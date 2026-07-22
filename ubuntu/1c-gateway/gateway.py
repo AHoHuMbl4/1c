@@ -25,9 +25,14 @@ execute_code режется прокси).
 import json
 import os
 import sys
+import threading
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# Встроенный HTTP-сервер тулкита однопоточный и деградирует под пачкой параллельных
+# соединений (копит CLOSE_WAIT). Сериализуем обращения к нему — не бьём конкурентно.
+_UPSTREAM_LOCK = threading.Lock()
 
 # --- конфиг ---
 LISTEN_HOST   = os.environ.get("GW_LISTEN_HOST", "127.0.0.1")
@@ -118,24 +123,26 @@ class Handler(BaseHTTPRequestHandler):
             # Формат отказа как у тулкита — предсказуемо для мозга.
             return self._send(200, _jsonrpc_error(payload.get("id"), reason))
 
-        # forward наверх (тулкит через SSH-туннель) с его Bearer-токеном
+        # forward наверх (тулкит по IP) с его Bearer-токеном
         req = urllib.request.Request(UPSTREAM_BASE + "/mcp", data=raw, method="POST")
         req.add_header("Content-Type", "application/json; charset=utf-8")
         req.add_header("Accept", "application/json, text/event-stream")
+        req.add_header("Connection", "close")   # не оставлять соединение висеть у тулкита
         if TOOLKIT_TOKEN:
             req.add_header("Authorization", f"Bearer {TOOLKIT_TOKEN}")
         sid = self.headers.get("Mcp-Session-Id")
         if sid:
             req.add_header("Mcp-Session-Id", sid)
         try:
-            with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-                body = resp.read()
-                ctype = resp.headers.get("Content-Type", "application/json")
-                extra = {}
-                up_sid = resp.headers.get("Mcp-Session-Id")
-                if up_sid:
-                    extra["Mcp-Session-Id"] = up_sid
-                return self._send(resp.status, body, ctype, extra)
+            with _UPSTREAM_LOCK:   # сериализуем — не бьём однопоточный сервер тулкита конкурентно
+                with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+                    body = resp.read()
+                    ctype = resp.headers.get("Content-Type", "application/json")
+                    extra = {}
+                    up_sid = resp.headers.get("Mcp-Session-Id")
+                    if up_sid:
+                        extra["Mcp-Session-Id"] = up_sid
+                    return self._send(resp.status, body, ctype, extra)
         except urllib.error.HTTPError as e:
             return self._send(e.code, e.read() or _jsonrpc_error(payload.get("id"), "upstream error"))
         except Exception as e:
