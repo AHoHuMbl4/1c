@@ -15,8 +15,9 @@
 ## Целевые машины (правила владельца, 2026-07-22)
 1. **Сам проект** разворачиваем на LXC **`lxc-claude-1c`**, IP `192.168.56.42` (Ubuntu).
    Инвентаризация 2026-07-22 (доступ `root@192.168.56.42` по ключу — работает): Ubuntu 24.04.4 LTS, 6 CPU, 62 GB RAM, диск 360 GB (238 свободно), Python 3.12.3; PostgreSQL и Docker не установлены.
-2. **1С** будет на **Windows**, доступ: `ssh unde@10.8.0.58`.
-   ⚠ 2026-07-22: sshd отвечает, но ключ Claude не принят (`Permission denied (publickey)`). Вероятно, `unde` — администратор, и ключ нужно класть в `C:\ProgramData\ssh\administrators_authorized_keys` (а не в `%USERPROFILE%\.ssh\authorized_keys`) — ждём фикса владельцем.
+2. **1С** будет на **Windows**, доступ: `ssh unde@10.8.0.58` — работает (ключ добавлен 2026-07-22 в administrators_authorized_keys).
+   Инвентаризация 2026-07-22: Windows 11 (build 26100), 2 CPU, 8 GB RAM, диск C: 36 GB свободно из 60. **1С НЕ установлена** (реестр/сервисы/процессы/ibases.v8i пусты), IIS нет. PowerShell 5.1. ⚠ Для длинных команд по SSH использовать `powershell -EncodedCommand` (base64 UTF-16LE) — прямое экранирование через bash→cmd ломается.
+   → Блокер фазы 2: владелец ставит платформу 1С (для MCP Toolkit нужна 8.3.25+) + тестовую базу ERP + лицензию.
 
 ## LLM / бот-слой
 - Ключ DeepSeek API — в `credentials/deepseek.env` (папка в `.gitignore`, в репозиторий не попадает).
