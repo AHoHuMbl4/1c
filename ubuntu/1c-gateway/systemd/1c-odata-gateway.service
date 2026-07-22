@@ -1,0 +1,16 @@
+[Unit]
+# OData read-only шлюз: единственная дверь мозга к 1С через штатный OData на IIS.
+# Пропускает только GET; пишет — 405. Креды 1С (read-only ai_reader) в EnvironmentFile.
+Description=1C OData read-only gateway (GET-only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# EnvironmentFile: ODG_USER, ODG_PASS (read-only юзер 1С), ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata
+EnvironmentFile=/etc/1c-odata-gateway.env
+ExecStart=/usr/bin/python3 /opt/1c-odata-gateway/odata_gateway.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
