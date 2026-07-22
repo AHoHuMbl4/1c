@@ -1,72 +1,66 @@
 # RUNBOOK: развёртывание «второго мозга» на 1С с нуля
 
-Пошаговая, воспроизводимая инструкция для раскатки на новом проекте. Проверено на стенде 2026-07-22 (Windows 11, платформа 8.3.27.1786 x86, Бухгалтерия 3.0.190.11). Держим в актуальном состоянии — это эталон для клонирования.
+Пошаговая воспроизводимая инструкция для раскатки на новом проекте. Проверено end-to-end на стенде 2026-07-22 (Windows 11, платформа 8.3.27.1786 x86, Бухгалтерия 3.0.190.11 → OData/IIS → braine на Ubuntu LXC → бот отвечает по данным 1С). Эталон для клонирования — держать актуальным.
 
-Связанные документы: архитектура и решение — `docs/PLAN.md`; стек braine на Ubuntu — `docs/UBUNTU_SETUP.md`; сырые результаты тестов MCP — `docs/PHASE2_MCP_TEST.md`; форк тулкита — `windows/fork/`.
+Связанные: `docs/PLAN.md` (архитектура/решения) · `docs/UBUNTU_SETUP.md` (стек braine) · `docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md` (почему НЕ встроенный тулкит) · `ubuntu/1c-gateway/` (OData-шлюз) · `ubuntu/1c-etl/` (ETL).
 
 ---
 
-## 0. Архитектура (кратко)
+## 0. Архитектура (прод — соединение по IP, канал = OData на IIS)
 
 ```
-1С (Windows) ──read-only──► MCP Toolkit (:6003) ──► [наш ETL/клиент] ──► второй мозг (braine на LXC)
-                                                                         PostgreSQL+pgvector, RAG-бот
+Windows (1С):  файловая база ─► IIS (служба) ─► штатный OData 1С (read-only user ai_reader)
+                                   ▲ авто-старт, многопоточно, без idle-обработчика/модалок
+Роутер 192.168.56.1:  проброс <порт> ─► Windows-IIS:80
+Ubuntu LXC (наш):  OData-шлюз :6011 (только GET) ─► ETL ─► KB-репо (GitLab) ─► oikb/OWUI индексация ─► бот
 ```
-- **Инвариант:** в 1С только читаем, ничего не меняем. Гарантия — слоями на стороне 1С, НЕ настройками тулкита.
-- Два контура: холодный (ночная выгрузка в базу знаний) + горячий (запрос по требованию). Детали — `docs/PLAN.md §2`.
+- **Инвариант:** в 1С только читаем. Гарантия read-only — двумя слоями (§6): пользователь `ai_reader` (нет прав записи) + шлюз (режет не-GET). Не на настройках приложения.
+- **Почему OData, а не встроенный сервер MCP-тулкита:** тулкит обслуживает HTTP через клиентский idle-обработчик 1С — ~1 req/s и встаёт на любом модальном окне сессии (`docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`). OData обслуживает IIS (служба Windows): многопоточно, авто-старт, переживает ребут, модалок в веб-сессии нет. Тулкит остаётся как **dev-опция** (§Приложение).
+- Два контура: холодный (ночная выгрузка ETL → KB) + горячий (бот отвечает по индексу). `docs/PLAN.md §2`.
 
 ---
 
 ## 1. Предусловия (собрать заранее)
 
-| Что | Где взять | Куда кладём |
+| Что | Где | Куда |
 |---|---|---|
-| Дистрибутив платформы 1С 8.3.25+ (Windows) | portal releases.1c.ru / developer.1c.ru | `C:\1c\distr\` |
-| Комьюнити-лицензия разработчика | developer.1c.ru → «Комьюнити-лицензии» (бесплатно, регистрация с подтв. телефона) | активируется в GUI при 1-м запуске |
-| Тестовая база (.dt или .cf «чистая база») | у клиента / демо конфигурации | `C:\1c\distr\` |
-| MCP Toolkit .epf (вариант под разрядность платформы!) | github.com/ROCTUP/1c-mcp-toolkit → Releases (x86/linux/macos) | `C:\1c\distr\` |
-| KB-репо на GitLab (для braine) | самостоятельный GitLab | project id + read-token |
+| Дистрибутив платформы 1С 8.3.25+ (Windows) | releases.1c.ru / developer.1c.ru | `C:\1c\distr\` |
+| Комьюнити-лицензия разработчика (бесплатно) | developer.1c.ru → «Комьюнити-лицензии» | активация в GUI при 1-м запуске |
+| Тестовая/клиентская база (.dt или .cf) | клиент / демо | `C:\1c\distr\` |
+| KB-репо на GitLab + read/write-токен | self-host GitLab | project id + token |
 | Telegram-бот + свой telegram-id | @BotFather | `credentials/` |
 | Ключи DeepSeek + Alibaba DashScope intl | platform.deepseek.com / Model Studio | `credentials/` |
 
-⚠ **Разрядность:** вариант `.epf` (x86 vs x64) должен совпадать с разрядностью установленной платформы, иначе нативный HTTP-компонент не загрузится.
-
 ---
 
-## 2. Windows-стенд: раскладка
+## 2. Windows-стенд: раскладка и доступ
 
 ```powershell
-# Каталоги
 New-Item -ItemType Directory -Force -Path C:\1c\bases,C:\1c\backups,C:\1c\distr,C:\1c\logs,C:\1c\repo
-
-# Git (если нужен клон рабочего репо со скриптами)
 git config --global user.name "<имя>"; git config --global user.email "<mail>"
 git clone <repo> C:\1c\repo
 ```
+SSH-ключ Claude — в `C:\ProgramData\ssh\administrators_authorized_keys` (для admin-пользователя), НЕ в `%USERPROFILE%`.
 
-Доступ Claude по SSH: ключ `claude-1c` в `C:\ProgramData\ssh\administrators_authorized_keys` (для admin-пользователя!), не в `%USERPROFILE%\.ssh`.
-
-### ⚠ Готчи окружения (важно для автоматизации по SSH)
-- Длинные PowerShell-команды по SSH: только через `powershell -EncodedCommand` (base64 UTF-16LE) ИЛИ файл-скрипт (`scp` + `-File`). Экранирование bash→cmd ломает `$`, кавычки, кириллицу. Лимит командной строки ~8191 символов → большие скрипты только файлом.
-- `.ps1` с кириллицей — строго UTF-8 **с BOM** (PS 5.1 без BOM читает как ANSI → синтаксические ошибки).
-- COM-коннектор 1С: `regsvr32` запускать из каталога `bin` платформы (иначе не резолвит зависимости, exit 3). Класс `V83.COMConnector`, запускать из **32-битного** PowerShell (`C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`) под x86-платформу.
-- COM: свойства `Metadata`/`InfoBaseUsers` через PowerShell отдаются пусто (late-binding квирк). Запросы (`NewObject('Query')`) работают; для чтения ЗНАЧЕНИЙ полей удобнее гнать SELECT через MCP `execute_query` (он сериализует в JSON правильно).
+### ⚠ Готчи автоматизации по SSH (сэкономят часы)
+- Длинные PowerShell по SSH — только `powershell -EncodedCommand` (base64 UTF-16LE) ИЛИ `scp` файла + `-File`. Экранирование bash→cmd ломает `$`/кавычки/кириллицу; лимит cmd ~8191 символов.
+- `.ps1` с кириллицей — UTF-8 **с BOM** (PS 5.1 без BOM = ANSI → синтакс-ошибки).
+- COM-коннектор: `regsvr32 comcntr.dll` запускать **из каталога bin** платформы; класс `V83.COMConnector`; вызывать из **32-битного** PowerShell (`C:\Windows\SysWOW64\WindowsPowerShell\v1.0\powershell.exe`) под x86-платформу.
+- COM-квирк: свойства (`Metadata`) через PowerShell отдаются только рефлексией (`InvokeMember GetProperty`); **методы коллекций метаданных не резолвятся** (`Найти`/`Count`) — но **`foreach` по коллекции (COM-энумератор) работает** (см. §5 состав OData). Прямые вызовы методов объектов (`$ib.NewObject`, `$arr.Добавить`) — работают.
 
 ---
 
 ## 3. Установка платформы (тихо, headless)
 
 ```powershell
-# vc_redist (пререквизит) + платформа
 Start-Process "<distr>\vc_redist.x86.exe" -Args '/install','/quiet','/norestart' -Wait
 Start-Process msiexec.exe -Wait -Args @(
-  '/i', '"<distr>\1CEnterprise 8.msi"', '/qn', '/norestart', 'TRANSFORMS=1049.mst',
+  '/i','"<distr>\1CEnterprise 8.msi"','/qn','/norestart','TRANSFORMS=1049.mst',
   'DESIGNERALLCLIENTS=1','THICKCLIENT=1','THINCLIENT=1','THINCLIENTFILE=1',
-  'SERVER=1','SERVERCLIENT=1','WEBSERVEREXT=1',      # сервер+консоль+веб — если нужны; для файловой базы можно 0
-  'LANGUAGES=RU', '/l*v','C:\1c\logs\install_1c.log')
-# бинарники: C:\Program Files (x86)\1cv8\<версия>\bin\1cv8.exe (+ 1cv8c, ragent, rac, wsisapi.dll)
+  'WEBSERVEREXT=1',                 # веб-модуль wsisapi.dll — ОБЯЗАТЕЛЬНО для OData/IIS
+  'LANGUAGES=RU','/l*v','C:\1c\logs\install_1c.log')
 ```
-⚠ **Лицензия нужна даже тестовой сборке.** Проверено: `CREATEINFOBASE` работает без лицензии, конфигуратор/предприятие — нет. Активировать комьюнити-лицензию в GUI (диалог «Получить лицензию» → учётка developer.1c.ru) при первом запуске.
+⚠ **Лицензия нужна даже тестовой сборке** (`CREATEINFOBASE` работает без, конфигуратор/предприятие — нет). Активировать комьюнити-лицензию в GUI при первом запуске.
 
 ---
 
@@ -74,90 +68,130 @@ Start-Process msiexec.exe -Wait -Args @(
 
 ```powershell
 $exe='C:\Program Files (x86)\1cv8\<версия>\bin\1cv8.exe'
-# создать пустую ИБ
 Start-Process $exe -Wait -Args 'CREATEINFOBASE File="C:\1c\bases\<база>" /DisableStartupDialogs'
-# загрузить .dt (нужна лицензия!)
 Start-Process $exe -Wait -Args 'DESIGNER /F"C:\1c\bases\<база>" /RestoreIB "<distr>\<база>.dt" /Out C:\1c\logs\restore.log /DisableStartupDialogs'
 ```
-Первый интерактивный вход: на вопрос «база восстановлена из копии» → **«Это копия информационной базы»** (оставляет внешние операции/синхронизации ЗАБЛОКИРОВАННЫМИ — правильно для теста). Помощник старта — выбрать вид организации (для полноты структуры — «Юридическое лицо»).
+Первый интерактивный вход: «база восстановлена из копии» → **«Это копия информационной базы»** (внешние операции остаются заблокированы). Помощник → вид организации «Юридическое лицо».
 
-Добавление базы в стартер (если нет в списке): GUI-мастер «Добавление существующей информационной базы» → путь к каталогу `C:\1c\bases\<база>`.
+**Пользователи (BSP, порядок ВАЖЕН):** Администрирование → Настройки пользователей и прав → Пользователи.
+1. Сначала **admin** (полные права) — иначе после создания первого юзера потеряешь админ-доступ.
+2. Затем **ai_reader** — профиль **«Только просмотр»** (read-only ко всем данным). Запомнить пароли.
 
-### Бэкап (правило проекта: перед ЛЮБЫМ изменением)
-`powershell -File C:\1c\repo\windows\scripts\backup-1c.ps1 -BasePath C:\1c\bases\<база>` → zip в `C:\1c\backups` с ротацией 14.
-
----
-
-## 5. MCP Toolkit — запуск и жёсткая конфигурация
-
-Обработку надо открыть в сессии 1С (GUI, headless нельзя — толстому клиенту нужен рабочий стол):
-1. Открыть базу в режиме «1С:Предприятие» (см. §6 — под каким пользователем!).
-2. **Файл → Открыть** → `C:\1c\distr\MCP_Toolkit_<арх>.epf`. На «защиту от опасных действий» → разрешить.
-3. На форме «Подключение»:
-   - Режим: **Встроенный сервер**.
-   - Адрес: **`127.0.0.1 — только локально`** : порт **6003**.
-   - Формат ответов: **JSON**.
-   - Токен доступа: свой (генератор secrets/token_urlsafe). Пустой = БЕЗ авторизации.
-   - «Разрешать опасные операции с подтверждением» — снять. «Автоматически разрешать: Записать / УстановитьПривилегированныйРежим» — снять.
-   - MCP инструменты: выключить `execute_code`, `restart_1c_session`, `close_1c_session`, `get_screenshot`, `submit_for_deanonymization`. Оставить `execute_query` + read-инструменты.
-   - **«Запустить сервер»** → статус «Сервер запущен (порт 6003)».
-
-Протокол: MCP Streamable HTTP, эндпоинт `POST /mcp` (JSON-RPC), health — `GET /health`. Рукопожатие: `initialize` → `notifications/initialized` → `tools/call`. Заголовки: `Accept: application/json, text/event-stream`, `Authorization: Bearer <токен>`. Ответы приходят в SSE-обёртке (`data: {...}`), тело — многострочный JSON.
-
-### 🔴 КРИТИЧНО: тумблеры — НЕ граница безопасности
-Доказано на стенде: отключённый `execute_code` **исчезает из `tools/list`, но продолжает исполнять произвольный код при прямом `tools/call`** (вернул `111*111=12321`). Причина: диспетчер вызывает исполнение без проверки флага включённости. **Вывод: на настройки тулкита полагаться нельзя.** Границу строит 1С (см. §6). Опция «доломать» — форк тулкита (`windows/fork/`, вырезает execute_code headless-сборкой; на стенде ребилд x86 упал на нативном компоненте — вариант запасной, не основной).
+**Бэкап (правило проекта, перед любым изменением базы):** `powershell -File C:\1c\repo\windows\scripts\backup-1c.ps1 -BasePath C:\1c\bases\<база>` → zip в `C:\1c\backups` (ротация 14).
 
 ---
 
-## 6. 🔒 Read-only граница — на стороне Ubuntu (ГЛАВНОЕ, решение владельца)
+## 5. Прод-канал: OData на IIS (headless)
 
-**На Винде ничего кастомного не ставим.** Read-only гарантию строит Ubuntu-сторона: SSH-туннель + whitelist-прокси. Код и юниты готовы: `ubuntu/1c-gateway/`.
-
-Почему не «запускать тулкит под read-only пользователем»: проверено на стенде — **встроенный сервер тулкита требует привилегию** (подключает нативную HTTP-компоненту, «опасное действие»). Под read-only пользователем (`Только просмотр`) обработка **не открывается — «непредвиденная ошибка»**; под админом — открывается. Значит тулкит обязан крутиться в достаточно-привилегированной сессии, и границу надо ставить снаружи 1С.
-
-Топология (соединение по IP — проверено на живой системе 2026-07-22):
+### 5.1 Включить IIS (нужен один ребут)
+```powershell
+Enable-WindowsOptionalFeature -Online -All -NoRestart -FeatureName `
+  IIS-WebServerRole,IIS-WebServer,IIS-CommonHttpFeatures,IIS-StaticContent,IIS-DefaultDocument,`
+  IIS-HttpErrors,IIS-RequestFiltering,IIS-Security,IIS-ISAPIExtensions,IIS-ISAPIFilter,IIS-CGI,`
+  IIS-ManagementConsole,IIS-BasicAuthentication
+# фичи встают в EnablePending → ПЕРЕЗАГРУЗИТЬ Windows (разовый шаг настройки).
+# После ребута: служба W3SVC = Running / Automatic (авто-старт).
 ```
-Windows (stock): 1C+тулкит → слушает сетевой интерфейс :6003 (под админом, Bearer)
-Роутер 192.168.56.1: проброс :6003 → Windows-тулкит (владелец, на своей железке)
-Ubuntu (наш контроль): gateway.py :6010 → http://192.168.56.1:6003 (только execute_query+read) → мозг
+
+### 5.2 Опубликовать базу и включить OData
+```powershell
+$webinst='C:\Program Files (x86)\1cv8\<версия>\bin\webinst.exe'
+& $webinst -publish -iis -wsdir 1c -dir C:\inetpub\1c -connstr "File='C:\1c\bases\<база>';"
+# в C:\inetpub\1c\default.vrd переключить <standardOdata enable="false"  →  enable="true"
+# права пула IIS на файловую базу (нужна запись для сессий/блокировок):
+icacls 'C:\1c\bases\<база>' /grant 'IIS APPPOOL\DefaultAppPool:(OI)(CI)M' /T
+icacls 'C:\1c\bases\<база>' /grant 'IUSR:(OI)(CI)M' /T
+# для x86-платформы — 32-битный пул:
+Import-Module WebAdministration; Set-ItemProperty 'IIS:\AppPools\DefaultAppPool' enable32BitAppOnWin64 $true
+iisreset /restart
 ```
-Три слоя (все на нашей стороне): (1) 6003 доступен только внутри сети LXC через роутер `.1`, наружу не торчит + Bearer; (2) прокси deny-by-default режет `execute_code` до 1С; (3) язык запросов 1С не имеет DML. Развёртывание — `ubuntu/1c-gateway/README.md`.
+Эндпоинт: `http://<host>/1c/odata/standard.odata/` (первый запрос прогревается; дальше мгновенно). Без auth → 401.
 
-**Валидация ПОЛНОЙ цепочки (2026-07-22, живой тулкит по IP):**
-- `192.168.56.1:6003/health` отвечает и с хоста, и **с самого LXC** ✅ (транспорт по IP работает — в отличие от SSH-туннеля, который ответы тулкита не отдавал).
-- Прямой `execute_query` по IP → реальные данные («Наша организация») ✅.
-- Через шлюз: `execute_query` → данные ✅; `execute_code` → **отбит проксей, до 1С не дошёл** ✅.
-
-Транспорт решён — прямое IP-соединение (роутер `.1` пробрасывает 6003 на Винду). SSH-туннель НЕ используем (встроенный HTTP-сервер тулкита на нём завис — однопоточность). Прокси-режим тулкита не понадобился.
-
-`ai_reader` (read-only пользователь) — опциональный доп. слой, НЕ несущий (тулкит под ним не стартует). Если нужен для других целей: сначала создать admin-пользователя (иначе потеря админ-доступа в BSP), затем `ai_reader` с профилями «Только просмотр» + «Открытие внешних отчетов и обработок».
-
----
-
-## 7. Проверки безопасности (ворота перед «боевым» использованием)
-
-Через шлюз (`:6010`), тулкит запущен под админом:
-1. `execute_query` читает данные → ✅ (проверено на стенде: `Наша организация`, COUNT валют).
-2. Запись через язык запросов — невозможна синтаксически (нет DML). ✅ по построению.
-3. `execute_code` через шлюз → **отбит проксей, до 1С не дошёл** ✅ (проверено на моке; в проде — то же).
-4. Запрос без Bearer к тулкиту → **401** ✅ (проверено). Прокси может требовать свой `GW_GATEWAY_TOKEN` от мозга.
-5. Прямой доступ к 6003 из сети → невозможен (localhost + только SSH-туннель).
-
-Итоговое правило клиента «второго мозга»: **ходить только через шлюз и вызывать только `execute_query`** (+ read-инструменты). Даже если клиент ошибётся и пошлёт `execute_code` — шлюз отобьёт. Плюс фундамент: язык запросов писать не умеет.
+### 5.3 Задать состав OData (какие объекты отдавать) — COM под админом
+Через COM (32-бит PowerShell), **перебором коллекций** (методы `Найти`/`Count` не резолвятся, а `foreach` — да):
+```powershell
+$GP=[Reflection.BindingFlags]::GetProperty
+function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,$null) }
+$ib=(New-Object -ComObject 'V83.COMConnector').Connect('File="C:\1c\bases\<база>";Usr="admin";Pwd="<admin-pass>";')
+$md=P $ib 'Metadata'; $arr=$ib.NewObject('Array')
+foreach($coll in @('Справочники','Документы')){ foreach($o in (P $md $coll)){ $arr.Добавить($o) } }
+$ib.УстановитьСоставСтандартногоИнтерфейсаOData($arr)   # выставит все справочники+документы
+```
+(На проде состав можно сузить до нужных разделов ERP.)
 
 ---
 
-## 8. Стыковка с braine (LXC)
-Наш ETL (холодный контур) читает 1С через `execute_query` и пишет md-файлы/таблицы в KB-репо (`money/1c-test`, GitLab id 95) → braine индексирует и отвечает. Развёртывание braine — `docs/UBUNTU_SETUP.md` (без Ollama; эмбеддер/реранк — DashScope; генерация — DeepSeek; пины open-webui==0.10.2/oikb==0.3.6).
+## 6. 🔒 Read-only — два слоя (проверено)
+
+**Слой 1 — пользователь `ai_reader`** (OData Basic auth под ним): читает (200), пишет → отказ прав. Основная гарантия.
+**Слой 2 — наш OData-шлюз** (`ubuntu/1c-gateway/odata_gateway.py`, :6011): пропускает только GET; POST/PATCH/PUT/DELETE → **405, до 1С не доходят**.
+
+### Роутер `.1`: проброс на IIS
+На роутере/шлюзе сети LXC пробросить порт на **Windows-IIS:80** (напр. `192.168.56.1:6003 → <win-ip>:80`). Тогда LXC ходит `192.168.56.1:<порт>/1c/odata/standard.odata/…`.
+
+### Развернуть OData-шлюз (LXC)
+```bash
+install -D odata_gateway.py /opt/1c-odata-gateway/odata_gateway.py
+cat > /etc/1c-odata-gateway.env <<EOF
+ODG_USER=ai_reader
+ODG_PASS=<пароль ai_reader>
+ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata
+EOF
+chmod 600 /etc/1c-odata-gateway.env
+cp systemd/1c-odata-gateway.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now 1c-odata-gateway
+```
+
+### Проверки безопасности (ворота, проверено на стенде с LXC)
+1. `GET Catalog_Валюты/$count` через шлюз → данные ✅.
+2. `POST/PATCH/PUT/DELETE` через шлюз → **405** (не доходят до 1С) ✅.
+3. Прямая запись под `ai_reader` (мимо шлюза) → отказ прав (HTTP 500) ✅.
+4. Итоговое правило клиента: ходить только через шлюз, только GET.
 
 ---
 
-## Журнал проверенного на стенде (2026-07-22)
-- Платформа 8.3.27.1786 x86, лицензия community — ✅.
-- База Бухгалтерия 3.0.190.11 (buh_test) загружена, бэкап 760 MB — ✅.
-- MCP Toolkit v1.8.0 x86: health ✅, Bearer-авторизация ✅ (401 без токена), `execute_query` читает ✅.
-- 🔴 Тумблеры не блокируют вызов, `execute_code` исполняется отключённым — подтверждено трижды.
-- Форк (вырезать execute_code) собран headless, но x86-ребилд падает при открытии (нативный компонент) — отложен.
-- Read-only под пользователем `ai_reader` **не работает**: тулкит требует привилегию на нативную компоненту, под read-only не стартует («непредвиденная ошибка»); под админом — ок. → Решение владельца: защита на стороне Ubuntu (шлюз).
-- **Whitelist-шлюз написан и провалидирован** (`ubuntu/1c-gateway/`): execute_query проходит, execute_code режется до 1С. Открытый вопрос — транспорт LXC↔тулкит (SSH-туннель не отдавал ответы встроенного сервера; кандидат прода — прокси-режим тулкита).
-- **Дальше:** развернуть braine на LXC + шлюз/туннель (по команде владельца), решить транспорт, стыковать ETL 1С→KB-репо.
+## 7. Стек braine (LXC) — `docs/UBUNTU_SETUP.md`
+Клон braine в `/opt/smart-bot`; `.env` из `credentials/` (KB-репо, бот, ключи, сгенерированные секреты); `install.sh` пропатчить (без Ollama, пины `open-webui==0.10.2`/`oikb==0.3.6`); `bootstrap.sh` (админ OWUI, KB, эмбеддер DashScope, реранкер-шим). Сервисы: postgresql, open-webui(:3000), oikb(:8081), rerank-shim(:8082), tg-bridge, api(:8090), kb-poll. Пустой `gsheets-sync.timer` — замаскировать, если Google Sheets не нужны.
+
+---
+
+## 8. Холодный контур: ETL 1С → KB — `ubuntu/1c-etl/`
+Читает через OData-шлюз (:6011, GET), пишет md-таблицы в KB-репо (GitLab), пушит → oikb/kb-poll индексируют.
+```bash
+install -D oc_etl.py /opt/1c-etl/oc_etl.py
+cat > /etc/1c-etl.env <<EOF
+ETL_ODATA_BASE=http://127.0.0.1:6011
+ETL_KB_REPO=http://root:<glpat>@<gitlab>/<group>/<kb-repo>.git
+ETL_KB_DIR=/opt/1c-etl/kb
+ETL_KB_SUBDIR=1c
+EOF
+chmod 600 /etc/1c-etl.env
+cp systemd/1c-etl.{service,timer} /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now 1c-etl.timer   # ночь 03:00
+systemctl start 1c-etl.service                                   # первый прогон
+```
+Список сущностей — `oc_etl.py: ENTITIES` (на проде расширить). Пишет `1c/catalogs/*.md`, `1c/documents/*.md`, `1c/_index.md`.
+
+---
+
+## 9. Zero-touch: что переживает ребут
+- **Windows:** IIS (W3SVC) = Automatic; публикация/состав OData/пользователи — персистентны. После ребута OData сам доступен.
+- **LXC (все enabled):** postgresql, open-webui, oikb, rerank-shim, tg-bridge, api, kb-poll, **1c-odata-gateway**; таймеры nightly-eval, **1c-etl**. Ребут LXC → всё поднимается само.
+- Итог: после перезагрузки любой из машин канал восстанавливается без ручных действий.
+
+---
+
+## Приложение: MCP Toolkit — dev-only (НЕ для прода)
+Встроенный сервер тулкита удобен для интерактивной отладки/произвольных `execute_query`, но НЕ годится для сервиса: обслуживает всё через один клиентский idle-обработчик 1С (~1 req/s, встаёт на модальном окне — `docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`). Также подтверждено: UI-тумблеры инструментов **не блокируют вызов** (отключённый `execute_code` исполнял код). Артефакты для dev: `ubuntu/1c-gateway/gateway.py` (whitelist-прокси MCP), `windows/fork/` (форк с вырезанным execute_code — x86-ребилд падал на нативном компоненте). Для прода — OData (§5-6).
+
+---
+
+## Журнал проверенного end-to-end (2026-07-22)
+- Платформа 8.3.27.1786 x86 + community-лицензия; база Бухгалтерия 3.0.190.11; бэкап 760 MB — ✅.
+- IIS включён (ребут), W3SVC Automatic; база опубликована; OData enable=true; состав — 1128 объектов (COM foreach) — ✅.
+- OData читает как служба: `Организации`→«Наша организация», `Валюты`=1; **зависаний/модалок нет** — ✅.
+- Read-only 2 слоя: `ai_reader` пишет→500; шлюз POST/PATCH/PUT/DELETE→405 (проверено с LXC) — ✅.
+- braine развёрнут (7 сервисов active, пины 0.10.2/0.3.6, без Ollama); бот @test1c_mcp_bot в Telegram — ✅.
+- **ETL прогнан:** 19 сущностей / 44 записи через OData-шлюз → push в KB-репо → oikb «Synced: 20 added» → индексация — ✅.
+- **Бот отвечает по данным 1С:** «Каких контрагентов знаешь?» → «МИ ФНС России по управлению долгом (ИНН 7727406020), Казначейство России» с цитатами — ✅.
+- Zero-touch: все сервисы enabled; IIS Automatic — ✅.

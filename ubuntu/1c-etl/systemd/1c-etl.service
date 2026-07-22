@@ -1,0 +1,12 @@
+[Unit]
+# ETL 1С → KB-репо (через read-only OData-шлюз). Пишет md, пушит в GitLab;
+# дальше oikb/kb-poll сами индексируют. Запускается таймером (см. 1c-etl.timer).
+Description=1C -> KB ETL (OData read-only -> GitLab KB repo)
+After=network-online.target 1c-odata-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# EnvironmentFile: ETL_KB_REPO=http://root:<glpat>@gitlab-real.unde.life/money/1c-test.git и пр.
+EnvironmentFile=/etc/1c-etl.env
+ExecStart=/usr/bin/python3 /opt/1c-etl/oc_etl.py
