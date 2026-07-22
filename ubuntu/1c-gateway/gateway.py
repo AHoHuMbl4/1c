@@ -4,14 +4,18 @@
 
 Модель безопасности (вся на стороне Ubuntu, на Винде — ничего кастомного):
 
-    мозг ──► этот прокси (deny-by-default allowlist) ──► SSH-туннель ──► Windows 127.0.0.1:6003 (stock тулкит)
+    мозг ──► этот прокси (deny-by-default allowlist) ──► 192.168.56.1:6003 (проброс на Windows-тулкит)
 
 Прокси пропускает ТОЛЬКО безопасные read-методы. execute_code и любой не-whitelist
 инструмент отбиваются здесь, на HTTP-уровне, и до 1С не доходят вообще. Bearer-токен
 тулкита хранится тут (мозг его не знает); наружу прокси слушает только localhost.
 
+Тулкит на Винде слушает сетевой интерфейс, роутер 192.168.56.1 пробрасывает :6003 на него;
+LXC ходит на 192.168.56.1:6003. Проверено на живой системе 2026-07-22 (execute_query читает,
+execute_code режется прокси).
+
 Почему это надёжно, тремя слоями:
-  1. Сеть: порт 6003 на Винде — только localhost, доступен лишь через наш SSH-туннель.
+  1. Сеть: 6003 доступен только внутри доверенной сети LXC (через роутер .1); наружу не торчит.
   2. Этот прокси: deny-by-default, execute_code режется до 1С.
   3. Фундамент: язык запросов 1С не имеет DML — execute_query физически не пишет.
 
@@ -28,7 +32,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 # --- конфиг ---
 LISTEN_HOST   = os.environ.get("GW_LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT   = int(os.environ.get("GW_LISTEN_PORT", "6010"))
-UPSTREAM_BASE = os.environ.get("GW_UPSTREAM", "http://127.0.0.1:16003").rstrip("/")
+UPSTREAM_BASE = os.environ.get("GW_UPSTREAM", "http://192.168.56.1:6003").rstrip("/")
 TOOLKIT_TOKEN = os.environ.get("GW_TOOLKIT_TOKEN", "")   # Bearer к тулкиту (обязателен)
 GATEWAY_TOKEN = os.environ.get("GW_GATEWAY_TOKEN", "")    # Bearer, который ДОЛЖЕН предъявить мозг (опц.)
 TIMEOUT       = float(os.environ.get("GW_TIMEOUT", "180"))
