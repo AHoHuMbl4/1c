@@ -1,0 +1,23 @@
+[Unit]
+# SSH-туннель Ubuntu → Windows: локальный 127.0.0.1:16003 пробрасывается
+# в 127.0.0.1:6003 на Винде (там слушает stock MCP Toolkit). Порт 6003 наружу
+# не торчит — доступен только через этот аутентифицированный по ключу туннель.
+Description=SSH tunnel to Windows 1C MCP Toolkit (16003 -> win:6003)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# Ключ Ubuntu-машины должен быть добавлен в C:\ProgramData\ssh\administrators_authorized_keys на Винде.
+ExecStart=/usr/bin/ssh -N \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=30 \
+  -o ServerAliveCountMax=3 \
+  -o StrictHostKeyChecking=accept-new \
+  -i /root/.ssh/id_1c_windows \
+  -L 127.0.0.1:16003:127.0.0.1:6003 \
+  unde@10.8.0.58
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

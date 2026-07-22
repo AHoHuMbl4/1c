@@ -1,0 +1,16 @@
+[Unit]
+# Whitelist-прокси: единственная дверь мозга к 1С. Пропускает только read-методы,
+# execute_code режет до 1С. Токен тулкита хранится тут (в EnvironmentFile), мозг его не знает.
+Description=1C read-only gateway (execute_query allowlist)
+After=1c-tunnel.service
+Wants=1c-tunnel.service
+
+[Service]
+# EnvironmentFile: GW_TOOLKIT_TOKEN=<Bearer тулкита>, опц. GW_GATEWAY_TOKEN=<Bearer для мозга>
+EnvironmentFile=/etc/1c-gateway.env
+ExecStart=/usr/bin/python3 /opt/1c-gateway/gateway.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
