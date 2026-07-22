@@ -1,4 +1,4 @@
-# Бэкап файловой базы 1С (правило проекта: бэкап перед ЛЮБЫМ изменением на машине с 1С).
+﻿# Бэкап файловой базы 1С (правило проекта: бэкап перед ЛЮБЫМ изменением на машине с 1С).
 # Использование:
 #   powershell -NoProfile -File backup-1c.ps1 -BasePath C:\1c\bases\erp_test
 #   powershell -NoProfile -File backup-1c.ps1 -BasePath C:\1c\bases\erp_test -Force   # игнорировать открытые сессии 1С
