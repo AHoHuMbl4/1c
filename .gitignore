@@ -1,6 +1,9 @@
 # Секреты — в git не попадают
 credentials/
 
+# Служебные файлы Claude Code (настройки проекта .claude/*.json — коммитим, runtime-артефакты — нет)
+.claude/scheduled_tasks.lock
+
 # 1С: локальные/временные артефакты
 *.cfu
 *.dt
