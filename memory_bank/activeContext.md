@@ -19,7 +19,7 @@ _Обновлено: 2026-07-22 (вечер)_
 - Windows 10.8.0.58: Win11, 2 CPU/8 GB/36 GB свободно; C:\1c\{repo,bases,backups,distr,logs}; 1С НЕ установлена.
 
 ## Блокеры (все — на стороне владельца)
-1. **Развёртывание braine на LXC** — ✅ KB-репо решён владельцем (2026-07-22): **`money/1c-test` на gitlab-real.unde.life, project id 95, ветка main** (доступ проверен с dev-машины: API+git ok; креды в `credentials/gitlab-1c-test.env`). ✅ Ollama не ставим вообще («standby плохо себя показал») — эмбеддер сразу DashScope, fallback'а нет (принятый риск). Остались: telegram-бот/id, подтверждение egress (DeepSeek+DashScope+Telegram+GitLab), пины open-webui==0.10.2/oikb==0.3.6 (рекомендация: да) — и явная команда «разворачивай».
+1. **Развёртывание braine на LXC** — входные почти собраны: ✅ KB-репо `money/1c-test` (gitlab-real.unde.life, id 95, main; креды `credentials/gitlab-1c-test.env`); ✅ Ollama не ставим («standby плохо себя показал») — эмбеддер сразу DashScope, fallback'а нет; ✅ Telegram-бот создан владельцем: **@test1c_mcp_bot** (токен в `credentials/telegram-1c-bot.env`). Осталось: telegram-id владельца для allowlist (кандидат из braine-оригинала: 5949699699 — подтвердить), пины open-webui==0.10.2/oikb==0.3.6 (беру по рекомендации) — и явная команда «разворачивай».
 2. **1С на Windows-стенде** — дистрибутив платформы 8.3.25+ в `C:\1c\distr` + тестовая база ERP + лицензия. Учебная версия НЕ подходит (нет внешних компонент/HTTP-сервисов, лимит 2000 строк).
 3. Решения §9 плана: DeepSeek-приватность данных 1С, приоритетные разделы ERP, окно ночной выгрузки, OData/IIS.
 
