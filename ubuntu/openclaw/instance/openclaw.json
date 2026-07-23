@@ -59,7 +59,10 @@
     }
   },
   "commands": {
-    "native": false
+    "native": false,
+    "ownerAllowFrom": [
+      "telegram:5949699699"
+    ]
   },
   "plugins": {
     "entries": {
@@ -100,6 +103,19 @@
             "ask_1c"
           ]
         }
+      }
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": true,
+      "tokenFile": "/home/undebot/.openclaw/telegram-token",
+      "dmPolicy": "allowlist",
+      "allowFrom": [
+        "5949699699"
+      ],
+      "streaming": {
+        "mode": "off"
       }
     }
   }

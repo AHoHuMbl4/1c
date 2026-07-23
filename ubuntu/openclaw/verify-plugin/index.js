@@ -37,18 +37,26 @@ function dbg(cfg, line) {
   }
 }
 
-// эталон braine за ход, ключ = "run:<runId>"; несколько вызовов ask_1c в ходе — сливаем
-const refs = new Map(); // key -> { at, text, digits:Set<string>, blob:string, noData:boolean }
-// последний ввод пользователя, ключ = "sess:<sessionKey>"
-const inbound = new Map(); // key -> { at, digits:Set<string>, blob:string }
+// КОРРЕЛЯЦИЯ (проверено в рантайме): у `message_sending` в ctx НЕТ runId — есть только
+// `sessionKey`. Доставка идёт ПОСЛЕ `agent_end`. Поэтому эталон храним по sessionKey, а не
+// по runId, и НЕ удаляем на agent_end (иначе к доставке эталона уже нет). Внутри хода
+// (тот же runId) вызовы ask_1c сливаем; новый runId в сессии → эталон СБРАСЫВАЕМ (это новый ход).
+const refs = new Map(); // sessKey -> { at, runId, text, digits:Set<string>, blob:string, noData:boolean }
+const lastInbound = new Map(); // sessKey -> ts (граница хода: входящее сообщение)
+const inbound = new Map(); // sessKey -> { at, digits:Set<string>, blob:string } (числа пользователя)
 
 function prune(map, ttl) {
   const cut = Date.now() - ttl;
-  for (const [k, v] of map) if (v.at < cut) map.delete(k);
+  for (const [k, v] of map) if ((typeof v === "number" ? v : v.at) < cut) map.delete(k);
   if (map.size > 2000) {
     const excess = [...map.keys()].slice(0, map.size - 2000);
     for (const k of excess) map.delete(k);
   }
+}
+
+// ключ сессии для корреляции (в обоих хуках это ctx.sessionKey)
+function sessKeyOf(ctx, event) {
+  return (ctx && ctx.sessionKey) || (event && event.sessionKey) || null;
 }
 
 export default definePluginEntry({
@@ -62,28 +70,34 @@ export default definePluginEntry({
       return { ...DEFAULTS, ...pc };
     };
 
-    // 1) захват эталона braine за ход
+    // 1) захват эталона braine за ход (ключ = sessionKey; сброс при новом runId)
     api.on("after_tool_call", async (event, ctx) => {
       const cfg = getCfg();
       if (!event || !toolMatches(event.toolName, cfg.toolName)) return;
-      const runId = event.runId || (ctx && ctx.runId);
-      if (!runId) return; // без runId корреляция ненадёжна — пропускаем (деградация безопасна)
+      const runId = event.runId || (ctx && ctx.runId) || null;
+      const sessKey = sessKeyOf(ctx, event) || (runId ? "run:" + runId : null);
+      if (!sessKey) return;
       const text = event.error ? cfg.noDataMarker + " tool_error]" : extractText(event.result);
-      const key = "run:" + runId;
-      const merged = mergeRef(refs.get(key), text, Date.now(), cfg.noDataMarker);
-      refs.set(key, merged);
+      const prev = refs.get(sessKey);
+      const sameTurn = prev && prev.runId === runId; // тот же ход → сливаем; иначе новый ход → сброс
+      const merged = mergeRef(sameTurn ? prev : null, text, Date.now(), cfg.noDataMarker);
+      merged.runId = runId;
+      refs.set(sessKey, merged);
       prune(refs, cfg.refTtlMs);
-      dbg(cfg, `after_tool_call tool=${event.toolName} runId=${runId} textLen=${text.length} refDigits=${merged.digits.size} noData=${merged.noData}`);
+      dbg(cfg, `after_tool_call tool=${event.toolName} sess=${sessKey} runId=${runId} refDigits=${merged.digits.size} noData=${merged.noData}`);
     });
 
-    // 2) числа из ввода пользователя (эхо его же номера — не галлюцинация)
+    // 2) числа из ввода пользователя + граница хода (эхо его номера — не галлюцинация)
     api.on("message_received", async (event, ctx) => {
       const cfg = getCfg();
-      const sessKey = ctx && ctx.sessionKey;
+      const sessKey = sessKeyOf(ctx, event);
       if (!sessKey) return;
+      const now = Date.now();
+      lastInbound.set(sessKey, now);
       const text = (event && event.content) || "";
-      inbound.set("sess:" + sessKey, { at: Date.now(), digits: numericTokens(text, 1), blob: digitBlob(text) });
+      inbound.set(sessKey, { at: now, digits: numericTokens(text, 1), blob: digitBlob(text) });
       prune(inbound, cfg.refTtlMs);
+      prune(lastInbound, cfg.refTtlMs);
       dbg(cfg, `message_received sess=${sessKey} len=${text.length}`);
     });
 
@@ -91,27 +105,25 @@ export default definePluginEntry({
     api.on("message_sending", async (event, ctx) => {
       const cfg = getCfg();
       const content = (event && event.content) || "";
-      const runId = (ctx && ctx.runId) || (event && event.runId);
-      const sessKey = ctx && ctx.sessionKey;
-      const ref = runId ? refs.get("run:" + runId) || null : null;
-      const inb = sessKey ? inbound.get("sess:" + sessKey) || null : null;
+      const sessKey = sessKeyOf(ctx, event);
+      let ref = sessKey ? refs.get(sessKey) || null : null;
+      // отсечь ЧУЖОЙ ход: если эталон старше последнего входящего этой сессии — это прошлый ход
+      if (ref && sessKey) {
+        const li = lastInbound.get(sessKey);
+        if (li && ref.at < li) ref = null;
+      }
+      const inb = sessKey ? inbound.get(sessKey) || null : null;
 
       const decision = evaluate(content, ref, inb, cfg);
       dbg(
         cfg,
-        `message_sending action=${decision.action} tokens=${[...numericTokens(content, cfg.minDigits)].length} hasRef=${!!ref} refNoData=${ref ? ref.noData : "-"} runId=${runId || "-"}`,
+        `message_sending sess=${sessKey} action=${decision.action} tokens=${[...numericTokens(content, cfg.minDigits)].length} hasRef=${!!ref} refNoData=${ref ? ref.noData : "-"}`,
       );
       if (decision.action === "cancel") return { cancel: true, cancelReason: "braine-verify: " + decision.reason };
       if (decision.action === "replace") return { content: decision.content };
       return undefined; // allow
     });
 
-    // 4) уборка эталона хода
-    api.on("agent_end", async (event, ctx) => {
-      const cfg = getCfg();
-      const runId = (event && event.runId) || (ctx && ctx.runId);
-      dbg(cfg, `agent_end runId=${runId || "-"}`);
-      if (runId) refs.delete("run:" + runId);
-    });
+    // Эталон НЕ удаляем на agent_end (доставка идёт после него) — чистка по TTL в prune().
   },
 });
