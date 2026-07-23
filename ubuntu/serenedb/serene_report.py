@@ -123,6 +123,47 @@ def run_report(question, max_rows=50):
     return {"question": question, "sql": sql, "columns": columns, "rows": rows, "n": len(rows)}
 
 
+def _num(x):
+    try:
+        return float(str(x).replace(" ", "").replace(" ", "").replace(",", "."))
+    except Exception:
+        return None
+
+
+def render_chart(result, max_bars=25):
+    """Числа отчёта -> PNG (bar). Матч: >=2 колонки, последняя числовая, немного строк.
+    Числа берём из результата SQL (достоверны). matplotlib импортируем лениво (CLI не тянет его)."""
+    rows = result.get("rows") or []
+    cols = result.get("columns") or []
+    if result.get("error") or len(cols) < 2 or not rows or len(rows) > max_bars:
+        return None
+    labels = [str(r[0]) for r in rows]
+    vals = [_num(r[-1]) for r in rows]
+    if any(v is None for v in vals):
+        return None  # не числовой срез — график не строим (отдадим таблицей)
+    import io
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(8, max(2.2, 0.45 * len(rows) + 1)))
+    ax.barh(range(len(rows)), vals, color="#4C78A8")
+    ax.set_yticks(range(len(rows)))
+    ax.set_yticklabels(labels)
+    ax.invert_yaxis()
+    ax.set_xlabel(cols[-1])
+    title = (result.get("question") or "").strip()
+    if title:
+        ax.set_title(title[:90])
+    for i, v in enumerate(vals):
+        ax.text(v, i, f" {v:g}", va="center", fontsize=9)
+    fig.tight_layout()
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", dpi=120)
+    plt.close(fig)
+    return buf.getvalue()
+
+
 def format_table(result, show=30):
     if result.get("error"):
         return f"[ОТЧЁТ НЕ ВЫПОЛНЕН: {result['error']}]\nТрактовка (SQL): {result.get('sql') or '—'}"
