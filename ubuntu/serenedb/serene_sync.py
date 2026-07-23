@@ -26,22 +26,41 @@ def _core(name):
     return name.split("_", 1)[1] if "_" in name else name
 
 
-def _suggest(name, published):
-    """Ближайшее РЕАЛЬНОЕ имя для мёртвого (слой 2). Сравниваем по ядру и по длине наибольшего общего
-    фрагмента (устойчивее ratio: не штрафует длину — длинное верное не проигрывает короткому чужому),
-    в пределах того же типа (каталог ищем среди каталогов). Слабое совпадение → молчим, чтобы не
-    вводить в заблуждение. Тот же лексический принцип, что в резолвере; без имён-констант."""
+def _selectable(c):
+    """Кандидат пригоден как БИЗНЕС-выбор: не табличная часть (в ядре нет '_', иначе это `X_Товары`)
+    и не 1С-служебное (присоединённые файлы, помеченные на удаление). Это платформенные соглашения
+    1С (общие для любой конфигурации), а не имена-константы — как исключение navigation-колонок в
+    резолвере. Убирает мусор из подсказок (напр. `…ПрисоединенныеФайлы_УдалитьЭлектронныеПодписи`)."""
+    core = _core(c)
+    if "_" in core:
+        return False
+    low = core.lower()
+    return "присоединенныефайлы" not in low and not low.startswith("удалить")
+
+
+def _suggest(name, published, k=3):
+    """Ближайшие РЕАЛЬНЫЕ имена для мёртвого (слой 2). Сравниваем по ядру; метрика — длина наибольшего
+    общего фрагмента (устойчивее ratio: не штрафует длину, длинное верное не проигрывает короткому
+    чужому), ratio — тай-брейк. В пределах того же типа (каталог ищем среди каталогов), только среди
+    пригодных для выбора (без служебных/табличных — см. `_selectable`).
+    ВАЖНО про неоднозначность: если несколько кандидатов равно-близки (одинаковая длина общего
+    фрагмента, напр. десятки «Договор…») — возвращаем НЕСКОЛЬКО, а не один наугад: выбор за человеком.
+    Слабое совпадение → пусто (не вводим в заблуждение). Без имён-констант."""
     pref = name.split("_", 1)[0] if "_" in name else ""
     cq = _core(name)
-    same = [c for c in published if c.startswith(pref + "_")] or list(published)
-    best, best_key = None, (0, 0.0)
+    same = [c for c in published if c.startswith(pref + "_") and _selectable(c)] or list(published)
+    scored = []
     for c in same:
         cc = _core(c)
         sm = difflib.SequenceMatcher(None, cq, cc)
-        key = (sm.find_longest_match(0, len(cq), 0, len(cc)).size, sm.ratio())
-        if key > best_key:
-            best, best_key = c, key
-    return best if best_key[0] >= max(4, len(cq) // 3) else None
+        scored.append((sm.find_longest_match(0, len(cq), 0, len(cc)).size, round(sm.ratio(), 3), c))
+    scored = [s for s in scored if s[0] >= max(4, len(cq) // 3)]  # отсечь слабое
+    if not scored:
+        return []
+    scored.sort(reverse=True)
+    top = scored[0][0]  # лучшая длина общего фрагмента
+    band = [c for sz, _r, c in scored if sz == top]  # все равно-близкие по главной метрике
+    return band[:k]
 
 
 def _preflight(ents):
@@ -58,8 +77,9 @@ def _preflight(ents):
         print(f"  ⚠ ВНИМАНИЕ: {len(missing)} выбранных сущностей НЕ опубликованы в OData этой базы:")
         for m in missing:
             near = _suggest(m, published)
-            print(f"     ✗ {m}  →  ближайшее реальное: {near or '— (похожего нет)'}")
-        print("     имена не выдумывать — чинить по живому OData у источника выбора")
+            hint = " | ".join(near) + (" …" if len(near) == 3 else "") if near else "— (похожего нет)"
+            print(f"     ✗ {m}  →  похоже на: {hint}")
+        print("     имена не выдумывать; при неоднозначности выбрать нужное из показанных — по живому OData")
     return missing
 
 
