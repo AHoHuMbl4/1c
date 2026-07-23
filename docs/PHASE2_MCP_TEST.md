@@ -1,5 +1,11 @@
 # Фаза 2: тест MCP Toolkit на стенде
 
+> ⚠️ **DEV / ИСТОРИЯ.** MCP-тулкит по итогам этих тестов отвергнут как прод-канал
+> (обслуживается idle-обработчиком 1С — зависает; тумблеры не блокируют вызов). Прод-
+> канал — OData, см. [`ARCHITECTURE.md`](ARCHITECTURE.md), [`RUNBOOK_DEPLOY.md`](RUNBOOK_DEPLOY.md),
+> [`TOOLKIT_TRANSPORT_ROOTCAUSE.md`](TOOLKIT_TRANSPORT_ROOTCAUSE.md). Документ хранит сырые
+> результаты тестов (полезно для понимания, почему ушли на OData).
+
 _Начато 2026-07-22. Стенд: Windows 10.8.0.58, платформа 8.3.27.1786 x86, база `C:\1c\bases\buh_test` (Бухгалтерия 3.0.190.11). Обработка: `C:\1c\distr\MCP_Toolkit_x86_v1.8.0.epf`._
 
 ## Что уже проверено (Claude, автоматически через COM)

@@ -1,4 +1,9 @@
-# 1C read-only gateway (Ubuntu-сторона)
+# 1C read-only gateway — MCP-путь (DEV-опция)
+
+> ⚠️ **DEV.** Прод-канал — **OData** (`odata_gateway.py`, порт 6011; см. `../../docs/ARCHITECTURE.md`).
+> Этот `gateway.py` — whitelist-прокси для встроенного **MCP-тулкита**, который для прода
+> отвергнут (обслуживается idle-обработчиком 1С, зависает — `../../docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`).
+> Оставлен как рабочий пример на случай, если MCP-путь понадобится для отладки/ad-hoc запросов.
 
 Вся защита read-only — на Ubuntu. На Винде ничего кастомного: штатный MCP Toolkit на `127.0.0.1:6003` + SSH (оба уже есть).
 
