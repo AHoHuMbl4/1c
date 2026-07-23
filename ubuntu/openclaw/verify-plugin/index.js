@@ -134,6 +134,19 @@ export default definePluginEntry({
       return undefined; // allow без изменений
     });
 
+    // 3b) анти-слив на payload-пути: подпись к МЕДИА (фото) идёт через payload.text,
+    // а НЕ через message_sending.content. Режем внутреннее и здесь — полное кодовое покрытие.
+    api.on("reply_payload_sending", async (event, ctx) => {
+      const cfg = getCfg();
+      if (cfg.stripInternal === false) return undefined;
+      const p = event && event.payload;
+      if (!p || typeof p.text !== "string" || !p.text) return undefined;
+      const clean = stripInternal(p.text);
+      if (clean === p.text) return undefined; // нечего резать
+      dbg(cfg, `reply_payload_sending stripped caption/text (was ${p.text.length} -> ${clean.length})`);
+      return { payload: { ...p, text: clean.trim() ? clean : cfg.noDataReply } };
+    });
+
     // Эталон НЕ удаляем на agent_end (доставка идёт после него) — чистка по TTL в prune().
   },
 });
