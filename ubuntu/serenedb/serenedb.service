@@ -1,0 +1,18 @@
+[Unit]
+Description=SereneDB (search+analytics, Postgres wire) — 1C reporting mart
+After=network.target
+
+[Service]
+User=serenedb
+Group=serenedb
+ExecStart=/usr/local/bin/serened --flagfile=/etc/serenedb/serened.conf
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/serenedb
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target
