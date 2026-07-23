@@ -45,7 +45,9 @@ def report_1c(question: str) -> str:
         res = run_report(question)
     except Exception as e:  # noqa: BLE001
         return f"[ОШИБКА ОТЧЁТА: {type(e).__name__}] — сообщи клиенту, что отчёт не удалось построить."
-    text = format_table(res)
+    # прозрачность — СЕРВЕРНО (владельцу в журнал), в чат клиенту SQL не уходит
+    print(f"[report_1c] q={question!r} sql={res.get('sql')!r} n={res.get('n')} err={res.get('error')!r}", flush=True)
+    text = format_table(res, show_sql=False)
     try:
         png = render_chart(res)
     except Exception:  # noqa: BLE001

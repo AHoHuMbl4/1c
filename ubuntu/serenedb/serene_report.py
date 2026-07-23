@@ -164,9 +164,12 @@ def render_chart(result, max_bars=25):
     return buf.getvalue()
 
 
-def format_table(result, show=30):
+def format_table(result, show=30, show_sql=True):
+    """show_sql=True — для CLI/владельца (видно SQL-трактовку). show_sql=False — клиентский
+    вывод бота: только чистая таблица, без SQL/служебного (SQL логируется серверно отдельно)."""
     if result.get("error"):
-        return f"[ОТЧЁТ НЕ ВЫПОЛНЕН: {result['error']}]\nТрактовка (SQL): {result.get('sql') or '—'}"
+        base = f"[ОТЧЁТ НЕ ВЫПОЛНЕН: {result['error']}]"
+        return base + (f"\nТрактовка (SQL): {result.get('sql') or '—'}" if show_sql else "")
     cols = result.get("columns") or []
     grid = ([cols] if cols else []) + result["rows"][:show]
     widths = []
@@ -178,4 +181,7 @@ def format_table(result, show=30):
     if cols and lines:
         lines.insert(1, "  ".join("-" * w for w in widths))
     more = "" if result["n"] <= show else f"\n… ещё {result['n'] - show} строк"
-    return "\n".join(lines) + more + f"\n\nСтрок: {result['n']}\nТрактовка (SQL): {result['sql']}"
+    body = "\n".join(lines) + more
+    if show_sql:
+        body += f"\n\nСтрок: {result['n']}\nТрактовка (SQL): {result['sql']}"
+    return body
