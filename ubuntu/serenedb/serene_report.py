@@ -67,21 +67,83 @@ def get_schema():
     return "\n".join(out)
 
 
-def gen_sql(question, schema):
+# Семантический резолвер (Этап 3), v1 — ЛЕКСИЧЕСКИЙ (fuzzy) поверх SereneDB.
+# Задача: фаззи-термин из вопроса («ростов», «москвы») -> ТОЧНОЕ значение в данных («Г. РОСТОВ-НА-ДОНУ»),
+# чтобы LLM фильтровал по точному значению даже на больших справочниках (когда sample-values не влезут).
+# Ловит опечатки/падежи/частичные/регистр (LIKE + jaro_winkler). Чисто-семантику («питер»→«СПб»)
+# закроет слой на эмбеддингах+HNSW, когда будет reachable-эмбеддер (сейчас .38:8083 с .42 недоступен).
+RU_STOP = {
+    "сколько", "покажи", "дай", "топ", "самых", "больше", "меньше", "какой", "какие", "что",
+    "как", "все", "всего", "по", "за", "на", "из", "для", "это", "есть", "нет", "мне", "отчет",
+    "отчёт", "график", "таблицу", "таблица", "список", "штук", "года", "год", "лет", "месяц",
+    "месяцев", "город", "городов", "городам", "количество", "число", "сумма", "итого",
+}
+
+
+def _stem(w):
+    return w[:-2] if len(w) > 5 else w  # грубый стем под русские падежи (ростове->росто, москвы->моск)
+
+
+def resolve_hints(question, max_per_col=5, max_distinct=1500, min_sim=0.9):
+    """Термины вопроса -> точные значения КОЛОНОК-ИЗМЕРЕНИЙ витрины (fuzzy). Строка-подсказка для LLM.
+    Берём только низко-кардинальные текстовые колонки (справочные измерения вроде city), а не
+    высоко-кардинальные сущности (имена — description) — чтобы не шуметь. Падежи ловим стеммингом.
+    На больших измерениях чистую семантику даст векторный слой (HNSW) — TODO, нужен reachable-эмбеддер."""
+    words = [w for w in re.findall(r"[0-9A-Za-zА-Яа-яёЁ-]{4,}", str(question).lower()) if w not in RU_STOP]
+    if not words:
+        return ""
+    r = psql(
+        "SELECT table_name, column_name FROM duckdb_columns() "
+        "WHERE schema_name='public' AND lower(data_type) LIKE '%char%';",
+        ["-tAF", "\t"],
+    )
+    if r.returncode != 0:
+        return ""
+    hints = []
+    for line in r.stdout.splitlines():
+        if not line.strip():
+            continue
+        t, c = line.split("\t")
+        cnt = psql(f'SELECT count(DISTINCT "{c}") FROM "{t}";', ["-tA"]).stdout.strip()
+        if not cnt.isdigit() or int(cnt) > max_distinct:
+            continue  # высоко-кардинальная (сущность) — не измерение для фильтра по термину
+        conds = []
+        for w in words[:8]:
+            wq = w.replace("'", "''")
+            sq = _stem(w).replace("'", "''")
+            conds.append(f"lower(\"{c}\") LIKE '%{wq}%'")
+            conds.append(f"lower(\"{c}\") LIKE '%{sq}%'")
+            conds.append(f"jaro_winkler_similarity(lower(\"{c}\"), '{wq}') > {min_sim}")
+        q = (
+            f'SELECT DISTINCT "{c}" FROM "{t}" '
+            f'WHERE "{c}" IS NOT NULL AND ({" OR ".join(conds)}) LIMIT {max_per_col};'
+        )
+        vals = [v for v in psql(q, ["-tA"]).stdout.splitlines() if v.strip()][:max_per_col]
+        if vals:
+            hints.append(f"{t}.{c}: " + ", ".join(vals))
+    return "\n".join(hints)
+
+
+def gen_sql(question, schema, hints=""):
     if not DS_KEY:
         raise RuntimeError("нет DEEPSEEK_API_KEY")
     sys_prompt = (
         "Ты SQL-аналитик для SereneDB (DuckDB-совместимый диалект, Postgres-протокол). "
         "По схеме и вопросу верни РОВНО ОДИН read-only SELECT (или WITH...SELECT). "
         "Только колонки из схемы — не выдумывай. Учитывай ФОРМАТ значений из примеров (e.g. ...). "
+        "Если даны РЕЛЕВАНТНЫЕ ЗНАЧЕНИЯ — фильтруй ТОЧНО по ним (термин из вопроса → точное значение). "
         "Без пояснений, без markdown, без ';' в конце. Разумные LIMIT для 'топ'."
     )
+    user = f"СХЕМА:\n{schema}\n"
+    if hints:
+        user += f"\nРЕЛЕВАНТНЫЕ ЗНАЧЕНИЯ (термин вопроса → точные значения в данных, используй их):\n{hints}\n"
+    user += f"\nВОПРОС: {question}\n\nSQL:"
     body = json.dumps({
         "model": "deepseek-chat",
         "temperature": 0,
         "messages": [
             {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": f"СХЕМА:\n{schema}\n\nВОПРОС: {question}\n\nSQL:"},
+            {"role": "user", "content": user},
         ],
     }).encode()
     req = urllib.request.Request(
@@ -108,7 +170,11 @@ def run_report(question, max_rows=50):
     schema = get_schema()
     if not schema.strip():
         return {"question": question, "sql": None, "error": "витрина пуста (нет таблиц)"}
-    sql = gen_sql(question, schema)
+    try:
+        hints = resolve_hints(question)  # Этап 3: фаззи-резолвер терминов -> точные значения
+    except Exception:  # noqa: BLE001
+        hints = ""
+    sql = gen_sql(question, schema, hints)
     err = validate(sql)
     if err:
         return {"question": question, "sql": sql, "error": f"отклонено валидатором: {err}"}
