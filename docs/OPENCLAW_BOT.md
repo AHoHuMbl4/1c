@@ -108,6 +108,15 @@ braine приемлем (это не «кастом поверх OpenClaw», а 
 - либо иной путь по указанию владельца.
 Без его согласия плагин не пишем (правило №1).
 
+## 🔒 Изоляция и read-only эталона (инвариант — проверено 2026-07-23)
+Их проект-эталон `money/opwnclaw-bot` склонирован на LXC как **READ-ONLY** (`/opt/openclaw`);
+движок — `/opt/openclaw-engine`. Оба **только читаю** (ls/sed/cat), в них НЕ пишу/не коммичу/
+не пушу. Прод-бот владельца — на отдельном сервере `.15`, я туда **не подключался вообще**.
+Вся моя сборка — в **отдельном Linux-юзере `undebot`** → `/home/undebot/.openclaw/` на нашей
+LXC `.42` (рядом с braine). Ничего общего с их эталоном/продом.
+Проверка на 2026-07-23: `git -C /opt/openclaw status` пусто, HEAD==origin (`23a0fd1`),
+reflog = только `clone`; к `.15` подключений нет (known_hosts). ✅
+
 ## Реализация — прогресс (владелец одобрил Вариант А: плагин-verify)
 
 **Артефакты:** `ubuntu/openclaw/`.
@@ -117,15 +126,25 @@ braine приемлем (это не «кастом поверх OpenClaw», а 
   проверенный текст + источники; `no_data` пробрасывается маркером. Сервис **`1c-mcp-braine`**
   (LXC `127.0.0.1:6014`, enabled). Проверено MCP-клиентом: вернул реальных контрагентов
   с ИНН и цитатой. ✅
-- [ ] **Компонент 2 — движок OpenClaw** на LXC (npm; версия с MCP-клиентом + plugin hooks).
+- [x] **Компонент 2 — движок OpenClaw** на LXC (npm global **2026.7.1-2**). Инстанс под
+  юзером `undebot` (linger on): `~/.openclaw/openclaw.json` (DeepSeek provider-плагин
+  `@openclaw/deepseek-provider`, `commands.native=false`, `dmScope: per-channel-peer`),
+  `.env` (600, `DEEPSEEK_API_KEY`). Gateway = systemd **user**-юнит `openclaw-gateway.service`
+  (enabled --now, «gateway ready», http server listening). Проверен турн через gateway:
+  `openclaw agent --to +… --message …` → DeepSeek ответил. ✅
 - [ ] **Компонент 3 — verify-плагин** (`definePluginEntry`; `after_tool_call` = захват эталона
   braine + `message_sending` = сверка/замена): числа/даты/цены/имена ответа сверяются с
   выводом braine; несверенное режется/заменяется. Anti-hallucination кодом, не промтом.
-- [ ] **Компонент 4 — инстанция бота-менеджера:** конфиг + персона (когда звать `ask_1c`) +
+- [ ] **Компонент 4 — инстанция бота-менеджера:** ⏳ gateway поднят (см. К.2). Осталось:
   `openclaw mcp add second-brain --url http://127.0.0.1:6014/mcp --transport streamable-http`
-  + плагин enable.
+  + персона `workspace/AGENTS.md` (когда звать `ask_1c`) + `tools.allow` (узкий набор).
 - [ ] **Компонент 5 — тест:** живой диалог + провокации (факт, которого нет в ответе braine,
   должен быть отрезан кодом).
 
 Топология: собираем/демо на нашем LXC (`.42`, рядом с braine), НЕ трогая их прод-бот на `.15`.
 Перенос на прод / подключение их бота — отдельным шагом с владельцем.
+
+**CLI-гоча (из `docs/cli/agent.md`, не угадано):** одноразовый турн — `openclaw agent
+--message "<текст>"` (+ селектор сессии: `--to <E.164>` | `--agent <id>` | `--session-key`);
+позиционный текст НЕ принимается («Too many arguments»). Без `--deliver` ответ идёт в stdout
+(канал не нужен) — удобно для проверки.

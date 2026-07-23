@@ -11,8 +11,10 @@ _Обновлено: 2026-07-23 — «второй мозг» работает; 
 
 **Сборка (артефакты `ubuntu/openclaw/`):**
 - ✅ Компонент 1 — MCP-сервер `ask_1c` над braine (mcp_braine.py, FastMCP streamable-http). Сервис **1c-mcp-braine** :6014 (enabled). Проверено: вернул контрагентов с ИНН+цитатой.
-- ⏳ Компонент 2 — движок OpenClaw на LXC (npm). 3 — verify-плагин (after_tool_call+message_sending). 4 — инстанция бота (конфиг+персона+mcp add+плагин). 5 — тест на галлюцинации.
+- ✅ Компонент 2 — движок OpenClaw (npm 2026.7.1-2). Инстанс под юзером `undebot` (`~/.openclaw/`, DeepSeek provider-плагин), gateway = systemd user-юнит (enabled --now, «gateway ready»). Турн через gateway проверен (DeepSeek ответил).
+- ⏳ Компонент 4 — осталось: `openclaw mcp add second-brain` (:6014) + персона AGENTS.md + tools.allow. 3 — verify-плагин (after_tool_call+message_sending). 5 — тест на галлюцинации.
 Топология: собираем/демо на нашем `.42` (рядом с braine), НЕ трогая их прод-бот на `.15`.
+🔒 Эталон `money/opwnclaw-bot` (`/opt/openclaw`) + движок (`/opt/openclaw-engine`) — READ-ONLY, только читаю; к проду `.15` не подключался. Проверено 2026-07-23 (git clean, HEAD==origin).
 
 ---
 
