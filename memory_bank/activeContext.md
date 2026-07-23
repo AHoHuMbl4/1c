@@ -14,10 +14,14 @@ _Обновлено: 2026-07-23 — бот на Telegram живёт; новый 
 (`ubuntu/serenedb/serene_report.py`: схема+примеры→LLM→read-only SELECT→валидатор→SereneDB→таблица+SQL).
 ✅ **`report_1c` ЖИВОЙ в Telegram**: MCP-сервер `1c-mcp-reports` (:6015), бот маршрутизирует
 аналитика→report_1c / факт→ask_1c, гейт заземляет числа обоих. Проверено: «топ-5 городов по банкам» → верная таблица.
-✅ **График картинкой в Telegram** — `render_chart` (matplotlib) → PNG в workspace → бот шлёт `message`'ом
-(`sendPhoto` подтверждён). Находка: медиа-файл только из разрешённой директории (workspace), CHART_DIR env.
-**Дальше:** read-only роль SereneDB; Этап 3 семантический резолвер; штатный инкрементальный синк
-ETL→SereneDB; backup/restore (тест+фаундеры). RAG braine — второй инструмент (текст/fallback).
+✅ **График картинкой в Telegram** (`sendPhoto`; PNG в workspace = разрешённая дир, CHART_DIR env).
+✅ **Анти-слив КОДОМ** (`stripInternal` в `message_sending` + `reply_payload_sending` для caption).
+✅ **Read-only роль** `serene_ro` (бот-отчёты; БД физически не даёт писать; get_schema через duckdb_columns).
+✅ **Мониторинг «бот жив»** (systemd-таймер 3 мин → прямой Telegram-алерт владельцу при падении сервисов).
+✅ **Нативные правила money/opwnclaw-bot применены** (персона+tools.allow, QA-батарея). Мета/анти-ложь —
+на персоне (промт), кодового гейта нет (открытое поведение). Правило: [[feedback_prompt_rules_dont_work]].
+**Дальше:** SereneDB Этап 3 семантический резолвер; штатный инкрементальный синк ETL→SereneDB;
+backup/restore (тест+фаундеры); ротация bot-токена перед реальным продом. RAG braine — второй инструмент.
 
 ## ФОКУС (бот-слой готов): OpenClaw поверх braine (см. `docs/OPENCLAW_BOT.md`)
 У владельца УЖЕ работает бот-менеджер на OpenClaw (репо `money/opwnclaw-bot`, склонирован `/opt/openclaw`); отвечает «сухо». Надо, чтобы он **черпал факты из нашего braine**. OpenClaw = надстройка тона, НЕ замена: человек→OpenClaw→наш braine→OpenClaw оживил→клиент.

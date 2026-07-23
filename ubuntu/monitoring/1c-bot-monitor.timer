@@ -1,0 +1,10 @@
+[Unit]
+Description=1c-bot-monitor timer — проверять «бот жив» каждые 3 минуты
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=3min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target
