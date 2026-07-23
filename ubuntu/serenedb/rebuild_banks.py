@@ -36,9 +36,13 @@ def main():
         for r in rows:
             w.writerow([r.get(src) for src, _ in MAPPING])
     subprocess.run(["chown", "serenedb:serenedb", csv_path], check=False)
+    # is_folder=true — это узлы-ПАПКИ иерархии классификатора (регионы: «ВЛАДИМИРСКАЯ ОБЛАСТЬ»…),
+    # без города и реквизитов. Это НЕ банки — исключаем, иначе «покажи N банков» подсовывает заголовки
+    # регионов вместо банков. Город-фильтры не затрагиваются (у папок нет city).
     sql = (
         "DROP TABLE IF EXISTS banks;\n"
         f"CREATE TABLE banks AS SELECT * FROM read_csv('{csv_path}') "
+        "WHERE is_folder = false "
         "QUALIFY row_number() OVER (PARTITION BY ref_key ORDER BY ref_key) = 1;\n"
         f"GRANT SELECT ON banks TO {RO_ROLE};\n"
     )

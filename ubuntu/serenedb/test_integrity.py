@@ -29,6 +29,8 @@ DSN = L.DSN
 ODATA = L.ODATA
 # banks — витрина-проекция классификатора (особое имя, грузится rebuild_banks), знаем маппинг явно
 SPECIAL = {"banks": "Catalog_КлассификаторБанков"}
+# banks — ПРОЕКЦИЯ без папок-регионов (is_folder), поэтому сверяем с OData, отфильтрованным так же
+ODATA_FILTER = {"banks": "IsFolder eq false"}
 
 _fail = 0
 
@@ -55,9 +57,11 @@ def cols_lower(t):
     return {c.lower() for c in q(f"SELECT column_name FROM duckdb_columns() WHERE table_name='{t}'").splitlines() if c}
 
 
-def odata_count(es):
-    url = f"{ODATA}/{urllib.parse.quote(es)}?" + urllib.parse.urlencode(
-        {"$format": "json", "$top": "1", "$inlinecount": "allpages"})
+def odata_count(es, filt=None):
+    params = {"$format": "json", "$top": "1", "$inlinecount": "allpages"}
+    if filt:
+        params["$filter"] = filt
+    url = f"{ODATA}/{urllib.parse.quote(es)}?" + urllib.parse.urlencode(params)
     try:
         d = json.load(urllib.request.urlopen(url, timeout=60))
         c = d.get("odata.count")
@@ -91,7 +95,7 @@ def main():
         if t not in existing or "ref_key" not in cols_lower(t):
             continue
         mart = int(q(f'SELECT count(DISTINCT ref_key) FROM "{t}"'))
-        oc = odata_count(es)
+        oc = odata_count(es, ODATA_FILTER.get(t))
         if isinstance(oc, str) or oc is None:
             check(f"mart==OData {t}", True, f"OData count n/a ({oc}) — пропуск")
         else:

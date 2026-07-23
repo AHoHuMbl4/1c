@@ -170,9 +170,13 @@ def _lexical_into(hints, words, max_per_col, min_sim):
                 hints.setdefault((t, c), []).append(v)
 
 
-def _semantic_into(hints, words, min_cos=0.5):
-    """Qwen-вектор (v2): слово -> БЛИЖАЙШЕЕ значение-измерение в resolver_index (косинус, перебор).
-    Ловит смысл: «питер»/«спб» -> «Г. САНКТ-ПЕТЕРБУРГ». Порог отсекает не-сущностные слова."""
+def _semantic_into(hints, words, min_cos=0.70):
+    """Qwen-вектор: слово -> БЛИЖАЙШЕЕ значение-измерение в resolver_index (косинус, перебор).
+    Порог 0.70 ВЫСОКИЙ намеренно (замер measure_resolver.py): на коротких токенах эмбеддинг ловит
+    больше орфографию, чем гео-смысл, и низкий порог давал ЛОЖНЫЕ разрешения («Йоркшир»→Новошахтинск
+    0.51, «казань»→Кандалакша 0.62). Верные совпадения — ≥0.72 (спб/москва/пятигорск), ложные ≤0.63,
+    между ними и ставим отсечку. Легит-случаи («казань»/«питере») закрывают лексика + знания самой LLM.
+    Лучше НЕ подсказать, чем подсказать ЧУЖОЙ город (тихо неверный ответ)."""
     if not EMBED_URL:
         return
     chk = psql("SELECT count(*) FROM resolver_index;", ["-tA"])
@@ -284,8 +288,9 @@ def run_report(question, max_rows=50):
     err = validate(sql)
     if err:
         return {"question": question, "sql": sql, "error": f"отклонено валидатором: {err}"}
-    # обёртка-подзапрос: стабильные заголовки + гарантированный LIMIT независимо от формы sql
-    wrapped = f"SELECT * FROM (\n{sql}\n) _q LIMIT {max_rows}"
+    # обёртка-подзапрос: стабильные заголовки + LIMIT независимо от формы sql. Тянем max_rows+1, чтобы
+    # ЗАМЕТИТЬ обрезку и честно о ней сообщить (а не молча показать часть как всё — баг «50 из 77»).
+    wrapped = f"SELECT * FROM (\n{sql}\n) _q LIMIT {max_rows + 1}"
     r = psql(wrapped, extra=["-A", "-F", "\t"])  # без -t: первая строка = заголовки
     if r.returncode != 0:
         return {"question": question, "sql": sql, "error": f"ошибка выполнения: {r.stderr.strip()[:300]}"}
@@ -294,7 +299,10 @@ def run_report(question, max_rows=50):
         return {"question": question, "sql": sql, "columns": [], "rows": [], "n": 0}
     columns = data[0].split("\t")
     rows = [ln.split("\t") for ln in data[1:]]
-    return {"question": question, "sql": sql, "columns": columns, "rows": rows, "n": len(rows)}
+    truncated = len(rows) > max_rows
+    if truncated:
+        rows = rows[:max_rows]
+    return {"question": question, "sql": sql, "columns": columns, "rows": rows, "n": len(rows), "truncated": truncated}
 
 
 def _num(x):
@@ -355,6 +363,8 @@ def format_table(result, show=30, show_sql=True):
     if cols and lines:
         lines.insert(1, "  ".join("-" * w for w in widths))
     more = "" if result["n"] <= show else f"\n… ещё {result['n'] - show} строк"
+    if result.get("truncated"):  # выборка была обрезана лимитом — честно сообщаем, а не выдаём часть за всё
+        more += f"\n⚠ показаны первые {result['n']} — в выборке есть ещё строки (уточните фильтр/период)"
     body = "\n".join(lines) + more
     if show_sql:
         body += f"\n\nСтрок: {result['n']}\nТрактовка (SQL): {result['sql']}"
