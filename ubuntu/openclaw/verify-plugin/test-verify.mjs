@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, evaluate, mergeRef, numericTokens, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, evaluate, mergeRef, numericTokens, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -93,6 +93,37 @@ t("mergeRef объединяет цифры двух вызовов", () => {
 t("minDigits=3 ловит выдуманную 3-значную цену при эталоне", () => {
   const d = evaluate("Цена 450 рублей.", ref("Товар без цены"), null, { minDigits: 3 });
   assert.strictEqual(d.action, "replace");
+});
+
+// --- stripInternal: детерминированная зачистка внутреннего (анти-слив кодом) ---
+t("strip: убирает «Трактовка (SQL): ...»", () => {
+  const out = stripInternal("Топ городов\n| Москва | 630 |\nТрактовка (SQL): SELECT city FROM banks GROUP BY city");
+  assert.ok(!/SQL|SELECT|FROM/i.test(out));
+  assert.ok(out.includes("Москва"));
+});
+t("strip: убирает маркер [ГРАФИК-ФАЙЛ: ...]", () => {
+  const out = stripInternal("Вот отчёт.\n[ГРАФИК-ФАЙЛ: /home/undebot/.openclaw/workspace/charts/c.png]\nГотово.");
+  assert.ok(!out.includes("ГРАФИК-ФАЙЛ"));
+  assert.ok(!out.includes("/home/"));
+});
+t("strip: убирает Attachment и серверный путь", () => {
+  const out = stripInternal("Готово.\nAttachment: /home/undebot/.openclaw/workspace/charts/x.png");
+  assert.ok(!out.includes("Attachment"));
+  assert.ok(!/\/home\//.test(out));
+});
+t("strip: голый SQL вырезается", () => {
+  assert.strictEqual(stripInternal("SELECT count(*) FROM banks").trim(), "");
+});
+t("strip: внутренний маркер [НЕТ ДАННЫХ ...] убирается", () => {
+  const out = stripInternal("[НЕТ ДАННЫХ во втором мозге] — сообщи клиенту");
+  assert.strictEqual(out.trim(), "");
+});
+t("strip: чистый текст не трогается", () => {
+  const s = "Здравствуйте! Чем помочь по данным компании?";
+  assert.strictEqual(stripInternal(s), s);
+});
+t("strip: путь /var|/opt тоже режется", () => {
+  assert.ok(!/\/(var|opt)\//.test(stripInternal("файл /var/lib/serenedb-charts/a.png и /opt/x")));
 });
 
 console.log(`\n${pass} tests passed`);

@@ -25,7 +25,7 @@
 
 import { appendFileSync } from "node:fs";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, digitBlob, evaluate, extractText, mergeRef, numericTokens, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, digitBlob, evaluate, extractText, mergeRef, numericTokens, stripInternal, toolMatchesAny } from "./verify-core.js";
 
 const DEBUG_FILE = (process.env.HOME || "/tmp") + "/.openclaw/braine-verify-debug.log";
 function dbg(cfg, line) {
@@ -116,13 +116,22 @@ export default definePluginEntry({
       const inb = sessKey ? inbound.get(sessKey) || null : null;
 
       const decision = evaluate(content, ref, inb, cfg);
+      if (decision.action === "cancel") {
+        dbg(cfg, `message_sending sess=${sessKey} action=cancel`);
+        return { cancel: true, cancelReason: "braine-verify: " + decision.reason };
+      }
+      // база: обоснованный текст (или дословная замена braine) → детерминированная зачистка ВНУТРЕННЕГО (кодом)
+      const base = decision.action === "replace" ? decision.content : content;
+      const clean = cfg.stripInternal === false ? base : stripInternal(base);
+      const leaked = clean !== base;
       dbg(
         cfg,
-        `message_sending sess=${sessKey} action=${decision.action} tokens=${[...numericTokens(content, cfg.minDigits)].length} hasRef=${!!ref} refNoData=${ref ? ref.noData : "-"}`,
+        `message_sending sess=${sessKey} action=${decision.action} hasRef=${!!ref} refNoData=${ref ? ref.noData : "-"} stripped=${leaked}`,
       );
-      if (decision.action === "cancel") return { cancel: true, cancelReason: "braine-verify: " + decision.reason };
-      if (decision.action === "replace") return { content: decision.content };
-      return undefined; // allow
+      if (decision.action === "replace" || clean !== content) {
+        return { content: clean.trim() ? clean : cfg.noDataReply };
+      }
+      return undefined; // allow без изменений
     });
 
     // Эталон НЕ удаляем на agent_end (доставка идёт после него) — чистка по TTL в prune().
