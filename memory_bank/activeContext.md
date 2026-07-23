@@ -51,9 +51,11 @@ backup/restore (тест+фаундеры); ротация bot-токена пе
       └─ роутер 192.168.56.1 проброс → IIS:80
           └─ LXC: OData-шлюз :6011 (только GET, писать нельзя)
               └─ ETL (ubuntu/1c-etl) → md-таблицы → KB-репо money/1c-test (GitLab)
-                  └─ oikb/kb-poll → OWUI/pgvector (эмбеддинги DashScope)
-                      └─ tg-bridge (бот) + api :8090 → ответы с цитатами (DeepSeek, гейты)
+                  └─ oikb/kb-poll → OWUI/pgvector (эмбеддинги Qwen text-embedding-v4 @ 1536)
+                      └─ api :8090 (POST /ask) → ответы с цитатами (DeepSeek, гейты)
+                          └─ фронт Telegram = OpenClaw @test1c_mcp_bot (tg-bridge disabled); + SereneDB-аналитика
 ```
+_(Это исходная схема braine; актуальная полная картина со всеми слоями — `docs/ARCHITECTURE.md`.)_
 
 Эталон раскатки на новом проекте: **`docs/RUNBOOK_DEPLOY.md`** (переписан под OData).
 

@@ -176,7 +176,8 @@ systemctl start 1c-etl.service                                   # первый 
 
 ## 9. Zero-touch: что переживает ребут
 - **Windows:** IIS (W3SVC) = Automatic; публикация/состав OData/пользователи — персистентны. После ребута OData сам доступен.
-- **LXC (все enabled):** postgresql, open-webui, oikb, rerank-shim, tg-bridge, api, kb-poll, **1c-odata-gateway**; таймеры nightly-eval, **1c-etl**. Ребут LXC → всё поднимается само.
+- **LXC (все enabled):** postgresql, open-webui, oikb, rerank-shim, api, kb-poll, **1c-odata-gateway**; таймеры nightly-eval, **1c-etl**. Ребут LXC → всё поднимается само.
+  (`tg-bridge` — braine-фронт Telegram; в полной системе **disabled**, Telegram держит OpenClaw `@test1c_mcp_bot`. Аналитика/бот-слой — `docs/SERENEDB.md`, `docs/OPENCLAW_BOT.md`.)
 - Итог: после перезагрузки любой из машин канал восстанавливается без ручных действий.
 
 ---
