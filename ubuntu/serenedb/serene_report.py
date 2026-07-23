@@ -251,7 +251,14 @@ def gen_sql(question, schema, hints=""):
     return re.sub(r"^```[a-z]*\s*|\s*```$", "", sql, flags=re.I).strip().rstrip(";").strip()
 
 
+MAX_SQL_LEN = 6000  # патологическая генерация LLM (repetition-loop, тысячи вложенных функций) роняла
+# соединение SereneDB. Осмысленный аналитический SELECT в это укладывается с запасом; всё длиннее —
+# почти наверняка деградация, до БД НЕ пускаем (защита от падения сервера).
+
+
 def validate(sql):
+    if len(sql) > MAX_SQL_LEN:
+        return f"SQL слишком длинный ({len(sql)}>{MAX_SQL_LEN}) — вероятно патологическая генерация"
     if not re.match(r"^\s*(select|with)\b", sql, re.I):
         return "не SELECT/WITH"
     bare = _strip_literals(sql)  # ключевые слова/«;» проверяем ВНЕ строковых литералов

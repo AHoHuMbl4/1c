@@ -40,6 +40,7 @@ MUST_FAIL = [
     "SELECT * FROM glob('/etc/*')",
     "SELECT content FROM read_blob('/root/.ssh/id_rsa')",
     "SELECT * FROM read_parquet('/var/lib/serenedb/secret.parquet')",
+    "SELECT " + "1," * 4000 + "1 FROM banks",  # патологически длинный (repetition-loop) — ронял SereneDB
 ]
 
 
