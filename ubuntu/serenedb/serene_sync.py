@@ -14,6 +14,7 @@ import sys
 
 import build_resolver_index as R
 import poc_load_entity as L
+import rebuild_banks as RB
 
 SELECTED = os.environ.get("SELECTED_FILE", "/etc/1c-etl-selected.txt")
 
@@ -37,7 +38,16 @@ def main():
             print(f"  {es}: ОШИБКА {e}")
     print(f"витрина: загружено {ok}, пусто {empty}, ошибок {err} из {len(ents)}")
 
-    # пересборка семантического индекса резолвера (Qwen text-embedding-v4 @ 1536)
+    # Справочная витрина-проекция `banks` (БИК-классификатор) — вне списка сущностей (это ПРОЕКЦИЯ
+    # значимых полей на англ. схему, а не сырьё), поэтому обновляем отдельным шагом тем же стабильным
+    # конвейером. Иначе banks обновлялся бы только вручную и со временем расходился бы с 1С.
+    try:
+        RB.main()
+    except Exception as e:  # noqa: BLE001 — не должна валить синк
+        print(f"  banks: ОШИБКА пересборки {e}")
+
+    # пересборка семантического индекса резолвера (Qwen text-embedding-v4 @ 1536) — ПОСЛЕ banks,
+    # чтобы индекс увидел свежие города справочника
     try:
         R.main()
     except SystemExit as e:
