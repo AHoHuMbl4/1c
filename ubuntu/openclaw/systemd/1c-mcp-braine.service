@@ -1,0 +1,19 @@
+[Unit]
+# MCP-сервер поверх braine: даёт OpenClaw-боту инструмент ask_1c (факты из 1С).
+# Подключается к боту штатно: openclaw mcp add second-brain --url http://127.0.0.1:6014/mcp --transport streamable-http
+Description=1C second-brain MCP server (ask_1c over braine)
+After=network-online.target api.service
+Wants=network-online.target
+
+[Service]
+# EnvironmentFile: BRAINE_TOKEN=<API_TOKEN braine из /opt/smart-bot/.env>
+EnvironmentFile=/etc/1c-mcp-braine.env
+Environment=BRAINE_URL=http://127.0.0.1:8090
+Environment=MCP_HOST=127.0.0.1
+Environment=MCP_PORT=6014
+ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/openclaw-mcp/mcp_braine.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
