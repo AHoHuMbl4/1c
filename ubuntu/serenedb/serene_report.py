@@ -96,6 +96,10 @@ def get_schema():
         cols_by_table.setdefault(t, []).append((c, dt))
     out = []
     for t, cols in cols_by_table.items():
+        # число строк — фактические метаданные (как примеры значений), не хардкод. Помогает LLM
+        # выбрать НУЖНУЮ таблицу при похожих именах (banks 2779 vs catalog_банки 1) и честно видеть,
+        # что таблица пустая (не выдумывать данные, которых нет).
+        n = psql(f'SELECT count(*) FROM "{t}"', ["-tA"]).stdout.strip() or "?"
         parts = []
         for c, dt in cols:
             desc = f"{c} {dt}"
@@ -104,7 +108,7 @@ def get_schema():
                 if ex:
                     desc += " e.g. " + "|".join(ex)
             parts.append(desc)
-        out.append(f"- {t}({', '.join(parts)})")
+        out.append(f"- {t} [строк: {n}]({', '.join(parts)})")
     return "\n".join(out)
 
 
