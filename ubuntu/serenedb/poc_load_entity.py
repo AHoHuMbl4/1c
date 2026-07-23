@@ -19,12 +19,29 @@ CSV_DIR = os.environ.get("CSV_DIR", "/var/lib/serenedb")
 PAGE = 1000
 
 
+def _order_by(entity_set):
+    """Ключ стабильной сортировки для пагинации. `Ref_Key` — универсальный идентификатор
+    объекта 1С (уникален у любого справочника/документа). БЕЗ сортировки $skip/$top не
+    гарантирует одинаковый порядок между страницами → строки перекрываются между страницами
+    (наблюдали дубли ×2/×3) и часть строк вовсе теряется. Определяем ключ по данным, без хардкода."""
+    url = f"{ODATA}/{urllib.parse.quote(entity_set)}?" + urllib.parse.urlencode(
+        {"$format": "json", "$top": "1"}
+    )
+    try:
+        v = json.load(urllib.request.urlopen(url, timeout=120)).get("value", [])
+    except Exception:
+        return None
+    return "Ref_Key" if v and "Ref_Key" in v[0] else None
+
+
 def fetch_all(entity_set):
+    order = _order_by(entity_set)
     rows, skip = [], 0
     while True:
-        url = f"{ODATA}/{urllib.parse.quote(entity_set)}?" + urllib.parse.urlencode(
-            {"$format": "json", "$top": str(PAGE), "$skip": str(skip)}
-        )
+        params = {"$format": "json", "$top": str(PAGE), "$skip": str(skip)}
+        if order:
+            params["$orderby"] = order  # стабильный порядок → страницы не перекрываются
+        url = f"{ODATA}/{urllib.parse.quote(entity_set)}?" + urllib.parse.urlencode(params)
         v = json.load(urllib.request.urlopen(url, timeout=120)).get("value", [])
         if not v:
             break
@@ -60,14 +77,26 @@ def load_entity(es, ro_role="serene_ro"):
             w.writerow([r.get(c) for c in cols])
     subprocess.run(["chown", "serenedb:serenedb", csv_path], check=False)
     grant = f'GRANT SELECT ON "{table}" TO {ro_role};\n' if ro_role else ""
+    # Grain-инвариант: одна строка на объект 1С. Поверх стабильной пагинации — дедуп-сеть:
+    # если страницы OData всё же перекрылись, ref_key (уникальный ключ платформы) убирает копии;
+    # для сущностей без ref_key (напр. регистры) — снимаем полностью идентичные строки.
+    has_ref = any(safe_col(c).lower() == "ref_key" for c in cols)
+    select = (
+        f"SELECT * FROM read_csv('{csv_path}') "
+        "QUALIFY row_number() OVER (PARTITION BY ref_key ORDER BY ref_key) = 1"
+        if has_ref else f"SELECT DISTINCT * FROM read_csv('{csv_path}')"
+    )
     sql = (
         f'DROP TABLE IF EXISTS "{table}";\n'
-        f"CREATE TABLE \"{table}\" AS SELECT * FROM read_csv('{csv_path}');\n" + grant
+        f'CREATE TABLE "{table}" AS {select};\n' + grant
     )
     r = subprocess.run(["psql", DSN, "-v", "ON_ERROR_STOP=1"], input=sql, text=True, capture_output=True)
     if r.returncode != 0:
         raise RuntimeError(f"load error: {r.stderr.strip()[:200]}")
-    return {"entity": es, "table": table, "rows": len(rows), "cols": len(cols), "sec": dt}
+    c = subprocess.run(["psql", DSN, "-tAc", f'SELECT count(*) FROM "{table}";'], text=True, capture_output=True)
+    n = int(c.stdout.strip()) if c.returncode == 0 and c.stdout.strip().isdigit() else len(rows)
+    # rows = grain витрины (после дедупа), rows_raw = сколько строк отдал OData (видно перекрытие страниц)
+    return {"entity": es, "table": table, "rows": n, "rows_raw": len(rows), "cols": len(cols), "sec": dt}
 
 
 def main():
