@@ -52,6 +52,18 @@ def fetch_all(entity_set):
     return rows
 
 
+def published_entity_sets():
+    """Множество имён entity set, РЕАЛЬНО опубликованных в OData (служебный документ) — источник
+    правды об именах сущностей. Нужен, чтобы валидировать рукописный выбор против реальности, а не
+    верить памяти. Возвращает None при сетевой ошибке (тогда преполёт пропускается — без ложной тревоги)."""
+    try:
+        url = f"{ODATA}/?" + urllib.parse.urlencode({"$format": "json"})
+        doc = json.load(urllib.request.urlopen(url, timeout=60))
+        return {e.get("name", "") for e in doc.get("value", []) if e.get("name")}
+    except Exception:
+        return None
+
+
 def safe_col(name):
     # кириллица/спецсимволы -> безопасное имя колонки (без хардкода конкретных полей)
     s = re.sub(r"[^0-9A-Za-zА-Яа-яёЁ_]", "_", str(name)).strip("_")
