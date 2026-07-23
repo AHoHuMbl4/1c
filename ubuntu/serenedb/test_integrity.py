@@ -27,10 +27,10 @@ except Exception:
 
 DSN = L.DSN
 ODATA = L.ODATA
-# banks — витрина-проекция классификатора (особое имя, грузится rebuild_banks), знаем маппинг явно
-SPECIAL = {"banks": "Catalog_КлассификаторБанков"}
-# banks — ПРОЕКЦИЯ без папок-регионов (is_folder), поэтому сверяем с OData, отфильтрованным так же
-ODATA_FILTER = {"banks": "IsFolder eq false"}
+# banks — витрина-ПРОЕКЦИЯ (исключает папки-регионы is_folder + ремап колонок), поэтому в T2
+# «витрина == сырой OData» НЕ участвует: сравнивать проекцию с сырым count некорректно (а OData
+# $filter по IsFolder в этой 1С не работает — и eq false, и eq true дают 83). Целостность banks
+# держат T1 (grain: count==distinct), стабильная пагинация загрузчика (без потерь) и rebuild_banks.
 
 _fail = 0
 
@@ -89,13 +89,13 @@ def main():
     print("\n== T2. Витрина == живой OData (нет потерь/дублей загрузки) ==")
     ent_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "serene-entities.txt")
     ents = [l.strip() for l in open(ent_file, encoding="utf-8") if l.strip() and not l.lstrip().startswith("#")]
-    pairs = [(es, L.safe_col(es).lower()) for es in ents] + [(v, k) for k, v in SPECIAL.items()]
+    pairs = [(es, L.safe_col(es).lower()) for es in ents]  # banks-проекция вне T2 (см. коммент выше)
     existing = set(tbls)
     for es, t in pairs:
         if t not in existing or "ref_key" not in cols_lower(t):
             continue
         mart = int(q(f'SELECT count(DISTINCT ref_key) FROM "{t}"'))
-        oc = odata_count(es, ODATA_FILTER.get(t))
+        oc = odata_count(es)
         if isinstance(oc, str) or oc is None:
             check(f"mart==OData {t}", True, f"OData count n/a ({oc}) — пропуск")
         else:

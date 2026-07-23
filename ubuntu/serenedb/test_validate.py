@@ -41,6 +41,11 @@ MUST_FAIL = [
     "SELECT content FROM read_blob('/root/.ssh/id_rsa')",
     "SELECT * FROM read_parquet('/var/lib/serenedb/secret.parquet')",
     "SELECT " + "1," * 4000 + "1 FROM banks",  # патологически длинный (repetition-loop) — ронял SereneDB
+    "SELECT * FROM resolver_index",                      # внутренний RAG-индекс (эмбеддинги)
+    "SELECT * FROM pg_settings",                         # конфиг движка + внутренние пути
+    "SELECT table_name FROM information_schema.tables",  # раскрытие служебных объектов
+    "SELECT current_setting('data_directory')",          # внутренний путь через current_setting
+    "SELECT * FROM duckdb_settings()",                   # интроспекция движка
 ]
 
 

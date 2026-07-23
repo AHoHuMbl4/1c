@@ -58,6 +58,19 @@ FS_ACCESS = re.compile(
 )
 
 
+# Служебные/системные объекты: read-only роль имеет SELECT и на внутренний индекс резолвера, и на
+# системные каталоги. Бизнес-бот их не запрашивает; LLM-запрос к ним = утечка внутренней структуры
+# (resolver_index c эмбеддингами, конфиг движка, пути на диске, имя сервис-аккаунта). Режем на
+# валидаторе. Внутренние запросы резолвера/get_schema идут МИМО validate() (это код, не LLM), поэтому
+# продолжают работать.
+INTERNAL_OBJECTS = re.compile(
+    r"\b(resolver_index|information_schema|pg_settings|pg_catalog|pg_stat\w*|pg_roles|pg_authid|"
+    r"pg_shadow|pg_user|pg_database|pg_tables|pg_read\w*|current_setting|current_database|"
+    r"duckdb_settings|duckdb_secrets|duckdb_columns|duckdb_tables)\b",
+    re.I,
+)
+
+
 def _strip_literals(sql):
     """Убрать содержимое строковых литералов, чтобы ключевое слово/«;» ВНУТРИ строки
     (LIKE '%truncate%', city='РОСТОВ; МОСКВА') не считалось оператором."""
@@ -272,6 +285,8 @@ def validate(sql):
         return "запрещённое ключевое слово (изменение данных)"
     if FS_ACCESS.search(bare):
         return "запрещён доступ к файловой системе (табличная функция чтения файлов)"
+    if INTERNAL_OBJECTS.search(bare):
+        return "запрещён доступ к служебным/системным объектам"
     return None
 
 
