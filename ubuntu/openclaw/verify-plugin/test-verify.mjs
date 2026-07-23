@@ -126,4 +126,37 @@ t("strip: путь /var|/opt тоже режется", () => {
   assert.ok(!/\/(var|opt)\//.test(stripInternal("файл /var/lib/serenedb-charts/a.png и /opt/x")));
 });
 
+// === ИЗОЩРЁННЫЕ (adversarial) ===
+
+// substring-заземление: короткое выдуманное число НЕ должно проходить как подстрока длинного обоснованного
+t("adv: 2740 ⊂ 7727406020, но выдумано -> replace (не заземлять по подстроке)", () => {
+  const d = evaluate("Прибыль 2740 тыс.", ref("ИНН 7727406020"), null, {});
+  assert.strictEqual(d.action, "replace");
+});
+t("adv: cross-number 3456 из '1234'+'5678' -> replace", () => {
+  let r = mergeRef(null, "код 1234", 1000, ND);
+  r = mergeRef(r, "счёт 5678", 1001, ND);
+  assert.strictEqual(evaluate("Значение 3456.", r, null, {}).action, "replace");
+});
+t("adv: эхо-подстрока номера юзера не спасает выдумку (2740 ⊂ 7727406020) -> replace", () => {
+  const d = evaluate("Сумма 2740.", ref("текст без числа"), inbound("проверь 7727406020"), {});
+  assert.strictEqual(d.action, "replace");
+});
+// регресс: разная группировка тысяч ДОЛЖНА заземляться (через точный токен, не подстроку)
+t("adv-regress: 7 727 406 020 == 7727406020 -> allow", () => {
+  assert.strictEqual(evaluate("ИНН 7 727 406 020", ref("inn=7727406020"), null, {}).action, "allow");
+});
+// осознанный компромисс: короткое число (< minDigits) не сверяется — защита витрины отдельными тестами целостности
+t("adv-doc: короткое '5' при эталоне не проверяется -> allow (известный blind-spot)", () => {
+  assert.strictEqual(evaluate("В выборке 5 банков.", ref("таблица без пятёрки"), null, {}).action, "allow");
+});
+// stripInternal — доп. рёбра
+t("adv-strip: несколько серверных путей в одной строке", () => {
+  const out = stripInternal("см. /etc/passwd и /root/.ssh/id_rsa и /var/lib/x");
+  assert.ok(!/\/(etc|root|var)\//.test(out));
+});
+t("adv-strip: SQL в нижнем регистре тоже режется", () => {
+  assert.strictEqual(stripInternal("select code from banks where city='x'").trim(), "");
+});
+
 console.log(`\n${pass} tests passed`);

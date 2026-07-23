@@ -115,10 +115,14 @@ export function mergeRef(prev, text, nowMs, noDataMarker) {
   };
 }
 
-// токен обоснован, если он есть среди чисел эталона braine ИЛИ его дал сам пользователь
+// токен обоснован, если он ТОЧНО присутствует среди числовых токенов эталона braine ИЛИ ввода
+// пользователя. НЕ по подстроке blob: короткое выдуманное число (2740) может оказаться подстрокой
+// длинного обоснованного (7727406020) или склейки нескольких — это ложное заземление (галлюцинация
+// проходит). Разную группировку тысяч (7 727 406 020 == 7727406020) покрывает сам токенайзер: обе
+// стороны нормализуются в один и тот же токен, поэтому точного сравнения по digits достаточно.
 export function isGrounded(token, ref, inb) {
-  if (ref && (ref.digits.has(token) || ref.blob.includes(token))) return true;
-  if (inb && (inb.digits.has(token) || inb.blob.includes(token))) return true;
+  if (ref && ref.digits.has(token)) return true;
+  if (inb && inb.digits.has(token)) return true;
   return false;
 }
 
