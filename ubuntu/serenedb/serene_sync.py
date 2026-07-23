@@ -17,7 +17,12 @@ import build_resolver_index as R
 import poc_load_entity as L
 import rebuild_banks as RB
 
-SELECTED = os.environ.get("SELECTED_FILE", "/etc/1c-etl-selected.txt")
+# Список сущностей — СОБСТВЕННЫЙ у serene (версионируется в git, деплоится рядом со скриптом),
+# НЕ копия braine: две копии разъезжаются. Все имена в нём заведомо из живого OData (+ преполёт
+# сверяет каждый прогон). Переопределяется env SELECTED_FILE при необходимости.
+SELECTED = os.environ.get(
+    "SELECTED_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "serene-entities.txt")
+)
 
 
 def _core(name):
