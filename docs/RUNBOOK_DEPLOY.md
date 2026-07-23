@@ -151,7 +151,7 @@ systemctl daemon-reload && systemctl enable --now 1c-odata-gateway
 ---
 
 ## 7. Стек braine (LXC) — `docs/UBUNTU_SETUP.md`
-Клон braine в `/opt/smart-bot`; `.env` из `credentials/` (KB-репо, бот, ключи, сгенерированные секреты); `install.sh` пропатчить (без Ollama, пины `open-webui==0.10.2`/`oikb==0.3.6`); `bootstrap.sh` (админ OWUI, KB, эмбеддер DashScope, реранкер-шим). Сервисы: postgresql, open-webui(:3000), oikb(:8081), rerank-shim(:8082), tg-bridge, api(:8090), kb-poll. Пустой `gsheets-sync.timer` — замаскировать, если Google Sheets не нужны.
+Клон braine в `/opt/smart-bot`; `.env` из `credentials/` (KB-репо, бот, ключи, сгенерированные секреты); `install.sh` пропатчить (пины `open-webui==0.10.2`/`oikb==0.3.6`); `bootstrap.sh` (админ OWUI, KB, **эмбеддер Qwen `text-embedding-v4` @ 1536 через DashScope**, реранкер qwen3-rerank-шим). Сервисы: postgresql, open-webui(:3000), oikb(:8081), rerank-shim(:8082), tg-bridge, api(:8090), kb-poll. Пустой `gsheets-sync.timer` — замаскировать, если Google Sheets не нужны.
 
 ---
 
@@ -191,7 +191,7 @@ systemctl start 1c-etl.service                                   # первый 
 - IIS включён (ребут), W3SVC Automatic; база опубликована; OData enable=true; состав — 1128 объектов (COM foreach) — ✅.
 - OData читает как служба: `Организации`→«Наша организация», `Валюты`=1; **зависаний/модалок нет** — ✅.
 - Read-only 2 слоя: `ai_reader` пишет→500; шлюз POST/PATCH/PUT/DELETE→405 (проверено с LXC) — ✅.
-- braine развёрнут (7 сервисов active, пины 0.10.2/0.3.6, без Ollama); бот @test1c_mcp_bot в Telegram — ✅.
+- braine развёрнут (7 сервисов active, пины 0.10.2/0.3.6, эмбеддер Qwen `text-embedding-v4` @ 1536); бот @test1c_mcp_bot в Telegram — ✅.
 - **ETL прогнан:** 19 сущностей / 44 записи через OData-шлюз → push в KB-репо → oikb «Synced: 20 added» → индексация — ✅.
 - **Бот отвечает по данным 1С:** «Каких контрагентов знаешь?» → «МИ ФНС России по управлению долгом (ИНН 7727406020), Казначейство России» с цитатами — ✅.
 - Zero-touch: все сервисы enabled; IIS Automatic — ✅.

@@ -7,7 +7,7 @@
 - Прод-канал 1С→бот полностью собран и проверен: 1С → OData/IIS (read-only ai_reader) → LXC OData-шлюз (:6011, GET-only) → ETL → KB-репо → oikb/OWUI индексация → бот отвечает по данным 1С с цитатами.
 - Стенд: платформа 8.3.27.1786 x86, Бухгалтерия 3.0.190.11, community-лицензия, бэкап.
 - IIS-публикация + OData (состав 1128 объектов через COM), read-only 2 слоя.
-- braine на LXC: 7 сервисов active, пины 0.10.2/0.3.6, без Ollama, DashScope-эмбеддер.
+- braine на LXC: 7 сервисов active, пины 0.10.2/0.3.6, эмбеддер Qwen `text-embedding-v4` @ 1536 (DashScope), реранк qwen3-rerank.
 - ETL прогнан (19 сущностей/44 записи), бот подтверждён вопросом про контрагентов.
 - Zero-touch: всё enabled/Automatic, переживает ребут без ручных действий.
 - Эталон раскатки: `docs/RUNBOOK_DEPLOY.md`; корневая причина отказа тулкита: `docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`.
