@@ -1,0 +1,27 @@
+{
+  "name": "openclaw-braine-verify",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Code-level anti-hallucination gate over braine ask_1c for the OpenClaw bot layer",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "verify-core.js",
+    "openclaw.plugin.json"
+  ],
+  "scripts": {
+    "test": "node test-verify.mjs"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.3.24-beta.2"
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.js"
+    ],
+    "compat": {
+      "pluginApi": ">=2026.3.24-beta.2",
+      "minGatewayVersion": "2026.3.24-beta.2"
+    }
+  }
+}

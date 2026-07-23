@@ -11,9 +11,12 @@ _Обновлено: 2026-07-23 — «второй мозг» работает; 
 
 **Сборка (артефакты `ubuntu/openclaw/`):**
 - ✅ Компонент 1 — MCP-сервер `ask_1c` над braine (mcp_braine.py, FastMCP streamable-http). Сервис **1c-mcp-braine** :6014 (enabled). Проверено: вернул контрагентов с ИНН+цитатой.
-- ✅ Компонент 2 — движок OpenClaw (npm 2026.7.1-2). Инстанс под юзером `undebot` (`~/.openclaw/`, DeepSeek provider-плагин), gateway = systemd user-юнит (enabled --now, «gateway ready»). Турн через gateway проверен (DeepSeek ответил).
-- ⏳ Компонент 4 — осталось: `openclaw mcp add second-brain` (:6014) + персона AGENTS.md + tools.allow. 3 — verify-плагин (after_tool_call+message_sending). 5 — тест на галлюцинации.
+- ✅ Компонент 2 — движок OpenClaw (npm 2026.7.1-2). Инстанс под юзером `undebot` (`~/.openclaw/`, DeepSeek provider-плагин), gateway = systemd user-юнит (enabled --now). Турн через gateway проверен.
+- ✅ Компонент 3 — verify-плагин (`ubuntu/openclaw/verify-plugin/`, нативный `definePluginEntry`+хуки). Установлен, enabled, хуки СРАБАТЫВАЮТ, эталон braine захватывается (refDigits>0). 19 оффлайн-юнитов зелёные. Живой гейт `message_sending` — только на доставке в канал (⏳ К5).
+- ✅ Компонент 4 — `mcp add second-brain` (:6014, include ask_1c), бот зовёт инструмент, отвечает данными 1С. Осталось: персона AGENTS.md (тон+когда звать; НЕ анти-галл).
+- ⏳ Компонент 5 — живой тест гейта: нужен канал (Telegram). `message_sending` не срабатывает на `openclaw agent` без `--deliver`. Выбор бота для демо — за владельцем.
 Топология: собираем/демо на нашем `.42` (рядом с braine), НЕ трогая их прод-бот на `.15`.
+🔬 Живые гочи (2026-07-23, в OPENCLAW_BOT.md §Живые находки): allowConversationAccess для хуков; MCP-имя `second-brain__ask_1c` (суффикс-матч); config через api.pluginConfig; ключ провайдера в auth-store (`models auth paste-api-key`), не только env.
 🔒 Эталон `money/opwnclaw-bot` (`/opt/openclaw`) + движок (`/opt/openclaw-engine`) — READ-ONLY, только читаю; к проду `.15` не подключался. Проверено 2026-07-23 (git clean, HEAD==origin).
 
 ---

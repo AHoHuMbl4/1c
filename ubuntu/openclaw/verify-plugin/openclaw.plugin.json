@@ -1,0 +1,26 @@
+{
+  "id": "braine-verify",
+  "name": "Braine Verify",
+  "description": "Anti-hallucination gate: verifies hard numeric facts (INN/sums/dates/prices/codes) in outbound messages against the braine ask_1c reference for the same turn. Ungrounded facts are replaced with braine's grounded answer or cancelled. Code-level, not prompt.",
+  "activation": {
+    "onStartup": true
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "toolName": { "type": "string" },
+      "minDigits": { "type": "integer", "minimum": 1 },
+      "highRiskDigits": { "type": "integer", "minimum": 1 },
+      "noDataMarker": { "type": "string" },
+      "noDataReply": { "type": "string" },
+      "refTtlMs": { "type": "integer", "minimum": 1000 },
+      "debug": { "type": "boolean" }
+    }
+  },
+  "uiHints": {
+    "toolName": { "label": "Tool name", "help": "MCP tool that returns grounded braine facts (default: ask_1c)" },
+    "minDigits": { "label": "Min digits to verify", "help": "Verify numeric tokens with at least this many digits (default 4; set 3 for stricter price checks)" },
+    "highRiskDigits": { "label": "High-risk digit length", "help": "Ungrounded numbers this long with no braine lookup are cancelled (default 7: INN/account/phone)" }
+  }
+}

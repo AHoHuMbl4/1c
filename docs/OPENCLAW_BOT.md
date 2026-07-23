@@ -132,19 +132,42 @@ reflog = только `clone`; к `.15` подключений нет (known_hos
   `.env` (600, `DEEPSEEK_API_KEY`). Gateway = systemd **user**-юнит `openclaw-gateway.service`
   (enabled --now, «gateway ready», http server listening). Проверен турн через gateway:
   `openclaw agent --to +… --message …` → DeepSeek ответил. ✅
-- [ ] **Компонент 3 — verify-плагин** (`definePluginEntry`; `after_tool_call` = захват эталона
-  braine + `message_sending` = сверка/замена): числа/даты/цены/имена ответа сверяются с
-  выводом braine; несверенное режется/заменяется. Anti-hallucination кодом, не промтом.
-- [ ] **Компонент 4 — инстанция бота-менеджера:** ⏳ gateway поднят (см. К.2). Осталось:
-  `openclaw mcp add second-brain --url http://127.0.0.1:6014/mcp --transport streamable-http`
-  + персона `workspace/AGENTS.md` (когда звать `ask_1c`) + `tools.allow` (узкий набор).
-- [ ] **Компонент 5 — тест:** живой диалог + провокации (факт, которого нет в ответе braine,
-  должен быть отрезан кодом).
+- [x] **Компонент 3 — verify-плагин** (`ubuntu/openclaw/verify-plugin/`, нативный
+  `definePluginEntry` + хуки `api.on`). Собран, установлен (`plugins install npm-pack:`),
+  **enabled**, хуки реально срабатывают, эталон braine захватывается. Чистая логика в
+  `verify-core.js` — **19 оффлайн-юнитов** (`test-verify.mjs`) зелёные. Осталось только увидеть
+  срабатывание `message_sending` на РЕАЛЬНОЙ доставке (нужен канал — см. К5). ✅(код) ⏳(живой гейт)
+- [x] **Компонент 4 — стыковка bot↔braine:** `openclaw mcp add second-brain` (`:6014`,
+  streamable-http, `include ask_1c`) — сделано, `mcp probe` = 1 tool. Бот нативно зовёт
+  инструмент и отвечает реальными данными 1С. Осталось: персона `workspace/AGENTS.md`
+  (тон + КОГДА звать `ask_1c`; НЕ для анти-галл — это гейт) + опц. `tools.allow`.
+- [ ] **Компонент 5 — живой тест гейта:** нужен канал (Telegram) — `message_sending`
+  срабатывает только на доставке в канал, не на `openclaw agent` без `--deliver`.
+  Выбор бота для демо на `.42` — за владельцем (новый тест-бот, либо забрать
+  `@test1c_mcp_bot` у braine-моста). После подключения: провокации (факт не из braine → режется).
 
 Топология: собираем/демо на нашем LXC (`.42`, рядом с braine), НЕ трогая их прод-бот на `.15`.
 Перенос на прод / подключение их бота — отдельным шагом с владельцем.
 
-**CLI-гоча (из `docs/cli/agent.md`, не угадано):** одноразовый турн — `openclaw agent
---message "<текст>"` (+ селектор сессии: `--to <E.164>` | `--agent <id>` | `--session-key`);
-позиционный текст НЕ принимается («Too many arguments»). Без `--deliver` ответ идёт в stdout
-(канал не нужен) — удобно для проверки.
+## 🔬 Живые находки интеграции (2026-07-23, проверено в рантайме, НЕ угадано)
+Всё ниже выяснено запуском на стенде + чтением движка `/opt/openclaw-engine`:
+1. **Хуки НЕ-bundled плагина к переписке блокируются по умолчанию.** Нужен флаг
+   `plugins.entries.braine-verify.hooks.allowConversationAccess=true`, иначе `after_tool_call`/
+   `message_sending`/`agent_end` молча не срабатывают (в логе `typed hook … blocked because …`).
+2. **MCP-инструмент проецируется боту под именем сервера:** `ask_1c` → **`second-brain__ask_1c`**.
+   В плагине имя матчим по суффиксу (`toolMatches`), иначе эталон не захватывается.
+3. **Конфиг плагина — через `api.pluginConfig`** (в ctx хука его НЕТ, `pluginConfig` там пусто).
+4. **`message_sending` — только на доставке в канал** (`src/infra/outbound/deliver.ts`), не на
+   `openclaw agent` без `--deliver`. `after_tool_call`/`agent_end` — на любом турне.
+5. **Ключ провайдера для изолированного агента** хранить в auth-store, не только в env:
+   `openclaw models auth paste-api-key --provider deepseek --profile-id deepseek:default`
+   (иначе «No API key found» после того как `plugins.allow` задан явно — он гейтит discovery).
+6. **CLI-турн:** `openclaw agent --message "<текст>"` (+ `--to <E.164>`/`--agent`/`--session-key`);
+   позиционный текст не принимается. Без `--deliver` ответ в stdout (для проверки мозга/эталона).
+
+## Как работает гейт (Компонент 3) — детерминированно, кодом
+`after_tool_call(second-brain__ask_1c)` кладёт ответ braine в эталон хода (ключ `runId`,
+несколько вызовов сливаются). `message_received` помнит числа пользователя (эхо ≠ выдумка).
+`message_sending`: жёсткие числовые токены (≥`minDigits`, с группировкой) сверяются с эталоном/
+вводом; необоснованные → замена на дословный braine / «нет данных», длинный выдуманный
+ИНН без эталона → cancel. Границы и конфиг — в `verify-plugin/README.md`.
