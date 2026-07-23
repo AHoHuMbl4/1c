@@ -1,0 +1,15 @@
+[Unit]
+Description=1c-mcp-reports — MCP report_1c (умная аналитика по витрине SereneDB)
+After=network.target serenedb.service
+Wants=serenedb.service
+
+[Service]
+WorkingDirectory=/opt/1c-mcp-reports
+EnvironmentFile=/etc/1c-mcp-reports.env
+ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/mcp_reports.py
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

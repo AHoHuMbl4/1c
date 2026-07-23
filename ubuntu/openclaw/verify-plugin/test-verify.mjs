@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, evaluate, mergeRef, numericTokens, toolMatches } from "./verify-core.js";
+import { DEFAULTS, evaluate, mergeRef, numericTokens, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -19,6 +19,10 @@ t("toolMatches: точное имя", () => assert.ok(toolMatches("ask_1c", "ask
 t("toolMatches: MCP-неймспейс second-brain__ask_1c", () => assert.ok(toolMatches("second-brain__ask_1c", "ask_1c")));
 t("toolMatches: чужой инструмент не матчится", () => assert.ok(!toolMatches("memory_search", "ask_1c")));
 t("toolMatches: не ловим ложный суффикс без разделителя", () => assert.ok(!toolMatches("myask_1c", "ask_1c")));
+t("toolMatchesAny: report_1c из списка (MCP-неймспейс)", () =>
+  assert.ok(toolMatchesAny("second-brain-reports__report_1c", ["ask_1c", "report_1c"])));
+t("toolMatchesAny: ask_1c из списка", () => assert.ok(toolMatchesAny("second-brain__ask_1c", ["ask_1c", "report_1c"])));
+t("toolMatchesAny: чужой не матчится", () => assert.ok(!toolMatchesAny("memory_search", ["ask_1c", "report_1c"])));
 
 // --- токенайзер ---
 t("ИНН одним числом", () => assert.ok(numericTokens("ИНН 7727406020", 4).has("7727406020")));

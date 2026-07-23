@@ -3,7 +3,8 @@
 // это к хукам движка. Принцип и политика описаны в index.js / OPENCLAW_BOT.md.
 
 export const DEFAULTS = {
-  toolName: "ask_1c", // MCP-инструмент, возвращающий обоснованные факты braine
+  toolName: "ask_1c", // (устар.) одиночное имя; ниже toolNames — список заземляемых инструментов
+  toolNames: ["ask_1c", "report_1c"], // и факты braine, и числа отчётов SereneDB — эталон для сверки
   minDigits: 4, // проверяем числовые токены длиной >= столько цифр (год/сумма/ИНН/код)
   highRiskDigits: 7, // токен такой длины (ИНН/счёт/телефон) без эталона -> жёсткий блок
   noDataMarker: "[НЕТ ДАННЫХ", // префикс маркера «нет данных» из mcp_braine
@@ -38,6 +39,11 @@ export function digitBlob(text) {
 export function toolMatches(name, want) {
   if (!name || !want) return false;
   return name === want || name.endsWith("__" + want) || name.endsWith(":" + want) || name.endsWith("." + want);
+}
+
+// матч против списка (ask_1c + report_1c и т.п.) — оба инструмента дают эталонные числа
+export function toolMatchesAny(name, wants) {
+  return (wants || []).some((w) => toolMatches(name, w));
 }
 
 // достаём читаемый текст из результата MCP-инструмента произвольной формы

@@ -25,7 +25,7 @@
 
 import { appendFileSync } from "node:fs";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, digitBlob, evaluate, extractText, mergeRef, numericTokens, toolMatches } from "./verify-core.js";
+import { DEFAULTS, digitBlob, evaluate, extractText, mergeRef, numericTokens, toolMatchesAny } from "./verify-core.js";
 
 const DEBUG_FILE = (process.env.HOME || "/tmp") + "/.openclaw/braine-verify-debug.log";
 function dbg(cfg, line) {
@@ -73,7 +73,8 @@ export default definePluginEntry({
     // 1) захват эталона braine за ход (ключ = sessionKey; сброс при новом runId)
     api.on("after_tool_call", async (event, ctx) => {
       const cfg = getCfg();
-      if (!event || !toolMatches(event.toolName, cfg.toolName)) return;
+      const wants = cfg.toolNames && cfg.toolNames.length ? cfg.toolNames : [cfg.toolName];
+      if (!event || !toolMatchesAny(event.toolName, wants)) return;
       const runId = event.runId || (ctx && ctx.runId) || null;
       const sessKey = sessKeyOf(ctx, event) || (runId ? "run:" + runId : null);
       if (!sessKey) return;

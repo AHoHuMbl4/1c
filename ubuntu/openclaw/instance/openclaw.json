@@ -103,6 +103,17 @@
             "ask_1c"
           ]
         }
+      },
+      "second-brain-reports": {
+        "url": "http://127.0.0.1:6015/mcp",
+        "transport": "streamable-http",
+        "connectTimeout": 15,
+        "timeout": 120,
+        "toolFilter": {
+          "include": [
+            "report_1c"
+          ]
+        }
       }
     }
   },
