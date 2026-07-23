@@ -43,10 +43,25 @@ def _vec_literal(v):
 DS_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 
 FORBIDDEN = re.compile(
+    # 'replace' УБРАН — это строковая функция replace(), не запись (REPLACE INTO не начинается с SELECT,
+    # его ловит структурная проверка + read-only роль). Остальное — операторы изменения/DDL/расширений.
     r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|copy|attach|"
-    r"detach|pragma|call|merge|replace|vacuum|install|load)\b",
+    r"detach|pragma|call|merge|vacuum|install|load)\b",
     re.I,
 )
+# Файловый доступ DuckDB: технически read-only, но читает ФАЙЛОВУЮ СИСТЕМУ сервера (утечка /etc/passwd,
+# ключей и т.п.). Витрина — только опубликованные таблицы; табличные функции чтения файлов боту не нужны.
+FS_ACCESS = re.compile(
+    r"\b(read_csv|read_csv_auto|read_parquet|read_json|read_json_auto|read_json_objects|read_ndjson|"
+    r"read_text|read_blob|sniff_csv|glob|parquet_scan|parquet_metadata|csv_scan|delta_scan|iceberg_scan)\b",
+    re.I,
+)
+
+
+def _strip_literals(sql):
+    """Убрать содержимое строковых литералов, чтобы ключевое слово/«;» ВНУТРИ строки
+    (LIKE '%truncate%', city='РОСТОВ; МОСКВА') не считалось оператором."""
+    return re.sub(r"'(?:[^']|'')*'", "''", sql)
 
 
 def psql(sql, extra=None):
@@ -235,10 +250,13 @@ def gen_sql(question, schema, hints=""):
 def validate(sql):
     if not re.match(r"^\s*(select|with)\b", sql, re.I):
         return "не SELECT/WITH"
-    if ";" in sql:
+    bare = _strip_literals(sql)  # ключевые слова/«;» проверяем ВНЕ строковых литералов
+    if ";" in bare:
         return "несколько операторов"
-    if FORBIDDEN.search(sql):
+    if FORBIDDEN.search(bare):
         return "запрещённое ключевое слово (изменение данных)"
+    if FS_ACCESS.search(bare):
+        return "запрещён доступ к файловой системе (табличная функция чтения файлов)"
     return None
 
 
