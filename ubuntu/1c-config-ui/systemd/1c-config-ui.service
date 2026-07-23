@@ -1,0 +1,16 @@
+[Unit]
+# Веб-страница настройки ETL (галочки «что тянуть из 1С»). Админ-инструмент разовой
+# настройки бизнеса; можно держать включённым (лёгкий) или запускать по требованию.
+Description=1C ETL config UI (checkbox picker of entities)
+After=network-online.target 1c-odata-gateway.service
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=/etc/1c-odata-gateway.env
+Environment=ETL_ODATA_BASE=http://127.0.0.1:6011
+ExecStart=/usr/bin/python3 /opt/1c-config-ui/oc_config_ui.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
