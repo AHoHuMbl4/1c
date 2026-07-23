@@ -1,0 +1,106 @@
+{
+  "gateway": {
+    "port": 18800,
+    "bind": "loopback",
+    "mode": "local",
+    "auth": {
+      "mode": "token",
+      "token": "<GENERATED-ON-gateway-install>"
+    }
+  },
+  "session": {
+    "dmScope": "per-channel-peer"
+  },
+  "agents": {
+    "defaults": {
+      "workspace": "/home/undebot/.openclaw/workspace",
+      "model": {
+        "primary": "deepseek/deepseek-chat"
+      },
+      "models": {
+        "deepseek/deepseek-chat": {}
+      },
+      "thinkingDefault": "off"
+    }
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "deepseek": {
+        "baseUrl": "https://api.deepseek.com",
+        "api": "openai-completions",
+        "models": [
+          {
+            "id": "deepseek-chat",
+            "name": "DeepSeek Chat",
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0.14,
+              "output": 0.28,
+              "cacheRead": 0.028,
+              "cacheWrite": 0
+            },
+            "contextWindow": 128000,
+            "maxTokens": 8192,
+            "api": "openai-completions"
+          }
+        ]
+      }
+    }
+  },
+  "auth": {
+    "profiles": {
+      "deepseek:default": {
+        "provider": "deepseek",
+        "mode": "api_key"
+      }
+    }
+  },
+  "commands": {
+    "native": false
+  },
+  "plugins": {
+    "entries": {
+      "deepseek": {
+        "enabled": true
+      },
+      "memory-core": {
+        "config": {}
+      },
+      "braine-verify": {
+        "enabled": true,
+        "config": {
+          "debug": true
+        },
+        "hooks": {
+          "allowConversationAccess": true
+        }
+      }
+    },
+    "allow": [
+      "deepseek",
+      "braine-verify"
+    ]
+  },
+  "logging": {
+    "level": "info",
+    "file": "/home/undebot/.openclaw/logs/gateway.log"
+  },
+  "mcp": {
+    "servers": {
+      "second-brain": {
+        "url": "http://127.0.0.1:6014/mcp",
+        "transport": "streamable-http",
+        "connectTimeout": 15,
+        "timeout": 60,
+        "toolFilter": {
+          "include": [
+            "ask_1c"
+          ]
+        }
+      }
+    }
+  }
+}
