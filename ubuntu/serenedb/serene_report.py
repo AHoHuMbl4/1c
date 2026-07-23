@@ -37,10 +37,12 @@ def sample_values(table, col, n=5):
 
 
 def get_schema():
+    # duckdb_columns(), а НЕ information_schema.columns: под read-only ролью SereneDB
+    # information_schema.columns пуста, а duckdb_columns доступна. Таблицы витрины — в схеме public.
     sql = (
-        "SELECT table_name, column_name, data_type FROM information_schema.columns "
-        "WHERE table_schema NOT IN ('information_schema','pg_catalog') "
-        "ORDER BY table_name, ordinal_position;"
+        "SELECT table_name, column_name, data_type FROM duckdb_columns() "
+        "WHERE schema_name = 'public' "
+        "ORDER BY table_name, column_index;"
     )
     r = psql(sql, extra=["-tAF", "\t"])
     if r.returncode != 0:
