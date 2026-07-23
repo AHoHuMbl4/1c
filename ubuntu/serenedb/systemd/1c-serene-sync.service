@@ -1,0 +1,10 @@
+[Unit]
+Description=1c-serene-sync — синк выбранных сущностей 1С в витрину SereneDB + пересборка резолвера
+After=network.target serenedb.service 1c-odata-gateway.service
+Wants=serenedb.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/1c-mcp-reports
+EnvironmentFile=/etc/1c-serene-sync.env
+ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_sync.py

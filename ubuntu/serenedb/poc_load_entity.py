@@ -41,40 +41,40 @@ def safe_col(name):
     return s or "col"
 
 
-def main():
-    if len(sys.argv) < 2:
-        sys.exit("usage: poc_load_entity.py <EntitySet>  (напр. Catalog_КлассификаторБанков)")
-    es = sys.argv[1]
+def load_entity(es, ro_role="serene_ro"):
+    """Сущность 1С (OData) -> CSV -> таблица SereneDB (полная идемпотентная перезагрузка) +
+    GRANT SELECT ro-роли (default privileges на SereneDB не всегда покрывают новые таблицы).
+    Возвращает dict со статистикой. Переиспользуется штатным синком (serene_sync.py)."""
     table = safe_col(es).lower()
     csv_path = os.path.join(CSV_DIR, f"{table}.csv")
-
     t0 = time.time()
     rows = fetch_all(es)
-    t_fetch = time.time() - t0
+    dt = round(time.time() - t0, 2)
     if not rows:
-        sys.exit(f"{es}: пусто")
-
-    cols = list(dict.fromkeys(k for r in rows for k in r.keys()))  # union, порядок стабильный
+        return {"entity": es, "table": table, "rows": 0, "sec": dt}
+    cols = list(dict.fromkeys(k for r in rows for k in r.keys()))  # union полей, порядок стабильный
     with open(csv_path, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow([safe_col(c) for c in cols])
         for r in rows:
             w.writerow([r.get(c) for c in cols])
-    try:
-        subprocess.run(["chown", "serenedb:serenedb", csv_path], check=False)
-    except Exception:
-        pass
-
-    # загрузка + проба агрегации (read_csv авто-выводит схему)
+    subprocess.run(["chown", "serenedb:serenedb", csv_path], check=False)
+    grant = f'GRANT SELECT ON "{table}" TO {ro_role};\n' if ro_role else ""
     sql = (
-        f"\\timing on\n"
         f'DROP TABLE IF EXISTS "{table}";\n'
-        f"CREATE TABLE \"{table}\" AS SELECT * FROM read_csv('{csv_path}');\n"
-        f'SELECT count(*) AS rows FROM "{table}";\n'
+        f"CREATE TABLE \"{table}\" AS SELECT * FROM read_csv('{csv_path}');\n" + grant
     )
-    print(f"{es}: {len(rows)} строк за {t_fetch:.2f}s  ->  {csv_path}  ({len(cols)} колонок)")
-    print(f"Таблица SereneDB: {table}")
-    subprocess.run(["psql", DSN], input=sql, text=True)
+    r = subprocess.run(["psql", DSN, "-v", "ON_ERROR_STOP=1"], input=sql, text=True, capture_output=True)
+    if r.returncode != 0:
+        raise RuntimeError(f"load error: {r.stderr.strip()[:200]}")
+    return {"entity": es, "table": table, "rows": len(rows), "cols": len(cols), "sec": dt}
+
+
+def main():
+    if len(sys.argv) < 2:
+        sys.exit("usage: poc_load_entity.py <EntitySet>  (напр. Catalog_КлассификаторБанков)")
+    res = load_entity(sys.argv[1])
+    print(res)
 
 
 if __name__ == "__main__":

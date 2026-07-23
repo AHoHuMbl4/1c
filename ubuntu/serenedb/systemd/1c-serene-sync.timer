@@ -1,0 +1,10 @@
+[Unit]
+Description=1c-serene-sync timer — витрина SereneDB ночью после ETL (03:40)
+
+[Timer]
+OnCalendar=*-*-* 03:40:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target
