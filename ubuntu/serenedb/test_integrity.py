@@ -43,6 +43,19 @@ def q(sql):
     return r.stdout.strip()
 
 
+def qr(sql):
+    """resolver_index читаем ОТДЕЛЬНОЙ ролью serene_resolver (positive control: у serene_ro доступ отозван).
+    Фолбэк на q(), если резолвер-роль не сконфигурирована в env."""
+    dsn = getattr(S, "RESOLVER_DSN", None)
+    pw = getattr(S, "RESOLVER_PW", None)
+    if not dsn or dsn == DSN or not pw:
+        return q(sql)
+    r = S.psql(sql, ["-tA"], dsn=dsn, pgpass=pw)
+    if r.returncode != 0:
+        raise RuntimeError(r.stderr.strip()[:200])
+    return r.stdout.strip()
+
+
 def check(name, cond, detail=""):
     global _fail
     if not cond:
@@ -107,14 +120,14 @@ def main():
         else:
             check(f"mart==OData {t}", mart == oc, f"mart={mart} odata={oc}")
 
-    print("\n== T3. resolver_index ==")
-    ri = int(q("SELECT count(*) FROM resolver_index"))
+    print("\n== T3. resolver_index (под serene_resolver) ==")
+    ri = int(qr("SELECT count(*) FROM resolver_index"))
     check("resolver непусто", ri > 0, f"n={ri}")
-    nulls = int(q("SELECT count(*) FROM resolver_index WHERE value IS NULL OR emb IS NULL"))
+    nulls = int(qr("SELECT count(*) FROM resolver_index WHERE value IS NULL OR emb IS NULL"))
     check("resolver без NULL value/emb", nulls == 0, f"nulls={nulls}")
     for fn in ("len(emb)", "array_length(emb)", "len(emb::FLOAT[])"):  # диалект массива варьируется
         try:
-            dim = q(f"SELECT DISTINCT {fn} FROM resolver_index").splitlines()
+            dim = qr(f"SELECT DISTINCT {fn} FROM resolver_index").splitlines()
             check("resolver размерность emb", dim == [str(EMBED_DIM)], f"{fn}={dim} ожидалось [{EMBED_DIM}]")
             break
         except Exception:

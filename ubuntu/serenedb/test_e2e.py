@@ -29,15 +29,17 @@ def rr(q):
 
 
 def _truth_count(term):
-    """Истинный count строк витрины, где какое-либо текст-измерение матчит термин (ILIKE, кириллица ок).
-    ДИНАМИЧЕСКИ — находим таблицу/колонку сами, без вшитого имени/числа."""
+    """Истинный count по ДОМИНИРУЮЩЕМУ значению-измерению, матчащему термин (как бот отфильтрует точно, а
+    не broad-ILIKE по вариантам «Г. МОСКВА 35»). ДИНАМИЧЕСКИ — таблицу/колонку находим сами, без вшитого."""
     best = 0
     try:
         for t, c in R.dim_columns():
             tq = term.replace("'", "''")
-            n = R.psql(f"SELECT count(*) FROM \"{t}\" WHERE \"{c}\" ILIKE '%{tq}%'", ["-tA"]).stdout.strip()
-            if n.isdigit():
-                best = max(best, int(n))
+            row = R.psql(
+                f"SELECT count(*) FROM \"{t}\" WHERE \"{c}\" ILIKE '%{tq}%' "
+                f"GROUP BY \"{c}\" ORDER BY 1 DESC LIMIT 1", ["-tA"]).stdout.strip()
+            if row.isdigit():
+                best = max(best, int(row))
     except Exception:  # noqa: BLE001
         pass
     return best
