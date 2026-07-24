@@ -55,11 +55,13 @@ Windows (1С)              Ubuntu LXC (весь наш контроль)
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Устройство системы целиком** — слои, потоки, безопасность, zero-touch |
 | [`docs/OPENCLAW_BOT.md`](docs/OPENCLAW_BOT.md) | **Бот-слой OpenClaw**: тон над мозгами, гейт анти-галлюцинаций КОДОМ, нативные правила |
 | [`docs/SERENEDB.md`](docs/SERENEDB.md) | **Аналитика/отчёты на SereneDB**: витрина, NL→SQL, графики, резолвер, read-only роль |
-| [`docs/RUNBOOK_DEPLOY.md`](docs/RUNBOOK_DEPLOY.md) | **🚀 Развёртывание с нуля** (эталон): 1С/OData/read-only → braine → **§10 SereneDB-аналитика + подключение НОВОЙ базы** |
+| [`docs/RUNBOOK_DEPLOY.md`](docs/RUNBOOK_DEPLOY.md) | **🚀 Сквозной деплой** (эталон): §1-6 1С/OData/read-only → §7-8 braine → §9 карта сервисов → **§10 SereneDB** + новая база → **§11 OpenClaw-бот** |
+| [`docs/PRODUCTION_PLAN.md`](docs/PRODUCTION_PLAN.md) | Доведение до продакшена: что сделано и что осталось (Фаза 7 — реальные данные/регистры) |
 | [`ubuntu/1c-gateway/README.md`](ubuntu/1c-gateway/README.md) | OData read-only шлюз (только GET) |
 | [`ubuntu/1c-etl/README.md`](ubuntu/1c-etl/README.md) | ETL: 1С → KB-репо (выгрузка, резолв ссылок) |
 | [`ubuntu/1c-config-ui/README.md`](ubuntu/1c-config-ui/README.md) | Веб-настройка «что тянуть» (галочки) |
 | [`ubuntu/serenedb/README.md`](ubuntu/serenedb/README.md) | Установка SereneDB (self-host) |
+| [`ubuntu/openclaw/README.md`](ubuntu/openclaw/README.md) | Код бот-слоя: MCP `ask_1c`, verify-плагин, инстанция/персона |
 | [`docs/UBUNTU_SETUP.md`](docs/UBUNTU_SETUP.md) | Стек braine на Ubuntu (разбор) |
 | [`windows/README.md`](windows/README.md) | Раскладка Windows-стенда, бэкапы |
 | [`docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`](docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md) | Почему встроенный MCP-тулкит НЕ для прода (из кода) |

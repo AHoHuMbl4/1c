@@ -1,8 +1,10 @@
 # RUNBOOK: развёртывание «второго мозга» на 1С с нуля
 
-Пошаговая воспроизводимая инструкция для раскатки на новом проекте. Проверено end-to-end на стенде 2026-07-22 (Windows 11, платформа 8.3.27.1786 x86, Бухгалтерия 3.0.190.11 → OData/IIS → braine на Ubuntu LXC → бот отвечает по данным 1С). Эталон для клонирования — держать актуальным.
+Пошаговая воспроизводимая инструкция для раскатки на новом проекте — **сквозной стек от 1С на Windows до всей системы на Ubuntu**. Проверено end-to-end на стенде 2026-07-22..24 (Windows 11, платформа 8.3.27.1786 x86, Бухгалтерия 3.0.190.11 → OData/IIS → Ubuntu LXC: braine RAG + SereneDB-аналитика → OpenClaw-бот отвечает по данным 1С фактами и отчётами). Эталон для клонирования — держать актуальным.
 
-Связанные: `docs/PLAN.md` (архитектура/решения) · `docs/UBUNTU_SETUP.md` (стек braine) · `docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md` (почему НЕ встроенный тулкит) · `ubuntu/1c-gateway/` (OData-шлюз) · `ubuntu/1c-etl/` (ETL).
+**Порядок разделов = порядок раскатки:** §1-6 Windows/1С/OData/read-only → §7-8 braine (факты) → §9 zero-touch/карта сервисов → §10 SereneDB (аналитика/отчёты) → §11 OpenClaw (бот-слой + гейт). Каждый слой ставится ПОВЕРХ предыдущего.
+
+Связанные: `docs/ARCHITECTURE.md` (устройство целиком) · `docs/UBUNTU_SETUP.md` (стек braine) · `docs/SERENEDB.md` (аналитика) · `docs/OPENCLAW_BOT.md` (бот-слой) · `docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md` (почему НЕ встроенный тулкит) · `ubuntu/1c-gateway/` (OData-шлюз) · `ubuntu/1c-etl/` (ETL).
 
 ---
 
@@ -11,12 +13,37 @@
 ```
 Windows (1С):  файловая база ─► IIS (служба) ─► штатный OData 1С (read-only user ai_reader)
                                    ▲ авто-старт, многопоточно, без idle-обработчика/модалок
-Роутер 192.168.56.1:  проброс <порт> ─► Windows-IIS:80
-Ubuntu LXC (наш):  OData-шлюз :6011 (только GET) ─► ETL ─► KB-репо (GitLab) ─► oikb/OWUI индексация ─► бот
+Роутер 192.168.56.1:  проброс :6003 ─► Windows-IIS:80
+Ubuntu LXC (наш, всё loopback):
+  OData-шлюз :6011 (только GET) ─┬─► ETL(ночь) ─► KB-репо(GitLab) ─► oikb/OWUI ─► braine /ask :8090   [факты, RAG]
+                                 └─► serene_sync(ночь) ─► витрина SereneDB :7890                        [аналитика, OLAP+вектор]
+  OpenClaw-бот :18800 (юзер undebot) ─┬─ ask_1c    (MCP :6014) ─► braine /ask
+     Telegram ◄─── тон, DeepSeek      └─ report_1c (MCP :6015) ─► SereneDB (ro-роль + резолвер + график)
+     → verify-плагин (ГЕЙТ КОДОМ: числа сверяет, внутреннее режет) → ответ клиенту
 ```
+
+**Полная карта сервисов LXC `.42` (всё loopback; ground-truth, `enabled` = переживает ребут):**
+
+| Порт | Unit / таймер | Процесс | Юзер | Слой |
+|---|---|---|---|---|
+| — | `1c-odata-gateway` :6011 | `odata_gateway.py` | root | канал: только GET к 1С-OData (upstream `192.168.56.1:6003`) |
+| `0.0.0.0:6012` | `1c-config-ui` | `oc_config_ui.py` | root | веб-галочки «что тянуть» (ETL) |
+| — | `1c-etl.timer` 03:00 | `oc_etl.py` | root | ночь: 1С → md-таблицы → KB-репо (braine) |
+| `127.0.0.1:5432` | `postgresql` | postgres | postgres | pgvector braine (OWUI) |
+| `0.0.0.0:3000` | `open-webui` | — | root | индекс/retrieval braine |
+| `0.0.0.0:8081` | `oikb` | — | root | синк KB-репо → OWUI |
+| `127.0.0.1:8082` | `rerank-shim` | — | root | реранкер qwen3 |
+| `0.0.0.0:8090` | `api` (braine) | — | root | `POST /ask` (RAG-ответ с цитатами) |
+| `127.0.0.1:7890` | `serenedb` | `serened` | **serenedb** | витрина аналитики (Postgres-протокол) |
+| `127.0.0.1:6015` | `1c-mcp-reports` | `mcp_reports.py` | root | MCP `report_1c` (NL→SQL + график) |
+| — | `1c-serene-sync.timer` 03:40 | `serene_sync.py` | root | ночь: витрина + резолвер (после ETL) |
+| `127.0.0.1:6014` | `1c-mcp-braine` | `mcp_braine.py` | root | MCP `ask_1c` над braine |
+| `127.0.0.1:18800` | `openclaw-gateway` (**user**-юнит) | `node …/openclaw` | **undebot** | бот: Telegram + DeepSeek-тон + verify-гейт |
+| — | `1c-bot-monitor.timer` +2min | `bot_health_check.sh` | root | алерт владельцу в Telegram при падении |
+
 - **Инвариант:** в 1С только читаем. Гарантия read-only — двумя слоями (§6): пользователь `ai_reader` (нет прав записи) + шлюз (режет не-GET). Не на настройках приложения.
 - **Почему OData, а не встроенный сервер MCP-тулкита:** тулкит обслуживает HTTP через клиентский idle-обработчик 1С — ~1 req/s и встаёт на любом модальном окне сессии (`docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`). OData обслуживает IIS (служба Windows): многопоточно, авто-старт, переживает ребут, модалок в веб-сессии нет. Тулкит остаётся как **dev-опция** (§Приложение).
-- Два контура: холодный (ночная выгрузка ETL → KB) + горячий (бот отвечает по индексу). `docs/PLAN.md §2`.
+- Два контура: холодный (ночная выгрузка ETL/синк → KB+витрина) + горячий (бот отвечает по индексу/витрине). `docs/ARCHITECTURE.md §3`.
 
 ---
 
@@ -175,10 +202,15 @@ systemctl start 1c-etl.service                                   # первый 
 ---
 
 ## 9. Zero-touch: что переживает ребут
+Полная карта портов/юзеров — в §0. Всё `enabled`; после ребута любой машины стек поднимается сам.
 - **Windows:** IIS (W3SVC) = Automatic; публикация/состав OData/пользователи — персистентны. После ребута OData сам доступен.
-- **LXC (все enabled):** postgresql, open-webui, oikb, rerank-shim, api, kb-poll, **1c-odata-gateway**, **serenedb**, **1c-mcp-reports**; таймеры nightly-eval, **1c-etl**, **1c-serene-sync**. Ребут LXC → всё поднимается само.
-  (`tg-bridge` — braine-фронт Telegram; в полной системе **disabled**, Telegram держит OpenClaw `@test1c_mcp_bot`. Аналитика/бот-слой — `docs/SERENEDB.md`, `docs/OPENCLAW_BOT.md`.)
-- Итог: после перезагрузки любой из машин канал восстанавливается без ручных действий.
+- **LXC — system-сервисы (`enabled`):** postgresql, open-webui, oikb, rerank-shim, api, kb-poll,
+  **1c-odata-gateway**, **1c-config-ui**, **serenedb**, **1c-mcp-braine**, **1c-mcp-reports**;
+  таймеры nightly-eval, **1c-etl** (03:00), **1c-serene-sync** (03:40), **1c-bot-monitor** (+2 мин).
+- **LXC — OpenClaw gateway:** systemd **user**-юнит юзера `undebot` с **`linger=yes`** → стартует на буте
+  **без логина** (проверено). Telegram — long polling, токен в `tokenFile`.
+- `tg-bridge` (braine-фронт Telegram) — **disabled**: Telegram держит OpenClaw `@test1c_mcp_bot`.
+- Итог: перезагрузка любой из машин → всё восстанавливается без ручных действий; мониторинг алертит, если что-то не встало.
 
 ---
 
@@ -264,12 +296,87 @@ for t in test_validate test_integrity test_caveat test_ro_role; do python3 $t.py
 
 ---
 
+## 11. OpenClaw: бот-слой (Telegram + гейт анти-галлюцинаций)
+
+Диалоговая оболочка тона над двумя мозгами: Telegram → OpenClaw (DeepSeek) → `ask_1c` (braine) / `report_1c`
+(SereneDB) → **verify-плагин** сверяет числа кодом. Ставится ПОВЕРХ §7-8 (braine) и §10 (SereneDB).
+Устройство — `docs/OPENCLAW_BOT.md`. Код — `ubuntu/openclaw/`. 🔴 Только нативное OpenClaw; гарантии — кодом,
+не промтом (персона держит только тон).
+
+### 11.1 MCP-сервер `ask_1c` над braine (:6014)
+```bash
+install -d /opt/openclaw-mcp && python3 -m venv /opt/openclaw-mcp/venv
+/opt/openclaw-mcp/venv/bin/pip install -r ubuntu/openclaw/requirements.txt   # FastMCP (офиц. MCP SDK)
+install -D ubuntu/openclaw/mcp_braine.py /opt/openclaw-mcp/mcp_braine.py
+cat > /etc/1c-mcp-braine.env <<EOF        # chmod 600
+BRAINE_TOKEN=<API_TOKEN braine из /opt/smart-bot/.env>
+EOF
+chmod 600 /etc/1c-mcp-braine.env
+cp ubuntu/openclaw/systemd/1c-mcp-braine.service /etc/systemd/system/   # BRAINE_URL=127.0.0.1:8090, MCP_PORT=6014
+systemctl daemon-reload && systemctl enable --now 1c-mcp-braine
+```
+*(Инструмент `report_1c` :6015 уже поднят в §10.6 — оба MCP-сервера нужны боту.)*
+
+### 11.2 Движок OpenClaw + инстанция под юзером `undebot`
+```bash
+npm install -g openclaw@2026.7.1-2          # движок глобально; CLI /usr/bin/openclaw
+useradd --create-home --shell /bin/bash undebot
+loginctl enable-linger undebot              # user-сервисы стартуют на буте БЕЗ логина (reboot-safe)
+install -d -o undebot -g undebot -m700 /home/undebot/.openclaw /home/undebot/.openclaw/workspace
+```
+
+### 11.3 Конфиг + секреты (эталон — `ubuntu/openclaw/instance/openclaw.json`)
+Конфиг класть **файлом** (headless `onboard` сломан). Эталон совпадает с прод-деплоем 1:1; подставить свои
+пути/ID. Ключевое (детали — `docs/OPENCLAW_BOT.md`): `tools.allow:["message","bundle-mcp"]` (узкий набор
+кодом), `dmPolicy:allowlist`+`allowFrom:[<свой tg-id>]` (только владелец!), `commands.native:false`,
+`mcp.servers` = `second-brain`(:6014→`ask_1c`) + `second-brain-reports`(:6015→`report_1c`).
+```bash
+sudo -u undebot cp ubuntu/openclaw/instance/openclaw.json /home/undebot/.openclaw/openclaw.json
+sudo -u undebot cp ubuntu/openclaw/instance/AGENTS.md     /home/undebot/.openclaw/workspace/AGENTS.md
+printf '%s' '<TELEGRAM_BOT_TOKEN>' | sudo -u undebot tee /home/undebot/.openclaw/telegram-token >/dev/null
+sudo -u undebot chmod 600 /home/undebot/.openclaw/telegram-token
+printf 'DEEPSEEK_API_KEY=%s\n' '<ключ>' | sudo -u undebot tee /home/undebot/.openclaw/.env >/dev/null
+sudo -u undebot chmod 600 /home/undebot/.openclaw/.env
+# ключ провайдера — ТАКЖЕ в auth-store (иначе «No API key found» при явном plugins.allow):
+sudo -u undebot openclaw models auth paste-api-key --provider deepseek --profile-id deepseek:default
+```
+
+### 11.4 verify-плагин (гейт анти-галлюцинаций, КОДОМ)
+```bash
+cd ubuntu/openclaw/verify-plugin && node test-verify.mjs      # 36 оффлайн-юнитов — все PASS
+npm pack --pack-destination /tmp
+sudo -u undebot openclaw plugins install npm-pack:/tmp/openclaw-braine-verify-1.0.0.tgz --force
+# в openclaw.json уже: plugins.allow += "braine-verify"; entries.braine-verify.enabled=true +
+#   hooks.allowConversationAccess=true (иначе хуки к переписке молча не срабатывают)
+```
+
+### 11.5 Gateway (systemd user-юнит, reboot-safe)
+```bash
+sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot) openclaw gateway install --port 18800
+sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot) systemctl --user enable --now openclaw-gateway
+```
+
+### 11.6 Проверка
+```bash
+UD="sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot)"
+$UD systemctl --user is-active openclaw-gateway          # active
+$UD openclaw channels status --probe                     # telegram: works
+$UD openclaw mcp probe second-brain; $UD openclaw mcp probe second-brain-reports   # по 1 tool
+bash ubuntu/openclaw/qa/qa-probes.sh                     # приветствие/мета/инъекции/нет-данных/не-слил-SQL — PASS
+# живой гейт: написать боту в Telegram вопрос → факт с числом из данных проходит;
+#   выдуманное число без эталона → заменяется/режется (см. braine-verify-debug.log при config.debug)
+```
+⚠ **Ротация bot-токена** перед реальным продом — действие владельца (@BotFather `/revoke` → новый токен в
+`telegram-token` → `systemctl --user restart openclaw-gateway`). Мониторинг `1c-bot-monitor` читает тот же файл.
+
+---
+
 ## Приложение: MCP Toolkit — dev-only (НЕ для прода)
 Встроенный сервер тулкита удобен для интерактивной отладки/произвольных `execute_query`, но НЕ годится для сервиса: обслуживает всё через один клиентский idle-обработчик 1С (~1 req/s, встаёт на модальном окне — `docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`). Также подтверждено: UI-тумблеры инструментов **не блокируют вызов** (отключённый `execute_code` исполнял код). Артефакты для dev: `ubuntu/1c-gateway/gateway.py` (whitelist-прокси MCP), `windows/fork/` (форк с вырезанным execute_code — x86-ребилд падал на нативном компоненте). Для прода — OData (§5-6).
 
 ---
 
-## Журнал проверенного end-to-end (2026-07-22)
+## Журнал проверенного end-to-end (2026-07-22..24)
 - Платформа 8.3.27.1786 x86 + community-лицензия; база Бухгалтерия 3.0.190.11; бэкап 760 MB — ✅.
 - IIS включён (ребут), W3SVC Automatic; база опубликована; OData enable=true; состав — 1128 объектов (COM foreach) — ✅.
 - OData читает как служба: `Организации`→«Наша организация», `Валюты`=1; **зависаний/модалок нет** — ✅.
@@ -277,4 +384,6 @@ for t in test_validate test_integrity test_caveat test_ro_role; do python3 $t.py
 - braine развёрнут (7 сервисов active, пины 0.10.2/0.3.6, эмбеддер Qwen `text-embedding-v4` @ 1536); бот @test1c_mcp_bot в Telegram — ✅.
 - **ETL прогнан:** 19 сущностей / 44 записи через OData-шлюз → push в KB-репо → oikb «Synced: 20 added» → индексация — ✅.
 - **Бот отвечает по данным 1С:** «Каких контрагентов знаешь?» → «МИ ФНС России по управлению долгом (ИНН 7727406020), Казначейство России» с цитатами — ✅.
-- Zero-touch: все сервисы enabled; IIS Automatic — ✅.
+- **SereneDB-аналитика (§10):** витрина загружена (стабильная пагинация + дедуп + исключение папок); NL→SQL под `serene_ro`; валидатор allow-list + резолвер Qwen; тесты `validate/integrity/caveat/ro_role` — ✅. Гейт продакшена — реальные обороты/регистры (`PRODUCTION_PLAN.md §7`).
+- **OpenClaw бот-слой (§11):** движок 2026.7.1-2 под `undebot` (linger); оба MCP (`ask_1c`:6014, `report_1c`:6015, `mcp probe` = 1 tool); verify-плагин (36 юнитов) `enabled`, гейт на РЕАЛЬНОЙ Telegram-доставке: обоснованное число → прошло, выдуманное → заменено/срезано — ✅.
+- Zero-touch: все system-сервисы enabled; OpenClaw user-юнит + linger; IIS Automatic — ✅.
