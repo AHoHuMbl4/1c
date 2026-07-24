@@ -13,7 +13,18 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import serene_report as R  # noqa: E402
 
-T = "banks"  # реальная таблица витрины для кейсов (есть в этой базе)
+def _pick_table():
+    """Реальная непустая таблица витрины — ДИНАМИЧЕСКИ из схемы (без вшитого имени). validate() —
+    table-level, поэтому важно лишь что имя в схеме; колонки в кейсах не проверяются."""
+    tabs = sorted(R._schema_tables())
+    for t in tabs:
+        n = R.psql(f'SELECT count(*) FROM "{t}"', ["-tA"]).stdout.strip()
+        if n.isdigit() and int(n) > 0:
+            return t
+    return tabs[0] if tabs else "catalog_валюты"
+
+
+T = _pick_table()  # реальная таблица витрины для кейсов — из схемы, не вшито
 MUST_PASS = [
     f"SELECT * FROM {T}",
     f"select count(*) from {T} where city = 'Г. КАЗАНЬ'",

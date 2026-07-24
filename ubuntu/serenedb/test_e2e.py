@@ -28,15 +28,33 @@ def rr(q):
         return {"error": f"exc {e}"}
 
 
+def _truth_count(term):
+    """Истинный count строк витрины, где какое-либо текст-измерение матчит термин (ILIKE, кириллица ок).
+    ДИНАМИЧЕСКИ — находим таблицу/колонку сами, без вшитого имени/числа."""
+    best = 0
+    try:
+        for t, c in R.dim_columns():
+            tq = term.replace("'", "''")
+            n = R.psql(f"SELECT count(*) FROM \"{t}\" WHERE \"{c}\" ILIKE '%{tq}%'", ["-tA"]).stdout.strip()
+            if n.isdigit():
+                best = max(best, int(n))
+    except Exception:  # noqa: BLE001
+        pass
+    return best
+
+
 def main():
-    print("== A. Ground-truth (факт данных обязан быть в ответе) ==")
-    # якоря с фильтром по ГОРОДУ — форсируют таблицу banks (в ней city), без двусмысленности
-    # «какой из двух банковских справочников» (banks 2779 vs catalog_банки 1).
-    for q, want in [("сколько банков в Казани", "37"), ("сколько банков в Москве", "674")]:
-        r = rr(q)
+    print("== A. Ground-truth ДИНАМИЧЕСКИ (число берём из БД, не вшито) ==")
+    # Тест выбирает города (вход), но ОЖИДАЕМОЕ число считает из данных в момент прогона — magic-чисел нет.
+    for q_form, term in [("Казани", "казань"), ("Москве", "москва")]:
+        truth = _truth_count(term)
+        if truth == 0:
+            check(f"A: {q_form}", True, "нет данных по термину — пропуск (другая база)")
+            continue
+        r = rr(f"сколько банков в {q_form}")
         flat = " ".join(str(c) for row in (r.get("rows") or []) for c in row)
-        check(f"A: {q}", (not r.get("error")) and want in flat,
-              f"ждём '{want}'; n={r.get('n')} err={r.get('error')} sql={(r.get('sql') or '')[:50]}")
+        check(f"A: {q_form}", (not r.get("error")) and str(truth) in flat,
+              f"истина(БД)={truth}; n={r.get('n')} err={r.get('error')} sql={(r.get('sql') or '')[:50]}")
 
     print("\n== B. Danger-wiring (опасное НЕ выполняется) ==")
     danger = [

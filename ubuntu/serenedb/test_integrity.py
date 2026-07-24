@@ -27,10 +27,11 @@ except Exception:
 
 DSN = L.DSN
 ODATA = L.ODATA
-# banks — витрина-ПРОЕКЦИЯ (исключает папки-регионы is_folder + ремап колонок), поэтому в T2
-# «витрина == сырой OData» НЕ участвует: сравнивать проекцию с сырым count некорректно (а OData
-# $filter по IsFolder в этой 1С не работает — и eq false, и eq true дают 83). Целостность banks
-# держат T1 (grain: count==distinct), стабильная пагинация загрузчика (без потерь) и rebuild_banks.
+# Все таблицы витрины теперь грузятся ОБЩИМ generic-загрузчиком (Фаза 1.1: bespoke `banks`/rebuild_banks
+# ретайрены — классификатор синкается как обычная сущность catalog_классификаторбанков с is_folder-фильтром).
+# Поэтому спец-случаев нет; T1/T2/T4 идут по всем синкнутым сущностям единообразно.
+# ⚠ T2 «витрина==OData»: у сущностей с is_folder витрина = НЕ-папки, а сырой OData count включает папки —
+#   это ожидаемое расхождение (загрузчик исключает папки). Для таких таблиц T2 сверяет мягко (см. ниже).
 
 _fail = 0
 
@@ -89,15 +90,20 @@ def main():
     print("\n== T2. Витрина == живой OData (нет потерь/дублей загрузки) ==")
     ent_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "serene-entities.txt")
     ents = [l.strip() for l in open(ent_file, encoding="utf-8") if l.strip() and not l.lstrip().startswith("#")]
-    pairs = [(es, L.safe_col(es).lower()) for es in ents]  # banks-проекция вне T2 (см. коммент выше)
+    pairs = [(es, L.safe_col(es).lower()) for es in ents]
     existing = set(tbls)
     for es, t in pairs:
-        if t not in existing or "ref_key" not in cols_lower(t):
+        c = cols_lower(t)
+        if t not in existing or "ref_key" not in c:
             continue
         mart = int(q(f'SELECT count(DISTINCT ref_key) FROM "{t}"'))
         oc = odata_count(es)
         if isinstance(oc, str) or oc is None:
-            check(f"mart==OData {t}", True, f"OData count n/a ({oc}) — пропуск")
+            check(f"mart~OData {t}", True, f"OData count n/a ({oc}) — пропуск")
+        elif "isfolder" in c:
+            # витрина исключает папки-регионы → mart = НЕ-папки ≤ OData total (папки в count входят);
+            # OData $filter по IsFolder не работает (проверено), потому мягко: подмножество + непусто.
+            check(f"mart⊆OData {t}", 0 < mart <= oc, f"mart={mart} odata_total={oc} (папки исключены)")
         else:
             check(f"mart==OData {t}", mart == oc, f"mart={mart} odata={oc}")
 
