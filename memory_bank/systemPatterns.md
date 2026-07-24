@@ -13,9 +13,10 @@
 
 ## Архитектура (кратко; полностью — `docs/ARCHITECTURE.md`)
 Два контура:
-- **Холодный** (наполнение): 1С OData (read-only) → GET-only шлюз → ETL выгружает
-  выбранные сущности в md → push в KB-репо (GitLab) → oikb/kb-poll → OpenWebUI/pgvector индекс.
-- **Горячий** (ответ): вопрос → braine (retrieval + гейты точности + DeepSeek) → ответ с цитатами.
+- **Холодный** (наполнение): 1С OData (read-only) → GET-only шлюз → ночью ETL→KB-репо (braine) и
+  `serene_sync`→витрина SereneDB (аналитика). Обе выгрузки из одного read-only канала.
+- **Горячий** (ответ): вопрос → OpenClaw-бот (тон) → `ask_1c` (braine RAG, факты+цитаты) **или** `report_1c`
+  (SereneDB, отчёт/график под ro-ролью) → verify-гейт (числа/анти-слив КОДОМ) → ответ клиенту.
 
 Ключевые решения:
 - Канал чтения — **штатный OData на IIS** (служба Windows), НЕ встроенный MCP-тулкит
@@ -26,9 +27,11 @@
   config-ui → `/etc/1c-etl-selected.txt`), не хардкод. Резолв ссылок guid→имя — универсален.
 
 ## Структура репозитория
-- `docs/` — документация (ARCHITECTURE, RUNBOOK — главные).
+- `docs/` — документация (ARCHITECTURE, RUNBOOK — главные; SERENEDB, OPENCLAW_BOT, PRODUCTION_PLAN).
 - `ubuntu/` — код на LXC: `1c-gateway/` (OData-шлюз + dev MCP-прокси), `1c-etl/` (ETL+таймер),
-  `1c-config-ui/` (галочки+discovery). У каждого — README + systemd/.
+  `1c-config-ui/` (галочки+discovery), **`serenedb/`** (витрина/аналитика: NL→SQL `report_1c` + резолвер +
+  ro-роль + тесты), **`openclaw/`** (бот-слой: MCP `ask_1c`, verify-плагин, инстанция/персона, QA).
+  У каждого — README + systemd/.
 - `windows/` — скрипты стенда (`scripts/backup-1c.ps1`), `fork/` (dev-форк тулкита).
 - `memory_bank/` — контекст. `credentials/` — секреты (в `.gitignore`).
 
