@@ -237,6 +237,48 @@ def resolve_hints(question, max_per_col=5, min_sim=0.9):
     return "\n".join(f"{t}.{c}: " + ", ".join(dict.fromkeys(vals)) for (t, c), vals in hints.items())
 
 
+def text_columns():
+    """Имена ТЕКСТОВЫХ колонок витрины (нижним регистром). Идентификаторы/реквизиты/метки (номер счёта,
+    ИНН, БИК, код, название…) — числовая свёртка таких полей БЕССМЫСЛЕННА как показатель. Тип берём из
+    интроспекции (факт схемы), не из имён — общий сигнал без сопоставления бизнес-терминов."""
+    # lower() делаем в Python: DuckDB lower() НЕ лоуэркейсит кириллицу (ASCII-only), а имена колонок 1С
+    # кириллические (НомерСчета) — иначе сравнение с Python-.lower() промахивается.
+    r = psql(
+        "SELECT DISTINCT column_name FROM duckdb_columns() WHERE schema_name='public' "
+        "AND lower(data_type) ~ 'char|text|string|varchar';", ["-tA"])
+    return {v.strip().lower() for v in r.stdout.splitlines() if v.strip()}
+
+
+_NUM = r"(?:\w*int\w*|double|float|real|decimal|numeric|dec|hugeint)"
+
+
+def measure_caveat(sql, text_cols=None):
+    """Прозрачность трактовки против «выдуманной метрики»: если запрос ЧИСЛОВО сворачивает (SUM/AVG)
+    или приводит-к-числу (CAST/::) ТЕКСТОВУЮ колонку-реквизит — итог не является достоверным денежным/
+    количественным показателем (напр. AVG(CAST(НомерСчёта AS HUGEINT)) выдаётся за «оборот»). Возвращаем
+    ПРЕДУПРЕЖДЕНИЕ (не блок — число «настоящее», врёт лишь трактовка), чтобы человек видел подмену.
+    Схемо-типовой сигнал, БЕЗ карты «прибыль→колонка» (не хардкод). LENGTH(...)/COUNT(...) не триггерят."""
+    cols = text_cols if text_cols is not None else text_columns()
+    if not cols:
+        return ""
+    s = _strip_literals(sql)
+    hits = set()
+    pats = [
+        rf"\b(?:sum|avg)\(\s*(?:\w+\.)?\"?(\w+)\"?\s*\)",          # SUM/AVG(текст_колонка)
+        rf"cast\(\s*(?:\w+\.)?\"?(\w+)\"?\s+as\s+{_NUM}\b",        # CAST(текст AS число)
+        rf"(?:\w+\.)?\"?(\w+)\"?::\s*{_NUM}\b",                    # текст::число
+    ]
+    for p in pats:
+        for m in re.finditer(p, s, re.I):
+            if m.group(1).lower() in cols:
+                hits.add(m.group(1))
+    if not hits:
+        return ""
+    return ("⚠ Внимание: показатель посчитан по текстовому полю (" + ", ".join(sorted(hits)) +
+            ") — это реквизит/идентификатор, а не числовая величина; как денежный/количественный "
+            "показатель результат недостоверен.")
+
+
 def gen_sql(question, schema, hints=""):
     if not DS_KEY:
         raise RuntimeError("нет DEEPSEEK_API_KEY")
@@ -303,6 +345,7 @@ def run_report(question, max_rows=50):
     err = validate(sql)
     if err:
         return {"question": question, "sql": sql, "error": f"отклонено валидатором: {err}"}
+    caveat = measure_caveat(sql)  # подмена метрики (числовая свёртка текст-реквизита) — предупреждаем
     # обёртка-подзапрос: стабильные заголовки + LIMIT независимо от формы sql. Тянем max_rows+1, чтобы
     # ЗАМЕТИТЬ обрезку и честно о ней сообщить (а не молча показать часть как всё — баг «50 из 77»).
     wrapped = f"SELECT * FROM (\n{sql}\n) _q LIMIT {max_rows + 1}"
@@ -311,13 +354,14 @@ def run_report(question, max_rows=50):
         return {"question": question, "sql": sql, "error": f"ошибка выполнения: {r.stderr.strip()[:300]}"}
     data = [ln for ln in r.stdout.splitlines() if ln != "" and not re.match(r"^\(\d+ rows?\)$", ln.strip())]
     if not data:
-        return {"question": question, "sql": sql, "columns": [], "rows": [], "n": 0}
+        return {"question": question, "sql": sql, "columns": [], "rows": [], "n": 0, "caveat": caveat}
     columns = data[0].split("\t")
     rows = [ln.split("\t") for ln in data[1:]]
     truncated = len(rows) > max_rows
     if truncated:
         rows = rows[:max_rows]
-    return {"question": question, "sql": sql, "columns": columns, "rows": rows, "n": len(rows), "truncated": truncated}
+    return {"question": question, "sql": sql, "columns": columns, "rows": rows, "n": len(rows),
+            "truncated": truncated, "caveat": caveat}
 
 
 def _num(x):
@@ -380,6 +424,8 @@ def format_table(result, show=30, show_sql=True):
     more = "" if result["n"] <= show else f"\n… ещё {result['n'] - show} строк"
     if result.get("truncated"):  # выборка была обрезана лимитом — честно сообщаем, а не выдаём часть за всё
         more += f"\n⚠ показаны первые {result['n']} — в выборке есть ещё строки (уточните фильтр/период)"
+    if result.get("caveat"):  # подмена метрики — предупреждаем и клиента (не только владельца в логе SQL)
+        more += "\n" + result["caveat"]
     body = "\n".join(lines) + more
     if show_sql:
         body += f"\n\nСтрок: {result['n']}\nТрактовка (SQL): {result['sql']}"
