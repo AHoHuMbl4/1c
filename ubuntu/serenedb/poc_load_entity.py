@@ -93,10 +93,15 @@ def load_entity(es, ro_role="serene_ro"):
     # если страницы OData всё же перекрылись, ref_key (уникальный ключ платформы) убирает копии;
     # для сущностей без ref_key (напр. регистры) — снимаем полностью идентичные строки.
     has_ref = any(safe_col(c).lower() == "ref_key" for c in cols)
+    # is_folder=true — узлы-ПАПКИ иерархии справочника 1С (регионы/группы), не бизнес-строки. Исключаем
+    # для ЛЮБОГО справочника с этой колонкой (общее платформенное правило 1С, не per-entity). CAST — на
+    # случай инференса строкой; COALESCE(NULL→не-папка) — сущности без is_folder (документы) не затронуты.
+    has_folder = any(safe_col(c).lower() == "is_folder" for c in cols)
+    where = " WHERE NOT COALESCE(CAST(is_folder AS BOOLEAN), false)" if has_folder else ""
     select = (
-        f"SELECT * FROM read_csv('{csv_path}') "
+        f"SELECT * FROM read_csv('{csv_path}'){where} "
         "QUALIFY row_number() OVER (PARTITION BY ref_key ORDER BY ref_key) = 1"
-        if has_ref else f"SELECT DISTINCT * FROM read_csv('{csv_path}')"
+        if has_ref else f"SELECT DISTINCT * FROM read_csv('{csv_path}'){where}"
     )
     sql = (
         f'DROP TABLE IF EXISTS "{table}";\n'
