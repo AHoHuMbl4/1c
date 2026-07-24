@@ -330,12 +330,17 @@ MAX_SQL_LEN = 6000  # патологическая генерация LLM (repet
 # почти наверняка деградация, до БД НЕ пускаем (защита от падения сервера).
 
 
-def validate(sql):
-    if len(sql) > MAX_SQL_LEN:
-        return f"SQL слишком длинный ({len(sql)}>{MAX_SQL_LEN}) — вероятно патологическая генерация"
+# Скалярные служебные функции (утечка конфигурации/окружения). AST-allow-list проверяет ТАБЛИЦЫ, а это
+# скалярные функции (могут быть в SELECT без FROM) — их allow-list не покрывает, поэтому тонкий денайлист.
+# Это ФУНКЦИИ движка, не бизнес-логика (бизнес-запрос их не использует) — не «хардкод под базу».
+_INTERNAL_FUNCS = re.compile(r"\b(current_setting|current_database|getenv|pg_read\w*)\b", re.I)
+
+
+def _validate_fallback(sql):
+    """Запасной валидатор на денайлистах — если AST-разбор (json_serialize_sql) недоступен."""
     if not re.match(r"^\s*(select|with)\b", sql, re.I):
         return "не SELECT/WITH"
-    bare = _strip_literals(sql)  # ключевые слова/«;» проверяем ВНЕ строковых литералов
+    bare = _strip_literals(sql)
     if ";" in bare:
         return "несколько операторов"
     if FORBIDDEN.search(bare):
@@ -344,6 +349,74 @@ def validate(sql):
         return "запрещён доступ к файловой системе (табличная функция чтения файлов)"
     if INTERNAL_OBJECTS.search(bare):
         return "запрещён доступ к служебным/системным объектам"
+    return None
+
+
+def _schema_tables():
+    """Имена таблиц ВИТРИНЫ (allow-list). lower() в Python (DuckDB lower() не трогает кириллицу)."""
+    r = psql("SELECT DISTINCT table_name FROM duckdb_columns() WHERE schema_name='public' "
+             "AND table_name <> 'resolver_index'", ["-tA"])
+    return {t.strip().lower() for t in r.stdout.splitlines() if t.strip()}
+
+
+def _ast_relations(sql):
+    """Разбор SQL в AST (json_serialize_sql) — БЕЗ regex. Возвращает:
+      None                         — функция недоступна/сбой вызова → caller делает fallback;
+      {'error': True}              — не одиночный читающий запрос (DML/DDL/несколько операторов/синтаксис);
+      {'tables','tf','ctes'}       — множество BASE_TABLE, флаг табличной функции, имена CTE."""
+    lit = "'" + sql.replace("'", "''") + "'"
+    r = psql(f"SELECT json_serialize_sql({lit})", ["-tA"])
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    try:
+        doc = json.loads(r.stdout.strip())
+    except Exception:  # noqa: BLE001
+        return None
+    if doc.get("error"):
+        return {"error": True}
+    tables, ctes, tf = set(), set(), [False]
+
+    def walk(n):
+        if isinstance(n, dict):
+            t = n.get("type")
+            if t == "BASE_TABLE" and n.get("table_name"):
+                tables.add(str(n["table_name"]).lower())
+            elif t == "TABLE_FUNCTION":
+                tf[0] = True
+            cm = n.get("cte_map")
+            if isinstance(cm, dict):
+                for e in cm.get("map", []):
+                    if isinstance(e, dict) and e.get("key"):
+                        ctes.add(str(e["key"]).lower())
+            for v in n.values():
+                walk(v)
+        elif isinstance(n, list):
+            for v in n:
+                walk(v)
+
+    walk(doc)
+    return {"tables": tables, "tf": tf[0], "ctes": ctes}
+
+
+def validate(sql):
+    """ALLOW-LIST через AST (Фаза 3.1): по построению пропускаем ТОЛЬКО одиночный SELECT/WITH, читающий
+    ИСКЛЮЧИТЕЛЬНО таблицы витрины (+ свои CTE), без табличных функций (файлы/внешнее) и служебных объектов.
+    Общий контроль без списков имён/слов — переносится на любую базу. Денайлисты — только fallback."""
+    if len(sql) > MAX_SQL_LEN:
+        return f"SQL слишком длинный ({len(sql)}>{MAX_SQL_LEN}) — вероятно патологическая генерация"
+    info = _ast_relations(sql)
+    if info is None:
+        return _validate_fallback(sql)  # AST недоступен — запасной денайлист
+    if info.get("error"):
+        return "не одиночный читающий запрос (DML/DDL/несколько операторов/синтаксис)"
+    if info["tf"]:
+        return "запрещена табличная функция (доступ к файлам/внешнему)"
+    allowed = _schema_tables() | info["ctes"]
+    bad = sorted(t for t in info["tables"] if t not in allowed)
+    if bad:
+        return "обращение к объекту вне схемы витрины: " + ", ".join(bad)
+    if _INTERNAL_FUNCS.search(_strip_literals(sql)):
+        return "запрещена служебная функция (утечка конфигурации)"
     return None
 
 
