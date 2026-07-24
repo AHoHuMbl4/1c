@@ -14,6 +14,20 @@ import json, os, re, subprocess, urllib.error, urllib.request
 
 DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres")
 DS_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com").rstrip("/")
+# Каталог для запирания ФС в сессии выполнения LLM-SQL (защита в глубину под FS-денайлистом валидатора).
+# РЕАЛЬНЫЙ каталог данных: движок игнорирует несуществующий путь (→ allow-all), а каталог данных всегда
+# есть → блокирует /etc//root/секреты; загрузчик-CSV в нём — та же витрина (безвредно). enable_external_access
+# НЕ трогаем: он ГЛОБАЛЬНЫЙ one-way латч (ломает загрузчик), проверено. allowed_directories — сессионный.
+# Движковый лимит доступа к ФС (allowed_directories/enable_external_access) НЕДОСТИЖИМ для роли serene_ro
+# на этой сборке SereneDB: enable_external_access — глобальный one-way латч (ломает загрузчик); allowed_
+# directories под ro — no-op, SET GLOBAL не держит на свежих коннектах, ALTER ROLE не применяется, флага
+# конфига нет. Энфорсмент доступа к файлам — ТОЛЬКО валидатор (FS_ACCESS денайлист, проверено). Пункт для
+# фаундеров SereneDB — см. docs. Разнос ролей (positive control) над resolver_index — рабочий, ниже.
+# Отдельная роль serene_resolver читает resolver_index, а не serene_ro → LLM-SQL под serene_ro не дотянется
+# к служебному индексу даже в обход валидатора. Пароль — через env подпроцесса (не в conninfo/ps).
+# Фолбэк на DSN — обратная совместимость (если роль не заведена, семантика тихо деградирует до лексики).
+RESOLVER_DSN = os.environ.get("RESOLVER_DSN", DSN)
+RESOLVER_PW = os.environ.get("RESOLVER_PW")
 
 # Qwen-эмбеддер — РОВНО как в braine: DashScope text-embedding-v4 @ 1536 (ollama не используем).
 EMBED_URL = os.environ.get("ALIBABA_EMBED_URL", "").rstrip("/")
@@ -77,9 +91,10 @@ def _strip_literals(sql):
     return re.sub(r"'(?:[^']|'')*'", "''", sql)
 
 
-def psql(sql, extra=None):
-    cmd = ["psql", DSN, "-v", "ON_ERROR_STOP=1"] + (extra or [])
-    return subprocess.run(cmd, input=sql, text=True, capture_output=True)
+def psql(sql, extra=None, dsn=None, pgpass=None):
+    cmd = ["psql", dsn or DSN, "-v", "ON_ERROR_STOP=1"] + (extra or [])
+    env = {**os.environ, "PGPASSWORD": pgpass} if pgpass is not None else None  # пароль в env, не в ps
+    return subprocess.run(cmd, input=sql, text=True, capture_output=True, env=env)
 
 
 def sample_values(table, col, n=5):
@@ -192,16 +207,16 @@ def _semantic_into(hints, words, min_cos=0.70):
     Лучше НЕ подсказать, чем подсказать ЧУЖОЙ город (тихо неверный ответ)."""
     if not EMBED_URL:
         return
-    chk = psql("SELECT count(*) FROM resolver_index;", ["-tA"])
+    chk = psql("SELECT count(*) FROM resolver_index;", ["-tA"], dsn=RESOLVER_DSN, pgpass=RESOLVER_PW)
     if chk.returncode != 0 or not chk.stdout.strip().isdigit() or int(chk.stdout.strip()) == 0:
-        return  # индекс не построен — тихо пропускаем (лексика всё равно работает)
+        return  # индекс не построен/нет доступа — тихо пропускаем (лексика всё равно работает)
     vecs = embed(words[:8])
     for w, v in zip(words[:8], vecs):
         q = (
             f"SELECT table_name, column_name, value, array_cosine_similarity(emb, {_vec_literal(v)}) sim "
             f"FROM resolver_index ORDER BY sim DESC LIMIT 1;"
         )
-        for line in psql(q, ["-tAF", "\t"]).stdout.splitlines():
+        for line in psql(q, ["-tAF", "\t"], dsn=RESOLVER_DSN, pgpass=RESOLVER_PW).stdout.splitlines():
             if not line.strip():
                 continue
             parts = line.split("\t")

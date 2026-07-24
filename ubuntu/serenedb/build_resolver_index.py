@@ -30,7 +30,10 @@ def main():
         f"CREATE TABLE IF NOT EXISTS resolver_index"
         f"(table_name TEXT, column_name TEXT, value TEXT, emb FLOAT[{S.EMBED_DIM}]);"
     )
-    S.psql("GRANT SELECT ON resolver_index TO serene_ro;")  # бот (ro) должен читать индекс
+    # resolver_index читает ОТДЕЛЬНАЯ роль serene_resolver (positive control), НЕ serene_ro — тогда
+    # LLM-SQL под serene_ro не дотянется до служебного индекса даже в обход валидатора.
+    S.psql("GRANT SELECT ON resolver_index TO serene_resolver;")
+    S.psql("REVOKE SELECT ON resolver_index FROM serene_ro;")  # идемпотентно закрываем ro-доступ
     sql_or_die("DELETE FROM resolver_index;")
     total = 0
     for t, c in S.dim_columns():
