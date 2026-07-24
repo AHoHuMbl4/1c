@@ -285,6 +285,40 @@ def measure_caveat(sql, text_cols=None):
             "показатель результат недостоверен.")
 
 
+def metric_critic(question, schema, sql):
+    """Grounding-критик выдуманной метрики (Фаза 3.2): 2-й LLM-проход судит, посчитан ли ответ по РЕАЛЬНОЙ
+    величине из схемы, или подставлен суррогат (усреднение/сумма идентификатора; подмена метрики на COUNT
+    элемента справочника — при том что колонки-величины под запрос в схеме НЕТ). Общий — LLM рассуждает о
+    ФАКТИЧЕСКОЙ схеме, без карты «термин→колонка». Возвращает caveat или ''. Env `METRIC_CRITIC=0` выключает.
+    Дешёвая первая линия — детерминированный measure_caveat; критик добивает семантические подмены."""
+    if os.environ.get("METRIC_CRITIC", "1") == "0" or not DS_KEY:
+        return ""
+    sysp = (
+        "Ты аудитор SQL-аналитики. Дана СХЕМА, ВОПРОС и SQL. Ответь СТРОГО JSON "
+        '{"grounded":true|false,"why":"кратко"}. grounded=false ТОЛЬКО когда запрошена числовая ВЕЛИЧИНА '
+        "(сумма/оборот/прибыль/выручка/остаток/средний чек…), а SQL считает её по НЕподходящему полю — "
+        "усредняет/суммирует идентификатор (номер счёта/ИНН/код) ИЛИ подменяет на COUNT элемента справочника, "
+        "и при этом реальной колонки-величины под запрос в схеме НЕТ. Если метрика адекватна данным ИЛИ "
+        "вопрос не про числовую величину — grounded=true. Без объяснений вне JSON."
+    )
+    user = f"СХЕМА:\n{schema}\n\nВОПРОС: {question}\n\nSQL:\n{sql}\n\nJSON:"
+    try:
+        body = json.dumps({"model": "deepseek-chat", "temperature": 0, "messages": [
+            {"role": "system", "content": sysp}, {"role": "user", "content": user}]}).encode()
+        req = urllib.request.Request(
+            f"{DS_BASE}/chat/completions", data=body,
+            headers={"Authorization": f"Bearer {DS_KEY}", "Content-Type": "application/json"})
+        txt = json.load(urllib.request.urlopen(req, timeout=40))["choices"][0]["message"]["content"]
+        m = re.search(r"\{.*\}", txt, re.S)
+        d = json.loads(m.group(0)) if m else {}
+        if d.get("grounded") is False:
+            return ("⚠ Внимание: показатель, вероятно, не отражает запрошенную величину ("
+                    + str(d.get("why", ""))[:150] + ") — проверьте трактовку.")
+    except Exception:  # noqa: BLE001 — критик не должен ронять отчёт
+        return ""
+    return ""
+
+
 def gen_sql(question, schema, hints=""):
     if not DS_KEY:
         raise RuntimeError("нет DEEPSEEK_API_KEY")
@@ -424,7 +458,8 @@ def run_report(question, max_rows=50):
     err = validate(sql)
     if err:
         return {"question": question, "sql": sql, "error": f"отклонено валидатором: {err}"}
-    caveat = measure_caveat(sql)  # подмена метрики (числовая свёртка текст-реквизита) — предупреждаем
+    # подмена метрики: дешёвый детерминированный measure_caveat (типовой), иначе — grounding-критик (LLM)
+    caveat = measure_caveat(sql) or metric_critic(question, schema, sql)
     # обёртка-подзапрос: стабильные заголовки + LIMIT независимо от формы sql. Тянем max_rows+1, чтобы
     # ЗАМЕТИТЬ обрезку и честно о ней сообщить (а не молча показать часть как всё — баг «50 из 77»).
     wrapped = f"SELECT * FROM (\n{sql}\n) _q LIMIT {max_rows + 1}"
