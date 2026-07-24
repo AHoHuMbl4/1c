@@ -322,17 +322,20 @@ def metric_critic(question, schema, sql):
 def gen_sql(question, schema, hints=""):
     if not DS_KEY:
         raise RuntimeError("нет DEEPSEEK_API_KEY")
+    # Промт ЯЗЫКО-НЕЙТРАЛЬНЫЙ (Фаза 4.2): инструкции на English (LLM их понимает лучше всего), а ВОПРОС
+    # может быть на любом языке. Никаких допущений про язык базы — переносится на любую 1С/локаль.
     sys_prompt = (
-        "Ты SQL-аналитик для SereneDB (DuckDB-совместимый диалект, Postgres-протокол). "
-        "По схеме и вопросу верни РОВНО ОДИН read-only SELECT (или WITH...SELECT). "
-        "Только колонки из схемы — не выдумывай. Учитывай ФОРМАТ значений из примеров (e.g. ...). "
-        "Если даны РЕЛЕВАНТНЫЕ ЗНАЧЕНИЯ — фильтруй ТОЧНО по ним (термин из вопроса → точное значение). "
-        "Без пояснений, без markdown, без ';' в конце. Разумные LIMIT для 'топ'."
+        "You are a SQL analyst for SereneDB (DuckDB-compatible dialect, Postgres wire protocol). "
+        "Given the SCHEMA and QUESTION, return EXACTLY ONE read-only SELECT (or WITH...SELECT). "
+        "Use ONLY tables and columns present in the SCHEMA — never invent them. Respect the VALUE "
+        "FORMAT shown in examples (e.g. ...). If RELEVANT VALUES are provided, filter EXACTLY by them "
+        "(question term → exact stored value). No prose, no markdown, no trailing ';'. Reasonable LIMIT "
+        "for 'top N'. The question may be in any language; reply with the SQL only."
     )
-    user = f"СХЕМА:\n{schema}\n"
+    user = f"SCHEMA:\n{schema}\n"
     if hints:
-        user += f"\nРЕЛЕВАНТНЫЕ ЗНАЧЕНИЯ (термин вопроса → точные значения в данных, используй их):\n{hints}\n"
-    user += f"\nВОПРОС: {question}\n\nSQL:"
+        user += f"\nRELEVANT VALUES (question term → exact stored values in data, use them to filter):\n{hints}\n"
+    user += f"\nQUESTION: {question}\n\nSQL:"
     body = json.dumps({
         "model": "deepseek-chat",
         "temperature": 0,

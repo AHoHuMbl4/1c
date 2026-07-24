@@ -43,7 +43,10 @@ def _count(es):
 
 
 def main():
-    min_rows = int(sys.argv[1]) if len(sys.argv) > 1 else 1
+    args = sys.argv[1:]
+    review = "--review" in args  # Фаза 2.2 picker: кандидаты закомментированы, владелец отбирает
+    nums = [a for a in args if a.isdigit()]
+    min_rows = int(nums[0]) if nums else 1
     pub = L.published_entity_sets()
     if not pub:
         sys.exit("не получил список сущностей OData")
@@ -54,14 +57,28 @@ def main():
         for es, n in ex.map(_count, cands):
             if isinstance(n, int) and n >= min_rows:
                 keep.append((es, n))
-    keep.sort()
-    with open(OUT, "w", encoding="utf-8") as f:
-        f.write("# СГЕНЕРИРОВАНО serene_select.py из ЖИВОГО OData (Фаза 2) — не править вручную, перегенерировать.\n")
-        f.write("# Только НЕПУСТЫЕ бизнес-сущности верхнего уровня; имена — из реальности, преполёт сверяет каждый прогон.\n\n")
-        f.write("\n".join(es for es, _ in keep) + "\n")
-    print(f"записано непустых: {len(keep)} -> {OUT}")
-    for es, n in keep[:50]:
-        print(f"  {es}  ({n})")
+    if review:
+        # PICKER: все кандидаты ЗАКОММЕНТИРОВАНЫ, по убыванию count. Владелец раскомментирует нужные
+        # (авто-дискавери тащит и платформенные справочники — метаданные/НДФЛ/варианты отчётов — их отсеять
+        # алгоритмически без хардкода нельзя, потому решает человек). Отобранное → serene-entities.txt.
+        keep.sort(key=lambda x: (-x[1], x[0]))
+        rf = OUT + ".review"
+        with open(rf, "w", encoding="utf-8") as f:
+            f.write("# PICKER (serene_select --review): НЕПУСТЫЕ бизнес-сущности из ЖИВОГО OData, по убыванию строк.\n")
+            f.write("# Раскомментируй нужные БИЗНЕС-сущности (аналитику), сохрани отобранное как serene-entities.txt.\n")
+            f.write("# Имена — из реальности; преполёт сверяет каждый прогон синка.\n\n")
+            for es, n in keep:
+                f.write(f"# {es}\t({n})\n")
+        print(f"picker: {len(keep)} кандидатов -> {rf}. Раскомментируй бизнес-сущности, сохрани как {OUT}.")
+    else:
+        keep.sort()
+        with open(OUT, "w", encoding="utf-8") as f:
+            f.write("# СГЕНЕРИРОВАНО serene_select.py из ЖИВОГО OData — при желании сузить используй --review (picker).\n")
+            f.write("# Только НЕПУСТЫЕ бизнес-сущности верхнего уровня; имена — из реальности, преполёт сверяет каждый прогон.\n\n")
+            f.write("\n".join(es for es, _ in keep) + "\n")
+        print(f"записано непустых: {len(keep)} -> {OUT}")
+        for es, n in sorted(keep, key=lambda x: -x[1])[:50]:
+            print(f"  {es}  ({n})")
 
 
 if __name__ == "__main__":
