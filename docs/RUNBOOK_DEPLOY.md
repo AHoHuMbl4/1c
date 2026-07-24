@@ -176,9 +176,91 @@ systemctl start 1c-etl.service                                   # первый 
 
 ## 9. Zero-touch: что переживает ребут
 - **Windows:** IIS (W3SVC) = Automatic; публикация/состав OData/пользователи — персистентны. После ребута OData сам доступен.
-- **LXC (все enabled):** postgresql, open-webui, oikb, rerank-shim, api, kb-poll, **1c-odata-gateway**; таймеры nightly-eval, **1c-etl**. Ребут LXC → всё поднимается само.
+- **LXC (все enabled):** postgresql, open-webui, oikb, rerank-shim, api, kb-poll, **1c-odata-gateway**, **serenedb**, **1c-mcp-reports**; таймеры nightly-eval, **1c-etl**, **1c-serene-sync**. Ребут LXC → всё поднимается само.
   (`tg-bridge` — braine-фронт Telegram; в полной системе **disabled**, Telegram держит OpenClaw `@test1c_mcp_bot`. Аналитика/бот-слой — `docs/SERENEDB.md`, `docs/OPENCLAW_BOT.md`.)
 - Итог: после перезагрузки любой из машин канал восстанавливается без ручных действий.
+
+---
+
+## 10. SereneDB-аналитика: развёртывание + подключение НОВОЙ 1С-базы
+
+Слой «вопрос на естественном языке → точный отчёт/график». **Общий, без хардкода — переносится на любую
+1С-базу.** Описание — `docs/SERENEDB.md`. Ставится ПОВЕРХ §1-6 (нужен читающий OData-шлюз :6011). Весь код —
+в `ubuntu/serenedb/`.
+
+### 10.1 Движок SereneDB
+Установить бинарём + systemd — `ubuntu/serenedb/README.md` (loopback :7890, под юзером `serened`, enabled).
+
+### 10.2 Код аналитики + окружение
+```bash
+install -d /opt/1c-mcp-reports
+cp ubuntu/serenedb/*.py ubuntu/serenedb/*.sh ubuntu/serenedb/serene-entities.txt /opt/1c-mcp-reports/
+chmod +x /opt/1c-mcp-reports/*.sh
+cat > /etc/1c-mcp-reports.env <<EOF        # секреты не в git, chmod 600
+ETL_ODATA_BASE=http://127.0.0.1:6011         # читающий OData-шлюз из §6
+CSV_DIR=/var/lib/serenedb                    # каталог данных SereneDB (загрузчик пишет CSV сюда)
+DEEPSEEK_API_KEY=<ключ>                        # NL→SQL + grounding-критик
+DEEPSEEK_BASE=https://api.deepseek.com
+ALIBABA_API_KEY=<ключ>                         # эмбеддер резолвера (Qwen text-embedding-v4)
+ALIBABA_EMBED_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
+EMBED_MODEL=text-embedding-v4
+EMBED_DIM=1536
+CHART_DIR=/home/<botuser>/.openclaw/workspace/charts   # PNG-графики: только из песочницы бота
+MCP_HOST=127.0.0.1
+MCP_PORT=6015
+EOF
+chmod 600 /etc/1c-mcp-reports.env
+```
+
+### 10.3 Роли + секреты (идемпотентно, генерируемые пароли)
+```bash
+cd /opt/1c-mcp-reports && bash setup.sh /etc/1c-mcp-reports.env
+```
+Создаёт `serene_ro` (read-only) + `serene_resolver` (доступ к `resolver_index`; у `serene_ro` отозван) и
+дописывает в env `PGPASSWORD`/`RESOLVER_PW`/`RESOLVER_DSN`/`SERENEDB_DSN`. Пароли рутуются при каждом прогоне
+→ после setup перезапусти `1c-mcp-reports`.
+
+### 10.4 Подключение НОВОЙ базы: выбор сущностей ИЗ ЖИВОГО OData
+```bash
+cd /opt/1c-mcp-reports
+export $(grep -E '^ETL_ODATA_BASE=' /etc/1c-mcp-reports.env | xargs -d '\n')
+python3 serene_select.py --review          # → serene-entities.txt.review (кандидаты по убыванию строк)
+# раскомментируй нужные БИЗНЕС-сущности, сохрани как serene-entities.txt
+```
+Имена всегда из реальности. Авто-дискавери включает и платформенные справочники (метаданные/классификаторы)
+— бизнес-сущности отбираешь сам; преполёт синка сверяет список каждый прогон.
+
+### 10.5 Первый синк (загрузка витрины + резолвер)
+```bash
+export $(grep -E '^(ALIBABA_|ETL_ODATA_BASE|CSV_DIR|EMBED_)' /etc/1c-mcp-reports.env | xargs -d '\n')
+export SERENEDB_DSN='host=127.0.0.1 port=7890 user=postgres'   # загрузка под rw
+python3 serene_sync.py
+```
+
+### 10.6 Сервисы (reboot-safe)
+```bash
+cp ubuntu/serenedb/systemd/1c-mcp-reports.service /etc/systemd/system/     # EnvironmentFile=/etc/1c-mcp-reports.env
+cp ubuntu/serenedb/systemd/1c-serene-sync.{service,timer} /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now 1c-mcp-reports.service     # инструмент report_1c (:6015)
+systemctl enable --now 1c-serene-sync.timer       # ночная пересборка витрины (после ETL)
+```
+
+### 10.7 Бот (инструмент `report_1c`) → `docs/OPENCLAW_BOT.md`
+Подключить MCP-инструмент `report_1c` к OpenClaw-боту (маршрутизация: аналитика → `report_1c`, факт/текст →
+`ask_1c`; гейт `verify-plugin` сверяет числа обоих).
+
+### 10.8 Проверка
+```bash
+cd /opt/1c-mcp-reports
+export $(grep -E '^(ALIBABA_|EMBED_|PGPASSWORD|RESOLVER_PW)=' /etc/1c-mcp-reports.env | xargs -d '\n')
+export SERENEDB_DSN='host=127.0.0.1 port=7890 user=serene_ro dbname=postgres'
+export RESOLVER_DSN='host=127.0.0.1 port=7890 user=serene_resolver dbname=postgres'
+for t in test_validate test_integrity test_caveat test_ro_role; do python3 $t.py; done   # все PASS
+./probe.sh "<вопрос по вашим данным>"       # реальный отчёт через весь путь NL→SQL→exec
+```
+⚠ Реальная аналитика (обороты/суммы/периоды) требует РЕАЛЬНЫХ данных в 1С + публикации нужных
+`AccumulationRegister` в OData (сторона 1С) — иначе готовых оборотов через OData нет. См. `PRODUCTION_PLAN.md` §7.
 
 ---
 
