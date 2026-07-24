@@ -9,6 +9,9 @@ AI-ассистент компании по данным из 1С — **стро
 реальным данным 1С; отчёты приходят таблицей + графиком-картинкой. Раскатывается копипастом на
 любую конфигурацию 1С с разовой настройкой под бизнес.
 
+> 🚀 **Развернуть на новом сервере / подключить новую 1С-базу → [`docs/RUNBOOK_DEPLOY.md`](docs/RUNBOOK_DEPLOY.md)**
+> (пошагово, воспроизводимо; §10 — слой аналитики и подключение новой базы без хардкода).
+
 ## Как это работает — два слоя мозга + диалоговая оболочка
 
 ```
@@ -52,7 +55,7 @@ Windows (1С)              Ubuntu LXC (весь наш контроль)
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Устройство системы целиком** — слои, потоки, безопасность, zero-touch |
 | [`docs/OPENCLAW_BOT.md`](docs/OPENCLAW_BOT.md) | **Бот-слой OpenClaw**: тон над мозгами, гейт анти-галлюцинаций КОДОМ, нативные правила |
 | [`docs/SERENEDB.md`](docs/SERENEDB.md) | **Аналитика/отчёты на SereneDB**: витрина, NL→SQL, графики, резолвер, read-only роль |
-| [`docs/RUNBOOK_DEPLOY.md`](docs/RUNBOOK_DEPLOY.md) | **Раскатка braine с нуля** (эталон, headless-воспроизводимо) |
+| [`docs/RUNBOOK_DEPLOY.md`](docs/RUNBOOK_DEPLOY.md) | **🚀 Развёртывание с нуля** (эталон): 1С/OData/read-only → braine → **§10 SereneDB-аналитика + подключение НОВОЙ базы** |
 | [`ubuntu/1c-gateway/README.md`](ubuntu/1c-gateway/README.md) | OData read-only шлюз (только GET) |
 | [`ubuntu/1c-etl/README.md`](ubuntu/1c-etl/README.md) | ETL: 1С → KB-репо (выгрузка, резолв ссылок) |
 | [`ubuntu/1c-config-ui/README.md`](ubuntu/1c-config-ui/README.md) | Веб-настройка «что тянуть» (галочки) |
