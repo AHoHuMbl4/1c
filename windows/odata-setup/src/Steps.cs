@@ -172,6 +172,7 @@ namespace Oc1c
             }
             string dst = Path.Combine(backupDir, Path.GetFileName(src) + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".zip");
             if (Ctx.DryRun) { Log.Sim("создал бы бэкап " + dst); return true; }
+            bool mainOk = false;                      // попал ли в архив сам файл базы 1Cv8.1CD
             try
             {
                 if (!Directory.Exists(backupDir)) Directory.CreateDirectory(backupDir);
@@ -182,6 +183,7 @@ namespace Oc1c
                     for (int i = 0; i < files.Length; i++)
                     {
                         string rel = files[i].Substring(src.Length).TrimStart('\\');
+                        if (IsTransient(rel)) { Log.File("служебный файл не архивируем: " + rel); continue; }
                         try
                         {
                             // FileShare.ReadWrite — файлы базы могут быть открыты сеансами 1С
@@ -190,12 +192,22 @@ namespace Oc1c
                                 ZipArchiveEntry e = zip.CreateEntry(rel, CompressionLevel.Fastest);
                                 using (Stream es = e.Open()) fs.CopyTo(es);
                             }
+                            if (rel.Equals("1Cv8.1CD", StringComparison.OrdinalIgnoreCase)) mainOk = true;
                         }
                         catch (Exception ex) { Log.Warn("файл пропущен в бэкапе (" + rel + "): " + ex.Message); }
                     }
                 }
+                // Без главного файла копия бесполезна — тогда менять базу НЕЛЬЗЯ.
+                if (!mainOk)
+                {
+                    Log.Err("в бэкап не попал главный файл базы 1Cv8.1CD — копия непригодна");
+                    Log.Fix("закройте сеансы 1С (включая веб-клиент) и повторите, либо сделайте копию сами " +
+                            "(Конфигуратор -> Администрирование -> Выгрузить информационную базу) и запустите с --no-backup");
+                    try { File.Delete(dst); } catch { }
+                    return false;
+                }
                 Ctx.Changed = true;
-                Log.Ok("бэкап: " + dst);
+                Log.Ok("бэкап: " + dst + " (" + (new FileInfo(dst).Length / 1024 / 1024) + " МБ)");
                 RotateBackups(backupDir, Path.GetFileName(src), 5);
                 return true;
             }
@@ -204,6 +216,18 @@ namespace Oc1c
                 Log.Err("бэкап не создан: " + e.Message);
                 return false;
             }
+        }
+
+        // Служебные файлы 1С: блокировки, временные, каталог сеансов. В копии им не место —
+        // они всегда заняты работающими сеансами и данных не содержат. Молча пропускаем,
+        // чтобы предупреждения оставались только про НАСТОЯЩИЕ проблемы.
+        static bool IsTransient(string rel)
+        {
+            string low = rel.ToLowerInvariant();
+            if (low.StartsWith("1cv8temp\\") || low.IndexOf("\\1cv8temp\\") >= 0) return true;
+            if (low.EndsWith(".cfl") || low.EndsWith(".tmp") || low.EndsWith(".lck")) return true;
+            if (low.StartsWith("1cv8tmp.") || low.StartsWith("1cv8snc.")) return true;
+            return false;
         }
 
         // Держим последние N копий этой базы — иначе повторные запуски забьют диск (база может быть в гигабайтах).
