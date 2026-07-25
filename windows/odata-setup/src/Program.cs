@@ -228,7 +228,8 @@ namespace Oc1c
 
             // ---------- 11. бэкап (перед единственным изменением в базе — составом OData)
             Log.Step(11, TOTAL, "Резервная копия базы (перед изменением состава OData)");
-            if (o.NoBackup) Log.Warn("бэкап отключён ключом --no-backup (на ваш риск)");
+            if (o.SkipScope) Log.Skip("состав OData не меняется (--skip-scope) => база не изменится => бэкап не нужен");
+            else if (o.NoBackup) Log.Warn("бэкап отключён ключом --no-backup (на ваш риск)");
             else if (!bref.IsFile) Log.Warn("клиент-серверная база — файловый бэкап невозможен, сделайте копию средствами кластера/СУБД");
             else if (Ctx.DryRun) Log.Sim("создал бы zip-бэкап базы в " + o.BackupDir);
             else if (!Steps.BackupZip(bref, o.BackupDir))
