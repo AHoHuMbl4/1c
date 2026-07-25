@@ -14,6 +14,20 @@ import json, os, re, subprocess, urllib.error, urllib.request
 
 DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres")
 DS_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com").rstrip("/")
+# Имя модели — В КОНФИГЕ, не в коде: 2026-07-24 DeepSeek снял deepseek-chat/deepseek-reasoner,
+# и захардкоженное имя уронило генерацию SQL. Дефолт = прямой эквивалент старого deepseek-chat
+# (это non-thinking режим deepseek-v4-flash). Thinking выключен: наш парсер ждёт чистый ответ,
+# а не рассуждения, плюс это втрое дешевле по токенам.
+DS_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DS_THINKING = os.environ.get("DEEPSEEK_THINKING", "disabled")
+
+
+def _ds_body(messages, temperature=0):
+    """Тело запроса к DeepSeek: модель и режим размышлений — из конфига."""
+    b = {"model": DS_MODEL, "temperature": temperature, "messages": messages}
+    if DS_THINKING:
+        b["thinking"] = {"type": DS_THINKING}
+    return json.dumps(b).encode()
 # Каталог для запирания ФС в сессии выполнения LLM-SQL (защита в глубину под FS-денайлистом валидатора).
 # РЕАЛЬНЫЙ каталог данных: движок игнорирует несуществующий путь (→ allow-all), а каталог данных всегда
 # есть → блокирует /etc//root/секреты; загрузчик-CSV в нём — та же витрина (безвредно). enable_external_access
@@ -303,8 +317,8 @@ def metric_critic(question, schema, sql):
     )
     user = f"СХЕМА:\n{schema}\n\nВОПРОС: {question}\n\nSQL:\n{sql}\n\nJSON:"
     try:
-        body = json.dumps({"model": "deepseek-chat", "temperature": 0, "messages": [
-            {"role": "system", "content": sysp}, {"role": "user", "content": user}]}).encode()
+        body = _ds_body([{"role": "system", "content": sysp},
+                         {"role": "user", "content": user}])
         req = urllib.request.Request(
             f"{DS_BASE}/chat/completions", data=body,
             headers={"Authorization": f"Bearer {DS_KEY}", "Content-Type": "application/json"})
@@ -336,14 +350,10 @@ def gen_sql(question, schema, hints=""):
     if hints:
         user += f"\nRELEVANT VALUES (question term → exact stored values in data, use them to filter):\n{hints}\n"
     user += f"\nQUESTION: {question}\n\nSQL:"
-    body = json.dumps({
-        "model": "deepseek-chat",
-        "temperature": 0,
-        "messages": [
-            {"role": "system", "content": sys_prompt},
-            {"role": "user", "content": user},
-        ],
-    }).encode()
+    body = _ds_body([
+        {"role": "system", "content": sys_prompt},
+        {"role": "user", "content": user},
+    ])
     req = urllib.request.Request(
         f"{DS_BASE}/chat/completions", data=body,
         headers={"Authorization": f"Bearer {DS_KEY}", "Content-Type": "application/json"},

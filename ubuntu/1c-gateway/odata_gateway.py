@@ -26,6 +26,21 @@ import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+
+def _url_ascii(raw: str) -> str:
+    """URL для http.client обязан быть ASCII, иначе UnicodeEncodeError.
+
+    `self.path` у BaseHTTPRequestHandler декодирован как latin-1, поэтому не-ASCII
+    символы (кириллические имена реквизитов в $select/$filter) роняли прокси:
+    'ascii' codec can't encode characters. Возвращаем байты и percent-кодируем
+    ТОЛЬКО не-ASCII — всё ASCII (включая уже готовые %XX, $, &, =, ') не трогаем,
+    поэтому уже закодированные клиентом запросы не портятся.
+    """
+    out = []
+    for b in raw.encode("latin-1", "replace"):
+        out.append(chr(b) if b < 0x80 else "%%%02X" % b)
+    return "".join(out)
+
 LISTEN_HOST  = os.environ.get("ODG_LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT  = int(os.environ.get("ODG_LISTEN_PORT", "6011"))
 # База OData на IIS через проброс роутера .1 (порт — куда роутер пробрасывает IIS:80)
@@ -78,7 +93,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(401, b'{"error":"unauthorized"}')
         # проксируем GET на OData; путь клиента добавляется к базовому OData-URL
         path = self.path if self.path.startswith("/") else "/" + self.path
-        url = UPSTREAM + path
+        url = UPSTREAM + _url_ascii(path)
         req = urllib.request.Request(url, method="GET")
         req.add_header("Authorization", _basic())
         accept = self.headers.get("Accept")
