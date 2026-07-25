@@ -63,7 +63,8 @@ Windows (1С)              Ubuntu LXC (весь наш контроль)
 | [`ubuntu/serenedb/README.md`](ubuntu/serenedb/README.md) | Установка SereneDB (self-host) |
 | [`ubuntu/openclaw/README.md`](ubuntu/openclaw/README.md) | Код бот-слоя: MCP `ask_1c`, verify-плагин, инстанция/персона |
 | [`docs/UBUNTU_SETUP.md`](docs/UBUNTU_SETUP.md) | Стек braine на Ubuntu (разбор) |
-| [`windows/README.md`](windows/README.md) | Раскладка Windows-стенда, бэкапы |
+| [`windows/README.md`](windows/README.md) | Windows-сторона: 1С/IIS/OData, раскладка, доступы, бэкапы |
+| [`windows/odata-setup/README.md`](windows/odata-setup/README.md) | **🚀 `setup-1c-odata.exe`** — автонастройка Windows одним файлом (руками только юзер-читатель) |
 | [`docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`](docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md) | Почему встроенный MCP-тулкит НЕ для прода (из кода) |
 | [`memory_bank/`](memory_bank/) | Контекст проекта для сессий (читать в начале, обновлять по ходу) |
 
@@ -78,7 +79,9 @@ ubuntu/          всё, что на LXC (наш контроль)
   serenedb/        витрина/аналитика: SereneDB + NL→SQL (report_1c) + резолвер + ro-роль
   openclaw/        бот-слой: MCP-обёртки (ask_1c/report_1c) + verify-плагин (гейт) + инстанс/персона + QA
   monitoring/      health-check «бот жив» + Telegram-алерт
-windows/         скрипты стенда (бэкап 1С) + fork/ (dev-форк тулкита)
+windows/         Windows-сторона 1С
+  odata-setup/     🚀 setup-1c-odata.exe — автонастройка IIS/OData одним файлом (+исходники, build.cmd)
+  scripts/         бэкап 1С; fork/ — dev-форк тулкита
 memory_bank/     контекст проекта
 credentials/     секреты (в .gitignore — в git НЕ попадают)
 ```

@@ -110,6 +110,23 @@ Start-Process $exe -Wait -Args 'DESIGNER /F"C:\1c\bases\<база>" /RestoreIB "
 
 ## 5. Прод-канал: OData на IIS (headless)
 
+### 5.0 🚀 АВТОМАТИЧЕСКИ (рекомендуется): `setup-1c-odata.exe`
+Один файл делает §5.1-5.3 + §6-слой прав + бэкап + проверку. Руками остаётся **только пользователь-читатель**
+(§4). Без зависимостей, повторный запуск безопасен, `--check` ничего не меняет.
+```bat
+:: посмотреть план, ничего не меняя
+windows\odata-setup\dist\setup-1c-odata.exe --check --base "C:\1c\bases\<база>"
+
+:: настроить (пароль администратора 1С спросит скрытно)
+windows\odata-setup\dist\setup-1c-odata.exe --base "C:\1c\bases\<база>" --admin-user Администратор ^
+        --scope analytics --reader-user ai_reader
+```
+Печатает готовый блок `ODG_UPSTREAM/ODG_USER/ODG_PASS` для §6 и сохраняет его в
+`C:\1c\logs\1c-odata-connection.txt`. Код возврата 10 = «поставлены компоненты IIS, перезагрузите и
+запустите снова». Все ключи, сценарии нехватки компонентов и коды возврата — `windows/odata-setup/README.md`.
+
+Ниже — **ручной путь** (что именно делает инструмент; нужен для разбора и нестандартных случаев).
+
 ### 5.1 Включить IIS (нужен один ребут)
 ```powershell
 Enable-WindowsOptionalFeature -Online -All -NoRestart -FeatureName `
