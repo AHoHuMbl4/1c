@@ -196,6 +196,7 @@ namespace Oc1c
                 }
                 Ctx.Changed = true;
                 Log.Ok("бэкап: " + dst);
+                RotateBackups(backupDir, Path.GetFileName(src), 5);
                 return true;
             }
             catch (Exception e)
@@ -203,6 +204,26 @@ namespace Oc1c
                 Log.Err("бэкап не создан: " + e.Message);
                 return false;
             }
+        }
+
+        // Держим последние N копий этой базы — иначе повторные запуски забьют диск (база может быть в гигабайтах).
+        static void RotateBackups(string backupDir, string baseName, int keep)
+        {
+            try
+            {
+                string[] files = Directory.GetFiles(backupDir, baseName + "_*.zip");
+                if (files.Length <= keep) return;
+                Array.Sort(files, delegate(string a, string b)
+                {
+                    return File.GetLastWriteTimeUtc(b).CompareTo(File.GetLastWriteTimeUtc(a));
+                });
+                for (int i = keep; i < files.Length; i++)
+                {
+                    try { File.Delete(files[i]); Log.Info("удалён старый бэкап: " + Path.GetFileName(files[i])); }
+                    catch (Exception e) { Log.File("не удалить старый бэкап " + files[i] + ": " + e.Message); }
+                }
+            }
+            catch (Exception e) { Log.File("ротация бэкапов пропущена: " + e.Message); }
         }
 
         // ============================================================ 4. компоненты IIS
@@ -652,21 +673,32 @@ namespace Oc1c
         // Скрипт COM: read — только прочитать текущий состав; write — установить.
         static string ComScript(bool write, bool checkReader)
         {
+            // ВАЖНО (проверено на живом стенде): методы COM-объектов 1С зовём ПРЯМО ($o.Метод(...)).
+            // Через [__ComObject].InvokeMember вызов ломается, когда аргумент — тоже COM-объект
+            // (например $arr.Добавить(<объект метаданных>)). Свойства, наоборот, отдаются только
+            // через InvokeMember(GetProperty) — это платформенный квирк, не наша прихоть.
+            // Всё завёрнуто в try/catch с выводом 'ERROR=' в stdout: иначе PowerShell отдаёт
+            // ошибку в stderr в виде CLIXML, и текст причины теряется.
             StringBuilder s = new StringBuilder();
             s.AppendLine("$GP=[Reflection.BindingFlags]::GetProperty");
             s.AppendLine("function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,@()) }");
-            s.AppendLine("function PAny($o,$names){ foreach($n in $names){ try { return (P $o $n) } catch {} } throw ('нет свойства: ' + ($names -join '/')) }");
-            s.AppendLine("function CallAny($o,$names,$a){ foreach($n in $names){ try { return [__ComObject].InvokeMember($n,'InvokeMethod',$null,$o,$a) } catch {} } throw ('нет метода: ' + ($names -join '/')) }");
+            s.AppendLine("function PAny($o,$names){ $last=''; foreach($n in $names){ try { return (P $o $n) } catch { $last=$_.Exception.Message } } throw ('нет свойства ' + ($names -join '/') + ': ' + $last) }");
+            s.AppendLine("try {");
             s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
             s.AppendLine("$ib = $connector.Connect($env:OC1C_CONNSTR)");
             s.AppendLine("$cur = -1");
-            s.AppendLine("try { $c = CallAny $ib @('ПолучитьСоставСтандартногоИнтерфейсаOData','GetStandardODataInterfaceContent') @(); if($c -ne $null){ $cur = [int](CallAny $c @('Количество','Count') @()) } } catch { $cur = -1 }");
+            s.AppendLine("try {");
+            s.AppendLine("  $c = $null");
+            s.AppendLine("  try { $c = $ib.ПолучитьСоставСтандартногоИнтерфейсаOData() } catch { $c = $ib.GetStandardODataInterfaceContent() }");
+            s.AppendLine("  if($c -ne $null){ try { $cur = [int]$c.Количество() } catch { $cur = [int]$c.Count() } }");
+            s.AppendLine("} catch { $cur = -1 }");
             s.AppendLine("'CURRENT=' + $cur");
             if (checkReader)
             {
                 s.AppendLine("try {");
                 s.AppendLine("  $users = PAny $ib @('ПользователиИнформационнойБазы','InfoBaseUsers')");
-                s.AppendLine("  $u = CallAny $users @('НайтиПоИмени','FindByName') @($env:OC1C_READER)");
+                s.AppendLine("  $u = $null");
+                s.AppendLine("  try { $u = $users.НайтиПоИмени($env:OC1C_READER) } catch { $u = $users.FindByName($env:OC1C_READER) }");
                 s.AppendLine("  if($u -eq $null){ 'READER=NOTFOUND' } else {");
                 s.AppendLine("    $roles = PAny $u @('Роли','Roles'); $rn=@()");
                 s.AppendLine("    foreach($r in $roles){ try { $rn += (PAny $r @('Имя','Name')) } catch {} }");
@@ -676,22 +708,36 @@ namespace Oc1c
             if (write)
             {
                 s.AppendLine("$md = PAny $ib @('Metadata','Метаданные')");
-                s.AppendLine("$arr = CallAny $ib @('NewObject','NewObject') @('Array')");
-                s.AppendLine("$added = 0; $skipped = @()");
+                s.AppendLine("$arr = $null");
+                s.AppendLine("try { $arr = $ib.NewObject('Array') } catch { $arr = $ib.NewObject('Массив') }");
+                s.AppendLine("$added = 0; $skipped = @(); $addRu = $null");
                 s.AppendLine("foreach($grp in ($env:OC1C_COLLECTIONS -split ';')){");
                 s.AppendLine("  if(-not $grp){ continue }");
                 s.AppendLine("  $coll = $null");
                 s.AppendLine("  foreach($n in ($grp -split ',')){ try { $coll = P $md $n; break } catch {} }");
                 s.AppendLine("  if($coll -eq $null){ $skipped += $grp; continue }");
-                s.AppendLine("  foreach($o in $coll){ CallAny $arr @('Добавить','Add') @($o) | Out-Null; $added++ }");
+                s.AppendLine("  foreach($o in $coll){");
+                s.AppendLine("    if($addRu -eq $null){ try { $arr.Добавить($o); $addRu = $true } catch { $arr.Add($o); $addRu = $false } }");
+                s.AppendLine("    elseif($addRu){ $arr.Добавить($o) } else { $arr.Add($o) }");
+                s.AppendLine("    $added++ }");
                 s.AppendLine("}");
                 s.AppendLine("if($skipped.Count -gt 0){ 'SKIPPED=' + ($skipped -join ' ') }");
                 s.AppendLine("if($added -eq 0){ throw 'в конфигурации не найдено ни одного объекта для публикации в OData' }");
-                s.AppendLine("CallAny $ib @('УстановитьСоставСтандартногоИнтерфейсаOData','SetStandardODataInterfaceContent') @($arr) | Out-Null");
+                s.AppendLine("try { $ib.УстановитьСоставСтандартногоИнтерфейсаOData($arr) } catch { $ib.SetStandardODataInterfaceContent($arr) }");
                 s.AppendLine("'ADDED=' + $added");
             }
             s.AppendLine("'RESULT=OK'");
+            s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
             return s.ToString();
+        }
+
+        // Чистая строка ошибки: скрипт сам печатает 'ERROR=<текст>' в stdout,
+        // потому что stderr от powershell.exe приходит в виде CLIXML и текст причины тонет.
+        static string ComErrorLine(ExecResult r)
+        {
+            Match m = Regex.Match(r.StdOut, @"ERROR=(.+)");
+            if (m.Success) return m.Groups[1].Value.Trim();
+            return r.Tail(3);
         }
 
         static string TranslateComError(string raw)
@@ -775,8 +821,9 @@ namespace Oc1c
 
             if (r.All.IndexOf("RESULT=OK") < 0)
             {
+                string line = ComErrorLine(r);
                 string human = TranslateComError(r.All);
-                Log.Err("состав OData не задан: " + (human != null ? human : r.Tail(3)));
+                Log.Err("состав OData не задан: " + (human != null ? human + " (" + line + ")" : line));
                 if (human != null && human.StartsWith("неверные"))
                     Log.Fix("проверьте --admin-user/--admin-password (пользователь 1С с полными правами)");
                 else if (human != null && human.StartsWith("база заблокирована"))
