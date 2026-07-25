@@ -26,6 +26,7 @@ namespace Oc1c
         public string OpenFirewall;
         public string VerifyUrl, ExternalUrl;
         public bool Unattended;
+        public bool SkipScope;
         public bool Force;
         public bool AutoResume;
         public string LogPath;
@@ -239,6 +240,14 @@ namespace Oc1c
 
             // ---------- 12. состав OData (через COM)
             Log.Step(12, TOTAL, "Состав интерфейса OData (какие объекты отдавать)");
+            if (o.SkipScope)
+            {
+                Log.Skip("шаг отключён ключом --skip-scope (состав в базе оставлен как есть)");
+                Log.Info("состав хранится В БАЗЕ и переживает перепубликацию; задать/изменить: " +
+                         "перезапуск с --admin-user/--admin-password и нужным --scope");
+            }
+            else
+            {
             string scopeErr;
             List<string> scopeKeys = Steps.ExpandScope(o.Scope, out scopeErr);
             if (scopeKeys == null)
@@ -296,6 +305,7 @@ namespace Oc1c
                     }
                 }
             }
+            }   // конец блока --skip-scope
 
             // ---------- 13. проверка
             Log.Step(13, TOTAL, "Проверка: отвечает ли OData");
@@ -510,6 +520,7 @@ namespace Oc1c
                     case "--check": Ctx.DryRun = true; need = false; break;
                     case "--yes": case "-y": Ctx.AssumeYes = true; need = false; break;
                     case "--unattended": o.Unattended = true; Ctx.AssumeYes = true; need = false; break;
+                    case "--skip-scope": o.SkipScope = true; need = false; break;
                     case "--force": o.Force = true; need = false; break;
                     case "--no-backup": o.NoBackup = true; need = false; break;
                     case "--use-default-pool": o.UseDefaultPool = true; need = false; break;
@@ -654,6 +665,9 @@ setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая нас�
   --check                  режим проверки: ничего не менять, только показать
   --yes                    не задавать подтверждений
   --unattended             полностью без вопросов (все данные — ключами/конфигом)
+  --skip-scope             не трогать состав OData (шаг 12). Нужен, когда состав в базе уже задан
+                           и пароля администратора 1С под рукой нет: состав хранится В БАЗЕ и
+                           переживает перепубликацию
   --auto-resume            продолжить автоматически после перезагрузки (RunOnce)
   --config <файл>          файл настроек ключ=значение (см. setup-1c-odata.example.ini)
   --log <файл>             путь к логу (по умолчанию C:\1c\logs\setup-1c-odata_<дата>.log)
