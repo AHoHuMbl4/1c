@@ -56,6 +56,7 @@ Windows (1С)              Ubuntu LXC (весь наш контроль)
 | [`docs/OPENCLAW_BOT.md`](docs/OPENCLAW_BOT.md) | **Бот-слой OpenClaw**: тон над мозгами, гейт анти-галлюцинаций КОДОМ, нативные правила |
 | [`docs/SERENEDB.md`](docs/SERENEDB.md) | **Аналитика/отчёты на SereneDB**: витрина, NL→SQL, графики, резолвер, read-only роль |
 | [`docs/RUNBOOK_DEPLOY.md`](docs/RUNBOOK_DEPLOY.md) | **🚀 Сквозной деплой** (эталон): §1-6 1С/OData/read-only → §7-8 braine → §9 карта сервисов → **§10 SereneDB** + новая база → **§11 OpenClaw-бот** |
+| [`docs/TARGET_ARCHITECTURE.md`](docs/TARGET_ARCHITECTURE.md) | **🎯 Целевая схема**: ищет SereneDB, модель ничего не грузит — вопрос и результат, и только |
 | [`docs/UNIVERSAL_INGEST.md`](docs/UNIVERSAL_INGEST.md) | **Коробка**: любая база, вся информация, ноль ручной настройки — ключи из `$metadata`, свежесть раз в 10 минут |
 | [`docs/ANONYMIZATION.md`](docs/ANONYMIZATION.md) | **Анонимизация**: чтобы на сервер уходили только псевдонимы — разбор варианта, проверенные факты, план |
 | [`docs/PRODUCTION_PLAN.md`](docs/PRODUCTION_PLAN.md) | Доведение до продакшена: что сделано и что осталось (Фаза 7 — реальные данные/регистры) |
