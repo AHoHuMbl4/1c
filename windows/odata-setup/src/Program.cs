@@ -336,8 +336,13 @@ namespace Oc1c
                 else Log.Info("без пароля -> HTTP " + anon.Status);
 
                 // 2) с учётными данными — ожидаем 200 и непустой список сущностей
-                string vu = !string.IsNullOrEmpty(o.ReaderUser) ? o.ReaderUser : o.AdminUser;
-                string vp = !string.IsNullOrEmpty(o.ReaderUser) ? o.ReaderPassword : o.AdminPassword;
+                // Под читателем проверяем, только если известен ЕГО пароль. Иначе — под администратором:
+                // иначе указание одного лишь --reader-user (для проверки ролей) давало бы ложный провал 401.
+                bool useReader = !string.IsNullOrEmpty(o.ReaderUser) && !string.IsNullOrEmpty(o.ReaderPassword);
+                if (!useReader && !string.IsNullOrEmpty(o.ReaderUser))
+                    Log.Info("пароль читателя не задан — проверяю под администратором (роли читателя проверены на шаге 12)");
+                string vu = useReader ? o.ReaderUser : o.AdminUser;
+                string vp = useReader ? o.ReaderPassword : o.AdminPassword;
                 if (!string.IsNullOrEmpty(vu))
                 {
                     Steps.HttpProbe auth = Steps.Probe(url, vu, vp, 180000);
