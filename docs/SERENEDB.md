@@ -183,6 +183,9 @@ fast-path-реестре (`server/connector/view_fast_path.cpp`). Сейчас �
 | **Векторный `ivf` над PG-view** | ✅ **работает**, 224 мс на 50 тыс.; поиск 4.25 мс |
 | **Гибрид: текст + вектор в ОДНОМ индексе над PG-view** | ✅ 457 мс; фильтр по тексту 2.7 мс; текст + ранжирование вектором 4.4 мс |
 
+⚠ **Тип денежных колонок:** `NUMERIC`/`DECIMAL` **не индексируется** (`unsupported type DECIMAL(14,2)`).
+В PostgreSQL деньги обычно `numeric` → приводить в VIEW: `amount::DOUBLE AS amount`.
+
 ⚠ **Тип вектора:** колонка обязана быть **фиксированной** `FLOAT[N]`. PG-массив `real[]` приходит как
 переменный `FLOAT[]` → ошибка `Column 'emb' must be ARRAY(FLOAT, N)`. Лечится приведением в самом VIEW:
 `SELECT …, emb::FLOAT[8] AS emb FROM …`.
