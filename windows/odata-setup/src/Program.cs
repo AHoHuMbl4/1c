@@ -226,6 +226,27 @@ namespace Oc1c
             if (!Steps.GrantAcl(bref, pool, out detail)) return EXIT_STEP;
             Log.Ok(detail);
 
+            // ---------- состав OData: решаем ДО бэкапа (иначе зря копируем гигабайты, если админ откажется)
+            string scopeErr;
+            List<string> scopeKeys = Steps.ExpandScope(o.Scope, out scopeErr);
+            if (scopeKeys == null)
+            {
+                Log.Err(scopeErr);
+                Log.Fix("допустимо: default | analytics | all | список через запятую (см. --help)");
+                return EXIT_ARGS;
+            }
+            if (!o.SkipScope && string.IsNullOrEmpty(o.AdminUser) && !Ctx.DryRun)
+            {
+                if (o.Unattended)
+                {
+                    Log.Err("не заданы учётные данные администратора 1С для шага 12 (состав OData)");
+                    Log.Fix("либо --admin-user + --admin-password-env, либо --skip-scope " +
+                            "(тогда состав задаёт администратор 1С вручную — программа напечатает инструкцию)");
+                    return EXIT_ARGS;
+                }
+                if (!AskScopeChoice(o, bref, scopeKeys)) o.SkipScope = true;
+            }
+
             // ---------- 11. бэкап (перед единственным изменением в базе — составом OData)
             Log.Step(11, TOTAL, "Резервная копия базы (перед изменением состава OData)");
             if (o.SkipScope) Log.Skip("состав OData не меняется (--skip-scope) => база не изменится => бэкап не нужен");
@@ -243,32 +264,12 @@ namespace Oc1c
             Log.Step(12, TOTAL, "Состав интерфейса OData (какие объекты отдавать)");
             if (o.SkipScope)
             {
-                Log.Skip("шаг отключён ключом --skip-scope (состав в базе оставлен как есть)");
-                Log.Info("состав хранится В БАЗЕ и переживает перепубликацию; задать/изменить: " +
-                         "перезапуск с --admin-user/--admin-password и нужным --scope");
+                Log.Skip("состав в базе не меняется — задаёт администратор 1С вручную (инструкция ниже, в итоге)");
+                Log.Info("состав хранится В БАЗЕ и переживает перепубликацию/переустановку IIS");
             }
             else
             {
-            string scopeErr;
-            List<string> scopeKeys = Steps.ExpandScope(o.Scope, out scopeErr);
-            if (scopeKeys == null)
-            {
-                Log.Err(scopeErr);
-                Log.Fix("допустимо: default | analytics | all | список через запятую (см. --help)");
-                return EXIT_ARGS;
-            }
             Log.Info("разделы: " + string.Join(", ", scopeKeys.ToArray()));
-
-            if (string.IsNullOrEmpty(o.AdminUser) && !o.Unattended && !Ctx.DryRun)
-            {
-                Console.Write("       Пользователь 1С с полными правами (Enter — без авторизации): ");
-                o.AdminUser = (Console.ReadLine() ?? "").Trim();
-                if (o.AdminUser.Length > 0)
-                {
-                    o.AdminPassword = Win.ReadPassword("Пароль этого пользователя");
-                    Log.AddSecret(o.AdminPassword);
-                }
-            }
 
             int cur, added;
             string roles;
@@ -393,21 +394,91 @@ namespace Oc1c
                 if (Steps.OpenFirewall(o.OpenFirewall, out detail)) Log.Ok(detail);
             }
 
-            Report(o, bref, plat, pool, url);
+            Report(o, bref, plat, pool, url, scopeKeys);
             ClearResume();
             return verifyExit;
         }
 
+        // ================================================================= осознанный выбор администратора
+        // Возвращает true, если админ согласился ввести пароль (и он введён), иначе false.
+        static bool AskScopeChoice(Opts o, BaseRef b, List<string> scopeKeys)
+        {
+            Log.Head("ШАГ 12 ТРЕБУЕТ РЕШЕНИЯ АДМИНИСТРАТОРА 1С");
+            Log.Con("ЧТО ОСТАЛОСЬ СДЕЛАТЬ: указать состав интерфейса OData — какие объекты базы");
+            Log.Con("вообще видны наружу. Планируется отдать (только на чтение):");
+            for (int i = 0; i < scopeKeys.Count; i++) Log.Con("    - " + scopeKeys[i]);
+            Log.Con("Без этого шага OData отдаёт ПУСТОЙ список и сервер аналитики не увидит данных.");
+            Log.Con("");
+            Log.Con("ПОЧЕМУ НУЖЕН ПАРОЛЬ: это административная операция ВНУТРИ базы 1С — платформа");
+            Log.Con("требует пользователя с полными правами. Больше он не нужен нигде: в работе");
+            Log.Con("система читает данные под отдельным пользователем-читателем (только чтение).");
+            Log.Con("");
+            Log.Con("ЧТО ПРОГРАММА СДЕЛАЕТ С ПАРОЛЕМ:");
+            Log.Con("    - спросит скрытно (на экране только звёздочки);");
+            Log.Con("    - передаст платформе 1С через окружение дочернего процесса —");
+            Log.Con("      в командной строке и в списке процессов он НЕ виден;");
+            Log.Con("    - НЕ сохранит на диск, НЕ запишет в лог (в логе «***»), НЕ отправит по сети;");
+            Log.Con("    - использует один раз и забудет (программа завершится).");
+            Log.Con("");
+            Log.Con("ЧТО ИМЕННО БУДЕТ СДЕЛАНО В БАЗЕ:");
+            Log.Con("    - сначала автоматическая резервная копия базы;");
+            Log.Con("    - затем ровно одна операция: запись списка объектов, видимых через OData.");
+            Log.Con("      Никакие данные (документы, справочники, проводки) НЕ изменяются.");
+            Log.Con("");
+            Log.Con("ВАШ ВЫБОР:");
+            Log.Con("    1) Ввести пароль — программа сделает всё сама (несколько секунд).");
+            Log.Con("    2) НЕ вводить — программа не тронет базу и напечатает точную пошаговую");
+            Log.Con("       инструкцию, как сделать это руками в Конфигураторе.");
+            Console.Write("       Ваш выбор [1/2]: ");
+            string ch = (Console.ReadLine() ?? "").Trim();
+            Log.File("выбор администратора: " + ch);
+            if (ch != "1")
+            {
+                Log.Skip("выбран ручной режим — база не изменяется");
+                return false;
+            }
+            Console.Write("       Пользователь 1С с полными правами (Enter = Администратор): ");
+            string u = (Console.ReadLine() ?? "").Trim();
+            o.AdminUser = u.Length == 0 ? "Администратор" : u;
+            o.AdminPassword = Win.ReadPassword("Пароль пользователя " + o.AdminUser + " (ввод скрыт)");
+            Log.AddSecret(o.AdminPassword);
+            if (string.IsNullOrEmpty(o.AdminPassword))
+            {
+                Log.Warn("пароль пуст — попробую подключиться без пароля");
+            }
+            return true;
+        }
+
         // ================================================================= итоговый отчёт
-        static void Report(Opts o, BaseRef b, Platform p, string pool, string url)
+        static void Report(Opts o, BaseRef b, Platform p, string pool, string url, List<string> scopeKeys)
         {
             Log.Head("ИТОГ");
             if (Ctx.DryRun) Log.Con("Режим проверки: ничего не менялось. Для настройки запустите без --check.");
             else Log.Con(Ctx.Changed ? "Настройка выполнена." : "Всё уже было настроено — изменений не потребовалось.");
             if (Log.Warnings > 0) Log.Con("Предупреждений: " + Log.Warnings + " (см. выше и в логе).");
 
+            // Если состав OData оставлен администратору — печатаем и сохраняем точную инструкцию.
+            if (o.SkipScope && !Ctx.DryRun)
+            {
+                string manual = Steps.ManualScopeInstructions(b, o.Alias, scopeKeys);
+                Log.Con("");
+                Log.Con(new string('-', 74));
+                Log.Con(manual);
+                Log.Con(new string('-', 74));
+                try
+                {
+                    string mf = Path.Combine(Path.GetDirectoryName(Log.Path), "1c-odata-ручная-настройка.txt");
+                    File.WriteAllText(mf, manual, new UTF8Encoding(true));
+                    Log.Con("Эта инструкция сохранена в файл: " + mf);
+                    Log.Con("(можно переслать тому, у кого есть пароль администратора 1С)");
+                }
+                catch (Exception e) { Log.File("не сохранил инструкцию: " + e.Message); }
+            }
+
             Log.Con("");
             Log.Con("ОСТАЛОСЬ СДЕЛАТЬ РУКАМИ (осознанно не автоматизируется):");
+            if (o.SkipScope && !Ctx.DryRun)
+                Log.Con("  0) Задать состав OData в Конфигураторе — инструкция выше (без этого данных не будет).");
             Log.Con("  1) Создать в 1С пользователя-читателя:");
             Log.Con("     1С:Предприятие -> Администрирование -> Настройки пользователей и прав -> Пользователи");
             Log.Con("     - сначала должен существовать пользователь с полными правами (администратор);");

@@ -694,6 +694,71 @@ namespace Oc1c
             return keys;
         }
 
+        static readonly Dictionary<string, string> ScopeRu = BuildScopeRu();
+        static Dictionary<string, string> BuildScopeRu()
+        {
+            Dictionary<string, string> m = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            m["catalogs"] = "Справочники";
+            m["documents"] = "Документы";
+            m["accumulation-registers"] = "Регистры накопления (обороты и остатки)";
+            m["information-registers"] = "Регистры сведений";
+            m["accounting-registers"] = "Регистры бухгалтерии";
+            m["calculation-registers"] = "Регистры расчёта";
+            m["charts-of-accounts"] = "Планы счетов";
+            m["charts-of-characteristic-types"] = "Планы видов характеристик";
+            m["charts-of-calculation-types"] = "Планы видов расчёта";
+            m["enums"] = "Перечисления";
+            m["constants"] = "Константы";
+            m["exchange-plans"] = "Планы обмена";
+            m["business-processes"] = "Бизнес-процессы";
+            m["tasks"] = "Задачи";
+            m["document-journals"] = "Журналы документов";
+            return m;
+        }
+
+        // Точная инструкция для администратора 1С, если он не хочет вводить пароль в программу.
+        public static string ManualScopeInstructions(BaseRef b, string alias, List<string> scopeKeys)
+        {
+            StringBuilder s = new StringBuilder();
+            s.AppendLine("РУЧНАЯ НАСТРОЙКА СОСТАВА OData — выполняет администратор 1С (~5 минут)");
+            s.AppendLine("");
+            s.AppendLine("Зачем это нужно: без этого шага OData отдаёт ПУСТОЙ список объектов, и сервер");
+            s.AppendLine("аналитики не увидит ни одной таблицы. Всё остальное уже настроено программой.");
+            s.AppendLine("");
+            s.AppendLine("0) СНАЧАЛА КОПИЯ БАЗЫ (обязательно):");
+            s.AppendLine("   Конфигуратор -> Администрирование -> «Выгрузить информационную базу...»");
+            s.AppendLine("   -> сохранить файл .dt в надёжное место.");
+            s.AppendLine("");
+            s.AppendLine("1) Открыть Конфигуратор для базы:");
+            s.AppendLine("   " + (b.IsFile ? b.Dir : (b.Srvr + " / " + b.Name)));
+            s.AppendLine("   (1С:Предприятие -> выбрать базу в списке -> кнопка «Конфигуратор»,");
+            s.AppendLine("    войти пользователем с полными правами)");
+            s.AppendLine("");
+            s.AppendLine("2) Меню «Администрирование» -> «Состав стандартного интерфейса OData...»");
+            s.AppendLine("");
+            s.AppendLine("3) В открывшемся окне отметить флажками объекты, которые можно отдавать");
+            s.AppendLine("   наружу (доступ будет ТОЛЬКО на чтение — под пользователем-читателем):");
+            for (int i = 0; i < scopeKeys.Count; i++)
+            {
+                string ru;
+                if (!ScopeRu.TryGetValue(scopeKeys[i], out ru)) ru = scopeKeys[i];
+                s.AppendLine("     - " + ru);
+            }
+            s.AppendLine("   Отмечать можно как весь раздел целиком, так и отдельные объекты —");
+            s.AppendLine("   что не отмечено, наружу не отдаётся вообще.");
+            s.AppendLine("");
+            s.AppendLine("4) Нажать «ОК». Состав сохраняется В САМОЙ БАЗЕ: он переживает");
+            s.AppendLine("   перепубликацию, переустановку IIS и перенос на другой сервер.");
+            s.AppendLine("");
+            s.AppendLine("5) ПРОВЕРКА (любой из способов):");
+            s.AppendLine("   а) открыть в браузере: http://localhost/" + alias + "/odata/standard.odata/");
+            s.AppendLine("      ввести логин/пароль любого пользователя 1С -> должен прийти НЕПУСТОЙ");
+            s.AppendLine("      список (много строк вида <collection href=\"...\">);");
+            s.AppendLine("   б) снова запустить программу с ключом --skip-scope — шаг 13 покажет,");
+            s.AppendLine("      сколько сущностей отдаёт OData (должно быть больше нуля).");
+            return s.ToString();
+        }
+
         // Скрипт COM: read — только прочитать текущий состав; write — установить.
         static string ComScript(bool write, bool checkReader)
         {
