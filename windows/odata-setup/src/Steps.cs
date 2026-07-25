@@ -695,6 +695,14 @@ namespace Oc1c
         }
 
         static readonly Dictionary<string, string> ScopeRu = BuildScopeRu();
+
+        // Человеческое имя раздела — для экранов, которые читает администратор 1С.
+        public static string ScopeLabel(string key)
+        {
+            string ru;
+            if (ScopeRu.TryGetValue(key, out ru)) return ru + " (" + key + ")";
+            return key;
+        }
         static Dictionary<string, string> BuildScopeRu()
         {
             Dictionary<string, string> m = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
