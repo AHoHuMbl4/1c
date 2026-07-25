@@ -69,6 +69,7 @@ Windows (1С)              Ubuntu LXC (весь наш контроль)
 | [`windows/README.md`](windows/README.md) | Windows-сторона: 1С/IIS/OData, раскладка, доступы, бэкапы |
 | [`windows/odata-setup/README.md`](windows/odata-setup/README.md) | **🚀 `setup-1c-odata.exe`** — автонастройка Windows одним файлом (руками только юзер-читатель) |
 | [`docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`](docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md) | Почему встроенный MCP-тулкит НЕ для прода (из кода) |
+| [`docs/INSTALL_LOG.md`](docs/INSTALL_LOG.md) | **Журнал установок**: что ставили, что ломалось, как чинили; грабли окружения |
 | [`memory_bank/`](memory_bank/) | Контекст проекта для сессий (читать в начале, обновлять по ходу) |
 
 ## Структура репозитория
