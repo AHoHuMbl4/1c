@@ -170,7 +170,9 @@ namespace Oc1c
                 Log.Fix("освободите место, укажите другой --backup-dir или запустите с --no-backup (на свой риск)");
                 return false;
             }
-            string dst = Path.Combine(backupDir, Path.GetFileName(src) + "_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".zip");
+            // Своя метка в имени: ротация ниже трогает ТОЛЬКО копии этой программы и никогда —
+            // чужие бэкапы (например, от windows/scripts/backup-1c.ps1, у которых имя без метки).
+            string dst = Path.Combine(backupDir, Path.GetFileName(src) + "_setup-odata_" + DateTime.Now.ToString("yyyyMMdd_HHmmss") + ".zip");
             if (Ctx.DryRun) { Log.Sim("создал бы бэкап " + dst); return true; }
             bool mainOk = false;                      // попал ли в архив сам файл базы 1Cv8.1CD
             try
@@ -208,7 +210,7 @@ namespace Oc1c
                 }
                 Ctx.Changed = true;
                 Log.Ok("бэкап: " + dst + " (" + (new FileInfo(dst).Length / 1024 / 1024) + " МБ)");
-                RotateBackups(backupDir, Path.GetFileName(src), 5);
+                RotateBackups(backupDir, Path.GetFileName(src), 3);
                 return true;
             }
             catch (Exception e)
@@ -230,12 +232,14 @@ namespace Oc1c
             return false;
         }
 
-        // Держим последние N копий этой базы — иначе повторные запуски забьют диск (база может быть в гигабайтах).
+        // Держим последние N копий, СОЗДАННЫХ ЭТОЙ ПРОГРАММОЙ (метка _setup-odata_ в имени).
+        // Чужие бэкапы не трогаем никогда: на живом стенде ротация по общему шаблону снесла
+        // копию, сделанную другим скриптом. Больше такого быть не может.
         static void RotateBackups(string backupDir, string baseName, int keep)
         {
             try
             {
-                string[] files = Directory.GetFiles(backupDir, baseName + "_*.zip");
+                string[] files = Directory.GetFiles(backupDir, baseName + "_setup-odata_*.zip");
                 if (files.Length <= keep) return;
                 Array.Sort(files, delegate(string a, string b)
                 {
