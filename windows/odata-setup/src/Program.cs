@@ -295,7 +295,16 @@ namespace Oc1c
                     }
                     else if (roles != null)
                     {
-                        Log.Info("роли пользователя «" + o.ReaderUser + "»: " + (roles.Length == 0 ? "(нет)" : roles));
+                        // В типовых на БСП профиль «Только просмотр» разворачивается в сотни ролей —
+                        // в консоли показываем сводку, полный список уходит в лог.
+                        string[] rr = roles.Length == 0 ? new string[0] : roles.Split(',');
+                        Log.File("полный список ролей «" + o.ReaderUser + "»: " + roles);
+                        if (rr.Length > 6)
+                        {
+                            string head = string.Join(",", rr, 0, 6).Trim();
+                            Log.Info("ролей у «" + o.ReaderUser + "»: " + rr.Length + " (полный список в логе). Первые: " + head + " …");
+                        }
+                        else Log.Info("роли пользователя «" + o.ReaderUser + "»: " + (roles.Length == 0 ? "(нет)" : roles));
                         string rl = roles.ToLowerInvariant();
                         if (rl.Contains("полныеправа") || rl.Contains("fullaccess") ||
                             rl.Contains("администратор") || rl.Contains("administrator"))
