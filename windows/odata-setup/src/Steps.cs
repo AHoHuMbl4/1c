@@ -575,6 +575,12 @@ namespace Oc1c
             if (!b.IsFile) { detail = "клиент-серверная база — права на каталог не нужны"; return true; }
             if (Ctx.DryRun) { Log.Sim("выдал бы права Modify на " + b.Dir + " для IIS AppPool\\" + pool + ", IIS_IUSRS, IUSR"); detail = "симуляция"; return true; }
 
+            // Уже выдавали? Проверяем по идентификатору пула — он язык-нейтрален ("IIS APPPOOL\<имя>").
+            // Без этой проверки icacls /T гонялся бы по всей базе при каждом запуске и «изменения» считались бы ложно.
+            ExecResult have = Proc.Run("icacls.exe", "\"" + b.Dir + "\"", 60000, Proc.Oem, null, null);
+            if (have.Ok && have.StdOut.IndexOf("APPPOOL\\" + pool, StringComparison.OrdinalIgnoreCase) >= 0)
+            { detail = "права уже выданы (пул " + pool + ")"; return true; }
+
             string[] who = new string[] { "IIS AppPool\\" + pool, "*S-1-5-32-568", "*S-1-5-17" }; // пул, IIS_IUSRS, IUSR (SID — не зависят от локали)
             bool allOk = true;
             for (int i = 0; i < who.Length; i++)
