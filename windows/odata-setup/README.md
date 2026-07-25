@@ -120,12 +120,18 @@ setup-1c-odata.exe --base "C:\1c\bases\ваша_база" --admin-user Адми�
 
 ```bat
 build.cmd
-:: -> dist\setup-1c-odata.exe
+:: -> build\setup-1c-odata.exe
 ```
 
 Файлы: `src\Sys.cs` (лог, запуск процессов, PowerShell, системные проверки), `src\Steps.cs` (шаги),
 `src\Program.cs` (сценарий, аргументы, отчёт), `src\app.manifest` (запрос прав администратора).
-В `dist\` лежит уже собранный exe — можно использовать сразу.
+
+⚠ **Два разных каталога — намеренно:**
+- `dist\setup-1c-odata.exe` — **готовый** бинарь из репозитория, можно запускать сразу;
+- `build\` — локальная сборка, **в `.gitignore`**.
+
+Так сделано, потому что иначе `git pull` на машине, где уже собирали локально, падает с
+`untracked working tree files would be overwritten by merge` — и репозиторий молча остаётся старым.
 
 ## Лог и результат
 

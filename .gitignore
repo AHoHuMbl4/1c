@@ -20,3 +20,6 @@ Thumbs.db
 # Python bytecode
 __pycache__/
 *.pyc
+
+# Локальная сборка Windows-инструмента (готовый бинарь лежит в dist/)
+windows/odata-setup/build/

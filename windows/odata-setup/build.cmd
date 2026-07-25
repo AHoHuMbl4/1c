@@ -15,8 +15,10 @@ if not exist "%CSC%" (
   exit /b 1
 )
 
-if not exist "%~dp0dist" mkdir "%~dp0dist"
-set "OUT=%~dp0dist\setup-1c-odata.exe"
+rem Сборка кладётся в build\ (в .gitignore): чтобы локальная сборка НИКОГДА не конфликтовала
+rem с готовым dist\setup-1c-odata.exe из репозитория при git pull.
+if not exist "%~dp0build" mkdir "%~dp0build"
+set "OUT=%~dp0build\setup-1c-odata.exe"
 
 echo Компилятор: %CSC%
 echo Выход:      %OUT%
