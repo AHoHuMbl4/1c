@@ -6,8 +6,10 @@
 Потом резолвер ищет ближайшее значение к термину вопроса (косинус) → «питер»→«Г. САНКТ-ПЕТЕРБУРГ».
 
 Запуск под RW (postgres): SERENEDB_DSN=host=127.0.0.1 port=7890 user=postgres + ALIBABA_* в env.
-Пересобирает индекс с нуля. На больших справочниках HNSW ускорит поиск (в этой версии SereneDB
-CREATE INDEX USING HNSW недоступен — перебор косинуса; для сотен-тысяч значений добавить индекс).
+Пересобирает индекс с нуля. Сейчас поиск — перебор косинуса.
+В SereneDB ЕСТЬ HNSW (проверено 2026-07-25), синтаксис — колонка внутри инвертированного индекса:
+  CREATE INDEX i ON resolver_index USING inverted(emb hnsw (metric='cosine', m=32, ef_construction=64));
+Колонка emb уже FLOAT[1536] — схема менять не нужно. Включать после замера (docs/SERENEDB.md).
 """
 import sys
 import serene_report as S
