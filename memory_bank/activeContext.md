@@ -2,6 +2,32 @@
 
 _Обновлено: 2026-07-24 — стек доведён до продакшен-уровня (zero hardcode) + документация сквозная_
 
+## 🔎 2026-07-25 — SereneDB изучен по исходникам (важные исправления)
+Клон `github.com/serenedb/serenedb` + опрос живого инстанса. SereneDB = «Elasticsearch-поиск +
+ClickHouse-аналитика в одной Postgres-совместимой БД», поиск на собственном движке **IResearch**.
+- ❗ **Исправлено неверное:** HNSW-индекс ЕСТЬ (`USING inverted(col hnsw(metric='cosine', m=32,
+  ef_construction=64))`), а не «отсутствует». Раньше искали не тот синтаксис. Из вопросов фаундерам убран.
+- **`ai_embed(text, model, provider)`** — эмбеддинг прямо в SQL, в любой OpenAI-совместимый эндпоинт
+  (наш DashScope такой же) → можно направить на **локальный** и не выпускать значения из периметра.
+- **`postgres_attach`/`postgres_query`/`postgres_scan_pushdown`** вкомпилированы статически: данные могут
+  жить в Postgres, а поиск/аналитику даёт Serene — без копии (то, что вспомнил владелец).
+- **Zero-ETL** по Parquet/Iceberg/CSV/JSON на S3/HDFS с BM25 и векторами; заявлены column-wise real-time
+  updates (в тему требования «данные всегда свежие»).
+- Наш `resolver_index.emb` уже `FLOAT[1536]` — под HNSW подходит без изменения схемы. Детали и что мерить —
+  `docs/SERENEDB.md` §«Возможности движка».
+
+## 🧭 Факт стека на 2026-07-25 (перепроверено вживую)
+Активны и enabled: `1c-odata-gateway`(:6011), `1c-config-ui`(:6012), `1c-mcp-braine`(:6014 → ask_1c),
+`1c-mcp-reports`(:6015 → report_1c), `serenedb`(:7890), `open-webui`(:3000), `oikb`(:8081),
+`rerank-shim`(:8082), `api`(:8090 braine /ask), `kb-poll`, `postgresql`(:5432); `tg-bridge` — disabled.
+Таймеры: `1c-etl` 03:00, `1c-serene-sync` 03:40, `1c-bot-monitor` каждые 3 мин, `nightly-eval`.
+Бот — OpenClaw (user-юнит `undebot`, :18800, linger). Витрина: 12 catalog-таблиц + `resolver_index`.
+Эмбеддинги — DashScope `compatible-mode/v1` (**облако**, это и есть текущая точка утечки, см.
+`docs/ANONYMIZATION.md`). ОБЕ выгрузки (ETL→KB для braine и serene_sync→витрина) идут из ОДНОГО
+read-only OData-шлюза.
+
+---
+
 ## 🆕 2026-07-24 — продакшен-доводка (zero hardcode) + сквозные доки
 Директива владельца: «никакого хардкода, исправить всё до уровня продакшена». **Все кодовые фазы (1–6)
 `docs/PRODUCTION_PLAN.md` закрыты и задеплоены:**
