@@ -109,9 +109,7 @@ INTENT_SYS = """Convert the user's question about company data into a structure.
 Reply with JSON only.
 
 {
-  "terms":  ["words to search full-text: names of parties, goods, places, and the document
-              kind if the user named it — taken FROM the question, in the question's own
-              language; include natural inflections of the same word if useful"],
+  "terms":  [["alternatives for ONE concept"], ["alternatives for the NEXT concept"]],
   "amount": {"op": ">"|"<"|">="|"<="|"between"|null, "value": number|null, "value2": number|null},
   "period": {"from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null},
   "want":   "list" | "sum" | "count",
@@ -121,7 +119,13 @@ Reply with JSON only.
 }
 
 Rules:
-- Never invent terms that are not in the question.
+- "terms" holds only VALUES that should literally appear in a record: names of parties,
+  goods, places, document numbers. NEVER put the KIND of records there — that goes to
+  "kind". A record about a bank in Moscow need not contain the word "bank".
+- Group alternatives for the same concept together: expand abbreviations to their full
+  form and add the inflections a record would realistically use. Example shape:
+  [["Moscow", "MSK"], ["Acme"]] — matching is AND between groups, OR inside a group.
+- Never invent concepts that are not in the question.
 - want = "sum" when the user asks for a total money amount;
   "count" when they ask how many records; otherwise "list".
 - A numeric threshold belongs in "amount", never in "terms".
@@ -145,7 +149,14 @@ def parse_intent(question, today):
     d.setdefault("period", {})
     d["want"] = d.get("want") or "list"
     d["kind"] = (d.get("kind") or "").strip() or None
-    d["terms"] = [str(t) for t in (d.get("terms") or []) if str(t).strip()][:8]
+    # Поддерживаем и плоский список (старый вид), и группы синонимов
+    groups = []
+    for item in (d.get("terms") or []):
+        alts = item if isinstance(item, list) else [item]
+        alts = [str(a).strip() for a in alts if str(a).strip()]
+        if alts:
+            groups.append(alts[:6])
+    d["terms"] = groups[:6]
     return d
 
 
@@ -187,7 +198,7 @@ def search(question, intent):
     preds = _predicates(intent)
     terms = intent.get("terms") or []
     diag = {"terms": terms, "preds": preds}
-    tq = "[" + ", ".join("ts_phrase(%s)" % lit(x) for x in terms) + "]" if terms else ""
+    tq = ""
     rank = "bm25(%s.tableoid)" % INDEX
 
     # Слово, которого в данных нет вообще («продажи» при таблице «реализациятоваровуслуг»),
@@ -195,11 +206,17 @@ def search(question, intent):
     # это данные решают, а не список слов в коде.
     if terms:
         live, fuzzy = [], []
-        for x in terms:
-            n = psql("SELECT count(*) FROM %s WHERE doc @@ ts_phrase(%s)" % (INDEX, lit(x)))
-            if n and n[0] and int(n[0][0]) > 0:
-                live.append("ts_phrase(%s)" % lit(x))
+        for group in terms:
+            hits = []                      # варианты одного понятия: между ними ИЛИ
+            for x in group:
+                n = psql("SELECT count(*) FROM %s WHERE doc @@ ts_phrase(%s)" % (INDEX, lit(x)))
+                if n and n[0] and int(n[0][0]) > 0:
+                    hits.append("ts_phrase(%s)" % lit(x))
+            if hits:
+                live.append(hits[0] if len(hits) == 1
+                            else "ts_any([%s])" % ", ".join(hits))
                 continue
+            x = group[0]
             # Слово не нашлось целиком. Причина обычно морфологическая: спрашивают
             # «поступления», а в данных «ПоступлениеТоваровУслуг». Стемминг мы держим
             # выключенным (он привязан к языку), поэтому подбираем самый длинный
@@ -270,6 +287,55 @@ def widen_by_predicate(src_table, preds, rows):
         % (CORPUS, " AND ".join(preds), lit(src_table), TOPK))
     seen = {r[0] for r in full}
     return full + [r for r in rows if r[0] not in seen]
+
+
+PICK_SYS = """You map a user's question to ONE record type.
+
+You get the question and a numbered list of record types that exist in this database.
+Answer with the NUMBER only — the type whose records would ANSWER the question.
+If none of them fits, answer 0.
+Judge by meaning, across languages and wording: a question about sales belongs to the
+type that records sales even if the words differ.
+Records are kept from the company's own point of view, so a counterparty's purchase is
+the company's sale, and a counterparty's sale is the company's receipt."""
+
+
+def pick_entity(question, kind, cands):
+    """Какая сущность имеется в виду — спрашиваем модель, но даём ей ТОЛЬКО НАЗВАНИЯ.
+
+    Почему не вектором: замерено на живых данных — эмбеддинг не связывает «продажи» с
+    «Реализация Товаров Услуг» (0.419) и ставит выше «Склады» (0.465), а для «покупки»
+    сигнала нет вовсе. Короткие названия дают ложное сходство с любым коротким запросом.
+    Наращивать эвристику здесь — значит подбирать её под конкретную базу.
+
+    Модель для этого и нужна: сопоставить слово человека с названием сущности — чисто
+    языковая задача. Данные ей не показываем, схему тоже: только список названий тех
+    сущностей, где ПОИСК УЖЕ ЧТО-ТО НАШЁЛ. Список приходит из данных, а не из кода,
+    поэтому одинаково работает на базе любого размера и на любом языке.
+    """
+    if len(cands) < 2:
+        return cands[0] if cands else None
+    try:
+        rs = psql("SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                  % (TABLES, ", ".join(lit(c) for c in cands)))
+    except RuntimeError:
+        return None
+    names = [(r[0], r[1]) for r in rs if r and r[0]]
+    if len(names) < 2:
+        return names[0][0] if names else None
+    listing = "\n".join("%d. %s" % (i + 1, nm) for i, (_t, nm) in enumerate(names))
+    ask_text = question if not kind else "%s (%s)" % (question, kind)
+    try:
+        raw = ds_chat([{"role": "system", "content": PICK_SYS},
+                       {"role": "user", "content": "%s\n\nTypes:\n%s" % (ask_text, listing)}],
+                      max_tokens=8)
+    except Exception:                          # noqa: BLE001 — сеть/квота
+        return None
+    m = re.search(r"\d+", raw or "")
+    if not m:
+        return None
+    i = int(m.group(0))
+    return names[i - 1][0] if 1 <= i <= len(names) else None
 
 
 def table_by_meaning(question, candidates):
@@ -343,6 +409,9 @@ def focus(question, rows, want, kind=None, have_terms=False):
             return (money_first, round(mass * max(sim.get(t_, 0.0), 0.0), 4), len(rs))
         return (money_first, sim.get(t_, 0.0), len(rs))
 
+    picked = pick_entity(question, kind, list(by))
+    if picked in by:
+        return picked, by[picked]
     src, rs = max(by.items(), key=lambda kv: score(kv[0], kv[1]))
     return src, rs
 
@@ -379,6 +448,9 @@ ANSWER_SYS = """You answer an employee's question using ONLY the rows given to y
 - Never invent numbers, dates or names that are not in the rows.
 - If the rows do not answer the question, say plainly that there is no data.
 - If a TOTAL is provided, it was computed over every matching row — use exactly that figure.
+- Records are kept from the company's own point of view. What the company sells is what
+  the counterparty buys, and what the company receives is what the counterparty supplied.
+  Answer from the perspective the question takes instead of refusing over wording.
 - Be short and businesslike, no preamble. Amounts as digits."""
 
 
@@ -494,20 +566,19 @@ def answer(question):
         if not diag.get("terms_exact"):
             cand = [r[0] for r in psql("SELECT DISTINCT src_table FROM %s WHERE %s"
                                        % (CORPUS, " AND ".join(diag["preds"])))]
-            best = table_by_meaning(intent.get("kind") or question, cand)
+            best = pick_entity(question, intent.get("kind"), cand) \
+                or table_by_meaning(intent.get("kind") or question, cand)
             if best:
                 src = best
                 diag["focus_by_name"] = src
         rows = widen_by_predicate(src, diag["preds"], rows)
         focused = [r for r in rows if r[1] == src] or rows
     agg = aggregate(src, match if not diag.get("by_predicate_only") else "", diag["preds"])
-    if want in ("sum", "count"):
-        # Для арифметики нужен ОДИН источник: складывать справочник с документами нельзя.
-        rows = focused or rows
-    else:
-        # Для списка сужать нельзя: ответ про контрагента складывается из его карточки
-        # И его документов. Фокус здесь задаёт лишь порядок показа.
-        rows = (focused or []) + [r for r in rows if r not in (focused or [])]
+    # ВСЕГДА один источник — и для арифметики, и для списка. Иначе модель перечисляет
+    # строки одной таблицы, а итог берёт от другой: так «три реализации на 1 236 800»
+    # получили итог 925 000 (оплаты того же контрагента), и гейт это пропустил —
+    # число ведь настоящее, просто не от тех строк.
+    rows = focused or rows
     text = compose(question, rows, agg)
     ok, bad = gate(text, rows, agg, question)
     if not ok:

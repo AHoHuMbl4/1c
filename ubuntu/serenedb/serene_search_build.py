@@ -110,6 +110,14 @@ def odata_types():
 
 ENTITY_NAMES = {}          # сущность_lower -> оригинальное имя из $metadata
 
+# Служебные свойства OData-интерфейса 1С: одинаковы в любой конфигурации и на любом
+# языке (сама конфигурация может быть хоть японской — эти имена задаёт платформа).
+# Мы их НЕ предполагаем: используем только если сущность объявила их в своих метаданных.
+STANDARD_NAME_PROPS = ("Description", "Code")
+
+SAMPLE = int(os.environ.get("BUILD_SAMPLE", "20"))   # сколько значений смотреть при разборе
+NAME_COLS = int(os.environ.get("BUILD_NAME_COLS", "2"))  # сколько наименований склеивать
+
 NUMERIC_EDM = ("Edm.Double", "Edm.Decimal", "Edm.Int16", "Edm.Int32", "Edm.Int64", "Edm.Byte")
 
 
@@ -216,21 +224,34 @@ def build_corpus():
     # --- карта ссылок: GUID -> человекочитаемое наименование
     refmap = {}
     for t, n in live:
-        _decl, gcols, ccols = split_cols(t)
+        declared, gcols, ccols = split_cols(t)
         key_col, scored = (gcols[0] if gcols else None), []
-        for c in ccols:
-            vals = [r[0] for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL LIMIT 20'
-                                    % (c, t, c)) if r and r[0]]
-            if not vals:
-                continue
-            if max(len(v) for v in vals) <= 2 or any(machine_token(v) for v in vals):
-                continue
-            if int(q('SELECT count(DISTINCT "%s") FROM "%s"' % (c, t))[0][0]) <= n * 0.5:
-                continue
-            words = sum(len(v.split()) for v in vals) / len(vals)
-            alpha = sum(sum(ch.isalpha() for ch in v) / max(len(v), 1) for v in vals) / len(vals)
-            scored.append((words * alpha, c))
-        name_cols = [c for _s, c in sorted(scored, reverse=True)[:2]]
+
+        # Сначала — КОНТРАКТ ПЛАТФОРМЫ. OData-интерфейс 1С объявляет служебные свойства
+        # одинаково в любой конфигурации и на любом языке. Мы их не предполагаем: берём
+        # только те, что сущность РЕАЛЬНО объявила в своих метаданных. Документы,
+        # например, наименования не имеют — там сработает разбор ниже.
+        # Контракт платформы — первым, ранжирование — дополнением. Так не теряется
+        # полное наименование (по нему тоже ищут), и при этом не нужен порог.
+        std = [c for c in STANDARD_NAME_PROPS if c in declared]
+        name_cols = list(std)
+        if True:
+            for c in ccols:
+                if c in std:
+                    continue
+                vals = [r[0] for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL LIMIT %d'
+                                        % (c, t, c, SAMPLE)) if r and r[0]]
+                if not vals or any(machine_token(v) for v in vals):
+                    continue
+                # Порогов нет — только СРАВНЕНИЕ кандидатов между собой. Отсечка вида
+                # «уникальность выше половины» требовала бы подбора под каждую базу;
+                # ранжирование самокалибруется: побеждает лучший из того, что есть.
+                words = sum(len(v.split()) for v in vals) / len(vals)
+                alpha = sum(sum(ch.isalpha() for ch in v) / max(len(v), 1) for v in vals) / len(vals)
+                uniq = int(q('SELECT count(DISTINCT "%s") FROM "%s"' % (c, t))[0][0]) / max(n, 1)
+                scored.append((words * alpha * uniq, c))
+            extra = [c for _s, c in sorted(scored, reverse=True)]
+            name_cols += extra[:max(0, NAME_COLS + 1 - len(name_cols))]
         if key_col and name_cols:
             sel = ", ".join('"%s"' % c for c in name_cols)
             for row in q('SELECT "%s", %s FROM "%s" WHERE "%s" IS NOT NULL'
