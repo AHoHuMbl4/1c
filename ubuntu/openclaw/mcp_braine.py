@@ -35,6 +35,42 @@ TIMEOUT = float(os.environ.get("BRAINE_TIMEOUT", "180"))
 mcp = FastMCP("second-brain", host=MCP_HOST, port=MCP_PORT)
 
 
+# --- авторизация MCP -------------------------------------------------------------
+# Сервис отдаёт данные 1С. До этой правки он слушал без всякой проверки: любой
+# локальный процесс получал ответы, не зная ни одного токена, — то есть ASK_TOKEN у
+# сервиса ответов и токен OData-шлюза защищали двери, рядом с которыми стояла
+# открытая. Проверено прогоном: initialize + tools/call без единого заголовка
+# возвращали данные витрины.
+# Заголовок передаётся штатным механизмом OpenClaw: mcp.servers.<имя>.headers.
+MCP_TOKEN = os.environ.get("MCP_TOKEN", "")
+
+
+def _serve_with_auth(mcp_obj):
+    """Поднять MCP поверх Starlette с обязательной проверкой Bearer.
+
+    fail-closed: без токена в окружении сервис не стартует. Пустая переменная не
+    должна молча открывать доступ — эту ошибку мы уже проходили на шлюзе.
+    """
+    import uvicorn
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import JSONResponse
+
+    if not MCP_TOKEN:
+        sys.stderr.write("FATAL: MCP_TOKEN не задан — сервис отдавал бы данные 1С без "
+                         "авторизации. Задайте токен в окружении.\n")
+        raise SystemExit(2)
+
+    class Auth(BaseHTTPMiddleware):
+        async def dispatch(self, request, call_next):
+            if request.headers.get("authorization", "") != "Bearer " + MCP_TOKEN:
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+            return await call_next(request)
+
+    app = mcp_obj.streamable_http_app()
+    app.add_middleware(Auth)
+    uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="warning")
+
+
 def _braine_ask(question: str, prev_turn: str | None = None) -> dict:
     body = json.dumps({"question": question, "prev_turn": prev_turn}).encode("utf-8")
     req = urllib.request.Request(f"{BRAINE_URL}/ask", data=body, method="POST")
@@ -95,4 +131,4 @@ if __name__ == "__main__":
         import sys
         sys.stderr.write("WARN: BRAINE_TOKEN пуст — braine ответит 401\n")
     # Streamable HTTP: эндпоинт /mcp на MCP_HOST:MCP_PORT
-    mcp.run(transport="streamable-http")
+    _serve_with_auth(mcp)

@@ -447,9 +447,15 @@ def iter_corpus():
         picked_money = money_column(split_camel(ENTITY_NAMES.get(t.lower(), t)),
                                     num_cols) if declared else None
         amount_col = picked_money or None
-        # Запасной разбор запускаем ТОЛЬКО если модель не ответила (None), а не когда
-        # она ответила «денег нет» (пустая строка).
-        fallback = picked_money is None
+        # Запасной разбор по форме — ТОЛЬКО когда метаданных нет вовсе. Если метаданные
+        # есть, а модель недоступна, лучше остаться БЕЗ суммы, чем подставить «самое
+        # большое число»: на нашей же базе это правило выбирало служебный реквизит
+        # упорядочивания и процент комиссии. Неверное число хуже отсутствующего —
+        # отсутствие видно, неверное уходит клиенту как факт.
+        fallback = (picked_money is None) and not declared
+        if picked_money is None and declared:
+            sys.stderr.write("%s: денежная колонка не определена (модель недоступна) — "
+                             "агрегаты по этой сущности считаться не будут\n" % t)
         best = 1e18 if amount_col else -1
         for c in (num_cols if fallback else []):
             vals = []
@@ -593,14 +599,20 @@ def main():
     # Обработка ПО ТАБЛИЦАМ (память не зависит от размера базы), но пул эмбеддинга —
     # ОДИН на весь прогон. Пул на таблицу сбрасывал параллельность на каждой мелкой
     # сущности: замерено 71 с против 29 с на том же корпусе.
-    seen, total_rows, n_tables, n_ref, done = set(), 0, 0, 0, 0
+    seen, total_rows, n_tables, n_ref, done, failed = set(), 0, 0, 0, 0, 0
     buf, pending, inflight = [], [], {}
     t1 = time.time()
 
     def harvest(fut):
-        nonlocal buf, pending, done
+        nonlocal buf, pending, done, failed
         items = inflight.pop(fut)
-        for item, vec in zip(items, fut.result()):
+        try:
+            vecs = fut.result()
+        except Exception as e:                  # noqa: BLE001 — сеть/квота поставщика
+            failed += 1
+            sys.stderr.write("пачка эмбеддинга не посчитана: %s\n" % str(e)[:120])
+            return
+        for item, vec in zip(items, vecs):
             buf.append(_row_sql(item, vec))
             pending.append((item[0], item[1]))
         done += len(items)
@@ -633,6 +645,12 @@ def main():
     if buf:
         _flush(buf, pending)
     embed_sec = time.time() - t1
+
+    if failed:
+        # Частичный корпус + индекс от прошлого прогона = витрина отвечает по
+        # рассогласованным данным и не сообщает об этом. Индекс пересобираем в любом
+        # случае, но прогон помечаем проваленным.
+        sys.stderr.write("ВНИМАНИЕ: %d пачек не посчитаны — корпус неполный\n" % failed)
 
     gone = [k for k in have if k not in seen]
     if gone:
@@ -686,6 +704,10 @@ def main():
             pass
 
     total = int(q("SELECT count(*) FROM %s" % CORPUS)[0][0])
+    if failed:
+        print(json.dumps({"rows": total, "embedded": done, "failed_batches": failed,
+                          "status": "неполный корпус"}, ensure_ascii=False))
+        return 3
     print(json.dumps({"rows": total, "embedded": done, "deleted": len(gone),
                       "embed_sec": round(embed_sec, 1), "index_sec": round(idx_sec, 2),
                       "total_sec": round(time.time() - t0, 1)}, ensure_ascii=False))

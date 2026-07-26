@@ -471,7 +471,14 @@ def compose(question, rows, agg):
         payload.append(head + ((" | " + " | ".join(tail)) if tail else ""))
     body = "QUESTION: %s\n\nROWS FOUND (%d):\n%s" % (
         question, len(rows), "\n".join("- " + p for p in payload))
-    if agg:
+    has_money = bool(agg) and (agg.get("sum") or agg.get("max") or agg.get("min"))
+    if agg and not has_money:
+        # Денежной колонки у этой сущности нет. Передать sum=0 нельзя: модель ответит
+        # «0», и гейт согласится — ноль ведь посчитан. Отсутствие суммы и сумма,
+        # равная нулю, — разные вещи, и путать их нельзя.
+        body += "\n\nCOMPUTED OVER ALL MATCHING ROWS: count = %d" % agg["count"]
+        body += "\n  (this record type has no monetary field — do not state any amount)"
+    elif agg:
         body += "\n\nCOMPUTED OVER ALL MATCHING ROWS (use these exact figures, each in its own role):"
         body += "\n  count (number of records) = %d" % agg["count"]
         body += "\n  sum (TOTAL amount)        = %s" % _fmt(agg["sum"])
