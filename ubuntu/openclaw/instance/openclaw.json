@@ -103,7 +103,10 @@
           ]
         },
         "connectionTimeoutMs": 15000,
-        "requestTimeoutMs": 60000
+        "requestTimeoutMs": 60000,
+        "headers": {
+          "Authorization": "Bearer ЗАМЕНИТЬ-ИЗ-/etc/1c-mcp-braine.env"
+        }
       },
       "second-brain-reports": {
         "url": "http://127.0.0.1:6015/mcp",
@@ -114,7 +117,10 @@
           ]
         },
         "connectionTimeoutMs": 15000,
-        "requestTimeoutMs": 120000
+        "requestTimeoutMs": 120000,
+        "headers": {
+          "Authorization": "Bearer ЗАМЕНИТЬ-ИЗ-/etc/1c-mcp-braine.env"
+        }
       }
     }
   },

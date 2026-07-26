@@ -86,7 +86,7 @@
 | Монитор не проверял, что gateway **отвечает** (зависший процесс тоже `active`) | ✅ добавлена штатная проверка `/health` |
 | Дока: модель `deepseek-chat` | ✅ исправлено на `deepseek-v4-flash` |
 | Дока: путь установки плагина указан неверно | ❌ **не сделано** |
-| `connectTimeout`/`timeout` вместо канонических `connectionTimeoutMs`/`requestTimeoutMs` | ❌ **не сделано** (алиасы работают, `config validate` проходит) |
+| `connectTimeout`/`timeout` вместо канонических `connectionTimeoutMs`/`requestTimeoutMs` | ✅ сделано — живой конфиг и эталон на канонических именах (проверено грепом по обоим 26.07) |
 | `mcp_braine` перевести на stdio-спавн или `defineToolPlugin` | ⛔ сознательно не делаем: ломает откат braine↔SereneDB через drop-in и разводит два одинаковых моста по разным механизмам |
 | `qa-probes.sh` → штатный `openclaw qa` | ⛔ невозможно: в установленной версии команды нет, extensions не поставляются |
 | `verify-plugin` как hook-only | ⛔ ничего не делаем: дока называет это поддерживаемым базовым вариантом |

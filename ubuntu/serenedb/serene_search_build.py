@@ -352,6 +352,21 @@ def build_corpus():
     return out, nt, nref
 
 
+def protocol_companion(c, names):
+    """Служебный спутник протокола OData: `X_Type` (имя типа конфигурации) и
+    `X_navigationLinkUrl` (адрес перехода) существуют только В ПАРЕ со свойством
+    `X` или `X_Key`. Пара — контракт платформы: бизнес-поле, чьё имя случайно
+    кончается на «_Type» без пары, не пострадает. Значения спутников — не
+    бизнес-текст; в корпусе они давали 30% строк с именами типов конфигурации,
+    и посторонние регистры обгоняли нужный документ по числу совпадений.
+    """
+    for suf in ("_Type", "_navigationLinkUrl"):
+        if c.endswith(suf):
+            base = c[: -len(suf)]
+            return base in names or base + "_Key" in names
+    return False
+
+
 def iter_corpus():
     """Отдавать корпус ПО ТАБЛИЦАМ, а не одним списком.
 
@@ -363,7 +378,11 @@ def iter_corpus():
     tables = [r[0] for r in q(
         "SELECT table_name FROM duckdb_tables() WHERE database_name='postgres' "
         "  AND table_name NOT LIKE 'duckdb%%' AND table_name NOT LIKE '%s%%' "
-        "  AND table_name<>'resolver_index'" % CORPUS.split("_")[0])]
+        "  AND table_name NOT IN ('resolver_index', 'base_profile')" % CORPUS.split("_")[0])]
+    # base_profile — наша перепись базы: диагностика и покрытие, НЕ бизнес-данные.
+    # В корпусе она подсовывала имена всех 4585 типов конфигурации как искомый текст,
+    # а пустой row_key у всех её строк заставлял каждый flush стирать предыдущий:
+    # из 4585 строк выживало 154, и именно они шумели в выборе сущности.
     live = []
     for t in tables:
         n = int(q('SELECT count(*) FROM "%s"' % t)[0][0])
@@ -394,12 +413,21 @@ def iter_corpus():
         declared = meta.get(t.lower(), {})
         if declared:
             guid_cols = [c for c, _dt in cols[t] if declared.get(c) == "Edm.Guid"]
+            # `X_Type` — служебный спутник свойства `X` (полиморфная ссылка или
+            # хранилище): его значения — имена типов конфигурации, не бизнес-текст.
+            # Пара задаётся протоколом, поэтому исключаем ТОЛЬКО при объявленном `X`
+            # в той же сущности — бизнес-поле, чьё имя кончается на «_Type» без пары,
+            # не пострадает. Замерено: такой мусор был в 28 918 строках корпуса (30%),
+            # и посторонние регистры обгоняли нужный документ по числу совпадений.
             txt = [c for c, _dt in cols[t] if declared.get(c) == "Edm.String"
-                   and c not in STANDARD_SERVICE_PROPS]
+                   and c not in STANDARD_SERVICE_PROPS
+                   and not protocol_companion(c, declared)]
         else:
             # Запасной разбор (метаданных нет): образцы всех текстовых колонок берём
             # ОДНИМ запросом, а не запросом на колонку.
-            vcols = [c for c, dt in cols[t] if "VARCHAR" in dt]
+            names = {c for c, _dt in cols[t]}
+            vcols = [c for c, dt in cols[t] if "VARCHAR" in dt
+                     and not protocol_companion(c, names)]
             guid_cols, txt = [], []
             if vcols:
                 sel = ", ".join(clip(c) for c in vcols)
@@ -413,7 +441,16 @@ def iter_corpus():
     refmap = {}
     for t, n in live:
         declared, gcols, ccols = split_cols(t)
-        key_col, scored = (gcols[0] if gcols else None), []
+        # Собственная идентичность объекта в OData 1С называется буквально `Ref_Key` —
+        # это контракт платформы, одинаковый в любой конфигурации и на любом языке.
+        # «Первая Guid-колонка» здесь стояла раньше и была ДОГАДКОЙ: у регистров первая
+        # Guid-колонка — измерение, ссылка на ЧУЖОЙ объект. 48 таблиц витрины писали в
+        # карту свои реквизиты под чужими GUID: организация во всех документах
+        # называлась «СтандартныеВычетыНарастающимИтогом», а настоящее имя встречалось
+        # в корпусе 1 раз из 97 085. Кто кого затрёт, зависело от порядка таблиц.
+        # Нет Ref_Key — нет собственной идентичности, в карту такой таблице нельзя.
+        key_col = "Ref_Key" if any(c == "Ref_Key" for c, _dt in cols[t]) else None
+        scored = []
         prof = profile_table(t, cols[t], ccols, [])
 
         # Сначала — КОНТРАКТ ПЛАТФОРМЫ. OData-интерфейс 1С объявляет служебные свойства
@@ -515,6 +552,7 @@ def iter_corpus():
             date_col = std_date[0] if std_date else None
 
         txt_cols = []
+        mart_names = {cn for cn, _dt in tcols}
         for c, dt in tcols:
             # В поиск идёт всё, что база объявила строкой (коды, номера, названия) —
             # даже если витрина сохранила это числом.
@@ -522,6 +560,12 @@ def iter_corpus():
                 if declared.get(c) != "Edm.String":
                     continue
             elif "VARCHAR" not in dt:
+                continue
+            # Спутники протокола режутся и здесь: это ВТОРОЙ отбор колонок, независимый
+            # от split_cols, и однажды они уже разъехались — исключение стояло в одном
+            # месте, а текст собирался по другому (30 420 строк мусора после «фикса»).
+            if c in STANDARD_SERVICE_PROPS or protocol_companion(
+                    c, declared if declared else mart_names):
                 continue
             # Раньше здесь выбрасывалась колонка с единственным различным значением.
             # У маленького клиента (один склад, одна организация, один вид договора)
@@ -585,7 +629,11 @@ def iter_corpus():
                 if not v:
                     continue
                 if c in guid_cols or GUID.match(v):
-                    if key is None:
+                    # Собственный ключ — только `Ref_Key` (контракт, см. карту ссылок).
+                    # Раньше ключом считался ПЕРВЫЙ GUID строки — у регистров это
+                    # измерение, и контрагент из текста пропадал: «Ромашка» в регистре
+                    # состояний не находилась вовсе (0 строк корпуса).
+                    if c == "Ref_Key":
                         key = v
                         continue                    # собственный ключ в текст не пишем
                     nm = refmap.get(v)
@@ -602,7 +650,13 @@ def iter_corpus():
                                          "%d" % amt if amt == int(amt) else "%.2f" % amt))
             if dt_:
                 parts.append("%s: %s" % (date_col, dt_[:10]))
-            corpus.append((t, declared_key or key or "", " | ".join(parts), amt, dt_))
+            doc = " | ".join(parts)
+            # Без объявленного ключа и без Ref_Key ключом становится отпечаток
+            # содержимого: пустой ключ у нескольких строк заставлял каждый flush
+            # стирать предыдущие (так base_profile терял 4431 строку из 4585).
+            # Исчезнувшие отпечатки подчищает штатная gone-очистка в конце сборки.
+            row_id = declared_key or key or hashlib.sha1(doc.encode("utf-8")).hexdigest()
+            corpus.append((t, row_id, doc, amt, dt_))
         yield t, corpus, len(live), len(refmap)
 
 
@@ -703,8 +757,13 @@ def main():
 
     t2 = time.time()
     ddl("DROP INDEX IF EXISTS %s;" % INDEX)
-    # ВАЖНО: индекс — снимок. Пересобираем каждый прогон; на наших объёмах это <1 с.
-    ddl("CREATE INDEX %s ON %s USING inverted(doc %s, emb ivf (metric='cosine')) "
+    # Индекс ТЕКСТОВЫЙ. Векторная часть (ivf) сюда не входит: её сборка на 96 931
+    # строке x 1536 требует >34 ГБ и убивается OOM хоста — замерено 2026-07-26 трижды,
+    # sdb_ivf_sample_factor и segment_memory_max траекторию не меняют. Сервису ответов
+    # ivf и не нужен: из индекса читаются текст и INCLUDE-колонки, а смысловой запасной
+    # путь идёт полным сканом array_cosine_similarity по таблице корпуса (доли секунды
+    # на этом объёме). Вопрос к движку про память ivf — открыт, см. TARGET_ARCHITECTURE §0.
+    ddl("CREATE INDEX %s ON %s USING inverted(doc %s) "
         "INCLUDE (src_table, row_key, amount, doc_date);" % (INDEX, CORPUS, DICT))
     idx_sec = time.time() - t2
 
