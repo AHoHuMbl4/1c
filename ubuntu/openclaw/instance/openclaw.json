@@ -20,7 +20,10 @@
       "models": {
         "deepseek/deepseek-v4-flash": {}
       },
-      "thinkingDefault": "off"
+      "thinkingDefault": "off",
+      "heartbeat": {
+        "every": "0m"
+      }
     }
   },
   "models": {
@@ -94,24 +97,24 @@
       "second-brain": {
         "url": "http://127.0.0.1:6014/mcp",
         "transport": "streamable-http",
-        "connectTimeout": 15,
-        "timeout": 60,
         "toolFilter": {
           "include": [
             "ask_1c"
           ]
-        }
+        },
+        "connectionTimeoutMs": 15000,
+        "requestTimeoutMs": 60000
       },
       "second-brain-reports": {
         "url": "http://127.0.0.1:6015/mcp",
         "transport": "streamable-http",
-        "connectTimeout": 15,
-        "timeout": 120,
         "toolFilter": {
           "include": [
             "report_1c"
           ]
-        }
+        },
+        "connectionTimeoutMs": 15000,
+        "requestTimeoutMs": 120000
       }
     }
   },
@@ -132,6 +135,9 @@
     "allow": [
       "message",
       "bundle-mcp"
-    ]
+    ],
+    "elevated": {
+      "enabled": false
+    }
   }
 }

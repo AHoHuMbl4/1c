@@ -70,7 +70,7 @@ MCP-инструмента:
 `braine-verify` (наш гейт; `config.debug:true`). Флаг `hooks.allowConversationAccess` **не нужен** и снят: он гейтит только хуки диалога, а наши четыре к ним не относятся.
 
 ## 🔴 Гейт анти-галлюцинаций `braine-verify` — КОДОМ, не промтом
-Нативный плагин OpenClaw (`ubuntu/openclaw/verify-plugin/`, установлен `/home/undebot/braine-verify/`,
+Нативный плагин OpenClaw (`ubuntu/openclaw/verify-plugin/`, устанавливается командой `openclaw plugins install npm-pack:<путь>/openclaw-braine-verify-1.0.0.tgz`. Каталог установки принадлежит движку и содержит генерируемый хеш — путём пользоваться нельзя, проверять состояние командой `openclaw plugins info braine-verify` (покажет источник и sha512-integrity),
 `enabled`). Точность даёт **детерминированная сверка кода**, не запрет в промте (правило владельца).
 Финальный ответ всегда генерит LLM бота (нативного passthrough в движке нет → LLM может исказить факт
 при «оживлении»); гейт ловит это на исходящем. Чистая логика — `verify-core.js` (без зависимостей,
