@@ -819,8 +819,45 @@ def main():
     odata_types()                       # заполняет ENTITY_NAMES оригинальными именами
     meta_names = dict(ENTITY_NAMES)
     ddl("DROP TABLE IF EXISTS %s;" % TABLES)
-    ddl("CREATE TABLE %s (src_table TEXT, label TEXT, emb FLOAT[%d]);" % (TABLES, EMBED_DIM))
+    # `parent` — КОНТРАКТ ПЛАТФОРМЫ, а не догадка по имени. Табличная часть документа
+    # объявлена в `$metadata` составным ключом «ссылка на владельца + номер строки»:
+    # ключ вида [Ref_Key, LineNumber]. Родителя ищем ПО ДАННЫМ — та сущность, чей
+    # собственный ключ (ровно ["Ref_Key"]) содержит те же значения Ref_Key.
+    # Зачем: итог живёт в шапке, а не в строках. Замерено — «what is the total amount
+    # of all sales» уходило в `..._услуги` вместо самого документа. Прежняя попытка
+    # решать это суффиксом имени была догадкой и ломалась на `*_recordtype`
+    # и `*_Turnovers`; здесь ни одного имени нашей базы.
+    ddl("CREATE TABLE %s (src_table TEXT, label TEXT, parent TEXT, emb FLOAT[%d]);"
+        % (TABLES, EMBED_DIM))
     srcs = [r[0] for r in q("SELECT DISTINCT src_table FROM %s" % CORPUS)]
+    own = {t for t in srcs if ENTITY_KEYS.get(t.lower()) == ["Ref_Key"]}
+    lines = {t for t in srcs
+             if len(ENTITY_KEYS.get(t.lower()) or []) > 1
+             and "Ref_Key" in ENTITY_KEYS.get(t.lower(), [])}
+    parent_of = {}
+    for t in lines:
+        # Берём ОДНО значение ссылки из табличной части и ищем, в какой сущности с
+        # собственным ключом оно есть. Одно значение достаточно: ссылка ведёт к
+        # владельцу по определению. Прежний вариант строил UNION ALL по всем
+        # сущностям с собственным ключом (142 подзапроса с EXISTS по всей таблице) —
+        # запрос не отрабатывал, ошибка гасилась, и владелец не находился ни у одной.
+        try:
+            ref = q('SELECT "Ref_Key" FROM "%s" WHERE "Ref_Key" IS NOT NULL LIMIT 1' % t)
+        except RuntimeError:
+            continue
+        if not ref or not ref[0] or not ref[0][0]:
+            continue
+        val = ref[0][0]
+        for o in own:
+            try:
+                hit = q('SELECT 1 FROM "%s" WHERE "Ref_Key" = %s LIMIT 1' % (o, lit(val)))
+            except RuntimeError:
+                continue
+            if hit:
+                parent_of[t] = o
+                break
+    if parent_of:
+        print("табличных частей с найденным владельцем: %d" % len(parent_of))
     labels = []
     for t in srcs:
         raw = t.split("_", 1)[1] if "_" in t else t
@@ -830,8 +867,9 @@ def main():
     for i in range(0, len(labels), BATCH):
         part = labels[i:i + BATCH]
         vecs = embed([lb for _t, lb in part])
-        vals = ",".join("(%s,%s,%s::FLOAT[%d])" % (
-            lit(t), lit(lb), "'[" + ",".join("%.6f" % x for x in v) + "]'", EMBED_DIM)
+        vals = ",".join("(%s,%s,%s,%s::FLOAT[%d])" % (
+            lit(t), lit(lb), lit(parent_of.get(t, "")),
+            "'[" + ",".join("%.6f" % x for x in v) + "]'", EMBED_DIM)
             for (t, lb), v in zip(part, vecs))
         ddl("INSERT INTO %s VALUES %s;" % (TABLES, vals))
     print("профиль таблиц: %d" % len(labels))

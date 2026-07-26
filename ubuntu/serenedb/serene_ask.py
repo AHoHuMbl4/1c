@@ -341,6 +341,8 @@ PICK_SYS = """You map a user's question to ONE record type.
 
 You get the question and a numbered list of record types that exist in this database.
 Answer with the NUMBER only — the type whose records would ANSWER the question.
+Entries marked as line items are the rows INSIDE another record: a question about a
+total, a sum or "how much in all" belongs to the record that owns them, not to the rows.
 Some entries show how many records already match the question; prefer a type that
 actually has matches over a same-sounding one that has none.
 If none of them fits, answer 0.
@@ -364,7 +366,7 @@ def pick_entity(question, kind, cands, counts=None):
     if len(cands) < 2:
         return cands[0] if cands else None
     try:
-        rs = psql("SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+        rs = psql("SELECT src_table, label, parent FROM %s WHERE src_table IN (%s)"
                   % (TABLES, ", ".join(lit(c) for c in cands)))
     except RuntimeError:
         return None
@@ -374,6 +376,10 @@ def pick_entity(question, kind, cands, counts=None):
     # вперемешку. Замерено: «сколько всего мы продали» выбирало регистр бухучёта
     # зарплаты, «продажи за декабрь» — календарные графики.
     label_by = {r[0]: r[1] for r in rs if r and r[0]}
+    # `parent` определён при сборке ПО КОНТРАКТУ метаданных: у табличной части ключ
+    # составной (ссылка на владельца + номер строки), а сам владелец найден по данным.
+    # Это структурный факт, который модели неоткуда узнать из названия.
+    parent_by = {r[0]: (r[2] if len(r) > 2 else "") for r in rs if r and r[0]}
     names = [(c, label_by[c]) for c in cands if c in label_by]
     if len(names) < 2:
         return names[0][0] if names else None
@@ -382,8 +388,11 @@ def pick_entity(question, kind, cands, counts=None):
     # «Классификатор Банков» на 680 по названию неразличимы, по числу — очевидны.
     counts = counts or {}
     listing = "\n".join(
-        "%d. %s%s" % (i + 1, nm,
-                      "" if t not in counts else " — %d matching records" % counts[t])
+        "%d. %s%s%s" % (
+            i + 1, nm,
+            "" if t not in counts else " — %d matching records" % counts[t],
+            "" if not parent_by.get(t) else
+            " [line items of «%s»]" % label_by.get(parent_by[t], parent_by[t]))
         for i, (t, nm) in enumerate(names))
     ask_text = question if not kind else "%s (%s)" % (question, kind)
     try:
