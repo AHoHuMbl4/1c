@@ -425,8 +425,9 @@ Reply with JSON only, no text outside it:
 {"text": "the answer for the user",
  "claims": {"total": number|null, "count": number|null, "max": number|null, "min": number|null}}
 
-"claims" is where you state figures BY ROLE. If your answer says «total is X», put X in
-"total". If it says «N records», put N in "count". Leave a role null if you do not claim it.
+"claims" is where you state figures BY ROLE. Fill a role ONLY if that exact figure appears
+in your "text" written in DIGITS; otherwise leave the role null. Never spell figures out in
+words — a figure written in words cannot be checked and the answer will be discarded.
 The figures given to you below are computed over every matching row — copy them, do not
 recompute. Claims are checked against the database and a wrong claim discards your answer.
 
@@ -600,6 +601,30 @@ def check_claims(claims, agg):
     return (not bad), bad
 
 
+def claims_in_text(claims, text):
+    """Заявленная величина обязана присутствовать в тексте ЦИФРАМИ.
+
+    Закрывает единственный класс выдумки, который гейт не видел: число, написанное
+    СЛОВАМИ («два миллиона восемьсот тысяч»). Списка числительных в коде нет и быть не
+    может — он был бы привязан к языку. Вместо этого требуем совпадения: раз модель
+    заявила величину, пусть она стоит в тексте цифрами, а цифры мы уже умеем сверять.
+    """
+    if not isinstance(claims, dict):
+        return True, []
+    have = _norm_numbers(text)
+    bad = []
+    for role, v in claims.items():
+        if v is None:
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if fv not in have and round(fv, 2) not in have:
+            bad.append("%s=%s названо не цифрами" % (role, _fmt(fv)))
+    return (not bad), bad
+
+
 def gate(answer, rows, agg):
     """Каждое число ответа обязано встречаться в данных, в итоге или в самом вопросе.
 
@@ -697,6 +722,8 @@ def answer(question):
     raw = compose(question, rows, agg)
     text, claims = _split_answer(raw)
     ok_roles, bad_roles = check_claims(claims, agg)
+    ok_txt, bad_txt = claims_in_text(claims, text)
+    ok_roles, bad_roles = (ok_roles and ok_txt), (bad_roles + bad_txt)
     ok_nums, bad_nums = gate(text, rows, agg)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     diag["claims"] = claims or None
@@ -742,7 +769,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path.rstrip("/") != "/ask":
             return self._send(404, {"error": "not found"})
-        if ASK_TOKEN and self.headers.get("Authorization", "") != "Bearer " + ASK_TOKEN:
+        # Fail-closed: без токена сервис не стартует (см. main), поэтому здесь
+        # проверка безусловная. Раньше пустая переменная окружения молча открывала
+        # доступ — та же дыра, что была у OData-шлюза.
+        if self.headers.get("Authorization", "") != "Bearer " + ASK_TOKEN:
             return self._send(401, {"error": "unauthorized"})
         try:
             n = int(self.headers.get("Content-Length", "0"))
@@ -761,11 +791,16 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if not ASK_TOKEN:
+        sys.stderr.write("FATAL: ASK_TOKEN не задан — сервис без авторизации отдавал бы "
+                         "данные витрины кому угодно. Задайте токен в окружении.\n")
+        return 2
     srv = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     sys.stderr.write("serene-ask на http://%s:%d  (поиск в SereneDB, схема в модель не уходит)\n"
                      % (LISTEN_HOST, LISTEN_PORT))
     srv.serve_forever()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

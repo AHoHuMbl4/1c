@@ -146,6 +146,11 @@ STANDARD_SERVICE_PROPS = ("DataVersion",)
 STANDARD_NAME_PROPS = ("Description", "Code")
 STANDARD_DATE_PROPS = ("Date",)
 
+# Локаль словаря. Замерено: на регистр и на результат поиска не влияет (ru_RU, en_US и
+# несуществующая xx_XX дают одинаковые совпадения), но это единственный языковой литерал
+# в исполняемом DDL — выносим в настройку, чтобы он не выглядел допущением о языке базы.
+DICT_LOCALE = os.environ.get("BUILD_DICT_LOCALE", "ru_RU.UTF-8")
+
 SAMPLE = int(os.environ.get("BUILD_SAMPLE", "20"))   # сколько значений смотреть при разборе
 NAME_COLS = int(os.environ.get("BUILD_NAME_COLS", "2"))  # сколько наименований склеивать
 
@@ -630,9 +635,9 @@ def main():
           % (n_tables, total_rows, n_ref, done, len(gone)))
 
     try:
-        ddl("CREATE TEXT SEARCH DICTIONARY %s (template='text', locale='ru_RU.UTF-8', "
+        ddl("CREATE TEXT SEARCH DICTIONARY %s (template='text', locale=%s, "
             "case='lower', stemming=false, accent=false, frequency=true, position=true, "
-            "norm=true);" % DICT)
+            "norm=true);" % (DICT, lit(DICT_LOCALE)))
     except RuntimeError:
         pass                                   # словарь уже создан прошлым прогоном
 

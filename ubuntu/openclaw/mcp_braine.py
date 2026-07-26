@@ -45,34 +45,48 @@ def _braine_ask(question: str, prev_turn: str | None = None) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+# Тексты, которые видит человек, вынесены в окружение: продукт коробочный, и язык
+# клиента заранее неизвестен. Описание инструмента (его читает модель бота) — на
+# английском и без предметных примеров, чтобы не тянуть ответ в конкретный язык и
+# не предполагать торговую конфигурацию.
+NO_DATA_REPLY = os.environ.get(
+    "MCP_NO_DATA_REPLY",
+    "[НЕТ ДАННЫХ во втором мозге по этому вопросу] — сообщи клиенту, что таких данных "
+    "нет; НЕ выдумывай.")
+ERROR_REPLY = os.environ.get(
+    "MCP_ERROR_REPLY",
+    "[ОШИБКА второго мозга: {detail}] — сообщи клиенту, что не удалось получить данные.")
+SOURCES_LABEL = os.environ.get("MCP_SOURCES_LABEL", "Источники")
+
+
 @mcp.tool()
 def ask_1c(question: str) -> str:
-    """Задать вопрос «второму мозгу» компании по данным из 1С (контрагенты, продажи,
-    склад, деньги, документы и т.п.). Возвращает ПРОВЕРЕННЫЙ ответ с фактами из 1С.
+    """Ask the company's second brain about data stored in its ERP system.
 
-    ВАЖНО для бота: отвечай клиенту ТОЛЬКО фактами из результата этого инструмента —
-    не добавляй и не меняй цифры/даты/имена. Если инструмент вернул маркер «НЕТ ДАННЫХ» —
-    так и скажи клиенту, не выдумывай.
+    Returns a VERIFIED answer: every figure in it is checked against the database
+    before it is returned. Answer the user with these facts only — do not add,
+    recompute or reword numbers, dates or names. If the result carries a no-data
+    marker, say so plainly instead of inventing anything.
 
-    :param question: вопрос на естественном языке о данных компании.
+    :param question: the user's question, in their own language, about company data.
     """
     try:
         data = _braine_ask(question)
     except urllib.error.HTTPError as e:
-        return f"[ОШИБКА второго мозга: HTTP {e.code}] — сообщи клиенту, что не удалось получить данные."
+        return ERROR_REPLY.format(detail="HTTP %d" % e.code)
     except Exception as e:  # noqa: BLE001
-        return f"[ОШИБКА второго мозга: {type(e).__name__}] — сообщи клиенту, что не удалось получить данные."
+        return ERROR_REPLY.format(detail=type(e).__name__)
 
     kind = data.get("kind", "")
     text = (data.get("text") or "").strip()
     sources = data.get("sources") or []
 
     if kind == "no_data" or not text:
-        return "[НЕТ ДАННЫХ во втором мозге по этому вопросу] — сообщи клиенту, что таких данных нет; НЕ выдумывай."
+        return NO_DATA_REPLY
 
     out = text
     if sources:
-        out += "\n\nИсточники: " + ", ".join(sources[:5])
+        out += "\n\n%s: %s" % (SOURCES_LABEL, ", ".join(sources[:5]))
     return out
 
 

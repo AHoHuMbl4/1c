@@ -125,9 +125,13 @@ export function mergeRef(prev, text, nowMs, noDataMarker) {
 // длинного обоснованного (7727406020) или склейки нескольких — это ложное заземление (галлюцинация
 // проходит). Разную группировку тысяч (7 727 406 020 == 7727406020) покрывает сам токенайзер: обе
 // стороны нормализуются в один и тот же токен, поэтому точного сравнения по digits достаточно.
-export function isGrounded(token, ref, inb) {
+export function isGrounded(token, ref, inb, cfg) {
   if (ref && ref.digits.has(token)) return true;
-  if (inb && inb.digits.has(token)) return true;
+  // Числа из сообщения пользователя заземляют ответ ТОЛЬКО когда эталона нет вовсе
+  // (обычный разговор, эхо номера заказа). Если эталон есть, они белым списком не
+  // работают: иначе достаточно упомянуть число в вопросе, чтобы бот мог назвать его
+  // фактом из 1С. То же отмывание закрыто на стороне serene_ask.
+  if (!ref && inb && inb.digits.has(token)) return true;
   return false;
 }
 
@@ -143,7 +147,7 @@ export function evaluate(content, ref, inb, cfg) {
   const tokens = [...numericTokens(content, ref ? c.minDigitsWithRef : c.minDigits)];
   if (tokens.length === 0) return { action: "allow" }; // нет жёстких фактов — не трогаем
 
-  const ungrounded = tokens.filter((t) => !isGrounded(t, ref, inb));
+  const ungrounded = tokens.filter((t) => !isGrounded(t, ref, inb, c));
   if (ungrounded.length === 0) return { action: "allow" }; // все факты обоснованы
 
   if (!ref) {

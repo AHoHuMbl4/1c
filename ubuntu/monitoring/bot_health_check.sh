@@ -12,12 +12,20 @@ SYS_SERVICES="${SYS_SERVICES:-serenedb 1c-mcp-braine 1c-mcp-reports api}"  # с�
 
 mkdir -p "$(dirname "$STATE")"
 U=$(id -u "$BOT_USER" 2>/dev/null || echo "")
+# Штатная проверка живости gateway (docs/gateway/health.md). Пусто — проверка пропускается.
+GATEWAY_HEALTH_URL="${GATEWAY_HEALTH_URL:-}"
 
 fails=""
 # gateway — user-сервис под ботом
 if [ -n "$U" ]; then
   sudo -u "$BOT_USER" XDG_RUNTIME_DIR="/run/user/$U" systemctl --user is-active openclaw-gateway.service >/dev/null 2>&1 \
     || fails="$fails gateway"
+  # systemctl говорит только «процесс запущен». Зависший процесс тоже active, а бот при
+  # этом не отвечает. У gateway есть штатный /health: мгновенный ответ, без сессии и без
+  # обращения к модели — проверяем и его.
+  if [ -n "$GATEWAY_HEALTH_URL" ]; then
+    curl -fsS -m 5 "$GATEWAY_HEALTH_URL" >/dev/null 2>&1 || fails="$fails gateway-health"
+  fi
 else
   fails="$fails no-bot-user"
 fi
