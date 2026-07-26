@@ -146,6 +146,22 @@ def embed(texts):
     raise last
 
 
+def split_camel(name):
+    """«ПоступлениеТоваровУслуг» -> «Поступление Товаров Услуг».
+
+    Слитое имя эмбеддится плохо, разделённое — как обычная фраза. Разрыв ставим по
+    смене регистра средствами самого Unicode (`isupper`/`islower`), а не диапазоном
+    букв: диапазон пришлось бы писать под каждый алфавит, и для греческой или любой
+    другой конфигурации имя осталось бы слитным.
+    """
+    out = []
+    for i, ch in enumerate(name):
+        if i and ch.isupper() and name[i - 1].islower():
+            out.append(" ")
+        out.append(ch)
+    return "".join(out)
+
+
 def lit(s):
     return "'" + s.replace("'", "''") + "'"
 
@@ -260,7 +276,10 @@ def build_corpus():
             mx = max(vals)
             if mx > best:
                 best, amount_col = mx, c
-        if best <= 1:
+        if not declared and best <= 1:
+            # Запасной разбор: без типов колонка 0/1 неотличима от флага. При типах
+            # из метаданных отсечка не нужна и была бы вредна — в базе с мелкими
+            # суммами (копейки, граммы) она выбросила бы настоящие деньги.
             amount_col = None
         if declared:
             dcols = [c for c, _dt in tcols if declared.get(c) == "Edm.DateTime"]
@@ -404,11 +423,9 @@ def main():
     labels = []
     for t in srcs:
         raw = t.split("_", 1)[1] if "_" in t else t
-        # «ПоступлениеТоваровУслуг» -> «Поступление Товаров Услуг»: слитое имя
-        # эмбеддится плохо, разделённое — как обычная фраза. Работает и для латиницы.
         orig = meta_names.get(t.lower(), raw)
         orig = orig.split("_", 1)[1] if "_" in orig else orig
-        labels.append((t, re.sub(r"(?<=[a-zа-яё])(?=[A-ZА-ЯЁ])", " ", orig)))
+        labels.append((t, split_camel(orig)))
     for i in range(0, len(labels), BATCH):
         part = labels[i:i + BATCH]
         vecs = embed([lb for _t, lb in part])

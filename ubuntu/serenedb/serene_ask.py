@@ -57,6 +57,11 @@ EMBED_KEY = os.environ.get("ALIBABA_API_KEY", "")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-v4")
 EMBED_DIM = int(os.environ.get("EMBED_DIM", "1536"))
 
+# Единственные две строки, которые уходят человеку от НАС, а не от модели: ответ модели
+# всегда на языке вопроса. Вынесены в окружение, чтобы локализовать без правки кода.
+NO_DATA_TEXT = os.environ.get("ASK_NO_DATA_TEXT", "нет данных")
+TOTAL_TEXT = os.environ.get("ASK_TOTAL_TEXT", "Найдено {count} записей; сумма {sum}.")
+
 
 # ----------------------------------------------------------------- инфраструктура
 def psql(sql):
@@ -388,10 +393,10 @@ def compose(question, rows, agg):
         if r[3]:
             tail.append("date=%s" % r[3])
         payload.append(head + ((" | " + " | ".join(tail)) if tail else ""))
-    body = "ВОПРОС: %s\n\nНАЙДЕННЫЕ СТРОКИ (%d):\n%s" % (
+    body = "QUESTION: %s\n\nROWS FOUND (%d):\n%s" % (
         question, len(rows), "\n".join("- " + p for p in payload))
     if agg:
-        body += "\n\nИТОГ ПО ВСЕМ НАЙДЕННЫМ: количество=%d, сумма=%s" % (
+        body += "\n\nTOTAL OVER ALL MATCHING ROWS: count=%d, sum=%s" % (
             agg["count"], ("%d" % agg["sum"]) if agg["sum"] == int(agg["sum"]) else "%.2f" % agg["sum"])
     return ds_chat([{"role": "system", "content": ANSWER_SYS},
                     {"role": "user", "content": body}], max_tokens=800)
@@ -471,7 +476,7 @@ def answer(question):
     intent = parse_intent(question, today)
     rows, match, diag = search(question, intent)
     if not rows:
-        return {"kind": "no_data", "text": "нет данных", "sources": [],
+        return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     want = intent.get("want")
@@ -509,11 +514,12 @@ def answer(question):
         # Числа, которых нет в данных, наружу не выпускаем: отдаём проверяемый факт.
         sys.stderr.write("ask GATE: числа вне данных: %s\n" % bad[:6])
         if agg:
-            text = ("Найдено %d записей; сумма %s." %
-                    (agg["count"], ("%d" % agg["sum"]) if agg["sum"] == int(agg["sum"])
-                     else "%.2f" % agg["sum"]))
+            text = TOTAL_TEXT.format(
+                count=agg["count"],
+                sum=("%d" % agg["sum"]) if agg["sum"] == int(agg["sum"])
+                    else "%.2f" % agg["sum"])
         else:
-            return {"kind": "no_data", "text": "нет данных", "sources": [],
+            return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
                     "diag": dict(diag, gate_rejected=bad[:6])}
 
     srcs = []
