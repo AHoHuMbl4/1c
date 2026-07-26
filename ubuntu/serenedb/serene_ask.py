@@ -50,6 +50,13 @@ CORPUS, INDEX, TABLES = "search_corpus", "search_idx", "search_tables"
 # граница режет ХВОСТ, а не смысл. Без границы перечень рос с числом сущностей: на
 # 4585 типах это ~267 КБ в каждый вопрос.
 PICK_BUDGET = int(os.environ.get("ASK_PICK_BUDGET_CHARS", "8000"))
+# Сколько символов СТРОК отдавать модели. Это тоже бюджет контекста, а не решение о
+# том, что важно в строке: бюджет делится между показанными строками поровну, а не
+# режет каждую по фиксированной длине. Раньше здесь стояло «первые 320 символов
+# строки» без единого слова обоснования — и замер показал, что у 12 контрагентов из
+# 13 ИНН стоит на 367-м символе, КПП на 385-м. То есть данные доезжали до последнего
+# шага целыми, а вопрос «какой ИНН у контрагента» получал «данных нет».
+ROWS_BUDGET = int(os.environ.get("ASK_ROWS_BUDGET_CHARS", "24000"))
 TOPK = int(os.environ.get("ASK_TOPK", "40"))
 ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
 
@@ -343,11 +350,19 @@ def tables_of(match, preds):
 
 
 def rows_of(src_table, match, preds, limit):
-    """Строки одного источника. Модели отдаём подсвеченный фрагмент, а не начало строки."""
+    """Строки одного источника: САМА строка, а рядом — подсветка совпадения.
+
+    Раньше модели уходила ТОЛЬКО подсветка. Она по устройству отдаёт фрагменты вокруг
+    совпавших слов, а не строку: замерено — 144 символа при длине строки 398. Реквизит,
+    оказавшийся дальше от совпадения, до модели не доходил вовсе. Живая проверка: ИНН
+    контрагента стоит на 367-м символе, вопрос «какой ИНН у Дон-Агро» получал ответ
+    «данных нет» при том, что значение есть и в витрине, и в корпусе, и в индексе.
+    Подсветка остаётся — она показывает, ГДЕ совпало, — но данные берутся из строки.
+    """
     where = [w for w in ([match] + preds) if w] + ["src_table = %s" % lit(src_table)]
     src = INDEX if match else CORPUS
-    frag = ("ts_highlight(doc, 'MaxWords=14,MaxFragments=2,StartSel=[,StopSel=]')"
-            if match else "doc")
+    frag = ("ts_highlight(doc, 'MaxWords=14,MaxFragments=2,StartSel=[,StopSel=]') "
+            "|| ' | ' || doc" if match else "doc")
     order = ((SCORERS.get(SCORER, SCORERS["bm25"]) % INDEX) + " DESC") if match \
         else "amount DESC NULLS LAST"
     return psql(
@@ -516,8 +531,12 @@ def _split_answer(raw):
 
 def compose(question, rows, agg):
     payload = []
-    for r in rows[:ROWS_TO_MODEL]:
-        head = r[5][:320]
+    shown = rows[:ROWS_TO_MODEL]
+    # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
+    # места, длинные не режутся по произвольной границе.
+    per_row = max(320, ROWS_BUDGET // max(1, len(shown)))
+    for r in shown:
+        head = r[5][:per_row]
         tail = []
         if _num(r[2]):
             tail.append("amount=%s" % ("%d" % _num(r[2]) if _num(r[2]) == int(_num(r[2]))
