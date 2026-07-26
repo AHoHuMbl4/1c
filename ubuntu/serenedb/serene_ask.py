@@ -376,10 +376,14 @@ def rows_of(src_table, match, preds, limit):
         % (frag, src, " AND ".join(where), order, limit))
 
 
-PICK_SYS = """You map a user's question to ONE record type.
+PICK_SYS = """You map a user's question to a record type.
 
 You get the question and a numbered list of record types that exist in this database.
 Answer with the NUMBER only — the type whose records would ANSWER the question.
+If the question genuinely fits SEVERAL types and the answers would be DIFFERENT — the
+asker could reasonably have meant either — answer with their numbers separated by a
+comma (at most three). Do that only for real ambiguity, not for uncertainty: if one
+type clearly answers the question better, give that one number.
 Some entries list what is typical for their records — the attributes that set them
 apart from the rest of the database. Use them to tell apart types whose names sound
 alike: they describe what the records actually are about.
@@ -422,6 +426,35 @@ def signal_terms(src_table, match, top):
     return [r[0] for r in rs if r and r[0]]
 
 
+CLARIFY_SYS = """The question can be answered from several kinds of records, and the
+answers would differ. Ask the person ONE short question to find out which they meant.
+
+Rules:
+- Ask in the SAME language the question was asked in.
+- Describe each option in plain business words, using its name and what is typical for
+  its records. Never show table names, codes or internal identifiers.
+- One sentence, no preamble, no apology. End with a question mark."""
+
+
+def clarify_text(question, opts):
+    """Уточняющий вопрос формулирует МОДЕЛЬ — на языке спрашивающего.
+
+    Своей прозой это писать нельзя: она была бы на одном языке независимо от языка
+    вопроса (тот же дефект, что и с русскими умолчаниями ответа). Данные для фразы
+    уже посчитаны — названия источников и их отличительные реквизиты, — выдумывать
+    модели нечего.
+    """
+    body = "Question: %s\n\nOptions:\n" % question + "\n".join(
+        "- %s%s" % (o["label"],
+                    "" if not o["distinct_by"] else " (typical: %s)" % o["distinct_by"])
+        for o in opts)
+    try:
+        return (ds_chat([{"role": "system", "content": CLARIFY_SYS},
+                         {"role": "user", "content": body}], max_tokens=120) or "").strip()
+    except Exception:                          # noqa: BLE001 — сеть/квота
+        return ""                              # вызывающий сформулирует сам по options
+
+
 def pick_entity(question, kind, cands, counts=None, match=""):
     """Какая сущность имеется в виду — спрашиваем модель, но даём ей ТОЛЬКО НАЗВАНИЯ.
 
@@ -436,12 +469,12 @@ def pick_entity(question, kind, cands, counts=None, match=""):
     поэтому одинаково работает на базе любого размера и на любом языке.
     """
     if len(cands) < 2:
-        return cands[0] if cands else None
+        return (cands[:1], {})
     try:
         rs = psql("SELECT src_table, label, parent FROM %s WHERE src_table IN (%s)"
                   % (TABLES, ", ".join(lit(c) for c in cands)))
     except RuntimeError:
-        return None
+        return ([], {})
     # ПОРЯДОК КАНДИДАТОВ ОБЯЗАН СОХРАНИТЬСЯ. `IN (...)` возвращает строки в порядке
     # хранения, а не в порядке списка — и смысловой порядок, посчитанный выше, молча
     # терялся. Модель тяготеет к началу списка, поэтому она получала 226 названий
@@ -454,7 +487,7 @@ def pick_entity(question, kind, cands, counts=None, match=""):
     parent_by = {r[0]: (r[2] if len(r) > 2 else "") for r in rs if r and r[0]}
     names = [(c, label_by[c]) for c in cands if c in label_by]
     if len(names) < 2:
-        return names[0][0] if names else None
+        return ([names[0][0]] if names else [], {})
     # Рядом с названием — СКОЛЬКО СОВПАДЕНИЙ там нашлось. Это данные, а не схема, и
     # именно они снимают неоднозначность: справочник «Банки» на 1 запись и
     # «Классификатор Банков» на 680 по названию неразличимы, по числу — очевидны.
@@ -504,11 +537,12 @@ def pick_entity(question, kind, cands, counts=None, match=""):
         # тихо взять «источник, где больше совпадений».
         sys.stderr.write("ask DEGRADED: выбор сущности без модели (%s)\n" % str(e)[:80])
         raise RuntimeError("entity-pick-unavailable")
-    m = re.search(r"\d+", raw or "")
-    if not m:
-        return None
-    i = int(m.group(0))
-    return names[i - 1][0] if 1 <= i <= len(names) else None
+    # Модель может назвать несколько типов — тогда вопрос неоднозначен, и правильный
+    # ход не угадывать за человека, а спросить его. Возвращаем список: один элемент —
+    # выбор сделан, несколько — нужно уточнение.
+    got = [int(x) for x in re.findall(r"\d+", raw or "")]
+    picked = [names[i - 1][0] for i in got if 1 <= i <= len(names)]
+    return ([], marks) if not picked else (picked, marks)
 
 
 def _vec(text):
@@ -940,9 +974,32 @@ def answer(question):
         except RuntimeError:
             cands = list(by)
     try:
-        src = pick_entity(question, intent.get("kind"), cands, counts_for_model, match)
+        picked, marks = pick_entity(question, intent.get("kind"), cands,
+                                    counts_for_model, match)
     except RuntimeError:
-        src, diag["degraded"] = None, "выбор сущности сделан без модели"
+        picked, marks = [], {}
+        diag["degraded"] = "выбор сущности сделан без модели"
+    # НЕОДНОЗНАЧНЫЙ ВОПРОС — спрашиваем человека, а не угадываем за него.
+    # Судья неоднозначности — модель: она видит и названия, и отличительные реквизиты
+    # каждого источника, и сама говорит, когда вопрос честно допускает несколько
+    # прочтений. Порога тут нет и быть не может: «одинаково ли подходят» — вопрос
+    # языковой, а не числовой. Замеренный случай: «что покупало ООО Ромашка» — у двух
+    # источников ровно по 3 совпадения, и оба ответа следуют из данных (контрагент и
+    # покупал товары, и платил). Прежде система молча брала один.
+    if len(picked) > 1:
+        try:
+            lab_by = {r[0]: r[1] for r in psql(
+                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(c) for c in picked))) if r and r[0]}
+        except RuntimeError:
+            lab_by = {}
+        opts = [{"src": t, "label": lab_by.get(t, t), "distinct_by": marks.get(t, ""),
+                 "found": by.get(t, 0)} for t in picked]
+        diag["ambiguous"] = [o["src"] for o in opts]
+        return {"kind": "clarify", "text": clarify_text(question, opts),
+                "options": opts, "sources": [o["label"] for o in opts],
+                "diag": dict(diag, sec=round(time.time() - t0, 2))}
+    src = picked[0] if picked else None
     if src not in by:
         # Модель назвала источник, куда поиск не попал: проверяем, есть ли там что-то
         # под наши условия, иначе остаёмся с тем, что реально нашлось.
