@@ -20,6 +20,7 @@
 
 Запуск: под RW (postgres). Env — /etc/1c-serene-sync.env + /etc/1c-mcp-reports.env.
 """
+import concurrent.futures as cf
 import csv
 import hashlib
 import io
@@ -35,7 +36,16 @@ DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbn
 EMBED_DIM = int(os.environ.get("EMBED_DIM", "1536"))
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-v4")
 BATCH = 10          # лимит DashScope на батч
-INS = 20            # строк на INSERT (вектора длинные — argv не резиновый)
+# Строк на INSERT. Раньше 20 из-за длины argv, но запись давно идёт через stdin, и
+# ограничения нет. При 20 запись блокировала главный поток каждые две пачки, и пул
+# эмбеддинга простаивал: замерено 43 с против 29 с на том же корпусе.
+INS = int(os.environ.get("BUILD_INSERT_ROWS", "200"))
+# Одновременных пачек эмбеддинга. Значение выбрано ЗАМЕРОМ на полном корпусе, а не
+# наугад: 1 -> 0.151 с/строка, 8 -> 0.019, 16 -> 0.0098, 24 -> 0.008. На 16 полная
+# сборка 2882 строк прошла за 28 с эмбеддингов без единой ошибки; 24 проверялось только
+# коротким всплеском, поэтому умолчанием не ставим — лимиты поставщика считаются в
+# запросах в минуту, и на многочасовой сборке всплеск не показателен.
+PARALLEL = int(os.environ.get("BUILD_EMBED_PARALLEL", "16"))
 CORPUS = "search_corpus"
 INDEX = "search_idx"
 DICT = "search_dict"
@@ -75,6 +85,9 @@ def machine_token(v):
     return bool(v) and bool(URLISH.match(v))
 
 
+_META_CACHE = {}
+
+
 def odata_types():
     """Объявленные типы свойств из `$metadata` самой базы: {сущность_lower: {свойство: Edm-тип}}.
 
@@ -86,6 +99,8 @@ def odata_types():
     Работает для любой конфигурации и языка — имена свойств не важны, важен объявленный тип.
     Если метаданные недоступны — возвращаем пусто, вызывающий переходит на разбор по форме.
     """
+    if _META_CACHE:
+        return _META_CACHE                  # 15 МБ и 16 с за загрузку — тянем один раз
     base = os.environ.get("ETL_ODATA_BASE", "http://127.0.0.1:6011").rstrip("/")
     req = urllib.request.Request(base + "/$metadata")
     tok = os.environ.get("ODG_GATEWAY_TOKEN", "")
@@ -112,6 +127,7 @@ def odata_types():
             props[p.group(1)] = p.group(2)
         if props:
             out[name.lower()] = props
+    _META_CACHE.update(out)
     return out
 
 
@@ -225,6 +241,52 @@ def money_column(entity_label, names):
     return names[i - 1] if 1 <= i <= len(names) else ""
 
 
+def num_cols_of(tcols, declared):
+    """Числовые колонки: по объявленному типу, иначе по типу в витрине."""
+    if declared:
+        return [c for c, _dt in tcols if declared.get(c) in NUMERIC_EDM]
+    return [c for c, dt in tcols
+            if dt in ("BIGINT", "DOUBLE", "DECIMAL", "INTEGER", "HUGEINT")]
+
+
+def profile_table(t, tcols, txt_candidates, num_candidates):
+    """Профиль таблицы ОДНИМ запросом вместо запроса на каждую колонку.
+
+    Было: на каждую колонку отдельный процесс `psql` — счёт различных значений,
+    выборка образцов, максимум по числовой. На 19 таблицах это 1073 запуска процесса
+    по 39 мс каждый, то есть почти минута чистых накладных расходов. На витрине с
+    тысячами таблиц счёт пошёл бы на часы.
+
+    Стало: два запроса на таблицу — агрегаты и образцы.
+    """
+    prof = {"distinct": {}, "maxabs": {}, "samples": {}}
+    aggs = []
+    for c in txt_candidates:
+        aggs.append('count(DISTINCT "%s")' % c)
+    for c in num_candidates:
+        aggs.append('coalesce(max(abs("%s")),0)' % c)
+    if aggs:
+        row = q("SELECT %s FROM \"%s\"" % (", ".join(aggs), t))
+        vals = row[0] if row else []
+        for i, c in enumerate(txt_candidates):
+            try:
+                prof["distinct"][c] = int(vals[i])
+            except (ValueError, IndexError):
+                prof["distinct"][c] = 0
+        for j, c in enumerate(num_candidates):
+            k = len(txt_candidates) + j
+            try:
+                prof["maxabs"][c] = float(vals[k])
+            except (ValueError, IndexError):
+                prof["maxabs"][c] = 0.0
+    if txt_candidates:
+        sel = ", ".join('"%s"' % c for c in txt_candidates)
+        rows = q("SELECT %s FROM \"%s\" LIMIT %d" % (sel, t, SAMPLE))
+        for i, c in enumerate(txt_candidates):
+            prof["samples"][c] = [r[i] for r in rows if i < len(r) and r[i]]
+    return prof
+
+
 def split_camel(name):
     """«ПоступлениеТоваровУслуг» -> «Поступление Товаров Услуг».
 
@@ -246,7 +308,21 @@ def lit(s):
 
 
 def build_corpus():
-    """Собрать тексты строк витрины. Возвращает список (src_table, row_key, doc, amount, date)."""
+    """Совместимость: собрать весь корпус списком (используется проверками и замерами)."""
+    out, nt, nref = [], 0, 0
+    for t, rows, nt, nref in iter_corpus():
+        out.extend(rows)
+    return out, nt, nref
+
+
+def iter_corpus():
+    """Отдавать корпус ПО ТАБЛИЦАМ, а не одним списком.
+
+    Иначе память растёт линейно с размером базы: на миллион строк это сотни мегабайт
+    текста, которые держатся всё время сборки без всякой нужды — каждая таблица
+    обрабатывается независимо. Общей остаётся только карта ссылок, она нужна всем.
+    Возвращает (таблица, строки, всего_таблиц, размер_карты_ссылок).
+    """
     tables = [r[0] for r in q(
         "SELECT table_name FROM duckdb_tables() WHERE database_name='postgres' "
         "  AND table_name NOT LIKE 'duckdb%%' AND table_name NOT LIKE '%s%%' "
@@ -284,13 +360,16 @@ def build_corpus():
             txt = [c for c, _dt in cols[t] if declared.get(c) == "Edm.String"
                    and c not in STANDARD_SERVICE_PROPS]
         else:
+            # Запасной разбор (метаданных нет): образцы всех текстовых колонок берём
+            # ОДНИМ запросом, а не запросом на колонку.
+            vcols = [c for c, dt in cols[t] if "VARCHAR" in dt]
             guid_cols, txt = [], []
-            for c, dt in cols[t]:
-                if "VARCHAR" not in dt:
-                    continue
-                smp = [r[0] for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL LIMIT 5'
-                                       % (c, t, c)) if r and r[0]]
-                (guid_cols if smp and all(GUID.match(v) for v in smp) else txt).append(c)
+            if vcols:
+                sel = ", ".join('"%s"' % c for c in vcols)
+                rows = q("SELECT %s FROM \"%s\" LIMIT %d" % (sel, t, SAMPLE))
+                for i, c in enumerate(vcols):
+                    smp = [r[i] for r in rows if i < len(r) and r[i]]
+                    (guid_cols if smp and all(GUID.match(v) for v in smp) else txt).append(c)
         return declared, guid_cols, txt
 
     # --- карта ссылок: GUID -> человекочитаемое наименование
@@ -298,6 +377,7 @@ def build_corpus():
     for t, n in live:
         declared, gcols, ccols = split_cols(t)
         key_col, scored = (gcols[0] if gcols else None), []
+        prof = profile_table(t, cols[t], ccols, [])
 
         # Сначала — КОНТРАКТ ПЛАТФОРМЫ. OData-интерфейс 1С объявляет служебные свойства
         # одинаково в любой конфигурации и на любом языке. Мы их не предполагаем: берём
@@ -311,8 +391,7 @@ def build_corpus():
             for c in ccols:
                 if c in std:
                     continue
-                vals = [r[0] for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL LIMIT %d'
-                                        % (c, t, c, SAMPLE)) if r and r[0]]
+                vals = prof["samples"].get(c) or []
                 if not vals or any(machine_token(v) for v in vals):
                     continue
                 # Порогов нет — только СРАВНЕНИЕ кандидатов между собой. Отсечка вида
@@ -320,7 +399,7 @@ def build_corpus():
                 # ранжирование самокалибруется: побеждает лучший из того, что есть.
                 words = sum(len(v.split()) for v in vals) / len(vals)
                 alpha = sum(sum(ch.isalpha() for ch in v) / max(len(v), 1) for v in vals) / len(vals)
-                uniq = int(q('SELECT count(DISTINCT "%s") FROM "%s"' % (c, t))[0][0]) / max(n, 1)
+                uniq = prof["distinct"].get(c, 0) / max(n, 1)
                 scored.append((words * alpha * uniq, c))
             extra = [c for _s, c in sorted(scored, reverse=True)]
             name_cols += extra[:max(0, NAME_COLS + 1 - len(name_cols))]
@@ -338,10 +417,11 @@ def build_corpus():
                 refmap[g] = " / ".join(uniq)
 
     # --- тексты строк
-    corpus = []
     for t, n in live:
+        corpus = []
         tcols = cols[t]
-        declared, guid_cols, _txt = split_cols(t)
+        declared, guid_cols, cand_txt = split_cols(t)
+        prof = profile_table(t, tcols, cand_txt, num_cols_of(tcols, declared))
         key_props = [c for c in ENTITY_KEYS.get(t.lower(), [])
                      if any(c == cn for cn, _dt in tcols)]
 
@@ -351,10 +431,7 @@ def build_corpus():
         # Поэтому доверяем метаданным, а форму значений используем только как запасной
         # вариант, когда метаданные недоступны.
         if declared:
-            num_cols = [c for c, _dt in tcols if declared.get(c) in NUMERIC_EDM]
-        else:
-            num_cols = [c for c, dt in tcols
-                        if dt in ("BIGINT", "DOUBLE", "DECIMAL", "INTEGER", "HUGEINT")]
+            num_cols = num_cols_of(tcols, declared)
         picked_money = money_column(split_camel(ENTITY_NAMES.get(t.lower(), t)),
                                     num_cols) if declared else None
         amount_col = picked_money or None
@@ -403,10 +480,9 @@ def build_corpus():
                     continue
             elif "VARCHAR" not in dt:
                 continue
-            if int(q('SELECT count(DISTINCT "%s") FROM "%s"' % (c, t))[0][0]) < 2 and n != 1:
+            if prof["distinct"].get(c, 0) < 2 and n != 1:
                 continue
-            smp = [r[0] for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL LIMIT 20'
-                                   % (c, t, c)) if r and r[0]]
+            smp = prof["samples"].get(c) or []
             if smp and sum(1 for v in smp if machine_token(v)) > len(smp) * 0.5:
                 continue
             txt_cols.append(c)
@@ -474,7 +550,23 @@ def build_corpus():
             if dt_:
                 parts.append("%s: %s" % (date_col, dt_[:10]))
             corpus.append((t, declared_key or key or "", " | ".join(parts), amt, dt_))
-    return corpus, len(live), len(refmap)
+        yield t, corpus, len(live), len(refmap)
+
+
+def _flush(buf, pending):
+    conds = " OR ".join("(src_table=%s AND row_key=%s)" % (lit(s), lit(k)) for s, k in pending)
+    if conds:
+        ddl("DELETE FROM %s WHERE %s;" % (CORPUS, conds))
+    ddl("INSERT INTO %s VALUES %s;" % (CORPUS, ",".join(buf)))
+
+
+def _row_sql(item, vec):
+    src, key, doc, h, amt, dtv = item
+    return "(%s,%s,%s,%s,%s,%s,%s::FLOAT[%d])" % (
+        lit(src), lit(key), lit(doc), lit(h),
+        "NULL" if amt is None else repr(amt),
+        "NULL" if not dtv else lit(dtv),
+        "'[" + ",".join("%.6f" % x for x in vec) + "]'", EMBED_DIM)
 
 
 def main():
@@ -482,46 +574,60 @@ def main():
     ddl("CREATE TABLE IF NOT EXISTS %s (src_table TEXT, row_key TEXT, doc TEXT, doc_hash TEXT, "
         "amount DOUBLE, doc_date TIMESTAMP, emb FLOAT[%d]);" % (CORPUS, EMBED_DIM))
 
-    corpus, n_tables, n_ref = build_corpus()
-    fresh = {}
-    for src, key, doc, amt, dtv in corpus:
-        h = hashlib.sha1(doc.encode("utf-8")).hexdigest()
-        fresh[(src, key)] = (doc, h, amt, dtv)
-
     have = {}
     for src, key, h in q("SELECT src_table, row_key, doc_hash FROM %s" % CORPUS):
         have[(src, key)] = h
 
-    todo = [k for k, v in fresh.items() if have.get(k) != v[1]]
-    gone = [k for k in have if k not in fresh]
-    print("витрина: %d таблиц, %d строк | ссылок: %d | новых/изменённых: %d | удалено: %d (%.1f с)"
-          % (n_tables, len(corpus), n_ref, len(todo), len(gone), time.time() - t0))
+    # Обработка ПО ТАБЛИЦАМ (память не зависит от размера базы), но пул эмбеддинга —
+    # ОДИН на весь прогон. Пул на таблицу сбрасывал параллельность на каждой мелкой
+    # сущности: замерено 71 с против 29 с на том же корпусе.
+    seen, total_rows, n_tables, n_ref, done = set(), 0, 0, 0, 0
+    buf, pending, inflight = [], [], {}
+    t1 = time.time()
 
+    def harvest(fut):
+        nonlocal buf, pending, done
+        items = inflight.pop(fut)
+        for item, vec in zip(items, fut.result()):
+            buf.append(_row_sql(item, vec))
+            pending.append((item[0], item[1]))
+        done += len(items)
+        if len(buf) >= INS:
+            _flush(buf, pending)
+            buf, pending = [], []
+
+    with cf.ThreadPoolExecutor(max_workers=PARALLEL) as pool:
+        for t, rows, n_tables, n_ref in iter_corpus():
+            total_rows += len(rows)
+            todo = []
+            for src, key, doc, amt, dtv in rows:
+                h = hashlib.sha1(doc.encode("utf-8")).hexdigest()
+                seen.add((src, key))
+                if have.get((src, key)) != h:
+                    todo.append((src, key, doc, h, amt, dtv))
+            for i in range(0, len(todo), BATCH):
+                ch = todo[i:i + BATCH]
+                inflight[pool.submit(embed, [x[2] for x in ch])] = ch
+                # Держим очередь ограниченной: иначе в память уедет весь корпус разом
+                # и потоковая обработка потеряет смысл.
+                while len(inflight) >= PARALLEL * 4:
+                    for f in cf.wait(list(inflight), return_when=cf.FIRST_COMPLETED)[0]:
+                        harvest(f)
+                        if done % 500 < BATCH:
+                            print("  эмбеддинги: %d (%.0f с)" % (done, time.time() - t1))
+        while inflight:
+            for f in cf.wait(list(inflight), return_when=cf.FIRST_COMPLETED)[0]:
+                harvest(f)
+    if buf:
+        _flush(buf, pending)
+    embed_sec = time.time() - t1
+
+    gone = [k for k in have if k not in seen]
     if gone:
         conds = " OR ".join("(src_table=%s AND row_key=%s)" % (lit(s), lit(k)) for s, k in gone)
         ddl("DELETE FROM %s WHERE %s;" % (CORPUS, conds))
-
-    t1 = time.time()
-    done, buf = 0, []
-    for i in range(0, len(todo), BATCH):
-        chunk = todo[i:i + BATCH]
-        vecs = embed([fresh[k][0] for k in chunk])
-        for (src, key), v in zip(chunk, vecs):
-            doc, h, amt, dtv = fresh[(src, key)]
-            buf.append("(%s,%s,%s,%s,%s,%s,%s::FLOAT[%d])" % (
-                lit(src), lit(key), lit(doc), lit(h),
-                "NULL" if amt is None else repr(amt),
-                "NULL" if not dtv else lit(dtv),
-                "'[" + ",".join("%.6f" % x for x in v) + "]'", EMBED_DIM))
-        done += len(chunk)
-        if len(buf) >= INS or done == len(todo):
-            conds = " OR ".join("(src_table=%s AND row_key=%s)" % (lit(s), lit(k))
-                                for s, k in todo[max(0, done - len(buf)):done])
-            if conds:
-                ddl("DELETE FROM %s WHERE %s;" % (CORPUS, conds))
-            ddl("INSERT INTO %s VALUES %s;" % (CORPUS, ",".join(buf)))
-            buf = []
-    embed_sec = time.time() - t1
+    print("витрина: %d таблиц, %d строк | ссылок: %d | новых/изменённых: %d | удалено: %d"
+          % (n_tables, total_rows, n_ref, done, len(gone)))
 
     try:
         ddl("CREATE TEXT SEARCH DICTIONARY %s (template='text', locale='ru_RU.UTF-8', "
@@ -568,7 +674,7 @@ def main():
             pass
 
     total = int(q("SELECT count(*) FROM %s" % CORPUS)[0][0])
-    print(json.dumps({"rows": total, "embedded": len(todo), "deleted": len(gone),
+    print(json.dumps({"rows": total, "embedded": done, "deleted": len(gone),
                       "embed_sec": round(embed_sec, 1), "index_sec": round(idx_sec, 2),
                       "total_sec": round(time.time() - t0, 1)}, ensure_ascii=False))
 
