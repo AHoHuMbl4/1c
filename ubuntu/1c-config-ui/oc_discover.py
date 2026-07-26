@@ -13,6 +13,22 @@ import os
 import urllib.parse
 import urllib.request
 
+def _odata_auth(req):
+    """Добавить Bearer шлюза. Один способ на всех клиентов OData.
+
+    Шлюз стал fail-closed (без токена не стартует и отвечает 401). Токен был роздан
+    только сборщику индекса — остальные клиенты продолжали ходить без заголовка, и
+    канал к 1С молча разорвался: преполёт возвращал None, синк грузил ноль сущностей,
+    юнит при этом не падал. Поэтому заголовок ставится здесь, а не в каждом вызове.
+    """
+    if isinstance(req, str):
+        req = urllib.request.Request(req)      # вызывают и строкой, и объектом
+    tok = os.environ.get("ODG_GATEWAY_TOKEN", "")
+    if tok:
+        req.add_header("Authorization", "Bearer " + tok)
+    return req
+
+
 ODATA_BASE = os.environ.get("ETL_ODATA_BASE", "http://127.0.0.1:6011").rstrip("/")
 TOP_PREFIXES = ("Catalog", "Document")
 WORKERS = int(os.environ.get("DISCOVER_WORKERS", "12"))
@@ -32,7 +48,7 @@ SYSTEM_HINTS = (
 def http_get(path, want_json=True):
     req = urllib.request.Request(f"{ODATA_BASE}/{path}", method="GET")
     req.add_header("Accept", "application/json")
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
+    with urllib.request.urlopen(_odata_auth(req), timeout=TIMEOUT) as resp:
         raw = resp.read().decode("utf-8")
     return json.loads(raw) if want_json else raw
 

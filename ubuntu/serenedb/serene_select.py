@@ -15,6 +15,22 @@ import urllib.request
 
 import poc_load_entity as L
 
+def _odata_auth(req):
+    """Добавить Bearer шлюза. Один способ на всех клиентов OData.
+
+    Шлюз стал fail-closed (без токена не стартует и отвечает 401). Токен был роздан
+    только сборщику индекса — остальные клиенты продолжали ходить без заголовка, и
+    канал к 1С молча разорвался: преполёт возвращал None, синк грузил ноль сущностей,
+    юнит при этом не падал. Поэтому заголовок ставится здесь, а не в каждом вызове.
+    """
+    if isinstance(req, str):
+        req = urllib.request.Request(req)      # вызывают и строкой, и объектом
+    tok = os.environ.get("ODG_GATEWAY_TOKEN", "")
+    if tok:
+        req.add_header("Authorization", "Bearer " + tok)
+    return req
+
+
 OUT = os.environ.get("SELECTED_FILE",
                      os.path.join(os.path.dirname(os.path.abspath(__file__)), "serene-entities.txt"))
 
@@ -35,7 +51,7 @@ def _count(es):
     try:
         u = L.ODATA + "/" + urllib.parse.quote(es) + "?" + urllib.parse.urlencode(
             {"$format": "json", "$top": "1", "$inlinecount": "allpages"})
-        d = json.load(urllib.request.urlopen(u, timeout=60))
+        d = json.load(urllib.request.urlopen(_odata_auth(u), timeout=60))
         c = d.get("odata.count")
         return es, (int(c) if c is not None else len(d.get("value", [])))
     except Exception:  # noqa: BLE001

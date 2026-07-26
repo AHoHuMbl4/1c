@@ -20,7 +20,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import oc_discover  # noqa: E402
 
-LISTEN_HOST = os.environ.get("UI_HOST", "0.0.0.0")
+# Слушаем ТОЛЬКО localhost. Раньше здесь было 0.0.0.0 без какой-либо авторизации:
+# проверено прогоном с чужой машины — GET /, POST /save и POST /scan работали, и одним
+# curl-ом переписывался список сущностей, которые выгружаются из 1С. При этом в окружении
+# процесса лежит пароль пользователя 1С. Наружу этот сервис выставлять нельзя.
+LISTEN_HOST = os.environ.get("UI_HOST", "127.0.0.1")
+UI_TOKEN = os.environ.get("UI_TOKEN", "")
 LISTEN_PORT = int(os.environ.get("UI_PORT", "6012"))
 CACHE = os.environ.get("UI_CACHE", "/var/lib/1c-config-ui/entities.json")
 SELECTED = os.environ.get("ETL_SELECTED_FILE", "/etc/1c-etl-selected.txt")
@@ -119,11 +124,19 @@ class H(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
 
     def do_GET(self):
+        if not self._auth_ok():
+            return self._html("<h1>401</h1>", 401)
         if self.path.rstrip("/") in ("", "/"):
             return self._html(render())
         self._html("<h1>404</h1>", 404)
 
+    def _auth_ok(self):
+        """Fail-closed: без токена сервис не стартует (см. main), проверка безусловная."""
+        return self.headers.get("Authorization", "") == "Bearer " + UI_TOKEN
+
     def do_POST(self):
+        if not self._auth_ok():
+            return self._html("<h1>401</h1>", 401)
         n = int(self.headers.get("Content-Length", "0"))
         body = self.rfile.read(n).decode("utf-8") if n else ""
         if self.path == "/save":
@@ -138,7 +151,16 @@ class H(BaseHTTPRequestHandler):
         self._html("<h1>404</h1>", 404)
 
 
-if __name__ == "__main__":
+def main():
+    if not UI_TOKEN:
+        sys.stderr.write("FATAL: UI_TOKEN не задан. Этот экран управляет тем, какие данные\n"
+                         "из 1С попадут в систему, и раньше был открыт наружу без авторизации.\n")
+        return 2
     srv = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), H)
     sys.stderr.write(f"config-ui на http://{LISTEN_HOST}:{LISTEN_PORT}  (кэш {CACHE}, выбор {SELECTED})\n")
     srv.serve_forever()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main() or 0)

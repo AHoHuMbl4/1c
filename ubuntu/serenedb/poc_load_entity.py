@@ -13,6 +13,22 @@ Env:     ETL_ODATA_BASE (default http://127.0.0.1:6011)
 """
 import csv, json, os, re, subprocess, sys, time, urllib.parse, urllib.request
 
+def _odata_auth(req):
+    """Добавить Bearer шлюза. Один способ на всех клиентов OData.
+
+    Шлюз стал fail-closed (без токена не стартует и отвечает 401). Токен был роздан
+    только сборщику индекса — остальные клиенты продолжали ходить без заголовка, и
+    канал к 1С молча разорвался: преполёт возвращал None, синк грузил ноль сущностей,
+    юнит при этом не падал. Поэтому заголовок ставится здесь, а не в каждом вызове.
+    """
+    if isinstance(req, str):
+        req = urllib.request.Request(req)      # вызывают и строкой, и объектом
+    tok = os.environ.get("ODG_GATEWAY_TOKEN", "")
+    if tok:
+        req.add_header("Authorization", "Bearer " + tok)
+    return req
+
+
 ODATA = os.environ.get("ETL_ODATA_BASE", "http://127.0.0.1:6011").rstrip("/")
 DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres")
 CSV_DIR = os.environ.get("CSV_DIR", "/var/lib/serenedb")
@@ -28,7 +44,7 @@ def _order_by(entity_set):
         {"$format": "json", "$top": "1"}
     )
     try:
-        v = json.load(urllib.request.urlopen(url, timeout=120)).get("value", [])
+        v = json.load(urllib.request.urlopen(_odata_auth(url), timeout=120)).get("value", [])
     except Exception:
         return None
     return "Ref_Key" if v and "Ref_Key" in v[0] else None
@@ -42,7 +58,7 @@ def fetch_all(entity_set):
         if order:
             params["$orderby"] = order  # стабильный порядок → страницы не перекрываются
         url = f"{ODATA}/{urllib.parse.quote(entity_set)}?" + urllib.parse.urlencode(params)
-        v = json.load(urllib.request.urlopen(url, timeout=120)).get("value", [])
+        v = json.load(urllib.request.urlopen(_odata_auth(url), timeout=120)).get("value", [])
         if not v:
             break
         rows.extend(v)
@@ -58,7 +74,7 @@ def published_entity_sets():
     верить памяти. Возвращает None при сетевой ошибке (тогда преполёт пропускается — без ложной тревоги)."""
     try:
         url = f"{ODATA}/?" + urllib.parse.urlencode({"$format": "json"})
-        doc = json.load(urllib.request.urlopen(url, timeout=60))
+        doc = json.load(urllib.request.urlopen(_odata_auth(url), timeout=60))
         return {e.get("name", "") for e in doc.get("value", []) if e.get("name")}
     except Exception:
         return None

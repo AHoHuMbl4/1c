@@ -371,8 +371,12 @@ def pick_entity(question, kind, cands, counts=None):
         raw = ds_chat([{"role": "system", "content": PICK_SYS},
                        {"role": "user", "content": "%s\n\nTypes:\n%s" % (ask_text, listing)}],
                       max_tokens=8)
-    except Exception:                          # noqa: BLE001 — сеть/квота
-        return None
+    except Exception as e:                     # noqa: BLE001 — сеть/квота
+        # Не молча: выбор сущности — решение, влияющее на правильность ответа. Если
+        # модель недоступна, вызывающий обязан узнать об этом и пометить ответ, а не
+        # тихо взять «источник, где больше совпадений».
+        sys.stderr.write("ask DEGRADED: выбор сущности без модели (%s)\n" % str(e)[:80])
+        raise RuntimeError("entity-pick-unavailable")
     m = re.search(r"\d+", raw or "")
     if not m:
         return None
@@ -504,11 +508,19 @@ def _readings(tok):
     if not digits:
         return out
     body = tok.strip(SEP)
-    # 1) все разделители — групповые
-    try:
-        out.add(round(float(digits), 2))
-    except ValueError:
-        pass
+    # 1) все разделители — групповые. Только если группировка ПРАВИЛЬНАЯ: первая группа
+    # 1-3 цифры, каждая следующая ровно 3. Иначе «10 20 30» читалось как 102030, а
+    # «18860000.00» — как 1886000000, и белый список гейта содержал каждое настоящее
+    # значение, умноженное на сто. Проверено прогоном: сумма x100 проходила гейт.
+    groups = [g for g in re.split(r"[%s]" % re.escape(SEP), body) if g != ""]
+    grouped_ok = (len(groups) == 1
+                  or (1 <= len(groups[0]) <= 3
+                      and all(len(g) == 3 for g in groups[1:])))
+    if grouped_ok:
+        try:
+            out.add(round(float(digits), 2))
+        except ValueError:
+            pass
     # 2) последний разделитель — десятичный, остальные групповые
     m = list(re.finditer(r"[%s]" % re.escape(SEP), body))
     if m:
@@ -560,7 +572,26 @@ def _tokens(text):
         return []
     for a, b in sorted(_date_spans(t), reverse=True):
         t = t[:a] + " " * (b - a) + t[b:]
-    return [r for r in (_readings(m.group(0)) for m in NUMTOK.finditer(t)) if r]
+    out = []
+    for m in NUMTOK.finditer(t):
+        tok = m.group(0)
+        body = tok.strip(SEP)
+        groups = [g for g in re.split(r"[%s]" % re.escape(SEP), body) if g != ""]
+        valid = (len(groups) == 1
+                 or (1 <= len(groups[0]) <= 3 and all(len(g) == 3 for g in groups[1:])))
+        if valid:
+            r = _readings(tok)
+            if r:
+                out.append(r)
+        else:
+            # Не группировка, а просто перечисление рядом: «10 20 30 шт». Каждое число —
+            # самостоятельный токен, иначе три настоящих числа превращались в одно
+            # выдуманное и честный ответ отвергался.
+            for g in groups:
+                r = _readings(g)
+                if r:
+                    out.append(r)
+    return out
 
 
 def _norm_numbers(text):
@@ -635,12 +666,26 @@ def gate(answer, rows, agg):
     allowed = set()
     for r in rows:
         allowed |= _norm_numbers(r[5])
-        allowed |= _norm_numbers(r[2])
         allowed |= _norm_numbers(r[3])
+        # amount приходит из psql как «5000000.00» — через текстовый разбор это давало
+        # ещё и 500000000. Берём числом.
+        try:
+            v = float(r[2])
+            allowed.add(round(v, 2))
+            if v == int(v):
+                allowed.add(float(int(v)))
+        except (TypeError, ValueError):
+            pass
     if agg:
-        allowed |= _norm_numbers(str(agg["count"]))
-        allowed |= _norm_numbers("%.2f" % agg["sum"])
-        allowed |= {round(agg["sum"], 2), float(agg["count"])}
+        # ЧИСЛАМИ, а не текстом: прогон "%.2f" через разбор давал ещё и значение,
+        # умноженное на 100 (дробная часть склеивалась с целой).
+        for key in ("sum", "min", "max", "avg"):
+            v = agg.get(key)
+            if v is not None:
+                allowed.add(round(float(v), 2))
+                if float(v) == int(float(v)):
+                    allowed.add(float(int(float(v))))
+        allowed.add(float(agg["count"]))
     # Числа из ВОПРОСА в белый список больше не идут. Вопрос — это аргумент, который
     # сочиняет модель бота: она сама пополняла список того, что ей разрешено сказать,
     # и через это проходило любое выдуманное число.
@@ -704,7 +749,10 @@ def answer(question):
         cands = [r[0] for r in psql("SELECT src_table FROM %s" % TABLES)] or list(by)
     except RuntimeError:
         cands = list(by)
-    src = pick_entity(question, intent.get("kind"), cands, by)
+    try:
+        src = pick_entity(question, intent.get("kind"), cands, by)
+    except RuntimeError:
+        src, diag["degraded"] = None, "выбор сущности сделан без модели"
     if src not in by:
         # Модель назвала источник, куда поиск не попал: проверяем, есть ли там что-то
         # под наши условия, иначе остаёмся с тем, что реально нашлось.
@@ -724,6 +772,17 @@ def answer(question):
     ok_roles, bad_roles = check_claims(claims, agg)
     ok_txt, bad_txt = claims_in_text(claims, text)
     ok_roles, bad_roles = (ok_roles and ok_txt), (bad_roles + bad_txt)
+
+    # Ролевая сверка не может быть НЕОБЯЗАТЕЛЬНОЙ. Достаточно было ответить обычным
+    # текстом без JSON — и `claims` оказывались пустыми, цикл проверки проходил вхолостую,
+    # а сумма одной строки, выданная за итог, снова проходила. Раз итог посчитан, ответ
+    # обязан его объявить.
+    if agg and not isinstance(claims, dict):
+        ok_roles, bad_roles = False, bad_roles + ["ответ не объявил величины (нет claims)"]
+    # Числа словами: если величина посчитана, а в тексте НЕТ НИ ОДНОЙ цифры — это
+    # «примерно три миллиона». Признак детерминируемый, списка числительных не нужно.
+    if agg and intent.get("want") in ("sum", "count") and not _norm_numbers(text):
+        ok_roles, bad_roles = False, bad_roles + ["величина названа не цифрами"]
     ok_nums, bad_nums = gate(text, rows, agg)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     diag["claims"] = claims or None

@@ -284,10 +284,11 @@ def profile_table(t, tcols, txt_candidates, num_candidates):
                 prof["maxabs"][c] = float(vals[k])
             except (ValueError, IndexError):
                 prof["maxabs"][c] = 0.0
-    if txt_candidates:
-        sel = ", ".join('"%s"' % c for c in txt_candidates)
+    sample_cols = list(txt_candidates) + [c for c in num_candidates if c not in txt_candidates]
+    if sample_cols:
+        sel = ", ".join('"%s"' % c for c in sample_cols)
         rows = q("SELECT %s FROM \"%s\" LIMIT %d" % (sel, t, SAMPLE))
-        for i, c in enumerate(txt_candidates):
+        for i, c in enumerate(sample_cols):
             prof["samples"][c] = [r[i] for r in rows if i < len(r) and r[i]]
     return prof
 
@@ -435,8 +436,14 @@ def iter_corpus():
         # приезжает через CSV, и её сниффер типов этого не знает: ИНН становится BIGINT.
         # Поэтому доверяем метаданным, а форму значений используем только как запасной
         # вариант, когда метаданные недоступны.
-        if declared:
-            num_cols = num_cols_of(tcols, declared)
+        # num_cols вычисляется БЕЗУСЛОВНО. Раньше присваивание стояло внутри
+        # `if declared:` — и при отсутствии метаданных ветка падала UnboundLocalError,
+        # то есть весь заявленный «запасной разбор по форме» не исполнялся никогда.
+        # Хуже промежуточный случай: часть сущностей в метаданных есть, часть нет —
+        # тогда num_cols ПРОТЕКАЛ с предыдущей итерации цикла, и колонкой денег
+        # становилась колонка чужой сущности. Это не отказ и не падение, а тихо
+        # неверные агрегаты.
+        num_cols = num_cols_of(tcols, declared)
         picked_money = money_column(split_camel(ENTITY_NAMES.get(t.lower(), t)),
                                     num_cols) if declared else None
         amount_col = picked_money or None

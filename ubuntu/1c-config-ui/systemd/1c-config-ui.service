@@ -6,7 +6,10 @@ After=network-online.target 1c-odata-gateway.service
 Wants=network-online.target
 
 [Service]
-EnvironmentFile=/etc/1c-odata-gateway.env
+# Раньше сюда подключался /etc/1c-odata-gateway.env — и у процесса, слушавшего
+# 0.0.0.0 без авторизации, в окружении лежал пароль пользователя 1С. Оставляем только
+# то, что этому экрану действительно нужно.
+EnvironmentFile=/etc/1c-config-ui.env
 Environment=ETL_ODATA_BASE=http://127.0.0.1:6011
 ExecStart=/usr/bin/python3 /opt/1c-config-ui/oc_config_ui.py
 Restart=always
