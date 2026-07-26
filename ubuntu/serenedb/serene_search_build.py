@@ -250,10 +250,18 @@ def money_column(entity_label, names):
         + "/v1/chat/completions", data=body, method="POST")
     req.add_header("Authorization", "Bearer " + key)
     req.add_header("Content-Type", "application/json")
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            raw = json.loads(r.read())["choices"][0]["message"]["content"]
-    except Exception:                       # noqa: BLE001 — сеть/квота
+    raw = None
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                raw = json.loads(r.read())["choices"][0]["message"]["content"]
+            break
+        except Exception:                   # noqa: BLE001 — сеть/квота поставщика
+            # Сборка обходит сотни сущностей подряд; одиночный отказ по лимиту не должен
+            # превращаться в «сущность без денег» на весь следующий такт.
+            if attempt < 2:
+                time.sleep(2 * (attempt + 1))
+    if raw is None:
         return None
     m = re.search(r"\d+", raw or "")
     if not m:
@@ -533,8 +541,15 @@ def iter_corpus():
         extra = ([('"%s"' % amount_col)] if amount_col else []) + \
                 ([('"%s"' % date_col)] if date_col else []) + \
                 [('"%s"' % c) for c in key_extra]
-        sel = ", ".join(clip(c) for c in all_cols) or "NULL"
-        rows = q("SELECT %s%s FROM \"%s\"" % (sel, (", " + ", ".join(extra)) if extra else "", t))
+        # Заглушки NULL быть не должно. Когда у сущности нет ни текстовых, ни ссылочных
+        # колонок (обычное дело для регистров: только Period и число), пустой список
+        # подменялся на «NULL», и ВСЕ значения сдвигались на позицию — число попадало в
+        # колонку даты. Проверено: 7 регистров писали в дату «116.49», «912000», «16».
+        # Собираем список выборки как есть и режем результат по его длине.
+        sel_parts = [clip(c) for c in all_cols] + extra
+        if not sel_parts:
+            continue                            # нечего брать из этой сущности
+        rows = q("SELECT %s FROM \"%s\"" % (", ".join(sel_parts), t))
 
         label = t.split("_", 1)[1] if "_" in t else t
         for r in rows:
