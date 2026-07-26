@@ -645,7 +645,7 @@ def iter_corpus():
                 if any(parts_k):
                     declared_key = "|".join(parts_k)
 
-            parts, key = [label], None
+            parts, refs, key = [label], [], None
             for c, v in zip(all_cols, tv):
                 if not v:
                     continue
@@ -657,7 +657,12 @@ def iter_corpus():
                         continue                    # собственный ключ в текст не пишем
                     nm = refmap.get(v)
                     if nm:
-                        parts.append("%s: %s" % (c.replace("_Key", ""), nm))
+                        # Ссылки копим ОТДЕЛЬНО. В мешке слов «Контрагент: Ромашка» и
+                        # «Склад: Ромашка» неразличимы; отдельное поле позволяет
+                        # спросить именно про контрагента и поднять его вес.
+                        piece = "%s: %s" % (c.replace("_Key", ""), nm)
+                        parts.append(piece)
+                        refs.append(piece)
                     continue
                 if machine_token(v):
                     continue
@@ -675,7 +680,7 @@ def iter_corpus():
             # стирать предыдущие (так base_profile терял 4431 строку из 4585).
             # Исчезнувшие отпечатки подчищает штатная gone-очистка в конце сборки.
             row_id = declared_key or key or hashlib.sha1(doc.encode("utf-8")).hexdigest()
-            corpus.append((t, row_id, doc, amt, dt_))
+            corpus.append((t, row_id, doc, " | ".join(refs), amt, dt_))
         yield t, corpus, len(live), len(refmap)
 
 
@@ -687,9 +692,9 @@ def _flush(buf, pending):
 
 
 def _row_sql(item, vec):
-    src, key, doc, h, amt, dtv = item
-    return "(%s,%s,%s,%s,%s,%s,%s::FLOAT[%d])" % (
-        lit(src), lit(key), lit(doc), lit(h),
+    src, key, doc, refs, h, amt, dtv = item
+    return "(%s,%s,%s,%s,%s,%s,%s,%s::FLOAT[%d])" % (
+        lit(src), lit(key), lit(doc), lit(refs), lit(h),
         "NULL" if amt is None else repr(amt),
         "NULL" if not dtv else lit(dtv),
         "'[" + ",".join("%.6f" % x for x in vec) + "]'", EMBED_DIM)
@@ -697,8 +702,25 @@ def _row_sql(item, vec):
 
 def main():
     t0 = time.time()
-    ddl("CREATE TABLE IF NOT EXISTS %s (src_table TEXT, row_key TEXT, doc TEXT, doc_hash TEXT, "
-        "amount DOUBLE, doc_date TIMESTAMP, emb FLOAT[%d]);" % (CORPUS, EMBED_DIM))
+    # `refs` — отдельное поле для ссылок на другие объекты (контрагент, организация,
+    # склад). Движок индексирует поля по отдельности в ОДНОМ индексе, и это его штатный
+    # шаблон (examples/demo6, cookbook/one-search-box.test). Раньше всё склеивалось в
+    # `doc`: 45 реквизитов превращались в мешок слов, где «Контрагент: Ромашка» и
+    # «Склад: Ромашка» неразличимы.
+    # Состав колонок корпуса — часть контракта поиска. Если он изменился (например,
+    # добавилось поле), старая таблица несовместима, и `IF NOT EXISTS` её молча
+    # сохранит, а вставка упадёт на числе значений. Сверяем и пересобираем сами:
+    # молчаливое расхождение схемы хуже честной пересборки.
+    want = ["src_table", "row_key", "doc", "refs", "doc_hash", "amount", "doc_date", "emb"]
+    have_cols = [r[0] for r in q("SELECT column_name FROM duckdb_columns() "
+                                 "WHERE table_name=%s ORDER BY column_index" % lit(CORPUS))]
+    if have_cols and have_cols != want:
+        sys.stderr.write("корпус пересоздаётся: состав колонок изменился (%s -> %s)\n"
+                         % (",".join(have_cols), ",".join(want)))
+        ddl("DROP INDEX IF EXISTS %s; DROP TABLE IF EXISTS %s;" % (INDEX, CORPUS))
+    ddl("CREATE TABLE IF NOT EXISTS %s (src_table TEXT, row_key TEXT, doc TEXT, refs TEXT, "
+        "doc_hash TEXT, amount DOUBLE, doc_date TIMESTAMP, emb FLOAT[%d]);"
+        % (CORPUS, EMBED_DIM))
 
     have = {}
     for src, key, h in q("SELECT src_table, row_key, doc_hash FROM %s" % CORPUS):
@@ -732,11 +754,11 @@ def main():
         for t, rows, n_tables, n_ref in iter_corpus():
             total_rows += len(rows)
             todo = []
-            for src, key, doc, amt, dtv in rows:
+            for src, key, doc, refs, amt, dtv in rows:
                 h = hashlib.sha1(doc.encode("utf-8")).hexdigest()
                 seen.add((src, key))
                 if have.get((src, key)) != h:
-                    todo.append((src, key, doc, h, amt, dtv))
+                    todo.append((src, key, doc, refs, h, amt, dtv))
             for i in range(0, len(todo), BATCH):
                 ch = todo[i:i + BATCH]
                 inflight[pool.submit(embed, [x[2] for x in ch])] = ch
@@ -782,8 +804,15 @@ def main():
     # ivf и не нужен: из индекса читаются текст и INCLUDE-колонки, а смысловой запасной
     # путь идёт полным сканом array_cosine_similarity по таблице корпуса (доли секунды
     # на этом объёме). Вопрос к движку про память ivf — открыт, см. TARGET_ARCHITECTURE §0.
-    ddl("CREATE INDEX %s ON %s USING inverted(doc %s) "
-        "INCLUDE (src_table, row_key, amount, doc_date);" % (INDEX, CORPUS, DICT))
+    # Поля индексируются ПО ОТДЕЛЬНОСТИ в одном индексе — штатный шаблон движка
+    # (examples/demo6/bootstrap.sql, cookbook/one-search-box.test). Что это даёт:
+    #   doc        — широкий запрос по всей строке, как раньше;
+    #   refs       — только ссылки на другие объекты; спросить «контрагент Ромашка»
+    #                и не получить «склад Ромашка», плюс можно поднять вес поля (^);
+    #   src_table  — БЕЗ словаря, то есть keyword: точное совпадение и фильтр уровня
+    #                индекса вместо post-filter по INCLUDE, плюс фасеты ts_dict_agg.
+    ddl("CREATE INDEX %s ON %s USING inverted(doc %s, refs %s, src_table) "
+        "INCLUDE (src_table, row_key, amount, doc_date);" % (INDEX, CORPUS, DICT, DICT))
     idx_sec = time.time() - t2
 
     # --- профиль таблиц: по нему выбирается, О ЧЁМ вопрос
