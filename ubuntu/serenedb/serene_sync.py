@@ -10,10 +10,13 @@
 Env: SERENEDB_DSN (rw=postgres), ETL_ODATA_BASE, CSV_DIR, ALIBABA_* (для резолвера) — см. serene_report.
 """
 import difflib
+import json
 import os
 import sys
 
 import build_resolver_index as R
+import odata_census as C
+import subprocess
 import poc_load_entity as L
 
 # Список сущностей — СОБСТВЕННЫЙ у serene (версионируется в git, деплоится рядом со скриптом),
@@ -87,32 +90,71 @@ def _preflight(ents):
     return missing
 
 
-def main():
-    if not os.path.exists(SELECTED):
-        sys.exit(f"нет файла выбора сущностей: {SELECTED}")
-    ents = [ln.strip() for ln in open(SELECTED, encoding="utf-8") if ln.strip() and not ln.lstrip().startswith("#")]
+def save_profile(rows):
+    """Профиль базы в витрину: что нашли, что взяли, чего не видим из-за прав.
 
-    missing = _preflight(ents)  # слой 1+2: валидация выбора против живого OData
-    to_load = [e for e in ents if e not in set(missing)]  # заведомо-невалидные не грузим (это 404)
+    Раньше закрытая правами сущность и пустая выглядели одинаково — обе просто
+    исчезали, и клиент не знал, что часть его данных системе недоступна. Молчать об
+    этом нельзя: он вправе знать, о чём бот принципиально не сможет ответить.
+    """
+    dsn = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
+
+    def run(sql):
+        subprocess.run(["psql", dsn, "-v", "ON_ERROR_STOP=1", "-f", "-"],
+                       input=sql, capture_output=True, text=True)
+
+    def lit(v):
+        return "'" + str(v).replace("'", "''") + "'"
+
+    run("DROP TABLE IF EXISTS base_profile;")
+    run("CREATE TABLE base_profile (entity TEXT, rows BIGINT, problem TEXT, key_props TEXT);")
+    vals = []
+    for r in rows:
+        vals.append("(%s,%d,%s,%s)" % (lit(r["entity"]), r["rows"],
+                                       lit(r["problem"]), lit(",".join(r["key"]))))
+        if len(vals) >= 200:
+            run("INSERT INTO base_profile VALUES " + ",".join(vals) + ";")
+            vals = []
+    if vals:
+        run("INSERT INTO base_profile VALUES " + ",".join(vals) + ";")
+    for role in ("serene_ro", "serene_resolver"):
+        run("GRANT SELECT ON base_profile TO %s;" % role)
+
+
+def main():
+    # СОСТАВ ОПРЕДЕЛЯЕТ ПЕРЕПИСЬ, А НЕ ЧЕЛОВЕК. Рукописный список был главным ручным
+    # шагом установки: 19 таблиц из 235 непустых, то есть 8% данных клиента. Теперь
+    # берём всё непустое и доступное; отбор при загрузке не нужен — нужная сущность
+    # находится поиском в момент вопроса.
+    print("перепись базы…")
+    rows = C.census()
+    s = C.summary(rows)
+    print("  " + json.dumps(s, ensure_ascii=False))
+    save_profile(rows)
+    ents = C.to_load(rows)
+    if s["закрыто_правами"]:
+        print("  ⚠ закрыто правами читателя: %d сущностей — бот о них ответить не сможет"
+              % s["закрыто_правами"])
+
+    limit = int(os.environ.get("SYNC_MAX_ENTITIES", "0"))
+    if limit:
+        ents = sorted(ents, key=lambda e: -next(r["rows"] for r in rows if r["entity"] == e))[:limit]
+        print("  ограничение SYNC_MAX_ENTITIES=%d: грузим %d крупнейших" % (limit, len(ents)))
 
     ok = empty = err = 0
-    for es in to_load:
+    for es in ents:
         try:
             r = L.load_entity(es)
             if r["rows"] == 0:
                 empty += 1
-                print(f"  {es}: пусто")
             else:
                 ok += 1
                 print(f"  {es}: {r['rows']} строк -> {r['table']} ({r['sec']}s)")
         except Exception as e:  # noqa: BLE001 — одна сущность не должна валить весь синк
             err += 1
             print(f"  {es}: ОШИБКА {e}")
-    skipped = len(ents) - len(to_load)
-    print(f"витрина: загружено {ok}, пусто {empty}, ошибок {err}, пропущено-невалидных {skipped} из {len(ents)}")
+    print(f"витрина: загружено {ok}, пусто {empty}, ошибок {err} из {len(ents)}")
 
-    # пересборка семантического индекса резолвера (Qwen text-embedding-v4 @ 1536) — по свежим
-    # значениям колонок-измерений всех загруженных таблиц
     try:
         R.main()
     except SystemExit as e:
@@ -120,10 +162,9 @@ def main():
     except Exception as e:  # noqa: BLE001
         print(f"resolver_index: ошибка пересборки {e}")
 
-    # Слой 1: невалидные имена НЕ глотаем молча. Валидные данные уже загружены выше, но прогон
-    # помечаем как проваленный (ненулевой код) — systemd покажет unit failed, и это точно не упустить.
-    if missing:
-        print(f"⚠ ИТОГ: {len(missing)} невалидных имён в списке выбора — см. преполёт выше. Чинить у источника.")
+    # Ошибки загрузки не глотаем: прогон помечается проваленным, systemd покажет failed.
+    if err:
+        print(f"⚠ ИТОГ: {err} сущностей не загрузились")
         sys.exit(3)
 
 

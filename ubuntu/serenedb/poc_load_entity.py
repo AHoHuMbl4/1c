@@ -35,11 +35,37 @@ CSV_DIR = os.environ.get("CSV_DIR", "/var/lib/serenedb")
 PAGE = 1000
 
 
+_KEYS_CACHE = {}
+
+
+def declared_key(entity_set):
+    """Объявленный ключ сущности из `$metadata` — источник правды, в т.ч. составной."""
+    if not _KEYS_CACHE:
+        try:
+            xml = urllib.request.urlopen(
+                _odata_auth(ODATA + "/$metadata"), timeout=300).read().decode("utf-8", "replace")
+        except Exception:                       # noqa: BLE001
+            return []
+        for m in re.finditer(r'<EntityType\s+Name="([^"]+)"(.*?)</EntityType>', xml, re.S):
+            km = re.search(r"<Key>(.*?)</Key>", m.group(2), re.S)
+            _KEYS_CACHE[m.group(1)] = (
+                re.findall(r'<PropertyRef\s+Name="([^"]+)"', km.group(1)) if km else [])
+    return _KEYS_CACHE.get(entity_set, [])
+
+
 def _order_by(entity_set):
-    """Ключ стабильной сортировки для пагинации. `Ref_Key` — универсальный идентификатор
-    объекта 1С (уникален у любого справочника/документа). БЕЗ сортировки $skip/$top не
-    гарантирует одинаковый порядок между страницами → строки перекрываются между страницами
-    (наблюдали дубли ×2/×3) и часть строк вовсе теряется. Определяем ключ по данным, без хардкода."""
+    """Порядок страниц — по ОБЪЯВЛЕННОМУ ключу, а не по предположению про `Ref_Key`.
+
+    Без сортировки `$skip/$top` не гарантирует одинаковый порядок между страницами:
+    строки перекрываются, а часть теряется НАВСЕГДА — витрина тихо неполная, суммы
+    тихо заниженные. Прежний вариант знал только `Ref_Key`; у 3121 типа из 4585 ключ
+    составной, а у 497 нет ни одной Guid-колонки, и для них сортировки не было вовсе.
+    """
+    key = declared_key(entity_set)
+    if key:
+        # `*_Type` — служебные спутники ссылок, сортировать по ним смысла нет
+        cols = [k for k in key if not k.endswith("_Type")] or key
+        return ",".join(cols)
     url = f"{ODATA}/{urllib.parse.quote(entity_set)}?" + urllib.parse.urlencode(
         {"$format": "json", "$top": "1"}
     )
@@ -50,9 +76,30 @@ def _order_by(entity_set):
     return "Ref_Key" if v and "Ref_Key" in v[0] else None
 
 
+def count_of(entity_set):
+    """Сколько строк в 1С. Нужно, чтобы сверить выгрузку и не принять неполную за полную."""
+    url = "%s/%s/$count" % (ODATA, urllib.parse.quote(entity_set))
+    try:
+        return int(urllib.request.urlopen(_odata_auth(url), timeout=120).read().decode().strip())
+    except Exception:                           # noqa: BLE001
+        return -1
+
+
 def fetch_all(entity_set):
+    """Выгрузить сущность целиком, со сверкой количества.
+
+    Короткая страница НЕ означает конец данных: замерено — под нагрузкой (сразу после
+    переписи из 4585 запросов) 1С вернула 517 строк вместо 1000 в середине выгрузки, и
+    прежний код на этом останавливался. Итог: 19 517 строк из 23 878, витрина тихо
+    неполная, суммы тихо заниженные, ошибок в журнале ноль. Повторный прогон отдал все
+    23 878 — то есть дефект плавающий, а такой опаснее постоянного.
+
+    Поэтому: идём до ПУСТОЙ страницы и сверяем итог с `$count`. Расхождение — ошибка,
+    а не «загрузили сколько получилось».
+    """
     order = _order_by(entity_set)
-    rows, skip = [], 0
+    expected = count_of(entity_set)
+    rows, skip, short_pages = [], 0, 0
     while True:
         params = {"$format": "json", "$top": str(PAGE), "$skip": str(skip)}
         if order:
@@ -64,7 +111,16 @@ def fetch_all(entity_set):
         rows.extend(v)
         skip += len(v)
         if len(v) < PAGE:
-            break
+            short_pages += 1
+            # Короткая страница в середине — признак нагрузки, а не конца. Продолжаем,
+            # пока не придёт пустая или пока не набрали ожидаемое количество.
+            if expected >= 0 and len(rows) >= expected:
+                break
+            if expected < 0 and short_pages > 1:
+                break
+    if expected >= 0 and len(rows) != expected:
+        raise RuntimeError(
+            "%s: выгружено %d строк, в 1С %d — выгрузка неполная" % (entity_set, len(rows), expected))
     return rows
 
 
@@ -81,9 +137,20 @@ def published_entity_sets():
 
 
 def safe_col(name):
-    # кириллица/спецсимволы -> безопасное имя колонки (без хардкода конкретных полей)
-    s = re.sub(r"[^0-9A-Za-zА-Яа-яёЁ_]", "_", str(name)).strip("_")
-    return s or "col"
+    """Безопасное имя колонки для ЛЮБОГО алфавита.
+
+    Раньше здесь был диапазон «латиница + русская кириллица»: на японской, китайской
+    или греческой конфигурации ВСЕ имена схлопывались в одно (`catalog`, `col`), и
+    каждая следующая сущность затирала предыдущую. Проверять принадлежность к алфавиту
+    надо средствами Unicode, а не перечислением букв.
+    """
+    out = []
+    for ch in str(name):
+        out.append(ch if (ch.isalnum() or ch == "_") else "_")
+    s = "".join(out).strip("_")
+    if not s or s[0].isdigit():
+        s = "c_" + s
+    return s
 
 
 def load_entity(es, ro_role="serene_ro"):
@@ -109,13 +176,13 @@ def load_entity(es, ro_role="serene_ro"):
     # если страницы OData всё же перекрылись, ref_key (уникальный ключ платформы) убирает копии;
     # для сущностей без ref_key (напр. регистры) — снимаем полностью идентичные строки.
     has_ref = any(safe_col(c).lower() == "ref_key" for c in cols)
-    # is_folder=true — узлы-ПАПКИ иерархии справочника 1С (регионы/группы), не бизнес-строки. Исключаем
-    # для ЛЮБОГО справочника с этой колонкой (общее платформенное правило 1С, не per-entity). CAST — на
-    # случай инференса строкой; COALESCE(NULL→не-папка) — сущности без is_folder (документы) не затронуты.
-    # поле 1С — IsFolder (без подчёркивания); safe_col.lower() = 'isfolder'. DuckDB идентификаторы
-    # регистронезависимы, поэтому ссылаемся как isfolder (совпадёт с колонкой IsFolder).
-    has_folder = any(safe_col(c).lower() == "isfolder" for c in cols)
-    where = " WHERE NOT COALESCE(CAST(isfolder AS BOOLEAN), false)" if has_folder else ""
+    # Узлы-ПАПКИ иерархии (группы номенклатуры, категории, регионы) раньше отбрасывались
+    # как «не бизнес-строки». Для коробки это неверно: требование владельца — «информация
+    # должна быть вся», а про группы спрашивают ровно так же, как про элементы («что в
+    # группе Электроника», «какие группы товаров есть»). Замерено: на одном справочнике
+    # это 4361 строка из 23 878 — 18% данных, выброшенных молча.
+    # Папки остаются различимы: колонка IsFolder есть в витрине, поиск её видит.
+    where = ""
     select = (
         f"SELECT * FROM read_csv('{csv_path}'){where} "
         "QUALIFY row_number() OVER (PARTITION BY ref_key ORDER BY ref_key) = 1"
