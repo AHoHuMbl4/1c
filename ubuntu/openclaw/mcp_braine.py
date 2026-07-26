@@ -21,6 +21,7 @@ braine остаётся источником истины: у него внут�
 """
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 

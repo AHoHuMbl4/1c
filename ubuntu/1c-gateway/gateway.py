@@ -84,9 +84,11 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write("gw %s - %s\n" % (self.address_string(), fmt % args))
 
     def _auth_ok(self):
-        if not GATEWAY_TOKEN:
-            return True
-        return self.headers.get("Authorization", "") == f"Bearer {GATEWAY_TOKEN}"
+        # Fail-CLOSED. Раньше пустой токен означал «пускать всех»: запрос без единого
+        # заголовка уходил наверх к 1С. Спасало только то, что юнит был отключён —
+        # один systemctl start открывал дверь. Отсутствие токена ловится в main().
+        return bool(GATEWAY_TOKEN) and \
+            self.headers.get("Authorization", "") == f"Bearer {GATEWAY_TOKEN}"
 
     def _send(self, status, body=b"", ctype="application/json", extra=None):
         self.send_response(status)
@@ -150,6 +152,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if not GATEWAY_TOKEN:
+        sys.stderr.write("FATAL: GW_GATEWAY_TOKEN пуст — шлюз не поднимается.\n"
+                         "Без него любой в сети читал бы 1С через этот порт.\n")
+        return 2
     if not TOOLKIT_TOKEN:
         sys.stderr.write("WARN: GW_TOOLKIT_TOKEN пуст — тулкит, вероятно, ответит 401\n")
     srv = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
