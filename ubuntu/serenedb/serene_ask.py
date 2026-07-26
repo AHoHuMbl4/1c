@@ -57,6 +57,11 @@ PICK_BUDGET = int(os.environ.get("ASK_PICK_BUDGET_CHARS", "8000"))
 # 13 ИНН стоит на 367-м символе, КПП на 385-м. То есть данные доезжали до последнего
 # шага целыми, а вопрос «какой ИНН у контрагента» получал «данных нет».
 ROWS_BUDGET = int(os.environ.get("ASK_ROWS_BUDGET_CHARS", "24000"))
+# Бюджеты ВРЕМЕНИ на отличительные реквизиты: сколько кандидатов считать и сколько
+# термов показывать. Один расчёт ~50 мс. На правильность выбора не влияют — влияют
+# на то, скольким кандидатам мы успеваем дать эту подсказку.
+TERMS_FOR = int(os.environ.get("ASK_TERMS_FOR", "3"))
+TERMS_TOP = int(os.environ.get("ASK_TERMS_TOP", "6"))
 TOPK = int(os.environ.get("ASK_TOPK", "40"))
 ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
 
@@ -375,6 +380,9 @@ PICK_SYS = """You map a user's question to ONE record type.
 
 You get the question and a numbered list of record types that exist in this database.
 Answer with the NUMBER only — the type whose records would ANSWER the question.
+Some entries list what is typical for their records — the attributes that set them
+apart from the rest of the database. Use them to tell apart types whose names sound
+alike: they describe what the records actually are about.
 Entries marked as line items are the rows INSIDE another record: a question about a
 total, a sum or "how much in all" belongs to the record that owns them, not to the rows.
 Some entries show how many records already match the question; prefer a type that
@@ -384,7 +392,37 @@ Judge by meaning, across languages and wording: a question about sales belongs t
 type that records sales even if the words differ."""
 
 
-def pick_entity(question, kind, cands, counts=None):
+def signal_terms(src_table, match, top):
+    """Чем ЭТОТ источник отличается от базы в целом — по его совпадениям.
+
+    Штатный рецепт движка (cookbook/search/significant-terms.test): частота терма в
+    подмножестве против ожидаемой по фону. Считаем по полю `refs` — это ссылки на
+    другие объекты, их словарь в шесть раз меньше словаря всей строки (11 744 против
+    71 604 термов) и в пять раз дешевле при том же разделении.
+
+    Зачем: два источника могут иметь ОДИНАКОВОЕ число совпадений по имени контрагента,
+    и выбирать модели не из чего. Отличительные реквизиты дают ей то, чего нет в
+    названии: у реализации это склад и расчёты с покупателями, у поступления на счёт —
+    банк и счёт организации. Это данные из индекса, а не правило в подсказке.
+    """
+    where = " AND ".join([w for w in [match, "src_table @@ %s" % lit(src_table)] if w])
+    try:
+        rs = psql(
+            "WITH bg AS (SELECT unnest(ts_dict_agg(refs)) t, unnest(ts_dict_count(refs)) b"
+            "            FROM %(i)s),"
+            "     fg AS (SELECT unnest(ts_dict_agg(refs)) t, unnest(ts_dict_count(refs)) f"
+            "            FROM %(i)s WHERE %(w)s),"
+            "     n  AS (SELECT (SELECT count(*) FROM %(i)s WHERE %(w)s) ft,"
+            "                   (SELECT count(*) FROM %(i)s) bt)"
+            " SELECT fg.t FROM fg JOIN bg USING (t) CROSS JOIN n"
+            " ORDER BY fg.f - bg.b * n.ft::DOUBLE / nullif(n.bt,0) DESC LIMIT %(k)d"
+            % {"i": INDEX, "w": where, "k": top})
+    except RuntimeError:
+        return []
+    return [r[0] for r in rs if r and r[0]]
+
+
+def pick_entity(question, kind, cands, counts=None, match=""):
     """Какая сущность имеется в виду — спрашиваем модель, но даём ей ТОЛЬКО НАЗВАНИЯ.
 
     Почему не вектором: замерено на живых данных — эмбеддинг не связывает «продажи» с
@@ -421,13 +459,32 @@ def pick_entity(question, kind, cands, counts=None):
     # именно они снимают неоднозначность: справочник «Банки» на 1 запись и
     # «Классификатор Банков» на 680 по названию неразличимы, по числу — очевидны.
     counts = counts or {}
+    # Отличительные реквизиты считаем ТОЛЬКО верхним кандидатам: каждый расчёт стоит
+    # ~50 мс, и это бюджет времени ответа, а не порог правильности — порядок уже задан
+    # данными, поэтому счёт идёт для тех, между кем модель и выбирает.
+    marks = {}
+    if match and len(names) > 1:
+        raw = {}
+        for t, _nm in names[:TERMS_FOR]:
+            tt = signal_terms(t, match, TERMS_TOP)
+            if tt:
+                raw[t] = tt
+        # Терм, который есть у ВСЕХ рассмотренных кандидатов, ничего не различает —
+        # это само искомое имя и общие коды. Убираем: подсказка должна нести только
+        # то, чем источники ОТЛИЧАЮТСЯ. Отбор по данным, без списка слов в коде.
+        common = set.intersection(*(set(v) for v in raw.values())) if len(raw) > 1 else set()
+        for t, tt in raw.items():
+            uniq = [x for x in tt if x not in common]
+            if uniq:
+                marks[t] = ", ".join(uniq)
     lines_out, used = [], 0
     for i, (t, nm) in enumerate(names):
-        row = "%d. %s%s%s" % (
+        row = "%d. %s%s%s%s" % (
             i + 1, nm,
             "" if t not in counts else " — %d matching records" % counts[t],
             "" if not parent_by.get(t) else
-            " [line items of «%s»]" % label_by.get(parent_by[t], parent_by[t]))
+            " [line items of «%s»]" % label_by.get(parent_by[t], parent_by[t]),
+            "" if t not in marks else "\n     typical for these records: %s" % marks[t])
         if used + len(row) > PICK_BUDGET and lines_out:
             sys.stderr.write("ask: перечень сущностей обрезан по бюджету промпта "
                              "(%d из %d, порядок по смыслу)\n" % (len(lines_out), len(names)))
@@ -883,7 +940,7 @@ def answer(question):
         except RuntimeError:
             cands = list(by)
     try:
-        src = pick_entity(question, intent.get("kind"), cands, counts_for_model)
+        src = pick_entity(question, intent.get("kind"), cands, counts_for_model, match)
     except RuntimeError:
         src, diag["degraded"] = None, "выбор сущности сделан без модели"
     if src not in by:
