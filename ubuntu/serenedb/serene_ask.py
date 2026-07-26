@@ -46,6 +46,20 @@ ASK_TOKEN = os.environ.get("ASK_TOKEN", "")
 CORPUS, INDEX, TABLES = "search_corpus", "search_idx", "search_tables"
 TOPK = int(os.environ.get("ASK_TOPK", "40"))
 ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
+SLOP_SPAN = int(os.environ.get("ASK_SLOP_SPAN", "8"))   # окно между краями фразы
+
+# Модель ранжирования — штатная функция движка, а не наша сортировка. Выбирается
+# окружением, чтобы сравнивать варианты A/B на одном наборе вопросов, а не спорить.
+#   bm25     — по умолчанию у движка (k1=1.2, b=0.75): штрафует длинные документы;
+#   bm25_b0  — без нормализации по длине: строки документов длиннее строк справочников,
+#              и штраф по длине систематически задвигает документы вниз;
+#   tfidf    — классика без нормализации по длине.
+SCORERS = {
+    "bm25": "bm25(%s.tableoid)",
+    "bm25_b0": "bm25(%s.tableoid, 1.2, 0.0)",
+    "tfidf": "tfidf(%s.tableoid)",
+}
+SCORER = os.environ.get("ASK_SCORER", "bm25")
 
 DS_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com").rstrip("/")
 DS_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
@@ -77,6 +91,15 @@ def psql(sql):
 
 def lit(s):
     return "'" + str(s).replace("'", "''") + "'"
+
+
+def _fmt(v):
+    """Число для человека и для сверки: без хвоста .0 у целых."""
+    try:
+        v = float(v)
+    except (TypeError, ValueError):
+        return "0"
+    return "%d" % v if v == int(v) else "%.2f" % v
 
 
 def ds_chat(messages, temperature=0, max_tokens=900):
@@ -205,10 +228,18 @@ def probe(groups):
     probes, meta = [], []
     for gi, group in enumerate(groups):
         for ai_, alt in enumerate(group):
-            for kind, expr in (
-                    ("exact", "ts_phrase(%s)" % lit(alt)),
-                    ("fuzzy", "ts_levenshtein(%s, 2)" % lit(alt)),
-                    ("part", "ts_like(%s)" % lit("%" + alt.lower() + "%"))):
+            variants = [("exact", "ts_phrase(%s)" % lit(alt))]
+            words = alt.split()
+            if len(words) > 1:
+                # Многословное имя в данных часто разорвано: «Общество с ограниченной
+                # ответственностью "Ромашка"». Точная фраза «Общество Ромашка» даёт 0,
+                # фраза с окном — 9. Окно берём по числу пропущенных слов, а не по
+                # магической константе: сколько слов между краями, столько и допускаем.
+                variants.append(("slop", "ts_phrase(%s, ARRAY[0,%d], %s)"
+                                 % (lit(words[0]), SLOP_SPAN, lit(words[-1]))))
+            variants += [("fuzzy", "ts_levenshtein(%s, 2)" % lit(alt)),
+                         ("part", "ts_like(%s)" % lit("%" + alt.lower() + "%"))]
+            for kind, expr in variants:
                 probes.append("SELECT %d i, count(*) n FROM %s WHERE doc @@ %s"
                               % (len(meta), INDEX, expr))
                 meta.append((gi, kind, expr))
@@ -224,7 +255,7 @@ def probe(groups):
     for i, (gi, kind, expr) in enumerate(meta):
         if counts.get(i, 0) <= 0:
             continue
-        rank = {"exact": 0, "fuzzy": 1, "part": 2}[kind]
+        rank = {"exact": 0, "slop": 1, "fuzzy": 2, "part": 3}[kind]
         cur = per_group.get(gi)
         if cur is None or rank < cur[0]:
             per_group[gi] = (rank, [expr], kind)
@@ -283,7 +314,8 @@ def rows_of(src_table, match, preds, limit):
     src = INDEX if match else CORPUS
     frag = ("ts_highlight(doc, 'MaxWords=14,MaxFragments=2,StartSel=[,StopSel=]')"
             if match else "doc")
-    order = "bm25(%s.tableoid) DESC" % INDEX if match else "amount DESC NULLS LAST"
+    order = ((SCORERS.get(SCORER, SCORERS["bm25"]) % INDEX) + " DESC") if match \
+        else "amount DESC NULLS LAST"
     return psql(
         "SELECT row_key, src_table, coalesce(amount,0), coalesce(doc_date::date::text,''), "
         "       0 AS s, %s FROM %s WHERE %s ORDER BY %s LIMIT %d"
@@ -370,15 +402,33 @@ def aggregate(src_table, match, preds):
         return None
     where = [w for w in ([match] + preds + ["src_table = %s" % lit(src_table)]) if w]
     src = INDEX if match else CORPUS
-    r = psql("SELECT count(*), coalesce(sum(amount),0) FROM %s WHERE %s"
-             % (src, " AND ".join(where)))
+    # Считаем не только итог: у каждой величины будет СВОЯ РОЛЬ, и гейт сверяет
+    # число именно с той ролью, в которой оно названо. Иначе «настоящее число не от
+    # тех строк» проходит: сумма одной строки, выданная за итог, гейту неотличима.
+    r = psql("SELECT count(*), coalesce(sum(amount),0), coalesce(min(amount),0), "
+             "       coalesce(max(amount),0), coalesce(avg(amount),0), "
+             "       coalesce(min(doc_date)::date::text,''), "
+             "       coalesce(max(doc_date)::date::text,'') "
+             "FROM %s WHERE %s" % (src, " AND ".join(where)))
     if not r or not r[0] or r[0][0] == "":
         return None
-    return {"count": int(r[0][0]), "sum": _num(r[0][1]), "src": src_table}
+    row = r[0] + [""] * (7 - len(r[0]))
+    return {"count": int(row[0]), "sum": _num(row[1]), "min": _num(row[2]),
+            "max": _num(row[3]), "avg": round(_num(row[4]), 2),
+            "date_min": row[5], "date_max": row[6], "src": src_table}
 
 
 # ----------------------------------------------------------------- 4. формулировка
 ANSWER_SYS = """You answer an employee's question using ONLY the rows given to you.
+
+Reply with JSON only, no text outside it:
+{"text": "the answer for the user",
+ "claims": {"total": number|null, "count": number|null, "max": number|null, "min": number|null}}
+
+"claims" is where you state figures BY ROLE. If your answer says «total is X», put X in
+"total". If it says «N records», put N in "count". Leave a role null if you do not claim it.
+The figures given to you below are computed over every matching row — copy them, do not
+recompute. Claims are checked against the database and a wrong claim discards your answer.
 
 - Reply in the SAME language the question was asked in.
 - Never invent numbers, dates or names that are not in the rows.
@@ -388,6 +438,19 @@ ANSWER_SYS = """You answer an employee's question using ONLY the rows given to y
   the counterparty buys, and what the company receives is what the counterparty supplied.
   Answer from the perspective the question takes instead of refusing over wording.
 - Be short and businesslike, no preamble. Amounts as digits."""
+
+
+def _split_answer(raw):
+    """Разделить ответ модели на текст и заявленные величины."""
+    m = re.search(r"\{.*\}", raw or "", re.S)
+    if m:
+        try:
+            d = json.loads(m.group(0))
+            if isinstance(d, dict) and "text" in d:
+                return str(d.get("text") or "").strip(), (d.get("claims") or {})
+        except ValueError:
+            pass
+    return (raw or "").strip(), {}
 
 
 def compose(question, rows, agg):
@@ -404,8 +467,16 @@ def compose(question, rows, agg):
     body = "QUESTION: %s\n\nROWS FOUND (%d):\n%s" % (
         question, len(rows), "\n".join("- " + p for p in payload))
     if agg:
-        body += "\n\nTOTAL OVER ALL MATCHING ROWS: count=%d, sum=%s" % (
-            agg["count"], ("%d" % agg["sum"]) if agg["sum"] == int(agg["sum"]) else "%.2f" % agg["sum"])
+        body += "\n\nCOMPUTED OVER ALL MATCHING ROWS (use these exact figures, each in its own role):"
+        body += "\n  count (number of records) = %d" % agg["count"]
+        body += "\n  sum (TOTAL amount)        = %s" % _fmt(agg["sum"])
+        body += "\n  max (largest single)      = %s" % _fmt(agg["max"])
+        body += "\n  min (smallest single)     = %s" % _fmt(agg["min"])
+        body += "\n  avg (average)             = %s" % _fmt(agg["avg"])
+        if agg.get("date_min"):
+            body += "\n  period                    = %s .. %s" % (agg["date_min"], agg["date_max"])
+        body += "%s" % (
+            "")
     return ds_chat([{"role": "system", "content": ANSWER_SYS},
                     {"role": "user", "content": body}], max_tokens=800)
 
@@ -497,6 +568,36 @@ def _norm_numbers(text):
     for r in _tokens(text):
         out |= r
     return out
+
+
+ROLE_TOL = 0.01          # копеечная погрешность форматирования
+
+
+def check_claims(claims, agg):
+    """Сверить ЗАЯВЛЕННЫЕ моделью величины с посчитанными в базе — по ролям.
+
+    Это то, чего не умеет проверка «число встречается в данных»: сумма одной строки,
+    названная итогом, ей неотличима от правды. Живой случай: три реализации на
+    1 236 800 были поданы с итогом 925 000 — настоящим числом, но из другой роли.
+    Теперь модель обязана назвать роль явно, а роль сверяется с базой.
+    """
+    if not agg or not isinstance(claims, dict):
+        return True, []
+    bad = []
+    for role in ("total", "count", "max", "min"):
+        v = claims.get(role)
+        if v is None:
+            continue
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            bad.append("%s=?" % role)
+            continue
+        real = {"total": agg.get("sum"), "count": agg.get("count"),
+                "max": agg.get("max"), "min": agg.get("min")}[role]
+        if real is None or abs(v - float(real)) > ROLE_TOL:
+            bad.append("%s: заявлено %s, в базе %s" % (role, _fmt(v), _fmt(real)))
+    return (not bad), bad
 
 
 def gate(answer, rows, agg):
@@ -593,8 +694,12 @@ def answer(question):
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     agg = aggregate(src, match, preds)
-    text = compose(question, rows, agg)
-    ok, bad = gate(text, rows, agg)
+    raw = compose(question, rows, agg)
+    text, claims = _split_answer(raw)
+    ok_roles, bad_roles = check_claims(claims, agg)
+    ok_nums, bad_nums = gate(text, rows, agg)
+    ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
+    diag["claims"] = claims or None
     if not ok:
         sys.stderr.write("ask GATE: числа вне данных: %s\n" % bad[:6])
         if agg:
