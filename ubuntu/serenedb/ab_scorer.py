@@ -121,6 +121,14 @@ def main():
     for sc, (hits, avg, _r) in table.items():
         print("  %-9s верных %d/%d  средняя %.2f с%s"
               % (sc, hits, len(gold), avg, "   <= лучший" if sc == best[0] else ""))
+    # Отметка о прогоне: по ней хук перед выкатом понимает, был ли замер ПОСЛЕ
+    # последней правки исходников. Ставится только реальным прогоном, не руками.
+    try:
+        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        open(os.path.join(root, ".claude", ".golden-last-run"), "w").write(
+            "%s %d/%d\n" % (best[0], best[1][0], len(gold)))
+    except Exception:                            # noqa: BLE001
+        pass
     return best[0]
 
 

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-diff.sh\"",
+            "timeout": 20,
+            "statusMessage": "Проверка диффа на подгонку под базу"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-golden.sh\"",
+            "timeout": 20,
+            "statusMessage": "Проверка: замер сделан до выката"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/count-edits.sh\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

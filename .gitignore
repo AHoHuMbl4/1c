@@ -23,3 +23,6 @@ __pycache__/
 
 # Локальная сборка Windows-инструмента (готовый бинарь лежит в dist/)
 windows/odata-setup/build/
+
+# Отметка о прогоне золотого набора — локальная, у каждого своя
+.claude/.golden-last-run
