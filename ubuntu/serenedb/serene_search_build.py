@@ -1,0 +1,437 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""Сборка поискового корпуса и гибридного индекса над витриной SereneDB.
+
+Зачем: чтобы отвечать на вопрос, система должна НАЙТИ нужные строки в базе, а не грузить
+схему в модель (см. docs/TARGET_ARCHITECTURE.md). Индекс — один на всю витрину:
+текст (BM25) + вектор (смысл) + числовые/датовые колонки в INCLUDE для условий и агрегатов.
+
+Коробочность: ни одного имени сущности, колонки или ключа в коде. Всё определяется
+ПО СТРУКТУРЕ значений:
+  * GUID  -> ссылка, резолвится в наименование по общей карте;
+  * base64/URL -> машинный токен, в поиск не идёт;
+  * колонка-наименование -> самая «человекочитаемая» по форме значений (слова x доля букв),
+    поэтому наименование выигрывает у кода (00-000006) без единого имени в коде;
+  * число для агрегатов -> колонка с наибольшим максимумом;
+  * дата -> первая временная колонка.
+
+Инкремент: эмбеддинг считается ТОЛЬКО для новых и изменившихся строк (сверка по hash текста).
+Это делает такт обновления минутами, а не 8 минутами полного пересчёта.
+
+Запуск: под RW (postgres). Env — /etc/1c-serene-sync.env + /etc/1c-mcp-reports.env.
+"""
+import hashlib
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+
+DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
+EMBED_DIM = int(os.environ.get("EMBED_DIM", "1536"))
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-v4")
+BATCH = 10          # лимит DashScope на батч
+INS = 20            # строк на INSERT (вектора длинные — argv не резиновый)
+CORPUS = "search_corpus"
+INDEX = "search_idx"
+DICT = "search_dict"
+TABLES = "search_tables"
+
+GUID = re.compile(r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$")
+NULL_GUID = "00000000-0000-0000-0000-000000000000"
+B64 = re.compile(r"^[A-Za-z0-9+/]{8,}={0,2}$")
+URLISH = re.compile(r"^(https?://|/)")
+
+
+def env_from(path):
+    try:
+        with open(path, encoding="utf-8") as fh:
+            for line in fh:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    k, v = line.split("=", 1)
+                    os.environ.setdefault(k, v)
+    except IOError:
+        pass
+
+
+for _f in ("/etc/1c-serene-sync.env", "/etc/1c-mcp-reports.env"):
+    env_from(_f)
+
+
+def machine_token(v):
+    """Значение машинное по ФОРМЕ: версия записи (base64), ссылка, hex-идентификатор."""
+    if not v:
+        return False
+    if URLISH.match(v):
+        return True
+    if len(v) >= 8 and " " not in v and B64.match(v) and (
+            v.endswith("=") or (any(c.isdigit() for c in v) and any(c.isupper() for c in v)
+                                and not v.isalpha())):
+        return True
+    return False
+
+
+def odata_types():
+    """Объявленные типы свойств из `$metadata` самой базы: {сущность_lower: {свойство: Edm-тип}}.
+
+    Это единственный правильный источник: 1С сама говорит, что `ИНН` и `КПП` — `Edm.String`
+    (код, а не число), а `СуммаДокумента` — `Edm.Double` (деньги). Угадывать по форме
+    значений нельзя: витрина строится через CSV, а сниффер типов превращает ИНН в число,
+    после чего «сумма документа» находится в паспортных данных контрагента.
+
+    Работает для любой конфигурации и языка — имена свойств не важны, важен объявленный тип.
+    Если метаданные недоступны — возвращаем пусто, вызывающий переходит на разбор по форме.
+    """
+    base = os.environ.get("ETL_ODATA_BASE", "http://127.0.0.1:6011").rstrip("/")
+    req = urllib.request.Request(base + "/$metadata")
+    tok = os.environ.get("ODG_GATEWAY_TOKEN", "")
+    if tok:
+        req.add_header("Authorization", "Bearer " + tok)
+    try:
+        with urllib.request.urlopen(req, timeout=180) as r:
+            xml = r.read().decode("utf-8", "replace")
+    except Exception as e:                      # noqa: BLE001
+        sys.stderr.write("metadata недоступны (%s) — типы будут определяться по форме\n" % e)
+        return {}
+    out = {}
+    for m in re.finditer(r'<EntityType\s+Name="([^"]+)"(.*?)</EntityType>', xml, re.S):
+        name, body = m.group(1), m.group(2)
+        ENTITY_NAMES[name.lower()] = name      # оригинальный регистр нужен для подписей
+        props = {}
+        for p in re.finditer(r'<Property\s+Name="([^"]+)"\s+Type="([^"]+)"', body):
+            props[p.group(1)] = p.group(2)
+        if props:
+            out[name.lower()] = props
+    return out
+
+
+ENTITY_NAMES = {}          # сущность_lower -> оригинальное имя из $metadata
+
+NUMERIC_EDM = ("Edm.Double", "Edm.Decimal", "Edm.Int16", "Edm.Int32", "Edm.Int64", "Edm.Byte")
+
+
+def q(sql):
+    p = subprocess.run(["psql", DSN, "-tA", "-F", "\x1f", "-c", sql],
+                       capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError("SQL: %s\n%s" % (sql[:200], (p.stderr or "")[:400]))
+    return [l.split("\x1f") for l in p.stdout.split("\n") if l != ""]
+
+
+def ddl(sql):
+    """DDL/INSERT через stdin: длинные вектора не помещаются в argv."""
+    p = subprocess.run(["psql", DSN, "-v", "ON_ERROR_STOP=1", "-f", "-"],
+                       input=sql, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError("DDL: %s\n%s" % (sql[:200], (p.stderr or "")[:400]))
+
+
+def embed(texts):
+    url = os.environ.get("ALIBABA_EMBED_URL", "").rstrip("/") + "/embeddings"
+    body = json.dumps({"model": EMBED_MODEL, "dimensions": EMBED_DIM, "input": texts}).encode()
+    req = urllib.request.Request(url, data=body, method="POST")
+    req.add_header("Authorization", "Bearer " + os.environ.get("ALIBABA_API_KEY", ""))
+    req.add_header("Content-Type", "application/json")
+    last = None
+    for attempt in range(4):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return [d["embedding"] for d in json.loads(r.read())["data"]]
+        except Exception as e:          # noqa: BLE001 — сеть/квоты, ретраим
+            last = e
+            time.sleep(1.5 * (attempt + 1))
+    raise last
+
+
+def lit(s):
+    return "'" + s.replace("'", "''") + "'"
+
+
+def build_corpus():
+    """Собрать тексты строк витрины. Возвращает список (src_table, row_key, doc, amount, date)."""
+    tables = [r[0] for r in q(
+        "SELECT table_name FROM duckdb_tables() WHERE database_name='postgres' "
+        "  AND table_name NOT LIKE 'duckdb%%' AND table_name NOT LIKE '%s%%' "
+        "  AND table_name<>'resolver_index'" % CORPUS.split("_")[0])]
+    live = []
+    for t in tables:
+        n = int(q('SELECT count(*) FROM "%s"' % t)[0][0])
+        if n:
+            live.append((t, n))
+
+    cols = {t: q("SELECT column_name, data_type FROM duckdb_columns() "
+                 "WHERE table_name=%s ORDER BY column_index" % lit(t)) for t, _ in live}
+
+    # Источник — только бизнес-данные. Таблицы с колонкой-вектором (наш же корпус,
+    # резолвер, отладочные копии) исключаем ПО СТРУКТУРЕ, а не по имени: иначе
+    # индекс начинает индексировать сам себя.
+    live = [(t, n) for t, n in live
+            if not any("[" in dt for _c, dt in cols[t])]
+    cols = {t: cols[t] for t, _ in live}
+
+    meta = odata_types()
+    if meta:
+        print("типы взяты из $metadata базы: %d сущностей" % len(meta))
+
+    def split_cols(t):
+        """Разделить колонки таблицы на ССЫЛКИ и ТЕКСТ по объявленному типу.
+
+        Ключ строки и ссылки на другие объекты — `Edm.Guid`; свободный текст — `Edm.String`.
+        Без этого разделения `Ref_Key` пропадает из обработки (он не String), и все строки
+        таблицы получают пустой ключ — корпус схлопывается.
+        """
+        declared = meta.get(t.lower(), {})
+        if declared:
+            guid_cols = [c for c, _dt in cols[t] if declared.get(c) == "Edm.Guid"]
+            txt = [c for c, _dt in cols[t] if declared.get(c) == "Edm.String"]
+        else:
+            guid_cols, txt = [], []
+            for c, dt in cols[t]:
+                if "VARCHAR" not in dt:
+                    continue
+                smp = [r[0] for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL LIMIT 5'
+                                       % (c, t, c)) if r and r[0]]
+                (guid_cols if smp and all(GUID.match(v) for v in smp) else txt).append(c)
+        return declared, guid_cols, txt
+
+    # --- карта ссылок: GUID -> человекочитаемое наименование
+    refmap = {}
+    for t, n in live:
+        _decl, gcols, ccols = split_cols(t)
+        key_col, scored = (gcols[0] if gcols else None), []
+        for c in ccols:
+            vals = [r[0] for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL LIMIT 20'
+                                    % (c, t, c)) if r and r[0]]
+            if not vals:
+                continue
+            if max(len(v) for v in vals) <= 2 or any(machine_token(v) for v in vals):
+                continue
+            if int(q('SELECT count(DISTINCT "%s") FROM "%s"' % (c, t))[0][0]) <= n * 0.5:
+                continue
+            words = sum(len(v.split()) for v in vals) / len(vals)
+            alpha = sum(sum(ch.isalpha() for ch in v) / max(len(v), 1) for v in vals) / len(vals)
+            scored.append((words * alpha, c))
+        name_cols = [c for _s, c in sorted(scored, reverse=True)[:2]]
+        if key_col and name_cols:
+            sel = ", ".join('"%s"' % c for c in name_cols)
+            for row in q('SELECT "%s", %s FROM "%s" WHERE "%s" IS NOT NULL'
+                         % (key_col, sel, t, key_col)):
+                g, names = row[0], [x for x in row[1:] if x]
+                if not g or g == NULL_GUID or not names:
+                    continue
+                uniq = []
+                for nm in names:               # краткое и полное; дубли не плодим
+                    if nm not in uniq and not any(nm in u for u in uniq):
+                        uniq.append(nm)
+                refmap[g] = " / ".join(uniq)
+
+    # --- тексты строк
+    corpus = []
+    for t, n in live:
+        tcols = cols[t]
+        declared, guid_cols, _txt = split_cols(t)
+
+        # ЧИСЛО ДЛЯ АГРЕГАТОВ. Правильный источник — объявленный тип: 1С сама говорит,
+        # что ИНН/КПП/счёт это строки-коды, а сумма документа — Edm.Double. Витрина
+        # приезжает через CSV, и её сниффер типов этого не знает: ИНН становится BIGINT.
+        # Поэтому доверяем метаданным, а форму значений используем только как запасной
+        # вариант, когда метаданные недоступны.
+        if declared:
+            num_cols = [c for c, _dt in tcols if declared.get(c) in NUMERIC_EDM]
+        else:
+            num_cols = [c for c, dt in tcols
+                        if dt in ("BIGINT", "DOUBLE", "DECIMAL", "INTEGER", "HUGEINT")]
+        amount_col, best = None, -1
+        for c in num_cols:
+            vals = []
+            for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL AND "%s"<>0 LIMIT 50'
+                       % (c, t, c, c)):
+                try:
+                    vals.append(abs(float(r[0])))
+                except (TypeError, ValueError, IndexError):
+                    pass
+            if not vals:
+                continue
+            if not declared and len({len("%d" % int(v)) for v in vals}) == 1:
+                continue          # запасной разбор: постоянная длина в цифрах = код
+            mx = max(vals)
+            if mx > best:
+                best, amount_col = mx, c
+        if best <= 1:
+            amount_col = None
+        if declared:
+            dcols = [c for c, _dt in tcols if declared.get(c) == "Edm.DateTime"]
+            date_cols = dcols or [c for c, dt in tcols if "TIMESTAMP" in dt or dt == "DATE"]
+        else:
+            date_cols = [c for c, dt in tcols if "TIMESTAMP" in dt or dt == "DATE"]
+        date_col = date_cols[0] if date_cols else None
+
+        txt_cols = []
+        for c, dt in tcols:
+            # В поиск идёт всё, что база объявила строкой (коды, номера, названия) —
+            # даже если витрина сохранила это числом.
+            if declared:
+                if declared.get(c) != "Edm.String":
+                    continue
+            elif "VARCHAR" not in dt:
+                continue
+            if int(q('SELECT count(DISTINCT "%s") FROM "%s"' % (c, t))[0][0]) < 2 and n != 1:
+                continue
+            smp = [r[0] for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL LIMIT 20'
+                                   % (c, t, c)) if r and r[0]]
+            if smp and sum(1 for v in smp if machine_token(v)) > len(smp) * 0.5:
+                continue
+            txt_cols.append(c)
+
+        # Колонки-ссылки читаем отдельно от текстовых: первая — собственный ключ строки,
+        # остальные резолвятся в наименования.
+        all_cols = guid_cols + txt_cols
+        extra = ([('"%s"' % amount_col)] if amount_col else []) + \
+                ([('"%s"' % date_col)] if date_col else [])
+        sel = ", ".join('"%s"' % c for c in all_cols) or "NULL"
+        rows = q("SELECT %s%s FROM \"%s\"" % (sel, (", " + ", ".join(extra)) if extra else "", t))
+
+        label = t.split("_", 1)[1] if "_" in t else t
+        for r in rows:
+            tv = r[:len(all_cols)] if all_cols else []
+            rest = r[len(all_cols):]
+            amt = dt_ = None
+            i = 0
+            if amount_col:
+                try:
+                    amt = float(rest[i])
+                except (ValueError, IndexError, TypeError):
+                    amt = None
+                i += 1
+            if date_col and i < len(rest):
+                dt_ = rest[i] or None
+
+            parts, key = [label], None
+            for c, v in zip(all_cols, tv):
+                if not v:
+                    continue
+                if c in guid_cols or GUID.match(v):
+                    if key is None:
+                        key = v
+                        continue                    # собственный ключ в текст не пишем
+                    nm = refmap.get(v)
+                    if nm:
+                        parts.append("%s: %s" % (c.replace("_Key", ""), nm))
+                    continue
+                if machine_token(v):
+                    continue
+                parts.append("%s: %s" % (c, v[:200]))
+            # Подписи берём ИЗ БАЗЫ (имя колонки), а не придумываем слова: в англоязычной
+            # или иной конфигурации русские «сумма»/«дата» были бы чужеродны.
+            if amt is not None:
+                parts.append("%s: %s" % (amount_col,
+                                         "%d" % amt if amt == int(amt) else "%.2f" % amt))
+            if dt_:
+                parts.append("%s: %s" % (date_col, dt_[:10]))
+            corpus.append((t, key or "", " | ".join(parts), amt, dt_))
+    return corpus, len(live), len(refmap)
+
+
+def main():
+    t0 = time.time()
+    ddl("CREATE TABLE IF NOT EXISTS %s (src_table TEXT, row_key TEXT, doc TEXT, doc_hash TEXT, "
+        "amount DOUBLE, doc_date TIMESTAMP, emb FLOAT[%d]);" % (CORPUS, EMBED_DIM))
+
+    corpus, n_tables, n_ref = build_corpus()
+    fresh = {}
+    for src, key, doc, amt, dtv in corpus:
+        h = hashlib.sha1(doc.encode("utf-8")).hexdigest()
+        fresh[(src, key)] = (doc, h, amt, dtv)
+
+    have = {}
+    for src, key, h in q("SELECT src_table, row_key, doc_hash FROM %s" % CORPUS):
+        have[(src, key)] = h
+
+    todo = [k for k, v in fresh.items() if have.get(k) != v[1]]
+    gone = [k for k in have if k not in fresh]
+    print("витрина: %d таблиц, %d строк | ссылок: %d | новых/изменённых: %d | удалено: %d (%.1f с)"
+          % (n_tables, len(corpus), n_ref, len(todo), len(gone), time.time() - t0))
+
+    if gone:
+        conds = " OR ".join("(src_table=%s AND row_key=%s)" % (lit(s), lit(k)) for s, k in gone)
+        ddl("DELETE FROM %s WHERE %s;" % (CORPUS, conds))
+
+    t1 = time.time()
+    done, buf = 0, []
+    for i in range(0, len(todo), BATCH):
+        chunk = todo[i:i + BATCH]
+        vecs = embed([fresh[k][0] for k in chunk])
+        for (src, key), v in zip(chunk, vecs):
+            doc, h, amt, dtv = fresh[(src, key)]
+            buf.append("(%s,%s,%s,%s,%s,%s,%s::FLOAT[%d])" % (
+                lit(src), lit(key), lit(doc), lit(h),
+                "NULL" if amt is None else repr(amt),
+                "NULL" if not dtv else lit(dtv),
+                "'[" + ",".join("%.6f" % x for x in v) + "]'", EMBED_DIM))
+        done += len(chunk)
+        if len(buf) >= INS or done == len(todo):
+            conds = " OR ".join("(src_table=%s AND row_key=%s)" % (lit(s), lit(k))
+                                for s, k in todo[max(0, done - len(buf)):done])
+            if conds:
+                ddl("DELETE FROM %s WHERE %s;" % (CORPUS, conds))
+            ddl("INSERT INTO %s VALUES %s;" % (CORPUS, ",".join(buf)))
+            buf = []
+    embed_sec = time.time() - t1
+
+    try:
+        ddl("CREATE TEXT SEARCH DICTIONARY %s (template='text', locale='ru_RU.UTF-8', "
+            "case='lower', stemming=false, accent=false, frequency=true, position=true, "
+            "norm=true);" % DICT)
+    except RuntimeError:
+        pass                                   # словарь уже создан прошлым прогоном
+
+    t2 = time.time()
+    ddl("DROP INDEX IF EXISTS %s;" % INDEX)
+    # ВАЖНО: индекс — снимок. Пересобираем каждый прогон; на наших объёмах это <1 с.
+    ddl("CREATE INDEX %s ON %s USING inverted(doc %s, emb ivf (metric='cosine')) "
+        "INCLUDE (src_table, row_key, amount, doc_date);" % (INDEX, CORPUS, DICT))
+    idx_sec = time.time() - t2
+
+    # --- профиль таблиц: по нему выбирается, О ЧЁМ вопрос
+    odata_types()                       # заполняет ENTITY_NAMES оригинальными именами
+    meta_names = dict(ENTITY_NAMES)
+    ddl("DROP TABLE IF EXISTS %s;" % TABLES)
+    ddl("CREATE TABLE %s (src_table TEXT, label TEXT, emb FLOAT[%d]);" % (TABLES, EMBED_DIM))
+    srcs = [r[0] for r in q("SELECT DISTINCT src_table FROM %s" % CORPUS)]
+    labels = []
+    for t in srcs:
+        raw = t.split("_", 1)[1] if "_" in t else t
+        # «ПоступлениеТоваровУслуг» -> «Поступление Товаров Услуг»: слитое имя
+        # эмбеддится плохо, разделённое — как обычная фраза. Работает и для латиницы.
+        orig = meta_names.get(t.lower(), raw)
+        orig = orig.split("_", 1)[1] if "_" in orig else orig
+        labels.append((t, re.sub(r"(?<=[a-zа-яё])(?=[A-ZА-ЯЁ])", " ", orig)))
+    for i in range(0, len(labels), BATCH):
+        part = labels[i:i + BATCH]
+        vecs = embed([lb for _t, lb in part])
+        vals = ",".join("(%s,%s,%s::FLOAT[%d])" % (
+            lit(t), lit(lb), "'[" + ",".join("%.6f" % x for x in v) + "]'", EMBED_DIM)
+            for (t, lb), v in zip(part, vecs))
+        ddl("INSERT INTO %s VALUES %s;" % (TABLES, vals))
+    print("профиль таблиц: %d" % len(labels))
+
+    # Читающая роль сервиса ответов должна видеть корпус и индекс. Делаем это здесь,
+    # чтобы на чистой установке ничего не нужно было раздавать руками.
+    for role in [r[0] for r in q("SELECT usename FROM pg_user WHERE usename<>'postgres'")]:
+        try:
+            ddl("GRANT SELECT ON %s TO %s;" % (CORPUS, role))
+            ddl("GRANT SELECT ON %s TO %s;" % (TABLES, role))
+        except RuntimeError:
+            pass
+
+    total = int(q("SELECT count(*) FROM %s" % CORPUS)[0][0])
+    print(json.dumps({"rows": total, "embedded": len(todo), "deleted": len(gone),
+                      "embed_sec": round(embed_sec, 1), "index_sec": round(idx_sec, 2),
+                      "total_sec": round(time.time() - t0, 1)}, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    sys.exit(main())

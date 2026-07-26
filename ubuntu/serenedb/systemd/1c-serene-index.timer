@@ -1,0 +1,12 @@
+[Unit]
+Description=1c-serene-index timer — поисковый индекс следом за синком витрины
+
+[Timer]
+# Пока витрина обновляется ночью (1c-serene-sync в 03:40) — индекс сразу за ней.
+# При переходе на дельта-синк раз в 10 минут сюда встанет OnUnitActiveSec=10min.
+OnCalendar=*-*-* 03:55:00
+Persistent=true
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

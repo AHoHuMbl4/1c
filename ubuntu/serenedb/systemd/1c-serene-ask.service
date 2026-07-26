@@ -1,0 +1,19 @@
+[Unit]
+# Отвечающий сервис «второго мозга»: ищет в SereneDB, схему в модель не грузит.
+# Контракт /ask совпадает с braine, поэтому OpenClaw переключается одной строкой
+# BRAINE_URL в /etc/1c-mcp-braine.env — и так же откатывается обратно.
+Description=1c-serene-ask — ответы на вопросы поиском в витрине SereneDB
+After=network.target serenedb.service
+Wants=serenedb.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/1c-mcp-reports
+EnvironmentFile=/etc/1c-mcp-reports.env
+EnvironmentFile=-/etc/1c-serene-ask.env
+ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_ask.py
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

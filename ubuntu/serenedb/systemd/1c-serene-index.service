@@ -1,0 +1,13 @@
+[Unit]
+# Пересборка поискового индекса над витриной. Инкрементальная: эмбеддинг считается
+# только для новых и изменившихся строк, поэтому такт — минуты, а не полный пересчёт.
+Description=1c-serene-index — пересборка гибридного поискового индекса (BM25 + вектор)
+After=network.target serenedb.service
+Wants=serenedb.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/opt/1c-mcp-reports
+EnvironmentFile=/etc/1c-serene-sync.env
+EnvironmentFile=-/etc/1c-mcp-reports.env
+ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_search_build.py
