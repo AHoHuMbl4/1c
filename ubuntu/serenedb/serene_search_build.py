@@ -152,7 +152,6 @@ STANDARD_DATE_PROPS = ("Date",)
 DICT_LOCALE = os.environ.get("BUILD_DICT_LOCALE", "ru_RU.UTF-8")
 
 SAMPLE = int(os.environ.get("BUILD_SAMPLE", "20"))   # сколько значений смотреть при разборе
-NAME_COLS = int(os.environ.get("BUILD_NAME_COLS", "2"))  # сколько наименований склеивать
 
 NUMERIC_EDM = ("Edm.Double", "Edm.Decimal", "Edm.Int16", "Edm.Int32", "Edm.Int64", "Edm.Byte")
 
@@ -439,8 +438,15 @@ def iter_corpus():
                 alpha = sum(sum(ch.isalpha() for ch in v) / max(len(v), 1) for v in vals) / len(vals)
                 uniq = prof["distinct"].get(c, 0) / max(n, 1)
                 scored.append((words * alpha * uniq, c))
-            extra = [c for _s, c in sorted(scored, reverse=True)]
-            name_cols += extra[:max(0, NAME_COLS + 1 - len(name_cols))]
+            # Берём все кандидаты, чей ранг не оторван от лучшего: отсечка «первые N»
+            # означала бы «у наших справочников наименование стоит N-м». Там, где
+            # значимых текстовых реквизитов больше (ФИО раздельно, название на двух
+            # языках), фиксированное N молча выбрасывает часть — и поиск по ней не
+            # работает при полностью исправной базе.
+            ranked = sorted(scored, reverse=True)
+            if ranked:
+                top = ranked[0][0]
+                name_cols += [c for sc, c in ranked if sc > 0 and sc >= top / 2]
         if key_col and name_cols:
             sel = ", ".join(clip(c) for c in name_cols)
             for row in q('SELECT "%s", %s FROM "%s" WHERE "%s" IS NOT NULL'
@@ -476,39 +482,20 @@ def iter_corpus():
         # становилась колонка чужой сущности. Это не отказ и не падение, а тихо
         # неверные агрегаты.
         num_cols = num_cols_of(tcols, declared)
-        picked_money = money_column(split_camel(ENTITY_NAMES.get(t.lower(), t)),
-                                    num_cols) if declared else None
+        # Колонку для агрегатов выбирает модель по ИМЕНАМ — и когда метаданные есть, и
+        # когда их нет: имена колонок доступны всегда, метаданные ей не нужны. Раньше
+        # без метаданных работал разбор «по форме значений» (самое большое число =
+        # деньги, постоянная длина в цифрах = код, максимум <= 1 = флаг). Это догадки о
+        # ФОРМЕ, а не о СМЫСЛЕ: на нашей же базе так выбирался служебный реквизит
+        # упорядочивания и процент комиссии, а на рознице с суммами одного порядка
+        # терялись настоящие деньги.
+        picked_money = money_column(split_camel(ENTITY_NAMES.get(t.lower(), t)), num_cols)
         amount_col = picked_money or None
-        # Запасной разбор по форме — ТОЛЬКО когда метаданных нет вовсе. Если метаданные
-        # есть, а модель недоступна, лучше остаться БЕЗ суммы, чем подставить «самое
-        # большое число»: на нашей же базе это правило выбирало служебный реквизит
-        # упорядочивания и процент комиссии. Неверное число хуже отсутствующего —
-        # отсутствие видно, неверное уходит клиенту как факт.
-        fallback = (picked_money is None) and not declared
-        if picked_money is None and declared:
-            sys.stderr.write("%s: денежная колонка не определена (модель недоступна) — "
-                             "агрегаты по этой сущности считаться не будут\n" % t)
-        best = 1e18 if amount_col else -1
-        for c in (num_cols if fallback else []):
-            vals = []
-            for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL AND "%s"<>0 LIMIT 50'
-                       % (c, t, c, c)):
-                try:
-                    vals.append(abs(float(r[0])))
-                except (TypeError, ValueError, IndexError):
-                    pass
-            if not vals:
-                continue
-            if not declared and len({len("%d" % int(v)) for v in vals}) == 1:
-                continue          # запасной разбор: постоянная длина в цифрах = код
-            mx = max(vals)
-            if mx > best:
-                best, amount_col = mx, c
-        if not declared and best <= 1:
-            # Запасной разбор: без типов колонка 0/1 неотличима от флага. При типах
-            # из метаданных отсечка не нужна и была бы вредна — в базе с мелкими
-            # суммами (копейки, граммы) она выбросила бы настоящие деньги.
-            amount_col = None
+        if picked_money is None:
+            # Модель недоступна — остаёмся БЕЗ суммы и говорим об этом. Неверное число
+            # хуже отсутствующего: отсутствие видно, неверное уходит клиенту как факт.
+            sys.stderr.write("%s: колонка для агрегатов не определена (модель недоступна) "
+                             "— агрегаты по этой сущности считаться не будут\n" % t)
         if declared:
             dcols = [c for c, _dt in tcols if declared.get(c) == "Edm.DateTime"]
             # У документа дата документа объявлена платформой отдельным свойством.
@@ -519,7 +506,13 @@ def iter_corpus():
                                               if "TIMESTAMP" in dt or dt == "DATE"]
         else:
             date_cols = [c for c, dt in tcols if "TIMESTAMP" in dt or dt == "DATE"]
-        date_col = date_cols[0] if date_cols else None
+        # Одна дата — она и есть дата записи. Несколько (ДатаНачала, ДатаОкончания,
+        # ДатаДокумента) — угадывать нельзя: «первая по порядку колонок» уводит фильтр
+        # «за декабрь» на дату начала действия договора. Лучше не иметь фильтра по
+        # дате, чем иметь неверный: отсутствие видно в ответе, подмена — нет.
+        date_col = date_cols[0] if len(date_cols) == 1 else None
+        if len(date_cols) > 1:
+            date_col = std_date[0] if std_date else None
 
         txt_cols = []
         for c, dt in tcols:
@@ -530,8 +523,11 @@ def iter_corpus():
                     continue
             elif "VARCHAR" not in dt:
                 continue
-            if prof["distinct"].get(c, 0) < 2 and n != 1:
-                continue
+            # Раньше здесь выбрасывалась колонка с единственным различным значением.
+            # У маленького клиента (один склад, одна организация, один вид договора)
+            # это ровно те реквизиты, которыми он оперирует в вопросах: «отгрузки со
+            # склада Основной» не находилось, потому что склад один. Константная
+            # колонка ранжированию не мешает — она просто ничего не различает.
             smp = prof["samples"].get(c) or []
             if smp and sum(1 for v in smp if machine_token(v)) > len(smp) * 0.5:
                 continue

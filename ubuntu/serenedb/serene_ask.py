@@ -46,13 +46,6 @@ ASK_TOKEN = os.environ.get("ASK_TOKEN", "")
 CORPUS, INDEX, TABLES = "search_corpus", "search_idx", "search_tables"
 TOPK = int(os.environ.get("ASK_TOPK", "40"))
 ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
-SLOP_SPAN = int(os.environ.get("ASK_SLOP_SPAN", "8"))   # окно между краями фразы
-# Сколько сущностей показывать модели при выборе. Список длиной во всю витрину
-# (227 на нашей базе) модель не разбирает — проверено падением золотого набора с 8/8
-# до 2/8. Берём найденные по совпадениям плюс ближайшие по названию.
-CAND_MATCHED = int(os.environ.get("ASK_CAND_MATCHED", "12"))
-CAND_NEAR = int(os.environ.get("ASK_CAND_NEAR", "8"))
-CAND_SEMANTIC = int(os.environ.get("ASK_CAND_SEMANTIC", "6"))
 
 # Модель ранжирования — штатная функция движка, а не наша сортировка. Выбирается
 # окружением, чтобы сравнивать варианты A/B на одном наборе вопросов, а не спорить.
@@ -239,11 +232,17 @@ def probe(groups):
             if len(words) > 1:
                 # Многословное имя в данных часто разорвано: «Общество с ограниченной
                 # ответственностью "Ромашка"». Точная фраза «Общество Ромашка» даёт 0,
-                # фраза с окном — 9. Окно берём по числу пропущенных слов, а не по
-                # магической константе: сколько слов между краями, столько и допускаем.
+                # фраза с окном — 9. Окно берём по самой фразе: сколько слов между
+                # краями, столько и допускаем. Константа здесь означала бы «наши имена
+                # такой длины» — на языке с длинными оборотами фраза перестаёт находиться.
                 variants.append(("slop", "ts_phrase(%s, ARRAY[0,%d], %s)"
-                                 % (lit(words[0]), SLOP_SPAN, lit(words[-1]))))
-            variants += [("fuzzy", "ts_levenshtein(%s, 2)" % lit(alt)),
+                                 % (lit(words[0]), len(words) - 1, lit(words[-1]))))
+            # Расстояние опечатки — от длины слова, а не фиксированное. При 2 на слове из
+            # трёх букв совпадает половина корпуса: замерено, 'tax' -> 2978 строк из
+            # 97 085 при нуле точных. На кириллице не проявлялось только потому, что
+            # значимые слова длинные.
+            variants += [("fuzzy", "ts_levenshtein(%s, %d)"
+                          % (lit(alt), min(2, len(alt) // 4))),
                          ("part", "ts_like(%s)" % lit("%" + alt.lower() + "%"))]
             for kind, expr in variants:
                 probes.append("SELECT %d i, count(*) n FROM %s WHERE doc @@ %s"
@@ -334,36 +333,9 @@ You get the question and a numbered list of record types that exist in this data
 Answer with the NUMBER only — the type whose records would ANSWER the question.
 Some entries show how many records already match the question; prefer a type that
 actually has matches over a same-sounding one that has none.
-Entries marked as line items are subordinate rows of another record type: a question
-about totals, sums or "how much" belongs to the PARENT, not to the line items.
-The list is ordered by how well each type matches WHAT the question is about — that
-matters more than the number of matching records. A high count only means the value
-appears there; it does not make it the right kind of record.
 If none of them fits, answer 0.
 Judge by meaning, across languages and wording: a question about sales belongs to the
-type that records sales even if the words differ.
-Records are kept from the company's own point of view, so a counterparty's purchase is
-the company's sale, and a counterparty's sale is the company's receipt."""
-
-
-def subordinate_of(names):
-    """Какие сущности ПОДЧИНЕНЫ другим: {имя: имя-родителя}.
-
-    Табличная часть документа объявлена отдельной сущностью, и её имя — имя родителя
-    плюс суффикс. Признак структурный, из самого перечня сущностей: ни одного имени в
-    коде. Это важно для выбора: в строках документа контрагент встречается чаще, чем в
-    шапке, и «сколько всего продали» уходило в табличную часть — замерено, золотой
-    набор падал с 8/8 до 2/8 на полной базе.
-    """
-    out, s = {}, set(names)
-    for n in names:
-        parts = n.split("_")
-        for i in range(len(parts) - 1, 1, -1):
-            head = "_".join(parts[:i])
-            if head in s and head != n:
-                out[n] = head
-                break
-    return out
+type that records sales even if the words differ."""
 
 
 def pick_entity(question, kind, cands, counts=None):
@@ -393,14 +365,9 @@ def pick_entity(question, kind, cands, counts=None):
     # именно они снимают неоднозначность: справочник «Банки» на 1 запись и
     # «Классификатор Банков» на 680 по названию неразличимы, по числу — очевидны.
     counts = counts or {}
-    sub = subordinate_of([t for t, _nm in names])
-    label_by = {t: nm for t, nm in names}
     listing = "\n".join(
-        "%d. %s%s%s" % (
-            i + 1, nm,
-            "" if t not in counts else " — %d matching records" % counts[t],
-            "" if t not in sub else " (line items belonging to «%s»; the parent record "
-                                    "holds the totals)" % label_by.get(sub[t], sub[t]))
+        "%d. %s%s" % (i + 1, nm,
+                      "" if t not in counts else " — %d matching records" % counts[t])
         for i, (t, nm) in enumerate(names))
     ask_text = question if not kind else "%s (%s)" % (question, kind)
     try:
@@ -475,9 +442,6 @@ recompute. Claims are checked against the database and a wrong claim discards yo
 - Never invent numbers, dates or names that are not in the rows.
 - If the rows do not answer the question, say plainly that there is no data.
 - If a TOTAL is provided, it was computed over every matching row — use exactly that figure.
-- Records are kept from the company's own point of view. What the company sells is what
-  the counterparty buys, and what the company receives is what the counterparty supplied.
-  Answer from the perspective the question takes instead of refusing over wording.
 - Be short and businesslike, no preamble. Amounts as digits."""
 
 
@@ -787,62 +751,27 @@ def answer(question):
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     # Кандидаты: те, где поиск ЧТО-ТО нашёл, плюс ближайшие по смыслу названия.
-    # Крайности одинаково плохи. Только найденное — на чужом языке нужная сущность в
-    # выдачу не попадает вовсе. Все подряд — на полной базе это 227 названий, и модель
-    # в них тонет: замерено, «сколько всего продали» уходило в табличную часть, а
-    # англоязычный вопрос — в справочник полей форм статистики.
-    # «Совпадений N» имеет смысл, только если совпадение действительно было. Без слов и
-    # без условий группировка возвращает РАЗМЕРЫ таблиц, а не совпадения: модель видела
-    # список крупнейших справочников и выбирала из них. Замерено на вопросе «сколько
-    # всего мы продали» — в кандидатах оказались поля форм статистики и календарные
-    # графики, а нужного документа не было вовсе.
-    signal = bool(match) or bool(preds)
-    cands = sorted(by, key=lambda t: -by[t])[:CAND_MATCHED] if signal else []
-    try:
-        near = psql("SELECT src_table FROM %s ORDER BY array_cosine_similarity(emb, %s) "
-                    "DESC LIMIT %d" % (TABLES, _vec(intent.get("kind") or question),
-                                       CAND_NEAR if signal else CAND_NEAR * 2))
-        for r in near:
-            if r and r[0] and r[0] not in cands:
-                cands.append(r[0])
-    except RuntimeError:
-        pass
-    cands = cands or list(by)
+    # Кандидаты — те сущности, где поиск ДЕЙСТВИТЕЛЬНО что-то нашёл. Без отсечки по
+    # числу: любое «первые N» означает «на нашей базе нужное попадало в первые N», и на
+    # базе другого размера нужная сущность просто выпадет из списка.
+    #
+    # «Совпадений N» имеет смысл, только если совпадение было по СЛОВАМ вопроса. Одно
+    # условие по дате — не совпадение: группировка тогда возвращает размеры таблиц,
+    # отфильтрованные по дате. Замерено на «сколько продали в декабре»: календарные
+    # графики 62, регистр производственного календаря 31, нужный документ 6 — и модели
+    # это подавалось как «столько записей совпало».
+    signal = bool(match)
+    cands = sorted(by, key=lambda t: -by[t]) if signal else []
     counts_for_model = by if signal else {}
-    # Порядок списка важен: модель тяготеет к началу. Ставим первыми те, что БЛИЖЕ ПО
-    # СМЫСЛУ к тому, о чём спросили, а не те, где больше совпадений. Замерено: на
-    # вопросе про поступления регистр «Документы по требованию ФНС» давал 7 совпадений
-    # по имени контрагента против 2 у нужного документа — и выигрывал числом.
-    semantic_order = []
-    if intent.get("kind") and len(cands) > 1:
+    # Когда слов не нашлось вовсе (чужой язык, иное написание), список брать неоткуда —
+    # тогда и только тогда идём от смысла вопроса к названиям сущностей.
+    if not cands:
         try:
-            order = [r[0] for r in psql(
-                "SELECT src_table FROM %s WHERE src_table IN (%s) "
-                "ORDER BY array_cosine_similarity(emb, %s) DESC"
-                % (TABLES, ", ".join(lit(c) for c in cands), _vec(intent["kind"])))]
-            # Не просто переставляем — ОТСЕКАЕМ семантически далёкие. Иначе сущность,
-            # где имя контрагента встречается чаще, выигрывает числом совпадений, даже
-            # если спрашивали совсем о другом виде записей. Список должен быть коротким:
-            # модель выбирает из немногих правдоподобных, а не из двух десятков.
-            semantic_order = order
-            cands = (order[:CAND_SEMANTIC]
-                     + [c for c in cands if c not in order][:2]) or cands
+            cands = [r[0] for r in psql(
+                "SELECT src_table FROM %s ORDER BY array_cosine_similarity(emb, %s) DESC"
+                % (TABLES, _vec(intent.get("kind") or question))) if r and r[0]]
         except RuntimeError:
-            pass
-    # ВЫБОР КОДОМ, когда данных для решения достаточно. Модель нужна там, где задача
-    # языковая («продажи» = «реализация»); но когда смысловой порядок уже построен и
-    # совпадения есть, выбирать больше нечего — и подсказка тут не помогает: замерено,
-    # модель шла за числом совпадений (7 у постороннего регистра против 2 у нужного
-    # документа), хотя порядок по смыслу ставил нужный первым.
-    # Правило: среди ДВУХ ближайших по смыслу берём тот, где совпадений больше.
-    # Оно же решает обратный случай: «банки» -> справочник «Банки» ближе по названию,
-    # но записи лежат в «Классификатор Банков» (1 совпадение против 680).
-    # Пробовал заменить выбор модели правилом «среди двух ближайших по смыслу берём тот,
-    # где совпадений больше». На замере стало хуже (3/8 против 6/8): правило опирается на
-    # список кандидатов, а он сам ненадёжен — при условии по дате в кандидаты попадают
-    # календари, и «ближайшее по смыслу» считается уже среди них. Оставляю выбор за
-    # моделью: это языковая задача, а код удерживает то, что можно удержать однозначно
-    # (правило родителя ниже).
+            cands = list(by)
     try:
         src = pick_entity(question, intent.get("kind"), cands, counts_for_model)
     except RuntimeError:
@@ -851,16 +780,8 @@ def answer(question):
         # Модель назвала источник, куда поиск не попал: проверяем, есть ли там что-то
         # под наши условия, иначе остаёмся с тем, что реально нашлось.
         probe_rows = rows_of(src, match, preds, 1) if src else []
-        if not probe_rows:
+        if not probe_rows and by:
             src = max(by.items(), key=lambda kv: kv[1])[0]
-    # ПРАВИЛО КОДОМ, а не пожеланием в подсказке: если спросили сумму или количество,
-    # а выбрана подчинённая сущность (строки документа), берём родителя — итог живёт в
-    # шапке. Подсказка это не удерживала: модель раз за разом выбирала «_услуги».
-    if src and intent.get("want") in ("sum", "count"):
-        parent = subordinate_of(list(by) + [src]).get(src)
-        if parent:
-            diag["parent_rule"] = "%s -> %s" % (src, parent)
-            src = parent
     diag["focus"], diag["found"] = src, by.get(src, 0)
 
     rows = rows_of(src, match, preds, TOPK)

@@ -172,10 +172,17 @@ def load_entity(es, ro_role="serene_ro"):
             w.writerow([r.get(c) for c in cols])
     subprocess.run(["chown", "serenedb:serenedb", csv_path], check=False)
     grant = f'GRANT SELECT ON "{table}" TO {ro_role};\n' if ro_role else ""
-    # Grain-инвариант: одна строка на объект 1С. Поверх стабильной пагинации — дедуп-сеть:
-    # если страницы OData всё же перекрылись, ref_key (уникальный ключ платформы) убирает копии;
-    # для сущностей без ref_key (напр. регистры) — снимаем полностью идентичные строки.
-    has_ref = any(safe_col(c).lower() == "ref_key" for c in cols)
+    # Grain-инвариант: одна строка на ОБЪЯВЛЕННЫЙ КЛЮЧ, а не на Ref_Key.
+    #
+    # Раньше здесь стояло PARTITION BY ref_key. Для справочника и шапки документа это
+    # верно, для ТАБЛИЧНОЙ ЧАСТИ — нет: её ключ составной (Ref_Key + LineNumber), и все
+    # строки одной накладной имеют один Ref_Key. Дедуп оставлял из них ОДНУ.
+    # Замерено против 1С: Document_РеализацияТоваровУслуг_Товары — 76 строк в базе, 30 в
+    # витрине; количество 499 штук -> 213, сумма 12 052 500 -> 7 856 600.
+    # Сверка с $count это не ловила: fetch_all сверяет ДО дедупа и честно видит 76 == 76.
+    # Поэтому теперь: ключ берём объявленный, а снятое дедупом — считаем и показываем.
+    key_cols = [safe_col(k) for k in declared_key(es)]
+    key_cols = [k for k in key_cols if any(safe_col(c) == k for c in cols)]
     # Узлы-ПАПКИ иерархии (группы номенклатуры, категории, регионы) раньше отбрасывались
     # как «не бизнес-строки». Для коробки это неверно: требование владельца — «информация
     # должна быть вся», а про группы спрашивают ровно так же, как про элементы («что в
@@ -183,11 +190,13 @@ def load_entity(es, ro_role="serene_ro"):
     # это 4361 строка из 23 878 — 18% данных, выброшенных молча.
     # Папки остаются различимы: колонка IsFolder есть в витрине, поиск её видит.
     where = ""
-    select = (
-        f"SELECT * FROM read_csv('{csv_path}'){where} "
-        "QUALIFY row_number() OVER (PARTITION BY ref_key ORDER BY ref_key) = 1"
-        if has_ref else f"SELECT DISTINCT * FROM read_csv('{csv_path}'){where}"
-    )
+    if key_cols:
+        part = ", ".join('"%s"' % k for k in key_cols)
+        select = (f"SELECT * FROM read_csv('{csv_path}'){where} "
+                  f"QUALIFY row_number() OVER (PARTITION BY {part} ORDER BY {part}) = 1")
+    else:
+        # Ключа не объявлено — снимаем только полностью идентичные строки.
+        select = f"SELECT DISTINCT * FROM read_csv('{csv_path}'){where}"
     sql = (
         f'DROP TABLE IF EXISTS "{table}";\n'
         f'CREATE TABLE "{table}" AS {select};\n' + grant
@@ -197,8 +206,17 @@ def load_entity(es, ro_role="serene_ro"):
         raise RuntimeError(f"load error: {r.stderr.strip()[:200]}")
     c = subprocess.run(["psql", DSN, "-tAc", f'SELECT count(*) FROM "{table}";'], text=True, capture_output=True)
     n = int(c.stdout.strip()) if c.returncode == 0 and c.stdout.strip().isdigit() else len(rows)
-    # rows = grain витрины (после дедупа), rows_raw = сколько строк отдал OData (видно перекрытие страниц)
-    return {"entity": es, "table": table, "rows": n, "rows_raw": len(rows), "cols": len(cols), "sec": dt}
+    # rows = grain витрины (после дедупа), rows_raw = сколько строк отдал OData.
+    # Расхождение между ними — ВСЕГДА в журнал. Дедуп законен только когда страницы
+    # OData перекрылись; любое другое расхождение означает, что мы выбросили данные,
+    # и молчать о нём нельзя: именно так 61% строк накладных пропали незаметно, потому
+    # что rows_raw никуда не выводился.
+    if len(rows) != n:
+        sys.stderr.write("%s: OData отдал %d строк, в витрине %d — дедуп снял %d "
+                         "(ключ: %s)\n" % (es, len(rows), n, len(rows) - n,
+                                           ",".join(key_cols) or "не объявлен"))
+    return {"entity": es, "table": table, "rows": n, "rows_raw": len(rows),
+            "dropped": len(rows) - n, "cols": len(cols), "sec": dt}
 
 
 def main():
