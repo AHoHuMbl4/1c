@@ -14,7 +14,10 @@
 //
 // Требования движка (проверено на 2026.7.1, НЕ угадано):
 //   • Хуки с доступом к переписке у НЕ-bundled плагина включаются только флагом
-//     plugins.entries.braine-verify.hooks.allowConversationAccess=true.
+//     ВАЖНО: этот флаг нам НЕ нужен. Он гейтит только хуки диалога (llm_input,
+//     llm_output, before_agent_run, agent_end и т.п.); наши четыре — after_tool_call,
+//     message_received, message_sending, reply_payload_sending — в тот список не входят.
+//     Раньше мы его выставляли, выдавая плагину лишнюю привилегию читать переписку.
 //   • MCP-инструмент проецируется боту под ИМЕНЕМ СЕРВЕРА: `<server>__ask_1c`
 //     (напр. `second-brain__ask_1c`) — поэтому имя матчим по суффиксу.
 //   • Конфиг плагина приходит через `api.pluginConfig` (в ctx хука его НЕТ).
@@ -23,18 +26,24 @@
 //
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
-import { appendFileSync } from "node:fs";
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { DEFAULTS, digitBlob, evaluate, extractText, mergeRef, numericTokens, stripInternal, toolMatchesAny } from "./verify-core.js";
 
-const DEBUG_FILE = (process.env.HOME || "/tmp") + "/.openclaw/braine-verify-debug.log";
+let PLUGIN_API = null; // штатный api движка; выставляется в register()
+
 function dbg(cfg, line) {
   if (!cfg || !cfg.debug) return;
+  const api = PLUGIN_API;
+  // Штатный логгер движка: общий gateway.log, ротация, уровни, скрабинг секретов,
+  // видно через `openclaw logs`. Свой файл рос без ограничения и не был виден
+  // никакими штатными средствами диагностики.
   try {
-    appendFileSync(DEBUG_FILE, new Date().toISOString() + " " + line + "\n");
-  } catch {
-    /* диагностика не должна ломать доставку */
-  }
+    // Уровень info, а не debug: отладка включается явным флагом конфига, а при
+    // logging.level=info записи уровня debug движок отбрасывает — диагностика была бы
+    // невидима, то есть замена самописного файла ничего бы не дала.
+    if (api && api.logger && typeof api.logger.info === "function") api.logger.info("[braine-verify] " + line);
+    else console.error("[braine-verify] " + line);
+  } catch {}
 }
 
 // КОРРЕЛЯЦИЯ (проверено в рантайме): у `message_sending` в ctx НЕТ runId — есть только
@@ -64,6 +73,7 @@ export default definePluginEntry({
   name: "Braine Verify",
   description: "Code-level anti-hallucination gate over braine ask_1c (verifies hard numeric facts in outbound messages).",
   register(api) {
+    PLUGIN_API = api;
     // конфиг плагина берём из api.pluginConfig (не из ctx хука — там его нет)
     const getCfg = () => {
       const pc = api && api.pluginConfig && typeof api.pluginConfig === "object" ? api.pluginConfig : {};

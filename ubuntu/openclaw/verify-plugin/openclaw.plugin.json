@@ -43,6 +43,11 @@
       "stripInternal": {
         "type": "boolean",
         "description": "Вырезать из ответа внутреннее (SQL, пути, служебные маркеры)."
+      },
+      "minDigitsWithRef": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "При наличии эталона сверять числа от такой длины. 1 = сверять все."
       }
     }
   },

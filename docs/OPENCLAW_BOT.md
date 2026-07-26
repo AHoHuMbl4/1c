@@ -47,7 +47,7 @@ MCP-инструмента:
 
 | Ключ | Значение | Зачем |
 |---|---|---|
-| `agents.defaults.model.primary` | `deepseek/deepseek-chat` | LLM тона (openai-completions, ключ в `.env` + auth-store) |
+| `agents.defaults.model.primary` | `deepseek/deepseek-v4-flash` | LLM тона (openai-completions, ключ в `.env` + auth-store) |
 | `agents.defaults.thinkingDefault` | `off` | без «размышлений» в чат |
 | `session.dmScope` | `per-channel-peer` | изоляция диалогов по собеседнику (обязательно) |
 | `commands.native` | `false` | без служебного меню команд в Telegram |
@@ -67,7 +67,7 @@ MCP-инструмента:
 штатной командой `openclaw mcp add <name> --url … --transport streamable-http --include <tool>` (не патч).
 
 **Плагины** (`plugins.entries`): `deepseek` (провайдер модели), `memory-core` (нативная память диалога),
-`braine-verify` (наш гейт; `config.debug:true`, `hooks.allowConversationAccess:true`).
+`braine-verify` (наш гейт; `config.debug:true`). Флаг `hooks.allowConversationAccess` **не нужен** и снят: он гейтит только хуки диалога, а наши четыре к ним не относятся.
 
 ## 🔴 Гейт анти-галлюцинаций `braine-verify` — КОДОМ, не промтом
 Нативный плагин OpenClaw (`ubuntu/openclaw/verify-plugin/`, установлен `/home/undebot/braine-verify/`,
@@ -111,7 +111,7 @@ MCP-инструмента:
 
 ## Эксплуатация / грабли (важное, проверено в рантайме)
 - **Хуки не-bundled плагина к переписке** блокируются по умолчанию → нужен
-  `plugins.entries.braine-verify.hooks.allowConversationAccess:true` (иначе хуки молча не срабатывают).
+  ~~`allowConversationAccess:true`~~ — **это было неверно**. Проверено по коду установленной версии: флаг гейтит список хуков диалога (`llm_input`, `llm_output`, `before_agent_run`, `agent_end`…), а наши `after_tool_call`/`message_received`/`message_sending`/`reply_payload_sending` в нём отсутствуют.
 - **Корреляция хода:** у `message_sending` в ctx **нет `runId`**, есть `ctx.sessionKey`; доставка идёт
   **после `agent_end`**. Поэтому эталон храним по `sessionKey`, **не** удаляем на `agent_end`, сбрасываем
   на новом `runId`. (Раньше удаление на `agent_end` давало ложный `cancel` верного числа.)

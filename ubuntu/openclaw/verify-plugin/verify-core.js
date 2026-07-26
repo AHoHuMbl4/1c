@@ -5,8 +5,13 @@
 export const DEFAULTS = {
   toolName: "ask_1c", // (устар.) одиночное имя; ниже toolNames — список заземляемых инструментов
   toolNames: ["ask_1c", "report_1c"], // и факты braine, и числа отчётов SereneDB — эталон для сверки
-  minDigits: 4, // проверяем числовые токены длиной >= столько цифр (год/сумма/ИНН/код)
-  highRiskDigits: 7, // токен такой длины (ИНН/счёт/телефон) без эталона -> жёсткий блок
+  minDigits: 4, // без эталона: с какой длины токен считаем «фактом», а не болтовнёй
+  minDigitsWithRef: 1, // ЕСТЬ эталон -> сверяем ВСЕ числа. Раньше порог 4 пропускал
+  //   количества, штуки, проценты и дни: «продано 850 шт» не проверялось никогда,
+  //   хотя эталон под рукой и сверить было чем.
+  highRiskDigits: 5, // без эталона: с какой длины выдумка блокируется. Было 7 —
+  //   пятизначные и шестизначные суммы («долг 45 000», «выручка 950 000») уходили
+  //   клиенту из воздуха, без единого обращения к данным.
   noDataMarker: "[НЕТ ДАННЫХ", // префикс маркера «нет данных» из mcp_braine
   noDataReply: "К сожалению, по этому вопросу у меня нет данных в системе.",
   refTtlMs: 10 * 60 * 1000, // сколько держать эталон хода в памяти
@@ -134,7 +139,8 @@ export function evaluate(content, ref, inb, cfg) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
   if (!content) return { action: "allow" };
 
-  const tokens = [...numericTokens(content, c.minDigits)];
+  // С эталоном сверяем всё, без эталона — только то, что похоже на факт.
+  const tokens = [...numericTokens(content, ref ? c.minDigitsWithRef : c.minDigits)];
   if (tokens.length === 0) return { action: "allow" }; // нет жёстких фактов — не трогаем
 
   const ungrounded = tokens.filter((t) => !isGrounded(t, ref, inb));

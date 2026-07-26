@@ -75,10 +75,8 @@
       "braine-verify": {
         "enabled": true,
         "config": {
-          "debug": true
-        },
-        "hooks": {
-          "allowConversationAccess": true
+          "debug": true,
+          "minDigitsWithRef": 1
         }
       }
     },
