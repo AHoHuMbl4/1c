@@ -157,6 +157,24 @@ NAME_COLS = int(os.environ.get("BUILD_NAME_COLS", "2"))  # сколько наи
 NUMERIC_EDM = ("Edm.Double", "Edm.Decimal", "Edm.Int16", "Edm.Int32", "Edm.Int64", "Edm.Byte")
 
 
+# У csv-разбора Python лимит поля 128 КБ. На реальной базе есть хранилища и вложения
+# заметно больше — сборка падала «field larger than field limit». Значение поднимаем,
+# но главная защита не в нём, а в обрезке текста на стороне базы (см. TEXT_CLIP).
+csv.field_size_limit(50 * 1024 * 1024)
+
+# Предел длины ОДНОГО значения при чтении. Раньше в корпус попадало 200 символов —
+# длинный комментарий искался только по началу, то есть часть информации была
+# недоступна поиску. Движок индексирует длинный текст нормально, а модель видит
+# подсвеченный фрагмент, а не строку целиком, поэтому режем только патологические
+# случаи: хранилища и вложения, которые всё равно не текст.
+TEXT_CLIP = int(os.environ.get("BUILD_TEXT_CLIP", "20000"))
+
+
+def clip(col, is_text=True):
+    """Выражение выборки колонки с обрезкой длинного текста прямо в базе."""
+    return ('substr(CAST("%s" AS VARCHAR), 1, %d)' % (col, TEXT_CLIP)) if is_text else '"%s"' % col
+
+
 def q(sql):
     """Выполнить SQL. Читаем CSV, а не «строка = запись».
 
@@ -269,7 +287,9 @@ def profile_table(t, tcols, txt_candidates, num_candidates):
     for c in txt_candidates:
         aggs.append('count(DISTINCT "%s")' % c)
     for c in num_candidates:
-        aggs.append('coalesce(max(abs("%s")),0)' % c)
+        # TRY_CAST: тип объявлен базой, но в витрине значение могло приехать текстом
+        # (CSV-сниффер). Без него abs() падает на несовместимом типе и роняет сборку.
+        aggs.append('coalesce(max(abs(TRY_CAST("%s" AS DOUBLE))),0)' % c)
     if aggs:
         row = q("SELECT %s FROM \"%s\"" % (", ".join(aggs), t))
         vals = row[0] if row else []
@@ -286,7 +306,7 @@ def profile_table(t, tcols, txt_candidates, num_candidates):
                 prof["maxabs"][c] = 0.0
     sample_cols = list(txt_candidates) + [c for c in num_candidates if c not in txt_candidates]
     if sample_cols:
-        sel = ", ".join('"%s"' % c for c in sample_cols)
+        sel = ", ".join(clip(c) for c in sample_cols)
         rows = q("SELECT %s FROM \"%s\" LIMIT %d" % (sel, t, SAMPLE))
         for i, c in enumerate(sample_cols):
             prof["samples"][c] = [r[i] for r in rows if i < len(r) and r[i]]
@@ -371,7 +391,7 @@ def iter_corpus():
             vcols = [c for c, dt in cols[t] if "VARCHAR" in dt]
             guid_cols, txt = [], []
             if vcols:
-                sel = ", ".join('"%s"' % c for c in vcols)
+                sel = ", ".join(clip(c) for c in vcols)
                 rows = q("SELECT %s FROM \"%s\" LIMIT %d" % (sel, t, SAMPLE))
                 for i, c in enumerate(vcols):
                     smp = [r[i] for r in rows if i < len(r) and r[i]]
@@ -410,7 +430,7 @@ def iter_corpus():
             extra = [c for _s, c in sorted(scored, reverse=True)]
             name_cols += extra[:max(0, NAME_COLS + 1 - len(name_cols))]
         if key_col and name_cols:
-            sel = ", ".join('"%s"' % c for c in name_cols)
+            sel = ", ".join(clip(c) for c in name_cols)
             for row in q('SELECT "%s", %s FROM "%s" WHERE "%s" IS NOT NULL'
                          % (key_col, sel, t, key_col)):
                 g, names = row[0], [x for x in row[1:] if x]
@@ -513,7 +533,7 @@ def iter_corpus():
         extra = ([('"%s"' % amount_col)] if amount_col else []) + \
                 ([('"%s"' % date_col)] if date_col else []) + \
                 [('"%s"' % c) for c in key_extra]
-        sel = ", ".join('"%s"' % c for c in all_cols) or "NULL"
+        sel = ", ".join(clip(c) for c in all_cols) or "NULL"
         rows = q("SELECT %s%s FROM \"%s\"" % (sel, (", " + ", ".join(extra)) if extra else "", t))
 
         label = t.split("_", 1)[1] if "_" in t else t
@@ -559,7 +579,7 @@ def iter_corpus():
                     continue
                 if machine_token(v):
                     continue
-                parts.append("%s: %s" % (c, v[:200]))
+                parts.append("%s: %s" % (c, v))
             # Подписи берём ИЗ БАЗЫ (имя колонки), а не придумываем слова: в англоязычной
             # или иной конфигурации русские «сумма»/«дата» были бы чужеродны.
             if amt is not None:
