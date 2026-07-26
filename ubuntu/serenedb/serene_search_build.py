@@ -363,7 +363,11 @@ def protocol_companion(c, names):
     for suf in ("_Type", "_navigationLinkUrl"):
         if c.endswith(suf):
             base = c[: -len(suf)]
-            return base in names or base + "_Key" in names
+            # `X_Base64Data` — третий член тройки «хранилище значения»: X объявлен как
+            # Edm.Stream и в витрину не попадает, поэтому без него пара у 20 колонок
+            # не распознавалась и «application/xml+xdto» шло в корпус как бизнес-текст.
+            return (base in names or base + "_Key" in names
+                    or base + "_Base64Data" in names)
     return False
 
 
@@ -426,7 +430,13 @@ def iter_corpus():
             # Запасной разбор (метаданных нет): образцы всех текстовых колонок берём
             # ОДНИМ запросом, а не запросом на колонку.
             names = {c for c, _dt in cols[t]}
+            # Запасной путь обязан фильтровать ТО ЖЕ, что и объявленный: иначе без
+            # $metadata в текст лезут DataVersion (значения вида AAAAAQAAABw=, они
+            # выигрывают ранжирование у таблиц без Description) и двоичные вложения
+            # _Base64Data — в витрине они VARCHAR и уходили в корпус как текст.
             vcols = [c for c, dt in cols[t] if "VARCHAR" in dt
+                     and c not in STANDARD_SERVICE_PROPS
+                     and not c.endswith("_Base64Data")
                      and not protocol_companion(c, names)]
             guid_cols, txt = [], []
             if vcols:
@@ -449,7 +459,13 @@ def iter_corpus():
         # называлась «СтандартныеВычетыНарастающимИтогом», а настоящее имя встречалось
         # в корпусе 1 раз из 97 085. Кто кого затрёт, зависело от порядка таблиц.
         # Нет Ref_Key — нет собственной идентичности, в карту такой таблице нельзя.
-        key_col = "Ref_Key" if any(c == "Ref_Key" for c, _dt in cols[t]) else None
+        # НО и наличия колонки мало: у ТАБЛИЧНОЙ ЧАСТИ ключ составной
+        # (Ref_Key + LineNumber), и Ref_Key там — ссылка на РОДИТЕЛЯ. На живой базе
+        # это 1840 типов из 4585: строки накладной писали в карту своё «Содержание»
+        # под GUID документа, и ссылка на документ резолвилась в название услуги.
+        # Своя идентичность есть, только если объявленный ключ — РОВНО ["Ref_Key"].
+        own_key = ENTITY_KEYS.get(t.lower()) == ["Ref_Key"]
+        key_col = "Ref_Key" if own_key and any(c == "Ref_Key" for c, _dt in cols[t]) else None
         scored = []
         prof = profile_table(t, cols[t], ccols, [])
 
@@ -505,6 +521,11 @@ def iter_corpus():
         prof = profile_table(t, tcols, cand_txt, num_cols_of(tcols, declared))
         key_props = [c for c in ENTITY_KEYS.get(t.lower(), [])
                      if any(c == cn for cn, _dt in tcols)]
+        # Своя идентичность — только при ключе РОВНО ["Ref_Key"]. У табличной части
+        # Ref_Key это ссылка на родителя, и выбрасывать её из текста нельзя: строки
+        # накладных теряли номер документа, контрагента и дату — «что купила Ромашка»
+        # по позициям не находилось вовсе (0 строк корпуса).
+        own_ref = ENTITY_KEYS.get(t.lower()) == ["Ref_Key"]
 
         # ЧИСЛО ДЛЯ АГРЕГАТОВ. Правильный источник — объявленный тип: 1С сама говорит,
         # что ИНН/КПП/счёт это строки-коды, а сумма документа — Edm.Double. Витрина
@@ -629,11 +650,9 @@ def iter_corpus():
                 if not v:
                     continue
                 if c in guid_cols or GUID.match(v):
-                    # Собственный ключ — только `Ref_Key` (контракт, см. карту ссылок).
-                    # Раньше ключом считался ПЕРВЫЙ GUID строки — у регистров это
-                    # измерение, и контрагент из текста пропадал: «Ромашка» в регистре
-                    # состояний не находилась вовсе (0 строк корпуса).
-                    if c == "Ref_Key":
+                    # Собственный ключ — только `Ref_Key` И только у сущности, чей
+                    # объявленный ключ равен ["Ref_Key"] (см. карту ссылок выше).
+                    if c == "Ref_Key" and own_ref:
                         key = v
                         continue                    # собственный ключ в текст не пишем
                     nm = refmap.get(v)
