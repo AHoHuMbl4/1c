@@ -44,6 +44,12 @@ LISTEN_PORT = int(os.environ.get("ASK_LISTEN_PORT", "8091"))
 ASK_TOKEN = os.environ.get("ASK_TOKEN", "")
 
 CORPUS, INDEX, TABLES = "search_corpus", "search_idx", "search_tables"
+# Сколько символов перечня сущностей отдавать модели. Это бюджет КОНТЕКСТА МОДЕЛИ,
+# а не порог правильности: он не зависит от базы и не подбирается под неё. Порядок
+# перечня уже задан данными (близость метки сущности к тому, о чём спросили), поэтому
+# граница режет ХВОСТ, а не смысл. Без границы перечень рос с числом сущностей: на
+# 4585 типах это ~267 КБ в каждый вопрос.
+PICK_BUDGET = int(os.environ.get("ASK_PICK_BUDGET_CHARS", "8000"))
 TOPK = int(os.environ.get("ASK_TOPK", "40"))
 ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
 
@@ -72,8 +78,12 @@ EMBED_DIM = int(os.environ.get("EMBED_DIM", "1536"))
 
 # Единственные две строки, которые уходят человеку от НАС, а не от модели: ответ модели
 # всегда на языке вопроса. Вынесены в окружение, чтобы локализовать без правки кода.
-NO_DATA_TEXT = os.environ.get("ASK_NO_DATA_TEXT", "нет данных")
-TOTAL_TEXT = os.environ.get("ASK_TOTAL_TEXT", "Найдено {count} записей; сумма {sum}.")
+# Две строки, уходящие человеку не от модели. Умолчания НЕТ намеренно: русский текст
+# по умолчанию — это настройка, которую обязан заполнить человек, знающий язык базы,
+# то есть такой же дефект, как имя в коде. Когда переменные не заданы, ответ уходит
+# структурой (kind + числа), а формулировку делает вызывающий на языке вопроса.
+NO_DATA_TEXT = os.environ.get("ASK_NO_DATA_TEXT", "")
+TOTAL_TEXT = os.environ.get("ASK_TOTAL_TEXT", "")
 
 
 # ----------------------------------------------------------------- инфраструктура
@@ -81,8 +91,17 @@ def psql(sql):
     env = dict(os.environ)
     if PGPASSWORD:
         env["PGPASSWORD"] = PGPASSWORD
-    p = subprocess.run(["psql", DSN, "-tA", "-F", "\x1f", "-c", sql],
-                       capture_output=True, text=True, env=env)
+    # SQL идёт в stdin, а НЕ аргументом `-c`. У одного аргумента командной строки
+    # жёсткий предел 131 072 байта, и запрос с перечислением кандидатов плюс вектором
+    # вопроса (1536 чисел ≈ 14.6 КБ) его перекрывал. Замерено запуском: на 1712
+    # сущностях ответ приходит, на 1713 — OSError «Argument list too long», и он не
+    # RuntimeError, поэтому не ловился НИ ОДНОЙ защитой вокруг: сервис отдавал HTTP 500
+    # на каждый вопрос. У сборщика этот путь через stdin с самого начала.
+    try:
+        p = subprocess.run(["psql", DSN, "-tA", "-F", "\x1f", "-f", "-"],
+                           input=sql, capture_output=True, text=True, env=env)
+    except OSError as e:
+        raise RuntimeError("psql не запущен: %s" % str(e)[:160])
     if p.returncode != 0:
         raise RuntimeError((p.stderr or "psql failed")[:300])
     return [l.split("\x1f") for l in p.stdout.split("\n") if l != ""]
@@ -387,13 +406,21 @@ def pick_entity(question, kind, cands, counts=None):
     # именно они снимают неоднозначность: справочник «Банки» на 1 запись и
     # «Классификатор Банков» на 680 по названию неразличимы, по числу — очевидны.
     counts = counts or {}
-    listing = "\n".join(
-        "%d. %s%s%s" % (
+    lines_out, used = [], 0
+    for i, (t, nm) in enumerate(names):
+        row = "%d. %s%s%s" % (
             i + 1, nm,
             "" if t not in counts else " — %d matching records" % counts[t],
             "" if not parent_by.get(t) else
             " [line items of «%s»]" % label_by.get(parent_by[t], parent_by[t]))
-        for i, (t, nm) in enumerate(names))
+        if used + len(row) > PICK_BUDGET and lines_out:
+            sys.stderr.write("ask: перечень сущностей обрезан по бюджету промпта "
+                             "(%d из %d, порядок по смыслу)\n" % (len(lines_out), len(names)))
+            break
+        lines_out.append(row)
+        used += len(row) + 1
+    names = names[:len(lines_out)]
+    listing = "\n".join(lines_out)
     ask_text = question if not kind else "%s (%s)" % (question, kind)
     try:
         raw = ds_chat([{"role": "system", "content": PICK_SYS},
@@ -827,9 +854,13 @@ def answer(question):
     # смысла вопроса к названиям всех сущностей.
     if not cands:
         try:
+            # LIMIT в БАЗЕ: иначе в кандидаты, а следом в промпт, уезжает вся база.
+            # Число получаем из бюджета промпта, а не задаём отдельно.
             cands = [r[0] for r in psql(
-                "SELECT src_table FROM %s ORDER BY array_cosine_similarity(emb, %s) DESC"
-                % (TABLES, _vec(intent.get("kind") or question))) if r and r[0]]
+                "SELECT src_table FROM %s ORDER BY array_cosine_similarity(emb, %s) "
+                "DESC LIMIT %d"
+                % (TABLES, _vec(intent.get("kind") or question),
+                   max(1, PICK_BUDGET // 40))) if r and r[0]]
         except RuntimeError:
             cands = list(by)
     try:
@@ -871,14 +902,21 @@ def answer(question):
     diag["claims"] = claims or None
     if not ok:
         sys.stderr.write("ask GATE: числа вне данных: %s\n" % bad[:6])
+        # Гейт отклонил формулировку модели. Числа при этом посчитаны базой и верны —
+        # отдаём их СТРУКТУРОЙ, а не своей прозой: свой текст был бы на одном языке
+        # независимо от языка вопроса. Вызывающий формулирует сам.
         if agg:
-            text = TOTAL_TEXT.format(
-                count=agg["count"],
-                sum=("%d" % agg["sum"]) if agg["sum"] == int(agg["sum"])
-                    else "%.2f" % agg["sum"])
-        else:
-            return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
+            return {"kind": "figures", "text": TOTAL_TEXT.format(
+                        count=agg["count"],
+                        sum=("%d" % agg["sum"]) if agg["sum"] == int(agg["sum"])
+                            else "%.2f" % agg["sum"]) if TOTAL_TEXT else "",
+                    "figures": {k: agg[k] for k in
+                                ("count", "count_amount", "sum", "min", "max", "avg",
+                                 "date_min", "date_max") if k in agg},
+                    "sources": [src.split("_", 1)[1] if "_" in src else src],
                     "diag": dict(diag, gate_rejected=bad[:6])}
+        return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
+                "diag": dict(diag, gate_rejected=bad[:6])}
 
     tag = src.split("_", 1)[1] if "_" in src else src
     return {"kind": "answer", "text": text.strip(), "sources": [tag],

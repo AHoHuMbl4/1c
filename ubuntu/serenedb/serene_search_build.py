@@ -144,7 +144,11 @@ STANDARD_SERVICE_PROPS = ("DataVersion",)
 # языке (сама конфигурация может быть хоть японской — эти имена задаёт платформа).
 # Мы их НЕ предполагаем: используем только если сущность объявила их в своих метаданных.
 STANDARD_NAME_PROPS = ("Description", "Code")
-STANDARD_DATE_PROPS = ("Date",)
+# Служебные даты, которые объявляет ПЛАТФОРМА (а не конфигурация): у документа это
+# `Date`, у регистра — `Period`. Без `Period` у 1006 типов из 1257 с несколькими
+# датами дата записи не определялась вовсе, и любой вопрос с периодом выбрасывал их
+# целиком — не «без фильтра», а «нет строк». Замерено по $metadata живой базы.
+STANDARD_DATE_PROPS = ("Date", "Period")
 
 # Локаль словаря. Замерено: на регистр и на результат поиска не влияет (ru_RU, en_US и
 # несуществующая xx_XX дают одинаковые совпадения), но это единственный языковой литерал
@@ -449,6 +453,11 @@ def iter_corpus():
 
     # --- карта ссылок: GUID -> человекочитаемое наименование
     refmap = {}
+    # Кто владеет каждым GUID: заполняется ЗДЕСЬ ЖЕ, потому что этот цикл и так
+    # обходит ровно сущности с собственным ключом и читает у них все Ref_Key.
+    # Отдельный поиск владельца перебором стоил бы до 2 млн запросов (замерено
+    # снайпером: 1840 табличных частей x 1129 сущностей, ~21 час на полной базе).
+    owner_of = {}
     for t, n in live:
         declared, gcols, ccols = split_cols(t)
         # Собственная идентичность объекта в OData 1С называется буквально `Ref_Key` —
@@ -475,7 +484,11 @@ def iter_corpus():
         # например, наименования не имеют — там сработает разбор ниже.
         # Контракт платформы — первым, ранжирование — дополнением. Так не теряется
         # полное наименование (по нему тоже ищут), и при этом не нужен порог.
-        std = [c for c in STANDARD_NAME_PROPS if c in declared]
+        # Объявлено в метаданных ≠ есть в витрине (частичная загрузка, Edm.Stream
+        # не сериализуется). Без пересечения с фактическими колонками SELECT падал,
+        # и одна такая сущность роняла всю сборку.
+        mart = {cn for cn, _dt in cols[t]}
+        std = [c for c in STANDARD_NAME_PROPS if c in declared and c in mart]
         name_cols = list(std)
         if True:
             for c in ccols:
@@ -512,6 +525,7 @@ def iter_corpus():
                     if nm not in uniq and not any(nm in u for u in uniq):
                         uniq.append(nm)
                 refmap[g] = " / ".join(uniq)
+                owner_of[g] = t
 
     # --- тексты строк
     for t, n in live:
@@ -681,7 +695,7 @@ def iter_corpus():
             # Исчезнувшие отпечатки подчищает штатная gone-очистка в конце сборки.
             row_id = declared_key or key or hashlib.sha1(doc.encode("utf-8")).hexdigest()
             corpus.append((t, row_id, doc, " | ".join(refs), amt, dt_))
-        yield t, corpus, len(live), len(refmap)
+        yield t, corpus, len(live), len(refmap), owner_of
 
 
 def _flush(buf, pending):
@@ -751,11 +765,14 @@ def main():
             buf, pending = [], []
 
     with cf.ThreadPoolExecutor(max_workers=PARALLEL) as pool:
-        for t, rows, n_tables, n_ref in iter_corpus():
+        for t, rows, n_tables, n_ref, owner_of in iter_corpus():
             total_rows += len(rows)
             todo = []
             for src, key, doc, refs, amt, dtv in rows:
-                h = hashlib.sha1(doc.encode("utf-8")).hexdigest()
+                # Отпечаток считается по ВСЕМУ, что попадает в индекс. Раньше в него
+                # входил только `doc`: изменение одних лишь ссылок не пересчитывалось,
+                # поле refs молча оставалось старым, а прогон отчитывался успешным.
+                h = hashlib.sha1(("%s\x00%s" % (doc, refs)).encode("utf-8")).hexdigest()
                 seen.add((src, key))
                 if have.get((src, key)) != h:
                     todo.append((src, key, doc, refs, h, amt, dtv))
@@ -836,34 +853,26 @@ def main():
              and "Ref_Key" in ENTITY_KEYS.get(t.lower(), [])}
     parent_of = {}
     for t in lines:
-        # Берём ОДНО значение ссылки из табличной части и ищем, в какой сущности с
-        # собственным ключом оно есть. Одно значение достаточно: ссылка ведёт к
-        # владельцу по определению. Прежний вариант строил UNION ALL по всем
-        # сущностям с собственным ключом (142 подзапроса с EXISTS по всей таблице) —
-        # запрос не отрабатывал, ошибка гасилась, и владелец не находился ни у одной.
+        # Владелец — по КАРТЕ, собранной при построении refmap: один запрос на
+        # табличную часть и словарное обращение. Перебор сущностей здесь стоил бы
+        # квадратично (замерено: до 2 077 360 запросов, ~21 час на полной базе).
         try:
             ref = q('SELECT "Ref_Key" FROM "%s" WHERE "Ref_Key" IS NOT NULL LIMIT 1' % t)
         except RuntimeError:
             continue
-        if not ref or not ref[0] or not ref[0][0]:
-            continue
-        val = ref[0][0]
-        for o in own:
-            try:
-                hit = q('SELECT 1 FROM "%s" WHERE "Ref_Key" = %s LIMIT 1' % (o, lit(val)))
-            except RuntimeError:
-                continue
-            if hit:
-                parent_of[t] = o
-                break
+        if ref and ref[0] and ref[0][0] and ref[0][0] in owner_of:
+            parent_of[t] = owner_of[ref[0][0]]
     if parent_of:
         print("табличных частей с найденным владельцем: %d" % len(parent_of))
     labels = []
     for t in srcs:
-        raw = t.split("_", 1)[1] if "_" in t else t
-        orig = meta_names.get(t.lower(), raw)
-        orig = orig.split("_", 1)[1] if "_" in orig else orig
-        labels.append((t, split_camel(orig)))
+        # Префикс вида «document_»/«catalog_» срезается РОВНО ОДИН раз. Раньше он
+        # срезался дважды, когда имени нет в метаданных: `document_реализация_товары`
+        # превращалось в метку «товары», и все табличные части становились
+        # неразличимы («Товары», «Услуги», «Условия») — а именно эти метки уходят
+        # модели при выборе сущности и в эмбеддинг профиля.
+        orig = meta_names.get(t.lower()) or t
+        labels.append((t, split_camel(orig.split("_", 1)[1] if "_" in orig else orig)))
     for i in range(0, len(labels), BATCH):
         part = labels[i:i + BATCH]
         vecs = embed([lb for _t, lb in part])
