@@ -20,7 +20,9 @@
 
 Запуск: под RW (postgres). Env — /etc/1c-serene-sync.env + /etc/1c-mcp-reports.env.
 """
+import csv
 import hashlib
+import io
 import json
 import os
 import re
@@ -62,16 +64,15 @@ for _f in ("/etc/1c-serene-sync.env", "/etc/1c-mcp-reports.env"):
 
 
 def machine_token(v):
-    """Значение машинное по ФОРМЕ: версия записи (base64), ссылка, hex-идентификатор."""
-    if not v:
-        return False
-    if URLISH.match(v):
-        return True
-    if len(v) >= 8 and " " not in v and B64.match(v) and (
-            v.endswith("=") or (any(c.isdigit() for c in v) and any(c.isupper() for c in v)
-                                and not v.isalpha())):
-        return True
-    return False
+    """Значение машинное: ссылка. Только это можно утверждать по ФОРМЕ.
+
+    Раньше здесь угадывались ещё и идентификаторы («латиница + цифры + заглавные»),
+    и под это правило попадали настоящие данные бизнеса: `INV000000021`,
+    `WVWZZZ1JZXW000001` (VIN), `NKE2024AM270BLK` (артикул), `DE89…` (IBAN).
+    На нашей базе это не проявлялось только потому, что её номера содержат кириллицу.
+    Версия записи теперь отбрасывается по контракту (`STANDARD_SERVICE_PROPS`).
+    """
+    return bool(v) and bool(URLISH.match(v))
 
 
 def odata_types():
@@ -100,6 +101,12 @@ def odata_types():
     for m in re.finditer(r'<EntityType\s+Name="([^"]+)"(.*?)</EntityType>', xml, re.S):
         name, body = m.group(1), m.group(2)
         ENTITY_NAMES[name.lower()] = name      # оригинальный регистр нужен для подписей
+        # Ключ объявлен явно и бывает СОСТАВНЫМ. «Первая Guid-колонка» — неверно:
+        # у регистров Guid-колонок нет вовсе, и все строки таблицы получали пустой
+        # ключ, схлопываясь в одну запись корпуса.
+        km = re.search(r"<Key>(.*?)</Key>", body, re.S)
+        if km:
+            ENTITY_KEYS[name.lower()] = re.findall(r'<PropertyRef\s+Name="([^"]+)"', km.group(1))
         props = {}
         for p in re.finditer(r'<Property\s+Name="([^"]+)"\s+Type="([^"]+)"', body):
             props[p.group(1)] = p.group(2)
@@ -109,11 +116,19 @@ def odata_types():
 
 
 ENTITY_NAMES = {}          # сущность_lower -> оригинальное имя из $metadata
+ENTITY_KEYS = {}           # сущность_lower -> список свойств объявленного ключа
+
+# Служебное свойство OData-интерфейса 1С: версия записи. Отбрасываем ПО КОНТРАКТУ,
+# а не по форме значения. Прежний разбор «латиница+цифры+заглавные = мусор» выбрасывал
+# заодно настоящие бизнес-идентификаторы: номера документов вида INV000000021, VIN,
+# артикулы, IBAN — на чужой конфигурации их просто не было бы в поиске.
+STANDARD_SERVICE_PROPS = ("DataVersion",)
 
 # Служебные свойства OData-интерфейса 1С: одинаковы в любой конфигурации и на любом
 # языке (сама конфигурация может быть хоть японской — эти имена задаёт платформа).
 # Мы их НЕ предполагаем: используем только если сущность объявила их в своих метаданных.
 STANDARD_NAME_PROPS = ("Description", "Code")
+STANDARD_DATE_PROPS = ("Date",)
 
 SAMPLE = int(os.environ.get("BUILD_SAMPLE", "20"))   # сколько значений смотреть при разборе
 NAME_COLS = int(os.environ.get("BUILD_NAME_COLS", "2"))  # сколько наименований склеивать
@@ -122,11 +137,18 @@ NUMERIC_EDM = ("Edm.Double", "Edm.Decimal", "Edm.Int16", "Edm.Int32", "Edm.Int64
 
 
 def q(sql):
-    p = subprocess.run(["psql", DSN, "-tA", "-F", "\x1f", "-c", sql],
+    """Выполнить SQL. Читаем CSV, а не «строка = запись».
+
+    В комментарии или адресе доставки бывает перевод строки — при построчном разборе
+    колонки съезжают, ключом становится обрывок текста, а короткая строка роняет
+    сервис. CSV-разбор это исключает: кавычки и переводы строк внутри значений
+    обрабатывает сам формат.
+    """
+    p = subprocess.run(["psql", DSN, "-tA", "--csv", "-c", sql],
                        capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError("SQL: %s\n%s" % (sql[:200], (p.stderr or "")[:400]))
-    return [l.split("\x1f") for l in p.stdout.split("\n") if l != ""]
+    return [r for r in csv.reader(io.StringIO(p.stdout)) if r]
 
 
 def ddl(sql):
@@ -152,6 +174,55 @@ def embed(texts):
             last = e
             time.sleep(1.5 * (attempt + 1))
     raise last
+
+
+MONEY_SYS = """You are given the numeric field names of one record type in an ERP database.
+Pick the ONE field that holds the record's monetary total — the amount of money the
+document is for. Answer with the NUMBER of that field only. If none of them is a money
+total (they are counters, order indices, ordinal numbers, quantities, rates), answer 0."""
+
+
+def money_column(entity_label, names):
+    """Какая из числовых колонок — деньги. Спрашиваем модель по ИМЕНАМ.
+
+    Почему не «самая большая по величине»: это правило уже промахнулось на нашей же
+    базе — в справочниках «суммой» стал служебный реквизит упорядочивания, а на рознице
+    номер чека ККМ (тоже целое, тоже объявлен рядом с суммой) обогнал бы средний чек.
+    Отличить деньги от счётчика по величине нельзя; по имени — можно, и это чисто
+    языковая задача. Кандидаты приходят из метаданных базы, а не из кода.
+    """
+    if not names:
+        return None
+    if len(names) == 1:
+        return names[0]
+    key = os.environ.get("DEEPSEEK_API_KEY", "")
+    if not key:
+        return None
+    listing = "\n".join("%d. %s" % (i + 1, n) for i, n in enumerate(names))
+    body = json.dumps({
+        "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash"),
+        "temperature": 0, "max_tokens": 8,
+        "thinking": {"type": "disabled"},
+        "messages": [{"role": "system", "content": MONEY_SYS},
+                     {"role": "user", "content": "Record type: %s\n\nFields:\n%s"
+                      % (entity_label, listing)}]}).encode()
+    req = urllib.request.Request(
+        os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com").rstrip("/")
+        + "/v1/chat/completions", data=body, method="POST")
+    req.add_header("Authorization", "Bearer " + key)
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            raw = json.loads(r.read())["choices"][0]["message"]["content"]
+    except Exception:                       # noqa: BLE001 — сеть/квота
+        return None
+    m = re.search(r"\d+", raw or "")
+    if not m:
+        return None
+    i = int(m.group(0))
+    if i == 0:
+        return ""                      # модель прямо сказала: денежной колонки нет
+    return names[i - 1] if 1 <= i <= len(names) else ""
 
 
 def split_camel(name):
@@ -210,7 +281,8 @@ def build_corpus():
         declared = meta.get(t.lower(), {})
         if declared:
             guid_cols = [c for c, _dt in cols[t] if declared.get(c) == "Edm.Guid"]
-            txt = [c for c, _dt in cols[t] if declared.get(c) == "Edm.String"]
+            txt = [c for c, _dt in cols[t] if declared.get(c) == "Edm.String"
+                   and c not in STANDARD_SERVICE_PROPS]
         else:
             guid_cols, txt = [], []
             for c, dt in cols[t]:
@@ -270,6 +342,8 @@ def build_corpus():
     for t, n in live:
         tcols = cols[t]
         declared, guid_cols, _txt = split_cols(t)
+        key_props = [c for c in ENTITY_KEYS.get(t.lower(), [])
+                     if any(c == cn for cn, _dt in tcols)]
 
         # ЧИСЛО ДЛЯ АГРЕГАТОВ. Правильный источник — объявленный тип: 1С сама говорит,
         # что ИНН/КПП/счёт это строки-коды, а сумма документа — Edm.Double. Витрина
@@ -281,8 +355,14 @@ def build_corpus():
         else:
             num_cols = [c for c, dt in tcols
                         if dt in ("BIGINT", "DOUBLE", "DECIMAL", "INTEGER", "HUGEINT")]
-        amount_col, best = None, -1
-        for c in num_cols:
+        picked_money = money_column(split_camel(ENTITY_NAMES.get(t.lower(), t)),
+                                    num_cols) if declared else None
+        amount_col = picked_money or None
+        # Запасной разбор запускаем ТОЛЬКО если модель не ответила (None), а не когда
+        # она ответила «денег нет» (пустая строка).
+        fallback = picked_money is None
+        best = 1e18 if amount_col else -1
+        for c in (num_cols if fallback else []):
             vals = []
             for r in q('SELECT "%s" FROM "%s" WHERE "%s" IS NOT NULL AND "%s"<>0 LIMIT 50'
                        % (c, t, c, c)):
@@ -304,7 +384,12 @@ def build_corpus():
             amount_col = None
         if declared:
             dcols = [c for c, _dt in tcols if declared.get(c) == "Edm.DateTime"]
-            date_cols = dcols or [c for c, dt in tcols if "TIMESTAMP" in dt or dt == "DATE"]
+            # У документа дата документа объявлена платформой отдельным свойством.
+            # «Первая по порядку» — неверно: в сотнях типов первой идёт дата
+            # доверенности или дата начала, и «за декабрь» фильтровалось бы по ней.
+            std_date = [c for c in STANDARD_DATE_PROPS if c in declared and c in dcols]
+            date_cols = std_date or dcols or [c for c, dt in tcols
+                                              if "TIMESTAMP" in dt or dt == "DATE"]
         else:
             date_cols = [c for c, dt in tcols if "TIMESTAMP" in dt or dt == "DATE"]
         date_col = date_cols[0] if date_cols else None
@@ -329,8 +414,11 @@ def build_corpus():
         # Колонки-ссылки читаем отдельно от текстовых: первая — собственный ключ строки,
         # остальные резолвятся в наименования.
         all_cols = guid_cols + txt_cols
+        # Объявленный ключ читаем отдельно: он бывает составным и не обязан быть Guid.
+        key_extra = [c for c in key_props if c not in all_cols]
         extra = ([('"%s"' % amount_col)] if amount_col else []) + \
-                ([('"%s"' % date_col)] if date_col else [])
+                ([('"%s"' % date_col)] if date_col else []) + \
+                [('"%s"' % c) for c in key_extra]
         sel = ", ".join('"%s"' % c for c in all_cols) or "NULL"
         rows = q("SELECT %s%s FROM \"%s\"" % (sel, (", " + ", ".join(extra)) if extra else "", t))
 
@@ -348,6 +436,20 @@ def build_corpus():
                 i += 1
             if date_col and i < len(rest):
                 dt_ = rest[i] or None
+                i += 1
+            declared_key = None
+            if key_props:
+                vals = {}
+                for c, v in zip(all_cols, tv):
+                    if c in key_props:
+                        vals[c] = v
+                for c in key_extra:
+                    if i < len(rest):
+                        vals[c] = rest[i]
+                        i += 1
+                parts_k = [vals.get(c, "") for c in key_props]
+                if any(parts_k):
+                    declared_key = "|".join(parts_k)
 
             parts, key = [label], None
             for c, v in zip(all_cols, tv):
@@ -371,7 +473,7 @@ def build_corpus():
                                          "%d" % amt if amt == int(amt) else "%.2f" % amt))
             if dt_:
                 parts.append("%s: %s" % (date_col, dt_[:10]))
-            corpus.append((t, key or "", " | ".join(parts), amt, dt_))
+            corpus.append((t, declared_key or key or "", " | ".join(parts), amt, dt_))
     return corpus, len(live), len(refmap)
 
 

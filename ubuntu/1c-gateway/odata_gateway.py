@@ -13,7 +13,8 @@ idle-обработчиком 1С (см. docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md) �
 Гарантии read-only, слоями:
   1. Пользователь 1С read-only (ai_reader) — OData под ним физически не пишет
      (запись = POST/PATCH/DELETE, права не дают). Это ОСНОВНАЯ гарантия.
-  2. Этот прокси пропускает ТОЛЬКО GET и только под базовым OData-путём — writes режет.
+  2. Этот прокси пропускает ТОЛЬКО GET и только под базовым OData-путём (`..` отклоняется
+     с 403), writes режет на входе. Bearer-токен обязателен: без него сервис не стартует.
   3. Состав OData ограничен (УстановитьСоставСтандартногоИнтерфейсаOData).
 Bearer/креды 1С хранятся здесь, мозг их не знает; наружу прокси слушает localhost.
 
@@ -22,6 +23,7 @@ Bearer/креды 1С хранятся здесь, мозг их не знает
 import base64
 import os
 import sys
+import urllib.parse
 import urllib.request
 import urllib.error
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -71,9 +73,30 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _auth_ok(self):
-        if not GATEWAY_TOKEN:
-            return True
+        # Fail-closed. Раньше здесь было «нет токена — пускаем всех», и токен в env
+        # не задали: шлюз отдавал всю опубликованную 1С любому локальному процессу
+        # без единого заголовка. Пустая переменная окружения не должна молча снимать
+        # защиту — теперь без токена сервис вообще не стартует (см. main()).
         return self.headers.get("Authorization", "") == f"Bearer {GATEWAY_TOKEN}"
+
+    @staticmethod
+    def _path_ok(raw: str) -> bool:
+        """Путь обязан оставаться ВНУТРИ базового OData-адреса.
+
+        `UPSTREAM` уже содержит базовый путь публикации, а путь клиента к нему
+        дописывается. Поэтому `..` выводит запрос за пределы OData — на корень
+        веб-сервера. Проверено до правки: `GET /../../..` отдавал 200.
+        Разрешаем только обычные сегменты; сравниваем и исходную, и раскодированную
+        форму, чтобы `%2e%2e` не проскочил мимо.
+        """
+        for form in (raw, urllib.parse.unquote(raw)):
+            path = form.split("?", 1)[0]
+            if "\\" in path:
+                return False
+            for seg in path.split("/"):
+                if seg == "..":
+                    return False
+        return True
 
     # Разрешаем ТОЛЬКО чтение. Всё, что меняет данные, — отклоняем на входе.
     def do_POST(self):   return self._deny()
@@ -91,6 +114,9 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, b'{"status":"odata-gateway-ok"}')
         if not self._auth_ok():
             return self._send(401, b'{"error":"unauthorized"}')
+        if not self._path_ok(self.path):
+            self.log_message("DENY path traversal %s", self.path)
+            return self._send(403, b'{"error":"path outside OData base"}')
         # проксируем GET на OData; путь клиента добавляется к базовому OData-URL
         path = self.path if self.path.startswith("/") else "/" + self.path
         url = UPSTREAM + _url_ascii(path)
@@ -111,12 +137,19 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def main():
+    if not GATEWAY_TOKEN:
+        # Отказ на старте, а не тихое снятие защиты: опечатка в имени переменной
+        # окружения не должна превращать шлюз в открытый доступ к данным 1С.
+        sys.stderr.write("FATAL: ODG_GATEWAY_TOKEN не задан — шлюз без авторизации "
+                         "отдавал бы 1С кому угодно. Задайте токен в окружении.\n")
+        return 2
     if not (ODATA_USER and ODATA_PASS):
         sys.stderr.write("WARN: ODG_USER/ODG_PASS пусты — OData ответит 401\n")
     srv = ThreadingHTTPServer((LISTEN_HOST, LISTEN_PORT), Handler)
     sys.stderr.write(f"1c-odata-gateway на http://{LISTEN_HOST}:{LISTEN_PORT}  →  {UPSTREAM}  (только GET)\n")
     srv.serve_forever()
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main() or 0)

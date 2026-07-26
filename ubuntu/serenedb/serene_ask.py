@@ -188,111 +188,114 @@ def _fetch(match_sql, preds, order, limit):
         % (order, src, (" WHERE " + " AND ".join(where)) if where else "", limit))
 
 
-def search(question, intent):
-    """Гибридный поиск: сначала строгое «И» по словам вопроса, потом «ИЛИ», потом вектор.
+def probe(groups):
+    """Проверить все слова вопроса ОДНИМ запросом и вернуть выражение на каждое понятие.
 
-    Почему «И» первым: `ts_any` — это ИЛИ, и на вопросе «поступления от ООО ТехноСнаб»
-    он тянет всё, где встречается «ООО». Строгое совпадение по всем словам даёт то самое
-    множество, по которому потом честно считается сумма.
+    Три способа на каждое слово, по убыванию строгости:
+      * `ts_phrase`      — точное совпадение, проходит через анализатор (регистр не важен);
+      * `ts_levenshtein` — опечатки и словоформы, тоже через анализатор;
+      * `ts_like`        — подстрока, для склеенных имён («поступления» в
+                           «ПоступлениеТоваровУслуг»).
+    Важно: `ts_like` и `ts_starts_with` — ТЕРМИННЫЕ функции, анализатор их не трогает и
+    регистр не понижает. Проверено на инстансе: `ts_starts_with('Сбербан')` = 0, а
+    `ts_starts_with('сбербан')` = 143. Поэтому для них слово приводится к нижнему регистру.
+    Раньше здесь был цикл подбора длины префикса — до шести отдельных запросов на слово,
+    и для имён собственных он не находил ничего вообще.
     """
-    preds = _predicates(intent)
-    terms = intent.get("terms") or []
-    diag = {"terms": terms, "preds": preds}
-    tq = ""
-    rank = "bm25(%s.tableoid)" % INDEX
-
-    # Слово, которого в данных нет вообще («продажи» при таблице «реализациятоваровуслуг»),
-    # обнуляет строгий поиск. Проверяем каждое слово по индексу и оставляем только живые —
-    # это данные решают, а не список слов в коде.
-    if terms:
-        live, fuzzy = [], []
-        for group in terms:
-            hits = []                      # варианты одного понятия: между ними ИЛИ
-            for x in group:
-                n = psql("SELECT count(*) FROM %s WHERE doc @@ ts_phrase(%s)" % (INDEX, lit(x)))
-                if n and n[0] and int(n[0][0]) > 0:
-                    hits.append("ts_phrase(%s)" % lit(x))
-            if hits:
-                live.append(hits[0] if len(hits) == 1
-                            else "ts_any([%s])" % ", ".join(hits))
-                continue
-            x = group[0]
-            # Слово не нашлось целиком. Причина обычно морфологическая: спрашивают
-            # «поступления», а в данных «ПоступлениеТоваровУслуг». Стемминг мы держим
-            # выключенным (он привязан к языку), поэтому подбираем самый длинный
-            # ПРЕФИКС, который что-то находит. Длину подбирает индекс, а не список
-            # окончаний в коде: одинаково работает для любого языка.
-            found = None
-            for cut in range(len(x) - 1, max(3, int(len(x) * 0.5)) - 1, -1):
-                p = x[:cut]
-                n = psql("SELECT count(*) FROM %s WHERE doc @@ ts_starts_with(%s)"
-                         % (INDEX, lit(p)))
-                if n and n[0] and int(n[0][0]) > 0:
-                    found = p
-                    break
-            if found:
-                fuzzy.append("ts_starts_with(%s)" % lit(found))
-                diag.setdefault("by_prefix", []).append("%s->%s" % (x, found))
-        # Точное совпадение — ФИЛЬТР. Префиксное — только запасной вариант: «покупало»
-        # обрезается до «покупа» и цепляет «Покупатель», а как обязательное условие
-        # это уводит выборку не туда. Приблизительное годится, когда точного нет вовсе.
-        diag["terms_exact"], diag["terms_fuzzy"] = len(live), len(fuzzy)
-        use = live or fuzzy
-        tq = "[" + ", ".join(use) + "]" if use else ""
-        terms = use
-
-    rows, match = [], ""
-    t = time.time()
-    if tq:
-        match = "doc @@ ts_all(%s)" % tq
-        rows = _fetch(match, preds, rank, TOPK)
-        diag["mode"] = "all"
-        if not rows:
-            match = "doc @@ ts_any(%s)" % tq
-            rows = _fetch(match, preds, rank, TOPK)
-            diag["mode"] = "any"
-    diag["bm25_ms"] = round((time.time() - t) * 1000, 1)
-    diag["bm25_n"] = len(rows)
-
-    # вектор — только когда словами не нашли НИЧЕГО. Одно точное попадание ценнее
-    # сорока «похожих»: иначе релевантный результат тонет в шуме справочников.
-    if not rows:
-        t = time.time()
-        vec = embed_one(question)
-        vlit = "'[" + ",".join("%.6f" % x for x in vec) + "]'::FLOAT[%d]" % EMBED_DIM
-        vrows = _fetch("", preds, "array_cosine_similarity(emb, %s)" % vlit, TOPK)
-        seen = {r[0] for r in rows}
-        rows += [r for r in vrows if r[0] not in seen]
-        match, diag["vec_used"] = "", True
-        diag["vec_ms"] = round((time.time() - t) * 1000, 1)
-
-    # только условие, без слов («все документы больше 500 000»)
-    if not rows and preds:
-        rows = _fetch("", preds, "0", TOPK)
-        diag["by_predicate_only"] = True
-    return rows, match, diag
+    probes, meta = [], []
+    for gi, group in enumerate(groups):
+        for ai_, alt in enumerate(group):
+            for kind, expr in (
+                    ("exact", "ts_phrase(%s)" % lit(alt)),
+                    ("fuzzy", "ts_levenshtein(%s, 2)" % lit(alt)),
+                    ("part", "ts_like(%s)" % lit("%" + alt.lower() + "%"))):
+                probes.append("SELECT %d i, count(*) n FROM %s WHERE doc @@ %s"
+                              % (len(meta), INDEX, expr))
+                meta.append((gi, kind, expr))
+    if not probes:
+        return [], {}
+    counts = {}
+    for r in psql(" UNION ALL ".join(probes)):
+        try:
+            counts[int(r[0])] = int(r[1])
+        except (ValueError, IndexError):
+            pass
+    per_group, diag = {}, {}
+    for i, (gi, kind, expr) in enumerate(meta):
+        if counts.get(i, 0) <= 0:
+            continue
+        rank = {"exact": 0, "fuzzy": 1, "part": 2}[kind]
+        cur = per_group.get(gi)
+        if cur is None or rank < cur[0]:
+            per_group[gi] = (rank, [expr], kind)
+        elif rank == cur[0] and expr not in cur[1]:
+            cur[1].append(expr)
+    out = []
+    for gi in sorted(per_group):
+        rank, exprs, kind = per_group[gi]
+        out.append(exprs[0] if len(exprs) == 1 else "ts_any([%s])" % ", ".join(exprs))
+        diag[gi] = kind
+    return out, diag
 
 
-def widen_by_predicate(src_table, preds, rows):
-    """Добрать ВСЕ строки фокусной таблицы, подходящие под условие.
+def match_expr(exprs, preds):
+    """Собрать условие поиска с ГРАДИЕНТОМ: сперва все понятия, потом мягче.
 
-    Вопрос «какие продажи больше 500 000» — это не «покажи похожие», а «покажи все».
-    Вектор ранжирует, но не обязан вернуть полный список; условие возвращает.
+    `ts_any(массив, k)` — «не меньше k из N». Прежний обрыв «всё → любое» на вопросе
+    «поступления от ООО ТехноСнаб» давал либо ноль, либо всё, где есть «ООО».
     """
-    if not (src_table and preds):
-        return rows
-    full = psql(
+    n = len(exprs)
+    if not n:
+        return "", 0
+    for k in range(n, 0, -1):
+        expr = exprs[0] if (n == 1) else (
+            "ts_all([%s])" % ", ".join(exprs) if k == n
+            else "ts_any([%s], %d)" % (", ".join(exprs), k))
+        cond = " AND ".join(["doc @@ %s" % expr] + preds)
+        r = psql("SELECT count(*) FROM %s WHERE %s" % (INDEX, cond))
+        if r and r[0] and int(r[0][0]) > 0:
+            return "doc @@ %s" % expr, k
+    return "doc @@ %s" % (exprs[0] if n == 1 else "ts_any([%s], 1)" % ", ".join(exprs)), 1
+
+
+def tables_of(match, preds):
+    """Разложить ВСЁ множество совпадений по источникам — группировкой в индексе.
+
+    Раньше источники считались по 40 строкам, отобранным по рангу. BM25 штрафует
+    длинные документы, поэтому справочник вытеснял документы из выдачи целиком:
+    замерено — 74 строки из четырёх таблиц документов не попадали в кандидаты вовсе,
+    и выбирать приходилось между неверными.
+    """
+    where = " AND ".join([w for w in ([match] + preds) if w]) or "TRUE"
+    src = INDEX if match else CORPUS
+    out = {}
+    for r in psql("SELECT src_table, count(*) FROM %s WHERE %s GROUP BY 1" % (src, where)):
+        try:
+            out[r[0]] = int(r[1])
+        except (ValueError, IndexError):
+            pass
+    return out
+
+
+def rows_of(src_table, match, preds, limit):
+    """Строки одного источника. Модели отдаём подсвеченный фрагмент, а не начало строки."""
+    where = [w for w in ([match] + preds) if w] + ["src_table = %s" % lit(src_table)]
+    src = INDEX if match else CORPUS
+    frag = ("ts_highlight(doc, 'MaxWords=14,MaxFragments=2,StartSel=[,StopSel=]')"
+            if match else "doc")
+    order = "bm25(%s.tableoid) DESC" % INDEX if match else "amount DESC NULLS LAST"
+    return psql(
         "SELECT row_key, src_table, coalesce(amount,0), coalesce(doc_date::date::text,''), "
-        "       0 AS s, doc FROM %s WHERE %s AND src_table = %s ORDER BY amount DESC LIMIT %d"
-        % (CORPUS, " AND ".join(preds), lit(src_table), TOPK))
-    seen = {r[0] for r in full}
-    return full + [r for r in rows if r[0] not in seen]
+        "       0 AS s, %s FROM %s WHERE %s ORDER BY %s LIMIT %d"
+        % (frag, src, " AND ".join(where), order, limit))
 
 
 PICK_SYS = """You map a user's question to ONE record type.
 
 You get the question and a numbered list of record types that exist in this database.
 Answer with the NUMBER only — the type whose records would ANSWER the question.
+Some entries show how many records already match the question; prefer a type that
+actually has matches over a same-sounding one that has none.
 If none of them fits, answer 0.
 Judge by meaning, across languages and wording: a question about sales belongs to the
 type that records sales even if the words differ.
@@ -300,7 +303,7 @@ Records are kept from the company's own point of view, so a counterparty's purch
 the company's sale, and a counterparty's sale is the company's receipt."""
 
 
-def pick_entity(question, kind, cands):
+def pick_entity(question, kind, cands, counts=None):
     """Какая сущность имеется в виду — спрашиваем модель, но даём ей ТОЛЬКО НАЗВАНИЯ.
 
     Почему не вектором: замерено на живых данных — эмбеддинг не связывает «продажи» с
@@ -323,7 +326,14 @@ def pick_entity(question, kind, cands):
     names = [(r[0], r[1]) for r in rs if r and r[0]]
     if len(names) < 2:
         return names[0][0] if names else None
-    listing = "\n".join("%d. %s" % (i + 1, nm) for i, (_t, nm) in enumerate(names))
+    # Рядом с названием — СКОЛЬКО СОВПАДЕНИЙ там нашлось. Это данные, а не схема, и
+    # именно они снимают неоднозначность: справочник «Банки» на 1 запись и
+    # «Классификатор Банков» на 680 по названию неразличимы, по числу — очевидны.
+    counts = counts or {}
+    listing = "\n".join(
+        "%d. %s%s" % (i + 1, nm,
+                      "" if t not in counts else " — %d matching records" % counts[t])
+        for i, (t, nm) in enumerate(names))
     ask_text = question if not kind else "%s (%s)" % (question, kind)
     try:
         raw = ds_chat([{"role": "system", "content": PICK_SYS},
@@ -338,82 +348,8 @@ def pick_entity(question, kind, cands):
     return names[i - 1][0] if 1 <= i <= len(names) else None
 
 
-def table_by_meaning(question, candidates):
-    """Какая сущность ближе всего к вопросу по НАЗВАНИЮ. Пусто — если профиля нет."""
-    if not candidates:
-        return None
-    try:
-        vec = embed_one(question)
-        vlit = "'[" + ",".join("%.6f" % x for x in vec) + "]'::FLOAT[%d]" % EMBED_DIM
-        rs = psql("SELECT src_table, array_cosine_similarity(emb, %s) AS s FROM %s "
-                  "WHERE src_table IN (%s) ORDER BY s DESC LIMIT 1"
-                  % (vlit, TABLES, ", ".join(lit(c) for c in candidates)))
-    except RuntimeError:
-        return None
-    return rs[0][0] if rs and rs[0] else None
-
-
 def _vec(text):
     return "'[" + ",".join("%.6f" % x for x in embed_one(text)) + "]'::FLOAT[%d]" % EMBED_DIM
-
-
-def focus(question, rows, want, kind=None, have_terms=False):
-    """Из разнородных попаданий выбрать ОДНУ таблицу, по которой считать итог.
-
-    Складывать суммы справочников, договоров и документов вместе — бессмыслица (именно
-    так в первом прогоне получилось 7e20). Выбор источника — ПО СМЫСЛУ ВОПРОСА:
-    считаем близость вопроса к строкам каждого источника вектором. Так «продали»
-    приводит к реализациям, а не к поступлениям на счёт, без единого слова в коде.
-    Для вопросов про сумму источники без денег отбрасываются: ответить они не могут.
-    """
-    by = {}
-    for r in rows:
-        by.setdefault(r[1], []).append(r)
-    if not by:
-        return None, []
-    if len(by) == 1:
-        src = next(iter(by))
-        return src, by[src]
-
-    # О ЧЁМ вопрос — решаем сравнением с НАЗВАНИЕМ сущности («продажи» ближе к
-    # «Реализация Товаров Услуг», чем к «Поступление Товаров Услуг»). Сравнивать с
-    # текстом строк нельзя: там доминируют имена контрагентов и числа, и вопрос
-    # «за декабрь» уводит в соседнюю таблицу.
-    sim = {}
-    try:
-        vlit = _vec(kind or question)
-        for t_, c in psql("SELECT src_table, array_cosine_similarity(emb, %s) FROM %s"
-                          % (vlit, TABLES)):
-            sim[t_] = _num(c)
-        keys = ", ".join(lit(r[0]) for r in rows if r[0])
-        if keys:
-            qlit = _vec(question)
-            for t_, c in psql("SELECT src_table, max(array_cosine_similarity(emb, %s)) "
-                              "FROM %s WHERE row_key IN (%s) GROUP BY 1"
-                              % (qlit, CORPUS, keys)):
-                sim[t_] = max(sim.get(t_, 0.0), _num(c))
-    except RuntimeError:
-        sim = {}                      # профиля ещё нет — решаем по числу попаданий
-
-    def score(t_, rs):
-        with_amt = sum(1 for r in rs if _num(r[2]))
-        money_first = 1 if (want in ("sum", "count") and with_amt) else 0
-        # Нашлись слова — верим попаданиям: имя контрагента точно указало на его
-        # документы. Слов нет — верить нечему, кроме смысла.
-        if have_terms:
-            # Сила совпадения, ВЗВЕШЕННАЯ смыслом. По отдельности оба сигнала врут:
-            # по количеству побеждает справочник статей (слово «поступления» там в
-            # каждой строке), а по смыслу — таблица с похожим названием, где нужного
-            # контрагента нет вовсе. Произведение требует и того, и другого.
-            mass = sum(max(_num(r[4]), 0.0) for r in rs)
-            return (money_first, round(mass * max(sim.get(t_, 0.0), 0.0), 4), len(rs))
-        return (money_first, sim.get(t_, 0.0), len(rs))
-
-    picked = pick_entity(question, kind, list(by))
-    if picked in by:
-        return picked, by[picked]
-    src, rs = max(by.items(), key=lambda kv: score(kv[0], kv[1]))
-    return src, rs
 
 
 def _num(x):
@@ -423,7 +359,7 @@ def _num(x):
         return 0.0
 
 
-def aggregate(src_table, match, preds, want=None):
+def aggregate(src_table, match, preds):
     """Итог считается В БАЗЕ по ВСЕМУ подходящему множеству, без LIMIT.
 
     Это ключевое отличие от чанкового RAG: тот суммирует то, что попало в выборку,
@@ -475,48 +411,100 @@ def compose(question, rows, agg):
 
 
 # ----------------------------------------------------------------- 5. гейт (кодом)
-SPACE = re.compile(r"[^\S\n]+")
-DATE = re.compile(r"\b(\d{1,4})[.\-/](\d{1,2})(?:[.\-/](\d{1,4}))?\b")
-NUM = re.compile(r"\d+(?:[.,]\d+)?")
+# Разделитель разрядов — любой пробел, включая неразрывный и узкий. Но склеивать
+# можно ТОЛЬКО правильные группы по три цифры: иначе «итого 10 20 30 шт» слипается
+# в 102030, и три настоящих числа исчезают из проверки.
+# Число может быть записано как угодно: «1 629 700», «1,629,700», «1.629.700»,
+# «16,29,700». Разделитель разрядов — вопрос локали, а продукт коробочный. Поэтому
+# токен разбирается во ВСЕ допустимые прочтения, и он считается обоснованным, если
+# ХОТЯ БЫ ОДНО из них есть в данных. Прежняя версия читала «1,629,700» как 1.629
+# и объявляла выдумкой весь правильный англоязычный ответ.
+NUMTOK = re.compile(r"\d[\d  \u2009\u202f.,]*\d|\d")
+SEP = "  \u2009\u202f,."
+DATE3 = re.compile(r"\b(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})\b")
+DATE2 = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})\b")
+
+
+def _readings(tok):
+    """Все осмысленные прочтения числового токена."""
+    out = set()
+    digits = re.sub(r"[^\d]", "", tok)
+    if not digits:
+        return out
+    body = tok.strip(SEP)
+    # 1) все разделители — групповые
+    try:
+        out.add(round(float(digits), 2))
+    except ValueError:
+        pass
+    # 2) последний разделитель — десятичный, остальные групповые
+    m = list(re.finditer(r"[%s]" % re.escape(SEP), body))
+    if m:
+        i = m[-1].start()
+        head = re.sub(r"[^\d]", "", body[:i])
+        tail = re.sub(r"[^\d]", "", body[i + 1:])
+        if head and tail:
+            try:
+                out.add(round(float("%s.%s" % (head, tail)), 2))
+            except ValueError:
+                pass
+    return {v for v in out} | {float(int(v)) for v in out if v == int(v)}
 
 
 def _dates(text):
-    """Даты как НАБОР компонент, без разбора формата.
+    """Даты как УПОРЯДОЧЕННЫЕ компоненты (день, месяц, год).
 
-    Человеку всё равно, «09.12», «9.12.2025» или «2025-12-09». Сравнивать форматы —
-    значит зашивать локаль; сравниваем множества чисел: {9,12} входит в {2025,12,9}.
+    Раньше сравнивались множества, и «09.12» с «12.09» были неразличимы — подменённая
+    дата проходила. Год определяется по четырёхзначной записи, а не по позиции: это
+    не зависит от того, в каком порядке его пишут в стране.
     """
-    return [frozenset(int(x) for x in m.groups() if x) for m in DATE.finditer(str(text or ""))]
-
-
-def _norm_numbers(text):
-    """Числа из текста.
-
-    Разделителем разрядов бывает любой пробел, включая неразрывный: без склейки
-    «2 088 800» распадается на 2, 88 и 800, и гейт зря считает ответ выдумкой.
-    Даты убираем — их проверяет `_dates`, иначе «9.12» выглядит числом 9.12.
-    """
-    if not text:
-        return set()
-    t = SPACE.sub("", DATE.sub(" ", str(text)))
-    out = set()
-    for m in NUM.finditer(t):
-        try:
-            v = float(m.group(0).replace(",", "."))
-        except ValueError:
-            continue
-        out.add(round(v, 2))
-        if v == int(v):
-            out.add(float(int(v)))
+    out, seen = [], []
+    for m in DATE3.finditer(str(text or "")):
+        if m.group(1):
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        else:
+            d, mo, y = int(m.group(4)), int(m.group(5)), int(m.group(6))
+        out.append((d, mo, y))
+        seen.append(m.span())
+    for m in DATE2.finditer(str(text or "")):
+        if not any(a <= m.start() and m.end() <= b for a, b in seen):
+            out.append((int(m.group(1)), int(m.group(2)), None))
     return out
 
 
-def gate(answer, rows, agg, question=""):
+def _date_spans(text):
+    t = str(text or "")
+    spans = [m.span() for m in DATE3.finditer(t)]
+    for m in DATE2.finditer(t):
+        if not any(a <= m.start() and m.end() <= b for a, b in spans):
+            spans.append(m.span())
+    return spans
+
+
+def _tokens(text):
+    """Числовые токены текста, вне дат: список множеств допустимых значений."""
+    t = str(text or "")
+    if not t:
+        return []
+    for a, b in sorted(_date_spans(t), reverse=True):
+        t = t[:a] + " " * (b - a) + t[b:]
+    return [r for r in (_readings(m.group(0)) for m in NUMTOK.finditer(t)) if r]
+
+
+def _norm_numbers(text):
+    """Все значения, которые встречаются в тексте (для белого списка по данным)."""
+    out = set()
+    for r in _tokens(text):
+        out |= r
+    return out
+
+
+def gate(answer, rows, agg):
     """Каждое число ответа обязано встречаться в данных, в итоге или в самом вопросе.
 
     Правило живёт в КОДЕ, а не в промте: промт — это пожелание, а не гарантия.
-    Числа из вопроса разрешены отдельно (человек сам назвал порог «больше 500000»,
-    и повторить его в ответе — не выдумка).
+    Числа из вопроса НЕ разрешаются: «вопрос» приходит как аргумент инструмента,
+    и составляет его модель бота — то есть проверяемый сам пополнял бы белый список.
     """
     allowed = set()
     for r in rows:
@@ -527,62 +515,87 @@ def gate(answer, rows, agg, question=""):
         allowed |= _norm_numbers(str(agg["count"]))
         allowed |= _norm_numbers("%.2f" % agg["sum"])
         allowed |= {round(agg["sum"], 2), float(agg["count"])}
-    allowed |= _norm_numbers(question)
+    # Числа из ВОПРОСА в белый список больше не идут. Вопрос — это аргумент, который
+    # сочиняет модель бота: она сама пополняла список того, что ей разрешено сказать,
+    # и через это проходило любое выдуманное число.
 
-    bad = [n for n in _norm_numbers(answer) if n not in allowed]
+    # Токен обоснован, если ХОТЯ БЫ ОДНО его прочтение есть в данных.
+    bad = [sorted(r)[0] for r in _tokens(answer) if not (r & allowed)]
 
-    # Даты: компоненты названной даты обязаны входить в какую-то дату из данных.
+    # Даты: названная дата обязана совпасть с датой из данных ПОКОМПОНЕНТНО.
     known = []
     for r in rows:
         known += _dates(r[3]) + _dates(r[5])
-    for d in _dates(answer):
-        if not any(d <= k for k in known):
-            bad.append(tuple(sorted(d)))
+    for d, mo, y in _dates(answer):
+        ok = any(kd == d and kmo == mo and (y is None or ky is None or ky == y)
+                 for kd, kmo, ky in known)
+        # Двухкомпонентная запись без года неоднозначна: «10.5» — это и дата, и дробь.
+        # Разрешаем, если такое ЧИСЛО есть в данных; выдуманное не пройдёт ни как дата,
+        # ни как число.
+        if not ok and y is None:
+            ok = float("%d.%d" % (d, mo)) in allowed
+        if not ok:
+            bad.append("%02d.%02d%s" % (d, mo, "" if y is None else ".%d" % y))
     return (not bad), bad
 
 
 # ----------------------------------------------------------------- HTTP
 def answer(question):
+    """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
+
+    Порядок важен: сначала множество совпадений раскладывается по источникам ЦЕЛИКОМ,
+    и только потом выбирается один источник и тянутся его строки. Обратный порядок
+    (сперва top-N строк, потом группировка) терял целые таблицы.
+    """
     t0 = time.time()
-    today = time.strftime("%Y-%m-%d")
-    intent = parse_intent(question, today)
-    rows, match, diag = search(question, intent)
+    intent = parse_intent(question, time.strftime("%Y-%m-%d"))
+    preds = _predicates(intent)
+    diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind")}
+
+    exprs, kinds = probe(intent.get("terms") or [])
+    diag["match_by"] = kinds
+    match, k = match_expr(exprs, preds)
+    diag["min_should_match"] = k if exprs else 0
+
+    by = tables_of(match, preds)
+    if not by and match:                       # слова не дали ничего — ищем по смыслу
+        vec = _vec(question)
+        near = psql("SELECT src_table, count(*) FROM (SELECT src_table FROM %s "
+                    "ORDER BY array_cosine_similarity(emb, %s) DESC LIMIT %d) GROUP BY 1"
+                    % (CORPUS, vec, TOPK))
+        by = {r[0]: int(r[1]) for r in near if r and r[0]}
+        match = ""
+        diag["by_vector"] = True
+    if not by:
+        by = tables_of("", preds)
+    if not by:
+        return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
+                "diag": dict(diag, sec=round(time.time() - t0, 2))}
+
+    # Кандидаты — все источники витрины, а не только попавшие в выдачу: на вопросе
+    # на другом языке нужная сущность в выдачу не попадает, и выбирать не из чего.
+    try:
+        cands = [r[0] for r in psql("SELECT src_table FROM %s" % TABLES)] or list(by)
+    except RuntimeError:
+        cands = list(by)
+    src = pick_entity(question, intent.get("kind"), cands, by)
+    if src not in by:
+        # Модель назвала источник, куда поиск не попал: проверяем, есть ли там что-то
+        # под наши условия, иначе остаёмся с тем, что реально нашлось.
+        probe_rows = rows_of(src, match, preds, 1) if src else []
+        if not probe_rows:
+            src = max(by.items(), key=lambda kv: kv[1])[0]
+    diag["focus"], diag["found"] = src, by.get(src, 0)
+
+    rows = rows_of(src, match, preds, TOPK)
     if not rows:
         return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
-    want = intent.get("want")
-    src, focused = focus(question, rows, want, intent.get("kind"),
-                         bool(diag.get("terms_exact")))
-    diag["focus"], diag["kind"] = src, intent.get("kind")
-    # Итог по фокусной таблице считаем ВСЕГДА, даже когда спросили список: иначе
-    # модель складывает сама, а такое число гейт обязан отклонить — и вместе с ним
-    # гибнет правильный ответ.
-    if diag["preds"]:
-        # Когда слов для полнотекста нет вовсе («какие продажи больше 500 000»),
-        # нельзя наследовать источник от векторной выдачи: она вернула что попало,
-        # и расширение по условию только закрепит ошибку. Выбираем сущность по
-        # названию среди ВСЕХ, где условие вообще выполняется.
-        if not diag.get("terms_exact"):
-            cand = [r[0] for r in psql("SELECT DISTINCT src_table FROM %s WHERE %s"
-                                       % (CORPUS, " AND ".join(diag["preds"])))]
-            best = pick_entity(question, intent.get("kind"), cand) \
-                or table_by_meaning(intent.get("kind") or question, cand)
-            if best:
-                src = best
-                diag["focus_by_name"] = src
-        rows = widen_by_predicate(src, diag["preds"], rows)
-        focused = [r for r in rows if r[1] == src] or rows
-    agg = aggregate(src, match if not diag.get("by_predicate_only") else "", diag["preds"])
-    # ВСЕГДА один источник — и для арифметики, и для списка. Иначе модель перечисляет
-    # строки одной таблицы, а итог берёт от другой: так «три реализации на 1 236 800»
-    # получили итог 925 000 (оплаты того же контрагента), и гейт это пропустил —
-    # число ведь настоящее, просто не от тех строк.
-    rows = focused or rows
+    agg = aggregate(src, match, preds)
     text = compose(question, rows, agg)
-    ok, bad = gate(text, rows, agg, question)
+    ok, bad = gate(text, rows, agg)
     if not ok:
-        # Числа, которых нет в данных, наружу не выпускаем: отдаём проверяемый факт.
         sys.stderr.write("ask GATE: числа вне данных: %s\n" % bad[:6])
         if agg:
             text = TOTAL_TEXT.format(
@@ -593,14 +606,9 @@ def answer(question):
             return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
                     "diag": dict(diag, gate_rejected=bad[:6])}
 
-    srcs = []
-    for r in rows[:5]:
-        tag = r[1].split("_", 1)[1] if "_" in r[1] else r[1]
-        if tag not in srcs:
-            srcs.append(tag)
-    return {"kind": "answer", "text": text.strip(), "sources": srcs,
-            "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2),
-                         gate_ok=ok)}
+    tag = src.split("_", 1)[1] if "_" in src else src
+    return {"kind": "answer", "text": text.strip(), "sources": [tag],
+            "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 
 class Handler(BaseHTTPRequestHandler):
