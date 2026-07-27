@@ -723,7 +723,7 @@ def _split_answer(raw):
     return (raw or "").strip(), {}
 
 
-def compose(question, rows, agg):
+def compose(question, rows, agg, corrections=None):
     payload = []
     shown = rows[:ROWS_TO_MODEL]
     # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
@@ -758,6 +758,16 @@ def compose(question, rows, agg):
             body += "\n  period                    = %s .. %s" % (agg["date_min"], agg["date_max"])
         body += "%s" % (
             "")
+    if corrections:
+        # ВТОРАЯ ПОПЫТКА. Первая формулировка не прошла проверку кодом — говорим модели,
+        # что именно не сошлось, и требуем опираться только на посчитанные базой числа.
+        # Это не «правило на промте»: результат второй попытки проверяется тем же
+        # гейтом, что и первой. Смысл — не поверить модели, а дать ответу дойти до
+        # клиента, если он есть (решение владельца 27.07).
+        body += ("\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY A VERIFIER: %s"
+                 "\nAnswer again. Use ONLY the computed figures above, each in its own "
+                 "role. If a figure is not given above, do not state it at all."
+                 % "; ".join(corrections))
     return ds_chat([{"role": "system", "content": ANSWER_SYS},
                     {"role": "user", "content": body}], max_tokens=800)
 
@@ -921,21 +931,42 @@ def check_claims(claims, agg):
     return (not bad), bad
 
 
-def claims_in_text(claims, text):
-    """Заявленная величина обязана присутствовать в тексте ЦИФРАМИ.
+ASKED_ROLE = {"sum": "total", "count": "count"}
+
+
+def claims_in_text(claims, text, want=None):
+    """Величина, О КОТОРОЙ СПРОСИЛИ, обязана стоять в тексте цифрами.
 
     Закрывает единственный класс выдумки, который гейт не видел: число, написанное
     СЛОВАМИ («два миллиона восемьсот тысяч»). Списка числительных в коде нет и быть не
     может — он был бы привязан к языку. Вместо этого требуем совпадения: раз модель
-    заявила величину, пусть она стоит в тексте цифрами, а цифры мы уже умеем сверять.
+    ответила на вопрос про сумму, пусть сумма стоит в тексте цифрами, а цифры мы уже
+    умеем сверять.
+
+    🔴 Проверяется ТОЛЬКО запрошенная величина, а не все заявленные. Решение владельца
+    27.07: «надо же дать ответ, если он есть. а так выходит, что если данные есть, но по
+    нашей системе мы их не отдали, мы не отвечаем — пропадает смысл проекта».
+
+    Замер, который к этому привёл: на «на какую сумму продано за год» модель написала
+    верный ответ (сумма 12 326 000 цифрами), но ДОПОЛНИТЕЛЬНО заявила count=36,
+    max=1629700, min=1500, не написав их в тексте. Прежнее правило отвергало ответ
+    целиком, и клиент получал отказ вместо верного числа — на каждом третьем прогоне.
+
+    Почему это безопасно: заявление, которого в тексте НЕТ, клиенту ничего не
+    утверждает — он его не видит. А каждое число, которое в тексте ЕСТЬ, по-прежнему
+    сверяется с базой гейтом (`gate`) и по ролям (`check_roles`). То есть ослаблена
+    не проверка чисел, а блокировка ответа тем, чего в ответе нет.
     """
     if not isinstance(claims, dict):
         return True, []
     have = _norm_numbers(text)
+    need = ASKED_ROLE.get(want)
     bad = []
     for role, v in claims.items():
-        if v is None:
+        if v is None or (need is not None and role != need):
             continue
+        if need is None:
+            continue                   # вопрос не про величину — блокировать нечем
         try:
             fv = float(v)
         except (TypeError, ValueError):
@@ -1128,7 +1159,7 @@ def answer(question):
     raw = compose(question, rows, agg)
     text, claims = _split_answer(raw)
     ok_roles, bad_roles = check_claims(claims, agg)
-    ok_txt, bad_txt = claims_in_text(claims, text)
+    ok_txt, bad_txt = claims_in_text(claims, text, intent.get("want"))
     ok_roles, bad_roles = (ok_roles and ok_txt), (bad_roles + bad_txt)
 
     # Ролевая сверка не может быть НЕОБЯЗАТЕЛЬНОЙ. Достаточно было ответить обычным
@@ -1143,6 +1174,25 @@ def answer(question):
         ok_roles, bad_roles = False, bad_roles + ["величина названа не цифрами"]
     ok_nums, bad_nums = gate(text, rows, agg)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
+    # ОТВЕТ ОБЯЗАН ДОЙТИ, ЕСЛИ ОН ЕСТЬ. Решение владельца 27.07: «если данные есть, но по
+    # нашей системе мы их не отдали — пропадает смысл проекта». Первая формулировка могла
+    # не пройти проверку по своей вине (модель объявила число строк суммой), а данные при
+    # этом посчитаны и верны. Даём ровно одну вторую попытку, назвав причину отказа, и
+    # проверяем её ТЕМ ЖЕ гейтом. Ослабления проверки здесь нет: если и второй ответ не
+    # сходится с базой, он не уйдёт.
+    if not ok and agg:
+        diag["retry"] = bad[:3]
+        raw2 = compose(question, rows, agg, corrections=bad[:3])
+        text2, claims2 = _split_answer(raw2)
+        ok_roles2, bad_roles2 = check_claims(claims2, agg)
+        ok_txt2, bad_txt2 = claims_in_text(claims2, text2, intent.get("want"))
+        ok_nums2, bad_nums2 = gate(text2, rows, agg)
+        if ok_roles2 and ok_txt2 and ok_nums2 and (text2 or "").strip():
+            text, claims = text2, claims2
+            ok, bad = True, []
+            diag["retry_ok"] = True
+        else:
+            bad = bad + (bad_roles2 + bad_txt2 + bad_nums2)[:3]
     diag["claims"] = claims or None
     if not ok:
         sys.stderr.write("ask GATE: числа вне данных: %s\n" % bad[:6])

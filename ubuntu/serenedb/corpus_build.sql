@@ -241,3 +241,24 @@ SELECT 'нет в новой' AS сторона, count(*) FROM search_corpus c
 UNION ALL
 SELECT 'нет в боевой', count(*) FROM tmp3_corpus t
   WHERE NOT EXISTS (SELECT 1 FROM search_corpus c WHERE c.src_table=t.src_table AND c.row_key=t.row_key);
+
+-- ============ 8. ОТЧЁТ О КАЧЕСТВЕ КАРТЫ ИМЁН ============
+-- П. 13 TARGET.md: то, что данные где-то потеряли качество, обязано быть ВИДНО, а не
+-- зависеть от того, догадался ли человек посмотреть. Три числа считаются на любой базе
+-- без единой настройки и без просмотра глазами (проверка «посмотреть выборку» не
+-- универсальна: её нельзя ни повторить у клиента, ни выразить замером).
+CREATE TABLE IF NOT EXISTS search_quality (k VARCHAR, v BIGINT, note VARCHAR);
+DELETE FROM search_quality WHERE k LIKE 'refmap_%';
+INSERT INTO search_quality
+SELECT 'refmap_resolved', count(*), 'ссылок получили человеческое имя' FROM tmp3_refmap
+UNION ALL
+SELECT 'refmap_unresolved', count(*), 'GUID в корпусе без имени в карте'
+FROM (SELECT DISTINCT val FROM (
+        SELECT unnest(regexp_extract_all(doc,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')) val
+        FROM search_corpus)
+      WHERE val NOT IN (SELECT guid FROM tmp3_refmap))
+UNION ALL
+SELECT 'refmap_ambiguous', count(*), 'имён, которые делят между собой разные объекты'
+FROM (SELECT name FROM tmp3_refmap GROUP BY name HAVING count(*) > 1);
+
+SELECT k, v, note FROM search_quality WHERE k LIKE 'refmap_%' ORDER BY k;
