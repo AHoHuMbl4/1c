@@ -217,7 +217,11 @@ def _semantic_into(hints, words, min_cos=0.70):
     vecs = embed(words[:8])
     for w, v in zip(words[:8], vecs):
         q = (
-            f"SELECT table_name, column_name, value, array_cosine_similarity(emb, {_vec_literal(v)}) sim "
+            # cosine_similarity — РОДНАЯ функция движка, array_cosine_similarity приходит
+            # из ядра DuckDB и медленнее. Здесь взята именно similarity, а не оператор
+            # <=>: ниже значение сравнивается с порогом min_cos=0.70, а <=> возвращает
+            # РАССТОЯНИЕ (1 - cos) — подстановка оператора молча вывернула бы отсечку.
+            f"SELECT table_name, column_name, value, cosine_similarity(emb, {_vec_literal(v)}) sim "
             f"FROM resolver_index ORDER BY sim DESC LIMIT 1;"
         )
         for line in psql(q, ["-tAF", "\t"], dsn=RESOLVER_DSN, pgpass=RESOLVER_PW).stdout.splitlines():

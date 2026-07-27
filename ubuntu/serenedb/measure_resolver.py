@@ -8,6 +8,8 @@ vecs = R.embed(TERMS)
 for t, v in zip(TERMS, vecs):
     lit = R._vec_literal(v)
     out = R.psql(
-        f"SELECT value, round(array_cosine_similarity(emb,{lit})::numeric,3) FROM resolver_index "
+        # cosine_similarity — родная функция движка; печатаем похожесть, а не расстояние,
+        # чтобы числа сравнивались с порогом 0.70 из _semantic_into напрямую.
+        f"SELECT value, round(cosine_similarity(emb,{lit})::numeric,3) FROM resolver_index "
         f"ORDER BY 2 DESC LIMIT 1", ["-tAF", " | "]).stdout.strip()
     print(f"  {t:12} -> {out}")

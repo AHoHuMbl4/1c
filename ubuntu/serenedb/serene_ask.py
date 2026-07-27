@@ -917,8 +917,14 @@ def answer(question):
     by = tables_of(match, preds)
     if not by and match:                       # слова не дали ничего — ищем по смыслу
         vec = _vec(question)
+        # Оператор <=> — РОДНОЕ ядро движка (cosine_distance), а array_cosine_similarity
+        # приходит из ядра DuckDB. Разница не только в скорости (замер 27.07: 583-627 мс
+        # против 435-451 на 97 965 x 1536): только родные функции несут AnnFunctionInfo,
+        # то есть array_* НИКОГДА не сможет воспользоваться векторным индексом. Выдача
+        # не меняется — сверено топ-40, совпало 40 из 40 позиция в позицию.
+        # <=> это РАССТОЯНИЕ: меньше = ближе, поэтому сортировка по возрастанию, без DESC.
         near = psql("SELECT src_table, count(*) FROM (SELECT src_table FROM %s "
-                    "ORDER BY array_cosine_similarity(emb, %s) DESC LIMIT %d) GROUP BY 1"
+                    "ORDER BY emb <=> %s LIMIT %d) GROUP BY 1"
                     % (CORPUS, vec, TOPK))
         by = {r[0]: int(r[1]) for r in near if r and r[0]}
         match = ""
@@ -955,7 +961,7 @@ def answer(question):
         try:
             order = [r[0] for r in psql(
                 "SELECT src_table FROM %s WHERE src_table IN (%s) "
-                "ORDER BY array_cosine_similarity(emb, %s) DESC"
+                "ORDER BY emb <=> %s"
                 % (TABLES, ", ".join(lit(c) for c in cands), _vec(intent["kind"])))]
             cands = order + [c for c in cands if c not in order]
         except RuntimeError:
@@ -967,8 +973,7 @@ def answer(question):
             # LIMIT в БАЗЕ: иначе в кандидаты, а следом в промпт, уезжает вся база.
             # Число получаем из бюджета промпта, а не задаём отдельно.
             cands = [r[0] for r in psql(
-                "SELECT src_table FROM %s ORDER BY array_cosine_similarity(emb, %s) "
-                "DESC LIMIT %d"
+                "SELECT src_table FROM %s ORDER BY emb <=> %s LIMIT %d"
                 % (TABLES, _vec(intent.get("kind") or question),
                    max(1, PICK_BUDGET // 40))) if r and r[0]]
         except RuntimeError:
