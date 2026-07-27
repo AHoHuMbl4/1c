@@ -19,7 +19,9 @@ import urllib.request
 
 DSN = "host=127.0.0.1 port=7890 user=postgres dbname=postgres"
 URL = "http://127.0.0.1:8091/ask"
-SCORERS = ["bm25", "bm25_b0", "tfidf"]
+# Шесть штатных моделей ранжирования движка. Седьмая, indri_dirichlet, исключена
+# замером: в нашей сборке она в этой форме запроса молча отдаёт ноль строк.
+SCORERS = ["bm25", "bm25_b0", "tfidf", "lm_jm", "lm_dirichlet", "dfi"]
 
 # Вопрос -> SQL, считающий правду независимо от системы поиска.
 GOLD = [
