@@ -28,6 +28,8 @@
 Env: SERENEDB_DSN, DEEPSEEK_*, ALIBABA_* (см. /etc/1c-mcp-reports.env), ASK_TOKEN.
 Только stdlib.
 """
+import csv
+import io
 import json
 import os
 import re
@@ -108,6 +110,12 @@ SCORER = os.environ.get("ASK_SCORER", "bm25")
 # Штатность: веса полей — `cookbook/search/boosting.test`, `ranking.test:example_004`.
 REFS_BOOST = os.environ.get("ASK_REFS_BOOST", "8.0")
 
+# У csv-разбора Python предел поля 128 КБ. Сборщик режет значения на 20 000 символов,
+# но строка корпуса склеивается из многих значений и предел перекрывает, а падение
+# было бы на редких длинных строках — то есть незаметным до клиента. Тот же лимит,
+# что в сборщике (`serene_search_build.py`).
+csv.field_size_limit(50 * 1024 * 1024)
+
 DS_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com").rstrip("/")
 DS_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DS_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
@@ -139,14 +147,24 @@ def psql(sql):
     # сущностях ответ приходит, на 1713 — OSError «Argument list too long», и он не
     # RuntimeError, поэтому не ловился НИ ОДНОЙ защитой вокруг: сервис отдавал HTTP 500
     # на каждый вопрос. У сборщика этот путь через stdin с самого начала.
+    # Разбор — CSV, а НЕ «строка вывода = запись». В комментарии, адресе доставки или
+    # назначении платежа бывает перевод строки, и построчный разбор тогда рассыпает
+    # колонки: обрывок текста становится ключом, а короткая строка роняет сервис.
+    # [замер 27.07] запрос, вернувший из базы 40 строк, при разборе по `\n` давал 799
+    # «строк», из них 759 короче шести полей, и первое же обращение к полю `doc` —
+    # `IndexError: list index out of range`. В корпусе таких строк 4 009 по `doc`
+    # и ещё 2 361 по `refs` — то есть падало на 4 % данных.
+    # Починка не новая: ровно это уже сделано в сборщике (`serene_search_build.py:190`),
+    # но при переходе на подачу SQL через stdin взяли `-F "\x1f"` вместо `--csv`, и
+    # вторая починка затёрла первую. Здесь они сложены: и stdin, и `--csv`.
     try:
-        p = subprocess.run(["psql", DSN, "-tA", "-F", "\x1f", "-f", "-"],
+        p = subprocess.run(["psql", DSN, "-tA", "--csv", "-f", "-"],
                            input=sql, capture_output=True, text=True, env=env)
     except OSError as e:
         raise RuntimeError("psql не запущен: %s" % str(e)[:160])
     if p.returncode != 0:
         raise RuntimeError((p.stderr or "psql failed")[:300])
-    return [l.split("\x1f") for l in p.stdout.split("\n") if l != ""]
+    return [r for r in csv.reader(io.StringIO(p.stdout)) if r]
 
 
 def lit(s):
