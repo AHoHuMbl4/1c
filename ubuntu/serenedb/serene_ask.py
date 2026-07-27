@@ -517,6 +517,40 @@ def clarify_text(question, opts):
         return ""                              # вызывающий сформулирует сам по options
 
 
+# Формулировка нарочно НЕ говорит «данных нет»: этот же отказ уходит и там, где данные
+# есть и посчитаны, а не прошла проверку формулировка модели. Сказать «нет данных» в
+# таком случае — соврать клиенту.
+REFUSE_SYS = """The system could not produce a verified answer to the user's question.
+Write ONE short sentence, in the SAME LANGUAGE as the question, saying that a verified
+answer to it cannot be given right now. State no facts, no figures, no reasons, no
+apologies. Reply with that sentence only."""
+
+
+def refuse_text(question):
+    """Отказ формулирует МОДЕЛЬ — на языке спрашивающего.
+
+    Пункт 18 `TARGET.md`: при отказе бот обязан СКАЗАТЬ, что не может ответить, а не
+    промолчать. Раньше здесь уходила пустая строка, и клиент видел пустоту — замерено
+    на вопросах «какие дополнительные условия продажи есть» и «покажи статистические
+    показатели» (гейт зарубал формулировку модели, а сказать об этом было некому).
+
+    Своей прозой писать нельзя: она была бы на одном языке независимо от языка вопроса —
+    тот же дефект, что и русские умолчания ответа (п. 9). Модель здесь ничего не решает
+    и не считает: ей нечего выдумывать, потому что данных ей не дают вовсе (п. 19).
+
+    Цифры из отказа вырезаются КОДОМ, а не просьбой в промте: любая цифра в отказе —
+    это уже утверждение о данных, а «правила на промте не работают».
+    """
+    if not question:
+        return ""
+    try:
+        t = (ds_chat([{"role": "system", "content": REFUSE_SYS},
+                      {"role": "user", "content": question}], max_tokens=60) or "").strip()
+    except Exception:                          # noqa: BLE001 — сеть/квота поставщика
+        return ""                              # модель недоступна — формулирует вызывающий
+    return "" if _norm_numbers(t) else t
+
+
 def pick_entity(question, kind, cands, counts=None, match=""):
     """Какая сущность имеется в виду — спрашиваем модель, но даём ей ТОЛЬКО НАЗВАНИЯ.
 
@@ -994,7 +1028,7 @@ def answer(question):
     if not by:
         by = tables_of("", preds)
     if not by:
-        return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
+        return {"kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     # Кандидаты: те, где поиск ЧТО-ТО нашёл, плюс ближайшие по смыслу названия.
@@ -1077,7 +1111,7 @@ def answer(question):
 
     rows = rows_of(src, match, preds, TOPK)
     if not rows:
-        return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
+        return {"kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     agg = aggregate(src, match, preds)
@@ -1106,16 +1140,17 @@ def answer(question):
         # отдаём их СТРУКТУРОЙ, а не своей прозой: свой текст был бы на одном языке
         # независимо от языка вопроса. Вызывающий формулирует сам.
         if agg:
-            return {"kind": "figures", "text": TOTAL_TEXT.format(
+            return {"kind": "figures", "text": (TOTAL_TEXT.format(
                         count=agg["count"],
                         sum=("%d" % agg["sum"]) if agg["sum"] == int(agg["sum"])
-                            else "%.2f" % agg["sum"]) if TOTAL_TEXT else "",
+                            else "%.2f" % agg["sum"]) if TOTAL_TEXT
+                        else refuse_text(question)),
                     "figures": {k: agg[k] for k in
                                 ("count", "count_amount", "sum", "min", "max", "avg",
                                  "date_min", "date_max") if k in agg},
                     "sources": [src.split("_", 1)[1] if "_" in src else src],
                     "diag": dict(diag, gate_rejected=bad[:6])}
-        return {"kind": "no_data", "text": NO_DATA_TEXT, "sources": [],
+        return {"kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                 "diag": dict(diag, gate_rejected=bad[:6])}
 
     tag = src.split("_", 1)[1] if "_" in src else src
