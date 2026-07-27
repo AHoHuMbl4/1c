@@ -51,6 +51,12 @@ CORPUS = "search_corpus"
 # перечисление источников её и так не видит (тот же фильтр, что прячет сам корпус).
 STAGE = "search_seen"
 INDEX = "search_idx"
+# Отпечаток DDL индекса. Нужен потому, что каталог движка состав индекса НЕ хранит:
+# duckdb_indexes().sql отдаёт «CREATE INDEX ... USING inverted ()» — пустые скобки при
+# любом составе, а pg_index.indkey не различает ключи и INCLUDE и не знает словаря
+# (indclass IS NULL). Проверено запросами 27.07. Поэтому желаемый DDL храним сами и
+# сравниваем с ним: это единственный способ понять, что пересобирать индекс НАДО.
+META = "search_meta"
 DICT = "search_dict"
 TABLES = "search_tables"
 
@@ -861,8 +867,6 @@ def main():
     except RuntimeError:
         pass                                   # словарь уже создан прошлым прогоном
 
-    t2 = time.time()
-    ddl("DROP INDEX IF EXISTS %s;" % INDEX)
     # Индекс ТЕКСТОВЫЙ. Векторная часть (ivf) сюда не входит: её сборка на 96 931
     # строке x 1536 требует >34 ГБ и убивается OOM хоста — замерено 2026-07-26 трижды,
     # sdb_ivf_sample_factor и segment_memory_max траекторию не меняют. Сервису ответов
@@ -876,8 +880,39 @@ def main():
     #                и не получить «склад Ромашка», плюс можно поднять вес поля (^);
     #   src_table  — БЕЗ словаря, то есть keyword: точное совпадение и фильтр уровня
     #                индекса вместо post-filter по INCLUDE, плюс фасеты ts_dict_agg.
-    ddl("CREATE INDEX %s ON %s USING inverted(doc %s, refs %s, src_table) "
-        "INCLUDE (src_table, row_key, amount, doc_date);" % (INDEX, CORPUS, DICT, DICT))
+    want_idx = ("CREATE INDEX %s ON %s USING inverted(doc %s, refs %s, src_table) "
+                "INCLUDE (src_table, row_key, amount, doc_date);"
+                % (INDEX, CORPUS, DICT, DICT))
+
+    # Индекс НЕ пересобирается каждый такт. Движок ведёт инвертированный индекс
+    # транзакционно вместе с таблицей (examples/demo2, index/inverted_index_isolation.test),
+    # и тест merge.test:2-3 отдельно оговаривает, что цель с инвертированным индексом
+    # идёт по commit-time append/delete пути — то есть наш MERGE его и поддерживает.
+    # Зачем это меняли: полная пересборка была ЕДИНСТВЕННЫМ элементом такта, растущим с
+    # размером ВСЕЙ базы, а не с числом изменений. Пока так, требование свежести до
+    # 20 минут (п.17 TARGET.md) на базе клиента недостижимо в принципе.
+    # Пересобираем только когда индекса нет или его состав/словарь изменились.
+    ddl("CREATE TABLE IF NOT EXISTS %s (k TEXT, v TEXT);" % META)
+    have_idx = int(q("SELECT count(*) FROM duckdb_indexes() WHERE index_name=%s"
+                     % lit(INDEX))[0][0])
+    prev = q("SELECT v FROM %s WHERE k='index_ddl'" % META)
+    prev_idx = prev[0][0] if prev else ""
+
+    t2 = time.time()
+    if have_idx == 0 or prev_idx != want_idx:
+        why = "индекса нет" if have_idx == 0 else "изменился состав индекса или словарь"
+        sys.stderr.write("индекс пересоздаётся: %s\n" % why)
+        ddl("DROP INDEX IF EXISTS %s;" % INDEX)
+        ddl(want_idx)
+        ddl("DELETE FROM %s WHERE k='index_ddl';" % META)
+        ddl("INSERT INTO %s VALUES ('index_ddl', %s);" % (META, lit(want_idx)))
+    else:
+        # Публикация свежих записей читателям — штатной командой движка. Именно
+        # REFRESH_INDEX (один индекс), а НЕ REFRESH_TABLE: последний на всей таблице
+        # разом дал 34 ГБ и смерть движка, когда в таблице был вектор (замер 27.07).
+        # Фоновый цикл (refresh_interval=1000 мс) делает то же сам, но явный вызов
+        # гарантирует, что к концу сборки новые строки уже видны поиску.
+        ddl("VACUUM (REFRESH_INDEX) %s;" % INDEX)
     idx_sec = time.time() - t2
 
     # --- профиль таблиц: по нему выбирается, О ЧЁМ вопрос
