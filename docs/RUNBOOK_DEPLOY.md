@@ -15,10 +15,10 @@ Windows (1С):  файловая база ─► IIS (служба) ─► шт�
                                    ▲ авто-старт, многопоточно, без idle-обработчика/модалок
 Роутер 192.168.56.1:  проброс :6003 ─► Windows-IIS:80
 Ubuntu LXC (наш, всё loopback):
-  OData-шлюз :6011 (только GET) ─┬─► ETL(ночь) ─► KB-репо(GitLab) ─► oikb/OWUI ─► braine /ask :8090   [факты, RAG]
-                                 └─► serene_sync(ночь) ─► витрина SereneDB :7890                        [аналитика, OLAP+вектор]
-  OpenClaw-бот :18800 (юзер undebot) ─┬─ ask_1c    (MCP :6014) ─► braine /ask
-     Telegram ◄─── тон, DeepSeek      └─ report_1c (MCP :6015) ─► SereneDB (ro-роль + резолвер + график)
+  OData-шлюз :6011 (только GET) ──► serene_sync ──► витрина SereneDB :7890
+                                       └─► serene_search_build ──► корпус + инвертированный индекс
+  OpenClaw-бот :18800 (юзер undebot) ── serene_ask :8091 ──► индекс SereneDB (отбор) + база (счёт)
+     Telegram ◄─── тон, DeepSeek
      → verify-плагин (ГЕЙТ КОДОМ: числа сверяет, внутреннее режет) → ответ клиенту
 ```
 
@@ -28,16 +28,13 @@ Ubuntu LXC (наш, всё loopback):
 |---|---|---|---|---|
 | — | `1c-odata-gateway` :6011 | `odata_gateway.py` | root | канал: только GET к 1С-OData (upstream `192.168.56.1:6003`) |
 | `0.0.0.0:6012` | `1c-config-ui` | `oc_config_ui.py` | root | веб-галочки «что тянуть» (ETL) |
-| — | `1c-etl.timer` 03:00 | `oc_etl.py` | root | ночь: 1С → md-таблицы → KB-репо (braine) |
-| `127.0.0.1:5432` | `postgresql` | postgres | postgres | pgvector braine (OWUI) |
-| `0.0.0.0:3000` | `open-webui` | — | root | индекс/retrieval braine |
-| `0.0.0.0:8081` | `oikb` | — | root | синк KB-репо → OWUI |
-| `127.0.0.1:8082` | `rerank-shim` | — | root | реранкер qwen3 |
-| `0.0.0.0:8090` | `api` (braine) | — | root | `POST /ask` (RAG-ответ с цитатами) |
+| — | `1c-etl.timer` 03:00 | `oc_etl.py` | root | ⚠ кормил braine → **не нужен** после вывода слоя |
+| — | *(braine: postgresql/open-webui/oikb/rerank-shim/api :8090)* | — | — | ⚠ **слой выведен из контура** 26.07, освободилось 972 МБ. §7-8 оставлены как история |
 | `127.0.0.1:7890` | `serenedb` | `serened` | **serenedb** | витрина аналитики (Postgres-протокол) |
-| `127.0.0.1:6015` | `1c-mcp-reports` | `mcp_reports.py` | root | MCP `report_1c` (NL→SQL + график) |
-| — | `1c-serene-sync.timer` 03:40 | `serene_sync.py` | root | ночь: витрина + резолвер (после ETL) |
-| `127.0.0.1:6014` | `1c-mcp-braine` | `mcp_braine.py` | root | MCP `ask_1c` над braine |
+| `127.0.0.1:8091` | **`1c-serene-ask`** | `serene_ask.py` | root | **отвечающий сервис**: ищет индексом, считает базой |
+| — | `1c-serene-sync.timer` 03:40 | `serene_sync.py` | root | витрина из OData |
+| — | **`1c-serene-index.timer`** 03:55 | `serene_search_build.py` | root | корпус + индекс, инкрементально (следом за синком) |
+| `127.0.0.1:6015` | `1c-mcp-reports` | `mcp_reports.py` | root | ⚠ `report_1c` (NL→SQL) — **выведен из контура**, юнит ещё жив |
 | `127.0.0.1:18800` | `openclaw-gateway` (**user**-юнит) | `node …/openclaw` | **undebot** | бот: Telegram + DeepSeek-тон + verify-гейт |
 | — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` | root | алерт владельцу в Telegram при падении |
 
@@ -195,6 +192,11 @@ systemctl daemon-reload && systemctl enable --now 1c-odata-gateway
 ---
 
 ## 7. Стек braine (LXC) — `docs/UBUNTU_SETUP.md`
+
+> ⚠ **РАЗДЕЛЫ 7 И 8 БОЛЬШЕ НЕ ЧАСТЬ ПРОДУКТА.** Слой braine (RAG на OWUI/pgvector) выведен
+> из контура 26.07 — его заменил `serene_ask` (§10.6), который ищет тем же индексом SereneDB.
+> Разделы сохранены как история установки; **при развёртывании с нуля их пропускать.**
+> Замер, на основании которого выведен: `docs/BENCH_BRAINE_VS_SERENE.md`.
 Клон braine в `/opt/smart-bot`; `.env` из `credentials/` (KB-репо, бот, ключи, сгенерированные секреты); `install.sh` пропатчить (пины `open-webui==0.10.2`/`oikb==0.3.6`); `bootstrap.sh` (админ OWUI, KB, **эмбеддер Qwen `text-embedding-v4` @ 1536 через DashScope**, реранкер qwen3-rerank-шим). Сервисы: postgresql, open-webui(:3000), oikb(:8081), rerank-shim(:8082), tg-bridge, api(:8090), kb-poll. Пустой `gsheets-sync.timer` — замаскировать, если Google Sheets не нужны.
 
 ---
@@ -288,16 +290,27 @@ python3 serene_sync.py
 
 ### 10.6 Сервисы (reboot-safe)
 ```bash
-cp ubuntu/serenedb/systemd/1c-mcp-reports.service /etc/systemd/system/     # EnvironmentFile=/etc/1c-mcp-reports.env
-cp ubuntu/serenedb/systemd/1c-serene-sync.{service,timer} /etc/systemd/system/
+cp ubuntu/serenedb/systemd/1c-serene-sync.{service,timer}  /etc/systemd/system/
+cp ubuntu/serenedb/systemd/1c-serene-index.{service,timer} /etc/systemd/system/
+cp ubuntu/serenedb/systemd/1c-serene-ask.service           /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now 1c-mcp-reports.service     # инструмент report_1c (:6015)
-systemctl enable --now 1c-serene-sync.timer       # ночная пересборка витрины (после ETL)
+systemctl enable --now 1c-serene-sync.timer    # витрина из OData
+systemctl enable --now 1c-serene-index.timer   # корпус + индекс, следом за синком
+systemctl enable --now 1c-serene-ask.service   # отвечающий сервис :8091
 ```
+`1c-serene-ask` читает `/etc/1c-mcp-reports.env` (ключи Alibaba/DeepSeek, пароли ролей) и
+необязательный `/etc/1c-serene-ask.env` (`ASK_TOKEN` — авторизация запросов, `ASK_*_BUDGET_CHARS` —
+символьные бюджеты контекста модели).
 
-### 10.7 Бот (инструмент `report_1c`) → `docs/OPENCLAW_BOT.md`
-Подключить MCP-инструмент `report_1c` к OpenClaw-боту (маршрутизация: аналитика → `report_1c`, факт/текст →
-`ask_1c`; гейт `verify-plugin` сверяет числа обоих).
+⚠ **Такт индекса.** Сейчас таймер ночной (03:55). Пункт 17 `TARGET.md` требует свежести
+**не позднее 20 минут** — значит здесь должен стоять `OnUnitActiveSec`, а сборка обязана
+укладываться в такт. Сборка инкрементальная (эмбеддинг считается только для новых и
+изменившихся строк), но **на живой базе это ещё не замерено** — открытый пункт.
+
+### 10.7 Подключение к боту
+`serene_ask` держит контракт `/ask`, совместимый с прежним braine, поэтому бот переключается
+одной строкой `BRAINE_URL` в `/etc/1c-mcp-braine.env` — и так же откатывается обратно.
+Гейт `verify-plugin` сверяет числа ответа с данными КОДОМ (`docs/OPENCLAW_BOT.md`).
 
 ### 10.8 Проверка
 ```bash
@@ -308,8 +321,14 @@ export RESOLVER_DSN='host=127.0.0.1 port=7890 user=serene_resolver dbname=postgr
 for t in test_validate test_integrity test_caveat test_ro_role; do python3 $t.py; done   # все PASS
 ./probe.sh "<вопрос по вашим данным>"       # реальный отчёт через весь путь NL→SQL→exec
 ```
-⚠ Реальная аналитика (обороты/суммы/периоды) требует РЕАЛЬНЫХ данных в 1С + публикации нужных
-`AccumulationRegister` в OData (сторона 1С) — иначе готовых оборотов через OData нет. См. `PRODUCTION_PLAN.md` §7.
+Сквозная проверка отвечающего сервиса:
+```bash
+curl -s -X POST http://127.0.0.1:8091/ask -H 'Content-Type: application/json' \
+  ${ASK_TOKEN:+-H "Authorization: Bearer $ASK_TOKEN"} \
+  -d '{"question":"<вопрос по вашим данным>"}'
+```
+Виды ответа: `answer` — ответ с числами из базы; `clarify` — уточняющий вопрос, если прочтений
+несколько; `figures` — гейт не пропустил цифру. Догадок нет по построению (п. 12 `TARGET.md`).
 
 ---
 
