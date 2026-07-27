@@ -551,7 +551,7 @@ def refuse_text(question):
     return "" if _norm_numbers(t) else t
 
 
-def pick_entity(question, kind, cands, counts=None, match=""):
+def pick_entity(question, kind, cands, counts=None, match="", cut=None):
     """Какая сущность имеется в виду — спрашиваем модель, но даём ей ТОЛЬКО НАЗВАНИЯ.
 
     Почему не вектором: замерено на живых данных — эмбеддинг не связывает «продажи» с
@@ -615,8 +615,15 @@ def pick_entity(question, kind, cands, counts=None, match=""):
             " [line items of «%s»]" % label_by.get(parent_by[t], parent_by[t]),
             "" if t not in marks else "\n     typical for these records: %s" % marks[t])
         if used + len(row) > PICK_BUDGET and lines_out:
+            # П. 13 TARGET.md: обрезал — покажи это КЛИЕНТУ, а не в журнале. Раньше
+            # запись уходила только в stderr, и 11-12 сущностей из 226 не доходили до
+            # выбора на КАЖДОМ вопросе, а спрашивающий об этом не знал. Сам бюджет
+            # снимать нельзя — перечень рос бы с числом сущностей базы (п. 19).
             sys.stderr.write("ask: перечень сущностей обрезан по бюджету промпта "
                              "(%d из %d, порядок по смыслу)\n" % (len(lines_out), len(names)))
+            if cut is not None:
+                cut["entities_shown"] = len(lines_out)
+                cut["entities_total"] = len(names)
             break
         lines_out.append(row)
         used += len(row) + 1
@@ -1004,6 +1011,9 @@ def answer(question):
     intent = parse_intent(question, time.strftime("%Y-%m-%d"))
     preds = _predicates(intent)
     diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind")}
+    # Что не доехало до модели — уходит в ОТВЕТ, а не в журнал (п. 13). Объявлено здесь,
+    # потому что ранние ветки возврата (нет совпадений) отвечают раньше выбора сущности.
+    cut = {}
 
     exprs, kinds = probe(intent.get("terms") or [])
     diag["match_by"] = kinds
@@ -1028,7 +1038,7 @@ def answer(question):
     if not by:
         by = tables_of("", preds)
     if not by:
-        return {"kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
+        return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     # Кандидаты: те, где поиск ЧТО-ТО нашёл, плюс ближайшие по смыслу названия.
@@ -1076,7 +1086,7 @@ def answer(question):
             cands = list(by)
     try:
         picked, marks = pick_entity(question, intent.get("kind"), cands,
-                                    counts_for_model, match)
+                                    counts_for_model, match, cut)
     except RuntimeError:
         picked, marks = [], {}
         diag["degraded"] = "выбор сущности сделан без модели"
@@ -1097,7 +1107,7 @@ def answer(question):
         opts = [{"src": t, "label": lab_by.get(t, t), "distinct_by": marks.get(t, ""),
                  "found": by.get(t, 0)} for t in picked]
         diag["ambiguous"] = [o["src"] for o in opts]
-        return {"kind": "clarify", "text": clarify_text(question, opts),
+        return {"partial": cut or None, "kind": "clarify", "text": clarify_text(question, opts),
                 "options": opts, "sources": [o["label"] for o in opts],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
     src = picked[0] if picked else None
@@ -1111,7 +1121,7 @@ def answer(question):
 
     rows = rows_of(src, match, preds, TOPK)
     if not rows:
-        return {"kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
+        return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     agg = aggregate(src, match, preds)
@@ -1140,7 +1150,7 @@ def answer(question):
         # отдаём их СТРУКТУРОЙ, а не своей прозой: свой текст был бы на одном языке
         # независимо от языка вопроса. Вызывающий формулирует сам.
         if agg:
-            return {"kind": "figures", "text": (TOTAL_TEXT.format(
+            return {"partial": cut or None, "kind": "figures", "text": (TOTAL_TEXT.format(
                         count=agg["count"],
                         sum=("%d" % agg["sum"]) if agg["sum"] == int(agg["sum"])
                             else "%.2f" % agg["sum"]) if TOTAL_TEXT
@@ -1150,11 +1160,11 @@ def answer(question):
                                  "date_min", "date_max") if k in agg},
                     "sources": [src.split("_", 1)[1] if "_" in src else src],
                     "diag": dict(diag, gate_rejected=bad[:6])}
-        return {"kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
+        return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                 "diag": dict(diag, gate_rejected=bad[:6])}
 
     tag = src.split("_", 1)[1] if "_" in src else src
-    return {"kind": "answer", "text": text.strip(), "sources": [tag],
+    return {"partial": cut or None, "kind": "answer", "text": text.strip(), "sources": [tag],
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 
