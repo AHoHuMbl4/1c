@@ -124,7 +124,14 @@ DS_THINKING = os.environ.get("DEEPSEEK_THINKING", "disabled")
 EMBED_URL = os.environ.get("ALIBABA_EMBED_URL", "").rstrip("/")
 EMBED_KEY = os.environ.get("ALIBABA_API_KEY", "")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-v4")
-EMBED_DIM = int(os.environ.get("EMBED_DIM", "1536"))
+# Размерность вектора. 1024 — это то, что отдаёт модель, а не наш выбор: корпус теперь
+# эмбеддится ШТАТНОЙ функцией движка `ai_embed`, у которой параметра размерности нет и
+# не нужно — длину определяет модель, а колонка объявляется под неё (`VECTOR_DECISION §6`).
+# Прежние 1536 были взяты по образцу выведенного слоя braine, а не замером. Побочно:
+# перебор читает 401 МБ вместо 602, то есть быстрее на треть.
+# 🔴 Значение обязано совпадать с размерностью колонок `search_corpus.emb` и
+# `search_tables.emb`. Разойдётся — сравнение векторов упадёт, а не ошибётся молча.
+EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
 
 # Единственные две строки, которые уходят человеку от НАС, а не от модели: ответ модели
 # всегда на языке вопроса. Вынесены в окружение, чтобы локализовать без правки кода.
@@ -767,7 +774,11 @@ def compose(question, rows, agg, corrections=None):
         body += ("\n\nYOUR PREVIOUS ANSWER WAS REJECTED BY A VERIFIER: %s"
                  "\nAnswer again. Use ONLY the computed figures above, each in its own "
                  "role. If a figure is not given above, do not state it at all."
-                 % "; ".join(corrections))
+                 # Причины отказа приходят из двух источников: ролевые проверки дают
+                 # строки, а `gate` — сами необоснованные ЧИСЛА. Склеивать надо через
+                 # str(): [замер] иначе `TypeError: expected str instance, float found`
+                 # и HTTP 500 на любом вопросе с порогом суммы.
+                 % "; ".join(str(c) for c in corrections))
     return ds_chat([{"role": "system", "content": ANSWER_SYS},
                     {"role": "user", "content": body}], max_tokens=800)
 
@@ -976,14 +987,38 @@ def claims_in_text(claims, text, want=None):
     return (not bad), bad
 
 
-def gate(answer, rows, agg):
-    """Каждое число ответа обязано встречаться в данных, в итоге или в самом вопросе.
+def _threshold_values(intent):
+    """Значения НАШИХ условий отбора: пороги суммы. Дата в текст ответа попадает как
+    дата, её проверяет отдельная ветка гейта."""
+    amt = (intent or {}).get("amount") or {}
+    return [v for v in (amt.get("value"), amt.get("value2")) if v is not None]
+
+
+def gate(answer, rows, agg, thresholds=None):
+    """Каждое число ответа обязано встречаться в данных, в итоге или в наших условиях.
 
     Правило живёт в КОДЕ, а не в промте: промт — это пожелание, а не гарантия.
     Числа из вопроса НЕ разрешаются: «вопрос» приходит как аргумент инструмента,
     и составляет его модель бота — то есть проверяемый сам пополнял бы белый список.
+
+    🔴 ИСКЛЮЧЕНИЕ — пороги НАШИХ СОБСТВЕННЫХ условий (`thresholds`). Это не число из
+    текста вопроса, а значение, по которому МЫ отфильтровали данные: оно верно по
+    построению, потому что фильтр применён нами и проверен кодом. [замер 27.07] без
+    этого исключения вопрос «какие продажи были на сумму больше 500000» получал отказ,
+    хотя ответ был верен целиком: сумма 9 101 800 на 11 документов, максимум 1 629 700 —
+    всё сошлось с базой. Не пустило единственное число — 500 000, наш же порог,
+    названный в ответе как описание отбора. Это ровно п. 21 TARGET.md: данные есть,
+    ответ верен, а не отдала его собственная проверка.
     """
     allowed = set()
+    for t in (thresholds or []):
+        try:
+            v = float(t)
+        except (TypeError, ValueError):
+            continue
+        allowed.add(round(v, 2))
+        if v == int(v):
+            allowed.add(float(int(v)))
     for r in rows:
         allowed |= _norm_numbers(r[5])
         allowed |= _norm_numbers(r[3])
@@ -1103,6 +1138,33 @@ def answer(question):
             cands = order + [c for c in cands if c not in order]
         except RuntimeError:
             cands = sorted(by, key=lambda t: -by[t])
+    # РЕБЁНОК НЕ МОЖЕТ СТОЯТЬ РАНЬШЕ РОДИТЕЛЯ. Табличная часть документа и сам документ —
+    # разные источники, и итог живёт в ШАПКЕ, а не в строках. Порядок по смыслу этого не
+    # знает: [замер 27.07] на вопросе «какая самая крупная продажа» метки табличных
+    # частей оказались ближе к слову «продажа» (0,566-0,574), чем метка документа
+    # (0,600), список пошёл модели с них, и ответом стала самая крупная СТРОКА
+    # накладной — 1 550 000 вместо 1 629 700. Ответ верный по числу и неверный по сути.
+    # Родитель берётся из КОНТРАКТА ПЛАТФОРМЫ (составной ключ), а не из имени: в
+    # `search_tables.parent` его записывает сборщик. Оба источника остаются в списке —
+    # мы не решаем за модель, мы лишь не ставим часть впереди целого.
+    if len(cands) > 1:
+        try:
+            par = {r[0]: r[1] for r in psql(
+                "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(c) for c in cands))) if r and r[0]}
+            ordered, placed = [], set()
+            for c in cands:
+                if par.get(c) in cands and par.get(c) not in placed:
+                    continue                    # ребёнок ждёт, пока встанет родитель
+                ordered.append(c)
+                placed.add(c)
+                for ch in cands:                # сразу за родителем — его части
+                    if ch not in placed and par.get(ch) == c:
+                        ordered.append(ch)
+                        placed.add(ch)
+            cands = ordered + [c for c in cands if c not in placed]
+        except RuntimeError:
+            pass                                # порядок остаётся прежним
     # Не подошло ничего вовсе (чужой язык, иное написание) — только тогда идём от
     # смысла вопроса к названиям всех сущностей.
     if not cands:
@@ -1172,7 +1234,7 @@ def answer(question):
     # «примерно три миллиона». Признак детерминируемый, списка числительных не нужно.
     if agg and intent.get("want") in ("sum", "count") and not _norm_numbers(text):
         ok_roles, bad_roles = False, bad_roles + ["величина названа не цифрами"]
-    ok_nums, bad_nums = gate(text, rows, agg)
+    ok_nums, bad_nums = gate(text, rows, agg, _threshold_values(intent))
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     # ОТВЕТ ОБЯЗАН ДОЙТИ, ЕСЛИ ОН ЕСТЬ. Решение владельца 27.07: «если данные есть, но по
     # нашей системе мы их не отдали — пропадает смысл проекта». Первая формулировка могла
@@ -1186,7 +1248,7 @@ def answer(question):
         text2, claims2 = _split_answer(raw2)
         ok_roles2, bad_roles2 = check_claims(claims2, agg)
         ok_txt2, bad_txt2 = claims_in_text(claims2, text2, intent.get("want"))
-        ok_nums2, bad_nums2 = gate(text2, rows, agg)
+        ok_nums2, bad_nums2 = gate(text2, rows, agg, _threshold_values(intent))
         if ok_roles2 and ok_txt2 and ok_nums2 and (text2 or "").strip():
             text, claims = text2, claims2
             ok, bad = True, []
