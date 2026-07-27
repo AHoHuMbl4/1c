@@ -117,6 +117,25 @@ REFS_BOOST = os.environ.get("ASK_REFS_BOOST", "8.0")
 # у «продажи» и у «sales» ближайшая метка — `catalog_склады`.
 ORDER_BY_MEANING = os.environ.get("ASK_ORDER_BY_MEANING", "1") not in ("0", "false", "no")
 
+# РЕРАНКЕР — модель, которая оценивает пару «вопрос ↔ название», а не расстояние между
+# двумя векторами. Для сопоставления слова человека с названием сущности это и есть
+# нужный инструмент, и п. 19 такую работу модели разрешает прямо: «сопоставить слово
+# человека с названием в базе».
+# [замер 27.07] на 226 названиях нашей базы: «продажи» → «Реализация Товаров Услуг»
+# (0,585) первым, тогда как эмбеддинг метки ставил первым «Склады» (0,521). На «sales»
+# реранкер даёт верное семейство, а правило «родитель раньше ребёнка» доворачивает на
+# шапку документа.
+# Честная оговорка: панацеей он не является — «сколько штук продано» он тоже не
+# сопоставляет (первым идёт «Расходный Кассовый Ордер»), потому что нужного числа нет
+# в корпусе вовсе (работа 3 в PRODUCTION_PLAN).
+RERANK_URL = os.environ.get("ALIBABA_RERANK_URL",
+                            "https://dashscope-intl.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank")
+RERANK_MODEL = os.environ.get("ALIBABA_RERANK_MODEL", "qwen3-rerank")
+# Сколько названий уходит в реранкер за один вопрос. Это БЮДЖЕТ КОНТЕКСТА, а не порог
+# правильности: он не подбирается под базу и не зависит от неё. Без него объём, уходящий
+# во внешнюю модель, рос бы с числом сущностей — прямое нарушение п. 19.
+RERANK_TOP = int(os.environ.get("ASK_RERANK_TOP", "60"))
+
 # У csv-разбора Python предел поля 128 КБ. Сборщик режет значения на 20 000 символов,
 # но строка корпуса склеивается из многих значений и предел перекрывает, а падение
 # было бы на редких длинных строках — то есть незаметным до клиента. Тот же лимит,
@@ -565,6 +584,28 @@ def refuse_text(question):
     return "" if _norm_numbers(t) else t
 
 
+def rerank(query, docs):
+    """Упорядочить названия по близости к вопросу — моделью-реранкером.
+
+    Возвращает порядок индексов. Пусто — значит не получилось, и вызывающий остаётся
+    на прежнем порядке: отсутствие сигнала не должно превращаться в отказ (п. 21).
+    """
+    if not query or not docs or not EMBED_KEY:
+        return []
+    body = json.dumps({"model": RERANK_MODEL,
+                       "input": {"query": query, "documents": docs},
+                       "parameters": {"return_documents": False, "top_n": len(docs)}}).encode()
+    req = urllib.request.Request(RERANK_URL, data=body, method="POST")
+    req.add_header("Authorization", "Bearer " + EMBED_KEY)
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            out = json.loads(r.read())["output"]["results"]
+        return [int(x["index"]) for x in out]
+    except Exception:                          # noqa: BLE001 — сеть/квота поставщика
+        return []
+
+
 def pick_entity(question, kind, cands, counts=None, match="", cut=None):
     """Какая сущность имеется в виду — спрашиваем модель, но даём ей ТОЛЬКО НАЗВАНИЯ.
 
@@ -725,8 +766,16 @@ recompute. Claims are checked against the database and a wrong claim discards yo
 
 
 def _split_answer(raw):
-    """Разделить ответ модели на текст и заявленные величины."""
-    m = re.search(r"\{.*\}", raw or "", re.S)
+    """Разделить ответ модели на текст и заявленные величины.
+
+    🔴 Служебная обёртка НЕ ДОЛЖНА доезжать до человека. [замер 27.07] когда модель
+    отвечает почти-JSON-ом (скобки есть, разбор падает), прежняя версия отдавала клиенту
+    сырую строку целиком: в ответе про поставщика наружу уходило
+    `{"text":":"В предоставленных данных нет информации…`. Это видно клиенту, значит
+    дефект (п. 13), и чинится кодом, а не просьбой в промте отвечать правильным JSON.
+    """
+    raw = raw or ""
+    m = re.search(r"\{.*\}", raw, re.S)
     if m:
         try:
             d = json.loads(m.group(0))
@@ -734,7 +783,19 @@ def _split_answer(raw):
                 return str(d.get("text") or "").strip(), (d.get("claims") or {})
         except ValueError:
             pass
-    return (raw or "").strip(), {}
+    if '"text"' in raw:
+        # Достаём поле текста из поломанной обёртки. Не вышло — отдаём пусто, и дальше
+        # включается честный отказ: пустота лучше служебного мусора, а отказ лучше
+        # пустоты (п. 18, п. 21).
+        m2 = re.search(r'"text"\s*:\s*"?:?\s*"?(.*?)(?:"\s*,\s*"claims"|"\s*\}|\}\s*$)',
+                       raw, re.S)
+        if m2:
+            return (m2.group(1).strip().strip('"').replace('\\"', '"')
+                    .replace("\\n", " ").strip()), {}
+        return "", {}
+    if raw.lstrip().startswith("{"):
+        return "", {}
+    return raw.strip(), {}
 
 
 def compose(question, rows, agg, corrections=None):
@@ -1132,33 +1193,42 @@ def answer(question):
     # базы. Замерено: «продажи за декабрь» — нужный документ был среди подходящих по
     # дате (6 строк), но тонул в общем списке, и выбирались календарные графики.
     cands = list(by)
-    # ВОПРОС ПРО ДЕНЬГИ — ТОЛЬКО К ТЕМ, У КОГО ДЕНЬГИ ЕСТЬ. Это отбор ДАННЫМИ, а не
-    # догадкой: у сущности либо есть заполненная денежная колонка, либо нет, и та, у
-    # которой её нет, ответить про сумму не может в принципе.
-    # Зачем: [замер 27.07] на «What is the total amount of all sales?» модель выбирала
-    # из 238 названий и брала «Поступление На Расчетный Счет». Порядок перечня задаётся
-    # близостью метки к слову вопроса, а этот сигнал негоден (у «sales» ближайшее —
-    # «Склады»); выключить его нельзя — без порядка модель берёт первое попавшееся
-    # (проверено: выбирала «Поля Форм Статистики»). Сужение круга бьёт в причину:
-    # кандидатов становится меньше, и все они по существу пригодны.
-    # Отсечка не по числу и не по порогу — по НАЛИЧИЮ величины, поэтому размер базы
-    # ничего не меняет (п. 9).
+    # ВЕЛИЧИНА, О КОТОРОЙ СПРАШИВАЮТ, ДОЛЖНА У КАНДИДАТА СУЩЕСТВОВАТЬ.
+    # Это не про деньги: в корпусе сегодня живёт РОВНО ОДНА числовая величина на строку
+    # (`amount`), поэтому «сумма» и есть та самая величина. Когда до корпуса доедут
+    # остальные числовые колонки (работа 3 в PRODUCTION_PLAN), правило обобщится само:
+    # спросили количество — кандидат обязан иметь количество.
+    # Отбор идёт ДАННЫМИ: у сущности либо есть заполненная величина, либо нет. Ни порога,
+    # ни числа, ни имени — размер и состав базы ничего не меняют (п. 9).
+    # [замер 27.07] без этого правила «сколько продали в декабре» отвечалось
+    # «100 000 рублей (1 запись)» вместо 2 456 400 на 6 документах: вопрос уходил
+    # к сущности, у которой суммы нет вовсе. Реранкер этого не закрывает — он про то,
+    # ЧТО спросили, а не про то, ЧЕМ сущность располагает.
     if intent.get("want") == "sum" and len(cands) > 1:
         try:
-            with_money = {r[0] for r in psql(
+            with_value = {r[0] for r in psql(
                 "SELECT src_table FROM %s WHERE src_table IN (%s) AND amount IS NOT NULL "
                 "GROUP BY 1" % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
-            if with_money:
-                dropped = [c for c in cands if c not in with_money]
-                cands = [c for c in cands if c in with_money]
+            if with_value:
+                dropped = [c for c in cands if c not in with_value]
+                cands = [c for c in cands if c in with_value]
                 if dropped:
-                    diag["money_only"] = len(dropped)
+                    diag["without_value"] = len(dropped)
         except RuntimeError:
             pass
     # Порядок списка — ПО СМЫСЛУ вопроса, не по числу совпадений: модель тяготеет к
     # началу списка, а число совпадений врёт (значение встречается чаще в чужой
     # сущности). Порядок — это данные (эмбеддинг названия сущности против вопроса),
     # отсечки нет: список отдаётся модели целиком.
+    # ПОРЯДОК КАНДИДАТОВ — В ДВА ШАГА, И ОБА ОГРАНИЧЕНЫ СВЕРХУ.
+    # Шаг 1, в базе: грубый порядок по близости метки к слову вопроса. Сигнал слабый
+    # (он не связывает «продажи» с «Реализация Товаров Услуг» и ставит выше «Склады»),
+    # но он бесплатный и годится как СИТО.
+    # Шаг 2, моделью: реранкер оценивает пару «вопрос ↔ название» и расставляет голову
+    # списка правильно. [замер 27.07] «продажи» → «Реализация Товаров Услуг» первым
+    # (0,585) там, где эмбеддинг давал «Склады» (0,521).
+    # 🔴 Во внешнюю модель уходит НЕ БОЛЬШЕ RERANK_TOP названий — иначе объём растёт с
+    # числом сущностей базы, а это п. 19. Отсечённое видно клиенту через `partial`.
     if ORDER_BY_MEANING and len(cands) > 1 and intent.get("kind"):
         try:
             order = [r[0] for r in psql(
@@ -1168,6 +1238,22 @@ def answer(question):
             cands = order + [c for c in cands if c not in order]
         except RuntimeError:
             cands = sorted(by, key=lambda t: -by[t])
+        head, tail = cands[:RERANK_TOP], cands[RERANK_TOP:]
+        if tail:
+            cut["reranked_of"] = len(cands)
+            cut["reranked"] = len(head)
+        try:
+            lab = {r[0]: r[1] for r in psql(
+                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(c) for c in head))) if r and r[0]}
+        except RuntimeError:
+            lab = {}
+        keys = [c for c in head if c in lab]
+        idx = rerank(question, [lab[c] for c in keys]) if keys else []
+        if idx:
+            best = [keys[i] for i in idx if 0 <= i < len(keys)]
+            cands = best + [c for c in head if c not in best] + tail
+            diag["order_by"] = "rerank"
     # РЕБЁНОК НЕ МОЖЕТ СТОЯТЬ РАНЬШЕ РОДИТЕЛЯ. Табличная часть документа и сам документ —
     # разные источники, и итог живёт в ШАПКЕ, а не в строках. Порядок по смыслу этого не
     # знает: [замер 27.07] на вопросе «какая самая крупная продажа» метки табличных
@@ -1207,6 +1293,29 @@ def answer(question):
                    max(1, PICK_BUDGET // 40))) if r and r[0]]
         except RuntimeError:
             cands = list(by)
+    # ВЕЛИЧИНА, О КОТОРОЙ СПРАШИВАЮТ, ДОЛЖНА У КАНДИДАТА СУЩЕСТВОВАТЬ.
+    # Это не про деньги: в корпусе сегодня живёт РОВНО ОДНА числовая величина на строку
+    # (`amount`), поэтому «сумма» и есть та самая величина. Когда до корпуса доедут
+    # остальные числовые колонки (работа 3 в PRODUCTION_PLAN), правило обобщится само:
+    # спросили количество — кандидат обязан иметь количество.
+    # Отбор идёт ДАННЫМИ: у сущности либо есть заполненная величина, либо нет. Ни порога,
+    # ни числа, ни имени — размер и состав базы ничего не меняют (п. 9).
+    # [замер 27.07] без этого правила «сколько продали в декабре» отвечалось
+    # «100 000 рублей (1 запись)» вместо 2 456 400 на 6 документах: вопрос уходил
+    # к сущности, у которой суммы нет вовсе. Реранкер этого не закрывает — он про то,
+    # ЧТО спросили, а не про то, ЧЕМ сущность располагает.
+    if intent.get("want") == "sum" and len(cands) > 1:
+        try:
+            with_value = {r[0] for r in psql(
+                "SELECT src_table FROM %s WHERE src_table IN (%s) AND amount IS NOT NULL "
+                "GROUP BY 1" % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
+            if with_value:
+                dropped = [c for c in cands if c not in with_value]
+                cands = [c for c in cands if c in with_value]
+                if dropped:
+                    diag["without_value"] = len(dropped)
+        except RuntimeError:
+            pass
     # ВОПРОС ПРО ДЕНЬГИ — ТОЛЬКО К ТЕМ, У КОГО ДЕНЬГИ ЕСТЬ. Это отбор ДАННЫМИ, а не
     # догадкой: у сущности либо есть заполненная денежная колонка, либо нет, и та, у
     # которой её нет, ответить про сумму не может в принципе.
@@ -1227,7 +1336,7 @@ def answer(question):
                 dropped = [c for c in cands if c not in with_money]
                 cands = [c for c in cands if c in with_money]
                 if dropped:
-                    diag["money_only"] = len(dropped)
+                    diag["without_value"] = len(dropped)
         except RuntimeError:
             pass
     try:
