@@ -96,6 +96,18 @@ SCORERS = {
 }
 SCORER = os.environ.get("ASK_SCORER", "bm25")
 
+# ВЕС ПОЛЯ ССЫЛОК. Поле `refs` собирается сборщиком из тех же кусков, что и `doc`
+# («Контрагент: Ромашка» пишется в оба, serene_search_build.py:684-690), поэтому по
+# термам refs ⊆ doc: добавление `OR refs @@ …` строк НЕ добавляет и не убирает.
+# [замер 27.07] на двух терминах: doc=29/refs∪doc=29/в refs, но не в doc=0; то же
+# 56/56/0. Меняется только ВЕС: строка, где слово стоит в ссылке на другой объект,
+# поднимается над строкой, где оно попало в текст случайно. Ради этого поле и заводилось —
+# чтобы «Контрагент: Ромашка» не был неотличим от «Склад: Ромашка».
+# [замер] EXPLAIN: `Boost: 8` остаётся внутри Index Filter, скорер и Top: N по-прежнему
+# уходят внутрь IRESEARCH_SCAN — план не портится.
+# Штатность: веса полей — `cookbook/search/boosting.test`, `ranking.test:example_004`.
+REFS_BOOST = os.environ.get("ASK_REFS_BOOST", "8.0")
+
 DS_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com").rstrip("/")
 DS_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DS_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
@@ -323,6 +335,17 @@ def probe(groups):
     return out, diag
 
 
+def with_refs(expr):
+    """Искать по строке И по полю ссылок, ссылкам — вес.
+
+    Множество строк от этого не меняется (см. REFS_BOOST): `refs` собран из тех же
+    кусков, что и `doc`. Меняется порядок: совпадение в ссылке на другой объект весит
+    больше случайного совпадения в тексте. Поле было построено и проиндексировано ровно
+    ради этого, но в отборе не участвовало ни разу — платили за него и не пользовались.
+    """
+    return "(doc @@ %s OR refs @@ (%s ^ %s))" % (expr, expr, REFS_BOOST)
+
+
 def match_expr(exprs, preds):
     """Собрать условие поиска с ГРАДИЕНТОМ: сперва все понятия, потом мягче.
 
@@ -333,10 +356,13 @@ def match_expr(exprs, preds):
     if not n:
         return "", 0
     if n == 1:
-        return "doc @@ %s" % exprs[0], 1
+        return with_refs(exprs[0]), 1
     # Один запрос вместо цикла по k: ts_compound(must, must_not, should, k) — штатный
     # булев запрос движка (замерено: 6.9 мс против 42.5 мс у цикла из трёх шагов).
     # Градиент сохраняем данными: берём наибольшее k, при котором есть совпадения.
+    # Здесь СЧИТАЕМ, а не ранжируем, поэтому вес ссылок не нужен: множество строк у
+    # `doc @@ X` и у `doc @@ X OR refs @@ (X^N)` одно и то же (замер в REFS_BOOST),
+    # а лишний терм в запросе — лишняя работа на каждом из n шагов градиента.
     counts = psql(" UNION ALL ".join(
         "SELECT %d k, count(*) FROM %s WHERE %s" % (
             k, INDEX, " AND ".join(
@@ -350,7 +376,7 @@ def match_expr(exprs, preds):
                 best = max(best, int(r[0]))
         except (ValueError, IndexError):
             continue
-    return "doc @@ ts_compound(NULL, NULL, [%s], %d)" % (", ".join(exprs), best), best
+    return with_refs("ts_compound(NULL, NULL, [%s], %d)" % (", ".join(exprs), best)), best
 
 
 def tables_of(match, preds):
