@@ -8,6 +8,15 @@ Wants=serenedb.service
 [Service]
 Type=oneshot
 WorkingDirectory=/opt/1c-mcp-reports
-EnvironmentFile=/etc/1c-serene-sync.env
+# 🔴 ПОРЯДОК ФАЙЛОВ ЗНАЧИМ, И ЕГО НЕЛЬЗЯ МЕНЯТЬ МЕСТАМИ.
+# Обе переменные `SERENEDB_DSN` объявлены в обоих файлах, а systemd оставляет
+# значение из ПОСЛЕДНЕГО. В `1c-mcp-reports.env` роль `serene_ro` — ей CREATE
+# запрещён; в `1c-serene-sync.env` роль `postgres`. Когда sync-файл стоял первым,
+# в сборку попадала read-only роль и она падала на `permission denied for schema
+# public` — ночная сборка не отработала НИ РАЗУ, то есть свежести данных не было
+# вовсе (замер 27.07, п. 17 TARGET.md).
+# Файл `1c-mcp-reports.env` нужен здесь только ради `DEEPSEEK_API_KEY` (выбор
+# денежной колонки моделью), поэтому он идёт первым, а роль задаёт sync-файл.
 EnvironmentFile=-/etc/1c-mcp-reports.env
+EnvironmentFile=/etc/1c-serene-sync.env
 ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_search_build.py
