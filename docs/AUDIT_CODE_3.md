@@ -256,11 +256,13 @@
         DELETE` закрывает и удаление исчезнувших строк, `USING (ключ)` — краткая форма
         равенства по одноимённым колонкам, `RETURNING merge_action, *` даёт готовую
         статистику вместо нашей сверки len(rows) != n на :214.
-            MERGE INTO "t" USING (SELECT * FROM read_csv('...')) s USING ("Ref_Key","LineNumber")
+            MERGE INTO "t" USING (SELECT * FROM read_csv('...')) s USING (<declared_key()>)
             WHEN MATCHED THEN UPDATE
             WHEN NOT MATCHED BY TARGET THEN INSERT BY NAME
-            WHEN NOT MATCHED BY SOURCE THEN DELETE
             RETURNING merge_action;
+        ⛔ ветка WHEN NOT MATCHED BY SOURCE THEN DELETE из рекомендации УБРАНА: она
+        удаляет из витрины всё, чего нет в текущей выгрузке, а выгрузка OData бывает
+        неполной (от этого в коде сверка с $count). Данные уходят без отката.
 Выигрыш: правильность (таблица не исчезает под читателем, GRANT не теряется —
         сейчас его приходится переиздавать строкой :174) + масштаб (перезаливаются
         только изменившиеся строки) + меньше кода (уходит ручной QUALIFY-дедуп
@@ -324,7 +326,10 @@
         (metric='cosine', m=32, ef_construction=64)); ... Включать после замера».
         Это инструкция к действию, которая на сборке 26.07.3 упадёт.
 Штатно: доступен только `ivf`:
-            CREATE INDEX i ON t USING inverted (id, emb ivf (metric='cosine', quant='sq8'));
+            CREATE INDEX i ON t USING inverted (id, emb ivf (metric='cosine'));
+        ⛔ quant='sq8' с metric='cosine' НЕ РАБОТАЕТ: движок отвечает «ivf quantization
+        supports only metric 'l2' or 'ip'». И не создавать ivf поверх заполненной
+        таблицы — сборка не прерывается, снимается только рестартом движка.
         Опровержение уже записано в docs/SERENEDB.md:161-163 («Unknown built-in opclass
         'hnsw' on 'emb' (known: included, ivf)»), но в код не доехало.
 Выигрыш: правильность (не даём следующему исполнителю ложную инструкцию).

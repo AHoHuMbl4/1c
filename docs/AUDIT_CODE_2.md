@@ -421,9 +421,16 @@ sql = (f'DROP TABLE IF EXISTS "{table}";\n'
 
 **Штатно:** `MERGE INTO` с ключом-списком колонок — он и дедуп по ключу, и upsert, и
 удаление исчезнувших, в одной команде, без окна, когда таблицы нет:
+> ⛔ **`WHEN NOT MATCHED BY SOURCE THEN DELETE` НЕ ПРИМЕНЯТЬ.** Эта ветка удаляет из
+> витрины всё, чего нет в текущей выгрузке. Выгрузка OData бывает неполной — именно от
+> этого в коде стоит сверка с `$count` (`poc_load_entity.py:88-124`), — и тогда реальные
+> данные уходят без отката. Отдельно: `USING ("Ref_Key")` — хардкод, склеивающий строки
+> табличных частей; ровно этот дефект уже был найден и исправлен (76 строк → 30,
+> сумма 12 052 500 → 7 856 600). Ключ берётся из `declared_key()`, а не пишется руками.
+
 ```sql
 MERGE INTO "catalog_x" t USING (SELECT * FROM read_csv('/var/lib/serenedb/x.csv')) s
-USING ("Ref_Key")                                  -- краткая форма ключа
+USING (<колонки из declared_key(), НЕ "Ref_Key")                                  -- краткая форма ключа
 WHEN MATCHED THEN UPDATE
 WHEN NOT MATCHED THEN INSERT
 WHEN NOT MATCHED BY SOURCE THEN DELETE

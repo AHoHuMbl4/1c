@@ -2,7 +2,7 @@
 
 SereneDB — search+analytics БД (полнотекст + вектор + колоночный OLAP) с **Postgres-протоколом**,
 Apache-2.0 (single-node). Под капотом: форк DuckDB (аналитика) + собственный поисковый движок
-**IResearch** (BM25, инвертированный индекс, HNSW). У нас — движок витрины/аналитики над данными 1С.
+**IResearch** (BM25, инвертированный индекс, вектор через `ivf`; HNSW из продукта удалён). У нас — движок витрины/аналитики над данными 1С.
 
 > Здесь — только установка **движка**. Развёртывание слоя аналитики (роли, загрузка витрины, отчёты,
 > подключение НОВОЙ 1С-базы) — **`docs/RUNBOOK_DEPLOY.md` §10**. Как всё устроено — `docs/SERENEDB.md`.
@@ -41,7 +41,7 @@ psql "host=127.0.0.1 port=7890 user=postgres" -c "select version();"   # Postgre
   `--hba_config`/`--auth_*`/`--tls_*` — по умолчанию доступ без пароля на loopback (как локальный PG).
 - Данные — `/var/lib/serenedb` (persistent; проверено: переживают рестарт сервиса).
 - Логи — `journalctl -u serenedb`. Под капотом DuckDB (OLAP) — `select * from duckdb_logs()`.
-- Что умеет движок сверх нашего текущего использования (HNSW, BM25, `ai_embed`, `postgres_attach`,
+- Что умеет движок сверх нашего текущего использования (BM25, `ivf`, `postgres_attach`,
   Zero-ETL по файлам) — `docs/SERENEDB.md` §«Возможности движка».
 - **Бэкап:** оффлайн-снапшот `/var/lib/serenedb` (`serenedb_backup.sh`) + первичное восстановление =
   ре-синк из 1С (витрина производная). Штатный online-backup/PITR — вопрос фаундерам (`docs/SERENEDB.md`).

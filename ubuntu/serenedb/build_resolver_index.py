@@ -7,9 +7,15 @@
 
 Запуск под RW (postgres): SERENEDB_DSN=host=127.0.0.1 port=7890 user=postgres + ALIBABA_* в env.
 Пересобирает индекс с нуля. Сейчас поиск — перебор косинуса.
-В SereneDB ЕСТЬ HNSW (проверено 2026-07-25), синтаксис — колонка внутри инвертированного индекса:
-  CREATE INDEX i ON resolver_index USING inverted(emb hnsw (metric='cosine', m=32, ef_construction=64));
-Колонка emb уже FLOAT[1536] — схема менять не нужно. Включать после замера (docs/SERENEDB.md).
+
+HNSW в SereneDB 26.07.3 НЕТ: опклассы движка — {included, ivf} (`kKnownOpclassTypes`),
+исходники columnstore/hnsw.cpp удалены. Прежняя запись здесь («HNSW есть, проверено
+2026-07-25») была ОШИБОЧНОЙ и опровергнута — см. docs/VECTOR_DECISION.md §4.
+
+Единственный векторный опкласс — ivf. НЕ создавать его поверх заполненной таблицы:
+сборка не прерывается (pg_cancel_backend возвращает успех, работа продолжается,
+SET memory_limit не помогает), снимается только рестартом движка. Порядок, который
+работает: CREATE INDEX на ПУСТОЙ таблице, затем вставка данных в готовый индекс.
 """
 import sys
 import serene_report as S
