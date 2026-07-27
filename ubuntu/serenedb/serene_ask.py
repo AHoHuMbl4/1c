@@ -110,6 +110,13 @@ SCORER = os.environ.get("ASK_SCORER", "bm25")
 # Штатность: веса полей — `cookbook/search/boosting.test`, `ranking.test:example_004`.
 REFS_BOOST = os.environ.get("ASK_REFS_BOOST", "8.0")
 
+# Упорядочивать ли перечень сущностей по близости метки к слову вопроса. Переключатель
+# заведён, чтобы это можно было ЗАМЕРИТЬ, а не обсуждать: сам код в `pick_entity` уже
+# признаёт сигнал негодным («эмбеддинг не связывает „продажи“ с „Реализация Товаров
+# Услуг“ и ставит выше „Склады“»), и [замер 27.07] это подтвердился и на 1024:
+# у «продажи» и у «sales» ближайшая метка — `catalog_склады`.
+ORDER_BY_MEANING = os.environ.get("ASK_ORDER_BY_MEANING", "1") not in ("0", "false", "no")
+
 # У csv-разбора Python предел поля 128 КБ. Сборщик режет значения на 20 000 символов,
 # но строка корпуса склеивается из многих значений и предел перекрывает, а падение
 # было бы на редких длинных строках — то есть незаметным до клиента. Тот же лимит,
@@ -1125,11 +1132,34 @@ def answer(question):
     # базы. Замерено: «продажи за декабрь» — нужный документ был среди подходящих по
     # дате (6 строк), но тонул в общем списке, и выбирались календарные графики.
     cands = list(by)
+    # ВОПРОС ПРО ДЕНЬГИ — ТОЛЬКО К ТЕМ, У КОГО ДЕНЬГИ ЕСТЬ. Это отбор ДАННЫМИ, а не
+    # догадкой: у сущности либо есть заполненная денежная колонка, либо нет, и та, у
+    # которой её нет, ответить про сумму не может в принципе.
+    # Зачем: [замер 27.07] на «What is the total amount of all sales?» модель выбирала
+    # из 238 названий и брала «Поступление На Расчетный Счет». Порядок перечня задаётся
+    # близостью метки к слову вопроса, а этот сигнал негоден (у «sales» ближайшее —
+    # «Склады»); выключить его нельзя — без порядка модель берёт первое попавшееся
+    # (проверено: выбирала «Поля Форм Статистики»). Сужение круга бьёт в причину:
+    # кандидатов становится меньше, и все они по существу пригодны.
+    # Отсечка не по числу и не по порогу — по НАЛИЧИЮ величины, поэтому размер базы
+    # ничего не меняет (п. 9).
+    if intent.get("want") == "sum" and len(cands) > 1:
+        try:
+            with_money = {r[0] for r in psql(
+                "SELECT src_table FROM %s WHERE src_table IN (%s) AND amount IS NOT NULL "
+                "GROUP BY 1" % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
+            if with_money:
+                dropped = [c for c in cands if c not in with_money]
+                cands = [c for c in cands if c in with_money]
+                if dropped:
+                    diag["money_only"] = len(dropped)
+        except RuntimeError:
+            pass
     # Порядок списка — ПО СМЫСЛУ вопроса, не по числу совпадений: модель тяготеет к
     # началу списка, а число совпадений врёт (значение встречается чаще в чужой
     # сущности). Порядок — это данные (эмбеддинг названия сущности против вопроса),
     # отсечки нет: список отдаётся модели целиком.
-    if len(cands) > 1 and intent.get("kind"):
+    if ORDER_BY_MEANING and len(cands) > 1 and intent.get("kind"):
         try:
             order = [r[0] for r in psql(
                 "SELECT src_table FROM %s WHERE src_table IN (%s) "
@@ -1177,6 +1207,29 @@ def answer(question):
                    max(1, PICK_BUDGET // 40))) if r and r[0]]
         except RuntimeError:
             cands = list(by)
+    # ВОПРОС ПРО ДЕНЬГИ — ТОЛЬКО К ТЕМ, У КОГО ДЕНЬГИ ЕСТЬ. Это отбор ДАННЫМИ, а не
+    # догадкой: у сущности либо есть заполненная денежная колонка, либо нет, и та, у
+    # которой её нет, ответить про сумму не может в принципе.
+    # Зачем: [замер 27.07] на «What is the total amount of all sales?» модель выбирала
+    # из 238 названий и брала «Поступление На Расчетный Счет». Порядок перечня задаётся
+    # близостью метки к слову вопроса, а этот сигнал негоден (у «sales» ближайшее —
+    # «Склады»); выключить его нельзя — без порядка модель берёт первое попавшееся
+    # (проверено: выбирала «Поля Форм Статистики»). Сужение круга бьёт в причину:
+    # кандидатов становится меньше, и все они по существу пригодны.
+    # Отсечка не по числу и не по порогу — по НАЛИЧИЮ величины, поэтому размер базы
+    # ничего не меняет (п. 9).
+    if intent.get("want") == "sum" and len(cands) > 1:
+        try:
+            with_money = {r[0] for r in psql(
+                "SELECT src_table FROM %s WHERE src_table IN (%s) AND amount IS NOT NULL "
+                "GROUP BY 1" % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
+            if with_money:
+                dropped = [c for c in cands if c not in with_money]
+                cands = [c for c in cands if c in with_money]
+                if dropped:
+                    diag["money_only"] = len(dropped)
+        except RuntimeError:
+            pass
     try:
         picked, marks = pick_entity(question, intent.get("kind"), cands,
                                     counts_for_model, match, cut)
