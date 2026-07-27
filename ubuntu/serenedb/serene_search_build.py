@@ -707,10 +707,28 @@ def iter_corpus():
 
 
 def _flush(buf, pending):
-    conds = " OR ".join("(src_table=%s AND row_key=%s)" % (lit(s), lit(k)) for s, k in pending)
-    if conds:
-        ddl("DELETE FROM %s WHERE %s;" % (CORPUS, conds))
-    ddl("INSERT INTO %s VALUES %s;" % (CORPUS, ",".join(buf)))
+    """Записать пачку строк корпуса ОДНОЙ штатной командой движка.
+
+    `MERGE INTO` — механизм SereneDB, и её тесты отдельно оговаривают цель с
+    инвертированным индексом: «the index forces the commit-time append/delete path for
+    every merge action» (tests/sqllogic/sdb/pg/dml/merge.test). То есть движок сам
+    приводит индекс в согласованное состояние.
+
+    Раньше здесь было DELETE со списком ключей через OR, а следом INSERT: две команды,
+    причём строка DELETE росла с размером пачки, а между командами корпус на мгновение
+    оставался без этих строк.
+    """
+    if not buf:
+        return
+    ddl("MERGE INTO %(c)s t USING (VALUES %(v)s) AS s"
+        "  (src_table, row_key, doc, refs, doc_hash, amount, doc_date, emb)"
+        " ON t.src_table = s.src_table AND t.row_key = s.row_key"
+        " WHEN MATCHED THEN UPDATE SET doc = s.doc, refs = s.refs,"
+        "      doc_hash = s.doc_hash, amount = s.amount, doc_date = s.doc_date,"
+        "      emb = s.emb"
+        " WHEN NOT MATCHED THEN INSERT VALUES (s.src_table, s.row_key, s.doc, s.refs,"
+        "      s.doc_hash, s.amount, s.doc_date, s.emb);"
+        % {"c": CORPUS, "v": ",".join(buf)})
 
 
 def _row_sql(item, vec):
