@@ -47,6 +47,9 @@ INS = int(os.environ.get("BUILD_INSERT_ROWS", "200"))
 # запросах в минуту, и на многочасовой сборке всплеск не показателен.
 PARALLEL = int(os.environ.get("BUILD_EMBED_PARALLEL", "16"))
 CORPUS = "search_corpus"
+# Служебная таблица отпечатков на время сборки. Имя начинается с `search`, поэтому
+# перечисление источников её и так не видит (тот же фильтр, что прячет сам корпус).
+STAGE = "search_seen"
 INDEX = "search_idx"
 DICT = "search_dict"
 TABLES = "search_tables"
@@ -741,14 +744,18 @@ def main():
         "doc_hash TEXT, amount DOUBLE, doc_date TIMESTAMP, emb FLOAT[%d]);"
         % (CORPUS, EMBED_DIM))
 
-    have = {}
-    for src, key, h in q("SELECT src_table, row_key, doc_hash FROM %s" % CORPUS):
-        have[(src, key)] = h
+    # Что уже собрано — знает БАЗА, а не память процесса. Раньше сюда грузился весь
+    # корпус словарём: замерено 1.5 КБ на строку, 167 МБ на 98 тыс. строк, и на базе
+    # в сто раз больше это 15+ ГБ ещё до начала работы, плюс столько же на множество
+    # `seen`. Теперь состав строк держится во временной таблице, а что пересчитывать —
+    # решает джойн отпечатков.
+    ddl("DROP TABLE IF EXISTS %s; CREATE TABLE %s (src_table TEXT, row_key TEXT, "
+        "doc_hash TEXT);" % (STAGE, STAGE))
 
     # Обработка ПО ТАБЛИЦАМ (память не зависит от размера базы), но пул эмбеддинга —
     # ОДИН на весь прогон. Пул на таблицу сбрасывал параллельность на каждой мелкой
     # сущности: замерено 71 с против 29 с на том же корпусе.
-    seen, total_rows, n_tables, n_ref, done, failed = set(), 0, 0, 0, 0, 0
+    total_rows, n_tables, n_ref, done, failed = 0, 0, 0, 0, 0
     buf, pending, inflight = [], [], {}
     t1 = time.time()
 
@@ -772,15 +779,26 @@ def main():
     with cf.ThreadPoolExecutor(max_workers=PARALLEL) as pool:
         for t, rows, n_tables, n_ref, owner_of in iter_corpus():
             total_rows += len(rows)
-            todo = []
-            for src, key, doc, refs, amt, dtv in rows:
-                # Отпечаток считается по ВСЕМУ, что попадает в индекс. Раньше в него
-                # входил только `doc`: изменение одних лишь ссылок не пересчитывалось,
-                # поле refs молча оставалось старым, а прогон отчитывался успешным.
-                h = hashlib.sha1(("%s\x00%s" % (doc, refs)).encode("utf-8")).hexdigest()
-                seen.add((src, key))
-                if have.get((src, key)) != h:
-                    todo.append((src, key, doc, refs, h, amt, dtv))
+            # Отпечаток считается по ВСЕМУ, что попадает в индекс: иначе изменение
+            # одних лишь ссылок не пересчитывалось бы, а прогон отчитывался успешным.
+            fresh = [(src, key,
+                      hashlib.sha1(("%s\x00%s" % (doc, refs)).encode("utf-8")).hexdigest(),
+                      doc, refs, amt, dtv)
+                     for src, key, doc, refs, amt, dtv in rows]
+            for i in range(0, len(fresh), INS):
+                part = fresh[i:i + INS]
+                ddl("INSERT INTO %s VALUES %s;" % (STAGE, ",".join(
+                    "(%s,%s,%s)" % (lit(a), lit(b), lit(c)) for a, b, c, *_ in part)))
+            # ЧТО ПЕРЕСЧИТЫВАТЬ — решает база: строки этой таблицы, которых в корпусе
+            # нет или отпечаток отличается. Один запрос вместо словаря на всю базу.
+            changed = {(r[0], r[1]) for r in q(
+                "SELECT s.src_table, s.row_key FROM %s s LEFT JOIN %s c "
+                "  ON c.src_table = s.src_table AND c.row_key = s.row_key "
+                "WHERE s.src_table = %s AND (c.doc_hash IS NULL OR c.doc_hash <> s.doc_hash)"
+                % (STAGE, CORPUS, lit(t)))}
+            todo = [(src, key, doc, refs, h, amt, dtv)
+                    for src, key, h, doc, refs, amt, dtv in fresh
+                    if (src, key) in changed]
             for i in range(0, len(todo), BATCH):
                 ch = todo[i:i + BATCH]
                 inflight[pool.submit(embed, [x[2] for x in ch])] = ch
@@ -804,12 +822,19 @@ def main():
         # случае, но прогон помечаем проваленным.
         sys.stderr.write("ВНИМАНИЕ: %d пачек не посчитаны — корпус неполный\n" % failed)
 
-    gone = [k for k in have if k not in seen]
-    if gone:
-        conds = " OR ".join("(src_table=%s AND row_key=%s)" % (lit(s), lit(k)) for s, k in gone)
-        ddl("DELETE FROM %s WHERE %s;" % (CORPUS, conds))
+    # Исчезнувшие строки удаляет БАЗА одним запросом. Раньше их ключи собирались в
+    # список Python и склеивались в одну строку SQL через OR: на полной пересборке это
+    # был бы весь корпус одной командой (98 тыс. ключей ≈ 7.8 МБ текста, на базе ×100 —
+    # 780 МБ).
+    n_gone = int(q("SELECT count(*) FROM %s c WHERE NOT EXISTS "
+                   "(SELECT 1 FROM %s s WHERE s.src_table=c.src_table "
+                   " AND s.row_key=c.row_key)" % (CORPUS, STAGE))[0][0])
+    if n_gone:
+        ddl("DELETE FROM %s WHERE NOT EXISTS (SELECT 1 FROM %s s "
+            "WHERE s.src_table=%s.src_table AND s.row_key=%s.row_key);"
+            % (CORPUS, STAGE, CORPUS, CORPUS))
     print("витрина: %d таблиц, %d строк | ссылок: %d | новых/изменённых: %d | удалено: %d"
-          % (n_tables, total_rows, n_ref, done, len(gone)))
+          % (n_tables, total_rows, n_ref, done, n_gone))
 
     try:
         ddl("CREATE TEXT SEARCH DICTIONARY %s (template='text', locale=%s, "
@@ -897,12 +922,13 @@ def main():
         except RuntimeError:
             pass
 
+    ddl("DROP TABLE IF EXISTS %s;" % STAGE)   # служебная, в поиске ей не место
     total = int(q("SELECT count(*) FROM %s" % CORPUS)[0][0])
     if failed:
         print(json.dumps({"rows": total, "embedded": done, "failed_batches": failed,
                           "status": "неполный корпус"}, ensure_ascii=False))
         return 3
-    print(json.dumps({"rows": total, "embedded": done, "deleted": len(gone),
+    print(json.dumps({"rows": total, "embedded": done, "deleted": n_gone,
                       "embed_sec": round(embed_sec, 1), "index_sec": round(idx_sec, 2),
                       "total_sec": round(time.time() - t0, 1)}, ensure_ascii=False))
 
