@@ -1,0 +1,5 @@
+- [Размещение данных — решение владельца](feedback-data-placement-is-owner-decision.md) — молча выбрал витрину на Ubuntu вместо PG-на-Windows, жёсткая претензия 26.07
+- [Архитектура: PG на Windows + attach](project-architecture-pg-windows-attach.md) — решение владельца 26.07, сырые данные на винде, Ubuntu только корпус+индекс
+- [Без NL→SQL, график после ответа](project-no-nl2sql-charts-after-answer.md) — решение 26.07: схема в модель не уходит никогда, график = доделать уже известный запрос
+- [Сначала спросить агента, потом писать своё](feedback-ask-agent-before-writing-own-code.md) — любой свой SQL поверх SereneDB только после ответа serenedb-native «штатного нет»
+- [Вектор в SereneDB заблокирован](project-serenedb-ivf-blocked.md) — ivf ломается на 5-6 тыс. строк при 1536 измерениях, hnsw удалён из продукта; сборка НЕ отменяется, каждый опыт = рестарт

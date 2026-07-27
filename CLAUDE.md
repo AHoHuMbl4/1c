@@ -127,6 +127,19 @@
 
 ---
 
+## Решения владельца, которые нельзя пересматривать
+
+Лежат в [`memory_bank/owner-memory/`](memory_bank/owner-memory/) — это перенесённая
+память прошлых сессий. Прочитать **до** первого действия:
+
+| Файл | О чём |
+|---|---|
+| `feedback-data-placement-is-owner-decision.md` | размещение данных решает владелец, а не я |
+| `feedback-ask-agent-before-writing-own-code.md` | свой SQL поверх SereneDB — только после ответа агента `serenedb-native`, что штатного нет |
+| `project-architecture-pg-windows-attach.md` | сырые данные на Windows рядом с 1С, Ubuntu держит корпус и индекс |
+| `project-no-nl2sql-charts-after-answer.md` | схема в модель не уходит никогда; график — ПОСЛЕ ответа |
+| `project-serenedb-ivf-blocked.md` | вектор в SereneDB заблокирован, сборка не отменяется |
+
 ## С чего начинать в новой сессии
 
 **Первым делом — [`memory_bank/activeContext.md`](memory_bank/activeContext.md), раздел

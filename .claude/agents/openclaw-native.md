@@ -16,7 +16,8 @@ model: opus
 ## Источник истины — доки на сервере, не память
 
 ```bash
-SSH="ssh -i /home/ahohum/.ssh/id_ed25519_1c root@192.168.56.42"
+# 🔴 ГДЕ ТЫ РАБОТАЕШЬ. Если существует каталог `/srv/1c` и НЕ существует `/srv/data/cursor` — ты уже НА сервере: `ssh` не нужен, все команды ниже выполняй локально, а `$SSH` считай пустой строкой. Иначе ты на машине разработки, и доступ к серверу — `ssh -i ~/.ssh/id_ed25519_1c root@192.168.56.42`.
+SSH="ssh -i ~/.ssh/id_ed25519_1c root@192.168.56.42"   # на сервере: SSH=""
 $SSH 'ls /opt/openclaw-engine/docs/'                       # разделы
 $SSH 'find /opt/openclaw-engine/docs -name "*.md" | wc -l' # их 747
 $SSH 'grep -rl "<тема>" /opt/openclaw-engine/docs --include=*.md | head'

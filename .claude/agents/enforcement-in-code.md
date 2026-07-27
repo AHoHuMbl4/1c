@@ -36,7 +36,8 @@ model: opus
    политика инструментов, права, песочница, хук — вместо нашей самодельной проверки.
    **Читай доки на сервере, не по памяти:**
    ```bash
-   SSH="ssh -i /home/ahohum/.ssh/id_ed25519_1c root@192.168.56.42"
+   # 🔴 ГДЕ ТЫ РАБОТАЕШЬ. Если существует каталог `/srv/1c` и НЕ существует `/srv/data/cursor` — ты уже НА сервере: `ssh` не нужен, все команды ниже выполняй локально, а `$SSH` считай пустой строкой. Иначе ты на машине разработки, и доступ к серверу — `ssh -i ~/.ssh/id_ed25519_1c root@192.168.56.42`.
+   SSH="ssh -i ~/.ssh/id_ed25519_1c root@192.168.56.42"   # на сервере: SSH=""
    $SSH 'ls /opt/openclaw-engine/docs/cli/ /opt/openclaw-engine/docs/gateway/ /opt/openclaw-engine/docs/automation/'
    $SSH 'grep -rl "<тема>" /opt/openclaw-engine/docs --include=*.md | head'
    ```
