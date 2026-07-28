@@ -35,9 +35,17 @@ CREATE OR REPLACE TABLE search_coverage AS
 WITH ent AS (
   -- Слева — то, что ОБЪЯВЛЕНО платформой, а не то, что мы сумели прочитать. Иначе
   -- перепись считала бы полноту по себе самой и всегда показывала бы «всё на месте».
+  -- 🔴 ТЕНИ РЕГИСТРОВ (`_RecordType`/`_RowType`) ИСКЛЮЧАЮТСЯ. Плоская тень `<Регистр>_
+  -- RecordType` объявлена в `$metadata` и несёт те же движения, что обёртка, но в корпус
+  -- идёт ОБЁРТКА (`corpus_build.sql` тени отсекает). Без этого исключения перепись
+  -- считала тень отдельной сущностью и кричала «280 строк не собралось», хотя данные
+  -- целы в обёртке — [замер 28.07] так `cov_rows_lost` показывал 326 при реальной
+  -- потере 2. Ложная тревога прячет настоящую: считаем по тем же сущностям, что и корпус.
   SELECT e.entity AS ent, b.rows AS in_1c, b.problem
   FROM tmp3_ent e
-  LEFT JOIN base_profile b ON lower(b.entity) = e.entity),
+  LEFT JOIN base_profile b ON lower(b.entity) = e.entity
+  WHERE e.entity NOT LIKE '%\_recordtype' ESCAPE '\'
+    AND e.entity NOT LIKE '%\_rowtype'    ESCAPE '\'),
  mart AS (SELECT lower(tbl) AS ent, n_rows FROM cov_mart),
  corp AS (SELECT src_table AS ent, count(*) AS n,
                  count(*) FILTER (WHERE emb IS NOT NULL) AS n_emb
