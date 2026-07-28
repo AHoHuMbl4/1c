@@ -121,20 +121,55 @@ def save_profile(rows):
         run("GRANT SELECT ON base_profile TO %s;" % role)
 
 
+def _profile_age():
+    """Возраст base_profile в секундах, или большое число, если её нет/пуста.
+    По нему решаем, пора ли переписывать СХЕМУ заново."""
+    dsn = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
+    p = subprocess.run(["psql", dsn, "-tA", "-c",
+                        "SELECT coalesce(epoch(now()-max(seen)),1e9) FROM base_profile_meta"],
+                       capture_output=True, text=True)
+    try:
+        return float(p.stdout.strip())
+    except ValueError:
+        return 1e9
+
+
+def _cached_entities():
+    """Список непустых сущностей из base_profile — БЕЗ повторной переписи."""
+    dsn = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
+    p = subprocess.run(["psql", dsn, "-tA", "-c", "SELECT entity FROM base_profile WHERE rows>0"],
+                       capture_output=True, text=True)
+    return [e for e in p.stdout.splitlines() if e.strip()]
+
+
 def main():
-    # СОСТАВ ОПРЕДЕЛЯЕТ ПЕРЕПИСЬ, А НЕ ЧЕЛОВЕК. Рукописный список был главным ручным
-    # шагом установки: 19 таблиц из 235 непустых, то есть 8% данных клиента. Теперь
-    # берём всё непустое и доступное; отбор при загрузке не нужен — нужная сущность
-    # находится поиском в момент вопроса.
-    print("перепись базы…")
-    rows = C.census()
-    s = C.summary(rows)
-    print("  " + json.dumps(s, ensure_ascii=False))
-    save_profile(rows)
-    ents = C.to_load(rows)
-    if s["закрыто_правами"]:
-        print("  ⚠ закрыто правами читателя: %d сущностей — бот о них ответить не сможет"
-              % s["закрыто_правами"])
+    # 🔴 ПЕРЕПИСЬ СХЕМЫ — ПЕРИОДИЧЕСКИ, ДАННЫЕ — КАЖДЫЙ ТАКТ. Перепись `C.census()` дёргает
+    # `$count` у ВСЕХ 4585 типов 1С — [замер 28.07] это ~10 минут и почти всё время такта.
+    # Но перепись про СХЕМУ (какие сущности есть, где нет прав), а она меняется на
+    # КОНФИГУРАЦИИ 1С, не на данных. Данные же тянет дельта на каждом такте. Поэтому полная
+    # перепись — раз в `CENSUS_MAX_AGE` (по умолчанию час), а между — берём список сущностей
+    # из base_profile и сразу идём в дельту. Это не ограничение свежести ДАННЫХ (они
+    # каждый такт), а лишь темп обнаружения НОВЫХ сущностей — событие редкое.
+    dsn = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
+    max_age = int(os.environ.get("CENSUS_MAX_AGE", "3600"))
+    if _profile_age() > max_age:
+        print("перепись схемы…")
+        rows = C.census()
+        s = C.summary(rows)
+        print("  " + json.dumps(s, ensure_ascii=False))
+        save_profile(rows)
+        subprocess.run(["psql", dsn, "-v", "ON_ERROR_STOP=1", "-c",
+                        "CREATE TABLE IF NOT EXISTS base_profile_meta(seen TIMESTAMP); "
+                        "DELETE FROM base_profile_meta; INSERT INTO base_profile_meta VALUES (now());"],
+                       capture_output=True, text=True)
+        ents = C.to_load(rows)
+        if s["закрыто_правами"]:
+            print("  ⚠ закрыто правами читателя: %d сущностей — бот о них ответить не сможет"
+                  % s["закрыто_правами"])
+    else:
+        ents = _cached_entities()
+        print("перепись свежая (%.0f с) — беру %d сущностей из base_profile, сразу дельта"
+              % (_profile_age(), len(ents)))
 
     limit = int(os.environ.get("SYNC_MAX_ENTITIES", "0"))
     if limit:
