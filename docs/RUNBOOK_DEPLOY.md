@@ -33,7 +33,7 @@ Ubuntu LXC (наш, всё loopback):
 | `127.0.0.1:7890` | `serenedb` | `serened` | **serenedb** | витрина аналитики (Postgres-протокол) |
 | `127.0.0.1:8091` | **`1c-serene-ask`** | `serene_ask.py` | root | **отвечающий сервис**: ищет индексом, считает базой |
 | — | `1c-serene-sync.timer` 03:40 | `serene_sync.py` | root | витрина из OData |
-| — | **`1c-serene-index.timer`** 03:55 | `serene_search_build.py` | root | корпус + индекс, инкрементально (следом за синком) |
+| — | **`1c-serene-index.timer`** 03:55 | `serene_search_build.py` | root | ⚠ **устарело, таймер остановлен 28.07.** Сборка переехала в штатные средства движка: `ubuntu/serenedb/build.sh` (корпус, величины, резолвер, индекс — одним SQL, без питона). Юнит на неё ещё не переключён; пока таймер выключен, потому что старый скрипт при новом составе корпуса **сносит таблицу и индекс** (авария 28.07, `HOW_NOT_TO §2.9`) |
 | `127.0.0.1:6015` | `1c-mcp-reports` | `mcp_reports.py` | root | ⚠ `report_1c` (NL→SQL) — **выведен из контура**, юнит ещё жив |
 | `127.0.0.1:18800` | `openclaw-gateway` (**user**-юнит) | `node …/openclaw` | **undebot** | бот: Telegram + DeepSeek-тон + verify-гейт |
 | — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` | root | алерт владельцу в Telegram при падении |
