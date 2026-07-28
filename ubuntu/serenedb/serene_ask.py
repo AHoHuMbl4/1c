@@ -41,6 +41,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DSN = os.environ.get("SERENEDB_DSN_RO", "host=127.0.0.1 port=7890 user=serene_ro dbname=postgres")
 PGPASSWORD = os.environ.get("PGPASSWORD", "")
+# 🔴 РЕЗОЛВЕР ЧИТАЕТСЯ ОТДЕЛЬНОЙ РОЛЬЮ. `serene_ro`, которой исполняется SQL по данным,
+# к `resolver_index` доступа НЕ имеет — это positive control: SQL, который пишет модель,
+# не должен дотягиваться до служебных эмбеддингов. Резолвер спрашивает СИСТЕМА фиксированным
+# запросом, поэтому у неё своя роль `serene_resolver`. Разойдётся — резолв просто отключится
+# (лог, не падение): ответ без него хуже, но не неверен.
+RESOLVER_DSN = os.environ.get("RESOLVER_DSN", "")
+RESOLVER_PW = os.environ.get("RESOLVER_PW", "")
 LISTEN_HOST = os.environ.get("ASK_LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("ASK_LISTEN_PORT", "8091"))
 ASK_TOKEN = os.environ.get("ASK_TOKEN", "")
@@ -412,11 +419,31 @@ def probe(groups):
             per_group[gi] = (rank, [expr], kind)
         elif rank == cur[0] and expr not in cur[1]:
             cur[1].append(expr)
+    # РЕЗОЛВЕР — ФОЛЛБЭК ДЛЯ ГРУПП БЕЗ СОВПАДЕНИЯ. Если слово не нашлось ни точно, ни по
+    # опечатке, ни подстрокой — оно записано в базе иначе (сокращение, разговорное имя).
+    # Спрашиваем резолвер: слово -> конкретные значения базы, и ищем уже по ним, точной
+    # фразой. Срабатывает ТОЛЬКО там, где буквальный поиск дал ноль, поэтому на работающие
+    # вопросы не влияет — у них совпадение есть. Резолвленное значение видно в ответе:
+    # человек проверит, то ли слово поняли.
+    for gi, group in enumerate(groups):
+        if gi in per_group:
+            continue                           # уже нашлось буквально — резолвить нечего
+        vals = []
+        for alt in group:
+            vals = resolve_values(alt)
+            if vals:
+                break
+        if vals:
+            exprs = ["ts_phrase(%s)" % lit(v) for v in vals]
+            per_group[gi] = (0, exprs, "resolved")
+            diag.setdefault("_resolved", {})[gi] = vals
+
     out = []
-    for gi in sorted(per_group):
+    for gi in sorted(k for k in per_group):
         rank, exprs, kind = per_group[gi]
         out.append(exprs[0] if len(exprs) == 1 else "ts_any([%s])" % ", ".join(exprs))
-        diag[gi] = kind
+        if kind != "resolved":
+            diag[gi] = kind
     return out, diag
 
 
@@ -693,6 +720,92 @@ def rerank(query, docs):
         return [int(x["index"]) for x in out]
     except Exception:                          # noqa: BLE001 — сеть/квота поставщика
         return []
+
+
+def _resolver_psql(sql):
+    """Запрос к резолверу — ОТДЕЛЬНОЙ ролью `serene_resolver`. Не через общий `psql`:
+    та роль (`serene_ro`) к `resolver_index` доступа не имеет по замыслу. Ошибка (нет
+    настроек, роль недоступна) гасится в пустой список — резолв отключается, а не роняет
+    ответ (п. 21)."""
+    if not RESOLVER_DSN:
+        return []
+    env = dict(os.environ)
+    if RESOLVER_PW:
+        env["PGPASSWORD"] = RESOLVER_PW
+    try:
+        p = subprocess.run(["psql", RESOLVER_DSN, "-tA", "--csv", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+                           input=sql, capture_output=True, text=True, env=env)
+    except OSError:
+        return []
+    if p.returncode != 0:
+        sys.stderr.write("resolver query failed: %s\n" % (p.stderr or "")[:160])
+        return []
+    return [r for r in csv.reader(io.StringIO(p.stdout)) if r]
+
+
+RESOLVE_NEAR = int(os.environ.get("ASK_RESOLVE_NEAR", "12"))
+RESOLVE_KEEP = int(os.environ.get("ASK_RESOLVE_KEEP", "3"))
+
+
+def resolve_values(term):
+    """Слово человека -> конкретные значения в базе («Питер» -> «Санкт-Петербург»).
+
+    🔴 ЭТО РЕЗОЛВЕР. Он закрывает класс вопросов, где спрошенное слово в данных записано
+    ИНАЧЕ и ни точным совпадением, ни опечаткой, ни подстрокой не находится: сокращение,
+    разговорное имя, другой падеж основы. [замер 28.07] «Питер» подстрокой даёт 0, а в
+    базе 180 записей про Санкт-Петербург.
+
+    Механизм — тот же, что везде в проекте: близость считает БАЗА (вектор значения к
+    вектору слова, `emb <=> vec`), а какой из близких верен, решает РЕРАНКЕР. Порога
+    близости НЕТ и быть не может: «то же это слово или нет» — вопрос языковой. Реранкер
+    уже используется для выбора сущности; здесь та же роль.
+
+    Границы (п. 19): смотрим не больше `RESOLVE_NEAR` ближайших и оставляем не больше
+    `RESOLVE_KEEP` — объём во внешнюю модель не растёт с размером базы.
+    """
+    try:
+        vec = _vec(term)
+    except Exception:                          # noqa: BLE001 — эмбеддер недоступен
+        return []
+    near = _resolver_psql(
+        "SELECT DISTINCT value FROM resolver_index ORDER BY emb <=> %s LIMIT %d"
+        % (vec, RESOLVE_NEAR))
+    vals = [r[0] for r in near if r and r[0]]
+    if not vals:
+        return []
+    # 🔴 ГАРДА ОТ РАЗРЕШЕНИЯ В МУСОР. Вектор ВСЕГДА отдаёт ближайшее, а реранкер всегда
+    # даёт порядок — поэтому у значения, которого в базе НЕТ, они находят случайное:
+    # [замер 28.07] «SanDisk» (нет в данных) разрешался в коды занятий «5920», и ответ
+    # уходил про «уличных торговцев». Оценка реранкера не спасает (мусору давал 0.55 при
+    # 0.67 у верного). Признак структурный и без порога: слово человека и значение базы
+    # обязаны делить кусочек букв — «Питер»/«Петербург» делят «тер», а «SanDisk»/«5920» —
+    # ничего. Работает на любом языке: это буквы, а не список синонимов.
+    keep = [v for v in vals if _shares_chars(term, v)]
+    if not keep:
+        return []
+    order = rerank(term, keep)
+    picked = [keep[i] for i in order[:RESOLVE_KEEP]] if order else keep[:RESOLVE_KEEP]
+    return picked
+
+
+def _ngrams(s, n=3):
+    s = re.sub(r"[^0-9a-zа-яё]", "", (s or "").lower())
+    if len(s) < n:
+        return {s} if s else set()
+    return {s[i:i + n] for i in range(len(s) - n + 1)}
+
+
+def _shares_chars(term, value):
+    """Слово и значение делят хотя бы один буквенный триграмм (или одно — подстрока
+    другого). Структурная проверка «это то же слово, пусть и искажённое», без списка
+    синонимов и без числового порога."""
+    t = re.sub(r"[^0-9a-zа-яё]", "", (term or "").lower())
+    v = re.sub(r"[^0-9a-zа-яё]", "", (value or "").lower())
+    if not t or not v:
+        return False
+    if t in v or v in t:
+        return True
+    return bool(_ngrams(term) & _ngrams(value))
 
 
 def measures_of(src_table):
@@ -1604,7 +1717,31 @@ def answer(question):
     cut = {}
 
     exprs, kinds = probe(intent.get("terms") or [])
-    diag["match_by"] = kinds
+    diag["match_by"] = {k: v for k, v in kinds.items() if k != "_resolved"}
+    # Разрешённые резолвером значения — В ОТВЕТ (п. 13): человек должен видеть, что «Питер»
+    # поняли как «Санкт-Петербург», а не гадать. В тексте это и так всплывёт, но метка
+    # даёт проверяемый след.
+    if isinstance(kinds, dict) and kinds.get("_resolved"):
+        diag["resolved"] = kinds["_resolved"]
+
+    # 🔴 ЗНАЧЕНИЕ, КОТОРОГО НЕТ, НЕ ПРЕВРАЩАЕТСЯ В «ВСЁ». Термы `terms` — это ЗНАЧЕНИЯ,
+    # которые обязаны стоять в записи (имя контрагента, товар). Если группа не нашлась ни
+    # буквально, ни резолвером — такого значения в базе нет. Прежде группа молча
+    # выбрасывалась, и «продали SanDisk» отвечало про ВСЕ продажи на 12 млн — неверный
+    # ответ (п. 3), опаснее отказа. Считаем: сколько групп-значений осталось без совпадения.
+    n_groups = len(intent.get("terms") or [])
+    matched_groups = len([g for g in (kinds or {}) if isinstance(g, int)])
+    if n_groups > 0 and matched_groups < n_groups:
+        missing = n_groups - matched_groups
+        diag["unmatched_terms"] = missing
+        # Не нашли ни одного значения из вопроса — отвечать не о чем, это честный отказ,
+        # а НЕ агрегат по всей сущности.
+        if matched_groups == 0:
+            return {"partial": cut or None, "kind": "no_data", "sources": [],
+                    "text": NO_DATA_TEXT or refuse_text(question),
+                    "diag": dict(diag, sec=round(time.time() - t0, 2),
+                                 reason="значения из вопроса не найдены в данных")}
+
     match, k = match_expr(exprs, preds)
     diag["min_should_match"] = k if exprs else 0
 
