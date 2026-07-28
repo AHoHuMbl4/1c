@@ -144,18 +144,16 @@ QUALIFY row_number() OVER (PARTITION BY tbl ORDER BY pr, ord) = 1;
 
 -- ============ 5. КОЛОНКА ДЕНЕГ ============
 -- Единственное решение, которого у движка нет: какое из чисел — деньги. Его принимает
--- языковая модель (п. 20 TARGET.md разрешает явно). Для СВЕРКИ мы не спрашиваем модель
--- заново, а восстанавливаем ЕЁ ЖЕ прошлый выбор из боевого корпуса: колонка денег та,
--- чьё имя стоит в тексте строки рядом со значением, равным полю amount. Это сверка,
--- а не работа продукта: в бою таблица заполняется ответом модели.
+-- языковая модель — п. 20 TARGET.md разрешает это явно («вызов языковой модели и
+-- решения, требующие смысла»). Ответ живёт в таблице `search_amount_col`, её заполняет
+-- `pick_money_col.py` МЕЖДУ этим файлом и слиянием в корпус, и делает это с кэшем:
+-- ключ — отпечаток списка имён числовых колонок, имена не менялись — модель не
+-- спрашивают. Здесь мы только читаем результат.
+-- Таблицы нет — сборка не падает, а идёт БЕЗ сумм: отсутствие агрегата видно
+-- (`amount IS NULL`), а неверный агрегат — нет.
+CREATE TABLE IF NOT EXISTS search_amount_col (tbl TEXT, col TEXT, fp TEXT);
 CREATE OR REPLACE TABLE tmp3_amountcol AS
-SELECT DISTINCT c.tbl, c.col
-FROM tmp3_cls c
-JOIN search_corpus sc ON sc.src_table = c.tbl AND sc.amount IS NOT NULL
-WHERE c.kind = 'num'
-  AND contains(sc.doc, c.col || ': ' ||
-        CASE WHEN sc.amount = floor(sc.amount) THEN printf('%d', sc.amount::BIGINT)
-             ELSE printf('%.2f', sc.amount) END);
+SELECT tbl, col FROM search_amount_col WHERE col <> '';
 
 SELECT 'колонка денег' AS шаг, count(*) AS сущностей FROM tmp3_amountcol;
 
