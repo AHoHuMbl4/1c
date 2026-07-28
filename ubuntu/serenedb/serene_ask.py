@@ -860,7 +860,17 @@ ANSWER_SYS = """You answer an employee's question using ONLY the rows given to y
 
 Reply with JSON only, no text outside it:
 {"text": "the answer for the user",
+ "ask": "one clarifying question, or null",
  "claims": {"total": number|null, "count": number|null, "max": number|null, "min": number|null}}
+
+"ask" is the middle road between answering and giving up. Fill it ONLY when the rows do
+not answer exactly what was asked, but they DO answer a closely related question about
+the same subject — a different direction of the same relation, a different period, a
+different role of the same party. Then put in "text" what the rows DO show, and in "ask"
+a single short question that would let you answer precisely. Do not ask when the rows
+answer the question — answer it. Do not ask when the rows are unrelated — say there is
+no data. Never ask about our database, tables or fields: ask about the person's intent,
+in their own words.
 
 "claims" is where you state figures BY ROLE. Fill a role ONLY if that exact figure appears
 in your "text" written in DIGITS; otherwise leave the role null. Never spell figures out in
@@ -868,9 +878,10 @@ words — a figure written in words cannot be checked and the answer will be dis
 The figures given to you below are computed over every matching row — copy them, do not
 recompute. Claims are checked against the database and a wrong claim discards your answer.
 
-- Reply in the SAME language the question was asked in.
+- Reply in the SAME language the question was asked in — "ask" too.
 - Never invent numbers, dates or names that are not in the rows.
-- If the rows do not answer the question, say plainly that there is no data.
+- If the rows do not answer the question and nothing close to it, say plainly that there
+  is no data. Silence is the last resort, not the first.
 - If a TOTAL is provided, it was computed over every matching row — use exactly that figure.
 - Be short and businesslike, no preamble. Amounts as digits."""
 
@@ -906,6 +917,23 @@ def _split_answer(raw):
     if raw.lstrip().startswith("{"):
         return "", {}
     return raw.strip(), {}
+
+
+def _ask_back(raw):
+    """Уточняющий вопрос модели, если она его задала.
+
+    Отдельной функцией, а не третьим членом кортежа `_split_answer`: у того пять путей
+    возврата, и добавлять элемент в каждый — способ ошибиться на ровном месте. Здесь
+    отсутствие поля и поломанная обёртка дают одно и то же — пусто, то есть «не спросила».
+    """
+    m = re.search(r"\{.*\}", raw or "", re.S)
+    if not m:
+        return ""
+    try:
+        d = json.loads(m.group(0))
+    except ValueError:
+        return ""
+    return str((d.get("ask") if isinstance(d, dict) else "") or "").strip()
 
 
 def compose(question, rows, agg, corrections=None, totals=None):
@@ -1536,6 +1564,7 @@ def answer(question):
     agg = aggregate(src, match, preds, measure)
     raw = compose(question, rows, agg, totals=totals)
     text, claims = _split_answer(raw)
+    ask_back = _ask_back(raw)
     ok_roles, bad_roles = check_claims(claims, agg, totals)
     ok_txt, bad_txt = claims_in_text(claims, text, intent.get("want"))
     ok_roles, bad_roles = (ok_roles and ok_txt), (bad_roles + bad_txt)
@@ -1568,7 +1597,7 @@ def answer(question):
         ok_nums2, bad_nums2 = gate(text2, rows, agg, _threshold_values(intent)
                                    + [x for t in (totals or []) for x in t[1:]])
         if ok_roles2 and ok_txt2 and ok_nums2 and (text2 or "").strip():
-            text, claims = text2, claims2
+            text, claims, ask_back = text2, claims2, _ask_back(raw2)
             ok, bad = True, []
             diag["retry_ok"] = True
         else:
@@ -1594,6 +1623,39 @@ def answer(question):
                 "diag": dict(diag, gate_rejected=bad[:6])}
 
     tag = src.split("_", 1)[1] if "_" in src else src
+
+    # СРЕДНЕЕ ЗВЕНО: ответ → УТОЧНЯЮЩИЙ ВОПРОС → отказ (п. 21).
+    #
+    # Прежде звеньев было два, и всё, что не отвечало на вопрос дословно, падало в отказ.
+    # [замер 28.07] «Что покупало ООО Ромашка?»: в данных есть наши реализации в её адрес
+    # на 1 236 800 руб., а её собственных закупок нет. Система отвечала «данных нет» —
+    # формально верно, по делу бесполезно: спрашивавший почти наверняка имел в виду
+    # именно эти продажи, а мы молчали, имея их посчитанными.
+    #
+    # Судья неоднозначности — МОДЕЛЬ, как и при выборе сущности. Порога здесь быть не
+    # может: «отвечают ли эти строки на соседний вопрос» — суждение языковое, а не
+    # числовое, и списком слов («покупало», «продали») оно не выражается — такой список
+    # был бы хардкодом под русский язык и под эту конфигурацию.
+    #
+    # Уточнение возвращается ТОЛЬКО после гейта: числа в нём проверены базой наравне с
+    # обычным ответом. Вопрос без данных не задаётся — иначе это переспрашивание вместо
+    # работы, а не вместо молчания.
+    if ask_back:
+        diag["asked_back"] = True
+        return {"partial": cut or None, "kind": "clarify",
+                "text": (text.strip() + "\n\n" + ask_back).strip(),
+                "question": ask_back, "options": [],
+                # Величина не названа вопросом — тогда `agg` считает по пустому месту, и
+                # `sum: 0` был бы не «нулём», а «не считали». Отдаём то же, что видела
+                # модель: итоги по каждой величине сущности, с их именами из данных.
+                "figures": ({k: agg[k] for k in
+                             ("count", "count_amount", "sum", "min", "max", "avg",
+                              "date_min", "date_max") if k in agg} if (agg and measure)
+                            else {"count": (agg or {}).get("count")}),
+                "totals": {m: {"sum": v, "max": mx, "min": mn} for m, v, mx, mn in (totals or [])},
+                "sources": [tag],
+                "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
+
     return {"partial": cut or None, "kind": "answer", "text": text.strip(), "sources": [tag],
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
