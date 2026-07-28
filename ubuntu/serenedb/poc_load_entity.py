@@ -11,7 +11,7 @@ Env:     ETL_ODATA_BASE (default http://127.0.0.1:6011)
          SERENEDB_DSN   (default 'host=127.0.0.1 port=7890 user=postgres')
          CSV_DIR        (default /var/lib/serenedb  — читаемо процессом serened)
 """
-import csv, json, os, re, subprocess, sys, time, urllib.parse, urllib.request
+import csv, io, json, os, re, subprocess, sys, time, urllib.parse, urllib.request
 
 def _odata_auth(req):
     """Добавить Bearer шлюза. Один способ на всех клиентов OData.
@@ -214,6 +214,177 @@ def safe_col(name):
     return s
 
 
+def _psql_rows(sql):
+    """Строки запроса к витрине списком кортежей. SQL идёт ЧЕРЕЗ STDIN, а не аргументом
+    `-c`: у аргумента командной строки жёсткий предел (~128 КБ), и запрос с длинным
+    списком ключей его перекрывал — [замер 28.07] `Argument list too long` на справочнике
+    в 23 878 строк. Служебное для дельта-загрузки."""
+    p = subprocess.run(["psql", DSN, "-tA", "--csv", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+                       input=sql, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(p.stderr.strip()[:200])
+    return [tuple(r) for r in csv.reader(io.StringIO(p.stdout)) if r]
+
+
+def _psql_exec(sql):
+    p = subprocess.run(["psql", DSN, "-v", "ON_ERROR_STOP=1", "-f", "-"],
+                       input=sql, capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(p.stderr.strip()[:200])
+
+
+def _lit(v):
+    return "'" + str(v).replace("'", "''") + "'"
+
+
+def _mart_has(table, col):
+    try:
+        return bool(_psql_rows("SELECT 1 FROM duckdb_columns() WHERE table_name=%s "
+                               "AND column_name=%s" % (_lit(table), _lit(col))))
+    except RuntimeError:
+        return False
+
+
+def _fetch_page(es, params):
+    url = f"{ODATA}/{urllib.parse.quote(es)}?" + urllib.parse.urlencode(params)
+    return json.load(urllib.request.urlopen(_odata_auth(url), timeout=HTTP_TIMEOUT)).get("value", [])
+
+
+def _cell(v):
+    """Значение для CSV в том же виде, в каком его отдал 1С. 🔴 json в Python делает из
+    `false`/`true` булевы `False`/`True`, а `csv.writer` пишет их с БОЛЬШОЙ буквы. Витрина
+    тогда несёт `False`, а 1С — `false`; у регистров без уникального ключа `row_key` =
+    `sha1(doc)`, и смена регистра буквы ПЕРЕКЛЮЧАЕТ ключ у всех строк — [замер 28.07]
+    слияние хотело удалить 22 042 строки при неизменных данных. Пишем как в JSON 1С."""
+    if v is True:
+        return "true"
+    if v is False:
+        return "false"
+    # Дата-время 1С приходит в ISO с `T` (`2022-02-07T00:00:00`), а движок и корпус
+    # хранят её с пробелом (`2022-02-07 00:00:00`). Разница в одном символе так же
+    # переключает `row_key` регистров без уникального ключа, как и регистр буквы в
+    # булевом [замер 28.07: ещё 22 267 ложных удалений]. Приводим к виду корпуса.
+    if isinstance(v, str):
+        m = re.match(r"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})$", v)
+        if m:
+            return m.group(1) + " " + m.group(2)
+    return v
+
+
+def load_entity_delta(es, ro_role="serene_ro"):
+    """ИНКРЕМЕНТАЛЬНАЯ загрузка: тянем из 1С только ИЗМЕНЁННОЕ, не всю сущность.
+
+    🔴 ЗАЧЕМ. Полная перезагрузка каждой сущности каждый такт — это трафик и, главное,
+    повторный ЭМБЕДДИНГ. Указание владельца 28.07: «научиться заливать из 1С только
+    изменения, иначе будет постоянный эмбеддинг».
+
+    Как ловим изменения БЕЗ даты и без полной вычитки: у каждой записи 1С есть `DataVersion`
+    — токен версии. [замер 28.07] его берут отдельным дешёвым `$select=Ref_Key,DataVersion`
+    (два поля на строку). Сравниваем с витриной: версия иная/ключа нет → изменилось, тянем
+    целиком; ключ в витрине есть, а в 1С нет → удалено, чистим. Ничего не изменилось —
+    НУЛЕВАЯ работа: ни полной вычитки, ни одного вектора.
+
+    Применимо к сущностям с УНИКАЛЬНЫМ `Ref_Key` (справочники, шапки документов). Табличные
+    части и регистры (составной ключ, вложенная форма) — полной загрузкой. Возвращает None,
+    когда дельта неприменима: тогда вызывающий грузит полностью.
+    """
+    table = safe_col(es).lower()
+    if not (_mart_has(table, "Ref_Key") and _mart_has(table, "DataVersion")):
+        return None
+    if es in _NESTED_SEEN:
+        return None
+    try:
+        dup = _psql_rows('SELECT count(*) FROM (SELECT "Ref_Key" FROM "%s" '
+                         'GROUP BY 1 HAVING count(*)>1)' % table)
+        if dup and int(dup[0][0]) > 0:
+            return None                        # Ref_Key не уникален — не справочник
+    except RuntimeError:
+        return None
+
+    t0 = time.time()
+    # Проба версий — до ПУСТОЙ страницы, а не до короткой: под нагрузкой 1С отдаёт неполную
+    # страницу в середине (тот же дефект, что у полной выгрузки). Затем сверяем с `$count`.
+    expected = count_of(es)
+    probe, skip = [], 0
+    while True:
+        params = {"$format": "json", "$select": "Ref_Key,DataVersion",
+                  "$top": str(PAGE), "$skip": str(skip)}
+        # Сортировка по ключу нужна ТОЛЬКО при постраничности: без неё `$skip/$top`
+        # перекрываются и теряют строки. На одной странице сортировать нечего (и это
+        # снимает `HTTP 500` на сущностях, где `$orderby` капризничает).
+        if expected < 0 or expected > PAGE:
+            params["$orderby"] = "Ref_Key"
+        page = _fetch_page(es, params)
+        if not page:
+            break
+        probe.extend(page)
+        skip += len(page)
+        if expected >= 0 and len(probe) >= expected:
+            break
+    ver_1c = {r.get("Ref_Key"): r.get("DataVersion") for r in probe if r.get("Ref_Key")}
+    # 🔴 НЕПОЛНАЯ ПРОБА — НЕ ДЕЛЬТА. Если снимок версий короче, чем сущность в 1С, часть
+    # живых записей выглядела бы «удалённой» и была бы стёрта. Лучше отдать на полную
+    # загрузку (она сверяется с `$count` и не удаляет по неполному снимку).
+    if expected >= 0 and len(ver_1c) < expected:
+        return None
+    mart = dict(_psql_rows('SELECT "Ref_Key","DataVersion" FROM "%s"' % table))
+    changed = [k for k, v in ver_1c.items() if mart.get(k) != v]
+    gone = [k for k in mart if k not in ver_1c]
+    if not changed and not gone:
+        return {"entity": es, "table": table, "rows": len(mart), "delta": True,
+                "changed": 0, "gone": 0, "sec": round(time.time() - t0, 2)}
+
+    # Изменённые тянем ПРЯМЫМ ДОСТУПОМ по ключу: `Сущность(guid'KEY')`. `$filter` по
+    # `Ref_Key` 1С не поддерживает — [замер 28.07] отдаёт HTTP 500, а прямой доступ 200.
+    # По запросу на ключ, но каждый крошечный (одна запись) и только для изменившихся.
+    new_rows = []
+    for k in changed:
+        url = "%s/%s(guid'%s')?%s" % (ODATA, urllib.parse.quote(es), k,
+                                      urllib.parse.urlencode({"$format": "json"}))
+        try:
+            obj = json.load(urllib.request.urlopen(_odata_auth(url), timeout=HTTP_TIMEOUT))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:                  # запись успели удалить между пробой и тягой
+                gone.append(k)
+                continue
+            raise
+        if isinstance(obj, dict) and obj.get("Ref_Key"):
+            new_rows.append(obj)
+
+    if new_rows:
+        cols = [c[0] for c in _psql_rows(
+            "SELECT column_name FROM duckdb_columns() WHERE table_name=%s "
+            "ORDER BY column_index" % _lit(table))]
+        csv_path = os.path.join(CSV_DIR, f"{table}__delta.csv")
+        with open(csv_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(cols)
+            for r in new_rows:
+                w.writerow([_cell(r.get(c)) for c in cols])
+        subprocess.run(["chown", "serenedb:serenedb", csv_path], check=False)
+        csv_opts = ("header=true, all_varchar=true, quote='\"', escape='\"', "
+                    "maximum_line_size=%d" % int(os.environ.get("ETL_CSV_MAX_LINE", 200 * 1024 * 1024)))
+        merge = (
+            'CREATE OR REPLACE TEMP TABLE "d_%s" AS SELECT * FROM read_csv(\'%s\', %s);\n'
+            'DELETE FROM "%s" WHERE "Ref_Key" IN (SELECT "Ref_Key" FROM "d_%s");\n'
+            'INSERT INTO "%s" SELECT * FROM "d_%s";\n'
+            % (table, csv_path, csv_opts, table, table, table, table))
+        r = subprocess.run(["psql", DSN, "-v", "ON_ERROR_STOP=1"], input=merge,
+                           text=True, capture_output=True)
+        if r.returncode != 0:
+            raise RuntimeError("delta upsert error: %s" % r.stderr.strip()[:200])
+    if gone:
+        # Удаление через VALUES-набор в stdin, а не `IN (…)` аргументом: тысячи ключей
+        # не влезают в командную строку. Ключи — литералами внутри тела запроса.
+        vals = ",".join("(%s)" % _lit(k) for k in gone)
+        _psql_exec('DELETE FROM "%s" WHERE "Ref_Key" IN '
+                   '(SELECT k FROM (VALUES %s) AS g(k));' % (table, vals))
+    n = _psql_rows('SELECT count(*) FROM "%s"' % table)
+    return {"entity": es, "table": table, "rows": int(n[0][0]) if n else len(ver_1c),
+            "delta": True, "changed": len(changed), "gone": len(gone),
+            "sec": round(time.time() - t0, 2)}
+
+
 def load_entity(es, ro_role="serene_ro"):
     """Сущность 1С (OData) -> CSV -> таблица SereneDB (полная идемпотентная перезагрузка) +
     GRANT SELECT ro-роли (default privileges на SereneDB не всегда покрывают новые таблицы).
@@ -230,7 +401,7 @@ def load_entity(es, ro_role="serene_ro"):
         w = csv.writer(f)
         w.writerow([safe_col(c) for c in cols])
         for r in rows:
-            w.writerow([r.get(c) for c in cols])
+            w.writerow([_cell(r.get(c)) for c in cols])
     subprocess.run(["chown", "serenedb:serenedb", csv_path], check=False)
     grant = f'GRANT SELECT ON "{table}" TO {ro_role};\n' if ro_role else ""
     # Grain-инвариант: одна строка на ОБЪЯВЛЕННЫЙ КЛЮЧ, а не на Ref_Key.

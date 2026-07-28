@@ -1,0 +1,17 @@
+[Unit]
+# КОНВЕЙЕР СВЕЖЕСТИ: витрина (дельта) → поисковый слой. Один атомарный такт.
+# Заменяет пару 1c-serene-sync + 1c-serene-index: теперь это один такт по готовности.
+Description=1c-serene-pipeline — витрина (дельта из 1С) + сборка поискового слоя
+After=network.target serenedb.service 1c-odata-gateway.service
+Wants=serenedb.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=3600
+WorkingDirectory=/opt/1c-mcp-reports
+# Порядок env значим: reports первым (ключи эмбеддера, токен шлюза), sync последним
+# (пишущая роль postgres — CREATE/MERGE в корпус). Разойдётся порядок — сборка упадёт на
+# permission denied, как было прежде.
+EnvironmentFile=-/etc/1c-mcp-reports.env
+EnvironmentFile=/etc/1c-serene-sync.env
+ExecStart=/opt/1c-mcp-reports/pipeline.sh

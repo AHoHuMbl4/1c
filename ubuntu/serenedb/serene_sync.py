@@ -14,7 +14,7 @@ import json
 import os
 import sys
 
-import build_resolver_index as R
+# build_resolver_index больше не нужен: резолвер строит build.sh (см. main())
 import odata_census as C
 import subprocess
 import poc_load_entity as L
@@ -141,26 +141,39 @@ def main():
         ents = sorted(ents, key=lambda e: -next(r["rows"] for r in rows if r["entity"] == e))[:limit]
         print("  ограничение SYNC_MAX_ENTITIES=%d: грузим %d крупнейших" % (limit, len(ents)))
 
-    ok = empty = err = 0
+    # 🔴 СНАЧАЛА ДЕЛЬТА, ПОТОМ ПОЛНАЯ. Для сущности с уникальным Ref_Key тянем из 1С
+    # только изменившиеся записи (по `DataVersion`), а не всю таблицу — иначе каждый такт
+    # это трафик и повторный эмбеддинг (указание владельца 28.07). Дельта неприменима
+    # (табличная часть, регистр, первая загрузка) → `load_entity_delta` вернёт None, и
+    # грузим полностью. Итог считаем по фактически затронутым строкам, чтобы было видно,
+    # СКОЛЬКО работы такт реально сделал.
+    ok = empty = err = touched = 0
     for es in ents:
         try:
-            r = L.load_entity(es)
-            if r["rows"] == 0:
-                empty += 1
+            r = L.load_entity_delta(es)
+            if r is None:
+                r = L.load_entity(es)
+                if r["rows"] == 0:
+                    empty += 1
+                else:
+                    ok += 1
+                    print(f"  {es}: {r['rows']} строк -> {r['table']} (полная, {r['sec']}s)")
             else:
                 ok += 1
-                print(f"  {es}: {r['rows']} строк -> {r['table']} ({r['sec']}s)")
+                if r.get("changed") or r.get("gone"):
+                    touched += r.get("changed", 0) + r.get("gone", 0)
+                    print(f"  {es}: дельта +{r.get('changed',0)}/-{r.get('gone',0)} "
+                          f"({r['sec']}s)")
         except Exception as e:  # noqa: BLE001 — одна сущность не должна валить весь синк
             err += 1
             print(f"  {es}: ОШИБКА {e}")
-    print(f"витрина: загружено {ok}, пусто {empty}, ошибок {err} из {len(ents)}")
+    print(f"витрина: сущностей {ok}, пусто {empty}, ошибок {err}; изменённых строк {touched}")
 
-    try:
-        R.main()
-    except SystemExit as e:
-        print(f"resolver_index: {e}")
-    except Exception as e:  # noqa: BLE001
-        print(f"resolver_index: ошибка пересборки {e}")
+    # 🔴 РЕЗОЛВЕР ЗДЕСЬ БОЛЬШЕ НЕ СТРОИТСЯ. Прежде синк вызывал `build_resolver_index`
+    # (питон), а тот пересобирал резолвер ЦЕЛИКОМ — [замер 27.07] 7 ч 34 мин. Теперь
+    # резолвер строит `build.sh` штатными средствами движка, инкрементально (векторы
+    # только новым значениям). Синк отвечает ТОЛЬКО за витрину (1С → таблицы); корпус,
+    # индекс, резолвер и векторы — за `build.sh`. Разделение слоёв, п. 20.
 
     # Ошибки загрузки не глотаем: прогон помечается проваленным, systemd покажет failed.
     if err:
