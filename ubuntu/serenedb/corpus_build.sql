@@ -87,8 +87,25 @@ SELECT c.table_name AS tbl, c.column_index AS ord, c.column_name AS col, c.data_
             WHERE p2.entity=lower(c.table_name) AND p2.prop=regexp_replace(c.column_name,'_Type$',''))) AS is_companion,
        coalesce((SELECT k.key_cols=['Ref_Key'] FROM tmp3_key k WHERE k.entity=lower(c.table_name)),false) AS own_ref
 FROM duckdb_columns() c
-LEFT JOIN tmp3_prop p ON p.entity=lower(c.table_name) AND p.prop=c.column_name
-WHERE c.database_name='postgres';
+-- 🔴 ОБЪЯВЛЕНИЕ ИЩЕТСЯ И ВО ВЛОЖЕННОМ ТИПЕ. Регистры 1С отдают данные обёрткой, а поля
+-- самих движений объявлены ОТДЕЛЬНОЙ сущностью, имя которой начинается с имени регистра
+-- (`…_recordtype`). Загрузчик такие наборы разворачивает, и в витрине появляются колонки,
+-- которых у обёртки нет. Классификатор их не находил и ставил `skip` — то есть
+-- выбрасывал из текста: [замер 28.07] `Period`, `LineNumber`, `Active` и суммы проводок
+-- не попадали в корпус вовсе, тексты 85 движений выходили ОДИНАКОВЫМИ, и слияние
+-- останавливалось на дублях ключа. Данные при этом лежали в витрине целыми.
+-- Правило структурное: имя вложенного типа начинается с имени сущности. Ни суффикса,
+-- ни списка имён в коде нет — используется само соглашение платформы о вложенности.
+LEFT JOIN tmp3_prop p ON p.prop = c.column_name
+     AND (p.entity = lower(c.table_name)
+          OR p.entity LIKE lower(c.table_name) || '\_%' ESCAPE '\')
+WHERE c.database_name='postgres'
+-- Колонка бывает объявлена И у обёртки, И у вложенного типа — тогда соединение даёт ДВЕ
+-- строки на одну колонку, и `map_from_entries` падает с «Map keys must be unique».
+-- Оставляем одно объявление, приоритет — собственному: вложенный тип уточняет, а не
+-- переопределяет.
+QUALIFY row_number() OVER (PARTITION BY c.table_name, c.column_name
+                           ORDER BY (p.entity = lower(c.table_name)) DESC NULLS LAST) = 1;
 
 -- 🔴 ИСТОЧНИКИ БЕРУТСЯ ИЗ ОТДЕЛЬНОЙ ТАБЛИЦЫ, А НЕ ИЗ КОРПУСА.
 -- Прежде здесь стояло `SELECT DISTINCT src_table FROM search_corpus`, и это была петля:
@@ -271,10 +288,23 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
      CASE WHEN is_guid THEN 0 WHEN is_num THEN 2 WHEN is_date THEN 3 ELSE 1 END AS prio
    FROM j)
 SELECT src_table,
+       -- 🔴 ОБЪЯВЛЕННЫЙ КЛЮЧ НЕ ВСЕГДА РАЗЛИЧАЕТ СТРОКИ. У регистров 1С отдаёт данные
+       -- обёрткой (одна запись на регистратор, движения внутри списком), и объявленный
+       -- ключ принадлежит ОБЁРТКЕ: [замер 28.07] `AccountingRegister_Хозрасчетный` —
+       -- 280 движений схлопывались в 104 ключа, 66 ключей повторялись. Слияние в корпус
+       -- на этом останавливалось, и правильно: дубль ключа в корпусе — двойной счёт в
+       -- любой сумме, и уйти оттуда он уже не может.
+       -- Ключ дополняется отпечатком строки ТОЛЬКО там, где он повторяется: где ключ
+       -- различает — он остаётся прежним, и отпечатки строк не меняются впустую.
+       CASE WHEN count(*) OVER (PARTITION BY src_table, rk) > 1
+            THEN rk || '#' || sha1(doc) ELSE rk END AS row_key,
+       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, dt
+FROM (
+SELECT src_table,
        -- Без объявленного ключа и без Ref_Key ключом становится отпечаток текста —
        -- как в боевом коде, иначе строки с пустым ключом затирают друг друга.
-       coalesce(row_key, sha1(doc)) AS row_key,
-       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, dt
+       coalesce(row_key, sha1(doc)) AS rk,
+       doc, refs, nums, dt
 FROM (
   SELECT $1::VARCHAR AS src_table,
          coalesce(any_value(k.row_key),
@@ -297,7 +327,7 @@ FROM (
          -- даты. Отсутствие обязано выглядеть как отсутствие.
          max(nullif(try_cast(val AS TIMESTAMP), TIMESTAMP '0001-01-01 00:00:00'))
              FILTER (is_dt IS NOT NULL) AS dt
-  FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g;
+  FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g) h;
 
 SELECT 'EXECUTE p_doc(' || quote_literal(tbl) || ');' FROM tmp3_src
 \gexec
