@@ -881,8 +881,28 @@ def pick_measure(src_table, question, word):
         return None
     if len(names) == 1:
         return names[0]                        # выбора нет — и спрашивать не о чем
+    # Имя величины ТОЧНО совпало со словом вопроса — брать его, не гадая реранкером.
+    # «сумма» → «Сумма», а не «СуммаНУDr»: точное совпадение сильнее близости.
+    wl = word.lower()
+    exact = [n for n in names if n.lower() == wl]
+    if exact:
+        return exact[0]
     idx = rerank(word, names)
-    return names[idx[0]] if idx else None
+    ranked = [names[i] for i in idx] if idx else names
+    # БАЗОВАЯ ВЕЛИЧИНА ПРЕДПОЧТИТЕЛЬНЕЕ УТОЧНЁННОЙ, когда слово общее. У регистра бухучёта
+    # величины вложены: «Сумма» — база, «СуммаВРDr»/«СуммаНУCr» — её частные виды (разницы,
+    # налоговый учёт, дебет/кредит). Имя базы — ПРЕФИКС имён частных, это структурный факт,
+    # а не список. На «обороты»/«сумма» реранкер путался и брал частный вид — [замер 28.07]
+    # «обороты» → «СуммаВРDr». Если верхний по рангу — частный вид, а его база тоже в
+    # списке и в вопросе нет её уточнителя, берём базу.
+    top = ranked[0]
+    base = next((n for n in names if n != top and top.startswith(n)
+                 and sum(1 for m in names if m != n and m.startswith(n)) >= 2), None)
+    if base and base.lower() not in wl:
+        qualifier = top[len(base):].lower()
+        if qualifier and qualifier not in wl:
+            return base
+    return top
 
 
 def pick_entity(question, kind, cands, counts=None, match="", cut=None):
@@ -1571,6 +1591,12 @@ def gate(answer, rows, agg, thresholds=None):
     known = []
     for r in rows:
         known += _dates(r[3]) + _dates(r[5])
+    # Границы периода (`date_min`/`date_max`) посчитаны базой по ВСЕМУ множеству, а `rows`
+    # — лишь показанная выборка (LIMIT): строки с крайней датой в ней может не быть.
+    # [замер 28.07] из-за этого верный ответ с «28.02.2026» (это `date_max`) отвергался
+    # через раз. Даты-агрегаты разрешены наравне со строчными — они проверены базой.
+    if agg:
+        known += _dates(agg.get("date_min") or "") + _dates(agg.get("date_max") or "")
     for d, mo, y in _dates(answer):
         ok = any(kd == d and kmo == mo and (y is None or ky is None or ky == y)
                  for kd, kmo, ky in known)
@@ -1686,8 +1712,15 @@ def _coverage_answer(question, diag, t0):
 
 
 # ----------------------------------------------------------------- HTTP
-def answer(question):
+def answer(question, focus=None):
     """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
+
+    `focus` — сущность, ВЫБРАННАЯ человеком после уточнения (кнопкой или словом). Когда
+    вопрос неоднозначен, система отвечает `kind=clarify` со списком сущностей; бот
+    показывает их кнопками, и выбор возвращается сюда как `focus`. Тогда выбор сущности не
+    гадается — берётся заданный, и ответ считается по нему. Так замыкается порядок п. 21:
+    ответ → уточняющий вопрос → ответ по выбору (решение владельца 28.07: «если после
+    уточнения даётся верный ответ, это ок»).
 
     Порядок важен: сначала множество совпадений раскладывается по источникам ЦЕЛИКОМ,
     и только потом выбирается один источник и тянутся его строки. Обратный порядок
@@ -1951,12 +1984,64 @@ def answer(question):
                     diag["without_value"] = len(dropped)
         except RuntimeError:
             pass
-    try:
-        picked, marks = pick_entity(question, intent.get("kind"), cands,
-                                    counts_for_model, match, cut)
-    except RuntimeError:
-        picked, marks = [], {}
-        diag["degraded"] = "выбор сущности сделан без модели"
+    # ВЫБОР ЧЕЛОВЕКА ПОСЛЕ УТОЧНЕНИЯ важнее догадки: если задан `focus` и такая сущность
+    # реально под условиями что-то содержит — берём её и не спрашиваем модель.
+    if focus:
+        picked, marks = [focus], {}
+        diag["focus_forced"] = focus
+        # Код-терм (счёт, ОКВЭД) при ВЫБРАННОЙ сущности фильтруется иерархическим префиксом
+        # безопасно: сущность уже определена, спутать её с чужой нельзя. Дот-граница
+        # отсекает лишнее (счёт «62» ≠ сумма «624000»): [замер] по регистру ровно 147
+        # движений, сумма сходится с 1С. В одношаговом ответе этот префикс давал ошибочный
+        # выбор сущности — поэтому он живёт ТОЛЬКО на выбранной человеком.
+        code_filter = None
+        for group in (intent.get("terms") or []):
+            for alt in group:
+                a = alt.strip()
+                if a and any(c.isdigit() for c in a) and "." not in a and len(a) <= 12:
+                    code_filter = ("(doc @@ ts_starts_with(%s) OR doc @@ ts_phrase(%s))"
+                                   % (lit(a.lower() + "."), lit(a)))
+                    break
+            if code_filter:
+                break
+        if code_filter:
+            # Префикс кода СТАНОВИТСЯ `match`. Буквальный «62» точной фразой по выбранной
+            # сущности дал бы ноль. `match` (а не `preds`) — потому что по нему запросы
+            # идут по ИНДЕКСУ, где только и работают `ts_*`; с пустым match они ушли бы в
+            # корпус и упали («TSQUERY outside @@ match»).
+            match = code_filter
+    else:
+        try:
+            picked, marks = pick_entity(question, intent.get("kind"), cands,
+                                        counts_for_model, match, cut)
+        except RuntimeError:
+            picked, marks = [], {}
+            diag["degraded"] = "выбор сущности сделан без модели"
+
+        # КОД С ИЕРАРХИЕЙ — НЕОДНОЗНАЧНОСТЬ, КОТОРУЮ РЕШАЕТ ЧЕЛОВЕК. «62» — это и номер
+        # формы статистики, и счёт: буквальный поиск ведёт к форме, а иерархический
+        # префикс `62.` — к регистру бухучёта. Судить, что имел в виду человек, по числу
+        # нельзя. Раньше система молча брала форму и отвечала «нет оборотов». Теперь: если
+        # у кода есть держатели через `62.`, которых буквальный поиск НЕ дал, — предлагаем
+        # выбор (форма / регистр), и по выбору (`focus`) считаем верно. Порядок п. 21.
+        code_terms = [a.strip() for g in (intent.get("terms") or []) for a in g
+                      if a.strip() and any(c.isdigit() for c in a) and "." not in a
+                      and len(a.strip()) <= 12]
+        if code_terms and not focus:
+            holders = {}
+            for r in psql(" UNION ALL ".join(
+                    "SELECT src_table, count(*) n FROM %s WHERE doc @@ ts_starts_with(%s) "
+                    "GROUP BY 1" % (INDEX, lit(c.lower() + ".")) for c in code_terms[:2])):
+                try:
+                    holders[r[0]] = holders.get(r[0], 0) + int(r[1])
+                except (ValueError, IndexError):
+                    continue
+            extra = [t for t in sorted(holders, key=lambda x: -holders[x])[:3]
+                     if t not in by and t not in picked]
+            if extra:
+                picked = list(dict.fromkeys((picked or []) + extra))
+                diag["code_ambiguous"] = extra
+
     # НЕОДНОЗНАЧНЫЙ ВОПРОС — спрашиваем человека, а не угадываем за него.
     # Судья неоднозначности — модель: она видит и названия, и отличительные реквизиты
     # каждого источника, и сама говорит, когда вопрос честно допускает несколько
@@ -1978,9 +2063,10 @@ def answer(question):
                 "options": opts, "sources": [o["label"] for o in opts],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
     src = picked[0] if picked else None
-    if src not in by:
+    if src not in by and not focus:
         # Модель назвала источник, куда поиск не попал: проверяем, есть ли там что-то
-        # под наши условия, иначе остаёмся с тем, что реально нашлось.
+        # под наши условия, иначе остаёмся с тем, что реально нашлось. Выбор человека
+        # (`focus`) так не перебиваем — он назвал сущность сам.
         probe_rows = rows_of(src, match, preds, 1) if src else []
         if not probe_rows and by:
             src = max(by.items(), key=lambda kv: kv[1])[0]
@@ -2022,8 +2108,15 @@ def answer(question):
     # Числа неполноты разрешены гейту наравне с порогами вопроса: иначе фраза «не дошло
     # 104 строки» была бы отвергнута как выдумка, и система замолчала бы ровно там, где
     # обязана предупредить.
+    # Числа ИЗ САМОГО ВОПРОСА разрешены в ответе: если человек спросил «обороты по счёту
+    # 62», модель эхом называет «62» — это не выдуманная величина, а его же слово. Прежде
+    # гейт отвергал верный ответ (сумма 23 742 200 посчитана верно) только из-за «62» в
+    # тексте [замер 28.07]. Берём числа из вопроса как ещё один разрешённый набор.
+    q_nums = [float(re.sub(r"[^\d]", "", n)) for n in re.findall(r"\d[\d.]*", question)
+              if re.sub(r"[^\d]", "", n)]
     extra_vals = _threshold_values(intent) + [x for t in (totals or []) for x in t[1:]] \
-                 + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else [])
+                 + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else []) \
+                 + q_nums
     raw = compose(question, rows, agg, totals=totals, coverage=cov)
     text, claims = _split_answer(raw)
     ask_back = _ask_back(raw)
@@ -2168,8 +2261,10 @@ class Handler(BaseHTTPRequestHandler):
         question = (req.get("question") or "").strip()
         if not question:
             return self._send(400, {"error": "empty question"})
+        # `focus` — сущность, выбранная человеком после уточнения (кнопка/слово).
+        focus = (req.get("focus") or "").strip() or None
         try:
-            return self._send(200, answer(question))
+            return self._send(200, answer(question, focus=focus))
         except Exception as e:                          # noqa: BLE001
             sys.stderr.write("ask ERROR: %r\n" % (e,))
             return self._send(500, {"kind": "error", "text": "", "sources": [],
