@@ -645,6 +645,42 @@ def measures_of(src_table):
         return []
 
 
+def totals_of(src_table, match, preds, measures):
+    """Итоги ПО КАЖДОЙ величине сущности — одним запросом.
+
+    Нужно там, где вопрос величину не называет («что покупало ООО Ромашка»). Заставлять
+    выбирать одну в таком случае нельзя: [замер 28.07] реранкер на таком вопросе выбрал
+    `НомерЧекаККМ` — номер чека вместо суммы. Отдаём модели ВСЕ итоги с именами, пусть
+    берёт подходящий; каждое число всё равно сверяется гейтом с базой.
+
+    Размер ограничен природой данных: величин у сущности единицы (у нас максимум 12), и
+    их число не растёт с размером базы — п. 19 соблюдён.
+    """
+    if not measures:
+        return []
+    where = [w for w in ([match] + preds + ["src_table = %s" % lit(src_table)]) if w]
+    src = INDEX if match else CORPUS
+    # По каждой величине — итог, наибольшее и наименьшее. Иначе вопрос «какая самая
+    # крупная продажа» отвечать нечем: величину он не называет, а максимум ему нужен.
+    cols = ", ".join(
+        "coalesce(sum(map_extract(nums, %(m)s)[1]),0), count(map_extract(nums, %(m)s)[1]), "
+        "coalesce(max(map_extract(nums, %(m)s)[1]),0), coalesce(min(map_extract(nums, %(m)s)[1]),0)"
+        % {"m": lit(m)} for m in measures)
+    try:
+        r = psql("SELECT %s FROM %s WHERE %s" % (cols, src, " AND ".join(where)))
+    except RuntimeError:
+        return []
+    if not r or not r[0]:
+        return []
+    row = r[0]
+    out = []
+    for i, m in enumerate(measures):
+        b = 4 * i
+        if b + 3 < len(row) and int(row[b + 1] or 0) > 0:
+            out.append((m, _num(row[b]), _num(row[b + 2]), _num(row[b + 3])))
+    return out
+
+
 def pick_measure(src_table, question, word):
     """Какую величину считать — решается ПО ВОПРОСУ.
 
@@ -659,9 +695,14 @@ def pick_measure(src_table, question, word):
     names = measures_of(src_table)
     if not names:
         return None
+    if not word:
+        # Вопрос не называет величину — НЕ выбираем за него. Иначе получается
+        # «что покупало Ромашка» → `НомерЧекаККМ`. Итоги по всем величинам отдадим
+        # модели отдельно (`totals_of`).
+        return None
     if len(names) == 1:
         return names[0]                        # выбора нет — и спрашивать не о чем
-    idx = rerank(word or question, names)
+    idx = rerank(word, names)
     return names[idx[0]] if idx else None
 
 
@@ -862,7 +903,7 @@ def _split_answer(raw):
     return raw.strip(), {}
 
 
-def compose(question, rows, agg, corrections=None):
+def compose(question, rows, agg, corrections=None, totals=None):
     payload = []
     shown = rows[:ROWS_TO_MODEL]
     # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
@@ -899,6 +940,13 @@ def compose(question, rows, agg, corrections=None):
             body += "\n  period                    = %s .. %s" % (agg["date_min"], agg["date_max"])
         body += "%s" % (
             "")
+    if totals:
+        # Итоги по каждой величине — с ИМЕНАМИ из базы. Модель сама возьмёт подходящую
+        # под вопрос; выдумать она их не может, а гейт всё равно сверит с данными.
+        body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS, by quantity name "
+                 "(total / largest single / smallest single):")
+        for m, v, mx, mn in totals:
+            body += "\n  %s: total = %s, max = %s, min = %s" % (m, _fmt(v), _fmt(mx), _fmt(mn))
     if corrections:
         # ВТОРАЯ ПОПЫТКА. Первая формулировка не прошла проверку кодом — говорим модели,
         # что именно не сошлось, и требуем опираться только на посчитанные базой числа.
@@ -1049,7 +1097,7 @@ def _norm_numbers(text):
 ROLE_TOL = 0.01          # копеечная погрешность форматирования
 
 
-def check_claims(claims, agg):
+def check_claims(claims, agg, totals=None):
     """Сверить ЗАЯВЛЕННЫЕ моделью величины с посчитанными в базе — по ролям.
 
     Это то, чего не умеет проверка «число встречается в данных»: сумма одной строки,
@@ -1071,6 +1119,15 @@ def check_claims(claims, agg):
             continue
         real = {"total": agg.get("sum"), "count": agg.get("count"),
                 "max": agg.get("max"), "min": agg.get("min")}[role]
+        # Когда вопрос величину не назвал, единственного агрегата нет — считаны итоги
+        # ПО КАЖДОЙ величине. Роль тогда сверяется с любой из них: «наибольшая продажа»
+        # это max величины `СуммаДокумента`, и число обязано совпасть именно с ним, а не
+        # с чем попало в данных. [замер 28.07] без этого верный ответ 1 629 700 отвергался
+        # с формулировкой «в базе 0», потому что сверять было не с чем.
+        if role in ("total", "max", "min") and totals:
+            i = {"total": 1, "max": 2, "min": 3}[role]
+            if any(abs(v - float(t[i])) <= ROLE_TOL for t in totals):
+                continue
         if real is None or abs(v - float(real)) > ROLE_TOL:
             bad.append("%s: заявлено %s, в базе %s" % (role, _fmt(v), _fmt(real)))
     return (not bad), bad
@@ -1252,7 +1309,14 @@ def answer(question):
     # графики 62, регистр производственного календаря 31, нужный документ 6 — и модели
     # это подавалось как «столько записей совпало».
     signal = bool(match)
-    counts_for_model = by if signal else {}
+    # Число подошедших строк показывается модели ВСЕГДА, а не только при совпадении по
+    # словам. Прежняя оговорка («без слов это просто размеры таблиц, отфильтрованные по
+    # дате») верна лишь наполовину: отфильтрованное по дате число — это и есть данные о
+    # вопросе. [замер 28.07] «сколько продали в декабре» уходило в регистр
+    # `accumulationregister_реализацияуслуг_recordtype` с ОДНОЙ декабрьской записью
+    # вместо документа продажи с шестью — по названию они почти неразличимы, а по числу
+    # подошедших строк различаются вшестеро.
+    counts_for_model = by
     # Кандидаты — ВСЕГДА те сущности, которые реально подошли: по словам вопроса, а
     # если слов нет — по его условиям (период, порог суммы). Раньше при отсутствии
     # слов список подходящих ВЫБРАСЫВАЛСЯ и модели отдавались все 226 сущностей
@@ -1329,7 +1393,14 @@ def answer(question):
     # Родитель берётся из КОНТРАКТА ПЛАТФОРМЫ (составной ключ), а не из имени: в
     # `search_tables.parent` его записывает сборщик. Оба источника остаются в списке —
     # мы не решаем за модель, мы лишь не ставим часть впереди целого.
-    if len(cands) > 1:
+    # 🔴 Правило применяется ТОЛЬКО когда спрашивают ЧИСЛО. Оно и заводилось ради этого:
+    # итог документа живёт в шапке, а не в строках. Но на вопрос «что покупало ООО
+    # Ромашка» ответ как раз в СТРОКАХ — там наименования, — и правило уводило на шапку,
+    # где их нет. [замер 28.07] система честно отвечала «покупало товары и услуги,
+    # наименований нет», то есть правило мешало ответить.
+    wants_number = bool((intent.get("measure") or "").strip()) or \
+        intent.get("want") in ("sum", "count")
+    if wants_number and len(cands) > 1:
         try:
             par = {r[0]: r[1] for r in psql(
                 "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
@@ -1396,8 +1467,9 @@ def answer(question):
     if intent.get("want") == "sum" and len(cands) > 1:
         try:
             with_money = {r[0] for r in psql(
-                "SELECT src_table FROM %s WHERE src_table IN (%s) AND amount IS NOT NULL "
-                "GROUP BY 1" % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
+                "SELECT src_table FROM %s WHERE src_table IN (%s) "
+                "  AND nums IS NOT NULL AND len(map_keys(nums)) > 0 GROUP BY 1"
+                % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
             if with_money:
                 dropped = [c for c in cands if c not in with_money]
                 cands = [c for c in cands if c in with_money]
@@ -1446,6 +1518,10 @@ def answer(question):
     # оказаться про количество.
     measure = pick_measure(src, question, (intent.get("measure") or ""))
     diag["measure"] = measure
+    # Величина не названа — считаем итоги по всем и показываем модели с именами.
+    totals = [] if measure else totals_of(src, match, preds, measures_of(src))
+    if totals:
+        diag["totals"] = {m: [v, mx, mn] for m, v, mx, mn in totals}
     preds = preds + _num_pred(intent, measure)
     rows = rows_of(src, match, preds, TOPK, measure)
     if not rows:
@@ -1453,9 +1529,9 @@ def answer(question):
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     agg = aggregate(src, match, preds, measure)
-    raw = compose(question, rows, agg)
+    raw = compose(question, rows, agg, totals=totals)
     text, claims = _split_answer(raw)
-    ok_roles, bad_roles = check_claims(claims, agg)
+    ok_roles, bad_roles = check_claims(claims, agg, totals)
     ok_txt, bad_txt = claims_in_text(claims, text, intent.get("want"))
     ok_roles, bad_roles = (ok_roles and ok_txt), (bad_roles + bad_txt)
 
@@ -1469,7 +1545,8 @@ def answer(question):
     # «примерно три миллиона». Признак детерминируемый, списка числительных не нужно.
     if agg and intent.get("want") in ("sum", "count") and not _norm_numbers(text):
         ok_roles, bad_roles = False, bad_roles + ["величина названа не цифрами"]
-    ok_nums, bad_nums = gate(text, rows, agg, _threshold_values(intent))
+    ok_nums, bad_nums = gate(text, rows, agg, _threshold_values(intent)
+                             + [x for t in (totals or []) for x in t[1:]])
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     # ОТВЕТ ОБЯЗАН ДОЙТИ, ЕСЛИ ОН ЕСТЬ. Решение владельца 27.07: «если данные есть, но по
     # нашей системе мы их не отдали — пропадает смысл проекта». Первая формулировка могла
@@ -1479,11 +1556,12 @@ def answer(question):
     # сходится с базой, он не уйдёт.
     if not ok and agg:
         diag["retry"] = bad[:3]
-        raw2 = compose(question, rows, agg, corrections=bad[:3])
+        raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals)
         text2, claims2 = _split_answer(raw2)
-        ok_roles2, bad_roles2 = check_claims(claims2, agg)
+        ok_roles2, bad_roles2 = check_claims(claims2, agg, totals)
         ok_txt2, bad_txt2 = claims_in_text(claims2, text2, intent.get("want"))
-        ok_nums2, bad_nums2 = gate(text2, rows, agg, _threshold_values(intent))
+        ok_nums2, bad_nums2 = gate(text2, rows, agg, _threshold_values(intent)
+                                   + [x for t in (totals or []) for x in t[1:]])
         if ok_roles2 and ok_txt2 and ok_nums2 and (text2 or "").strip():
             text, claims = text2, claims2
             ok, bad = True, []
