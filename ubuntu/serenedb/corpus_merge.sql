@@ -9,15 +9,27 @@
 -- `emb = NULL` у изменившихся — не потеря, а честная отметка «вектор ещё не посчитан»:
 -- она видна запросом `count(*) FILTER (WHERE emb IS NULL)`, тогда как оставленный старый
 -- вектор при новом тексте был бы тихим расхождением смысла и текста.
+-- Строка несёт ВСЕ свои числовые величины (`nums`), а не одну выбранную. Колонка
+-- добавляется, если её ещё нет: на существующей базе это переход, на новой — обычная схема.
+ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS nums MAP(VARCHAR, DOUBLE);
+
 MERGE INTO search_corpus AS t
 USING tmp3_corpus AS s
 ON t.src_table = s.src_table AND t.row_key = s.row_key
 WHEN MATCHED AND t.doc_hash <> s.doc_hash THEN
      UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash,
-                amount = s.amount, doc_date = s.doc_date, emb = NULL
+                nums = s.nums, doc_date = s.doc_date, emb = NULL
 WHEN NOT MATCHED THEN
-     INSERT (src_table, row_key, doc, refs, doc_hash, amount, doc_date, emb)
-     VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.amount, s.doc_date, NULL);
+     INSERT (src_table, row_key, doc, refs, doc_hash, nums, doc_date, emb)
+     VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.doc_date, NULL);
+
+-- Величины не входят в отпечаток (он считается по тексту и ссылкам), поэтому строки,
+-- чей текст не изменился, `MERGE` не трогает — а величины им всё равно нужны.
+-- Дозаполняем отдельно: это НЕ повод пересчитывать вектор, текст ведь тот же.
+UPDATE search_corpus c SET nums = t.nums
+FROM tmp3_corpus t
+WHERE t.src_table = c.src_table AND t.row_key = c.row_key
+  AND c.nums IS DISTINCT FROM t.nums;
 
 -- Исчезнувшие строки удаляет БАЗА одним запросом — и только по тем сущностям, которые
 -- в этот раз собирались. Иначе неполная выгрузка из 1С вычистила бы живые данные.
@@ -32,4 +44,6 @@ WHERE c.src_table IN (SELECT tbl FROM tmp3_src)
 VACUUM (REFRESH_INDEX) search_idx;
 
 SELECT 'корпус' AS шаг, count(*) AS строк, count(DISTINCT src_table) AS сущностей,
-       count(*) FILTER (WHERE emb IS NULL) AS ждут_вектора FROM search_corpus;
+       count(*) FILTER (WHERE emb IS NULL) AS ждут_вектора,
+       count(*) FILTER (WHERE nums IS NOT NULL AND len(map_keys(nums)) > 0) AS строк_с_величинами
+FROM search_corpus;

@@ -247,6 +247,9 @@ Reply with JSON only.
   "amount": {"op": ">"|"<"|">="|"<="|"between"|null, "value": number|null, "value2": number|null},
   "period": {"from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null},
   "want":   "list" | "sum" | "count",
+  "measure": "the word from the question naming WHICH quantity is asked about
+             (money total, pieces, weight, price, …), in the question's own language.
+             null if the question asks about no quantity",
   "kind":   "ALWAYS fill this: a short noun naming WHAT kind of records the question is
              about, in the question's own language. If the user used a verb, give the
              corresponding noun. Only null if the question names no kind of records at all"
@@ -260,7 +263,7 @@ Rules:
   form and add the inflections a record would realistically use. Example shape:
   [["Moscow", "MSK"], ["Acme"]] — matching is AND between groups, OR inside a group.
 - Never invent concepts that are not in the question.
-- want = "sum" when the user asks for a total money amount;
+- want = "sum" when the user asks for a total of ANY quantity, not only money;
   "count" when they ask how many records; otherwise "list".
 - A numeric threshold belongs in "amount", never in "terms".
 - A time range belongs in "period" as dates; `today` is given below.
@@ -295,16 +298,34 @@ def parse_intent(question, today):
 
 
 # ----------------------------------------------------------------- 2-3. поиск и счёт
-def _predicates(intent):
-    """Условия по числу и дате — предикаты по INCLUDE-колонкам индекса."""
-    out = []
-    a = intent.get("amount") or {}
+def _num_pred(intent, measure):
+    """Условие по ЧИСЛУ — к названной величине, а не к единственной колонке.
+
+    Величина известна только после выбора сущности (её имена лежат в самих данных),
+    поэтому числовое условие отделено от датного: датное работает на отборе сущностей,
+    числовое — уже внутри выбранной.
+    """
+    a = (intent or {}).get("amount") or {}
     op, v, v2 = a.get("op"), a.get("value"), a.get("value2")
-    if op and v is not None:
-        if op == "between" and v2 is not None:
-            out.append("amount BETWEEN %s AND %s" % (float(v), float(v2)))
-        elif op in (">", "<", ">=", "<="):
-            out.append("amount %s %s" % (op, float(v)))
+    if not (op and v is not None and measure):
+        return []
+    m = "map_extract(nums, %s)[1]" % lit(measure)
+    if op == "between" and v2 is not None:
+        return ["%s BETWEEN %s AND %s" % (m, float(v), float(v2))]
+    if op in (">", "<", ">=", "<="):
+        return ["%s %s %s" % (m, op, float(v))]
+    return []
+
+
+def _predicates(intent):
+    """Условия по дате — предикаты по INCLUDE-колонке индекса.
+
+    Числовых условий здесь БОЛЬШЕ НЕТ: строка несёт все свои величины картой, и какая
+    из них имеется в виду, зависит от вопроса и от сущности. Смешивать нельзя —
+    «больше 500000» у документа про сумму, а у строки накладной могло бы оказаться
+    про количество.
+    """
+    out = []
     p = intent.get("period") or {}
     if p.get("from"):
         out.append("doc_date >= %s" % lit(p["from"]))
@@ -317,7 +338,7 @@ def _fetch(match_sql, preds, order, limit):
     where = [w for w in ([match_sql] + preds) if w]
     src = INDEX if match_sql else CORPUS
     return psql(
-        "SELECT row_key, src_table, coalesce(amount,0), coalesce(doc_date::date::text,''), "
+        "SELECT row_key, src_table, 0, coalesce(doc_date::date::text,''), "
         "       %s AS s, doc FROM %s%s ORDER BY s DESC LIMIT %d"
         % (order, src, (" WHERE " + " AND ".join(where)) if where else "", limit))
 
@@ -449,7 +470,7 @@ def tables_of(match, preds):
     return out
 
 
-def rows_of(src_table, match, preds, limit):
+def rows_of(src_table, match, preds, limit, measure=None):
     """Строки одного источника: САМА строка, а рядом — подсветка совпадения.
 
     Раньше модели уходила ТОЛЬКО подсветка. Она по устройству отдаёт фрагменты вокруг
@@ -464,11 +485,13 @@ def rows_of(src_table, match, preds, limit):
     frag = ("ts_highlight(doc, 'MaxWords=14,MaxFragments=2,StartSel=[,StopSel=]') "
             "|| ' | ' || doc" if match else "doc")
     order = ((SCORERS.get(SCORER, SCORERS["bm25"]) % INDEX) + " DESC") if match \
-        else "amount DESC NULLS LAST"
+        else (("map_extract(nums, %s)[1] DESC NULLS LAST" % lit(measure)) if measure
+              else "row_key")
     return psql(
-        "SELECT row_key, src_table, coalesce(amount,0), coalesce(doc_date::date::text,''), "
+        "SELECT row_key, src_table, coalesce(%s,0), coalesce(doc_date::date::text,''), "
         "       0 AS s, %s FROM %s WHERE %s ORDER BY %s LIMIT %d"
-        % (frag, src, " AND ".join(where), order, limit))
+        % (("map_extract(nums, %s)[1]" % lit(measure)) if measure else "NULL::DOUBLE",
+           frag, src, " AND ".join(where), order, limit))
 
 
 PICK_SYS = """You map a user's question to a record type.
@@ -606,6 +629,42 @@ def rerank(query, docs):
         return []
 
 
+def measures_of(src_table):
+    """Какие величины есть у сущности — ИЗ ДАННЫХ, а не из кода.
+
+    Имена величин — это имена числовых колонок 1С, попавшие в строку корпуса. Список
+    короткий (величины ОДНОЙ сущности), поэтому его можно показать модели, не нарушая
+    п. 19: он не растёт с размером базы.
+    """
+    try:
+        return [r[0] for r in psql(
+            "SELECT DISTINCT u.k FROM %s, unnest(map_keys(nums)) AS u(k) "
+            "WHERE src_table = %s AND nums IS NOT NULL ORDER BY 1"
+            % (CORPUS, lit(src_table))) if r and r[0]]
+    except RuntimeError:
+        return []
+
+
+def pick_measure(src_table, question, word):
+    """Какую величину считать — решается ПО ВОПРОСУ.
+
+    🔴 Здесь больше нет понятия «деньги». Прежде сборщик выбирал одну колонку на
+    сущность и объявлял её суммой; из-за этого на «сколько ШТУК продано» отвечать было
+    нечем — количества в корпусе не существовало (работа 3 в PRODUCTION_PLAN). Замечание
+    владельца 28.07: «это не универсально, базы разные бывают».
+    Теперь строка несёт все свои величины, а сопоставить слово человека с именем
+    величины — языковая задача, и её делает модель (п. 19). Список имён короткий и
+    приходит из данных.
+    """
+    names = measures_of(src_table)
+    if not names:
+        return None
+    if len(names) == 1:
+        return names[0]                        # выбора нет — и спрашивать не о чем
+    idx = rerank(word or question, names)
+    return names[idx[0]] if idx else None
+
+
 def pick_entity(question, kind, cands, counts=None, match="", cut=None):
     """Какая сущность имеется в виду — спрашиваем модель, но даём ей ТОЛЬКО НАЗВАНИЯ.
 
@@ -714,7 +773,7 @@ def _num(x):
         return 0.0
 
 
-def aggregate(src_table, match, preds):
+def aggregate(src_table, match, preds, measure=None):
     """Итог считается В БАЗЕ по ВСЕМУ подходящему множеству, без LIMIT.
 
     Это ключевое отличие от чанкового RAG: тот суммирует то, что попало в выборку,
@@ -728,12 +787,16 @@ def aggregate(src_table, match, preds):
     # Считаем не только итог: у каждой величины будет СВОЯ РОЛЬ, и гейт сверяет
     # число именно с той ролью, в которой оно названо. Иначе «настоящее число не от
     # тех строк» проходит: сумма одной строки, выданная за итог, гейту неотличима.
-    r = psql("SELECT count(*), coalesce(sum(amount),0), coalesce(min(amount),0), "
-             "       coalesce(max(amount),0), coalesce(avg(amount),0), "
+    # Величина названа по имени из данных. Нет величины — нет и агрегатов: пустой
+    # результат честнее нуля, потому что ноль неотличим от «посчитано и получилось 0».
+    m = ("map_extract(nums, %s)[1]" % lit(measure)) if measure else "NULL::DOUBLE"
+    r = psql("SELECT count(*), coalesce(sum(%(m)s),0), coalesce(min(%(m)s),0), "
+             "       coalesce(max(%(m)s),0), coalesce(avg(%(m)s),0), "
              "       coalesce(min(doc_date)::date::text,''), "
              "       coalesce(max(doc_date)::date::text,''), "
-             "       count(amount) "
-             "FROM %s WHERE %s" % (src, " AND ".join(where)))
+             "       count(%(m)s) "
+             "FROM %(src)s WHERE %(w)s"
+             % {"m": m, "src": src, "w": " AND ".join(where)})
     if not r or not r[0] or r[0][0] == "":
         return None
     row = r[0] + [""] * (8 - len(r[0]))
@@ -742,7 +805,8 @@ def aggregate(src_table, match, preds):
     return {"count": int(row[0]), "sum": _num(row[1]), "min": _num(row[2]),
             "max": _num(row[3]), "avg": round(_num(row[4]), 2),
             "date_min": row[5], "date_max": row[6],
-            "count_amount": int(row[7] or 0), "src": src_table}
+            "count_amount": int(row[7] or 0), "src": src_table,
+            "measure": measure}
 
 
 # ----------------------------------------------------------------- 4. формулировка
@@ -821,11 +885,13 @@ def compose(question, rows, agg, corrections=None):
         # «0», и гейт согласится — ноль ведь посчитан. Отсутствие суммы и сумма,
         # равная нулю, — разные вещи, и путать их нельзя.
         body += "\n\nCOMPUTED OVER ALL MATCHING ROWS: count = %d" % agg["count"]
-        body += "\n  (this record type has no monetary field — do not state any amount)"
+        body += ("\n  (no numeric quantity matches the question for this record type — "
+                 "do not state any figure other than the count)")
     elif agg:
-        body += "\n\nCOMPUTED OVER ALL MATCHING ROWS (use these exact figures, each in its own role):"
+        body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS for the quantity «%s» "
+                 "(use these exact figures, each in its own role):" % (agg.get("measure") or "-"))
         body += "\n  count (number of records) = %d" % agg["count"]
-        body += "\n  sum (TOTAL amount)        = %s" % _fmt(agg["sum"])
+        body += "\n  sum (TOTAL)               = %s" % _fmt(agg["sum"])
         body += "\n  max (largest single)      = %s" % _fmt(agg["max"])
         body += "\n  min (smallest single)     = %s" % _fmt(agg["min"])
         body += "\n  avg (average)             = %s" % _fmt(agg["avg"])
@@ -1194,10 +1260,9 @@ def answer(question):
     # дате (6 строк), но тонул в общем списке, и выбирались календарные графики.
     cands = list(by)
     # ВЕЛИЧИНА, О КОТОРОЙ СПРАШИВАЮТ, ДОЛЖНА У КАНДИДАТА СУЩЕСТВОВАТЬ.
-    # Это не про деньги: в корпусе сегодня живёт РОВНО ОДНА числовая величина на строку
-    # (`amount`), поэтому «сумма» и есть та самая величина. Когда до корпуса доедут
-    # остальные числовые колонки (работа 3 в PRODUCTION_PLAN), правило обобщится само:
-    # спросили количество — кандидат обязан иметь количество.
+    # Строка несёт ВСЕ свои числовые величины картой, поэтому проверка теперь общая:
+    # у кандидата должна быть хоть одна величина. Какая именно нужна — решается уже
+    # после выбора сущности (`pick_measure`), потому что имена величин у каждой свои.
     # Отбор идёт ДАННЫМИ: у сущности либо есть заполненная величина, либо нет. Ни порога,
     # ни числа, ни имени — размер и состав базы ничего не меняют (п. 9).
     # [замер 27.07] без этого правила «сколько продали в декабре» отвечалось
@@ -1207,8 +1272,9 @@ def answer(question):
     if intent.get("want") == "sum" and len(cands) > 1:
         try:
             with_value = {r[0] for r in psql(
-                "SELECT src_table FROM %s WHERE src_table IN (%s) AND amount IS NOT NULL "
-                "GROUP BY 1" % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
+                "SELECT src_table FROM %s WHERE src_table IN (%s) "
+                "  AND nums IS NOT NULL AND len(map_keys(nums)) > 0 GROUP BY 1"
+                % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
             if with_value:
                 dropped = [c for c in cands if c not in with_value]
                 cands = [c for c in cands if c in with_value]
@@ -1294,10 +1360,9 @@ def answer(question):
         except RuntimeError:
             cands = list(by)
     # ВЕЛИЧИНА, О КОТОРОЙ СПРАШИВАЮТ, ДОЛЖНА У КАНДИДАТА СУЩЕСТВОВАТЬ.
-    # Это не про деньги: в корпусе сегодня живёт РОВНО ОДНА числовая величина на строку
-    # (`amount`), поэтому «сумма» и есть та самая величина. Когда до корпуса доедут
-    # остальные числовые колонки (работа 3 в PRODUCTION_PLAN), правило обобщится само:
-    # спросили количество — кандидат обязан иметь количество.
+    # Строка несёт ВСЕ свои числовые величины картой, поэтому проверка теперь общая:
+    # у кандидата должна быть хоть одна величина. Какая именно нужна — решается уже
+    # после выбора сущности (`pick_measure`), потому что имена величин у каждой свои.
     # Отбор идёт ДАННЫМИ: у сущности либо есть заполненная величина, либо нет. Ни порога,
     # ни числа, ни имени — размер и состав базы ничего не меняют (п. 9).
     # [замер 27.07] без этого правила «сколько продали в декабре» отвечалось
@@ -1307,8 +1372,9 @@ def answer(question):
     if intent.get("want") == "sum" and len(cands) > 1:
         try:
             with_value = {r[0] for r in psql(
-                "SELECT src_table FROM %s WHERE src_table IN (%s) AND amount IS NOT NULL "
-                "GROUP BY 1" % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
+                "SELECT src_table FROM %s WHERE src_table IN (%s) "
+                "  AND nums IS NOT NULL AND len(map_keys(nums)) > 0 GROUP BY 1"
+                % (CORPUS, ", ".join(lit(c) for c in cands))) if r and r[0]}
             if with_value:
                 dropped = [c for c in cands if c not in with_value]
                 cands = [c for c in cands if c in with_value]
@@ -1374,12 +1440,19 @@ def answer(question):
             src = max(by.items(), key=lambda kv: kv[1])[0]
     diag["focus"], diag["found"] = src, by.get(src, 0)
 
-    rows = rows_of(src, match, preds, TOPK)
+    # ВЕЛИЧИНА ВЫБИРАЕТСЯ ПО ВОПРОСУ — после того, как известна сущность: её величины
+    # лежат в самих данных. Числовое условие («больше 500000») тоже применяется здесь,
+    # а не на общем отборе: у документа оно про сумму, у строки накладной могло бы
+    # оказаться про количество.
+    measure = pick_measure(src, question, (intent.get("measure") or ""))
+    diag["measure"] = measure
+    preds = preds + _num_pred(intent, measure)
+    rows = rows_of(src, match, preds, TOPK, measure)
     if not rows:
         return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
-    agg = aggregate(src, match, preds)
+    agg = aggregate(src, match, preds, measure)
     raw = compose(question, rows, agg)
     text, claims = _split_answer(raw)
     ok_roles, bad_roles = check_claims(claims, agg)

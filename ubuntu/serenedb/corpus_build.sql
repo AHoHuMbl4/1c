@@ -8,10 +8,9 @@
 -- в шлюз 1С за `$metadata`, сам разбирает XML регулярными выражениями, сам классифицирует
 -- колонки, сам считает статистики, сам собирает текст и отпечаток.
 --
--- Единственное, чего у движка нет и что остаётся снаружи, — решение «какая из числовых
--- колонок содержит деньги». Это языковая задача, и пункт 20 разрешает её явно. Здесь
--- таблица `tmp3_amountcol` заполняется восстановлением прошлого выбора модели из боевого
--- корпуса — это нужно ДЛЯ СВЕРКИ; в бою её заполняет ответ модели.
+-- Понятия «деньги» в сборке НЕТ: строка несёт все свои числовые величины картой
+-- «имя → значение», а какую из них считать, решается по вопросу в момент ответа.
+-- Своего кода в сборке корпуса не осталось вовсе.
 --
 -- ЗАПУСК: секрет с токеном шлюза подаётся ОТДЕЛЬНЫМ файлом с правами 600 и удаляется
 -- в конце. «Временный» секрет SereneDB переживает сессию и виден любой другой —
@@ -142,25 +141,26 @@ SELECT tbl, col FROM (
 WHERE (best < 2 AND pr = best) OR (best = 2 AND ndates = 1)
 QUALIFY row_number() OVER (PARTITION BY tbl ORDER BY pr, ord) = 1;
 
--- ============ 5. КОЛОНКА ДЕНЕГ ============
--- Единственное решение, которого у движка нет: какое из чисел — деньги. Его принимает
--- языковая модель — п. 20 TARGET.md разрешает это явно («вызов языковой модели и
--- решения, требующие смысла»). Ответ живёт в таблице `search_amount_col`, её заполняет
--- `pick_money_col.py` МЕЖДУ этим файлом и слиянием в корпус, и делает это с кэшем:
--- ключ — отпечаток списка имён числовых колонок, имена не менялись — модель не
--- спрашивают. Здесь мы только читаем результат.
--- Таблицы нет — сборка не падает, а идёт БЕЗ сумм: отсутствие агрегата видно
--- (`amount IS NULL`), а неверный агрегат — нет.
-CREATE TABLE IF NOT EXISTS search_amount_col (tbl TEXT, col TEXT, fp TEXT);
-CREATE OR REPLACE TABLE tmp3_amountcol AS
-SELECT tbl, col FROM search_amount_col WHERE col <> '';
+-- ============ 5. ВЕЛИЧИНЫ СТРОКИ ============
+-- 🔴 Здесь БОЛЬШЕ НЕ ВЫБИРАЕТСЯ «денежная колонка». Строка несёт ВСЕ свои числовые
+-- величины разом, картой «имя величины → значение».
+--
+-- Почему прежний путь был неверен (замечание владельца 28.07): «pick_money_col — про
+-- деньги, а мы говорили, что это не универсально. Базы разные бывают». Выбор одной
+-- колонки из многих означал, что на вопрос «сколько ШТУК продано» отвечать нечем:
+-- количества в корпусе не было вовсе — отсюда работа 3 в PRODUCTION_PLAN и ответ
+-- «числом документов вместо количества».
+--
+-- Понятия «деньги» в коде теперь нет. Какую величину считать — решается ПО ВОПРОСУ, в
+-- момент ответа: имена величин сущности достаются из самих данных (`map_keys`), а слово
+-- человека сопоставляет с ними модель. Это её работа по п. 19 и короткий список — не
+-- схема базы, а величины одной сущности.
 
-SELECT 'колонка денег' AS шаг, count(*) AS сущностей FROM tmp3_amountcol;
 
 -- ============ 6. СБОРКА ТЕКСТА ============
 CREATE OR REPLACE TABLE tmp3_corpus
   (src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
-   amount DOUBLE, doc_date TIMESTAMP);
+   nums MAP(VARCHAR, DOUBLE), doc_date TIMESTAMP);
 
 PREPARE p_doc AS
 INSERT INTO tmp3_corpus
@@ -190,30 +190,30 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
           (c.kind='ref' OR regexp_full_match(u.val,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')) AS is_guid,
           (c.kind IN ('text','flag') AND NOT c.is_companion AND c.col <> 'DataVersion'
            AND NOT regexp_matches(u.val,'^(https?://|/)')) AS in_text,
-          (SELECT 1 FROM tmp3_amountcol a WHERE a.tbl=$1 AND a.col=u.col) AS is_amt,
+          (c.kind = 'num') AS is_num,
           (SELECT 1 FROM tmp3_datecol   d WHERE d.tbl=$1 AND d.col=u.col) AS is_dt
    FROM cells u JOIN tmp3_cls c ON c.tbl=$1 AND c.col=u.col
    LEFT JOIN tmp3_refmap r ON r.guid = u.val
    WHERE u.val <> ''),
  pieces AS (
-   SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_amt, is_dt,
+   SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_dt,
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
           WHEN is_guid AND refname IS NOT NULL THEN replace(col,'_Key','') || ': ' || refname
           WHEN is_guid THEN NULL
-          WHEN is_amt IS NOT NULL THEN col || ': ' ||
+          WHEN is_num AND try_cast(val AS DOUBLE) IS NOT NULL THEN col || ': ' ||
                CASE WHEN try_cast(val AS DOUBLE) = floor(try_cast(val AS DOUBLE))
                     THEN printf('%d', try_cast(val AS BIGINT))
                     ELSE printf('%.2f', try_cast(val AS DOUBLE)) END
           WHEN is_dt IS NOT NULL THEN col || ': ' || substr(val,1,10)
           WHEN in_text THEN col || ': ' || val
           ELSE NULL END AS piece,
-     CASE WHEN is_guid THEN 0 WHEN is_amt IS NOT NULL THEN 2 WHEN is_dt IS NOT NULL THEN 3 ELSE 1 END AS prio
+     CASE WHEN is_guid THEN 0 WHEN is_num THEN 2 WHEN is_dt IS NOT NULL THEN 3 ELSE 1 END AS prio
    FROM j)
 SELECT src_table,
        -- Без объявленного ключа и без Ref_Key ключом становится отпечаток текста —
        -- как в боевом коде, иначе строки с пустым ключом затирают друг друга.
        coalesce(row_key, sha1(doc)) AS row_key,
-       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, amt, dt
+       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, dt
 FROM (
   SELECT $1::VARCHAR AS src_table,
          coalesce(any_value(k.row_key),
@@ -221,7 +221,10 @@ FROM (
          regexp_replace($1,'^[^_]*_','') || coalesce(' | ' || string_agg(piece,' | ' ORDER BY prio, ord)
                                                      FILTER (piece IS NOT NULL), '') AS doc,
          coalesce(string_agg(piece,' | ' ORDER BY ord) FILTER (is_guid AND refname IS NOT NULL), '') AS refs,
-         max(try_cast(val AS DOUBLE))    FILTER (is_amt IS NOT NULL) AS amt,
+         -- ВСЕ величины строки, а не одна выбранная. Имя величины — имя колонки из
+         -- базы, а не наше слово: на другой конфигурации и языке это работает так же.
+         map_from_entries(list({'key': col, 'value': try_cast(val AS DOUBLE)})
+                          FILTER (is_num AND try_cast(val AS DOUBLE) IS NOT NULL)) AS nums,
          max(try_cast(val AS TIMESTAMP)) FILTER (is_dt  IS NOT NULL) AS dt
   FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g;
 
@@ -232,12 +235,21 @@ SELECT 'EXECUTE p_doc(' || quote_literal(tbl) || ');' FROM tmp3_src
 SELECT 'строк: новая формула' AS что, count(*) AS сколько FROM tmp3_corpus
 UNION ALL SELECT 'строк: боевой корпус', count(*) FROM search_corpus;
 
+-- Сверка с боевым: отпечаток и дата сравниваются напрямую, величины — по существу.
+-- Прежняя колонка `amount` несла ОДНУ величину, выбранную моделью; теперь строка несёт
+-- их все, поэтому сравнивается не «равен ли amount», а «есть ли прежняя величина среди
+-- нынешних»: сужение считалось бы потерей, а расширение — нет.
 SELECT count(*) AS сошлось_ключами,
        count(*) FILTER (WHERE c.doc_hash = t.doc_hash) AS отпечаток_совпал,
        count(*) FILTER (WHERE c.doc_hash <> t.doc_hash) AS отпечаток_разошёлся,
-       count(*) FILTER (WHERE c.amount IS DISTINCT FROM t.amount) AS amount_разошёлся,
-       count(*) FILTER (WHERE c.doc_date IS DISTINCT FROM t.doc_date) AS doc_date_разошёлся
+       count(*) FILTER (WHERE c.doc_date IS DISTINCT FROM t.doc_date) AS doc_date_разошёлся,
+       count(*) FILTER (WHERE c.amount IS NOT NULL
+                          AND NOT list_contains(map_values(t.nums), c.amount)) AS величина_потеряна
 FROM search_corpus c JOIN tmp3_corpus t USING (src_table, row_key);
+
+SELECT 'величин в строке' AS что, round(avg(len(map_keys(nums))),1) AS в_среднем,
+       max(len(map_keys(nums))) AS максимум,
+       count(*) FILTER (WHERE len(map_keys(nums)) = 0) AS строк_без_величин FROM tmp3_corpus;
 
 SELECT 'нет в новой' AS сторона, count(*) FROM search_corpus c
   WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table=c.src_table AND t.row_key=c.row_key)
