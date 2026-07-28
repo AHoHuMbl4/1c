@@ -33,6 +33,16 @@ ODATA = os.environ.get("ETL_ODATA_BASE", "http://127.0.0.1:6011").rstrip("/")
 DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres")
 CSV_DIR = os.environ.get("CSV_DIR", "/var/lib/serenedb")
 PAGE = 1000
+# Сущности, у которых выборка пришла вложенной. Для них объявленный ключ — ключ ОБЁРТКИ.
+_NESTED_SEEN = set()
+# Предел ожидания одного запроса к 1С. Это БЮДЖЕТ ВРЕМЕНИ, а не порог правильности:
+# при его превышении загрузка падает с ошибкой, а не отбрасывает данные молча.
+# [замер 28.07] жёсткие 120 с не были ни на чём основаны и роняли загрузку целой
+# сущности: `Catalog_ИдентификаторыОбъектовМетаданных` отдаёт страницу в 1 000 строк за
+# 84-89 секунд — то есть вторая же страница не укладывалась. Сортировка тут ни при чём:
+# без `$orderby` те же 84 с. Сущность просто медленная на стороне 1С, и наш предел
+# объявлял её несуществующей: 5 881 строка молча отсутствовала в поиске.
+HTTP_TIMEOUT = int(os.environ.get("ETL_HTTP_TIMEOUT", "600"))
 
 
 _KEYS_CACHE = {}
@@ -43,7 +53,7 @@ def declared_key(entity_set):
     if not _KEYS_CACHE:
         try:
             xml = urllib.request.urlopen(
-                _odata_auth(ODATA + "/$metadata"), timeout=300).read().decode("utf-8", "replace")
+                _odata_auth(ODATA + "/$metadata"), timeout=HTTP_TIMEOUT).read().decode("utf-8", "replace")
         except Exception:                       # noqa: BLE001
             return []
         for m in re.finditer(r'<EntityType\s+Name="([^"]+)"(.*?)</EntityType>', xml, re.S):
@@ -70,7 +80,7 @@ def _order_by(entity_set):
         {"$format": "json", "$top": "1"}
     )
     try:
-        v = json.load(urllib.request.urlopen(_odata_auth(url), timeout=120)).get("value", [])
+        v = json.load(urllib.request.urlopen(_odata_auth(url), timeout=HTTP_TIMEOUT)).get("value", [])
     except Exception:
         return None
     return "Ref_Key" if v and "Ref_Key" in v[0] else None
@@ -80,9 +90,39 @@ def count_of(entity_set):
     """Сколько строк в 1С. Нужно, чтобы сверить выгрузку и не принять неполную за полную."""
     url = "%s/%s/$count" % (ODATA, urllib.parse.quote(entity_set))
     try:
-        return int(urllib.request.urlopen(_odata_auth(url), timeout=120).read().decode().strip())
+        return int(urllib.request.urlopen(_odata_auth(url), timeout=HTTP_TIMEOUT).read().decode().strip())
     except Exception:                           # noqa: BLE001
         return -1
+
+
+def _flatten_nested(rows):
+    """Развернуть ВЛОЖЕННЫЙ набор записей в обычные строки.
+
+    Регистры 1С приходят по OData не плоским списком, а обёрткой: одна запись на
+    регистратор, а сами движения лежат внутри списком (`RecordSet`). Загрузчик видел
+    ОДНУ строку вместо всех и объявлял выгрузку неполной — [замер 28.07]
+    `AccountingRegister_Хозрасчетный`: «выгружено 1 строк, в 1С 104». Так молча
+    отсутствовала главная книга: на «обороты по счёту» отвечать было нечем.
+
+    Правило СТРУКТУРНОЕ, без единого имени: если у записи ровно одно поле, значение
+    которого — непустой список объектов, то настоящие строки лежат в нём, а внешние
+    скалярные поля общие для всех. Имя поля роли не играет и в коде не упоминается.
+    """
+    out, changed = [], False
+    for r in rows:
+        nested = [k for k, v in r.items()
+                  if isinstance(v, list) and v and isinstance(v[0], dict)]
+        if len(nested) != 1:
+            out.append(r)
+            continue
+        k = nested[0]
+        outer = {kk: vv for kk, vv in r.items() if kk != k}
+        for inner in r[k]:
+            merged = dict(outer)
+            merged.update(inner)               # внутреннее поле важнее одноимённого внешнего
+            out.append(merged)
+        changed = True
+    return out, changed
 
 
 def fetch_all(entity_set):
@@ -113,7 +153,7 @@ def fetch_all(entity_set):
         if order:
             params["$orderby"] = order  # стабильный порядок → страницы не перекрываются
         url = f"{ODATA}/{urllib.parse.quote(entity_set)}?" + urllib.parse.urlencode(params)
-        v = json.load(urllib.request.urlopen(_odata_auth(url), timeout=120)).get("value", [])
+        v = json.load(urllib.request.urlopen(_odata_auth(url), timeout=HTTP_TIMEOUT)).get("value", [])
         if not v:
             break
         rows.extend(v)
@@ -126,7 +166,20 @@ def fetch_all(entity_set):
                 break
             if expected < 0 and short_pages > 1:
                 break
-    if expected >= 0 and len(rows) != expected:
+    rows, nested = _flatten_nested(rows)
+    # 🔴 СВЕРКА С `$count` ПРИМЕНИМА ТОЛЬКО К ПЛОСКОЙ ВЫБОРКЕ. У вложенной формы эти
+    # числа считают РАЗНОЕ и сравнению не подлежат: [замер 28.07]
+    # `AccountingRegister_Хозрасчетный` — `$count` даёт 104, коллекция возвращает ОДНУ
+    # обёртку, а внутри неё 280 движений. Прежний код сравнивал 1 со 104, объявлял
+    # выгрузку неполной и выбрасывал сущность целиком — так молча отсутствовала главная
+    # книга. Проверка, отвергающая верные данные, защитой не является.
+    # Несопоставимость не заминается: она печатается, и число строк уходит в перепись,
+    # где расхождение с 1С видно владельцу (п. 13).
+    if nested:
+        print("    %s: вложенный набор развёрнут -> %d строк (в 1С $count=%d — формы разные,"
+              " сравнению не подлежат)" % (entity_set, len(rows), expected))
+        _NESTED_SEEN.add(entity_set)
+    elif expected >= 0 and len(rows) != expected:
         raise RuntimeError(
             "%s: выгружено %d строк, в 1С %d — выгрузка неполная" % (entity_set, len(rows), expected))
     return rows
@@ -204,6 +257,15 @@ def load_entity(es, ro_role="serene_ro"):
 
     key_cols = [safe_col(k) for k in declared_key(es)]
     key_cols = [k for k in key_cols if any(safe_col(c) == k for c in cols)]
+    # 🔴 У ВЛОЖЕННОЙ ФОРМЫ ОБЪЯВЛЕННЫЙ КЛЮЧ — КЛЮЧ ОБЁРТКИ, А НЕ СТРОКИ. Дедуп по нему
+    # оставляет одну строку на обёртку и выбрасывает остальные: [замер 28.07]
+    # `AccountingRegister_Хозрасчетный` — 280 движений, ключ обёртки `Recorder`,
+    # после дедупа 104, молча потеряно 176 проводок. Это ровно тот дефект зерна, что
+    # разобран выше для табличных частей, только пришедший с другой стороны.
+    # Развёрнутые строки уже различны по устройству, поэтому снимаем только полностью
+    # одинаковые — без ключа, а значит и без возможности выбросить лишнее.
+    if es in _NESTED_SEEN:
+        key_cols = []
     # Узлы-ПАПКИ иерархии (группы номенклатуры, категории, регионы) раньше отбрасывались
     # как «не бизнес-строки». Для коробки это неверно: требование владельца — «информация
     # должна быть вся», а про группы спрашивают ровно так же, как про элементы («что в
