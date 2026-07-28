@@ -99,7 +99,11 @@ FROM duckdb_columns() c
 LEFT JOIN tmp3_prop p ON p.prop = c.column_name
      AND (p.entity = lower(c.table_name)
           OR p.entity LIKE lower(c.table_name) || '\_%' ESCAPE '\')
-WHERE c.database_name='postgres'
+-- 🔴 ИМЯ БАЗЫ НЕ ЗАШИТО. Прежде здесь стояло `database_name = 'postgres'` — имя нашей
+-- базы на ЭТОМ стенде. На установке, где база SereneDB названа иначе, отбор давал бы
+-- НОЛЬ источников, и корпус собрался бы пустым молча. [замер 28.07] найдено при
+-- подготовке теста на второй базе: `current_database()` в `ut_test` вернул `ut_test`.
+WHERE c.database_name=current_database()
 -- Колонка бывает объявлена И у обёртки, И у вложенного типа — тогда соединение даёт ДВЕ
 -- строки на одну колонку, и `map_from_entries` падает с «Map keys must be unique».
 -- Оставляем одно объявление, приоритет — собственному: вложенный тип уточняет, а не
@@ -131,7 +135,7 @@ QUALIFY row_number() OVER (PARTITION BY c.table_name, c.column_name
 -- человеческое имя; тень выбрасываем.
 INSERT INTO search_sources
 SELECT t.table_name, now() FROM duckdb_tables() t
-WHERE t.database_name = 'postgres'
+WHERE t.database_name = current_database()
   AND EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(t.table_name))
   AND t.table_name NOT ILIKE '%\_recordtype' ESCAPE '\'
   AND t.table_name NOT ILIKE '%\_rowtype'    ESCAPE '\'

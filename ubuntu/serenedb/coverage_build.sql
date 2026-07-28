@@ -22,7 +22,11 @@ CREATE OR REPLACE TABLE cov_mart (tbl VARCHAR, n_rows BIGINT);
 PREPARE p_cov AS INSERT INTO cov_mart SELECT $1::VARCHAR, count(*) FROM query_table($1);
 SELECT 'EXECUTE p_cov(' || quote_literal(table_name) || ');'
 FROM duckdb_tables()
-WHERE database_name = 'postgres'
+-- 🔴 ИМЯ БАЗЫ НЕ ЗАШИТО. Прежде здесь стояло `database_name = 'postgres'` — имя нашей
+-- базы на ЭТОМ стенде. На установке, где база SereneDB названа иначе, отбор давал бы
+-- НОЛЬ источников, и корпус собрался бы пустым молча. [замер 28.07] найдено при
+-- подготовке теста на второй базе: `current_database()` в `ut_test` вернул `ut_test`.
+WHERE database_name = current_database()
   AND EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(table_name))
 \gexec
 
