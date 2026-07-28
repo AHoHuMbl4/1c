@@ -57,6 +57,7 @@ REVOKE SELECT ON resolver_index FROM serene_ro;
 
 SELECT 'объекты поиска на месте' AS шаг,
        (SELECT count(*) FROM duckdb_tables()
-        WHERE table_name IN ('search_corpus','resolver_index','search_tables',
+        WHERE database_name = current_database()
+          AND table_name IN ('search_corpus','resolver_index','search_tables',
                              'search_sources','search_meta','build_state')) AS таблиц,
        (SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'search_idx') AS индексов;

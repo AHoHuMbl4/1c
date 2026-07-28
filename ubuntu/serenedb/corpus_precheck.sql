@@ -39,7 +39,10 @@ WHERE privilege_type = 'SELECT' AND table_name IN ('search_corpus', 'resolver_in
 SELECT CASE WHEN count(*) > 0
        THEN error('нет таблиц-источников (идёт синк витрины?): ' || string_agg(src_table, ', ')) END
 FROM (SELECT DISTINCT src_table FROM search_sources) s
-WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table);
+-- Фильтр по базе: `duckdb_tables()` видит все присоединённые базы, и без него проверка
+-- считала бы источник живым, потому что таблица с таким именем есть в ЧУЖОЙ базе.
+WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table
+                  AND t.database_name = current_database());
 
 -- 4. Эмбеддер ЖИВ — проверяем ДО изменения корпуса. Секреты движка живут в памяти и
 --    исчезают при рестарте; после этого `ai_embed` падает с ошибкой, а досчёт векторов

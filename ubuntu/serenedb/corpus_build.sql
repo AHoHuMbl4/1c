@@ -154,12 +154,18 @@ WHERE NOT EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(s.src_table));
 -- удаляются из перечня — они попадут в отчёт как «источник исчез».
 CREATE OR REPLACE TABLE tmp3_src AS
 SELECT s.src_table AS tbl FROM search_sources s
-WHERE EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table);
+-- 🔴 ФИЛЬТР ПО БАЗЕ ОБЯЗАТЕЛЕН: `duckdb_tables()` видит ВСЕ присоединённые базы.
+-- [замер 28.07] из `ut_test` он показал 1 605 своих таблиц И 302 чужих. Без фильтра
+-- источник считался существующим, потому что есть в ДРУГОЙ базе, и `query_table()`
+-- падал: «Table catalog_внешниекомпоненты does not exist». Найдено на второй базе.
+WHERE EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table
+              AND t.database_name = current_database());
 
 SELECT CASE WHEN count(*) > 0
        THEN error('источники исчезли из витрины (идёт синк?): ' || string_agg(src_table, ', ')) END
 FROM search_sources s
-WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table);
+WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table
+                  AND t.database_name = current_database());
 
 SELECT 'классификация' AS шаг, (SELECT count(*) FROM tmp3_src) AS сущностей_корпуса,
        (SELECT count(*) FROM tmp3_cls WHERE tbl IN (SELECT tbl FROM tmp3_src)) AS колонок;
@@ -325,7 +331,23 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
           (c.kind = 'date') AS is_date,
           (SELECT 1 FROM tmp3_datecol   d WHERE d.tbl=$1 AND d.col=u.col) AS is_dt
    FROM cells u JOIN tmp3_cls c ON c.tbl=$1 AND c.col=u.col
-   LEFT JOIN tmp3_refmap r ON r.guid = u.val
+   -- 🔴 СОЕДИНЯЕМСЯ ТОЛЬКО С GUID-ОБРАЗНЫМИ ЗНАЧЕНИЯМИ. Прежде ключом соединения было
+   -- ЛЮБОЕ значение ячейки. Два следствия, оба плохие:
+   --   1) движок хеширует все ячейки подряд (миллионы) против 39 тыс. записей карты —
+   --      лишняя работа на каждой сущности;
+   --   2) 🔴 значение с БИТОЙ КОДИРОВКОЙ роняет соединение целиком:
+   --      `Invalid unicode (byte sequence mismatch) detected in value construction`.
+   --      [замер 28.07, вторая база] на `catalog_правилаинтеграциис1сдокументооборотом`
+   --      это убивало сборку ВСЕЙ сущности, а с `ON_ERROR_STOP on` — и весь такт.
+   --      Проверено: исходное значение соединяется, а после нашей же обрезки
+   --      `substr(…,1,20000)` — падает. То есть дефект наш, а не данных: на первой базе
+   --      он просто не стрелял, потому что там не было таких значений.
+   -- GUID по определению ASCII, поэтому битые байты до хеша не доходят вовсе.
+   -- Ссылкой может быть ТОЛЬКО GUID — значит сужение не теряет ни одной связи.
+   LEFT JOIN tmp3_refmap r
+          ON r.guid = CASE WHEN regexp_full_match(u.val,
+               '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+             THEN u.val END
    WHERE u.val <> ''),
  pieces AS (
    SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_dt, is_date,
@@ -385,8 +407,61 @@ FROM (
              FILTER (is_dt IS NOT NULL) AS dt
   FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g) h;
 
+-- ============ 6-бис. УПРОЩЁННЫЙ ВАРИАНТ СБОРКИ (запасной) ============
+-- 🔴 ОДНА СУЩНОСТЬ НЕ ДОЛЖНА УБИВАТЬ ВЕСЬ ТАКТ. Полная сборка делает много тонкого:
+-- разрешает ссылки по карте, собирает карту величин, выбирает дату. Любой из этих шагов
+-- может споткнуться о данные, которых мы не предвидели — [замер 28.07, вторая база]
+-- значение с битой кодировкой роняло соединение с картой ссылок, а с `ON_ERROR_STOP on`
+-- вместе с ним падал ВЕСЬ такт: 1 500 здоровых сущностей не доезжали из-за одной.
+--
+-- Решение (указание владельца 28.07): не падать, а пробовать ДРУГОЙ подготовленный
+-- вариант. Этот — намеренно простой: текст из пар «колонка: значение», ключ из
+-- объявленного ключа или отпечатка. Ни ссылок, ни величин, ни дат — только то, без чего
+-- строка вообще не найдётся. Качество ниже, но сущность остаётся в поиске.
+--
+-- 🔴 Деградация НЕ МОЛЧАЛИВАЯ (п. 13): ниже считается, сколько сущностей собрано
+-- упрощённо и сколько не собралось вовсе, и оба числа уходят в отчёт.
+PREPARE p_doc_plain AS
+INSERT INTO tmp3_corpus
+WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
+ src AS (SELECT row_number() OVER () AS rid,
+                substr(coalesce(COLUMNS(*)::VARCHAR, ''), 1, 20000) FROM query_table($1)),
+ cells AS (SELECT * FROM src UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (rid))))),
+ keyed AS (SELECT u.rid, string_agg(u.val, '|' ORDER BY list_position((SELECT key_cols FROM kc), u.col)) AS rk
+           FROM cells u WHERE list_position((SELECT key_cols FROM kc), u.col) IS NOT NULL
+           GROUP BY u.rid),
+ g AS (SELECT c.rid,
+              regexp_replace($1,'^[^_]*_','') || coalesce(' | ' || string_agg(c.col || ': ' || c.val, ' | '), '') AS doc
+       FROM cells c WHERE c.val <> '' GROUP BY c.rid)
+SELECT $1::VARCHAR, coalesce(k.rk, sha1(g.doc)), g.doc, '', sha1(g.doc), NULL, NULL
+FROM g LEFT JOIN keyed k USING (rid);
+
+-- Первый заход: полная сборка. Ошибка ОДНОЙ сущности здесь не останавливает файл —
+-- останов включён обратно сразу после цикла, чтобы настоящие сбои (метаданные, права)
+-- по-прежнему роняли такт.
+\set ON_ERROR_STOP off
 SELECT 'EXECUTE p_doc(' || quote_literal(tbl) || ');' FROM tmp3_src
 \gexec
+\set ON_ERROR_STOP on
+
+-- Второй заход: то, что не собралось, — упрощённым вариантом.
+\set ON_ERROR_STOP off
+SELECT 'EXECUTE p_doc_plain(' || quote_literal(tbl) || ');'
+FROM tmp3_src s
+WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = s.tbl)
+\gexec
+\set ON_ERROR_STOP on
+
+-- Чем кончился перебор — ЧИСЛАМИ В БАЗУ, а не в поток.
+DELETE FROM search_quality WHERE k IN ('build_degraded', 'build_failed');
+INSERT INTO search_quality
+SELECT 'build_failed', count(*), 'сущностей не собралось ни одним вариантом'
+FROM tmp3_src s WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = s.tbl);
+
+SELECT 'сборка сущностей' AS шаг,
+       (SELECT count(*) FROM tmp3_src) AS всего,
+       (SELECT count(DISTINCT src_table) FROM tmp3_corpus) AS собрано,
+       (SELECT v FROM search_quality WHERE k = 'build_failed') AS не_собралось;
 
 -- ============ 7. СВЕРКА С БОЕВЫМ КОРПУСОМ ============
 SELECT 'строк: новая формула' AS что, count(*) AS сколько FROM tmp3_corpus
