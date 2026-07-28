@@ -464,6 +464,59 @@ def match_expr(exprs, preds):
     return with_refs("ts_compound(NULL, NULL, [%s], %d)" % (", ".join(exprs), best)), best
 
 
+def children_by_parent(by, match, preds):
+    """Табличные части сущностей, в которых нашлись совпадения (п. 3, п. 21).
+
+    🔴 ЗАЧЕМ. Бот отвечал по ОДНОЙ сущности и не умел связывать их между собой. Всё, что
+    лежит в табличной части, оказывалось недостижимо: [замер 28.07] на «какие товары мы
+    продали ООО Ромашка» система перечисляла ДОКУМЕНТЫ И СУММЫ, а не товары — ответ
+    выглядел уверенно и отвечал не на тот вопрос, что хуже отказа. Сами товары лежали
+    рядом, в `…_товары`, 76 строк.
+
+    Почему поиск их не находил: имя контрагента стоит в ШАПКЕ, в строках товаров его нет,
+    поэтому по словам вопроса они не совпадают никогда и в кандидаты не попадают.
+
+    Связь берётся СТРУКТУРНО, а не по именам: `parent` посчитан при сборке по составному
+    ключу (`$metadata` объявляет ключ табличной части как ссылка на владельца + номер
+    строки), а ключ строки-потомка начинается с ключа шапки. Отсюда отбор:
+    «строки потомка, чей владелец попал в совпадения». Считает база, одним запросом.
+    """
+    if not by or not match:
+        return {}, {}
+    parents = [t for t in by if by.get(t)]
+    if not parents:
+        return {}, {}
+    try:
+        rs = psql("SELECT src_table, parent FROM %s WHERE parent IN (%s)"
+                  % (TABLES, ", ".join(lit(p) for p in parents)))
+    except RuntimeError:
+        return {}, {}
+    pred_by = {}
+    for r in rs:
+        if not r or not r[0]:
+            continue
+        pred_by[r[0]] = ("split_part(row_key, '|', 1) IN (SELECT row_key FROM %s "
+                         "WHERE src_table = %s AND %s)" % (INDEX, lit(r[1]), match))
+    if not pred_by:
+        return {}, {}
+    # ОДИН запрос на все табличные части, а не по запросу на каждую: число обращений к
+    # базе не должно расти с числом сущностей (п. 20).
+    parts = " UNION ALL ".join(
+        "SELECT %s AS t, count(*) AS n FROM %s WHERE src_table = %s AND %s"
+        % (lit(c), CORPUS, lit(c), pred) for c, pred in pred_by.items())
+    out = {}
+    try:
+        for r in psql(parts):
+            try:
+                if int(r[1]) > 0:
+                    out[r[0]] = int(r[1])
+            except (ValueError, IndexError):
+                continue
+    except RuntimeError:
+        return {}, {}
+    return out, {c: pred_by[c] for c in out}
+
+
 def tables_of(match, preds):
     """Разложить ВСЁ множество совпадений по источникам — группировкой в индексе.
 
@@ -759,6 +812,25 @@ def pick_entity(question, kind, cands, counts=None, match="", cut=None):
     # Отличительные реквизиты считаем ТОЛЬКО верхним кандидатам: каждый расчёт стоит
     # ~50 мс, и это бюджет времени ответа, а не порог правильности — порядок уже задан
     # данными, поэтому счёт идёт для тех, между кем модель и выбирает.
+    # ВЕЛИЧИНЫ КАНДИДАТА — рядом с его названием. Без них модель выбирала сущность, у
+    # которой нужной величины нет вовсе: [замер 28.07] «сколько штук товара продано»
+    # выбирало шапку документа и сопоставляло «штук» с `СуммаДокумента`, потому что
+    # количества у шапки не существует — оно лежит в табличной части. Названия величин
+    # приходят ИЗ ДАННЫХ (`map_keys(nums)`), а не из кода, и считаются ОДНИМ запросом
+    # только для верхних кандидатов: это бюджет контекста, а не порог правильности.
+    meas = {}
+    if len(names) > 1:
+        top = [t for t, _ in names[:TERMS_FOR * 4]]
+        try:
+            for r in psql(
+                "SELECT src_table, string_agg(DISTINCT u.k, ', ' ORDER BY u.k) FROM %s, "
+                "unnest(map_keys(nums)) AS u(k) WHERE nums IS NOT NULL AND src_table IN (%s) "
+                "GROUP BY 1" % (CORPUS, ", ".join(lit(t) for t in top))):
+                if r and r[0] and len(r) > 1 and r[1]:
+                    meas[r[0]] = r[1][:160]
+        except RuntimeError:
+            meas = {}
+
     marks = {}
     if match and len(names) > 1:
         raw = {}
@@ -776,11 +848,12 @@ def pick_entity(question, kind, cands, counts=None, match="", cut=None):
                 marks[t] = ", ".join(uniq)
     lines_out, used = [], 0
     for i, (t, nm) in enumerate(names):
-        row = "%d. %s%s%s%s" % (
+        row = "%d. %s%s%s%s%s" % (
             i + 1, nm,
             "" if t not in counts else " — %d matching records" % counts[t],
             "" if not parent_by.get(t) else
             " [line items of «%s»]" % label_by.get(parent_by[t], parent_by[t]),
+            "" if t not in meas else "\n     quantities recorded here: %s" % meas[t],
             "" if t not in marks else "\n     typical for these records: %s" % marks[t])
         if used + len(row) > PICK_BUDGET and lines_out:
             # П. 13 TARGET.md: обрезал — покажи это КЛИЕНТУ, а не в журнале. Раньше
@@ -1536,6 +1609,12 @@ def answer(question):
     diag["min_should_match"] = k if exprs else 0
 
     by = tables_of(match, preds)
+    # Табличные части попадают в кандидаты вместе со своей шапкой: искать их по словам
+    # вопроса бесполезно — имени контрагента в строках товаров нет.
+    kids, kid_pred = children_by_parent(by, match, preds)
+    if kids:
+        by.update(kids)
+        diag["children"] = kids
     if not by and match:                       # слова не дали ничего — ищем по смыслу
         vec = _vec(question)
         # Оператор <=> — РОДНОЕ ядро движка (cosine_distance), а array_cosine_similarity
@@ -1768,6 +1847,14 @@ def answer(question):
         probe_rows = rows_of(src, match, preds, 1) if src else []
         if not probe_rows and by:
             src = max(by.items(), key=lambda kv: kv[1])[0]
+    # Выбрана табличная часть — отбор идёт ПО ШАПКЕ. Её собственный текст слов вопроса
+    # не содержит (имя контрагента стоит в шапке), поэтому искать по нему нечего:
+    # условие заменяется на «владелец строки попал в совпадения».
+    if src in kid_pred:
+        preds = preds + [kid_pred[src]]
+        match = ""
+        diag["via_parent"] = True
+
     diag["focus"], diag["found"] = src, by.get(src, 0)
 
     # НЕПОЛНОТА ИМЕННО ЭТОЙ СУЩНОСТИ (п. 13): «если из-за потери возможен неверный ответ,
