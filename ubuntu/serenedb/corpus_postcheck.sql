@@ -26,8 +26,15 @@ WITH s AS (SELECT max(v) FILTER (WHERE k = 'before_rows')  AS b_rows,
 SELECT CASE
   WHEN a_rows = 0
        THEN error('после такта корпус ПУСТ — восстанавливать из копии')
-  WHEN a_src < b_src
-       THEN error(printf('пропали сущности: было %d, стало %d', b_src, a_src))
+  -- «Пропала сущность» — это когда живой ИСТОЧНИК не доехал до корпуса, а не когда
+  -- число сущностей просто уменьшилось. Отсев теней регистров (`_recordtype`) уменьшает
+  -- счётчик законно, и сравнение before/after ловило бы это ложной тревогой. Считаем по
+  -- контракту: каждый источник из `search_sources` обязан быть в корпусе.
+  WHEN (SELECT count(*) FROM search_sources s
+        WHERE NOT EXISTS (SELECT 1 FROM search_corpus c WHERE c.src_table = s.src_table)) > 0
+       THEN error('источник не доехал до корпуса: ' ||
+                  (SELECT string_agg(s.src_table, ', ') FROM search_sources s
+                   WHERE NOT EXISTS (SELECT 1 FROM search_corpus c WHERE c.src_table = s.src_table)))
   WHEN a_rows * 10 < b_rows * 9
        THEN error(printf('корпус усох больше чем на десятую: было %d, стало %d', b_rows, a_rows))
   -- Векторов не хватает больше чем у двадцатой части строк — значит эмбеддер молчал

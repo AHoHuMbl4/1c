@@ -85,6 +85,11 @@ psql "$DSN" -q -f corpus_merge.sql || fail "слияние корпуса"
 echo "== 3. векторы новым строкам корпуса"
 ./embed_missing.sh search_corpus doc "$WORKERS" "src_table,row_key" || fail "векторы корпуса"
 
+# Векторы МЕТОК сущностей: нужны для семантического выбора источника, когда слова вопроса
+# не совпали (`search_tables.emb`). Пересобираются тем же тактом, что и метки.
+echo "== 3-бис. векторы меток сущностей"
+./embed_missing.sh search_tables label "$WORKERS" "src_table" || fail "векторы меток"
+
 echo "== 4. резолвер"
 psql "$DSN" -q -f resolver_build.sql || fail "сборка резолвера"
 # Вход эмбеддера ОБРЕЗАЕТСЯ здесь, а не в таблице: `resolver_index.value` идёт в предикат

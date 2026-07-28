@@ -121,11 +121,25 @@ QUALIFY row_number() OVER (PARTITION BY c.table_name, c.column_name
 -- `tmp_refmap`, `tbl_chunk` — корпус собрался на 235 532 строки вместо 97 965 и дал
 -- 4 551 дубль ключа. Перечень имён нельзя ни угадать заранее, ни повторить у клиента.
 -- Контракт платформы это решает сам: [замер] отбор по `$metadata` даёт ровно 226.
+-- 🔴 ПЛОСКИЕ ТЕНИ РЕГИСТРОВ ИСКЛЮЧАЮТСЯ. Регистр 1С OData отдаёт ДВАЖДЫ: обёрткой
+-- `<Регистр>` (одна запись на регистратор, движения внутри — их разворачивает загрузчик)
+-- и плоской сущностью `<Регистр>_RecordType` с теми же движениями напрямую. [замер 28.07]
+-- у `AccountingRegister_Хозрасчетный` обе дали по 280 строк — данные задвоены, а `_RecordType`
+-- ещё и лез в кандидаты отдельной сущностью и путал выбор. Суффиксы `_RecordType`/`_RowType`
+-- — технические имена платформы (одинаковы при любом языке конфигурации, это контракт
+-- OData, а не бизнес-имя), поэтому отсев по ним не хардкод. Держим обёртку — у неё
+-- человеческое имя; тень выбрасываем.
 INSERT INTO search_sources
 SELECT t.table_name, now() FROM duckdb_tables() t
 WHERE t.database_name = 'postgres'
   AND EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(t.table_name))
+  AND t.table_name NOT ILIKE '%\_recordtype' ESCAPE '\'
+  AND t.table_name NOT ILIKE '%\_rowtype'    ESCAPE '\'
   AND NOT EXISTS (SELECT 1 FROM search_sources s WHERE s.src_table = t.table_name);
+
+-- Тень, попавшая в источники прежним прогоном, уходит из перечня.
+DELETE FROM search_sources
+WHERE src_table ILIKE '%\_recordtype' ESCAPE '\' OR src_table ILIKE '%\_rowtype' ESCAPE '\';
 
 -- То, что источником быть перестало (или никогда им не было), из перечня уходит: иначе
 -- ошибка одного прогона осталась бы в списке навсегда.
@@ -145,6 +159,44 @@ WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_tab
 
 SELECT 'классификация' AS шаг, (SELECT count(*) FROM tmp3_src) AS сущностей_корпуса,
        (SELECT count(*) FROM tmp3_cls WHERE tbl IN (SELECT tbl FROM tmp3_src)) AS колонок;
+
+-- ============ 2-бис. КАРТА СУЩНОСТЕЙ: метка и связь шапка↔часть ============
+-- 🔴 `search_tables` (имя сущности для выбора моделью + связь `parent`) ПЕРЕСОБИРАЕТСЯ
+-- ЗДЕСЬ. Прежде её наполнял только питоновский сборщик, а штатный такт не трогал — и она
+-- устаревала: [замер 28.07] 8 новых сущностей (включая регистр бухучёта) не имели метки,
+-- и модель их не выбирала — «обороты по счёту» уходили не в тот источник. Метка — из
+-- `$metadata` (контракт), а не из старой памяти.
+CREATE OR REPLACE TABLE tmp3_names AS
+SELECT lower(regexp_extract(body,'Name="([^"]+)"',1)) AS ent,
+       regexp_extract(body,'Name="([^"]+)"',1) AS orig
+FROM tmp3_ent;
+
+-- Метка = человекочитаемое имя: убрать тип-префикс (`Catalog_`/`Document_`/…), разбить
+-- CamelCase пробелом. Подчёркивание табличной части сохраняется, как в прежнем формате.
+-- parent = имя без последнего сегмента, если такой источник существует (табличная часть).
+-- `emb = NULL` у изменившихся — вектор метки досчитает `embed_missing` штатным шагом.
+MERGE INTO search_tables t
+USING (
+  SELECT s.tbl AS src_table,
+         regexp_replace(regexp_replace(n.orig, '^[^_]+_', ''),
+                        '([\p{Ll}0-9])([\p{Lu}])', '\1 \2', 'g') AS label,
+         CASE WHEN len(str_split(s.tbl, '_')) >= 3
+                   AND regexp_replace(s.tbl, '_[^_]+$', '')
+                       IN (SELECT tbl FROM tmp3_src)
+              THEN regexp_replace(s.tbl, '_[^_]+$', '') END AS parent
+  FROM tmp3_src s JOIN tmp3_names n ON n.ent = lower(s.tbl)
+) x ON t.src_table = x.src_table
+WHEN MATCHED AND (t.label IS DISTINCT FROM x.label OR t.parent IS DISTINCT FROM x.parent)
+     THEN UPDATE SET label = x.label, parent = x.parent, emb = NULL
+WHEN NOT MATCHED THEN
+     INSERT (src_table, label, parent, emb) VALUES (x.src_table, x.label, x.parent, NULL);
+
+DELETE FROM search_tables WHERE src_table NOT IN (SELECT tbl FROM tmp3_src);
+
+SELECT 'карта сущностей' AS шаг, count(*) AS всего,
+       count(*) FILTER (WHERE label IS NULL OR label = '') AS без_метки,
+       count(*) FILTER (WHERE parent IS NOT NULL) AS табличных_частей
+FROM search_tables;
 
 -- ============ 3. КОЛОНКА-НАИМЕНОВАНИЕ и КАРТА ССЫЛОК ============
 CREATE OR REPLACE TABLE tmp3_namecol (tbl VARCHAR, col VARCHAR, ord INT, score DOUBLE, std INT);

@@ -103,6 +103,14 @@ WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
   AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
                   WHERE t.src_table = c.src_table AND t.row_key = c.row_key);
 
+-- Сущность, ВЫБЫВШАЯ ИЗ ИСТОЧНИКОВ целиком (переименована, признана тенью регистра и
+-- исключена), оставляет свои строки сиротами: `DELETE` выше их не трогает — их нет в
+-- новом наборе, а `IN (… tmp3_corpus)` их и не покрывает. [замер 28.07] так после отсева
+-- теней `_recordtype` в корпусе осталось 324 лишних строки, и финальная сверка упала.
+-- Убираем по контракту: строка, чьего источника больше нет в перечне, в корпусе не нужна.
+DELETE FROM search_corpus c
+WHERE NOT EXISTS (SELECT 1 FROM search_sources s WHERE s.src_table = c.src_table);
+
 COMMIT;
 
 -- ============ 3. ПУБЛИКАЦИЯ ПОИСКУ ============
