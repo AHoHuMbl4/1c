@@ -74,6 +74,10 @@ TERMS_FOR = int(os.environ.get("ASK_TERMS_FOR", "3"))
 # КОНТЕКСТА (п. 19), а не порог правильности: общее число потерянных строк и сущностей
 # называется всегда и целиком, поимённый список ограничен, чтобы не расти с базой.
 COVERAGE_TOP = int(os.environ.get("ASK_COVERAGE_TOP", "15"))
+# Сверх этого возраста данных (сек) ответ несёт приписку о старении. По умолчанию
+# час — заведомо больше цикла такта (~6 мин), то есть срабатывает только когда
+# обновление реально встало (1С недоступна, такт падает), а не в норме.
+STALE_WARN_SEC = int(os.environ.get("ASK_STALE_WARN_SEC", "3600"))
 TERMS_TOP = int(os.environ.get("ASK_TERMS_TOP", "6"))
 TOPK = int(os.environ.get("ASK_TOPK", "40"))
 ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
@@ -2264,11 +2268,44 @@ class Handler(BaseHTTPRequestHandler):
         # `focus` — сущность, выбранная человеком после уточнения (кнопка/слово).
         focus = (req.get("focus") or "").strip() or None
         try:
-            return self._send(200, answer(question, focus=focus))
+            out = answer(question, focus=focus)
+            # СВЕЖЕСТЬ ДАННЫХ — В КАЖДЫЙ ОТВЕТ (п. 18). Если 1С недоступна или такт падает,
+            # корпус остаётся консистентным (защиты сборки), но СТАРЕЕТ, а бот об этом
+            # молчал бы. Возраст последнего успешного такта делает старение видимым, а при
+            # сильном отставании (сверх `ASK_STALE_WARN_SEC`, вдвое больше цикла и выше) —
+            # явная приписка к ответу. Один дешёвый запрос, не на каждую ветку `answer`.
+            try:
+                r = psql("SELECT round(epoch(now()) - v) FROM search_quality WHERE k='build_ts'")
+                age = int(_num(r[0][0])) if r and r[0] else None
+            except RuntimeError:
+                age = None
+            if age is not None and isinstance(out, dict):
+                out.setdefault("diag", {})["data_age_sec"] = age
+                if age > STALE_WARN_SEC and out.get("kind") in ("answer", "figures", "clarify"):
+                    mins = age // 60
+                    out["text"] = (out.get("text", "") +
+                                   "\n\n⚠ Данные могли устареть: последнее обновление из 1С "
+                                   "было %d мин назад." % mins).strip()
+                    out["stale"] = True
+            return self._send(200, out)
         except Exception as e:                          # noqa: BLE001
+            # 🔴 ЧЕСТНЫЙ ОТКАЗ ПРИ СБОЕ (п. 18), А НЕ ВЫДУМАННЫЙ ОТВЕТ. Любое исключение
+            # по дороге (модель молчит, база/движок недоступны, эмбеддер не отвечает)
+            # доходит СЮДА, а не превращается в ответ по частичным данным: `answer`
+            # либо возвращает результат целиком, либо падает. Пользователю — понятное
+            # сообщение по типу сбоя, БЕЗ внутренностей (`psql`, стек): их видит только
+            # журнал. Класс сбоя определяем по тексту исключения, без утечки деталей.
+            txt = str(e)
             sys.stderr.write("ask ERROR: %r\n" % (e,))
-            return self._send(500, {"kind": "error", "text": "", "sources": [],
-                                    "error": str(e)[:300]})
+            low = txt.lower()
+            if any(w in low for w in ("psql", "connection to server", "port", "postgres")):
+                msg = "База данных временно недоступна. Повторите запрос через минуту."
+            elif any(w in low for w in ("urlopen", "http", "timed out", "connection refused")):
+                msg = "Языковая модель сейчас не отвечает. Повторите запрос через минуту."
+            else:
+                msg = "Сервис временно недоступен. Повторите запрос через минуту."
+            return self._send(503, {"kind": "unavailable", "text": msg, "sources": [],
+                                    "retry": True})
 
 
 def main():

@@ -49,6 +49,9 @@ CREATE INDEX IF NOT EXISTS search_idx ON search_corpus
 -- модель, не должен дотягиваться до служебных эмбеддингов даже в обход валидатора.
 GRANT SELECT ON search_corpus  TO serene_ro;
 GRANT SELECT ON search_tables  TO serene_ro;
+-- Свежесть данных (`build_ts`) и полнота (`cov_*`) — сервис ответов читает их, чтобы
+-- показать возраст данных и старение (п. 18), поэтому право нужно читающей роли.
+GRANT SELECT ON search_quality TO serene_ro;
 GRANT SELECT ON resolver_index TO serene_resolver;
 REVOKE SELECT ON resolver_index FROM serene_ro;
 
