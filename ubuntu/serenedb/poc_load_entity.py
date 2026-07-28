@@ -97,8 +97,16 @@ def fetch_all(entity_set):
     Поэтому: идём до ПУСТОЙ страницы и сверяем итог с `$count`. Расхождение — ошибка,
     а не «загрузили сколько получилось».
     """
-    order = _order_by(entity_set)
     expected = count_of(entity_set)
+    # 🔴 СОРТИРОВКА НУЖНА ТОЛЬКО ДЛЯ ПОСТРАНИЧНОГО ЧТЕНИЯ. Она держит порядок между
+    # страницами, чтобы строки не перекрывались и не терялись. Если сущность целиком
+    # помещается в одну страницу, страниц нет — и сортировать нечего.
+    # [замер 28.07] пять информационных регистров по одной строке 1С отдавала с
+    # `HTTP 500 Internal Server Error` ИМЕННО на `$orderby` по объявленному ключу; без
+    # него те же адреса отвечают 200. Так молча терялись пять сущностей: ошибка печаталась
+    # в поток и нигде не сохранялась, а в переписи стояло «не загрузилось» без причины.
+    # Заодно снимается лишняя работа с 1С на всех мелких сущностях.
+    order = _order_by(entity_set) if (expected < 0 or expected > PAGE) else ""
     rows, skip, short_pages = [], 0, 0
     while True:
         params = {"$format": "json", "$top": str(PAGE), "$skip": str(skip)}
@@ -181,6 +189,19 @@ def load_entity(es, ro_role="serene_ro"):
     # витрине; количество 499 штук -> 213, сумма 12 052 500 -> 7 856 600.
     # Сверка с $count это не ловила: fetch_all сверяет ДО дедупа и честно видит 76 == 76.
     # Поэтому теперь: ключ берём объявленный, а снятое дедупом — считаем и показываем.
+
+    # 🔴 ФОРМАТ ЗАДАЁМ ЯВНО, А НЕ УГАДЫВАЕМ. CSV пишем мы сами, поэтому сообщать читателю
+    # его устройство обязаны тоже мы. С авторазбором сущность с вложением молча не
+    # грузилась вовсе: [замер 28.07] `Catalog_ВнешниеКомпоненты` — 19 МБ на ОДНУ строку
+    # (внутри base64-архив с переносами строк), читатель упирался в предел длины строки и
+    # отдавал `CSV Error on Line: 1`. Ошибка печаталась в поток и нигде не сохранялась,
+    # поэтому в переписи стояло «не загрузилось» без причины, а сущность отсутствовала в
+    # поиске. С явным пределом строка читается: замерено, 1 из 1.
+    # Предел берётся из окружения: это БЮДЖЕТ ПАМЯТИ, а не порог правильности — при
+    # нехватке загрузка падает с ошибкой, а не отбрасывает данные молча.
+    csv_opts = ("header=true, all_varchar=true, quote='\"', escape='\"', "
+                "maximum_line_size=%d" % int(os.environ.get("ETL_CSV_MAX_LINE", 200 * 1024 * 1024)))
+
     key_cols = [safe_col(k) for k in declared_key(es)]
     key_cols = [k for k in key_cols if any(safe_col(c) == k for c in cols)]
     # Узлы-ПАПКИ иерархии (группы номенклатуры, категории, регионы) раньше отбрасывались
@@ -192,11 +213,11 @@ def load_entity(es, ro_role="serene_ro"):
     where = ""
     if key_cols:
         part = ", ".join('"%s"' % k for k in key_cols)
-        select = (f"SELECT * FROM read_csv('{csv_path}'){where} "
+        select = (f"SELECT * FROM read_csv('{csv_path}', {csv_opts}){where} "
                   f"QUALIFY row_number() OVER (PARTITION BY {part} ORDER BY {part}) = 1")
     else:
         # Ключа не объявлено — снимаем только полностью идентичные строки.
-        select = f"SELECT DISTINCT * FROM read_csv('{csv_path}'){where}"
+        select = f"SELECT DISTINCT * FROM read_csv('{csv_path}', {csv_opts}){where}"
     sql = (
         f'DROP TABLE IF EXISTS "{table}";\n'
         f'CREATE TABLE "{table}" AS {select};\n' + grant

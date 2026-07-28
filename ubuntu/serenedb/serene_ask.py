@@ -63,6 +63,10 @@ ROWS_BUDGET = int(os.environ.get("ASK_ROWS_BUDGET_CHARS", "24000"))
 # термов показывать. Один расчёт ~50 мс. На правильность выбора не влияют — влияют
 # на то, скольким кандидатам мы успеваем дать эту подсказку.
 TERMS_FOR = int(os.environ.get("ASK_TERMS_FOR", "3"))
+# Сколько потерянных сущностей называется поимённо в ответе о полноте. Это БЮДЖЕТ
+# КОНТЕКСТА (п. 19), а не порог правильности: общее число потерянных строк и сущностей
+# называется всегда и целиком, поимённый список ограничен, чтобы не расти с базой.
+COVERAGE_TOP = int(os.environ.get("ASK_COVERAGE_TOP", "15"))
 TERMS_TOP = int(os.environ.get("ASK_TERMS_TOP", "6"))
 TOPK = int(os.environ.get("ASK_TOPK", "40"))
 ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
@@ -257,7 +261,11 @@ Reply with JSON only.
              null if the question asks about no quantity",
   "kind":   "ALWAYS fill this: a short noun naming WHAT kind of records the question is
              about, in the question's own language. If the user used a verb, give the
-             corresponding noun. Only null if the question names no kind of records at all"
+             corresponding noun. Only null if the question names no kind of records at all",
+  "about":  "\\"data\\" when the question asks about the company's records themselves —
+             how many, how much, which ones. \\"coverage\\" when it asks about the SYSTEM's
+             knowledge instead: what data is missing, what failed to load, what is closed
+             by permissions, how complete or fresh the data is. Default to \\"data\\""
 }
 
 Rules:
@@ -872,18 +880,32 @@ answer the question — answer it. Do not ask when the rows are unrelated — sa
 no data. Never ask about our database, tables or fields: ask about the person's intent,
 in their own words.
 
-"claims" is where you state figures BY ROLE. Fill a role ONLY if that exact figure appears
-in your "text" written in DIGITS; otherwise leave the role null. Never spell figures out in
-words — a figure written in words cannot be checked and the answer will be discarded.
-The figures given to you below are computed over every matching row — copy them, do not
-recompute. Claims are checked against the database and a wrong claim discards your answer.
+🔴 NEVER WRITE A COMPUTED FIGURE YOURSELF. Not as digits, not in words, not even by
+copying it from the figures below. Write a PLACEHOLDER instead, and the exact value will
+be substituted by the system:
+
+  {total}  {count}  {max}  {min}  {avg}  {date_min}  {date_max}
+
+When several quantities are given by name, address one of them: {total:NAME},
+{max:NAME}, {min:NAME} — NAME exactly as given below.
+
+Example: "Sold for {total} across {count} documents, the largest being {max}."
+
+Values that appear INSIDE a row — a document number, a tax id, a party's name, the date
+of one specific record — you copy verbatim from the rows. Those are quotations, not
+arithmetic. The distinction: anything computed over several rows is a placeholder,
+anything read from one row is copied.
+
+"claims" — leave every role null. It exists only for compatibility and is ignored.
 
 - Reply in the SAME language the question was asked in — "ask" too.
 - Never invent numbers, dates or names that are not in the rows.
 - If the rows do not answer the question and nothing close to it, say plainly that there
   is no data. Silence is the last resort, not the first.
-- If a TOTAL is provided, it was computed over every matching row — use exactly that figure.
-- Be short and businesslike, no preamble. Amounts as digits."""
+- When the question is about an amount or a quantity over several records, state the
+  computed total with {total} — listing the records one by one instead of giving the
+  total is not an answer to "how much in all". List them in addition to it, not instead.
+- Be short and businesslike, no preamble."""
 
 
 def _split_answer(raw):
@@ -919,6 +941,73 @@ def _split_answer(raw):
     return raw.strip(), {}
 
 
+SLOT = re.compile(r"\{([a-z_]+)(?::([^}]+))?\}")
+
+
+def _fill_figures(text, agg, totals, has_measure=True):
+    """Подставить посчитанные базой числа на места, оставленные моделью.
+
+    🔴 ЭТО ЗАМЕНА ПРОВЕРКИ УСТРОЙСТВОМ. Прежде модель писала число сама, а гейт ловил её
+    за руку, сверяя каждую цифру с данными. Указание владельца 28.07: «нужен просто
+    калькулятор для чисел, а не сложные системы».
+
+    Разница не в объёме кода, а в том, что становится возможным. При проверке неверное
+    число возможно и лишь отлавливается — а всякая проверка ошибается в обе стороны, и
+    [замер 28.07] эта ошиблась дважды за день, уронив ВЕРНЫЕ ответы: сперва из-за функции
+    ранжирования, потом склеив «36, 4» в несуществующее 36.4. При подстановке неверное
+    число невозможно: модель его физически не пишет. Это то же правило проекта, что и
+    везде, — «запреты держатся кодом, а не промтом», доведённое до конца.
+
+    Возвращает (текст, список нераспознанных мест). Непустой список — отказ формулировки,
+    а не тихая замена на пустоту: место, которому нечего подставить, означает, что модель
+    сослалась на величину, которой мы не считали.
+    """
+    if not text:
+        return text, []
+    known = dict(agg or {})
+    # 🔴 БЕЗ ВЫБРАННОЙ ВЕЛИЧИНЫ БЕЗЫМЯННОЕ МЕСТО НЕ ЗАПОЛНЯЕТСЯ. Когда вопрос не назвал,
+    # какую величину считать, `agg` считает по пустому месту и его `sum` равен нулю.
+    # [замер 28.07] на «какие поступления были от ООО ТехноСнаб» ответ так и вышел:
+    # «Общая сумма поступлений — 0 руб.» при настоящих 2 088 800. Ноль — такое же неверное
+    # число, как любое другое, и подстановка кодом сама по себе от него не спасает:
+    # спасает только отказ подставлять там, где считать было нечего.
+    # Итоги по каждой величине при этом есть — они адресуются по имени, `{total:ИМЯ}`.
+    if not has_measure:
+        for k in ("sum", "max", "min", "avg"):
+            known.pop(k, None)
+    by_name = {}
+    for m, v, mx, mn in (totals or []):
+        by_name[m] = {"total": v, "max": mx, "min": mn}
+    bad = []
+
+    def one(mt):
+        role, name = mt.group(1), mt.group(2)
+        if name:
+            got = by_name.get(name.strip(), {}).get(role)
+        else:
+            got = known.get({"total": "sum"}.get(role, role))
+        if got is None:
+            # В отказе называем ДОСТУПНЫЕ имена: вторая попытка должна знать, чем
+            # заменить, иначе она повторит ту же ошибку.
+            bad.append("%s (есть: %s)" % (mt.group(0), ", ".join(sorted(by_name)) or "нет")
+                       if not name else mt.group(0))
+            return mt.group(0)
+        if role in ("date_min", "date_max"):
+            return str(got)
+        # Вид числа теперь наш, а не модели: разряды разделяем НЕРАЗРЫВНЫМ пробелом.
+        # Обычный пробел переносится по строке и рвёт число пополам, а гейт разбирает
+        # оба одинаково ([замер] `NUMTOK` включает U+00A0).
+        out = _fmt(got)
+        head, _, frac = out.partition(".")
+        neg, head = (head[0] == "-"), head.lstrip("-")
+        grouped = "\u00a0".join(
+            [head[:len(head) % 3 or 3]] + [head[i:i + 3] for i in
+                                           range(len(head) % 3 or 3, len(head), 3)])
+        return ("-" if neg else "") + grouped + ("." + frac if frac else "")
+
+    return SLOT.sub(one, text), bad
+
+
 def _ask_back(raw):
     """Уточняющий вопрос модели, если она его задала.
 
@@ -936,7 +1025,7 @@ def _ask_back(raw):
     return str((d.get("ask") if isinstance(d, dict) else "") or "").strip()
 
 
-def compose(question, rows, agg, corrections=None, totals=None):
+def compose(question, rows, agg, corrections=None, totals=None, coverage=None):
     payload = []
     shown = rows[:ROWS_TO_MODEL]
     # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
@@ -980,6 +1069,18 @@ def compose(question, rows, agg, corrections=None, totals=None):
                  "(total / largest single / smallest single):")
         for m, v, mx, mn in totals:
             body += "\n  %s: total = %s, max = %s, min = %s" % (m, _fmt(v), _fmt(mx), _fmt(mn))
+    if coverage:
+        # НЕПОЛНОТА ЭТОЙ СУЩНОСТИ. Модель обязана предупредить на языке вопроса — сами мы
+        # приписать не можем: своя фраза была бы на одном языке независимо от вопроса.
+        # Числа отсюда разрешены гейту явно, поэтому предупреждение не будет отвергнуто
+        # как выдумка.
+        body += ("\n\nDATA COMPLETENESS WARNING: this kind of records is INCOMPLETE in "
+                 "the search: %d rows exist in the source system, %d reached the search, "
+                 "%d are missing (%s). The figures above are computed over what reached "
+                 "the search only. You MUST warn the user about this in your answer, in "
+                 "their language, stating the number of missing rows in digits."
+                 % (coverage["in_1c"], coverage["in_search"], coverage["missing"],
+                    coverage.get("reason") or "reason unknown"))
     if corrections:
         # ВТОРАЯ ПОПЫТКА. Первая формулировка не прошла проверку кодом — говорим модели,
         # что именно не сошлось, и требуем опираться только на посчитанные базой числа.
@@ -1007,7 +1108,15 @@ def compose(question, rows, agg, corrections=None, totals=None):
 # токен разбирается во ВСЕ допустимые прочтения, и он считается обоснованным, если
 # ХОТЯ БЫ ОДНО из них есть в данных. Прежняя версия читала «1,629,700» как 1.629
 # и объявляла выдумкой весь правильный англоязычный ответ.
-NUMTOK = re.compile(r"\d[\d  \u00a0\u2007\u2009\u202f\u200b'.,]*\d|\d")
+# \ud83d\udd34 \u0417\u0430 \u0437\u0430\u043f\u044f\u0442\u043e\u0439 \u0438\u043b\u0438 \u0442\u043e\u0447\u043a\u043e\u0439 \u041e\u0411\u042f\u0417\u0410\u041d\u0410 \u0438\u0434\u0442\u0438 \u0446\u0438\u0444\u0440\u0430. \u041f\u0440\u0435\u0436\u0434\u0435 \u043a\u043b\u0430\u0441\u0441 \u0441\u0438\u043c\u0432\u043e\u043b\u043e\u0432 \u0434\u043e\u043f\u0443\u0441\u043a\u0430\u043b \u0438 \u043f\u0440\u043e\u0431\u0435\u043b,
+# \u0438 \u0437\u0430\u043f\u044f\u0442\u0443\u044e \u0432\u043f\u0435\u0440\u0435\u043c\u0435\u0448\u043a\u0443, \u043f\u043e\u044d\u0442\u043e\u043c\u0443 \u00ab\u043d\u0430\u0439\u0434\u0435\u043d\u043e 36, 4 \u043e\u0442\u0441\u0443\u0442\u0441\u0442\u0432\u0443\u044e\u0442\u00bb \u0441\u043a\u043b\u0435\u0438\u0432\u0430\u043b\u043e\u0441\u044c \u0432 \u043e\u0434\u043d\u043e \u0447\u0438\u0441\u043b\u043e
+# 36.4 \u2014 \u043a\u043e\u0442\u043e\u0440\u043e\u0433\u043e \u043c\u043e\u0434\u0435\u043b\u044c \u043d\u0435 \u043f\u0438\u0441\u0430\u043b\u0430, \u2014 \u0438 \u0433\u0435\u0439\u0442 \u043e\u0442\u0432\u0435\u0440\u0433\u0430\u043b \u0412\u0415\u0420\u041d\u042b\u0419 \u043e\u0442\u0432\u0435\u0442 \u0446\u0435\u043b\u0438\u043a\u043e\u043c.
+# [\u0437\u0430\u043c\u0435\u0440 28.07] \u043f\u0440\u0435\u0434\u0443\u043f\u0440\u0435\u0436\u0434\u0435\u043d\u0438\u0435 \u043e \u043d\u0435\u043f\u043e\u043b\u043d\u043e\u0442\u0435 \u0434\u0430\u043d\u043d\u044b\u0445 \u043d\u0435 \u043c\u043e\u0433\u043b\u043e \u0434\u043e\u0439\u0442\u0438 \u0434\u043e \u043a\u043b\u0438\u0435\u043d\u0442\u0430 \u043d\u0438 \u0440\u0430\u0437\u0443:
+# \u043e\u043d\u043e \u0432\u0441\u0435\u0433\u0434\u0430 \u0441\u0442\u0430\u0432\u0438\u0442 \u0434\u0432\u0430 \u0447\u0438\u0441\u043b\u0430 \u0440\u044f\u0434\u043e\u043c \u0447\u0435\u0440\u0435\u0437 \u0437\u0430\u043f\u044f\u0442\u0443\u044e. \u041e\u0442\u0432\u0435\u0440\u0433\u043d\u0443\u0442\u044b\u0439 \u0432\u0435\u0440\u043d\u044b\u0439 \u043e\u0442\u0432\u0435\u0442 \u2014 \u0434\u0435\u0444\u0435\u043a\u0442
+# \u043f\u0440\u043e\u0432\u0435\u0440\u043a\u0438, \u0430 \u043d\u0435 \u043e\u0441\u0442\u043e\u0440\u043e\u0436\u043d\u043e\u0441\u0442\u044c (\u043f. 21).
+# \u0417\u0430\u043f\u044f\u0442\u0430\u044f \u0441 \u043f\u0440\u043e\u0431\u0435\u043b\u043e\u043c \u043d\u0435 \u044f\u0432\u043b\u044f\u0435\u0442\u0441\u044f \u0434\u0435\u0441\u044f\u0442\u0438\u0447\u043d\u044b\u043c \u0440\u0430\u0437\u0434\u0435\u043b\u0438\u0442\u0435\u043b\u0435\u043c \u043d\u0438 \u0432 \u043e\u0434\u043d\u043e\u0439 \u0437\u0430\u043f\u0438\u0441\u0438 \u0447\u0438\u0441\u0435\u043b:
+# \u00ab36,4\u00bb \u043f\u0438\u0448\u0443\u0442 \u0441\u043b\u0438\u0442\u043d\u043e, \u00ab36, 4\u00bb \u2014 \u044d\u0442\u043e \u043f\u0435\u0440\u0435\u0447\u0438\u0441\u043b\u0435\u043d\u0438\u0435.
+NUMTOK = re.compile(r"\d(?:[ \u00a0\u2007\u2009\u202f\u200b']\d|[.,]\d|\d)*")
 SEP = "  \u00a0\u2007\u2009\u202f\u200b',."
 DATE3 = re.compile(r"\b(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})\b")
 DATE2 = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})\b")
@@ -1289,6 +1398,107 @@ def gate(answer, rows, agg, thresholds=None):
     return (not bad), bad
 
 
+def _coverage_of(src_table):
+    """Неполнота ИМЕННО ТОЙ сущности, по которой отвечаем (п. 13).
+
+    Общая перепись говорит «потеряно 5 993 строки», но человеку, спросившему про продажи,
+    важно не общее число, а то, полны ли продажи. Отметка обязана быть про его вопрос,
+    иначе она превращается в шум, который перестают читать.
+    """
+    if not src_table:
+        return None
+    try:
+        r = psql("SELECT в_1С, в_корпусе, coalesce(причина,'') FROM search_coverage "
+                 "WHERE entity = %s AND в_1С > в_корпусе" % lit(src_table))
+    except RuntimeError:
+        return None                            # переписи нет — молчим, а не выдумываем
+    if not r:
+        return None
+    return {"in_1c": int(_num(r[0][0])), "in_search": int(_num(r[0][1])),
+            "missing": int(_num(r[0][0])) - int(_num(r[0][1])),
+            "reason": r[0][2] if len(r[0]) > 2 else ""}
+
+
+COVERAGE_SYS = """You answer an employee's question about how complete the company's data
+is inside this system. You get a census: for each kind of records, how many rows exist in
+the source system and how many reached the search, plus the reason when they differ.
+
+Reply with JSON only, no text outside it:
+{"text": "the answer for the user",
+ "claims": {"total": number|null, "count": number|null, "max": number|null, "min": number|null}}
+
+- Reply in the SAME language the question was asked in.
+- Name the kinds of records that are missing, and say WHY, using the reason given.
+- State figures in DIGITS, copied from the census — never recompute, never estimate.
+- Put the number of missing rows in "claims.total" and the number of affected kinds of
+  records in "claims.count", both only if they appear in your text in digits.
+- Say plainly if nothing is missing.
+- Be short and businesslike, no preamble."""
+
+
+def _coverage_answer(question, diag, t0):
+    """Ответ о полноте данных — из переписи, а не из корпуса (п. 13).
+
+    Числа сюда приходят посчитанными базой и проходят ТОТ ЖЕ гейт, что обычный ответ:
+    «сколько данных мы потеряли» — такое же число, как «на какую сумму продано», и
+    ошибиться в нём так же нельзя. Отдельного, более мягкого пути для служебных ответов
+    нет и быть не должно.
+    """
+    try:
+        tot = psql(
+            "SELECT coalesce(sum(в_1С) FILTER (WHERE в_1С > 0), 0),"
+            "       coalesce(sum(в_корпусе), 0),"
+            "       coalesce(sum(в_1С - в_корпусе) FILTER (WHERE в_1С > в_корпусе), 0),"
+            "       count(*) FILTER (WHERE в_1С > 0 AND в_корпусе = 0),"
+            "       count(*) FILTER (WHERE в_1С = -1) FROM search_coverage")
+        # Поимённо — только то, что ПОТЕРЯНО. Список закрытых правами не перечисляется:
+        # их 934, и он рос бы с размером базы, нарушая п. 19. Их число названо, состав
+        # доступен запросом.
+        lost = psql(
+            "SELECT entity, в_1С, в_корпусе, причина FROM search_coverage "
+            "WHERE в_1С > 0 AND в_1С > в_корпусе ORDER BY в_1С - в_корпусе DESC LIMIT %d"
+            % COVERAGE_TOP)
+    except RuntimeError as e:
+        sys.stderr.write("ask COVERAGE: перепись недоступна: %s\n" % str(e)[:160])
+        return {"partial": None, "kind": "no_data", "sources": [],
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "diag": dict(diag, error="перепись недоступна")}
+    if not tot:
+        return {"partial": None, "kind": "no_data", "sources": [],
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "diag": dict(diag, error="перепись пуста — такт ещё не считал полноту")}
+    in_1c, in_search, n_lost, ent_lost, ent_denied = (int(_num(x)) for x in tot[0][:5])
+    census = ["rows in source system: %d" % in_1c, "rows reached search: %d" % in_search,
+              "rows missing: %d" % n_lost, "kinds of records fully missing: %d" % ent_lost,
+              "kinds of records closed by permissions in the source system: %d" % ent_denied]
+    for r in lost:
+        census.append("%s: %s in source, %s in search — %s"
+                      % (r[0], r[1], r[2], r[3] if len(r) > 3 else ""))
+    raw = ds_chat([{"role": "system", "content": COVERAGE_SYS},
+                   {"role": "user",
+                    "content": "%s\n\nCensus:\n%s" % (question, "\n".join(census))}])
+    text, claims = _split_answer(raw)
+    # Гейт: заявленные числа обязаны совпасть с переписью. Роли те же, что у обычного
+    # ответа, поэтому проверка переиспользуется без послаблений.
+    agg = {"sum": float(n_lost), "count": ent_lost}
+    ok_roles, bad = check_claims(claims, agg, [])
+    diag["claims"] = claims or None
+    if not ok_roles or not (text or "").strip():
+        sys.stderr.write("ask COVERAGE GATE: %s\n" % bad[:4])
+        # Числа посчитаны и верны — отдаём их структурой, как и на обычном пути.
+        return {"partial": None, "kind": "figures", "text": text.strip(),
+                "figures": {"rows_in_1c": in_1c, "rows_in_search": in_search,
+                            "rows_missing": n_lost, "entities_missing": ent_lost,
+                            "entities_denied": ent_denied},
+                "sources": [], "diag": dict(diag, gate_rejected=bad[:4],
+                                            sec=round(time.time() - t0, 2))}
+    return {"partial": None, "kind": "answer", "text": text.strip(), "sources": [],
+            "figures": {"rows_in_1c": in_1c, "rows_in_search": in_search,
+                        "rows_missing": n_lost, "entities_missing": ent_lost,
+                        "entities_denied": ent_denied},
+            "diag": dict(diag, sec=round(time.time() - t0, 2), gate_ok=True)}
+
+
 # ----------------------------------------------------------------- HTTP
 def answer(question):
     """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
@@ -1301,6 +1511,21 @@ def answer(question):
     intent = parse_intent(question, time.strftime("%Y-%m-%d"))
     preds = _predicates(intent)
     diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind")}
+
+    # ВОПРОС О САМИХ ДАННЫХ ИЛИ О ТОМ, ЧТО СИСТЕМА О НИХ ЗНАЕТ (п. 13).
+    #
+    # «То, что недоступно — закрыто правами, не загрузилось, не попало в индекс — видно
+    # владельцу». До этого перепись считалась и не читалась никем: [замер 28.07] `grep`
+    # по сервису ответов давал ноль совпадений с `search_coverage` и `base_profile`.
+    # Владелец узнавал о 5 993 потерянных строках, только заглянув в таблицу руками.
+    #
+    # Различает вопросы МОДЕЛЬ, тем же разбором намерения, который и так делается на
+    # каждый вопрос: ни второго обращения к модели, ни списка слов. Список вроде
+    # «чего нет», «не загрузилось» был бы хардкодом под язык (`HOW_NOT_TO §3.9`), а
+    # продукт коробочный и конфигурация может быть любой.
+    if (intent.get("about") or "") == "coverage":
+        diag["about"] = "coverage"
+        return _coverage_answer(question, diag, t0)
     # Что не доехало до модели — уходит в ОТВЕТ, а не в журнал (п. 13). Объявлено здесь,
     # потому что ранние ветки возврата (нет совпадений) отвечают раньше выбора сущности.
     cut = {}
@@ -1545,6 +1770,14 @@ def answer(question):
             src = max(by.items(), key=lambda kv: kv[1])[0]
     diag["focus"], diag["found"] = src, by.get(src, 0)
 
+    # НЕПОЛНОТА ИМЕННО ЭТОЙ СУЩНОСТИ (п. 13): «если из-за потери возможен неверный ответ,
+    # система обязана уточнить или отказать, а не ответить по неполным данным». Первый шаг
+    # — сказать. Отметка идёт ПОЛЕМ ответа, а не припиской в тексте: текст пишет модель на
+    # языке вопроса, а проверяемым должно быть число.
+    cov = _coverage_of(src)
+    if cov:
+        diag["incomplete"] = cov
+
     # ВЕЛИЧИНА ВЫБИРАЕТСЯ ПО ВОПРОСУ — после того, как известна сущность: её величины
     # лежат в самих данных. Числовое условие («больше 500000») тоже применяется здесь,
     # а не на общем отборе: у документа оно про сумму, у строки накладной могло бы
@@ -1562,25 +1795,34 @@ def answer(question):
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     agg = aggregate(src, match, preds, measure)
-    raw = compose(question, rows, agg, totals=totals)
+    # Числа неполноты разрешены гейту наравне с порогами вопроса: иначе фраза «не дошло
+    # 104 строки» была бы отвергнута как выдумка, и система замолчала бы ровно там, где
+    # обязана предупредить.
+    extra_vals = _threshold_values(intent) + [x for t in (totals or []) for x in t[1:]] \
+                 + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else [])
+    raw = compose(question, rows, agg, totals=totals, coverage=cov)
     text, claims = _split_answer(raw)
     ask_back = _ask_back(raw)
-    ok_roles, bad_roles = check_claims(claims, agg, totals)
-    ok_txt, bad_txt = claims_in_text(claims, text, intent.get("want"))
-    ok_roles, bad_roles = (ok_roles and ok_txt), (bad_roles + bad_txt)
+    # КАЛЬКУЛЯТОР: числа ставит код, а не модель. Всё, что подставлено, посчитано базой,
+    # поэтому проверять его не нужно — оно верно по построению.
+    text, slots_bad = _fill_figures(text, agg, totals, bool(measure))
+    ask_back, _ = _fill_figures(ask_back, agg, totals, bool(measure))
+    # Место, которому нечего подставить, — отказ формулировки: модель сослалась на
+    # величину, которой мы не считали. Это единственная проверка, оставшаяся от прежней
+    # ролевой сверки, и она структурная, а не числовая.
+    ok_roles = not slots_bad
+    bad_roles = ["нераспознанное место: %s" % x for x in slots_bad[:3]]
 
-    # Ролевая сверка не может быть НЕОБЯЗАТЕЛЬНОЙ. Достаточно было ответить обычным
-    # текстом без JSON — и `claims` оказывались пустыми, цикл проверки проходил вхолостую,
-    # а сумма одной строки, выданная за итог, снова проходила. Раз итог посчитан, ответ
-    # обязан его объявить.
-    if agg and not isinstance(claims, dict):
-        ok_roles, bad_roles = False, bad_roles + ["ответ не объявил величины (нет claims)"]
-    # Числа словами: если величина посчитана, а в тексте НЕТ НИ ОДНОЙ цифры — это
-    # «примерно три миллиона». Признак детерминируемый, списка числительных не нужно.
+    # Проверка «ответ обязан объявить величину через claims» УБРАНА вместе с самими
+    # claims: теперь величина попадает в текст подстановкой, и объявлять её отдельно
+    # незачем. Осталась одна проверка того же смысла — ниже.
+    #
+    # Числа словами: если величина посчитана, а в тексте НЕТ НИ ОДНОЙ цифры — значит
+    # модель написала «примерно три миллиона» вместо места под подстановку. Признак
+    # детерминируемый, списка числительных не нужно.
     if agg and intent.get("want") in ("sum", "count") and not _norm_numbers(text):
         ok_roles, bad_roles = False, bad_roles + ["величина названа не цифрами"]
-    ok_nums, bad_nums = gate(text, rows, agg, _threshold_values(intent)
-                             + [x for t in (totals or []) for x in t[1:]])
+    ok_nums, bad_nums = gate(text, rows, agg, extra_vals)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     # ОТВЕТ ОБЯЗАН ДОЙТИ, ЕСЛИ ОН ЕСТЬ. Решение владельца 27.07: «если данные есть, но по
     # нашей системе мы их не отдали — пропадает смысл проекта». Первая формулировка могла
@@ -1590,13 +1832,14 @@ def answer(question):
     # сходится с базой, он не уйдёт.
     if not ok and agg:
         diag["retry"] = bad[:3]
-        raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals)
+        raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals, coverage=cov)
         text2, claims2 = _split_answer(raw2)
-        ok_roles2, bad_roles2 = check_claims(claims2, agg, totals)
-        ok_txt2, bad_txt2 = claims_in_text(claims2, text2, intent.get("want"))
-        ok_nums2, bad_nums2 = gate(text2, rows, agg, _threshold_values(intent)
-                                   + [x for t in (totals or []) for x in t[1:]])
-        if ok_roles2 and ok_txt2 and ok_nums2 and (text2 or "").strip():
+        text2, slots_bad2 = _fill_figures(text2, agg, totals, bool(measure))
+        ok_roles2 = not slots_bad2
+        bad_roles2 = ["нераспознанное место: %s" % x for x in slots_bad2[:3]]
+        bad_txt2 = []
+        ok_nums2, bad_nums2 = gate(text2, rows, agg, extra_vals)
+        if ok_roles2 and ok_nums2 and (text2 or "").strip():
             text, claims, ask_back = text2, claims2, _ask_back(raw2)
             ok, bad = True, []
             diag["retry_ok"] = True
@@ -1618,6 +1861,7 @@ def answer(question):
                                 ("count", "count_amount", "sum", "min", "max", "avg",
                                  "date_min", "date_max") if k in agg},
                     "sources": [src.split("_", 1)[1] if "_" in src else src],
+                    "completeness": cov,
                     "diag": dict(diag, gate_rejected=bad[:6])}
         return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                 "diag": dict(diag, gate_rejected=bad[:6])}
@@ -1657,6 +1901,7 @@ def answer(question):
                 "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
     return {"partial": cut or None, "kind": "answer", "text": text.strip(), "sources": [tag],
+            "completeness": cov,
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 

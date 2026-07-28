@@ -68,6 +68,12 @@ LEFT JOIN mart m USING (ent)
 LEFT JOIN corp c ON c.ent = e.ent
 LEFT JOIN idx  i ON i.ent = e.ent;
 
+-- 🔴 ПРАВА ВЫДАЮТСЯ ЗДЕСЬ ЖЕ. `CREATE OR REPLACE TABLE` снимает `GRANT`, и читающая
+-- роль сервиса молча получает «нет доступа», неотличимое от «данных нет». Наступил на это
+-- сегодня третий раз: перепись считалась верно, а бот на вопрос «что не загрузилось»
+-- отвечал отказом (`HOW_NOT_TO §2.9`, `techContext` ловушка про GRANT).
+GRANT SELECT ON search_coverage TO serene_ro;
+
 -- 🔴 В `base_profile` причина НЕ ПИШЕТСЯ, хотя соблазн есть: поле `problem` там пусто у
 -- всех девяти потерянных, и именно поэтому потеря выглядела как «так и задумано».
 -- Но `serene_sync.py:109` делает `DROP TABLE base_profile` при каждом прогоне и пишет
