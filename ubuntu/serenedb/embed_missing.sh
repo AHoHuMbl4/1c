@@ -11,50 +11,142 @@
 # Параллельность — потому что вызов сетевой и ждёт: [замер] 1 поток — 6,7 строк/с,
 # 2 потока — 12,7, 12 потоков — около 30. Дальше упирается в провайдера.
 #
-# 🔴 КАЖДЫЙ ПОТОК ПИШЕТ В СВОЮ ТАБЛИЦУ, и только в конце результат переносится одним
+# 🔴 КАЖДЫЙ ПОТОК ПИШЕТ В СВОЮ ТАБЛИЦУ, и только потом результат переносится одним
 # запросом. Это не стиль, а обход падения движка: [замер 28.07] четырнадцать
 # параллельных `UPDATE ... FROM (SELECT ai_embed(...))` в ОДНУ таблицу уронили движок
 # с `SIGSEGV` (systemd поднял через 3 с, данные уцелели, но досчёт встал молча).
 # Запись у движка однопоточная; раздельные таблицы конфликта не создают.
 #
-# Использование: embed_missing.sh <таблица> <колонка-источник> [потоков]
+# Использование: embed_missing.sh <таблица> <выражение-источник> [потоков] [ключ,через,запятую]
 set -u
-TBL="$1"; SRC="$2"; N="${3:-8}"
+TBL="$1"; SRC="$2"; N="${3:-8}"; KEY="${4:-}"
 DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 MODEL="${EMBED_MODEL:-text-embedding-v4}"
 DIM="${EMBED_DIM:-1024}"
-TAG="emb_$$"
 
+# 🔴 МЕТКА ПОСТОЯННАЯ, ПО ИМЕНИ ТАБЛИЦЫ, а не `emb_$$`. С меткой по номеру процесса
+# следующий запуск имел другой номер и НЕ находил недоделанное предыдущим: посчитанные
+# векторы оставались лежать в осиротевших таблицах, а строки считались заново.
+# [замер 28.07] в базе нашлось 224 719 таких строк ≈ 0,9 ГБ. С постоянной меткой
+# прерванный прогон ДОКАТЫВАЕТСЯ следующим, а не выбрасывается.
+TAG="emb_${TBL}"
+
+# Предел длины входа. Пачка = не больше 10 строк И не больше $BUDGET символов; значение
+# длиннее $MAXLEN в пачку не берётся вовсе. $BUDGET + $MAXLEN < 33 000 — это доказывает,
+# что ни одна пачка не может превысить предел провайдера.
+BUDGET=12000
+MAXLEN=20000
+
+# Ключ строки. По умолчанию — `rowid` движка, но это ЗАПАСНОЙ путь: [замер] rowid
+# устойчив внутри одного прогона (удаление дыры не переиспользует, обновление не двигает),
+# однако прогон теперь докатывается через рестарт движка, а устойчивость rowid через
+# уплотнение никем не проверена. Вектор, легший на чужую строку, — тихая порча смысла.
+# Поэтому вызывающий передаёт настоящий ключ; он есть у обеих таблиц.
+if [ -n "$KEY" ]; then
+  KCOLS="$KEY"
+  # Условие соединения склеивается вручную. `paste -sd' AND '` здесь НЕ ГОДИТСЯ: `-d`
+  # принимает СПИСОК ОДНОСИМВОЛЬНЫХ разделителей и берёт их по кругу, поэтому вместо
+  # `AND` между условиями подставлялся пробел — получался синтаксически битый `UPDATE`,
+  # который поток проглатывал молча, и досчёт не двигался ни на строку.
+  ON=""
+  for c in ${KEY//,/ }; do
+    [ -n "$ON" ] && ON="$ON AND "
+    ON="${ON}t.$c = p.$c"
+  done
+  ORD="$KEY"
+else
+  KCOLS="rowid AS rid"; ON="t.rowid = p.rid"; ORD="rid"
+fi
+
+psql_q() { psql "$DSN" -q -v ON_ERROR_STOP=1 "$@"; }
 left() { psql "$DSN" -tA -c "SELECT count(*) FROM $TBL WHERE emb IS NULL" 2>/dev/null; }
+
+# Перенос посчитанного из рабочих таблиц в целевую. Вызывается ДО начала работы (докатка
+# прерванного прогона) и после неё. Писатель у движка один, поэтому последовательно.
+transfer() {
+  psql "$DSN" -tA -c "SELECT 'UPDATE $TBL t SET emb = p.emb FROM ' || table_name ||
+         ' p WHERE $ON AND t.emb IS NULL;'
+       FROM duckdb_tables() WHERE table_name LIKE '${TAG}\_part\_%' ESCAPE '\'" \
+    | psql "$DSN" -q >/dev/null 2>&1
+}
+drop_parts() {
+  psql "$DSN" -tA -c "SELECT 'DROP TABLE IF EXISTS ' || table_name || ';' FROM duckdb_tables()
+       WHERE table_name LIKE '${TAG}\_%' ESCAPE '\'" | psql "$DSN" -q >/dev/null 2>&1
+}
+
+# Докатка: если прошлый прогон оборвался, его векторы уже посчитаны и оплачены.
+transfer
 
 n=$(left)
 [ -z "$n" ] && { echo "не удалось прочитать $TBL" >&2; exit 1; }
-[ "$n" = "0" ] && { echo "{\"таблица\":\"$TBL\",\"было_без_вектора\":0,\"осталось\":0}"; exit 0; }
+if [ "$n" = "0" ]; then
+  drop_parts
+  echo "{\"таблица\":\"$TBL\",\"было_без_вектора\":0,\"осталось\":0}"
+  exit 0
+fi
 
-# Ключ строки — `rowid` движка: он уникален внутри одного прогона, а нам больше и не надо.
-psql "$DSN" -q -c "CREATE OR REPLACE TABLE ${TAG}_todo AS
-  SELECT rowid AS rid, $SRC AS txt,
-         ((row_number() OVER (ORDER BY rowid)) - 1) / 10 AS chunk
-  FROM $TBL WHERE emb IS NULL;" || exit 1
+drop_parts
 
+# Пачки режутся по СИМВОЛАМ, а не только по числу строк. Прежде резалось по 10 строк, а
+# предел провайдера — в символах: [замер 28.07] два значения по 560 282 символа отравляли
+# свою пачку целиком, и вместе с ними вектор не получали 16 нормальных соседей — каждый
+# такт, вечно, при коде возврата «успех». [замер 28.07] после этой правки все 20
+# застрявших значений резолвера, включая два по 560 282 символа, получили вектор.
+# `greatest` двух неубывающих величин неубывающая, поэтому колонка `chunk` остаётся
+# монотонной в физическом порядке — на ней работают зонные карты, и выборка пачки стоит
+# около миллисекунды вместо полного скана ([замер] 0,45–1,36 мс на 97 965 строках).
+psql_q -c "CREATE OR REPLACE TABLE ${TAG}_todo AS
+  WITH s AS (SELECT $KCOLS, $SRC AS txt FROM $TBL WHERE emb IS NULL),
+       ok AS (SELECT * FROM s WHERE txt IS NOT NULL AND length(txt) BETWEEN 1 AND $MAXLEN),
+       w AS (SELECT *, row_number() OVER (ORDER BY $ORD) - 1 AS rn,
+                    sum(length(txt)) OVER (ORDER BY $ORD ROWS BETWEEN UNBOUNDED PRECEDING
+                                                              AND 1 PRECEDING) AS cum
+             FROM ok)
+  SELECT * EXCLUDE (rn, cum),
+         greatest(rn / 10, coalesce(cum, 0) / $BUDGET) AS chunk
+  FROM w;" || exit 1
+
+# Значения, которые вектор получить НЕ МОГУТ, — названы, а не потеряны молча (п. 13),
+# и посчитаны: без этого числа «осталось без вектора» невозможно отличить недоделанную
+# работу от работы, которая никогда не сдвинется.
+psql "$DSN" -tA -c "SELECT 'вектор невозможен, длина ' || length($SRC) || ': ' ||
+       substr(replace($SRC, chr(10), ' '), 1, 60)
+     FROM $TBL WHERE emb IS NULL AND length($SRC) > $MAXLEN" >&2
+impossible=$(psql "$DSN" -tA -c "SELECT count(*) FROM $TBL
+     WHERE emb IS NULL AND (($SRC) IS NULL OR length($SRC) > $MAXLEN OR length($SRC) = 0)")
+impossible=${impossible:-0}
+
+pids=()
 for w in $(seq 0 $((N - 1))); do
   psql "$DSN" -q -v ON_ERROR_STOP=0 <<SQL >/dev/null 2>&1 &
-CREATE OR REPLACE TABLE ${TAG}_part_$w (rid BIGINT, emb FLOAT[$DIM]);
-SELECT 'INSERT INTO ${TAG}_part_$w SELECT rid, ai_embed(txt, ''$MODEL'', ''qwen'')::FLOAT[$DIM]
+CREATE OR REPLACE TABLE ${TAG}_part_$w AS SELECT * FROM ${TAG}_todo WHERE false;
+ALTER TABLE ${TAG}_part_$w DROP COLUMN txt;
+ALTER TABLE ${TAG}_part_$w DROP COLUMN chunk;
+ALTER TABLE ${TAG}_part_$w ADD COLUMN emb FLOAT[$DIM];
+SELECT 'INSERT INTO ${TAG}_part_$w SELECT * EXCLUDE (txt, chunk), ai_embed(txt, ''$MODEL'', ''qwen'')::FLOAT[$DIM]
         FROM ${TAG}_todo WHERE chunk = ' || chunk || ';'
 FROM (SELECT DISTINCT chunk FROM ${TAG}_todo WHERE chunk % $N = $w ORDER BY 1)
 \gexec
 SQL
+  pids+=($!)
 done
-wait
 
-# Перенос — одним запросом на поток, последовательно: писатель у движка один.
-psql "$DSN" -tA -c "SELECT 'UPDATE $TBL t SET emb = p.emb FROM ' || table_name ||
-       ' p WHERE t.rowid = p.rid AND t.emb IS NULL;'
-     FROM duckdb_tables() WHERE table_name LIKE '${TAG}\_part\_%' ESCAPE '\'" \
-  | psql "$DSN" -q >/dev/null 2>&1
+# Коды возврата потоков собираются. Прежде `wait` без аргументов их проглатывал, и молча
+# умерший поток был неотличим от отработавшего.
+bad=0
+for p in "${pids[@]}"; do wait "$p" || bad=$((bad + 1)); done
 
+transfer
 after=$(left)
-psql "$DSN" -tA -c "SELECT 'DROP TABLE IF EXISTS ' || table_name || ';' FROM duckdb_tables()
-     WHERE table_name LIKE '${TAG}\_%' ESCAPE '\'" | psql "$DSN" -q >/dev/null 2>&1
-echo "{\"таблица\":\"$TBL\",\"было_без_вектора\":$n,\"осталось\":${after:-?}}"
+drop_parts
+
+echo "{\"таблица\":\"$TBL\",\"было_без_вектора\":$n,\"осталось\":${after:-?},\"вектор_невозможен\":$impossible,\"потоков_с_ошибкой\":$bad}"
+
+# 🔴 НЕНУЛЕВОЙ КОД, ЕСЛИ РАБОТА НЕ СДВИНУЛАСЬ. Прежде скрипт заканчивался успехом, даже
+# посчитав ноль строк, — так тихо умирал весь досчёт (`HOW_NOT_TO §2.10`).
+# Строки, которым вектор невозможен, из ожидания вычитаются: иначе одно слишком длинное
+# значение валило бы такт на каждом прогоне, и настоящий отказ утонул бы в этом шуме.
+[ -z "$after" ] && { echo "не удалось прочитать итог по $TBL" >&2; exit 1; }
+[ "$after" -le "$impossible" ] && exit 0
+[ "$after" -ge "$n" ] && { echo "досчёт не сдвинулся: было $n, осталось $after" >&2; exit 1; }
+exit 0

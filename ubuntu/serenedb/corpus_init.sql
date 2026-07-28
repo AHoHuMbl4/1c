@@ -1,0 +1,59 @@
+\set ON_ERROR_STOP on
+
+-- РАЗВЁРТЫВАНИЕ ОБЪЕКТОВ ПОИСКА С НУЛЯ. Идемпотентно: можно звать перед каждым тактом.
+--
+-- Зачем отдельный файл. Прежняя цепочка умела только ПОДДЕРЖИВАТЬ то, что уже есть:
+-- `corpus_build.sql` брал список сущностей из существующего корпуса, `corpus_merge.sql`
+-- начинался с `ALTER TABLE search_corpus`. На чистой машине клиента ни то, ни другое не
+-- стартует, а после аварии 28.07 (корпус снесён) сборка не подняла бы ничего и
+-- рапортовала бы «0 строк» с кодом успеха.
+--
+-- 🔴 Права выдаются ЗДЕСЬ ЖЕ. Пересозданная таблица теряет `GRANT`, и читающая роль
+-- сервиса молча получает пустоту — бот отвечает «нет данных» при живом корпусе. Это
+-- уже случилось (`HOW_NOT_TO §2.9`), и по журналу выглядело как отсутствие данных.
+
+CREATE TABLE IF NOT EXISTS search_corpus (
+  src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
+  nums MAP(VARCHAR, DOUBLE), doc_date TIMESTAMP, emb FLOAT[1024]);
+
+CREATE TABLE IF NOT EXISTS resolver_index (
+  table_name VARCHAR, column_name VARCHAR, value VARCHAR, emb FLOAT[1024]);
+
+CREATE TABLE IF NOT EXISTS search_tables (
+  src_table VARCHAR, label VARCHAR, parent VARCHAR, emb FLOAT[1024]);
+
+-- ПЕРЕЧЕНЬ ИСТОЧНИКОВ — отдельная таблица, а НЕ производная от корпуса.
+-- Это главная структурная починка: раньше `tmp3_src` строился как
+-- `SELECT DISTINCT src_table FROM search_corpus`, поэтому сущность, один раз собравшаяся
+-- пустой, вычищалась из корпуса и **выпадала из списка навсегда**, а пустой корпус давал
+-- ноль источников. Найдено тремя независимыми проверками, подтверждено замером на копии.
+CREATE TABLE IF NOT EXISTS search_sources (src_table VARCHAR, seen_at TIMESTAMP);
+
+CREATE TABLE IF NOT EXISTS search_meta (k VARCHAR, v VARCHAR);
+CREATE TABLE IF NOT EXISTS search_quality (k VARCHAR, v BIGINT, note VARCHAR);
+CREATE TABLE IF NOT EXISTS build_state (ts TIMESTAMP, k VARCHAR, v BIGINT);
+
+-- Словарь и индекс. Поля индексируются по отдельности в ОДНОМ индексе — штатный шаблон
+-- движка: `doc` для широкого запроса, `refs` для адресности и веса, `src_table` без
+-- словаря (keyword) для фильтра уровня индекса.
+CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict (
+  template = 'text', locale = :'dict_locale', case = 'lower',
+  stemming = false, accent = false, frequency = true, position = true, norm = true);
+
+CREATE INDEX IF NOT EXISTS search_idx ON search_corpus
+  USING inverted(doc search_dict, refs search_dict, src_table)
+  INCLUDE (src_table, row_key, doc_date);
+
+-- Права. Идемпотентно, поэтому повторный вызов безвреден.
+-- `serene_resolver` — отдельная роль под резолвер (positive control): SQL, который пишет
+-- модель, не должен дотягиваться до служебных эмбеддингов даже в обход валидатора.
+GRANT SELECT ON search_corpus  TO serene_ro;
+GRANT SELECT ON search_tables  TO serene_ro;
+GRANT SELECT ON resolver_index TO serene_resolver;
+REVOKE SELECT ON resolver_index FROM serene_ro;
+
+SELECT 'объекты поиска на месте' AS шаг,
+       (SELECT count(*) FROM duckdb_tables()
+        WHERE table_name IN ('search_corpus','resolver_index','search_tables',
+                             'search_sources','search_meta','build_state')) AS таблиц,
+       (SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'search_idx') AS индексов;

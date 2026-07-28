@@ -4,120 +4,123 @@
 -- СБОРКА СЕМАНТИЧЕСКОГО РЕЗОЛВЕРА ШТАТНЫМИ СРЕДСТВАМИ SereneDB.
 --
 -- Резолвер сопоставляет слово человека со значением в базе («питер» → «Г. САНКТ-
--- ПЕТЕРБУРГ»). Хранит различные значения колонок-измерений и их векторы.
+-- ПЕТЕРБУРГ»). Хранит различные значения текстовых колонок и их векторы.
 --
--- Чем отличается от прежней питоновской сборки (`build_resolver_index.py`), и почему
--- это и есть работа по п. 17 (свежесть):
+-- Чем отличается от прежней питоновской сборки (`build_resolver_index.py`):
 --   * прежняя делала `DELETE FROM resolver_index` и считала ВСЕ векторы заново каждый
---     синк. [замер 27.07] это 7 часов 34 минуты при 10 минутах процессорного времени —
---     всё остальное ожидание облачного эмбеддера;
---   * здесь значения добавляются `MERGE`-ом, а вектор считается ТОЛЬКО у новых
---     (`emb IS NULL`). Повторный запуск на неизменных данных не тратит ни одного вызова;
---   * прежняя тянула в облако мусор: [замер] 43 680 значений из 12 колонок
---     `*_Base64Data` — двоичные вложения, закодированные текстом. Здесь отбор идёт по
---     тем же правилам, что у корпуса: объявленный тип `Edm.String`, без служебных
---     свойств протокола, без машинных значений, без вложений;
---   * прежняя плодила дубли: [замер] 34 230 из 119 271. Ключ `(таблица, колонка,
---     значение)` здесь соблюдается `MERGE`-ом.
+--     синк. [замер 27.07] 7 часов 34 минуты при 10 минутах процессорного времени;
+--   * здесь значения сводятся `MERGE`-ом, а вектор считается ТОЛЬКО новым (`emb IS NULL`).
+--     Повторный прогон на неизменных данных не тратит ни одного вызова к облаку;
+--   * прежняя тянула в облако мусор: [замер] 43 680 значений из колонок `*_Base64Data`
+--     (таких колонок у сущностей корпуса 20), плюс значения наших служебных таблиц;
+--   * прежняя плодила дубли: [замер] 34 230 из 119 271.
 --
--- Требует таблиц классификации из `corpus_build.sql` (`tmp3_cls`, `tmp3_src`) — они
--- строятся из `$metadata` самой базы, а не из кода.
+-- 🔴 ЧИСЛОВЫХ ОТСЕЧЕК ЗДЕСЬ НЕТ, и это принципиально. В первой версии я перенёс из питона
+-- предел «не больше 1500 различных значений на колонку» и добавил свой «значение короче
+-- 200 символов» — обе оказались отсечками в пути ПРАВИЛЬНОСТИ, а не бюджетами.
+-- [замер 28.07] самое крупное измерение нашей базы — 10 048 значений, колонок свыше 1500
+-- — семнадцать: прежний предел молча выбросил бы их все. Отбор только СТРУКТУРНЫЙ, по
+-- контракту платформы: объявленный тип строка, не спутник протокола, не версия записи,
+-- не вложение, не GUID (ссылку разрешает карта корпуса), не адрес.
 
--- ============ 1. КОЛОНКИ СО ЗНАЧЕНИЯМИ ============
--- 🔴 ЗДЕСЬ НЕТ ЧИСЛОВЫХ ОТСЕЧЕК, и это принципиально. В первой версии я перенёс из
--- питона предел «не больше 1500 различных значений» и добавил свой «значение короче
--- 200 символов». Обе — отсечки в пути ПРАВИЛЬНОСТИ: колонка с 1501 значением молча
--- становится неразрешимой, а одно длинное значение выбрасывает из резолвера все
--- остальные значения своей колонки. [замер 28.07] на нашей базе самое крупное
--- измерение — 1 470 значений, то есть предел не резал ничего СЕГОДНЯ и сработал бы
--- молча на базе побольше. Это ловушка, а не бюджет.
--- Отбор идёт только СТРУКТУРНЫЙ, по контракту платформы:
---   * объявленный тип — строка (`Edm.String`), а не число и не дата;
---   * не спутник протокола и не версия записи;
---   * не вложение (`*_Base64Data`) — это двоичные данные, а не значение;
---   * не GUID — ссылку разрешает карта корпуса, а не резолвер;
---   * не машинный токен (адрес).
--- Цена честного набора платится ОДИН раз: вектор считается только новым значениям.
-CREATE OR REPLACE TABLE res_dim (tbl VARCHAR, col VARCHAR, n_distinct BIGINT);
-
-PREPARE p_dim AS
-INSERT INTO res_dim
-WITH cells AS (SELECT * FROM (SELECT COLUMNS(*)::VARCHAR FROM query_table($1)) s
-                    UNPIVOT (val FOR col IN (COLUMNS(*))))
-SELECT $1::VARCHAR, u.col, count(DISTINCT u.val)
-FROM cells u
-JOIN tmp3_cls c ON c.tbl = $1 AND c.col = u.col
-WHERE u.val <> ''
-  AND c.kind = 'text'                      -- объявленный тип, а не тип витрины
-  AND NOT c.is_companion                   -- спутники протокола (`X_Type`) не данные
-  AND c.col <> 'DataVersion'               -- версия записи объявлена платформой
-  AND c.col NOT LIKE '%\_Base64Data'       -- вложение, а не значение измерения
-  AND NOT regexp_matches(u.val, '^(https?://|/)')
-  -- GUID измерением не бывает: он и есть ссылка, её разрешает карта корпуса
-  AND NOT regexp_full_match(u.val,
-        '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
-GROUP BY u.col
-HAVING count(DISTINCT u.val) > 0;
-
-SELECT 'EXECUTE p_dim(' || quote_literal(tbl) || ');' FROM tmp3_src
+-- ============ 1. ЧТО В ЭТОТ РАЗ ДЕЙСТВИТЕЛЬНО ПРОЧИТАНО ============
+-- 🔴 Без этого шага удаление стирало живые значения вместе с посчитанными векторами.
+-- Прежняя охрана смотрела на `tmp3_src` — «что числится источником», а не «что мы сейчас
+-- смогли прочитать». Сущность, у которой источник в этот раз вернул ноль строк (сбой 1С,
+-- окно пересоздания таблицы синком), теряла ВСЕ свои значения.
+-- [замер] воспроизведено на копии: `DELETE 2` у сущности, которая просто была пуста.
+-- [замер] `count(*)` по самой крупной таблице — 2,6 мс, по всем 226 — меньше секунды.
+CREATE OR REPLACE TABLE res_seen (tbl VARCHAR, n_rows BIGINT);
+PREPARE p_seen AS INSERT INTO res_seen SELECT $1::VARCHAR, count(*) FROM query_table($1);
+SELECT 'EXECUTE p_seen(' || quote_literal(tbl) || ');' FROM tmp3_src
 \gexec
 
-SELECT 'колонок-измерений' AS шаг, count(*) AS колонок, sum(n_distinct) AS значений FROM res_dim;
-
--- ============ 2. ЗНАЧЕНИЯ ============
+-- ============ 2. ЗНАЧЕНИЯ — ОДНИМ ПРОХОДОМ ============
+-- Прежде было два полных прохода по всем ячейкам: первый считал `count(DISTINCT)` по
+-- колонкам, второй забирал значения. При этом фильтры стояли только в первом, а решение
+-- принималось «по колонке» — поэтому достаточно было одного нормального значения, чтобы
+-- в резолвер уехали ВСЕ GUID этой колонки. [замер] так туда попали 454 GUID и 2 адреса,
+-- и за них уже заплачено векторами.
+-- Теперь фильтры стоят там же, где отбираются значения, и проход один.
+-- [замер] на самой крупной таблице: 150 мс против 68 мс — вдвое быстрее.
+-- Порядок важен: регулярные выражения применяются к РАЗЛИЧНЫМ значениям (10 675), а не
+-- ко всем ячейкам (477 тысяч).
 CREATE OR REPLACE TABLE res_val (tbl VARCHAR, col VARCHAR, val VARCHAR);
 
 PREPARE p_val AS
 INSERT INTO res_val
 WITH cells AS (SELECT * FROM (SELECT COLUMNS(*)::VARCHAR FROM query_table($1)) s
-                    UNPIVOT (val FOR col IN (COLUMNS(*))))
-SELECT DISTINCT $1::VARCHAR, u.col, u.val
-FROM cells u JOIN res_dim d ON d.tbl = $1 AND d.col = u.col
-WHERE u.val <> '';
+                    UNPIVOT (val FOR col IN (COLUMNS(*)))),
+     d AS (SELECT DISTINCT u.col, u.val
+           FROM cells u JOIN tmp3_cls c ON c.tbl = $1 AND c.col = u.col
+           WHERE u.val <> ''
+             AND c.kind = 'text'                    -- объявленный тип, а не тип витрины
+             AND NOT c.is_companion                 -- спутник протокола (`X_Type`)
+             -- Служебные свойства протокола OData 1С: `DataVersion` — версия записи,
+             -- `PredefinedDataName` — машинное имя предопределённого элемента ([замер]
+             -- объявлено у 707 сущностей, 2 526 значений). Человеческих имён там не
+             -- бывает никогда, а подсказка резолвера увела бы модель на служебный реквизит.
+             AND c.col NOT IN ('DataVersion', 'PredefinedDataName')
+             AND c.col NOT LIKE '%\_Base64Data')    -- вложение, а не значение
+SELECT $1::VARCHAR, col, val FROM d
+WHERE NOT regexp_matches(val, '^(https?://|/)')
+  AND NOT regexp_full_match(val,
+        '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}');
 
-SELECT 'EXECUTE p_val(' || quote_literal(tbl) || ');' FROM (SELECT DISTINCT tbl FROM res_dim)
+SELECT 'EXECUTE p_val(' || quote_literal(tbl) || ');' FROM tmp3_src
 \gexec
 
-SELECT 'значений к разрешению' AS шаг, count(*) AS всего,
-       count(DISTINCT (tbl, col, val)) AS уникальных FROM res_val;
+-- Колонки-измерения выводятся из значений, а не считаются отдельным проходом по данным.
+CREATE OR REPLACE TABLE res_dim AS
+SELECT tbl, col, count(*) AS n_distinct FROM res_val GROUP BY 1, 2;
 
--- ============ 3. ИНКРЕМЕНТ: значения обновляются, векторы считаются только новым ============
--- Размерность задаёт модель (`ai_embed` отдаёт 1024) — колонка объявляется под неё.
--- Смена размерности делается один раз: `ALTER COLUMN TYPE` движок не даёт,
--- `DROP COLUMN` + `ADD COLUMN` работает и индексы таблицы переживает.
+SELECT 'значения' AS шаг, (SELECT count(*) FROM res_val) AS всего,
+       (SELECT count(*) FROM res_dim) AS колонок,
+       (SELECT max(n_distinct) FROM res_dim) AS крупнейшее_измерение;
+
+-- ============ 3. СВЕДЕНИЕ С ХРАНИМЫМ — ОДНИМ MERGE ============
 CREATE TABLE IF NOT EXISTS resolver_index
   (table_name VARCHAR, column_name VARCHAR, value VARCHAR, emb FLOAT[1024]);
 
--- Убираем ушедшее ТОЧЕЧНО — только по тем таблицам, которые мы в этот раз осмотрели
--- (`tmp3_src`). Удалять всё, чего нет в текущей выгрузке, нельзя: выгрузка из 1С бывает
--- неполной, и это стёрло бы живые данные (HOW_NOT_TO §4.2).
--- Две ветки, и обе нужны:
---   1. колонка перестала быть измерением (или ею и не была — так уходит мусор прежней
---      сборки: [замер] 43 680 значений из колонок `*_Base64Data`);
---   2. само значение исчезло из данных.
--- Служебные таблицы — не бизнес-данные. [замер] прежняя сборка индексировала
--- `base_profile`, `search_tables`, `search_corpus_bak` и даже сам `search_idx`,
--- то есть отправляла в облако нашу собственную служебную перепись.
+-- Права выдаются здесь же: на чистой машине таблица рождается этим файлом, и без этих
+-- команд `serene_resolver` её не прочитает, а `serene_ro` не будет отозван — то есть
+-- разделение ролей окажется невыполненным МОЛЧА, а `test_integrity.py` T3 упадёт.
+GRANT SELECT ON resolver_index TO serene_resolver;
+REVOKE SELECT ON resolver_index FROM serene_ro;
+
+-- Служебные таблицы прежней сборки вычищаем по КОНТРАКТУ 1С, а не по нашему корпусу:
+-- сущность — это то, что объявлено в `$metadata`. Прежняя ветка удаляла всё, чего нет в
+-- `tmp3_src`, то есть повторяла шаблон, запрещённый `HOW_NOT_TO §4.2`: пустой или
+-- устаревший `tmp3_src` стёр бы весь резолвер (89 436 значений, из них 66 479 с
+-- посчитанными векторами). Условие `count(*) > 0` не даёт сработать на пустых метаданных.
 DELETE FROM resolver_index r
-WHERE NOT EXISTS (SELECT 1 FROM tmp3_src s WHERE s.tbl = r.table_name);
+WHERE (SELECT count(*) FROM tmp3_ent) > 0
+  AND NOT EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(r.table_name));
 
-DELETE FROM resolver_index r
-WHERE r.table_name IN (SELECT tbl FROM tmp3_src)
-  AND (NOT EXISTS (SELECT 1 FROM res_dim d
-                   WHERE d.tbl = r.table_name AND d.col = r.column_name)
-       OR NOT EXISTS (SELECT 1 FROM res_val v
-                      WHERE v.tbl = r.table_name AND v.col = r.column_name AND v.val = r.value));
+-- Один `MERGE` вместо трёх операторов: удаляет ушедшее ТОЛЬКО у сущностей, которые в
+-- этот раз реально прочитаны, вставляет новое без вектора, а совпавшие строки НЕ трогает —
+-- их векторы уцелевают. [замер] `NOT MATCHED BY SOURCE` в сборке 26.07.3 работает.
+MERGE INTO resolver_index t
+USING (SELECT tbl, col, val FROM res_val) s
+   ON t.table_name = s.tbl AND t.column_name = s.col AND t.value = s.val
+ WHEN NOT MATCHED BY SOURCE
+      AND EXISTS (SELECT 1 FROM res_seen z WHERE z.tbl = t.table_name AND z.n_rows > 0)
+      THEN DELETE
+ WHEN NOT MATCHED THEN
+      INSERT (table_name, column_name, value, emb) VALUES (s.tbl, s.col, s.val, NULL);
 
--- Новые значения. Вектор НЕ считается здесь: он считается отдельным шагом только тем,
--- у кого его нет. Так повторный запуск на неизменных данных не стоит ни одного вызова
--- к облаку — это и есть исполнение п. 17.
-INSERT INTO resolver_index (table_name, column_name, value, emb)
-SELECT v.tbl, v.col, v.val, NULL
-FROM res_val v
-WHERE NOT EXISTS (SELECT 1 FROM resolver_index r
-                  WHERE r.table_name = v.tbl AND r.column_name = v.col AND r.value = v.val);
+-- ============ 4. ОТЧЁТ — В БАЗУ, А НЕ В ЖУРНАЛ ============
+-- П. 13: потеря обязана быть видна запросом, а не только тому, кто смотрел в консоль.
+-- `resolver_too_long` — значения, которые вектор не получат никогда, если досчёт не
+-- обрежет вход: у эмбеддера предел 33 000 символов, а в базе лежат значения по 560 282.
+DELETE FROM search_quality WHERE k LIKE 'resolver_%';
+INSERT INTO search_quality
+            SELECT 'resolver_values',   count(*),                            'значений в резолвере'
+            FROM resolver_index
+UNION ALL   SELECT 'resolver_no_emb',   count(*) FILTER (WHERE emb IS NULL), 'ждут вектора'
+            FROM resolver_index
+UNION ALL   SELECT 'resolver_clipped', count(*) FILTER (WHERE length(value) > 20000),
+                   'вектор посчитан по обрезанному началу значения, а не по всему'
+            FROM resolver_index;
 
-SELECT 'резолвер' AS шаг, count(*) AS значений,
-       count(*) FILTER (WHERE emb IS NULL) AS ждут_вектора,
-       array_length(any_value(emb) FILTER (WHERE emb IS NOT NULL)) AS размерность
-FROM resolver_index;
+SELECT k, v, note FROM search_quality WHERE k LIKE 'resolver_%' ORDER BY k;

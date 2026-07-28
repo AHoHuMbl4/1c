@@ -1,16 +1,17 @@
 #!/bin/bash
-# НОЧНАЯ СБОРКА: корпус, резолвер, индекс — штатными средствами SereneDB.
+# ЦИКЛ ОБНОВЛЕНИЯ: корпус, резолвер, индекс — штатными средствами SereneDB.
 #
 # Это то, что запускает таймер вместо `serene_search_build.py`.
 #
 # Порядок шагов значим:
+#   0. развёртывание объектов и проверки ДО такта — они же снимают отпечаток «как было»;
 #   1. секреты — движку нужен токен шлюза 1С (`$metadata` он читает сам) и ключ эмбеддера;
 #   2. корпус собирается во временные таблицы и там же сверяется;
 #   3. слияние в боевой корпус по отпечатку + публикация индекса;
 #   4. векторы досчитываются только новым строкам;
 #   5. резолвер — тем же способом: значения по ключу, векторы только новым;
-#   6. секреты удаляются. 🔴 Это обязательный шаг: «временный» секрет SereneDB
-#      переживает сессию и виден любой другой, сам он не исчезает.
+#   6. проверки ПОСЛЕ такта сравнивают с отпечатком «как было» и роняют такт, если данные
+#      исчезли; секреты удаляются в любом случае.
 #
 # Своего кода в сборке НЕ ОСТАЛОСЬ вовсе: шаг выбора денежной колонки убран вместе с
 # самим понятием «денежная колонка» — строка несёт все свои величины, а какую считать,
@@ -22,43 +23,86 @@ DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 export SERENEDB_DSN="$DSN"
 GATE="${ETL_ODATA_BASE:-http://127.0.0.1:6011}"
 WORKERS="${BUILD_EMBED_WORKERS:-8}"
+EMBED_MODEL="${EMBED_MODEL:-text-embedding-v4}"
+EMBED_DIM="${EMBED_DIM:-1024}"
+DICT_LOCALE="${SEARCH_DICT_LOCALE:-ru_RU.utf8}"
 t0=$(date +%s)
 
+# 🔴 ЗАМОК. Такт идёт минутами, а при первом наполнении — часами; таймер за это время
+# успевает выстрелить снова. Два такта на одной таблице выберут ОДНО И ТО ЖЕ множество
+# `emb IS NULL` и посчитают его дважды: заплачено дважды, записано дважды. `flock` без
+# ожидания — второй просто уходит.
+exec 9>/var/lock/1c-serene-build.lock
+flock -n 9 || { echo "такт уже идёт — этот запуск пропущен"; exit 0; }
+
+# Уборка при ЛЮБОМ выходе, включая обрыв. Прежде секрет удалялся только на штатном пути,
+# и после падения посреди такта ключ эмбеддера оставался жить в движке до рестарта.
+# `2>/dev/null`, чтобы имя секрета не всплыло в journald в тексте ошибки.
+cleanup() { psql "$DSN" -q -c "DROP SECRET IF EXISTS odg; DROP SECRET IF EXISTS qwen;" >/dev/null 2>&1; }
+trap cleanup EXIT INT TERM HUP
+
+fail() { echo "СБОРКА ПРЕРВАНА: $1" >&2; exit 1; }
+
+echo "== 0. объекты поиска и проверки до такта"
+psql "$DSN" -q -v dict_locale="$DICT_LOCALE" -f corpus_init.sql || fail "развёртывание объектов"
+
 # Секреты подаются ФАЙЛОМ с правами 600, а не аргументом командной строки: в командной
-# строке они видны любому `ps`.
+# строке они видны любому `ps`. Одинарные кавычки внутри значения удваиваются — иначе
+# ключ с апострофом сломал бы синтаксис, и обрывок ключа ушёл бы в текст ошибки.
 umask 077
-SEC=$(mktemp); trap 'rm -f "$SEC"' EXIT
+esc() { printf '%s' "${1:-}" | sed "s/'/''/g"; }
+SEC=$(mktemp); trap 'rm -f "$SEC"; cleanup' EXIT INT TERM HUP
 {
-  printf "CREATE OR REPLACE TEMPORARY SECRET odg (TYPE http, EXTRA_HTTP_HEADERS MAP{'Authorization': 'Bearer %s'});\n" "${ODG_GATEWAY_TOKEN:-}"
+  # 🔴 SCOPE ОБЯЗАТЕЛЕН. [замер 28.07] без него область секрета — `{}`, то есть ВСЕ
+  # адреса, и его заголовок `Authorization` перебивает ключ эмбеддера: `ai_embed` уходит
+  # в облако с токеном шлюза 1С и получает `HTTP 401 invalid_api_key`.
+  # Проверено обоими способами: при `SCOPE '{}'` — 401, при `SCOPE '$GATE'` — вектор 1024,
+  # и `read_text('$GATE/$metadata')` при этом продолжает работать (16 652 877 байт).
+  # Без этой строки НИ ОДИН вектор за такт не считался бы, а такт заканчивался успехом.
+  printf "CREATE OR REPLACE TEMPORARY SECRET odg (TYPE http, SCOPE '%s', EXTRA_HTTP_HEADERS MAP{'Authorization': 'Bearer %s'});\n" "$GATE" "$(esc "${ODG_GATEWAY_TOKEN:-}")"
   printf "CREATE OR REPLACE TEMPORARY SECRET qwen (TYPE openai, api_key '%s', base_url '%s', embeddings_path '%s');\n" \
-         "${ALIBABA_API_KEY:-}" "${EMBED_HOST:-https://dashscope-intl.aliyuncs.com}" \
+         "$(esc "${ALIBABA_API_KEY:-}")" "${EMBED_HOST:-https://dashscope-intl.aliyuncs.com}" \
          "${EMBED_PATH:-/compatible-mode/v1/embeddings}"
 } > "$SEC"
-psql "$DSN" -q -f "$SEC" || { echo "секреты не созданы" >&2; exit 1; }
+# Вывод гасится целиком: при ошибке psql печатает ОПЕРАТОР, а в нём ключ.
+psql "$DSN" -q -f "$SEC" >/dev/null 2>&1 || fail "секреты не созданы"
 rm -f "$SEC"
 
-fail() { echo "СБОРКА ПРЕРВАНА: $1" >&2; psql "$DSN" -q -c "DROP SECRET IF EXISTS odg; DROP SECRET IF EXISTS qwen;"; exit 1; }
+# Проверки до такта — после секретов: одна из них дёргает эмбеддер, чтобы убедиться, что
+# он жив, ДО того как слияние обнулит векторы у изменившихся строк.
+psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" \
+     -f corpus_precheck.sql || fail "проверки до такта"
 
 echo "== 1. корпус: движок читает \$metadata из $GATE и собирает текст"
-psql "$DSN" -q -f corpus_build.sql || fail "сборка корпуса"
+psql "$DSN" -q -v gate="$GATE" -f corpus_build.sql || fail "сборка корпуса"
 
 echo "== 2. слияние в боевой корпус и публикация индекса"
 psql "$DSN" -q -f corpus_merge.sql || fail "слияние корпуса"
 
+# 🔴 `fail`, а не «предупреждение». Прежде недосчитанные векторы печатались в журнал и
+# такт заканчивался успехом — это ровно тот тихий отказ, из-за которого 20 значений не
+# получали вектор КАЖДЫЙ такт и никто не знал (`HOW_NOT_TO §2.10`).
 echo "== 3. векторы новым строкам корпуса"
-./embed_missing.sh search_corpus doc "$WORKERS" || echo "предупреждение: часть векторов не посчитана" >&2
+./embed_missing.sh search_corpus doc "$WORKERS" "src_table,row_key" || fail "векторы корпуса"
 
 echo "== 4. резолвер"
 psql "$DSN" -q -f resolver_build.sql || fail "сборка резолвера"
-./embed_missing.sh resolver_index value "$WORKERS" || echo "предупреждение: часть векторов резолвера не посчитана" >&2
+# Вход эмбеддера ОБРЕЗАЕТСЯ здесь, а не в таблице: `resolver_index.value` идёт в предикат
+# `WHERE`, и обрезанное значение перестало бы совпадать с данными. [замер] два значения по
+# 560 282 символа отравляли свою пачку целиком — вместе с ними вектор не получали 16
+# нормальных соседей, и так каждый такт.
+./embed_missing.sh resolver_index "substr(value,1,20000)" "$WORKERS" \
+                   "table_name,column_name,value" || fail "векторы резолвера"
 
-echo "== 5. секреты убраны"
-psql "$DSN" -q -c "DROP SECRET IF EXISTS odg; DROP SECRET IF EXISTS qwen;"
+# Публикация ЕЩЁ РАЗ: досчёт векторов правит `emb` уже после первого обновления индекса,
+# и без второго вызова индекс отдавал бы строки со старым вектором.
+echo "== 5. повторная публикация индекса после досчёта"
+psql "$DSN" -q -c "VACUUM (REFRESH_INDEX) search_idx;" || fail "публикация индекса"
 
-# Итог такта — числами, а не словами: по ним видно, выполняется ли п. 17.
-psql "$DSN" -tA -F' | ' -c "
-SELECT 'корпус: ' || count(*) || ' строк, без вектора ' || count(*) FILTER (WHERE emb IS NULL)
-FROM search_corpus
-UNION ALL SELECT 'резолвер: ' || count(*) || ' значений, без вектора ' || count(*) FILTER (WHERE emb IS NULL)
-FROM resolver_index"
+# Итог такта — СВЕРКОЙ с отпечатком «как было», а не печатью абсолютных чисел: «корпус:
+# 0 строк» в журнале выглядит так же спокойно, как «97 965 строк». Ненулевой код возврата
+# отсюда и есть код всей сборки.
+echo "== 6. проверки после такта"
+psql "$DSN" -tA -F' | ' -f corpus_postcheck.sql || fail "проверки после такта"
+
 echo "== такт занял $(( $(date +%s) - t0 )) с"

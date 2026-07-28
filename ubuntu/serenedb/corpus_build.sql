@@ -16,22 +16,23 @@
 -- в конце. «Временный» секрет SereneDB переживает сессию и виден любой другой —
 -- `DROP SECRET` обязателен, сам он не исчезнет.
 --
--- СОСТОЯНИЕ: Шаг 3 плана CHECK2_INCR_SUMMARY_V2 пройден — сборка идёт во ВРЕМЕННЫЕ
--- таблицы `tmp3_*` и сверяется с боевым корпусом построчно. Боевые объекты
--- (`search_corpus`, `search_idx`) не трогаются ни одной командой этого файла.
--- Шаг 4 (переключение сборщика и MERGE в боевой корпус) — не сделан.
+-- СОСТОЯНИЕ: файл боевой. Он собирает во временные таблицы `tmp3_*`, а перенос в корпус
+-- делает `corpus_merge.sql` — разделение намеренное: сборка может упасть, не тронув
+-- боевые объекты. Порядок вызова задаёт `build.sh`.
 --
 -- [замер 27.07] Один запуск процесса `psql`, 1 мин 58 с, ноль строк наружу.
--- Против сегодняшней питоновской фазы: 258 с и около 1 190 запусков процесса.
--- Сверка с боевым корпусом: 97 965 строк сошлись по ключу, из них отпечаток совпал
--- у 62 756, разошёлся у 35 209, `amount` совпал у ВСЕХ, `doc_date` разошёлся у 90.
--- Каждое расхождение разобрано — см. docs/CHECK2_INCR_SUMMARY_V2.md и CHANGELOG.
+-- Против прежней питоновской фазы: 258 с и около 1 190 запусков процесса.
+--
+-- ТАКТ — НЕ НОЧНОЙ. Решение владельца 28.07: понятие «ночная сборка» упразднено, цикл
+-- обновления идёт не реже чем раз в 20 минут (п. 17 TARGET.md — реакция на новые данные).
+-- Отсюда требования, которых у ночного прогона не было: замок от наложения тактов,
+-- докатка прерванного и цена такта, не зависящая от размера базы, а только от изменений.
 
 -- ============ 1. $metadata: движок сам ходит в 1С и сам разбирает XML ============
 CREATE OR REPLACE TABLE tmp3_ent AS
 SELECT lower(regexp_extract(b,'Name="([^"]+)"',1)) AS entity, b AS body
 FROM (SELECT unnest(regexp_extract_all(content,'(?s)<EntityType\s.*?</EntityType>')) AS b
-      FROM read_text('http://127.0.0.1:6011/$metadata'));
+      FROM read_text(:'gate' || '/$metadata'));
 
 CREATE OR REPLACE TABLE tmp3_prop AS
 SELECT entity, x.prop, x.edm FROM (
@@ -43,6 +44,26 @@ CREATE OR REPLACE TABLE tmp3_key AS
 SELECT entity, regexp_extract_all(regexp_extract(body,'(?s)<Key>(.*?)</Key>',1),
                                   '<PropertyRef\s+Name="([^"]+)"',1) AS key_cols
 FROM tmp3_ent;
+
+-- 🔴 Ответ 200 с НЕ ТЕМ телом (страница ошибки IIS, обрезанный XML, смена формата) даёт
+-- пустые таблицы без единой ошибки. Дальше: ключей нет -> `keypos` пуст у всех колонок
+-- -> ключом каждой строки становится отпечаток текста -> `MERGE` считает ВЕСЬ корпус
+-- новым, `DELETE` сносит старый, эмбеддер получает 98 тысяч вызовов. Проверяем ДО того,
+-- как что-либо посчитано: сравнение не с числом из головы, а с прошлым тактом.
+SELECT CASE WHEN (SELECT count(*) FROM tmp3_ent) = 0
+             OR (SELECT count(*) FROM tmp3_key WHERE len(key_cols) > 0) = 0
+       THEN error('$metadata пусты или неполны: сущностей '
+                  || (SELECT count(*) FROM tmp3_ent) || ', с ключом '
+                  || (SELECT count(*) FROM tmp3_key WHERE len(key_cols) > 0)
+                  || ' — сборка остановлена до изменения данных') END;
+
+SELECT CASE WHEN prev > 0 AND (SELECT count(*) FROM tmp3_ent) * 2 < prev
+       THEN error('$metadata усохли вдвое против прошлого такта: было '
+                  || prev || ', стало ' || (SELECT count(*) FROM tmp3_ent)) END
+FROM (SELECT coalesce(max(v), 0) AS prev FROM search_quality WHERE k = 'meta_entities');
+
+DELETE FROM search_quality WHERE k = 'meta_entities';
+INSERT INTO search_quality SELECT 'meta_entities', count(*), 'сущностей в $metadata' FROM tmp3_ent;
 
 SELECT 'метаданные' AS шаг, (SELECT count(*) FROM tmp3_ent) AS сущностей,
        (SELECT count(*) FROM tmp3_prop) AS свойств,
@@ -69,10 +90,41 @@ FROM duckdb_columns() c
 LEFT JOIN tmp3_prop p ON p.entity=lower(c.table_name) AND p.prop=c.column_name
 WHERE c.database_name='postgres';
 
--- Источники корпуса: ровно те, что уже есть в боевом корпусе. Так сверка идёт по
--- одному и тому же множеству сущностей, а не по «похожему».
+-- 🔴 ИСТОЧНИКИ БЕРУТСЯ ИЗ ОТДЕЛЬНОЙ ТАБЛИЦЫ, А НЕ ИЗ КОРПУСА.
+-- Прежде здесь стояло `SELECT DISTINCT src_table FROM search_corpus`, и это была петля:
+-- сущность, один раз собравшаяся пустой, вычищалась из корпуса и **выпадала из списка
+-- навсегда**, а пустой корпус давал ноль источников — то есть после аварии сборка
+-- не подняла бы ничего и отчиталась «0 строк» с кодом успеха. Найдено тремя
+-- независимыми проверками и подтверждено замером на копии.
+-- Перечень пополняется тем, что реально есть в витрине, и НИКОГДА не сужается молча:
+-- пропавшая таблица остаётся в списке и попадает в отчёт, а не исчезает из мира.
+-- Источник — это таблица, ОБЪЯВЛЕННАЯ СУЩНОСТЬЮ В `$metadata`, а не «всё, что не похоже
+-- на служебное». Первая версия отбирала по шаблонам имён (`NOT LIKE 'tmp3_%'` и прочие),
+-- и это был хардкод под нашу машину: [замер 28.07] в источники уехали `tmp_prod_corpus`,
+-- `tmp_refmap`, `tbl_chunk` — корпус собрался на 235 532 строки вместо 97 965 и дал
+-- 4 551 дубль ключа. Перечень имён нельзя ни угадать заранее, ни повторить у клиента.
+-- Контракт платформы это решает сам: [замер] отбор по `$metadata` даёт ровно 226.
+INSERT INTO search_sources
+SELECT t.table_name, now() FROM duckdb_tables() t
+WHERE t.database_name = 'postgres'
+  AND EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(t.table_name))
+  AND NOT EXISTS (SELECT 1 FROM search_sources s WHERE s.src_table = t.table_name);
+
+-- То, что источником быть перестало (или никогда им не было), из перечня уходит: иначе
+-- ошибка одного прогона осталась бы в списке навсегда.
+DELETE FROM search_sources s
+WHERE NOT EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(s.src_table));
+
+-- В сборку идут только те источники, чьи таблицы существуют СЕЙЧАС. Пропавшие не
+-- удаляются из перечня — они попадут в отчёт как «источник исчез».
 CREATE OR REPLACE TABLE tmp3_src AS
-SELECT DISTINCT src_table AS tbl FROM search_corpus;
+SELECT s.src_table AS tbl FROM search_sources s
+WHERE EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table);
+
+SELECT CASE WHEN count(*) > 0
+       THEN error('источники исчезли из витрины (идёт синк?): ' || string_agg(src_table, ', ')) END
+FROM search_sources s
+WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table);
 
 SELECT 'классификация' AS шаг, (SELECT count(*) FROM tmp3_src) AS сущностей_корпуса,
        (SELECT count(*) FROM tmp3_cls WHERE tbl IN (SELECT tbl FROM tmp3_src)) AS колонок;
@@ -191,12 +243,19 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
           (c.kind IN ('text','flag') AND NOT c.is_companion AND c.col <> 'DataVersion'
            AND NOT regexp_matches(u.val,'^(https?://|/)')) AS in_text,
           (c.kind = 'num') AS is_num,
+          -- ВСЕ даты строки, а не только выбранная. Прежде дата, не ставшая `doc_date`,
+          -- не попадала НИКУДА: ни в текст, ни в величины. [замер 28.07] так пропадали
+          -- 83 колонки и 30 909 значений, а у 24 сущностей не оставалось ни одной даты
+          -- вовсе — «когда открыт счёт», «до какого числа действует договор», «дата
+          -- регистрации контрагента» отвечать было нечем. `doc_date` по-прежнему одна:
+          -- она про фильтр по периоду, а текст — про то, что человек может спросить.
+          (c.kind = 'date') AS is_date,
           (SELECT 1 FROM tmp3_datecol   d WHERE d.tbl=$1 AND d.col=u.col) AS is_dt
    FROM cells u JOIN tmp3_cls c ON c.tbl=$1 AND c.col=u.col
    LEFT JOIN tmp3_refmap r ON r.guid = u.val
    WHERE u.val <> ''),
  pieces AS (
-   SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_dt,
+   SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_dt, is_date,
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
           WHEN is_guid AND refname IS NOT NULL THEN replace(col,'_Key','') || ': ' || refname
           WHEN is_guid THEN NULL
@@ -204,10 +263,12 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
                CASE WHEN try_cast(val AS DOUBLE) = floor(try_cast(val AS DOUBLE))
                     THEN printf('%d', try_cast(val AS BIGINT))
                     ELSE printf('%.2f', try_cast(val AS DOUBLE)) END
-          WHEN is_dt IS NOT NULL THEN col || ': ' || substr(val,1,10)
+          -- Незаполненная дата приезжает из 1С как `0001-01-01` — это НЕ дата, а пустое
+          -- место, и в тексте ему делать нечего.
+          WHEN is_date THEN nullif(col || ': ' || substr(val,1,10), col || ': 0001-01-01')
           WHEN in_text THEN col || ': ' || val
           ELSE NULL END AS piece,
-     CASE WHEN is_guid THEN 0 WHEN is_num THEN 2 WHEN is_dt IS NOT NULL THEN 3 ELSE 1 END AS prio
+     CASE WHEN is_guid THEN 0 WHEN is_num THEN 2 WHEN is_date THEN 3 ELSE 1 END AS prio
    FROM j)
 SELECT src_table,
        -- Без объявленного ключа и без Ref_Key ключом становится отпечаток текста —
@@ -223,9 +284,19 @@ FROM (
          coalesce(string_agg(piece,' | ' ORDER BY ord) FILTER (is_guid AND refname IS NOT NULL), '') AS refs,
          -- ВСЕ величины строки, а не одна выбранная. Имя величины — имя колонки из
          -- базы, а не наше слово: на другой конфигурации и языке это работает так же.
-         map_from_entries(list({'key': col, 'value': try_cast(val AS DOUBLE)})
+         -- ПОРЯДОК КЛЮЧЕЙ ЗАДАЁТСЯ ЯВНО. Сравнение `MAP` в движке зависит от порядка:
+         -- [замер] `MAP{'a':1,'b':2} IS DISTINCT FROM MAP{'b':2,'a':1}` -> true. Без
+         -- `ORDER BY` порядок определяется ходом агрегации и при параллельном исполнении
+         -- не гарантирован — тогда `nums` переписывались бы каждый такт у всех строк,
+         -- а число «сколько изменилось» переставало бы что-либо значить.
+         map_from_entries(list({'key': col, 'value': try_cast(val AS DOUBLE)} ORDER BY col)
                           FILTER (is_num AND try_cast(val AS DOUBLE) IS NOT NULL)) AS nums,
-         max(try_cast(val AS TIMESTAMP)) FILTER (is_dt  IS NOT NULL) AS dt
+         -- [замер 28.07] 312 строк корпуса имели `doc_date = 0001-01-01`: незаполненная
+         -- дата 1С — валидный TIMESTAMP, и `try_cast` её принимал. «Самый ранний
+         -- документ» отвечал первым годом нашей эры, а «даты нет» было неотличимо от
+         -- даты. Отсутствие обязано выглядеть как отсутствие.
+         max(nullif(try_cast(val AS TIMESTAMP), TIMESTAMP '0001-01-01 00:00:00'))
+             FILTER (is_dt IS NOT NULL) AS dt
   FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g;
 
 SELECT 'EXECUTE p_doc(' || quote_literal(tbl) || ');' FROM tmp3_src
@@ -243,13 +314,20 @@ SELECT count(*) AS сошлось_ключами,
        count(*) FILTER (WHERE c.doc_hash = t.doc_hash) AS отпечаток_совпал,
        count(*) FILTER (WHERE c.doc_hash <> t.doc_hash) AS отпечаток_разошёлся,
        count(*) FILTER (WHERE c.doc_date IS DISTINCT FROM t.doc_date) AS doc_date_разошёлся,
-       count(*) FILTER (WHERE c.amount IS NOT NULL
-                          AND NOT list_contains(map_values(t.nums), c.amount)) AS величина_потеряна
+       count(*) FILTER (WHERE c.nums IS NOT NULL AND len(map_keys(c.nums)) > 0
+                          AND NOT (t.nums IS NOT NULL AND len(map_keys(t.nums)) > 0)) AS величины_пропали
 FROM search_corpus c JOIN tmp3_corpus t USING (src_table, row_key);
 
-SELECT 'величин в строке' AS что, round(avg(len(map_keys(nums))),1) AS в_среднем,
-       max(len(map_keys(nums))) AS максимум,
-       count(*) FILTER (WHERE len(map_keys(nums)) = 0) AS строк_без_величин FROM tmp3_corpus;
+-- 🔴 `coalesce` здесь не украшение. [замер] `map_from_entries` над списком, из которого
+-- фильтр выбросил всё, даёт NULL, а не пустую карту; `len(map_keys(NULL))` — тоже NULL,
+-- и условие `= 0` не срабатывает НИКОГДА. Отчёт печатал «строк без величин: 0», когда их
+-- было 66 746 из 97 965, а среднее считалось по трети строк и было завышено втрое.
+-- Число, которое структурно не может показать потерю, хуже отсутствующего.
+SELECT 'величин в строке' AS что,
+       round(avg(coalesce(len(map_keys(nums)), 0)), 1) AS в_среднем,
+       max(coalesce(len(map_keys(nums)), 0)) AS максимум,
+       count(*) FILTER (WHERE nums IS NULL OR len(map_keys(nums)) = 0) AS строк_без_величин
+FROM tmp3_corpus;
 
 SELECT 'нет в новой' AS сторона, count(*) FROM search_corpus c
   WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table=c.src_table AND t.row_key=c.row_key)
@@ -267,13 +345,29 @@ DELETE FROM search_quality WHERE k LIKE 'refmap_%';
 INSERT INTO search_quality
 SELECT 'refmap_resolved', count(*), 'ссылок получили человеческое имя' FROM tmp3_refmap
 UNION ALL
-SELECT 'refmap_unresolved', count(*), 'GUID в корпусе без имени в карте'
+-- Считается по СОБРАННОМУ, а не по боевому корпусу. Прежде это число бралось из
+-- `search_corpus`, то есть из корпуса ПРЕДЫДУЩЕГО такта (файл выполняется до слияния):
+-- рядом стояли два числа из разных эпох и выглядели как одно измерение.
+SELECT 'refmap_unresolved', count(*), 'GUID в тексте без имени в карте'
 FROM (SELECT DISTINCT val FROM (
         SELECT unnest(regexp_extract_all(doc,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')) val
-        FROM search_corpus)
+        FROM tmp3_corpus)
       WHERE val NOT IN (SELECT guid FROM tmp3_refmap))
 UNION ALL
 SELECT 'refmap_ambiguous', count(*), 'имён, которые делят между собой разные объекты'
-FROM (SELECT name FROM tmp3_refmap GROUP BY name HAVING count(*) > 1);
+FROM (SELECT name FROM tmp3_refmap GROUP BY name HAVING count(*) > 1)
+UNION ALL
+-- Обрезка длинного значения (20 000 символов) была решением в комментарии и нигде не
+-- считалась. П. 13: обрезал — покажи это числом, а не строкой в исходнике.
+SELECT 'clipped_docs', count(*), 'строк, где значение обрезано по длине'
+FROM tmp3_corpus WHERE length(doc) >= 20000;
 
-SELECT k, v, note FROM search_quality WHERE k LIKE 'refmap_%' ORDER BY k;
+SELECT k, v, note FROM search_quality WHERE k LIKE 'refmap_%' OR k = 'clipped_docs' ORDER BY k;
+
+-- ============ 9. ОТМЕТКА ПРОГОНА ============
+-- Ставится САМОЙ ПОСЛЕДНЕЙ командой: её наличие доказывает, что сборка дошла до конца,
+-- а не оборвалась на середине. `corpus_merge.sql` откажется переносить данные, если
+-- отметки нет или она старая — иначе он молча перенесёт вчерашние временные таблицы
+-- (они обычные, а не временные, и переживают сессию и рестарт движка).
+CREATE OR REPLACE TABLE tmp3_run AS SELECT now() AS ts, count(*) AS собрано FROM tmp3_corpus;
+SELECT 'сборка завершена' AS шаг, собрано, ts FROM tmp3_run;

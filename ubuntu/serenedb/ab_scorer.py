@@ -27,33 +27,40 @@ URL = "http://127.0.0.1:8091/ask"
 SCORERS = [s for s in os.environ.get(
     "AB_SCORERS", "bm25,bm25_b0,tfidf,lm_jm,lm_dirichlet,dfi").split(",") if s]
 
-# Вопрос -> SQL, считающий правду независимо от системы поиска.
-GOLD = [
-    ("Сколько всего мы продали?",
-     "SELECT sum(\"СуммаДокумента\")::BIGINT FROM document_реализациятоваровуслуг"),
-    ("What is the total amount of all sales?",
-     "SELECT sum(\"СуммаДокумента\")::BIGINT FROM document_реализациятоваровуслуг"),
-    ("На какую сумму мы продали ООО Северный Ветер?",
-     "SELECT sum(d.\"СуммаДокумента\")::BIGINT FROM document_реализациятоваровуслуг d "
-     "JOIN catalog_контрагенты k ON k.\"Ref_Key\"=d.\"Контрагент_Key\" "
-     "WHERE k.\"Description\" LIKE '%Северный Ветер%'"),
-    ("Какие поступления были от ООО ТехноСнаб?",
-     "SELECT sum(d.\"СуммаДокумента\")::BIGINT FROM document_поступлениетоваровуслуг d "
-     "JOIN catalog_контрагенты k ON k.\"Ref_Key\"=d.\"Контрагент_Key\" "
-     "WHERE k.\"Description\" LIKE '%ТехноСнаб%'"),
-    ("Покажи продажи за декабрь 2025 года",
-     "SELECT sum(\"СуммаДокумента\")::BIGINT FROM document_реализациятоваровуслуг "
-     "WHERE \"Date\">='2025-12-01' AND \"Date\"<'2026-01-01'"),
-    ("Какие продажи были на сумму больше 500000 рублей?",
-     "SELECT sum(\"СуммаДокумента\")::BIGINT FROM document_реализациятоваровуслуг "
-     "WHERE \"СуммаДокумента\">500000"),
-    ("Сколько банков в Казани?",
-     "SELECT count(*) FROM catalog_классификаторбанков WHERE upper(\"Город\") LIKE '%КАЗАН%'"),
-    ("Что покупало ООО Ромашка?",
-     "SELECT sum(d.\"СуммаДокумента\")::BIGINT FROM document_реализациятоваровуслуг d "
-     "JOIN catalog_контрагенты k ON k.\"Ref_Key\"=d.\"Контрагент_Key\" "
-     "WHERE k.\"Description\" LIKE '%Ромашка%'"),
-]
+# Приёмочный набор лежит в ФАЙЛЕ ДАННЫХ, а не в коде. Прежде пары «вопрос → эталонный
+# SQL» были записаны здесь же, и вместе с ними в программу попадали имена сущностей,
+# реквизитов и значения конкретной базы («Ромашка», «КАЗАН», `СуммаДокумента`). На чужой
+# конфигурации такой замер не воспроизводится, а править пришлось бы код — то есть это
+# был хардкод, ничем не отличающийся от прочих.
+GOLD_FILE = os.environ.get(
+    "AB_GOLD_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "ab-gold.tsv"))
+
+
+def load_gold(path):
+    """Пары «вопрос → SQL» из файла. Строка: вопрос, табуляция, запрос."""
+    out = []
+    try:
+        fh = open(path, encoding="utf-8")
+    except OSError as e:
+        sys.stderr.write("нет набора вопросов %s: %s\n" % (path, e))
+        sys.exit(1)
+    with fh:
+        for line in fh:
+            line = line.rstrip("\n")
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if "\t" not in line:
+                sys.stderr.write("строка без табуляции пропущена: %s\n" % line[:60])
+                continue
+            q, sql = line.split("\t", 1)
+            out.append((q.strip(), sql.strip()))
+    if not out:
+        sys.stderr.write("набор вопросов пуст: %s\n" % path)
+        sys.exit(1)
+    return out
+
+
+GOLD = load_gold(GOLD_FILE)
 
 
 def truth(sql):

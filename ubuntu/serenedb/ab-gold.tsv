@@ -1,0 +1,12 @@
+# Приёмочный набор: вопрос <TAB> SQL, считающий правду НЕЗАВИСИМО от поиска.
+# Файл ДАННЫХ, а не кода: имена сущностей, реквизитов и значения здесь — от
+# конкретной базы, и на другой конфигурации заменяется он, а не программа.
+# Путь задаётся переменной AB_GOLD_FILE; по умолчанию — этот файл рядом.
+Сколько всего мы продали?	SELECT sum("СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг
+What is the total amount of all sales?	SELECT sum("СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг
+На какую сумму мы продали ООО Северный Ветер?	SELECT sum(d."СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг d JOIN catalog_контрагенты k ON k."Ref_Key"=d."Контрагент_Key" WHERE k."Description" LIKE '%Северный Ветер%'
+Какие поступления были от ООО ТехноСнаб?	SELECT sum(d."СуммаДокумента")::BIGINT FROM document_поступлениетоваровуслуг d JOIN catalog_контрагенты k ON k."Ref_Key"=d."Контрагент_Key" WHERE k."Description" LIKE '%ТехноСнаб%'
+Покажи продажи за декабрь 2025 года	SELECT sum("СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг WHERE "Date">='2025-12-01' AND "Date"<'2026-01-01'
+Какие продажи были на сумму больше 500000 рублей?	SELECT sum("СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг WHERE "СуммаДокумента">500000
+Сколько банков в Казани?	SELECT count(*) FROM catalog_классификаторбанков WHERE upper("Город") LIKE '%КАЗАН%'
+Что покупало ООО Ромашка?	SELECT sum(d."СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг d JOIN catalog_контрагенты k ON k."Ref_Key"=d."Контрагент_Key" WHERE k."Description" LIKE '%Ромашка%'
