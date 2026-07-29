@@ -315,6 +315,25 @@ systemctl start 1c-etl.service                                   # первый 
 Установить бинарём + systemd — `ubuntu/serenedb/README.md` (loopback :7890, под юзером `serened`, enabled).
 
 ### 10.2 Код аналитики + окружение
+
+🔴 **Раскладка кода — `deploy.sh`, а не `cp` руками.** [замер 28.07] забытое копирование
+однажды заставило сборку чужой базы полтакта идти по СТАРЫМ файлам, и выглядело это как
+дефект кода, которого в коде уже не было (`HOW_NOT_TO §3.15`). `deploy.sh` копирует только
+изменившееся, печатает что именно, и подменяет файлы **атомарно** (`mv`, а не запись
+поверх: `bash` дочитывает скрипт по ходу исполнения, и запись в идущий такт порвала бы
+его в произвольном месте).
+
+```bash
+install -d /opt/1c-mcp-reports
+ubuntu/serenedb/deploy.sh /opt/1c-mcp-reports     # вместо cp; идемпотентно
+```
+
+**На стенде разработки** раскладка делается сама, первым шагом каждого такта: в
+`/etc/1c-serene-sync.env` задана `SERENE_SRC_DIR=/srv/1c/ubuntu/serenedb`, и `pipeline.sh`
+зовёт `deploy.sh` перед синком. В продукте переменная не задаётся — установщик кладёт
+файлы один раз, и конвейер не зависит от наличия репозитория.
+
+Раскладка вручную (если `deploy.sh` почему-то недоступен):
 ```bash
 install -d /opt/1c-mcp-reports
 cp ubuntu/serenedb/*.py ubuntu/serenedb/*.sh ubuntu/serenedb/serene-entities.txt /opt/1c-mcp-reports/
