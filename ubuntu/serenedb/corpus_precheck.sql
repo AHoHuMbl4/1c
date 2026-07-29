@@ -18,6 +18,11 @@ UNION ALL   SELECT now(), 'before_src',   count(DISTINCT src_table)           FR
 -- «за такт не убавилось ни одной» срабатывала бы ложно КАЖДЫЙ такт, как только
 -- бизнес-строки досчитаны.
 UNION ALL   SELECT now(), 'before_noemb', count(*) FILTER (WHERE emb IS NULL
+              -- Строки, которым вектор НЕВОЗМОЖЕН (длиннее предела эмбеддера), тоже
+              -- исключаются: они не убудут никогда, и проверка «за такт не убавилось ни
+              -- одной» срабатывала бы ложно каждый такт. Их число видно отдельно —
+              -- `embed_missing.sh` печатает его как «вектор невозможен».
+              AND length(doc) <= 20000
               AND NOT EXISTS (SELECT 1 FROM search_entity_class e
                     WHERE e.src_table = search_corpus.src_table AND e.cls = 'service'))
             FROM search_corpus
