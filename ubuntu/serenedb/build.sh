@@ -102,7 +102,7 @@ rm -f "$SEC"
 # Проверки до такта — после секретов: одна из них дёргает эмбеддер, чтобы убедиться, что
 # он жив, ДО того как слияние обнулит векторы у изменившихся строк.
 psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" -v embed_secret="$SEC_EMB" \
-     -f corpus_precheck.sql || fail "проверки до такта"
+     -v embed_workers="$WORKERS" -f corpus_precheck.sql || fail "проверки до такта"
 
 echo "== 1. корпус: движок читает \$metadata из $GATE и собирает текст"
 psql "$DSN" -q -v gate="$GATE" -f corpus_build.sql || fail "сборка корпуса"
