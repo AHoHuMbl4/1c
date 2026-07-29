@@ -17,9 +17,18 @@
 # с `SIGSEGV` (systemd поднял через 3 с, данные уцелели, но досчёт встал молча).
 # Запись у движка однопоточная; раздельные таблицы конфликта не создают.
 #
+# 🔴 ОЧЕРЁДНОСТЬ, А НЕ ОТБОР. `ROWS_WHERE` сужает ЭТОТ прогон до части строк, чтобы
+# вызывающий мог посчитать сначала то, о чём спрашивают, а потом остальное. Это не фильтр
+# полноты (п. 13): вызывающий обязан завершить проход БЕЗ `ROWS_WHERE`, и тогда вектор
+# получают все. Сужение сделано условием, а НЕ пересортировкой: `chunk` монотонен в
+# физическом порядке ключа, на этом стоят зонные карты и выборка пачки за миллисекунду
+# ([замер] 0,45–1,36 мс на 97 965 строках). Сортировка по приоритету это сломала бы.
+#
 # Использование: embed_missing.sh <таблица> <выражение-источник> [потоков] [ключ,через,запятую]
 set -u
 TBL="$1"; SRC="$2"; N="${3:-8}"; KEY="${4:-}"
+ROWS_WHERE="${ROWS_WHERE:-}"
+[ -n "$ROWS_WHERE" ] && ROWS_WHERE="AND ($ROWS_WHERE)"
 DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 MODEL="${EMBED_MODEL:-text-embedding-v4}"
 DIM="${EMBED_DIM:-1024}"
@@ -59,7 +68,7 @@ else
 fi
 
 psql_q() { psql "$DSN" -q -v ON_ERROR_STOP=1 "$@"; }
-left() { psql "$DSN" -tA -c "SELECT count(*) FROM $TBL WHERE emb IS NULL" 2>/dev/null; }
+left() { psql "$DSN" -tA -c "SELECT count(*) FROM $TBL WHERE emb IS NULL $ROWS_WHERE" 2>/dev/null; }
 
 # Перенос посчитанного из рабочих таблиц в целевую. Вызывается ДО начала работы (докатка
 # прерванного прогона) и после неё. Писатель у движка один, поэтому последовательно.
@@ -96,7 +105,7 @@ drop_parts
 # монотонной в физическом порядке — на ней работают зонные карты, и выборка пачки стоит
 # около миллисекунды вместо полного скана ([замер] 0,45–1,36 мс на 97 965 строках).
 psql_q -c "CREATE OR REPLACE TABLE ${TAG}_todo AS
-  WITH s AS (SELECT $KCOLS, $SRC AS txt FROM $TBL WHERE emb IS NULL),
+  WITH s AS (SELECT $KCOLS, $SRC AS txt FROM $TBL WHERE emb IS NULL $ROWS_WHERE),
        ok AS (SELECT * FROM s WHERE txt IS NOT NULL AND length(txt) BETWEEN 1 AND $MAXLEN),
        w AS (SELECT *, row_number() OVER (ORDER BY $ORD) - 1 AS rn,
                     sum(length(txt)) OVER (ORDER BY $ORD ROWS BETWEEN UNBOUNDED PRECEDING
@@ -111,7 +120,7 @@ psql_q -c "CREATE OR REPLACE TABLE ${TAG}_todo AS
 # работу от работы, которая никогда не сдвинется.
 psql "$DSN" -tA -c "SELECT 'вектор невозможен, длина ' || length($SRC) || ': ' ||
        substr(replace($SRC, chr(10), ' '), 1, 60)
-     FROM $TBL WHERE emb IS NULL AND length($SRC) > $MAXLEN" >&2
+     FROM $TBL WHERE emb IS NULL AND length($SRC) > $MAXLEN $ROWS_WHERE" >&2
 impossible=$(psql "$DSN" -tA -c "SELECT count(*) FROM $TBL
      WHERE emb IS NULL AND (($SRC) IS NULL OR length($SRC) > $MAXLEN OR length($SRC) = 0)")
 impossible=${impossible:-0}

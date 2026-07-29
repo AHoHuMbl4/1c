@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS search_sources (src_table VARCHAR, seen_at TIMESTAMP)
 CREATE TABLE IF NOT EXISTS search_meta (k VARCHAR, v VARCHAR);
 CREATE TABLE IF NOT EXISTS search_quality (k VARCHAR, v BIGINT, note VARCHAR);
 CREATE TABLE IF NOT EXISTS build_state (ts TIMESTAMP, k VARCHAR, v BIGINT);
+-- Разметка «о таком спрашивают / это служебное». Заводится ЗДЕСЬ, а не только в
+-- `classify_entities.py`: сборка ссылается на неё при выборе очерёдности векторизации, и
+-- на первом такте, когда разметчик ещё не отработал (или модель недоступна), таблица
+-- обязана существовать пустой — тогда весь корпус считается одним проходом, как раньше.
+CREATE TABLE IF NOT EXISTS search_entity_class (src_table VARCHAR, cls VARCHAR, seen_at TIMESTAMP);
 
 -- Словарь и индекс. Поля индексируются по отдельности в ОДНОМ индексе — штатный шаблон
 -- движка: `doc` для широкого запроса, `refs` для адресности и веса, `src_table` без
@@ -52,6 +57,7 @@ GRANT SELECT ON search_tables  TO serene_ro;
 -- Свежесть данных (`build_ts`) и полнота (`cov_*`) — сервис ответов читает их, чтобы
 -- показать возраст данных и старение (п. 18), поэтому право нужно читающей роли.
 GRANT SELECT ON search_quality TO serene_ro;
+GRANT SELECT ON search_entity_class TO serene_ro;
 GRANT SELECT ON resolver_index TO serene_resolver;
 REVOKE SELECT ON resolver_index FROM serene_ro;
 
