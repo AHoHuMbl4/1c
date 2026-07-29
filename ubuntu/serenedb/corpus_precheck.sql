@@ -13,7 +13,14 @@ DELETE FROM build_state WHERE k LIKE 'before_%';
 INSERT INTO build_state
             SELECT now(), 'before_rows',  count(*)                            FROM search_corpus
 UNION ALL   SELECT now(), 'before_src',   count(DISTINCT src_table)           FROM search_corpus
-UNION ALL   SELECT now(), 'before_noemb', count(*) FILTER (WHERE emb IS NULL) FROM search_corpus
+-- 🔴 Считаем только те строки, которым вектор ПОЛОЖЕН. Служебным он не считается по
+-- решению владельца, и включать их сюда нельзя: их число не убывает никогда, и проверка
+-- «за такт не убавилось ни одной» срабатывала бы ложно КАЖДЫЙ такт, как только
+-- бизнес-строки досчитаны.
+UNION ALL   SELECT now(), 'before_noemb', count(*) FILTER (WHERE emb IS NULL
+              AND NOT EXISTS (SELECT 1 FROM search_entity_class e
+                    WHERE e.src_table = search_corpus.src_table AND e.cls = 'service'))
+            FROM search_corpus
 UNION ALL   SELECT now(), 'before_res',   count(*)                            FROM resolver_index;
 
 -- 1. Индекс на месте. Без него `VACUUM (REFRESH_INDEX)` упадёт УЖЕ ПОСЛЕ `MERGE`:

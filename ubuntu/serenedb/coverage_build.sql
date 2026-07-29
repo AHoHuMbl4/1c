@@ -105,7 +105,25 @@ UNION ALL   SELECT 'cov_rows_lost',  sum(в_1С - в_корпусе) FILTER (WHE
 UNION ALL   SELECT 'cov_ent_lost',   count(*) FILTER (WHERE в_1С > 0 AND в_корпусе = 0),
                    'сущностей не дошло совсем' FROM search_coverage
 UNION ALL   SELECT 'cov_ent_denied', count(*) FILTER (WHERE в_1С = -1),
-                   'сущностей закрыто правами' FROM search_coverage;
+                   'сущностей закрыто правами' FROM search_coverage
+-- 🔴 БЕЗ ВЕКТОРА — С ПРИЧИНОЙ, А НЕ ПРОСТО ЧИСЛОМ. Решение владельца 29.07: служебным
+-- сущностям вектор не нужен вовсе («да, не нужны они в векторе»). Это осознанное решение,
+-- а не недоделка, и разница обязана быть видна: строка без вектора ПО РЕШЕНИЮ и строка
+-- без вектора ПОТОМУ ЧТО НЕ УСПЕЛИ — разные вещи (п. 13).
+--
+-- Что при этом НЕ теряется: служебные сущности целиком в корпусе и в текстовом индексе,
+-- то есть находятся по словам. Не находятся только «по смыслу» — а по смыслу замеры
+-- времени и объекты «Удалить…» никто и не ищет.
+UNION ALL   SELECT 'cov_noemb_service',
+                   (SELECT count(*) FROM search_corpus c
+                     WHERE c.emb IS NULL AND EXISTS (SELECT 1 FROM search_entity_class e
+                           WHERE e.src_table = c.src_table AND e.cls = 'service')),
+                   'строк без вектора ПО РЕШЕНИЮ: служебные, ищутся словами через индекс'
+UNION ALL   SELECT 'cov_noemb_pending',
+                   (SELECT count(*) FROM search_corpus c
+                     WHERE c.emb IS NULL AND NOT EXISTS (SELECT 1 FROM search_entity_class e
+                           WHERE e.src_table = c.src_table AND e.cls = 'service')),
+                   'строк без вектора В ОЧЕРЕДИ: не служебные, вектор ещё считается';
 
 SELECT k, v, note FROM search_quality WHERE k LIKE 'cov_%' ORDER BY k;
 

@@ -12,7 +12,11 @@ DELETE FROM build_state WHERE k LIKE 'after_%';
 INSERT INTO build_state
             SELECT now(), 'after_rows',  count(*)                            FROM search_corpus
 UNION ALL   SELECT now(), 'after_src',   count(DISTINCT src_table)           FROM search_corpus
-UNION ALL   SELECT now(), 'after_noemb', count(*) FILTER (WHERE emb IS NULL) FROM search_corpus
+-- Как и : только строки, которым вектор положен (см. ).
+UNION ALL   SELECT now(), 'after_noemb', count(*) FILTER (WHERE emb IS NULL
+              AND NOT EXISTS (SELECT 1 FROM search_entity_class e
+                    WHERE e.src_table = search_corpus.src_table AND e.cls = 'service'))
+            FROM search_corpus
 UNION ALL   SELECT now(), 'after_res',   count(*)                            FROM resolver_index;
 
 WITH s AS (SELECT max(v) FILTER (WHERE k = 'before_rows')  AS b_rows,
