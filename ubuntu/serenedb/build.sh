@@ -60,7 +60,16 @@ flock -n 9 || { echo "такт уже идёт — этот запуск про�
 # Уборка при ЛЮБОМ выходе, включая обрыв. Прежде секрет удалялся только на штатном пути,
 # и после падения посреди такта ключ эмбеддера оставался жить в движке до рестарта.
 # `2>/dev/null`, чтобы имя секрета не всплыло в journald в тексте ошибки.
-cleanup() { psql "$DSN" -q -c "DROP SECRET IF EXISTS odg; DROP SECRET IF EXISTS qwen;" >/dev/null 2>&1; }
+# 🔴 ИМЕНА СЕКРЕТОВ — ПО БАЗЕ. Секреты у движка ОБЩИЕ НА ИНСТАНС, а не на базу: имя
+# `qwen` одно на все присоединённые базы. [замер 29.07] сборка второй базы упала, её
+# `cleanup` снёс `odg`/`qwen` — и идущий в ту же секунду такт ПЕРВОЙ базы получил
+# `ai_embed: secret 'qwen' not found` и остался без векторов. Такт первой базы сломала
+# сборка второй, ничего о ней не зная. Та же болезнь, что была с рабочими таблицами
+# (`HOW_NOT_TO §3.16`), и лечится так же — отдельными именами, а не аккуратностью.
+SEC_ODG="odg_${LOCK_TAG}"
+SEC_EMB="qwen_${LOCK_TAG}"
+export EMBED_SECRET="$SEC_EMB"
+cleanup() { psql "$DSN" -q -c "DROP SECRET IF EXISTS $SEC_ODG; DROP SECRET IF EXISTS $SEC_EMB;" >/dev/null 2>&1; }
 trap cleanup EXIT INT TERM HUP
 
 fail() { echo "СБОРКА ПРЕРВАНА: $1" >&2; exit 1; }
@@ -81,9 +90,9 @@ SEC=$(mktemp); trap 'rm -f "$SEC"; cleanup' EXIT INT TERM HUP
   # Проверено обоими способами: при `SCOPE '{}'` — 401, при `SCOPE '$GATE'` — вектор 1024,
   # и `read_text('$GATE/$metadata')` при этом продолжает работать (16 652 877 байт).
   # Без этой строки НИ ОДИН вектор за такт не считался бы, а такт заканчивался успехом.
-  printf "CREATE OR REPLACE TEMPORARY SECRET odg (TYPE http, SCOPE '%s', EXTRA_HTTP_HEADERS MAP{'Authorization': 'Bearer %s'});\n" "$GATE" "$(esc "${ODG_GATEWAY_TOKEN:-}")"
-  printf "CREATE OR REPLACE TEMPORARY SECRET qwen (TYPE openai, api_key '%s', base_url '%s', embeddings_path '%s');\n" \
-         "$(esc "${ALIBABA_API_KEY:-}")" "${EMBED_HOST:-https://dashscope-intl.aliyuncs.com}" \
+  printf "CREATE OR REPLACE TEMPORARY SECRET %s (TYPE http, SCOPE '%s', EXTRA_HTTP_HEADERS MAP{'Authorization': 'Bearer %s'});\n" "$SEC_ODG" "$GATE" "$(esc "${ODG_GATEWAY_TOKEN:-}")"
+  printf "CREATE OR REPLACE TEMPORARY SECRET %s (TYPE openai, api_key '%s', base_url '%s', embeddings_path '%s');\n" \
+         "$SEC_EMB" "$(esc "${ALIBABA_API_KEY:-}")" "${EMBED_HOST:-https://dashscope-intl.aliyuncs.com}" \
          "${EMBED_PATH:-/compatible-mode/v1/embeddings}"
 } > "$SEC"
 # Вывод гасится целиком: при ошибке psql печатает ОПЕРАТОР, а в нём ключ.
@@ -92,7 +101,7 @@ rm -f "$SEC"
 
 # Проверки до такта — после секретов: одна из них дёргает эмбеддер, чтобы убедиться, что
 # он жив, ДО того как слияние обнулит векторы у изменившихся строк.
-psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" \
+psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" -v embed_secret="$SEC_EMB" \
      -f corpus_precheck.sql || fail "проверки до такта"
 
 echo "== 1. корпус: движок читает \$metadata из $GATE и собирает текст"

@@ -53,6 +53,9 @@
 | `classify_entities.py` | разметка сущностей моделью: о чём спрашивают / служебное. Кэш в `search_entity_class`, задаёт **очерёдность** векторизации, ничего не выбрасывает |
 | `deploy.sh` | раскладка кода в рабочий каталог, атомарной подменой. Убирает ручной шаг «скопировать в `/opt`» |
 
+Проверка «не сломали ли первую базу» — [`docs/REGRESSION_BASE1.md`](docs/REGRESSION_BASE1.md):
+там сведено, какой правкой и каким замером это доказано.
+
 Юниты systemd — в `ubuntu/systemd/` (`1c-serene-pipeline.service/.timer`, `1c-serene-index.service`).
 
 ### Ответы — `ubuntu/serenedb/serene_ask.py`

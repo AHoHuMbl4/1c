@@ -48,7 +48,7 @@ WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_tab
 --    исчезают при рестарте; после этого `ai_embed` падает с ошибкой, а досчёт векторов
 --    завершается «успешно», не посчитав ничего.
 SELECT CASE WHEN coalesce(array_length(
-                  ai_embed('проверка связи', :'embed_model', 'qwen')), 0) <> :embed_dim
+                  ai_embed('проверка связи', :'embed_model', :'embed_secret')), 0) <> :embed_dim
        THEN error('эмбеддер не отвечает или отдал не ту размерность — такт остановлен до изменения корпуса') END;
 
 -- 5. Размерность колонки совпадает с тем, подо что считает досчёт. Разойдётся — не
