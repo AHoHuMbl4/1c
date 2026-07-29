@@ -18,7 +18,7 @@ UNION ALL   SELECT now(), 'after_noemb', count(*) FILTER (WHERE emb IS NULL
               -- исключаются: они не убудут никогда, и проверка «за такт не убавилось ни
               -- одной» срабатывала бы ложно каждый такт. Их число видно отдельно —
               -- `embed_missing.sh` печатает его как «вектор невозможен».
-              AND length(doc) <= 20000
+              AND length(doc) <= :embed_maxlen
               AND NOT EXISTS (SELECT 1 FROM search_entity_class e
                     WHERE e.src_table = search_corpus.src_table AND e.cls = 'service'))
             FROM search_corpus

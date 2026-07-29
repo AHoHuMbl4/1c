@@ -34,6 +34,10 @@ WORKERS="${BUILD_EMBED_WORKERS:-8}"
 EMBED_MODEL="${EMBED_MODEL:-text-embedding-v4}"
 EMBED_DIM="${EMBED_DIM:-1024}"
 DICT_LOCALE="${SEARCH_DICT_LOCALE:-ru_RU.utf8}"
+# 🔴 ОДИН ИСТОЧНИК ПРЕДЕЛА ДЛИНЫ. Строки длиннее него вектор получить не могут; на это
+# опираются и досчёт, и проверки до/после такта. Пока число было скопировано в три файла,
+# оно могло разойтись молча — и проверка начала бы ждать того, чего не бывает.
+EMBED_MAXLEN="${EMBED_MAXLEN:-20000}"; export EMBED_MAXLEN
 t0=$(date +%s)
 
 # 🔴 ЗАМОК. Такт идёт минутами, а при первом наполнении — часами; таймер за это время
@@ -131,7 +135,7 @@ rm -f "$SEC"
 # Проверки до такта — после секретов: одна из них дёргает эмбеддер, чтобы убедиться, что
 # он жив, ДО того как слияние обнулит векторы у изменившихся строк.
 psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" -v embed_secret="$SEC_EMB" \
-     -v embed_workers="$WORKERS" -f corpus_precheck.sql || fail "проверки до такта"
+     -v embed_workers="$WORKERS" -v embed_maxlen="$EMBED_MAXLEN" -f corpus_precheck.sql || fail "проверки до такта"
 
 # 🔴 ПРОПУСК ПЕРЕСБОРКИ, КОГДА СОБИРАТЬ НЕЧЕГО. Вопрос владельца 29.07: «а зачем мы
 # постоянно делаем сборку? теряем время». Он прав: за день такт перезапускался четырежды
@@ -199,7 +203,7 @@ psql "$DSN" -q -f resolver_build.sql || fail "сборка резолвера"
 # `WHERE`, и обрезанное значение перестало бы совпадать с данными. [замер] два значения по
 # 560 282 символа отравляли свою пачку целиком — вместе с ними вектор не получали 16
 # нормальных соседей, и так каждый такт.
-./embed_missing.sh resolver_index "substr(value,1,20000)" "$WORKERS" \
+./embed_missing.sh resolver_index "substr(value,1,$EMBED_MAXLEN)" "$WORKERS" \
                    "table_name,column_name,value" || fail "векторы резолвера"
 
 # 🔴 ДВА ПРОХОДА, А НЕ ОТБОР. Сначала вектор получает то, о чём спрашивают, потом всё
@@ -252,6 +256,6 @@ echo "== 7. перепись полноты: сколько данных 1С д�
 psql "$DSN" -q -f coverage_build.sql || fail "перепись полноты"
 
 echo "== 8. проверки после такта"
-psql "$DSN" -tA -F' | ' -v build_sql_hash="$SQL_HASH" -f corpus_postcheck.sql || fail "проверки после такта"
+psql "$DSN" -tA -F' | ' -v build_sql_hash="$SQL_HASH" -v embed_maxlen="$EMBED_MAXLEN" -f corpus_postcheck.sql || fail "проверки после такта"
 
 echo "== такт занял $(( $(date +%s) - t0 )) с"
