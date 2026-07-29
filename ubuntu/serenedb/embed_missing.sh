@@ -70,17 +70,29 @@ fi
 psql_q() { psql "$DSN" -q -v ON_ERROR_STOP=1 "$@"; }
 left() { psql "$DSN" -tA -c "SELECT count(*) FROM $TBL WHERE emb IS NULL $ROWS_WHERE" 2>/dev/null; }
 
+# 🔴 ФИЛЬТР ПО БАЗЕ ОБЯЗАТЕЛЕН. `duckdb_tables()` показывает таблицы ВСЕХ присоединённых
+# баз движка, а не текущей. У клиента баз 1С бывает несколько, и рабочие таблицы досчёта
+# называются одинаково — по имени целевой таблицы. [замер 29.07] из базы `postgres` было
+# видно 5 рабочих таблиц базы `ut_test`. Без фильтра получалось два разных вреда, оба
+# молчаливых:
+#   * `transfer` подставил бы в `UPDATE` таблицу ЧУЖОЙ базы — вектор чужих данных лёг бы
+#     на нашу строку, если бы ключи совпали;
+#   * `drop_parts` снёс бы ЧУЖУЮ посчитанную и оплаченную работу.
+# Имя текущей базы спрашиваем у движка (`current_database()`), а не разбираем из DSN:
+# `dbname=` в строке может быть не указан вовсе (`HOW_NOT_TO §3.14`).
+DBQ="AND database_name = current_database()"
+
 # Перенос посчитанного из рабочих таблиц в целевую. Вызывается ДО начала работы (докатка
 # прерванного прогона) и после неё. Писатель у движка один, поэтому последовательно.
 transfer() {
   psql "$DSN" -tA -c "SELECT 'UPDATE $TBL t SET emb = p.emb FROM ' || table_name ||
          ' p WHERE $ON AND t.emb IS NULL;'
-       FROM duckdb_tables() WHERE table_name LIKE '${TAG}\_part\_%' ESCAPE '\'" \
+       FROM duckdb_tables() WHERE table_name LIKE '${TAG}\_part\_%' ESCAPE '\' $DBQ" \
     | psql "$DSN" -q >/dev/null 2>&1
 }
 drop_parts() {
   psql "$DSN" -tA -c "SELECT 'DROP TABLE IF EXISTS ' || table_name || ';' FROM duckdb_tables()
-       WHERE table_name LIKE '${TAG}\_%' ESCAPE '\'" | psql "$DSN" -q >/dev/null 2>&1
+       WHERE table_name LIKE '${TAG}\_%' ESCAPE '\' $DBQ" | psql "$DSN" -q >/dev/null 2>&1
 }
 
 # Докатка: если прошлый прогон оборвался, его векторы уже посчитаны и оплачены.
@@ -125,9 +137,16 @@ impossible=$(psql "$DSN" -tA -c "SELECT count(*) FROM $TBL
      WHERE emb IS NULL AND (($SRC) IS NULL OR length($SRC) > $MAXLEN OR length($SRC) = 0)")
 impossible=${impossible:-0}
 
+# Журнал ошибок потоков. Прежде stderr гасился целиком, и «досчёт не сдвинулся» не
+# говорило ПОЧЕМУ: [замер 29.07] на разбор «вектор не считается» ушло несколько заходов, а
+# в stderr лежало готовое «OpenAI embeddings API returned HTTP 404». Ключа в этих
+# операторах нет — он живёт в секрете движка, а не в тексте запроса, поэтому показывать
+# первую строку ошибки безопасно (сам оператор `CREATE SECRET` создаётся в `build.sh`).
+ERRDIR=$(mktemp -d); trap 'rm -rf "$ERRDIR"' EXIT
+
 pids=()
 for w in $(seq 0 $((N - 1))); do
-  psql "$DSN" -q -v ON_ERROR_STOP=0 <<SQL >/dev/null 2>&1 &
+  psql "$DSN" -q -v ON_ERROR_STOP=0 <<SQL >/dev/null 2>"$ERRDIR/$w" &
 CREATE OR REPLACE TABLE ${TAG}_part_$w AS SELECT * FROM ${TAG}_todo WHERE false;
 ALTER TABLE ${TAG}_part_$w DROP COLUMN txt;
 ALTER TABLE ${TAG}_part_$w DROP COLUMN chunk;
@@ -144,6 +163,11 @@ done
 # умерший поток был неотличим от отработавшего.
 bad=0
 for p in "${pids[@]}"; do wait "$p" || bad=$((bad + 1)); done
+
+# `ON_ERROR_STOP=0` не даёт потоку ненулевой код: он доводит остальные операторы до конца.
+# Поэтому «поток отработал» и «поток посчитал» — разные вещи, и судить надо по stderr.
+first_err=$(cat "$ERRDIR"/* 2>/dev/null | grep -m1 -E '^(ERROR|FATAL|ОШИБКА)' || true)
+[ -n "$first_err" ] && echo "досчёт: первая ошибка потока: ${first_err:0:200}" >&2
 
 transfer
 after=$(left)
