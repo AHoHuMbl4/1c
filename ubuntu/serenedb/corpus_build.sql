@@ -244,7 +244,15 @@ WITH src AS (SELECT row_number() OVER () AS rid, COLUMNS(*)::VARCHAR FROM query_
      cells AS (SELECT * FROM src UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (rid))))),
      rows AS (SELECT u.rid,
                      max(u.val) FILTER (WHERE u.col='Ref_Key') AS guid,
-                     list(u.val ORDER BY nc.std, nc.score DESC)
+                     -- 🔴 `nc.col` В КОНЦЕ СОРТИРОВКИ ОБЯЗАТЕЛЕН. Без него у колонок с
+                     -- РАВНЫМИ (std, score) порядок произволен, склеенное имя выходит
+                     -- разным от сборки к сборке — а вместе с ним и `row_key` строк
+                     -- регистров (`sha1(doc)`). [замер 29.07] равных групп 30, имён из
+                     -- нескольких колонок 27 177 из 42 107; после починки карты
+                     -- расхождение ключей упало с 64 107 до 1 299, и остаток был именно
+                     -- здесь. Имя колонки устойчиво, поэтому порядок становится одним и
+                     -- тем же при любом порядке чтения.
+                     list(u.val ORDER BY nc.std, nc.score DESC, nc.col)
                        FILTER (WHERE nc.col IS NOT NULL AND u.val<>'') AS names
               FROM cells u LEFT JOIN tmp3_namecol nc ON nc.tbl=$1 AND nc.col=u.col
               GROUP BY u.rid)
