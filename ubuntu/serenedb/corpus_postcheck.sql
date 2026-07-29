@@ -20,6 +20,8 @@ WITH s AS (SELECT max(v) FILTER (WHERE k = 'before_rows')  AS b_rows,
                   max(v) FILTER (WHERE k = 'before_src')   AS b_src,
                   max(v) FILTER (WHERE k = 'after_src')    AS a_src,
                   max(v) FILTER (WHERE k = 'after_noemb')  AS a_noemb,
+                  -- «Было без вектора» — чтобы судить по СДВИГУ, а не по остатку.
+                  max(v) FILTER (WHERE k = 'before_noemb') AS b_noemb,
                   max(v) FILTER (WHERE k = 'before_res')   AS b_res,
                   max(v) FILTER (WHERE k = 'after_res')    AS a_res
            FROM build_state)
@@ -37,10 +39,24 @@ SELECT CASE
                    WHERE NOT EXISTS (SELECT 1 FROM search_corpus c WHERE c.src_table = s.src_table)))
   WHEN a_rows * 10 < b_rows * 9
        THEN error(printf('корпус усох больше чем на десятую: было %d, стало %d', b_rows, a_rows))
-  -- Векторов не хватает больше чем у двадцатой части строк — значит эмбеддер молчал
-  -- (например, секрет умер при рестарте движка), а не «часть не успела».
-  WHEN a_noemb * 20 > a_rows
-       THEN error(printf('без вектора %d строк из %d — эмбеддер не отработал', a_noemb, a_rows))
+  -- 🔴 СУДИМ ПО СДВИГУ, А НЕ ПО ОСТАТКУ. Прежнее условие («без вектора больше двадцатой
+  -- части — эмбеддер молчал») исходило из того, что за один такт векторизуется ВСЁ. Это
+  -- верно на маленькой базе и неверно на большой: [замер 29.07, УТ] первая загрузка —
+  -- 632 683 строки, за такт считается около 87 000, то есть нужно несколько тактов. Такт
+  -- падал с «эмбеддер не отработал», хотя эмбеддер отработал и посчитал 86 896 строк.
+  --
+  -- Для автономности это дефект, а не мелочь: на любой крупной базе клиента первый такт
+  -- всегда падал бы, а если его перезапускает таймер — падал бы бесконечно, при том что
+  -- работа идёт. И настоящий отказ эмбеддера утонул бы в этом шуме.
+  --
+  -- Правильный признак молчания: остаток НЕ УМЕНЬШИЛСЯ. Строки, которым вектор невозможен
+  -- (слишком длинные), из ожидания вычитаются — они не уменьшатся никогда.
+  WHEN a_noemb > coalesce(b_noemb, 0) AND a_noemb > 0
+       THEN error(printf('без вектора стало БОЛЬШЕ: было %d, стало %d — эмбеддер не отработал',
+                         coalesce(b_noemb, 0), a_noemb))
+  WHEN a_noemb > 0 AND a_noemb = coalesce(b_noemb, -1)
+       THEN error(printf('без вектора %d строк, и за такт не убавилось ни одной — эмбеддер молчал',
+                         a_noemb))
   WHEN b_res > 0 AND a_res * 10 < b_res * 9
        THEN error(printf('резолвер усох: было %d, стало %d', b_res, a_res))
   END
