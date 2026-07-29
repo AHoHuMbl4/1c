@@ -67,9 +67,33 @@ flock -n 9 || { echo "такт уже идёт — этот запуск про�
 # сборка второй, ничего о ней не зная. Та же болезнь, что была с рабочими таблицами
 # (`HOW_NOT_TO §3.16`), и лечится так же — отдельными именами, а не аккуратностью.
 SEC_ODG="odg_${LOCK_TAG}"
-SEC_EMB="qwen_${LOCK_TAG}"
-export EMBED_SECRET="$SEC_EMB"
-cleanup() { psql "$DSN" -q -c "DROP SECRET IF EXISTS $SEC_ODG; DROP SECRET IF EXISTS $SEC_EMB;" >/dev/null 2>&1; }
+
+# 🔴 КЛЮЧЕЙ ЭМБЕДДЕРА МОЖЕТ БЫТЬ НЕСКОЛЬКО. [замер 29.07] после того как пул исполнителей
+# движка подняли (5-6 → 55 одновременных запросов), скорость выросла лишь вдвое — 9,2 →
+# 18,3 строки/с — при НУЛЕ отказов `429`. Значит провайдер не отвергает запросы, а ставит
+# их в очередь: отдаёт около двух запросов в секунду на аккаунт, сколько бы мы ни слали.
+# Это его потолок, и обойти его можно только вторым аккаунтом.
+#
+# `ALIBABA_API_KEYS` — ключи через запятую; если не задана, берётся одиночный
+# `ALIBABA_API_KEY`, и поведение ровно прежнее. Каждому ключу — свой именованный секрет,
+# потоки досчёта раскладываются по ним по кругу (`embed_missing.sh`).
+IFS=',' read -r -a _KEYS <<< "${ALIBABA_API_KEYS:-${ALIBABA_API_KEY:-}}"
+SEC_EMB_LIST=""
+for _i in "${!_KEYS[@]}"; do
+  _k="$(printf '%s' "${_KEYS[$_i]}" | tr -d ' ')"
+  [ -z "$_k" ] && continue
+  SEC_EMB_LIST="$SEC_EMB_LIST qwen_${LOCK_TAG}_${_i}"
+done
+SEC_EMB_LIST="${SEC_EMB_LIST# }"
+[ -n "$SEC_EMB_LIST" ] || { echo "СБОРКА ПРЕРВАНА: не задан ни один ключ эмбеддера" >&2; exit 1; }
+# Первый секрет — для проверок до такта: она дёргает эмбеддер одним запросом.
+SEC_EMB="${SEC_EMB_LIST%% *}"
+export EMBED_SECRETS="$SEC_EMB_LIST"
+cleanup() {
+  local _drops="DROP SECRET IF EXISTS $SEC_ODG;"
+  for _s in $SEC_EMB_LIST; do _drops="$_drops DROP SECRET IF EXISTS $_s;"; done
+  psql "$DSN" -q -c "$_drops" >/dev/null 2>&1
+}
 trap cleanup EXIT INT TERM HUP
 
 fail() { echo "СБОРКА ПРЕРВАНА: $1" >&2; exit 1; }
@@ -91,9 +115,14 @@ SEC=$(mktemp); trap 'rm -f "$SEC"; cleanup' EXIT INT TERM HUP
   # и `read_text('$GATE/$metadata')` при этом продолжает работать (16 652 877 байт).
   # Без этой строки НИ ОДИН вектор за такт не считался бы, а такт заканчивался успехом.
   printf "CREATE OR REPLACE TEMPORARY SECRET %s (TYPE http, SCOPE '%s', EXTRA_HTTP_HEADERS MAP{'Authorization': 'Bearer %s'});\n" "$SEC_ODG" "$GATE" "$(esc "${ODG_GATEWAY_TOKEN:-}")"
-  printf "CREATE OR REPLACE TEMPORARY SECRET %s (TYPE openai, api_key '%s', base_url '%s', embeddings_path '%s');\n" \
-         "$SEC_EMB" "$(esc "${ALIBABA_API_KEY:-}")" "${EMBED_HOST:-https://dashscope-intl.aliyuncs.com}" \
-         "${EMBED_PATH:-/compatible-mode/v1/embeddings}"
+  _n=0
+  for _s in $SEC_EMB_LIST; do
+    printf "CREATE OR REPLACE TEMPORARY SECRET %s (TYPE openai, api_key '%s', base_url '%s', embeddings_path '%s');\n" \
+           "$_s" "$(esc "$(printf '%s' "${_KEYS[$_n]}" | tr -d ' ')")" \
+           "${EMBED_HOST:-https://dashscope-intl.aliyuncs.com}" \
+           "${EMBED_PATH:-/compatible-mode/v1/embeddings}"
+    _n=$((_n + 1))
+  done
 } > "$SEC"
 # Вывод гасится целиком: при ошибке psql печатает ОПЕРАТОР, а в нём ключ.
 psql "$DSN" -q -f "$SEC" >/dev/null 2>&1 || fail "секреты не созданы"

@@ -31,10 +31,16 @@ ROWS_WHERE="${ROWS_WHERE:-}"
 [ -n "$ROWS_WHERE" ] && ROWS_WHERE="AND ($ROWS_WHERE)"
 DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 MODEL="${EMBED_MODEL:-text-embedding-v4}"
-# Имя секрета эмбеддера приходит от вызывающего: секреты у движка ОБЩИЕ НА ИНСТАНС, и
-# одно имя `qwen` на все базы означало, что уборка одной сборки гасит эмбеддер другой
-# ([замер 29.07] `ai_embed: secret 'qwen' not found` посреди чужого такта).
-SECRET="${EMBED_SECRET:-qwen}"
+# Имена секретов эмбеддера приходят от вызывающего. Их МОЖЕТ БЫТЬ НЕСКОЛЬКО — по одному
+# на ключ провайдера: [замер 29.07] потолок у него на аккаунт (около двух запросов в
+# секунду), и после снятия НАШЕГО ограничения скорость упёрлась в него при нуле отказов
+# `429`. Потоки раскладываются по ключам по кругу, поэтому нагрузка делится поровну.
+#
+# Имя несёт базу, потому что секреты у движка ОБЩИЕ НА ИНСТАНС: одно имя `qwen` на все
+# базы означало, что уборка одной сборки гасит эмбеддер другой ([замер 29.07]
+# `ai_embed: secret 'qwen' not found` посреди чужого такта).
+read -r -a SECRETS <<< "${EMBED_SECRETS:-${EMBED_SECRET:-qwen}}"
+NSEC=${#SECRETS[@]}
 DIM="${EMBED_DIM:-1024}"
 
 # 🔴 МЕТКА ПОСТОЯННАЯ, ПО ИМЕНИ ТАБЛИЦЫ, а не `emb_$$`. С меткой по номеру процесса
@@ -178,7 +184,7 @@ CREATE OR REPLACE TABLE ${TAG}_part_$w AS SELECT * FROM ${TAG}_todo WHERE false;
 ALTER TABLE ${TAG}_part_$w DROP COLUMN txt;
 ALTER TABLE ${TAG}_part_$w DROP COLUMN chunk;
 ALTER TABLE ${TAG}_part_$w ADD COLUMN emb FLOAT[$DIM];
-SELECT 'INSERT INTO ${TAG}_part_$w SELECT * EXCLUDE (txt, chunk), ai_embed(txt, ''$MODEL'', ''$SECRET'')::FLOAT[$DIM]
+SELECT 'INSERT INTO ${TAG}_part_$w SELECT * EXCLUDE (txt, chunk), ai_embed(txt, ''$MODEL'', ''${SECRETS[$((w % NSEC))]}'')::FLOAT[$DIM]
         FROM ${TAG}_todo WHERE chunk = ' || chunk || ';'
 FROM (SELECT DISTINCT chunk FROM ${TAG}_todo WHERE chunk % $N = $w ORDER BY 1)
 \gexec
