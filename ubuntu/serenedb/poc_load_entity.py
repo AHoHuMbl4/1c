@@ -46,21 +46,121 @@ HTTP_TIMEOUT = int(os.environ.get("ETL_HTTP_TIMEOUT", "600"))
 
 
 _KEYS_CACHE = {}
+# Поля сущности и их типы — оттуда же, из `$metadata`. Нужны, чтобы не просить у 1С то,
+# что она физически не может отдать (см. `_select_of`).
+_PROPS_CACHE = {}
+
+# 🔴 ТИПЫ, КОТОРЫЕ ШТАТНЫЙ OData 1С НЕ ОТДАЁТ В JSON. Это не наша догадка и не список
+# имён полей: тип объявлен в `$metadata` самой платформой.
+# [замер 29.07, УТ 11.4.9] `InformationRegister_ИсточникиДанныхВариантовАнализаЦелевых-
+# Показателей` отвечал `HTTP 500` при ЛЮБОМ размере страницы, вплоть до `$top=1`, при
+# этом `$count` честно говорил 37. Причина — поля `ИсточникДанных` (`Edm.Stream`) и
+# `ИсточникДанных_Base64Data` (`Edm.Binary`): хранилище значения. Стоило перечислить в
+# `$select` остальные поля — те же 37 строк пришли с кодом 200.
+# 🔴 МАСШТАБ: таких типов в этой конфигурации **470 из 2 795** — присоединённые файлы,
+# подписи, сертификаты. В демо-базе они почти пусты, и упала ровно одна сущность; на
+# базе клиента с приложенными файлами так молча отвалились бы сотни.
+UNSERVABLE_TYPES = ("Edm.Stream", "Edm.Binary")
+_SELECT_WARNED = set()
+
+
+def _load_metadata():
+    """Один разбор `$metadata` на процесс: ключи и типы полей."""
+    if _KEYS_CACHE or _PROPS_CACHE:
+        return
+    try:
+        xml = urllib.request.urlopen(
+            _odata_auth(ODATA + "/$metadata"), timeout=HTTP_TIMEOUT).read().decode("utf-8", "replace")
+    except Exception:                           # noqa: BLE001
+        return
+    for m in re.finditer(r'<EntityType\s+Name="([^"]+)"(.*?)</EntityType>', xml, re.S):
+        km = re.search(r"<Key>(.*?)</Key>", m.group(2), re.S)
+        _KEYS_CACHE[m.group(1)] = (
+            re.findall(r'<PropertyRef\s+Name="([^"]+)"', km.group(1)) if km else [])
+        _PROPS_CACHE[m.group(1)] = re.findall(
+            r'<Property\s+Name="([^"]+)"\s+Type="([^"]+)"', m.group(2))
 
 
 def declared_key(entity_set):
     """Объявленный ключ сущности из `$metadata` — источник правды, в т.ч. составной."""
-    if not _KEYS_CACHE:
-        try:
-            xml = urllib.request.urlopen(
-                _odata_auth(ODATA + "/$metadata"), timeout=HTTP_TIMEOUT).read().decode("utf-8", "replace")
-        except Exception:                       # noqa: BLE001
-            return []
-        for m in re.finditer(r'<EntityType\s+Name="([^"]+)"(.*?)</EntityType>', xml, re.S):
-            km = re.search(r"<Key>(.*?)</Key>", m.group(2), re.S)
-            _KEYS_CACHE[m.group(1)] = (
-                re.findall(r'<PropertyRef\s+Name="([^"]+)"', km.group(1)) if km else [])
+    _load_metadata()
     return _KEYS_CACHE.get(entity_set, [])
+
+
+def _select_of(entity_set):
+    """`$select` из полей, которые 1С способна отдать. Пусто — значит нечего сужать.
+
+    🔴 ЭТО ЗАПАСНОЙ ВАРИАНТ, А НЕ ОСНОВНОЙ. Применяется только после того, как обычный
+    запрос дважды ответил ошибкой (`_get_json`). Причина: [замер 29.07] наличие
+    двоичного поля само по себе выдачу НЕ ломает — `Catalog_ШаблоныПоясненийДляФНС`
+    имеет те же `Edm.Stream`/`Edm.Binary`, 35 строк, и отдаётся с кодом 200. Ломает,
+    судя по всему, непустое хранилище. Таких типов на первой базе 961 из 4 585, и
+    сужать их все означало бы выбросить колонки там, где сейчас всё работает, — то есть
+    сменить схему таблиц витрины и переписать ключи строк корпуса (`ловушка 22`).
+    Поэтому: обычный запрос → повтор → и только потом сужение.
+
+    Табличные части при этом не теряются: в 1С они **отдельные наборы**
+    (`Document_X_Товары`), и грузятся своими запросами, а не внутри этого.
+    """
+    _load_metadata()
+    props = _PROPS_CACHE.get(entity_set) or []
+    bad = [n for n, t in props if t in UNSERVABLE_TYPES]
+    if not bad:
+        return ""
+    keep = [n for n, t in props if t not in UNSERVABLE_TYPES]
+    if not keep:                                # сущность вся из двоичных полей
+        return ""
+    # 🔴 Потеря НАЗВАНА, а не проглочена (п. 13). Двоичному содержимому в текстовом
+    # корпусе делать нечего, но человек должен видеть, что именно не взято и почему.
+    # Один раз на сущность: иначе в дельте это печаталось бы на каждую изменённую запись.
+    if entity_set not in _SELECT_WARNED:
+        _SELECT_WARNED.add(entity_set)
+        print("    %s: пропущены поля, которые OData 1С не отдаёт (%s): %s"
+              % (entity_set, "/".join(UNSERVABLE_TYPES), ", ".join(bad)), flush=True)
+    return ",".join(keep)
+
+
+def _get_json(entity_set, params, timeout=None, key=None):
+    """Запрос к OData с ПЕРЕБОРОМ ВАРИАНТОВ вместо падения.
+
+    Указание владельца 29.07: «ошибку надо попробовать закрыть — ещё раз сделать запрос
+    на неё, например, или по-другому. иначе это будут не все данные». Порядок:
+
+      1. как обычно — так работает подавляющее большинство сущностей;
+      2. **повтор** — часть отказов 1С разовые (нагрузка, фоновое задание);
+      3. **без неотдаваемых полей** (`$select` по `$metadata`) — [замер 29.07]
+         `InformationRegister_ИсточникиДанныхВариантовАнализаЦелевыхПоказателей` отвечал
+         `HTTP 500` при любом размере страницы, вплоть до `$top=1`, тогда как `$count`
+         честно говорил 37. Стоило исключить `Edm.Stream`/`Edm.Binary` — пришли все 37
+         строк с кодом 200.
+
+    Порядок именно такой, потому что вариант 3 меняет СОСТАВ КОЛОНОК, а значит и схему
+    таблицы витрины. Применять его к тем, кто и так отвечает, — самому себе устроить
+    массовую смену ключей строк (`techContext` ловушка 22). Запасной вариант должен
+    включаться после отказа, а не вместо основного пути.
+
+    Если не помог ни один — исключение уходит наверх, и сущность честно считается
+    незагруженной: перепись полноты покажет её числом, а не умолчит (п. 13).
+    """
+    t = timeout or HTTP_TIMEOUT
+    seg = urllib.parse.quote(entity_set) + ("(guid'%s')" % key if key else "")
+    url = "%s/%s?%s" % (ODATA, seg, urllib.parse.urlencode(params))
+    try:
+        return json.load(urllib.request.urlopen(_odata_auth(url), timeout=t))
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            raise
+        first = e
+    try:                                        # 2. просто ещё раз
+        return json.load(urllib.request.urlopen(_odata_auth(url), timeout=t))
+    except urllib.error.HTTPError:
+        pass
+    sel = _select_of(entity_set)                # 3. по-другому: без неотдаваемых полей
+    if not sel:
+        raise first
+    p2 = dict(params, **{"$select": sel})
+    url2 = "%s/%s?%s" % (ODATA, seg, urllib.parse.urlencode(p2))
+    return json.load(urllib.request.urlopen(_odata_auth(url2), timeout=t))
 
 
 def _order_by(entity_set):
@@ -152,8 +252,7 @@ def fetch_all(entity_set):
         params = {"$format": "json", "$top": str(PAGE), "$skip": str(skip)}
         if order:
             params["$orderby"] = order  # стабильный порядок → страницы не перекрываются
-        url = f"{ODATA}/{urllib.parse.quote(entity_set)}?" + urllib.parse.urlencode(params)
-        v = json.load(urllib.request.urlopen(_odata_auth(url), timeout=HTTP_TIMEOUT)).get("value", [])
+        v = _get_json(entity_set, params).get("value", [])
         if not v:
             break
         rows.extend(v)
@@ -347,10 +446,8 @@ def load_entity_delta(es, ro_role="serene_ro"):
     # По запросу на ключ, но каждый крошечный (одна запись) и только для изменившихся.
     new_rows = []
     for k in changed:
-        url = "%s/%s(guid'%s')?%s" % (ODATA, urllib.parse.quote(es), k,
-                                      urllib.parse.urlencode({"$format": "json"}))
         try:
-            obj = json.load(urllib.request.urlopen(_odata_auth(url), timeout=HTTP_TIMEOUT))
+            obj = _get_json(es, {"$format": "json"}, key=k)
         except urllib.error.HTTPError as e:
             if e.code == 404:                  # запись успели удалить между пробой и тягой
                 gone.append(k)
