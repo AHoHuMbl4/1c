@@ -133,11 +133,42 @@ rm -f "$SEC"
 psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" -v embed_secret="$SEC_EMB" \
      -v embed_workers="$WORKERS" -f corpus_precheck.sql || fail "проверки до такта"
 
-echo "== 1. корпус: движок читает \$metadata из $GATE и собирает текст"
-psql "$DSN" -q -v gate="$GATE" -f corpus_build.sql || fail "сборка корпуса"
+# 🔴 ПРОПУСК ПЕРЕСБОРКИ, КОГДА СОБИРАТЬ НЕЧЕГО. Вопрос владельца 29.07: «а зачем мы
+# постоянно делаем сборку? теряем время». Он прав: за день такт перезапускался четырежды
+# ради настроек эмбеддинга, и каждый раз корпус собирался заново — [замер] по 8-18 минут
+# холостой работы, больше часа за день.
+#
+# Пересборка не нужна, если ОДНОВРЕМЕННО:
+#   * корпус не пуст;
+#   * витрина не менялась с прошлого такта (`max(seen_at)` источников старше `build_ts`);
+#   * не менялся сам `corpus_build.sql` — иначе прежний корпус собран другим кодом.
+# Третье условие обязательно: без него правка сборки молча не применялась бы.
+#
+# Для цели «поставил и работает» это важнее экономии: первый такт на чужой базе идёт
+# часами, и без пропуска ЛЮБАЯ остановка — своя или аварийная — отбрасывает в начало.
+SQL_HASH=$(md5sum corpus_build.sql 2>/dev/null | cut -d' ' -f1)
+SKIP_BUILD=$(psql "$DSN" -tA -c "SELECT CASE WHEN
+      (SELECT count(*) FROM search_corpus) > 0
+  AND coalesce((SELECT v FROM search_quality WHERE k='build_ts'), 0)
+      > coalesce((SELECT epoch(max(seen_at))::BIGINT FROM search_sources), 0)
+  AND coalesce((SELECT note FROM search_quality WHERE k='build_sql_hash'), '') = '$SQL_HASH'
+  -- Временные таблицы сборки нужны ПОСЛЕДУЮЩИМ шагам: резолверу (tmp3_cls, tmp3_ent,
+  -- tmp3_src), переписи полноты (tmp3_ent) и разметке сущностей (tmp3_cls). Пропускать
+  -- сборку можно, только если они на месте, иначе пропуск уронит следующий шаг.
+  AND (SELECT count(*) FROM duckdb_tables()
+       WHERE database_name = current_database()
+         AND table_name IN ('tmp3_cls','tmp3_ent','tmp3_src','tmp3_corpus')) = 4
+  THEN 1 ELSE 0 END" 2>/dev/null)
 
-echo "== 2. слияние в боевой корпус и публикация индекса"
-psql "$DSN" -q -f corpus_merge.sql || fail "слияние корпуса"
+if [ "${FORCE_REBUILD:-0}" != "1" ] && [ "$SKIP_BUILD" = "1" ]; then
+  echo "== 1-2. корпус НЕ пересобирается: данные и код сборки не менялись с прошлого такта"
+else
+  echo "== 1. корпус: движок читает \$metadata из $GATE и собирает текст"
+  psql "$DSN" -q -v gate="$GATE" -f corpus_build.sql || fail "сборка корпуса"
+
+  echo "== 2. слияние в боевой корпус и публикация индекса"
+  psql "$DSN" -q -f corpus_merge.sql || fail "слияние корпуса"
+fi
 
 # 🔴 `fail`, а не «предупреждение». Прежде недосчитанные векторы печатались в журнал и
 # такт заканчивался успехом — это ровно тот тихий отказ, из-за которого 20 значений не
@@ -205,6 +236,6 @@ echo "== 7. перепись полноты: сколько данных 1С д�
 psql "$DSN" -q -f coverage_build.sql || fail "перепись полноты"
 
 echo "== 8. проверки после такта"
-psql "$DSN" -tA -F' | ' -f corpus_postcheck.sql || fail "проверки после такта"
+psql "$DSN" -tA -F' | ' -v build_sql_hash="$SQL_HASH" -f corpus_postcheck.sql || fail "проверки после такта"
 
 echo "== такт занял $(( $(date +%s) - t0 )) с"

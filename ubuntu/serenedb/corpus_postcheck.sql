@@ -53,7 +53,11 @@ INSERT INTO search_quality
             SELECT 'build_ts',    epoch(now())::BIGINT,                          'время конца такта'
 UNION ALL   SELECT 'build_rows',  count(*),                                      'строк корпуса' FROM search_corpus
 UNION ALL   SELECT 'build_noemb', count(*) FILTER (WHERE emb IS NULL),           'строк без вектора' FROM search_corpus
-UNION ALL   SELECT 'build_res',   (SELECT count(*) FROM resolver_index),         'значений резолвера';
+UNION ALL   SELECT 'build_res',   (SELECT count(*) FROM resolver_index),         'значений резолвера'
+-- 🔴 ОТПЕЧАТОК КОДА СБОРКИ. По нему следующий такт понимает, можно ли пропустить
+-- пересборку корпуса: если ни данные не менялись, ни сам `corpus_build.sql`, собирать
+-- заново нечего. Хранится в `note`, потому что это строка, а не число.
+UNION ALL   SELECT 'build_sql_hash', 0, :'build_sql_hash';
 
 -- Итог — ДЕЛЬТОЙ, а не абсолютом.
 SELECT printf('корпус %d -> %d (%+d), сущностей %d -> %d, без вектора %d; резолвер %d -> %d',

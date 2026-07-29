@@ -93,6 +93,7 @@ else
   KCOLS="rowid AS rid"; ON="t.rowid = p.rid"; ORD="rid"
 fi
 
+T0=$(date +%s)
 psql_q() { psql "$DSN" -q -v ON_ERROR_STOP=1 "$@"; }
 left() { psql "$DSN" -tA -c "SELECT count(*) FROM $TBL WHERE emb IS NULL $ROWS_WHERE" 2>/dev/null; }
 
@@ -201,6 +202,22 @@ for p in "${pids[@]}"; do wait "$p" || bad=$((bad + 1)); done
 # Поэтому «поток отработал» и «поток посчитал» — разные вещи, и судить надо по stderr.
 first_err=$(cat "$ERRDIR"/* 2>/dev/null | grep -m1 -E '^(ERROR|FATAL|ОШИБКА)' || true)
 [ -n "$first_err" ] && echo "досчёт: первая ошибка потока: ${first_err:0:200}" >&2
+
+# 🔴 СКОЛЬКО ДАЛ КАЖДЫЙ КЛЮЧ. Считается ДО переноса и уборки, пока рабочие таблицы живы.
+# Нужно, чтобы решение «добавить ещё ключей» принималось по числу, а не по ощущению:
+# ключи одного аккаунта делят общую квоту и прироста не дадут, ключи разных — дадут.
+# Поток `w` работает ключом `w % NSEC`, поэтому раскладка по ключам однозначна.
+if [ "$NSEC" -gt 1 ]; then
+  psql "$DSN" -tA -F'|' -c "SELECT 'SELECT ''' || table_name || ''', count(*) FROM ' || table_name || ';'
+       FROM duckdb_tables() WHERE table_name LIKE '${TAG}\_part\_%' ESCAPE '\' $DBQ" 2>/dev/null \
+    | psql "$DSN" -tA -F'|' 2>/dev/null \
+    | awk -F'|' -v n="$NSEC" -v secs="$(( $(date +%s) - T0 ))" '
+        { w = $1; sub(/^.*_part_/, "", w); cnt[w % n] += $2; tot += $2 }
+        END { for (k = 0; k < n; k++)
+                printf "  ключ %d: %d строк%s\n", k, cnt[k],
+                       (secs > 0 ? sprintf(", %.1f строк/с", cnt[k] / secs) : "")
+              printf "  всего: %d строк за %d с\n", tot, secs }' >&2
+fi
 
 transfer
 after=$(left)
