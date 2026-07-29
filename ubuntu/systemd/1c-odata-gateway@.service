@@ -1,0 +1,25 @@
+[Unit]
+# OData read-only шлюз для ИМЕНОВАННОЙ базы 1С. Шаблон: `1c-odata-gateway@ut` читает
+# `/etc/1c-odata-gateway-ut.env` и слушает порт, заданный там же.
+#
+# 🔴 ЗАЧЕМ ШАБЛОН. Баз 1С у клиента бывает несколько, и у каждой свой шлюз. [замер 29.07]
+# шлюз второй базы был поднят разово, руками, вне systemd — и не пережил перезапуск.
+# Сборка второй базы упала «на ровном месте», а её падение снесло секреты движка и
+# оставило без векторов такт ПЕРВОЙ базы. Один ручной шаг обошёлся в два дефекта.
+#
+# Пропускает только GET; на запись отвечает 405. Креды 1С (пользователь без прав записи)
+# — в EnvironmentFile с правами 600, никогда в командной строке и никогда в git.
+Description=1C OData read-only gateway (GET-only) для базы %i
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# ODG_USER, ODG_PASS — читатель 1С; ODG_UPSTREAM — публикация OData;
+# ODG_LISTEN_PORT — порт этого экземпляра; ODG_GATEWAY_TOKEN — токен для наших сервисов.
+EnvironmentFile=/etc/1c-odata-gateway-%i.env
+ExecStart=/usr/bin/python3 /opt/1c-odata-gateway/odata_gateway.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
