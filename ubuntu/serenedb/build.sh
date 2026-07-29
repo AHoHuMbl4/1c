@@ -151,10 +151,21 @@ psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" -v embed_
 # Для цели «поставил и работает» это важнее экономии: первый такт на чужой базе идёт
 # часами, и без пропуска ЛЮБАЯ остановка — своя или аварийная — отбрасывает в начало.
 SQL_HASH=$(md5sum corpus_build.sql 2>/dev/null | cut -d' ' -f1)
+# 🔴 ПРИЗНАК «ВИТРИНА НЕ МЕНЯЛАСЬ» ДАЁТ СИНК, А НЕ `seen_at`.
+# [замер 29.07] `search_sources.seen_at` пишется ТОЛЬКО при первом появлении источника
+# (`INSERT … WHERE NOT EXISTS`, `UPDATE` нет ни в одном файле). Это отметка «когда источник
+# впервые увидели», а не «когда его данные менялись». Сравнение `build_ts > max(seen_at)`
+# после первого же успешного такта давало «пропустить» НАВСЕГДА: новые данные из 1С
+# попадали в витрину и никогда не доходили до поиска — молчаливая потеря свежести (п. 17).
+#
+# Правильный источник — тот, кто знает: синк пишет `mart_changed_ts`, когда что-то залил.
+# 🔴 ОТСУТСТВИЕ ОТМЕТКИ = СОБИРАТЬ. Признак недостоверен ⇒ работаем. Иначе забытая отметка
+# снова тихо заморозила бы поиск.
 SKIP_BUILD=$(psql "$DSN" -tA -c "SELECT CASE WHEN
       (SELECT count(*) FROM search_corpus) > 0
+  AND (SELECT count(*) FROM search_quality WHERE k='mart_changed_ts') = 1
   AND coalesce((SELECT v FROM search_quality WHERE k='build_ts'), 0)
-      > coalesce((SELECT epoch(max(seen_at))::BIGINT FROM search_sources), 0)
+      > (SELECT v FROM search_quality WHERE k='mart_changed_ts')
   AND coalesce((SELECT note FROM search_quality WHERE k='build_sql_hash'), '') = '$SQL_HASH'
   -- Временные таблицы сборки нужны ПОСЛЕДУЮЩИМ шагам: резолверу (tmp3_cls, tmp3_ent,
   -- tmp3_src), переписи полноты (tmp3_ent) и разметке сущностей (tmp3_cls). Пропускать
