@@ -277,7 +277,8 @@ systemctl start 1c-etl.service                                   # первый 
 - **Windows:** IIS (W3SVC) = Automatic; публикация/состав OData/пользователи — персистентны. После ребута OData сам доступен.
 - **LXC — system-сервисы (`enabled`):** postgresql, open-webui, oikb, rerank-shim, api, kb-poll,
   **1c-odata-gateway**, **1c-config-ui**, **serenedb**, **1c-mcp-braine**, **1c-mcp-reports**;
-  таймеры nightly-eval, **1c-etl** (03:00), **1c-serene-sync** (03:40), **1c-bot-monitor** (каждые 3 мин).
+  таймеры **1c-serene-pipeline** (по готовности), **1c-etl** (03:00), **1c-serene-sync** (03:40),
+  **1c-bot-monitor** (каждые 3 мин). `nightly-eval` — **погашен 29.07**, поднимать не надо.
 - **LXC — OpenClaw gateway:** systemd **user**-юнит юзера `undebot` с **`linger=yes`** → стартует на буте
   **без логина** (проверено). Telegram — long polling, токен в `tokenFile`.
 - `tg-bridge` (braine-фронт Telegram) — **disabled**: Telegram держит OpenClaw `@test1c_mcp_bot`.

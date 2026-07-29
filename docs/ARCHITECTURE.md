@@ -155,7 +155,8 @@ read-only роль SereneDB. Персона (тон, маршрутизация 
 - **Windows:** IIS (W3SVC) = Automatic; публикация/состав OData/пользователи персистентны.
 - **LXC (system-сервисы `enabled`):** postgresql, open-webui, oikb, rerank-shim, api, kb-poll,
   1c-odata-gateway, 1c-config-ui, **serenedb**, **1c-mcp-braine**, **1c-mcp-reports** + таймеры
-  (nightly-eval, 1c-etl, **1c-bot-monitor**). `tg-bridge` — **disabled** (Telegram у OpenClaw).
+  (**1c-serene-pipeline**, 1c-etl, **1c-bot-monitor**). `tg-bridge` — **disabled** (Telegram у
+  OpenClaw), `nightly-eval` — **погашен 29.07** (евал выведенного слоя braine).
 - **OpenClaw gateway** — systemd **user**-юнит юзера `undebot` с **linger=on** → стартует на буте
   без логина (проверено). Telegram — long polling, токен в `tokenFile`.
 - Итог: перезагрузка любой машины → всё поднимается само; мониторинг алертит, если что-то не встало.

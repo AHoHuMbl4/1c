@@ -69,8 +69,6 @@ _Обновлено: **2026-07-28, вечер.** Актуально — верх
 
 ## Открыто и ждёт слова владельца
 
-- гасить ли `nightly-eval` — гоняет выведенный слой braine и шлёт алерт **с токена
-  боевого бота** каждую ночь;
 - выводить ли `report_1c` из конфига бота (решение принято 26.07, не исполнено);
 - строгость гейта: числа словами против ложных отказов (`PRODUCTION_PLAN` п. 2).
 
@@ -323,7 +321,9 @@ ClickHouse-аналитика в одной Postgres-совместимой БД
 Активны и enabled: `1c-odata-gateway`(:6011), `1c-config-ui`(:6012), `1c-mcp-braine`(:6014 → ask_1c),
 `1c-mcp-reports`(:6015 → report_1c), `serenedb`(:7890), `open-webui`(:3000), `oikb`(:8081),
 `rerank-shim`(:8082), `api`(:8090 braine /ask), `kb-poll`, `postgresql`(:5432); `tg-bridge` — disabled.
-Таймеры: `1c-etl` 03:00, `1c-serene-sync` 03:40, `1c-bot-monitor` каждые 3 мин, `nightly-eval`.
+Таймеры: `1c-serene-pipeline` (по готовности, каждую минуту), `1c-bot-monitor` каждые 3 мин.
+`nightly-eval` **погашен 29.07** (евал выведенного слоя braine, алерт владельцу с боевого
+токена); `1c-etl`, `1c-serene-sync` — остатки прежней схемы.
 Бот — OpenClaw (user-юнит `undebot`, :18800, linger). Витрина: 12 catalog-таблиц + `resolver_index`.
 Эмбеддинги — DashScope `compatible-mode/v1` (**облако**, это и есть текущая точка утечки, см.
 `docs/ANONYMIZATION.md`). ОБЕ выгрузки (ETL→KB для braine и serene_sync→витрина) идут из ОДНОГО
@@ -423,7 +423,7 @@ _(Это исходная схема braine; актуальная полная �
 - OData читает как служба (Организации→«Наша организация»), зависаний нет.
 - ETL: 19 сущностей/44 записи через шлюз → push в KB → oikb «Synced 20 added» → индексация.
 - Бот: «Каких контрагентов знаешь?» → «МИ ФНС России по управлению долгом (ИНН 7727406020), Казначейство России» с цитатами.
-- Zero-touch: W3SVC Automatic; все LXC-сервисы enabled (postgresql/open-webui/oikb/rerank-shim/tg-bridge/api/kb-poll/1c-odata-gateway + таймеры nightly-eval, 1c-etl). gsheets-sync замаскирован. Старый MCP 1c-gateway disabled.
+- Zero-touch: W3SVC Automatic; все LXC-сервисы enabled (postgresql/open-webui/oikb/rerank-shim/tg-bridge/api/kb-poll/1c-odata-gateway + таймеры 1c-etl; nightly-eval погашен 29.07). gsheets-sync замаскирован. Старый MCP 1c-gateway disabled.
 
 ## Перепроверка (2026-07-23) ✅
 Сверено git↔LXC↔живое: все 9 сервисов + 2 таймера enabled/active; порты 6011/6012/3000/8081/8082/8090/5432 слушают; OData-шлюз чтение=1/запись=405; config-ui 116 чекбоксов; Windows IIS Automatic/Running; бот отвечает; ссылки в доках все рабочие. **Найден и починен рассинхрон:** `oc_etl.py` на LXC был старее git (без чтения галочек, в авто-режиме → ночью тянул бы мусор) — передеплоен (md5=git). Поставлен дефолт-выбор `/etc/1c-etl-selected.txt` (23 бизнес-сущности Бухгалтерии) — ночной ETL теперь тянет только их; владелец может переотметить через config-ui `:6012`.
