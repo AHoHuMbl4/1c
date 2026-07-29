@@ -235,9 +235,11 @@ FROM tmp3_src s JOIN tmp3_key k ON k.entity=lower(s.tbl)
 WHERE k.key_cols=['Ref_Key']
 \gexec
 
-CREATE OR REPLACE TABLE tmp3_refmap (guid VARCHAR, name VARCHAR, owner VARCHAR);
+-- Сырая карта: по строке на каждое вхождение идентификатора. Однозначной она станет
+-- ниже; здесь намеренно собирается ВСЁ, чтобы было из чего выбирать.
+CREATE OR REPLACE TABLE tmp3_refmap_raw (guid VARCHAR, name VARCHAR, owner VARCHAR);
 PREPARE p_ref AS
-INSERT INTO tmp3_refmap
+INSERT INTO tmp3_refmap_raw
 WITH src AS (SELECT row_number() OVER () AS rid, COLUMNS(*)::VARCHAR FROM query_table($1)),
      cells AS (SELECT * FROM src UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (rid))))),
      rows AS (SELECT u.rid,
@@ -259,6 +261,35 @@ SELECT 'EXECUTE p_ref(' || quote_literal(s.tbl) || ');'
 FROM tmp3_src s JOIN tmp3_key k ON k.entity=lower(s.tbl)
 WHERE k.key_cols=['Ref_Key']
 \gexec
+
+-- 🔴 КАРТА ССЫЛОК ОБЯЗАНА БЫТЬ ОДНОЗНАЧНОЙ, ИНАЧЕ КОРПУС НЕ ВОСПРОИЗВОДИМ.
+-- [замер 29.07, УТ] пересборка тех же данных дала 632 683 строки — ровно столько же, —
+-- но у **64 107** из них изменился `row_key`, и слияние остановилось защитой «удаление
+-- снесло бы 10% корпуса». Все пострадавшие — РЕГИСТРЫ, то есть сущности без объявленного
+-- ключа, где `row_key = sha1(doc)`. Значит менялся сам текст.
+--
+-- Причина: `p_ref` собирает карту по КАЖДОЙ таблице, а у табличных частей документа
+-- `Ref_Key` — это ключ РОДИТЕЛЯ. Поэтому на один идентификатор попадало несколько строк
+-- с разными именами: [замер] 50 535 строк на 42 107 различных идентификаторов, из них
+-- **223 идентификатора с несколькими именами**. Соединение брало произвольное — и текст
+-- строки, а с ним и ключ, менялись от сборки к сборке.
+--
+-- Чем это грозило, если бы защита не сработала: каждая пересборка выглядит как «десятая
+-- часть данных изменилась», такие строки теряют вектор и считаются заново — за деньги,
+-- каждый раз. Та же семья дефектов, что `techContext` ловушка 22.
+--
+-- Выбор ДЕТЕРМИНИРОВАННЫЙ и осмысленный:
+--   1. сначала владелец, у которого этот идентификатор встречается ОДИН раз — это
+--      настоящий объект, а не строка табличной части;
+--   2. при равенстве — по имени таблицы, затем по самому имени. Оба поля устойчивы,
+--      поэтому результат один и тот же при любом порядке чтения.
+CREATE OR REPLACE TABLE tmp3_refmap AS
+SELECT guid, name, owner FROM (
+  SELECT guid, name, owner,
+         count(*) OVER (PARTITION BY owner, guid) AS вхождений_у_владельца
+  FROM tmp3_refmap_raw)
+QUALIFY row_number() OVER (PARTITION BY guid
+        ORDER BY вхождений_у_владельца, owner, name) = 1;
 
 SELECT 'карта ссылок' AS шаг, count(*) AS записей FROM tmp3_refmap;
 
@@ -505,6 +536,13 @@ CREATE TABLE IF NOT EXISTS search_quality (k VARCHAR, v BIGINT, note VARCHAR);
 DELETE FROM search_quality WHERE k LIKE 'refmap_%';
 INSERT INTO search_quality
 SELECT 'refmap_resolved', count(*), 'ссылок получили человеческое имя' FROM tmp3_refmap
+UNION ALL
+-- 🔴 Сколько идентификаторов пришли с НЕСКОЛЬКИМИ именами. Пока это число не равно нулю,
+-- имя выбирается правилом, а не данными, — и человек должен об этом знать. Именно эта
+-- неоднозначность [замер 29.07] делала корпус невоспроизводимым: 64 107 строк меняли
+-- ключ при пересборке тех же данных.
+SELECT 'refmap_ambiguous_guid', count(*), 'идентификаторов с несколькими именами — имя выбрано правилом'
+FROM (SELECT guid FROM tmp3_refmap_raw GROUP BY guid HAVING count(DISTINCT name) > 1)
 UNION ALL
 -- Считается по СОБРАННОМУ, а не по боевому корпусу. Прежде это число бралось из
 -- `search_corpus`, то есть из корпуса ПРЕДЫДУЩЕГО такта (файл выполняется до слияния):
