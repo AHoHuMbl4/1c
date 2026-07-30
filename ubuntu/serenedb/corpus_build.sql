@@ -342,6 +342,19 @@ CREATE OR REPLACE TABLE tmp3_corpus
 PREPARE p_doc AS
 INSERT INTO tmp3_corpus
 WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
+ -- 🔴 ОДНО ВЫРАЖЕНИЕ НА ДВА МЕСТА. Прежде условие «есть где взять» стояло только у
+ -- отбрасывания колонок, а свёртка строк была безусловной: там, где условие защитило
+ -- колонки, строки всё равно схлопывались до одной — и данные табличной части исчезали.
+ -- Защита стояла на входе, а потеря происходила на выходе. Теперь оба места смотрят
+ -- в одно выражение, и разойтись не могут по построению.
+ --
+ -- Подчёркивания В САМОМ имени экранируются: имя объекта 1С законно бывает с
+ -- подчёркиванием (отраслевые префиксы), и без экранирования `Catalog_Мои_Товары`
+ -- считался бы дочерним для `Catalog_Мои`.
+ fold AS (SELECT (SELECT key_cols FROM kc) = ['Ref_Key']
+                 AND EXISTS (SELECT 1 FROM tmp3_src s2
+                             WHERE lower(s2.tbl) LIKE replace(lower($1),'_','\_') || '\_%' ESCAPE '\')
+                 AS on_),
  -- coalesce ДО unpivot: иначе пустые ячейки исчезают вовсе (UNPIVOT роняет NULL), и
  -- составной ключ схлопывается. Боевой ключ выглядит как «160.1|||ЛЕПРО|___|ЗП80РК» —
  -- пустые сегменты значимы, они держат позицию. Без них разные строки дают ОДИН ключ,
@@ -413,11 +426,15 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
    -- увидел. На ПЕРВОЙ базе из 41 затронутой сущности у **25 дочерней нет вовсе**: без
    -- условия их колонки исчезли бы из текста, а взять их было бы негде.
    -- Одна база снова умолчала о случае, которого в ней нет.
+   -- `coalesce(own_prop, true)` — БЕЗОПАСНОЕ НАПРАВЛЕНИЕ. `own_prop` считается через
+   -- LEFT JOIN, и у колонки, которую не объявлял НИКТО, он NULL. Без `coalesce` всё
+   -- выражение давало NULL, и `WHERE` выбрасывал ячейку — то есть терялось ровно то, про
+   -- что неизвестно, где его взять. Считаем такую колонку своей: лишний текст дешевле
+   -- потери.
    WHERE u.val <> ''
-     AND NOT (c.own_ref AND NOT c.own_prop
+     AND NOT (coalesce(c.own_ref, false) AND NOT coalesce(c.own_prop, true)
               AND list_position((SELECT key_cols FROM kc), u.col) IS NULL
-              AND EXISTS (SELECT 1 FROM tmp3_src s2
-                          WHERE lower(s2.tbl) LIKE lower($1) || '\_%' ESCAPE '\'))),
+              AND (SELECT on_ FROM fold))),
  pieces AS (
    SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_dt, is_date,
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
@@ -450,7 +467,7 @@ SELECT src_table,
        -- 🔴 У ССЫЛОЧНОГО ОБЪЕКТА ОТПЕЧАТОК К КЛЮЧУ НЕ ДОПИСЫВАЕТСЯ: строка корпуса
        -- обязана быть ОДНА на объект. После отбрасывания колонок вложенного типа строки
        -- одного объекта дают одинаковый текст, и `QUALIFY` ниже оставляет одну.
-       CASE WHEN NOT (SELECT key_cols FROM kc) = ['Ref_Key']
+       CASE WHEN NOT (SELECT on_ FROM fold)
              AND count(*) OVER (PARTITION BY src_table, rk) > 1
             THEN rk || '#' || sha1(doc) ELSE rk END AS row_key,
        doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, dt
@@ -487,7 +504,7 @@ FROM (
 -- представителя различаются, выбор обязан быть один и тот же при любом порядке чтения
 -- (`techContext` ловушки 29, 30). Расхождение текстов внутри объекта после починки
 -- загрузчика означать нечего не должно — это проверяется отдельным числом в отчёте.
-QUALIFY NOT (SELECT key_cols FROM kc) = ['Ref_Key']
+QUALIFY NOT (SELECT on_ FROM fold)
      OR row_number() OVER (PARTITION BY src_table, row_key
           ORDER BY doc, refs, doc_hash) = 1;
 
