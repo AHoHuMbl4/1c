@@ -246,6 +246,55 @@ def ds_chat(messages, temperature=0, max_tokens=900):
         return json.loads(r.read())["choices"][0]["message"]["content"]
 
 
+# 🔴 АРБИТР: ВЫБИРАЕТ ИЗ ГОТОВЫХ ОТВЕТОВ, А НЕ СОЧИНЯЕТ СВОЙ.
+# Замысел владельца 30.07: «даём 2 ответа, и ллм просто должен прочесть вопрос или контекст…
+# его задача просто выбрать из составленных ответов системы».
+#
+# Почему это лучше моих правил. Прежде выбор сущности решался по её НАЗВАНИЮ: «Приобретение
+# Товаров Услуг» и «Корректировка Приобретения» по названию почти неразличимы, и оба
+# независимых сигнала соглашались на неверном — [замер 30.07] «сколько приобретений товаров
+# и услуг» отвечал то 249 (верно), то «3 корректировки, 152 800» (неверно), 2 раза из 3.
+# Арбитр видит не названия, а ГОТОВЫЕ ОТВЕТЫ С ЧИСЛАМИ — «Всего найдено 249 документов
+# приобретения товаров и услуг» против «Найдено 3 корректировок приобретения» — и это уже
+# различимо языковым способом, без всякого знания конкретной базы.
+#
+# П. 19 соблюдён: арбитр НЕ считает и НЕ ищет. Числа посчитаны базой и уже стоят в ответах;
+# он только сопоставляет вопрос человека с готовым текстом — чисто языковая задача.
+#
+# Запрет «не пересказывать» держится КОДОМ, а не просьбой в промте (правило владельца:
+# «любые правила, основанные на промте, НЕ РАБОТАЮТ»): от арбитра принимается ТОЛЬКО номер.
+# Всё, что не разбирается в номер из предложенного списка, считается «не выбрал», и тогда
+# вопрос уходит человеку. Пересказать ответ он физически не может — его текст не попадает
+# в выдачу ни при каком исходе.
+def arbitrate(question, answers, context=""):
+    """Номер ответа, который действительно отвечает на вопрос; None — не выбрал."""
+    if len(answers) < 2:
+        return 0 if answers else None
+    listing = "\n\n".join("%d) %s" % (i + 1, a) for i, a in enumerate(answers))
+    sys_msg = ("You are given a user question and several ready answers produced by a "
+               "database system. The numbers in them are already computed and correct. "
+               "Choose the ONE answer that actually answers the question that was asked. "
+               "Do not rewrite, summarise or explain anything. "
+               "Reply with a single digit: the number of the answer. "
+               "If none of them answers the question, or two answer it equally well, "
+               "reply 0.")
+    user = ("%sQuestion: %s\n\nAnswers:\n%s\n\nNumber:"
+            % (("Conversation so far:\n%s\n\n" % context[-2000:]) if context else "",
+               question, listing))
+    try:
+        out = ds_chat([{"role": "system", "content": sys_msg},
+                       {"role": "user", "content": user}], max_tokens=8)
+    except Exception:                          # noqa: BLE001 — сеть/квота поставщика
+        return None
+    digits = "".join(ch for ch in (out or "") if ch.isdigit())[:2]
+    if not digits:
+        return None
+    n = int(digits)
+    if n == 0 or n > len(answers):             # «не выбрал» либо выдумал номер
+        return None
+    return n - 1
+
+
 def embed_one(text):
     body = json.dumps({"model": EMBED_MODEL, "dimensions": EMBED_DIM, "input": [text]}).encode()
     req = urllib.request.Request(EMBED_URL + "/embeddings", data=body, method="POST")
@@ -1745,12 +1794,15 @@ def _coverage_answer(question, diag, t0):
 # Опыт 30.07: нужно ли считать расхождение слабого сигнала (вектор вопроса) с выбором
 # модели признаком неоднозначности. Решается замером, а не рассуждением.
 SIGNAL_DISAGREE = os.environ.get("ASK_SIGNAL_DISAGREE", "1") == "1"
+# Сколько готовых ответов отдавать арбитру. Больше двух-трёх не нужно: это
+# столько же полных ответов, сколько кандидатов, и время ответа растёт.
+ARBITER_MAX = int(os.environ.get("ASK_ARBITER_MAX", "3"))
 # Опыт 30.07: требовать ли, чтобы спрошенное слово было у кандидата полем
 # («ИНН: …») либо названием сущности. Тоже решается замером.
 FIELD_MUST_EXIST = os.environ.get("ASK_FIELD_MUST_EXIST", "1") == "1"
 
 
-def answer(question, focus=None, measure_pick=None):
+def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False):
     """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
 
     `focus` — сущность, ВЫБРАННАЯ человеком после уточнения (кнопкой или словом). Когда
@@ -2189,13 +2241,19 @@ def answer(question, focus=None, measure_pick=None):
     # Родство приходит из данных (`search_tables.parent`), а не из разбора имени.
     # Указание владельца 30.07 требует спрашивать при СОМНЕНИИ; лишний вопрос там, где
     # сомнения нет, — не осторожность, а шум, и он обесценивает настоящие уточнения.
+    # Родство нужно ДВУМ проверкам ниже — и признаку неоднозначности, и подбору соперника
+    # для арбитра, — поэтому берётся один раз и на весь круг кандидатов, которых мы можем
+    # рассматривать. Без этого `_family` молча возвращала бы саму сущность, и в соперники
+    # арбитру попадала бы табличная часть той же шапки: два ответа об одном и том же.
     par = {}
-    if top_by_question and picked and top_by_question not in picked:
+    if picked:
+        need = set(picked) | set(cands[:ARBITER_MAX * 4])
+        if top_by_question:
+            need.add(top_by_question)
         try:
             par = {r[0]: (r[1] or "") for r in psql(
                 "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
-                % (TABLES, ", ".join(lit(c) for c in set(picked) | {top_by_question})))
-                if r and r[0]}
+                % (TABLES, ", ".join(lit(c) for c in need))) if r and r[0]}
         except RuntimeError:
             par = {}
 
@@ -2214,6 +2272,66 @@ def answer(question, focus=None, measure_pick=None):
     # языковой, а не числовой. Замеренный случай: «что покупало ООО Ромашка» — у двух
     # источников ровно по 3 совпадения, и оба ответа следуют из данных (контрагент и
     # покупал товары, и платил). Прежде система молча брала один.
+    # 🔴 АРБИТРУ НУЖНЫ ДВА ОТВЕТА, А МОДЕЛЬ ЧАСТО УВЕРЕННО НАЗЫВАЕТ ОДИН — И ОШИБАЕТСЯ.
+    # [замер 30.07] «сколько приобретений товаров и услуг»: `picked` из одного элемента, и
+    # это то `Приобретение Товаров Услуг` (249, верно), то `Корректировка Приобретения`
+    # (3, неверно). Арбитр в такой ветке не запускался вовсе и помочь не мог.
+    # Поэтому соперник ДОБАВЛЯЕТСЯ: следующий по порядку отбора кандидат, у которого есть
+    # свои совпадения и который не из той же семьи (шапка/табличная часть — одно прочтение).
+    # Порядок отбора — данные (близость вектора, затем реранкер), а не список имён.
+    arb_pool = list(picked)
+    if picked and not focus and not no_arbiter and len(arb_pool) < ARBITER_MAX:
+        fam = {_family(x) for x in arb_pool}
+        # 🔴 СОПЕРНИК БЕРЁТСЯ ПО ПОРЯДКУ ОТБОРА, И ЭТО РЕШЕНО ЗАМЕРОМ, А НЕ ВКУСОМ.
+        # Я попробовал подбирать соперника «по независимым признакам» — вершина по вектору
+        # вопроса и кандидат с наибольшим числом совпадений. [замер 30.07] стало ХУЖЕ:
+        # 0 верных из 3 против 3 из 5, и в пару попадали `Корректировка Приобретения` плюс
+        # КОНСТАНТА, то есть верной сущности там не было вовсе. Правка откачена.
+        # Порядок отбора (вектор, затем реранкер) хотя бы держит верную сущность в голове
+        # списка; вершина по вопросу добавляется ПОСЛЕ него, как дополнение, а не вместо.
+        for c in list(cands) + ([top_by_question] if top_by_question else []):
+            if len(arb_pool) >= ARBITER_MAX:
+                break
+            if c in arb_pool or c not in by or _family(c) in fam:
+                continue
+            arb_pool.append(c); fam.add(_family(c))
+        if len(arb_pool) > 1:
+            diag["arbiter_rivals"] = arb_pool[1:]
+
+    if len(arb_pool) > 1 and not no_arbiter:
+        # 🔴 СНАЧАЛА АРБИТР, ПОТОМ ЧЕЛОВЕК. Порядок п. 21: ответ → уточняющий вопрос →
+        # отказ. Спрашивать человека, не попытавшись ответить, — значит переложить на него
+        # работу, которую система может сделать сама. Поэтому по каждому кандидату
+        # СОБИРАЕТСЯ ПОЛНЫЙ ОТВЕТ (тем же кодом, через `focus`, — то есть числа считает
+        # база), и арбитр выбирает между готовыми ответами. Не выбрал — спрашиваем человека.
+        cand_ans, cand_src = [], []
+        for c in arb_pool[:ARBITER_MAX]:
+            try:
+                sub = answer(question, focus=c, measure_pick=measure_pick,
+                             context=context, no_arbiter=True)
+            except Exception:                  # noqa: BLE001 — один кандидат не должен
+                continue                       # ронять весь ответ
+            if sub.get("kind") in ("answer", "figures") and (sub.get("text") or "").strip():
+                cand_ans.append(sub["text"].split("⚠")[0].strip())
+                cand_src.append(sub)
+        if len(cand_ans) > 1:
+            n = arbitrate(question, cand_ans, context)
+            diag["arbiter"] = {"candidates": [s.get("diag", {}).get("focus") for s in cand_src],
+                               "chose": None if n is None else
+                                        cand_src[n].get("diag", {}).get("focus")}
+            if n is not None:
+                out = dict(cand_src[n])
+                out["diag"] = dict(out.get("diag", {}), arbiter=diag["arbiter"])
+                out["partial"] = cut or out.get("partial")
+                return out
+        elif len(cand_ans) == 1:
+            # Ответ смог собраться только у одного кандидата — остальные пусты. Выбирать не
+            # из чего, и спрашивать человека не о чем: у прочих ответа нет.
+            out = dict(cand_src[0])
+            out["diag"] = dict(out.get("diag", {}), arbiter={"single": True})
+            out["partial"] = cut or out.get("partial")
+            return out
+
     if len(picked) > 1:
         try:
             lab_by = {r[0]: r[1] for r in psql(
@@ -2450,8 +2568,12 @@ class Handler(BaseHTTPRequestHandler):
         # Выбор величины кнопкой — такой же вход, как `focus`. Без него уточнение о
         # величине было бы вопросом, на который нечем ответить.
         measure_pick = (req.get("measure") or "").strip() or None
+        # Предыдущий разговор ведёт OpenClaw; сюда он приходит строкой и
+        # используется ТОЛЬКО арбитром. В отбор данных не попадает.
+        context = (req.get("context") or "")[:4000]
         try:
-            out = answer(question, focus=focus, measure_pick=measure_pick)
+            out = answer(question, focus=focus, measure_pick=measure_pick,
+                         context=context)
             # СВЕЖЕСТЬ ДАННЫХ — В КАЖДЫЙ ОТВЕТ (п. 18). Если 1С недоступна или такт падает,
             # корпус остаётся консистентным (защиты сборки), но СТАРЕЕТ, а бот об этом
             # молчал бы. Возраст последнего успешного такта делает старение видимым, а при
