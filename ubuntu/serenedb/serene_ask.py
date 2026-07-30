@@ -159,7 +159,14 @@ csv.field_size_limit(50 * 1024 * 1024)
 
 DS_BASE = os.environ.get("DEEPSEEK_BASE", "https://api.deepseek.com").rstrip("/")
 DS_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
-DS_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-flash")
+# 🔴 PRO, А НЕ FLASH. Указание владельца 30.07: «не Флэш, а v4 pro».
+# Почему это важно, а не вкус: выбор сущности и формулировка параметров подсчёта — задачи
+# СМЫСЛОВЫЕ, и они целиком на модели (п. 19 разрешает ей ровно это). [замер 30.07] весь день
+# приёмка мерилась на `deepseek-v4-flash` с выключенным размышлением, и главным остатком
+# дефектов был именно выбор сущности — 10 провалов из 11. Замер на Flash не отвечает на
+# вопрос «умеет ли система выбирать сущность», он отвечает «умеет ли это Flash».
+# У провайдера доступны ровно два: `deepseek-v4-flash` и `deepseek-v4-pro`.
+DS_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 DS_THINKING = os.environ.get("DEEPSEEK_THINKING", "disabled")
 
 EMBED_URL = os.environ.get("ALIBABA_EMBED_URL", "").rstrip("/")
