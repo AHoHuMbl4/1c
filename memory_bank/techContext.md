@@ -456,6 +456,41 @@ service, `document_реализациятоваровуслуг` → business. �
 подряд к тому же дешевле по существу: второе считается только для строк, не нашедшихся по
 первому, — регулярное выражение исполняется для единиц, а не для всего корпуса.
 
+## Возможность 35: словарь со стеммингом и синонимами — `copy_from` + `ts_lexize`
+
+Не ловушка, а **пропущенная возможность**: она была описана в `docs/SERENE_CAPS_3.md §2.4`, а
+я вместо неё написал `contains()` по подстроке и потерял на падежах верный ответ.
+
+```sql
+-- вариант основного словаря СО СТЕММИНГОМ; локаль наследуется, индекс не трогается
+CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict_stem (
+  template = 'copy_from', from = 'search_dict', stemming = true);
+
+SELECT ts_lexize('search_dict_stem', 'складов');   -- {склад}
+SELECT ts_lexize('search_dict_stem', 'Склады');    -- {склад}
+SELECT list_has_any(ts_lexize('search_dict_stem', label),
+                    ts_lexize('search_dict_stem', 'складов'));  -- сравнение по основам
+```
+
+Синонимы — тем же механизмом, `solr_synonyms` в `pipeline` (нужна ЯВНАЯ локаль, иначе
+`text: invalid locale`):
+
+```sql
+CREATE TEXT SEARCH DICTIONARY syn (
+  template='pipeline',
+  step1_template='text', step1_locale='ru_RU.UTF-8', step1_case='lower', step1_stemming=false,
+  step2_template='solr_synonyms', step2_synonyms='спб, санкт-петербург, питер');
+-- ts_lexize('syn','спб') -> {питер,санкт-петербург,спб}
+```
+
+**Область действия — СВОЯ БАЗА.** [замер 30.07] словарь, созданный в `ut_test`, из `postgres`
+не виден: `text search dictionary "probe_stem" does not exist`. То есть здесь столкновения
+между базами нет, в отличие от секретов (ловушка 26).
+
+**Чего словарь НЕ решает.** [замер 30.07] на выборе сущности он замер не улучшил: по основам
+совпадает много названий, и «Корректировка Приобретения» с «Приобретение Товаров Услуг»
+неразличимы по словам. Он снимает СЛУЧАЙНЫЕ потери (падеж), но не выбирает смысл.
+
 ## Известная граница: фильтр подсказок привязан к русским словам
 
 `serene_sync._selectable` (и его копия в `serene_select.py`) отбрасывает кандидатов по
