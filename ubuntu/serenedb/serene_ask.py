@@ -2370,13 +2370,24 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         не одобрение, а признание, что проверять нечем.
         """
         try:
+            # 🔴 СОБСТВЕННОЕ НАЗВАНИЕ СУЩНОСТИ — ТОЖЕ ЕЁ СЛОВО, И БРАТЬ ЕГО НАДО ИЗ ДАННЫХ.
+            # [замер 30.07] после перегенерации алиасов модель описала справочник
+            # номенклатуры по смыслу — «товар, услуга, работа, артикул, вес товара» — и
+            # выкинула слово «номенклатура». Подтверждения не нашлось, и ВЕРНЫЙ ответ
+            # «227 позиций» превратился в уточнение. Спрашивать модель о том, как
+            # называется сущность, незачем: название лежит в `search_tables.label`.
+            # Это устраняет целый класс провалов по построению: что бы модель ни забыла
+            # написать, своё имя сущность не теряет.
             r = psql(
-                "SELECT count(*) FILTER (trim(u.w) <> ''), "
-                "       count(*) FILTER (trim(u.w) <> '' "
-                "         AND list_has_any(ts_lexize(%s, trim(u.w)), ts_lexize(%s, %s))) "
-                "FROM search_entity_alias a, unnest(str_split(a.aliases, ',')) AS u(w) "
-                "WHERE a.src_table = %s"
-                % (lit(STEM_DICT), lit(STEM_DICT), lit(question), lit(cand)))
+                "WITH w AS ("
+                "  SELECT trim(u.w) AS t FROM search_entity_alias a, "
+                "         unnest(str_split(a.aliases, ',')) AS u(w) WHERE a.src_table = %s"
+                "  UNION ALL SELECT label FROM %s WHERE src_table = %s) "
+                "SELECT count(*) FILTER (t <> ''), "
+                "       count(*) FILTER (t <> '' "
+                "         AND list_has_any(ts_lexize(%s, t), ts_lexize(%s, %s))) FROM w"
+                % (lit(cand), TABLES, lit(cand),
+                   lit(STEM_DICT), lit(STEM_DICT), lit(question)))
             known, hit = (int(r[0][0] or 0), int(r[0][1] or 0)) if r and r[0] else (0, 0)
         except RuntimeError as e:
             diag["alias_unreadable"] = str(e)[:120]
@@ -2657,6 +2668,34 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # сверено со списком величин ЭТОЙ сущности (`pick_entity`), то есть выдуманное имя сюда
     # не доходит. Прежний путь (`pick_measure`) остаётся запасным: он выбирает по похожести
     # имён, не видя вопроса, и именно поэтому ошибался.
+    # 🔴 ВЕЛИЧИНА ЖИВЁТ В ТАБЛИЧНОЙ ЧАСТИ, А НЕ В ШАПКЕ — И ЭТО НЕ ДВЕ СУЩНОСТИ, А ОДНА.
+    # [замер 30.07] эталоны четырёх вопросов приёмки лежат ИМЕННО в табличной части, и в
+    # шапке этих величин нет вовсе: «сколько НДС заплатили поставщикам» — 11 036 086,09 в
+    # `..._товары.СуммаНДС`; «сколько штук закупили» — 92 683 в `..._товары.Количество`;
+    # «цена за единицу» — 50 000 в `..._товары.Цена`. Шапка отвечала не тем или ничем.
+    # Переход делается ПО ДАННЫМ: родство берётся из `search_tables.parent`, наличие
+    # величины — из `map_keys(nums)`, сравнение имени — штатным словарём по основам.
+    # Переходим ТОЛЬКО когда член семьи ровно один: два — это уже выбор, а выбор молча
+    # делать нельзя (п. 12). Ни порога, ни имени конкретной базы здесь нет.
+    want = (plan.get("quantity") or intent.get("measure") or "").strip()
+    if want and not focus and not any(m.lower() == want.lower() for m in measures_of(src)):
+        try:
+            fam = _family(src)
+            owners = [r[0] for r in psql(
+                "WITH kin AS (SELECT src_table FROM %s WHERE src_table = %s OR parent = %s) "
+                "SELECT DISTINCT m.src_table FROM (SELECT src_table, unnest(map_keys(nums)) AS k "
+                "  FROM %s WHERE src_table IN (SELECT src_table FROM kin) AND nums IS NOT NULL) m "
+                "WHERE list_has_any(ts_lexize(%s, m.k), ts_lexize(%s, %s))"
+                % (TABLES, lit(fam), lit(fam), CORPUS,
+                   lit(STEM_DICT), lit(STEM_DICT), lit(want))) if r and r[0]]
+        except RuntimeError:
+            owners = []
+        if len(owners) == 1 and owners[0] != src:
+            diag["measure_in_kin"] = {"было": src, "стало": owners[0], "величина": want}
+            src = owners[0]
+            match, preds = match, [p for p in preds if p]
+            diag["focus"], diag["found"] = src, by.get(src, 0)
+
     measure, measure_alts = None, []
     if plan.get("quantity") and plan["quantity"] in measures_of(src):
         measure = plan["quantity"]
