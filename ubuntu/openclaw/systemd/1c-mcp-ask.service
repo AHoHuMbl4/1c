@@ -1,0 +1,23 @@
+[Unit]
+# MCP-сервер поверх `serene_ask`: даёт OpenClaw-боту инструмент ask_1c (факты из 1С через
+# SereneDB). Заменяет `1c-mcp-braine`, который смотрел на выведенный из продукта слой braine
+# (:8090) — [замер 30.07] порт не слушал, и бот на любой вопрос отвечал «сервер 1С не отвечает».
+# Подключается к боту штатно, через `mcp.servers` в конфигурации OpenClaw.
+Description=1C ask MCP server (ask_1c over serene_ask)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# EnvironmentFile: ASK_TOKEN (сервиса ответов) и MCP_TOKEN (этого сервера, fail-closed)
+EnvironmentFile=/etc/1c-mcp-ask.env
+# Адрес сервиса ответов — настройка, а не константа: у каждой базы свой порт, и какая база
+# основная, решает владелец (30.07 выбрана вторая, `ut_test`).
+Environment=ASK_URL=http://127.0.0.1:8099
+Environment=MCP_HOST=127.0.0.1
+Environment=MCP_PORT=6016
+ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/openclaw-mcp/mcp_ask.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

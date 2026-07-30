@@ -450,7 +450,34 @@ curl -s -X POST http://127.0.0.1:8091/ask -H 'Content-Type: application/json' \
 Устройство — `docs/OPENCLAW_BOT.md`. Код — `ubuntu/openclaw/`. 🔴 Только нативное OpenClaw; гарантии — кодом,
 не промтом (персона держит только тон).
 
-### 11.1 MCP-сервер `ask_1c` над braine (:6014)
+### 11.1 MCP-сервер `ask_1c` над `serene_ask` (:6016) — с 30.07
+
+🔴 **Прежний мост над braine (:6014) выведен.** Он обращался к `BRAINE_URL=:8090`, а слой braine
+выведен из продукта и порт не слушает — [замер 30.07] бот на любой вопрос отвечал «сервер 1С не
+отвечает». Это второй раз класс `HOW_NOT_TO §2.14`: вывод компонента не закончен, пока не убраны
+его связки. Решение владельца 30.07: новый мост, бот отвечает по второй базе.
+
+```bash
+install -D ubuntu/openclaw/mcp_ask.py /opt/openclaw-mcp/mcp_ask.py
+install -m 644 ubuntu/openclaw/systemd/1c-mcp-ask.service /etc/systemd/system/
+# /etc/1c-mcp-ask.env (600): ASK_TOKEN=<токен serene_ask>, MCP_TOKEN=<свой, fail-closed>
+systemctl daemon-reload && systemctl enable --now 1c-mcp-ask
+```
+
+Подключение к боту — штатным `mcp.servers`: запись `serene-ask` → `http://127.0.0.1:6016/mcp`,
+заголовок `Authorization: Bearer $MCP_TOKEN`, `toolFilter.include = ["ask_1c"]`.
+Запись `second-brain` (braine) **удалена**; `second-brain-reports` (:6015) не тронут по слову
+владельца («пока не трогать»).
+
+**Чем этот мост отличается по сути:** пробрасывает `focus`, `measure` и `context`, поэтому
+работает ЦЕПОЧКА — вопрос → уточнение о сущности → уточнение о величине → ответ. Без этих полей
+уточнение было односторонним: сервис спрашивал, а вернуть выбор человека было нечем.
+
+Проверка вживую 30.07: «на какую сумму мы закупили товаров и услуг» → **73 181 157,68 по 249
+документам, 4 прогона из 4** (совпадает с живой 1С); «сколько мы продали» → бот **переспросил**
+«оптовые или розничные», а не выбрал сам.
+
+### 11.1-старое MCP-сервер `ask_1c` над braine (:6014) — выведен
 ```bash
 install -d /opt/openclaw-mcp && python3 -m venv /opt/openclaw-mcp/venv
 /opt/openclaw-mcp/venv/bin/pip install -r ubuntu/openclaw/requirements.txt   # FastMCP (офиц. MCP SDK)
