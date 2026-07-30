@@ -883,20 +883,40 @@ def pick_measure(src_table, question, word):
     """
     names = measures_of(src_table)
     if not names:
-        return None
+        return (None, [])
     if not word:
         # Вопрос не называет величину — НЕ выбираем за него. Иначе получается
         # «что покупало Ромашка» → `НомерЧекаККМ`. Итоги по всем величинам отдадим
         # модели отдельно (`totals_of`).
-        return None
+        return (None, [])
     if len(names) == 1:
-        return names[0]                        # выбора нет — и спрашивать не о чем
+        return (names[0], [])                  # выбора нет — и спрашивать не о чем
     # Имя величины ТОЧНО совпало со словом вопроса — брать его, не гадая реранкером.
     # «сумма» → «Сумма», а не «СуммаНУDr»: точное совпадение сильнее близости.
     wl = word.lower()
     exact = [n for n in names if n.lower() == wl]
     if exact:
-        return exact[0]
+        return (exact[0], [])
+    # 🔴 НЕСКОЛЬКО ВЕЛИЧИН ОДИНАКОВО ПОДХОДЯТ — ЭТО ВОПРОС ЧЕЛОВЕКУ, А НЕ ЗАДАЧА РЕРАНКЕРУ.
+    # Указание владельца 30.07: «давать юзеру неверный ответ — самое страшное, что мы можем
+    # сделать. лучше 1, 2, 3 раза уточнить, если непонятно, чем дать не то».
+    # [замер 30.07] у `document_приобретениетоваровуслуг` слово «сумма» несут ЧЕТЫРЕ
+    # величины: СуммаДокумента, СуммаВзаиморасчетов, СуммаВзаиморасчетовПоЗаказу,
+    # СуммаВзаиморасчетовПоТаре. Реранкер выбирал молча и ошибался: на выбранной человеком
+    # сущности ответ дал 71 045 277,59 вместо 73 181 157,68 — сущность верная, величина нет.
+    # Отбор здесь — ПОДСТРОКА имени величины, то есть само слово человека против имён из
+    # данных: ни списка слов, ни порога, работает на любом языке и любой конфигурации.
+    same = [n for n in names if wl in n.lower()]
+    if len(same) > 1:
+        # Базовая величина снимает неоднозначность, если её частные виды — её же префиксы
+        # (правило ниже): тогда спрашивать не о чем. Иначе — спрашиваем.
+        base_of = [n for n in same
+                   if sum(1 for m in same if m != n and m.startswith(n)) >= len(same) - 1]
+        if len(base_of) == 1 and base_of[0].lower() != wl:
+            return (base_of[0], [])
+        return (None, sorted(same))
+    if len(same) == 1:
+        return (same[0], [])
     idx = rerank(word, names)
     ranked = [names[i] for i in idx] if idx else names
     # БАЗОВАЯ ВЕЛИЧИНА ПРЕДПОЧТИТЕЛЬНЕЕ УТОЧНЁННОЙ, когда слово общее. У регистра бухучёта
@@ -911,8 +931,8 @@ def pick_measure(src_table, question, word):
     if base and base.lower() not in wl:
         qualifier = top[len(base):].lower()
         if qualifier and qualifier not in wl:
-            return base
-    return top
+            return (base, [])
+    return (top, [])
 
 
 def pick_entity(question, kind, cands, counts=None, match="", cut=None):
@@ -1722,7 +1742,7 @@ def _coverage_answer(question, diag, t0):
 
 
 # ----------------------------------------------------------------- HTTP
-def answer(question, focus=None):
+def answer(question, focus=None, measure_pick=None):
     """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
 
     `focus` — сущность, ВЫБРАННАЯ человеком после уточнения (кнопкой или словом). Когда
@@ -2167,8 +2187,20 @@ def answer(question, focus=None):
     # лежат в самих данных. Числовое условие («больше 500000») тоже применяется здесь,
     # а не на общем отборе: у документа оно про сумму, у строки накладной могло бы
     # оказаться про количество.
-    measure = pick_measure(src, question, (intent.get("measure") or ""))
+    measure, measure_alts = pick_measure(src, question, (intent.get("measure") or ""))
+    if measure_pick:                           # человек уже выбрал величину кнопкой
+        measure, measure_alts = measure_pick, []
     diag["measure"] = measure
+    # Несколько величин подходят одинаково — спрашиваем, какую считать. Механизм тот же,
+    # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
+    if measure_alts:
+        diag["measure_ambiguous"] = measure_alts
+        opts = [{"src": src, "measure": m, "label": m} for m in measure_alts]
+        return {"partial": cut or None, "kind": "clarify",
+                "text": "Уточните, какую величину считать: %s."
+                        % ", ".join("«%s»" % m for m in measure_alts),
+                "options": opts, "sources": [src],
+                "diag": dict(diag, sec=round(time.time() - t0, 2))}
     # Величина не названа — считаем итоги по всем и показываем модели с именами.
     totals = [] if measure else totals_of(src, match, preds, measures_of(src))
     if totals:
@@ -2292,8 +2324,15 @@ def answer(question, focus=None):
                 "sources": [tag],
                 "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
-    return {"partial": cut or None, "kind": "answer", "text": text.strip(), "sources": [tag],
-            "completeness": cov,
+    # 🔴 ОТВЕТ НАЗЫВАЕТ ВЕЛИЧИНУ, ПО КОТОРОЙ СЧИТАЛ. У сущности их бывает девять со словом
+    # «сумма», и молчаливый выбор неотличим от догадки (п. 12). Дописывает КОД, а не модель:
+    # имя приходит из данных, значит одинаково верно на любой конфигурации, и его нельзя
+    # забыть. Приписка не дублируется, если модель уже назвала величину сама.
+    text = text.strip()
+    if measure and measure.lower() not in text.lower():
+        text = "%s\n\nСчитано по величине «%s»." % (text, measure)
+    return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
+            "completeness": cov, "measure": measure,
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 
@@ -2338,8 +2377,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(400, {"error": "empty question"})
         # `focus` — сущность, выбранная человеком после уточнения (кнопка/слово).
         focus = (req.get("focus") or "").strip() or None
+        # Выбор величины кнопкой — такой же вход, как `focus`. Без него уточнение о
+        # величине было бы вопросом, на который нечем ответить.
+        measure_pick = (req.get("measure") or "").strip() or None
         try:
-            out = answer(question, focus=focus)
+            out = answer(question, focus=focus, measure_pick=measure_pick)
             # СВЕЖЕСТЬ ДАННЫХ — В КАЖДЫЙ ОТВЕТ (п. 18). Если 1С недоступна или такт падает,
             # корпус остаётся консистентным (защиты сборки), но СТАРЕЕТ, а бот об этом
             # молчал бы. Возраст последнего успешного такта делает старение видимым, а при
