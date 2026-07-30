@@ -85,7 +85,14 @@ SELECT c.table_name AS tbl, c.column_index AS ord, c.column_name AS col, c.data_
             ELSE 'skip' END AS kind,
        (c.column_name LIKE '%\_Type' AND EXISTS (SELECT 1 FROM tmp3_prop p2
             WHERE p2.entity=lower(c.table_name) AND p2.prop=regexp_replace(c.column_name,'_Type$',''))) AS is_companion,
-       coalesce((SELECT k.key_cols=['Ref_Key'] FROM tmp3_key k WHERE k.entity=lower(c.table_name)),false) AS own_ref
+       coalesce((SELECT k.key_cols=['Ref_Key'] FROM tmp3_key k WHERE k.entity=lower(c.table_name)),false) AS own_ref,
+       -- 🔴 ПРИЗНАК «ОБЪЯВЛЕНИЕ СОБСТВЕННОЕ». Колонка объявлена самой сущностью, а не только
+       -- её вложенным типом. Нужен, чтобы у ссылочного объекта в текст не попадали поля
+       -- табличной части: они уже есть у своей сущности отдельным источником.
+       -- Считается ЗДЕСЬ и один раз — соединение с объявлениями уже есть, новой работы нет.
+       -- [замер 30.07] подзапрос на каждую сущность стоил бы 68 с в пересчёте на 1 502
+       -- сущности против 98 мс одним разом; рост квадратичен по размеру базы.
+       (p.entity = lower(c.table_name)) AS own_prop
 FROM duckdb_columns() c
 -- 🔴 ОБЪЯВЛЕНИЕ ИЩЕТСЯ И ВО ВЛОЖЕННОМ ТИПЕ. Регистры 1С отдают данные обёрткой, а поля
 -- самих движений объявлены ОТДЕЛЬНОЙ сущностью, имя которой начинается с имени регистра
@@ -387,7 +394,30 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
           ON r.guid = CASE WHEN regexp_full_match(u.val,
                '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
              THEN u.val END
-   WHERE u.val <> ''),
+   -- 🔴 У ССЫЛОЧНОГО ОБЪЕКТА ПОЛЯ ВЛОЖЕННОГО ТИПА В ТЕКСТ НЕ ИДУТ.
+   -- Вложенная табличная часть разворачивается загрузчиком в ту же таблицу, и её колонки
+   -- (`LineNumber`, номенклатура, количество…) попадали в текст объекта, размножая строки:
+   -- [замер 29.07] партнёров 216 строк на 164 объекта, раздуто 85 сущностей / 9 155 строк.
+   -- Бот отвечал «216 партнёров» вместо 164, и гейт это пропускал: 216 действительно
+   -- посчитано базой — посчитано не то.
+   -- Эти колонки НЕ теряются: табличная часть — отдельная сущность 1С, она загружена и в
+   -- корпусе есть у всех затронутых родителей (проверено).
+   -- Признак `own_prop` считается один раз в `tmp3_cls`; ключевые колонки не отбрасываются
+   -- никогда — иначе рассыпется тождество строки.
+   -- У обёрток наборов записей (регистры, ключ ≠ `['Ref_Key']`) поведение прежнее: там
+   -- вложенные строки и есть данные, [замер] сворачивание занизило бы число проводок вдвое.
+   -- 🔴 ВЫБРАСЫВАЕМ ТОЛЬКО ТО, ЧТО ЕСТЬ ГДЕ ВЗЯТЬ. Колонки вложенного типа убираются из
+   -- текста объекта лишь при условии, что сама вложенная сущность ЗАГРУЖЕНА и есть в
+   -- источниках. Иначе это не перенос, а потеря.
+   -- [замер 30.07] на второй базе дочерняя есть у всех затронутых — и я этого условия не
+   -- увидел. На ПЕРВОЙ базе из 41 затронутой сущности у **25 дочерней нет вовсе**: без
+   -- условия их колонки исчезли бы из текста, а взять их было бы негде.
+   -- Одна база снова умолчала о случае, которого в ней нет.
+   WHERE u.val <> ''
+     AND NOT (c.own_ref AND NOT c.own_prop
+              AND list_position((SELECT key_cols FROM kc), u.col) IS NULL
+              AND EXISTS (SELECT 1 FROM tmp3_src s2
+                          WHERE lower(s2.tbl) LIKE lower($1) || '\_%' ESCAPE '\'))),
  pieces AS (
    SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_dt, is_date,
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
@@ -404,6 +434,10 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
           ELSE NULL END AS piece,
      CASE WHEN is_guid THEN 0 WHEN is_num THEN 2 WHEN is_date THEN 3 ELSE 1 END AS prio
    FROM j)
+-- 🔴 ДВА УРОВНЯ, А НЕ ОДИН. `QUALIFY` не может ссылаться на ключ, который сам считается
+-- оконной функцией: движок отвечает `window function calls cannot be nested`. Ключ
+-- строится на внутреннем уровне, выбор одной строки на объект — на внешнем.
+SELECT src_table, row_key, doc, refs, doc_hash, nums, dt FROM (
 SELECT src_table,
        -- 🔴 ОБЪЯВЛЕННЫЙ КЛЮЧ НЕ ВСЕГДА РАЗЛИЧАЕТ СТРОКИ. У регистров 1С отдаёт данные
        -- обёрткой (одна запись на регистратор, движения внутри списком), и объявленный
@@ -413,7 +447,11 @@ SELECT src_table,
        -- любой сумме, и уйти оттуда он уже не может.
        -- Ключ дополняется отпечатком строки ТОЛЬКО там, где он повторяется: где ключ
        -- различает — он остаётся прежним, и отпечатки строк не меняются впустую.
-       CASE WHEN count(*) OVER (PARTITION BY src_table, rk) > 1
+       -- 🔴 У ССЫЛОЧНОГО ОБЪЕКТА ОТПЕЧАТОК К КЛЮЧУ НЕ ДОПИСЫВАЕТСЯ: строка корпуса
+       -- обязана быть ОДНА на объект. После отбрасывания колонок вложенного типа строки
+       -- одного объекта дают одинаковый текст, и `QUALIFY` ниже оставляет одну.
+       CASE WHEN NOT (SELECT key_cols FROM kc) = ['Ref_Key']
+             AND count(*) OVER (PARTITION BY src_table, rk) > 1
             THEN rk || '#' || sha1(doc) ELSE rk END AS row_key,
        doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, dt
 FROM (
@@ -444,7 +482,14 @@ FROM (
          -- даты. Отсутствие обязано выглядеть как отсутствие.
          max(nullif(try_cast(val AS TIMESTAMP), TIMESTAMP '0001-01-01 00:00:00'))
              FILTER (is_dt IS NOT NULL) AS dt
-  FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g) h;
+  FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g) h) q
+-- 🔴 ОДНА СТРОКА НА ОБЪЕКТ — только для ссылочных объектов. Порядок ПОЛНЫЙ: если два
+-- представителя различаются, выбор обязан быть один и тот же при любом порядке чтения
+-- (`techContext` ловушки 29, 30). Расхождение текстов внутри объекта после починки
+-- загрузчика означать нечего не должно — это проверяется отдельным числом в отчёте.
+QUALIFY NOT (SELECT key_cols FROM kc) = ['Ref_Key']
+     OR row_number() OVER (PARTITION BY src_table, row_key
+          ORDER BY doc, refs, doc_hash) = 1;
 
 -- ============ 6-бис. УПРОЩЁННЫЙ ВАРИАНТ СБОРКИ (запасной) ============
 -- 🔴 ОДНА СУЩНОСТЬ НЕ ДОЛЖНА УБИВАТЬ ВЕСЬ ТАКТ. Полная сборка делает много тонкого:
