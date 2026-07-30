@@ -102,6 +102,23 @@ GRANT SELECT ON search_tables  TO serene_ro;
 -- показать возраст данных и старение (п. 18), поэтому право нужно читающей роли.
 GRANT SELECT ON search_quality TO serene_ro;
 GRANT SELECT ON search_entity_class TO serene_ro;
+-- 🔴 ПРАВО НА АЛИАСЫ. Без него правило подтверждения выбора НЕ РАБОТАЕТ ВОВСЕ, и это не
+-- заметно: `psql` отдаёт `permission denied`, сервис ловит RuntimeError и трактует его как
+-- «знания нет — требовать подтверждения нечем», то есть пропускает ответ БЕЗ проверки.
+-- [замер 30.07] защита, построенная против уверенного неверного ответа, вырождалась ровно
+-- в него: «сколько НДС заплатили поставщикам» отвечалось регистром вместо уточнения, хотя
+-- в алиасах верной сущности лежит дословно эта фраза.
+GRANT SELECT ON search_entity_alias TO serene_ro;
+
+-- Индекс по алиасам: когда выбор сущности не подтверждён, соперников по вопросу ранжирует
+-- ДВИЖОК штатной `tfidf`, а не наш счёт общих слов. Разница принципиальная: [замер 30.07]
+-- счёт совпадений считает ВСЕ общие слова, поэтому «сколько записей в справочнике»
+-- совпадало с любым вопросом такого вида, и верный ответ про номенклатуру превращался в
+-- уточнение с вариантами «Денежные Средства В Кассах ККМ». У словаря включена частота
+-- (`frequency = true`), и редкое слово весит больше частого — это делает движок.
+CREATE INDEX IF NOT EXISTS alias_idx ON search_entity_alias
+  USING inverted(aliases search_dict, src_table) INCLUDE (src_table);
+GRANT SELECT ON alias_idx TO serene_ro;
 GRANT SELECT ON resolver_index TO serene_resolver;
 REVOKE SELECT ON resolver_index FROM serene_ro;
 

@@ -886,6 +886,15 @@ def _shares_chars(term, value):
     return bool(_ngrams(term) & _ngrams(value))
 
 
+# Сколько лучших совпадений по алиасам поднимать. Не отсечка данных, а размер списка,
+# который уйдёт ЧЕЛОВЕКУ: показывать больше нескольких вариантов бессмысленно, а
+# отброшенные ничего не теряют — они и так слабее победителя по совпадению фразы.
+ALIAS_TOP = int(os.environ.get('ASK_ALIAS_TOP', '8'))
+# Индекс по алиасам — чтобы соперников по вопросу ранжировал ДВИЖОК, а не мой счёт
+# совпадений: у словаря включена частота, и редкое слово весит больше частого.
+ALIAS_INDEX = os.environ.get('ASK_ALIAS_INDEX', 'alias_idx')
+
+
 def measures_of(src_table):
     """Какие величины есть у сущности — ИЗ ДАННЫХ, а не из кода.
 
@@ -2338,6 +2347,96 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
 
     def _family(t):
         return par.get(t) or t
+
+    def _alias_verdict(cand):
+        """Подтверждает ли собственное знание базы, что отвечать надо ЭТОЙ сущностью.
+
+        🔴 ПРОВЕРКА ОБЯЗАНА СТОЯТЬ НА ИТОГОВОМ ВЫБОРЕ, А НЕ НА ПРОМЕЖУТОЧНОМ. [замер 30.07]
+        прежде она стояла ниже арбитра, а обе ветки арбитра возвращают ответ раньше — то
+        есть на всяком пути, где ответ вообще собрался, проверка не выполнялась. Вместе с
+        отсутствующим правом `SELECT` (см. `corpus_init.sql`) это давало защиту, не
+        работавшую НИ РАЗУ.
+
+        Опора относительная: подтверждена та сущность, чьи алиасы совпали с вопросом
+        ЛУЧШЕ ВСЕХ, а не всякая, у которой нашлось общее слово. Разбор чисел — у места
+        вызова. Поиск ведёт база (п. 19): алиасы — такая же поисковая поверхность, как
+        названия, и до этой правки они никого не приводили, только проверяли.
+
+        Возвращает (supported, alias_top). `supported=True` при отсутствии знания — это
+        не одобрение, а признание, что проверять нечем.
+        """
+        try:
+            r = psql(
+                "SELECT count(*) FILTER (trim(u.w) <> ''), "
+                "       count(*) FILTER (trim(u.w) <> '' "
+                "         AND list_has_any(ts_lexize(%s, trim(u.w)), ts_lexize(%s, %s))) "
+                "FROM search_entity_alias a, unnest(str_split(a.aliases, ',')) AS u(w) "
+                "WHERE a.src_table = %s"
+                % (lit(STEM_DICT), lit(STEM_DICT), lit(question), lit(cand)))
+            known, hit = (int(r[0][0] or 0), int(r[0][1] or 0)) if r and r[0] else (0, 0)
+        except RuntimeError as e:
+            diag["alias_unreadable"] = str(e)[:120]
+            return True, []
+        if not known:
+            # Про ЭТУ сущность знания нет — требовать подтверждения нечем. Так выглядит
+            # база, где вики не собрана: [замер] в первой базе алиасов 0.
+            diag["alias_no_evidence"] = True
+            return True, []
+        if hit:
+            return True, []
+        # Не подтверждена — соперников подбираем ПО ВОПРОСУ, штатным ранжированием движка
+        # (`tfidf` учитывает редкость слова: «сколько» весит мало, «поставщикам» много).
+        # Свой счёт совпадений здесь стоял и был отвергнут замером — он считал ВСЕ общие
+        # слова, поэтому «сколько записей в справочнике» совпадало с чем угодно.
+        try:
+            top = [(r[0], float(r[1])) for r in psql(
+                "SELECT src_table, %s FROM %s WHERE aliases @@ %s ORDER BY 2 DESC LIMIT %d"
+                % (SCORERS.get(SCORER, SCORERS["bm25"]) % ALIAS_INDEX, ALIAS_INDEX,
+                   lit(question), ALIAS_TOP)) if r and r[0]]
+        except RuntimeError:
+            top = []
+        miss = [t for t, _ in top if t not in par]
+        if miss:
+            try:
+                par.update({r[0]: (r[1] or "") for r in psql(
+                    "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
+                    % (TABLES, ", ".join(lit(t) for t in miss))) if r and r[0]})
+            except RuntimeError:
+                pass
+        diag["alias_top"] = [t for t, _ in top[:4]]
+        return False, top
+
+    def _alias_clarify(cand, top):
+        """Список для человека: лучшие по вопросу, по одному представителю от семьи."""
+        seen, rivals = {_family(cand)}, []
+        for t, _n in top:
+            if t == cand or _family(t) in seen:
+                continue
+            seen.add(_family(t)); rivals.append(t)
+        opts_src = [cand] + rivals[:2]
+        try:
+            lab_by = {r[0]: r[1] for r in psql(
+                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
+        except RuntimeError:
+            return None
+        if len(opts_src) < 2 or not lab_by:
+            return None
+        # `distinct_by` — обязательное поле: `clarify_text` читает его без `get`. Прежняя
+        # копия правила его НЕ клала, то есть при первом же выполнении упала бы с
+        # `KeyError('distinct_by')`. Это ещё одно доказательство, что она не работала ни
+        # разу: путь, который никогда не исполнялся, донёс до продукта и дефект прав, и
+        # дефект формы данных.
+        opts = [{"src": t, "label": lab_by.get(t, t), "distinct_by": marks.get(t, ""),
+                 "found": by.get(t, 0)}
+                for t in opts_src if t in lab_by]
+        if len(opts) < 2:
+            return None
+        diag["unsupported_pick"] = cand
+        return {"partial": cut or None, "kind": "clarify",
+                "text": clarify_text(question, opts),
+                "options": opts, "sources": [o["label"] for o in opts],
+                "diag": dict(diag, sec=round(time.time() - t0, 2))}
     if (SIGNAL_DISAGREE and top_by_question and picked and not focus
             and top_by_question not in picked and top_by_question in by
             and _family(top_by_question) not in {_family(x) for x in picked}):
@@ -2396,6 +2495,23 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if len(arb_pool) > 1:
             diag["arbiter_rivals"] = arb_pool[1:]
 
+    def _checked(out):
+        """Ответ уходит только если собственное знание базы подтверждает выбор сущности.
+
+        Решение владельца 30.07: когда вопросу отвечает несколько РАЗНЫХ объектов —
+        всегда переспрашивать, а не выбирать за человека.
+        """
+        if not REQUIRE_SUPPORT or focus:
+            return out
+        w = (out.get("diag") or {}).get("focus")
+        if not w or out.get("kind") not in ("answer", "figures"):
+            return out
+        ok, top = _alias_verdict(w)
+        if ok:
+            return out
+        ask = _alias_clarify(w, top)
+        return ask or out
+
     if len(arb_pool) > 1 and not no_arbiter:
         # 🔴 СНАЧАЛА АРБИТР, ПОТОМ ЧЕЛОВЕК. Порядок п. 21: ответ → уточняющий вопрос →
         # отказ. Спрашивать человека, не попытавшись ответить, — значит переложить на него
@@ -2421,14 +2537,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 out = dict(cand_src[n])
                 out["diag"] = dict(out.get("diag", {}), arbiter=diag["arbiter"])
                 out["partial"] = cut or out.get("partial")
-                return out
+                return _checked(out)
         elif len(cand_ans) == 1:
             # Ответ смог собраться только у одного кандидата — остальные пусты. Выбирать не
-            # из чего, и спрашивать человека не о чем: у прочих ответа нет.
+            # из чего, но это НЕ повод не проверять: «остальные не собрались» говорит о
+            # соперниках, а не о том, что этот верен.
             out = dict(cand_src[0])
             out["diag"] = dict(out.get("diag", {}), arbiter={"single": True})
             out["partial"] = cut or out.get("partial")
-            return out
+            return _checked(out)
 
     if len(picked) > 1:
         try:
@@ -2474,39 +2591,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     #      Тот же приём уже применён в этом файле при отборе кандидатов.
     # Ни одно не выполнилось — система не знает, та ли это запись, и обязана спросить
     # (п. 12: догадка — ошибка; п. 21: уточнение стоит выше отказа).
+    # Тот же контроль на пути БЕЗ арбитра: правило обязано быть одно, а не два похожих.
+    # Прежде здесь лежала его собственная копия, и она разошлась с замыслом — проверяла
+    # `list_has_any` (хоть одно общее слово), то есть пропускала 160 сущностей из 697.
     if REQUIRE_SUPPORT and picked and not focus:
         cand = picked[0]
-        supported = (cand == top_by_question)
-        if not supported:
-            try:
-                supported = bool(psql(
-                    "SELECT 1 FROM search_entity_alias a, unnest(str_split(a.aliases, ',')) AS u(w) "
-                    "WHERE a.src_table = %s AND trim(u.w) <> '' "
-                    "  AND list_has_any(ts_lexize(%s, trim(u.w)), ts_lexize(%s, %s)) LIMIT 1"
-                    % (lit(cand), lit(STEM_DICT), lit(STEM_DICT), lit(question))))
-            except RuntimeError:
-                # Знания нет вовсе (вики не собрана) — требовать подтверждения нечем, и
-                # молчать система не должна: это не защита от выдумки, а требование опоры.
-                supported = True
-        if not supported:
-            rivals = [c for c in ([top_by_question] if top_by_question else []) + list(cands)
-                      if c and c != cand][:2]
-            opts_src = [cand] + rivals
-            try:
-                lab_by = {r[0]: r[1] for r in psql(
-                    "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                    % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
-            except RuntimeError:
-                lab_by = {}
-            if len(opts_src) > 1 and lab_by:
-                opts = [{"src": t, "label": lab_by.get(t, t), "found": by.get(t, 0)}
-                        for t in opts_src if t in lab_by]
-                diag["unsupported_pick"] = cand
-                return {"partial": cut or None, "kind": "clarify",
-                        "text": clarify_text(question, opts),
-                        "options": opts, "sources": [o["label"] for o in opts],
-                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
-
+        if cand != top_by_question:
+            ok, top = _alias_verdict(cand)
+            if not ok:
+                ask = _alias_clarify(cand, top)
+                if ask:
+                    return ask
     src = picked[0] if picked else None
     if src not in by and not focus:
         # Модель назвала источник, куда поиск не попал: проверяем, есть ли там что-то
