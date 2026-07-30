@@ -35,14 +35,32 @@ TMP=$(mktemp -d "$EXCH/wiki-alias-XXXXXX") || { echo "алиасы: нет до�
 chmod 755 "$TMP"; trap 'rm -rf "$TMP"' EXIT
 done_total=0
 while :; do
-  # Пачка формируется В БАЗЕ одним запросом, наружу уходит готовый JSON (п. 20).
+  # 🔴 ПАЧКА — ЭТО ГРУППА ПОХОЖИХ, А НЕ СЛУЧАЙНЫЕ СУЩНОСТИ ПОДРЯД.
+  # [замер 30.07] описанные поодиночке страницы не различают соседей: у «Подтверждения
+  # оплаты НДС в бюджет» в «не годится» стояло «налоговая декларация, конкретный платёж» —
+  # верно, но не отделяет ни от «НДС записи книги покупок», ни от строк приобретений. А
+  # сущностей со словом «НДС» в базе ВОСЕМНАДЦАТЬ, и бот отвечал не из той: 8 654 378,11
+  # вместо 11 036 086,09.
+  #
+  # Поэтому пачка набирается ПО БЛИЗОСТИ СМЫСЛА к первой невзятой сущности — тем же
+  # вектором названия, что уже лежит в `search_tables.emb`. Ни списка тем, ни слов о
+  # конкретной базе: соседей определяет сама база. Тогда модель видит их рядом и может
+  # сказать, чем они отличаются ДРУГ ОТ ДРУГА.
   psql "$DSN" -tA -c "
+    WITH seed AS (
+      SELECT f.src_table, t.emb FROM wiki_entity_facts f
+      JOIN search_tables t ON t.src_table = f.src_table
+      WHERE f.cls <> 'service'
+        AND NOT EXISTS (SELECT 1 FROM search_entity_alias a WHERE a.src_table = f.src_table)
+      ORDER BY f.src_table LIMIT 1)
     SELECT to_json(list(struct_pack(entity := src_table, title := label,
                                     quantities := coalesce(measures,''))))
-    FROM (SELECT f.* FROM wiki_entity_facts f
+    FROM (SELECT f.*, t.emb <=> (SELECT emb FROM seed) AS d
+            FROM wiki_entity_facts f
+            JOIN search_tables t ON t.src_table = f.src_table
            WHERE f.cls <> 'service'
              AND NOT EXISTS (SELECT 1 FROM search_entity_alias a WHERE a.src_table = f.src_table)
-           ORDER BY f.src_table LIMIT $BATCH)" > "$TMP/pay" 2>/dev/null
+           ORDER BY d, f.src_table LIMIT $BATCH)" > "$TMP/pay" 2>/dev/null
   PAY=$(cat "$TMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
 
@@ -51,7 +69,7 @@ while :; do
   # доходит. У `openclaw agent` для этого есть штатный `--message-file`. Тот же класс дефекта, что
   # «стена argv» в разборе `HOW_NOT_TO §0`: данные аргументом командной строки не передаются.
   {
-    printf '%s' "Return JSON only, no prose, no code fences. For each record type below, list the words and phrases a business user of this database would use when asking about it, in the SAME language as its title, and what it is good and not good for answering. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+    printf '%s' "Return JSON only, no prose, no code fences. The record types below are CLOSE IN MEANING to each other — that is why they are shown together. For each one, in the SAME language as its title: (1) aliases — the words and phrases a business user of this database would use when asking about it; (2) bestUsedFor — the questions it answers; (3) notEnoughFor — what it does NOT answer, and this field MUST name the SIBLING record types from this same list that a person could confuse it with, and say which of them answers that instead. Be concrete: name them. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
