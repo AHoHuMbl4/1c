@@ -92,7 +92,14 @@ SELECT c.table_name AS tbl, c.column_index AS ord, c.column_name AS col, c.data_
        -- Считается ЗДЕСЬ и один раз — соединение с объявлениями уже есть, новой работы нет.
        -- [замер 30.07] подзапрос на каждую сущность стоил бы 68 с в пересчёте на 1 502
        -- сущности против 98 мс одним разом; рост квадратичен по размеру базы.
-       (p.entity = lower(c.table_name)) AS own_prop
+       (p.entity = lower(c.table_name)) AS own_prop,
+       -- 🔴 КТО ИМЕННО ОБЪЯВИЛ КОЛОНКУ. Нужно, чтобы условие «есть где взять» проверяло
+       -- ТУ САМУЮ вложенную сущность, а не любую подходящую по шаблону имени. [замер 30.07]
+       -- у документа с двумя табличными частями достаточно, чтобы одна не загрузилась
+       -- (отказ 1С, права, пустая), и колонки ЭТОЙ части выбросились бы, потому что
+       -- загрузилась соседняя. Шаблон имени к тому же не экранировал подчёркивания и
+       -- ломался на именах объектов с `_`.
+       p.entity AS decl_entity
 FROM duckdb_columns() c
 -- 🔴 ОБЪЯВЛЕНИЕ ИЩЕТСЯ И ВО ВЛОЖЕННОМ ТИПЕ. Регистры 1С отдают данные обёрткой, а поля
 -- самих движений объявлены ОТДЕЛЬНОЙ сущностью, имя которой начинается с имени регистра
@@ -351,10 +358,7 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
  -- Подчёркивания В САМОМ имени экранируются: имя объекта 1С законно бывает с
  -- подчёркиванием (отраслевые префиксы), и без экранирования `Catalog_Мои_Товары`
  -- считался бы дочерним для `Catalog_Мои`.
- fold AS (SELECT (SELECT key_cols FROM kc) = ['Ref_Key']
-                 AND EXISTS (SELECT 1 FROM tmp3_src s2
-                             WHERE lower(s2.tbl) LIKE replace(lower($1),'_','\_') || '\_%' ESCAPE '\')
-                 AS on_),
+ fold AS (SELECT (SELECT key_cols FROM kc) = ['Ref_Key'] AS on_),
  -- coalesce ДО unpivot: иначе пустые ячейки исчезают вовсе (UNPIVOT роняет NULL), и
  -- составной ключ схлопывается. Боевой ключ выглядит как «160.1|||ЛЕПРО|___|ЗП80РК» —
  -- пустые сегменты значимы, они держат позицию. Без них разные строки дают ОДИН ключ,
@@ -434,7 +438,9 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
    WHERE u.val <> ''
      AND NOT (coalesce(c.own_ref, false) AND NOT coalesce(c.own_prop, true)
               AND list_position((SELECT key_cols FROM kc), u.col) IS NULL
-              AND (SELECT on_ FROM fold))),
+              AND (SELECT on_ FROM fold)
+              -- Проверяем ИМЕННО ту сущность, что объявила колонку.
+              AND EXISTS (SELECT 1 FROM tmp3_src s2 WHERE lower(s2.tbl) = c.decl_entity))),
  pieces AS (
    SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_dt, is_date,
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL

@@ -16,3 +16,5 @@
 
 Базовый код продукта: `windows/odata-setup/` (src + `dist/setup-1c-odata.exe`).
 Черновики и эксперименты — только в этой папке.
+
+**План работ:** [`PLAN.md`](PLAN.md).
