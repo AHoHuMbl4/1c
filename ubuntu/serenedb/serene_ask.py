@@ -1984,9 +1984,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                        lit(intent["kind"]), lit(intent["kind"]))) if r and r[0]}
             except RuntimeError:
                 pass
-            if has_field and len(has_field) < len(cands):
-                diag["field_absent"] = len(cands) - len(has_field)
-                cands = [c for c in cands if c in has_field]
+            # 🔴 ДОБАВЛЯЕМ, А НЕ ОТСЕИВАЕМ. Отсев по совпадению слова с названием — привязка
+            # к языку, и падежи её ломают: [замер 30.07] модель вернула «складов»,
+            # справочник называется «Склады», `contains` ложна в обе стороны — и мой же
+            # отсев выбросил `catalog_склады`, то есть САМ ОТВЕТ. Уцелели константы
+            # «ИспользоватьНесколькоСкладов»: там «складов» случайно лежит целиком.
+            # Я повторил в починке тот дефект, который чинил (`HOW_NOT_TO §3.30`).
+            #
+            # Поэтому признак «у кандидата есть спрошенное поле» теперь только ПОДНИМАЕТ
+            # его в начало круга — вперёд, к арбитру. Никто не выбрасывается: потеря
+            # верной сущности невозможна по построению, а не «маловероятна».
+            if has_field:
+                diag["field_present"] = len(has_field)
+                cands = ([c for c in cands if c in has_field]
+                         + [c for c in cands if c not in has_field])
         except RuntimeError:
             pass
     # Порядок списка — ПО СМЫСЛУ вопроса, не по числу совпадений: модель тяготеет к
