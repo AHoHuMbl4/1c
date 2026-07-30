@@ -361,9 +361,15 @@ def _predicates(intent):
 def _fetch(match_sql, preds, order, limit):
     where = [w for w in ([match_sql] + preds) if w]
     src = INDEX if match_sql else CORPUS
+    # 🔴 РАЗДЕЛИТЕЛЬ РАВЕНСТВА ОБЯЗАТЕЛЕН. `ORDER BY … LIMIT` без него делает ОТВЕТ
+    # невоспроизводимым: у равных оценок порядок задаётся ходом исполнения, а `LIMIT`
+    # отрезает по этому порядку — в модель уезжают РАЗНЫЕ строки при одном и том же
+    # вопросе и неизменных данных. [замер 30.07] один вопрос пять раз: дважды ответ
+    # «невозможно», трижды верные 73 181 157,68. Это `techContext` ловушка 30, уже
+    # укусившая сборку корпуса; здесь она кусала ответы.
     return psql(
         "SELECT row_key, src_table, 0, coalesce(doc_date::date::text,''), "
-        "       %s AS s, doc FROM %s%s ORDER BY s DESC LIMIT %d"
+        "       %s AS s, doc FROM %s%s ORDER BY s DESC, src_table, row_key LIMIT %d"
         % (order, src, (" WHERE " + " AND ".join(where)) if where else "", limit))
 
 
@@ -588,7 +594,7 @@ def rows_of(src_table, match, preds, limit, measure=None):
         "SELECT row_key, src_table, coalesce(%s,0), coalesce(doc_date::date::text,''), "
         "       0 AS s, %s FROM %s WHERE %s ORDER BY %s LIMIT %d"
         % (("map_extract(nums, %s)[1]" % lit(measure)) if measure else "NULL::DOUBLE",
-           frag, src, " AND ".join(where), order, limit))
+           frag, src, " AND ".join(where), order + ", row_key", limit))
 
 
 PICK_SYS = """You map a user's question to a record type.
@@ -772,7 +778,7 @@ def resolve_values(term):
     except Exception:                          # noqa: BLE001 — эмбеддер недоступен
         return []
     near = _resolver_psql(
-        "SELECT DISTINCT value FROM resolver_index ORDER BY emb <=> %s LIMIT %d"
+        "SELECT DISTINCT value FROM resolver_index ORDER BY emb <=> %s, value LIMIT %d"
         % (vec, RESOLVE_NEAR))
     vals = [r[0] for r in near if r and r[0]]
     if not vals:
@@ -1797,8 +1803,12 @@ def answer(question, focus=None):
         # то есть array_* НИКОГДА не сможет воспользоваться векторным индексом. Выдача
         # не меняется — сверено топ-40, совпало 40 из 40 позиция в позицию.
         # <=> это РАССТОЯНИЕ: меньше = ближе, поэтому сортировка по возрастанию, без DESC.
+        # 🔴 И ЗДЕСЬ РАЗДЕЛИТЕЛЬ РАВЕНСТВА. Это самое дорогое место: `LIMIT` отрезает
+        # ближайшие строки, из них складывается САМ НАБОР сущностей-кандидатов, и без
+        # разделителя набор колеблется. [замер 30.07] один вопрос пять раз — сущностей в
+        # наборе 1 322, 1 322, 1 318, 1 318, 1 318, и вместе с набором менялся ответ.
         near = psql("SELECT src_table, count(*) FROM (SELECT src_table FROM %s "
-                    "ORDER BY emb <=> %s LIMIT %d) GROUP BY 1"
+                    "ORDER BY emb <=> %s, src_table, row_key LIMIT %d) GROUP BY 1"
                     % (CORPUS, vec, TOPK))
         by = {r[0]: int(r[1]) for r in near if r and r[0]}
         match = ""
@@ -1874,7 +1884,9 @@ def answer(question, focus=None):
         try:
             order = [r[0] for r in psql(
                 "SELECT src_table FROM %s WHERE src_table IN (%s) "
-                "ORDER BY emb <=> %s"
+                # разделитель равенства: ниже порядок режется по RERANK_TOP,
+                # и без него до реранкера доходят разные сущности
+                "ORDER BY emb <=> %s, src_table"
                 % (TABLES, ", ".join(lit(c) for c in cands), _vec(intent["kind"])))]
             cands = order + [c for c in cands if c not in order]
         except RuntimeError:
@@ -1936,7 +1948,7 @@ def answer(question, focus=None):
             # LIMIT в БАЗЕ: иначе в кандидаты, а следом в промпт, уезжает вся база.
             # Число получаем из бюджета промпта, а не задаём отдельно.
             cands = [r[0] for r in psql(
-                "SELECT src_table FROM %s ORDER BY emb <=> %s LIMIT %d"
+                "SELECT src_table FROM %s ORDER BY emb <=> %s, src_table LIMIT %d"
                 % (TABLES, _vec(intent.get("kind") or question),
                    max(1, PICK_BUDGET // 40))) if r and r[0]]
         except RuntimeError:
