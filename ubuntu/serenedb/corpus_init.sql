@@ -14,7 +14,18 @@
 
 CREATE TABLE IF NOT EXISTS search_corpus (
   src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
-  nums MAP(VARCHAR, DOUBLE), doc_date TIMESTAMP, emb FLOAT[1024]);
+  nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP,
+  emb FLOAT[1024]);
+
+-- 🔴 ДОБОР КОЛОНКИ ДЛЯ БАЗ, СОБРАННЫХ ПРЕЖНИМ КОДОМ. `CREATE TABLE IF NOT EXISTS` у
+-- существующей таблицы не делает НИЧЕГО — новая колонка из объявления выше в такую базу
+-- не попадёт. [замер 30.07] первая база (`dbname=postgres`, 103 808 строк) осталась без
+-- `flags`, и запрос сервиса падал: `Referenced column "flags" not found in FROM clause`.
+-- Отказ при наличии данных — дефект (п. 21), поэтому добор стоит ЗДЕСЬ, в создании схемы,
+-- которое идёт первым шагом каждого такта, а не только в слиянии.
+-- Пока база не пересобрана, карта пуста, `coalesce(..., false)` читает это как «не папка»,
+-- и поведение совпадает с прежним — деградация плавная, а не отказ.
+ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS flags MAP(VARCHAR, BOOLEAN);
 
 CREATE TABLE IF NOT EXISTS resolver_index (
   table_name VARCHAR, column_name VARCHAR, value VARCHAR, emb FLOAT[1024]);

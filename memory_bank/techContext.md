@@ -491,6 +491,67 @@ CREATE TEXT SEARCH DICTIONARY syn (
 совпадает много названий, и «Корректировка Приобретения» с «Приобретение Товаров Услуг»
 неразличимы по словам. Он снимает СЛУЧАЙНЫЕ потери (падеж), но не выбирает смысл.
 
+## Ловушка 35: булев реквизит есть только в тексте — типизированного доступа к нему нет
+
+У витрины две карты: `nums MAP(VARCHAR, DOUBLE)` для чисел и — с 30.07 — `flags
+MAP(VARCHAR, BOOLEAN)` для булевых. До этого булевы реквизиты (`kind='flag'`) попадали
+**только в текст `doc`**, и отобрать по ним было нечем, кроме поиска подстроки.
+
+**Штатного способа достать именованный реквизит из УЖЕ СОБРАННОГО текста у движка нет.**
+Проверено агентом `serenedb-native` на живом движке 26.07.3: структурный доступ
+(`doc['name']`, `map_extract_value`) требует, чтобы значение лежало в типизированной
+колонке **на момент построения индекса**. `ts_phrase` не спасает — строка
+`'Description: Гайка IsFolder true в тексте | IsFolder: false'` попадает в выдачу
+`doc @@ ts_phrase('IsFolder true')` наравне с настоящей папкой, то есть даёт ровно тот же
+класс ложных срабатываний, что и `contains`.
+
+**Замер стоимости** (`ut_test`, 623 565 строк, 3 прогона):
+
+| запрос | время |
+|---|---|
+| `count(*)` — базовая линия | 2,8 / 5,9 мс |
+| `count(*) FILTER (contains(doc,'IsFolder: true'))` | 244 / 262 / 355 мс |
+| `count(*) FILTER (map_extract_value(nums,'Количество') IS NOT NULL)` | 22 / 30 / 46 мс |
+
+Типизированная карта дешевле разбора текста **примерно в 8 раз**.
+
+**MAP индексировать нельзя, но в `INCLUDE` он принимается:**
+
+```
+CREATE INDEX bad ON corp USING inverted(row_key, doc ru, flags);
+ERROR:  Column 'flags' has unsupported type MAP(VARCHAR, BOOLEAN) and can not be indexed
+```
+```sql
+CREATE INDEX corp_idx ON corp USING inverted(row_key, doc ru, src_table)
+  INCLUDE (nums, flags, doc_date);   -- так работает
+```
+В `INCLUDE` предикат по карте становится `Column Filter` **внутри** `IRESEARCH_SCAN`, а не
+`FILTER` сверху. У нас `INCLUDE (src_table, row_key, doc_date)`, то есть ни `nums`, ни
+`flags` туда не входят — обращение из `search_idx` работает, но с походом в таблицу.
+Добавление их в `INCLUDE` требует пересоздания индекса; для правильности не обязательно.
+
+**Пустая агрегация даёт NULL, а не пустой MAP.** Проверено:
+`map_from_entries(list(...) FILTER (false)) IS NULL` → `t`. Поэтому `coalesce` до
+`MAP{}::MAP(VARCHAR, BOOLEAN)` обязателен, иначе сущность без единого булева реквизита
+неотличима от несобранной.
+
+**Отбор — трёхзначный, и это существенно:**
+```sql
+WHERE NOT coalesce(map_extract_value(flags, 'IsFolder'), false)  -- не папка (в т.ч. если реквизита нет)
+WHERE     coalesce(map_extract_value(flags, 'IsFolder'), false)  -- только папки
+```
+
+**Соседняя ловушка, если пойти через `VARCHAR[]`:** `NOT (flagset @@ ts_like(...))`
+работает по правилам SQL-NULL и **выбрасывает строки с `flagset IS NULL`** — то есть молча
+теряет сущности без булевых реквизитов (п. 13). Обойти через `coalesce` вокруг `@@`
+нельзя: `ERROR: TSQUERY expression evaluated outside an @@ match against an
+inverted-indexed column`.
+
+**Отвергнуто по универсальности:** `STRUCT` в `INCLUDE` движок принимает, но имена полей
+обязаны стоять в DDL — это ровно тот список имён конкретной базы, которого нельзя
+допускать. `VARIANT` в индекс целиком тоже не принимается, только `INCLUDE`, — то есть
+против пары `nums` + `flags` не даёт ничего, кроме «одной колонки вместо двух».
+
 ## Известная граница: фильтр подсказок привязан к русским словам
 
 `serene_sync._selectable` (и его копия в `serene_select.py`) отбрасывает кандидатов по

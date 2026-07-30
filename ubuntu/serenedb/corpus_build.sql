@@ -344,7 +344,7 @@ QUALIFY row_number() OVER (PARTITION BY tbl ORDER BY pr, ord) = 1;
 -- ============ 6. СБОРКА ТЕКСТА ============
 CREATE OR REPLACE TABLE tmp3_corpus
   (src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
-   nums MAP(VARCHAR, DOUBLE), doc_date TIMESTAMP);
+   nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP);
 
 PREPARE p_doc AS
 INSERT INTO tmp3_corpus
@@ -385,6 +385,16 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
           (c.kind IN ('text','flag') AND NOT c.is_companion AND c.col <> 'DataVersion'
            AND NOT regexp_matches(u.val,'^(https?://|/)')) AS in_text,
           (c.kind = 'num') AS is_num,
+          -- Булев реквизит — ОТДЕЛЬНАЯ карта, как и величины, и по той же причине:
+          -- обращаться к реквизиту по имени, а не искать подстроку в тексте документа.
+          -- [ревизия 30.07] `contains(doc, 'IsFolder: true')` — подстрочный поиск: литерал
+          -- может встретиться в комментарии или наименовании, и запись молча выпадет из
+          -- счёта. Сегодня совпадений нет (375 = 375 по граничному regexp), но булевых
+          -- реквизитов в корпусе 830 имён у 376 301 строки — на следующем совпадёт.
+          -- Агент `serenedb-native` проверил на живом движке: штатного способа достать
+          -- именованный реквизит из УЖЕ СОБРАННОГО текста у движка нет, `ts_phrase` даёт
+          -- ровно те же ложные срабатывания. Значит карта строится при сборке.
+          (c.kind = 'flag') AS is_flag,
           -- 🔴 ВЕЛИЧИНА И ЧИСЛО В ТЕКСТЕ — РАЗНЫЕ ВЕЩИ, И ЭТО ОПЛАЧЕНО ОШИБКОЙ.
           -- [замер 30.07] `SurrogateKey` попал в карту величин у 656 сущностей,
           -- `LineNumber` — у 359, и на вопрос «сколько штук закупили» система отвечала
@@ -466,7 +476,7 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
               -- Проверяем ИМЕННО ту сущность, что объявила колонку.
               AND EXISTS (SELECT 1 FROM tmp3_src s2 WHERE lower(s2.tbl) = c.decl_entity))),
  pieces AS (
-   SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_measure, is_dt, is_date,
+   SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_measure, is_flag, is_dt, is_date,
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
           WHEN is_guid AND refname IS NOT NULL THEN replace(col,'_Key','') || ': ' || refname
           WHEN is_guid THEN NULL
@@ -484,7 +494,7 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
 -- 🔴 ДВА УРОВНЯ, А НЕ ОДИН. `QUALIFY` не может ссылаться на ключ, который сам считается
 -- оконной функцией: движок отвечает `window function calls cannot be nested`. Ключ
 -- строится на внутреннем уровне, выбор одной строки на объект — на внешнем.
-SELECT src_table, row_key, doc, refs, doc_hash, nums, dt FROM (
+SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt FROM (
 SELECT src_table,
        -- 🔴 ОБЪЯВЛЕННЫЙ КЛЮЧ НЕ ВСЕГДА РАЗЛИЧАЕТ СТРОКИ. У регистров 1С отдаёт данные
        -- обёрткой (одна запись на регистратор, движения внутри списком), и объявленный
@@ -500,13 +510,13 @@ SELECT src_table,
        CASE WHEN NOT (SELECT on_ FROM fold)
              AND count(*) OVER (PARTITION BY src_table, rk) > 1
             THEN rk || '#' || sha1(doc) ELSE rk END AS row_key,
-       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, dt
+       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, flags, dt
 FROM (
 SELECT src_table,
        -- Без объявленного ключа и без Ref_Key ключом становится отпечаток текста —
        -- как в боевом коде, иначе строки с пустым ключом затирают друг друга.
        coalesce(row_key, sha1(doc)) AS rk,
-       doc, refs, nums, dt
+       doc, refs, nums, flags, dt
 FROM (
   SELECT $1::VARCHAR AS src_table,
          coalesce(any_value(k.row_key),
@@ -523,6 +533,15 @@ FROM (
          -- а число «сколько изменилось» переставало бы что-либо значить.
          map_from_entries(list({'key': col, 'value': try_cast(val AS DOUBLE)} ORDER BY col)
                           FILTER (is_measure AND try_cast(val AS DOUBLE) IS NOT NULL)) AS nums,
+         -- Карта булевых реквизитов. `try_cast(... AS BOOLEAN)` — штатное приведение,
+         -- круг замкнут на всех формах, которые отдаёт OData: 'true'/'True'/'1'/'t' -> t,
+         -- мусор и пустая строка -> NULL, то есть в карту не попадают.
+         -- `coalesce` до пустой карты обязателен: пустая агрегация даёт NULL, а не пустой
+         -- MAP, и тогда сущности без единого булева реквизита отличались бы от прочих.
+         -- Семантика отбора трёхзначная и это важно: «реквизита нет» = «не папка».
+         coalesce(map_from_entries(list({'key': col, 'value': try_cast(val AS BOOLEAN)} ORDER BY col)
+                          FILTER (is_flag AND try_cast(val AS BOOLEAN) IS NOT NULL)),
+                  MAP{}::MAP(VARCHAR, BOOLEAN)) AS flags,
          -- [замер 28.07] 312 строк корпуса имели `doc_date = 0001-01-01`: незаполненная
          -- дата 1С — валидный TIMESTAMP, и `try_cast` её принимал. «Самый ранний
          -- документ» отвечал первым годом нашей эры, а «даты нет» было неотличимо от
@@ -564,7 +583,10 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
  g AS (SELECT c.rid,
               regexp_replace($1,'^[^_]*_','') || coalesce(' | ' || string_agg(c.col || ': ' || c.val, ' | '), '') AS doc
        FROM cells c WHERE c.val <> '' GROUP BY c.rid)
-SELECT $1::VARCHAR, coalesce(k.rk, sha1(g.doc)), g.doc, '', sha1(g.doc), NULL, NULL
+-- Порядок колонок позиционный: src_table, row_key, doc, refs, doc_hash, nums, flags,
+-- doc_date. У упрощённого пути ни величин, ни булевых реквизитов, ни дат нет — и это
+-- честный NULL «не разбирали», а не пустая карта «разобрали, ничего не нашли».
+SELECT $1::VARCHAR, coalesce(k.rk, sha1(g.doc)), g.doc, '', sha1(g.doc), NULL, NULL, NULL
 FROM g LEFT JOIN keyed k USING (rid);
 
 -- Первый заход: полная сборка. Ошибка ОДНОЙ сущности здесь не останавливает файл —

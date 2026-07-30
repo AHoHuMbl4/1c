@@ -80,6 +80,10 @@ WHERE c.nums IS NOT NULL AND len(map_keys(c.nums)) > 0
 -- DDL остаётся ВНЕ транзакции: движок коммитит его сразу и сам об этом предупреждает
 -- («DDL is not transactional»), а при `sdb_strict_ddl = on` он внутри транзакции упал бы.
 ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS nums MAP(VARCHAR, DOUBLE);
+-- Булевы реквизиты — своей типизированной картой, как и величины. Обращение к
+-- реквизиту по имени вместо подстрочного поиска в тексте (`corpus_build.sql`, is_flag).
+-- [проверено] `ADD COLUMN` при живом инвертированном индексе индекс не роняет.
+ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS flags MAP(VARCHAR, BOOLEAN);
 
 -- ============ 2. ЗАПИСЬ — ОДНОЙ ТРАНЗАКЦИЕЙ ============
 -- [замер] транзакции в этом движке работают: `BEGIN; MERGE; UPDATE; DELETE; ROLLBACK`
@@ -98,10 +102,10 @@ USING tmp3_corpus AS s
 ON t.src_table = s.src_table AND t.row_key = s.row_key
 WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash THEN
      UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash,
-                nums = s.nums, doc_date = s.doc_date, emb = NULL
+                nums = s.nums, flags = s.flags, doc_date = s.doc_date, emb = NULL
 WHEN NOT MATCHED THEN
-     INSERT (src_table, row_key, doc, refs, doc_hash, nums, doc_date, emb)
-     VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.doc_date, NULL);
+     INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, emb)
+     VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, NULL);
 
 -- Величины и дата не входят в отпечаток, поэтому строки с неизменившимся текстом `MERGE`
 -- не трогает — а обновить их нужно. Вектор здесь не сбрасывается: текст тот же.
@@ -109,10 +113,16 @@ WHEN NOT MATCHED THEN
 -- поэтому смена времени внутри суток отпечаток НЕ меняет: `MERGE` строку пропускает, и
 -- без этой строки `doc_date` оставался бы старым навсегда. [замер] 446 строк корпуса
 -- несут дату с ненулевым временем, то есть попадают в этот класс.
-UPDATE search_corpus c SET nums = t.nums, doc_date = t.doc_date
+-- 🔴 `flags` ОБЯЗАНЫ БЫТЬ ЗДЕСЬ, а не только в `MERGE`. Булев реквизит в отпечаток не
+-- входит (он часть текста, но карта строится отдельно), поэтому у строк с неизменившимся
+-- текстом `MERGE` не срабатывает вовсе. При первом такте после `ADD COLUMN` отпечатки
+-- совпадают У ВСЕГО корпуса — без этой строки карта осталась бы пустой навсегда, и
+-- отбор «не папка» молча возвращал бы всё подряд.
+UPDATE search_corpus c SET nums = t.nums, flags = t.flags, doc_date = t.doc_date
 FROM tmp3_corpus t
 WHERE t.src_table = c.src_table AND t.row_key = c.row_key
-  AND (c.nums IS DISTINCT FROM t.nums OR c.doc_date IS DISTINCT FROM t.doc_date);
+  AND (c.nums IS DISTINCT FROM t.nums OR c.flags IS DISTINCT FROM t.flags
+       OR c.doc_date IS DISTINCT FROM t.doc_date);
 
 -- Исчезнувшие строки удаляет БАЗА одним запросом — и только по сущностям, которые в этот
 -- раз ДЕЙСТВИТЕЛЬНО собрались. Прежний фильтр по `tmp3_src` был тавтологией: `tmp3_src`
