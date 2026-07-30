@@ -1010,12 +1010,15 @@ def pick_entity(question, kind, cands, counts=None, match="", cut=None):
     поэтому одинаково работает на базе любого размера и на любом языке.
     """
     if len(cands) < 2:
-        return (cands[:1], {})
+        # 🔴 ДЛИНА ВЫХОДА ОДНА НА ВСЕ ВЕТКИ. [замер 30.07] этот выход остался двухместным
+        # после добавления плана, и на вопросе с единственным кандидатом сервис отдал 503
+        # (`not enough values to unpack`). Отказ честный (п. 18 сработал), но это дефект.
+        return (cands[:1], {}, {})
     try:
         rs = psql("SELECT src_table, label, parent FROM %s WHERE src_table IN (%s)"
                   % (TABLES, ", ".join(lit(c) for c in cands)))
     except RuntimeError:
-        return ([], {})
+        return ([], {}, {})
     # ПОРЯДОК КАНДИДАТОВ ОБЯЗАН СОХРАНИТЬСЯ. `IN (...)` возвращает строки в порядке
     # хранения, а не в порядке списка — и смысловой порядок, посчитанный выше, молча
     # терялся. Модель тяготеет к началу списка, поэтому она получала 226 названий
@@ -1028,7 +1031,7 @@ def pick_entity(question, kind, cands, counts=None, match="", cut=None):
     parent_by = {r[0]: (r[2] if len(r) > 2 else "") for r in rs if r and r[0]}
     names = [(c, label_by[c]) for c in cands if c in label_by]
     if len(names) < 2:
-        return ([names[0][0]] if names else [], {})
+        return ([names[0][0]] if names else [], {}, {})
     # Рядом с названием — СКОЛЬКО СОВПАДЕНИЙ там нашлось. Это данные, а не схема, и
     # именно они снимают неоднозначность: справочник «Банки» на 1 запись и
     # «Классификатор Банков» на 680 по названию неразличимы, по числу — очевидны.
