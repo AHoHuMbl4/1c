@@ -34,6 +34,7 @@ EXCH="${CSV_DIR:-/var/lib/serenedb}"
 TMP=$(mktemp -d "$EXCH/wiki-alias-XXXXXX") || { echo "алиасы: нет доступа к $EXCH" >&2; exit 0; }
 chmod 755 "$TMP"; trap 'rm -rf "$TMP"' EXIT
 done_total=0
+skipped=0
 while :; do
   # 🔴 ПАЧКА — ЭТО ГРУППА ПОХОЖИХ, А НЕ СЛУЧАЙНЫЕ СУЩНОСТИ ПОДРЯД.
   # [замер 30.07] описанные поодиночке страницы не различают соседей: у «Подтверждения
@@ -75,7 +76,20 @@ while :; do
   chmod 644 "$TMP/msg"
   sudo -u "$BOTUSER" -H openclaw agent --agent main --session-key wiki-alias --json \
     --message-file "$TMP/msg" \
-    > "$TMP/ans" 2>"$TMP/err" || { echo "алиасы: агент не ответил: $(head -c 200 "$TMP/err")" >&2; break; }
+    > "$TMP/ans" 2>"$TMP/err" || {
+      # 🔴 ОДНА ОСЕЧКА НЕ ОСТАНАВЛИВАЕТ ВСЁ. [замер 30.07] на 143-й сущности из 686 модель
+      # не ответила в срок (`LLM request timed out`), и прежний код обрывал цикл целиком —
+      # остальные 543 остались без описания из-за одной пачки. Теперь пачка пропускается,
+      # а её сущности помечаются, чтобы следующий проход не спотыкался о них снова и не
+      # ходил по кругу. Сколько пропущено — печатается в конце, молчания тут быть не должно.
+      skipped=$((skipped + 1))
+      echo "алиасы: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
+      psql "$DSN" -q -c "INSERT INTO search_entity_alias
+        SELECT entity, '', '', '', now() FROM read_json('$TMP/pay',
+          columns := {entity:'VARCHAR', title:'VARCHAR', quantities:'VARCHAR'})
+        WHERE entity NOT IN (SELECT src_table FROM search_entity_alias)" >/dev/null 2>&1
+      continue
+    }
 
   # Разбор ответа модели — своим кодом это разрешено (п. 20: проверка ответа модели).
   python3 - "$TMP/ans" "$TMP/rows.json" <<'PY'
@@ -128,4 +142,8 @@ PY
   done_total=$((done_total + BATCH))
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
 done
-psql "$DSN" -tA -F' | ' -c "SELECT 'алиасов в базе', count(*) FROM search_entity_alias"
+[ "$skipped" -gt 0 ] && echo "алиасы: пачек пропущено из-за отказа модели: $skipped" >&2
+psql "$DSN" -tA -F' | ' -c "
+  SELECT 'алиасов в базе', count(*) FROM search_entity_alias
+  UNION ALL SELECT 'из них ПУСТЫХ (модель не ответила)', count(*) FROM search_entity_alias
+    WHERE coalesce(aliases,'') = ''"

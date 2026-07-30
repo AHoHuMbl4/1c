@@ -384,22 +384,31 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
           (c.kind='ref' OR regexp_full_match(u.val,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')) AS is_guid,
           (c.kind IN ('text','flag') AND NOT c.is_companion AND c.col <> 'DataVersion'
            AND NOT regexp_matches(u.val,'^(https?://|/)')) AS in_text,
-          -- 🔴 ОБЪЯВЛЕННЫЙ КЛЮЧ — НЕ ВЕЛИЧИНА. [замер 30.07] `SurrogateKey` попал в величины
-          -- у 656 сущностей, `LineNumber` — у 359, и система на вопрос «сколько штук
-          -- закупили» отвечала «считано по величине SurrogateKey». Складывать ключ
-          -- бессмысленно: это тождество строки, а не измерение.
-          -- Отличаем НЕ списком имён, а объявленным ключом из `$metadata` — тем же
-          -- источником, что `Ref_Key` (`tmp3_key.key_cols`). Поэтому на любой другой
-          -- конфигурации и языке правило работает без правки.
-          -- Второе правило нужно там, где ключ объявлен обёрткой регистра
-          -- (`{Recorder, Recorder_Type}`): номер строки в него не входит, и первое правило
-          -- его не ловит — [замер 30.07] так уцелели 95 сущностей из 359.
-          -- `LineNumber` и `SurrogateKey` порождает САМА ПЛАТФОРМА 1С, одинаково на любой
-          -- конфигурации и языке, — тот же класс факта, что `Ref_Key` и `DataVersion`
-          -- (последний уже отсекается строкой выше). Это не список слов про конкретную базу.
+          (c.kind = 'num') AS is_num,
+          -- 🔴 ВЕЛИЧИНА И ЧИСЛО В ТЕКСТЕ — РАЗНЫЕ ВЕЩИ, И ЭТО ОПЛАЧЕНО ОШИБКОЙ.
+          -- [замер 30.07] `SurrogateKey` попал в карту величин у 656 сущностей,
+          -- `LineNumber` — у 359, и на вопрос «сколько штук закупили» система отвечала
+          -- «считано по величине SurrogateKey». Складывать ключ бессмысленно: это
+          -- тождество строки, а не измерение.
+          --
+          -- Первая моя попытка исключила их из `is_num` — то есть СРАЗУ и из величин, и из
+          -- ТЕКСТА строки. Слияние отказало: «дублей ключа 1368». У обёрток регистров ключ
+          -- объявлен как `{Recorder, Recorder_Type}` и строки НЕ различает — их различал
+          -- именно номер строки в тексте. Без него тексты совпали, отпечатки совпали.
+          -- Защита сработала и перенос остановила, корпус остался цел.
+          --
+          -- Поэтому признаки разведены: в тексте число остаётся (оно про тождество
+          -- строки), в карту величин не идёт (там только то, что можно складывать).
+          -- Отличаем двумя правилами и БЕЗ списка слов о конкретной базе:
+          --   1) колонка входит в объявленный ключ (`$metadata` → `kc`) — тот же источник,
+          --      что `Ref_Key`; снимает `SurrogateKey` целиком (656 → 0);
+          --   2) `LineNumber`/`SurrogateKey` — имена САМОЙ ПЛАТФОРМЫ 1С, одинаковые на
+          --      любой конфигурации и языке. Нужны потому, что у обёрток регистров первое
+          --      правило их не ловит: [замер] уцелели 95 сущностей из 359. Тот же класс
+          --      факта, что `Ref_Key` и `DataVersion`.
           (c.kind = 'num'
            AND list_position((SELECT key_cols FROM kc), u.col) IS NULL
-           AND u.col NOT IN ('LineNumber', 'SurrogateKey')) AS is_num,
+           AND u.col NOT IN ('LineNumber', 'SurrogateKey')) AS is_measure,
           -- ВСЕ даты строки, а не только выбранная. Прежде дата, не ставшая `doc_date`,
           -- не попадала НИКУДА: ни в текст, ни в величины. [замер 28.07] так пропадали
           -- 83 колонки и 30 909 значений, а у 24 сущностей не оставалось ни одной даты
@@ -457,7 +466,7 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
               -- Проверяем ИМЕННО ту сущность, что объявила колонку.
               AND EXISTS (SELECT 1 FROM tmp3_src s2 WHERE lower(s2.tbl) = c.decl_entity))),
  pieces AS (
-   SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_dt, is_date,
+   SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_measure, is_dt, is_date,
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
           WHEN is_guid AND refname IS NOT NULL THEN replace(col,'_Key','') || ': ' || refname
           WHEN is_guid THEN NULL
@@ -513,7 +522,7 @@ FROM (
          -- не гарантирован — тогда `nums` переписывались бы каждый такт у всех строк,
          -- а число «сколько изменилось» переставало бы что-либо значить.
          map_from_entries(list({'key': col, 'value': try_cast(val AS DOUBLE)} ORDER BY col)
-                          FILTER (is_num AND try_cast(val AS DOUBLE) IS NOT NULL)) AS nums,
+                          FILTER (is_measure AND try_cast(val AS DOUBLE) IS NOT NULL)) AS nums,
          -- [замер 28.07] 312 строк корпуса имели `doc_date = 0001-01-01`: незаполненная
          -- дата 1С — валидный TIMESTAMP, и `try_cast` её принимал. «Самый ранний
          -- документ» отвечал первым годом нашей эры, а «даты нет» было неотличимо от
