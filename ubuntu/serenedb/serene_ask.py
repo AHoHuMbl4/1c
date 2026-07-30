@@ -2132,8 +2132,28 @@ def answer(question, focus=None, measure_pick=None):
     #
     # Это не «уточнять почаще на всякий случай»: пока оба сигнала согласны — ответ идёт
     # без вопроса, как и требует порядок п. 21 (ответ → уточнение → отказ).
+    # 🔴 ОДНА СЕМЬЯ — ЭТО ОДНО ПРОЧТЕНИЕ, А НЕ ДВА. Табличная часть и её шапка (`Партнеры`
+    # и `Партнеры_КонтактнаяИнформация`) — не два смысла вопроса, а одна сущность и её же
+    # часть. Без этой оговорки система спрашивала лишнее: [замер 30.07] «Какой ИНН у
+    # Нептун?» → «из карточки партнёра или из контактной информации?», хотя прочтение одно.
+    # Родство приходит из данных (`search_tables.parent`), а не из разбора имени.
+    # Указание владельца 30.07 требует спрашивать при СОМНЕНИИ; лишний вопрос там, где
+    # сомнения нет, — не осторожность, а шум, и он обесценивает настоящие уточнения.
+    par = {}
+    if top_by_question and picked and top_by_question not in picked:
+        try:
+            par = {r[0]: (r[1] or "") for r in psql(
+                "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(c) for c in set(picked) | {top_by_question})))
+                if r and r[0]}
+        except RuntimeError:
+            par = {}
+
+    def _family(t):
+        return par.get(t) or t
     if (top_by_question and picked and not focus
-            and top_by_question not in picked and top_by_question in by):
+            and top_by_question not in picked and top_by_question in by
+            and _family(top_by_question) not in {_family(x) for x in picked}):
         picked = list(dict.fromkeys(picked + [top_by_question]))
         diag["signals_disagree"] = top_by_question
 
