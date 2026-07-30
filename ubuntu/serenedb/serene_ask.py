@@ -663,7 +663,19 @@ Some entries show how many records already match the question; prefer a type tha
 actually has matches over a same-sounding one that has none.
 If none of them fits, answer 0.
 Judge by meaning, across languages and wording: a question about sales belongs to the
-type that records sales even if the words differ."""
+type that records sales even if the words differ.
+
+Then state WHAT has to be computed. Reply with one JSON object and nothing else:
+  {"types": [numbers], "quantity": "<exact name from that entry's list, or null>",
+   "compute": "count" | "sum" | "max" | "min" | "avg"}
+Rules for these fields:
+- "quantity" MUST be copied character for character from the "quantities recorded here"
+  list of the type you chose. Never invent a name, never translate it, never reshape it.
+  Use null when the question asks how MANY records there are rather than about a value.
+- "compute" is what the question asks for: how many records -> "count"; a total or
+  "how much in all" -> "sum"; the largest/smallest -> "max"/"min"; the average -> "avg".
+- If the type you chose has no quantity that the question is about, still name the type
+  and put null: the system will ask the user rather than guess."""
 
 
 def signal_terms(src_table, match, top):
@@ -932,20 +944,20 @@ def pick_measure(src_table, question, word):
     """
     names = measures_of(src_table)
     if not names:
-        return (None, [])
+        return (None, [], 'none')
     if not word:
         # Вопрос не называет величину — НЕ выбираем за него. Иначе получается
         # «что покупало Ромашка» → `НомерЧекаККМ`. Итоги по всем величинам отдадим
         # модели отдельно (`totals_of`).
-        return (None, [])
+        return (None, [], 'none')
     if len(names) == 1:
-        return (names[0], [])                  # выбора нет — и спрашивать не о чем
+        return (names[0], [], 'single')        # выбора нет — и спрашивать не о чем
     # Имя величины ТОЧНО совпало со словом вопроса — брать его, не гадая реранкером.
     # «сумма» → «Сумма», а не «СуммаНУDr»: точное совпадение сильнее близости.
     wl = word.lower()
     exact = [n for n in names if n.lower() == wl]
     if exact:
-        return (exact[0], [])
+        return (exact[0], [], 'exact')
     # 🔴 НЕСКОЛЬКО ВЕЛИЧИН ОДИНАКОВО ПОДХОДЯТ — ЭТО ВОПРОС ЧЕЛОВЕКУ, А НЕ ЗАДАЧА РЕРАНКЕРУ.
     # Указание владельца 30.07: «давать юзеру неверный ответ — самое страшное, что мы можем
     # сделать. лучше 1, 2, 3 раза уточнить, если непонятно, чем дать не то».
@@ -962,10 +974,10 @@ def pick_measure(src_table, question, word):
         base_of = [n for n in same
                    if sum(1 for m in same if m != n and m.startswith(n)) >= len(same) - 1]
         if len(base_of) == 1 and base_of[0].lower() != wl:
-            return (base_of[0], [])
-        return (None, sorted(same))
+            return (base_of[0], [], 'base')
+        return (None, sorted(same), 'ask')
     if len(same) == 1:
-        return (same[0], [])
+        return (same[0], [], 'substring')
     idx = rerank(word, names)
     ranked = [names[i] for i in idx] if idx else names
     # БАЗОВАЯ ВЕЛИЧИНА ПРЕДПОЧТИТЕЛЬНЕЕ УТОЧНЁННОЙ, когда слово общее. У регистра бухучёта
@@ -980,8 +992,8 @@ def pick_measure(src_table, question, word):
     if base and base.lower() not in wl:
         qualifier = top[len(base):].lower()
         if qualifier and qualifier not in wl:
-            return (base, [])
-    return (top, [])
+            return (base, [], 'base')
+    return (top, [], 'rerank')
 
 
 def pick_entity(question, kind, cands, counts=None, match="", cut=None):
@@ -1086,7 +1098,7 @@ def pick_entity(question, kind, cands, counts=None, match="", cut=None):
     try:
         raw = ds_chat([{"role": "system", "content": PICK_SYS},
                        {"role": "user", "content": "%s\n\nTypes:\n%s" % (ask_text, listing)}],
-                      max_tokens=8)
+                      max_tokens=120)
     except Exception as e:                     # noqa: BLE001 — сеть/квота
         # Не молча: выбор сущности — решение, влияющее на правильность ответа. Если
         # модель недоступна, вызывающий обязан узнать об этом и пометить ответ, а не
@@ -1096,9 +1108,47 @@ def pick_entity(question, kind, cands, counts=None, match="", cut=None):
     # Модель может назвать несколько типов — тогда вопрос неоднозначен, и правильный
     # ход не угадывать за человека, а спросить его. Возвращаем список: один элемент —
     # выбор сделан, несколько — нужно уточнение.
-    got = [int(x) for x in re.findall(r"\d+", raw or "")]
+    # 🔴 МОДЕЛЬ ФОРМУЛИРУЕТ ПАРАМЕТРЫ, СЧИТАЕТ КОД. Замысел владельца 30.07: «сначала
+    # сформулировать, какие именно параметры вытягивать для подсчёта, а потом уже из них
+    # включается калькулятор».
+    #
+    # Зачем это лучше прежнего. Прежде модель отдавала ТОЛЬКО номер типа, а величину потом
+    # угадывал реранкер по похожести имён — уже НЕ ВИДЯ вопроса. Отсюда [замер 30.07]
+    # «на какую сумму мы закупили» при верно выбранной сущности давало 70 902 572,21
+    # (`Сумма` строк, без НДС) вместо 73 181 157,68 (`СуммаДокумента`): имя похоже, смысл
+    # другой. Теперь величину называет тот, кто читал вопрос.
+    #
+    # П. 19 соблюдён: модель не считает и не ищет — она описывает, ЧТО посчитать. Считает
+    # база, число подставляет код.
+    #
+    # 🔴 ПАРАМЕТРЫ ПРОВЕРЯЮТСЯ ПО ДАННЫМ, А НЕ ПРИНИМАЮТСЯ НА СЛОВО. Имя величины обязано
+    # существовать у выбранной сущности (`measures_of`), иначе оно отбрасывается и система
+    # спрашивает человека. Запрет держится кодом, а не просьбой в промте: выдуманное имя
+    # физически не может дойти до калькулятора.
+    plan = {}
+    txt = (raw or "").strip()
+    try:
+        j = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
+        if isinstance(j, dict):
+            got = [int(x) for x in (j.get("types") or []) if str(x).strip().isdigit()]
+            q = j.get("quantity")
+            if isinstance(q, str) and q.strip():
+                plan["quantity"] = q.strip()
+            c = (j.get("compute") or "").strip().lower()
+            if c in ("count", "sum", "max", "min", "avg"):
+                plan["compute"] = c
+        else:
+            got = []
+    except (ValueError, KeyError, TypeError):
+        # Не JSON — остаёмся на прежнем разборе: номера типов из текста. Отсутствие
+        # параметров не должно ронять ответ (п. 21), просто величину выберем как раньше.
+        got = [int(x) for x in re.findall(r"\d+", txt)]
     picked = [names[i - 1][0] for i in got if 1 <= i <= len(names)]
-    return ([], marks) if not picked else (picked, marks)
+    if picked and plan.get("quantity"):
+        # Имя величины — только из данных ЭТОЙ сущности. Иначе выбрасываем.
+        if plan["quantity"] not in measures_of(picked[0]):
+            plan["quantity_rejected"] = plan.pop("quantity")
+    return ([], marks, plan) if not picked else (picked, marks, plan)
 
 
 def _vec(text):
@@ -2134,10 +2184,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     diag["without_value"] = len(dropped)
         except RuntimeError:
             pass
+    # Параметры подсчёта, названные моделью: сущность, величина, что считать. Объявляются
+    # ДО ветвления, чтобы ни один путь не оставил их неопределёнными.
+    plan = {}
     # ВЫБОР ЧЕЛОВЕКА ПОСЛЕ УТОЧНЕНИЯ важнее догадки: если задан `focus` и такая сущность
     # реально под условиями что-то содержит — берём её и не спрашиваем модель.
     if focus:
-        picked, marks = [focus], {}
+        picked, marks, plan = [focus], {}, {}
         diag["focus_forced"] = focus
         # Код-терм (счёт, ОКВЭД) при ВЫБРАННОЙ сущности фильтруется иерархическим префиксом
         # безопасно: сущность уже определена, спутать её с чужой нельзя. Дот-граница
@@ -2162,10 +2215,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             match = code_filter
     else:
         try:
-            picked, marks = pick_entity(question, intent.get("kind"), cands,
-                                        counts_for_model, match, cut)
+            picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
+                                              counts_for_model, match, cut)
         except RuntimeError:
-            picked, marks = [], {}
+            picked, marks, plan = [], {}, {}
             diag["degraded"] = "выбор сущности сделан без модели"
 
         # КОД С ИЕРАРХИЕЙ — НЕОДНОЗНАЧНОСТЬ, КОТОРУЮ РЕШАЕТ ЧЕЛОВЕК. «62» — это и номер
@@ -2367,7 +2420,31 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # лежат в самих данных. Числовое условие («больше 500000») тоже применяется здесь,
     # а не на общем отборе: у документа оно про сумму, у строки накладной могло бы
     # оказаться про количество.
-    measure, measure_alts = pick_measure(src, question, (intent.get("measure") or ""))
+    # 🔴 ПЕРВЫМ ДЕЛОМ — ВЕЛИЧИНА, КОТОРУЮ НАЗВАЛА МОДЕЛЬ, ЧИТАВШАЯ ВОПРОС. Её имя уже
+    # сверено со списком величин ЭТОЙ сущности (`pick_entity`), то есть выдуманное имя сюда
+    # не доходит. Прежний путь (`pick_measure`) остаётся запасным: он выбирает по похожести
+    # имён, не видя вопроса, и именно поэтому ошибался.
+    measure, measure_alts = None, []
+    if plan.get("quantity") and plan["quantity"] in measures_of(src):
+        measure = plan["quantity"]
+        diag["measure_by_plan"] = True
+    else:
+        measure, measure_alts, how = pick_measure(src, question,
+                                                  (intent.get("measure") or ""))
+        # 🔴 ДОГАДКА РЕРАНКЕРА НЕ ГОДИТСЯ ТАМ, ГДЕ СПРАШИВАЮТ ВЕЛИЧИНУ. [замер 30.07]
+        # «Сколько НДС мы заплатили поставщикам?» — модель не смогла назвать величину
+        # (её у выбранного регистра нет), и прежний путь молча брал «КОплате»: ответ
+        # 13 777 225,30 вместо 11 036 086,09. Три прогона из трёх.
+        # Реранкер выбирает по похожести ИМЁН, не видя вопроса, — это ровно догадка, а
+        # догадка запрещена (п. 12). Спрашиваем человека, какую величину считать.
+        if how == "rerank" and (plan.get("compute") in ("sum", "max", "min", "avg")
+                                or intent.get("want") == "sum"):
+            alts = measures_of(src)
+            if len(alts) > 1:
+                measure, measure_alts = None, alts
+                diag["measure_guess_refused"] = how
+    if plan.get("compute"):
+        diag["compute"] = plan["compute"]
     if measure_pick:                           # человек уже выбрал величину кнопкой
         measure, measure_alts = measure_pick, []
     diag["measure"] = measure
