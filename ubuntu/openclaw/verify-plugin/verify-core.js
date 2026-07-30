@@ -12,7 +12,17 @@ export const DEFAULTS = {
   highRiskDigits: 5, // без эталона: с какой длины выдумка блокируется. Было 7 —
   //   пятизначные и шестизначные суммы («долг 45 000», «выручка 950 000») уходили
   //   клиенту из воздуха, без единого обращения к данным.
-  noDataMarker: "[НЕТ ДАННЫХ", // префикс маркера «нет данных» из mcp_braine
+  noDataMarker: "[НЕТ ДАННЫХ", // префикс маркера «нет данных» из моста
+  clarifyMarker: "[НУЖНО УТОЧНЕНИЕ", // префикс маркера уточнения из `mcp_ask.py`
+  requireDataTool: true, // ход без обращения к данным прогоняется моделью ещё раз
+  // Тексты — для МОДЕЛИ, не для человека, поэтому по-английски и без предметных примеров:
+  // продукт коробочный, язык клиента заранее неизвестен.
+  reviseReason: "This turn ended without consulting the company data tool.",
+  reviseInstruction:
+    "If the user's message is about company data, you MUST call the data tool before " +
+    "answering or before asking any clarifying question: the options you offer have to come " +
+    "from this database, not from general knowledge. If the message is not about company " +
+    "data, reply exactly as you did.",
   noDataReply: "К сожалению, по этому вопросу у меня нет данных в системе.",
   refTtlMs: 10 * 60 * 1000, // сколько держать эталон хода в памяти
   debug: false, // console.log решения гейта (для диагностики)
@@ -106,12 +116,22 @@ export function extractText(result) {
 }
 
 // объединить эталон хода (несколько вызовов ask_1c за ход)
-export function mergeRef(prev, text, nowMs, noDataMarker) {
+// 🔴 УТОЧНЕНИЕ ОТ СЕРВИСА ДАННЫХ — ЭТО ЗАПРЕТ ОТВЕЧАТЬ ЧИСЛОМ.
+// Когда `serene_ask` не уверен, какая запись имеется в виду, он возвращает НЕ ответ, а
+// уточняющий вопрос с вариантами. Бот обязан задать этот вопрос человеку, а не отвечать
+// самому. Признак — маркер, который ставит мост `mcp_ask.py`; текст его настраивается,
+// поэтому сверяем по префиксу из конфигурации, а не по словам.
+export function isClarify(text, marker) {
+  return String(text || "").includes(marker || "[НУЖНО УТОЧНЕНИЕ");
+}
+
+export function mergeRef(prev, text, nowMs, noDataMarker, clarifyMarker) {
   const digits = numericTokens(text, 1); // все цифровые токены эталона; порог применяем на исходящем
   const blob = digitBlob(text);
   const isND = String(text).includes(noDataMarker);
+  const isCl = isClarify(text, clarifyMarker);
   if (!prev) {
-    return { at: nowMs, text: String(text), digits, blob, noData: isND };
+    return { at: nowMs, text: String(text), digits, blob, noData: isND, clarify: isCl };
   }
   for (const d of digits) prev.digits.add(d);
   return {
@@ -120,6 +140,8 @@ export function mergeRef(prev, text, nowMs, noDataMarker) {
     digits: prev.digits,
     blob: prev.blob + blob,
     noData: prev.noData && isND,
+    // хоть один инструмент попросил уточнить — ход считается уточняющим
+    clarify: Boolean(prev.clarify || isCl),
   };
 }
 
@@ -154,13 +176,30 @@ export function evaluate(content, ref, inb, cfg) {
   if (ungrounded.length === 0) return { action: "allow" }; // все факты обоснованы
 
   if (!ref) {
-    // за этот ход braine не спрашивали. Блокируем только явно «фактовые» длинные числа
-    // (ИНН/счёт/телефон), которых пользователь не называл, — это почти наверняка выдумка.
+    // 🔴 ЗА ЭТОТ ХОД К ДАННЫМ НЕ ОБРАЩАЛИСЬ ВОВСЕ. [замер 30.07] бот отвечал и переспрашивал
+    // при `инструменты: None` — то есть из общих знаний о предметной области, а не из ЭТОЙ
+    // базы. На другой базе тот же ответ был бы выдумкой. Указание владельца: правила держатся
+    // инструментами, а не промтом, — поэтому запрет стоит здесь, а не в инструкции боту.
+    //
+    // Порог `minDigits` отделяет факт от речи: «около 23 часов», «1.», «2.» — не факты о
+    // данных. Всё, что длиннее и не названо человеком, без обращения к данным не проходит.
     const risky = ungrounded.filter((t) => t.length >= c.highRiskDigits);
     if (risky.length) {
-      return { action: "cancel", reason: "числовой факт без обращения к braine (" + risky.join(",") + ")" };
+      return { action: "cancel", reason: "числовой факт без обращения к данным (" + risky.join(",") + ")" };
     }
+    // 🔴 Я ПОПРОБОВАЛ БЛОКИРОВАТЬ ЛЮБОЕ ЧИСЛО БЕЗ ОБРАЩЕНИЯ К ДАННЫМ — И ТЕСТ ЭТО ОТВЁРГ,
+    // справедливо: «в 2026 году» — год в речи, а не факт о данных. Отличить их по длине
+    // нельзя, поэтому правило осталось прежним: блокируется только заведомо фактовое
+    // (`highRiskDigits`). Случай «бот переспросил, не обратившись к данным» этим гейтом НЕ
+    // ловится — там чисел нет вовсе; для него нужен признак надёжнее текста.
     return { action: "allow" };
+  }
+
+  // 🔴 СЕРВИС ПОПРОСИЛ УТОЧНИТЬ — ЧИСЛО В ОТВЕТЕ ЗАПРЕЩЕНО. Иначе бот, получив вопрос
+  // «какая из записей имеется в виду», отвечает своим числом и обходит уточнение. Отдаём
+  // человеку сам вопрос сервиса — он уже содержит варианты, собранные из данных.
+  if (ref.clarify) {
+    return { action: "replace", content: ref.text, reason: "сервис данных запросил уточнение" };
   }
 
   // эталон был. braine нашёл данные -> заменяем на его дословный (обоснованный) ответ.

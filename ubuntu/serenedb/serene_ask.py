@@ -1868,6 +1868,8 @@ def _coverage_answer(question, diag, t0):
 # Опыт 30.07: нужно ли считать расхождение слабого сигнала (вектор вопроса) с выбором
 # модели признаком неоднозначности. Решается замером, а не рассуждением.
 SIGNAL_DISAGREE = os.environ.get("ASK_SIGNAL_DISAGREE", "1") == "1"
+# Требовать подтверждения выбора сущности; иначе спрашивать человека.
+REQUIRE_SUPPORT = os.environ.get("ASK_REQUIRE_SUPPORT", "1") == "1"
 # Сколько готовых ответов отдавать арбитру. Больше двух-трёх не нужно: это
 # столько же полных ответов, сколько кандидатов, и время ответа растёт.
 ARBITER_MAX = int(os.environ.get("ASK_ARBITER_MAX", "3"))
@@ -2414,6 +2416,70 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         return {"partial": cut or None, "kind": "clarify", "text": clarify_text(question, opts),
                 "options": opts, "sources": [o["label"] for o in opts],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
+    # 🔴 НЕ ОТВЕЧАТЬ, ПОКА ВЫБОР СУЩНОСТИ НЕ ПОДТВЕРЖДЁН. Решение владельца 30.07 — «правило в
+    # сервисе в этом случае», — принято ПОСЛЕ того, как оба штатных средства движка были
+    # проверены замером и оказались недостаточны:
+    #
+    #   `before_agent_finalize` → `{action:"revise"}` — движок честно отменил ход и прогнал
+    #     модель заново («requested one more pass, attempt=1/3» в журнале шлюза), но модель
+    #     указание ПРОИГНОРИРОВАЛА и повторила прежний ответ без обращения к данным;
+    #   `tool_choice: "required"` — ушёл в ПЕТЛЮ: пять вызовов подряд, шесть минут вместо
+    #     тридцати секунд, ответа нет. Модель обязана звать инструмент на каждом шаге и не
+    #     может остановиться, чтобы ответить. Откачено.
+    #
+    # Вывод: заставить модель пойти за данными ИМЕННО ТОГДА, КОГДА НАДО, движок не умеет.
+    # Гарантирует только запрет на выход — и он должен стоять там, где ответ рождается.
+    #
+    # Зачем правило нужно. Цель владельца: «100% правильных ответов, даже если для этого надо
+    # 2-3 раза переспросить». Гейт исходящего этот класс не ловит по построению: число ЧЕСТНО
+    # посчитано базой, просто не по той сущности — для гейта оно обосновано.
+    # [замер 30.07, чистые сессии] из 10 вопросов 4 неверных, и во всех выбор был уверенным:
+    # «НДС поставщикам» → регистр «уплаченный НДС» (2 719 573,23 вместо 11 036 086,09).
+    #
+    # Подтверждением считается ЛЮБОЕ из трёх, и все три — из данных, без порогов:
+    #   1. человек выбрал сущность сам (`focus`) — спорить не с чем;
+    #   2. сущность — ВЕРШИНА по вектору самого вопроса (считает база);
+    #   3. слово вопроса совпало с ЕЁ АЛИАСОМ (`search_entity_alias`, собран один раз при
+    #      установке штатным агентом OpenClaw). Сравнение — ПО ОСНОВАМ СЛОВ, штатным словарём
+    #      движка (`search_dict_stem`, `techContext` возможность 35), а НЕ подстрокой:
+    #      [замер 30.07] `contains('склады','складов')` ложна в обе стороны, и по подстроке
+    #      верная сущность осталась бы неподтверждённой — система ушла бы в лишнее уточнение.
+    #      Тот же приём уже применён в этом файле при отборе кандидатов.
+    # Ни одно не выполнилось — система не знает, та ли это запись, и обязана спросить
+    # (п. 12: догадка — ошибка; п. 21: уточнение стоит выше отказа).
+    if REQUIRE_SUPPORT and picked and not focus:
+        cand = picked[0]
+        supported = (cand == top_by_question)
+        if not supported:
+            try:
+                supported = bool(psql(
+                    "SELECT 1 FROM search_entity_alias a, unnest(str_split(a.aliases, ',')) AS u(w) "
+                    "WHERE a.src_table = %s AND trim(u.w) <> '' "
+                    "  AND list_has_any(ts_lexize(%s, trim(u.w)), ts_lexize(%s, %s)) LIMIT 1"
+                    % (lit(cand), lit(STEM_DICT), lit(STEM_DICT), lit(question))))
+            except RuntimeError:
+                # Знания нет вовсе (вики не собрана) — требовать подтверждения нечем, и
+                # молчать система не должна: это не защита от выдумки, а требование опоры.
+                supported = True
+        if not supported:
+            rivals = [c for c in ([top_by_question] if top_by_question else []) + list(cands)
+                      if c and c != cand][:2]
+            opts_src = [cand] + rivals
+            try:
+                lab_by = {r[0]: r[1] for r in psql(
+                    "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                    % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
+            except RuntimeError:
+                lab_by = {}
+            if len(opts_src) > 1 and lab_by:
+                opts = [{"src": t, "label": lab_by.get(t, t), "found": by.get(t, 0)}
+                        for t in opts_src if t in lab_by]
+                diag["unsupported_pick"] = cand
+                return {"partial": cut or None, "kind": "clarify",
+                        "text": clarify_text(question, opts),
+                        "options": opts, "sources": [o["label"] for o in opts],
+                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+
     src = picked[0] if picked else None
     if src not in by and not focus:
         # Модель назвала источник, куда поиск не попал: проверяем, есть ли там что-то

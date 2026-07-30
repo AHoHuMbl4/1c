@@ -91,11 +91,49 @@ export default definePluginEntry({
       const text = event.error ? cfg.noDataMarker + " tool_error]" : extractText(event.result);
       const prev = refs.get(sessKey);
       const sameTurn = prev && prev.runId === runId; // тот же ход → сливаем; иначе новый ход → сброс
-      const merged = mergeRef(sameTurn ? prev : null, text, Date.now(), cfg.noDataMarker);
+      const merged = mergeRef(sameTurn ? prev : null, text, Date.now(), cfg.noDataMarker,
+                              cfg.clarifyMarker);
       merged.runId = runId;
       refs.set(sessKey, merged);
       prune(refs, cfg.refTtlMs);
       dbg(cfg, `after_tool_call tool=${event.toolName} sess=${sessKey} runId=${runId} refDigits=${merged.digits.size} noData=${merged.noData}`);
+    });
+
+    // 1b) 🔴 ХОД ЗАВЕРШАЕТСЯ ОТВЕТОМ, А К ДАННЫМ НЕ ОБРАЩАЛИСЬ — ГОНИМ МОДЕЛЬ ЗАНОВО.
+    //
+    // Указание владельца 30.07: «правила ставятся штатными механизмами openclaw, промт не
+    // работает; запрещено свой код делать». Это тот самый механизм: движок сам прогоняет
+    // модель ещё раз, а мы лишь говорим, почему.
+    //
+    // [замер 30.07] на вопрос «Сколько НДС в наших продажах?» бот ответил уточнением при
+    // `toolSummary: None` — то есть придумал варианты из общих знаний о предметной области,
+    // а не из ЭТОЙ базы. На другой базе тот же вопрос был бы бессмыслицей.
+    //
+    // Движок вызывает этот хук ТОЛЬКО когда ход завершается естественным видимым ответом и
+    // инструментов в нём не было, — то есть условие «к данным не обращались» проверять не
+    // нужно, оно уже в самом факте вызова. Мы добавляем лишь одно: был ли эталон за этот ход.
+    //
+    // Один дополнительный проход, не больше: `maxAttempts: 1`. Если вопрос не про данные
+    // (приветствие, «работаю с текстом»), модель на втором проходе ответит так же — цена
+    // одного прохода. Городить распознавание «про данные или нет» нельзя: это была бы
+    // догадка, а догадка запрещена (п. 12).
+    //
+    // Требует `plugins.entries.braine-verify.hooks.allowConversationAccess: true` — без него
+    // движок МОЛЧА не зарегистрирует хук у неbundled-плагина.
+    api.on("before_agent_finalize", async (event, ctx) => {
+      const cfg = getCfg();
+      if (cfg.requireDataTool === false) return;
+      const sessKey = sessKeyOf(ctx, event) || (event && event.runId ? "run:" + event.runId : null);
+      const ref = sessKey ? refs.get(sessKey) : null;
+      const runId = (event && event.runId) || (ctx && ctx.runId) || null;
+      if (ref && (!runId || ref.runId === runId)) return; // данные за этот ход спрашивали
+      dbg(cfg, `before_agent_finalize sess=${sessKey} runId=${runId} action=revise`);
+      return {
+        action: "revise",
+        reason: cfg.reviseReason,
+        retry: { instruction: cfg.reviseInstruction, maxAttempts: 1,
+                 idempotencyKey: "require-data-tool" },
+      };
     });
 
     // 2) числа из ввода пользователя + граница хода (эхо его номера — не галлюцинация)

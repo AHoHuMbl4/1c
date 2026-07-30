@@ -48,6 +48,20 @@
         "type": "integer",
         "minimum": 1,
         "description": "При наличии эталона сверять числа от такой длины. 1 = сверять все."
+      },
+      "requireDataTool": {
+        "type": "boolean",
+        "description": "Ход без обращения к инструменту данных прогоняется моделью ещё раз (before_agent_finalize)."
+      },
+      "clarifyMarker": {
+        "type": "string",
+        "description": "Префикс маркера уточнения из моста ask_1c; при нём число модели до человека не доходит."
+      },
+      "reviseReason": {
+        "type": "string"
+      },
+      "reviseInstruction": {
+        "type": "string"
       }
     }
   },
