@@ -1742,6 +1742,14 @@ def _coverage_answer(question, diag, t0):
 
 
 # ----------------------------------------------------------------- HTTP
+# Опыт 30.07: нужно ли считать расхождение слабого сигнала (вектор вопроса) с выбором
+# модели признаком неоднозначности. Решается замером, а не рассуждением.
+SIGNAL_DISAGREE = os.environ.get("ASK_SIGNAL_DISAGREE", "1") == "1"
+# Опыт 30.07: требовать ли, чтобы спрошенное слово было у кандидата полем
+# («ИНН: …») либо названием сущности. Тоже решается замером.
+FIELD_MUST_EXIST = os.environ.get("ASK_FIELD_MUST_EXIST", "1") == "1"
+
+
 def answer(question, focus=None, measure_pick=None):
     """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
 
@@ -1885,6 +1893,48 @@ def answer(question, focus=None, measure_pick=None):
                 cands = [c for c in cands if c in with_value]
                 if dropped:
                     diag["without_value"] = len(dropped)
+        except RuntimeError:
+            pass
+    # 🔴 СПРОШЕННОЕ ПОЛЕ ДОЛЖНО У КАНДИДАТА СУЩЕСТВОВАТЬ — то же правило, что абзацем выше
+    # для величин, только для текстовых реквизитов. [замер 30.07] «Какой ИНН у Нептун?»
+    # четыре раза из четырёх отвечал «в найденных данных ИНН отсутствует», а ИНН есть:
+    # `catalog_контрагенты`, `ИНН: 5256023574`. Система садилась на
+    # `catalog_партнеры_контактнаяинформация`, где ИНН нет, и объявляла, что данных нет
+    # вообще — это п. 21, «отказ при наличии данных — дефект». Хуже: предлагаемое уточнение
+    # не содержало сущности, где ответ есть, то есть ни один вариант к ответу не вёл.
+    #
+    # Проверка идёт ПО ДАННЫМ и в базе: реквизиты лежат в тексте строки как «Имя: значение»
+    # (формат нашей же сборки), поэтому ищем слово вопроса С ДВОЕТОЧИЕМ. Именно с ним, а не
+    # где угодно в тексте: текст строки начинается с имени сущности, и поиск «где угодно»
+    # снова давал бы преимущество сущности, чьё ИМЯ похоже на слово вопроса, — тот самый
+    # дефект, который мы здесь и чиним.
+    # Ни списка слов, ни порога: слово приходит из вопроса, имена реквизитов — из данных.
+    if FIELD_MUST_EXIST and intent.get("kind") and len(cands) > 1:
+        try:
+            # 🔴 СЛОВО ВОПРОСА МОЖЕТ НАЗЫВАТЬ НЕ ПОЛЕ, А САМУ СУЩНОСТЬ. «ИНН» — поле,
+            # «склад» — сущность `catalog_склады`, у которой поля с таким именем нет.
+            # [замер 30.07] без этой оговорки правило отсекало ВЕРНУЮ сущность, и на
+            # «сколько складов» ответ стал 268 вместо 25. Годится и то, и другое: поле
+            # `Имя:` в тексте ЛИБО совпадение с названием сущности — оба из данных.
+            has_field = {r[0] for r in psql(
+                "SELECT src_table FROM %s WHERE src_table IN (%s)%s "
+                "  AND contains(lower(doc), lower(%s)) GROUP BY 1"
+                % (INDEX if match else CORPUS, ", ".join(lit(c) for c in cands),
+                   (" AND " + " AND ".join([w for w in ([match] + preds) if w]))
+                   if [w for w in ([match] + preds) if w] else "",
+                   lit(intent["kind"] + ":"))) if r and r[0]}
+            try:
+                has_field |= {r[0] for r in psql(
+                    "SELECT src_table FROM %s WHERE src_table IN (%s) "
+                    "  AND (contains(lower(label), lower(%s)) "
+                    "       OR contains(lower(%s), lower(label)))"
+                    % (TABLES, ", ".join(lit(c) for c in cands),
+                       lit(intent["kind"]), lit(intent["kind"]))) if r and r[0]}
+            except RuntimeError:
+                pass
+            if has_field and len(has_field) < len(cands):
+                diag["field_absent"] = len(cands) - len(has_field)
+                cands = [c for c in cands if c in has_field]
         except RuntimeError:
             pass
     # Порядок списка — ПО СМЫСЛУ вопроса, не по числу совпадений: модель тяготеет к
@@ -2151,7 +2201,7 @@ def answer(question, focus=None, measure_pick=None):
 
     def _family(t):
         return par.get(t) or t
-    if (top_by_question and picked and not focus
+    if (SIGNAL_DISAGREE and top_by_question and picked and not focus
             and top_by_question not in picked and top_by_question in by
             and _family(top_by_question) not in {_family(x) for x in picked}):
         picked = list(dict.fromkeys(picked + [top_by_question]))
