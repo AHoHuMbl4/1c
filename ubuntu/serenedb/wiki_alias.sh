@@ -46,8 +46,17 @@ while :; do
   PAY=$(cat "$TMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
 
+  # 🔴 ЗАДАНИЕ ПЕРЕДАЁТСЯ ФАЙЛОМ, А НЕ АРГУМЕНТОМ. [замер 30.07] с `-m "$PAY"` на пачке из 25
+  # сущностей команда отвечала «Missing message»: длинный JSON в аргументе командной строки не
+  # доходит. У `openclaw agent` для этого есть штатный `--message-file`. Тот же класс дефекта, что
+  # «стена argv» в разборе `HOW_NOT_TO §0`: данные аргументом командной строки не передаются.
+  {
+    printf '%s' "Return JSON only, no prose, no code fences. For each record type below, list the words and phrases a business user of this database would use when asking about it, in the SAME language as its title, and what it is good and not good for answering. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+    cat "$TMP/pay"
+  } > "$TMP/msg"
+  chmod 644 "$TMP/msg"
   sudo -u "$BOTUSER" -H openclaw agent --agent main --session-key wiki-alias --json \
-    -m "Return JSON only, no prose, no code fences. For each record type below, list the words and phrases a business user of this database would use when asking about it, in the SAME language as its title, and what it is good and not good for answering. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: $PAY" \
+    --message-file "$TMP/msg" \
     > "$TMP/ans" 2>"$TMP/err" || { echo "алиасы: агент не ответил: $(head -c 200 "$TMP/err")" >&2; break; }
 
   # Разбор ответа модели — своим кодом это разрешено (п. 20: проверка ответа модели).
