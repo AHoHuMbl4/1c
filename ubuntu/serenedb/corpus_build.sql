@@ -631,7 +631,7 @@ SELECT 'fold_kept_no_child', count(*),
 FROM tmp3_cls c
 WHERE coalesce(c.own_ref, false) AND NOT coalesce(c.own_prop, true)
   AND EXISTS (SELECT 1 FROM tmp3_key k
-              WHERE k.entity = lower(c.table_name) AND k.key_cols = ['Ref_Key'])
+              WHERE k.entity = lower(c.tbl) AND k.key_cols = ['Ref_Key'])
   AND NOT EXISTS (SELECT 1 FROM tmp3_src s WHERE lower(s.tbl) = c.decl_entity)
 UNION ALL
 -- Считается по СОБРАННОМУ, а не по боевому корпусу. Прежде это число бралось из
