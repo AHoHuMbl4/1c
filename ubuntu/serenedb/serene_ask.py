@@ -315,39 +315,23 @@ def embed_one(text):
 # Промт намеренно НЕ привязан к языку: продукт коробочный, база может быть любой —
 # от продавца семечек до банка, на любом языке конфигурации. Инструкция описывает
 # СМЫСЛ, а слова берутся из вопроса пользователя, каким бы он ни был.
-INTENT_SYS = """Convert the user's question about company data into a structure.
-Reply with JSON only.
+INTENT_SYS = """Turn the question into this JSON. Nothing else in the reply.
 
-{
-  "terms":  [["alternatives for ONE concept"], ["alternatives for the NEXT concept"]],
-  "amount": {"op": ">"|"<"|">="|"<="|"between"|null, "value": number|null, "value2": number|null},
-  "period": {"from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null},
-  "want":   "list" | "sum" | "count",
-  "measure": "the word from the question naming WHICH quantity is asked about
-             (money total, pieces, weight, price, …), in the question's own language.
-             null if the question asks about no quantity",
-  "kind":   "ALWAYS fill this: a short noun naming WHAT kind of records the question is
-             about, in the question's own language. If the user used a verb, give the
-             corresponding noun. Only null if the question names no kind of records at all",
-  "about":  "\\"data\\" when the question asks about the company's records themselves —
-             how many, how much, which ones. \\"coverage\\" when it asks about the SYSTEM's
-             knowledge instead: what data is missing, what failed to load, what is closed
-             by permissions, how complete or fresh the data is. Default to \\"data\\""
-}
+{"terms":   [["synonyms of ONE value"], ["synonyms of the NEXT value"]],
+ "amount":  {"op": ">"|"<"|">="|"<="|"between"|null, "value": number|null, "value2": number|null},
+ "period":  {"from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null},
+ "want":    "list"|"sum"|"count",
+ "measure": "the word naming WHICH quantity is asked about, in the question's language",
+ "kind":    "a short noun for the kind of records asked about, in the question's language",
+ "about":   "data"|"coverage"}
 
-Rules:
-- "terms" holds only VALUES that should literally appear in a record: names of parties,
-  goods, places, document numbers. NEVER put the KIND of records there — that goes to
-  "kind". A record about a bank in Moscow need not contain the word "bank".
-- Group alternatives for the same concept together: expand abbreviations to their full
-  form and add the inflections a record would realistically use. Example shape:
-  [["Moscow", "MSK"], ["Acme"]] — matching is AND between groups, OR inside a group.
-- Never invent concepts that are not in the question.
-- want = "sum" when the user asks for a total of ANY quantity, not only money;
-  "count" when they ask how many records; otherwise "list".
-- A numeric threshold belongs in "amount", never in "terms".
-- A time range belongs in "period" as dates; `today` is given below.
-- Unknown fields are null. No text outside the JSON."""
+terms are VALUES that would literally appear in a record — parties, goods, places,
+numbers. The kind of record goes to "kind", not here. Groups are AND, items inside a
+group are OR, so put inflections and expanded abbreviations in the same group.
+
+want: "sum" for a total of any quantity, "count" for how many records, else "list".
+about: "coverage" when the question is about what data is MISSING from this system,
+otherwise "data". Today's date is given below. Unknown fields are null."""
 
 
 def parse_intent(question, today):
@@ -653,36 +637,23 @@ def rows_of(src_table, match, preds, limit, measure=None):
            frag, src, " AND ".join(where), order + ", row_key", limit))
 
 
-PICK_SYS = """You map a user's question to a record type.
+PICK_SYS = """You are given a question and a numbered list of the record types in
+this database. Choose the type whose records answer it, and say what to compute.
 
-You get the question and a numbered list of record types that exist in this database.
-Answer with the NUMBER only — the type whose records would ANSWER the question.
-If the question genuinely fits SEVERAL types and the answers would be DIFFERENT — the
-asker could reasonably have meant either — answer with their numbers separated by a
-comma (at most three). Do that only for real ambiguity, not for uncertainty: if one
-type clearly answers the question better, give that one number.
-Some entries list what is typical for their records — the attributes that set them
-apart from the rest of the database. Use them to tell apart types whose names sound
-alike: they describe what the records actually are about.
-Entries marked as line items are the rows INSIDE another record: a question about a
-total, a sum or "how much in all" belongs to the record that owns them, not to the rows.
-Some entries show how many records already match the question; prefer a type that
-actually has matches over a same-sounding one that has none.
-If none of them fits, answer 0.
-Judge by meaning, across languages and wording: a question about sales belongs to the
-type that records sales even if the words differ.
+{"types": [numbers], "quantity": "<name copied from that type\'s quantity list>|null",
+ "compute": "count"|"sum"|"max"|"min"|"avg"}
 
-Then state WHAT has to be computed. Reply with one JSON object and nothing else:
-  {"types": [numbers], "quantity": "<exact name from that entry's list, or null>",
-   "compute": "count" | "sum" | "max" | "min" | "avg"}
-Rules for these fields:
-- "quantity" MUST be copied character for character from the "quantities recorded here"
-  list of the type you chose. Never invent a name, never translate it, never reshape it.
-  Use null when the question asks how MANY records there are rather than about a value.
-- "compute" is what the question asks for: how many records -> "count"; a total or
-  "how much in all" -> "sum"; the largest/smallest -> "max"/"min"; the average -> "avg".
-- If the type you chose has no quantity that the question is about, still name the type
-  and put null: the system will ask the user rather than guess."""
+Judge by meaning, across languages and wording. Entries may show what is typical for
+their records and how many already match — both help tell apart similar names.
+Entries marked as line items are the rows inside another record; a question about a
+total belongs to the record that owns them.
+
+Several numbers (at most three) when the question genuinely fits several types AND the
+answers would differ. One number when one type answers better. 0 when none fits.
+
+quantity is copied character for character from the chosen type\'s list, or null when
+the question is about how many records there are, or when that type has no such
+quantity."""
 
 
 def signal_terms(src_table, match, top):
@@ -715,14 +686,9 @@ def signal_terms(src_table, match, top):
     return [r[0] for r in rs if r and r[0]]
 
 
-CLARIFY_SYS = """The question can be answered from several kinds of records, and the
-answers would differ. Ask the person ONE short question to find out which they meant.
-
-Rules:
-- Ask in the SAME language the question was asked in.
-- Describe each option in plain business words, using its name and what is typical for
-  its records. Never show table names, codes or internal identifiers.
-- One sentence, no preamble, no apology. End with a question mark."""
+CLARIFY_SYS = """The question fits several kinds of records and the answers would
+differ. Ask ONE short question to find out which was meant, in the language of the
+question, in plain business words. End with a question mark."""
 
 
 def clarify_text(question, opts):
@@ -747,10 +713,8 @@ def clarify_text(question, opts):
 # Формулировка нарочно НЕ говорит «данных нет»: этот же отказ уходит и там, где данные
 # есть и посчитаны, а не прошла проверку формулировка модели. Сказать «нет данных» в
 # таком случае — соврать клиенту.
-REFUSE_SYS = """The system could not produce a verified answer to the user's question.
-Write ONE short sentence, in the SAME LANGUAGE as the question, saying that a verified
-answer to it cannot be given right now. State no facts, no figures, no reasons, no
-apologies. Reply with that sentence only."""
+REFUSE_SYS = """Say in ONE sentence, in the language of the question, that a
+verified answer cannot be given right now. No figures, no reasons, no apology."""
 
 
 def refuse_text(question):
@@ -1263,48 +1227,24 @@ def aggregate(src_table, match, preds, measure=None):
 
 
 # ----------------------------------------------------------------- 4. формулировка
-ANSWER_SYS = """You answer an employee's question using ONLY the rows given to you.
+ANSWER_SYS = """Answer the employee\'s question from the rows given below.
 
-Reply with JSON only, no text outside it:
-{"text": "the answer for the user",
- "ask": "one clarifying question, or null",
- "claims": {"total": number|null, "count": number|null, "max": number|null, "min": number|null}}
+{"text": "the answer", "ask": "one clarifying question, or null"}
 
-"ask" is the middle road between answering and giving up. Fill it ONLY when the rows do
-not answer exactly what was asked, but they DO answer a closely related question about
-the same subject — a different direction of the same relation, a different period, a
-different role of the same party. Then put in "text" what the rows DO show, and in "ask"
-a single short question that would let you answer precisely. Do not ask when the rows
-answer the question — answer it. Do not ask when the rows are unrelated — say there is
-no data. Never ask about our database, tables or fields: ask about the person's intent,
-in their own words.
+Computed values are written as placeholders, and the system substitutes the exact
+figures: {total} {count} {max} {min} {avg} {date_min} {date_max}. When quantities are
+listed by name, address one: {total:NAME}. Example: "Sold for {total} across {count}
+documents, the largest {max}."
 
-🔴 NEVER WRITE A COMPUTED FIGURE YOURSELF. Not as digits, not in words, not even by
-copying it from the figures below. Write a PLACEHOLDER instead, and the exact value will
-be substituted by the system:
+Values read from a single row — a document number, a name, a date — are copied as they
+stand. The line is: computed over several rows is a placeholder, read from one row is a
+quotation.
 
-  {total}  {count}  {max}  {min}  {avg}  {date_min}  {date_max}
+Fill "ask" when the rows answer a closely related question but not exactly the one
+asked; put what the rows DO show in "text". Ask about what the person meant, in their
+own words.
 
-When several quantities are given by name, address one of them: {total:NAME},
-{max:NAME}, {min:NAME} — NAME exactly as given below.
-
-Example: "Sold for {total} across {count} documents, the largest being {max}."
-
-Values that appear INSIDE a row — a document number, a tax id, a party's name, the date
-of one specific record — you copy verbatim from the rows. Those are quotations, not
-arithmetic. The distinction: anything computed over several rows is a placeholder,
-anything read from one row is copied.
-
-"claims" — leave every role null. It exists only for compatibility and is ignored.
-
-- Reply in the SAME language the question was asked in — "ask" too.
-- Never invent numbers, dates or names that are not in the rows.
-- If the rows do not answer the question and nothing close to it, say plainly that there
-  is no data. Silence is the last resort, not the first.
-- When the question is about an amount or a quantity over several records, state the
-  computed total with {total} — listing the records one by one instead of giving the
-  total is not an answer to "how much in all". List them in addition to it, not instead.
-- Be short and businesslike, no preamble."""
+Answer in the language of the question. Short and businesslike, no preamble."""
 
 
 def _split_answer(raw):
@@ -1841,21 +1781,18 @@ def _coverage_of(src_table):
             "reason": r[0][2] if len(r[0]) > 2 else ""}
 
 
-COVERAGE_SYS = """You answer an employee's question about how complete the company's data
-is inside this system. You get a census: for each kind of records, how many rows exist in
-the source system and how many reached the search, plus the reason when they differ.
+COVERAGE_SYS = """The question is about how complete this system\'s copy of the
+company data is. Below is a census: per kind of records, how many rows exist in the
+source, how many reached the search, and why they differ.
 
-Reply with JSON only, no text outside it:
-{"text": "the answer for the user",
- "claims": {"total": number|null, "count": number|null, "max": number|null, "min": number|null}}
+{"text": "the answer", "claims": {"total": number|null, "count": number|null,
+ "max": null, "min": null}}
 
-- Reply in the SAME language the question was asked in.
-- Name the kinds of records that are missing, and say WHY, using the reason given.
-- State figures in DIGITS, copied from the census — never recompute, never estimate.
-- Put the number of missing rows in "claims.total" and the number of affected kinds of
-  records in "claims.count", both only if they appear in your text in digits.
-- Say plainly if nothing is missing.
-- Be short and businesslike, no preamble."""
+Name what is missing and why, with figures copied from the census in digits. Put the
+missing row count in claims.total and the number of affected kinds in claims.count when
+they appear in your text. Say plainly if nothing is missing.
+
+Answer in the language of the question. Short and businesslike."""
 
 
 def _coverage_answer(question, diag, t0):

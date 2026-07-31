@@ -97,19 +97,19 @@ def _ask(question, focus=None, measure=None, context=None):
 # клиента заранее неизвестен. Описание инструмента (его читает модель бота) — на
 # английском и без предметных примеров, чтобы не тянуть ответ в конкретный язык и не
 # предполагать торговую конфигурацию.
+# 🔴 ЭТИ СТРОКИ ЧИТАЕТ МОДЕЛЬ, А НЕ ЧЕЛОВЕК, поэтому они по-английски. Русский текст
+# здесь тянул модель ответить клиенту по-русски — ровно в той ветке, ради которой ниже по
+# стеку заведён `clarify_text` на языке вопроса.
 NO_DATA_REPLY = os.environ.get(
-    "MCP_NO_DATA_REPLY",
-    "[НЕТ ДАННЫХ по этому вопросу] — сообщи клиенту, что таких данных нет; НЕ выдумывай.")
+    "MCP_NO_DATA_REPLY", "[NO DATA] Tell the user there is no such data.")
 ERROR_REPLY = os.environ.get(
-    "MCP_ERROR_REPLY",
-    "[ОШИБКА сервиса данных: {detail}] — сообщи клиенту, что не удалось получить данные.")
-CLARIFY_LABEL = os.environ.get("MCP_CLARIFY_LABEL", "ВАРИАНТЫ")
+    "MCP_ERROR_REPLY", "[SERVICE ERROR: {detail}] Tell the user the data is unavailable.")
+CLARIFY_LABEL = os.environ.get("MCP_CLARIFY_LABEL", "OPTIONS")
 CLARIFY_HINT = os.environ.get(
     "MCP_CLARIFY_HINT",
-    "[НУЖНО УТОЧНЕНИЕ] Задай клиенту вопрос ниже своими словами и по-человечески, "
-    "перечислив варианты. Получив выбор, вызови инструмент СНОВА с тем же вопросом и "
-    "полем focus (и measure, если выбиралась величина) — значения бери ДОСЛОВНО из "
-    "перечня. Ничего из служебных имён клиенту не показывай.")
+    "[CLARIFICATION NEEDED] Put the question below to the user in your own words with the "
+    "options. Then call this tool again with the same question and `focus` (and `measure` "
+    "if a quantity was chosen), copied verbatim from the list.")
 
 
 @mcp.tool()
@@ -117,15 +117,13 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
            context: str = "") -> str:
     """Ask about data stored in the company's ERP system.
 
-    Every figure comes from the database itself and is checked before it is returned.
-    Answer the user with these facts only — do not add, recompute or reword numbers,
-    dates or names.
+    Figures come from the database and are checked before they are returned; pass them
+    on as they are.
 
-    The answer may instead be a request to CLARIFY: the question fits several record
-    types, or several different quantities. In that case ask the user which one they
-    mean, then call this tool again with the same question plus `focus` (and `measure`
-    when a quantity was being chosen), copying those values verbatim from the list you
-    were given. Never pick one yourself and never invent such a value.
+    The reply may instead ask to CLARIFY, when the question fits several record types or
+    several quantities. Then put that question to the user and call this tool again with
+    the same question plus `focus` (and `measure` if a quantity was chosen), copied
+    verbatim from the list given.
 
     :param question: the user's question, in their own language, about company data.
     :param focus: record type chosen by the user after a clarification, verbatim.
