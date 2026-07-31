@@ -31,14 +31,44 @@ sudo -u "$BOTUSER" -H mkdir -p "$BAK"
 sudo -u "$BOTUSER" -H cp instance/AGENTS.md "$WS/AGENTS.md"
 echo "выкатка: AGENTS.md ($(wc -c < instance/AGENTS.md) символов)"
 
-# Заготовки движка убираются в сторону, а не стираются: они не наши, и разбирать их
-# содержимое может понадобиться при обновлении OpenClaw.
+# 🔴 УДАЛЕНИЕ НЕ РАБОТАЕТ — ДВИЖОК КЛАДЁТ ФАЙЛ ОБРАТНО. [замер 31.07] `TOOLS.md` убрали в
+# 04:17:03, движок положил идентичную копию в 04:17:21 — через 18 секунд. Удаление файла,
+# который создаёт чужой код, это не запрет кодом, а гонка, и я её проиграл.
+# Поэтому заготовки не стираются, а ПЕРЕЗАПИСЫВАЮТСЯ пустышкой: существующий файл движок
+# не трогает, значит содержимое остаётся нашим. Оригинал сохраняется рядом.
 for f in BOOTSTRAP.md SOUL.md IDENTITY.md TOOLS.md USER.md; do
-  if [ -f "$WS/$f" ]; then
-    sudo -u "$BOTUSER" -H mv "$WS/$f" "$BAK/$f"
-    echo "выкатка: убрана заготовка $f"
+  [ -f "$WS/$f" ] || continue
+  if [ ! -f "$BAK/$f" ]; then
+    sudo -u "$BOTUSER" -H cp "$WS/$f" "$BAK/$f"
   fi
+  # Пустой файл движок считает заполненным и заново не заводит; в промт уходит одна строка
+  # вместо 6 124 символов чужих указаний.
+  printf '%s\n' "(не используется — см. instance/AGENTS.md)" \
+    | sudo -u "$BOTUSER" -H tee "$WS/$f" >/dev/null
+  echo "выкатка: заготовка $f опустошена"
 done
+
+# Мост MCP — туда же, куда и персона: он тоже читается чужим процессом.
+# [замер 31.07] в /opt лежала копия от 30.07, и правки моста не влияли ни на один ответ.
+MCPDIR="${OPENCLAW_MCP_DIR:-/opt/openclaw-mcp}"
+if [ -d "$MCPDIR" ]; then
+  cp mcp_ask.py "$MCPDIR/mcp_ask.py"
+  echo "выкатка: mcp_ask.py -> $MCPDIR"
+  systemctl restart 1c-mcp-ask 2>/dev/null && echo "выкатка: 1c-mcp-ask перезапущен"
+fi
+
+# Плагин-гейт: маркеры в нём обязаны совпадать с теми, что шлёт мост.
+# Путь ИЩЕТСЯ, а не задаётся: движок ставит плагин в каталог со сгенерированным именем
+# (`.../npm/projects/openclaw-braine-verify__…__g-<хеш>/node_modules/openclaw-braine-verify`),
+# и хеш меняется при переустановке. Записать его в скрипт значило бы поставить догадку.
+PLUGDIR=$(sudo -u "$BOTUSER" -H find "/home/$BOTUSER/.openclaw" -name verify-core.js \
+          -printf '%h\n' 2>/dev/null | head -1)
+if [ -n "$PLUGDIR" ]; then
+  sudo -u "$BOTUSER" -H cp verify-plugin/verify-core.js verify-plugin/index.js "$PLUGDIR/" 2>/dev/null \
+    && echo "выкатка: verify-plugin -> $PLUGDIR"
+else
+  echo "🔴 выкатка: плагин-гейт не найден — маркеры моста и гейта могут разойтись"
+fi
 
 # Отметка «настройка завершена»: без неё движок считает рабочую папку незаполненной и
 # добавляет в промт раздел «Bootstrap Pending», требующий исполнить BOOTSTRAP.md.

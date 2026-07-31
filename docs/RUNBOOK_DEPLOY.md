@@ -506,7 +506,14 @@ install -d -o undebot -g undebot -m700 /home/undebot/.openclaw /home/undebot/.op
 `mcp.servers` = `second-brain`(:6014→`ask_1c`) + `second-brain-reports`(:6015→`report_1c`).
 ```bash
 sudo -u undebot cp ubuntu/openclaw/instance/openclaw.json /home/undebot/.openclaw/openclaw.json
-sudo -u undebot cp ubuntu/openclaw/instance/AGENTS.md     /home/undebot/.openclaw/workspace/AGENTS.md
+# 🔴 ПЕРСОНА — ТОЛЬКО СКРИПТОМ, не копированием руками.
+# [замер 31.07] пока здесь стояло `cp`, персона правилась в репозитории, а бот отвечал по
+# копии от 30.07: шаг никто не делал, и правки промта не влияли НИ НА ОДИН ответ, причём
+# это ниоткуда не было видно. Скрипт вдобавок убирает стартовые заготовки движка
+# (`BOOTSTRAP.md`, `SOUL.md`, `IDENTITY.md`, `TOOLS.md`, `USER.md`) — 6 124 символа в
+# системном промте каждый ход, часть прямо против контракта. Разбор — `HOW_NOT_TO §1.27`,
+# `§1.28`.
+ubuntu/openclaw/deploy_instance.sh
 printf '%s' '<TELEGRAM_BOT_TOKEN>' | sudo -u undebot tee /home/undebot/.openclaw/telegram-token >/dev/null
 sudo -u undebot chmod 600 /home/undebot/.openclaw/telegram-token
 printf 'DEEPSEEK_API_KEY=%s\n' '<ключ>' | sudo -u undebot tee /home/undebot/.openclaw/.env >/dev/null

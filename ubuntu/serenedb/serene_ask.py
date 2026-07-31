@@ -322,12 +322,14 @@ INTENT_SYS = """Turn the question into this JSON. Nothing else in the reply.
  "period":  {"from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null},
  "want":    "list"|"sum"|"count",
  "measure": "the word naming WHICH quantity is asked about, in the question's language",
- "kind":    "a short noun for the kind of records asked about, in the question's language",
+ "kind":    "always give this: a short noun for the kind of records asked about, in the
+             question's language; for a verb give the matching noun",
  "about":   "data"|"coverage"}
 
 terms are VALUES that would literally appear in a record — parties, goods, places,
-numbers. The kind of record goes to "kind", not here. Groups are AND, items inside a
-group are OR, so put inflections and expanded abbreviations in the same group.
+document numbers. The kind of record goes to "kind", not here; a numeric threshold goes
+to "amount", never here. Groups are AND, items inside a group are OR, so put inflections
+and expanded abbreviations in the same group.
 
 want: "sum" for a total of any quantity, "count" for how many records, else "list".
 about: "coverage" when the question is about what data is MISSING from this system,
@@ -643,10 +645,13 @@ this database. Choose the type whose records answer it, and say what to compute.
 {"types": [numbers], "quantity": "<name copied from that type\'s quantity list>|null",
  "compute": "count"|"sum"|"max"|"min"|"avg"}
 
-Judge by meaning, across languages and wording. Entries may show what is typical for
-their records and how many already match — both help tell apart similar names.
-Entries marked as line items are the rows inside another record; a question about a
-total belongs to the record that owns them.
+Judge by meaning, across languages and wording.
+
+Entries may carry three hints, and each decides between similar names: what is typical
+for their records; how many records already MATCH the question — prefer a type that has
+matches over a same-sounding one that has none; and whether the entry is line items —
+the rows inside another record, so a question about a total belongs to the record that
+owns them.
 
 Several numbers (at most three) when the question genuinely fits several types AND the
 answers would differ. One number when one type answers better. 0 when none fits.
@@ -1229,14 +1234,17 @@ def aggregate(src_table, match, preds, measure=None):
 # ----------------------------------------------------------------- 4. формулировка
 ANSWER_SYS = """Answer the employee\'s question from the rows given below.
 
-{"text": "the answer", "ask": "one clarifying question, or null"}
+Reply with JSON and nothing else: {"text": "the answer", "ask": "a clarifying question,
+or null"}
 
-Computed values are written as placeholders, and the system substitutes the exact
-figures: {total} {count} {max} {min} {avg} {date_min} {date_max}. When quantities are
-listed by name, address one: {total:NAME}. Example: "Sold for {total} across {count}
-documents, the largest {max}."
+Do not write a computed figure yourself — not in digits, not in words, not even by
+copying it from the figures below. Write a placeholder and the system substitutes the
+exact value: {total} {count} {max} {min} {avg} {date_min} {date_max} {folders}. When
+quantities are listed by name, address one: {total:NAME} {max:NAME} {min:NAME} — NAME
+exactly as given. Example: "Sold {total:NAME} across {count} documents, the largest
+{max:NAME}."
 
-Values read from a single row — a document number, a name, a date — are copied as they
+Values read from a single row — a document number, a name, a date — you copy as they
 stand. The line is: computed over several rows is a placeholder, read from one row is a
 quotation.
 
@@ -1785,12 +1793,13 @@ COVERAGE_SYS = """The question is about how complete this system\'s copy of the
 company data is. Below is a census: per kind of records, how many rows exist in the
 source, how many reached the search, and why they differ.
 
+Reply with JSON and nothing else:
 {"text": "the answer", "claims": {"total": number|null, "count": number|null,
  "max": null, "min": null}}
 
 Name what is missing and why, with figures copied from the census in digits. Put the
-missing row count in claims.total and the number of affected kinds in claims.count when
-they appear in your text. Say plainly if nothing is missing.
+missing row count in claims.total and the number of affected kinds in claims.count, so
+that they can be checked against the census.
 
 Answer in the language of the question. Short and businesslike."""
 
