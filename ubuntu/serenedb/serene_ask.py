@@ -1424,7 +1424,8 @@ def _ask_back(raw):
     return str((d.get("ask") if isinstance(d, dict) else "") or "").strip()
 
 
-def compose(question, rows, agg, corrections=None, totals=None, coverage=None):
+def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
+            measure_used=None, folders=None):
     payload = []
     shown = rows[:ROWS_TO_MODEL]
     # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
@@ -1480,6 +1481,22 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None):
                  "their language, stating the number of missing rows in digits."
                  % (coverage["in_1c"], coverage["in_search"], coverage["missing"],
                     coverage.get("reason") or "reason unknown"))
+    # 🔴 ОГОВОРКИ К ОТВЕТУ ГОВОРИТ МОДЕЛЬ, А НЕ МЫ. Прежде обе дописывались нашей прозой
+    # ПОСЛЕ модели — по-русски, в файле, где от русских умолчаний отказались сознательно:
+    # `NO_DATA_TEXT` пуст, отказ и уточнение формулирует модель именно потому, что своя
+    # фраза была бы на одном языке независимо от языка вопроса. На англоязычном клиенте
+    # ответ выходил смешанным. Механизм тот же, что у предупреждения о неполноте выше.
+    # Числа отсюда разрешены гейту, поэтому оговорка не будет отвергнута как выдумка.
+    if measure_used:
+        body += ("\n\nQUANTITY USED: the figures above are computed over the quantity named "
+                 "'%s'. Name that quantity in your answer, in the user's language, so they "
+                 "know WHICH value was summed." % measure_used)
+    if folders:
+        body += ("\n\nGROUPS EXCLUDED: %d records were folders (grouping nodes of the "
+                 "catalogue), not real items, and are NOT included in the count above. You "
+                 "MUST say this in your answer, in the user's language, stating the number "
+                 "%d in digits — otherwise a user who knows the raw record count will think "
+                 "the figure is wrong." % (folders, folders))
     if corrections:
         # ВТОРАЯ ПОПЫТКА. Первая формулировка не прошла проверку кодом — говорим модели,
         # что именно не сошлось, и требуем опираться только на посчитанные базой числа.
@@ -2724,10 +2741,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
     if measure_alts:
         diag["measure_ambiguous"] = measure_alts
-        opts = [{"src": src, "measure": m, "label": m} for m in measure_alts]
+        opts = [{"src": src, "measure": m, "label": m, "distinct_by": ""}
+                for m in measure_alts]
+        # 🔴 ВОПРОС ЗАДАЁТ МОДЕЛЬ, НА ЯЗЫКЕ СПРАШИВАЮЩЕГО. Здесь стояла наша русская фраза
+        # «Уточните, какую величину считать», и она составляла ВЕСЬ текст уточнения: на
+        # англоязычном клиенте человек не понял бы, что у него спрашивают. Тот же
+        # `clarify_text`, что и у выбора сущности; не смогла сформулировать — остаётся
+        # перечень величин, по нему выбор всё равно возможен.
         return {"partial": cut or None, "kind": "clarify",
-                "text": "Уточните, какую величину считать: %s."
-                        % ", ".join("«%s»" % m for m in measure_alts),
+                "text": clarify_text(question, opts)
+                        or ", ".join("«%s»" % m for m in measure_alts),
                 "options": opts, "sources": [src],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
     # Величина не названа — считаем итоги по всем и показываем модели с именами.
@@ -2753,7 +2776,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     extra_vals = _threshold_values(intent) + [x for t in (totals or []) for x in t[1:]] \
                  + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else []) \
                  + q_nums
-    raw = compose(question, rows, agg, totals=totals, coverage=cov)
+    # Оговорки к ответу — в промт, а не приписью после: язык берётся из вопроса.
+    counting_rows = (plan.get("compute") == "count") or (intent.get("want") == "count")
+    say_measure = measure if (measure and not counting_rows) else None
+    n_folders = (agg or {}).get("folders") or 0
+    raw = compose(question, rows, agg, totals=totals, coverage=cov,
+                  measure_used=say_measure, folders=n_folders)
     text, claims = _split_answer(raw)
     ask_back = _ask_back(raw)
     # КАЛЬКУЛЯТОР: числа ставит код, а не модель. Всё, что подставлено, посчитано базой,
@@ -2785,7 +2813,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # сходится с базой, он не уйдёт.
     if not ok and agg:
         diag["retry"] = bad[:3]
-        raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals, coverage=cov)
+        raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals,
+                       coverage=cov, measure_used=say_measure, folders=n_folders)
         text2, claims2 = _split_answer(raw2)
         text2, slots_bad2 = _fill_figures(text2, agg, totals, bool(measure))
         ok_roles2 = not slots_bad2
@@ -2858,19 +2887,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # имя приходит из данных, значит одинаково верно на любой конфигурации, и его нельзя
     # забыть. Приписка не дублируется, если модель уже назвала величину сама.
     text = text.strip()
-    # Величина называется только там, где по ней СЧИТАЛИ. [замер 30.07] на «сколько позиций
-    # номенклатуры» приписка выходила бессмысленной: «считано по величине
-    # КоэффициентЕдиницыДляОтчетов», хотя считались записи, а не величина. Признак — что
-    # просили посчитать: счёт записей величины не требует.
-    counting_rows = (plan.get("compute") == "count") or (intent.get("want") == "count")
-    if measure and not counting_rows and measure.lower() not in text.lower():
-        text = "%s\n\nСчитано по величине «%s»." % (text, measure)
-    # 🔴 ОТБРОШЕННЫЕ ГРУППЫ НАЗЫВАЮТСЯ ЧИСЛОМ. Папка — не запись, и в счёт она не идёт; но
-    # умолчать об этом нельзя: человек, знающий, что в справочнике 252 строки, обязан понять,
-    # откуда 227. Дописывает КОД, а не модель, — забыть нельзя.
-    nf = (agg or {}).get("folders") or 0
-    if nf:
-        text = "%s\n\nГруппы справочника в счёт не входят: их %d." % (text, nf)
+    # 🔴 ОБЕ ОГОВОРКИ — КАКАЯ ВЕЛИЧИНА СЧИТАНА И СКОЛЬКО ГРУПП ОТБРОШЕНО — ушли в промт
+    # (`compose`), потому что здесь они дописывались НАШЕЙ русской прозой после модели.
+    # Требование не ослаблено: и то и другое названо в задании как обязательное, а числа
+    # оговорок разрешены гейту, то есть не будут отвергнуты как выдумка. Смысл прежний:
+    # папка — не запись и в счёт не идёт, но человек, знающий про 252 строки, обязан
+    # понять, откуда 227 (п. 13: молчаливая потеря — дефект).
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
             "completeness": cov, "measure": measure,
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
