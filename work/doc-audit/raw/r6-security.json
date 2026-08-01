@@ -1,0 +1,95 @@
+{
+  "angle": "security",
+  "findings": [
+    {
+      "title": "Файрвола на стенде нет ни одного правила, при том что доки перечисляют его среди выполненных «наших дополнений»",
+      "detail": "Периметр держится ровно одним: все службы забиндены на 127.0.0.1 (наружу слушает только sshd :22). Никакого сетевого фильтра на машине нет вовсе. При этом UBUNTU_SETUP §5 п.4 перечисляет «firewall на :3000/:8090» в порядке развёртывания как наше дополнение (шаги 1-7 исполнялись — стек braine был развёрнут), а §3 п.11 требует «закрыть файрволом до VPN/локалки» с оговоркой braine «токен не заменяет сетевую защиту». ARCHITECTURE §7 п.5 оставляет firewall на «тюнинг прода». Того, что фактическая защита — только bind на loopback, не записано ни в одном документе; при первом же выносе любого сервиса на 0.0.0.0 (а RUNBOOK:30 уже описывает config-ui как 0.0.0.0:6012) защиты не будет никакой.",
+      "evidence": "[замер] iptables -L -n → все три цепи policy ACCEPT, ни одного правила | nft list ruleset → пусто | ufw status → Status: inactive | ip6tables -L -n → пусто | [замер] ss -tlnp → 0.0.0.0:22 (sshd) единственный не-loopback; 7890/8099/6011/6012/6014/6015/6016/6021/5432/18800 — все 127.0.0.1",
+      "doc_locs": ["docs/UBUNTU_SETUP.md:46", "docs/UBUNTU_SETUP.md:62", "docs/ARCHITECTURE.md:137", "docs/ARCHITECTURE.md:175"],
+      "verdict": "a",
+      "verdict_why": "Док описывает несуществующее состояние (firewall как выполненный шаг развёртывания) и нигде не фиксирует реально действующую меру — bind на 127.0.0.1. Правится документом: перечислить фактический периметр и статус файрвола.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Ротация утёкших токенов не сделана: env-файлы MCP старше самой записи об утечке",
+      "detail": "PRODUCTION_PLAN §«ротация» (коммит 7c73e0a от 27.07 14:22) фиксирует: «ASK_TOKEN и Bearer для MCP утекли в транскрипты агентов». По датам изменения секретных файлов видно, что перевыпуск сделан только для ASK_TOKEN (файл правился 30.07), а Bearer MCP — нет: /etc/1c-mcp-braine.env не менялся с 26.07 09:38, /etc/1c-gateway.env — с 22.07 18:06, то есть оба старше записи об утечке. Юнит 1c-mcp-braine при этом жив и enabled — токен рабочий. F013 закрывает только ключ S3; про MCP-Bearer следа о перевыпуске нет ни в CHANGELOG, ни в самом плане.",
+      "evidence": "[замер] stat -c \"%y %n\" /etc/*.env → 2026-07-22 18:06 /etc/1c-gateway.env; 2026-07-26 09:38 /etc/1c-mcp-braine.env; 2026-07-30 13:01 /etc/1c-serene-ask.env | [замер] git log -1 -S\"утекли в транскрипты\" -- docs/PRODUCTION_PLAN.md → Mon Jul 27 14:22:18 2026 7c73e0a | [замер] systemctl is-active/is-enabled 1c-mcp-braine → active / enabled",
+      "doc_locs": ["docs/PRODUCTION_PLAN.md:397"],
+      "verdict": "v",
+      "severity": "medium",
+      "verdict_why": "Сам док говорит «перевыпуск — за владельцем», то есть это его решение, а не дефект кода. Вопрос владельцу: перевыпускаем Bearer MCP или признаём риск принятым (доступ локальный) — и записываем ответ, иначе строка про ротацию висит месяц.",
+      "known_fid": ""
+    },
+    {
+      "title": "Боевая конфигурация осиротевших процессов собрана вручную в интерактивной сессии: SERENEDB_DSN обрезан, куски строки стали отдельными переменными окружения",
+      "detail": "У боевого сервиса ответов (:8099) в окружении SERENEDB_DSN=host=127.0.0.1 — без порта, пользователя и базы; рядом живут переменные l=, port=7890, user=serene_resolver, dbname=postgres. Это след `export SERENEDB_DSN=host=... port=... user=... dbname=...` без кавычек: export разобрал строку как несколько присваиваний. RUNBOOK §10.8 ровно этот export печатает (в кавычках), а оператор потерял их. Плюс в окружении обоих ручных процессов (:8099 и шлюз второй базы :6021) стоят маркеры CLAUDE_CODE_*/CLAUDECODE — то есть боевые службы унаследовали ключи (PGPASSWORD, DEEPSEEK_API_KEY, ALIBABA_API_KEY, ASK_TOKEN, ODG_PASS) из интерактивной оболочки агента, а это тот самый канал, который PRODUCTION_PLAN:397 называет источником утечки токенов. Сам serene_ask.py SERENEDB_DSN не читает (только строка в docstring), так что немедленной поломки нет — но конфигурация не воспроизводима и не переживёт перезагрузку.",
+      "evidence": "[замер] tr '\\0' '\\n' < /proc/3109129/environ → SERENEDB_DSN=host=127.0.0.1; l=; port=7890; user=serene_resolver; dbname=postgres; SERENEDB_DSN_RO=... dbname=ut_test | [замер] имена переменных того же процесса содержат CLAUDECODE, CLAUDE_CODE_SESSION_ID, SSH_TTY, PGPASSWORD | [замер] ps -o user,cmd -p 3109129,1136469 → root python3 serene_ask.py; root python3 /opt/1c-odata-gateway/odata_gateway.py | [код] serene_ask.py:28 (SERENEDB_DSN только в docstring), :42 DSN берётся из SERENEDB_DSN_RO",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:429", "docs/RUNBOOK_DEPLOY.md:430"],
+      "verdict": "v",
+      "severity": "medium",
+      "verdict_why": "F110 уже фиксирует, что боевая конфигурация живёт только в окружении осиротевшего процесса. Новое здесь — как она туда попала (разорванный кавычками export, секреты через оболочку сессии агента) и что при перезапуске воспроизвести её нечем. Вопрос владельцу: закрепляем окружение env-файлом и поднимаем юнитом или оставляем ручной запуск.",
+      "known_fid": "F110"
+    },
+    {
+      "title": "RUNBOOK учит вываливать пароли и ключи в окружение интерактивной оболочки, тогда как два других дока прямо запрещают это",
+      "detail": "RUNBOOK §10.8 «Проверка» начинается с `export $(grep -E '^(ALIBABA_|EMBED_|PGPASSWORD|RESOLVER_PW)=' /etc/1c-mcp-reports.env | xargs -d '\\n')`: все секреты из файла 600 переезжают в окружение интерактивной оболочки и дальше наследуются каждым её потомком (именно так их получили ручные боевые процессы, см. соседнюю находку). API_ASK.md:119 и ACCEPTANCE_UT.md:11 в тех же ситуациях пишут прямо противоположное — «в командную строку его не пишем» — и показывают аккуратный способ через `curl -K` с временным файлом 600. Один и тот же проект учит двум разным практикам обращения с секретами, причём опасная лежит в главном руководстве по развёртыванию.",
+      "evidence": "[код] docs/RUNBOOK_DEPLOY.md:429 export $(grep -E '^(ALIBABA_|EMBED_|PGPASSWORD|RESOLVER_PW)=' /etc/1c-mcp-reports.env | xargs -d '\\n') | [код] docs/API_ASK.md:119 «# токен лежит в /etc/1c-serene-ask.env, в командную строку его не пишем» + mktemp/chmod 600 | [код] docs/ACCEPTANCE_UT.md:11 то же правило | [замер] /etc/1c-mcp-reports.env → 600 root:root",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:429", "docs/API_ASK.md:119", "docs/ACCEPTANCE_UT.md:11"],
+      "verdict": "a",
+      "verdict_why": "Инвариант CLAUDE.md «секреты — в /etc/*.env с правами 600, никогда в командной строке» и собственный приём из API_ASK.md уже дают правильный образец; RUNBOOK отстал и тиражирует старый. Правится документом.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "RUNBOOK называет ASK_TOKEN необязательным, а код с 30.07 fail-closed: без токена сервис не стартует, а документированный curl уйдёт в 401",
+      "detail": "RUNBOOK:413 описывает `/etc/1c-serene-ask.env` как «необязательный», а проверка на :438 подставляет заголовок условно — `${ASK_TOKEN:+-H \"Authorization: Bearer $ASK_TOKEN\"}`, то есть допускает вызов вообще без токена. В коде обратное: serene_ask.py:2991 при пустом ASK_TOKEN печатает FATAL и возвращает 2 (сервис не стартует), а обработчик :2930 проверяет заголовок безусловно. То же и у остальных дверей: oc_config_ui.py:155, mcp_ask.py:62, mcp_braine.py:58, mcp_reports.py:53, odata_gateway.py:140 — все fail-closed. AGENT_FINDINGS_STATUS:35 закрытие fail-open уже отметил, а RUNBOOK остался в прежней эпохе: выполнив его буквально, получишь 401 и решишь, что сервис сломан.",
+      "evidence": "[код] /opt/1c-mcp-reports/serene_ask.py:2991 «if not ASK_TOKEN: FATAL: ASK_TOKEN не задан … return 2»; :2930 «if self.headers.get(\"Authorization\",\"\") != \"Bearer \" + ASK_TOKEN: 401» | [код] odata_gateway.py:140, oc_config_ui.py:155, mcp_ask.py:62, mcp_braine.py:58, mcp_reports.py:53 — все FATAL при пустом токене | [код] docs/RUNBOOK_DEPLOY.md:413 «необязательный /etc/1c-serene-ask.env», :438 ${ASK_TOKEN:+…}",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:413", "docs/RUNBOOK_DEPLOY.md:438", "docs/AGENT_FINDINGS_STATUS.md:35"],
+      "verdict": "a",
+      "verdict_why": "Код правильный и fail-closed, док описывает отменённое поведение. Правится документом.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Разовая настройка «галочками» невыполнима: config-ui требует Bearer, которого браузер не пошлёт",
+      "detail": "ARCHITECTURE §5:149 описывает единственный ручной шаг настройки под бизнес как «открыл http://<lxc>:6012 → отметил бизнес-разделы → сохранил». Фактически oc_config_ui.py проверяет `Authorization: Bearer <UI_TOKEN>` и на GET, и на POST безусловно (:127, :133-136, :138), а без UI_TOKEN вообще не стартует (:155). Обычный браузер такого заголовка не отправляет — по документированной инструкции человек получит только «401». Известная F082 говорит лишь про адрес (127.0.0.1 вместо 0.0.0.0); авторизация — второй, независимый запрет на этот шаг, и вместе они делают документированную процедуру невыполнимой ни локально, ни по сети.",
+      "evidence": "[код] /opt/1c-config-ui/oc_config_ui.py:133-136 «_auth_ok … return self.headers.get('Authorization','') == 'Bearer ' + UI_TOKEN», :127 и :138 — проверка на do_GET и do_POST; :155 FATAL без UI_TOKEN | [замер] ss -tlnp → 127.0.0.1:6012 (oc_config_ui.py) | [замер] окружение процесса 3173735 содержит UI_TOKEN",
+      "doc_locs": ["docs/ARCHITECTURE.md:149", "docs/RUNBOOK_DEPLOY.md:30"],
+      "verdict": "a",
+      "verdict_why": "Защита кодом правильная (экран решает, какие данные 1С попадут в систему). Документ описывает процедуру, которой нет: нужно либо описать способ с токеном, либо назвать шаг иным.",
+      "severity": "medium",
+      "known_fid": "F082"
+    },
+    {
+      "title": "Выгрузка данных 1С в каталоге движка доступна на чтение всем локальным пользователям, а каталог опытов bench — 777",
+      "detail": "В /var/lib/serenedb (12 ГБ, права 755) лежат 1767 CSV с данными 1С правами 644 — их читает любой локальный пользователь, включая undebot (под ним крутится бот-шлюз) и ubuntu (владелец репозитория). Подкаталог опытов bench имеет права drwxrwxrwx — любой локальный пользователь может писать внутрь каталога данных движка. Доки при этом объявляют данные 1С чувствительными с доступом «только allowlist» (UBUNTU_SETUP:44). F158 фиксирует сам факт свалки в каталоге движка, про права там ничего нет. Дополнительно 644 у /etc/serenedb/serened.conf — сама по себе не секрет, но описывает раскладку данных.",
+      "evidence": "[замер] ls -l /var/lib/serenedb/*.csv → -rw-r--r-- serenedb:serenedb (1767 файлов) | [замер] ls -ld /var/lib/serenedb/bench → drwxrwxrwx 1 root root | [замер] stat -c \"%a %U:%G %n\" /var/lib/serenedb /etc/serenedb/serened.conf → 755 serenedb:serenedb, 644 root:root | [замер] awk по /etc/passwd → непривилегированные пользователи ubuntu(1000), undebot(1001) | [замер] du -sh /var/lib/serenedb → 12G",
+      "doc_locs": ["docs/UBUNTU_SETUP.md:44", "docs/SERVER_HANDOFF.md:74"],
+      "verdict": "v",
+      "verdict_why": "Ни TARGET.md, ни решения владельца прав на файлы не оговаривают, а стенд объявлен стендом разработки. Вопрос владельцу: считаем ли локальный доступ угрозой (тогда 640/750 и убрать 777 с bench) или фиксируем как принятое для стенда — сейчас не записано ни то, ни другое.",
+      "severity": "medium",
+      "known_fid": "F158"
+    },
+    {
+      "title": "Обещание «юниты под root, ужесточим после» не выполнено: из одиннадцати юнитов ограничение стоит у одного",
+      "detail": "UBUNTU_SETUP:40 фиксирует как временное решение: «Юниты работают под root (User= нет нигде) — для первой итерации оставляем как в оригинале, ужесточим после». Спустя итерацию картина та же: у всех наших юнитов User= пуст (значит root), и из директив ужесточения (NoNewPrivileges/ProtectSystem/ProtectHome/PrivateTmp) есть ровно одна — NoNewPrivileges=true у 1c-mcp-reports. Под root ходят и обе сетевые двери (1c-odata-gateway, 1c-config-ui), и процессы, держащие ключи облачных моделей. Единственный юнит с выделенным пользователем — serenedb (User=serenedb). RUNBOOK §0 честно печатает «root» в колонке пользователя, так что расхождение именно с обещанием ужесточить, а не с таблицей.",
+      "evidence": "[замер] systemctl show -p User по 1c-* → пусто у всех одиннадцати; serenedb.service → User=serenedb | [замер] systemctl cat по одиннадцати юнитам → NoNewPrivileges=true только у 1c-mcp-reports, Protect*/PrivateTmp нет нигде | [код] docs/UBUNTU_SETUP.md:40",
+      "doc_locs": ["docs/UBUNTU_SETUP.md:40", "docs/RUNBOOK_DEPLOY.md:29"],
+      "verdict": "a",
+      "verdict_why": "Обещание «ужесточим после» висит невыполненным и в доке не помечено ни сроком, ни отказом. Либо ужесточать, либо записать решение «оставляем root на стенде» — сейчас документ обещает то, чего не делается.",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "/health сервиса ответов без авторизации отдаёт размер корпуса — единственная неавторизованная ручка с данными",
+      "detail": "У serene_ask GET /health обрабатывается до проверки токена и выполняет SELECT count(*) по корпусу, возвращая corpus_rows. Это не пароль и не строка данных, но объём загруженной базы — сведение о клиенте, и отдаётся оно любому локальному процессу без единого заголовка. У OData-шлюза /health устроен так же, но там ответ статический ({\"status\":\"odata-gateway-ok\"}) — то есть образец «здоровье без данных» в проекте уже есть. Ни один док ручку /health и её содержимое не описывает с этой стороны (API_ASK.md показывает вызов, но не оговаривает, что она без токена).",
+      "evidence": "[код] /opt/1c-mcp-reports/serene_ask.py:2915-2919 «def do_GET … if self.path.rstrip('/') == '/health': n = psql(\"SELECT count(*) FROM %s\" % CORPUS) … return self._send(200, {\"status\":\"serene-ask-ok\",\"corpus_rows\": int(n)})» — до проверки Authorization (:2930) | [код] /opt/1c-odata-gateway/odata_gateway.py:112-114 — /health до _auth_ok, но без обращения к данным",
+      "doc_locs": ["docs/API_ASK.md:47"],
+      "verdict": "v",
+      "verdict_why": "Похоже на осознанный компромисс ради монитора, но нигде не записано. Вопрос владельцу: оставляем счётчик в неавторизованном /health или прячем за токен, как остальное.",
+      "severity": "low",
+      "known_fid": ""
+    }
+  ]
+}

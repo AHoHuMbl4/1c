@@ -1,0 +1,85 @@
+{
+  "angle": "serene",
+  "findings": [
+    {
+      "title": "Ловушка 33 подтверждена сегодня, но записана мягче факта: при наличии фильтра врёт и ПРОЕКЦИЯ, а не только набор строк",
+      "detail": "techContext ловушка 33 говорит: фильтр «подставили NULL и сравнили с левой колонкой» отбрасывается целиком, но «Сами данные соединение даёт верные: 1:5/5 2:0/5 3:0/5». Прогон на живом движке 26.07.3 (01.08) показал, что это верно только для запроса БЕЗ фильтра. Как только фильтр присутствует, значение coalesce(r.n,0) в списке вывода для СОВПАВШЕЙ строки тоже становится нулём — то есть наружу уходит не просто лишняя строка, а неверное ЧИСЛО в колонке. Практически: любой отчёт вида «сколько разошлось», написанный этим образцом, отдаёт и лишние строки, и обнулённые значения, без единой ошибки. Запись про ловушку надо усилить: портится не только отбор.",
+      "evidence": "[замер 01.08] psql 'SELECT l.id, coalesce(r.n,0) FROM l LEFT JOIN r ON r.id=l.id WHERE coalesce(r.n,0) <> l.x' (l=(1,5),(2,5),(3,5), r=(1,5)) -> 1|0, 2|0, 3|0 | тот же join БЕЗ WHERE -> 1|5, 2|NULL, 3|NULL | 'WHERE coalesce(r.n,0) = l.x' -> 1,2,3 | 'WHERE r.n IS DISTINCT FROM l.x' -> 1,2,3 | [код] memory_bank/techContext.md:403-419",
+      "doc_locs": ["memory_bank/techContext.md:418", "memory_bank/techContext.md:403"],
+      "verdict": "a",
+      "verdict_why": "Ловушка описана, но её радиус занижен: док утверждает, что данные соединения верны, а замер показывает искажение значения в списке вывода. Правится док (усилить формулировку и добавить строку про проекцию).",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "ts_regexp: точка — это ОДИН БАЙТ, а не символ; записанная причина ловушки («термозависим, молча неверный ответ») не та",
+      "detail": "techContext ловушка «ts_regexp термозависим: на кириллице `догово..` даёт 1678 вместо 565 — молча неверный ответ» объясняет расхождение не тем. Замер на боевом корпусе (103 808 строк): ts_regexp('догово.*') = 2612 = ts_like('догово%') = ts_starts_with('догово') — то есть по термам ts_regexp считает ровно то же, что и остальные термные функции, никакого «неверного ответа» нет. Настоящая ловушка в другом: точка матчит БАЙТ. ts_regexp('догово.') = 0 (одного байта после кириллического префикса не бывает), ts_regexp('догово..') = 1649 (два байта = один кириллический символ, то есть все 7-символьные термы), ts_regexp('договор') = 570 = ts_phrase('договор'). Это тот же байтовый мир, что и записанный «ts_offsets в байтах». Дополнительно: у ts_regexp в нашей сборке есть ВТОРОЙ аргумент — синтаксис, и он на это не влияет: движок принимает только 'perl' и 'posix', и обе ветви дают те же 0 / 1649.",
+      "evidence": "[замер 01.08, db=postgres] ts_regexp('догово.')=0; ts_regexp('догово..')=1649; ts_regexp('догово...')=387; ts_regexp('договор')=570; ts_phrase('договор')=570; ts_regexp('догово.*')=2612; ts_like('догово%')=2612; ts_starts_with('догово')=2612; contains(lower(doc),'догово')=2669 | psql -> ERROR: ts_regexp syntax must be one of ['perl','posix'], got 'utf8' | perl и posix дают одинаковые 0 / 1649 | [док] https://docs.serenedb.com/docs/sql/functions/search/full-text#ts_regexp (ts_regexp(pattern[, syntax])), https://docs.serenedb.com/docs/sql/indexes/inverted/full-text-search#prefix-wildcard-and-regex",
+      "doc_locs": ["memory_bank/techContext.md:36"],
+      "verdict": "a",
+      "verdict_why": "Запись описывает симптом и приписывает его «термозависимости», из-за чего читатель не узнаёт, как написать ПРАВИЛЬНОЕ выражение. Проверяемая причина — байтовая семантика точки (кириллический символ = две точки) и наличие параметра syntax из {perl, posix}. Правится док.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Аутентификация: штатный механизм HBA в сборке ЕСТЬ и роли им ограничены; неснимаем только trust для postgres по петле — это свойство движка, а не наш пробел",
+      "detail": "Записано (F113), что «движок пускает суперпользователя postgres с любым паролем — разделение ролей serene_ro/serene_resolver ничего не ограничивает для процессов стенда». Первая половина верна, вторая — нет, и штатный механизм в нашей сборке есть. Живая раскладка pg_hba_file_rules: trust стоит РОВНО на пользователе postgres и только для local/127.0.0.1/::1 (правила 1-3), а всем остальным — scram-sha-256, включая local (правила 4-6). Проверено прямым подключением: serene_ro с неверным паролем получает FATAL: password authentication failed, то есть роль ограничивает по-настоящему. Правилами управляют штатно, из SQL: настройка hba (GLOBAL, сейчас пустая = умолчание) плюс файл <datadir>/pg_hba.conf. При этом снять trust с postgres по петле НЕЛЬЗЯ: движок принудительно допечатывает неудаляемое правило local+loopback trust, чтобы кривой ruleset не запер администратора. Значит записанная проблема — задокументированное поведение движка, а не наша недоделка, и закрывать её надо не ролями БД, а тем, кто вообще может открыть локальное соединение.",
+      "evidence": "[замер 01.08] psql 'SELECT * FROM pg_catalog.pg_hba_file_rules' -> 1..3: local | host 127.0.0.1/32 | ::1/128, users={postgres}, method=trust; 4..6: local | host 0.0.0.0/0 | ::/0, users={all}, method=scram-sha-256 | PGPASSWORD=<неверный> psql user=postgres -> запрос выполнился | PGPASSWORD=<неверный> psql user=serene_ro -> FATAL: password authentication failed for user \"serene_ro\" | psql \"SELECT name,value,scope FROM duckdb_settings() WHERE name='hba'\" -> hba | (пусто) | GLOBAL | strings /usr/local/bin/serened: «An un-removable local + loopback trust rule is force-prepended so a bad ruleset cannot lock you out; an empty value restores the default (unix trust + SCRAM for TCP). Server-global.» | [док] https://docs.serenedb.com/docs/security/client_authentication#the-default-posture и #the-hba-ruleset",
+      "doc_locs": ["docs/SERENEDB.md:72", "docs/SERENEDB.md:76"],
+      "verdict": "a",
+      "verdict_why": "Запись преувеличивает («ничего не ограничивает»): scram для не-postgres ролей работает, замер прилагается. И наоборот — штатный hba в сборке есть, но неснимаемое loopback-trust правило делает задачу «отобрать у postgres вход по петле» неразрешимой средствами движка. Оба факта надо внести в док, иначе следующая сессия будет искать несуществующую настройку.",
+      "severity": "medium",
+      "known_fid": "F113"
+    },
+    {
+      "title": "Онлайн-копия базы средствами движка есть (COPY FROM DATABASE … TO, EXPORT DATABASE), а наш бэкап гасит движок целиком",
+      "detail": "ARCHITECTURE:176 записывает backup/restore SereneDB как «штатного нет — тест + вопрос фаундерам», SERENEDB.md держит тот же вопрос открытым и предлагает единственный быстрый путь — оффлайн-снапшот. serenedb_backup.sh действительно делает systemctl stop serenedb, tar каталога и старт обратно, то есть простой инстанса на время архивации. В доках движка описаны два штатных пути, не требующих остановки: EXPORT DATABASE (схема + данные в каталог) и COPY FROM DATABASE … TO (перелив всего содержимого одной присоединённой базы в другую одним оператором). Обе конструкции присутствуют в бинарнике нашей сборки 26.07.3. Замечание про «pg_dump не годится» при этом верно и остаётся.",
+      "evidence": "[замер 01.08] strings /usr/local/bin/serened | grep -> 'COPY FROM DATABASE ', 'EXPORT DATABASE', 'Failed to export database: table \"%s\" has a self-referencing foreign key constraint…' | [код] ubuntu/serenedb/serenedb_backup.sh:17-19 — systemctl stop serenedb; tar czf …; systemctl start serenedb | [док] https://docs.serenedb.com/docs/sql/statements/export_and_import_database#export-database и https://docs.serenedb.com/docs/sql/statements/copy#copy-from-database--to | внимание: операторы НЕ исполнял — это запись, а мандат раунда только чтение",
+      "doc_locs": ["docs/ARCHITECTURE.md:176", "docs/SERENEDB.md:393", "docs/SERENEDB.md:407"],
+      "verdict": "a",
+      "verdict_why": "Формулировка «штатного нет» и открытый вопрос фаундерам про online-backup держатся при том, что в доках и в бинарнике нашей сборки лежат два штатных механизма. Док правится; выбор, переводить ли бэкап на них, — отдельное решение владельца после замера.",
+      "severity": "medium",
+      "known_fid": "F163"
+    },
+    {
+      "title": "Подстрочный поиск сделан термным ts_like по словарю text; штатный механизм подстроки — словарь sparse_ngram, он в нашей сборке есть",
+      "detail": "В сервисе ответов вариант «part» для каждого слова вопроса — ts_like('%слово%') по индексу с обычным словарём template='text'. Это перебор словаря термов, и он дороже прочих проб на порядок. Замер на боевой второй базе (623 565 строк): ts_like('%поступлен%') — 74,3 мс, при том что ts_phrase('поступление') — 4,5 мс и ts_levenshtein('поступление',2) — 4,6 мс; на первой базе (103 808 строк) — 18,5 мс против 2,3 мс. Проб на вопрос несколько, они складываются. Штатный механизм подстроки у движка отдельный — словарь template='sparse_ngram' (и родственный wildcard с ngramsize), в нашей сборке 26.07.3 присутствует: полный перечень шаблонов, который печатает сам движок, его содержит. Цена внедрения — второй словарь и рост индекса, поэтому это кандидат на A/B (ubuntu/serenedb/ab_scorer.py), а не немедленная правка.",
+      "evidence": "[замер 01.08, dbname=ut_test] SELECT count(*) FROM search_idx WHERE doc @@ ts_like('%поступлен%') -> Time: 74.280 ms; ts_phrase('поступление') -> 4.505 ms; ts_levenshtein('поступление',2) -> 4.598 ms | [замер, dbname=postgres] ts_like('%казан%') 18.499 ms против ts_phrase('казань') 2.255 ms | [замер] CREATE TEXT SEARCH DICTIONARY zz(help) -> в перечне шаблонов сборки есть sparse_ngram, wildcard, keyword, copy_from, solr_synonyms, wordnet_synonyms, union, path_hierarchy, geopoint, geojson | [код] ubuntu/serenedb/serene_ask.py:465 — ('part', ts_like('%'+alt.lower()+'%')) | [код] ubuntu/serenedb/corpus_init.sql:66-68 — словарь template='text' | [док] https://docs.serenedb.com/docs/sql/statements/create_text_search_dictionary/sparse-ngram, https://docs.serenedb.com/docs/cookbook/search/fuzzy-search",
+      "doc_locs": ["docs/SERENEDB.md:387", "ubuntu/serenedb/corpus_init.sql:63"],
+      "verdict": "v",
+      "verdict_why": "Штатный механизм есть и в доках, и в сборке, наш ts_like даёт тот же ответ дороже в 16 раз, но внедрение стоит второго словаря и роста индекса. По правилу владельца спор решается A/B на золотом наборе — это вопрос к нему, а не решение аудитора.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "«Файлов движок не умеет» — неточно: COPY … TO пишет файлы, и внешний доступ на инстансе включён",
+      "detail": "Обоснование разделения труда в вики-шаге записано как «наружу уходит ГОТОВЫЙ текст страницы, скрипту остаётся только записать файл: файлов движок не умеет, всё остальное умеет» и повторено в wiki_publish.sh. Движок файлы писать умеет штатно — COPY … TO, EXPORT DATABASE, экспорт CSV/JSON/Parquet; на нашем инстансе enable_external_access = on, то есть путь открыт. Чего действительно нет — записи ОДНОЙ строки в ОТДЕЛЬНЫЙ файл с именем из колонки: PARTITION_BY даёт каталоги и служебные имена файлов, а не <page_id>.md. То есть вывод («шаг остаётся своим») верен, а причина названа неверно, и в таком виде она мешает искать штатные пути в других местах.",
+      "evidence": "[код] ubuntu/serenedb/wiki_build.sql:15 «файлов движок не умеет, всё остальное умеет»; ubuntu/serenedb/wiki_publish.sh:11 «того, чего движок не умеет (п. 20)»; wiki_publish.sh:30-50 — выгрузка psql -R \\x1e -F \\x1f и питоновский цикл записи .md | [замер 01.08] SELECT name,value FROM duckdb_settings() WHERE name='enable_external_access' -> on (scope GLOBAL) | [док] https://docs.serenedb.com/docs/cookbook/file_formats/csv_export, https://docs.serenedb.com/docs/sql/statements/copy",
+      "doc_locs": ["ubuntu/serenedb/wiki_build.sql:15", "ubuntu/serenedb/wiki_publish.sh:11"],
+      "verdict": "a",
+      "verdict_why": "Утверждение о движке в комментарии-обосновании неверно по букве (файлы движок пишет), верна лишь узкая его часть — нет вывода «строка -> файл с именем из колонки». Причина должна быть сужена до проверяемой, иначе она работает как ложное «штатного нет».",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "duckdb_indexes().sql теряет список колонок инвертированного индекса — «USING inverted ()»; в таблице ловушек этого нет",
+      "detail": "Штатная интроспекция отдаёт DDL индекса без колонок и без INCLUDE: для search_idx строка выглядит как «CREATE INDEX search_idx ON public.search_corpus USING inverted ();», хотя фактически проиндексированы doc, refs, src_table и в INCLUDE лежат src_table, row_key, doc_date. Значит по duckdb_indexes() нельзя ни проверить состав индекса, ни построить его отпечаток — а именно отпечаток DDL проект однажды и заводил. Факт зафиксирован ровно в одном месте — в комментарии ВЫВЕДЕННОГО из контура сборщика (serene_search_build.py:55); ни в techContext, ни в SERENEDB.md его нет. Настоящий состав индекса виден в pg_class.reloptions (там же, кстати, все фоновые интервалы: refresh_interval=1000, compaction_interval=1000, cleanup_interval_step=1).",
+      "evidence": "[замер 01.08] psql \"SELECT index_name, sql FROM duckdb_indexes() WHERE database_name='postgres'\" -> 'search_idx | CREATE INDEX search_idx ON public.search_corpus USING inverted ();' и 'alias_idx | … USING inverted ();' | [код] ubuntu/serenedb/corpus_init.sql:92-94 — USING inverted(doc search_dict, refs search_dict, src_table) INCLUDE (src_table, row_key, doc_date) | [замер] SELECT relname, reloptions FROM pg_class WHERE relname='search_idx' -> {row_group_size=122880,…,refresh_interval=1000,compaction_interval=1000,cleanup_interval_step=1,…} | [код] ubuntu/serenedb/serene_search_build.py:55 (выведенный сборщик) — единственное место, где это записано",
+      "doc_locs": ["memory_bank/techContext.md:30", "docs/SERENEDB.md:108"],
+      "verdict": "a",
+      "verdict_why": "Проверяемая ловушка движка живёт только в комментарии выведенного из контура файла. В таблице ловушек её нет, а полагаться на duckdb_indexes() для проверки состава индекса будет любой следующий проход. Правится док (перенести в techContext).",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "«offset = true нужен для ts_offsets/ts_highlight» — на нашем словаре offset не задан, а обе функции работают",
+      "detail": "Свод возможностей описывает опцию словаря offset как «байтовые смещения -> ts_offsets/ts_highlight», из чего читается обязательность. Наш search_dict создан без offset (умолчание, по справке самого движка, — false): заданы только case, stemming, accent, frequency, position, norm. При этом на боевом индексе и ts_highlight, и ts_offsets возвращают результат. То есть зависимость сформулирована сильнее, чем есть: для подсветки и смещений достаточно того набора признаков, что у нас включён. Это стоит уточнить прежде, чем кто-нибудь пересоздаст индекс «ради подсветки» — пересборка индекса на 623 тыс. строк не бесплатна.",
+      "evidence": "[замер 01.08] SELECT ts_highlight(doc,'MaxWords=10,MaxFragments=1,StartSel=[,StopSel=]') FROM search_idx WHERE doc @@ ts_phrase('касса') LIMIT 1 -> '… ООО НКО \"ЕДИНАЯ [КАССА]' | SELECT ts_offsets(doc) … -> {179,189} | [замер] CREATE TEXT SEARCH DICTIONARY zz(help) -> features: offset (boolean) [default: false] | [код] ubuntu/serenedb/corpus_init.sql:66-68 — offset не задан | [код] ubuntu/serenedb/serene_ask.py:644 — ts_highlight используется в боевом пути",
+      "doc_locs": ["docs/SERENE_CAPS_1.md:169"],
+      "verdict": "a",
+      "verdict_why": "Док утверждает зависимость, которой на живом инстансе не видно: подсветка и смещения отдают результат на словаре без offset. Формулировку надо уточнить замером, иначе она провоцирует дорогую и ненужную пересборку индекса.",
+      "severity": "low",
+      "known_fid": ""
+    }
+  ]
+}

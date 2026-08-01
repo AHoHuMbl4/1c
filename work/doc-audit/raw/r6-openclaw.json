@@ -1,0 +1,132 @@
+{
+ "angle": "openclaw",
+ "findings": [
+  {
+   "title": "Хуков у гейта пять, а не четыре: before_agent_finalize прямо в списке доков движка, требующих allowConversationAccess — значит «флаг не нужен и снят» неверно",
+   "detail": "OPENCLAW_BOT.md описывает плагин как «Четыре хука» и отдельно утверждает, что флаг hooks.allowConversationAccess «не нужен и снят: он гейтит только хуки диалога, а наши четыре к ним не относятся». В исполняемом коде плагина хуков ПЯТЬ: пятым с 30.07 зарегистрирован before_agent_finalize (правило «ход без обращения к данным гоним заново»), и он прямо назван в доке движка среди хуков, которые у не-bundled плагина работают ТОЛЬКО при allowConversationAccess: true. То есть цитируемое в нашем доке обоснование («наши хуки в тот список не входят») с 30.07 неверно, а на стенде флаг стоит и держит именно пятый хук. Сам index.js в комментарии к хуку пишет обратное тому, что написано в шапке файла (строки 17-20 «этот флаг нам НЕ нужен» против строк 121-122 «Требует allowConversationAccess: true — без него движок МОЛЧА не зарегистрирует хук»). Ниже по OPENCLAW_BOT.md, в разделе «Эксплуатация», то же неверное утверждение повторено как «проверено по коду установленной версии».",
+   "evidence": "[код] /srv/1c/docs/OPENCLAW_BOT.md:70 «Флаг `hooks.allowConversationAccess` **не нужен** и снят», :79 «Четыре хука», :145 «~~allowConversationAccess:true~~ — это было неверно» | [код] /srv/1c/ubuntu/openclaw/verify-plugin/index.js:17-20 против :121-123 и :123 `api.on(\"before_agent_finalize\", ...)` | [код] /opt/openclaw-engine/docs/plugins/hooks.md:601 «Non-bundled plugins that need raw conversation hooks (`before_model_resolve`, `before_agent_reply`, `llm_input`, `llm_output`, `before_agent_finalize`, `agent_end`, or `before_agent_run`) must set: plugins.entries.<id>.hooks.allowConversationAccess: true» | [замер] python3 -c чтение /home/undebot/.openclaw/openclaw.json → plugins.entries.braine-verify.hooks.allowConversationAccess = true | [замер] grep -c 'braine-verify] before_agent_finalize' /home/undebot/.openclaw/logs/gateway.log → 204 срабатывания",
+   "doc_locs": [
+    "docs/OPENCLAW_BOT.md:70",
+    "docs/OPENCLAW_BOT.md:79",
+    "docs/OPENCLAW_BOT.md:145",
+    "docs/RUNBOOK_DEPLOY.md:531",
+    "ubuntu/openclaw/verify-plugin/README.md:13"
+   ],
+   "verdict": "a",
+   "verdict_why": "Док движка называет before_agent_finalize среди гейтящихся хуков, живой конфиг флаг держит — правы RUNBOOK и HOW_IT_WORKS, а OPENCLAW_BOT.md (и README плагина с «четырьмя хуками») отстали от кода от 30.07. Правится наш док, не стенд.",
+   "severity": "high",
+   "known_fid": "F022"
+  },
+  {
+   "title": "Стартовые заготовки движка глушатся пустышками в обход штатного agents.defaults.skipBootstrap, который есть в нашей версии",
+   "detail": "deploy_instance.sh перезаписывает BOOTSTRAP.md/SOUL.md/IDENTITY.md/TOOLS.md/USER.md строкой-пустышкой, потому что «удаление не работает — движок кладёт файл обратно», и отдельно правит legacy-файл openclaw-workspace-state.json, чтобы проставить setupCompletedAt. У движка для ровно этого случая есть штатный ключ agents.defaults.skipBootstrap (и точечный skipOptionalBootstrapFiles с перечнем SOUL.md/USER.md/HEARTBEAT.md/IDENTITY.md), плюс флаг onboard --skip-bootstrap. Оба присутствуют в установленной сборке 2026.7.1-2 (zod-схема конфига и разбор CLI), то есть это не описание будущей версии. При skipBootstrap движок вообще не заводит заготовки — не нужно ни гонки, ни пустышек, ни правки состояния руками. Наши доки подают гонку с движком как свойство продукта («движок кладёт их обратно каждый ход»), а на стенде 4 из 5 заготовок отсутствуют с 31.07 и движком не пересозданы — то есть описанная в доке картина не воспроизводится и сейчас.",
+   "evidence": "[код] /srv/1c/ubuntu/openclaw/deploy_instance.sh:34-49 «УДАЛЕНИЕ НЕ РАБОТАЕТ — ДВИЖОК КЛАДЁТ ФАЙЛ ОБРАТНО… заготовки ПЕРЕЗАПИСЫВАЮТСЯ пустышкой», :76-87 правка openclaw-workspace-state.json | [код] /opt/openclaw-engine/docs/concepts/agent.md:62-64 «To disable bootstrap file creation entirely (for pre-seeded workspaces), set: { agents: { defaults: { skipBootstrap: true } } }»; /opt/openclaw-engine/docs/concepts/agent-workspace.md:49-51 «If you already manage the workspace files yourself, disable bootstrap file creation» | [замер] grep skipBootstrap в /usr/lib/node_modules/openclaw/dist/zod-schema-O9ml_nmo.js → `skipBootstrap: boolean().optional(), skipOptionalBootstrapFiles: array(OptionalBootstrapFileNameSchema)` , OptionalBootstrapFileNameSchema = [SOUL.md, USER.md, HEARTBEAT.md, IDENTITY.md] | [замер] openclaw onboard --help → `--skip-bootstrap  Skip creating default agent workspace files` | [замер] ls -la /home/undebot/.openclaw/workspace/ → SOUL.md/IDENTITY.md/USER.md/BOOTSTRAP.md отсутствуют с 31.07, движок их не пересоздал; в конфиге стенда ключа skipBootstrap нет",
+   "doc_locs": [
+    "docs/OPENCLAW_BOT.md:127",
+    "docs/RUNBOOK_DEPLOY.md:509",
+    "ubuntu/openclaw/deploy_instance.sh:10"
+   ],
+   "verdict": "a",
+   "verdict_why": "Штатный ключ есть в установленной версии и покрывает наш случай целиком; наши доки описывают самописный обход как единственно возможный. Док и обвязка отстали от возможностей движка — переносить и переписывать раздел.",
+   "severity": "medium",
+   "known_fid": ""
+  },
+  {
+   "title": "Выкатка копирует файлы плагина внутрь каталога установки движка — тем самым путём, которым наш же док пользоваться запрещает; штатное — plugins install --link / plugins.load.paths",
+   "detail": "OPENCLAW_BOT.md прямо пишет, что каталог установки принадлежит движку, содержит генерируемый хеш и «путём пользоваться нельзя». deploy_instance.sh делает ровно это: ищет find-ом verify-core.js в ~/.openclaw и копирует туда index.js и verify-core.js поверх установленного пакета. У движка для разработки/выката локального плагина есть два штатных пути: `openclaw plugins install --link ./verify-plugin` (managed local path) и `plugins.load.paths` в конфиге; при них исполняется ровно репозиторный каталог и подмена файлов внутри установки не нужна. Побочный эффект нынешней схемы — расхождение sha512-integrity установленного пакета с тем, что реально исполняется, и невозможность проверить состояние командой `openclaw plugins info`, на которую сам док и ссылается.",
+   "evidence": "[код] /srv/1c/ubuntu/openclaw/deploy_instance.sh:60-71 `PLUGDIR=$(find \"/home/$BOTUSER/.openclaw\" -name verify-core.js …); cp verify-plugin/verify-core.js verify-plugin/index.js \"$PLUGDIR/\"` | [код] /srv/1c/docs/OPENCLAW_BOT.md:73 «Каталог установки принадлежит движку и содержит генерируемый хеш — путём пользоваться нельзя» | [код] /opt/openclaw-engine/docs/tools/plugin.md:124 «local path | You are developing or testing a plugin on the same machine | `openclaw plugins install --link ./my-plugin`», :190 «`plugins.load.paths` adds explicit local plugin files or directories» | [замер] openclaw plugins list --enabled --verbose → braine-verify source: ~/.openclaw/npm/projects/openclaw-braine-verify__openclaw-generation__g-7b1e11146feb9aaa/…/index.js (origin: global)",
+   "doc_locs": [
+    "docs/OPENCLAW_BOT.md:73",
+    "ubuntu/openclaw/verify-plugin/README.md:55",
+    "docs/RUNBOOK_DEPLOY.md:520"
+   ],
+   "verdict": "v",
+   "verdict_why": "Наш док запрещает то, что делает наш же скрипт, а у движка есть два штатных пути выката локального плагина. Что считать правильным — вопрос владельцу: либо --link/load.paths, либо снять запрет из дока.",
+   "severity": "medium",
+   "known_fid": "F138"
+  },
+  {
+   "title": "Анти-галлюцинационный гейт применяется к служебным прогонам: 140 лишних проходов модели на генерации алиасов и общая очередь сессии",
+   "detail": "Хук before_agent_finalize плагина braine-verify требует повторного прохода модели у ЛЮБОГО хода, где не было вызова ask_1c/report_1c, — в том числе у фоновых прогонов wiki_alias.sh, которые данными не занимаются вовсе. В живом журнале шлюза 140 таких решений в сессии agent:main:wiki-alias, то есть каждая пачка алиасов оплачена вторым проходом модели и удвоенным временем. Движок даёт штатные средства отличить служебный прогон от диалогового: ctx.channel/ctx.messageProvider/ctx.senderId отсутствуют у system-originated прогонов, есть ctx.agentId и ctx.sessionKey — хук можно сузить конфигом или условием. Второй эффект той же схемы: все пачки алиасов идут под одним session-key, поэтому встают в общую очередь сессии — 39 записей «lane wait exceeded» с ожиданиями до 38 секунд. Ни удвоения проходов, ни очереди нет ни в одном нашем документе.",
+   "evidence": "[замер] grep -c 'braine-verify] before_agent_finalize sess=agent:main:wiki-alias' /home/undebot/.openclaw/logs/gateway.log → 140 | [замер] grep -c 'lane wait exceeded' … → 39, пример: «lane wait exceeded: lane=session:agent:main:wiki-alias waitedMs=38129» | [код] /srv/1c/ubuntu/openclaw/verify-plugin/index.js:123-137 — хук без фильтра по каналу/сессии | [код] /srv/1c/ubuntu/serenedb/wiki_alias.sh:79 `openclaw agent --agent main --session-key wiki-alias --json` | [код] /opt/openclaw-engine/docs/plugins/hooks.md:547 «These fields are optional and absent for system-originated runs (heartbeat, cron, exec-event)»",
+   "doc_locs": [
+    "docs/OPENCLAW_BOT.md:79",
+    "docs/HOW_IT_WORKS.md:205",
+    "ubuntu/openclaw/verify-plugin/README.md:13"
+   ],
+   "verdict": "v",
+   "verdict_why": "Не описано нигде и похоже на непреднамеренный расход: правило для диалога применяется к служебной генерации данных. Задумано ли это — вопрос владельцу; средства сузить хук у движка есть.",
+   "severity": "medium",
+   "known_fid": ""
+  },
+  {
+   "title": "Механизм «гоним модель заново» описан у нас иначе, чем работает: движок молча отказывает после любого не-replay-safe инструмента и приписывает к нашей причине свой обратный по смыслу префикс",
+   "detail": "HOW_IT_WORKS называет единственную причину провала правила «сходи за данными»: «ход честно отменяется, но модель указание проигнорировала». В движке у этого механизма два неописанных у нас свойства. Первое: перед отправкой причины модели движок сам приписывает к ней текст «Before accepting the previous final answer, apply this revision request… Do not repeat completed work or rerun tools unless the request explicitly requires it» — то есть буквально просит не звать инструменты повторно, тогда как наша инструкция просит обратного. Второе: если в ходе уже был вызван хоть один инструмент, не входящий в жёсткий список replay-safe (read/search/grep/web_fetch/memory_get/…), движок отклоняет revise целиком и пишет в журнал «requested revision after potential side effects; finalizing» — в живом журнале это случилось 23 раза. MCP-инструменты в этот список попасть не могут: declaredReplaySafe у движка умеет только запретить (=== false), а разрешить — нет, так что вывод нашего дока «повторить ход ПОСЛЕ вызова инструмента штатного средства нет» подтверждается, но по другой причине, чем записано.",
+   "evidence": "[замер] grep -c 'requested revision after potential side effects' /home/undebot/.openclaw/logs/gateway.log → 23; grep -c 'requested one more pass' → 98 | [код] /usr/lib/node_modules/openclaw/dist/embedded-agent-DGUuxGR2.js: BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX = «…Do not repeat completed work or rerun tools unless the request explicitly requires it.», MAX_BEFORE_AGENT_FINALIZE_REVISIONS = 3 | [код] /usr/lib/node_modules/openclaw/dist/attempt.tool-run-context-CuQsIXnb.js: UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES (read, search, find, grep, glob, ls, web_search, web_fetch, …), isAgentToolReplaySafe: declaredReplaySafe умеет только вернуть false | [код] /opt/openclaw-engine/docs/plugins/hooks.md:575-599 (семантика revise/finalize и retry{instruction,idempotencyKey,maxAttempts})",
+   "doc_locs": [
+    "docs/HOW_IT_WORKS.md:378",
+    "docs/HOW_IT_WORKS.md:381",
+    "ubuntu/openclaw/verify-plugin/verify-core.js:26"
+   ],
+   "verdict": "a",
+   "verdict_why": "Замер и код движка показывают два свойства механизма, которых нет в нашем описании; вывод «штатного нет» остаётся верным, но обоснование в доке надо заменить на фактическое.",
+   "severity": "medium",
+   "known_fid": ""
+  },
+  {
+   "title": "Генерация алиасов гоняется через боевого агента с персоной и инструментами, тогда как каноническая headless-поверхность движка — openclaw infer",
+   "detail": "wiki_alias.sh получает алиасы и bestUsedFor/notEnoughFor вызовом `openclaw agent --agent main --session-key wiki-alias --json`, и наши доки подают это как «штатным агентом OpenClaw». Прогон через агента тянет за собой всё окружение бота: персону из workspace/AGENTS.md (9 416 символов на стенде), разрешённые инструменты (wiki_search/wiki_get и оба MCP-моста), плагин-гейт braine-verify и общую растущую сессию. У движка для headless-вызова модели есть отдельная каноническая поверхность `openclaw infer model run` — та же конфигурация провайдеров и профилей аутентификации, но без сессии, персоны и инструментов; в установленной сборке команда присутствует. Это же снимает и очередь сессии, и лишние проходы гейта (см. отдельную находку).",
+   "evidence": "[код] /srv/1c/ubuntu/serenedb/wiki_alias.sh:79 и :199 `openclaw agent --agent main --session-key wiki-alias --json --message-file …` | [код] /opt/openclaw-engine/docs/cli/infer.md:9 «`openclaw infer` is the canonical headless surface for provider-backed inference», :12-14 «Reuses providers and models already configured in OpenClaw… Runs the normal local path without the gateway for most subcommands» | [замер] sudo -u undebot openclaw infer --help → команды model/embedding/image/tts/video присутствуют в 2026.7.1-2 | [замер] wc -c /home/undebot/.openclaw/workspace/AGENTS.md → 9416 (персона уходит в каждый служебный прогон)",
+   "doc_locs": [
+    "docs/HOW_IT_WORKS.md:205",
+    "MAP.md:58",
+    "ubuntu/serenedb/wiki_alias.sh:2"
+   ],
+   "verdict": "v",
+   "verdict_why": "И agent, и infer — штатные механизмы, но infer описан доками как канонический для headless-автоматизации и не тащит персону/инструменты/сессию. Выбор — за владельцем; в доках сейчас нет даже упоминания, что альтернатива существует.",
+   "severity": "medium",
+   "known_fid": ""
+  },
+  {
+   "title": "Конфиг бота кладётся целым файлом по «headless onboard сломан», хотя в нашей версии есть openclaw config patch/set и onboard --non-interactive",
+   "detail": "RUNBOOK велит класть конфиг файлом (`cp instance/openclaw.json`) с обоснованием «headless onboard сломан», без ссылки и без замера. В установленной сборке есть обе штатные поверхности: `openclaw config get/set/patch/unset/validate` («Patch config from a JSON5 object in one validated write») и `openclaw onboard --non-interactive --accept-risk` с флагами --skip-bootstrap/--token/--gateway-auth. Практическое следствие копирования файлом: эталон и боевой конфиг расходятся целиком (модель, wiki-плагин, флаг хуков, третий MCP-сервер), и любая выкатка из репозитория затирает боевую настройку, тогда как точечный patch менял бы ровно нужный ключ с валидацией.",
+   "evidence": "[код] /srv/1c/docs/RUNBOOK_DEPLOY.md:503 «Конфиг класть **файлом** (headless `onboard` сломан)», :508 `sudo -u undebot cp ubuntu/openclaw/instance/openclaw.json …` | [замер] sudo -u undebot openclaw config --help → «Non-interactive config helpers (get/set/patch/unset/file/schema/validate)»; patch — «one validated write» | [замер] sudo -u undebot openclaw onboard --help → --non-interactive, --accept-risk, --skip-bootstrap, --token | [замер] sudo -u undebot openclaw config validate → «Config valid: ~/.openclaw/openclaw.json» (боевой конфиг валиден, то есть штатный путь правки применим)",
+   "doc_locs": [
+    "docs/RUNBOOK_DEPLOY.md:503",
+    "docs/OPENCLAW_BOT.md:45"
+   ],
+   "verdict": "a",
+   "verdict_why": "Утверждение о сломанности не подкреплено и относится к другой поверхности: штатная неинтерактивная запись конфига в нашей версии есть и валидируется. Док надо переписать на config patch, иначе расхождение эталона с боем будет воспроизводиться.",
+   "severity": "medium",
+   "known_fid": "F017"
+  },
+  {
+   "title": "Режим поиска route-question записан как выбранный механизм, но нигде не задаётся: вики ищется в режиме auto",
+   "detail": "ACCEPTANCE_UT обосновывает вики формулой «поиск по ней (`wiki_search --mode route-question`) вместо списка голых названий», и это преподносится как принятое решение по итогам замера. Ни персона (ни боевая, ни репозиторная), ни один скрипт параметр mode не задают — значит wiki_search работает в режиме auto. Разница не косметическая: по доке движка именно route-question поднимает карточки сущностей и подсказки ask-for/best-used-for, а наши страницы построены ровно на bestUsedFor/notEnoughFor/aliases, то есть механизм подобран под наши данные и не включён. Там же рядом стоит незадокументированный выбор: search.backend в боевом конфиге переставлен с умолчания `shared` на `local`, corpus `wiki` — этого нет ни в одном нашем документе.",
+   "evidence": "[код] /srv/1c/docs/ACCEPTANCE_UT.md:794 «(`wiki_search --mode route-question`) вместо списка голых названий» | [замер] grep -i 'wiki\\|mode' /home/undebot/.openclaw/workspace/AGENTS.md → одна строка «посмотри вики (`wiki_search`, при надобности `wiki_get`)», параметра mode нет; то же в /srv/1c/ubuntu/openclaw/instance/AGENTS.md:20 | [код] /opt/openclaw-engine/docs/plugins/memory-wiki.md:263 «`route-question` | agent cards, ask-for/best-used-for hints, relationship context» | [замер] чтение /home/undebot/.openclaw/openclaw.json → plugins.entries.memory-wiki.config.search = {backend: local, corpus: wiki} при умолчании доков `shared` (memory-wiki.md:366)",
+   "doc_locs": [
+    "docs/ACCEPTANCE_UT.md:794",
+    "docs/HOW_IT_WORKS.md:207",
+    "docs/HOW_IT_WORKS.md:347"
+   ],
+   "verdict": "a",
+   "verdict_why": "Док описывает применяемым механизм, который в бою не задан ни разу; плюс реально сделанный выбор backend=local нигде не записан. Правится док (или включается режим — но это уже решение владельца).",
+   "severity": "medium",
+   "known_fid": "F160"
+  },
+  {
+   "title": "Токены бот-слоя лежат в openclaw.json открытым текстом при штатном механизме SecretRef и команде openclaw secrets audit",
+   "detail": "В боевом ~/.openclaw/openclaw.json открытым текстом хранятся заголовки Authorization обоих MCP-серверов и токен шлюза; наши доки описывают как «секрет отдельно» только telegram tokenFile. У движка для этого есть штатная подсистема SecretRef: значения подставляются в память при активации, а не хранятся в конфиге, и есть проверка `openclaw secrets audit --check` на остаточный плейнтекст. В установленной сборке 2026.7.1-2 команда `openclaw secrets` (apply/audit/configure) присутствует, и разрешение ссылок для gateway.auth.token в коде есть. Дока движка отдельно предупреждает, что плейнтекст в openclaw.json остаётся доступным агенту. Наш инвариант «секреты — в /etc/*.env с правами 600» бот-слой не покрывает вовсе: файл конфига 600, но это не то же самое, и в доках это место не разобрано.",
+   "evidence": "[замер] чтение /home/undebot/.openclaw/openclaw.json (значения не печатались) → mcp.servers.*.headers.Authorization и gateway.auth.token заданы литералами; права файла 600 | [замер] sudo -u undebot openclaw secrets --help → apply/audit/configure присутствуют | [код] /usr/lib/node_modules/openclaw/dist/auth-token-resolution-DX7Sy3no.js — resolveSecretInputRef для cfg.gateway.auth.token | [код] /opt/openclaw-engine/docs/gateway/secrets.md:11 «OpenClaw supports additive SecretRefs so supported credentials do not need to live as plaintext in configuration», :18 «Plaintext credentials remain agent-readable if they sit in files the agent can inspect, including `openclaw.json`»",
+   "doc_locs": [
+    "docs/OPENCLAW_BOT.md:43",
+    "docs/RUNBOOK_DEPLOY.md:517",
+    "CLAUDE.md:1"
+   ],
+   "verdict": "v",
+   "verdict_why": "Штатный механизм есть в нашей версии и прямо адресует наш инвариант о секретах, но переход трогает боевые токены — это решение владельца, а не аудитора. Минимум, чего не хватает без него: в доках бот-слоя нет ни слова о том, где лежат MCP-токены и токен шлюза.",
+   "severity": "medium",
+   "known_fid": ""
+  }
+ ]
+}

@@ -1,0 +1,135 @@
+{
+  "angle": "secondbase",
+  "findings": [
+    {
+      "title": "Вики бота — ОДНО хранилище на все базы: такт первой базы перезапишет 60 страниц, по которым бот выбирает сущность во второй",
+      "detail": "Шаг вики добавлен в такт 30.07 и вызывается из build.sh безусловно. Имя страницы — идентификатор сущности (`page_id = src_table`), файлы кладутся в единственное хранилище бота `/home/undebot/.openclaw/wiki/main/entities`, одно на весь инстанс OpenClaw. Разделения по базам нет ни в имени файла, ни в каталоге. Сейчас там 698 страниц — все из `ut_test` (в `postgres` таблицы `wiki_pages` нет вовсе, алиасов 0). Такт (`1c-serene-pipeline`/`1c-serene-index`) получает `SERENEDB_DSN` из `/etc/1c-serene-sync.env`, где `dbname` не задан вовсе, — значит идёт в ПЕРВУЮ базу. Один запуск задокументированного таймера соберёт вики первой базы и перезапишет 60 одноимённых страниц (`catalog_договорыконтрагентов`, `catalog_валюты`, `catalog_номенклатура` и др.) описаниями из Бухгалтерии, вместе с блоком «не годится: сосед такой-то». Бот отвечает по второй базе и берёт из этих страниц имя сущности — то есть получит подсказку из чужой базы и молча выберет не ту сущность (класс дефекта, на котором 30.07 уже ловили 8-10 провалов из 11). Ошибка шага вики к тому же глушится: `./wiki_publish.sh || echo 'вики: шаг не прошёл, такт продолжается'`. Это ЧЕТВЁРТЫЙ случай класса «общее имя на все базы» из TEST_SECOND_BASE.md Н-6 (замок, рабочие таблицы, секреты движка), и в перечне столкновений его нет: доку Н-6 закрыли 29.07, а вики завели 30.07.",
+      "evidence": "[код] ubuntu/serenedb/build.sh:286-287 — `./wiki_alias.sh …` и `./wiki_publish.sh …` в такте | [код] ubuntu/serenedb/wiki_publish.sh:16 `DSN=\"${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}\"`, там же VAULT=`openclaw wiki status` → `$VAULT/entities` без имени базы | [код] ubuntu/serenedb/wiki_build.sql:48 `SELECT f.src_table AS page_id` | [замер] `psql 'host=127.0.0.1 port=7890 user=postgres' -tAc 'select current_database()'` → `postgres` (в env такта dbname не задан) | [замер] пересечение имён сущностей двух баз: base1 231, base2 1502, общих 60 (`catalog_валюты`, `catalog_договорыконтрагентов`, …) | [замер] `ls /home/undebot/.openclaw/wiki/main/entities | wc -l` → 698; `select count(*) from search_entity_alias`: postgres 0, ut_test 697 | [замер] `select count(*) from wiki_pages` в postgres → `Table with name wiki_pages does not exist!`",
+      "doc_locs": ["docs/HOW_IT_WORKS.md:205", "docs/HOW_IT_WORKS.md:206", "MAP.md:57", "MAP.md:58", "docs/TEST_SECOND_BASE.md:104", "docs/RUNBOOK_DEPLOY.md:409"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п. 9 «без хардкода и подстройки под конкретную базу» и п. 10 «любые ошибки в ответах запрещены»: слой знаний, по которому выбирается сущность, общий на инстанс и перезаписывается тактом чужой базы. Прямо против решения владельца из TEST_SECOND_BASE Н-6 — «отдельные имена, а не фильтр, имя базы спрашиваем у движка (current_database())» и памяти владельца feedback-make-collision-impossible-not-filtered.md. Чинится по построению: имя базы в page_id/каталоге.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "RUNBOOK §10 «подключение НОВОЙ 1С-базы» ни в одной команде не называет базу движка — вторая база 1С зальётся в витрину первой",
+      "detail": "Раздел озаглавлен «развёртывание + подключение НОВОЙ 1С-базы» и подаётся как способ поставить систему на ещё одну базу. Но: §10.2 задаёт `ETL_ODATA_BASE=http://127.0.0.1:6011` — шлюз ПЕРВОЙ базы (у второй :6021); §10.5 первый синк делает `export SERENEDB_DSN='host=127.0.0.1 port=7890 user=postgres'` — без `dbname`, libpq подставляет базу по умолчанию, замером это `postgres`; §10.3 `setup.sh` создаёт роли с DSN по умолчанию `dbname=postgres`; §10.8 проверки идут `dbname=postgres`. Ни `CREATE DATABASE`, ни выбор базы движка в §10 не упомянуты нигде. Исполнение §10 «для новой базы» на стенде с двумя базами загрузит её таблицы в витрину первой — 1502 сущности УТ лягут рядом с 231 сущностью Бухгалтерии в одной базе движка, корпус соберётся общим, и разъехавшиеся ответы будут выглядеть как дефект поиска. Ровно этот класс уже стоил дня 29.07 (TEST_SECOND_BASE Н-6: «в окружении конвейера dbname= не задан — libpq подставляет базу по умолчанию»), но в RUNBOOK починка не доехала.",
+      "evidence": "[код] docs/RUNBOOK_DEPLOY.md:362 `ETL_ODATA_BASE=http://127.0.0.1:6011`; :398 `export SERENEDB_DSN='host=127.0.0.1 port=7890 user=postgres'`; :430-431 `dbname=postgres` | [код] ubuntu/serenedb/setup.sh:16-17 умолчания `dbname=postgres` | [замер] `psql 'host=127.0.0.1 port=7890 user=postgres' -tAc 'select current_database()'` → `postgres` | [замер] корпус: postgres 103 808 / 231 сущность, ut_test 623 565 / 1502 — две разные базы движка | [замер] `/etc/1c-odata-gateway-ut.env`: `ODG_LISTEN_PORT=6021`, upstream `…/ut/odata/standard.odata`",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:308", "docs/RUNBOOK_DEPLOY.md:362", "docs/RUNBOOK_DEPLOY.md:385", "docs/RUNBOOK_DEPLOY.md:396", "docs/RUNBOOK_DEPLOY.md:398"],
+      "verdict": "a",
+      "verdict_why": "Инструкция написана до появления второй базы и не знает про базу движка как параметр; стенд уже разведён по двум базам движка правильно. Править док: во всём §10 ввести имя базы движка (создание + dbname во всех DSN) и порт шлюза экземпляра.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Задокументированный запуск 1c-serene-ask поднимет на :8091 сервис, молча отвечающий из ПЕРВОЙ базы: у кода умолчание dbname=postgres",
+      "detail": "RUNBOOK §10.6 велит `systemctl enable --now 1c-serene-ask.service`. Юнит читает `/etc/1c-mcp-reports.env` + `/etc/1c-serene-ask.env`; переменной `SERENEDB_DSN_RO`, которой сервис выбирает базу, нет ни в одном из них. При её отсутствии код НЕ падает, а подставляет умолчание `dbname=postgres` — то есть сервис поднимется и будет отвечать числами Бухгалтерии. Признака в ответе нет: `/health` отдаёт `corpus_rows`, но не имя базы. Туда же — на :8091 — указывают README, MAP, API_ASK (инструкция фронту), `golden.sh` и `ab_scorer.py`. Боевой путь при этом идёт мимо: бот → :6016 (`mcp_ask`, `ASK_URL=http://127.0.0.1:8099`) → осиротевший процесс с `SERENEDB_DSN_RO=…dbname=ut_test`. Новое к F110/F002: отсутствие настройки даёт не отказ, а тихий ответ из другой базы, и вся документированная приёмка смотрит именно туда.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:42 `DSN = os.environ.get(\"SERENEDB_DSN_RO\", \"host=127.0.0.1 port=7890 user=serene_ro dbname=postgres\")` | [замер] `grep SERENEDB_DSN_RO /etc/1c-mcp-reports.env /etc/1c-serene-ask.env` → пусто (в файлах только `SERENEDB_DSN=…dbname=postgres` и `RESOLVER_DSN=…dbname=postgres`) | [замер] окружение боевого процесса :8099 (pid 3109129): `SERENEDB_DSN_RO=host=127.0.0.1 port=7890 user=serene_ro dbname=ut_test` | [замер] `ss -tlnp`: :8091 не слушает никто, :8099 — python3 вне systemd | [код] /etc/systemd/system/1c-mcp-ask.service: `Environment=ASK_URL=http://127.0.0.1:8099`",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:406", "docs/RUNBOOK_DEPLOY.md:410", "docs/RUNBOOK_DEPLOY.md:437", "docs/API_ASK.md:15", "docs/API_ASK.md:120", "MAP.md:22", "README.md:35"],
+      "verdict": "a",
+      "verdict_why": "Док отстал: в §10.6 нет переменной, которой задаётся база ответа, а в §0/§11 не сказано, что боевой сервис — другой порт и другая база. Отдельно требует правки код (умолчание базы вместо отказа), но первично документ разворачивает сервис не той базы.",
+      "severity": "high",
+      "known_fid": "F110"
+    },
+    {
+      "title": "Документированное восстановление витрины сносит ОБЕ базы, а единственный снапшот сделан до пересоздания боевой второй базы",
+      "detail": "`ubuntu/serenedb/README.md` описывает бэкап как «оффлайн-снапшот /var/lib/serenedb» и первичное восстановление как «ре-синк из 1С (витрина производная)» — как будто витрина одна. Каталог данных общий на весь инстанс: в нём лежат обе базы. Процедура RESTORE в шапке скрипта делает `rm -rf /var/lib/serenedb/*` и распаковку архива, то есть заменяет ОБЕ базы состоянием из снапшота. Снапшот на диске ровно один — от 29.07 04:53, снят как раз перед `DROP DATABASE ut_test`/`CREATE DATABASE` (PLAN_AUTONOMY:299), то есть содержит ДОпересозданную вторую базу. Восстановление «первой базы по инструкции» откатит боевую вторую на трое суток и уничтожит оплаченные векторы (в ut_test 623 565 строк корпуса и 188 068 значений резолвера). Обещанный запасной путь — ре-синк — для второй базы недоступен: юнита, таймера и env у неё нет (F157), а `serene_sync.py` без `SERENEDB_DSN` пойдёт в первую базу.",
+      "evidence": "[код] ubuntu/serenedb/README.md:46-47 «оффлайн-снапшот /var/lib/serenedb (serenedb_backup.sh) + первичное восстановление = ре-синк из 1С» | [код] ubuntu/serenedb/serenedb_backup.sh:15-17 `systemctl stop serenedb; tar czf … -C /var/lib/serenedb .`, комментарий RESTORE: `rm -rf /var/lib/serenedb/*` | [замер] `ls -la /root/backups/serenedb/` → единственный `serenedb-20260729-044937.tar.gz` (2,7 ГБ, 29.07 04:53) | [замер] `du -sh /var/lib/serenedb` → 12 ГБ, обе базы в одном каталоге | [замер] ut_test: корпус 623 565, resolver_index 188 068",
+      "doc_locs": ["ubuntu/serenedb/README.md:46", "ubuntu/serenedb/README.md:47", "docs/RUNBOOK_DEPLOY.md:315"],
+      "verdict": "a",
+      "verdict_why": "Док написан для одной витрины и не предупреждает, что снапшот и restore — на весь инстанс, а не на базу. Стенд не нарушает контракт: он просто не описан. Править док (и указать, что снапшот от 29.07 предшествует пересозданию второй базы).",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "RUNBOOK §6 «Развернуть OData-шлюз» для второй базы затрёт креды первой и займёт тот же :6011",
+      "detail": "§6 — единственное место, где шлюз реально разворачивается, и оно однобазовое: пишет `/etc/1c-odata-gateway.env` (без `ODG_LISTEN_PORT`), `ODG_UPSTREAM=…/1c/odata/standard.odata`, копирует непараметризованный `1c-odata-gateway.service` и включает его. Шаблон `1c-odata-gateway@<имя>` упомянут только в справочной таблице §0 и в ARCHITECTURE, инструкции по нему нет. Кто пойдёт по §6, чтобы подключить вторую базу, перезапишет env первой (креды `ai_reader` и токен шлюза потеряются) и получит второй экземпляр на дефолтном порту 6011 — конфликт, а не второй канал. У живой второй базы всё иначе: `ODG_LISTEN_PORT=6021`, путь публикации `/ut/odata/standard.odata` (не `/1c/`), и пользователь другой.",
+      "evidence": "[код] docs/RUNBOOK_DEPLOY.md:244-255 — блок «Развернуть OData-шлюз (LXC)»: `/etc/1c-odata-gateway.env`, `ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata`, `cp systemd/1c-odata-gateway.service` | [код] ubuntu/1c-gateway/odata_gateway.py:47 `LISTEN_PORT = int(os.environ.get(\"ODG_LISTEN_PORT\", \"6011\"))` | [замер] `/etc/1c-odata-gateway-ut.env`: `ODG_LISTEN_PORT=6021`, `ODG_UPSTREAM=http://192.168.56.1:6003/ut/odata/standard.odata` | [замер] `systemctl list-units`: `1c-odata-gateway` active, `1c-odata-gateway@ut` inactive/dead, порт 6021 держит процесс вне systemd",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:244", "docs/RUNBOOK_DEPLOY.md:247", "docs/RUNBOOK_DEPLOY.md:250", "docs/RUNBOOK_DEPLOY.md:253", "docs/ARCHITECTURE.md:62"],
+      "verdict": "a",
+      "verdict_why": "Шаблонный юнит на стенде есть и правильный, а инструкция осталась однобазовой. Править §6: разворачивать через `1c-odata-gateway@<имя>` + `/etc/1c-odata-gateway-<имя>.env` с обязательным ODG_LISTEN_PORT и путём публикации конкретной базы.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "MAP: и «подключение к базе», и вся таблица «чем что запускать» ведут в первую базу — команда «посмотреть полноту» покажет чужие числа",
+      "detail": "MAP §4 даёт единственную строку подключения `psql 'host=127.0.0.1 port=7890 user=postgres dbname=postgres'`, а §«Чем что запускать» — набор команд (`poc_load_entity.py <Имя>`, `serene_sync.py`, `embed_all.sh`, `build.sh`, `pipeline.sh`, `SELECT * FROM search_quality WHERE k LIKE 'cov_%'`). Ни одна строка не говорит, что боевые ответы идут по `ut_test`, а у всех перечисленных инструментов умолчание `dbname=postgres`. Последствия разные по тяжести: «посмотреть полноту» молча покажет перепись первой базы (7 строк `cov_*` в postgres) вместо боевой; `poc_load_entity.py`/`embed_all.sh`/`build.sh` потратят такт и деньги эмбеддера на первую базу; `pipeline.sh` вдобавок перезапишет вики бота (см. находку 1). Ошибки не будет ни на одном шаге — числа просто окажутся из другой базы.",
+      "evidence": "[код] MAP.md:203 `psql 'host=127.0.0.1 port=7890 user=postgres dbname=postgres'`; MAP.md:88-93 таблица «Задача → Запускать» | [код] умолчания: serene_sync.py:100,127,139,153 · build.sh:30 · embed_all.sh:31 · embed_missing.sh:34 · classify_entities.py:44 — все `dbname=postgres` | [замер] `psql '…dbname=postgres' -tAc \"select current_database(), count(*) from search_quality where k like 'cov_%'\"` → `postgres|7` (боевая перепись — в ut_test)",
+      "doc_locs": ["MAP.md:203", "MAP.md:88", "MAP.md:90", "MAP.md:92", "MAP.md:93"],
+      "verdict": "a",
+      "verdict_why": "Карта заведена 28.07, до того как боевой стала вторая база, и с тех пор не переписана. Править MAP: назвать боевую базу и добавить `SERENEDB_DSN` в каждую команду таблицы.",
+      "severity": "high",
+      "known_fid": "F003"
+    },
+    {
+      "title": "Обязательный после КАЖДОЙ правки набор проверок целиком про первую базу — правку, ломающую боевые ответы, он пропустит зелёным",
+      "detail": "CHECKLIST_SEARCH_FIX §0 объявлен набором, который «гоняется после КАЖДОЙ правки», и все его критерии — из Бухгалтерии: полнота «= 97 965», контрольные ответы «контрагенты 13, ИНН 7701012342, сумма 12 326 000». Инструмент набора `golden.sh` по умолчанию бьёт в `http://127.0.0.1:8091/ask`, а `golden-questions.txt` в шапке прямо помечен «ДЛЯ НАШЕГО СТЕНДА (Бухгалтерия 3.0)». Второй набор, `ab_scorer.py`, считает эталон SQL по зашитому `dbname=postgres` и тоже стучится в :8091. Боевые же ответы бота идут по `ut_test` (корпус 623 565). Итог: правка `serene_ask.py`/`corpus_build.sql`, ухудшившая боевые ответы, проходит документированную приёмку без единого красного, а приёмочный набор второй базы (ACCEPTANCE_UT, `work/acceptance/run_acceptance.py`) в правилах чек-листа не назван.",
+      "evidence": "[код] docs/CHECKLIST_SEARCH_FIX.md:28-33 (набор §0), :29 «= 97 965», :32-33 «контрагенты 13, ИНН 7701012342, сумма 12 326 000» | [код] ubuntu/serenedb/golden.sh:11 `URL=${ASK_URL:-http://127.0.0.1:8091/ask}` | [код] ubuntu/serenedb/golden-questions.txt:1 «ДЛЯ НАШЕГО СТЕНДА (Бухгалтерия 3.0, демо-данные)» | [код] ubuntu/serenedb/ab_scorer.py:20-21 `DSN = \"…dbname=postgres\"`, `URL = \"http://127.0.0.1:8091/ask\"` | [замер] корпус postgres 103 808 (а не 97 965), боевой ut_test 623 565; :8091 не слушает никто",
+      "doc_locs": ["docs/CHECKLIST_SEARCH_FIX.md:26", "docs/CHECKLIST_SEARCH_FIX.md:29", "docs/CHECKLIST_SEARCH_FIX.md:32", "MAP.md:125", "MAP.md:126"],
+      "verdict": "a",
+      "verdict_why": "Док отстал от того, какая база боевая: правило «после каждой правки» осталось привязано к первой базе. Править чек-лист и MAP — назвать, какой набор к какой базе и чем проверяется боевая.",
+      "severity": "high",
+      "known_fid": "F015"
+    },
+    {
+      "title": "Какая база боевая — задано строкой Environment= внутри юнита 1c-mcp-ask; RUNBOOK предлагает переключать несуществующий рычаг BRAINE_URL",
+      "detail": "Единственное место, где выбирается база, по которой отвечает бот, — `Environment=ASK_URL=http://127.0.0.1:8099` в теле `1c-mcp-ask.service` (env-файл `/etc/1c-mcp-ask.env` содержит только токены). Ни один документ этого не называет: RUNBOOK §10.7 говорит, что «бот переключается одной строкой BRAINE_URL в /etc/1c-mcp-braine.env» — это рычаг выведенного моста :6014, на боевой путь он не влияет вовсе, а §11.1 перечисляет для нового моста только ASK_TOKEN и MCP_TOKEN. Поэтому «переключить бота на другую базу» по документации невозможно: исполнение §10.7 ничего не изменит, а правка, которая нужна, требует редактировать unit-файл, о чём не сказано нигде. Смена базы при этом — решение владельца, и оно должно быть настройкой, а не строкой в юните.",
+      "evidence": "[замер] `systemctl cat 1c-mcp-ask.service` → `Environment=ASK_URL=http://127.0.0.1:8099`; `/etc/1c-mcp-ask.env` содержит только ASK_TOKEN и MCP_TOKEN | [код] ubuntu/openclaw/mcp_ask.py:42 `ASK_URL = os.environ.get(\"ASK_URL\", \"http://127.0.0.1:8099\")` | [замер] конфиг бота: mcp.servers = `serene-ask → http://127.0.0.1:6016/mcp`, `second-brain-reports → :6015`; записи braine нет | [код] docs/RUNBOOK_DEPLOY.md:422-423 «бот переключается одной строкой BRAINE_URL в /etc/1c-mcp-braine.env»",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:421", "docs/RUNBOOK_DEPLOY.md:422", "docs/RUNBOOK_DEPLOY.md:460", "docs/RUNBOOK_DEPLOY.md:463"],
+      "verdict": "a",
+      "verdict_why": "§10.7 описывает контур, выведенный из продукта, и потому даёт неверное действие; сам стенд настроен работоспособно. Править док: назвать ASK_URL единственным рычагом выбора базы и вынести его в /etc/1c-mcp-ask.env.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "HOW_IT_WORKS смешивает числа двух баз в одном тексте, не называя базу: корпус из второй, резолвер из первой",
+      "detail": "В одном документе рядом стоят замеры разных баз без пометки, какой. Строка 169: «корпус 623 565 без изменений, партнёров 164» — это `ut_test`. Строка 498: «резолвер (`resolver_index`, 115 тыс. значений с векторами)» — это `postgres` (115 151); в боевой базе их 188 068, то есть на 63% больше. Строка 32 в таблице «было → стало» даёт третий набор: «корпус 97 965, профили 226, резолвер 89 483» — состояние первой базы на 27-28.07. Читатель, сверяющий описание с боевой базой, получает расхождение в полтора раза и не может понять, документ врёт или база сломана.",
+      "evidence": "[код] docs/HOW_IT_WORKS.md:169 «корпус 623 565», :498 «resolver_index, 115 тыс. значений», :32 «корпус 97 965, профили 226, резолвер 89 483» | [замер] `select count(*) from resolver_index`: postgres 115 151, ut_test 188 068 | [замер] `select count(*) from search_corpus`: postgres 103 808, ut_test 623 565",
+      "doc_locs": ["docs/HOW_IT_WORKS.md:32", "docs/HOW_IT_WORKS.md:169", "docs/HOW_IT_WORKS.md:498"],
+      "verdict": "a",
+      "verdict_why": "Замеры верны каждый в своей базе, но база не названа — документ отстал от появления второй. Править: у каждого числа указывать базу либо давать только числа боевой.",
+      "severity": "medium",
+      "known_fid": "F023"
+    },
+    {
+      "title": "Слой вики/алиасов есть только во второй базе: на первой он пуст, и описанный в HOW_IT_WORKS механизм выбора сущности там работает иначе",
+      "detail": "HOW_IT_WORKS описывает выбор сущности как трёхслойный и безусловный: `search_entity_alias` + индекс `alias_idx` + страницы вики, «подсказка — а та ли это сущность». Замером: в `ut_test` 697 алиасов, в `postgres` — 0, и таблицы `wiki_pages` там нет вовсе. То есть на первой базе бот выбирает сущность БЕЗ этого слоя, а документ и REGRESSION_BASE1 подают их как одну и ту же систему. Практический вывод неверный дважды: проверка «первая база цела» ничего не говорит о слое, который в боевых ответах решающий, а перенос выводов о качестве выбора сущности с одной базы на другую невозможен.",
+      "evidence": "[замер] `select count(*) from search_entity_alias`: postgres 0, ut_test 697 | [замер] `select count(*) from wiki_pages` в postgres → `Table with name wiki_pages does not exist!` | [замер] `ls /home/undebot/.openclaw/wiki/main/entities | wc -l` → 698 (все из ut_test) | [код] docs/HOW_IT_WORKS.md:205-208 таблица «Что где лежит», :396 «Три слоя знания о сущности»",
+      "doc_locs": ["docs/HOW_IT_WORKS.md:205", "docs/HOW_IT_WORKS.md:208", "docs/HOW_IT_WORKS.md:396", "docs/REGRESSION_BASE1.md:74"],
+      "verdict": "a",
+      "verdict_why": "Док описывает механизм как общий, а он наполнен только во второй базе. Править: указать, что слой строится тактом каждой базы отдельно, и что регрессия первой базы его не покрывает.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Инструменты сверки «ground truth» (sql.sh, probe.sh, test_ro_role) зашиты в первую базу — сверка боевого ответа идёт с чужими данными",
+      "detail": "SERENEDB.md подаёт `probe.sh`/`sql.sh` как харнесс «прогон вопроса через реальный путь / ground-truth SELECT», а RUNBOOK §10.8 — как проверку установки. `sql.sh` подключается строкой, зашитой прямо в код, без всякого переопределения окружением; `probe.sh` явно экспортирует `dbname=postgres` (с комментарием «пробелы — ставим явно»); `test_ro_role.py` тоже зашит. Кто проверит ответ бота (он идёт по `ut_test`) через `sql.sh`, сравнит два разных множества данных и получит расхождение, у которого нет никакой видимой причины, — либо, что хуже, случайное совпадение агрегата. Прямая привязка к конкретной базе в коде инструмента — тот же дефект, что имя в коде (п. 9).",
+      "evidence": "[код] ubuntu/serenedb/sql.sh:7 `exec psql 'host=127.0.0.1 port=7890 user=serene_ro dbname=postgres' -tA -c \"$1\"` (переменной окружения не читает) | [код] ubuntu/serenedb/probe.sh:8-9 `export SERENEDB_DSN='…dbname=postgres'`, `export RESOLVER_DSN='…dbname=postgres'` | [код] ubuntu/serenedb/test_ro_role.py:7 `DSN = \"…dbname=postgres\"` | [замер] боевой сервис :8099 работает с `dbname=ut_test` (SERENEDB_DSN_RO/RESOLVER_DSN в его окружении)",
+      "doc_locs": ["docs/SERENEDB.md:51", "docs/RUNBOOK_DEPLOY.md:428", "docs/RUNBOOK_DEPLOY.md:430", "docs/RUNBOOK_DEPLOY.md:433"],
+      "verdict": "a",
+      "verdict_why": "Первично док: он называет эти скрипты средством сверки, не сказав, какую базу они читают. Отдельно требуется правка кода (принимать SERENEDB_DSN), но пометить как нарушение контракта не берусь — это dev-харнесс, а не продукт; решение о статусе — за владельцем.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "MAP: «упирается во вторую конфигурацию 1С» — вторая конфигурация уже боевая, и TARGET_STATUS это фиксирует",
+      "detail": "MAP §5 в разделе «Что дальше» пишет: «Упирается во вторую конфигурацию 1С (п. 9, 15)». На деле вторая конфигурация (УТ 11.4.9) не только загружена, но и стала боевой: все ответы бота идут по ней. TARGET_STATUS п. 9 прямо говорит «проверено на чужой конфигурации … всё без правок кода» с 28.07. Сессия, открывшая MAP первым файлом (как велит порядок чтения в CLAUDE.md), получит неверную картину следующего шага и может начать «подключать вторую базу», которая уже работает.",
+      "evidence": "[код] MAP.md:221-223 «Упирается во вторую конфигурацию 1С (п. 9, 15)»; MAP.md:213 «Работает: корпус 103 808 строк / 231 сущность» — числа первой базы | [код] docs/TARGET_STATUS.md:26 «п. 9 … проверено на чужой конфигурации — УТ 11.4.9 (2 795 сущностей) … всё без правок кода» | [замер] боевой мост :6016 → :8099 → `dbname=ut_test`; корпус ut_test 623 565 / 1502 сущности",
+      "doc_locs": ["MAP.md:213", "MAP.md:221", "docs/TARGET_STATUS.md:26"],
+      "verdict": "a",
+      "verdict_why": "Расхождение двух документов о состоянии; TARGET_STATUS новее и подтверждён замером. Править MAP §5.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "RUNBOOK §9 «Zero-touch: перезагрузка любой машины → всё восстанавливается» неверно ровно для боевого пути второй базы",
+      "detail": "§9 перечисляет enabled-сервисы и обещает, что после ребута стек поднимается сам. Для боевого пути это не так: сервис ответов второй базы (:8099) — процесс вне systemd, шлюз второй базы (:6021) — тоже вне systemd, а штатный `1c-odata-gateway@ut` в состоянии inactive/dead. После перезагрузки поднимутся мост `1c-mcp-ask` (:6016) и бот, но `ASK_URL=:8099` уже никто не слушает — бот на любой вопрос ответит «сервер не отвечает». Список §9 при этом называет enabled-ными сервисы выведенного слоя braine и таймеры, которые погашены, из-за чего проверить обещание по самому списку нельзя. Новое к F002/F005: неверно именно обещание zero-touch в инструкции, и оно относится к боевой второй базе, а не к первой.",
+      "evidence": "[замер] `ss -tlnp`: :8099 python3 pid 3109129 (PPID=1, вне юнита), :6021 python3 pid 1136469 — оба не принадлежат ни одному юниту | [замер] `systemctl list-units`: `1c-serene-ask.service` inactive/dead, `1c-odata-gateway@ut.service` inactive/dead, `1c-serene-pipeline.service` failed, `1c-serene-sync.service` failed | [код] docs/RUNBOOK_DEPLOY.md:294-304 §9",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:294", "docs/RUNBOOK_DEPLOY.md:297", "docs/RUNBOOK_DEPLOY.md:304"],
+      "verdict": "a",
+      "verdict_why": "Обещание документа не выполняется для боевой базы; стенд в этом состоянии описан в §0 честно («осиротевшие процессы»), то есть противоречие внутри одного файла. Править §9 — либо привести стенд в соответствие, это решение владельца.",
+      "severity": "medium",
+      "known_fid": "F002"
+    }
+  ]
+}
