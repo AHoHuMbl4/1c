@@ -1,0 +1,369 @@
+{
+  "shard": "plans-a",
+  "half": 1,
+  "results": [
+    {
+      "idx": 0,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 97,
+      "claim": "На УТ 632 683 строки корпуса",
+      "status": "disc",
+      "actual": "Строк корпуса в ut_test сейчас 623 565 — на 9 155 меньше после шага 2 плана PLAN_ROW_IS_OBJECT (свёртка объектов); PLAN_ROW_IS_OBJECT.md:251 новое число называет, PLAN_AUTONOMY — нет",
+      "evidence": "[замер] psql dbname=ut_test -c \"SELECT count(*) FROM search_corpus\" → 623565",
+      "verdict": "a",
+      "verdict_why": "изменение легитимно и задокументировано в PLAN_ROW_IS_OBJECT §4-бис; PLAN_AUTONOMY отстал — править док"
+    },
+    {
+      "idx": 1,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 98,
+      "claim": "Крупнейшие сущности корпуса УТ: замерывремени (97 834), удалитьзамерывремени3 (52 153), удалитьзамерывремени2 (17 311)",
+      "status": "disc",
+      "actual": "Числа каждой из трёх сущностей верны (97 834, 52 153, 17 311), но это НЕ топ-3: третья по величине — informationregister_abcxyzклассификацияноменклатуры (44 514), дальше календарныеграфики (33 971) и видыпродукциипогруппамветис (21 603); удалитьзамерывремени2 лишь шестая. Регистры шагом 2 не менялись, значит и на 29.07 топ-3 был не тот",
+      "evidence": "[замер] psql dbname=ut_test -c \"SELECT src_table, count(*) FROM search_corpus GROUP BY 1 ORDER BY 2 DESC LIMIT 5\" → замерывремени 97834; удалитьзамерывремени3 52153; abcxyzклассификацияноменклатуры 44514; календарныеграфики 33971; видыпродукциипогруппамветис 21603; отдельный count удалитьзамерывремени2 → 17311",
+      "verdict": "a",
+      "verdict_why": "перечислены иллюстративные служебные сущности, а названы «крупнейшими» — неточность дока, править формулировку"
+    },
+    {
+      "idx": 2,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 107,
+      "claim": "Результат классификации сущностей хранится в таблице search_entity_class в базе, не в коде",
+      "status": "ok",
+      "actual": "Таблица создаётся corpus_init.sql и classify_entities.py, в ut_test 1 502 строки (697 business, 805 service); списков имён в коде нет",
+      "evidence": "[код] ubuntu/serenedb/corpus_init.sql:50, classify_entities.py:137,188; [замер] SELECT cls, count(*) FROM search_entity_class GROUP BY 1 (ut_test) → business 697, service 805"
+    },
+    {
+      "idx": 3,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 128,
+      "claim": "Перепись search_coverage проходит по каждой сущности по цепочке 1С → витрина → корпус → индекс → вектор и на каждый разрыв даёт структурную причину",
+      "status": "ok",
+      "actual": "search_coverage строится по каждой сущности из tmp3_ent с колонками в_1С/в_витрине/объектов_витрины/в_корпусе/в_индексе/с_вектором и CASE-веткой причин по течению данных",
+      "evidence": "[код] ubuntu/serenedb/coverage_build.sql:54-123 (CASE причин: строки 91-119); [замер] SELECT причина, count(*) FROM search_coverage GROUP BY 1 (ut_test) → 5 разных причин, вкл. «витрина развёрнута по табличной части» (85)"
+    },
+    {
+      "idx": 4,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 140,
+      "claim": "Решение владельца 29.07: служебным сущностям вектор не считается вовсе; это 41% корпуса на УТ",
+      "status": "ok",
+      "actual": "Правило в коде: досчёт корпуса идёт с ROWS_WHERE «не служебные», служебным вектор считается только при EMBED_SERVICE=1; 41% — замер 29.07 (257 966/632 683), сейчас 248 384/623 565 = 39,8% — суть в силе",
+      "evidence": "[код] ubuntu/serenedb/build.sh:243-264 (решение владельца процитировано, 5-alt только при EMBED_SERVICE=1); [замер] search_quality ut_test: cov_noemb_service=248384 при корпусе 623565"
+    },
+    {
+      "idx": 5,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 143,
+      "claim": "Отсутствие вектора у служебных названо причиной cov_noemb_service отдельно от cov_noemb_pending",
+      "status": "ok",
+      "actual": "Оба счётчика пишутся переписью с разными пояснениями («ПО РЕШЕНИЮ» / «В ОЧЕРЕДИ»)",
+      "evidence": "[код] ubuntu/serenedb/coverage_build.sql:163-172; [замер] ut_test search_quality: cov_noemb_service=248384, cov_noemb_pending=92080"
+    },
+    {
+      "idx": 6,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 160,
+      "claim": "ai_embed занимает исполнителя движка на всё время сетевого запроса; --cpu_threads по умолчанию равен числу ядер",
+      "status": "ok",
+      "actual": "serened --helpfull: «--cpu_threads … 0 = let server auto-detect from cpu_count; default: 0» — по умолчанию пул равен числу ядер. Доки движка: каждый поток SereneDB делает не более одного HTTP-запроса одновременно — исполнитель занят на время сетевого вызова",
+      "evidence": "[замер] /usr/local/bin/serened --helpfull → «--cpu_threads (Executor pool size… 0 = auto-detect from cpu_count); default: 0»; serenedb-docs «Querying Remote Files»: each SereneDB thread can make at most one HTTP request at a time"
+    },
+    {
+      "idx": 7,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 163,
+      "claim": "12 и 64 psql-потока дают одинаковые 9,2 строки/с при пуле по умолчанию",
+      "status": "hist",
+      "actual": "Замер 29.07 при прежнем пуле; сейчас пул поднят до 160 и замер невоспроизводим без платной векторизации. Число продублировано в комментарии /etc/serenedb/serened.conf",
+      "evidence": "[замер] cat /etc/serenedb/serened.conf → комментарий «12 и 64 давали одинаковые 9,2 строки/с», --cpu_threads=160"
+    },
+    {
+      "idx": 8,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 164,
+      "claim": "Настройка пула исполнителей движка сейчас правится руками в /etc/serenedb/serened.conf",
+      "status": "ok",
+      "actual": "В конфиге вручную вписаны --cpu_threads=160 и --io_threads=16 с комментарием «поднят намеренно, 29.07»; установщика Ubuntu-стороны (Фаза 2) нет, deploy.sh копирует только *.sh/*.sql/*.py/*.tsv в /opt и конфиг движка не трогает",
+      "evidence": "[замер] cat /etc/serenedb/serened.conf → --cpu_threads=160, --io_threads=16; [код] ubuntu/serenedb/deploy.sh:22 (перечень копируемых масок)"
+    },
+    {
+      "idx": 9,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 173,
+      "claim": "--io_threads по умолчанию max(1, ядер/4) = 1, и один io-поток сериализует соединения",
+      "status": "ok",
+      "actual": "serened --helpfull: «--io_threads (IO threads for HTTP and pg-wire connections (0 = max(1, cpu_count / 4))); default: 0»; на этой машине 6 ядер → max(1, 6/4)=1",
+      "evidence": "[замер] /usr/local/bin/serened --helpfull → формула max(1, cpu_count/4); nproc → 6"
+    },
+    {
+      "idx": 10,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 184,
+      "claim": "Проверка пула исполнителей поставлена в corpus_precheck.sql: такт падает ДО работы с текстом об ошибке, если пул меньше запрошенных потоков",
+      "status": "ok",
+      "actual": "corpus_precheck.sql сравнивает current_setting('threads') с embed_workers+8 и зовёт error() с текстом «пул исполнителей движка = …»; build.sh исполняет precheck до сборки корпуса (шаг 0)",
+      "evidence": "[код] ubuntu/serenedb/corpus_precheck.sql:86-92; ubuntu/serenedb/build.sh:137-138 (precheck) против :191-195 (сборка)"
+    },
+    {
+      "idx": 11,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 193,
+      "claim": "При пуле 96 и запросе 64 precheck проходит; при запросе 200 — падает с текстом ошибки",
+      "status": "ok",
+      "actual": "Логика кода воспроизводит замер: условие threads < workers+8 — при 96 и 64 (порог 72) проходит, при 200 (порог 208) падает. Сейчас пул 160, замер от 29.07 помечен [замер]",
+      "evidence": "[код] ubuntu/serenedb/corpus_precheck.sql:86-92; [замер] SELECT current_setting('threads') (ut_test) → 160"
+    },
+    {
+      "idx": 12,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 204,
+      "claim": "Шаги 1-2 такта пропускаются, если одновременно: корпус не пуст, max(seen_at) источников старше build_ts, не менялся corpus_build.sql (сверка build_sql_hash), на месте tmp3_cls, tmp3_ent, tmp3_src, tmp3_corpus",
+      "status": "disc",
+      "actual": "Два условия из четырёх изменились: (1) признак «витрина не менялась» — НЕ max(seen_at), а отметка mart_changed_ts от синка (в build.sh разобрано, почему seen_at давал «пропустить навсегда» и молчаливую потерю свежести); (2) отпечаток build_sql_hash считается по corpus_build.sql + poc_load_entity.py, а не только по corpus_build.sql (добавлено 30.07, PLAN_ROW_IS_OBJECT §6-бис.1). «Корпус не пуст» и четыре tmp3-таблицы — совпадают",
+      "evidence": "[код] ubuntu/serenedb/build.sh:163 (SQL_HASH=cat corpus_build.sql poc_load_entity.py), :164-186 (mart_changed_ts вместо seen_at, tmp3-условие)",
+      "verdict": "a",
+      "verdict_why": "реальность легитимна и лучше описанного (защита свежести по п.17, отпечаток загрузчика по PLAN_ROW_IS_OBJECT §6-бис.1) — править PLAN_AUTONOMY"
+    },
+    {
+      "idx": 13,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 212,
+      "claim": "Обход пропуска пересборки — переменная FORCE_REBUILD=1",
+      "status": "ok",
+      "actual": "build.sh проверяет FORCE_REBUILD и при 1 пересобирает",
+      "evidence": "[код] ubuntu/serenedb/build.sh:188"
+    },
+    {
+      "idx": 14,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 214,
+      "claim": "Чтобы продолжить векторизацию, build.sh не нужен — достаточно embed_missing.sh",
+      "status": "ok",
+      "actual": "embed_missing.sh — отдельный скрипт досчёта векторов строкам с emb IS NULL, самодостаточен по логике; оговорка: секреты эмбеддера он не создаёт (CREATE SECRET делает build.sh и сносит их на выходе), при ручном запуске секрет нужно подать (EMBED_SECRETS/EMBED_SECRET)",
+      "evidence": "[код] ubuntu/serenedb/embed_missing.sh:1-7 (назначение), :44 (EMBED_SECRETS), :226 (комментарий «сам оператор CREATE SECRET создаётся в build.sh»)"
+    },
+    {
+      "idx": 15,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 219,
+      "claim": "build.sh — это такт целиком; отметки о завершённых шагах и продолжение с незавершённого НЕ реализованы (задача)",
+      "status": "ok",
+      "actual": "build.sh исполняет шаги 0-8 подряд; единственный пропуск — шагов 1-2 по SKIP_BUILD, по-шаговых отметок и resume нет (build_state хранит только счётчики before_/after_ для сверки)",
+      "evidence": "[код] ubuntu/serenedb/build.sh:105-292 (линейный такт); corpus_precheck.sql:12-13 и corpus_postcheck.sql:11-12 (build_state — только before_%/after_%)"
+    },
+    {
+      "idx": 16,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 228,
+      "claim": "Существуют части: build_state, докатка transfer(), search_quality",
+      "status": "ok",
+      "actual": "Все три существуют: таблица build_state, функция transfer() в embed_missing.sh, таблица search_quality",
+      "evidence": "[код] ubuntu/serenedb/corpus_init.sql:45 (build_state), embed_missing.sh:118 (transfer()), coverage_build.sql:139-172 (search_quality)"
+    },
+    {
+      "idx": 17,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 233,
+      "claim": "Резолвер второй базы — 188 065 значений, ~70 минут; разметка сущностей на резолвер не влияет (задача не сделана)",
+      "status": "ok",
+      "actual": "resolver_index в ut_test = 188 068 (дрейф +3 от замера 29.07); фильтра по search_entity_class в сборке резолвера нет ни в resolver_build.sql, ни в вызове досчёта его векторов (embed_missing без ROWS_WHERE) — задача действительно не сделана",
+      "evidence": "[замер] SELECT count(*) FROM resolver_index (ut_test) → 188068; [код] grep search_entity_class resolver_build.sql → пусто; build.sh:222-228 (резолвер без ROWS_WHERE)"
+    },
+    {
+      "idx": 18,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 240,
+      "claim": "Сейчас 16 приёмочных вопросов написаны вручную под наши данные; генератора из базы нет",
+      "status": "ok",
+      "actual": "8 вопросов в ab-gold.tsv + 8 в golden-questions.txt = 16, оба файла подписаны «заполняется руками / файл данных под наш стенд»; генератора вопросов в репозитории нет",
+      "evidence": "[замер] grep -v '^#' по обоим файлам → по 8 непустых строк; [код] заголовки ab-gold.tsv:1-3 и golden-questions.txt:1-6; ls ubuntu/serenedb | grep -i gen → пусто"
+    },
+    {
+      "idx": 19,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 255,
+      "claim": "Существует windows/odata-setup — установщик стороны 1С",
+      "status": "ok",
+      "actual": "Каталог существует: README.md, build.cmd, dist/, src/ (Program.cs, Steps.cs, Sys.cs, app.manifest)",
+      "evidence": "[замер] ls /srv/1c/windows/odata-setup/ и /src/"
+    },
+    {
+      "idx": 20,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 293,
+      "claim": "Разметчик classify_entities.py делит сущности на бизнес/служебные моделью; на УТ 1 501 из 1 501, business 687 сущностей / 366 767 строк, service 814 / 265 916",
+      "status": "hist",
+      "actual": "Запись журнала выполнения от 29.07. Скрипт существует и пишет в search_entity_class; текущий счёт слегка уехал после пересборки: 1 502 сущности — business 697, service 805 (было 687/814)",
+      "evidence": "[код] ubuntu/serenedb/classify_entities.py:137-192; [замер] SELECT cls, count(*) FROM search_entity_class GROUP BY 1 (ut_test) → business 697, service 805"
+    },
+    {
+      "idx": 21,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 294,
+      "claim": "Очерёдность векторизации вторым проходом (ROWS_WHERE) отменена: служебным вектор не считается вовсе, второго прохода нет",
+      "status": "ok",
+      "actual": "По умолчанию второй проход не выполняется: шаг 5 идёт с ROWS_WHERE «не служебные», шаг 5-alt (все строки) — только при EMBED_SERVICE=1; сам механизм ROWS_WHERE остался для первого прохода",
+      "evidence": "[код] ubuntu/serenedb/build.sh:243-264 (ROWS_WHERE + if EMBED_SERVICE=1)"
+    },
+    {
+      "idx": 22,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 295,
+      "claim": "deploy.sh раскладывает код из репозитория; конвейер зовёт её на стенде через SERENE_SRC_DIR",
+      "status": "ok",
+      "actual": "deploy.sh копирует отличающиеся *.sh/*.sql/*.py/*.tsv в /opt/1c-mcp-reports атомарной подменой; pipeline.sh вызывает $SERENE_SRC_DIR/deploy.sh, если переменная задана",
+      "evidence": "[код] ubuntu/serenedb/deploy.sh:14-31; pipeline.sh:20-22"
+    },
+    {
+      "idx": 23,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 297,
+      "claim": "Шлюз OData — шаблонный systemd-юнит 1c-odata-gateway@<база>; /$metadata отвечает 200, 10 800 957 байт, юнит enabled",
+      "status": "ok",
+      "actual": "Шаблонный юнит /etc/systemd/system/1c-odata-gateway@.service существует (EnvironmentFile=/etc/1c-odata-gateway-%i.env), 1c-odata-gateway@ut enabled; сам инстанс сейчас inactive (конвейер стоит с 29.07), замер /$metadata 200 / 10 800 957 байт — журнальный [замер] 29.07",
+      "evidence": "[замер] systemctl is-enabled 1c-odata-gateway@ut.service → enabled; is-active → inactive; ls /etc/systemd/system/1c-odata-gateway@.service"
+    },
+    {
+      "idx": 24,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 298,
+      "claim": "Секреты движка разведены по базам: имена odg_<база>, qwen_<база>",
+      "status": "ok",
+      "actual": "Развод по базам в силе: SEC_ODG=odg_${LOCK_TAG}; у эмбеддера имя с 30.07 получило индекс ключа — qwen_${LOCK_TAG}_${i} (поддержка нескольких ключей ALIBABA_API_KEYS), т.е. qwen_<база>_<N>",
+      "evidence": "[код] ubuntu/serenedb/build.sh:73 (odg_${LOCK_TAG}), :84-91 (qwen_${LOCK_TAG}_${_i})"
+    },
+    {
+      "idx": 25,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 300,
+      "claim": "setup-1c-odata.exe версии 1.1.0: префлайт CPU/RAM/диск/веб-модуль, два варианта состава, флаги --ubuntu-host/--external-url, перечит enable=true",
+      "status": "ok",
+      "actual": "ToolVersion = \"1.1.0\"; префлайт CPU/RAM (Program.cs:101-122), диск (Steps.cs:165-169, 871-884), туториал веб-модуля «Изменить» (Steps.cs:809-842); флаги --ubuntu-host/--external-url (Program.cs:771-772); enable=true перечитывается из файла (Steps.cs:495-503 «проверено перечитыванием файла»)",
+      "evidence": "[код] windows/odata-setup/src/Sys.cs:22; Program.cs:101-122,771-772; Steps.cs:495-503,809-842"
+    },
+    {
+      "idx": 26,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 300,
+      "claim": "Замер --check: TCP 192.168.56.42:22 OK; IIS 192.168.122.141 → 401; с Ubuntu 192.168.56.1:6003 → 401",
+      "status": "hist",
+      "actual": "Журнальная запись [замер] 30.07 о разовом прогоне --check на Windows-стенде; перепроверка требует запуска установщика на Windows, с Ubuntu недоступна. Апстрим 192.168.56.1:6003 подтверждается конфигурацией шлюза",
+      "evidence": "[замер] снимок stand-net: ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata в юните 1c-odata-gateway.service; сам --check не воспроизводим без Windows"
+    },
+    {
+      "idx": 27,
+      "doc": "docs/PLAN_AUTONOMY.md",
+      "line": 307,
+      "claim": "Раскладка файлов в /opt — теперь шаг конвейера, а не ручное копирование",
+      "status": "ok",
+      "actual": "pipeline.sh первым шагом зовёт deploy.sh (раскладка в /opt/1c-mcp-reports), при незаданной SERENE_SRC_DIR идёт на том, что лежит",
+      "evidence": "[код] ubuntu/serenedb/pipeline.sh:17-22; deploy.sh:1-16"
+    },
+    {
+      "idx": 28,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 3,
+      "claim": "Статус плана: шаги 1 и 2 сделаны и проверены на двух базах; шаги 3 и 4 не реализованы",
+      "status": "disc",
+      "actual": "Шаги 1-2 сделаны — верно. Но шаг 4 (ветка раздутия в переписи) РЕАЛИЗОВАН: coverage_build.sql сравнивает корпус с числом объектов витрины (n_obj) и даёт две ветки — «витрина развёрнута по табличной части» и «регистр: $count считает регистраторы»; на живом стенде ветки заполнены (85 и 80 сущностей). Не реализован только шаг 3 в смысле отдельного правила — но док сам говорит, что он закрылся шагом 2",
+      "evidence": "[код] ubuntu/serenedb/coverage_build.sql:104-115 (ветки), :27-47 (cov_mart_obj); [замер] SELECT причина, count(*) FROM search_coverage GROUP BY 1 (ut_test) → «витрина развёрнута по табличной части» 85, «регистр: $count считает регистраторы» 80",
+      "verdict": "a",
+      "verdict_why": "код ушёл вперёд статусной строки плана — обновить статус (шаг 4 сделан)"
+    },
+    {
+      "idx": 29,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 5,
+      "claim": "Шаг 3 закрылся сам: выброшенная в шаге 2 колонка физически не доходит до построения карты величин",
+      "status": "ok",
+      "actual": "Исключение колонок вложенного типа стоит в WHERE CTE j (до pieces), а карта величин nums строится агрегатом по pieces — выброшенная ячейка до неё не доходит",
+      "evidence": "[код] ubuntu/serenedb/corpus_build.sql:472-477 (исключение в j), :534-535 (nums из pieces FILTER is_measure)"
+    },
+    {
+      "idx": 30,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 28,
+      "claim": "Дефектом раздутия затронуто 85 сущностей, лишних строк 9 155 (52 450 → 43 295), 1,45% корпуса",
+      "status": "hist",
+      "actual": "Описание состояния ДО починки (раздел «Дефект», [замер]); после шага 2 дефект устранён: партнёры в корпусе 164 (не 216), корпус 623 565 = 632 720 − 9 155, что сходится с заявленными лишними строками; 85 сущностей подтверждаются живой переписью (ветка «витрина развёрнута по табличной части» = 85)",
+      "evidence": "[замер] SELECT count(*) FROM search_corpus WHERE src_table='catalog_партнеры' (ut_test) → 164; причина «витрина развёрнута по табличной части» → 85 сущностей"
+    },
+    {
+      "idx": 31,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 70,
+      "claim": "Место шага 1 — ubuntu/serenedb/poc_load_entity.py, функция _flatten_nested, строка merged.update(inner)",
+      "status": "ok",
+      "actual": "Функция и строка на месте: _flatten_nested определена, merged.update(inner) — ветка обёрток; для объектов рядом стоит защищённое слияние",
+      "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:213 (_flatten_nested), :255-257 (merged.update)"
+    },
+    {
+      "idx": 32,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 100,
+      "claim": "При слиянии выигрывает значение шапки для свойств, объявленных самой сущностью в $metadata; вложенной строки — только для свойств вложенного типа; разворот применяется только когда объявленный ключ ≠ ['Ref_Key']",
+      "status": "disc",
+      "actual": "Первые две части верны (merged.update фильтрует kk not in own при is_object). Третья — нет: разворот (одна строка витрины на вложенную запись) применяется КО ВСЕМ обёрткам с ровно одним непустым списком, включая объекты с ключом ['Ref_Key']; от ключа зависит только политика слияния (защита шапки), а не сам разворот. Витрина партнёров развёрнута: 216 строк на 164 Ref_Key — сворачивает уже корпус (шаг 2), на этом стоит и перепись (ветка «витрина развёрнута по табличной части»)",
+      "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:243-258 (цикл разворота без предиката по ключу; is_object меняет лишь merge); [замер] SELECT count(*), count(DISTINCT \"Ref_Key\") FROM \"catalog_партнеры\" (ut_test) → 216|164",
+      "verdict": "a",
+      "verdict_why": "код легитимен (весь план построен на свёртке в корпусе, витрина остаётся развёрнутой); фраза дока про «разворот только у обёрток» неточна — править формулировку"
+    },
+    {
+      "idx": 33,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 103,
+      "claim": "Загрузчик fail-closed: если $metadata недоступна и перечень свойств пуст, загрузка отказывает, а не откатывается к прежнему правилу",
+      "status": "ok",
+      "actual": "При заданной сущности и пустом own поднимается RuntimeError «нет свойств … в $metadata — загрузка отменена»",
+      "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:235-240"
+    },
+    {
+      "idx": 34,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 127,
+      "claim": "Место шага 2 — ubuntu/serenedb/corpus_build.sql, PREPARE p_doc (CTE cells, построение row_key, финальный QUALIFY)",
+      "status": "ok",
+      "actual": "Всё на месте: PREPARE p_doc, CTE cells, построение row_key, финальный QUALIFY со свёрткой",
+      "evidence": "[код] ubuntu/serenedb/corpus_build.sql:349 (PREPARE p_doc), :372 (cells), :510-512 (row_key), :556-558 (QUALIFY)"
+    },
+    {
+      "idx": 35,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 134,
+      "claim": "Список колонок вложенного типа считается один раз до цикла (экви-джойн 98 мс), а не подзапросом на сущность (68 с)",
+      "status": "ok",
+      "actual": "Признак own_prop и decl_entity вычисляются один раз в tmp3_cls экви-джойном с tmp3_prop, с тем же замером в комментарии (68 с против 98 мс)",
+      "evidence": "[код] ubuntu/serenedb/corpus_build.sql:89-102 (own_prop, decl_entity в tmp3_cls), :113-115 (LEFT JOIN tmp3_prop)"
+    },
+    {
+      "idx": 36,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 141,
+      "claim": "Для сущностей с ключом ['Ref_Key'] — одна строка на Ref_Key, отпечаток sha1(doc) к ключу не дописывается; порядок представителя doc, refs, sha1(nums||dt)",
+      "status": "disc",
+      "actual": "Одна строка на Ref_Key и недописывание отпечатка — верно (при fold.on_ ключ остаётся rk, QUALIFY оставляет одну строку). Но третий ключ порядка представителя — НЕ sha1(nums||dt): код сортирует по doc, refs, doc_hash, где doc_hash = sha1(doc || chr(0) || refs), т.е. функция от первых двух ключей и различия nums/dt не разрывает. На практике безвредно: после исключения колонок вложенного типа строки объекта идентичны целиком (замер 4-бис: 2 сборки, 0 расхождений), но заявленная в плане формула в код не попала",
+      "evidence": "[код] ubuntu/serenedb/corpus_build.sql:510-513 (CASE + doc_hash=sha1(doc||chr(0)||refs)), :556-558 (QUALIFY … ORDER BY doc, refs, doc_hash)",
+      "verdict": "a",
+      "verdict_why": "реализация детерминирована по построению и проверена воспроизводимостью; план описывает нереализованную формулу — уточнить док"
+    },
+    {
+      "idx": 37,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 168,
+      "claim": "Для ключа ≠ ['Ref_Key'] (регистры) поведение прежнее: accumulationregister_переданнаявозвратнаятара — 6 строк",
+      "status": "ok",
+      "actual": "В корпусе ut_test у этой сущности ровно 6 строк",
+      "evidence": "[замер] SELECT count(*) FROM search_corpus WHERE src_table='accumulationregister_переданнаявозвратнаятара' (ut_test) → 6"
+    },
+    {
+      "idx": 38,
+      "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+      "line": 173,
+      "claim": "Владельцы вложенных типов в обеих базах делятся ровно на два класса: Ref_Key (919 и 1 839) и Recorder* (105 и 232), третьего нет",
+      "status": "ok",
+      "actual": "Подтверждено запросом по tmp3_key обеих баз: ut_test — Ref_Key 919, Recorder 105; postgres — Ref_Key 1 840, Recorder 232 и один «other», который при разборе оказался ложным совпадением моего прокси по префиксу имени (informationregister_настройкиучетастраховыхвзносовип_пфр_ффомс — соседний регистр, а не вложенный тип), т.е. под точным определением 1 839 и третьего класса нет",
+      "evidence": "[замер] JOIN tmp3_key по префиксу имени в обеих базах → ut_test: Ref_Key 919 / Recorder 105; postgres: Ref_Key 1840 / Recorder 232 / other 1 (единственный «other» — совпадение имени, key_cols=[Period, Организация_Key] у сущности-соседа, не владельца)"
+    }
+  ]
+}

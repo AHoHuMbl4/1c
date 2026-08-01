@@ -1,0 +1,384 @@
+{
+"shard": "plans-a",
+"half": 2,
+"results": [
+ {
+  "idx": 39,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 221,
+  "claim": "Шаг 4 не сделан: в coverage_build.sql нет ветки «в витрине больше, чем в 1С»; владелец видит cov_rows_1c=507 500 против cov_rows_search=632 720 без объяснения",
+  "status": "disc",
+  "actual": "Шаг 4 сделан: в coverage_build.sql ЕСТЬ ветки «витрина развёрнута по табличной части» и «регистр: $count считает регистраторы», раздутие называется с причиной; шапка плана («Шаги 3 и 4 не реализованы… осталcя шаг 4», строки 3-6) и §Шаг 4 отстали",
+  "evidence": "[код] ubuntu/serenedb/coverage_build.sql:104-116 (CASE-ветки, включая WHEN m.n_rows > e.in_1c …); [замер] git log: правка в 3775e92 30.07 06:02 «перепись возвращена», док коммичен позже (04c8452 06:39) без снятия пункта",
+  "verdict": "a",
+  "verdict_why": "код легитимен (закрывает п. 13 — раздутие называется), док отстал от кода"
+ },
+ {
+  "idx": 40,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 228,
+  "claim": "coverage_build.sql помечает «собралось не полностью», когда корпус меньше витрины — после починки 85 сущностей навсегда получат ложную пометку",
+  "status": "disc",
+  "actual": "Ложной пометки больше нет: перепись сравнивает корпус с ЧИСЛОМ ОБЪЕКТОВ витрины (n_obj), а не с числом её строк — законный разворот перестал быть тревогой",
+  "evidence": "[код] ubuntu/serenedb/coverage_build.sql:70-73 (coalesce(o.n_obj, m.n_rows)), :104 (WHEN c.n < m.n_obj THEN 'собралось не полностью')",
+  "verdict": "a",
+  "verdict_why": "описанное в доке «сейчас» починено в тот же день, док не обновлён"
+ },
+ {
+  "idx": 41,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 243,
+  "claim": "После шага 2 на УТ: партнёры 164, контрагенты 155, номенклатура 252, строк корпуса 623 565, sum(СуммаДокумента) приобретений 73 181 158, дублей ключа 0",
+  "status": "ok",
+  "actual": "Все числа совпали: партнёры 164, контрагенты 155, номенклатура 252, корпус 623 565, сумма 73 181 158, дублей ключа 0",
+  "evidence": "[замер] psql ut_test: count(*) FILTER по трём сущностям → 164|155|252, count(*)=623565; sum(nums['СуммаДокумента']) по document_приобретениетоваровуслуг → 73181158 (249 строк); GROUP BY src_table,row_key HAVING count(*)>1 → 0"
+ },
+ {
+  "idx": 42,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 255,
+  "claim": "Строк длиннее предела эмбеддера (20 000 символов) по 85 сущностям — 3, не выросло",
+  "status": "ok",
+  "actual": "Строк длиннее 20 000 симв. у Ref_Key-сущностей — ровно 3 (catalog_новости 2, catalog_версиимобильныхприложений 1); ещё 22 таких строки — informationregister'ы, вне 85 сущностей шага 2",
+  "evidence": "[замер] psql ut_test: length(doc)>20000 GROUP BY src_table → catalog_новости 2, catalog_версиимобильныхприложений 1, остальные 22 в informationregister_*; [код] build.sh:40 EMBED_MAXLEN по умолчанию 20000"
+ },
+ {
+  "idx": 43,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 258,
+  "claim": "Первая база (Бухгалтерия) не изменилась: 103 808 строк корпуса, 231 сущность",
+  "status": "ok",
+  "actual": "Первая база: 103 808 строк корпуса, 231 сущность",
+  "evidence": "[замер] psql postgres: SELECT count(*), count(DISTINCT src_table) FROM search_corpus → 103808|231"
+ },
+ {
+  "idx": 44,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 269,
+  "claim": "Строк корпуса, содержащих navigationLinkUrl, — 0; у колонок *_navigationLinkUrl kind='skip', в текст не попадают",
+  "status": "ok",
+  "actual": "Строк с navigationLinkUrl в корпусе 0 (в обеих базах); колонки в витрине есть (ut_test 2348, postgres 205), но не объявлены в $metadata и получают kind='skip'",
+  "evidence": "[замер] psql: doc LIKE '%navigationLinkUrl%' → 0 (postgres) и 0 (ut_test); duckdb_columns() LIKE '%navigationLinkUrl%' → ut_test 2348, postgres 205; [код] corpus_build.sql:80-85 — необъявленная колонка при объявленной сущности → 'skip'"
+ },
+ {
+  "idx": 45,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 283,
+  "claim": "В правке шагов 1-2 нет ни одного имени сущности или колонки; правило стоит на объявленном ключе и признаке «объявление собственное» из $metadata",
+  "status": "ok",
+  "actual": "В коде шагов 1-2 конфигурационных имён нет: правило стоит на declared_key==['Ref_Key'] и own_props из $metadata; объявившая сущность проверяется точным равенством; встречаются только платформенные имена (Ref_Key, LineNumber, Description, Code)",
+  "evidence": "[код] poc_load_entity.py:227-240; corpus_build.sql:361 (fold: key_cols=['Ref_Key']), 95-113 (decl_entity из tmp3_prop), 475-477"
+ },
+ {
+  "idx": 46,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 300,
+  "claim": "Затёртые значения шапки в уже загруженной витрине НЕ восстановлены: нужна перезаливка затронутых сущностей (28 дельта-сущностей)",
+  "status": "ok",
+  "actual": "Витрина не перезалита: развёрнутые строки на месте — у document_приобретениетоваровуслуг 419 строк витрины на 249 объектов; упоминаний перезаливки в CHANGELOG нет",
+  "evidence": "[замер] psql ut_test: SELECT count(*), count(DISTINCT \"Ref_Key\") FROM \"document_приобретениетоваровуслуг\" → 419|249"
+ },
+ {
+  "idx": 47,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 313,
+  "claim": "Шаги 1 и 2 обязаны ехать одним коммитом; в отпечаток пропуска пересборки добавлен poc_load_entity.py: SQL_HASH=$(cat corpus_build.sql poc_load_entity.py | md5sum …) — сделано 30.07",
+  "status": "ok",
+  "actual": "Отпечаток пропуска включает загрузчик, ровно как записано",
+  "evidence": "[код] build.sh:163 SQL_HASH=$(cat corpus_build.sql poc_load_entity.py 2>/dev/null | md5sum | cut -d' ' -f1); :179 сверка с search_quality k='build_sql_hash'"
+ },
+ {
+  "idx": 48,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 323,
+  "claim": "Шаг 1 сужен предикатом «ключ = ['Ref_Key']» — сделано; регистры _flatten_nested не трогает",
+  "status": "ok",
+  "actual": "Разворот подавляется только при declared_key == ['Ref_Key'] (is_object); обёртки регистров (ключ Recorder…) разворачиваются как прежде",
+  "evidence": "[код] poc_load_entity.py:234 is_object = bool(entity_set) and declared_key(entity_set) == ['Ref_Key']"
+ },
+ {
+  "idx": 49,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 331,
+  "claim": "_load_metadata() прежде глотал любую ошибку; теперь пустой перечень свойств при заданной сущности — отказ. Сделано",
+  "status": "ok",
+  "actual": "Fail-closed есть: пустой перечень свойств при заданной сущности — RuntimeError, загрузка отменяется (сам _load_metadata по-прежнему тихий, отказ на уровне _flatten_nested — как и записано в доке)",
+  "evidence": "[код] poc_load_entity.py:236-240 raise RuntimeError('нет свойств %s в $metadata — загрузка отменена…')"
+ },
+ {
+  "idx": 50,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 350,
+  "claim": "Защита «удаление >10%» переписана на сравнение объектов (сделано 30.07): строка не потеряна, если есть строка с тем же ключом либо с ключом без отпечатка regexp_replace(row_key, '#[0-9a-f]{40}$', '')",
+  "status": "ok",
+  "actual": "Защита считает объекты: строка не «уйдёт», если в новом наборе есть строка с тем же ключом ЛИБО с ключом без отпечатка '#[0-9a-f]{40}$'",
+  "evidence": "[код] corpus_merge.sql:39-67 — порог 0.1 (стр. 53), два NOT EXISTS: t.row_key=c.row_key (63) и t.row_key=regexp_replace(c.row_key,'#[0-9a-f]{40}$','') (65-67)"
+ },
+ {
+  "idx": 51,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 363,
+  "claim": "Формулировка через IN не уложилась в 2 минуты на 623 565 строках; два раздельных NOT EXISTS — 0,21 с (techContext ловушка 34)",
+  "status": "ok",
+  "actual": "В коде именно два раздельных NOT EXISTS (не IN); ловушка 34 в techContext есть; 0,21 с — датированный замер 30.07",
+  "evidence": "[код] corpus_merge.sql:63-67; memory_bank/techContext.md:446 «Ловушка 34: IN (ключ, выражение) вместо двух равенств уводит движок в перебор»"
+ },
+ {
+  "idx": 52,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 368,
+  "claim": "Вторая защита в corpus_postcheck.sql «корпус усох больше чем на десятую» считает общее число строк до и после и правки не требует",
+  "status": "ok",
+  "actual": "Вторая защита считает общее число строк до/после, смену ключа не различает и правки не получила — ровно как записано",
+  "evidence": "[код] corpus_postcheck.sql:49-50 WHEN a_rows*10 < b_rows*9 THEN error('корпус усох больше чем на десятую: было %d, стало %d')"
+ },
+ {
+  "idx": 53,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 378,
+  "claim": "Условие «выбрасывать колонки вложенного типа только если тип есть в корпусе» сделано 30.07 и исправлено дважды: оба места читают один CTE fold; проверяется объявившая сущность (tmp3_cls.decl_entity из tmp3_prop.entity) точным равенством",
+  "status": "ok",
+  "actual": "Оба места (условие выброса колонок и свёртка строк) читают один CTE fold; проверяется объявившая сущность точным равенством lower(s2.tbl)=c.decl_entity",
+  "evidence": "[код] corpus_build.sql:361 (fold), 475-477 (условие в WHERE с EXISTS по decl_entity), 510 и 556 (свёртка через SELECT on_ FROM fold), 95-113 (decl_entity = p.entity из tmp3_prop)"
+ },
+ {
+  "idx": 54,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 390,
+  "claim": "Счётчик search_quality.fold_kept_no_child — «колонок вложенного типа оставлено в тексте: объявившая их сущность не загрузилась»",
+  "status": "ok",
+  "actual": "Счётчик существует с точно такой формулировкой и пишется в search_quality",
+  "evidence": "[код] corpus_build.sql:675-676; [замер] psql ut_test: search_quality k='fold_kept_no_child' → v=16"
+ },
+ {
+  "idx": 55,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 399,
+  "claim": "В corpus_build.sql остался один any_value: coalesce(any_value(k.row_key), …), детерминированный по построению (группа из одного значения)",
+  "status": "ok",
+  "actual": "any_value ровно один — coalesce(any_value(k.row_key),…); keyed сгруппирован по u.rid (одна строка на rid), агрегат детерминирован по построению",
+  "evidence": "[код] grep -c any_value corpus_build.sql → 1 (строка 522); keyed: corpus_build.sql:375-379 GROUP BY u.rid"
+ },
+ {
+  "idx": 56,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 408,
+  "claim": "Выбор представителя объекта детерминирован полным порядком в QUALIFY … ORDER BY doc, refs, doc_hash",
+  "status": "ok",
+  "actual": "Полный порядок при выборе представителя есть",
+  "evidence": "[код] corpus_build.sql:560-562 QUALIFY … row_number() OVER (PARTITION BY src_table, row_key ORDER BY doc, refs, doc_hash) = 1"
+ },
+ {
+  "idx": 57,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 412,
+  "claim": "Корпус обратим через git revert (смена отпечатка → пересборка); витрина 28 дельта-сущностей необратима кодом — нужен DROP таблицы и полная загрузка",
+  "status": "ok",
+  "actual": "Корпус обратим сменой отпечатка (git revert → SQL_HASH не совпадёт → принудительная пересборка); дельта тянет только строки с изменившимся DataVersion, потому затронутая витрина без DROP+полной загрузки не восстановится",
+  "evidence": "[код] build.sh:163,179; poc_load_entity.py:416-520 (дельта по Ref_Key+DataVersion)"
+ },
+ {
+  "idx": 58,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 416,
+  "claim": "Снапшот serenedb_backup.sh общий на инстанс: откат второй базы откатит и первую, требует остановки движка",
+  "status": "ok",
+  "actual": "Снапшот общий на инстанс и требует остановки движка: скрипт стопит serenedb и тарит весь /var/lib/serenedb (обе базы в одном каталоге инстанса)",
+  "evidence": "[код] serenedb_backup.sh:15-17 systemctl stop serenedb; tar czf … -C /var/lib/serenedb .; systemctl start serenedb"
+ },
+ {
+  "idx": 59,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 420,
+  "claim": "В search_quality первой базы нет строки build_sql_hash — корпус собран прежней версией corpus_build.sql",
+  "status": "ok",
+  "actual": "Строки build_sql_hash в search_quality первой базы по-прежнему нет",
+  "evidence": "[замер] psql postgres: SELECT v,note FROM search_quality WHERE k='build_sql_hash' → пусто"
+ },
+ {
+  "idx": 60,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 434,
+  "claim": "Первая база живёт в dbname=postgres",
+  "status": "ok",
+  "actual": "Первая база живёт в dbname=postgres",
+  "evidence": "[замер] psql postgres: search_corpus 103808 строк; [код] serene_sync.py:100 DSN по умолчанию dbname=postgres"
+ },
+ {
+  "idx": 61,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 431,
+  "claim": "Две пересборки подряд дают одинаковые ключи: 623 565 = 623 565, расхождений 0, ошибок 0 и 0 (замер 30.07)",
+  "status": "ok",
+  "actual": "Датированный замер 30.07; текущий корпус ровно 623 565 строк — согласуется",
+  "evidence": "[замер] psql ut_test: count(*) FROM search_corpus → 623565"
+ },
+ {
+  "idx": 62,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 446,
+  "claim": "Доля строк дочерних таблиц с сырым идентификатором вместо имени родителя — 4 995 из 53 057, обязана не вырасти",
+  "status": "unverifiable",
+  "actual": "",
+  "evidence": "Метрика «сырой идентификатор вместо имени родителя» требует исходного запроса (нерешённые GUID из текста выбрасываются: corpus_build.sql:481 WHEN is_guid THEN NULL — простой поиск GUID её не воспроизводит). Моя оценка: дочерних строк 53 047 (у дока 53 057), строк с любым GUID в тексте 9 212 — число 4 995 без определения замера не воспроизводимо"
+ },
+ {
+  "idx": 63,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 456,
+  "claim": "Сейчас 5 891 объект против 6 148 различных текстов: у 257 объектов в 20 сущностях строки дают разный текст — след незавершённого шага 1 (витрина ещё отравлена)",
+  "status": "ok",
+  "actual": "Состояние «витрина ещё отравлена» сохраняется: развёрнутые строки в витрине на месте (419 строк на 249 объектов у приобретений, перезаливки не было); точные 5891/6148/257/20 — датированный замер 30.07, после свёртки корпуса тем же путём невоспроизводим",
+  "evidence": "[замер] psql ut_test: count(*)=419, count(DISTINCT \"Ref_Key\")=249 по document_приобретениетоваровуслуг"
+ },
+ {
+  "idx": 64,
+  "doc": "docs/PLAN_ROW_IS_OBJECT.md",
+  "line": 460,
+  "claim": "На первой базе (dbname=postgres) строк с отпечатком в ключе у Ref_Key-сущностей — 0; сущностей с колонками вложенного типа — 3, все регистры: проверка №5 изменённый путь не исполняет",
+  "status": "ok",
+  "actual": "Отпечатков в ключе у Ref_Key-сущностей первой базы 0: все 242 строки с '#<sha1>' — в accountingregister_хозрасчетный (регистр); изменённый путь шага 2 на первой базе действительно не исполняется",
+  "evidence": "[замер] psql postgres: regexp_matches(row_key,'#[0-9a-f]{40}$') GROUP BY src_table → accountingregister_хозрасчетный|242, других таблиц нет"
+ },
+ {
+  "idx": 65,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 4,
+  "claim": "Задача «коробка без ручного разбора» — задача владельца и невыполненная; UNIVERSAL_INGEST.md был наброском решения",
+  "status": "ok",
+  "actual": "UNIVERSAL_INGEST.md существует в docs/ как набросок; приёмка коробки («два действия») не достигнута — токены и env по-прежнему заводятся руками по RUNBOOK",
+  "evidence": "[замер] ls /srv/1c/docs/UNIVERSAL_INGEST.md — файл есть; [код] RUNBOOK_DEPLOY.md:413,463 — ручное заполнение токенов"
+ },
+ {
+  "idx": 66,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 15,
+  "claim": "Приёмку коробки проверяет агент boxed-ready",
+  "status": "ok",
+  "actual": "Агент существует",
+  "evidence": "[код] /srv/1c/.claude/agents/boxed-ready.md"
+ },
+ {
+  "idx": 67,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 22,
+  "claim": "Типов объявлено в базе 4585; документы/справочники 1549/1419; регистров 1614; типов с составным ключом 3121 (68%); без Guid-колонок 497; закрыто правами читателя 934 (20%)",
+  "status": "ok",
+  "actual": "Числа переписи совпали: всего 4585; Document_ 1549, Catalog_ 1419; регистры сведений+накопления 1402+212=1614; составной ключ 3121; закрыто правами 934. «497 без Guid-колонок» дёшево не перепроверить — остальные шесть чисел точны",
+  "evidence": "[замер] psql postgres, base_profile: count(*)=4585; rows=-1 → 934; key_props LIKE '%,%' → 3121; LIKE 'Document_%' → 1549, 'Catalog_%' → 1419; InformationRegister_+AccumulationRegister_ → 1402+212"
+ },
+ {
+  "idx": 68,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 25,
+  "claim": "В работу попадает 19 таблиц; отбираются руками — файл на 24 строки (serene-entities.txt)",
+  "status": "disc",
+  "actual": "Ручной отбор снят: синк берёт сущности из переписи базы (base_profile / odata_census.to_load — «всё непустое и доступное, никакого отбора человеком»); константа SELECTED (serene-entities.txt) объявлена, но нигде не используется; в корпусе первой базы 231 сущность, не 19; в файле 22 записи, не 24",
+  "evidence": "[код] serene_sync.py:146-172 (census → ents), :25-26 (SELECTED — мёртвая константа); odata_census.py:113-116; [замер] psql postgres: count(DISTINCT src_table)=231; grep -v '^#' serene-entities.txt | grep -vc '^\\s*$' → 22",
+  "verdict": "a",
+  "verdict_why": "шаг 1 плана реализован, док описывает снятое состояние как текущее"
+ },
+ {
+  "idx": 69,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 33,
+  "claim": "Составные ключи и регистры реализованы по метаданным, но на 19 таблицах не выполняются ни разу — непроверенные ветки",
+  "status": "disc",
+  "actual": "Ветки больше не «непроверенные»: регистры и составные ключи выполняются в бою на обеих базах — в корпусе первой базы 87 регистровых сущностей и 19 табличных частей, в ut_test 1502 сущности; составные ключи реально в данных (242 строки с отпечатком у accountingregister_хозрасчетный)",
+  "evidence": "[замер] psql postgres: count(DISTINCT src_table) FILTER (регистровые префиксы) → 87, ТЧ → 19; отпечатков '#sha1' 242; [код] serene_sync.py:146-172 грузит всё непустое",
+  "verdict": "a",
+  "verdict_why": "код исполняет эти пути в бою, док-план отстал"
+ },
+ {
+  "idx": 70,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 36,
+  "claim": "Если при сборке недоступна модель, колонку денег выбирает запасная эвристика «побеждает наибольшее число» — молчаливая деградация (та, что давала 7·10²⁰)",
+  "status": "disc",
+  "actual": "«Колонка денег» больше не выбирается вовсе: corpus_build.sql кладёт в nums ВСЕ величины строки («все величины, а не одна выбранная»); эвристика «наибольший максимум» осталась только в выведенном из контура serene_search_build.py (юнит переключён на build.sh 28.07); classify_entities.py — про приоритет векторизации, при недоступной модели громкое предупреждение и один проход, к деньгам не относится",
+  "evidence": "[код] corpus_build.sql:531-535 (map всех is_measure); serene_search_build.py:15 (старая эвристика); ubuntu/systemd/1c-serene-index.service:6 + stand-systemd (ExecStart=/opt/1c-mcp-reports/build.sh); build.sh:206",
+  "verdict": "a",
+  "verdict_why": "описанная деградация удалена вместе с самим выбором колонки; док отстал"
+ },
+ {
+  "idx": 71,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 51,
+  "claim": "serene-entities.txt должен быть удалён (шаг 1 плана); признак готовности — файла нет ни в репозитории, ни на сервере",
+  "status": "ok",
+  "actual": "Плановое требование пока не выполнено, противоречия нет: файл существует в репозитории (37 строк), но выбор сущностей уже не определяет (мёртвая константа)",
+  "evidence": "[замер] wc -l ubuntu/serenedb/serene-entities.txt → 37; [код] serene_sync.py:25-26 — SELECTED нигде не читается"
+ },
+ {
+  "idx": 72,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 58,
+  "claim": "На нашей базе непустых сущностей 208 (система должна находить их вместо 19)",
+  "status": "disc",
+  "actual": "Перепись реализована и признак уже достигнут, но число отстало: непустых сущностей сегодня 235 (не 208), в корпус первой базы попала 231 сущность",
+  "evidence": "[замер] psql postgres: SELECT count(*) FILTER (rows>0) FROM base_profile → 235; count(DISTINCT src_table) FROM search_corpus → 231",
+  "verdict": "a",
+  "verdict_why": "док фиксирует замер 26.07 как текущий; система уже находит сущности сама, число изменилось"
+ },
+ {
+  "idx": 73,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 74,
+  "claim": "Табличных частей 1840 типов; решение «грузить сразу или по требованию» не принято",
+  "status": "disc",
+  "actual": "Решение фактически принято кодом: табличные части грузятся сразу (перепись отдаёт «всё непустое», в корпусе первой базы 19 ТЧ-сущностей, в ut_test 53 047 строк ТЧ); число «1840 типов» не воспроизведено (моя оценка ~1907 имён с двойным сегментом без теней RowType/RecordType)",
+  "evidence": "[код] odata_census.py:113-116 to_load — всё непустое и доступное; [замер] psql postgres: 19 ТЧ-сущностей в корпусе; psql ut_test: 53 047 строк ТЧ",
+  "verdict": "a",
+  "verdict_why": "поведение легитимно (полнота данных — TARGET), док не отражает состоявшееся решение; обоснования замером объёма в доках не нашёл — стоит отметить при правке"
+ },
+ {
+  "idx": 74,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 89,
+  "claim": "Сейчас при недоступной $metadata сборка молча переходит на разбор по форме значений (должна отказывать)",
+  "status": "disc",
+  "actual": "Сборка теперь fail-closed по $metadata с двух сторон: загрузчик отказывает при пустом перечне свойств (RuntimeError, «загрузка отменена»), а corpus_build падает error() при пустых или вдвое усохших $metadata",
+  "evidence": "[код] poc_load_entity.py:236-240; corpus_build.sql:55-64",
+  "verdict": "a",
+  "verdict_why": "шаг 3 в этой части выполнен (30.07), док описывает старое поведение как текущее"
+ },
+ {
+  "idx": 75,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 91,
+  "claim": "Сейчас при недоступном эмбеддере — исключение в середине сборки, а не явный отказ до начала",
+  "status": "disc",
+  "actual": "Отказ теперь ДО начала: проверка до такта дёргает эмбеддер (ai_embed('проверка связи')) и останавливает такт до изменения корпуса; без ключа эмбеддера сборка прерывается сразу с понятным сообщением",
+  "evidence": "[код] corpus_precheck.sql:63-64 («эмбеддер не отвечает или отдал не ту размерность — такт остановлен до изменения корпуса»); build.sh:92 («СБОРКА ПРЕРВАНА: не задан ни один ключ эмбеддера»)",
+  "verdict": "a",
+  "verdict_why": "поведение уже соответствует колонке «должно быть» того же плана; док отстал"
+ },
+ {
+  "idx": 76,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 106,
+  "claim": "Генерация токенов (шлюза, сервиса ответов) сейчас делается руками",
+  "status": "ok",
+  "actual": "Токены шлюза и сервиса ответов по-прежнему заводятся руками в env-файлах; автогенерация есть только у паролей ролей БД",
+  "evidence": "[код] RUNBOOK_DEPLOY.md:413,463 (ручное заполнение ASK_TOKEN/MCP_TOKEN в /etc/*.env); setup.sh:18 openssl rand — только RO_PW/RES_PW"
+ },
+ {
+  "idx": 77,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 113,
+  "claim": "На стороне Windows автоматизация уже есть: windows/odata-setup, 13 шагов",
+  "status": "ok",
+  "actual": "Установщик Windows — ровно 13 шагов",
+  "evidence": "[код] windows/odata-setup/src/Program.cs:39 const int TOTAL = 13; Log.Step(1..13, …) по всему файлу"
+ },
+ {
+  "idx": 78,
+  "doc": "docs/PLAN_BOXED.md",
+  "line": 145,
+  "claim": "Каждый шаг плана завершается прогоном агентов boxed-ready и hardcode-sniper и золотым набором",
+  "status": "ok",
+  "actual": "Инструменты для этого правила существуют: агенты boxed-ready и hardcode-sniper, золотой набор golden.sh/ab-gold.tsv; само утверждение — правило плана",
+  "evidence": "[код] .claude/agents/boxed-ready.md, .claude/agents/hardcode-sniper.md; ubuntu/serenedb/golden.sh, ubuntu/serenedb/ab-gold.tsv"
+ }
+]
+}

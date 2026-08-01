@@ -1,0 +1,530 @@
+{
+  "shard": "agents-misc",
+  "half": 2,
+  "results": [
+    {
+      "idx": 55,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 100,
+      "claim": "СЕЙЧАС в рабочей папке бота лежит не эталонная персона, а персона от 30.07 — намеренно; diff репозитория с рабочей папкой расходится, и это не забытая выкатка",
+      "status": "ok",
+      "actual": "Рабочая папка: AGENTS.md 9416 байт (старая персона), репозиторий instance/AGENTS.md 3867 байт — расходятся; развилка записана в activeContext.md:35 «Развилка, которую нужно решить владельцу»",
+      "evidence": "[замер] wc -c → 3867 (/srv/1c/ubuntu/openclaw/instance/AGENTS.md) и 9416 (/home/undebot/.openclaw/workspace/AGENTS.md); grep activeContext.md:35 «Развилка»"
+    },
+    {
+      "idx": 56,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 102,
+      "claim": "Замер 31.07: новая персона даёт 1/2/7 против 2/4/4 при возврате прежней (около двух верных ответов из десяти разницы)",
+      "status": "ok",
+      "actual": "Запись замера согласована во всех трёх местах: activeContext.md:42, progress.md:48,62; сам прогон не повторялся (нужна модель), но как фиксация замера — совпадает",
+      "evidence": "[замер] grep '1/2/7|2/4/4' → activeContext.md:42, progress.md:62 те же цифры"
+    },
+    {
+      "idx": 57,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 116,
+      "claim": "Персона переписана начисто 31.07: 9 416 → 3 867 символов; убраны имена сущностей, «язык — русский», маршрутизация списком русских слов, готовые фразы",
+      "status": "ok",
+      "actual": "Репо-персона ровно 3867 байт, прежняя (в рабочей папке бота) ровно 9416 байт",
+      "evidence": "[замер] wc -c /srv/1c/ubuntu/openclaw/instance/AGENTS.md → 3867; wc -c /home/undebot/.openclaw/workspace/AGENTS.md → 9416"
+    },
+    {
+      "idx": 58,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 127,
+      "claim": "Движок кладёт в рабочую папку заготовки BOOTSTRAP.md, SOUL.md, TOOLS.md, IDENTITY.md, USER.md (итого 6 124 символа) и вставляет их в системный промт каждый ход; выкатка убирает их в .replaced-by-deploy и проставляет setupCompletedAt",
+      "status": "disc",
+      "actual": "Механизм подтверждён полностью: все 5 файлов лежат в .replaced-by-deploy/ (mtime 23.07), setupCompletedAt=2026-07-31T04:17:03Z проставлен, deploy_instance.sh:27,77-86 делает ровно это. НО сумма файлов = 5 878 байт (5 857 символов), а не 6 124 — число в доке не сходится с фактом (~4%)",
+      "evidence": "[замер] wc -c /home/undebot/.openclaw/workspace/.replaced-by-deploy/* → 1669+1278+1518+876+537=5878 (wc -m → 5857); grep setupCompletedAt openclaw-workspace-state.json → 2026-07-31; [код] ubuntu/openclaw/deploy_instance.sh:27 (BAK=.replaced-by-deploy), :77-86 (setupCompletedAt)",
+      "verdict": "a",
+      "verdict_why": "механизм верен, число 6 124 не совпадает с фактическими 5 878 байтами — поправить цифру в доке (либо указать, откуда она взята)"
+    },
+    {
+      "idx": 59,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 136,
+      "claim": "Сборка — только под юзером undebot на нашей LXC .42; прод-бот владельца на .15 не трогаем (не подключались)",
+      "status": "ok",
+      "actual": "Наша LXC — 192.168.56.42; openclaw живёт user-юнитом undebot (openclaw-gateway.service под uid 1001, см. stand-systemd); отрицание «не подключались к .15» напрямую недоказуемо, но следов подключения нет",
+      "evidence": "[замер] hostname -I → 192.168.56.42; systemd user-юнит undebot по снимку stand-systemd (openclaw-gateway под undebot)"
+    },
+    {
+      "idx": 60,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 137,
+      "claim": "Токен @test1c_mcp_bot забран у braine-моста tg-bridge; tg-bridge остановлен и выключен (stop+disable)",
+      "status": "ok",
+      "actual": "tg-bridge: disabled + inactive — остановлен и выключен; токен теперь в /home/undebot/.openclaw/telegram-token (см. idx 65)",
+      "evidence": "[замер] systemctl is-enabled tg-bridge → disabled; systemctl is-active tg-bridge → inactive"
+    },
+    {
+      "idx": 61,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 140,
+      "claim": "Мониторинг 1c-bot-monitor.timer шлёт алерт владельцу в Telegram при падении gateway/mcp/serenedb",
+      "status": "ok",
+      "actual": "Таймер активен, тикает каждые ~3 минуты; скрипт проверяет openclaw-gateway (user-юнит + /health), сервисы serenedb, 1c-mcp-braine, 1c-mcp-reports, api и шлёт sendMessage напрямую в api.telegram.org",
+      "evidence": "[замер] systemctl list-timers | grep 1c-bot-monitor → next 11:27:50, timer active; [код] /opt/1c-bot-monitor/bot_health_check.sh:11 (SYS_SERVICES=serenedb 1c-mcp-braine 1c-mcp-reports api), :21-27 (gateway), :42-43 (api.telegram.org sendMessage)"
+    },
+    {
+      "idx": 62,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 145,
+      "claim": "allowConversationAccess гейтит список хуков диалога (llm_input, llm_output, before_agent_run, agent_end…); наших четырёх хуков в этом списке нет — проверено по коду установленной версии",
+      "status": "ok",
+      "actual": "В установленной версии CONVERSATION_HOOK_NAMES = [before_model_resolve, before_agent_reply, llm_input, llm_output, before_agent_finalize, agent_end, before_agent_run]; наших четырёх (after_tool_call, message_received, message_sending, reply_payload_sending) там нет",
+      "evidence": "[код] /usr/lib/node_modules/openclaw/dist/command-registration-tKF3dsKu.js:170-178 (список CONVERSATION_HOOK_NAMES); config-normalization-shared-w2iz0aeC.js:268-274 (allowConversationAccess); хуки плагина — ubuntu/openclaw/verify-plugin/index.js:83-198"
+    },
+    {
+      "idx": 63,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 146,
+      "claim": "У message_sending в ctx нет runId, есть ctx.sessionKey; доставка идёт после agent_end — поэтому эталон хранится по sessionKey, не удаляется на agent_end, сбрасывается на новом runId",
+      "status": "ok",
+      "actual": "Плагин реализован ровно так: refs — Map по sessKey (ctx.sessionKey), сброс при новом runId (sameTurn-проверка), на agent_end не удаляется (чистка по TTL)",
+      "evidence": "[код] ubuntu/openclaw/verify-plugin/index.js:49-53 (комментарий-контракт), :66-68 (sessKeyOf → ctx.sessionKey), :93 (prev.runId===runId — сброс на новом ходе), :198 (эталон не удаляем на agent_end)"
+    },
+    {
+      "idx": 64,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 150,
+      "claim": "Ключ провайдера DeepSeek держится в auth-store (openclaw models auth paste-api-key --provider deepseek), не только в env",
+      "status": "unverifiable",
+      "actual": "",
+      "evidence": "проверка требует чтения конфигов с секретами (~/.openclaw/openclaw.json, .env) или запуска openclaw CLI под undebot — оба действия заблокированы классификатором разрешений этой сессии; файла с именем *auth* в ~/.openclaw не видно, но auth-store может жить внутри openclaw.json/sqlite"
+    },
+    {
+      "idx": 65,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 153,
+      "claim": "Telegram-токен лежит в /home/undebot/.openclaw/telegram-token с правами 600; мониторинг читает тот же файл",
+      "status": "ok",
+      "actual": "Файл существует, права 600, владелец undebot, 46 байт; монитор читает его же",
+      "evidence": "[замер] stat -c '%a %U %s' → 600 undebot 46; [код] /opt/1c-bot-monitor/bot_health_check.sh:8 TOKEN_FILE=/home/undebot/.openclaw/telegram-token, :41 cat $TOKEN_FILE"
+    },
+    {
+      "idx": 66,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 156,
+      "claim": "CLI-проверка: openclaw agent --message «текст» (+ --session-key); без --deliver ответ в stdout, гейт message_sending срабатывает только на реальной доставке в канал",
+      "status": "ok",
+      "actual": "QA-батарея работает именно так (openclaw agent --session-key ... -m, вывод парсится из stdout); срабатывание гейта только на доставке зафиксировано в коде плагина как проверенный факт (deliver.ts)",
+      "evidence": "[код] ubuntu/openclaw/qa/qa-probes.sh:37 (openclaw agent --session-key ... -m ... | tail); ubuntu/openclaw/verify-plugin/index.js:24 (message_sending — только на реальной доставке в канал, deliver.ts); живой прогон агента не выполнялся (стоил бы вызова модели)"
+    },
+    {
+      "idx": 67,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 161,
+      "claim": "ubuntu/openclaw/mcp_braine.py — MCP-сервер инструмента ask_1c над braine /ask (FastMCP, streamable-http), работает как сервис 1c-mcp-braine на :6014",
+      "status": "ok",
+      "actual": "Файл есть, шапка описывает ровно это (FastMCP, streamable-http, BRAINE_URL, MCP_PORT 6014); сервис active, слушает 127.0.0.1:6014. Нюанс не из этого утверждения: upstream braine (8090/8091) сейчас мёртв — braine выведен из контура, боевой ask_1c идёт через 1c-mcp-ask (:6016) → serene_ask (:8099)",
+      "evidence": "[код] ubuntu/openclaw/mcp_braine.py:1-21 (FastMCP, streamable-http, 6014); [замер] systemctl is-active 1c-mcp-braine → active; ss -tlnp | grep 6014 → LISTEN python pid=3173746"
+    },
+    {
+      "idx": 68,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 165,
+      "claim": "Существует QA-батарея ubuntu/openclaw/qa/qa-probes.sh (приветствие, мета, инъекции, отчёт-чисто, нет-данных, не-слил-SQL) — работает через CLI без Telegram",
+      "status": "ok",
+      "actual": "Файл существует (2617 байт, исполняемый), гоняет вопросы через openclaw agent CLI без Telegram",
+      "evidence": "[замер] ls -la /srv/1c/ubuntu/openclaw/qa/qa-probes.sh → -rwxr-xr-x 2617; [код] qa-probes.sh:37 — вызов openclaw agent --session-key ... -m"
+    },
+    {
+      "idx": 69,
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 168,
+      "claim": "Инструмент report_1c и его сервис 1c-mcp-reports :6015 живут в ubuntu/serenedb/",
+      "status": "ok",
+      "actual": "В ubuntu/serenedb/ лежат mcp_reports.py, report_query.py, serene_report.py; сервис 1c-mcp-reports active, слушает 127.0.0.1:6015",
+      "evidence": "[замер] ls /srv/1c/ubuntu/serenedb | grep -i report → mcp_reports.py, report_query.py, serene_report.py; systemctl is-active 1c-mcp-reports → active; ss | grep 6015 → LISTEN pid=3173769"
+    },
+    {
+      "idx": 70,
+      "doc": "docs/ANONYMIZATION.md",
+      "line": 7,
+      "claim": "Статус анонимизации: проектный разбор + план; код ещё не написан",
+      "status": "ok",
+      "actual": "Кода анонимайзера/псевдонимизации в репозитории нет — поиск по ubuntu/ и windows/ (py/sql/sh/cs) не находит ни одного файла",
+      "evidence": "[замер] grep -rln 'anonym|псевдоним|pseudo' /srv/1c/ubuntu /srv/1c/windows --include='*.py' --include='*.sql' --include='*.sh' --include='*.cs' → пусто"
+    },
+    {
+      "idx": 71,
+      "doc": "docs/ANONYMIZATION.md",
+      "line": 64,
+      "claim": "Гейт анти-галлюцинаций сверяет числа ответа с выводом инструмента и продолжит работать при псевдонимизации",
+      "status": "ok",
+      "actual": "Гейт действительно сравнивает только числовые токены ответа с числовыми токенами эталона инструмента (нормализованные строки цифр) — семантики значений не касается, поэтому одинаковая псевдонимизация обеих сторон его не ломает (логический вывод дока корректен для этого кода)",
+      "evidence": "[код] ubuntu/openclaw/verify-plugin/verify-core.js:46-52 (numericTokens), :135 (digits эталона), :158-160 (точное сравнение по digits)"
+    },
+    {
+      "idx": 72,
+      "doc": "docs/ANONYMIZATION.md",
+      "line": 66,
+      "claim": "Инварианты загрузчика: дедуп по ref_key и стабильная пагинация $orderby=Ref_Key требуют GUID-подобного значения",
+      "status": "ok",
+      "actual": "Загрузчик пагинирует со стабильной сортировкой и откатом на $orderby=Ref_Key, дедуп через SELECT DISTINCT/ключевую логику; дельта в serene_sync опирается на Ref_Key",
+      "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:289 ($orderby — стабильный порядок страниц), :458 (params['$orderby']='Ref_Key'), :549,593 (дедуп: PARTITION BY ref_key → SELECT DISTINCT); serene_sync.py:179 (дельта по Ref_Key)"
+    },
+    {
+      "idx": 73,
+      "doc": "docs/ANONYMIZATION.md",
+      "line": 79,
+      "claim": "ai_embed(text, model, provider) в SereneDB ходит в любой OpenAI-совместимый эндпоинт — эмбеддинги можно считать внутри периметра",
+      "status": "ok",
+      "actual": "Функция есть в живой сборке с тремя VARCHAR-параметрами; официальные доки: «ai_embed talks to any service that exposes an OpenAI-compatible embeddings API»",
+      "evidence": "[замер] psql :7890 duckdb_functions() WHERE function_name='ai_embed' → ai_embed|{col0,col1,col2}|{VARCHAR,VARCHAR,VARCHAR}; [док движка] docs.serenedb.com/docs/sql/functions/ai#providers"
+    },
+    {
+      "idx": 74,
+      "doc": "docs/ANONYMIZATION.md",
+      "line": 87,
+      "claim": "HNSW в продукте нет (только ivf); ivf-индекс нужно строить на пустой таблице с последующим наполнением",
+      "status": "ok",
+      "actual": "В исходниках движка каталог индексов — только {kIncludedKind, kIVFKind}, HNSW удалён; в живой сборке нет ни одной hnsw-функции; порядок «индекс на пустой таблице» — вывод VECTOR_DECISION.md, подтверждённый ответом разработчиков",
+      "evidence": "[замер] psql :7890 duckdb_functions() WHERE function_name ILIKE '%hnsw%' → 0; [код] docs/VECTOR_DECISION.md:169-179 (§4 HNSW удалён, index.cpp:110-113), :438-448 (индекс на пустой таблице)"
+    },
+    {
+      "idx": 75,
+      "doc": "docs/ANONYMIZATION.md",
+      "line": 146,
+      "claim": "Windows-стенд: Intel Xeon E3-1275 v6, 2 логических ЦП, 8 ГБ RAM, 32 ГБ свободно на диске (замер 2026-07-25)",
+      "status": "unverifiable",
+      "actual": "",
+      "evidence": "нужен показ с Windows (wmic/systeminfo по ssh 192.168.56.1:2222) — ssh-команды заблокированы классификатором разрешений этой сессии; в снимках stand-* железо Windows не зафиксировано"
+    },
+    {
+      "idx": 76,
+      "doc": "docs/ANONYMIZATION.md",
+      "line": 251,
+      "claim": "Для алертов уже есть 1c-bot-monitor",
+      "status": "ok",
+      "actual": "1c-bot-monitor.timer активен (тик каждые ~3 мин), скрипт /opt/1c-bot-monitor/bot_health_check.sh шлёт телеграм-алерты",
+      "evidence": "[замер] systemctl is-active 1c-bot-monitor.timer → active; systemctl list-timers | grep 1c-bot-monitor → next через ~1 мин"
+    },
+    {
+      "idx": 77,
+      "doc": "docs/ANONYMIZATION.md",
+      "line": 255,
+      "claim": "Существуют тесты test_integrity, test_validate, test_e2e",
+      "status": "ok",
+      "actual": "Все три файла есть в ubuntu/serenedb/ (плюс их .pyc)",
+      "evidence": "[замер] find /srv/1c -name 'test_*' → /srv/1c/ubuntu/serenedb/test_e2e.py, test_integrity.py, test_validate.py"
+    },
+    {
+      "idx": 78,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 19,
+      "claim": "Сборка setup-1c-odata переведена в build/ (в .gitignore), готовый бинарь остался в dist/",
+      "status": "ok",
+      "actual": "Корневой .gitignore содержит windows/odata-setup/build/; в dist/ лежит setup-1c-odata.exe",
+      "evidence": "[замер] grep build /srv/1c/.gitignore → строка 25 'windows/odata-setup/build/'; ls windows/odata-setup/dist/ → setup-1c-odata.exe"
+    },
+    {
+      "idx": 79,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 26,
+      "claim": "Состав OData расширен --scope analytics: объектов 1128 → 3645, сущностей 2968 → 4585",
+      "status": "ok",
+      "actual": "Живая перепись базы (base_profile) содержит ровно 4585 сущностей — итоговое число после расширения совпадает; промежуточные (1128/3645/2968) — историческая динамика, не перепроверяема",
+      "evidence": "[замер] psql :7890 dbname=postgres 'SELECT count(*) FROM base_profile' → 4585"
+    },
+    {
+      "idx": 80,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 27,
+      "claim": "Права 1С действуют поверх состава OData: часть подсистемных регистров под read-only профилем отдаёт «Доступ запрещен» (код 20) — это защита, а не сбой",
+      "status": "ok",
+      "actual": "В живой переписи 934 сущности помечены «нет прав» (из 4585); код переписи распознаёт ответ 1С по тексту «Доступ»/denied",
+      "evidence": "[замер] psql :7890 'SELECT problem, count(*) FROM base_profile GROUP BY 1' → «нет прав»=934; [код] ubuntu/serenedb/odata_census.py:86-89 (детект «Доступ»/denied → «нет прав»)"
+    },
+    {
+      "idx": 81,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 30,
+      "claim": "На Windows установлен VC++ x64 runtime — оставлен",
+      "status": "unverifiable",
+      "actual": "",
+      "evidence": "нужен reg query на Windows — ssh заблокирован классификатором разрешений этой сессии; косвенно согласуется с работающим PostgreSQL (5432 отвечает, а он без VC++ runtime не стартует — INSTALL_LOG:64-90)"
+    },
+    {
+      "idx": 82,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 33,
+      "claim": "PostgreSQL 17.6 на Windows установлен: служба postgresql17 Running с автозапуском, порт 5432 слушает, кластер 39 МБ",
+      "status": "ok",
+      "actual": "Порт 5432 на Windows-машине (через проброс 192.168.56.1:5432) принимает соединение с LXC — сервер жив; версия/имя службы/размер кластера без ssh не перепроверяемы, но противоречий не найдено (запись «Убрано после неудачи» в том же файле относится к артефактам ранних НЕУДАЧНЫХ попыток: C:\\pgsql, C:\\pgdata, pgsvc)",
+      "evidence": "[замер] bash /dev/tcp/192.168.56.1/5432 → OPEN; [код] docs/INSTALL_LOG.md:88-93 (итог: postgresql17 Running, 5432, кластер 39 МБ) и :113 (убраны именно каталоги неудачных попыток)"
+    },
+    {
+      "idx": 83,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 107,
+      "claim": "На Windows-машине свободно 6 из 8 ГБ памяти; IIS и 1С работают",
+      "status": "hist",
+      "actual": "",
+      "evidence": "запись в журнале установки — замер от 25.07 в прошедшем времени («осталось»); текущее значение памяти не является предметом дока"
+    },
+    {
+      "idx": 84,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 116,
+      "claim": "SereneDB на Windows нативно невозможна: CI собирает только linux-amd64, linux-arm64 и Docker; windows-latest в workflow относится к serene-ui",
+      "status": "ok",
+      "actual": "В локальном чекауте исходников движка workflow'ы собирают linux-amd64/linux-arm64 (+Docker-образы); windows-latest встречается ровно в одном файле — serene-ui-reusable.yml (клиент)",
+      "evidence": "[код] /srv/serenedb-src/.github/workflows/build-manual.yml:15-16 (варианты linux-amd64, linux-arm64); grep -rln windows-latest workflows/ → только serene-ui-reusable.yml (:250 runs-on: windows-latest)"
+    },
+    {
+      "idx": 85,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 122,
+      "claim": "WSL на Windows-стенде не установлен",
+      "status": "unverifiable",
+      "actual": "",
+      "evidence": "нужен wsl --status на Windows — ssh заблокирован классификатором разрешений этой сессии"
+    },
+    {
+      "idx": 86,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 124,
+      "claim": "Баг шлюза на кириллице в строке запроса исправлен: было 400 → стало 200; запись по-прежнему режется 405",
+      "status": "ok",
+      "actual": "Фикс в коде обоих экземпляров (репо и /opt): функция _url_ascii percent-кодирует только не-ASCII и применяется к URL; не-GET режется 405 read-only шлюзом",
+      "evidence": "[код] ubuntu/1c-gateway/odata_gateway.py:32-42 (_url_ascii, кодирует только не-ASCII), :122 (url = UPSTREAM + _url_ascii(path)), :110 (405 read-only gateway); идентичный код в /opt/1c-odata-gateway/odata_gateway.py (те же строки); живой прогон 200 требует клиентских кредов шлюза (в /etc, чтение секретов заблокировано)"
+    },
+    {
+      "idx": 87,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 135,
+      "claim": "LLM-путь переведён на deepseek-v4-flash; размышления выключаются параметром \"thinking\":{\"type\":\"disabled\"}; имя модели вынесено в конфиг DEEPSEEK_MODEL/DEEPSEEK_THINKING",
+      "status": "ok",
+      "actual": "В braine-конфиге DEEPSEEK_MODEL=deepseek-v4-flash; в текущем LLM-пути (serene_ask.py) модель и thinking берутся из env DEEPSEEK_MODEL/DEEPSEEK_THINKING, thinking по умолчанию disabled и уходит в тело запроса как {\"type\": ...}",
+      "evidence": "[код] /opt/smart-bot/.env:35 DEEPSEEK_MODEL=deepseek-v4-flash; ubuntu/serenedb/serene_ask.py:169-170 (DS_MODEL=env DEEPSEEK_MODEL, DS_THINKING=env DEEPSEEK_THINKING default 'disabled'), :247 (body['thinking']={'type': DS_THINKING})"
+    },
+    {
+      "idx": 88,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 140,
+      "claim": "В 1С заведены тестовые данные: 104 проведённых документа за 6 месяцев (280 проводок, 44 записи в регистрах накопления), 13 контрагентов, 14 номенклатуры",
+      "status": "ok",
+      "actual": "Все пять чисел сходятся с живым корпусом базы 1: документов-шапок 32+12+6+6+36+12=104, проводок 280 (accountingregister_хозрасчетный), записей РН 38+6=44, контрагентов 13, номенклатуры 14",
+      "evidence": "[замер] psql :7890 dbname=postgres GROUP BY src_table: document_* шапки в сумме 104; accountingregister_хозрасчетный=280; accumulationregister_*=38+6=44; catalog_контрагенты=13; catalog_номенклатура=14"
+    },
+    {
+      "idx": 89,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 142,
+      "claim": "Регистров накопления заполнилось 2 из ~200 — корректно для УСН «Доходы» в БП 3.0",
+      "status": "ok",
+      "actual": "Заполнено ровно 2 РН (книгаучетадоходовирасходов, реализацияуслуг); в переписи 106 регистров накопления (212 сущностей вместе с RecordType) — «~200» сходится по сущностям OData",
+      "evidence": "[замер] psql :7890 base_profile: accumulationregister без recordtype → 106, из них rows>0 → 2; со RecordType → 212; search_corpus: 2 таблицы РН (38 и 6 строк)"
+    },
+    {
+      "idx": 90,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 149,
+      "claim": "Владелец пробросил порт 5432 между LXC и Windows; изначально был проброшен только порт 80 (OData)",
+      "status": "ok",
+      "actual": "5432 на 192.168.56.1 открыт и принимает соединения с LXC (как и 6003 для OData-канала); историческая часть «изначально только 80» не перепроверяема, но текущее состояние совпадает",
+      "evidence": "[замер] bash /dev/tcp/192.168.56.1/5432 → OPEN; /dev/tcp/192.168.56.1/6003 → OPEN"
+    },
+    {
+      "idx": 91,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 199,
+      "claim": "NUMERIC/DECIMAL(14,2) нельзя индексировать инвертированным индексом SereneDB — «Column has unsupported type»; лечится приведением ::DOUBLE в VIEW, это надо закладывать в генератор представлений",
+      "status": "ok",
+      "actual": "В исходниках движка Classify() для индексируемых колонок не имеет case DECIMAL → Unsupported → Validate бросает ровно эту ошибку; DOUBLE классифицируется как NumericF64 (поддержан) — приведение ::DOUBLE действительно лечит",
+      "evidence": "[код] /srv/serenedb-src/server/catalog/inverted_index.h:70-108 (Classify: DECIMAL отсутствует → default: Unsupported; DOUBLE → NumericF64), inverted_index.cpp:236 («has unsupported type ... can not be indexed»)"
+    },
+    {
+      "idx": 92,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 230,
+      "claim": "COM-коннектор 1С — 32-битный: запускать PowerShell из C:\\Windows\\SysWOW64, иначе Class not registered",
+      "status": "ok",
+      "actual": "Знание вшито в наш продуктовый код: инсталлятор выбирает SysWOW64 для x86-COM на 64-битной ОС; живой повтор ошибки на Windows недоступен (ssh заблокирован), но код — самостоятельное подтверждение",
+      "evidence": "[код] windows/odata-setup/src/Sys.cs:189 (sub = Is64BitOperatingSystem ? \"SysWOW64\" : \"System32\"); Steps.cs:1030 (p.X86 && 64-бит ОС → SysWOW64\\regsvr32.exe)"
+    },
+    {
+      "idx": 93,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 241,
+      "claim": "Стандартные поля OData именуются по-английски даже в русской конфигурации: Ref_Key, DataVersion, Posted, Date, Description, IsFolder; пользовательские реквизиты — на языке конфигурации",
+      "status": "ok",
+      "actual": "Живые колонки загруженной таблицы catalog_контрагенты: Ref_Key, DataVersion, DeletionMark, Parent_Key, IsFolder, Code, Description — по-английски; рядом НаименованиеПолное, ИНН, КПП и т.д. — по-русски",
+      "evidence": "[замер] psql :7890 duckdb_columns() WHERE table_name='catalog_контрагенты' → Ref_Key, DataVersion, IsFolder, Description + кириллические реквизиты"
+    },
+    {
+      "idx": 94,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 244,
+      "claim": "Ключ у каждого типа OData объявлен в $metadata и различается: Ref_Key, Ref_Key+LineNumber, Recorder+Recorder_Type, бывает кириллический (Организация_Key)",
+      "status": "ok",
+      "actual": "Живая перепись key_props: Ref_Key,LineNumber — 1840 сущностей; Ref_Key — 1129; Recorder,Recorder_Type — 191; кириллические ключи есть (Организация_Key — 42, Документ_Key,... — 37, Идентификатор — 16)",
+      "evidence": "[замер] psql :7890 'SELECT key_props, count(*) FROM base_profile GROUP BY 1 ORDER BY 2 DESC' → перечисленные варианты, включая Организация_Key=42"
+    },
+    {
+      "idx": 95,
+      "doc": "docs/INSTALL_LOG.md",
+      "line": 254,
+      "claim": "Нерешённое: PostgreSQL на Windows headless — нужен вход по RDP; SereneDB на Windows — только WSL2/Docker после wsl --install и перезагрузки",
+      "status": "disc",
+      "actual": "Пункт 1 таблицы «Что осталось нерешённым» устарел и противоречит этому же файлу: PostgreSQL на Windows УСТАНОВЛЕН headless (INSTALL_LOG:33 '✅ УСТАНОВЛЕН', :86-93 'vc_redist /repair' → initdb OK, служба Running) и порт 5432 живой — RDP не понадобился. Пункт про SereneDB/WSL остаётся в силе (сборки под Windows нет — см. idx 84)",
+      "evidence": "[замер] bash /dev/tcp/192.168.56.1/5432 → OPEN; [код] docs/INSTALL_LOG.md:33 и :86-93 (успешная headless-установка через vc_redist /repair) против :254 (таблица «нерешённое» с тем же пунктом)",
+      "verdict": "a",
+      "verdict_why": "таблицу «Что осталось нерешённым» не обновили после успешной установки — внутреннее противоречие дока, править док"
+    },
+    {
+      "idx": 96,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 15,
+      "claim": "LXC lxc-claude-1c: 6 CPU / 62 GB RAM / 238 GB диск, Ubuntu 24.04",
+      "status": "disc",
+      "actual": "CPU 6 ✓, RAM 62 GB ✓, Ubuntu 24.04.4 ✓, но диск — 360 GB (df /: /dev/loop3 360G, занято 159G), а не 238 GB: диск LXC был расширен, док не обновлён",
+      "evidence": "[замер] nproc → 6; free -g → total 62; df -h / → /dev/loop3 360G; cat /etc/os-release → Ubuntu 24.04.4 LTS",
+      "verdict": "a",
+      "verdict_why": "стенд легитимно расширили (в снимках/истории фигурирует рост диска), док отстал — поправить цифру"
+    },
+    {
+      "idx": 97,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 18,
+      "claim": "Всё развёрнуто нативно через systemd, без Docker (в непривилегированном LXC Docker падает на keyring-квоте)",
+      "status": "ok",
+      "actual": "Docker в системе отсутствует; все сервисы проекта — systemd-юниты в /etc/systemd/system/",
+      "evidence": "[замер] which docker → пусто (rc=1); systemd-юниты 1c-*/braine перечислены в /etc/systemd/system (см. idx 109 и stand-systemd)"
+    },
+    {
+      "idx": 98,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 21,
+      "claim": "PostgreSQL 16 + pgvector: роль smartbot, БД openwebui и mem0, слушает 127.0.0.1:5432",
+      "status": "ok",
+      "actual": "Кластер PG 16 online на 5432 (postgresql-16 16.14, postgresql-16-pgvector 0.6.0), слушает 127.0.0.1:5432; роль smartbot и БД openwebui/mem0 создаются install.sh (прямой запрос к БД под postgres заблокирован политикой сессии, но пакет+кластер+скрипт подтверждены)",
+      "evidence": "[замер] pg_lsclusters → 16 main 5432 online; ss → LISTEN 127.0.0.1:5432 postgres; dpkg -l → postgresql-16, postgresql-16-pgvector; [код] /opt/smart-bot/deploy/install.sh:13-18 (CREATE ROLE smartbot, createdb openwebui/mem0, CREATE EXTENSION vector)"
+    },
+    {
+      "idx": 99,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 22,
+      "claim": "Эмбеддер braine — Qwen text-embedding-v4 (DashScope intl), размерность 1536; document_chunk.vector = vector(1536); локальных эмбеддеров нет, fallback-эмбеддера нет — при недоступности DashScope индексация и поиск стоят",
+      "status": "ok",
+      "actual": "bootstrap.sh прописывает text-embedding-v4 (EMBEDDING_ENGINE/EMBEDDING_MODEL), .env содержит dashscope-intl.aliyuncs.com; локального эмбеддера в стеке нет (ollama-дефолты перекрываются, .env.bak-ollama-removal). Колонку vector(1536) в живой БД не перепроверить (доступ под postgres заблокирован политикой); braine-слой сейчас выведен и остановлен",
+      "evidence": "[код] /opt/smart-bot/deploy/bootstrap.sh (text-embedding-v4 ×2, EMBEDDING_ENGINE/MODEL); [замер] grep .env → dashscope-intl.aliyuncs.com ×2; /opt/smart-bot/.env.bak-ollama-removal (локальный эмбеддер убран)"
+    },
+    {
+      "idx": 100,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 23,
+      "claim": "Open WebUI установлен в venv /opt/owui-venv, сервис open-webui слушает 0.0.0.0:3000",
+      "status": "disc",
+      "actual": "Установлен: venv /opt/owui-venv есть, open-webui 0.10.2, юнит с ExecStart --host 0.0.0.0 --port 3000. НО сервис disabled + inactive, порт 3000 никто не слушает — braine-слой выведен из контура (CHANGELOG:2264 «слой braine, а он выведен: api, oikb, kb-poll, open-webui — все inactive»)",
+      "evidence": "[замер] systemctl is-enabled/is-active open-webui → disabled/inactive; ss | grep 3000 → пусто; /opt/owui-venv/bin/pip show open-webui → 0.10.2; [код] /etc/systemd/system/open-webui.service:9",
+      "verdict": "a",
+      "verdict_why": "вывод braine из контура зафиксирован в CHANGELOG (решение проекта, TARGET braine не требует) — док UBUNTU_SETUP отстал, надо пометить слой выведенным"
+    },
+    {
+      "idx": 101,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 24,
+      "claim": "oikb (синк git→KB) в venv /opt/oikb-venv, сервис oikb на порту 8081, с sed-патчем таймаута 120→600с",
+      "status": "disc",
+      "actual": "Установка и патч подтверждены (oikb 0.3.6 в /opt/oikb-venv, client.py:17 timeout=600.0, install.sh:39 sed 120→600), но сервис disabled + inactive, порт 8081 закрыт — braine выведен",
+      "evidence": "[замер] systemctl is-enabled/is-active oikb → disabled/inactive; ss | grep 8081 → пусто; [код] /opt/oikb-venv/.../oikb/client.py:17 (timeout: float = 600.0); /opt/smart-bot/deploy/install.sh:39 (sed 120.0→600.0)",
+      "verdict": "a",
+      "verdict_why": "то же выведение braine из контура (CHANGELOG:2264) — док отстал"
+    },
+    {
+      "idx": 102,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 25,
+      "claim": "rerank-shim (адаптер OWUI↔DashScope qwen3-rerank) слушает 127.0.0.1:8082",
+      "status": "disc",
+      "actual": "Юнит есть (ExecStart=/usr/bin/python3 /opt/smart-bot/deploy/rerank-shim.py), но сервис disabled + inactive, порт 8082 никто не слушает",
+      "evidence": "[замер] systemctl is-enabled/is-active rerank-shim → disabled/inactive; ss/curl 8082 → connection refused; [код] /etc/systemd/system/rerank-shim.service:8",
+      "verdict": "a",
+      "verdict_why": "braine выведен из контура (CHANGELOG:2264) — док отстал"
+    },
+    {
+      "idx": 103,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 26,
+      "claim": "Мост в /opt/bridge-venv: tg-bridge disabled (Telegram забрал OpenClaw), сервис api слушает 0.0.0.0:8090 и кормит ask_1c",
+      "status": "disc",
+      "actual": "tg-bridge действительно disabled ✓ и /opt/bridge-venv существует ✓, но api ТОЖЕ disabled + inactive и 8090 никто не слушает; ask_1c кормит уже не braine api, а serene_ask :8099 через 1c-mcp-ask :6016 (drop-in 1c-mcp-braine переключён на мёртвый 8091)",
+      "evidence": "[замер] systemctl is-enabled/is-active api → disabled/inactive; curl 127.0.0.1:8090 → connection refused; ss | grep 8099 → LISTEN serene_ask.py; [код] /etc/systemd/system/api.service:9 (0.0.0.0:${API_PORT})",
+      "verdict": "a",
+      "verdict_why": "braine выведен, боевой ask_1c переведён на serene-путь (CHANGELOG:2264, stand-systemd) — док отстал"
+    },
+    {
+      "idx": 104,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 27,
+      "claim": "Поллер свежести kb-poll проверяет SHA коммита KB-репо каждые 30с",
+      "status": "disc",
+      "actual": "Сервис kb-poll disabled + inactive — ничего не проверяет; сам скрипт на месте (/opt/smart-bot/deploy/kb-poll.sh)",
+      "evidence": "[замер] systemctl is-enabled/is-active kb-poll → disabled/inactive; [код] /etc/systemd/system/kb-poll.service:8 (ExecStart kb-poll.sh)",
+      "verdict": "a",
+      "verdict_why": "braine выведен из контура (CHANGELOG:2264) — док отстал"
+    },
+    {
+      "idx": 105,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 28,
+      "claim": "Таймеры: nightly-eval.timer — ночной golden-регресс 03:40 с телеграм-алертом; gsheets-sync.timer — синк раз в 5 мин",
+      "status": "disc",
+      "actual": "Оба таймера disabled и не в списке активных таймеров — регресс и синк не выполняются (юнит-файлы существуют)",
+      "evidence": "[замер] systemctl is-enabled nightly-eval.timer gsheets-sync.timer → disabled, disabled; systemctl list-timers --all | grep -E 'nightly-eval|gsheets' → пусто",
+      "verdict": "a",
+      "verdict_why": "braine выведен; кроме того golden set braine захардкожен под чужой KB (сам док, §3 п.10) — док отстал"
+    },
+    {
+      "idx": 106,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 30,
+      "claim": "Код braine лежит в /opt/smart-bot (путь зашит в юниты)",
+      "status": "ok",
+      "actual": "/opt/smart-bot существует (bridge, oikb, deploy, docs...); юниты ссылаются: api/tg-bridge WorkingDirectory=/opt/smart-bot/bridge, kb-poll и rerank-shim ExecStart из /opt/smart-bot/deploy",
+      "evidence": "[замер] ls /opt/smart-bot → bridge, deploy, oikb...; [код] /etc/systemd/system/api.service:8, kb-poll.service:8, rerank-shim.service:8, tg-bridge.service:9"
+    },
+    {
+      "idx": 107,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 32,
+      "claim": "Внешние API (egress с LXC): api.deepseek.com, dashscope-intl.aliyuncs.com, api.telegram.org, GitLab владельца; входящие порты не нужны",
+      "status": "ok",
+      "actual": "Конфиг braine содержит api.deepseek.com и dashscope-intl.aliyuncs.com; api.telegram.org используется монитором (и телеграм-каналом OpenClaw); все сервисы проекта слушают только 127.0.0.1 (кроме openclaw-gateway 18800) — входящих не требуется",
+      "evidence": "[замер] grep -o по /opt/smart-bot/.env → api.deepseek.com ×2, dashscope-intl.aliyuncs.com ×2; [код] /opt/1c-bot-monitor/bot_health_check.sh:43 (api.telegram.org); ss: все 1c-порты на 127.0.0.1"
+    },
+    {
+      "idx": 108,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 36,
+      "claim": "Калибровка гейтов braine: SCORE_MODE=similarity, пороги 0.25/0.15, замерены на Open WebUI 0.10.2; ставить с пинами open-webui==0.10.2 и oikb==0.3.6",
+      "status": "ok",
+      "actual": "Стоят ровно пиненные версии: open-webui 0.10.2, oikb 0.3.6; в .env SCORE_MODE=similarity и значения 0.25/0.15 присутствуют",
+      "evidence": "[замер] /opt/owui-venv/bin/pip show open-webui → 0.10.2; /opt/oikb-venv/bin/pip show oikb → 0.3.6; grep -o .env → SCORE_MODE=similarity, 0.25, 0.15"
+    },
+    {
+      "idx": 109,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 41,
+      "claim": "Юниты braine работают под root (User= нет нигде) — оставлено как в оригинале для первой итерации",
+      "status": "ok",
+      "actual": "Во всех восьми braine-юнитах (api, open-webui, oikb, kb-poll, rerank-shim, tg-bridge, nightly-eval, gsheets-sync) ни одной строки User= — при запуске работали бы под root (сейчас остановлены)",
+      "evidence": "[замер] grep -c User= по восьми юнит-файлам /etc/systemd/system/ → 0 во всех"
+    },
+    {
+      "idx": 110,
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 46,
+      "claim": "Open WebUI :3000 и API :8090 слушают 0.0.0.0 — требуют закрытия файрволом",
+      "status": "disc",
+      "actual": "Сейчас НИЧЕГО не слушает ни 3000, ни 8090 — оба сервиса disabled/inactive (braine выведен), так что открытых наружу портов braine нет. Конфигурационный факт верен: юниты действительно биндят 0.0.0.0 (open-webui.service:9 '--host 0.0.0.0 --port 3000', api.service:9 '--host 0.0.0.0'), т.е. при включении гоча вернётся",
+      "evidence": "[замер] curl 127.0.0.1:3000 и :8090 → connection refused; ss — портов нет; systemctl is-active open-webui api → inactive; [код] /etc/systemd/system/open-webui.service:9, api.service:9",
+      "verdict": "a",
+      "verdict_why": "утверждение о текущем состоянии устарело из-за вывода braine (CHANGELOG:2264); как предупреждение на случай включения — сохранить с пометкой"
+    }
+  ]
+}

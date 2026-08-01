@@ -1,0 +1,479 @@
+{
+  "shard": "plans-b",
+  "half": 2,
+  "results": [
+    {
+      "idx": 50,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 90,
+      "claim": "ts_compound внедрён; probe() на словаре термов — рецепт получен, но не внедрён",
+      "status": "hist",
+      "actual": "Блок явно датирован («Состояние на конец 26.07», цитата из STATE_2026-07-26.md). Сегодня probe() внедрён и работает в боевом пути; ts_compound внедрён.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:432 (def probe), :1975 (вызов в answer()), :547,557 (ts_compound). Датировка блока — PLAN_NATIVE_SEARCH.md:83 «Состояние на конец 26.07»"
+    },
+    {
+      "idx": 51,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 91,
+      "claim": "Выбор сущности: табличная часть по контракту $metadata, владелец по данным — 19 из 19",
+      "status": "ok",
+      "actual": "Механизм жив: связь табличная часть→владелец берётся структурно из составного ключа $metadata (parent в search_tables), отбор потомков по ключу шапки считает база. 19/19 — записанный замер 26.07.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:560-611 (children_by_parent: «parent посчитан при сборке по составному ключу ($metadata…)», отбор split_part(row_key,'|',1) IN (…))"
+    },
+    {
+      "idx": 52,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 92,
+      "claim": "Транспорт сделан не через psycopg, а SQL через stdin; стена 1713 сущностей снята, проверено на 10 000",
+      "status": "ok",
+      "actual": "Так и есть: psql-подпроцесс, SQL подаётся в stdin (-f -), не через argv и не psycopg.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:199-222 (комментарий про предел 131072 байта, стену 1712/1713 и переход на stdin; subprocess.run([\"psql\", DSN, …, \"-f\", \"-\"], input=sql))"
+    },
+    {
+      "idx": 53,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 93,
+      "claim": "hnsw удалён из продукта; вставка в уже созданный ivf-индекс работает: 98 тыс. строк по 1536 вошли за секунды при 5-10 тыс. строк/с",
+      "status": "disc",
+      "actual": "hnsw удалён — верно. Но «вставка работает» опровергнута более поздним замером того же дня: порционная вставка в готовый ivf-индекс упирается в ту же стену на 6 000 строк; 98 тыс. «вошли за секунды» только потому, что публикация не делалась — VACUUM (REFRESH_TABLE) после вставки повис и съел 34 ГБ.",
+      "evidence": "[код/док] docs/VECTOR_DECISION.md §10.5 (таблица: порция 4 «встала», RSS 22,8 ГБ; «порядок: индекс до данных — не помогает, та же стена на 6 000») и §9 «Что осталось нерешённым» (REFRESH_TABLE повис, 34 ГБ). hnsw: §4 + /srv/serenedb-src (kKnownOpclassTypes = included, ivf)",
+      "verdict": "a",
+      "verdict_why": "Док отстал от позднейшего замера в VECTOR_DECISION §10.5 — реальность (стена не обходится вставкой) легитимна, править строку плана"
+    },
+    {
+      "idx": 54,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 95,
+      "claim": "Золотой набор на конец 26.07: 7/8",
+      "status": "hist",
+      "actual": "Явно датированный снимок («Состояние на конец 26.07»); позднее зафиксировано 8 из 8.",
+      "evidence": "[код] docs/PLAN_THREE_STEPS.md:67 «Золотой набор после переделки: 8 из 8 (до переделки было 7 из 8)»"
+    },
+    {
+      "idx": 55,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 117,
+      "claim": "Сейчас запрос ломается на 1 900 сущностях — предел argv",
+      "status": "disc",
+      "actual": "Предел argv снят переходом на подачу SQL через stdin — та же правка, что зафиксирована строкой 92 того же документа. Текст шага 3 написан со словом «сейчас» и не помечен как устаревший, при этом противоречит собственной сводке файла.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:199-222 (SQL в stdin, комментарий: стена была на 1712/1713 сущностях и снята); внутреннее противоречие — PLAN_NATIVE_SEARCH.md:92",
+      "verdict": "a",
+      "verdict_why": "Док отстал от кода: транспорт давно через stdin, «сейчас» в тексте шага неверно"
+    },
+    {
+      "idx": 56,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 130,
+      "claim": "Агрегаты count/sum/min/max/avg считаются в базе по всему множеству, фильтр проталкивается в индекс — подтверждено EXPLAIN",
+      "status": "ok",
+      "actual": "Агрегаты считаются одним SQL в базе (count/sum/min/max/avg с FILTER), запросы при наличии условия идут FROM search_idx — фильтр внутри индекса. EXPLAIN-подтверждение записано в STATE_2026-07-26.md.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:1239-1249 (агрегатный SQL), :419/:622/:1212 (src = INDEX if match else CORPUS), :55 (INDEX='search_idx')"
+    },
+    {
+      "idx": 57,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 134,
+      "claim": "Боевые запросы идут FROM search_idx, а не FROM search_corpus",
+      "status": "ok",
+      "actual": "Все запросы с поисковым условием идут FROM search_idx (probe, градиент ts_compound, строки, агрегаты). FROM search_corpus остаётся только там, где условия нет (векторный полный скан) — это сознательно: CHECK1 показал, что search_idx без условия медленнее.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:55 (INDEX='search_idx'), :467, :545, :419/:622/:643/:932/:1212 (src=INDEX if match); векторный fallback FROM CORPUS — :2024 с обоснованием"
+    },
+    {
+      "idx": 58,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 137,
+      "claim": "Инкремент сборки сделан по doc_hash; штатного CDC в движке нет",
+      "status": "ok",
+      "actual": "Инкремент — MERGE по doc_hash (sha1 от doc||refs); CDC как возможность в документации движка отсутствует.",
+      "evidence": "[код] ubuntu/serenedb/corpus_merge.sql:103-108 (WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash), corpus_build.sql:513 (sha1(doc||chr(0)||refs)); [замер] serenedb-docs search_docs «change data capture CDC» — ни одного раздела про CDC"
+    },
+    {
+      "idx": 59,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 143,
+      "claim": "Инкрементального обновления inverted-индекса нет: только DROP INDEX + CREATE INDEX («The index is frozen at CREATE INDEX time»)",
+      "status": "disc",
+      "actual": "У движка есть штатная публикация обновлений индекса без DROP/CREATE — VACUUM (REFRESH_INDEX); продукт живёт на ней каждый такт. Цитата «frozen at CREATE INDEX time» реальна, но относится к индексу на attach-витрине, и даже там «только DROP+CREATE» — неполно.",
+      "evidence": "[код] ubuntu/serenedb/build.sh:269 и corpus_merge.sql:157 (VACUUM (REFRESH_INDEX) search_idx — публикация после MERGE); /srv/serenedb-src/server/connector/duckdb_vacuum_function.cpp:72 ({\"refresh_index\", {Action::Refresh, Scope::Index}}); тест-первоисточник цитаты: /srv/serenedb-src/tests/sqllogic/sdb/pg/index/inverted_index_view_attached.test:137",
+      "verdict": "a",
+      "verdict_why": "Док отстал: штатное обновление индекса существует (REFRESH_INDEX) и является основой боевого такта"
+    },
+    {
+      "idx": 60,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 146,
+      "claim": "Из attach-таблицы читать можно только INCLUDE-колонки; иная колонка — ошибка (server/connector/view_fast_path.cpp:140, TODO)",
+      "status": "ok",
+      "actual": "Механизм подтверждается исходником движка: postgres_scan отсутствует в реестре fast-path lookup-функций (стоит TODO), поэтому достать из attach-источника колонку вне INCLUDE индексу нечем. В текущем продукте attach не используется вовсе.",
+      "evidence": "[код] /srv/serenedb-src/server/connector/view_fast_path.cpp:141 «// TODO: read_avro, postgres_scan / postgres_query.» (реестр kLookup... без postgres_scan); [код] grep ATTACH по ubuntu/serenedb — ни одного использования"
+    },
+    {
+      "idx": 61,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 149,
+      "claim": "Диапазонный предикат в PG не проталкивается (WHERE id > N → Unsupported table filter type); дельта-синк остаётся на загрузчике через DataVersion OData",
+      "status": "ok",
+      "actual": "Действующая часть подтверждена кодом: дельта-синк реализован в загрузчике через Ref_Key+DataVersion из OData. «Unsupported table filter type» — записанный замер по attach-схеме; attach не в продукте, живьём не перепроверялся (потребовал бы DDL).",
+      "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:415-466 (дельта по $select=Ref_Key,DataVersion, откат на полную при отсутствии полей), serene_sync.py:180"
+    },
+    {
+      "idx": 62,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 151,
+      "claim": "ATTACH не переживает рестарт движка — нужен юнит с повторным ATTACH при старте",
+      "status": "unverifiable",
+      "actual": "Поведение ATTACH после рестарта проверить без DDL нельзя. В текущем продукте ATTACH не используется вообще (данные загружаются внутрь движка загрузчиком), поэтому и юнит с повторным ATTACH не нужен и не существует.",
+      "evidence": "[код] grep -rn ATTACH по ubuntu/serenedb — только blocklist-регэксп в serene_report.py:76; [замер] systemctl cat serenedb → ExecStart без каких-либо ExecStartPost/ATTACH"
+    },
+    {
+      "idx": 63,
+      "doc": "docs/PLAN_NATIVE_SEARCH.md",
+      "line": 152,
+      "claim": "NUMERIC/DECIMAL не индексируется — в VIEW amount приводится к DOUBLE",
+      "status": "ok",
+      "actual": "Принцип жив в текущей сборке: все величины хранятся в корпусе как MAP(VARCHAR, DOUBLE), числовые значения приводятся try_cast(... AS DOUBLE). Механика «VIEW поверх attach» не в продукте; само ограничение NUMERIC — записанный замер.",
+      "evidence": "[код] ubuntu/serenedb/corpus_build.sql:347 (nums MAP(VARCHAR, DOUBLE)), :483-484 (try_cast(val AS DOUBLE))"
+    },
+    {
+      "idx": 64,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 4,
+      "claim": "Этап 3.1 (локальный эмбеддер Qwen) привязан к появлению GPU-сервера; этап 3.2 — решение не принято",
+      "status": "ok",
+      "actual": "GPU-сервера и локального эмбеддера нет: эмбеддинги по-прежнему в DashScope (умолчание сборки dashscope-intl.aliyuncs.com), ALIBABA_* живут в окружении; следов принятого решения по 3.2 в activeContext/TARGET_STATUS нет.",
+      "evidence": "[код] ubuntu/serenedb/build.sh:126 (EMBED_HOST умолч. https://dashscope-intl.aliyuncs.com); [замер] grep ALIBABA /etc/*.env → /etc/1c-mcp-reports.env содержит ALIBABA_API_KEY/ALIBABA_EMBED_URL; grep GPU по activeContext.md и TARGET_STATUS.md — пусто"
+    },
+    {
+      "idx": 65,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 15,
+      "claim": "DashScope получает текст вопроса на каждый вопрос",
+      "status": "ok",
+      "actual": "На типовом пути ответа текст вопроса уходит в DashScope дважды: вектором вопроса (embed_one → ALIBABA_EMBED_URL/embeddings) в сите порядка кандидатов и реранкером (dashscope-intl .../text-rerank). Строго «каждый» — с оговоркой: при единственном кандидате сито пропускается, но эмбеддинг-fallback и резолвер тоже шлют текст.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:305-311 (embed_one → EMBED_URL+/embeddings), :2143 (_vec(question) в сите), :2172 (rerank(question,…)), :146-148 (RERANK_URL умолч. dashscope-intl.aliyuncs.com)"
+    },
+    {
+      "idx": 66,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 16,
+      "claim": "DashScope при сборке индекса получает весь корпус витрины — имена контрагентов, суммы, номера договоров",
+      "status": "ok",
+      "actual": "Верно и сейчас: векторы корпуса считает ai_embed внутри движка, но секрет эмбеддера указывает на DashScope (base_url умолч. https://dashscope-intl.aliyuncs.com, путь /compatible-mode/v1/embeddings) — текст каждой строки корпуса уходит туда.",
+      "evidence": "[код] ubuntu/serenedb/build.sh:124-127 (CREATE SECRET … TYPE openai, base_url dashscope-intl…), embed_missing.sh:236 (ai_embed(txt, '$MODEL', 'секрет'))"
+    },
+    {
+      "idx": 67,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 18,
+      "claim": "DeepSeek получает до 25 строк витрины (подсвеченные фрагменты) на каждый вопрос",
+      "status": "ok",
+      "actual": "ASK_ROWS_TO_MODEL, умолчание 25; в модель уходит rows[:ROWS_TO_MODEL].",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:83 (ROWS_TO_MODEL = int(env ASK_ROWS_TO_MODEL, '25')), :1430 (shown = rows[:ROWS_TO_MODEL])"
+    },
+    {
+      "idx": 68,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 21,
+      "claim": "Лимиты ASK_TOPK, ASK_ROWS_TO_MODEL и обрезка фрагмента ограничивают объём, а не содержимое",
+      "status": "ok",
+      "actual": "Оба лимита — числовые срезы (TOPK=40, ROWS_TO_MODEL=25), никакой фильтрации содержимого перед отправкой в модель в коде нет.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:82-83, :1430 — только срезы списков, контентного барьера нет (совпадает с ANONYMIZATION.md: барьер не написан)"
+    },
+    {
+      "idx": 69,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 26,
+      "claim": "В ANONYMIZATION.md записано: выходной барьер — единственный слой с настоящей гарантией, и его код ещё не написан",
+      "status": "ok",
+      "actual": "Дословно присутствует.",
+      "evidence": "[код] docs/ANONYMIZATION.md:7 «Код ещё не написан…», :22 «Это единственный слой, который даёт настоящую гарантию», :131 «Это и есть настоящая гарантия»"
+    },
+    {
+      "idx": 70,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 39,
+      "claim": "Индекс сейчас на размерности 1536 (Qwen text-embedding-v4)",
+      "status": "disc",
+      "actual": "Размерность давно 1024: колонка emb в корпусе FLOAT[1024], все 98 717 векторов боевой базы длиной 1024, EMBED_DIM умолч. 1024. Модель осталась text-embedding-v4. 1536 были взяты по образцу выведенного braine и заменены осознанно.",
+      "evidence": "[замер] psql: SELECT len(emb), count(*) FROM search_corpus … → 1024|98717; [код] ubuntu/serenedb/corpus_init.sql:18 (emb FLOAT[1024]), serene_ask.py:175-182 (комментарий: «Прежние 1536 были взяты по образцу выведенного слоя braine», EMBED_DIM=1024)",
+      "verdict": "a",
+      "verdict_why": "Док отстал от осознанной смены размерности (1536→1024), зафиксированной в коде и данных"
+    },
+    {
+      "idx": 71,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 41,
+      "claim": "Полная пересборка индекса занимает 47 с на нашей витрине",
+      "status": "disc",
+      "actual": "47 с — замер на витрине в 2 882 строки (PLAN_THREE_STEPS). Текущая витрина — 103 808 строк (боевая) и 623 565 (ut_test); цифра «на нашей витрине» не переносится: одни только векторы на большой базе считаются часами (в ut_test 92 080 строк ещё в очереди на эмбеддинг).",
+      "evidence": "[код] docs/PLAN_THREE_STEPS.md:53-57 (таблица «на нашей витрине (2882 строки)»: полная сборка 507 с → 47 с); [замер] psql count(*) search_corpus → 103 808 (postgres), 623 565 (ut_test); search_quality ut_test: cov_noemb_pending=92080",
+      "verdict": "a",
+      "verdict_why": "Док отстал: замер честный, но витрина с тех пор выросла в ~36 раз, подача «занимает 47 с» как текущего неверна"
+    },
+    {
+      "idx": 72,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 42,
+      "claim": "Текущий формат эндпоинта эмбеддингов: /embeddings, вход input, выход data[].embedding; адрес задаётся в окружении",
+      "status": "ok",
+      "actual": "Точно так: POST на EMBED_URL+/embeddings с body {model, dimensions, input:[…]}, ответ читается как data[0].embedding; адрес из env ALIBABA_EMBED_URL (сборка — EMBED_HOST/EMBED_PATH).",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:305-311; build.sh:124-127 (EMBED_HOST, EMBED_PATH=/compatible-mode/v1/embeddings из окружения)"
+    },
+    {
+      "idx": 73,
+      "doc": "docs/PLAN_PRIVACY.md",
+      "line": 52,
+      "claim": "Переменные ALIBABA_* присутствуют в окружении (их удаление — признак готовности этапа 3.1)",
+      "status": "ok",
+      "actual": "Присутствуют: ALIBABA_API_KEY, ALIBABA_EMBED_URL, ALIBABA_API_KEYS в /etc/1c-mcp-reports.env (и упоминание в /etc/1c-serene-sync.env).",
+      "evidence": "[замер] grep -l ALIBABA /etc/*.env → /etc/1c-mcp-reports.env, /etc/1c-serene-sync.env; grep -o '^[A-Z_]*=' /etc/1c-mcp-reports.env — имена без значений"
+    },
+    {
+      "idx": 74,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 31,
+      "claim": "Сборка ivf не прерывается: pg_cancel_backend возвращает успех, SET memory_limit не действует; снимается только рестартом движка",
+      "status": "ok",
+      "actual": "Механизм подтверждается исходником: во всём пути построения ivf нет ни одной точки проверки прерывания. Сами замеры (cancel/ memory_limit) записаны в SERENEDB_IVF_ISSUE_RU.md; на боевом не воспроизводились — запрещено инвариантом.",
+      "evidence": "[код] grep -rln 'interrupt|cancel' /srv/serenedb-src/libs/iresearch/include/iresearch/formats/ivf/ → пусто (centroids/clustering/ivf_writer/quantizer); записи: SERENEDB_IVF_ISSUE_RU.md §«Сборка не отменяется», VECTOR_DECISION §5/§7"
+    },
+    {
+      "idx": 75,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 33,
+      "claim": "Незавершённая работа с ivf уходит в WAL и проигрывается при каждом старте — движок уходит в петлю OOM-рестартов",
+      "status": "ok",
+      "actual": "Совпадает с записанным замером 27.07 (три часа петли OOM, RSS ~19 МБ/с до OOM; лечение отводом WAL проверено) и с инвариантом проекта. Живьём не воспроизводится намеренно.",
+      "evidence": "[код/док] docs/VECTOR_DECISION.md §10.4 (замер и лечение); CLAUDE.md, инвариант «Опыты с ivf — только на отдельном --server_directory … роняет инстанс в петлю OOM»"
+    },
+    {
+      "idx": 76,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 34,
+      "claim": "Правило: любой опыт с ivf — только на отдельном --server_directory, вторым процессом на другом порту",
+      "status": "ok",
+      "actual": "Правило зафиксировано в инвариантах проекта и в VECTOR_DECISION §10.4.",
+      "evidence": "[код] CLAUDE.md, раздел «Инварианты проекта»: «Опыты с ivf — только на отдельном --server_directory»; docs/VECTOR_DECISION.md:521-523"
+    },
+    {
+      "idx": 77,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 50,
+      "claim": "CREATE INDEX ivf поверх заполненной таблицы упирается в стену на 6 000 строках",
+      "status": "ok",
+      "actual": "Совпадает с первоисточником-отчётом: резкий порог между 5 000 и 6 000 строк, все числа — замеры на живой сборке.",
+      "evidence": "[код/док] docs/SERENEDB_IVF_ISSUE_RU.md:1 (заголовок «резкий порог между 5 000 и 6 000 строк») и §«Что наблюдается»; подтверждено повторно в VECTOR_DECISION §10.5"
+    },
+    {
+      "idx": 78,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 51,
+      "claim": "Вставка в заранее созданный ivf-индекс — та же стена (VECTOR_DECISION.md §10.5)",
+      "status": "ok",
+      "actual": "Это позднейший и итоговый замер: порции по 2 000 в готовый индекс — count(*) встал на 6 000, RSS 0,9→22,8 ГБ. Противоречащая строка PLAN_NATIVE_SEARCH:93 — более ранний снимок (см. idx 53).",
+      "evidence": "[код/док] docs/VECTOR_DECISION.md §10.5, таблица порций и вывод «порядок: индекс до данных — не помогает, та же стена на 6 000»"
+    },
+    {
+      "idx": 79,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 53,
+      "claim": "segment_docs_max = 5000 не помогает против стены ivf",
+      "status": "ok",
+      "actual": "Совпадает: одна транзакция с segment_docs_max=5000 — рост RSS строго линейный, 25 МБ/с, полки нет.",
+      "evidence": "[код/док] docs/VECTOR_DECISION.md §10.1 (таблица RSS, вывод «segment_docs_max в одной большой транзакции работу не ограничивает»)"
+    },
+    {
+      "idx": 80,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 60,
+      "claim": "HNSW удалён из продукта SereneDB",
+      "status": "ok",
+      "actual": "Подтверждено и по исходникам, и записью живой ошибки: известны только опклассы included и ivf; каталог columnstore с hnsw.cpp отсутствует.",
+      "evidence": "[код/док] docs/VECTOR_DECISION.md §4 (index.cpp:110-113 {kIncludedKind,kIVFKind}); SERENEDB_IVF_ISSUE_RU.md (ERROR: Unknown built-in opclass 'hnsw' … known: included, ivf)"
+    },
+    {
+      "idx": 81,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 61,
+      "claim": "Переход 1536 → 1024 даёт экономию 5 МБ из 30 ГБ",
+      "status": "ok",
+      "actual": "Совпадает с разбором: единственный квадратичный по d буфер — матрица поворота 4·d² (9,4 МБ против 4,2 МБ), остальное линейно; экономия ~5 МБ на фоне 30 ГБ. (Речь о пике памяти сборки ivf, не о размере корпуса.)",
+      "evidence": "[код/док] docs/VECTOR_DECISION.md §6 «Переход 1536 → 1024 бессмысленен» (:289-294)"
+    },
+    {
+      "idx": 82,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 72,
+      "claim": "Точный перебор ORDER BY emb <=> q на 97 965 × 1536 — 262–338 мс; боевой запрос array_cosine_similarity — 397–511 мс (перебор быстрее боевого)",
+      "status": "ok",
+      "actual": "Соответствует замерам трёх агентов CHECK1 (родные функции 260–290/полный скан 280–322 мс; array_* 398–482 мс, +45%). Сегодняшняя прикидка на 98 717×1024 даёт тот же порядок величины.",
+      "evidence": "[код/док] docs/CHECK1_SCAN_SUMMARY.md:29 («родные 260–290 мс, array_* 398–482 мс»); [замер] time psql ORDER BY emb <=> … LIMIT 10 → 0,60 с wall с накладными psql на 98 717×1024"
+    },
+    {
+      "idx": 83,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 112,
+      "claim": "80% времени полного перебора — чтение 602 МБ векторной колонки, а не арифметика",
+      "status": "ok",
+      "actual": "Совпадает с CHECK1: 602 МБ = 97 965×1536×4 Б, доля чтения ~77–80% по трём агентам (sum(emb[1]) 223–250 мс). Сегодня колонка 1024-мерная (~385 МБ), sum(emb[1]) — 0,15 с.",
+      "evidence": "[код/док] docs/CHECK1_SCAN_SUMMARY.md:59,63,415; [замер] time psql \"SELECT sum(emb[1]) FROM search_corpus\" → 0,148 с"
+    },
+    {
+      "idx": 84,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 114,
+      "claim": "Векторный перебор однопоточный: cpu/wall ≈ 0,86–0,89",
+      "status": "ok",
+      "actual": "Совпадает с записанными замерами ревизоров CHECK1 (0.86 и 0.89, вывод об однопоточности устоял).",
+      "evidence": "[код/док] docs/CHECK1_SCAN_SUMMARY.md:36"
+    },
+    {
+      "idx": 85,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 117,
+      "claim": "FROM search_idx без условия — 541–572 мс, хуже обычной таблицы: векторы тянутся построчными lookup-ами",
+      "status": "ok",
+      "actual": "Совпадает с CHECK1: 541/549, 563.6 и 541 мс у трёх агентов против ~300 мс от таблицы, причина — точечные lookup'ы из row-store (в PLAN верхняя граница 572 против 563.6 в сводке — округление в пределах разброса).",
+      "evidence": "[код/док] docs/CHECK1_SCAN_SUMMARY.md:266,416"
+    },
+    {
+      "idx": 86,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 119,
+      "claim": "array_cosine_similarity — функция из ядра DuckDB, на 45% медленнее родной и расходится с ней на 84 108 строках из 97 965; наш код везде использует чужую",
+      "status": "disc",
+      "actual": "Факты про саму функцию верны (записаны в CHECK1), но «наш код везде использует чужую» устарело: боевой код полностью переведён на родные средства — оператор <=> в serene_ask.py и cosine_similarity в serene_report.py; array_cosine_similarity осталась только в комментариях, объясняющих, почему её НЕ используют.",
+      "evidence": "[код] grep -rn array_cosine_similarity /srv/1c/ubuntu → только комментарии serene_ask.py:2013 и serene_report.py:220; живые вызовы: serene_ask.py:849,2024,2142,2218 (emb <=> …), serene_report.py:224 (cosine_similarity(emb,…)); факты о функции: CHECK1_SCAN_SUMMARY.md:28-29",
+      "verdict": "a",
+      "verdict_why": "Док отстал от кода: замена на родной оператор уже сделана, фраза «наш код везде использует чужую» больше неверна"
+    },
+    {
+      "idx": 87,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 132,
+      "claim": "Квантование (sq8/pq/rabitq) заперто внутри опкласса ivf и отдельными SQL-средствами недоступно",
+      "status": "ok",
+      "actual": "По документации движка квантование — только опция quant у ivf-индекса; отдельных SQL-функций квантования в доках нет.",
+      "evidence": "[замер] serenedb-docs search_docs «vector quantization standalone SQL» → единственное место: docs/sql/indexes/inverted/vector-search#quantization (опция quant индекса); раздел Vector Functions квантования не содержит"
+    },
+    {
+      "idx": 88,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 148,
+      "claim": "С metric='cosine' квантизация запрещена вообще; l2 и ip пропускают все квантизаторы",
+      "status": "ok",
+      "actual": "Совпадает с записанной матрицей замеров на нашей сборке: cosine (и l1) — только none; l2/ip пускают sq8/sq4/pq/rabitq. Ошибка движка дословно записана.",
+      "evidence": "[код/док] docs/VECTOR_DECISION.md §1 (ERROR: ivf quantization supports only metric 'l2' or 'ip'; полная матрица 4×5) и §2 (таблица валидации опций)"
+    },
+    {
+      "idx": 89,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 153,
+      "claim": "В публичном main SereneDB умолчание уже sq8 и косинус со сжатием разрешён — наша сборка отстаёт",
+      "status": "ok",
+      "actual": "Подтверждено по локальному чекауту свежего исходника движка: quant по умолчанию SQ8 для l2/ip/cosine, ошибка выдаётся только для прочих метрик — то есть cosine со сжатием разрешён. Наша сборка 26.07.3 его отвергает (записанный замер).",
+      "evidence": "[код] /srv/serenedb-src/server/catalog/index.cpp:343-347 (if (!quant_set && (L2Sqr||InnerProduct||Cosine)) cfg.quant = SQ8; запрет только для прочих метрик); наша сборка: VECTOR_DECISION §1 (ERROR при cosine+sq8)"
+    },
+    {
+      "idx": 90,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 192,
+      "claim": "Оператор <=> жёстко привязан к косинусу: с индексом на ip запрос молча уйдёт в полный перебор без ошибки",
+      "status": "ok",
+      "actual": "Привязка <=> к косинусу подтверждена исходником (kCosineDistanceOp), требование совпадения метрик — записанный разбор iresearch_plan.cpp:594-596. Живой EXPLAIN невозможен: ivf-индекса на стенде нет (duckdb_indexes: только search_idx и alias_idx).",
+      "evidence": "[код] /srv/serenedb-src/server/connector/functions/vector.h:62 (kCosineDistanceOp = \"<=>\"), :67 (kNegativeIPDistanceOp = \"<#>\"); docs/VECTOR_DECISION.md §7 п.1 (functions/vector.cpp:394-410, iresearch_plan.cpp:594-596)"
+    },
+    {
+      "idx": 91,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 197,
+      "claim": "<=> даёт 1 − cos, <#> даёт −ip; пороги сходства при переходе становятся неверными",
+      "status": "ok",
+      "actual": "Проверено живым запросом: для пары [1,0] и [0.6,0.8] (cos=0.6, ip=0.6) движок вернул <=> = 0.4 (=1−cos) и <#> = −0.6 (=−ip).",
+      "evidence": "[замер] psql SELECT ([1.0,0.0]::FLOAT[2] <=> [0.6,0.8]::FLOAT[2]), ([1.0,0.0]::FLOAT[2] <#> [0.6,0.8]::FLOAT[2]) → 0.39999998|-0.6"
+    },
+    {
+      "idx": 92,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 200,
+      "claim": "При cosine движок нормирует векторы сам, при ip — нет",
+      "status": "ok",
+      "actual": "Подтверждено исходником: писатель ivf нормирует строки только при metric==Cosine (NormalizeRows), при InnerProduct нормировки нет; при квантизации Cosine подменяется на InnerProduct уже после нормировки (EffectiveQuantMetric).",
+      "evidence": "[код] /srv/serenedb-src/libs/iresearch/include/iresearch/formats/ivf/ivf_writer.cpp:86 (normalize = … && metric == VectorMetric::Cosine), :118-119, :371-372 (NormalizeRows); column_info.hpp:80-83 (EffectiveQuantMetric: Cosine → InnerProduct)"
+    },
+    {
+      "idx": 93,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 247,
+      "claim": "sdb_ivf_sample_factor по умолчанию 0 (адаптивно); обучающая выборка ~625 векторов на 10 тыс. строк",
+      "status": "ok",
+      "actual": "Умолчание 0 подтверждено на живом инстансе. Размер выборки — записанный разбор кода: VECTOR_DECISION §5 даёт «≤576 векторов» на 10 тыс. против «~625» здесь — расхождение записей в пределах «около», суть (маленькая, растёт плавно) совпадает.",
+      "evidence": "[замер] psql SHOW sdb_ivf_sample_factor → 0; [код/док] docs/VECTOR_DECISION.md §5 (kMaxTrainSample недостижима, выборка ≤576 ≈ 3,5 МБ)"
+    },
+    {
+      "idx": 94,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 250,
+      "claim": "Опция compression есть в справке движка: bool, default true",
+      "status": "ok",
+      "actual": "Совпадает с записанной справкой нашей сборки: «compression (bool, default true; false stores the index vectors uncompressed)». Повторное снятие справки требует DDL-ошибки — не выполнялось; в свежем main опция уже другая (имя кодека), но claim — про нашу сборку.",
+      "evidence": "[код/док] docs/VECTOR_DECISION.md:120 (дословная справка сборки 26.07.3); для контраста [код] /srv/serenedb-src/server/catalog/index.cpp:114,135-175 (в main compression — имя кодека)"
+    },
+    {
+      "idx": 95,
+      "doc": "docs/PLAN_VECTOR_CHECKS.md",
+      "line": 283,
+      "claim": "Письмо разработчикам SereneDB отправлено; из пяти вопросов отвечен один",
+      "status": "ok",
+      "actual": "В письме (SERENEDB_IVF_ISSUE_RU.md) ровно пять пронумерованных вопросов; зафиксирован один содержательный ответ разработчиков (про порядок загрузки, 27.07). Следов более поздних ответов в activeContext/CHANGELOG нет. Сам факт отправки подтверждается наличием полученного ответа.",
+      "evidence": "[код/док] docs/SERENEDB_IVF_ISSUE_RU.md §«Вопросы» (пункты 1–5); docs/VECTOR_DECISION.md §9 «Ответ разработчиков SereneDB и что он изменил (27.07)»"
+    },
+    {
+      "idx": 96,
+      "doc": "docs/PLAN.md",
+      "line": 7,
+      "claim": "Шапка утверждает: канал чтения — штатный OData на IIS, а не MCP-тулкит",
+      "status": "ok",
+      "actual": "Соответствует текущей архитектуре и стенду: чтение из 1С идёт через штатный OData, опубликованный на IIS, апстрим шлюза — 192.168.56.1:6003 → Windows-IIS; MCP-тулкит в контуре чтения не используется.",
+      "evidence": "[код] docs/ARCHITECTURE.md:54 (IIS публикует OData /1c/odata/standard.odata/); [замер] systemd 1c-odata-gateway: ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata (stand-net + grep юнита)"
+    },
+    {
+      "idx": 97,
+      "doc": "docs/PLAN.md",
+      "line": 9,
+      "claim": "Шапка утверждает: read-only обеспечивают ai_reader + GET-only шлюз",
+      "status": "ok",
+      "actual": "Оба слоя на месте: пользователь 1С ai_reader с ролью «Только просмотр» (Basic auth OData) и шлюз, отдающий 405 на любой не-GET метод; шлюз запущен на стенде (порт 6011).",
+      "evidence": "[код] ubuntu/1c-gateway/odata_gateway.py:109-112 (DENY write method → 405, реализован только do_GET) ; docs/ARCHITECTURE.md:55,121 (ai_reader, запись через OData → отказ); [замер] ss/curl из stand-net: 127.0.0.1:6011 слушает odata_gateway.py"
+    },
+    {
+      "idx": 98,
+      "doc": "docs/PLAN.md",
+      "line": 10,
+      "claim": "Шапка утверждает как актуальное: хранилище/мозг — braine (Open WebUI + pgvector), SereneDB НЕ используется, OpenClaw не используется",
+      "status": "disc",
+      "actual": "Шапка «актуальной картины» сама протухла: braine выведен из контура ещё 26.07, на вопросы отвечает serene_ask поверх SereneDB — SereneDB это боевой движок (serenedb.service запущен, корпус 103 808 строк, сервис ответов на 8099); бот — OpenClaw (gateway запущен, слой ubuntu/openclaw в продукте).",
+      "evidence": "[код] docs/ARCHITECTURE.md:13-14 («braine выведен из контура…; на вопросы отвечает serene_ask поверх SereneDB»); MAP.md §1 (пайплайн через SereneDB и бот OpenClaw); [замер] systemctl: serenedb.service enabled/running; psql count(*) search_corpus → 103 808; ss: serene_ask.py на 127.0.0.1:8099, openclaw gateway на 18800",
+      "verdict": "a",
+      "verdict_why": "Док отстал: сам документ помечен историческим, но его шапка выдаёт устаревшие «ключевые отличия» за актуальную картину — править шапку"
+    },
+    {
+      "idx": 99,
+      "doc": "docs/PLAN.md",
+      "line": 105,
+      "claim": "Ключ DeepSeek лежит в credentials/deepseek.env",
+      "status": "hist",
+      "actual": "Документ явно исторический (шапка PLAN.md). Файл credentials/deepseek.env физически существует (53 Б, от 22.07), в git не попадает (.gitignore: credentials/). Боевой ключ сервис берёт из /etc/1c-mcp-reports.env (600, root). Примечание владельцу: остаточная копия секрета лежит в рабочей папке с правами 644 — в git не течёт, но инвариант «секреты в /etc/*.env 600» она не соблюдает.",
+      "evidence": "[замер] ls -la credentials/ → deepseek.env 53 Б, права -rw-r--r--; git ls-files | grep credential → пусто; git check-ignore -v → .gitignore:2 credentials/; ls -la /etc/1c-mcp-reports.env → -rw------- root, содержит DEEPSEEK_API_KEY"
+    },
+    {
+      "idx": 100,
+      "doc": "docs/PLAN.md",
+      "line": 70,
+      "claim": "LXC lxc-claude-1c (Ubuntu) имеет адрес 192.168.56.42",
+      "status": "ok",
+      "actual": "Адрес действует до сих пор: eth0 контейнера — 192.168.56.42/24.",
+      "evidence": "[замер] ip -4 a → eth0: inet 192.168.56.42/24 brd 192.168.56.255"
+    }
+  ]
+}

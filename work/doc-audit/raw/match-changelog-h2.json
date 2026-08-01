@@ -1,0 +1,586 @@
+{
+ "shard": "changelog",
+ "half": 2,
+ "results": [
+  {
+   "idx": 63,
+   "doc": "CHANGELOG.md",
+   "line": 1075,
+   "claim": "Отказ разметчика ничего не ломает: нет разметки → первый проход полный, второй пустой; предупреждение, а не fail",
+   "status": "ok",
+   "actual": "classify_entities.py зовётся с `|| echo ВНИМАНИЕ` (не fail); первый проход — условие «НЕ названо служебным», без разметки покрывает всё; второй проход теперь по умолчанию выключен решением владельца 29.07 (EMBED_SERVICE=1 возвращает)",
+   "evidence": "[код] ubuntu/serenedb/build.sh:206 (`python3 classify_entities.py || echo \"  ВНИМАНИЕ: разметка не удалась...\"`), build.sh:243-246 (ROWS_WHERE NOT EXISTS ... cls='service'), build.sh:258-263"
+  },
+  {
+   "idx": 64,
+   "doc": "CHANGELOG.md",
+   "line": 1093,
+   "claim": "LOCK_TAG замка сборки = SELECT current_database() у движка, а не разбор строки DSN",
+   "status": "ok",
+   "actual": "именно так",
+   "evidence": "[код] ubuntu/serenedb/build.sh:59 `LOCK_TAG=$(psql \"$DSN\" -tAc 'SELECT current_database()' ...)`; build.sh:61 замок /var/lock/1c-serene-build-${LOCK_TAG}.lock"
+  },
+  {
+   "idx": 65,
+   "doc": "CHANGELOG.md",
+   "line": 1101,
+   "claim": "deploy.sh подменяет файлы атомарно (mv, а не запись поверх)",
+   "status": "ok",
+   "actual": "install в .$b.new, затем mv -f в пределах каталога",
+   "evidence": "[код] ubuntu/serenedb/deploy.sh:30-31"
+  },
+  {
+   "idx": 66,
+   "doc": "CHANGELOG.md",
+   "line": 1121,
+   "claim": "Секреты движка именуются с базой: odg_<база> и qwen_<база>; имя эмбеддера проведено в embed_missing.sh (EMBED_SECRET) и corpus_precheck.sql (:embed_secret)",
+   "status": "ok",
+   "actual": "odg_${LOCK_TAG} и qwen_${LOCK_TAG}_<i> (после поддержки нескольких ключей 29.07 к имени добавился номер ключа — суть «имя несёт базу» сохранена); embed_missing.sh принимает EMBED_SECRETS/EMBED_SECRET, precheck получает :embed_secret",
+   "evidence": "[код] ubuntu/serenedb/build.sh:73,89,95,137; ubuntu/serenedb/embed_missing.sh:44; ubuntu/serenedb/corpus_precheck.sql:63"
+  },
+  {
+   "idx": 67,
+   "doc": "CHANGELOG.md",
+   "line": 1136,
+   "claim": "Порядок целей такта: метки → резолвер → корпус (бизнес) → корпус (остальное)",
+   "status": "ok",
+   "actual": "шаги 3 (метки search_tables), 4 (резолвер), 5 (корпус не-служебные), 5-alt (остальное; по умолчанию служебным вектор не считается — решение владельца 29.07, EMBED_SERVICE=1 возвращает)",
+   "evidence": "[код] ubuntu/serenedb/build.sh:229-263 (echo «== 3/4/5/5-alt» и вызовы embed_missing.sh в этом порядке)"
+  },
+  {
+   "idx": 68,
+   "doc": "CHANGELOG.md",
+   "line": 1140,
+   "claim": "Боевая функция ранжирования — tfidf (приёмка 8/8 на tfidf (боевой), bm25, bm25_b0, lm_dirichlet; dfi и lm_jm дают 5/8, в продукте не используются)",
+   "status": "disc",
+   "actual": "Живой отвечающий процесс (pid 3109129, порт 8099) работает с ASK_SCORER=tfidf — с ним док совпадает. НО в /etc/1c-serene-ask.env прописано ASK_SCORER=dfi: процесс запущен 31.07 до/мимо этой правки, и при первом же рестарте боевым скорером станет dfi, который по этой же записи даёт 5/8 приёмки. Конфиг стенда противоречит и доку, и приёмке.",
+   "evidence": "[замер] `grep ASK_SCORER /etc/1c-serene-ask.env` → `ASK_SCORER=dfi`; [замер] `tr '\\0' '\\n' < /proc/3109129/environ | grep ASK_SCORER` → `ASK_SCORER=tfidf`; [код] ubuntu/serenedb/serene_ask.py:114 (умолчание bm25)",
+   "verdict": "b",
+   "verdict_why": "env-файл стенда включает скорер с приёмкой 5/8 — при рестарте нарушит TARGET.md п. 3/10 («ответы без ошибок», «любые ошибки запрещены»); править док под dfi нельзя, чинить надо env; ровно случай owner-memory feedback-verify-what-runs-before-measuring"
+  },
+  {
+   "idx": 69,
+   "doc": "CHANGELOG.md",
+   "line": 1163,
+   "claim": "Рабочие таблицы досчёта несут имя базы: emb_<база>_<таблица>; фильтр database_name = current_database() оставлен вторым рубежом",
+   "status": "ok",
+   "actual": "TAG=emb_${DBNAME}_${TBL}, DBNAME спрашивается у движка; DBQ-фильтр по current_database() во всех запросах к duckdb_tables()",
+   "evidence": "[код] ubuntu/serenedb/embed_missing.sh:61-63, 112 (DBQ), 122-123, 133-135, 267"
+  },
+  {
+   "idx": 70,
+   "doc": "CHANGELOG.md",
+   "line": 1170,
+   "claim": "Уборка рабочих таблиц перечисляет ровно те таблицы, которые скрипт создаёт, а не всё по шаблону метки",
+   "status": "ok",
+   "actual": "drop_parts перечисляет ${TAG}_part_% (ESCAPE), ${TAG}_todo и их старые варианты TAG_OLD — ровно то, что создаётся строками 191 и 232",
+   "evidence": "[код] ubuntu/serenedb/embed_missing.sh:131-136 (+ комментарий 126-130 объясняет отказ от шаблона)"
+  },
+  {
+   "idx": 71,
+   "doc": "CHANGELOG.md",
+   "line": 1179,
+   "claim": "embed_missing.sh не глушит stderr потоков целиком: печатается первая строка ошибки",
+   "status": "ok",
+   "actual": "stderr каждого потока пишется в файл ($ERRDIR/$w), затем считаются отказы и печатается первая ошибка (первые 160 символов), отдельно счёт HTTP 429",
+   "evidence": "[код] ubuntu/serenedb/embed_missing.sh:227, 231, 254-259"
+  },
+  {
+   "idx": 72,
+   "doc": "CHANGELOG.md",
+   "line": 1192,
+   "claim": "deploy.sh раскладывает изменившиеся файлы в /opt и печатает что именно; конвейер зовёт её на стенде через SERENE_SRC_DIR",
+   "status": "ok",
+   "actual": "копирует только отличающееся (cmp -s), печатает «обновлён: <файл>»; pipeline.sh зовёт $SERENE_SRC_DIR/deploy.sh, если переменная задана",
+   "evidence": "[код] ubuntu/serenedb/deploy.sh:27-34; ubuntu/serenedb/pipeline.sh:20-23"
+  },
+  {
+   "idx": 73,
+   "doc": "CHANGELOG.md",
+   "line": 1211,
+   "claim": "nightly-eval.timer отключён и остановлен: timer inactive/disabled, service inactive",
+   "status": "ok",
+   "actual": "так и есть",
+   "evidence": "[замер] `systemctl is-active nightly-eval.timer` → inactive; `is-enabled` → disabled; `is-active nightly-eval.service` → inactive"
+  },
+  {
+   "idx": 74,
+   "doc": "CHANGELOG.md",
+   "line": 1215,
+   "claim": "Из наших таймеров на сервере активны только 1c-serene-pipeline.timer (конвейер) и 1c-bot-monitor.timer (health-check бота, шлёт только при падении)",
+   "status": "disc",
+   "actual": "Активен только 1c-bot-monitor.timer. 1c-serene-pipeline.timer — enabled, но inactive (dead), последний запуск 29.07 06:41; 1c-serene-pipeline.service — failed (killed TERM 29.07 07:32). Конвейер свежести стоит третьи сутки.",
+   "evidence": "[замер] `systemctl is-active 1c-serene-pipeline.timer 1c-bot-monitor.timer` → inactive / active; `systemctl list-timers --all | grep 1c` → у pipeline.timer нет NEXT, last run Wed 2026-07-29 06:41:15 UTC",
+   "verdict": "v",
+   "verdict_why": "если контур считается рабочим — стенд нарушает TARGET.md п. 17 (свежесть ≤ 20 мин) и док прав; но сервер — стенд разработки (owner-memory project-1c-is-dev-stand-not-prod), остановка могла быть осознанной на время опытов — нужен ответ владельца: перезапустить конвейер или зафиксировать остановку"
+  },
+  {
+   "idx": 75,
+   "doc": "CHANGELOG.md",
+   "line": 1229,
+   "claim": "Модель не отвечает → HTTP 503, kind=unavailable; база недоступна → 503 «База данных временно недоступна»; внутренности только в журнал",
+   "status": "ok",
+   "actual": "класс сбоя определяется по тексту исключения, наружу — только msg, стек в stderr",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:2977-2988 (503, kind=unavailable, «База данных временно недоступна...», «Языковая модель сейчас не отвечает...»; sys.stderr.write ask ERROR)"
+  },
+  {
+   "idx": 76,
+   "doc": "CHANGELOG.md",
+   "line": 1236,
+   "claim": "В каждом ответе есть возраст данных data_age_sec; сверх ASK_STALE_WARN_SEC (по умолчанию час) — приписка «данные могли устареть»",
+   "status": "ok",
+   "actual": "age из search_quality build_ts кладётся в diag.data_age_sec каждого ответа; при age > STALE_WARN_SEC (умолчание 3600) — приписка и stale=True",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:80 (STALE_WARN_SEC=3600), 2957-2968"
+  },
+  {
+   "idx": 77,
+   "doc": "CHANGELOG.md",
+   "line": 1240,
+   "claim": "serene_ro имеет SELECT на search_quality — выдан в corpus_init",
+   "status": "ok",
+   "actual": "грант в файле и действует на стенде",
+   "evidence": "[код] ubuntu/serenedb/corpus_init.sql:103 `GRANT SELECT ON search_quality TO serene_ro;`; [замер] `SELECT has_table_privilege('serene_ro','search_quality','SELECT')` → t"
+  },
+  {
+   "idx": 78,
+   "doc": "CHANGELOG.md",
+   "line": 1252,
+   "claim": "Полная перепись схемы — раз в CENSUS_MAX_AGE (по умолчанию час); между — список сущностей из base_profile и сразу дельта",
+   "status": "ok",
+   "actual": "max_age = CENSUS_MAX_AGE, умолчание 3600; между переписями сущности берутся из base_profile",
+   "evidence": "[код] ubuntu/serenedb/serene_sync.py:150-154"
+  },
+  {
+   "idx": 79,
+   "doc": "CHANGELOG.md",
+   "line": 1269,
+   "claim": "Дельта-синк по DataVersion: $select=Ref_Key,DataVersion, изменённое тянется прямым доступом Сущность(guid'KEY'), удалённое чистится",
+   "status": "ok",
+   "actual": "ровно такой $select и прямой доступ по guid",
+   "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:452 ($select: Ref_Key,DataVersion), :146 и :479 (Сущность(guid'KEY')), :416-430"
+  },
+  {
+   "idx": 80,
+   "doc": "CHANGELOG.md",
+   "line": 1279,
+   "claim": "Дельта применима к сущностям с уникальным Ref_Key (144 из 234); регистры и табличные части — полной загрузкой",
+   "status": "ok",
+   "actual": "механизм на месте: дельта только при уникальном Ref_Key+DataVersion, остальное полной загрузкой; числа 144/234 — замер того дня на той базе (снимок)",
+   "evidence": "[код] ubuntu/serenedb/serene_sync.py:179-198; ubuntu/serenedb/poc_load_entity.py:234 (is_object = declared_key == ['Ref_Key'])"
+  },
+  {
+   "idx": 81,
+   "doc": "CHANGELOG.md",
+   "line": 1288,
+   "claim": "Загрузчик приводит булево и дату к виду 1С/движка (строчное булево, дата с пробелом) для стабильности row_key = sha1(doc)",
+   "status": "ok",
+   "actual": "v is True → 'true', False → 'false'; ISO-дата с T приводится к пробелу",
+   "evidence": "[код] ubuntu/serenedb/poc_load_entity.py: функция scalar — ветки `if v is True: return \"true\"` / `if v is False: return \"false\"` и замена T→пробел (строка ~404: `return m.group(1) + \" \" + m.group(2)`)"
+  },
+  {
+   "idx": 82,
+   "doc": "CHANGELOG.md",
+   "line": 1294,
+   "claim": "Конвейер 1c-serene-pipeline: синк-дельта → сборка, один атомарный такт; таймер OnUnitInactiveSec=1min; старые таймеры 1c-serene-sync/1c-serene-index отключены; юниты в ubuntu/systemd/",
+   "status": "ok",
+   "actual": "pipeline.sh: синк, затем exec build.sh; таймер OnUnitInactiveSec=1min и в репо, и на стенде; sync/index таймеры disabled+inactive; юниты 1c-serene-pipeline.{service,timer} лежат в ubuntu/systemd/ (сам таймер сейчас не тикает — см. idx 74)",
+   "evidence": "[код] ubuntu/serenedb/pipeline.sh:26-31; ubuntu/systemd/1c-serene-pipeline.timer (OnUnitInactiveSec=1min); [замер] `systemctl is-enabled 1c-serene-sync.timer 1c-serene-index.timer` → disabled, disabled; is-active → inactive, inactive"
+  },
+  {
+   "idx": 83,
+   "doc": "CHANGELOG.md",
+   "line": 1313,
+   "claim": "Вход focus в /ask — сущность, выбранная человеком после уточнения; задан focus — выбор сущности не гадается",
+   "status": "ok",
+   "actual": "focus форсирует picked=[focus], diag.focus_forced",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:1938-1943 (docstring), 2273-2277 (`if focus: picked = [focus]`)"
+  },
+  {
+   "idx": 84,
+   "doc": "CHANGELOG.md",
+   "line": 1337,
+   "claim": "resolver_index (115 103 значения с векторами) читается отдельной ролью serene_resolver; serene_ro доступа к нему не имеет (positive control, проверено permission denied)",
+   "status": "ok",
+   "actual": "сейчас 115 151 строка, все с вектором (число в доке — снимок того дня); serene_ro SELECT не имеет, serene_resolver имеет; в коде резолвер ходит отдельным DSN (RESOLVER_DSN)",
+   "evidence": "[замер] `SELECT count(*), count(emb) FROM resolver_index` → 115151|115151; `SELECT has_table_privilege('serene_ro','resolver_index','SELECT'), has_table_privilege('serene_resolver','resolver_index','SELECT')` → f|t; [код] serene_ask.py:49-50, 805-814"
+  },
+  {
+   "idx": 85,
+   "doc": "CHANGELOG.md",
+   "line": 1342,
+   "claim": "Резолвер срабатывает только когда слово не нашлось ни точно, ни по опечатке, ни подстрокой",
+   "status": "ok",
+   "actual": "порядок фоллбэков: точно → ts_levenshtein (опечатка) → ts_like (подстрока) → resolve_values",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:436-489 (лестница совпадений), 828-833 (docstring resolve_values: «ИНАЧЕ и ни точным совпадением, ни опечаткой, ни подстрокой не находится»)"
+  },
+  {
+   "idx": 86,
+   "doc": "CHANGELOG.md",
+   "line": 1347,
+   "claim": "Гарда резолвера структурная: слово и значение обязаны делить буквенный триграмм, порога близости нет",
+   "status": "ok",
+   "actual": "_shares_chars: подстрока либо пересечение триграмм; числового порога нет",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:876-887"
+  },
+  {
+   "idx": 87,
+   "doc": "CHANGELOG.md",
+   "line": 1359,
+   "claim": "Если ни одно значение из вопроса не найдено — честный отказ, а не агрегат по всей сущности",
+   "status": "ok",
+   "actual": "matched_groups == 0 → kind=no_data с reason «значения из вопроса не найдены в данных»",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:1983-2000"
+  },
+  {
+   "idx": 88,
+   "doc": "CHANGELOG.md",
+   "line": 1372,
+   "claim": "corpus_build.sql пересобирает search_tables сам: метка из $metadata, parent из структуры имени; векторы меток досчитываются тем же тактом",
+   "status": "ok",
+   "actual": "MERGE INTO search_tables из tmp3_src (собранного из $metadata), label через regexp_replace имени, parent = имя без последнего сегмента; изменившимся emb=NULL; векторы меток — шаг 3 такта",
+   "evidence": "[код] ubuntu/serenedb/corpus_build.sql:188-218 (MERGE, :206 label, :210 parent, :218 DELETE ушедших); ubuntu/serenedb/build.sh:230 (embed_missing.sh search_tables label)"
+  },
+  {
+   "idx": 89,
+   "doc": "CHANGELOG.md",
+   "line": 1380,
+   "claim": "Плоские тени регистров _RecordType/_RowType отсеиваются (технические имена платформы); держится обёртка",
+   "status": "ok",
+   "actual": "NOT ILIKE '%_recordtype'/'%_rowtype' при вставке в search_sources + чистка попавших ранее",
+   "evidence": "[код] ubuntu/serenedb/corpus_build.sql:150-161"
+  },
+  {
+   "idx": 90,
+   "doc": "CHANGELOG.md",
+   "line": 1384,
+   "claim": "corpus_merge чистит строки, чьего источника нет в перечне (сироты при выбытии источника); постчек проверяет «каждый источник обязан быть в корпусе»",
+   "status": "ok",
+   "actual": "DELETE сирот в merge; в postcheck error() если источник из search_sources не в корпусе",
+   "evidence": "[код] ubuntu/serenedb/corpus_merge.sql:136-142; ubuntu/serenedb/corpus_postcheck.sql:43-47"
+  },
+  {
+   "idx": 91,
+   "doc": "CHANGELOG.md",
+   "line": 1417,
+   "claim": "children_by_parent: табличные части сущностей-совпадений добавляются в кандидаты; при выбранной табличной части отбор идёт по шапке split_part(row_key,'|',1)",
+   "status": "ok",
+   "actual": "функция есть и используется, предикат по шапке ровно такой",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:560 (def children_by_parent), 591 (split_part(row_key, '|', 1) IN ...), 2007 (вызов)"
+  },
+  {
+   "idx": 92,
+   "doc": "CHANGELOG.md",
+   "line": 1441,
+   "claim": "Доступ к Windows-стенду: ssh -i /root/.ssh/id_ed25519_1c -p 2222 unde@192.168.56.1; :22 на том же адресе — SSH Linux-роутера, не Windows",
+   "status": "ok",
+   "actual": "ключ и порт работают, отвечает Windows-машина",
+   "evidence": "[замер] `ssh -i /root/.ssh/id_ed25519_1c -p 2222 unde@192.168.56.1 hostname` → DESKTOP-UQG768B"
+  },
+  {
+   "idx": 93,
+   "doc": "CHANGELOG.md",
+   "line": 1454,
+   "claim": "ai_reader — профиль 1С «Только просмотр» (BSP), намеренно без доступа к перс. данным; 934 сущности закрыты правами, решение владельца — оставить как есть",
+   "status": "ok",
+   "actual": "решение владельца зафиксировано; число закрытых правами — снимок того дня, сейчас перепись показывает cov_ent_denied=909 (та же природа: закрыто правами, названо причиной)",
+   "evidence": "[замер] `SELECT k,v FROM search_quality WHERE k LIKE 'cov_%'` → cov_ent_denied=909 (dbname=postgres); сам профиль на стороне 1С/Windows отсюда не снять — принято по решению владельца в доке"
+  },
+  {
+   "idx": 94,
+   "doc": "CHANGELOG.md",
+   "line": 1541,
+   "claim": "ODG_TIMEOUT в /opt/1c-odata-gateway/odata_gateway.py по умолчанию 120 с, на стенде поднят до 900",
+   "status": "ok",
+   "actual": "умолчание 120, env 900",
+   "evidence": "[код] /opt/1c-odata-gateway/odata_gateway.py:53 `TIMEOUT = float(os.environ.get(\"ODG_TIMEOUT\", \"120\"))`; [замер] grep /etc/1c-odata-gateway.env → ODG_TIMEOUT=900"
+  },
+  {
+   "idx": 95,
+   "doc": "CHANGELOG.md",
+   "line": 1582,
+   "claim": "Предел ожидания страницы 1С вынесен в ETL_HTTP_TIMEOUT, по умолчанию 600",
+   "status": "ok",
+   "actual": "именно так",
+   "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:45 `HTTP_TIMEOUT = int(os.environ.get(\"ETL_HTTP_TIMEOUT\", \"600\"))`"
+  },
+  {
+   "idx": 96,
+   "doc": "CHANGELOG.md",
+   "line": 1588,
+   "claim": "serene_select.py содержал хардкод (русские подстроки отбора «бизнес-сущностей»), никем не импортируется и выведен из контура",
+   "status": "ok",
+   "actual": "единственное упоминание вне самого файла — пояснительный комментарий в setup.sh; импортов и вызовов нет ни в репо, ни в /opt",
+   "evidence": "[замер] `grep -rn serene_select /srv/1c/ubuntu/ /opt/1c-mcp-reports/*.py /opt/1c-mcp-reports/*.sh /etc/systemd/system/` → только setup.sh:56 (комментарий) и сам файл"
+  },
+  {
+   "idx": 97,
+   "doc": "CHANGELOG.md",
+   "line": 1592,
+   "claim": "setup.sh больше не зовёт установщика отбирать бизнес-сущности — состав определяет перепись",
+   "status": "ok",
+   "actual": "в setup.sh вызова serene_select/отбора нет, остался только комментарий, что шаг убран",
+   "evidence": "[код] ubuntu/serenedb/setup.sh:56 (комментарий об убранном шаге; grep по файлу вызова не находит)"
+  },
+  {
+   "idx": 98,
+   "doc": "CHANGELOG.md",
+   "line": 1609,
+   "claim": "Калькулятор: модель пишет места {total}, {count}, {max}, {min}, {avg}, {date_min}, {date_max}, {total:ИМЯ}; числа ставит код из посчитанного базой",
+   "status": "ok",
+   "actual": "SLOT-регэксп и промт перечисляют ровно эти места; _fill_figures подставляет числа из agg/totals, посчитанных базой",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:1343 (SLOT), 1286-1288 (промт), 1346-1410 (_fill_figures), 2787-2790 (вызов: «числа ставит код, а не модель»)"
+  },
+  {
+   "idx": 99,
+   "doc": "CHANGELOG.md",
+   "line": 1619,
+   "claim": "Без выбранной величины безымянное место не заполняется; отказ формулировки называет доступные имена величин",
+   "status": "ok",
+   "actual": "при not has_measure sum/max/min/avg выкидываются из known; в bad пишется «(есть: <имена>)»",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:1367-1377, 1388-1393"
+  },
+  {
+   "idx": 100,
+   "doc": "CHANGELOG.md",
+   "line": 1657,
+   "claim": "Заведена search_coverage: цепочка «объявлено в 1С → витрина → корпус → индекс → вектор» по каждой сущности с причиной; итоги в search_quality (cov_*), перепись в такте",
+   "status": "ok",
+   "actual": "таблица есть (4 353 строки) с колонками в_1С/в_витрине/в_корпусе/в_индексе/с_вектором/причина; в search_quality 7 ключей cov_*; перепись — шаг 7 такта",
+   "evidence": "[замер] `SELECT count(*) FROM search_coverage` → 4353; колонки через information_schema; `SELECT k,v FROM search_quality WHERE k LIKE 'cov_%'` → 7 строк; [код] build.sh:277 (coverage_build.sql)"
+  },
+  {
+   "idx": 101,
+   "doc": "CHANGELOG.md",
+   "line": 1667,
+   "claim": "Причина потери не пишется в base_profile: синк делает DROP TABLE при каждом прогоне, хозяин таблицы — синк",
+   "status": "ok",
+   "actual": "синк каждый прогон DROP+CREATE base_profile; причина потери живёт в search_coverage (колонка «причина»); колонка problem в base_profile — собственное поле синка о загрузке, пишется им же",
+   "evidence": "[код] ubuntu/serenedb/serene_sync.py:109-110 (DROP TABLE IF EXISTS base_profile; CREATE TABLE ... problem TEXT); [замер] колонки search_coverage содержат «причина»"
+  },
+  {
+   "idx": 102,
+   "doc": "CHANGELOG.md",
+   "line": 1755,
+   "claim": "Существуют corpus_init.sql (идемпотентное развёртывание с правами), corpus_precheck.sql (7 проверок до изменения, включая живость эмбеддера и размерность) и corpus_postcheck.sql",
+   "status": "ok",
+   "actual": "все три файла на месте; precheck сейчас держит 6 нумерованных блоков / 8 вызовов error(), среди них живость эмбеддера (№4) и размерность (№5) — состав проверок с момента записи менялся, суть цела",
+   "evidence": "[замер] ls ubuntu/serenedb/corpus_{init,precheck,postcheck}.sql — есть; [код] corpus_precheck.sql:31-88 (блоки 1-6, error() ×8, №4 ai_embed живость, №5 размерность); corpus_init.sql:103 (права)"
+  },
+  {
+   "idx": 103,
+   "doc": "CHANGELOG.md",
+   "line": 1763,
+   "claim": "VACUUM (REFRESH_INDEX) внутри транзакции — тихий no-op; запись в corpus_merge.sql закрыта своим COMMIT, публикация отдельно, в файле явный запрет оборачивать в BEGIN…COMMIT; есть вторая публикация индекса после досчёта векторов",
+   "status": "ok",
+   "actual": "BEGIN:93 … COMMIT:143, REFRESH_INDEX отдельно строкой 157 с комментарием-запретом (150-154); вторая публикация — шаг 6 build.sh",
+   "evidence": "[код] ubuntu/serenedb/corpus_merge.sql:93,143,150-157; ubuntu/serenedb/build.sh:269 (`VACUUM (REFRESH_INDEX)` после досчёта)"
+  },
+  {
+   "idx": 104,
+   "doc": "CHANGELOG.md",
+   "line": 1774,
+   "claim": "Все даты идут в текст корпуса; doc_date одна — про фильтр по периоду; незаполненная дата 1С 0001-01-01 отфильтрована",
+   "status": "ok",
+   "actual": "все даты строки в текст (:422-426), 0001-01-01 вырезается и из текста (:489 nullif), и из doc_date (:549 nullif try_cast)",
+   "evidence": "[код] ubuntu/serenedb/corpus_build.sql:422-426, 487-489, 545-549"
+  },
+  {
+   "idx": 105,
+   "doc": "CHANGELOG.md",
+   "line": 1819,
+   "claim": "Обход SIGSEGV: каждый поток эмбеддинга пишет в свою таблицу, перенос одним запросом в конце (embed_missing.sh)",
+   "status": "ok",
+   "actual": "потоки пишут в ${TAG}_part_$w, transfer() переносит UPDATE-ом по ключу",
+   "evidence": "[код] ubuntu/serenedb/embed_missing.sh:14-18 (причина), 230-242 (свои таблицы), 118-125 (transfer)"
+  },
+  {
+   "idx": 106,
+   "doc": "CHANGELOG.md",
+   "line": 1822,
+   "claim": "Секреты движка живут в памяти и исчезают при рестарте — после подъёма ai_embed не работает, пока секрет не создан заново",
+   "status": "ok",
+   "actual": "сборка создаёт CREATE OR REPLACE TEMPORARY SECRET; по докам SereneDB временные секреты — умолчание и не переживают инстанс, персистентность — только явным CREATE PERSISTENT SECRET (его в коде нет); рестарт ради проверки не делался (менять состояние нельзя)",
+   "evidence": "[код] ubuntu/serenedb/build.sh:121-129 (TEMPORARY SECRET); [док] serenedb-docs «Secrets Manager → Creating a Secret»: temporary по умолчанию; «Persistent Secrets»: перенос между инстансами только через CREATE PERSISTENT SECRET"
+  },
+  {
+   "idx": 107,
+   "doc": "CHANGELOG.md",
+   "line": 1850,
+   "claim": "Строка корпуса несёт карту nums «имя величины → значение» со всеми числами; имя величины — имя колонки из базы",
+   "status": "ok",
+   "actual": "nums MAP(VARCHAR,DOUBLE) в боевой таблице (information_schema MAP-колонки не показывает, но typeof подтверждает); имена — имена колонок, measures_of читает map_keys(nums)",
+   "evidence": "[замер] `SELECT typeof(nums) FROM search_corpus LIMIT 1` → MAP(VARCHAR, DOUBLE); [код] corpus_build.sql:347; serene_ask.py:908-912 (map_keys(nums))"
+  },
+  {
+   "idx": 108,
+   "doc": "CHANGELOG.md",
+   "line": 1867,
+   "claim": "Убраны pick_money_col.py из сборки, таблица search_amount_col и колонка amount в пути ответа",
+   "status": "ok",
+   "actual": "файла pick_money_col.py нет, таблицы search_amount_col в базе нет, в коде остались только исторические комментарии; amount в serene_ask.py — это порог из вопроса, не колонка корпуса",
+   "evidence": "[замер] `ls ubuntu/serenedb/pick_money_col.py` → нет; `SELECT count(*) FROM duckdb_tables() WHERE table_name='search_amount_col' AND database_name=current_database()` → 0; [код] grep по ubuntu/ — только комментарий corpus_build.sql:332"
+  },
+  {
+   "idx": 109,
+   "doc": "CHANGELOG.md",
+   "line": 1886,
+   "claim": "Сборка резолвера — ubuntu/serenedb/resolver_build.sql штатными средствами: UNPIVOT, вектор только новым (emb IS NULL), ушедшее убирается точечно",
+   "status": "ok",
+   "actual": "UNPIVOT в сборке значений, MERGE + точечные DELETE, вектор докатывается только emb IS NULL",
+   "evidence": "[код] ubuntu/serenedb/resolver_build.sql:53 (UNPIVOT), 96-108 (точечные DELETE/MERGE), 120 (resolver_no_emb: emb IS NULL); build.sh:236-238 (embed_missing resolver_index)"
+  },
+  {
+   "idx": 110,
+   "doc": "CHANGELOG.md",
+   "line": 1899,
+   "claim": "В resolver_build.sql отбор только структурный, числовых порогов не осталось ни одного",
+   "status": "ok",
+   "actual": "все числа ≥100 в файле — либо комментарии о прежних порогах, либо FLOAT[1024] (размерность) и счётчик resolver_clipped length>20000 (отчётность, не отбор)",
+   "evidence": "[замер] `grep -nE '^[^-]*[0-9]{3,}' resolver_build.sql` вне комментариев → :83 FLOAT[1024], :122 счётчик clipped; порогов отбора нет"
+  },
+  {
+   "idx": 111,
+   "doc": "CHANGELOG.md",
+   "line": 1959,
+   "claim": "Корпус на нативных векторах ai_embed размерности 1024; search_tables пересчитан тем же способом; EMBED_DIM в сервисе ответов = 1024",
+   "status": "ok",
+   "actual": "emb FLOAT[1024] в боевой таблице; метки считает тот же embed_missing/ai_embed; EMBED_DIM умолчание 1024",
+   "evidence": "[замер] `SELECT typeof(emb) FROM search_corpus LIMIT 1` → FLOAT[1024]; [код] serene_ask.py:182; build.sh:35 (EMBED_DIM=1024), 230"
+  },
+  {
+   "idx": 112,
+   "doc": "CHANGELOG.md",
+   "line": 2028,
+   "claim": "Обрезка значения в SQL-формуле корпуса — 20 000 символов на значение (clip), как в боевом коде; предел входа эмбеддера 33 000 символов",
+   "status": "ok",
+   "actual": "substr(...,1,20000) в обеих ветках сборки; EMBED_MAXLEN=20000 один источник; предел провайдера 33 000 зафиксирован и доказан неравенством BUDGET+MAXLEN<33000",
+   "evidence": "[код] ubuntu/serenedb/corpus_build.sql:371,578,697-698; build.sh:40; embed_missing.sh:5,71-79"
+  },
+  {
+   "idx": 113,
+   "doc": "CHANGELOG.md",
+   "line": 2031,
+   "claim": "Ограничения провайдера эмбеддингов: пачка не больше 10 строк, вход не больше 33 000 символов; ручки размера пачки у движка нет",
+   "status": "ok",
+   "actual": "нарезка пачек своя: rn/10 (≤10 строк) + бюджет символов; комментарий фиксирует замер «batch size is invalid» и отсутствие ручки у движка",
+   "evidence": "[код] ubuntu/serenedb/embed_missing.sh:4-7 (нет ручки, пределы), 191-210 (нарезка rn/10 + cum/BUDGET)"
+  },
+  {
+   "idx": 114,
+   "doc": "CHANGELOG.md",
+   "line": 2042,
+   "claim": "В TARGET.md п. 21 записан порядок предпочтений: ответ → уточняющий вопрос → отказ; отказ при наличии данных — дефект",
+   "status": "ok",
+   "actual": "дословно так",
+   "evidence": "[код] TARGET.md:110-133 (п. 21: порядок 1-ответ 2-уточняющий вопрос 3-честный отказ; «Отказ при наличии данных — дефект, а не осторожность»)"
+  },
+  {
+   "idx": 115,
+   "doc": "CHANGELOG.md",
+   "line": 2053,
+   "claim": "Гейт проверяет только величину, о которой спросили; каждое число, которое в тексте есть, сверяется с базой; при отказе одна вторая попытка через тот же гейт",
+   "status": "ok",
+   "actual": "каждое число текста сверяется (gate); ровно одна вторая попытка через тот же gate; часть «только величина, о которой спросили» с тех пор развилась: ролевая сверка заменена калькулятором-подстановкой (числа модель не пишет вовсе), сверка чисел осталась",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:1746-1762 (gate: «Каждое число ответа обязано встречаться в данных»), 2812-2830 (одна вторая попытка тем же гейтом), 2799-2801 (ролевая проверка убрана вместе с claims)"
+  },
+  {
+   "idx": 116,
+   "doc": "CHANGELOG.md",
+   "line": 2066,
+   "claim": "Корпус собирается целиком движком одним запуском psql, без строки питона — файл ubuntu/serenedb/corpus_build.sql; ноль строк наружу (п. 20)",
+   "status": "ok",
+   "actual": "шаг сборки — один `psql -f corpus_build.sql`; движок сам читает $metadata через шлюз",
+   "evidence": "[код] ubuntu/serenedb/build.sh:191-192 (`psql \"$DSN\" -q -v gate=\"$GATE\" -f corpus_build.sql`)"
+  },
+  {
+   "idx": 117,
+   "doc": "CHANGELOG.md",
+   "line": 2106,
+   "claim": "Сервис ответов читает вывод psql через --csv и stdin одновременно; предел поля csv поднят до 50 МБ",
+   "status": "ok",
+   "actual": "subprocess psql -tA --csv -f - (stdin) и csv.field_size_limit(50*1024*1024)",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:221 (--csv, -f -), 154-158 (field_size_limit 50 МБ)"
+  },
+  {
+   "idx": 118,
+   "doc": "CHANGELOG.md",
+   "line": 2120,
+   "claim": "Факт усечения перечня сущностей уходит в ответ полем partial: {entities_shown, entities_total}; бот-слой это поле пока не показывает человеку",
+   "status": "ok",
+   "actual": "cut с entities_shown/entities_total уходит как partial во всех ветках; в mcp_ask.py (мост OpenClaw) слова partial нет вообще",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:1127-1128, 1996, 2032 (partial: cut); [замер] `grep -n partial ubuntu/openclaw/mcp_ask.py` → пусто"
+  },
+  {
+   "idx": 119,
+   "doc": "CHANGELOG.md",
+   "line": 2134,
+   "claim": "Цифры из отказа вырезаются кодом, а не просьбой в промте; текст отказа формулирует модель на языке вопроса",
+   "status": "ok",
+   "actual": "refuse_text: формулирует модель по вопросу; при любой цифре в тексте возвращается пустая строка (`return \"\" if _norm_numbers(t) else t`) — держится кодом",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:756-779"
+  },
+  {
+   "idx": 120,
+   "doc": "CHANGELOG.md",
+   "line": 2173,
+   "claim": "Вес поля refs в отборе вынесен в ASK_REFS_BOOST (условие doc @@ X OR refs @@ (X ^ boost))",
+   "status": "ok",
+   "actual": "REFS_BOOST из env (умолчание 8.0), условие ровно такое",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:126, 524 (`\"(doc @@ %s OR refs @@ (%s ^ %s))\" % (expr, expr, REFS_BOOST)`)"
+  },
+  {
+   "idx": 121,
+   "doc": "CHANGELOG.md",
+   "line": 2179,
+   "claim": "Выставлено ASK_SCORER=lm_dirichlet (запись 27-28.07) — противоречит более новой записи (строка 1140), где боевой скорер tfidf",
+   "status": "hist",
+   "actual": "запись явно устарела и сама помечена аудитором как противоречащая более новой; сейчас живой процесс — tfidf, env-файл — dfi (см. idx 68)",
+   "evidence": "[замер] /proc/3109129/environ → ASK_SCORER=tfidf; /etc/1c-serene-ask.env:2 → dfi; lm_dirichlet нигде не выставлен"
+  },
+  {
+   "idx": 122,
+   "doc": "CHANGELOG.md",
+   "line": 2196,
+   "claim": "Движок допускает одну модель ранжирования на инвертированный индекс — выбор скорера делается A/B",
+   "status": "ok",
+   "actual": "живой движок при двух скорерах в одном запросе отвечает именно этой ошибкой; A/B-скрипт есть",
+   "evidence": "[замер] `SELECT bm25(search_idx.tableoid), tfidf(search_idx.tableoid) FROM search_idx WHERE doc @@ '...'` → ERROR: Only one scorer function is allowed per inverted index (HINT: Use UNION...); [код] ubuntu/serenedb/ab_scorer.py существует"
+  },
+  {
+   "idx": 123,
+   "doc": "CHANGELOG.md",
+   "line": 2204,
+   "claim": "В юните 1c-serene-index порядок env-файлов значим: 1c-mcp-reports.env первым, роль задаёт 1c-serene-sync.env; в юните комментарий почему (сам юнит позже отключён записью 28.07 о конвейере)",
+   "status": "ok",
+   "actual": "в файле юнита ровно этот порядок и развёрнутый комментарий; юнит на стенде static, таймер disabled — как и говорит сама запись",
+   "evidence": "[код] ubuntu/systemd/1c-serene-index.service (EnvironmentFile=-/etc/1c-mcp-reports.env, затем EnvironmentFile=/etc/1c-serene-sync.env, комментарий «ПОРЯДОК ФАЙЛОВ ЗНАЧИМ»); [замер] systemctl is-enabled 1c-serene-index.timer → disabled"
+  },
+  {
+   "idx": 124,
+   "doc": "CHANGELOG.md",
+   "line": 2227,
+   "claim": "WAND (top-k внутри скана) уже включён: EXPLAIN показывает Score и Top: 25 внутри IRESEARCH_SCAN, sdb_disable_top_k_optimization = off; optimize_top_k не нужен",
+   "status": "ok",
+   "actual": "EXPLAIN боевой формы: IRESEARCH_SCAN несёт Score: bm25(...) и Dynamic Filter (sdb_inverted_index_score >= ?), над ним TOP_N Top: 25; настройка off",
+   "evidence": "[замер] EXPLAIN SELECT ... FROM search_idx WHERE doc @@ '...' AND src_table='...' ORDER BY bm25(search_idx.tableoid) DESC LIMIT 25 → Score: bm25(k1=1.2, b=0.75) + Dynamic Filter внутри IRESEARCH_SCAN, TOP_N 25; `SHOW sdb_disable_top_k_optimization` → off"
+  },
+  {
+   "idx": 125,
+   "doc": "CHANGELOG.md",
+   "line": 2257,
+   "claim": "serene_ask.py не читает resolver_index вообще (запись 27-28.07; позже 28.07 резолвер подключён к пути ответа — строка 1337)",
+   "status": "hist",
+   "actual": "запись — история до подключения резолвера; сейчас resolver_index читается отдельной ролью через RESOLVER_DSN",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:49-50 (RESOLVER_DSN/RESOLVER_PW), 849 (SELECT ... FROM resolver_index ORDER BY emb <=> ...)"
+  },
+  {
+   "idx": 126,
+   "doc": "CHANGELOG.md",
+   "line": 2264,
+   "claim": "Слой braine выведен: юниты api, oikb, kb-poll, open-webui — все inactive",
+   "status": "ok",
+   "actual": "все четыре inactive",
+   "evidence": "[замер] `systemctl is-active api oikb kb-poll open-webui` → inactive ×4"
+  }
+ ]
+}

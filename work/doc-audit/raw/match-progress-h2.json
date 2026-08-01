@@ -1,0 +1,348 @@
+{
+  "shard": "progress",
+  "half": 2,
+  "results": [
+    {
+      "idx": 38,
+      "doc": "memory_bank/progress.md",
+      "line": 313,
+      "claim": "Шаги 1 и 2 плана PLAN_ROW_IS_OBJECT обязаны уезжать одним коммитом — порознь корпус сворачивается по отравленной витрине и не пересобирается",
+      "status": "ok",
+      "actual": "Правило зафиксировано в самом плане тем же текстом",
+      "evidence": "[код] docs/PLAN_ROW_IS_OBJECT.md:311 «### 1. 🔴 Шаги 1 и 2 — один коммит и одна выкладка»"
+    },
+    {
+      "idx": 39,
+      "doc": "memory_bank/progress.md",
+      "line": 353,
+      "claim": "Дефект Н-1 (имя базы SereneDB зашито как 'postgres') найден и закрыт при тесте второй базы",
+      "status": "ok",
+      "actual": "Хардкода имени базы в SQL сборки нет: везде current_database(), с комментарием о прежнем дефекте; в py-коде dbname приходит из SERENEDB_DSN (env)",
+      "evidence": "[код] ubuntu/serenedb/corpus_build.sql:116-120 «ИМЯ БАЗЫ НЕ ЗАШИТО. Прежде здесь стояло database_name = 'postgres'» + WHERE c.database_name=current_database(); coverage_build.sql:33-37 то же"
+    },
+    {
+      "idx": 40,
+      "doc": "memory_bank/progress.md",
+      "line": 360,
+      "claim": "Вместо падения сборки — перебор вариантов: не собралось полной сборкой → упрощённая p_doc_plain → число в search_quality.build_failed",
+      "status": "ok",
+      "actual": "Оба механизма в SQL сборки, счётчик живёт в базе (сейчас 0)",
+      "evidence": "[код] ubuntu/serenedb/corpus_build.sql:574 PREPARE p_doc_plain, :609-617 запись build_failed; [замер] psql SELECT из search_quality → build_failed|0|«сущностей не собралось ни одним вариантом»"
+    },
+    {
+      "idx": 41,
+      "doc": "memory_bank/progress.md",
+      "line": 368,
+      "claim": "Свежесть: дельта-синк из 1С по DataVersion, перепись схемы отделена от синка, такт ~6 мин; «ночное» упразднено",
+      "status": "ok",
+      "actual": "Дельта по DataVersion и отдельная периодическая перепись схемы — в коде синка; ночной таймер отключён. «~6 мин» — датированный замер 28.07 на первой базе (на второй сейчас ~13 мин, activeContext)",
+      "evidence": "[код] ubuntu/serenedb/serene_sync.py:180 (дельта по DataVersion), :146-157 (перепись схемы периодически, не каждый такт); [замер] systemctl is-enabled 1c-serene-sync.timer → disabled"
+    },
+    {
+      "idx": 42,
+      "doc": "memory_bank/progress.md",
+      "line": 371,
+      "claim": "Честный отказ: модель/база down → 503 с понятным сообщением; старение видно припиской (норма 291 с без приписки, 3 ч — с припиской)",
+      "status": "ok",
+      "actual": "503 с kind=unavailable и текстом в коде; порог приписки STALE_WARN_SEC=3600 с (291 с < часа — без приписки, 3 ч — с припиской, согласуется с замером)",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:2986 self._send(503, {\"kind\": \"unavailable\", \"text\": msg, ...}), :2921 (503 degraded), :80 STALE_WARN_SEC=3600, :2968 out[\"stale\"]=True"
+    },
+    {
+      "idx": 43,
+      "doc": "memory_bank/progress.md",
+      "line": 378,
+      "claim": "Корпус первой базы: 103 808 строк, 231 сущность, вектор размерности 1024, у строки карта всех величин",
+      "status": "ok",
+      "actual": "Живая база postgres: 103808 строк, 231 сущность, размерность вектора 1024 — совпадает точно",
+      "evidence": "[замер] psql dbname=postgres SELECT count(*), count(DISTINCT src_table), max(len(emb)) FROM search_corpus → 103808|231|1024"
+    },
+    {
+      "idx": 44,
+      "doc": "memory_bank/progress.md",
+      "line": 379,
+      "claim": "Индекс search_idx инвертированный; векторного индекса нет (ivf заблокирован)",
+      "status": "ok",
+      "actual": "В обеих базах только search_idx и alias_idx USING inverted; ivf-индексов нет",
+      "evidence": "[замер] psql SELECT ... FROM duckdb_indexes() → search_idx/alias_idx «USING inverted ()» в postgres и ut_test, других индексов нет"
+    },
+    {
+      "idx": 45,
+      "doc": "memory_bank/progress.md",
+      "line": 380,
+      "claim": "Резолвер: 115 151 значение, инкрементальный, подключён к ответу (слово → значение)",
+      "status": "ok",
+      "actual": "resolver_index в postgres ровно 115151 строка; отвечающий сервис ходит в него через RESOLVER_DSN; векторы досчитываются только новым",
+      "evidence": "[замер] psql SELECT count(*) FROM resolver_index → 115151; [код] ubuntu/serenedb/serene_ask.py:808-814 (запрос через RESOLVER_DSN), build.sh:13 «резолвер: значения по ключу, векторы только новым»"
+    },
+    {
+      "idx": 46,
+      "doc": "memory_bank/progress.md",
+      "line": 381,
+      "claim": "Сборка корпуса целиком в движке (build.sh); своего кода в сборке нет",
+      "status": "ok",
+      "actual": "build.sh — цепочка psql -f corpus_init/precheck/build/merge/resolver_build/coverage_build.sql; свои вызовы остались только в разрешённых исключениях: classify_entities.py (разметка моделью) и embed_missing.sh (оркестрация штатного ai_embed движка)",
+      "evidence": "[код] ubuntu/serenedb/build.sh:106,138,192,195,222,277 — все шаги psql -f *.sql; embed_missing.sh:2 «штатной функцией движка ai_embed»; заголовок build.sh: «Своего кода в сборке НЕ ОСТАЛОСЬ вовсе»"
+    },
+    {
+      "idx": 47,
+      "doc": "memory_bank/progress.md",
+      "line": 383,
+      "claim": "Конвейер 1c-serene-pipeline работает по готовности (синк → сборка → повтор), такт ~6 мин; «ночного» нет",
+      "status": "hist",
+      "actual": "Строка — из таблицы «Снимок состояния на вечер 28.07» (явно датирована). Устройство совпадает и сегодня: OnUnitInactiveSec=1min, OnBootSec=3min, без OnCalendar. Но сейчас конвейер СТОИТ: таймер enabled/inactive, сервис failed (killed TERM) с 29.07 — это уже зафиксировано как disc в шардах root/status-arch/runbook по докам, подающим состояние как текущее",
+      "evidence": "[замер] systemctl cat 1c-serene-pipeline.timer → OnUnitInactiveSec=1min «по ГОТОВНОСТИ, не по часам»; systemctl is-active 1c-serene-pipeline.timer → inactive"
+    },
+    {
+      "idx": 48,
+      "doc": "memory_bank/progress.md",
+      "line": 386,
+      "claim": "Таймеры: конвейер включён (OnUnitInactiveSec), старые sync/index отключены",
+      "status": "ok",
+      "actual": "1c-serene-pipeline.timer enabled (хотя сейчас не запущен — стенд разработки), 1c-serene-sync.timer и 1c-serene-index.timer — disabled",
+      "evidence": "[замер] systemctl is-enabled 1c-serene-sync.timer 1c-serene-index.timer 1c-serene-pipeline.timer → disabled / disabled / enabled"
+    },
+    {
+      "idx": 49,
+      "doc": "memory_bank/progress.md",
+      "line": 446,
+      "claim": "В базе лежат search_corpus_backup_20260727 (97 965 строк, все 8 колонок включая emb и refs) и tmp_prod_corpus — это не мусор; в search_corpus_bak нет колонки refs",
+      "status": "ok",
+      "actual": "search_corpus_backup_20260727: 97965 строк, 8 колонок, emb и refs присутствуют; tmp_prod_corpus: 97965 строк (5 колонок, refs есть); search_corpus_bak: 7 колонок, refs НЕТ — всё как записано",
+      "evidence": "[замер] psql: count(backup)=97965, duckdb_columns(): backup 8 колонок (emb+refs=2 из 2), search_corpus_bak has_refs=0, tmp_prod_corpus count=97965"
+    },
+    {
+      "idx": 50,
+      "doc": "memory_bank/progress.md",
+      "line": 459,
+      "claim": "Ссылка определяется по форме значения, а не по имени колонки: GUID лежали в 88 колонках с суффиксом _Key и в 26 без него",
+      "status": "ok",
+      "actual": "Критерий ссылки в сборке — регулярка формы GUID по значению (regexp_full_match), а не имя колонки; числа 88/26 — записанный замер того дня",
+      "evidence": "[код] ubuntu/serenedb/corpus_build.sql:384 regexp_full_match(u.val,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-...{12}') AS is_guid; :445-446 соединение с картой ссылок по той же форме"
+    },
+    {
+      "idx": 51,
+      "doc": "memory_bank/progress.md",
+      "line": 463,
+      "claim": "Тождество строки корпуса — объявленный ключ, а не rowid; в MERGE обязано остаться t.doc_hash <> s.doc_hash, иначе молчаливо пересчитываются все эмбеддинги",
+      "status": "ok",
+      "actual": "MERGE сравнивает отпечатки: WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash (null-безопасный эквивалент <>); тождество — src_table+row_key (объявленный ключ)",
+      "evidence": "[код] ubuntu/serenedb/corpus_merge.sql:103-108 — MERGE по doc_hash, UPDATE только при расхождении отпечатка, INSERT с emb=NULL"
+    },
+    {
+      "idx": 52,
+      "doc": "memory_bank/progress.md",
+      "line": 468,
+      "claim": "Запрещён VACUUM (REFRESH_TABLE) на корпусе (34 ГБ и смерть движка на таблице с вектором) — только REFRESH_INDEX",
+      "status": "ok",
+      "actual": "REFRESH_TABLE не вызывается нигде в сборке; все публикации — VACUUM (REFRESH_INDEX), с комментарием-предупреждением",
+      "evidence": "[код] ubuntu/serenedb/corpus_merge.sql:146 «Именно REFRESH_INDEX ..., а НЕ REFRESH_TABLE: последний на таблице с вектором...», :157 и build.sh:269, embed_all.sh:83 — только REFRESH_INDEX"
+    },
+    {
+      "idx": 53,
+      "doc": "memory_bank/progress.md",
+      "line": 474,
+      "claim": "Отпечаток желаемого DDL индекса хранится в search_meta, потому что duckdb_indexes().sql отдаёт пустые скобки",
+      "status": "ok",
+      "actual": "search_meta содержит k=index_ddl с полным DDL (inverted(doc search_dict, refs search_dict, src_table) INCLUDE(...)), а duckdb_indexes().sql в живой базе действительно отдаёт «USING inverted ()» — пустые скобки",
+      "evidence": "[замер] psql SELECT k, v FROM search_meta → index_ddl|CREATE INDEX search_idx ... USING inverted(doc search_dict, ...); psql duckdb_indexes() → «CREATE INDEX search_idx ON public.search_corpus USING inverted ();»"
+    },
+    {
+      "idx": 54,
+      "doc": "memory_bank/progress.md",
+      "line": 508,
+      "claim": "Стена ivf: ~6 000 строк при 1536 измерениях — CREATE INDEX поверх заполненной таблицы не завершается; вставка в готовый индекс работает",
+      "status": "ok",
+      "actual": "Совпадает с первичной записью замеров в VECTOR_DECISION (таблицы §10: 5000 — 1 с, 6000 — виснет, память до 22,8 ГБ; вставка в готовый индекс — та же стена не воспроизводится на вставке). Повторить замер нельзя: опыты с ivf на боевом инстансе запрещены инвариантом",
+      "evidence": "[код] docs/VECTOR_DECISION.md:404 «заполнить таблицу → CREATE INDEX (наш) | ломается на 6 000 строк», :535-554 таблицы замеров и вывод «жёсткая стена около 6 000 строк при 1536 измерениях»"
+    },
+    {
+      "idx": 55,
+      "doc": "memory_bank/progress.md",
+      "line": 515,
+      "claim": "Сборка ivf не отменяется: pg_cancel_backend возвращает успех, работа продолжается; каждый неудачный опыт = рестарт движка",
+      "status": "ok",
+      "actual": "Совпадает с записью замера и проверкой по исходникам движка; правило закреплено инвариантом CLAUDE.md (опыты только на отдельном --server_directory)",
+      "evidence": "[код] docs/VECTOR_DECISION.md:316 «pg_cancel_backend возвращает успех, читать сигнал некому» и :245 «проверено поиском по коду»; CLAUDE.md:184 инвариант про отдельный --server_directory"
+    },
+    {
+      "idx": 56,
+      "doc": "memory_bank/progress.md",
+      "line": 520,
+      "claim": "Копия store.db + WAL спасательной операции лежит в /var/lib/serenedb-rescue-20260727/",
+      "status": "ok",
+      "actual": "Каталог существует (от 27.07), внутри store.db, store.db.wal, store.db.wal.replayed-out",
+      "evidence": "[замер] ls /var/lib/serenedb-rescue-20260727/ → store.db, store.db.wal, store.db.wal.replayed-out (каталог от Jul 27 09:03)"
+    },
+    {
+      "idx": 57,
+      "doc": "memory_bank/progress.md",
+      "line": 527,
+      "claim": "HNSW удалён из продукта SereneDB: в сборке 26.07.3 опклассы только {included, ivf}",
+      "status": "ok",
+      "actual": "В живом каталоге pg_opclass встроенных индексных опклассов два: ivf и included; hnsw отсутствует. Остальные записи (search_dict, search_dict_stem, bench_dict*) — наши TEXT SEARCH DICTIONARY, созданные corpus_init.sql и бенчами, не опклассы движка",
+      "evidence": "[замер] psql SELECT opcname FROM pg_opclass → ivf, included, search_dict_stem, search_dict, bench_dict2, bench_dict; hnsw нет; [код] ubuntu/serenedb/corpus_init.sql:66,89 — создание search_dict/search_dict_stem"
+    },
+    {
+      "idx": 58,
+      "doc": "memory_bank/progress.md",
+      "line": 631,
+      "claim": "ai_embed отдаёт размерность 1024 (параметра dimensions нет), размерность задаётся моделью",
+      "status": "ok",
+      "actual": "Весь корпус, посчитанный ai_embed, имеет вектор ровно 1024; EMBED_DIM в сборке по умолчанию 1024. Прямой вызов ai_embed сейчас невозможен (секреты снимаются после такта) — подтверждено продуктом его работы",
+      "evidence": "[замер] psql max(len(emb)) FROM search_corpus → 1024; [код] ubuntu/serenedb/build.sh:35 EMBED_DIM=\"${EMBED_DIM:-1024}\""
+    },
+    {
+      "idx": 59,
+      "doc": "memory_bank/progress.md",
+      "line": 643,
+      "claim": "Снимок стека 25.07: 1c-odata-gateway(:6011), 1c-config-ui(:6012), 1c-mcp-braine(:6014), 1c-mcp-reports(:6015), serenedb(:7890), open-webui(:3000), oikb(:8081), rerank-shim(:8082), api(:8090), postgresql(:5432); бот OpenClaw user-юнит undebot :18800",
+      "status": "hist",
+      "actual": "Строка явно озаглавлена «Снимок стека (перепроверено вживую 25.07)». Сейчас braine-слой выведен: :3000/:8081/:8082/:8090 никто не слушает, open-webui/oikb/rerank-shim inactive; ядро (:6011, :6012, :7890, :18800) живо",
+      "evidence": "[замер] curl 127.0.0.1:3000 → rc=7 connection refused; systemctl is-active open-webui oikb rerank-shim → inactive inactive inactive"
+    },
+    {
+      "idx": 60,
+      "doc": "memory_bank/progress.md",
+      "line": 649,
+      "claim": "Эмбеддинги идут в DashScope compatible-mode/v1 — облако, точка утечки (docs/ANONYMIZATION.md)",
+      "status": "ok",
+      "actual": "Эндпоинт эмбеддера по умолчанию — облачный DashScope: https://dashscope-intl.aliyuncs.com + /compatible-mode/v1/embeddings (переопределяем через EMBED_HOST/EMBED_PATH)",
+      "evidence": "[код] ubuntu/serenedb/build.sh:126-127 «${EMBED_HOST:-https://dashscope-intl.aliyuncs.com}» и «${EMBED_PATH:-/compatible-mode/v1/embeddings}»"
+    },
+    {
+      "idx": 61,
+      "doc": "memory_bank/progress.md",
+      "line": 663,
+      "claim": "Read-only 2 слоя: пользователь 1С ai_reader без прав записи (пишет → 500) + OData-шлюз режет не-GET (POST/PATCH/PUT/DELETE → 405)",
+      "status": "ok",
+      "actual": "Слой шлюза подтверждён кодом (не-GET → 405), боевая копия идентична репозиторию; слой ai_reader (500 при записи) — на стороне 1С, живую запись не проверял (менять состояние запрещено), зафиксирован в доках и описании юнита «Пропускает только GET; пишет — 405»",
+      "evidence": "[код] ubuntu/1c-gateway/odata_gateway.py:110 return self._send(405, b'{\"error\":\"read-only gateway: method not allowed\"}'); [замер] diff ubuntu/1c-gateway/odata_gateway.py /opt/1c-odata-gateway/odata_gateway.py → идентичны"
+    },
+    {
+      "idx": 62,
+      "doc": "memory_bank/progress.md",
+      "line": 675,
+      "claim": "Пароль ai_reader лежит в /etc/1c-odata-gateway.env на LXC; ключи DeepSeek/Alibaba/GitLab в credentials/ (не в git)",
+      "status": "ok",
+      "actual": "/etc/1c-odata-gateway.env существует с правами 600 (rw-------); credentials/ исключён из git",
+      "evidence": "[замер] ls -l /etc/1c-odata-gateway.env → -rw------- 1 root root 162; [код] /srv/1c/.gitignore:2 «credentials/»"
+    },
+    {
+      "idx": 63,
+      "doc": "memory_bank/progress.md",
+      "line": 682,
+      "claim": "config-ui кэширует список сущностей в /var/lib/1c-config-ui/entities.json",
+      "status": "ok",
+      "actual": "Файл кэша существует (20190 байт, от 23.07), сервис 1c-config-ui жив (running по stand-systemd)",
+      "evidence": "[замер] ls -l /var/lib/1c-config-ui/entities.json → -rw-r--r-- 20190 Jul 23 06:05"
+    },
+    {
+      "idx": 64,
+      "doc": "memory_bank/progress.md",
+      "line": 688,
+      "claim": "Дефолт-выбор сущностей ETL — /etc/1c-etl-selected.txt (23 бизнес-сущности Бухгалтерии)",
+      "status": "ok",
+      "actual": "Файл на месте (835 байт); сам ETL-слой braine выведен из контура (1c-etl.timer disabled), но утверждение о файле верно",
+      "evidence": "[замер] ls -l /etc/1c-etl-selected.txt → -rw------- 835 Jul 26 08:15"
+    },
+    {
+      "idx": 65,
+      "doc": "memory_bank/progress.md",
+      "line": 703,
+      "claim": "SereneDB-витрина для NL→SQL работала под read-only ролью serene_ro",
+      "status": "ok",
+      "actual": "Роль serene_ro существует и по-прежнему только читает (INSERT=f); сам NL→SQL (report_1c) отменён решением владельца 26.07 — запись в доке подана в прошедшем времени, в разделе 23.07",
+      "evidence": "[замер] psql \\du → serene_ro без атрибутов; stand-db: has_table_privilege(serene_ro, search_corpus, INSERT)=f"
+    },
+    {
+      "idx": 66,
+      "doc": "memory_bank/progress.md",
+      "line": 714,
+      "claim": "Мониторинг «бот жив»: таймер каждые 3 мин → Telegram-алерт при падении (1c-bot-monitor)",
+      "status": "ok",
+      "actual": "Таймер активен, тикает каждые 3 минуты; скрипт шлёт алерт владельцу через api.telegram.org",
+      "evidence": "[замер] systemctl cat 1c-bot-monitor.timer → OnUnitActiveSec=3min; is-active → active; [код] ubuntu/monitoring/bot_health_check.sh:43 curl https://api.telegram.org/bot${token}/sendMessage"
+    },
+    {
+      "idx": 67,
+      "doc": "memory_bank/progress.md",
+      "line": 719,
+      "claim": "Эталоны /opt/openclaw (репо money/opwnclaw-bot) и /opt/openclaw-engine — READ-ONLY",
+      "status": "ok",
+      "actual": "Оба каталога — чистые git-деревья: /opt/openclaw без локальных правок, HEAD 23a0fd1 == origin/main; /opt/openclaw-engine тоже clean",
+      "evidence": "[замер] git -C /opt/openclaw status --short --branch → «## main...origin/main», пусто; rev-parse HEAD и @{u} совпадают (23a0fd1f...)"
+    },
+    {
+      "idx": 68,
+      "doc": "memory_bank/progress.md",
+      "line": 734,
+      "claim": "Ночной синк 1c-serene-sync.timer в 03:40",
+      "status": "hist",
+      "actual": "Запись от 24.07; 28.07 «ночное» упразднено (та же дока, строка 368) и заменено конвейером. Сейчас таймер disabled/inactive, OnCalendar 03:40 остался лишь в файле юнита",
+      "evidence": "[замер] systemctl is-enabled 1c-serene-sync.timer → disabled"
+    },
+    {
+      "idx": 69,
+      "doc": "memory_bank/progress.md",
+      "line": 739,
+      "claim": "Движковый FS-лимит per-role на SereneDB недостижим (один DuckDB-инстанс, GLOBAL-only) — защиту держит валидатор",
+      "status": "ok",
+      "actual": "Совпадает с профильным документом: enable_external_access/allowed_directories — GLOBAL-only, подтверждено исходником движка; вопрос стоит в списке фаундерам. Живой опыт потребовал бы менять GLOBAL-настройки движка — запрещено",
+      "evidence": "[код] docs/SERENEDB.md:78 «enable_external_access/allowed_directories — GLOBAL-only, ломают загрузчик; подтверждено исходником», :405-406 — тот же пункт в вопросах фаундерам"
+    },
+    {
+      "idx": 70,
+      "doc": "memory_bank/progress.md",
+      "line": 769,
+      "claim": "Штатного online-backup/PITR в SereneDB нет — только снапшот",
+      "status": "ok",
+      "actual": "В официальных доках движка по теме backup есть только EXPORT/IMPORT DATABASE и COPY FROM DATABASE ... TO; online-backup/PITR не находится. На стенде единственный бэкап — офлайн-снапшот tar.gz от 29.07",
+      "evidence": "[замер] serenedb-docs search_docs «online backup PITR» → ничего по теме; «backup restore snapshot» → только EXPORT/IMPORT DATABASE, COPY FROM DATABASE; [код] docs/SERENEDB.md:395,407"
+    },
+    {
+      "idx": 71,
+      "doc": "memory_bank/progress.md",
+      "line": 486,
+      "claim": "Решение владельца «данные в PG на Windows, SereneDB держит корпус через postgres_attach + VIEW» в коде НЕ реализовано и на 31.07 отложено словом владельца",
+      "status": "ok",
+      "actual": "postgres_attach в боевом коде отсутствует (единственное упоминание — обзорная строка README о возможностях движка); отложенность зафиксирована в activeContext; решение — в owner-memory",
+      "evidence": "[замер] grep -rn postgres_attach /srv/1c/ubuntu/ → только ubuntu/serenedb/README.md:44; [код] memory_bank/activeContext.md:90 «🔴 Отложено по слову владельца: Windows-PG + attach не сделан»; owner-memory/project-architecture-pg-windows-attach.md"
+    },
+    {
+      "idx": 72,
+      "doc": "memory_bank/progress.md",
+      "line": 776,
+      "claim": "Главная открытая проблема на 31.07 — выбор сущности: единственная причина всех неверных ответов; дефектов счёта не осталось",
+      "status": "ok",
+      "actual": "Согласуется с обоими носителями текущего состояния: TARGET_STATUS п.3 («причина одна: выбор сущности... Счёт при этом верен всегда») и activeContext («выбор сущности — единственная причина всех неверных ответов»)",
+      "evidence": "[код] docs/TARGET_STATUS.md:20; memory_bank/activeContext.md:65"
+    },
+    {
+      "idx": 73,
+      "doc": "memory_bank/progress.md",
+      "line": 795,
+      "claim": "Замена модели на v4 pro вместо flash не влияет на выбор сущности: 11 плохих исходов против 11",
+      "status": "ok",
+      "actual": "Замер зафиксирован в приёмочном документе теми же числами",
+      "evidence": "[код] docs/ACCEPTANCE_UT.md:817 «[замер 30.07, утро] на приёмке из 23 вопросов flash и pro дали одинаково 11 плохих исходов»"
+    },
+    {
+      "idx": 74,
+      "doc": "memory_bank/progress.md",
+      "line": 296,
+      "claim": "Во второй базе без вектора 205 477 служебных строк (по решению) + 2 невозможных — оба числа названы в переписи",
+      "status": "hist",
+      "actual": "Снимок 29.07 в датированном разделе; корпус ut_test с тех пор пересобран (623 565 строк). Сейчас перепись называет другие числа: служебных без вектора 248 384, в очереди на вектор 92 080 — сам механизм «числа названы в переписи» жив",
+      "evidence": "[замер] psql dbname=ut_test SELECT из search_quality → cov_noemb_service=248384, cov_noemb_pending=92080"
+    },
+    {
+      "idx": 75,
+      "doc": "memory_bank/progress.md",
+      "line": 367,
+      "claim": "Полнота: перепись search_coverage прослеживает 1С → витрина → корпус → индекс → вектор",
+      "status": "ok",
+      "actual": "Таблица search_coverage в живой базе имеет ровно эти этапы колонками: в_1С, в_витрине (и объектов_витрины), в_корпусе, в_индексе, с_вектором + причина",
+      "evidence": "[замер] psql duckdb_columns(search_coverage) → entity, в_1С, в_витрине, объектов_витрины, в_корпусе, в_индексе, с_вектором, причина; [код] ubuntu/serenedb/coverage_build.sql:54"
+    }
+  ]
+}

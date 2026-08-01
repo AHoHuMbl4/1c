@@ -1,0 +1,390 @@
+{
+  "shard": "vector",
+  "half": 2,
+  "results": [
+    {
+      "idx": 39,
+      "doc": "docs/SERENEDB_IVF_ISSUE_RU.md",
+      "line": 200,
+      "claim": "CREATE INDEX ... USING secondary (v bogus_opclass) выполняется успешно и молча создаёт индекс без колонок; USING inverted в том же случае выдаёт ошибку",
+      "status": "unverifiable",
+      "actual": "Повторная проверка требует CREATE INDEX (DDL) — запрещено условиями аудита. Косвенно согласуется с исходником: у inverted есть явный THROW «Unknown built-in opclass» (index.cpp:441-445), в secondary_index.cpp разбора opclass нет вовсе.",
+      "evidence": "[код] /srv/serenedb-src/server/catalog/index.cpp:441-445 (THROW для inverted); grep 'opclass' по /srv/serenedb-src/server/catalog/secondary_index.cpp — 0 совпадений. Прямой повтор = DDL, запрещён."
+    },
+    {
+      "idx": 40,
+      "doc": "docs/SERENEDB_IVF_ISSUE.md",
+      "line": 11,
+      "claim": "Английская копия отчёта: те же утверждения, что в SERENEDB_IVF_ISSUE_RU.md (версия 26.07.3, порог 5000/6000, отсутствие отмены, memory_limit не действует)",
+      "status": "ok",
+      "actual": "Числа и разделы совпадают: 26.07.3, порог 5000/6000 (та же таблица, +4473 МБ на 6000), раздел «build cannot be cancelled», раздел «SET memory_limit does not stop it».",
+      "evidence": "[код] docs/SERENEDB_IVF_ISSUE.md:11,42,60,110,120,138-145 против SERENEDB_IVF_ISSUE_RU.md:11,46,60,110,120,138-145 — построчная сверка ключевых чисел, расхождений нет"
+    },
+    {
+      "idx": 41,
+      "doc": "docs/SERENEDB.md",
+      "line": 6,
+      "claim": "Установка движка SereneDB описана в ubuntu/serenedb/README.md; развёртывание — docs/RUNBOOK_DEPLOY.md §10",
+      "status": "ok",
+      "actual": "Оба места существуют: README на месте, §10 «SereneDB-аналитика: развёртывание + подключение НОВОЙ 1С-базы».",
+      "evidence": "[замер] ls /srv/1c/ubuntu/serenedb/README.md → существует; grep '## 10' docs/RUNBOOK_DEPLOY.md → строка 308"
+    },
+    {
+      "idx": 42,
+      "doc": "docs/SERENEDB.md",
+      "line": 20,
+      "claim": "Пайплайн: 1С -OData(GET,read-only)-> poc_load_entity.py -> витрина -> serene_report.py -> валидатор allow-list(AST) -> выполнение под serene_ro -> report_1c(MCP)",
+      "status": "ok",
+      "actual": "Все звенья существуют и живы: загрузчик poc_load_entity.py, витрина, serene_report.py с AST-валидатором, выполнение под serene_ro (DSN юнита), MCP report_1c на :6015 (сервис running, в конфиге бота). Оговорка: это уже не единственный путь — основной путь ответов теперь serene_ask (корпус search_corpus), в SERENEDB.md он не описан.",
+      "evidence": "[код] ubuntu/serenedb/serene_report.py:443-462 (validate по AST), mcp_reports.py:24 (порт 6015); [замер] grep SERENEDB_DSN /etc/systemd/system/1c-mcp-reports.service → user=serene_ro; stand-systemd: 1c-mcp-reports running на 6015"
+    },
+    {
+      "idx": 43,
+      "doc": "docs/SERENEDB.md",
+      "line": 26,
+      "claim": "Загрузчик использует стабильную пагинацию $orderby=Ref_Key, дедуп QUALIFY row_number() PARTITION BY ref_key, исключение строк-папок IsFolder",
+      "status": "disc",
+      "actual": "Пагинация и дедуп есть (сортировка по объявленному ключу и только при постраничности; QUALIFY по объявленному ключу). Но исключение папок IsFolder ОТМЕНЕНО: папки остаются в витрине намеренно (требование владельца «информация должна быть вся»; раньше молча выбрасывалось до 18% строк).",
+      "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:280-295 ($orderby только при страницах), :588-594 (QUALIFY по ключу), :580-586 — комментарий: «Узлы-ПАПКИ... раньше отбрасывались... Папки остаются различимы: колонка IsFolder есть в витрине»",
+      "verdict": "a",
+      "verdict_why": "Док отстал: папки оставлены по требованию владельца «информация должна быть вся» — реальность легитимна, править док"
+    },
+    {
+      "idx": 44,
+      "doc": "docs/SERENEDB.md",
+      "line": 32,
+      "claim": "Семантический слой резолвера: эмбеддинги Qwen text-embedding-v4 -> таблица resolver_index @ 1536, косинус, порог 0.70",
+      "status": "disc",
+      "actual": "Живой resolver_index — emb FLOAT[1024] (115 151 значений), строится resolver_build.sql + ai_embed внутри движка (EMBED_DIM=1024), а не питоновским эмбеддером @1536. Описание в доке соответствует только serene_report.py (EMBED_DIM default 1536, min_cos=0.70) — отставшему пути отчётов; его семантический слой при живом индексе 1024 молча несовместим (исключения глотаются resolve_hints).",
+      "evidence": "[замер] psql duckdb_columns() → resolver_index.emb = FLOAT[1024]; [код] build.sh:35 (EMBED_DIM=1024), resolver_build.sql:83 (emb FLOAT[1024]), serene_report.py:50 (default 1536), :205 (min_cos=0.70)",
+      "verdict": "a",
+      "verdict_why": "Док отстал: резолвер переехал в build.sh/ai_embed@1024 (штатные средства движка — п. 20 TARGET). Побочно: живой mcp_reports с 1536 молча не совпадает с индексом 1024 — стоит отметить владельцу отдельно"
+    },
+    {
+      "idx": 45,
+      "doc": "docs/SERENEDB.md",
+      "line": 33,
+      "claim": "gen_sql использует DeepSeek с temperature=0, промт язык-нейтральный",
+      "status": "ok",
+      "actual": "Совпадает: _ds_body(messages, temperature=0) — дефолт, gen_sql не переопределяет; системный промт на английском, вопрос «may be in any language».",
+      "evidence": "[код] ubuntu/serenedb/serene_report.py:25-27 (temperature=0), :340-357 (gen_sql, язык-нейтральный sys_prompt)"
+    },
+    {
+      "idx": 46,
+      "doc": "docs/SERENEDB.md",
+      "line": 37,
+      "claim": "Бот получает инструмент report_1c через MCP-сервер 1c-mcp-reports на порту :6015; гейт verify-plugin сверяет числа",
+      "status": "ok",
+      "actual": "Совпадает: mcp_reports.py дефолт 127.0.0.1:6015, сервис 1c-mcp-reports running; в конфиге бота сервер :6015 с инструментом report_1c; verify-plugin сверяет числа обоих инструментов.",
+      "evidence": "[код] ubuntu/serenedb/mcp_reports.py:24; ubuntu/openclaw/instance/openclaw.json:112-116 (url :6015/mcp, report_1c); ubuntu/openclaw/verify-plugin/verify-core.js:7 (toolNames: ['ask_1c','report_1c'])"
+    },
+    {
+      "idx": 47,
+      "doc": "docs/SERENEDB.md",
+      "line": 42,
+      "claim": "В ubuntu/serenedb/ существуют файлы: poc_load_entity.py, serene_select.py, serene-entities.txt, serene_sync.py, serene_report.py, build_resolver_index.py, mcp_reports.py, setup.sh, setup_ro_role.sql, probe.sh, sql.sh, test_*.py, serenedb_backup.sh",
+      "status": "ok",
+      "actual": "Все перечисленные файлы на месте (test_*.py — 5 штук: caveat, e2e, integrity, ro_role, validate). Таблица в доке при этом неполна относительно текущего каталога (нет build.sh, serene_ask.py, corpus_*.sql и пр.), но само утверждение о существовании верно.",
+      "evidence": "[замер] ls /srv/1c/ubuntu/serenedb/ → все 13+ имён присутствуют"
+    },
+    {
+      "idx": 48,
+      "doc": "docs/SERENEDB.md",
+      "line": 45,
+      "claim": "serene_sync.py — штатный синк (преполёт -> загрузка выбранных -> пересборка резолвера), запускается systemd-таймером",
+      "status": "disc",
+      "actual": "Схема иная: main() берёт сущности из переписи живого OData (census) либо кэша base_profile, грузит дельтой (полная — фолбэк), резолвер НЕ строит («РЕЗОЛВЕР ЗДЕСЬ БОЛЬШЕ НЕ СТРОИТСЯ» — его строит build.sh). Преполёт _preflight — мёртвый код (определён, не вызывается). Таймер 1c-serene-sync.timer disabled; живой запуск — через pipeline.sh (1c-serene-pipeline).",
+      "evidence": "[код] ubuntu/serenedb/serene_sync.py:153-172 (census/base_profile), :185-224 (дельта первой), :237-241 (резолвер строит build.sh); grep '_preflight' → только def на :73; [замер] systemctl: 1c-serene-sync.timer disabled/inactive (stand-systemd), pipeline.sh:28 вызывает serene_sync.py",
+      "verdict": "a",
+      "verdict_why": "Док отстал: дельта и перенос резолвера в build.sh — исполнение указания владельца 28.07 «заливать только изменения», реальность легитимна"
+    },
+    {
+      "idx": 49,
+      "doc": "docs/SERENEDB.md",
+      "line": 56,
+      "claim": "serene-entities.txt — активный список сущностей витрины, собственный у serene, версионируется в git; НЕ /etc/1c-etl-selected.txt",
+      "status": "disc",
+      "actual": "Файл существует и версионируется, но АКТИВНЫМ списком витрины больше не является: main() синка его не читает — константа SELECTED объявлена (строки 25-27) и нигде не используется, список сущностей берётся из переписи живого OData (все ~4585 типов, rows>0). Docstring самого serene_sync.py тоже врёт о собственном коде.",
+      "evidence": "[код] ubuntu/serenedb/serene_sync.py:25-27 (SELECTED объявлен), :153-172 (main берёт ents из C.census()/C.to_load либо base_profile — SELECTED не участвует); grep SELECTED по файлу — использования в main() нет",
+      "verdict": "a",
+      "verdict_why": "Док отстал: переход на перепись живого OData — прямое исполнение девиза владельца об автономности (список из реальности, а не из файла)"
+    },
+    {
+      "idx": 50,
+      "doc": "docs/SERENEDB.md",
+      "line": 62,
+      "claim": "serene_sync._preflight каждый прогон сверяет список сущностей с живым OData; несуществующее имя помечает прогон failed с подсказкой ближайшего реального",
+      "status": "disc",
+      "actual": "_preflight — мёртвый код: определён (строка 73), не вызывается ни одним живым путём. Сверка со списком не нужна: имена берутся ИЗ живой переписи OData, несуществующих там не бывает; закрытые правами помечаются в base_profile.problem (сейчас 934 из 4585).",
+      "evidence": "[код] ubuntu/serenedb/serene_sync.py:73 (def _preflight), grep 'preflight' по ubuntu/serenedb/*.py *.sh — вызовов нет; [замер] psql: base_profile n=4585, with_problem=934",
+      "verdict": "a",
+      "verdict_why": "Док отстал: механизм заменён переписью (несуществующее имя невозможно по построению — сильнее прежней защиты)"
+    },
+    {
+      "idx": 51,
+      "doc": "docs/SERENEDB.md",
+      "line": 66,
+      "claim": "Валидатор — allow-list через AST (json_serialize_sql): только одиночный SELECT/WITH по таблицам витрины; табличные функции и объекты вне схемы (resolver_index, pg_settings) отвергаются by construction; плюс лимит длины SQL и денайлист current_setting",
+      "status": "ok",
+      "actual": "Совпадает: validate() — MAX_SQL_LEN=6000, AST через json_serialize_sql, reject табличных функций, allow-list = таблицы схемы + CTE (resolver_index скрыт из схемы), денайлист _INTERNAL_FUNCS (current_setting/current_database/getenv/pg_read*).",
+      "evidence": "[код] ubuntu/serenedb/serene_report.py:370 (MAX_SQL_LEN), :405-410 (json_serialize_sql), :443-462 (validate: tf reject, allowed, _INTERNAL_FUNCS), :127 (resolver_index скрыт из get_schema)"
+    },
+    {
+      "idx": 52,
+      "doc": "docs/SERENEDB.md",
+      "line": 71,
+      "claim": "Денайлисты FORBIDDEN/FS_ACCESS/INTERNAL_OBJECTS остаются как fallback, если AST недоступен",
+      "status": "ok",
+      "actual": "Совпадает: при info is None валидатор уходит в _validate_fallback на трёх денайлистах.",
+      "evidence": "[код] ubuntu/serenedb/serene_report.py:73-96 (три regex-денайлиста), :382-394 (_validate_fallback), :451-452 (откат при недоступном AST)"
+    },
+    {
+      "idx": 53,
+      "doc": "docs/SERENEDB.md",
+      "line": 73,
+      "claim": "Роль serene_ro — read-only: SELECT работает, любая запись -> permission denied (проверено test_ro_role)",
+      "status": "ok",
+      "actual": "Совпадает: живые привилегии — SELECT на search_corpus есть, INSERT нет; тест test_ro_role.py существует и проверяет INSERT/UPDATE/DELETE/DROP/CREATE/TRUNCATE.",
+      "evidence": "[замер] psql has_table_privilege: ro_corpus(SELECT)=t, ro_ins(INSERT)=f; [код] ubuntu/serenedb/test_ro_role.py:31-60"
+    },
+    {
+      "idx": 54,
+      "doc": "docs/SERENEDB.md",
+      "line": 74,
+      "claim": "Роль serene_resolver читает resolver_index (positive control); у serene_ro доступ к resolver_index отозван",
+      "status": "ok",
+      "actual": "Совпадает на живой базе: serene_resolver SELECT на resolver_index = t, serene_ro = f.",
+      "evidence": "[замер] psql: has_table_privilege('serene_ro','resolver_index','SELECT')=f, has_table_privilege('serene_resolver','resolver_index','SELECT')=t"
+    },
+    {
+      "idx": 55,
+      "doc": "docs/SERENEDB.md",
+      "line": 77,
+      "claim": "Движковый лимит доступа к ФС недостижим: enable_external_access/allowed_directories — GLOBAL-only и ломают загрузчик; доступ к файлам держит только валидатор",
+      "status": "ok",
+      "actual": "Согласуется с кодом и зафиксировано в двух местах кода; повторная проверка требует смены GLOBAL-настроек движка (запрещено). Для пути отчётов доступ к файлам действительно держит только валидатор.",
+      "evidence": "[код] ubuntu/serenedb/setup_ro_role.sql:31-34 («enable_external_access — глобальный one-way латч... Доступ к файлам ограничивает ТОЛЬКО валидатор»); serene_report.py:35-38 — тот же вывод"
+    },
+    {
+      "idx": 56,
+      "doc": "docs/SERENEDB.md",
+      "line": 94,
+      "claim": "Регистры опубликованы в OData (2026-07-25): состав 1128 -> 3645 объектов, сущностей 2968 -> 4585, из них 212 регистров накопления, 1402 регистра сведений, 2 бухгалтерии, план счетов",
+      "status": "ok",
+      "actual": "Ключевое число подтверждено живым стендом: в base_profile ровно 4585 сущностей OData. Разбивка по видам — датированный замер 25.07, живой пересчёт по видам не делался, но противоречий нет.",
+      "evidence": "[замер] psql: SELECT count(*) FROM base_profile → 4585"
+    },
+    {
+      "idx": 57,
+      "doc": "docs/SERENEDB.md",
+      "line": 98,
+      "claim": "В базе 1С 104 проведённых документа, 280 проводок, 44 записи в регистрах накопления (INSTALL_LOG.md:139-143)",
+      "status": "ok",
+      "actual": "Ссылка точная: docs/INSTALL_LOG.md в этих строках содержит ровно эти числа («104 проведённых документа за 6 месяцев (280 проводок, 44 записи в регистрах накопления)»).",
+      "evidence": "[код] docs/INSTALL_LOG.md:139-141 — дословно те же числа"
+    },
+    {
+      "idx": 58,
+      "doc": "docs/SERENEDB.md",
+      "line": 99,
+      "claim": "Корпус — 97 965 строк по 235 сущностям, расхождений с $count ноль (STATE_2026-07-26.md)",
+      "status": "disc",
+      "actual": "Написано в настоящем времени, но это снимок 26.07: живой search_corpus — 103 808 строк, search_tables — 231 сущность (и появилась вторая база ut_test с 623 565 строками). Число 97 965 сохранилось только в tmp_prod_corpus и search_corpus_backup_20260727.",
+      "evidence": "[замер] psql: search_corpus=103808, search_tables=231 (dbname=postgres); stand-db: tmp_prod_corpus=97965, backup_20260727=97965",
+      "verdict": "a",
+      "verdict_why": "Док отстал от живых данных: корпус растёт конвейером — обновить числа или явно пометить как снимок 26.07"
+    },
+    {
+      "idx": 59,
+      "doc": "docs/SERENEDB.md",
+      "line": 103,
+      "claim": "Под read-only профилем часть регистров отдаёт «Доступ запрещен» (код 20), например подсистемные ЕГАИС/САТУРН; преполёт помечает такие сущности",
+      "status": "ok",
+      "actual": "Совпадает: перепись распознаёт «Доступ» в теле ответа 1С и помечает problem='нет прав'; на живом стенде 934 сущности с проблемой, из них 909 «закрыто правами» в search_quality.",
+      "evidence": "[код] ubuntu/serenedb/odata_census.py:87-88,121 (распознание «Доступ», подсчёт denied); [замер] psql: base_profile with_problem=934; search_quality cov_ent_denied=909 (stand-db)"
+    },
+    {
+      "idx": 60,
+      "doc": "docs/SERENEDB.md",
+      "line": 115,
+      "claim": "Полнотекст USING inverted(col dict) + BM25 с кириллицей работает на нашей сборке",
+      "status": "ok",
+      "actual": "Работает прямо сейчас: живой inverted-индекс search_idx со словарём отвечает на кириллический ts_phrase; на нём стоит весь продукт (serene_ask).",
+      "evidence": "[замер] psql: SELECT count(*) FROM search_idx WHERE doc @@ ts_phrase('казань') → 56"
+    },
+    {
+      "idx": 61,
+      "doc": "docs/SERENEDB.md",
+      "line": 117,
+      "claim": "ai_embed(text, model, secret) работает с любым OpenAI-совместимым эндпоинтом; без параметра dimensions модель отдаёт свой дефолт (DashScope — 1024, у нас индекс 1536)",
+      "status": "disc",
+      "actual": "Первая половина верна и теперь подтверждена продом: весь конвейер эмбеддит через ai_embed (3 аргумента, dimensions нет), DashScope отдаёт 1024. Но «у нас индекс 1536» устарело: живые resolver_index и search_corpus — FLOAT[1024], размерность выбрана ПОД дефолт ai_embed. Устарел и вывод дока «ai_embed пока не заменяет наш питоновский эмбеддер» (строка 180) — заменил полностью.",
+      "evidence": "[замер] psql duckdb_columns(): resolver_index.emb=FLOAT[1024]; [код] build.sh:35 (EMBED_DIM=1024), embed_missing.sh:236 (ai_embed(txt,model,secret)::FLOAT[$DIM]), corpus_precheck.sql:63 (контроль размерности тестовым вызовом)",
+      "verdict": "a",
+      "verdict_why": "Док отстал: проект перешёл на ai_embed@1024 (штатное средство движка, п. 20 TARGET) — упоминание «индекс 1536» больше не про нас"
+    },
+    {
+      "idx": 62,
+      "doc": "docs/SERENEDB.md",
+      "line": 118,
+      "claim": "postgres_attach работает: ATTACH ... (TYPE postgres, READ_ONLY) читает таблицы braine напрямую",
+      "status": "unverifiable",
+      "actual": "Датированный замер 25.07; повтор требует ATTACH (изменение состояния сервера — запрещено). Сейчас присоединённых Postgres-баз нет (pg_database: только postgres и ut_test), в проде механизм не используется; braine выведен из контура 26.07.",
+      "evidence": "[замер] psql pg_database → postgres, ut_test (stand-db); повтор ATTACH запрещён условиями аудита"
+    },
+    {
+      "idx": 63,
+      "doc": "docs/SERENEDB.md",
+      "line": 127,
+      "claim": "Поиск @@ работает только в форме FROM имя_индекса; FROM таблица WHERE col @@ ... даёт ERROR: TSQUERY expression evaluated outside an @@ match",
+      "status": "ok",
+      "actual": "Воспроизведено на живом стенде обе формы: FROM search_idx — 56 строк; FROM search_corpus — ровно та ошибка, дословно.",
+      "evidence": "[замер] psql: FROM search_idx WHERE doc @@ ts_phrase('казань') → 56; FROM search_corpus WHERE doc @@ ts_phrase('казань') → ERROR: TSQUERY expression evaluated outside an `@@` match against an inverted-indexed column."
+    },
+    {
+      "idx": 64,
+      "doc": "docs/SERENEDB.md",
+      "line": 149,
+      "claim": "CREATE TEXT SEARCH DICTIONARY: template обязателен ('text'), locale обязательна; без case='lower' поиск регистрозависим (СБЕРБАНК 56 / Сбербанк 4 / сбербанк 0; с lower — 62 везде)",
+      "status": "ok",
+      "actual": "Рецепт живёт в проде: corpus_init.sql создаёт search_dict ровно с template='text', locale, case='lower', и словарь работает (поиск в нижнем регистре 'казань' находит; данные — верхним регистром). Конкретные числа 56/4/0/62 — датированный замер, не повторялся.",
+      "evidence": "[код] ubuntu/serenedb/corpus_init.sql:66-68 (template='text', locale=:dict_locale, case='lower'); [замер] ts_phrase('казань') → 56 при данных в верхнем регистре — регистронезависимость подтверждена"
+    },
+    {
+      "idx": 65,
+      "doc": "docs/SERENEDB.md",
+      "line": 163,
+      "claim": "HNSW нет ни в сборке, ни в исходниках main: kKnownOpclassTypes = {included, ivf}, каталог columnstore/ удалён; остались только проза и демки",
+      "status": "ok",
+      "actual": "Подтверждено по локальной копии исходников: kKnownOpclassTypes содержит ровно kIncludedKind и kIVFKind (строки 110-113 — совпадает с цитатой дока), каталога libs/iresearch/include/iresearch/columnstore/ нет, а scripts/perf/sweep_hnsw.sh:16 ссылается на несуществующий columnstore/hnsw.cpp.",
+      "evidence": "[код] /srv/serenedb-src/server/catalog/index.cpp:110-113; ls libs/iresearch/include/iresearch/columnstore → No such file; scripts/perf/sweep_hnsw.sh:16"
+    },
+    {
+      "idx": 66,
+      "doc": "docs/SERENEDB.md",
+      "line": 209,
+      "claim": "SELECT колонки вне индекса и INCLUDE из view-backed inverted index даёт documented error «materialising real columns ... is not yet supported»",
+      "status": "ok",
+      "actual": "Ошибка существует в исходнике дословно, бросается когда view не над распознанным fast-path-источником: «materialising real columns from this view-backed inverted index is not yet supported -- view body must be a simple SELECT * FROM <reader>(literal_args)...».",
+      "evidence": "[код] /srv/serenedb-src/server/connector/duckdb_search_full_scan.cpp:1188-1195; index_source_factory.cpp:51"
+    },
+    {
+      "idx": 67,
+      "doc": "docs/SERENEDB.md",
+      "line": 213,
+      "claim": "Fast-path-реестр (server/connector/view_fast_path.cpp) содержит read_parquet, read_csv, read_json, read_ndjson, read_json_objects; postgres_scan — явный TODO",
+      "status": "ok",
+      "actual": "Совпадает: реестр содержит перечисленные функции (плюс read_ndjson_objects и алиасы *_auto), postgres_scan — в комментарии TODO.",
+      "evidence": "[код] /srv/serenedb-src/server/connector/view_fast_path.cpp:82-113 (реестр), :140 («TODO: read_avro, postgres_scan / postgres_query»), :147-151 (алиасы)"
+    },
+    {
+      "idx": 68,
+      "doc": "docs/SERENEDB.md",
+      "line": 234,
+      "claim": "NUMERIC/DECIMAL не индексируется inverted-индексом (unsupported type DECIMAL(14,2)); деньги приводить в VIEW к DOUBLE",
+      "status": "ok",
+      "actual": "Подтверждено исходником: Classify() для индексируемых колонок не знает DECIMAL (default → Unsupported) → ошибка «has unsupported type ... can not be indexed»; DECIMAL разрешён только в INCLUDE. DOUBLE индексируется (NumericF64).",
+      "evidence": "[код] /srv/serenedb-src/server/catalog/inverted_index.h:70-108 (Classify: DECIMAL отсутствует → Unsupported), inverted_index.cpp:236 (текст ошибки), :281 (DECIMAL допустим в included::Validate)"
+    },
+    {
+      "idx": 69,
+      "doc": "docs/SERENEDB.md",
+      "line": 237,
+      "claim": "Векторная колонка для ivf обязана быть фиксированной FLOAT[N]; переменный FLOAT[] даёт ошибку Column must be ARRAY(FLOAT, N)",
+      "status": "ok",
+      "actual": "Подтверждено исходником: ivf::Validate бросает «Column '...' must be ARRAY(FLOAT, N) to use the 'ivf' opclass, not ...» при нулевой размерности (LIST/переменный массив).",
+      "evidence": "[код] /srv/serenedb-src/server/catalog/inverted_index.cpp:325-336"
+    },
+    {
+      "idx": 70,
+      "doc": "docs/SERENEDB.md",
+      "line": 256,
+      "claim": "Индекс — снимок: не отслеживает изменения источника; свежесть регулируется пересборкой (0.4–0.5 с на 50 тыс. строк)",
+      "status": "ok",
+      "actual": "Снимковая природа подтверждается живой практикой: после каждого MERGE конвейер обязан явно публиковать индекс VACUUM (REFRESH_INDEX) search_idx, иначе поиск не видит изменений (в транзакции — тихий no-op). Тайминг 0.4-0.5 с — датированный замер.",
+      "evidence": "[код] ubuntu/serenedb/build.sh:269 (VACUUM (REFRESH_INDEX) search_idx || fail), corpus_merge.sql:146-157 (REFRESH_INDEX нарочно вне транзакции)"
+    },
+    {
+      "idx": 71,
+      "doc": "docs/SERENEDB.md",
+      "line": 263,
+      "claim": "ATTACH сохраняется между сессиями, но не переживает рестарт сервера — после рестарта нужен повторный ATTACH",
+      "status": "unverifiable",
+      "actual": "Проверка требует ATTACH и рестарта движка — оба действия запрещены (изменение состояния; рестарт при незавершённой сборке роняет инстанс в OOM-петлю). Присоединённых баз сейчас нет, наблюдать не на чем.",
+      "evidence": "[замер] pg_database → только postgres, ut_test; повтор требует ATTACH+restart — запрещено"
+    },
+    {
+      "idx": 72,
+      "doc": "docs/SERENEDB.md",
+      "line": 272,
+      "claim": "Поле DataVersion отдаётся штатным OData проекцией $select=Ref_Key,DataVersion и меняется при каждой записи объекта",
+      "status": "ok",
+      "actual": "Подтверждено тем, что на этом стоит живой дельта-синк: проба $select=Ref_Key,DataVersion, сравнение с витриной, дотяжка изменённых — все три случая (добавление/удаление/изменение) проверены замером 28.07 и работают в проде.",
+      "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:415-416,452-466 (проба версий), CHANGELOG.md:1263-1280 ([замер] 28.07: все три случая проверены)"
+    },
+    {
+      "idx": 73,
+      "doc": "docs/SERENEDB.md",
+      "line": 339,
+      "claim": "Решение владельца (2026-07-25): опрос изменений раз в 10 минут; вебхук/расширение/план обмена не нужны",
+      "status": "disc",
+      "actual": "Решение о 10 минутах ОТМЕНЕНО более поздним указанием владельца 28.07: «убираем понятие ночной... не делать самим себе ограничения по времени; по готовности, не по часам». Живой конвейер — 1c-serene-pipeline.timer OnUnitInactiveSec=1min (такт по готовности, ~каждую минуту). Часть «вебхук/расширение/план обмена не нужны» остаётся в силе (в 1С ничего не ставится).",
+      "evidence": "[код] CHANGELOG.md:1263-1267 (указание владельца 28.07 дословно); [замер] /etc/systemd/system/1c-serene-pipeline.timer:10 → OnUnitInactiveSec=1min",
+      "verdict": "a",
+      "verdict_why": "Оба решения — владельца, действует более позднее (28.07 «по готовности»); док фиксирует отменённое как действующее — править док"
+    },
+    {
+      "idx": 74,
+      "doc": "docs/SERENEDB.md",
+      "line": 352,
+      "claim": "1c-serene-sync сейчас делает полную перезагрузку всех сущностей и полную пересборку резолвера: 3 мин 31 с, резолвер 624 значения эмбеддятся заново",
+      "status": "disc",
+      "actual": "«Сейчас» неверно: синк идёт дельтой по DataVersion (полная — только фолбэк), резолвер синком не строится вообще (build.sh, инкрементально — векторы только новым значениям), в резолвере 115 151 значение, а не 624. Описанное состояние — до правок 28.07.",
+      "evidence": "[код] ubuntu/serenedb/serene_sync.py:185-224 (сначала дельта), :237-241 (резолвер строит build.sh); [замер] psql: resolver_index → 115 151 строк",
+      "verdict": "a",
+      "verdict_why": "Док отстал: дельта-план, изложенный тут же ниже, давно внедрён по указанию владельца 28.07 — раздел надо перевести в прошедшее время"
+    },
+    {
+      "idx": 75,
+      "doc": "docs/SERENEDB.md",
+      "line": 377,
+      "claim": "Резолвер эмбеддит мусор: в индекс попадают DataVersion (base64-штампы) и *_navigationLinkUrl (URL); отсечение — отдельная правка",
+      "status": "disc",
+      "actual": "«Отдельная правка» давно сделана: живая сборка резолвера структурно отсекает DataVersion/PredefinedDataName, %_Base64Data, спутники _Type, URL/пути и GUID — ровно тем способом «по данным, а не по именам», который док предлагает как будущее.",
+      "evidence": "[код] ubuntu/serenedb/resolver_build.sql:57-68 (NOT IN ('DataVersion','PredefinedDataName'), NOT LIKE '%_Base64Data', не-спутник), :66-68 (regexp: не URL/путь, не GUID)",
+      "verdict": "a",
+      "verdict_why": "Док отстал от кода: отсечение внедрено в resolver_build.sql — снять пункт как сделанный"
+    },
+    {
+      "idx": 76,
+      "doc": "docs/SERENEDB.md",
+      "line": 389,
+      "claim": "IVF-индекс на resolver_index не внедрён — включать при росте до >10^4 значений",
+      "status": "disc",
+      "actual": "Факт «не внедрён» верен (живые индексы — только search_idx и alias_idx, ivf нет). Но рекомендация «включать при >10^4» отменена реальностью: значений уже 115 151 (>10^4 в 11 раз), а ivf в SereneDB заблокирован решением владельца — сборка IVF на 1536-векторах виснет с порога 6000 строк и роняет инстанс (SERENEDB_IVF_ISSUE_RU.md).",
+      "evidence": "[замер] psql duckdb_indexes() → только search_idx, alias_idx (ivf нет); resolver_index=115 151; [код] memory_bank/owner-memory/project-serenedb-ivf-blocked.md (вектор в SereneDB заблокирован)",
+      "verdict": "a",
+      "verdict_why": "Док отстал: условие «>10^4» давно наступило, а включение ivf запрещено решением владельца (project-serenedb-ivf-blocked.md) — рекомендацию править"
+    },
+    {
+      "idx": 77,
+      "doc": "docs/SERENEDB.md",
+      "line": 394,
+      "claim": "Backup: первичное восстановление — ре-синк из 1С; быстрый restore — оффлайн-снапшот /var/lib/serenedb через serenedb_backup.sh с ротацией; pg_dump не годится",
+      "status": "ok",
+      "actual": "Совпадает: скрипт останавливает serenedb, tar czf в /root/backups/serenedb, ротация KEEP=7; каталог бэкапов существует. «pg_dump не годится» согласуется с неполной PG-совместимостью (даже \\l падает на живом движке). Оговорка: скрипт запускается только вручную, ни один таймер его не зовёт.",
+      "evidence": "[код] ubuntu/serenedb/serenedb_backup.sh:10-20 (KEEP=7, tar, ротация); [замер] каталог /root/backups/serenedb существует; stand-db: \\l → ERROR (движок не полный PG)"
+    },
+    {
+      "idx": 78,
+      "doc": "docs/SERENEDB.md",
+      "line": 399,
+      "claim": "Гейты: test_validate, test_integrity, test_caveat, test_ro_role, test_e2e — все схемо-агностичны, гоняются перед деплоем/после синка",
+      "status": "disc",
+      "actual": "«Гоняются перед деплоем/после синка» кодом не держится: ни build.sh, ни pipeline.sh, ни deploy.sh, ни setup.sh, ни хуки их не вызывают — запуск только ручной. Часть тестов отстала от живой архитектуры: test_integrity ждёт резолвер размерности 1536 (живой — 1024) и читает serene-entities.txt (синк его не использует); test_e2e/test_validate проверяют путь отчётов, а не основной путь serene_ask. Фактические гейты такта — corpus_precheck/corpus_postcheck (fail-closed) в build.sh.",
+      "evidence": "[замер] grep test_validate|test_integrity|test_e2e|test_ro_role|test_caveat по build.sh, pipeline.sh, deploy.sh, setup.sh, .claude/hooks/*.sh → 0 вызовов; [код] ubuntu/serenedb/test_integrity.py:24-26 (EMBED_DIM 1536), :104 (serene-entities.txt)",
+      "verdict": "a",
+      "verdict_why": "Док отстал: роль гейтов такта перешла к corpus_precheck/postcheck в build.sh; старые test_* остались ручными и частично несовместимы с текущей схемой — раздел править"
+    }
+  ]
+}

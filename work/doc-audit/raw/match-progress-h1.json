@@ -1,0 +1,348 @@
+{
+  "shard": "progress",
+  "half": 1,
+  "results": [
+    {
+      "idx": 0,
+      "doc": "memory_bank/progress.md",
+      "line": 18,
+      "claim": "Выкатка бота стала кодом: ubuntu/openclaw/deploy_instance.sh — персона, мост, плагин-гейт, чистка рабочей папки, отметка setupCompletedAt",
+      "status": "ok",
+      "actual": "Скрипт существует и делает всё перечисленное: копирует AGENTS.md, опустошает заготовки движка, выкатывает mcp_ask.py с рестартом 1c-mcp-ask, ищет плагин-гейт, ставит setupCompletedAt",
+      "evidence": "[код] ubuntu/openclaw/deploy_instance.sh:31 (AGENTS.md), :39-49 (заготовки), :53-57 (мост+рестарт), :61-70 (плагин-гейт), :76-86 (setupCompletedAt)"
+    },
+    {
+      "idx": 1,
+      "doc": "memory_bank/progress.md",
+      "line": 24,
+      "claim": "Удаление SOUL.md/BOOTSTRAP.md не работает — движок кладёт файл обратно через 18 секунд; работает перезапись пустышкой",
+      "status": "ok",
+      "actual": "Код перезаписывает BOOTSTRAP.md/SOUL.md/IDENTITY.md/TOOLS.md/USER.md пустышкой, а не удаляет; комментарий фиксирует замер 04:17:03 → 04:17:21 (18 секунд)",
+      "evidence": "[код] ubuntu/openclaw/deploy_instance.sh:33-49 — «заготовки не стираются, а ПЕРЕЗАПИСЫВАЮТСЯ пустышкой», цикл printf | tee по пяти файлам"
+    },
+    {
+      "idx": 2,
+      "doc": "memory_bank/progress.md",
+      "line": 32,
+      "claim": "Прогонщик приёмки перенесён в work/acceptance/run_acceptance.py и проверяет поведение (отказ/переспрос), а не только число",
+      "status": "ok",
+      "actual": "Файл существует; проверяет kinds no_data/clarify по признакам отказа и уточнения в тексте ответа",
+      "evidence": "[код] work/acceptance/run_acceptance.py:28 (kinds), :92-100 (is_clar/is_refuse и сверка с no_data/clarify)"
+    },
+    {
+      "idx": 3,
+      "doc": "memory_bank/progress.md",
+      "line": 39,
+      "claim": "Полный замер ночи RUN_TAG=v12 задокументирован в docs/ACCEPTANCE_UT.md: вопросы 1-30 — верно 7, уточнений 3, неверно 6, без эталона 13",
+      "status": "ok",
+      "actual": "Таблица в ACCEPTANCE_UT.md даёт итого 1-30: 7/3/6/13; 31-58 объявлены недействительными (обрыв ключа DeepSeek)",
+      "evidence": "[код] docs/ACCEPTANCE_UT.md:913-928 — таблица «итого 1-30: 7, 3, 6, 13»"
+    },
+    {
+      "idx": 4,
+      "doc": "memory_bank/progress.md",
+      "line": 57,
+      "claim": "Промты сервиса возвращены к прежней (несокращённой) редакции — польза сокращения не подтвердилась",
+      "status": "ok",
+      "actual": "Действующие промты serene_ask.py совпадают с редакцией до сокращения (коммит 4a53882^) по 5 из 6 блоков дословно; в INTENT_SYS отличие только в двух нейтрализованных примерах (Moscow/Acme → X/Y). Суммарно 8141 символ против прежних 8154",
+      "evidence": "[замер] diff промтов HEAD против 4a53882^: ANSWER/CLARIFY/COVERAGE/PICK/REFUSE SAME, INTENT_SYS отличается двумя строками примеров; сумма len(*_SYS)=8141. [код] коммит f79424a — контрольный опыт на несокращённых промтах"
+    },
+    {
+      "idx": 5,
+      "doc": "memory_bank/progress.md",
+      "line": 64,
+      "claim": "Контрольным опытом возвращена прежняя персона бота от 30.07 как лучшее известное; развилка — решение владельца",
+      "status": "ok",
+      "actual": "Живая персона бота (/home/undebot/.openclaw/workspace/AGENTS.md, 9416 Б) побайтно совпадает с версией 30.07 из git (коммит 4b78be5, 2026-07-30 12:25); в репозитории HEAD лежит новая (3867 Б) — развилка зафиксирована и в activeContext.md как ожидающая владельца",
+      "evidence": "[замер] md5sum /home/undebot/.openclaw/workspace/AGENTS.md = 03c8e193c77a5ced9e212b61bfa5a15c = git show 4b78be5:ubuntu/openclaw/instance/AGENTS.md; activeContext.md:29-47 («Сейчас первый diff РАЗОЙДЁТСЯ намеренно», «Развилка... решение владельца»)"
+    },
+    {
+      "idx": 6,
+      "doc": "memory_bank/progress.md",
+      "line": 68,
+      "claim": "Название сущности служит её алиасом само по себе (из search_tables.label)",
+      "status": "ok",
+      "actual": "В проверке алиасов label сущности добавляется к словам алиасов через UNION ALL SELECT label FROM search_tables",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:2390-2408 — «СОБСТВЕННОЕ НАЗВАНИЕ СУЩНОСТИ — ТОЖЕ ЕЁ СЛОВО», SQL с UNION ALL SELECT label FROM search_tables"
+    },
+    {
+      "idx": 7,
+      "doc": "memory_bank/progress.md",
+      "line": 73,
+      "claim": "Единственная причина всех неверных ответов — выбор сущности; арифметика верна везде, гейт ни разу не пропустил выдуманное число",
+      "status": "ok",
+      "actual": "Вывод совпадает с документом-первоисточником замера: «Ни одного дефекта счёта: арифметика верна везде. Оставшееся — выбор сущности и величины»; «10 из 11 — выбор сущности»",
+      "evidence": "[код] docs/ACCEPTANCE_UT.md:738-741, :992-1000; activeContext.md:56-57 (гейт ни разу не пропустил число, которого нет в данных). Перепрогон модели для независимой проверки невозможен в рамках аудита, запись согласована между документами"
+    },
+    {
+      "idx": 8,
+      "doc": "memory_bank/progress.md",
+      "line": 86,
+      "claim": "Партнёров в корпусе второй базы 164 (= живой 1С), контрагентов 155, номенклатуры 252",
+      "status": "ok",
+      "actual": "В search_corpus базы ut_test: catalog_партнеры = 164, catalog_контрагенты = 155, catalog_номенклатура = 252. Сверку с живой 1С повторить нельзя (шлюз 401 без кредов), числа корпуса совпадают",
+      "evidence": "[замер] psql dbname=ut_test SELECT src_table, count(*) ... GROUP BY → партнеры 164, контрагенты 155, номенклатура 252"
+    },
+    {
+      "idx": 9,
+      "doc": "memory_bank/progress.md",
+      "line": 93,
+      "claim": "Корпус второй базы — 623 565 строк, дублей ключа 0",
+      "status": "ok",
+      "actual": "count(*) = 623565, дублей пары (src_table, row_key) = 0",
+      "evidence": "[замер] psql dbname=ut_test SELECT count(*), count(*)-count(DISTINCT src_table||'|'||row_key) FROM search_corpus → 623565 | 0"
+    },
+    {
+      "idx": 10,
+      "doc": "memory_bank/progress.md",
+      "line": 94,
+      "claim": "Корпус первой базы — 103 808 строк, расхождений 0",
+      "status": "ok",
+      "actual": "count(*) = 103808 в базе postgres; REGRESSION_BASE1.md подтверждает 103 808 без изменений по всем последним правкам",
+      "evidence": "[замер] psql dbname=postgres SELECT count(*) FROM search_corpus → 103808; [код] docs/REGRESSION_BASE1.md:22,91-92"
+    },
+    {
+      "idx": 11,
+      "doc": "memory_bank/progress.md",
+      "line": 100,
+      "claim": "Защита «удаление >10%» считает по ОБЪЕКТАМ; смена ключа больше не считается потерей",
+      "status": "ok",
+      "actual": "Защита в corpus_merge.sql считает потерю объектов: строка не считается ушедшей, если находится в новом состоянии под ключом с отрезанным sha1-отпечатком (regexp_replace '#[0-9a-f]{40}$')",
+      "evidence": "[код] ubuntu/serenedb/corpus_merge.sql:42-70 — «СЧИТАЕМ ПОТЕРЮ ОБЪЕКТОВ, А НЕ ИСЧЕЗНОВЕНИЕ КЛЮЧЕЙ», два NOT EXISTS: по своему ключу и по ключу без отпечатка"
+    },
+    {
+      "idx": 12,
+      "doc": "memory_bank/progress.md",
+      "line": 101,
+      "claim": "poc_load_entity.py входит в отпечаток пропуска пересборки",
+      "status": "ok",
+      "actual": "Отпечаток SQL_HASH = md5(corpus_build.sql + poc_load_entity.py) и сравнивается с build_sql_hash в условии пропуска SKIP_BUILD",
+      "evidence": "[код] ubuntu/serenedb/build.sh:163 (SQL_HASH=$(cat corpus_build.sql poc_load_entity.py ... | md5sum)), :180 (сравнение с note build_sql_hash)"
+    },
+    {
+      "idx": 13,
+      "doc": "memory_bank/progress.md",
+      "line": 105,
+      "claim": "Ловушка планировщика 33: сравнение колонки из LEFT JOIN с колонкой левой таблицы в фильтре молча не применяется; в нашем коде образец не встречается",
+      "status": "ok",
+      "actual": "Ловушка задокументирована с таблицей замера в techContext.md; в SQL сборки LEFT JOIN-фильтры используют разрешённые формы (константы, coalesce(...) с константой, NOT EXISTS), образец сравнения joined-колонки с левой в WHERE не найден точечной проверкой",
+      "evidence": "[код] memory_bank/techContext.md:403-413 (ловушка 33 с замером 30.07); grep LEFT JOIN по ubuntu/serenedb/*.sql + чтение corpus_build.sql:444-475 — WHERE сравнивает с константами (coalesce(c.own_ref,false), coalesce(c.own_prop,true))"
+    },
+    {
+      "idx": 14,
+      "doc": "memory_bank/progress.md",
+      "line": 128,
+      "claim": "1c-mcp-ask слушает :6016 — мост ask_1c к serene_ask (:8099), пробрасывает focus/measure/context; MCP_TOKEN fail-closed",
+      "status": "ok",
+      "actual": "Порт 6016 слушает процесс юнита 1c-mcp-ask (active); юнит задаёт MCP_PORT=6016, ASK_URL=http://127.0.0.1:8099; код пробрасывает focus/measure/context и не стартует без MCP_TOKEN (SystemExit(2)), запросы без Bearer — 401",
+      "evidence": "[замер] ss -ltnp → 127.0.0.1:6016 python pid=3173753; systemctl is-active 1c-mcp-ask → active, systemctl cat → MCP_PORT=6016, ASK_URL=:8099. [код] ubuntu/openclaw/mcp_ask.py:62-65 (fail-closed), :78-85 (focus/measure/context)"
+    },
+    {
+      "idx": 15,
+      "doc": "memory_bank/progress.md",
+      "line": 132,
+      "claim": "Мёртвый braine (second-brain → :8090) убран из конфигурации бота",
+      "status": "ok",
+      "actual": "В живой конфигурации бота (/home/undebot/.openclaw/openclaw.json) сервера second-brain (:6014) нет — только second-brain-reports (:6015) и serene-ask (:6016). Оговорка: эталонная копия в репозитории (ubuntu/openclaw/instance/openclaw.json:97-110) до сих пор содержит second-brain :6014 и не содержит :6016 — репо-копия отстала от стенда (deploy_instance.sh openclaw.json не выкатывает); также сам мост 1c-mcp-braine на стенде продолжает работать как сервис",
+      "evidence": "[замер] grep по /home/undebot/.openclaw/openclaw.json → servers: second-brain-reports (:6015) и serene-ask (:6016), second-brain отсутствует. [код] ubuntu/openclaw/instance/openclaw.json:97-110 — second-brain :6014 ещё на месте (расхождение репо/стенд, к данному утверждению дока не относится)"
+    },
+    {
+      "idx": 16,
+      "doc": "memory_bank/progress.md",
+      "line": 134,
+      "claim": "Вики: 697 страниц собирает база (wiki_build.sql), публикует wiki_publish.sh, алиасы даёт openclaw agent — всё шагами такта",
+      "status": "ok",
+      "actual": "wiki_pages в ut_test = 697 строк; в хранилище бота /home/undebot/.openclaw/wiki/main/entities 698 файлов; wiki_publish.sh прогоняет wiki_build.sql и выгружает страницы; wiki_alias.sh зовёт openclaw agent; оба — шаги build.sh",
+      "evidence": "[замер] psql dbname=ut_test SELECT count(*) FROM wiki_pages → 697; ls .../wiki/main/entities | wc -l → 698. [код] ubuntu/serenedb/build.sh:286-287 (wiki_alias.sh, wiki_publish.sh); wiki_publish.sh:24 (psql -f wiki_build.sql); wiki_alias.sh:79,199 (openclaw agent)"
+    },
+    {
+      "idx": 17,
+      "doc": "memory_bank/progress.md",
+      "line": 137,
+      "claim": "Модель бота и сервиса — deepseek-v4-pro (указание владельца)",
+      "status": "ok",
+      "actual": "Бот: primary = deepseek/deepseek-v4-pro в живом конфиге; сервис: DEEPSEEK_MODEL=deepseek-v4-pro в /etc/1c-serene-ask.env, дефолт в коде тот же",
+      "evidence": "[замер] /home/undebot/.openclaw/openclaw.json:18 «primary: deepseek/deepseek-v4-pro»; /etc/1c-serene-ask.env: DEEPSEEK_MODEL=deepseek-v4-pro. [код] ubuntu/serenedb/serene_ask.py:169"
+    },
+    {
+      "idx": 18,
+      "doc": "memory_bank/progress.md",
+      "line": 119,
+      "claim": "Бот отвечает по данным второй базы ut_test (решение владельца 30.07)",
+      "status": "ok",
+      "actual": "Живой процесс serene_ask.py на :8099 (в него ходит мост :6016 бота) работает с SERENEDB_DSN_RO=...dbname=ut_test и RESOLVER_DSN=...dbname=ut_test",
+      "evidence": "[замер] tr '\\0' '\\n' < /proc/3109129/environ → SERENEDB_DSN_RO=host=127.0.0.1 port=7890 user=serene_ro dbname=ut_test; ASK_LISTEN_PORT=8099"
+    },
+    {
+      "idx": 19,
+      "doc": "memory_bank/progress.md",
+      "line": 165,
+      "claim": "Модель формулирует параметры подсчёта; имя величины сверяется с measures_of, выдуманное до калькулятора не доходит",
+      "status": "ok",
+      "actual": "План модели (quantity/compute) проверяется: если plan['quantity'] not in measures_of(picked[0]) — величина отбрасывается (quantity_rejected); measures_of читает имена из map_keys(nums) корпуса",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:1162-1187 (проверка по данным, quantity_rejected), :902-916 (measures_of из данных), :2698, :2717"
+    },
+    {
+      "idx": 20,
+      "doc": "memory_bank/progress.md",
+      "line": 172,
+      "claim": "Ответ на один и тот же вопрос НЕ ПОВТОРЯЕТСЯ: намерение извлекается одним словом, от грамматического числа зависит выбор сущности; способ починки — решение владельца",
+      "status": "hist",
+      "actual": "Журнальная запись от 30.07, верная на свою дату: дефект задокументирован замером (6 вызовов: закупки/закупка → 4 отказа/2 верных) в DEFECT_FOCUS_CHOICE §1-бис. Но часть «способ починки — решение владельца» опровергнута 31.07 в том же документе: владелец указал, что решения уже записаны (TARGET.md пп. 3, 12, 19, 21), выносить было не нужно. progress.md — явно «история по дням», текущее состояние живёт в activeContext",
+      "evidence": "[код] docs/DEFECT_FOCUS_CHOICE.md:52-72 (§1-бис, замер 6 вызовов), :121-135 («Я зря вынес это владельцу — решения уже записаны», таблица пп. 3/12/19/21); memory_bank/progress.md:1-5 (шапка: «Здесь — история по дням»)"
+    },
+    {
+      "idx": 21,
+      "doc": "memory_bank/progress.md",
+      "line": 198,
+      "claim": "Объявленный ключ не попадает в величины: SurrogateKey 656 → 0 сущностей, LineNumber 359 → 0",
+      "status": "ok",
+      "actual": "Сегодня в ut_test ни одна сущность не имеет SurrogateKey или LineNumber среди ключей nums: 0 и 0",
+      "evidence": "[замер] psql dbname=ut_test: count(DISTINCT src_table) FILTER (k='SurrogateKey') / (k='LineNumber') по unnest(map_keys(nums)) → 0 | 0"
+    },
+    {
+      "idx": 22,
+      "doc": "memory_bank/progress.md",
+      "line": 219,
+      "claim": "Вопрос 10 «сколько позиций номенклатуры» — эталон 227 (группы не позиции); группы есть лишь у 26 сущностей из 697",
+      "status": "ok",
+      "actual": "catalog_номенклатура: 227 позиций (IsFolder=false/нет) + 25 групп = 252 строки; сущностей с IsFolder=true строками — ровно 26; 697 — число деловых сущностей с вики-страницей (wiki_pages=697)",
+      "evidence": "[замер] psql dbname=ut_test: count FILTER (coalesce(flags['IsFolder'],false)) → groups 25 / items 227; count(DISTINCT src_table) WHERE flags['IsFolder'] → 26; count(*) FROM wiki_pages → 697"
+    },
+    {
+      "idx": 23,
+      "doc": "memory_bank/progress.md",
+      "line": 231,
+      "claim": "Булевы реквизиты хранятся типизированной картой flags MAP(VARCHAR, BOOLEAN) рядом с nums в корпусе",
+      "status": "ok",
+      "actual": "DESCRIBE search_corpus (ut_test): flags MAP(VARCHAR, BOOLEAN), nums MAP(VARCHAR, DOUBLE); ключи flags — DeletionMark, IsFolder, Predefined и реквизиты 1С",
+      "evidence": "[замер] psql dbname=ut_test DESCRIBE search_corpus → flags | MAP(VARCHAR, BOOLEAN); SELECT DISTINCT unnest(map_keys(flags)) → IsFolder, DeletionMark, ..."
+    },
+    {
+      "idx": 24,
+      "doc": "memory_bank/progress.md",
+      "line": 235,
+      "claim": "Правило подтверждения выбора сущности ранее было мертво по трём причинам (нет GRANT, стояло после арбитра, KeyError); теперь впервые заработало",
+      "status": "ok",
+      "actual": "Все три причины устранены: GRANT SELECT для serene_ro на search_entity_alias есть в ut_test; _alias_verdict вызывается (строка 2558) ДО арбитра (строка 2564+), комментарий в коде фиксирует прежнюю ошибку положения; ошибок чтения нет (REGRESSION_BASE1: «проверка подтверждения выполняется без ошибки»)",
+      "evidence": "[замер] psql dbname=ut_test table_privileges по search_entity_alias → serene_ro SELECT. [код] ubuntu/serenedb/serene_ask.py:2372-2376 (комментарий «прежде стояла ниже арбитра»), :2558 (вызов) до :2564 (арбитр); docs/REGRESSION_BASE1.md:92"
+    },
+    {
+      "idx": 25,
+      "doc": "memory_bank/progress.md",
+      "line": 242,
+      "claim": "Данные второй базы воспроизводимы: две пересборки подряд дают одинаковые ключи (0/0/0), первая база цела (103 808 → 103 808)",
+      "status": "ok",
+      "actual": "Текущие числа сходятся: ut_test 623565 строк / 0 дублей, postgres 103808; целостность первой базы по каждой правке ведётся в REGRESSION_BASE1.md (103 808 без изменений). Сам замер «две пересборки 0/0/0» — прошлое событие, повторный прогон пересборки аудиту запрещён (меняет состояние)",
+      "evidence": "[замер] psql: ut_test 623565/0 дублей; postgres 103808. [код] docs/REGRESSION_BASE1.md:22,91-92"
+    },
+    {
+      "idx": 26,
+      "doc": "memory_bank/progress.md",
+      "line": 248,
+      "claim": "Windows-установщик setup-1c-odata.exe доведён до 1.1.0: префлайт CPU/RAM/диск/веб-модуль, флаги --ubuntu-host и --external-url; план в work/installer-exe/PLAN.md",
+      "status": "ok",
+      "actual": "ToolVersion = \"1.1.0\" (в рабочем дереве, изменение 1.0.0→1.1.0 ещё не закоммичено); префлайт CPU/RAM (Program.cs:101-122), диска (PrefightDisk, :220-223), веб-модуля (:163); флаги --ubuntu-host/--external-url разбираются (:766-771); exe в dist и PLAN.md существуют",
+      "evidence": "[код] windows/odata-setup/src/Sys.cs:22 (ToolVersion 1.1.0), Program.cs:101-122,220-223,163,771. [замер] ls dist/setup-1c-odata.exe (109056 Б, 01.08) и work/installer-exe/PLAN.md — есть"
+    },
+    {
+      "idx": 27,
+      "doc": "memory_bank/progress.md",
+      "line": 265,
+      "claim": "Рабочие таблицы досчёта векторов отдельные по базам: emb_<база>_<таблица>; фильтр по базе — второй рубеж",
+      "status": "ok",
+      "actual": "Метка рабочих таблиц TAG=\"emb_${DBNAME}_${TBL}\" (имя базы в имени); второй рубеж — фильтр database_name в запросах к duckdb_tables() (переменная DBQ), с комментарием про случай, когда из postgres было видно 5 таблиц ut_test",
+      "evidence": "[код] ubuntu/serenedb/embed_missing.sh:54-63 (TAG с именем базы, «указание владельца 29.07»), :107-133 (фильтр по базе как вторая защита)"
+    },
+    {
+      "idx": 28,
+      "doc": "memory_bank/progress.md",
+      "line": 266,
+      "claim": "Замок сборки берёт имя базы от движка (current_database()), а не разбором DSN",
+      "status": "ok",
+      "actual": "LOCK_TAG=$(psql ... 'SELECT current_database()'); без ответа движка сборка прерывается; embed_all.sh берёт имя базы так же",
+      "evidence": "[код] ubuntu/serenedb/build.sh:59-62; embed_all.sh:35"
+    },
+    {
+      "idx": 29,
+      "doc": "memory_bank/progress.md",
+      "line": 267,
+      "claim": "Раскладка кода — deploy.sh, на стенде зовётся конвейером через SERENE_SRC_DIR; ручного копирования больше нет",
+      "status": "ok",
+      "actual": "deploy.sh существует; pipeline.sh при непустом SERENE_SRC_DIR зовёт $SERENE_SRC_DIR/deploy.sh /opt/1c-mcp-reports; все 42 одноимённых файла /opt/1c-mcp-reports совпадают с репо по md5 (снимок stand-files, выборочно перепроверено: serene_ask.py идентичен)",
+      "evidence": "[код] ubuntu/serenedb/pipeline.sh:20-22; ls ubuntu/serenedb/deploy.sh. [замер] diff /srv/1c/ubuntu/serenedb/serene_ask.py /opt/1c-mcp-reports/serene_ask.py — пуст"
+    },
+    {
+      "idx": 30,
+      "doc": "memory_bank/progress.md",
+      "line": 268,
+      "claim": "Юнит nightly-eval погашен (евал выведенного слоя braine, слал алерт с боевого токена)",
+      "status": "ok",
+      "actual": "nightly-eval.service inactive (dead, static), nightly-eval.timer disabled и inactive; последний запуск 29.07 03:42",
+      "evidence": "[замер] systemctl status nightly-eval → inactive (dead); systemctl is-enabled nightly-eval.timer → disabled; is-active → inactive"
+    },
+    {
+      "idx": 31,
+      "doc": "memory_bank/progress.md",
+      "line": 283,
+      "claim": "Конвейер первой базы (1c-serene-pipeline.timer) остановлен намеренно на время заливки второй; вернуть — systemctl start",
+      "status": "hist",
+      "actual": "Запись из раздела «Состояние стенда днём 29.07 (снимок)» — явная история. Сегодня таймер по-прежнему enabled но inactive (стоит с 29.07), то есть снимок не разошёлся с реальностью; конвейер свежести так и не возвращён",
+      "evidence": "[замер] systemctl is-enabled 1c-serene-pipeline.timer → enabled; is-active → inactive. [код] memory_bank/progress.md:278 — заголовок «Состояние стенда днём 29.07 (снимок)»"
+    },
+    {
+      "idx": 32,
+      "doc": "memory_bank/progress.md",
+      "line": 285,
+      "claim": "Шлюз второй базы — порт :6021, юнит 1c-odata-gateway@ut установлен (на 29.07 порт держал осиротевший процесс)",
+      "status": "hist",
+      "actual": "Снимок 29.07 («порт держал осиротевший процесс от 28.07; юнит установлен, но занять порт не мог. Заменить после замера»). Замечание к сегодняшнему дню: положение НЕ изменилось — :6021 до сих пор держит осиротевший процесс root-сессии (pid 1136469, cgroup user-0.slice/session-247653.scope), юнит 1c-odata-gateway@ut enabled но inactive с 29.07 06:00 (умер с exit-code 1 — порт занят). Обещанная замена не сделана; как текущее состояние это нигде в живых доках не переописано — сигнал для сверки activeContext/RUNBOOK (вне моей половины)",
+      "evidence": "[замер] ss -ltnp → 127.0.0.1:6021 pid=1136469; cat /proc/1136469/cgroup → /user.slice/user-0.slice/session-247653.scope (не systemd-юнит); systemctl status 1c-odata-gateway@ut → inactive (dead, Result: exit-code) since 2026-07-29 06:00:45"
+    },
+    {
+      "idx": 33,
+      "doc": "memory_bank/progress.md",
+      "line": 286,
+      "claim": "Сервис ответов второй базы слушает :8099 (на 29.07 — осиротевший процесс, юнита не было)",
+      "status": "hist",
+      "actual": "Снимок 29.07. Сегодня: :8099 слушает, но снова осиротевший процесс (pid 3109129, запущен 31.07 04:50 из root-сессии, cgroup session-247653.scope), а юнит 1c-serene-ask существует, enabled, но inactive с 29.07 17:21. То есть боевой путь бота (:6016 → :8099 → ut_test) работает НЕ под systemd — перезагрузка сервера его не поднимет; как текущее состояние это в живых доках не зафиксировано (сигнал для сверки других шардов)",
+      "evidence": "[замер] ss -ltnp → 127.0.0.1:8099 python3 pid=3109129; ps lstart → Fri Jul 31 04:50:55 2026; cat /proc/3109129/cgroup → user-0.slice/session-247653.scope; systemctl status 1c-serene-ask → enabled, inactive (dead) since 2026-07-29 17:21"
+    },
+    {
+      "idx": 34,
+      "doc": "memory_bank/progress.md",
+      "line": 287,
+      "claim": "Бэкап перед сносом второй базы: /root/backups/serenedb/serenedb-20260729-044937.tar.gz, 2,6 ГБ",
+      "status": "ok",
+      "actual": "Файл существует, 2.6G, от 29.07 04:53",
+      "evidence": "[замер] ls -lh /root/backups/serenedb/serenedb-20260729-044937.tar.gz → -rw-r--r-- root 2.6G Jul 29 04:53"
+    },
+    {
+      "idx": 35,
+      "doc": "memory_bank/progress.md",
+      "line": 303,
+      "claim": "Ключей эмбеддера 11 в переменной ALIBABA_API_KEYS; общий потолок ~62 строки/с",
+      "status": "ok",
+      "actual": "В /etc/1c-mcp-reports.env переменная ALIBABA_API_KEYS содержит 11 значений через запятую (значения не читались). Потолок ~62 строки/с — журнальный замер, повторить нельзя без прогона эмбеддера",
+      "evidence": "[замер] awk -F',' '{print NF}' по значению ALIBABA_API_KEYS в /etc/1c-mcp-reports.env → 11"
+    },
+    {
+      "idx": 36,
+      "doc": "memory_bank/progress.md",
+      "line": 304,
+      "claim": "Потоков векторизации 44 (4 на ключ): на 110 — 458 отказов за раунд, на 44 — ноль",
+      "status": "hist",
+      "actual": "Запись раздела 29.07 «что настроено» о ручном запуске того дня: 44 передавалось аргументом/переменной запуска и НИГДЕ не закреплено — сегодня в коде дефолты embed_all.sh = 32, build.sh = 8, BUILD_EMBED_WORKERS не задан ни в одном /etc/*.env и юните. Замечание: досчёт векторов ut_test не завершён (cov_noemb_pending=92080), и продолжение по докам пойдёт на 32 потоках, а не на замеренных 44",
+      "evidence": "[код] ubuntu/serenedb/embed_all.sh:30 (N=${1:-${BUILD_EMBED_WORKERS:-32}}), build.sh:33 (WORKERS=...:-8). [замер] grep BUILD_EMBED_WORKERS /etc/*.env, юниты — не задан; psql dbname=ut_test search_quality cov_noemb_pending=92080 (снимок stand-db, ключ есть в базе)"
+    },
+    {
+      "idx": 37,
+      "doc": "memory_bank/progress.md",
+      "line": 306,
+      "claim": "Продолжение досчёта векторов — embed_all.sh, а не build.sh (пересборка корпуса не нужна)",
+      "status": "ok",
+      "actual": "embed_all.sh существует и его назначение — «ТОЛЬКО ДОСЧЁТ ВЕКТОРОВ — без пересборки корпуса», с публикацией индекса в конце; build.sh — полный такт",
+      "evidence": "[код] ubuntu/serenedb/embed_all.sh:1-12 (шапка: только досчёт, отличие от build.sh), :83-86 (VACUUM REFRESH_INDEX)"
+    }
+  ]
+}

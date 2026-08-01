@@ -1,0 +1,581 @@
+{
+ "shard": "changelog",
+ "half": 1,
+ "results": [
+  {
+   "idx": 0,
+   "doc": "CHANGELOG.md",
+   "line": 13,
+   "claim": "memory_bank/activeContext.md сокращён до 129 строк; memory_bank/progress.md вырос до 804 строк",
+   "status": "ok",
+   "actual": "activeContext.md = 129 строк, progress.md = 804 строки — точно как в доке",
+   "evidence": "[замер] wc -l memory_bank/activeContext.md memory_bank/progress.md → 129 / 804"
+  },
+  {
+   "idx": 1,
+   "doc": "CHANGELOG.md",
+   "line": 20,
+   "claim": "Порог хука check-active-size.sh — 300 строк, выполнен",
+   "status": "ok",
+   "actual": "Порог 300 в хуке, файл 129 строк — порог выполнен",
+   "evidence": "[код] .claude/hooks/check-active-size.sh:22 LIMIT=300; [замер] wc -l activeContext.md → 129"
+  },
+  {
+   "idx": 2,
+   "doc": "CHANGELOG.md",
+   "line": 33,
+   "claim": "Файл work/doc-audit/SESSION_PROMPTS.md существует и содержит промты четырёх сессий A–D",
+   "status": "ok",
+   "actual": "Файл существует, содержит разделы «Сессия A» (стр.44), B (120), C (168), D (188)",
+   "evidence": "[замер] grep '^##' work/doc-audit/SESSION_PROMPTS.md → Сессии A–D"
+  },
+  {
+   "idx": 3,
+   "doc": "CHANGELOG.md",
+   "line": 45,
+   "claim": "Три MCP перенесены в .mcp.json репозитория: serenedb-docs, memory, filesystem (позже filesystem убран)",
+   "status": "ok",
+   "actual": ".mcp.json содержит serenedb-docs и memory; filesystem отсутствует",
+   "evidence": "[замер] cat /srv/1c/.mcp.json → два сервера, filesystem нет"
+  },
+  {
+   "idx": 4,
+   "doc": "CHANGELOG.md",
+   "line": 47,
+   "claim": "Граф MCP memory хранится в memory_bank/mcp-memory.json и коммитится",
+   "status": "disc",
+   "actual": "Путь настроен (.mcp.json → MEMORY_FILE_PATH=/srv/1c/memory_bank/mcp-memory.json), но самого файла НЕТ и он ни разу не коммитился: git log --all по этому пути пуст. «Хранится и коммитится» сейчас не выполняется — графа ещё не существует",
+   "evidence": "[замер] ls memory_bank/mcp-memory.json → No such file; git log --all --oneline -- memory_bank/mcp-memory.json → пусто; [код] .mcp.json:11 MEMORY_FILE_PATH",
+   "verdict": "a",
+   "verdict_why": "Реальность легитимна: по правилу CLAUDE.md граф «впрок не заполняется», файл появится при первом наполнении; формулировку «хранится... (в git)» в доке стоит уточнить (файла пока нет)"
+  },
+  {
+   "idx": 5,
+   "doc": "CHANGELOG.md",
+   "line": 49,
+   "claim": "В settings.json включён enableAllProjectMcpServers",
+   "status": "ok",
+   "actual": "enableAllProjectMcpServers: true в .claude/settings.json",
+   "evidence": "[код] .claude/settings.json:3"
+  },
+  {
+   "idx": 6,
+   "doc": "CHANGELOG.md",
+   "line": 50,
+   "claim": "docs_health MCP serenedb-docs отдаёт 3119 разделов, гибридный поиск",
+   "status": "ok",
+   "actual": "docs_health: sections indexed 3119, search type hybrid",
+   "evidence": "[замер] mcp__serenedb-docs__docs_health → 3119 разделов, hybrid"
+  },
+  {
+   "idx": 7,
+   "doc": "CHANGELOG.md",
+   "line": 56,
+   "claim": "Хук SessionStart .claude/hooks/session-start.sh вбрасывает шапку раздела «С ЧЕГО НАЧАТЬ» (90 строк) из activeContext.md в контекст новой сессии",
+   "status": "ok",
+   "actual": "Хук существует, берёт раздел «С ЧЕГО НАЧАТЬ» awk-ом, head -n 90 (MAX_LINES=90), обрезка помечается; зарегистрирован в settings.json SessionStart (matcher startup|clear)",
+   "evidence": "[код] .claude/hooks/session-start.sh:17 MAX_LINES=90, :24 awk '/^# .*С ЧЕГО НАЧАТЬ/'; .claude/settings.json SessionStart"
+  },
+  {
+   "idx": 8,
+   "doc": "CHANGELOG.md",
+   "line": 60,
+   "claim": "Хук check-docs.sh на git commit выносит владельцу коммит, где staged есть код, но нет ни одного .md; не блокирует, а спрашивает",
+   "status": "ok",
+   "actual": "Хук ловит git commit, staged-код без .md → permissionDecision:ask (не блок); memory_bank/ исключён",
+   "evidence": "[код] .claude/hooks/check-docs.sh: case *'git commit'*, CODE без .md → ask; регистрация в settings.json PreToolUse/Bash"
+  },
+  {
+   "idx": 9,
+   "doc": "CHANGELOG.md",
+   "line": 64,
+   "claim": "Хук check-active-size.sh на git commit выносит владельцу коммит, если activeContext.md больше 300 строк",
+   "status": "ok",
+   "actual": "Хук ловит git commit, при >300 строк activeContext.md → permissionDecision:ask",
+   "evidence": "[код] .claude/hooks/check-active-size.sh:22 LIMIT=300, ask при LINES>LIMIT"
+  },
+  {
+   "idx": 10,
+   "doc": "CHANGELOG.md",
+   "line": 70,
+   "claim": "MCP filesystem убран из конфигурации; в CLAUDE.md пометка «не возвращать без нужды»",
+   "status": "ok",
+   "actual": "filesystem в .mcp.json отсутствует; CLAUDE.md:42 — «убран... Не возвращать без нужды»",
+   "evidence": "[замер] grep -i filesystem .mcp.json → пусто; [код] CLAUDE.md:42"
+  },
+  {
+   "idx": 11,
+   "doc": "CHANGELOG.md",
+   "line": 74,
+   "claim": "Агент serenedb-native переведён на MCP serenedb-docs (search_docs/read_section); инструменты MCP добавлены в frontmatter tools агента",
+   "status": "ok",
+   "actual": "Frontmatter агента: tools включает mcp__serenedb-docs__search_docs, read_section, docs_health; описание ссылается на MCP serenedb-docs",
+   "evidence": "[код] .claude/agents/serenedb-native.md:4 (строка tools)"
+  },
+  {
+   "idx": 12,
+   "doc": "CHANGELOG.md",
+   "line": 87,
+   "claim": "Существует скрипт выкатки персоны бота ubuntu/openclaw/deploy_instance.sh",
+   "status": "ok",
+   "actual": "Скрипт существует, исполняемый, 6409 байт",
+   "evidence": "[замер] ls -la ubuntu/openclaw/deploy_instance.sh → -rwxr-xr-x"
+  },
+  {
+   "idx": 13,
+   "doc": "CHANGELOG.md",
+   "line": 154,
+   "claim": "Заготовки движка OpenClaw (BOOTSTRAP.md, SOUL.md, TOOLS.md и др.) не стираются, а перезаписываются пустышкой — существующий файл движок не трогает",
+   "status": "ok",
+   "actual": "Цикл по BOOTSTRAP.md SOUL.md IDENTITY.md TOOLS.md USER.md: cp в .replaced-by-deploy, затем перезапись строкой «(не используется — см. instance/AGENTS.md)» — не удаление",
+   "evidence": "[код] ubuntu/openclaw/deploy_instance.sh:40-50 (for f in ...; printf | tee)"
+  },
+  {
+   "idx": 14,
+   "doc": "CHANGELOG.md",
+   "line": 111,
+   "claim": "В рабочей папке бота — прежняя персона от 30.07 (9 416 символов); новая (3 867) лежит в репозитории и выкатывается скриптом; развилка за владельцем",
+   "status": "ok",
+   "actual": "В репо instance/AGENTS.md = 3867 байт; в рабочей папке бота /home/undebot/.openclaw/workspace/AGENTS.md = 9416 байт; развилка записана",
+   "evidence": "[замер] wc -c обоих файлов → 3867 / 9416"
+  },
+  {
+   "idx": 15,
+   "doc": "CHANGELOG.md",
+   "line": 115,
+   "claim": "Развилка по персоне записана в activeContext и docs/OPENCLAW_BOT.md",
+   "status": "ok",
+   "actual": "docs/OPENCLAW_BOT.md:100 «СЕЙЧАС В РАБОЧЕЙ ПАПКЕ БОТА ... ПЕРСОНА ОТ 30.07 — намеренно»; activeContext.md:29-46 — развилка и варианты",
+   "evidence": "[замер] grep -n персон docs/OPENCLAW_BOT.md memory_bank/activeContext.md"
+  },
+  {
+   "idx": 16,
+   "doc": "CHANGELOG.md",
+   "line": 141,
+   "claim": "Требование формата (подстановочные места) возвращено в ANSWER_SYS — без него калькулятор _fill_figures выключается",
+   "status": "ok",
+   "actual": "ANSWER_SYS требует JSON и подстановочные места ({total} {count} ... NEVER WRITE A COMPUTED FIGURE), _fill_figures работает (вызовы на 2789)",
+   "evidence": "[код] serene_ask.py:1266-1291 (ANSWER_SYS), :1346 _fill_figures, :2789 вызов"
+  },
+  {
+   "idx": 17,
+   "doc": "CHANGELOG.md",
+   "line": 148,
+   "claim": "Маркеры моста и гейта переведены на английские [NO DATA], [CLARIFICATION NEEDED] с обеих сторон разом",
+   "status": "ok",
+   "actual": "Мост шлёт [NO DATA]/[CLARIFICATION NEEDED] (mcp_ask.py:104,110), плагин читает те же префиксы (verify-core.js:20-21)",
+   "evidence": "[код] ubuntu/openclaw/mcp_ask.py:104,110; verify-plugin/verify-core.js:20-21"
+  },
+  {
+   "idx": 18,
+   "doc": "CHANGELOG.md",
+   "line": 151,
+   "claim": "Мост в /opt/openclaw-mcp добавлен в выкатку вместе с плагином; путь к плагину ищется (каталог со сгенерированным хешем)",
+   "status": "ok",
+   "actual": "deploy_instance.sh копирует mcp_ask.py в /opt/openclaw-mcp и рестартует 1c-mcp-ask; путь плагина ищется find ... -name verify-core.js (каталог с хешем не хардкодится)",
+   "evidence": "[код] deploy_instance.sh:55-73 (MCPDIR, PLUGDIR=find)"
+  },
+  {
+   "idx": 19,
+   "doc": "CHANGELOG.md",
+   "line": 159,
+   "claim": "Итоговый размер сервисного промта — 4 208 символов (не 3 767: часть сокращения возвращена)",
+   "status": "disc",
+   "actual": "Суммарный размер шести сервисных промтов serene_ask.py сейчас ~8141 символ (INTENT 2101 + PICK 2070 + CLARIFY 439 + REFUSE 282 + ANSWER 2358 + COVERAGE 891), т.е. вернулись почти к исходным 8154, а не 4208: коммит f79424a (контрольный опыт) вернул несокращённые промты. Запись «итог 4208» осталась последним словом дока о размере",
+   "evidence": "[замер] python len() по *_SYS в serene_ask.py → 8141; [код] git log serene_ask.py → f79424a «контрольный опыт... промты были ни при чём» (125 добавленных строк)",
+   "verdict": "a",
+   "verdict_why": "Док отстал: контрольный опыт (новее записи) вернул прежние промты, но итоговый размер в CHANGELOG не поправлен/не оговорён"
+  },
+  {
+   "idx": 20,
+   "doc": "CHANGELOG.md",
+   "line": 166,
+   "claim": "Перегенерация 697 алиасов откачена; новая версия сохранена как search_entity_alias_v3, прежняя — как ..._bak",
+   "status": "ok",
+   "actual": "Таблицы search_entity_alias_v3 и search_entity_alias_bak существуют (в базе ut_test), по 697 строк каждая, рабочая search_entity_alias — тоже 697",
+   "evidence": "[замер] duckdb_tables() LIKE 'search_entity_alias%' → v3/_bak в ut_test; count(*) → 697/697/697"
+  },
+  {
+   "idx": 21,
+   "doc": "CHANGELOG.md",
+   "line": 178,
+   "claim": "Название сущности служит её алиасом само по себе — берётся из search_tables.label, а не спрашивается у модели",
+   "status": "ok",
+   "actual": "Название сущности участвует как её слово: UNION ALL SELECT label FROM search_tables при проверке алиасов; у модели не спрашивается",
+   "evidence": "[код] serene_ask.py:2395-2402 (комментарий «название лежит в search_tables.label» + UNION ALL SELECT label)"
+  },
+  {
+   "idx": 22,
+   "doc": "CHANGELOG.md",
+   "line": 183,
+   "claim": "Величина ищется в семье: родство из search_tables.parent, наличие величины из map_keys(nums); переход только когда член семьи ровно один",
+   "status": "ok",
+   "actual": "Родство из search_tables.parent, наличие величины из map_keys(nums), переход только при len(owners)==1",
+   "evidence": "[код] serene_ask.py:2694-2712 (WITH kin ... parent = fam; if len(owners) == 1)"
+  },
+  {
+   "idx": 23,
+   "doc": "CHANGELOG.md",
+   "line": 187,
+   "claim": "Индекс алиасов построен на словаре БЕЗ стемминга (на search_dict_stem ранжирование вырождается в нули)",
+   "status": "ok",
+   "actual": "alias_idx построен USING inverted(aliases search_dict, ...) — словарь БЕЗ стемминга (search_dict, не search_dict_stem)",
+   "evidence": "[код] ubuntu/serenedb/corpus_init.sql:119-120"
+  },
+  {
+   "idx": 24,
+   "doc": "CHANGELOG.md",
+   "line": 209,
+   "claim": "GRANT SELECT ON search_entity_alias TO serene_ro выдан и объявлен в corpus_init.sql",
+   "status": "ok",
+   "actual": "GRANT SELECT ON search_entity_alias TO serene_ro в corpus_init.sql:111; на живом стенде has_table_privilege('serene_ro','search_entity_alias','SELECT')=t",
+   "evidence": "[код] corpus_init.sql:111; [замер] psql has_table_privilege → t"
+  },
+  {
+   "idx": 25,
+   "doc": "CHANGELOG.md",
+   "line": 213,
+   "claim": "Соперников по вопросу ранжирует движок: индекс alias_idx и штатная tfidf вместо своего счёта общих слов",
+   "status": "ok",
+   "actual": "Соперников ранжирует движок: SELECT src_table, <scorer(alias_idx)> FROM alias_idx WHERE aliases @@ вопрос ORDER BY 2 DESC; штатные скореры (bm25/tfidf) из SCORERS",
+   "evidence": "[код] serene_ask.py:2424-2427, :109 SCORERS['tfidf'], :895 ALIAS_INDEX='alias_idx'"
+  },
+  {
+   "idx": 26,
+   "doc": "CHANGELOG.md",
+   "line": 222,
+   "claim": "Правило подтверждения выбора по алиасам оставлено мягким (не вето), ужесточение отложено",
+   "status": "ok",
+   "actual": "ALIAS_VETO по умолчанию '0' (мягко); жёсткая форма под выключателем ASK_ALIAS_VETO",
+   "evidence": "[код] serene_ask.py:898 ALIAS_VETO=env('ASK_ALIAS_VETO','0')=='1'; :2417 if hit and not ALIAS_VETO"
+  },
+  {
+   "idx": 27,
+   "doc": "CHANGELOG.md",
+   "line": 231,
+   "claim": "Папка справочника не считается позицией; к ответу кодом дописывается «группы справочника в счёт не входят: их N»",
+   "status": "disc",
+   "actual": "Папки действительно исключаются из счёта (folder_pred NOT coalesce(map_extract_value(flags,'IsFolder'),false)), НО русская приписка «группы справочника в счёт не входят: их N» кодом больше НЕ дописывается: требование перенесено в промт модели (GROUPS EXCLUDED ... You MUST say this in your answer), коммит b2f8485 от 31.07 «оговорки к ответу говорит модель на языке вопроса». Число folders уходит в diag/промт, оглашение зависит от модели",
+   "evidence": "[код] serene_ask.py:1238 folder_pred; :1494-1499 GROUPS EXCLUDED в body промта; :2890-2896 комментарий «обе оговорки ушли в промт»; [замер] grep 'группы справочника' serene_ask.py → пусто",
+   "verdict": "v",
+   "verdict_why": "Перенос из кода в промт сделан сознательно (язык ответа), числа оговорок разрешены гейту, но правило владельца «правила на промте НЕ РАБОТАЮТ» и п.13 (молчание = дефект, если модель не скажет) — решение о допустимости за владельцем; в CHANGELOG перенос не записан"
+  },
+  {
+   "idx": 28,
+   "doc": "CHANGELOG.md",
+   "line": 245,
+   "claim": "В корпусе есть вторая типизированная карта flags MAP(VARCHAR, BOOLEAN) рядом с nums, из колонок с kind='flag'; отбор NOT coalesce(map_extract_value(flags,'IsFolder'), false)",
+   "status": "ok",
+   "actual": "В search_corpus есть flags MAP(VARCHAR, BOOLEAN) рядом с nums; отбор именно NOT coalesce(map_extract_value(flags,'IsFolder'), false)",
+   "evidence": "[замер] duckdb_columns() → flags MAP(VARCHAR, BOOLEAN); [код] serene_ask.py:1238; corpus_build.sql:347"
+  },
+  {
+   "idx": 29,
+   "doc": "CHANGELOG.md",
+   "line": 254,
+   "claim": "Булев реквизит вне doc_hash дописан в доборный UPDATE слияния — иначе карта flags осталась бы пустой после ADD COLUMN",
+   "status": "ok",
+   "actual": "corpus_merge.sql: ADD COLUMN flags + flags в MERGE и в доборном UPDATE (c.flags IS DISTINCT FROM t.flags)",
+   "evidence": "[код] corpus_merge.sql:86,105-108,116-124"
+  },
+  {
+   "idx": 30,
+   "doc": "CHANGELOG.md",
+   "line": 307,
+   "claim": "Бинарь установщика windows/odata-setup/dist/setup-1c-odata.exe версии 1.1.0; план — work/installer-exe/PLAN.md",
+   "status": "ok",
+   "actual": "dist/setup-1c-odata.exe и work/installer-exe/PLAN.md существуют; ToolVersion = \"1.1.0\"",
+   "evidence": "[замер] ls обоих файлов; [код] windows/odata-setup/src/Sys.cs:22 ToolVersion=\"1.1.0\""
+  },
+  {
+   "idx": 31,
+   "doc": "CHANGELOG.md",
+   "line": 298,
+   "claim": "Установщик: нет wsisapi.dll → код выхода 3 + туториал в файле 1c-odata-добавить-веб-модуль.txt",
+   "status": "ok",
+   "actual": "Нет wsisapi.dll → return EXIT_PREREQ (=3) и SaveTextBesideLog(\"1c-odata-добавить-веб-модуль.txt\", tut)",
+   "evidence": "[код] Program.cs:40 EXIT_PREREQ=3; :154-161 (Err + туториал + return EXIT_PREREQ)"
+  },
+  {
+   "idx": 32,
+   "doc": "CHANGELOG.md",
+   "line": 312,
+   "claim": "Мост 1c-mcp-ask слушает :6016, инструмент ask_1c ходит в serene_ask на :8099; пробрасывает focus/measure/context; MCP_TOKEN fail-closed, токены в /etc/*.env с правами 600",
+   "status": "ok",
+   "actual": ":6016 слушает /opt/openclaw-mcp/mcp_ask.py (проверено по /proc/pid/cmdline), :8099 — serene_ask.py; мост пробрасывает focus/measure/context; MCP_TOKEN fail-closed (FATAL без токена); /etc/1c-mcp-ask.env права 600",
+   "evidence": "[замер] ss -tlnp + /proc/3173753/cmdline → mcp_ask.py на 6016; [код] mcp_ask.py:42-85; [замер] ls -l /etc/1c-mcp-ask.env → -rw-------"
+  },
+  {
+   "idx": 33,
+   "doc": "CHANGELOG.md",
+   "line": 315,
+   "claim": "Мёртвый braine (second-brain на :8090) убран из конфигурации бота; порт :8090 не слушает",
+   "status": "ok",
+   "actual": "Порт 8090 никто не слушает; в openclaw.json бота упоминаний 8090 нет (second-brain-reports указывает на живой :6015/mcp — это отчёты, не braine)",
+   "evidence": "[замер] ss -tln | grep 8090 → пусто; grep 8090 /home/undebot/.openclaw/openclaw.json → пусто"
+  },
+  {
+   "idx": 34,
+   "doc": "CHANGELOG.md",
+   "line": 370,
+   "claim": "Арбитр: принимается только номер выбранного ответа, всё прочее — «не выбрал»; текст арбитра в выдачу не попадает никогда — держится кодом",
+   "status": "ok",
+   "actual": "arbitrate(): из ответа модели берутся только цифры, номер вне диапазона/0 → None («не выбрал»); текст арбитра никуда не подставляется — возвращается только индекс",
+   "evidence": "[код] serene_ask.py:276-304 (digits→int, n>len→None), комментарий :271-275"
+  },
+  {
+   "idx": 35,
+   "doc": "CHANGELOG.md",
+   "line": 372,
+   "claim": "Поле context в /ask используется только арбитром, в отбор данных не попадает",
+   "status": "ok",
+   "actual": "context из /ask (обрезка 4000) передаётся в answer() и используется только в arbitrate(); в отбор/SQL не попадает",
+   "evidence": "[код] serene_ask.py:2947 req.get('context'), :2581 arbitrate(question, cand_ans, context) — единственное использование"
+  },
+  {
+   "idx": 36,
+   "doc": "CHANGELOG.md",
+   "line": 394,
+   "claim": "Ответ несёт поле measure и приписку «Считано по величине «X»», если модель не назвала сама; дописывает код",
+   "status": "disc",
+   "actual": "Поле measure в ответе есть (:2897), но русской приписки «Считано по величине «X»» код больше не дописывает: требование перенесено в промт (QUANTITY USED ... Name that quantity in your answer, in the user's language), коммит b2f8485. Строки «Считано по величине» в коде нет",
+   "evidence": "[замер] grep 'Считано по величине' serene_ask.py → пусто; [код] serene_ask.py:1490-1493 QUANTITY USED; :2885-2896 комментарий о переносе оговорок в промт; :2897 'measure': measure",
+   "verdict": "v",
+   "verdict_why": "Тот же перенос код→промт, что и у групп (b2f8485): сознательный (язык ответа), но против правила «держится кодом»; молчаливый выбор величины = п.12 — решение за владельцем"
+  },
+  {
+   "idx": 37,
+   "doc": "CHANGELOG.md",
+   "line": 401,
+   "claim": "API_ASK.md описывает входы focus и measure и поле measure в ответе",
+   "status": "ok",
+   "actual": "API_ASK.md описывает вход focus (§ таблица, :56,:144), measure (:145) и поле measure в ответе (:151)",
+   "evidence": "[замер] grep -n 'focus|measure' docs/API_ASK.md → строки 50-160"
+  },
+  {
+   "idx": 38,
+   "doc": "CHANGELOG.md",
+   "line": 439,
+   "claim": "poc_load_entity.py входит в отпечаток пропуска пересборки корпуса",
+   "status": "ok",
+   "actual": "Отпечаток пропуска: SQL_HASH = md5(corpus_build.sql + poc_load_entity.py)",
+   "evidence": "[код] ubuntu/serenedb/build.sh:163"
+  },
+  {
+   "idx": 39,
+   "doc": "CHANGELOG.md",
+   "line": 452,
+   "claim": "Счётчик потерь cov_rows_lost печатает 0, а не NULL (sum FILTER обёрнут coalesce)",
+   "status": "ok",
+   "actual": "cov_rows_lost обёрнут coalesce(sum(...) FILTER (...), 0)",
+   "evidence": "[код] ubuntu/serenedb/coverage_build.sql:149"
+  },
+  {
+   "idx": 40,
+   "doc": "CHANGELOG.md",
+   "line": 455,
+   "claim": "Ловушка 33: сравнение колонки из LEFT JOIN с колонкой левой таблицы в фильтре молча не применяется; в нашем коде образец не встречается — записано в techContext ловушка 33",
+   "status": "ok",
+   "actual": "Ловушка 33 записана в techContext.md (заголовок §, LEFT JOIN + фильтр)",
+   "evidence": "[код] memory_bank/techContext.md:403"
+  },
+  {
+   "idx": 41,
+   "doc": "CHANGELOG.md",
+   "line": 486,
+   "claim": "Признак «витрина менялась» пишет синк отметкой mart_changed_ts; отсутствие отметки = собирать (fail-safe); отметка ставится и при частичных ошибках синка",
+   "status": "ok",
+   "actual": "serene_sync.py ставит mart_changed_ts при touched ИЛИ err (частичные ошибки → отметка); build.sh пропускает пересборку только если отметка есть (count=1) и build_ts новее — отсутствие отметки = собирать",
+   "evidence": "[код] serene_sync.py:226-233 (if touched or err); build.sh:176-178"
+  },
+  {
+   "idx": 42,
+   "doc": "CHANGELOG.md",
+   "line": 534,
+   "claim": "Вторая база (УТ) собрана полностью: такт 790 с; строк дошло до поиска 632 720; повторный такт без изменений — 99 с (пропуск пересборки)",
+   "status": "hist",
+   "actual": "Запись — датированный замер такта второй базы (сейчас в ut_test 623 565 строк — корпус жил дальше); как история верна",
+   "evidence": "[замер] psql ut_test count(search_corpus) → 623565 (снимок stand-db тот же)"
+  },
+  {
+   "idx": 43,
+   "doc": "CHANGELOG.md",
+   "line": 639,
+   "claim": "Корпус УТ: всего 632 683 строк, с вектором 427 241, без вектора служебных 205 440, без вектора бизнес — 2 (длиннее 20 000 символов)",
+   "status": "hist",
+   "actual": "Датированный замер состава корпуса УТ на 31.07; текущие числа другие (623 565 строк, cov_noemb_pending 92 080) — запись читается как история такта",
+   "evidence": "[замер] psql ut_test: search_quality cov_* → noemb_service 248384, pending 92080"
+  },
+  {
+   "idx": 44,
+   "doc": "CHANGELOG.md",
+   "line": 657,
+   "claim": "Ориентир для установщика: 4 потока на ключ эмбеддера, не больше; признак перебора — ненулевые «отказов пачек N»",
+   "status": "ok",
+   "actual": "Ориентир записан в доке; опорный счётчик существует: строка «досчёт: отказов пачек N (из них по перегрузке M)» печатается при n_err>0; в коде ориентир не зашит (умолчания N=32/N=8), но это совет установщику, а не механизм",
+   "evidence": "[код] embed_missing.sh:254-259 (n_err, «отказов пачек»); embed_all.sh:30 N default 32"
+  },
+  {
+   "idx": 45,
+   "doc": "CHANGELOG.md",
+   "line": 669,
+   "claim": "Решение владельца: служебным сущностям вектор не считается вовсе; поведение возвращается переменной EMBED_SERVICE=1",
+   "status": "ok",
+   "actual": "EMBED_SERVICE=1 возвращает счёт служебным; по умолчанию 0 — служебным вектор не считается (решение владельца в комментариях)",
+   "evidence": "[код] build.sh:258-264; embed_all.sh:72-77"
+  },
+  {
+   "idx": 46,
+   "doc": "CHANGELOG.md",
+   "line": 690,
+   "claim": "Перепись различает cov_noemb_service («по решению») и cov_noemb_pending («ещё в очереди»)",
+   "status": "ok",
+   "actual": "cov_noemb_service и cov_noemb_pending считаются отдельно",
+   "evidence": "[код] coverage_build.sql:163,168; [замер] search_quality обеих баз содержит обе строки"
+  },
+  {
+   "idx": 47,
+   "doc": "CHANGELOG.md",
+   "line": 698,
+   "claim": "Проверка после такта before_noemb/after_noemb считает только строки, которым вектор положен",
+   "status": "ok",
+   "actual": "before_noemb/after_noemb считают только строки, которым вектор положен: FILTER emb IS NULL AND length(doc)<=embed_maxlen AND NOT EXISTS(...cls='service')",
+   "evidence": "[код] corpus_precheck.sql:20-26; corpus_postcheck.sql:16-23"
+  },
+  {
+   "idx": 48,
+   "doc": "CHANGELOG.md",
+   "line": 724,
+   "claim": "Нарезка пачек эмбеддера — сложение слагаемых (строки + символы) вместо greatest: внутри пачки соблюдены оба предела по построению",
+   "status": "ok",
+   "actual": "chunk = (rn/10) + (cum/BUDGET) — сумма слагаемых, оба предела по построению; комментарий «СУММА, А НЕ МАКСИМУМ»",
+   "evidence": "[код] embed_missing.sh:199-209"
+  },
+  {
+   "idx": 49,
+   "doc": "CHANGELOG.md",
+   "line": 746,
+   "claim": "Существует отдельный вход embed_all.sh — только досчёт векторов без такта; берёт ключи из окружения, создаёт по секрету на ключ, идёт в той же очерёдности, заново публикует индекс",
+   "status": "ok",
+   "actual": "embed_all.sh существует: только досчёт (без такта), ключи из ALIBABA_API_KEYS|ALIBABA_API_KEY, секрет на ключ (emb_<база>_<i>), очерёдность та же (сначала не-служебные), в конце VACUUM (REFRESH_INDEX)",
+   "evidence": "[код] embed_all.sh:1-95 (шапка, KEYS, ROWS_WHERE, REFRESH_INDEX)"
+  },
+  {
+   "idx": 50,
+   "doc": "CHANGELOG.md",
+   "line": 776,
+   "claim": "Проверка векторизации после такта судит по сдвигу, а не по остатку: больше стало — отказ; не убавилось ни на строку — отказ; убавилось — норма",
+   "status": "ok",
+   "actual": "Постчек судит по сдвигу: a_noemb > b_noemb → отказ; a_noemb = b_noemb (и >0) → «эмбеддер молчал»; убавилось → норма; невозможные (длиннее предела) исключены",
+   "evidence": "[код] corpus_postcheck.sql:52-68"
+  },
+  {
+   "idx": 51,
+   "doc": "CHANGELOG.md",
+   "line": 787,
+   "claim": "Отметка завершения такта (build_ts, отпечаток кода) пишется ПОСЛЕ проверок",
+   "status": "ok",
+   "actual": "build_ts и build_sql_hash пишутся в corpus_postcheck.sql ПОСЛЕ блока error()-проверок (строки 27-73 → запись 76-85); сам постчек — шаг 8, последний в build.sh",
+   "evidence": "[код] corpus_postcheck.sql:76-85; build.sh:290"
+  },
+  {
+   "idx": 52,
+   "doc": "CHANGELOG.md",
+   "line": 823,
+   "claim": "Досчёт векторов раундовый: пауза EMBED_RETRY_PAUSE (20 с) и повтор остатка; выход — нет работы, раунд не сдвинул ни строки, или предел раундов",
+   "status": "ok",
+   "actual": "Раунды: PAUSE=EMBED_RETRY_PAUSE:-20, ROUNDS=EMBED_ROUNDS:-6; выход — работы нет, раунд не сдвинул ни строки, или предел раундов",
+   "evidence": "[код] embed_missing.sh:158-180 (комментарий + цикл)"
+  },
+  {
+   "idx": 53,
+   "doc": "CHANGELOG.md",
+   "line": 851,
+   "claim": "ALIBABA_API_KEYS — ключи через запятую; на каждый создаётся именованный секрет qwen_<база>_<номер>, потоки раскладываются по кругу; без переменной берётся одиночный ALIBABA_API_KEY",
+   "status": "ok",
+   "actual": "ALIBABA_API_KEYS через запятую → секреты qwen_<база>_<номер> (qwen_${LOCK_TAG}_${i}, LOCK_TAG=current_database()); без неё одиночный ALIBABA_API_KEY; потоки по кругу в embed_missing.sh",
+   "evidence": "[код] build.sh:59 LOCK_TAG, :84-90 qwen_..., embed_missing.sh:44 (SECRETS по кругу)"
+  },
+  {
+   "idx": 54,
+   "doc": "CHANGELOG.md",
+   "line": 888,
+   "claim": "Карта ссылок строится в два шага: tmp3_refmap_raw → tmp3_refmap с одной строкой на идентификатор, детерминированный выбор",
+   "status": "ok",
+   "actual": "tmp3_refmap_raw → tmp3_refmap: QUALIFY row_number() OVER (PARTITION BY guid ORDER BY вхождений_у_владельца, owner, name)=1 — одна строка на guid, детерминированно",
+   "evidence": "[код] corpus_build.sql:254,308-314"
+  },
+  {
+   "idx": 55,
+   "doc": "CHANGELOG.md",
+   "line": 895,
+   "claim": "Есть счётчик refmap_ambiguous_guid — сколько идентификаторов пришли с несколькими именами",
+   "status": "ok",
+   "actual": "Счётчик refmap_ambiguous_guid: count guid HAVING count(DISTINCT name)>1",
+   "evidence": "[код] corpus_build.sql:666-667"
+  },
+  {
+   "idx": 56,
+   "doc": "CHANGELOG.md",
+   "line": 909,
+   "claim": "Корпус воспроизводим: две полные пересборки подряд дают 0 разошедшихся ключей (проверка repro_check)",
+   "status": "unverifiable",
+   "actual": "Код, обеспечивающий воспроизводимость, на месте (однозначная карта ссылок, детерминированный порядок), но сам факт «0 разошедшихся ключей» — разовый замер 30.07: таблиц/артефактов repro_check в базах не осталось, а повторить две полные пересборки нельзя — это изменение состояния стенда, запрещённое рамками сверки",
+   "evidence": "[замер] duckdb_tables() LIKE '%repro%' → 0 строк; grep repro_check по репо → только CHANGELOG:917"
+  },
+  {
+   "idx": 57,
+   "doc": "CHANGELOG.md",
+   "line": 1003,
+   "claim": "Загрузка сущности при HTTP 500 от 1С: (1) как обычно, (2) повтор, (3) без неотдаваемых полей ($select по списку из $metadata); запасной путь только после отказа",
+   "status": "ok",
+   "actual": "_get_json: (1) обычный запрос, (2) повтор, (3) $select без неотдаваемых полей по $metadata; 404 не ретраится; не помогло — исключение наверх",
+   "evidence": "[код] poc_load_entity.py:123-165"
+  },
+  {
+   "idx": 58,
+   "doc": "CHANGELOG.md",
+   "line": 1020,
+   "claim": "Потеря полей при сужении $select называется в журнале (какие и почему), один раз на сущность",
+   "status": "ok",
+   "actual": "Потеря полей называется: print «пропущены поля, которые OData 1С не отдаёт (типы): список», один раз на сущность (_SELECT_WARNED)",
+   "evidence": "[код] poc_load_entity.py:113-119"
+  },
+  {
+   "idx": 59,
+   "doc": "CHANGELOG.md",
+   "line": 1044,
+   "claim": "classify_entities.py: модель (DeepSeek) делит сущности на business/service; в модель уходят только имена; разметка кэшируется в таблице search_entity_class",
+   "status": "ok",
+   "actual": "classify_entities.py: DeepSeek (DS_MODEL deepseek-v4-flash), business/service; в модель уходят имя, метка, имена колонок, число строк — данных нет («You never get the data itself»); кэш в search_entity_class, спрашиваются только новые (NOT EXISTS)",
+   "evidence": "[код] classify_entities.py:45-46,59-77 (SYS), :137-138 (таблица), :159 (только новые)"
+  },
+  {
+   "idx": 60,
+   "doc": "CHANGELOG.md",
+   "line": 1052,
+   "claim": "Векторы идут двумя проходами: ROWS_WHERE сужает первый до бизнес-сущностей, второй без сужения покрывает всё; оба обязаны завершиться успехом, иначе fail",
+   "status": "hist",
+   "actual": "Запись верна на свою дату (29-30.07), но перекрыта БОЛЕЕ НОВОЙ записью того же CHANGELOG (стр. 669): решением владельца второй проход по умолчанию не идёт (EMBED_SERVICE=1 возвращает его). Сейчас: первый проход ROWS_WHERE «не служебные» с fail, второй — только при EMBED_SERVICE=1 (тоже с fail)",
+   "evidence": "[код] build.sh:243-264 (ROWS_WHERE + || fail; if EMBED_SERVICE=1)"
+  },
+  {
+   "idx": 61,
+   "doc": "CHANGELOG.md",
+   "line": 1062,
+   "claim": "CLASSIFY_MAX_PER_RUN, по умолчанию 400 — потолок разметки за прогон; остаток называется числом «осталось_на_следующие_такты»",
+   "status": "ok",
+   "actual": "CLASSIFY_MAX_PER_RUN default 400; остаток печатается как «осталось_на_следующие_такты»",
+   "evidence": "[код] classify_entities.py:57, :199"
+  },
+  {
+   "idx": 62,
+   "doc": "CHANGELOG.md",
+   "line": 1071,
+   "claim": "Условие первого прохода векторизации — «НЕ названо служебным» (неразмеченное считается сразу)",
+   "status": "ok",
+   "actual": "Условие первого прохода — NOT EXISTS (... cls='service'), т.е. «НЕ названо служебным»: неразмеченное считается сразу; так и в build.sh, и в embed_all.sh",
+   "evidence": "[код] build.sh:236-245; embed_all.sh:66-68"
+  }
+ ]
+}
