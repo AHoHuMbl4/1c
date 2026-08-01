@@ -33,6 +33,12 @@
           },
           {
             "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-active-size.sh\"",
+            "timeout": 15,
+            "statusMessage": "Проверка: activeContext.md не разросся"
+          },
+          {
+            "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-golden.sh\"",
             "timeout": 20,
             "statusMessage": "Проверка: замер сделан до выката"

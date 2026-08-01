@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Перехват перед коммитом: activeContext.md не должен разрастаться.
+#
+# Зачем: файл дорос до ~900 строк, и при большом контексте модель скользит по нему
+# глазами — правила и состояние игнорируются. Автоматически ПЕРЕНОСИТЬ текст скриптом
+# нельзя: что ещё живо, а что уже история — решение семантическое, тупой перенос даст
+# молчаливую потерю. Поэтому порог держит код, а перенос делает модель осмысленно.
+#
+# Куда переносить: историю по дням — в memory_bank/progress.md; раздел «С ЧЕГО НАЧАТЬ»
+# остаётся коротким, новое сверху.
+set -uo pipefail
+
+CMD=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("tool_input") or {}).get("command") or "")' 2>/dev/null)
+case "$CMD" in
+  *"git commit"*) ;;
+  *) echo '{}'; exit 0 ;;
+esac
+
+cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 0
+
+F="memory_bank/activeContext.md"
+LIMIT=300
+[ -f "$F" ] || { echo '{}'; exit 0; }
+
+LINES=$(wc -l < "$F")
+[ "$LINES" -le "$LIMIT" ] && { echo '{}'; exit 0; }
+
+python3 - "$LINES" "$LIMIT" <<'PY'
+import json, sys
+lines, limit = sys.argv[1], sys.argv[2]
+print(json.dumps({"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason":
+        f"memory_bank/activeContext.md разросся до {lines} строк (порог {limit}).\n\n"
+        "Разросшийся файл при большом контексте игнорируется — правила перестают "
+        "действовать. Перенеси историю в memory_bank/progress.md (по дням, осмысленно, "
+        "ничего не теряя — молчаливая потеря = дефект), оставь здесь только живое "
+        "состояние и «С ЧЕГО НАЧАТЬ». Потом повтори коммит.\n"
+        "Если прямо сейчас переносить нельзя — подтвердите коммит, но перенос остаётся "
+        "долгом ближайшего шага."}},
+    ensure_ascii=False))
+PY
