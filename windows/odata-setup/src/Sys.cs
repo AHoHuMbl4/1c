@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Security.Principal;
@@ -18,7 +19,7 @@ namespace Oc1c
         public static bool DryRun;              // --check: ничего не менять
         public static bool AssumeYes;           // --yes: без вопросов
         public static bool Changed;             // хоть что-то реально изменено
-        public const string ToolVersion = "1.0.0";
+        public const string ToolVersion = "1.1.0";
     }
 
     // ---------------------------------------------------------------- результат внешней команды
@@ -340,6 +341,72 @@ namespace Oc1c
                 return total / 1024 / 1024;
             }
             catch { return -1; }
+        }
+
+        // Нагрузка ПК: CPU% и RAM. Через PowerShell (без лишних сборок). -1 = не удалось замерить.
+        public static void SampleLoad(out int cpuPct, out long ramFreeMb, out long ramTotalMb)
+        {
+            cpuPct = -1; ramFreeMb = -1; ramTotalMb = -1;
+            string script =
+                "$os = Get-CimInstance Win32_OperatingSystem; " +
+                "$free = [int]($os.FreePhysicalMemory/1024); $total = [int]($os.TotalVisibleMemorySize/1024); " +
+                "$cpu = -1; try { $cpu = [int]((Get-Counter '\\Processor(_Total)\\% Processor Time' " +
+                "-SampleInterval 1 -MaxSamples 1).CounterSamples[0].CookedValue) } catch {}; " +
+                "Write-Output ('LOAD cpu=' + $cpu + ' ram_free_mb=' + $free + ' ram_total_mb=' + $total)";
+            ExecResult r = Ps.Run(script, false, 30000, null);
+            if (!r.Ok && r.All.IndexOf("LOAD ") < 0) return;
+            try
+            {
+                System.Text.RegularExpressions.Match m = System.Text.RegularExpressions.Regex.Match(
+                    r.All, @"LOAD cpu=(-?\d+)\s+ram_free_mb=(-?\d+)\s+ram_total_mb=(-?\d+)");
+                if (!m.Success) return;
+                cpuPct = int.Parse(m.Groups[1].Value);
+                ramFreeMb = long.Parse(m.Groups[2].Value);
+                ramTotalMb = long.Parse(m.Groups[3].Value);
+            }
+            catch { }
+        }
+
+        // TCP-проверка: достучимся ли с этой машины до хоста (например Ubuntu-сервер аналитики).
+        public static bool TcpReachable(string host, int port, int timeoutMs, out string detail)
+        {
+            detail = "";
+            if (string.IsNullOrEmpty(host)) { detail = "хост не задан"; return false; }
+            try
+            {
+                using (TcpClient c = new TcpClient())
+                {
+                    IAsyncResult ar = c.BeginConnect(host, port, null, null);
+                    if (!ar.AsyncWaitHandle.WaitOne(timeoutMs))
+                    {
+                        try { c.Close(); } catch { }
+                        detail = host + ":" + port + " — нет ответа за " + timeoutMs + " мс";
+                        return false;
+                    }
+                    c.EndConnect(ar);
+                    detail = host + ":" + port + " — TCP OK";
+                    return true;
+                }
+            }
+            catch (Exception e)
+            {
+                detail = host + ":" + port + " — " + e.Message;
+                return false;
+            }
+        }
+
+        // Из «192.168.56.42» → «192.168.56.0/24» для правила брандмауэра (вход к IIS с подсети сервера).
+        public static string SuggestFirewallCidr(string host)
+        {
+            if (string.IsNullOrEmpty(host)) return null;
+            string h = host.Trim();
+            // если уже CIDR — как есть
+            if (h.IndexOf('/') >= 0) return h;
+            IPAddress ip;
+            if (!IPAddress.TryParse(h, out ip)) return h + "/32";
+            byte[] b = ip.GetAddressBytes();
+            if (b.Length != 4) return h + "/32";
+            return b[0] + "." + b[1] + "." + b[2] + ".0/24";
         }
 
         public static bool Confirm(string question)

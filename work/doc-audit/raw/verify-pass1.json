@@ -1,0 +1,674 @@
+[
+ {
+  "fid": "F186",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "v",
+  "evidence": "[замер] python-разбор /home/undebot/.openclaw/openclaw.json (значения не печатались): .gateway.auth.token — строка-литерал (48 симв., не ${...}), .mcp.servers.serene-ask.headers.Authorization и .mcp.servers.second-brain-reports.headers.Authorization — литералы 'Bearer …', 'source'/'secretRef' в файле 0 вхождений, права 0o600; .channels.telegram.tokenFile — единственный вынесенный секрет. [замер] sudo -u undebot openclaw secrets --help → OpenClaw 2026.7.1-2, команды apply/audit/configure/reload. НО: docs/RUNBOOK_DEPLOY.md:467-468 прямо описывает запись mcp.servers с «заголовок Authorization: Bearer $MCP_TOKEN» и /etc/1c-mcp-ask.env(600):463; docs/OPENCLAW_BOT.md:46 — «кроме секрета gateway.auth.token, генерится при gateway install»; эталон ubuntu/openclaw/instance/openclaw.json:8,108,122 несёт ровно эти плейнтекстовые слоты с плейсхолдерами.",
+  "fix": "Снять из формулировки утверждения «в доках бот-слоя нет ни слова о том, где лежат MCP-токены и токен шлюза» и «инвариант о секретах бот-слой не покрывает вовсе» — оба опровергаются RUNBOOK:463,467-468, OPENCLAW_BOT.md:43,46 и эталоном instance/openclaw.json:8,108,122. Оставить настоящий пробел: доки не разбирают, что плейнтекст в openclaw.json читаем самим агентом и что в нашей сборке есть штатный SecretRef с `secrets audit --check`/`reload`. Вердикт (в) верен: перевод боевых токенов — решение владельца."
+ },
+ {
+  "fid": "F209",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "v",
+  "evidence": "[код] work/acceptance/run_acceptance.py:33-41 — флага --deliver в команде нет (подтверждаю чтением). [код] ubuntu/openclaw/verify-plugin/index.js:24-25 и :153-183 — message_sending «срабатывает только на РЕАЛЬНОЙ доставке в канал (deliver.ts)», в нём же evaluate/cancel/stripInternal; reply_payload_sending (:187-196) режет только payload.text медиа. [код] /usr/lib/node_modules/openclaw/dist/deliver-BdKtkX_b.js:1277,1357 — хук действительно живёт в модуле доставки. НО: TARGET.md п.15 (стр. 47 таблицы доказательств: «приёмочный набор построен из базы клиента; проверку ведут агенты без контекста») о пути замера и о гейте исходящего не говорит ни слова; docs/HOW_IT_WORKS.md:250-251 по букве противопоставляет бота ПРЯМОМУ вызову сервиса («через бота, а не прямым вызовом сервиса: прямой путь минует перефразирование по вики»), и прогонщик этому следует; docs/OPENCLAW_BOT.md:155-156 намеренно и заранее записывает: «CLI-турн для проверки … без --deliver … гейт message_sending — только на реальной доставке».",
+  "fix": "Понизить до (в): ни один документ не врёт, контракт по букве не нарушен, разделение приборов записано в OPENCLAW_BOT.md:155-156. Вопрос владельцу — гонять ли приёмку реальной доставкой (58 сообщений в Telegram) или оставить как есть; документная часть — дописать в MAP.md:87 / HOW_IT_WORKS.md:257 строку «прогон CLI не проходит через message_sending, гейт исходящего не меряется»."
+ },
+ {
+  "fid": "F210",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[замер] свой разбор docs/ACCEPTANCE_UT.md регуляркой прогонщика (:17,:27): у №39, 44, 48, 53, 54 ref=None при непустых kinds, содержащих answer → ветка :99-101 сводится к bool(got). [замер] свой прогон копий nums/close/is_clar/is_refuse: «…Казакова Наталья Александровна, 0001-01-01» → got=[1,1,1] → ВЕРНО, при том что :614-616 называет ровно это провалом; «Самый ранний документ — 2014 год» → ВЕРНО при :425-426 «провал: 2014 … потеря данных (п. 13)»; «ИНН контрагента Алмаз — 4024005781» → ВЕРНО при :490-492 «🔴 провал: один ИНН … прямо запрещённая п. 12». Второй член тоже воспроизвёлся: «Данных за 2022 год нет: последний документ — 2019-11-18» → got=[2022,2019,11,18] → is_refuse=False → 🔴, а «Нет данных.» → is_refuse=True → ВЕРНО, при том что ACCEPTANCE_UT.md:292 фиксирует объяснённый отказ эталоном поведения, а :293 называет глухое «нет данных» провалом. Вердикт (б) держится по букве таблицы доказательств TARGET.md:152 («Проверка, отвергнувшая верный ответ, считается дефектом проверки») и :143 (п.11 — «пункт закрыт, только если проверен замером»); править MAP.md:73 под код нельзя.",
+  "fix": "Правок по существу не требуется. Мелочь, уже записанная скептиком: в evidence у №53 строки «эталон:» нет вовсе (501 стоит в SQL, :586), а ссылку «док на :293» во втором члене читать как «:292»; опору вердикта лучше держать на TARGET.md:152 и :143, а не на п.12 (он про систему, а не про прибор)."
+ },
+ {
+  "fid": "F211",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "b",
+  "evidence": "[код] run_acceptance.py:92 — шаблон is_clar включает 'или ' и '\\?\\s*$' по последним 260 символам; :58-60 nums склеивает цифры через пробел; :108 сравнение any() по ВСЕМ числам ответа. [замер] свои копии функций: nums('Складов 25 (включая 8 групп). Данные на 2019-11-18 17:04.') = [25.0, 8.0, 2019.0, 11.0, 1817.0, 4.0] — числа 1817 в тексте нет; при эталоне 5 (№11) «Организаций в справочнике 14 записей, из них 5 групп.» → close-совпадение True → ВЕРНО; «Товаров 227 позиций справочника, или 92 683 закупленных штук.» → is_clar=True. НО: пример из находки «Позиций номенклатуры 227. … уточните при необходимости» срабатывает по 'уточн', а не по 'или '; и №29 в перечень «док требует именно clarify» не годится — ACCEPTANCE_UT.md:344 допускает `answer`, называющий величину, и разбор дока даёт у №29 kinds=['clarify','answer'], то есть ВЕРНО там приходит веткой answer (bool(got)), а не is_clar.",
+  "fix": "В теле находки заменить пример №26 на «Товаров 227 позиций справочника, или 92 683 закупленных штук.» и убрать №29 из перечня «где док требует именно clarify» (оставить 26 и 28) — то есть свернуть уточнение скептика внутрь формулировки. Три механики (союз «или», any() по всем числам, склейка цифр) верны, вердикт (б) остаётся."
+ },
+ {
+  "fid": "F212",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "b",
+  "evidence": "[код] run_acceptance.py:95-96 и :92 — два русских списка подстрок, других признаков нет; :43-56 из JSON берётся самый длинный текстовый фрагмент, поле kind не читается. НО причина названа неверно: kind до прогонщика не доходит в принципе — мост схлопывает его в текст ещё до CLI: ubuntu/openclaw/mcp_braine.py:117-122 («kind = data.get(\"kind\"…)» → при no_data возвращается NO_DATA_REPLY, наружу уходит только строка), ubuntu/openclaw/mcp_ask.py:140-168 — то же с ветками unavailable/clarify/no_data. Комментарий :93-94 дословно: «Отказ распознаётся по СМЫСЛУ ответа, а не по числу: система обязана сказать, что ответить не может (п. 18), и текст пишет модель на языке вопроса» — независимости от языка он не заявляет.",
+  "fix": "Заменить «прогонщик kind не получает, потому что снимает stdout CLI» на «kind схлопывается в текст самим мостом (mcp_ask.py:140-168, mcp_braine.py:117-122), поэтому его нет и в полном --json — починка требует правки моста, а не чтения другого поля». Формулировку «код сам заявляет независимость от языка» смягчить до «комментарий признаёт, что язык ответа задаёт вопрос, — и тем противоречит русским спискам». Вердикт (б) оставить (TARGET.md:142 — «на чужой базе … другой язык … работает без правки кода»; CLAUDE.md:172 «список слов — догадка и привязка»), но в doc_locs добавить memory_bank/activeContext.md:58 «отказ при отсутствии данных — проверяется прогонщиком по kind» — это прямо неверная строка дока."
+ },
+ {
+  "fid": "F213",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "v",
+  "evidence": "[замер] воспроизвёл конструкцию прогонщика: subprocess.run(['timeout','1','sleep','5'],timeout=10) → rc=124, stdout='' , stderr='' , исключения НЕТ; дальше json.loads('') → JSONDecodeError → txt='' → nums=[] → is_clar=False → вопрос попадает в 🔴 НЕ СОВПАЛО/НЕ ТО ПОВЕДЕНИЕ. Основной таймаут стоит внутри команды (run_acceptance.py:33 'timeout','400') и срабатывает раньше внешнего timeout=420, значит «таймауты не считает вовсе» неверно: обычный таймаут не теряется, а раздувает счётчик НЕВЕРНО. Верно только про except→continue (:87-88) и про ИТОГ без числа прогнанных (:122-123); при этом каждая потеря печатается строкой «ОТКАЗ: …», а lo-hi в ИТОГЕ даёт полное число попыток. TARGET.md п.18 (стр. 64-66) по букве говорит о БОТЕ («Недоступна 1С, не отвечает модель … бот сообщает об этом»), к приёмочному прогонщику не относится; ACCEPTANCE_UT.md:913-919 случай v12 уже разобран, документ не отстал.",
+  "fix": "Понизить до (в) и переписать заголовок: «прибор не отличает внешний сбой (billing error, cooldown) от неверного ответа и не имеет пробы живости; в сводке нет числа прогнанных». Убрать «таймауты не считает вовсе» (таймаут 400 идёт в НЕВЕРНО) и ссылку на нарушение п.18. Вопрос владельцу — вводить ли контрольный вопрос с известным ответом и счётчик потерянных в ИТОГ."
+ },
+ {
+  "fid": "F214",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "[код] run_acceptance.py:82-123 — один проход, агрегирования и разброса нет (подтверждаю); но повтор штатно делается новым RUN_TAG (HOW_IT_WORKS.md:253-257) и делался: ACCEPTANCE_UT.md:753 «устойчивость … замерена только на четырёх тяжёлых (по 3 повтора)». Разделы, на которые ссылается находка, — датированная история: заголовок :703 «Результат прогона 30.07.2026», и раздел Flash/pro утверждает ОБРАТНОЕ «стало лучше»: :775 «плохих исходов всего 11 → 11», :777 «Число плохих исходов не изменилось». [замер] git log -S 'Знать свой разброс' -- docs/HOW_IT_WORKS.md → правило записано 2026-07-31 05:17, а выводы 30.07 (git log -S 'Pro оставлен' -- docs/ACCEPTANCE_UT.md → 6992193, 2026-07-30 11:40), то есть правило применено к записи задним числом. Сдвиг в таблице :711-713 — не 1-2, а 10→13→9 по неверным числам.",
+  "fix": "Сузить до одной строки: ACCEPTANCE_UT.md:796 — «+1 верный» подан как довод, надо пометить, что +1 из 23 внутри объявленного разброса, а решающий довод один — «убраны оба отказа при наличии данных (п. 21)». Убрать «повторов прогонщик не умеет» (не умеет агрегировать, повтор — новый RUN_TAG) и «выводы «стало лучше» сделаны на шуме» (раздел Flash/pro фиксирует отсутствие улучшения). Severity → low; класс (а) верен."
+ },
+ {
+  "fid": "F001",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "[замер 01.08 20:14 UTC] systemctl is-active 1c-serene-pipeline.timer → inactive (is-enabled → enabled); .service → failed, status=15/TERM 29.07 07:32, list-timers: last run Wed 2026-07-29 06:41:15, NEXT нет. Подмены нет: crontab -l → «no crontab for root», ps -eo args → ни одного pipeline.sh/build.sh/serene_sync. Но остановка записана как намеренная и временная: memory_bank/progress.md:283 (раздел «Состояние стенда днём 29.07 (снимок)») — «конвейер ПЕРВОЙ базы 🔴 остановлен намеренно… Вернуть: systemctl start 1c-serene-pipeline.timer», docs/TEST_SECOND_BASE.md:43 — «остановлен на время теста… Вернуть после». Из перечисленных локусов CHANGELOG.md:1215 и docs/HOW_NOT_TO.md:826 — датированные записи от 29.07 о том, что было в тот момент («проверено, что больше некому», история отключения nightly-eval), а не текущие утверждения. Текущими и неверными остаются docs/TARGET_STATUS.md:34 (п.17 🟢 «конвейер по готовности, такт ~6 мин»), MAP.md:216 («Свежесть по готовности… такт ~6 мин»), docs/RUNBOOK_DEPLOY.md:36 (🟢 боевой такт).",
+  "fix": "Оставить вердикт (б) — чинится стенд (start timer), доки под остановку править нельзя, — но переформулировать: не «п.17 контракта не выполняется», а «намеренная временная остановка (progress.md:283, TEST_SECOND_BASE.md:43) не отменена четвёртые сутки, и сервис при этом в failed». Из doc_locs убрать CHANGELOG.md:1215 и docs/HOW_NOT_TO.md:826 как датированную историю; оставить TARGET_STATUS.md:34, MAP.md:216, RUNBOOK_DEPLOY.md:36."
+ },
+ {
+  "fid": "F002",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[замер] ss -tlnp → 127.0.0.1:8099 держит python3 pid 3109129; ps -o ppid,lstart -p 3109129 → PPID=1, старт Fri Jul 31 04:50:55; /proc/3109129/cgroup → user.slice/user-0.slice/session-247653.scope (вне systemd). curl -s -o /dev/null -w %{http_code} http://127.0.0.1:8099/health → 200 ({\"status\":\"serene-ask-ok\",\"corpus_rows\":623565}), :8091 → 000 (никто не слушает). systemctl is-active 1c-serene-ask → inactive при is-enabled → enabled; systemctl cat 1c-mcp-ask → строка 16 Environment=ASK_URL=http://127.0.0.1:8099, юнит active. [код] serene_ask.py:52 LISTEN_PORT default 8091; ASK_LISTEN_PORT нет ни в /etc/1c-serene-ask.env (ключи ASK_TOKEN, ASK_SCORER, DEEPSEEK_MODEL), ни в /etc/1c-mcp-reports.env, ни в юните — то есть штатный старт поднимет :8091 и оборвёт мост. Док, который это опровергает прямо: docs/RUNBOOK_DEPLOY.md:295 и :304 — «Всё enabled; после ребута стек поднимается сам… перезагрузка любой из машин → всё восстанавливается без ручных действий».",
+  "fix": "Вердикт верен. В отчёте развести локусы: README.md:35, MAP.md:22, memory_bank/techContext.md:13, TARGET_ARCHITECTURE.md:117 (порт 8091) и BOXED_BLOCKERS.md:143 («к боту не подключён») — чистая (а), правятся в доке независимо; (б) держится на сироте вне systemd и на обещании zero-touch в RUNBOOK:295,304."
+ },
+ {
+  "fid": "F004",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[замер] python-разбор живого /home/undebot/.openclaw/openclaw.json → mcp.servers: second-brain-reports = http://127.0.0.1:6015/mcp, toolFilter {'include': ['report_1c']}; serene-ask = :6016 {'include': ['ask_1c']}. systemctl list-units → 1c-mcp-reports active (running), ss → 127.0.0.1:6015 слушает. [код] ubuntu/serenedb/serene_report.py:467 schema = get_schema(), :353 user = f\"SCHEMA:\\n{schema}\" — схема целиком в промт; та же строка в развёрнутой копии /opt/1c-mcp-reports/serene_report.py:467. Решение владельца дословно: memory_bank/owner-memory/project-no-nl2sql-charts-after-answer.md — «Сделать: убрать report_1c из mcp.servers.*.toolFilter.include, погасить NL→SQL-путь». Доки, утверждающие обратное: README.md:46 («инструмент report_1c (NL→SQL) выведен из контура — решение владельца 26.07») и docs/SCALE_BLOCKERS.md:320 («инструмент выведен из контура»).",
+  "fix": "Вердикт верен. Мелочи: owner-memory/project-no-nl2sql-charts-after-answer.md:19 перенести из doc_locs (мест для правки) в доказательства — файл ничего ложного не утверждает; и уточнить формулировку: замерено, что инструмент оставлен доступным боту (toolFilter.include) и что путь NL→SQL шлёт схему при вызове; сам факт вызова report_1c ботом не замерялся."
+ },
+ {
+  "fid": "F005",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "[замер] ss -tlnp → 127.0.0.1:6021 держит python3 pid 1136469 (/opt/1c-odata-gateway/odata_gateway.py), ps → PPID=1, старт Tue Jul 28 20:32:49, cgroup user-0.slice/session-247653.scope. systemctl status 1c-odata-gateway@ut → «inactive (dead) (Result: exit-code) since Wed 2026-07-29 06:00:45» — то есть цикл перезапусков давно кончился. awk по /etc/1c-odata-gateway-ut.env → ODG_USER len 25, ODG_PASS len 0 (в /etc/1c-odata-gateway.env — 9 и 6). Но док не «описывает иначе»: docs/RUNBOOK_DEPLOY.md:51-58 сам помечает это 🔴 и заканчивает выводом «Оба осиротевших процесса — это и есть „ручной шаг“, который ломает автономность… Один ручной шаг обошёлся в два дефекта»; README.md:30 — строка схемы про шаблонный юнит 1c-odata-gateway@<имя>, и такой юнит на стенде есть (1c-odata-gateway@.service, indirect/enabled), она не утверждает, что @ut запущен.",
+  "fix": "Снизить до (а) и переформулировать: «снимок RUNBOOK_DEPLOY.md:51 протух в детали — юнит @ut не „крутится в перезапуске“, а inactive (dead) с 29.07 06:00; сам сирота уже назван дефектом в том же доке». README.md:30 из локусов убрать. Ценное и новое здесь одно, его и вынести в суть: в /etc/1c-odata-gateway-ut.env ODG_PASS пуст, поэтому штатный юнит и после освобождения порта отдаст 401 — пароль читателя второй базы нигде не сохранён."
+ },
+ {
+  "fid": "F007",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "[код] diff /opt/1c-gateway/gateway.py (файл от 22.07 18:09) и /srv/1c/ubuntu/1c-gateway/gateway.py: в /opt-копии _auth_ok() = «if not GATEWAY_TOKEN: return True», гарда в main() нет; в репо — fail-closed плюс FATAL при пустом GW_GATEWAY_TOKEN. git log -1 -S \"FATAL: GW_GATEWAY_TOKEN\" → ee37997 от 2026-07-26 «запреты держатся кодом: шлюз fail-closed» — ужесточение сделано и записано, и в самом коде стоит пояснение «Спасало только то, что юнит был отключён». [замер] systemctl is-enabled 1c-gateway → disabled, is-active → inactive, в ss :6010 отсутствует; /etc/1c-gateway.env содержит только GW_TOOLKIT_TOKEN и GW_UPSTREAM. Статус компонента: docs/RUNBOOK_DEPLOY.md:556 и README.md:98 называют gateway.py dev-артефактом (whitelist-прокси MCP), боевой канал — odata_gateway.py :6011.",
+  "fix": "Оставить как (а) по названному локусу: «таблица env в ubuntu/1c-gateway/README.md:50 отстала от кода — GW_GATEWAY_TOKEN стал обязательным (FATAL), GW_TOOLKIT_TOKEN даёт лишь WARN». Отдельной строкой — уборка стенда: «в /opt/1c-gateway лежит копия dev-прокси от 22.07 (fail-open), юнит disabled, порт не слушается». Убрать формулировки «дверь открыта по факту настройки» и «нарушен инвариант „запреты держатся кодом“»: ужесточение уже внесено 26.07, живого процесса нет."
+ },
+ {
+  "fid": "F008",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[замер] grep ASK_SCORER /etc/1c-serene-ask.env → ASK_SCORER=dfi (файл 600 root, mtime 30.07 13:01); systemctl is-active 1c-serene-ask → inactive, боевой ответ держит процесс на :8099 (см. F002). [код] serene_ask.py:114 SCORER = os.environ.get(\"ASK_SCORER\", \"bm25\"); ab_scorer.py:107-113 restart() переписывает боевой /etc/1c-serene-ask.env и рестартует юнит, восстановления прежнего значения в файле нет, список по умолчанию (:27) кончается на dfi. Что dfi не задуман боевым — записано самим проектом: CHANGELOG.md:1140-1142 «приёмка 8/8 на tfidf (боевой)… dfi и lm_jm дают 5/8… в продукте не используются» и :2188-2192 «ab_scorer.py оставляет в конфиге последний прогнанный вариант, а не победителя»; docs/REGRESSION_BASE1.md:88 то же. Доки, где скорер подан как данность: HOW_IT_WORKS.md:208 и :302 («ранжирует движок штатной tfidf»), techContext.md:66-67 («выбрана lm_dirichlet»), CHECKLIST_SEARCH_FIX.md:290,307, PLAN_THREE_STEPS.md:164 («оставляем bm25»). Скорер живого процесса я не снимал: это требует /proc/<pid>/environ, что мне запрещено; на вердикт не влияет.",
+  "fix": "Вердикт (б) оставить за главным: ASK_SCORER=dfi в боевом env — побочный эффект ab_scorer, чинится env и код инструмента, док под dfi править нельзя. Доработки формулировки: (1) вынести в отдельную (а) чисто док-локусы HOW_IT_WORKS:208,302, techContext:67, PLAN_THREE_STEPS:164 — там функция подана фиксированной, хотя код берёт её из ASK_SCORER; (2) снять расхождение внутри самого отчёта по цифре dfi: CHANGELOG:1141 и REGRESSION_BASE1:88 дают 5/8, CHECKLIST_SEARCH_FIX.md:292 — 7/8; (3) пометить, что значение у живого процесса взято из окружения процесса, а не из конфигурации."
+ },
+ {
+  "fid": "F011",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[код] ubuntu/serenedb/corpus_precheck.sql:32-35 — «SELECT CASE WHEN count(*) = 0 THEN error('нет индекса search_idx…') END FROM duckdb_indexes() WHERE index_name = 'search_idx'», без database_name, тогда как соседняя проверка :54-57 фильтр несёт; ubuntu/serenedb/corpus_init.sql:130 то же. Путь живой: build.sh:106 -f corpus_init.sql, :138 -f corpus_precheck.sql; развёрнутая копия совпадает с репо (diff -q /srv/1c/ubuntu/serenedb/corpus_precheck.sql /opt/1c-mcp-reports/corpus_precheck.sql → расхождений нет). [замер, живой движок, одиночный SELECT под serene_ro] SELECT database_name||'|'||index_name FROM duckdb_indexes() WHERE index_name IN ('search_idx','alias_idx') → postgres|alias_idx, postgres|search_idx, ut_test|alias_idx, ut_test|search_idx — имя одно на две базы, значит гарда пройдёт по чужому индексу. Правило записано в memory_bank/techContext.md:239-241 с оговоркой «если только цель прямо не в том, чтобы смотреть на соседние базы» — здесь цель именно текущая база.",
+  "fix": "Вердикт верен. Две уточняющие правки: corpus_init.sql:130 — строка отчёта («индексов»), а не гарда, поэтому «защита вырождается в пропускать всё» относится только к corpus_precheck.sql:35; и serene_search_build.py:396 (жёсткое database_name='postgres') лежит вне живого пути — [замер] 1c-serene-index.timer inactive/disabled, юнит переключён на build.sh (комментарий /etc/systemd/system/1c-serene-index.service:6), последняя правка файла 27.07."
+ },
+ {
+  "fid": "F017",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "a",
+  "evidence": "Док утверждает это категорично, без оговорок: docs/OPENCLAW_BOT.md:46 «Репо-копия совпадает с деплоем 1:1 (кроме секрета gateway.auth.token)», то же в ubuntu/openclaw/README.md:13. Свой замер: diff <(jq -S 'del(.gateway.auth.token)' ubuntu/openclaw/instance/openclaw.json) <(jq -S ... /home/undebot/.openclaw/openclaw.json) — расходятся model.primary flash→pro, состав mcp.servers (репо: second-brain :6014/ask_1c/60000 + reports :6015; бой: reports :6015 + serene-ask :6016/ask_1c/300000), +plugins memory-wiki, hooks.allowConversationAccess:true, meta.lastTouchedAt. jq по бою: tools.allow=[message,bundle-mcp,wiki_search,wiki_get], plugins.allow=[deepseek,braine-verify,memory-wiki]; в репо — по два. Легитимность стенда подтверждена: memory_bank/progress.md:137 (deepseek-v4-pro — указание владельца), progress.md:139-146 (memory-wiki — «Согласовано владельцем: плагин включаем», решение 30.07), docs/HOW_IT_WORKS.md:207 («wiki_search/wiki_get — инструменты разрешены боту в tools.allow»). Нарушения TARGET.md нет → отстали док и репо-эталон, вердикт (а) верен.",
+  "fix": "Поправить только адрес одной цитаты: фраза «Эталон совпадает с прод-деплоем 1:1» стоит в docs/RUNBOOK_DEPLOY.md:503, а в doc_locs указана :504 (там tools.allow). Сомнение о санкции на memory-wiki/wiki_search/wiki_get из состава находки убрать — оно снято progress.md:139-146 и HOW_IT_WORKS.md:207."
+ },
+ {
+  "fid": "F099",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "Воспроизвёл на боевой базе (ut_test — та, из которой отвечает живой сервис: curl 127.0.0.1:8099/health → corpus_rows 623565): тот самый запрос из serene_ask.py даёт 507500|623565|0|0|0, а список «потерянного» (WHERE в_1С>0 AND в_1С>в_корпусе) — 0 строк. Причина посчитана рядом: select причина,count(*),sum(в_1С),sum(в_корпусе) → 'регистр: $count считает регистраторы' 80|20887|136952, то есть ровно 116 065 разницы = 623565−507500, и 'витрина развёрнута по табличной части' 85|5891|5891. В коде ubuntu/serenedb/serene_ask.py:1863-1897 колонка «причина» читается ТОЛЬКО в списке потерянных (который пуст), в census уходят пять итогов — модель получает два несовместимых числа без объяснения. При этом ubuntu/serenedb/coverage_build.sql:105-112 дословно: «РАЗДУТИЕ НАЗЫВАЕТСЯ, А НЕ УМАЛЧИВАЕТСЯ… по п. 13 это молчаливое ИСКАЖЕНИЕ, а не потеря, и потому опаснее». docs/TARGET_STATUS.md:30 держит п. 13 🟢. Правится код ответа, вердикт (б) верен.",
+  "fix": "Обоснование опереть на записанное решение проекта (coverage_build.sql:105-112 требует называть раздутие), а не на букву п. 13 — по букве он про недоступное и про потерю. Из doc_locs убрать docs/HOW_IT_WORKS.md:606: это строка ASCII-схемы «1С → перепись», она про причины ничего не утверждает; значимое место — TARGET_STATUS.md:30 (п. 13 🟢) и сам код."
+ },
+ {
+  "fid": "F100",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "Все числа воспроизвёл: ut_test build_rows 632720 / build_noemb 205479 при живых count(*)=623565, count(*)-count(emb)=340464 (=cov_noemb_service 248384 + cov_noemb_pending 92080); база 1 build_noemb 0 при 5091 без вектора, build_rows 103808 = живому. Но «противоречит сам себе» и «не сообщает, что одно из них протухло» — сильнее фактов: в той же таблице лежит build_ts (ut_test 1785346661 = 29.07 17:37 UTC, база 1 = 29.07 06:40), corpus_postcheck.sql:74-77 прямо называет build_* «следом такта… по нему судить о свежести (п. 17)», а serene_ask.py:2957-2967 при возрасте свыше ASK_STALE_WARN_SEC (3600 с) дописывает к ответу «Данные могли устареть». Причина расхождения — такт не доходил до конца с 29.07 (systemctl is-active 1c-serene-pipeline.service → failed), то есть это симптом F001/F096, а не отдельная поломка прибора. Место docs/ACCEPTANCE_UT.md:692-695 указано неверно: там прямая оговорка «Состав корпуса НА МОМЕНТ СБОРКИ НАБОРА: 632 720».",
+  "fix": "Заголовок переписать: не «search_quality противоречит сам себе», а «с 29.07 такт не доходил до конца, поэтому build_* — снимок прошлой эпохи (build_ts 29.07 17:37), а cov_* пересчитаны позже: два набора в одной таблице описывают разные состояния». Снять довод «не сообщает, что протухло» (есть build_ts и приписка о старении в ответе) и убрать docs/ACCEPTANCE_UT.md:695 из doc_locs (оговорено «на момент сборки набора»). Свести с F096 по первопричине. Как настоящий остаток оставить: build_noemb считается без отсева служебных и слишком длинных строк, в отличие от after_noemb (corpus_postcheck.sql:14-23), — одно название означает разное. Вердикт (б) оставить."
+ },
+ {
+  "fid": "F110",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "b",
+  "evidence": "Ядро фактов подтверждаю: /opt/1c-mcp-reports/serene_ask.py:42 — DSN = os.environ.get(\"SERENEDB_DSN_RO\", \"…dbname=postgres\"), имя SERENEDB_DSN встречается только в докстринге :28; grep -l SERENEDB_DSN_RO /etc/1c-*.env → 0 файлов, grep -rl по /etc/systemd/system → 0; systemctl cat 1c-serene-ask → EnvironmentFile=/etc/1c-mcp-reports.env + -/etc/1c-serene-ask.env, в первом из имён есть SERENEDB_DSN, но не …_RO. Что боевой процесс читает вторую базу, снял без /proc: curl 127.0.0.1:8099/health → corpus_rows 623565 (ut_test; в базе 1 — 103808); cat /proc/3109129/cgroup → /user.slice/user-0.slice/session-247653.scope, ppid=1 — вне systemd. Но «неясно, как задумано» неверно: docs/RUNBOOK_DEPLOY.md:52 сам пишет «сервис ответов второй базы — тоже осиротевший процесс, юнита нет. Должен стать 1c-serene-ask@<имя> — Фаза 2 PLAN_AUTONOMY», а docs/PLAN_AUTONOMY.md:89 держит это строкой №12 списка ручных действий, подлежащих устранению. Замысел записан, вопроса владельцу нет — чинится стенд.",
+  "fix": "Вердикт v → b и свести с F002/F003: как задумано, известно и записано (RUNBOOK_DEPLOY.md:52 «должен стать 1c-serene-ask@<имя> — Фаза 2», PLAN_AUTONOMY.md:89 п. 12), поэтому это известный дефект стенда, а не неясность. Формулировку про док смягчить: docs/REGRESSION_BASE1.md:95 стоит внутри датированного разбора и хеджирован словом «по умолчанию» — он не «прямо утверждает обратное живому состоянию», а описывает состояние на дату замера."
+ },
+ {
+  "fid": "F111",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "Проверил сам: /opt/1c-mcp-reports/serene_report.py:50 EMBED_DIM default 1536 против /opt/1c-mcp-reports/serene_ask.py:182 — 1024 и ubuntu/serenedb/build.sh:35 — 1024; EMBED_DIM не задан ни в одном /etc/1c-*.env (grep -c → ни одного вхождения), юнит 1c-mcp-reports читает только /etc/1c-mcp-reports.env, Environment= там нет — значит работает дефолт 1536. В обеих базах SELECT table_name,data_type FROM duckdb_columns() WHERE column_name='emb' AND table_name IN ('resolver_index','search_corpus') → FLOAT[1024]. Движок такое сравнение не выполняет: SELECT cosine_similarity([1.0,2.0,3.0]::FLOAT[3],[1.0,2.0]::FLOAT[2]) → ERROR: Array dimensions must be equal. Возврат не проверяется: serene_report.py:227 итерирует psql(...).stdout.splitlines() без returncode (сравните с sample_values:117-119, где проверка есть) — ошибка становится «ничего не нашлось». Ветка живая: mcp_reports.py:21 импортирует serene_report, юнит 1c-mcp-reports active на :6015, resolver_index непуст (build_res 188068). Док под это править нельзя, вердикт (б) верен.",
+  "fix": "Добавить две точности: (1) размерность литерала берётся из len(v) (serene_report.py:70), то есть поломка наступает, если эмбеддер вернёт запрошенные 1536 — прямого замера ответа API никто не снимал, стоит либо снять его, либо написать «при 1536 ветка падает, при 1024 работает вопреки объявленному EMBED_DIM»; (2) в doc_locs явно назвать docs/RUNBOOK_DEPLOY.md:369 как место, где док прямо предписывает EMBED_DIM=1536 в /etc/1c-mcp-reports.env (при корпусе FLOAT[1024] это сломало бы и serene_ask)."
+ },
+ {
+  "fid": "F112",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "Суть подтверждаю своими замерами: /opt/1c-bot-monitor/bot_health_check.sh:11 SYS_SERVICES=\"${SYS_SERVICES:-serenedb 1c-mcp-braine 1c-mcp-reports api}\" (строка 11, не 12); файлы репо и /opt идентичны (diff пуст); systemctl cat 1c-bot-monitor.service — EnvironmentFile отсутствует, поэтому /etc/1c-bot-monitor.env (единственная строка GATEWAY_HEALTH_URL=http://127.0.0.1:18800/health) не читается и на строках 16/26 срабатывает fail-open; cat /var/lib/1c-bot-monitor/state → «down: api», записан 30.07 11:18:25 (не 26.07); systemctl is-active api.service → inactive (ExecStart — uvicorn app.api:app из /opt/smart-bot, слой braine). Вердикт (б) обоснован прецедентом HOW_NOT_TO §2.14 (выведенный слой сохранил право будить владельца) — правило подтверждено, доки описывают тот же неверный состав (ARCHITECTURE.md:89 «жив ли gateway/serenedb/mcp/api»), значит правится код, не док. Но формулировка сильнее фактов: в списке есть два живых звена пути ответа — serenedb и 1c-mcp-reports (:6015, дверь report_1c, подключена к боту), плюс проверяется user-юнит openclaw-gateway.",
+  "fix": "Заголовок и тезис «не сторожит путь ответа» заменить на точный: «монитор сторожит базу, отчётную дверь :6015 и шлюз бота, но не сторожит 1c-mcp-ask (:6016), сервис ответов serene_ask (:8099), 1c-odata-gateway и такты свежести 1c-serene-pipeline/1c-serene-sync — ровно те звенья, чей отказ и провисел незамеченным». Убрать «две трети — юниты выведенного braine» (из четырёх выведен api, а 1c-mcp-braine до сих пор active) и «держит down: api с 26.07» (файл состояния от 30.07 11:18). Из doc_locs выбросить MAP.md:52 и docs/RUNBOOK_DEPLOY.md:369 — про монитор там ничего нет (MAP.md вообще не упоминает bot-monitor, :369 — блок EMBED_DIM); исправить ссылку на строку 11."
+ },
+ {
+  "fid": "F119",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "a",
+  "evidence": "Факты воспроизвёл: diff ubuntu/systemd/1c-serene-index.service ubuntu/serenedb/systemd/1c-serene-index.service → ExecStart=/opt/1c-mcp-reports/build.sh против /opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_search_build.py; cmp ubuntu/systemd/… /etc/systemd/system/1c-serene-index.service → идентичны (боевая копия — ubuntu/systemd/); docs/RUNBOOK_DEPLOY.md:405 велит cp именно ubuntu/serenedb/systemd/1c-serene-index.{service,timer}; MAP.md:111 указывает на ubuntu/systemd/. Но стенд и боевой код контракт НЕ нарушают: в /etc стоит build.sh, таймер OnBootSec=5min+OnUnitActiveSec=20min. Нарушение только гипотетическое — при исполнении отставшего руководства. По правилу отчёта это (а): реальность легитимна, править док (RUNBOOK §10.6 и SERVER_HANDOFF) и убрать устаревшую пару из репозитория. Заодно уточнение: ls ubuntu/systemd/*.timer → только 1c-serene-pipeline.timer, боевого 20-минутного 1c-serene-index.timer в git нет вовсе, так что «таймер тоже задвоен» неверно. И весь §10.6 устарел целиком: systemctl is-enabled 1c-serene-index.timer/1c-serene-sync.timer → disabled, работу ведёт 1c-serene-pipeline.timer (enabled).",
+  "fix": "Вердикт b → a: стенд легитимен, нарушение возникает только при исполнении дока. Формулировку «таймер тоже задвоен» заменить на «боевого 20-минутного таймера в git нет ни одной копии, единственная версия в репозитории — снятая ночная (OnCalendar 03:55), поэтому одной сменой пути в RUNBOOK не обойтись». Добавить, что §10.6 устарел целиком: 1c-serene-index.timer и 1c-serene-sync.timer на стенде disabled, такт ведёт 1c-serene-pipeline. Ссылку на п. 20 сузить до доказанного: питоновский сборщик сносил корпус DROP+CREATE (шапка боевого юнита)."
+ },
+ {
+  "fid": "F120",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "v",
+  "evidence": "[замер] stat -c '%a %U:%G %n' /srv/1c/credentials/* → 644 ubuntu:users на всех шести .env; ls -ld /srv/1c → drwxr-xr-x; git log --all --diff-filter=A --name-only | grep credentials → пусто — эта часть верна. НО: [замер] grep -n -i 'секрет|600|credentials|парол' /srv/1c/TARGET.md → НИ ОДНОГО совпадения; grep -rn -i 'credentials|секрет' memory_bank/owner-memory/ → пусто. Ни контракта, ни решения владельца о месте секретов нет — инвариант живёт только в CLAUDE.md. [файл] docs/ARCHITECTURE.md:187-188 «Всё в credentials/ (в .gitignore) и в /etc/*.env на LXC (chmod 600)» и memory_bank/techContext.md:129 «## Ключи и секреты (все в credentials/, вне git)» — доки закрепляют credentials/ как штатное место, а MAP.md:200 и TARGET_ARCHITECTURE.md:122 требуют /etc 600: доки противоречат друг другу, а как задумано — неясно. [замер] ls -l /etc/1c-*.env → всего 13 файлов, 600 у двенадцати (не «остальных тринадцати»); [замер] cut -d= -f1 /etc/1c-bot-monitor.env → единственный ключ GATEWAY_HEALTH_URL, секрета там нет вовсе.",
+  "fix": "Снять вердикт «нарушен инвариант/контракт»: в TARGET.md о секретах ни строки, в owner-memory тоже. Переписать одной фразой: «доки расходятся о месте секретов (MAP:200 и TARGET_ARCHITECTURE:122 против ARCHITECTURE:188 и techContext:129), а боевые ключи в credentials/ стоят 644» — и вынести владельцу вопрос: узаконить credentials/ или переносить в /etc. Убрать довесок про /etc/1c-bot-monitor.env (там только GATEWAY_HEALTH_URL, не секрет) и исправить «остальные тринадцать» → двенадцать."
+ },
+ {
+  "fid": "F127",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "b",
+  "evidence": "[замер] grep '^ODG_' /etc/1c-odata-gateway-ut.env → ODG_LISTEN_PORT=6021, ODG_UPSTREAM=http://192.168.56.1:6003/ut/odata/standard.odata, ODG_USER=Администратор (ФедоровБМ); у первой базы /etc/1c-odata-gateway.env → ODG_USER=ai_reader. Порт 6021 держит pid 1136469 (ss -tlnp) — слой read-only-пользователя у боевой второй базы действительно отсутствует. НО факт про пароль неверен: [замер] awk -F= '/^ODG_PASS=/{print length($2)}' → /etc/1c-odata-gateway-ut.env: 0, /etc/1c-odata-gateway.env: 6. Пароля администратора в этом файле нет — он пустой. Подтверждение с живого процесса: первая строка его журнала ut-gw.log — «WARN: ODG_USER/ODG_PASS пусты — OData ответит 401» (odata_gateway.py:145-146 печатает её только при пустом USER или PASS), при этом в том же журнале 22 390 ответов 200: /ut отдаёт данные административной учётке с пустым паролем.",
+  "fix": "Убрать «плюс пароль администратора 1С лежит в /etc/1c-odata-gateway-ut.env» — ODG_PASS там пуст; заменить на замеренное: вторая база отдаёт данные под «Администратор (ФедоровБМ)» с пустым паролем (WARN в журнале + 22 390 ответов 200). «Полноправным администратором» → «не под ai_reader; права учётки изнутри 1С отсюда не проверялись» (скептик уже отметил). Вердикт (б) оставить."
+ },
+ {
+  "fid": "F128",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[код] serene_ask.py:1899 — вызов модели с COVERAGE_SYS; :1906 ok_roles,bad = check_claims(claims, agg, []); :1911-1912 при провале return {'kind':'figures','text': text.strip()} — отклонённый текст модели уходит как есть, тогда как на основном пути :2836-2841 текст заменяется на TOTAL_TEXT/refuse_text. [код] grep -n 'gate(' serene_ask.py → вызовы только на 2806 и 2823; на ветке coverage gate() не вызывается ни разу. [код] :1666-1672 check_claims: 'if v is None: continue' → при пустых ролях возврат (True, []). [замер] diff ubuntu/openclaw/mcp_ask.py /opt/openclaw-mcp/mcp_ask.py → пусто (боевая копия та же), grep -c figures в ней → 0: боту уходит только data['text']. [код] verify-plugin/index.js:84-97 — результат инструмента уходит в mergeRef, то есть становится эталоном хода. Ветка достижима: :1968 'if (intent.get(\"about\") or \"\") == \"coverage\"'. Докстринг :1864-1867 действительно обещает «ТОТ ЖЕ гейт… отдельного, более мягкого пути нет».",
+  "fix": "Существо и вердикт менять не нужно. Две мелочи: координата docs/HOW_IT_WORKS.md:226 → :225 (скептик отметил); во втором участнике убрать оборот «модель, выполнив соседнюю инструкцию»: ANSWER_SYS (:1514) и COVERAGE_SYS (:1899) уходят в разных вызовах и вместе модели не видны — дыра не в противоречии промтов, а в том, что claims держится просьбой в промте, а check_claims при null-ролях возвращает True."
+ },
+ {
+  "fid": "F129",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[код] serene_ask.py:191 TOTAL_TEXT = os.environ.get('ASK_TOTAL_TEXT',''); :2836-2841 при провале гейта kind=figures, text = TOTAL_TEXT.format(...) если задан, иначе refuse_text(question). [замер] grep -c 'ASK_TOTAL_TEXT|ASK_NO_DATA_TEXT' /etc/1c-mcp-reports.env /etc/1c-serene-ask.env → 0 и 0; в дампе окружения живого :8099 (scratchpad/ask8099.env) из ASK_* есть только ASK_LISTEN_PORT=8099, ASK_SCORER, ASK_TOKEN — ASK_TOTAL_TEXT отсутствует; там же SERENEDB_DSN_RO с dbname=ut_test. [замер] diff ubuntu/openclaw/mcp_ask.py /opt/openclaw-mcp/mcp_ask.py → пусто; grep -c figures в боевой копии → 0 (mcp_ask.py:140-178 возвращает только text). [файл] TARGET.md:110 — действительно п.21 «ЗАДАЧА ПРОЕКТА — ОТДАТЬ ОТВЕТ. ПРАВИЛЬНЫЙ», дословно «если данные есть, но по нашей системе мы их не отдали… пропадает смысл проекта» — вердикт (б) держится по букве. Комментарий кода :188-190 подтверждает замысел: «Когда переменные не заданы, ответ уходит структурой… формулировку делает вызывающий», а вызывающий figures не читает.",
+  "fix": "Правок по существу не требуется. Мелочь: в DISCREPANCIES.md:133 цитаты из serene_ask.py помечены [замер] — это чтение кода, метка должна быть [код]."
+ },
+ {
+  "fid": "F130",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[код] verify-core.js:7 toolNames:['ask_1c','report_1c']; :134-152 mergeRef сливает digits обоих в один набор за ход (ключ runId); боевая копия у бота (/home/undebot/.openclaw/npm/projects/…/openclaw-braine-verify/verify-core.js:7) — та же строка. [замер] grep -oE 'dbname=[a-z_]+' /etc/1c-mcp-reports.env → dbname=postgres (дважды: SERENEDB_DSN и RESOLVER_DSN); дамп окружения живого serene_ask :8099 → SERENEDB_DSN_RO и RESOLVER_DSN с dbname=ut_test; psql -Atc 'SELECT datname FROM pg_database' → postgres, ut_test. [замер] в /home/undebot/.openclaw/openclaw.json включены оба сервера (second-brain-reports :6015 include report_1c; serene-ask :6016 include ask_1c), оба порта слушают (pid 3173769 и 3173753). Вердикт (б) держится даже крепче: memory_bank/owner-memory/project-no-nl2sql-charts-after-answer.md прямо предписывает «убрать report_1c из mcp.servers.*.toolFilter.include» — решение владельца 26.07 не исполнено.",
+  "fix": "В вердикте сослаться на owner-memory/project-no-nl2sql-charts-after-answer.md («убрать report_1c из toolFilter.include») вместо натянутых п.19/п.12 — это делает класс (б) бесспорным. Внести в текст (а не только в примечание скептика) правку фразы «ни один док не описывает две двери» — ARCHITECTURE.md:87 report_1c перечисляет, не описана именно разность баз."
+ },
+ {
+  "fid": "F150",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "Замер подтверждён: [замер] ls -l /proc/3109129/fd/{1,2} и /proc/1136469/fd/{1,2} → все четыре в /tmp/claude-0/-srv-1c/81653964-…/scratchpad/{ask8099.log,ut-gw.log}; ls /var/log/1c-* /var/log/serene* → No such file; 1c-serene-ask.service inactive, оба процесса с PPID=1. НО: [файл] docs/RUNBOOK_DEPLOY.md:51-52 уже описывает ровно это состояние — «порт держит осиротевший процесс от 28.07 (PPID=1, поднят вручную)» и «тоже осиротевший процесс, юнита нет. Должен стать 1c-serene-ask@<имя> — Фаза 2 PLAN_AUTONOMY»: ново только место журнала, а не сам факт ручного запуска. [файл] TARGET.md п.14 (стр. 47-50) — про инсталлятор («ручных действий два»), п.13 — про полноту данных; журналирования ни один не требует — ссылка не по букве. [замер] /usr/lib/tmpfiles.d/tmp.conf:11 «D /tmp 1777 root root 30d» — чистка при загрузке и по возрасту 30 суток: завтрашний проход systemd-tmpfiles-clean живые файлы не тронет.",
+  "fix": "Класс (б) оставить (чинится стенд — юнит 1c-serene-ask@<имя>), но формулировку смягчить до честной: «RUNBOOK §0:51-52 фиксирует оба осиротевших процесса и планируемый юнит, но не то, что их единственный журнал — файл в scratchpad завершённой сессии под /tmp и не переживёт ребут». Убрать ссылки на TARGET п.14/п.13, слова «ни один док этого не описывает» и намёк на удаление завтрашним проходом таймера."
+ },
+ {
+  "fid": "F151",
+  "ok": false,
+  "problem": "неверное место",
+  "right_verdict": "a",
+  "evidence": "Существо подтверждено: [файл] docs/RUNBOOK_DEPLOY.md:405 «cp ubuntu/serenedb/systemd/1c-serene-index.{service,timer} /etc/systemd/system/», а [код] ubuntu/serenedb/systemd/1c-serene-index.service:22 ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_search_build.py — §10.6 разворачивает именно тот юнит, который §0 называет сносящим таблицу и индекс. Вердикт (a) верен: [замер] systemctl list-timers --all → 1c-serene-index.timer отсутствует, таймеры выключены осознанно, чинится документ. Координаты сдвинуты: строка про 1c-serene-index.timer в §0 — 37, а не 36 (36 — строка про 1c-serene-pipeline.timer); «systemctl enable --now 1c-serene-sync.timer / 1c-serene-index.timer» — строки 408-409, а не 405-407 (404-406 — три cp). Строка 299 (§9, 1c-serene-sync среди enabled) процитирована верно.",
+  "fix": "Поправить координаты: §0 — строка 37 (не 36); блок enable — 408-409, cp — 404-406. Заодно снять метку [замер] с цитат из RUNBOOK в DISCREPANCIES.md:700 — замером доказано только отсутствие таймера в list-timers."
+ },
+ {
+  "fid": "F215",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "Сам проверил: docs/ACCEPTANCE_UT.md:8-19 — §0 «Как пользоваться» = PID по :8099, токен из /proc/$PID/environ, curl на http://127.0.0.1:8099/ask; MAP.md:87 «замер качества ответов | run_acceptance.py через бота | НЕ запускать: прямой вызов /ask»; HOW_IT_WORKS.md:250 то же. `grep -n run_acceptance docs/ACCEPTANCE_UT.md` → пусто (подтверждаю). НО: «про работающий инструмент нет ни строки» неверно — в доке есть «# Прогон ЧЕРЕЗ БОТА, пачка 1 (вопросы 1-10)» (:832) и «Полный прогон 31.07 ночью (`RUN_TAG=v12`)» (:913). Порт :8099 держит python3 pid=3109129 (ss -lntpH), при этом `systemctl` показывает 1c-serene-ask.service inactive/dead — то есть §0 действительно завязан на ручной процесс.",
+  "fix": "Вердикт (а) оставить. Из формулировки убрать «нет ни строки»: отсутствует только имя run_acceptance.py и способ прогона в §0, а RUN_TAG и пачки по 10 в доке есть (:832, :913). Правка та же — перенести в §0 прогон через бота и убрать прямой /ask как способ замера качества."
+ },
+ {
+  "fid": "F216",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "a",
+  "evidence": "docs/ACCEPTANCE_UT.md:3 «Набор построен **из самой базы** (п. 15 TARGET.md), 29.07.2026» против TARGET.md:52-54 «Приёмочный набор вопросов строится из самой базы клиента при установке, а не пишется под конкретные данные». docs/TARGET_STATUS.md:63 сам числит п. 15 открытым. Проверил привязку к этой базе: :354 «ТД00-000049», :434 «Альтаиру», :445 «База \"Электротовары\"», :457 ADIDAS, :468 BOSCH. work/acceptance/run_acceptance.py:5 DOC=ACCEPTANCE_DOC и :13-30 — источник вопросов только разметка этого md (**N. «вопрос»**, «- эталон: **…**», «- ожидаемый kind:»). Оговорки рядом с :3, снимающей заявление, нет.",
+  "fix": "—"
+ },
+ {
+  "fid": "F217",
+  "ok": false,
+  "problem": "неверное место",
+  "right_verdict": "b",
+  "evidence": "Свой замер на репозиторной копии (diff с боевой /home/undebot/.openclaw/npm/.../verify-core.js → идентичны): stripInternal('Отгружено 12 шт товара «T-Shirt with print from Italy» на 45 000 руб.') → 'Отгружено 12 шт товара «T-Shirt'; stripInternal('Sales with VAT from January: 1 200 000 rubles.') → 'Sales'. verify-core.js:84 SQL_RE с /gi и без m; применяется в index.js:173 (message_sending) и :192 (reply_payload_sending). `git log -S SQL_RE` → строка с 23.07, то есть исполняется и в текущем шлюзе. Ошибка адреса: TARGET.md:130 — это середина п. 21 («догадка остаётся ошибкой»), а процитированная в вердикте фраза «Молчаливая потеря данных приравнивается к неверному ответу» стоит на TARGET.md:43 (п. 13, строки 41-45).",
+  "fix": "Заменить ссылку TARGET.md:130 на TARGET.md:41-45 (п. 13) в doc_locs и в обосновании. Существо и вердикт (б) оставить без изменений."
+ },
+ {
+  "fid": "F218",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "Свой прогон на боевом коде: mergeRef(текст моста с [CLARIFICATION NEEDED]+OPTIONS) → ref.clarify=true; evaluate('По продажам получилось 1 234 567 руб.') → action=replace, и после stripInternal клиенту уходит «Какие продажи вы имеете в виду?\\n\\nOPTIONS:\\n- Реализация товаров и услуг | measure=Сумма | focus=document_реализациятоваровуслуг…»; evaluate('Уточните: оптовые или розничные?') → action=allow, утечки нет. Значит ветка условная (нужен необоснованный числовой токен), а не «гарантированно на любом уточнении»; сборка блока — mcp_ask.py:148-165, LEAK_LINE_RES (verify-core.js:82) режет только строку маркера. Реальные src — в нижнем регистре (API_ASK.md:83). TARGET.md:11 (п. 1 «Полноценный продакшен») запрета показывать внутренние имена не содержит — по букве ссылка не работает.",
+  "fix": "Сузить формулировку: «в ветке подмены (бот назвал необоснованное число) гейт отдаёт дословный текст моста вместе с блоком OPTIONS; stripInternal `focus=<src_table>` не режет вообще, поэтому те же имена уходят и когда модель перескажет блок дословно». Убрать «гарантированно» и ссылку на п. 1, оставив инвариант владельца «запреты держатся кодом, а не промтом»; src писать в нижнем регистре. Вердикт (б) сохранить."
+ },
+ {
+  "fid": "F219",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "Прочитал mcp_ask.py:140-178 — берутся только kind/text/options/measure, подтверждаю. Но перечень «потерянного» завышен: `question` дублируется в text (serene_ask.py:2871-2873: text = text + ask_back, question=ask_back), приписка о старении и величина доезжают текстом ([величина: …] в mcp_ask.py:176-178), completeness/figures отражены в тексте ответа. Реально до человека не доходит именно `partial` (ставится во всех ветках :1996, :2032, :2485, :2609, :2751, :2837…, наполняется :1127-1128 и :2162-2164). Плюс контекст: CHANGELOG.md:2126 уже записал ровно это как остаток («Остаётся дошить бот-слой: поле есть в ответе, но плагин OpenClaw его пока не показывает человеку»), а HOW_IT_WORKS.md:38 стоит в датированной таблице «Что изменилось 27-28.07» и говорит про слой /ask, где поле действительно отдаётся. Отсечение при этом на выбор источника влияет — serene_ask.py:2112-2118 [замер 30.07]: регистр вытеснял документ за RERANK_TOP, «четыре отказа и два верных ответа на один вопрос».",
+  "fix": "Оставить в заголовке и в claim только `partial`; вычеркнуть figures/completeness/totals/stale/sources/question. Снять оборот «HOW_IT_WORKS.md:38 фиксирует обратное как сделанное» — строка датирована и относится к /ask; вместо неё сослаться на CHANGELOG.md:2126 как на уже записанный остаток. Severity понизить с high. Вердикт (б) сохранить: показывать усечение человеку — требование п. 13, док под код не правится."
+ },
+ {
+  "fid": "F220",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "Свой замер: stripInternal('[SERVICE ERROR: HTTP 503] Tell the user the data is unavailable.') → '' , дальше index.js:180 `return { content: clean.trim() ? clean : cfg.noDataReply }` и verify-core.js:31 noDataReply = «К сожалению, по этому вопросу у меня нет данных в системе.». НО stripInternal('Сервис данных сейчас недоступен.\\n[SERVICE ERROR: …]') → 'Сервис данных сейчас недоступен.' — подмена срабатывает только когда после зачистки не осталось ничего, то есть когда модель переслала одну служебную строку. Конфиг /home/undebot/.openclaw/openclaw.json у braine-verify переопределяет только debug и minDigitsWithRef. Ещё: маркер SERVICE ERROR добавлен в LEAK_LINE_RES 31.07 04:40 (git log -S, коммит 72db759), а доставляющий шлюз поднят 30.07 17:41 (ps -o lstart, pid 2786727) — в его памяти версия без этой строки. Контракт по букве: TARGET.md:65-67 (п. 18) «бот сообщает об этом».",
+  "fix": "Переформулировать: «пустой остаток после зачистки подменяется русским noDataReply — когда модель пересылает служебную строку дословно, сбой сервиса превращается в „нет данных“», вместо «любой сбой». Добавить оговорку, что в доставляющем шлюзе сейчас исполняется версия до 31.07 (там тот же сбой даёт обратный дефект — маркер уходит клиенту). Вторую половину (русская noDataReply в языконезависимом слое) оставить как есть. Вердикт (б) сохранить."
+ },
+ {
+  "fid": "F222",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "Проверил сам: verify-core.js:12 highRiskDigits: 5; :192-194 возвращает {action:'cancel'}; node: evaluate('Долг составляет 45 000 рублей.', null, null, DEFAULTS) → {\"action\":\"cancel\",\"reason\":\"числовой факт без обращения к данным (45000)\"} — content не формируется. index.js:167-170 отдаёт {cancel:true, cancelReason}. Движок при этом ничего не подставляет: /usr/lib/node_modules/openclaw/dist/deliver-BdKtkX_b.js — `if (sendingResult?.cancel) return { cancelled: true, … }` и дальше recordPayloadOutcome(suppressedPayloadOutcome(...)), то есть доставка подавлена. Противоположное решение на соседнем слое: serene_ask.py:753-761 (refuse_text, «при отказе бот обязан СКАЗАТЬ, а не промолчать»). По букве: TARGET.md:125-128 (п. 21) «Собственная проверка, которая роняет верный ответ… превращает работающую систему в молчащую».",
+  "fix": "Мелочь для точности: главный якорь контракта — TARGET.md:125-128 (п. 21), он сильнее ссылки на :66 (п. 18); и добавить в список доков HOW_IT_WORKS.md:37, где молчание гейта уже числится починенным («гейт мог зарубить верный ответ и промолчать → ответ обязан дойти»)."
+ },
+ {
+  "fid": "F223",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "serene_ask.py:2963 `if age > STALE_WARN_SEC and out.get(\"kind\") in (\"answer\",\"figures\",\"clarify\")` — ядро находки верно, ветка no_data приписку не получает (diag.data_age_sec ставится всем, строка 2962). Порог: :80 STALE_WARN_SEC=3600, в env-файлах юнита ASK_STALE_WARN_SEC нет. Но: (1) TARGET.md:61 — пустая строка, п.17 «Свежесть» начинается на :62; (2) «единственная русская фраза … в файле, где от русских умолчаний отказались» подрывается тем же файлом: :2981/:2983/:2985 три русских сообщения человеку; (3) ветка unavailable — это except-обработчик, ответа по данным там нет вовсе, «оговорка о старении» ей не нужна; (4) AGENTS.md:21-22 запрещает «служебные пометки в квадратных скобках» — к «⚠ Данные могли устареть…» это не относится, персона её вырезать не велит; (5) 72 ч старения — состояние стенда: `systemctl list-timers` → 1c-serene-pipeline.timer последний запуск Wed 2026-07-29, is-active=inactive. Документная часть подтвердилась: API_ASK.md:105-108 и HOW_IT_WORKS.md:544-545 обещают приписку безусловно, без оговорки про kind.",
+  "fix": "Сузить до одного факта: «приписка о старении не ставится в ветке no_data — на устаревшем корпусе отказ „таких данных нет“ звучит как на свежих; API_ASK §5 и HOW_IT_WORKS:544-545 обещают её безусловно». Снять: ветку unavailable, «единственная русская фраза», ссылку на персону (AGENTS.md:21-22 про скобки — это про F224), «на боевой базе» → указать, что 72 ч — следствие остановленного 1c-serene-pipeline.timer. Заменить doc_loc TARGET.md:61 на :62. Добавить своё: правки одного serene_ask мало — mcp_ask.py:168 при kind==\"no_data\" возвращает NO_DATA_REPLY и текст сервиса выбрасывает целиком, так что приписка до клиента через бота не дойдёт."
+ },
+ {
+  "fid": "F224",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "a",
+  "evidence": "mcp_ask.py:175-177 `m = (data.get(\"measure\") or \"\").strip(); if m and m.lower() not in text.lower(): text += \"\\n\\n[величина: %s]\" % m` — строка есть, verify-core.js:76-83 её не знает (в LEAK_LINE_RES только [ГРАФИК-ФАЙЛ], Трактовка (SQL), НЕТ ДАННЫХ/ОТЧЁТ НЕ ВЫПОЛНЕН/ОШИБКА/NO DATA/CLARIFICATION NEEDED/SERVICE ERROR). Но вердикт «b» по букве п.12 не проходит: п.12 (TARGET.md:36-39) запрещает «выбор наугад между правдоподобными вариантами», а неоднозначность величины закрыта КОДОМ — serene_ask.py:2742-2755 при measure_alts возвращает kind=clarify с options[].measure; пометка моста — прозрачность поверх уже работающей защиты. Возврат в 178 — результат инструмента, его читает модель бота (комментарий mcp_ask.py:171-174 прямо: «поле пробрасывается отдельно, чтобы бот мог сказать это своими словами»), клиенту он уходит лишь если модель не перескажет. Зато есть настоящее (a): API_ASK.md:151-153 утверждает «в текст дописано „Считано по величине «ИМЯ».“ … Дописывает КОД», а `grep -n 'Считано по величине' ubuntu/serenedb/serene_ask.py` → пусто; serene_ask.py:2890-2891 «ОБЕ ОГОВОРКИ … ушли в промт (compose)».",
+  "fix": "Вердикт b → a: главное расхождение — API_ASK.md:151-153 описывает дописку кодом, которой в serene_ask больше нет. Заголовок «уходит клиенту» заменить на «дописывается к результату инструмента, который читает модель; удаление ничем, кроме промта, не подстраховано». Ссылку на п.12 убрать (неоднозначность закрывает kind=clarify, serene_ask.py:2742-2755) — оставить как код-замечание без контрактной части: русский маркер на слое, объявившем строки для модели английскими (mcp_ask.py:100-102), и его нет в LEAK_LINE_RES."
+ },
+ {
+  "fid": "F225",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "Замеры воспроизвелись целиком: 1c-mcp-ask.service:15 Environment=ASK_URL=http://127.0.0.1:8099; 1c-serene-ask.service:12-14 без ASK_LISTEN_PORT/SERENEDB_DSN_RO; serene_ask.py:42 умолчание dbname=postgres, :52 порт 8091; `sed 's/=.*/=<hidden>/'` по /etc/1c-serene-ask.env и /etc/1c-mcp-reports.env — обеих переменных нет; drop-in-каталогов нет (ls → No such file); diff репо↔/etc/systemd/system для обоих юнитов пуст; systemctl: 1c-serene-ask inactive, 1c-mcp-ask active; ss -ltnp → :8099 держит python3 pid 3109129, :8091 не слушает. Но рамка неверна: это не «пара юнитов, не сходящаяся между собой» — 1c-serene-ask юнит ПЕРВОЙ базы (RUNBOOK_DEPLOY.md:34, :8091), а у ВТОРОЙ базы юнита нет вовсе, и это записано: RUNBOOK_DEPLOY.md:52 «сервис ответов второй базы … юнита нет. Должен стать 1c-serene-ask@<имя> — Фаза 2 PLAN_AUTONOMY», :55 «оба осиротевших процесса — это и есть „ручной шаг“». Вердикт b опирается на п.1 «Полноценный продакшен» (TARGET.md:11) — это не буква требования, а лозунг раздела; записанный незакрытый шаг плана им не нарушается. Подтверждается документная часть: BOXED_BLOCKERS.md:143 «:8099 … к боту не подключён» устарело (ARCHITECTURE.md:85 уже верно: 1c-mcp-ask :6016 → :8099 ut_test), techContext.md:13-14 тоже отстал (:8091 как сервис ответов, MCP :6014/:6015).",
+  "fix": "Вердикт b → a. Переписать: «у второй базы (ut_test, :8099) юнита нет — записанный ручной шаг, Фаза 2 PLAN_AUTONOMY (RUNBOOK:52); новое здесь только следствие — после перезагрузки systemd поднимет 1c-serene-ask на :8091 по dbname=postgres, а мост уйдёт в :8099, где никого нет». Убрать «пара закоммиченных юнитов не сходится» и ссылку на п.1. Править доки: BOXED_BLOCKERS.md:132-146 (секция про braine :8090 закрыта 30.07, строку 143 в историю), techContext.md:13-14."
+ },
+ {
+  "fid": "F227",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "v",
+  "evidence": "Код-факт верен: serene_ask.py:2143 и :2219 вызывают _vec внутри try, а перехват — только `except RuntimeError` (:2144, :2221); RuntimeError поднимает лишь psql (:223-226), embed_one идёт urllib.request.urlopen (:305-311) и при сбое поставщика даёт URLError/HTTPError → do_POST:2970 → 503. Асимметрия реальна: :844-847 `try: vec = _vec(term) except Exception: # эмбеддер недоступен` и rerank:799-800 гасят любое исключение. Но вердикт b неверен дважды: (1) HOW_IT_WORKS.md:536-538 прямо документирует нынешнее поведение как задуманное — «Любой обрыв по дороге — модель молчит, база/движок недоступны, ЭМБЕДДЕР НЕ ОТВЕЧАЕТ — … превращается в HTTP 503 … а НЕ в ответ по частичным данным», то есть расхождения дока с кодом здесь нет; (2) по букве это столкновение п.18 (TARGET.md:65-67, «не отвечает модель — бот сообщает об этом») с п.21 (:125), и разрешать его молча нельзя. Плюс фактическая ошибка в рассуждении: «аргумент вычисляется ДО вызова psql» — _vec стоит внутри try (строки 2138-2143), дело только в классе исключения. Замечание про 2219 тоже слабее заявленного: туда попадают лишь при пустом cands, и откат `cands = list(by)` даст пустой список; сильный случай один — 2132-2145, где кандидаты уже есть.",
+  "fix": "Вердикт b → v (вопрос владельцу): доводить ли откат до эмбеддера (широкий except, как в :844-847) или оставить честный отказ, как записано в HOW_IT_WORKS.md:536-538. Убрать ссылку на п.21 как «нарушение», убрать фразу «аргумент вычисляется ДО вызова psql», оставить один сильный случай :2132-2145 (кандидаты есть, падает только упорядочивание), про :2214-2221 сказать, что там откат и так пуст. Doc_loc HOW_IT_WORKS.md:545 заменить на :536-538."
+ },
+ {
+  "fid": "F228",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "",
+  "evidence": "`cat ubuntu/openclaw/requirements.txt` → одна строка «mcp>=1.28»; `find /srv/1c -name 'requirements*.txt'` → единственный файл, для ubuntu/serenedb нет. `/opt/openclaw-mcp/venv/bin/pip list` → рядом с mcp 1.28.1 стоят matplotlib 3.11.1, numpy 2.5.1, pillow 12.3.0, contourpy 1.3.3, fonttools 4.63.0, kiwisolver 1.5.0, cycler 0.12.1 — зависимостями mcp не являются. Единственная установка venv в RUNBOOK — строки 482-483, и лежит она в разделе :480 «11.1-старое … — выведен», с комментарием «FastMCP»; ubuntu/openclaw/README.md:17 приписывает requirements.txt выведенному mcp_braine.py. Импорт ленивый (serene_report.py:516-519 внутри render_chart), обёрнут в mcp_reports.py:88-91 «except Exception: png = None» — значит без пакета график исчезает молча. Слой в контуре: конфиг бота /home/undebot/.openclaw/openclaw.json содержит сервер second-brain-reports → 127.0.0.1:6015 с toolFilter include report_1c, ss -ltnp показывает :6015 живым.",
+  "fix": "Мелкая правка точности: venv из /opt/openclaw-mcp указан в ExecStart не трёх, а пяти юнитов (grep по /etc/systemd/system: 1c-mcp-reports, 1c-serene-sync, 1c-serene-ask, 1c-mcp-ask, 1c-mcp-braine). Стоит добавить, что действующего шага установки venv в RUNBOOK нет вовсе — единственный лежит в разделе «выведен»."
+ },
+ {
+  "fid": "F229",
+  "ok": false,
+  "problem": "снять целиком",
+  "right_verdict": "снять",
+  "evidence": "Ровно это уже записано в проекте как известное и принятое отклонение: docs/BOXED_BLOCKERS.md:70 «serene_ask.py, приписка о старении и три сообщения об отказе | русский текст уходит клиенту | ухудшает, но система работает; рядом в том же файле от русских умолчаний уже сознательно отказались (NO_DATA_TEXT пуст)» — те же четыре строки, в разделе :66 «Найдено тогда же, но НЕ блокирует коробочность». Поэтому утверждение находки «нигде не сказано, что она зашита по-русски» ложно, и расхождения дока с реальностью нет. Вдобавок факт завышен: через бота три сообщения 503 клиенту не уходят — mcp_ask.py:135-138 (HTTPError/любое исключение) и :145-146 (kind==\"unavailable\") возвращают английский ERROR_REPLY «[SERVICE ERROR: {detail}] Tell the user the data is unavailable», русский текст попадает лишь обрезком detail[:120] в модель. Ссылка находки на mcp_ask.py:170-175 указывает на блок величины, а не на путь 503. Вердикт b по TARGET.md:27 п.9 по букве не держится: пункт про «любые данные и любую размерность» базы, а не про язык интерфейса.",
+  "fix": "Снять как расхождение: то же самое уже зафиксировано в docs/BOXED_BLOCKERS.md:70 как известное непринципиальное отклонение. Если оставлять — только строкой «см. BOXED_BLOCKERS §66», без вердикта b, с исправлением «четыре строки клиенту» → «одна (приписка о старении); три сообщения 503 мост подменяет английским ERROR_REPLY». Остаток по существу дублирует F223."
+ },
+ {
+  "fid": "F230",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "",
+  "evidence": "`node --version` → v24.18.0, `npm --version` → 11.16.0; `dpkg -l | awk /nodejs/` → «ii nodejs 24.18.0-1nodesource1»; `ls /etc/apt/sources.list.d/` → nodesource.sources, ubuntu.sources; engines пакета: /usr/lib/node_modules/openclaw/package.json → {'node': '>=22.22.3 <23 || >=24.15.0 <25 || >=25.9.0'}. RUNBOOK_DEPLOY.md:494-496 §11.2 начинается прямо с `npm install -g openclaw@2026.7.1-2`; OPENCLAW_BOT.md:38 лишь констатирует «npm global». `grep -rniE 'nodesource|node\\.js|nodejs|node -v' --include=*.md` по репозиторию (без work/) → единственное попадание docs/HANDOFF_CHECK_2.md:463 — строка отчёта проверки, не инструкция. UBUNTU_SETUP.md:19-26 — таблица стека, node в ней отсутствует. Вердикт a верен: реальность легитимна (движок ставится npm-ом), неполон документ; п.14 про инсталлятор по букве ещё не нарушен — он делается в конце (TARGET.md:47-50).",
+  "fix": "Правок не требуется. Можно уточнить формулировку: не «нет npm», а «на чистой Ubuntu 24.04 node/npm не установлены, а штатный apt даёт версию ниже окна engines OpenClaw» — тогда виден и второй риск, не только отсутствие пакета."
+ },
+ {
+  "fid": "F231",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "снять",
+  "evidence": "[код] ubuntu/serenedb/wiki_publish.sh:21 «openclaw wiki status … | sed -n 's/^Vault: ready (\\(.*\\))$/\\1/p'», :22 «[ -n \"$VAULT\" ] || { echo \"вики: хранилище не готово … шаг пропущен\"; exit 0; }», :55 «openclaw wiki compile 2>&1 | tail -2» (в отчёте указаны 21-23 и :60 — мимо). [замер] sudo -u undebot openclaw wiki status --help → «--json  Print JSON» — штатный машинный вывод действительно есть. [док] MAP.md:57 и docs/HOW_IT_WORKS.md:206 описывают шаг верно, ни одного дока, который врал бы, нет; doc_locs MAP.md:122 и HOW_IT_WORKS.md:693 указывают на посторонние таблицы («Проверка», «Что уходит наружу»). [док] TARGET.md — ни один из 21 пункта разбора вывода CLI не касается; инвариант CLAUDE.md («спроси источник, а не разбирай текст») имеет собственную проверку «может ли код узнать нужное, ничего не зная о конкретной базе» — здесь источник спрошен и привязки к базе нет.",
+  "fix": "Убрать из раздела (б): нарушения контракта/решения владельца по букве нет и расхождения с доками тоже нет — оставить отдельной заметкой об устойчивости («взять openclaw wiki status --json, проверять код возврата wiki compile»). Заодно поправить строки (21-22 и 55) и снять «молча»: при пустом VAULT скрипт печатает «вики: хранилище не готово — шаг пропущен» в журнал такта, невидим только счётчик."
+ },
+ {
+  "fid": "F242",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "[код] serene_ask.py:2769-2775 — q_nums заведены НАМЕРЕННО, с обоснованием и замером прямо в комментарии: «Числа ИЗ САМОГО ВОПРОСА разрешены… Прежде гейт отвергал верный ответ (сумма 23 742 200) только из-за «62» [замер 28.07]»; [док] CHANGELOG.md:1325-1327 «Гейт: числа из вопроса и даты-агрегаты разрешены… [замер] без этого верный ответ отвергался» — то есть это записанное решение, а не тихо заведённая заново дыра. [код] :2776-2778 extra_vals → :2804 gate(text, rows, agg, extra_vals) → :1762-1768 allowed — механизм подтверждён. [замер] python3: re.findall(r'\\d[\\d.]*') + re.sub(r'[^\\d]','') на «12.5» даёт 125.0, на «1 200 000» — 1.0, 200.0, 0.0 — величины, которых в вопросе не было; это выходит за объявленное «эхо числа вопроса». [док] serene_ask.py:1749-1750 и :1791-1793 (докстрока и комментарий «числа из ВОПРОСА в белый список больше не идут») и docs/AGENT_FINDINGS_STATUS.md:40 «закрыто в обоих слоях» — устарели и врут.",
+  "fix": "Переписать заголовок и текст: не «дыра заведена заново соседней строкой» (изменение намеренное, с замером и записью в CHANGELOG), а два отдельных пункта — (b, код) склейка цифр в q_nums расширяет белый список за пределы чисел вопроса («12.5»→125, «1 200 000»→1/200/0); (a, док) докстрока gate() :1749-1750, комментарий :1791-1793 и AGENT_FINDINGS_STATUS.md:40 отстали от исполняемого кода. Уточнение скептика уже это говорит — вынести его в основной текст."
+ },
+ {
+  "fid": "F243",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "b",
+  "evidence": "[код] serene_ask.py:2425 «SELECT src_table, %s FROM %s WHERE aliases @@ %s ORDER BY 2 DESC LIMIT %d» — разделителя равенства нет; :711 «ORDER BY fg.f - bg.b*n.ft::DOUBLE/nullif(n.bt,0) DESC LIMIT %(k)d»; против :427-428 «ORDER BY s DESC, src_table, row_key» и :651-653, где разделитель есть. Дефект и вердикт (б) держатся по букве п. 3 TARGET.md («детерминированно на данных»). НО число ничьих привязано к скореру: [замер] psql ut_test, tfidf → 6 сущностей с оценкой 6.632184 на местах 2-7 (воспроизвёл дословно); dfi, LIMIT 8 (ALIAS_TOP по умолчанию 8, а не 12) → одна пара ничьих 4.4229274; lm_dirichlet → одна пара 0.39296868. [стенд] grep ASK_SCORER /etc/1c-serene-ask.env → dfi (юнит 1c-serene-ask inactive, процесс 3109129 поднят вручную из /opt/1c-mcp-reports, окружение проверить нечем), а CHANGELOG.md:2179 фиксирует выбранным lm_dirichlet — то есть «живой скорер ASK_SCORER=tfidf» и «5 ничьих в первой восьмёрке» боевой обстановке не соответствуют.",
+  "fix": "В заголовке и замере не выдавать tfidf за живой скорер: в /etc/1c-serene-ask.env стоит dfi, в CHANGELOG выбранным записан lm_dirichlet. Формулировать «ничьи есть при любом скорере (dfi и lm_dirichlet — по паре в первой восьмёрке, tfidf — шесть), LIMIT берётся ALIAS_TOP=8» — суть (нет разделителя равенства в двух ORDER BY боевого пути) остаётся."
+ },
+ {
+  "fid": "F244",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "b",
+  "evidence": "[код] corpus_postcheck.sql:63-66 — ветка «WHEN a_noemb > coalesce(b_noemb,0) AND a_noemb > 0 THEN error(…эмбеддер не отработал)» стоит рядом с собственным пояснением :51-58 «за такт считается около 87 000 из 632 683, нужно несколько тактов»; build.sh:138 (precheck, снимок before_*) → :195 (corpus_merge, новые строки с emb IS NULL) → :219-261 (эмбеддер) → :290 (postcheck) — значит остаток законно может вырасти; corpus_postcheck.sql:1 «\\set ON_ERROR_STOP on», запись build_ts/build_sql_hash идёт на :76-84, то есть ПОСЛЕ ветки error, а build.sh:174-179 читает именно их для SKIP_BUILD — цена подтверждается. НО замер в доказательстве истолкован неверно: [замер] psql ut_test «SELECT k,v FROM build_state» → before_noemb=0, after_noemb=0 (воспроизводится под postgres, вопреки уточнению скептика «не воспроизводится»), однако сегодня в корпусе 92 078 бизнес-строк без вектора при EMBED_MAXLEN=20000 (всего без вектора 340 464 из 623 565) — значит «бизнес-строки досчитаны» неверно; отпечаток build_state просто устарел (after_rows 632 720 против нынешних 623 565, конвейер стоит с 29.07).",
+  "fix": "Заменить последний [замер]: build_state отдаёт 0/0 не потому, что бизнес-строки досчитаны, а потому что это снимок старого такта (конвейер стоит с 29.07); сегодня без вектора 92 078 бизнес-строк из 623 565. Снять «делает такт под таймером бесконечно падающим» — ложный отказ бьёт по первому такту после крупного притока, следующий сравнивается уже с выросшим остатком. И поправить уточнение скептика: замер воспроизводится, недоступна build_state только роли serene_ro."
+ },
+ {
+  "fid": "F245",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[код] serene_ask.py:860 «Работает на любом языке: это буквы, а не список синонимов», :861-863 «keep = [v for v in vals if _shares_chars(term, v)]; if not keep: return []» (диагностики в этой ветке нет), :870, :880, :881 — три re.sub(r\"[^0-9a-zа-яё]\", …); grep 'а-яё' по ubuntu/ даёт только serene_ask.py. [замер] прогнал сами функции: '仓库'/'仓库' → False, 'Αθήνα'/'Αθήνα' → False, 'مخزن'/'مخزن' → False, при этом 'Müller'/'Müller GmbH' → True и 'қойма'/'қойма' → True. Вердикт (б) держится по букве п. 9 TARGET.md («без хардкода и подстройки под конкретную базу, работает из коробки на базе с любыми данными») — перечень двух алфавитов и есть подстройка, а комментарий рядом утверждает обратное.",
+  "fix": "Мелочь редактуры: свести основной текст с уточнением скептика — немецкий и казахский НЕ ломаются (диакритика срезается симметрично с обеих сторон), выключается резолвер только на письменностях целиком вне [0-9a-zа-яё] (CJK, греческая, арабская, иврит); строки — 860 (комментарий) и 861-863 (keep/return), а не 852-859/862-864."
+ },
+ {
+  "fid": "F246",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[код] serene_ask.py:375 «groups.append(alts[:6])» и :376 «d[\"terms\"] = groups[:6]» — без комментария, без замера, рядом только пояснение :369 про плоский список; [код] cut заполняется лишь на :1127-1128 (entities_shown/entities_total) и :2163-2164 (reranked_of/reranked), про понятия ничего; diag на :1955 отдаёт intent['terms'], то есть уже обрезанные, — обрезание не видно ни клиенту, ни в диагностике. Это буква п. 13 TARGET.md («молчаливая потеря данных приравнивается к неверному ответу»), вердикт (б) верен. Ссылка же на механизм в доказательстве неверна: :400-412 _predicates собирает ТОЛЬКО условия по дате (docstring «Числовых условий здесь БОЛЬШЕ НЕТ»), альтернативы внутри группы склеиваются ts_any на :508, а группы соединяются не жёстким AND, а градиентом ts_compound(NULL, NULL, [exprs], k) в match_expr :525-557.",
+  "fix": "Мелочь редактуры: убрать из доказательства «serene_ask.py:400-412 _predicates: группы соединяются AND» (это предикаты по дате) и поставить :508 ts_any (OR внутри группы) + :525-557 match_expr (градиент «не меньше k из N» между группами) — уточнение скептика уже это говорит, перенести в основной текст. Направление вреда и вердикт не меняются."
+ },
+ {
+  "fid": "F247",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[код] ubuntu/monitoring/bot_health_check.sh:40-45 alert(): «curl -s -o /dev/null --max-time 15 \"https://api.telegram.org/bot${token}/sendMessage\" --data-urlencode chat_id=… --data-urlencode text=$1 || true» — токен в argv, код возврата отброшен; :48-55 «echo \"$now\" > \"$STATE\"» выполняется в той же ветке безусловно, то есть недоставленная тревога о смене состояния не повторится. [стенд] systemctl is-active 1c-bot-monitor.timer → active, list-timers: последний запуск 01.08 20:36, следующий через 2 мин; diff /opt/1c-bot-monitor/bot_health_check.sh ubuntu/monitoring/bot_health_check.sh → идентичны; cat /var/lib/1c-bot-monitor/state → «down: api». Инвариант CLAUDE.md (раздел «Инварианты проекта»): «Секреты — в /etc/*.env с правами 600, никогда в git и никогда в командной строке» — нарушен дословно; вторая половина — docs/HOW_NOT_TO.md §2.10 «фоновая работа умерла молча».",
+  "fix": ""
+ },
+ {
+  "fid": "F248",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "b",
+  "evidence": "[код] по подстроке *\"git commit\"* отбирают ТРИ хука: check-diff.sh:18-19, check-docs.sh:13-14, check-active-size.sh:14-15. check-golden.sh:14-15 — совсем другой case: `scp\\ *|*\"scp -i\"*|*\"rsync \"*` (гейт выката, не коммита), т.е. строка доказательства «check-golden.sh:14-17 — одинаковый case по подстроке [git commit]» ложна по содержанию. Агент-снайпер в .claude/settings.json действительно начинает с «Если команда НЕ содержит 'git commit' — ответь ровно OK». [замер] мой прогон того же case: 'git commit -m x'→MATCH, 'git -C /srv/1c commit -m x'→SKIP, 'git -c user.name=x commit -m y'→SKIP, 'git --git-dir=/srv/1c/.git commit -m z'→MATCH (подстрока «.git commit» содержит «git commit»). Доки HOW_NOT_TO.md:496 (§3.5 fail-open) и :507 (§3.6 запрет в промте) сформулированы верно — правится код, не док.",
+  "fix": "Заголовок и claim: «ТРИ коммит-хука (check-diff, check-docs, check-active-size) и агент-снайпер — четыре проверки, а не пять/четыре хука». Из доказательства убрать check-golden.sh:14-17 (его fail-open по scp/rsync — отдельная находка того же класса). Убрать пример с --git-dir: он как раз ловится. Ядро (fail-open по подстроке, `git -C … commit` проходит мимо всех) и вердикт (б) оставить; в «доки, где это описано иначе» пометить, что HOW_NOT_TO §3.5/§3.6 правки не требуют."
+ },
+ {
+  "fid": "F252",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "[код] grep -c systemctl → deploy.sh:0, /opt/1c-mcp-reports/pipeline.sh:0; deploy.sh копирует \"$SRC\"/*.sh *.sql *.py *.tsv, в наборе есть serene_ask.py и mcp_reports.py; /etc/1c-serene-sync.env: SERENE_SRC_DIR=/srv/1c/ubuntu/serenedb — механизм подтверждён. НО [замер] конвейер не работает: 1c-serene-pipeline.timer inactive и в list-timers отсутствует, service failed (Result=signal, ExecMainStatus=15, InactiveEnterTimestamp=Wed 2026-07-29 07:32:47) — «каждый такт раскладывает код» три дня не происходит. [замер] cmp репо↔/opt по serene_ask.py, mcp_reports.py, serene_sync.py, build.sh, corpus_merge.sql → одинаково, накопленного расхождения сейчас нет. [замер] ребут страшнее, чем описано: в /etc/1c-serene-ask.env и /etc/1c-mcp-reports.env нет ни SERENEDB_DSN_RO, ни ASK_LISTEN_PORT, значит юнит поднимет serene_ask на :8091 по dbname=postgres (serene_ask.py:42,52), а мост бота смотрит в :8099 (/opt/openclaw-mcp/mcp_ask.py:42) — бот после ребута останется без ответов. [док] MAP.md:22 — это строка схемы «сервис ответов :8091», к раскладке кода отношения не имеет.",
+  "fix": "Переформулировать в терминах устройства, а не настоящего времени: «раскладка кода в /opt идёт первым шагом такта и не сопровождается ни одним systemctl; момент, когда разложенный код вступает в силу, — ребут». Добавить оговорку замера: конвейер стоит с 29.07, /opt сейчас побайтно равен репозиторию. Дополнить последствие ребута: юнит 1c-serene-ask поднимется на :8091 по первой базе, а мост бота смотрит в :8099. Из doc_locs убрать MAP.md:22 (другая находка — порт), оставить RUNBOOK_DEPLOY.md:295 и :402 (§9/§10.6 reboot-safe), где заодно нет 1c-serene-ask и 1c-mcp-ask."
+ },
+ {
+  "fid": "F003",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "a",
+  "evidence": "[замер] curl -s http://127.0.0.1:8099/health → {\"status\":\"serene-ask-ok\",\"corpus_rows\":623565}; psql: ut_test search_corpus=623565, postgres=103808 → бот действительно отвечает по второй базе (проверено без чтения /proc/*/environ). НО это решение владельца, записанное в доках: RUNBOOK_DEPLOY.md:455 «Решение владельца 30.07: новый мост, бот отвечает по второй базе», ARCHITECTURE.md:85 «1c-mcp-ask | 6016 | … над serene_ask (:8099, база ut_test)»; openclaw.json mcp.servers = {second-brain-reports :6015, serene-ask :6016}. Значит «какая база боевая» — не вопрос владельцу. [док] docs/REGRESSION_BASE1.md:94-98 — датированный разбор замера 31.07, утверждение условное («по умолчанию», «SERENEDB_DSN_RO не задан → dbname=postgres») и истинное: serene_ask.py:42 именно такой дефолт; правки не требует. [замер] хрупкость реальна: grep -c SERENEDB_DSN_RO /etc/1c-serene-ask.env /etc/1c-mcp-reports.env → 0 и 0, а живой :8099 — процесс 3109129 в /user.slice/…/session-247653.scope при inactive юните.",
+  "fix": "Сменить вердикт группы с «в» на «а» и снять формулировку «неясно, какая база боевая» — решение владельца 30.07 записано (RUNBOOK:455, ARCHITECTURE:85). Оставить один документный пункт README.md:14 («Бухгалтерия 3.0» → стенд двухбазовый, ответы по ut_test) плюс MAP (dbname=postgres в строке подключения и в таблице «чем что запускать»). Из doc_locs убрать docs/REGRESSION_BASE1.md:95. Хрупкость (SERENEDB_DSN_RO нет ни в одном env, сервис живёт вне systemd — рестарт/ребут молча вернёт первую базу) вынести отдельным стендовым пунктом (б), а не под видом вопроса о базе."
+ },
+ {
+  "fid": "F006",
+  "ok": false,
+  "problem": "неверное место",
+  "right_verdict": "v",
+  "evidence": "[замер] systemctl is-enabled/is-active 1c-mcp-braine → enabled/active; ss -tlnp → 127.0.0.1:6014 python pid 3173746, на 8090/8091 слушателей нет; curl -o /dev/null -w %{http_code} http://127.0.0.1:6014/mcp → 401 (жив, требует токен), :8091/ask → 000; api.service (upstream :8090) inactive; systemctl cat: базовый Environment=BRAINE_URL=…:8090 + drop-in override.conf …:8091. [док] docs/HOW_NOT_TO.md:804-807 — это заголовок урока «§2.14 Вывел компонент из контура…» и абзац «**Что сделал не так.**», который сам продолжает «Но я вывел его из своей головы, а не с сервера»: док не утверждает, что braine выведен с сервера, правки не требует. [док] RUNBOOK_DEPLOY.md:454 — пустая строка, текст «Прежний мост над braine (:6014) выведен» на 455. [док] ARCHITECTURE.md:86 «Смотрел на braine :8090, а тот выведен из продукта и не слушает» — «не слушает» относится к :8090 и стенду соответствует; настоящее противоречие — ARCHITECTURE.md:160-161, где 1c-mcp-braine числится среди enabled-сервисов, переживающих ребут.",
+  "fix": "Стендовый факт и вердикт (в) оставить. Из doc_locs убрать docs/HOW_NOT_TO.md:804 (урок §2.14 говорит ровно обратное), RUNBOOK_DEPLOY.md:454 заменить на :455. Из члена xref-1.json#5 убрать утверждение «„не слушает“ из строки 86 не совпадает со стендом» — это неверное прочтение. Единственная документная правка — ARCHITECTURE.md:160-161 (пометить «юнит ещё жив вхолостую» по образцу RUNBOOK для :6015 либо снять из перечня, если владелец решит гасить)."
+ },
+ {
+  "fid": "F009",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "a",
+  "evidence": "[замер] psql ut_test: search_corpus=623565, с вектором 283101; по классам business 92080 без вектора из 365574, service 248384 из 257991; search_quality: cov_noemb_pending=92080, cov_noemb_service=248384, resolver_values=188068, resolver_no_emb=0 — числа находки совпадают. [док] docs/ACCEPTANCE_UT.md:587-588 буквально «две записи catalog_новости … единственные деловые строки без вектора во всей базе» — сейчас неверно (место указано верно). [док] docs/TEST_SECOND_BASE.md:179 — ячейка таблицы «3. Ход теста — ИТОГ» датированного живого протокола 28.07; forward-looking утверждение «Вектора на УТ не считались намеренно… резолвер не проверялся» стоит в §6 «Что осталось», строки 233-234. [замер] причина названа неверно: CHANGELOG.md:634-641 (29.07) фиксирует «с вектором 427 241, деловых без вектора 2»; search_quality build_ts=2026-07-29 17:37, mart_changed_ts=2026-07-30 03:45 — часть уже посчитанных векторов снята дельта-перезаливкой, а конвейер стоит с 29.07 (таймер inactive, service failed), т.е. хвост сам не рассосётся и «неясности замысла» нет.",
+  "fix": "Вердикт группы сменить с «в» на «а»: правятся два места — ACCEPTANCE_UT.md:587-588 (снять «единственные», назвать текущее число 92 080) и TEST_SECOND_BASE.md:233-234 (§6: векторы УТ посчитаны частично — 283 101, резолвер собран — 188 068, resolver_no_emb=0). Ссылку на :179 пометить как исторический протокол (не правится). Причину переписать: «дельта-перезаливка 30.07 сняла векторы затронутых строк, а конвейер стоит с 29.07», и сослаться на F001, а не спрашивать владельца, «временный ли это хвост»."
+ },
+ {
+  "fid": "F013",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "[замер] ls -la /etc/1c-s3.env → -rw------- root root 152 Jul 27 11:25; grep -c <ключ> /etc/1c-s3.env → 1, т.е. ключ на диске лежит — но в штатном месте секретов (инвариант «/etc/*.env, 600»). [док] PRODUCTION_PLAN.md:397-399 дословно: «ключ S3 … передавался в переписке и лежал на диске сервера открытым текстом (с диска убран 27.07). Перевыпуск — за владельцем.» — то есть док САМ пишет, что перевыпуск не сделан, расхождения в этой части нет; абзац стоит в §10 «остаются незакрытыми» (строка 387). [память владельца] /root/.claude/projects/-srv-1c/memory/project-s3-key-is-temporary-not-a-defect.md (modified 2026-08-01T15:15Z): «ключ s3 — не важно вообще. это временный, не надо на него тратить токены… Ни в находки аудита, ни в списки дефектов его не выносить, перевыпуск не предлагать», там же разрешено поправить строку в доке.",
+  "fix": "Оставить ровно одну строку: PRODUCTION_PLAN.md:397-399 «(с диска убран 27.07)» → «вынесен в /etc/1c-s3.env, права 600 root». Из заголовка убрать «перевыпуск не сделан» (док утверждает то же самое — это не расхождение), снять severity=high, добавить пометку «решение владельца 01.08: ключ временный, дефектом не считать». Значение ключа в отчёте не повторять."
+ },
+ {
+  "fid": "F014",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "v",
+  "evidence": "[замер] /etc/1c-bot-monitor.env — ровно одна строка «GATEWAY_HEALTH_URL=» с ПУСТЫМ значением (wc -l = 1), права -rw-r--r-- против 600 у прочих 1c-*.env. Значит утверждение находки «URL задан в /etc/1c-bot-monitor.env» неверно. [замер] systemctl cat 1c-bot-monitor.service → EnvironmentFile отсутствует, каталога drop-in нет, systemctl show -p Environment → пусто; cmp репозиторного ubuntu/monitoring/1c-bot-monitor.service с /etc/systemd/system/… → совпадают (дефект и в git, не только на стенде). [код] /opt/1c-bot-monitor/bot_health_check.sh:15-16 «Пусто — проверка пропускается» / GATEWAY_HEALTH_URL=\"${GATEWAY_HEALTH_URL:-}\", :26-28 curl под условием непустоты; копия в /opt совпадает с репо. [док] AGENT_FINDINGS_STATUS.md:102 говорит «✅ добавлена штатная проверка /health» — про правку кода, и это правда. [док] в TARGET.md нет ни «монитор», ни «health», ни «алерт» — опоры для (б) в контракте нет.",
+  "fix": "Убрать из «как есть» слова «URL задан в /etc/1c-bot-monitor.env»: значение пустое, поэтому починка одного юнита ничего не даст — нужны и EnvironmentFile (в юните репозитория ubuntu/monitoring/, не только на стенде), и сам URL. Уточнить, что док:102 не врёт (это статус правки кода) — либо убрать его из «доки описаны иначе», либо предложить формулировку, чтобы галочка не читалась как «проверка работает на стенде». Вердикт (в) оставить: в TARGET мониторинга нет, а прописать URL — изменение состояния сервера по слову владельца. Заодно упомянуть права 0644 на env-файле."
+ },
+ {
+  "fid": "F015",
+  "ok": true,
+  "problem": "нет",
+  "evidence": "Снял сам: `ss -tlnp` → :8091 нет вовсе, слушает 127.0.0.1:8099 (python3, pid 3109129); `systemctl is-active 1c-serene-ask` → inactive. /opt/1c-mcp-reports/golden.sh:11 `URL=${ASK_URL:-http://127.0.0.1:8091/ask}`, `grep -c '^ASK_URL' /etc/1c-serene-ask.env` → 0. Но диагноз находки («сервис переехал на :8099») ложен: `systemctl cat 1c-serene-ask` → EnvironmentFile=/etc/1c-mcp-reports.env, где SERENEDB_DSN … dbname=postgres, а serene_ask.py:52 по умолчанию слушает 8091 — это порт ПЕРВОЙ базы; docs/RUNBOOK_DEPLOY.md:52 прямо описывает :8099 как «сервис ответов ВТОРОЙ базы, осиротевший процесс, юнита нет». Остаток («приёмку сейчас не прогнать») целиком покрыт F002, а два a-члена — F196 (probe.sh/RUNBOOK §10.8) и F023 (97 965 в чек-листе). Снятие целиком верно.",
+  "fix": "Ничего. Единственное, что стоит добавить в строку «Снято» — что остаток покрыт F002, чтобы находку не завели заново.",
+  "right_verdict": ""
+ },
+ {
+  "fid": "F016",
+  "ok": false,
+  "problem": "неверное место",
+  "evidence": "В отчёте (DISCREPANCIES.md:685) строка стоит в разделе `docs/HOW_IT_WORKS.md` с адресами «стр. 214; 242; 286», а процитированное утверждение («заготовки … итого 6 124 символа») живёт в другом файле: `grep -rn '6 124' docs` → docs/OPENCLAW_BOT.md:131, docs/RUNBOOK_DEPLOY.md:513, docs/HOW_NOT_TO.md:1403, CHANGELOG.md:89. Само число проверил: `wc -c .replaced-by-deploy/*` → 5878 байт (wc -m → 5857), то есть расхождение реально и вердикт «a» верен. Заголовок находки в findings.json («боевая персона нигде в git не сохранена») опровергается замером: md5 /home/undebot/.openclaw/workspace/AGENTS.md = md5 `git show 4b78be5:ubuntu/openclaw/instance/AGENTS.md` = 03c8e193c77a5ced9e212b61bfa5a15c, оба 9416 байт (в отчёт эта формулировка не попала — и правильно). При этом настоящее отставание HOW_IT_WORKS в строку не попало: блок diff на :242 и предписание :247 «Разошлись — сперва deploy_instance.sh» стоят без оговорки, тогда как тот же блок в memory_bank/activeContext.md:28-30 сопровождён красной пометкой «Сейчас первый diff РАЗОЙДЁТСЯ намеренно».",
+  "fix": "Строку про «6 124 символа» перенести в раздел docs/OPENCLAW_BOT.md с адресом :131 (и приписать те же места: RUNBOOK_DEPLOY.md:513, HOW_NOT_TO.md:1403, CHANGELOG.md:89), факт — 5 878 байт / 5 857 символов. Отдельной строкой раздела HOW_IT_WORKS оставить настоящее расхождение: :242-247 нужна оговорка activeContext.md:28-30 о намеренно невыкаченной персоне. Формулировку «нигде в git не сохранена» не воскрешать.",
+  "right_verdict": "a"
+ },
+ {
+  "fid": "F019",
+  "ok": false,
+  "problem": "преувеличено",
+  "evidence": "Цитата и место верны дословно: TARGET.md:91 — «- запускать процесс `psql` (или иной клиент) в цикле», буллет в п. 20 без оговорок. Но «бесконечный цикл» и «десятки-сотни psql при большом недосчёте» фактам не соответствуют: embed_missing.sh:161 `ROUNDS=${EMBED_ROUNDS:-6}`, выходы `break` на :179, :282, :284, :286-287 («достигнут предел раундов»); внутри раунда число запусков фиксировано (12 мест вызова psql в файле + N параллельных psql на :230-242, N=WORKERS, build.sh:33 по умолчанию 8) и от размера недосчёта не растёт; build.sh зовёт скрипт 4 раза за такт (:219, :227, :245, :261). Вердикт «v» оставляю: буква нарушена, но п. 20 тем же перечнем разрешает своим кодом «вызов языковой модели», а цикл — именно докатка пачек ai_embed; решать владельцу.",
+  "fix": "Заголовок переписать: «embed_missing.sh запускает psql в цикле (TARGET.md:91): раундовый цикл с потолком EMBED_ROUNDS=6 и 8 параллельных psql на раунд, 4 вызова за такт; число запусков ограничено сверху и от недосчёта не растёт, строки наружу не уходят». Добавить второй адрес — критерий приёмки п. 20 в TARGET.md:151 («норма — единицы запусков»).",
+  "right_verdict": "v"
+ },
+ {
+  "fid": "F022",
+  "ok": true,
+  "problem": "нет",
+  "evidence": "Всё перепроверил сам. docs/OPENCLAW_BOT.md:70 дословно: «Флаг `hooks.allowConversationAccess` **не нужен** и снят: он гейтит только хуки диалога, а наши четыре к ним не относятся» — в действующем разделе, без пометки «история». На стенде флаг стоит: python3 по /home/undebot/.openclaw/openclaw.json → plugins.entries['braine-verify']['hooks'] = {'allowConversationAccess': True}; в репо-эталоне ubuntu/openclaw/instance/openclaw.json у braine-verify только {enabled, config} — блока hooks нет. Причина, по которой прав стенд, а не док: `grep -n 'api.on(' ubuntu/openclaw/verify-plugin/index.js` → 5 хуков (84, 123, 140, 154, 187), пятый — before_agent_finalize, и он назван среди гейтящихся в доке движка: /opt/openclaw-engine/docs/plugins/hooks.md:600-602 и /opt/openclaw-engine/docs/cli/plugins.md:404. RUNBOOK_DEPLOY.md:530-531 и HOW_IT_WORKS.md:393-394 («иначе движок молча не зарегистрирует») верны и правки не требуют. Вердикт «a» верен.",
+  "fix": "В строку добавить причину и остальные адреса, иначе читатель починит не в ту сторону (снимет флаг со стенда): править OPENCLAW_BOT.md:70, :79 («Четыре хука» → пять), :145 («это было неверно» — разбор годен только для четырёх хуков) и AGENT_FINDINGS_STATUS.md:99 («✅ снят»). Отдельно отметить последствие: в instance/openclaw.json флага нет, выкатка эталона молча погасит before_agent_finalize.",
+  "right_verdict": ""
+ },
+ {
+  "fid": "F101",
+  "ok": true,
+  "problem": "нет",
+  "evidence": "Воспроизвёл своими запросами (psql к SereneDB 127.0.0.1:7890): в базе postgres `select k,count(*) from search_quality group by k having count(*)>1` → clipped_docs|130; в ut_test → clipped_docs|25, fold_kept_no_child|6. Значения вперемешку из разных эпох: ut_test clipped_docs = 25 (×20), 2140 (×3), 813, 795 при фактических `count(*) from search_corpus where length(doc)>=20000` = 25; база 1 — 0 (×129) и 5 при фактических 0. Код подтверждает: corpus_build.sql:658 `DELETE FROM search_quality WHERE k LIKE 'refmap_%'`, а clipped_docs и fold_kept_no_child вставляются тем же UNION ALL (:672-698) без удаления; build.sh:176-179 читает соседние ключи скалярным подзапросом, для mart_changed_ts защита count(*)=1 есть, для этих двух — нет. Вердикт «b» верен: доки тут не врут, правится SQL сборки.",
+  "fix": "Убрать из «доки, где это описано иначе» строку docs/REGRESSION_BASE1.md:30 — там fold_kept_no_child и для базы 1 он в единственном экземпляре со значением 0 (проверено: k=fold_kept_no_child, count=1), то есть док верен. Оставить PLAN_P13_COMPLETENESS.md:41 («закрыто: считается как clipped_docs»).",
+  "right_verdict": ""
+ },
+ {
+  "fid": "F102",
+  "ok": false,
+  "problem": "неверное место",
+  "evidence": "Ядро подтвердил сам: `grep -n 'обрез\\|clip' ubuntu/serenedb/serene_ask.py` → только 1120 и 1124, и это механизм `cut` для усечения ПЕРЕЧНЯ сущностей по бюджету промпта (:1119-1129); `grep -n 'search_quality'` по всему файлу → единственное вхождение :2957 (build_ts для свежести), то есть clipped_docs сервис ответов не читает никогда; _coverage_answer (:1861) строит перепись из search_coverage. Замеры: ut_test `count(*) where length(doc)>=20000` → 25, база 1 → 0. Но два адреса в отчёте неверны: doc_loc «CLAUDE.md:0» — такой строки нет, инвариант стоит в CLAUDE.md:178 («Обрезал — покажи это в ответе, а не в журнале»); в evidence числится строка 154, где ни «обрез», ни «clip» нет (там про csv.field_size_limit). Вердикт «b» оставляю: TARGET.md:41-45 требует, чтобы недоступное было видно владельцу и чтобы при возможной ошибке система уточняла, а не отвечала по неполным данным — счётчик в служебной таблице этого не даёт.",
+  "fix": "doc_loc CLAUDE.md:0 → CLAUDE.md:178; из evidence убрать «154». Дописать, что это не новая дыра: docs/PLAN_P13_COMPLETENESS.md:45-46 сам фиксирует «числа search_quality не читает никто — grep по сервису ответов даёт ноль», то есть дефект известен и открыт.",
+  "right_verdict": "b"
+ },
+ {
+  "fid": "F103",
+  "ok": false,
+  "problem": "неверный факт",
+  "evidence": "Числа воспроизвёл до единицы (psql user=postgres, 7890): ut_test `select kind,count(*),count(distinct tbl) from tmp3_cls group by 1` → skip|2966|714 (text 6695, ref 4601, num 4028, flag 2626, date 976); по сущностям, дошедшим до корпуса, `join search_sources … where kind='skip'` → 2565 колонок, из них Edm.Binary 142 в 100 сущностях; база 1 → 313 и 23. Разрез: nav-колонки 1955, Collection(...) 459, StandardODATA.TypeDescription 9, Edm.Binary 142. Счётчика колонок действительно нет: перечень ключей search_quality (24 ключа, колоночного нет ни одного; nums_lost — про строки, corpus_merge.sql:72-74) и колонки search_coverage (в_1С, в_корпусе, объектов_витрины, в_витрине, в_индексе, с_вектором, причина, entity). TARGET.md:145 дословно «число строк и колонок, дошедших до поиска, сверено с 1С», TARGET_STATUS.md:30 п. 13 стоит 🟢 — вердикт «b» верен. Неверно одно утверждение внутри находки: «ни один документ такого счётчика не обещает» — docs/PLAN_P13_COMPLETENESS.md:133-139 «Шаг 5. Колонки, а не только строки» обещает ровно этот замер («число значений, не дошедших до текста, посчитано по классам и видно запросом») и стоит невыполненным, а :39 держит открытым пункт про Edm.Binary.",
+  "fix": "Из «на самом деле» убрать «ни один документ такого счётчика не обещает» и заменить на «это невыполненный Шаг 5 собственного плана, docs/PLAN_P13_COMPLETENESS.md:133-139». В заголовке развести числа: выброшено 2 565, из них 1 955 служебных *_navigationLinkUrl и 468 вложенных типов (грузятся отдельными источниками), реальная потеря содержимого — 142 колонки Edm.Binary в 100 сущностях (база 1 — 23). Адрес правки: код (счётчик skip по классам) + TARGET_STATUS.md:30.",
+  "right_verdict": "b"
+ },
+ {
+  "fid": "F107",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "v",
+  "evidence": "psql ut_test \"SELECT k,v FROM search_quality WHERE k IN ('build_ts','mart_changed_ts')\" → build_ts 1785346661 (29.07 17:37 UTC), mart_changed_ts 1785383137 (30.07 03:45 UTC) — разрыв 10,1 ч, числа находки верны (сейчас 01.08 20:37 UTC). Но два утверждения тела опровергаются кодом: (1) coverage_build.sql:64-66 — колонка `в_1С` берётся из base_profile ($count из 1С), витрина лежит отдельными `в_витрине`/`объектов_витрины` (:79-84), значит витрина эталоном 1С НЕ считается; (2) coverage_build.sql:104 `WHEN c.n < m.n_obj THEN 'собралось не полностью'` — признак «корпус меньше витрины» в переписи ЕСТЬ. Верно другое: перепись пересчитывается только внутри такта (build.sh:277 — единственный вызов coverage_build.sql), поэтому при стоящем такте (cov_rows_lost=0, причин 'собралось не полностью' в search_coverage сейчас 0) отставание ею не выражается; отдельного ключа отставания в search_quality нет (перечислил все ключи). Огласка возраста существует: serene_ask.py:2957 считает возраст от build_ts и приписывает предупреждение при age > STALE_WARN_SEC.",
+  "fix": "Вердикт «v» оставить. Из тела убрать «перепись считает витрину эталоном 1С» и «признака „корпус отстал от витрины“ нет ни одного в search_coverage» — оба неверны (coverage_build.sql:64-66 и :104). Оставить проверяемое ядро: перепись пересчитывается только внутри такта, отдельного счётчика отставания корпуса от витрины в search_quality нет, а приписка о возрасте считается от build_ts и названа «последнее обновление из 1С» неточно."
+ },
+ {
+  "fid": "F113",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "v",
+  "evidence": "PGPASSWORD=deliberately_wrong_zz psql \"host=127.0.0.1 port=7890 user=postgres\" → запрос выполнился (главный факт верен). Контрольный опыт: тот же неверный пароль под serene_ro → FATAL: password authentication failed for user \"serene_ro\" — то есть парольная граница для не-суперпользователя РАБОТАЕТ. pg_hba_file_rules: trust только на {postgres} для local/127.0.0.1/::1, остальным scram-sha-256. strings -n 30 /usr/local/bin/serened: «An un-removable local + loopback trust rule is force-prepended so a bad ruleset cannot lock you out» — беспарольный вход postgres по петле неснимаем средствами движка. Второй абзац находки бьёт мимо: EnvironmentFile с дефисом стоит у 1c-serene-index/1c-serene-pipeline, а они запускают build.sh/pipeline.sh; serene_report.py исполняется в 1c-mcp-reports.service и 1c-serene-ask.service, где /etc/1c-mcp-reports.env подключён БЕЗ дефиса (systemctl cat) — сервис не стартует, а не «молча уходит суперпользователем». Верно осталось: /opt/1c-mcp-reports/serene_report.py:15 дефолт DSN = user=postgres. TARGET.md пункта про роли/аутентификацию нет — на (б) опереться нечем.",
+  "fix": "Заголовок «разделение ролей ничего не ограничивает» заменить на «по петле беспарольно пускается только суперпользователь postgres — это неснимаемое правило движка; парольная граница serene_ro работает (замер), но локальный процесс может её обойти, взяв DSN суперпользователя». Снять абзац про EnvironmentFile с дефисом. Вопрос владельцу сузить до: убирать ли суперпользовательский дефолт из serene_report.py:15 и записать ли в HOW_IT_WORKS, что trust для postgres по петле снять нельзя."
+ },
+ {
+  "fid": "F114",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "a",
+  "evidence": "Замеры находки воспроизвёл: systemctl cat 1c-serene-index/1c-serene-pipeline → EnvironmentFile=-/etc/1c-mcp-reports.env, затем /etc/1c-serene-sync.env; SERENEDB_DSN в reports.env:5 = user=serene_ro dbname=postgres, в sync.env:1 = user=postgres без dbname; PGPASSWORD есть только в reports.env; psql с sync-DSN → current_database() = postgres. Но опорное утверждение «ни один док состав этих двух файлов и порядок их подключения не описывает» ЛОЖНО: CHANGELOG.md:2198-2207 «Ночная сборка индекса починена: причина была в порядке env-файлов» с замером (permission denied for schema public), docs/SERVER_HANDOFF.md §6:236-244 «почему нельзя менять порядок строк в юните обратно», и комментарий в самом юните /etc/systemd/system/1c-serene-index.service:26-28 («роль задаёт sync-файл»). Плюс setup_ro_role.sql:1-3 прямо делит: бот под serene_ro, загрузчик витрины под rw (postgres). То есть «сборка под суперпользователем» — записанное решение 27.07, а не неясность.",
+  "fix": "Сменить вердикт с «v» на «a» и снять формулировку «сборка получает DSN суперпользователя» как дефект — это задокументированная починка 27.07. Оставить узкий остаток для доков: в RUNBOOK_DEPLOY.md §0/§10 нет таблицы «какой юнит какие env-файлы подключает и кто побеждает», а dbname в DSN сборки не записан явно (libpq подставляет имя роли). Severity понизить до low."
+ },
+ {
+  "fid": "F115",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "v",
+  "evidence": "Факты про модели верны: /opt/1c-mcp-reports/serene_report.py:21 DS_MODEL default «deepseek-v4-flash», serene_ask.py:169 default «deepseek-v4-pro»; grep -c '^DEEPSEEK_MODEL' → /etc/1c-serene-ask.env 1, /etc/1c-mcp-reports.env 0; дверь отчётов жива (:6015, 1c-mcp-reports active) и mcp_reports.py:21 импортирует serene_report. Но утверждение «нигде это не записано, различие возникает не из решения» неверно: обоснование обоих дефолтов лежит рядом со строками — serene_report.py:17-20 («дефолт = прямой эквивалент старого deepseek-chat, non-thinking flash, втрое дешевле»), serene_ask.py:161-168 «🔴 PRO, А НЕ FLASH. Указание владельца 30.07: „не Флэш, а v4 pro“» с замером 10 провалов из 11 на flash. Ещё: doc_loc docs/RUNBOOK_DEPLOY.md:369 — это строка EMBED_DIM=1536 внутри шаблона /etc/1c-mcp-reports.env, про DEEPSEEK_MODEL там ни слова.",
+  "fix": "Вердикт «v» оставить, но убрать «нигде это не записано»: оба дефолта — записанные решения (serene_report.py:17-20 и указание владельца в serene_ask.py:161-168). Вопрос владельцу сформулировать как «распространяется ли указание „не Флэш, а v4 pro“ на дверь отчётов». doc_loc уточнить: шаблон env в RUNBOOK_DEPLOY.md §…, где DEEPSEEK_MODEL отсутствует, а не строка 369 (EMBED_DIM)."
+ },
+ {
+  "fid": "F116",
+  "ok": false,
+  "problem": "неверное место",
+  "right_verdict": "v",
+  "evidence": "Ядро подтверждаю: stat → 600 root:root /etc/1c-pg-windows.env; имена переменных PGW_HOST PGW_PORT PGW_USER PGW_PASSWORD PGW_DB; grep -rn 'PGW_' по /srv/1c/ubuntu, /srv/1c/work, /opt/1c-mcp-reports, /opt/1c-etl → только файлы самого аудита; ни один юнит в /etc/systemd/system файл не подключает. Но doc_loc docs/RUNBOOK_DEPLOY.md:369 — это строка EMBED_DIM=1536 из блока /etc/1c-mcp-reports.env; grep '1c-pg-windows' по всем .md даёт memory_bank/techContext.md:19 («Реквизиты PG на Windows — /etc/1c-pg-windows.env»), docs/SERVER_HANDOFF.md:113 (в перечне секретов) и docs/HANDOFF_CHECK_1.md:171 — RUNBOOK не упоминает файл ни разу. И оговорка «ни один док не объявляет отложенным» неверна: owner-memory/project-architecture-pg-windows-attach.md описывает PG-на-Windows как действующую целевую схему владельца с открытым вопросом автоустановки.",
+  "fix": "Вердикт «v» оставить. Заменить doc_loc docs/RUNBOOK_DEPLOY.md:369 на memory_bank/techContext.md:19 и docs/SERVER_HANDOFF.md:113; снять «контура, которого нет ни в одном доке» и «ни один док не объявляет отложенным». Оставить проверяемое: пароль лежит, кода-потребителя нет; вопрос владельцу — держим до возврата к ATTACH (тогда записать в RUNBOOK) или перевыпускаем."
+ },
+ {
+  "fid": "F118",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "v",
+  "evidence": "git status --porcelain → M windows/odata-setup/{README.md,dist/setup-1c-odata.exe,setup-1c-odata.example.ini,src/{Program,Steps,Sys}.cs}, M work/installer-exe/PLAN.md, M docs/PLAN_AUTONOMY.md; git diff --stat → exe Bin 95744 → 109056, 453 вставки. git show HEAD:.../Sys.cs → ToolVersion = \"1.0.0\", рабочий Sys.cs:22 → \"1.1.0\". git diff HEAD -- CHANGELOG.md memory_bank/progress.md → пусто, а CHANGELOG.md:293-307 («## 30.07: setup-1c-odata.exe 1.1.0 … Бинарь: windows/odata-setup/dist/setup-1c-odata.exe (1.1.0)») и progress.md:246-248 уже в origin. README обещание «готовый бинарь из репозитория, можно запускать сразу» есть и в HEAD (строка 173). Вердикт «v», а не «b», подтверждается записями: work/installer-exe/PLAN.md §9 «Коммит/push — по слову владельца (в этой сессии не делался из-за параллельных агентов)» и docs/HOW_NOT_TO.md §2.16 «git add -A захватил работу параллельной сессии» — то есть отступление от правила коммита осознанное, а разрешать его владельцу.",
+  "fix": "Мелочь в доказательстве: «последний коммит в каталог установщика — 70ff915» неточно — последний по git log -1 -- windows/odata-setup это 920ef19 (тоже 25.07; 70ff915 — последний по dist/ до 4864d69). И README:180 — строка рабочего дерева, в HEAD это 173. На вердикт не влияет."
+ },
+ {
+  "fid": "F121",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "git diff -- windows/odata-setup/setup-1c-odata.example.ini: было '# external-url = http://192.168.56.1:6003/...' (закомментировано) и 'backup-dir = C:\\1c\\backups', стало действующими 'ubuntu-host = 192.168.56.42' (:37) и 'external-url = http://192.168.56.1:6003/1c/odata/standard.odata/' (:40). README.md:19,23,28 — все три команды «Быстрого старта» показаны с --ubuntu-host 192.168.56.42 и --external-url http://192.168.56.1:6003/... Подтверждается и расширение скептика: адреса стенда попали в текст --help (Program.cs:868, 871-872 — в HEAD-версии этих строк нет) и, значит, в пересобранный dist/setup-1c-odata.exe. TARGET.md п.14 по букве: «Правила те же, что для всей системы: без хардкода, на любой базе» — адрес нашей лаборатории как действующее значение примера под это подпадает, править надо правку, а не док.",
+  "fix": "Ничего менять не требуется. По желанию — в место находки добавить windows/odata-setup/src/Program.cs:868,871-872 (текст --help), чтобы правка не осталась только в README и ini; при этом строка Program.cs:650 с 192.168.56.1:6003 существовала и в HEAD (:512) — она к этой правке не относится."
+ },
+ {
+  "fid": "F122",
+  "ok": false,
+  "problem": "неверный вердикт",
+  "right_verdict": "v",
+  "evidence": "[код] .claude/hooks/check-docs.sh:28 дословно `if [ -z \"$CODE\" ] || [ -n \"$DOCS\" ]; then echo '{}'; exit 0; fi` — коммит из одних .md уходит молча; факт подтверждён историей: `git show --stat 59ea77c` («журнал и активный контекст за вечер 30.07») содержит только CHANGELOG.md и activeContext.md, а сам код 1.1.0 до сих пор незакоммичен — `git diff --stat -- windows/odata-setup/` даёт 6 файлов, Program.cs +290 строк. [код] .claude/settings.json: хуки только SessionStart, PreToolUse[Bash] (check-diff, check-docs, check-active-size, check-golden, агент-снайпер) и PostToolUse[Write|Edit] (count-edits, check-write); Stop-хука нет, `ls /srv/1c/.git/hooks | grep -v sample` пусто — напоминания «сделай коммит» действительно нет ни одного. Но: `grep -n 'промт\\|коммит\\|push' TARGET.md` → пусто, в memory_bank/owner-memory/*.md правила о коммитах тоже нет (единственное упоминание «кодом, а не просьбой в промте» — project-figures-substituted-by-code.md:27, про подстановку чисел). CLAUDE.md при этом описывает check-docs.sh честно («выносит владельцу коммит, где код есть, а документов нет») — ни один документ не врёт.",
+  "fix": "Вердикт b заменить на v: буквы контракта TARGET.md находка не нарушает (о коммитах там ничего нет), owner-memory тоже; основание — инвариант CLAUDE.md, а «чем именно подпереть кодом правило коммита после шага» (события «шаг закончен» у механизма нет) — решение владельца. Формулировку «в session-start.sh обращений к git нет» поправить: строка 13 зовёт git rev-parse для cd, состояние дерева хук не показывает."
+ },
+ {
+  "fid": "F123",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "b",
+  "evidence": "[код] work/installer-exe/PLAN.md:226-227 дословно: «Коммит/push — по слову владельца (в этой сессии не делался автоматически из-за параллельных агентов; артефакты в git working tree)»; `git show HEAD:work/installer-exe/PLAN.md | tail` — на этом месте в HEAD стоял другой текст («Дождаться слова „делай“…»), то есть абзац добавлен незакоммиченной правкой. CLAUDE.md, раздел «🔴 Коммит и push — после КАЖДОГО законченного шага»: «Шаг закончен — коммит и push в origin/main», с прямой цитатой владельца. `grep -rn 'по слову владельца' --include=*.md .` даёт разрешение владельца только на другие вещи (TARGET_STATUS.md:64 — делать установщик в конце, SERVER_HANDOFF.md:97 — гашение nightly-eval), разрешения не коммитить нет нигде. HOW_NOT_TO §2.16 (1231) и §2.17 (1558) действительно предупреждают только о `git add -A` и `git stash`, не об отказе от коммита; коммит поимённо чужого дерева не трогает — довод находки верен.",
+  "fix": "Поправить только координату: HOW_NOT_TO §2.17 — строка 1558, а не 1557 (1557 пустая). По сути и вердикту править нечего."
+ },
+ {
+  "fid": "F124",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "[замер] десять юнитов подтверждены: для каждого из api/kb-poll/oikb/open-webui/rerank-shim/tg-bridge/gsheets-sync.service+.timer/nightly-eval.service+.timer `git ls-files | grep -c \"/<имя>$\"` → 0, состояние disabled|static / inactive. Но остальное не сходится: я сверил ВСЕ наши юниты (`cmp /etc/systemd/system/<u>` с каждой копией в git) — их 19, а не 11, и два расходятся: 1c-serene-index.timer отличается от единственной копии ubuntu/serenedb/systemd/1c-serene-index.timer, 1c-serene-index.service совпадает лишь со второй копией (ubuntu/systemd/), а ubuntu/serenedb/systemd/ — DIFF; в находке эти юниты вообще не названы. Доковая часть тоже не выдерживает: RUNBOOK_DEPLOY.md:266-269 прямо над §7 несёт баннер «РАЗДЕЛЫ 7 И 8 БОЛЬШЕ НЕ ЧАСТЬ ПРОДУКТА… при развёртывании с нуля их пропускать», :41 — «nightly-eval погашен 29.07, поднимать не надо», ARCHITECTURE.md:13 — «braine выведен из контура»; ARCHITECTURE.md:64 в doc_locs — это строка про 1c-etl.timer, который в репозитории есть. По UBUNTU_SETUP.md:28-33 юниты ставит сторонний `deploy/install.sh` braine в /opt/smart-bot — их отсутствие в нашем git ожидаемо. Зато проверкой нашлось обратное расхождение, которого в находке нет: ARCHITECTURE.md:159-160 и RUNBOOK_DEPLOY.md:296-297 перечисляют open-webui, oikb, rerank-shim, api, kb-poll как «system-сервисы (enabled)», а systemctl у всех пяти даёт disabled/inactive.",
+  "fix": "Снять «стенд из репозитория не воспроизводится» и вердикт v: слой braine выведен намеренно и это записано (ARCHITECTURE.md:13, RUNBOOK §7-баннер), юниты ставились чужим install.sh. Переписать в находку класса «a»: (1) UBUNTU_SETUP.md без пометки о выведении слоя; (2) ARCHITECTURE.md:160 и RUNBOOK_DEPLOY.md:297 называют пять погашенных сервисов «enabled». Убрать фразу «остальные 11 юнитов побайтно совпадают» (их 19, и 1c-serene-index.timer/.service расходятся с репозиторными копиями — это отдельная находка) и doc_loc ARCHITECTURE.md:64."
+ },
+ {
+  "fid": "F125",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "a",
+  "evidence": "[замер] `git diff -- windows/odata-setup/setup-1c-odata.example.ini` — строки `-backup-dir = C:\\1c\\backups` и `-# no-backup = 0` удалены, на их место встал сетевой блок: факт пропажи верен. Ключи в коде живы: Program.cs:24 BackupDir по умолчанию, :750 `case \"--no-backup\"`, :768 `case \"--backup-dir\"`, :826/:836 разбор из ini, :899-900 строки справки. Но утверждение «README установщика о бэкапе не упоминает вовсе» ложно и ложно из-за метода: `grep -nic 'backup' windows/odata-setup/README.md` → 0, а `grep -ni 'бэкап|резерв'` → README.md:43 «(с резервной копией файла)», :47 «11 | Бэкап | zip-копия базы перед единственным изменением», :71, :126 «Мало места под бэкап», :127 «Бэкап не удался — состав OData не меняет», :160 «только после успешного бэкапа». Документ русский, grep искал латиницей.",
+  "fix": "Убрать из находки «README о бэкапе не упоминает вовсе» и вывод «единственное место, где можно было узнать про настройку бэкапа, исчезло» (ключи печатаются в --help, Program.cs:899-900). Оставить: «в примере настроек больше не показаны backup-dir/no-backup — вернуть две строки закомментированными и назвать ключи в README». Вердикт a верен, тяжесть — ниже low; в evidence заменить латинский grep на `grep -ni 'бэкап|резерв'`."
+ },
+ {
+  "fid": "F126",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "v",
+  "evidence": "[замер] `ls -l` и `md5sum`: /opt/openclaw-mcp/mcp_braine.py 6913 байт c85f445afda4f5166f174d8cff4e7413, ubuntu/openclaw/mcp_braine.py 6924 байт b101a3953e…; `diff` — ровно одна строка `23a24 > import sys`. Однако перебор всех ревизий файла (`for r in $(git log --format=%h -- ubuntu/openclaw/mcp_braine.py); do git show $r:… | md5sum; done`) даёт: ee37997→b101a395 (HEAD), c4764ce→c85f445a — то есть развёрнутая копия побайтно равна ревизии c4764ce, а не «неизвестной репозиторию версии»; деплой отстал на один коммит. Юнит жив: `systemctl is-active/is-enabled 1c-mcp-braine.service` → active/enabled, ExecStart крутит именно /opt-копию (pid 3173746), при том что ARCHITECTURE.md:86 помечает его «🔴 выведен 30.07».",
+  "fix": "Заменить «исполняется именно неизвестная репозиторию версия» на «развёрнутая копия — ревизия c4764ce, на один коммит старше HEAD; вся разница — вынесенный наверх `import sys` (ee37997), нужный только на fail-closed ветке без MCP_TOKEN». Вердикт v оставить (снести или обновить хвост выведенного braine — решение владельца), тяжесть low подтверждается."
+ },
+ {
+  "fid": "F131",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "b",
+  "evidence": "[код] ubuntu/openclaw/verify-plugin/index.js:187-196 — в reply_payload_sending только stripInternal и `return {payload:{...p,text:clean…}}`; evaluate() зовётся единственный раз, в message_sending (:166). Числовой гейт к подписи медиа не применяется — факт верен. [замер] `node -e` с verify-core: DEFAULTS.minDigits=4, minDigitsWithRef=1; evaluate('Долг 4321 руб',null,null,{}) → {\"action\":\"allow\"}, evaluate('Выручка 45000',…) → cancel. Путь живой: report_1c остаётся в конфигурации бота (/home/undebot/.openclaw/openclaw.json:142-147, :6015), 1c-mcp-reports.service active. Но обвинение доку неточно: OPENCLAW_BOT.md:86-87 дословно «тем же `stripInternal` чистит подпись к медиа … → полное покрытие: текст + подпись к графику» — «полное покрытие» отнесено к анти-сливу, а числовую сверку док честно приписывает пункту 3 (message_sending). Переобещание — только общее HOW_IT_WORKS.md:689 «модель не выдумывает числа | гейт сверяет каждое число» (и таблица :226).",
+  "fix": "Вердикт b оставить (дыра в коде против TARGET п.3/п.10: подпись — часть ответа). Снять тезис «док подаёт этот хук как закрывающий дыру» и заменить doc_locs OPENCLAW_BOT.md:86-87 на HOW_IT_WORKS.md:689 (+:226). Добавить оговорку: путь существует только потому, что не исполнено решение владельца 26.07 о выводе report_1c из контура (TARGET_ARCHITECTURE.md:78, PRODUCTION_PLAN.md:264) — лобовое применение evaluate() к подписи дало бы replace на дословный ответ инструмента, то есть режим отсечки — вопрос владельцу."
+ },
+ {
+  "fid": "F132",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "[код] .claude/hooks/check-diff.sh:25 `DIFF=$(git diff --cached -U0 -- '*.py' '*.js' '*.mjs')`, :34-37 регулярка `=\\s*[0-9]+`, :43-45 отсев кириллицы списком слов; check-write.sh:11-14 `case \"$FILE\" in *.py|*.js|*.mjs) ;; *) echo '{}'; exit 0` — .sql/.sh/.cs/.json молча пропускаются, а `git status` подтверждает, что сейчас правятся именно .cs (Program.cs, Steps.cs, Sys.cs). Доки: HOW_IT_WORKS.md:689 «подгонка под нашу базу | хук-агент перед коммитом и проверка после каждой правки» и systemPatterns.md:75 «+ скрипт после каждой правки» — расширений не оговаривают, то есть обещают больше, чем есть → правка дока. Но два элемента находки — рассуждение, а не факт: агент-снайпер (.claude/settings.json, PreToolUse[Bash], type:agent) вызывается механизмом безусловно и весь дифф читает, приравнивать его к «правилу в промте», о котором инвариант CLAUDE.md:160-161, нельзя; а сам check-write.sh:4-7 объясняет в шапке, почему отбор файлов сделан скриптом, — это записанное намеренное решение.",
+  "fix": "Оставить вердикт a, но убрать «единственная полная проверка — ПРОМТ, ровно та форма, про которую инвариант говорит НЕ РАБОТАЮТ» и «врёт таблица гарантий». Честная формулировка: «HOW_IT_WORKS.md:689 и systemPatterns.md:75 обещают проверку после каждой правки — дописать „для .py/.js/.mjs“»; расширять ли детерминированные хуки на .sql/.sh/.cs — отдельный вопрос владельцу, не правка дока."
+ },
+ {
+  "fid": "F133",
+  "ok": false,
+  "problem": "неверное место",
+  "right_verdict": "v",
+  "evidence": "Факты сошлись сам: cat .claude/hooks/check-golden.sh — :14-17 `case \"$CMD\" in scp\\ *|*\"scp -i\"*|*\"rsync \"*) ;; *) echo '{}'; exit 0`, :22-25 SRC_DIRS + только *.py/*.js/*.mjs, :44-45 предлагает `touch .claude/.golden-last-run`; stat .claude/.golden-last-run → 2026-07-28 22:32, содержимое «tfidf 8/8»; find … -newer .golden-last-run → serene_sync.py, poc_load_entity.py, serene_ask.py, mcp_ask.py, verify-core.js, index.js; ubuntu/serenedb/deploy.sh:28-30 install+mv локально (scp/rsync нет). НО doc_locs указывают на чужие строки: CLAUDE.md:102 — это строка про `docs/REGRESSION_BASE1.md` («Замер снимается ПОСЛЕ последней правки»), про держание кодом там ни слова; docs/HOW_IT_WORKS.md:689 — строка «подгонка под нашу базу | хук-агент перед коммитом», а `grep -n 'золот\\|выкат' docs/HOW_IT_WORKS.md` пуст. Единственное место, где правило объявлено кодовым, — .claude/settings.json:42 (statusMessage «Проверка: замер сделан до выката»).",
+  "fix": "Заменить doc_locs на .claude/settings.json (регистрация check-golden.sh, statusMessage «замер сделан до выката») и шапку самого хука; убрать формулировку «правило CLAUDE.md:102 подано как держащееся кодом» — CLAUDE.md:102 про REGRESSION_BASE1 и кодового держания не обещает, HOW_IT_WORKS.md:689 про другой хук. Суть оставить: хук покрывает только удалённый выкат тремя расширениями — вопрос владельцу «расширять хук или признать правило договорным»."
+ },
+ {
+  "fid": "F135",
+  "ok": true,
+  "problem": "нет",
+  "right_verdict": "a",
+  "evidence": "docs/HOW_IT_WORKS.md:284 дословно «| бот не отвечает без обращения к данным | типизированные хуки плагина, у них есть block/cancel |». Код: ubuntu/openclaw/verify-plugin/index.js:131-136 возвращает `{action:\"revise\", retry:{maxAttempts:1}}`, block/cancel там нет; verify-core.js:192-201 без эталона блокирует только длину ≥ highRiskDigits, и рядом комментарий «Случай „бот переспросил, не обратившись к данным“ этим гейтом НЕ ловится». Свой прогон: node -e с import verify-core → 'Долг 4321 руб'→allow, 'Продано 850 шт'→allow, 'Выручка 45000'→cancel (highRiskDigits=5, verify-core.js:12).",
+  "fix": "Вердикт и место верны, править формулировку строки 284 (revise + одна повторная попытка, cancel только для ≥highRiskDigits). Заодно тем же заходом: docs/OPENCLAW_BOT.md:92-93 отстал — там highRiskDigits:7 и noDataMarker \"[НЕТ ДАННЫХ\", в verify-core.js:12,20 сейчас 5 и \"[NO DATA\", и не упомянут minDigitsWithRef:1."
+ },
+ {
+  "fid": "F136",
+  "ok": false,
+  "problem": "неверный факт",
+  "right_verdict": "v",
+  "evidence": "Замерил сам под postgres по петле (port 7890): ut_test has_schema_privilege('serene_ro','public','USAGE')=f, в postgres=t — эта часть верна. Но остальное не так: (1) «setup_ro_role.sql — единственный документированный способ» опровергается docs/SERENEDB.md:50 «справочная SQL-раскладка ролей (setup.sh её автоматизирует)» и RUNBOOK_DEPLOY.md:379 `bash setup.sh /etc/1c-mcp-reports.env`; (2) «26 таблиц без SELECT» не признак второй базы — в ОБЕИХ базах одинаково: search_meta/search_sources/cov_mart/build_state/base_profile_meta → f, search_corpus/search_tables/search_coverage → t; (3) отсутствие USAGE в ut_test чтение не ломает: под serene_ro `select count(*) from search_corpus` в ut_test вернул 623565, а search_meta — «permission denied» ровно как и в postgres. Positive control цел: resolver_index — serene_ro f, serene_resolver t (ut_test).",
+  "fix": "Переписать «как есть»: штатный путь — setup.sh (RUNBOOK §10.3), он по умолчанию настраивает базу postgres (setup.sh:15 SETUP_RW_DSN без dbname), для второй базы документированной процедуры нет, права там держатся грантами загрузчика (poc_load_entity.py:546) и сборщика (serene_search_build.py:973-974). Убрать «единственный документированный способ», убрать привязку 26 закрытых служебных таблиц ко второй базе (в первой то же самое) и снять довод про молчаливую потерю (чтение в ut_test работает несмотря на USAGE=false). Вопрос владельцу оставить: каким должен быть штатный путь заведения ролей на незнакомой базе."
+ },
+ {
+  "fid": "F137",
+  "ok": false,
+  "problem": "неверное место",
+  "right_verdict": "a",
+  "evidence": "Слово стоит ровно в одном месте кода: ubuntu/1c-gateway/odata_gateway.py:11 «этот прокси (только GET, whitelist)»; перечня сущностей в do_GET нет — только /health, Bearer (:80) и _path_ok (:92-99). Из doc_locs два неверны: README.md:98 дословно «1c-gateway/ OData read-only шлюз (+ dev: MCP whitelist-прокси)» — про gateway.py, где allowlist настоящий (gateway.py:9); в docs/HOW_IT_WORKS.md слова whitelist нет (grep пуст), :684 — про 405 до авторизации. Мой curl к живому :6011: POST без токена 405, GET без токена 401, --path-as-is /../../ → 401 (не 403, как в evidence — _auth_ok идёт до _path_ok), BREW 501, /health 200. Зато находка пропустила настоящий доковый промах: docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md:37 «Наш whitelist-шлюз ставится перед ним так же» — сказано именно про OData-канал.",
+  "fix": "Свести к двум местам: odata_gateway.py:11 (заменить «whitelist» на «только базовый путь») и docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md:37. README.md:98 и docs/HOW_IT_WORKS.md:684 из doc_locs убрать. В evidence поправить «traversal → 403»: без токена 401, 403 достижим только с валидным Bearer."
+ },
+ {
+  "fid": "F138",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "v",
+  "evidence": "Состояние подтвердил: ls -la /home/undebot/braine-verify → index.js 9430 б (23.07), verify-core.js 9421 б (23.07); cmp репо↔npm-копия (…/node_modules/openclaw-braine-verify) → идентичны, cmp репо↔/home/undebot/braine-verify → отличаются. Но действующего риска подмены нет: в /home/undebot/.openclaw/openclaw.json у braine-verify только enabled/config/hooks, ни одного пути (plugins.load.paths отсутствует), и в репо ссылок на этот каталог нет — единственный исходник назван в OPENCLAW_BOT.md:73. Второй участник находки крепче и проверен: deploy_instance.sh:64-68 ищет verify-core.js в ~/.openclaw и копирует туда index.js/verify-core.js, тогда как OPENCLAW_BOT.md:73 пишет «Каталог установки принадлежит движку … путём пользоваться нельзя»; штатные пути движка есть — /opt/openclaw-engine/docs/tools/plugin.md:~124 (`plugins install --link ./my-plugin`) и :~190 (`plugins.load.paths`).",
+  "fix": "Заголовок и первый участник ослабить до гигиены: «остался каталог ручной установки 23.07, никем не читаемый — убрать ли». Убрать «риск „правится не то, что исполняется“» и «различить копии по имени нельзя». Главным сделать второго участника: наш deploy_instance.sh копирует в каталог установки, который наш же док запрещает, при наличии штатных --link/plugins.load.paths — это и есть вопрос владельцу."
+ },
+ {
+  "fid": "F139",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "Ссылки точны, проверил каждую: TARGET.md:47-48 «14. Инсталлятор. Ставится сам. Ручных действий два…»; windows/README.md:7 «руками остаётся только пользователь-читатель»; windows/odata-setup/README.md:4 «Руками остаётся ровно одно»; Program.cs:601 «ОСТАЛОСЬ СДЕЛАТЬ РУКАМИ», :602-603 пункт 0 при --skip-scope, :604 пункт 1 читатель, :610-612 пункт 2 «Сеть … проброс на роутере, например 6003 -> 80»; :644 ODG_PASS=<пароль пользователя-читателя>; --auto-resume есть только в таблице README:117, в примерах быстрого старта README:17-29 его нет. Но по букве п.14 нарушения нет: проброс на стороннем роутере и перенос файла кредов на Ubuntu установщик на Windows выполнить не может в принципе, а пароль читателя по тому же п.14 задаёт человек; сам пример «6003 -> 80» — топология нашего стенда.",
+  "fix": "Переформулировать как «док расходится с собственным выводом программы»: оба README обязаны перечислить то же, что печатает exe (сетевое предусловие, перенос ODG_PASS, при доустановке IIS — повторный запуск, с --auto-resume в примерах). Снять «нарушение п.14 / дыра установщика» и высокую важность (medium). Если владельцу нужен вопрос — задать его отдельно и узко: считать ли сетевую доступность машины предусловием среды или третьим ручным действием."
+ },
+ {
+  "fid": "F140",
+  "ok": false,
+  "problem": "преувеличено",
+  "right_verdict": "a",
+  "evidence": "Код-факт верен: Program.cs:444 `if (!string.IsNullOrEmpty(vu))`, :454 verifyExit = EXIT_VERIFY только внутри этой ветки, :467 Log.Skip(«проверка с авторизацией пропущена (не заданы учётные данные)»), :502 return verifyExit — в варианте 2 без кредов возврат остаётся 0, README:129 обещает «Состав OData пуст | проверка это ловит». Но «тихий зелёный итог на неработающей системе» не подтверждается тем же файлом: :585 «Настройка выполнена» печатается вместе с :601 «ОСТАЛОСЬ СДЕЛАТЬ РУКАМИ» и :602-603 «0) Задать состав OData в Конфигураторе — инструкция выше (без этого данных не будет)», :355 «состав в базе не меняется — задаёт администратор 1С вручную», :596 сохраняет файл 1c-odata-ручная-настройка.txt; work/installer-exe/PLAN.md:203 фиксирует такое поведение варианта 2 как критерий приёмки.",
+  "fix": "Оставить вердикт «а» и правку README:129 («ловится при варианте 1 либо при --reader-password; в варианте 2 без учётных данных проверка не выполняется — состав задаётся вручную по инструкции»). Снять формулировку про зелёный итог на системе без сущностей (программа печатает это первым пунктом «руками») и понизить важность с high до low/medium."
+ }
+]

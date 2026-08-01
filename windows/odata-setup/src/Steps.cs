@@ -491,10 +491,43 @@ namespace Oc1c
 
                 doc.Save(vrd);
                 Ctx.Changed = true;
-                detail = "standardOdata enable=\"true\"";
+
+                // Грабля Н-3 (УТ): webinst мог оставить enable=false; мы обязаны ПЕРЕЧИТАТЬ файл.
+                string verify;
+                if (!IsODataEnabledInVrd(dir, out verify))
+                {
+                    Log.Err("после записи в default.vrd OData всё ещё выключен: " + verify);
+                    Log.Fix("откройте " + vrd + " и убедитесь, что <standardOdata enable=\"true\" .../>");
+                    return false;
+                }
+                detail = "standardOdata enable=\"true\" (проверено перечитыванием файла)";
                 return true;
             }
             catch (Exception e) { Log.Err("не удалось изменить " + vrd + ": " + e.Message); return false; }
+        }
+
+        // Перечитать default.vrd: enable обязан быть true (иначе «успех» с 404 снаружи).
+        public static bool IsODataEnabledInVrd(string dir, out string detail)
+        {
+            detail = "";
+            string vrd = VrdPath(dir);
+            if (!File.Exists(vrd)) { detail = "файл не найден: " + vrd; return false; }
+            try
+            {
+                XNamespace ns = "http://v8.1c.ru/8.2/virtual-resource-system";
+                XDocument doc = XDocument.Load(vrd);
+                XElement od = doc.Root.Element(ns + "standardOdata");
+                if (od == null) { detail = "нет узла standardOdata"; return false; }
+                XAttribute en = od.Attribute("enable");
+                if (en == null || !en.Value.Equals("true", StringComparison.OrdinalIgnoreCase))
+                {
+                    detail = "enable=\"" + (en == null ? "" : en.Value) + "\"";
+                    return false;
+                }
+                detail = "enable=true";
+                return true;
+            }
+            catch (Exception e) { detail = e.Message; return false; }
         }
 
         // ============================================================ 8. пул приложений
@@ -729,13 +762,15 @@ namespace Oc1c
         }
 
         // Точная инструкция для администратора 1С, если он не хочет вводить пароль в программу.
+        // Внимание: речь про СОСТАВ OData, а не про публикацию в IIS (её уже сделал установщик).
         public static string ManualScopeInstructions(BaseRef b, string alias, List<string> scopeKeys)
         {
             StringBuilder s = new StringBuilder();
             s.AppendLine("РУЧНАЯ НАСТРОЙКА СОСТАВА OData — выполняет администратор 1С (~5 минут)");
             s.AppendLine("");
-            s.AppendLine("Зачем это нужно: без этого шага OData отдаёт ПУСТОЙ список объектов, и сервер");
-            s.AppendLine("аналитики не увидит ни одной таблицы. Всё остальное уже настроено программой.");
+            s.AppendLine("Важно: публикация базы в IIS уже выполнена установщиком. Сейчас нужно только");
+            s.AppendLine("указать СОСТАВ — какие объекты базы видны через OData API. Без этого шага");
+            s.AppendLine("OData отдаёт ПУСТОЙ список, и сервер аналитики не увидит ни одной таблицы.");
             s.AppendLine("");
             s.AppendLine("0) СНАЧАЛА КОПИЯ БАЗЫ (обязательно):");
             s.AppendLine("   Конфигуратор -> Администрирование -> «Выгрузить информационную базу...»");
@@ -769,6 +804,91 @@ namespace Oc1c
             s.AppendLine("   б) снова запустить программу с ключом --skip-scope — шаг 13 покажет,");
             s.AppendLine("      сколько сущностей отдаёт OData (должно быть больше нуля).");
             return s.ToString();
+        }
+
+        // Полный туториал: добавить веб-модуль БЕЗ «переустановки всей 1С» (способ 1 — Изменить).
+        public static string WebModuleTutorial(Platform p)
+        {
+            StringBuilder s = new StringBuilder();
+            s.AppendLine("ДОБАВИТЬ МОДУЛЬ РАСШИРЕНИЯ ВЕБ-СЕРВЕРА (wsisapi.dll) — без сноса 1С");
+            s.AppendLine("");
+            s.AppendLine("Без этого файла публикация OData в IIS невозможна. Базы, пользователи и");
+            s.AppendLine("лицензии НЕ удаляются — нужно только ДОБАВИТЬ компонент платформы.");
+            if (p != null)
+            {
+                s.AppendLine("");
+                s.AppendLine("Обнаружена платформа: " + p.Version + "  (" + (p.X86 ? "x86" : "x64") + ")");
+                s.AppendLine("Каталог: " + p.Root);
+                s.AppendLine("Ожидаемый файл: " + Path.Combine(p.Bin, "wsisapi.dll") + " — СЕЙЧАС ЕГО НЕТ.");
+            }
+            s.AppendLine("");
+            s.AppendLine("СПОСОБ 1 (рекомендуется) — «Изменить» установку:");
+            s.AppendLine("  1) Закройте 1С:Предприятие и Конфигуратор на этой машине.");
+            s.AppendLine("  2) Панель управления Windows -> Программы и компоненты");
+            s.AppendLine("     (или Параметры -> Приложения).");
+            s.AppendLine("  3) Найдите «1С:Предприятие 8» нужной версии" +
+                         (p != null ? " (" + p.Version + ")" : "") + ".");
+            s.AppendLine("  4) Выделите -> кнопка «Изменить» (Change), НЕ «Удалить».");
+            s.AppendLine("  5) В списке компонентов включите:");
+            s.AppendLine("       • «Модули расширения веб-сервера»  (это wsisapi.dll — обязательно)");
+            s.AppendLine("       • «Модули расширения COM»          (нужны, если состав OData");
+            s.AppendLine("         будет задавать установщик автоматически; для ручного состава");
+            s.AppendLine("         в Конфигураторе COM не обязателен)");
+            s.AppendLine("  6) Далее / Установить. Дождитесь конца. Базы не трогаются.");
+            s.AppendLine("  7) Проверка: должен появиться файл");
+            s.AppendLine("       " + (p != null ? Path.Combine(p.Bin, "wsisapi.dll") : @"...\1cv8\<версия>\bin\wsisapi.dll"));
+            s.AppendLine("  8) Снова запустите setup-1c-odata.exe — он продолжит с того же места.");
+            s.AppendLine("");
+            s.AppendLine("ЗАПАСНЫЕ СПОСОБЫ (если «Изменить» недоступен):");
+            s.AppendLine("  • Тихая доустановка из дистрибутива той же версии:");
+            s.AppendLine("      msiexec /i \"1CEnterprise 8.msi\" /qn /norestart TRANSFORMS=1049.mst WEBSERVEREXT=1");
+            s.AppendLine("  • Поставить рядом другую версию платформы УЖЕ с веб-модулем;");
+            s.AppendLine("    установщик сам выберет новейшую с wsisapi.dll, либо укажите");
+            s.AppendLine("    --platform-version / --platform-dir.");
+            s.AppendLine("");
+            s.AppendLine("Не пишите и не делайте «переустановить всю 1С с нуля» — это не требуется.");
+            return s.ToString();
+        }
+
+        // Оценка места ДО изменений: база + запас под бэкап + публикация/логи.
+        // Возвращает false = критично мало (стоп); warnOnly — только предупреждения.
+        public static bool PrefightDisk(BaseRef b, string backupDir, string pubDir, string logDir,
+                                        bool needBackup, out string summary)
+        {
+            StringBuilder s = new StringBuilder();
+            bool ok = true;
+            long baseMb = (b != null && b.IsFile) ? Win.DirSizeMb(b.Dir) : 0;
+            long needBackupMb = needBackup && baseMb > 0 ? baseMb + 200 : 0;
+
+            long freeBase = (b != null && b.IsFile) ? Win.FreeSpaceMb(b.Dir) : -1;
+            long freeBak = Win.FreeSpaceMb(backupDir);
+            long freePub = Win.FreeSpaceMb(string.IsNullOrEmpty(pubDir) ? @"C:\inetpub" : pubDir);
+            long freeLog = Win.FreeSpaceMb(string.IsNullOrEmpty(logDir) ? @"C:\1c\logs" : logDir);
+
+            s.Append("база ~" + (baseMb < 0 ? "?" : baseMb.ToString()) + " МБ");
+            if (needBackupMb > 0) s.Append("; нужно под бэкап ≥" + needBackupMb + " МБ");
+            s.Append("; свободно: ");
+            if (freeBase >= 0) s.Append("диск базы " + freeBase + " МБ, ");
+            s.Append("бэкап " + (freeBak < 0 ? "?" : freeBak.ToString()) + " МБ, ");
+            s.Append("публикация " + (freePub < 0 ? "?" : freePub.ToString()) + " МБ, ");
+            s.Append("логи " + (freeLog < 0 ? "?" : freeLog.ToString()) + " МБ");
+
+            if (needBackupMb > 0 && freeBak >= 0 && freeBak < needBackupMb)
+            {
+                Log.Err("мало места под бэкап: свободно " + freeBak + " МБ, нужно ≥" + needBackupMb + " МБ на " + backupDir);
+                Log.Fix("освободите диск, укажите --backup-dir на другой том или --no-backup (если копия уже есть)");
+                ok = false;
+            }
+            if (freePub >= 0 && freePub < 500)
+            {
+                Log.Warn("мало места на диске публикации IIS (" + freePub + " МБ) — рекомендуется ≥500 МБ");
+            }
+            if (freeLog >= 0 && freeLog < 100)
+            {
+                Log.Warn("мало места для логов (" + freeLog + " МБ)");
+            }
+            summary = s.ToString();
+            return ok;
         }
 
         // Скрипт COM: read — только прочитать текущий состав; write — установить.

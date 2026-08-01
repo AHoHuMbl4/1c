@@ -25,6 +25,8 @@ namespace Oc1c
         public bool NoBackup;
         public string OpenFirewall;
         public string VerifyUrl, ExternalUrl;
+        public string UbuntuHost;           // IP/имя сервера аналитики (Ubuntu) — проверка связи с Windows
+        public int UbuntuPort = 22;         // TCP-порт для пробы (на стенде SSH)
         public bool Unattended;
         public bool SkipScope;
         public bool Force;
@@ -90,8 +92,34 @@ namespace Oc1c
             Log.Ok("права администратора есть");
             string why;
             if (Win.PendingReboot(out why))
-                Log.Warn("система ждёт перезагрузки (" + why + ") — установка компонентов может не примениться");
+            {
+                Log.Warn("система ждёт перезагрузки (" + why + ")");
+                Log.Fix("перезагрузите Windows и запустите установщик снова — иначе компоненты IIS могут не примениться");
+            }
             Log.Info("PowerShell: " + Ps.Exe(false));
+
+            // Префлайт системы: нагрузка CPU/RAM (до любых изменений)
+            int cpuPct; long ramFree, ramTotal;
+            Log.Info("замеряю нагрузку ПК (CPU/RAM, ~1 с)...");
+            Win.SampleLoad(out cpuPct, out ramFree, out ramTotal);
+            if (cpuPct >= 0 || ramFree >= 0)
+            {
+                string load = "CPU " + (cpuPct < 0 ? "?" : cpuPct + "%") +
+                              ", RAM свободно " + (ramFree < 0 ? "?" : ramFree + " МБ") +
+                              (ramTotal > 0 ? " из " + ramTotal + " МБ" : "");
+                Log.Info(load);
+                if (cpuPct >= 85)
+                    Log.Warn("высокая загрузка CPU (" + cpuPct + "%) — закройте лишние программы или повторите позже (иначе возможны таймауты COM/бэкапа)");
+                if (ramFree >= 0 && ramFree < 256)
+                {
+                    Log.Err("мало свободной памяти (" + ramFree + " МБ) — установка небезопасна");
+                    Log.Fix("освободите память (закройте программы) и повторите");
+                    return EXIT_PREREQ;
+                }
+                if (ramFree >= 0 && ramFree < 512)
+                    Log.Warn("мало свободной RAM (" + ramFree + " МБ) — рекомендуется ≥512 МБ");
+            }
+            else Log.Warn("не удалось замерить нагрузку CPU/RAM — продолжаю без этой проверки");
 
             // ---------- 2. платформа 1С
             Log.Step(2, TOTAL, "Платформа 1С");
@@ -124,12 +152,21 @@ namespace Oc1c
             if (!plat.HasWeb)
             {
                 Log.Err("в выбранной платформе НЕТ модуля расширения веб-сервера (bin\\wsisapi.dll)");
-                Log.Fix("перезапустите установщик платформы 1С и включите «Модули расширения веб-сервера». " +
-                        "Тихая установка: msiexec /i \"1CEnterprise 8.msi\" /qn /norestart TRANSFORMS=1049.mst WEBSERVEREXT=1");
+                string tut = Steps.WebModuleTutorial(plat);
+                Log.Con("");
+                Log.Con(new string('-', 74));
+                Log.Con(tut);
+                Log.Con(new string('-', 74));
+                SaveTextBesideLog("1c-odata-добавить-веб-модуль.txt", tut);
                 return EXIT_PREREQ;
             }
             Log.Ok("платформа " + plat.Version + " (" + (plat.X86 ? "x86" : "x64") + "), веб-модуль есть" +
                    (plat.HasCom ? ", COM-коннектор есть" : ", COM-коннектор НЕ найден"));
+            if (!plat.HasCom)
+            {
+                Log.Warn("нет comcntr.dll — автоматический состав OData (вариант 1) недоступен");
+                Log.Fix("либо добавьте «Модули расширения COM» тем же способом «Изменить», либо запускайте с --skip-scope (вариант 2: состав вручную в Конфигураторе)");
+            }
 
             // ---------- 3. база 1С
             Log.Step(3, TOTAL, "База 1С");
@@ -177,6 +214,35 @@ namespace Oc1c
             Log.Ok(bref.Display);
             if (string.IsNullOrEmpty(o.Dir)) o.Dir = Path.Combine(@"C:\inetpub", o.Alias);
 
+            // Префлайт места: бэкап ещё может отмениться диалогом (вариант 2) — если уже
+            // --skip-scope/--no-backup, запас под бэкап не требуем.
+            bool willBackup = !o.SkipScope && !o.NoBackup && bref.IsFile;
+            string diskSum;
+            if (!Steps.PrefightDisk(bref, o.BackupDir, o.Dir, Path.GetDirectoryName(Log.Path), willBackup, out diskSum))
+                return EXIT_PREREQ;
+            Log.Info(diskSum);
+
+            // Ранняя проверка связи с сервером Ubuntu (если задан)
+            if (!string.IsNullOrEmpty(o.UbuntuHost))
+            {
+                string tcpDetail;
+                if (Win.TcpReachable(o.UbuntuHost, o.UbuntuPort, 3000, out tcpDetail))
+                    Log.Ok("связь с сервером аналитики: " + tcpDetail);
+                else
+                {
+                    Log.Warn("нет TCP-связи с сервером аналитики: " + tcpDetail);
+                    Log.Fix("проверьте сеть/VPN/маршрут до " + o.UbuntuHost +
+                            " (с этой машины должен быть доступен сервер Ubuntu). Продолжаю настройку IIS;");
+                    Log.Fix("без сети сервер не сможет забирать OData, даже если публикация локально ок.");
+                }
+                if (string.IsNullOrEmpty(o.OpenFirewall))
+                {
+                    o.OpenFirewall = Win.SuggestFirewallCidr(o.UbuntuHost);
+                    Log.Info("брандмауэр: для входа к IIS:80 предложен remoteip=" + o.OpenFirewall +
+                             " (из --ubuntu-host; переопределите --open-firewall при необходимости)");
+                }
+            }
+
             // ---------- 4. компоненты IIS
             Log.Step(4, TOTAL, "Компоненты IIS");
             string detail;
@@ -209,6 +275,16 @@ namespace Oc1c
             Log.Step(7, TOTAL, "Включение интерфейса OData (default.vrd)");
             if (!Steps.EnableODataInVrd(o.Dir, out detail)) return EXIT_STEP;
             if (detail.StartsWith("standardOdata уже")) Log.Skip(detail); else Log.Ok(detail);
+            // Доп. рубеж: даже если шаг «уже был true», перечитываем (грабля Н-3).
+            if (!Ctx.DryRun || File.Exists(Steps.VrdPath(o.Dir)))
+            {
+                string vchk;
+                if (!Steps.IsODataEnabledInVrd(o.Dir, out vchk))
+                {
+                    Log.Err("проверка default.vrd провалена: " + vchk);
+                    return EXIT_STEP;
+                }
+            }
 
             // ---------- 8. пул приложений
             Log.Step(8, TOTAL, "Пул приложений IIS");
@@ -244,7 +320,19 @@ namespace Oc1c
                             "(тогда состав задаёт администратор 1С вручную — программа напечатает инструкцию)");
                     return EXIT_ARGS;
                 }
-                if (!AskScopeChoice(o, bref, scopeKeys)) o.SkipScope = true;
+                if (!plat.HasCom)
+                {
+                    Log.Warn("COM-коннектора нет — доступен только вариант 2 (состав вручную)");
+                    o.SkipScope = true;
+                }
+                else if (!AskScopeChoice(o, bref, scopeKeys)) o.SkipScope = true;
+            }
+            if (!o.SkipScope && !plat.HasCom && !Ctx.DryRun)
+            {
+                Log.Err("автоматический состав OData требует comcntr.dll, его нет");
+                Log.Fix("добавьте модуль COM (см. туториал веб-модуля) или запустите с --skip-scope");
+                SaveTextBesideLog("1c-odata-добавить-веб-модуль.txt", Steps.WebModuleTutorial(plat));
+                return EXIT_PREREQ;
             }
 
             // ---------- 11. бэкап (перед единственным изменением в базе — составом OData)
@@ -382,7 +470,22 @@ namespace Oc1c
                 {
                     Steps.HttpProbe ext = Steps.Probe(o.ExternalUrl, vu, vp, 180000);
                     if (ext.Ok) Log.Ok("внешний адрес (через роутер) отвечает: " + o.ExternalUrl);
-                    else { Log.Warn("внешний адрес не отвечает (HTTP " + ext.Status + "): " + o.ExternalUrl); Log.Fix("проверьте проброс порта на роутере и брандмауэр Windows"); }
+                    else
+                    {
+                        Log.Warn("внешний адрес с ЭТОЙ машины не отвечает (HTTP " + ext.Status + "): " + o.ExternalUrl);
+                        Log.Fix("часто это hairpin NAT: Windows не достучится до себя через роутер. Проверка с Ubuntu: curl -s -o NUL -w %{http_code} " + o.ExternalUrl + "  (ожидается 401 без пароля). Также проверьте проброс и --open-firewall.");
+                        // Запасная проверка: прямой LAN этой машины (как если бы Ubuntu был в той же сети)
+                        string lip = PreferLanIp(Win.LocalIPv4());
+                        if (lip != null && lip.IndexOf('<') < 0)
+                        {
+                            string direct = "http://" + lip + "/" + o.Alias + "/odata/standard.odata/";
+                            Steps.HttpProbe d = Steps.Probe(direct, null, null, 30000);
+                            if (d.Status == 401 || d.Ok)
+                                Log.Ok("прямой HTTP к IIS на " + lip + " отвечает (HTTP " + d.Status + ") — канал на машине жив");
+                            else
+                                Log.Warn("прямой HTTP к IIS на " + lip + " тоже не ок (HTTP " + d.Status + ")");
+                        }
+                    }
                 }
             }
 
@@ -403,38 +506,32 @@ namespace Oc1c
         // Возвращает true, если админ согласился ввести пароль (и он введён), иначе false.
         static bool AskScopeChoice(Opts o, BaseRef b, List<string> scopeKeys)
         {
-            Log.Head("ШАГ 12 ТРЕБУЕТ РЕШЕНИЯ АДМИНИСТРАТОРА 1С");
-            Log.Con("ЧТО ОСТАЛОСЬ СДЕЛАТЬ: указать состав интерфейса OData — какие объекты базы");
-            Log.Con("вообще видны наружу. Планируется отдать (только на чтение):");
+            Log.Head("ДВА СПОСОБА ЗАДАТЬ СОСТАВ OData");
+            Log.Con("Нужно указать, какие объекты базы видны через OData API (только чтение).");
+            Log.Con("Без этого шага OData отдаёт ПУСТОЙ список — сервер аналитики не увидит данных.");
+            Log.Con("Планируется отдать разделы:");
             for (int i = 0; i < scopeKeys.Count; i++) Log.Con("    - " + Steps.ScopeLabel(scopeKeys[i]));
-            Log.Con("Без этого шага OData отдаёт ПУСТОЙ список и сервер аналитики не увидит данных.");
             Log.Con("");
-            Log.Con("ПОЧЕМУ НУЖЕН ПАРОЛЬ: это административная операция ВНУТРИ базы 1С — платформа");
-            Log.Con("требует пользователя с полными правами. Больше он не нужен нигде: в работе");
-            Log.Con("система читает данные под отдельным пользователем-читателем (только чтение).");
+            Log.Con("ВАРИАНТ 1 — установщик задаст состав сам (нужен пароль администратора 1С):");
+            Log.Con("    Пароль нужен платформе 1С один раз, локально на этой машине.");
+            Log.Con("    Вводится скрыто (звёздочки). Нам по сети не передаётся; в логе маскируется.");
+            Log.Con("    Кому этого мало для политики ИБ — берите вариант 2: пароль в программу не вводится.");
+            Log.Con("    Перед записью будет автоматический бэкап базы. Данные документов не меняются —");
+            Log.Con("    только список объектов, видимых через OData.");
             Log.Con("");
-            Log.Con("ЧТО ПРОГРАММА СДЕЛАЕТ С ПАРОЛЕМ:");
-            Log.Con("    - спросит скрытно (на экране только звёздочки);");
-            Log.Con("    - передаст платформе 1С через окружение дочернего процесса —");
-            Log.Con("      в командной строке и в списке процессов он НЕ виден;");
-            Log.Con("    - НЕ сохранит на диск, НЕ запишет в лог (в логе «***»), НЕ отправит по сети;");
-            Log.Con("    - использует один раз и забудет (программа завершится).");
-            Log.Con("");
-            Log.Con("ЧТО ИМЕННО БУДЕТ СДЕЛАНО В БАЗЕ:");
-            Log.Con("    - сначала автоматическая резервная копия базы;");
-            Log.Con("    - затем ровно одна операция: запись списка объектов, видимых через OData.");
-            Log.Con("      Никакие данные (документы, справочники, проводки) НЕ изменяются.");
+            Log.Con("ВАРИАНТ 2 — задам состав сам в Конфигураторе (пароль админа в программу НЕ нужен):");
+            Log.Con("    Публикацию в IIS установщик уже сделал / сделает. Вручную — только СОСТАВ OData.");
+            Log.Con("    Программа напечатает и сохранит подробный туториал (клики в меню 1С).");
             Log.Con("");
             Log.Con("ВАШ ВЫБОР:");
-            Log.Con("    1) Ввести пароль — программа сделает всё сама (несколько секунд).");
-            Log.Con("    2) НЕ вводить — программа не тронет базу и напечатает точную пошаговую");
-            Log.Con("       инструкцию, как сделать это руками в Конфигураторе.");
+            Log.Con("    1) Ввести пароль — состав задаст программа.");
+            Log.Con("    2) Задам состав сам — туториал + база программой не меняется.");
             Console.Write("       Ваш выбор [1/2]: ");
             string ch = (Console.ReadLine() ?? "").Trim();
             Log.File("выбор администратора: " + ch);
             if (ch != "1")
             {
-                Log.Skip("выбран ручной режим — база не изменяется");
+                Log.Skip("выбран ручной режим (вариант 2) — состав OData программой не меняется");
                 return false;
             }
             Console.Write("       Пользователь 1С с полными правами (Enter = Администратор): ");
@@ -447,6 +544,37 @@ namespace Oc1c
                 Log.Warn("пароль пуст — попробую подключиться без пароля");
             }
             return true;
+        }
+
+        // Предпочтительный LAN IP для подсказок: не VPN (10.8), не APIPA (169.254).
+        static string PreferLanIp(List<string> ips)
+        {
+            string fallback = "<ip-этой-машины>";
+            string any = null;
+            for (int i = 0; i < ips.Count; i++)
+            {
+                string ip = ips[i].Split(' ')[0];
+                if (ip.StartsWith("169.254")) continue;
+                if (any == null) any = ip;
+                // VPN WireGuard/стандартные туннели — хуже для проброса IIS
+                if (ip.StartsWith("10.8.") || ip.StartsWith("10.7.")) continue;
+                return ip;
+            }
+            return any != null ? any : fallback;
+        }
+
+        static void SaveTextBesideLog(string fileName, string text)
+        {
+            try
+            {
+                string dir = Path.GetDirectoryName(Log.Path);
+                if (string.IsNullOrEmpty(dir)) dir = @"C:\1c\logs";
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                string mf = Path.Combine(dir, fileName);
+                File.WriteAllText(mf, text, new UTF8Encoding(true));
+                Log.Con("Инструкция сохранена в файл: " + mf);
+            }
+            catch (Exception e) { Log.File("не сохранил " + fileName + ": " + e.Message); }
         }
 
         // ================================================================= итоговый отчёт
@@ -465,14 +593,8 @@ namespace Oc1c
                 Log.Con(new string('-', 74));
                 Log.Con(manual);
                 Log.Con(new string('-', 74));
-                try
-                {
-                    string mf = Path.Combine(Path.GetDirectoryName(Log.Path), "1c-odata-ручная-настройка.txt");
-                    File.WriteAllText(mf, manual, new UTF8Encoding(true));
-                    Log.Con("Эта инструкция сохранена в файл: " + mf);
-                    Log.Con("(можно переслать тому, у кого есть пароль администратора 1С)");
-                }
-                catch (Exception e) { Log.File("не сохранил инструкцию: " + e.Message); }
+                SaveTextBesideLog("1c-odata-ручная-настройка.txt", manual);
+                Log.Con("(можно переслать тому, у кого есть пароль администратора 1С)");
             }
 
             Log.Con("");
@@ -482,34 +604,51 @@ namespace Oc1c
             Log.Con("  1) Создать в 1С пользователя-читателя:");
             Log.Con("     1С:Предприятие -> Администрирование -> Настройки пользователей и прав -> Пользователи");
             Log.Con("     - сначала должен существовать пользователь с полными правами (администратор);");
-            Log.Con("     - затем создать «" + (string.IsNullOrEmpty(o.ReaderUser) ? "ai_reader" : o.ReaderUser) + "» с профилем «Только просмотр»;");
+            Log.Con("     - затем создать «" + (string.IsNullOrEmpty(o.ReaderUser) ? "ai_reader" : o.ReaderUser) + "» с профилем «Только просмотр»");
+            Log.Con("       (или уже́ правами — только то, что AI разрешено видеть);");
             Log.Con("     - запомнить пароль — он понадобится серверу Ubuntu.");
-            Log.Con("  2) На роутере пробросить порт на эту машину (порт 80), например 6003 -> 80.");
+            Log.Con("  2) Сеть: сервер Ubuntu должен доставать эту машину по HTTP:80 (часто через");
+            Log.Con("     проброс на роутере, например 6003 -> 80). Укажите --ubuntu-host и");
+            Log.Con("     --external-url, чтобы установщик проверил путь.");
 
             List<string> ips = Win.LocalIPv4();
             if (ips.Count > 0)
             {
                 Log.Con("");
-                Log.Con("     IP-адреса этой машины (для проброса):");
+                Log.Con("     IP-адреса этой машины (Windows):");
                 for (int i = 0; i < ips.Count; i++) Log.Con("       " + ips[i]);
             }
 
-            string lanIp = "<ip-этой-машины>";
-            for (int i = 0; i < ips.Count; i++)
+            string lanIp = PreferLanIp(ips);
+
+            // Предпочтительный ODG_UPSTREAM: внешний URL (как видит Ubuntu), иначе прямой LAN.
+            string upstream;
+            if (!string.IsNullOrEmpty(o.ExternalUrl))
             {
-                string ip = ips[i].Split(' ')[0];
-                if (!ip.StartsWith("169.254")) { lanIp = ip; break; }
+                upstream = o.ExternalUrl.TrimEnd('/');
+                // external-url часто с хвостом / — ODG без завершающего слэша ок
+                if (upstream.EndsWith("/odata/standard.odata", StringComparison.OrdinalIgnoreCase) ||
+                    upstream.IndexOf("/odata/standard.odata", StringComparison.OrdinalIgnoreCase) >= 0)
+                { /* уже полный путь */ }
+                else if (!upstream.EndsWith("standard.odata", StringComparison.OrdinalIgnoreCase))
+                    upstream = upstream.TrimEnd('/') + "/" + o.Alias + "/odata/standard.odata";
             }
+            else
+                upstream = "http://" + lanIp + "/" + o.Alias + "/odata/standard.odata";
 
             StringBuilder h = new StringBuilder();
             h.AppendLine("# Данные для сервера Ubuntu (/etc/1c-odata-gateway.env)");
             h.AppendLine("# Сформировано setup-1c-odata " + Ctx.ToolVersion + " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
-            h.AppendLine("ODG_UPSTREAM=http://" + lanIp + "/" + o.Alias + "/odata/standard.odata");
+            h.AppendLine("ODG_UPSTREAM=" + upstream);
             h.AppendLine("ODG_USER=" + (string.IsNullOrEmpty(o.ReaderUser) ? "ai_reader" : o.ReaderUser));
             h.AppendLine("ODG_PASS=<пароль пользователя-читателя>");
             h.AppendLine("#");
-            h.AppendLine("# Если Ubuntu ходит через роутер — подставьте адрес роутера и проброшенный порт, например:");
+            if (!string.IsNullOrEmpty(o.UbuntuHost))
+                h.AppendLine("# Сервер аналитики (проверка с Windows): " + o.UbuntuHost + ":" + o.UbuntuPort);
+            h.AppendLine("# Прямой LAN этой машины: http://" + lanIp + "/" + o.Alias + "/odata/standard.odata");
+            h.AppendLine("# Если Ubuntu ходит через роутер — типичный стенд:");
             h.AppendLine("# ODG_UPSTREAM=http://192.168.56.1:6003/" + o.Alias + "/odata/standard.odata");
+            h.AppendLine("#   (проброс 192.168.56.1:6003 -> " + lanIp + ":80)");
             h.AppendLine("#");
             h.AppendLine("# Локальная проверка на этой машине: " + url);
             h.AppendLine("# База: " + b.Display);
@@ -630,6 +769,15 @@ namespace Oc1c
                     case "--open-firewall": o.OpenFirewall = v; break;
                     case "--verify-url": o.VerifyUrl = v; break;
                     case "--external-url": o.ExternalUrl = v; break;
+                    case "--ubuntu-host": o.UbuntuHost = v; break;
+                    case "--ubuntu-port":
+                        {
+                            int up;
+                            if (!int.TryParse(v, out up) || up < 1 || up > 65535)
+                                return "--ubuntu-port должен быть числом 1..65535";
+                            o.UbuntuPort = up;
+                            break;
+                        }
                     case "--log": o.LogPath = v; break;
                     case "--config": break;               // уже обработан
                     default:
@@ -678,6 +826,13 @@ namespace Oc1c
                         case "backup-dir": o.BackupDir = v; break;
                         case "open-firewall": o.OpenFirewall = v; break;
                         case "external-url": o.ExternalUrl = v; break;
+                        case "ubuntu-host": o.UbuntuHost = v; break;
+                        case "ubuntu-port":
+                            {
+                                int up;
+                                if (int.TryParse(v, out up) && up >= 1 && up <= 65535) o.UbuntuPort = up;
+                                break;
+                            }
                         case "no-backup": if (v == "1" || v.ToLowerInvariant() == "true") o.NoBackup = true; break;
                     }
                 }
@@ -693,36 +848,35 @@ namespace Oc1c
 setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая настройка Windows-стороны «второго мозга».
 
 ЧТО ДЕЛАЕТ (по шагам, всё повторно безопасно — можно запускать сколько угодно раз):
-  1  проверяет права администратора, версию Windows, ожидание перезагрузки
-  2  находит платформу 1С и проверяет наличие модуля веб-сервера (wsisapi.dll) и COM-коннектора
-  3  проверяет базу (файловую или клиент-серверную)
+  1  права администратора + префлайт системы (перезагрузка, CPU/RAM)
+  2  платформа 1С: веб-модуль (wsisapi.dll) и COM; при отсутствии — полный туториал «Изменить»
+  3  база + префлайт места на дисках; при --ubuntu-host — проверка TCP до сервера аналитики
   4  устанавливает недостающие компоненты IIS (при необходимости попросит перезагрузку)
   5  включает службу W3SVC (автозапуск)
   6  публикует базу в IIS (webinst)
-  7  включает интерфейс OData в default.vrd
+  7  включает OData в default.vrd и ПЕРЕЧИТЫВАЕТ файл (enable обязан быть true)
   8  создаёт ОТДЕЛЬНЫЙ пул приложений нужной разрядности и отключает выгрузку по простою
   9  разрешает модуль 1С в ISAPI-ограничениях IIS
  10  выдаёт IIS права на каталог файловой базы
- 11  делает резервную копию базы (перед единственным изменением в ней)
- 12  задаёт состав OData (какие объекты отдавать) через COM
- 13  проверяет по HTTP: без пароля -> 401, с паролем -> 200 и список сущностей
+ 11  резервная копия базы (перед изменением состава)
+ 12  состав OData: два варианта — пароль админа ИЛИ ручной туториал (--skip-scope)
+ 13  проверка HTTP + при необходимости брандмауэр для подсети Ubuntu
 
-РУКАМИ ОСТАЁТСЯ ТОЛЬКО ОДНО: создать в 1С пользователя с профилем «Только просмотр».
+РУКАМИ ОСТАЁТСЯ: создать в 1С пользователя-читателя (ai_reader) с нужными правами.
 
 ПРИМЕРЫ:
-  setup-1c-odata.exe --check
-      посмотреть, что будет сделано (НИЧЕГО не меняет)
+  setup-1c-odata.exe --check --ubuntu-host 192.168.56.42
+      префлайт + план (НИЧЕГО не меняет), проверка связи с Ubuntu
+
+  setup-1c-odata.exe --base ""C:\1c\bases\buh_test"" --ubuntu-host 192.168.56.42 ^
+                     --external-url http://192.168.56.1:6003/1c/odata/standard.odata/
+      настройка + брандмауэр подсеть сервера + правильный ODG_UPSTREAM для Ubuntu
 
   setup-1c-odata.exe --base ""C:\1c\bases\buh_test"" --admin-user Администратор
-      обычная настройка (пароль спросит скрытно), состав OData = справочники + документы
+      обычная настройка; перед составом — выбор варианта 1 или 2
 
-  setup-1c-odata.exe --base ""C:\1c\bases\buh_test"" --admin-user Администратор ^
-                     --scope analytics --reader-user ai_reader
-      состав с регистрами (обороты/остатки — нужны для аналитики) + проверка пользователя-читателя
-
-  setup-1c-odata.exe --connstr ""Srvr='srv1c';Ref='erp';"" --admin-user Администратор --unattended ^
-                     --admin-password-env PWD1C
-      клиент-серверная база, без вопросов, пароль из переменной окружения
+  setup-1c-odata.exe --base ""C:\1c\bases\buh_test"" --skip-scope --reader-user ai_reader
+      без пароля админа: IIS/OData, состав — вручную по туториалу
 
 КЛЮЧИ:
   --base <путь>            каталог файловой базы (где лежит 1Cv8.1CD)
@@ -744,16 +898,18 @@ setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая нас�
   --platform-dir <путь>    нестандартный каталог установки платформы
   --backup-dir <путь>      куда класть бэкап (по умолчанию C:\1c\backups)
   --no-backup              не делать бэкап (только если копия уже есть)
+  --ubuntu-host <ip/имя>   сервер аналитики (Ubuntu): проверка TCP с этой машины + подсказка firewall
+  --ubuntu-port <порт>     порт пробы (по умолчанию 22 — SSH)
   --open-firewall <сеть>   разрешить входящий TCP/80 с подсети, например 192.168.56.0/24
+                           (если не задан, но задан --ubuntu-host — берётся его /24)
   --verify-url <url>       адрес для локальной проверки (по умолчанию http://localhost/<alias>/odata/standard.odata/)
-  --external-url <url>     дополнительно проверить путь снаружи (через роутер)
+  --external-url <url>     путь как видит Ubuntu (через роутер); попадёт в ODG_UPSTREAM
   --force                  перепубликовать поверх чужой публикации в том же каталоге
   --check                  режим проверки: ничего не менять, только показать
   --yes                    не задавать подтверждений
   --unattended             полностью без вопросов (все данные — ключами/конфигом)
-  --skip-scope             не трогать состав OData (шаг 12). Нужен, когда состав в базе уже задан
-                           и пароля администратора 1С под рукой нет: состав хранится В БАЗЕ и
-                           переживает перепубликацию
+  --skip-scope             не трогать состав OData (вариант 2). Нужен, когда состав задаёт
+                           админ в Конфигураторе или пароля админа в программу давать нельзя
   --auto-resume            продолжить автоматически после перезагрузки (RunOnce)
   --config <файл>          файл настроек ключ=значение (см. setup-1c-odata.example.ini)
   --log <файл>             путь к логу (по умолчанию C:\1c\logs\setup-1c-odata_<дата>.log)
@@ -761,7 +917,7 @@ setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая нас�
 КОДЫ ВОЗВРАТА:
   0   успех
   2   запущено без прав администратора
-  3   не выполнены предусловия (нет платформы / веб-модуля / базы)
+  3   не выполнены предусловия (нет платформы / веб-модуля / базы / мало RAM)
   4   ошибка на шаге настройки
   5   ошибка в аргументах
   10  установлены компоненты IIS — нужна перезагрузка, затем запустить снова
