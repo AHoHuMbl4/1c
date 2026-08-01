@@ -1,0 +1,248 @@
+# cmdlog-backup.txt — сырой вывод команд аудита «РЕЗЕРВ И ВОЗВРАТ» (задание backup)
+# Дата прогона: 2026-08-01, сервер 1c (Ubuntu, /srv/1c). Только чтение.
+
+=== date -u ; date -u +%s ===
+Sat Aug  1 20:37:14 UTC 2026
+1785616634
+
+=== ls -la /root/backups/ ; ls -laR /root/backups/ ; du -sh /root/backups ===
+/root/backups/:
+total 4
+drwxr-xr-x 1 root root  16 Jul 29 04:49 .
+drwx------ 1 root root 466 Aug  1 20:18 ..
+drwxr-xr-x 1 root root  62 Jul 29 04:50 serenedb
+
+/root/backups/serenedb:
+total 2666844
+drwxr-xr-x 1 root root         62 Jul 29 04:50 .
+drwxr-xr-x 1 root root         16 Jul 29 04:49 ..
+-rw-r--r-- 1 root root 2730846611 Jul 29 04:53 serenedb-20260729-044937.tar.gz
+
+2.6G	/root/backups
+
+ИТОГ: копия ОДНА, от 29.07.2026 04:53 UTC, 2 730 846 611 байт. Ни одного pg-дампа в /root/backups нет.
+
+=== ls -la /var/lib | grep -i seren ; du -sh /var/lib/serenedb* ===
+drwxr-xr-x 1 serenedb  serenedb  279960 Jul 30 22:25 serenedb
+drwxr-xr-x 1 root      root          44 Jul 23 13:45 serenedb-charts
+drwxr-xr-x 1 root      root          90 Jul 27 09:03 serenedb-rescue-20260727
+
+12G	/var/lib/serenedb
+28K	/var/lib/serenedb-charts
+2.0G	/var/lib/serenedb-rescue-20260727
+
+=== ls -la /var/lib/serenedb-rescue-20260727/ ===
+total 2050788
+drwxr-xr-x 1 root     root             90 Jul 27 09:03 .
+drwxr-xr-x 1 root     root            912 Jul 27 09:40 ..
+-rw-r--r-- 1 serenedb serenedb 1727803392 Jul 27 07:47 store.db
+-rw-r--r-- 1 serenedb serenedb  186098265 Jul 27 07:47 store.db.wal
+-rw-r--r-- 1 serenedb serenedb  186098265 Jul 27 07:47 store.db.wal.replayed-out
+
+=== структура /var/lib/serenedb (каталоги) ===
+drwxrwxrwx bench             Jul 25 20:53   (corpus.parquet 235 481)
+drwxr-xr-x engine_duckdb     Jul 30 19:00
+drwxr-xr-x engine_search     Jul 29 06:18
+drwxr-xr-x ut                Jul 28 21:38   (1588 файлов, 786M — CSV-стейджинг)
++ 1767 CSV верхнего уровня, 826M total (свежие — 30.07 03:16..03:45; один — 29.07 06:41)
+
+=== stat живых файлов движка ===
+/var/lib/serenedb/engine_duckdb/store.db      10766790656 bytes  2026-07-30 19:03:53 UTC
+/var/lib/serenedb/engine_duckdb/store.db.wal      8988733 bytes  2026-07-30 22:25:10 UTC
+
+=== du -sh /var/lib/serenedb/engine_search/* ===
+14M	/var/lib/serenedb/engine_search/1000002
+145M	/var/lib/serenedb/engine_search/2259102     (создан 29.07 06:18)
+
+=== find / -maxdepth 4 -name "*.tar.gz" ===
+/usr/share/usb_modeswitch/configPack.tar.gz
+/root/backups/serenedb/serenedb-20260729-044937.tar.gz
+
+=== find / -maxdepth 4 -name "*.dump" ===
+(пусто)
+
+=== find / -maxdepth 6 \( -name "*.dump" -o -name "*.sql.gz" -o -name "*.tgz" \) ===
+/tmp/openclaw-braine-verify-1.0.0.tgz        9079      Jul 23 14:25
+/tmp/serenedb.tgz                            36162810  Jul 23 13:00   (дистрибутив движка, не копия данных)
+/opt/openclaw-engine/test/fixtures/hooks-install/npm-pack-hooks.tgz
+/opt/openclaw-engine/test/fixtures/plugins-install/voice-call-0.0.1.tgz
+/opt/openclaw-engine/test/fixtures/plugins-install/voice-call-0.0.2.tgz
+
+=== tar tzvf /root/backups/serenedb/serenedb-20260729-044937.tar.gz | wc -l ===
+1891
+
+=== состав архива: не-CSV и служебное ===
+drwxr-xr-x serenedb/serenedb          0 2026-07-29 04:50 ./
+drwxr-xr-x serenedb/serenedb          0 2026-07-29 04:50 ./engine_duckdb/
+-rw-r--r-- serenedb/serenedb 9705893888 2026-07-29 04:50 ./engine_duckdb/store.db
+drwxr-xr-x serenedb/serenedb          0 2026-07-28 21:41 ./engine_search/
+-rw-r--r-- root/root                423 2026-07-27 09:31 ./lab.log
+./ut/  — 1589 записей
+LOCK — в архиве ОТСУТСТВУЕТ (движок был остановлен) — grep "LOCK" → 0 строк
+конфигов и env в архиве НЕТ: grep -iE "conf|\.env|serened" → совпадений нет
+
+=== engine_search: архив против живого каталога ===
+в архиве:  ./engine_search/1000002/   ./engine_search/2131450/
+на диске:  1000002   2259102          (grep -c "2259102" по списку архива → 0)
+
+=== ubuntu/serenedb/serenedb_backup.sh (целиком, 28 строк) ===
+     1	#!/usr/bin/env bash
+     2	# Оффлайн-снапшот витрины SereneDB (проверено round-trip: снапшот → потеря → restore → данные на месте).
+     3	# Кратко останавливает serenedb для консистентности. Ротация: держим последние KEEP.
+     4	#
+     5	# ⚠ ПЕРВИЧНОЕ восстановление витрины — РЕ-СИНК из 1С (`serene_sync`, витрина производная — не система
+     6	#   оф-рекорд). Снапшот — БЫСТРЫЙ restore без повторного пула OData и ре-эмбеддинга резолвера.
+     7	#
+     8	# Запуск: bash serenedb_backup.sh   (или systemd-таймер, если нужен регулярный).
+     9	set -euo pipefail
+    10	DIR=${BACKUP_DIR:-/root/backups/serenedb}
+    11	KEEP=${KEEP:-7}
+    12	TS=$(date +%Y%m%d-%H%M%S)
+    13	mkdir -p "$DIR"
+    14
+    15	systemctl stop serenedb
+    16	tar czf "$DIR/serenedb-$TS.tar.gz" -C /var/lib/serenedb .
+    17	systemctl start serenedb
+    18
+    19	# ротация
+    20	ls -1t "$DIR"/serenedb-*.tar.gz 2>/dev/null | tail -n +$((KEEP + 1)) | xargs -r rm -f
+    21	echo "backup: $DIR/serenedb-$TS.tar.gz ($(du -h "$DIR/serenedb-$TS.tar.gz" | cut -f1))"
+    22
+    23	# RESTORE (вручную):
+    24	#   systemctl stop serenedb
+    25	#   rm -rf /var/lib/serenedb/*
+    26	#   tar xzf <backup.tar.gz> -C /var/lib/serenedb
+    27	#   chown -R serenedb:serenedb /var/lib/serenedb
+    28	#   systemctl start serenedb
+
+=== расписание: systemctl list-timers --all (выдержка) ===
+Sun 2026-08-02 00:00:00 UTC  dpkg-db-backup.timer -> dpkg-db-backup.service   (дампы dpkg, к витрине не относится)
+-                            1c-serene-pipeline.timer  LAST Wed 2026-07-29 06:41:15 UTC  (NEXT «-»)
+ни одного таймера с бэкапом SereneDB в списке НЕТ.
+
+=== crontab -l ===
+no crontab for root
+
+=== ls /etc/cron.d /etc/cron.daily ; grep -rn backup /etc/cron* ===
+/etc/cron.d: .placeholder, e2scrub_all, sysstat
+/etc/cron.daily: .placeholder, apport, apt-compat, dpkg, logrotate, man-db, sysstat
+/etc/cron.daily/dpkg:8:/usr/libexec/dpkg/dpkg-db-backup
+=> расписания копий витрины НЕТ ни в cron, ни в systemd.
+
+=== grep -rln "backup" /etc/systemd/system/ ===
+(пусто)
+
+=== systemctl is-active/is-enabled ===
+serenedb: active / enabled
+1c-serene-pipeline.timer: enabled / inactive
+
+=== psql: свежесть данных обеих баз ===
+$ psql "host=127.0.0.1 port=7890 user=postgres" -c "select datname from pg_database"
+ postgres
+ ut_test
+
+$ psql ... dbname=ut_test -c "select k,v,to_timestamp(v) at time zone 'UTC' from search_quality where k in ('build_ts','mart_changed_ts')"
+ build_ts        | 1785346661 | 2026-07-29 17:37:41
+ mart_changed_ts | 1785383137 | 2026-07-30 03:45:37
+
+$ psql ... dbname=postgres -c "... то же ..."
+ build_ts | 1785307201 | 2026-07-29 06:40:01
+ (mart_changed_ts отсутствует)
+
+$ psql ... dbname=postgres  -c "select k,v from search_quality order by k"
+ build_failed 0 | build_noemb 0 | build_res 115151 | build_rows 103808 | build_ts 1785307201 | clipped_docs ...
+$ psql ... dbname=postgres  -tAc "select count(*) from search_corpus"  → 103808
+
+$ psql ... dbname=ut_test -c "select k,v from search_quality order by k"
+ build_failed 0 | build_noemb 205479 | build_res 188068 | build_rows 632720 | build_sql_hash 0 | build_ts 1785346661
+ cov_ent_denied 0 | cov_ent_lost 0 | cov_noemb_pending 92080 | cov_noemb_service 248384
+ cov_rows_1c 507500 | cov_rows_lost 0 | cov_rows_search 623565
+$ psql ... dbname=ut_test -tAc "select count(*) from search_corpus"  → 623565
+
+ИТОГ по свежести: копия 29.07 04:53 UTC старше ВСЕХ отметок обеих баз.
+
+=== проверка штатных механизмов движка (MCP serenedb-docs) ===
+search_docs "EXPORT DATABASE backup snapshot":
+ [1] EXPORT DATABASE — https://docs.serenedb.com/docs/sql/statements/export_and_import_database#export-database
+ [2] EXPORT / IMPORT DATABASE — https://docs.serenedb.com/docs/sql/statements/export_and_import_database
+ [8] IMPORT DATABASE — .../export_and_import_database#import-database
+search_docs "COPY FROM DATABASE":
+ [1] COPY FROM DATABASE ... TO — https://docs.serenedb.com/docs/sql/statements/copy#copy-from-database--to
+ [8]/[9] «compact the database by creating a fresh copy with the COPY FROM DATABASE statement»
+
+=== проверка на ЖИВОМ инстансе 26.07.3 (только парс/бинд, ничего не записано) ===
+$ psql ... -tAc "select version()"
+PostgreSQL 18.3 (SereneDB 26.07.3)
+
+$ psql ... -c "COPY FROM DATABASE zzz_nonexistent_src TO zzz_nonexistent_dst"
+BEGIN
+ERROR:  Catalog "zzz_nonexistent_src" does not exist!      <- оператор РАСПОЗНАН (ошибка биндера)
+
+$ psql ... -c "EXPORT DATABASE '/proc/self/zzz_probe_qq'"
+ERROR:  Failed to create directory "/proc/self/zzz_probe_qq": No such file or directory   <- дошло до ИСПОЛНЕНИЯ
+$ psql ... -c "EXPORTX DATABASE '/proc/self/zzz_probe_qq'"      (контроль)
+ERROR:  syntax error at or near "DATABASE"                  <- так выглядит НЕизвестный оператор
+$ psql ... -c "IMPORT DATABASE '/proc/self/zzz_probe_qq'"
+ERROR:  Cannot open file "/proc/self/zzz_probe_qq/schema.sql": No such file or directory   <- распознан
+
+ВЫВОД: EXPORT DATABASE, IMPORT DATABASE и COPY FROM DATABASE ... TO в сборке 26.07.3 ЕСТЬ.
+(Ничего не записано: /proc/self — не создаваемый путь, обе команды упали до записи.)
+
+=== где копия лежит: df -h ===
+Filesystem      Size  Used Avail Use% Mounted on
+/dev/loop3      360G  159G  202G  45% /
+/dev/loop3      360G  159G  202G  45% /       (для /root)
+/dev/loop3      360G  159G  202G  45% /       (для /var)
+=> копия и данные — на одном томе /dev/loop3.
+
+=== /etc: что НЕ входит в копию и новее её (только имена и время, значения не читались) ===
+/etc/1c-mcp-reports.env             2026-07-29 13:32:16  (600; имена: DEEPSEEK_API_KEY MCP_HOST MCP_PORT
+                                     CHART_DIR SERENEDB_DSN ALIBABA_API_KEY ALIBABA_EMBED_URL RESOLVER_DSN
+                                     PGPASSWORD RESOLVER_PW ODG_GATEWAY_TOKEN MCP_TOKEN ALIBABA_API_KEYS)
+/etc/1c-mcp-reports.env.bak-20260729  2026-07-29 12:36:17
+/etc/1c-mcp-reports.env.bak2-20260729 2026-07-29 13:32:15
+/etc/serenedb/serened.conf            2026-07-29 13:35:20
+/etc/serenedb/serened.conf.bak-20260729 2026-07-29 10:06:42
+/etc/1c-serene-sync.env               2026-07-29 03:59:58
+/etc/1c-serene-ask.env                2026-07-30 13:01:53
+Копия — 29.07 04:53. Все перечисленные, кроме 1c-serene-sync.env, ПОЗЖЕ копии.
+
+=== доки: где описан бэкап/восстановление ===
+ubuntu/serenedb/README.md:46-47   «Бэкап: оффлайн-снапшот /var/lib/serenedb (serenedb_backup.sh) + первичное
+                                   восстановление = ре-синк из 1С (витрина производная). Штатный
+                                   online-backup/PITR — вопрос фаундерам»
+docs/SERENEDB.md:53               таблица файлов: «serenedb_backup.sh | оффлайн-снапшот /var/lib/serenedb»
+docs/SERENEDB.md:393-396          §Backup/restore: ре-синк + оффлайн-снапшот, «Проверено round-trip»
+docs/SERENEDB.md:407              открытые вопросы: «Штатный online-backup/PITR single-node (кроме
+                                   снапшота/`EXPORT DATABASE`)»
+docs/ARCHITECTURE.md:176          «Backup/restore SereneDB (штатного нет — тест + вопрос фаундерам …)»
+memory_bank/progress.md:769       «штатного online-backup/PITR нет (только снапшот)»
+memory_bank/progress.md:287       «бэкап перед сносом | /root/backups/serenedb/serenedb-20260729-044937.tar.gz, 2,6 ГБ»
+memory_bank/progress.md:521       «store.db + WAL в /var/lib/serenedb-rescue-20260727/, WAL отведён — поднялся за 10 с»
+docs/RUNBOOK_DEPLOY.md:53         «база движка ut_test | пересоздана с нуля 29.07 (бэкап → DROP DATABASE →
+                                   CREATE DATABASE → конвейер)»
+docs/UBUNTU_SETUP.md:41           «Бэкапов по расписанию в braine НЕТ … добавим свой таймер (наше правило:
+                                   бэкапы всегда)»
+docs/UBUNTU_SETUP.md:62           «Наши дополнения: бэкап-таймер pg_dumpall, …»
+docs/HOW_NOT_TO.md:387 (§2.9)     «Восстановление после сноса требует не только данных: у пересозданной
+                                   таблицы нет прав, и читающая роль сервиса молча получает пустоту»
+memory_bank/techContext.md:43     «Незавершённая работа с ivf попадает в WAL … движок ушёл в петлю
+                                   OOM-рестартов … Лечение: остановить, снять копию, отвести store.db.wal»
+CLAUDE.md:184-186                 «Сборка не прерывается ничем, кроме рестарта движка; незавершённая работа
+                                   уходит в WAL и роняет инстанс в петлю OOM при каждом старте»
+В docs/RUNBOOK_DEPLOY.md раздела восстановления ВИТРИНЫ нет (grep -i "restore|откат|tar xzf|serenedb_backup"
+по RUNBOOK даёт только /RestoreIB для 1С на Windows, строка 136).
+MAP.md о serenedb_backup.sh не упоминает (grep -i "backup|бэкап|копи" → ни одной строки про него).
+docs/TARGET_STATUS.md и TARGET.md слова «бэкап/восстановление» не содержат вовсе.
+
+=== доказательство отсутствия замера round-trip ===
+$ grep -rni "round-trip|round trip" --include="*.md" --include="*.sh" .
+ubuntu/serenedb/serenedb_backup.sh:2   (само утверждение)
+docs/SERENEDB.md:396                   (само утверждение)
+docs/SERENEDB.md:289, docs/SERENE_CAPS_3.md:857, docs/CHECK1_SCAN_1.md:409 — про другое (round-trip запроса/INCLUDE)
+Ни в CHANGELOG.md, ни в memory_bank/progress.md, ни в docs/HOW_NOT_TO.md записи о выполненном
+восстановлении из снапшота нет.
+
+=== упоминания rescue-каталога ===
+$ grep -rni "rescue" --include="*.md" --include="*.sh" --include="*.py" /srv/1c
+memory_bank/progress.md:521 — единственное; в MAP.md, SERENEDB.md, README и RUNBOOK его нет.

@@ -1,0 +1,241 @@
+СЫРОЙ ВЫВОД ПЕРЕПРОВЕРКИ ВЫБОРКИ «ok» (задание oksample), 01.08.2026
+Все команды — только чтение. Ниже — существенные фрагменты вывода, по которым сделаны выводы.
+
+=====================================================================
+0. ОТБОР ВЫБОРКИ
+=====================================================================
+$ python3 (агрегация match-*.json)
+statuses: {'ok': 1196, 'disc': 248, 'hist': 157, 'unverifiable': 38}
+shards: 17
+acceptance 87 | agents-misc 81 | changelog 115 | hist-1 46 | hist-2 50 | howitworks 68
+hownotto 72 | membank 65 | plans-a 59 | plans-b 66 | prodplan 48 | progress 67
+root 72 | runbook 70 | status-arch 62 | sub-readmes 113 | vector 55
+
+Расслоение 1196 «ok» по силе доказательства (prio0 = нет [замер] И ссылки только на .md;
+prio1 = нет [замер]; prio2 = [замер], но только .md; prio3 = [замер] + не-.md):
+population {prio0: 118, prio1: 424, prio2: 366, prio3: 288}  сумма 1196
+
+Выборка 60 = 3-4 из каждой из 17 долей, с перевесом на слабую доказательность:
+prio0 n=51, prio1 n=9.
+
+=====================================================================
+1. НАХОДКА: ХУКОВ ПЯТЬ, А НЕ ЧЕТЫРЕ (item 5, OPENCLAW_BOT.md:79)
+=====================================================================
+$ grep -n 'api.on(\|definePluginEntry' /srv/1c/ubuntu/openclaw/verify-plugin/index.js
+29:import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+71:export default definePluginEntry({
+84:    api.on("after_tool_call", async (event, ctx) => {
+123:    api.on("before_agent_finalize", async (event, ctx) => {     <-- ПЯТЫЙ
+140:    api.on("message_received", async (event, ctx) => {
+154:    api.on("message_sending", async (event, ctx) => {
+187:    api.on("reply_payload_sending", async (event, ctx) => {
+
+$ sed -n '118,137p' index.js
+    // Требует `plugins.entries.braine-verify.hooks.allowConversationAccess: true` — без него
+    // движок МОЛЧА не зарегистрирует хук у неbundled-плагина.
+    api.on("before_agent_finalize", async (event, ctx) => {
+      ... if (cfg.requireDataTool === false) return; ... return { action: "revise", ... }
+
+$ sed -n '70p;79p' /srv/1c/docs/OPENCLAW_BOT.md
+70:`braine-verify` ... Флаг `hooks.allowConversationAccess` **не нужен** и снят: он гейтит
+   только хуки диалога, а наши четыре к ним не относятся.
+79:Четыре хука:
+
+$ python3 (чтение /home/undebot/.openclaw/openclaw.json)
+ "braine-verify": {"enabled": true, "config": {"debug": true, "minDigitsWithRef": 1},
+                   "hooks": {"allowConversationAccess": true}}          <-- СТОИТ
+
+$ md5sum репо / рабочая папка / установленный плагин
+dcf10ea32318eb40a6901ab4ee5c2106  /srv/1c/ubuntu/openclaw/verify-plugin/index.js
+03a43997e8648b08db3bea089fe4ffe0  /home/undebot/braine-verify/index.js          (4 хука, отстала)
+dcf10ea32318eb40a6901ab4ee5c2106  .../node_modules/openclaw-braine-verify/index.js (5 хуков)
+
+$ git show --stat 65794bc
+65794bc 2026-07-30 «штатные хуки движка + правило подтверждения в сервисе…»
+ docs/HOW_IT_WORKS.md | ubuntu/openclaw/verify-plugin/index.js | openclaw.plugin.json
+ | verify-core.js | ubuntu/serenedb/serene_ask.py       -> OPENCLAW_BOT.md НЕ ТРОНУТ
+
+=====================================================================
+2. НАХОДКА: ВИДОВ ОТВЕТА ПЯТЬ, RUNBOOK НАЗЫВАЕТ ТРИ (item 49)
+=====================================================================
+$ sed -n '441,442p' /srv/1c/docs/RUNBOOK_DEPLOY.md
+Виды ответа: `answer` — ответ с числами из базы; `clarify` — уточняющий вопрос, если прочтений
+несколько; `figures` — гейт не пропустил цифру. Догадок нет по построению (п. 12 `TARGET.md`).
+
+$ grep -n '"kind":' /srv/1c/ubuntu/serenedb/serene_ask.py
+1885 no_data | 1889 no_data | 1911 figures | 1917 answer | 1996 no_data | 2032 no_data
+2485 clarify | 2609 clarify | 2751 clarify | 2763 no_data | 2837 figures | 2848 no_data
+2871 clarify | 2896 answer | 2986 unavailable                -> ПЯТЬ разных kind
+
+$ sed -n '62,68p' /srv/1c/docs/API_ASK.md
+| `answer` | 200 | ... | `figures` | 200 | ... | `clarify` | 200 | ...
+| `no_data` | 200 | данных нет — честный отказ | `unavailable` | **503** | сбой ...
+
+=====================================================================
+3. НАХОДКА: «ЕДИНСТВЕННАЯ ПРИЧИНА — ВЫБОР СУЩНОСТИ» (items 39, 40)
+=====================================================================
+$ sed -n '73,75p' /srv/1c/memory_bank/progress.md
+**Единственная причина всех неверных ответов — выбор сущности.** Арифметика верна везде...
+$ sed -n '776,778p' /srv/1c/memory_bank/progress.md
+### 🔴 Главная открытая проблема (31.07): ВЫБОР СУЩНОСТИ
+Это единственная причина всех неверных ответов.
+$ sed -n '20p' /srv/1c/docs/TARGET_STATUS.md
+... Причина одна: выбор сущности отдан модели ...
+$ sed -n '65p' /srv/1c/memory_bank/activeContext.md
+| 🔴 **выбор сущности** — единственная причина всех неверных ответов |
+
+ПЕРВОИСТОЧНИК ЗАМЕРА говорит другое:
+$ sed -n '736,741p;995,1002p' /srv/1c/docs/ACCEPTANCE_UT.md
+| **10** | сколько позиций номенклатуры | ... | **группы посчитаны как позиции** |
+**Итого: 10 из 11 — выбор сущности. Один отдельный дефект — №10.**
+| 7 | 18 342 против 50 000 | сущность подтверждена, выбрана **не та величина** |
+Ни одного дефекта счёта: арифметика верна везде. Оставшееся — **выбор сущности и величины**
+
+=====================================================================
+4. НАХОДКА: «ПАЧКА 11-20 — 4-5 ВЕРНЫХ» (item 52)
+=====================================================================
+$ sed -n '19p' /srv/1c/docs/TARGET_STATUS.md
+... пачка 1-10 даёт 2-3 верных, пачка 11-20 — 4-5 ...
+$ grep -rn '11-20' docs/ memory_bank/ CHANGELOG.md
+docs/ACCEPTANCE_UT.md:926:| 11-20 | **4** | 0 | 2 | 4 |          <-- единственный прогон
+docs/ACCEPTANCE_UT.md:948:## Пачка 11-20 — лучшая…  «4 верных, ни одного уточнения, 2 неверных»
+docs/TARGET_STATUS.md:19  / memory_bank/progress.md:36  — оба повторяют «4-5»
+Прогонов пачки 1-10: 2 (30.07, стр. 837), 3 (v9), 3 (v12) — диапазон «2-3» замерен.
+Прогон, давший 5 верных в 11-20, в репозитории отсутствует.
+
+=====================================================================
+5. НАХОДКА: РЕЕСТР fast-path НЕПОЛОН (item 57)
+=====================================================================
+$ sed -n '211,213p' /srv/1c/docs/SERENEDB.md
+Сейчас там `read_parquet`, `read_csv`, `read_json`, `read_ndjson`, `read_json_objects`
+(+ алиасы). `postgres_scan` — **явный TODO** в коде;
+
+$ sed -n '80,140p' /srv/serenedb-src/server/connector/view_fast_path.cpp
+kRegistry[] = read_parquet, read_csv, read_json, read_ndjson, read_json_objects,
+              read_ndjson_objects, iceberg_scan, read_text, read_duckdb   (ДЕВЯТЬ)
+  // TODO: read_avro, postgres_scan / postgres_query.
+
+$ git -C /srv/serenedb-src log --oneline -1
+722c929 fix: Zstd .col layout… (#975)   дата 2026-07-26 — ровесник нашей сборки 26.07.3,
+        т.е. это не «main убежал вперёд», а неполный перечень в доке.
+
+=====================================================================
+6. НАХОДКА: НОРМИРОВКА ПРИ COSINE (item 34)
+=====================================================================
+$ sed -n '200,201p' /srv/1c/docs/PLAN_VECTOR_CHECKS.md
+**[код]** При `cosine` движок нормирует сам, при `ip` — **нет**. Ненормированные
+векторы дадут молча неверный порядок.
+
+$ sed -n '86p' /srv/serenedb-src/libs/iresearch/include/iresearch/formats/ivf/ivf_writer.cpp
+  const bool normalize = qw != nullptr && _info.metric == VectorMetric::Cosine;
+$ sed -n '385,390p' ivf_writer.cpp
+  auto qw = MakeQuantizerWriter(...);  builder.Compute(col, ctx, qw.get());
+$ sed -n '61,63p' /srv/1c/docs/VECTOR_DECISION.md
+**[замер]** … `l2` и `ip` пропускают все квантизаторы; `cosine` **и `l1`** — только `none`.
+=> на нашей сборке cosine ⇒ quant=none ⇒ qw==nullptr ⇒ normalize == false.
+
+=====================================================================
+7. НАХОДКА: ЭКСТРАПОЛЯЦИЯ ПОДАНА КАК ЗАКРЫТЫЙ ЗАМЕР (item 13)
+=====================================================================
+$ sed -n '72p' /srv/1c/docs/AGENT_FINDINGS_STATUS.md
+| Масштаб: 44 часа на миллион строк | ✅ закрыто: 2.7 часа (шаг 2) |
+$ sed -n '65p' /srv/1c/docs/PLAN_THREE_STEPS.md
+**Экстраполяция на миллион строк: 44 часа → ≈2.7 часа.**   (прогона миллиона не было)
+
+=====================================================================
+8. НАХОДКА: «ЭТАЛОННЫЙ SQL К КАЖДОМУ» (item 44)
+=====================================================================
+$ python3 (подсчёт по разделам docs/ACCEPTANCE_UT.md)
+§1 q=7 sql=6 | §2 9/9 | §3 4/4 | §4 5/5 | §5 4/0 | §6 5/5 | §7 5/4 | §8 5/5
+§9 3/3 | §10 4/4 | §11 4/4 | §12 3/0        => 58 вопросов, 49 маркеров «SQL:»
+$ sed -n '103p' /srv/1c/MAP.md ; sed -n '104p' MAP.md
+docs/ACCEPTANCE_UT.md — 58 вопросов под 12 классов дефектов, с эталонным SQL к каждому
+Вопрос 27 («На какую сумму?») эталона не имеет вовсе — по замыслу, это ловушка на clarify.
+
+=====================================================================
+9. ПОДТВЕРЖДЁННЫЕ «ok» — выборочный сырой вывод
+=====================================================================
+[0] docs/API_ASK.md:62-68 — пять kind, подтверждено (см. §2 выше).
+[1] docs/REGRESSION_BASE1.md §0 (стр.50) и §3 (стр.116): «правка… не считается законченной,
+    пока на первой не сняты замеры 1-3 из §0. И наоборот» — дословно на месте.
+[2] docs/TARGET_STATUS.md:26 «Остался только другой язык»; :60-61 то же — совпадает.
+[3] windows/odata-setup/src/Steps.cs:451-506 — проверка od.Attribute("enable"), SetAttributeValue
+    ("enable","true"), «Грабля Н-3 (УТ): … мы обязаны ПЕРЕЧИТАТЬ файл», IsODataEnabledInVrd.
+[4] verify-core.js:44-56 numericTokens — сравниваются только цифровые основы (raw.replace(/\D/g,'')).
+[6][53] TARGET.md:47-48 «Ручных действий два: создать читателя в 1С и, если требуется,
+    пользователя Windows»; hardcode-sniper.md:20-23 и boxed-ready.md:15-17 — те же два.
+[7] index.js:187-194 reply_payload_sending → stripInternal(p.text)/caption.
+[8] memory_bank/techContext.md:403 «## Ловушка 33: сравнение колонки из LEFT JOIN…».
+[9] .claude/agents/serenedb-native.md:4 tools: … mcp__serenedb-docs__search_docs, read_section,
+    docs_health.
+[10] TARGET.md:110-133 — порядок 1 ответ / 2 уточняющий вопрос / 3 честный отказ; «Отказ при
+    наличии данных — дефект, а не осторожность».
+[11] corpus_postcheck.sql: a_noemb > b_noemb → error «эмбеддер не отработал»; a_noemb=b_noemb>0 →
+    «эмбеддер молчал»; строки с невозможным вектором исключены.
+[12] serenedb-docs: «Building the index with the optimize_top_k index option enables WAND pruning»;
+    «Three index WITH options control the background lifecycle (set at CREATE INDEX)» — опции
+    задаются при создании. Живой ALTER INDEX не проверялся (DDL запрещён аудитору).
+[14][35] verify-core.js:76-85 LEAK_LINE_RES — ровно 5 регэкспов + SQL_RE + PATH_RE.
+[15] serenedb-docs docs/sql/indexes/inverted/views#snapshot-and-isolation: «A view-backed index is a
+    static snapshot: its postings are captured at CREATE INDEX time and are not refreshed when the
+    source changes»; maintenance#rebuilding — то же.
+[16] CHECK2_REVIEW_1.md:330 «не годен без правок пп. 1-5»; _2:230 «Как есть — не годен, годен после
+    правки пяти пунктов»; _3:247 «пригодна как основа решения, но требует правки».
+[17] docs/AUDIT_SERENE_SUMMARY.md:3-27 — баннер «⛔ ЭТОТ ФАЙЛ НЕ ЯВЛЯЕТСЯ ПЛАНОМ РАБОТ»; все три
+    названных файла на месте (ls).
+[18] corpus_init.sql:17 и :28 — flags MAP(VARCHAR, BOOLEAN).
+[19] serene_ask.py:2989-2994 `if not ASK_TOKEN: … return 2`; :3003 sys.exit(main() or 0).
+[20] serene_ask.py:1186-1187 quantity_rejected; :2713-2735 — если величины нет у сущности, идёт
+    pick_measure и при догадке реранкера — clarify. До калькулятора выдуманное имя не доходит.
+[21] odata_gateway.py:83-99 — for form in (raw, unquote(raw)); '\\' → False; сегмент '..' → False;
+    :117-119 403 «path outside OData base».
+[22] docs/PLAN_VECTOR_CHECKS.md:44 «## Что уже проверено и переспрашивать не нужно».
+[23] CLAUDE.md:92 «| Что изменил | Какие документы обязан обновить |».
+[24][33][43] CLAUDE.md:184-186 «🔴 Опыты с ivf — только на отдельном --server_directory… уходит в
+    WAL и роняет инстанс в петлю OOM»; VECTOR_DECISION.md:521-523 то же.
+[25] ЗАМЕР буферизации: python3 -c '…print×50; sleep 6' > файл ; через 2 с `wc -c` = 0,
+    после завершения 795. Подтверждает §3.28 HOW_NOT_TO.
+[26] verify-core.js:9-10 minDigitsWithRef:1 («ЕСТЬ эталон -> сверяем ВСЕ числа»); :208-216
+    action:"replace" на ответ инструмента / noDataReply.
+[27] SERENEDB_IVF_ISSUE_RU.md:58-63 — 5 000 → 1 с / 0 МБ; 6 000 → не завершилось 90 с / +4 473 МБ;
+    :73-80 sdb_ivf_posting_size 128/256/1024 порога не двигает.
+[28][37] SERENEDB.md:120 «Индекс на таблицу pgp.public.t — да, транслируется в btree внутри PG.
+    Но индекс на VIEW … строит настоящий IResearch»; :198 то же.
+[29] .claude/agents/boxed-ready.md существует (6844 байта).
+[30] build.sh — шаги «== 0 … == 8» подряд (стр. 105-292), пропуск только по SKIP_BUILD (:174,:188);
+    отметок о завершённых шагах и resume нет.
+[31] poc_load_entity.py:232-240 — declared_key(entity_set)==['Ref_Key'], own_props, fail-closed при
+    пустой $metadata; имён конфигурации нет.
+[32] SERENEDB_IVF_ISSUE_RU.md:151-175 — «## Вопросы», пункты 1-5; VECTOR_DECISION.md §9 — один ответ.
+[36] VECTOR_DECISION.md:547-556 — таблица ровно четырёх обходов, у всех «не помогает».
+    (Побочно: строка 544 того же файла говорит «три гипотезы» при четырёх строках таблицы.)
+[38] SERENEDB.md:77-80 — enable_external_access/allowed_directories GLOBAL-only; :405 тот же пункт в
+    вопросах фаундерам. serenedb-docs: scopes только GLOBAL/SESSION, per-role для ФС нет.
+[41] PLAN_ROW_IS_OBJECT.md:311 «### 1. 🔴 Шаги 1 и 2 — один коммит и одна выкладка».
+[42] BOXED_BLOCKERS.md:12/32/49 — ровно три названных блокера как открытые §1-§3.
+[45] TARGET.md — grep -E '^[0-9]+\. ' даёт 21 пункт (строки 11…110), 1..21 подряд.
+[46] PLAN_AUTONOMY.md:77 (шаг 0 «поднял пул исполнителей движка»), :157 «обязан ставить УСТАНОВЩИК».
+[47] techContext.md:44 «VACUUM (REFRESH_TABLE) на таблице с ivf … съел 34 ГБ».
+[48] .gitignore:2 `credentials/`.
+[50] TARGET_STATUS.md:18-38 пересчитан построчно: 🟢 4,5,6,7,8,12,13,17,18,19,20 = 11;
+     🟡 1,2,9,14,16,21 = 6; 🔴 3,10,11,15 = 4; сумма 21 — сходится со строкой 40.
+[51] TARGET.md:49 «Делается в конце, когда закрыто всё остальное»; PLAN_TARGET_CLOSURE.md:82-83
+     «Пункта 14 (инсталлятор) … в этот список владельцем не включён».
+[54] verify-core.js:34 stripInternal: true.
+[55] index.js:49-50 (у message_sending нет runId, доставка после agent_end), :66-68 ctx.sessionKey,
+     :84 after_tool_call.
+[56] index.js:29 import { definePluginEntry }, :71 export default definePluginEntry.
+[58] /srv/serenedb-src/server/catalog/index.cpp:343-347 — при неуказанном quant для L2Sqr/
+     InnerProduct/Cosine ставится SQ8; :358-365 отдельный запрет только rabitq+cosine.
+[59] ls formats/ivf/ → centroids.cpp, clustering.cpp, ivf_writer.cpp, ivf_reader.cpp, quantizer.cpp;
+     grep -rniE 'cancel|interrupt' по каталогу — 0 вхождений.
+
+=====================================================================
+10. ИТОГОВЫЙ СЧЁТ
+=====================================================================
+Переснято независимо: 60 из 60.
+Ошибочных «ok»: 9 (items 5, 13, 34, 39, 40, 44, 49, 52, 57) = 15.0 %.
+Из них «жёстких» (утверждение противоречит проверяемому факту): 7 = 11.7 %.
+Из 9 один (item 5) уже описан в findings.json как F022; НОВЫХ — 7 группировок.
+Расслоённая оценка на все 1196 (по замеренным стратам prio0/prio1): ≈66 пропущенных.
+С допущением, что «ok» с пометкой [замер] ошибочны вдвое реже: ≈120.

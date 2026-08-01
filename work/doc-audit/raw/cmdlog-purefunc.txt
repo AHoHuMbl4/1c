@@ -1,0 +1,507 @@
+СЫРОЙ ВЫВОД ЗАМЕРОВ — задание purefunc, 01.08.2026
+Все запуски — в отдельном процессе, без сети и без базы (psql/ds_chat заглушены).
+
+############ 1. python3 t_gate.py (gate/check_claims, импорт serene_ask.py) ############
+$ env -u SERENEDB_DSN_RO -u ASK_TOTAL_TEXT -u ASK_NO_DATA_TEXT -u DEEPSEEK_API_KEY python3 t_gate.py
+MODULE OK; TOTAL_TEXT='' NO_DATA_TEXT=''
+==============================================================================
+--- 1. БАЗА: выдуманное число без thresholds ---
+A1 выдумка, thresholds=None                                thresholds=None
+   ответ: Продано на 7 777 777 руб.
+   -> gate ok=False bad=[7777777.0]
+
+A2 верная сумма                                            thresholds=None
+   ответ: Итого 2 161 800 руб. по 2 документам.
+   -> gate ok=True bad=[]
+
+--- 2. ЧИСЛА ИЗ ВОПРОСА (docstring gate: «числа из вопроса НЕ разрешаются») ---
+вопрос: 'обороты по счёту 62' -> q_nums=[62.0]
+B1 эхо номера счёта                                        thresholds=[62.0]
+   ответ: По счёту 62 оборот 2 161 800 руб.
+   -> gate ok=True bad=[]
+
+вопрос: 'сколько мы продали на 7777777 рублей' -> q_nums=[7777777.0]
+B2 выдумка, названная в вопросе                            thresholds=[7777777.0]
+   ответ: Продано на 7 777 777 руб.
+   -> gate ok=True bad=[]
+
+--- 3. x100: разбор q_nums склеивает дробную часть ---
+вопрос: 'продажи на сумму больше 500000.00' -> q_nums=[50000000.0]
+C1 сумма x100 из вопроса                                   thresholds=[50000000.0]
+   ответ: Итого 50 000 000 руб.
+   -> gate ok=True bad=[]
+
+вопрос: 'покажи документы на 1 236 800.00' -> q_nums=[1.0, 236.0, 80000.0]
+C2 «1 236 800.00» в вопросе                                thresholds=[1.0, 236.0, 80000.0]
+   ответ: Сумма 123680000 руб.
+   -> gate ok=False bad=[123680000.0]
+
+--- 4. totals в extra_vals (строка 2776) — тоже белый список ---
+extra_vals из totals: [2161800.0, 1236800.0, 925000.0]
+==============================================================================
+--- 5. check_claims: ветка полноты (serene_ask.py:1906) ---
+claims={"total": null, "count": null, "max": null, "min": null} -> check_claims=(True, [])
+claims={}                                                   -> check_claims=(True, [])
+claims=null                                                 -> check_claims=(True, [])
+claims={"total": 104, "count": 3}                           -> check_claims=(True, [])
+claims={"total": 999999, "count": 3}                        -> check_claims=(False, ['total: заявлено 999999, в базе 104'])
+
+сигнатура check_claims: ('claims', 'agg', 'totals') — текста ответа среди аргументов НЕТ
+текст ответа: 'Не дошло 9 999 строк по 42 видам записей.'
+числа текста (_norm_numbers): [42.0, 9999.0]
+check_claims(claims=all-null, agg={'sum': 104.0, 'count': 3}) = (True, [])  <- текст не сверяется ничем
+gate(тот же текст, rows=[], agg=cov_agg) = (False, [9999.0, 42.0])  <- так выглядело бы, если бы гейт вызывался
+==============================================================================
+--- 6. F129: что уходит мосту при провале гейта ---
+TOTAL_TEXT (ASK_TOTAL_TEXT) = '' ; при пустом — text=refuse_text(question)
+refuse_text('') = '' (модель недоступна/пусто -> пустая строка)
+payload сервиса при провале гейта:
+    {"partial": null, "kind": "figures", "text": "", "figures": {"count": 2, "sum": 2161800.0, "min": 925000.0, "max": 1236800.0, "avg": 1080900.0, "date_min": "2026-02-11", "date_max": "2026-02-14"}, "sources": ["реализация"], "completeness": null, "diag": {"gate_rejected": ["7777777"]}}
+что мост отдаёт боту: '[NO DATA] Tell the user there is no such data.'
+
+############ 2. python3 t_coverage.py (_coverage_answer с заглушками psql/ds_chat) ############
+ask COVERAGE GATE: ['total: заявлено 9999999, в базе 5993', 'count: заявлено 42, в базе 3']
+==============================================================================
+1. claims=null (как учит ANSWER_SYS), в тексте ВЫДУМАННЫЕ числа
+  модель вернула: {"text": "Не дошло 9 999 999 строк по 42 видам записей, потеряно 88% данных.", "claims": {"total": null, "count": null, "max": null, "min": null}}
+  kind = answer
+  text уходит клиенту: 'Не дошло 9 999 999 строк по 42 видам записей, потеряно 88% данных.'
+  diag: {"claims": {"total": null, "count": null, "max": null, "min": null}, "sec": 0.0, "gate_ok": true}
+==============================================================================
+2. claims верные, но в тексте ЛИШНЕЕ выдуманное число
+  модель вернула: {"text": "Не дошло 5 993 строки по 3 видам записей; в справочнике контрагентов пропало 777 777 строк.", "claims": {"total": 5993, "count": 3, "max": null, "min": null}}
+  kind = answer
+  text уходит клиенту: 'Не дошло 5 993 строки по 3 видам записей; в справочнике контрагентов пропало 777 777 строк.'
+  diag: {"claims": {"total": 5993, "count": 3, "max": null, "min": null}, "sec": 0.0, "gate_ok": true}
+==============================================================================
+3. claims НЕВЕРНЫЕ — единственный случай, когда проверка срабатывает
+  модель вернула: {"text": "Не дошло 9 999 999 строк по 42 видам записей.", "claims": {"total": 9999999, "count": 42, "max": null, "min": null}}
+  kind = figures
+  text уходит клиенту: 'Не дошло 9 999 999 строк по 42 видам записей.'
+  diag: {"claims": {"total": 9999999, "count": 42, "max": null, "min": null}, "gate_rejected": ["total: заявлено 9999999, в базе 5993", "count: заявлено 42, в базе 3"], "sec": 0.0}
+
+############ 3. python3 t_role.py (роль числа на основном пути) ############
+ПРАВДА: sum=2161800.0 count=2 max=1236800.0 min=925000.0
+check_claims на основном пути ВЫЗЫВАЕТСЯ? grep даёт только :1906 (ветка полноты)
+
+"Всего продано на 925 000 руб."                         gate=True  slots_bad=[] -> ответ уходит: True
+"Итого за год 1 236 800 руб. по 2 документам."          gate=True  slots_bad=[] -> ответ уходит: True
+"Средний чек 925 000 руб., всего 1 236 800 руб."        gate=True  slots_bad=[] -> ответ уходит: True
+"Продажи выросли на 2 раза, итого 2 161 800 руб."       gate=True  slots_bad=[] -> ответ уходит: True
+"Итого 2 161 800 руб."                                  gate=True  slots_bad=[] -> ответ уходит: True
+
+_fill_figures на тексте БЕЗ плейсхолдеров: ('Всего продано на 925 000 руб.', [])
+проверка 'нет ни одной цифры' (:2804): _norm_numbers('Всего продано на 925 000 руб.') = [925000.0]
+
+check_claims, если бы его позвали: (False, ['total: заявлено 925000, в базе 2161800'])
+claims_in_text (мёртвый код) : (True, [])
+
+############ 4. числа прописью ############
+'Продано примерно три миллиона рублей — это 2 документа.'
+   _norm_numbers=[2.0] ; проверка :2804 (нет ни одной цифры)=False ; gate=(True, [])
+'Выручка составила около двух с половиной миллионов.'
+   _norm_numbers=[] ; проверка :2804 (нет ни одной цифры)=True ; gate=(True, [])
+'Итого 2 161 800 руб.'
+   _norm_numbers=[2161800.0] ; проверка :2804 (нет ни одной цифры)=False ; gate=(True, [])
+
+############ 5. node t_verify.mjs (verify-core.js) ############
+------------------------------------------------------------------------------
+1. stripInternal: живой текст с «with … from»
+  IN : "Отгружено 12 шт товара «T-Shirt with print from Italy» на 45 000 руб."
+  OUT: "Отгружено 12 шт товара «T-Shirt"
+  IN : "Договор with ООО Ромашка. Сумма 1 236 800 руб. Дата 11.02.2026."
+  OUT: "Договор with ООО Ромашка. Сумма 1 236 800 руб. Дата 11.02.2026."
+  IN : "Selected items from the price list:\nA — 100\nB — 200"
+  OUT: "Selected items from the price list:\nA — 100\nB — 200"
+  IN : "Контрагент: Ромашка\n\nWith regards from the sales team, итого 5 993 строки."
+  OUT: "Контрагент: Ромашка"
+  IN : "Продано 3 позиции: shirt with logo from Italy, всего 45 000 руб. Спасибо!"
+  OUT: "Продано 3 позиции: shirt"
+------------------------------------------------------------------------------
+2. флаги SQL_RE (из исходника verify-core.js:84)
+  flags = gi  (i есть, m нет -> $ = конец ВСЕЙ строки-текста)
+------------------------------------------------------------------------------
+3. evaluate БЕЗ эталона (ref=null): порог highRiskDigits=5
+  "Выручка за год 950 000 руб." -> {"action":"cancel","reason":"числовой факт без обращения к данным (950000)"}
+  "Долг 4500 руб." -> {"action":"allow"}
+  "В 2026 году мы выросли." -> {"action":"allow"}
+  "Отгружено 850 шт." -> {"action":"allow"}
+------------------------------------------------------------------------------
+4. evaluate С эталоном: сверяются ВСЕ числа от 1 цифры (minDigitsWithRef=1)
+  эталон digits = ["2161800","2","1236800"]
+  "Итого 2 161 800 руб. по 2 документам."
+     -> {"action":"allow"}
+  "Итого 2 161 800 руб. по 2 документам, в среднем 1 080 900."
+     -> {"action":"replace","content":"Итого 2 161 800 руб. по 2 документам, максимум 1 236 800."}
+  "Итого 2161800 руб."
+     -> {"action":"allow"}
+  "Всего 3 документа."
+     -> {"action":"replace","content":"Итого 2 161 800 руб. по 2 документам, максимум 1 236 800."}
+  "Итого 2 161 800 руб. (см. пункт 1)."
+     -> {"action":"replace","content":"Итого 2 161 800 руб. по 2 документам, максимум 1 236 800."}
+------------------------------------------------------------------------------
+5. числа из вопроса пользователя при наличии эталона (isGrounded)
+  ref есть : {"action":"replace","content":"Итого 2 161 800 руб. по 2 документам, максимум 1 236 800."}
+  ref нет  : {"action":"allow"}
+------------------------------------------------------------------------------
+6. маркеры моста: noDataMarker="[NO DATA" clarifyMarker="[CLARIFICATION NEEDED"
+  эталон=[NO DATA...] noData=true -> {"action":"replace","content":"К сожалению, по этому вопросу у меня нет данных в системе."}
+  эталон=[НЕТ ДАННЫХ] (русский, старый маркер) noData=false
+  эталон=[CLARIFICATION NEEDED] clarify=true
+------------------------------------------------------------------------------
+7. stripInternal + маркеры: что останется от ответа моста
+  ""
+  "OPTIONS:\n- Реализация | focus=doc_x"
+
+############ 6. node t_verify2.mjs (verify-core.js, полный путь index.js) ############
+------------------------------------------------------------------------------
+A. полный путь index.js:165-180 — evaluate(replace) -> stripInternal -> клиенту
+  decision = {"action":"replace","reason":"сервис данных запросил уточнение"}
+  ЧЕЛОВЕК ВИДИТ:
+"О каких записях идёт речь?\n\nOPTIONS:\n- Реализация товаров и услуг | focus=doc_реализациятоваровуслуг\n- Отчёт о розничных продажах | focus=doc_отчетрозничныхпродаж"
+------------------------------------------------------------------------------
+B. minDigitsWithRef=1: бытовые числа в живом ответе при наличии эталона
+  "Итого 2 161 800 руб.\n1. Реализация 000-1\n2. Реализация 000-2"
+     -> {"action":"replace","content":"Итого 2 161 800 руб. по 2 документам."}
+  "Итого 2 161 800 руб. Данные на 11.02.2026."
+     -> {"action":"replace","content":"Итого 2 161 800 руб. по 2 документам."}
+  "Итого 2 161 800 руб. Это примерно 5% оборота."
+     -> {"action":"replace","content":"Итого 2 161 800 руб. по 2 документам."}
+  "Итого 2 161 800 руб. по 2 документам."
+     -> {"action":"allow"}
+------------------------------------------------------------------------------
+C. noDataReply — русская строка в коде плагина
+  DEFAULTS.noDataReply = "К сожалению, по этому вопросу у меня нет данных в системе."
+  вопрос по-английски, эталон [NO DATA] -> {"action":"replace","content":"К сожалению, по этому вопросу у меня нет данных в системе."}
+------------------------------------------------------------------------------
+D. stripInternal съедает ответ целиком -> подменяется на noDataReply (index.js:179)
+  IN : "Sales report with totals from January:\nA — 100"
+  OUT: "Sales report"  -> клиенту уйдёт "Sales report"
+
+############ 7. grep check_claims/claims_in_text в serene_ask.py ############
+1658:def check_claims(claims, agg, totals=None):
+1697:def claims_in_text(claims, text, want=None):
+1906:    ok_roles, bad = check_claims(claims, agg, [])
+
+############ ИСХОДНИКИ ЗАМЕРОВ ############
+===== t_gate.py =====
+# -*- coding: utf-8 -*-
+"""Замер чистых функций gate()/check_claims() serene_ask.py. Ничего не поднимает."""
+import importlib.util, re, sys, json
+
+spec = importlib.util.spec_from_file_location("sa", "/srv/1c/ubuntu/serenedb/serene_ask.py")
+sa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sa)          # импорт без запуска сервера (main под __main__)
+print("MODULE OK; TOTAL_TEXT=%r NO_DATA_TEXT=%r" % (sa.TOTAL_TEXT, sa.NO_DATA_TEXT))
+print("=" * 78)
+
+# строка как из rows_of: [row_key, src_table, amount, doc_date, s, doc]
+ROWS = [["k1", "doc_реализация", "1236800.00", "2026-02-11", 0,
+         "Реализация 000-1 | Контрагент: ООО Ромашка | Сумма: 1 236 800"],
+        ["k2", "doc_реализация", "925000.00", "2026-02-14", 0,
+         "Реализация 000-2 | Контрагент: ООО Ромашка | Сумма: 925 000"]]
+AGG = {"count": 2, "sum": 2161800.0, "min": 925000.0, "max": 1236800.0,
+       "avg": 1080900.0, "date_min": "2026-02-11", "date_max": "2026-02-14"}
+
+
+def qnums(question):
+    """ДОСЛОВНО из serene_ask.py:2774-2775 (формирование extra_vals)."""
+    return [float(re.sub(r"[^\d]", "", n)) for n in re.findall(r"\d[\d.]*", question)
+            if re.sub(r"[^\d]", "", n)]
+
+
+def show(name, ans, rows, agg, thr):
+    ok, bad = sa.gate(ans, rows, agg, thr)
+    print("%-58s thresholds=%s" % (name, thr))
+    print("   ответ: %s" % ans)
+    print("   -> gate ok=%s bad=%s" % (ok, bad))
+    print()
+
+
+print("--- 1. БАЗА: выдуманное число без thresholds ---")
+show("A1 выдумка, thresholds=None", "Продано на 7 777 777 руб.", ROWS, AGG, None)
+show("A2 верная сумма", "Итого 2 161 800 руб. по 2 документам.", ROWS, AGG, None)
+
+print("--- 2. ЧИСЛА ИЗ ВОПРОСА (docstring gate: «числа из вопроса НЕ разрешаются») ---")
+q1 = "обороты по счёту 62"
+print("вопрос: %r -> q_nums=%s" % (q1, qnums(q1)))
+show("B1 эхо номера счёта", "По счёту 62 оборот 2 161 800 руб.", ROWS, AGG, qnums(q1))
+
+q2 = "сколько мы продали на 7777777 рублей"
+print("вопрос: %r -> q_nums=%s" % (q2, qnums(q2)))
+show("B2 выдумка, названная в вопросе", "Продано на 7 777 777 руб.", ROWS, AGG, qnums(q2))
+
+print("--- 3. x100: разбор q_nums склеивает дробную часть ---")
+q3 = "продажи на сумму больше 500000.00"
+print("вопрос: %r -> q_nums=%s" % (q3, qnums(q3)))
+show("C1 сумма x100 из вопроса", "Итого 50 000 000 руб.", ROWS, AGG, qnums(q3))
+q4 = "покажи документы на 1 236 800.00"
+print("вопрос: %r -> q_nums=%s" % (q4, qnums(q4)))
+show("C2 «1 236 800.00» в вопросе", "Сумма 123680000 руб.", ROWS, AGG, qnums(q4))
+
+print("--- 4. totals в extra_vals (строка 2776) — тоже белый список ---")
+totals = [["СуммаДокумента", 2161800.0, 1236800.0, 925000.0]]
+extra = sa._threshold_values({}) + [x for t in totals for x in t[1:]]
+print("extra_vals из totals:", extra)
+
+print("=" * 78)
+print("--- 5. check_claims: ветка полноты (serene_ask.py:1906) ---")
+cov_agg = {"sum": 104.0, "count": 3}
+for claims in ({"total": None, "count": None, "max": None, "min": None},
+               {},
+               None,
+               {"total": 104, "count": 3},
+               {"total": 999999, "count": 3}):
+    print("claims=%-52s -> check_claims=%s" % (json.dumps(claims, ensure_ascii=False),
+                                               sa.check_claims(claims, cov_agg, [])))
+print()
+print("сигнатура check_claims:", sa.check_claims.__code__.co_varnames[:sa.check_claims.__code__.co_argcount],
+      "— текста ответа среди аргументов НЕТ")
+txt = "Не дошло 9 999 строк по 42 видам записей."
+print("текст ответа: %r" % txt)
+print("числа текста (_norm_numbers): %s" % sorted(sa._norm_numbers(txt)))
+print("check_claims(claims=all-null, agg=%s) = %s  <- текст не сверяется ничем"
+      % (cov_agg, sa.check_claims({"total": None, "count": None}, cov_agg, [])))
+print("gate(тот же текст, rows=[], agg=cov_agg) = %s  <- так выглядело бы, если бы гейт вызывался"
+      % (sa.gate(txt, [], cov_agg, None),))
+
+print("=" * 78)
+print("--- 6. F129: что уходит мосту при провале гейта ---")
+print("TOTAL_TEXT (ASK_TOTAL_TEXT) = %r ; при пустом — text=refuse_text(question)" % sa.TOTAL_TEXT)
+print("refuse_text('') = %r (модель недоступна/пусто -> пустая строка)" % sa.refuse_text(""))
+
+
+def bridge(data):
+    """ДОСЛОВНАЯ копия mcp_ask.py:140-178 (без сетевого _ask)."""
+    ERROR_REPLY = "[SERVICE ERROR: {detail}] Tell the user the data is unavailable."
+    NO_DATA_REPLY = "[NO DATA] Tell the user there is no such data."
+    CLARIFY_HINT = "[CLARIFICATION NEEDED] ..."
+    CLARIFY_LABEL = "OPTIONS"
+    kind = data.get("kind", "")
+    text = (data.get("text") or "").strip()
+    if kind == "unavailable":
+        return ERROR_REPLY.format(detail=text[:120] or "unavailable")
+    if kind == "clarify":
+        opts = data.get("options") or []
+        lines = []
+        for o in opts:
+            if not isinstance(o, dict):
+                continue
+            if o.get("measure"):
+                lines.append("- %s | measure=%s | focus=%s"
+                             % (o.get("label") or o["measure"], o["measure"], o.get("src") or ""))
+            elif o.get("src"):
+                lines.append("- %s | focus=%s" % (o.get("label") or o["src"], o["src"]))
+        out = CLARIFY_HINT
+        if text:
+            out += "\n\n" + text
+        if lines:
+            out += "\n\n%s:\n%s" % (CLARIFY_LABEL, "\n".join(lines))
+        return out
+    if kind == "no_data" or not text:
+        return NO_DATA_REPLY
+    m = (data.get("measure") or "").strip()
+    if m and m.lower() not in text.lower():
+        text += "\n\n[величина: %s]" % m
+    return text
+
+
+payload = {"partial": None, "kind": "figures",
+           "text": (sa.TOTAL_TEXT or sa.refuse_text("")),
+           "figures": {k: AGG[k] for k in ("count", "sum", "min", "max", "avg",
+                                           "date_min", "date_max")},
+           "sources": ["реализация"], "completeness": None,
+           "diag": {"gate_rejected": ["7777777"]}}
+print("payload сервиса при провале гейта:")
+print("   ", json.dumps(payload, ensure_ascii=False))
+print("что мост отдаёт боту: %r" % bridge(payload))
+===== t_coverage.py =====
+# -*- coding: utf-8 -*-
+"""_coverage_answer с ЗАГЛУШКАМИ psql/ds_chat: ни базы, ни сети. Показывает, что уходит
+клиенту, когда модель пишет в текст числа, которых в переписи нет."""
+import importlib.util, json, time
+
+spec = importlib.util.spec_from_file_location("sa", "/srv/1c/ubuntu/serenedb/serene_ask.py")
+sa = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(sa)
+
+CENSUS = [["150000", "144007", "5993", "3", "934"]]      # tot: в_1С, в_корпусе, потеряно, сущностей, закрыто
+LOST = [["doc_реализация", "1200", "1100", "нет прав"]]
+
+
+def fake_psql(sql):
+    return CENSUS if "coalesce(sum" in sql else LOST
+
+
+sa.psql = fake_psql
+
+CASES = {
+ "1. claims=null (как учит ANSWER_SYS), в тексте ВЫДУМАННЫЕ числа":
+   '{"text": "Не дошло 9 999 999 строк по 42 видам записей, потеряно 88% данных.",'
+   ' "claims": {"total": null, "count": null, "max": null, "min": null}}',
+ "2. claims верные, но в тексте ЛИШНЕЕ выдуманное число":
+   '{"text": "Не дошло 5 993 строки по 3 видам записей; в справочнике контрагентов пропало 777 777 строк.",'
+   ' "claims": {"total": 5993, "count": 3, "max": null, "min": null}}',
+ "3. claims НЕВЕРНЫЕ — единственный случай, когда проверка срабатывает":
+   '{"text": "Не дошло 9 999 999 строк по 42 видам записей.",'
+   ' "claims": {"total": 9999999, "count": 42, "max": null, "min": null}}',
+}
+
+for name, raw in CASES.items():
+    sa.ds_chat = lambda *a, **k: raw
+    out = sa._coverage_answer("сколько данных мы потеряли", {}, time.time())
+    print("=" * 78)
+    print(name)
+    print("  модель вернула:", raw)
+    print("  kind =", out["kind"])
+    print("  text уходит клиенту:", repr(out["text"]))
+    print("  diag:", json.dumps({k: v for k, v in out["diag"].items()}, ensure_ascii=False))
+===== t_role.py =====
+# -*- coding: utf-8 -*-
+"""Роль числа на ОСНОВНОМ пути: сумма одной строки, названная итогом."""
+import importlib.util
+spec = importlib.util.spec_from_file_location("sa", "/srv/1c/ubuntu/serenedb/serene_ask.py")
+sa = importlib.util.module_from_spec(spec); spec.loader.exec_module(sa)
+
+ROWS = [["k1", "doc_реализация", "1236800.00", "2026-02-11", 0, "Реализация 000-1 | ООО Ромашка | Сумма: 1 236 800"],
+        ["k2", "doc_реализация", "925000.00", "2026-02-14", 0, "Реализация 000-2 | ООО Ромашка | Сумма: 925 000"]]
+AGG = {"count": 2, "sum": 2161800.0, "min": 925000.0, "max": 1236800.0, "avg": 1080900.0,
+       "date_min": "2026-02-11", "date_max": "2026-02-14"}
+TOTALS = [["СуммаДокумента", 2161800.0, 1236800.0, 925000.0]]
+
+print("ПРАВДА: sum=%s count=%s max=%s min=%s" % (AGG["sum"], AGG["count"], AGG["max"], AGG["min"]))
+print("check_claims на основном пути ВЫЗЫВАЕТСЯ? grep даёт только :1906 (ветка полноты)\n")
+
+probes = [
+    "Всего продано на 925 000 руб.",                       # итог = сумма ОДНОЙ строки
+    "Итого за год 1 236 800 руб. по 2 документам.",        # итог = max
+    "Средний чек 925 000 руб., всего 1 236 800 руб.",      # роли перепутаны
+    "Продажи выросли на 2 раза, итого 2 161 800 руб.",
+    "Итого 2 161 800 руб.",                                # правда
+]
+for p in probes:
+    ok, bad = sa.gate(p, ROWS, AGG, None)
+    filled, slots_bad = sa._fill_figures(p, AGG, TOTALS, True)
+    role_ok = not slots_bad
+    print("%-55s gate=%-5s slots_bad=%s -> ответ уходит: %s"
+          % ('"%s"' % p, ok, slots_bad, ok and role_ok))
+print()
+print("_fill_figures на тексте БЕЗ плейсхолдеров:", sa._fill_figures("Всего продано на 925 000 руб.", AGG, TOTALS, True))
+print("проверка 'нет ни одной цифры' (:2804): _norm_numbers('Всего продано на 925 000 руб.') =",
+      sorted(sa._norm_numbers("Всего продано на 925 000 руб.")))
+print()
+print("check_claims, если бы его позвали:", sa.check_claims({"total": 925000}, AGG, TOTALS))
+print("claims_in_text (мёртвый код) :", sa.claims_in_text({"total": 925000}, "Всего продано на 925 000 руб.", "sum"))
+===== t_verify.mjs =====
+import { stripInternal, evaluate, mergeRef, numericTokens, DEFAULTS }
+  from "/srv/1c/ubuntu/openclaw/verify-plugin/verify-core.js";
+
+const line = (s) => console.log("-".repeat(78) + "\n" + s);
+
+line("1. stripInternal: живой текст с «with … from»");
+const cases = [
+  'Отгружено 12 шт товара «T-Shirt with print from Italy» на 45 000 руб.',
+  'Договор with ООО Ромашка. Сумма 1 236 800 руб. Дата 11.02.2026.',
+  'Selected items from the price list:\nA — 100\nB — 200',
+  'Контрагент: Ромашка\n\nWith regards from the sales team, итого 5 993 строки.',
+  'Продано 3 позиции: shirt with logo from Italy, всего 45 000 руб. Спасибо!',
+];
+for (const c of cases) {
+  console.log("  IN : " + JSON.stringify(c));
+  console.log("  OUT: " + JSON.stringify(stripInternal(c)));
+}
+
+line("2. флаги SQL_RE (из исходника verify-core.js:84)");
+const SQL_RE = /\b(?:WITH|SELECT)\b[\s\S]*?\bFROM\b[\s\S]*?(?=\n\s*\n|$)/gi;
+console.log("  flags = " + SQL_RE.flags + "  (i есть, m нет -> $ = конец ВСЕЙ строки-текста)");
+
+line("3. evaluate БЕЗ эталона (ref=null): порог highRiskDigits=" + DEFAULTS.highRiskDigits);
+const noRef = [
+  "Выручка за год 950 000 руб.",
+  "Долг 4500 руб.",
+  "В 2026 году мы выросли.",
+  "Отгружено 850 шт.",
+];
+for (const c of noRef) console.log("  " + JSON.stringify(c) + " -> " + JSON.stringify(evaluate(c, null, null, {})));
+
+line("4. evaluate С эталоном: сверяются ВСЕ числа от 1 цифры (minDigitsWithRef=" + DEFAULTS.minDigitsWithRef + ")");
+const ref = mergeRef(null, "Итого 2 161 800 руб. по 2 документам, максимум 1 236 800.",
+                     Date.now(), DEFAULTS.noDataMarker, DEFAULTS.clarifyMarker);
+console.log("  эталон digits = " + JSON.stringify([...ref.digits]));
+const withRef = [
+  "Итого 2 161 800 руб. по 2 документам.",
+  "Итого 2 161 800 руб. по 2 документам, в среднем 1 080 900.",
+  "Итого 2161800 руб.",
+  "Всего 3 документа.",
+  "Итого 2 161 800 руб. (см. пункт 1).",
+];
+for (const c of withRef) {
+  const r = evaluate(c, ref, null, {});
+  console.log("  " + JSON.stringify(c) + "\n     -> " + JSON.stringify(r));
+}
+
+line("5. числа из вопроса пользователя при наличии эталона (isGrounded)");
+const inb = mergeRef(null, "а что с 777 777?", Date.now(), DEFAULTS.noDataMarker, DEFAULTS.clarifyMarker);
+console.log("  ref есть : " + JSON.stringify(evaluate("Там 777 777 руб.", ref, inb, {})));
+console.log("  ref нет  : " + JSON.stringify(evaluate("Там 777 777 руб.", null, inb, {})));
+
+line("6. маркеры моста: noDataMarker=" + JSON.stringify(DEFAULTS.noDataMarker) +
+     " clarifyMarker=" + JSON.stringify(DEFAULTS.clarifyMarker));
+const nd = mergeRef(null, "[NO DATA] Tell the user there is no such data.", Date.now(),
+                    DEFAULTS.noDataMarker, DEFAULTS.clarifyMarker);
+console.log("  эталон=[NO DATA...] noData=" + nd.noData + " -> " +
+            JSON.stringify(evaluate("Продано на 45 000 руб.", nd, null, {})));
+const ru = mergeRef(null, "[НЕТ ДАННЫХ] ...", Date.now(), DEFAULTS.noDataMarker, DEFAULTS.clarifyMarker);
+console.log("  эталон=[НЕТ ДАННЫХ] (русский, старый маркер) noData=" + ru.noData);
+const cl = mergeRef(null, "[CLARIFICATION NEEDED] ...\n\nOPTIONS:\n- Реализация", Date.now(),
+                    DEFAULTS.noDataMarker, DEFAULTS.clarifyMarker);
+console.log("  эталон=[CLARIFICATION NEEDED] clarify=" + cl.clarify);
+
+line("7. stripInternal + маркеры: что останется от ответа моста");
+console.log("  " + JSON.stringify(stripInternal("[NO DATA] Tell the user there is no such data.")));
+console.log("  " + JSON.stringify(stripInternal("[CLARIFICATION NEEDED] Put the question below\n\nOPTIONS:\n- Реализация | focus=doc_x")));
+===== t_verify2.mjs =====
+import { stripInternal, evaluate, mergeRef, DEFAULTS }
+  from "/srv/1c/ubuntu/openclaw/verify-plugin/verify-core.js";
+const line = (s) => console.log("-".repeat(78) + "\n" + s);
+
+// ровно то, что собирает mcp_ask.py на ветке clarify (CLARIFY_HINT + text + OPTIONS)
+const bridgeClarify =
+  "[CLARIFICATION NEEDED] Put the question below to the user in your own words with the " +
+  "options. Then call this tool again with the same question and `focus`.\n\n" +
+  "О каких записях идёт речь?\n\n" +
+  "OPTIONS:\n- Реализация товаров и услуг | focus=doc_реализациятоваровуслуг\n" +
+  "- Отчёт о розничных продажах | focus=doc_отчетрозничныхпродаж";
+
+line("A. полный путь index.js:165-180 — evaluate(replace) -> stripInternal -> клиенту");
+const ref = mergeRef(null, bridgeClarify, Date.now(), DEFAULTS.noDataMarker, DEFAULTS.clarifyMarker);
+const dec = evaluate("У ООО Ромашка 3 документа на 1 236 800 руб.", ref, null, {});
+console.log("  decision = " + JSON.stringify({ action: dec.action, reason: dec.reason }));
+const base = dec.action === "replace" ? dec.content : "…";
+console.log("  ЧЕЛОВЕК ВИДИТ:\n" + JSON.stringify(stripInternal(base), null, 0));
+
+line("B. minDigitsWithRef=1: бытовые числа в живом ответе при наличии эталона");
+const ref2 = mergeRef(null, "Итого 2 161 800 руб. по 2 документам.", Date.now(),
+                      DEFAULTS.noDataMarker, DEFAULTS.clarifyMarker);
+const probes = [
+  "Итого 2 161 800 руб.\n1. Реализация 000-1\n2. Реализация 000-2",
+  "Итого 2 161 800 руб. Данные на 11.02.2026.",
+  "Итого 2 161 800 руб. Это примерно 5% оборота.",
+  "Итого 2 161 800 руб. по 2 документам.",
+];
+for (const p of probes)
+  console.log("  " + JSON.stringify(p) + "\n     -> " + JSON.stringify(evaluate(p, ref2, null, {})));
+
+line("C. noDataReply — русская строка в коде плагина");
+console.log("  DEFAULTS.noDataReply = " + JSON.stringify(DEFAULTS.noDataReply));
+const nd = mergeRef(null, "[NO DATA] Tell the user there is no such data.", Date.now(),
+                    DEFAULTS.noDataMarker, DEFAULTS.clarifyMarker);
+console.log("  вопрос по-английски, эталон [NO DATA] -> " +
+            JSON.stringify(evaluate("You sold 45 000 in total.", nd, null, {})));
+
+line("D. stripInternal съедает ответ целиком -> подменяется на noDataReply (index.js:179)");
+const t = "Sales report with totals from January:\nA — 100";
+const clean = stripInternal(t);
+console.log("  IN : " + JSON.stringify(t));
+console.log("  OUT: " + JSON.stringify(clean) + "  -> клиенту уйдёт " +
+            JSON.stringify(clean.trim() ? clean : DEFAULTS.noDataReply));

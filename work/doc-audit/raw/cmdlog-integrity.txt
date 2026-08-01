@@ -1,0 +1,94 @@
+=== 1. test_integrity.py запущен ровно как учит RUNBOOK_DEPLOY.md:427-432 ===
+  PASS  grain catalog_видытарифовстраховыхвзносов   rows=38 distinct_ref_key=38
+  PASS  grain catalog_значениякатегорийновостей   rows=2 distinct_ref_key=2
+  PASS  grain catalog_видыиспользованиярабочеговремени   rows=6 distinct_ref_key=6
+  PASS  grain catalog_контрагенты   rows=13 distinct_ref_key=13
+Traceback (most recent call last):
+  File "/tmp/claude-0/-srv-1c/c3e5f711-9621-4715-809d-de51eff1f750/scratchpad/run_integrity.py", line 24, in <module>
+    runpy.run_path('/opt/1c-mcp-reports/test_integrity.py', run_name='__main__')
+  File "<frozen runpy>", line 286, in run_path
+  File "<frozen runpy>", line 98, in _run_module_code
+  File "<frozen runpy>", line 88, in _run_code
+  File "/opt/1c-mcp-reports/test_integrity.py", line 149, in <module>
+    main()
+  File "/opt/1c-mcp-reports/test_integrity.py", line 100, in main
+    n, d = q(f'SELECT count(*)||chr(124)||count(DISTINCT ref_key) FROM "{t}"').split("|")
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/1c-mcp-reports/test_integrity.py", line 42, in q
+    raise RuntimeError(r.stderr.strip()[:200])
+RuntimeError: ERROR:  Table with name catalog_эквайринговыетерминалы does not exist!
+Did you mean "ut_test.catalog_эквайринговыетерминалы"?
+LINE 1: ... count(*)||chr(124)||count(DISTINCT ref_key) FROM "catalog_э...
+
+=== 2. duckdb_columns() без фильтра базы (причина падения) ===
+postgres|public|292
+system|information_schema|11
+system|main|14
+system|pg_catalog|22
+ut_test|public|1624
+tables() как в test_integrity.py:67 ->
+1825
+
+=== 3. odata_count() из test_integrity — чистый вызов ===
+Catalog_Контрагенты -> 'ERR HTTP Error 401: Unauthorized'
+Catalog_КлассификаторБанков -> 'ERR HTTP Error 401: Unauthorized'
+Document_РеализацияТоваровУслуг -> 'ERR HTTP Error 401: Unauthorized'
+
+=== 4. Полная сверка витрины с живой 1С, база 1 (postgres / шлюз :6011) ===
+{
+ "db": "postgres",
+ "total_ref_key_tables": 144,
+ "checked": 144,
+ "ok": 144,
+ "ok_folder": 0,
+ "bad": 0,
+ "bad_rows": []
+}
+
+=== 5. Полная сверка витрины с живой 1С, база 2 (ut_test / шлюз :6021) — сводка ===
+{'db': 'ut_test', 'total_ref_key_tables': 572, 'checked': 572, 'ok': 487, 'ok_folder': 0, 'bad': 85}
+все "плохие" имеют LineNumber: True
+у всех dref == odata: True
+лишних строк: 9155
+
+=== 6. search_coverage обеих баз ===
+-- postgres --
+в 1С нет строк|3212|0|0|0
+закрыто правами в 1С|909|-909|0|0
+|229|97647|97647|97647
+не загрузилось из 1С|1|2|0|0
+нет вектора|1|5881|5881|5881
+регистр: $count считает регистраторы|1|104|280|280
+cov_ent_denied|909
+cov_ent_lost|1
+cov_noemb_pending|0
+cov_noemb_service|5091
+cov_rows_1c|103634
+cov_rows_lost|2
+cov_rows_search|103808
+base_profile snapshot: 2026-07-29 06:34:36.003587
+-- ut_test --
+в 1С нет строк|1188|0|0|0
+нет вектора|1072|349487|349487|349487
+|265|131235|131235|131235
+витрина развёрнута по табличной части|85|5891|15046|5891
+регистр: $count считает регистраторы|80|20887|136952|136952
+cov_ent_denied|0
+cov_ent_lost|0
+cov_noemb_pending|92080
+cov_noemb_service|248384
+cov_rows_1c|507500
+cov_rows_lost|0
+cov_rows_search|623565
+base_profile snapshot: 2026-07-29 16:54:09.293377
+
+=== 7. T1 grain вручную по обеим базам ===
+postgres: таблиц с ref_key=144, T1-grain FAIL=9
+ut_test:  таблиц с ref_key=572, T1-grain FAIL=284
+
+=== 8. состояние шлюзов и конвейера ===
+active
+inactive
+inactive
+LISTEN 0      5          127.0.0.1:6011       0.0.0.0:*    users:(("python3",pid=3173747,fd=3))                      
+LISTEN 0      5          127.0.0.1:6021       0.0.0.0:*    users:(("python3",pid=1136469,fd=3))                      

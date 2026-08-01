@@ -1,0 +1,152 @@
+=== r9-unverif: сырой вывод команд (только чтение) ===
+Дата: 2026-08-01. Все команды выполнены под root на lxc-claude-1c, кроме помеченных [WIN]
+(ssh -i /root/.ssh/id_ed25519_1c -p 2222 unde@192.168.56.1, только чтение).
+
+--- 1. Премисса «кредиты DeepSeek исчерпаны» -------------------------------------
+$ ls -l /home/undebot/.openclaw/logs/gateway.log
+-rw------- 1 undebot undebot 13647602 Aug  1 16:36 gateway.log
+
+$ python3: разбор gateway.log, события [model-fetch] response provider=deepseek + Insufficient
+всего событий: 1552
+Counter({'200': 1492, 'INSUFF': 45, '402': 15})
+первые 3: [('2026-07-23T10:16:57.231+00:00','200'), ...]
+все не-200: окно 2026-07-30T22:26:00.022 .. 2026-07-30T22:34:24.581 (15 ответов 402,
+            45 строк 'Insufficient Balance'), других не-200 НЕТ
+последние 15 событий: все '200', последнее 2026-07-31T05:12:14.600
+
+$ python3: вызовов после последнего 402
+вызовов после последнего 402: 419 из них 200: 419
+первый после: ('2026-07-31T03:39:15.910+00:00','200') последний: ('2026-07-31T05:12:14.600+00:00','200')
+
+$ journalctl _UID=1001 | grep -i balance   (фрагмент)
+2026-07-30T22:34:24.594 [agent/embedded] ... rawError=402 Insufficient Balance
+2026-07-30T22:34:24.673 auth profile failure state updated: ... reason=billing window=disabled
+2026-07-31T04:26:32.800 [model-fetch] response provider=deepseek ... status=200
+2026-07-31T04:46:26.471 [model-fetch] response provider=deepseek ... status=200
+
+--- 2. Где лежит ключ провайдера (значения НЕ печатались) ------------------------
+$ python3 sqlite3 file:/home/undebot/.openclaw/state/openclaw.sqlite?mode=ro
+auth_profile_stores строк: 0   колонки: ['store_key','store_json','updated_at']
+auth_profile_state  строк: 0   колонки: ['store_key','state_json','updated_at']
+(контроль чтения WAL: audit_events 2362, installed_plugin_index 1)
+
+$ grep -rl 'sk-4fe' /home/undebot/.openclaw /etc
+/home/undebot/.openclaw/.env
+/home/undebot/.openclaw/gateway.systemd.env
+/etc/1c-mcp-reports.env    (+ два .bak)
+
+$ openclaw.json (с маскировкой): "auth": {"profiles": {"deepseek:default":
+  {"provider":"deepseek","mode":"api_key"}}}   — запись профиля без значения ключа
+
+--- 3. Версии плагинов бота ------------------------------------------------------
+openclaw-braine-verify 1.0.0
+@openclaw/deepseek-provider 2026.7.1
+openclaw 2026.7.1-2   (/usr/lib/node_modules/openclaw/package.json)
+
+--- 4. Исходники движка ЕСТЬ на сервере ------------------------------------------
+$ ls -ld /srv/serenedb-src
+drwxr-xr-x 1 ubuntu users 612 Jul 26 06:13 /srv/serenedb-src
+$ ls -l /srv/serenedb-src/server/catalog/index.cpp /srv/serenedb-src/server/catalog/secondary_index.cpp
+-rw-r--r-- 1 ubuntu users 33816 Jul 26 06:13 index.cpp
+-rw-r--r-- 1 ubuntu users  2938 Jul 26 06:13 secondary_index.cpp
+
+--- 5. Бинарь СТАРШЕ исходников --------------------------------------------------
+$ ls -l /usr/local/bin/serened
+-rwxr-xr-x 1 root root 98623528 Jul 23 13:02 /usr/local/bin/serened
+$ psql -tAc 'SELECT version()'
+PostgreSQL 18.3 (SereneDB 26.07.3)
+$ strings serened | grep 'does not support metric'   -> 0 совпадений
+   (в исходниках /srv/serenedb-src/server/catalog/index.cpp:358-365 такая проверка ЕСТЬ)
+$ strings serened | grep -c 'ivf quantization supports only metric'  -> 1
+$ strings serened | grep 'plain indexes on views'
+plain indexes on views are not supported; use an inverted index instead
+$ strings serened | grep -i hnsw
+hnsw_ef_search / hnsw_enable_experimental_persistence / hnsw_compact_index /
+hnsw_index_scan / pragma_hnsw_index_info   (9 строк — слой duckdb/vss)
+$ strings serened | grep postgres_attach -> 1 совпадение
+
+--- 6. Индексы на VIEW: первоисточник --------------------------------------------
+/srv/serenedb-src/server/connector/duckdb_catalog.cpp:1066-1071
+  if (view_backed && create_index_info->index_type == "secondary") THROW
+  "plain indexes on views are not supported; use an inverted index instead"
+/srv/serenedb-src/tests/sqllogic/sdb/pg/index/secondary_index_view.test:5,25,31
+  statement error ... db error: ERROR: plain indexes on views are not supported
+
+--- 7. ivf sq8 + cosine (исходники 26.07 против бинаря 23.07) --------------------
+/srv/serenedb-src/server/catalog/index.cpp:348-357
+  THROW «ivf quantization supports only metric 'l2', 'ip', or 'cosine'»
+/srv/serenedb-src/tests/sqllogic/sdb/pg/index/inverted_index_ivf_sq8.test:398-411
+  «7b. Cosine + SQ8 ...» statement ok
+  CREATE INDEX ... USING inverted(pk, emb ivf (metric = 'cosine', quant = 'sq8'))
+/srv/serenedb-src/server/catalog/index.cpp:110-113
+  kKnownOpclassTypes{ included, ivf }   — hnsw среди опклассов нет
+
+--- 8. OData: $metadata через шлюзы ----------------------------------------------
+$ GET http://127.0.0.1:6011/$metadata  (шлюз базы 1, Bearer из /etc/1c-odata-gateway.env)
+bytes 16652877 sec 3.6
+EntitySet: 4585 EntityType: 4585
+типов с Edm.Stream: 961  с Edm.Binary: 961  с любым из двух: 961
+разрез по видам: Document 1549, Catalog 1419, InformationRegister 1402,
+                 AccumulationRegister 212, AccountingRegister 2, ChartOfAccounts 1
+типов с DataVersion: 1129, с Ref_Key: 2969
+
+$ GET http://127.0.0.1:6021/$metadata  (шлюз базы УТ, /etc/1c-odata-gateway-ut.env)
+bytes 8969969 sec 1.8
+EntitySet: 2795 EntityType: 2795
+типов со Stream: 470  с Binary: 470  с любым: 470
+
+$ учётки шлюзов (значения паролей не печатались)
+/etc/1c-odata-gateway.env    ODG_USER=ai_reader
+/etc/1c-odata-gateway-ut.env ODG_USER=Администратор (ФедоровБМ)
+
+--- 9. Golden-эталоны (обычные SELECT) -------------------------------------------
+$ SELECT count(*) FROM catalog_контрагенты                      -> 13
+$ SELECT "Description","ИНН" FROM catalog_контрагенты           -> ООО "Ромашка"|7701012342
+$ SELECT date_trunc('month',"Date"), count(*), sum("СуммаДокумента")
+    FROM document_реализациятоваровуслуг GROUP BY 1
+  2025-09|6|2307100   2025-10|6|2122600   2025-11|6|2805800
+  2025-12|6|2456400   2026-01|6|652700    2026-02|6|1981400
+$ SELECT count(*), sum(...), max(...) FROM document_реализациятоваровуслуг
+  36|12326000|1629700
+$ SELECT count(*) FROM search_corpus                            -> 103808
+
+--- 10. Обороты по счетам (Дт+Кт по проводкам, 280 строк регистра) ---------------
+code   | дебет      | n_dr | кредит     | n_cr | Дт+Кт
+41.01  | 11212700   | 31   | 9287800    | 76   | 20500500
+62.01  | 12326000   | 82   | 10956000   | 60   | 23282000
+62.02  |   389200   |  4   |   460200   |  5   |   849400
+(с фильтром Active — те же числа; итог по всем 62.* = 24 131 400)
+$ SELECT count(*) FROM search_corpus WHERE doc LIKE '%23 742 200%' OR '%23742200%' -> 0
+
+--- 11. Windows-стенд [WIN] ------------------------------------------------------
+$ Get-CimInstance Win32_Processor
+Name: Intel(R) Xeon(R) CPU E3-1275 v6 @ 3.80GHz   (два сокета по 1 ядру / 1 логическому)
+$ RAM_MB=8169   OS=Microsoft Windows 11 Pro 10.0.26100
+$ Get-PSDrive -PSProvider FileSystem
+C  FreeGB 25,9  UsedGB 34 ; D 0 0
+$ reg query "HKLM\SOFTWARE\Microsoft\VisualStudio\14.0\VC\Runtimes\x64"
+Version REG_SZ v14.44.35211.00 ; Installed REG_DWORD 0x1
+$ wsl --status
+«Подсистема Windows для Linux не установлена. Для установки выполните "wsl.exe --install"»
+$ (Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux).State
+Disabled
+$ netstat -an -p tcp | findstr LISTENING   (начало)
+0.0.0.0:22, 0.0.0.0:80, 0.0.0.0:135, 0.0.0.0:445, 0.0.0.0:5432, 0.0.0.0:49664..49670,
+0.0.0.0:51391, 10.8.0.58:139, 127.0.0.1:54662, 127.0.0.1:57855, 192.168.122.141:139
+$ netstat -an -p tcp | findstr ":6003"     -> пусто (6003 — проброс на 192.168.56.1, не порт Windows)
+$ Get-NetFirewallProfile
+Domain Enabled True ; Private False ; Public False
+$ Get-Content C:\inetpub\1c\default.vrd
+<point ... base="/1c" ib="File='C:\1c\bases\buh_test';">
+  <ws pointEnableCommon="true" />
+  <standardOdata enable="true" reuseSessions="autouse" sessionMaxAge="20" poolSize="10" .../>
+  <analytics enable="true" .../>
+(вторая публикация: C:\inetpub\ut\default.vrd)
+
+--- 12. Прочее -------------------------------------------------------------------
+$ SELECT table_name FROM information_schema.tables WHERE table_name ILIKE '%repro%' -> пусто
+$ SELECT datname FROM pg_database -> postgres, ut_test
+$ ss -ltnp | 8099 -> python3 pid=3109129 ; cwd=/opt/1c-mcp-reports ;
+  stdout/stderr -> /tmp/claude-0/-srv-1c/81653964-.../scratchpad/ask8099.log (процесс-сирота)
+$ head /opt/1c-mcp-reports/test_ro_role.py -> зовёт psql под ролью serene_ro, делает попытки ЗАПИСИ
+$ head /opt/1c-mcp-reports/test_validate.py -> проверка AST через json_serialize_sql, модель не зовётся

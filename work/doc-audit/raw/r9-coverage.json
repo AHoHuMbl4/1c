@@ -1,0 +1,98 @@
+{
+  "task": "coverage",
+  "findings": [
+    {
+      "title": "RUNBOOK §10.6 копирует юниты из УСТАРЕВШЕГО каталога: там 1c-serene-index.service всё ещё запускает serene_search_build.py — тот самый сборщик, что снёс корпус и индекс 28.07",
+      "detail": "В git ДВЕ копии одного юнита. Хорошая — ubuntu/systemd/1c-serene-index.service: ExecStart=/opt/1c-mcp-reports/build.sh, TimeoutStartSec=3600, в шапке разобрана авария 28.07 («прежний питоновский сборщик при изменении состава корпуса СНОСИЛ таблицу и индекс (DROP+CREATE)»). Именно она стоит на стенде — diff с /etc/systemd/system/1c-serene-index.service пуст. Устаревшая — ubuntu/serenedb/systemd/1c-serene-index.service: ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_search_build.py, последний коммит c733726 (до починки 28.07), НИКАКОЙ пометки «история/не применять» в файле нет. Соседний таймер в том же каталоге — OnCalendar 03:55, тогда как установленный — OnUnitActiveSec=20min. RUNBOOK §10.6 стр. 404 велит `cp ubuntu/serenedb/systemd/1c-serene-index.{service,timer} /etc/systemd/system/` — то есть выполнение процедуры развёртывания дословно ЗАМЕНЯЕТ рабочий build.sh-юнит на разрушительный питоновский и возвращает ночное расписание. Известная находка про §10.6 («велит включить таймер, который §0 называет сносящим таблицу») говорит только о ВКЛЮЧЕНИИ таймера и не замечает, что копируется другой, устаревший ExecStart из дублирующего каталога.",
+      "evidence": "[код] docs/RUNBOOK_DEPLOY.md:404 `cp ubuntu/serenedb/systemd/1c-serene-index.{service,timer} /etc/systemd/system/` | [код] ubuntu/serenedb/systemd/1c-serene-index.service:22 ExecStart=…/python /opt/1c-mcp-reports/serene_search_build.py | [код] ubuntu/systemd/1c-serene-index.service:31 ExecStart=/opt/1c-mcp-reports/build.sh | [замер] diff ubuntu/systemd/1c-serene-index.service /etc/systemd/system/1c-serene-index.service → пусто (установлен хороший экземпляр) | [замер] diff ubuntu/serenedb/systemd/1c-serene-index.service ubuntu/systemd/1c-serene-index.service → расходятся Description, TimeoutStartSec, ExecStart | [замер] grep -n OnCalendar ubuntu/serenedb/systemd/1c-serene-index.timer → 7:OnCalendar=*-*-* 03:55:00; /etc/systemd/system/1c-serene-index.timer → 16:OnUnitActiveSec=20min | [замер] git log --oneline -1 -- ubuntu/serenedb/systemd/1c-serene-index.service → c733726 (до 28.07)",
+      "doc_locs": [
+        "docs/RUNBOOK_DEPLOY.md:404",
+        "docs/RUNBOOK_DEPLOY.md:405",
+        "ubuntu/serenedb/systemd/1c-serene-index.service:22",
+        "ubuntu/serenedb/systemd/1c-serene-index.timer:7",
+        "docs/HOW_NOT_TO.md:365"
+      ],
+      "verdict": "a",
+      "verdict_why": "Проверено с двух сторон: расхождение двух git-копий и совпадение установленного экземпляра с хорошей копией. Документ развёртывания указывает на плохую копию буквально по пути. Это ровно тот случай из CLAUDE.md — «документ по развёртыванию разворачивает выведенный из продукта слой», и цена уже известна: авария 03:55 28.07, корпус и индекс потеряны.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Версионируемый ubuntu/serenedb/serened.conf не содержит пула исполнителей, который RUNBOOK §10.1 называет обязательным, а README ставит этот файл поверх настроенного боевого",
+      "detail": "RUNBOOK §10.1 стр. 314 отправляет за установкой движка в ubuntu/serenedb/README.md, а тот стр. 24 делает `install -m0644 serened.conf /etc/serenedb/serened.conf`. Сам §10.1 стр. 321-323 помечает пул 🔴 «обязателен, иначе первая загрузка растянется на сутки» и приводит --cpu_threads=96 / --io_threads=8. Живой /etc/serenedb/serened.conf держит --cpu_threads=160 / --io_threads=16 с разбором замера 29.07 в комментарии. А git-копия ubuntu/serenedb/serened.conf не содержит НИ ОДНОГО из этих флагов — только server_directory, listen, log_level, log_storage. Итого три расходящихся варианта, и худший из них — тот, который единственный ставится командой из README: при cpu_threads=0 пул равен числу ядер (6), наружу уходит 5-6 запросов, 9,2 строки/с, то есть ровно предсказанные сутки. На стенде `install` ещё и затрёт настроенный боевой конфиг. Известная находка F043 сверила ДОКИ (RUNBOOK:323, techContext:25/314, CHECK1_SCAN_SUMMARY:5) с /etc и третью копию — в git — не заметила: файл ubuntu/serenedb/serened.conf не упоминается ни разу ни в одном из ~100 файлов work/doc-audit/raw/.",
+      "evidence": "[код] ubuntu/serenedb/README.md:24 `install -m0644 serened.conf /etc/serenedb/serened.conf` | [код] docs/RUNBOOK_DEPLOY.md:314 «Установить бинарём + systemd — ubuntu/serenedb/README.md» | [код] docs/RUNBOOK_DEPLOY.md:317-326 «🔴 Пул исполнителей обязателен… --cpu_threads=96 --io_threads=8» | [замер] cat ubuntu/serenedb/serened.conf → 4 флага, cpu_threads/io_threads отсутствуют | [замер] diff ubuntu/serenedb/serened.conf /etc/serenedb/serened.conf → живой дополнительно содержит --cpu_threads=160 и --io_threads=16 | [замер] python3 cov2.py → ubuntu/serenedb/serened.conf: 0 вхождений во всём корпусе work/doc-audit/raw/*.json",
+      "doc_locs": [
+        "ubuntu/serenedb/README.md:24",
+        "ubuntu/serenedb/serened.conf:1",
+        "docs/RUNBOOK_DEPLOY.md:314",
+        "docs/RUNBOOK_DEPLOY.md:324",
+        "memory_bank/techContext.md:314"
+      ],
+      "verdict": "a",
+      "verdict_why": "Файл в git — это то, что реально поедет к клиенту установщиком, а не текст в RUNBOOK. Расхождение подтверждено diff'ом с живым конфигом; последствие названо самим же RUNBOOK и подкреплено его замером 9,2 строки/с. Расширяет F043, но в другом месте и с другим последствием: F043 — про неверное число в доках, здесь — про отсутствие настройки в разворачиваемом артефакте.",
+      "severity": "high",
+      "known_fid": "F043"
+    },
+    {
+      "title": "Шаблон 1c-mcp-reports.env.example разошёлся с боевым env: нет MCP_TOKEN (без него сервис fail-closed не стартует), нет ALIBABA_API_KEYS и ODG_GATEWAY_TOKEN, зато прописан EMBED_DIM=1536 при корпусе 1024",
+      "detail": "ubuntu/serenedb/systemd/1c-mcp-reports.env.example — единственный (наряду с serened.conf) файл проекта с нулём упоминаний во всём аудите. Он объявлен шаблоном для /etc/1c-mcp-reports.env. Имена ключей боевого файла: DEEPSEEK_API_KEY, MCP_HOST, MCP_PORT, CHART_DIR, SERENEDB_DSN, ALIBABA_API_KEY, ALIBABA_EMBED_URL, RESOLVER_DSN, PGPASSWORD, RESOLVER_PW, ODG_GATEWAY_TOKEN, MCP_TOKEN, ALIBABA_API_KEYS. В шаблоне последних трёх нет. MCP_TOKEN — fail-closed: mcp_reports.py:53-54 пишет «FATAL: MCP_TOKEN не задан» и сервис не поднимается, то есть развёрнутый по шаблону 1c-mcp-reports не стартует вообще. ALIBABA_API_KEYS — пул ключей эмбеддера (embed_all.sh:38 `IFS=',' read -r -a KEYS <<< \"${ALIBABA_API_KEYS:-…}\"`), в progress.md:303 замерено 11 ключей; без него досчёт векторов идёт на одном ключе. Отдельно шаблон предписывает `# EMBED_DIM=1536  # дефолт`, тогда как в боевом env ключа EMBED_DIM нет вовсе, штатная сборка build.sh:35 берёт 1024, а DDL corpus_init.sql:18 и resolver_build.sql:83 жёстко создают FLOAT[1024]. Ни один документ на этот файл не ссылается: RUNBOOK §10.2 вместо ссылки дублирует СВОЙ heredoc с третьим, тоже иным составом ключей (ETL_ODATA_BASE, CSV_DIR, DEEPSEEK_BASE, EMBED_MODEL, EMBED_DIM).",
+      "evidence": "[замер] grep -oE '^[A-Z_]+=' /etc/1c-mcp-reports.env → 13 имён, включая ODG_GATEWAY_TOKEN, MCP_TOKEN, ALIBABA_API_KEYS | [код] ubuntu/serenedb/systemd/1c-mcp-reports.env.example → 9 ключей, этих трёх нет | [код] ubuntu/serenedb/mcp_reports.py:53 `if not MCP_TOKEN: … FATAL … не стартует` | [код] ubuntu/serenedb/embed_all.sh:38 IFS=',' read -r -a KEYS <<< \"${ALIBABA_API_KEYS:-${ALIBABA_API_KEY:-}}\" | [замер] grep -c '^EMBED_DIM=' /etc/1c-mcp-reports.env → 0 | [код] ubuntu/serenedb/build.sh:35 EMBED_DIM=\"${EMBED_DIM:-1024}\" против corpus_init.sql:18 emb FLOAT[1024] | [замер] python3 cov2.py → 1c-mcp-reports.env.example: 0 вхождений во всём корпусе аудита",
+      "doc_locs": [
+        "ubuntu/serenedb/systemd/1c-mcp-reports.env.example:1",
+        "ubuntu/serenedb/systemd/1c-mcp-reports.env.example:12",
+        "docs/RUNBOOK_DEPLOY.md:355",
+        "docs/RUNBOOK_DEPLOY.md:369"
+      ],
+      "verdict": "a",
+      "verdict_why": "Секреты не печатались — сверялись только ИМЕНА ключей. Последствие проверяемо статически и однозначно: fail-closed на MCP_TOKEN означает, что развёртывание по версионируемому шаблону даёт неработающий сервис. Существующие находки про EMBED_DIM и про состав env в RUNBOOK не касаются этого файла (0 упоминаний), а он и есть то, что раздаётся вместе с кодом.",
+      "severity": "high",
+      "known_fid": "F025"
+    },
+    {
+      "title": "Непокрытыми остались 32 версионируемых .md; двенадцать из них — семейство CHECK1_*/CHECK2_*, целиком измеренное на search_corpus FLOAT[1536] / 97 965 строк, которого больше не существует",
+      "detail": "Перепись: 309 файлов в git, из них 211 проектных (без work/doc-audit/raw). По полному пути в содержательном корпусе аудита не упомянуты 2 файла (оба разобраны выше). Более жёсткая мера — цитирование в doc_locs хотя бы одной из 252 находок: не процитированы 32 из 107 .md. Двенадцать из них — CHECK1_SCAN_1..3, CHECK1_REVIEW_1..3, CHECK2_INCR_2..3, CHECK2_REVIEW_1..3 (~370 КБ замеров). Их фундамент устарел дважды: CHECK1_SCAN_2.md:1,5,10 меряет «точный перебор по FLOAT[1536]» при корпусе 97 965 строк, тогда как боевой DDL corpus_init.sql:18 создаёт FLOAT[1024], а корпус, по уже принятой находке, вырос до 103 808. Аудит трогал только сводки (CHECK1_SCAN_SUMMARY, CHECK2_INCR_SUMMARY_V2), сами отчёты — ни разу. MAP.md:187 подаёт всё семейство одной строкой «проверки тремя независимыми агентами со сводками», без пометки, что замеры сняты на снятой с вооружения размерности. Прочие непроцитированные: docs/ANONYMIZATION.md, AUDIT_CODE_2/3, BENCH_BRAINE_VS_SERENE, PHASE2_MCP_TEST, SERENEDB_IVF_ISSUE(_RU), SERENE_CAPS_2, TOOLKIT_TRANSPORT_ROOTCAUSE, research/1c-mcp-server-research, шесть memory_bank/owner-memory/*, ubuntu/openclaw/instance/AGENTS.md, windows/fork/BUILD.md, work/installer-exe/README.md, .claude/agents/context-and-scale.md.",
+      "evidence": "[замер] git ls-files | wc -l → 309; git ls-files '*.md' | wc -l → 107 | [замер] python3 по findings.json → «findings total 252 distinct doc files cited 96; .md files NEVER cited in any finding doc_locs: 32» (полный список — cmdlog-coverage.txt) | [замер] python3 cov2.py → zero in substantive corpus: 2 (serened.conf, 1c-mcp-reports.env.example) | [код] docs/CHECK1_SCAN_2.md:1 «точный перебор по FLOAT[1536]», :5 «emb FLOAT[1536] заполнен у всех строк (count(emb)=97965)» | [замер] bash sql.sh duckdb_columns → resolver_index emb:FLOAT[1024]; [код] corpus_init.sql:18 emb FLOAT[1024] | [код] MAP.md:187",
+      "doc_locs": [
+        "MAP.md:187",
+        "docs/CHECK1_SCAN_2.md:1",
+        "docs/CHECK1_SCAN_2.md:5",
+        "docs/CHECK2_REVIEW_2.md:243",
+        "docs/CHECK2_REVIEW_3.md:229"
+      ],
+      "verdict": "a",
+      "verdict_why": "Замер размерности снят с живого движка, число файлов — воспроизводимым перебором doc_locs. Отдельная находка нужна потому, что известные пункты про 1536 и про сводки перечисляют другие файлы: двенадцать отчётов на устаревшей размерности останутся непомеченными после закрытия всех текущих находок, а MAP объявляет их точкой входа наравне с актуальными.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Двенадцать шардов res_emb_0..11 живут в боевой базе, не создаются и не читаются ни одной строкой репозитория, а страховочные emb_done/emb_part_* из того же разбора уже исчезли",
+      "detail": "Одним SELECT по duckdb_tables()/duckdb_columns(): в боевой базе ровно 12 таблиц res_emb_0 … res_emb_11, все схемы (table_name VARCHAR, column_name VARCHAR, value VARCHAR, emb FLOAT[1024]). Таблиц вида emb_* нет — тот же LIKE '%emb%' не вернул ни emb_done, ни emb_part_*. Grep по всему коду (.py/.sh/.sql) даёт НОЛЬ вхождений res_emb: ни один скрипт их не создаёт, не наполняет и не читает; единственное упоминание во всём репозитории — docs/HOW_NOT_TO.md:379, рассказ об аварии 28.07, где эти таблицы названы тем, что спасло восстановление, и сделан вывод «рабочие таблицы не подчищать сразу». То есть документ ссылается на страховочный набор, половина которого уже пропала, и нигде не сказано, кто её убрал и почему. Права: у serene_ro доступа к шардам нет (permission denied) — та же грабля «у пересозданной таблицы нет прав», что описана в HOW_NOT_TO абзацем ниже. Известная находка «Служебные таблицы-остатки живут в обеих боевых базах и не описаны нигде» фиксирует факт остатков, но не даёт ни числа шардов, ни того, что описанная в HOW_NOT_TO страховка наполовину утрачена.",
+      "evidence": "[замер] bash ubuntu/serenedb/sql.sh \"SELECT t.table_name, t.column_count, (SELECT string_agg(c.column_name||':'||c.data_type,', ') FROM duckdb_columns() c WHERE c.table_name=t.table_name) FROM duckdb_tables() t WHERE t.table_name LIKE '%emb%'\" → 12 строк res_emb_0..res_emb_11, все emb:FLOAT[1024]; emb_done/emb_part_* отсутствуют | [замер] bash sql.sh \"SELECT count(*) FROM res_emb_0 …\" → ERROR: permission denied for table res_emb_0 | [замер] grep -rn 'res_emb' --include=*.py --include=*.sh --include=*.sql --include=*.md . → единственное попадание docs/HOW_NOT_TO.md:379",
+      "doc_locs": [
+        "docs/HOW_NOT_TO.md:377",
+        "docs/HOW_NOT_TO.md:379",
+        "docs/HOW_IT_WORKS.md:205",
+        "MAP.md:93"
+      ],
+      "verdict": "a",
+      "verdict_why": "Замер снят одним SELECT под read-only ролью, состояние не менялось. Уточняет известную находку конкретикой (12 шардов, схема, нулевые ссылки в коде) и добавляет то, чего в ней нет: вывод HOW_NOT_TO «не подчищать сразу» опирается на набор, которого наполовину уже нет — документ уверенно описывает несуществующую страховку.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Проверка поимённо названных критиком serenedb.service, 1c-serene-sync.timer и openclaw.plugin.json: дефектов нет",
+      "detail": "serenedb.service — diff с /etc/systemd/system/serenedb.service пуст, на стенде enabled+active, в таблице RUNBOOK §0 стр. 30 присутствует со своим портом 127.0.0.1:7890 и юзером; расхождений нет. 1c-serene-sync.timer — OnCalendar 03:40 совпадает с RUNBOOK §0 стр. 35 («1c-serene-sync.timer 03:40 … ⚠ остановлен: синк стал частью конвейера»), на стенде disabled/inactive, как и написано; расхождения нет (то, что 1c-serene-sync.service в failed с 28.07, уже покрыто отдельной находкой). openclaw.plugin.json — все 14 объявленных в configSchema ключей реально читаются кодом (каждый встречается в index.js и/или verify-core.js), лишних и несуществующих нет, additionalProperties:false не режет ничего используемого. Прогон node test-verify.mjs даёт «41 tests passed» против «36» в пяти местах доков — это уже зафиксировано существующей находкой, чьи doc_locs покрывают четыре из пяти; пятое (docs/OPENCLAW_BOT.md:164) добавляю сюда, чтобы правка не оставила хвост.",
+      "evidence": "[замер] diff ubuntu/serenedb/serenedb.service /etc/systemd/system/serenedb.service → пусто | [замер] systemctl is-enabled/is-active serenedb.service → enabled / active; 1c-serene-sync.timer → disabled / inactive | [код] ubuntu/serenedb/systemd/1c-serene-sync.timer:5 OnCalendar=*-*-* 03:40:00 против docs/RUNBOOK_DEPLOY.md:35 | [замер] node ubuntu/openclaw/verify-plugin/test-verify.mjs → «41 tests passed» | [замер] сверка ключей configSchema с grep по index.js/verify-core.js → все 14 употребляются (таблица в cmdlog-coverage.txt)",
+      "doc_locs": [
+        "docs/RUNBOOK_DEPLOY.md:30",
+        "docs/RUNBOOK_DEPLOY.md:35",
+        "docs/OPENCLAW_BOT.md:164"
+      ],
+      "verdict": "b",
+      "verdict_why": "Три из четырёх поимённо названных критиком файлов проверены и чисты — записываю это явным отрицательным результатом, чтобы к ним не возвращались. Единственная реальная правка отсюда — дописать docs/OPENCLAW_BOT.md:164 в doc_locs уже существующей находки про 36/41, самостоятельной находкой это не является.",
+      "severity": "low",
+      "known_fid": "F047"
+    }
+  ],
+  "summary": "Перепись: 309 файлов в git, 107 .md, 211 проектных без учёта самих выгрузок аудита. По полному пути в содержательном корпусе work/doc-audit/raw не упомянуты ровно ДВА проектных файла — ubuntu/serenedb/serened.conf и ubuntu/serenedb/systemd/1c-mcp-reports.env.example — и оба оказались с дефектом, причём одного класса: версионируемый артефакт разошёлся с боевым и, будучи развёрнут по инструкции, ломает работу. serened.conf не содержит пула исполнителей, который RUNBOOK §10.1 сам называет обязательным (README ставит его командой install поверх настроенного /etc с 160/16); env.example не содержит MCP_TOKEN, без которого сервис fail-closed не стартует, а также ALIBABA_API_KEYS и ODG_GATEWAY_TOKEN. Третий дефект того же класса нашёлся при сверке юнитов: в git две копии 1c-serene-index.service, и RUNBOOK §10.6 копирует из устаревшего каталога ту, что запускает serene_search_build.py — сборщик, снёсший корпус и индекс 28.07; хорошая копия с build.sh лежит в ubuntu/systemd/ и именно она стоит на стенде. По более строгой мере покрытия — цитирование в doc_locs хотя бы одной из 252 находок — не тронуты 32 .md; двенадцать из них суть семейство CHECK1_*/CHECK2_* (~370 КБ), целиком снятое на FLOAT[1536] и 97 965 строк, тогда как боевой DDL и живой resolver_index дают FLOAT[1024], а MAP.md:187 подаёт их без пометки об устаревании. Из названного критиком поимённо serenedb.service, 1c-serene-sync.timer и openclaw.plugin.json проверены и чисты (юнит побайтно совпадает с установленным, таймер 03:40 совпадает с §0 и со стендом, все 14 ключей манифеста употребляются кодом); node test-verify.mjs даёт 41 против «36» в доках — уже известная находка, добавлено недостающее место OPENCLAW_BOT.md:164. Одним SELECT подтверждены 12 шардов res_emb_0..11 схемы FLOAT[1024], на которые нет ни одной ссылки в коде, при этом emb_done/emb_part_* из того же абзаца HOW_NOT_TO уже исчезли — документ описывает наполовину несуществующую страховку. Состояние сервера и файлы проекта не менялись; секреты не печатались, сверялись только имена ключей."
+}

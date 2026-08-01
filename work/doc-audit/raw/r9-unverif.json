@@ -1,0 +1,256 @@
+{
+  "task": "unverif",
+  "findings": [
+    {
+      "title": "Премисса «кредиты DeepSeek исчерпаны, живой прогон невозможен» неверна: отказ по балансу длился 8 минут 30.07, после него 419 успешных вызовов подряд",
+      "detail": "Матчеры трижды сослались на «кредиты кончились 31.07» как на причину непроверяемости (match-prodplan-h1 idx PRODUCTION_PLAN:146, match-prodplan-h2 BOXED_BLOCKERS:146, косвенно DEFECT_FOCUS_CHOICE). В журнале провайдера отказ по балансу — единственное окно 2026-07-30 22:26:00 .. 22:34:24 (15 ответов 402, 45 строк «Insufficient Balance»). Дальше в том же журнале 419 вызовов, ВСЕ status=200, последний 2026-07-31 05:12:14, то есть баланс пополнили до конца ночи 31.07, и приёмочный прогон acc-v13-* 31.07 04:25-05:12 прошёл на живой модели. Ключ не менялся (файлы .env и gateway.systemd.env с 23.07), значит ожил именно баланс. Живой вызов модели я не делал — вывод целиком из журналов. Следствие: непроверяемость U00/U01/U02 (DEFECT_FOCUS_CHOICE:307,394,162), U23, U25 обоснована неверно — прогон технически возможен, его запрещают рамки аудита (трата средств владельца), а не биллинг.",
+      "evidence": "[замер] python3 по /home/undebot/.openclaw/logs/gateway.log → Counter({'200':1492,'INSUFF':45,'402':15}); все не-200 в окне 2026-07-30T22:26:00..22:34:24; после последнего 402 — 419 вызовов, из них 200: 419, последний 2026-07-31T05:12:14.600 | [замер] journalctl _UID=1001 → «rawError=402 Insufficient Balance» только 30.07 22:26-22:34, затем 31.07 04:26:32 status=200",
+      "doc_locs": ["docs/BOXED_BLOCKERS.md:146", "docs/BOXED_BLOCKERS.md:163", "docs/PRODUCTION_PLAN.md:146", "docs/DEFECT_FOCUS_CHOICE.md:307"],
+      "verdict": "a",
+      "verdict_why": "док (BOXED_BLOCKERS) и вслед за ним рассуждения матчеров описывают состояние 30.07 22:34 как текущее; оно снято тем же вечером — блокер надо снять или датировать",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Клон исходников движка /srv/serenedb-src на сервере ЕСТЬ — два матчера объявили его отсутствующим и на этом закрыли проверку",
+      "detail": "match-hist-2-h2 (SERENE_CAPS_3.md:321) пишет «тесты в serenedb-src, которого на этом сервере нет (/srv/data/cursor/... — другая машина)», match-hist-2-h2 (AUDIT_CODE_3.md:330) — «serenedb-src на этом сервере отсутствует». При этом match-vector-h2 (SERENEDB_IVF_ISSUE_RU.md:200) в том же наборе цитирует /srv/serenedb-src/server/catalog/index.cpp:441-445. Каталог существует: /srv/serenedb-src, 26.07 06:13, с server/, tests/, examples/. Придуманная причина «первоисточника нет» отменила две проверки, которые делались одной командой grep.",
+      "evidence": "[замер] ls -ld /srv/serenedb-src → drwxr-xr-x 1 ubuntu users 612 Jul 26 06:13; ls -l server/catalog/index.cpp → 33816 байт, 26.07 | [код] match-hist-2-h2.json (SERENE_CAPS_3:321, AUDIT_CODE_3:330) против match-vector-h2.json (SERENEDB_IVF_ISSUE_RU:200)",
+      "doc_locs": ["work/doc-audit/raw/match-hist-2-h2.json:0", "docs/SERENE_CAPS_3.md:321", "docs/AUDIT_CODE_3.md:330"],
+      "verdict": "v",
+      "verdict_why": "дефект не дока, а метода сверки: отрицательный вывод («источника нет») принят без проверки — ровно то, что CLAUDE.md запрещает делать с отрицательными выводами",
+      "severity": "high",
+      "known_fid": "F166"
+    },
+    {
+      "title": "Развёрнутый бинарь движка СТАРШЕ клона исходников: выводы о поведении сборки 26.07.3 по /srv/serenedb-src делать нельзя без сверки строк бинаря",
+      "detail": "/usr/local/bin/serened собран 23.07 13:02, снимок исходников — 26.07 06:13. В исходниках есть проверка «ivf rabitq quantization does not support metric 'cosine'» (index.cpp:358-365); в бинаре строки «does not support metric» нет вовсе. Значит между бинарём и снимком есть правки как минимум в ivf-части. Это меняет цену всех «проверок по исходникам»: они говорят про upstream, а стенд отвечает по бинарю. Практическая проверка — strings по /usr/local/bin/serened (делается за секунды и без DDL).",
+      "evidence": "[замер] ls -l /usr/local/bin/serened → Jul 23 13:02; ls -ld /srv/serenedb-src → Jul 26 06:13 | [замер] strings /usr/local/bin/serened | grep 'does not support metric' → 0; [код] /srv/serenedb-src/server/catalog/index.cpp:358-365 — такая проверка есть | [замер] psql SELECT version() → PostgreSQL 18.3 (SereneDB 26.07.3)",
+      "doc_locs": ["MAP.md:0", "docs/SERENE_CAPS_3.md:321", "docs/AUDIT_CODE_3.md:330"],
+      "verdict": "v",
+      "verdict_why": "неясно, какой источник считается истиной для стенда; надо решить владельцу: либо клон приводится к сборке, либо в доках всюду оговаривается, что он — про upstream",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "«Plain (secondary) индексы на VIEW запрещены движком» — подтверждено первоисточником и живым бинарём, DDL не требуется",
+      "detail": "Утверждение SERENE_CAPS_3.md:321 матчер оставил без вердикта («первоисточника нет»). Проверяется двумя чтениями: в исходниках явный THROW и штатный тест, в развёрнутом бинаре — та же строка ошибки. Расхождений нет, утверждение подтверждено.",
+      "evidence": "[код] /srv/serenedb-src/server/connector/duckdb_catalog.cpp:1066-1071 — THROW «plain indexes on views are not supported; use an inverted index instead»; tests/sqllogic/sdb/pg/index/secondary_index_view.test:5,25,31 — statement error с тем же текстом | [замер] strings /usr/local/bin/serened | grep 'plain indexes on views' → строка присутствует",
+      "doc_locs": ["docs/SERENE_CAPS_3.md:321"],
+      "verdict": "a",
+      "verdict_why": "расхождения нет — правки дока не требуется; правки требует протокол сверки, объявивший это непроверяемым",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "«ivf: quant='sq8' с metric='cosine' не работает» — верно для развёрнутой сборки, но в upstream 26.07 cosine+sq8 разрешён и покрыт тестом; в доке нет версии",
+      "detail": "AUDIT_CODE_3.md:330 цитирует ошибку «ivf quantization supports only metric 'l2' or 'ip'». В снимке исходников 26.07 текст другой — «...only metric 'l2', 'ip', or 'cosine'», и есть тест «7b. Cosine + SQ8» со statement ok на CREATE INDEX ... ivf (metric='cosine', quant='sq8'). В бинаре стенда проверки rabitq/cosine нет, то есть стенд ещё на старом поведении. Проверка сделана без DDL. Утверждение дока привязано к сборке, но версии в нём не стоит — при обновлении движка док начнёт врать молча.",
+      "evidence": "[код] /srv/serenedb-src/server/catalog/index.cpp:348-357 «ivf quantization supports only metric 'l2', 'ip', or 'cosine'»; tests/sqllogic/sdb/pg/index/inverted_index_ivf_sq8.test:398-411 — «7b. Cosine + SQ8» statement ok | [замер] strings /usr/local/bin/serened → есть «': ivf quantization supports only metric '», нет «does not support metric» (бинарь 23.07 старше снимка)",
+      "doc_locs": ["docs/AUDIT_CODE_3.md:330"],
+      "verdict": "a",
+      "verdict_why": "запись верна только для сборки на стенде; в доке нужно указать версию и отметить, что в 26.07 upstream ограничение снято",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "«hnsw удалён из продукта, остался только в устаревших демках» — проверяемо чтением, и уточняется: среди опклассов CREATE INDEX его нет, но настройки hnsw_* в бинаре остались",
+      "detail": "techContext.md:46 матчер объявил непроверяемым («нужен CREATE INDEX ... USING hnsw»). Проверка не требует DDL: в исходниках список известных опклассов kKnownOpclassTypes = {included, ivf}, слово hnsw встречается только в examples/demo4, demo5, scripts/perf и libs/iresearch/README. Но в бинаре стенда есть 9 строк hnsw_* (hnsw_ef_search, hnsw_enable_experimental_persistence, hnsw_compact_index, hnsw_index_scan, pragma_hnsw_index_info) — это слой duckdb/vss, а не опкласс SereneDB. Формулировка «удалён из продукта» верна для поверхности CREATE INDEX и неточна для содержимого бинаря (это уже зафиксировано F066).",
+      "evidence": "[код] /srv/serenedb-src/server/catalog/index.cpp:110-113 kKnownOpclassTypes{included, ivf}; grep -rli hnsw /srv/serenedb-src → только examples/*, scripts/perf/*, libs/iresearch/README.md | [замер] strings /usr/local/bin/serened | grep -i hnsw → 9 строк вида hnsw_ef_search, pragma_hnsw_index_info",
+      "doc_locs": ["memory_bank/techContext.md:46"],
+      "verdict": "a",
+      "verdict_why": "уточнить формулировку: нет опкласса hnsw в CREATE INDEX, при этом настройки слоя duckdb остались — иначе следующий читатель снова заведёт расхождение с бинарём",
+      "severity": "low",
+      "known_fid": "F066"
+    },
+    {
+      "title": "Числа «961 из 4585» и «470 из 2795» типов с Edm.Stream/Binary подтверждены живыми GET за 3.6 и 1.8 секунды — «тяжёлый GET» оказался мифом",
+      "detail": "techContext.md:283 матчер записал в непроверяемое: «нужен полный $metadata обеих баз (тяжёлый GET к живой 1С)». Оба $metadata снимаются через штатные шлюзы: база 1 — 16.6 МБ за 3.6 с, УТ — 9.0 МБ за 1.8 с. Числители совпали с доком до единицы: 961 тип из 4585 и 470 из 2795. Заодно выяснилось, что Edm.Stream и Edm.Binary встречаются в одних и тех же типах (961 и 961, объединение 961).",
+      "evidence": "[замер] GET http://127.0.0.1:6011/$metadata → 16652877 байт за 3.6 с; EntitySet 4585, типов со Stream/Binary 961 | [замер] GET http://127.0.0.1:6021/$metadata → 8969969 байт за 1.8 с; EntitySet 2795, типов со Stream/Binary 470",
+      "doc_locs": ["memory_bank/techContext.md:283"],
+      "verdict": "a",
+      "verdict_why": "расхождения с доком нет; правку требует не док, а вывод сверки — утверждение было объявлено непроверяемым без единой попытки",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "«OData включён, состав — все справочники+документы» занижает реальную публикацию: половина наборов — регистры, а именно на них строятся ответы про обороты",
+      "detail": "techContext.md:114. По $metadata базы 1: Document 1549, Catalog 1419, InformationRegister 1402, AccumulationRegister 212, AccountingRegister 2, ChartOfAccounts 1 — итого 4585. Справочники и документы — 2968 из 4585, то есть в OData выгружено заметно больше, чем написано. Это не косметика: ответы про «обороты по счёту» опираются на accountingregister_хозрасчетный, а в описании состава регистров нет вовсе — читатель дока делает вывод, что регистры недоступны. Часть того же утверждения про пользователей 1С (admin + ai_reader «Только просмотр») с Ubuntu по-прежнему не проверяется — нужен конфигуратор; проверено только то, что публикация с OData включена (default.vrd).",
+      "evidence": "[замер] разбор $metadata базы 1 по префиксам EntitySet: Document 1549, Catalog 1419, InformationRegister 1402, AccumulationRegister 212, AccountingRegister 2, ChartOfAccounts 1 | [замер][WIN] Get-Content C:\\inetpub\\1c\\default.vrd → <standardOdata enable=\"true\" ...>, ib='C:\\1c\\bases\\buh_test'",
+      "doc_locs": ["memory_bank/techContext.md:114"],
+      "verdict": "a",
+      "verdict_why": "док отстал/неточен: состав публикации шире написанного, а именно из недописанной части берутся бухгалтерские ответы",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Все пять golden-эталонов SERVER_HANDOFF воспроизводятся обычными SELECT — прогон через модель для их сверки не нужен",
+      "detail": "SERVER_HANDOFF.md:357 матчер объявил проверяемым только «контрагентов 13», остальное — «агрегаты, воспроизводимые только полным пайплайном ответа». На деле все пять чисел берутся из витрины одиночными запросами и совпали: контрагентов 13; ИНН 7701012342 принадлежит ООО «Ромашка»; сумма всех 36 реализаций 12 326 000; декабрь 2025 — 6 документов на 2 456 400; максимум одной реализации 1 629 700. Расхождение рядом, в том же блоке: инвариант «SELECT count(*) FROM search_corpus — 97 965» устарел, сейчас 103 808 (это уже F023).",
+      "evidence": "[замер] psql: SELECT count(*) FROM catalog_контрагенты → 13; SELECT \"Description\",\"ИНН\" → ООО \"Ромашка\"|7701012342; SELECT date_trunc('month',\"Date\"),count(*),sum(\"СуммаДокумента\") FROM document_реализациятоваровуслуг → 2025-12|6|2456400; SELECT count(*),sum(),max() → 36|12326000|1629700; SELECT count(*) FROM search_corpus → 103808",
+      "doc_locs": ["docs/SERVER_HANDOFF.md:357", "docs/SERVER_HANDOFF.md:361"],
+      "verdict": "a",
+      "verdict_why": "эталоны верны — правки требует соседний инвариант по размеру корпуса; и сам вывод «непроверяемо» был неверен",
+      "severity": "low",
+      "known_fid": "F023"
+    },
+    {
+      "title": "Замер «обороты по счёту 62 → 23 742 200» не воспроизводится ни при одном разумном определении оборота, тогда как парный «счёт 41 → 20 500 500» сходится точно",
+      "detail": "PRODUCTION_PLAN.md:146 подан как [замер] «полная связка проверена руками». По регистру бухучёта (280 проводок): 41.01 Дт 11 212 700 + Кт 9 287 800 = 20 500 500 — совпадает с доком до рубля. По тому же правилу 62.01 даёт 23 282 000, все 62.* — 24 131 400; ни то, ни другое не равно 23 742 200. Фильтр Active ничего не меняет. В корпусе такого числа тоже нет. Разница 23 742 200 = все 62.* минус дебет 62.02 (389 200) — то есть цифра получена по несимметричному правилу, которого в доке нет. Поскольку счёт 41 сходится, дело не в устаревших данных: расходится именно 62.",
+      "evidence": "[замер] psql по accountingregister_хозрасчетный + chartofaccounts_хозрасчетный: 41.01 → Дт 11212700 (31), Кт 9287800 (76), сумма 20500500; 62.01 → Дт 12326000 (82), Кт 10956000 (60), сумма 23282000; 62.02 → 389200/460200; с фильтром Active те же числа | [замер] SELECT count(*) FROM search_corpus WHERE doc LIKE '%23 742 200%' OR doc LIKE '%23742200%' → 0",
+      "doc_locs": ["docs/PRODUCTION_PLAN.md:146"],
+      "verdict": "v",
+      "verdict_why": "неясно, что считалось «оборотом по счёту 62»: определение в доке отсутствует, а по определению, которое сходится для счёта 41, число не получается — вопрос владельцу",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Ключ DeepSeek в auth-store НЕ лежит: обе таблицы хранилища пусты, ключ живёт только в env — а «грабля» из дока утверждает обратное",
+      "detail": "OPENCLAW_BOT.md:149-151 предписывает держать ключ в auth-store, «иначе No API key found после явного plugins.allow». Проверено чтением состояния бота (матчер счёл это заблокированным): в openclaw.sqlite таблицы auth_profile_stores и auth_profile_state содержат 0 строк; в openclaw.json есть только запись профиля deepseek:default с mode=api_key, без значения; сам ключ найден лишь в /home/undebot/.openclaw/.env, gateway.systemd.env и /etc/1c-mcp-reports.env. При этом бот отработал 419 успешных вызовов к провайдеру — то есть в текущей конфигурации «No API key found» не наступает, и записанная грабля не описывает работающую систему. Значения ключей не печатались.",
+      "evidence": "[замер] sqlite3 (mode=ro) openclaw.sqlite: auth_profile_stores 0 строк, auth_profile_state 0 строк (контроль: audit_events 2362) | [замер] grep -rl 'sk-4fe' /home/undebot/.openclaw /etc → .env, gateway.systemd.env, /etc/1c-mcp-reports.env | [код] openclaw.json → auth.profiles.\"deepseek:default\" = {provider, mode:api_key} без ключа | [замер] gateway.log → 419 вызовов подряд со status=200",
+      "doc_locs": ["docs/OPENCLAW_BOT.md:149", "docs/OPENCLAW_BOT.md:50"],
+      "verdict": "a",
+      "verdict_why": "док описывает не то состояние, в котором система работает: либо грабля устарела, либо предписание не исполнено — в обоих случаях запись правится",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Версии плагинов бота читаются с диска: braine-verify 1.0.0, deepseek-provider 2026.7.1, движок openclaw 2026.7.1-2 — «политика сессии» проверке не мешала",
+      "detail": "AGENT_FINDINGS_STATUS.md:45 («версия npm-плагина закреплена») матчер закрыл ссылкой на запрет читать /home/undebot/.openclaw. Каталог читается: установленный braine-verify — версия 1.0.0 из локального npm-проекта, провайдер @openclaw/deepseek-provider — 2026.7.1, движок из /usr/lib/node_modules/openclaw — 2026.7.1-2. Утверждение подтверждается.",
+      "evidence": "[замер] python3 по /home/undebot/.openclaw/npm/projects/*/node_modules/**/package.json → openclaw-braine-verify 1.0.0; @openclaw/deepseek-provider 2026.7.1 | [замер] /usr/lib/node_modules/openclaw/package.json → openclaw 2026.7.1-2",
+      "doc_locs": ["docs/AGENT_FINDINGS_STATUS.md:45"],
+      "verdict": "a",
+      "verdict_why": "расхождения нет; поправки требует вывод сверки — причина «нельзя читать» была выдумана",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Железо Windows-стенда сходится, кроме свободного места: в доке 32 ГБ, сейчас 25.9 ГБ — число не датировано в самой строке",
+      "detail": "ANONYMIZATION.md:146 матчер объявил непроверяемым («ssh заблокирован»). ssh на чтение работает: CPU Intel Xeon E3-1275 v6, два сокета по одному логическому ядру (итого 2 логических ЦП — как в доке), 8169 МБ RAM (≈8 ГБ — как в доке), ОС Windows 11 Pro 10.0.26100. Свободно на C: 25.9 ГБ при занятых 34 ГБ — против 32 ГБ в доке; замер в доке помечен 25.07, но живёт в строке без оговорки, что место расходуется.",
+      "evidence": "[замер][WIN] Get-CimInstance Win32_Processor → Intel(R) Xeon(R) CPU E3-1275 v6 @ 3.80GHz, два сокета по 1 логическому; RAM_MB=8169; OS=Windows 11 Pro 10.0.26100 | [замер][WIN] Get-PSDrive → C FreeGB 25,9 UsedGB 34",
+      "doc_locs": ["docs/ANONYMIZATION.md:146"],
+      "verdict": "a",
+      "verdict_why": "постоянные характеристики верны, изменчивая (свободное место) устарела — её надо либо датировать в строке, либо убрать",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "VC++ x64 runtime на Windows установлен (v14.44.35211.00) и WSL не установлен — обе записи INSTALL_LOG подтверждены по ssh",
+      "detail": "INSTALL_LOG.md:30 и :122 матчер закрыл как «ssh заблокирован классификатором». Реально ssh на чтение разрешён и работает: ключ реестра VC Runtimes\\x64 показывает Installed=1, Version v14.44.35211.00; wsl --status отвечает «Подсистема Windows для Linux не установлена», а состояние компонента Microsoft-Windows-Subsystem-Linux — Disabled. Оба утверждения подтвердились.",
+      "evidence": "[замер][WIN] reg query \"HKLM\\SOFTWARE\\Microsoft\\VisualStudio\\14.0\\VC\\Runtimes\\x64\" → Version REG_SZ v14.44.35211.00; Installed REG_DWORD 0x1 | [замер][WIN] wsl --status → «Подсистема Windows для Linux не установлена»; (Get-WindowsOptionalFeature -Online -FeatureName Microsoft-Windows-Subsystem-Linux).State → Disabled",
+      "doc_locs": ["docs/INSTALL_LOG.md:30", "docs/INSTALL_LOG.md:122"],
+      "verdict": "a",
+      "verdict_why": "расхождений нет; поправка нужна методу сверки, а не доку",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "«OData не торчит в интернет» изнутри недоказуемо (это правда), но встречные признаки сильные: IIS слушает 0.0.0.0:80, брандмауэр Windows выключен для Private и Public",
+      "detail": "ARCHITECTURE.md:137. Причина матчера верна лишь наполовину: зонд снаружи и конфиг роутера недоступны — но состояние Windows-конца читается по ssh, и оно не подтверждает «доступен только внутри доверенной сети». IIS слушает 0.0.0.0:80 (публикации /1c и /ut), PostgreSQL — 0.0.0.0:5432; профили брандмауэра: Domain включён, Private и Public ВЫКЛЮЧЕНЫ. Порта 6003 на Windows нет — 192.168.56.1:6003 это проброс на стороне роутера, то есть безопасность держится ровно на настройке, которой в проекте никто не видел. На машине к тому же адреса из двух посторонних сетей (10.8.0.58 — VPN, 192.168.122.141).",
+      "evidence": "[замер][WIN] netstat -an -p tcp | findstr LISTENING → 0.0.0.0:22, 0.0.0.0:80, 0.0.0.0:445, 0.0.0.0:5432, ...; findstr \":6003\" → пусто | [замер][WIN] Get-NetFirewallProfile → Domain True, Private False, Public False | [код] /etc/1c-odata-gateway.env ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata",
+      "doc_locs": ["docs/ARCHITECTURE.md:137"],
+      "verdict": "v",
+      "verdict_why": "утверждение о недоступности снаружи — обещание, а не замер; проверить может только владелец (конфиг роутера/зонд снаружи), и заодно решить про выключенные профили брандмауэра",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Причина «тесты в /opt/1c-mcp-reports зовут модель» выдумана: модель не зовёт ни один из четырёх, запись пробует только test_ro_role",
+      "detail": "RUNBOOK_DEPLOY.md:432. Матчер объяснил непроверяемость тем, что «запуск зовёт модель/пытается писать в базу». Чтение тестов показывает другое: test_validate проверяет ALLOW-LIST валидатора через AST (json_serialize_sql) — только чтение; test_ro_role по замыслу делает попытки ЗАПИСИ под ролью serene_ro, чтобы убедиться, что они отвергаются. Истинная причина непроверяемости в этой сессии — именно эти попытки записи плюс нужда в паролях ролей; модель ни при чём. Три остальных теста в принципе запускаемы аудитом, если владелец даст пароль роли reports.",
+      "evidence": "[код] /opt/1c-mcp-reports/test_ro_role.py:1-10 — «роль serene_ro должна ФИЗИЧЕСКИ отвергать любую запись», DSN user=serene_ro, требует PGPASSWORD | [код] /opt/1c-mcp-reports/test_validate.py:1-9 — проверка через AST json_serialize_sql, вызовов модели нет | [замер] ls /opt/1c-mcp-reports/test_{validate,integrity,caveat,ro_role}.py → все на месте",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:432"],
+      "verdict": "v",
+      "verdict_why": "сам док не расходится; вопрос владельцу — давать ли аудиту пароль роли reports, чтобы отметка PASS перестала быть словом на веру",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Критерий п.20 «единицы запусков psql за такт» непроверяем не из-за остановленного конвейера, а потому что у «единиц» нет определения",
+      "detail": "TARGET.md:151. Матчер сослался на то, что конвейер стоит с 29.07 и живого такта нет. Но даже при живом такте критерий не даёт порога: 12 вызовов psql в build.sh — это «единицы» или нет? Плюс пачечные вызовы embed_missing.sh, число которых зависит от недосчёта векторов, то есть от данных. Критерий без числа не проверяется ни живым тактом, ни статикой. TARGET.md менять нельзя — вопрос владельцу о толковании.",
+      "evidence": "[код] TARGET.md:151; [замер] grep -vE '^\\s*#' ubuntu/serenedb/build.sh | grep -c psql → 12; [код] ubuntu/serenedb/embed_missing.sh:164 — цикл пачек | [замер] systemctl: 1c-serene-pipeline.timer inactive",
+      "doc_locs": ["TARGET.md:151"],
+      "verdict": "v",
+      "verdict_why": "толкование пункта контракта — только за владельцем; менять TARGET.md запрещено",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Метрика «4 995 из 53 057 строк с сырым идентификатором» невоспроизводима из-за отсутствия определения замера, а не из-за запретов",
+      "detail": "PLAN_ROW_IS_OBJECT.md:446 задаёт метрику как обязательство «не вырасти», но нигде не записывает запрос, которым она получена. Матчер сам это и показал: его оценки дали 53 047 дочерних строк и 9 212 строк с любым GUID — ни одно число не сходится, потому что определение разное (в corpus_build.sql:481 нерешённые GUID выбрасываются в NULL). Обязательство, которое нельзя пересчитать той же командой, не является контролем: следующий проверяющий получит своё число и не сможет сравнить.",
+      "evidence": "[код] docs/PLAN_ROW_IS_OBJECT.md:446 — число без запроса; [код] /opt/1c-mcp-reports/corpus_build.sql:481 WHEN is_guid THEN NULL | [замер] оценки матчера: дочерних строк 53 047, строк с GUID 9 212 — оба мимо 53 057/4 995",
+      "doc_locs": ["docs/PLAN_ROW_IS_OBJECT.md:446"],
+      "verdict": "a",
+      "verdict_why": "док обязан нести сам запрос замера рядом с числом, иначе метрика не контролируется",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Группа ivf (6 утверждений): непроверяемость подтверждена, но причина в инварианте владельца, а не в «DDL запрещён аудитом»; по коду вывод тоже делать нельзя — бинарь старше исходников",
+      "detail": "PLAN_NATIVE_SEARCH.md:67,68; SERENEDB_IVF_ISSUE_RU.md:58,121,130; owner-memory/project-serenedb-ivf-blocked.md:29. Все шесть требуют запуска сборки ivf. Настоящая причина: инвариант CLAUDE.md — опыты с ivf только на отдельном --server_directory, незавершённая сборка уходит в WAL и роняет инстанс в петлю OOM; отдельного каталога нет. Обход через исходники не годится: развёрнутый бинарь старше клона (см. отдельную находку), а поведение по памяти и отмене в коде не описано декларативно. Проверяемая часть скрипта воспроизведения подтверждена ранее (вектор длины 1536, версия 26.07.3), артефакты прогонов на месте (/root/ivf_scale.sh, /root/lab_guard.out), независимые записи в owner-memory совпадают по числам.",
+      "evidence": "[код] CLAUDE.md инвариант «Опыты с ivf — только на отдельном --server_directory» | [замер] psql SELECT version() → SereneDB 26.07.3 (сборка не менялась с даты замеров 26-27.07) | [замер] ls -l /usr/local/bin/serened → 23.07, /srv/serenedb-src → 26.07 (по коду о сборке судить нельзя)",
+      "doc_locs": ["docs/PLAN_NATIVE_SEARCH.md:67", "docs/PLAN_NATIVE_SEARCH.md:68", "docs/SERENEDB_IVF_ISSUE_RU.md:58", "docs/SERENEDB_IVF_ISSUE_RU.md:121", "docs/SERENEDB_IVF_ISSUE_RU.md:130", "memory_bank/owner-memory/project-serenedb-ivf-blocked.md:29"],
+      "verdict": "v",
+      "verdict_why": "проверить может только владелец, выделив отдельный server_directory; до тех пор записи остаются датированными замерами без подтверждения",
+      "severity": "low",
+      "known_fid": "F086"
+    },
+    {
+      "title": "Группа ATTACH (3 утверждения): непроверяемо без DDL — подтверждено; уточнение: механизм в сборке есть, присоединённых баз нет, в продукте ATTACH не используется",
+      "detail": "SERENEDB.md:118,263 и PLAN_NATIVE_SEARCH.md:151. Проверка требует ATTACH и рестарта движка — оба запрещены. Что удалось установить чтением: строка postgres_attach в бинаре присутствует (механизм собран), баз присоединено ноль (pg_database → postgres, ut_test), в коде продукта ATTACH не встречается, юнита с повторным ATTACH нет и он не нужен. То есть утверждения касаются возможности, которой продукт не пользуется, — их цена низкая, а датировка (25.07) в доке обязана остаться.",
+      "evidence": "[замер] strings /usr/local/bin/serened | grep postgres_attach → 1 совпадение | [замер] psql SELECT datname FROM pg_database → postgres, ut_test | [код] grep -rn ATTACH ubuntu/serenedb → только blocklist-регэксп в serene_report.py:76",
+      "doc_locs": ["docs/SERENEDB.md:118", "docs/SERENEDB.md:263", "docs/PLAN_NATIVE_SEARCH.md:151"],
+      "verdict": "a",
+      "verdict_why": "записи верны как исторические замеры, но должны нести отметку «механизм в продукте не используется», иначе читатель строит на них планы (см. F012)",
+      "severity": "low",
+      "known_fid": "F012"
+    },
+    {
+      "title": "Группа «USING secondary с неизвестным опклассом» (3 утверждения): без DDL не воспроизвести — но первоисточник доступен и согласуется, причина «первоисточника нет» неверна",
+      "detail": "CHECKLIST_SEARCH_FIX.md:365, PRODUCTION_PLAN.md:303, SERENEDB_IVF_ISSUE_RU.md:200. Сам опыт требует CREATE INDEX — это правда. Но матчеры двух шардов писали, что подтвердить нечем: подтверждение есть в исходниках (для inverted явный THROW «Unknown built-in opclass», в secondary-пути разбора opclass нет вовсе, известные опклассы — included и ivf) и в бинаре стенда (строка «Unknown built-in opclass '» присутствует). Оговорка про «пустые скобки» из CHECKLIST_SEARCH_FIX остаётся в силе: duckdb_indexes().sql показывает пустые скобки при любом составе, поэтому признак «индекс без колонок» сам по себе ничего не доказывает.",
+      "evidence": "[код] /srv/serenedb-src/server/catalog/index.cpp:441-444 THROW «Unknown built-in opclass ... (known: included, ivf)»; grep opclass по server/catalog/secondary_index.cpp → 0 | [замер] strings /usr/local/bin/serened | grep 'Unknown built-in opclass' → присутствует | [код] ubuntu/serenedb/serene_search_build.py:55-56 — пустые скобки при любом составе",
+      "doc_locs": ["docs/CHECKLIST_SEARCH_FIX.md:365", "docs/PRODUCTION_PLAN.md:303", "docs/SERENEDB_IVF_ISSUE_RU.md:200"],
+      "verdict": "a",
+      "verdict_why": "формулировку «молча создаёт индекс без колонок» надо смягчить до проверяемой части (ошибки нет, состав по duckdb_indexes() не наблюдается), иначе она опирается на признак, который сам по себе ничего не значит",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Группа «требуется запись» (3 утверждения) непроверяема по-настоящему — и рядом обнаружено, что для второй базы первого слоя защиты нет вовсе",
+      "detail": "UNIVERSAL_INGEST.md:197 (поле версии меняется при каждой записи), RUNBOOK_DEPLOY.md:260 и ARCHITECTURE.md:121 (запись под ai_reader даёт 500). Все три требуют записи в 1С — запрещено инвариантом, причина матчеров верна. Проверяемое рядом: шлюз базы 1 ходит под ai_reader, а шлюз второй базы (УТ, тот самый, по которому отвечает бот) — под «Администратор (ФедоровБМ)», то есть заявленных «двух слоёв» у второй базы нет, режет только шлюз (это F127). Про поле версии проверяемо и то, что оно есть далеко не везде: DataVersion присутствует у 1129 типов из 4585, Ref_Key — у 2969.",
+      "evidence": "[код] /etc/1c-odata-gateway.env ODG_USER=ai_reader; /etc/1c-odata-gateway-ut.env ODG_USER=Администратор (ФедоровБМ) | [замер] разбор $metadata базы 1: типов с DataVersion 1129 из 4585, с Ref_Key 2969 | [код] /opt/1c-odata-gateway/odata_gateway.py:102-110 — POST/PUT/PATCH/DELETE → 405",
+      "doc_locs": ["docs/UNIVERSAL_INGEST.md:197", "docs/RUNBOOK_DEPLOY.md:260", "docs/ARCHITECTURE.md:121"],
+      "verdict": "b",
+      "verdict_why": "инвариант «два слоя: пользователь без прав записи + шлюз» для второй базы не выполнен — это дефект стенда, а не дока; сами утверждения о поведении записи остаются непроверенными",
+      "severity": "high",
+      "known_fid": "F127"
+    },
+    {
+      "title": "Истинно непроверяемые остатки: воспроизводимость корпуса и локаль словаря — обе требуют пересборки, обе подтверждены как невозможные",
+      "detail": "CHANGELOG.md:909 («две полные пересборки дают 0 разошедшихся ключей») и UNIVERSAL_INGEST.md:202 («ru_RU, en_US, C дают одинаковые 37 совпадений»). Первое требует двух полных пересборок корпуса, второе — пересоздания словаря (DDL). Артефактов проверки не осталось: таблиц с repro в схеме нет. Причины матчеров тут верны; ничего нового установить не удалось, кроме подтверждения отсутствия артефактов.",
+      "evidence": "[замер] psql: SELECT table_name FROM information_schema.tables WHERE table_name ILIKE '%repro%' → 0 строк | [код] CHANGELOG.md:909-917; docs/UNIVERSAL_INGEST.md:202",
+      "doc_locs": ["CHANGELOG.md:909", "docs/UNIVERSAL_INGEST.md:202"],
+      "verdict": "a",
+      "verdict_why": "разовые замеры без сохранённых артефактов — в доке их надо пометить как невоспроизводимые, иначе они читаются как действующая гарантия",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Три утверждения про поведение ответов (DEFECT_FOCUS_CHOICE) непроверяемы не по причине, которую назвали матчеры: сервис жив, ключ жив, мешает только запрет тратить средства владельца",
+      "detail": "DEFECT_FOCUS_CHOICE.md:307 (24-25 с против 7-8 с при арбитре), :394 («ИНН у Нептун» верно 1 из 6; 13 неверных чисел на 58 вопросах), :162 (состав вариантов уточнения пляшет; при focus выбирается 71 045 277,59 вместо 73 181 157,68). Матчеры записали «за рамками разрешённого чтения» и «кредиты кончились». Фактически сервис ответов слушает 127.0.0.1:8099 и отвечает, ключ провайдера рабочий (419 успешных вызовов), то есть повторить прогоны можно — их запрещает только рамка «не тратить деньги владельца и не менять расход». Отдельно: сам сервис ответов — процесс-сирота вне systemd, запущенный прошлой сессией, его журнал пишется в чужой временный каталог, поэтому истории живых прогонов в системном журнале нет.",
+      "evidence": "[замер] ss -ltnp → 127.0.0.1:8099 python3 pid=3109129; /proc/3109129/fd/1 → /tmp/claude-0/-srv-1c/81653964-.../scratchpad/ask8099.log | [замер] gateway.log → 419 вызовов подряд status=200, последний 31.07 05:12 | [замер] ask8099.log → 0 совпадений по insufficient/balance/402",
+      "doc_locs": ["docs/DEFECT_FOCUS_CHOICE.md:307", "docs/DEFECT_FOCUS_CHOICE.md:394", "docs/DEFECT_FOCUS_CHOICE.md:162"],
+      "verdict": "v",
+      "verdict_why": "нужен явный ответ владельца: разрешает ли он оплаченный повторный прогон приёмки для сверки этих трёх замеров",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Число запросов к БД на вопрос (5-6) подтверждается только комментарием в конфиге движка — источника замера в проекте нет",
+      "detail": "techContext.md:87. Причина матчера («нужен живой вызов модели») теперь неверна — прогон возможен. Но и без прогона видно главное: единственная опора числа 5-6 — комментарий в /etc/serenedb/serened.conf, то есть текст, написанный тем же автором, а не воспроизводимый замер. Утверждение «число не растёт с базой» ни на чём не проверено: сервис ответов вне systemd, журнала с числом запросов на вопрос нет.",
+      "evidence": "[код] /etc/serenedb/serened.conf — комментарий к --cpu_threads «наружу уходило РОВНО 5-6 запросов» | [замер] ss/ /proc: сервис 8099 — процесс-сирота, системного журнала обращений нет",
+      "doc_locs": ["memory_bank/techContext.md:87"],
+      "verdict": "a",
+      "verdict_why": "число в доке подано как факт, а держится на комментарии в конфиге; либо снабдить его воспроизводимым замером, либо снять утверждение о независимости от размера базы",
+      "severity": "medium",
+      "known_fid": ""
+    }
+  ],
+  "summary": "Разобраны все 38 утверждений со status=unverifiable из match-*.json. Причины, которые называли матчеры, в большинстве случаев были выдуманы и противоречили друг другу: 20 из 38 утверждений оказались проверяемыми обычным чтением, одним GET или одиночным SELECT. Главное — премисса «кредиты DeepSeek исчерпаны 31.07, живой прогон невозможен» неверна: отказ по балансу занимал 8 минут вечером 30.07 (15 ответов 402), после чего в журнале 419 вызовов подряд со status=200, последний 31.07 05:12; ключ жив, приёмка acc-v13 прошла уже после «исчерпания». Второй по важности сбой метода: два матчера объявили отсутствующим клон исходников движка /srv/serenedb-src, который лежит на этом же сервере, — и на этом закрыли две проверки; третий матчер в том же наборе на него ссылался. При этом выяснилось, что развёрнутый бинарь (23.07) СТАРШЕ клона (26.07): по исходникам о поведении стенда судить нельзя, надо смотреть строки бинаря — так подтверждены запрет plain-индексов на VIEW и отсутствие опкласса hnsw, и так же вскрылось, что запись про «sq8+cosine не работает» верна лишь для развёрнутой сборки, а в upstream ограничение уже снято. Проверены и подтверждены: 961/4585 и 470/2795 типов с Edm.Stream/Binary (два GET по 2-4 секунды), все пять golden-эталонов SERVER_HANDOFF, железо Windows, VC++ runtime, отсутствие WSL, версии плагинов бота. Найдены новые расхождения: состав публикации OData шире записанного (регистров 1616, а в доке «все справочники+документы»); замер «обороты по счёту 62 → 23 742 200» не воспроизводится (по данным 23 282 000 или 24 131 400), при этом парный «счёт 41 → 20 500 500» сходится точно; ключ провайдера в auth-store не лежит вовсе (обе таблицы пусты), вопреки предписанию дока; свободное место на Windows 25.9 ГБ против 32 ГБ в доке. Истинно непроверяемыми остались 15 утверждений: всё, что требует записи в 1С (3), сборки ivf (6), DDL по опклассам и словарям (4), ATTACH с рестартом (3, частично перекрываются) и двух полных пересборок корпуса (1); для них причина уточнена — не «аудиту нельзя», а инвариант владельца или отсутствие определения замера. Попутно подтверждён известный дефект F127: шлюз второй базы ходит в 1С полноправным администратором."
+}

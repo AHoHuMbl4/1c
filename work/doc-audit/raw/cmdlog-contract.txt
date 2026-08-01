@@ -1,0 +1,266 @@
+# Сырой вывод команд задания «contract» (матрица 21 пункт TARGET × находки), 01.08.2026
+# Только чтение. Секреты не печатались: значения env маскированы, из DSN оставлено
+# только dbname/host/port.
+
+================================================================================
+1. МАТРИЦА: сопоставление находок с пунктами контракта
+================================================================================
+
+Скрипт: сопоставление по (а) doc_locs/members с doc=TARGET.md → номер строки → пункт
+(диапазоны строк пунктов + строки таблицы «Как проверяется соответствие» 140-152),
+(б) текстовым ссылкам «п. N / пп. N / пункт N» в любом поле находки, регистронезависимо,
+с отбрасыванием контекстов «§… п.N» (ссылка на раздел ЧУЖОГО документа).
+
+Ложные срабатывания, снятые вручную после чтения контекста:
+  п.4  ← F086, F171  («Этап 4 — миграция RAG braine», не пункт контракта)
+  п.2  ← F205        («AUDIT_CODE_2 §Спорное, п.2» — раздел документа)
+  п.6  ← F080, F163  («пункт 6 списка граблей braine», «пункт 6 раздела развёртывания»)
+  п.8  ← F237        (про инструкции агентам, п.7/8 упомянут как ссылка)
+  п.4/п.5 ← F198     («UBUNTU_SETUP §5 п.4», «ARCHITECTURE §7 п.5»)
+
+ИТОГОВАЯ МАТРИЦА (всего находок / живых (alive=true) / из них high):
+
+  п. 1  всего 11  живых 10  high 6  F002 F034 F039 F041 F054 F078 F139 F211 F218 F225
+  п. 2  всего  4  живых  4  high 1  F040 F054 F071 F148
+  п. 3  всего  9  живых  9  high 4  F008 F071 F084 F093 F131 F148 F172 F178 F243
+  п. 4  всего  1  живых  0  high 0  — (единственная F020 опровергнута 3 скептиками из 3)
+  п. 5  всего  5  живых  5  high 2  F025 F026 F027 F096 F201
+  п. 6  всего  2  живых  2  high 0  F094 F095
+  п. 7  всего  5  живых  4  high 2  F029 F094 F157 F237
+  п. 8  всего  2  живых  1  high 0  F094            (F098 — про п.7, опровергнута)
+  п. 9  всего 17  живых 17  high 2  F003 F011 F014 F016 F049 F050 F068 F095 F096 F142
+                                    F147 F177 F191 F196 F197 F229 F249
+  п.10  всего  9  живых  9  high 6  F008 F093 F131 F169 F172 F178 F191 F217 F227
+  п.11  всего  9  живых  9  high 7  F001 F030 F037 F091 F094 F096 F169 F172 F210
+  п.12  всего 14  живых 14  high 7  F008 F037 F049 F065 F093 F094 F128 F130 F135 F210
+                                    F211 F212 F224 F242
+  п.13  всего 33  живых 32  high 10 F008 F009 F014 F016 F023 F037 F038 F049 F050 F057
+                                    F088 F099 F100 F101 F102 F103 F104 F105 F106 F107
+                                    F109 F111 F136 F145 F148 F150 F170 F177 F210 F217
+                                    F219 F223 F246
+  п.14  всего 11  живых 10  high 2  F074 F087 F121 F139 F142 F150 F164 F178 F188 F230
+  п.15  всего 10  живых  9  high 3  F005 F071 F177 F197 F209 F210 F211 F213 F216
+  п.16  всего  2  живых  2  high 1  F097 F226
+  п.17  всего 15  живых 14  high 8  F001 F033 F034 F050 F054 F056 F095 F100 F112 F119
+                                    F151 F157 F177 F223
+  п.18  всего 12  живых 12  high 3  F037 F093 F094 F107 F177 F212 F213 F220 F221 F222
+                                    F223 F227
+  п.19  всего 10  живых 10  high 5  F004 F053 F084 F088 F092 F095 F128 F130 F154 F242
+  п.20  всего 11  живых 11  high 5  F019 F025 F026 F034 F035 F039 F058 F091 F119 F132 F206
+  п.21  всего 13  живых 12  high 6  F008 F034 F039 F129 F130 F148 F154 F210 F214 F217
+                                    F222 F227
+
+Пункты, названные критиком: п.8 — 1 живая находка (F094), п.4 — 0 живых.
+
+Соседние по PostgreSQL-на-Windows находки, не попавшие в матрицу п.4 (текстовой
+ссылки на пункт в них нет):
+  F012 medium v alive=False  Решение владельца 26.07 «PG на Windows + ATTACH» не исполнено
+  F116 low    v alive=True   /etc/1c-pg-windows.env: пароль для контура, которого нет в коде
+  F041 medium a alive=True   Windows-сторона: адреса, число баз, статус PostgreSQL устарели
+
+================================================================================
+2. TARGET.md, таблица «Как проверяется соответствие» (строки 138-152)
+================================================================================
+Строки таблицы существуют для пунктов: 3,10 | 7,8 | 9 | 11 | 12,18 | 13 | 14 | 15 |
+16 | 17 | 19 | 20 | 21.
+Не названы вовсе: 1, 2, 4, 5, 6.
+
+================================================================================
+3. СОБСТВЕННАЯ ПРОВЕРКА П.4 — что стоит на Windows и что из этого использует продукт
+================================================================================
+
+$ ssh -i /root/.ssh/id_ed25519_1c -p 2222 unde@192.168.56.1 "hostname & whoami"
+DESKTOP-UQG768B
+desktop-uqg768b\unde
+
+$ ... Get-Service | ? {Name -like '*postgre*','*pgsql*','*1C*' -or Name -eq 'W3SVC'}
+Name          Status StartType
+----          ------ ---------
+postgresql17 Running Automatic
+W3SVC        Running Automatic
+
+$ ... Get-NetTCPConnection -State Listen | ? LocalPort -in 5432,5433,80,6003
+LocalAddress LocalPort
+------------ ---------
+::                  80
+0.0.0.0           5432
+
+$ ... Get-ChildItem 'C:\1c\bases' -Directory
+Name     LastWriteTime
+----     -------------
+bld      22.07.2026 16:25:44
+buh_test 01.08.2026 22:17:05
+ut_demo  01.08.2026 22:17:57
+
+$ ... Get-ChildItem 'C:\Program Files (x86)\1cv8' -Directory
+8.3.27.1786,common,conf
+
+# что лежит в PostgreSQL на Windows (реквизиты из /etc/1c-pg-windows.env, не печатаются)
+$ psql host=192.168.56.1 port=5432 ... -c "SELECT datname, pg_size_pretty(pg_database_size(datname)) FROM pg_database ORDER BY 1"
+mart,55 MB
+postgres,7843 kB
+template0,7689 kB
+template1,7899 kB
+
+$ psql ... dbname=mart -c "SELECT schemaname||'.'||relname, n_live_tup FROM pg_stat_user_tables ORDER BY n_live_tup DESC LIMIT 10"
+public.docs,200000
+
+$ psql ... dbname=mart -c "SELECT max(greatest(coalesce(last_autovacuum,'-infinity'),coalesce(last_analyze,'-infinity'),coalesce(last_autoanalyze,'-infinity'))) FROM pg_stat_user_tables"
+2026-07-25 21:58:14.850472+04
+
+# использует ли продукт этот PostgreSQL
+$ grep -rn "postgres_attach\|ATTACH" --include=*.sql --include=*.py --include=*.sh ubuntu/
+ubuntu/serene_report.py:76:  r"\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|copy|attach|"   ← это ЗАПРЕТ в регулярке, не использование
+(других вхождений нет)
+
+$ grep -rn "5432" -I /srv/1c --exclude-dir=.git | grep -v work/doc-audit
+docs/ARCHITECTURE.md:74      | `postgresql` | 5432 | pgvector (вектора OWUI) + служебные схемы braine
+docs/INSTALL_LOG.md:92,149
+docs/UBUNTU_SETUP.md:21      PostgreSQL 16 + pgvector … (127.0.0.1:5432)  ← это Ubuntu, не Windows
+docs/TARGET_ARCHITECTURE.md:114  Windows | PostgreSQL | 17.6 x64, служба postgresql17, порт 5432 | целевое хранилище
+memory_bank/techContext.md:10
+memory_bank/progress.md:647
+(ни одной строки КОДА)
+
+$ grep -rli "postgres" windows/
+(пусто — инсталлятор Windows PostgreSQL не ставит и не упоминает)
+
+$ psql :7890 -c "SELECT database_name, path FROM duckdb_databases()"
+memory / postgres / ut_test / system / temp     ← присоединённых Windows-баз нет
+
+Синк и загрузчик пишут в локальный движок:
+  ubuntu/serenedb/serene_sync.py:100     dsn = SERENEDB_DSN, умолчание host=127.0.0.1 port=7890
+  ubuntu/serenedb/poc_load_entity.py:33  DSN = host=127.0.0.1 port=7890
+
+================================================================================
+4. СОБСТВЕННАЯ ПРОВЕРКА П.8 — кто считает на пути ответа
+================================================================================
+
+$ wc -l ubuntu/serenedb/serene_ask.py  → 3003 (+1 хвостовая строка при разборе = 3004)
+Разбор по ast:
+  всего строк            3004
+  комментариев            869
+  пустых                  240
+  код                    1895
+  строк, занятых обращениями к движку (вызовы psql/_resolver_psql): 133  = 7,0 % кода
+  вызовов psql в файле:  35
+  вызовов модели (ds_chat/embed_one/rerank/arbitrate): 12
+
+answer() = строки 1938-2898, код 514 строк:
+  обращения к движку (SQL)     65
+  вызовы модели                22
+  чистый собственный python   429
+
+Размеры шагов (строка начала-конца, всего/код, чем считается):
+  parse_intent        353- 377   25/24   МОДЕЛЬ (разбор намерения, даты, пороги)
+  probe               432- 513   82/65   ДВИЖОК ts_compound/ts_phrase/ts_levenshtein
+  match_expr          527- 557   31/24   ДВИЖОК (строит выражение поиска)
+  children_by_parent  560- 610   51/46   ДВИЖОК (один запрос на все табличные части)
+  tables_of           613- 629   17/16   ДВИЖОК GROUP BY
+  rows_of             632- 653   22/21   ДВИЖОК
+  signal_terms        688- 715   28/26   ДВИЖОК ts_dict_agg
+  resolve_values      828- 866   39/29   ДВИЖОК (resolver_index) + модель
+  measures_of         902- 915   14/13   ДВИЖОК
+  totals_of           918- 951   34/30   ДВИЖОК sum/max/min
+  pick_measure        954-1016   63/40   МОДЕЛЬ
+  pick_entity        1019-1188  170/97   МОДЕЛЬ + ДВИЖОК (кандидаты, метки, величины)
+  aggregate          1202-1262   61/31   ДВИЖОК count/sum/min/max FILTER
+  arbitrate           276- 302   27/27   МОДЕЛЬ (выбирает НОМЕР готового ответа)
+  compose            1427-1515   89/63   МОДЕЛЬ (формулировка)
+  _fill_figures      1346-1407   62/45   НАШ PYTHON (подстановка посчитанных чисел)
+  gate               1746-1820   75/55   НАШ PYTHON (разрешён п.20: проверка ответа ЛЛМ)
+  check_claims       1658-1691   34/28   НАШ PYTHON
+  claims_in_text     1697-1736   40/36   НАШ PYTHON
+  _readings/_dates/_tokens/_norm_numbers 1541-1652  97/75  НАШ PYTHON (разбор чисел и дат)
+  embed_one           305- 311    7/ 7   ВНЕШНИЙ API Qwen (вектор вопроса)
+  rerank              781- 800   20/19   ВНЕШНЯЯ МОДЕЛЬ DashScope (порядок кандидатов)
+  _coverage_of       1823-1841   19/18   ДВИЖОК (перепись полноты)
+
+Порядок вызовов внутри answer() (строка → шаг):
+ 1953 parse_intent | 1975 probe | 2001 match_expr | 2004 tables_of | 2007 children_by_parent
+ 2012 _vec(эмбеддинг вопроса) | 2023 psql(<=>) | 2030 tables_of | 2072..2259 psql×7
+ 2172 rerank | 2301 pick_entity | 2318..2467 psql×6 | 2486 clarify_text | 2581 arbitrate
+ 2601 psql | 2659 rows_of | 2676 _coverage_of | 2698..2757 measures_of/totals_of
+ 2721 pick_measure | 2766 aggregate | 2783 compose | 2789 _fill_figures | 2806 gate
+ 2816 compose(2-я попытка) | 2823 gate
+
+Что действительно лежит ВНУТРИ движка (боевая база ut_test):
+$ psql :7890 dbname=ut_test -c "SELECT table_name FROM duckdb_tables() WHERE database_name='ut_test' AND (table_name LIKE 'search%' OR 'resolver%' OR 'wiki%' OR 'base_%')"
+base_profile, base_profile_meta, resolver_index, search_corpus, search_coverage,
+search_entity_alias, search_entity_alias_bak, search_entity_alias_v3, search_entity_class,
+search_idx, search_meta, search_quality, search_sources, search_tables
+$ ... duckdb_indexes()  → search_idx (на search_corpus), alias_idx (на search_entity_alias)
+$ ... duckdb_views()    → wiki_entity_facts, wiki_pages
+Сборочный слой на SQL: wc -l ubuntu/serenedb/*.sql → 1655 строк.
+
+================================================================================
+5. СОБСТВЕННАЯ ПРОВЕРКА П.2 — чем сегодня доказано, что бот отвечает по данным 1С
+================================================================================
+
+# какую базу обслуживает живой сервис ответов
+$ curl -s http://127.0.0.1:8099/health
+{"status": "serene-ask-ok", "corpus_rows": 623565}
+$ psql :7890 -c "SELECT 'postgres', count(*) FROM postgres.public.search_corpus UNION ALL SELECT 'ut_test', count(*) FROM ut_test.public.search_corpus"
+postgres,103808
+ut_test,623565                       ← бот отвечает по ВТОРОЙ базе (совпадает с F003)
+$ tr '\0' '\n' </proc/3109129/environ | grep -i dsn   (значения масок)
+SERENEDB_DSN_RO=host=127.0.0.1 port=7890 user=<скрыто> dbname=ut_test
+RESOLVER_DSN   =host=127.0.0.1 port=7890 user=<скрыто> dbname=ut_test
+$ grep -c SERENEDB_DSN_RO /etc/1c-serene-ask.env → 0     (штатный старт дал бы postgres)
+$ ps -o lstart= -p 3109129 → Fri Jul 31 04:50:55 2026 ; PPID=1 ; cgroup user-0.slice/session-247653.scope
+
+# возраст данных
+$ psql :7890 dbname=postgres -c "SELECT k,v FROM search_quality WHERE k IN ('build_ts','cov_rows_1c','cov_rows_search','cov_rows_lost','cov_ent_lost')"
+build_ts,1785307201  → 2026-07-29T06:40:01 UTC (85,9 ч назад)
+cov_ent_lost,1 | cov_rows_1c,103634 | cov_rows_lost,2 | cov_rows_search,103808
+$ psql :7890 -c "SELECT 'ut_test', v FROM ut_test.public.search_quality WHERE k='build_ts'"
+1785346661 → 2026-07-29T17:37:41 UTC (≈75 ч назад)
+
+$ systemctl is-active 1c-serene-ask 1c-serene-pipeline.timer 1c-serene-pipeline.service openclaw
+inactive / inactive / failed / inactive
+$ ss -ltnp | grep -E "6011|6021|8099|18800"
+127.0.0.1:8099  python3 pid=3109129      (serene_ask.py, сирота)
+127.0.0.1:6011  python3 pid=3173747      (шлюз OData первой базы)
+127.0.0.1:6021  python3 pid=1136469      (шлюз OData ВТОРОЙ базы, сирота, старт Tue Jul 28 20:32:49, PPID=1)
+127.0.0.1:18800 openclaw gateway pid=2786727
+$ systemctl is-active 1c-odata-gateway@ut.service → inactive (dead)
+
+# ЗАМЕР СЕГОДНЯ: сходятся ли данные бота с живой 1С (GET через шлюз + одиночные SELECT)
+Первая база (шлюз :6011, upstream http://192.168.56.1:6003/1c/odata/standard.odata):
+  Catalog_Контрагенты              1С=13  витрина=13
+  Document_РеализацияТоваровУслуг  1С=36  витрина=36
+  Catalog_Номенклатура             1С=14  витрина=14
+  Catalog_Склады                   1С=1   витрина=1
+Боевая база бота (шлюз :6021, upstream http://192.168.56.1:6003/ut/odata/standard.odata):
+  Catalog_Партнеры                 1С=164  витрина=216  корпус=164
+  Document_РеализацияТоваровУслуг  1С=272  витрина=272  корпус=272
+Разница витрина/корпус объяснена самой переписью, дефектом НЕ является:
+$ psql dbname=ut_test -c "SELECT entity, в_1С, в_витрине, объектов_витрины, в_корпусе, причина FROM search_coverage WHERE entity IN (...)"
+catalog_организации,5,14,5,5,витрина развёрнута по табличной части
+catalog_партнеры,164,216,164,164,витрина развёрнута по табличной части
+document_приобретениетоваровуслуг,249,419,249,249,витрина развёрнута по табличной части
+$ psql dbname=ut_test -c "SELECT count(*) FILTER (WHERE в_витрине > объектов_витрины), count(*), sum(в_витрине - объектов_витрины) FILTER (...) FROM search_coverage"
+85, 2690, 9155
+
+# последний замер САМИХ ОТВЕТОВ
+$ git log --format="%h %ad %s" --date=format:"%d.%m %H:%M" -- work/acceptance/run_acceptance.py docs/ACCEPTANCE_UT.md
+be87e58 31.07 03:38 эталоны сверены с живой 1С; прогонщик научен проверять ПОВЕДЕНИЕ
+1a52423 30.07 22:34 полный прогон приёмки: 1-30 измерено, 31-58 оборвано внешней причиной
+$ git log --oneline be87e58..HEAD -- ubuntu/
+f79424a контрольный опыт опроверг мой вывод: промты были ни при чём
+72db759 проверка агентами: сокращение промтов выключило защиту — возвращено
+4a53882 промты переписаны начисто
+b2f8485 оговорки к ответу говорит модель на языке вопроса
+da650f2 персона бота: убраны имена чужой конфигурации, русский язык и список слов
+→ после последнего прогона путь ответа менялся не меньше пяти раз, нового прогона нет.
+
+docs/ACCEPTANCE_UT.md:913 «Полный прогон 31.07 ночью (RUN_TAG=v12): вопросы 1-30
+действительны, 31-58 НЕТ» (обрыв: ключ DeepSeek исчерпан). Итог 1-30: верно 7,
+уточнений 3, неверно 6, без эталона 13.
+CHANGELOG.md:166-169 (31.07, ночь): пачка 1 через бота — 3 верных / 3 уточнения /
+4 неверных после отката алиасов. Это самый свежий замер ОТВЕТОВ.
+
+# что вообще есть в наборе (разбор тем же regex, что в run_acceptance.py)
+всего вопросов: 54 (номера 1-55, номера 27, 56, 57, 58 отсутствуют)
+с числовым эталоном: 44 | с ожидаемым kind: 23 | без того и другого: 1 (№20)
+вопросов с номером ≥31: 25 — годным прогоном не измерены ни разу
