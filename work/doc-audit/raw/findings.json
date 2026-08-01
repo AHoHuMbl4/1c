@@ -6392,7 +6392,32 @@
      "verdict_why": "Настройки рабочие, но по докам инстанс не воспроизвести: пустой GATEWAY_HEALTH_URL уже стоил проверки живости (F014), а неизвестная ручка WIKI_ALIAS_PER_TACT определяет, за сколько тактов база обрастёт человеческими словами. Правится RUNBOOK (состав env) и MAP (ручки)."
     }
    ]
+  },
+  {
+   "fid": "F166",
+   "title": "MAP.md посылает за знаниями о движке в клон исходников /srv/serenedb-src, тогда как источник — MCP serenedb-docs",
+   "group_verdict": "a",
+   "severity": "medium",
+   "category": "док-отстал",
+   "n_members": 1,
+   "doc_locs": [
+    "MAP.md:171",
+    "MAP.md:172",
+    "MAP.md:199"
+   ],
+   "members": [
+    {
+     "src": "owner:01.08",
+     "doc": "MAP.md",
+     "line": 171,
+     "claim": "«спросить агента serenedb-native (у него полный клон исходников движка)»; таблица §4: «исходники движка | /srv/serenedb-src — без них агент serenedb-native слеп»",
+     "actual": "Агент переведён на официальные доки через MCP: .claude/agents/serenedb-native.md:3-4 объявляет источниками mcp__serenedb-docs__search_docs/read_section и живой движок, а строка 35 того же файла прямо говорит: «Прежний источник — локальный клон исходников serenedb-src — больше не используется». CLAUDE.md:31-33 тоже называет serenedb-docs обязательным. Указание владельца 01.08: «для доков SereneDB используй mcp сервер, который уже настроен, не нужно изучать доки сырые». Каталог /srv/serenedb-src на диске ещё лежит, и MAP ведёт к нему.",
+     "evidence": "[код] .claude/agents/serenedb-native.md:3-4,20-23,35; CLAUDE.md:31-33; MAP.md:171-172,199. [замер] ls -d /srv/serenedb-src → каталог существует (источник путаницы)",
+     "verdict": "a",
+     "verdict_why": "Реальность (агент на MCP) легитимна и подтверждена указанием владельца — править MAP.md"
+    }
+   ]
   }
  ],
- "total": 165
+ "total": 166
 }
