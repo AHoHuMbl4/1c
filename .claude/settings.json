@@ -2,6 +2,19 @@
   "$schema": "https://json.schemastore.org/claude-code-settings.json",
   "enableAllProjectMcpServers": true,
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/session-start.sh\"",
+            "timeout": 10,
+            "statusMessage": "Вброс текущего состояния работ"
+          }
+        ]
+      }
+    ],
     "PreToolUse": [
       {
         "matcher": "Bash",
@@ -11,6 +24,12 @@
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-diff.sh\"",
             "timeout": 20,
             "statusMessage": "Проверка диффа на подгонку под базу"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-docs.sh\"",
+            "timeout": 15,
+            "statusMessage": "Проверка: документы в коммите"
           },
           {
             "type": "command",

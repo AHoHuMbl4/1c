@@ -11,12 +11,6 @@
       "env": {
         "MEMORY_FILE_PATH": "/srv/1c/memory_bank/mcp-memory.json"
       }
-    },
-    "filesystem": {
-      "type": "stdio",
-      "command": "npx",
-      "args": ["@modelcontextprotocol/server-filesystem", "/srv/1c"],
-      "env": {}
     }
   }
 }
