@@ -1,0 +1,433 @@
+{
+  "shard": "status-arch",
+  "half": 2,
+  "results": [
+    {
+      "idx": 45,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 88,
+      "claim": "openclaw-gateway — user-юнит юзера undebot, порт 18800; Telegram-бот @test1c_mcp_bot, DeepSeek-тон, verify-плагин",
+      "status": "ok",
+      "actual": "Gateway живёт user-юнитом undebot на 127.0.0.1:18800, модель DeepSeek (primary deepseek-v4-pro), плагин braine-verify включён. Имя бота @test1c_mcp_bot независимо не сверялось (нужен вызов Telegram API с токеном — секрет в команду не подставляем), противопоказаний нет.",
+      "evidence": "[код] /home/undebot/.openclaw/openclaw.json:3 (port 18800), :17-18 (deepseek/deepseek-v4-pro), :89-98 (braine-verify enabled); [замер] loginctl show-user undebot -p Linger → Linger=yes; ss (stand-systemd): pid 2786727 в cgroup user@1001/openclaw-gateway.service слушает 18800"
+    },
+    {
+      "idx": 46,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 89,
+      "claim": "1c-bot-monitor.timer каждые 3 мин проверяет gateway/serenedb/mcp/api и шлёт Telegram-алерт владельцу при падении",
+      "status": "ok",
+      "actual": "Совпадает с кодом: таймер OnUnitActiveSec=3min; скрипт проверяет openclaw-gateway (user-юнит + /health), serenedb, 1c-mcp-braine, 1c-mcp-reports, api и шлёт алерт напрямую через bot-токен при смене состояния. Примечание стенду: api.service — выведенный слой braine, он навсегда inactive, и монитор стоит в состоянии «down: api» (файл состояния это подтверждает) — мониторится мёртвый сервис.",
+      "evidence": "[замер] systemctl cat 1c-bot-monitor.timer → OnUnitActiveSec=3min; [код] /opt/1c-bot-monitor/bot_health_check.sh:11 (SYS_SERVICES=\"serenedb 1c-mcp-braine 1c-mcp-reports api\"), :20-33 (gateway), :42-47 (alert через api.telegram.org); [замер] cat /var/lib/1c-bot-monitor/state → «down: api»"
+    },
+    {
+      "idx": 47,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 96,
+      "claim": "1c-serene-sync.timer запускается в 03:40 (загрузка сущностей + пересборка резолвера)",
+      "status": "disc",
+      "actual": "Ночного синка 03:40 больше нет: 1c-serene-sync.timer disabled и inactive (OnCalendar 03:40 остался только в файле юнита). Свежесть теперь держит конвейер «по готовности» — 1c-serene-pipeline.timer (OnUnitInactiveSec=1min, enabled) и такт индекса 20 минут; TARGET_STATUS п.17 прямо говорит «ночного нет». Док подаёт 03:40 как текущий холодный контур.",
+      "evidence": "[замер] systemctl is-enabled 1c-serene-sync.timer → disabled; systemctl is-active → inactive; systemctl cat → OnCalendar=*-*-* 03:40:00",
+      "verdict": "a",
+      "verdict_why": "Переход на конвейер по готовности — легитимное закрытие п.17 (такт ~6 мин, TARGET_STATUS); ARCHITECTURE §3 не обновлён"
+    },
+    {
+      "idx": 48,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 105,
+      "claim": "Перед вызовом ask_1c бот перефразирует вопрос по вики (memory-wiki)",
+      "status": "ok",
+      "actual": "Плагин memory-wiki включён (vault /home/undebot/.openclaw/wiki/main), инструменты wiki_search/wiki_get разрешены, и живой AGENTS.md стенда предписывает: сначала вики → переформулировать словами базы → потом инструмент данных; при двух прочтениях — спросить человека.",
+      "evidence": "[код] /home/undebot/.openclaw/openclaw.json:99-124 (memory-wiki enabled), :186-191 (tools.allow: wiki_search, wiki_get); [код] /home/undebot/.openclaw/workspace/AGENTS.md:40-54 (порядок «вики → переформулируй → спроси данные»)"
+    },
+    {
+      "idx": 49,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 107,
+      "claim": "verify-плагин (гейт кодом) сверяет числа ответа с данными инструмента; несверенное режет/заменяет; режет SQL/пути в тексте и подписи к фото",
+      "status": "ok",
+      "actual": "Всё в коде плагина: message_sending сверяет числовые токены с эталоном из результатов инструмента (несверенное — replace/cancel), stripInternal режет SQL (WITH/SELECT...FROM), абсолютные пути и служебные маркеры, и тот же срез применяется к подписи медиа через хук reply_payload_sending.",
+      "evidence": "[код] ubuntu/openclaw/verify-plugin/verify-core.js:84-97 (SQL_RE, stripInternal), index.js:154-177 (message_sending, replace/cancel), index.js:186-196 (reply_payload_sending — подпись к фото); плагин включён в /home/undebot/.openclaw/openclaw.json:89-98"
+    },
+    {
+      "idx": 50,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 121,
+      "claim": "Попытка записи под ai_reader через OData даёт отказ: чтение 200, запись 500",
+      "status": "unverifiable",
+      "actual": "Проверка требует реальной попытки записи в 1С под ai_reader в обход шлюза — запрещено инвариантом «1С только читаем» и правилом «состояние серверов меняем только по явной инструкции». Косвенно: шлюз в любом случае режет не-GET (405) до 1С.",
+      "evidence": "[код] /opt/1c-odata-gateway/odata_gateway.py:102-110 — POST/PUT/PATCH/DELETE → 405; сам замер «чтение 200, запись 500» воспроизводим только записью в 1С"
+    },
+    {
+      "idx": 51,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 124,
+      "claim": "Креды 1С лежат только в /etc/1c-odata-gateway.env с chmod 600",
+      "status": "ok",
+      "actual": "Файл 600, креды предъявляет только шлюз (мозг их не знает). Уточнение: для второй базы есть парный /etc/1c-odata-gateway-ut.env (тоже 600) — тот же паттерн шаблонного юнита, док §3 его описывает.",
+      "evidence": "[замер] stat -c '%a %n' → 600 /etc/1c-odata-gateway.env, 600 /etc/1c-odata-gateway-ut.env; [код] odata_gateway.py:19 «Bearer/креды 1С хранятся здесь, мозг их не знает»"
+    },
+    {
+      "idx": 52,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 126,
+      "claim": "Роль serene_ro имеет только GRANT SELECT; INSERT/UPDATE/DROP → permission denied",
+      "status": "ok",
+      "actual": "SELECT=t, INSERT=f, UPDATE=f на search_corpus — роль только читает.",
+      "evidence": "[замер] psql dbname=postgres: SELECT has_table_privilege('serene_ro','search_corpus','SELECT'|'INSERT'|'UPDATE') → t|f|f"
+    },
+    {
+      "idx": 53,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 128,
+      "claim": "Валидатор serene_report: LLM генерит только SELECT/WITH, изменяющие ключевые слова режутся до выполнения",
+      "status": "ok",
+      "actual": "Валидатор в коде: не-SELECT/WITH отклоняется regex'ом, поверх — денайлист FORBIDDEN. Путь report_1c при этом всё ещё в контуре бота (toolFilter.include), так что валидатор — живой слой, хотя решение владельца 26.07 велит report_1c вынести (см. idx 68).",
+      "evidence": "[код] /opt/1c-mcp-reports/serene_report.py:383-384 (re.match ^select|with, иначе «не SELECT/WITH»), :73 (FORBIDDEN); [код] /home/undebot/.openclaw/openclaw.json:146-148 (report_1c в include)"
+    },
+    {
+      "idx": 54,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 137,
+      "claim": "OData не торчит в интернет — доступен только внутри доверенной сети LXC через роутер .1",
+      "status": "unverifiable",
+      "actual": "Изнутри периметра проверить «не торчит в интернет» нельзя — нужен зонд снаружи и конфиг проброса на роутере, доступа к которому нет. Видно только согласующееся: шлюз слушает 127.0.0.1, апстрим — частный адрес 192.168.56.1:6003.",
+      "evidence": "[замер] ss (stand-net): 6011 слушает 127.0.0.1; юнит: ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata — частная сеть"
+    },
+    {
+      "idx": 55,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 160,
+      "claim": "Enabled system-юниты: postgresql, open-webui, oikb, rerank-shim, api, kb-poll, 1c-odata-gateway, 1c-config-ui, serenedb, 1c-mcp-braine, 1c-mcp-reports + таймеры 1c-serene-pipeline, 1c-etl, 1c-bot-monitor",
+      "status": "disc",
+      "actual": "Реальный список enabled: 1c-config-ui, 1c-mcp-ask, 1c-mcp-braine, 1c-mcp-reports, 1c-odata-gateway, 1c-serene-ask, postgresql, serenedb + таймеры 1c-bot-monitor, 1c-serene-pipeline. Из докового списка НЕ enabled весь слой braine (open-webui, oikb, rerank-shim, api, kb-poll — все и inactive) и 1c-etl.timer (disabled); в доке отсутствуют 1c-mcp-ask и 1c-serene-ask. Отдельно: 1c-mcp-braine до сих пор enabled+running, хотя строка 86 того же файла говорит «выведен 30.07» — остаток на стенде.",
+      "evidence": "[замер] systemctl list-unit-files --state=enabled | grep -E '1c-|serene|open-webui|oikb|rerank|api|kb-poll|postgres' → 8 сервисов + 2 таймера (полный вывод в ходе проверки); systemctl is-active api open-webui oikb rerank-shim kb-poll → все inactive",
+      "verdict": "a",
+      "verdict_why": "Вывод braine и переход на serene_ask — зафиксированные решения (ARCHITECTURE:13, BENCH 26.07); §6 «Zero-touch» не обновлён и разворачивал бы мёртвый слой"
+    },
+    {
+      "idx": 56,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 164,
+      "claim": "OpenClaw gateway — systemd user-юнит юзера undebot с linger=on, стартует на буте без логина",
+      "status": "ok",
+      "actual": "Linger=yes у undebot; юнит openclaw-gateway.service в user-slice, процесс подтверждён в cgroup user@1001.",
+      "evidence": "[замер] loginctl show-user undebot -p Linger → Linger=yes; stand-systemd: /home/undebot/.config/systemd/user/openclaw-gateway.service, pid 2786727 в user@1001/openclaw-gateway.service"
+    },
+    {
+      "idx": 57,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 165,
+      "claim": "Telegram — long polling, токен в tokenFile",
+      "status": "ok",
+      "actual": "tokenFile=/home/undebot/.openclaw/telegram-token в конфиге канала; вебхука в конфиге нет — канал работает штатным long polling движка (streaming off).",
+      "evidence": "[код] /home/undebot/.openclaw/openclaw.json:172-183 (channels.telegram.tokenFile, dmPolicy allowlist, streaming off; ключей webhook нет)"
+    },
+    {
+      "idx": 58,
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 186,
+      "claim": "KB-репо money/1c-test (GitLab id 95); секреты в credentials/ (в .gitignore) и /etc/*.env (chmod 600), пароли в git не коммитятся",
+      "status": "ok",
+      "actual": "credentials/ в .gitignore; все env-файлы с секретами — 600 (12 шт.); единственный 644 — /etc/1c-bot-monitor.env, но секретов в нём нет (одна переменная GATEWAY_HEALTH_URL с локальным URL, 0 совпадений token/key/secret/pass). Id репозитория 95 — внешняя система GitLab, изнутри не сверялся.",
+      "evidence": "[код] /srv/1c/.gitignore:2 credentials/; [замер] stat -c '%a %n' /etc/1c-*.env → 12×600, 644 только 1c-bot-monitor.env; grep -ciE 'token|key|secret|bearer|pass' /etc/1c-bot-monitor.env → 0"
+    },
+    {
+      "idx": 59,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 19,
+      "claim": "На Windows установлен PostgreSQL 17.6 — целевое хранилище сырых таблиц 1С с колонкой emb FLOAT[N]",
+      "status": "ok",
+      "actual": "PostgreSQL 17.6 на Windows стоит службой postgresql17 с автозапуском. Роль «целевое хранилище с emb» — заявленная цель (сырые данные фактически пока в SereneDB на Ubuntu), док это и говорит: целевая схема.",
+      "evidence": "[замер] ssh unde@192.168.56.1:2222 «sc qc postgresql17» → AUTO_START, C:\\PostgreSQL\\17\\bin\\pg_ctl.exe; «postgres.exe --version» → postgres (PostgreSQL) 17.6"
+    },
+    {
+      "idx": 60,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 36,
+      "claim": "Ручки sdb_nprobe и sdb_rerank_factor уже есть в сборке SereneDB",
+      "status": "ok",
+      "actual": "Обе ручки отвечают: sdb_nprobe=8, sdb_rerank_factor=4.",
+      "evidence": "[замер] psql :7890 SHOW sdb_nprobe → 8; SHOW sdb_rerank_factor → 4"
+    },
+    {
+      "idx": 61,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 42,
+      "claim": "Витрина-копия 226 таблиц лежит в SereneDB (состояние на 26.07)",
+      "status": "hist",
+      "actual": "Явно датированный блок «Что сегодня нарушено (состояние на 26.07)» с пометкой «от неё уходим». Сейчас таблиц больше (postgres: 292, ut_test: 1624) и витрина-копия по-прежнему в SereneDB — уход на Windows-PG не выполнен, но док подаёт это как снимок и как нарушение целевой схемы, а не как норму.",
+      "evidence": "[замер] stand-db: duckdb_tables() → postgres=292, ut_test=1624; блок в доке датирован"
+    },
+    {
+      "idx": 62,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 43,
+      "claim": "search_idx создан как USING inverted () без векторной колонки; смысловой поиск идёт полным перебором 246 044 строк (состояние на 26.07)",
+      "status": "hist",
+      "actual": "Датированный снимок того же блока. Сейчас индекс создаётся с аргументами: inverted(doc search_dict, refs search_dict, src_table) INCLUDE (src_table, row_key, doc_date), отбор идёт индексом (TARGET_STATUS п.6 🟢), а корпус — 103 808/623 565 строк.",
+      "evidence": "[код] /opt/1c-mcp-reports/corpus_init.sql:92-94; [замер] duckdb_indexes() показывает search_idx (векторной части нет); счётчики строк — stand-db"
+    },
+    {
+      "idx": 63,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 48,
+      "claim": "Для ivf-колонки параметр row_group_size обнуляется — index.cpp:582; рецепт WITH (row_group_size=4096) не применять",
+      "status": "ok",
+      "actual": "Суть подтверждена независимым разбором исходников/тестов движка: для IVF-колонок опции compression/row_group_size сняты, ручка действует только на INCLUDE-колонки. Точную строку index.cpp:582 проверить нельзя — исходников движка на стенде нет (VECTOR_DECISION.md ссылается на соседнюю :583 про store_values).",
+      "evidence": "[код-док] docs/CHECK1_SCAN_2.md:317 (для IVF-колонок опции row_group_size сняты — tests/sqllogic .../inverted_index_compression_option.test:5,233-241); docs/CHECK1_SCAN_3.md:325 (row_group_size только для INCLUDE-колонок); [замер] find /root /usr/local/src /opt -name index.cpp → пусто"
+    },
+    {
+      "idx": 64,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 51,
+      "claim": "Сборка ivf неотменяема: pg_cancel_backend возвращает успех, работа продолжается; снимается только рестартом движка",
+      "status": "ok",
+      "actual": "Совпадает с зафиксированным замером 27.07 в памяти владельца и VECTOR_DECISION. Повторный опыт запрещён инвариантом (опыты с ivf — только на отдельном --server_directory; незавершённая сборка роняет инстанс в петлю OOM), поэтому проверка — по независимым записям, а не воспроизведением.",
+      "evidence": "[док] memory_bank/owner-memory/project-serenedb-ivf-blocked.md: «сборка ivf НЕ ОТМЕНЯЕТСЯ — pg_cancel_backend возвращает успех, работа продолжается... Снимается только рестартом движка»"
+    },
+    {
+      "idx": 65,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 53,
+      "claim": "Рабочий путь: индекс создаётся на пустой таблице, данные вставляются в готовый индекс (5-10 тыс. строк/с)",
+      "status": "ok",
+      "actual": "Текущая сборка так и устроена: corpus_init.sql создаёт таблицу и индекс (IF NOT EXISTS) до данных, затем build.sh льёт данные MERGE'ем в готовый индекс; precheck №1 прямо требует «нет индекса — сначала corpus_init.sql, потом сборка». Скорость 5-10 тыс. строк/с — прежний замер, не перемерялся.",
+      "evidence": "[код] /opt/1c-mcp-reports/corpus_init.sql:92-94 (CREATE INDEX до данных); build.sh:106 (init) → :192 (corpus_build) → :195 (corpus_merge); corpus_precheck.sql проверка 1"
+    },
+    {
+      "idx": 66,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 68,
+      "claim": "report_1c отправлял в модель 464 292 символа ≈ 155 000 токенов: схема 233 таблиц, 3 462 колонки + по 5 живых значений из 2 294 текстовых колонок (замер 26.07)",
+      "status": "hist",
+      "actual": "Датированный замер 26.07, приведён как обоснование отмены пути NL→SQL. Сам путь, впрочем, до сих пор физически включён у бота (см. idx 68).",
+      "evidence": "Блок доку явно датирован «замерено 2026-07-26»; повторить замер = прогнать get_schema — путь признан отменённым"
+    },
+    {
+      "idx": 67,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 78,
+      "claim": "Решение владельца 26.07: report_1c (NL→SQL) в контуре не нужен; модель не получает схему никогда; график строится после ответа",
+      "status": "ok",
+      "actual": "Решение зафиксировано дословно в памяти владельца — формулировки совпадают («report_1c не нужен... можно доделать запрос и... построить графики», схема в модель не уходит никогда).",
+      "evidence": "[док] memory_bank/owner-memory/project-no-nl2sql-charts-after-answer.md — то же решение 26.07 с дословной цитатой владельца"
+    },
+    {
+      "idx": 68,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 105,
+      "claim": "Сделать: вынести report_1c из mcp.servers.*.toolFilter.include, погасить get_schema и генерацию SQL моделью, добавить в ask_1c шаг построения графика",
+      "status": "ok",
+      "actual": "Как список несделанного — точен: report_1c ДО СИХ ПОР в toolFilter.include живого конфига бота, NL→SQL путь жив (mcp_reports.py → serene_report.run_report, get_schema на месте), шага графика в serene_ask.py нет (render_chart — 0 вхождений). Важно: решение владельца 26.07 не исполнено спустя 6 дней — пока report_1c включён, любой его вызов шлёт схему в модель вопреки TARGET п.19; это к стенду, не к доку.",
+      "evidence": "[код] /home/undebot/.openclaw/openclaw.json:142-155 (second-brain-reports :6015, include report_1c); /opt/1c-mcp-reports/mcp_reports.py:21,69-70; [замер] grep -c render_chart /opt/1c-mcp-reports/serene_ask.py → 0"
+    },
+    {
+      "idx": 69,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 113,
+      "claim": "Платформа 1С 8.3.27.1786 (x86), Бухгалтерия 3.0 — источник истины",
+      "status": "ok",
+      "actual": "На Windows в C:\\Program Files (x86)\\1cv8 лежит каталог версии 8.3.27.1786 — платформа x86 той самой версии. Конфигурация Бухгалтерия 3.0 — по докам/базе buh_test (TARGET_STATUS п.4), отдельно не вскрывалась.",
+      "evidence": "[замер] ssh unde@192.168.56.1:2222 «dir /b \\\"C:\\Program Files (x86)\\1cv8\\\"» → 8.3.27.1786, common, conf"
+    },
+    {
+      "idx": 70,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 114,
+      "claim": "На Windows PostgreSQL 17.6 x64, служба postgresql17, порт 5432, автозапуск",
+      "status": "ok",
+      "actual": "Служба postgresql17, AUTO_START, бинарь C:\\PostgreSQL\\17 (не x86-каталог), версия 17.6. Явной строки port в postgresql.conf нет — работает умолчание 5432.",
+      "evidence": "[замер] ssh: sc qc postgresql17 → AUTO_START, \"C:\\PostgreSQL\\17\\bin\\pg_ctl.exe\" ... -D C:\\PostgreSQL\\17\\data; postgres.exe --version → 17.6; findstr ^port postgresql.conf → пусто (умолчание 5432)"
+    },
+    {
+      "idx": 71,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 115,
+      "claim": "odata_gateway.py на :6011 под systemd: Bearer-токен, пропускает только GET, режет «..»; единственная дверь к 1С",
+      "status": "ok",
+      "actual": "Всё в коде: Bearer обязателен (без токена сервис не стартует), POST/PUT/PATCH/DELETE → 405, сегмент «..» → 403; юнит на :6011. «Единственная дверь» — старый 1c-gateway disabled; второй экземпляр того же шлюза (:6021, база ut) — та же дверь по шаблону, но сейчас запущен вне юнита (сирота, стендовая грязь).",
+      "evidence": "[код] /opt/1c-odata-gateway/odata_gateway.py:80 (Bearer), :97-99 ('..' → 403), :102-110 (не-GET → 405); [замер] systemctl is-enabled 1c-gateway → disabled; stand-systemd: pid 1136469 на :6021 вне юнита"
+    },
+    {
+      "idx": 72,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 116,
+      "claim": "SereneDB версии 26.07.3 на :7890 (PostgreSQL wire): корпус search_corpus, профиль search_tables, индекс search_idx",
+      "status": "ok",
+      "actual": "Версия и объекты на месте: SereneDB 26.07.3, порт 7890 отвечает по протоколу Postgres, search_corpus (103 808/623 565 строк), search_tables (1502 в ut_test), индекс search_idx.",
+      "evidence": "[замер] psql :7890 SELECT version() → PostgreSQL 18.3 (SereneDB 26.07.3); SELECT count(*) FROM search_tables (ut_test) → 1502; duckdb_indexes() → search_idx"
+    },
+    {
+      "idx": 73,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 117,
+      "claim": "serene_ask.py слушает :8091, systemd-юнит 1c-serene-ask; конвейер intent → probe → выбор сущности → агрегаты в SQL → формулировка → гейт",
+      "status": "disc",
+      "actual": "Живой serene_ask слушает :8099 (ASK_LISTEN_PORT=8099 в /etc/1c-mcp-reports.env; 8091 — лишь дефолт в коде), и туда же смотрит mcp_ask (ASK_URL=:8099); ARCHITECTURE:85 уже говорит 8099. Хуже: юнит 1c-serene-ask enabled, но inactive/dead — боевой процесс (pid 3109129) запущен 31.07 руками вне systemd и не переживёт перезагрузку. Конвейер по коду соответствует.",
+      "evidence": "[замер] ss -ltnp → 127.0.0.1:8099 python3 pid 3109129; tr '\\0' '\\n' < /proc/3109129/environ | grep ASK_LISTEN_PORT → 8099; [код] serene_ask.py:52 (дефолт 8091); [замер] systemctl cat 1c-serene-ask (юнит существует), stand-systemd: 1c-serene-ask inactive/dead, процесс в session-247653.scope",
+      "verdict": "a",
+      "verdict_why": "Порт — док отстал (8099 давно рабочий, ARCHITECTURE:85 согласен). Отдельно дефект СТЕНДА, не дока: боевой сервис вне юнита нарушает п.1 TARGET (продакшен, переживает перезапуск) — чинится стендом (запуск юнита), а не правкой доков"
+    },
+    {
+      "idx": 74,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 118,
+      "claim": "mcp_reports.py — MCP с Bearer, доступ бота/клиента к serene_ask",
+      "status": "disc",
+      "actual": "mcp_reports.py — мост к report_1c (NL→SQL через serene_report), а не к serene_ask. К serene_ask бот ходит через mcp_ask.py (:6016, инструмент ask_1c, ASK_URL=:8099). Bearer у mcp_reports действительно обязателен (без MCP_TOKEN — FATAL).",
+      "evidence": "[код] /opt/1c-mcp-reports/mcp_reports.py:21 (from serene_report import ... run_report), :30 (порт 6015), :53-60 (Bearer fail-closed), :69-70 (@mcp.tool report_1c); [код] /home/undebot/.openclaw/openclaw.json:156-169 (serene-ask → :6016, ask_1c)",
+      "verdict": "a",
+      "verdict_why": "Роли сервисов в таблице «Стек» перепутаны/устарели: mcp_ask.py появился позже и в таблицу не внесён; реальность легитимна"
+    },
+    {
+      "idx": 75,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 119,
+      "claim": "Эмбеддинги Qwen text-embedding-v4 размерностью 1536 (DashScope)",
+      "status": "disc",
+      "actual": "Эмбеддер тот же (text-embedding-v4, DashScope), но размерность 1024, а не 1536: len(emb)=1024 в обеих базах, EMBED_DIM=1024 в коде и сборке. Комментарий в коде: 1024 — то, что отдаёт модель; прежние 1536 были взяты по образцу выведенного braine, а не замером. TARGET_STATUS п.5 подтверждает 1024.",
+      "evidence": "[замер] psql: SELECT len(emb) FROM search_corpus ... → 1024 (и в postgres, и в ut_test); [код] serene_ask.py:175-182 (EMBED_DIM default 1024 с разбором), build.sh:35",
+      "verdict": "a",
+      "verdict_why": "Правило владельца — «только Qwen text-embedding-v4», оно соблюдено; размерность — инженерный факт модели, док отстал"
+    },
+    {
+      "idx": 76,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 120,
+      "claim": "Модель DeepSeek deepseek-v4-flash по HTTP: намерение, выбор сущности, формулировка ответа",
+      "status": "disc",
+      "actual": "Рабочая модель — deepseek-v4-pro: дефолт в коде serene_ask, явно задана в /etc/1c-serene-ask.env, и primary бота тоже v4-pro. Комментарий в коде фиксирует, что приёмка мерилась на v4-flash, но текущий выбор — pro. Роли модели (намерение/выбор/формулировка) — совпадают.",
+      "evidence": "[код] serene_ask.py:165-169 (DS_MODEL default deepseek-v4-pro, комментарий про flash); [замер] grep /etc/1c-serene-ask.env → DEEPSEEK_MODEL=deepseek-v4-pro; [код] /home/undebot/.openclaw/openclaw.json:18 (primary deepseek-v4-pro)",
+      "verdict": "a",
+      "verdict_why": "Смена flash→pro — рабочая настройка, зафиксированная в коде и env; док отстал"
+    },
+    {
+      "idx": 77,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 122,
+      "claim": "Секреты — в /etc/1c-*.env с chmod 600, в git не попадают",
+      "status": "ok",
+      "actual": "Все env-файлы с секретами — 600 (12 из 13). Один файл 644 — /etc/1c-bot-monitor.env, но секретов в нём нет (единственная переменная — локальный health-URL без токена, 0 совпадений token/key/secret/pass); для чистоты стенду стоит и его сделать 600. В git env-файлы не лежат (живут в /etc).",
+      "evidence": "[замер] stat -c '%a %n' /etc/1c-*.env → 600×12, 644 только 1c-bot-monitor.env; grep -ciE 'token|key|secret|bearer|pass' /etc/1c-bot-monitor.env → 0; длина значения 29 байт"
+    },
+    {
+      "idx": 78,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 124,
+      "claim": "Текстовый индекс: USING inverted(doc search_dict) INCLUDE (src_table, row_key, amount, doc_date); сборка 5 с, <0.5 ГБ на 96 931 строке (замер 26.07)",
+      "status": "disc",
+      "actual": "Определение индекса изменилось: теперь inverted(doc search_dict, refs search_dict, src_table) INCLUDE (src_table, row_key, doc_date) — добавлены проиндексированные refs и src_table, amount из INCLUDE убран. Замер 5 с/<0.5 ГБ датирован 26.07 и относится к прежнему корпусу 96 931 строк (сейчас 103 808/623 565). Абзац подан в §0 «Стек (факты)» как текущее.",
+      "evidence": "[код] /opt/1c-mcp-reports/corpus_init.sql:92-94 — текущий CREATE INDEX; [замер] счётчики корпуса stand-db (103 808 postgres, 623 565 ut_test)",
+      "verdict": "a",
+      "verdict_why": "Эволюция индекса (refs, src_table, уход amount) — рабочие правки сборки; таблица «Стек» не обновлена"
+    },
+    {
+      "idx": 79,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 126,
+      "claim": "Векторная часть (ivf) в индекс не включена: сборка на 96 931×1536 требует >34 ГБ и убивается OOM; векторный поиск — полным сканом array_cosine_similarity как запасной путь",
+      "status": "disc",
+      "actual": "Первая половина верна: ivf-индекса нет (duckdb_indexes — только inverted), вектор заблокирован (owner-memory). Но запасной путь давно НЕ array_cosine_similarity: используется родной оператор <=> (cosine_distance) — замер 27.07 в коде: быстрее и, в отличие от array_*, способен использовать векторный индекс; включается, «когда слова не дали ничего». Цифры OOM относятся к размерности 1536, сейчас 1024.",
+      "evidence": "[замер] duckdb_indexes() → только search_idx/alias_idx, ivf нет; [код] serene_ask.py:2010-2025 — ORDER BY emb <=> ... с разбором, почему не array_cosine_similarity",
+      "verdict": "a",
+      "verdict_why": "Замена array_* на родной <=> — движение К нативным средствам (п.7 TARGET), зафиксирована замером в коде; док отстал"
+    },
+    {
+      "idx": 80,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 132,
+      "claim": "Словарь индекса: template='text', case='lower', stemming=false, accent=false, frequency, position, norm; локаль — параметр DICT_LOCALE; опечатки ловит ts_levenshtein",
+      "status": "ok",
+      "actual": "Дословно совпадает с живой сборкой: search_dict создаётся именно с этими параметрами, локаль приходит параметром (env SEARCH_DICT_LOCALE → psql-переменная dict_locale, дефолт ru_RU.utf8), опечатки — ts_levenshtein в serene_ask. Добавился ещё search_dict_stem (copy_from + stemming=true) — расширение, не противоречие.",
+      "evidence": "[код] corpus_init.sql:66-68 (все параметры), :89-90 (search_dict_stem); build.sh:36 (DICT_LOCALE), :106 (-v dict_locale); serene_ask.py:463 (ts_levenshtein)"
+    },
+    {
+      "idx": 81,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 249,
+      "claim": "Индекс над данными в Postgres работает через VIEW; 50 тыс. строк — 423 мс (проверено замером)",
+      "status": "ok",
+      "actual": "Замер зафиксирован в SERENEDB.md (текстовый индекс над PG-view, 50 тыс. строк — 423 мс). Повторить сейчас нельзя без CREATE INDEX (DDL запрещён аудиту); утверждение согласовано и с owner-memory (индекс на VIEW обязателен).",
+      "evidence": "[док] docs/SERENEDB.md:228 «Текстовый индекс над PG-view, 50 тыс. строк | 423 мс»; owner-memory/project-architecture-pg-windows-attach.md"
+    },
+    {
+      "idx": 82,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 262,
+      "claim": "Выбор сущности — без имён в коде: сила текстового совпадения × близость вопроса к названию сущности из $metadata",
+      "status": "disc",
+      "actual": "«Без имён в коде» — верно (названия приходят из search_tables/данных). Но формула заменена: выбор делает МОДЕЛЬ из списка названий кандидатов (с числом совпадений и величинами), а векторная близость вопроса к названию отклонена замером — docstring pick_entity: «эмбеддинг не связывает „продажи“ с „Реализация Товаров Услуг“ (0.419) и ставит выше „Склады“». TARGET_STATUS п.3 фиксирует следствие: выбор сущности моделью недетерминирован.",
+      "evidence": "[код] serene_ask.py:1019-1032 (docstring pick_entity: «Почему не вектором... Модель для этого и нужна»), :1039-1046 (названия из search_tables, порядок кандидатов)",
+      "verdict": "a",
+      "verdict_why": "Замена механизма подтверждена замером и разрешена п.19 TARGET (сопоставить слово с названием — задача модели); док описывает отброшенную формулу"
+    },
+    {
+      "idx": 83,
+      "doc": "docs/TARGET_ARCHITECTURE.md",
+      "line": 263,
+      "claim": "braine выведен из контура, освободилось 972 МБ",
+      "status": "ok",
+      "actual": "Весь слой braine мёртв: api, open-webui, oikb, rerank-shim, kb-poll — inactive и не enabled; порты 3000/8081/8082/8090 никто не слушает. 972 МБ — замер момента вывода (26.07), не перемерялся. Хвост на стенде: 1c-mcp-braine.service (мост) до сих пор enabled+running при мёртвом апстриме.",
+      "evidence": "[замер] systemctl is-active api open-webui oikb rerank-shim kb-poll → все inactive; systemctl list-unit-files --state=enabled — их нет; stand-net: 3000/8081/8082/8090 connection refused"
+    },
+    {
+      "idx": 84,
+      "doc": "docs/PLAN_TARGET_CLOSURE.md",
+      "line": 1,
+      "claim": "Порядок закрытия контракта: 13 → 17 → 9 → 15 → 18 → 1 → 11, задан владельцем 28.07.2026, строго по очереди",
+      "status": "disc",
+      "actual": "Очередь частично исполнена по порядку (13 🟢, 17 🟢, 18 🟢, 9 🟡 в работе — согласуется), но позиция п. 15 разошлась с более новым словом владельца: TARGET_STATUS (обновлён 31.07) по п. 15 говорит «владелец: делаем в конце», тогда как в плане 15 стоит четвёртым — до 18, 1 и 11. Один из двух документов передаёт волю владельца неверно.",
+      "evidence": "[док] docs/TARGET_STATUS.md, строка п.15: «🔴 владелец: делаем в конце» (обновлено 2026-07-31) против PLAN_TARGET_CLOSURE.md:1 (15 на 4-й позиции); стадии 13/17/18 🟢, 9 🟡 — там же",
+      "verdict": "v",
+      "verdict_why": "Оба утверждения приписаны владельцу (28.07 и 31.07); переставил ли он п.15 в конец всей очереди или только отложил построение набора — решать не нам, вопрос владельцу"
+    },
+    {
+      "idx": 85,
+      "doc": "docs/PLAN_TARGET_CLOSURE.md",
+      "line": 10,
+      "claim": "На начало работы закрыты замером 4 пункта из 21: 5, 6, 19, 20",
+      "status": "hist",
+      "actual": "Явный снимок «Состояние на начало работы» (28.07). Сейчас зелёных 11 (TARGET_STATUS 31.07: 4,5,6,7,8,12,13,17,18,19,20) — снимок как история корректен.",
+      "evidence": "[док] docs/TARGET_STATUS.md «Итог: 🟢 11 · 🟡 6 · 🔴 4»; формулировка плана «Состояние на начало работы»"
+    },
+    {
+      "idx": 86,
+      "doc": "docs/PLAN_TARGET_CLOSURE.md",
+      "line": 45,
+      "claim": "serene_search_build.py остался в ExecStart таймера и после перезагрузки повторит аварию 03:55; первое действие — переключить юниты на build.sh и снять его с таймера",
+      "status": "disc",
+      "actual": "Уже сделано 28.07: ExecStart=/opt/1c-mcp-reports/build.sh, в юните комментарий «28.07.2026: юнит переключён с serene_search_build.py на build.sh», старый ExecStart сохранён в .bak-20260728; таймер — не 03:55, а каждые 20 минут (OnBootSec=5min/OnUnitActiveSec=20min). Питон-сборщик с таймера снят (TARGET_STATUS п.20 🟢 это же фиксирует). План читается как несделанное «первое действие».",
+      "evidence": "[замер] systemctl cat 1c-serene-index.service → ExecStart=/opt/1c-mcp-reports/build.sh + комментарий о переключении 28.07; systemctl cat 1c-serene-index.timer → OnUnitActiveSec=20min",
+      "verdict": "a",
+      "verdict_why": "Действие выполнено и задокументировано в самом юните; план не отмечает пункт сделанным — править док"
+    },
+    {
+      "idx": 87,
+      "doc": "docs/PLAN_TARGET_CLOSURE.md",
+      "line": 57,
+      "claim": "Приёмочный набор лежит в ab-gold.tsv и написан под наши данные",
+      "status": "ok",
+      "actual": "Файл существует на стенде и в репо; шапка прямо говорит, что это файл ДАННЫХ с именами сущностей и значениями от конкретной базы — т.е. «под наши данные», что план и признаёт незакрытым п.15.",
+      "evidence": "[замер] find → /opt/1c-mcp-reports/ab-gold.tsv и /srv/1c/ubuntu/serenedb/ab-gold.tsv; [код] шапка файла: «Файл ДАННЫХ, а не кода: имена сущностей, реквизитов и значения здесь — от...»"
+    },
+    {
+      "idx": 88,
+      "doc": "docs/PLAN_TARGET_CLOSURE.md",
+      "line": 66,
+      "claim": "corpus_precheck.sql ловит мёртвый эмбеддер и исчезнувшие источники до изменения корпуса",
+      "status": "ok",
+      "actual": "Обе проверки в файле и обе — до MERGE, через штатную error() с ненулевым кодом: №3 «таблицы-источники существуют» (с фильтром по текущей базе), №4 «эмбеддер жив» (ai_embed с проверкой размерности до изменения корпуса).",
+      "evidence": "[код] /opt/1c-mcp-reports/corpus_precheck.sql: проверка 3 (нет таблиц-источников → error, до такта) и проверка 4 («эмбеддер не отвечает... такт остановлен до изменения корпуса»)"
+    },
+    {
+      "idx": 89,
+      "doc": "docs/PLAN_TARGET_CLOSURE.md",
+      "line": 82,
+      "claim": "Пункт 14 (инсталлятор) по контракту делается последним и в план владельцем не включён",
+      "status": "ok",
+      "actual": "Обе части текстуально верны: TARGET.md п.14 — «Делается в конце, когда закрыто всё остальное», и в плане 13→17→9→15→18→1→11 пункта 14 нет. Наблюдение рядом: работа по инсталлятору фактически идёт уже сейчас (TARGET_STATUS п.14 🟡 — deploy.sh, deploy_instance.sh, шаблонный шлюз; в репо правится windows/odata-setup и work/installer-exe) — насколько это согласовано с «в конце», видно только владельцу.",
+      "evidence": "[док] /srv/1c/TARGET.md:47-50 (п.14, «Делается в конце»); PLAN_TARGET_CLOSURE.md:82-83; [док] TARGET_STATUS.md п.14 🟡; git status: изменены windows/odata-setup/*, work/installer-exe/PLAN.md"
+    }
+  ]
+}

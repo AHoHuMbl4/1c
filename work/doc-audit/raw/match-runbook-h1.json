@@ -1,0 +1,540 @@
+{
+ "shard": "runbook",
+ "half": 1,
+ "results": [
+  {
+   "idx": 0,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 16,
+   "claim": "Роутер 192.168.56.1 пробрасывает порт :6003 на Windows-IIS:80",
+   "status": "ok",
+   "actual": "Эндпоинт жив: без auth отвечает 401 от IIS",
+   "evidence": "[замер] curl http://192.168.56.1:6003/1c/odata/standard.odata/ → HTTP/1.1 401 Unauthorized"
+  },
+  {
+   "idx": 1,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 18,
+   "claim": "OData-шлюз слушает :6011 и пропускает только GET",
+   "status": "ok",
+   "actual": "Слушает 127.0.0.1:6011; POST → 405; в коде все пишущие методы → _deny(405); дополнительно требует Bearer-токен (fail-closed)",
+   "evidence": "[замер] ss -tlnp: 127.0.0.1:6011 python3 pid 3173747; curl -X POST :6011 → 405; [код] ubuntu/1c-gateway/odata_gateway.py:102-110"
+  },
+  {
+   "idx": 2,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 18,
+   "claim": "Витрина SereneDB слушает :7890",
+   "status": "ok",
+   "actual": "serened слушает 127.0.0.1:7890",
+   "evidence": "[замер] ss -tlnp: LISTEN 127.0.0.1:7890 serened pid 1601434"
+  },
+  {
+   "idx": 3,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 20,
+   "claim": "OpenClaw-бот слушает :18800 под юзером undebot; serene_ask — :8091",
+   "status": "disc",
+   "actual": "Бот :18800 под undebot — верно (cgroup user-1001/openclaw-gateway.service). Но :8091 НИКТО не слушает: юнит 1c-serene-ask inactive(dead) с 29.07; ответы держит осиротевший serene_ask.py на 127.0.0.1:8099 (PPID=1), и 1c-mcp-ask настроен на ASK_URL=http://127.0.0.1:8099",
+   "evidence": "[замер] ss -tlnp: 8091 отсутствует, 8099 → python3 pid 3109129 PPID=1; systemctl status 1c-serene-ask → inactive (dead) since 29.07; systemctl cat 1c-mcp-ask → Environment=ASK_URL=http://127.0.0.1:8099",
+   "verdict": "b",
+   "verdict_why": "Стенд нарушает автономность/zero-touch: боевой путь ответов держится на сироте, который не переживёт ребут (девиз владельца 29.07 «автономность», RUNBOOK §9 zero-touch; сам док на стр.55 называет это дефектом)"
+  },
+  {
+   "idx": 4,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 29,
+   "claim": "Юнит 1c-odata-gateway (odata_gateway.py, root) ходит на upstream 192.168.56.1:6003",
+   "status": "ok",
+   "actual": "Юнит active, ExecStart=/usr/bin/python3 /opt/1c-odata-gateway/odata_gateway.py, User не задан (root), ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata",
+   "evidence": "[замер] systemctl is-active 1c-odata-gateway → active; grep ODG_UPSTREAM /etc/1c-odata-gateway.env; [код] /etc/systemd/system/1c-odata-gateway.service:11"
+  },
+  {
+   "idx": 5,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 30,
+   "claim": "Юнит 1c-config-ui (oc_config_ui.py, root) слушает 0.0.0.0:6012",
+   "status": "disc",
+   "actual": "Слушает 127.0.0.1:6012, не 0.0.0.0: в /etc/1c-config-ui.env задано UI_HOST=127.0.0.1 (и дефолт в коде 127.0.0.1)",
+   "evidence": "[замер] ss -tlnp: LISTEN 127.0.0.1:6012 python3 pid 3173735; grep UI_HOST /etc/1c-config-ui.env → UI_HOST=127.0.0.1; [код] ubuntu/1c-config-ui/oc_config_ui.py:27",
+   "verdict": "a",
+   "verdict_why": "Реальность (loopback) безопаснее и легитимна — док отстал"
+  },
+  {
+   "idx": 6,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 31,
+   "claim": "Таймер 1c-etl.timer срабатывает в 03:00 и кормил braine — «не нужен» после вывода слоя",
+   "status": "ok",
+   "actual": "Таймер существует (OnCalendar 03:00), disabled и inactive — соответствует пометке «не нужен» (противоречие с §9 — отдельный пункт idx 37)",
+   "evidence": "[замер] systemctl cat 1c-etl.timer → OnCalendar=*-*-* 03:00:00; is-enabled → disabled; is-active → inactive"
+  },
+  {
+   "idx": 7,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 32,
+   "claim": "Слой braine (postgresql/open-webui/oikb/rerank-shim/api :8090) выведен из контура 26.07, освободилось 972 МБ",
+   "status": "ok",
+   "actual": "open-webui/oikb/rerank-shim/api/kb-poll — inactive и disabled; порт 8090 никто не слушает (972 МБ — исторический замер, не перепроверялся)",
+   "evidence": "[замер] systemctl is-active open-webui oikb rerank-shim api kb-poll → все inactive; is-enabled → все disabled; ss -tlnp | grep 8090 → пусто"
+  },
+  {
+   "idx": 8,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 33,
+   "claim": "Юнит serenedb (процесс serened) работает под юзером serenedb на 127.0.0.1:7890",
+   "status": "ok",
+   "actual": "User=serenedb, процесс serened на 127.0.0.1:7890",
+   "evidence": "[замер] systemctl show serenedb -p User → User=serenedb; ss -tlnp: 127.0.0.1:7890 serened"
+  },
+  {
+   "idx": 9,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 34,
+   "claim": "Юнит 1c-serene-ask (serene_ask.py, root) — отвечающий сервис на 127.0.0.1:8091",
+   "status": "disc",
+   "actual": "Юнит существует и enabled (ExecStart serene_ask.py, дефолт порта 8091 в коде), но inactive(dead) с 29.07 17:21; 8091 никто не слушает. Фактически отвечает сирота serene_ask.py на :8099 вне systemd",
+   "evidence": "[замер] systemctl status 1c-serene-ask → inactive (dead) since Wed 2026-07-29; ss: 8091 нет, 8099 pid 3109129 PPID=1; [код] ubuntu/serenedb/serene_ask.py:52 ASK_LISTEN_PORT default 8091",
+   "verdict": "b",
+   "verdict_why": "Дефект стенда: enabled-юнит мёртв, его роль исполняет ручной сирота — нарушение автономности (девиз владельца 29.07) и zero-touch §9; править док под сироту нельзя"
+  },
+  {
+   "idx": 10,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 35,
+   "claim": "Таймер 1c-serene-sync.timer (03:40) остановлен: синк стал частью конвейера",
+   "status": "ok",
+   "actual": "OnCalendar 03:40, disabled и inactive",
+   "evidence": "[замер] systemctl cat 1c-serene-sync.timer → OnCalendar=*-*-* 03:40:00; is-enabled → disabled; is-active → inactive"
+  },
+  {
+   "idx": 11,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 36,
+   "claim": "Таймер 1c-serene-pipeline.timer (pipeline.sh, по готовности) — боевой такт: раскладка кода → синк-дельта → сборка",
+   "status": "disc",
+   "actual": "Устройство совпадает (OnUnitInactiveSec=1min «по готовности», ExecStart=pipeline.sh, enabled), но таймер ОСТАНОВЛЕН: inactive, боевой такт не тикает (сервис pipeline failed/killed с 29.07) — свежесть не обеспечивается",
+   "evidence": "[замер] systemctl is-enabled 1c-serene-pipeline.timer → enabled; is-active → inactive; systemctl cat → OnUnitInactiveSec=1min; grep ExecStart /etc/systemd/system/1c-serene-pipeline.service:17 → pipeline.sh",
+   "verdict": "b",
+   "verdict_why": "TARGET.md п.17 (свежесть не позднее 20 минут): конвейер стоит с 29.07 — дефект стенда, а не дока"
+  },
+  {
+   "idx": 12,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 37,
+   "claim": "1c-serene-index.timer (03:55) остановлен 28.07; сборка переехала в build.sh, юнит на build.sh ещё не переключён",
+   "status": "disc",
+   "actual": "Юнит УЖЕ переключён на build.sh: ExecStart=/opt/1c-mcp-reports/build.sh (бэкап старого — 1c-serene-index.service.bak-20260728); таймер на стенде уже не «03:55», а OnUnitActiveSec=20min (но disabled/inactive). «Ещё не переключён» и «03:55» устарели",
+   "evidence": "[код] /etc/systemd/system/1c-serene-index.service:31 ExecStart=/opt/1c-mcp-reports/build.sh; [замер] systemctl cat 1c-serene-index.timer → OnUnitActiveSec=20min; is-enabled → disabled",
+   "verdict": "a",
+   "verdict_why": "Реальность ушла вперёд дока: переключение сделано, док не обновлён"
+  },
+  {
+   "idx": 13,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 38,
+   "claim": "1c-mcp-reports (mcp_reports.py) на 127.0.0.1:6015 — report_1c выведен из контура, но юнит ещё жив",
+   "status": "ok",
+   "actual": "Юнит active, слушает 127.0.0.1:6015; в конфиге бота second-brain-reports (:6015) присутствует",
+   "evidence": "[замер] systemctl is-active 1c-mcp-reports → active; ss: 127.0.0.1:6015 pid 3173769"
+  },
+  {
+   "idx": 14,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 39,
+   "claim": "openclaw-gateway — systemd user-юнит юзера undebot на 127.0.0.1:18800",
+   "status": "ok",
+   "actual": "Процесс pid 2786727 в cgroup user-1001.slice/user@1001.service/app.slice/openclaw-gateway.service, слушает 127.0.0.1:18800 и [::1]:18800",
+   "evidence": "[замер] cat /proc/2786727/cgroup → .../openclaw-gateway.service; ss -tlnp: 18800"
+  },
+  {
+   "idx": 15,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 40,
+   "claim": "Таймер 1c-bot-monitor.timer (bot_health_check.sh, root) срабатывает каждые 3 минуты, алертит владельцу в Telegram",
+   "status": "ok",
+   "actual": "OnUnitActiveSec=3min, таймер active; скрипт шлёт api.telegram.org/sendMessage",
+   "evidence": "[замер] systemctl cat 1c-bot-monitor.timer → OnUnitActiveSec=3min; is-active → active; [код] /opt/1c-bot-monitor/bot_health_check.sh:43 sendMessage"
+  },
+  {
+   "idx": 16,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 41,
+   "claim": "nightly-eval.timer погашен 29.07, поднимать не надо",
+   "status": "ok",
+   "actual": "disabled и inactive",
+   "evidence": "[замер] systemctl is-enabled nightly-eval.timer → disabled; is-active → inactive"
+  },
+  {
+   "idx": 17,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 46,
+   "claim": "Шаблонный юнит 1c-odata-gateway@<имя> читает /etc/1c-odata-gateway-<имя>.env (права 600)",
+   "status": "ok",
+   "actual": "EnvironmentFile=/etc/1c-odata-gateway-%i.env; /etc/1c-odata-gateway-ut.env имеет права 600 (rw-------)",
+   "evidence": "[замер] systemctl cat 1c-odata-gateway@ → EnvironmentFile=/etc/1c-odata-gateway-%i.env; ls -l → -rw------- root root 215 Jul 29"
+  },
+  {
+   "idx": 18,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 51,
+   "claim": "Порт 6021 держит осиротевший процесс от 28.07 (PPID=1); юнит 1c-odata-gateway@ut установлен и enabled, но крутится в перезапуске",
+   "status": "disc",
+   "actual": "Сирота подтверждён: pid 1136469, PPID=1, root, запущен 28.07 20:32, держит 127.0.0.1:6021; юнит @ut enabled. Но он уже НЕ «крутится в перезапуске»: inactive (dead, Result: exit-code) с 29.07 06:00 — systemd прекратил попытки",
+   "evidence": "[замер] ps -o pid,ppid,lstart -p 1136469 → PPID 1, Tue Jul 28 20:32; ss: 6021 pid 1136469; systemctl status 1c-odata-gateway@ut → inactive (dead) (Result: exit-code) since 2026-07-29 06:00:45",
+   "verdict": "a",
+   "verdict_why": "Снимок «на 29.07» частично протух: сирота на месте, но рестарт-цикл юнита давно закончился — обновить состояние в доке (сам сирота — известный дефект, уже описанный доком)"
+  },
+  {
+   "idx": 19,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 52,
+   "claim": "Порт 8099 (сервис ответов второй базы) держит осиротевший процесс, юнита нет; должен стать 1c-serene-ask@<имя>",
+   "status": "ok",
+   "actual": "Сирота pid 3109129 (PPID=1, root, с 31.07 04:50) слушает 127.0.0.1:8099; шаблонного юнита 1c-serene-ask@ нет (есть только 1c-serene-ask.service); при этом 1c-mcp-ask ходит именно на 8099",
+   "evidence": "[замер] ps -o pid,ppid,lstart -p 3109129 → PPID 1; ls /etc/systemd/system/ | grep serene-ask → только 1c-serene-ask.service; systemctl cat 1c-mcp-ask → ASK_URL=http://127.0.0.1:8099"
+  },
+  {
+   "idx": 20,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 53,
+   "claim": "База движка второй базы называется ut_test, пересоздана с нуля 29.07",
+   "status": "ok",
+   "actual": "База ut_test существует (вторая после postgres); пересоздание 29.07 зафиксировано в PLAN_AUTONOMY (строка «29.07 … DROP DATABASE ut_test → CREATE DATABASE → конвейер»)",
+   "evidence": "[замер] psql 7890: SELECT datname FROM pg_database → postgres, ut_test; [код] docs/PLAN_AUTONOMY.md, таблица шагов 29.07"
+  },
+  {
+   "idx": 21,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 60,
+   "claim": "Инвариант: read-only к 1С — двумя слоями: пользователь ai_reader без прав записи + шлюз, режущий не-GET",
+   "status": "ok",
+   "actual": "Шлюз режет не-GET кодом (405), ходит к 1С под ODG_USER=ai_reader",
+   "evidence": "[код] ubuntu/1c-gateway/odata_gateway.py:102-110 (do_POST/PUT/PATCH/DELETE/MERGE → 405); [замер] curl -X POST :6011 → 405; grep ODG_USER /etc/1c-odata-gateway.env → ai_reader"
+  },
+  {
+   "idx": 22,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 86,
+   "claim": "Доступ на Windows: ssh -i /root/.ssh/id_ed25519_1c -p 2222 unde@192.168.56.1",
+   "status": "ok",
+   "actual": "Ключ на месте (600), вход работает",
+   "evidence": "[замер] ssh -o BatchMode=yes -i /root/.ssh/id_ed25519_1c -p 2222 unde@192.168.56.1 hostname → DESKTOP-UQG768B"
+  },
+  {
+   "idx": 23,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 89,
+   "claim": "192.168.56.1:22 — SSH Linux-роутера, не Windows",
+   "status": "ok",
+   "actual": "Баннер на :22 — OpenSSH Ubuntu",
+   "evidence": "[замер] соединение с 192.168.56.1:22 → SSH-2.0-OpenSSH_10.2p1 Ubuntu-2ubuntu3.5"
+  },
+  {
+   "idx": 24,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 91,
+   "claim": "Windows-хост DESKTOP-UQG768B, пользователь unde",
+   "status": "ok",
+   "actual": "hostname → DESKTOP-UQG768B под юзером unde («не администратор домена» не перепроверялось, второстепенно)",
+   "evidence": "[замер] ssh unde@192.168.56.1:2222 hostname → DESKTOP-UQG768B"
+  },
+  {
+   "idx": 25,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 99,
+   "claim": "Платформа 8.3.27.1786; базы C:\\1c\\bases (bld, buh_test); опубликована buh_test через default.vrd со standardOdata enable=true",
+   "status": "disc",
+   "actual": "Платформа 8.3.27.1786 ✓; default.vrd: ib=C:\\1c\\bases\\buh_test, standardOdata enable=\"true\" ✓. Но в C:\\1c\\bases уже ТРИ базы: bld, buh_test, ut_demo — док перечисляет две",
+   "evidence": "[замер] ssh: dir /b \"C:\\Program Files (x86)\\1cv8\" → 8.3.27.1786; type C:\\inetpub\\1c\\default.vrd → ib buh_test, standardOdata enable=true; dir /b C:\\1c\\bases → bld, buh_test, ut_demo",
+   "verdict": "a",
+   "verdict_why": "Появилась вторая рабочая база ut_demo — док отстал от стенда"
+  },
+  {
+   "idx": 26,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 155,
+   "claim": "setup-1c-odata.exe существует; --check ничего не меняет; код возврата 10 = поставлены компоненты IIS, нужен ребут",
+   "status": "ok",
+   "actual": "exe на месте (109056 Б); README: «--check — полностью read-only режим»; в коде EXIT_REBOOT=10",
+   "evidence": "[замер] ls -l dist/setup-1c-odata.exe; [код] windows/odata-setup/README.md:161; windows/odata-setup/src/Program.cs:41 EXIT_REBOOT = 10, :260 return EXIT_REBOOT"
+  },
+  {
+   "idx": 27,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 162,
+   "claim": "setup-1c-odata.exe сохраняет блок подключения в C:\\1c\\logs\\1c-odata-connection.txt",
+   "status": "ok",
+   "actual": "Имя файла 1c-odata-connection.txt формируется в коде",
+   "evidence": "[код] windows/odata-setup/src/Program.cs:664 Path.Combine(dir, \"1c-odata-connection.txt\")"
+  },
+  {
+   "idx": 28,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 189,
+   "claim": "Эндпоинт OData: http://<host>/1c/odata/standard.odata/, без auth → 401",
+   "status": "ok",
+   "actual": "401 без авторизации",
+   "evidence": "[замер] curl http://192.168.56.1:6003/1c/odata/standard.odata/ → HTTP/1.1 401"
+  },
+  {
+   "idx": 29,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 208,
+   "claim": "Слой 2: odata_gateway.py на :6011 пропускает только GET; POST/PATCH/PUT/DELETE → 405, до 1С не доходят",
+   "status": "ok",
+   "actual": "Пишущие методы отбиваются на входе, до апстрима не доходят",
+   "evidence": "[код] odata_gateway.py:102-110 (_deny до любого похода в upstream); [замер] curl -X POST http://127.0.0.1:6011/... → 405"
+  },
+  {
+   "idx": 30,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 214,
+   "claim": "934 сущности отдают $count → 200, а выборку данных → 401 (перепись полноты)",
+   "status": "ok",
+   "actual": "В base_profile ровно 934 сущности с rows = -1 (признак «$count есть, данные 401»); таблица search_coverage существует (4353 строки)",
+   "evidence": "[замер] psql 7890: SELECT count(*) FROM base_profile WHERE rows=-1 → 934; SELECT count(*) FROM search_coverage → 4353"
+  },
+  {
+   "idx": 31,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 222,
+   "claim": "Из 934 закрытых: 25 *_RecordType, 352 Удалить*, 579 прочих (363 InformationRegister, 168 Catalog, 46 Document)",
+   "status": "disc",
+   "actual": "Каждое число по отдельности подтверждено (25 RecordType, 352 с «Удалить», 579 прочих; из них 363 IR + 168 Cat + 46 Doc + 2 AccumulationRegister). Но категории таблицы пересекаются: 22 сущности «Удалить…_RecordType» посчитаны и там и там, сумма таблицы 25+352+579=956 ≠ 934 — как разбиение таблица неверна (непересекающиеся: 25/330/579)",
+   "evidence": "[замер] psql: rectype=25, LIKE '%Удалить%' всего=352 (из них 22 одновременно _RecordType), прочие=579 (363/168/46/2); 25+330+579=934",
+   "verdict": "a",
+   "verdict_why": "Арифметика дока не сходится из-за двойного счёта 22 сущностей — поправить таблицу (реальность легитимна)"
+  },
+  {
+   "idx": 32,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 231,
+   "claim": "Решение владельца 28.07: 934 закрытых оставить как есть; полнота 99,998% (не дошло 2 строки из 103 958)",
+   "status": "ok",
+   "actual": "Решение зафиксировано в CHANGELOG за 28.07 с теми же цифрами; live: search_quality cov_rows_lost=2",
+   "evidence": "[код] CHANGELOG.md:1448-1456 «[решение] Владелец 28.07… полнота 99,998 % (не дошло 2 строки из 103 958)»; [замер] psql: search_quality cov_rows_lost=2 (снимок stand-db, подтверждён Changelog)"
+  },
+  {
+   "idx": 33,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 236,
+   "claim": "934 закрытых сущности присутствуют в $metadata — ограничивает роль, а не состав OData",
+   "status": "ok",
+   "actual": "$metadata через шлюз → 200, 20,2 МБ; выборочная сущность из списка 934 (AccumulationRegister_ОстаткиПартийЗЕРНО, rows=-1) в $metadata присутствует",
+   "evidence": "[замер] GET /$metadata через :6011 (Bearer из env, не в CLI) → 200, 20220005 байт, имя сущности найдено в XML"
+  },
+  {
+   "idx": 34,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 247,
+   "claim": "/etc/1c-odata-gateway.env содержит ODG_USER=ai_reader, ODG_PASS, ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata; права 600",
+   "status": "ok",
+   "actual": "Права 600; переменные ODG_USER=ai_reader, ODG_PASS, ODG_UPSTREAM (точно как в доке) есть; сверх дока — ODG_GATEWAY_TOKEN и ODG_TIMEOUT",
+   "evidence": "[замер] stat -c %a → 600; grep: ODG_USER=ai_reader, ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata; имена 5 переменных ODG_*"
+  },
+  {
+   "idx": 35,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 260,
+   "claim": "Прямая запись под ai_reader (мимо шлюза) → отказ прав HTTP 500",
+   "status": "unverifiable",
+   "actual": "",
+   "evidence": "Проверка требует POST к 1С с кредами ai_reader в командной строке — запрещено правилами сессии (только чтение; секреты не в CLI). Исторический замер в доке помечен «проверено»"
+  },
+  {
+   "idx": 36,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 267,
+   "claim": "Разделы 7-8 (braine) больше не часть продукта; braine выведен 26.07, заменён serene_ask; при развёртывании пропускать",
+   "status": "ok",
+   "actual": "Все сервисы braine-слоя inactive и disabled",
+   "evidence": "[замер] systemctl is-active open-webui oikb rerank-shim api kb-poll → inactive x5; is-enabled → disabled x5"
+  },
+  {
+   "idx": 37,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 297,
+   "claim": "§9: enabled: postgresql, open-webui, oikb, rerank-shim, api, kb-poll, …; таймеры 1c-etl (03:00), 1c-serene-sync (03:40) — противоречит §0",
+   "status": "disc",
+   "actual": "§9 устарел: open-webui, oikb, rerank-shim, api, kb-poll — disabled; таймеры 1c-etl и 1c-serene-sync — disabled. Enabled из списка: postgresql, 1c-odata-gateway, 1c-config-ui, serenedb, 1c-mcp-braine, 1c-mcp-reports, таймеры pipeline и bot-monitor",
+   "evidence": "[замер] systemctl is-enabled postgresql open-webui oikb rerank-shim api kb-poll 1c-mcp-braine 1c-mcp-reports 1c-config-ui serenedb 1c-odata-gateway → enabled,disabled,disabled,disabled,disabled,disabled,enabled,enabled,enabled,enabled,enabled; is-enabled 1c-etl.timer/1c-serene-sync.timer → disabled",
+   "verdict": "a",
+   "verdict_why": "§9 не переписан после вывода braine 26.07 — док отстал (и сам противоречит §0 того же файла)"
+  },
+  {
+   "idx": 38,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 301,
+   "claim": "openclaw-gateway — user-юнит undebot с linger=yes, стартует на буте без логина",
+   "status": "ok",
+   "actual": "Linger=yes; юнит работает в user@1001",
+   "evidence": "[замер] loginctl show-user undebot -p Linger → Linger=yes; /proc/2786727/cgroup → user@1001.service/…/openclaw-gateway.service"
+  },
+  {
+   "idx": 39,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 303,
+   "claim": "tg-bridge disabled; Telegram держит OpenClaw @test1c_mcp_bot",
+   "status": "ok",
+   "actual": "tg-bridge disabled; бот по токену стенда — username test1c_mcp_bot",
+   "evidence": "[замер] systemctl is-enabled tg-bridge → disabled; getMe по токену из /home/undebot/.openclaw/telegram-token → username=test1c_mcp_bot"
+  },
+  {
+   "idx": 40,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 315,
+   "claim": "Движок SereneDB ставится под юзером serened (в §0 назван serenedb)",
+   "status": "disc",
+   "actual": "Юзера serened в системе нет; юнит работает под serenedb (uid 999). §10.1 с именем «serened» неверен, §0 прав",
+   "evidence": "[замер] id serened → no such user; id serenedb → uid=999(serenedb); systemctl show serenedb -p User → User=serenedb",
+   "verdict": "a",
+   "verdict_why": "Опечатка/устаревшее имя в §10.1 — реальность (serenedb) легитимна"
+  },
+  {
+   "idx": 41,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 323,
+   "claim": "/etc/serenedb/serened.conf содержит --cpu_threads=96 и --io_threads=8",
+   "status": "disc",
+   "actual": "В конфиге --cpu_threads=160 и --io_threads=16 (поднято намеренно 29.07, комментарий в самом конфиге)",
+   "evidence": "[замер] cat /etc/serenedb/serened.conf → --cpu_threads=160, --io_threads=16, комментарий «ПУЛ ИСПОЛНИТЕЛЕЙ ПОДНЯТ… 29.07.2026»",
+   "verdict": "a",
+   "verdict_why": "Значения подняли после написания дока — док отстал"
+  },
+  {
+   "idx": 42,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 334,
+   "claim": "Настройка пула исполнителей ставится руками; по PLAN_AUTONOMY (ручной шаг №0) её обязан делать установщик",
+   "status": "ok",
+   "actual": "PLAN_AUTONOMY: шаг 0 перечня — «поднял пул исполнителей движка», и отдельная задача «пул… обязан ставить УСТАНОВЩИК, а не человек»",
+   "evidence": "[код] docs/PLAN_AUTONOMY.md:77 (шаг 0, Фаза 2) и :157 («обязан ставить УСТАНОВЩИК»)"
+  },
+  {
+   "idx": 43,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 339,
+   "claim": "Раскладка кода — только deploy.sh (копирует изменившееся, подменяет атомарно через mv)",
+   "status": "ok",
+   "actual": "deploy.sh сравнивает cmp -s (копирует только изменившееся) и подменяет mv -f через временное имя",
+   "evidence": "[код] ubuntu/serenedb/deploy.sh:25 cmp -s, :31 mv -f \"$DST/.$b.new\" \"$DST/$b\""
+  },
+  {
+   "idx": 44,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 352,
+   "claim": "На стенде в /etc/1c-serene-sync.env задана SERENE_SRC_DIR=/srv/1c/ubuntu/serenedb; pipeline.sh зовёт deploy.sh перед синком",
+   "status": "ok",
+   "actual": "Переменная задана; pipeline.sh:20-22 зовёт $SERENE_SRC_DIR/deploy.sh первым шагом",
+   "evidence": "[замер] grep SERENE_SRC_DIR /etc/1c-serene-sync.env → /srv/1c/ubuntu/serenedb; [код] ubuntu/serenedb/pipeline.sh:20-22"
+  },
+  {
+   "idx": 45,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 361,
+   "claim": "/etc/1c-mcp-reports.env (600) содержит ETL_ODATA_BASE, CSV_DIR, ключи DeepSeek/Alibaba, EMBED_MODEL=text-embedding-v4, EMBED_DIM=1536, CHART_DIR, MCP_PORT=6015",
+   "status": "disc",
+   "actual": "Права 600, MCP_PORT=6015 и CHART_DIR есть, ключи DeepSeek/Alibaba есть. Но ETL_ODATA_BASE, CSV_DIR, EMBED_MODEL, EMBED_DIM, DEEPSEEK_BASE в файле ОТСУТСТВУЮТ: ETL_ODATA_BASE и CSV_DIR переехали в /etc/1c-serene-sync.env, EMBED_MODEL/EMBED_DIM нет ни в одном env (модель эмбеддинга теперь через секреты движка qwen_<база>, см. PLAN_AUTONOMY 29.07). Сверх дока: SERENEDB_DSN, RESOLVER_DSN, PGPASSWORD, RESOLVER_PW, ODG_GATEWAY_TOKEN, MCP_TOKEN, ALIBABA_API_KEYS",
+   "evidence": "[замер] stat → 600; имена переменных /etc/1c-mcp-reports.env: DEEPSEEK_API_KEY, MCP_HOST, MCP_PORT, CHART_DIR, SERENEDB_DSN, ALIBABA_API_KEY(S), ALIBABA_EMBED_URL, RESOLVER_DSN, PGPASSWORD, RESOLVER_PW, ODG_GATEWAY_TOKEN, MCP_TOKEN — без ETL_ODATA_BASE/CSV_DIR/EMBED_*; /etc/1c-serene-sync.env: ETL_ODATA_BASE=http://127.0.0.1:6011, CSV_DIR=/var/lib/serenedb",
+   "verdict": "a",
+   "verdict_why": "Состав окружения давно перераспределён между env-файлами и секретами движка — образец в доке отстал"
+  },
+  {
+   "idx": 46,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 381,
+   "claim": "setup.sh создаёт роли serene_ro и serene_resolver (у serene_ro отозван resolver_index), дописывает PGPASSWORD/RESOLVER_PW/RESOLVER_DSN/SERENEDB_DSN; пароли ротируются каждый прогон",
+   "status": "ok",
+   "actual": "Код совпадает: openssl rand -hex 24 на каждый прогон, GRANT/REVOKE как описано, set_env всех четырёх; роли в базе существуют",
+   "evidence": "[код] ubuntu/serenedb/setup.sh:18 (openssl rand), :25-33 (role_pw, GRANT SELECT, REVOKE ... FROM serene_ro), :38+ set_env; [замер] psql: pg_roles → serene_ro, serene_resolver"
+  },
+  {
+   "idx": 47,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 390,
+   "claim": "serene_select.py --review создаёт serene-entities.txt.review с кандидатами по убыванию строк; преполёт синка сверяет список каждый прогон",
+   "status": "ok",
+   "actual": "--review пишет OUT+\".review\" с заголовком «по убыванию строк»; serene_sync.py имеет _preflight, сверяющий весь список с живым OData",
+   "evidence": "[код] ubuntu/serenedb/serene_select.py:85-92; ubuntu/serenedb/serene_sync.py:24 («сверяет каждый прогон»), :73-75 _preflight"
+  },
+  {
+   "idx": 48,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 412,
+   "claim": "1c-serene-ask читает /etc/1c-mcp-reports.env и необязательный /etc/1c-serene-ask.env (ASK_TOKEN, ASK_*_BUDGET_CHARS)",
+   "status": "ok",
+   "actual": "EnvironmentFile=/etc/1c-mcp-reports.env и -/etc/1c-serene-ask.env (дефис = необязательный); в env есть ASK_TOKEN; в коде читаются ASK_PICK_BUDGET_CHARS/ASK_ROWS_BUDGET_CHARS",
+   "evidence": "[замер] systemctl cat 1c-serene-ask → две строки EnvironmentFile; [код] ubuntu/serenedb/serene_ask.py:61,68"
+  },
+  {
+   "idx": 49,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 416,
+   "claim": "Такт индекса ночной (03:55), п.17 TARGET требует ≤20 минут; здесь должен стоять OnUnitActiveSec — открытый пункт",
+   "status": "disc",
+   "actual": "«Сейчас таймер ночной (03:55)» устарело: на стенде 1c-serene-index.timer уже OnUnitActiveSec=20min (и выключен — такт целиком у 1c-serene-pipeline.timer «по готовности»). Требуемое доком изменение фактически сделано; открытым остаётся не таймер, а то, что конвейер стоит (см. idx 11)",
+   "evidence": "[замер] systemctl cat 1c-serene-index.timer → OnUnitActiveSec=20min; is-enabled → disabled; systemctl cat 1c-serene-pipeline.timer → OnUnitInactiveSec=1min",
+   "verdict": "a",
+   "verdict_why": "Док описывает уже решённую проблему как открытую — отстал от стенда"
+  },
+  {
+   "idx": 50,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 422,
+   "claim": "serene_ask держит контракт /ask, совместимый с braine; бот переключается одной строкой BRAINE_URL в /etc/1c-mcp-braine.env",
+   "status": "disc",
+   "actual": "BRAINE_URL в /etc/1c-mcp-braine.env НЕТ (там только BRAINE_TOKEN и MCP_TOKEN); переключение живёт в drop-in /etc/systemd/system/1c-mcp-braine.service.d/override.conf (BRAINE_URL=http://127.0.0.1:8091 — порт, который сейчас никто не слушает). Боевой путь бота вообще другой: mcp_ask (:6016) → ASK_URL=:8099",
+   "evidence": "[замер] grep BRAINE_URL /etc/1c-mcp-braine.env → пусто (имена: BRAINE_TOKEN, MCP_TOKEN); override.conf:5 Environment=BRAINE_URL=http://127.0.0.1:8091; ss: 8091 не слушается",
+   "verdict": "a",
+   "verdict_why": "Механизм переключения описан не тем местом (env vs drop-in) и сам путь braine-моста уже заменён mcp_ask — док отстал"
+  },
+  {
+   "idx": 51,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 432,
+   "claim": "Тесты test_validate, test_integrity, test_caveat, test_ro_role в /opt/1c-mcp-reports — все PASS",
+   "status": "unverifiable",
+   "actual": "Все четыре файла на месте; сам результат PASS перепроверить нельзя: запуск зовёт модель/пытается писать в базу под ro-ролями (test_ro_role) — запрещено правилами сессии (только чтение)",
+   "evidence": "[замер] ls /opt/1c-mcp-reports/test_{validate,integrity,caveat,ro_role}.py → все существуют"
+  },
+  {
+   "idx": 52,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 441,
+   "claim": "Виды ответа /ask: answer, clarify, figures; догадок нет по построению (п.12 TARGET.md)",
+   "status": "ok",
+   "actual": "Три вида kind в коде подтверждены",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:1911 kind=figures, :1917 kind=answer, :2485/:2609 kind=clarify"
+  },
+  {
+   "idx": 53,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 454,
+   "claim": "Прежний MCP-мост над braine (:6014) выведен; с 30.07 действует mcp_ask.py над serene_ask на :6016",
+   "status": "disc",
+   "actual": "mcp_ask на :6016 действует (active). Но мост braine НЕ выведен фактически: 1c-mcp-braine active и enabled, слушает 127.0.0.1:6014 (его upstream BRAINE_URL=:8091 при этом мёртв). Из конфига бота запись убрана — выведен только из пути бота",
+   "evidence": "[замер] ss: 127.0.0.1:6014 python pid 3173746 и 127.0.0.1:6016 pid 3173753; systemctl is-active 1c-mcp-braine → active; is-enabled → enabled; openclaw.json mcp.servers → только second-brain-reports и serene-ask",
+   "verdict": "v",
+   "verdict_why": "Неясно задуманное состояние юнита: гасить его (вывод не закончен, класс HOW_NOT_TO §2.14) или, как для :6015, честно пометить «юнит ещё жив» — вопрос владельцу"
+  },
+  {
+   "idx": 54,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 463,
+   "claim": "/etc/1c-mcp-ask.env (600) содержит ASK_TOKEN и MCP_TOKEN (fail-closed)",
+   "status": "ok",
+   "actual": "Права 600; обе переменные присутствуют",
+   "evidence": "[замер] stat -c %a /etc/1c-mcp-ask.env → 600; grep -cE '^(ASK_TOKEN|MCP_TOKEN)=' → 2"
+  },
+  {
+   "idx": 55,
+   "doc": "docs/RUNBOOK_DEPLOY.md",
+   "line": 467,
+   "claim": "В конфиге бота mcp.servers: serene-ask → http://127.0.0.1:6016/mcp с Bearer $MCP_TOKEN и toolFilter.include=[ask_1c]; second-brain удалена; second-brain-reports (:6015) не тронут",
+   "status": "ok",
+   "actual": "servers = {second-brain-reports: 6015/report_1c; serene-ask: 6016, toolFilter.include=[ask_1c], заголовок Authorization начинается с 'Bearer '}; записи second-brain нет",
+   "evidence": "[замер] /home/undebot/.openclaw/openclaw.json (значения токенов не читались): ключи серверов и toolFilter как в доке; header Authorization = Bearer …"
+  }
+ ]
+}

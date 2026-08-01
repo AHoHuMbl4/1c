@@ -1,0 +1,179 @@
+{
+  "shard": "howitworks",
+  "half": 1,
+  "results": [
+    {"idx": 0, "doc": "docs/HOW_IT_WORKS.md", "line": 30, "claim": "Корпус собирает движок одним SQL — файл ubuntu/serenedb/corpus_build.sql", "status": "ok",
+     "actual": "Файл есть (63 373 байта), сборка идёт одним psql -f внутри build.sh",
+     "evidence": "[код] ubuntu/serenedb/corpus_build.sql существует; build.sh:192 `psql \"$DSN\" -q -v gate=\"$GATE\" -f corpus_build.sql`"},
+
+    {"idx": 1, "doc": "docs/HOW_IT_WORKS.md", "line": 31, "claim": "Резолвер строится инкрементно: вектор считается только новым значениям (resolver_build.sql)", "status": "ok",
+     "actual": "resolver_build.sql сводит значения MERGE-ом, вектор считается только строкам с emb IS NULL (досчитывает embed_missing.sh)",
+     "evidence": "[код] resolver_build.sql:10-12 («прежняя делала DELETE… здесь значения сводятся MERGE-ом, вектор считается ТОЛЬКО новым (emb IS NULL)»), :103 MERGE INTO resolver_index; build.sh:222 запускает его в такте"},
+
+    {"idx": 2, "doc": "docs/HOW_IT_WORKS.md", "line": 32, "claim": "Эмбеддинги считает движок штатной ai_embed, размерность 1024; корпус 97 965, профили 226, резолвер 89 483", "status": "hist",
+     "actual": "Счётчики — снимок 27-28.07 в таблице «Было/Стало» (ниже в том же доке корпус уже 623 565). Механика актуальна: ai_embed, FLOAT[1024]",
+     "evidence": "[код] corpus_init.sql:18 `emb FLOAT[1024]`; embed_missing.sh:236 `ai_embed(txt, '$MODEL', …)::FLOAT[$DIM]`; [замер] search_corpus сейчас: postgres=103 808, ut_test=623 565"},
+
+    {"idx": 3, "doc": "docs/HOW_IT_WORKS.md", "line": 34, "claim": "Поле refs участвует в отборе с весом refs ^ 8", "status": "ok",
+     "actual": "Условие собирается как (doc @@ X OR refs @@ (X ^ REFS_BOOST)), REFS_BOOST по умолчанию 8.0, окружение его не переопределяет",
+     "evidence": "[код] serene_ask.py:126 `REFS_BOOST = os.environ.get(\"ASK_REFS_BOOST\", \"8.0\")`, :524 `refs @@ (%s ^ %s)`; [замер] в /etc/1c-serene-ask.env и /etc/1c-mcp-reports.env переменной ASK_REFS_BOOST нет"},
+
+    {"idx": 4, "doc": "docs/HOW_IT_WORKS.md", "line": 36, "claim": "Строка корпуса несёт карту булевых реквизитов flags MAP(VARCHAR, BOOLEAN)", "status": "ok",
+     "actual": "Колонка flags MAP(VARCHAR, BOOLEAN) объявлена и наполняется сборкой",
+     "evidence": "[код] corpus_init.sql:17 и :28 (ADD COLUMN IF NOT EXISTS flags MAP(VARCHAR, BOOLEAN)); corpus_build.sql:347, :544"},
+
+    {"idx": 5, "doc": "docs/HOW_IT_WORKS.md", "line": 38, "claim": "Усечение перечня сущностей видно клиенту полем partial", "status": "ok",
+     "actual": "Каждая ветка ответа кладёт поле partial (cut or None) в JSON ответа",
+     "evidence": "[код] serene_ask.py:2485, :2588-2596, :2609, :2751 и др. — `\"partial\": cut or None`; :2110 комментарий «Отсечённое видно клиенту через partial»"},
+
+    {"idx": 6, "doc": "docs/HOW_IT_WORKS.md", "line": 40, "claim": "Обе штатные сборки НЕ вписаны в юниты — ночью по-прежнему запускается питоновский путь; это следующая работа", "status": "disc",
+     "actual": "Устарело: живой юнит 1c-serene-index.service запускает /opt/1c-mcp-reports/build.sh, а 1c-serene-pipeline.service — pipeline.sh → build.sh; build.sh гоняет именно corpus_build.sql и resolver_build.sql. Питоновский путь остался только в РЕПО-копии юнита (ubuntu/serenedb/systemd/1c-serene-index.service:22 всё ещё зовёт serene_search_build.py — она отстала от живой). Отдельно: сейчас все три таймера (index/sync/pipeline) inactive, такт не крутится с 29.07",
+     "evidence": "[замер] `systemctl cat 1c-serene-index.service` → ExecStart=/opt/1c-mcp-reports/build.sh; `systemctl cat 1c-serene-pipeline.service` → ExecStart=/opt/1c-mcp-reports/pipeline.sh; [код] build.sh:192 (corpus_build.sql), :222 (resolver_build.sql); pipeline.sh: `exec ./build.sh`; [замер] systemctl is-active 1c-serene-pipeline.timer → inactive, list-timers: последний прогон 29.07",
+     "verdict": "a",
+     "verdict_why": "Док отстал: штатные SQL-сборки уже вписаны в юниты (реальность легитимна и лучше описанной); заодно отстала и репо-копия юнита 1c-serene-index.service"},
+
+    {"idx": 7, "doc": "docs/HOW_IT_WORKS.md", "line": 80, "claim": "На шаге намерения модель получает только текст вопроса — ни схемы, ни данных", "status": "ok",
+     "actual": "parse_intent шлёт INTENT_SYS (общий, без имён и чисел) + строку today= + текст вопроса, больше ничего",
+     "evidence": "[код] serene_ask.py:353-356; [замер] проверка INTENT_SYS: ни кириллических имён, ни чисел ≥2 цифр в тексте промта"},
+
+    {"idx": 8, "doc": "docs/HOW_IT_WORKS.md", "line": 86, "claim": "Разведка: четыре способа (ts_phrase, ts_phrase с окном, ts_levenshtein, ts_like) в одном SQL через UNION ALL", "status": "ok",
+     "actual": "Ровно четыре варианта на слово (exact/slop/fuzzy/part), пробы склеиваются UNION ALL в один запрос",
+     "evidence": "[код] serene_ask.py:449 ts_phrase, :457 ts_phrase с окном, :463 ts_levenshtein, :465 ts_like; :473 `psql(\" UNION ALL \".join(probes))`"},
+
+    {"idx": 9, "doc": "docs/HOW_IT_WORKS.md", "line": 95, "claim": "Условие собирается штатным ts_compound(must, must_not, should, k) — один запрос вместо цикла", "status": "ok",
+     "actual": "Подбор k идёт одним запросом с набором ts_compound-выражений, итог — ts_compound(NULL, NULL, [...], best)",
+     "evidence": "[код] serene_ask.py:538 комментарий «Один запрос вместо цикла по k», :544-547, :557"},
+
+    {"idx": 10, "doc": "docs/HOW_IT_WORKS.md", "line": 107, "claim": "На шаге выбора сущности модели даётся только список названий с числами совпадений, significant terms и структурным фактом — данных и схемы модель не видит", "status": "ok",
+     "actual": "pick_entity собирает: названия, число совпадений, significant terms (без общих термов), структурный факт parent, плюс имена величин из map_keys(nums) — последнее согласуется с доком (строки 127-133: «имя величины дословно из списка данных»). Строк данных и схемы в промте нет",
+     "evidence": "[код] serene_ask.py:1019-1115 — только label/counts/parent/meas/marks; данные строк не передаются"},
+
+    {"idx": 11, "doc": "docs/HOW_IT_WORKS.md", "line": 133, "claim": "Имя величины проверяется по данным: его обязана содержать measures_of(сущность); выдуманное имя до калькулятора не доходит — держится кодом", "status": "ok",
+     "actual": "Имя, которого нет в measures_of(picked[0]), выбрасывается кодом (quantity_rejected), вторая сверка на пути ответа",
+     "evidence": "[код] serene_ask.py:1186-1187 `if plan[\"quantity\"] not in measures_of(picked[0]): plan[\"quantity_rejected\"] = plan.pop(\"quantity\")`; :2698 повторная сверка"},
+
+    {"idx": 12, "doc": "docs/HOW_IT_WORKS.md", "line": 160, "claim": "Ключи отсекаются из карты величин двумя правилами: колонка в объявленном ключе (tmp3_key.key_cols) и платформенные имена LineNumber/SurrogateKey", "status": "ok",
+     "actual": "Оба правила стоят в предикате is_measure сборки корпуса",
+     "evidence": "[код] corpus_build.sql:419-421 `(c.kind = 'num' AND list_position((SELECT key_cols FROM kc), u.col) IS NULL AND u.col NOT IN ('LineNumber', 'SurrogateKey')) AS is_measure`"},
+
+    {"idx": 13, "doc": "docs/HOW_IT_WORKS.md", "line": 169, "claim": "После правки: корпус 623 565 строк, партнёров 164, сумма приобретений 73 181 158", "status": "ok",
+     "actual": "Корпус второй базы (ut_test, УТ) ровно 623 565 — сверено живым запросом. Партнёры и сумма — замер через бота+модель, отсюда не перепроверить; зафиксированы в CHANGELOG:279 тем же набором",
+     "evidence": "[замер] psql dbname=ut_test `SELECT count(*) FROM search_corpus` → 623565; [код] CHANGELOG.md:279 та же тройка чисел"},
+
+    {"idx": 14, "doc": "docs/HOW_IT_WORKS.md", "line": 205, "claim": "Алиасы сущностей лежат в таблице search_entity_alias; наполняет wiki_alias.sh штатным агентом OpenClaw (openclaw agent --json), идемпотентно", "status": "ok",
+     "actual": "Таблица есть в обеих базах (в ut_test 697 строк, в первой базе postgres 0 — там вики не собиралась, код это штатно обрабатывает); wiki_alias.sh зовёт openclaw agent --json, build.sh спрашивает только недостающих",
+     "evidence": "[замер] SELECT count(*) FROM search_entity_alias: ut_test=697, postgres=0; [код] wiki_alias.sh:79 и :199 `openclaw agent --agent main --session-key wiki-alias --json`; build.sh:283-284 «спрашиваются только те, которых ещё нет» "},
+
+    {"idx": 15, "doc": "docs/HOW_IT_WORKS.md", "line": 206, "claim": "Страницы вики: wiki_build.sql собирает текст в базе, wiki_publish.sh пишет файлы и зовёт openclaw wiki compile; хранилище memory-wiki", "status": "ok",
+     "actual": "Оба файла есть; publish берёт Vault из `openclaw wiki status` (плагин memory-wiki) и в конце зовёт `openclaw wiki compile`",
+     "evidence": "[код] ubuntu/serenedb/wiki_build.sql (9 141 байт); wiki_publish.sh:21-22 (Vault, «плагин memory-wiki выключен?»), :55 `openclaw wiki compile`"},
+
+    {"idx": 16, "doc": "docs/HOW_IT_WORKS.md", "line": 207, "claim": "Инструменты wiki_search / wiki_get разрешены боту в tools.allow", "status": "ok",
+     "actual": "В живом конфиге бота tools.allow = [message, bundle-mcp, wiki_search, wiki_get]. Примечание: репо-копия ubuntu/openclaw/instance/openclaw.json этих двух НЕ содержит — отстала от живой",
+     "evidence": "[замер] /home/undebot/.openclaw/openclaw.json, блок tools.allow содержит \"wiki_search\", \"wiki_get\"; [код] ubuntu/openclaw/instance/openclaw.json tools.allow — только message и bundle-mcp"},
+
+    {"idx": 17, "doc": "docs/HOW_IT_WORKS.md", "line": 208, "claim": "Индекс alias_idx над search_entity_alias создаётся в corpus_init.sql; ранжирует движок штатной tfidf", "status": "disc",
+     "actual": "alias_idx действительно создаётся в corpus_init.sql:119. Но ранжирует НЕ tfidf: скорер один на все запросы и выбирается переменной ASK_SCORER (по умолчанию bm25), на живом стенде задан dfi",
+     "evidence": "[код] corpus_init.sql:119 CREATE INDEX alias_idx; serene_ask.py:114 `SCORER = os.environ.get(\"ASK_SCORER\", \"bm25\")`, :2426 `SCORERS.get(SCORER, SCORERS[\"bm25\"]) % ALIAS_INDEX`; [замер] /etc/1c-serene-ask.env: ASK_SCORER=dfi",
+     "verdict": "a",
+     "verdict_why": "Реальность легитимна: скорер намеренно выбирается окружением для A/B (serene_ask.py:85-107), сейчас dfi; док зафиксировал tfidf как данность"},
+
+    {"idx": 18, "doc": "docs/HOW_IT_WORKS.md", "line": 214, "claim": "Бот OpenClaw использует персону instance/AGENTS.md", "status": "disc",
+     "actual": "Бот читает /home/undebot/.openclaw/workspace/AGENTS.md, а там сейчас ПРЕЖНЯЯ персона (9 416 байт, с эмодзи и старой структурой), не репо-версия instance/AGENTS.md (3 867 байт). Расхождение намеренное: CHANGELOG «Состояние на конец сессии: в рабочей папке бота ПРЕЖНЯЯ персона» [решение] — прежняя возвращена контрольным опытом (2/4/4 против 1/2/7), развилка оставлена владельцу",
+     "evidence": "[замер] diff ubuntu/openclaw/instance/AGENTS.md /home/undebot/.openclaw/workspace/AGENTS.md — непуст; wc -c: 3867 против 9416 (workspace от 31.07 05:03, новее репо-файла); [код] CHANGELOG.md:109-116",
+     "verdict": "v",
+     "verdict_why": "CHANGELOG сам говорит «развилка за владельцем»: вернуть прежнюю персону и чистить по одной правке или оставить новую — не решено; док утверждает как данность то, что ещё не выбрано"},
+
+    {"idx": 19, "doc": "docs/HOW_IT_WORKS.md", "line": 216, "claim": "Вызов инструмента идёт через mcp_ask.py на порт :6016", "status": "ok",
+     "actual": ":6016 слушается, живой конфиг бота подключает MCP serene-ask по http://127.0.0.1:6016/mcp с единственным инструментом ask_1c",
+     "evidence": "[код] mcp_ask.py:45 `MCP_PORT = int(os.environ.get(\"MCP_PORT\", \"6016\"))`; [замер] ss -tlnp → LISTEN 127.0.0.1:6016 (python); /home/undebot/.openclaw/openclaw.json: serene-ask url 127.0.0.1:6016/mcp, toolFilter ask_1c"},
+
+    {"idx": 20, "doc": "docs/HOW_IT_WORKS.md", "line": 226, "claim": "Проверка исходящего — плагин verify-plugin, типизированные хуки", "status": "ok",
+     "actual": "Плагин braine-verify: хуки after_tool_call, message_received, message_sending, reply_payload_sending; включён в живом конфиге",
+     "evidence": "[код] ubuntu/openclaw/verify-plugin/index.js:18-19 (перечень четырёх хуков), :84 api.on(\"after_tool_call\"), :154 api.on(\"message_sending\"); [замер] live openclaw.json: braine-verify enabled=true"},
+
+    {"idx": 21, "doc": "docs/HOW_IT_WORKS.md", "line": 228, "claim": "Замер снимается только путём через бота: прямой вызов сервиса минует перефразирование по вики и даёт другой ответ", "status": "ok",
+     "actual": "Механика подтверждается устройством: шаг перефразирования по вики живёт в персоне бота (есть и в живой, и в репо-версии AGENTS.md), в serene_ask.py шага вики нет — прямой вызов его действительно минует",
+     "evidence": "[код] обе версии AGENTS.md содержат раздел «переформулируй вопрос по вики» (wiki_search/wiki_get) до вызова инструмента; в serene_ask.py упоминаний wiki_search нет (grep пуст)"},
+
+    {"idx": 22, "doc": "docs/HOW_IT_WORKS.md", "line": 242, "claim": "Соответствие репо и рабочих копий проверяется diff: instance/AGENTS.md ↔ workspace/AGENTS.md; mcp_ask.py ↔ /opt/openclaw-mcp/mcp_ask.py; serene_ask.py ↔ /opt/1c-mcp-reports/serene_ask.py", "status": "disc",
+     "actual": "Выполнил все три diff: mcp_ask.py и serene_ask.py совпадают побайтно, AGENTS.md расходится (в workspace прежняя персона 9 416). Расхождение намеренное и записано ([решение] CHANGELOG: «чтобы расхождение diff не приняли за забытую выкатку»), но HOW_IT_WORKS тут же предписывает «разошлись — сперва deploy_instance.sh», что затёрло бы оставленное владельцу состояние",
+     "evidence": "[замер] diff #2 и #3 → пусто; diff #1 → расходится полностью; [код] CHANGELOG.md:111-116 — расхождение оставлено сознательно и записано в activeContext и docs/OPENCLAW_BOT.md",
+     "verdict": "a",
+     "verdict_why": "Процедура в доке отстала от зафиксированного решения: нужна оговорка про намеренно невыкаченную персону, иначе инструкция дока ведёт к затиранию состояния, оставленного владельцу"},
+
+    {"idx": 23, "doc": "docs/HOW_IT_WORKS.md", "line": 247, "claim": "Развёртывание делают ubuntu/openclaw/deploy_instance.sh и ubuntu/serenedb/deploy.sh", "status": "ok",
+     "actual": "Оба скрипта существуют и исполняемы",
+     "evidence": "[замер] ls -la: ubuntu/openclaw/deploy_instance.sh (-rwxr-xr-x, 6 409), ubuntu/serenedb/deploy.sh (-rwxr-xr-x, 2 399); deploy.sh также зовётся из pipeline.sh при SERENE_SRC_DIR"},
+
+    {"idx": 24, "doc": "docs/HOW_IT_WORKS.md", "line": 253, "claim": "Приёмка запускается как RUN_TAG=v<N> python3 work/acceptance/run_acceptance.py 1 10; RUN_TAG меняется всегда", "status": "ok",
+     "actual": "Скрипт есть, RUN_TAG читается из окружения (по умолчанию — текущий timestamp, т.е. сессия меняется и без явного тега)",
+     "evidence": "[код] work/acceptance/run_acceptance.py:78 `RUN = os.environ.get('RUN_TAG') or str(int(time.time()))`"},
+
+    {"idx": 25, "doc": "docs/HOW_IT_WORKS.md", "line": 275, "claim": "Промты переписаны начисто: 8 154 → 3 767 символов у сервиса и 9 416 → 3 867 у персоны", "status": "disc",
+     "actual": "Число 3 767 у сервиса отозвано самим проектом: CHANGELOG «Итог: 8 154 → 4 208 символов, а не 3 767 — часть сокращения оказалась вредной». Мой замер шести _SYS-промтов текущего serene_ask.py даёт суммарно 8 141 символ (формат и защиты возвращены). Персона 3 867 есть в репо, но живой бот работает на прежней 9 416 (невыкачено намеренно)",
+     "evidence": "[код] CHANGELOG.md:158-161; [замер] len(INTENT_SYS..COVERAGE_SYS) = 2101+2070+439+282+2358+891 = 8141; wc -c instance/AGENTS.md=3867, workspace/AGENTS.md=9416",
+     "verdict": "a",
+     "verdict_why": "Док отстал от собственной поправки в CHANGELOG (4 208, не 3 767) и не упоминает, что персона на стенде осталась прежней до решения владельца"},
+
+    {"idx": 26, "doc": "docs/HOW_IT_WORKS.md", "line": 282, "claim": "Отказ не содержит цифр: код вырезает любой ответ с цифрой из refuse_text", "status": "ok",
+     "actual": "refuse_text возвращает пустую строку, если в ответе модели нашлись числовые токены — весь ответ отбрасывается кодом",
+     "evidence": "[код] serene_ask.py:778 `return \"\" if _norm_numbers(t) else t` (_norm_numbers:1647 — множество числовых значений текста)"},
+
+    {"idx": 27, "doc": "docs/HOW_IT_WORKS.md", "line": 283, "claim": "Служебная обёртка не доезжает до человека: разбор ответа _split_answer", "status": "ok",
+     "actual": "_split_answer определён и применяется на всех путях выдачи",
+     "evidence": "[код] serene_ask.py:1310 def _split_answer; вызовы :1902, :2785, :2818"},
+
+    {"idx": 28, "doc": "docs/HOW_IT_WORKS.md", "line": 285, "claim": "1С только читается: пользователь без прав записи + шлюз, режущий не-GET", "status": "ok",
+     "actual": "Шлюз ubuntu/1c-gateway/odata_gateway.py отвечает 405 на любой не-GET до проксирования, сервис активен, живой POST вернул 405. Права пользователя 1С с этого хоста не снять (Windows-сторона) — проверена половина «шлюз»",
+     "evidence": "[код] odata_gateway.py:110 `self._send(405, …method not allowed)` — только do_GET определён; [замер] `curl -X POST http://127.0.0.1:6011/anything` → 405 {\"error\":\"read-only gateway: method not allowed\"}; systemctl is-active 1c-odata-gateway → active"},
+
+    {"idx": 29, "doc": "docs/HOW_IT_WORKS.md", "line": 286, "claim": "В промтах нет ни одного имени сущности и ни одного числа из данных", "status": "disc",
+     "actual": "Сервисные промты чисты (проверены все шесть _SYS: ни кириллических имён, ни чисел). Но ЖИВАЯ персона бота (workspace/AGENTS.md, прежняя версия) содержит имена сущностей: «Выручка и себестоимость продаж», «Реализация Товаров Услуг», «Отчёт о розничных продажах». Чистая персона (3 867) лежит в репо и не выкачена — намеренно, до решения владельца",
+     "evidence": "[замер] diff instance/AGENTS.md ↔ workspace/AGENTS.md: правая (живая) сторона содержит перечисленные имена; проверка _SYS-промтов регэкспом — пусто; [код] CHANGELOG.md:114-116 («в новой персоне убраны имена чужой конфигурации; развилка за владельцем»)",
+     "verdict": "v",
+     "verdict_why": "Живой стенд противоречит доку и духу TARGET п. 9 (имена чужой конфигурации в промте), но состояние оставлено сознательно как «лучшее известное» до выбора владельца — вопрос ему, а не самовольная правка в любую сторону"},
+
+    {"idx": 30, "doc": "docs/HOW_IT_WORKS.md", "line": 296, "claim": "Подтверждение выбора сущности — любое из трёх: focus от человека, вершина по вектору вопроса, совпадение с алиасами по основам (словарь search_dict_stem)", "status": "ok",
+     "actual": "Ровно три пути в коде: focus обходит проверку; cand == top_by_question принимается; иначе _alias_verdict сравнивает по основам ts_lexize(search_dict_stem). REQUIRE_SUPPORT включён по умолчанию",
+     "evidence": "[код] serene_ask.py:2646-2653 `if REQUIRE_SUPPORT and picked and not focus: … if cand != top_by_question: ok, top = _alias_verdict(cand)`; :2404-2407 `list_has_any(ts_lexize(search_dict_stem, …))`; :1929 REQUIRE_SUPPORT default \"1\"; :1935 STEM_DICT default search_dict_stem"},
+
+    {"idx": 31, "doc": "docs/HOW_IT_WORKS.md", "line": 302, "claim": "Соперников подбирает движок: SELECT src_table, tfidf(alias_idx.tableoid) FROM alias_idx WHERE aliases @@ <вопрос> ORDER BY 2 DESC", "status": "disc",
+     "actual": "Форма запроса верна (aliases @@ вопрос, ORDER BY 2 DESC, считает движок), но функция ранжирования не tfidf: подставляется SCORERS[ASK_SCORER], по умолчанию bm25, на живом стенде dfi",
+     "evidence": "[код] serene_ask.py:2424-2427 `SELECT src_table, %s FROM %s WHERE aliases @@ %s ORDER BY 2 DESC LIMIT %d` % (SCORERS.get(SCORER, SCORERS[\"bm25\"]) % ALIAS_INDEX, …); :114 default bm25; [замер] /etc/1c-serene-ask.env: ASK_SCORER=dfi",
+     "verdict": "a",
+     "verdict_why": "Реальность легитимна (скорер — предмет A/B, выбран окружением, ход записан в комментарии кода); док зафиксировал tfidf дословно и отстал"},
+
+    {"idx": 32, "doc": "docs/HOW_IT_WORKS.md", "line": 306, "claim": "Жёсткая форма правила подтверждения ASK_ALIAS_VETO=1 существует, но ВЫКЛЮЧЕНА, пока замер не покажет, что алиасы подсказывают верно", "status": "ok",
+     "actual": "Флаг есть, по умолчанию выключен, окружение его не включает",
+     "evidence": "[код] serene_ask.py:898 `ALIAS_VETO = os.environ.get('ASK_ALIAS_VETO', '0') == '1'`, :2417 `if hit and not ALIAS_VETO: return True`; [замер] в /etc/1c-serene-ask.env и /etc/1c-mcp-reports.env переменной ASK_ALIAS_VETO нет"},
+
+    {"idx": 33, "doc": "docs/HOW_IT_WORKS.md", "line": 320, "claim": "Шаги сборки вики живут в репозитории и вызываются build.sh после переписи полноты (не руками)", "status": "ok",
+     "actual": "build.sh: шаг 7 — coverage_build.sql (перепись полноты), сразу после — wiki_alias.sh и wiki_publish.sh",
+     "evidence": "[код] build.sh:276 `psql … -f coverage_build.sql`, :286-287 `./wiki_alias.sh …; ./wiki_publish.sh` с комментарием «Шаг идёт ПОСЛЕ переписи»"},
+
+    {"idx": 34, "doc": "docs/HOW_IT_WORKS.md", "line": 337, "claim": "notEnoughFor в искомый текст вики не идёт — остаётся только во frontmatter", "status": "ok",
+     "actual": "Единственное место, где not_enough_for попадает в страницу, — агрегат внутри frontmatter-блока wiki_build.sql; в теле страницы его нет",
+     "evidence": "[код] wiki_build.sql:61-63 — сборка `notEnoughFor:` в YAML-frontmatter; других вхождений not_enough_for в wiki_build.sql/wiki_publish.sh нет (grep)"},
+
+    {"idx": 35, "doc": "docs/HOW_IT_WORKS.md", "line": 353, "claim": "Порядок «перефразирование по вики → ask_1c → переспрос» вписан в ubuntu/openclaw/instance/AGENTS.md и держится мостом mcp_ask.py, пробрасывающим поля focus/measure", "status": "ok",
+     "actual": "Порядок стоит в instance/AGENTS.md (и в живой персоне тоже); мост пробрасывает focus/measure/context и в описании инструмента велит возвращать выбор пользователя этими полями",
+     "evidence": "[код] instance/AGENTS.md раздел «Порядок работы с вопросом» (wiki_search → инструмент → переспрос); mcp_ask.py:78-83 (payload focus/measure), :111 и :125 (вернуть focus/measure при повторном вызове)"},
+
+    {"idx": 36, "doc": "docs/HOW_IT_WORKS.md", "line": 364, "claim": "Приёмка на 58 вопросов через бота после переключения на вики не гонялась — проверены четыре тяжёлых вопроса и один на уточнение", "status": "ok",
+     "actual": "Полная 58-вопросная приёмка через бота после переключения (30.07) так и не гонялась: 31.07 гонялись только пачки по 10 (пачка 1) через run_acceptance.py. Последний полный прогон 58 — до переключения (30.07, итог дня)",
+     "evidence": "[код] CHANGELOG.md:326 «Приёмка 58 вопросов через бота ещё не гонялась» (30.07, вечер); записи 31.07 — только `run_acceptance.py 1 10` пачками; work/acceptance/ содержит только сам скрипт, журналов полного прогона нет"},
+
+    {"idx": 37, "doc": "docs/HOW_IT_WORKS.md", "line": 393, "claim": "Включение хуков плагина обязательно: plugins.entries.braine-verify.hooks.allowConversationAccess: true, иначе движок молча не регистрирует хуки", "status": "ok",
+     "actual": "В живом конфиге ключ стоит; требование записано и в коде плагина. Примечание: репо-копия instance/openclaw.json этого ключа НЕ содержит — свежая выкатка из репо молча отключила бы хуки",
+     "evidence": "[замер] /home/undebot/.openclaw/openclaw.json: braine-verify.hooks.allowConversationAccess=true; [код] verify-plugin/index.js:121 — комментарий о требовании; ubuntu/openclaw/instance/openclaw.json блока hooks не имеет"},
+
+    {"idx": 38, "doc": "docs/HOW_IT_WORKS.md", "line": 417, "claim": "Переменная WIKI_ALIAS_WORD разводит конкретное спорное слово; полное разведение всех столкновений идёт ~3 часа", "status": "ok",
+     "actual": "Переменная реализована в wiki_alias.sh как быстрый путь для одного слова; оценка «~3 часа» — записанный замер, отсюда не воспроизводим, но противоречий нет",
+     "evidence": "[код] wiki_alias.sh:25 `TARGET_WORD=\"${WIKI_ALIAS_WORD:-}\"`, :170 «можно назвать слово прямо, переменной WIKI_ALIAS_WORD, — быстрый путь»"},
+
+    {"idx": 39, "doc": "docs/HOW_IT_WORKS.md", "line": 435, "claim": "Контекст предыдущего разговора приходит полем context (ведёт OpenClaw) и используется только арбитром — в отбор данных не попадает", "status": "ok",
+     "actual": "context читается из запроса (обрезка 4000), передаётся в answer() и используется единственным местом — промтом arbitrate (хвост 2000 символов); в SQL-отбор и другие промты не попадает",
+     "evidence": "[код] serene_ask.py:2947 `context = (req.get(\"context\") or \"\")[:4000]`; все использования: :276 def arbitrate(…, context), :289 «Conversation so far» в промте арбитра, :2581 arbitrate(question, cand_ans, context), :2574 проброс в рекурсивный answer; в поисковых запросах context не участвует (grep)"}
+  ]
+}

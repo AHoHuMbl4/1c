@@ -1,0 +1,257 @@
+{
+  "shard": "runbook",
+  "half": 2,
+  "results": [
+    {"idx": 56, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 472, "claim": "Мост mcp_ask.py пробрасывает поля focus, measure, context — работает цепочка уточнений", "status": "ok",
+     "actual": "Поля пробрасываются: _ask() кладёт focus/measure/context в payload, ask_1c() принимает их параметрами",
+     "evidence": "[код] ubuntu/openclaw/mcp_ask.py:78-85 (payload), 116-134 (сигнатура ask_1c и передача)"},
+
+    {"idx": 57, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 496, "claim": "Движок OpenClaw версии 2026.7.1-2 установлен глобально, CLI /usr/bin/openclaw; юзер undebot с linger", "status": "ok",
+     "actual": "OpenClaw 2026.7.1-2 (0790d9f), /usr/bin/openclaw, Linger=yes",
+     "evidence": "[замер] openclaw --version → 'OpenClaw 2026.7.1-2 (0790d9f)'; which openclaw → /usr/bin/openclaw; loginctl show-user undebot -p Linger → Linger=yes"},
+
+    {"idx": 58, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 504, "claim": "Конфиг бота: tools.allow=[message,bundle-mcp], dmPolicy=allowlist + allowFrom=[tg-id владельца], commands.native:false; эталон — ubuntu/openclaw/instance/openclaw.json, совпадает с прод-деплоем 1:1", "status": "disc",
+     "actual": "dmPolicy=allowlist, allowFrom=[5949699699], commands.native=false — совпадают. Но tools.allow в проде = [message, bundle-mcp, wiki_search, wiki_get] (два лишних инструмента), и эталон с прод-деплоем НЕ совпадает: в проде модель deepseek-v4-pro (эталон flash), добавлен плагин memory-wiki, MCP-серверы second-brain-reports(:6015)+serene-ask(:6016) против second-brain(:6014)+second-brain-reports(:6015) в эталоне",
+     "evidence": "[замер] diff <(jq -S . /srv/1c/ubuntu/openclaw/instance/openclaw.json) <(jq -S . /home/undebot/.openclaw/openclaw.json) → ~30 расходящихся строк; jq по живому конфигу: tools.allow=[message,bundle-mcp,wiki_search,wiki_get], plugins.allow=[deepseek,braine-verify,memory-wiki], commands.native=false",
+     "verdict": "v",
+     "verdict_why": "Часть прод-изменений явно новее и легитимна (serene-ask:6016 описан этим же RUNBOOK ниже), но происхождение memory-wiki и wiki_search/wiki_get (расширение прав инструментов бота) в доках не зафиксировано — санкционировано ли владельцем, неясно; эталон в репо отстал в любом случае"},
+
+    {"idx": 59, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 509, "claim": "Персона деплоится ТОЛЬКО скриптом ubuntu/openclaw/deploy_instance.sh, не cp; скрипт убирает стартовые заготовки движка (BOOTSTRAP.md, SOUL.md, IDENTITY.md, TOOLS.md, USER.md — 6124 символа промта)", "status": "ok",
+     "actual": "Скрипт существует и нейтрализует все пять заготовок; технически не удаляет, а перезаписывает пустышкой (удаление проигрывало гонку: движок вернул файл через 18 с) — эффект тот же, RUNBOOK описывает верно",
+     "evidence": "[код] ubuntu/openclaw/deploy_instance.sh:31 (AGENTS.md из репо), 40-50 (цикл по BOOTSTRAP/SOUL/IDENTITY/TOOLS/USER — перезапись заглушкой), 10-13 (6 124 символа)"},
+
+    {"idx": 60, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 517, "claim": "Токен Telegram лежит в /home/undebot/.openclaw/telegram-token (600), ключ DeepSeek в /home/undebot/.openclaw/.env (600) и в auth-store", "status": "ok",
+     "actual": "Оба файла существуют, права 600, владелец undebot",
+     "evidence": "[замер] stat -c '%a %U %n' → '600 undebot telegram-token', '600 undebot .env'; DEEPSEEK_API_KEY также в gateway.systemd.env юнита (OPENCLAW_SERVICE_MANAGED_ENV_KEYS=DEEPSEEK_API_KEY)"},
+
+    {"idx": 61, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 527, "claim": "verify-плагин: node test-verify.mjs — 36 оффлайн-юнитов, все PASS; пакет openclaw-braine-verify-1.0.0.tgz", "status": "disc",
+     "actual": "Тестов теперь 41, все PASS (набор дорос после написания дока); пакет установлен (архив openclaw-braine-verify-1.0.0-3d1c6e8915c5b67c.tgz в каталоге движка)",
+     "evidence": "[замер] cd /srv/1c/ubuntu/openclaw/verify-plugin && node test-verify.mjs → '41 tests passed'; find → /home/undebot/.openclaw/npm/projects/.../openclaw-braine-verify-1.0.0-3d1c6e8915c5b67c.tgz",
+     "verdict": "a",
+     "verdict_why": "Тесты дописывались после дока (verify-core.js от 31.07) — число в доке отстало, править док"},
+
+    {"idx": 62, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 531, "claim": "В openclaw.json: plugins.allow включает braine-verify; entries.braine-verify.enabled=true; hooks.allowConversationAccess=true", "status": "ok",
+     "actual": "Всё на месте в живом конфиге",
+     "evidence": "[замер] jq по /home/undebot/.openclaw/openclaw.json: plugins.allow=[deepseek,braine-verify,memory-wiki]; entries.braine-verify.enabled=true; entries.braine-verify.hooks.allowConversationAccess=true"},
+
+    {"idx": 63, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 536, "claim": "Gateway установлен как user-юнит на порт 18800 (openclaw gateway install --port 18800)", "status": "ok",
+     "actual": "User-юнит openclaw-gateway.service активен, ExecStart с --port 18800; порт 18800 отвечает",
+     "evidence": "[замер] sudo -u undebot systemctl --user cat openclaw-gateway → ExecStart=/usr/bin/node .../openclaw/dist/index.js gateway --port 18800; is-active → active"},
+
+    {"idx": 64, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 546, "claim": "Проверка живости: qa-probes.sh (приветствие/мета/инъекции/нет-данных/не-слил-SQL) — PASS", "status": "ok",
+     "actual": "Скрипт существует и исполняем; сам прогон PASS не повторял (нужен живой прогон через модель)",
+     "evidence": "[замер] ls -la /srv/1c/ubuntu/openclaw/qa/qa-probes.sh → -rwxr-xr-x 2617 B"},
+
+    {"idx": 65, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 551, "claim": "Мониторинг 1c-bot-monitor читает тот же файл telegram-token, что и бот", "status": "ok",
+     "actual": "TOKEN_FILE по умолчанию /home/undebot/.openclaw/telegram-token — тот же файл",
+     "evidence": "[код] /opt/1c-bot-monitor/bot_health_check.sh:8 TOKEN_FILE=${TOKEN_FILE:-/home/undebot/.openclaw/telegram-token}; [замер] systemctl cat 1c-bot-monitor.service → ExecStart=/opt/1c-bot-monitor/bot_health_check.sh"},
+
+    {"idx": 66, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 556, "claim": "MCP Toolkit — dev-only: ~1 req/s через idle-обработчик; UI-тумблеры инструментов не блокируют вызов", "status": "hist",
+     "actual": "Подано как разбор инцидента с отсылкой к docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md — документ существует; текущей проверки не требует",
+     "evidence": "[замер] ls /srv/1c/docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md → существует"},
+
+    {"idx": 67, "doc": "docs/RUNBOOK_DEPLOY.md", "line": 562, "claim": "Журнал end-to-end 22-24.07: платформа 8.3.27.1786 x86, база Бухгалтерия 3.0.190.11, состав OData 1128 объектов, бэкап 760 MB", "status": "hist",
+     "actual": "Явно исторический журнал 22-24.07; перепроверка потребовала бы похода на Windows-стенд",
+     "evidence": "раздел дока — датированный журнал; расхождением не является"},
+
+    {"idx": 68, "doc": "docs/SERVER_HANDOFF.md", "line": 13, "claim": "Сборка корпуса и резолвера переехала в штатные средства движка: corpus_build.sql, corpus_merge.sql, resolver_build.sql, embed_missing.sh, связывает build.sh; питона в сборке не осталось ни строки", "status": "disc",
+     "actual": "Все пять файлов существуют и сборка действительно на SQL/движке, НО «питона ни строки» больше неверно: build.sh:206 вызывает python3 classify_entities.py (разметка сущностей моделью, добавлена 29-30.07 ради автономности на чужой базе)",
+     "evidence": "[код] ubuntu/serenedb/build.sh:206 'python3 classify_entities.py || …'; classify_entities.py:1-25 — вызов языковой модели (разрешённый п.20 класс кода); [замер] ls ubuntu/serenedb/{corpus_build.sql,corpus_merge.sql,resolver_build.sql,embed_missing.sh,build.sh} — все есть",
+     "verdict": "a",
+     "verdict_why": "Появившийся питон — вызов языковой модели, что прямо входит в исчерпывающий перечень разрешённого своего кода (TARGET.md п.20); док от 28.07 отстал от легитимного изменения"},
+
+    {"idx": 69, "doc": "docs/SERVER_HANDOFF.md", "line": 17, "claim": "Таймеры 1c-serene-index и 1c-serene-sync остановлены; не включать, пока юниты не переключены на build.sh", "status": "ok",
+     "actual": "Оба таймера inactive и disabled; условие «переключить на build.sh» с тех пор выполнено (см. idx 73), но состояние таймеров совпадает с доком",
+     "evidence": "[замер] systemctl is-active/is-enabled 1c-serene-index.timer 1c-serene-sync.timer → inactive/inactive, disabled/disabled"},
+
+    {"idx": 70, "doc": "docs/SERVER_HANDOFF.md", "line": 25, "claim": "Вектор теперь 1024 (считает движок ai_embed), было 1536 питоном", "status": "ok",
+     "actual": "Размерность вектора в корпусе 1024",
+     "evidence": "[замер] psql: SELECT len(emb) FROM search_corpus WHERE emb IS NOT NULL LIMIT 1 → 1024"},
+
+    {"idx": 71, "doc": "docs/SERVER_HANDOFF.md", "line": 26, "claim": "Вместо одной колонки amount — карта всех величин nums", "status": "ok",
+     "actual": "В search_corpus есть колонка nums, колонки amount нет (состав: src_table, row_key, doc, refs, doc_hash, nums, doc_date, emb, flags)",
+     "evidence": "[замер] psql: SELECT column_name FROM duckdb_columns() WHERE table_name='search_corpus' → nums есть, amount отсутствует"},
+
+    {"idx": 72, "doc": "docs/SERVER_HANDOFF.md", "line": 27, "claim": "Резолвер: 89 436 значений (было 119 271), инкремент; повтор без изменений — ноль вызовов эмбеддера", "status": "hist",
+     "actual": "Число датировано 28.07; сейчас resolver_index = 115 151 (витрина выросла к 29-31.07). Механика инкремента в силе: резолвер собирает resolver_build.sql, эмбеддинг — только строкам без вектора через embed_missing.sh",
+     "evidence": "[замер] psql (postgres): SELECT count(*) FROM resolver_index → 115151; [код] ubuntu/serenedb/build.sh:222-227 — resolver_build.sql + ./embed_missing.sh resolver_index …"},
+
+    {"idx": 73, "doc": "docs/SERVER_HANDOFF.md", "line": 30, "claim": "Не доделано: переключить юниты на build.sh; замерить полный ночной такт; убрать из индекса ссылку на amount (индекс уже пересоздан без неё)", "status": "disc",
+     "actual": "Список «не доделано» исполнен: 1c-serene-index.service уже ExecStart=/opt/1c-mcp-reports/build.sh; эталонный DDL в search_meta без amount (inverted(doc, refs, src_table) INCLUDE (src_table,row_key,doc_date)); конвейер гонялся таймером 28-29.07",
+     "evidence": "[замер] grep ExecStart /etc/systemd/system/1c-serene-index.service → /opt/1c-mcp-reports/build.sh; psql: SELECT * FROM search_meta → index_ddl без amount; journalctl -u 1c-serene-pipeline → запуски 28-29.07",
+     "verdict": "a",
+     "verdict_why": "Работы выполнены после написания дока — список to-do устарел и сегодня вводит в заблуждение; править док"},
+
+    {"idx": 74, "doc": "docs/SERVER_HANDOFF.md", "line": 41, "claim": "TARGET.md — 20 пунктов (CLAUDE.md и другие доки говорят 21)", "status": "disc",
+     "actual": "В TARGET.md сейчас 21 пункт (последний — «21. ЗАДАЧА ПРОЕКТА — ОТДАТЬ ОТВЕТ. ПРАВИЛЬНЫЙ», добавлен после 27.07); handoff говорит «20 пунктов»",
+     "evidence": "[замер] grep -nE '^[0-9]+\\.' /srv/1c/TARGET.md → пункты 1..21, строка 110: '21. ЗАДАЧА ПРОЕКТА — ОТДАТЬ ОТВЕТ. ПРАВИЛЬНЫЙ.'",
+     "verdict": "a",
+     "verdict_why": "П.21 добавлен владельцем позже; число в handoff отстало — править док"},
+
+    {"idx": 75, "doc": "docs/SERVER_HANDOFF.md", "line": 57, "claim": "Сервер: 192.168.56.42, LXC, 62 ГБ памяти, 6 ядер, свободно 220 ГБ диска", "status": "ok",
+     "actual": "IP 192.168.56.42, 62 ГБ, 6 ядер — совпадают; свободно сейчас 202 ГБ (дрейф с датированного снимка 27.07, не расхождение)",
+     "evidence": "[замер] ip -4 addr → 192.168.56.42; free -g → 62; nproc → 6; df -h / → 202G avail"},
+
+    {"idx": 76, "doc": "docs/SERVER_HANDOFF.md", "line": 63, "claim": "git 2.43.0, node v24.18.0; claude не установлен (на 27.07); Python сервисов /opt/openclaw-mcp/venv/bin/python 3.12.3; код сервисов в /opt/1c-mcp-reports/", "status": "hist",
+     "actual": "git 2.43.0, node v24.18.0, venv Python 3.12.3, /opt/1c-mcp-reports существует — совпадают; claude ТЕПЕРЬ установлен (2.1.220, /root/.local/bin/claude) — но док сам датирует «на 27.07»",
+     "evidence": "[замер] git --version; node -v; /opt/openclaw-mcp/venv/bin/python -V; which claude → /root/.local/bin/claude, claude --version → 2.1.220"},
+
+    {"idx": 77, "doc": "docs/SERVER_HANDOFF.md", "line": 73, "claim": "Запись (DDL) — роль postgres; чтение — serene_ro, ей CREATE запрещён", "status": "ok",
+     "actual": "Роли устроены так по построению: serene_ro получает только USAGE+SELECT, CREATE не выдан; живой CREATE под serene_ro не выполнялся (DDL аудитору запрещён)",
+     "evidence": "[код] ubuntu/serenedb/setup_ro_role.sql:8-13 — только GRANT USAGE/SELECT, строка 13: 'Проверено (2026-07-23): под serene_ro CREATE/INSERT/UPDATE/DROP -> permission denied'; роль существует (stand-db: \\du)"},
+
+    {"idx": 78, "doc": "docs/SERVER_HANDOFF.md", "line": 80, "claim": "В /etc/1c-serene-sync.env лежит DSN с user=postgres, в /etc/1c-mcp-reports.env — user=serene_ro", "status": "ok",
+     "actual": "Совпадает; в 1c-mcp-reports.env дополнительно появился DSN с user=serene_resolver (позднее нововведение, не противоречит)",
+     "evidence": "[замер] grep -o 'user=[a-z_]*' /etc/1c-serene-sync.env /etc/1c-mcp-reports.env → postgres; serene_ro + serene_resolver"},
+
+    {"idx": 79, "doc": "docs/SERVER_HANDOFF.md", "line": 89, "claim": "Службы работают: serenedb (:7890 loopback), 1c-serene-ask (:8091), 1c-odata-gateway, 1c-mcp-braine, 1c-mcp-reports, 1c-config-ui", "status": "disc",
+     "actual": "Пять из шести active, но 1c-serene-ask — inactive (dead): на :8091 никто не слушает. serene_ask.py работает ВНЕ systemd — запущен вручную root'ом 31.07 04:50 (PPID 1, user session scope) на :8099; мост 1c-mcp-ask настроен на ASK_URL=http://127.0.0.1:8099 — цепочка бота живёт на ручном процессе, который не переживёт ребут",
+     "evidence": "[замер] systemctl is-active … → 1c-serene-ask inactive, остальные active; ss -tlnp → 8099 python3 serene_ask.py (pid 3109129), 8091 отсутствует; ps/cgroup pid 3109129 → root, session-247653.scope; systemctl cat 1c-mcp-ask → Environment=ASK_URL=http://127.0.0.1:8099",
+     "verdict": "v",
+     "verdict_why": "Порт 8099 прописан в юните моста — переезд похож на осознанный, но юнит 1c-serene-ask на 8099 не переведён и сервис держится ручным процессом; какое состояние целевое (8091 юнитом или 8099) — вопрос владельцу"},
+
+    {"idx": 80, "doc": "docs/SERVER_HANDOFF.md", "line": 93, "claim": "report_1c решено вывести из контура, но решение не исполнено (юнит 1c-mcp-reports работает)", "status": "ok",
+     "actual": "По-прежнему не исполнено: юнит active, second-brain-reports с toolFilter [report_1c] в живом openclaw.json (RUNBOOK: владелец сказал «пока не трогать»)",
+     "evidence": "[замер] systemctl is-active 1c-mcp-reports → active; jq живого /home/undebot/.openclaw/openclaw.json → mcp.servers.second-brain-reports, toolFilter.include=[report_1c], url :6015"},
+
+    {"idx": 81, "doc": "docs/SERVER_HANDOFF.md", "line": 95, "claim": "1c-serene-sync в состоянии FAILED (на 27.07)", "status": "ok",
+     "actual": "Юнит и сегодня failed (с 28.07 03:57, Result: signal/TERM — убит при остановке таймеров); синк с тех пор живёт внутри 1c-serene-pipeline",
+     "evidence": "[замер] systemctl status 1c-serene-sync → Active: failed (Result: signal) since 2026-07-28 03:57"},
+
+    {"idx": 82, "doc": "docs/SERVER_HANDOFF.md", "line": 99, "claim": "Индекс в базе один и только инвертированный; векторного нет и быть не должно: ivf заблокирован и роняет движок в петлю OOM", "status": "disc",
+     "actual": "Векторного ivf действительно нет, но инвертированных индексов теперь ДВА: search_idx на search_corpus и alias_idx на search_entity_alias (алиасы добавлены после 27.07). «Индекс один» устарело",
+     "evidence": "[замер] psql: SELECT database_name,table_name,index_name FROM duckdb_indexes() → postgres: search_corpus/search_idx + search_entity_alias/alias_idx (ivf нет)",
+     "verdict": "a",
+     "verdict_why": "alias_idx — легитимная часть новой алиасной подсистемы поиска (используется serene_ask, ASK_ALIAS_INDEX); док отстал"},
+
+    {"idx": 83, "doc": "docs/SERVER_HANDOFF.md", "line": 105, "claim": "Таймеры: 1c-serene-pipeline (по готовности), 1c-serene-sync (03:40), 1c-serene-index (03:55), 1c-bot-monitor (каждые 3 мин); nightly-eval погашен 29.07", "status": "disc",
+     "actual": "1c-serene-index.timer переведён 28.07 с 03:55 на КАЖДЫЕ 20 МИНУТ (OnBootSec=5min/OnUnitActiveSec=20min, п.17) и disabled; sync (03:40) — disabled; pipeline.timer «по готовности» enabled, но НЕ активен — конвейер стоит с 29.07 (последний запуск 29.07 06:41, build_ts корпуса 29.07); bot-monitor каждые 3 мин — верно; nightly-eval inactive — верно",
+     "evidence": "[замер] cat /etc/systemd/system/1c-serene-index.timer → OnUnitActiveSec=20min (комментарий '28.07.2026: с ночного расписания на КАЖДЫЕ 20 МИНУТ'); systemctl list-timers --all → активен только 1c-bot-monitor.timer, pipeline last run 29.07 06:41; psql search_quality build_ts=1785307201 (29.07 06:40)",
+     "verdict": "a",
+     "verdict_why": "Расписание index-таймера изменено легитимно под п.17 после написания дока — править док; отдельно: то, что pipeline.timer не тикает с 29.07 (свежесть п.17 фактически стоит), — состояние стенда, требующее внимания владельца"},
+
+    {"idx": 84, "doc": "docs/SERVER_HANDOFF.md", "line": 111, "claim": "Секреты в /etc/ с правами 600 (кроме 1c-bot-monitor.env — 644): 11 файлов", "status": "ok",
+     "actual": "Совпадает: 12 файлов 600, 1c-bot-monitor.env — 644 (док сам это отмечает как «стоит поправить»); добавились новые 1c-mcp-ask.env и 1c-odata-gateway-ut.env (оба 600)",
+     "evidence": "[замер] stat -c '%a %n' /etc/1c-*.env → 644 только 1c-bot-monitor.env, остальные 600"},
+
+    {"idx": 85, "doc": "docs/SERVER_HANDOFF.md", "line": 116, "claim": "Папка credentials/ намеренно в .gitignore", "status": "ok",
+     "actual": "credentials/ в .gitignore",
+     "evidence": "[код] /srv/1c/.gitignore:2 'credentials/'"},
+
+    {"idx": 86, "doc": "docs/SERVER_HANDOFF.md", "line": 130, "claim": "/srv/1c существует, рабочая копия чистая; токен git вшит в remote; перевыпуск токена — при переходе в прод", "status": "hist",
+     "actual": "Снимок [проверено] 27.07: репозиторий на месте, токен действительно вшит в origin; рабочая копия сегодня НЕ чистая (8 изменённых файлов + untracked work/doc-audit) — обычный рабочий дрейф",
+     "evidence": "[замер] git -C /srv/1c status --short → 8×M + ??; git remote -v → https://<токен>@github.com/AHoHuMbl4/1c.git"},
+
+    {"idx": 87, "doc": "docs/SERVER_HANDOFF.md", "line": 141, "claim": "/srv/serenedb-src — полный клон исходников SereneDB: 879 МБ, 1213 тестов, 7 демок", "status": "ok",
+     "actual": "Каталог существует, размер совпадает точно (879M); счёт тестов/демок не повторял",
+     "evidence": "[замер] du -sh /srv/serenedb-src → 879M"},
+
+    {"idx": 88, "doc": "docs/SERVER_HANDOFF.md", "line": 147, "claim": "/opt/1c-mcp-reports/build_resolver_index.py — версия от 24.07, отстаёт от репозитория (исправлен 27.07)", "status": "hist",
+     "actual": "Датированный замер 27.07; сегодня копии идентичны (md5 совпадают)",
+     "evidence": "[замер] md5sum обоих файлов → aebed547db3b9a61e9f2fc998edd0134 у обоих"},
+
+    {"idx": 89, "doc": "docs/SERVER_HANDOFF.md", "line": 163, "claim": "Репозиторий /srv/1c и рабочий код /opt/1c-mcp-reports — две разные копии; синхронизация копированием (на 27.07)", "status": "hist",
+     "actual": "На 27.07 верно; теперь раскладку делает конвейер сам: pipeline.sh вызывает deploy.sh перед сборкой, тёзки в /opt и в репо совпадают по md5",
+     "evidence": "[код] ubuntu/serenedb/pipeline.sh:20-22 — '$SERENE_SRC_DIR/deploy.sh /opt/1c-mcp-reports'; [замер] md5 build_resolver_index.py совпали; stand-files: SAME x42"},
+
+    {"idx": 90, "doc": "docs/SERVER_HANDOFF.md", "line": 202, "claim": "В базе лежат search_corpus_backup_20260727 (8 колонок, 97 965 строк, emb заполнен у всех) и tmp_prod_corpus; это не мусор", "status": "ok",
+     "actual": "Обе таблицы на месте: backup — 97 965 строк, 8 колонок, emb IS NULL = 0; tmp_prod_corpus — 97 965 строк",
+     "evidence": "[замер] psql: count(*) backup → 97965; count колонок из duckdb_columns() → 8; count(*) WHERE emb IS NULL → 0; count(*) tmp_prod_corpus → 97965"},
+
+    {"idx": 91, "doc": "docs/SERVER_HANDOFF.md", "line": 211, "claim": "search_corpus_bak копией не является: нет колонки refs и 97 085 строк против 97 965", "status": "ok",
+     "actual": "Подтверждено: 97 085 строк, колонки refs нет",
+     "evidence": "[замер] psql: count(*) search_corpus_bak → 97085; duckdb_columns() WHERE table_name='search_corpus_bak' AND column_name='refs' → 0"},
+
+    {"idx": 92, "doc": "docs/SERVER_HANDOFF.md", "line": 224, "claim": "sha1() движка побайтово совпадает с hashlib.sha1", "status": "ok",
+     "actual": "Совпадает: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3 у обоих на 'test'",
+     "evidence": "[замер] psql SELECT sha1('test') и python3 hashlib.sha1(b'test') → идентичные дайджесты"},
+
+    {"idx": 93, "doc": "docs/SERVER_HANDOFF.md", "line": 230, "claim": "Вектор ivf заблокирован снаружи: порог 6000 строк воспроизводим; перебор даёт 280-322 мс с полной точностью — продукт не блокируется", "status": "ok",
+     "actual": "Согласуется со всем: ivf-индекса в базе нет, блокировка — закреплённое решение владельца; сами числа (6000 / 280-322 мс) — из замеров, повтор опыта запрещён инвариантом (ivf только на отдельном --server_directory)",
+     "evidence": "[замер] duckdb_indexes() → ivf отсутствует; [код] memory_bank/owner-memory/project-serenedb-ivf-blocked.md; docs/VECTOR_DECISION.md"},
+
+    {"idx": 94, "doc": "docs/SERVER_HANDOFF.md", "line": 241, "claim": "1c-serene-index.service починен 27.07: EnvironmentFile -/etc/1c-mcp-reports.env первым, /etc/1c-serene-sync.env последним; правка в репозитории и /etc/systemd/system/", "status": "ok",
+     "actual": "Порядок именно такой в обеих копиях",
+     "evidence": "[замер] grep EnvironmentFile /etc/systemd/system/1c-serene-index.service → строки 29-30 (mcp-reports первым с '-', sync последним); [код] ubuntu/serenedb/systemd/1c-serene-index.service:20-21 — тот же порядок"},
+
+    {"idx": 95, "doc": "docs/SERVER_HANDOFF.md", "line": 261, "claim": "Индекс по расписанию не пересобирался ни разу — свежесть данных отсутствует (на 27.07)", "status": "hist",
+     "actual": "На 27.07 верно; затем 28-29.07 конвейер 1c-serene-pipeline гонялся таймером (запуски в журнале). Сегодня свежесть снова стоит: последний такт 29.07 06:41, build_ts корпуса 29.07 06:40 — но это уже новое состояние, не то, что описывает док",
+     "evidence": "[замер] journalctl -u 1c-serene-pipeline → запуск 28.07 14:02, останов 29.07 07:32 (killed); psql search_quality k='build_ts' → 1785307201 (29.07)"},
+
+    {"idx": 96, "doc": "docs/SERVER_HANDOFF.md", "line": 273, "claim": "serene_sync.py:165-168 — отказы 1С намеренно не глотаются, юнит завершается кодом 3 и показывает failed даже при успешной загрузке", "status": "ok",
+     "actual": "Поведение сохранено, номер строки уехал: sys.exit(3) при err теперь на строке 247 с тем же комментарием «Ошибки загрузки не глотаем»",
+     "evidence": "[код] ubuntu/serenedb/serene_sync.py:244-247 — 'if err: print(…не загрузились); sys.exit(3)'"},
+
+    {"idx": 97, "doc": "docs/SERVER_HANDOFF.md", "line": 278, "claim": "build_resolver_index.py:45 делает DELETE FROM resolver_index и заново эмбеддит ~60 000 значений пачками по 10 (состояние 27.07; по §0 резолвер уже инкрементный)", "status": "hist",
+     "actual": "Файл до сих пор делает DELETE FROM resolver_index (стр. 45) пачками BATCH=10 (стр. 23), но из сборки ВЫВЕДЕН: build.sh собирает резолвер штатно и инкрементально (resolver_build.sql + embed_missing.sh), build_resolver_index.py в build.sh/pipeline.sh не вызывается",
+     "evidence": "[код] /opt/1c-mcp-reports/build_resolver_index.py:45 sql_or_die(\"DELETE FROM resolver_index;\"), :23 BATCH=10; [замер] grep build_resolver_index ubuntu/serenedb/*.sh → ни одного вызова; build.sh:222-227 — штатная сборка"},
+
+    {"idx": 98, "doc": "docs/SERVER_HANDOFF.md", "line": 281, "claim": "serene_ask.py не читает resolver_index ни разу (греп по всем 1124 строкам); таблицу читает только serene_report.py", "status": "disc",
+     "actual": "Устарело: serene_ask.py теперь ЧИТАЕТ resolver_index (SELECT DISTINCT value FROM resolver_index … на стр. 849, отдельной ролью serene_resolver — positive control); файл вырос до 3003 строк",
+     "evidence": "[код] ubuntu/serenedb/serene_ask.py:849 — запрос к resolver_index; :45,805 — комментарии о роли serene_resolver; [замер] wc -l → 3003",
+     "verdict": "a",
+     "verdict_why": "Резолвер подключён к сервису ответов после 27.07 (ровно то, чего доку не хватало как смысла таблицы) — реальность легитимна, док-снимок отстал"},
+
+    {"idx": 99, "doc": "docs/SERVER_HANDOFF.md", "line": 300, "claim": "Содержимое /opt/smart-bot/.env и /home/undebot/.openclaw/telegram-token совпадало — алерт nightly-eval уходил с токена боевого бота", "status": "hist",
+     "actual": "Исторический диагноз выведенного слоя; nightly-eval погашен и мёртв — сравнивать токены незачем",
+     "evidence": "[замер] systemctl status nightly-eval → Loaded static, Active: inactive (dead)"},
+
+    {"idx": 100, "doc": "docs/SERVER_HANDOFF.md", "line": 316, "claim": "serene_ask.py:119 режет вывод psql по \\n; сервис падает на 4% корпуса (открытый дефект на момент написания)", "status": "disc",
+     "actual": "Починено 27.07 (в тот же день): psql вызывается с --csv и разбирается csv.reader — многострочные значения читаются корректно; PRODUCTION_PLAN §1 помечен ✅ СДЕЛАНО 27.07, но handoff подаёт пункт в списке «Остальное открытое»",
+     "evidence": "[код] ubuntu/serenedb/serene_ask.py:221-228 — subprocess psql '--csv' + csv.reader(io.StringIO(p.stdout)); csv.field_size_limit 50 МБ (:154-158); docs/PRODUCTION_PLAN.md:107 '# 1. ✅ СДЕЛАНО 27.07'",
+     "verdict": "a",
+     "verdict_why": "Дефект закрыт кодом в день написания дока; список «открытого» в handoff не обновлён — править док"},
+
+    {"idx": 101, "doc": "docs/SERVER_HANDOFF.md", "line": 319, "claim": "На некоторые вопросы сервис возвращает kind=figures с пустым текстом — нарушение п.18 (открытый дефект)", "status": "disc",
+     "actual": "Молчание устранено: отказ формулирует модель (refuse_text) на языке вопроса, пустой текст заменяется; PRODUCTION_PLAN §2 — «✅ ЧАСТИЧНО СДЕЛАНО 27.07, Молчание устранено»; golden.sh дополнительно помечает пустой ответ '(ПУСТОЙ ОТВЕТ)'",
+     "evidence": "[код] ubuntu/serenedb/serene_ask.py:756 def refuse_text, :1886,1890,1997 — 'NO_DATA_TEXT or refuse_text(question)'; docs/PRODUCTION_PLAN.md:92 «Молчание устранено»",
+     "verdict": "a",
+     "verdict_why": "Пункт закрыт (по крайней мере в части молчания) после написания handoff — список «открытого» отстал"},
+
+    {"idx": 102, "doc": "docs/SERVER_HANDOFF.md", "line": 320, "claim": "135 числовых колонок не доходят до корпуса — нарушение п.13 (открытый дефект)", "status": "disc",
+     "actual": "Закрыто 28.07: строка корпуса несёт карту всех величин nums (колонка подтверждена в базе), выбор величины делается при ответе; PRODUCTION_PLAN §3 — «✅ СДЕЛАНО 28.07»",
+     "evidence": "[замер] duckdb_columns() search_corpus → колонка nums есть, amount нет; [код] docs/PRODUCTION_PLAN.md:224 '# 3. ✅ СДЕЛАНО 28.07 — 135 числовых колонок…'",
+     "verdict": "a",
+     "verdict_why": "Дефект закрыт переходом на nums после написания handoff — править док"},
+
+    {"idx": 103, "doc": "docs/SERVER_HANDOFF.md", "line": 321, "claim": "report_1c шлёт в модель 465 КБ схемы с живыми данными клиента, дважды на вопрос — нарушение п.16 и 19; решение вывести принято 26.07, в конфиге не исполнено", "status": "ok",
+     "actual": "До сих пор так: юнит 1c-mcp-reports active, second-brain-reports с report_1c остаётся в живом openclaw.json (по RUNBOOK — слово владельца «пока не трогать»); утверждение дока совпадает с реальностью",
+     "evidence": "[замер] systemctl is-active 1c-mcp-reports → active; jq /home/undebot/.openclaw/openclaw.json → second-brain-reports, toolFilter=[report_1c]; [код] docs/PRODUCTION_PLAN.md §4 — тот же диагноз (465 КБ, решение 26.07 не исполнено)"},
+
+    {"idx": 104, "doc": "docs/SERVER_HANDOFF.md", "line": 333, "claim": "Правило: никакого VACUUM (REFRESH_TABLE) на корпусе — дало 34 ГБ и смерть движка; только REFRESH_INDEX", "status": "ok",
+     "actual": "Правило закреплено в таблице ловушек (файл живёт в memory_bank/, а не docs/ — мелочь адресации)",
+     "evidence": "[код] memory_bank/techContext.md:44 — 'VACUUM (REFRESH_TABLE) на таблице с ivf … съел 34 ГБ, движок ушёл в WAL-recovery'"},
+
+    {"idx": 105, "doc": "docs/SERVER_HANDOFF.md", "line": 336, "claim": "GUID лежат в 88 колонках с суффиксом _Key и в 26 без него, включая Контрагент", "status": "ok",
+     "actual": "Суть подтверждена: колонка Контрагент (без _Key) реально хранит GUID; точные числа 88/26 — снимок витрины 27.07, витрина с тех пор выросла (сейчас различных _Key-колонок 229)",
+     "evidence": "[замер] psql: SELECT Контрагент FROM document_приходныйкассовыйордер LIMIT 1 → '59e02fbe-883e-11f1-8c94-52540072bfb7' (GUID); count(DISTINCT column_name LIKE '%_Key') → 229"},
+
+    {"idx": 106, "doc": "docs/SERVER_HANDOFF.md", "line": 339, "claim": "Порог min_cos = 0.70 в резолвере сравнивается с похожестью (cosine_similarity), не с расстоянием", "status": "ok",
+     "actual": "Именно так: SELECT … cosine_similarity(emb, …) sim и условие float(sim) >= min_cos (0.70); комментарий кода прямо предостерегает от <=> (расстояние)",
+     "evidence": "[код] ubuntu/serenedb/serene_report.py:205 (min_cos=0.70), 222-224 (комментарий про <=>), 235 (if float(sim) >= min_cos)"},
+
+    {"idx": 107, "doc": "docs/SERVER_HANDOFF.md", "line": 343, "claim": "duckdb_indexes().sql отдаёт USING inverted () при любом составе — желаемый DDL хранится отпечатком в таблице search_meta", "status": "ok",
+     "actual": "Подтверждено: каталог отдаёт 'CREATE INDEX search_idx ON public.search_corpus USING inverted ();' без состава, полный DDL лежит в search_meta (k=index_ddl)",
+     "evidence": "[замер] psql: SELECT sql FROM duckdb_indexes() → 'USING inverted ()'; SELECT * FROM search_meta → index_ddl с полным составом inverted(doc search_dict, refs search_dict, src_table) INCLUDE (…)"},
+
+    {"idx": 108, "doc": "docs/SERVER_HANDOFF.md", "line": 353, "claim": "Приёмка после каждой правки: bash /opt/1c-mcp-reports/golden.sh — восемь вопросов, все должны вернуть answer", "status": "disc",
+     "actual": "Скрипт на месте и вопросов ровно 8, но документированная приёмка сейчас невыполнима как написано: golden.sh по умолчанию бьёт в http://127.0.0.1:8091/ask (ASK_URL в /etc/1c-serene-ask.env не задан), а на :8091 никто не слушает — сервис вручную переехал на :8099",
+     "evidence": "[код] /opt/1c-mcp-reports/golden.sh:11 URL=${ASK_URL:-http://127.0.0.1:8091/ask}; [замер] grep ASK_URL /etc/1c-serene-ask.env → пусто; ss -tlnp → :8091 нет, :8099 serene_ask.py",
+     "verdict": "v",
+     "verdict_why": "Тот же корень, что idx 79: сервис ответов живёт на ручном :8099 — целевой порт и возвращение под юнит должен назвать владелец; до этого неясно, что править — док/скрипт или стенд"},
+
+    {"idx": 109, "doc": "docs/SERVER_HANDOFF.md", "line": 357, "claim": "Эталоны golden: контрагентов 13; ИНН 7701012342; за год 12 326 000; декабрь 2 456 400 на 6 документов; крупнейшая продажа 1 629 700", "status": "unverifiable",
+     "actual": "Полная сверка требует прогона golden.sh через живой сервис и модель (а сервис на нештатном порту — см. idx 108). Спот-чек из витрины: контрагентов действительно 13 — противоречий не найдено",
+     "evidence": "[замер] psql: SELECT count(*) FROM catalog_контрагенты → 13; остальные эталоны — агрегаты, воспроизводимые только полным пайплайном ответа"},
+
+    {"idx": 110, "doc": "docs/SERVER_HANDOFF.md", "line": 363, "claim": "Инварианты базы: search_corpus = 97 965 строк, 226 различных src_table, индекс search_idx", "status": "disc",
+     "actual": "«Инварианты» устарели: сейчас 103 808 строк и 231 src_table (витрина легитимно доросла к 29-31.07, cov_rows_lost=2); search_idx есть, но появился и второй индекс alias_idx",
+     "evidence": "[замер] psql: SELECT count(*), count(DISTINCT src_table) FROM search_corpus → 103808|231; duckdb_indexes() → search_idx + alias_idx",
+     "verdict": "a",
+     "verdict_why": "Числа корпуса растут вместе с базой по замыслу (п.13 полнота); закреплять их в доке как инварианты и не обновлять — дефект дока"},
+
+    {"idx": 111, "doc": "docs/SERVER_HANDOFF.md", "line": 367, "claim": "golden-questions.txt — тестовые данные стенда, не часть продукта; по п.15 TARGET.md набор должен строиться из базы клиента при установке", "status": "ok",
+     "actual": "Файл существует (8 вопросов); TARGET.md п.15 дословно: «Приёмочный набор вопросов строится из самой базы клиента при установке, а не пишется под конкретные данные»",
+     "evidence": "[замер] ls ubuntu/serenedb/golden-questions.txt (1252 B, 8 непустых строк); [код] /srv/1c/TARGET.md:52-54 (п.15)"}
+  ]
+}

@@ -1,0 +1,429 @@
+{
+ "shard": "membank",
+ "half": 2,
+ "results": [
+  {
+   "idx": 44,
+   "doc": "memory_bank/techContext.md",
+   "line": 200,
+   "claim": "Нормализация значений при загрузке сделана в функции _cell файла poc_load_entity.py (канонический вид, чтобы sha1(doc)-ключи не пересобирались)",
+   "status": "ok",
+   "actual": "_cell нормализует булевы (true/false как в JSON 1С) и дату-время (T→пробел) именно чтобы sha1(doc)-ключи не пересобирались; в докстринге те же замеры 28.07 (22 042 ложных удаления)",
+   "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:387-404 — def _cell(v), приведение булевых и ISO-даты"
+  },
+  {
+   "idx": 45,
+   "doc": "memory_bank/techContext.md",
+   "line": 240,
+   "claim": "Правило: любой duckdb_tables()/duckdb_indexes()/duckdb_secrets() в коде обязан нести AND database_name = current_database()",
+   "status": "disc",
+   "actual": "Правило записано (techContext:239-241, с оговоркой «если цель не смотреть на соседние базы»), и duckdb_tables() везде фильтруется (corpus_build.sql:152,175-176; coverage_build.sql:37; build.sh:184; embed_missing.sh DBQ:112). Но duckdb_indexes() зовётся БЕЗ фильтра базы в corpus_precheck.sql:35 и corpus_init.sql:130 — а search_idx существует в ОБЕИХ базах ([замер] duckdb_indexes: search_idx в postgres и в ut_test), т.е. прекчек «индекс на месте» может ложно пройти, когда индекс есть только у соседней базы. Плюс serene_search_build.py:396 жёстко пишет database_name='postgres' (файл вне живого такта — таймер index disabled, но лежит в репо).",
+   "evidence": "[код] ubuntu/serenedb/corpus_precheck.sql:35 «FROM duckdb_indexes() WHERE index_name = 'search_idx'»; ubuntu/serenedb/corpus_init.sql:130; ubuntu/serenedb/serene_search_build.py:396; [замер] psql duckdb_indexes() — search_idx в обеих базах",
+   "verdict": "b",
+   "verdict_why": "код нарушает собственное записанное правило (введено после аварии, указание владельца 29.07 про столкновение баз); хардкод 'postgres' — TARGET.md п.9 «без хардкода»; править код, не док"
+  },
+  {
+   "idx": 46,
+   "doc": "memory_bank/techContext.md",
+   "line": 248,
+   "claim": "Рабочие таблицы досчёта векторов называются emb_<база>_<таблица> — имена, при которых столкновение баз невозможно",
+   "status": "ok",
+   "actual": "TAG=\"emb_${DBNAME}_${TBL}\", DBNAME берётся у движка (SELECT current_database()), не из DSN",
+   "evidence": "[код] ubuntu/serenedb/embed_missing.sh:61-63"
+  },
+  {
+   "idx": 47,
+   "doc": "memory_bank/techContext.md",
+   "line": 262,
+   "claim": "Имена секретов движка несут имя базы (odg_<база>, qwen_<база>) — секреты общие на весь инстанс",
+   "status": "ok",
+   "actual": "Секреты несут имя базы: odg_${LOCK_TAG} и qwen_${LOCK_TAG}_${N} (LOCK_TAG = current_database()); правило соблюдено; у qwen реальные имена несут ещё суффикс номера ключа _<N>, чего пример в доке не показывает — не расхождение по сути",
+   "evidence": "[код] ubuntu/serenedb/build.sh:59,73,89"
+  },
+  {
+   "idx": 48,
+   "doc": "memory_bank/techContext.md",
+   "line": 283,
+   "claim": "Типов с полями Edm.Stream/Edm.Binary: 961 из 4 585 на первой базе, 470 из 2 795 на УТ",
+   "status": "unverifiable",
+   "actual": "Числители (961 и 470 типов с Edm.Stream/Binary) проверить нельзя: нужен полный $metadata обеих баз (тяжёлый GET к живой 1С); в витрине tmp3_cls хранит колонки только 290 таблиц-источников ([замер] 17 из 290 со Stream/Binary — не тот разрез). Знаменатели подтверждены: [замер] tmp3_ent = 4585 (postgres) и 2795 (ut_test)",
+   "evidence": "[замер] psql: SELECT count(*) FROM tmp3_ent → 4585 (postgres), 2795 (ut_test); tmp3_cls покрывает только источники корпуса"
+  },
+  {
+   "idx": 49,
+   "doc": "memory_bank/techContext.md",
+   "line": 290,
+   "claim": "Порядок отказоустойчивости в poc_load_entity._get_json: как обычно → повтор → без неотдаваемых полей ($select) → честный отказ с числом в переписи",
+   "status": "ok",
+   "actual": "Порядок в коде ровно такой: попытка → повтор → $select без неотдаваемых полей (_select_of по $metadata) → исключение наверх («сущность честно считается незагруженной: перепись покажет её числом»)",
+   "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:123-164"
+  },
+  {
+   "idx": 50,
+   "doc": "memory_bank/techContext.md",
+   "line": 314,
+   "claim": "В /etc/serenedb/serened.conf выставлено --cpu_threads=96 и --io_threads=8 (29.07)",
+   "status": "disc",
+   "actual": "В /etc/serenedb/serened.conf сейчас --cpu_threads=160 и --io_threads=16, а не 96/8; док подаёт 96/8 как текущую настройку",
+   "evidence": "[замер] grep threads /etc/serenedb/serened.conf → строки 42-43: --cpu_threads=160, --io_threads=16",
+   "verdict": "a",
+   "verdict_why": "настройку подняли после записи в док (реальность легитимна — переподписка пула объявлена безопасной там же); обновить число в techContext"
+  },
+  {
+   "idx": 51,
+   "doc": "memory_bank/techContext.md",
+   "line": 442,
+   "claim": "Образец ловушки 33 (LEFT JOIN + coalesce в фильтре) в нашем коде не встречается; единственное похожее место — corpus_build.sql строка 439, булев coalesce, проверен замером",
+   "status": "disc",
+   "actual": "Суть верна: образца «LEFT JOIN + coalesce в фильтре со сравнением с левой колонкой» в corpus_build.sql нет, булев coalesce в фильтре есть (own_ref/own_prop). Но он теперь на строках 467-473, а на строке 439 — комментарий про битую кодировку: файл правился 30.07 после записи, номер строки в доке протух",
+   "evidence": "[замер] sed -n '435,443p' corpus_build.sql → комментарий про Invalid unicode; [код] ubuntu/serenedb/corpus_build.sql:467-473 — coalesce(c.own_ref,false)/coalesce(c.own_prop,true) в WHERE",
+   "verdict": "a",
+   "verdict_why": "код сместился при правках; поправить номер строки (или убрать его) в techContext"
+  },
+  {
+   "idx": 52,
+   "doc": "memory_bank/techContext.md",
+   "line": 495,
+   "claim": "У витрины две карты: nums MAP(VARCHAR, DOUBLE) для чисел и с 30.07 flags MAP(VARCHAR, BOOLEAN) для булевых реквизитов",
+   "status": "ok",
+   "actual": "Обе карты на месте: nums MAP(VARCHAR, DOUBLE) и flags MAP(VARCHAR, BOOLEAN)",
+   "evidence": "[замер] psql duckdb_columns() по search_corpus → nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN)"
+  },
+  {
+   "idx": 53,
+   "doc": "memory_bank/techContext.md",
+   "line": 529,
+   "claim": "Боевой индекс имеет INCLUDE (src_table, row_key, doc_date); nums и flags в INCLUDE не входят — обращение работает, но с походом в таблицу",
+   "status": "ok",
+   "actual": "Боевой индекс: inverted(doc search_dict, refs search_dict, src_table) INCLUDE (src_table, row_key, doc_date); nums и flags в INCLUDE не входят",
+   "evidence": "[код] ubuntu/serenedb/corpus_init.sql:92-94; [замер] psql search_meta k='index_ddl' → тот же DDL (duckdb_indexes().sql отдаёт пустые скобки — известная черта движка)"
+  },
+  {
+   "idx": 54,
+   "doc": "memory_bank/techContext.md",
+   "line": 557,
+   "claim": "serene_sync._selectable и его копия в serene_select.py отбрасывают кандидатов по русским подстрокам «присоединенныефайлы» и «удалить»; применяется только в _suggest, на загрузку данных не влияет",
+   "status": "ok",
+   "actual": "_selectable с подстроками «присоединенныефайлы»/«удалить» есть в serene_sync.py:36-45 и serene_select.py:56; используется только в _suggest (serene_sync.py:58), _suggest — только в _preflight (:86), а _preflight не вызывается никем (grep: только def) — на загрузку данных не влияет (даже сильнее, чем сказано: весь путь мёртв)",
+   "evidence": "[код] ubuntu/serenedb/serene_sync.py:36-45,58,86; ubuntu/serenedb/serene_select.py:56; grep _preflight → только определение"
+  },
+  {
+   "idx": 55,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 7,
+   "claim": "Сборка данных живёт внутри движка: corpus_build.sql + corpus_merge.sql + resolver_build.sql, связывает build.sh",
+   "status": "ok",
+   "actual": "Все четыре файла существуют: corpus_build.sql, corpus_merge.sql, resolver_build.sql, build.sh",
+   "evidence": "[замер] ls ubuntu/serenedb/{corpus_build.sql,corpus_merge.sql,resolver_build.sql,build.sh} — все на месте"
+  },
+  {
+   "idx": 56,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 12,
+   "claim": "Вектор 1024 и считает его сам движок (ai_embed)",
+   "status": "ok",
+   "actual": "emb в search_corpus — FLOAT[1024]; считает движок: ai_embed(...)::FLOAT[$DIM] в досчёте и проба ai_embed в прекчеке (противоречащий techContext:85 «1536» — чужая половина; живая витрина 1024)",
+   "evidence": "[замер] duckdb_columns(): emb FLOAT[1024]; [код] ubuntu/serenedb/embed_missing.sh:236; corpus_precheck.sql:63"
+  },
+  {
+   "idx": 57,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 29,
+   "claim": "Ни одного имени конкретной конфигурации 1С в коде — проверено разбором AST",
+   "status": "ok",
+   "actual": "Проверка хардкода существует кодом: агент .claude/agents/hardcode-sniper.md (разбор AST, import ast), хуки check-diff.sh (перед Bash) и check-write.sh (после каждой правки), агент-снайпер перед git commit; спот-проверка: в живом коде платформенные имена (Ref_Key, Date/Period), русские подстроки — только в мёртвой _selectable, что сам док честно фиксирует границей (techContext:555-561)",
+   "evidence": "[код] .claude/agents/hardcode-sniper.md (import ast); .claude/settings.json hooks; grep по ubuntu/serenedb/"
+  },
+  {
+   "idx": 58,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 34,
+   "claim": "Контракт из $metadata: собственная идентичность = ключ ровно [\"Ref_Key\"]; табличная часть = ключ содержит Ref_Key и ещё свойство; дата — Date у документов, Period у регистров",
+   "status": "ok",
+   "actual": "Контракт в SQL: own_ref = (key_cols=['Ref_Key']) — corpus_build.sql:88; отбор own-сущностей WHERE k.key_cols=['Ref_Key'] (:249,:284), регистры/наборы — ключ≠['Ref_Key'] (:458); дата — приоритет Date(0) → Period(1) (:321-323)",
+   "evidence": "[код] ubuntu/serenedb/corpus_build.sql:88,249,284,321-323,458"
+  },
+  {
+   "idx": 59,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 51,
+   "claim": "Индекс: CREATE INDEX search_idx ON search_corpus USING inverted(doc search_dict, refs search_dict, src_table) INCLUDE (src_table, row_key, amount, doc_date)",
+   "status": "disc",
+   "actual": "Живой индекс: INCLUDE (src_table, row_key, doc_date) — колонки amount в search_corpus нет вовсе (величины живут картой nums). systemPatterns:51 (в актуальной части дока, до маркера архива на :88) устарел и противоречит techContext:529, который верен",
+   "evidence": "[код] ubuntu/serenedb/corpus_init.sql:92-94; [замер] search_meta index_ddl и duckdb_columns() search_corpus — колонки amount нет",
+   "verdict": "a",
+   "verdict_why": "amount заменён картой nums ещё 27-28.07; поправить DDL-цитату в systemPatterns"
+  },
+  {
+   "idx": 60,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 64,
+   "claim": "При неоднозначности возвращается kind=clarify с вариантами; порога неоднозначности в коде нет",
+   "status": "ok",
+   "actual": "kind=clarify с options и текстом уточнения возвращается в нескольких ветках; числового порога неоднозначности нет — неоднозначность решается моделью (списком типов) и семьями алиасов, rivals[:2] — только ограничение показа",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:2485-2487,2609-2610,2458-2488"
+  },
+  {
+   "idx": 61,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 71,
+   "claim": "Шлюз отвечает 405 на изменяющие методы до всякой авторизации",
+   "status": "ok",
+   "actual": "do_POST/PUT/PATCH/DELETE/MERGE → _deny() → 405 без какой-либо проверки токена; живой шлюз отвечает 405 на POST без авторизации",
+   "evidence": "[код] ubuntu/1c-gateway/odata_gateway.py:101-110; [замер] curl -X POST http://127.0.0.1:6011/odata/standard.odata/ → 405"
+  },
+  {
+   "idx": 62,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 72,
+   "claim": "Сервис без токена не стартует: выход с кодом 2",
+   "status": "ok",
+   "actual": "main() при пустом ASK_TOKEN пишет FATAL и возвращает 2 — сервис не стартует",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:2990-2994"
+  },
+  {
+   "idx": 63,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 73,
+   "claim": "Бот не пишет в базу: роль СУБД имеет 0 привилегий INSERT/UPDATE/DELETE/TRUNCATE",
+   "status": "ok",
+   "actual": "У serene_ro только SELECT (241 грантов), INSERT/UPDATE/DELETE/TRUNCATE — ноль; у serene_resolver только SELECT (4)",
+   "evidence": "[замер] psql information_schema.role_table_grants: serene_ro → SELECT 241, других привилегий нет"
+  },
+  {
+   "idx": 64,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 74,
+   "claim": "Гейт сверяет каждое число ответа; не прошло — ответ заменяется структурой",
+   "status": "ok",
+   "actual": "При наличии эталона сверяются ВСЕ числа (minDigitsWithRef=1); не прошло — action:replace (эталонный ответ сервиса / noDataReply), т.е. ответ заменяется заземлённой структурой",
+   "evidence": "[код] ubuntu/openclaw/verify-plugin/verify-core.js:9-10,208-216"
+  },
+  {
+   "idx": 65,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 75,
+   "claim": "Против подгонки под базу стоит хук-агент перед коммитом + скрипт после каждой правки",
+   "status": "ok",
+   "actual": "В .claude/settings.json: PreToolUse(Bash) — агент-«снайпер» на git commit (велосипед/подгонка/рост/имя базы) + check-diff.sh; PostToolUse(Write|Edit) — check-write.sh после каждой правки",
+   "evidence": "[код] /srv/1c/.claude/settings.json — hooks PreToolUse/PostToolUse"
+  },
+  {
+   "idx": 66,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 79,
+   "claim": "Правило: свой код поверх SereneDB — только после ответа агента serenedb-native, что штатного нет; проверенные исключения: CDC, гейт чисел, AST-валидатор SQL, пагинация OData, ai_embed без параметра размерности",
+   "status": "ok",
+   "actual": "Правило и перечень исключений записаны (systemPatterns:78-83, актуальная часть); согласуются с TARGET.md:93-102 (исчерпывающий перечень своего кода: OData, модель, отрисовка, гейт) и MAP.md:27",
+   "evidence": "[код] memory_bank/systemPatterns.md:78-83; TARGET.md:93-102; MAP.md:27"
+  },
+  {
+   "idx": 67,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 105,
+   "claim": "Архитектура: холодный контур ETL→KB-репо (braine) и serene_sync→витрина; горячий: OpenClaw-бот → ask_1c (braine RAG) или report_1c (SereneDB)",
+   "status": "hist",
+   "actual": "Раздел лежит после маркера «_Ниже — архив предыдущей версии._» (systemPatterns:88) — подан как архив; braine/report_1c-контур в нём исторический",
+   "evidence": "[код] memory_bank/systemPatterns.md:88 — маркер архива"
+  },
+  {
+   "idx": 68,
+   "doc": "memory_bank/systemPatterns.md",
+   "line": 131,
+   "claim": "Сервисы на LXC — systemd, enabled (zero-touch, переживают ребут)",
+   "status": "hist",
+   "actual": "Строка 131 — в архивной части (после маркера :88), расхождением не считается. Фактически сейчас иначе: 1c-serene-pipeline/sync failed, 1c-etl.timer и 1c-serene-sync.timer disabled, 1c-gateway disabled ([замер] systemctl is-enabled/is-active)",
+   "evidence": "[код] memory_bank/systemPatterns.md:88; [замер] systemctl: pipeline failed, sync failed, etl.timer disabled"
+  },
+  {
+   "idx": 69,
+   "doc": "memory_bank/productContext.md",
+   "line": 9,
+   "claim": "Работает цепочка: штатный OData 1С (read-only) → внешняя база знаний → RAG-бот с цитатами",
+   "status": "disc",
+   "actual": "Цепочка в исходном смысле (OData → внешняя KB braine → RAG-бот) мертва: braine не слушает (8090/8091 — connection refused), 1c-etl.timer disabled. Живой путь — OData → витрина SereneDB → serene_ask. Док подаёт braine-цепочку в разделе «Что получилось (работает)» без пометки архива",
+   "evidence": "[замер] curl 127.0.0.1:8090 и :8091/health → connection refused (код 000); systemctl is-enabled 1c-etl.timer → disabled",
+   "verdict": "a",
+   "verdict_why": "braine/KB-путь выведен по более новым решениям; productContext переписать под живой контур"
+  },
+  {
+   "idx": 70,
+   "doc": "memory_bank/productContext.md",
+   "line": 11,
+   "claim": "Раскатка на новый бизнес = разовая настройка, дальше автоматически: ночная выгрузка, индексация, ответы; zero-touch, переживает ребут",
+   "status": "disc",
+   "actual": "Zero-touch сейчас не выполняется: 1c-serene-pipeline.timer enabled, но inactive (конвейер стоит с 29.07), 1c-serene-pipeline.service и 1c-serene-sync.service — failed, 1c-etl.timer disabled; «ночная выгрузка, индексация — автоматически» не идут",
+   "evidence": "[замер] systemctl: 1c-serene-pipeline.timer enabled/inactive; 1c-serene-pipeline.service failed; 1c-serene-sync.service failed; 1c-etl.timer disabled",
+   "verdict": "a",
+   "verdict_why": "док приукрашивает стадию: по TARGET_STATUS фазы автономности не закрыты; править productContext (свежесть п.17 TARGET на стенде сейчас тоже не держится — но это открытая работа, а не норма для дока)"
+  },
+  {
+   "idx": 71,
+   "doc": "memory_bank/projectbrief.md",
+   "line": 12,
+   "claim": "ETL выгружает выбранные сущности в KB-репо (GitLab) → braine (Open WebUI + pgvector) индексирует → Telegram-бот отвечает; выбор — галочками config-ui",
+   "status": "disc",
+   "actual": "projectbrief подаёт ETL→KB-репо(GitLab)→braine(Open WebUI+pgvector)→бот и выбор галочками config-ui как текущее устройство («Как (кратко)», без пометки архива). Реально braine мёртв (8090/8091 refused), 1c-etl.timer disabled; живой контур — SereneDB-витрина + serene_ask",
+   "evidence": "[замер] curl 8090/8091 → refused; systemctl is-enabled 1c-etl.timer → disabled; [код] memory_bank/projectbrief.md:12-14 — braine-схема без маркера архива",
+   "verdict": "a",
+   "verdict_why": "док отстал от вывода braine/NL→SQL; переписать раздел «Как (кратко)»"
+  },
+  {
+   "idx": 72,
+   "doc": "memory_bank/projectbrief.md",
+   "line": 25,
+   "claim": "Remote репозитория: https://github.com/AHoHuMbl4/1c.git, ветка main",
+   "status": "ok",
+   "actual": "origin → https://github.com/AHoHuMbl4/1c.git (fetch/push), ветка main",
+   "evidence": "[замер] git -C /srv/1c remote -v; текущая ветка main"
+  },
+  {
+   "idx": 73,
+   "doc": "memory_bank/owner-memory/project-architecture-pg-windows-attach.md",
+   "line": 11,
+   "claim": "Решение владельца 26.07: сырые данные 1С — в PostgreSQL на Windows; SereneDB на Ubuntu держит только корпус+индекс через ATTACH (TYPE postgres, READ_ONLY) + VIEW; сырых таблиц-копий в SereneDB быть не должно",
+   "status": "disc",
+   "actual": "Решение записано верно, но стенд ему не соответствует: в ut_test 1624 сырые таблицы лежат ВНУТРИ SereneDB, attach-схемы нет. Исполнение отложено самим владельцем 30.07 («отдельная работа, но запиши что надо» — activeContext, раздел «Отложено по слову владельца», шаги в docs/BOXED_BLOCKERS.md)",
+   "evidence": "[замер] psql ut_test: SELECT count(*) FROM duckdb_tables() WHERE database_name='ut_test' → 1624; [код] memory_bank/activeContext.md:92-99",
+   "verdict": "b",
+   "verdict_why": "стенд расходится с решением владельца (owner-memory/project-architecture-pg-windows-attach.md); править док под код нельзя — работа отложена владельцем, а не отменена"
+  },
+  {
+   "idx": 74,
+   "doc": "memory_bank/owner-memory/project-architecture-pg-windows-attach.md",
+   "line": 18,
+   "claim": "Индекс на VIEW обязателен: на attach-таблицу он транслируется в btree",
+   "status": "ok",
+   "actual": "Подтверждено докой-первоисточником с замерами на нашей сборке: индекс на attach-таблицу транслируется в btree внутри PG, на VIEW — настоящий IResearch; уточнение SERENEDB.md:143 («на обычной таблице индекс тоже работает») касается локальных таблиц и attach-случая не отменяет. Живой опыт повторить нельзя (DDL запрещён аудитору)",
+   "evidence": "[код] docs/SERENEDB.md:120,194-204 (таблица замеров), :197-198"
+  },
+  {
+   "idx": 75,
+   "doc": "memory_bank/owner-memory/project-no-nl2sql-charts-after-answer.md",
+   "line": 19,
+   "claim": "Правило: в модель для графика не уходит ничего; запрос для графика достраивается кодом после ответа; схема (get_schema, 464 292 символа) в модель не уходит никогда",
+   "status": "disc",
+   "actual": "Правило владельца нарушается живым контуром: serene_report.run_report → schema=get_schema() → gen_sql(question, schema) — схема целиком уходит в промт DeepSeek (SCHEMA:\\n{schema}); сервис 1c-mcp-reports enabled и running, инструмент report_1c включён в конфиг бота. График строится NL→SQL-путём, а не «кодом после ответа»",
+   "evidence": "[код] ubuntu/serenedb/serene_report.py:467-470,340-355 (SCHEMA в user-промт); ubuntu/openclaw/instance/openclaw.json:116 (report_1c в toolFilter); [замер] systemctl 1c-mcp-reports → enabled, active",
+   "verdict": "b",
+   "verdict_why": "прямое нарушение решения владельца (owner-memory/project-no-nl2sql-charts-after-answer.md); в самом доке это записано в «Сделать» — не исполнено; править код/конфиг, не док"
+  },
+  {
+   "idx": 76,
+   "doc": "memory_bank/owner-memory/project-no-nl2sql-charts-after-answer.md",
+   "line": 24,
+   "claim": "Сделать (на 26.07 не исполнено): убрать report_1c из mcp.servers.*.toolFilter.include, погасить NL→SQL-путь; activeContext:101 подтверждает — вывод report_1c из конфига бота не исполнен",
+   "status": "ok",
+   "actual": "Верно: вывод report_1c из конфига бота не исполнен — report_1c в toolFilter.include (openclaw.json:116), 1c-mcp-reports enabled+running; activeContext это же держит в «Открыто и ждёт слова владельца»",
+   "evidence": "[код] ubuntu/openclaw/instance/openclaw.json:116; memory_bank/activeContext.md:101-102; [замер] systemctl 1c-mcp-reports → enabled, active"
+  },
+  {
+   "idx": 77,
+   "doc": "memory_bank/owner-memory/project-serenedb-ivf-blocked.md",
+   "line": 14,
+   "claim": "ivf на FLOAT[1536]: 5 000 строк — индекс за 1 с; 6 000 — не завершается, +4 473 МБ; переход скачкообразный, sdb_ivf_posting_size не влияет",
+   "status": "ok",
+   "actual": "Числа совпадают с первичным отчётом: 5 000 строк — 1 с/0 МБ, 6 000 — не завершилось за 90 с/+4 473 МБ, sdb_ivf_posting_size порога не двигает; живой повтор запрещён правилом проекта (опыты ivf — только на отдельном --server_directory)",
+   "evidence": "[код] docs/SERENEDB_IVF_ISSUE_RU.md:59-60,66,73-77"
+  },
+  {
+   "idx": 78,
+   "doc": "memory_bank/owner-memory/project-serenedb-ivf-blocked.md",
+   "line": 24,
+   "claim": "HNSW удалён из продукта: каталога columnstore/ нет, kKnownOpclassTypes = {included, ivf}, LOAD/INSTALL движок запрещает",
+   "status": "ok",
+   "actual": "Живой движок наружу отдаёт только ivf: duckdb_settings() содержит sdb_ivf_posting_size и sdb_ivf_sample_factor и ни одной hnsw-настройки (строки hnsw_* в бинаре — следы vss-расширения, в каталог настроек не зарегистрированы). Проверка kKnownOpclassTypes/LOAD напрямую требует DDL/LOAD — запрещено; согласуется с CLAUDE.md («в нашей сборке — только ivf»)",
+   "evidence": "[замер] psql: SELECT name FROM duckdb_settings() WHERE name ILIKE '%hnsw%' OR ILIKE '%ivf%' → только sdb_ivf_*"
+  },
+  {
+   "idx": 79,
+   "doc": "memory_bank/owner-memory/project-serenedb-ivf-blocked.md",
+   "line": 29,
+   "claim": "Сборка ivf не отменяется: pg_cancel_backend возвращает успех, работа продолжается; снимается только рестартом движка",
+   "status": "unverifiable",
+   "actual": "Проверка требует запустить и попытаться отменить сборку ivf — запрещено инвариантом CLAUDE.md (опыты ivf только на отдельном --server_directory; незавершённая работа уходит в WAL и роняет инстанс). Правило зафиксировано и в CLAUDE.md, и в отчёте SERENEDB_IVF_ISSUE_RU.md — противоречий между документами нет",
+   "evidence": "[код] /srv/1c/CLAUDE.md (инварианты, пункт про ivf); docs/SERENEDB_IVF_ISSUE_RU.md"
+  },
+  {
+   "idx": 80,
+   "doc": "memory_bank/owner-memory/project-serenedb-ivf-blocked.md",
+   "line": 33,
+   "claim": "Отчёт разработчикам существует: docs/SERENEDB_IVF_ISSUE.md (англ.) и docs/SERENEDB_IVF_ISSUE_RU.md",
+   "status": "ok",
+   "actual": "Оба файла существуют",
+   "evidence": "[замер] ls /srv/1c/docs/SERENEDB_IVF_ISSUE*.md → SERENEDB_IVF_ISSUE.md и SERENEDB_IVF_ISSUE_RU.md"
+  },
+  {
+   "idx": 81,
+   "doc": "memory_bank/owner-memory/project-serenedb-ivf-blocked.md",
+   "line": 36,
+   "claim": "Смысловой поиск идёт полным перебором: 314 мс на 98 тыс. строк, recall 1.0",
+   "status": "ok",
+   "actual": "Порядок величины подтверждён: точный перебор <=> по 103 808 строкам (корпус вырос с 98 тыс.) — 0.62 с на весь процесс psql, т.е. сам запрос в сотнях миллисекунд, как записано (314-511 мс в techContext:88); recall 1.0 у точного перебора по построению",
+   "evidence": "[замер] time psql … ORDER BY emb <=> (…) LIMIT 5 на search_corpus (postgres, 103 808 строк) → real 0m0.623s"
+  },
+  {
+   "idx": 82,
+   "doc": "memory_bank/owner-memory/project-figures-substituted-by-code.md",
+   "line": 11,
+   "claim": "Модель не пишет посчитанных чисел: оставляет места {total},{count},{max},{min},{avg},{date_min},{date_max},{total:ИМЯ}, код подставляет посчитанное базой; прочитанное из одной строки — цитата, её проверяет гейт",
+   "status": "ok",
+   "actual": "Плейсхолдеры ровно те: {total} {count} {max} {min} {avg} {date_min} {date_max} и адресные {total:NAME} в промте; подстановку делает _fill_figures (числа считает база); цитаты из строки проверяет гейт (verify-core, при эталоне сверяются все числа)",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:1286-1291,1346-1412; ubuntu/openclaw/verify-plugin/verify-core.js:9-10"
+  },
+  {
+   "idx": 83,
+   "doc": "memory_bank/owner-memory/project-figures-substituted-by-code.md",
+   "line": 23,
+   "claim": "Нельзя заполнять место, которому нечего подставить: ноль — такое же неверное число",
+   "status": "ok",
+   "actual": "Ветка «нет значения» не подставляет 0: без выбранной величины sum/max/min/avg удаляются из known (комментарий прямо цитирует «ноль — такое же неверное число»); got is None → место попадает в bad (отказ формулировки), текст места остаётся незаполненным",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:1367-1377,1384-1394"
+  },
+  {
+   "idx": 84,
+   "doc": "memory_bank/owner-memory/project-clarify-as-buttons-plus-free-text.md",
+   "line": 12,
+   "claim": "Бэкенд уточнения готов: serene_ask принимает focus и отдаёт options; бот кнопки ещё не рисует (UX делается последним)",
+   "status": "ok",
+   "actual": "Бэкенд готов: serene_ask читает focus из запроса (req.get(\"focus\")) и отдаёт options в clarify-ответах; /opt-копия идентична репо ([замер] diff пуст по снимку stand-files, grep focus в /opt — 28 вхождений); кода рисования кнопок в ubuntu/openclaw нет (grep inline_keyboard/button — пусто)",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:2941,2485-2487; [замер] grep -c focus /opt/1c-mcp-reports/serene_ask.py → 28"
+  },
+  {
+   "idx": 85,
+   "doc": "memory_bank/owner-memory/project-clarify-as-buttons-plus-free-text.md",
+   "line": 23,
+   "claim": "Варианты уточнения строятся только из данных: options берёт label/src из search_tables; зашитых в бота вариантов нет",
+   "status": "ok",
+   "actual": "options строятся из данных: _alias_clarify берёт label по src_table запросом к search_tables (константа TABLES='search_tables'); зашитых вариантов нет",
+   "evidence": "[код] ubuntu/serenedb/serene_ask.py:55,2467-2481"
+  },
+  {
+   "idx": 86,
+   "doc": "memory_bank/owner-memory/feedback-native-first-even-for-metadata.md",
+   "line": 16,
+   "claim": "Правило (решение владельца 27.07): даже чтение $metadata и классификация колонок — сначала штатным средством движка; питоновский путь отменён",
+   "status": "ok",
+   "actual": "Исполнено в коде: движок сам ходит за $metadata (read_text(:'gate' || '/$metadata') внутри corpus_build.sql) и сам классифицирует колонки SQL-ом (tmp3_cls/tmp3_key); питон остался только на OData-загрузке данных, что разрешено перечнем TARGET п.20",
+   "evidence": "[код] ubuntu/serenedb/corpus_build.sql:8,31-35,43,88"
+  },
+  {
+   "idx": 87,
+   "doc": "memory_bank/owner-memory/feedback-ask-agent-before-writing-own-code.md",
+   "line": 25,
+   "claim": "Правило: любая строка своего SQL/алгоритма поверх SereneDB — только после ответа агента serenedb-native «штатного механизма нет»",
+   "status": "ok",
+   "actual": "Формулировки согласованы: TARGET.md:100-102 «прежде чем написать хоть строку своего кода поверх базы — ответ агента serenedb-native, что штатного средства нет»; CLAUDE.md (раздел п.20): «сначала serenedb-docs, при сомнении — агент serenedb-native, и только после ответа “штатного нет” — свой код»",
+   "evidence": "[код] TARGET.md:100-102; /srv/1c/CLAUDE.md раздел «ЗАПРЕЩЕНО ПИСАТЬ СВОИ СКРИПТЫ…»"
+  },
+  {
+   "idx": 88,
+   "doc": "memory_bank/owner-memory/feedback-data-placement-is-owner-decision.md",
+   "line": 23,
+   "claim": "Правило: любое решение, меняющее где лежат данные / куда копируются / что уходит наружу — только через явный вопрос владельцу до написания кода",
+   "status": "ok",
+   "actual": "Правило присутствует в CLAUDE.md: таблица «Решения владельца, которые нельзя пересматривать» включает feedback-data-placement-is-owner-decision.md («размещение данных решает владелец, а не я»); плюс инвариант «на серверах состояние меняем только по явной инструкции владельца»",
+   "evidence": "[код] /srv/1c/CLAUDE.md — таблица owner-memory и раздел «Инварианты проекта»"
+  }
+ ]
+}
