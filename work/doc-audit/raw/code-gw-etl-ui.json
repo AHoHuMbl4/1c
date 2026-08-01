@@ -1,0 +1,157 @@
+{
+  "area": "gw-etl-ui",
+  "facts": [
+    {
+      "fact": "gateway.py (MCP-прокси) слушает GW_LISTEN_HOST:GW_LISTEN_PORT, дефолт 127.0.0.1:6010, и форвардит POST /mcp на GW_UPSTREAM (дефолт http://192.168.56.1:6003) с Bearer GW_TOOLKIT_TOKEN",
+      "source": "ubuntu/1c-gateway/gateway.py:38-43,129-134"
+    },
+    {
+      "fact": "gateway.py — deny-by-default: методы только из ALLOWED_METHODS ({initialize, notifications/initialized, tools/list, ping}) плюс tools/call; для tools/call инструмент обязан быть в ALLOWED_TOOLS из 8 read-инструментов (execute_query, get_metadata, get_event_log, get_object_by_link, get_link_of_object, find_references_to_object, get_access_rights, get_bsl_syntax_help); execute_code отсутствует в списке и режется",
+      "source": "ubuntu/1c-gateway/gateway.py:46-58,66-77"
+    },
+    {
+      "fact": "РАСХОЖДЕНИЕ репо/прод: в репо gateway.py fail-closed (auth = bool(GATEWAY_TOKEN) and Bearer совпал; main() не стартует без GW_GATEWAY_TOKEN, строки 155-158), но развернутая копия /opt/1c-gateway/gateway.py — СТАРАЯ fail-open версия: 'if not GATEWAY_TOKEN: return True' (пустой токен = пускать всех) и без проверки в main(). Юнит 1c-gateway.service disabled и inactive — защита сейчас держится только на выключенности юнита",
+      "source": "ubuntu/1c-gateway/gateway.py:86-91,155-158",
+      "note": "diff /srv/1c/ubuntu/1c-gateway/gateway.py /opt/1c-gateway/gateway.py; systemctl: 1c-gateway.service disabled/inactive. Один systemctl start открывает 1С без авторизации"
+    },
+    {
+      "fact": "gateway.py сериализует все обращения к тулкиту глобальным threading.Lock (_UPSTREAM_LOCK) — фактическая пропускная способность 1 запрос за раз, несмотря на ThreadingHTTPServer",
+      "source": "ubuntu/1c-gateway/gateway.py:35,139"
+    },
+    {
+      "fact": "GET /health в обоих шлюзах отвечает БЕЗ авторизации (проверка _auth_ok идёт только после /health)",
+      "source": "ubuntu/1c-gateway/gateway.py:103-107; ubuntu/1c-gateway/odata_gateway.py:112-116"
+    },
+    {
+      "fact": "gateway.py при отказе (DENY) отвечает HTTP 200 с JSON-RPC error (код -32601), а не 4xx — 'формат отказа как у тулкита'",
+      "source": "ubuntu/1c-gateway/gateway.py:122-126"
+    },
+    {
+      "fact": "odata_gateway.py слушает ODG_LISTEN_HOST:ODG_LISTEN_PORT, дефолт 127.0.0.1:6011, проксирует ТОЛЬКО GET на ODG_UPSTREAM (дефолт http://192.168.56.1:6003/1c/odata/standard.odata) с Basic-авторизацией ODG_USER:ODG_PASS; POST/PUT/PATCH/DELETE/MERGE → 405",
+      "source": "ubuntu/1c-gateway/odata_gateway.py:46-53,101-110,123-124"
+    },
+    {
+      "fact": "odata_gateway.py fail-closed по токену: main() возвращает 2 (не стартует), если ODG_GATEWAY_TOKEN пуст; клиент обязан предъявить 'Bearer <токен>' (401 иначе). Пустые ODG_USER/ODG_PASS дают только WARN — стартует",
+      "source": "ubuntu/1c-gateway/odata_gateway.py:75-80,139-147"
+    },
+    {
+      "fact": "odata_gateway.py режет path traversal: сегмент '..' и обратный слэш запрещены; проверяются сырая форма и ОДИН проход urllib.parse.unquote (ловит %2e%2e). Двойное кодирование (%252e%252e) первым unquote превращается в %2e%2e и проверку raw/unquote-1 проходит — глубже не декодируется",
+      "source": "ubuntu/1c-gateway/odata_gateway.py:82-99",
+      "note": "комментарий в коде: до правки GET /../../.. отдавал 200 (корень IIS)"
+    },
+    {
+      "fact": "odata_gateway._url_ascii percent-кодирует только не-ASCII байты пути (self.path декодирован как latin-1) — фикс падения на кириллице в $select/$filter",
+      "source": "ubuntu/1c-gateway/odata_gateway.py:32-44"
+    },
+    {
+      "fact": "Развернуты ДВА варианта OData-шлюза: одиночный 1c-odata-gateway.service (active, env /etc/1c-odata-gateway.env) и шаблон 1c-odata-gateway@.service для именованных баз (env /etc/1c-odata-gateway-%i.env); экземпляр @ut загружен, но inactive/dead. Шаблонный юнит есть только в /etc/systemd/system, в репо ubuntu/1c-gateway/systemd/ его НЕТ",
+      "source": "/etc/systemd/system/1c-odata-gateway@.service; ubuntu/1c-gateway/systemd/",
+      "note": "оба варианта исполняют один и тот же /opt/1c-odata-gateway/odata_gateway.py (идентичен репо)"
+    },
+    {
+      "fact": "oc_etl.py: читает 1С через шлюз ETL_ODATA_BASE (дефолт http://127.0.0.1:6011) с Bearer из ODG_GATEWAY_TOKEN; клонирует/резетит KB-репо ETL_KB_REPO (git-URL с токеном внутри URL) в ETL_KB_DIR (дефолт /opt/1c-etl/kb), пишет markdown в подпапки <KB_SUBDIR>/catalogs и /documents + _index.md, делает git add/commit/push HEAD:main",
+      "source": "ubuntu/1c-etl/oc_etl.py:44-71,217-225,264-301",
+      "note": "токен GitLab лежит в URL remote → сохраняется в .git/config клона (git remote set-url origin KB_REPO, строка 219)"
+    },
+    {
+      "fact": "oc_etl.py: приоритет источника списка сущностей: ETL_INCLUDE (env) → /etc/1c-etl-selected.txt (галочки UI, ETL_SELECTED_FILE) → автообнаружение из GET /?$format=json (имена с префиксом Catalog_/Document_ и ровно одним '_'); затем фильтр ETL_EXCLUDE по подстроке без учёта регистра",
+      "source": "ubuntu/1c-etl/oc_etl.py:114-130,228-229,238"
+    },
+    {
+      "fact": "ОБРЕЗКА ДАННЫХ: oc_etl.py тянет максимум ETL_TOP записей на сущность (дефолт 5000, пагинация по 1000) и НИКАК не помечает в выходном markdown, что сущность обрезана — в шапке пишется 'Записей: N' по факту вытянутого",
+      "source": "ubuntu/1c-etl/oc_etl.py:64,140-154,190-193"
+    },
+    {
+      "fact": "ОБРЕЗКА ДАННЫХ: перед рендером удаляются ВСЕ .md в catalogs/ и documents/; сущности, упавшие с ошибкой при выгрузке (skipped), не перерисовываются — их прежние файлы исчезают из KB. Ошибки видны только списком в _index.md ('Пропущено (ошибки)')",
+      "source": "ubuntu/1c-etl/oc_etl.py:263-271,246-250,286-287"
+    },
+    {
+      "fact": "Фильтрация полей в oc_etl.py: выбрасываются NOISE_FIELDS (odata.*, Predefined, PredefinedDataName, DataVersion, Ref_Key), поля *_Type, *@navigationLinkUrl, *_Base64Data, а также полностью пустые колонки; даты усекаются до YYYY-MM-DD (0001-01-01 → пусто); сложные значения обрезаются до 120 символов json.dumps; NULL_GUID → пустая строка; guid заменяется на имя из refmap, а без совпадения остаётся guid",
+      "source": "ubuntu/1c-etl/oc_etl.py:78-102,176-210"
+    },
+    {
+      "fact": "Хардкод русского языка в выводе oc_etl.py: булевы 'да'/'нет', заголовки 'Справочник'/'Документ', '№'/'от' в представлении документов, '# Выгрузка 1С в базу знаний'; дефолт git-автора 1c-etl@unde.life",
+      "source": "ubuntu/1c-etl/oc_etl.py:70,179,173,191,281"
+    },
+    {
+      "fact": "oc_etl.py: если $count не поддержан (исключение) — возвращается None и сущность ТЯНЕТСЯ; в oc_discover.py тот же None при non_empty_only приравнен к пустой и сущность СКРЫВАЕТСЯ из UI — одинаковая ситуация обрабатывается противоположно",
+      "source": "ubuntu/1c-etl/oc_etl.py:133-137,244-247; ubuntu/1c-config-ui/oc_discover.py:66-70,82"
+    },
+    {
+      "fact": "1c-etl.timer (OnCalendar 03:00, Persistent) на живом сервере DISABLED, 1c-etl.service static — ночная выгрузка в KB сейчас не запускается ничем; юнит-файлы в /etc/systemd/system идентичны репо",
+      "source": "ubuntu/1c-etl/systemd/1c-etl.timer:5-6",
+      "note": "systemctl list-unit-files: 1c-etl.timer disabled; весь контур oc_etl→GitLab KB фактически мёртв, пока таймер не включат руками"
+    },
+    {
+      "fact": "oc_config_ui.py слушает UI_HOST:UI_PORT (дефолт 127.0.0.1:6012); GET / рисует таблицу из кэша /var/lib/1c-config-ui/entities.json (UI_CACHE); POST /save пишет выбор в /etc/1c-etl-selected.txt (ETL_SELECTED_FILE); POST /scan вызывает oc_discover.discover() и перезаписывает кэш",
+      "source": "ubuntu/1c-config-ui/oc_config_ui.py:27-31,126-151"
+    },
+    {
+      "fact": "oc_config_ui.py fail-closed: без UI_TOKEN не стартует (return 2); каждый GET/POST требует заголовок 'Authorization: Bearer <UI_TOKEN>' (иначе 401). Комментарий в коде: раньше слушал 0.0.0.0 без авторизации и с паролем 1С в окружении процесса",
+      "source": "ubuntu/1c-config-ui/oc_config_ui.py:23-28,133-135,154-158"
+    },
+    {
+      "fact": "Форма в HTML UI отправляет POST /save обычной кнопкой браузера, но do_POST требует Bearer-заголовок, который браузер сам не пошлёт — из голого браузера сохранение/скан невозможны (нужен reverse-proxy, добавляющий заголовок, либо curl)",
+      "source": "ubuntu/1c-config-ui/oc_config_ui.py:76-84,137-139",
+      "note": "в коде/юните нет никакого механизма выдачи токена браузеру"
+    },
+    {
+      "fact": "Юнит 1c-config-ui.service намеренно НЕ подключает /etc/1c-odata-gateway.env (комментарий: раньше пароль 1С лежал в окружении открытого процесса), даёт только /etc/1c-config-ui.env и ETL_ODATA_BASE=http://127.0.0.1:6011; значит ODG_GATEWAY_TOKEN для POST /scan должен лежать в /etc/1c-config-ui.env, иначе scan получает 401 от шлюза",
+      "source": "ubuntu/1c-config-ui/systemd/1c-config-ui.service:9-13"
+    },
+    {
+      "fact": "oc_config_ui пишет в /etc/1c-etl-selected.txt — юнит без User=, работает от root; сервис enabled и active на живом сервере",
+      "source": "ubuntu/1c-config-ui/oc_config_ui.py:48-51; ubuntu/1c-config-ui/systemd/1c-config-ui.service"
+    },
+    {
+      "fact": "oc_discover.py: SYSTEM_HINTS — захардкоженный список из ~25 русских подстрок ('Настройк', 'Удалить', 'Классификатор', вплоть до конкретного справочника 'ПричиныУвольнения') для пометки 'служебное'; по коду это только предотметка чекбоксов (человек решает), НЕ фильтр выгрузки",
+      "source": "ubuntu/1c-config-ui/oc_discover.py:37-45,73-74"
+    },
+    {
+      "fact": "oc_discover.py считает $count параллельно в ThreadPoolExecutor (DISCOVER_WORKERS, дефолт 12 потоков) через шлюз 6011",
+      "source": "ubuntu/1c-config-ui/oc_discover.py:34,77-88"
+    },
+    {
+      "fact": "Дублирование кода: _odata_auth, http_get, TOP_PREFIXES и логика top_level_sets/discover_entity_sets скопированы в oc_etl.py и oc_discover.py (два экземпляра одного кода с одинаковыми docstring)",
+      "source": "ubuntu/1c-etl/oc_etl.py:44-57,105-130; ubuntu/1c-config-ui/oc_discover.py:16-63"
+    },
+    {
+      "fact": "bot_health_check.sh: проверяет user-юнит openclaw-gateway.service под пользователем BOT_USER (дефолт undebot, через sudo -u + XDG_RUNTIME_DIR) и системные юниты из SYS_SERVICES (дефолт захардкожен: 'serenedb 1c-mcp-braine 1c-mcp-reports api'); при смене состояния шлёт сообщение в Telegram напрямую через api.telegram.org токеном из /home/undebot/.openclaw/telegram-token на захардкоженный OWNER_ID=5949699699",
+      "source": "ubuntu/monitoring/bot_health_check.sh:7-11,20-35,40-45"
+    },
+    {
+      "fact": "bot_health_check.sh: HTTP-проверка /health гейтвея выполняется ТОЛЬКО если задан GATEWAY_HEALTH_URL, дефолт пустой → по умолчанию проверка живости ограничена 'systemctl is-active' (зависший процесс считается живым — сам комментарий в коде это признаёт, но дефолт всё равно пуст)",
+      "source": "ubuntu/monitoring/bot_health_check.sh:16,26-28"
+    },
+    {
+      "fact": "РАСХОЖДЕНИЕ: юнит 1c-bot-monitor.service НЕ содержит EnvironmentFile, хотя на сервере существует /etc/1c-bot-monitor.env — все переменные скрипта (OWNER_ID, SYS_SERVICES, GATEWAY_HEALTH_URL…) берутся только из дефолтов скрипта; env-файл мёртв",
+      "source": "ubuntu/monitoring/1c-bot-monitor.service:1-7",
+      "note": "ls /etc/1c-bot-monitor.env существует; юнит его не читает"
+    },
+    {
+      "fact": "Монитор алертит только на СМЕНУ состояния (state-файл /var/lib/1c-bot-monitor/state, дефолт); ошибки отправки в Telegram глотаются (|| true), т.е. алерт может молча потеряться; таймер каждые 3 минуты (OnBootSec=2min, OnUnitActiveSec=3min), активен на сервере",
+      "source": "ubuntu/monitoring/bot_health_check.sh:37-55; ubuntu/monitoring/1c-bot-monitor.timer:4-7"
+    },
+    {
+      "fact": "Все три python-сервиса — только stdlib, без внешних зависимостей; юниты запускают их из /opt/* (1c-gateway, 1c-odata-gateway, 1c-etl, 1c-config-ui), а не из /srv/1c; кроме gateway.py все /opt-копии идентичны репо",
+      "source": "ubuntu/1c-gateway/systemd/1c-gateway.service:11; ubuntu/1c-etl/systemd/1c-etl.service:11; ubuntu/1c-config-ui/systemd/1c-config-ui.service:14"
+    },
+    {
+      "fact": "Секреты по коду ожидаются в /etc/*.env через EnvironmentFile юнитов: /etc/1c-gateway.env (GW_TOOLKIT_TOKEN, GW_GATEWAY_TOKEN), /etc/1c-odata-gateway.env (ODG_USER, ODG_PASS, ODG_GATEWAY_TOKEN), /etc/1c-etl.env (ETL_KB_REPO с glpat-токеном в URL — так прямо написано в комментарии юнита), /etc/1c-config-ui.env (UI_TOKEN)",
+      "source": "ubuntu/1c-gateway/systemd/*.service; ubuntu/1c-etl/systemd/1c-etl.service:10"
+    },
+    {
+      "fact": "oc_etl.py при недоступном push (returncode != 0) логирует PUSH FAIL и завершает exit 1; при отсутствии diff — 'изменений нет' и выход 0 без коммита",
+      "source": "ubuntu/1c-etl/oc_etl.py:291-301"
+    },
+    {
+      "fact": "ensure_repo() делает git reset --hard origin/main на каждом запуске — любые локальные изменения в клоне KB теряются молча",
+      "source": "ubuntu/1c-etl/oc_etl.py:217-222"
+    },
+    {
+      "fact": "Мёртвый/ручной код: CLI-режим oc_discover.py (__main__, флаг -o) не вызывается ни одним юнитом; ETL-путь в целом (oc_etl + timer) на сервере выключен; 1c-gateway (MCP-канал, порт 6010) выключен — живым каналом к 1С из этой подсистемы остаётся только odata_gateway 6011",
+      "source": "ubuntu/1c-config-ui/oc_discover.py:93-104",
+      "note": "состояние по systemctl на 2026-08-01"
+    }
+  ]
+}

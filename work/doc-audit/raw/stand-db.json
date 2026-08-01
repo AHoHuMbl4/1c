@@ -1,0 +1,75 @@
+{
+  "area": "stand-db",
+  "facts": [
+    {
+      "fact": "Версия движка: PostgreSQL 18.3 (SereneDB 26.07.3)",
+      "source": "psql dbname=postgres -c \"SELECT version()\"",
+      "raw": "PostgreSQL 18.3 (SereneDB 26.07.3)"
+    },
+    {
+      "fact": "Баз две: postgres и ut_test. Команда \\l падает с ошибкой движка (нет колонки daticulocale), список снят через pg_database",
+      "source": "psql -c \"\\l\" (ошибка) и psql -c \"SELECT datname FROM pg_database\"",
+      "raw": "\\l: ERROR: Table \"d\" does not have a column named \"daticulocale\". Candidate bindings: \"datlocale\". pg_database: postgres, ut_test"
+    },
+    {
+      "fact": "duckdb_tables() видит обе базы: в postgres 292 таблицы, в ut_test 1624 таблицы",
+      "source": "psql dbname=postgres -c \"SELECT database_name, count(*) FROM duckdb_tables() GROUP BY database_name\"",
+      "raw": "ut_test=1624, postgres=292"
+    },
+    {
+      "fact": "search_corpus: 103808 строк в базе postgres, 623565 строк в базе ut_test",
+      "source": "psql dbname=postgres|ut_test -c \"SELECT count(*) FROM search_corpus\"",
+      "raw": "postgres: 103808; ut_test: 623565"
+    },
+    {
+      "fact": "Индексы (duckdb_indexes): в обеих базах по два неуникальных индекса — search_idx на search_corpus и alias_idx на search_entity_alias. Других индексов нет, векторного ivf-индекса нет",
+      "source": "psql dbname=postgres -c \"SELECT database_name, table_name, index_name, is_unique FROM duckdb_indexes()\"",
+      "raw": "postgres: search_corpus/search_idx, search_entity_alias/alias_idx; ut_test: те же два; все is_unique=f"
+    },
+    {
+      "fact": "Роли: postgres (Superuser), serene_resolver, serene_ro — роль резолвера называется именно serene_resolver",
+      "source": "psql dbname=postgres -c \"\\du\"",
+      "raw": "postgres | Superuser...; serene_resolver | ; serene_ro |"
+    },
+    {
+      "fact": "search_quality (postgres): cov_rows_1c=103634, cov_rows_search=103808, cov_rows_lost=2, cov_ent_lost=1, cov_ent_denied=909, cov_noemb_service=5091, cov_noemb_pending=0",
+      "source": "psql dbname=postgres -c \"SELECT * FROM search_quality WHERE k LIKE '%cov_%'\"",
+      "raw": "7 строк; в поиск дошло больше, чем объявлено в 1С (103808 > 103634); 909 сущностей закрыто правами"
+    },
+    {
+      "fact": "search_quality (ut_test): cov_rows_1c=507500, cov_rows_search=623565, cov_rows_lost=0, cov_ent_lost=0, cov_ent_denied=0, cov_noemb_service=248384, cov_noemb_pending=92080",
+      "source": "psql dbname=ut_test -c \"SELECT * FROM search_quality WHERE k LIKE '%cov_%'\"",
+      "raw": "7 строк; 92080 строк без вектора ещё В ОЧЕРЕДИ (не служебные, вектор считается)"
+    },
+    {
+      "fact": "resolver_index: 115151 строк в postgres, 188068 строк в ut_test",
+      "source": "psql dbname=postgres|ut_test -c \"SELECT count(*) FROM resolver_index\"",
+      "raw": "postgres: 115151; ut_test: 188068"
+    },
+    {
+      "fact": "В базе postgres есть все пять проверяемых таблиц: search_entity_class (231), search_tables (231), search_meta (1), tmp_prod_corpus (97965), search_corpus_backup_20260727 (97965)",
+      "source": "duckdb_tables() WHERE table_name IN (...) + по одному SELECT count(*) на таблицу",
+      "raw": "tmp_prod_corpus и search_corpus_backup_20260727 совпадают по числу строк: 97965 = 97965"
+    },
+    {
+      "fact": "В базе ut_test есть search_entity_class (1502), search_tables (1502), search_meta (0 строк); таблиц tmp_prod_corpus и search_corpus_backup_20260727 в ut_test НЕТ",
+      "source": "duckdb_tables() WHERE table_name IN (...) + SELECT count(*) в dbname=ut_test",
+      "raw": "search_meta в ut_test пустая (0 строк) при 1 строке в postgres"
+    },
+    {
+      "fact": "Права в postgres: serene_ro SELECT на search_corpus=t, на resolver_index=f; serene_resolver SELECT на search_corpus=t, на resolver_index=t",
+      "source": "psql dbname=postgres -c \"SELECT has_table_privilege(...)\" (4 проверки одним запросом)",
+      "raw": "ro_corpus=t, ro_resolver=f, res_corpus=t, res_resolver=t"
+    },
+    {
+      "fact": "Права в ut_test: serene_ro SELECT на search_corpus=t, на resolver_index=f; serene_resolver SELECT на search_corpus=f (в postgres — t, расхождение между базами), на resolver_index=t",
+      "source": "psql dbname=ut_test -c \"SELECT has_table_privilege(...)\"",
+      "raw": "ro_corpus=t, ro_resolver=f, res_corpus=f, res_resolver=t"
+    },
+    {
+      "fact": "INSERT запрещён обеим служебным ролям в postgres: serene_ro на search_corpus=f, serene_resolver на resolver_index=f (роли только читают)",
+      "source": "psql dbname=postgres -c \"SELECT has_table_privilege(..., 'INSERT')\"",
+      "raw": "ro_ins_corpus=f, res_ins_resolver=f"
+    }
+  ]
+}

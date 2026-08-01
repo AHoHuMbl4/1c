@@ -1,0 +1,109 @@
+{
+  "shard": "xref-3",
+  "checked_files": [
+    "memory_bank/activeContext.md", "memory_bank/productContext.md", "memory_bank/progress.md",
+    "memory_bank/projectbrief.md", "memory_bank/systemPatterns.md", "memory_bank/techContext.md",
+    "memory_bank/owner-memory/*.md (8 файлов)",
+    "ubuntu/1c-config-ui/README.md", "ubuntu/1c-etl/README.md", "ubuntu/1c-gateway/README.md",
+    "ubuntu/openclaw/README.md", "ubuntu/openclaw/instance/AGENTS.md", "ubuntu/openclaw/verify-plugin/README.md",
+    "ubuntu/serenedb/README.md", "windows/README.md", "windows/fork/BUILD.md", "windows/odata-setup/README.md",
+    "work/doc-audit/SESSION_PROMPTS.md", "work/installer-exe/PLAN.md", "work/installer-exe/README.md",
+    ".claude/agents/boxed-ready.md", ".claude/agents/context-and-scale.md", ".claude/agents/data-completeness.md",
+    ".claude/agents/enforcement-in-code.md", ".claude/agents/hardcode-sniper.md", ".claude/agents/openclaw-native.md",
+    ".claude/agents/serenedb-native.md"
+  ],
+  "verified_ok_summary": "Проверены и существуют: MAP.md, docs/TARGET_STATUS.md, docs/BOXED_BLOCKERS.md, docs/PLAN_AUTONOMY.md, docs/PRODUCTION_PLAN.md (раздел про кнопки: строка 105), docs/HOW_NOT_TO.md (§0, §1.14-§1.34, §2.9, §2.10, §3.1, §3.9, §3.14, §3.25, §3.30 — все найдены grep-ом по заголовкам), docs/ARCHITECTURE.md, docs/RUNBOOK_DEPLOY.md (§2:79, §5:148, §6:205, §10:308, §11:446), docs/HOW_IT_WORKS.md (§4 'Выбор сущности':105), docs/PREPARE_BASE.md, docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md, docs/TARGET_ARCHITECTURE.md (§0:109), docs/SERENE_CAPS_1/2/3.md (§2.4 в CAPS_3:110), docs/AUDIT_CODE_1/2/3.md, docs/AUDIT_SERENE_SUMMARY.md, docs/STATE_2026-07-26.md, docs/SERENEDB.md (§'Возможности движка':108), docs/ANONYMIZATION.md, docs/OPENCLAW_BOT.md, docs/PLAN.md, docs/UBUNTU_SETUP.md, docs/REGRESSION_BASE1.md, docs/VECTOR_DECISION.md (§0,§4,§6,§10 — все есть), docs/TEST_SECOND_BASE.md (Н-3:64), docs/CHECK2_INCR_SUMMARY_V2.md, docs/ACCEPTANCE_UT.md, docs/DEFECT_FOCUS_CHOICE.md (§1-бис:52), docs/PLAN_ROW_IS_OBJECT.md (§6-бис:307), docs/INSTALL_LOG.md, docs/SERENEDB_IVF_ISSUE.md, docs/SERENEDB_IVF_ISSUE_RU.md; скрипты/юниты: deploy_instance.sh, serene_search_build.py, build.sh, embed_all.sh, deploy.sh, setup.sh, ab_scorer.py, serene_ask.py, mcp_ask.py, mcp_braine.py, serene_report.py, serene_select.py, serene_sync.py, poc_load_entity.py, embed_missing.sh, corpus_build.sql, corpus_merge.sql, resolver_build.sql, wiki_build.sql, wiki_publish.sh, serenedb_backup.sh, serened.conf, serenedb.service, oc_discover.py, oc_config_ui.py, oc_etl.py, odata_gateway.py, gateway.py, qa/qa-probes.sh, requirements.txt, instance/openclaw.json, verify-core.js, index.js, test-verify.mjs, юниты 1c-serene-index/.timer, 1c-serene-pipeline/.timer, 1c-serene-sync/.timer, 1c-serene-ask.service, 1c-mcp-ask.service, 1c-mcp-braine.service, 1c-config-ui.service, 1c-etl.service/.timer, 1c-gateway.service; windows: backup-1c.ps1, patch_execute_code.py, src/Sys.cs, src/Steps.cs, src/Program.cs, src/app.manifest, build.cmd, dist/setup-1c-odata.exe; хуки .claude/hooks/check-docs.sh, check-active-size.sh, settings.json; work/acceptance/run_acceptance.py.",
+  "findings": [
+    {
+      "doc": "memory_bank/progress.md",
+      "line": 216,
+      "problem": "битая ссылка",
+      "detail": "Упомянут скрипт пересборки корпуса `scratchpad/rebuild3.sh` — файла нет ни в scratchpad/, ни где-либо в репозитории (find по всему дереву пустой). Ссылка на несуществующий артефакт в записи о запуске пересборки 30.07.",
+      "target": "scratchpad/rebuild3.sh (не существует)"
+    },
+    {
+      "doc": "memory_bank/techContext.md",
+      "line": 15,
+      "problem": "противоречие доков",
+      "detail": "Строка 15: «эмбеддинги Qwen text-embedding-v4, 1536». Но тот же файл строка 52 утверждает: «ai_embed отдаёт размерность модели... наш эндпоинт даёт **1024**. Колонка объявляется под модель», а systemPatterns.md:12 — «вектор 1024 и считает его сам движок (ai_embed)». Обе строки в АКТУАЛЬНОЙ (не архивной) части techContext.",
+      "target": "memory_bank/techContext.md:52; memory_bank/systemPatterns.md:12"
+    },
+    {
+      "doc": "memory_bank/techContext.md",
+      "line": 85,
+      "problem": "противоречие доков",
+      "detail": "Таблица «Наши границы»: «размерность вектора | 1536 | эмбеддер» — противоречит systemPatterns.md:12 («вектор 1024») и собственной строке 52 того же файла («наш эндпоинт даёт 1024»).",
+      "target": "memory_bank/systemPatterns.md:12; memory_bank/techContext.md:52"
+    },
+    {
+      "doc": "memory_bank/techContext.md",
+      "line": 81,
+      "problem": "противоречие доков",
+      "detail": "«строк в корпусе | 97 965» — устарело против progress.md:93-94 (30.07): корпус второй базы 623 565 строк, первой — 103 808; и против activeContext.md:53 («623 565 строк, такт ~13 мин»). Файл помечен «Обновлено 2026-07-27», но раздел «Наши границы» подан как актуальный.",
+      "target": "memory_bank/progress.md:93-94; memory_bank/activeContext.md:53"
+    },
+    {
+      "doc": "memory_bank/techContext.md",
+      "line": 14,
+      "problem": "противоречие доков",
+      "detail": "«MCP для бота | :6014 / :6015» — по progress.md:129 (30.07) боевой мост бота теперь `1c-mcp-ask` на :6016 (ask_1c → serene_ask :8099); юнит ubuntu/openclaw/systemd/1c-mcp-ask.service:17 подтверждает MCP_PORT=6016. Порт :6016 в techContext не упомянут.",
+      "target": "memory_bank/progress.md:129; ubuntu/openclaw/systemd/1c-mcp-ask.service:15-17"
+    },
+    {
+      "doc": "ubuntu/openclaw/README.md",
+      "line": 3,
+      "problem": "противоречие доков",
+      "detail": "README описывает бот-слой как «оболочку над двумя мозгами (braine + SereneDB)» и (строка 12) единственным MCP-мостом называет `mcp_braine.py`/1c-mcp-braine.service (:6014, ask_1c над braine /ask). По progress.md:131-133 (30.07) «мёртвый braine (second-brain → :8090) из конфигурации бота убран», ask_1c теперь отдаёт новый мост 1c-mcp-ask (:6016) → serene_ask (:8099). Новый мост mcp_ask.py/1c-mcp-ask.service в README не упомянут вовсе.",
+      "target": "memory_bank/progress.md:129-133; ubuntu/openclaw/mcp_ask.py; ubuntu/openclaw/systemd/1c-mcp-ask.service"
+    },
+    {
+      "doc": "ubuntu/openclaw/verify-plugin/README.md",
+      "line": 4,
+      "problem": "противоречие доков",
+      "detail": "Гейт описан как сверка с ответом «нашего braine (второго мозга)» и (строки 11, 14) заземляет «факты ask_1c (braine)». По progress.md:131-133 braine выведен из конфигурации бота, ask_1c идёт в serene_ask. Механика гейта (эталон = ответ инструмента) не зависит от бэкенда, но текст называет источником braine.",
+      "target": "memory_bank/progress.md:131-133"
+    },
+    {
+      "doc": "ubuntu/1c-etl/README.md",
+      "line": 5,
+      "problem": "противоречие доков",
+      "detail": "«Дальше oikb/kb-poll (braine) сами индексируют → бот отвечает по данным 1С» — подано как текущий рабочий контур. docs/ARCHITECTURE.md:13 фиксирует: «braine выведен из контура» (26.07); progress.md:131-133 — braine убран из конфигурации бота. ETL→KB(GitLab)→braine больше не путь ответа бота.",
+      "target": "docs/ARCHITECTURE.md:13; memory_bank/progress.md:131-133"
+    },
+    {
+      "doc": "memory_bank/projectbrief.md",
+      "line": 13,
+      "problem": "противоречие доков",
+      "detail": "Раздел «Как (кратко)» описывает текущий механизм: «ETL выгружает... в KB-репо (GitLab) → braine (Open WebUI + pgvector) индексирует → Telegram-бот отвечает» — без пометки об устаревании. Противоречит docs/ARCHITECTURE.md:13 («braine выведен из контура», 26.07) и systemPatterns.md:5-14 (актуальная часть: сборка в SereneDB, corpus_build.sql и т.д.). SereneDB в projectbrief не упомянута вообще.",
+      "target": "docs/ARCHITECTURE.md:13; memory_bank/systemPatterns.md:5-14"
+    },
+    {
+      "doc": "memory_bank/productContext.md",
+      "line": 17,
+      "problem": "противоречие доков",
+      "detail": "«Точность: бот не выдумывает (гейты braine — каждая цифра сверяется...)» и строка 9 «→ RAG-бот с цитатами» — braine подан как действующий механизм точности. Противоречит docs/ARCHITECTURE.md:13 (braine выведен из контура) и progress.md:131-133. Файл не имеет пометки об архивности.",
+      "target": "docs/ARCHITECTURE.md:13; memory_bank/progress.md:131-133"
+    },
+    {
+      "doc": "ubuntu/serenedb/README.md",
+      "line": 40,
+      "problem": "противоречие доков",
+      "detail": "«под юзером `serened` (не root)» — противоречит собственной инструкции того же файла: строка 21 `useradd ... serenedb`, строка 25 `chown -R serenedb:serenedb`. Имя системного пользователя в двух местах одного README разное (serened vs serenedb).",
+      "target": "ubuntu/serenedb/README.md:21,25"
+    },
+    {
+      "doc": "work/doc-audit/SESSION_PROMPTS.md",
+      "line": 62,
+      "problem": "противоречие доков",
+      "detail": "ШАГ 0 промта сессии A: «memory_bank/activeContext.md разросся (~900 строк) — перенеси историю...». Фактически activeContext.md уже 129 строк (перенос выполнен; CLAUDE.md фиксирует порог 300 строк хуком check-active-size.sh). Исполнение промта буквально предписывает уже сделанный шаг.",
+      "target": "memory_bank/activeContext.md (факт: 129 строк); CLAUDE.md (порог 300 строк)"
+    },
+    {
+      "doc": "memory_bank/techContext.md",
+      "line": 13,
+      "problem": "противоречие доков",
+      "detail": "«сервис ответов | :8091, юнит 1c-serene-ask» — по progress.md:129,286 (29-30.07) сервис ответов второй базы работает на :8099 и «юнита нет — Фаза 2»; боевой мост бота смотрит на ASK_URL=http://127.0.0.1:8099 (1c-mcp-ask.service:15). techContext описывает только :8091 первой базы, не отражая, что бот отвечает по второй базе (:8099, решение владельца 30.07, progress.md:118).",
+      "target": "memory_bank/progress.md:129,286; ubuntu/openclaw/systemd/1c-mcp-ask.service:15"
+    }
+  ]
+}

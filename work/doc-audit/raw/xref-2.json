@@ -1,0 +1,103 @@
+{
+  "shard": "xref-2",
+  "findings": [
+    {
+      "doc": "docs/RUNBOOK_DEPLOY.md",
+      "line": 341,
+      "problem": "нет раздела",
+      "detail": "Ссылка на разбор `HOW_NOT_TO §3.15` — в docs/HOW_NOT_TO.md раздела 3.15 нет: есть §3.14 (строка 832) и сразу §3.16 (строка 859).",
+      "target": "docs/HOW_NOT_TO.md §3.15 (отсутствует)"
+    },
+    {
+      "doc": "docs/REGRESSION_BASE1.md",
+      "line": 102,
+      "problem": "нет раздела",
+      "detail": "Ссылка `HOW_NOT_TO §1.24` — в docs/HOW_NOT_TO.md раздела 1.24 нет: нумерация идёт 1.13 → 1.15–1.18 → 1.27–1.34, пункта 1.24 нет ни в одном месте файла (grep '## 1.24' пуст).",
+      "target": "docs/HOW_NOT_TO.md §1.24 (отсутствует)"
+    },
+    {
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 63,
+      "problem": "противоречие доков",
+      "detail": "Таблица действующих MCP-серверов бота: `second-brain` 127.0.0.1:6014 → ask_1c над braine :8090 (также строки 26-28, 161, 166). Но ARCHITECTURE.md:86 говорит: 1c-mcp-braine (:6014) выведен 30.07, запись second-brain из конфигурации бота убрана; RUNBOOK_DEPLOY.md:455 — «Прежний мост над braine (:6014) выведен», RUNBOOK_DEPLOY.md:467 — действующий путь ask_1c через :6016 (mcp_ask.py). OPENCLAW_BOT.md подаёт выведенный контур как текущий и вовсе не упоминает действующие mcp_ask.py / systemd/1c-mcp-ask.service (файлы существуют в ubuntu/openclaw/).",
+      "target": "docs/ARCHITECTURE.md:86; docs/RUNBOOK_DEPLOY.md:455,467; docs/HOW_IT_WORKS.md:216"
+    },
+    {
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 70,
+      "problem": "противоречие доков",
+      "detail": "«Флаг hooks.allowConversationAccess НЕ нужен и снят» (подтверждено там же строкой 145: «это было неверно»). Но RUNBOOK_DEPLOY.md:530-531 в актуальном разделе §11.4 велит обратное: «hooks.allowConversationAccess=true (иначе хуки к переписке молча не срабатывают)». Два документа дают противоположные инструкции по одному и тому же флагу.",
+      "target": "docs/RUNBOOK_DEPLOY.md:530-531"
+    },
+    {
+      "doc": "docs/RUNBOOK_DEPLOY.md",
+      "line": 20,
+      "problem": "противоречие доков",
+      "detail": "Схема §0: «OpenClaw-бот :18800 ── serene_ask :8091». Но ARCHITECTURE.md:85: 1c-mcp-ask (:6016) работает над serene_ask «(:8099, база ut_test)»; код это подтверждает: ubuntu/openclaw/mcp_ask.py:42 default ASK_URL=127.0.0.1:8099, ubuntu/openclaw/systemd/1c-mcp-ask.service:15 Environment=ASK_URL=http://127.0.0.1:8099. При этом сам RUNBOOK_DEPLOY.md:52 называет :8099 «осиротевший процесс, юнита нет» — то есть бот по двум докам смотрит в разные serene_ask (:8091 против :8099).",
+      "target": "docs/ARCHITECTURE.md:85; ubuntu/openclaw/systemd/1c-mcp-ask.service:15; docs/RUNBOOK_DEPLOY.md:52"
+    },
+    {
+      "doc": "docs/RUNBOOK_DEPLOY.md",
+      "line": 569,
+      "problem": "противоречие доков",
+      "detail": "Итоговый чек-лист «что проверено»: «braine развёрнут (7 сервисов active)… оба MCP (ask_1c:6014, report_1c:6015)… ✅» (строки 565-569) — без пометки об устаревании. Это противоречит тому же документу: строка 32 «слой braine выведен из контура 26.07», строка 38 «report_1c — выведен из контура», строка 455 «мост :6014 выведен», и ARCHITECTURE.md:86.",
+      "target": "docs/RUNBOOK_DEPLOY.md:32,38,455; docs/ARCHITECTURE.md:86"
+    },
+    {
+      "doc": "docs/SERENEDB.md",
+      "line": 180,
+      "problem": "противоречие доков",
+      "detail": "«ai_embed пока не заменяет наш питоновский эмбеддер: 1024 ≠ 1536 сломает существующий индекс» (и строка 117: «у нас индекс на 1536»). Но HOW_IT_WORKS.md:32 фиксирует текущее состояние: «считает движок штатной ai_embed, размерность 1024; корпус 97 965», и TARGET_STATUS.md:22 (п.5 🟢: text-embedding-v4, 1024). SERENEDB.md описывает как блокер то, что по другим докам уже сделано.",
+      "target": "docs/HOW_IT_WORKS.md:32; docs/TARGET_STATUS.md:22"
+    },
+    {
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 64,
+      "problem": "противоречие доков",
+      "detail": "Чек-лист внедрения содержит целевой шаг «Golden set под 1С-домен, nightly-eval зелёный». Но nightly-eval погашен решением владельца: RUNBOOK_DEPLOY.md:41 «⛔ погашен 29.07… Поднимать не надо», TARGET_STATUS.md:89, REGRESSION_BASE1.md:79. Документ без пометки об устаревании предписывает поднять то, что владелец велел отключить.",
+      "target": "docs/RUNBOOK_DEPLOY.md:41; docs/TARGET_STATUS.md:89; docs/REGRESSION_BASE1.md:79"
+    },
+    {
+      "doc": "docs/UBUNTU_SETUP.md",
+      "line": 60,
+      "problem": "цель не существует",
+      "detail": "Строки 60, 61 ссылаются на «PORTING.md» как на рабочий документ («по PORTING.md», «.env по карте PORTING.md»); в этом репозитории docs/PORTING.md нет. Из строки 69 видно, что имеется в виду docs/PORTING.md внешнего репо github.com/AHoHuMbl4/braine (там же memory_bank/decisions/D-001…D-006, deploy/install.sh, bootstrap.sh — тоже внешние). В строках 60-61 принадлежность внешнему репо не указана — при чтении ссылка выглядит битой.",
+      "target": "docs/PORTING.md (в репо отсутствует; внешний репо braine — см. UBUNTU_SETUP.md:69)"
+    },
+    {
+      "doc": "docs/TARGET_STATUS.md",
+      "line": 21,
+      "problem": "противоречие доков",
+      "detail": "П. 4 контракта «1С + PostgreSQL на Windows» помечен 🟢 с обоснованием «база C:\\1c\\bases\\buh_test» — но это файловая база 1С (RUNBOOK_DEPLOY.md:182: «права пула IIS на файловую базу»), а PostgreSQL на Windows в RUNBOOK_DEPLOY.md нигде не разворачивается (grep 'PostgreSQL' по нему пуст). Решение владельца «сырые данные в PostgreSQL на Windows» зафиксировано в TARGET_ARCHITECTURE.md:4-9 как целевое; текущая схема (RUNBOOK_DEPLOY.md:18) держит витрину в SereneDB на Ubuntu.",
+      "target": "docs/RUNBOOK_DEPLOY.md:182,18; docs/TARGET_ARCHITECTURE.md:4-9"
+    },
+    {
+      "doc": "docs/TARGET_STATUS.md",
+      "line": 22,
+      "problem": "противоречие доков",
+      "detail": "П. 5: «корпус и резолвер без вектора 0». Тот же файл, строки 83-84: решение владельца 29.07 — «служебному вектор не считается вовсе… [замер] это 41% корпуса». Либо «без вектора 0» относится только к бизнес-части (тогда формулировка вводит в заблуждение), либо одна из записей устарела.",
+      "target": "docs/TARGET_STATUS.md:83-84"
+    },
+    {
+      "doc": "docs/STATE_2026-07-26.md",
+      "line": 18,
+      "problem": "противоречие доков",
+      "detail": "Текст: «Вечернее 7/8 — на корпусе, сверенном с 1С», а таблица тем же вечером (строка 10) даёт «Золотой набор … 8/8» (и строка 65: «закрыто, 8/8»). Две цифры вечернего прогона в одном документе расходятся: 7/8 против 8/8.",
+      "target": "docs/STATE_2026-07-26.md:10,65"
+    },
+    {
+      "doc": "docs/PREPARE_BASE.md",
+      "line": 104,
+      "problem": "цель не существует",
+      "detail": "Пункт плана: «Вынести шаги 1-5 в отдельный файл prepare_base.sql» — файла ubuntu/serenedb/prepare_base.sql в репозитории нет (find по репо пуст). Это план, а не битая ссылка, но при чтении неочевидно, что файл ещё не создан.",
+      "target": "ubuntu/serenedb/prepare_base.sql (отсутствует)"
+    },
+    {
+      "doc": "docs/OPENCLAW_BOT.md",
+      "line": 161,
+      "problem": "битая ссылка",
+      "detail": "Таблица «Файлы (ubuntu/openclaw/)» перечисляет только mcp_braine.py и systemd/1c-mcp-braine.service (выведенный мост) — действующие ubuntu/openclaw/mcp_ask.py и ubuntu/openclaw/systemd/1c-mcp-ask.service (оба существуют) в таблице отсутствуют. Опись файлов каталога неполна и описывает мёртвый контур вместо живого.",
+      "target": "ubuntu/openclaw/mcp_ask.py; ubuntu/openclaw/systemd/1c-mcp-ask.service (существуют, не упомянуты)"
+    }
+  ]
+}

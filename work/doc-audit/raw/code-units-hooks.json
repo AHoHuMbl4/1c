@@ -1,0 +1,135 @@
+{
+  "area": "units-hooks",
+  "facts": [
+    {
+      "fact": "1c-odata-gateway@.service — шаблонный юнит: экземпляр %i читает EnvironmentFile=/etc/1c-odata-gateway-%i.env и запускает /usr/bin/python3 /opt/1c-odata-gateway/odata_gateway.py, Restart=always, RestartSec=5. Сам юнит никакой GET-only защиты не содержит — 'пропускает только GET, 405 на запись' заявлено только в комментарии, реализация целиком в odata_gateway.py.",
+      "source": "ubuntu/systemd/1c-odata-gateway@.service:19-22",
+      "note": "порт нигде в юните не задан — ожидается ODG_LISTEN_PORT из env-файла (комментарий строка 18)"
+    },
+    {
+      "fact": "Ожидаемые env-переменные шлюза (по комментарию в юните): ODG_USER, ODG_PASS (читатель 1С), ODG_UPSTREAM (публикация OData), ODG_LISTEN_PORT, ODG_GATEWAY_TOKEN — всё из /etc/1c-odata-gateway-<база>.env с правами 600.",
+      "source": "ubuntu/systemd/1c-odata-gateway@.service:17-19"
+    },
+    {
+      "fact": "РАСХОЖДЕНИЕ: 1c-serene-pipeline.service объявляет After=... 1c-odata-gateway.service (не-шаблонное имя), но в репозитории есть только шаблон 1c-odata-gateway@.service. Юнита '1c-odata-gateway.service' не существует, зависимость упорядочивания — мёртвая (systemd молча игнорирует несуществующий юнит в After).",
+      "source": "ubuntu/systemd/1c-serene-pipeline.service:61 (строка After=network.target serenedb.service 1c-odata-gateway.service)"
+    },
+    {
+      "fact": "1c-serene-index.service: Type=oneshot, TimeoutStartSec=3600, WorkingDirectory=/opt/1c-mcp-reports, ExecStart=/opt/1c-mcp-reports/build.sh. В репозитории на него не ссылается ни таймер, ни другой юнит: таймер 1c-serene-pipeline.timer заведён на pipeline, а комментарий в pipeline.service прямо говорит, что pipeline 'заменяет пару 1c-serene-sync + 1c-serene-index'. Юнит index в кодовой базе — вероятно мёртвый/оставлен для ручного запуска.",
+      "source": "ubuntu/systemd/1c-serene-index.service:42-56; ubuntu/systemd/1c-serene-pipeline.service:59"
+    },
+    {
+      "fact": "Порядок EnvironmentFile в index- и pipeline-юнитах значим и хрупок: оба файла (/etc/1c-mcp-reports.env — опциональный, с дефисом; /etc/1c-serene-sync.env — обязательный) объявляют SERENEDB_DSN, systemd берёт значение из последнего. Первый даёт ключи эмбеддера и токен шлюза (роль serene_ro), последний — пишущую роль postgres. Перестановка местами ломает сборку на permission denied.",
+      "source": "ubuntu/systemd/1c-serene-index.service:47-55; ubuntu/systemd/1c-serene-pipeline.service:68-72"
+    },
+    {
+      "fact": "1c-serene-pipeline.timer: OnBootSec=3min, OnUnitInactiveSec=1min, Persistent=true, AccuracySec=15s — такт запускается через минуту после окончания предыдущего, не по стенным часам. ExecStart такта — /opt/1c-mcp-reports/pipeline.sh.",
+      "source": "ubuntu/systemd/1c-serene-pipeline.timer:82-85; ubuntu/systemd/1c-serene-pipeline.service:73"
+    },
+    {
+      "fact": "ВСЕ SEMЬ хуков fail-open: любая ошибка предусловия (не распарсился stdin-JSON, не найден git toplevel, нет файла) заканчивается echo '{}'; exit 0 — то есть пропуском без проверки. Пример условия: CMD=$(python3 -c ... 2>/dev/null); case \"$CMD\" in *\"git commit\"*) ;; *) echo '{}'; exit 0;; esac — если python3 упал, CMD пуст и хук молча пропускает коммит.",
+      "source": ".claude/hooks/check-diff.sh:53-57; check-docs.sh:114-118; check-active-size.sh:159-163; check-golden.sh:13-17"
+    },
+    {
+      "fact": "Ни один хук не блокирует: check-diff, check-docs, check-active-size, check-golden возвращают permissionDecision: \"ask\" (вопрос владельцу, можно подтвердить и продолжить), check-write и count-edits — только systemMessage (информационное сообщение), решения не требуют вовсе.",
+      "source": ".claude/hooks/check-diff.sh:97; check-docs.sh:137; check-active-size.sh:179; check-golden.sh:42; check-write.sh:95; count-edits.sh:127"
+    },
+    {
+      "fact": "session-start.sh: awk '/^# .*С ЧЕГО НАЧАТЬ/{on=1} on{print}' — берёт текст от заголовка ДО КОНЦА ФАЙЛА (флаг on никогда не сбрасывается), затем head -n 90. Если раздел не первый в файле или после него идут другие разделы — они тоже считаются 'разделом'. Обрезка помечается явно строкой '…показаны первые N строк из M'.",
+      "source": ".claude/hooks/session-start.sh:23,32-36"
+    },
+    {
+      "fact": "check-diff.sh анализирует только staged-дифф файлов *.py, *.js, *.mjs — правки в *.sh, *.sql, *.cs, *.ps1, конфигах и юнитах под проверку 'подгонки под базу' не попадают вовсе.",
+      "source": ".claude/hooks/check-diff.sh:61"
+    },
+    {
+      "fact": "check-diff.sh ловит: (1) новые числовые константы в присваиваниях (=\\s*[0-9]+), исключая 0,1,2,100,1000, максимум 8 штук; (2) кириллические строковые литералы, но с зашитым списком исключений-слов 'ошибк|Ошибк|ВНИМАНИЕ|FATAL|перепись|витрина|строк|сущност|индекс|корпус|нет данных|Найдено' — сам фильтр является хардкодом списка слов; (3) промт-правила по regex 'never |always |do not |не выдумывай|никогда не'.",
+      "source": ".claude/hooks/check-diff.sh:70-87"
+    },
+    {
+      "fact": "check-docs.sh: срабатывает только на 'git commit'; кодом считает staged-файлы с расширениями py|sh|cs|js|mjs|ts|sql|ps1|psm1|bat|cmd|ini|toml|yml|yaml|json|conf|cfg|service|timer вне memory_bank/. Гасится ЛЮБЫМ .md в коммите — один любой markdown-файл (в т.ч. не относящийся к правке) снимает вопрос: условие [ -z \"$CODE\" ] || [ -n \"$DOCS\" ] → пропуск.",
+      "source": ".claude/hooks/check-docs.sh:126-130"
+    },
+    {
+      "fact": "check-active-size.sh: при 'git commit' меряет wc -l memory_bank/activeContext.md, порог 300 строк зашит в скрипте (LIMIT=300); при превышении — permissionDecision ask с предложением перенести историю в progress.md; коммит можно подтвердить, перенос остаётся 'долгом'.",
+      "source": ".claude/hooks/check-active-size.sh:167-172"
+    },
+    {
+      "fact": "check-golden.sh срабатывает только на команды по шаблону 'scp *' | *'scp -i'* | *'rsync '* — выкат через ssh (cat|ssh, git push на сервер, ansible и т.п.) проверку обходит полностью. Проверяет, что файлы *.py|*.js|*.mjs в SRC_DIRS='ubuntu/serenedb ubuntu/openclaw ubuntu/1c-gateway ubuntu/1c-etl ubuntu/1c-config-ui' не новее отметки .claude/.golden-last-run; каталог ubuntu/monitoring и всё под windows/ в SRC_DIRS не входят. Отметку можно поставить простым touch без реального прогона.",
+      "source": ".claude/hooks/check-golden.sh:14-16,21-25,44-45"
+    },
+    {
+      "fact": "check-write.sh (PostToolUse на Write|Edit): проверяет только файлы *.py|*.js|*.mjs; три эвристики grep по ВСЕМУ файлу (не по добавленному): цикл range + count(*)/UNION ALL ('счётчики вместо ts_dict_*'), КОНСТАНТЫ вида ^[A-Z_]+ = [0-9]+ с зашитым белым списком имён 'PORT|TIMEOUT|BATCH|PARALLEL|INS|PAGE|DIM', и .join(... for ... in (cands|names|rows|tables|srcs)) без BUDGET|LIMIT|[:...] где-либо в файле. Результат — только systemMessage, ничего не блокируется.",
+      "source": ".claude/hooks/check-write.sh:57-96"
+    },
+    {
+      "fact": "count-edits.sh: считает правки кода (*.py|*.js|*.mjs) за сессию в файле ${TMPDIR:-/tmp}/claude-edit-counts-${CLAUDE_SESSION_ID:-default}.txt; на каждой 3-й, 6-й, 9-й... правке одного файла выдаёт systemMessage о возможном подборе. Файл-состояние в /tmp никогда не чистится скриптом.",
+      "source": ".claude/hooks/count-edits.sh:108-124"
+    },
+    {
+      "fact": "settings.json содержит ПЯТЫЙ PreToolUse-хук типа 'agent' ('снайпер'): промтовая проверка каждой Bash-команды с таймаутом 180с; сам промт велит ответить 'OK' если команда не содержит 'git commit', иначе искать в git diff --cached четыре класса проблем (велосипед, подгонка, рост, имя базы). Это проверка промтом — при инварианте проекта 'запреты держатся кодом, а не промтом' этот контролёр держится именно промтом.",
+      "source": ".claude/settings.json:47-51"
+    },
+    {
+      "fact": "Все четыре command-хука PreToolUse навешаны на matcher 'Bash' целиком — каждая Bash-команда сессии прогоняется через 4 скрипта + agent-хук; фильтрация 'это git commit?' происходит внутри каждого скрипта отдельно.",
+      "source": ".claude/settings.json:18-53"
+    },
+    {
+      "fact": "settings.json: enableAllProjectMcpServers=true — все MCP из .mcp.json подключаются без подтверждения.",
+      "source": ".claude/settings.json:3"
+    },
+    {
+      "fact": ".mcp.json: два сервера — serenedb-docs по HTTP на https://api.serenedb.com/mcp (внешний интернет-адрес) и memory (npx @modelcontextprotocol/server-memory) с MEMORY_FILE_PATH=/srv/1c/memory_bank/mcp-memory.json (абсолютный путь — конфиг привязан к машине с проектом в /srv/1c).",
+      "source": ".mcp.json:1-16"
+    },
+    {
+      "fact": "settings.local.json — allowlist из ~35 разовых Bash-команд с зашитыми конкретикой: путь ключа /home/ahohum/.ssh/id_ed25519_1c, адрес root@192.168.56.42, порт БД 7890 (psql host=127.0.0.1 port=7890 user=postgres), имена таблиц (search_corpus, search_corpus_backup_20260727, tmp_prod_corpus, tmp_refmap, resolver_index, search_tables_1536...), имя таблицы 1С 'реализациятоваровуслуг_товары', разрешения на git add/commit/push и на systemctl restart 1c-serene-ask по ssh. Часть записей указывает на чужой каталог /tmp/claude-1000/-srv-data-cursor-cursor-1-1c/... — устаревшие следы другой сессии/машины.",
+      "source": ".claude/settings.local.json:77-111"
+    },
+    {
+      "fact": "run_acceptance.py читает вопросы/эталоны из docs/ACCEPTANCE_UT.md (переопределяется env ACCEPTANCE_DOC), парсит regex-ами блоки '**N. «вопрос»**', строки '- эталон: **...**', '- провал: **...**' и '- ожидаемый kind: ...' (значения no_data|clarify|answer|figures|unavailable). Аргументы CLI — диапазон номеров lo hi; env RUN_TAG задаёт метку прогона.",
+      "source": "work/acceptance/run_acceptance.py:139-163,212-213"
+    },
+    {
+      "fact": "run_acceptance.py опрашивает бота командой: sudo -u undebot -H timeout 400 openclaw agent --agent main --session-key acc-<RUN>-<номер> --json -m <вопрос> (таймаут subprocess 420с). Каждый прогон — новая сессия бота (RUN в ключе), чтобы не мерить память бота вместо работы системы. В базу ничего не пишет, файлов не создаёт — только stdout.",
+      "source": "work/acceptance/run_acceptance.py:167-175"
+    },
+    {
+      "fact": "run_acceptance.py: сравнение чисел ТОЧНОЕ — close() это round(a,2)==round(b,2) или round(a)==round(b) (та же величина без копеек); прежний допуск abs(a-b)<=max(0.51, abs(b)*0.0001) удалён как подгонка (комментарий в коде).",
+      "source": "work/acceptance/run_acceptance.py:196-210"
+    },
+    {
+      "fact": "run_acceptance.py: распознавание поведения — русскоязычные regex-словари, зашитые в код: отказ = 'не могу|нет данных|не найд|отсутству|не содержит|не удалось|нельзя дать|не располага' И отсутствие чисел; уточнение = '\\?\\s*$|уточн|имеете в виду|что именно|какой из|или ' в последних 260 символах. Привязка к языку: бот, ответивший на другом языке, будет засчитан как 'НЕ СОВПАЛО'; паттерн 'или ' сработает на любом ответе со словом 'или' в хвосте.",
+      "source": "work/acceptance/run_acceptance.py:226-230"
+    },
+    {
+      "fact": "run_acceptance.py извлекает из JSON-ответа бота САМУЮ ДЛИННУЮ строку из всех полей text/content (max(c, key=len)); если JSON не распарсился — берёт сырой stdout/stderr. Числа из ответа сравниваются с эталоном ЛЮБОЕ-С-ОДНИМ: any(close(g, ref) for g in got) — совпадение эталона с любым числом ответа (даже посторонним, например годом) засчитывается как ВЕРНО.",
+      "source": "work/acceptance/run_acceptance.py:177-194,242-243"
+    },
+    {
+      "fact": "Файл .claude/.golden-last-run существует в репо (отметка последнего прогона золотого набора); check-golden сам предлагает обходной путь 'touch .claude/.golden-last-run, если замер сделан иначе' — отметка не доказывает, что замер был.",
+      "source": ".claude/hooks/check-golden.sh:44-45; наличие файла .claude/.golden-last-run"
+    },
+    {
+      "fact": "Хуки check-diff/check-docs/check-active-size/check-golden реагируют на подстроку 'git commit' в команде: команда, где коммит сделан иначе (git -C ... commit проходит, т.к. содержит 'git commit'? нет — там 'git -C x commit', подстроки 'git commit' нет), а также alias/скрипт-обёртка вокруг git — проверку обходят. Аналогично check-golden не видит выкат не через scp/rsync.",
+      "source": ".claude/hooks/check-diff.sh:54-57 (case *\"git commit\"*)",
+      "note": "фильтр по подстроке, не по семантике команды"
+    },
+    {
+      "fact": "В юнитах индекса/пайплайна секреты ожидаются в /etc/1c-mcp-reports.env (ключи эмбеддера, токен шлюза, DSN serene_ro) и /etc/1c-serene-sync.env (DSN роли postgres, ключи ALIBABA_* судя по allowlist settings.local.json:78); в git и командных строках юнитов секретов нет.",
+      "source": "ubuntu/systemd/1c-serene-index.service:54-55; .claude/settings.local.json:78"
+    },
+    {
+      "fact": "1c-serene-index.service и 1c-serene-pipeline.service объявляют Wants=serenedb.service и After=serenedb.service — сборка зависит от юнита движка serenedb.service, которого в ubuntu/systemd/ репозитория нет (живёт только на сервере).",
+      "source": "ubuntu/systemd/1c-serene-index.service:38-39; 1c-serene-pipeline.service:61-62"
+    },
+    {
+      "fact": "ExecStart-скрипты юнитов (/opt/1c-mcp-reports/build.sh, /opt/1c-mcp-reports/pipeline.sh, /opt/1c-odata-gateway/odata_gateway.py) лежат вне репозиторной копии юнитов — юниты в git ссылаются на серверные пути /opt/*; сверить, что там исполняется именно репозиторная версия, по самим юнитам нельзя.",
+      "source": "ubuntu/systemd/1c-serene-index.service:56; 1c-serene-pipeline.service:73; 1c-odata-gateway@.service:20"
+    },
+    {
+      "fact": "У 1c-serene-index.service и 1c-serene-pipeline.service НЕТ секции [Install] — их нельзя enable; index запускается только вручную (systemctl start), pipeline — только таймером.",
+      "source": "ubuntu/systemd/1c-serene-index.service:41-56; 1c-serene-pipeline.service:64-73"
+    }
+  ]
+}

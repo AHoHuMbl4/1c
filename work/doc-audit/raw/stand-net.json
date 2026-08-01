@@ -1,0 +1,65 @@
+{
+  "area": "stand-net",
+  "facts": [
+    {
+      "fact": "Порт 6011 (odata-gateway, /opt/1c-odata-gateway/odata_gateway.py) слушает 127.0.0.1, GET / отвечает 401",
+      "source": "curl -s -m 5 -o /dev/null -w %{http_code} http://127.0.0.1:6011/ ; ss -tlnp",
+      "raw": "401; LISTEN 127.0.0.1:6011 python3 pid=3173747 /opt/1c-odata-gateway/odata_gateway.py"
+    },
+    {
+      "fact": "GET http://127.0.0.1:6011/1c/odata/standard.odata/ и /odata/standard.odata/ оба отвечают 401 — шлюз с локалхоста без клиентской авторизации данные не отдаёт (или креды к апстриму не проходят)",
+      "source": "curl -s -m 10 -o /dev/null -w %{http_code} http://127.0.0.1:6011/1c/odata/standard.odata/",
+      "raw": "401 на обоих вариантах пути; апстрим по юниту: ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata"
+    },
+    {
+      "fact": "Порты 6012, 6014, 6015, 6016, 6021 слушают 127.0.0.1 и отвечают 401 (все — экземпляры odata_gateway.py: 6012/6011/6021 — python3, 6014/6015/6016 — python)",
+      "source": "curl -s -m 5 http://127.0.0.1:{6012,6014,6015,6016,6021}/ ; ss -tlnp",
+      "raw": "401 на всех пяти; ss: pids 3173735(6012), 3173746(6014), 3173769(6015), 3173753(6016), 1136469(6021)"
+    },
+    {
+      "fact": "Порт 8090 — соединение отклонено (никто не слушает)",
+      "source": "curl -s -m 5 http://127.0.0.1:8090/",
+      "raw": "curl rc=7 Connection refused; в ss порта нет"
+    },
+    {
+      "fact": "Порт 8091 (/health) — соединение отклонено (никто не слушает)",
+      "source": "curl -s -m 5 http://127.0.0.1:8091/health",
+      "raw": "curl rc=7 Connection refused; в ss порта нет"
+    },
+    {
+      "fact": "Порт 8099 слушает 127.0.0.1, процесс python3 serene_ask.py (pid 3109129), GET / отвечает 404 — сервис жив, корневого маршрута нет (/ask не вызывался, POST запрещён)",
+      "source": "curl -s -m 5 http://127.0.0.1:8099/ ; ss -tlnp ; /proc/3109129/cmdline",
+      "raw": "404; LISTEN 127.0.0.1:8099 python3 serene_ask.py"
+    },
+    {
+      "fact": "Порт 3000 — соединение отклонено (никто не слушает)",
+      "source": "curl -s -m 5 http://127.0.0.1:3000/",
+      "raw": "curl rc=7 Connection refused"
+    },
+    {
+      "fact": "Порт 8081 — соединение отклонено (никто не слушает)",
+      "source": "curl -s -m 5 http://127.0.0.1:8081/",
+      "raw": "curl rc=7 Connection refused"
+    },
+    {
+      "fact": "Порт 8082 — соединение отклонено (никто не слушает)",
+      "source": "curl -s -m 5 http://127.0.0.1:8082/",
+      "raw": "curl rc=7 Connection refused"
+    },
+    {
+      "fact": "Порт 18800 отвечает 200; это не сервис проекта, а openclaw gateway (node)",
+      "source": "curl -s -m 5 http://127.0.0.1:18800/ ; /proc/2786727/cmdline",
+      "raw": "200; /usr/bin/node /usr/lib/node_modules/openclaw/dist/index.js gateway --port 18800; слушает 127.0.0.1 и [::1]"
+    },
+    {
+      "fact": "Юнит 1c-odata-gateway.service: GET-only шлюз, апстрим ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata, креды в /etc/1c-odata-gateway.env; есть шаблонный юнит 1c-odata-gateway@.service с EnvironmentFile=/etc/1c-odata-gateway-%i.env",
+      "source": "grep ExecStart|Environment|Description /etc/systemd/system/1c-odata-gateway.service /etc/systemd/system/1c-odata-gateway@.service",
+      "raw": "ExecStart=/usr/bin/python3 /opt/1c-odata-gateway/odata_gateway.py; описание: «Пропускает только GET; пишет — 405»"
+    },
+    {
+      "fact": "Windows-стенд доступен по SSH (unde@192.168.56.1:2222, ключ id_ed25519_1c); служба W3SVC в состоянии 4 RUNNING",
+      "source": "ssh -o BatchMode=yes -o ConnectTimeout=5 -p 2222 -i ~/.ssh/id_ed25519_1c unde@192.168.56.1 \"sc query W3SVC\"",
+      "raw": "SERVICE_NAME W3SVC, TYPE 20 WIN32_SHARE_PROCESS, STATE 4 RUNNING (вывод в CP866, кириллица искажена)"
+    }
+  ]
+}

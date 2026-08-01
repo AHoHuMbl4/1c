@@ -1,0 +1,70 @@
+{
+  "area": "stand-systemd",
+  "facts": [
+    {
+      "fact": "Существуют юниты: 1c-bot-monitor (static), 1c-config-ui (enabled), 1c-etl (static), 1c-gateway (disabled), 1c-mcp-ask (enabled), 1c-mcp-braine (enabled), 1c-mcp-reports (enabled), 1c-odata-gateway (enabled), 1c-odata-gateway@ (indirect, шаблон), 1c-serene-ask (enabled), 1c-serene-index (static), 1c-serene-pipeline (static), 1c-serene-sync (static), serenedb (enabled), postgresql/postgresql@16-main (enabled). Юнитов с именем openclaw* в системном systemd нет — openclaw живёт в user-юните undebot.",
+      "source": "systemctl list-unit-files | grep -E '1c-|serene|openclaw|postgres'",
+      "raw": "15 сервисных юнитов + 5 таймеров 1c-*; openclaw* в system slice отсутствует"
+    },
+    {
+      "fact": "Активны (running): 1c-config-ui, 1c-mcp-ask, 1c-mcp-braine, 1c-mcp-reports, 1c-odata-gateway, serenedb, postgresql@16-main. Неактивны (dead): 1c-bot-monitor (oneshot по таймеру), 1c-etl, 1c-gateway, 1c-odata-gateway@ut, 1c-serene-ask, 1c-serene-index. В состоянии failed: 1c-serene-pipeline и 1c-serene-sync.",
+      "source": "systemctl list-units --all; systemctl is-enabled/is-active по каждому",
+      "raw": "7 running, 6 dead, 2 failed"
+    },
+    {
+      "fact": "1c-serene-pipeline.service failed (Result: signal, killed TERM) с 29.07 07:32 UTC, последний запуск таймером 29.07 06:41; работал 51 минуту и был убит. 1c-serene-sync.service failed (Result: signal, killed TERM) с 28.07 03:57 UTC.",
+      "source": "systemctl status 1c-serene-pipeline 1c-serene-sync",
+      "raw": "pipeline: Main PID 1370573 code=killed 15/TERM 2026-07-29; sync: Main PID 837813 code=killed 15/TERM 2026-07-28"
+    },
+    {
+      "fact": "1c-serene-pipeline.timer: enabled, но НЕ активен (inactive/dead) — конвейер свежести стоит с 29.07. Устроен «по готовности»: OnUnitInactiveSec=1min + OnBootSec=3min + Persistent=true. 1c-bot-monitor.timer активен и тикает каждые 3 минуты (OnUnitActiveSec=3min). 1c-etl.timer (03:00), 1c-serene-index.timer (каждые 20 мин) и 1c-serene-sync.timer (03:40) — disabled и inactive.",
+      "source": "systemctl list-timers --all; systemctl cat таймеров; systemctl is-enabled/is-active",
+      "raw": "активен лишь 1c-bot-monitor.timer; 1c-serene-pipeline.timer enabled но dead, last run 29.07 06:41"
+    },
+    {
+      "fact": "Файлы всех юнитов лежат в /etc/systemd/system/: 1c-bot-monitor.service (ExecStart=/opt/1c-bot-monitor/bot_health_check.sh), 1c-config-ui.service (/opt/1c-config-ui/oc_config_ui.py), 1c-etl.service (/opt/1c-etl/oc_etl.py), 1c-gateway.service (/opt/1c-gateway/gateway.py), 1c-mcp-ask.service (/opt/openclaw-mcp/venv/bin/python /opt/openclaw-mcp/mcp_ask.py), 1c-mcp-braine.service (/opt/openclaw-mcp/mcp_braine.py), 1c-mcp-reports.service (/opt/1c-mcp-reports/mcp_reports.py), 1c-odata-gateway.service и шаблон @ (/opt/1c-odata-gateway/odata_gateway.py), 1c-serene-ask.service (/opt/1c-mcp-reports/serene_ask.py), 1c-serene-index.service (/opt/1c-mcp-reports/build.sh), 1c-serene-pipeline.service (/opt/1c-mcp-reports/pipeline.sh), 1c-serene-sync.service (/opt/1c-mcp-reports/serene_sync.py), serenedb.service (/usr/local/bin/serened --flagfile=/etc/serenedb/serened.conf, User=serenedb, ProtectSystem=strict, ReadWritePaths=/var/lib/serenedb).",
+      "source": "systemctl cat <юнит> для каждого",
+      "raw": "все в /etc/systemd/system/, ExecStart перечислены"
+    },
+    {
+      "fact": "1c-mcp-braine.service имеет drop-in override /etc/systemd/system/1c-mcp-braine.service.d/override.conf, который переключает BRAINE_URL с http://127.0.0.1:8090 на http://127.0.0.1:8091 — но ни 8090, ни 8091 никто не слушает. MCP-сервер braine работает (порт 6014), однако его upstream мёртв.",
+      "source": "systemctl cat 1c-mcp-braine; ss -tlnp",
+      "raw": "override.conf: Environment=BRAINE_URL=http://127.0.0.1:8091; в ss нет слушателей 8090/8091"
+    },
+    {
+      "fact": "Карта портов: 7890 — serened (serenedb.service); 5432 — postgres (postgresql@16-main); 6011 — odata_gateway.py pid 3173747 (1c-odata-gateway.service); 6012 — oc_config_ui.py pid 3173735 (1c-config-ui.service); 6014 — mcp_braine.py pid 3173746 (1c-mcp-braine.service); 6015 — mcp_reports.py pid 3173769 (1c-mcp-reports.service, MCP_PORT=6015); 6016 — mcp_ask.py pid 3173753 (1c-mcp-ask.service); 6021 — odata_gateway.py pid 1136469 (СИРОТА, вне юнита); 8099 — serene_ask.py pid 3109129 (СИРОТА, вне юнита); 18800 — node openclaw gateway pid 2786727 (user-юнит undebot); 22 — sshd. Порты 3000, 8081, 8082, 8090, 8091 НЕ слушает никто.",
+      "source": "ss -tlnp + cat /proc/<pid>/cgroup",
+      "raw": "11 слушателей; 3000/8081/8082/8090/8091 отсутствуют"
+    },
+    {
+      "fact": "СИРОТА №1: pid 1136469, root, запущен 28.07 20:32 из /srv/1c, cgroup user-0/session-247653.scope (НЕ systemd-юнит) — python3 /opt/1c-odata-gateway/odata_gateway.py, слушает 127.0.0.1:6021, ODG_UPSTREAM=http://192.168.56.1:6003/ut/odata/standard.odata. Это шлюз ВТОРОЙ базы (ut), поднятый руками, при том что штатный экземпляр 1c-odata-gateway@ut.service существует, но inactive/dead. Ровно этот сценарий описан в комментарии шаблона как авария 29.07 («ручной шлюз не пережил перезапуск»).",
+      "source": "ss -tlnp; ps aux; cat /proc/1136469/cgroup, environ, cmdline; ps -o lstart",
+      "raw": "session-247653.scope, cwd=/srv/1c, upstream /ut/odata, 1c-odata-gateway@ut dead"
+    },
+    {
+      "fact": "СИРОТА №2: pid 3109129, root, запущен 31.07 04:50, cgroup user-0/session-247653.scope — python3 serene_ask.py (cwd /opt/1c-mcp-reports), слушает 127.0.0.1:8099, dbname=ut_test. Штатный юнит 1c-serene-ask.service enabled, но inactive/dead. При этом 1c-mcp-ask.service указывает ASK_URL=http://127.0.0.1:8099 — то есть боевой путь ответов бота (ask_1c) сейчас держится на осиротевшем процессе, который не переживёт перезагрузку и не рестартует при падении.",
+      "source": "ss -tlnp; cat /proc/3109129/cgroup, environ, cmdline; systemctl is-active 1c-serene-ask; systemctl cat 1c-mcp-ask",
+      "raw": "serene_ask.py вне юнита на 8099; 1c-serene-ask dead; ASK_URL=127.0.0.1:8099 в 1c-mcp-ask"
+    },
+    {
+      "fact": "OpenClaw-бот работает как user-юнит undebot: /home/undebot/.config/systemd/user/openclaw-gateway.service (v2026.7.1-2), ExecStart=/usr/bin/node /usr/lib/node_modules/openclaw/dist/index.js gateway --port 18800, Restart=always, включён через default.target.wants; пользователь undebot (uid 1001) lingering=yes, значит стартует без входа. Процесс pid 2786727 подтверждён в cgroup user@1001/openclaw-gateway.service, слушает 127.0.0.1:18800 и [::1]:18800.",
+      "source": "ls /home/undebot/.config/systemd/user/; cat openclaw-gateway.service; loginctl list-users; cat /proc/2786727/cgroup",
+      "raw": "user-юнит, порт 18800, linger yes, EnvironmentFile=~/.openclaw/gateway.systemd.env"
+    },
+    {
+      "fact": "1c-serene-index.service переключён с serene_search_build.py на build.sh (комментарий в юните: авария 28.07 03:55, DROP+CREATE снёс корпус; бэкап юнита 1c-serene-index.service.bak-20260728). В юнитах index и pipeline зафиксирован значимый порядок EnvironmentFile: 1c-mcp-reports.env первым, 1c-serene-sync.env последним (пишущая роль перекрывает serene_ro).",
+      "source": "systemctl cat 1c-serene-index 1c-serene-pipeline",
+      "raw": "ExecStart=build.sh / pipeline.sh; порядок env-файлов помечен как нельзя менять"
+    },
+    {
+      "fact": "1c-gateway.service (whitelist-прокси execute_query к тулкиту на 192.168.56.1:6003) — disabled и inactive: старый слой доступа к 1С выведен, дверь теперь только OData-шлюз. 1c-etl.service + 1c-etl.timer (выгрузка в GitLab KB) — тоже выключены (timer disabled/inactive).",
+      "source": "systemctl is-enabled/is-active 1c-gateway 1c-etl 1c-etl.timer; systemctl cat 1c-gateway 1c-etl",
+      "raw": "gateway.py и oc_etl.py не работают и не стартуют сами"
+    },
+    {
+      "fact": "Осиротевшие/внеюнитные процессы root'а помимо двух сирот-сервисов: два node mcp-server-memory и один mcp-server-filesystem (pts/2, pts/4 — интерактивные сессии Claude, MCP-хелперы; при этом в CLAUDE.md заявлено, что filesystem-MCP убран 01.08, а процесс от 05:05 ещё жив в другой сессии).",
+      "source": "ps aux | grep -E 'python|serene|node'",
+      "raw": "pid 3343112 mcp-server-filesystem /srv/1c (pts/2), pid 3343097 и 3347331 mcp-server-memory"
+    }
+  ]
+}

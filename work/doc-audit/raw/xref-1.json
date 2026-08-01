@@ -1,0 +1,134 @@
+{
+  "shard": "xref-1",
+  "scope": "README.md, MAP.md, CLAUDE.md, TARGET.md, CHANGELOG.md, docs/ACCEPTANCE_UT..HOW_NOT_TO (32 файла, ~19 200 строк; 821 извлечённая ссылка)",
+  "method": "markdown-ссылки — строгое разрешение относительно каталога документа; упоминания путей/скриптов/юнитов в бэктиках — поиск по репозиторию, /etc и /etc/systemd/system; §-разделы — grep по целевому файлу; противоречия — сверка чисел/портов/статусов между документами, где спорно — сверено с живым стендом (только чтение: ss, systemctl is-enabled/is-active)",
+  "findings": [
+    {
+      "doc": "README.md",
+      "line": 12,
+      "problem": "противоречие доков",
+      "detail": "«контракт из 19 пунктов», тогда как TARGET.md содержит пункты 1–21 (последний — TARGET.md:110), а CLAUDE.md:13,22,110 и MAP.md:143 говорят «21 пункт»",
+      "target": "TARGET.md:110; CLAUDE.md:13; CLAUDE.md:22; CLAUDE.md:110; MAP.md:143"
+    },
+    {
+      "doc": "README.md",
+      "line": 55,
+      "problem": "противоречие доков",
+      "detail": "«Эмбеддинги — только Qwen text-embedding-v4 @ 1536», тогда как HOW_IT_WORKS фиксирует переход на штатную ai_embed размерности 1024, а MAP говорит «вектор 1024 у всех». То же устаревшее 1536 — в docs/ARCHITECTURE.md:34 и :69",
+      "target": "docs/HOW_IT_WORKS.md:32; MAP.md:214; docs/ARCHITECTURE.md:69"
+    },
+    {
+      "doc": "README.md",
+      "line": 35,
+      "problem": "противоречие доков",
+      "detail": "serene_ask показан живым на :8091 (то же — MAP.md:22, docs/API_ASK.md:15,120,125, docs/RUNBOOK_DEPLOY.md:20,34,410,437), тогда как docs/BOXED_BLOCKERS.md:142 говорит «:8091 остановлен», а docs/ARCHITECTURE.md:85 — что бот ходит в serene_ask на :8099. Живой стенд (ss, только чтение): слушает 127.0.0.1:8099, :8091 не слушает никто; systemctl is-active 1c-serene-ask = inactive",
+      "target": "docs/BOXED_BLOCKERS.md:142; docs/ARCHITECTURE.md:85; docs/API_ASK.md:15; docs/RUNBOOK_DEPLOY.md:34; MAP.md:22"
+    },
+    {
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 85,
+      "problem": "противоречие доков",
+      "detail": "«1c-mcp-ask :6016 — MCP ask_1c над serene_ask (:8099, база ut_test)» — то есть :8099 подключён к боту; docs/BOXED_BLOCKERS.md:143 утверждает обратное: «:8099 — отвечающий сервис ВТОРОЙ базы, работает, но к боту не подключён»",
+      "target": "docs/BOXED_BLOCKERS.md:143"
+    },
+    {
+      "doc": "README.md",
+      "line": 46,
+      "problem": "противоречие доков",
+      "detail": "«слой braine и инструмент report_1c (NL→SQL) выведены из контура (решение владельца 26.07)», при этом docs/ARCHITECTURE.md:87 описывает 1c-mcp-reports :6015 (report_1c: NL→SQL + график PNG) как живой сервис, docs/ARCHITECTURE.md:102 включает report_1c в горячий контур диалога, а README.md:72 сам аннотирует SERENEDB.md как «витрина, NL→SQL, графики». Живой стенд: юнит 1c-mcp-reports enabled и active, :6015 слушает",
+      "target": "docs/ARCHITECTURE.md:87; docs/ARCHITECTURE.md:102; README.md:72; memory_bank/owner-memory/project-no-nl2sql-charts-after-answer.md"
+    },
+    {
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 86,
+      "problem": "противоречие доков",
+      "detail": "строка зачёркнута: «1c-mcp-braine выведен 30.07... не слушает», но тот же документ в §6 (строка 161) перечисляет 1c-mcp-braine среди enabled system-сервисов, переживающих ребут. Живой стенд: юнит enabled и active, :6014 слушает — то есть и «не слушает» из строки 86 не совпадает со стендом",
+      "target": "docs/ARCHITECTURE.md:161"
+    },
+    {
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 96,
+      "problem": "противоречие доков",
+      "detail": "«1c-serene-sync.timer 03:40 (загрузка + пересборка резолвера)» подан как действующий холодный контур (то же — строка 174: «ночной 1c-serene-sync.timer уже штатный»), тогда как MAP.md:216-218 говорит: конвейер 1c-serene-pipeline по готовности, «„Ночного“ нет. Старые таймеры sync/index отключены». Живой стенд: systemctl is-enabled 1c-serene-sync.timer = disabled",
+      "target": "MAP.md:216; MAP.md:218; docs/ARCHITECTURE.md:174"
+    },
+    {
+      "doc": "docs/ARCHITECTURE.md",
+      "line": 80,
+      "problem": "противоречие доков",
+      "detail": "вектор «через ivf» подан как рабочая возможность движка (то же — строки 177-180: «вектор через ivf В ТОМ ЖЕ индексе»), тогда как MAP.md:168 и docs/VECTOR_DECISION.md фиксируют: векторный индекс ivf заблокирован (решение владельца — memory_bank/owner-memory/project-serenedb-ivf-blocked.md)",
+      "target": "MAP.md:168; docs/VECTOR_DECISION.md; memory_bank/owner-memory/project-serenedb-ivf-blocked.md"
+    },
+    {
+      "doc": "README.md",
+      "line": 16,
+      "problem": "противоречие доков",
+      "detail": "«Открыто несколько пунктов TARGET.md, они перечислены в docs/STATE_2026-07-26.md» — отсылает за текущим статусом к снимку от 26.07, тогда как CLAUDE.md:13 назначает docs/TARGET_STATUS.md единственным документом стадий по пунктам, а CLAUDE.md:26-27: «Текущее состояние работ живёт только в TARGET_STATUS.md и activeContext.md»",
+      "target": "CLAUDE.md:13; CLAUDE.md:26"
+    },
+    {
+      "doc": "CLAUDE.md",
+      "line": 40,
+      "problem": "цель не существует",
+      "detail": "«граф знаний... хранится в memory_bank/mcp-memory.json (в git)» и «Изменил граф — файл коммитится» — файла memory_bank/mcp-memory.json нет ни на диске (ls), ни в git ls-files; .mcp.json:12 задаёт этот же путь как MEMORY_FILE_PATH; CHANGELOG.md:48 тоже утверждает «коммитится»",
+      "target": "memory_bank/mcp-memory.json (отсутствует); .mcp.json:12; CHANGELOG.md:48"
+    },
+    {
+      "doc": "MAP.md",
+      "line": 213,
+      "problem": "противоречие доков",
+      "detail": "состояние: «корпус 103 808 строк / 231 сущность... резолвер 115 151 значение» (строки 213-214), тогда как docs/HOW_IT_WORKS.md:32 в колонке «стало» даёт «корпус 97 965, профили 226, резолвер 89 483», а HOW_IT_WORKS.md:39 — «214-215 из 226». Оба документа подают числа как текущие",
+      "target": "docs/HOW_IT_WORKS.md:32; docs/HOW_IT_WORKS.md:39"
+    },
+    {
+      "doc": "docs/HOW_IT_WORKS.md",
+      "line": 40,
+      "problem": "противоречие доков",
+      "detail": "«обе штатные сборки пока не вписаны в юниты — ночью по-прежнему запускается питоновский путь», тогда как MAP.md:216-219: конвейер 1c-serene-pipeline (синк-дельта → сборка), юнит index — на build.sh «(не на снёсший корпус serene_search_build.py)»; юниты 1c-serene-pipeline.service/.timer существуют в /etc/systemd/system",
+      "target": "MAP.md:216-219; /etc/systemd/system/1c-serene-pipeline.service"
+    },
+    {
+      "doc": "MAP.md",
+      "line": 198,
+      "problem": "противоречие доков",
+      "detail": "«боевой код /opt/1c-mcp-reports/ — копия файлов; после правки копировать туда» (ручной шаг), тогда как MAP.md:54 про deploy.sh: «Убирает ручной шаг „скопировать в /opt“» — внутри одного документа",
+      "target": "MAP.md:54"
+    },
+    {
+      "doc": "docs/HOW_NOT_TO.md",
+      "line": 138,
+      "problem": "нет раздела (номер задвоен)",
+      "detail": "два раздела с одним номером: «## 1.6 Решил за владельца» (строка 127) и «## 1.6 Взял одну сторону противоречия и закрыл вопрос» (строка 138). Внешние ссылки на §1.6 (CHANGELOG.md:403, docs/DEFECT_FOCUS_CHOICE.md:136, docs/HOW_NOT_TO.md:1705 — все про «решил за владельца») формально неоднозначны",
+      "target": "docs/HOW_NOT_TO.md:127; CHANGELOG.md:403; docs/DEFECT_FOCUS_CHOICE.md:136"
+    },
+    {
+      "doc": "docs/HOW_NOT_TO.md",
+      "line": 1709,
+      "problem": "нет раздела (номер задвоен)",
+      "detail": "два раздела с номером 3.31: «Один флаг отвечал за две разные вещи» (строка 1176) и «Тестировал коммит-хук через git stash» (строка 1709). Ссылки указывают на РАЗНЫЕ разделы под одним номером: CHANGELOG.md:73 и :282 — про stash (строка 1709), CHANGELOG.md:289 и docs/HOW_IT_WORKS.md:158 — про флаг (строка 1176)",
+      "target": "docs/HOW_NOT_TO.md:1176; CHANGELOG.md:73; CHANGELOG.md:282; CHANGELOG.md:289; docs/HOW_IT_WORKS.md:158"
+    },
+    {
+      "doc": "docs/HANDOFF_CHECK_1.md",
+      "line": 456,
+      "problem": "противоречие доков",
+      "detail": "«§1.6 в других документах нет, поэтому вреда сейчас нет» — на момент проверки отсылки на §1.6 в других документах есть: CHANGELOG.md:403 и docs/DEFECT_FOCUS_CHOICE.md:136 (обе появились позже снимка HANDOFF)",
+      "target": "CHANGELOG.md:403; docs/DEFECT_FOCUS_CHOICE.md:136"
+    },
+    {
+      "doc": "docs/CHECK2_INCR_1.md",
+      "line": 5,
+      "problem": "цель не существует",
+      "detail": "объект проверки задан абсолютным путём /srv/data/cursor/cursor/1/1c/ubuntu/serenedb/serene_search_build.py — такого пути на сервере нет; файл живёт в /srv/1c/ubuntu/serenedb/serene_search_build.py. Тот же мёртвый путь — в docs/CHECK2_REVIEW_1.md:9",
+      "target": "/srv/data/cursor/cursor/1/1c/ubuntu/serenedb/serene_search_build.py (нет); docs/CHECK2_REVIEW_1.md:9; /srv/1c/ubuntu/serenedb/serene_search_build.py (есть)"
+    },
+    {
+      "doc": "docs/ACCEPTANCE_UT.md",
+      "line": 883,
+      "problem": "цель не существует",
+      "detail": "сверка эталонов «снята напрямую из 1С по OData (etalon_1c.py)» — скрипта etalon_1c.py в репозитории нет; единственная копия найдена в эфемерном scratchpad старой сессии (/tmp/claude-0/-srv-1c/81653964.../scratchpad/etalon_1c.py), т.е. замер невоспроизводим по документу",
+      "target": "etalon_1c.py (в /srv/1c отсутствует)"
+    }
+  ],
+  "checked_ok": "все markdown-ссылки на файлы в README/MAP/CLAUDE/TARGET/CHANGELOG и docs/A*-H* разрешаются (кроме перечисленного); все §-отсылки HOW_NOT_TO/VECTOR_DECISION/SCALE_BLOCKERS/RUNBOOK существуют; скрипты ubuntu/serenedb/* и ubuntu/openclaw/* из MAP.md найдены; юниты 1c-serene-pipeline/.timer, 1c-serene-index, 1c-etl есть в /etc/systemd/system; scripts/perf/* и examples/* из CHECK1/CHECK2 есть в /srv/serenedb-src; хуки .claude/hooks/{check-docs,check-active-size,session-start,...}.sh есть; docs/SERENE_CAPS_1..3 есть; TARGET.md действительно 21 пункт; ACCEPTANCE_UT: 58 вопросов = сумма §1-12, §13 — сводка (совпадает с MAP.md:104). Файл 1c-odata-добавить-веб-модуль.txt (CHANGELOG.md:299) генерируется exe на Windows (windows/odata-setup/src/Program.cs:160) — не битая ссылка. Ссылки HANDOFF_CHECK_1.md:398,399,436 — цитаты/примеры внутри кода, не проверяемые ссылки."
+}

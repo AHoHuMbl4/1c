@@ -1,0 +1,130 @@
+{
+  "area": "serene-py",
+  "facts": [
+    {
+      "fact": "serene_sync.py НЕ использует serene-entities.txt: константа SELECTED (env SELECTED_FILE, дефолт serene-entities.txt) объявлена, но main() её не читает — список сущностей берётся из переписи OData (C.census()/C.to_load) либо из кэша base_profile. Docstring файла ('список сущностей из serene-entities.txt') врёт о собственном коде.",
+      "source": "ubuntu/serenedb/serene_sync.py:25-27,157-172",
+      "note": "Также мертвы функции _core, _selectable, _suggest, _preflight — ни одного вызова в живом коде (grep по файлу: _preflight не вызывается нигде)"
+    },
+    {
+      "fact": "В мёртвой функции _selectable сохраняется хардкод русских подстрок: return \"присоединенныефайлы\" not in low and not low.startswith(\"удалить\") — тот же хардкод, за который serene_select.py выведен из контура.",
+      "source": "ubuntu/serenedb/serene_sync.py:44-45"
+    },
+    {
+      "fact": "Баг NameError: при заданном SYNC_MAX_ENTITIES и свежей переписи (ветка else, ents = _cached_entities()) переменная rows не определена, но строка 176 обращается к ней: ents = sorted(ents, key=lambda e: -next(r[\"rows\"] for r in rows ...)) — упадёт с NameError.",
+      "source": "ubuntu/serenedb/serene_sync.py:169-177"
+    },
+    {
+      "fact": "serene_sync.py: перепись схемы (census, $count по всем ~4585 типам) выполняется только если base_profile_meta старше CENSUS_MAX_AGE (дефолт 3600 с); между переписями список сущностей берётся из base_profile WHERE rows>0.",
+      "source": "ubuntu/serenedb/serene_sync.py:153-172"
+    },
+    {
+      "fact": "Порядок в serene_sync.main(): 1) перепись/кэш; 2) для каждой сущности сначала load_entity_delta, при None — load_entity (полная); 3) при touched или err — отметка mart_changed_ts в search_quality; 4) при err>0 — sys.exit(3). Резолвер здесь НЕ строится (комментарий: строит build.sh).",
+      "source": "ubuntu/serenedb/serene_sync.py:185-247"
+    },
+    {
+      "fact": "save_profile создаёт таблицу base_profile (entity, rows, problem, key_props), DROP+CREATE+INSERT пачками по 200, GRANT SELECT ролям serene_ro и serene_resolver. Все psql-вызовы внутри run() выполняются с capture_output=True и БЕЗ проверки returncode — сбой записи профиля молча глотается (fail-open).",
+      "source": "ubuntu/serenedb/serene_sync.py:100-121"
+    },
+    {
+      "fact": "Отметка изменения витрины: DELETE/INSERT в search_quality ключа mart_changed_ts ставится при touched>0 ИЛИ err>0; при неудаче записи — только print предупреждения, синк продолжает (частичный fail-open, названный в комментарии).",
+      "source": "ubuntu/serenedb/serene_sync.py:225-236"
+    },
+    {
+      "fact": "Дефолтные адреса: SereneDB — host=127.0.0.1 port=7890 user=postgres (DSN через env SERENEDB_DSN), OData-шлюз — http://127.0.0.1:6011 (env ETL_ODATA_BASE), CSV_DIR=/var/lib/serenedb.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:32-34, serene_sync.py:100,153, odata_census.py:28"
+    },
+    {
+      "fact": "Аутентификация к шлюзу: Bearer-токен из env ODG_GATEWAY_TOKEN добавляется в _odata_auth; если переменная пуста — заголовок НЕ ставится и запрос уходит без авторизации (клиент fail-open, полагается на fail-closed самого шлюза).",
+      "source": "ubuntu/serenedb/poc_load_entity.py:16-29, odata_census.py:36-42"
+    },
+    {
+      "fact": "poc_load_entity._get_json — три попытки: обычный запрос → повтор → $select без полей Edm.Stream/Edm.Binary (UNSERVABLE_TYPES); 404 пробрасывается сразу. Если не помогло — исключение наверх, сущность считается незагруженной (fail-closed).",
+      "source": "ubuntu/serenedb/poc_load_entity.py:63,123-163"
+    },
+    {
+      "fact": "Потеря данных названа: при сужении $select пропущенные двоичные поля печатаются один раз на сущность ('пропущены поля, которые OData 1С не отдаёт'); двоичное содержимое (вложения, подписи) в витрину не попадает никогда.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:107-120"
+    },
+    {
+      "fact": "fetch_all идёт до ПУСТОЙ страницы (короткая страница в середине не считается концом), затем сверяет len(rows) с $count; расхождение у плоской выборки — RuntimeError 'выгрузка неполная' (fail-closed). Для вложенных наборов сверка отключена (формы несопоставимы), печатается пояснение.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:263-319"
+    },
+    {
+      "fact": "_flatten_nested fail-closed: если $metadata недоступна (own пуст при заданной сущности) — RuntimeError 'нет свойств ... загрузка отменена, иначе реквизиты шапки будут затёрты значениями строк'. Разворот вложенного списка структурный: ровно одно поле-список словарей; для ссылочных объектов (ключ ['Ref_Key']) реквизиты шапки не затираются полями строк.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:213-260"
+    },
+    {
+      "fact": "load_entity: полная перезагрузка DROP TABLE + CREATE TABLE AS read_csv(...); дедуп QUALIFY row_number() OVER (PARTITION BY объявленный_ключ)=1, у вложенных форм — SELECT DISTINCT * без ключа; GRANT SELECT ON таблицу TO serene_ro. Расхождение rows_raw vs rows после дедупа пишется в stderr.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:528-613"
+    },
+    {
+      "fact": "load_entity_delta применима только при уникальном Ref_Key + DataVersion в существующей таблице витрины (_mart_has по duckdb_columns()); проба версий $select=Ref_Key,DataVersion, изменённые тянутся по одному прямым доступом Entity(guid'KEY') ($filter по Ref_Key 1С не держит — HTTP 500); неполная проба (len(ver_1c)<expected) → None → полная загрузка, чтобы не удалить живое по неполному снимку.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:408-525"
+    },
+    {
+      "fact": "CSV-файлы пишутся в CSV_DIR (/var/lib/serenedb): <table>.csv и <table>__delta.csv, затем chown serenedb:serenedb (check=False — сбой chown молча игнорируется). Предел строки CSV — env ETL_CSV_MAX_LINE, дефолт 200 МБ.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:498-506,533,545,566-567"
+    },
+    {
+      "fact": "Нормализация значений _cell: булевы пишутся как 'true'/'false' (не Python True/False), дата ISO 'T' заменяется пробелом — иначе row_key=sha1(doc) регистров переключался и слияние удаляло десятки тысяч строк.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:387-405"
+    },
+    {
+      "fact": "HTTP-таймаут к 1С — env ETL_HTTP_TIMEOUT, дефолт 600 с; страница PAGE=1000 захардкожена.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:35,45"
+    },
+    {
+      "fact": "odata_census: перечень сущностей из служебного документа OData, ключи/типы из $metadata (таймаут 300 с), $count параллельно (CENSUS_PARALLEL=12, CENSUS_TIMEOUT=60). to_load() возвращает всё с rows>0 — никакого отбора человеком.",
+      "source": "ubuntu/serenedb/odata_census.py:28-30,50-115"
+    },
+    {
+      "fact": "odata_census.count_one различает 'нет прав' и прочие ошибки; определение 'нет прав' при HTTP 500 — по подстрокам в теле ответа: 'Доступ' (русская), 'denied', 'Access' — хардкод языка ответа 1С.",
+      "source": "ubuntu/serenedb/odata_census.py:79-90"
+    },
+    {
+      "fact": "classify_entities.py: разметка сущностей business/service внешней моделью DeepSeek (env DEEPSEEK_API_KEY, DEEPSEEK_BASE дефолт https://api.deepseek.com, DEEPSEEK_MODEL дефолт deepseek-v4-flash, POST /v1/chat/completions). В модель уходят только имя таблицы, метка, до 12 имён колонок и число строк — не данные.",
+      "source": "ubuntu/serenedb/classify_entities.py:44-77,99-110,178"
+    },
+    {
+      "fact": "classify_entities fail-open в сторону business: неотвеченное моделью пишется как 'business' (got.get(r[0], \"business\")); без DEEPSEEK_API_KEY ask() возвращает {} и весь батч уходит в failed без вставки — сущности остаются неразмеченными и трактуются потребителем как business. Нечитаемый ответ модели → рекурсивное деление батча пополам до 1 сущности.",
+      "source": "ubuntu/serenedb/classify_entities.py:101-102,117-133,184-187"
+    },
+    {
+      "fact": "classify_entities: кэш в таблице search_entity_class (src_table, cls, seen_at), CREATE TABLE IF NOT EXISTS; отбираются только новые (NOT EXISTS), крупные вперёд, потолок CLASSIFY_MAX_PER_RUN=400 за прогон; остаток печатается числом. Читает search_sources, search_tables, search_corpus, tmp3_cls.",
+      "source": "ubuntu/serenedb/classify_entities.py:137-173"
+    },
+    {
+      "fact": "serene_select.py объявлен ВЫВЕДЕННЫМ ИЗ КОНТУРА 28.07.2026 ('Не запускать, не импортировать'), но файл остаётся исполняемым и содержит хардкод русских подстрок 'присоединенныефайлы'/'удалить' в _is_business_toplevel; пишет serene-entities.txt или .review-файл. Ни один живой файл его не импортирует (проверено grep).",
+      "source": "ubuntu/serenedb/serene_select.py:1-16,47-56,91-104"
+    },
+    {
+      "fact": "setup.sh при КАЖДОМ прогоне генерирует новые пароли (openssl rand -hex 24) ролям serene_ro и serene_resolver: CREATE ROLE (терпимо) + всегда ALTER ROLE PASSWORD; пишет PGPASSWORD и RESOLVER_PW в ENV_FILE (дефолт /etc/1c-mcp-reports.env, chmod 600). Ротация означает, что до перезапуска сервисов старые процессы теряют доступ.",
+      "source": "ubuntu/serenedb/setup.sh:14-41"
+    },
+    {
+      "fact": "setup.sh: GRANT SELECT ON ALL TABLES + ALTER DEFAULT PRIVILEGES для serene_ro; GRANT SELECT ON resolver_index TO serene_resolver и REVOKE FROM serene_ro (оба '|| true' — терпимо до первого build). С флагом --load сразу запускает serene_sync.py под RW-DSN, экспортируя из ENV_FILE только переменные ALIBABA_*, ETL_ODATA_BASE, CSV_DIR, EMBED_*.",
+      "source": "ubuntu/serenedb/setup.sh:27-33,47-52"
+    },
+    {
+      "fact": "Юнит 1c-serene-sync.service запускает /opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_sync.py (WorkingDirectory=/opt/1c-mcp-reports, EnvironmentFile=/etc/1c-serene-sync.env) — деплой-копия, не репозиторий /srv/1c/ubuntu/serenedb. Таймер — ежедневно 03:40, Persistent=true. Описания юнита и таймера ('+ пересборка резолвера', 'после ETL') не соответствуют коду: резолвер синк больше не строит.",
+      "source": "ubuntu/serenedb/systemd/1c-serene-sync.service:2,8-10; systemd/1c-serene-sync.timer:5"
+    },
+    {
+      "fact": "Шаблон env юнита (1c-serene-sync.env.example) описывает SELECTED_FILE/serene-entities.txt и 'резолвер эмбеддит на Qwen (ALIBABA_*)' — оба утверждения не соответствуют текущему serene_sync.py: SELECTED_FILE мёртв, эмбеддинг из синка убран.",
+      "source": "ubuntu/serenedb/systemd/1c-serene-sync.env.example:2,8-9"
+    },
+    {
+      "fact": "Живые вызовы аудируемых скриптов: pipeline.sh:28 запускает serene_sync.py (ошибки не роняют пайплайн: '|| echo'); build.sh:206 запускает classify_entities.py (тоже '|| echo'); build.sh:163 включает текст poc_load_entity.py в хеш SQL_HASH (смена загрузчика триггерит пересборку). odata_census и poc_load_entity живут как библиотеки serene_sync; poc_load_entity имеет и CLI (загрузка одной сущности).",
+      "source": "ubuntu/serenedb/pipeline.sh:28, build.sh:163,206, poc_load_entity.py:616-621"
+    },
+    {
+      "fact": "SQL строится конкатенацией строк с самодельным экранированием кавычек (_lit / lit: replace(\"'\",\"''\")) и передаётся psql через stdin — имена таблиц/колонок подставляются в кавычках без параметризации во всех трёх питон-файлах.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:370-371,439-441,508-521; classify_entities.py:95-96; serene_sync.py:106-119"
+    },
+    {
+      "fact": "published_entity_sets() при любой сетевой ошибке возвращает None, и вызывавший его преполёт молча пропускался ('не поднимаю ложную тревогу') — но сам преполёт (_preflight) из main() уже не вызывается, так что этот путь целиком мёртв.",
+      "source": "ubuntu/serenedb/poc_load_entity.py:322-331, serene_sync.py:73-90"
+    }
+  ]
+}

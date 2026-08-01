@@ -1,0 +1,195 @@
+{
+  "area": "serene-retired",
+  "facts": [
+    {
+      "fact": "mcp_reports.py — НЕ мёртвый код: сервис 1c-mcp-reports.service на живом хосте enabled и running, ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/mcp_reports.py; вместе с ним жив и serene_report.py (импортируется: from serene_report import format_table, render_chart, run_report)",
+      "source": "ubuntu/serenedb/systemd/1c-mcp-reports.service:9; ubuntu/serenedb/mcp_reports.py:21",
+      "note": "проверено на хосте: systemctl → loaded active running, is-enabled → enabled"
+    },
+    {
+      "fact": "mcp_reports.py слушает MCP_HOST/MCP_PORT, по умолчанию 127.0.0.1:6015; инструмент report_1c поверх FastMCP('second-brain-reports')",
+      "source": "ubuntu/serenedb/mcp_reports.py:23-30"
+    },
+    {
+      "fact": "Авторизация mcp_reports fail-closed: без MCP_TOKEN в окружении сервис не стартует (SystemExit(2)); все запросы без 'Authorization: Bearer <MCP_TOKEN>' получают 401 через Starlette-middleware",
+      "source": "ubuntu/serenedb/mcp_reports.py:53-66",
+      "note": "цитата: «if not MCP_TOKEN: ... raise SystemExit(2)»"
+    },
+    {
+      "fact": "mcp_reports пишет PNG-графики в CHART_DIR (default /var/lib/serenedb-charts), делает chmod 0755 каталогу и 0644 файлу, имя chart_<md5(png)[:12]>.png; путь к файлу вставляется в текст ответа инструментом с инструкцией агенту отправить файл клиенту",
+      "source": "ubuntu/serenedb/mcp_reports.py:28,94-105"
+    },
+    {
+      "fact": "SQL клиенту через MCP не показывается (show_sql=False), но печатается в stdout сервиса (журнал systemd): print('[report_1c] q=... sql=...')",
+      "source": "ubuntu/serenedb/mcp_reports.py:86-87"
+    },
+    {
+      "fact": "serene_report.py: DSN default 'host=127.0.0.1 port=7890 user=postgres' (SERENEDB_DSN); DeepSeek DEEPSEEK_BASE default https://api.deepseek.com, модель из env DEEPSEEK_MODEL default 'deepseek-v4-flash', thinking disabled; эмбеддер ALIBABA_EMBED_URL + ALIBABA_API_KEY, модель text-embedding-v4 @ 1536",
+      "source": "ubuntu/serenedb/serene_report.py:15-22,47-50"
+    },
+    {
+      "fact": "Фолбэк резолвера fail-open по DSN: RESOLVER_DSN = os.environ.get('RESOLVER_DSN', DSN) — если роль serene_resolver не заведена, комментарий в коде прямо говорит «семантика тихо деградирует до лексики»; при недоступности resolver_index _semantic_into молча return (return без ошибки)",
+      "source": "ubuntu/serenedb/serene_report.py:42-44,214-216"
+    },
+    {
+      "fact": "resolve_hints глотает ЛЮБЫЕ исключения обоих слоёв резолвера: try/except Exception: pass вокруг _lexical_into и _semantic_into — сбой резолвера невидим, подсказки просто пустые",
+      "source": "ubuntu/serenedb/serene_report.py:253-260"
+    },
+    {
+      "fact": "Лексический резолвер интерполирует слова вопроса в SQL с единственной защитой w.replace(\"'\", \"''\"): условия LIKE '%<слово>%' и jaro_winkler_similarity(...) > 0.9 строятся конкатенацией строк по всем низкокардинальным (<=1500 distinct) текстовым колонкам витрины",
+      "source": "ubuntu/serenedb/serene_report.py:192-202,169-189"
+    },
+    {
+      "fact": "Порог семантического резолвера min_cos=0.70 вшит в код (default аргумента _semantic_into), выбран по замеру measure_resolver.py; берётся ровно 1 ближайшее значение (LIMIT 1) на слово",
+      "source": "ubuntu/serenedb/serene_report.py:205-226"
+    },
+    {
+      "fact": "Валидатор LLM-SQL — allow-list по AST (json_serialize_sql): пропускается только одиночный SELECT/WITH по таблицам витрины (+CTE), любая табличная функция запрещена, скалярные current_setting/current_database/getenv/pg_read* запрещены денайлистом; лимит длины SQL 6000 символов",
+      "source": "ubuntu/serenedb/serene_report.py:370-378,443-462"
+    },
+    {
+      "fact": "Если json_serialize_sql недоступен (info is None), валидатор откатывается на более слабый regex-денайлист _validate_fallback (FORBIDDEN/FS_ACCESS/INTERNAL_OBJECTS + проверка 'начинается с SELECT/WITH' + один statement) — деградация тихая, без пометки в ответе",
+      "source": "ubuntu/serenedb/serene_report.py:449-451,381-394",
+      "note": "цитата: «if info is None: return _validate_fallback(sql)  # AST недоступен — запасной денайлист»"
+    },
+    {
+      "fact": "get_schema() отдаёт LLM реальную схему из duckdb_columns() (не information_schema — под ro-ролью она пуста), скрывая resolver_index, плюс count(*) каждой таблицы и до 5 примеров значений каждой текстовой колонки",
+      "source": "ubuntu/serenedb/serene_report.py:122-154,114-119"
+    },
+    {
+      "fact": "run_report ловит обрезку честно: обёртка SELECT * FROM (sql) _q LIMIT max_rows+1 (default 50+1); если строк больше — rows режутся до 50 и ставится truncated=true, format_table добавляет «⚠ показаны первые N — в выборке есть ещё строки»",
+      "source": "ubuntu/serenedb/serene_report.py:480-495,556-557"
+    },
+    {
+      "fact": "measure_caveat — предупреждение, а НЕ блокировка: числовая свёртка/CAST текстовой колонки даёт caveat-текст в ответе, запрос всё равно выполняется («не блок — число „настоящее“, врёт лишь трактовка»)",
+      "source": "ubuntu/serenedb/serene_report.py:279-303"
+    },
+    {
+      "fact": "metric_critic (второй LLM-проход-аудитор) fail-open: выключается env METRIC_CRITIC=0, при отсутствии DEEPSEEK_API_KEY или любом исключении молча возвращает '' («критик не должен ронять отчёт»)",
+      "source": "ubuntu/serenedb/serene_report.py:306-337"
+    },
+    {
+      "fact": "Пароль резолвера передаётся через PGPASSWORD в env подпроцесса psql, не в conninfo/командной строке: env={**os.environ, 'PGPASSWORD': pgpass}",
+      "source": "ubuntu/serenedb/serene_report.py:108-111"
+    },
+    {
+      "fact": "serene_search_build.py МЁРТВ на живом пути: установленный /etc/systemd/system/1c-serene-index.service запускает /opt/1c-mcp-reports/build.sh, прежний ExecStart с serene_search_build.py сохранён только в .bak-20260728; таймер 1c-serene-index.timer disabled",
+      "source": "ubuntu/systemd/1c-serene-index.service:6-31",
+      "note": "проверено на хосте: ExecStart=.../build.sh, is-enabled timer → disabled; конвейер живёт в 1c-serene-pipeline (pipeline.sh → serene_sync.py → build.sh)"
+    },
+    {
+      "fact": "РАСХОЖДЕНИЕ юнитов в репозитории: ubuntu/serenedb/systemd/1c-serene-index.service до сих пор содержит ExecStart=.../serene_search_build.py (и таймер OnCalendar 03:55), тогда как ubuntu/systemd/1c-serene-index.service того же имени переключён на build.sh — две копии одного юнита противоречат друг другу",
+      "source": "ubuntu/serenedb/systemd/1c-serene-index.service:22 vs ubuntu/systemd/1c-serene-index.service:31"
+    },
+    {
+      "fact": "serene_search_build.py сам читает /etc/1c-serene-sync.env и /etc/1c-mcp-reports.env (env_from, setdefault) — секреты берутся из файлов независимо от systemd",
+      "source": "ubuntu/serenedb/serene_search_build.py:69-82"
+    },
+    {
+      "fact": "serene_search_build.py создаёт/пишет таблицы search_corpus, search_seen (STAGE, дропается в конце), search_meta, search_dict (text search dictionary), search_tables, индекс search_idx (inverted, поля doc/refs/src_table + INCLUDE amount/doc_date); при изменении состава колонок корпуса ДЕЛАЕТ DROP INDEX + DROP TABLE корпуса",
+      "source": "ubuntu/serenedb/serene_search_build.py:49-61,760-777,883-916",
+      "note": "именно этот DROP+CREATE стал причиной аварии 03:55 28.07 (комментарий юнита) и перевода на build.sh"
+    },
+    {
+      "fact": "serene_search_build тянет $metadata с ETL_ODATA_BASE (default http://127.0.0.1:6011) с Bearer ODG_GATEWAY_TOKEN; при недоступности метаданных fail-open на разбор по форме значений: «metadata недоступны (...) — типы будут определяться по форме»",
+      "source": "ubuntu/serenedb/serene_search_build.py:100-124"
+    },
+    {
+      "fact": "Денежную колонку каждой сущности выбирает LLM (DeepSeek) по именам числовых колонок (MONEY_SYS-промт); если модель недоступна — сущность остаётся БЕЗ суммы с записью в stderr «агрегаты по этой сущности считаться не будут» (fail-closed на число, а не подстановка)",
+      "source": "ubuntu/serenedb/serene_search_build.py:230-288,573-579"
+    },
+    {
+      "fact": "Обрезки/потери в сборщике корпуса: TEXT_CLIP=20000 символов на значение (substr в базе), DataVersion отбрасывается по контракту (STANDARD_SERVICE_PROPS), спутники протокола X_Type/X_navigationLinkUrl режутся, URL-подобные значения (machine_token) не идут в текст, колонка выбрасывается если >50% образцов машинные",
+      "source": "ubuntu/serenedb/serene_search_build.py:175-187,150,368-384,616-627"
+    },
+    {
+      "fact": "Неуспешные пачки эмбеддинга НЕ роняют сборку, но помечают прогон: stderr «ВНИМАНИЕ: N пачек не посчитаны — корпус неполный», JSON status:'неполный корпус', return 3; исчезнувшие строки корпуса удаляются одним DELETE по анти-джойну со STAGE",
+      "source": "ubuntu/serenedb/serene_search_build.py:789-794,843-859,979-983"
+    },
+    {
+      "fact": "serene_search_build раздаёт SELECT на search_corpus и search_tables ВСЕМ ролям из pg_user кроме postgres (цикл GRANT по всем ролям), т.е. и serene_resolver получает доступ к корпусу",
+      "source": "ubuntu/serenedb/serene_search_build.py:969-976"
+    },
+    {
+      "fact": "Дата записи: при нескольких датах и отсутствии платформенных Date/Period фильтра по дате НЕТ вовсе (date_col=None) — осознанный отказ вместо догадки «первая колонка»",
+      "source": "ubuntu/serenedb/serene_search_build.py:581-596"
+    },
+    {
+      "fact": "build_resolver_index.py МЁРТВ: serene_sync.py прямо говорит «build_resolver_index больше не нужен: резолвер строит build.sh» и «🔴 РЕЗОЛВЕР ЗДЕСЬ БОЛЬШЕ НЕ СТРОИТСЯ»; в build.sh резолвер собирают resolver_build.sql + embed_missing.sh; ни один юнит/скрипт его не вызывает",
+      "source": "ubuntu/serenedb/serene_sync.py:17,238; ubuntu/serenedb/build.sh:222-227"
+    },
+    {
+      "fact": "build_resolver_index.py (когда запускался руками) создаёт resolver_index(table_name,column_name,value,emb FLOAT[1536]), GRANT SELECT → serene_resolver, REVOKE от serene_ro, полный DELETE и пересборка; батч эмбеддинга 10 (лимит DashScope), INSERT по 50 строк",
+      "source": "ubuntu/serenedb/build_resolver_index.py:23-24,37-45"
+    },
+    {
+      "fact": "measure_resolver.py МЁРТВ (ручной замер): хардкод русских терминов TERMS=['спб','питере','питре','йоркшир','лондон','москва','казань','ростов','пятигорск'] — инструмент выбора порога 0.70, никем не вызывается",
+      "source": "ubuntu/serenedb/measure_resolver.py:6"
+    },
+    {
+      "fact": "report_query.py — ручной CLI над run_report, ни один юнит/скрипт его не вызывает; печатает таблицу С SQL (show_sql=True по умолчанию)",
+      "source": "ubuntu/serenedb/report_query.py:11-17"
+    },
+    {
+      "fact": "probe.py вызывается только из probe.sh (ручной зонд): probe.sh выставляет SERENEDB_DSN=user=serene_ro и RESOLVER_DSN=user=serene_resolver явно, секреты грепает из /etc/1c-mcp-reports.env; автоматических вызовов нет",
+      "source": "ubuntu/serenedb/probe.sh:6-10; ubuntu/serenedb/probe.py:12"
+    },
+    {
+      "fact": "ab_scorer.py — «тест», который МЕНЯЕТ состояние сервера: restart() перезаписывает /etc/1c-serene-ask.env (заменяет строку ASK_SCORER=) и делает systemctl restart 1c-serene-ask.service для каждой из 6 моделей ранжирования",
+      "source": "ubuntu/serenedb/ab_scorer.py:107-113",
+      "note": "при этом 1c-serene-ask.service на хосте сейчас inactive dead — прогон стартовал бы остановленный сервис"
+    },
+    {
+      "fact": "ab_scorer.py целится в http://127.0.0.1:8091/ask (сервис serene_ask, НЕ mcp_reports) и в DSN host=127.0.0.1 port=7890 user=postgres (RW-роль, вшита в код); ASK_TOKEN читает напрямую парсингом /etc/1c-serene-ask.env",
+      "source": "ubuntu/serenedb/ab_scorer.py:20-21,71-78"
+    },
+    {
+      "fact": "ab_scorer.py по завершении пишет отметку прогона в <repo>/.claude/.golden-last-run («best N/M»); эту отметку проверяет хук .claude/hooks/check-golden.sh — единственная живая связь ab_scorer с чем-либо; запуск только ручной (юнита нет)",
+      "source": "ubuntu/serenedb/ab_scorer.py:143-150; .claude/hooks/check-golden.sh:9,44"
+    },
+    {
+      "fact": "Золотой набор ab_scorer вынесен из кода в файл ab-gold.tsv (env AB_GOLD_FILE), список моделей — env AB_SCORERS (default bm25,bm25_b0,tfidf,lm_jm,lm_dirichlet,dfi; indri_dirichlet исключена — молча отдаёт 0 строк); сверка ответов по цифровым последовательностям с учётом U+00A0 и прочих разрядных разделителей",
+      "source": "ubuntu/serenedb/ab_scorer.py:27-36,96-104"
+    },
+    {
+      "fact": "ab_scorer.main() всегда возвращает код 0: «sys.exit(0 if main() else 0)» — как гейт он непригоден, провал не отличим от успеха по exit-коду",
+      "source": "ubuntu/serenedb/ab_scorer.py:155"
+    },
+    {
+      "fact": "test_caveat.py — чистый юнит-тест measure_caveat без БД/LLM, 8 кейсов, exit 1 при провале; никем автоматически не вызывается",
+      "source": "ubuntu/serenedb/test_caveat.py:12-33"
+    },
+    {
+      "fact": "test_e2e.py: ground-truth считается ДИНАМИЧЕСКИ из БД в момент прогона (не magic-числа), но входные термины вшиты русские («Казани»/«казань», «Москве»/«москва») с пропуском при отсутствии данных; danger-кейсы проверяют, что опасный SQL не ВЫПОЛНИЛСЯ (executed_danger = not error AND содержит FORBIDDEN/FS_ACCESS); ручной запуск",
+      "source": "ubuntu/serenedb/test_e2e.py:51-74"
+    },
+    {
+      "fact": "test_integrity.py: 4 инварианта (grain по ref_key; витрина==живой OData count через $inlinecount=allpages; resolver_index непуст/без NULL/размерность 1536; нет фантомных строк); импортирует poc_load_entity (DSN/ODATA оттуда) и читает serene-entities.txt; resolver_index читает ролью serene_resolver с фолбэком на общий DSN если RESOLVER_PW не задан; ручной запуск, exit!=0 при FAIL",
+      "source": "ubuntu/serenedb/test_integrity.py:20-29,47-56,104-121"
+    },
+    {
+      "fact": "test_integrity T2 для таблиц с isfolder сверяет МЯГКО (0 < mart <= odata_total): витрина исключает папки, а OData $filter по IsFolder «не работает (проверено)» — точная сверка невозможна",
+      "source": "ubuntu/serenedb/test_integrity.py:116-121"
+    },
+    {
+      "fact": "test_ro_role.py: подключается как user=serene_ro (порт 7890, PGPASSWORD из env), динамически берёт первую таблицу витрины и проверяет, что INSERT/UPDATE/DELETE/DROP/CREATE/TRUNCATE отвергнуты, самовыдача GRANT INSERT — no-op, SELECT работает; ручной запуск",
+      "source": "ubuntu/serenedb/test_ro_role.py:7,31-60"
+    },
+    {
+      "fact": "test_validate.py: MUST_PASS/MUST_FAIL кейсы валидатора по AST; таблица для кейсов выбирается динамически из схемы с отказом (SystemExit) если витрина пуста — «Запасного ИМЕНИ здесь быть не может»; в кейсах остался русскоязычный литерал 'Г. КАЗАНЬ' и колонки city/description/code (значения, не имена таблиц); ручной запуск",
+      "source": "ubuntu/serenedb/test_validate.py:16-42"
+    },
+    {
+      "fact": "Живые вызовы из доли: mcp_reports.py (systemd 1c-mcp-reports.service, работает) и serene_report.py (его импорт). Полуживые (ручные обвязки в папке): probe.py←probe.sh, ab_scorer.py←рекомендация хука check-golden.sh. Мёртвые/только ручной запуск без обвязки: serene_search_build.py (юнит переключён на build.sh, старая ссылка осталась в ubuntu/serenedb/systemd/), build_resolver_index.py (ретайрен serene_sync/build.sh), measure_resolver.py, report_query.py, test_caveat.py, test_e2e.py, test_integrity.py, test_ro_role.py, test_validate.py",
+      "source": "ubuntu/systemd/1c-serene-index.service:31; ubuntu/serenedb/serene_sync.py:238; ubuntu/serenedb/systemd/1c-mcp-reports.service:9"
+    },
+    {
+      "fact": "Порядок EnvironmentFile в юнитах индекса/пайплайна значим и задокументирован в самих юнитах: 1c-mcp-reports.env (ro-роль serene_ro, ключи) ПЕРВЫМ, 1c-serene-sync.env (RW postgres) ПОСЛЕДНИМ — systemd берёт SERENEDB_DSN из последнего; обратный порядок ронял ночную сборку на permission denied",
+      "source": "ubuntu/systemd/1c-serene-index.service:20-30; ubuntu/systemd/1c-serene-pipeline.service:12-16"
+    },
+    {
+      "fact": "render_chart строит bar-график только если >=2 колонок, последняя колонка целиком числовая и строк <=25; иначе молча None (уходит только таблица) — matplotlib импортируется лениво",
+      "source": "ubuntu/serenedb/serene_report.py:505-536"
+    }
+  ]
+}

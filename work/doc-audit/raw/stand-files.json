@@ -1,0 +1,65 @@
+{
+  "area": "stand-files",
+  "facts": [
+    {
+      "fact": "AGENTS.md расходится: репозиторий (ubuntu/openclaw/instance/AGENTS.md, 3867 байт) против стенда (/home/undebot/.openclaw/workspace/AGENTS.md, 9416 байт), diff = 146 строк. Живая версия стенда (mtime 31.07 05:03) НЕ существует нигде в репозитории и не совпадает ни с одним AGENTS.md на диске (проверено md5 по /srv/1c и /opt/openclaw). Единственная актуальная копия боевого промта — на стенде.",
+      "source": "diff /srv/1c/ubuntu/openclaw/instance/AGENTS.md /home/undebot/.openclaw/workspace/AGENTS.md | wc -l; wc -c; md5sum-поиск по /srv/1c и /opt/openclaw",
+      "raw": "diff=146 строк; репо 3867 B, стенд 9416 B; md5 03c8e193... не найден ни в репо, ни в /opt/openclaw; karina/AGENTS.md (16766 B) тоже не совпадает (diff 204 строки)"
+    },
+    {
+      "fact": "mcp_ask.py идентичен: /srv/1c/ubuntu/openclaw/mcp_ask.py == /opt/openclaw-mcp/mcp_ask.py (diff пуст).",
+      "source": "diff /srv/1c/ubuntu/openclaw/mcp_ask.py /opt/openclaw-mcp/mcp_ask.py",
+      "raw": "нет расхождений; на стенде mtime 31.07 04:37, 10219 B"
+    },
+    {
+      "fact": "serene_ask.py идентичен: /srv/1c/ubuntu/serenedb/serene_ask.py == /opt/1c-mcp-reports/serene_ask.py.",
+      "source": "diff /srv/1c/ubuntu/serenedb/serene_ask.py /opt/1c-mcp-reports/serene_ask.py",
+      "raw": "нет расхождений; 229377 B, mtime на стенде 31.07 04:50"
+    },
+    {
+      "fact": "Все 42 файла из /opt/1c-mcp-reports, имеющие тёзку в /srv/1c/ubuntu/serenedb/, совпадают по md5 (включая build.sh, corpus_*.sql, wiki_*.sh, serene_sync.py, serene_ask.py). Три файла существуют только на стенде, без копии в репозитории: bench_build.py, bench_run.py, serene-entities.txt.review.",
+      "source": "md5sum попарно для всех файлов /opt/1c-mcp-reports/* против /srv/1c/ubuntu/serenedb/*",
+      "raw": "SAME x42; NO_TWIN: bench_build.py (12300 B, 25.07), bench_run.py (10463 B, 25.07), serene-entities.txt.review (7604 B, 24.07)"
+    },
+    {
+      "fact": "Состав /opt/1c-mcp-reports: 45+ файлов и каталоги __pycache__, release-42; самые свежие — serene_ask.py (31.07 04:50), wiki_alias.sh (31.07 04:19), build.sh (30.07 11:59), corpus_init.sql (30.07 19:51). /opt/openclaw-mcp: mcp_ask.py (31.07 04:37), mcp_braine.py (26.07), client_test.py, server.log, venv.",
+      "source": "ls -la /opt/1c-mcp-reports/ /opt/openclaw-mcp/",
+      "raw": "1c-mcp-reports: 45 файлов + release-42/; openclaw-mcp: 4 файла + venv/"
+    },
+    {
+      "fact": "Права /etc/*.env: 12 из 13 файлов имеют 600, но /etc/1c-bot-monitor.env — 644 (читается всеми). Инвариант проекта требует 600 для секретов.",
+      "source": "stat -c '%a %n' /etc/*.env",
+      "raw": "644 /etc/1c-bot-monitor.env; остальные 12 (1c-config-ui, 1c-etl, 1c-gateway, 1c-mcp-ask, 1c-mcp-braine, 1c-mcp-reports, 1c-odata-gateway, 1c-odata-gateway-ut, 1c-pg-windows, 1c-s3, 1c-serene-ask, 1c-serene-sync) — 600"
+    },
+    {
+      "fact": "systemd-юниты 1c-*: 17 юнитов побайтно совпадают с репозиторием. Расхождения два. (1) 1c-serene-index.timer: на стенде OnBootSec=5min/OnUnitActiveSec=20min (каждые 20 минут, п.17), в единственной репо-копии ubuntu/serenedb/systemd — устаревший OnCalendar 03:55; актуальной копии таймера в репо НЕТ. (2) 1c-serene-index.service существует в репо ДВАЖДЫ: ubuntu/systemd/ — актуальная (ExecStart=build.sh, совпадает со стендом), ubuntu/serenedb/systemd/ — устаревшая (ExecStart=serene_search_build.py, тот самый сборщик, ронявший индекс 28.07).",
+      "source": "diff /etc/systemd/system/1c-*.{service,timer} против ubuntu/*/systemd/ и ubuntu/systemd/",
+      "raw": "SAME: bot-monitor(2), config-ui, etl(2), gateway, mcp-ask, mcp-braine, mcp-reports, odata-gateway, odata-gateway@, serene-ask, serene-pipeline(2), serene-sync(2); DIFF: serene-index.timer (стенд 20min vs репо 03:55), serene-index.service (стенд==ubuntu/systemd, != ubuntu/serenedb/systemd)"
+    },
+    {
+      "fact": "На стенде есть файлы юнитов без пары в репо: /etc/systemd/system/1c-serene-index.service.bak-20260728 (бэкап старого ExecStart) и drop-in 1c-mcp-braine.service.d/override.conf (BRAINE_URL=http://127.0.0.1:8091 — переключение «второго мозга» на SereneDB); override.conf при этом побайтно совпадает с репо-копией ubuntu/openclaw/systemd/1c-mcp-braine.service.d/override.conf.",
+      "source": "ls /etc/systemd/system/1c-*; diff override.conf",
+      "raw": ".bak-20260728 в репо отсутствует; override.conf OVERRIDE_SAME"
+    },
+    {
+      "fact": "/var/lib/serenedb (верхний уровень): 1773 записи — почти всё это CSV-файлы сущностей 1С (catalog_*, accumulationregister_*, включая *__delta.csv), лежащие прямо в корне каталога данных; не-CSV: LOCK, bench/, engine_duckdb/, engine_search/, lab.log, ut/.",
+      "source": "ls /var/lib/serenedb | wc -l; ls | grep -v csv",
+      "raw": "1773 записей; каталоги движка: engine_duckdb, engine_search, bench, ut; файлы: LOCK, lab.log; остальное ~1767 csv"
+    },
+    {
+      "fact": "Бэкап SereneDB один: /root/backups/serenedb/serenedb-20260729-044937.tar.gz, 2.73 ГБ, от 29.07. При этом crontab у root ПУСТ («no crontab for root») и таймера бэкапа среди 1c-* юнитов нет — serenedb_backup.sh лежит в /opt/1c-mcp-reports, но регулярный запуск не настроен: бэкап разовый, свежее 29.07 копий нет.",
+      "source": "ls -la /root/backups/serenedb/; crontab -l",
+      "raw": "serenedb-20260729-044937.tar.gz 2730846611 B; crontab: no crontab for root, rc=1"
+    },
+    {
+      "fact": "/opt/openclaw и /opt/openclaw-engine существуют. /opt/openclaw — git-репозиторий, рабочее дерево чистое (status --short пуст), HEAD 23a0fd1 «commands.native=false: чистое меню клиент-бота (59 команд → 0) + гоча в runbook»; внутри client-bots/ (karina с AGENTS.md 16766 B от 23.07), docs/, onboarding/. /opt/openclaw-engine — исходники движка (AGENTS.md, Dockerfile, VISION.md и т.д.).",
+      "source": "ls /opt/openclaw /opt/openclaw-engine; git -C /opt/openclaw status --short; git log --oneline -1",
+      "raw": "git clean; HEAD 23a0fd1"
+    },
+    {
+      "fact": "Рабочая папка бота /home/undebot/.openclaw/workspace/: AGENTS.md 9416 B (31.07 05:03), HEARTBEAT.md 244 B, TOOLS.md 61 B (31.07 04:37), chart_banks_top5.png, top5-banks.html, charts/, .git/, openclaw-workspace-state.json. SOUL.md и BOOTSTRAP.md в корне рабочей папки ОТСУТСТВУЮТ — они перенесены в .replaced-by-deploy/ (SOUL.md 1518 B, BOOTSTRAP.md 1669 B, IDENTITY.md 1278 B, TOOLS.md 876 B, USER.md 537 B, все от 23.07; каталог создан 31.07 04:17).",
+      "source": "ls -la /home/undebot/.openclaw/workspace/ и .replaced-by-deploy/; wc -c AGENTS.md",
+      "raw": "AGENTS.md 9416 B; .replaced-by-deploy: SOUL.md 1518, BOOTSTRAP.md 1669, IDENTITY.md 1278, TOOLS.md 876, USER.md 537"
+    }
+  ]
+}
