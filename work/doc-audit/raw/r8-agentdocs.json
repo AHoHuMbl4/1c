@@ -1,0 +1,78 @@
+{
+  "angle": "agentdocs",
+  "findings": [
+    {
+      "title": "Пять из семи агентов не имеют запрета менять состояние стенда, а serenedb-native прямо послан «проверять на инстансе» — при 🔴 инварианте CLAUDE.md об обратном",
+      "detail": "Инвариант CLAUDE.md: «На серверах состояние меняем только по явной инструкции владельца», и отдельно 🔴 «Опыты с ivf — только на отдельном --server_directory: незавершённая сборка уходит в WAL и роняет инстанс в петлю OOM при каждом старте». Запрет «не меняй состояние системы» записан только в двух агентах из семи — context-and-scale.md:119 и data-completeness.md:94. В boxed-ready.md, enforcement-in-code.md, hardcode-sniper.md, openclaw-native.md и serenedb-native.md такой строки нет вовсе, при том что у всех семи в frontmatter объявлен `tools: ... Bash`, а три файла (boxed-ready.md:48-49, enforcement-in-code.md:39-40, openclaw-native.md:19-20) дают готовую командную строку `ssh -i ~/.ssh/id_ed25519_1c root@192.168.56.42`, то есть root на живом стенде. Хуже всего в serenedb-native.md: он единственный, кого TARGET.md п.7/8 назначает доказательством штатности, и ему прямо предписано «Всё, найденное в доках, проверяй на инстансе перед тем, как предлагать» (стр. 43) и печатать «Проверено на инстансе: да/нет» (стр. 126) — при этом DSN в его же файле (стр. 50) ведёт суперпользователем postgres, а про отдельный `--server_directory` для опытов с индексом и про «только SELECT» в файле нет ни слова. Раздел «Чего не делать» (стр. 110-117) ограничивает только рекомендации, не действия. Итог: инструкция агента разрешает ровно то, что инвариант проекта запрещает, и агента при этом зовут именно тогда, когда речь о создании индексов и словарей.",
+      "evidence": "[код] .claude/agents/serenedb-native.md:43,50,126 (проверяй на инстансе; DSN user=postgres; «Проверено на инстансе») | [замер] grep -n 'не меняй\\|Не меняй\\|только чтение\\|server_directory' .claude/agents/*.md → только context-and-scale.md:119 и data-completeness.md:94 (плюс boxed-ready.md:16 и enforcement-in-code.md:32 — о правах пользователя 1С и ролях БД, не об агенте) | [код] CLAUDE.md, раздел «Инварианты проекта»: «На серверах состояние меняем только по явной инструкции владельца», «🔴 Опыты с ivf — только на отдельном --server_directory»",
+      "doc_locs": [
+        ".claude/agents/serenedb-native.md:43",
+        ".claude/agents/serenedb-native.md:50",
+        ".claude/agents/serenedb-native.md:110",
+        ".claude/agents/boxed-ready.md:49",
+        ".claude/agents/enforcement-in-code.md:40",
+        ".claude/agents/openclaw-native.md:20",
+        ".claude/agents/hardcode-sniper.md:96"
+      ],
+      "verdict": "a",
+      "verdict_why": "Инвариант в CLAUDE.md сформулирован верно; отстали инструкции агентов — в них не перенесена строка «только чтение, состояние не менять» и оговорка про отдельный --server_directory. Правится документ (файл агента), код продукта здесь ни при чём.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "serenedb-native §6 «возможности, которые мы не используем» — три пункта из шести давно внедрены: ранжирование, фаззи/подстрока со стеммингом, фразы со слопом",
+      "detail": "Раздел 6 назван в файле «твоя главная задача» и перечисляет штатные возможности движка, которых у нас якобы нет. Проверка по коду показывает обратное: (1) стр. 85 «модели ранжирования — их несколько, мы используем ранг по умолчанию» — в serene_ask.py:106-114 объявлена карта из шести штатных моделей (bm25, bm25_b0, tfidf, lm_jm, lm_dirichlet, dfi) с переключателем ASK_SCORER, а живой процесс ответов работает с ASK_SCORER=tfidf, то есть НЕ по умолчанию; (2) стр. 83-84 «фаззи и подстрочный поиск ... у нас вместо этого самодельный подбор префикса словами вопроса, потому что стемминг выключен» — самодельного подбора префикса больше нет (serene_ask.py:443 прямо пишет «Раньше здесь был цикл подбора длины префикса»), сейчас используются штатные ts_phrase / ts_levenshtein / ts_like (serene_ask.py:455-465), а стемминг не выключен: corpus_init.sql:90 создаёт ВТОРОЙ словарь со `stemming = true` специально для сопоставления слова человека с названием; (3) стр. 89 «фразы со слопом и булевы запросы — у нас только И и ИЛИ» — слоп-фраза строится в serene_ask.py:457 (`ts_phrase(%s, ARRAY[0,%d], %s)`). Четвёртый пункт того же списка — стр. 87 «ai_embed() прямо в SQL — у нас отдельный поход в облако из Python» — тоже неверен: ai_embed это боевой путь такта (embed_missing.sh:236, build.sh:70, corpus_precheck.sql:63); по докам это уже описано как F026, здесь новое только место — инструкция агента. Последствие конкретное: агента зовут перед каждым решением «своё или штатное», он получает ложную картину нашего кода и либо предлагает внедрять внедрённое, либо принимает уже сделанное за находку, а настоящие пробелы списком не подсвечены.",
+      "evidence": "[код] .claude/agents/serenedb-native.md:83-89 против ubuntu/serenedb/serene_ask.py:106-114,443,455-465 и ubuntu/serenedb/corpus_init.sql:90 | [замер] tr '\\0' '\\n' < /proc/3109129/environ | grep ASK_SCORER → ASK_SCORER=tfidf (живой процесс ответов на :8099) | [замер] psql 'host=127.0.0.1 port=7890 user=postgres dbname=postgres' -tAc \"SELECT DISTINCT function_name FROM duckdb_functions() WHERE function_name IN ('ts_compound','ts_like','ts_dict_agg','ts_dict_count','ts_dict_score','sparse_ngram')\" → ts_compound, ts_dict_agg, ts_dict_count, ts_dict_score, ts_like",
+      "doc_locs": [
+        ".claude/agents/serenedb-native.md:83",
+        ".claude/agents/serenedb-native.md:85",
+        ".claude/agents/serenedb-native.md:87",
+        ".claude/agents/serenedb-native.md:89"
+      ],
+      "verdict": "a",
+      "verdict_why": "Код ушёл вперёд (штатные модели ранжирования, ts_phrase/ts_levenshtein/ts_like, второй словарь со стеммингом, ai_embed в такте) — отстал текст инструкции агента. Контракт TARGET.md ничем не нарушен, править надо файл агента.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "boxed-ready меряет охват сущностей по ПЕРВОЙ базе (postgres), а бот отвечает по второй (ut_test): 292 таблицы против 1624",
+      "detail": "В §2 «Отбор данных» агенту дана готовая проверка «сколько реально в витрине»: psql ... \"SELECT count(*) FROM duckdb_tables() WHERE database_name='postgres'\" (стр. 53-54). Фильтр по базе жёстко зашит в инструкцию, а боевой контур с 30.07 отвечает по второй базе: у живого процесса ответов SERENEDB_DSN_RO ... dbname=ut_test. По замеру в базе postgres 292 таблицы, в ut_test — 1624. То есть страж коробки, чья задача ответить «сколько сущностей базы попало в работу», посчитает витрину базы, которая в ответах клиенту не участвует, и выдаст заведомо не тот числитель и знаменатель. Это тот самый разрез, из-за которого доки уже закрывали дефект охвата цифрами первой базы. Соседняя строка того же блока (стр. 51, /tmp/meta.xml) уже записана как F074 — здесь другая строка и другая причина: не отсутствующий файл, а привязка к базе, выведенной из боевого пути. Тот же класс в data-completeness.md:46-48: рецепт «сколько в 1С / сколько доехало» написан под один $ODATA и один $DSN, тогда как шлюзов на стенде два (:6011 и :6021) и баз тоже две.",
+      "evidence": "[код] .claude/agents/boxed-ready.md:53-54 | [замер] psql 'host=127.0.0.1 port=7890 user=postgres dbname=postgres' -tAc \"SELECT database_name, schema_name, count(*) FROM duckdb_tables() GROUP BY 1,2\" → postgres|public|292 и ut_test|public|1624 | [замер] tr '\\0' '\\n' < /proc/3109129/environ | grep SERENEDB_DSN_RO → host=127.0.0.1 port=7890 user=serene_ro dbname=ut_test",
+      "doc_locs": [
+        ".claude/agents/boxed-ready.md:53",
+        ".claude/agents/data-completeness.md:46"
+      ],
+      "verdict": "a",
+      "verdict_why": "Стенд переехал на вторую базу, инструкция агента осталась на первой — правится инструкция. Само по себе расхождение баз уже разобрано отдельно (F003), здесь новое — что измерительный рецепт агента коробки привязан к нерабочей базе.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Хук-снайпер на коммите объявляет «велосипедом» ts_like — штатную функцию движка, которую боевой код использует по итогам замера",
+      "detail": "В .claude/settings.json единственный хук, который смотрит ВЕСЬ дифф (type: agent, PreToolUse/Bash), в пункте 1 своего промта перечисляет признаки велосипеда: «свой цикл вместо ts_compound, свои счётчики вместо ts_dict_*, свой ts_like вместо sparse_ngram, свой отбор списком вместо отбора в базе». Первые два и четвёртый корректны, третий — нет. ts_like это штатная функция движка (есть в duckdb_functions нашей сборки 26.07.3) и именно она стоит в боевом пути отбора: serene_ask.py:465 строит вариант «part» через ts_like, а комментарий рядом (стр. 438-443) фиксирует замер, ради которого её и выбрали вместо самодельного подбора префикса. При этом sparse_ngram функцией в нашей сборке не является: в duckdb_functions его нет (семейство ngram представлено ts_ngram и ngram_matches), в бинарнике строка встречается ровно один раз — то есть это в лучшем случае опция словаря, а не замена ts_like. Следствие: любой коммит, трогающий отбор в serene_ask.py, получает от хука ложную находку «велосипед», а ложная находка гейта обесценивает сам гейт — по правилу TARGET.md п.21 «проверка, отвергнувшая верное, считается дефектом проверки».",
+      "evidence": "[код] .claude/settings.json:48 (промт агент-хука, пункт 1) против ubuntu/serenedb/serene_ask.py:438-443,465 | [замер] psql ... -tAc \"SELECT DISTINCT function_name FROM duckdb_functions() WHERE function_name LIKE '%ngram%' OR function_name LIKE 'ts_like%'\" → ngram_matches, ts_like, ts_ngram (sparse_ngram отсутствует) | [замер] strings /opt/serenedb-dist/serenedb-26.07.3-linux-amd64/usr/bin/serened | grep -ci sparse_ngram → 1",
+      "doc_locs": [
+        ".claude/settings.json:48",
+        ".claude/agents/serenedb-native.md:83"
+      ],
+      "verdict": "a",
+      "verdict_why": "Критерий в промте хука отстал от кода и от состава функций сборки 26.07.3; правится текст промта в settings.json (инфраструктура сессии, не продуктовый код). Проверить, что имелось в виду под «своим ts_like», без владельца нельзя — если это про самодельный LIKE, формулировку всё равно надо однозначно переписать.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "AGENT_FINDINGS_STATUS ведёт статус находок только четырёх агентов из семи: boxed-ready, data-completeness и context-and-scale в документе отсутствуют",
+      "detail": "CLAUDE.md, таблица «Куда что писать», строка «Закрыл находку агента» → docs/AGENT_FINDINGS_STATUS.md — статус пункта. В самом документе разделы заведены ровно под четыре агента: enforcement-in-code (стр. 27), hardcode-sniper (стр. 54), serenedb-native (стр. 76), openclaw-native (стр. 95). Трёх агентов из семи в документе нет вовсе — boxed-ready, data-completeness и context-and-scale, причём именно они закрывают пункты контракта 13 (полнота), 14 (два ручных действия) и 19 (что уходит в модель). Их находки закрывать формально некуда: правило CLAUDE.md для них не исполнимо, а по прошлым отчётам этих агентов (docs/STATE_2026-07-26.md:99 ссылается на context-and-scale, docs/PLAN_BOXED.md:145 — на boxed-ready) статуса «закрыто/открыто» нигде не ведётся.",
+      "evidence": "[замер] grep -n '^#\\+ ' /srv/1c/docs/AGENT_FINDINGS_STATUS.md → разделы только по enforcement-in-code:27, hardcode-sniper:54, serenedb-native:76, openclaw-native:95 | [замер] ls /srv/1c/.claude/agents/*.md → 7 файлов (boxed-ready, context-and-scale, data-completeness, enforcement-in-code, hardcode-sniper, openclaw-native, serenedb-native) | [код] CLAUDE.md, таблица «По типу изменения», строка «Закрыл находку агента»",
+      "doc_locs": [
+        "docs/AGENT_FINDINGS_STATUS.md:27",
+        "docs/AGENT_FINDINGS_STATUS.md:95",
+        "CLAUDE.md:101"
+      ],
+      "verdict": "a",
+      "verdict_why": "Агентов стало семь, документ статусов остался на четырёх — отстал документ. Требование CLAUDE.md верно и менять его не нужно, нужно завести недостающие разделы (или явно записать, что для этих трёх агентов статус ведётся в другом месте).",
+      "severity": "low",
+      "known_fid": ""
+    }
+  ]
+}

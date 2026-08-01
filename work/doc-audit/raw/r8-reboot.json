@@ -1,0 +1,80 @@
+{
+  "angle": "reboot",
+  "findings": [
+    {
+      "title": "После перезагрузки бот немеет: единственный мост ask_1c бьёт в порт, которого не будет, а поднявшийся сервис ответов слушает другой порт и отвечает по ДРУГОЙ базе",
+      "detail": "Картина боевого пути ответа после ребута, установленная по конфигурации (ничего не перезагружалось). Telegram → openclaw-gateway (user-юнит undebot, linger=yes — поднимется) → openclaw.json знает ровно два MCP: report_1c на :6015 и ask_1c на :6016. Юнит 1c-mcp-ask задаёт ASK_URL=http://127.0.0.1:8099. На :8099 сейчас сидит осиротевший процесс serene_ask.py (PID 3109129) в cgroup сессии SSH (session-247653.scope) — ребут его убивает, юнита для него нет, и ни одна строка в /etc не содержит ни числа 8099 (кроме юнита моста), ни ASK_LISTEN_PORT, ни SERENEDB_DSN_RO. Значит после ребута ask_1c получает connection refused на каждый вопрос — ровно тот отказ, ради ухода от которого мост и заводили (комментарий в 1c-mcp-ask.service: «порт не слушал, и бот на любой вопрос отвечал „сервер 1С не отвечает“»). Одновременно enabled-юнит 1c-serene-ask поднимется — но не туда и не по той базе: ASK_LISTEN_PORT нигде не задан → serene_ask.py:52 берёт дефолт 8091; SERENEDB_DSN_RO нигде не задан → serene_ask.py:42 берёт дефолт «dbname=postgres» — ПЕРВУЮ базу (Бухгалтерия), тогда как боевая по решению владельца 30.07 — ut_test; ASK_SCORER из /etc/1c-serene-ask.env = dfi, а живой процесс работает на tfidf (F008) — значит и функция ранжирования сменится молча. Итог: после ребута у бота остаётся один рабочий инструмент — report_1c (:6015, NL→SQL, выведенный решением владельца 26.07), и тоже по первой базе. Боевая конфигурация ответа (порт 8099 + DSN ut_test) не восстанавливается ничем: её нет ни в одном файле на диске.",
+      "evidence": "[код] /etc/systemd/system/1c-mcp-ask.service: Environment=ASK_URL=http://127.0.0.1:8099 | [код] /opt/1c-mcp-reports/serene_ask.py:52 — LISTEN_PORT=int(os.environ.get(\"ASK_LISTEN_PORT\", \"8091\")); :42 — DSN=os.environ.get(\"SERENEDB_DSN_RO\", \"host=127.0.0.1 port=7890 user=serene_ro dbname=postgres\") | [замер] grep -rl \"8099|ASK_LISTEN_PORT|SERENEDB_DSN_RO\" /etc → единственный файл: /etc/systemd/system/1c-mcp-ask.service (drop-in каталогов 1c-serene-ask.service.d нет) | [замер] tr -d '\\0' </proc/3109129/cgroup → 0::/user.slice/user-0.slice/session-247653.scope (процесс :8099 живёт в scope SSH-сессии, PPID=1) | [замер] systemctl is-enabled/is-active 1c-serene-ask → enabled / inactive | [замер] ss -ltnp → :8091 не слушает никто, :8099 — python3 pid=3109129 | [замер] openclaw.json:143,157 — mcp.servers ровно два: 127.0.0.1:6015 (report_1c) и 127.0.0.1:6016 (ask_1c) | [замер] sha256 первых 12 символов ASK_TOKEN совпадает в /etc/1c-serene-ask.env и /etc/1c-mcp-ask.env — то есть дело не в токене, а именно в порте и базе | [код] /etc/1c-serene-ask.env: ASK_SCORER=dfi",
+      "doc_locs": [
+        "docs/RUNBOOK_DEPLOY.md:295",
+        "docs/RUNBOOK_DEPLOY.md:304",
+        "docs/ARCHITECTURE.md:166",
+        "docs/ARCHITECTURE.md:85",
+        "README.md:62",
+        "memory_bank/productContext.md:11"
+      ],
+      "verdict": "a",
+      "verdict_why": "Доки в четырёх местах обещают «после ребута стек поднимается сам», «всё восстанавливается без ручных действий». По конфигурации ребут не восстанавливает боевой путь ответа, а ухудшает его: было «отвечает по ut_test через :8099», станет «ask_1c не отвечает вовсе, а поднятый сервис ответов смотрит в первую базу другим скорером». F002/F110 фиксируют текущее состояние (осиротевший процесс, конфигурация только в его окружении) — здесь установлено, во что именно это превращается после перезагрузки и чем доказано.",
+      "severity": "high",
+      "known_fid": "F002"
+    },
+    {
+      "title": "Ручная остановка конвейера свежести ребут не переживает: такт сам возобновится через 3 минуты после старта, раз в минуту и по НЕ боевой базе",
+      "detail": "Сейчас 1c-serene-pipeline.timer inactive, сервис failed с 29.07 — состояние, оставленное человеком. Ребут это состояние стирает: таймер enabled и имеет симлинк в timers.target.wants, поэтому стартует вместе с системой, OnBootSec=3min даёт первый такт на третьей минуте после загрузки, а OnUnitInactiveSec=1min — далее по такту в минуту бессрочно, включая случай, когда каждый такт падает. Обслуживает такт ПЕРВУЮ базу: в /etc/1c-serene-sync.env ETL_ODATA_BASE=http://127.0.0.1:6011 (шлюз первой базы) и SERENEDB_DSN с dbname=postgres. Боевой второй базы (ut_test) конвейер не касается — юнита/таймера/env для неё нет вовсе. То есть после ребута свежесть выглядит работающей (такты идут, журнал полон), но обновляется база, по которой бот не отвечает, а боевая продолжает стареть; такт при этом тратит ключи эмбеддера и пишет CSV в каталог движка. Заметить это некому: 1c-bot-monitor.timer затикает на второй минуте, но проверяет не этот путь.",
+      "evidence": "[код] systemctl cat 1c-serene-pipeline.timer → OnBootSec=3min, OnUnitInactiveSec=1min, Persistent=true, [Install] WantedBy=timers.target | [замер] ls -l /etc/systemd/system/timers.target.wants/ → 1c-serene-pipeline.timer -> /etc/systemd/system/1c-serene-pipeline.timer (симлинк от 28.07) | [замер] systemctl is-enabled/is-active 1c-serene-pipeline.timer → enabled / inactive; systemctl status 1c-serene-pipeline.service → «Active: failed (Result: signal) since Wed 2026-07-29 07:32:47» | [код] /etc/1c-serene-sync.env: ETL_ODATA_BASE=http://127.0.0.1:6011, SERENEDB_DSN ... user=postgres dbname=postgres | [замер] systemctl list-timers --all → из наших после ребута затикают только 1c-serene-pipeline и 1c-bot-monitor; 1c-etl.timer, 1c-serene-sync.timer, 1c-serene-index.timer — disabled",
+      "doc_locs": [
+        "docs/RUNBOOK_DEPLOY.md:39",
+        "docs/RUNBOOK_DEPLOY.md:295",
+        "docs/RUNBOOK_DEPLOY.md:304",
+        "docs/ARCHITECTURE.md:161"
+      ],
+      "verdict": "a",
+      "verdict_why": "Ни один документ не описывает, что «остановлено руками» — состояние, которое живёт до первой перезагрузки. RUNBOOK §0 подаёт pipeline как 🟢 боевой такт, §9 обещает, что после ребута всё встаёт само; на деле встанет ровно то, что уже признано неверно нацеленным (F001 — конвейер стоит, F157 — вторая база не обслуживается), и будет крутиться в минуту без надзора. Новое здесь — что перезагрузка возвращает это сама, без человека.",
+      "severity": "high",
+      "known_fid": "F001"
+    },
+    {
+      "title": "Ни один юнит не защищает движок от перезагрузки посреди такта и не проверяет его готовность: зависимости — Wants/After при Type=simple",
+      "detail": "serenedb.service — Type=simple, значит для systemd «запущен» = процесс форкнулся, а не «принимает соединения»; каталог данных 12 ГБ. Все зависимые (1c-serene-ask, 1c-serene-pipeline, 1c-mcp-reports) связаны с ним только After= и Wants= — ни Requires=, ни BindsTo=, ни какой-либо проверки готовности. Поэтому на буте сервис ответов и первый такт (boot+3min) стартуют независимо от того, поднялся ли движок: если serened не встал, ask вернёт ошибку соединения, а такт упадёт — и это ничем не отличается от «встал и отвечает». Обратная сторона — выключение: при OnUnitInactiveSec=1min шанс, что перезагрузка придётся на идущий такт, близок к единице, а такт получает SIGTERM посреди записи в движок. Это уже происходило: 29.07 сервис конвейера убит сигналом TERM прямо на шаге «синк витрины». Инвариант проекта прямо говорит, чем это грозит: незавершённая работа уходит в WAL и роняет инстанс в петлю OOM при каждом старте. То есть самый вероятный сценарий отказа после перезагрузки — не «сервис не встал», а «движок не встал», и ни один документ по ребуту его не рассматривает.",
+      "evidence": "[код] systemctl cat serenedb.service → [Service] Type по умолчанию simple, Restart=always, ExecStart=/usr/local/bin/serened --flagfile=/etc/serenedb/serened.conf | [код] 1c-serene-ask.service: After=network.target serenedb.service, Wants=serenedb.service (Requires нет); 1c-serene-pipeline.service: то же | [замер] journalctl -u 1c-serene-pipeline -n 25 → «Jul 29 07:32:47 … Main process exited, code=killed, status=15/TERM» на шаге «== синк витрины (дельта из 1С)» | [замер] du -sh /var/lib/serenedb → 12G | [док] CLAUDE.md, инварианты: «Сборка не прерывается ничем, кроме рестарта движка; незавершённая работа уходит в WAL и роняет инстанс в петлю OOM при каждом старте»",
+      "doc_locs": [
+        "docs/RUNBOOK_DEPLOY.md:294",
+        "docs/RUNBOOK_DEPLOY.md:304",
+        "docs/ARCHITECTURE.md:158",
+        "CLAUDE.md:176"
+      ],
+      "verdict": "a",
+      "verdict_why": "Обещание «после ребута любой машины стек поднимается сам» опирается на признак enabled и ни на что больше: готовность движка никем не проверяется, а известный проектный способ уронить движок (обрыв такта на записи) наступает при перезагрузке почти гарантированно из-за такта раз в минуту. F152 знает про SIGTERM 29.07 как причину падения синка; здесь — что это штатное следствие любой перезагрузки и что порядок юнитов от него не защищает.",
+      "severity": "medium",
+      "known_fid": "F152"
+    },
+    {
+      "title": "Раскладка кода в /opt никого не перезапускает — перезагрузка работает как незапланированная выкатка боевого кода ответов",
+      "detail": "Каждый такт конвейера первым шагом раскладывает код из рабочего дерева репозитория в /opt/1c-mcp-reports (SERENE_SRC_DIR=/srv/1c/ubuntu/serenedb задан в /etc/1c-serene-sync.env). В набор попадают не только скрипты сборки, но и serene_ask.py — код боевого сервиса ответов — и mcp_reports.py. При этом ни pipeline.sh, ни deploy.sh не делают ни одного systemctl restart: долгоживущие сервисы продолжают исполнять версию, загруженную при старте. Отсюда два следствия для перезагрузки. Первое: моментом, когда разложенный код впервые начинает исполняться, оказывается ребут — то есть перезагрузка меняет поведение боевых ответов на код, который мог накопиться за дни и никогда не проверялся замером. Второе: на буте порядок обратный — сервис стартует со старого /opt, а через 3 минуты такт кладёт поверх новый файл, и снова «исполняется не то, что лежит». Сейчас файлы совпадают (замер), но это совпадение времени, а не устройство: /opt/…/serene_ask.py имеет mtime 31.07 04:50:53, а процесс стартовал 04:50:55 — то есть его подняли руками сразу после раскладки.",
+      "evidence": "[код] /opt/1c-mcp-reports/pipeline.sh:20-23 — вызов \"$SERENE_SRC_DIR/deploy.sh\" /opt/1c-mcp-reports | [код] /srv/1c/ubuntu/serenedb/deploy.sh — копирует \"$SRC\"/*.sh *.sql *.py *.tsv, ни одного systemctl в файле | [замер] ls /srv/1c/ubuntu/serenedb/ → в наборе serene_ask.py и mcp_reports.py | [код] /etc/1c-serene-sync.env: SERENE_SRC_DIR=/srv/1c/ubuntu/serenedb | [замер] stat -c '%y' /opt/1c-mcp-reports/serene_ask.py → 2026-07-31 04:50:53; ps -o lstart= -p 3109129 → Fri Jul 31 04:50:55 2026 | [замер] cmp репо vs /opt по serene_ask.py, mcp_reports.py, serene_sync.py, build.sh, corpus_merge.sql → одинаково",
+      "doc_locs": [
+        "docs/RUNBOOK_DEPLOY.md:402",
+        "docs/RUNBOOK_DEPLOY.md:295",
+        "MAP.md:22"
+      ],
+      "verdict": "a",
+      "verdict_why": "Раздел «Сервисы (reboot-safe)» и обещание zero-touch трактуют перезагрузку как безвредное восстановление прежнего состояния. На деле это единственный момент, когда разложенный, но не перезапущенный код вступает в силу, — то есть перезагрузка тихо выкатывает боевой сервис ответов. F133 знает, что правило «замер до выката» ловит только scp/rsync; здесь — что настоящим триггером выката является ребут, и что deploy.sh кладёт в /opt в том числе код сервиса ответов.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Из выведенного слоя braine перезагрузка поднимает PostgreSQL 16 с его базами, хотя ни один живой компонент к нему не ходит",
+      "detail": "Слой braine объявлен выведенным из контура 26.07 («освободилось 972 МБ»), и его юниты действительно disabled: open-webui, oikb, rerank-shim, api, kb-poll, tg-bridge. Кроме одного: postgresql.service остался enabled и работает, а после перезагрузки поднимется снова — вместе с базами openwebui и mem0, то есть данными выведенного слоя. Ни один живой сервис к :5432 не подключается: все боевые DSN идут на 127.0.0.1:7890 (SereneDB). Побочный эффект — лишний слушающий сервер БД на стенде и расхождение с описанием состава сервисов, где postgresql перечислен внутри погашенного блока braine.",
+      "evidence": "[замер] systemctl is-enabled postgresql → enabled; systemctl list-units --state=running → postgresql@16-main.service running | [замер] sudo -u postgres psql -tAc \"select datname, pg_size_pretty(pg_database_size(datname)) from pg_database\" → mem0|7575 kB, openwebui|19 MB, postgres|7503 kB | [замер] systemctl is-enabled для open-webui, oikb, rerank-shim, api, kb-poll, tg-bridge → disabled у всех | [код] /etc/1c-mcp-reports.env, /etc/1c-serene-sync.env — все DSN на host=127.0.0.1 port=7890",
+      "doc_locs": [
+        "docs/RUNBOOK_DEPLOY.md:30",
+        "docs/RUNBOOK_DEPLOY.md:296",
+        "docs/ARCHITECTURE.md:160"
+      ],
+      "verdict": "b",
+      "verdict_why": "Само по себе безвредно (25 МБ RSS), но это остаток выведенного слоя, который переживает ребут вопреки формулировке «слой выведен, освободилось 972 МБ», и он же попал в оба списка «что переживает ребут» — там postgresql назван нужным. F032 фиксирует, что список enabled-юнитов в ARCHITECTURE §6 устарел в сторону мёртвых; здесь обратный случай — единственный braine-юнит, который после ребута действительно встанет. Решение «сносить или оставить» — владельца.",
+      "severity": "low",
+      "known_fid": "F032"
+    }
+  ]
+}
