@@ -1,0 +1,105 @@
+{
+  "angle": "git",
+  "findings": [
+    {
+      "title": "Установщик 1.1.0 объявлен готовым в закоммиченных доках, а сам код и бинарь висят незакоммиченными вторые сутки",
+      "detail": "CHANGELOG.md и memory_bank/progress.md закоммичены (59ea77c, 4eb582c) и утверждают: «setup-1c-odata.exe 1.1.0 — префлайт, два варианта состава, связь с Ubuntu», «Бинарь: windows/odata-setup/dist/setup-1c-odata.exe (1.1.0)». В git этого нет: src/Program.cs, src/Steps.cs, src/Sys.cs, dist/setup-1c-odata.exe, README.md, example.ini и work/installer-exe/PLAN.md лежат только в рабочем дереве (M, 453 вставки). В HEAD-версии бинаря нет ни строки ubuntu-host, в рабочей — есть, и есть версия 1.1.0. То есть любой, кто склонирует репозиторий или откатит дерево, получит доки про 1.1.0 и бинарь 1.0 — а README:180 обещает «готовый бинарь из репозитория, можно запускать сразу». Работа сделана 30.07, сегодня 01.08.",
+      "evidence": "[замер] git status --porcelain → ' M windows/odata-setup/src/{Program,Steps,Sys}.cs, dist/setup-1c-odata.exe, README.md, setup-1c-odata.example.ini; M work/installer-exe/PLAN.md; M docs/PLAN_AUTONOMY.md' | [замер] git diff --stat HEAD -- CHANGELOG.md memory_bank/progress.md → пусто (обе закоммичены) | [замер] git show HEAD:windows/odata-setup/dist/setup-1c-odata.exe | strings -el | grep -c ubuntu-host → 0; strings -el windows/odata-setup/dist/setup-1c-odata.exe | grep -E '1.1.0|--ubuntu-host|--external-url|--skip-scope' → все найдены | [код] windows/odata-setup/src/Sys.cs:22 ToolVersion = \"1.1.0\" (файл не в git)",
+      "doc_locs": ["CHANGELOG.md:293", "CHANGELOG.md:307", "memory_bank/progress.md:246", "memory_bank/progress.md:248", "windows/odata-setup/README.md:180", "docs/PLAN_AUTONOMY.md:300"],
+      "verdict": "b",
+      "verdict_why": "Прямое указание владельца 28.07, зафиксированное в CLAUDE.md: «Шаг закончен — коммит и push в origin/main. Не после серии, не когда закончу тему», и причина названа там же — ночью полчаса незакоммиченной работы снёс таймер. Здесь незакоммиченными висят двое суток работы со своим замером, при том что доки о ней уже уехали в origin. Док править нельзя — надо коммитить код.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Двойник юнита 1c-serene-index в репозитории: RUNBOOK разворачивает устаревшую копию с питоновским сборщиком, снёсшим корпус 28.07",
+      "detail": "Один и тот же юнит лежит в git дважды: ubuntu/systemd/1c-serene-index.service (боевой, ExecStart=/opt/1c-mcp-reports/build.sh, TimeoutStartSec=3600, побайтно равен /etc) и ubuntu/serenedb/systemd/1c-serene-index.service (ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_search_build.py). Таймер тоже задвоен: боевой — OnUnitActiveSec=20min, репозиторный из serenedb/ — OnCalendar 03:55. RUNBOOK_DEPLOY.md:405 велит ставить именно устаревшую пару: cp ubuntu/serenedb/systemd/1c-serene-index.{service,timer} /etc/systemd/system/. MAP.md:111 указывает на другую копию. Развернувший по руководству получит обратно тот самый сборщик, который DROP+CREATE снёс корпус и индекс в 03:55 28.07 (об этом написано в шапке боевого юнита), и ночное расписание вместо 20-минутного. Скрипт serene_search_build.py при этом жив и в git, и в /opt.",
+      "evidence": "[замер] diff ubuntu/systemd/1c-serene-index.service ubuntu/serenedb/systemd/1c-serene-index.service → ExecStart: build.sh против venv/bin/python serene_search_build.py | [замер] diff ubuntu/serenedb/systemd/1c-serene-index.timer /etc/systemd/system/1c-serene-index.timer → OnCalendar 03:55 против OnBootSec=5min + OnUnitActiveSec=20min | [замер] cmp ubuntu/systemd/1c-serene-index.service /etc/... → идентичны (боевая копия — ubuntu/systemd/) | [код] docs/RUNBOOK_DEPLOY.md:405",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:405", "MAP.md:111", "ubuntu/serenedb/systemd/1c-serene-index.service:22", "ubuntu/serenedb/systemd/1c-serene-index.timer:5"],
+      "verdict": "b",
+      "verdict_why": "Исполнение руководства как написано нарушает TARGET.md п.17 (свежесть не позднее 20 минут — вернётся ночное 03:55) и п.20 (питоновский сборщик читает корпус наружу и пишет обратно, за что он и выведен). Устаревшую копию надо убрать из репозитория, а не описывать её в доке.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Боевые ключи и токен телеграм-бота лежат внутри /srv/1c/credentials/ с правами 644, при инварианте «секреты только в /etc/*.env, 600»",
+      "detail": "В рабочем дереве репозитория есть каталог credentials/ с шестью .env: alibaba (DashScope), deepseek, gitlab-1c-test, gitlab-openclaw, mcp-toolkit, telegram-1c-bot. Все — 644 ubuntu:users, каталог /srv/1c тоже 755, то есть любой локальный пользователь читает их. В git они не попали ни разу (проверено по всей истории), .gitignore их прячет — но именно это и делает нарушение невидимым при обычном ревью репозитория. Доки расходятся сами с собой: MAP.md:200, ARCHITECTURE.md:188, TARGET_ARCHITECTURE.md:122 и techContext.md:18 объявляют местом секретов /etc/*.env с 600, а techContext.md:129 закрепляет credentials/ как штатное хранилище и перечисляет содержимое поимённо (вплоть до owner id бота). Заодно /etc/1c-bot-monitor.env стоит 644, тогда как остальные тринадцать /etc/1c-*.env — 600.",
+      "evidence": "[замер] stat -c '%a %U:%G %n' credentials/* → 644 ubuntu:users для alibaba.env, deepseek.env, gitlab-1c-test.env, gitlab-openclaw.env, mcp-toolkit.env, telegram-1c-bot.env | [замер] ls -ld /srv/1c → drwxr-xr-x | [замер] git log --all --diff-filter=A --name-only | grep credentials/ → пусто (в историю не попадали) | [замер] ls -l /etc/1c-*.env → 1c-bot-monitor.env 644, остальные 600",
+      "doc_locs": ["memory_bank/techContext.md:129", "memory_bank/techContext.md:18", "MAP.md:200", "docs/ARCHITECTURE.md:188", "docs/TARGET_ARCHITECTURE.md:122", "docs/HANDOFF_CHECK_1.md:38"],
+      "verdict": "b",
+      "verdict_why": "Инвариант проекта в CLAUDE.md: «Секреты — в /etc/*.env с правами 600, никогда в git и никогда в командной строке». Здесь секреты вне /etc и с правами 644. Док (techContext.md:129), который называет credentials/ штатным местом, под это состояние править нельзя — это описание нарушения, а не нормы.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "В незакоммиченной правке установщика адреса нашего стенда стали действующими значениями примера и рекомендованной командой в README",
+      "detail": "До правки в setup-1c-odata.example.ini обе сетевые строки были закомментированы (# external-url = http://192.168.56.1:6003/...). После — ubuntu-host = 192.168.56.42 и external-url = http://192.168.56.1:6003/1c/odata/standard.odata/ стоят раскомментированными, то есть клиент, скопировавший пример, молча получит адреса нашей лаборатории. README «Быстрый старт» усилил это: все три команды теперь показаны с --ubuntu-host 192.168.56.42 и --external-url http://192.168.56.1:6003/..., хотя до правки быстрый старт был без адресов вовсе.",
+      "evidence": "[код] windows/odata-setup/setup-1c-odata.example.ini:37 'ubuntu-host = 192.168.56.42', :40 'external-url = http://192.168.56.1:6003/1c/odata/standard.odata/' | [замер] git diff -- windows/odata-setup/setup-1c-odata.example.ini → строки '# external-url = ...' и 'backup-dir'/'no-backup' заменены на раскомментированные ubuntu-host/external-url | [код] windows/odata-setup/README.md:19,23,28",
+      "doc_locs": ["windows/odata-setup/setup-1c-odata.example.ini:37", "windows/odata-setup/setup-1c-odata.example.ini:40", "windows/odata-setup/README.md:19", "windows/odata-setup/README.md:23", "windows/odata-setup/README.md:28"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п.14: инсталлятор — «без хардкода, на любой базе», и инвариант CLAUDE.md «Без хардкода: настройка, которую человек может заполнить только зная конкретную базу, — такой же дефект, как имя в коде». Адрес чужого стенда как действующее значение примера — ровно это. Правка ещё не закоммичена, поймать дешевле всего сейчас.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Правило «коммит и push после каждого шага» не держится ни одним хуком, а check-docs.sh ловит только обратный случай",
+      "detail": "check-docs.sh срабатывает на git commit и просит подтверждения, когда в индексе есть код и нет ни одного .md. Симметричного контроля нет: коммит из одних доков, описывающих несуществующий в git код, проходит молча — именно так 30.07 уехали CHANGELOG и progress про 1.1.0 без самого 1.1.0. SessionStart-хук вбрасывает раздел activeContext, но git status не показывает, поэтому новая сессия не узнаёт, что в дереве висит чужая незакоммиченная работа (и, по HOW_NOT_TO §2.16 и §2.17, дважды уже пыталась её захватить или спрятать). Итого главное операционное правило проекта держится только текстом.",
+      "evidence": "[код] .claude/hooks/check-docs.sh:28 'if [ -z \"$CODE\" ] || [ -n \"$DOCS\" ]; then echo {}; exit 0; fi' — доки без кода пропускаются без вопроса | [код] .claude/hooks/session-start.sh — весь вывод хука это раздел «С ЧЕГО НАЧАТЬ», обращений к git нет | [замер] git status показывает 8 изменённых файлов, ни один хук об этом не сообщает",
+      "doc_locs": [".claude/hooks/check-docs.sh:28", ".claude/hooks/session-start.sh:12", "CLAUDE.md:0"],
+      "verdict": "b",
+      "verdict_why": "Инвариант CLAUDE.md и правило владельца: «Запреты держатся кодом, а не промтом; любые правила, основанные на промте, НЕ РАБОТАЮТ». Правило коммита названо 🔴-обязательным, но кодом не подпёрто, и первый же случай (находка 1) показал, что промтом оно не удержалось.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Незакоммиченный PLAN.md вводит собственное правило «коммит по слову владельца», отменяющее правило CLAUDE.md",
+      "detail": "В конце work/installer-exe/PLAN.md появился абзац: «Коммит/push — по слову владельца (в этой сессии не делался автоматически из-за параллельных агентов; артефакты в git working tree)». CLAUDE.md требует обратного: шаг закончен — коммит и push, и разрешения владельца на это не ждут. Довод про параллельных агентов верен узко (git add -A и git stash действительно цепляли чужую работу — HOW_NOT_TO §2.16, §2.17), но из него не следует «не коммитить»: коммит конкретных путей (git commit -- путь) чужого дерева не трогает. Рассуждение подменило правило, и результат — находка 1.",
+      "evidence": "[код] work/installer-exe/PLAN.md:226-227 | [код] CLAUDE.md, раздел «🔴 Коммит и push — после КАЖДОГО законченного шага»: «Шаг закончен — коммит и push в origin/main. Не после серии, не «когда закончу тему»»",
+      "doc_locs": ["work/installer-exe/PLAN.md:226", "docs/HOW_NOT_TO.md:1231", "docs/HOW_NOT_TO.md:1557"],
+      "verdict": "b",
+      "verdict_why": "Инвариант CLAUDE.md «Несогласие с правилом — вопрос владельцу, а не решение»: исполнять свою версию вместо правила запрещено. Здесь своя версия ещё и записана в документ как норма. Убирать надо запись, а не правило.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Десять юнитов существуют только на стенде и отсутствуют в git — стенд из репозитория не воспроизводится",
+      "detail": "В /etc/systemd/system есть api, kb-poll, oikb, open-webui, rerank-shim, tg-bridge, gsheets-sync.service/.timer, nightly-eval.service/.timer — ни одного файла с такими именами в репозитории нет (git ls-files и find по ubuntu/ пусты). Все они сейчас disabled/static и inactive, то есть вреда не наносят, но: (а) поставить систему заново по репозиторию нельзя — часть контура нигде не описана файлами; (б) снять их по репозиторию тоже нельзя — нечего удалять; (в) доки продолжают их упоминать как часть установки (UBUNTU_SETUP §2 «Таймеры: nightly-eval.timer, gsheets-sync.timer», RUNBOOK_DEPLOY §7). Остальные 11 наших юнитов в репозитории есть и побайтно совпадают с /etc.",
+      "evidence": "[замер] для каждого /etc/systemd/system/*.{service,timer} проверено find /srv/1c/ubuntu -name <имя> → без копии в репо: api.service (disabled), kb-poll.service (disabled), oikb.service (disabled), open-webui.service (disabled), rerank-shim.service (disabled), tg-bridge.service (disabled), gsheets-sync.service (static)/gsheets-sync.timer (disabled), nightly-eval.service (static)/nightly-eval.timer (disabled) | [замер] остальные (1c-config-ui, 1c-etl x2, 1c-gateway, 1c-odata-gateway, 1c-odata-gateway@, 1c-mcp-ask, 1c-mcp-braine, 1c-mcp-reports, 1c-serene-ask, 1c-serene-sync x2, 1c-serene-pipeline x2, 1c-bot-monitor x2, serenedb) — идентичны репозиторным",
+      "doc_locs": ["docs/UBUNTU_SETUP.md:28", "docs/RUNBOOK_DEPLOY.md:271", "docs/RUNBOOK_DEPLOY.md:41", "docs/ARCHITECTURE.md:64"],
+      "verdict": "v",
+      "verdict_why": "Неясно, как задумано: это остатки выведенного braine (тогда их надо снести со стенда и вычистить из доков) или сознательно сохранённая история установки (тогда файлы обязаны лежать в репозитории, иначе «поставил и работает» не проверяемо). Решение о судьбе выведенного слоя — за владельцем.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Выкатка персоны затрёт живой AGENTS.md репозиторным, вдвое короче, и копию не сохранит",
+      "detail": "Новое к уже известному расхождению персоны: deploy_instance.sh:30 копирует instance/AGENTS.md в рабочую папку бота безусловно («Персона — из репозитория, всегда»), а резервную копию делает только для чужих заготовок (BOOTSTRAP/SOUL/IDENTITY/TOOLS/USER — в $WS/.replaced-by-deploy). Для AGENTS.md резервирования нет. Репозиторная версия 3 867 байт, живая 9 416 байт от 31.07 — то есть первый же запуск выкатки уничтожит 5,5 КБ боевой персоны без следа, и восстановить будет неоткуда, потому что в git её нет.",
+      "evidence": "[код] ubuntu/openclaw/deploy_instance.sh:30 'sudo -u \"$BOTUSER\" -H cp instance/AGENTS.md \"$WS/AGENTS.md\"' — без ветки сохранения, в отличие от цикла по заготовкам ниже | [замер] wc -c ubuntu/openclaw/instance/AGENTS.md → 3867; ls -la /home/undebot/.openclaw/workspace/AGENTS.md → 9416, 31 Jul 05:03; diff → DIFFERENT",
+      "doc_locs": ["ubuntu/openclaw/deploy_instance.sh:30", "docs/RUNBOOK_DEPLOY.md:513"],
+      "verdict": "b",
+      "verdict_why": "Молчаливая потеря данных (п.13 TARGET.md) и невоспроизводимость персоны: боевая версия существует в единственном экземпляре на диске бота, а штатная выкатка её перезаписывает. Правится кодом (сохранять копию, а лучше — держать боевую персону в git), а не доком.",
+      "severity": "medium",
+      "known_fid": "F016"
+    },
+    {
+      "title": "Ключи --backup-dir/--no-backup выпали из примера настроек, оставшись в коде и в справке",
+      "detail": "Незакоммиченная правка example.ini выкинула строки backup-dir = C:\\1c\\backups и # no-backup = 0, заменив их сетевым блоком. В коде оба ключа живы и разбираются и из командной строки, и из ini, и печатаются в --help. README установщика о бэкапе не упоминает вовсе. Итог: единственное место, где человек мог узнать про настройку бэкапа перед правкой рабочей базы, исчезло.",
+      "evidence": "[замер] git diff -- windows/odata-setup/setup-1c-odata.example.ini → '-backup-dir = C:\\1c\\backups' и '-# no-backup = 0' | [код] windows/odata-setup/src/Program.cs:768 'case \"--backup-dir\"', :826 'case \"backup-dir\"', :836 'case \"no-backup\"', :899-900 строки справки | [замер] grep -n 'backup' windows/odata-setup/README.md → пусто",
+      "doc_locs": ["windows/odata-setup/setup-1c-odata.example.ini:29", "windows/odata-setup/README.md:0"],
+      "verdict": "a",
+      "verdict_why": "Возможность есть в коде и в --help, а документация о ней замолчала — отставший документ. Вернуть строки в пример и назвать бэкап в README.",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Развёрнутая копия mcp_braine.py разошлась с репозиторной на 11 байт",
+      "detail": "Кроме известного расхождения gateway.py, из 46 сверенных файлов ubuntu/* против /opt разошёлся ещё один: /opt/openclaw-mcp/mcp_braine.py (6 913 байт) против ubuntu/openclaw/mcp_braine.py (6 924). Мост braine выведен из контура, но его юнит на стенде жив, значит исполняется именно неизвестная репозиторию версия. Все прочие 44 файла (весь ubuntu/serenedb, 1c-etl, 1c-config-ui, odata_gateway.py, mcp_ask.py) побайтно совпадают.",
+      "evidence": "[замер] cmp по каждому git ls-files ubuntu/**/*.{py,sh,sql} с одноимённым в /opt/{1c-mcp-reports,1c-gateway,openclaw-mcp,1c-config-ui,1c-etl} → DIFF только ubuntu/1c-gateway/gateway.py (8731 против 8077) и ubuntu/openclaw/mcp_braine.py (6924 против 6913); остальные 44 — SAME",
+      "doc_locs": ["ubuntu/openclaw/README.md:0", "docs/RUNBOOK_DEPLOY.md:489"],
+      "verdict": "v",
+      "verdict_why": "Неясно, как задумано: если braine выведен — юнит и файл на стенде подлежат сносу, и расхождение неважно; если он ещё зачем-то нужен — исполняется версия, которой нет в git. Судьба выведенного слоя — решение владельца.",
+      "severity": "low",
+      "known_fid": ""
+    }
+  ]
+}

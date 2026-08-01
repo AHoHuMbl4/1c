@@ -1,0 +1,115 @@
+{
+  "angle": "env",
+  "findings": [
+    {
+      "title": "Боевая конфигурация сервиса ответов существует только в окружении осиротевшего процесса: SERENEDB_DSN_RO не задан ни в одном файле",
+      "detail": "serene_ask.py читает DSN из SERENEDB_DSN_RO (строка 42), а переменную SERENEDB_DSN, которую ему подаёт юнит через EnvironmentFile=/etc/1c-mcp-reports.env, не читает вовсе — единственное вхождение этого имени в файле находится в докстринге (строка 28, «Env: SERENEDB_DSN … (см. /etc/1c-mcp-reports.env)»). SERENEDB_DSN_RO не задан ни в одном /etc/1c-*.env, ни в одном юните и ни в одном drop-in. Живой процесс (pid 3109129, тот самый, что отвечает на :8099) эту переменную имеет, и она указывает на dbname=ut_test; в его же окружении лежат CLAUDE_CODE_SESSION_ID, CLAUDE_PID, SSH_TTY, SSH_CLIENT — то есть окружение унаследовано от интерактивной агентской сессии по SSH, а не собрано systemd. Итог: выбор базы, по которой бот отвечает владельцу, не воспроизводится ничем на диске. Любой перезапуск (или reboot) отдаёт управление дефолту в коде — 'host=127.0.0.1 port=7890 user=serene_ro dbname=postgres' — и сервис молча начинает отвечать по ДРУГОЙ базе, без единой записи в журнале. Факт «отвечаем по второй базе» зафиксирован как F003, факт «процесс осиротел» — как F002; здесь новое — механизм: конфигурации второй базы нет ни в одном файле, и штатный старт её не восстановит.",
+      "evidence": "[код] /opt/1c-mcp-reports/serene_ask.py:42 DSN = os.environ.get(\"SERENEDB_DSN_RO\", \"host=127.0.0.1 port=7890 user=serene_ro dbname=postgres\") | [код] serene_ask.py:28 докстринг «Env: SERENEDB_DSN …» — grep -c 'SERENEDB_DSN\\b' serene_ask.py → 1 (только докстринг) | [замер] grep -oE '^[A-Za-z_][A-Za-z0-9_]*' по всем /etc/1c-*.env → SERENEDB_DSN_RO не встречается ни разу | [замер] systemctl cat 1c-serene-ask → EnvironmentFile=/etc/1c-mcp-reports.env, EnvironmentFile=-/etc/1c-serene-ask.env, Environment= отсутствует | [замер] tr '\\0' '\\n' < /proc/3109129/environ | имена → …SERENEDB_DSN SERENEDB_DSN_RO ASK_LISTEN_PORT… CLAUDE_CODE_SESSION_ID SSH_TTY SSH_CLIENT | [замер] sed -n 's/.*\\(dbname=[A-Za-z0-9_]*\\).*/\\1/p' по environ 3109129 → dbname=postgres, dbname=ut_test",
+      "doc_locs": ["docs/REGRESSION_BASE1.md:95", "/opt/1c-mcp-reports/serene_ask.py:28", "/opt/1c-mcp-reports/serene_ask.py:42"],
+      "verdict": "v",
+      "verdict_why": "REGRESSION_BASE1.md:95 прямо утверждает обратное живому состоянию: «читает первую базу (SERENEDB_DSN_RO не задан → dbname=postgres)». На стенде переменная задана и указывает на ut_test. Какая база боевая и где эта настройка обязана лежать — решение владельца, а не моё; при этом текущее положение (настройка только в памяти процесса) не воспроизводимо ни при каком штатном старте.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "report_1c просит у эмбеддера 1536 при корпусе 1024: семантический резолв молча отключён, ошибка psql не проверяется",
+      "detail": "EMBED_DIM не задан ни в одном /etc/1c-*.env и ни в одном юните — значит везде работает дефолт из кода, а дефолты разошлись: serene_ask.py:182 и build.sh:35 берут 1024, а serene_report.py:50, serene_search_build.py:36 и test_integrity.py:24/26 берут 1536. serene_report.py импортируется живым mcp_reports.py (строка 21: from serene_report import format_table, render_chart, run_report), то есть 1536 сидит в процессе, который слушает :6015 и подключён к боту. В _semantic_into() (serene_report.py:217) вектор из embed() подставляется литералом в cosine_similarity(emb, …) к resolver_index, где emb объявлен FLOAT[1024] — сравнение массивов разной длины движок выполнить не может. Возврат psql при этом не проверяется: код сразу итерирует .stdout.splitlines(), пустой вывод = «ничего не нашлось». Значит вся ветка «слово → ближайшее значение-измерение» (разрешение городов и т. п.) в отчётном пути тихо не работает, и ни в ответ, ни владельцу об этом ничего не уходит. То же 1536 сидит в test_integrity.py, который проверяет размерность resolver_index — то есть штатная проверка целостности либо валит T3 всегда, либо её никто не гоняет. Расхождение доков про 1536/1024 уже записано (F025, F044); здесь новое — что EMBED_DIM не задан НИГДЕ и из-за этого живой код расходится сам с собой.",
+      "evidence": "[код] /opt/1c-mcp-reports/serene_report.py:50 EMBED_DIM = int(os.environ.get(\"EMBED_DIM\", \"1536\")) против serene_ask.py:182 …(\"EMBED_DIM\", \"1024\") и ubuntu/serenedb/build.sh:35 EMBED_DIM=\"${EMBED_DIM:-1024}\" | [код] serene_report.py:217-226 vecs = embed(words[:8]) → f\"… cosine_similarity(emb, {_vec_literal(v)}) …\" → for line in psql(q, …).stdout.splitlines() (returncode не проверяется) | [код] /opt/1c-mcp-reports/mcp_reports.py:21 from serene_report import … | [замер] psql … -tAc \"SELECT table_name, column_name, data_type FROM duckdb_columns() WHERE column_name='emb' AND table_name IN ('resolver_index','search_corpus')\" → resolver_index|emb|FLOAT[1024]; search_corpus|emb|FLOAT[1024] | [замер] имена переменных /proc/3173769/environ (живой mcp_reports) → EMBED_DIM отсутствует | [замер] grep '^EMBED_DIM=' /etc/1c-*.env → пусто",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:369", "docs/BOXED_BLOCKERS.md:73", "docs/AUDIT_CODE_1.md:234", "ubuntu/serenedb/test_integrity.py:24"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п.13: «Молчаливая потеря данных приравнивается к неверному ответу … система обязана уточнить или отказать, а не ответить по неполным данным». Здесь целая ветка разрешения значений выключена ошибкой SQL, которую код не смотрит, и ответ строится дальше как ни в чём не бывало. Док под это править нельзя — чинить надо код (проверять returncode и брать размерность из одного места).",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Монитор «бот жив» сторожит выведенный контур (api, braine) и не сторожит путь ответа — потому падение конвейера и сервиса ответов никто не заметил",
+      "detail": "Список проверяемых сервисов в bot_health_check.sh — переменная окружения с дефолтом SYS_SERVICES=\"serenedb 1c-mcp-braine 1c-mcp-reports api\". Ни юнит 1c-bot-monitor.service (в нём вообще нет EnvironmentFile — F014), ни /etc/1c-bot-monitor.env (в нём одна строка GATEWAY_HEALTH_URL) её не переопределяют, то есть работает именно этот дефолт. В нём: api.service — inactive (юнит существует, но погашен, это выведенный слой braine), 1c-mcp-braine — из выведенного контура (F006), и НЕТ ни 1c-serene-ask, ни 1c-serene-pipeline, ни 1c-odata-gateway. Состояние монитора на диске — «down: api», то есть он живёт в постоянной тревоге по мёртвому чужому сервису. Ровно те два отказа, которые действительно ломают продукт (конвейер свежести failed — F001, сервис ответов вне systemd — F002), в список не входят и алерта владельцу не давали. Плюс fail-open на второй переменной: GATEWAY_HEALTH_URL=\"${GATEWAY_HEALTH_URL:-}\" и дальше if [ -n \"$GATEWAY_HEALTH_URL\" ] — пустая переменная молча выключает единственную проверку «бот отвечает, а не завис».",
+      "evidence": "[код] /opt/1c-bot-monitor/bot_health_check.sh:12 SYS_SERVICES=\"${SYS_SERVICES:-serenedb 1c-mcp-braine 1c-mcp-reports api}\" | [код] там же:16-30 GATEWAY_HEALTH_URL=\"${GATEWAY_HEALTH_URL:-}\" … if [ -n \"$GATEWAY_HEALTH_URL\" ]; then curl … fi | [замер] systemctl cat 1c-bot-monitor.service → EnvironmentFile отсутствует | [замер] systemctl is-active api.service → inactive | [замер] cat /var/lib/1c-bot-monitor/state → «down: api» | [замер] diff ubuntu/monitoring/bot_health_check.sh /opt/1c-bot-monitor/bot_health_check.sh → идентичны (это не рассинхрон копий, а сам код)",
+      "doc_locs": ["ubuntu/monitoring/bot_health_check.sh:12", "docs/RUNBOOK_DEPLOY.md:369"],
+      "verdict": "b",
+      "verdict_why": "Правило CLAUDE.md «Выведение компонента из контура — в тот же день править документы» и решение о выводе braine из контура: монитор так и остался настроенным на выведенный слой. Плюс TARGET.md п.17 (свежесть не позднее 20 минут) — сторож, который не смотрит на 1c-serene-pipeline, не может обнаружить нарушение этого пункта; именно так падение 29.07 и провисело незамеченным. Док под этот код править нельзя.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Движок пускает суперпользователя postgres с любым паролем — разделение ролей serene_ro/serene_resolver ничего не ограничивает для процессов стенда",
+      "detail": "Подключение host=127.0.0.1 port=7890 user=postgres проходит с заведомо неверным PGPASSWORD. Значит все пароли, аккуратно разложенные по /etc/1c-*.env (PGPASSWORD для serene_ro, RESOLVER_PW для serene_resolver), не образуют границы: любой процесс на хосте, включая тот же psql от модели, если бы кто-то подставил ему другой DSN, ходит суперпользователем без предъявления чего-либо. Отдельно опаснее то, что дефолт в коде отчётного пути — тоже суперпользователь: serene_report.py:15 DSN = os.environ.get(\"SERENEDB_DSN\", \"host=127.0.0.1 port=7890 user=postgres\"). Если EnvironmentFile не подгрузился (у 1c-serene-index и 1c-serene-pipeline он подключён с дефисом, то есть его отсутствие не ошибка), отчётный путь молча уходит в базу под суперпользователем вместо serene_ro, и ни в одном журнале это не отличить от нормальной работы. Про «positive control» (serene_ro не видит resolver_index) записано в HOW_IT_WORKS — как контроль для SQL от модели он держится, но как граница вообще — нет.",
+      "evidence": "[замер] PGPASSWORD=definitely_wrong_password_check psql \"host=127.0.0.1 port=7890 user=postgres dbname=postgres\" -tAc \"SELECT 'superuser_no_password_required'\" → superuser_no_password_required | [код] /opt/1c-mcp-reports/serene_report.py:15 DSN = os.environ.get(\"SERENEDB_DSN\", \"host=127.0.0.1 port=7890 user=postgres\") | [замер] systemctl cat 1c-serene-index / 1c-serene-pipeline → EnvironmentFile=-/etc/1c-mcp-reports.env (необязательный)",
+      "doc_locs": ["docs/HOW_IT_WORKS.md:503", "ubuntu/serenedb/setup_ro_role.sql:5", "ubuntu/serenedb/setup_ro_role.sql:16"],
+      "verdict": "v",
+      "verdict_why": "Владелец записал в память, что сервер 1c — стенд разработки, а не прод, поэтому «пароль на суперпользователя» может быть сознательным упрощением. Но доки и setup_ro_role.sql подают разделение ролей как действующую защиту, и дефолт-суперпользователь в коде отчётов — это уже не про стенд. Нужно слово владельца: закрывать pg_hba или снимать формулировку про защиту.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Одна переменная в двух EnvironmentFile: сборка получает DSN суперпользователя и чужой PGPASSWORD, побеждает порядок строк в юните",
+      "detail": "1c-serene-index.service и 1c-serene-pipeline.service подключают сначала -/etc/1c-mcp-reports.env, потом /etc/1c-serene-sync.env. SERENEDB_DSN объявлен в обоих и значения РАЗНЫЕ: в reports — user=serene_ro dbname=postgres, в sync — user=postgres без dbname вовсе. Побеждает второй файл (порядок), но PGPASSWORD, объявленный только в reports (пароль serene_ro), в окружении остаётся и уходит в каждый psql, запущенный уже под user=postgres. Работает это ровно потому, что движок пароль не спрашивает (см. находку про суперпользователя) — то есть держится на побочном эффекте, а не по построению. Второе: DSN сборки не содержит dbname, и libpq в этом случае берёт имя базы равным имени пользователя, «postgres». База, в которую пишется витрина, определяется, таким образом, не настройкой, а совпадением имени роли с именем базы — переименование роли молча уводит сборку в другую базу. Ни один док состав этих двух файлов и порядок их подключения не описывает.",
+      "evidence": "[замер] systemctl cat 1c-serene-pipeline → EnvironmentFile=-/etc/1c-mcp-reports.env; EnvironmentFile=/etc/1c-serene-sync.env | [замер] sed -n 's/^SERENEDB_DSN=//p' /etc/1c-mcp-reports.env → host=127.0.0.1 port=7890 user=serene_ro dbname=postgres; то же по /etc/1c-serene-sync.env → host=127.0.0.1 port=7890 user=postgres | [замер] md5-сравнение строк SERENEDB_DSN= в двух файлах → DIFFER | [замер] имена переменных /etc/1c-serene-sync.env → PGPASSWORD отсутствует, значит остаётся значение из reports.env",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:369", "ubuntu/serenedb/setup.sh:38"],
+      "verdict": "v",
+      "verdict_why": "Не могу отличить задуманное («сборке нужен rw, поэтому второй файл перекрывает первый») от случайного (чужой PGPASSWORD в окружении, отсутствующий dbname). Вопрос владельцу: какой файл считается источником DSN для сборки и должен ли dbname быть записан явно.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Две разные модели по умолчанию в одном продукте: ответ — deepseek-v4-pro, отчёты — deepseek-v4-flash, переменная задана только одному сервису",
+      "detail": "DEEPSEEK_MODEL объявлен ровно в одном env-файле — /etc/1c-serene-ask.env. Живой mcp_reports (pid 3173769, дверь report_1c, :6015) этой переменной в окружении не имеет и работает на дефолте из кода serene_report.py:21 «deepseek-v4-flash», тогда как сервис ответов работает на значении из env (в коде дефолт другой — serene_ask.py:169 «deepseek-v4-pro»). То есть какой моделью отвечает продукт, зависит от того, через какую дверь пришёл вопрос, и одна из веток управляется не настройкой, а константой в коде. Расхождение доков про «модель flash» отмечено в F084 — здесь новое: причина в том, что переменная просто не заведена для второго сервиса.",
+      "evidence": "[код] /opt/1c-mcp-reports/serene_report.py:21 DS_MODEL = os.environ.get(\"DEEPSEEK_MODEL\", \"deepseek-v4-flash\") | [код] /opt/1c-mcp-reports/serene_ask.py:169 DS_MODEL = os.environ.get(\"DEEPSEEK_MODEL\", \"deepseek-v4-pro\") | [замер] имена переменных в /etc/1c-mcp-reports.env → DEEPSEEK_MODEL отсутствует; в /etc/1c-serene-ask.env → присутствует | [замер] имена переменных /proc/3173769/environ (живой mcp_reports) → DEEPSEEK_MODEL отсутствует",
+      "doc_locs": ["docs/TARGET_ARCHITECTURE.md", "docs/RUNBOOK_DEPLOY.md:369"],
+      "verdict": "v",
+      "verdict_why": "Возможно, отчётам flash дан намеренно (дешевле). Но нигде это не записано, а различие возникает не из решения, а из незаданной переменной. Вопрос владельцу: одна модель на продукт или разные по дверям.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "/etc/1c-pg-windows.env: пароль на диске для контура, которого нет ни в одной строке кода",
+      "detail": "Файл содержит PGW_HOST, PGW_PORT, PGW_USER, PGW_PASSWORD, PGW_DB (права 600). Ни одна из этих переменных не читается ничем: поиск по ubuntu/, work/, /opt/1c-mcp-reports и /opt/1c-etl не даёт ни одного вхождения имени PGW_. Ни один юнит его не подключает. То есть на стенде лежит действующий пароль от PostgreSQL на Windows-машине, который никакой живой код не использует и который ни один док не объявляет отложенным. Решение владельца о «сырых данных в PostgreSQL на Windows + ATTACH» отложено им же (F012) — но там речь о невыполненном решении, а не о том, что от него остался бесхозный секрет. Секрет, который никто не использует, невозможно и заметить при ротации.",
+      "evidence": "[замер] stat -c \"%a %U:%G %n\" /etc/1c-pg-windows.env → 600 root:root | [замер] grep -oE '^[A-Za-z_][A-Za-z0-9_]*' /etc/1c-pg-windows.env → PGW_HOST PGW_PORT PGW_USER PGW_PASSWORD PGW_DB | [замер] grep -rn \"PGW_\" /srv/1c/ubuntu /srv/1c/work /opt/1c-mcp-reports /opt/1c-etl → пусто | [замер] grep -l 1c-pg-windows.env по /etc/systemd/system/1c-*.service → пусто",
+      "doc_locs": ["memory_bank/owner-memory/project-architecture-pg-windows-attach.md", "docs/RUNBOOK_DEPLOY.md:369"],
+      "verdict": "v",
+      "verdict_why": "Не мне решать, живой это задел под отложенное решение владельца или мусор от снятой попытки. Вопрос владельцу: держим файл до возврата к ATTACH (тогда это надо записать в RUNBOOK) или пароль перевыпускается и файл убирается.",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "/etc/1c-bot-monitor.env имеет права 644 — единственный из тринадцати; инвариант «секреты в /etc/*.env с правами 600» и SERVER_HANDFF утверждают обратное",
+      "detail": "Двенадцать файлов из тринадцати имеют 600, /etc/1c-bot-monitor.env — 644, читается любым пользователем системы. Секрета в нём сейчас нет (одна строка GATEWAY_HEALTH_URL), но файл лежит в том же каталоге и под тем же шаблоном, что и файлы с паролями, — то есть следующая переменная, дописанная в него «как в соседний», окажется публичной. Изъян уже был найден собственными проверками проекта (HANDOFF_CHECK_1 §2, HANDOFF_CHECK_2) и с 26 июля не устранён, а доки о сдаче продолжают перечислять его среди файлов с 600.",
+      "evidence": "[замер] stat -c \"%a %n\" /etc/1c-*.env → 644 /etc/1c-bot-monitor.env, остальные двенадцать 600 | [замер] ls -la /etc/1c-bot-monitor.env → -rw-r--r-- 1 root root 49 Jul 26 07:49",
+      "doc_locs": ["docs/HANDOFF_CHECK_2.md:317", "docs/HANDOFF_CHECK_2.md:467", "docs/HANDOFF_CHECK_1.md:177", "CLAUDE.md"],
+      "verdict": "a",
+      "verdict_why": "Само право — состояние сервера, менять его я не могу и не должен. Но утверждение доков сдачи «в /etc/, права 600: … 1c-bot-monitor.env, …» неверно уже неделю, и это ровно тот случай, когда устаревший документ уверенно врёт про безопасность. Правится либо док (оговорка-исключение), либо права — решает владелец; фиксирую как отставший док.",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Порт сервиса ответов живёт только в памяти осиротевшего процесса: ASK_LISTEN_PORT не задан нигде, штатный старт юнита поднимет :8091 и оборвёт мост бота",
+      "detail": "Дополнение к F002 со стороны окружения. serene_ask.py:52 берёт порт из ASK_LISTEN_PORT с дефолтом 8091. Эта переменная не объявлена ни в /etc/1c-serene-ask.env, ни в /etc/1c-mcp-reports.env, ни в юните — но она есть в окружении живого процесса на :8099, унаследованном от интерактивной сессии. При этом мост бота жёстко направлен на 8099: в 1c-mcp-ask.service стоит Environment=ASK_URL=http://127.0.0.1:8099. Значит нынешний разрыв «:8099 живой, :8091 пустой» не чинится запуском юнита — штатный старт даёт :8091, и бот, ходящий на :8099, останется без ответов. Порт, от которого зависит связность продукта, нигде на диске не записан.",
+      "evidence": "[код] /opt/1c-mcp-reports/serene_ask.py:52 LISTEN_PORT = int(os.environ.get(\"ASK_LISTEN_PORT\", \"8091\")) | [замер] grep '^ASK_LISTEN_PORT=' /etc/1c-*.env → пусто; systemctl cat 1c-serene-ask → Environment= отсутствует | [замер] имена переменных /proc/3109129/environ → ASK_LISTEN_PORT присутствует | [замер] systemctl cat 1c-mcp-ask → Environment=ASK_URL=http://127.0.0.1:8099 | [замер] ss -ltnp → 127.0.0.1:8099 python3 (pid 3109129), :8091 никто",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:369", "docs/HOW_IT_WORKS.md:503"],
+      "verdict": "v",
+      "verdict_why": "Сам факт разрыва портов уже записан (F002). Новое — что он не устраняется штатным запуском, потому что рабочее значение порта не существует ни в одном файле. Как именно закрепить (Environment= в юните или строка в env-файле) — решение владельца.",
+      "severity": "high",
+      "known_fid": "F002"
+    },
+    {
+      "title": "Развёрнутый шлюз тулкита fail-open по точному условию, и GW_GATEWAY_TOKEN не заведён ни в одном env-файле",
+      "detail": "Дополнение к F007 со стороны окружения. В развёрнутой копии проверка авторизации написана так, что пустой токен означает «пускать всех», и в отличие от репо-версии в main() нет гарда, который не давал бы стартовать без токена (репо: строка 156 «FATAL: GW_GATEWAY_TOKEN пуст — шлюз не поднимается»). При этом /etc/1c-gateway.env содержит только GW_TOOLKIT_TOKEN и GW_UPSTREAM — GW_GATEWAY_TOKEN там не объявлен вовсе. То есть дверь открыта не «потенциально», а по факту настройки: один systemctl start — и POST /mcp принимается без единого заголовка. Сейчас спасает лишь то, что юнит disabled и процесса нет. Для сравнения: соседний odata_gateway.py уже переведён на fail-closed с явным FATAL (строки 140-143) — то есть решение о fail-closed принято, но до этого файла не доехало.",
+      "evidence": "[код] /opt/1c-gateway/gateway.py:87-89 def _auth_ok(self): if not GATEWAY_TOKEN: return True; return self.headers.get(\"Authorization\", \"\") == f\"Bearer {GATEWAY_TOKEN}\" | [код] /opt/1c-gateway/gateway.py — grep FATAL → ни одного вхождения; ubuntu/1c-gateway/gateway.py:156 FATAL присутствует | [код] /opt/1c-odata-gateway/odata_gateway.py:140-143 — fail-closed с FATAL | [замер] grep -oE '^[A-Za-z_]+' /etc/1c-gateway.env → GW_TOOLKIT_TOKEN, GW_UPSTREAM | [замер] systemctl is-enabled 1c-gateway → disabled; ss -ltnp → :6010 не слушает никто",
+      "doc_locs": ["ubuntu/1c-gateway/gateway.py:86", "README.md"],
+      "verdict": "b",
+      "verdict_why": "Инвариант проекта: «Запреты держатся кодом, а не промтом», и «1С только читаем: пользователь без прав записи + шлюз, режущий не-GET». Шлюз, который при пустой переменной пускает кого угодно, держит запрет на настройке, а не на коде. Док под это править нельзя — репо-код уже правильный, догонять должна развёрнутая копия и env-файл.",
+      "severity": "medium",
+      "known_fid": "F007"
+    },
+    {
+      "title": "Drop-in braine переводит вторую дверь бота на :8091 — порт, который никто не слушает и который совпадает с незаданным дефолтом сервиса ответов",
+      "detail": "Дополнение к F006 со стороны окружения. Drop-in /etc/systemd/system/1c-mcp-braine.service.d/override.conf ставит Environment=BRAINE_URL=http://127.0.0.1:8091 с комментарием «переключение второго мозга с braine на поиск в SereneDB, контракт /ask одинаковый». Порт 8091 — это в точности дефолт ASK_LISTEN_PORT в serene_ask.py, то есть переключение делали в расчёте на штатный запуск сервиса ответов. Сервис же подняли руками на 8099, и в результате живой mcp_braine на :6014 (enabled, active) стучится в пустоту, а базовый Environment= в самом юните всё ещё указывает на :8090 (мёртвый api). Итого у бота две двери к ответам (:6014 и :6016), из которых одна гарантированно нерабочая, и разбирается это только чтением drop-in.",
+      "evidence": "[замер] cat /etc/systemd/system/1c-mcp-braine.service.d/override.conf → [Service] Environment=BRAINE_URL=http://127.0.0.1:8091 | [замер] systemctl cat 1c-mcp-braine → Environment=BRAINE_URL=http://127.0.0.1:8090 (базовый) | [код] /opt/1c-mcp-reports/serene_ask.py:52 дефолт порта 8091 | [замер] ss -ltnp → на :8090 и :8091 не слушает никто; :6014 python (pid 3173746) | [замер] systemctl is-enabled 1c-mcp-braine → enabled",
+      "doc_locs": ["docs/ARCHITECTURE.md", "docs/RUNBOOK_DEPLOY.md:369"],
+      "verdict": "v",
+      "verdict_why": "F006 фиксирует, что юнит braine жив при мёртвом upstream. Новое — что drop-in задумывался как мост к serene_ask на штатном порту, и восстановление этого замысла упирается в ту же незаписанную настройку порта. Оставлять ли вторую дверь вообще — решение владельца.",
+      "severity": "medium",
+      "known_fid": "F006"
+    }
+  ]
+}

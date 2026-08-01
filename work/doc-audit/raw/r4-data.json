@@ -1,0 +1,125 @@
+{
+  "angle": "data",
+  "findings": [
+    {
+      "title": "Ответ о полноте на боевой базе выдаёт «в 1С 507 500, до поиска 623 565, потеряно 0» и причину раздутия в ответ не отдаёт",
+      "detail": "Ветка п. 13 (`about=coverage`) подаёт модели пять итогов по всей переписи, а поимённый список берёт только `WHERE в_1С > 0 AND в_1С > в_корпусе`. На ut_test таких сущностей ноль, поэтому список пуст, и модель получает два несовместимых числа рядом: в источнике 507 500, в поиске 623 565 (на 116 065 больше) — без единого слова о причине. Причина в переписи ЕСТЬ и посчитана поимённо: 80 регистров ('регистр: $count считает регистраторы', 20 887 в 1С → 136 952 в корпусе) и 85 сущностей с развёрнутой табличной частью. Сам `coverage_build.sql:105-112` называет ровно этот случай «молчаливым ИСКАЖЕНИЕМ, а не потерей, и потому опаснее» и ради него завёл ветки причин — но ветка ОТВЕТА эти причины не читает. На базе 1 то же самое мягче: 103 634 против 103 808.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:1868-1884 — итоги `sum(в_1С) FILTER (в_1С>0)`, `sum(в_корпусе)`, список `WHERE в_1С > 0 AND в_1С > в_корпусе LIMIT 15` | [замер] psql ut_test \"SELECT sum(в_1С) FILTER (WHERE в_1С>0), sum(в_корпусе), sum(в_1С-в_корпусе) FILTER (WHERE в_1С>в_корпусе), count(*) FILTER (WHERE в_1С>0 AND в_корпусе=0), count(*) FILTER (WHERE в_1С=-1) FROM search_coverage\" → 507500 | 623565 | 0 | 0 | 0 (список потерянных пуст) | [замер] psql ut_test \"select причина, count(*), sum(в_1С), sum(в_корпусе) from search_coverage group by 1\" → 'регистр: $count считает регистраторы' 80 | 20887 | 136952; 'витрина развёрнута по табличной части' 85 | 5891 | 5891",
+      "doc_locs": ["docs/TARGET_STATUS.md:30", "docs/HOW_IT_WORKS.md:606", "ubuntu/serenedb/serene_ask.py:1880"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п. 13: «расхождение видно владельцу». Расхождение в 116 065 строк владельцу показывается ЧИСЛОМ БЕЗ ПРИЧИНЫ, хотя причина посчитана и лежит рядом. Правится код ответа (передать причину раздутых сущностей в перепись для модели), а не документ; TARGET_STATUS:30 при этом держит п. 13 🟢",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "search_quality противоречит сам себе: build_rows 632 720 при корпусе 623 565, build_noemb 205 479 при фактических 340 464",
+      "detail": "Ключи `build_*` (их пишет `corpus_postcheck.sql` последним шагом такта) и ключи `cov_*` / таблица `search_coverage` в одной и той же переписи описывают РАЗНЫЕ состояния корпуса. ut_test: build_rows = 632 720 «строк корпуса», реально в `search_corpus` 623 565 (−9 155), а `sum(в_корпусе)` переписи = 623 565; build_noemb = 205 479 «строк без вектора», реально 340 464, и cov_noemb_service (248 384) + cov_noemb_pending (92 080) = ровно 340 464. База 1: build_noemb = 0 при 5 091 строке без вектора (cov_noemb_service = 5 091). То есть по `build_*` система отчитывается числами прошлой эпохи, а по `cov_*` — нынешними, и оба набора выдаются как одна перепись. Это же `build_ts` служит источником возраста данных в приписке к каждому ответу (serene_ask.py:2957), то есть возраст меряется отметкой такта, который к нынешнему корпусу отношения не имеет.",
+      "evidence": "[замер] psql ut_test \"select k,v from search_quality where k like 'build_%' or k like 'cov_noemb%'\" → build_rows 632720; build_noemb 205479; cov_noemb_pending 92080; cov_noemb_service 248384 | [замер] psql ut_test \"select count(*) total, count(emb) with_emb, count(*)-count(emb) no_emb from search_corpus\" → 623565 | 283101 | 340464 | [замер] psql postgres то же → 103808 | 98717 | 5091 при build_noemb=0 | [код] ubuntu/serenedb/corpus_postcheck.sql:76-85 (build_rows = count(*) FROM search_corpus), ubuntu/serenedb/coverage_build.sql:139-171 (cov_* пересчитываются отдельно)",
+      "doc_locs": ["docs/TARGET_STATUS.md:30", "docs/ACCEPTANCE_UT.md:695"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п. 13 требует, чтобы расхождение было видно владельцу; здесь сама перепись — единственный прибор полноты — показывает два разных числа для одной величины и не сообщает, что одно из них протухло. Ни один документ этого не объявлял: чинится стенд/код (пересчёт build_* или отметка эпохи у ключей), а не док",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Счётчики clipped_docs и fold_kept_no_child не удаляются перед вставкой — в переписи 130 копий из разных эпох",
+      "detail": "`corpus_build.sql:658` перед вставкой чистит только `k LIKE 'refmap_%'`, а в том же `UNION ALL` вставляются ещё `clipped_docs` и `fold_kept_no_child`. Они накапливаются каждым тактом. База 1: 130 строк `clipped_docs` (129 нулей и одна 5) при фактических 0 обрезанных строк сейчас. ut_test: 25 строк `clipped_docs` со значениями 2140 (×3), 813, 795 и 25 (×20) при фактических 25, и 6 строк `fold_kept_no_child` = 16. Прочитать счётчик п. 13 запросом нельзя: `SELECT v FROM search_quality WHERE k='clipped_docs'` вернёт 25 разных значений, а скалярный подзапрос (так читаются `build_ts` и `build_sql_hash` в `build.sh:177-179`) на таком ключе просто упал бы. Для `mart_changed_ts` защита от дублей в `build.sh:176` есть, для этих двух — нет.",
+      "evidence": "[замер] psql postgres \"select k, count(*) from search_quality group by k having count(*)>1\" → clipped_docs | 130 | [замер] psql ut_test то же → clipped_docs | 25, fold_kept_no_child | 6 | [замер] psql ut_test \"select count(*) from search_corpus where length(doc)>=20000\" → 25 (то есть 2140/813/795 в таблице — мусор прошлых эпох) | [код] ubuntu/serenedb/corpus_build.sql:658 «DELETE FROM search_quality WHERE k LIKE 'refmap_%'» и вставка clipped_docs/fold_kept_no_child строками 668-698 без DELETE",
+      "doc_locs": ["docs/PLAN_P13_COMPLETENESS.md:41", "docs/REGRESSION_BASE1.md:30"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п. 13 «расхождение видно владельцу»: счётчик обрезки, заведённый как доказательство п. 13, в нынешнем виде не читается однозначно — в таблице лежат значения разных тактов вперемешку. Правится SQL сборки, документ здесь ни при чём",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Обрезка значений на 20 000 символов видна только счётчиком в базе и никогда не доходит до ответа клиенту",
+      "detail": "На боевой базе 25 строк корпуса собраны из обрезанных значений (`length(doc) >= 20000`), на базе 1 — 0. В ответе об этом не говорится нигде: в `serene_ask.py` механизм «покажи обрезку клиенту» (`cut`) заведён ТОЛЬКО для усечения перечня сущностей по бюджету промпта (строки 1120-1128), а обрезка самого значения не попадает ни в `cut`, ни в ветку полноты (`_coverage_answer` числа `clipped_docs` не читает вовсе). Комментарий сборки (`corpus_build.sql:695`) трактует п. 13 как «покажи это числом», инвариант проекта — как «покажи это в ответе, а не в журнале». Побочно: комментарий serene_ask.py:154 ссылается на предел «тот же, что в сборщике `serene_search_build.py`» — это выведенный из такта питон-сборщик, живой предел стоит в corpus_build.sql.",
+      "evidence": "[замер] psql ut_test \"select count(*) from search_corpus where length(doc)>=20000\" → 25 | [замер] psql postgres то же → 0 | [код] ubuntu/serenedb/serene_ask.py:1120-1128 (cut только для перечня сущностей), :1861-1900 (_coverage_answer читает только search_coverage) | [код] grep -n 'обрез\\|clip' serene_ask.py → 154, 1120, 1124 и больше нигде",
+      "doc_locs": ["docs/TARGET_STATUS.md:30", "CLAUDE.md:0", "docs/PLAN_P13_COMPLETENESS.md:41"],
+      "verdict": "b",
+      "verdict_why": "Инвариант владельца в CLAUDE.md: «Молчаливая потеря данных = дефект (п. 13). Обрезал — покажи это в ответе, а не в журнале». Счётчик в служебной таблице — это журнал, а не ответ. Док под код править нельзя; либо ответ по обрезанной строке помечается, либо это вопрос владельцу о трактовке",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Колонки не переписываются вовсе: 2 565 выброшенных колонок на боевой базе, из них 142 двоичных, и ни одного счётчика",
+      "detail": "Приёмка п. 13 в TARGET.md:145 требует, чтобы с 1С было сверено «число строк И КОЛОНОК, дошедших до поиска». Перепись считает только строки. Классификатор колонок (`corpus_build.sql:75-85`) ставит `kind='skip'` и выбрасывает колонку из текста объекта, нигде это не считая. На ut_test у сущностей, реально попавших в корпус, выброшено 2 565 колонок в 621 сущности; из них 610 — не служебные `*_navigationLinkUrl`, а 142 колонки в 100 сущностях — `Edm.Binary` (например `Value_Base64Data`, содержимое присоединённых файлов). На базе 1 — 313 выброшенных колонок, 23 двоичных. Ни `search_quality`, ни `search_coverage` про колонки не знают ни одного числа, и ни один документ такого счётчика не обещает.",
+      "evidence": "[замер] psql ut_test \"select kind, count(*) cols, count(distinct tbl) ents from tmp3_cls group by 1\" → skip | 2966 | 714 (text 6695, ref 4601, num 4028, flag 2626, date 976) | [замер] psql ut_test \"select count(*), count(*) filter (where edm='Edm.Binary'), count(distinct tbl) filter (where edm='Edm.Binary') from tmp3_cls c join search_sources s on s.src_table=lower(c.tbl) where c.kind='skip'\" → 2565 | 142 | 100 | [замер] psql postgres то же → 313 | 23 | [код] ubuntu/serenedb/corpus_build.sql:80-85 — ветки 'skip' без счётчика",
+      "doc_locs": ["TARGET.md:145", "docs/TARGET_STATUS.md:30"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md:145 — приёмочный критерий п. 13 прямо называет колонки. Половина критерия не реализована, а п. 13 в TARGET_STATUS:30 стоит 🟢. Менять TARGET.md нельзя, значит правится код (счётчик выброшенных колонок) и отметка статуса",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "«401 по правам» в статусе п. 13 против 909 в переписи и 934 в профиле базы",
+      "detail": "TARGET_STATUS:30 закрывает п. 13 формулой «потеря видна числом (реальная — 2 строки, 401 по правам)». Замер базы 1: потеряно ровно 2 строки — верно; закрытых правами сущностей в переписи 909, а в `base_profile` (то, что реально вернула 1С) — 934. Число 401 не сходится ни с одним из них. Разница 934 − 909 = 25 объяснима (это тени регистров `_RecordType`, перепись их исключает по построению), но нигде не названа, и в коде сервиса число зашито комментарием: serene_ask.py:1877 «их 934» — при том что на боевой базе ut_test закрытых правами 0.",
+      "evidence": "[замер] psql postgres \"select count(*) filter (where в_1С=-1) from search_coverage\" → 909 | [замер] psql postgres \"select count(*) filter (where rows=-1) from base_profile\" → 934 | [замер] psql postgres \"select v from search_quality where k='cov_ent_denied'\" → 909 | [замер] psql postgres \"select sum(в_1С-в_корпусе) filter (where в_1С>в_корпусе) from search_coverage\" → 2 | [код] ubuntu/serenedb/serene_ask.py:1877 «их 934»",
+      "doc_locs": ["docs/TARGET_STATUS.md:30", "ubuntu/serenedb/serene_ask.py:1877"],
+      "verdict": "a",
+      "verdict_why": "Замер подтверждает механизм (потеря 2 строки видна числом), расходится только цифра в документе — правится документ; попутно жёсткое «934» в комментарии кода стоит заменить ссылкой на счётчик",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "fold_kept_no_child = 16 на боевой базе: риск завышенного «сколько всего» посчитан и не назван ни в одном документе",
+      "detail": "Счётчик считает колонки вложенного типа, оставленные в тексте объекта, потому что объявившая их сущность не загрузилась. Комментарий сборки прямо говорит: «у стольких колонок текст объекта несёт значения строк, и ответ на вопрос “сколько всего” по ним может быть завышен. Молчать об этом нельзя (п. 13)». На ut_test счётчик равен 16. В документах зафиксировано только значение базы 1 (REGRESSION_BASE1:30 — 0), причём с оговоркой «0 означает не “всё хорошо”». Значения боевой базы нет ни в TARGET_STATUS, ни в ACCEPTANCE_UT, ни в activeContext; в ответ клиенту оно тоже не выходит.",
+      "evidence": "[замер] psql ut_test \"select k, v from search_quality where k='fold_kept_no_child'\" → 6 одинаковых строк со значением 16 | [замер] psql postgres то же → одна строка, 0 | [код] ubuntu/serenedb/corpus_build.sql:668-682 (комментарий «может быть завышен … молчать нельзя (п. 13)») | [док] docs/REGRESSION_BASE1.md:30 «fold_kept_no_child | — | 0»",
+      "doc_locs": ["docs/REGRESSION_BASE1.md:30", "docs/ACCEPTANCE_UT.md:686", "docs/TARGET_STATUS.md:30"],
+      "verdict": "a",
+      "verdict_why": "Механизм работает и считает; в документах отсутствует замер боевой базы, из-за чего 🟢 п. 13 выглядит подтверждённым только базой 1. Правится документ (внести число 16 и его смысл); если решено, что оно должно доходить до клиента — это уже отдельный вопрос владельцу",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Ветка ответа о полноте (about=coverage) не описана в HOW_IT_WORKS вовсе",
+      "detail": "TARGET_STATUS:30 закрывает п. 13 в том числе тем, что «бот отвечает “что не загрузилось”». В коде это отдельный путь ответа: намерение `about=coverage` определяет модель разбором вопроса, дальше `_coverage_answer` собирает перепись, отдельная системная подсказка COVERAGE_SYS, свой бюджет `ASK_COVERAGE_TOP=15` и тот же гейт по числам. В HOW_IT_WORKS — документе «как это работает» — нет ни слова: поиск по «полнот», «coverage», «что не загрузилось» даёт только строку 606 (схема пайплайна) и 320. То есть целый вид ответа живёт вне описания, и проверить его по документу нельзя.",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:1968-1970 «if (intent.get('about') or '') == 'coverage': return _coverage_answer(...)»; :1843-1858 COVERAGE_SYS; :76 COVERAGE_TOP | [замер] grep -n 'полнот\\|coverage\\|что не загрузилось' docs/HOW_IT_WORKS.md → 320, 606 (обе про пайплайн сборки, не про ответ)",
+      "doc_locs": ["docs/HOW_IT_WORKS.md:606", "docs/TARGET_STATUS.md:30"],
+      "verdict": "a",
+      "verdict_why": "Код есть и работает, документа нет — дописывается документ",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Витрина новее корпуса на 10 часов, и перепись этого не показывает ни одним числом",
+      "detail": "`mart_changed_ts` (его пишет синк при изменении витрины) = 30.07 03:45 UTC, `build_ts` (конец такта сборки) = 29.07 17:37 UTC. То есть изменения из 1С, доехавшие до витрины 30.07, в корпус и индекс не попали, и с тех пор такт не запускался. Перепись при этом отвечает «потеряно 0», потому что считает витрину эталоном 1С и сравнивает с корпусом ту же эпоху: признака «корпус отстал от витрины» в `search_coverage` и `search_quality` нет ни одного, хотя оба времени лежат в той же таблице и сравниваются в `build.sh:176-179` для решения «пропускать ли пересборку». Наружу это выходит только приблизительной припиской о возрасте, считаемой от `build_ts`, который сам из чужой эпохи (см. находку про build_rows).",
+      "evidence": "[замер] date -u → Sat Aug 1 15:53:18 UTC 2026 (epoch 1785599598) | [замер] psql ut_test \"select k,v from search_quality where k in ('build_ts','mart_changed_ts')\" → build_ts 1785346661 (29.07 17:37, 70.3 ч назад), mart_changed_ts 1785383137 (30.07 03:45, 60.1 ч назад) | [замер] psql ut_test \"select max(seen_at) from search_sources\" → 2026-07-29 17:22:10 | [код] ubuntu/serenedb/build.sh:176-179 — сравнение build_ts > mart_changed_ts используется только как условие пропуска",
+      "doc_locs": ["docs/TARGET_STATUS.md:30", "docs/TARGET_STATUS.md:34"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п. 13: «то, что недоступно поиску, видно владельцу». Данные, дошедшие до витрины и не дошедшие до поиска, — ровно такой случай, и перепись их не называет (её «потеряно 0» формально верно, но меряет не то). Правится счётчик/перепись, а не документ",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Отпечаток DDL индекса больше никем не пишется и не сверяется: search_meta пуста на боевой базе, на базе 1 — строка от выведенного сборщика",
+      "detail": "Индекс создаётся `CREATE INDEX IF NOT EXISTS`, то есть индекс, созданный когда-то по другому набору колонок, живым тактом не пересоздаётся и не сверяется. Единственная проверка «DDL индекса тот же» жила в выведенном питон-сборщике (`serene_search_build.py:898-908`, ключ `search_meta.index_ddl`). Сейчас: на базе 1 в `search_meta` лежит одна строка `index_ddl` с текстом БЕЗ `amount` — то есть слепок ещё той эпохи, когда её писал сборщик; в ut_test таблица пуста вовсе. Движок в `duckdb_indexes().sql` состав колонок не отдаёт («USING inverted ()»), так что сверить живой индекс с каноном `corpus_init.sql:92-94` сейчас нечем ничем.",
+      "evidence": "[замер] psql postgres \"select * from search_meta\" → index_ddl | CREATE INDEX search_idx ON search_corpus USING inverted(doc search_dict, refs search_dict, src_table) INCLUDE (src_table, row_key, doc_date) | [замер] psql ut_test \"select count(*) from search_meta\" → 0 | [замер] psql \"select database_name, index_name, sql from duckdb_indexes()\" → sql = «CREATE INDEX search_idx ON public.search_corpus USING inverted ();» (состав колонок не виден) | [код] ubuntu/serenedb/corpus_init.sql:92-94 (IF NOT EXISTS), serene_search_build.py:898-908 (снятая сверка)",
+      "doc_locs": ["docs/HANDOFF_CHECK_1.md:290", "docs/HANDOFF_CHECK_2.md:378"],
+      "verdict": "v",
+      "verdict_why": "Неясно, как задумано: сверка отпечатка индекса ушла вместе с питон-сборщиком осознанно или потерялась при переносе на build.sh. Вопрос владельцу — нужна ли проверка «живой индекс = канон» в такте. Смежное (duckdb_indexes без фильтра базы) уже записано как F011",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "resolver_clipped = 4 на боевой базе: вектор посчитан по обрезанному началу значения, и это нигде не названо",
+      "detail": "Ключ `resolver_clipped` («вектор посчитан по обрезанному началу значения, а не по всему») равен 4 на ut_test и 3 на базе 1. Это значит, что четыре значения резолвера ищутся по смыслу по своему началу, а не целиком, — то есть по ним семантический поиск может не найти совпадение. Ни в TARGET_STATUS, ни в HOW_IT_WORKS, ни в ACCEPTANCE_UT, ни в activeContext это число не упомянуто; в ответ клиенту не выходит.",
+      "evidence": "[замер] psql ut_test \"select k,v,note from search_quality where k like 'resolver_%'\" → resolver_clipped 4; resolver_no_emb 0; resolver_values 188068 | [замер] psql postgres то же → resolver_clipped 3; resolver_values 115151 | [замер] grep -rn 'resolver_clipped' docs memory_bank → пусто",
+      "doc_locs": ["docs/TARGET_STATUS.md:30", "docs/HOW_IT_WORKS.md:205"],
+      "verdict": "a",
+      "verdict_why": "Счётчик работает и считает, документы про него молчат — дописывается документ (и это же кандидат в приписку к ответу, если владелец решит, что четыре значения того стоят)",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Свежесть в числах: корпус базы 1 отстал на 102.8 ч, боевой — на 70.3 ч; данные 1С не обновлялись 60.1 ч",
+      "detail": "Дополнение к уже записанной находке о вставшем конвейере — точные величины отставания на 01.08.2026 15:53 UTC, снятые с обеих баз. База 1: build_ts 29.07 06:40 (81.2 ч назад), а содержимое корпуса ещё старше — max(search_sources.seen_at) = 28.07 09:04 (102.8 ч назад). Боевая база ut_test: build_ts 29.07 17:37 (70.3 ч назад), витрина последний раз менялась 30.07 03:45 (60.1 ч назад). Контракт п. 17 — 20 минут; отставание больше нормы в 180-300 раз. Приписка о старении при этом сработает (порог ASK_STALE_WARN_SEC = 3600 с), то есть клиенту старение видно.",
+      "evidence": "[замер] date -u → 1785599598 | [замер] psql postgres \"select k,v from search_quality where k='build_ts'\" → 1785307201 (29.07 06:40) | [замер] psql postgres \"select max(seen_at) from search_sources\" → 2026-07-28 09:04:45 | [замер] psql ut_test → build_ts 1785346661, mart_changed_ts 1785383137 | [код] serene_ask.py:80 STALE_WARN_SEC=3600, :2957-2966 приписка",
+      "doc_locs": ["docs/TARGET_STATUS.md:34"],
+      "verdict": "b",
+      "verdict_why": "Тот же вердикт, что у F001: правится стенд (запустить конвейер), а не документ",
+      "severity": "high",
+      "known_fid": "F001"
+    }
+  ]
+}

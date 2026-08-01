@@ -1,0 +1,125 @@
+{
+  "angle": "journal",
+  "findings": [
+    {
+      "title": "Журналы боевого пути второй базы пишутся в scratchpad прошлой сессии Claude под /tmp",
+      "detail": "Оба осиротевших процесса — сервис ответов второй базы (:8099, pid 3109129) и её OData-шлюз (:6021, pid 1136469) — имеют stdout и stderr, направленные в /tmp/claude-0/-srv-1c/81653964-16d8-4b8d-a70f-70c62bbb1ae5/scratchpad/ (файлы ask8099.log и ut-gw.log). Это каталог песочницы ЗАВЕРШЁННОЙ сессии Claude Code: в journal их вывода нет вовсе (journalctl их не знает — юнитов нет), /var/log/1c-* и /var/log/serene* не существуют, а системный таймер systemd-tmpfiles-clean.timer активен (следующий проход 02.08 07:27). То есть единственный журнал боевого пути второй базы — временный файл в чужом каталоге, который исчезнет при чистке /tmp или ребуте, и в нём нет ни одной отметки времени (ask8099.log — 45 строк вида «ask 127.0.0.1 - \"POST /ask HTTP/1.1\" 200 -» без дат). Разбор любого инцидента второй базы после ребута будет вести не по чему. Ни один док этого не описывает: RUNBOOK называет процессы осиротевшими, но про их вывод не говорит ничего.",
+      "evidence": "[замер] ls -l /proc/3109129/fd/1 → /tmp/claude-0/-srv-1c/81653964-16d8-4b8d-a70f-70c62bbb1ae5/scratchpad/ask8099.log; ls -l /proc/1136469/fd/1 → …/scratchpad/ut-gw.log | [замер] ls -la /var/log/1c-* /var/log/serene* → No such file or directory | [замер] systemctl list-timers → systemd-tmpfiles-clean.timer NEXT Sun 2026-08-02 07:27:17 | [замер] wc -l …/ut-gw.log …/ask8099.log → 22714 / 45",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:51", "docs/RUNBOOK_DEPLOY.md:52", "docs/SERVER_HANDOFF.md:11"],
+      "verdict": "b",
+      "verdict_why": "TARGET п. 14 требует установки без ручных действий сверх двух, а п. 13 — чтобы потеря была видима. Боевой сервис, чей журнал лежит в /tmp чужой сессии, не переживает ни ребут, ни чистку tmpfiles: и процесс, и след его работы исчезают молча. Док под это править нельзя — чинится запуск под systemd (юнит 1c-serene-ask@<имя>, Фаза 2 PLAN_AUTONOMY).",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Монитор бота залип в состоянии «down: api» и следит за выведенным слоем braine, а не за путём ответа",
+      "detail": "В /var/lib/1c-bot-monitor/state лежит «down: api». Список проверяемых сервисов в /opt/1c-bot-monitor/bot_health_check.sh — SYS_SERVICES=\"serenedb 1c-mcp-braine 1c-mcp-reports api\": две трети — юниты выведенного 26.07 слоя braine, а api.service вообще disabled+inactive, поэтому проверка вечно даёт fails=\" api\". Алерт по коду шлётся только при СМЕНЕ строки состояния, значит владельцу уже ушло «⚠️ Бот 1С: не работают сервисы — api» про мёртвый юнит выведенного слоя, а «✅ снова в строю» не придёт никогда. При этом ни 1c-serene-pipeline (failed 3 суток), ни 1c-serene-sync (failed 4 суток), ни 1c-serene-ask (dead 2 суток), ни осиротевший :8099, ни 1c-odata-gateway в списке НЕ значатся — то есть весь отвечающий путь и конвейер свежести не мониторятся вообще. Три юнита стояли трое суток, монитор при этом каждые 3 минуты успешно отрабатывал.",
+      "evidence": "[замер] cat /var/lib/1c-bot-monitor/state → «down: api» | [код] /opt/1c-bot-monitor/bot_health_check.sh:12 SYS_SERVICES=\"serenedb 1c-mcp-braine 1c-mcp-reports api\" | [замер] systemctl is-active api.service → inactive; list-unit-files → api.service disabled | [замер] journalctl -u 1c-bot-monitor -n 40 → каждые ~3 мин «Finished», ни одного сообщения об ошибке | [замер] systemctl status 1c-serene-pipeline → failed since Wed 2026-07-29 07:32:47 UTC; 1c-serene-sync → failed since Tue 2026-07-28 03:57:44",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:40", "docs/ARCHITECTURE.md:89", "docs/OPENCLAW_BOT.md:141", "docs/RUNBOOK_DEPLOY.md:305"],
+      "verdict": "b",
+      "verdict_why": "Решение владельца 29.07 по nightly-eval (HOW_NOT_TO §2.14): вывод слоя не закончен, пока у него остаются таймеры и право слать наружу — здесь монитор продолжает алертить владельцу про api выведенного braine. Плюс п. 17 контракта (свежесть ≤20 мин) не имеет ни одного наблюдателя: конвейер стоял трое суток бесшумно. Править надо список сервисов, а не доки.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "RUNBOOK §10.6 велит включить таймер 1c-serene-index, который §0 того же файла называет сносящим таблицу и индекс",
+      "detail": "В §0 (строка 36) сказано: таймер 1c-serene-index остановлен 28.07, потому что старый serene_search_build.py при новом составе корпуса сносит таблицу и индекс (авария 28.07, HOW_NOT_TO §2.9); строка 35 говорит то же про 1c-serene-sync.timer («остановлен: синк стал частью конвейера»). А раздел раскатки §10.6 (строки 404-408) без единой оговорки предписывает: cp юнитов + systemctl enable --now 1c-serene-sync.timer и systemctl enable --now 1c-serene-index.timer. Раскатка по инструкции воспроизведёт известную аварию на чистой машине. §9 (строка 299) добавляет к тому же противоречию: перечисляет 1c-serene-sync (03:40) среди таймеров, которые «переживают ребут».",
+      "evidence": "[код] docs/RUNBOOK_DEPLOY.md:405-407 «systemctl enable --now 1c-serene-sync.timer / 1c-serene-index.timer» против docs/RUNBOOK_DEPLOY.md:35-36 «остановлен … сносит таблицу и индекс» | [замер] systemctl list-timers --all → 1c-serene-index.timer в списке отсутствует, 1c-serene-pipeline.timer NEXT «-» (не активирован)",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:404", "docs/RUNBOOK_DEPLOY.md:405", "docs/RUNBOOK_DEPLOY.md:406", "docs/RUNBOOK_DEPLOY.md:35", "docs/RUNBOOK_DEPLOY.md:36", "docs/RUNBOOK_DEPLOY.md:299"],
+      "verdict": "a",
+      "verdict_why": "Код правильный (таймеры выключены осознанно), устарел раздел раскатки — он остался от прежней схемы. Документ, разворачивающий известную аварию, — ровно тот случай из CLAUDE.md, когда устаревший док хуже отсутствующего.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "1c-serene-sync в failed с 28.07 по другой причине, чем описано: обрыв SIGTERM посреди загрузки, а не «честный код 3»",
+      "detail": "SERVER_HANDOFF §«Синк витрины тоже в failed» описывает падение 27.07 в 06:53 с Connection refused и утверждает: перезапущен вручную 27.07 в 15:41, а failed после этого — «честный сигнал» кода 3 из-за отказов 1С. Журнал показывает другое: последний прогон — 28.07, оборван в 03:57:44 сигналом TERM (code=killed, status=15/TERM) прямо посреди перечисления регистров (последняя строка — InformationRegister_СвойстваКонтрагентовСПАРКРиски), то есть до фазы, где скрипт мог бы вернуть код 3. С тех пор юнит четвёртые сутки в failed. Плюс RUNBOOK:35 описывает тот же юнит как «⚠ остановлен: синк стал частью конвейера» — не failed; два дока дают два разных состояния, и ни одно не совпадает со стендом.",
+      "evidence": "[замер] systemctl status 1c-serene-sync → «Active: failed (Result: signal) since Tue 2026-07-28 03:57:44 UTC; 4 days ago; Main PID: 837813 (code=killed, signal=TERM)» | [замер] journalctl -u 1c-serene-sync -n 60 → 03:57:44 «Main process exited, code=killed, status=15/TERM» сразу после строки загрузки очередного регистра",
+      "doc_locs": ["docs/SERVER_HANDOFF.md:264", "docs/SERVER_HANDOFF.md:268", "docs/SERVER_HANDOFF.md:272", "docs/RUNBOOK_DEPLOY.md:35"],
+      "verdict": "a",
+      "verdict_why": "Состояние стенда фактическое, док описывает прошлую итерацию и приписывает failed причине, которой в последнем прогоне не было. Правится док.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Пять сущностей 1С стабильно отдают HTTP 500 при загрузке — ни один док их не называет",
+      "detail": "В журнале синка на каждом прогоне повторяются одни и те же отказы стороны 1С: 15 записей «HTTP Error 500: Internal Server Error» по пяти сущностям (InformationRegister_ДатыВступленияВСилуНА, _ДополнительныеНастройкиЗарплатаКадры, _НастройкиКадровогоУчета, _НастройкиРасчетаЗарплаты, _НастройкиЭлектронныхТрудовыхКнижек), 3 записи «HTTP Error 404: Not Found», 3 записи «HTTP Error 401: Unauthorized» и 3 записи «load error: ERROR: CSV Error on Line: 1» по Catalog_ВнешниеКомпоненты. Документы ведут поимённые списки потерь (PLAN_P13_COMPLETENESS:27-28 — Хозрасчетный и ИерархияГруппПользователей; REGRESSION_BASE1:36 — единственная потеря), и в них ни одна из пяти «пятисоточных» сущностей не значится. SERVER_HANDOFF:272 упоминает ровно одну из пяти как пример. Итог: часть базы не доходит до поиска систематически, а перечень потерь в доках этих сущностей не содержит.",
+      "evidence": "[замер] journalctl -u 1c-serene-sync | grep -c 'HTTP Error 500' → 15; grep 'HTTP Error 500' | sort -u → пять имён (ДатыВступленияВСилуНА, ДополнительныеНастройкиЗарплатаКадры, НастройкиКадровогоУчета, НастройкиРасчетаЗарплаты, НастройкиЭлектронныхТрудовыхКнижек) | [замер] grep -oE 'ОШИБКА [^:]*: ?[^(]*' | sort | uniq -c → 15×500, 3×«load error: CSV Error on Line: 1», 3×404, 3×401",
+      "doc_locs": ["docs/PLAN_P13_COMPLETENESS.md:27", "docs/PLAN_P13_COMPLETENESS.md:28", "docs/REGRESSION_BASE1.md:36", "docs/SERVER_HANDOFF.md:272"],
+      "verdict": "a",
+      "verdict_why": "Отказы приходят со стороны 1С, наш код их честно печатает; отстал перечень потерь в доках — он называет две сущности из как минимум восьми проблемных.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Перепись в последнем такте показала 909 сущностей, закрытых правами, — доки в четырёх местах говорят 934",
+      "detail": "Последний успешный такт конвейера (29.07 06:40) напечатал таблицу переписи: cov_ent_denied = 909 «сущностей закрыто правами». Четыре документа и CHANGELOG в шести местах оперируют числом 934 (UNIVERSAL_INGEST: «934 (20%)», PLAN_P13: «934, объём неизвестен принципиально», STATE_2026-07-26:96, CHANGELOG:1449/1458/1656). Разница 25 сущностей нигде не объяснена, и в REGRESSION_BASE1 (замер той же даты) строки cov_ent_denied вообще нет — то есть число, на котором построен весь разбор п. 13, в регрессию не входит и в доках устарело.",
+      "evidence": "[замер] journalctl -u 1c-serene-pipeline → «cov_ent_denied | 909 | сущностей закрыто правами» (Jul 29 06:40:00) | [код] docs/UNIVERSAL_INGEST.md:94 «Закрыто правами читателя | 934 (20%)»; docs/PLAN_P13_COMPLETENESS.md:20 «934» | [замер] grep -n 'cov_ent_denied' docs/REGRESSION_BASE1.md → нет вхождений",
+      "doc_locs": ["docs/UNIVERSAL_INGEST.md:94", "docs/UNIVERSAL_INGEST.md:107", "docs/PLAN_P13_COMPLETENESS.md:20", "docs/STATE_2026-07-26.md:96", "docs/REGRESSION_BASE1.md:22"],
+      "verdict": "a",
+      "verdict_why": "Живое число даёт база, оно свежее; доки отстали. Правится док (и стоит внести cov_ent_denied в регрессионную таблицу, иначе дрейф снова пройдёт незамеченным).",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "На боевой второй базе до модели доходит 5-7% перечня сущностей — доки закрыли этот дефект на цифрах первой базы (95%)",
+      "detail": "Журнал живого сервиса ответов второй базы (:8099) на каждом вопросе печатает «ask: перечень сущностей обрезан по бюджету промпта»: 94 из 1575, 116 из 1617, 107 из 1645, 78 из 591 — то есть модель видит 6-13% перечня. В доках этот дефект помечен закрытым 27.07 на цифрах первой базы: «214-215 из 226» (CHECKLIST_SEARCH_FIX:84), то есть ~95%, и там же сказано «остаётся показать поле человеку в бот-слое» — то есть до клиента признак усечения по-прежнему не доходит. Ни один док не называет долю для базы в 1 600 сущностей, а именно на ней идут боевые ответы (F003). При таком отсечении «выбор сущности», названный в activeContext единственной причиной всех неверных ответов, работает по одной пятнадцатой перечня.",
+      "evidence": "[замер] tail -30 /tmp/claude-0/-srv-1c/81653964-…/scratchpad/ask8099.log → «перечень сущностей обрезан по бюджету промпта (94 из 1575…)», «(116 из 1617…)», «(107 из 1645…)» | [код] ubuntu/serenedb/serene_ask.py:1124 — та же строка в stderr | [код] docs/CHECKLIST_SEARCH_FIX.md:84 «закрыто 27.07: … (214-215 из 226)»",
+      "doc_locs": ["docs/CHECKLIST_SEARCH_FIX.md:84", "docs/HOW_NOT_TO.md:438", "memory_bank/activeContext.md:66"],
+      "verdict": "v",
+      "verdict_why": "Бюджет промпта оставлен намеренно (п. 19 — размер вызова не должен расти с числом сущностей), но при 1 600 сущностях это превращается в отсечение 94% кандидатов, и цена для правильности ответа (п. 21) не замерена. Как задумано на таком масштабе — вопрос владельцу, а не моё решение.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "У 1c-mcp-reports в журнале повторяющиеся трейсбеки ClientDisconnect, а прежний инстанс сжёг 5 ч 34 мин процессорного времени",
+      "detail": "Юнит выведенного из контура report_1c не просто жив — он нагружен: при остановке прошлого инстанса systemd записал «Consumed 5h 34min 12.713s CPU time, 149.4M memory peak». Перед этим журнал полон повторяющихся необработанных исключений: «Error handling POST request … starlette.requests.ClientDisconnect» и «Received exception from stream» — трейсбеки идут пачками, никакой обработки разрыва клиента в коде моста нет. Ни один док про эти ошибки не знает; RUNBOOK помечает mcp-reports как «выведен из контура, юнит ещё жив», из чего следует, что нагрузки на нём быть не должно.",
+      "evidence": "[замер] journalctl -u 1c-mcp-reports -n 25 → повторяющиеся «Error handling POST request / starlette.requests.ClientDisconnect» и «1c-mcp-reports.service: Consumed 5h 34min 12.713s CPU time, 149.4M memory peak» (Jul 31 06:03:54) | [замер] systemctl status 1c-mcp-reports → active (running) since Fri 2026-07-31 06:03:54",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:38", "docs/ARCHITECTURE.md:89"],
+      "verdict": "a",
+      "verdict_why": "Факт нагрузки и ошибок — стенд; статус «выведен, юнит жив» в доке не описывает ни того, ни другого. Само подключение report_1c к боту уже зафиксировано как F004; здесь новое — измеренный расход и повторяющаяся необработанная ошибка, которых нет ни в одном доке.",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Журнал движка нечитаем: трое суток записей «[23B blob data]», и ни один док не говорит, где смотреть логи",
+      "detail": "journalctl -u serenedb выводит только «[23B blob data]» — вывод движка приходит в journal в виде, который journalctl не показывает; при этом journalctl -u serenedb -p err — «No entries» за всё время, хотя в истории проекта у движка были падения в петлю OOM из-за WAL. Так что при следующем инциденте опереться будет не на что. Усугубляет то, что grep по всем докам и memory_bank не находит ни одного упоминания journalctl вообще: где смотреть журнал любого нашего сервиса, не написано нигде, а /var/log/1c-* и /var/log/serene* не существуют.",
+      "evidence": "[замер] journalctl -u serenedb -n 25 → 25 строк «[23B blob data]» | [замер] journalctl -u serenedb -p err -n 40 → «-- No entries --» | [замер] grep -rn 'journalctl' --include=*.md docs/ memory_bank/ → пусто | [замер] ls -la /var/log/1c-* /var/log/serene* → No such file or directory",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:33", "docs/SERENEDB.md:1"],
+      "verdict": "a",
+      "verdict_why": "Пробел в доке: раздел о диагностике движка и сервисов отсутствует как таковой. Сам факт blob — свойство вывода движка, его надо зафиксировать как ловушку в techContext, а не чинить наспех.",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Штатный юнит второй базы не заработает и после освобождения порта: ODG_PASS в его env пустой",
+      "detail": "Новое к F005. В /etc/1c-odata-gateway-ut.env ключ ODG_PASS присутствует, но значение пустое (длина 0) при ODG_USER длиной 25; в основном /etc/1c-odata-gateway.env оба непустые. Поэтому каждый старт юнита писал «WARN: ODG_USER/ODG_PASS пусты — OData ответит 401» ещё до падения на занятом порту: даже сняв осиротевший процесс, штатный путь отдаст 401 на все запросы. Пароль читателя второй базы не сохранён нигде — он живёт только в памяти процесса pid 1136469, поднятого руками. Второе уточнение к F005: юнит уже НЕ «крутится в перезапуске», как написано в RUNBOOK:51 — счётчик дошёл до 740 и systemd остановил его 29.07 06:00:45; сейчас состояние inactive (dead, Result: exit-code).",
+      "evidence": "[замер] awk -F= '/^ODG_(USER|PASS)/{print $1, length($2)}' /etc/1c-odata-gateway-ut.env → ODG_USER len=25, ODG_PASS len=0 (в /etc/1c-odata-gateway.env — 9 и 6) | [замер] journalctl -u '1c-odata-gateway@ut' → «WARN: ODG_USER/ODG_PASS пусты — OData ответит 401», затем OSError: [Errno 98] Address already in use, «restart counter is at 740», «Stopped …» Jul 29 06:00:45 | [замер] systemctl status 1c-odata-gateway@ut → inactive (dead) (Result: exit-code) since 2026-07-29 06:00:45",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:51", "docs/RUNBOOK_DEPLOY.md:52"],
+      "verdict": "b",
+      "verdict_why": "Инвариант проекта: секреты — в /etc/*.env с правами 600. Здесь секрет второй базы не записан вообще, а работоспособность держится на процессе, поднятом руками, — это тот самый ручной шаг, который по п. 14 запрещён и который 29.07 уже стоил двух дефектов. Док под это править нельзя.",
+      "severity": "high",
+      "known_fid": "F005"
+    },
+    {
+      "title": "Проверка /health бота не сработала бы и при исправленном юните: в env-файле переменная пустая",
+      "detail": "Дополнение к F014. Помимо того, что юнит 1c-bot-monitor не подключает EnvironmentFile, сам /etc/1c-bot-monitor.env содержит единственную строку «GATEWAY_HEALTH_URL=» — с пустым значением, а скрипт по коду при пустом значении проверку молча пропускает («Пусто — проверка пропускается»). То есть починка одного лишь юнита ничего не даст. Плюс права на файл 0644 (остальные env — 600).",
+      "evidence": "[замер] grep -oE '^[A-Za-z_]+=' /etc/1c-bot-monitor.env → «GATEWAY_HEALTH_URL=» (значение пустое) | [код] /opt/1c-bot-monitor/bot_health_check.sh:16-17 «GATEWAY_HEALTH_URL=\"${GATEWAY_HEALTH_URL:-}\"» и ветка «if [ -n \"$GATEWAY_HEALTH_URL\" ]» | [замер] ls -la /etc/1c-bot-monitor.env → -rw-r--r-- (остальные 1c-*.env — -rw-------)",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:40", "docs/OPENCLAW_BOT.md:141"],
+      "verdict": "b",
+      "verdict_why": "Инвариант «запреты держатся кодом, а не промтом» и правило про секреты/права 600. Проверка живости, которая по построению не выполняется, — та же молчаливая пустота, что п. 13 называет дефектом.",
+      "severity": "medium",
+      "known_fid": "F014"
+    },
+    {
+      "title": "Точная причина failed у конвейера — SIGTERM в фазе синка 29.07 07:32:47; activeContext от 01.08 об остановке молчит",
+      "detail": "Уточнение к F001. Юнит не падал по ошибке кода: последний успешный такт 29.07 06:38-06:40 завершился штатно («корпус 103808 -> 103808 (+0), сущностей 231 -> 231, без вектора 0; резолвер 115151 -> 115151», «такт занял 123 с», Deactivated successfully). Следующий запуск в 06:41:15 дошёл до строки «== синк витрины (дельта из 1С)» и был убит извне в 07:32:47 (code=killed, status=15/TERM) — то есть после 51 минуты в фазе синка. С тех пор такт не запускался: 1c-serene-pipeline.timer в list-timers показывает NEXT «-», LAST 29.07 06:41:15. При этом memory_bank/activeContext.md, обновлённый 01.08, в разделах «Что работает» / «Что НЕ работает» не упоминает ни одного failed-юнита и утверждает «сборка корпуса и слияние внутри базы — такт ~13 мин».",
+      "evidence": "[замер] journalctl -u 1c-serene-pipeline -n 60 → Jul 29 06:40:01 «== такт занял 123 с», «Deactivated successfully»; Jul 29 06:41:15 «== синк витрины (дельта из 1С)»; Jul 29 07:32:47 «Main process exited, code=killed, status=15/TERM» | [замер] systemctl list-timers --all → «- - Wed 2026-07-29 06:41:15 UTC 3 days ago 1c-serene-pipeline.timer»",
+      "doc_locs": ["memory_bank/activeContext.md:53", "memory_bank/activeContext.md:64", "docs/RUNBOOK_DEPLOY.md:37"],
+      "verdict": "a",
+      "verdict_why": "Останов внешний (SIGTERM), не дефект кода конвейера; отстали доки — прежде всего activeContext, который обновлён позже остановки и её не отражает, хотя п. 17 контракта именно этим тактом и держится.",
+      "severity": "medium",
+      "known_fid": "F001"
+    }
+  ]
+}

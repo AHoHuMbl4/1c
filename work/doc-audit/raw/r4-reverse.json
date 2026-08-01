@@ -1,0 +1,125 @@
+{
+  "angle": "reverse",
+  "findings": [
+    {
+      "title": "Два инструмента бота ходят в РАЗНЫЕ базы 1С: ask_1c отвечает по ut_test, report_1c считает по первой базе",
+      "detail": "В конфигурации бота включены оба MCP-сервера: `serene-ask` (:6016 → serene_ask :8099) и `second-brain-reports` (:6015 → mcp_reports). Первый читает вторую базу (`dbname=ut_test`), второй — первую (`dbname=postgres`, Бухгалтерия). Модель выбирает инструмент сама, значит в одном разговоре числа могут прийти из двух разных информационных баз, и человек этого не увидит: в ответе нет пометки, по какой базе посчитано. Ни один док не описывает, что у бота две двери в две разные базы (ARCHITECTURE:85 описывает только сторону ask_1c). Смежная известная находка F004 — про сам факт подключения report_1c вопреки решению владельца; здесь новое — расхождение баз между инструментами.",
+      "evidence": "[замер] python3 -c json.load(/home/undebot/.openclaw/openclaw.json) → mcp.servers: {second-brain-reports: http://127.0.0.1:6015/mcp, toolFilter include report_1c; serene-ask: http://127.0.0.1:6016/mcp, include ask_1c} | [замер] grep SERENEDB_DSN /etc/1c-mcp-reports.env → host=127.0.0.1 port=7890 user=serene_ro dbname=postgres; RESOLVER_DSN → dbname=postgres | [замер] tr '\\0' '\\n' < /proc/3109129/environ (живой serene_ask :8099) → SERENEDB_DSN_RO=… dbname=ut_test, RESOLVER_DSN=… dbname=ut_test | [код] ubuntu/serenedb/serene_ask.py:42 DSN = os.environ.get(\"SERENEDB_DSN_RO\", …)",
+      "doc_locs": ["docs/ARCHITECTURE.md:85", "docs/HOW_IT_WORKS.md:216", "docs/RUNBOOK_DEPLOY.md:453", "MAP.md:19"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п.12: «выбор наугад между правдоподобными вариантами запрещён», п.21: ответ обязан быть правильным. Ответ из другой базы 1С — неверный ответ, а не осторожность; выбирает базу фактически модель, выбором инструмента. Док под такое состояние править нельзя — правится стенд (одна база на инстанс, как и задумано шаблонными юнитами).",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "У боевой второй базы нет ни юнита, ни таймера, ни env: конвейер свежести жёстко обслуживает первую базу",
+      "detail": "Юнит `1c-serene-pipeline` читает `/etc/1c-serene-sync.env`, где `SERENEDB_DSN` задан БЕЗ `dbname` — libpq подставляет базу по умолчанию (`postgres`, первая база). Последний прогон в журнале это подтверждает числами первой базы. Для `ut_test`, по которой бот отвечает сегодня, нет ни отдельного env, ни экземпляра юнита, ни таймера — она обновлялась только ручными запусками с переопределением переменных, и рецепта этого запуска нет ни в одном доке (RUNBOOK:363,398 приводит переменные только для первой базы). Следствие: даже если поднять погашенный таймер (F001), боевая база не обновится никогда. Известные F001 (таймер стоит) и F003 (ответы по второй базе) этот разрыв не покрывают.",
+      "evidence": "[замер] grep DSN /etc/1c-serene-sync.env → SERENEDB_DSN=host=127.0.0.1 port=7890 user=postgres (без dbname) | [замер] systemctl cat 1c-serene-pipeline.service → EnvironmentFile=/etc/1c-serene-sync.env, ExecStart=/opt/1c-mcp-reports/pipeline.sh | [замер] journalctl -u 1c-serene-pipeline -n 25 → «корпус 103808 -> 103808 (+0), сущностей 231 … резолвер 115151» (числа ПЕРВОЙ базы), последний успешный такт 29.07 06:40 | [замер] psql dbname=ut_test -c \"select max(seen_at) from search_sources\" → 2026-07-29 17:22:10 | [замер] systemctl list-unit-files | grep serene → экземпляров конвейера для второй базы нет",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:363", "docs/RUNBOOK_DEPLOY.md:398", "docs/ARCHITECTURE.md:62", "docs/TEST_SECOND_BASE.md:40", "MAP.md:19"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п.17: ответ отражает изменения в 1С не позднее 20 минут. Для базы, по которой бот реально отвечает, механизма обновления на стенде не существует вовсе — это нарушение контракта, а не отставание документа. Плюс инвариант универсальности: привязка конвейера к базе по умолчанию libpq — та же ловушка, на которой уже обжигались (TEST_SECOND_BASE §Н-2).",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Монитор «бот жив» сторожит выведенный контур и постоянно висит в состоянии down: api",
+      "detail": "`bot_health_check.sh` проверяет список `SYS_SERVICES=\"serenedb 1c-mcp-braine 1c-mcp-reports api\"`. `api.service` (слой braine) выведен и мёртв, поэтому монитор с 26.07 держит состояние `down: api` — а алерт шлётся только на СМЕНУ состояния, то есть владельцу постоянно висит ложная тревога, к которой привыкают. При этом в списке НЕТ ни одного звена живого пути ответа: `1c-mcp-ask` (:6016), сам `serene_ask` (:8099, осиротевший процесс), `1c-odata-gateway`. Что именно проверяет монитор, не описано ни в одном доке: RUNBOOK:40 даёт только строку «алерт владельцу в Telegram при падении».",
+      "evidence": "[код] ubuntu/monitoring/bot_health_check.sh:11 SYS_SERVICES=\"${SYS_SERVICES:-serenedb 1c-mcp-braine 1c-mcp-reports api}\" | [замер] cat /var/lib/1c-bot-monitor/state → «down: api» | [замер] systemctl is-active api.service → inactive; 1c-mcp-braine/1c-mcp-reports/serenedb → active | [замер] systemctl status 1c-bot-monitor.timer → active (waiting), срабатывает каждые 3 минуты, последний прогон 01.08 15:37",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:40", "docs/RUNBOOK_DEPLOY.md:551", "docs/ARCHITECTURE.md:161", "MAP.md:52"],
+      "verdict": "b",
+      "verdict_why": "Слой braine выведен из продукта решением владельца, а критерий здоровья бота на стенде всё ещё построен на нём: живой путь ответа не сторожится, а ложный «down» гасит смысл алерта. Это состояние стенда, не отставание дока; док под него править нельзя. Смежное известное — F014 (монитор не читает /etc/1c-bot-monitor.env, поэтому GATEWAY_HEALTH_URL пуст и проверка /health пропускается), но состав SYS_SERVICES и залипшее состояние там не разбирались.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Каталог данных движка используется как свалка выгрузки: 1767 CSV на 826 МБ, подкаталог второй базы, каталог опытов bench",
+      "detail": "Загрузчик пишет выгрузку сущности файлом CSV в `/var/lib/serenedb` (тот же каталог, где лежат данные движка) и после `read_csv` файлы не удаляет: лежат 1767 файлов на 826 МБ, старейшие от 24.07 (в том числе `banks.csv` от ручных опытов). Вторая база складывает своё в подкаталог `/var/lib/serenedb/ut` (786 МБ), там же каталог `bench` с `corpus.parquet` от опытов и `lab.log`. Итого каталог данных — 12 ГБ, из них 11 ГБ `engine_duckdb` и 159 МБ `engine_search`. Ни устройство выгрузки через CSV, ни то, что файлы копятся и растут с размером базы, ни раскладка подкаталогов не описаны: MAP:201 даёт одну строку «данные движка», RUNBOOK:363 — одну строку про CSV_DIR.",
+      "evidence": "[код] ubuntu/serenedb/poc_load_entity.py:34 CSV_DIR = os.environ.get(\"CSV_DIR\", \"/var/lib/serenedb\"); :533-545 пишет `{table}.csv`, :498 — `{table}__delta.csv`, удаления нет | [замер] ls /var/lib/serenedb | grep -c '\\.csv$' → 1767; du -ch /var/lib/serenedb/*.csv | tail -1 → 826M; du -sh /var/lib/serenedb → 12G; du -sh ut engine_duckdb engine_search bench → 786M / 11G / 159M / 232K | [замер] ls -lt /var/lib/serenedb/*.csv | tail -1 → banks.csv от 24.07",
+      "doc_locs": ["MAP.md:201", "docs/RUNBOOK_DEPLOY.md:363", "docs/HOW_IT_WORKS.md:206", "docs/ARCHITECTURE.md:62"],
+      "verdict": "a",
+      "verdict_why": "Механизм рабочий и осмысленный (файл + read_csv — штатный путь загрузки движка), но нигде не описан: ни что выгрузка идёт через диск, ни что она копится, ни где лежит раскладка второй базы. На чужой машине это первый вопрос при планировании места. Правится док (MAP/RUNBOOK/HOW_IT_WORKS); вопрос об уборке файлов — отдельный, к владельцу.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Служебные таблицы-остатки живут в обеих боевых базах и не описаны нигде",
+      "detail": "В базе `postgres` и в `ut_test` рядом с боевыми таблицами лежат остатки прошлых опытов и снятых механизмов, которых нет ни в одном *.md: `base1_aff` (41 строка), `base1_before` (231), `probe_dim`/`probe_map`/`probe_s`, `rb_first`, `step2_first`, `search_seen` (стадия выведенного serene_search_build.py), `res_chunk`, `res_dim`, `res_emb_0…res_emb_11`, `search_corpus_backup_20260727` (97 965 строк), `search_corpus_bak`, `search_tables_bak`, `search_tables_1536`, `tmp_prod_corpus`, `tmp_refmap`, `tbl_chunk`, `search_entity_alias_bak`/`_v3`, а также рабочие таблицы, которые док не знает: `cov_mart`, `cov_mart_obj` (перепись полноты), `base_profile_meta` (отметка «когда переписывали схему»), представления `wiki_pages`, `wiki_entity_facts`. Отбор источников теперь идёт по `$metadata`, поэтому в корпус они не лезут, но человек, открывший базу, не отличит боевое от мусора — а однажды именно такие таблицы уехали в источники и раздули корпус до 235 532 строк.",
+      "evidence": "[замер] psql dbname=postgres -c \"select table_name from information_schema.tables where table_schema not in (…) and table_name !~ '^(catalog|document|…)_'\" → перечень выше; тот же запрос по ut_test → +rb_first, step2_first, wiki_pages, wiki_entity_facts, search_entity_alias_bak/_v3 | [замер] select count(*): base1_aff=41, base1_before=231, probe_s=3, search_corpus_backup_20260727=97965, search_seen=0 | [замер] grep -rn --include='*.md' по каждому имени → cov_mart=0, cov_mart_obj=0, base_profile_meta=0, wiki_pages=0, wiki_entity_facts=0, probe_dim=0, probe_map=0, base1_aff=0, base1_before=0, rb_first=0, step2_first=0, res_chunk=0, res_dim=0 упоминаний | [код] ubuntu/serenedb/coverage_build.sql:21,27 создаёт cov_mart/cov_mart_obj; ubuntu/serenedb/serene_sync.py:162 — base_profile_meta; ubuntu/serenedb/wiki_build.sql:27,47 — представления вики",
+      "doc_locs": ["MAP.md:93", "docs/HOW_IT_WORKS.md:205", "docs/PLAN_P13_COMPLETENESS.md:75", "docs/HANDOFF_CHECK_1.md:362"],
+      "verdict": "a",
+      "verdict_why": "Часть перечисленного — рабочие механизмы (перепись полноты, отметка переписи схемы, представления вики), их просто нет в доках; часть — мусор опытов, о котором док тоже молчит. Разделение «что боевое, что остаток» — это документ, а не код. Уборка мусора — отдельное решение владельца (состояние стенда меняем только по его слову).",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Вики — целый работающий слой, от которого в доках только строчка в таблице",
+      "detail": "Вики собирается и публикуется КАЖДЫМ тактом: `build.sh:286-287` зовёт `wiki_alias.sh \"${WIKI_ALIAS_PER_TACT:-100}\"` и `wiki_publish.sh`, оба — «шаг не прошёл, такт продолжается». Ни то, что вики внутри такта, ни ручка `WIKI_ALIAS_PER_TACT` (ноль упоминаний в доках) нигде не записаны. Не описано и устройство хранилища: плагин `memory-wiki` включён с `vaultMode: isolated`, хранилище `/home/undebot/.openclaw/wiki/main` (698 страниц сущностей, 5,1 МБ, каталоги `entities/`, `concepts/`, `reports/`, `sources/`, `_views/`, свой `AGENTS.md`), `ingest.autoCompile: true`, `render.createBacklinks/createDashboards`, поиск `backend: local, corpus: wiki`; в `~/.openclaw/plugin-skills` подвешены два навыка движка (`wiki-maintainer`, `obsidian-vault-maintainer`). Боту разрешены `wiki_search`/`wiki_get` в `tools.allow`. Всё это — путь, по которому бот выбирает сущность до обращения к данным.",
+      "evidence": "[код] ubuntu/serenedb/build.sh:286-287 | [замер] python3 -c json.load(/home/undebot/.openclaw/openclaw.json) → plugins.entries['memory-wiki'].config = {vaultMode: isolated, vault.path: /home/undebot/.openclaw/wiki/main, search: {backend: local, corpus: wiki}, ingest.autoCompile: true, render: {createBacklinks, createDashboards}}; tools.allow = [message, bundle-mcp, wiki_search, wiki_get] | [замер] ls /home/undebot/.openclaw/wiki/main/entities | wc -l → 698; du -sh …/wiki/main → 5.1M | [замер] ls -la /home/undebot/.openclaw/plugin-skills → симлинки wiki-maintainer, obsidian-vault-maintainer в dist/extensions/memory-wiki/skills | [замер] grep -rn WIKI_ALIAS_PER_TACT --include='*.md' → 0",
+      "doc_locs": ["docs/HOW_IT_WORKS.md:205", "docs/HOW_IT_WORKS.md:206", "docs/HOW_IT_WORKS.md:207", "MAP.md:56", "docs/ARCHITECTURE.md:105", "docs/RUNBOOK_DEPLOY.md:453"],
+      "verdict": "a",
+      "verdict_why": "Слой рабочий и штатный (хранилище и компиляция — средства движка OpenClaw, а не наш код), но по докам его нельзя ни развернуть на чистой машине, ни понять, когда он обновляется и чем ограничен. Правится док: RUNBOOK (раскладка хранилища и плагина), HOW_IT_WORKS (вики — шаг такта), MAP (ручка WIKI_ALIAS_PER_TACT).",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Гейты сессии — семь хуков и агент-снайпер на коммите — работают, но описаны как «доехали»",
+      "detail": "Правило «запреты держатся кодом» держится семью хуками в `.claude/hooks/` и агентом внутри `settings.json`, а в доках названы два: `check-docs.sh` (CLAUDE.md:66) и `check-active-size.sh` (CLAUDE.md:88). Про остальные — `check-diff.sh` (PreToolUse на Bash), `check-golden.sh` (блокирует scp/rsync, если золотой набор не прогнан после последней правки, отметка `.claude/.golden-last-run`), `check-write.sh` и `count-edits.sh` (PostToolUse на Write/Edit: велосипед/подгонка/рост и счётчик третьей подряд правки одного файла), `session-start.sh` — единственное упоминание в проекте это строка HANDOFF_CHECK_1:41-42 «все доехали, права на выполнение сохранены». Не описан и агент-хук «снайпер», который на каждом `git commit` читает `git diff --cached` и ищет четыре вещи (велосипед поверх штатного, подгонка порогов, рост величины в модель, имя нашей базы в коде). `.claude/` вообще нет в карте проекта, хотя это исполняемая часть правил.",
+      "evidence": "[замер] ls /srv/1c/.claude/hooks → check-active-size.sh, check-diff.sh, check-docs.sh, check-golden.sh, check-write.sh, count-edits.sh, session-start.sh; ls .claude/agents → boxed-ready, context-and-scale, data-completeness, enforcement-in-code, hardcode-sniper, openclaw-native, serenedb-native | [замер] python3 разбор .claude/settings.json → PreToolUse(Bash): 4 command-хука + agent-хук «Снайпер смотрит коммит» (timeout 180); PostToolUse(Write|Edit): count-edits.sh, check-write.sh | [код] .claude/hooks/check-golden.sh:9,22-26 (отметка .golden-last-run, SRC_DIRS) | [замер] grep -rn --include='*.md' по именам хуков → check-diff/check-golden/check-write/count-edits встречаются ровно один раз, все в docs/HANDOFF_CHECK_1.md:41",
+      "doc_locs": ["CLAUDE.md:66", "CLAUDE.md:88", "MAP.md:2", "docs/HANDOFF_CHECK_1.md:41"],
+      "verdict": "a",
+      "verdict_why": "Механизм рабочий; отставание — документное: новая сессия узнаёт о запрете только когда в него упрётся, а перенос проекта на другую машину потеряет половину гейтов молча. Правится MAP (раздел «чем держатся правила») и CLAUDE.md (перечень хуков и что каждый блокирует).",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Рабочий каталог /opt/1c-mcp-reports содержит файлы, которых нет в репозитории, — deploy.sh лишнее не убирает",
+      "detail": "`deploy.sh` копирует из репозитория только `*.sh|*.sql|*.py|*.tsv`, что отличается, и ничего не удаляет. Поэтому в каталоге, из которого systemd запускает конвейер и сервис ответов, живут неверсионированные файлы: `bench_build.py` (12 КБ), `bench_run.py` (10 КБ), каталог `release-42/` с 13 журналами опытов от 26.07 (`rebuild*.log`, `sync_fix.log` 70 КБ, `final*_ab.txt`), `serene-entities.txt.review`. Восстановить рабочий каталог из репозитория «как есть» нельзя, и при разборе аварии непонятно, что из лежащего исполняется. Сами скрипты при этом совпадают с репо (расхождений, кроме `__pycache__`, нет).",
+      "evidence": "[замер] comm -23 <(ls /opt/1c-mcp-reports) <(ls ubuntu/serenedb) → bench_build.py, bench_run.py, release-42, serene-entities.txt.review | [замер] diff -rq ubuntu/serenedb /opt/1c-mcp-reports | grep -v '^Only in' → отличаются только 4 файла __pycache__ | [код] ubuntu/serenedb/deploy.sh:21-33 — цикл по \"$SRC\"/*.sh *.sql *.py *.tsv, `cmp -s` + атомарная подмена; удаления лишнего нет | [замер] ls -la /opt/1c-mcp-reports/release-42 → 13 файлов журналов от 26.07",
+      "doc_locs": ["MAP.md:66", "docs/RUNBOOK_DEPLOY.md:453", "docs/SERVER_HANDOFF.md:65"],
+      "verdict": "a",
+      "verdict_why": "Поведение deploy.sh осознанное (копировать только отличающееся, атомарно), но нигде не сказано, что рабочий каталог — не зеркало репозитория и что лишнее в нём остаётся навсегда. Правится док (MAP-строка deploy.sh и RUNBOOK §11); чистка каталога — состояние стенда, решение владельца.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Снапшот витрины: рабочий скрипт есть, расписания нет, копия одна и от 29.07 — а ARCHITECTURE говорит «штатного нет»",
+      "detail": "`serenedb_backup.sh` рабочий: останавливает движок, кладёт tar.gz каталога данных, крутит ротацию по KEEP=7 и содержит процедуру восстановления в комментарии. Его нет ни в карте файлов MAP §2, ни в RUNBOOK; ни один таймер и ни один cron его не запускают, а в `/root/backups/serenedb` лежит ровно одна копия от 29.07 на 2,7 ГБ (сделана руками перед пересозданием второй базы). При этом ARCHITECTURE:176 держит backup/restore SereneDB в открытых пунктах как «штатного нет», а UBUNTU_SETUP:41 обещает «добавим свой таймер — наше правило: бэкапы всегда».",
+      "evidence": "[код] ubuntu/serenedb/serenedb_backup.sh:1-27 (stop → tar → start → ротация; RESTORE в комментарии) | [замер] ls -la /root/backups/serenedb → serenedb-20260729-044937.tar.gz, 2 730 846 611 байт, единственный файл | [замер] systemctl list-unit-files | grep -iE 'backup' → пусто; ls /etc/cron.d → только e2scrub_all, sysstat; crontab -l для root и undebot → «no crontab»",
+      "doc_locs": ["docs/ARCHITECTURE.md:176", "docs/UBUNTU_SETUP.md:41", "MAP.md:52", "docs/RUNBOOK_DEPLOY.md:300"],
+      "verdict": "a",
+      "verdict_why": "Средство существует и проверено round-trip — значит формулировка «штатного нет» и обещание «добавим таймер» устарели, а карта файлов о скрипте молчит. Правится док; заводить таймер — изменение состояния сервера, то есть решение владельца.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Живой enabled-сервис 1c-config-ui кормит выведенный контур ETL",
+      "detail": "`1c-config-ui` (enabled + active, :6012, под root, под токеном `UI_TOKEN`) — веб-страница с галочками «что тянуть»; её выход `/etc/1c-etl-selected.txt` (последняя правка 26.07) читает только `oc_etl.py`, чей таймер `1c-etl.timer` погашен, а боевая сборка состав сущностей берёт из переписи `$metadata`. То есть работает и держит порт единственный веб-интерфейс продукта, который сегодня ни на что не влияет; ни ARCHITECTURE:63, ни RUNBOOK:30 этого не говорят — там он подан как рабочее звено. Переменная `UI_TOKEN` не встречается в доках ни разу. Смежные известные F031 (таймер ETL погашен) и F050 (рукописный список сущностей — мёртвый код) про сам сервис ничего не говорят.",
+      "evidence": "[замер] systemctl list-units | grep config-ui → 1c-config-ui.service loaded active running; list-unit-files → enabled | [замер] ss -tlnp → 127.0.0.1:6012 python3 /opt/1c-config-ui/oc_config_ui.py | [код] ubuntu/1c-config-ui/oc_config_ui.py:31 SELECTED = os.environ.get(\"ETL_SELECTED_FILE\", \"/etc/1c-etl-selected.txt\"); ubuntu/1c-etl/oc_etl.py:68 — единственный читатель | [замер] ls -la /etc/1c-etl-selected.txt → 26.07 08:15; systemctl list-unit-files | grep 1c-etl.timer → disabled | [замер] grep -rn --include='*.md' UI_TOKEN → 0",
+      "doc_locs": ["docs/ARCHITECTURE.md:63", "docs/RUNBOOK_DEPLOY.md:30", "MAP.md:52", "ubuntu/1c-config-ui/README.md:15"],
+      "verdict": "v",
+      "verdict_why": "Непонятно, как задумано: сервис держат ради будущего инсталлятора (п.14 — выбор состава человеком) или он остаток контура ETL, который пора гасить. От ответа зависит и док, и состояние стенда, поэтому вопрос владельцу, а не правка.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Переменные окружения стенда, которых нет ни в одном доке",
+      "detail": "На стенде живут настройки, не встречающиеся в *.md ни разу: `UI_TOKEN` (доступ к веб-настройке :6012), `GATEWAY_HEALTH_URL` (штатная проверка живости бота; пуста — проверка молча пропускается), `WIKI_ALIAS_PER_TACT` (сколько сущностей размечать словами за такт). Ещё две упомянуты только в CHANGELOG/progress, но не в RUNBOOK, где перечисляется состав env: `ALIBABA_API_KEYS` (несколько ключей эмбеддера — механизм чередования) и `SERENE_SRC_DIR` (раскладка кода из репозитория внутри такта, включена на стенде). Отдельно: `/etc/1c-mcp-reports.env` держит `PGPASSWORD` — переменную, которую подхватывает любой psql, запущенный из сервиса с этим EnvironmentFile.",
+      "evidence": "[замер] перечень имён из /etc/*.env (значения не печатались): 1c-config-ui.env → UI_TOKEN; 1c-bot-monitor.env → GATEWAY_HEALTH_URL; 1c-mcp-reports.env → DEEPSEEK_API_KEY, MCP_HOST/PORT, CHART_DIR, SERENEDB_DSN, ALIBABA_API_KEY, ALIBABA_EMBED_URL, RESOLVER_DSN, PGPASSWORD, RESOLVER_PW, ODG_GATEWAY_TOKEN, MCP_TOKEN, ALIBABA_API_KEYS; 1c-serene-sync.env → SERENE_SRC_DIR, CSV_DIR | [замер] grep -rn --include='*.md' по именам → UI_TOKEN=0, GATEWAY_HEALTH_URL=0, WIKI_ALIAS_PER_TACT=0; ALIBABA_API_KEYS и SERENE_SRC_DIR — только CHANGELOG/progress/PLAN_AUTONOMY | [код] ubuntu/monitoring/bot_health_check.sh:17; ubuntu/serenedb/build.sh:286; ubuntu/serenedb/pipeline.sh:20",
+      "doc_locs": ["docs/RUNBOOK_DEPLOY.md:363", "docs/RUNBOOK_DEPLOY.md:398", "docs/SERVER_HANDOFF.md:65", "docs/ARCHITECTURE.md:85"],
+      "verdict": "a",
+      "verdict_why": "Настройки рабочие, но по докам инстанс не воспроизвести: пустой GATEWAY_HEALTH_URL уже стоил проверки живости (F014), а неизвестная ручка WIKI_ALIAS_PER_TACT определяет, за сколько тактов база обрастёт человеческими словами. Правится RUNBOOK (состав env) и MAP (ручки).",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Drop-in override.conf у 1c-mcp-braine — теневой источник настройки, упомянут ровно один раз",
+      "detail": "Новое к известной находке: помимо того, что юнит жив при мёртвом upstream, его адрес задаётся не юнитом из репозитория, а drop-in файлом `/etc/systemd/system/1c-mcp-braine.service.d/override.conf` с `BRAINE_URL=http://127.0.0.1:8091`. Порт :8091 не слушает никто (сервис ответов живёт осиротевшим процессом на :8099), а инструкция отката внутри самого файла вернёт мост на :8090 — то есть на выведенный braine. Ни RUNBOOK, ни ARCHITECTURE о drop-in не знают; единственное упоминание в проекте — BENCH_BRAINE_VS_SERENE.md:215.",
+      "evidence": "[замер] cat /etc/systemd/system/1c-mcp-braine.service.d/override.conf → Environment=BRAINE_URL=http://127.0.0.1:8091 + «ОТКАТ: удалить этот файл … restart» | [замер] ss -tlnp → :8091 не слушает никто; :8099 держит python3 serene_ask.py (pid 3109129, cwd /opt/1c-mcp-reports) | [замер] grep -rn --include='*.md' override.conf → docs/BENCH_BRAINE_VS_SERENE.md:215, единственное",
+      "doc_locs": ["docs/BENCH_BRAINE_VS_SERENE.md:215", "docs/RUNBOOK_DEPLOY.md:39", "docs/ARCHITECTURE.md:161"],
+      "verdict": "a",
+      "verdict_why": "Само наличие живого моста разобрано в F006; здесь новое — что настройка живёт в файле, которого нет в перечне развёртывания, и его «откат» ведёт в выведенный слой. Правится RUNBOOK (перечень drop-in) — либо файл убирается вместе с мостом, что решает владелец.",
+      "severity": "low",
+      "known_fid": "F006"
+    }
+  ]
+}

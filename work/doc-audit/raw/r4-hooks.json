@@ -1,0 +1,135 @@
+{
+  "angle": "hooks",
+  "findings": [
+    {
+      "title": "Шлюз ВТОРОЙ базы ходит в 1С полноправным администратором — первого слоя read-only у боевой базы нет",
+      "detail": "Инвариант «1С только читаем. Два слоя: пользователь без прав записи + шлюз, режущий не-GET» держится двумя слоями только для ПЕРВОЙ базы. Живой шлюз второй базы (:6021 → /ut/odata/...), из которой сейчас идут боевые ответы (SERENEDB_DSN_RO=...dbname=ut_test), подключается к 1С под учётной записью «Администратор (ФедоровБМ)», а не под ai_reader. То есть слой «пользователь физически не пишет» — тот, который сам код шлюза называет ОСНОВНОЙ гарантией (odata_gateway.py:14-15), — для боевой базы отсутствует вовсе; единственный барьер — фильтр методов на Ubuntu. Плюс пароль администратора 1С лежит в /etc/1c-odata-gateway-ut.env. Сам фильтр методов измерен и работает (см. отдельную запись), но он один, и его обход/останов (шлюз запущен руками вне systemd, F005) снимает всю защиту.",
+      "evidence": "[замер] tr '\\0' '\\n' </proc/1136469/environ → ODG_USER=Администратор (ФедоровБМ), ODG_UPSTREAM=http://192.168.56.1:6003/ut/odata/standard.odata, ODG_LISTEN_PORT=6021 | grep ^ODG_USER /etc/1c-odata-gateway-ut.env → Администратор (ФедоровБМ); /etc/1c-odata-gateway.env → ai_reader | [замер] /proc/3109129/environ → SERENEDB_DSN_RO=...dbname=ut_test (боевые ответы идут по этой базе) | [код] ubuntu/1c-gateway/odata_gateway.py:14-15 «Пользователь 1С read-only (ai_reader) ... Это ОСНОВНАЯ гарантия»",
+      "doc_locs": ["CLAUDE.md:160", "README.md:52", "docs/HOW_IT_WORKS.md:285", "docs/HOW_IT_WORKS.md:684", "ubuntu/1c-gateway/odata_gateway.py:14"],
+      "verdict": "b",
+      "verdict_why": "Стенд нарушает инвариант проекта (CLAUDE.md:160 «Два слоя: пользователь без прав записи + шлюз») и обещание README:52. Док под стенд править нельзя: либо заводить ai_reader во второй базе, либо владелец решает, что для стенда достаточно одного слоя — но тогда это его решение, а не молчаливое положение дел",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Путь «полнота данных» обходит числовой гейт, а отклонённый гейтом текст всё равно уходит клиенту",
+      "detail": "На основном пути гейт gate() сверяет каждое число ответа с данными, и при провале текст модели ВЫБРАСЫВАЕТСЯ. На пути ответов о полноте (_coverage_answer) вызывается только check_claims — сверка объявленных claims; сам текст, где числа модель пишет свободно, функцией gate() не проверяется вообще. Хуже: при провале check_claims код возвращает kind=figures с text=text.strip(), то есть ОТКЛОНЁННЫЙ текст модели отдаётся наружу как есть (на основном пути в этом месте текст заменяется на TOTAL_TEXT/refuse_text). Мост mcp_ask.py при kind=figures возвращает боту ровно это поле text, а плагин braine-verify кладёт ответ инструмента в ЭТАЛОН хода — значит выдуманные числа из отклонённого ответа не только доходят до клиента, но и заземляют всё, что бот допишет от себя. Докстринг самой функции (:1864-1867) утверждает обратное: «проходят ТОТ ЖЕ гейт, что обычный ответ... Отдельного, более мягкого пути для служебных ответов нет и быть не должно».",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:1902-1916 (ok_roles,bad = check_claims(...); при провале return kind=figures, text=text.strip()), :1746 (gate() — на пути coverage не вызывается), :1864-1867 (докстринг «ТОТ ЖЕ гейт»), :2831-2847 (основной путь: текст модели отбрасывается) | [код] ubuntu/openclaw/mcp_ask.py:140-141,168-178 (боту уходит только data['text']) | [код] ubuntu/openclaw/verify-plugin/index.js:84-99 (ответ ask_1c/report_1c становится эталоном)",
+      "doc_locs": ["docs/HOW_IT_WORKS.md:688", "docs/HOW_IT_WORKS.md:226", "ubuntu/serenedb/serene_ask.py:1864"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п.19 (модель не считает) и п.12 (догадка — ошибка): число, которое никто не сверил с переписью, уходит клиенту как факт о полноте данных. Комментарий в коде прямо обещает отсутствие мягкого пути — значит это дефект кода, а не устаревший док",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "«Гейт отклонил — отдаём числа структурой» не работает end-to-end: клиент получает отказ при посчитанных числах",
+      "detail": "При провале гейта serene_ask возвращает {kind: figures, figures: {...посчитанные базой величины...}, text: TOTAL_TEXT или refuse_text}. Мост mcp_ask.py поле figures НЕ читает и боту не передаёт — возвращается только text. На стенде ASK_TOTAL_TEXT не задан (в окружении живого процесса :8099 его нет), поэтому text = refuse_text(question), то есть ОТКАЗ. Итог: цепочка, задуманная как «ответ не пропал, вызывающий сформулирует сам», на живом стенде превращается в отказ при наличии посчитанных данных — ровно то, что п.21 называет дефектом. Комментарий в коде (:2833-2835) обещает обратное: «отдаём их СТРУКТУРОЙ... Вызывающий формулирует сам».",
+      "evidence": "[код] ubuntu/serenedb/serene_ask.py:2836-2847 (kind=figures + figures{...}, text=TOTAL_TEXT если задан, иначе refuse_text), :191 (TOTAL_TEXT = os.environ.get('ASK_TOTAL_TEXT','')) | [замер] tr '\\0' '\\n' </proc/3109129/environ | grep ASK_ → только ASK_LISTEN_PORT, ASK_SCORER, ASK_TOKEN; ASK_TOTAL_TEXT отсутствует | [код] ubuntu/openclaw/mcp_ask.py:140-178 — ни одного обращения к data['figures'], return text",
+      "doc_locs": ["TARGET.md:110", "docs/HOW_IT_WORKS.md:688", "ubuntu/serenedb/serene_ask.py:2833"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п.21: «Отказ при наличии данных — дефект». Числа посчитаны базой и верны, а до человека доходит отказ; править надо мост (пробрасывать figures) или окружение, а не док",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Эталон гейта может прийти из ДРУГОЙ базы: report_1c подключён к postgres, а ask_1c отвечает по ut_test",
+      "detail": "verify-plugin считает эталонными числами вывод ЛЮБОГО из инструментов списка toolNames = [ask_1c, report_1c] и сливает их в один набор digits за ход (mergeRef). Но живой mcp_reports.py (:6015, инструмент report_1c) работает с SERENEDB_DSN=...dbname=postgres — это ПЕРВАЯ база (Бухгалтерия), а сервис ответов :8099 (ask_1c) — с dbname=ut_test. Значит числа первой базы легально «заземляют» ответ бота про вторую: гейт пропустит сумму из Бухгалтерии в ответе про УТ, потому что токен нашёлся в эталоне хода. Проверка, что оба инструмента смотрят в одну базу, не сделана ни кодом, ни конфигом.",
+      "evidence": "[замер] /proc/3173769/environ (mcp_reports.py) → SERENEDB_DSN=host=127.0.0.1 port=7890 user=serene_ro dbname=postgres, RESOLVER_DSN=...dbname=postgres | /proc/3109129/environ (serene_ask.py) → SERENEDB_DSN_RO=...dbname=ut_test | [код] ubuntu/openclaw/verify-plugin/verify-core.js:7 (toolNames ask_1c+report_1c), :134-152 (mergeRef сливает digits обоих), :159-167 (isGrounded — принадлежность к общему набору) | связано с F003 (ответы по ut_test) и F004 (report_1c подключён)",
+      "doc_locs": ["docs/OPENCLAW_BOT.md:80", "docs/HOW_IT_WORKS.md:226", "ubuntu/openclaw/verify-plugin/verify-core.js:7"],
+      "verdict": "b",
+      "verdict_why": "TARGET.md п.19/п.12: гейт обязан подтверждать число ДАННЫМИ ТОГО ЖЕ вопроса; смешение двух баз в одном эталоне делает проверку формальной. Ни один док не описывает эту связку — чинить конфиг/код, а не док",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Подпись к графику проходит только зачистку внутреннего — числовой гейт к ней не применяется",
+      "detail": "Хук reply_payload_sending (путь подписи к медиа) вызывает только stripInternal и ничего не проверяет числами: evaluate() там не зовётся. То есть подпись к картинке-графику — ровно то место, где числа и живут, — не сверяется с эталоном вообще. Док подаёт этот хук как закрывающий дыру: «полное покрытие: текст + подпись к графику». Ограничение движка тут ни при чём: хук уже возвращает изменённый payload, значит и replace/сокращение по гейту технически возможны.",
+      "evidence": "[код] ubuntu/openclaw/verify-plugin/index.js:187-196 (reply_payload_sending: только stripInternal, return {payload}), :154-182 (evaluate вызывается только в message_sending) | [замер] node -e с verify-core: evaluate('Долг 4321 руб', null, null, {}) → {\"action\":\"allow\"}; evaluate('Выручка 45000',null,null,{}) → cancel",
+      "doc_locs": ["docs/OPENCLAW_BOT.md:86", "docs/OPENCLAW_BOT.md:87", "docs/HOW_IT_WORKS.md:226"],
+      "verdict": "b",
+      "verdict_why": "Обещание «модель не выдумывает числа» (HOW_IT_WORKS:688, systemPatterns:74) держится кодом только для текстового пути; на медиа-пути гарантии нет, хотя механизм доступен. Дырка в коде, а не устаревший док",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Детерминированные хуки-снайперы смотрят только .py/.js/.mjs — SQL, shell и C# вне проверки; весь дифф закрывает только промт-агент",
+      "detail": "check-diff.sh берёт из индекса дифф только по '*.py' '*.js' '*.mjs', check-write.sh проверяет файл только если он .py/.js/.mjs. Между тем работа по правилу п.20 намеренно переехала ВНУТРЬ базы: corpus_build.sql, corpus_merge.sql, resolver_build.sql, build.sh, pipeline.sh, а инсталлятор — C# (windows/odata-setup/src/*.cs, сейчас как раз в изменённых). Ни числовая отсечка в SQL, ни кириллическое имя сущности в .sql/.sh/.cs, ни хардкод в .json-конфиге ни одним детерминированным хуком не ловятся. Единственная проверка, читающая весь дифф, — хук типа agent («снайпер смотрит коммит»), то есть ПРОМТ, ровно та форма, про которую инвариант говорит «НЕ РАБОТАЮТ». Дополнительно: регулярка ловит только присваивания '= <число>', поэтому порог в сравнении (if score > 0.85, LIMIT 50 внутри SQL-строки) не находится, а фильтр кириллицы отбрасывает находки по списку слов.",
+      "evidence": "[код] .claude/hooks/check-diff.sh:25 (git diff --cached -U0 -- '*.py' '*.js' '*.mjs'), :34-37 (grep -oE '=\\s*[0-9]+'), :43-45 (исключения кириллицы списком слов); .claude/hooks/check-write.sh:11-14 (case *.py|*.js|*.mjs); .claude/settings.json PreToolUse[Bash] — единственный полный разбор диффа сделан хуком type:agent | [замер] git status: изменены windows/odata-setup/src/Program.cs, Steps.cs, Sys.cs — под детерминированные хуки не попадают",
+      "doc_locs": ["docs/HOW_IT_WORKS.md:689", "memory_bank/systemPatterns.md:75", "CLAUDE.md:161"],
+      "verdict": "a",
+      "verdict_why": "Док обещает «хук-агент перед коммитом И проверка после каждой правки» — проверка после правки существует лишь для трёх расширений. Сам хук честно описан в своей шапке, врёт таблица гарантий; но заодно это вопрос по инварианту CLAUDE.md:161 (полное покрытие держится промт-агентом)",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Правило «замер до выката» не срабатывает на реальном пути выката: check-golden.sh ловит только scp/rsync",
+      "detail": "Хук требует свежего прогона золотого набора только если команда содержит scp или rsync. Выкат на этом же сервере делается локально — ubuntu/serenedb/deploy.sh (install + mv в /opt/1c-mcp-reports), плюс правки прямо в /opt; ни одна из этих команд условия не подходит, хук молча возвращает {}. Второе: список «свежести» ограничен файлами .py/.js/.mjs в пяти каталогах, поэтому правка build.sh, corpus_*.sql или systemd-юнита замера не требует вовсе. Третье: отметку ставит либо ab_scorer.py, либо любой touch — сам хук это и предлагает, так что порог снимается одной командой. На стенде отметка .claude/.golden-last-run датирована 28.07 («tfidf 8/8»), при том что .py в ubuntu/serenedb правились позже.",
+      "evidence": "[код] .claude/hooks/check-golden.sh:14-17 (case scp|rsync), :22-25 (SRC_DIRS + -name '*.py' -o '*.js' -o '*.mjs'), :44-45 («или отметить touch .claude/.golden-last-run») | [код] ubuntu/serenedb/deploy.sh:30-31 (install + mv, локально) | [замер] stat .claude/.golden-last-run → 2026-07-28 22:32, содержимое «tfidf 8/8»; ab_scorer.py:147 — единственный писатель отметки",
+      "doc_locs": ["CLAUDE.md:102", "docs/HOW_IT_WORKS.md:689"],
+      "verdict": "a",
+      "verdict_why": "Правило CLAUDE.md:102 («Замер снимается ПОСЛЕ последней правки») подано как держащееся кодом, а код покрывает лишь удалённый выкат тремя расширениями. Либо расширять хук (на deploy.sh/локальные пути и на .sh/.sql), либо честно писать в доке, что правило договорное",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Автовброс состояния работает только на startup|clear — при resume и compact сессия стартует без «С ЧЕГО НАЧАТЬ»",
+      "detail": "CLAUDE.md утверждает безусловно: шапка раздела «вбрасывается в контекст автоматически SessionStart-хуком». В settings.json matcher = 'startup|clear'. Сессия, продолженная (resume) или сжатая (compact), вброса не получает — то есть именно те сессии, где контекст уже большой и правила «скользят глазами» (ровно причина, ради которой хук написан), остаются без него. Мелочью рядом: awk печатает всё от заголовка ДО КОНЦА ФАЙЛА, а не «раздел», поэтому head -90 берёт первые 90 строк остатка файла независимо от границ раздела.",
+      "evidence": "[код] .claude/settings.json SessionStart.matcher = \"startup|clear\" | [код] .claude/hooks/session-start.sh:23 (awk '/^# .*С ЧЕГО НАЧАТЬ/{on=1} on{print}' — до EOF), :32 (head -n 90)",
+      "doc_locs": ["CLAUDE.md:17", "CHANGELOG.md:56"],
+      "verdict": "a",
+      "verdict_why": "Код делает меньше, чем обещает док: либо добавить в matcher resume/compact, либо снять слово «автоматически» без оговорок. Правило владельца «держится кодом» здесь не нарушено по сути, но покрытие неполно",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "«Бот не отвечает без обращения к данным» — на деле одна дополнительная попытка, после неё ответ уходит",
+      "detail": "Таблица гарантий называет механизмом «типизированные хуки плагина, у них есть block/cancel». Фактически before_agent_finalize возвращает не block, а {action:'revise', retry:{maxAttempts:1}} — движок гоняет модель ещё раз; если второй проход снова отвечает без обращения к данным, ответ доставляется. На доставке cancel случится только для числа длиной ≥ highRiskDigits (5); четырёхзначное выдуманное число проходит. Сам код это признаёт («Случай „бот переспросил, не обратившись к данным“ этим гейтом НЕ ловится»), а таблица гарантий — нет.",
+      "evidence": "[код] ubuntu/openclaw/verify-plugin/index.js:123-137 (action revise, maxAttempts:1), verify-core.js:184-201 (без эталона блокируется только ≥highRiskDigits, комментарий про непойманный случай) | [замер] node: evaluate('Долг 4321 руб',null,null,{}) → allow; evaluate('Продано 850 шт',null,null,{}) → allow; evaluate('Выручка 45000',null,null,{}) → cancel",
+      "doc_locs": ["docs/HOW_IT_WORKS.md:284", "docs/OPENCLAW_BOT.md:85"],
+      "verdict": "a",
+      "verdict_why": "Механизм выбран сознательно (одна лишняя попытка вместо распознавания «про данные или нет» — п.12), но таблица гарантий описывает его сильнее, чем он есть: править формулировку «block/cancel»",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Роль serene_ro во второй базе заведена не штатным setup_ro_role.sql: нет USAGE на схему, 26 таблиц без SELECT",
+      "detail": "setup_ro_role.sql — единственный документированный способ завести роли, и он описывает одну базу (запуск под postgres, GRANT USAGE + GRANT SELECT ON ALL TABLES + ALTER DEFAULT PRIVILEGES). В боевой ut_test картина другая: has_schema_privilege('serene_ro','public','USAGE') = false (в postgres = true), и 26 таблиц без SELECT для serene_ro (search_meta, search_sources, cov_mart, build_state, base_profile_meta, tmp3_*, ...). Права там, похоже, выданы по ходу загрузки (poc_load_entity.py:408,528 ro_role='serene_ro'), а не скриптом. Пока всё, что читает serene_ask (search_corpus, search_tables, search_coverage, search_entity_alias, search_quality), доступно — проверено; но защита держится побочным эффектом загрузчика, и на следующей незнакомой базе новая служебная таблица окажется нечитаемой, а проявится это как «данных нет» (молчаливая потеря, п.13). Хорошая новость, тоже замером: positive control цел в ОБЕИХ базах — resolver_index закрыт для serene_ro и открыт serene_resolver; запись (INSERT/UPDATE/DELETE) для serene_ro запрещена физически.",
+      "evidence": "[замер] psql ut_test: has_schema_privilege('serene_ro','public','USAGE') → f; postgres → t | [замер] по duckdb_tables() без индексов: ut_test 1596/1622 таблиц доступны serene_ro, недоступны 26 (search_meta, search_sources, cov_mart, cov_mart_obj, build_state, base_profile_meta, rb_first, step2_first, res_*, tmp3_*); postgres 241/290 | [замер] has_table_privilege('serene_ro','search_corpus','INSERT'/'UPDATE'/'DELETE') → f,f,f; resolver_index SELECT: serene_ro f / serene_resolver t в обеих базах | [код] ubuntu/serenedb/setup_ro_role.sql:8-11 (однобазовый сценарий), poc_load_entity.py:408,528",
+      "doc_locs": ["ubuntu/serenedb/setup_ro_role.sql:5", "docs/HOW_IT_WORKS.md:687", "docs/RUNBOOK_DEPLOY.md:0"],
+      "verdict": "v",
+      "verdict_why": "Неясно, как задумано: заводится ли роль на новой базе штатным скриптом (тогда ut_test заведена мимо процедуры) или намеренно правами загрузчика. Это прямо про девиз «непривязанность к базе» — вопрос владельцу, каким должен быть штатный путь для незнакомой базы",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Шлюз OData назван whitelist-прокси, хотя перечня сущностей в нём нет — состав держится ручной настройкой в 1С",
+      "detail": "Шапка кода описывает схему как «этот прокси (только GET, whitelist)». Whitelist-а в коде нет: проверяются метод, Bearer и отсутствие '..' в пути; любой опубликованный OData-ресурс под базовым путём проксируется. Ограничение состава — третий слой, но он живёт на стороне 1С (УстановитьСоставСтандартногоИнтерфейсаOData) и ставится руками (см. F018 про третье ручное действие). Слово whitelist из старого MCP-прокси (gateway.py, где deny-by-default действительно есть) переехало в док OData-шлюза и создаёт впечатление проверки, которой нет. Проверено замером: метод режется до авторизации, '..' и %2e%2e дают 403, неизвестный метод — 501, без токена — 401 — эта часть держится кодом честно.",
+      "evidence": "[замер] curl к живому :6011 — POST без токена → 405; POST с токеном → 405 {\"error\":\"read-only gateway: method not allowed\"}; GET без токена → 401; --path-as-is /../../ → 403, /%2e%2e/%2e%2e/ → 403, /..%2f..%2f → 403; BREW → 501; /health → 200 | [код] ubuntu/1c-gateway/odata_gateway.py:11 («только GET, whitelist»), :82-99 (_path_ok — только '..'), :101-110 (методы), :139-145 (без токена exit 2) | [замер] diff репо ↔ /opt/1c-odata-gateway/odata_gateway.py → идентичны",
+      "doc_locs": ["ubuntu/1c-gateway/odata_gateway.py:11", "README.md:98", "docs/HOW_IT_WORKS.md:684"],
+      "verdict": "a",
+      "verdict_why": "Код честен, слово в шапке — нет: перечня сущностей шлюз не проверяет. Править формулировку (и не путать с MCP-прокси gateway.py, где allowlist настоящий)",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Устаревшая таблица дефолтов verify-плагина продублирована в OPENCLAW_BOT.md (новое место известной находки)",
+      "detail": "Известно, что дефолты плагина в README устарели (F046) и что тестов не 36, а больше (F047). Добавляю: та же неверная таблица стоит и в docs/OPENCLAW_BOT.md — highRiskDigits:7 (в коде 5), noDataMarker \"[НЕТ ДАННЫХ\" (в коде \"[NO DATA\"), не упомянут minDigitsWithRef:1, и там же «36 оффлайн-юнитов». Отдельно: боевой конфиг задаёт minDigitsWithRef:1 явно, то есть расхождение маркеров стало бы молчаливым отключением правила «уточнение → числом не отвечать» (об этом предупреждает сам verify-core.js:15-19).",
+      "evidence": "[код] ubuntu/openclaw/verify-plugin/verify-core.js:8-21 (minDigits 4, minDigitsWithRef 1, highRiskDigits 5, noDataMarker '[NO DATA', clarifyMarker '[CLARIFICATION NEEDED') | [док] docs/OPENCLAW_BOT.md:92-93, :77 | [замер] jq по /home/undebot/.openclaw/openclaw.json → braine-verify.config = {debug:true, minDigitsWithRef:1}; установленная копия плагина (npm-каталог движка) побайтно совпадает с репо",
+      "doc_locs": ["docs/OPENCLAW_BOT.md:92", "docs/OPENCLAW_BOT.md:93", "docs/OPENCLAW_BOT.md:77"],
+      "verdict": "a",
+      "verdict_why": "Док отстал от кода (то же, что F046/F047, но в другом файле — по нему тоже будут сверяться)",
+      "severity": "low",
+      "known_fid": "F046"
+    },
+    {
+      "title": "Рядом с исполняемой копией плагина лежит старая ручная копия — риск «правится не то, что исполняется»",
+      "detail": "Плагин установлен движком в /home/undebot/.openclaw/npm/projects/openclaw-braine-verify__.../node_modules/openclaw-braine-verify (эта копия побайтно равна репо — хорошо). Но рядом сохранился каталог /home/undebot/braine-verify от 23.07 с ДРУГИМИ index.js и verify-core.js, и он выглядит как исходник плагина (там же test-verify.mjs и манифест). Правка в нём ничего не изменит в поведении бота, а различить копии по имени нельзя. Это ровно та ловушка, что стоила двух суток (память владельца: «сверить, что исполняется то, что правится»); док при этом честно предупреждает, что каталогом установки пользоваться нельзя, а про старую копию не знает.",
+      "evidence": "[замер] diff репо ↔ npm-копия index.js/verify-core.js → различий нет; diff репо ↔ /home/undebot/braine-verify/{index.js,verify-core.js} → отличаются (9430 vs 13655 байт, 23.07 vs 31.07) | [замер] find / -name openclaw.plugin.json -path '*verify*' → три каталога",
+      "doc_locs": ["docs/OPENCLAW_BOT.md:73", "docs/RUNBOOK_DEPLOY.md:0"],
+      "verdict": "v",
+      "verdict_why": "Неясно, задумана ли ручная копия как рабочий исходник (тогда она обязана быть свежей) или это мусор после установки (тогда её место — не в домашнем каталоге бота). Решать владельцу; трогать состояние без его слова нельзя",
+      "severity": "low",
+      "known_fid": ""
+    }
+  ]
+}

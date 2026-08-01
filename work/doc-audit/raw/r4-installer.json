@@ -1,0 +1,125 @@
+{
+  "angle": "installer",
+  "findings": [
+    {
+      "title": "Версия 1.1.0 существует только в рабочем дереве: в git лежит 1.0.0, а CHANGELOG уже описывает 1.1.0 как готовую",
+      "detail": "Committed CHANGELOG.md (запись «30.07: setup-1c-odata.exe 1.1.0») и work/installer-exe/PLAN.md §6 объявляют версию 1.1.0 собранной и лежащей в windows/odata-setup/dist/setup-1c-odata.exe. В git (HEAD) Sys.cs держит ToolVersion = \"1.0.0\", а бинарь в HEAD — 95 744 байта. Всё 1.1.0 (Program.cs +290 строк, Steps.cs +126, Sys.cs +69, README, example.ini, exe 109 056 байт) не закоммичено. Тот, кто склонирует репозиторий, получит 1.0.0 и документ, уверенно описывающий 1.1.0. Плюс app.manifest так и остался assemblyIdentity version=\"1.0.0.0\" — в свойствах файла Windows покажет 1.0.0.0 у любой сборки, включая 1.1.0.",
+      "evidence": "[замер] git status --short → ' M windows/odata-setup/src/{Program,Steps,Sys}.cs, M dist/setup-1c-odata.exe, M README.md' | [замер] git show HEAD:windows/odata-setup/src/Sys.cs | grep ToolVersion → 'public const string ToolVersion = \"1.0.0\";' против рабочего Sys.cs:22 → \"1.1.0\" | [замер] git diff --stat → dist/setup-1c-odata.exe Bin 95744 -> 109056 bytes | [код] windows/odata-setup/src/app.manifest: assemblyIdentity version=\"1.0.0.0\" | [замер] strings dist/setup-1c-odata.exe → 'setup-1c-odata 1.1.0' (бинарь в рабочем дереве уже 1.1.0)",
+      "doc_locs": ["CHANGELOG.md:293", "CHANGELOG.md:307", "work/installer-exe/PLAN.md:184", "work/installer-exe/PLAN.md:226", "windows/odata-setup/README.md:7"],
+      "verdict": "v",
+      "verdict_why": "PLAN.md:226 прямо говорит, что коммит отложен «по слову владельца из-за параллельных агентов» — то есть это осознанное отступление от правила «коммит после каждого шага». Но committed-документ уже утверждает готовность того, чего в git нет; как это разрешать (коммитить или снять утверждение из CHANGELOG) — решает владелец.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Ручных действий по факту минимум три: сеть/проброс на роутере установщик не делает и делать не умеет",
+      "detail": "П. 14 контракта разрешает два ручных действия: читатель в 1С и, если требуется, пользователь Windows. Итоговый отчёт самого установщика печатает пункт «2) Сеть: сервер Ubuntu должен доставать эту машину по HTTP:80 (часто через проброс на роутере, например 6003 -> 80)» — это третье ручное действие, и оно не автоматизируется даже частично (код только проверяет TCP и предлагает правило брандмауэра). Плюс к этому руками переносится файл 1c-odata-connection.txt и в нём вручную дописывается ODG_PASS. Отдельно: при доустановке компонентов IIS штатный путь — «перезагрузите Windows и запустите файл снова» (код 10); автопродолжение есть, но только по ключу --auto-resume, которого нет ни в одном примере быстрого старта. При этом README:4 и windows/README.md:7 утверждают «руками остаётся ровно одно / только пользователь-читатель». (Третье ручное действие «состав OData вручную» уже зафиксировано как F018 — здесь речь о ДРУГИХ, к нему не сводящихся.)",
+      "evidence": "[код] windows/odata-setup/src/Program.cs:610-612 — 'Log.Con(\"  2) Сеть: сервер Ubuntu должен доставать эту машину по HTTP:80 (часто через\"); ... \"проброс на роутере, например 6003 -> 80\"' | [код] Program.cs:644 'ODG_PASS=<пароль пользователя-читателя>' — вписывается человеком | [код] Program.cs:255-260 — при недостающих компонентах IIS возврат EXIT_REBOOT с текстом «После перезагрузки ЗАПУСТИТЕ ЭТОТ ЖЕ ФАЙЛ СНОВА» | [замер] ssh на стенд, C:\\1c\\logs\\setup-1c-odata_20260730_162337.log → блок «ОСТАЛОСЬ СДЕЛАТЬ РУКАМИ» содержит пункты 1) и 2)",
+      "doc_locs": ["windows/odata-setup/README.md:4", "windows/README.md:7", "work/installer-exe/PLAN.md:15", "TARGET.md:47"],
+      "verdict": "b",
+      "verdict_why": "П. 14 TARGET.md: «Ручных действий два: создать читателя в 1С и, если требуется, пользователя Windows. Всё остальное — из коробки». Сеть/проброс и ручной перенос кредов в этот перечень не входят; документ под код править нельзя — это дыра установщика, а не устаревший текст.",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "В варианте 2 (отказ дать пароль админа) пустой состав OData не ловится: программа выходит с кодом 0 «Настройка выполнена»",
+      "detail": "README:129 обещает: «Состав OData пуст | проверка это ловит и говорит, каким ключом починить». Ловля живёт в шаге 13 и срабатывает только когда есть учётные данные для авторизованной пробы. При отказе от пароля (вариант 2 / --skip-scope) AdminUser пуст, пароль читателя обычно тоже не задан — авторизованная проба пропускается целиком, остаётся анонимная 401, и verifyExit остаётся EXIT_OK. То есть самый рекомендуемый для ИБ клиента путь заканчивается зелёным «Настройка выполнена» на системе, которая через OData не отдаёт ни одной сущности. Ровно то состояние, ради которого заведён код возврата 20.",
+      "evidence": "[код] Program.cs:444 'if (!string.IsNullOrEmpty(vu))' … :467 'else Log.Skip(\"проверка с авторизацией пропущена (не заданы учётные данные)\")' — ветка verifyExit = EXIT_VERIFY (Program.cs:454) недостижима без кредов | [код] Program.cs:502 'return verifyExit;' — при пропуске это EXIT_OK | [замер] лог стенда setup-1c-odata_20260730_162337.log: «[13/13] … OK без пароля -> 401 … ПРОПУСК проверка с авторизацией пропущена (не заданы учётные данные)» и далее «ИТОГ»",
+      "doc_locs": ["windows/odata-setup/README.md:129", "windows/odata-setup/README.md:155", "work/installer-exe/PLAN.md:203"],
+      "verdict": "a",
+      "verdict_why": "Док обещает проверку, которой в этой ветке кода нет. Как минимум документ обязан сказать, что в варианте 2 пустой состав не диагностируется; по-хорошему это чинится кодом (проба под читателем с его паролем или явный код 20).",
+      "severity": "high",
+      "known_fid": ""
+    },
+    {
+      "title": "Проверка пользователя-читателя работает только вместе с паролем администратора 1С",
+      "detail": "README:95-101 подаёт проверку читателя как отдельную возможность: «--reader-user … скажет, существует ли пользователь, покажет его роли и предупредит, если у него есть административная роль». В коде эта проверка выполняется ВНУТРИ SetOdataComposition, то есть только когда состав OData задаётся через COM под админом. При --skip-scope (или при выборе «2» в диалоге, или при отсутствии comcntr.dll) весь блок пропускается — роли читателя не проверяются, и предупреждение об административной роли не появится никогда. Тем самым единственная автоматическая проверка границы безопасности («1С только читаем, слой 1») выключена ровно в том сценарии, который README рекомендует клиентам, не отдающим пароль.",
+      "evidence": "[код] Program.cs:353-357 — 'if (o.SkipScope) { Log.Skip(…); }' и весь блок с ролями лежит в else | [код] Program.cs:378-405 — проверка ReaderUser/ролей внутри ветки состава | [код] Program.cs:365-368 — без AdminUser в режиме --check блок тоже пропускается ('Log.Skip(\"проверка состава OData пропущена…\")') | [код] Steps.cs:1001 'if (!string.IsNullOrEmpty(readerUser)) env[\"OC1C_READER\"] = readerUser;' — роли добывает только COM-скрипт состава",
+      "doc_locs": ["windows/odata-setup/README.md:99", "windows/odata-setup/README.md:100", "work/installer-exe/PLAN.md:206", "work/installer-exe/PLAN.md:212"],
+      "verdict": "a",
+      "verdict_why": "Документ описывает возможность как независимую от варианта состава; код связывает её с паролем админа. Либо док честно оговаривает ограничение, либо проверка ролей выносится отдельным шагом.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Установщик ищет базы только в C:\\1c\\bases — привязка к нашему стенду вместо списка баз 1С",
+      "detail": "Если --base/--connstr не заданы, программа сканирует жёстко зашитый каталог C:\\1c\\bases и при пустом результате падает с кодом 5 и текстом «файловые базы в C:\\1c\\bases не найдены». C:\\1c\\bases — раскладка НАШЕГО стенда (windows/README.md:30-37), у клиента баз там не будет. При этом источник истины существует и его можно спросить: список информационных баз 1С хранит сама платформа (%APPDATA%\\1C\\1CEStart\\ibases.v8i, общий 1CEStart.cfg, реестр). Того же рода зашиты умолчания C:\\1c\\logs (лог) и C:\\1c\\backups (бэкап). Ни автоскан, ни его каталог в README и --help не описаны, а документированный пример справки 'setup-1c-odata.exe --check --ubuntu-host …' без --base на клиентской машине просто не заработает.",
+      "evidence": "[код] Program.cs:180 'List<string> found = Steps.ScanFileBases(@\"C:\\1c\\bases\");' и :183 'Log.Err(\"файловые базы в C:\\\\1c\\\\bases не найдены\")' | [код] Program.cs:24 'public string BackupDir = @\"C:\\1c\\backups\";', Program.cs:56 'string dir = @\"C:\\1c\\logs\";' | [код] Steps.cs:145-157 ScanFileBases просто перебирает подкаталоги переданного корня | [код] Program.cs:868 пример справки '--check --ubuntu-host 192.168.56.42' без --base",
+      "doc_locs": ["windows/odata-setup/README.md:18", "windows/odata-setup/README.md:33", "docs/PLAN_AUTONOMY.md:11", "TARGET.md:27"],
+      "verdict": "b",
+      "verdict_why": "П. 9 контракта («без хардкода и подстройки под конкретную базу») и девиз владельца 29.07: есть источник истины (список баз платформы) — надо спросить его, а не подставлять догадку по нашей раскладке. Док под код тут править нельзя.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Пароль администратора 1С попадает в файл на диске и в реестр HKLM при ветке «нужна перезагрузка»",
+      "detail": "На пути «доустановили компоненты IIS → нужна перезагрузка» программа сохраняет ПОЛНУЮ командную строку запуска в C:\\ProgramData\\1c-odata-setup\\resume.txt, а при --auto-resume ещё и в HKLM\\...\\RunOnce. Маскирование Log.Mask сюда не применяется. Если запуск был с документированным ключом --admin-password <пароль> (или --reader-password), пароль ложится открытым текстом в файл и в ветку реестра, читаемую любым локальным пользователем. README:162 при этом заявляет «Пароли не попадают ни в командную строку, ни в лог». Дополнительно: SaveResume вызывается без оглядки на Ctx.DryRun, то есть --check, объявленный «полностью read-only», на машине с EnablePending-компонентами создаёт файл и (с --auto-resume) пишет в реестр.",
+      "evidence": "[код] Program.cs:258-259 'SaveResume(o); if (o.AutoResume) RegisterRunOnce();' — без проверки Ctx.DryRun | [код] Program.cs:692-695 'string[] a = Environment.GetCommandLineArgs(); … File.WriteAllText(ResumeFile, sb…)' — без Log.Mask | [код] Program.cs:711-719 RegisterRunOnce кладёт ту же строку в SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\RunOnce | [код] Program.cs:759 'case \"--admin-password\": o.AdminPassword = v;' — ключ есть и документирован (Program.cs:888) | [код] Steps.cs:323-327 EnsureIis возвращает 1 (reboot) и в DryRun тоже",
+      "doc_locs": ["windows/odata-setup/README.md:161", "windows/odata-setup/README.md:162", "work/installer-exe/PLAN.md:213", "CLAUDE.md:183"],
+      "verdict": "b",
+      "verdict_why": "Инвариант проекта: «Секреты — в /etc/*.env с правами 600, никогда в git и никогда в командной строке». Ключ --admin-password в командной строке существует и его значение переживает запуск на диске и в реестре. Это нарушение инварианта, а не устаревший текст документа.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Мёртвый ключ --yes/-y: подтверждений программа не задаёт нигде",
+      "detail": "--help документирует '--yes — не задавать подтверждений', ключ разбирается и выставляет Ctx.AssumeYes. Единственный потребитель AssumeYes — Win.Confirm, который не вызывается ни разу ни в одном файле: программа не задаёт ни одного y/N-вопроса (диалог состава читает «1/2», выбор базы — номер, пароль — ReadPassword). То есть ключ обещан пользователю и ничего не меняет; заодно Confirm — мёртвый код. Рядом: --reader-password-env разбирается в коде, но его нет ни в --help, ни в README (упомянут только --admin-password-env).",
+      "evidence": "[код] Program.cs:746 'case \"--yes\": case \"-y\": Ctx.AssumeYes = true;' и Program.cs:909 в справке '--yes  не задавать подтверждений' | [замер] grep -n \"Confirm\" windows/odata-setup/src/*.cs → единственная строка Sys.cs:412 (объявление) — ни одного вызова | [код] Program.cs:763 'case \"--reader-password-env\"' против справки Program.cs:889-891, где есть только --admin-password-env",
+      "doc_locs": ["windows/odata-setup/README.md:31", "windows/odata-setup/README.md:143"],
+      "verdict": "a",
+      "verdict_why": "Расхождение обещанного и делаемого: либо ключ убрать из справки вместе с мёртвым Confirm, либо подтверждения действительно ввести. Ключ --reader-password-env — просто пропуск в справке и README.",
+      "severity": "low",
+      "known_fid": ""
+    },
+    {
+      "title": "Гарантия «--unattended не падает молча» проверяет только имя админа, а не пароль — пример из example.ini доходит до шага 12 и падает уже после бэкапа",
+      "detail": "README:89 обещает: «--unattended без --admin-user не «падает молча», а сразу говорит…». Проверка в коде смотрит только на пустой AdminUser. Поставляемый setup-1c-odata.example.ini задаёт admin-user = Администратор, а admin-password оставляет закомментированным и в шапке предлагает запуск «--config setup-1c-odata.ini --unattended». Такой запуск проходит ранний контроль, делает все изменения IIS, снимает полный zip-бэкап базы и только на шаге 12 упирается в отказ COM по пустому паролю. Тот же провал даёт --admin-password-env с несуществующей переменной: GetEnvironmentVariable вернёт null, ошибки не будет. Плюс LoadConfig молча игнорирует любые незнакомые ключи (skip-scope, use-default-pool, verify-url, platform-dir, force, log в ini не поддержаны вовсе) — человек напишет skip-scope = 1 и не получит ни эффекта, ни предупреждения.",
+      "evidence": "[код] Program.cs:314 'if (!o.SkipScope && string.IsNullOrEmpty(o.AdminUser) && !Ctx.DryRun)' — пароль не проверяется | [код] Program.cs:760 'case \"--admin-password-env\": o.AdminPassword = Environment.GetEnvironmentVariable(v);' — без проверки на null | [код] Program.cs:812-837 LoadConfig: switch без default-ветки, поддержано 17 ключей из 30 | [код] setup-1c-odata.example.ini:2 '--config setup-1c-odata.ini --unattended', :22 'admin-user = Администратор', :23 '# admin-password = …'",
+      "doc_locs": ["windows/odata-setup/README.md:89", "windows/odata-setup/README.md:90", "windows/odata-setup/setup-1c-odata.example.ini:2", "windows/odata-setup/README.md:143"],
+      "verdict": "a",
+      "verdict_why": "Обещание документа шире того, что делает код; попутно молчаливое проглатывание неизвестных ключей конфигурации — та же порода, что п. 13 («потеря не должна быть молчаливой»). Правится и док, и (лучше) ранняя проверка.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "PLAN §4.2 требует не продолжать установку IIS при ожидающей перезагрузке — код только предупреждает, а задача помечена «сделано»",
+      "detail": "work/installer-exe/PLAN.md:140 формулирует требование: «уже есть warn; усилить: не продолжать установку IIS, пока pending reboot (кроме явного override)». В коде осталось ровно то, что было: предупреждение и продолжение. При этом строка P («Префлайт в начале… reboot…») в таблице объёма работ помечена «сделано 30.07». На живом стенде это состояние воспроизводится: система ждала перезагрузки, установщик написал ВНИМАНИЕ и пошёл дальше через все 13 шагов.",
+      "evidence": "[код] Program.cs:93-98 'if (Win.PendingReboot(out why)) { Log.Warn(…); Log.Fix(\"перезагрузите Windows и запустите установщик снова…\"); }' — возврата нет | [замер] ssh стенд, C:\\1c\\logs\\setup-1c-odata_20260730_162337.log: '[ 1/13] … ВНИМАНИЕ система ждёт перезагрузки (PendingFileRenameOperations)' → далее '[ 4/13] Компоненты IIS' и до '[13/13]'",
+      "doc_locs": ["work/installer-exe/PLAN.md:140", "work/installer-exe/PLAN.md:177"],
+      "verdict": "a",
+      "verdict_why": "Либо статус P в плане не «сделано», либо требование снимается явно с обоснованием. Сейчас документ утверждает выполненным то, чего в коде нет.",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Блок для Ubuntu, который печатает установщик, называет отменённый файл /etc/1c-odata-gateway.env и не содержит порта экземпляра",
+      "detail": "Итоговый отчёт формирует «# Данные для сервера Ubuntu (/etc/1c-odata-gateway.env)» с тремя переменными ODG_UPSTREAM/ODG_USER/ODG_PASS. На Ubuntu с 29.07 шлюз — шаблонный юнит 1c-odata-gateway@<база>, читающий /etc/1c-odata-gateway-<база>.env, и в боевом файле второй базы шесть переменных, включая ODG_LISTEN_PORT (без него экземпляр сядет на дефолтный 6011 и второй шлюз столкнётся с первым) и ODG_GATEWAY_TOKEN. Администратор Ubuntu, следуя выводу exe буквально, кладёт файл под старым именем, которого шаблон не читает. Отдельно: если ODG_UPSTREAM всё-таки не задан, сам шлюз по умолчанию идёт на http://192.168.56.1:6003/1c/odata/standard.odata — адрес НАШЕГО стенда зашит в продуктовый код как молчаливый запасной вариант.",
+      "evidence": "[код] Program.cs:640 'h.AppendLine(\"# Данные для сервера Ubuntu (/etc/1c-odata-gateway.env)\")' и :642-644 — только три переменные | [замер] cat /etc/systemd/system/1c-odata-gateway@.service → 'EnvironmentFile=/etc/1c-odata-gateway-%i.env' | [замер] cut -d= -f1 /etc/1c-odata-gateway-ut.env → ODG_LISTEN_PORT, ODG_UPSTREAM, ODG_USER, ODG_PASS, ODG_GATEWAY_TOKEN, ODG_TIMEOUT | [код] /opt/1c-odata-gateway/odata_gateway.py:49 'UPSTREAM = os.environ.get(\"ODG_UPSTREAM\", \"http://192.168.56.1:6003/1c/odata/standard.odata\")'",
+      "doc_locs": ["windows/odata-setup/README.md:51", "windows/odata-setup/README.md:189", "docs/PLAN_AUTONOMY.md:297"],
+      "verdict": "a",
+      "verdict_why": "Текст, который установщик отдаёт клиенту, отстал от боевого контура Ubuntu (шаблонный юнит с 29.07). Правится текст отчёта и README; отдельным вопросом остаётся зашитый в шлюзе адрес нашего стенда как умолчание — это уже привязка (п. 9).",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Умолчание --scope default даёт справочники и документы без регистров: обороты и остатки такой установкой не отвечаются",
+      "detail": "ExpandScope при пустом/`default` даёт только catalogs+documents. Сам README:139 пишет, что регистры «нужно для оборотов и остатков», а поставляемый example.ini активной строкой ставит scope = default. Боевой стенд при этом настроен через --scope analytics (windows/README.md:17). То есть установка «по умолчанию, ничего не указывая» даёт систему, заведомо неспособную ответить на вопросы про обороты/остатки — при том что в примерах быстрого старта README analytics передан, а в примерах --help — нет.",
+      "evidence": "[код] Steps.cs:706-709 'if (s == \"\" || s == \"default\") { keys.Add(\"catalogs\"); keys.Add(\"documents\"); }' | [код] Program.cs:20 'public string Scope = \"default\";' | [код] setup-1c-odata.example.ini:32 'scope = default' | [код] Program.cs:871-879 — ни в одном примере справки --scope нет",
+      "doc_locs": ["windows/odata-setup/README.md:138", "windows/odata-setup/README.md:139", "windows/odata-setup/setup-1c-odata.example.ini:32", "windows/README.md:17"],
+      "verdict": "v",
+      "verdict_why": "Неясно, как задумано: если умолчание сознательно узкое (меньше данных наружу — решение по периметру), это надо назвать в документе; если нет — умолчанием должен быть analytics, иначе установка «из коробки» ломает п. 2/п. 3. Решение о периметре данных — владельца (owner-memory: размещение и объём данных решает он).",
+      "severity": "medium",
+      "known_fid": ""
+    },
+    {
+      "title": "Правило брандмауэра добавляется само по --ubuntu-host и не обновляется при смене подсети",
+      "detail": "README:165 подаёт открытие порта как явное действие пользователя («--open-firewall <сеть> открывает входящий 80/TCP только для указанной подсети»). В коде при заданном --ubuntu-host и незаданном --open-firewall подсеть /24 подставляется сама, и в конце прогона правило добавляется без отдельного согласия — то есть документированный «быстрый старт» README (пример 2, только --ubuntu-host) молча меняет брандмауэр. Идемпотентность при этом проверяется грубо: если правило с тем же именем уже есть и в его выводе встречается подстрока «80», код рапортует «правило уже есть» и НЕ приводит remoteip к новой подсети — при переезде сервера аналитики старая подсеть останется разрешённой, а новая не появится, и это будет выглядеть как ПРОПУСК-успех.",
+      "evidence": "[код] Program.cs:238-243 'if (string.IsNullOrEmpty(o.OpenFirewall)) { o.OpenFirewall = Win.SuggestFirewallCidr(o.UbuntuHost); … }' | [код] Program.cs:493-498 — блок «[доп.] Брандмауэр Windows» выполняется без подтверждения | [код] Steps.cs:1139-1140 'ExecResult chk = … show rule name=…; if (chk.Ok && chk.All.IndexOf(\"80\") >= 0) { detail = \"правило уже есть\"; return true; }' | [замер] лог стенда: '[СИМУЛЯЦИЯ] добавил бы правило брандмауэра для TCP/80 c 192.168.56.0/24' — при запуске без --open-firewall",
+      "doc_locs": ["windows/odata-setup/README.md:19", "windows/odata-setup/README.md:165"],
+      "verdict": "a",
+      "verdict_why": "README описывает открытие порта как строго опциональное и по явному ключу; код открывает его по производному значению. Документ обязан это назвать, а совпадение по подстроке «80» — отдельная слабость идемпотентности (успех рапортуется без проверки, что разрешена нужная подсеть).",
+      "severity": "low",
+      "known_fid": ""
+    }
+  ]
+}
