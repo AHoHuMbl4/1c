@@ -104,6 +104,63 @@ ROOT=$(cd / && env -u CLAUDE_PROJECT_DIR bash -c ". '$HOOKS/lib-hooks.sh'; hook_
 say $? 'без переменной и вне репозитория — корень берётся от места самого хука'
 cd "$TMP" || exit 1
 
+echo '== гейт git (.githooks/pre-commit): последний рубеж =='
+# 🔴 Проверяется НАСТОЯЩИМИ коммитами: `git commit --dry-run` хуки не зовёт вовсе, и
+# «проверил на сухом прогоне» означало бы, что не проверил.
+REPO="$(cd "$HOOKS/../.." && pwd)"
+G="$TMP/gate"; mkdir -p "$G/.claude/hooks" "$G/memory_bank" "$G/ubuntu/serenedb" \
+                        "$G/windows/odata-setup" "$G/.githooks"
+cp "$REPO"/.claude/hooks/{lib-hooks.sh,check-docs.sh,check-graph-fresh.sh,check-active-size.sh} "$G/.claude/hooks/"
+cp "$REPO"/.githooks/pre-commit "$G/.githooks/"
+printf '{"entities":[],"relations":[]}\n' > "$G/memory_bank/mcp-memory.json"
+printf '# Active Context\n' > "$G/memory_bank/activeContext.md"
+cd "$G" || exit 1
+git init -q .; git config user.email t@t; git config user.name t
+git config core.hooksPath .githooks
+printf '# doc\n' > README.md; printf 'print(0)\n' > ubuntu/serenedb/known.py
+git commit -qm init --no-verify -- README.md ubuntu/serenedb/known.py 2>/dev/null || { git add -A; git commit -qm init --no-verify; }
+
+gate() { # gate <ожидание: block|pass> <название>
+  local want="$1" name="$2"
+  git commit -qm "$name" >/dev/null 2>&1
+  local rc=$?
+  if [ "$want" = block ]; then [ "$rc" -ne 0 ]; else [ "$rc" -eq 0 ]; fi
+  say $? "$name"
+  # Каждый случай независим: заблокированный коммит не должен тащить свой индекс
+  # в следующий — иначе одна поломка выдаёт себя за несколько.
+  git reset -q
+}
+
+printf 'print(1)\n' > ubuntu/serenedb/newcode.py; git add ubuntu/serenedb/newcode.py
+gate block 'код без документов — коммит остановлен'
+
+printf '\nстрока\n' >> README.md; git add ubuntu/serenedb/newcode.py README.md
+gate block 'код с документом, но компонент не в графе — остановлен'
+
+# 🔴 Граф должен именно ИЗМЕНИТЬСЯ: хук смотрит дифф индекса, а не список путей.
+# Первая редакция пробы добавляла неизменённый mcp-memory.json и ждала, что коммит
+# пройдёт, — проба была неверной, а не гейт.
+printf '{"entities":[{"name":"newcode.py","entityType":"компонент","observations":[]}],"relations":[]}\n' \
+  > memory_bank/mcp-memory.json
+git add ubuntu/serenedb/newcode.py README.md memory_bank/mcp-memory.json
+gate pass 'код + документ + изменённый граф — коммит проходит'
+
+printf 'x\n' > windows/odata-setup/setup.cs; git add windows/odata-setup/setup.cs
+gate pass 'трек владельца (odata-setup) пропускается'
+
+printf 'print(2)\n' > ubuntu/serenedb/nodocs.py; git add ubuntu/serenedb/nodocs.py
+git commit -qm 'обход осознанный' --no-verify >/dev/null 2>&1
+say $? '--no-verify обходит гейт (аварийный люк на месте)'
+git reset -q
+
+# Упавшая проверка не должна означать пройденную.
+printf 'print(3)\n' > ubuntu/serenedb/broken.py; git add ubuntu/serenedb/broken.py
+cp .claude/hooks/check-docs.sh "$TMP/cd-gate.bak"
+printf '#!/usr/bin/env bash\nexit 3\n' > .claude/hooks/check-docs.sh
+gate block 'упавшая проверка = не пройденная, а не пропущенная'
+cp "$TMP/cd-gate.bak" .claude/hooks/check-docs.sh
+cd "$TMP" || exit 1
+
 echo
 if [ "$FAILED" != 0 ]; then echo "🔴 ПРОВАЛОВ: $FAILED"; exit 1; fi
 echo 'Хуки прошли пробу полностью.'

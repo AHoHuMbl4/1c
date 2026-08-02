@@ -26,7 +26,18 @@ fi
 FAKE='{"tool_input":{"command":"git commit"}}'
 fail=0
 for h in check-docs check-graph-fresh check-active-size; do
-  out=$(printf '%s' "$FAKE" | ".claude/hooks/$h.sh" 2>/dev/null) || continue
+  # 🔴 Упавшая проверка — не пройденная проверка. Прежде здесь стояло `|| continue`:
+  # хук, который не запустился (нет файла, нет python3, синтаксическая ошибка), молча
+  # пропускал коммит — тот же fail-open, ради которого этот гейт и заводился.
+  out=$(printf '%s' "$FAKE" | ".claude/hooks/$h.sh" 2>/dev/null)
+  rc=$?
+  if [ "$rc" -ne 0 ]; then
+    { echo; echo "== $h =="
+      echo "проверка не отработала (код $rc). Молча пропускать нельзя: почини хук"
+      echo "или обойди осознанно — git commit --no-verify"; } >&2
+    fail=1
+    continue
+  fi
   reason=$(printf '%s' "$out" | python3 -c "
 import json, sys
 try:
