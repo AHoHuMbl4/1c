@@ -50,9 +50,17 @@ KIND_RE = re.compile(r'no_data|clarify|answer|figures|unavailable')
 
 # Маркеры моста (`mcp_ask.py`). Это протокол, а не текст на языке: менять только вместе
 # с мостом и плагином-гейтом.
+#
+# 🔴 `[FIGURES]` мост начал ставить 02.08 (кластер Э4, `F129`): когда гейт снял неверную
+# формулировку, боту уходят посчитанные базой числа. Прибор обязан знать оба состояния
+# моста — и до этой правки, и после: неизвестный маркер он принял бы за обычный ответ.
 MARKERS = (('[NO DATA]', 'no_data'),
            ('[CLARIFICATION NEEDED]', 'clarify'),
-           ('[SERVICE ERROR', 'unavailable'))
+           ('[SERVICE ERROR', 'unavailable'),
+           ('[FIGURES]', 'figures'))
+# `answer` и `figures` — один исход по существу: система ответила по данным, числа
+# посчитаны базой. Док называет то одно, то другое, и придираться к этому прибор не вправе.
+ANSWERED = {'answer', 'figures'}
 
 
 def numify(s):
@@ -198,10 +206,14 @@ def verdict(case, obs):
     if kind in ('no_data', 'unavailable') and human_nums:
         return 'wrong', 'сервис ответил %s, а человеку ушло число %s' % (kind, human_nums[:3])
 
-    if kind in case['fail_kinds'] and kind not in case['kinds']:
+    def named(kind, kinds):
+        """Назван ли исход в перечне. `answer` и `figures` считаются одним."""
+        return kind in kinds or (kind in ANSWERED and bool(ANSWERED & set(kinds)))
+
+    if named(kind, case['fail_kinds']) and not named(kind, case['kinds']):
         return 'fail', 'kind `%s` назван в доке провалом' % kind
 
-    if case['kinds'] and kind not in case['kinds']:
+    if case['kinds'] and not named(kind, case['kinds']):
         return 'wrong', 'kind `%s`, ждали `%s`' % (kind, '/'.join(case['kinds']))
 
     # Уточнение — законный исход там, где док его допускает. Число при нём не сверяем:
