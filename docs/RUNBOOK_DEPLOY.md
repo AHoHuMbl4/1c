@@ -830,6 +830,99 @@ sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot) openclaw gateway inst
 sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot) systemctl --user enable --now openclaw-gateway
 ```
 
+### 11.5-бис ВТОРОЙ БОТ НА ДРУГУЮ БАЗУ — как это делается
+
+**Зачем.** У каждой базы 1С свой контур целиком: свой шлюз OData, своя база внутри движка,
+свой сервис ответов. Бот — последнее звено, и у него та же логика: **свой бот на базу**.
+Иначе один бот отвечает по одной базе, а вики (словарь «как это называется здесь»)
+получается общей на две — и он перефразирует вопрос именами чужой конфигурации.
+
+**Почему именно отдельный экземпляр, а не второй агент внутри одного.** В сборке
+`2026.7.1-2` вики-хранилище **одно на процесс**, разделить его по агентам нечем: у плагина
+в коде `strictObject({path, renderMode})`, в схеме у `agents.list[]` стоит
+`additionalProperties: false` и ключа для плагинов там нет. Штатный способ — **профиль**:
+отдельный экземпляр gateway со своим конфигом, каталогом состояния, портом и ботом
+(`multiple-gateways.md:38-46`). Заодно изоляция инструментов выходит **по построению**: у
+каждого экземпляра свой `mcp.servers`, то есть бот одной базы физически не видит мост
+другой — а не «настроен не видеть».
+
+**Что уже есть.** Боты заведены владельцем 02.08: `@Test11c_bot` — **первой** базе
+(`postgres`, Бухгалтерия), `@Test21c_bot` — в запас. Нынешний `@test1c_mcp_bot` работает по
+**второй** базе (`ut_test`) и не трогается: второй экземпляр поднимается **рядом**, а не
+вместо. Токены — `/etc/1c-telegram-test1.token` и `/etc/1c-telegram-test2.token`, права
+600, владелец `undebot`.
+
+#### Шаг 1. Свой мост MCP на эту базу
+
+Сейчас `1c-mcp-ask.service` — **один экземпляр** с зашитыми `ASK_URL=http://127.0.0.1:8099`
+и `MCP_PORT=6016`, то есть намертво привязан ко второй базе. Его надо сделать шаблоном —
+ровно так же, как это уже сделано для сервиса ответов (`1c-serene-ask@<база>`):
+
+```bash
+# 1c-mcp-ask@.service + побазовый /etc/1c-mcp-ask-<база>.env:
+#   ASK_URL=http://127.0.0.1:<порт сервиса ответов этой базы>   # первая база — 8091
+#   MCP_PORT=<свободный порт моста>                             # у второй базы 6016
+#   ASK_TOKEN, MCP_TOKEN — свои
+systemctl enable --now 1c-mcp-ask@postgres
+```
+
+#### Шаг 2. Свой экземпляр бота
+
+```bash
+UD="sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot)"
+$UD openclaw --profile buh onboard          # базовый порт НЕ ближе чем на 20 к 18800 → напр. 18830
+```
+
+Профиль даёт своё: файл конфигурации (`~/.openclaw-buh/openclaw.json`), каталог состояния,
+рабочую папку, имя службы, порт и токен бота. Дальше в **его** конфиге:
+
+```json5
+{
+  channels: { telegram: { enabled: true, tokenFile: "/etc/1c-telegram-test1.token" } },
+  mcp: { servers: { "serene-ask": { url: "http://127.0.0.1:<порт моста шага 1>/mcp" } } },
+  plugins: { entries: { "memory-wiki": { config: {
+    vault: { path: "/home/undebot/.openclaw-buh/wiki/buh" },   // 🔴 ЗАДАТЬ ЯВНО
+  } } } },
+  agents: { defaults: { memorySearch: {
+    enabled: true, provider: "openai-compatible", model: "<модель эмбеддера>",
+    remote: { baseUrl: "<адрес>/v1", apiKey: "${EMBED_API_KEY}" },
+    extraPaths: ["/home/undebot/.openclaw-buh/wiki/buh/entities"],
+  } } },
+}
+```
+
+🔴 **`vault.path` задать ОБЯЗАТЕЛЬНО.** Путь по умолчанию считается от домашнего каталога,
+а **не** от каталога состояния профиля (`dist/config-BRlVcj4J.js:84-86`). Без явного пути
+второй бот будет писать в то же `~/.openclaw/wiki/main`, что и первый, — две вики сольются
+в одну **молча**, и ни одна диагностика этого не покажет: путь ведь валидный.
+
+Ключ эмбеддера — в `gateway.systemd.env` этого профиля (600), как в §11.4-бис.
+
+#### Шаг 3. Наполнить его вики страницами ЕГО базы
+
+```bash
+SERENEDB_DSN="host=127.0.0.1 port=7890 user=postgres dbname=postgres" \
+WIKI_VAULT=/home/undebot/.openclaw-buh/wiki/buh \
+  ./wiki_publish.sh
+```
+
+Скрипт сам поставит отметку `.built-from` с именем базы и на следующих тактах **не пустит**
+в это хранилище другую базу. Он же удалит страницы, которых в базе больше нет, и
+переиндексирует вики — без этого смысловой поиск ищет по прошлому такту.
+
+#### Шаг 4. Проверка
+
+```bash
+UDB="sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot) openclaw --profile buh"
+$UDB gateway status --deep
+$UDB openclaw wiki status        # Vault должен быть СВОЙ, не ~/.openclaw/wiki/main
+cat /home/undebot/.openclaw-buh/wiki/buh/.built-from     # имя его базы
+# и главное — вопрос в его Telegram: ответ должен считаться по ЕГО базе
+```
+
+⚠ `openclaw gateway probe` покажет «multiple reachable gateway identities detected» — это
+ожидаемо при двух экземплярах (`multiple-gateways.md:137`), а не ошибка.
+
 ### 11.6 Проверка
 ```bash
 UD="sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot)"

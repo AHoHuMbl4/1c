@@ -181,7 +181,7 @@
 |---|---|
 | `ubuntu/systemd/` | `1c-serene-pipeline.service/.timer` (боевой такт), `1c-serene-index.service` (**боевая** копия, на `build.sh`), `1c-odata-gateway@.service` (шаблон на каждую базу) |
 | `ubuntu/serenedb/systemd/` | `1c-serene-ask.service`, `1c-mcp-reports.service`, `1c-serene-sync.*`, ⚠ **двойник** `1c-serene-index.service/.timer` |
-| `ubuntu/openclaw/systemd/` | `1c-mcp-ask.service` (мост бота), `1c-mcp-braine.service` + drop-in `override.conf` |
+| `ubuntu/openclaw/systemd/` | `1c-mcp-ask.service` (мост бота), `1c-mcp-braine.service` + drop-in `override.conf`. ⚠ Мост — **один экземпляр** с зашитыми `ASK_URL=:8099` и `MCP_PORT=6016`, то есть привязан ко второй базе; второму боту нужен свой — шаблон `1c-mcp-ask@<база>`, см. `RUNBOOK_DEPLOY §11.5-бис` |
 | `ubuntu/1c-gateway/systemd/` | `1c-odata-gateway.service` (первая база) |
 | `ubuntu/1c-etl/systemd/`, `ubuntu/1c-config-ui/systemd/`, `ubuntu/monitoring/`, `ubuntu/serenedb/` | ETL, config-ui, монитор бота, юнит движка |
 
