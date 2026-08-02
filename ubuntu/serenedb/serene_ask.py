@@ -2256,6 +2256,52 @@ ARBITER_MAX = int(os.environ.get("ASK_ARBITER_MAX", "3"))
 STEM_DICT = os.environ.get("ASK_STEM_DICT", "search_dict_stem")
 
 
+def resolve_focus(focus, diag=None):
+    """Свести `focus` к ИМЕНИ ИСТОЧНИКА, как бы его ни назвали.
+
+    🔴 ЗАЧЕМ. `focus` приходит от бота, а бот берёт название оттуда, где его увидел —
+    и это **разные пространства имён**. Уточнение сервиса даёт внутреннее имя
+    (`catalog_классификаторбанков`), а страница вики — человеческий заголовок
+    («Классификатор Банков»). [замер 02.08] как только смысловой поиск по вики заработал,
+    бот стал передавать заголовок, сервис его не узнавал и отвечал «нет данных» — при том
+    что тот же вопрос без `focus` отвечался верно (37 банков). Отказ при наличии данных —
+    дефект (п. 21), и чинится он здесь, а не просьбой к модели «передавай правильное имя»:
+    правило на промте не работает.
+
+    Сведение спрашивается У БАЗЫ (имя и метка лежат в `search_tables`), а не собирается
+    разбором строки: разбор был бы догадкой и привязкой к языку (п. 9).
+
+    Не свелось — возвращаем None, и вызывающий идёт обычным путём выбора сущности. Это
+    лучше отказа: человек назвал что-то, чего мы не узнали, но данные могут быть.
+    """
+    if not focus:
+        return None
+    f = str(focus).strip()
+    if not f:
+        return None
+    try:
+        rows = psql("SELECT src_table FROM %s WHERE src_table = %s LIMIT 1" % (TABLES, lit(f)))
+        if rows and rows[0] and rows[0][0]:
+            return rows[0][0]
+        # По человеческому названию: регистр и пробелы не считаем — «Классификатор Банков»,
+        # «классификатор банков» и «КлассификаторБанков» это одно и то же.
+        rows = psql("SELECT src_table FROM %s WHERE lower(replace(label,' ','')) = "
+                    "lower(replace(%s,' ','')) LIMIT 2" % (TABLES, lit(f)))
+        if len(rows) == 1 and rows[0] and rows[0][0]:
+            if diag is not None:
+                diag["focus_resolved"] = "%s -> %s" % (f, rows[0][0])
+            return rows[0][0]
+        if len(rows) > 1 and diag is not None:
+            # Название неоднозначно — навязывать одно из двух нельзя (п. 12).
+            diag["focus_ambiguous"] = f
+            return None
+    except RuntimeError:
+        return None                     # база недоступна — пусть решает общий путь
+    if diag is not None:
+        diag["focus_unknown"] = f
+    return None
+
+
 def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False):
     """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
 
@@ -2600,6 +2646,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     plan = {}
     # ВЫБОР ЧЕЛОВЕКА ПОСЛЕ УТОЧНЕНИЯ важнее догадки: если задан `focus` и такая сущность
     # реально под условиями что-то содержит — берём её и не спрашиваем модель.
+    if focus:
+        focus = resolve_focus(focus, diag)
     if focus:
         picked, marks, plan = [focus], {}, {}
         diag["focus_forced"] = focus
