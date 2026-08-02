@@ -39,6 +39,12 @@
           },
           {
             "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-graph-fresh.sh\"",
+            "timeout": 15,
+            "statusMessage": "Проверка: новые компоненты внесены в граф"
+          },
+          {
+            "type": "command",
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-golden.sh\"",
             "timeout": 20,
             "statusMessage": "Проверка: замер сделан до выката"
