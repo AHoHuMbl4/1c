@@ -199,3 +199,4 @@ MCP `filesystem` был подключён и **убран** `[решение]` 
 | `project-architecture-pg-windows-attach.md` | сырые данные на Windows рядом с 1С, Ubuntu держит корпус и индекс |
 | `project-no-nl2sql-charts-after-answer.md` | схема в модель не уходит никогда; график — ПОСЛЕ ответа |
 | `project-serenedb-ivf-blocked.md` | вектор в SereneDB заблокирован, сборка не отменяется |
+| `feedback-details-are-dev-decisions-target-is-judge.md` | нюансы решает разработка, мерило — TARGET.md; владельцу — только правки контракта и внешний периметр |
