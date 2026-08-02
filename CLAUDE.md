@@ -207,3 +207,4 @@ MCP `filesystem` был подключён и **убран** `[решение]` 
 | `project-no-nl2sql-charts-after-answer.md` | схема в модель не уходит никогда; график — ПОСЛЕ ответа |
 | `project-serenedb-ivf-blocked.md` | вектор в SereneDB заблокирован, сборка не отменяется |
 | `feedback-details-are-dev-decisions-target-is-judge.md` | нюансы решает разработка, мерило — TARGET.md; владельцу — только правки контракта и внешний периметр |
+| `project-installer-is-owner-track-via-cursor.md` | установщик (п. 14) делает владелец сам через Cursor; `windows/odata-setup` не трогать, незакоммиченное там — не дефект |
