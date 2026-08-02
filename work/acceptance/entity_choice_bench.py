@@ -123,27 +123,44 @@ def psql(sql):
 
 
 def pairs(path):
-    """Вопрос → эталонная сущность, вынутая из эталонного SQL набора."""
+    """Вопрос → эталонная сущность, вынутая ИЗ НАБОРА, а не написанная руками.
+
+    Три правила разбора, все общие — ни одного «вопрос №N отвечает таблица X»:
+      1. `from <таблица>` в блоке — прямой случай;
+      2. если `from` ведёт в НАШУ таблицу (`search_corpus`), эталон стоит в условии
+         `src_table='…'` — это вопросы про содержимое корпуса, а не про его устройство;
+      3. `см. №N` / `тот же, что у №N` — эталон унаследован от другого вопроса; набор
+         так и написан, и терять эти вопросы значит терять шестую часть выборки.
+    Вопросы, у которых верной сущности нет по замыслу (ожидается уточнение или отказ),
+    сюда не попадают: у них нет ни `from`, ни ссылки.
+    """
     text = open(path, encoding="utf-8").read()
     out = []
+    by_num = {}
     # Вопрос: строка вида **N. «...»** — хвост в скобках допустим (у 27, 56-58 он есть,
     # и прежний прогонщик молча терял эти четыре вопроса).
     blocks = re.split(r"\n(?=\*\*\d+\.\s*«)", text)
     for b in blocks:
-        m = re.match(r"\*\*\d+\.\s*«(.+?)»", b, re.S)
+        m = re.match(r"\*\*(\d+)\.\s*«(.+?)»", b, re.S)
         if not m:
             continue
-        q = m.group(1).strip()
+        num, q = m.group(1), m.group(2).strip()
+        want = None
         t = re.search(r"\bfrom\s+([a-zа-яё0-9_]+)", b, re.I)
-        if not t:
+        if t:
+            want = t.group(1).lower()
+            if want.startswith(("search_", "resolver_")):
+                # правило 2: эталон в условии по нашей же таблице
+                inner = re.search(r"src_table\s*=\s*'([a-zа-яё0-9_]+)'", b, re.I)
+                want = inner.group(1).lower() if inner else want
+        if want is None or want.startswith(("search_", "resolver_")):
+            # правило 3: ссылка на другой вопрос набора
+            ref = re.search(r"(?:см\.|что у)\s*№\s*(\d+)", b)
+            if ref and ref.group(1) in by_num:
+                want = by_num[ref.group(1)]
+        if not want or want.startswith(("search_", "resolver_")):
             continue
-        want = t.group(1).lower()
-        # Вопросы, где эталонный SQL идёт по НАШИМ таблицам (`search_corpus`,
-        # `search_coverage`), выбор сущности 1С не проверяют вовсе — это вопросы про
-        # содержимое корпуса и про полноту. Оставлять их значило бы записать в промахи
-        # то, чего прибор не меряет.
-        if want.startswith(("search_", "resolver_")):
-            continue
+        by_num[num] = want
         out.append((q, want))
     return out
 
@@ -206,6 +223,9 @@ def main():
         return fam_of.get(name, name)
     hit1 = hit3 = hit5 = hitN = 0
     misses = []
+    # Поимённый вывод: без него два прогона можно сравнить только счётом, а счёт не
+    # говорит, ТЕ ЖЕ вопросы разошлись или разные. `DUMP=<файл>` — строка на вопрос.
+    dump = open(os.environ["DUMP"], "w", encoding="utf-8") if os.environ.get("DUMP") else None
     for q, want in data:
         vec = "[" + ",".join("%.7g" % x for x in embed(q)) + "]"
         # `EXCLUDE_SERVICE=1` — отсев служебных сущностей из соперников. Вынесен в ручку
@@ -253,6 +273,10 @@ def main():
             hit5 += 1
         else:
             misses.append((q[:52], want, top[0] if top else "-"))
+        if dump:
+            dump.write("%s\t%s\t%s\t%s\n"
+                       % (q, want, top[0] if top else "-",
+                          "ВЕРНО" if fam[:1] == [w] else "нет"))
     n = len(data)
     # Прогон подписывает себя сам: что за модели РЕАЛЬНО отвечали (по `/health`, а не по
     # нашим настройкам) и был ли реранкер. Иначе два числа в отчёте невозможно сопоставить.
