@@ -27,7 +27,7 @@ Ubuntu LXC (наш, всё loopback):
 | Порт | Unit / таймер | Процесс | Юзер | Слой |
 |---|---|---|---|---|
 | — | `1c-odata-gateway` :6011 | `odata_gateway.py` | root | канал: только GET к 1С-OData (upstream `192.168.56.1:6003`) |
-| `0.0.0.0:6012` | `1c-config-ui` | `oc_config_ui.py` | root | веб-галочки «что тянуть» (ETL) |
+| `127.0.0.1:6012` | `1c-config-ui` | `oc_config_ui.py` | root | веб-галочки «что тянуть» (ETL). Требует `Authorization: Bearer $UI_TOKEN` и на GET, и на POST — из браузера без токена страница не откроется |
 | — | `1c-etl.timer` 03:00 | `oc_etl.py` | root | ⚠ кормил braine → **не нужен** после вывода слоя |
 | — | *(braine: postgresql/open-webui/oikb/rerank-shim/api :8090)* | — | — | ⚠ **слой выведен из контура** 26.07, освободилось 972 МБ. §7-8 оставлены как история |
 | `127.0.0.1:7890` | `serenedb` | `serened` | **serenedb** | витрина аналитики (Postgres-протокол) |
@@ -40,15 +40,15 @@ Ubuntu LXC (наш, всё loopback):
 | — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` | root | алерт владельцу в Telegram при падении |
 | — | `nightly-eval.timer` | `nightly-eval.sh` | root | ⛔ **погашен 29.07**: гонял евал выведенного слоя braine и слал алерт владельцу **с боевого токена бота**. Поднимать не надо |
 
-### Вторая база 1С (стенд, состояние на 29.07)
+### Вторая база 1С (стенд, состояние на 02.08)
 
 Баз 1С у клиента бывает несколько. У каждой — **свой шлюз, своя база движка, свой
 отвечающий сервис**. Шаблонный юнит: `1c-odata-gateway@<имя>` читает
 `/etc/1c-odata-gateway-<имя>.env` (права 600).
 
-| Порт | Что | Состояние на 29.07 |
+| Порт | Что | Состояние на 02.08 |
 |---|---|---|
-| `127.0.0.1:6021` | шлюз OData второй базы (`@ut`) | 🔴 **порт держит осиротевший процесс от 28.07** (PPID=1, поднят вручную). Юнит `1c-odata-gateway@ut` установлен и `enabled`, но не может занять порт и крутится в перезапуске. Меняется после текущего замера |
+| `127.0.0.1:6021` | шлюз OData второй базы (`@ut`) | 🔴 **порт держит осиротевший процесс от 28.07** (PPID=1, поднят вручную). Юнит `1c-odata-gateway@ut` установлен и `enabled`, но `inactive (dead, Result: exit-code)` **с 29.07 06:00:45**: systemd прекратил попытки после 740 рестартов. Мало освободить порт — в `/etc/1c-odata-gateway-ut.env` **`ODG_PASS` пуст** (длина 0 при `ODG_USER` 25), поэтому штатный путь отдаст 401 на все запросы: пароль читателя второй базы нигде не сохранён, он живёт только в памяти процесса, поднятого руками |
 | `127.0.0.1:8099` | сервис ответов второй базы | 🔴 **тоже осиротевший процесс**, юнита нет. Должен стать `1c-serene-ask@<имя>` — Фаза 2 `PLAN_AUTONOMY` |
 | база движка | `ut_test` | пересоздана с нуля 29.07 (бэкап → `DROP DATABASE` → `CREATE DATABASE` → конвейер) |
 
@@ -60,6 +60,15 @@ Ubuntu LXC (наш, всё loopback):
 - **Инвариант:** в 1С только читаем. Гарантия read-only — двумя слоями (§6): пользователь `ai_reader` (нет прав записи) + шлюз (режет не-GET). Не на настройках приложения.
 - **Почему OData, а не встроенный сервер MCP-тулкита:** тулкит обслуживает HTTP через клиентский idle-обработчик 1С — ~1 req/s и встаёт на любом модальном окне сессии (`docs/TOOLKIT_TRANSPORT_ROOTCAUSE.md`). OData обслуживает IIS (служба Windows): многопоточно, авто-старт, переживает ребут, модалок в веб-сессии нет. Тулкит остаётся как **dev-опция** (§Приложение).
 - Два контура: холодный (ночная выгрузка ETL/синк → KB+витрина) + горячий (бот отвечает по индексу/витрине). `docs/ARCHITECTURE.md §3`.
+- ⚠ **Права юнитов: все наши `1c-*` ходят под `root`, и решение об этом нигде не записано.**
+  [замер 02.08] `systemctl show -p User` пуст у всех двенадцати сервисов `1c-*` и у
+  шаблонного `1c-odata-gateway@` — включая обе сетевые двери (`1c-odata-gateway`,
+  `1c-config-ui`) и процессы, держащие ключи облачных
+  моделей; из ужесточающих директив есть ровно одна — `NoNewPrivileges=true` у
+  `1c-mcp-reports`; `ProtectSystem`/`ProtectHome`/`PrivateTmp` не выставлены нигде.
+  Единственный юнит с выделенным пользователем — `serenedb` (`User=serenedb`). Таблица §0
+  это честно печатает; **вопрос владельцу** — ужесточать или зафиксировать «на стенде
+  оставляем root» (`work/doc-audit/QUESTIONS_TO_OWNER.md`).
 
 ---
 
@@ -219,8 +228,13 @@ $ib.УстановитьСоставСтандартногоИнтерфейса
 | категория | сколько | что это |
 |---|---|---|
 | `*_RecordType` | 25 | вложенные типы регистров — служебные тени, не данные |
-| `Удалить*` | 352 | объекты, **помеченные в конфигурации на удаление** |
-| прочее | 579 | служебные таб. части (`ПрисоединённыеФайлы`, `Состав`, `Назначение`), настройки обмена, группы доступа; из них 363 `InformationRegister`, 168 `Catalog`, 46 `Document` |
+| `Удалить*` (кроме `_RecordType`) | 330 | объекты, **помеченные в конфигурации на удаление** |
+| прочее | 579 | служебные таб. части (`ПрисоединённыеФайлы`, `Состав`, `Назначение`), настройки обмена, группы доступа; из них 363 `InformationRegister`, 168 `Catalog`, 46 `Document`, 2 `AccumulationRegister` |
+
+*Было ошибочно: «25 / 352 / 579» — категории пересекались (22 сущности вида
+`Удалить…_RecordType` попадали в обе), сумма давала 956 ≠ 934. **Чем опровергнуто:**
+`psql`-пересчёт — `_RecordType` 25, `LIKE '%Удалить%'` 352 (из них 22 одновременно
+`_RecordType`), прочих 579; непересекающееся разбиение 25 + 330 + 579 = 934.*
 
 **Почему так и почему это правильно.** Профиль `ai_reader` — «Только просмотр» (BSP) —
 намеренно не даёт доступа к персональным данным, правам доступа и служебным регистрам.
@@ -294,10 +308,21 @@ systemctl start 1c-etl.service                                   # первый 
 ## 9. Zero-touch: что переживает ребут
 Полная карта портов/юзеров — в §0. Всё `enabled`; после ребута любой машины стек поднимается сам.
 - **Windows:** IIS (W3SVC) = Automatic; публикация/состав OData/пользователи — персистентны. После ребута OData сам доступен.
-- **LXC — system-сервисы (`enabled`):** postgresql, open-webui, oikb, rerank-shim, api, kb-poll,
-  **1c-odata-gateway**, **1c-config-ui**, **serenedb**, **1c-mcp-braine**, **1c-mcp-reports**;
-  таймеры **1c-serene-pipeline** (по готовности), **1c-etl** (03:00), **1c-serene-sync** (03:40),
-  **1c-bot-monitor** (каждые 3 мин). `nightly-eval` — **погашен 29.07**, поднимать не надо.
+- **LXC — system-сервисы (`enabled`), [замер 01.08]:** `postgresql`, `serenedb`,
+  **`1c-odata-gateway`**, **`1c-config-ui`**, **`1c-mcp-ask`**, **`1c-mcp-braine`**,
+  **`1c-mcp-reports`**, **`1c-serene-ask`**; таймеры **`1c-serene-pipeline`** (по готовности)
+  и **`1c-bot-monitor`** (каждые 3 мин).
+
+  *Было ошибочно: в перечне стояли `open-webui`, `oikb`, `rerank-shim`, `api`, `kb-poll`
+  и таймеры `1c-etl` (03:00), `1c-serene-sync` (03:40). **Чем опровергнуто:**
+  `systemctl list-unit-files --state=enabled` — первых пяти в enabled нет вовсе (слой braine
+  выведен 26.07, см. §0), `1c-etl.timer` и `1c-serene-sync.timer` существуют, но disabled:
+  синк стал шагом конвейера, ETL кормил выведенный braine. Отдельно: `1c-serene-sync` нельзя
+  было называть «переживающим ребут» — §0 того же файла объявляет его остановленным.*
+
+  🔴 Список снят со стенда в аварийном состоянии (конвейер стоит с 29.07, сервис ответов
+  и шлюз второй базы — процессы вне systemd). `enabled` здесь означает «поднимется после
+  ребута», а не «работает сейчас».
 - **LXC — OpenClaw gateway:** systemd **user**-юнит юзера `undebot` с **`linger=yes`** → стартует на буте
   **без логина** (проверено). Telegram — long polling, токен в `tokenFile`.
 - `tg-bridge` (braine-фронт Telegram) — **disabled**: Telegram держит OpenClaw `@test1c_mcp_bot`.
@@ -359,20 +384,45 @@ install -d /opt/1c-mcp-reports
 cp ubuntu/serenedb/*.py ubuntu/serenedb/*.sh ubuntu/serenedb/serene-entities.txt /opt/1c-mcp-reports/
 chmod +x /opt/1c-mcp-reports/*.sh
 cat > /etc/1c-mcp-reports.env <<EOF        # секреты не в git, chmod 600
-ETL_ODATA_BASE=http://127.0.0.1:6011         # читающий OData-шлюз из §6
-CSV_DIR=/var/lib/serenedb                    # каталог данных SereneDB (загрузчик пишет CSV сюда)
 DEEPSEEK_API_KEY=<ключ>                        # NL→SQL + grounding-критик
 DEEPSEEK_BASE=https://api.deepseek.com
 ALIBABA_API_KEY=<ключ>                         # эмбеддер резолвера (Qwen text-embedding-v4)
 ALIBABA_EMBED_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 EMBED_MODEL=text-embedding-v4
-EMBED_DIM=1536
+EMBED_DIM=1024                                 # столько отдаёт наш эндпоинт; колонка emb FLOAT[1024]
 CHART_DIR=/home/<botuser>/.openclaw/workspace/charts   # PNG-графики: только из песочницы бота
 MCP_HOST=127.0.0.1
 MCP_PORT=6015
+SERENEDB_DSN='host=127.0.0.1 port=7890 user=serene_ro dbname=postgres'
+RESOLVER_DSN='host=127.0.0.1 port=7890 user=serene_resolver dbname=postgres'
+PGPASSWORD=<пароль serene_ro>
+RESOLVER_PW=<пароль serene_resolver>
+ODG_GATEWAY_TOKEN=<токен OData-шлюза из §6>
+MCP_TOKEN=<токен MCP>
 EOF
 chmod 600 /etc/1c-mcp-reports.env
+
+cat > /etc/1c-serene-sync.env <<EOF        # окружение конвейера (синк + сборка), chmod 600
+ETL_ODATA_BASE=http://127.0.0.1:6011         # читающий OData-шлюз из §6
+CSV_DIR=/var/lib/serenedb                    # каталог данных SereneDB (загрузчик пишет CSV сюда)
+SERENEDB_DSN='host=127.0.0.1 port=7890 user=postgres dbname=postgres'   # сборке нужен rw
+EOF
+chmod 600 /etc/1c-serene-sync.env
 ```
+
+*Было ошибочно: `ETL_ODATA_BASE`, `CSV_DIR` показаны как часть `/etc/1c-mcp-reports.env`,
+`EMBED_DIM=1536`. **Чем опровергнуто:** перепись имён переменных на стенде — в
+`/etc/1c-mcp-reports.env` этих двух ключей нет, они в `/etc/1c-serene-sync.env`;
+`SELECT len(emb) FROM search_corpus` → 1024, `corpus_init.sql:18` `emb FLOAT[1024]`.*
+
+🔴 **Порядок `EnvironmentFile=` в юнитах сборки значим и менять его нельзя.**
+`1c-serene-index.service` и `1c-serene-pipeline.service` подключают сначала
+`-/etc/1c-mcp-reports.env` (он нужен ради ключей эмбеддера и DeepSeek), потом
+`/etc/1c-serene-sync.env` — и второй перекрывает `SERENEDB_DSN` на `user=postgres`.
+Так и задумано: боту нужен `serene_ro`, а сборке — `rw`, иначе `CREATE TABLE` падает на
+`permission denied for schema public` (починка 27.07, `SERVER_HANDOFF §6`). `dbname`
+записывайте явно: без него libpq берёт имя базы равным имени роли, и переименование роли
+молча уводит сборку в другую базу.
 
 ### 10.3 Роли + секреты (идемпотентно, генерируемые пароли)
 ```bash
@@ -401,26 +451,61 @@ python3 serene_sync.py
 
 ### 10.6 Сервисы (reboot-safe)
 ```bash
-cp ubuntu/serenedb/systemd/1c-serene-sync.{service,timer}  /etc/systemd/system/
-cp ubuntu/serenedb/systemd/1c-serene-index.{service,timer} /etc/systemd/system/
+cp ubuntu/systemd/1c-serene-pipeline.{service,timer}       /etc/systemd/system/
 cp ubuntu/serenedb/systemd/1c-serene-ask.service           /etc/systemd/system/
 systemctl daemon-reload
-systemctl enable --now 1c-serene-sync.timer    # витрина из OData
-systemctl enable --now 1c-serene-index.timer   # корпус + индекс, следом за синком
-systemctl enable --now 1c-serene-ask.service   # отвечающий сервис :8091
+systemctl enable --now 1c-serene-pipeline.timer  # ЕДИНСТВЕННЫЙ такт: раскладка → синк-дельта → сборка
+systemctl enable --now 1c-serene-ask.service     # отвечающий сервис
 ```
+
+🔴 **`1c-serene-sync.timer` и `1c-serene-index.timer` включать НЕЛЬЗЯ.** Синк с 28.07 —
+шаг конвейера, а не отдельный таймер; а `1c-serene-index.service` в репозитории до сих пор
+запускает `serene_search_build.py`, который при нынешнем составе корпуса **сносит таблицу и
+индекс** — та самая авария 28.07 (`HOW_NOT_TO §2.9`), о которой предупреждает §0 этого же
+файла.
+
+*Было ошибочно: §10.6 без единой оговорки предписывала `cp` обоих юнитов и
+`systemctl enable --now 1c-serene-sync.timer` / `1c-serene-index.timer`. **Чем
+опровергнуто:** §0 строки 35-37 объявляют оба таймера остановленными и называют причину;
+`systemctl list-timers --all` — `1c-serene-index.timer` в списке отсутствует, живой такт
+один, `1c-serene-pipeline`. Раскатка по прежней редакции воспроизводила известную аварию на
+чистой машине. Юниты конвейера лежат в `ubuntu/systemd/`, а не в `ubuntu/serenedb/systemd/`.*
 `1c-serene-ask` читает `/etc/1c-mcp-reports.env` (ключи Alibaba/DeepSeek, пароли ролей) и
 необязательный `/etc/1c-serene-ask.env` (`ASK_TOKEN` — авторизация запросов, `ASK_*_BUDGET_CHARS` —
 символьные бюджеты контекста модели).
 
-⚠ **Такт индекса.** Сейчас таймер ночной (03:55). Пункт 17 `TARGET.md` требует свежести
-**не позднее 20 минут** — значит здесь должен стоять `OnUnitActiveSec`, а сборка обязана
-укладываться в такт. Сборка инкрементальная (эмбеддинг считается только для новых и
-изменившихся строк), но **на живой базе это ещё не замерено** — открытый пункт.
+**Такт.** «Ночного» такта в продукте нет: `1c-serene-pipeline.timer` работает **по
+готовности** — следующий заход начинается, когда закончился предыдущий. Этого требует п. 17
+`TARGET.md` (свежесть не позднее 20 минут).
+
+*Было ошибочно: «сейчас таймер ночной (03:55), здесь должен стоять `OnUnitActiveSec` —
+открытый пункт». **Чем опровергнуто:** `systemctl cat 1c-serene-index.timer` →
+`OnUnitActiveSec=20min`, сам таймер `disabled`; такт целиком у `1c-serene-pipeline.timer`
+(по готовности). Требуемое прежней редакцией изменение давно сделано.*
 
 ### 10.7 Подключение к боту
-`serene_ask` держит контракт `/ask`, совместимый с прежним braine, поэтому бот переключается
-одной строкой `BRAINE_URL` в `/etc/1c-mcp-braine.env` — и так же откатывается обратно.
+Бот ходит в отвечающий сервис через MCP-мост `ask_1c` (`1c-mcp-ask`, :6016), а мост — по
+`ASK_URL`. **`ASK_URL` — единственный рычаг выбора того, какой сервис (а значит, какая база
+1С) отвечает боту.** Задан он строкой `Environment=ASK_URL=…` в теле юнита
+`1c-mcp-ask.service`; штатный способ переопределить — drop-in:
+
+```bash
+systemctl edit 1c-mcp-ask        # [Service] Environment=ASK_URL=http://127.0.0.1:<порт>
+systemctl restart 1c-mcp-ask
+```
+
+Какую **базу движка** читает сам сервис ответов — задаёт `SERENEDB_DSN_RO`/`RESOLVER_DSN`
+в его окружении (`/etc/1c-serene-ask.env`).
+
+⚠ Если выносить `ASK_URL` в `/etc/1c-mcp-ask.env`, то `EnvironmentFile=` в юните надо
+поставить **ниже** строки `Environment=`, иначе значение из юнита перекроет env-файл.
+
+*Было ошибочно: «бот переключается одной строкой `BRAINE_URL` в `/etc/1c-mcp-braine.env` —
+и так же откатывается обратно». **Чем опровергнуто:** в `/etc/1c-mcp-braine.env` есть только
+`BRAINE_TOKEN` и `MCP_TOKEN`, `BRAINE_URL` там нет (он `Environment=` в юните
+`1c-mcp-braine`, адрес :8091 никто не слушает); в конфиге бота записи `braine` нет вовсе —
+мост выведен из контура. Исполнение прежней инструкции не меняло ничего.*
+
 Гейт `verify-plugin` сверяет числа ответа с данными КОДОМ (`docs/OPENCLAW_BOT.md`).
 
 ### 10.8 Проверка
@@ -432,6 +517,13 @@ export RESOLVER_DSN='host=127.0.0.1 port=7890 user=serene_resolver dbname=postgr
 for t in test_validate test_integrity test_caveat test_ro_role; do python3 $t.py; done   # все PASS
 ./probe.sh "<вопрос по вашим данным>"       # реальный отчёт через весь путь NL→SQL→exec
 ```
+
+🔴 **`sql.sh`, `probe.sh` и `test_ro_role.py` читают `dbname=postgres`, и строка подключения
+у них зашита в код — окружение они не читают.** На однобазовой установке из этого раздела
+это та самая база; но если сервис ответов настроен на другую базу движка (на стенде боевая —
+`ut_test`), сверка «ответ бота против ground-truth SELECT» пойдёт **по чужим данным**, и
+расхождение будет выглядеть беспричинным. Перед сверкой убедитесь, что база в `sql.sh` та же,
+что в `SERENEDB_DSN_RO` отвечающего сервиса.
 Сквозная проверка отвечающего сервиса:
 ```bash
 curl -s -X POST http://127.0.0.1:8091/ask -H 'Content-Type: application/json' \
@@ -440,6 +532,37 @@ curl -s -X POST http://127.0.0.1:8091/ask -H 'Content-Type: application/json' \
 ```
 Виды ответа: `answer` — ответ с числами из базы; `clarify` — уточняющий вопрос, если прочтений
 несколько; `figures` — гейт не пропустил цифру. Догадок нет по построению (п. 12 `TARGET.md`).
+
+### 10.9 Снапшот и восстановление витрины
+
+🔴 **Снапшот и восстановление — на весь инстанс движка, а не на базу.** Каталог
+`/var/lib/serenedb` общий: в нём лежат ВСЕ базы движка. `serenedb_backup.sh` останавливает
+движок и кладёт `tar.gz` всего каталога (ротация `KEEP=7`); процедура `RESTORE` в шапке того
+же скрипта делает `rm -rf /var/lib/serenedb/*` и распаковку. Значит **восстановление одной
+базы заменяет и все остальные** состоянием из архива.
+
+На стенде это уже заряженная ловушка: снапшот на диске ровно один,
+`serenedb-20260729-044937.tar.gz` от 29.07 04:53, снят **перед** `DROP DATABASE ut_test` /
+`CREATE DATABASE` (`PLAN_AUTONOMY`). Восстановить по нему «первую базу» — значит откатить
+боевую вторую на трое суток и потерять оплаченные векторы. Обещанный запасной путь
+(«витрина производная — ре-синк из 1С») для второй базы недоступен: у неё нет ни юнита, ни
+таймера, ни env, а `serene_sync.py` без `SERENEDB_DSN` пойдёт в первую.
+
+**У движка есть и штатные средства — их и надо предпочитать, когда нужна ОДНА база**
+([замер 02.08] на нашей сборке 26.07.3):
+
+| Средство | Что делает | Проверено |
+|---|---|---|
+| `COPY FROM DATABASE <src> TO <dst>` | копирует содержимое одной прикреплённой базы в другую, движок не останавливая | `ERROR: Catalog "zzz_nonexistent_src" does not exist!` — оператор распознан |
+| `EXPORT DATABASE '<каталог>'` | выгружает схему и данные базы в каталог | `ERROR: Failed to create directory …` — дошло до исполнения |
+| `IMPORT DATABASE '<каталог>'` | заливает обратно | `ERROR: Cannot open file ".../schema.sql"` |
+
+Контрольный опыт: `EXPORTX DATABASE '…'` → `syntax error at or near "DATABASE"` — так
+выглядит **неизвестный** оператор, значит три предыдущих движок действительно знает.
+
+⚠ Оффлайн-снапшот при этом не отменяется: он несёт ещё и инвертированный индекс движка,
+которого `EXPORT DATABASE` не выгружает. Выбор — по задаче: одна база без остановки →
+`COPY FROM DATABASE`; весь инстанс вместе с индексом → снапшот.
 
 ---
 
@@ -458,11 +581,27 @@ curl -s -X POST http://127.0.0.1:8091/ask -H 'Content-Type: application/json' \
 его связки. Решение владельца 30.07: новый мост, бот отвечает по второй базе.
 
 ```bash
+install -d /opt/openclaw-mcp && python3 -m venv /opt/openclaw-mcp/venv
+/opt/openclaw-mcp/venv/bin/pip install -r ubuntu/openclaw/requirements.txt   # офиц. MCP SDK
+/opt/openclaw-mcp/venv/bin/pip install matplotlib                            # ⬅ отрисовка графиков
 install -D ubuntu/openclaw/mcp_ask.py /opt/openclaw-mcp/mcp_ask.py
 install -m 644 ubuntu/openclaw/systemd/1c-mcp-ask.service /etc/systemd/system/
 # /etc/1c-mcp-ask.env (600): ASK_TOKEN=<токен serene_ask>, MCP_TOKEN=<свой, fail-closed>
 systemctl daemon-reload && systemctl enable --now 1c-mcp-ask
 ```
+
+🔴 **`requirements.txt` неполон, и на этом молча теряется график.** В файле одна строка
+`mcp>=1.28`, а в боевом `/opt/openclaw-mcp/venv` стоят ещё `matplotlib`, `numpy`, `pillow`,
+`contourpy`, `fonttools`, `kiwisolver`, `cycler` — зависимостями `mcp` они не являются, их
+ставили руками. Импорт `matplotlib` ленивый (внутри `render_chart`), а вызов обёрнут в
+`except Exception: png = None` — на машине, поставленной строго по прежней редакции этого
+руководства, **график просто не появляется, без единого сообщения**. Отрисовка изображений —
+один из четырёх пунктов, которые `TARGET.md` разрешает делать своим кодом.
+
+Этот же venv указан в `ExecStart` шести юнитов репозитория (`1c-mcp-ask`, `1c-mcp-braine`,
+`1c-mcp-reports`, `1c-serene-ask`, `1c-serene-sync`, `1c-serene-index`) и в `pipeline.sh` и
+`probe.sh` — поэтому шаг его создания стоит здесь, а не в выведенном §11.1-старое, где он
+лежал раньше. Своего файла зависимостей у `ubuntu/serenedb/` нет вовсе.
 
 Подключение к боту — штатным `mcp.servers`: запись `serene-ask` → `http://127.0.0.1:6016/mcp`,
 заголовок `Authorization: Bearer $MCP_TOKEN`, `toolFilter.include = ["ask_1c"]`.
