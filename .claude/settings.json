@@ -66,6 +66,12 @@
             "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-write.sh\"",
             "timeout": 15,
             "statusMessage": "Проверка на велосипед и подгонку"
+          },
+          {
+            "type": "command",
+            "command": "\"$CLAUDE_PROJECT_DIR/.claude/hooks/check-deps.sh\"",
+            "timeout": 15,
+            "statusMessage": "Граф: что задевает эта правка"
           }
         ]
       }
