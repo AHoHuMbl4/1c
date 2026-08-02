@@ -39,7 +39,27 @@ run() {
 ok() { [ "$DRY" = "1" ] || echo "$*"; }
 
 BOTUSER="${OPENCLAW_USER:-undebot}"
-WS="${OPENCLAW_WORKSPACE:-/home/$BOTUSER/.openclaw/workspace}"
+
+# 🔴 ЭКЗЕМПЛЯРОВ БОТА НЕСКОЛЬКО — ПО ОДНОМУ НА БАЗУ. У каждой базы 1С свой контур целиком,
+# и бот — его последнее звено: свой шлюз, свой каталог состояния, своя вики, свой гейт.
+# Прежде здесь были жёстко зашиты пути экземпляра по умолчанию, и второй бот остался бы
+# (и остался) с ЧУЖОЙ персоной и целыми стартовыми заготовками движка — 6 124 символа
+# указаний, часть которых прямо противоречит контракту («come back with answers, not
+# questions» против п. 12 и указания владельца «лучше уточнить трижды»).
+#
+#   OPENCLAW_PROFILE_ID=<профиль>  — каталог состояния `~/.openclaw-<профиль>`;
+#   OPENCLAW_STATE_DIR / OPENCLAW_WORKSPACE — точные пути, если раскладка иная.
+STATE="${OPENCLAW_STATE_DIR:-}"
+if [ -z "$STATE" ]; then
+  if [ -n "${OPENCLAW_PROFILE_ID:-}" ]; then
+    STATE="/home/$BOTUSER/.openclaw-$OPENCLAW_PROFILE_ID"
+  else
+    STATE="/home/$BOTUSER/.openclaw"
+  fi
+fi
+WS="${OPENCLAW_WORKSPACE:-$STATE/workspace}"
+[ -d "$STATE" ] || { echo "выкатка: каталога состояния $STATE нет — шаг пропущен"; exit 0; }
+echo "выкатка: экземпляр $STATE"
 [ -d "$WS" ] || { echo "выкатка: рабочей папки $WS нет — шаг пропущен"; exit 0; }
 
 BAK="$WS/.replaced-by-deploy"
@@ -93,14 +113,17 @@ MCPDIR="${OPENCLAW_MCP_DIR:-/opt/openclaw-mcp}"
 if [ -d "$MCPDIR" ]; then
   run cp mcp_ask.py "$MCPDIR/mcp_ask.py"
   ok "выкатка: mcp_ask.py -> $MCPDIR"
-  run systemctl restart 1c-mcp-ask 2>/dev/null && ok "выкатка: 1c-mcp-ask перезапущен"
+  # Код моста один на все базы, а юнитов столько же, сколько баз: перезапускать надо тот,
+  # что обслуживает ЭТОТ экземпляр бота. Умолчание — боевой.
+  ASK_UNIT="${OPENCLAW_ASK_UNIT:-1c-mcp-ask}"
+  run systemctl restart "$ASK_UNIT" 2>/dev/null && ok "выкатка: $ASK_UNIT перезапущен"
 fi
 
 # Плагин-гейт: маркеры в нём обязаны совпадать с теми, что шлёт мост.
 # Путь ИЩЕТСЯ, а не задаётся: движок ставит плагин в каталог со сгенерированным именем
 # (`.../npm/projects/openclaw-braine-verify__…__g-<хеш>/node_modules/openclaw-braine-verify`),
 # и хеш меняется при переустановке. Записать его в скрипт значило бы поставить догадку.
-PLUGDIR=$(sudo -u "$BOTUSER" -H find "/home/$BOTUSER/.openclaw" -name verify-core.js \
+PLUGDIR=$(sudo -u "$BOTUSER" -H find "$STATE" -name verify-core.js \
           -printf '%h\n' 2>/dev/null | head -1)
 if [ -n "$PLUGDIR" ]; then
   # 🔴 МАНИФЕСТ ВЫКАТЫВАЕТСЯ ВМЕСТЕ С КОДОМ. [замер 02.08] копировались только два `.js`,
