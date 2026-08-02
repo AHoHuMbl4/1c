@@ -194,9 +194,33 @@ def main():
             "   Это не замер, а неудавшийся прогон — хук перед выкатом обязан спросить.\n"
             % (errs, hits, len(gold)))
         return None
+    # 🔴 ОТМЕТКУ ЧИТАЕТ КОММИТ-ХУК, А ОН ЖИВЁТ В РЕПОЗИТОРИИ. Прежде путь считался как
+    # «три каталога вверх от скрипта»: из репозитория это давало корень, а из рабочего
+    # каталога `/opt/1c-mcp-reports` — **корень файловой системы**, то есть
+    # `/.claude/.golden-last-run`. А запускать велено именно из рабочего каталога
+    # (`REGRESSION_BASE1 §0`), значит в документированном способе отметка не ставилась
+    # НИКОГДА и гейт перед выкатом её не видел. Тот же класс, что «хуки не вызывались
+    # вовсе» (`HOW_NOT_TO §1.42`): защита, которая молча не срабатывает.
+    root = os.environ.get("AB_MARK_DIR") or os.environ.get("CLAUDE_PROJECT_DIR") or ""
+    if not root:
+        try:
+            root = subprocess.run(
+                ["git", "-C", os.path.dirname(os.path.abspath(__file__)),
+                 "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, check=True).stdout.strip()
+        except Exception:                        # noqa: BLE001 — вне репозитория
+            root = ""
+    mark_dir = os.path.join(root, ".claude") if root else ""
+    if not mark_dir or not os.path.isdir(mark_dir):
+        # Молча не пишем — говорим. Иначе прогон выглядит удавшимся, а гейт остаётся слеп.
+        sys.stderr.write(
+            "\n🔴 отметка НЕ поставлена: не найден репозиторий (запуск из %s).\n"
+            "   Замер СОСТОЯЛСЯ (%s, верных %d из %d) — не поставлена только отметка для\n"
+            "   коммит-хука. Укажите каталог: AB_MARK_DIR=/путь/к/репозиторию\n"
+            % (os.path.dirname(os.path.abspath(__file__)), best[0], hits, len(gold)))
+        return best[0]
     try:
-        root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-        open(os.path.join(root, ".claude", ".golden-last-run"), "w").write(
+        open(os.path.join(mark_dir, ".golden-last-run"), "w").write(
             "%s %s %d/%d\n" % (BASE, best[0], hits, len(gold)))
     except Exception as e:                       # noqa: BLE001
         sys.stderr.write("отметку записать не удалось: %s\n" % e)
