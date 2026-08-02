@@ -451,6 +451,11 @@ openclaw --profile <база> onboard        # свой config, stateDir, worksp
 `ut_test` (мост `1c-mcp-ask` прибит к `:8099`), а первая база опрашивается напрямую
 приборами. Когда понадобится второй бот — порядок такой:
 
+Боты для этого **уже заведены владельцем** (02.08, «про запас»): `@Test11c_bot` и
+`@Test21c_bot`, токены живые (проверено `getMe`), лежат в `/etc/1c-telegram-test1.token` и
+`/etc/1c-telegram-test2.token` — права 600, владелец `undebot`, в git не входят. Подключать
+их штатным `channels.telegram.tokenFile`, как подключён нынешний бот.
+
 1. `openclaw --profile <база> onboard`, базовый порт **не ближе чем на 20** к 18800
    (`multiple-gateways.md:19`);
 2. в конфиге профиля **явно** задать `vault.path` — иначе молчаливое слияние с боевым
