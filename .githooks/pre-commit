@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+# Гейт коммита на стороне git — последний рубеж, не зависящий от типа сессии и движка.
+#
+# Зачем: 02.08 выяснилось, что PreToolUse-хуки Claude Code не зовутся в дочерних
+# сессиях — гейты защищали ноль коммитов. Git зовёт pre-commit ВСЕГДА, кто бы ни
+# коммитил: сессия, человек, Cursor. Включение (раз на клон):
+#   git config core.hooksPath .githooks
+#
+# Здесь только детерминированные проверки (молчат, пока правило не нарушено).
+# Эвристичные снайперы остаются в сессиях, где есть мягкое «спросить».
+# Аварийный люк: git commit --no-verify — осознанно, когда проверка ошибается.
+set -uo pipefail
+cd "$(git rev-parse --show-toplevel)" || exit 0
+LOG=".claude/hooks.log"
+
+STAGED=$(git diff --cached --name-only)
+[ -z "$STAGED" ] && exit 0
+
+# Трек владельца (решение 02.08, owner-memory): установщик коммитится из Cursor,
+# коммит целиком из windows/odata-setup не проверяем.
+if ! printf '%s\n' "$STAGED" | grep -qv '^windows/odata-setup/'; then
+  echo "$(date '+%d.%m %H:%M:%S') git-gate    пропуск: трек владельца (odata-setup)" >> "$LOG" 2>/dev/null || true
+  exit 0
+fi
+
+FAKE='{"tool_input":{"command":"git commit"}}'
+fail=0
+for h in check-docs check-graph-fresh check-active-size; do
+  out=$(printf '%s' "$FAKE" | ".claude/hooks/$h.sh" 2>/dev/null) || continue
+  reason=$(printf '%s' "$out" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+r = (d.get('hookSpecificOutput') or {}).get('permissionDecisionReason') or ''
+print(r)")
+  if [ -n "$reason" ]; then
+    { echo; echo "== $h =="; printf '%s\n' "$reason"; } >&2
+    fail=1
+  fi
+done
+
+if [ "$fail" -eq 1 ]; then
+  echo "$(date '+%d.%m %H:%M:%S') git-gate    БЛОК коммита" >> "$LOG" 2>/dev/null || true
+  { echo; echo "Коммит остановлен гейтом git (.githooks/pre-commit). Поправь и повтори."
+    echo "Осознанный обход, если проверка ошибается: git commit --no-verify"; } >&2
+  exit 1
+fi
+echo "$(date '+%d.%m %H:%M:%S') git-gate    ok" >> "$LOG" 2>/dev/null || true
+exit 0

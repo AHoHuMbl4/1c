@@ -20,16 +20,56 @@
 set -u
 cd "$(dirname "$0")" || exit 1
 
+# 🔴 СУХОЙ ПРОГОН — ЧАСТЬЮ СКРИПТА, А НЕ АККУРАТНОСТЬЮ ЗАПУСКАЮЩЕГО.
+#
+#   DRY_RUN=1 ./deploy_instance.sh   — только печатает, что бы сделала выкатка.
+#
+# [ошибка 02.08] Я думал, что подменой `OPENCLAW_WORKSPACE` на временную папку получаю
+# безопасную пробу. Она перенаправляет ТОЛЬКО шаг персоны: копирование моста в
+# `/opt/openclaw-mcp` и `systemctl restart 1c-mcp-ask` идут по жёстким путям — и
+# состояние боевого стенда изменилось без слова владельца, а маркеры моста и плагина
+# разъехались (мост новый, плагин старый). Пришлось откатывать. Пробы «почти как
+# настоящий запуск» не бывает: либо она держится кодом, либо её нет.
+DRY="${DRY_RUN:-0}"
+run() {
+  if [ "$DRY" = "1" ]; then printf 'СУХО: %s\n' "$*"; else "$@"; fi
+}
+# Подтверждение «сделано» при сухом прогоне не печатается: строка «1c-mcp-ask перезапущен»
+# там, где ничего не перезапускали, — это врущий вывод, а он хуже отсутствующего.
+ok() { [ "$DRY" = "1" ] || echo "$*"; }
+
 BOTUSER="${OPENCLAW_USER:-undebot}"
 WS="${OPENCLAW_WORKSPACE:-/home/$BOTUSER/.openclaw/workspace}"
 [ -d "$WS" ] || { echo "выкатка: рабочей папки $WS нет — шаг пропущен"; exit 0; }
 
 BAK="$WS/.replaced-by-deploy"
-sudo -u "$BOTUSER" -H mkdir -p "$BAK"
+run sudo -u "$BOTUSER" -H mkdir -p "$BAK"
 
-# Персона — из репозитория, всегда.
-sudo -u "$BOTUSER" -H cp instance/AGENTS.md "$WS/AGENTS.md"
-echo "выкатка: AGENTS.md ($(wc -c < instance/AGENTS.md) символов)"
+# 🔴 ПЕРСОНА: РЕЗЕРВ ПЕРЕД ЗАМЕНОЙ И ВОЗМОЖНОСТЬ ЕЁ НЕ ТРОГАТЬ.
+#
+# Прежде здесь стояло «Персона — из репозитория, всегда», и рабочая копия затиралась
+# молча. Это ловушка, а не строгость: в рабочей папке лежит персона от 30.07, которую
+# контрольный опыт вернул как ЛУЧШЕЕ ИЗВЕСТНОЕ состояние ([замер 31.07] новая стоит около
+# двух верных ответов из десяти), и она — предмет незакрытой развилки `№45`. Любой запуск
+# выкатки ради правки моста или плагина уничтожал бы предмет спора, ничего не сказав.
+#
+#   DEPLOY_PERSONA=0  — выкатить всё, КРОМЕ персоны. Ровно то, что нужно, пока развилка
+#                       `№45` не закрыта: мост и плагин обновляются, состояние сохраняется.
+#
+# Резерв делается ВСЕГДА и с меткой времени: у заготовок движка ниже действует правило
+# «первый резерв побеждает», для персоны оно не годится — так уцелела бы только самая
+# первая версия, а нужна предыдущая.
+if [ -f "$WS/AGENTS.md" ] && ! cmp -s instance/AGENTS.md "$WS/AGENTS.md"; then
+  PBAK="$BAK/AGENTS.md.$(date +%Y%m%d-%H%M%S)"
+  run sudo -u "$BOTUSER" -H cp "$WS/AGENTS.md" "$PBAK"
+  ok "выкатка: прежняя персона ($(wc -c < "$WS/AGENTS.md") символов) сохранена в $PBAK"
+fi
+if [ "${DEPLOY_PERSONA:-1}" = "0" ]; then
+  echo "выкатка: персона НЕ тронута (DEPLOY_PERSONA=0) — развилка №45"
+else
+  run sudo -u "$BOTUSER" -H cp instance/AGENTS.md "$WS/AGENTS.md"
+  ok "выкатка: AGENTS.md ($(wc -c < instance/AGENTS.md) символов)"
+fi
 
 # 🔴 УДАЛЕНИЕ НЕ РАБОТАЕТ — ДВИЖОК КЛАДЁТ ФАЙЛ ОБРАТНО. [замер 31.07] `TOOLS.md` убрали в
 # 04:17:03, движок положил идентичную копию в 04:17:21 — через 18 секунд. Удаление файла,
@@ -39,22 +79,21 @@ echo "выкатка: AGENTS.md ($(wc -c < instance/AGENTS.md) символов)
 for f in BOOTSTRAP.md SOUL.md IDENTITY.md TOOLS.md USER.md; do
   [ -f "$WS/$f" ] || continue
   if [ ! -f "$BAK/$f" ]; then
-    sudo -u "$BOTUSER" -H cp "$WS/$f" "$BAK/$f"
+    run sudo -u "$BOTUSER" -H cp "$WS/$f" "$BAK/$f"
   fi
   # Пустой файл движок считает заполненным и заново не заводит; в промт уходит одна строка
   # вместо 6 124 символов чужих указаний.
-  printf '%s\n' "(не используется — см. instance/AGENTS.md)" \
-    | sudo -u "$BOTUSER" -H tee "$WS/$f" >/dev/null
-  echo "выкатка: заготовка $f опустошена"
+  run sudo -u "$BOTUSER" -H bash -c 'printf "%s\n" "(не используется — см. instance/AGENTS.md)" > "$1"' _ "$WS/$f"
+  ok "выкатка: заготовка $f опустошена"
 done
 
 # Мост MCP — туда же, куда и персона: он тоже читается чужим процессом.
 # [замер 31.07] в /opt лежала копия от 30.07, и правки моста не влияли ни на один ответ.
 MCPDIR="${OPENCLAW_MCP_DIR:-/opt/openclaw-mcp}"
 if [ -d "$MCPDIR" ]; then
-  cp mcp_ask.py "$MCPDIR/mcp_ask.py"
-  echo "выкатка: mcp_ask.py -> $MCPDIR"
-  systemctl restart 1c-mcp-ask 2>/dev/null && echo "выкатка: 1c-mcp-ask перезапущен"
+  run cp mcp_ask.py "$MCPDIR/mcp_ask.py"
+  ok "выкатка: mcp_ask.py -> $MCPDIR"
+  run systemctl restart 1c-mcp-ask 2>/dev/null && ok "выкатка: 1c-mcp-ask перезапущен"
 fi
 
 # Плагин-гейт: маркеры в нём обязаны совпадать с теми, что шлёт мост.
@@ -64,8 +103,8 @@ fi
 PLUGDIR=$(sudo -u "$BOTUSER" -H find "/home/$BOTUSER/.openclaw" -name verify-core.js \
           -printf '%h\n' 2>/dev/null | head -1)
 if [ -n "$PLUGDIR" ]; then
-  sudo -u "$BOTUSER" -H cp verify-plugin/verify-core.js verify-plugin/index.js "$PLUGDIR/" 2>/dev/null \
-    && echo "выкатка: verify-plugin -> $PLUGDIR"
+  run sudo -u "$BOTUSER" -H cp verify-plugin/verify-core.js verify-plugin/index.js "$PLUGDIR/" 2>/dev/null \
+    && ok "выкатка: verify-plugin -> $PLUGDIR"
 else
   echo "🔴 выкатка: плагин-гейт не найден — маркеры моста и гейта могут разойтись"
 fi
@@ -76,6 +115,9 @@ fi
 STATE="$WS/openclaw-workspace-state.json"
 if [ -f "$STATE" ] && ! grep -q setupCompletedAt "$STATE"; then
   TS="${DEPLOY_TS:-$(date -u +%Y-%m-%dT%H:%M:%S.000Z)}"
+  if [ "$DRY" = "1" ]; then
+    echo "СУХО: проставить setupCompletedAt=$TS в $STATE"
+  else
   sudo -u "$BOTUSER" -H python3 - "$STATE" "$TS" <<'PY'
 import json, sys
 p, ts = sys.argv[1], sys.argv[2]
@@ -83,5 +125,6 @@ d = json.load(open(p, encoding="utf-8"))
 d["setupCompletedAt"] = ts
 json.dump(d, open(p, "w", encoding="utf-8"))
 PY
-  echo "выкатка: проставлена отметка setupCompletedAt"
+  ok "выкатка: проставлена отметка setupCompletedAt"
+  fi
 fi
