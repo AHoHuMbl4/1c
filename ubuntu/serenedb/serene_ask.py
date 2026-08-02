@@ -143,9 +143,16 @@ ORDER_BY_MEANING = os.environ.get("ASK_ORDER_BY_MEANING", "1") not in ("0", "fal
 # Честная оговорка: панацеей он не является — «сколько штук продано» он тоже не
 # сопоставляет (первым идёт «Расходный Кассовый Ордер»), потому что нужного числа нет
 # в корпусе вовсе (работа 3 в PRODUCTION_PLAN).
-RERANK_URL = os.environ.get("ALIBABA_RERANK_URL",
-                            "https://dashscope-intl.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank")
-RERANK_MODEL = os.environ.get("ALIBABA_RERANK_MODEL", "qwen3-rerank")
+# 🔴 Имена настроек не называют поставщика (как и у эмбеддера): реранкер переезжает в свой
+# контур следом. `RERANK_API` выбирает вид запроса — `openai` (общий `/v1/rerank`,
+# умолчание) или `dashscope` (прежний облачный). Прежние `ALIBABA_*` читаются как запасные.
+RERANK_URL = (os.environ.get("RERANK_URL")
+              or os.environ.get("ALIBABA_RERANK_URL")
+              or "https://dashscope-intl.aliyuncs.com/api/v1/services/rerank/text-rerank/text-rerank")
+RERANK_MODEL = (os.environ.get("RERANK_MODEL")
+                or os.environ.get("ALIBABA_RERANK_MODEL") or "qwen3-rerank")
+RERANK_API = os.environ.get("RERANK_API",
+                            "dashscope" if "dashscope" in RERANK_URL else "openai")
 # Сколько названий уходит в реранкер за один вопрос. Это БЮДЖЕТ КОНТЕКСТА, а не порог
 # правильности: он не подбирается под базу и не зависит от неё. Без него объём, уходящий
 # во внешнюю модель, рос бы с числом сущностей — прямое нарушение п. 19.
@@ -180,6 +187,9 @@ EMBED_URL = (os.environ.get("EMBED_BASE_URL")
              or os.environ.get("ALIBABA_EMBED_URL", "")).rstrip("/")
 EMBED_KEY = os.environ.get("EMBED_API_KEY") or os.environ.get("ALIBABA_API_KEY", "")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-v4")
+# Ключ реранкера может быть свой (он и живёт отдельным сервисом), а может совпадать с
+# ключом эмбеддера, если они за одной дверью. Умолчание — второе, потому что так и было.
+RERANK_KEY = os.environ.get("RERANK_API_KEY") or EMBED_KEY
 # Размерность вектора. 1024 — это то, что отдаёт модель, а не наш выбор: корпус теперь
 # эмбеддится ШТАТНОЙ функцией движка `ai_embed`, у которой параметра размерности нет и
 # не нужно — длину определяет модель, а колонка объявляется под неё (`VECTOR_DECISION §6`).
@@ -862,17 +872,31 @@ def rerank(query, docs):
     Возвращает порядок индексов. Пусто — значит не получилось, и вызывающий остаётся
     на прежнем порядке: отсутствие сигнала не должно превращаться в отказ (п. 21).
     """
-    if not query or not docs or not EMBED_KEY:
+    if not query or not docs or not RERANK_KEY:
         return []
-    body = json.dumps({"model": RERANK_MODEL,
-                       "input": {"query": query, "documents": docs},
-                       "parameters": {"return_documents": False, "top_n": len(docs)}}).encode()
+    # 🔴 ФОРМАТ ЗАПРОСА — НАСТРОЙКА, А НЕ КОНСТАНТА. Прежде тут был зашит вид одного
+    # облачного поставщика (`input`/`parameters`/`output.results`), и на любом другом
+    # реранкере — включая свой, поднятый рядом с эмбеддером, — вызов молча падал бы в
+    # «не получилось», а выдача оставалась бы в прежнем порядке. Заметить это по ответу
+    # бота нельзя: сигнала просто нет.
+    # Умолчание — общий вид `/v1/rerank` (`model`/`query`/`documents`/`top_n`, ответ
+    # `results[].index`), его отдают llama.cpp, TEI и совместимые. Прежний вид доступен
+    # как `RERANK_API=dashscope`.
+    if RERANK_API == "dashscope":
+        body = json.dumps({"model": RERANK_MODEL,
+                           "input": {"query": query, "documents": docs},
+                           "parameters": {"return_documents": False,
+                                          "top_n": len(docs)}}).encode()
+    else:
+        body = json.dumps({"model": RERANK_MODEL, "query": query,
+                           "documents": docs, "top_n": len(docs)}).encode()
     req = urllib.request.Request(RERANK_URL, data=body, method="POST")
-    req.add_header("Authorization", "Bearer " + EMBED_KEY)
+    req.add_header("Authorization", "Bearer " + RERANK_KEY)
     req.add_header("Content-Type", "application/json")
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
-            out = json.loads(r.read())["output"]["results"]
+            out = json.loads(r.read())
+        out = out["output"]["results"] if RERANK_API == "dashscope" else out["results"]
         return [int(x["index"]) for x in out]
     except Exception as e:                     # noqa: BLE001 — сеть/квота поставщика
         # 🔴 МОЛЧА ТЕРЯТЬ СИГНАЛ НЕЛЬЗЯ (п. 13). Отказ реранкера не роняет ответ — и это
