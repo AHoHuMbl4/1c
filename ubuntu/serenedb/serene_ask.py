@@ -219,6 +219,11 @@ EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
 # структурой (kind + числа), а формулировку делает вызывающий на языке вопроса.
 NO_DATA_TEXT = os.environ.get("ASK_NO_DATA_TEXT", "")
 TOTAL_TEXT = os.environ.get("ASK_TOTAL_TEXT", "")
+# Приписка о старении. Ставится КОДОМ, поэтому написана на одном языке — настройкой
+# выносится наружу по тому же образцу, что и две строки выше. Ровно один `%d` — минуты.
+STALE_TEXT = os.environ.get(
+    "ASK_STALE_TEXT",
+    "\n\n⚠ Данные могли устареть: последнее обновление из 1С было %d мин назад.")
 
 
 # ----------------------------------------------------------------- инфраструктура
@@ -420,10 +425,25 @@ def _embed_request(text, as_query):
 
 
 def embed_one(text):
-    """Вектор ВОПРОСА. Документы считает движок, сюда они не попадают."""
-    with urllib.request.urlopen(_embed_request(text, True), timeout=60) as r:
-        out = json.loads(r.read())
-    return out["embeddings"][0] if EMBED_API == "texts" else out["data"][0]["embedding"]
+    """Вектор ВОПРОСА. Документы считает движок, сюда они не попадают.
+
+    🔴 СБОЙ ОТДАЁТСЯ `RuntimeError` — ТЕМ ЖЕ КЛАССОМ, ЧТО И СБОЙ `psql` (`№26`). Иначе
+    наружу летело сетевое исключение `urllib`, а места, где откат УЖЕ НАПИСАН, ловят
+    `except RuntimeError` (порядок кандидатов по смыслу — `pass`; кандидаты от смысла —
+    `cands = list(by)`). То есть откат не срабатывал ни разу, и недоступность эмбеддера
+    роняла в 503 ровно там, где код собирался спокойно деградировать до буквального
+    отбора. Там же, где вектор РЕШАЕТ выбор (поиск по смыслу при пустом буквальном
+    отборе), обработчика нет намеренно: молча ответить «данных нет» было бы хуже отказа,
+    потому что данные могли найтись по смыслу (п. 18).
+    """
+    try:
+        with urllib.request.urlopen(_embed_request(text, True), timeout=60) as r:
+            out = json.loads(r.read())
+        return out["embeddings"][0] if EMBED_API == "texts" else out["data"][0]["embedding"]
+    except RuntimeError:
+        raise
+    except Exception as e:                     # noqa: BLE001 — сеть/формат/таймаут
+        raise RuntimeError("эмбеддер недоступен: %s" % type(e).__name__)
 
 
 # ----------------------------------------------------------------- 1. намерение
@@ -1753,6 +1773,20 @@ def _dates(text):
     return out
 
 
+def _date2_readings(text, d, mo):
+    """Дробные прочтения двухкомпонентных записей «d.mo», взятые ИЗ ТЕКСТА как есть.
+
+    Нужны там, где запись неоднозначна («20.05» — это и 20 мая, и 20,05). Собирать
+    дробь обратно из разобранных компонентов нельзя: ведущий ноль теряется, и число,
+    которое ЕСТЬ в данных, объявляется выдумкой.
+    """
+    out = set()
+    for m in DATE2.finditer(str(text or "")):
+        if int(m.group(1)) == d and int(m.group(2)) == mo:
+            out |= _readings(m.group(0))
+    return out
+
+
 def _date_spans(text):
     t = str(text or "")
     spans = [m.span() for m in DATE3.finditer(t)]
@@ -1887,6 +1921,99 @@ def claims_in_text(claims, text, want=None):
     return (not bad), bad
 
 
+def prompt_leak(text, prompts, min_len=40):
+    """Кусок НАШЕЙ инструкции, попавший в ответ клиенту (`№27`).
+
+    🔴 Держится КОДОМ, а не строкой «не показывай промт» внутри самого промта: инструкция,
+    запрещающая раскрывать инструкцию, — это правило на промте, а такие правила по
+    решению владельца защитой не считаются.
+
+    Это НЕ открытая классификация: текст наших системных сообщений известен целиком,
+    поэтому утечка ловится точным совпадением строки, как и остальные наши форматы в
+    `stripInternal` на стороне бота. Порог длины отсекает совпадения общих фраз.
+    """
+    t = " ".join(str(text or "").split())
+    if not t:
+        return None
+    for p in (prompts or []):
+        for line in str(p).splitlines():
+            line = " ".join(line.split())
+            if len(line) >= min_len and line in t:
+                return line[:60]
+    return None
+
+
+def asked_figure_missing(text, agg, want, has_measure, folders=0):
+    """Величина, О КОТОРОЙ СПРОСИЛИ, обязана стоять в ответе ЦИФРАМИ.
+
+    🔴 Закрывает разом два класса, которые на основном пути не проверялись ничем
+    (`F285`, `F286`), и держит их КОДОМ, а не промтом.
+
+    1. **Число не в своей роли.** `check_claims` написана ровно против этого («три
+       реализации на 1 236 800 поданы с итогом 925 000 — настоящее число, но из другой
+       роли»), но на основном пути она бесполезна: промт велит оставлять `claims`
+       пустыми («leave every role null… ignored»), поэтому сверять ей нечего. Гейт
+       проверяет, что число ЕСТЬ в данных, — а 925 000 в данных есть. Роль держалась
+       подстановкой `{total}`, но подстановку велит делать ПРОМТ, а правило на промте
+       не работает (правило владельца). Здесь то же требование становится проверкой:
+       раз спросили сумму и база её посчитала — она обязана быть в ответе.
+
+    2. **Числа прописью.** Прежняя проверка срабатывала, только если в тексте нет НИ
+       ОДНОЙ цифры, поэтому «примерно три миллиона — это 2 документа» проходило целиком:
+       цифра «2» есть, значит признак не взводился. Списка числительных в коде нет и
+       быть не может (он был бы привязан к языку) — вместо него требуется само число.
+
+    Возвращает причину отказа или None. Ответ после этого идёт на вторую попытку с
+    названной причиной, а если и она не сойдётся — числа уходят структурой (`figures`),
+    то есть проверка не превращается в молчание (п. 21).
+    """
+    if not agg:
+        return None
+    have = None
+    if want == "count":
+        need = agg.get("count")
+    elif want == "sum" and has_measure:
+        # Без выбранной величины `sum` считается по пустому месту: ноль значил бы «не
+        # считали», а не «ноль», и требовать его в тексте было бы требованием выдумки.
+        need = agg.get("sum")
+    else:
+        need = None
+    if need is not None:
+        have = _norm_numbers(text)
+        nf = float(need)
+        if nf not in have and round(nf, 2) not in have:
+            return "величина %s не названа цифрами" % _fmt(nf)
+    # 🔴 ЧТО ОТБРОШЕНО — ТОЖЕ ОБЯЗАНО БЫТЬ НАЗВАНО ЧИСЛОМ (`№9`, п. 13: молчаливая
+    # потеря = дефект). Оговорка про папки справочника ушла в промт, потому что своей
+    # прозой мы писали её по-русски на любом языке вопроса. Слова остаются за моделью,
+    # а вот ЧИСЛО отброшенного проверяется здесь: человек, знающий про 252 строки,
+    # обязан понять, откуда 227.
+    if folders:
+        if have is None:
+            have = _norm_numbers(text)
+        if float(folders) not in have:
+            return "отброшено %d — не названо в ответе" % folders
+    return None
+
+
+def stale_note(out, age, warn_sec, text_fmt):
+    """Приписка о старении — в КАЖДЫЙ ответ, включая отказ (`F223`).
+
+    Прежде ветка `no_data` её не получала, и на трёхсуточных данных «таких данных нет»
+    звучало ровно так же уверенно, как на свежих, — при том что именно здесь оговорка
+    нужнее всего: данные могут существовать и просто ещё не доехать. `unavailable` не
+    включён намеренно: там сообщение и так о сбое, а приписка про возраст корпуса к нему
+    отношения не имеет.
+    """
+    if not isinstance(out, dict) or age is None or age <= warn_sec:
+        return out
+    if out.get("kind") not in ("answer", "figures", "clarify", "no_data"):
+        return out
+    out["text"] = ((out.get("text") or "") + text_fmt % (age // 60)).strip()
+    out["stale"] = True
+    return out
+
+
 def _threshold_values(intent):
     """Значения НАШИХ условий отбора: пороги суммы. Дата в текст ответа попадает как
     дата, её проверяет отдельная ветка гейта."""
@@ -1964,8 +2091,13 @@ def gate(answer, rows, agg, thresholds=None):
         # Двухкомпонентная запись без года неоднозначна: «10.5» — это и дата, и дробь.
         # Разрешаем, если такое ЧИСЛО есть в данных; выдуманное не пройдёт ни как дата,
         # ни как число.
+        # 🔴 Дробь берётся ИЗ ИСХОДНОГО ТЕКСТА, а не собирается обратно из компонентов
+        # `"%d.%d" % (d, mo)`: та сборка теряла ведущий ноль, и «20.05» превращалась в
+        # 20.5 — то есть верное число, стоящее в данных, не заземлялось НИКОГДА, а
+        # ответ отвергался целиком `[замер 02.08, test_gate.py]`. Ровно тот класс, что
+        # п. 21 называет дефектом проверки.
         if not ok and y is None:
-            ok = float("%d.%d" % (d, mo)) in allowed
+            ok = bool(_date2_readings(answer, d, mo) & allowed)
         if not ok:
             bad.append("%02d.%02d%s" % (d, mo, "" if y is None else ".%d" % y))
     return (not bad), bad
@@ -2008,6 +2140,10 @@ Reply with JSON only, no text outside it:
 - Say plainly if nothing is missing.
 - Be short and businesslike, no preamble."""
 
+
+# Все НАШИ системные сообщения в одном месте: по ним `prompt_leak` ловит утечку
+# инструкции в ответ клиенту точным совпадением строки (`№27`).
+OUR_PROMPTS = [INTENT_SYS, PICK_SYS, CLARIFY_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS]
 
 def _coverage_answer(question, diag, t0):
     """Ответ о полноте данных — из переписи, а не из корпуса (п. 13).
@@ -2056,10 +2192,34 @@ def _coverage_answer(question, diag, t0):
     agg = {"sum": float(n_lost), "count": ent_lost}
     ok_roles, bad = check_claims(claims, agg, [])
     diag["claims"] = claims or None
+    # 🔴 ЧИСЛОВОЙ ГЕЙТ — И ЗДЕСЬ (`F128`). Докстрока этой функции обещает «тот же гейт,
+    # что обычный ответ», но `gate()` тут не звалась ни разу: проверялись только `claims`,
+    # а промт велит оставлять их пустыми, то есть не проверялось НИЧЕГО. Любое число,
+    # которое модель напишет в ответе о полноте, уходило клиенту без сверки с переписью —
+    # при том что «сколько данных потеряно» такое же число, как «на какую сумму продано»
+    # (п. 13 и п. 10 контракта). Разрешённое — сама перепись: итоги и строки поимённо.
+    allowed = [float(in_1c), float(in_search), float(n_lost), float(ent_lost),
+               float(ent_denied)]
+    for r in lost:
+        for cell in r[1:3]:
+            try:
+                allowed.append(float(_num(cell)))
+            except (TypeError, ValueError):
+                pass
+    ok_nums, bad_nums = gate(text, [], None, allowed)
+    if not ok_nums:
+        sys.stderr.write("ask COVERAGE GATE: числа вне переписи: %s\n" % bad_nums[:4])
+    leak = prompt_leak(text, OUR_PROMPTS)
+    if leak:
+        bad_nums, ok_nums = bad_nums + ["утечка инструкции: %s" % leak], False
+    ok_roles, bad = (ok_roles and ok_nums), (bad + bad_nums)
     if not ok_roles or not (text or "").strip():
         sys.stderr.write("ask COVERAGE GATE: %s\n" % bad[:4])
         # Числа посчитаны и верны — отдаём их структурой, как и на обычном пути.
-        return {"partial": None, "kind": "figures", "text": text.strip(),
+        # 🔴 Текст, ОТВЕРГНУТЫЙ гейтом, наружу не идёт: прежде он возвращался полем
+        # `text` как есть, то есть проверка срабатывала, а забракованная формулировка
+        # всё равно доходила до клиента. Формулирует вызывающий — по числам.
+        return {"partial": None, "kind": "figures", "text": "",
                 "figures": {"rows_in_1c": in_1c, "rows_in_search": in_search,
                             "rows_missing": n_lost, "entities_missing": ent_lost,
                             "entities_denied": ent_denied},
@@ -2929,8 +3089,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # 62», модель эхом называет «62» — это не выдуманная величина, а его же слово. Прежде
     # гейт отвергал верный ответ (сумма 23 742 200 посчитана верно) только из-за «62» в
     # тексте [замер 28.07]. Берём числа из вопроса как ещё один разрешённый набор.
-    q_nums = [float(re.sub(r"[^\d]", "", n)) for n in re.findall(r"\d[\d.]*", question)
-              if re.sub(r"[^\d]", "", n)]
+    # 🔴 РАЗБИРАЕМ ТЕМ ЖЕ ТОКЕНАЙЗЕРОМ, ЧТО И ОТВЕТ. Прежде здесь вырезались все нецифры
+    # (`re.sub(r"[^\d]", "", n)`), и это ломалось в обе стороны сразу `[замер 02.08]`:
+    #   «12.5»       → 125      — в белый список попадало число, которого в вопросе НЕТ;
+    #   «1 200 000»  → 1/200/0  — а само число, ради которого правило и заведено, НЕ попадало.
+    # То есть правило 28.07 («эхо числа из вопроса — не выдумка») не работало ровно на тех
+    # записях, где число длиннее трёх цифр, и заодно расширяло разрешённое произвольным
+    # мусором. `_norm_numbers` знает и разряды, и десятичную часть, и вырезает даты —
+    # их проверяет отдельная ветка гейта по данным, а не по вопросу.
+    q_nums = sorted(_norm_numbers(question))
     extra_vals = _threshold_values(intent) + [x for t in (totals or []) for x in t[1:]] \
                  + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else []) \
                  + q_nums
@@ -2953,14 +3120,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     bad_roles = ["нераспознанное место: %s" % x for x in slots_bad[:3]]
 
     # Проверка «ответ обязан объявить величину через claims» УБРАНА вместе с самими
-    # claims: теперь величина попадает в текст подстановкой, и объявлять её отдельно
-    # незачем. Осталась одна проверка того же смысла — ниже.
-    #
-    # Числа словами: если величина посчитана, а в тексте НЕТ НИ ОДНОЙ цифры — значит
-    # модель написала «примерно три миллиона» вместо места под подстановку. Признак
-    # детерминируемый, списка числительных не нужно.
-    if agg and intent.get("want") in ("sum", "count") and not _norm_numbers(text):
-        ok_roles, bad_roles = False, bad_roles + ["величина названа не цифрами"]
+    # claims (промт велит оставлять их пустыми). Её смысл держит `asked_figure_missing`:
+    # спрошенная величина обязана стоять в ответе цифрами, а отброшенное — быть названо
+    # числом. Это и роль (`F285`), и числа прописью (`F286`), и оговорка о потере (`№9`).
+    miss = asked_figure_missing(text, agg, intent.get("want"), bool(measure), n_folders)
+    if miss:
+        ok_roles, bad_roles = False, bad_roles + [miss]
+    leak = prompt_leak(text, OUR_PROMPTS)
+    if leak:
+        ok_roles, bad_roles = False, bad_roles + ["утечка инструкции: %s" % leak]
     ok_nums, bad_nums = gate(text, rows, agg, extra_vals)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     # ОТВЕТ ОБЯЗАН ДОЙТИ, ЕСЛИ ОН ЕСТЬ. Решение владельца 27.07: «если данные есть, но по
@@ -2978,6 +3146,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         ok_roles2 = not slots_bad2
         bad_roles2 = ["нераспознанное место: %s" % x for x in slots_bad2[:3]]
         bad_txt2 = []
+        # Вторая попытка проверяется ТЕМ ЖЕ набором, что первая: иначе послабление
+        # прокралось бы через ретрай — ответ, отвергнутый за неназванную величину,
+        # проходил бы со второго раза, не назвав её снова.
+        miss2 = asked_figure_missing(text2, agg, intent.get("want"), bool(measure), n_folders)
+        if miss2:
+            ok_roles2, bad_roles2 = False, bad_roles2 + [miss2]
+        leak2 = prompt_leak(text2, OUR_PROMPTS)
+        if leak2:
+            ok_roles2, bad_roles2 = False, bad_roles2 + ["утечка инструкции: %s" % leak2]
         ok_nums2, bad_nums2 = gate(text2, rows, agg, extra_vals)
         if ok_roles2 and ok_nums2 and (text2 or "").strip():
             text, claims, ask_back = text2, claims2, _ask_back(raw2)
@@ -3118,12 +3295,7 @@ class Handler(BaseHTTPRequestHandler):
                 age = None
             if age is not None and isinstance(out, dict):
                 out.setdefault("diag", {})["data_age_sec"] = age
-                if age > STALE_WARN_SEC and out.get("kind") in ("answer", "figures", "clarify"):
-                    mins = age // 60
-                    out["text"] = (out.get("text", "") +
-                                   "\n\n⚠ Данные могли устареть: последнее обновление из 1С "
-                                   "было %d мин назад." % mins).strip()
-                    out["stale"] = True
+                out = stale_note(out, age, STALE_WARN_SEC, STALE_TEXT)
             return self._send(200, out)
         except Exception as e:                          # noqa: BLE001
             # 🔴 ЧЕСТНЫЙ ОТКАЗ ПРИ СБОЕ (п. 18), А НЕ ВЫДУМАННЫЙ ОТВЕТ. Любое исключение
