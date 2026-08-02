@@ -91,6 +91,19 @@ asks "$OUT"; [ $? = 1 ]; say $? 'замер свежее правок — мол
 OUT=$(call 'ls /opt' check-golden.sh)
 asks "$OUT"; [ $? = 1 ]; say $? 'на посторонней команде молчит'
 
+echo '== каталог запуска: хук не имеет права молчать (fail-open 02.08) =='
+# Хук зовут не обязательно из каталога проекта. Прежняя форма
+# `cd "$(git rev-parse --show-toplevel || echo .)"` в этом случае оставалась в чужом
+# каталоге, `git diff --cached` отдавал пусто, и коммит проходил БЕЗ ПРОВЕРКИ.
+printf 'print(3)\n' > "$TMP/ubuntu/serenedb/other.py"
+git -C "$TMP" add ubuntu/serenedb/other.py
+OUT=$(cd / && CLAUDE_PROJECT_DIR="$TMP" bash -c "printf '%s' '{\"tool_input\":{\"command\":\"git commit -m x\"}}' | bash '$HOOKS/check-docs.sh'" 2>/dev/null)
+asks "$OUT"; say $? 'запуск из / с CLAUDE_PROJECT_DIR — проверяет указанный репозиторий'
+ROOT=$(cd / && env -u CLAUDE_PROJECT_DIR bash -c ". '$HOOKS/lib-hooks.sh'; hook_repo_root")
+[ "$ROOT" = "$(cd "$HOOKS/../.." && pwd)" ]
+say $? 'без переменной и вне репозитория — корень берётся от места самого хука'
+cd "$TMP" || exit 1
+
 echo
 if [ "$FAILED" != 0 ]; then echo "🔴 ПРОВАЛОВ: $FAILED"; exit 1; fi
 echo 'Хуки прошли пробу полностью.'

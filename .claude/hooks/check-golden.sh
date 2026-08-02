@@ -18,7 +18,9 @@ CMD=$(hook_command)
 # способе, которым мы выкатываем на самом деле.
 is_deploy "$CMD" || { echo '{}'; exit 0; }
 
-cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 0
+# Корень репозитория — от движка или от места самого хука, НЕ от текущего каталога:
+# прежняя форма при запуске из чужого каталога молча пропускала коммит (fail-open).
+cd_repo || { hook_ask "Хук $(basename "$0") не смог определить каталог репозитория и ничего не проверил. Пропускать проверку молча нельзя — подтвердите шаг вручную."; exit 0; }
 
 MARK=".claude/.golden-last-run"
 SRC_DIRS="ubuntu/serenedb ubuntu/openclaw ubuntu/1c-gateway ubuntu/1c-etl ubuntu/1c-config-ui"

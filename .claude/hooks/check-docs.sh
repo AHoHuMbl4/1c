@@ -15,7 +15,9 @@ CMD=$(hook_command)
 # равнозначные формы вроде `git -C /srv/1c commit` (`F248`).
 is_git_commit "$CMD" || { echo '{}'; exit 0; }
 
-cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 0
+# Корень репозитория — от движка или от места самого хука, НЕ от текущего каталога:
+# прежняя форма при запуске из чужого каталога молча пропускала коммит (fail-open).
+cd_repo || { hook_ask "Хук $(basename "$0") не смог определить каталог репозитория и ничего не проверил. Пропускать проверку молча нельзя — подтвердите шаг вручную."; exit 0; }
 
 STAGED=$(git diff --cached --name-only 2>/dev/null)
 [ -z "$STAGED" ] && { echo '{}'; exit 0; }
