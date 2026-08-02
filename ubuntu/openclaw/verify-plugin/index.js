@@ -91,7 +91,10 @@ function refFor(sessKey) {
 export default definePluginEntry({
   id: "braine-verify",
   name: "Braine Verify",
-  description: "Code-level anti-hallucination gate over braine ask_1c (verifies hard numeric facts in outbound messages).",
+  // 🔴 Это описание показывает `openclaw plugins inspect` — оно, а НЕ текст из
+  // `openclaw.plugin.json`. Держать их согласованными: расходятся молча, и проверка
+  // «обновился ли плагин на стенде» по описанию из манифеста даёт ложный ответ.
+  description: "Code-level anti-hallucination gate over ask_1c: verifies hard numeric facts in outbound messages AND media captions; delivery is never silently dropped.",
   register(api) {
     PLUGIN_API = api;
     // конфиг плагина берём из api.pluginConfig (не из ctx хука — там его нет)

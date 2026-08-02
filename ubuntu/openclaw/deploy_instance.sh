@@ -103,7 +103,12 @@ fi
 PLUGDIR=$(sudo -u "$BOTUSER" -H find "/home/$BOTUSER/.openclaw" -name verify-core.js \
           -printf '%h\n' 2>/dev/null | head -1)
 if [ -n "$PLUGDIR" ]; then
-  run sudo -u "$BOTUSER" -H cp verify-plugin/verify-core.js verify-plugin/index.js "$PLUGDIR/" 2>/dev/null \
+  # 🔴 МАНИФЕСТ ВЫКАТЫВАЕТСЯ ВМЕСТЕ С КОДОМ. [замер 02.08] копировались только два `.js`,
+  # и на стенде остался манифест, не знающий новых ключей настройки. При
+  # `additionalProperties: false` это значит, что настройка, описанная в наших же доках
+  # как доступная, движком была бы отвергнута: документ обещает то, чего на стенде нет.
+  run sudo -u "$BOTUSER" -H cp verify-plugin/verify-core.js verify-plugin/index.js \
+      verify-plugin/openclaw.plugin.json verify-plugin/README.md "$PLUGDIR/" 2>/dev/null \
     && ok "выкатка: verify-plugin -> $PLUGDIR"
 else
   echo "🔴 выкатка: плагин-гейт не найден — маркеры моста и гейта могут разойтись"
