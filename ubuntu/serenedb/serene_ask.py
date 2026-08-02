@@ -253,6 +253,39 @@ def lit(s):
 # её нет — таблица для смыслового поиска не существует, работает буквальный отбор.
 # Отметку ставит перевекторизация (`embed_all.sh`, `EMBED_RESET=1`), а не человек.
 _EMB_OK_CACHE = {}
+_EMB_LIVE_CACHE = [None, 0.0]
+
+
+def embed_model_live():
+    """Эмбеддер отдаёт ИМЕННО ту модель, которую мы просим?
+
+    🔴 Спрашивать надо ответ, а не собственную настройку. [замер 02.08] наш эндпоинт при
+    незнакомом имени модели молча подставляет свою: запрос с `model=…-Q8_0` возвращает
+    HTTP 200 и вектор `…-Q6_K`. То есть смена модели на сервере — а она делается за
+    секунды и без предупреждения — превращает вопрос и корпус в несравнимые величины,
+    и ни одна ошибка об этом не скажет. Тот же разбор, что в `embed_check.sh`, только
+    здесь он на живом пути ответа: сборку он остановить успевает, а бота — нет.
+    """
+    if _EMB_LIVE_CACHE[0] is not None and time.time() - _EMB_LIVE_CACHE[1] < 300:
+        return _EMB_LIVE_CACHE[0]
+    ok = False
+    try:
+        body = json.dumps({"model": EMBED_MODEL, "dimensions": EMBED_DIM,
+                           "input": ["ping"]}).encode()
+        req = urllib.request.Request(EMBED_URL + "/embeddings", data=body, method="POST")
+        req.add_header("Authorization", "Bearer " + EMBED_KEY)
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=20) as r:
+            got = (json.loads(r.read()).get("model") or "").strip()
+        ok = (got == EMBED_MODEL)
+        if not ok:
+            sys.stderr.write("🔴 ЭМБЕДДЕР ОТДАЁТ ДРУГУЮ МОДЕЛЬ: просим «%s», получаем «%s». "
+                             "Поиск по смыслу выключен — векторы несравнимы.\n"
+                             % (EMBED_MODEL, got))
+    except Exception as e:                     # noqa: BLE001 — сеть/квота поставщика
+        sys.stderr.write("эмбеддер не отвечает, поиск по смыслу выключен: %r\n" % (e,))
+    _EMB_LIVE_CACHE[0], _EMB_LIVE_CACHE[1] = ok, time.time()
+    return ok
 
 
 def emb_ready(table):
@@ -260,6 +293,11 @@ def emb_ready(table):
     hit = _EMB_OK_CACHE.get(table)
     if hit is not None and time.time() - hit[1] < 60:
         return hit[0]
+    if not embed_model_live():
+        # Модель на сервере не та, что мы просим (или он молчит). Смысловой путь
+        # выключается ЦЕЛИКОМ: буквальный отбор работает, догадки по чужим векторам нет.
+        _EMB_OK_CACHE[table] = (False, time.time())
+        return False
     try:
         rows = psql("SELECT note FROM search_quality WHERE k = %s" % lit("emb_model_" + table))
         ok = bool(rows) and (rows[0][0] or "").strip() == EMBED_MODEL
