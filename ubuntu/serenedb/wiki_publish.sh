@@ -18,8 +18,45 @@ BOTUSER="${OPENCLAW_USER:-undebot}"
 cd "$(dirname "$0")" || exit 1
 
 command -v openclaw >/dev/null 2>&1 || { echo "вики: openclaw не установлен — шаг пропущен"; exit 0; }
-VAULT=$(sudo -u "$BOTUSER" -H openclaw wiki status 2>/dev/null | sed -n 's/^Vault: ready (\(.*\))$/\1/p')
-[ -n "$VAULT" ] || { echo "вики: хранилище не готово (плагин memory-wiki выключен?) — шаг пропущен"; exit 0; }
+
+# 🔴 У КАЖДОЙ БАЗЫ СВОЯ ВИКИ. Хранилище выбирается ЯВНО, а не берётся «то, что вернёт
+# `wiki status`»: та команда всегда показывает хранилище агента по умолчанию, и при двух
+# базах обе писали бы в одно место. [замер 02.08] так и вышло: в общем хранилище лежала
+# смесь — 697 страниц при 231 сущности у первой базы и 1502 у второй, причём страницы УТ
+# попадали в словарь, по которому бот перефразирует вопросы к Бухгалтерии.
+#   WIKI_VAULT  — путь к хранилищу целиком (высший приоритет);
+#   WIKI_AGENT  — идентификатор агента; путь = <родитель хранилища>/<агент>. Это раскладка
+#                 штатного `vault.scope: "agent"` — движок кладёт вики агента именно так.
+VAULT="${WIKI_VAULT:-}"
+if [ -z "$VAULT" ]; then
+  DEFAULT_VAULT=$(sudo -u "$BOTUSER" -H openclaw wiki status 2>/dev/null | sed -n 's/^Vault: ready (\(.*\))$/\1/p')
+  [ -n "$DEFAULT_VAULT" ] || { echo "вики: хранилище не готово (плагин memory-wiki выключен?) — шаг пропущен"; exit 0; }
+  if [ -n "${WIKI_AGENT:-}" ]; then
+    VAULT="$(dirname "$DEFAULT_VAULT")/$WIKI_AGENT"
+  else
+    VAULT="$DEFAULT_VAULT"
+  fi
+fi
+
+# Имя базы спрашиваем У БАЗЫ, а не разбираем строку подключения: разбор DSN — догадка
+# (`HOW_NOT_TO §3.9`), и он уже ломался на форме без `dbname=`.
+DBNAME=$(psql "$DSN" -tAc "SELECT current_database()" 2>/dev/null | tr -d '[:space:]')
+[ -n "$DBNAME" ] || { echo "вики: база не отвечает — шаг пропущен"; exit 0; }
+
+# 🔴 ЧУЖОЕ ХРАНИЛИЩЕ НЕ ПЕРЕЗАПИСЫВАЕТСЯ. Отметка говорит, чьими страницами оно заполнено.
+# Это защита по ПОСТРОЕНИЮ, а не правило, которое надо помнить: перепутать базу и агента
+# можно на любом такте, и молча — страницы просто заменятся, а бот начнёт перефразировать
+# по чужому словарю. Осознанная передача хранилища другой базе — `WIKI_VAULT_TAKEOVER=1`.
+STAMP="$VAULT/.built-from"
+if [ -f "$STAMP" ]; then
+  OWNER=$(tr -d '[:space:]' < "$STAMP")
+  if [ -n "$OWNER" ] && [ "$OWNER" != "$DBNAME" ] && [ "${WIKI_VAULT_TAKEOVER:-0}" != "1" ]; then
+    echo "🔴 вики: хранилище $VAULT заполнено базой «$OWNER», а такт идёт по «$DBNAME» —" >&2
+    echo "   публикация ОТМЕНЕНА, чтобы не подменить словарь чужим. Заведите базе своё" >&2
+    echo "   хранилище (WIKI_AGENT/WIKI_VAULT) или передайте это: WIKI_VAULT_TAKEOVER=1" >&2
+    exit 1
+  fi
+fi
 
 psql "$DSN" -q -v ON_ERROR_STOP=1 -f wiki_build.sql >/dev/null || { echo "вики: wiki_build.sql не прошёл" >&2; exit 1; }
 
@@ -34,7 +71,7 @@ import os, sys
 dump, out = sys.argv[1], sys.argv[2]
 os.makedirs(out, exist_ok=True)
 data = open(dump, encoding='utf-8').read()
-n = 0
+written = set()
 for rec in data.split('\x1e'):
     if '\x1f' not in rec:
         continue
@@ -47,9 +84,34 @@ for rec in data.split('\x1e'):
     if '/' in page_id or page_id.startswith('.'):
         continue
     open(os.path.join(out, page_id + '.md'), 'w', encoding='utf-8').write(body.rstrip('\n') + '\n')
-    n += 1
-print('вики: записано страниц %d' % n)
+    written.add(page_id + '.md')
+
+# 🔴 СТРАНИЦЫ, КОТОРЫХ В БАЗЕ БОЛЬШЕ НЕТ, УДАЛЯЮТСЯ. Прежде не удалялось ничего, и
+# хранилище копило чужое: сущность, выведенная из базы (или пришедшая из ДРУГОЙ базы),
+# оставалась в словаре навсегда и продолжала предлагаться боту как вариант перефразирования.
+# Удаляем только при непустой выгрузке: пустая означает сбой сборки, а не «сущностей нет», и
+# вычистить по ней весь словарь было бы худшим из исходов.
+removed = 0
+if written:
+    for name in os.listdir(out):
+        if name.endswith('.md') and name not in written:
+            os.remove(os.path.join(out, name))
+            removed += 1
+print('вики: записано страниц %d, удалено устаревших %d' % (len(written), removed))
 PY
 
-chown -R "$BOTUSER":"$BOTUSER" "$VAULT/entities" 2>/dev/null
+# Отметка «чьими страницами заполнено» — её читает проверка выше на следующем такте.
+printf '%s\n' "$DBNAME" > "$STAMP"
+chown -R "$BOTUSER":"$BOTUSER" "$VAULT/entities" "$STAMP" 2>/dev/null
 sudo -u "$BOTUSER" -H openclaw wiki compile 2>&1 | tail -2
+
+# 🔴 СМЫСЛОВОЙ ПОИСК ЖИВЁТ ИНДЕКСОМ, А ИНДЕКС САМ НЕ ОБНОВИТСЯ. Страницы изменились —
+# значит переиндексация обязательна, иначе бот ищет по прошлому такту и этого ниоткуда не
+# видно. Шаг не валит такт: без индекса вики хуже, но ответы работают.
+# 🔴 КЛЮЧ ЭМБЕДДЕРА ПРОБРАСЫВАЕТСЯ ЯВНО. `sudo -H` очищает окружение, и без этого шаг
+# падает с `SecretRef is unresolved (env:default:EMBED_API_KEY)` — [замер 02.08] так и
+# случилось на первом же прогоне. Ключ берётся из окружения такта (его задаёт
+# `/etc/1c-embed.env`, одно место на весь продукт) и в командную строку не попадает:
+# `env` получает его через своё окружение, а не аргументом — иначе он был бы виден в `ps`.
+EMBED_API_KEY="${EMBED_API_KEY:-}" sudo -u "$BOTUSER" -H --preserve-env=EMBED_API_KEY \
+  openclaw memory index --agent "${WIKI_AGENT:-main}" 2>&1 | tail -1

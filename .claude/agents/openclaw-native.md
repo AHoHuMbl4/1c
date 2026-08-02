@@ -1,6 +1,6 @@
 ---
 name: openclaw-native
-description: Следит, чтобы всё, что касается OpenClaw, делалось его штатными механизмами. Читает ДОКИ ИЗ /opt/openclaw-engine/docs на сервере (747 файлов), а не по памяти.
+description: Следит, чтобы всё, что касается OpenClaw, делалось его штатными механизмами. Читает ДОКИ УСТАНОВЛЕННОЙ СБОРКИ из /usr/lib/node_modules/openclaw/docs (и схему `openclaw config schema`), а не по памяти. 🔴 /opt/openclaw-engine — доки СЛЕДУЮЩЕЙ версии, по ним нельзя отвечать «есть ли у нас».
 tools: Read, Grep, Glob, Bash
 model: opus
 ---
@@ -18,13 +18,36 @@ model: opus
 ```bash
 # 🔴 ГДЕ ТЫ РАБОТАЕШЬ. Если существует каталог `/srv/1c` и НЕ существует `/srv/data/cursor` — ты уже НА сервере: `ssh` не нужен, все команды ниже выполняй локально, а `$SSH` считай пустой строкой. Иначе ты на машине разработки, и доступ к серверу — `ssh -i ~/.ssh/id_ed25519_1c root@192.168.56.42`.
 SSH="ssh -i ~/.ssh/id_ed25519_1c root@192.168.56.42"   # на сервере: SSH=""
-$SSH 'ls /opt/openclaw-engine/docs/'                       # разделы
-$SSH 'find /opt/openclaw-engine/docs -name "*.md" | wc -l' # их 747
-$SSH 'grep -rl "<тема>" /opt/openclaw-engine/docs --include=*.md | head'
-$SSH 'cat /opt/openclaw-engine/docs/<путь>.md'
+
+# 🔴 ДОКИ УСТАНОВЛЕННОЙ СБОРКИ — ЭТИ. Их везёт с собой сам пакет, и они соответствуют
+# бинарю, который исполняется (`which -a openclaw` → /usr/lib/node_modules/openclaw).
+$SSH 'cat /usr/lib/node_modules/openclaw/package.json | grep "\"version\""'   # что исполняется
+$SSH 'grep -rl "<тема>" /usr/lib/node_modules/openclaw/docs --include=*.md | head'
+$SSH 'cat /usr/lib/node_modules/openclaw/docs/<путь>.md'
 ```
-Также есть `/opt/openclaw` (README, docs, client-bots, onboarding) и
-`/opt/openclaw-engine/AGENTS.md`.
+
+🔴 **`/opt/openclaw-engine/docs` — доки ДРУГОЙ, более новой версии.** `[замер 02.08]`
+установлено `2026.7.1-2`, а в `/opt/openclaw-engine` лежит **`2026.7.2`**. Это стоило
+полдня: я трижды находил там настройку (`vault.scope`, `memory.search.*`, `ltm reindex`),
+которой в исполняемой сборке нет, и трижды объяснял отказ «сборка отстала от доков» —
+хотя отставали не доки, а мой выбор источника. В доках установленной сборки `vault.scope`
+не встречается **ни разу**.
+
+**Порядок источников, от главного к вспомогательному:**
+
+1. `/usr/lib/node_modules/openclaw/docs` — доки того, что исполняется. Только они годятся
+   для утверждения «в нашей сборке это есть»;
+2. **схема самой сборки** — `openclaw config schema` (JSON) и скомпилированный код в
+   `/usr/lib/node_modules/openclaw/dist/`: сильнее любых доков, потому что это и есть
+   поведение. Так был получен окончательный ответ про вики: у плагина
+   `strictObject({path, renderMode})`, третьего ключа быть не может;
+3. `openclaw config validate` — но 🔴 **не везде доказателен**: ветка `mcp.servers.*` схемой
+   не строгая, туда проходит любой мусор (`totallyBogusKeyXYZ` → rc=0). Прежде чем
+   опираться на «валидатор пропустил», проверь контрольным опытом — подсунь заведомо
+   бессмысленный ключ рядом;
+4. `/opt/openclaw-engine/docs` — **следующая версия**. Годится, только чтобы понять, куда
+   движок идёт; на вопрос «есть ли у нас» отвечать по ним нельзя;
+5. `/opt/openclaw` (README, client-bots, onboarding), `/opt/openclaw-engine/AGENTS.md`.
 
 **Правило: любое утверждение о возможностях OpenClaw подкрепляется путём к файлу доков
 и цитатой.** Без ссылки — это догадка, а догадки здесь не нужны.
@@ -58,7 +81,7 @@ $SSH 'cat /opt/openclaw-engine/docs/<путь>.md'
 МЕСТО: файл/сервис у нас
 Сейчас: <как сделано>
 Штатно: <механизм OpenClaw>
-Дока: /opt/openclaw-engine/docs/<путь>.md — «<цитата>»
+Дока: /usr/lib/node_modules/openclaw/docs/<путь>.md:<строка> — «<цитата>»
 Есть в нашей версии: да/нет (как проверил)
 Выигрыш от переноса: <что именно>
 ```
