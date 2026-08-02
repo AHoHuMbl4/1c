@@ -1,7 +1,15 @@
 [Unit]
-Description=1c-bot-monitor — health-check бота (алерт владельцу в Telegram при падении)
+# Сторож пути ответа: алерт владельцу в Telegram при падении.
+#
+# 🔴 `EnvironmentFile` ОБЯЗАТЕЛЕН, и его отсутствие уже стоило трёх суток молчания
+# (`F014`): адрес `/health` лежал в `/etc/1c-bot-monitor.env`, юнит этот файл не
+# подключал, переменная всегда была пуста — и проверка двери молча пропускалась КАЖДЫЙ
+# раз. Настройка, которую никто не читает, хуже отсутствующей: она создаёт видимость
+# проверки там, где её нет.
+Description=1c-bot-monitor — сторож пути ответа (алерт владельцу в Telegram)
 After=network.target
 
 [Service]
 Type=oneshot
+EnvironmentFile=/etc/1c-bot-monitor.env
 ExecStart=/opt/1c-bot-monitor/bot_health_check.sh
