@@ -169,8 +169,16 @@ DS_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 DS_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 DS_THINKING = os.environ.get("DEEPSEEK_THINKING", "disabled")
 
-EMBED_URL = os.environ.get("ALIBABA_EMBED_URL", "").rstrip("/")
-EMBED_KEY = os.environ.get("ALIBABA_API_KEY", "")
+# 🔴 ИМЯ НАСТРОЙКИ НЕ НАЗЫВАЕТ ПОСТАВЩИКА. Прежние `ALIBABA_*` читаются, но только как
+# запасной вариант: 02.08 эмбеддер переехал с dashscope на свой (Qwen3-Embedding-4B,
+# OpenAI-совместимый), и имя переменной стало враньём. Поставщик — настройка, а не свойство
+# кода: тот же путь работает с любым сервисом с совместимым API, включая внутренний
+# (п. 16 `TARGET.md` — целевое состояние «модели внутри контура»).
+# Умолчания НЕТ намеренно: адрес и модель эмбеддера человек обязан задать явно, иначе
+# вопрос уйдёт в чужое облако молча.
+EMBED_URL = (os.environ.get("EMBED_BASE_URL")
+             or os.environ.get("ALIBABA_EMBED_URL", "")).rstrip("/")
+EMBED_KEY = os.environ.get("EMBED_API_KEY") or os.environ.get("ALIBABA_API_KEY", "")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-v4")
 # Размерность вектора. 1024 — это то, что отдаёт модель, а не наш выбор: корпус теперь
 # эмбеддится ШТАТНОЙ функцией движка `ai_embed`, у которой параметра размерности нет и
@@ -229,6 +237,38 @@ def psql(sql):
 
 def lit(s):
     return "'" + str(s).replace("'", "''") + "'"
+
+
+# 🔴 ВЕКТОРЫ РАЗНЫХ МОДЕЛЕЙ НЕСРАВНИМЫ, И ЭТО НЕ ВИДНО НИОТКУДА.
+# [замер 02.08] эмбеддер переехал с `text-embedding-v4` на свой `Qwen3-Embedding-4B`.
+# Вектор вопроса от новой модели и вектор строки от старой сравниваются БЕЗ ЕДИНОЙ ОШИБКИ
+# и дают бессмысленную близость: система не падает, она начинает тихо выбирать не то.
+# Это худший исход по контракту (п. 10, п. 12) — хуже отказа.
+#
+# Держать это правилом «не забыть перевекторизовать» нельзя: перевекторизация боевой базы
+# идёт ЧАСАМИ ([замер 02.08] 4,6 строки/с — корпус около суток), и всё это время таблицы
+# заведомо в разных состояниях. Поэтому запрет держится КОДОМ: каждая таблица с векторами
+# несёт в переписи отметку, КАКОЙ моделью они посчитаны, и путь «по смыслу» включается
+# только там, где отметка совпадает с моделью, которой считается вопрос. Не совпала или
+# её нет — таблица для смыслового поиска не существует, работает буквальный отбор.
+# Отметку ставит перевекторизация (`embed_all.sh`, `EMBED_RESET=1`), а не человек.
+_EMB_OK_CACHE = {}
+
+
+def emb_ready(table):
+    """Векторы этой таблицы посчитаны ТОЙ ЖЕ моделью, что считает вопрос?"""
+    hit = _EMB_OK_CACHE.get(table)
+    if hit is not None and time.time() - hit[1] < 60:
+        return hit[0]
+    try:
+        rows = psql("SELECT note FROM search_quality WHERE k = %s" % lit("emb_model_" + table))
+        ok = bool(rows) and (rows[0][0] or "").strip() == EMBED_MODEL
+    except RuntimeError:
+        # Не смогли спросить — считаем, что не совпало. Ошибка в эту сторону стоит
+        # потери подсказки, в обратную — неверного ответа.
+        ok = False
+    _EMB_OK_CACHE[table] = (ok, time.time())
+    return ok
 
 
 def _fmt(v):
@@ -796,7 +836,13 @@ def rerank(query, docs):
         with urllib.request.urlopen(req, timeout=30) as r:
             out = json.loads(r.read())["output"]["results"]
         return [int(x["index"]) for x in out]
-    except Exception:                          # noqa: BLE001 — сеть/квота поставщика
+    except Exception as e:                     # noqa: BLE001 — сеть/квота поставщика
+        # 🔴 МОЛЧА ТЕРЯТЬ СИГНАЛ НЕЛЬЗЯ (п. 13). Отказ реранкера не роняет ответ — и это
+        # верно (п. 21), — но он ухудшает ровно то, что и так главная открытая проблема:
+        # выбор сущности. [замер 02.08] поставщик реранкера отвечал `Arrearage` на все
+        # запросы, и по журналу это было не видно ничем: выдача просто оставалась в
+        # прежнем порядке. Теперь причина видна в журнале службы.
+        sys.stderr.write("rerank НЕ ОТРАБОТАЛ (порядок остаётся прежним): %r\n" % (e,))
         return []
 
 
@@ -841,12 +887,22 @@ def resolve_values(term):
     Границы (п. 19): смотрим не больше `RESOLVE_NEAR` ближайших и оставляем не больше
     `RESOLVE_KEEP` — объём во внешнюю модель не растёт с размером базы.
     """
+    # Векторы резолвера посчитаны другой моделью — сравнивать с ними нельзя (`emb_ready`).
+    if not emb_ready("resolver_index"):
+        return []
     try:
         vec = _vec(term)
     except Exception:                          # noqa: BLE001 — эмбеддер недоступен
         return []
     near = _resolver_psql(
-        "SELECT DISTINCT value FROM resolver_index ORDER BY emb <=> %s, value LIMIT %d"
+        # 🔴 ТОЛЬКО СТРОКИ С ВЕКТОРОМ. Без этого условия запрос не отдаёт «ничего», когда
+        # векторов нет: `<=>` от NULL даёт NULL, такие строки уходят в конец, и когда
+        # вектора нет НИ У КОГО, порядок целиком решает разделитель равенства — то есть
+        # возвращается первое по алфавиту под видом «ближайшего по смыслу». Это молчаливо
+        # неверный ответ (п. 10), а не пустой. Условие делает случай честным: нет
+        # векторов — нет и близких, вызывающий остаётся без подсказки и спрашивает.
+        "SELECT DISTINCT value FROM resolver_index WHERE emb IS NOT NULL "
+        "ORDER BY emb <=> %s, value LIMIT %d"
         % (vec, RESOLVE_NEAR))
     vals = [r[0] for r in near if r and r[0]]
     if not vals:
@@ -2008,7 +2064,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if kids:
         by.update(kids)
         diag["children"] = kids
-    if not by and match:                       # слова не дали ничего — ищем по смыслу
+    # Ищем по смыслу, только если векторы корпуса посчитаны ТОЙ ЖЕ моделью (`emb_ready`).
+    if not by and match and emb_ready(CORPUS):
         vec = _vec(question)
         # Оператор <=> — РОДНОЕ ядро движка (cosine_distance), а array_cosine_similarity
         # приходит из ядра DuckDB. Разница не только в скорости (замер 27.07: 583-627 мс
@@ -2020,7 +2077,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # ближайшие строки, из них складывается САМ НАБОР сущностей-кандидатов, и без
         # разделителя набор колеблется. [замер 30.07] один вопрос пять раз — сущностей в
         # наборе 1 322, 1 322, 1 318, 1 318, 1 318, и вместе с набором менялся ответ.
+        # `emb IS NOT NULL` — см. разбор в `resolve_near`: без него запрос при пустых
+        # векторах отдаёт первые по алфавиту, выдавая их за ближайшие по смыслу.
         near = psql("SELECT src_table, count(*) FROM (SELECT src_table FROM %s "
+                    "WHERE emb IS NOT NULL "
                     "ORDER BY emb <=> %s, src_table, row_key LIMIT %d) GROUP BY 1"
                     % (CORPUS, vec, TOPK))
         by = {r[0]: int(r[1]) for r in near if r and r[0]}
@@ -2129,7 +2189,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # может выбросить кандидата: слово модели добавляет сигнал, но больше ничего не решает.
     # Верхняя граница прежняя (RERANK_TOP), то есть объём в модель не вырос — п. 19 цел.
     top_by_question = None
-    if ORDER_BY_MEANING and len(cands) > 1:
+    # Порядок по смыслу берётся только у меток, посчитанных ТОЙ ЖЕ моделью (`emb_ready`).
+    if ORDER_BY_MEANING and len(cands) > 1 and emb_ready(TABLES):
         orders = []
         for src_text in (question, intent.get("kind")):
             if not src_text:
@@ -2137,6 +2198,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             try:
                 orders.append([r[0] for r in psql(
                     "SELECT src_table FROM %s WHERE src_table IN (%s) "
+                    "AND emb IS NOT NULL "        # см. разбор в `resolve_near`
                     # разделитель равенства: ниже порядок режется по RERANK_TOP,
                     # и без него до реранкера доходят разные сущности
                     "ORDER BY emb <=> %s, src_table"
@@ -2210,12 +2272,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             pass                                # порядок остаётся прежним
     # Не подошло ничего вовсе (чужой язык, иное написание) — только тогда идём от
     # смысла вопроса к названиям всех сущностей.
-    if not cands:
+    if not cands and emb_ready(TABLES):
         try:
             # LIMIT в БАЗЕ: иначе в кандидаты, а следом в промпт, уезжает вся база.
             # Число получаем из бюджета промпта, а не задаём отдельно.
             cands = [r[0] for r in psql(
-                "SELECT src_table FROM %s ORDER BY emb <=> %s, src_table LIMIT %d"
+                "SELECT src_table FROM %s WHERE emb IS NOT NULL "   # см. `resolve_near`
+                "ORDER BY emb <=> %s, src_table LIMIT %d"
                 % (TABLES, _vec(intent.get("kind") or question),
                    max(1, PICK_BUDGET // 40))) if r and r[0]]
         except RuntimeError:

@@ -13,12 +13,11 @@ INSERT INTO build_state
             SELECT now(), 'after_rows',  count(*)                            FROM search_corpus
 UNION ALL   SELECT now(), 'after_src',   count(DISTINCT src_table)           FROM search_corpus
 -- Как и : только строки, которым вектор положен (см. ).
+-- 🔴 02.08: исключение «длиннее предела эмбеддера» снято здесь и в `corpus_precheck.sql`
+-- одним заходом — иначе «до» и «после» считались бы по разным правилам, а это ровно тот
+-- дефект `F100`, где одно название означало разное. Вход эмбеддера теперь обрезается, и
+-- вектор возможен каждой строке.
 UNION ALL   SELECT now(), 'after_noemb', count(*) FILTER (WHERE emb IS NULL
-              -- Строки, которым вектор НЕВОЗМОЖЕН (длиннее предела эмбеддера), тоже
-              -- исключаются: они не убудут никогда, и проверка «за такт не убавилось ни
-              -- одной» срабатывала бы ложно каждый такт. Их число видно отдельно —
-              -- `embed_missing.sh` печатает его как «вектор невозможен».
-              AND length(doc) <= :embed_maxlen
               AND NOT EXISTS (SELECT 1 FROM search_entity_class e
                     WHERE e.src_table = search_corpus.src_table AND e.cls = 'service'))
             FROM search_corpus
@@ -77,7 +76,18 @@ DELETE FROM search_quality WHERE k LIKE 'build_%';
 INSERT INTO search_quality
             SELECT 'build_ts',    epoch(now())::BIGINT,                          'время конца такта'
 UNION ALL   SELECT 'build_rows',  count(*),                                      'строк корпуса' FROM search_corpus
-UNION ALL   SELECT 'build_noemb', count(*) FILTER (WHERE emb IS NULL),           'строк без вектора' FROM search_corpus
+-- 🔴 ОДНО НАЗВАНИЕ — ОДНО ЗНАЧЕНИЕ (`F100`). Прежде `build_noemb` считал ВСЕ строки без
+-- вектора, включая служебные, которым он не считается по решению владельца, — а соседний
+-- `after_noemb` в этом же файле считал только те, которым вектор положен. Числа под
+-- похожими именами расходились в разы (боевая база: 205 479 против 92 080), и читающий
+-- переписи не мог знать, какое из них про недоделанную работу. Теперь их два, и каждое
+-- названо: `build_noemb` — работа, которая ещё предстоит; `build_noemb_all` — всего строк
+-- без вектора, вместе с теми, кому он не положен.
+UNION ALL   SELECT 'build_noemb', count(*) FILTER (WHERE emb IS NULL
+              AND NOT EXISTS (SELECT 1 FROM search_entity_class e
+                    WHERE e.src_table = search_corpus.src_table AND e.cls = 'service')),
+                                                                                'строк без вектора, которым он ПОЛОЖЕН (работа впереди)' FROM search_corpus
+UNION ALL   SELECT 'build_noemb_all', count(*) FILTER (WHERE emb IS NULL),      'строк без вектора всего, включая служебные (им он не считается по решению)' FROM search_corpus
 UNION ALL   SELECT 'build_res',   (SELECT count(*) FROM resolver_index),         'значений резолвера'
 -- 🔴 ОТПЕЧАТОК КОДА СБОРКИ. По нему следующий такт понимает, можно ли пропустить
 -- пересборку корпуса: если ни данные не менялись, ни сам `corpus_build.sql`, собирать
