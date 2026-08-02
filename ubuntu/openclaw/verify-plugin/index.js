@@ -27,7 +27,7 @@
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, digitBlob, evaluate, extractText, mergeRef, numericTokens, stripInternal, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, digitBlob, evaluate, extractText, isServiceError, mergeRef, numericTokens, stripInternal, toolMatchesAny } from "./verify-core.js";
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
@@ -68,6 +68,26 @@ function sessKeyOf(ctx, event) {
   return (ctx && ctx.sessionKey) || (event && event.sessionKey) || null;
 }
 
+// 🔴 ОТ ЗАЧИСТКИ НИЧЕГО НЕ ОСТАЛОСЬ — ЧТО СКАЗАТЬ ЧЕЛОВЕКУ. Раньше здесь стояла одна
+// строка «данных нет», и сбой сервиса приходил к клиенту как уверенное «таких данных у
+// нас нет» — самый вредный ответ из возможных (п. 18: при отказах — честный отказ, а не
+// ответ на неполных данных). Различаем по маркеру моста, который был в тексте ДО зачистки,
+// и по эталону хода: сбой мог прийти и первым вызовом инструмента, а не только в тексте.
+function emptyReply(base, ref, cfg) {
+  if (isServiceError(base, cfg.serviceErrorMarker) || (ref && ref.svcError)) return cfg.serviceErrorReply;
+  return cfg.noDataReply;
+}
+
+// эталон хода для этой сессии, с отсечкой чужого хода (эталон старше последнего входящего)
+function refFor(sessKey) {
+  let ref = sessKey ? refs.get(sessKey) || null : null;
+  if (ref && sessKey) {
+    const li = lastInbound.get(sessKey);
+    if (li && ref.at < li) ref = null;
+  }
+  return ref;
+}
+
 export default definePluginEntry({
   id: "braine-verify",
   name: "Braine Verify",
@@ -92,7 +112,7 @@ export default definePluginEntry({
       const prev = refs.get(sessKey);
       const sameTurn = prev && prev.runId === runId; // тот же ход → сливаем; иначе новый ход → сброс
       const merged = mergeRef(sameTurn ? prev : null, text, Date.now(), cfg.noDataMarker,
-                              cfg.clarifyMarker);
+                              cfg.clarifyMarker, cfg.serviceErrorMarker);
       merged.runId = runId;
       refs.set(sessKey, merged);
       prune(refs, cfg.refTtlMs);
@@ -155,12 +175,8 @@ export default definePluginEntry({
       const cfg = getCfg();
       const content = (event && event.content) || "";
       const sessKey = sessKeyOf(ctx, event);
-      let ref = sessKey ? refs.get(sessKey) || null : null;
       // отсечь ЧУЖОЙ ход: если эталон старше последнего входящего этой сессии — это прошлый ход
-      if (ref && sessKey) {
-        const li = lastInbound.get(sessKey);
-        if (li && ref.at < li) ref = null;
-      }
+      const ref = refFor(sessKey);
       const inb = sessKey ? inbound.get(sessKey) || null : null;
 
       const decision = evaluate(content, ref, inb, cfg);
@@ -177,22 +193,38 @@ export default definePluginEntry({
         `message_sending sess=${sessKey} action=${decision.action} hasRef=${!!ref} refNoData=${ref ? ref.noData : "-"} stripped=${leaked}`,
       );
       if (decision.action === "replace" || clean !== content) {
-        return { content: clean.trim() ? clean : cfg.noDataReply };
+        return { content: clean.trim() ? clean : emptyReply(base, ref, cfg) };
       }
       return undefined; // allow без изменений
     });
 
-    // 3b) анти-слив на payload-пути: подпись к МЕДИА (фото) идёт через payload.text,
-    // а НЕ через message_sending.content. Режем внутреннее и здесь — полное кодовое покрытие.
+    // 3b) подпись к МЕДИА (фото) идёт через payload.text, а НЕ через message_sending.content.
+    //
+    // 🔴 ЗДЕСЬ ТОТ ЖЕ ЧИСЛОВОЙ ГЕЙТ, ЧТО И НА ТЕКСТЕ. Раньше этот путь звал только
+    // `stripInternal`, то есть подпись к графику — ровно то место, где числа и живут, —
+    // не сверялась с эталоном вообще. Дыра против пп. 3 и 10: подпись такая же часть
+    // ответа, как и текст, и человек читает её точно так же. Эталон берём тот же, что и
+    // на текстовом пути (тот же ход, тот же sessionKey) — иначе гейт мерил бы разное на
+    // двух половинах одного ответа.
     api.on("reply_payload_sending", async (event, ctx) => {
       const cfg = getCfg();
-      if (cfg.stripInternal === false) return undefined;
       const p = event && event.payload;
       if (!p || typeof p.text !== "string" || !p.text) return undefined;
-      const clean = stripInternal(p.text);
-      if (clean === p.text) return undefined; // нечего резать
-      dbg(cfg, `reply_payload_sending stripped caption/text (was ${p.text.length} -> ${clean.length})`);
-      return { payload: { ...p, text: clean.trim() ? clean : cfg.noDataReply } };
+      const sessKey = sessKeyOf(ctx, event);
+      const ref = refFor(sessKey);
+      const inb = sessKey ? inbound.get(sessKey) || null : null;
+
+      const decision = evaluate(p.text, ref, inb, cfg);
+      // `cancel` на этом пути отменить нечего (картинка уже уходит), поэтому подпись
+      // заменяется честной строкой — это и есть поведение п. 21 «ответ обязан дойти».
+      const base = decision.action === "replace" ? decision.content
+                 : decision.action === "cancel" ? cfg.unverifiedReply
+                 : p.text;
+      const clean = cfg.stripInternal === false ? base : stripInternal(base);
+      const out = clean.trim() ? clean : emptyReply(base, ref, cfg);
+      if (out === p.text) return undefined; // нечего менять
+      dbg(cfg, `reply_payload_sending action=${decision.action} hasRef=${!!ref} (was ${p.text.length} -> ${out.length})`);
+      return { payload: { ...p, text: out } };
     });
 
     // Эталон НЕ удаляем на agent_end (доставка идёт после него) — чистка по TTL в prune().

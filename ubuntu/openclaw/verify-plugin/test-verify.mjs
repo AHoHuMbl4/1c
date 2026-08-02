@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, evaluate, mergeRef, numericTokens, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, evaluate, isServiceError, mergeRef, numericTokens, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -53,10 +53,11 @@ t("hallucinated ИНН при эталоне без него -> replace на т�
   assert.strictEqual(d.content, "Казначейство России");
 });
 
-// --- evaluate: нет эталона + длинное «фактовое» число -> cancel ---
-t("нет эталона + выдуманный ИНН -> cancel", () => {
+// --- evaluate: нет эталона + длинное «фактовое» число -> честная замена (НЕ тишина) ---
+t("нет эталона + выдуманный ИНН -> replace на unverifiedReply", () => {
   const d = evaluate("Его ИНН 1234567890, точно.", null, null, {});
-  assert.strictEqual(d.action, "cancel");
+  assert.strictEqual(d.action, "replace");
+  assert.strictEqual(d.content, DEFAULTS.unverifiedReply);
 });
 t("нет эталона + короткое число (год) -> allow", () => {
   const d = evaluate("Это было в 2026 году.", null, null, {});
@@ -157,8 +158,11 @@ t("короткое число, которое ЕСТЬ в эталоне -> all
 });
 // без эталона порог остаётся: обычная реплика с годом или мелким числом не блокируется,
 // но выдуманная сумма от пяти цифр — блокируется (было — только от семи).
-t("без эталона: выдуманная сумма 45000 -> cancel", () => {
-  assert.strictEqual(evaluate("Ваш долг 45 000 руб.", null, null, {}).action, "cancel");
+t("без эталона: выдуманная сумма 45000 -> replace, а НЕ тишина", () => {
+  const d = evaluate("Ваш долг 45 000 руб.", null, null, {});
+  assert.strictEqual(d.action, "replace");
+  assert.strictEqual(d.content, DEFAULTS.unverifiedReply);
+  assert.notStrictEqual(d.action, "cancel"); // F222: отмена доставки = молчание в мессенджере
 });
 t("без эталона: год 2025 в реплике -> allow", () => {
   assert.strictEqual(evaluate("Отчёт за 2025 год готовлю.", null, null, {}).action, "allow");
@@ -185,6 +189,73 @@ t("adv-strip: несколько серверных путей в одной с�
 });
 t("adv-strip: SQL в нижнем регистре тоже режется", () => {
   assert.strictEqual(stripInternal("select code from banks where city='x'").trim(), "");
+});
+
+// === Э4: целость ответа на пути к человеку (02.08) ===
+
+// F217 — анти-слив резал живой текст: «with … from» в любом языке считалось SQL, и всё
+// между ними исчезало молча. Ответ на английской базе — норма, а не край.
+t("F217: живая английская фраза с with…from НЕ режется", () => {
+  const s = "We started with 3 suppliers from the north region. That is all.";
+  assert.strictEqual(stripInternal(s), s);
+});
+t("F217: живая фраза с select…from без формы запроса НЕ режется", () => {
+  const s = "Please select an option from the list below.";
+  assert.strictEqual(stripInternal(s), s);
+});
+t("F217: русский текст с латинскими with/from НЕ режется", () => {
+  const out = stripInternal("Отбор шёл with учётом from поставщиков.\n\nВторой абзац.");
+  assert.ok(out.includes("поставщиков"));
+  assert.ok(out.includes("Второй абзац"));
+});
+t("F217-регресс: настоящий CTE всё ещё режется", () => {
+  assert.strictEqual(
+    stripInternal("WITH t AS (SELECT id, city FROM banks) SELECT count(*) FROM t").trim(), "");
+});
+t("F217-регресс: SELECT * FROM режется", () => {
+  assert.strictEqual(stripInternal("SELECT * FROM search_corpus").trim(), "");
+});
+
+// F218 — блок вариантов уходил клиенту вместе с внутренними именами таблиц.
+t("F218: из вариантов уходит метка, а внутреннее имя источника — нет", () => {
+  const out = stripInternal(
+    "Какой тип записи?\n\nOPTIONS:\n- Реализация товаров | focus=Document_РеализацияТоваровУслуг\n"
+    + "- Возврат | measure=СуммаДокумента | focus=Document_ВозвратТоваров");
+  assert.ok(!/focus=|measure=|Document_/.test(out), "внутренние имена не должны уходить клиенту");
+  assert.ok(out.includes("Реализация товаров") && out.includes("Возврат"), "метки вариантов обязаны остаться");
+});
+
+// F220 — сбой сервиса данных превращался в «нет данных»: маркер вырезался, пустой
+// остаток подменялся фразой про отсутствие данных.
+t("F220: сбой сервиса отличается от «нет данных»", () => {
+  const r = mergeRef(null, "[SERVICE ERROR: HTTP 503] Tell the user the data is unavailable.",
+                     1000, ND, DEFAULTS.clarifyMarker, DEFAULTS.serviceErrorMarker);
+  assert.strictEqual(r.svcError, true);
+  assert.strictEqual(r.noData, false);
+  const d = evaluate("У вас 12 345 документов.", r, null, {});
+  assert.strictEqual(d.action, "replace");
+  assert.strictEqual(d.content, DEFAULTS.serviceErrorReply);
+  assert.notStrictEqual(d.content, DEFAULTS.noDataReply);
+});
+t("F220: маркер сбоя опознаётся до зачистки", () => {
+  assert.ok(isServiceError("[SERVICE ERROR: HTTP 503] …", DEFAULTS.serviceErrorMarker));
+  assert.ok(!isServiceError("[NO DATA] …", DEFAULTS.serviceErrorMarker));
+  assert.strictEqual(stripInternal("[SERVICE ERROR: HTTP 503] …").trim(), ""); // сама строка по-прежнему режется
+});
+
+// F287 — нумерация списка считалась фактом, и живой ответ подменялся машинным.
+t("F287: нумерация списка не считается фактом о данных", () => {
+  const r = ref("Продано 850 шт на сумму 1 236 800 руб.");
+  const d = evaluate("Итого:\n1. Товар А\n2. Товар Б\nВсего 850 шт на 1 236 800 руб.", r, null, {});
+  assert.strictEqual(d.action, "allow");
+});
+t("F287-регресс: выдуманное число в пункте списка ловится по-прежнему", () => {
+  const r = ref("Продано 850 шт.");
+  const d = evaluate("1. Товар А — 4321 шт.", r, null, {});
+  assert.strictEqual(d.action, "replace");
+});
+t("F287-регресс: короткое количество при эталоне сверяется (порог не поднят)", () => {
+  assert.strictEqual(evaluate("В выборке 5 банков.", ref("таблица без пятёрки"), null, {}).action, "replace");
 });
 
 console.log(`\n${pass} tests passed`);

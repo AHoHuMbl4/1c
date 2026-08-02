@@ -105,11 +105,53 @@ NO_DATA_REPLY = os.environ.get(
 ERROR_REPLY = os.environ.get(
     "MCP_ERROR_REPLY", "[SERVICE ERROR: {detail}] Tell the user the data is unavailable.")
 CLARIFY_LABEL = os.environ.get("MCP_CLARIFY_LABEL", "OPTIONS")
+# 🔴 ГЕЙТ ОТКЛОНИЛ ФОРМУЛИРОВКУ — НО ЧИСЛА ПОСЧИТАНЫ И ВЕРНЫ. Сервис отдаёт их
+# `kind=figures` отдельным полем и прямо говорит в коде: «отдаём структурой, а не своей
+# прозой… вызывающий формулирует сам». Мост этого не делал: он брал `text`, а там в этой
+# ветке лежит ОТКАЗ (`ASK_TOTAL_TEXT` пуст по умолчанию и не задан ни в одном env, значит
+# `refuse_text(question)`). Итог — отказ при наличии посчитанных данных, то есть ровно
+# то, что п. 21 контракта называет дефектом, а не осторожностью.
+FIGURES_HINT = os.environ.get(
+    "MCP_FIGURES_HINT",
+    "[FIGURES] The wording of the draft answer could not be verified, so it was dropped. "
+    "The values below ARE computed by the database and are correct. Answer the user's "
+    "question from these values, copying the digits exactly. Do not add any other figure.")
+# Что не поместилось/не дошло (п. 13: молчаливая потеря = дефект). До 02.08 поле
+# `partial` мост не передавал вовсе, хотя `API_ASK` обещает его как видимое клиенту.
+PARTIAL_HINT = os.environ.get(
+    "MCP_PARTIAL_HINT",
+    "[PARTIAL] Not everything was taken into account. Tell the user so in one short "
+    "sentence, using the figures below as they are.")
 CLARIFY_HINT = os.environ.get(
     "MCP_CLARIFY_HINT",
     "[CLARIFICATION NEEDED] Put the question below to the user in your own words with the "
     "options. Then call this tool again with the same question and `focus` (and `measure` "
     "if a quantity was chosen), copied verbatim from the list.")
+
+
+def _num(v):
+    """Число для модели: без хвоста .0 у целых — иначе гейт сверяет «1236800.0» с «1236800».
+
+    Формат тот же, что у `serene_ask` в его собственных подстановках, и это не косметика:
+    белый список гейта собирается из ТЕКСТА, который ушёл боту.
+    """
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return str(v)
+    return "%d" % v if float(v) == int(v) else "%.2f" % v
+
+
+def _kv_block(label, d):
+    """Плоский блок `ключ=значение` — машинный, без прозы: язык клиента неизвестен."""
+    if not isinstance(d, dict):
+        return ""
+    lines = ["- %s=%s" % (k, _num(v)) for k, v in d.items() if v is not None]
+    return ("%s:\n%s" % (label, "\n".join(lines))) if lines else ""
+
+
+def _with_partial(out, data):
+    """Дописать, что учтено не всё (п. 13). Числа отсюда уходят боту, значит гейт их видит."""
+    block = _kv_block("PARTIAL", data.get("partial"))
+    return out + "\n\n" + PARTIAL_HINT + "\n\n" + block if block else out
 
 
 @mcp.tool()
@@ -163,7 +205,15 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
             out += "\n\n" + text
         if lines:
             out += "\n\n%s:\n%s" % (CLARIFY_LABEL, "\n".join(lines))
-        return out
+        return _with_partial(out, data)
+
+    # 🔴 ГЕЙТ ОТКЛОНИЛ ПРОЗУ, ЧИСЛА ПОСЧИТАНЫ. `text` в этой ветке — НЕ ответ: это либо
+    # отказ (`refuse_text`), либо та самая непрошедшая формулировка. Пересылать его боту
+    # значит отдать отказ, имея данные. Отдаём то, ради чего ветка и заведена, — числа.
+    if kind == "figures":
+        block = _kv_block("FIGURES", data.get("figures"))
+        if block:
+            return _with_partial(FIGURES_HINT + "\n\n" + block, data)
 
     if kind == "no_data" or not text:
         return NO_DATA_REPLY
@@ -175,7 +225,7 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     m = (data.get("measure") or "").strip()
     if m and m.lower() not in text.lower():
         text += "\n\n[величина: %s]" % m
-    return text
+    return _with_partial(text, data)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 {
   "id": "braine-verify",
   "name": "Braine Verify",
-  "description": "Anti-hallucination gate: verifies hard numeric facts (INN/sums/dates/prices/codes) in outbound messages against the braine ask_1c reference for the same turn. Ungrounded facts are replaced with braine's grounded answer or cancelled. Code-level, not prompt.",
+  "description": "Anti-hallucination gate: verifies hard numeric facts (INN/sums/dates/prices/codes) in outbound messages, and in media captions, against the ask_1c reference for the same turn. Ungrounded facts are replaced with the grounded answer or with an honest line — delivery is never silently dropped. Code-level, not prompt.",
   "activation": {
     "onStartup": true
   },
@@ -57,6 +57,18 @@
         "type": "string",
         "description": "Префикс маркера уточнения из моста ask_1c; при нём число модели до человека не доходит."
       },
+      "serviceErrorMarker": {
+        "type": "string",
+        "description": "Префикс маркера сбоя сервиса данных из моста ask_1c. Сбой — не «нет данных» (п. 18 контракта), поэтому у него своя строка ответа."
+      },
+      "serviceErrorReply": {
+        "type": "string",
+        "description": "Строка клиенту, когда сервис данных не ответил. Умолчание русское — язык установки задаётся здесь."
+      },
+      "unverifiedReply": {
+        "type": "string",
+        "description": "Строка клиенту, когда бот назвал число, не обратившись к данным. Раньше на этом месте отменялась доставка и человек видел молчание."
+      },
       "reviseReason": {
         "type": "string"
       },
@@ -76,7 +88,7 @@
     },
     "highRiskDigits": {
       "label": "High-risk digit length",
-      "help": "Ungrounded numbers this long with no braine lookup are cancelled (default 7: INN/account/phone)"
+      "help": "Ungrounded numbers this long with no data lookup are withheld and replaced by an honest line (default 5: sums, INN, account, phone)"
     }
   }
 }
