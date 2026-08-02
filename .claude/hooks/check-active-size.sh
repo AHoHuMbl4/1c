@@ -24,6 +24,7 @@ LIMIT=300
 
 LINES=$(wc -l < "$F")
 [ "$LINES" -le "$LIMIT" ] && { echo '{}'; exit 0; }
+echo "$(date '+%d.%m %H:%M:%S') active-size ASK: activeContext.md $LINES строк (порог $LIMIT)" >> .claude/hooks.log 2>/dev/null || true
 
 python3 - "$LINES" "$LIMIT" <<'PY'
 import json, sys

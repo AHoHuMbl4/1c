@@ -25,7 +25,12 @@ CODE=$(printf '%s\n' "$STAGED" | grep -v '^memory_bank/' \
   | grep -E '\.(py|sh|cs|js|mjs|ts|sql|ps1|psm1|bat|cmd|ini|toml|yml|yaml|json|conf|cfg|service|timer)$' || true)
 DOCS=$(printf '%s\n' "$STAGED" | grep -E '\.md$' || true)
 
-if [ -z "$CODE" ] || [ -n "$DOCS" ]; then echo '{}'; exit 0; fi
+LOG=".claude/hooks.log"
+if [ -z "$CODE" ] || [ -n "$DOCS" ]; then
+  echo "$(date '+%d.%m %H:%M:%S') check-docs  тихо (коммит в порядке)" >> "$LOG" 2>/dev/null || true
+  echo '{}'; exit 0
+fi
+echo "$(date '+%d.%m %H:%M:%S') check-docs  ASK: код без документов" >> "$LOG" 2>/dev/null || true
 
 python3 - "$(printf '%s\n' "$CODE" | head -10)" <<'PY'
 import json, sys

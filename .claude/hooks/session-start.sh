@@ -28,6 +28,7 @@ if [ -z "$SECTION" ]; then
 fi
 
 TOTAL=$(printf '%s\n' "$SECTION" | wc -l)
+echo "$(date '+%d.%m %H:%M:%S') session-start вброс «С ЧЕГО НАЧАТЬ» ($TOTAL строк в разделе)" >> .claude/hooks.log 2>/dev/null || true
 echo "=== Автовброс из $F (SessionStart-хук) ==="
 printf '%s\n' "$SECTION" | head -n "$MAX_LINES"
 if [ "$TOTAL" -gt "$MAX_LINES" ]; then

@@ -31,3 +31,4 @@ windows/odata-setup/build/
 # к SSH-ключам. На машине разработки файл скрыт глобальным конфигом git, на сервере
 # такого конфига нет (HANDOFF_CHECK_1 §8).
 .claude/settings.local.json
+.claude/hooks.log
