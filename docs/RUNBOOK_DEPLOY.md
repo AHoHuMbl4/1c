@@ -31,10 +31,10 @@ Ubuntu LXC (наш, всё loopback):
 | — | `1c-etl.timer` 03:00 | `oc_etl.py` | root | ⚠ кормил braine → **не нужен** после вывода слоя |
 | — | *(braine: postgresql/open-webui/oikb/rerank-shim/api :8090)* | — | — | ⚠ **слой выведен из контура** 26.07, освободилось 972 МБ. §7-8 оставлены как история |
 | `127.0.0.1:7890` | `serenedb` | `serened` | **serenedb** | витрина аналитики (Postgres-протокол) |
-| `127.0.0.1:8091` | **`1c-serene-ask`** | `serene_ask.py` | root | **отвечающий сервис**: ищет индексом, считает базой |
+| `127.0.0.1:8091` | **`1c-serene-ask`** | `serene_ask.py` | root | **отвечающий сервис ПЕРВОЙ базы**: ищет индексом, считает базой. ⚠ [замер 02.08] юнит `enabled`, но `inactive`, на `:8091` никто не слушает; боевые ответы идёт с `:8099` — процесса вне systemd (см. таблицу второй базы ниже) |
 | — | `1c-serene-sync.timer` 03:40 | `serene_sync.py` | root | ⚠ **остановлен**: синк стал частью конвейера |
 | — | **`1c-serene-pipeline.timer`** (по готовности) | `pipeline.sh` | root | 🟢 **боевой такт**: раскладка кода → синк-дельта → сборка. Понятия «ночной» нет (п. 17) |
-| — | **`1c-serene-index.timer`** 03:55 | `serene_search_build.py` | root | ⚠ **устарело, таймер остановлен 28.07.** Сборка переехала в штатные средства движка: `ubuntu/serenedb/build.sh` (корпус, величины, резолвер, индекс — одним SQL, без питона). Юнит на неё ещё не переключён; пока таймер выключен, потому что старый скрипт при новом составе корпуса **сносит таблицу и индекс** (авария 28.07, `HOW_NOT_TO §2.9`) |
+| — | **`1c-serene-index.timer`** (`OnUnitActiveSec=20min`, `disabled`) | `build.sh` | root | ⚠ **таймер остановлен 28.07.** Сборка переехала в штатные средства движка: `build.sh` (корпус, величины, резолвер, индекс — одним SQL, без питона), и **живой юнит на неё переключён 28.07** (старый `ExecStart` сохранён в `.bak-20260728`). Таймер выключен, потому что такт целиком отдан `1c-serene-pipeline`. 🔴 Опасна не установленная копия, а **репозиторная** `ubuntu/serenedb/systemd/1c-serene-index.service` — она до сих пор зовёт `serene_search_build.py`, который при новом составе корпуса **сносит таблицу и индекс** (авария 28.07, `HOW_NOT_TO §2.9`); см. §10.6 |
 | `127.0.0.1:6015` | `1c-mcp-reports` | `mcp_reports.py` | root | ⚠ `report_1c` (NL→SQL) — **выведен из контура**, юнит ещё жив |
 | `127.0.0.1:18800` | `openclaw-gateway` (**user**-юнит) | `node …/openclaw` | **undebot** | бот: Telegram + DeepSeek-тон + verify-гейт |
 | — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` | root | алерт владельцу в Telegram при падении |
@@ -262,19 +262,28 @@ $ib.УстановитьСоставСтандартногоИнтерфейса
 переписать `/etc/1c-odata-gateway.env` первой (потеряются креды `ai_reader` и токен шлюза) и
 займёт тот же порт 6011.
 
+Все пути ниже — **от корня репозитория**.
+
 ```bash
 BASE=ut                                        # короткое имя экземпляра: свой env, свой порт
-install -D odata_gateway.py /opt/1c-odata-gateway/odata_gateway.py
+GW=6021                                        # его порт; понадобится дальше в §10
+install -D ubuntu/1c-gateway/odata_gateway.py /opt/1c-odata-gateway/odata_gateway.py
 cat > /etc/1c-odata-gateway-$BASE.env <<EOF
 ODG_USER=<пользователь-читатель этой базы>
 ODG_PASS=<его пароль>                          # 🔴 обязательно: пустой ODG_PASS → 401 на все запросы
-ODG_LISTEN_PORT=6021                           # 🔴 свой порт на каждый экземпляр (умолчание 6011)
+ODG_GATEWAY_TOKEN=<сгенерируйте: openssl rand -hex 24>   # 🔴 без него шлюз НЕ СТАРТУЕТ (exit 2)
+ODG_LISTEN_PORT=$GW                            # 🔴 свой порт на каждый экземпляр (умолчание 6011)
 ODG_UPSTREAM=http://192.168.56.1:6003/$BASE/odata/standard.odata   # путь ПУБЛИКАЦИИ этой базы
 EOF
 chmod 600 /etc/1c-odata-gateway-$BASE.env
 cp ubuntu/systemd/1c-odata-gateway@.service /etc/systemd/system/
 systemctl daemon-reload && systemctl enable --now 1c-odata-gateway@$BASE
 ```
+
+🔴 **`ODG_GATEWAY_TOKEN` обязателен и здесь, и дальше.** `odata_gateway.py` при пустом токене
+выходит с кодом 2 («отказ на старте, а не тихое снятие защиты»), а у шаблонного юнита
+`Restart=always` — получится бесконечная петля рестартов. Этот же токен понадобится в §10.2
+и в каждом ручном запуске загрузчика (§10.4, §10.5): без него шлюз ответит **401**.
 
 *Было ошибочно: единственная инструкция по шлюзу была однобазовой — писала
 `/etc/1c-odata-gateway.env` без `ODG_LISTEN_PORT`, с путём публикации `/1c/`, и включала
@@ -326,8 +335,11 @@ systemctl start 1c-etl.service                                   # первый 
 - **Windows:** IIS (W3SVC) = Automatic; публикация/состав OData/пользователи — персистентны. После ребута OData сам доступен.
 - **LXC — system-сервисы (`enabled`), [замер 01.08]:** `postgresql`, `serenedb`,
   **`1c-odata-gateway`**, **`1c-config-ui`**, **`1c-mcp-ask`**, **`1c-mcp-braine`**,
-  **`1c-mcp-reports`**, **`1c-serene-ask`**; таймеры **`1c-serene-pipeline`** (по готовности)
-  и **`1c-bot-monitor`** (каждые 3 мин).
+  **`1c-mcp-reports`**, **`1c-serene-ask`**, **`1c-odata-gateway@ut`** (шлюз второй базы);
+  таймеры **`1c-serene-pipeline`** (по готовности) и **`1c-bot-monitor`** (каждые 3 мин).
+
+  ⚠ `1c-odata-gateway@ut` `enabled` — то есть после ребута он **стартует**, но с пустым
+  `ODG_PASS` (см. таблицу второй базы в §0) будет отвечать 401 на все запросы.
 
   *Было ошибочно: в перечне стояли `open-webui`, `oikb`, `rerank-shim`, `api`, `kb-poll`
   и таймеры `1c-etl` (03:00), `1c-serene-sync` (03:40). **Чем опровергнуто:**
@@ -356,10 +368,22 @@ systemctl start 1c-etl.service                                   # первый 
 внутри SereneDB. Заведите её и подставляйте во ВСЕ строки подключения ниже:
 
 ```bash
-DB=ut_test                                     # имя базы движка под эту базу 1С
-GW=6021                                        # порт OData-шлюза этого экземпляра (§6)
+export DB=ut_test                              # имя базы движка под эту базу 1С
+export GW=6021                                 # порт OData-шлюза этого экземпляра (§6)
 psql 'host=127.0.0.1 port=7890 user=postgres dbname=postgres' -c "CREATE DATABASE $DB"
 ```
+
+🔴 **`DB` и `GW` держите в ОДНОЙ оболочке до конца §10** (потому и `export`). Пустое значение
+не даёт ошибки: `psql '…user=postgres dbname='` молча открывает базу `postgres`, то есть
+витрину первой базы 1С — ровно тот отказ, который этот раздел и закрывает.
+
+⚠ **Параметром стала строка подключения, но НЕ имена env-файлов, юнитов и портов.** Вторая
+база на одном сервере этим разделом пока не разворачивается до конца: `§10.2` пишет в
+единственные `/etc/1c-mcp-reports.env` и `/etc/1c-serene-sync.env`, `setup.sh` ротирует
+пароли ОБЩИХ ролей `serene_ro`/`serene_resolver`, а `1c-serene-ask` непараметризован и займёт
+`:8091` первого экземпляра. Поэкземплярные юниты (`1c-serene-ask@<имя>`) — Фаза 2
+`PLAN_AUTONOMY`, см. §0. Пока их нет, второй экземпляр поднимается руками, и это записанный
+ручной шаг, а не «как надо».
 
 *Было ошибочно: §10 подавался как «подключение НОВОЙ 1С-базы», но базу движка параметром не
 делал — `CREATE DATABASE` не упоминался, в §10.3/§10.5 `dbname` был опущен (libpq подставляет
@@ -415,7 +439,8 @@ ubuntu/serenedb/deploy.sh /opt/1c-mcp-reports     # вместо cp; идемп�
 Раскладка вручную (если `deploy.sh` почему-то недоступен):
 ```bash
 install -d /opt/1c-mcp-reports
-cp ubuntu/serenedb/*.py ubuntu/serenedb/*.sh ubuntu/serenedb/serene-entities.txt /opt/1c-mcp-reports/
+cp ubuntu/serenedb/*.py ubuntu/serenedb/*.sh ubuntu/serenedb/*.sql ubuntu/serenedb/*.tsv \
+   ubuntu/serenedb/serene-entities.txt /opt/1c-mcp-reports/
 chmod +x /opt/1c-mcp-reports/*.sh
 cat > /etc/1c-mcp-reports.env <<EOF        # секреты не в git, chmod 600
 DEEPSEEK_API_KEY=<ключ>                        # NL→SQL + grounding-критик
@@ -427,22 +452,31 @@ EMBED_DIM=1024                                 # столько отдаёт н�
 CHART_DIR=/home/<botuser>/.openclaw/workspace/charts   # PNG-графики: только из песочницы бота
 MCP_HOST=127.0.0.1
 MCP_PORT=6015
-SERENEDB_DSN='host=127.0.0.1 port=7890 user=serene_ro dbname=<та самая база движка $DB>'
-RESOLVER_DSN='host=127.0.0.1 port=7890 user=serene_resolver dbname=<та же база>'
+SERENEDB_DSN='host=127.0.0.1 port=7890 user=serene_ro dbname=$DB'
+RESOLVER_DSN='host=127.0.0.1 port=7890 user=serene_resolver dbname=$DB'
+SERENEDB_DSN_RO='host=127.0.0.1 port=7890 user=serene_ro dbname=$DB'
 PGPASSWORD=<пароль serene_ro>
 RESOLVER_PW=<пароль serene_resolver>
-ODG_GATEWAY_TOKEN=<токен OData-шлюза из §6>
+ODG_GATEWAY_TOKEN=<тот же токен, что в /etc/1c-odata-gateway-$BASE.env из §6>
 MCP_TOKEN=<токен MCP>
 EOF
 chmod 600 /etc/1c-mcp-reports.env
 
 cat > /etc/1c-serene-sync.env <<EOF        # окружение конвейера (синк + сборка), chmod 600
-ETL_ODATA_BASE=http://127.0.0.1:6021         # читающий OData-шлюз ЭТОЙ базы 1С (§6)
+ETL_ODATA_BASE=http://127.0.0.1:$GW          # читающий OData-шлюз ЭТОЙ базы 1С (§6)
 CSV_DIR=/var/lib/serenedb                    # каталог данных SereneDB (загрузчик пишет CSV сюда)
-SERENEDB_DSN='host=127.0.0.1 port=7890 user=postgres dbname=<база движка $DB>'   # сборке нужен rw
+SERENEDB_DSN='host=127.0.0.1 port=7890 user=postgres dbname=$DB'   # сборке нужен rw
+ODG_GATEWAY_TOKEN=<тот же токен шлюза>
 EOF
 chmod 600 /etc/1c-serene-sync.env
 ```
+
+🔴 **`SERENEDB_DSN_RO` — отдельная переменная, и без неё сервис ответов читает не ту базу.**
+`serene_ask.py` берёт базу из `SERENEDB_DSN_RO` (умолчание в коде — `dbname=postgres`), а не
+из `SERENEDB_DSN`. Юнит `1c-serene-ask` подключает `/etc/1c-mcp-reports.env` и
+`-/etc/1c-serene-ask.env`; если `SERENEDB_DSN_RO` не задана ни там, ни там, корпус будет
+читаться из `postgres`, а резолвер — из `$DB`, и ответы разъедутся молча. На стенде это
+именно так и не задано — обе переменные живут только в окружении процесса, поднятого руками.
 
 *Было ошибочно: `ETL_ODATA_BASE`, `CSV_DIR` показаны как часть `/etc/1c-mcp-reports.env`,
 `EMBED_DIM=1536`. **Чем опровергнуто:** перепись имён переменных на стенде — в
@@ -460,11 +494,23 @@ chmod 600 /etc/1c-serene-sync.env
 
 ### 10.3 Роли + секреты (идемпотентно, генерируемые пароли)
 ```bash
-cd /opt/1c-mcp-reports && SERENEDB_DSN="host=127.0.0.1 port=7890 user=postgres dbname=$DB" \
+cd /opt/1c-mcp-reports
+SETUP_RW_DSN="host=127.0.0.1 port=7890 user=postgres dbname=$DB" \
+SETUP_RO_DSN="host=127.0.0.1 port=7890 user=serene_ro dbname=$DB" \
+SETUP_RES_DSN="host=127.0.0.1 port=7890 user=serene_resolver dbname=$DB" \
   bash setup.sh /etc/1c-mcp-reports.env
 ```
-⚠ Без явного `SERENEDB_DSN` `setup.sh` создаст роли в базе `postgres` — то есть в витрине
-ПЕРВОЙ базы 1С, а не в той, которую вы разворачиваете.
+🔴 **Именно эти три переменные, а не `SERENEDB_DSN`.** `setup.sh` читает `SETUP_RW_DSN` /
+`SETUP_RO_DSN` / `SETUP_RES_DSN` (строки 15-17) и сам экспортирует `SERENEDB_DSN` поверх
+входящего (строка 51) — переданный снаружи `SERENEDB_DSN` будет молча отброшен. Умолчания у
+всех трёх — `dbname=postgres`. `CREATE ROLE` в движке кластерный, а `GRANT SELECT ON ALL
+TABLES` — **пободазовый**: ошибётесь здесь — роли создадутся, а гранты лягут в витрину первой
+базы, и `serene_ro` не увидит в `$DB` ни одной таблицы.
+
+*Было ошибочно (правка 02.08, исправлено в тот же день): здесь стояло
+`SERENEDB_DSN="…dbname=$DB" bash setup.sh` и оговорка «без него роли создадутся в
+`postgres`». **Чем опровергнуто:** чтением `ubuntu/serenedb/setup.sh` — `SERENEDB_DSN` он не
+читает вовсе. Инструкция была написана, не открыв скрипт, о котором она.*
 Создаёт `serene_ro` (read-only) + `serene_resolver` (доступ к `resolver_index`; у `serene_ro` отозван) и
 дописывает в env `PGPASSWORD`/`RESOLVER_PW`/`RESOLVER_DSN`/`SERENEDB_DSN`. Пароли рутуются при каждом прогоне
 → после setup перезапусти `1c-mcp-reports`.
@@ -472,7 +518,7 @@ cd /opt/1c-mcp-reports && SERENEDB_DSN="host=127.0.0.1 port=7890 user=postgres d
 ### 10.4 Подключение НОВОЙ базы: выбор сущностей ИЗ ЖИВОГО OData
 ```bash
 cd /opt/1c-mcp-reports
-export $(grep -E '^ETL_ODATA_BASE=' /etc/1c-mcp-reports.env | xargs -d '\n')
+export $(grep -E '^(ETL_ODATA_BASE|ODG_GATEWAY_TOKEN)=' /etc/1c-serene-sync.env | xargs -d '\n')
 python3 serene_select.py --review          # → serene-entities.txt.review (кандидаты по убыванию строк)
 # раскомментируй нужные БИЗНЕС-сущности, сохрани как serene-entities.txt
 ```
@@ -482,8 +528,7 @@ python3 serene_select.py --review          # → serene-entities.txt.review (к�
 ### 10.5 Первый синк (загрузка витрины + резолвер)
 ```bash
 export $(grep -E '^(ALIBABA_|EMBED_)' /etc/1c-mcp-reports.env | xargs -d '\n')
-export $(grep -E '^(ETL_ODATA_BASE|CSV_DIR)' /etc/1c-serene-sync.env | xargs -d '\n')
-export ETL_ODATA_BASE=http://127.0.0.1:$GW                       # шлюз ИМЕННО ЭТОЙ базы 1С
+export $(grep -E '^(ETL_ODATA_BASE|CSV_DIR|ODG_GATEWAY_TOKEN)=' /etc/1c-serene-sync.env | xargs -d '\n')
 export SERENEDB_DSN="host=127.0.0.1 port=7890 user=postgres dbname=$DB"   # загрузка под rw, dbname ЯВНО
 python3 serene_sync.py
 ```
@@ -498,10 +543,18 @@ systemctl enable --now 1c-serene-ask.service     # отвечающий серв
 ```
 
 🔴 **`1c-serene-sync.timer` и `1c-serene-index.timer` включать НЕЛЬЗЯ.** Синк с 28.07 —
-шаг конвейера, а не отдельный таймер; а `1c-serene-index.service` в репозитории до сих пор
-запускает `serene_search_build.py`, который при нынешнем составе корпуса **сносит таблицу и
-индекс** — та самая авария 28.07 (`HOW_NOT_TO §2.9`), о которой предупреждает §0 этого же
-файла.
+шаг конвейера, а не отдельный таймер. А юнит `1c-serene-index.service` лежит в репозитории
+**в двух копиях, и они разные**:
+
+| Копия | `ExecStart` | Что это |
+|---|---|---|
+| `ubuntu/systemd/1c-serene-index.service` | `/opt/1c-mcp-reports/build.sh` | **боевая**, побайтно равна установленной |
+| `ubuntu/serenedb/systemd/1c-serene-index.service` | `…venv/bin/python …/serene_search_build.py` | 🔴 **снятая**: тот самый питоновский сборщик, который **снёс таблицу и индекс** 28.07 (`HOW_NOT_TO §2.9`). Пометки об этом в самом файле нет |
+
+Если проверите `systemctl cat 1c-serene-index.service` и увидите `build.sh` — это не значит,
+что предупреждение протухло: на стенде юнит переключён 28.07, опасна именно вторая копия в
+репозитории. Боевого таймера (`OnBootSec=5min` / `OnUnitActiveSec=20min`) в git нет вовсе —
+единственная его версия в репозитории — снятое ночное расписание `OnCalendar 03:55`.
 
 *Было ошибочно: §10.6 без единой оговорки предписывала `cp` обоих юнитов и
 `systemctl enable --now 1c-serene-sync.timer` / `1c-serene-index.timer`. **Чем
@@ -520,7 +573,13 @@ systemctl enable --now 1c-serene-ask.service     # отвечающий серв
 *Было ошибочно: «сейчас таймер ночной (03:55), здесь должен стоять `OnUnitActiveSec` —
 открытый пункт». **Чем опровергнуто:** `systemctl cat 1c-serene-index.timer` →
 `OnUnitActiveSec=20min`, сам таймер `disabled`; такт целиком у `1c-serene-pipeline.timer`
-(по готовности). Требуемое прежней редакцией изменение давно сделано.*
+(по готовности). Требуемое прежней редакцией изменение по расписанию сделано.*
+
+🔴 **Но п. 17 этим НЕ закрыт: на стенде свежести нет с 29.07.** [замер 02.08]
+`1c-serene-pipeline.service` → `ActiveState=failed`, `Result=signal`, последний запуск
+29.07 06:41; таймер `enabled`, но `inactive`, `NEXT` пуст; `1c-serene-sync.service` тоже
+`failed`. Механизм такта сделан и замерен — **работает он не сейчас**. Пока конвейер не
+поднят, любое утверждение «свежесть обеспечена» в любом документе неверно.
 
 ### 10.7 Подключение к боту
 Бот ходит в отвечающий сервис через MCP-мост `ask_1c` (`1c-mcp-ask`, :6016), а мост — по
@@ -563,9 +622,10 @@ for t in test_validate test_integrity test_caveat test_ro_role; do python3 $t.py
 `ut_test`), сверка «ответ бота против ground-truth SELECT» пойдёт **по чужим данным**, и
 расхождение будет выглядеть беспричинным. Перед сверкой убедитесь, что база в `sql.sh` та же,
 что в `SERENEDB_DSN_RO` отвечающего сервиса.
-Сквозная проверка отвечающего сервиса:
+Сквозная проверка отвечающего сервиса (`8091` — умолчание кода; если задавали
+`ASK_LISTEN_PORT`, подставьте свой порт — на стенде это `:8099`):
 ```bash
-curl -s -X POST http://127.0.0.1:8091/ask -H 'Content-Type: application/json' \
+curl -s -X POST http://127.0.0.1:${ASK_LISTEN_PORT:-8091}/ask -H 'Content-Type: application/json' \
   ${ASK_TOKEN:+-H "Authorization: Bearer $ASK_TOKEN"} \
   -d '{"question":"<вопрос по вашим данным>"}'
 ```
@@ -587,21 +647,32 @@ curl -s -X POST http://127.0.0.1:8091/ask -H 'Content-Type: application/json' \
 («витрина производная — ре-синк из 1С») для второй базы недоступен: у неё нет ни юнита, ни
 таймера, ни env, а `serene_sync.py` без `SERENEDB_DSN` пойдёт в первую.
 
-**У движка есть и штатные средства — их и надо предпочитать, когда нужна ОДНА база**
+**У движка ЕСТЬ штатные средства — три наших документа утверждали обратное, не проверив**
 ([замер 02.08] на нашей сборке 26.07.3):
 
-| Средство | Что делает | Проверено |
+| Средство | Что делает (по докам движка) | Что доказано замером |
 |---|---|---|
-| `COPY FROM DATABASE <src> TO <dst>` | копирует содержимое одной прикреплённой базы в другую, движок не останавливая | `ERROR: Catalog "zzz_nonexistent_src" does not exist!` — оператор распознан |
-| `EXPORT DATABASE '<каталог>'` | выгружает схему и данные базы в каталог | `ERROR: Failed to create directory …` — дошло до исполнения |
-| `IMPORT DATABASE '<каталог>'` | заливает обратно | `ERROR: Cannot open file ".../schema.sql"` |
+| `COPY FROM DATABASE <src> TO <dst>` | копирует содержимое одной прикреплённой базы в другую | `ERROR: Catalog "zzz_nonexistent_src" does not exist!` — **оператор распознан** |
+| `EXPORT DATABASE '<каталог>'` | выгружает схему и данные базы в каталог | `ERROR: Failed to create directory …` — **дошло до исполнения** |
+| `IMPORT DATABASE '<каталог>'` | заливает обратно из `schema.sql` + `load.sql` | `ERROR: Cannot open file ".../schema.sql"` |
 
-Контрольный опыт: `EXPORTX DATABASE '…'` → `syntax error at or near "DATABASE"` — так
-выглядит **неизвестный** оператор, значит три предыдущих движок действительно знает.
+Контрольный опыт: `EXPORTX DATABASE`, `IMPORTX DATABASE`, `BACKUP DATABASE`,
+`RESTORE DATABASE`, `COPY FROM DATABASEX` — **все** дают `syntax error`. Так выглядит
+неизвестный оператор, значит три средства выше движок действительно знает.
 
-⚠ Оффлайн-снапшот при этом не отменяется: он несёт ещё и инвертированный индекс движка,
-которого `EXPORT DATABASE` не выгружает. Выбор — по задаче: одна база без остановки →
-`COPY FROM DATABASE`; весь инстанс вместе с индексом → снапшот.
+🔴 **Граница доказанного — не переступайте её при планировании.** Замером подтверждено
+только то, что операторы **существуют и доходят до исполнения**. НЕ проверено: работают ли
+они на наших объёмах, что именно попадает в выгрузку, и восстанавливается ли база обратно —
+round-trip в проекте не делался ни разу. Прежде чем переводить на них резерв, это надо
+замерить (вопрос владельцу №46).
+
+⚠ Оффлайн-снапшот пока не отменяется: он снимает каталог целиком, то есть **весь инстанс со
+всеми базами разом**, и заведомо включает файлы инвертированного индекса. Покрывает ли их
+`EXPORT DATABASE` — **не проверено ни замером, ни доками**: там перечислены «schema
+information, tables, views and sequences», про индексы не сказано ни в ту, ни в другую
+сторону. *В первой редакции этого раздела (02.08) стояло «которого `EXPORT DATABASE` не
+выгружает» — утверждение без доказательства, ровно того класса, который абзацем выше
+требует проверки.*
 
 ---
 
