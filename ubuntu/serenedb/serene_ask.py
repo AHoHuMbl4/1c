@@ -185,11 +185,23 @@ DS_THINKING = os.environ.get("DEEPSEEK_THINKING", "disabled")
 # вопрос уйдёт в чужое облако молча.
 EMBED_URL = (os.environ.get("EMBED_BASE_URL")
              or os.environ.get("ALIBABA_EMBED_URL", "")).rstrip("/")
+# 🔴 ВОПРОС И ДОКУМЕНТ СЧИТАЮТСЯ ПО-РАЗНОМУ. Qwen3 обучен так, что запрос идёт с
+# инструкцией, а документ без неё; звать их одинаково — молча потерять часть качества,
+# и заметить это по ответу бота нельзя. Документы считает движок (`ai_embed` через
+# OpenAI-совместимый путь, там всегда «документ»), а вопрос — мы, здесь, и обязаны
+# сказать об этом явно. `EMBED_API=texts` — вид API, где такой признак есть.
+EMBED_API = os.environ.get("EMBED_API", "openai")
+EMBED_QUERY_PATH = os.environ.get("EMBED_QUERY_PATH", "/embed")
+# Cloudflare перед сервисом режет клиента по подписи (`error code: 1010`): curl проходит,
+# python — нет. Подпись задаётся настройкой, а не зашита: это свойство чужого периметра.
+EMBED_UA = os.environ.get("EMBED_UA", "curl/8.5.0")
+# Дверь, называющая РЕАЛЬНО загруженную модель. Открыта без ключа.
+EMBED_HEALTH_URL = os.environ.get("EMBED_HEALTH_URL") or (EMBED_URL + "/health")
 EMBED_KEY = os.environ.get("EMBED_API_KEY") or os.environ.get("ALIBABA_API_KEY", "")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "text-embedding-v4")
 # Ключ реранкера может быть свой (он и живёт отдельным сервисом), а может совпадать с
 # ключом эмбеддера, если они за одной дверью. Умолчание — второе, потому что так и было.
-RERANK_KEY = os.environ.get("RERANK_API_KEY") or EMBED_KEY
+RERANK_KEY = os.environ.get("RERANK_API_KEY") or EMBED_KEY  # ключ реранкера может быть свой
 # Размерность вектора. 1024 — это то, что отдаёт модель, а не наш выбор: корпус теперь
 # эмбеддится ШТАТНОЙ функцией движка `ai_embed`, у которой параметра размерности нет и
 # не нужно — длину определяет модель, а колонка объявляется под неё (`VECTOR_DECISION §6`).
@@ -280,11 +292,12 @@ def embed_model_live():
         return _EMB_LIVE_CACHE[0]
     ok = False
     try:
-        body = json.dumps({"model": EMBED_MODEL, "dimensions": EMBED_DIM,
-                           "input": ["ping"]}).encode()
-        req = urllib.request.Request(EMBED_URL + "/embeddings", data=body, method="POST")
-        req.add_header("Authorization", "Bearer " + EMBED_KEY)
-        req.add_header("Content-Type", "application/json")
+        # 🔴 Имя модели берём из `/health`, а не из ответа на запрос. [замер 02.08] два
+        # сервиса подряд соврали по-разному и оба молча: llama.cpp при незнакомом имени
+        # подставлял своё, нынешний — возвращает ЭХОМ то, что попросили, и подтвердил
+        # даже несуществующую модель. Поле `model` в ответе свидетельством не является.
+        req = urllib.request.Request(EMBED_HEALTH_URL)
+        req.add_header("User-Agent", EMBED_UA)
         with urllib.request.urlopen(req, timeout=20) as r:
             got = (json.loads(r.read()).get("model") or "").strip()
         ok = (got == EMBED_MODEL)
@@ -390,13 +403,27 @@ def arbitrate(question, answers, context=""):
     return n - 1
 
 
-def embed_one(text):
-    body = json.dumps({"model": EMBED_MODEL, "dimensions": EMBED_DIM, "input": [text]}).encode()
-    req = urllib.request.Request(EMBED_URL + "/embeddings", data=body, method="POST")
-    req.add_header("Authorization", "Bearer " + EMBED_KEY)
+def _embed_request(text, as_query):
+    """Запрос к эмбеддеру. `as_query` — считать ВОПРОСОМ, а не документом (см. EMBED_API)."""
+    if EMBED_API == "texts":
+        url = EMBED_URL + EMBED_QUERY_PATH
+        body = {"texts": [text], "is_query": bool(as_query), "dim": EMBED_DIM}
+    else:
+        url = EMBED_URL + "/embeddings"
+        body = {"model": EMBED_MODEL, "dimensions": EMBED_DIM, "input": [text]}
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST")
+    if EMBED_KEY:
+        req.add_header("Authorization", "Bearer " + EMBED_KEY)
     req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=60) as r:
-        return json.loads(r.read())["data"][0]["embedding"]
+    req.add_header("User-Agent", EMBED_UA)
+    return req
+
+
+def embed_one(text):
+    """Вектор ВОПРОСА. Документы считает движок, сюда они не попадают."""
+    with urllib.request.urlopen(_embed_request(text, True), timeout=60) as r:
+        out = json.loads(r.read())
+    return out["embeddings"][0] if EMBED_API == "texts" else out["data"][0]["embedding"]
 
 
 # ----------------------------------------------------------------- 1. намерение
@@ -887,12 +914,18 @@ def rerank(query, docs):
                            "input": {"query": query, "documents": docs},
                            "parameters": {"return_documents": False,
                                           "top_n": len(docs)}}).encode()
+    elif RERANK_API == "texts":
+        # Схема сервиса объявляет ровно query/documents/instruction/top_n — лишних полей
+        # не шлём: молча проглоченное поле сегодня завтра станет ошибкой валидации.
+        body = json.dumps({"query": query, "documents": docs, "top_n": len(docs)}).encode()
     else:
         body = json.dumps({"model": RERANK_MODEL, "query": query,
                            "documents": docs, "top_n": len(docs)}).encode()
     req = urllib.request.Request(RERANK_URL, data=body, method="POST")
-    req.add_header("Authorization", "Bearer " + RERANK_KEY)
+    if RERANK_KEY:
+        req.add_header("Authorization", "Bearer " + RERANK_KEY)
     req.add_header("Content-Type", "application/json")
+    req.add_header("User-Agent", EMBED_UA)
     try:
         with urllib.request.urlopen(req, timeout=30) as r:
             out = json.loads(r.read())

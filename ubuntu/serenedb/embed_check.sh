@@ -16,29 +16,49 @@
 # Окружение:     EMBED_BASE_URL, EMBED_API_KEY|EMBED_API_KEYS, EMBED_MODEL
 set -u
 
-BASE="${EMBED_BASE_URL:-}"
+# 🔴 ПРОВЕРЯЕТСЯ ТА ЖЕ ДВЕРЬ, В КОТОРУЮ ПОЙДЁТ ДВИЖОК — `EMBED_HOST` + `EMBED_PATH`,
+# ровно то, что уходит в секрет `TYPE openai (base_url, embeddings_path)`. Проверять
+# соседний адрес бессмысленно: [замер 02.08] у нового сервиса путь движка `/v1/embeddings`,
+# а вопросы наш код шлёт в `/embed` — это РАЗНЫЕ двери одного сервиса, и совпадение
+# моделей на одной ничего не говорит о другой.
+URL="${EMBED_HOST:-}${EMBED_PATH:-}"
+[ -n "$URL" ] || URL="${EMBED_BASE_URL:-}/embeddings"
 KEY="${EMBED_API_KEY:-}"
 [ -n "$KEY" ] || KEY="$(printf '%s' "${EMBED_API_KEYS:-}" | cut -d, -f1 | tr -d ' ')"
 MODEL="${EMBED_MODEL:-}"
 
-# Адрес для нашего кода собирается из тех же двух переменных, что и секрет движка, если
-# EMBED_BASE_URL не задан отдельно, — чтобы проверялся ТОТ ЖЕ эндпоинт, куда пойдёт ai_embed.
-[ -n "$BASE" ] || BASE="${EMBED_HOST:-}${EMBED_PATH%/embeddings}"
-
-if [ -z "$BASE" ] || [ -z "$KEY" ] || [ -z "$MODEL" ]; then
-  echo "проверка эмбеддера: не заданы адрес, ключ или модель" >&2
+if [ -z "$URL" ] || [ -z "$MODEL" ]; then
+  echo "проверка эмбеддера: не заданы адрес или модель" >&2
   exit 1
 fi
 
-OUT=$(printf 'url = "%s/embeddings"\nheader = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\ndata = "{\\"model\\":\\"%s\\",\\"dimensions\\":%s,\\"input\\":[\\"ping\\"]}"\nsilent\nshow-error\nmax-time = 60\n' \
-        "${BASE%/}" "$KEY" "$MODEL" "${EMBED_DIM:-1024}" | curl --config - 2>/dev/null)
+# 🔴 ИМЯ МОДЕЛИ БЕРЁТСЯ ИЗ `/health`, А НЕ ИЗ ОТВЕТА НА ЗАПРОС.
+# [замер 02.08] два сервиса подряд повели себя по-разному, и оба — молча:
+#   * llama.cpp при незнакомом имени ПОДСТАВЛЯЛ своё (просим Q8_0 — считает Q6_K);
+#   * нынешний сервис ЭХОМ возвращает то имя, которое попросили, — подтвердил даже
+#     несуществующую «Qwen3-Embedding-4B-f16».
+# То есть поле `model` в ответе не является свидетельством ни в ту, ни в другую сторону.
+# `/health` называет модель, которая реально загружена, и открыт без ключа.
+HEALTH_URL="${EMBED_HEALTH_URL:-}"
+if [ -z "$HEALTH_URL" ] && [ -n "${EMBED_HOST:-}" ]; then HEALTH_URL="${EMBED_HOST%/}/health"; fi
 
-GOT=$(printf '%s' "$OUT" | python3 -c 'import json,sys
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    print(""); raise SystemExit
-print(d.get("model") or "")' 2>/dev/null)
+GOT=""
+if [ -n "$HEALTH_URL" ]; then
+  GOT=$(printf 'url = "%s"\nuser-agent = "%s"\nsilent\nmax-time = 30\n' \
+          "$HEALTH_URL" "${EMBED_UA:-curl/8.5.0}" | curl --config - 2>/dev/null \
+        | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("model") or "")
+except Exception: print("")' 2>/dev/null)
+fi
+
+# Запасной путь: сервис без `/health` — тогда сверяем по ответу, зная его слабость.
+if [ -z "$GOT" ]; then
+  GOT=$(printf 'url = "%s"\nheader = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\nuser-agent = "%s"\ndata = "{\\"model\\":\\"%s\\",\\"dimensions\\":%s,\\"input\\":[\\"ping\\"]}"\nsilent\nshow-error\nmax-time = 60\n' \
+          "$URL" "$KEY" "${EMBED_UA:-curl/8.5.0}" "$MODEL" "${EMBED_DIM:-1024}" | curl --config - 2>/dev/null \
+        | python3 -c 'import json,sys
+try: print(json.load(sys.stdin).get("model") or "")
+except Exception: print("")' 2>/dev/null)
+fi
 
 if [ -z "$GOT" ]; then
   echo "проверка эмбеддера: сервис не ответил или ответ не разобран" >&2
