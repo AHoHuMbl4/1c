@@ -950,7 +950,17 @@ def rerank(query, docs):
         with urllib.request.urlopen(req, timeout=30) as r:
             out = json.loads(r.read())
         out = out["output"]["results"] if RERANK_API == "dashscope" else out["results"]
-        return [int(x["index"]) for x in out]
+        order = [int(x["index"]) for x in out]
+        # 🔴 УСПЕХ ТОЖЕ ПИШЕТСЯ В ЖУРНАЛ. Прежде отмечался только сбой, и «реранкер
+        # отработал» было неотличимо от «реранкер не звался вовсе»: обе картины дают в
+        # журнале пустоту. [замер 02.08] на этом я и ошибся — счёл прогон идущим без
+        # реранкера по строкам 401, снятым до смены настроек. Теперь по журналу видно,
+        # участвовал ли он в КАЖДОМ ответе и переставил ли он что-нибудь.
+        sys.stderr.write("rerank отработал: %d кандидатов, порядок %s\n"
+                         % (len(docs),
+                            "изменён" if order[:len(docs)] != list(range(len(docs)))
+                            else "без изменений"))
+        return order
     except Exception as e:                     # noqa: BLE001 — сеть/квота поставщика
         # 🔴 МОЛЧА ТЕРЯТЬ СИГНАЛ НЕЛЬЗЯ (п. 13). Отказ реранкера не роняет ответ — и это
         # верно (п. 21), — но он ухудшает ровно то, что и так главная открытая проблема:
