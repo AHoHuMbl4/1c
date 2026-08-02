@@ -46,6 +46,14 @@ DB=$(psql "$DSN" -tAc 'SELECT current_database()' 2>/dev/null | tr -cd 'A-Za-z0-
 [ -n "$DB" ] || { echo "движок не отвечает, имя базы не получено" >&2; exit 1; }
 
 IFS=',' read -r -a KEYS <<< "${EMBED_API_KEYS:-${EMBED_API_KEY:-${ALIBABA_API_KEYS:-${ALIBABA_API_KEY:-}}}}"
+# 🔴 НЕСКОЛЬКО АДРЕСОВ — ПО ОДНОМУ НА КАРТУ. `EMBED_HOSTS` (через запятую) заводит по
+# секрету на адрес, и потоки досчёта раскладываются по ним по кругу — тем же механизмом,
+# что был сделан под несколько ключей облака.
+# Зачем: [замер 02.08] балансировщик перед двумя A100 отдавал скорость ОДНОЙ карты
+# (23 строки/с при любом числе потоков), а прямое обращение к обеим — 42,1. То есть
+# «один base_url» стоил половины арендованного железа.
+IFS=',' read -r -a HOSTS <<< "${EMBED_HOSTS:-${EMBED_HOST:-}}"
+[ ${#HOSTS[@]} -gt 0 ] || HOSTS=("${EMBED_HOST:-}")
 # Адрес и модель эмбеддера задаются явно: умолчание с именем поставщика однажды уже
 # означало бы, что забытая переменная тихо уводит вектор в чужое облако другой моделью,
 # а разные модели дают НЕСРАВНИМЫЕ векторы без единой ошибки.
@@ -54,14 +62,20 @@ IFS=',' read -r -a KEYS <<< "${EMBED_API_KEYS:-${EMBED_API_KEY:-${ALIBABA_API_KE
 [ -n "${EMBED_MODEL:-}" ] || { echo "не задан EMBED_MODEL (модель эмбеддера)" >&2; exit 1; }
 umask 077
 SEC=$(mktemp); LIST=""
-for i in "${!KEYS[@]}"; do
-  k="$(printf '%s' "${KEYS[$i]}" | tr -d ' ')"
-  [ -z "$k" ] && continue
+# Секретов столько, сколько пар «адрес × ключ»: у своего контура ключ обычно один, а
+# адресов столько, сколько карт.
+PAIRS=()
+for h in "${HOSTS[@]}"; do
+  for k0 in "${KEYS[@]}"; do PAIRS+=("$(printf '%s|%s' "$(printf '%s' "$h" | tr -d ' ')" "$(printf '%s' "$k0" | tr -d ' ')")"); done
+done
+for i in "${!PAIRS[@]}"; do
+  h="${PAIRS[$i]%%|*}"; k="${PAIRS[$i]#*|}"
+  [ -z "$k" ] || [ -z "$h" ] && continue
   # Одинарные кавычки в ключе удваиваются — иначе оператор сломается, и обрывок ключа
   # уйдёт в текст ошибки. Файл, а не аргумент: в командной строке ключ виден любому `ps`.
   printf "CREATE OR REPLACE TEMPORARY SECRET emb_%s_%s (TYPE openai, api_key '%s', base_url '%s', embeddings_path '%s');\n" \
     "$DB" "$i" "$(printf '%s' "$k" | sed "s/'/''/g")" \
-    "$EMBED_HOST" "$EMBED_PATH" >> "$SEC"
+    "$h" "$EMBED_PATH" >> "$SEC"
   LIST="$LIST emb_${DB}_${i}"
 done
 [ -n "$LIST" ] || { echo "не задан ни один ключ эмбеддера" >&2; rm -f "$SEC"; exit 1; }
@@ -102,7 +116,7 @@ mark_target() {
 # свою ([замер 02.08]), а несравнимые векторы не дают ни одной ошибки — см. embed_check.sh.
 ./embed_check.sh || { echo "досчёт не начат: эмбеддер отдаёт не ту модель" >&2; exit 1; }
 
-echo "== досчёт  $(date -u +%H:%M:%S), потоков $N, ключей ${#KEYS[@]}, цели: $TARGETS"
+echo "== досчёт  $(date -u +%H:%M:%S), потоков $N, адресов ${#HOSTS[@]}, ключей ${#KEYS[@]}, цели: $TARGETS"
 [ "${EMBED_RESET:-0}" = "1" ] && echo "== 🔴 РЕЖИМ ПЕРЕВЕКТОРИЗАЦИИ: старые векторы целей обнуляются"
 
 for tgt in $TARGETS; do
