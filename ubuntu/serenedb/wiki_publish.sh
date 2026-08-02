@@ -19,6 +19,14 @@ cd "$(dirname "$0")" || exit 1
 
 command -v openclaw >/dev/null 2>&1 || { echo "вики: openclaw не установлен — шаг пропущен"; exit 0; }
 
+# 🔴 У КАЖДОЙ БАЗЫ СВОЙ ЭКЗЕМПЛЯР БОТА, А ЗНАЧИТ И СВОЙ ПРОФИЛЬ. Компиляция вики и
+# переиндексация обязаны идти в ТОТ ЖЕ экземпляр, куда записаны страницы. Без этого
+# страницы легли бы в одно хранилище, а скомпилировался и переиндексировался бы другой —
+# и обе стороны выглядели бы исправными.
+#   OPENCLAW_PROFILE_ID — идентификатор профиля (пусто = экземпляр по умолчанию).
+PROFILE_ARGS=()
+[ -n "${OPENCLAW_PROFILE_ID:-}" ] && PROFILE_ARGS=(--profile "$OPENCLAW_PROFILE_ID")
+
 # 🔴 У КАЖДОЙ БАЗЫ СВОЯ ВИКИ. Хранилище выбирается ЯВНО, а не берётся «то, что вернёт
 # `wiki status`»: та команда всегда показывает хранилище агента по умолчанию, и при двух
 # базах обе писали бы в одно место. [замер 02.08] так и вышло: в общем хранилище лежала
@@ -29,7 +37,7 @@ command -v openclaw >/dev/null 2>&1 || { echo "вики: openclaw не уста�
 #                 штатного `vault.scope: "agent"` — движок кладёт вики агента именно так.
 VAULT="${WIKI_VAULT:-}"
 if [ -z "$VAULT" ]; then
-  DEFAULT_VAULT=$(sudo -u "$BOTUSER" -H openclaw wiki status 2>/dev/null | sed -n 's/^Vault: ready (\(.*\))$/\1/p')
+  DEFAULT_VAULT=$(sudo -u "$BOTUSER" -H openclaw "${PROFILE_ARGS[@]}" wiki status 2>/dev/null | sed -n 's/^Vault: ready (\(.*\))$/\1/p')
   [ -n "$DEFAULT_VAULT" ] || { echo "вики: хранилище не готово (плагин memory-wiki выключен?) — шаг пропущен"; exit 0; }
   if [ -n "${WIKI_AGENT:-}" ]; then
     VAULT="$(dirname "$DEFAULT_VAULT")/$WIKI_AGENT"
@@ -103,7 +111,7 @@ PY
 # Отметка «чьими страницами заполнено» — её читает проверка выше на следующем такте.
 printf '%s\n' "$DBNAME" > "$STAMP"
 chown -R "$BOTUSER":"$BOTUSER" "$VAULT/entities" "$STAMP" 2>/dev/null
-sudo -u "$BOTUSER" -H openclaw wiki compile 2>&1 | tail -2
+sudo -u "$BOTUSER" -H openclaw "${PROFILE_ARGS[@]}" wiki compile 2>&1 | tail -2
 
 # 🔴 СМЫСЛОВОЙ ПОИСК ЖИВЁТ ИНДЕКСОМ, А ИНДЕКС САМ НЕ ОБНОВИТСЯ. Страницы изменились —
 # значит переиндексация обязательна, иначе бот ищет по прошлому такту и этого ниоткуда не
@@ -114,4 +122,4 @@ sudo -u "$BOTUSER" -H openclaw wiki compile 2>&1 | tail -2
 # `/etc/1c-embed.env`, одно место на весь продукт) и в командную строку не попадает:
 # `env` получает его через своё окружение, а не аргументом — иначе он был бы виден в `ps`.
 EMBED_API_KEY="${EMBED_API_KEY:-}" sudo -u "$BOTUSER" -H --preserve-env=EMBED_API_KEY \
-  openclaw memory index --agent "${WIKI_AGENT:-main}" 2>&1 | tail -1
+  openclaw "${PROFILE_ARGS[@]}" memory index --agent "${WIKI_AGENT:-main}" 2>&1 | tail -1

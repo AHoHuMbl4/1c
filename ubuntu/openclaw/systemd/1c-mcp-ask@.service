@@ -1,0 +1,29 @@
+[Unit]
+# MCP-сервер поверх `serene_ask` НА ИМЕНОВАННУЮ БАЗУ: даёт боту этой базы инструмент
+# `ask_1c` (факты из 1С через SereneDB).
+#
+# 🔴 ЗАЧЕМ ШАБЛОН. Прежний `1c-mcp-ask.service` — один экземпляр с зашитыми
+# `ASK_URL=:8099` и `MCP_PORT=6016`, то есть намертво привязан ко второй базе. У каждой
+# базы 1С свой контур целиком (свой шлюз OData, своя база движка, свой сервис ответов), и
+# бот — последнее звено этой цепочки: свой бот на базу, значит и свой мост на базу.
+# Ровно так же ранее стал шаблонным сервис ответов (`1c-serene-ask@<база>`).
+#
+# Экземпляр: `1c-mcp-ask@<база>`, где <база> — имя базы внутри движка (`postgres`, `ut_test`).
+# Все настройки — в побазовом `/etc/1c-mcp-ask-<база>.env`: адрес сервиса ответов этой базы,
+# порт этого моста, оба токена. В юните не зашито ничего, что относится к конкретной базе.
+Description=1C ask MCP server for %i (ask_1c over serene_ask)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+# ASK_URL   — сервис ответов ЭТОЙ базы (первая :8091, вторая :8099)
+# MCP_PORT  — порт этого моста; у каждой базы свой, иначе экземпляры отберут порт друг у друга
+# ASK_TOKEN — Bearer сервиса ответов; MCP_TOKEN — Bearer этого моста (без него не стартует)
+EnvironmentFile=/etc/1c-mcp-ask-%i.env
+Environment=MCP_HOST=127.0.0.1
+ExecStart=/opt/openclaw-mcp/venv/bin/python /opt/openclaw-mcp/mcp_ask.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
