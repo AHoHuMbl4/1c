@@ -256,17 +256,33 @@ $ib.УстановитьСоставСтандартногоИнтерфейса
 На роутере/шлюзе сети LXC пробросить порт на **Windows-IIS:80** (напр. `192.168.56.1:6003 → <win-ip>:80`). Тогда LXC ходит `192.168.56.1:<порт>/1c/odata/standard.odata/…`.
 
 ### Развернуть OData-шлюз (LXC)
+
+🔴 **Шлюз ставится ПОЭКЗЕМПЛЯРНО: один экземпляр = одна база 1С.** Даже если база пока одна,
+разворачивайте шаблонным юнитом `1c-odata-gateway@<имя>` — иначе вторая база потребует
+переписать `/etc/1c-odata-gateway.env` первой (потеряются креды `ai_reader` и токен шлюза) и
+займёт тот же порт 6011.
+
 ```bash
+BASE=ut                                        # короткое имя экземпляра: свой env, свой порт
 install -D odata_gateway.py /opt/1c-odata-gateway/odata_gateway.py
-cat > /etc/1c-odata-gateway.env <<EOF
-ODG_USER=ai_reader
-ODG_PASS=<пароль ai_reader>
-ODG_UPSTREAM=http://192.168.56.1:6003/1c/odata/standard.odata
+cat > /etc/1c-odata-gateway-$BASE.env <<EOF
+ODG_USER=<пользователь-читатель этой базы>
+ODG_PASS=<его пароль>                          # 🔴 обязательно: пустой ODG_PASS → 401 на все запросы
+ODG_LISTEN_PORT=6021                           # 🔴 свой порт на каждый экземпляр (умолчание 6011)
+ODG_UPSTREAM=http://192.168.56.1:6003/$BASE/odata/standard.odata   # путь ПУБЛИКАЦИИ этой базы
 EOF
-chmod 600 /etc/1c-odata-gateway.env
-cp systemd/1c-odata-gateway.service /etc/systemd/system/
-systemctl daemon-reload && systemctl enable --now 1c-odata-gateway
+chmod 600 /etc/1c-odata-gateway-$BASE.env
+cp ubuntu/systemd/1c-odata-gateway@.service /etc/systemd/system/
+systemctl daemon-reload && systemctl enable --now 1c-odata-gateway@$BASE
 ```
+
+*Было ошибочно: единственная инструкция по шлюзу была однобазовой — писала
+`/etc/1c-odata-gateway.env` без `ODG_LISTEN_PORT`, с путём публикации `/1c/`, и включала
+непараметризованный `1c-odata-gateway.service`; шаблонный юнит упоминался только в
+справочной таблице §0. **Чем опровергнуто:** живая вторая база настроена иначе —
+`/etc/1c-odata-gateway-ut.env` с `ODG_LISTEN_PORT=6021` и путём `/ut/odata/standard.odata`;
+`odata_gateway.py:47` берёт `ODG_LISTEN_PORT` с умолчанием 6011, то есть по прежней
+инструкции второй экземпляр вставал бы на тот же порт.*
 
 ### Проверки безопасности (ворота, проверено на стенде с LXC)
 1. `GET Catalog_Валюты/$count` через шлюз → данные ✅.
@@ -333,8 +349,26 @@ systemctl start 1c-etl.service                                   # первый 
 ## 10. SereneDB-аналитика: развёртывание + подключение НОВОЙ 1С-базы
 
 Слой «вопрос на естественном языке → точный отчёт/график». **Общий, без хардкода — переносится на любую
-1С-базу.** Описание — `docs/SERENEDB.md`. Ставится ПОВЕРХ §1-6 (нужен читающий OData-шлюз :6011). Весь код —
-в `ubuntu/serenedb/`.
+1С-базу.** Описание — `docs/SERENEDB.md`. Ставится ПОВЕРХ §1-6 (нужен читающий OData-шлюз этой базы).
+Весь код — в `ubuntu/serenedb/`.
+
+🔴 **База движка — параметр этого раздела, а не константа.** У каждой базы 1С — своя база
+внутри SereneDB. Заведите её и подставляйте во ВСЕ строки подключения ниже:
+
+```bash
+DB=ut_test                                     # имя базы движка под эту базу 1С
+GW=6021                                        # порт OData-шлюза этого экземпляра (§6)
+psql 'host=127.0.0.1 port=7890 user=postgres dbname=postgres' -c "CREATE DATABASE $DB"
+```
+
+*Было ошибочно: §10 подавался как «подключение НОВОЙ 1С-базы», но базу движка параметром не
+делал — `CREATE DATABASE` не упоминался, в §10.3/§10.5 `dbname` был опущен (libpq подставляет
+`postgres`), в §10.8 стояло зашитое `dbname=postgres`, а `ETL_ODATA_BASE` указывал на шлюз
+ПЕРВОЙ базы :6011. **Чем опровергнуто:** `psql 'host=… user=postgres' -tAc 'select
+current_database()'` → `postgres`; на стенде базы разведены правильно (`postgres` — 103 808
+строк корпуса / 231 сущность, `ut_test` — 623 565 / 1502), то есть исполнение прежней
+редакции «для новой базы» слило бы её таблицы в витрину первой. Этот же класс уже стоил дня
+29.07 (`TEST_SECOND_BASE`, Н-6).*
 
 ### 10.1 Движок SereneDB
 Установить бинарём + systemd — `ubuntu/serenedb/README.md` (loopback :7890, под юзером `serened`, enabled).
@@ -393,8 +427,8 @@ EMBED_DIM=1024                                 # столько отдаёт н�
 CHART_DIR=/home/<botuser>/.openclaw/workspace/charts   # PNG-графики: только из песочницы бота
 MCP_HOST=127.0.0.1
 MCP_PORT=6015
-SERENEDB_DSN='host=127.0.0.1 port=7890 user=serene_ro dbname=postgres'
-RESOLVER_DSN='host=127.0.0.1 port=7890 user=serene_resolver dbname=postgres'
+SERENEDB_DSN='host=127.0.0.1 port=7890 user=serene_ro dbname=<та самая база движка $DB>'
+RESOLVER_DSN='host=127.0.0.1 port=7890 user=serene_resolver dbname=<та же база>'
 PGPASSWORD=<пароль serene_ro>
 RESOLVER_PW=<пароль serene_resolver>
 ODG_GATEWAY_TOKEN=<токен OData-шлюза из §6>
@@ -403,9 +437,9 @@ EOF
 chmod 600 /etc/1c-mcp-reports.env
 
 cat > /etc/1c-serene-sync.env <<EOF        # окружение конвейера (синк + сборка), chmod 600
-ETL_ODATA_BASE=http://127.0.0.1:6011         # читающий OData-шлюз из §6
+ETL_ODATA_BASE=http://127.0.0.1:6021         # читающий OData-шлюз ЭТОЙ базы 1С (§6)
 CSV_DIR=/var/lib/serenedb                    # каталог данных SereneDB (загрузчик пишет CSV сюда)
-SERENEDB_DSN='host=127.0.0.1 port=7890 user=postgres dbname=postgres'   # сборке нужен rw
+SERENEDB_DSN='host=127.0.0.1 port=7890 user=postgres dbname=<база движка $DB>'   # сборке нужен rw
 EOF
 chmod 600 /etc/1c-serene-sync.env
 ```
@@ -426,8 +460,11 @@ chmod 600 /etc/1c-serene-sync.env
 
 ### 10.3 Роли + секреты (идемпотентно, генерируемые пароли)
 ```bash
-cd /opt/1c-mcp-reports && bash setup.sh /etc/1c-mcp-reports.env
+cd /opt/1c-mcp-reports && SERENEDB_DSN="host=127.0.0.1 port=7890 user=postgres dbname=$DB" \
+  bash setup.sh /etc/1c-mcp-reports.env
 ```
+⚠ Без явного `SERENEDB_DSN` `setup.sh` создаст роли в базе `postgres` — то есть в витрине
+ПЕРВОЙ базы 1С, а не в той, которую вы разворачиваете.
 Создаёт `serene_ro` (read-only) + `serene_resolver` (доступ к `resolver_index`; у `serene_ro` отозван) и
 дописывает в env `PGPASSWORD`/`RESOLVER_PW`/`RESOLVER_DSN`/`SERENEDB_DSN`. Пароли рутуются при каждом прогоне
 → после setup перезапусти `1c-mcp-reports`.
@@ -444,8 +481,10 @@ python3 serene_select.py --review          # → serene-entities.txt.review (к�
 
 ### 10.5 Первый синк (загрузка витрины + резолвер)
 ```bash
-export $(grep -E '^(ALIBABA_|ETL_ODATA_BASE|CSV_DIR|EMBED_)' /etc/1c-mcp-reports.env | xargs -d '\n')
-export SERENEDB_DSN='host=127.0.0.1 port=7890 user=postgres'   # загрузка под rw
+export $(grep -E '^(ALIBABA_|EMBED_)' /etc/1c-mcp-reports.env | xargs -d '\n')
+export $(grep -E '^(ETL_ODATA_BASE|CSV_DIR)' /etc/1c-serene-sync.env | xargs -d '\n')
+export ETL_ODATA_BASE=http://127.0.0.1:$GW                       # шлюз ИМЕННО ЭТОЙ базы 1С
+export SERENEDB_DSN="host=127.0.0.1 port=7890 user=postgres dbname=$DB"   # загрузка под rw, dbname ЯВНО
 python3 serene_sync.py
 ```
 
@@ -512,8 +551,8 @@ systemctl restart 1c-mcp-ask
 ```bash
 cd /opt/1c-mcp-reports
 export $(grep -E '^(ALIBABA_|EMBED_|PGPASSWORD|RESOLVER_PW)=' /etc/1c-mcp-reports.env | xargs -d '\n')
-export SERENEDB_DSN='host=127.0.0.1 port=7890 user=serene_ro dbname=postgres'
-export RESOLVER_DSN='host=127.0.0.1 port=7890 user=serene_resolver dbname=postgres'
+export SERENEDB_DSN="host=127.0.0.1 port=7890 user=serene_ro dbname=$DB"
+export RESOLVER_DSN="host=127.0.0.1 port=7890 user=serene_resolver dbname=$DB"
 for t in test_validate test_integrity test_caveat test_ro_role; do python3 $t.py; done   # все PASS
 ./probe.sh "<вопрос по вашим данным>"       # реальный отчёт через весь путь NL→SQL→exec
 ```
