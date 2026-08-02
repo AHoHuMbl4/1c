@@ -773,12 +773,56 @@ sudo -u undebot openclaw models auth paste-api-key --provider deepseek --profile
 
 ### 11.4 verify-плагин (гейт анти-галлюцинаций, КОДОМ)
 ```bash
-cd ubuntu/openclaw/verify-plugin && node test-verify.mjs      # 36 оффлайн-юнитов — все PASS
+cd ubuntu/openclaw/verify-plugin && node test-verify.mjs      # 52 оффлайн-юнита — все PASS
 npm pack --pack-destination /tmp
 sudo -u undebot openclaw plugins install npm-pack:/tmp/openclaw-braine-verify-1.0.0.tgz --force
 # в openclaw.json уже: plugins.allow += "braine-verify"; entries.braine-verify.enabled=true +
 #   hooks.allowConversationAccess=true (иначе хуки к переписке молча не срабатывают)
 ```
+
+### 11.4-бис Смысловой поиск по вики (с 02.08) — на НАШЕМ эмбеддере
+
+Без этого шаг «перефразирование по вики» возвращает пусто почти на каждом живом вопросе
+(буквальный поиск не берёт мешок слов). Разбор — [`HOW_IT_WORKS.md`](HOW_IT_WORKS.md),
+раздел про вики.
+
+```bash
+# 1) ключ эмбеддера — в штатный env-файл шлюза (600, владелец undebot), НЕ в openclaw.json
+printf 'EMBED_API_KEY=%s\n' "$KEY" >> /home/undebot/.openclaw/gateway.systemd.env
+
+# 2) в openclaw.json (пути — те, что принимает схема сборки 2026.7.1-2):
+#    agents.defaults.memorySearch = {
+#      enabled: true, provider: "openai-compatible", model: "<модель эмбеддера>",
+#      remote: { baseUrl: "<адрес>/v1", apiKey: "${EMBED_API_KEY}" },
+#      extraPaths: ["<хранилище вики>/entities"]          # без него индекс пуст: 0/0 файлов
+#    }
+#    plugins.entries."memory-wiki".config.search = { backend: "shared", corpus: "all" }
+
+sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot) systemctl --user restart openclaw-gateway
+EMBED_API_KEY=$KEY sudo -u undebot -H openclaw memory index --force --agent main
+```
+
+🔴 **Три места, где легко ошибиться** (каждое проверено замером 02.08):
+
+- путь настройки — **`agents.defaults.memorySearch`**, а не `memory.search.*` из доков
+  движка: последний схема отвергает (`config validate` → `memory: Invalid input`).
+  Верный путь называет `openclaw doctor`;
+- **`corpus: "all"`**, не `"wiki"`: страницы попадают в индекс как источник `memory`, и с
+  `"wiki"` поиск смотрит не в тот корпус — выдача остаётся пустой;
+- пересборка индекса **обязательна и вручную**: при смене модели движок ставит векторный
+  поиск на паузу и сам не пересобирает.
+
+**Проверка** — только через шлюз или `openclaw memory search`; `openclaw wiki search` из
+CLI остаётся буквальным независимо от настройки и покажет «ничего не изменилось»:
+
+```bash
+EMBED_API_KEY=$KEY sudo -u undebot -H openclaw memory status --deep   # Indexed: N/N, Semantic vectors: ready
+EMBED_API_KEY=$KEY sudo -u undebot -H openclaw memory search "мешок слов из живого вопроса"
+```
+
+⚠ `memory-lancedb` установлен, но **выключен**: команда пересборки индекса принадлежит
+`memory-core` и работает только при его слоте, а у lancedb в этой сборке нет ни `reindex`,
+ни `drop-index`. Пакет остался в `~/.openclaw/npm/projects/`, в контуре не участвует.
 
 ### 11.5 Gateway (systemd user-юнит, reboot-safe)
 ```bash
@@ -815,7 +859,7 @@ bash ubuntu/openclaw/qa/qa-probes.sh                     # приветстви�
 - **ETL прогнан:** 19 сущностей / 44 записи через OData-шлюз → push в KB-репо → oikb «Synced: 20 added» → индексация — ✅.
 - **Бот отвечает по данным 1С:** «Каких контрагентов знаешь?» → «МИ ФНС России по управлению долгом (ИНН 7727406020), Казначейство России» с цитатами — ✅.
 - **SereneDB-аналитика (§10):** витрина загружена (стабильная пагинация + дедуп + исключение папок); NL→SQL под `serene_ro`; валидатор allow-list + резолвер Qwen; тесты `validate/integrity/caveat/ro_role` — ✅. Гейт продакшена — реальные обороты/регистры (`PRODUCTION_PLAN.md §7`).
-- **OpenClaw бот-слой (§11):** движок 2026.7.1-2 под `undebot` (linger); оба MCP (`ask_1c`:6014, `report_1c`:6015, `mcp probe` = 1 tool); verify-плагин (36 юнитов) `enabled`, гейт на РЕАЛЬНОЙ Telegram-доставке: обоснованное число → прошло, выдуманное → заменено/срезано — ✅.
+- **OpenClaw бот-слой (§11):** движок 2026.7.1-2 под `undebot` (linger); оба MCP (`ask_1c`:6014, `report_1c`:6015, `mcp probe` = 1 tool); verify-плагин (52 юнита) `enabled`, гейт на РЕАЛЬНОЙ Telegram-доставке: обоснованное число → прошло, выдуманное → заменено/срезано — ✅.
 - Zero-touch: все system-сервисы enabled; OpenClaw user-юнит + linger; IIS Automatic — ✅.
 - **Повторная проверка Windows-канала (2026-07-24, read-only):** W3SVC Running/Automatic; опубликована
   `buh_test`, `standardOdata enable=true` (poolSize 10); платформа 8.3.27.1786; AppPool 32-bit=True; данные
