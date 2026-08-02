@@ -62,11 +62,18 @@ IFS=',' read -r -a HOSTS <<< "${EMBED_HOSTS:-${EMBED_HOST:-}}"
 [ -n "${EMBED_MODEL:-}" ] || { echo "не задан EMBED_MODEL (модель эмбеддера)" >&2; exit 1; }
 umask 077
 SEC=$(mktemp); LIST=""
-# Секретов столько, сколько пар «адрес × ключ»: у своего контура ключ обычно один, а
-# адресов столько, сколько карт.
+# 🔴 У КАЖДОГО АДРЕСА МОЖЕТ БЫТЬ СВОЙ КЛЮЧ. Запись `EMBED_HOSTS` — «адрес» или
+# «адрес|ключ»: карты бывают на разных арендованных машинах, и общий ключ там не работает.
+# Без своего ключа берётся общий (`EMBED_API_KEYS`), и тогда получается прежнее поведение
+# «все адреса × все ключи».
 PAIRS=()
 for h in "${HOSTS[@]}"; do
-  for k0 in "${KEYS[@]}"; do PAIRS+=("$(printf '%s|%s' "$(printf '%s' "$h" | tr -d ' ')" "$(printf '%s' "$k0" | tr -d ' ')")"); done
+  h="$(printf '%s' "$h" | tr -d ' ')"
+  [ -z "$h" ] && continue
+  case "$h" in
+    *"|"*) PAIRS+=("${h%%|*}|${h#*|}") ;;
+    *)     for k0 in "${KEYS[@]}"; do PAIRS+=("$h|$(printf '%s' "$k0" | tr -d ' ')"); done ;;
+  esac
 done
 for i in "${!PAIRS[@]}"; do
   h="${PAIRS[$i]%%|*}"; k="${PAIRS[$i]#*|}"
