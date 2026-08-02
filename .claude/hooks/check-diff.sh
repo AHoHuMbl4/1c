@@ -14,11 +14,11 @@ set -uo pipefail
 
 # Хук навешен на Bash целиком: отбор команды делаем здесь, чтобы не зависеть от
 # того, поддерживается ли поле `if` в этой сборке.
-CMD=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("tool_input") or {}).get("command") or "")' 2>/dev/null)
-case "$CMD" in
-  *"git commit"*) ;;
-  *) echo '{}'; exit 0 ;;
-esac
+. "$(dirname "${BASH_SOURCE[0]}")/lib-hooks.sh"
+CMD=$(hook_command)
+# Опознаватель общий на все хуки (`lib-hooks.sh`): подстрока «git commit» пропускала
+# равнозначные формы вроде `git -C /srv/1c commit` (`F248`).
+is_git_commit "$CMD" || { echo '{}'; exit 0; }
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 0
 

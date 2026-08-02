@@ -17,8 +17,35 @@ import sys
 import time
 import urllib.request
 
-DSN = "host=127.0.0.1 port=7890 user=postgres dbname=postgres"
-URL = "http://127.0.0.1:8091/ask"
+# 🔴 НАБОР ПРИВЯЗАН К ИМЕНОВАННОЙ БАЗЕ, а не к одному юниту. 02.08 сервис ответов стал
+# шаблонным (`1c-serene-ask@<база>`) с побазовым `/etc/1c-serene-ask-<база>.env`, и прежняя
+# редакция этого не знала: она писала `ASK_SCORER` в ОБЩИЙ env (где его перекрывает
+# побазовый — то есть замер молча мерил неизменённый скорер) и рестартовала нешаблонный
+# юнит, чей порт держит уже поднятый экземпляр. Прогон либо падал, либо врал.
+BASE = os.environ.get("AB_BASE", "postgres")
+ENV_FILE = "/etc/1c-serene-ask-%s.env" % BASE
+UNIT = "1c-serene-ask@%s.service" % BASE
+# Общий env: там лежит только то, что одинаково для всех баз (`ASK_TOKEN`).
+ENV_COMMON = "/etc/1c-serene-ask.env"
+
+
+def env_value(key, *paths):
+    """Значение настройки. Побазовый файл сильнее общего — тот же порядок, что в юните."""
+    out = ""
+    for p in paths:
+        try:
+            for line in open(p, encoding="utf-8"):
+                if line.startswith(key + "="):
+                    out = line.split("=", 1)[1].strip()
+        except OSError:
+            continue
+    return out
+
+
+DSN = os.environ.get(
+    "AB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=%s" % BASE)
+URL = "http://127.0.0.1:%s/ask" % (
+    env_value("ASK_LISTEN_PORT", ENV_COMMON, ENV_FILE) or "8091")
 # Шесть штатных моделей ранжирования движка. Седьмая, indri_dirichlet, исключена
 # замером: в нашей сборке она в этой форме запроса молча отдаёт ноль строк.
 # Список сужается окружением: правка, которая модель ранжирования не трогает (вес поля,
@@ -68,14 +95,7 @@ def truth(sql):
     return (p.stdout or "").strip()
 
 
-def token(path="/etc/1c-serene-ask.env"):
-    for line in open(path, encoding="utf-8"):
-        if line.startswith("ASK_TOKEN="):
-            return line.split("=", 1)[1].strip()
-    return ""
-
-
-TOK = token()
+TOK = env_value("ASK_TOKEN", ENV_COMMON, ENV_FILE)
 
 
 def ask(q):
@@ -105,51 +125,87 @@ def digits(text):
 
 
 def restart(scorer):
-    conf = "/etc/1c-serene-ask.env"
-    lines = [l for l in open(conf, encoding="utf-8") if not l.startswith("ASK_SCORER=")]
+    """Сменить функцию ранжирования у сервиса ИМЕНОВАННОЙ базы и перезапустить его.
+
+    Пишем в побазовый env: он последний в списке `EnvironmentFile` юнита, то есть
+    перекрывает общий. Запись в общий не имела бы никакого действия — и не имела.
+    """
+    lines = [l for l in open(ENV_FILE, encoding="utf-8") if not l.startswith("ASK_SCORER=")]
     lines.append("ASK_SCORER=%s\n" % scorer)
-    open(conf, "w", encoding="utf-8").writelines(lines)
-    subprocess.run(["systemctl", "restart", "1c-serene-ask.service"], check=True)
+    open(ENV_FILE, "w", encoding="utf-8").writelines(lines)
+    subprocess.run(["systemctl", "restart", UNIT], check=True)
     time.sleep(4)
 
 
 def main():
+    print("база %s, сервис %s, %s" % (BASE, URL, UNIT))
     gold = [(q, truth(sql)) for q, sql in GOLD]
     print("эталоны: " + ", ".join("%s" % t for _q, t in gold))
+    # 🔴 Эталон, который не посчитался, — это молчащий прогон: сравнивать не с чем, и
+    # «верных 0 из 8» означало бы не качество ответов, а неработающий psql.
+    blind = [q for q, t in gold if not t]
+    if blind:
+        sys.stderr.write("эталон не посчитан у %d вопросов: %s\n"
+                         % (len(blind), "; ".join(q[:40] for q in blind[:3])))
+        return None
     table = {}
     for sc in SCORERS:
         restart(sc)
-        hits, secs, rows = 0, 0.0, []
+        hits, secs, rows, errs = 0, 0.0, [], 0
         for q, want in gold:
             d, sec = ask(q)
             text = d.get("text") or ""
-            claims = (d.get("diag") or {}).get("claims") or {}
+            diag = d.get("diag") or {}
+            if diag.get("error"):
+                errs += 1
+            claims = diag.get("claims") or {}
             got = digits(text) | {re.sub(r"\D", "", str(v)) for v in claims.values()
                                   if v is not None}
             ok = re.sub(r"\D", "", want) in got
             hits += 1 if ok else 0
             secs += sec
-            rows.append((q, ok, (d.get("diag") or {}).get("focus"), sec))
-        table[sc] = (hits, round(secs / len(gold), 2), rows)
-        print("\n== %s: верных %d/%d, средняя %.2f с" % (sc, hits, len(gold), secs / len(gold)))
+            rows.append((q, ok, diag.get("focus"), sec))
+        table[sc] = (hits, round(secs / len(gold), 2), rows, errs)
+        print("\n== %s: верных %d/%d, средняя %.2f с%s"
+              % (sc, hits, len(gold), secs / len(gold),
+                 ", СБОЕВ %d" % errs if errs else ""))
         for q, ok, focus, sec in rows:
             print("   %s %-46s %-38s %.1fс" % ("+" if ok else "-", q[:46], (focus or "—")[:38], sec))
 
     print("\n" + "=" * 62)
     best = max(table.items(), key=lambda kv: (kv[1][0], -kv[1][1]))
-    for sc, (hits, avg, _r) in table.items():
-        print("  %-9s верных %d/%d  средняя %.2f с%s"
-              % (sc, hits, len(gold), avg, "   <= лучший" if sc == best[0] else ""))
-    # Отметка о прогоне: по ней хук перед выкатом понимает, был ли замер ПОСЛЕ
-    # последней правки исходников. Ставится только реальным прогоном, не руками.
+    for sc, (hits, avg, _r, errs) in table.items():
+        print("  %-9s верных %d/%d  средняя %.2f с%s%s"
+              % (sc, hits, len(gold), avg, "  сбоев %d" % errs if errs else "",
+                 "   <= лучший" if sc == best[0] else ""))
+
+    # 🔴 ОТМЕТКА СТАВИТСЯ ТОЛЬКО ЗА СОСТОЯВШИЙСЯ ЗАМЕР (`№4`, `F172`). Прежде она
+    # писалась безусловно, в самом конце, — и хук «замер до выката» закрывался прогоном,
+    # где сервис не отвечал вовсе, а верных было 0 из 8. Гейт, засчитывающий провальный
+    # прогон, замером не является (п. 11 контракта).
+    #
+    # «Состоялся» — это ни одного сбоя обращения и хоть один верный ответ. Порог качества
+    # тут намеренно не ставится: решать «выкатывать ли при 6/8» — не дело отметки, это
+    # видно в её тексте и в выводе выше.
+    hits, _avg, _rows, errs = best[1]
+    if errs or not hits:
+        sys.stderr.write(
+            "\n🔴 отметка .golden-last-run НЕ поставлена: сбоев %d, верных %d из %d.\n"
+            "   Это не замер, а неудавшийся прогон — хук перед выкатом обязан спросить.\n"
+            % (errs, hits, len(gold)))
+        return None
     try:
         root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
         open(os.path.join(root, ".claude", ".golden-last-run"), "w").write(
-            "%s %d/%d\n" % (best[0], best[1][0], len(gold)))
-    except Exception:                            # noqa: BLE001
-        pass
+            "%s %s %d/%d\n" % (BASE, best[0], hits, len(gold)))
+    except Exception as e:                       # noqa: BLE001
+        sys.stderr.write("отметку записать не удалось: %s\n" % e)
+        return None
     return best[0]
 
 
 if __name__ == "__main__":
-    sys.exit(0 if main() else 0)
+    # 🔴 Код возврата ведём от РЕЗУЛЬТАТА (`№4`). Прежде здесь стояло `0 if main() else 0`
+    # — то есть успех при любом исходе, включая молчащий сервис. Всё, что смотрит на код
+    # возврата (руки, юниты, хуки), считало неудавшийся прогон удавшимся.
+    sys.exit(0 if main() else 1)

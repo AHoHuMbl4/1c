@@ -10,11 +10,13 @@
 # который трогает файл .claude/.golden-last-run.
 set -uo pipefail
 
-CMD=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("tool_input") or {}).get("command") or "")' 2>/dev/null)
-case "$CMD" in
-  scp\ *|*"scp -i"*|*"rsync "*) ;;
-  *) echo '{}'; exit 0 ;;
-esac
+. "$(dirname "${BASH_SOURCE[0]}")/lib-hooks.sh"
+CMD=$(hook_command)
+# 🔴 Было `scp`/`rsync` — то есть выкат на ДРУГУЮ машину (`F133`, `№14`). Наш выкат
+# местный: `deploy.sh` в `/opt/1c-mcp-reports`, `deploy_instance.sh` в рабочую папку бота,
+# плюс правки прямо в `/opt`. Правило «замер до выката» не срабатывало ни разу на том
+# способе, которым мы выкатываем на самом деле.
+is_deploy "$CMD" || { echo '{}'; exit 0; }
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 0
 

@@ -9,11 +9,11 @@
 # Не блокирует, а выносит решение владельцу — как и остальные снайперы.
 set -uo pipefail
 
-CMD=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("tool_input") or {}).get("command") or "")' 2>/dev/null)
-case "$CMD" in
-  *"git commit"*) ;;
-  *) echo '{}'; exit 0 ;;
-esac
+. "$(dirname "${BASH_SOURCE[0]}")/lib-hooks.sh"
+CMD=$(hook_command)
+# Опознаватель общий на все хуки (`lib-hooks.sh`): подстрока «git commit» пропускала
+# равнозначные формы вроде `git -C /srv/1c commit` (`F248`).
+is_git_commit "$CMD" || { echo '{}'; exit 0; }
 
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo .)" || exit 0
 
@@ -26,6 +26,47 @@ CODE=$(printf '%s\n' "$STAGED" | grep -v '^memory_bank/' \
 DOCS=$(printf '%s\n' "$STAGED" | grep -E '\.md$' || true)
 
 LOG=".claude/hooks.log"
+
+# 🔴 ОБРАТНАЯ ПРОВЕРКА (`№13`, `F122`): документы, уехавшие ВПЕРЁД кода. Прежде хук ловил
+# только «код без документов», а зеркальный случай проходил молча — именно так 30.07
+# `CHANGELOG` и `progress` описали код, которого в git не было. Ищем в добавленных строках
+# упоминания файлов репозитория и проверяем, что они существуют хоть где-то: в рабочем
+# дереве, в индексе или в HEAD. Документ вправе говорить и о прошлом — поэтому спрашиваем,
+# а не запрещаем.
+if [ -z "$CODE" ] && [ -n "$DOCS" ]; then
+  GHOSTS=$(git diff --cached -U0 -- '*.md' 2>/dev/null \
+    | grep '^+' | grep -v '^+++' \
+    | grep -oE '(ubuntu|work|windows|docs|memory_bank|\.claude)/[A-Za-z0-9_@./-]+\.(py|sh|sql|js|mjs|ts|service|timer|tsv|ps1|cs|json)' \
+    | sort -u \
+    | while read -r p; do
+        [ -e "$p" ] && continue
+        git cat-file -e ":$p" 2>/dev/null && continue
+        git cat-file -e "HEAD:$p" 2>/dev/null && continue
+        echo "$p"
+      done)
+  if [ -n "$GHOSTS" ]; then
+    echo "$(date '+%d.%m %H:%M:%S') check-docs  ASK: документы про несуществующий код" >> "$LOG" 2>/dev/null || true
+    python3 - "$(printf '%s\n' "$GHOSTS" | head -10)" <<'PY'
+import json, sys
+print(json.dumps({"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason":
+        "В коммите одни документы, и они называют файлы, которых нет ни в рабочем "
+        "дереве, ни в индексе, ни в HEAD:\n\n"
+        + sys.argv[1]
+        + "\n\nЛибо код забыли добавить в коммит (`git add`), либо документ описывает "
+          "то, чего ещё нет, — и тогда он врёт с первой минуты. Устаревший документ "
+          "хуже отсутствующего: отсутствующий заставляет посмотреть в код, а "
+          "устаревший уверенно врёт (CLAUDE.md).\n"
+          "Если документ намеренно говорит о прошлом (разбор «было ошибочно», история "
+          "в progress.md) — подтвердите."}},
+    ensure_ascii=False))
+PY
+    exit 0
+  fi
+fi
+
 if [ -z "$CODE" ] || [ -n "$DOCS" ]; then
   echo "$(date '+%d.%m %H:%M:%S') check-docs  тихо (коммит в порядке)" >> "$LOG" 2>/dev/null || true
   echo '{}'; exit 0
