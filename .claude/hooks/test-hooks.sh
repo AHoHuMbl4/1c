@@ -162,6 +162,43 @@ gate block 'упавшая проверка = не пройденная, а не
 cp "$TMP/cd-gate.bak" .claude/hooks/check-docs.sh
 cd "$TMP" || exit 1
 
+# --- правило в промте (check-prompt-rules.sh) ------------------------------------
+# 🔴 Первая редакция этого хука читала событие из stdin внутри `python3 - <<'PY'`, а
+# heredoc сам занимает stdin — питон разбирал как событие текст собственной программы.
+# Хук при этом НЕ падал: он молча печатал `{}` на любой вход, то есть был fail-open и не
+# поймал бы ничего. Нашла это проба, а не чтение кода — поэтому она здесь.
+echo
+echo '== правило, вписанное в промт =='
+PR="$HOOKS/check-prompt-rules.sh"
+SAMPLE="$TMP/prompt-sample.py"
+printf '%s\n' '# Комментарий: разделитель обязателен всегда.' \
+              'ANSWER_SYS = """You answer questions.' \
+              'Use the figures as they are.' \
+              '"""' \
+              'x = 1' > "$SAMPLE"
+
+pr_case() { # pr_case <ждём ask|pass> <json события> <название>
+  local want="$1" ev="$2" name="$3" out
+  out=$(printf '%s' "$ev" | bash "$PR" 2>/dev/null)
+  case "$out" in
+    *'"permissionDecision": "ask"'*) if [ "$want" = ask ]; then say 0 "$name"; else say 1 "$name"; fi ;;
+    *) if [ "$want" = pass ]; then say 0 "$name"; else say 1 "$name"; fi ;;
+  esac
+}
+
+pr_case ask "$(python3 -c 'import json;print(json.dumps({"tool_input":{"file_path":"/x/ubuntu/openclaw/instance/AGENTS.md","new_string":"Ты обязан всегда звать ask_1c перед ответом.","old_string":""}}))')" \
+  'правило в персону бота — останавливает'
+pr_case ask "$(python3 -c 'import json,sys;print(json.dumps({"tool_input":{"file_path":sys.argv[1],"new_string":"ANSWER_SYS = \"\"\"You answer questions.\nYou must always call the tool.\n\"\"\"","old_string":"ANSWER_SYS = \"\"\"You answer questions.\nUse the figures as they are.\n\"\"\""}}))' "$SAMPLE")" \
+  'правило в строковый литерал питона — останавливает (разбор, не догадка)'
+pr_case pass "$(python3 -c 'import json,sys;print(json.dumps({"tool_input":{"file_path":sys.argv[1],"new_string":"# Разделитель равенства обязателен всегда.\nx = 1","old_string":"x = 1"}}))' "$SAMPLE")" \
+  'то же слово в КОММЕНТАРИИ — пропускает (нет ложных срабатываний)'
+pr_case pass "$(python3 -c 'import json,sys;print(json.dumps({"tool_input":{"file_path":sys.argv[1],"new_string":"x = 2","old_string":"x = 1"}}))' "$SAMPLE")" \
+  'обычная правка кода — пропускает'
+pr_case ask "$(python3 -c 'import json;print(json.dumps({"tool_input":{"file_path":"/x/verify-plugin/index.js","new_string":"      instruction: \"You must call the data tool before answering.\",","old_string":""}}))')" \
+  'правило в поле instruction (текст уходит модели) — останавливает'
+pr_case pass "$(python3 -c 'import json;print(json.dumps({"tool_input":{"file_path":"/x/docs/HOW_NOT_TO.md","new_string":"Правило: разделитель равенства обязателен всегда.","old_string":""}}))')" \
+  'правило в ДОКУМЕНТ — пропускает: документы для людей, а не для модели'
+
 echo
 if [ "$FAILED" != 0 ]; then echo "🔴 ПРОВАЛОВ: $FAILED"; exit 1; fi
 echo 'Хуки прошли пробу полностью.'
