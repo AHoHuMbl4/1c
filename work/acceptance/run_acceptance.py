@@ -245,9 +245,32 @@ def verdict(case, obs):
 
 # ---------------------------------------------------------------- работа с ботом
 
+# 🔴 НАСТОЯЩАЯ ДОСТАВКА — ЕДИНСТВЕННЫЙ СПОСОБ ПОМЕРИТЬ ТО, ЧТО ПОЛУЧАЕТ КЛИЕНТ.
+# Хуки, умеющие ЗАМЕНИТЬ необоснованное число готовым ответом, живут только на пути
+# доставки в канал (`techContext` Ловушка 39); `openclaw agent` без `--deliver` их не
+# зовёт. Поэтому доставка — переключатель прогонщика, а не правка кода под наш стенд:
+# канал и адресат задаются окружением, в коде их нет (девиз: никакой привязки к базе и
+# к конкретной установке).
+DELIVER = os.environ.get('ACCEPTANCE_DELIVER', '0') == '1'
+REPLY_CHANNEL = os.environ.get('ACCEPTANCE_REPLY_CHANNEL') or ''
+REPLY_TO = os.environ.get('ACCEPTANCE_REPLY_TO') or ''
+
+
+def deliver_args():
+    """Аргументы доставки. Пусто, если доставка выключена."""
+    if not DELIVER:
+        return []
+    a = ['--deliver']
+    if REPLY_CHANNEL:
+        a += ['--reply-channel', REPLY_CHANNEL]
+    if REPLY_TO:
+        a += ['--reply-to', REPLY_TO]
+    return a
+
+
 def ask_bot(q, key, run):
     p = subprocess.run(['sudo', '-u', BOT_USER, '-H', 'timeout', '400',
-                        'openclaw', 'agent', '--agent', AGENT,
+                        'openclaw', 'agent', '--agent', AGENT] + deliver_args() + [
                         # 🔴 СВОЯ СЕССИЯ НА КАЖДЫЙ ПРОГОН. Прежде ключ был 'acc-<номер>' и
                         # повторялся между заходами: бот ПОМНИЛ прошлый ответ и говорил
                         # «цифры те же, что и полчаса назад» — то есть я мерил не работу
