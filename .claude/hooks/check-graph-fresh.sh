@@ -25,7 +25,7 @@ GRAPH="memory_bank/mcp-memory.json"
 STAGED="${STAGED_OVERRIDE:-$(git diff --cached --name-status 2>/dev/null)}"
 [ -z "$STAGED" ] && { echo '{}'; exit 0; }
 
-STAGED="$STAGED" python3 - "$GRAPH" <<'PY'
+STAGED="$STAGED" python3 - "$GRAPH" <<'PY' | hook_gate_json check-graph-fresh
 import json, os, sys, time
 
 def log(msg):
@@ -143,7 +143,7 @@ tail = ("\n\nПравило CLAUDE.md: создал, удалил или изм�
         "Зависимости и поведение правда не менялись (опечатка, комментарий) — подтвердите коммит.")
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
+    "permissionDecision": "deny",
     "permissionDecisionReason": "\n\n".join(msg) + tail}},
     ensure_ascii=False))
 PY

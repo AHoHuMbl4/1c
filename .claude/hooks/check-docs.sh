@@ -48,11 +48,11 @@ if [ -z "$CODE" ] && [ -n "$DOCS" ]; then
       done)
   if [ -n "$GHOSTS" ]; then
     echo "$(date '+%d.%m %H:%M:%S') check-docs  ASK: документы про несуществующий код" >> "$LOG" 2>/dev/null || true
-    python3 - "$(printf '%s\n' "$GHOSTS" | head -10)" <<'PY'
+    python3 - "$(printf '%s\n' "$GHOSTS" | head -10)" <<'PY' | hook_gate_json check-docs
 import json, sys
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
+    "permissionDecision": "deny",
     "permissionDecisionReason":
         "В коммите одни документы, и они называют файлы, которых нет ни в рабочем "
         "дереве, ни в индексе, ни в HEAD:\n\n"
@@ -75,11 +75,11 @@ if [ -z "$CODE" ] || [ -n "$DOCS" ]; then
 fi
 echo "$(date '+%d.%m %H:%M:%S') check-docs  ASK: код без документов" >> "$LOG" 2>/dev/null || true
 
-python3 - "$(printf '%s\n' "$CODE" | head -10)" <<'PY'
+python3 - "$(printf '%s\n' "$CODE" | head -10)" <<'PY' | hook_gate_json check-docs
 import json, sys
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
+    "permissionDecision": "deny",
     "permissionDecisionReason":
         "В коммите есть код, но нет ни одного документа:\n\n"
         + sys.argv[1]

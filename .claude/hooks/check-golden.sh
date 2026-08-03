@@ -39,11 +39,11 @@ else
   echo '{}'; exit 0
 fi
 
-python3 - "$REASON" <<'PY'
+python3 - "$REASON" <<'PY' | hook_gate_json check-golden
 import json, sys
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
+    "permissionDecision": "deny",
     "permissionDecisionReason": sys.argv[1]
         + "\n\nПрогнать: python3 ubuntu/serenedb/ab_scorer.py (или отметить "
           "touch .claude/.golden-last-run, если замер сделан иначе)."}},

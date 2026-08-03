@@ -56,11 +56,11 @@ PROMPT=$(printf '%s\n' "$CODE" | grep -icE 'never |always |do not |не выду
 
 if [ -z "$FINDINGS" ]; then echo '{}'; exit 0; fi
 
-python3 - "$FINDINGS" <<'PY'
+python3 - "$FINDINGS" <<'PY' | hook_gate_json check-diff
 import json, sys
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
+    "permissionDecision": "deny",
     "permissionDecisionReason": "Проверка коммита нашла возможную подгонку под нашу базу:\n\n"
                                + sys.argv[1]
                                + "\nЕсли обосновано — подтвердите; если нет — правьте до коммита."}},

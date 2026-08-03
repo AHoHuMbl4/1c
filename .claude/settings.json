@@ -32,6 +32,12 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/hooks/check-gates.sh\"",
+            "timeout": 15,
+            "statusMessage": "Проверка: гейты не разоружены"
+          },
+          {
+            "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/hooks/check-sql-docs.sh\"",
             "timeout": 15,
             "statusMessage": "Проверка: SQL в коммите — назван раздел доков"

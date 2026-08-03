@@ -1,1 +1,0 @@
-{"schema_version":"guardrail-fire.v1","ts":"2026-08-03T21:47:40Z","host":"claude","tool":"Bash","rule_id":"R10:no-git-bypass-flags","decision":"deny","command_sha256":"62bb77086f9e05ce5d1e31bffbeb424db0931b852cb3c1bbec91f1af8a701224","command_len":1906}

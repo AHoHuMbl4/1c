@@ -40,14 +40,195 @@ cd_repo() {
   cd "$r" || return 1
 }
 
-# Вынести решение владельцу (единственная форма ответа, которой хуки останавливают шаг).
-hook_ask() {
+# Запись в общий журнал хуков. Обход обязан оставлять след — иначе он неотличим от
+# исполненного правила.
+hook_log() {
+  local root
+  root="$(hook_repo_root)" || return 0
+  printf '%s %-11s %s\n' "$(date '+%d.%m %H:%M:%S')" "$1" "$2" >> "$root/.claude/hooks.log" 2>/dev/null || true
+}
+
+# 🔴 ОСТАНОВКА, А НЕ ВОПРОС (03.08). Единственной формой ответа был `permissionDecision:
+# "ask"` — «вынести решение владельцу». Замер показал, что в сессии, где вопрос никому не
+# показывается (фоновая, автономная, дочерняя), `ask` равен разрешению: правка
+# `work/_hook_probe.py` со строкой «Ты обязан всегда звать инструмент ask_1c» внутри
+# питоновского литерала прошла МОЛЧА, притом что тот же хук, вызванный руками на тех же
+# данных, выдаёт остановку. Девять хуков отдавали `ask`, `deny` — ни один: все гейты
+# держались на том, что кто-то прочитает вопрос. Это и есть «правило на пожелании»,
+# которое в этом проекте запрещено (CLAUDE.md).
+#
+# `deny` отменяет сам вызов инструмента, и режим сессии на это не влияет. Законный выход
+# остаётся, но он ЯВНЫЙ и со следом — hook_override_take ниже.
+hook_deny() {
   python3 - "$1" <<'PY'
 import json, sys
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
+    "permissionDecision": "deny",
     "permissionDecisionReason": sys.argv[1]}}, ensure_ascii=False))
+PY
+}
+
+# Прежнее имя сохранено ради вызовов внутри хуков, но означает теперь ОСТАНОВКУ с люком.
+# Отдельной мягкой формы в наборе нет намеренно: мягкая форма и была дефектом.
+hook_ask() { hook_stop "$(basename "$0" .sh)" "$1"; }
+
+# 🔴 АВАРИЙНЫЙ ЛЮК — ОДНОРАЗОВЫЙ И СО СЛЕДОМ. Без люка гейт, ошибившийся на живой работе,
+# останавливает её насовсем — и тогда его снимают целиком, теряя правило.
+# Форма: строка «<имя-гейта> <причина>» в `.claude/state/override.txt`. Строка
+# ПОТРЕБЛЯЕТСЯ (люк не остаётся открытым), причина уходит в `.claude/hooks.log`, а гейт
+# коммита не пропускает коммит, пока файл люка не пуст, — значит обход нельзя увезти в
+# историю молча.
+# 🔴 Имя гейта сверяется ПЕРВЫМ ПОЛЕМ на точное равенство, а не образцом: имя, попавшее в
+# регулярное выражение, открыло бы люк соседнего гейта.
+# 🔴 Строка потребляется без оглядки на код возврата фильтра: первая редакция писала
+# `grep -v … > tmp && mv`, и на файле ИЗ ОДНОЙ СТРОКИ grep возвращал 1, `mv` не выполнялся —
+# люк оставался открытым навсегда, а в журнал уже уходило «потреблён». Одноразовость,
+# которая не срабатывает ровно в самом частом случае, — это не одноразовость.
+hook_override_take() {
+  local gate="$1" root f line
+  root="$(hook_repo_root)" || return 1
+  f="$root/.claude/state/override.txt"
+  [ -f "$f" ] || return 1
+  line="$(awk -v g="$gate" '$1==g {print; exit}' "$f" 2>/dev/null)"
+  [ -n "$line" ] || return 1
+  awk -v g="$gate" 'BEGIN{done=0} { if (!done && $1==g) { done=1; next } print }' "$f" > "$f.tmp" 2>/dev/null \
+    || { rm -f "$f.tmp"; return 1; }
+  mv "$f.tmp" "$f"
+  hook_log "$gate" "ОБХОД ЛЮКОМ: $line"
+  return 0
+}
+
+# 🔴 ГЕЙТЫ СТОРОЖАТ ДРУГ ДРУГА. Печатает список нарушений (пусто = защита цела).
+# Зачем: правило держится кодом лишь до тех пор, пока код на месте. Снять хук из
+# `settings.json`, вернуть вердикт `ask`, убрать `core.hooksPath`, выпотрошить обёртку
+# `pre-commit` — четыре способа разоружить всё за одну правку, каждый из которых выглядит
+# как обычная работа. Проверяется СОСТОЯНИЕ, а не дифф: неважно, кто и когда снял защиту.
+#
+# Разделение труда: сам этот набор лежит в `.claude/hooks/` (среда не даёт писать туда
+# даже из оболочки), а беззащитная обёртка `.githooks/pre-commit` сведена к одной строке
+# вызова и сверяется отсюда.
+GATES_REQUIRED="check-docs check-graph-fresh check-active-size check-sql-docs check-diff check-prompt-rules check-golden check-gates"
+hook_guard_armed() {
+  local root out=""
+  root="$(hook_repo_root)" || { printf '%s' "Каталог репозитория не определён — проверить защиту нечем."; return 0; }
+
+  local hp
+  hp="$(git -C "$root" config core.hooksPath 2>/dev/null)"
+  [ "$hp" = ".githooks" ] || out="${out}  core.hooksPath = «${hp:-не задан}», а должен быть .githooks — гейт коммита не зовётся вовсе.
+"
+
+  local w="$root/.githooks/pre-commit"
+  if [ ! -x "$w" ]; then
+    out="${out}  .githooks/pre-commit отсутствует или не исполняем.
+"
+  else
+    # Обёртка обязана быть ТОНКОЙ: ровно один вызов защищённого файла и ничего больше.
+    # Так порча обёртки становится видимой, а не превращается в тихое «гейт ничего не делает».
+    local body cnt
+    body="$(grep -vE '^[[:space:]]*(#|$)' "$w")"
+    cnt="$(printf '%s\n' "$body" | grep -vcE '^[[:space:]]*(set|cd|exec)?[[:space:]]*.*git-gate\.sh|^[[:space:]]*set[[:space:]]')"
+    printf '%s' "$body" | grep -q 'git-gate\.sh' \
+      || out="${out}  .githooks/pre-commit не зовёт .claude/hooks/git-gate.sh — гейт выпотрошен.
+"
+    [ "${cnt:-0}" -le 1 ] || out="${out}  .githooks/pre-commit перестал быть тонкой обёрткой (${cnt} посторонних команд): логика обязана жить в защищённом .claude/hooks/git-gate.sh.
+"
+  fi
+
+  local g
+  for g in $GATES_REQUIRED; do
+    [ -x "$root/.claude/hooks/$g.sh" ] || { out="${out}  гейт $g.sh отсутствует или не исполняем.
+"; continue; }
+    grep -q "$g" "$root/.claude/settings.json" 2>/dev/null \
+      || out="${out}  гейт $g не подключён в .claude/settings.json — в сессии он не зовётся.
+"
+  done
+
+  # Вердикт `ask` в сессии, где вопрос никому не показывают, равен разрешению (замер 03.08).
+  # Смотрим только на САМИ ГЕЙТЫ: проба `test-hooks.sh` обязана называть оба вердикта, и
+  # проверка «ищем слово ask в каталоге» записывала её в разоружённые — ложное срабатывание
+  # на собственном приборе.
+  local soft f
+  soft=""
+  for f in $GATES_REQUIRED lib-hooks; do
+    [ -f "$root/.claude/hooks/$f.sh" ] || continue
+    grep -q '"permissionDecision": *"ask"' "$root/.claude/hooks/$f.sh" 2>/dev/null && soft="$soft $f.sh"
+  done
+  [ -z "$soft" ] || out="${out}  вердикт понижен до «ask» (равен разрешению в фоновой сессии): $soft
+"
+
+  printf '%s' "$out"
+}
+
+# Одинаковый текст выхода во всех остановках: выход обязан быть известен, иначе гейт
+# снимают целиком.
+hook_override_hint() {
+  printf '%s' "Проверка ошибается? Люк на один раз (потребляется, пишется в журнал):
+  echo '$1 <причина>' >> .claude/state/override.txt
+Пока файл люка не пуст, гейт коммита коммит не пропустит."
+}
+
+# Остановка с уже подшитым выходом — этой формой пользуются все гейты.
+hook_stop() {  # $1 — имя гейта, $2 — причина
+  if hook_override_take "$1"; then echo '{}'; return 0; fi
+  hook_log "$1" "СТОП"
+  hook_deny "$2
+
+$(hook_override_hint "$1")"
+}
+
+# 🔴 ЕДИНАЯ ТОЧКА ВЫХОДА ДЛЯ ГЕЙТОВ, СОБИРАЮЩИХ ОТВЕТ ВНУТРИ PYTHON. Половина хуков
+# печатала json сама, и правка формы ответа в одном месте их бы не задела — ровно тот
+# дефект разъехавшихся копий, ради которого заводился `lib-hooks.sh` (F248). Теперь вывод
+# python-части идёт через эту воронку: она проверяет люк, переводит решение в `deny` и
+# подшивает выход.
+#
+# 🔴 Три случая различаются РАЗБОРОМ, а не поиском подстроки:
+#   решения нет  → пропуск (ответ отдаётся как есть);
+#   решение есть → люк или `deny`;
+#   ответ пуст или не разбирается → тоже `deny`. Это главное: упавшая python-часть
+#   (traceback, пустой вывод, обрыв) прежде уходила бы в движок как «нет решения», и
+#   вызов проходил бы БЕЗ ПРОВЕРКИ. Упавшая проверка — не пройденная проверка; то же
+#   правило уже стоит в гейте коммита.
+hook_gate_json() {  # $1 — имя гейта; на stdin — json от python-части
+  local gate="${1:-}" payload rc
+  payload="$(cat)"
+  if [ -z "$gate" ]; then
+    hook_deny "Гейт вызван без имени — проверка не выполнена, и люка у безымянного гейта быть не может. Почини вызов hook_gate_json."
+    return 0
+  fi
+  PAYLOAD="$payload" python3 -c '
+import json, os, sys
+p = (os.environ.get("PAYLOAD") or "").strip()
+if not p:
+    sys.exit(2)
+try:
+    d = json.loads(p)
+except Exception:
+    sys.exit(2)
+h = d.get("hookSpecificOutput") or {}
+sys.exit(1 if h.get("permissionDecision") else 0)' 2>/dev/null
+  rc=$?
+  case "$rc" in
+    0) printf '%s' "$payload"; return 0 ;;
+    2) hook_log "$gate" "СБОЙ: ответ пуст или не разбирается"
+       hook_deny "Гейт $gate не отработал: его проверка отдала пустой или неразбираемый ответ.
+Пропускать молча нельзя — это fail-open, которым гейты и были бесполезны.
+
+$(hook_override_hint "$gate")"
+       return 0 ;;
+  esac
+  if hook_override_take "$gate"; then echo '{}'; return 0; fi
+  hook_log "$gate" "СТОП"
+  GATE_HINT="$(hook_override_hint "$gate")" PAYLOAD="$payload" python3 - <<'PY'
+import json, os, sys
+d = json.loads(os.environ["PAYLOAD"])
+h = d.get("hookSpecificOutput") or {}
+h["hookEventName"] = "PreToolUse"
+h["permissionDecision"] = "deny"
+h["permissionDecisionReason"] = (h.get("permissionDecisionReason") or "") + "\n\n" + os.environ.get("GATE_HINT", "")
+d["hookSpecificOutput"] = h
+print(json.dumps(d, ensure_ascii=False))
 PY
 }
 

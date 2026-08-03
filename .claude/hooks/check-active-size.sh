@@ -28,12 +28,12 @@ LINES=$(wc -l < "$F")
 [ "$LINES" -le "$LIMIT" ] && { echo '{}'; exit 0; }
 echo "$(date '+%d.%m %H:%M:%S') active-size ASK: activeContext.md $LINES строк (порог $LIMIT)" >> .claude/hooks.log 2>/dev/null || true
 
-python3 - "$LINES" "$LIMIT" <<'PY'
+python3 - "$LINES" "$LIMIT" <<'PY' | hook_gate_json check-active-size
 import json, sys
 lines, limit = sys.argv[1], sys.argv[2]
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
+    "permissionDecision": "deny",
     "permissionDecisionReason":
         f"memory_bank/activeContext.md разросся до {lines} строк (порог {limit}).\n\n"
         "Разросшийся файл при большом контексте игнорируется — правила перестают "

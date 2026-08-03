@@ -36,6 +36,100 @@ set -uo pipefail
 EVENT_JSON=$(cat)
 export EVENT_JSON
 
+# 🔴 ВТОРОЙ ЗАХОД — НА КОММИТЕ. Хук движка ловит правку, сделанную ЭТОЙ сессией. Мимо него
+# проходит всё остальное: другая сессия, редактор владельца, Cursor, `python3 -c`, `sed -i`.
+# Правило, которое ловит один способ правки из пяти, правилом не является. Поэтому тот же
+# разбор делается по индексу на коммите — и гейт коммита (`.githooks/pre-commit`) зовёт
+# этот хук наравне с остальными: git зовётся всегда, кто бы ни коммитил.
+if ! printf '%s' "$EVENT_JSON" | grep -q '"file_path"'; then
+  CMD=$(printf '%s' "$EVENT_JSON" | python3 -c 'import json,sys
+d=json.load(sys.stdin)
+print((d.get("tool_input") or {}).get("command") or "")' 2>/dev/null)
+  is_git_commit "$CMD" || { echo '{}'; exit 0; }
+  cd_repo || { hook_ask "Хук $(basename "$0") не смог определить каталог репозитория и ничего не проверил. Пропускать проверку молча нельзя."; exit 0; }
+  STAGED_DIFF="${DIFF_OVERRIDE:-$(git diff --cached -U0 2>/dev/null)}"
+  [ -z "$STAGED_DIFF" ] && { echo '{}'; exit 0; }
+  # 🔴 Дифф — ФАЙЛОМ, не окружением: на большом коммите переменная окружения упирается в
+  # предел (`/usr/bin/python3: Argument list too long`, код 126), гейт считает проверку
+  # непройденной и останавливает коммит целиком. Чем крупнее работа, тем вернее правило
+  # переставало работать — поймано настоящим коммитом, а не чтением кода.
+  DIFF_FILE="$(mktemp)" || { hook_ask "Хук $(basename "$0") не смог создать временный файл и ничего не проверил."; exit 0; }
+  trap 'rm -f "$DIFF_FILE"' EXIT
+  printf '%s' "$STAGED_DIFF" > "$DIFF_FILE"
+  DIFF_FILE="$DIFF_FILE" python3 <<'PY' | hook_gate_json check-prompt-rules
+import json, os, re, sys
+
+MARK = re.compile(
+    r"(?i)(обязан\w*|запрещ\w+|нельзя|никогда|всегда|не\s+смей\w*|должен|должна|должно|"
+    r"\bmust\b|\bnever\b|\balways\b|\bforbidden\b|\bmandatory\b|\bdo\s+not\b|\bdon't\b|"
+    r"\byou\s+should\b|\brequired\s+to\b)")
+FLD = re.compile(r"(?i)^\s*(instruction|reason|reviseReason|[A-Z_]*(SYS|HINT|PROMPT))\s*[:=]")
+
+# Хуки, документы и память — не текст для модели: правило про промты к ним не относится.
+SKIP = (".claude/", "work/hooks/", "docs/", "memory_bank/")
+
+with open(os.environ["DIFF_FILE"], encoding="utf-8", errors="replace") as fh:
+    diff_lines = fh.read().splitlines()
+
+cur, added = None, {}
+for line in diff_lines:
+    if line.startswith("+++ b/"):
+        cur = line[6:].strip()
+        continue
+    if not line.startswith("+") or line.startswith("+++") or not cur:
+        continue
+    if cur.startswith(SKIP):
+        continue
+    added.setdefault(cur, []).append(line[1:])
+
+hits = []
+for path, lines in added.items():
+    marked = [l.strip() for l in lines if MARK.search(l)]
+    if not marked:
+        continue
+    if path.endswith(".md") and "/instance/" in path:
+        hits.append((path, "персона бота", marked)); continue
+    if any(FLD.search(l) for l in lines):
+        hits.append((path, "поле, чей текст уходит модели", marked)); continue
+    if path.endswith(".py"):
+        # Внутри ли добавленное строкового литерала — решает РАЗБОР той версии файла,
+        # что уходит в коммит (`git show :путь`), а не подсчёт кавычек и не рабочая копия.
+        import ast, subprocess
+        try:
+            src = subprocess.run(["git", "show", ":" + path], capture_output=True, text=True,
+                                 timeout=20).stdout
+            tree = ast.parse(src)
+        except Exception:
+            continue
+        spans = [(n.lineno, n.end_lineno) for n in ast.walk(tree)
+                 if isinstance(n, ast.Constant) and isinstance(n.value, str) and n.lineno and n.end_lineno]
+        body = src.splitlines()
+        inside = []
+        for m in marked:
+            for i, l in enumerate(body, 1):
+                if m and m in l and any(a <= i <= b for a, b in spans):
+                    inside.append(m); break
+        if inside:
+            hits.append((path, "строковый литерал (проверено разбором)", inside))
+
+if not hits:
+    print("{}"); sys.exit(0)
+
+lines = ["  %s — %s: «%s»" % (p, place, "; ".join(h[:90] for h in hh[:2])) for p, place, hh in hits[:6]]
+print(json.dumps({"hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "deny",
+    "permissionDecisionReason":
+        "В коммите ПРАВИЛО, вписанное в текст для модели:\n" + "\n".join(lines) +
+        "\n\nУказание владельца 03.08: запрещено делать промтами правила, запреты и указания —\n"
+        "модель их читает и не исполняет. [замер 03.08] расширение контракта `ask_1c` словами\n"
+        "«передай focus первым вызовом» дало 5, 5, 4 из 10 — тот же уровень, что и без него.\n"
+        "Скажите, чем это держится КОДОМ (хук движка, проверка в мосте, гейт, роль базы)."}},
+    ensure_ascii=False))
+PY
+  exit 0
+fi
+
 REASON=$(python3 - <<'PY' 2>/dev/null
 import ast
 import json

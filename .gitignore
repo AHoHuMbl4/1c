@@ -37,3 +37,6 @@ windows/odata-setup/build/
 # В git не кладётся по размеру — не потому, что неважна. Как её получить заново, записано
 # в docs/INSTALL_LOG.md 03.08; лежит в work/config-dump/<база>/, архив рядом.
 work/config-dump/
+
+# Мусор от прогона test-hooks.sh: проба запускается из work/hooks и оставляет там свой .claude
+work/hooks/.claude/
