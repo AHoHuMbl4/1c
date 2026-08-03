@@ -3096,11 +3096,30 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 "text": clarify_text(question, opts),
                 "options": opts, "sources": [o["label"] for o in opts],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
+    # 🔴 ОДНА СЕМЬЯ — НЕ ОДНО ПРОЧТЕНИЕ. Здесь стояло `_family(top) not in {_family(x)…}`:
+    # если вершина по вектору оказывалась ШАПКОЙ ИЛИ СОСЕДНЕЙ ТАБЛИЧНОЙ ЧАСТЬЮ того же
+    # документа, расхождение сигналов не считалось расхождением вовсе, сомнение не
+    # поднималось, арбитр не запускался — и ответ уходил человеку молча.
+    #
+    # Посылка «шапка и её табличная часть — одно прочтение» опровергнута замером `[03.08]`,
+    # сплошной перебор по боевой базе: из 186 пар «семья + одноимённая величина» у двух и
+    # более членов **126 (68 %) расходятся числом**. Порознь ещё хуже там, где ошиблись:
+    #   шапка ↔ табличная часть  —  38 из 71  (54 %);
+    #   табличная ↔ табличная    — 195 из 249 (**78 %**).
+    # Вопрос 6 приёмки — ровно второй случай: «Виды Запасов» дали 327 против 92 683 у
+    # «Товаров» ТОГО ЖЕ документа, и оба — одна семья.
+    #
+    # Поднять сомнение безопасно: оно лишь заводит второго кандидата в круг арбитра, а
+    # арбитр-детектор (задача 17) спрашивает человека ТОЛЬКО если посчитанные числа
+    # разошлись. Совпали — ответ уходит как прежде. То есть цена — счёт, а не лишние
+    # уточнения. Замеры 30.07, на которых держится осторожность («партнёры», «организации»),
+    # это не задевает: у справочников табличных частей нет, семья состоит из них одних.
     if (SIGNAL_DISAGREE and top_by_question and picked and not focus
-            and top_by_question not in picked and top_by_question in by
-            and _family(top_by_question) not in {_family(x) for x in picked}):
+            and top_by_question not in picked and top_by_question in by):
         picked = list(dict.fromkeys(picked + [top_by_question]))
         diag["signals_disagree"] = top_by_question
+        if _family(top_by_question) in {_family(x) for x in picked if x != top_by_question}:
+            diag["signals_disagree_same_family"] = True
 
     # НЕОДНОЗНАЧНЫЙ ВОПРОС — спрашиваем человека, а не угадываем за него.
     # Судья неоднозначности — модель: она видит и названия, и отличительные реквизиты
@@ -3145,12 +3164,27 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # сущностей («организаций» -> «организац» есть у многих), круг соперников расширяется
         # и арбитр выбирает из шума. Признак остаётся в `diag` как наблюдение, но решения не
         # принимает: сигнал, который не улучшил замер, не имеет права менять поведение.
-        for c in list(cands) + ([top_by_question] if top_by_question else []):
+        order = list(cands) + ([top_by_question] if top_by_question else [])
+        for c in order:
             if len(arb_pool) >= ARBITER_MAX:
                 break
             if c in arb_pool or c not in by or _family(c) in fam:
                 continue
             arb_pool.append(c); fam.add(_family(c))
+        # 🔴 ВТОРЫМ ЗАХОДОМ — СОСЕДИ ПО СЕМЬЕ, если в круге осталось место. Первый заход
+        # оставлен как был: порядок «сперва чужие семьи» решён замером 30.07, и трогать его
+        # нельзя. Но выбрасывать соседей совсем — значит не видеть класс ошибки, который
+        # `[замер 03.08]` расходится числом в **195 случаях из 249 (78 %)**: две табличные
+        # части одного документа. Вопрос 6 приёмки проигран именно так.
+        # Соседи добавляются ПОСЛЕ, то есть только в свободное место, и лишними уточнениями
+        # это не оборачивается: арбитр-детектор спрашивает, лишь когда числа разошлись.
+        for c in order:
+            if len(arb_pool) >= ARBITER_MAX:
+                break
+            if c in arb_pool or c not in by:
+                continue
+            arb_pool.append(c)
+            diag["arbiter_kin_rival"] = c
         if len(arb_pool) > 1:
             diag["arbiter_rivals"] = arb_pool[1:]
 
