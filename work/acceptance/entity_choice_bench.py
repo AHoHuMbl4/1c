@@ -44,6 +44,12 @@ EXCLUDE_SERVICE = os.environ.get("EXCLUDE_SERVICE", "0") == "1"
 # 🔴 `is_query` не украшение: Qwen3 считает вопрос и документ ПО-РАЗНОМУ, и если звать
 # одинаково, часть качества теряется молча.
 EMBED_API = os.environ.get("EMBED_API", "openai")
+# 🔴 У вида `texts` вопрос считается ОТДЕЛЬНОЙ дверью, и её адрес — настройка, а не
+# корень сервиса: сервис ответов зовёт `EMBED_BASE_URL + EMBED_QUERY_PATH`
+# (`serene_ask.py:414`, умолчание `/embed`). Прибор бил в корень и получал `HTTP 404` —
+# то есть в боевой настройке (`EMBED_API=texts`) им нельзя было снять ни одного замера.
+# Найдено 03.08 при попытке сравнить вектор карточки с вектором метки.
+EMBED_QUERY_PATH = os.environ.get("EMBED_QUERY_PATH", "/embed")
 RERANK_URL = os.environ.get("RERANK_URL", "")
 RERANK_TOP = int(os.environ.get("RERANK_TOP", "10"))
 # Таблица меток для замера. Нужна, когда размерность модели не совпадает с боевой
@@ -71,7 +77,8 @@ def _post(url, obj, timeout=600):
 def embed_many(texts, is_query):
     """Векторы пачкой. `is_query` различает вопрос и документ — см. EMBED_API."""
     if EMBED_API == "texts":
-        out = _post(EMBED_URL, {"texts": texts, "is_query": bool(is_query), "dim": EMBED_DIM})
+        out = _post(EMBED_URL + EMBED_QUERY_PATH,
+                    {"texts": texts, "is_query": bool(is_query), "dim": EMBED_DIM})
         return out["embeddings"]
     out = _post(EMBED_URL + "/embeddings",
                 {"model": EMBED_MODEL, "dimensions": EMBED_DIM, "input": texts})

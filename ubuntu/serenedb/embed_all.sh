@@ -127,7 +127,8 @@ echo "== досчёт  $(date -u +%H:%M:%S), потоков $N, адресов $
 [ "${EMBED_RESET:-0}" = "1" ] && echo "== 🔴 РЕЖИМ ПЕРЕВЕКТОРИЗАЦИИ: старые векторы целей обнуляются"
 
 for tgt in $TARGETS; do
-  case "$tgt" in labels) _t=search_tables;; resolver) _t=resolver_index;; corpus) _t=search_corpus;; *) _t="";; esac
+  case "$tgt" in labels) _t=search_tables;; resolver) _t=resolver_index;; corpus) _t=search_corpus;;
+                 card) _t=search_entity_card;; *) _t="";; esac
   if [ "${EMBED_RESET:-0}" = "1" ] && [ -n "$_t" ]; then
     echo "== обнуление векторов $_t (смена модели на $EMBED_MODEL)  $(date -u +%H:%M:%S)"
     reset_target "$_t" || { echo "не удалось обнулить $_t" >&2; exit 1; }
@@ -162,7 +163,23 @@ for tgt in $TARGETS; do
         echo "== служебным вектор не считается (решение владельца)"
       fi
       ;;
-    *) echo "неизвестная цель досчёта: $tgt (знаю labels, resolver, corpus)" >&2 ;;
+    card)
+      # Карточка сущности — поверхность отбора кандидатов (`entity_card_build.sql`).
+      # Считается вектор ВСЕЙ карточки, а не одной метки: метка как поисковый сигнал у нас
+      # замерена и признана слабой ([замер 27.07] у «продажи» ближайшая метка — «Склады»,
+      # верный документ не входит даже в тройку). Проверить, лучше ли карточка метки, —
+      # и есть смысл Ф2 плана `work/entity-choice/PLAN_ENTITY_SURFACE.md`.
+      # 🔴 В такт НЕ включено: цель по умолчанию не входит в `TARGETS`, зовётся только явно
+      # (`EMBED_TARGETS=card`). Включать в конвейер — после решения по числу (Ф5).
+      echo "== карточки сущностей  $(date -u +%H:%M:%S)"
+      ./embed_missing.sh search_entity_card "substr(card,1,$MAXLEN)" "$N" "src_table" \
+        || echo "карточки: проход с ошибкой" >&2
+      # Индекс карточки публикуется заново по той же причине, что и корпусный ниже.
+      psql "$DSN" -q -c "VACUUM (REFRESH_INDEX) search_entity_card;" >/dev/null 2>&1
+      psql "$DSN" -tA -F' | ' -c "SELECT 'карточки: с вектором', count(emb),
+             'без вектора', count(*) - count(emb) FROM search_entity_card"
+      ;;
+    *) echo "неизвестная цель досчёта: $tgt (знаю labels, resolver, corpus, card)" >&2 ;;
   esac
 done
 
