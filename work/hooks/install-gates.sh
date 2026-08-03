@@ -47,7 +47,10 @@ if bash is None:
 
 tpl = ('"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}'
        '/.claude/hooks/%s.sh"')
-want = [("check-gates", 15, "Проверка: гейты не разоружены")]
+want = [("check-gates", 15, "Проверка: гейты не разоружены"),
+        # 🔴 Подавальщик диффа обязан стоять В ЦЕПОЧКЕ РАНЬШЕ снайпера-агента: тот читает
+        # уже готовый файл вместо того, чтобы лезть в оболочку, которой ему могут не дать.
+        ("prepare-diff", 15, "Дифф подан снайперу")]
 for name, timeout, msg in want:
     if any(name in h.get("command", "") for h in bash["hooks"]):
         print("  уже подключён:", name)
