@@ -1264,6 +1264,45 @@ def measure_choice(names, word):
     return (None, [], 'rerank')
 
 
+def answers_diverge(figures):
+    """Сошлись ли ПОСЧИТАННЫЕ ответы кандидатов на одном числе (задача 17).
+
+    Арбитр выбирает между готовыми ответами — и до 03.08 выбирал всегда, даже когда числа
+    в них РАЗНЫЕ. Но выбор между разными числами и есть выбор ответа за человека там, где
+    данные допускают оба прочтения, а п. 12 это прямо запрещает. Расхождение посчитанных
+    ответов — не подозрение, а ДОКАЗАННАЯ неоднозначность: обе величины честно посчитаны
+    базой, просто по разным сущностям.
+
+    Сравниваются числа, а не текст: разбор прозы модели был бы догадкой и ломался бы на
+    каждом языке ответа. Порога и допуска нет намеренно — «существенно» пришлось бы
+    выражать константой, подобранной под нашу базу.
+
+    Совпали — выбирать не из чего, вопрос был бы шумом (так бывает у документа и его
+    табличной части: `СуммаДокумента` = `СуммаСНДС` строк). Сравнивать нечем — решение
+    остаётся прежнему арбитру, новое правило молчит.
+    """
+    if len(figures) < 2:
+        return False
+    keys, vals = set(), set()
+    for f in figures:
+        if not isinstance(f, dict):
+            return False
+        k = "sum" if f.get("sum") is not None else "count"
+        v = f.get(k)
+        if v is None:
+            return False
+        keys.add(k)
+        try:
+            vals.add(float(v))
+        except (TypeError, ValueError):
+            return False
+    if len(keys) > 1:
+        # У кандидатов сравнимы разные вещи (у одного итог, у другого только число
+        # записей) — это не расхождение ответов, а разные вопросы. Не наше дело.
+        return False
+    return len(vals) > 1
+
+
 def measure_ambiguous(fits, totals):
     """Меняет ли выбор величины ОТВЕТ. Иначе неоднозначности нет, а вопрос был бы шумом.
 
@@ -2384,6 +2423,10 @@ REQUIRE_SUPPORT = os.environ.get("ASK_REQUIRE_SUPPORT", "1") == "1"
 # Сколько готовых ответов отдавать арбитру. Больше двух-трёх не нужно: это
 # столько же полных ответов, сколько кандидатов, и время ответа растёт.
 ARBITER_MAX = int(os.environ.get("ASK_ARBITER_MAX", "3"))
+# Арбитр работает ДЕТЕКТОРОМ: разошлись посчитанные числа кандидатов — спрашиваем человека,
+# а не даём модели выбрать между ними (задача 17). Выключатель нужен, чтобы прежнее
+# поведение можно было вернуть одним значением, если приёмка покажет обратное.
+ARBITER_DETECTS = os.environ.get("ASK_ARBITER_DETECTS", "1") == "1"
 # Словарь со стеммингом — им сравниваются слово человека и название сущности.
 # Создаётся сборкой (`corpus_init.sql`), локаль наследует от основного словаря.
 STEM_DICT = os.environ.get("ASK_STEM_DICT", "search_dict_stem")
@@ -3144,6 +3187,38 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if sub.get("kind") in ("answer", "figures") and (sub.get("text") or "").strip():
                 cand_ans.append(sub["text"].split("⚠")[0].strip())
                 cand_src.append(sub)
+        if len(cand_ans) > 1 and ARBITER_DETECTS and \
+                answers_diverge([s.get("figures") or {} for s in cand_src]):
+            # 🔴 АРБИТР — ДЕТЕКТОР НЕОДНОЗНАЧНОСТИ, А НЕ ВЫБИРАЮЩИЙ (задача 17 реестра).
+            # Числа кандидатов посчитаны базой и РАЗОШЛИСЬ — значит вопросу отвечают разные
+            # объекты с разными величинами, и это доказанная неоднозначность, а не повод
+            # положиться на языковую догадку модели. Живой случай `[замер 03.08]`: на «на
+            # какую сумму мы закупили» кандидатами идут документ приобретения
+            # (`СуммаДокумента` 73 181 157,68) и регистр накопления «Закупки» (`Сумма`
+            # 1 137 949,71) — прежде выбирал арбитр, и в последнем прогоне приёмки выбрал
+            # регистр. Ошибка при этом честная по гейту: число посчитано верно, просто не по
+            # той сущности, — поэтому ловится это только здесь.
+            # Оба ответа уже собраны, то есть человеку предлагается выбор, за которым стоят
+            # реальные числа, а не догадка о том, что он имел в виду.
+            src_of = [s.get("diag", {}).get("focus") for s in cand_src]
+            try:
+                lab_by = {r[0]: r[1] for r in psql(
+                    "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                    % (TABLES, ", ".join(lit(c) for c in src_of if c))) if r and r[0]}
+            except RuntimeError:
+                lab_by = {}
+            opts = [{"src": c, "label": lab_by.get(c, c), "distinct_by": marks.get(c, ""),
+                     "found": by.get(c, 0)} for c in src_of if c]
+            if len(opts) > 1:
+                diag["arbiter_detected"] = {
+                    "кандидаты": src_of,
+                    "числа": [(s.get("figures") or {}).get("sum")
+                              if (s.get("figures") or {}).get("sum") is not None
+                              else (s.get("figures") or {}).get("count") for s in cand_src]}
+                return {"partial": cut or None, "kind": "clarify",
+                        "text": clarify_text(question, opts), "options": opts,
+                        "sources": [o["label"] for o in opts],
+                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
         if len(cand_ans) > 1:
             n = arbitrate(question, cand_ans, context)
             diag["arbiter"] = {"candidates": [s.get("diag", {}).get("focus") for s in cand_src],
@@ -3508,6 +3583,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # понять, откуда 227 (п. 13: молчаливая потеря — дефект).
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
             "completeness": cov, "measure": measure,
+            # 🔴 ПОСЧИТАННЫЕ ЧИСЛА — ПОЛЕМ ОТВЕТА, А НЕ ТОЛЬКО ВНУТРИ ТЕКСТА (03.08).
+            # Их читает арбитр-детектор (задача 17): чтобы сравнить ответы кандидатов, он
+            # обязан сравнивать ЧИСЛА, посчитанные базой, а не разбирать прозу модели.
+            # Разбор текста здесь был бы догадкой (п. 12) и ломался бы на каждом языке
+            # ответа. Ветка уточнения отдаёт это поле с самого начала — теперь форма одна.
+            "figures": ({k: agg[k] for k in
+                         ("count", "count_amount", "sum", "min", "max", "avg",
+                          "date_min", "date_max") if k in agg} if (agg and measure)
+                        else {"count": (agg or {}).get("count")}),
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 
