@@ -271,3 +271,15 @@ ERROR: Column 'amount' has unsupported type DECIMAL(14,2) and can not be indexed
 - Осторожность: при ненайденном корне его хуки fail-open («hook skipped» в stderr);
   наш git-гейт остаётся последним рубежом. Снять пилот: `claude plugin disable
   claude-code-harness`.
+
+## 03.08 — harness: конфиг проекта, границы пилота
+
+- `harness doctor` на проекте: хотел standalone-раскладку (`hooks/hooks.json`,
+  `.claude-plugin/`). НЕ заводим сознательно: при живом плагине это двойное
+  срабатывание хуков; его генератор CLAUDE.md/settings.json к нашим файлам не
+  подпускаем. Заведён только минимальный `harness.toml` (i18n=en — русского у них
+  нет, язык владельца закреплён в CLAUDE.md; protectedBranchPush=allow — наше
+  правило «push каждый шаг»).
+- Подтверждено в перезапущенной сессии: их PreToolUse живёт (предупреждения о
+  защищаемых путях на CLAUDE.md и harness.toml), SessionStart-монитор, авто-оповещение
+  других сессий о правке CLAUDE.md. Сводки движка — ja/en.
