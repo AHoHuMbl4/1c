@@ -77,7 +77,7 @@ def is_entity(base, stem):
             return True
     return False
 
-added, deleted = [], []
+added, deleted, changed = [], [], []
 CODE_EXT = (".py", ".sh", ".sql", ".js", ".mjs", ".service", ".timer", ".ts")
 
 for row in os.environ["STAGED"].splitlines():
@@ -87,7 +87,13 @@ for row in os.environ["STAGED"].splitlines():
     st, path = parts[0][:1], parts[-1]
     if path == "memory_bank/mcp-memory.json":
         continue
-    if path.startswith((".claude/", "work/", "docs/", "memory_bank/")):
+    # 🔴 `work/` из пропуска УБРАН для случая правки (M). Приборы приёмки живут именно
+    # там и в графе как сущности ЕСТЬ; пропуская их, гейт молчал бы ровно о том, что
+    # правится чаще всего. Для новых файлов (A) пропуск сохранён: в `work/` заводится
+    # много разового, и требовать сущность на каждый черновик — превратить гейт в шум.
+    if path.startswith((".claude/", "docs/", "memory_bank/")):
+        continue
+    if st == "A" and path.startswith("work/"):
         continue
     if not path.endswith(CODE_EXT):
         continue
@@ -98,8 +104,24 @@ for row in os.environ["STAGED"].splitlines():
         added.append(path)
     elif st == "D" and known:
         deleted.append(path)
+    # 🔴 ПРАВКА ИЗВЕСТНОГО КОМПОНЕНТА БЕЗ ГРАФА (заведено 03.08 по слову владельца
+    # «чтобы это было не рекомендация, а неизбежное правило»).
+    #
+    # Прямое направление — вброс связей при правке — держал `check-deps.sh`, и держал
+    # честно: `[замер 03.08]` за день **94 вброса**. Изменений в графе за тот же день —
+    # **ноль**. Вброс СООБЩАЕТ, но ничего не требует, поэтому работа шла дальше. Все
+    # правила, у которых была ОСТАНОВКА (`check-docs` 5 раз, `check-active-size` 7,
+    # снайпер хардкода, проверка кода), исполнены в тот день без исключения.
+    #
+    # Отсюда правило: у вброса обязан быть момент, в котором работа не продолжается.
+    # Момент — коммит: тронул файл, у которого в графе ЕСТЬ сущность, а сам граф в
+    # коммит не входит — покажи, чем граф обновлён, либо подтверди, что зависимости
+    # не менялись. Проверка механическая: имя сущности против имени файла, ровно та же,
+    # что уже работает для A и D.
+    elif st in ("M", "R", "C") and known and not graph_staged:
+        changed.append(path)
 
-if not added and not deleted:
+if not added and not deleted and not changed:
     log("тихо (все компоненты коммита — сущности графа)")
     print("{}"); sys.exit(0)
 
@@ -108,15 +130,20 @@ if added:
     msg.append("Новые компоненты, которых НЕТ в графе зависимостей:\n  " + "\n  ".join(added[:8]))
 if deleted:
     msg.append("Удалённые файлы, которые в графе ЕСТЬ (связи осиротеют):\n  " + "\n  ".join(deleted[:8]))
-log("ASK: " + ", ".join(added[:3] + deleted[:3]))
+if changed:
+    msg.append("Правятся компоненты, которые ЕСТЬ в графе, а граф в коммит не входит:\n  "
+               + "\n  ".join(changed[:8]))
+log("ASK: " + ", ".join(added[:3] + deleted[:3] + changed[:3]))
+tail = ("\n\nПравило CLAUDE.md: создал, удалил или изменил компонент — обнови граф тем же\n"
+        "заходом (mcp__memory__create_entities / create_relations / delete_relations /\n"
+        "add_observations, с источником файл:строка) и закоммить memory_bank/mcp-memory.json\n"
+        "вместе с правкой.\n"
+        "Дешёвый честный способ закрыть: одно наблюдение о том, ЧТО именно изменилось в\n"
+        "поведении компонента — это и есть то, ради чего граф ведётся.\n"
+        "Зависимости и поведение правда не менялись (опечатка, комментарий) — подтвердите коммит.")
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "ask",
-    "permissionDecisionReason":
-        "\n\n".join(msg)
-        + "\n\nПравило CLAUDE.md: создал или удалил компонент — обнови граф тем же заходом\n"
-          "(mcp__memory__create_entities / create_relations / delete_relations, с источником\n"
-          "файл:строка) и закоммить memory_bank/mcp-memory.json вместе с правкой.\n"
-          "Если файл — не компонент (разовый вспомогательный), подтвердите коммит."}},
+    "permissionDecisionReason": "\n\n".join(msg) + tail}},
     ensure_ascii=False))
 PY
