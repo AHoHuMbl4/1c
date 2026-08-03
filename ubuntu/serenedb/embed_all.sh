@@ -174,6 +174,10 @@ for tgt in $TARGETS; do
       echo "== карточки сущностей  $(date -u +%H:%M:%S)"
       ./embed_missing.sh search_entity_card "substr(card,1,$MAXLEN)" "$N" "src_table" \
         || echo "карточки: проход с ошибкой" >&2
+      # 🔴 Отметка модели ставится ВСЕГДА, а не только при перевекторизации: без неё
+      # `serene_ask.emb_ready(CARD)` отвечает «не готово», и сервис молча работает по
+      # метке — то есть посчитанные векторы не участвовали бы ни в одном ответе.
+      mark_target search_entity_card
       # Индекс карточки публикуется заново по той же причине, что и корпусный ниже.
       psql "$DSN" -q -c "VACUUM (REFRESH_INDEX) search_entity_card;" >/dev/null 2>&1
       psql "$DSN" -tA -F' | ' -c "SELECT 'карточки: с вектором', count(emb),

@@ -34,7 +34,15 @@
 -- текст от сборки к сборке, а значит другой вектор и лишний пересчёт за деньги — это
 -- ловушка 30 `techContext`, уже кусавшая сборку корпуса и (03.08, `F243`) выбор сущности.
 
-CREATE OR REPLACE TABLE search_entity_card AS
+-- 🔴 ПУБЛИКУЕТСЯ `MERGE`-ем, А НЕ ПЕРЕСОЗДАНИЕМ. Пересоздание обнуляло бы `emb` у ВСЕХ
+-- 1 502 карточек каждый такт — это 45 с и деньги эмбеддера на пустом месте, при том что
+-- меняются единицы. Приём тот же, что у корпуса (`corpus_merge.sql:100`): вектор
+-- сбрасывается только там, где изменился сам текст карточки.
+CREATE TABLE IF NOT EXISTS search_entity_card (
+  src_table VARCHAR, label VARCHAR, parent VARCHAR, aliases VARCHAR,
+  about VARCHAR, quantities VARCHAR, card VARCHAR, emb FLOAT[1024]);
+
+CREATE OR REPLACE TABLE tmp_entity_card AS
 WITH q AS (
   -- Какие величины у сущности вообще есть. Факт из данных, а не список в коде.
   SELECT src_table, string_agg(DISTINCT k, ', ' ORDER BY k) AS quantities
@@ -55,6 +63,25 @@ SELECT t.src_table,
 FROM search_tables t
 LEFT JOIN search_entity_alias a ON a.src_table = t.src_table
 LEFT JOIN q                     ON q.src_table = t.src_table;
+
+-- Изменившимся карточкам вектор сбрасывается, неизменившиеся его сохраняют. Сравнение по
+-- самому тексту карточки: отдельного отпечатка тут не нужно — строк полторы тысячи, а не
+-- полмиллиона, и лишнее поле было бы вторым местом правды.
+MERGE INTO search_entity_card AS t
+USING tmp_entity_card AS s
+ON t.src_table = s.src_table
+WHEN MATCHED AND t.card IS DISTINCT FROM s.card THEN
+     UPDATE SET label = s.label, parent = s.parent, aliases = s.aliases,
+                about = s.about, quantities = s.quantities, card = s.card, emb = NULL
+WHEN NOT MATCHED THEN
+     INSERT (src_table, label, parent, aliases, about, quantities, card, emb)
+     VALUES (s.src_table, s.label, s.parent, s.aliases, s.about, s.quantities, s.card, NULL);
+
+-- Сущность исчезла из витрины — её карточка не должна оставаться в отборе кандидатов.
+DELETE FROM search_entity_card
+WHERE src_table NOT IN (SELECT src_table FROM tmp_entity_card);
+
+DROP TABLE IF EXISTS tmp_entity_card;
 
 -- Индекс по карточке. Словарь — общий `search_dict` (`stemming = false`), тот же, что у
 -- корпуса и алиасов: словарь со стеммингом отклонён и по п. 9, и замером (см. шапку).
