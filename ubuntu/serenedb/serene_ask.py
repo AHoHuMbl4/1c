@@ -842,8 +842,14 @@ def signal_terms(src_table, match, top):
             "            FROM %(i)s WHERE %(w)s),"
             "     n  AS (SELECT (SELECT count(*) FROM %(i)s WHERE %(w)s) ft,"
             "                   (SELECT count(*) FROM %(i)s) bt)"
+            # Разделитель равенства `fg.t` обязателен по той же причине, что у `_fetch`:
+            # отобранные термы уходят в подсказку модели («typical for these records») и в
+            # варианты уточнения, поэтому ничья на срезе меняла бы ВХОД выбора сущности.
+            # [замер 03.08] на семи соперниках вопроса «сколько всего мы продали» ничьи
+            # нашлись у двух (1 и 2 в первой шестёрке). Терм уникален в `fg` (`ts_dict_agg`
+            # отдаёт словарь), значит порядок полный.
             " SELECT fg.t FROM fg JOIN bg USING (t) CROSS JOIN n"
-            " ORDER BY fg.f - bg.b * n.ft::DOUBLE / nullif(n.bt,0) DESC LIMIT %(k)d"
+            " ORDER BY fg.f - bg.b * n.ft::DOUBLE / nullif(n.bt,0) DESC, fg.t LIMIT %(k)d"
             % {"i": INDEX, "w": where, "k": top})
     except RuntimeError:
         return []
@@ -2796,9 +2802,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # (`tfidf` учитывает редкость слова: «сколько» весит мало, «поставщикам» много).
         # Свой счёт совпадений здесь стоял и был отвергнут замером — он считал ВСЕ общие
         # слова, поэтому «сколько записей в справочнике» совпадало с чем угодно.
+        # 🔴 РАЗДЕЛИТЕЛЬ РАВЕНСТВА — см. врезку у `_fetch`: без него `ORDER BY … LIMIT`
+        # оставляет порядок равных на волю исполнения. Здесь это дороже, чем там: `top[0]`
+        # решает вето, `top[:2]` становятся вариантами уточнения, то есть ничья решает
+        # ВЫБОР СУЩНОСТИ. [замер 03.08] на боевом скорере (`tfidf`, `ut_test`) ничьих в
+        # первой восьмёрке 3-5 на каждом из семи вопросов приёмки, и у шести из семи на
+        # ничью попадает САМ СРЕЗ `LIMIT 8` — то есть произволен и состав восьмёрки.
+        # Разделитель — `src_table`: ключ `alias_idx` уникален (697 строк, 697 значений),
+        # значит порядок становится полным. Это штатное предписание движка, а не наш приём:
+        # доки, Indexes › Inverted › Ranking › Tie-breaking — «Add further ORDER BY columns
+        # after the scorer for a deterministic order — typically the primary key».
         try:
             top = [(r[0], float(r[1])) for r in psql(
-                "SELECT src_table, %s FROM %s WHERE aliases @@ %s ORDER BY 2 DESC LIMIT %d"
+                "SELECT src_table, %s FROM %s WHERE aliases @@ %s"
+                " ORDER BY 2 DESC, src_table LIMIT %d"
                 % (SCORERS.get(SCORER, SCORERS["bm25"]) % ALIAS_INDEX, ALIAS_INDEX,
                    lit(question), ALIAS_TOP)) if r and r[0]]
         except RuntimeError:
