@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, evaluate, isServiceError, mergeRef, numericTokens, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, evaluate, finalizeDecision, isServiceError, mergeRef, numericTokens, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -256,6 +256,106 @@ t("F287-регресс: выдуманное число в пункте спис
 });
 t("F287-регресс: короткое количество при эталоне сверяется (порог не поднят)", () => {
   assert.strictEqual(evaluate("В выборке 5 банков.", ref("таблица без пятёрки"), null, {}).action, "replace");
+});
+
+// --- ЗАВЕРШЕНИЕ ХОДА: числовой гейт на пути БЕЗ доставки в канал ---
+// [замер 03.08] по журналу шлюза за 23.07-03.08: after_tool_call 239, before_agent_finalize
+// 443, а message_sending — 1 и message_received — 1. Числовая половина гейта живёт на
+// доставке, которой у `openclaw agent` нет, — значит на пути приёмки её не было вовсе.
+// Эти случаи проверяют ровно то, что теперь она есть и на завершении хода.
+t("finalize: данных не спрашивали — гоним модель заново (прежнее поведение цело)", () => {
+  const d = finalizeDecision("Здравствуйте!", null, null, {}, false);
+  assert.strictEqual(d.action, "revise");
+  assert.strictEqual(d.why, "no-data-tool");
+  assert.strictEqual(d.idempotencyKey, "require-data-tool");
+});
+t("finalize: обоснованные числа проходят", () => {
+  const r = ref("Контрагентов: 155.");
+  const d = finalizeDecision("У нас 155 контрагентов.", r, null, {}, true);
+  assert.strictEqual(d.action, "pass");
+  assert.strictEqual(d.why, "figures-ok");
+});
+t("🔴 finalize: НЕОБОСНОВАННОЕ число ловится БЕЗ доставки в канал", () => {
+  const r = ref("Контрагентов: 155.");
+  const d = finalizeDecision("У нас 4 217 контрагентов.", r, null, {}, true);
+  assert.strictEqual(d.action, "revise");
+  assert.strictEqual(d.why, "figures");
+  assert.strictEqual(d.idempotencyKey, "verify-figures");
+});
+t("finalize: в инструкцию кладётся сам обоснованный ответ, а не «попробуй ещё раз»", () => {
+  const r = ref("Контрагентов: 155.");
+  const d = finalizeDecision("У нас 4 217 контрагентов.", r, null, {}, true);
+  assert.ok(d.instruction.includes("Grounded answer:"), "инструкция обязана нести эталон");
+  assert.ok(d.instruction.includes("155"), "в эталоне обязано быть верное число");
+});
+t("finalize: сервис попросил уточнить — число модели не проходит", () => {
+  const r = mergeRef(null, "[CLARIFICATION NEEDED] Какой из складов?", 1000, ND,
+                     DEFAULTS.clarifyMarker, DEFAULTS.serviceErrorMarker);
+  const d = finalizeDecision("На складе 1 240 позиций.", r, null, {}, true);
+  assert.strictEqual(d.action, "revise");
+  assert.strictEqual(d.why, "figures");
+});
+t("finalize: сбой сервиса — тоже не проходит числом", () => {
+  const r = mergeRef(null, "[SERVICE ERROR: HTTP 503] …", 1000, ND,
+                     DEFAULTS.clarifyMarker, DEFAULTS.serviceErrorMarker);
+  const d = finalizeDecision("Всего 12 345 документов.", r, null, {}, true);
+  assert.strictEqual(d.action, "revise");
+  assert.ok(d.instruction.includes(DEFAULTS.serviceErrorReply), "модели уходит строка про сбой, не про пустую базу");
+});
+// 🔴 ЧИСЛА ВОПРОСА ПРИ НАЛИЧИИ ЭТАЛОНА В БЕЛЫЙ СПИСОК НЕ ИДУТ — И ЭТО НАМЕРЕННО
+// (`isGrounded`: иначе достаточно назвать число в вопросе, чтобы бот выдал его за факт из
+// 1С). Здесь это закреплено тестом: на завершении хода решение обязано быть тем же, что и
+// на доставке, — иначе прогонщик снова мерил бы не то, что уходит клиенту.
+t("finalize: год из вопроса при наличии эталона НЕ заземляет (как и на доставке)", () => {
+  const r = ref("Продаж за период: 272 документа.");
+  const inb = inbound("Сколько продали в 2018 году?");
+  const d = finalizeDecision("В 2018 году продаж 272 документа.", r, inb, {}, true);
+  assert.strictEqual(d.action, "revise");
+  assert.strictEqual(evaluate("В 2018 году продаж 272 документа.", r, inb, {}).action, "replace",
+                     "доставка на том же входе тоже не пропускает — решения обязаны совпадать");
+});
+t("finalize: без эталона числа вопроса заземляют (и туда мы не доходим — ловит requireDataTool)", () => {
+  const inb = inbound("Мой заказ 4517, что с ним?");
+  assert.strictEqual(evaluate("Заказ 4517 в работе.", null, inb, {}).action, "allow");
+  assert.strictEqual(finalizeDecision("Заказ 4517 в работе.", null, inb, {}, false).why, "no-data-tool");
+});
+// 🔴 п. 19: то, что уходит В МОДЕЛЬ, ограничено сверху и не растёт с размером базы.
+// На доставке обоснованный ответ ставится ЗАМЕНОЙ и в модель не идёт; здесь он идёт
+// инструкцией — значит обязан быть ограничен, а обрезка названа вслух (п. 13).
+t("🔴 finalize: обоснованный ответ в инструкции ограничен сверху", () => {
+  const long = "Позиций: 227. " + "строка выборки; ".repeat(4000);
+  const r = ref(long);
+  const d = finalizeDecision("У нас 9 999 999 позиций.", r, null, {}, true);
+  assert.strictEqual(d.action, "revise");
+  assert.ok(d.instruction.length < 3000, "инструкция не должна расти с размером выборки, длина " + d.instruction.length);
+  assert.ok(d.instruction.includes("truncated"), "обрезка обязана быть названа");
+});
+t("finalize: короткий обоснованный ответ не режется и обрезкой не помечается", () => {
+  const d = finalizeDecision("У нас 4 217 контрагентов.", ref("Контрагентов: 155."), null, {}, true);
+  assert.ok(d.instruction.includes("155"));
+  assert.ok(!d.instruction.includes("truncated"));
+});
+t("finalize: граница настраивается, ноль отключает обрезку", () => {
+  const r = ref("Позиций: 227. " + "x".repeat(5000));
+  assert.ok(finalizeDecision("9 999 999.", r, null, { groundedMaxChars: 100 }, true).instruction.length < 600);
+  assert.ok(finalizeDecision("9 999 999.", r, null, { groundedMaxChars: 0 }, true).instruction.length > 5000);
+});
+t("finalize: выключатель verifyOnFinalize возвращает прежнее поведение", () => {
+  const r = ref("Контрагентов: 155.");
+  const d = finalizeDecision("У нас 4 217 контрагентов.", r, null, { verifyOnFinalize: false }, true);
+  assert.strictEqual(d.action, "pass");
+});
+t("finalize: пустой текст ответа не трогаем", () => {
+  const d = finalizeDecision("", ref("Контрагентов: 155."), null, {}, true);
+  assert.strictEqual(d.action, "pass");
+  assert.strictEqual(d.why, "no-answer-text");
+});
+t("finalize: политика ОДНА — решение совпадает с evaluate на том же входе", () => {
+  const r = ref("Контрагентов: 155.");
+  for (const text of ["У нас 155 контрагентов.", "У нас 4 217 контрагентов.", "Посмотрю в данных."]) {
+    const viaEval = evaluate(text, r, null, {}).action === "allow" ? "pass" : "revise";
+    assert.strictEqual(finalizeDecision(text, r, null, {}, true).action, viaEval, text);
+  }
 });
 
 console.log(`\n${pass} tests passed`);

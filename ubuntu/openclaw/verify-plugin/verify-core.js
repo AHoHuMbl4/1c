@@ -25,6 +25,28 @@ export const DEFAULTS = {
   // «данных нет» там, где сервис просто не ответил. Хуже отказа: он уходит с пустой базой.
   serviceErrorMarker: "[SERVICE ERROR", // префикс маркера сбоя сервиса данных из моста
   requireDataTool: true, // ход без обращения к данным прогоняется моделью ещё раз
+  // 🔴 ЧИСЛОВОЙ ГЕЙТ НА ПУТИ ЗАВЕРШЕНИЯ ХОДА, А НЕ ТОЛЬКО НА ДОСТАВКЕ.
+  // [замер 03.08] по всему журналу шлюза (23.07 → 03.08): `after_tool_call` 239 вызовов,
+  // `before_agent_finalize` 443, а `message_sending` — 1 и `message_received` — 1. То есть
+  // три из пяти хуков гейта живут ТОЛЬКО на доставке в канал, и всё, что меряется
+  // прогонщиком (`openclaw agent` без `--deliver`), идёт с выключенной числовой половиной
+  // защиты. Один раз за одиннадцать дней — это не защита, а её видимость.
+  // Здесь та же политика (`evaluate`, один источник правды) применяется на завершении хода:
+  // заменить текст движок на этом хуке не даёт, но даёт потребовать ещё один проход модели
+  // с точной инструкцией и обоснованным ответом в ней.
+  verifyOnFinalize: true,
+  // 🔴 ГРАНИЦА ТОГО, ЧТО УХОДИТ В МОДЕЛЬ. Обоснованный ответ кладётся в инструкцию
+  // повторного прохода — значит он становится КОНТЕКСТОМ, а не заменой текста, как на
+  // доставке. Без границы его размер растёт с числом строк и колонок выборки, а п. 19
+  // контракта требует обратного: «то, что уходит, ограничено сверху и не растёт с размером
+  // базы». Обрезка называется в самом тексте: молчаливая потеря запрещена (п. 13).
+  groundedMaxChars: 2000,
+  figureReviseReason: "A numeric fact in the answer is not grounded in the data tool result.",
+  figureReviseInstruction:
+    "Every figure you state MUST come from the data tool result for this turn. Rewrite the "
+    + "answer using only the grounded answer below; do not add, round, recompute or invent "
+    + "any number. If the grounded answer says there is no data, say exactly that and give "
+    + "no figures.",
   // Тексты — для МОДЕЛИ, не для человека, поэтому по-английски и без предметных примеров:
   // продукт коробочный, язык клиента заранее неизвестен.
   reviseReason: "This turn ended without consulting the company data tool.",
@@ -232,6 +254,48 @@ export function isGrounded(token, ref, inb, cfg) {
   // фактом из 1С. То же отмывание закрыто на стороне serene_ask.
   if (!ref && inb && inb.digits.has(token)) return true;
   return false;
+}
+
+// Обоснованный ответ, ограниченный сверху, — он уходит В МОДЕЛЬ (инструкцией повторного
+// прохода), а не человеку. На доставке тот же текст ставится ЗАМЕНОЙ и в модель не идёт,
+// поэтому границы там не нужно, а здесь нужна: п. 19 требует, чтобы уходящее в модель не
+// росло с размером базы. Обрезка ГОВОРИТСЯ вслух (п. 13: молчаливая потеря — дефект), и
+// сказана она по-английски, потому что читает её модель, а не человек.
+export function boundedGrounded(text, cfg) {
+  const c = { ...DEFAULTS, ...(cfg || {}) };
+  const s = typeof text === "string" ? text : "";
+  if (!s) return "";
+  const lim = c.groundedMaxChars;
+  if (!(lim > 0) || s.length <= lim) return s;
+  return s.slice(0, lim) + "\n[truncated: the grounded answer is longer than "
+       + lim + " characters; state only the figures shown above]";
+}
+
+// РЕШЕНИЕ НА ЗАВЕРШЕНИИ ХОДА — чистой функцией, чтобы проверялось оффлайн.
+// В index.js остаётся только перевод этого решения в форму движка (`revise`/`finalize`):
+// правило и его проверка не должны жить в разных местах — на двух разошедшихся копиях
+// одного правила проект уже обжигался (`HOW_NOT_TO`, разбор про две копии проверки).
+//
+// `haveRef` — спрашивали ли данные за ЭТОТ ход (сверка runId делается вызывающим).
+// Возвращает: {action:"pass"|"revise", why, reason, instruction}.
+export function finalizeDecision(answer, ref, inb, cfg, haveRef) {
+  const c = { ...DEFAULTS, ...(cfg || {}) };
+  if (!haveRef) {
+    if (c.requireDataTool === false) return { action: "pass", why: "require-data-tool-off" };
+    return { action: "revise", why: "no-data-tool", reason: c.reviseReason,
+             instruction: c.reviseInstruction, idempotencyKey: "require-data-tool" };
+  }
+  if (c.verifyOnFinalize === false) return { action: "pass", why: "verify-on-finalize-off" };
+  if (!answer) return { action: "pass", why: "no-answer-text" };
+  const d = evaluate(answer, ref, inb, c);
+  if (d.action === "allow") return { action: "pass", why: "figures-ok" };
+  const grounded = boundedGrounded(d.action === "replace" ? d.content : "", c);
+  return {
+    action: "revise", why: "figures", reason: c.figureReviseReason,
+    instruction: grounded ? c.figureReviseInstruction + "\n\nGrounded answer:\n" + grounded
+                          : c.figureReviseInstruction,
+    idempotencyKey: "verify-figures",
+  };
 }
 
 // Главное решение по исходящему тексту. Возвращает одно из:

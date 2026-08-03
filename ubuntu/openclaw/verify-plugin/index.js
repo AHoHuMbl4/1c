@@ -27,7 +27,7 @@
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, digitBlob, evaluate, extractText, isServiceError, mergeRef, numericTokens, stripInternal, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, digitBlob, evaluate, extractText, finalizeDecision, isServiceError, mergeRef, numericTokens, stripInternal, toolMatchesAny } from "./verify-core.js";
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
@@ -149,15 +149,46 @@ export default definePluginEntry({
       const sessKey = sessKeyOf(ctx, event) || (event && event.runId ? "run:" + event.runId : null);
       const ref = sessKey ? refs.get(sessKey) : null;
       const runId = (event && event.runId) || (ctx && ctx.runId) || null;
-      if (ref && (!runId || ref.runId === runId)) return; // данные за этот ход спрашивали
-      dbg(cfg, `before_agent_finalize sess=${sessKey} runId=${runId} action=revise`);
+      // 🔴 ДАННЫЕ СПРАШИВАЛИ — ЭТОГО МАЛО, СВЕРЯЕМ ЕЩЁ И ЧИСЛА, ИМЕННО ЗДЕСЬ.
+      // Прежде на этом месте стоял `return`: ход с обращением к данным считался проверенным,
+      // а числа в нём сверялись только хуком доставки. [замер 03.08] хук доставки за весь
+      // журнал шлюза сработал ОДИН раз на 239 захваченных вызовов инструмента — то есть на
+      // пути, которым снимается приёмка (`openclaw agent` без `--deliver`), числовой
+      // проверки не было ни одной.
+      //
+      // Политика — та же (`finalizeDecision` поверх того же `evaluate`): двух копий правила
+      // быть не должно, на разошедшихся копиях проект уже обжигался. Отличается только ФОРМА
+      // принуждения: заменить текст движок здесь не даёт
+      // (`PluginHookBeforeAgentFinalizeResult` умеет `revise`/`finalize`, но не `content`),
+      // поэтому вместо замены требуем ещё один проход и кладём в инструкцию сам обоснованный
+      // ответ — модели есть что написать, и это не «попробуй ещё раз» вслепую.
+      //
+      // Один проход, не больше (`maxAttempts: 1`): бесконечное «перепиши» превращает верный
+      // ответ в молчание, а п. 21 называет проверку, отвергнувшую верный ответ, дефектом
+      // проверки.
+      const haveRef = !!(ref && (!runId || ref.runId === runId));
+      const inb = sessKey ? inbound.get(sessKey) || null : null;
+      const d = finalizeDecision((event && event.lastAssistantMessage) || "", ref, inb, cfg, haveRef);
+      // 🔴 УСПЕХ ГЕЙТА ПИШЕТСЯ В ЖУРНАЛ НАРАВНЕ С ОТКАЗОМ. Пока молчал только успех,
+      // «проверил и пропустил» было неотличимо от «не звался вовсе» — ровно так дыра с
+      // доставкой и прожила одиннадцать дней незамеченной.
+      dbg(cfg, `before_agent_finalize sess=${sessKey} runId=${runId} action=${d.action} why=${d.why}`);
+      if (d.action !== "revise") return;
       return {
         action: "revise",
-        reason: cfg.reviseReason,
-        retry: { instruction: cfg.reviseInstruction, maxAttempts: 1,
-                 idempotencyKey: "require-data-tool" },
+        reason: d.reason,
+        retry: { instruction: d.instruction, maxAttempts: 1, idempotencyKey: d.idempotencyKey },
       };
     });
+
+    // ⚠ ЗДЕСЬ БЫЛ ЗАВЕДЁН `before_agent_run` — ЧТОБЫ ЗАПОМИНАТЬ ЧИСЛА ВОПРОСА И НА
+    // БЕЗКАНАЛЬНОМ ПУТИ (`message_received` [замер 03.08] сработал 1 раз за весь журнал).
+    // Снят в том же заходе: премиса была неверной. `isGrounded` намеренно НЕ пускает числа
+    // пользователя в белый список, когда эталон за ход есть, — иначе достаточно назвать
+    // число в вопросе, чтобы бот выдал его за факт из 1С. А когда эталона нет, до числовой
+    // сверки на завершении хода дело не доходит вовсе: там срабатывает `requireDataTool`.
+    // То есть хук не давал ничего и при этом брал плагину лишнюю привилегию читать
+    // переписку — ровно ту, от которой здесь уже отказывались однажды.
 
     // 2) числа из ввода пользователя + граница хода (эхо его номера — не галлюцинация)
     api.on("message_received", async (event, ctx) => {

@@ -323,12 +323,88 @@ def service_reply(path):
     return out, called
 
 
+# ------------------------------------------------- след гейта: сработал ли он вообще
+
+# 🔴 ПОЧЕМУ ЭТО ЗАВЕДЕНО. [замер 03.08] по журналу шлюза за 23.07-03.08: `after_tool_call`
+# 239 срабатываний, `before_agent_finalize` 443, а `message_sending` — ОДНО и
+# `message_received` — ОДНО. Числовая половина гейта живёт на доставке в канал, которой у
+# `openclaw agent` нет: значит КАЖДОЕ число приёмки, когда-либо снятое, получено с
+# выключенной половиной защиты, и одиннадцать дней это было не видно ниоткуда.
+#
+# Отсюда правило прибора: прогон, в котором гейт не сработал ни разу, — НЕ результат, а
+# показание сломанной установки. Прибор обязан это сказать сам, а не оставить читателя
+# гадать. Это тот же урок, что в `HOW_NOT_TO`: защита, ничего не запретившая ни разу,
+# подозрительна, и нужен замер, что она СРАБАТЫВАЕТ.
+
+def gate_log_path():
+    """Где журнал шлюза — спрашиваем конфиг движка, а не собираем путь догадкой."""
+    p = os.environ.get('ACCEPTANCE_GATEWAY_LOG')
+    if p:
+        return p
+    cfg = '/home/%s/.openclaw/openclaw.json' % BOT_USER
+    try:
+        with open(cfg, encoding='utf-8') as f:
+            return (json.load(f).get('logging') or {}).get('file')
+    except (OSError, ValueError):
+        return None
+
+
+def gate_debug_on():
+    """Гейт пишет свой вердикт только при `config.debug` — без него следа не будет."""
+    cfg = '/home/%s/.openclaw/openclaw.json' % BOT_USER
+    try:
+        with open(cfg, encoding='utf-8') as f:
+            e = ((json.load(f).get('plugins') or {}).get('entries') or {}).get('braine-verify') or {}
+        return bool((e.get('config') or {}).get('debug'))
+    except (OSError, ValueError):
+        return False
+
+
+GATE_RE = re.compile(r'\[braine-verify\] (\w+)[^\n]*?sess=(\S+)')
+
+
+def gate_trace(path, since_ts, key, run):
+    """Что гейт сделал на сессии этого вопроса: {хук: [что решил, ...]}.
+
+    Разбирается ТОЛЬКО собственная строка гейта — она наша, формат наш.
+    """
+    want = 'acc-%s-%s' % (run, key)
+    out = {}
+    if not path or not os.path.exists(path):
+        return out
+    try:
+        lines = open(path, encoding='utf-8', errors='replace').read().splitlines()
+    except OSError:
+        return out
+    for line in lines:
+        if 'braine-verify' not in line:
+            continue
+        try:
+            d = json.loads(line)
+        except ValueError:
+            continue
+        if (d.get('time') or '') < since_ts:
+            continue
+        m = GATE_RE.search(d.get('message') or '')
+        if not m or not m.group(2).endswith(want):
+            continue
+        act = re.search(r'action=(\S+)', d.get('message') or '')
+        out.setdefault(m.group(1), []).append(act.group(1) if act else 'ran')
+    return out
+
+
 def main():
     run = os.environ.get('RUN_TAG') or str(int(time.time()))
     lo, hi = int(sys.argv[1]), int(sys.argv[2])
     cases = [c for c in parse_cases(open(DOC, encoding='utf-8').read())
              if lo <= c['no'] <= hi]
     print('прогон %s: вопросов в диапазоне %d-%d — %d' % (run, lo, hi, len(cases)), flush=True)
+    glog, gdebug = gate_log_path(), gate_debug_on()
+    since = time.strftime('%Y-%m-%dT%H:%M:%S', time.gmtime())
+    if not gdebug:
+        print('🔴 ГЕЙТ СЛЕДА НЕ ОСТАВИТ: plugins.entries.braine-verify.config.debug выключен.\n'
+              '   Прогон пойдёт, но доказать, что защита работала, будет нечем.', flush=True)
+    gate = {'figures': 0, 'revised': 0, 'delivery': 0, 'silent': 0}
     tally = {'ok': 0, 'clarify': 0, 'wrong': 0, 'fail': 0, 'unchecked': 0, 'broken': 0}
     LABEL = {'ok': 'ВЕРНО', 'clarify': 'уточнение', 'wrong': '🔴 НЕВЕРНО',
              'fail': '🔴 ПРОВАЛ', 'unchecked': '⚠ ПРИБОР НЕ ПРОВЕРИЛ', 'broken': '⚠ СБОЙ'}
@@ -346,8 +422,22 @@ def main():
                 obs['error'] = 'стенограмма недоступна: %s' % type(e).__name__
         code, why = verdict(c, obs)
         tally[code] += 1
-        print('%2d %-46s %5.0fс %s — %s'
-              % (c['no'], c['q'][:46], time.time() - t0, LABEL[code], why), flush=True)
+        # След гейта за ЭТОТ вопрос: числовая сверка на завершении хода и, если ответ
+        # доставлялся в канал, — хук доставки. Пусто = защита не звалась вовсе.
+        tr = gate_trace(glog, since, str(c['no']), run) if gdebug else {}
+        fin = tr.get('before_agent_finalize') or []
+        figures = [a for a in fin if a in ('pass', 'revise')]
+        if figures:
+            gate['figures'] += 1
+            if 'revise' in figures:
+                gate['revised'] += 1
+        else:
+            gate['silent'] += 1
+        if tr.get('message_sending') or tr.get('reply_payload_sending'):
+            gate['delivery'] += 1
+        mark = ('гейт:%s' % '/'.join(figures)) if figures else '🔴 гейт молчал'
+        print('%2d %-46s %5.0fс %s — %s [%s]'
+              % (c['no'], c['q'][:46], time.time() - t0, LABEL[code], why, mark), flush=True)
         if code in ('wrong', 'fail', 'unchecked'):
             print('    эталон %s%s' % (c['ref']['raw'],
                   (' | поведение ' + '/'.join(c['kinds'])) if c['kinds'] else ''), flush=True)
@@ -359,6 +449,20 @@ def main():
     print('ВЕРНО %d, уточнений %d, НЕВЕРНО %d, ПРОВАЛОВ %d, прибор не проверил %d'
           % (tally['ok'], tally['clarify'], tally['wrong'], tally['fail'],
              tally['unchecked']), flush=True)
+    # 🔴 БЕЗ ЭТОГО БЛОКА ЧИСЛА ВЫШЕ НЕ ЗНАЧАТ НИЧЕГО. Они описывают ту систему, которая
+    # работала во время прогона, — а работала ли в ней защита, до 03.08 не спрашивал никто.
+    print('\nГЕЙТ ЗА ЭТОТ ПРОГОН: числовая сверка отработала на %d вопросах из %d '
+          '(из них потребовала переписать %d), доставка проверяла %d, молчал на %d'
+          % (gate['figures'], done or len(cases), gate['revised'],
+             gate['delivery'], gate['silent']), flush=True)
+    if gate['figures'] == 0:
+        print('🔴 ЗАЩИТА НЕ СРАБОТАЛА НИ РАЗУ — числа прогона результатом не являются.\n'
+              '   Так выглядит замер сломанной установкой, а не плохое качество ответов.',
+              flush=True)
+    if gate['delivery'] == 0:
+        print('⚠ Хуки ДОСТАВКИ не звались: `openclaw agent` без --deliver в канал не пишет.\n'
+              '   Замена необоснованного числа готовым ответом проверяется только доставкой;\n'
+              '   здесь проверена лишь та половина, что живёт на завершении хода.', flush=True)
     return tally
 
 

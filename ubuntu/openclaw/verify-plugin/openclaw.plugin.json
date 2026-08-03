@@ -53,6 +53,18 @@
         "type": "boolean",
         "description": "Ход без обращения к инструменту данных прогоняется моделью ещё раз (before_agent_finalize)."
       },
+      "verifyOnFinalize": {
+        "type": "boolean",
+        "description": "Сверять числа ответа и на завершении хода (before_agent_finalize), а не только на доставке. Хуки доставки не срабатывают на `openclaw agent` без --deliver — то есть на пути, которым снимается приёмка."
+      },
+      "figureReviseReason": {
+        "type": "string",
+        "description": "Причина повторного прохода, когда число ответа не обосновано эталоном (для модели, не для человека)."
+      },
+      "figureReviseInstruction": {
+        "type": "string",
+        "description": "Инструкция модели при необоснованном числе; к ней дописывается сам обоснованный ответ инструмента."
+      },
       "clarifyMarker": {
         "type": "string",
         "description": "Префикс маркера уточнения из моста ask_1c; при нём число модели до человека не доходит."
