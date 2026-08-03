@@ -32,6 +32,18 @@
         "hooks": [
           {
             "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/hooks/check-sql-docs.sh\"",
+            "timeout": 15,
+            "statusMessage": "Проверка: SQL в коммите — назван раздел доков"
+          },
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/hooks/check-prompt-rules.sh\"",
+            "timeout": 20,
+            "statusMessage": "Проверка: в коммите нет правил, вписанных в промт"
+          },
+          {
+            "type": "command",
             "command": "\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/hooks/check-diff.sh\"",
             "timeout": 20,
             "statusMessage": "Проверка диффа на подгонку под базу"

@@ -25,7 +25,7 @@ fi
 
 FAKE='{"tool_input":{"command":"git commit"}}'
 fail=0
-for h in check-docs check-graph-fresh check-active-size; do
+for h in check-docs check-graph-fresh check-active-size check-sql-docs; do
   # 🔴 Упавшая проверка — не пройденная проверка. Прежде здесь стояло `|| continue`:
   # хук, который не запустился (нет файла, нет python3, синтаксическая ошибка), молча
   # пропускал коммит — тот же fail-open, ради которого этот гейт и заводился.
