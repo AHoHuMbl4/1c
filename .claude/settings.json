@@ -91,6 +91,17 @@
             "statusMessage": "Граф: что задевает эта правка"
           }
         ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "\"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}/.claude/hooks/check-deps.sh\"",
+            "timeout": 15,
+            "statusMessage": "Граф: что задела правка из оболочки"
+          }
+        ]
       }
     ]
   }
