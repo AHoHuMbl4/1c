@@ -137,13 +137,14 @@ gate block 'код без документов — коммит остановл
 printf '\nстрока\n' >> README.md; git add ubuntu/serenedb/newcode.py README.md
 gate block 'код с документом, но компонент не в графе — остановлен'
 
-# 🔴 Граф должен именно ИЗМЕНИТЬСЯ: хук смотрит дифф индекса, а не список путей.
-# Первая редакция пробы добавляла неизменённый mcp-memory.json и ждала, что коммит
-# пройдёт, — проба была неверной, а не гейт.
-printf '{"entities":[{"name":"newcode.py","entityType":"компонент","observations":[]}],"relations":[]}\n' \
+# 🔴 С 03.08 «граф тронут» не пропуск: компонент должен существовать СУЩНОСТЬЮ в той
+# версии графа, что идёт в коммит (дыра: имена в наблюдениях чужих сущностей считались
+# учётом). Формат — JSONL, по объекту на строку, как пишет сервер MCP memory: агрегат
+# {"entities":[…]} гейт видеть не обязан.
+printf '{"type":"entity","name":"newcode.py","entityType":"компонент","observations":["проба test-hooks"]}\n' \
   > memory_bank/mcp-memory.json
 git add ubuntu/serenedb/newcode.py README.md memory_bank/mcp-memory.json
-gate pass 'код + документ + изменённый граф — коммит проходит'
+gate pass 'код + документ + граф с сущностью компонента — коммит проходит'
 
 printf 'x\n' > windows/odata-setup/setup.cs; git add windows/odata-setup/setup.cs
 gate pass 'трек владельца (odata-setup) пропускается'

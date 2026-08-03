@@ -35,8 +35,49 @@ def log(msg):
     except Exception:
         pass
 
-hay = open(sys.argv[1], encoding="utf-8").read()
-graph_staged, added, deleted = False, [], []
+# 🔴 «Известен» = существует СУЩНОСТЬ с таким именем, а не подстрока где-то в файле.
+# Первая версия искала имя по всему тексту графа и пропустила пять компонентов 03.08:
+# их имена упоминались в наблюдениях ЧУЖИХ сущностей, своих сущностей не было.
+# Упоминание — не учёт. И граф читаем из ИНДЕКСА, если он в коммите: «тронул файл
+# графа» само по себе ничего не доказывает.
+import subprocess
+
+graph_staged = any(
+    row.split("\t")[-1] == "memory_bank/mcp-memory.json"
+    for row in os.environ["STAGED"].splitlines() if "\t" in row)
+if graph_staged:
+    try:
+        graph_text = subprocess.run(
+            ["git", "show", ":memory_bank/mcp-memory.json"],
+            capture_output=True, text=True, check=True).stdout
+    except Exception:
+        graph_text = open(sys.argv[1], encoding="utf-8").read()
+else:
+    graph_text = open(sys.argv[1], encoding="utf-8").read()
+
+entity_names = []
+for line in graph_text.splitlines():
+    line = line.strip()
+    if not line:
+        continue
+    try:
+        d = json.loads(line)
+    except Exception:
+        continue
+    if d.get("type") == "entity":
+        entity_names.append(d.get("name", ""))
+
+def is_entity(base, stem):
+    for n in entity_names:
+        if n == base or n == stem:
+            return True
+        if len(base) >= 7 and (base in n or n in base):
+            return True
+        if len(stem) >= 7 and (stem in n or n in stem):
+            return True
+    return False
+
+added, deleted = [], []
 CODE_EXT = (".py", ".sh", ".sql", ".js", ".mjs", ".service", ".timer", ".ts")
 
 for row in os.environ["STAGED"].splitlines():
@@ -45,7 +86,6 @@ for row in os.environ["STAGED"].splitlines():
         continue
     st, path = parts[0][:1], parts[-1]
     if path == "memory_bank/mcp-memory.json":
-        graph_staged = True
         continue
     if path.startswith((".claude/", "work/", "docs/", "memory_bank/")):
         continue
@@ -53,14 +93,14 @@ for row in os.environ["STAGED"].splitlines():
         continue
     base = os.path.basename(path)
     stem = base.split("@")[0].rsplit(".", 1)[0]
-    known = base in hay or (len(stem) >= 7 and stem in hay)
+    known = is_entity(base, stem)
     if st == "A" and not known:
         added.append(path)
     elif st == "D" and known:
         deleted.append(path)
 
-if graph_staged or (not added and not deleted):
-    log("тихо (граф в коммите или компоненты известны)")
+if not added and not deleted:
+    log("тихо (все компоненты коммита — сущности графа)")
     print("{}"); sys.exit(0)
 
 msg = []

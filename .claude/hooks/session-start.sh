@@ -35,3 +35,19 @@ if [ "$TOTAL" -gt "$MAX_LINES" ]; then
   echo ""
   echo "…показаны первые $MAX_LINES строк из $TOTAL (свежее — сверху). Полный раздел и история — в $F."
 fi
+
+# Свежесть вброшенного: сессии забывают обновлять activeContext (владелец, 03.08), и
+# тогда вброс выше уверенно врёт. Считаем рабочие коммиты с последней правки файла —
+# и говорим об отставании прямо, с числом, а не молчим.
+LAST_AC=$(git log -1 --format=%H -- "$F" 2>/dev/null)
+if [ -n "$LAST_AC" ]; then
+  BEHIND=$(git rev-list --count "$LAST_AC..HEAD" -- ubuntu/ work/ windows/ docs/ 2>/dev/null || echo 0)
+  if [ "${BEHIND:-0}" -gt 10 ]; then
+    echo ""
+    echo "🔴 ВБРОШЕННОЕ ВЫШЕ ОТСТАЁТ: с последней правки $F прошло $BEHIND рабочих коммитов."
+    echo "Раздел «С ЧЕГО НАЧАТЬ» может врать. Сверься с CHANGELOG.md за сегодня и, если"
+    echo "состояние сдвинулось, обнови $F ПЕРВЫМ действием — иначе следующая сессия"
+    echo "получит этот же устаревший вброс."
+    echo "$(date '+%d.%m %H:%M:%S') session-start ⚠️ activeContext отстаёт на $BEHIND коммитов" >> .claude/hooks.log 2>/dev/null || true
+  fi
+fi
