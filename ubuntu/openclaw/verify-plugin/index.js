@@ -27,7 +27,7 @@
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, digitBlob, evaluate, extractText, finalizeDecision, isServiceError, mergeRef, numericTokens, stripInternal, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, digitBlob, evaluate, extractText, finalizeDecision, isServiceError, mergeRef, numericTokens, selfFetchNeeded, stripInternal, toolMatchesAny } from "./verify-core.js";
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
@@ -103,6 +103,50 @@ export default definePluginEntry({
       return { ...DEFAULTS, ...pc };
     };
 
+    // 🔴 СВОЙ ПОХОД ЗА ДАННЫМИ. Тот же сервис и тот же контракт, что у моста `ask_1c`:
+    // второго места правды не заводим. Возвращаем ТЕКСТ в том же виде, в каком его отдал бы
+    // инструмент, — дальше он идёт через `mergeRef`, как обычный эталон хода.
+    //
+    // Ошибка любого рода — это `null`, а не выдуманный ответ: молча подставить пустоту
+    // значило бы выдать «данных нет» там, где сервис просто не ответил (п. 18).
+    const askService = async (cfg, question) => {
+      const url = String(cfg.askUrl || "").trim();
+      if (!url || !question) return null;
+      const ctl = new AbortController();
+      const t = setTimeout(() => ctl.abort(), Math.max(1000, cfg.askTimeoutMs || 120000));
+      try {
+        // 🔴 ТОКЕН — ИЗ ОКРУЖЕНИЯ СЛУЖБЫ, А НЕ ИЗ ФАЙЛА НАСТРОЕК. Штатный `SecretRef`
+        // покрывает только перечисленные встроенные плагины (доки,
+        // `reference/secretref-credential-surface`), нашего в реестре нет — значит значение
+        // легло бы в `openclaw.json` открытым текстом, а правило проекта держит секреты в
+        // `/etc/*.env` с правами 600. Настройкой можно задать лишь ИМЯ переменной.
+        const token = String(process.env[cfg.askTokenEnv || "ASK_TOKEN"] || cfg.askToken || "");
+        const headers = { "Content-Type": "application/json" };
+        if (token) headers.Authorization = "Bearer " + token;
+        const r = await fetch(url, {
+          method: "POST", headers, signal: ctl.signal,
+          body: JSON.stringify({ question }),
+        });
+        if (!r.ok) return null;
+        const d = await r.json();
+        // Маркеры кладёт мост, а не сервис: здесь ветки те же, что в `mcp_ask.py`, иначе
+        // числовая сверка не узнает «нет данных» и «уточнение».
+        const kind = (d && d.kind) || "";
+        const text = (d && (d.text || "")) || "";
+        if (kind === "unavailable") return cfg.serviceErrorMarker + "] " + text;
+        if (kind === "no_data") return cfg.noDataMarker + "] " + text;
+        if (kind === "clarify") return cfg.clarifyMarker + "] " + text;
+        // Числа, посчитанные базой, обязаны попасть в эталон: по ним и идёт сверка.
+        const figs = d && d.figures && typeof d.figures === "object"
+          ? Object.entries(d.figures).map(([k, v]) => `${k}=${v}`).join(" ") : "";
+        return figs ? text + "\n" + figs : text;
+      } catch {
+        return null;
+      } finally {
+        clearTimeout(t);
+      }
+    };
+
     // 1) захват эталона braine за ход (ключ = sessionKey; сброс при новом runId)
     api.on("after_tool_call", async (event, ctx) => {
       const cfg = getCfg();
@@ -166,9 +210,28 @@ export default definePluginEntry({
       // Один проход, не больше (`maxAttempts: 1`): бесконечное «перепиши» превращает верный
       // ответ в молчание, а п. 21 называет проверку, отвергнувшую верный ответ, дефектом
       // проверки.
-      const haveRef = !!(ref && (!runId || ref.runId === runId));
+      let haveRef = !!(ref && (!runId || ref.runId === runId));
       const inb = sessKey ? inbound.get(sessKey) || null : null;
-      const d = finalizeDecision((event && event.lastAssistantMessage) || "", ref, inb, cfg, haveRef);
+      // 🔴 МОДЕЛЬ НЕ ПОЗВАЛА ИНСТРУМЕНТ — ЗОВЁМ САМИ. Разбор, почему именно так, а не
+      // просьбой к модели, — в `selfFetchNeeded` (verify-core). Коротко: заставить её
+      // движок не умеет, а просить бесполезно и это замерено.
+      let ref2 = ref;
+      if (selfFetchNeeded(haveRef, cfg, inb)) {
+        const own = await askService(cfg, inb.text);
+        if (own) {
+          ref2 = mergeRef(null, own, Date.now(), cfg.noDataMarker, cfg.clarifyMarker,
+                          cfg.serviceErrorMarker);
+          ref2.runId = runId;
+          if (sessKey) refs.set(sessKey, ref2);
+          haveRef = true;
+          dbg(cfg, `self_fetch sess=${sessKey} runId=${runId} refDigits=${ref2.digits.size} noData=${ref2.noData}`);
+        } else {
+          // Сервис не ответил — это НЕ повод выдать ответ модели за обоснованный.
+          // Оставляем прежний путь: движок прогонит модель ещё раз.
+          dbg(cfg, `self_fetch sess=${sessKey} runId=${runId} FAILED`);
+        }
+      }
+      const d = finalizeDecision((event && event.lastAssistantMessage) || "", ref2, inb, cfg, haveRef);
       // 🔴 УСПЕХ ГЕЙТА ПИШЕТСЯ В ЖУРНАЛ НАРАВНЕ С ОТКАЗОМ. Пока молчал только успех,
       // «проверил и пропустил» было неотличимо от «не звался вовсе» — ровно так дыра с
       // доставкой и прожила одиннадцать дней незамеченной.
@@ -179,7 +242,11 @@ export default definePluginEntry({
         reason: d.reason,
         retry: { instruction: d.instruction, maxAttempts: 1, idempotencyKey: d.idempotencyKey },
       };
-    });
+    // 🔴 БЮДЖЕТ ХУКА ПОДНЯТ ПОД СВОЙ ПОХОД ЗА ДАННЫМИ. Умолчание движка — 15 с, а сервис
+    // ответов отвечает 30-70 с ([замер 03.08] приёмка: 16-175 с на вопрос). При таймауте
+    // движок пишет отказ в журнал и продолжает с прежним ответом — то есть механизм молча
+    // не работал бы. Ручка штатная: `api.on(..., { timeoutMs })`, доки `plugins/hooks.md`.
+    }, { timeoutMs: DEFAULTS.askTimeoutMs + 10000 });
 
     // ⚠ ЗДЕСЬ БЫЛ ЗАВЕДЁН `before_agent_run` — ЧТОБЫ ЗАПОМИНАТЬ ЧИСЛА ВОПРОСА И НА
     // БЕЗКАНАЛЬНОМ ПУТИ (`message_received` [замер 03.08] сработал 1 раз за весь журнал).
@@ -198,7 +265,11 @@ export default definePluginEntry({
       const now = Date.now();
       lastInbound.set(sessKey, now);
       const text = (event && event.content) || "";
-      inbound.set(sessKey, { at: now, digits: numericTokens(text, 1), blob: digitBlob(text) });
+      // Текст вопроса хранится, чтобы плагин мог САМ сходить за данными, когда модель
+      // инструмент не позвала (см. `before_agent_finalize`). Ограничен сверху: в памяти
+      // плагина не должно копиться переписки больше, чем нужно для одного хода.
+      inbound.set(sessKey, { at: now, digits: numericTokens(text, 1), blob: digitBlob(text),
+                             text: text.slice(0, 2000) });
       prune(inbound, cfg.refTtlMs);
       prune(lastInbound, cfg.refTtlMs);
       dbg(cfg, `message_received sess=${sessKey} len=${text.length}`);

@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, evaluate, finalizeDecision, isServiceError, mergeRef, numericTokens, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, evaluate, finalizeDecision, isServiceError, mergeRef, numericTokens, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -356,6 +356,35 @@ t("finalize: политика ОДНА — решение совпадает с 
     const viaEval = evaluate(text, r, null, {}).action === "allow" ? "pass" : "revise";
     assert.strictEqual(finalizeDecision(text, r, null, {}, true).action, viaEval, text);
   }
+});
+
+// --- свой поход за данными, когда модель не позвала инструмент -------------------
+// Правило владельца 03.08: «промты не работают, это закон». Заставить модель движок не
+// умеет, просить бесполезно ([замер] 5, 5, 4 из 10 после расширения описания инструмента),
+// поэтому плагин идёт за данными сам. Здесь проверяется РЕШЕНИЕ идти — без сети.
+const ASK = { ...DEFAULTS, askUrl: "http://127.0.0.1:8099/ask" };
+
+t("свой поход: эталона нет, вопрос есть, адрес задан — идём", () => {
+  assert.strictEqual(selfFetchNeeded(false, ASK, { text: "сколько продали" }), true);
+});
+t("свой поход: эталон за ход уже есть — не идём", () => {
+  assert.strictEqual(selfFetchNeeded(true, ASK, { text: "сколько продали" }), false);
+});
+t("свой поход: адрес не задан — механизм выключен, поведение прежнее", () => {
+  assert.strictEqual(selfFetchNeeded(false, DEFAULTS, { text: "сколько продали" }), false);
+});
+t("свой поход: вопроса нет — спрашивать нечего", () => {
+  assert.strictEqual(selfFetchNeeded(false, ASK, { text: "   " }), false);
+  assert.strictEqual(selfFetchNeeded(false, ASK, null), false);
+});
+t("свой поход: requireDataTool выключен — не идём", () => {
+  assert.strictEqual(selfFetchNeeded(false, { ...ASK, requireDataTool: false }, { text: "x" }), false);
+});
+t("свой поход НЕ распознаёт «про данные ли вопрос» — это была бы догадка (п. 12)", () => {
+  // Приветствие и деловой вопрос неразличимы по построению: цена ошибки — один лишний
+  // запрос к своему же сервису, а не неверный ответ.
+  assert.strictEqual(selfFetchNeeded(false, ASK, { text: "привет" }),
+                     selfFetchNeeded(false, ASK, { text: "сколько у нас контрагентов" }));
 });
 
 console.log(`\n${pass} tests passed`);
