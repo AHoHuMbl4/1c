@@ -53,6 +53,13 @@ function dbg(cfg, line) {
 const refs = new Map(); // sessKey -> { at, runId, text, digits:Set<string>, blob:string, noData:boolean }
 const lastInbound = new Map(); // sessKey -> ts (граница хода: входящее сообщение)
 const inbound = new Map(); // sessKey -> { at, digits:Set<string>, blob:string } (числа пользователя)
+// 🔴 ВОПРОС ХОДА ОТДЕЛЬНО ОТ `inbound`. `message_received` живёт ТОЛЬКО на доставке в
+// канал ([замер 03.08] 1 срабатывание за одиннадцать дней), а свой поход за данными нужен
+// на любом пути — иначе он не работает ни в приёмке, ни при вызове агента напрямую.
+// Проверено пробой: на прогоне без доставки `self_fetch` не сработал ни разу именно из-за
+// пустого `inbound`. Текст берётся из `before_agent_run`, который даёт текущий ввод
+// пользователя и срабатывает всегда (доки `plugins/hooks.md`).
+const prompts = new Map(); // sessKey -> { at, text } (вопрос текущего хода)
 
 function prune(map, ttl) {
   const cut = Date.now() - ttl;
@@ -147,6 +154,20 @@ export default definePluginEntry({
       }
     };
 
+    // 0) вопрос хода — для своего похода за данными. Только текст и только в память на
+    // время хода; лишней привилегии это не берёт: `allowConversationAccess` плагину и так
+    // нужен для `before_agent_finalize`, где живёт числовая сверка.
+    api.on("before_agent_run", async (event, ctx) => {
+      const cfg = getCfg();
+      if (!cfg.askUrl) return;            // механизм выключен — переписку не читаем вовсе
+      const sessKey = sessKeyOf(ctx, event) || (event && event.runId ? "run:" + event.runId : null);
+      if (!sessKey) return;
+      const q = (event && (event.prompt || event.input || "")) || "";
+      if (!q || typeof q !== "string") return;
+      prompts.set(sessKey, { at: Date.now(), text: q.slice(0, 2000) });
+      prune(prompts, cfg.refTtlMs);
+    });
+
     // 1) захват эталона braine за ход (ключ = sessionKey; сброс при новом runId)
     api.on("after_tool_call", async (event, ctx) => {
       const cfg = getCfg();
@@ -216,8 +237,11 @@ export default definePluginEntry({
       // просьбой к модели, — в `selfFetchNeeded` (verify-core). Коротко: заставить её
       // движок не умеет, а просить бесполезно и это замерено.
       let ref2 = ref;
-      if (selfFetchNeeded(haveRef, cfg, inb)) {
-        const own = await askService(cfg, inb.text);
+      // Вопрос берём из `before_agent_run` (есть всегда), а `inbound` — запасной путь:
+      // он наполняется только на доставке в канал.
+      const qrec = (sessKey && prompts.get(sessKey)) || inb || null;
+      if (selfFetchNeeded(haveRef, cfg, qrec, sessKey)) {
+        const own = await askService(cfg, qrec.text);
         if (own) {
           ref2 = mergeRef(null, own, Date.now(), cfg.noDataMarker, cfg.clarifyMarker,
                           cfg.serviceErrorMarker);

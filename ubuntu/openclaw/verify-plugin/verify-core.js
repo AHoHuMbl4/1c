@@ -32,6 +32,14 @@ export const DEFAULTS = {
   askToken: "", // запасной путь; штатно токен берётся из окружения службы (askTokenEnv)
   askTokenEnv: "ASK_TOKEN", // имя переменной окружения с Bearer — значение в файлы настроек не кладётся
   askTimeoutMs: 120000, // сервис отвечает 30-70 с: бюджет хука поднимается под него
+  // 🔴 СЛУЖЕБНЫЕ ПРОГОНЫ НАШЕЙ ЖЕ СБОРКИ ИСКЛЮЧАЮТСЯ. Сессия `wiki-alias` — это шаг
+  // такта, который придумывает человеческие слова к сущностям; к данным он не обращается
+  // по замыслу. [замер 03.08] первая же проба своего похода сработала именно на нём: из
+  // 443 срабатываний `before_agent_finalize` подавляющее большинство — эта сессия.
+  // Это не догадка о вопросе клиента: имя сессии задаём мы сами, в `wiki_alias.sh`.
+  // Настоящее лечение — `№21`/`№22`: перевести шаг на `openclaw infer`, где хуки агента не
+  // зовутся вовсе; до тех пор — этот список.
+  askSkipSessions: ["wiki-alias"],
   // 🔴 ЧИСЛОВОЙ ГЕЙТ НА ПУТИ ЗАВЕРШЕНИЯ ХОДА, А НЕ ТОЛЬКО НА ДОСТАВКЕ.
   // [замер 03.08] по всему журналу шлюза (23.07 → 03.08): `after_tool_call` 239 вызовов,
   // `before_agent_finalize` 443, а `message_sending` — 1 и `message_received` — 1. То есть
@@ -302,11 +310,13 @@ export function boundedGrounded(text, cfg) {
 // Условия намеренно без догадок о том, «про данные ли вопрос»: распознавание темы было бы
 // ровно той догадкой, что запрещает п. 12. Единственная цена ошибки — один лишний запрос к
 // своему же сервису на ходе, где к данным и правда не обращались.
-export function selfFetchNeeded(haveRef, cfg, inb) {
+export function selfFetchNeeded(haveRef, cfg, inb, sessKey) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
   if (c.requireDataTool === false) return false; // механизм выключен целиком
   if (haveRef) return false;                     // данные за этот ход уже есть
   if (!c.askUrl) return false;                   // адрес сервиса не задан — прежнее поведение
+  const s = String(sessKey || "");
+  if ((c.askSkipSessions || []).some((x) => x && s.includes(x))) return false; // служебный прогон
   return !!(inb && typeof inb.text === "string" && inb.text.trim());
 }
 

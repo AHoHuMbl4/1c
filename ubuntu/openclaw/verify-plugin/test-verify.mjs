@@ -387,4 +387,11 @@ t("свой поход НЕ распознаёт «про данные ли во
                      selfFetchNeeded(false, ASK, { text: "сколько у нас контрагентов" }));
 });
 
+t("свой поход: служебный прогон нашей же сборки (wiki-alias) пропускается", () => {
+  // [замер 03.08] первая проба сработала именно на нём: шаг словаря к данным не обращается
+  // по замыслу, и поход за данными жёг бы сервис на каждом таком ходе.
+  assert.strictEqual(selfFetchNeeded(false, ASK, { text: "придумай слова" }, "agent:main:wiki-alias"), false);
+  assert.strictEqual(selfFetchNeeded(false, ASK, { text: "сколько продали" }, "agent:main:telegram:direct:1"), true);
+});
+
 console.log(`\n${pass} tests passed`);
