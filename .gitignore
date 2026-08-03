@@ -32,3 +32,8 @@ windows/odata-setup/build/
 # такого конфига нет (HANDOFF_CHECK_1 §8).
 .claude/settings.local.json
 .claude/hooks.log
+
+# Выгрузка конфигурации 1С (`DumpConfigToFiles`, 03.08): 31 772 файла и 1,3 ГБ на базу.
+# В git не кладётся по размеру — не потому, что неважна. Как её получить заново, записано
+# в docs/INSTALL_LOG.md 03.08; лежит в work/config-dump/<база>/, архив рядом.
+work/config-dump/
