@@ -35,7 +35,16 @@ cd_repo || { hook_ask "Хук $(basename "$0") не смог определит�
 DIFF="${DIFF_OVERRIDE:-$(git diff --cached -U0 2>/dev/null)}"
 [ -z "$DIFF" ] && { echo '{}'; exit 0; }
 
-DIFF="$DIFF" python3 <<'PY'
+# 🔴 ДИФФ ПЕРЕДАЁТСЯ ФАЙЛОМ, А НЕ ОКРУЖЕНИЕМ. Было `DIFF="$DIFF" python3` — и на большом
+# коммите окружение упиралось в предел: `/usr/bin/python3: Argument list too long`,
+# код возврата 126. Гейт коммита считает упавшую проверку непройденной и останавливал
+# коммит целиком — то есть чем крупнее работа, тем вернее правило переставало работать,
+# ровно там, где оно нужнее. Поймано настоящим коммитом этой правки, а не чтением кода.
+DIFF_FILE="$(mktemp)"
+trap 'rm -f "$DIFF_FILE"' EXIT
+printf '%s' "$DIFF" > "$DIFF_FILE"
+
+DIFF_FILE="$DIFF_FILE" python3 <<'PY' | hook_gate_json check-sql-docs
 import json, os, re, sys, time
 
 def log(msg):
@@ -67,7 +76,9 @@ MARKERS = [
 
 cur = None
 hits = {}          # файл -> набор признаков
-for line in (os.environ.get("DIFF") or "").splitlines():
+with open(os.environ["DIFF_FILE"], encoding="utf-8", errors="replace") as fh:
+    diff_lines = fh.read().splitlines()
+for line in diff_lines:
     if line.startswith("+++ b/"):
         cur = line[6:].strip()
         continue
@@ -105,6 +116,6 @@ reason = (
     "`map_entries` (HOW_NOT_TO §1.50, techContext Возможность 40).")
 print(json.dumps({"hookSpecificOutput": {
     "hookEventName": "PreToolUse",
-    "permissionDecision": "ask",
+    "permissionDecision": "deny",
     "permissionDecisionReason": reason}}, ensure_ascii=False))
 PY
