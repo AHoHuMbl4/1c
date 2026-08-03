@@ -3251,7 +3251,19 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
     if measure_alts:
         diag["measure_ambiguous"] = measure_alts
-        opts = [{"src": src, "measure": m, "label": m, "distinct_by": ""}
+        # 🔴 `entity_label` — человеческое имя ТОЙ ЖЕ сущности, отдельно от `label`, где
+        # здесь лежит имя ВЕЛИЧИНЫ. Без него мост не мог назвать боту сущность иначе как
+        # внутренним именем (`src`), а оно оттуда утекало человеку (03.08). Спрашивается у
+        # базы, а не собирается разбором строки; не нашлось — поле пустое, и мост честно
+        # обходится без него.
+        try:
+            _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
+                        % (TABLES, lit(src)))
+            _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
+        except RuntimeError:
+            _ent = ""
+        opts = [{"src": src, "measure": m, "label": m, "distinct_by": "",
+                 "entity_label": _ent}
                 for m in measure_alts]
         # 🔴 ВОПРОС ЗАДАЁТ МОДЕЛЬ, НА ЯЗЫКЕ СПРАШИВАЮЩЕГО. Здесь стояла наша русская фраза
         # «Уточните, какую величину считать», и она составляла ВЕСЬ текст уточнения: на

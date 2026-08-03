@@ -162,13 +162,19 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     Figures come from the database and are checked before they are returned; pass them
     on as they are.
 
+    If you already know which kind of record the question is about — for example the
+    knowledge base named it while you were rephrasing the question — pass that name in
+    `focus` on the FIRST call. Do not ask the user about it instead: naming a record type
+    is not an answer, and the figures still have to be counted here.
+
     The reply may instead ask to CLARIFY, when the question fits several record types or
     several quantities. Then put that question to the user and call this tool again with
     the same question plus `focus` (and `measure` if a quantity was chosen), copied
     verbatim from the list given.
 
     :param question: the user's question, in their own language, about company data.
-    :param focus: record type chosen by the user after a clarification, verbatim.
+    :param focus: the kind of record to count over — either one you already know, or the
+        one the user picked after a clarification. Give it as it is written for people.
     :param measure: quantity chosen by the user after a clarification, verbatim.
     :param context: the conversation so far, used only to disambiguate the question.
     """
@@ -190,16 +196,36 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     if kind == "clarify":
         opts = data.get("options") or []
         lines = []
+        # 🔴 ВНУТРЕННЕЕ ИМЯ ТАБЛИЦЫ МОДЕЛИ НЕ ОТДАЁТСЯ — И ЭТО ПО ПОСТРОЕНИЮ, А НЕ ФИЛЬТРОМ.
+        # Было: `- Реализация Товаров Услуг | focus=document_реализациятоваровуслуг`, и
+        # docstring велел скопировать `focus` дословно. Дальше бот пересказывал варианты
+        # человеку своими словами — и внутреннее имя уходило клиенту мимо `ask_1c`, то есть
+        # мимо зачистки плагина (`F218` закрывал её только на ответах инструмента).
+        # [замер 03.08] так утекли «Реализация Товаров Услуг_Товары», `НДСРегл`, `НДСУпр`.
+        # Стало: боту виден ОДИН и тот же человеческий текст — и как подпись варианта, и
+        # как значение `focus`. Скопировать нечего, кроме того, что и так предназначено
+        # человеку. Обратно в имя источника его сводит сервис (`resolve_focus`, 02.08) —
+        # он принимает человеческое название наравне с внутренним, спрашивая базу, а не
+        # разбирая строку. [замер 03.08] меток 1 502, различных 1 496: неоднозначны 6, и на
+        # них `resolve_focus` честно возвращает «не свёл» и уходит обычным путём выбора.
         for o in opts:
             if not isinstance(o, dict):
                 continue
             # `measure` заполнено — выбирается величина; иначе выбирается сущность.
             if o.get("measure"):
+                # ⚠ Имя величины остаётся внутренним (`НДСРегл`): это ключ данных, и
+                # человеческого имени у него сегодня нет ниоткуда. Отдельная работа.
+                # 🔴 `focus` здесь — СУЩНОСТЬ, а не величина: в этой ветке `label` занят
+                # именем величины, поэтому человеческое имя сущности приходит отдельным
+                # полем `entity_label` (заведено в `serene_ask` тем же заходом). Пусто —
+                # `focus` не передаём вовсе: лучше пустое поле, чем внутреннее имя наружу
+                # или, того хуже, имя величины, поданное как сущность.
+                name = o.get("label") or o["measure"]
                 lines.append("- %s | measure=%s | focus=%s"
-                             % (o.get("label") or o["measure"], o["measure"],
-                                o.get("src") or ""))
+                             % (name, o["measure"], o.get("entity_label") or ""))
             elif o.get("src"):
-                lines.append("- %s | focus=%s" % (o.get("label") or o["src"], o["src"]))
+                name = o.get("label") or o["src"]
+                lines.append("- %s | focus=%s" % (name, name))
         out = CLARIFY_HINT
         if text:
             out += "\n\n" + text
