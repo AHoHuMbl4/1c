@@ -300,6 +300,30 @@ def deliver_args():
     return a
 
 
+# 🔴 СЛЕД СЕРВИСА ЗА КАЖДЫЙ ВОПРОС. Требование владельца 03.08: «на каждом шагу логировать
+# можно — время, что делается и что происходит». Сам след пишет `serene_ask` (`diag.шаги` и
+# строки `ask СЛЕД` в поток ошибок); до модели он НЕ доходит и дойти не должен — там
+# внутренние имена сущностей. Поэтому прогонщик берёт его из журнала юнита, а не из ответа.
+#
+# Имя юнита — в окружении, а не в коде: у другой установки оно другое. Не задано — след
+# просто не собирается, прогон идёт как прежде.
+ASK_UNIT = os.environ.get('ACCEPTANCE_ASK_UNIT') or ''
+
+
+def ask_trace(since_iso):
+    """Строки следа сервиса, появившиеся с момента `since_iso`."""
+    if not ASK_UNIT:
+        return []
+    try:
+        p = subprocess.run(['journalctl', '-u', ASK_UNIT, '--since', since_iso,
+                            '--no-pager', '-o', 'cat'],
+                           capture_output=True, text=True, timeout=60)
+    except Exception:                               # noqa: BLE001 — журнал не обязателен
+        return []
+    return [l.split('ask СЛЕД', 1)[1].strip()
+            for l in p.stdout.splitlines() if 'ask СЛЕД' in l]
+
+
 def ask_bot(q, key, run):
     p = subprocess.run(['sudo', '-u', BOT_USER, '-H', 'timeout', '400',
                         'openclaw', 'agent', '--agent', AGENT] + deliver_args() + [
@@ -468,6 +492,7 @@ def main():
              'fail': '🔴 ПРОВАЛ', 'unchecked': '⚠ ПРИБОР НЕ ПРОВЕРИЛ', 'broken': '⚠ СБОЙ'}
     for c in cases:
         t0 = time.time()
+        q_since = time.strftime('%Y-%m-%d %H:%M:%S')
         obs = {'human': '', 'service': None, 'called': False, 'error': None}
         try:
             obs['human'] = ask_bot(c['q'], str(c['no']), run)
@@ -505,6 +530,10 @@ def main():
                   (' | поведение ' + '/'.join(c['kinds'])) if c['kinds'] else ''), flush=True)
             print('    человеку: %s' % (obs['human'] or '').replace('\n', ' ')[:200], flush=True)
             print('    сервис:   %s' % (obs['service'] or '—').replace('\n', ' ')[:160], flush=True)
+        # След печатается ВСЕГДА, а не только у неверных: по верным видно, чем выбор
+        # держался, и без этого «стало верно» неотличимо от везения.
+        for ln in ask_trace(q_since):
+            print('    след: %s' % ln, flush=True)
     done = sum(tally.values()) - tally['broken']
     print('\nИТОГ %d-%d: прогнано %d из %d (внешних сбоев %d)'
           % (lo, hi, done, len(cases), tally['broken']), flush=True)

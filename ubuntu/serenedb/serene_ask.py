@@ -85,6 +85,10 @@ COVERAGE_TOP = int(os.environ.get("ASK_COVERAGE_TOP", "15"))
 STALE_WARN_SEC = int(os.environ.get("ASK_STALE_WARN_SEC", "3600"))
 TERMS_TOP = int(os.environ.get("ASK_TERMS_TOP", "6"))
 TOPK = int(os.environ.get("ASK_TOPK", "40"))
+# След хода ответа в журнал сервиса (`journalctl -u 1c-serene-ask@…`). В самом ответе след
+# лежит всегда (`diag.шаги`) — переключатель только про вывод в поток ошибок, чтобы его
+# можно было погасить, не теряя следа там, где его читает прогонщик.
+TRACE = os.environ.get("ASK_TRACE", "1") not in ("0", "false", "no")
 ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
 
 # Модель ранжирования — штатная функция движка, а не наша сортировка. Выбирается
@@ -2493,9 +2497,33 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     (сперва top-N строк, потом группировка) терял целые таблицы.
     """
     t0 = time.time()
+    # 🔴 ПОШАГОВЫЙ СЛЕД: КОГДА, ЧТО СДЕЛАНО И ЧТО ПОЛУЧИЛОСЬ. Требование владельца 03.08:
+    # «на каждом шагу логировать можно — время, что делается и что происходит».
+    #
+    # Заведён не для красоты. `[03.08]` за один день два диагноза пришлось выводить
+    # запросами к базе задним числом, и один из них оказался неверным: почему ответ был
+    # «88», выяснилось только перебором сущностей с таким числом строк (`HOW_NOT_TO §1.46`).
+    # Ответ уже содержал `diag`, но в нём лежали ПОМЕТКИ, а не ход: не видно ни порядка, ни
+    # времени, ни того, какой шаг сузил множество.
+    #
+    # След — часть ответа (`diag.шаги`), а не только журнал: прогонщик и приёмка получают
+    # его тем же путём, что числа, и он не теряется при доставке. Ссылка на список лежит в
+    # `diag`, поэтому все ветки возврата отдают его накопленным, без правки каждой из них.
+    шаги = []
+
+    def шаг(что, **чем):
+        шаги.append(dict(шаг=что, мс=int((time.time() - t0) * 1000), **чем))
+        if TRACE:
+            sys.stderr.write("ask СЛЕД %6d мс  %-18s %s\n" % (
+                шаги[-1]["мс"], что,
+                " ".join("%s=%s" % (k, v) for k, v in чем.items())))
+
     intent = parse_intent(question, time.strftime("%Y-%m-%d"))
     preds = _predicates(intent)
-    diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind")}
+    diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind"),
+            "шаги": шаги}
+    шаг("разбор вопроса", тип=intent.get("kind"), понятий=len(intent.get("terms") or []),
+        величина=(intent.get("measure") or "—"), считать=(intent.get("want") or "—"))
 
     # ВОПРОС О САМИХ ДАННЫХ ИЛИ О ТОМ, ЧТО СИСТЕМА О НИХ ЗНАЕТ (п. 13).
     #
@@ -2545,6 +2573,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     diag["min_should_match"] = k if exprs else 0
 
     by = tables_of(match, preds)
+    шаг("отбор: буквально", сущностей=len(by), строк=sum(by.values()) if by else 0)
     # 🔴 ТРИ ПОВЕРХНОСТИ ОТБОРА СКЛАДЫВАЮТСЯ, А НЕ ЗАМЕНЯЮТ ДРУГ ДРУГА (03.08).
     #
     # Как было: буквальный отбор служил ШЛЮЗОМ. Нашёл хоть что-нибудь — пусть мусор — и
@@ -2580,6 +2609,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 extra.append(t)
     if extra:
         diag["by_meaning"] = extra
+    шаг("отбор: смысл и синонимы", добавлено=len(extra))
     # Табличные части попадают в кандидаты вместе со своей шапкой: искать их по словам
     # вопроса бесполезно — имени контрагента в строках товаров нет.
     # ⚠ ГРАНИЦА, ОСТАВЛЕННАЯ СОЗНАТЕЛЬНО: строки берутся у шапок, найденных СЛОВАМИ.
@@ -2649,6 +2679,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # а выдуманный счёт был бы враньём в том самом поле, которым модель различает
     # кандидатов. Порядок ниже всё равно пересобирается по смыслу и реранкером.
     cands = list(by) + [t for t in extra if t not in by]
+    шаг("кандидаты собраны", всего=len(cands))
     # ВЕЛИЧИНА, О КОТОРОЙ СПРАШИВАЮТ, ДОЛЖНА У КАНДИДАТА СУЩЕСТВОВАТЬ.
     # Строка несёт ВСЕ свои числовые величины картой, поэтому проверка теперь общая:
     # у кандидата должна быть хоть одна величина. Какая именно нужна — решается уже
@@ -3187,6 +3218,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["arbiter_kin_rival"] = c
         if len(arb_pool) > 1:
             diag["arbiter_rivals"] = arb_pool[1:]
+        шаг("круг арбитра", всего=len(arb_pool),
+            соперники=",".join(arb_pool[1:]) or "—")
 
     def _checked(out):
         """Ответ уходит только если собственное знание базы подтверждает выбор сущности.
@@ -3344,6 +3377,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["via_parent"] = True
 
     diag["focus"], diag["found"] = src, by.get(src, 0)
+    шаг("сущность выбрана", сущность=(src or "—"), совпадений=by.get(src, 0),
+        выбрал=("человек" if focus else "модель"),
+        сомнение=bool(diag.get("signals_disagree")))
 
     # НЕПОЛНОТА ИМЕННО ЭТОЙ СУЩНОСТИ (п. 13): «если из-за потери возможен неверный ответ,
     # система обязана уточнить или отказать, а не ответить по неполным данным». Первый шаг
@@ -3430,6 +3466,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if measure_pick:                           # человек уже выбрал величину кнопкой
         measure, measure_alts = measure_pick, []
     diag["measure"] = measure
+    шаг("величина выбрана", величина=(measure or "—"),
+        подходящих=len(measure_alts or []))
     # 🔴 ТОЖДЕСТВЕННО НУЛЕВАЯ ВЕЛИЧИНА — ЭТО НЕЗАПОЛНЕННОЕ ПОЛЕ, А НЕ ОТВЕТ «НОЛЬ».
     #
     # [замер 03.08] «Сколько НДС в наших продажах?» — выбран регистр выручки и величина
@@ -3497,6 +3535,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     agg = aggregate(src, match, preds, measure)
+    шаг("посчитано базой", сущность=src, величина=(measure or "—"),
+        строк=(agg or {}).get("count"), итог=(agg or {}).get("sum"),
+        со_значением=(agg or {}).get("count_amount"))
     # Числа неполноты разрешены гейту наравне с порогами вопроса: иначе фраза «не дошло
     # 104 строки» была бы отвергнута как выдумка, и система замолчала бы ровно там, где
     # обязана предупредить.
@@ -3546,6 +3587,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         ok_roles, bad_roles = False, bad_roles + ["утечка инструкции: %s" % leak]
     ok_nums, bad_nums = gate(text, rows, agg, extra_vals)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
+    шаг("гейт исходящего", прошёл=bool(ok), причин=len(bad),
+        первая=(bad[0][:60] if bad else "—"))
     # ОТВЕТ ОБЯЗАН ДОЙТИ, ЕСЛИ ОН ЕСТЬ. Решение владельца 27.07: «если данные есть, но по
     # нашей системе мы их не отдали — пропадает смысл проекта». Первая формулировка могла
     # не пройти проверку по своей вине (модель объявила число строк суммой), а данные при
