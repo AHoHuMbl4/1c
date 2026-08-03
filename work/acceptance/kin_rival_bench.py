@@ -43,10 +43,16 @@ B = importlib.import_module("entity_choice_bench")
 
 # Итоги по каждой паре «сущность + величина», сведённые в семьи по `search_tables.parent`.
 # Считает база одним запросом: наружу не вычитывается ничего, кроме готовых чисел (п. 20).
+# 🔴 `map_entries` — штатный способ разложить карту (доки SereneDB, Sql › Functions › Map),
+# проверен на нашей сборке 26.07.3. Два параллельных `unnest` по `map_keys` и `map_values`
+# держались бы на негласном допущении, что списки идут в одном порядке; `map_entries` отдаёт
+# struct(key, value), где пара связана по построению. `[замер 03.08]` числа обоими способами
+# совпали до единицы, так что это не исправление ошибки, а снятие допущения.
 FAMILY_SQL = """
-WITH m AS (SELECT src_table, unnest(map_keys(nums)) k, unnest(map_values(nums)) v
+WITH m AS (SELECT src_table, unnest(map_entries(nums)) e
            FROM search_corpus WHERE nums IS NOT NULL),
-s AS (SELECT src_table, k, round(sum(v), 2) tot FROM m GROUP BY 1, 2),
+u AS (SELECT src_table, struct_extract(e, 'key') k, struct_extract(e, 'value') v FROM m),
+s AS (SELECT src_table, k, round(sum(v), 2) tot FROM u GROUP BY 1, 2),
 f AS (SELECT coalesce(t.parent, t.src_table) fam, t.parent IS NULL AS head,
              s.src_table, s.k, s.tot
       FROM s JOIN search_tables t ON t.src_table = s.src_table)

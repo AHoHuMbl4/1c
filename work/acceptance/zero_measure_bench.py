@@ -75,9 +75,17 @@ def main():
     print("=" * 78)
     print("1. МАСШТАБ ПО БАЗЕ")
     r = A.psql(
-        "WITH m AS (SELECT src_table, unnest(map_keys(nums)) k, unnest(map_values(nums)) v"
+        # 🔴 `map_entries` — ШТАТНЫЙ способ разложить карту, а не два `unnest` подряд.
+        # Параллельные `unnest(map_keys(...))` и `unnest(map_values(...))` держатся на
+        # негласном допущении, что оба списка идут в одном порядке; `map_entries` отдаёт
+        # struct(key, value), где пара связана по построению. Проверено в доках SereneDB
+        # (Sql › Functions › Map) и на нашей сборке 26.07.3; числа прибора не изменились —
+        # 1928 / 454 / 539 обоими способами `[замер 03.08]`.
+        "WITH m AS (SELECT src_table, unnest(map_entries(nums)) e"
         "           FROM search_corpus WHERE nums IS NOT NULL),"
-        "     g AS (SELECT src_table, k, min(v) mn, max(v) mx FROM m GROUP BY 1,2)"
+        "     u AS (SELECT src_table, struct_extract(e, 'key') k,"
+        "                  struct_extract(e, 'value') v FROM m),"
+        "     g AS (SELECT src_table, k, min(v) mn, max(v) mx FROM u GROUP BY 1,2)"
         " SELECT count(*), count(*) FILTER (WHERE mn=0 AND mx=0),"
         "        count(DISTINCT src_table),"
         "        count(DISTINCT src_table) FILTER (WHERE mn=0 AND mx=0) FROM g")
@@ -91,13 +99,21 @@ def main():
 
     print("\n2. ЕСТЬ ЛИ ЧЕМ ЗАМЕНИТЬ (правило молчит, если живых величин не осталось)")
     r2 = A.psql(
-        "WITH m AS (SELECT src_table, unnest(map_keys(nums)) k, unnest(map_values(nums)) v"
+        # 🔴 `map_entries` — ШТАТНЫЙ способ разложить карту, а не два `unnest` подряд.
+        # Параллельные `unnest(map_keys(...))` и `unnest(map_values(...))` держатся на
+        # негласном допущении, что оба списка идут в одном порядке; `map_entries` отдаёт
+        # struct(key, value), где пара связана по построению. Проверено в доках SereneDB
+        # (Sql › Functions › Map) и на нашей сборке 26.07.3; числа прибора не изменились —
+        # 1928 / 454 / 539 обоими способами `[замер 03.08]`.
+        "WITH m AS (SELECT src_table, unnest(map_entries(nums)) e"
         "           FROM search_corpus WHERE nums IS NOT NULL),"
-        "     g AS (SELECT src_table, k, min(v) mn, max(v) mx FROM m GROUP BY 1,2),"
-        "     e AS (SELECT src_table, count(*) FILTER (WHERE mn=0 AND mx=0) z,"
+        "     u AS (SELECT src_table, struct_extract(e, 'key') k,"
+        "                  struct_extract(e, 'value') v FROM m),"
+        "     g AS (SELECT src_table, k, min(v) mn, max(v) mx FROM u GROUP BY 1,2),"
+        "     ent AS (SELECT src_table, count(*) FILTER (WHERE mn=0 AND mx=0) z,"
         "                  count(*) FILTER (WHERE NOT (mn=0 AND mx=0)) a"
         "           FROM g GROUP BY 1)"
-        " SELECT count(*) FILTER (WHERE z>0 AND a>0), count(*) FILTER (WHERE z>0 AND a=0) FROM e")
+        " SELECT count(*) FILTER (WHERE z>0 AND a>0), count(*) FILTER (WHERE z>0 AND a=0) FROM ent")
     with_alt, no_alt = (int(x) for x in r2[0][:2])
     print("   сущностей, где правило предложит выбор   %6d" % with_alt)
     print("   сущностей, где предложить нечего         %6d  (поведение прежнее)" % no_alt)
