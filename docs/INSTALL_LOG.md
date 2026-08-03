@@ -254,3 +254,20 @@ ERROR: Column 'amount' has unsupported type DECIMAL(14,2) and can not be indexed
 | 1 | PostgreSQL на Windows headless | один вход по RDP и запуск установщика руками |
 | 2 | Замер ресурсов СУБД рядом с 1С | зависит от п.1 |
 | 3 | SereneDB на Windows | только через WSL2/Docker — требуется `wsl --install` + перезагрузка |
+
+## 03.08 — плагин claude-code-harness 5.6.0 (пилот)
+
+- Поставлен по слову владельца: `claude plugin marketplace add Chachamaru127/claude-code-harness`
+  → `claude plugin install claude-code-harness@claude-code-harness-marketplace`
+  (scope: user, `~/.claude/plugins/…` — в новых сессиях подхватывается сам).
+- Что привозит: 21 навык (`/harness-plan|work|review|release|setup`, `cursor-*`,
+  `failure-codifier`, `memory`…), 4 агента, 27 хуков на Go-движке (`bin/harness`,
+  линукс-бинарь исполним). Всегда в контексте ~2,9k токенов.
+- Проверено вживую: `rm -rf /` через его `hook pre-tool` → «ask» с причиной; безобидные
+  команды — молча. Наша обвязка не задета: test-hooks 6/6, git-гейт независим.
+- Особо ценное под наши болячки: file-lease на Write|Edit (двум сессиям не даст
+  толкаться в одном файле — HOW_NOT_TO §3.34), PostCompact-вброс WIP после сжатия
+  контекста, session-summary в журнал на Stop.
+- Осторожность: при ненайденном корне его хуки fail-open («hook skipped» в stderr);
+  наш git-гейт остаётся последним рубежом. Снять пилот: `claude plugin disable
+  claude-code-harness`.
