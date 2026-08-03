@@ -38,7 +38,10 @@ EXTRA_UNITS="${EXTRA_UNITS:-serenedb.service}"
 # через пробел. Пусто — проверка пропускается.
 HEALTH_URLS="${HEALTH_URLS:-}"
 # Свежесть данных (п. 17): предельный возраст последнего такта в минутах, 0 — не следить.
-# Формат `FRESH_DSNS`: «имя=строка подключения» через пробел.
+# 🔴 Формат `FRESH_DSNS`: «имя=строка подключения», записи через ТОЧКУ С ЗАПЯТОЙ, а не
+# через пробел: в строке подключения libpq пробелы есть всегда (`host=… port=… user=…`),
+# и разбор по пробелу разваливает её на куски. [замер 02.08] сторож на этом сразу и
+# споткнулся — отчитался «свежесть:port:не-прочитана».
 FRESH_MAX_MIN="${FRESH_MAX_MIN:-0}"
 FRESH_DSNS="${FRESH_DSNS:-}"
 
@@ -95,7 +98,8 @@ fi
 # 🔴 Ровно этого не хватало 29.07: конвейер встал, данные старели четвёртые сутки, и
 # увидеть это можно было только заглянув в базу руками.
 if [ "${FRESH_MAX_MIN:-0}" -gt 0 ] 2>/dev/null && [ -n "$FRESH_DSNS" ]; then
-  for d in $FRESH_DSNS; do
+  while IFS= read -r d; do
+    [ -z "$d" ] && continue
     name="${d%%=*}"; dsn="${d#*=}"
     age=$(psql "$dsn" -tAc \
       "SELECT CAST((epoch(now()) - max(v)) / 60 AS BIGINT) FROM search_quality WHERE k = 'build_ts'" \
@@ -105,7 +109,7 @@ if [ "${FRESH_MAX_MIN:-0}" -gt 0 ] 2>/dev/null && [ -n "$FRESH_DSNS" ]; then
     elif [ "$age" -gt "$FRESH_MAX_MIN" ]; then
       fails="$fails свежесть:$name:${age}мин"
     fi
-  done
+  done <<< "$(printf '%s' "$FRESH_DSNS" | tr ';' '\n')"
 fi
 
 now=$([ -z "$fails" ] && echo "ok" || echo "down:$fails")
