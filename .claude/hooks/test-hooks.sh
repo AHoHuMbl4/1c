@@ -38,6 +38,13 @@ done
 for c in 'ls /opt' 'git commit -m x' 'python3 work/acceptance/test_acceptance.py'; do
   is_deploy "$c"; [ $? = 1 ]; say $? "не выкат: $c"
 done
+# 🔴 «Кладёт в /opt» ещё не значит «выкатывает наш код»: 03.08 гейт замера остановил перенос
+# самого Claude Code в /opt. Ложная тревога такого рода приучает обходить гейт, поэтому
+# выкатом считается попадание туда файла ИЗ ДЕРЕВА ПРОЕКТА.
+for c in 'cp -a /root/.local/share/claude/. /opt/claude-code/' \
+         'install -m 644 /etc/hosts /opt/backup/hosts'; do
+  is_deploy "$c"; [ $? = 1 ]; say $? "не выкат (чужой источник): $c"
+done
 
 # --- хуки на временном репозитории -----------------------------------------------
 TMP=$(mktemp -d)
@@ -124,13 +131,19 @@ cp "$REPO"/.githooks/pre-commit "$G/.githooks/"
 python3 - "$G" <<'PY'
 import json, sys
 gates = ["check-docs", "check-graph-fresh", "check-active-size", "check-sql-docs",
-         "check-diff", "check-prompt-rules", "check-golden", "check-gates"]
+         "check-diff", "check-prompt-rules", "check-golden", "check-gates", "prepare-diff"]
 hooks = [{"type": "command", "command": ".claude/hooks/%s.sh" % g} for g in gates]
 json.dump({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": hooks}]}},
           open(sys.argv[1] + "/.claude/settings.json", "w"), ensure_ascii=False)
 PY
 printf '{"entities":[],"relations":[]}\n' > "$G/memory_bank/mcp-memory.json"
 printf '# Active Context\n' > "$G/memory_bank/activeContext.md"
+# Правила проекта — часть проверяемого состояния: с 03.08 hook_guard_armed сверяет, что они
+# на месте и принадлежат владельцу (подмена сносом и подкладыванием своего иначе не видна).
+mkdir -p "$G/memory_bank/owner-memory"
+printf '# правила\n' > "$G/CLAUDE.md"
+printf '# контракт\n' > "$G/TARGET.md"
+printf '# решение владельца\n' > "$G/memory_bank/owner-memory/probe.md"
 cd "$G" || exit 1
 git init -q .; git config user.email t@t; git config user.name t
 git config core.hooksPath .githooks
@@ -247,24 +260,25 @@ cd "$L" || exit 1; git init -q .
 cp "$HOOKS"/lib-hooks.sh "$L/.claude/hooks/"
 ( . "$L/.claude/hooks/lib-hooks.sh"
   cd "$L"
-  # 🔴 Файл ИЗ ОДНОЙ СТРОКИ — тот самый случай, на котором первая редакция ломалась:
-  # `grep -v … > tmp && mv` при пустом остатке возвращал 1, `mv` не выполнялся, и люк
-  # оставался открытым навсегда, притом что в журнал уже ушло «потреблён».
-  printf 'check-docs проба одноразовости\n' > .claude/state/override.txt
+  # 🔴 Люк живёт в каталоге гейтов, а не в .claude/state/. Там, где сессия пишет сама, он
+  # был бы не люком, а выключателем: исполнитель открывал бы себе дверь одной строкой.
+  # Отсюда и то, что строка НЕ потребляется — снимает её владелец, а дверь удерживает
+  # остановка коммита, пока файл не пуст.
+  HATCH=".claude/hooks/override.txt"
+  printf 'check-docs проба люка\n' > "$HATCH"
   hook_override_take check-docs || exit 11
-  [ -s .claude/state/override.txt ] && exit 12          # строка обязана исчезнуть
-  hook_override_take check-docs && exit 13              # второй раз люка нет
-  grep -q 'ОБХОД ЛЮКОМ' .claude/hooks.log || exit 14    # след обязателен
-  printf 'check-docs причина\n' > .claude/state/override.txt
-  hook_override_take check-doc && exit 15               # имя сверяется точно, не образцом
+  grep -q 'ОБХОД ЛЮКОМ' .claude/hooks.log || exit 12    # след обязателен
+  hook_override_take check-doc && exit 13               # имя сверяется точно, не образцом
+  hook_override_take check-active-size && exit 14       # чужой гейт люком не открыт
+  [ -s "$HATCH" ] || exit 15                            # строку снимает владелец, не хук
   exit 0 )
-say $? 'люк: одноразовый на файле из одной строки, точное имя, след в журнале'
+say $? 'люк: открывает названный гейт, точное имя, след, строку снимает владелец'
 
 # --- воронка ответа (fail-open) ---------------------------------------------------
 echo '== воронка ответа: упавшая проверка = остановка =='
 ( . "$HOOKS/lib-hooks.sh"
   cd "$L"
-  rm -f .claude/state/override.txt
+  rm -f .claude/hooks/override.txt
   printf '' | hook_gate_json check-docs | grep -q '"deny"' || exit 21          # пустой вывод
   printf 'Traceback (most recent call last):' | hook_gate_json check-docs | grep -q '"deny"' || exit 22
   printf '{}' | hook_gate_json check-docs | grep -q 'permissionDecision' && exit 23  # молчание проходит
@@ -303,6 +317,20 @@ d['hooks']['PreToolUse'][0]['hooks']=[h for h in hs if 'check-sql-docs' not in h
 json.dump(d, open(p,'w'), ensure_ascii=False)"
 [ -n "$(armed)" ]; say $? 'гейт убран из settings.json — нарушение видно'
 cp "$TMP/set.bak" .claude/settings.json
+
+# 🔴 С 03.08 правила защищены ПРАВАМИ, а не только средой: сессия работает под рабочим
+# аккаунтом, каталоги правил принадлежат владельцу. Единственный оставшийся способ обойти
+# это — снести файл и положить свой, но тогда владелец файла меняется. Отсюда две пробы.
+mv CLAUDE.md "$TMP/rules.bak"
+[ -n "$(armed)" ]; say $? 'правило снесено — нарушение видно'
+mv "$TMP/rules.bak" CLAUDE.md
+
+# Владельца в песочнице не подменить (тест идёт не от root), поэтому проверяем саму
+# способность отличать: подставляем несуществующий путь через тот же список.
+OUT=$( . "$G/.claude/hooks/lib-hooks.sh"; cd "$G"; rm -f TARGET.md; hook_guard_armed )
+printf '%s' "$OUT" | grep -q 'TARGET.md'; say $? 'пропажу контракта гейт называет поимённо'
+printf '# контракт\n' > TARGET.md
+
 [ -z "$(armed)" ]; say $? 'всё возвращено — нарушений снова нет'
 
 echo '== check-gates: разоружение останавливает коммит =='
