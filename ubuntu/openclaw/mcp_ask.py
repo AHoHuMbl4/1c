@@ -148,9 +148,54 @@ def _kv_block(label, d):
     return ("%s:\n%s" % (label, "\n".join(lines))) if lines else ""
 
 
+# 🔴 ВНУТРЕННИЙ СЧЁТЧИК, НАЗВАННЫЙ СВОИМ ИМЕНЕМ, СТАНОВИТСЯ ЛОЖЬЮ О ДАННЫХ (`F251`).
+#
+# Сервис кладёт в `partial` пометки о своих отсечках: сколько ВИДОВ ЗАПИСЕЙ рассмотрено,
+# сколько показано модели, что не понято в вопросе. Мост отдавал их боту как есть —
+# `reranked_of=1502`, `reranked=60`, — и модель, не зная, что это, выдумывала смысл.
+# `[замер 04.08, живой прогон через бота]` на вопросе «покажи три самые крупные продажи»
+# человек получил: «это выборка из 60 записей, а всего в базе 1 502 документа». Оба числа
+# ЗАКОННЫ (они пришли ответом инструмента, гейт их пропустил верно), но сказанное про них
+# — неправда: 1 502 это число видов записей, рассмотренных отбором, а не документов в базе.
+# Гейт такое не ловит по построению: он сверяет числа, а не то, чем их называют.
+#
+# Поэтому имена переводятся здесь, на границе «внутреннее → клиентское», и переводятся
+# КОДОМ: просьбу «не выдумывай смысл» модель читает и не исполняет (правило владельца).
+# Ключ, которому имени не нашлось, числом наружу не идёт вовсе — вместо него счётчик
+# «сколько ещё отсечек было»: потеря не молчаливая (п. 13), но и выдумать по ней нечего.
+PARTIAL_LABELS = {
+    "entities_shown": "record_kinds_shown_to_model",
+    "entities_total": "record_kinds_matched_total",
+    "partial_shown": "partially_matching_kinds_shown",
+    "partial_total": "partially_matching_kinds_total",
+    "reranked": "record_kinds_kept_after_ranking",
+    "reranked_of": "record_kinds_considered",
+    "intent_lost": "question_parts_not_understood",
+    "intent_assumed": "question_parts_assumed",
+}
+
+
+def _named_partial(d):
+    """Пометки отсечки под именами, которые можно произнести человеку, не соврав."""
+    if not isinstance(d, dict):
+        return {}
+    out, unnamed = {}, 0
+    for k, v in d.items():
+        if v is None:
+            continue
+        if k in PARTIAL_LABELS:
+            out[PARTIAL_LABELS[k]] = v
+        else:
+            unnamed += 1
+            sys.stderr.write("mcp_ask: пометка отсечки без имени для человека: %s\n" % k)
+    if unnamed:
+        out["other_limits_applied"] = unnamed
+    return out
+
+
 def _with_partial(out, data):
     """Дописать, что учтено не всё (п. 13). Числа отсюда уходят боту, значит гейт их видит."""
-    block = _kv_block("PARTIAL", data.get("partial"))
+    block = _kv_block("PARTIAL", _named_partial(data.get("partial")))
     return out + "\n\n" + PARTIAL_HINT + "\n\n" + block if block else out
 
 
