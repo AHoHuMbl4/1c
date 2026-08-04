@@ -103,7 +103,10 @@ Code закрывает `.claude/hooks/`, — то есть защитой од�
 **Доступы к рабочему окружению** (04.08, `setup-work-user.sh` + группы): `/etc/1c-*.env` —
 `640 root:1c-secrets`; журнал юнитов — группа `systemd-journal`; контур бота
 (`/home/undebot/.openclaw`) — группа `undebot`; выкат `/opt/1c-mcp-reports`,
-`/opt/openclaw-mcp` — чтение и запись через `1c-secrets`. Без этого приборы не запускались
+`/opt/openclaw-mcp` — чтение и запись через `1c-secrets`; токены бота
+`/etc/1c-telegram-test*.token` — `640 undebot:1c-secrets` (при `600` членство в группе не
+даёт ничего, а приёмка идёт настоящей доставкой); перезапуск юнитов — `sudoers.d/claudedev-units`,
+ровно `systemctl … 1c-*`, без общего `sudo`. Без этого приборы и живой замер не запускались
 вовсе (`CHANGELOG` 04.08).
 
 **Окружение перенесено целиком** (`setup-work-user.sh`, шаг 4-тер): Claude Code, плагины
