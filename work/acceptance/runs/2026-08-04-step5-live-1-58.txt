@@ -1,0 +1,73 @@
+ЖИВОЙ ЗАМЕР ШАГА 5 — счёт против независимого пересчёта
+сервис: http://127.0.0.1:8099/ask   база: ut_test   вопросов: 58
+
+  1  —  шаг 5 не считал (kind=clarify, решение шага 5: measure_gate,measure_ambiguous)
+  2  ok  search_corpus                      строк=28      со_знач=28      итог=2719573.2300000004
+  3  —  шаг 5 не считал (kind=clarify, решение шага 5: measure_gate,measure_ambiguous)
+  4  ok  search_corpus                      строк=597     со_знач=597     итог=6166852.04
+  5  ok  search_corpus                      строк=1004    со_знач=1004    итог=4466.48
+  6  —  шаг 5 не считал (kind=clarify)
+  7  ok  search_corpus                      строк=11588   со_знач=11588   итог=36942610.88
+  8  —  шаг 5 не считал (kind=clarify)
+  9  —  шаг 5 не считал (kind=clarify)
+ 10  —  шаг 5 не считал (kind=clarify)
+ 11  —  шаг 5 не считал (kind=clarify)
+ 12  —  шаг 5 не считал (kind=clarify)
+ 13  ok  search_corpus                      строк=272     со_знач=0       итог=None
+ 14  —  шаг 5 не считал (kind=clarify)
+ 15  ok  search_corpus                      строк=249     со_знач=0       итог=None
+ 16  ok  search_corpus                      строк=2040    со_знач=2040    итог=25494521.81
+ 17  ok  search_corpus                      строк=1901    со_знач=1901    итог=1304566.22
+ 18  —  шаг 5 не считал (kind=clarify)
+ 19  ok  search_corpus                      строк=1774    со_знач=1774    итог=39392991.64
+ 20  ok  search_corpus                      строк=266     со_знач=266     итог=18178129.75
+ 21  —  шаг 5 не считал (kind=clarify)
+ 22  —  шаг 5 не считал (kind=clarify)
+ 23  —  шаг 5 не считал (kind=no_data)
+ 24  ok  search_idx                         строк=22      со_знач=0       итог=None
+ 25  ok  search_corpus                      строк=1       со_знач=0       итог=None
+ 26  —  шаг 5 не считал (kind=clarify)
+ 27  —  шаг 5 не считал (kind=clarify)
+ 28  —  шаг 5 не считал (kind=clarify)
+ 29  —  шаг 5 не считал (kind=clarify)
+ 30  ok  search_corpus                      строк=74      со_знач=74      итог=7049883.18
+ 31  ok  search_corpus                      строк=74      со_знач=74      итог=7049883.18
+ 32  ok  search_corpus                      строк=2557    со_знач=2557    итог=337125514.71
+ 33  ok  search_corpus                      строк=2       со_знач=2       итог=6000000.0
+ 34  —  шаг 5 не считал (kind=clarify)
+ 35  —  шаг 5 не считал (kind=clarify)
+ 36  —  шаг 5 не считал (kind=clarify)
+ 37  —  шаг 5 не считал (kind=clarify)
+ 38  —  шаг 5 не считал (kind=clarify)
+ 39  —  шаг 5 не считал (kind=clarify)
+ 40  ok  search_corpus                      строк=127     со_знач=127     итог=4140907.05
+ 41  ok  search_idx                         строк=746     со_знач=746     итог=286107.66
+ 42  —  шаг 5 не считал (kind=clarify)
+ 43  —  шаг 5 не считал (kind=clarify)
+ 44  ok  search_idx                         строк=2       со_знач=0       итог=None
+ 45  —  шаг 5 не считал (kind=clarify)
+ 46  ok  search_corpus                      строк=3091    со_знач=0       итог=None
+ 47  ok  search_corpus                      строк=97834   со_знач=0       итог=None
+ 48  —  шаг 5 не считал (kind=clarify)
+ 49  ok  search_corpus                      строк=4399    со_знач=4399    итог=146293.98
+ 50  ok  search_idx                         строк=1468    со_знач=1468    итог=94134.6163
+ 51  ok  search_corpus                      строк=4405    со_знач=0       итог=None
+ 52  —  шаг 5 не считал (kind=clarify)
+ 53  —  шаг 5 не считал (kind=clarify)
+ 54  —  шаг 5 не считал (kind=clarify)
+ 55  ok  search_corpus                      строк=4       со_знач=0       итог=None
+ 56  —  шаг 5 не считал (kind=clarify)
+ 57  —  шаг 5 не считал (kind=clarify, решение шага 5: measure_gate,measure_ambiguous)
+ 58  —  шаг 5 не считал (kind=clarify)
+
+==========================================================================
+шаг 5 считал на 25 вопросах, не запускался на 33
+  из них решение шага 5 (страж величины): 3 — №1 measure_gate,measure_ambiguous, №3 measure_gate,measure_ambiguous, №57 measure_gate,measure_ambiguous
+  решение других шагов: 30
+E1 число не сходится         0
+E2 выдуманное число          0
+E3 невоспроизводимо          0
+E4 множество не объявлено    0
+E5 потеря молча              0
+==========================================================================
+ОШИБОК ШАГА 5: 0 из 25 вопросов, где он считал
