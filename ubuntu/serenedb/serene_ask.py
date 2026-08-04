@@ -857,8 +857,19 @@ def rows_of(src_table, match, preds, limit, measure=None):
     контрагента стоит на 367-м символе, вопрос «какой ИНН у Дон-Агро» получал ответ
     «данных нет» при том, что значение есть и в витрине, и в корпусе, и в индексе.
     Подсветка остаётся — она показывает, ГДЕ совпало, — но данные берутся из строки.
+
+    🔴 ПОКАЗАНО = ПОСЧИТАНО. Строки уходят модели, а числа считает `aggregate`; множество у
+    них одно. Здесь папки справочника прежде не отбрасывались, а в счёте отбрасываются, и
+    множества расходились молча: [замер 04.08] на отборе из 94 строк-групп модели ушло 40
+    записей, а счёт по ним дал `count=0, sum=0`. Хуже самого нуля то, что гейт такую
+    подмену пропускает по построению: он сверяет названное число со строками, а строки —
+    вот они, показаны. Значит модель могла процитировать величину записи, которой в счёте
+    нет. Признак тот же, что в счёте (`IsFolder`, поле платформы 1С), и разойтись они
+    больше не могут. Число отброшенных групп называет ответ — его считает `aggregate`
+    (`folders`), а требует `asked_figure_missing`.
     """
-    where = [w for w in ([match] + preds) if w] + ["src_table = %s" % lit(src_table)]
+    where = [w for w in ([match] + preds) if w] + ["src_table = %s" % lit(src_table),
+             "NOT coalesce(map_extract_value(flags, 'IsFolder'), false)"]
     src = INDEX if match else CORPUS
     frag = ("ts_highlight(doc, 'MaxWords=14,MaxFragments=2,StartSel=[,StopSel=]') "
             "|| ' | ' || doc" if match else "doc")
@@ -1938,6 +1949,18 @@ def _readings(tok):
     return {v for v in out} | {float(int(v)) for v in out if v == int(v)}
 
 
+def _plausible(d, mo):
+    """Существует ли такой день и месяц. Отрицательная дробь датой не является.
+
+    🔴 Проверки диапазона не было вовсе, и «-3.26» читалось как «3-е число 26-го
+    месяца»: числовая ветка гейта такой токен не видела вообще, а датная сверяла его с
+    настоящими датами и отвергала. `[замер 04.08, step7_bench]` так отвергались верные
+    ответы с отрицательными величинами (сторно, возвраты, остатки). Границы здесь не
+    подгонка под базу, а календарь: он одинаков на любой конфигурации.
+    """
+    return 1 <= d <= 31 and 1 <= mo <= 12
+
+
 def _dates(text):
     """Даты как УПОРЯДОЧЕННЫЕ компоненты (день, месяц, год).
 
@@ -1951,11 +1974,13 @@ def _dates(text):
             y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
         else:
             d, mo, y = int(m.group(4)), int(m.group(5)), int(m.group(6))
-        out.append((d, mo, y))
-        seen.append(m.span())
+        if _plausible(d, mo):
+            out.append((d, mo, y))
+            seen.append(m.span())
     for m in DATE2.finditer(str(text or "")):
-        if not any(a <= m.start() and m.end() <= b for a, b in seen):
-            out.append((int(m.group(1)), int(m.group(2)), None))
+        d, mo = int(m.group(1)), int(m.group(2))
+        if _plausible(d, mo) and not any(a <= m.start() and m.end() <= b for a, b in seen):
+            out.append((d, mo, None))
     return out
 
 
@@ -1974,10 +1999,24 @@ def _date2_readings(text, d, mo):
 
 
 def _date_spans(text):
+    """Куски текста, которые числовая ветка гейта не разбирает: это даты.
+
+    Невозможная запись («-3.26», «62.01») датой не считается и остаётся числу — иначе
+    она пропадала бы из обеих веток разом: числовая её не видела, датная не с чем было
+    сверить (`_plausible`).
+    """
     t = str(text or "")
-    spans = [m.span() for m in DATE3.finditer(t)]
+    spans = []
+    for m in DATE3.finditer(t):
+        if m.group(1):
+            y, mo, d = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        else:
+            d, mo, y = int(m.group(4)), int(m.group(5)), int(m.group(6))
+        if _plausible(d, mo):
+            spans.append(m.span())
     for m in DATE2.finditer(t):
-        if not any(a <= m.start() and m.end() <= b for a, b in spans):
+        if _plausible(int(m.group(1)), int(m.group(2))) and \
+                not any(a <= m.start() and m.end() <= b for a, b in spans):
             spans.append(m.span())
     return spans
 
@@ -2243,6 +2282,49 @@ def _filter_dates(intent):
     return [str(x) for x in (p.get("from"), p.get("to")) if x]
 
 
+LIST_MARKER = re.compile(r"^[ \t]*\d+[.)][ \t]+", re.M)
+# Перечисление внутри строки: «Итого 5: 1) первая, 2) вторая». Номер пункта здесь тоже
+# разметка, а не число из данных, — но опознаётся он уже, чем в начале строки: не больше
+# двух цифр и сразу после двоеточия, точки с запятой или запятой. `[замер 04.08]` без
+# этого прибор шага 7 отвергал 7 верных ответов из 44 вопросов на одной лишь нумерации.
+INLINE_MARKER = re.compile(r"(?<=[:;,])[ \t]*\d{1,2}[.)][ \t]+")
+
+
+def without_list_markers(text):
+    """Разметка списка — не утверждение о данных (`F248`).
+
+    «1.», «2)» в начале строки нумеруют пункты. Гейт считал их наравне с суммами, и
+    любой перечисленный ответ («Итого 5: 1) первая, 2) вторая») объявлялся выдумкой —
+    `[замер 04.08, step7_bench]` 4 верных ответа из 44 вопросов отвергнуты только за
+    нумерацию. Плагин на стороне бота снимает их с 02.08 (`withoutListMarkers`), а
+    сервис — нет: одна и та же разметка на двух половинах шага 7 значила разное.
+    Снимается ТОЛЬКО маркер пункта, содержимое пункта проверяется как обычно. Маркеров
+    два вида: в начале строки (номер любой длины — так пишут списки) и внутри строки
+    после двоеточия или запятой (не больше двух цифр — так пишут перечисление в прозе).
+    Асимметрия намеренная: в начале строки «103.» — почти наверняка нумерация, а в
+    середине предложения такое число скорее величина, и снимать его было бы послаблением.
+    """
+    return INLINE_MARKER.sub("", LIST_MARKER.sub("", str(text or "")))
+
+
+def rows_seen(rows):
+    """Строки в том виде, в каком их ВИДЕЛА модель: показанные и обрезанные (`F247`).
+
+    🔴 Гейт заземлял ответ на ВСЕХ добытых строках (`TOPK` = 40), тогда как модели
+    показывается `ROWS_TO_MODEL` = 25, и каждая ещё режется бюджетом. Числа из
+    непоказанных строк и из отрезанных хвостов служили белым списком для того, чего
+    модель не видела: `[замер 04.08, step7_bench]` подменённые крайние значения (31, 7)
+    проходили гейт, потому что где-то в невидимой строке такие числа есть.
+
+    Скопировать модель может только то, что ей дали, поэтому сужение не может отвергнуть
+    верный ответ — оно лишь снимает лишнее разрешение. Срез и бюджет считаются теми же
+    правилами, что в `compose`: одна граница на оба места.
+    """
+    shown = list(rows or [])[:ROWS_TO_MODEL]
+    per_row = max(320, ROWS_BUDGET // max(1, len(shown)))
+    return [list(r[:5]) + [(r[5] or "")[:per_row]] for r in shown]
+
+
 def gate(answer, rows, agg, thresholds=None, our_dates=None):
     """Каждое число ответа обязано встречаться в данных, в итоге или в наших условиях.
 
@@ -2260,36 +2342,42 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None):
     ответ верен, а не отдала его собственная проверка.
     """
     allowed = set()
-    for t in (thresholds or []):
+
+    def allow(v):
+        """Значение и все его равнозначные прочтения: округление, целое, БЕЗ ЗНАКА.
+
+        🔴 Минус в числовой токен не входит (`NUMTOK` начинается с цифры), поэтому
+        посчитанное базой отрицательное значение не совпадало с тем, что читает
+        гейт из текста: ответ «наименьшая -70 552,79» отвергался, хотя это ровно `min`
+        из агрегата `[замер 04.08, step7_bench, 21 случай из 1484]`. Возвраты, сторно и
+        отрицательные остатки — обычные данные 1С, и отказ на них означал отказ при
+        наличии данных (п. 21). Знак при этом ничего не разрешает лишнего: величина всё
+        равно сверяется с данными, а «-5» и «5» гейт и так не различал бы.
+        """
         try:
-            v = float(t)
+            f = float(v)
         except (TypeError, ValueError):
-            continue
-        allowed.add(round(v, 2))
-        if v == int(v):
-            allowed.add(float(int(v)))
+            return
+        for x in (f, abs(f)):
+            allowed.add(round(x, 2))
+            if x == int(x):
+                allowed.add(float(int(x)))
+
+    for t in (thresholds or []):
+        allow(t)
     for r in rows:
         allowed |= _norm_numbers(r[5])
         allowed |= _norm_numbers(r[3])
         # amount приходит из psql как «5000000.00» — через текстовый разбор это давало
         # ещё и 500000000. Берём числом.
-        try:
-            v = float(r[2])
-            allowed.add(round(v, 2))
-            if v == int(v):
-                allowed.add(float(int(v)))
-        except (TypeError, ValueError):
-            pass
+        allow(r[2])
     if agg:
         # ЧИСЛАМИ, а не текстом: прогон "%.2f" через разбор давал ещё и значение,
         # умноженное на 100 (дробная часть склеивалась с целой).
         for key in ("sum", "min", "max", "avg"):
-            v = agg.get(key)
-            if v is not None:
-                allowed.add(round(float(v), 2))
-                if float(v) == int(float(v)):
-                    allowed.add(float(int(float(v))))
-        allowed.add(float(agg["count"]))
+            if agg.get(key) is not None:
+                allow(agg[key])
+        allow(agg["count"])
     # Числа из ВОПРОСА в белый список больше не идут. Вопрос — это аргумент, который
     # сочиняет модель бота: она сама пополняла список того, что ей разрешено сказать,
     # и через это проходило любое выдуманное число.
@@ -2319,7 +2407,9 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None):
         if _ky is not None:
             allowed.add(float(_ky))
 
-    # Токен обоснован, если ХОТЯ БЫ ОДНО его прочтение есть в данных.
+    # Токен обоснован, если ХОТЯ БЫ ОДНО его прочтение есть в данных. Нумерация пунктов
+    # утверждением о данных не является и снимается до разбора (`F248`).
+    answer = without_list_markers(answer)
     bad = [sorted(r)[0] for r in _tokens(answer) if not (r & allowed)]
 
     for d, mo, y in _dates(answer):
@@ -2338,6 +2428,23 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None):
         if not ok:
             bad.append("%02d.%02d%s" % (d, mo, "" if y is None else ".%d" % y))
     return (not bad), bad
+
+
+def count_figures(agg):
+    """Числа ответа, когда величина не названа: счёт и — если было — отброшенное.
+
+    🔴 `folders` уходит наружу вместе со счётом (`F249`). «Сколько записей» при
+    отброшенных папках справочника — это ДВА числа, а не одно, и молчаливая потеря
+    второго считается дефектом (п. 13). Прежде отброшенное держалось только прозой
+    модели: не назвала — гейт отказывал в ответе целиком, и `[замер 04.08]` на живом
+    вопросе «сколько всего контрагентов» это давало клиенту «проверенный ответ
+    невозможен» при посчитанных 12 записях и 1 папке. Теперь число уходит полем, то
+    есть доезжает и тогда, когда формулировка не сошлась.
+    """
+    out = {"count": (agg or {}).get("count")}
+    if (agg or {}).get("folders"):
+        out["folders"] = agg["folders"]
+    return out
 
 
 def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None):
@@ -3690,7 +3797,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     leak = prompt_leak(text, OUR_PROMPTS)
     if leak:
         ok_roles, bad_roles = False, bad_roles + ["утечка инструкции: %s" % leak]
-    ok_nums, bad_nums = gate(text, rows, agg, extra_vals, our_dates)
+    # 🔴 ЗАЗЕМЛЯЕМ НА ТОМ, ЧТО МОДЕЛЬ ВИДЕЛА (`F247`): показанные строки и только до
+    # обрезки бюджетом. Числа из непоказанных строк белым списком быть не могут —
+    # скопировать их модели неоткуда, а разрешение они давали.
+    seen = rows_seen(rows)
+    ok_nums, bad_nums = gate(text, seen, agg, extra_vals, our_dates)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     шаг("гейт исходящего", прошёл=bool(ok), причин=len(bad),
         первая=(bad[0][:60] if bad else "—"))
@@ -3718,7 +3829,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         leak2 = prompt_leak(text2, OUR_PROMPTS)
         if leak2:
             ok_roles2, bad_roles2 = False, bad_roles2 + ["утечка инструкции: %s" % leak2]
-        ok_nums2, bad_nums2 = gate(text2, rows, agg, extra_vals, our_dates)
+        ok_nums2, bad_nums2 = gate(text2, seen, agg, extra_vals, our_dates)
         if ok_roles2 and ok_nums2 and (text2 or "").strip():
             # 🔴 УТОЧНЕНИЕ ВТОРОЙ ПОПЫТКИ ТОЖЕ ПРОХОДИТ ПОДСТАНОВКУ. Прежде здесь стояло
             # голое `_ask_back(raw2)`: числа в вопросе первой попытки подставлялись, а во
@@ -3738,13 +3849,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # отдаём их СТРУКТУРОЙ, а не своей прозой: свой текст был бы на одном языке
         # независимо от языка вопроса. Вызывающий формулирует сам.
         if agg:
+            # Итога может не быть вовсе — считать было нечего (`sum is None`, см.
+            # `aggregate`). Тогда своя фраза с суммой не собирается: ноль на этом месте
+            # был бы выдуманным числом, а не пустым местом. Числа всё равно уходят
+            # структурой ниже, и вызывающий формулирует по ним.
             return {"partial": cut or None, "kind": "figures", "text": (TOTAL_TEXT.format(
-                        count=agg["count"],
-                        sum=("%d" % agg["sum"]) if agg["sum"] == int(agg["sum"])
-                            else "%.2f" % agg["sum"]) if TOTAL_TEXT
+                        count=agg["count"], sum=_fmt(agg["sum"]))
+                        if (TOTAL_TEXT and agg.get("sum") is not None)
                         else refuse_text(question)),
                     "figures": {k: agg[k] for k in
-                                ("count", "count_amount", "sum", "min", "max", "avg",
+                                ("count", "count_amount", "sum", "min", "max", "avg", "folders",
                                  "date_min", "date_max") if k in agg},
                     "sources": [src.split("_", 1)[1] if "_" in src else src],
                     "completeness": cov,
@@ -3777,7 +3891,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # человека невыверенным — а он читает его как факт о своих данных. Не сошлось —
     # вопрос снимается, ответ уходит обычным: это ослабление уточнения, а не ответа.
     if ask_back:
-        ok_ask, bad_ask = gate_out(ask_back, rows, agg, extra_vals, our_dates)
+        ok_ask, bad_ask = gate_out(ask_back, seen, agg, extra_vals, our_dates)
         if not ok_ask:
             sys.stderr.write("ask ASKBACK GATE: числа вне данных: %s\n" % bad_ask[:4])
             diag["ask_back_rejected"] = bad_ask[:4]
@@ -3791,9 +3905,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 # `sum: 0` был бы не «нулём», а «не считали». Отдаём то же, что видела
                 # модель: итоги по каждой величине сущности, с их именами из данных.
                 "figures": ({k: agg[k] for k in
-                             ("count", "count_amount", "sum", "min", "max", "avg",
+                             ("count", "count_amount", "sum", "min", "max", "avg", "folders",
                               "date_min", "date_max") if k in agg} if (agg and measure)
-                            else {"count": (agg or {}).get("count")}),
+                            else count_figures(agg)),
                 "totals": {m: {"sum": v, "max": mx, "min": mn} for m, v, mx, mn in (totals or [])},
                 "sources": [tag],
                 "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
@@ -3817,9 +3931,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # Разбор текста здесь был бы догадкой (п. 12) и ломался бы на каждом языке
             # ответа. Ветка уточнения отдаёт это поле с самого начала — теперь форма одна.
             "figures": ({k: agg[k] for k in
-                         ("count", "count_amount", "sum", "min", "max", "avg",
+                         ("count", "count_amount", "sum", "min", "max", "avg", "folders",
                           "date_min", "date_max") if k in agg} if (agg and measure)
-                        else {"count": (agg or {}).get("count")}),
+                        else count_figures(agg)),
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 

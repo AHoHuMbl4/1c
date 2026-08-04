@@ -229,8 +229,18 @@ export function isServiceError(text, marker) {
 // («1. Товар А») объявлялся необоснованным и живой текст бота подменялся машинным.
 // Убираем ТОЛЬКО ведущий маркер строки — само содержимое пункта проверяется как обычно.
 const LIST_MARKER_RE = /^[ \t]*\d+[.)][ \t]+/gm;
+// 🔴 ПЕРЕЧИСЛЕНИЕ ВНУТРИ СТРОКИ — ТОЖЕ РАЗМЕТКА (04.08, `F248`). «Итого 5: 1) первая,
+// 2) вторая» модель пишет одной строкой, и до этой правки номера пунктов шли в сверку
+// наравне с суммами: живой текст подменялся машинным на ровном месте. Опознаётся уже,
+// чем в начале строки, — не больше двух цифр и сразу после двоеточия, точки с запятой
+// или запятой; в середине предложения «103)» скорее величина, и её снимать нельзя.
+// Та же граница стоит в сервисе (`serene_ask.without_list_markers`): разметка на двух
+// половинах гейта обязана значить одно и то же.
+const INLINE_MARKER_RE = /([:;,])[ \t]*\d{1,2}[.)][ \t]+/g;
 export function withoutListMarkers(text) {
-  return String(text == null ? "" : text).replace(LIST_MARKER_RE, "");
+  return String(text == null ? "" : text)
+    .replace(LIST_MARKER_RE, "")
+    .replace(INLINE_MARKER_RE, "$1 ");
 }
 
 export function mergeRef(prev, text, nowMs, noDataMarker, clarifyMarker, serviceErrorMarker) {
