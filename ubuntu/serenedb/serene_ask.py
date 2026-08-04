@@ -2490,6 +2490,15 @@ def aggregate(src_table, match, preds, measure=None):
             # Значения, не влезшие в разрядность DECIMAL: в сумму они не вошли. Ноль у
             # любых мыслимых данных; не ноль — молчать нельзя (п. 13).
             "out_of_range": int(row[9] or 0),
+            # 🔴 ШАГ ОБЪЯВЛЯЕТ, ПО КАКОМУ МНОЖЕСТВУ ПОСЧИТАЛ. Без этого число проверить
+            # нечем: гейт сверяет ответ с ЭТИМ ЖЕ agg, то есть своё же число и подтвердит,
+            # а живой замер вынужден верить на слово. Здесь лежит ровно то, что ушло в базу:
+            # источник и полное условие вместе с отбрасыванием групп. По нему любой
+            # посторонний прибор пересчитывает итог независимо и сравнивает (п. 3 —
+            # «детерминированно на данных», п. 13 — потеря обязана быть видна).
+            # Модели это не уходит: `diag` до неё не доходит вовсе (`mcp_ask.py` его не
+            # читает), а внутренние имена таблиц туда и не должны попадать.
+            "scope": {"src": src, "where": " AND ".join(where), "folder_pred": folder_pred},
             # Сколько групп отброшено из счёта. Ноль у подавляющего большинства сущностей;
             # где не ноль — ответ обязан это назвать, иначе получится молчаливая подмена
             # множества (п. 13).
@@ -2581,14 +2590,17 @@ def _split_answer(raw):
 # и уезжало клиенту БУКВАЛЬНО, «Закуплено на {Total} руб.», без числа и без ошибки. Гейт
 # такую строку пропускает: цифр в ней нет. Терпимый разбор + `LEFTOVER` ниже закрывают
 # оба исхода: что распозналось — заполняется, что осталось — отказ формулировки.
-SLOT = re.compile(r"\{\s*([A-Za-z_]+)\s*(?::\s*([^}]*?)\s*)?\}")
+# Цифра в имени роли допустима: `{in_1c}` — число переписи «сколько строк в 1С». Без неё
+# место не совпадало с образцом вовсе и уезжало клиенту буквально — ровно тот же дефект,
+# что и `{Total}`, только найденный уже своей же пробой.
+SLOT = re.compile(r"\{\s*([A-Za-z_][A-Za-z_0-9]*)\s*(?::\s*([^}]*?)\s*)?\}")
 # Незаполненное место в готовом тексте. Форма — «слово» или «слово:имя» в скобках; GUID
 # 1С (`{a1b2c3d4-0000-…}`) под неё не подходит из-за дефисов, то есть цитата из данных
 # отказом не становится.
 LEFTOVER = re.compile(r"\{\s*[^\W\d_][\w ]*(?:\s*:[^}]*)?\}", re.UNICODE)
 
 
-def _fill_figures(text, agg, totals, has_measure=True):
+def _fill_figures(text, agg, totals, has_measure=True, extra=None):
     """Подставить посчитанные базой числа на места, оставленные моделью.
 
     🔴 ЭТО ЗАМЕНА ПРОВЕРКИ УСТРОЙСТВОМ. Прежде модель писала число сама, а гейт ловил её
@@ -2619,6 +2631,12 @@ def _fill_figures(text, agg, totals, has_measure=True):
     if not has_measure:
         for k in ("sum", "max", "min", "avg"):
             known.pop(k, None)
+    # Числа неполноты (`{missing}`, `{in_1c}`, `{in_search}`) — такие же места, как итоги:
+    # они посчитаны переписью, и списывать их модели тоже неоткуда. Кладутся ПОСЛЕ снятия
+    # величин, иначе отсутствие выбранной величины уносило бы и предупреждение о потере.
+    for k, v in (extra or {}).items():
+        if v is not None:
+            known[k] = v
     by_name = {}
     for m, v, mx, mn in (totals or []):
         by_name[m] = {"total": v, "max": mx, "min": mn}
@@ -2762,7 +2780,7 @@ def copied_figures(text, agg, rows):
     return out
 
 
-def _filled_ask(ask, agg, totals, measure, diag=None):
+def _filled_ask(ask, agg, totals, measure, diag=None, extra=None):
     """Уточняющий вопрос с подставленными числами — или пусто, если он вышел с изъяном.
 
     Разница с текстом ответа в том, чем платим за изъян. У ответа изъян ведёт ко второй
@@ -2771,7 +2789,7 @@ def _filled_ask(ask, agg, totals, measure, diag=None):
     не задавать вопроса вовсе. Второе честнее: ответ при этом остаётся целым и уходит
     человеку, а сорвавшийся вопрос виден в `diag`, а не в мессенджере.
     """
-    ask, slots_bad = _fill_figures(ask, agg, totals, bool(measure))
+    ask, slots_bad = _fill_figures(ask, agg, totals, bool(measure), extra)
     if not (ask or "").strip():
         return ""
     flaws = formulation_flaws(ask, slots_bad)
@@ -2819,20 +2837,54 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         if r[3]:
             tail.append("date=%s" % r[3])
         payload.append(head + ((" | " + " | ".join(tail)) if tail else ""))
-    body = "QUESTION: %s\n\nROWS FOUND (%d):\n%s" % (
-        question, len(rows), "\n".join("- " + p for p in payload))
+    # 🔴 ЧИСЛО ПОКАЗАННЫХ СТРОК — НЕ ЧИСЛО ЗАПИСЕЙ, и подавать его как число записей
+    # нельзя. `rows` обрезаны выборкой (`TOPK`), показываются из них первые
+    # `ROWS_TO_MODEL`, а записей в множестве столько, сколько посчитала база, — это
+    # `{count}`. Прежде в задании стояло «ROWS FOUND (40)», и модель честно пересказывала
+    # эти 40 как ответ на «сколько»: `[замер 04.08]` на вопросе про склады ответ вышел
+    # «есть только три документа приобретения» при 249 записях в множестве — размер
+    # выборки выдан за размер множества (п. 13, молчаливая подмена). Числа здесь больше
+    # нет вовсе: строки названы примерами, а за счётом модель идёт на место `{count}`.
+    # Когда счёта нет (агрегат не посчитан), остаётся прежний вид — лучше него ничего.
+    head_line = ("ROWS (examples from the matching set, not the whole of it — the number "
+                 "of records is {count}):" if agg else "ROWS FOUND (%d):" % len(rows))
+    body = "QUESTION: %s\n\n%s\n%s" % (
+        question, head_line, "\n".join("- " + p for p in payload))
+    # 🔴 ЗНАЧЕНИЙ ПОСЧИТАННОГО МОДЕЛЬ НЕ ВИДИТ — ТОЛЬКО РОЛИ И ИМЕНА.
+    #
+    # Правило «числа ставит код» держалось двумя опорами: словами в промте и подстановкой
+    # `{total}`. Первая опора замерена `[замер 04.08, step6_live.py]` и оказалась дырявой:
+    # на восьми вопросах модель семь раз оставила место — и один раз набрала 249 цифрами,
+    # а на повторных прогонах это было то 1, то 0 раз. То есть слова работают почти
+    # всегда, а «почти» и есть весь вопрос: пока число можно СПИСАТЬ, оно рано или поздно
+    # списывается, и тогда защищает только гейт — а он смотрит, ЕСТЬ ли такое число в
+    # данных, но не в своей ли оно роли (`F285`).
+    #
+    # Вторая попытка это не лечит: `[замер 04.08]` из двух случаев она исправила один.
+    # Проверка тут вообще бессильна по устройству — роль числа в прозе кодом не
+    # определяется, а определять её разбором текста значит гадать (п. 12) и привязываться
+    # к языку. Поэтому убран сам источник: списывать больше неоткуда. Модели даётся имя
+    # величины, перечень ролей и МЕСТО под каждую; значения подставляет код после ответа.
+    # Это то же решение, что и везде в проекте, — запрет держится устройством, а не
+    # просьбой, — доведённое до конца.
+    #
+    # Значения СТРОК при этом остаются: цитата из записи (номер документа, дата, имя
+    # стороны) моделью и должна копироваться, это не арифметика, а выписка.
     has_money = bool(agg) and (agg.get("sum") or agg.get("max") or agg.get("min"))
     if agg and not has_money:
         # Денежной колонки у этой сущности нет. Передать sum=0 нельзя: модель ответит
         # «0», и гейт согласится — ноль ведь посчитан. Отсутствие суммы и сумма,
         # равная нулю, — разные вещи, и путать их нельзя.
-        body += "\n\nCOMPUTED OVER ALL MATCHING ROWS: count = %d" % agg["count"]
+        body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS (values are not shown — write the "
+                 "placeholder and the system puts the exact figure in its place):")
+        body += "\n  count (number of records) -> {count}"
         body += ("\n  (no numeric quantity matches the question for this record type — "
-                 "do not state any figure other than the count)")
+                 "no placeholder other than {count} is available here)")
     elif agg:
-        body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS for the quantity «%s» "
-                 "(use these exact figures, each in its own role):" % (agg.get("measure") or "-"))
-        body += "\n  count (number of records) = %d" % agg["count"]
+        body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS for the quantity «%s». The values "
+                 "are not shown to you — write the placeholder and the system puts the "
+                 "exact figure in its place:" % (agg.get("measure") or "-"))
+        body += "\n  count (number of records) -> {count}"
         # 🔴 ПО СКОЛЬКИМ ЗАПИСЯМ ПОСЧИТАНЫ sum И avg. `aggregate` считает `count_amount`
         # отдельно именно для этого («иначе среднее по 31 строке уходит как среднее по
         # 1344»), но до модели число не доходило вовсе — комментарий в `aggregate`
@@ -2843,33 +2895,33 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         ca = agg.get("count_amount")
         if ca is not None and ca != agg["count"]:
             body += ("\n  count_amount (records having this quantity; sum and avg are "
-                     "over these) = %d" % ca)
-        body += "\n  sum (TOTAL)               = %s" % _fmt(agg["sum"])
-        body += "\n  max (largest single)      = %s" % _fmt(agg["max"])
-        body += "\n  min (smallest single)     = %s" % _fmt(agg["min"])
-        body += "\n  avg (average)             = %s" % _fmt(agg["avg"])
+                     "over these, and there are fewer of them than records) "
+                     "-> {count_amount}")
+        body += "\n  sum (TOTAL)               -> {total}"
+        body += "\n  max (largest single)      -> {max}"
+        body += "\n  min (smallest single)     -> {min}"
+        body += "\n  avg (average)             -> {avg}"
         if agg.get("date_min"):
-            body += "\n  period                    = %s .. %s" % (agg["date_min"], agg["date_max"])
-        body += "%s" % (
-            "")
+            body += "\n  period                    -> {date_min} .. {date_max}"
     if totals:
-        # Итоги по каждой величине — с ИМЕНАМИ из базы. Модель сама возьмёт подходящую
-        # под вопрос; выдумать она их не может, а гейт всё равно сверит с данными.
-        body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS, by quantity name "
-                 "(total / largest single / smallest single):")
+        # Итоги по каждой величине — с ИМЕНАМИ из базы, но опять же без значений. Модель
+        # сама возьмёт подходящую под вопрос величину; списать её итог ей неоткуда.
+        body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS, by quantity name — values not "
+                 "shown, address them by name:")
         for m, v, mx, mn in totals:
-            body += "\n  %s: total = %s, max = %s, min = %s" % (m, _fmt(v), _fmt(mx), _fmt(mn))
+            body += ("\n  %s: total -> {total:%s}, largest single -> {max:%s}, "
+                     "smallest single -> {min:%s}" % (m, m, m, m))
     if coverage:
         # НЕПОЛНОТА ЭТОЙ СУЩНОСТИ. Модель обязана предупредить на языке вопроса — сами мы
         # приписать не можем: своя фраза была бы на одном языке независимо от вопроса.
         # Числа отсюда разрешены гейту явно, поэтому предупреждение не будет отвергнуто
         # как выдумка.
         body += ("\n\nDATA COMPLETENESS WARNING: this kind of records is INCOMPLETE in "
-                 "the search: %d rows exist in the source system, %d reached the search, "
-                 "%d are missing (%s). The figures above are computed over what reached "
+                 "the search: %s rows exist in the source system, %s reached the search, "
+                 "%s are missing (%s). The figures above are computed over what reached "
                  "the search only. You MUST warn the user about this in your answer, in "
                  "their language, stating the number of missing rows in digits."
-                 % (coverage["in_1c"], coverage["in_search"], coverage["missing"],
+                 % ("{in_1c}", "{in_search}", "{missing}",
                     coverage.get("reason") or "reason unknown"))
     # 🔴 ОГОВОРКИ К ОТВЕТУ ГОВОРИТ МОДЕЛЬ, А НЕ МЫ. Прежде обе дописывались нашей прозой
     # ПОСЛЕ модели — по-русски, в файле, где от русских умолчаний отказались сознательно:
@@ -2882,11 +2934,11 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
                  "'%s'. Name that quantity in your answer, in the user's language, so they "
                  "know WHICH value was summed." % measure_used)
     if folders:
-        body += ("\n\nGROUPS EXCLUDED: %d records were folders (grouping nodes of the "
+        body += ("\n\nGROUPS EXCLUDED: %s records were folders (grouping nodes of the "
                  "catalogue), not real items, and are NOT included in the count above. You "
                  "MUST say this in your answer, in the user's language, stating the number "
-                 "%d in digits — otherwise a user who knows the raw record count will think "
-                 "the figure is wrong." % (folders, folders))
+                 "%s in digits — otherwise a user who knows the raw record count will think "
+                 "the figure is wrong." % ("{folders}", "{folders}"))
     if corrections:
         # ВТОРАЯ ПОПЫТКА. Первая формулировка не прошла проверку кодом — говорим модели,
         # что именно не сошлось, и требуем опираться только на посчитанные базой числа.
@@ -4901,6 +4953,45 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     шаг("посчитано базой", сущность=src, величина=(measure or "—"),
         строк=(agg or {}).get("count"), итог=(agg or {}).get("sum"),
         со_значением=(agg or {}).get("count_amount"))
+    # Множество, по которому посчитано, объявляется наружу целиком (см. `aggregate`):
+    # по нему посторонний прибор пересчитывает итог независимо, а не верит нашему числу.
+    # До модели `diag` не доходит.
+    if agg and agg.get("scope"):
+        diag["счёт"] = dict(agg["scope"], величина=measure,
+                            строк=agg["count"], со_значением=agg["count_amount"],
+                            групп_отброшено=agg["folders"],
+                            вне_разрядности=agg["out_of_range"])
+    # 🔴 ПЕРИОД ВЫБРАСЫВАЕТ СТРОКИ БЕЗ ДАТЫ — И ЭТО ОБЯЗАНО БЫТЬ ВИДНО ЧИСЛОМ (п. 13).
+    #
+    # Условие по периоду сравнивает `doc_date`, а строка без даты не проходит НИ ОДНО
+    # сравнение: она исчезает из счёта молча, как будто её нет. Для табличных частей это
+    # не редкость, а норма — дата стоит в шапке, и в строках её нет вовсе: `[замер 04.08]`
+    # у `document_возвраттоваровотклиента_товары` без даты 54 строки из 55 (98 %), у
+    # `..._расшифровкаплатежа` — 97 из 99, всего таких сущностей 22. То есть вопрос «за
+    # 2019 год» по табличной части считает единицы строк вместо всех и об этом не говорит.
+    #
+    # Считаем ровно то, что отняло НАШЕ условие по дате: то же множество без датных
+    # предикатов, строки без даты. Список датных предикатов берётся у того же
+    # `_predicates`, что их и построил, — строку никто не разбирает.
+    _date_preds = _predicates(intent)
+    if _date_preds and agg:
+        try:
+            _kept = [p for p in preds if p not in _date_preds]
+            _u = psql("SELECT count(*) FROM %s WHERE %s AND doc_date IS NULL"
+                      % (INDEX if match else CORPUS,
+                         " AND ".join([w for w in ([match] + _kept
+                                       + ["src_table = %s" % lit(src)]) if w])))
+            _undated = int(_u[0][0]) if _u and _u[0] else 0
+        except (RuntimeError, ValueError, IndexError):
+            _undated = 0
+        if _undated:
+            agg["undated"] = _undated
+            diag["счёт"]["без_даты_отброшено"] = _undated
+            # 🔴 В `cov` это НЕ дописывается, хотя соблазн есть: у него читаются ИМЕННО
+            # ключи `in_1c`/`in_search`/`missing` (ниже, в белом списке гейта и в местах
+            # подстановки), и словарь с другим составом уронил бы ответ `KeyError`-ом на
+            # каждом вопросе с периодом. Число живёт в самом счёте (`agg`) и в объявлении
+            # множества; в белый список гейта оно попадает отдельной строкой ниже.
     # Числа неполноты разрешены гейту наравне с порогами вопроса: иначе фраза «не дошло
     # 104 строки» была бы отвергнута как выдумка, и система замолчала бы ровно там, где
     # обязана предупредить.
@@ -4912,8 +5003,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # который сама `gate()` называет недопустимым, а плагин закрыл ещё 02.08.
     # `_filter_values` оставляет то же самое ровно там, где это проверяемо: значение
     # применённого нами предиката и числовое понятие, по которому мы искали.
+    # 🔴 ЧИСЛО ОТБРОШЕННЫХ ГРУПП — НА ТЕХ ЖЕ ПРАВАХ, ЧТО И ЧИСЛА ПЕРЕПИСИ. Оговорку про
+    # папки задание требует назвать цифрами (иначе человек, знающий про 252 строки, не
+    # поймёт, откуда 227), а гейт этого числа не знал — оно не приходит ни из строк, ни
+    # из агрегатов, ни из вопроса. `[замер 04.08, step6_live.py]` три прогона из трёх:
+    # «гейт: числа вне данных [25.0]» — то есть ответ, составленный ровно как велено,
+    # отвергался собственной проверкой и уходил в `figures`. Ровно тот дефект проверки,
+    # который п. 21 называет дефектом, а не осторожностью. `folders` посчитан базой тем же
+    # запросом, что и `count`, — обоснован по построению.
     extra_vals = _filter_values(intent) + [x for t in (totals or []) for x in t[1:]] \
-                 + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else [])
+                 + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else []) \
+                 + ([agg["undated"]] if (agg or {}).get("undated") else []) \
+                 + ([agg["folders"]] if (agg or {}).get("folders") else [])
     # Границы периода отбора — на тех же правах, но по датной ветке гейта.
     our_dates = _filter_dates(intent)
     # Оговорки к ответу — в промт, а не приписью после: язык берётся из вопроса.
@@ -4929,8 +5030,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     by_hand = copied_figures(text, agg, rows)
     # КАЛЬКУЛЯТОР: числа ставит код, а не модель. Всё, что подставлено, посчитано базой,
     # поэтому проверять его не нужно — оно верно по построению.
-    text, slots_bad = _fill_figures(text, agg, totals, bool(measure))
-    ask_back = _filled_ask(ask_back, agg, totals, measure, diag)
+    # Числа неполноты идут в подстановку наравне с итогами: их модель тоже не видит.
+    cov_slots = ({"in_1c": cov["in_1c"], "in_search": cov["in_search"],
+                  "missing": cov["missing"]} if cov else None)
+    text, slots_bad = _fill_figures(text, agg, totals, bool(measure), cov_slots)
+    ask_back = _filled_ask(ask_back, agg, totals, measure, diag, cov_slots)
     # Место, которому нечего подставить, — отказ формулировки: модель сослалась на
     # величину, которой мы не считали. Это единственная проверка, оставшаяся от прежней
     # ролевой сверки, и она структурная, а не числовая.
@@ -4967,7 +5071,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                        coverage=cov, measure_used=say_measure, folders=n_folders)
         text2, claims2 = _split_answer(raw2)
         by_hand2 = copied_figures(text2, agg, rows)
-        text2, slots_bad2 = _fill_figures(text2, agg, totals, bool(measure))
+        text2, slots_bad2 = _fill_figures(text2, agg, totals, bool(measure), cov_slots)
         bad_roles2 = formulation_flaws(text2, slots_bad2) + by_hand2
         ok_roles2 = not bad_roles2
         bad_txt2 = []
@@ -4988,7 +5092,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # вместо даты. Гейт этого не ловит (цифр в заготовке нет), и вопрос выглядел
             # как поломка системы ровно в тот момент, когда система переспрашивает.
             text, claims = text2, claims2
-            ask_back = _filled_ask(_ask_back(raw2), agg, totals, measure, diag)
+            ask_back = _filled_ask(_ask_back(raw2), agg, totals, measure, diag, cov_slots)
             ok, bad = True, []
             diag["retry_ok"] = True
         else:
