@@ -252,6 +252,27 @@ done
 git reset -q; rm -f bigfile.py
 cd "$TMP" || exit 1
 
+# --- подача диффа снайперу --------------------------------------------------------
+echo
+echo '== дифф для снайпера =='
+cd "$G" || exit 1
+git reset -q
+OUT=$(printf '{"tool_input":{"command":"git commit -m x"}}' | bash .claude/hooks/prepare-diff.sh 2>/dev/null)
+# 🔴 Пустой индекс на коммите — не «нечего проверять», а невыполненная проверка: хук движка
+# срабатывает ДО команды, поэтому на `git add … && git commit …` индекс ещё пуст. Так живой
+# коммит 0d75629 прошёл мимо снайпера: он получил «пусто» и ответил OK.
+grep -q 'ДИФФ НЕ СНЯТ' .claude/state/staged.diff
+say $? 'пустой индекс на коммите — снайперу подана пометка «дифф не снят», а не пустота'
+
+printf 'print(9)\n' > ubuntu/serenedb/sniper.py; git add ubuntu/serenedb/sniper.py
+printf '{"tool_input":{"command":"git commit -m x"}}' | bash .claude/hooks/prepare-diff.sh >/dev/null 2>&1
+grep -q 'sniper.py' .claude/state/staged.diff
+say $? 'непустой индекс — снайпер получает настоящий дифф'
+git reset -q; rm -f ubuntu/serenedb/sniper.py
+OUT=$(printf '{"tool_input":{"command":"ls"}}' | bash .claude/hooks/prepare-diff.sh 2>/dev/null)
+[ "$OUT" = '{}' ]; say $? 'на посторонней команде молчит'
+cd "$TMP" || exit 1
+
 # --- аварийный люк ----------------------------------------------------------------
 echo
 echo '== аварийный люк (одноразовый, со следом) =='
