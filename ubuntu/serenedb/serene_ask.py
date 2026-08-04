@@ -2207,7 +2207,43 @@ def _threshold_values(intent):
     return [v for v in (amt.get("value"), amt.get("value2")) if v is not None]
 
 
-def gate(answer, rows, agg, thresholds=None):
+def _filter_values(intent):
+    """Числа НАШИХ УСЛОВИЙ ОТБОРА: пороги и числовые понятия, по которым шёл поиск.
+
+    🔴 ЭТО ЗАМЕНА БЕЛОМУ СПИСКУ «ВСЕ ЧИСЛА ВОПРОСА» (`F244`). Прежде в разрешённое
+    уходило `_norm_numbers(question)` целиком — то самое отмывание, которое докстрока
+    самой `gate()` называет недопустимым: вопрос приходит аргументом инструмента,
+    сочиняет его модель бота, то есть проверяемый пополнял свой же белый список.
+    Плагин на стороне бота этот путь закрыл 02.08 (`verify-core.isGrounded`: числа
+    сообщения заземляют ответ, только когда эталона нет вовсе) и в комментарии
+    утверждал, что то же самое закрыто на стороне `serene_ask`, — а закрыто не было.
+
+    Разрешённым остаётся значение, по которому МЫ отфильтровали или отобрали данные.
+    Порог (`amount`) применён нашим предикатом, числовое понятие (`terms`) — нашим
+    запросом к индексу: строки, которые мы считаем, ему отвечают. Обоснование то же,
+    что у порогов, и проверяется кодом, а не доверием к тексту вопроса. [замер 28.07]
+    ради этого класса правило и заводилось: у вопроса «обороты по счёту 62» число «62»
+    приходит понятием отбора, и верный ответ с ним больше не отвергается.
+    """
+    out = list(_threshold_values(intent))
+    for group in ((intent or {}).get("terms") or []):
+        for alt in (group if isinstance(group, list) else [group]):
+            out += sorted(_norm_numbers(alt))
+    return out
+
+
+def _filter_dates(intent):
+    """Границы периода, по которому МЫ отобрали строки: «с 01.01.2019 по 31.12.2019».
+
+    Они верны по построению — фильтр применён нами, — но в данных такой строки может и
+    не быть (никто не продавал ровно 1 января), и тогда гейт отвергал верный ответ,
+    назвавший период отбора. Тот же случай, что и с порогом суммы 27.07, только про дату.
+    """
+    p = (intent or {}).get("period") or {}
+    return [str(x) for x in (p.get("from"), p.get("to")) if x]
+
+
+def gate(answer, rows, agg, thresholds=None, our_dates=None):
     """Каждое число ответа обязано встречаться в данных, в итоге или в наших условиях.
 
     Правило живёт в КОДЕ, а не в промте: промт — это пожелание, а не гарантия.
@@ -2258,9 +2294,6 @@ def gate(answer, rows, agg, thresholds=None):
     # сочиняет модель бота: она сама пополняла список того, что ей разрешено сказать,
     # и через это проходило любое выдуманное число.
 
-    # Токен обоснован, если ХОТЯ БЫ ОДНО его прочтение есть в данных.
-    bad = [sorted(r)[0] for r in _tokens(answer) if not (r & allowed)]
-
     # Даты: названная дата обязана совпасть с датой из данных ПОКОМПОНЕНТНО.
     known = []
     for r in rows:
@@ -2271,6 +2304,24 @@ def gate(answer, rows, agg, thresholds=None):
     # через раз. Даты-агрегаты разрешены наравне со строчными — они проверены базой.
     if agg:
         known += _dates(agg.get("date_min") or "") + _dates(agg.get("date_max") or "")
+    # Границы НАШЕГО периода отбора — на тех же правах, что порог суммы: фильтр применён
+    # нами, значит дата верна по построению, даже если ровно в этот день строк нет.
+    for s in (our_dates or []):
+        known += _dates(s)
+
+    # 🔴 ГОД ИЗВЕСТНОЙ ДАТЫ — ЭТО ЧИСЛО ИЗ ДАННЫХ (`F245`). Дата в строке (`2019-11-18`)
+    # вырезается токенайзером как дата, поэтому «2019» отдельным числом в разрешённое не
+    # попадало ниоткуда: ответ «за 2019 год продано на 1 236 800» отвергался целиком —
+    # из-за года, стоящего в данных `[замер 04.08, probe_gate]`. Год берётся только из
+    # ИЗВЕСТНЫХ дат (строки, границы агрегата, наш период), то есть выдуманный «2035» не
+    # проходит. Отвергать верный ответ — такой же дефект, как пропустить неверный (п. 21).
+    for _kd, _kmo, _ky in known:
+        if _ky is not None:
+            allowed.add(float(_ky))
+
+    # Токен обоснован, если ХОТЯ БЫ ОДНО его прочтение есть в данных.
+    bad = [sorted(r)[0] for r in _tokens(answer) if not (r & allowed)]
+
     for d, mo, y in _dates(answer):
         ok = any(kd == d and kmo == mo and (y is None or ky is None or ky == y)
                  for kd, kmo, ky in known)
@@ -2287,6 +2338,64 @@ def gate(answer, rows, agg, thresholds=None):
         if not ok:
             bad.append("%02d.%02d%s" % (d, mo, "" if y is None else ".%d" % y))
     return (not bad), bad
+
+
+def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None):
+    """Один гейт на ВСЁ, что уходит человеку словами модели: числа + утечка инструкции.
+
+    🔴 Заведён 04.08 (`F246`), потому что гейт стоял только на одной ветке из пяти.
+    Числа проверялись у `kind=answer`, а уходящий человеку текст сочиняет модель ещё в
+    четырёх местах: три уточнения о выборе сущности, уточнение о выборе величины и
+    встречный вопрос модели (`ask`). Ни одно из них не проверялось ничем — при том что
+    `HOW_IT_WORKS` про уточнение прямо утверждал обратное («уточнение возвращается
+    только после гейта — числа в нём проверены базой наравне с обычным ответом»).
+    Человеку разница не видна: «Вы про закупки на 73 млн или про регистр?» читается как
+    факт о его данных независимо от того, вопрос это или ответ.
+    """
+    ok, bad = gate(text, list(rows or []), agg, allowed or [], our_dates)
+    leak = prompt_leak(text, OUR_PROMPTS)
+    if leak:
+        ok, bad = False, list(bad) + ["утечка инструкции: %s" % leak]
+    return ok, bad
+
+
+def _opt_values(opts):
+    """Числа, которые модель ВИДЕЛА, сочиняя уточнение: имена вариантов и их приметы.
+
+    Больше ей ничего не давали (`clarify_text` кладёт в задание только вопрос, метки и
+    `distinct_by`), поэтому всё остальное числовое в уточнении — сочинённое.
+    """
+    out = []
+    for o in (opts or []):
+        for k in ("label", "distinct_by", "measure", "entity_label"):
+            out += sorted(_norm_numbers(o.get(k) or ""))
+        if o.get("found") is not None:
+            try:
+                out.append(float(o["found"]))
+            except (TypeError, ValueError):
+                pass
+    return out
+
+
+def clarify_say(question, opts, diag=None):
+    """Уточняющий вопрос — от модели, но через гейт; не прошёл — перечень из ДАННЫХ.
+
+    Молчания здесь не возникает: отвергнутая фраза заменяется перечислением меток
+    вариантов, то есть данными без прозы. Так уже сделано в уточнении о величине —
+    теперь это общий путь для всех уточнений, а не одна ветка из пяти.
+    """
+    fallback = ", ".join("«%s»" % (o.get("label") or o.get("measure") or "")
+                         for o in (opts or []) if (o.get("label") or o.get("measure")))
+    txt = clarify_text(question, opts)
+    if not (txt or "").strip():
+        return fallback
+    ok, bad = gate_out(txt, [], None, _opt_values(opts))
+    if ok:
+        return txt
+    sys.stderr.write("ask CLARIFY GATE: числа вне вариантов: %s\n" % bad[:4])
+    if isinstance(diag, dict):
+        diag["clarify_gate_rejected"] = bad[:4]
+    return fallback
 
 
 def _coverage_of(src_table):
@@ -3124,7 +3233,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             return None
         diag["unsupported_pick"] = cand
         return {"partial": cut or None, "kind": "clarify",
-                "text": clarify_text(question, opts),
+                "text": clarify_say(question, opts, diag),
                 "options": opts, "sources": [o["label"] for o in opts],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
     # 🔴 ОДНА СЕМЬЯ — НЕ ОДНО ПРОЧТЕНИЕ. Здесь стояло `_family(top) not in {_family(x)…}`:
@@ -3283,7 +3392,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                               if (s.get("figures") or {}).get("sum") is not None
                               else (s.get("figures") or {}).get("count") for s in cand_src]}
                 return {"partial": cut or None, "kind": "clarify",
-                        "text": clarify_text(question, opts), "options": opts,
+                        "text": clarify_say(question, opts, diag), "options": opts,
                         "sources": [o["label"] for o in opts],
                         "diag": dict(diag, sec=round(time.time() - t0, 2))}
         if len(cand_ans) > 1:
@@ -3315,7 +3424,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         opts = [{"src": t, "label": lab_by.get(t, t), "distinct_by": marks.get(t, ""),
                  "found": by.get(t, 0)} for t in picked]
         diag["ambiguous"] = [o["src"] for o in opts]
-        return {"partial": cut or None, "kind": "clarify", "text": clarify_text(question, opts),
+        return {"partial": cut or None, "kind": "clarify", "text": clarify_say(question, opts, diag),
                 "options": opts, "sources": [o["label"] for o in opts],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
     # 🔴 НЕ ОТВЕЧАТЬ, ПОКА ВЫБОР СУЩНОСТИ НЕ ПОДТВЕРЖДЁН. Решение владельца 30.07 — «правило в
@@ -3520,7 +3629,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # `clarify_text`, что и у выбора сущности; не смогла сформулировать — остаётся
         # перечень величин, по нему выбор всё равно возможен.
         return {"partial": cut or None, "kind": "clarify",
-                "text": clarify_text(question, opts)
+                "text": clarify_say(question, opts, diag)
                         or ", ".join("«%s»" % m for m in measure_alts),
                 "options": opts, "sources": [src],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
@@ -3541,22 +3650,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Числа неполноты разрешены гейту наравне с порогами вопроса: иначе фраза «не дошло
     # 104 строки» была бы отвергнута как выдумка, и система замолчала бы ровно там, где
     # обязана предупредить.
-    # Числа ИЗ САМОГО ВОПРОСА разрешены в ответе: если человек спросил «обороты по счёту
-    # 62», модель эхом называет «62» — это не выдуманная величина, а его же слово. Прежде
-    # гейт отвергал верный ответ (сумма 23 742 200 посчитана верно) только из-за «62» в
-    # тексте [замер 28.07]. Берём числа из вопроса как ещё один разрешённый набор.
-    # 🔴 РАЗБИРАЕМ ТЕМ ЖЕ ТОКЕНАЙЗЕРОМ, ЧТО И ОТВЕТ. Прежде здесь вырезались все нецифры
-    # (`re.sub(r"[^\d]", "", n)`), и это ломалось в обе стороны сразу `[замер 02.08]`:
-    #   «12.5»       → 125      — в белый список попадало число, которого в вопросе НЕТ;
-    #   «1 200 000»  → 1/200/0  — а само число, ради которого правило и заведено, НЕ попадало.
-    # То есть правило 28.07 («эхо числа из вопроса — не выдумка») не работало ровно на тех
-    # записях, где число длиннее трёх цифр, и заодно расширяло разрешённое произвольным
-    # мусором. `_norm_numbers` знает и разряды, и десятичную часть, и вырезает даты —
-    # их проверяет отдельная ветка гейта по данным, а не по вопросу.
-    q_nums = sorted(_norm_numbers(question))
-    extra_vals = _threshold_values(intent) + [x for t in (totals or []) for x in t[1:]] \
-                 + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else []) \
-                 + q_nums
+    # 🔴 РАЗРЕШЕНЫ ЧИСЛА НАШЕГО ОТБОРА, А НЕ ВСЕ ЧИСЛА ВОПРОСА (`F244`, правка 04.08).
+    # Прежде сюда уходило `_norm_numbers(question)` целиком — «эхо числа из вопроса не
+    # выдумка» (правило 28.07 ради «оборотов по счёту 62»). Но вопрос сочиняет модель
+    # бота, и через этот список проходило любое её число: `[замер 04.08, probe_gate]`
+    # выдуманный итог «7 777 777» проходил гейт, если он же стоял в вопросе. Класс,
+    # который сама `gate()` называет недопустимым, а плагин закрыл ещё 02.08.
+    # `_filter_values` оставляет то же самое ровно там, где это проверяемо: значение
+    # применённого нами предиката и числовое понятие, по которому мы искали.
+    extra_vals = _filter_values(intent) + [x for t in (totals or []) for x in t[1:]] \
+                 + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else [])
+    # Границы периода отбора — на тех же правах, но по датной ветке гейта.
+    our_dates = _filter_dates(intent)
     # Оговорки к ответу — в промт, а не приписью после: язык берётся из вопроса.
     counting_rows = (plan.get("compute") == "count") or (intent.get("want") == "count")
     say_measure = measure if (measure and not counting_rows) else None
@@ -3585,7 +3690,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     leak = prompt_leak(text, OUR_PROMPTS)
     if leak:
         ok_roles, bad_roles = False, bad_roles + ["утечка инструкции: %s" % leak]
-    ok_nums, bad_nums = gate(text, rows, agg, extra_vals)
+    ok_nums, bad_nums = gate(text, rows, agg, extra_vals, our_dates)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     шаг("гейт исходящего", прошёл=bool(ok), причин=len(bad),
         первая=(bad[0][:60] if bad else "—"))
@@ -3613,9 +3718,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         leak2 = prompt_leak(text2, OUR_PROMPTS)
         if leak2:
             ok_roles2, bad_roles2 = False, bad_roles2 + ["утечка инструкции: %s" % leak2]
-        ok_nums2, bad_nums2 = gate(text2, rows, agg, extra_vals)
+        ok_nums2, bad_nums2 = gate(text2, rows, agg, extra_vals, our_dates)
         if ok_roles2 and ok_nums2 and (text2 or "").strip():
-            text, claims, ask_back = text2, claims2, _ask_back(raw2)
+            # 🔴 УТОЧНЕНИЕ ВТОРОЙ ПОПЫТКИ ТОЖЕ ПРОХОДИТ ПОДСТАНОВКУ. Прежде здесь стояло
+            # голое `_ask_back(raw2)`: числа в вопросе первой попытки подставлялись, а во
+            # второй — нет, и человеку уходило «за какой период — с {date_min}?» с местом
+            # вместо даты. Гейт этого не ловит (цифр в заготовке нет), и вопрос выглядел
+            # как поломка системы ровно в тот момент, когда система переспрашивает.
+            text, claims = text2, claims2
+            ask_back = _filled_ask(_ask_back(raw2), agg, totals, measure, diag)
             ok, bad = True, []
             diag["retry_ok"] = True
         else:
@@ -3659,6 +3770,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Уточнение возвращается ТОЛЬКО после гейта: числа в нём проверены базой наравне с
     # обычным ответом. Вопрос без данных не задаётся — иначе это переспрашивание вместо
     # работы, а не вместо молчания.
+    # 🔴 ВСТРЕЧНЫЙ ВОПРОС ПРОВЕРЯЕТСЯ ТЕМ ЖЕ ГЕЙТОМ, ЧТО И ОТВЕТ (`F246`, правка 04.08).
+    # Утверждение выше («уточнение возвращается только после гейта») было верно лишь
+    # наполовину: гейт проходил `text`, а `ask` модели приклеивался к нему уже ПОСЛЕ
+    # проверки и не сверялся ни с чем. Число, названное во встречном вопросе, доходило до
+    # человека невыверенным — а он читает его как факт о своих данных. Не сошлось —
+    # вопрос снимается, ответ уходит обычным: это ослабление уточнения, а не ответа.
+    if ask_back:
+        ok_ask, bad_ask = gate_out(ask_back, rows, agg, extra_vals, our_dates)
+        if not ok_ask:
+            sys.stderr.write("ask ASKBACK GATE: числа вне данных: %s\n" % bad_ask[:4])
+            diag["ask_back_rejected"] = bad_ask[:4]
+            ask_back = ""
     if ask_back:
         diag["asked_back"] = True
         return {"partial": cut or None, "kind": "clarify",
