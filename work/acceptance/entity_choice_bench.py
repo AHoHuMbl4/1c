@@ -129,6 +129,67 @@ def psql(sql):
     return [ln.split(",")[0] for ln in psql_raw(sql)]
 
 
+_FROM = re.compile(r"\bfrom\s+([a-zа-яё0-9_]+)", re.I)
+
+
+def _ctes(block):
+    """Временные блоки `with имя as ( … ), имя2 as ( … )`: имя → тело, и хвост запроса.
+
+    Скобки считаются, а не сопоставляются шаблоном: внутри тела бывают подзапросы.
+    """
+    m = re.search(r"\bwith\b", block, re.I)
+    if not m:
+        return {}, block
+    i, out = m.end(), {}
+    while i < len(block):
+        nm = re.match(r"\s*([a-zа-яё0-9_]+)\s+as\s*\(", block[i:], re.I)
+        if not nm:
+            break
+        name = nm.group(1).lower()
+        j = i + nm.end() - 1                    # позиция открывающей скобки
+        depth, k = 0, j
+        while k < len(block):
+            if block[k] == "(":
+                depth += 1
+            elif block[k] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        out[name] = block[j + 1:k]
+        i = k + 1
+        c = re.match(r"\s*,", block[i:])
+        if not c:
+            break
+        i += c.end()
+    return out, block[i:]
+
+
+def _answering_table(block):
+    """Таблица, из которой запрос БЕРЁТ ДАННЫЕ для ответа.
+
+    🔴 Не первое `from` в тексте. У запроса с временными блоками первое `from` стоит
+    ВНУТРИ блока, откуда берут только ключ и имя для отбора, а величину считает внешний
+    `select`; бывает и наоборот — внешний `from` называет сам блок, и настоящая таблица
+    лежит в его теле. `[замер 04.08]` на приёмочном наборе таких вопросов два (40 и 41),
+    и оба давали приборам неверный эталон: у 40 — `catalog_партнеры` вместо документа
+    реализации, у 41 — вообще алиас `d`.
+    """
+    ctes, tail = _ctes(block)
+    m = _FROM.search(tail) or _FROM.search(block)
+    if not m:
+        return None
+    name = m.group(1).lower()
+    seen = set()
+    while name in ctes and name not in seen:    # блок ссылается на блок — разворачиваем
+        seen.add(name)
+        inner = _FROM.search(ctes[name])
+        if not inner:
+            break
+        name = inner.group(1).lower()
+    return name
+
+
 def pairs(path):
     """Вопрос → эталонная сущность, вынутая ИЗ НАБОРА, а не написанная руками.
 
@@ -144,6 +205,13 @@ def pairs(path):
     text = open(path, encoding="utf-8").read()
     out = []
     by_num = {}
+    # 🔴 ВРЕМЕННЫЙ БЛОК `with … as (…)` — НЕ ОТВЕЧАЮЩАЯ СУЩНОСТЬ (04.08). Первое `from`
+    # у такого запроса стоит ВНУТРИ блока, а величину считает внешний `select`. `[замер
+    # 04.08]` вопрос 40 «Сколько мы продали Альтаиру?» из-за этого имел эталоном
+    # `catalog_партнеры` (там берутся только имя и ключ для отбора), тогда как сумму
+    # считает `document_реализациятоваровуслуг`. Прибор объявлял промахом доставку
+    # справочника, который отвечать и не должен, — и это единственный вопрос, мешавший
+    # шагу 3 показать 44 из 44.
     # Вопрос: строка вида **N. «...»** — хвост в скобках допустим (у 27, 56-58 он есть,
     # и прежний прогонщик молча терял эти четыре вопроса).
     blocks = re.split(r"\n(?=\*\*\d+\.\s*«)", text)
@@ -153,9 +221,9 @@ def pairs(path):
             continue
         num, q = m.group(1), m.group(2).strip()
         want = None
-        t = re.search(r"\bfrom\s+([a-zа-яё0-9_]+)", b, re.I)
+        t = _answering_table(b)
         if t:
-            want = t.group(1).lower()
+            want = t
             if want.startswith(("search_", "resolver_")):
                 # правило 2: эталон в условии по нашей же таблице
                 inner = re.search(r"src_table\s*=\s*'([a-zа-яё0-9_]+)'", b, re.I)
