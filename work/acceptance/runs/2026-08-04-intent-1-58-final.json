@@ -1,0 +1,1629 @@
+{
+ "repeats": 3,
+ "rows": [
+  {
+   "no": 1,
+   "q": "На какую сумму мы закупили товаров и услуг?",
+   "parse": {
+    "terms": [],
+    "kind": "закупка",
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.38
+  },
+  {
+   "no": 2,
+   "q": "Сколько НДС мы заплатили поставщикам?",
+   "parse": {
+    "terms": [],
+    "kind": "платежи",
+    "measure": "НДС",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 7.77
+  },
+  {
+   "no": 3,
+   "q": "На какую сумму мы продали товаров и услуг?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.21
+  },
+  {
+   "no": 4,
+   "q": "Сколько НДС в наших продажах?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "НДС",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.36
+  },
+  {
+   "no": 5,
+   "q": "Сколько штук товара мы продали?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": "штук",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.54
+  },
+  {
+   "no": 6,
+   "q": "Сколько штук мы закупили?",
+   "parse": {
+    "terms": [],
+    "kind": "закупка",
+    "measure": "штук",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.77
+  },
+  {
+   "no": 7,
+   "q": "Какая самая высокая цена за единицу в продажах?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "цена за единицу",
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.75
+  },
+  {
+   "no": 8,
+   "q": "Сколько у нас партнёров?",
+   "parse": {
+    "terms": [],
+    "kind": "партнёров",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.5
+  },
+  {
+   "no": 9,
+   "q": "Сколько у нас контрагентов?",
+   "parse": {
+    "terms": [],
+    "kind": "контрагент",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.57
+  },
+  {
+   "no": 10,
+   "q": "Сколько позиций номенклатуры в справочнике?",
+   "parse": {
+    "terms": [],
+    "kind": "номенклатуры",
+    "measure": "позиций",
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [
+    "названа величина «позиций», а вопрос её не называет"
+   ],
+   "sec": 4.81
+  },
+  {
+   "no": 11,
+   "q": "Сколько у нас организаций?",
+   "parse": {
+    "terms": [],
+    "kind": "организаций",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.52
+  },
+  {
+   "no": 12,
+   "q": "Сколько у нас складов?",
+   "parse": {
+    "terms": [],
+    "kind": "складов",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.28
+  },
+  {
+   "no": 13,
+   "q": "Сколько документов реализации товаров и услуг?",
+   "parse": {
+    "terms": [],
+    "kind": "документы реализации товаров и услуг",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 6.99
+  },
+  {
+   "no": 14,
+   "q": "Сколько строк товаров во всех документах реализации?",
+   "parse": {
+    "terms": [],
+    "kind": "реализация",
+    "measure": "строк",
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.63
+  },
+  {
+   "no": 15,
+   "q": "Сколько документов приобретения товаров и услуг?",
+   "parse": {
+    "terms": [],
+    "kind": "документы приобретения товаров и услуг",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 7.62
+  },
+  {
+   "no": 16,
+   "q": "Сколько заказов клиентов оформлено и на какую сумму?",
+   "parse": {
+    "terms": [],
+    "kind": "заказы клиентов",
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "want"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 7.13
+  },
+  {
+   "no": 17,
+   "q": "Во что нам обошлись закупки?",
+   "parse": {
+    "terms": [],
+    "kind": "закупки",
+    "measure": "обошлись",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.55
+  },
+  {
+   "no": 18,
+   "q": "Кто нам поставляет товар?",
+   "parse": {
+    "terms": [],
+    "kind": "поставщик",
+    "measure": null,
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.29
+  },
+  {
+   "no": 19,
+   "q": "Сколько денег нам должны клиенты?",
+   "parse": {
+    "terms": [],
+    "kind": "клиенты",
+    "measure": "денег",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.48
+  },
+  {
+   "no": 20,
+   "q": "Сколько мы отгрузили за всё время?",
+   "parse": {
+    "terms": [],
+    "kind": "отгрузка",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [
+    "want=count, ожидалось sum"
+   ],
+   "sec": 6.81
+  },
+  {
+   "no": 21,
+   "q": "На какую сумму мы продали ООО \"Ромашка\"?",
+   "parse": {
+    "terms": [
+     [
+      "ООО \"Ромашка\"",
+      "Ромашка"
+     ]
+    ],
+    "kind": "продажа",
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.85
+  },
+  {
+   "no": 22,
+   "q": "Сколько велосипедов мы продали?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [
+    "в terms нет значения «велосипед»",
+    "понятий в terms 0, ожидалось 1"
+   ],
+   "sec": 6.26
+  },
+  {
+   "no": 23,
+   "q": "Какая у нас была выручка за 2022 год?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "выручка",
+    "want": "sum",
+    "period": {
+     "from": "2022-01-01",
+     "to": "2022-12-31"
+    },
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.08
+  },
+  {
+   "no": 24,
+   "q": "Сколько ноутбуков мы продали?",
+   "parse": {
+    "terms": [
+     [
+      "ноутбук",
+      "ноутбука",
+      "ноутбуков"
+     ]
+    ],
+    "kind": "продажа",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 6.09
+  },
+  {
+   "no": 25,
+   "q": "Сколько анкет заполнено?",
+   "parse": {
+    "terms": [],
+    "kind": "анкета",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 6.22
+  },
+  {
+   "no": 26,
+   "q": "Сколько у нас товаров?",
+   "parse": {
+    "terms": [],
+    "kind": "товар",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 6.55
+  },
+  {
+   "no": 27,
+   "q": "На какую сумму?",
+   "parse": {
+    "terms": [],
+    "kind": null,
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.33
+  },
+  {
+   "no": 28,
+   "q": "Сколько мы продали за год?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "продано",
+    "want": "sum",
+    "period": {
+     "from": "2025-08-04",
+     "to": "2026-08-04"
+    },
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [
+      "period.from",
+      "period.to"
+     ],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [
+    "год периода 2025 (from) не назван",
+    "год периода 2026 (to) не назван"
+   ],
+   "mismatch": [],
+   "sec": 5.63
+  },
+  {
+   "no": 29,
+   "q": "Покажи сумму по приобретениям",
+   "parse": {
+    "terms": [],
+    "kind": "приобретения",
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.56
+  },
+  {
+   "no": 30,
+   "q": "Какая самая крупная продажа и когда?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": "сумма",
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.06
+  },
+  {
+   "no": 31,
+   "q": "Какая самая маленькая продажа?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": "сумма",
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.61
+  },
+  {
+   "no": 32,
+   "q": "Средняя сумма документа реализации?",
+   "parse": {
+    "terms": [],
+    "kind": "реализация",
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.53
+  },
+  {
+   "no": 33,
+   "q": "Сколько денег поступило на расчётный счёт?",
+   "parse": {
+    "terms": [],
+    "kind": "поступления",
+    "measure": "денег",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 8.62
+  },
+  {
+   "no": 34,
+   "q": "Сколько мы списали с расчётного счёта?",
+   "parse": {
+    "terms": [],
+    "kind": "списание",
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.12
+  },
+  {
+   "no": 35,
+   "q": "Сколько мы продали в декабре 2017 года?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "продано",
+    "want": "sum",
+    "period": {
+     "from": "2017-12-01",
+     "to": "2017-12-31"
+    },
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.64
+  },
+  {
+   "no": 36,
+   "q": "Сколько продали в 2016 году?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": "продажи",
+    "want": "sum",
+    "period": {
+     "from": "2016-01-01",
+     "to": "2016-12-31"
+    },
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 8.44
+  },
+  {
+   "no": 37,
+   "q": "Сколько мы продали в 2018 году?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "продано",
+    "want": "sum",
+    "period": {
+     "from": "2018-01-01",
+     "to": "2018-12-31"
+    },
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 6.02
+  },
+  {
+   "no": 38,
+   "q": "Когда была последняя продажа?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": null,
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.7
+  },
+  {
+   "no": 39,
+   "q": "Какой самый ранний документ в базе?",
+   "parse": {
+    "terms": [],
+    "kind": "документ",
+    "measure": null,
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 4.79
+  },
+  {
+   "no": 40,
+   "q": "Сколько мы продали Альтаиру?",
+   "parse": {
+    "terms": [
+     [
+      "Альтаир",
+      "Альтаиру"
+     ]
+    ],
+    "kind": "продажа",
+    "measure": "продано",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "measure"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 10.68
+  },
+  {
+   "no": 41,
+   "q": "Что и на сколько мы закупали у Базы \"Электротовары\"?",
+   "parse": {
+    "terms": [
+     [
+      "Базы \"Электротовары\""
+     ]
+    ],
+    "kind": "закупки",
+    "measure": null,
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "terms",
+      "kind",
+      "measure"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 10.85
+  },
+  {
+   "no": 42,
+   "q": "Сколько кроссовок ADIDAS мы продали?",
+   "parse": {
+    "terms": [
+     [
+      "кроссовок",
+      "кроссовки",
+      "кроссовками"
+     ],
+     [
+      "ADIDAS",
+      "Адидас"
+     ]
+    ],
+    "kind": "продажи",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "terms",
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 12.34
+  },
+  {
+   "no": 43,
+   "q": "На какую сумму продали техники BOSCH?",
+   "parse": {
+    "terms": [
+     [
+      "BOSCH"
+     ]
+    ],
+    "kind": "продажи",
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [
+    "в terms нет значения «техник»",
+    "понятий в terms 1, ожидалось 2"
+   ],
+   "sec": 10.6
+  },
+  {
+   "no": 44,
+   "q": "Какой ИНН у контрагента Алмаз?",
+   "parse": {
+    "terms": [
+     [
+      "Алмаз"
+     ]
+    ],
+    "kind": "контрагент",
+    "measure": "ИНН",
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 6.56
+  },
+  {
+   "no": 45,
+   "q": "Сколько записей замеров времени в базе?",
+   "parse": {
+    "terms": [],
+    "kind": "замеров времени",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 8.93
+  },
+  {
+   "no": 46,
+   "q": "Сколько ролей роздано профилям групп доступа?",
+   "parse": {
+    "terms": [],
+    "kind": "роли",
+    "measure": "ролей",
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 7.84
+  },
+  {
+   "no": 47,
+   "q": "Сколько всего служебных записей в базе и сколько деловых?",
+   "parse": {
+    "terms": [],
+    "kind": "служебная записка",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "terms",
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 8.75
+  },
+  {
+   "no": 48,
+   "q": "Сколько записей в регистре закупок и на какую сумму?",
+   "parse": {
+    "terms": [],
+    "kind": "запись в регистре закупок",
+    "measure": "сумма",
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 9.88
+  },
+  {
+   "no": 49,
+   "q": "Сколько товара сейчас на складах?",
+   "parse": {
+    "terms": [],
+    "kind": "товар",
+    "measure": "количество",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.83
+  },
+  {
+   "no": 50,
+   "q": "Какой был самый высокий курс евро и когда?",
+   "parse": {
+    "terms": [
+     [
+      "евро",
+      "eur"
+     ]
+    ],
+    "kind": "курс",
+    "measure": "курс",
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 7.57
+  },
+  {
+   "no": 51,
+   "q": "Сколько записей о курсах валют?",
+   "parse": {
+    "terms": [],
+    "kind": "курсы валют",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.31
+  },
+  {
+   "no": 52,
+   "q": "Сколько было возвратов товаров от клиентов?",
+   "parse": {
+    "terms": [],
+    "kind": "возврат",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 7.54
+  },
+  {
+   "no": 53,
+   "q": "Сколько новостей в базе и о чём последняя?",
+   "parse": {
+    "terms": [],
+    "kind": "новостей",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 6.33
+  },
+  {
+   "no": 54,
+   "q": "У кого из сотрудников самая ранняя дата рождения?",
+   "parse": {
+    "terms": [],
+    "kind": "сотрудник",
+    "measure": "дата рождения",
+    "want": "list",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.55
+  },
+  {
+   "no": 55,
+   "q": "Сколько документов реализации с нулевой суммой?",
+   "parse": {
+    "terms": [],
+    "kind": "документы реализации",
+    "measure": "сумма",
+    "want": "count",
+    "period": {},
+    "amount": {
+     "op": "=",
+     "value": 0.0,
+     "value2": null
+    },
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [
+    "порог 0 цифрами не назван"
+   ],
+   "mismatch": [],
+   "sec": 6.01
+  },
+  {
+   "no": 56,
+   "q": "скока мы всего продали?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "всего",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 8.66
+  },
+  {
+   "no": 57,
+   "q": "Итоговая сумма реализации товаров и услуг",
+   "parse": {
+    "terms": [],
+    "kind": "реализация",
+    "measure": "сумма",
+    "want": "sum",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [],
+     "samples": 3
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 5.24
+  },
+  {
+   "no": 58,
+   "q": "Сколько у нас контрагетов?",
+   "parse": {
+    "terms": [],
+    "kind": "контрагенты",
+    "measure": null,
+    "want": "count",
+    "period": {},
+    "amount": {},
+    "about": "data",
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": [],
+     "assumed": [],
+     "unstable": [
+      "kind"
+     ],
+     "samples": 5
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "derived": [],
+   "mismatch": [],
+   "sec": 8.54
+  }
+ ]
+}

@@ -1,0 +1,1305 @@
+{
+ "repeats": 3,
+ "rows": [
+  {
+   "no": 1,
+   "q": "На какую сумму мы закупили товаров и услуг?",
+   "parse": {
+    "terms": [],
+    "kind": "закупка",
+    "measure": "сумма",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.43
+  },
+  {
+   "no": 2,
+   "q": "Сколько НДС мы заплатили поставщикам?",
+   "parse": {
+    "terms": [
+     [
+      "НДС"
+     ]
+    ],
+    "kind": "платежи",
+    "measure": "НДС",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.56
+  },
+  {
+   "no": 3,
+   "q": "На какую сумму мы продали товаров и услуг?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "сумма",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.47
+  },
+  {
+   "no": 4,
+   "q": "Сколько НДС в наших продажах?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "НДС",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.52
+  },
+  {
+   "no": 5,
+   "q": "Сколько штук товара мы продали?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": "штук",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.72
+  },
+  {
+   "no": 6,
+   "q": "Сколько штук мы закупили?",
+   "parse": {
+    "terms": [],
+    "kind": "закупка",
+    "measure": "штук",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.73
+  },
+  {
+   "no": 7,
+   "q": "Какая самая высокая цена за единицу в продажах?",
+   "parse": {
+    "terms": [],
+    "kind": "продажах",
+    "measure": "цена за единицу",
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.53
+  },
+  {
+   "no": 8,
+   "q": "Сколько у нас партнёров?",
+   "parse": {
+    "terms": [],
+    "kind": "партнёр",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.48
+  },
+  {
+   "no": 9,
+   "q": "Сколько у нас контрагентов?",
+   "parse": {
+    "terms": [],
+    "kind": "контрагент",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.54
+  },
+  {
+   "no": 10,
+   "q": "Сколько позиций номенклатуры в справочнике?",
+   "parse": {
+    "terms": [],
+    "kind": "позиции номенклатуры",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.59
+  },
+  {
+   "no": 11,
+   "q": "Сколько у нас организаций?",
+   "parse": {
+    "terms": [],
+    "kind": "организаций",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.55
+  },
+  {
+   "no": 12,
+   "q": "Сколько у нас складов?",
+   "parse": {
+    "terms": [],
+    "kind": "складов",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.56
+  },
+  {
+   "no": 13,
+   "q": "Сколько документов реализации товаров и услуг?",
+   "parse": {
+    "terms": [],
+    "kind": "документы реализации товаров и услуг",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.63
+  },
+  {
+   "no": 14,
+   "q": "Сколько строк товаров во всех документах реализации?",
+   "parse": {
+    "terms": [],
+    "kind": "документы реализации",
+    "measure": "строк",
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.65
+  },
+  {
+   "no": 15,
+   "q": "Сколько документов приобретения товаров и услуг?",
+   "parse": {
+    "terms": [],
+    "kind": "документы приобретения товаров и услуг",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.7
+  },
+  {
+   "no": 16,
+   "q": "Сколько заказов клиентов оформлено и на какую сумму?",
+   "parse": {
+    "terms": [],
+    "kind": "заказы клиентов",
+    "measure": "сумма",
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.45
+  },
+  {
+   "no": 17,
+   "q": "Во что нам обошлись закупки?",
+   "parse": {
+    "terms": [],
+    "kind": "закупки",
+    "measure": "обошлись",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.38
+  },
+  {
+   "no": 18,
+   "q": "Кто нам поставляет товар?",
+   "parse": {
+    "terms": [],
+    "kind": "поставщик",
+    "measure": null,
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.74
+  },
+  {
+   "no": 19,
+   "q": "Сколько денег нам должны клиенты?",
+   "parse": {
+    "terms": [],
+    "kind": "клиенты",
+    "measure": "денег",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.45
+  },
+  {
+   "no": 20,
+   "q": "Сколько мы отгрузили за всё время?",
+   "parse": {
+    "terms": [],
+    "kind": "отгрузка",
+    "measure": "отгрузили",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 3,
+   "invariants": [],
+   "sec": 1.75
+  },
+  {
+   "no": 21,
+   "q": "На какую сумму мы продали ООО \"Ромашка\"?",
+   "parse": {
+    "terms": [
+     [
+      "ООО \"Ромашка\"",
+      "Ромашка"
+     ]
+    ],
+    "kind": "продажа",
+    "measure": "сумма",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.9
+  },
+  {
+   "no": 22,
+   "q": "Сколько велосипедов мы продали?",
+   "parse": {
+    "terms": [
+     [
+      "велосипед",
+      "велосипеда",
+      "велосипедов"
+     ]
+    ],
+    "kind": "продажа",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.71
+  },
+  {
+   "no": 23,
+   "q": "Какая у нас была выручка за 2022 год?",
+   "parse": {
+    "terms": [],
+    "kind": "выручка",
+    "measure": "выручка",
+    "want": "sum",
+    "about": "data",
+    "period": {
+     "from": "2022-01-01",
+     "to": "2022-12-31"
+    },
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.63
+  },
+  {
+   "no": 24,
+   "q": "Сколько ноутбуков мы продали?",
+   "parse": {
+    "terms": [
+     [
+      "ноутбук",
+      "ноутбуков",
+      "ноутбука"
+     ]
+    ],
+    "kind": "продажа",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.82
+  },
+  {
+   "no": 25,
+   "q": "Сколько анкет заполнено?",
+   "parse": {
+    "terms": [],
+    "kind": "анкет",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.45
+  },
+  {
+   "no": 26,
+   "q": "Сколько у нас товаров?",
+   "parse": {
+    "terms": [],
+    "kind": "товаров",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.61
+  },
+  {
+   "no": 27,
+   "q": "На какую сумму?",
+   "parse": {
+    "terms": [],
+    "kind": null,
+    "measure": "сумма",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [
+    "kind пуст"
+   ],
+   "sec": 1.6
+  },
+  {
+   "no": 28,
+   "q": "Сколько мы продали за год?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "продажи",
+    "want": "sum",
+    "about": "data",
+    "period": {
+     "from": "2025-08-04",
+     "to": "2026-08-04"
+    },
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [
+    "год периода 2025 (from) не назван в вопросе",
+    "год периода 2026 (to) не назван в вопросе"
+   ],
+   "sec": 1.53
+  },
+  {
+   "no": 29,
+   "q": "Покажи сумму по приобретениям",
+   "parse": {
+    "terms": [],
+    "kind": "приобретения",
+    "measure": "сумма",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.73
+  },
+  {
+   "no": 30,
+   "q": "Какая самая крупная продажа и когда?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": "сумма",
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.73
+  },
+  {
+   "no": 31,
+   "q": "Какая самая маленькая продажа?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": "сумма",
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.79
+  },
+  {
+   "no": 32,
+   "q": "Средняя сумма документа реализации?",
+   "parse": {
+    "terms": [],
+    "kind": "реализация",
+    "measure": "сумма",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.75
+  },
+  {
+   "no": 33,
+   "q": "Сколько денег поступило на расчётный счёт?",
+   "parse": {
+    "terms": [],
+    "kind": "поступления",
+    "measure": "денег",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.7
+  },
+  {
+   "no": 34,
+   "q": "Сколько мы списали с расчётного счёта?",
+   "parse": {
+    "terms": [],
+    "kind": "списание",
+    "measure": "списано",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.51
+  },
+  {
+   "no": 35,
+   "q": "Сколько мы продали в декабре 2017 года?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "продано",
+    "want": "sum",
+    "about": "data",
+    "period": {
+     "from": "2017-12-01",
+     "to": "2017-12-31"
+    },
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 2.03
+  },
+  {
+   "no": 36,
+   "q": "Сколько продали в 2016 году?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "продали",
+    "want": "sum",
+    "about": "data",
+    "period": {
+     "from": "2016-01-01",
+     "to": "2016-12-31"
+    },
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.76
+  },
+  {
+   "no": 37,
+   "q": "Сколько мы продали в 2018 году?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "продано",
+    "want": "sum",
+    "about": "data",
+    "period": {
+     "from": "2018-01-01",
+     "to": "2018-12-31"
+    },
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.68
+  },
+  {
+   "no": 38,
+   "q": "Когда была последняя продажа?",
+   "parse": {
+    "terms": [],
+    "kind": "продажа",
+    "measure": null,
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.43
+  },
+  {
+   "no": 39,
+   "q": "Какой самый ранний документ в базе?",
+   "parse": {
+    "terms": [],
+    "kind": "документ",
+    "measure": null,
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.37
+  },
+  {
+   "no": 40,
+   "q": "Сколько мы продали Альтаиру?",
+   "parse": {
+    "terms": [
+     [
+      "Альтаир"
+     ],
+     [
+      "Альтаиру"
+     ]
+    ],
+    "kind": "продажи",
+    "measure": "продажи",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.78
+  },
+  {
+   "no": 41,
+   "q": "Что и на сколько мы закупали у Базы \"Электротовары\"?",
+   "parse": {
+    "terms": [
+     [
+      "Базы \"Электротовары\"",
+      "База \"Электротовары\"",
+      "Электротовары"
+     ]
+    ],
+    "kind": "закупка",
+    "measure": "сумма",
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.94
+  },
+  {
+   "no": 42,
+   "q": "Сколько кроссовок ADIDAS мы продали?",
+   "parse": {
+    "terms": [
+     [
+      "ADIDAS"
+     ]
+    ],
+    "kind": "кроссовки",
+    "measure": "продано",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.65
+  },
+  {
+   "no": 43,
+   "q": "На какую сумму продали техники BOSCH?",
+   "parse": {
+    "terms": [
+     [
+      "BOSCH"
+     ]
+    ],
+    "kind": "техника",
+    "measure": "сумма",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.51
+  },
+  {
+   "no": 44,
+   "q": "Какой ИНН у контрагента Алмаз?",
+   "parse": {
+    "terms": [
+     [
+      "Алмаз"
+     ]
+    ],
+    "kind": "контрагент",
+    "measure": "ИНН",
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.76
+  },
+  {
+   "no": 45,
+   "q": "Сколько записей замеров времени в базе?",
+   "parse": {
+    "terms": [],
+    "kind": "замеры времени",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.5
+  },
+  {
+   "no": 46,
+   "q": "Сколько ролей роздано профилям групп доступа?",
+   "parse": {
+    "terms": [],
+    "kind": "роли",
+    "measure": "ролей",
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.42
+  },
+  {
+   "no": 47,
+   "q": "Сколько всего служебных записей в базе и сколько деловых?",
+   "parse": {
+    "terms": [
+     [
+      "служебных записей"
+     ],
+     [
+      "деловых"
+     ]
+    ],
+    "kind": "записей",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [
+    "род записей в terms: «служебных записей»"
+   ],
+   "sec": 1.89
+  },
+  {
+   "no": 48,
+   "q": "Сколько записей в регистре закупок и на какую сумму?",
+   "parse": {
+    "terms": [],
+    "kind": "запись",
+    "measure": "сумма",
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.55
+  },
+  {
+   "no": 49,
+   "q": "Сколько товара сейчас на складах?",
+   "parse": {
+    "terms": [],
+    "kind": "товар",
+    "measure": "количество",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.56
+  },
+  {
+   "no": 50,
+   "q": "Какой был самый высокий курс евро и когда?",
+   "parse": {
+    "terms": [
+     [
+      "евро",
+      "eur"
+     ]
+    ],
+    "kind": "курс",
+    "measure": "курс",
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.67
+  },
+  {
+   "no": 51,
+   "q": "Сколько записей о курсах валют?",
+   "parse": {
+    "terms": [],
+    "kind": "курсы валют",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.77
+  },
+  {
+   "no": 52,
+   "q": "Сколько было возвратов товаров от клиентов?",
+   "parse": {
+    "terms": [],
+    "kind": "возврат",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.57
+  },
+  {
+   "no": 53,
+   "q": "Сколько новостей в базе и о чём последняя?",
+   "parse": {
+    "terms": [],
+    "kind": "новость",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 2,
+   "invariants": [],
+   "sec": 1.34
+  },
+  {
+   "no": 54,
+   "q": "У кого из сотрудников самая ранняя дата рождения?",
+   "parse": {
+    "terms": [],
+    "kind": "сотрудник",
+    "measure": "дата рождения",
+    "want": "list",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.47
+  },
+  {
+   "no": 55,
+   "q": "Сколько документов реализации с нулевой суммой?",
+   "parse": {
+    "terms": [],
+    "kind": "документы реализации",
+    "measure": "сумма",
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [
+      "amount.op"
+     ],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.77
+  },
+  {
+   "no": 56,
+   "q": "скока мы всего продали?",
+   "parse": {
+    "terms": [],
+    "kind": "продажи",
+    "measure": "всего",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.73
+  },
+  {
+   "no": 57,
+   "q": "Итоговая сумма реализации товаров и услуг",
+   "parse": {
+    "terms": [],
+    "kind": "реализация",
+    "measure": "сумма",
+    "want": "sum",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.48
+  },
+  {
+   "no": 58,
+   "q": "Сколько у нас контрагетов?",
+   "parse": {
+    "terms": [],
+    "kind": "контрагент",
+    "measure": null,
+    "want": "count",
+    "about": "data",
+    "period": {},
+    "amount": {},
+    "parse": {
+     "ok": true,
+     "lost": [],
+     "fixed": []
+    }
+   },
+   "variants": 1,
+   "invariants": [],
+   "sec": 1.46
+  }
+ ]
+}
