@@ -422,6 +422,15 @@ printf '# контракт\n' > TARGET.md
 
 [ -z "$(armed)" ]; say $? 'всё возвращено — нарушений снова нет'
 
+echo '== check-gates: повышение прав вместо прямого вызова =='
+# 🔴 Сессии повышение прав закрыто её средой, а юниты проекта разрешены polkit напрямую.
+# Без этой подсказки попытка упирается намертво и превращается в просьбу к владельцу —
+# 04.08 такая просьба пришла дважды уже после того, как прямой путь был сделан.
+OUT=$(printf '{"tool_input":{"command":"sudo systemctl restart 1c-serene-ask@ut_test"}}' | bash .claude/hooks/check-gates.sh 2>/dev/null)
+asks "$OUT"; say $? 'повышение прав + systemctl — останавливает и называет прямую команду'
+OUT=$(printf '{"tool_input":{"command":"systemctl restart 1c-serene-ask@ut_test"}}' | bash .claude/hooks/check-gates.sh 2>/dev/null)
+asks "$OUT"; [ $? = 1 ]; say $? 'та же команда напрямую — молчит'
+
 echo '== check-gates: разоружение останавливает коммит =='
 cp .githooks/pre-commit "$TMP/wrap2.bak"
 printf '#!/usr/bin/env bash\nexit 0\n' > .githooks/pre-commit; chmod +x .githooks/pre-commit
