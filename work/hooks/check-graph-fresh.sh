@@ -22,7 +22,10 @@ GRAPH="memory_bank/mcp-memory.json"
 [ -f "$GRAPH" ] || { echo '{}'; exit 0; }
 
 # A<TAB>path / D<TAB>path; для теста подменяется через STAGED_OVERRIDE
-STAGED="${STAGED_OVERRIDE:-$(git diff --cached --name-status 2>/dev/null)}"
+# Проверяем ровно то, что уйдёт в коммит: при пат-спеке — только названные пути,
+# иначе чужой staged-файл соседней сессии останавливал бы наш коммит.
+mapfile -t PS < <(hook_commit_pathspec "$CMD")
+STAGED="${STAGED_OVERRIDE:-$(git diff --cached --name-status -- "${PS[@]}" 2>/dev/null)}"
 [ -z "$STAGED" ] && { echo '{}'; exit 0; }
 
 STAGED="$STAGED" python3 - "$GRAPH" <<'PY' | hook_gate_json check-graph-fresh

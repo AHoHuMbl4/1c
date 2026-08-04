@@ -32,8 +32,18 @@ is_git_commit "$CMD" || { echo '{}'; exit 0; }
 cd_repo || { hook_ask "Хук $(basename "$0") не смог определить каталог репозитория и ничего не проверил. Пропускать проверку молча нельзя — подтвердите шаг вручную."; exit 0; }
 
 # Для проб подменяется через DIFF_OVERRIDE. `-U0` — только сами добавленные строки.
-DIFF="${DIFF_OVERRIDE:-$(git diff --cached -U0 2>/dev/null)}"
+# Проверяем ровно то, что уйдёт в коммит: при пат-спеке — только названные пути.
+mapfile -t PS < <(hook_commit_pathspec "$CMD")
+DIFF="${DIFF_OVERRIDE:-$(git diff --cached -U0 -- "${PS[@]}" 2>/dev/null)}"
 [ -z "$DIFF" ] && { echo '{}'; exit 0; }
+
+# Раздел доков называется в самом коммите — см. hook_commit_note в lib-hooks.sh.
+HOOK_CMD_FOR_NOTE="$CMD"
+NOTE="$(hook_commit_note 'доки|docs')"
+if [ -n "$NOTE" ]; then
+  hook_log "sql-docs" "пропуск: раздел назван в коммите — $NOTE"
+  echo '{}'; exit 0
+fi
 
 # 🔴 ДИФФ ПЕРЕДАЁТСЯ ФАЙЛОМ, А НЕ ОКРУЖЕНИЕМ. Было `DIFF="$DIFF" python3` — и на большом
 # коммите окружение упиралось в предел: `/usr/bin/python3: Argument list too long`,

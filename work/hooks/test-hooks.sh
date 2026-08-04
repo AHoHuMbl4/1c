@@ -126,7 +126,17 @@ G="$TMP/gate"; mkdir -p "$G/.claude/hooks" "$G/memory_bank" "$G/ubuntu/serenedb"
 # файлов в пробе — это второй список, который обязан совпадать с настоящим и не совпадает.
 cp "$REPO"/.claude/hooks/*.sh "$G/.claude/hooks/" 2>/dev/null
 cp "$HOOKS"/*.sh "$G/.claude/hooks/" 2>/dev/null   # проверяем ту версию, что правится
-cp "$REPO"/.githooks/pre-commit "$G/.githooks/"
+# 🔴 ОБЁРТКИ БЕРУТСЯ ИЗ УСТАНОВЛЕННОГО `.githooks`, а не из подготовительного каталога.
+# Проба, запущенная копией из `.claude/hooks/`, не находила там `commit-msg.thin` (туда
+# ставятся только `*.sh`) — и падала на «защита цела», хотя защита была цела: в реальном
+# репозитории обёртка стоит. Проба обязана смотреть на то же, что работает.
+cp "$REPO"/.githooks/pre-commit "$G/.githooks/" 2>/dev/null
+if [ -f "$REPO/.githooks/commit-msg" ]; then
+  cp "$REPO"/.githooks/commit-msg "$G/.githooks/"
+else
+  install -m 755 "$HOOKS/commit-msg.thin" "$G/.githooks/commit-msg" 2>/dev/null
+fi
+chmod +x "$G"/.githooks/* 2>/dev/null
 # Гейты сверяются с настройками сессии — в песочнице нужен свой settings.json с их именами.
 python3 - "$G" <<'PY'
 import json, sys
@@ -175,6 +185,21 @@ printf '{"type":"entity","name":"newcode.py","entityType":"компонент","
   > memory_bank/mcp-memory.json
 git add ubuntu/serenedb/newcode.py README.md memory_bank/mcp-memory.json
 gate pass 'код + документ + граф с сущностью компонента — коммит проходит'
+
+# 🔴 Пометка в сообщении проверяется НАСТОЯЩИМ коммитом: в pre-commit сообщения ещё нет
+# (man githooks: «before obtaining the proposed commit log message»), и первая редакция
+# читала .git/COMMIT_EDITMSG — то есть текст ПРОШЛОГО коммита. Нашла рабочая сессия.
+printf 'q = "SELECT src_table FROM search_idx"\n' > ubuntu/serenedb/gsql.py
+printf '\nстрока про gsql\n' >> README.md
+printf '{"type":"entity","name":"gsql.py","entityType":"компонент","observations":["проба"]}\n' \
+  >> memory_bank/mcp-memory.json
+git add ubuntu/serenedb/gsql.py README.md memory_bank/mcp-memory.json
+gate block 'SQL без пометки — коммит остановлен со стороны git'
+
+git add ubuntu/serenedb/gsql.py README.md memory_bank/mcp-memory.json
+git commit -qm 'правка. Доки: sql/functions/search/full-text' >/dev/null 2>&1
+say $? 'SQL с пометкой «Доки:» в сообщении — коммит проходит'
+git reset -q
 
 printf 'x\n' > windows/odata-setup/setup.cs; git add windows/odata-setup/setup.cs
 gate pass 'трек владельца (odata-setup) пропускается'
@@ -228,6 +253,49 @@ pr_case ask "$(python3 -c 'import json;print(json.dumps({"tool_input":{"file_pat
   'правило в поле instruction (текст уходит модели) — останавливает'
 pr_case pass "$(python3 -c 'import json;print(json.dumps({"tool_input":{"file_path":"/x/docs/HOW_NOT_TO.md","new_string":"Правило: разделитель равенства обязателен всегда.","old_string":""}}))')" \
   'правило в ДОКУМЕНТ — пропускает: документы для людей, а не для модели'
+
+# --- SQL: раздел доков и чужие файлы в общем индексе ------------------------------
+echo
+echo '== гейт SQL: раздел доков в коммите, чужое в индексе =='
+cd "$G" || exit 1
+git reset -q
+mkdir -p ubuntu/serenedb
+printf 'q = "SELECT src_table FROM search_idx"\n' > ubuntu/serenedb/sqlcode.py
+printf 'x = 1\n' > ubuntu/serenedb/plain.py
+git add ubuntu/serenedb/sqlcode.py ubuntu/serenedb/plain.py
+
+OUT=$(printf '{"tool_input":{"command":"git commit -m x"}}' | bash .claude/hooks/check-sql-docs.sh 2>/dev/null)
+asks "$OUT"; say $? 'SQL без названного раздела — останавливает'
+
+# 🔴 Раздел называет тот, кто коммитит, — строкой «Доки:» в сообщении. Прежде выходом был
+# только аварийный люк, то есть на каждый SQL-коммит дёргали владельца, хотя проверку
+# делал исполнитель. Названный раздел вдобавок уезжает в историю вместе с кодом.
+OUT=$(printf '{"tool_input":{"command":"git commit -m \x27правка. Доки: sql/functions/search/full-text\x27"}}' | bash .claude/hooks/check-sql-docs.sh 2>/dev/null)
+asks "$OUT"; [ $? = 1 ]; say $? 'раздел назван в сообщении — пропускает'
+
+# 🔴 Индекс общий на все сессии, коммит идёт пат-спеком. Гейт обязан смотреть только то,
+# что уедет в историю: чужой staged-файл с SQL не должен останавливать наш коммит.
+OUT=$(printf '{"tool_input":{"command":"git commit -m x -- ubuntu/serenedb/plain.py"}}' | bash .claude/hooks/check-sql-docs.sh 2>/dev/null)
+asks "$OUT"; [ $? = 1 ]; say $? 'чужой файл с SQL вне пат-спека — не мешает коммиту'
+
+OUT=$(printf '{"tool_input":{"command":"git commit -m x -- ubuntu/serenedb/sqlcode.py"}}' | bash .claude/hooks/check-sql-docs.sh 2>/dev/null)
+asks "$OUT"; say $? 'свой файл с SQL в пат-спеке — останавливает'
+git reset -q; rm -f ubuntu/serenedb/sqlcode.py ubuntu/serenedb/plain.py
+cd "$TMP" || exit 1
+
+# --- числа: объяснение в коммите ---------------------------------------------------
+echo
+echo '== гейт подгонки: числа объясняются в коммите =='
+cd "$G" || exit 1
+git reset -q
+printf 'LIMIT = 37\nTHRESHOLD = 0.83\n' > ubuntu/serenedb/nums.py
+git add ubuntu/serenedb/nums.py
+OUT=$(printf '{"tool_input":{"command":"git commit -m x"}}' | bash .claude/hooks/check-diff.sh 2>/dev/null)
+asks "$OUT"; say $? 'новые числа без объяснения — останавливает'
+OUT=$(printf '{"tool_input":{"command":"git commit -m \x27правка. Числа: бюджеты имитации, не отсечки правильности\x27"}}' | bash .claude/hooks/check-diff.sh 2>/dev/null)
+asks "$OUT"; [ $? = 1 ]; say $? 'числа объяснены в сообщении — пропускает'
+git reset -q; rm -f ubuntu/serenedb/nums.py
+cd "$TMP" || exit 1
 
 # --- большой дифф -----------------------------------------------------------------
 # 🔴 Гейты передавали дифф python-части ЧЕРЕЗ ОКРУЖЕНИЕ, и на крупном коммите это давало

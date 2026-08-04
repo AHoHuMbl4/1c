@@ -47,7 +47,10 @@ d=json.load(sys.stdin)
 print((d.get("tool_input") or {}).get("command") or "")' 2>/dev/null)
   is_git_commit "$CMD" || { echo '{}'; exit 0; }
   cd_repo || { hook_ask "Хук $(basename "$0") не смог определить каталог репозитория и ничего не проверил. Пропускать проверку молча нельзя."; exit 0; }
-  STAGED_DIFF="${DIFF_OVERRIDE:-$(git diff --cached -U0 2>/dev/null)}"
+  # При пат-спеке смотрим только названные пути: чужой staged-файл соседней сессии
+  # не должен останавливать наш коммит.
+  mapfile -t PS < <(hook_commit_pathspec "$CMD")
+  STAGED_DIFF="${DIFF_OVERRIDE:-$(git diff --cached -U0 -- "${PS[@]}" 2>/dev/null)}"
   [ -z "$STAGED_DIFF" ] && { echo '{}'; exit 0; }
   # 🔴 Дифф — ФАЙЛОМ, не окружением: на большом коммите переменная окружения упирается в
   # предел (`/usr/bin/python3: Argument list too long`, код 126), гейт считает проверку

@@ -29,6 +29,9 @@ echo "== 1-бис. обёртка гейта коммита =="
 # Порядок здесь — не стиль, а условие того, что репозиторий остаётся рабочим.
 if [ -x "$DST/git-gate.sh" ]; then
   install -m 755 "$SRC/pre-commit.thin" .githooks/pre-commit && echo "  .githooks/pre-commit — тонкая обёртка"
+  # Второй заход: проверки, закрываемые пометкой в сообщении. В pre-commit сообщения
+  # ещё нет (man githooks), поэтому без этой обёртки «Доки:» и «Числа:» не видны.
+  install -m 755 "$SRC/commit-msg.thin" .githooks/commit-msg && echo "  .githooks/commit-msg — тонкая обёртка"
 else
   echo "  🔴 git-gate.sh не поставился — обёртку не трогаю, прежний гейт остаётся рабочим"
 fi
