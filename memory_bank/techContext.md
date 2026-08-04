@@ -790,3 +790,43 @@ INDEX … ADD` не существует.
 реквизиты ЧУЖОЙ базы — и это не ошибка, а неверные данные в карточке.
 
 Лечится условием `c.database_name = current_database()` (`entity_card_build.sql`).
+
+## Возможность 43. Слияние мест (RRF) считается ОДНИМ запросом, вместе с kNN
+
+`[замер 04.08]`, сборка 26.07.3, доки `Cookbook › Search › Reciprocal Rank Fusion`.
+
+Ветви разной природы — лексический скорер по одному индексу, лексический по другому,
+косинус по вектору — сравнивать по оценкам нельзя, а по МЕСТАМ можно. Движок делает это
+сам, без выгрузки наружу (п. 20):
+
+```sql
+WITH fused AS (
+  SELECT src_table, RANK() OVER (ORDER BY s DESC, src_table) AS rank FROM (
+    SELECT src_table, tfidf(alias_idx.tableoid) AS s FROM alias_idx
+    WHERE aliases @@ ts_phrase('поставщик') ORDER BY s DESC, src_table LIMIT 50) t
+  UNION ALL
+  SELECT src_table, RANK() OVER (ORDER BY s DESC, src_table) FROM (
+    SELECT src_table, tfidf(entity_card_idx.tableoid) AS s FROM entity_card_idx
+    WHERE label @@ … OR attrs @@ … ORDER BY s DESC, src_table LIMIT 50) t
+  UNION ALL
+  SELECT src_table, RANK() OVER (ORDER BY d, src_table) FROM (
+    SELECT src_table, emb <=> '[…]'::FLOAT[1024] AS d FROM search_entity_card
+    WHERE emb IS NOT NULL ORDER BY d, src_table LIMIT 50) t
+)
+SELECT src_table, SUM(1.0/(60 + rank)) AS rrf
+FROM fused GROUP BY src_table ORDER BY rrf DESC, src_table LIMIT 200;
+```
+
+Три вещи, без которых это не работает:
+
+* **скорер только во вложенном запросе** — снаружи `GROUP BY`, и движок не даёт считать
+  `bm25`/`tfidf` в одном запросе с ним («requires an inverted index scan in the same
+  sub-query»). Тот же обход, что записан у сборки корпуса;
+* **разделитель равенства в каждой ветви** (ловушка 30): `RANK()` при ничьей даёт
+  одинаковые места, а `LIMIT` внутри ветви режет по порядку исполнения;
+* **`k = 60`** — умолчание исходной статьи и Elasticsearch, названное в доках; это не
+  подобранное нами число.
+
+Отсутствующая ветвь просто не даёт слагаемых («A document missing from a branch
+contributes nothing») — значит ветви можно включать по наличию: нет словаря синонимов,
+лёг эмбеддер, нет карточки — запрос остаётся верным.

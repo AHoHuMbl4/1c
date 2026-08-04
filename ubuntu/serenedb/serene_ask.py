@@ -1490,15 +1490,85 @@ def meaning_candidates(exprs, kind_text, question, limit, exclude=()):
         except RuntimeError:
             exprs_kind = []                 # база молчит — работаем на том, что есть
     exprs_all = list(exprs) + [e for e in exprs_kind if e not in exprs]
-    out = []
-    for src_from in (alias_hits(exprs_all, limit),
-                     card_hits(exprs_all, limit),
-                     near_tables(question, limit),
-                     near_tables(kind_text, limit) if kind_text else []):
-        for t in src_from:
-            if t not in exclude and t not in out:
-                out.append(t)
-    return out
+    out = _fused_candidates(exprs_all, kind_text, question, limit)
+    if out is None:
+        # Слияние не собралось (нет карточки, лёг эмбеддер, старая база) — прежний путь:
+        # те же поверхности по отдельности, порядок «одна за другой».
+        out = []
+        for src_from in (alias_hits(exprs_all, limit),
+                         card_hits(exprs_all, limit),
+                         near_tables(question, limit),
+                         near_tables(kind_text, limit) if kind_text else []):
+            for t in src_from:
+                if t not in out:
+                    out.append(t)
+    return [t for t in out if t not in exclude]
+
+
+def _fused_candidates(exprs, kind_text, question, limit):
+    """Те же четыре поверхности, но СЛИТЫЕ ПО МЕСТАМ и ОДНИМ ЗАПРОСОМ внутри движка.
+
+    🔴 Зачем слияние. Порядок, в котором кандидаты уходят дальше, решает, что вообще
+    увидит модель: набор режется бюджетом перечня (`[замер 04.08]` живой ответ показал
+    100 записей из 1502). Простая склейка «одна поверхность за другой» ставит вперёд ту,
+    что оказалась первой в коде, а слияние ставит вперёд то, на чём поверхности СОШЛИСЬ.
+    `[замер 04.08]`, 44 пары приёмки, настоящие разборы шага 1, глубина перечня как в бою:
+    эталон доходит до модели 43 из 44 при склейке и **44 из 44** при слиянии, а верхним
+    кандидатом оказывается верный 16 раз против 10.
+
+    🔴 Считает БАЗА, а не питон: ранги ветвей и их сумма — один SQL по шаблону доков
+    SereneDB («Cookbook → Search → Reciprocal Rank Fusion»): `RANK()` в каждой ветви,
+    `SUM(1.0/(k + rank))` снаружи. Оттуда же `k = 60` — умолчание исходной статьи и
+    Elasticsearch, а не подобранное нами число. Скорер стоит во ВЛОЖЕННОМ запросе, а
+    агрегат снаружи: движок не даёт считать `bm25`/`tfidf` в одном запросе с `GROUP BY`
+    (`techContext`, разбор у `serene_ask`).
+
+    Ветвей четыре, каждая со своим окном `limit`: синонимы, слова карточки, смысл вопроса,
+    смысл рода записей. Отсутствующая ветвь просто не даёт слагаемых — как и написано в
+    доках («A document missing from a branch contributes nothing»).
+
+    Возвращает `None`, если ни одна ветвь не собралась: тогда зовущий откатывается на
+    прежний путь, а не остаётся без кандидатов.
+    """
+    expr = None
+    if exprs:
+        expr = exprs[0] if len(exprs) == 1 else \
+            "ts_compound(NULL, NULL, [%s], 1)" % ", ".join(exprs)
+    branches = []
+    if expr:
+        branches.append(
+            "SELECT src_table, RANK() OVER (ORDER BY s DESC, src_table) AS rank FROM ("
+            "SELECT src_table, %s AS s FROM %s WHERE aliases @@ %s "
+            "ORDER BY s DESC, src_table LIMIT %d) t"
+            % (SCORERS.get(SCORER, SCORERS["bm25"]) % ALIAS_INDEX, ALIAS_INDEX, expr, limit))
+        branches.append(
+            "SELECT src_table, RANK() OVER (ORDER BY s DESC, src_table) AS rank FROM ("
+            "SELECT src_table, %s AS s FROM %s WHERE %s "
+            "ORDER BY s DESC, src_table LIMIT %d) t"
+            % (SCORERS.get(SCORER, SCORERS["bm25"]) % CARD_INDEX, CARD_INDEX,
+               " OR ".join("%s @@ %s" % (f, expr) for f in CARD_FIELDS), limit))
+    src = CARD if emb_ready(CARD) else (TABLES if emb_ready(TABLES) else "")
+    if src:
+        for text in (question, kind_text):
+            if not text:
+                continue
+            try:
+                vec = _vec(text)            # кэшируется на текст: см. `embed_one`
+            except RuntimeError:
+                continue                    # эмбеддер лёг — остаются лексические ветви
+            branches.append(
+                "SELECT src_table, RANK() OVER (ORDER BY d, src_table) AS rank FROM ("
+                "SELECT src_table, emb <=> %s AS d FROM %s WHERE emb IS NOT NULL "
+                "ORDER BY d, src_table LIMIT %d) t" % (vec, src, limit))
+    if not branches:
+        return None
+    sql = ("WITH fused AS (%s) SELECT src_table, SUM(1.0/(%d + rank)) AS rrf "
+           "FROM fused GROUP BY src_table ORDER BY rrf DESC, src_table LIMIT %d"
+           % (" UNION ALL ".join(branches), RRF_K, limit * len(branches)))
+    try:
+        return [r[0] for r in psql(sql) if r and r[0]]
+    except RuntimeError:
+        return None                         # слияние не прошло — зовущий откатится
 
 
 def near_tables(text, limit):
@@ -1875,6 +1945,10 @@ ALIAS_INDEX = os.environ.get('ASK_ALIAS_INDEX', 'alias_idx')
 # быть видно ошибкой запроса, а не пустой выдачей.
 CARD_INDEX = os.environ.get('ASK_CARD_INDEX', 'entity_card_idx')
 CARD_FIELDS = ("label", "aliases", "about", "quantities", "attrs")
+# Слияние мест (Reciprocal Rank Fusion) при сборе кандидатов. `k` НЕ подбиралось нами:
+# 60 — умолчание исходной статьи и Elasticsearch, названное в доках SereneDB
+# («Cookbook → Search → Reciprocal Rank Fusion», раздел «k — top-rank weight»).
+RRF_K = int(os.environ.get('ASK_RRF_K', '60'))
 # Жёсткая проверка выбора сущности по подсказке базы. Выключена, пока не замерено,
 # что алиасы подсказывают верно: см. разбор в `_alias_verdict` и HOW_NOT_TO §1.25.
 ALIAS_VETO = os.environ.get('ASK_ALIAS_VETO', '0') == '1'
@@ -3806,7 +3880,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Прибор — `work/acceptance/step3_bench.py` (детерминирован, модель ответов не зовёт,
     # разбор вопроса берётся из прогона прибора шага 1, а не сочиняется приближением).
     kind_text = (intent.get("kind") or "").strip()
-    extra = meaning_candidates(exprs, kind_text, question, MEANING_TOP, exclude=by)
+    # Полный итог шага 3 — в порядке слияния мест, БЕЗ вычитания буквально найденных:
+    # ниже он служит головой итогового порядка, а буквальный отбор при пустых понятиях
+    # отдаёт ВСЕ сущности, и вычитание оставило бы голову пустой (`[замер 04.08]` живой
+    # ответ: «шаг 3 добавил 0» при 1 502 буквальных кандидатах).
+    found_by_meaning = meaning_candidates(exprs, kind_text, question, MEANING_TOP)
+    extra = [t for t in found_by_meaning if t not in by]
     if extra:
         diag["by_meaning"] = extra
     шаг("отбор: смысл и синонимы", добавлено=len(extra))
@@ -4027,6 +4106,25 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # Эмбеддер молчит — порядок остаётся по числу совпадений, но круг кандидатов
             # не сужается: пришедшие от синонимов сохраняются, они добыты без вектора.
             cands = sorted(by, key=lambda t: -by[t]) + [t for t in extra if t not in by]
+        # 🔴 НАЙДЕННОЕ ШАГОМ 3 СТОИТ ВПЕРЕДИ (04.08). Выше набор пересортирован ОДНИМ
+        # сигналом — близостью вектора, — и найденное четырьмя поверхностями сразу теряет
+        # своё место. А режется список бюджетом перечня: `[замер 04.08]` живой ответ отдал
+        # модели 100 записей из 1502, и верная сущность стояла 106-й — то есть ошибка
+        # ответа была ошибкой ДОСТАВКИ, а не выбора. Порядок внутри головы — тот, в
+        # котором его отдало слияние мест; всё остальное идёт следом, как и раньше.
+        # `[замер 04.08]` на 44 парах приёмки при глубине перечня как в бою: эталон
+        # доходит до модели 44 из 44 против 43, до реранкера 43 против 42, и верным
+        # оказывается верхний кандидат 16 раз против 10.
+        # Сигнал `top_by_question` НЕ ТРОГАЕТСЯ: он выше и остаётся вершиной чистого
+        # вектора — на нём стоит признак неоднозначности шага 4, и менять его смысл
+        # отсюда нельзя.
+        if found_by_meaning:
+            in_cands = set(cands)
+            head3 = [t for t in found_by_meaning if t in in_cands]
+            if head3:
+                seen3 = set(head3)
+                cands = head3 + [c for c in cands if c not in seen3]
+                diag["order_head"] = len(head3)
         head, tail = cands[:RERANK_TOP], cands[RERANK_TOP:]
         if tail:
             cut["reranked_of"] = len(cands)

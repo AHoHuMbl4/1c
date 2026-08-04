@@ -200,7 +200,9 @@ def main():
     DELIVERY = os.environ.get('DELIVERY', '1') not in ('0', 'no')
     SHOWN = int(os.environ.get('SHOWN', '108'))   # сколько записей влезает в бюджет перечня
     deliv = {n: [0, 0] for n in ('метка (как в бою)', 'карточка', 'слияние рангов',
-                                 'поверхности впереди')}
+                                 'поверхности впереди', 'слияние без буквального',
+                                 'слияние 4 + хвост по карточке',
+                                 'ПРОДУКТ (как в бою)')}
     deliv_miss = {n: [] for n in deliv}
     deliv_top1 = {n: 0 for n in deliv}
     total = skipped = 0
@@ -240,7 +242,8 @@ def main():
             "смысл:kind": A.near_tables(kind, DEEP) if kind else [],
         }
         # 🔴 ПРОДУКТОВЫЙ ПУТЬ ЦЕЛИКОМ: то же, что исполняет `answer`, тем же кодом.
-        prod = A.meaning_candidates(e_terms, kind, q, TOP, exclude=set(by_prod))
+        prod_full = A.meaning_candidates(e_terms, kind, q, TOP)
+        prod = [t for t in prod_full if t not in by_prod]
         prod_ok = any(fam(t) == wf for t in prod) or any(fam(t) == wf for t in by_prod)
         # Частично совпавшие — поверхность ШАГА 2 (соседняя сессия, 04.08). В сумму она
         # входит, но к шагу 3 не относится: считаем её отдельно, чтобы не приписать себе
@@ -276,6 +279,24 @@ def main():
             # остальное — за ними по близости карточки. Смысл: то, что поверхность
             # НАШЛА, не должно вылетать из головы списка из-за пересортировки всего
             # набора по одному сигналу.
+            # Слияние ТОЛЬКО четырёх поверхностей шага 3, без буквального счёта: ровно
+            # то, что можно посчитать одним SQL внутри движка.
+            four = rrf([
+                A.alias_hits(e_both, A.MEANING_TOP),
+                deep_list["карточка:все поля"][:A.MEANING_TOP],
+                deep_list["смысл:вопрос"][:A.MEANING_TOP],
+                deep_list["смысл:kind"][:A.MEANING_TOP],
+            ])
+            variants["слияние без буквального"] = four
+            variants["слияние 4 + хвост по карточке"] = four + [
+                t for t in variants["карточка"] if t not in set(four)]
+            # Ровно то, что делает продукт после правки 04.08: голова — итог шага 3 в
+            # порядке слияния (те из него, кто есть среди кандидатов), хвост — прежний
+            # порядок по вектору карточки.
+            in_c = set(cands)
+            head_prod = [t for t in prod_full if t in in_c]
+            variants["ПРОДУКТ (как в бою)"] = head_prod + [
+                t for t in variants["карточка"] if t not in set(head_prod)]
             head = variants["слияние рангов"]
             variants["поверхности впереди"] = head + [
                 t for t in variants["карточка"] if t not in set(head)]
