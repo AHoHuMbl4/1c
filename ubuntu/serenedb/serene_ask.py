@@ -2875,15 +2875,15 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         # Денежной колонки у этой сущности нет. Передать sum=0 нельзя: модель ответит
         # «0», и гейт согласится — ноль ведь посчитан. Отсутствие суммы и сумма,
         # равная нулю, — разные вещи, и путать их нельзя.
-        body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS (values are not shown — write the "
-                 "placeholder and the system puts the exact figure in its place):")
+        body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS. The values are not shown; each "
+                 "placeholder below is replaced by the system with the exact figure:")
         body += "\n  count (number of records) -> {count}"
         body += ("\n  (no numeric quantity matches the question for this record type — "
                  "no placeholder other than {count} is available here)")
     elif agg:
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS for the quantity «%s». The values "
-                 "are not shown to you — write the placeholder and the system puts the "
-                 "exact figure in its place:" % (agg.get("measure") or "-"))
+                 "are not shown; each placeholder below is replaced by the system with "
+                 "the exact figure:" % (agg.get("measure") or "-"))
         body += "\n  count (number of records) -> {count}"
         # 🔴 ПО СКОЛЬКИМ ЗАПИСЯМ ПОСЧИТАНЫ sum И avg. `aggregate` считает `count_amount`
         # отдельно именно для этого («иначе среднее по 31 строке уходит как среднее по
