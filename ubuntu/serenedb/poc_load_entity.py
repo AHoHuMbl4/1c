@@ -287,7 +287,16 @@ def fetch_all(entity_set):
     Поэтому: идём до ПУСТОЙ страницы и сверяем итог с `$count`. Расхождение — ошибка,
     а не «загрузили сколько получилось».
     """
-    expected = count_of(entity_set)
+    # 🔴 СЧЁТ ПРИХОДИТ ВМЕСТЕ С ДАННЫМИ, А НЕ ОТДЕЛЬНЫМ ЗАПРОСОМ. `$inlinecount=allpages` —
+    # штатная возможность OData 3.0, которую 1С поддерживает: в ответе появляется поле
+    # `odata.count` (проверено на живой 1С — 176 в `odata.count` при `$top=2`, и ровно
+    # столько же отдаёт `/$count`). Прежде на КАЖДУЮ сущность уходил лишний заход за
+    # `/$count`: [замер 05.08] 1589 сущностей за такт по 0,13 с медианы — сотни секунд
+    # такта свежести (п. 17) на то, что и так приезжает вместе с первой страницей.
+    #
+    # Крупная первая страница мелкую сущность не удорожает — проверено: те же 176 строк
+    # приходят за 0,08-0,11 с и при `$top=176`, и при `$top=10000`.
+    #
     # 🔴 СОРТИРОВКА НУЖНА ТОЛЬКО ДЛЯ ПОСТРАНИЧНОГО ЧТЕНИЯ. Она держит порядок между
     # страницами, чтобы строки не перекрывались и не терялись. Если сущность целиком
     # помещается в одну страницу, страниц нет — и сортировать нечего.
@@ -295,18 +304,41 @@ def fetch_all(entity_set):
     # `HTTP 500 Internal Server Error` ИМЕННО на `$orderby` по объявленному ключу; без
     # него те же адреса отвечают 200. Так молча терялись пять сущностей: ошибка печаталась
     # в поток и нигде не сохранялась, а в переписи стояло «не загрузилось» без причины.
-    # Заодно снимается лишняя работа с 1С на всех мелких сущностях.
-    # Просить больше, чем в сущности есть, незачем: у мелких это снимает и лишний заход,
-    # и `$orderby` (см. ниже про `HTTP 500`).
-    page = PAGE if expected < 0 else max(1, min(PAGE, expected))
-    order = _order_by(entity_set) if (expected < 0 or expected > page) else ""
-    rows, skip, short_pages = [], 0, 0
+    #
+    # Отсюда порядок действий: первая страница идёт БЕЗ порядка и со счётом. Если по счёту
+    # видно, что одной страницей не обойтись, — начинаем сначала уже с `$orderby`. Лишняя
+    # страница платится только крупными сущностями, которых единицы, а сотни мелких
+    # экономят по заходу каждая.
+    expected = -1
+    page = PAGE
+    order = ""
+    rows, skip, short_pages, first = [], 0, 0, True
     while True:
         params = {"$format": "json", "$top": str(page), "$skip": str(skip)}
+        if first:
+            params["$inlinecount"] = "allpages"
         if order:
             params["$orderby"] = order  # стабильный порядок → страницы не перекрываются
         try:
-            v = _get_json(entity_set, params).get("value", [])
+            doc = _get_json(entity_set, params)
+            v = doc.get("value", [])
+            if first:
+                first = False
+                try:
+                    expected = int(doc.get("odata.count", doc.get("__count", -1)))
+                except (TypeError, ValueError):
+                    expected = -1
+                # Одной страницей не обошлось, а читали БЕЗ порядка — начинаем сначала.
+                # Иначе `$skip/$top` пойдут по нестабильному порядку и молча потеряют
+                # часть строк (тот самый дефект, ради которого `$orderby` и заведён).
+                if len(v) >= page and (expected < 0 or expected > page):
+                    order = _order_by(entity_set)
+                    if order:
+                        rows, skip, short_pages = [], 0, 0
+                        continue
+                # Счёта не дали — спрашиваем по-старому, иначе нечем сверить полноту.
+                if expected < 0:
+                    expected = count_of(entity_set)
         except Exception:                       # noqa: BLE001
             # 🔴 СТРАНИЦА УМЕНЬШАЕТСЯ, А НЕ СУЩНОСТЬ ТЕРЯЕТСЯ. `_get_json` уже перебрал
             # свои варианты (повтор, `$select` без неотдаваемых полей) — значит дело в
@@ -319,7 +351,10 @@ def fetch_all(entity_set):
                 raise
             page = max(PAGE_MIN, page // 4)
             order = _order_by(entity_set) if (expected < 0 or expected > page) else ""
-            rows, skip, short_pages = [], 0, 0
+            # Начинаем сущность заново — значит и счёт спросим заново вместе с первой
+            # страницей: `first` сбрасывается, иначе счёта не будет вовсе и сверять
+            # полноту будет нечем.
+            rows, skip, short_pages, first = [], 0, 0, True
             print("    %s: страница уменьшена до %d — 1С не отдала крупную"
                   % (entity_set, page), file=sys.stderr)
             continue
@@ -414,9 +449,20 @@ def _mart_has(table, col):
         return False
 
 
-def _fetch_page(es, params):
+def _fetch_page_doc(es, params):
+    """Ответ целиком — нужен, когда вместе со строками читается и `odata.count`.
+
+    🔴 Намеренно БЕЗ перебора вариантов из `_get_json`. Тот при отказе подставляет свой
+    `$select` по `$metadata` — и подменил бы узкий `$select=Ref_Key,DataVersion` пробы
+    версий полным списком полей, то есть проба перестала бы быть дешёвой и делала бы ровно
+    ту работу, которой дельта и избегает.
+    """
     url = f"{ODATA}/{urllib.parse.quote(es)}?" + urllib.parse.urlencode(params)
-    return json.load(urllib.request.urlopen(_odata_auth(url), timeout=HTTP_TIMEOUT)).get("value", [])
+    return json.load(urllib.request.urlopen(_odata_auth(url), timeout=HTTP_TIMEOUT))
+
+
+def _fetch_page(es, params):
+    return _fetch_page_doc(es, params).get("value", [])
 
 
 def _cell(v):
@@ -492,28 +538,46 @@ def load_entity_delta(es, ro_role="serene_ro"):
 
     t0 = time.time()
     # Проба версий — до ПУСТОЙ страницы, а не до короткой: под нагрузкой 1С отдаёт неполную
-    # страницу в середине (тот же дефект, что у полной выгрузки). Затем сверяем с `$count`.
-    expected = count_of(es)
-    # Проба берёт два узких поля на строку, поэтому крупная страница здесь безопаснее
-    # всего и выигрывает больше всего: именно эта проба и решает, будет ли дельта дешевле
-    # полной загрузки. Уменьшение при отказе — тем же правилом, что и у полной выгрузки.
-    top = PAGE if expected < 0 else max(1, min(PAGE, expected))
-    probe, skip = [], 0
+    # страницу в середине (тот же дефект, что у полной выгрузки). Затем сверяем со счётом.
+    #
+    # Счёт приезжает ВМЕСТЕ с первой страницей (`$inlinecount=allpages`), а не отдельным
+    # заходом за `/$count` — разбор в `fetch_all`. Проба берёт два узких поля на строку,
+    # поэтому крупная страница здесь безопаснее всего и выигрывает больше всего: именно
+    # эта проба и решает, будет ли дельта дешевле полной загрузки. Уменьшение при отказе —
+    # тем же правилом, что и у полной выгрузки.
+    expected = -1
+    top = PAGE
+    probe, skip, first = [], 0, True
     while True:
         params = {"$format": "json", "$select": "Ref_Key,DataVersion",
                   "$top": str(top), "$skip": str(skip)}
+        if first:
+            params["$inlinecount"] = "allpages"
         # Сортировка по ключу нужна ТОЛЬКО при постраничности: без неё `$skip/$top`
         # перекрываются и теряют строки. На одной странице сортировать нечего (и это
         # снимает `HTTP 500` на сущностях, где `$orderby` капризничает).
-        if expected < 0 or expected > top:
+        if not first and (expected < 0 or expected > top):
             params["$orderby"] = "Ref_Key"
         try:
-            page = _fetch_page(es, params)
+            doc = _fetch_page_doc(es, params)
+            page = doc.get("value", [])
+            if first:
+                first = False
+                try:
+                    expected = int(doc.get("odata.count", doc.get("__count", -1)))
+                except (TypeError, ValueError):
+                    expected = -1
+                if expected < 0:
+                    expected = count_of(es)
+                # Одной страницей не обошлось, а читали без порядка — начинаем сначала.
+                if len(page) >= top and (expected < 0 or expected > top):
+                    probe, skip = [], 0
+                    continue
         except Exception:                       # noqa: BLE001
             if top <= PAGE_MIN:
                 raise
             top = max(PAGE_MIN, top // 4)
-            probe, skip = [], 0                 # см. разбор в `fetch_all`: начинаем сначала
+            probe, skip, first = [], 0, True    # см. разбор в `fetch_all`: начинаем сначала
             continue
         if not page:
             break
