@@ -637,6 +637,42 @@ def load_entity(es, ro_role="serene_ro"):
     else:
         # Ключа не объявлено — снимаем только полностью идентичные строки.
         select = f"SELECT DISTINCT * FROM read_csv('{csv_path}', {csv_opts}){where}"
+    # 🔴 ПОЛНАЯ ЗАГРУЗКА — ЕЩЁ НЕ ИЗМЕНЕНИЕ. Прежде здесь безусловно шло
+    # `DROP TABLE; CREATE TABLE AS …`, и любая полная загрузка объявляла витрину
+    # изменённой. Цена этого замерена и она не косвенная: [замер 05.08] строка
+    # «изменённых строк 732475» повторилась в журнале ДОСЛОВНО в четырнадцати тактах
+    # подряд за двое суток — в 1С за это время не менялось ничего, а такт каждый раз
+    # пересобирал корпус (780 с) и заново публиковал индекс. Указание владельца 05.08:
+    # «надо смотреть, какие были изменения, и отрабатывать только изменённые записи».
+    #
+    # Признака изменения у 843 источников платформа не даёт вовсе (независимые регистры
+    # сведений, константы) — узнать, менялись ли они, можно только прочитав. Но
+    # ПРОЧИТАТЬ и ПЕРЕПИСАТЬ — разные вещи: прочитав, мы можем сравнить и не переписывать.
+    #
+    # Сравнение делает ДВИЖОК одним запросом (п. 20): симметричная разность через
+    # `EXCEPT ALL` в обе стороны. `ALL` обязателен — у мешочной семантики одинаковые
+    # строки не схлопываются, а у витрины дубли законны (регистры без уникального ключа).
+    # Доки: Sql › Query syntax › Set Operations.
+    #
+    # Любая ошибка сравнения (таблицы ещё нет, изменился состав колонок — набор операций
+    # сверяет по ПОЗИЦИИ и требует одинакового числа колонок) означает «считаем
+    # изменившимся»: ошибка в сторону лишней работы, а не в сторону потери свежести.
+    same = False
+    q = (f'SELECT (SELECT count(*) FROM (({select}) EXCEPT ALL (SELECT * FROM "{table}"))) '
+         f'     + (SELECT count(*) FROM ((SELECT * FROM "{table}") EXCEPT ALL ({select})))')
+    c0 = subprocess.run(["psql", DSN, "-tAc", q], text=True, capture_output=True)
+    if c0.returncode == 0 and c0.stdout.strip() == "0":
+        same = True
+    if same:
+        # Витрина не переписывается: ни `DROP`, ни `CREATE`, ни выдача прав заново.
+        n = len(rows)
+        c = subprocess.run(["psql", DSN, "-tAc", f'SELECT count(*) FROM "{table}";'],
+                           text=True, capture_output=True)
+        if c.returncode == 0 and c.stdout.strip().isdigit():
+            n = int(c.stdout.strip())
+        return {"entity": es, "table": table, "rows": n, "rows_raw": len(rows),
+                "dropped": len(rows) - n, "cols": len(cols), "sec": dt, "changed": 0}
+
     sql = (
         f'DROP TABLE IF EXISTS "{table}";\n'
         f'CREATE TABLE "{table}" AS {select};\n' + grant
@@ -656,7 +692,7 @@ def load_entity(es, ro_role="serene_ro"):
                          "(ключ: %s)\n" % (es, len(rows), n, len(rows) - n,
                                            ",".join(key_cols) or "не объявлен"))
     return {"entity": es, "table": table, "rows": n, "rows_raw": len(rows),
-            "dropped": len(rows) - n, "cols": len(cols), "sec": dt}
+            "dropped": len(rows) - n, "cols": len(cols), "sec": dt, "changed": n}
 
 
 def main():
