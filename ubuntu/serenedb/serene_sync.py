@@ -13,6 +13,7 @@ import difflib
 import json
 import os
 import sys
+import time
 
 # build_resolver_index больше не нужен: резолвер строит build.sh (см. main())
 import odata_census as C
@@ -134,6 +135,31 @@ def _profile_age():
         return 1e9
 
 
+def _profile_rows():
+    """Прошлая перепись из витрины: {сущность: (строк, беда)}.
+
+    Нужна, чтобы не спрашивать `$count` у тех, кого мы и так грузим: их число вернёт сама
+    загрузка. Разделитель взят табуляцией — в именах сущностей 1С её не бывает, а вот
+    вертикальная черта и запятая встречаются в тексте беды.
+    """
+    dsn = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
+    p = subprocess.run(["psql", dsn, "-tA", "-F", "\t", "-c",
+                        "SELECT entity, rows, coalesce(problem,'') FROM base_profile"],
+                       capture_output=True, text=True)
+    out = {}
+    if p.returncode != 0:
+        return out                              # переписи ещё не было — спросим всех
+    for line in p.stdout.splitlines():
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        try:
+            out[parts[0]] = (int(parts[1]), parts[2])
+        except ValueError:
+            continue
+    return out
+
+
 def _cached_entities():
     """Список непустых сущностей из base_profile — БЕЗ повторной переписи."""
     dsn = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
@@ -153,8 +179,34 @@ def main():
     dsn = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
     max_age = int(os.environ.get("CENSUS_MAX_AGE", "3600"))
     if _profile_age() > max_age:
+        # 🔴 `$COUNT` НЕ СПРАШИВАЕТСЯ У ТЕХ, КОГО МЫ И ТАК ГРУЗИМ. Их число вернёт сама
+        # загрузка — а перепись спрашивала его вторым заходом, то есть делала работу
+        # дважды. [замер 05.08] перепись занимает ~815 с внутри такта свежести при норме
+        # такта 20 минут (п. 17), и непустых среди 2795 типов — 1589, то есть больше
+        # половины запросов были лишними.
+        #
+        # Спрашиваем ровно тех, про кого иначе не узнаем: новые типы, пустые в прошлый раз
+        # и закрытые правами. Для известных непустых число берётся из прошлой переписи и
+        # ниже, после загрузки, переписывается ФАКТИЧЕСКИМ — так профиль становится даже
+        # свежее, чем был: раньше он обновлялся раз в час, теперь каждый такт.
+        #
+        # ⚠ Цена: если известная непустая сущность вдруг закроется правами, перепись этого
+        # сама не заметит — заметит загрузка, и скажет ошибкой в журнал и в перепись
+        # полноты. Молчания не возникает, поэтому цена принята.
         print("перепись схемы…")
-        rows = C.census()
+        t_census = time.time()
+        prev = _profile_rows()
+        all_sets = set(C.entity_sets())
+        meta = C.metadata()
+        known = {e for e, r in prev.items() if r[0] > 0 and e in all_sets}
+        ask = [e for e in sorted(all_sets) if e not in known]
+        rows = C.census(sets=ask, meta=meta)
+        rows += [{"entity": e, "rows": prev[e][0], "problem": prev[e][1],
+                  "key": (meta.get(e, {}).get("key") or []),
+                  "props": len(meta.get(e, {}).get("props") or {})}
+                 for e in sorted(known)]
+        print("  перепись: спрошено %d из %d типов (у %d непустых число даст сама загрузка), %.0f с"
+              % (len(ask), len(all_sets), len(known), time.time() - t_census))
         s = C.summary(rows)
         print("  " + json.dumps(s, ensure_ascii=False))
         save_profile(rows)
@@ -183,11 +235,17 @@ def main():
     # грузим полностью. Итог считаем по фактически затронутым строкам, чтобы было видно,
     # СКОЛЬКО работы такт реально сделал.
     ok = empty = err = touched = unchanged = 0
+    seen_rows = {}                              # фактическое число строк по каждой сущности
     for es in ents:
         try:
             r = L.load_entity_delta(es)
-            if r is None:
+            full = r is None
+            if full:
                 r = L.load_entity(es)
+            # Фактическое число строк знает тот, кто загрузил, — оно и уедет в профиль
+            # вместо `$count`, которого перепись у этих сущностей больше не спрашивает.
+            seen_rows[es] = r.get("rows", 0)
+            if full:
                 if r["rows"] == 0:
                     empty += 1
                 else:
@@ -204,12 +262,18 @@ def main():
                     #
                     # Обратная ошибка (не заметить изменение) невозможна по построению:
                     # любая осечка сравнения означает «изменилось», а не «совпало».
+                    # 🔴 СТРОКА ПЕЧАТАЕТСЯ ВСЕГДА, И ВЕРДИКТ В НЕЙ — ТОЖЕ. Первая попытка
+                    # печатать только изменившиеся вышла боком: из журнала пропали времена
+                    # по каждому источнику, а именно по ним видно, куда уходит такт, и
+                    # именно они дали все находки этого дня. Тишина вместо строки — это и
+                    # «источник не менялся», и «источник забыли», неотличимо (п. 13).
                     changed = r.get("changed", r["rows"])
                     touched += changed
-                    if changed:
-                        print(f"  {es}: {r['rows']} строк -> {r['table']} (полная, {r['sec']}s)")
-                    else:
+                    if not changed:
                         unchanged += 1
+                    print("  %s: %s строк -> %s (полная, %ss%s)"
+                          % (es, r["rows"], r["table"], r["sec"],
+                             "" if changed else ", без изменений"))
             else:
                 ok += 1
                 if r.get("changed") or r.get("gone"):
@@ -224,6 +288,22 @@ def main():
     # молчаливая потеря свежести, из-за которой п. 17 не выполнялся (п. 13).
     print(f"витрина: сущностей {ok}, пусто {empty}, ошибок {err}; "
           f"изменённых строк {touched}; источников без изменений {unchanged}")
+
+    # 🔴 ФАКТИЧЕСКОЕ ЧИСЛО СТРОК — В ПРОФИЛЬ, КАЖДЫЙ ТАКТ. Перепись больше не спрашивает
+    # `$count` у тех, кого мы грузим, поэтому число обязан вернуть тот, кто их загрузил.
+    # Профиль от этого не беднеет, а свежеет: раньше он обновлялся раз в час переписью,
+    # теперь — каждый такт по факту. Читает его перепись полноты (п. 13), и врать ей
+    # нельзя.
+    if seen_rows:
+        vals = ",".join("(%s,%d)" % ("'" + e.replace("'", "''") + "'", n)
+                        for e, n in seen_rows.items())
+        try:
+            subprocess.run(["psql", dsn, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+                           input="UPDATE base_profile SET rows = v.n FROM (VALUES %s) "
+                                 "AS v(e, n) WHERE base_profile.entity = v.e;" % vals,
+                           capture_output=True, text=True, check=True)
+        except Exception as e:                  # noqa: BLE001
+            print(f"⚠ не удалось обновить число строк в профиле: {str(e)[:120]}")
 
     # 🔴 ОТМЕТКА «ВИТРИНА МЕНЯЛАСЬ» — ДЛЯ СБОРКИ. Только синк знает, тронул ли он данные:
     # у движка отметки времени изменения таблицы нет, а `search_sources.seen_at` пишется
