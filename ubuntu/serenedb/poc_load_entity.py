@@ -468,13 +468,25 @@ def load_entity_delta(es, ro_role="serene_ro"):
     table = safe_col(es).lower()
     if not (_mart_has(table, "Ref_Key") and _mart_has(table, "DataVersion")):
         return None
-    if es in _NESTED_SEEN:
-        return None
+    # 🔴 РАЗВЁРНУТЫЙ НАБОР ДЕЛЬТЕ НЕ ПОМЕХА — И ЭТО БЫЛА ГЛАВНАЯ ПРИЧИНА, ПО КОТОРОЙ ЕЁ
+    # ПОЧТИ НИКОГДА НЕ БЫЛО. [замер 05.08] за такт боевой базы 172 источника пришли
+    # вложенной формой (документ с табличной частью внутри), после разворота `Ref_Key`
+    # перестаёт быть уникальным — и обе проверки ниже отправляли источник на ПОЛНУЮ
+    # загрузку, хотя `DataVersion` у документа есть. Это 85 источников и 331 с каждого
+    # такта на данных, которые не менялись.
+    #
+    # Замена работает и для многострочных: слияние ниже удаляет ВСЕ строки изменившегося
+    # `Ref_Key` и вставляет новые — то есть заменяет документ целиком вместе с его
+    # строками. Ровно это и нужно, когда у документа поменялась табличная часть.
+    #
+    # Осталась одна проверка, и она по существу: у всех строк одного `Ref_Key` версия
+    # обязана быть одна. Если это не так — витрина собрана не так, как мы думаем, и
+    # сравнивать версии нельзя: уходим на полную загрузку.
     try:
-        dup = _psql_rows('SELECT count(*) FROM (SELECT "Ref_Key" FROM "%s" '
-                         'GROUP BY 1 HAVING count(*)>1)' % table)
-        if dup and int(dup[0][0]) > 0:
-            return None                        # Ref_Key не уникален — не справочник
+        mix = _psql_rows('SELECT count(*) FROM (SELECT "Ref_Key" FROM "%s" '
+                         'GROUP BY 1 HAVING count(DISTINCT "DataVersion")>1)' % table)
+        if mix and int(mix[0][0]) > 0:
+            return None
     except RuntimeError:
         return None
 
@@ -515,7 +527,10 @@ def load_entity_delta(es, ro_role="serene_ro"):
     # загрузку (она сверяется с `$count` и не удаляет по неполному снимку).
     if expected >= 0 and len(ver_1c) < expected:
         return None
-    mart = dict(_psql_rows('SELECT "Ref_Key","DataVersion" FROM "%s"' % table))
+    # `DISTINCT` обязателен: у развёрнутого документа строк столько, сколько в его
+    # табличной части, а версия у них одна на всех. Без него мы тянули бы из движка
+    # десятки тысяч одинаковых пар вместо нескольких сотен.
+    mart = dict(_psql_rows('SELECT DISTINCT "Ref_Key","DataVersion" FROM "%s"' % table))
     changed = [k for k, v in ver_1c.items() if mart.get(k) != v]
     gone = [k for k in mart if k not in ver_1c]
     if not changed and not gone:
@@ -537,16 +552,37 @@ def load_entity_delta(es, ro_role="serene_ro"):
         if isinstance(obj, dict) and obj.get("Ref_Key"):
             new_rows.append(obj)
 
+    # 🔴 ВЫТЯНУТЫЙ ОБЪЕКТ РАЗВОРАЧИВАЕТСЯ ТАК ЖЕ, КАК ПРИ ПОЛНОЙ ЗАГРУЗКЕ. Прямой доступ
+    # по ключу отдаёт документ во вложенной форме — с табличной частью массивом внутри.
+    # Витрина же хранит его развёрнутым (строка на строку табличной части). Положи мы
+    # сюда объект как есть — в таблицу уехал бы один ряд с массивом в ячейке вместо
+    # десятка строк, то есть молчаливая потеря данных (п. 13) ровно в тех документах,
+    # которые ИЗМЕНИЛИСЬ. У плоской сущности разворот ничего не делает.
+    if new_rows:
+        new_rows, _ = _flatten_nested(new_rows, es)
+
     if new_rows:
         cols = [c[0] for c in _psql_rows(
             "SELECT column_name FROM duckdb_columns() WHERE table_name=%s "
             "ORDER BY column_index" % _lit(table))]
+        # 🔴 КОЛОНКА ВИТРИНЫ И ПОЛЕ 1С НАЗЫВАЮТСЯ ПО-РАЗНОМУ, И ИСКАТЬ НАДО ПО СООТВЕТСТВИЮ.
+        # Имена колонок приходят из движка уже безопасными (`safe_col`), а в ответе 1С поле
+        # зовётся как есть. Пока значение искали прямо по имени колонки, всякое поле, чьё
+        # имя `safe_col` меняет, доставалось как пустое: 1С отдаёт ссылки парой
+        # `Партнер_Key` и `Партнер@navigationLinkUrl`, и второе в витрине зовётся
+        # `Партнер_navigationLinkUrl` — по этому имени в ответе нет ничего. То есть
+        # изменившийся объект дописывался с пустыми ссылками, и это молчаливо (п. 13).
+        # Соответствие строим по самим данным, а не по догадке об именах.
+        raw_by_safe = {}
+        for r in new_rows:
+            for k in r:
+                raw_by_safe.setdefault(safe_col(k), k)
         csv_path = os.path.join(CSV_DIR, f"{table}__delta.csv")
         with open(csv_path, "w", newline="") as f:
             w = csv.writer(f)
             w.writerow(cols)
             for r in new_rows:
-                w.writerow([_cell(r.get(c)) for c in cols])
+                w.writerow([_cell(r.get(raw_by_safe.get(c, c))) for c in cols])
         subprocess.run(["chown", "serenedb:serenedb", csv_path], check=False)
         csv_opts = ("header=true, all_varchar=true, quote='\"', escape='\"', "
                     "maximum_line_size=%d" % int(os.environ.get("ETL_CSV_MAX_LINE", 200 * 1024 * 1024)))
