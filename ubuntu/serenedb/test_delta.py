@@ -102,6 +102,33 @@ check("имена: без соответствия ссылка терялась
 check("safe_col: '@' становится '_'", L.safe_col("Партнер@navigationLinkUrl"),
       "Партнер_navigationLinkUrl")
 
+# ── 3. Владелец табличной части ─────────────────────────────────────────────────────
+# Имя даёт только кандидата; решают проверки по `$metadata`.
+L._PROPS_CACHE.update({
+    "Document_Проба_Товары": [("Ref_Key", "Edm.Guid"), ("LineNumber", "Edm.String"),
+                              ("Номенклатура_Key", "Edm.Guid")],
+    # Часть с подчёркиванием внутри имени — владелец всё равно находится.
+    "Document_Проба_Виды_Цен": [("Ref_Key", "Edm.Guid"), ("LineNumber", "Edm.String")],
+    # Своя версия есть — значит сама себе владелец, дельта работает напрямую.
+    "Document_Сама": [("Ref_Key", "Edm.Guid"), ("DataVersion", "Edm.String")],
+    # Владельца в `$metadata` нет — гипотеза не подтверждается.
+    "Register_Сирота_Строки": [("Ref_Key", "Edm.Guid"), ("LineNumber", "Edm.String")],
+    # Ни ключа, ни версии — не набор строк объекта.
+    "InformationRegister_Плоский_RecordType": [("Период", "Edm.DateTime")],
+})
+L._OWNER_CACHE.clear()
+check("владелец: табличная часть -> документ",
+      L.owner_of("Document_Проба_Товары"), "Document_Проба")
+check("владелец: имя части с подчёркиванием тоже находит владельца",
+      L.owner_of("Document_Проба_Виды_Цен"), "Document_Проба")
+check("владелец: у объекта со своей версией владельца нет",
+      L.owner_of("Document_Сама"), None)
+check("владелец: кандидата нет в $metadata — None",
+      L.owner_of("Register_Сирота_Строки"), None)
+check("владелец: без Ref_Key владельца не ищем",
+      L.owner_of("InformationRegister_Плоский_RecordType"), None)
+check("владелец: неизвестная сущность — None", L.owner_of("Совсем_Чужое"), None)
+
 # ── итог ────────────────────────────────────────────────────────────────────────────
 if FAILS:
     print("ПРОБА НЕ ПРОШЛА, случаев с ошибкой: %d\n" % len(FAILS))
