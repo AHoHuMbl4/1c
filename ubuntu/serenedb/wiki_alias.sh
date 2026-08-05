@@ -15,7 +15,7 @@
 # что название» — поэтому на английской базе выйдут английские слова без всякой правки кода.
 # Значений данных не уходит: ни сумм, ни счётов (п. 19).
 #
-# Идемпотентно: спрашиваются только сущности, которых ещё нет в `search_entity_alias`.
+# Идемпотентно: спрашиваются только сущности, которых ещё нет в словаре.
 # Использование: wiki_alias.sh [сущностей за прогон]   (0 или пусто = все оставшиеся)
 set -u
 DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
@@ -25,11 +25,16 @@ BATCH="${WIKI_ALIAS_BATCH:-20}"
 # Одинарные кавычки удваиваются сразу: слово приходит извне (переменная окружения), и в
 # запрос оно подставляется текстом — без этого апостроф в слове ломал бы запрос.
 TARGET_WORD="${WIKI_ALIAS_WORD:-}"; TARGET_WORD=${TARGET_WORD//\'/\'\'}
+# 🔴 КУДА ПИСАТЬ СЛОВАРЬ. Умолчание — боевая таблица, как было. Своё имя (`ALIAS_TABLE`)
+# нужно затем, чтобы новую редакцию словаря можно было собрать РЯДОМ и сравнить прибором
+# `work/entity-choice/alias_rank_bench.py`, не трогая тот словарь, по которому сейчас
+# отвечает бот. Иначе всякая проба словаря — это правка боевого поведения вслепую.
+ALIAS_TABLE="${ALIAS_TABLE:-search_entity_alias}"
 CAP="${1:-0}"
 cd "$(dirname "$0")" || exit 1
 
 command -v openclaw >/dev/null 2>&1 || { echo "алиасы: openclaw не установлен — шаг пропущен"; exit 0; }
-psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS search_entity_alias (src_table VARCHAR, aliases VARCHAR, best_used_for VARCHAR, not_enough_for VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
+psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $ALIAS_TABLE (src_table VARCHAR, aliases VARCHAR, best_used_for VARCHAR, not_enough_for VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
 
 # 🔴 ОБМЕН ФАЙЛАМИ — ТОЛЬКО ЧЕРЕЗ КАТАЛОГ, ЧИТАЕМЫЙ ДВИЖКОМ. [замер 30.07] `read_json` из
 # `/tmp/...` даёт «No files found»: процесс `serened` этот путь не видит. Тот же каталог, что у
@@ -66,7 +71,7 @@ while :; do
       SELECT f.src_table, t.emb FROM wiki_entity_facts f
       JOIN search_tables t ON t.src_table = f.src_table
       WHERE f.cls <> 'service'
-        AND NOT EXISTS (SELECT 1 FROM search_entity_alias a WHERE a.src_table = f.src_table)
+        AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE a WHERE a.src_table = f.src_table)
       ORDER BY f.src_table LIMIT 1)
     SELECT to_json(list(struct_pack(entity := src_table, title := label,
                                     quantities := coalesce(measures,''))))
@@ -74,7 +79,7 @@ while :; do
             FROM wiki_entity_facts f
             JOIN search_tables t ON t.src_table = f.src_table
            WHERE f.cls <> 'service'
-             AND NOT EXISTS (SELECT 1 FROM search_entity_alias a WHERE a.src_table = f.src_table)
+             AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE a WHERE a.src_table = f.src_table)
            ORDER BY d, f.src_table LIMIT $BATCH)" > "$TMP/pay" 2>/dev/null
   PAY=$(cat "$TMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
@@ -84,7 +89,20 @@ while :; do
   # доходит. У `openclaw agent` для этого есть штатный `--message-file`. Тот же класс дефекта, что
   # «стена argv» в разборе `HOW_NOT_TO §0`: данные аргументом командной строки не передаются.
   {
-    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — how a person here would refer to this kind of record, including its own title, and, for EVERY quantity listed for it, the natural way someone would ask for that value; (2) bestUsedFor — the questions it answers; (3) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+    # 🔴 СЛОВАРЬ — ЭТО СЛОВА, А НЕ ВОПРОСЫ (05.08, вечер). Прежнее задание просило «the
+    # natural way someone would ask for that value», и модель честно клала в словарь вопросы
+    # целиком: у регистра тары там оказалось «сколько тары у нас». Поиск считает совпадение
+    # по всем словам вопроса, включая «сколько», «у», «нас», — и этот регистр стал лидером
+    # ЛЮБОГО вопроса «сколько у нас …» с одной и той же оценкой 12,49 на трёх разных
+    # вопросах приёмки (партнёры, склады, организации). Верные ответы 164, 17 и 5 из-за
+    # этого отвергались проверкой выбора. Разбор — `work/entity-choice/ANSWER_RATE_P21.md`.
+    #
+    # Просим теперь ИМЕНА: как называют сам вид записи и как называют каждую его величину,
+    # включая то слово-действие, которым о ней говорят («отгрузка», «продажа»). Запретов в
+    # задании нет намеренно — правило держится не текстом для модели, а формой ответа
+    # (короткие именующие обороты) и прибором `work/entity-choice/alias_rank_bench.py`,
+    # который меряет словарь числом: на каком месте эталонная сущность вопроса.
+    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — the SHORT NAMES a person here uses for this kind of record, including its own title, plus, for EVERY quantity listed for it, the short name of that value as people say it (a noun or a noun with the action word, 1-3 words each, no sentences); (2) bestUsedFor — the questions it answers; (3) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
@@ -98,10 +116,10 @@ while :; do
       # ходил по кругу. Сколько пропущено — печатается в конце, молчания тут быть не должно.
       skipped=$((skipped + 1))
       echo "алиасы: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
-      psql "$DSN" -q -c "INSERT INTO search_entity_alias
+      psql "$DSN" -q -c "INSERT INTO $ALIAS_TABLE
         SELECT entity, '', '', '', now() FROM read_json('$TMP/pay',
           columns := {entity:'VARCHAR', title:'VARCHAR', quantities:'VARCHAR'})
-        WHERE entity NOT IN (SELECT src_table FROM search_entity_alias)" >/dev/null 2>&1
+        WHERE entity NOT IN (SELECT src_table FROM $ALIAS_TABLE)" >/dev/null 2>&1
       continue
     }
 
@@ -145,13 +163,13 @@ print("алиасов разобрано: %d" % len(rows))
 PY
   # Запись — ОДНИМ запросом из файла, без цикла по строкам (п. 20).
   psql "$DSN" -q -c "
-    INSERT INTO search_entity_alias
+    INSERT INTO $ALIAS_TABLE
     SELECT src_table, aliases, best_used_for, not_enough_for, now()
     FROM read_json('$TMP/rows.json', columns := {src_table:'VARCHAR', aliases:'VARCHAR',
                                                 best_used_for:'VARCHAR', not_enough_for:'VARCHAR'})
-    WHERE src_table NOT IN (SELECT src_table FROM search_entity_alias)" 2>&1 | grep -i error
+    WHERE src_table NOT IN (SELECT src_table FROM $ALIAS_TABLE)" 2>&1 | grep -i error
 
-  have=$(psql "$DSN" -tAc "SELECT count(*) FROM search_entity_alias" 2>/dev/null)
+  have=$(psql "$DSN" -tAc "SELECT count(*) FROM $ALIAS_TABLE" 2>/dev/null)
   echo "алиасы: всего в базе $have"
   done_total=$((done_total + BATCH))
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
@@ -195,7 +213,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     # Functions; Sql › Functions › Aggregate Functions).
     PICK=$(psql "$DSN" -tA -F$'\t' -c "
       WITH al AS (SELECT src_table, trim(lower(x.a)) AS alias
-                    FROM search_entity_alias, unnest(str_split(aliases, ',')) AS x(a)
+                    FROM $ALIAS_TABLE, unnest(str_split(aliases, ',')) AS x(a)
                    WHERE trim(x.a) <> ''),
            dup AS (SELECT alias FROM al GROUP BY 1 HAVING count(DISTINCT src_table) > 1),
            -- Обычно берём САМОЕ спорное слово: у него больше всего сущностей.
@@ -211,7 +229,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
                            count(DISTINCT a.src_table) AS n
                       FROM al a JOIN dup d ON d.alias = a.alias
                      WHERE ('$TARGET_WORD' = '' OR a.alias = lower('$TARGET_WORD'))
-                       AND NOT EXISTS (SELECT 1 FROM search_entity_alias s
+                       AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE s
                                         WHERE s.src_table = a.src_table
                                           AND s.not_enough_for ILIKE '%' || a.alias || '%')
                      GROUP BY 1)
@@ -228,7 +246,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     asked=$((asked + 1))
     psql "$DSN" -tA -c "
       WITH al AS (SELECT src_table, trim(lower(x.a)) AS alias
-                    FROM search_entity_alias, unnest(str_split(aliases, ',')) AS x(a)
+                    FROM $ALIAS_TABLE, unnest(str_split(aliases, ',')) AS x(a)
                    WHERE trim(x.a) <> '')
       SELECT to_json(list(struct_pack(entity := f.src_table, title := f.label,
                                       quantities := coalesce(f.measures,''))))
@@ -285,7 +303,7 @@ open(sys.argv[2], 'w', encoding='utf-8').write(json.dumps(rows, ensure_ascii=Fal
 print("разведено сущностей: %d" % len(rows))
 PY2
     psql "$DSN" -q -c "
-      UPDATE search_entity_alias a SET aliases = n.aliases, best_used_for = n.best_used_for,
+      UPDATE $ALIAS_TABLE a SET aliases = n.aliases, best_used_for = n.best_used_for,
              not_enough_for = n.not_enough_for, seen_at = now()
       FROM read_json('$TMP/rows.json', columns := {src_table:'VARCHAR', aliases:'VARCHAR',
              best_used_for:'VARCHAR', not_enough_for:'VARCHAR'}) n
@@ -296,13 +314,13 @@ PY2
   # они лежат в `search_alias_probe` и сами собой больше не переспрашиваются.
   left=$(psql "$DSN" -tAc "
     WITH al AS (SELECT src_table, trim(lower(x.a)) AS alias
-                  FROM search_entity_alias, unnest(str_split(aliases, ',')) AS x(a)
+                  FROM $ALIAS_TABLE, unnest(str_split(aliases, ',')) AS x(a)
                  WHERE trim(x.a) <> ''),
          dup AS (SELECT alias FROM al GROUP BY 1 HAVING count(DISTINCT src_table) > 1),
          cand AS (SELECT a.alias,
                          md5(string_agg(DISTINCT a.src_table, ',' ORDER BY a.src_table)) AS fp
                     FROM al a JOIN dup d ON d.alias = a.alias
-                   WHERE NOT EXISTS (SELECT 1 FROM search_entity_alias s
+                   WHERE NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE s
                                       WHERE s.src_table = a.src_table
                                         AND s.not_enough_for ILIKE '%' || a.alias || '%')
                    GROUP BY 1)
@@ -314,6 +332,6 @@ fi
 
 [ "$skipped" -gt 0 ] && echo "алиасы: пачек пропущено из-за отказа модели: $skipped" >&2
 psql "$DSN" -tA -F' | ' -c "
-  SELECT 'алиасов в базе', count(*) FROM search_entity_alias
-  UNION ALL SELECT 'из них ПУСТЫХ (модель не ответила)', count(*) FROM search_entity_alias
+  SELECT 'алиасов в базе', count(*) FROM $ALIAS_TABLE
+  UNION ALL SELECT 'из них ПУСТЫХ (модель не ответила)', count(*) FROM $ALIAS_TABLE
     WHERE coalesce(aliases,'') = ''"
