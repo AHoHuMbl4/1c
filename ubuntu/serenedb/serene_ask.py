@@ -449,6 +449,12 @@ def _embed_request(text, as_query):
 # повтора внутри одного вопроса.
 _EMB_ONE_CACHE = {}
 EMB_ONE_CACHE_MAX = int(os.environ.get("ASK_EMB_CACHE", "256"))
+# Сколько раз ПОВТОРИТЬ обращение к эмбеддеру, прежде чем считать его упавшим, и сколько
+# ждать ответа. Это бюджет ожидания, а не порог правильности: числа влияют на то, сколько
+# времени мы даём сервису, и ни на один выбор в ответе. Разбор — в `embed_one`.
+EMB_RETRY = int(os.environ.get("ASK_EMB_RETRY", "2"))
+EMB_RETRY_PAUSE = float(os.environ.get("ASK_EMB_RETRY_PAUSE", "0.4"))
+EMB_TIMEOUT = int(os.environ.get("ASK_EMB_TIMEOUT", "60"))
 
 
 def embed_one(text):
@@ -474,14 +480,36 @@ def embed_one(text):
     hit = _EMB_ONE_CACHE.get(text)
     if hit is not None:
         return hit
-    try:
-        with urllib.request.urlopen(_embed_request(text, True), timeout=60) as r:
-            out = json.loads(r.read())
-        vec = out["embeddings"][0] if EMBED_API == "texts" else out["data"][0]["embedding"]
-    except RuntimeError:
-        raise
-    except Exception as e:                     # noqa: BLE001 — сеть/формат/таймаут
-        raise RuntimeError("эмбеддер недоступен: %s" % type(e).__name__)
+    # 🔴 ПОВТОР ПЕРЕД ТЕМ, КАК СЧИТАТЬ ЭМБЕДДЕР УПАВШИМ (05.08, решение владельца).
+    # Сбой эмбеддера теперь не проходит молча: смысловой путь выключается, и ответ уходит
+    # в уточнение (`meaning_down`). Это верно для настоящего отказа и неверно для секундной
+    # заминки — `[замер 05.08]` эмбеддер отдавал `TimeoutError` трижды за 25 минут на
+    # боевых юнитах, и каждое такое событие превращало годный ответ в вопрос человеку.
+    # Владелец 05.08: «надо для эмбеддинга просто защиту поставить, чтобы ретраи делал, а
+    # не просто всё уходило на уточнение».
+    #
+    # Повтор ТОЛЬКО на сетевых сбоях и таймаутах: ответ с чужой моделью или сломанным
+    # телом повторять бессмысленно — там не заминка, а несовместимость, и её ловит
+    # `embed_model_live()`. Пауза растёт (0,4 с, 0,8 с) — иначе три подряд обращения к уже
+    # перегруженному сервису делают хуже, а не лучше. Числа — бюджет ожидания, а не порог
+    # правильности: они не решают, каким будет ответ, только сколько его ждать.
+    last = None
+    for attempt in range(EMB_RETRY + 1):
+        try:
+            with urllib.request.urlopen(_embed_request(text, True), timeout=EMB_TIMEOUT) as r:
+                out = json.loads(r.read())
+            vec = out["embeddings"][0] if EMBED_API == "texts" else out["data"][0]["embedding"]
+            if attempt:
+                sys.stderr.write("эмбеддер ответил с попытки %d\n" % (attempt + 1))
+            break
+        except RuntimeError:
+            raise
+        except Exception as e:                 # noqa: BLE001 — сеть/формат/таймаут
+            last = e
+            if attempt < EMB_RETRY:
+                time.sleep(EMB_RETRY_PAUSE * (2 ** attempt))
+    else:
+        raise RuntimeError("эмбеддер недоступен: %s" % type(last).__name__)
     if len(_EMB_ONE_CACHE) >= EMB_ONE_CACHE_MAX:
         _EMB_ONE_CACHE.clear()                 # без вытеснения по одному: словарь мал
     _EMB_ONE_CACHE[text] = vec
