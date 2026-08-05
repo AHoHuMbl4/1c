@@ -4396,16 +4396,37 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # рассматривать. Без этого `_family` молча возвращала бы саму сущность, и в соперники
     # арбитру попадала бы табличная часть той же шапки: два ответа об одном и том же.
     par = {}
+    writer = {}
     if picked:
         need = set(picked) | set(cands[:ARBITER_MAX * 4])
         if top_by_question:
             need.add(top_by_question)
         try:
-            par = {r[0]: (r[1] or "") for r in psql(
-                "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
-                % (TABLES, ", ".join(lit(c) for c in need))) if r and r[0]}
+            # `written_by` — «какой документ пишет этот источник», заведено подготовкой базы
+            # 05.08 (`corpus_build.sql`, раздел 2-тер). Это ЕДИНСТВЕННЫЙ сигнал шага 4,
+            # который не является названием: метка, вектор метки и карточки, реранкер и
+            # словарь синонимов — все про имя, а регистр накопления в 1С назван деловым
+            # языком («Закупки»), документ — канцелярским («Приобретение Товаров Услуг»), и
+            # человек спрашивает деловым. Поэтому именные сигналы дружно подтверждали
+            # регистр, а показ модели вида записи `[замер 04.08]` сделал хуже (3 → 6).
+            par, writer = {}, {}
+            for r in psql(
+                "SELECT src_table, parent, written_by FROM %s WHERE src_table IN (%s)"
+                    % (TABLES, ", ".join(lit(c) for c in need))):
+                if not r or not r[0]:
+                    continue
+                par[r[0]] = (r[1] or "")
+                if len(r) > 2 and r[2]:
+                    writer[r[0]] = r[2]
         except RuntimeError:
-            par = {}
+            # Старая база без колонки — работаем как до 05.08, а не падаем.
+            par, writer = {}, {}
+            try:
+                par = {r[0]: (r[1] or "") for r in psql(
+                    "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
+                    % (TABLES, ", ".join(lit(c) for c in need))) if r and r[0]}
+            except RuntimeError:
+                par = {}
 
     def _family(t):
         return par.get(t) or t
@@ -4598,8 +4619,30 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     #   1. модель назвала БОЛЬШЕ ОДНОЙ сущности — она сама видит несколько прочтений;
     #   2. вершина по вектору САМОГО ВОПРОСА (считает база) не совпала с выбором модели и не
     #      из той же семьи (шапка и её табличная часть — одно прочтение).
-    doubt = len(picked) > 1 or bool(diag.get("signals_disagree"))
+    #   3. 🔴 (05.08) выбран источник, движения которого ПИШЕТ документ, и этот документ —
+    #      не тот же источник. Регистр накопления и документ-регистратор это ОДИН факт,
+    #      записанный дважды: «Закупки» пишет «Приобретение Товаров Услуг» (доля 0,759),
+    #      «Заказы Клиентов» — «Заказ Клиента» (0,723). Ровно на этой паре шаг 4 ошибался
+    #      молча: `[замер 05.08]` из трёх оставшихся неверных ответов боевой сборки два —
+    #      она, и у обоих в следе «защита не сработала ни одна».
+    #
+    #      🔴 ПОРОГА ПО ДОЛЕ ЗДЕСЬ НЕТ НАМЕРЕННО. Доля преобладающего регистратора —
+    #      число из данных (`[замер 05.08]` у 70 регистров из 81 регистраторов больше
+    #      одного, медиана 0,56), и отсечка по ней была бы константой, подобранной под нашу
+    #      базу (п. 9). Поэтому связь не решает, а лишь ЗАВОДИТ второе прочтение в круг
+    #      арбитра: спрашивает человека арбитр-детектор и только тогда, когда посчитанные
+    #      числа разошлись. Сошлись — ответ уходит как прежде, цена правила равна счёту.
+    writer_pair = writer.get(picked[0]) if picked else None
+    if writer_pair and picked and writer_pair not in picked:
+        diag["writer_pair"] = writer_pair
+    doubt = (len(picked) > 1 or bool(diag.get("signals_disagree"))
+             or bool(diag.get("writer_pair")))
     arb_pool = list(picked)
+    # Документ-регистратор идёт в круг ПЕРВЫМ соперником: он и есть второе прочтение,
+    # а не «следующий по порядку отбора».
+    if (diag.get("writer_pair") and picked and not focus and not no_arbiter
+            and len(arb_pool) < ARBITER_MAX):
+        arb_pool.append(diag["writer_pair"])
     if doubt and picked and not focus and not no_arbiter and len(arb_pool) < ARBITER_MAX:
         fam = {_family(x) for x in arb_pool}
         # 🔴 СОПЕРНИК БЕРЁТСЯ ПО ПОРЯДКУ ОТБОРА, И ЭТО РЕШЕНО ЗАМЕРОМ, А НЕ ВКУСОМ.
@@ -4670,6 +4713,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # СОБИРАЕТСЯ ПОЛНЫЙ ОТВЕТ (тем же кодом, через `focus`, — то есть числа считает
         # база), и арбитр выбирает между готовыми ответами. Не выбрал — спрашиваем человека.
         cand_ans, cand_src = [], []
+        mute = set()
         for c in arb_pool[:ARBITER_MAX]:
             try:
                 sub = answer(question, focus=c, measure_pick=measure_pick,
@@ -4679,6 +4723,36 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if sub.get("kind") in ("answer", "figures") and (sub.get("text") or "").strip():
                 cand_ans.append(sub["text"].split("⚠")[0].strip())
                 cand_src.append(sub)
+            else:
+                mute.add(c)
+        # 🔴 КАНДИДАТ, НЕ ДАВШИЙ ЧИСЛА, — ЭТО НЕ СОГЛАСИЕ (05.08).
+        # Соперник считается тем же кодом, и он может вернуться не числом, а собственным
+        # уточнением — например, когда у него самого несколько подходящих величин. Прежде
+        # такой ответ просто выпадал из `cand_ans`, сравнивать становилось нечего, и молчание
+        # засчитывалось за «числа сошлись»: ответ уходил по первому кандидату.
+        # Живой случай `[замер 05.08]`: «Во что нам обошлись закупки?» — пара
+        # «регистр ← документ» найдена, документ в круг попал, но его ответ пришёл
+        # уточнением по величине, и система всё равно ответила по регистру.
+        # Правило то же, что у `answers_diverge`: доказательства совпадения нет — спрашиваем.
+        # Оговорка узкая: только пара «источник ← документ, который его пишет», то есть
+        # структурная связь из данных, а не всякий не сложившийся кандидат — иначе вопрос
+        # задавался бы там, где соперник просто пуст.
+        if diag.get("writer_pair") in mute and picked:
+            opts_src = [picked[0], diag["writer_pair"]]
+            try:
+                lab_by = {r[0]: r[1] for r in psql(
+                    "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                    % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
+            except RuntimeError:
+                lab_by = {}
+            opts = [{"src": c, "label": lab_by.get(c, c), "distinct_by": marks.get(c, ""),
+                     "found": by.get(c, 0)} for c in opts_src if c in lab_by]
+            if len(opts) > 1:
+                diag["writer_pair_unproven"] = diag["writer_pair"]
+                return {"partial": cut or None, "kind": "clarify",
+                        "text": clarify_say(question, opts, diag), "options": opts,
+                        "sources": [o["label"] for o in opts],
+                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
         if len(cand_ans) > 1 and ARBITER_DETECTS and \
                 answers_diverge([s.get("figures") or {} for s in cand_src]):
             # 🔴 АРБИТР — ДЕТЕКТОР НЕОДНОЗНАЧНОСТИ, А НЕ ВЫБИРАЮЩИЙ (задача 17 реестра).
@@ -4786,7 +4860,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # вопросов 1, 3, 5, 13, 15, 17, 19, то есть в том числе у тех, что отвечались ВЕРНО).
     # Это ноль ошибок ценой отказа от ответов, а п. 21 `TARGET.md` ставит ответ выше
     # уточнения. Оговорка возвращена; разбор и числа — в `CHANGELOG` 04.08.
-    if REQUIRE_SUPPORT and picked and not focus:
+    # 🔴 `not no_arbiter` — ПРОВЕРКА СТОИТ НА ИТОГОВОМ ОТВЕТЕ, А НЕ НА КАЖДОМ ПОСЧИТАННОМ
+    # КАНДИДАТЕ (05.08). Круг арбитра собирает ответы кандидатов ЭТИМ ЖЕ кодом
+    # (`answer(..., focus=c, no_arbiter=True)`), и с включённым `ALIAS_VETO` подчинённый
+    # вызов возвращал не число, а уточнение. Такой ответ в `cand_ans` не попадает, сравнивать
+    # становится нечего, и арбитр-детектор молчал — то есть вето само гасило механизм,
+    # который должен был поймать ошибку. Поймано пробой: на «Во что нам обошлись закупки?»
+    # пара «регистр ← документ» нашлась (`writer_pair`), соперник в круг попал, а ответ всё
+    # равно ушёл по регистру, потому что ответ документа не собрался.
+    # Итоговый выбор по-прежнему проверяется — `_checked()` на всех ветках возврата арбитра.
+    if REQUIRE_SUPPORT and picked and not focus and not no_arbiter:
         cand = picked[0]
         if cand != top_by_question:
             ok, top = _alias_verdict(cand)
