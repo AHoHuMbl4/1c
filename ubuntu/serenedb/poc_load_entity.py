@@ -32,7 +32,22 @@ def _odata_auth(req):
 ODATA = os.environ.get("ETL_ODATA_BASE", "http://127.0.0.1:6011").rstrip("/")
 DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres")
 CSV_DIR = os.environ.get("CSV_DIR", "/var/lib/serenedb")
-PAGE = 1000
+# 🔴 РАЗМЕР СТРАНИЦЫ РЕШАЕТ БОЛЬШЕ, ЧЕМ ОБЪЁМ ДАННЫХ. [замер 05.08, боевая база] на одном
+# и том же регистре: `$top=1000` — **165 строк/с**, `$top=5000` — 411, `$top=20000` —
+# **1316**. Восьмикратная разница, потому что время уходит не на строки, а на ОБРАЩЕНИЯ:
+# каждый заход к 1С стоит несколько секунд сам по себе, и с ростом `$skip` дорожает ещё.
+# При странице 1000 регистр из 97 834 строк читался 888 с — почти четверть такта на одну
+# сущность, из-за чего не выполнялся п. 17 `TARGET.md` (свежесть ≤ 20 мин).
+#
+# Крупная страница — это МЕНЬШЕ нагрузки на 1С, а не больше (второе предложение п. 17):
+# меньше запросов и меньше повторных проходов по `$skip`.
+#
+# 🔴 ЧИСЛО НЕ ЗАШИТО И НЕ ПОДОБРАНО ПОД ЭТУ БАЗУ. Страница самонастраивается: начинаем
+# крупно и уменьшаем вчетверо, если 1С не справилась, — до `ETL_PAGE_MIN`. Так на чужой
+# базе с тяжёлыми строками (у нас есть справочник с 19 МБ в одной строке) загрузка не
+# падает и не требует ручной настройки, а на обычной идёт в разы быстрее.
+PAGE = int(os.environ.get("ETL_PAGE", "10000"))
+PAGE_MIN = int(os.environ.get("ETL_PAGE_MIN", "250"))
 # Сущности, у которых выборка пришла вложенной. Для них объявленный ключ — ключ ОБЁРТКИ.
 _NESTED_SEEN = set()
 # Предел ожидания одного запроса к 1С. Это БЮДЖЕТ ВРЕМЕНИ, а не порог правильности:
@@ -281,18 +296,38 @@ def fetch_all(entity_set):
     # него те же адреса отвечают 200. Так молча терялись пять сущностей: ошибка печаталась
     # в поток и нигде не сохранялась, а в переписи стояло «не загрузилось» без причины.
     # Заодно снимается лишняя работа с 1С на всех мелких сущностях.
-    order = _order_by(entity_set) if (expected < 0 or expected > PAGE) else ""
+    # Просить больше, чем в сущности есть, незачем: у мелких это снимает и лишний заход,
+    # и `$orderby` (см. ниже про `HTTP 500`).
+    page = PAGE if expected < 0 else max(1, min(PAGE, expected))
+    order = _order_by(entity_set) if (expected < 0 or expected > page) else ""
     rows, skip, short_pages = [], 0, 0
     while True:
-        params = {"$format": "json", "$top": str(PAGE), "$skip": str(skip)}
+        params = {"$format": "json", "$top": str(page), "$skip": str(skip)}
         if order:
             params["$orderby"] = order  # стабильный порядок → страницы не перекрываются
-        v = _get_json(entity_set, params).get("value", [])
+        try:
+            v = _get_json(entity_set, params).get("value", [])
+        except Exception:                       # noqa: BLE001
+            # 🔴 СТРАНИЦА УМЕНЬШАЕТСЯ, А НЕ СУЩНОСТЬ ТЕРЯЕТСЯ. `_get_json` уже перебрал
+            # свои варианты (повтор, `$select` без неотдаваемых полей) — значит дело в
+            # размере: у сущности тяжёлые строки. Уменьшаем вчетверо и НАЧИНАЕМ СНАЧАЛА:
+            # продолжать с середины нельзя, потому что при меньшей странице появляется
+            # постраничность, а с ней обязателен `$orderby` — смешивать упорядоченные
+            # страницы с уже прочитанными неупорядоченными значило бы терять и дублировать
+            # строки молча (п. 13).
+            if page <= PAGE_MIN:
+                raise
+            page = max(PAGE_MIN, page // 4)
+            order = _order_by(entity_set) if (expected < 0 or expected > page) else ""
+            rows, skip, short_pages = [], 0, 0
+            print("    %s: страница уменьшена до %d — 1С не отдала крупную"
+                  % (entity_set, page), file=sys.stderr)
+            continue
         if not v:
             break
         rows.extend(v)
         skip += len(v)
-        if len(v) < PAGE:
+        if len(v) < page:
             short_pages += 1
             # Короткая страница в середине — признак нагрузки, а не конца. Продолжаем,
             # пока не придёт пустая или пока не набрали ожидаемое количество.
@@ -447,16 +482,27 @@ def load_entity_delta(es, ro_role="serene_ro"):
     # Проба версий — до ПУСТОЙ страницы, а не до короткой: под нагрузкой 1С отдаёт неполную
     # страницу в середине (тот же дефект, что у полной выгрузки). Затем сверяем с `$count`.
     expected = count_of(es)
+    # Проба берёт два узких поля на строку, поэтому крупная страница здесь безопаснее
+    # всего и выигрывает больше всего: именно эта проба и решает, будет ли дельта дешевле
+    # полной загрузки. Уменьшение при отказе — тем же правилом, что и у полной выгрузки.
+    top = PAGE if expected < 0 else max(1, min(PAGE, expected))
     probe, skip = [], 0
     while True:
         params = {"$format": "json", "$select": "Ref_Key,DataVersion",
-                  "$top": str(PAGE), "$skip": str(skip)}
+                  "$top": str(top), "$skip": str(skip)}
         # Сортировка по ключу нужна ТОЛЬКО при постраничности: без неё `$skip/$top`
         # перекрываются и теряют строки. На одной странице сортировать нечего (и это
         # снимает `HTTP 500` на сущностях, где `$orderby` капризничает).
-        if expected < 0 or expected > PAGE:
+        if expected < 0 or expected > top:
             params["$orderby"] = "Ref_Key"
-        page = _fetch_page(es, params)
+        try:
+            page = _fetch_page(es, params)
+        except Exception:                       # noqa: BLE001
+            if top <= PAGE_MIN:
+                raise
+            top = max(PAGE_MIN, top // 4)
+            probe, skip = [], 0                 # см. разбор в `fetch_all`: начинаем сначала
+            continue
         if not page:
             break
         probe.extend(page)
