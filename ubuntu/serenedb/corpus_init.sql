@@ -30,8 +30,22 @@ ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS flags MAP(VARCHAR, BOOLEAN);
 CREATE TABLE IF NOT EXISTS resolver_index (
   table_name VARCHAR, column_name VARCHAR, value VARCHAR, emb FLOAT[1024]);
 
+-- `written_by*` — связь «кто пишет этот источник»: у движений регистра есть регистратор,
+-- и это ЕДИНСТВЕННЫЙ сигнал выбора сущности, который не является названием (разбор —
+-- `corpus_build.sql`, раздел 2-тер). Хранится тройкой, а не одним именем: связь
+-- (`written_by`), её доля в движениях (`written_by_share`) и полный расклад
+-- (`written_by_all`) — чтобы порог «преобладает ли регистратор» назначал тот, кто
+-- принимает решение, а не сборка.
 CREATE TABLE IF NOT EXISTS search_tables (
-  src_table VARCHAR, label VARCHAR, parent VARCHAR, emb FLOAT[1024]);
+  src_table VARCHAR, label VARCHAR, parent VARCHAR, emb FLOAT[1024],
+  written_by VARCHAR, written_by_share DOUBLE, written_by_all MAP(VARCHAR, BIGINT));
+
+-- Добор колонок для баз, собранных прежним кодом, — по той же причине, что у `flags`
+-- выше: `CREATE TABLE IF NOT EXISTS` существующую таблицу не трогает. Пока база не
+-- пересобрана, связь пуста, и всё, что её читает, обязано читать пустоту как «связи нет».
+ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS written_by VARCHAR;
+ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS written_by_share DOUBLE;
+ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS written_by_all MAP(VARCHAR, BIGINT);
 
 -- ПЕРЕЧЕНЬ ИСТОЧНИКОВ — отдельная таблица, а НЕ производная от корпуса.
 -- Это главная структурная починка: раньше `tmp3_src` строился как

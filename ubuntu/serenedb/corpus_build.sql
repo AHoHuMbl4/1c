@@ -222,6 +222,139 @@ SELECT 'карта сущностей' AS шаг, count(*) AS всего,
        count(*) FILTER (WHERE parent IS NOT NULL) AS табличных_частей
 FROM search_tables;
 
+-- ============ 2-тер. КТО ПИШЕТ ЭТОТ ИСТОЧНИК: связь «регистр ← регистратор» ============
+-- 🔴 ЗАЧЕМ. Выбор сущности брал регистр накопления вместо документа, который этот регистр
+-- пишет: «Сколько штук мы закупили?» уходило в `accumulationregister_закупки` вместо
+-- `document_приобретениетоваровуслуг`. Дело не в счёте: все сигналы выбора — метка, её
+-- вектор, карточка, реранкер, синонимы — про НАЗВАНИЕ, а в 1С регистр назван деловым
+-- языком («Закупки»), документ — канцелярским («Приобретение Товаров Услуг»). Человек
+-- спрашивает деловым, и все именные сигналы дружно подтверждают регистр. Добавление
+-- четвёртого именного не помогает: [замер 04.08] показ модели вида записи
+-- (`Document`/`AccumulationRegister`) дал 3 ошибки → 6. Нужен сигнал, который не имя.
+--
+-- Он лежит в наших данных и до сих пор терялся на сборке. У движений регистра есть
+-- регистратор (`Recorder` + спутник `Recorder_Type`); спутники `%_Type` помечаются
+-- `is_companion` (:86) и в текст корпуса не идут — для поиска словами это верно, тип
+-- ссылки не текст вопроса. Но связь не переносилась НИКУДА: `search_tables` знала только
+-- `label` и `parent`. [замер 05.08, ut_test] в `accumulationregister_закупки` 1 443
+-- движения из 1 901 написаны `Document_ПриобретениеТоваровУслуг` — ровно та пара, на
+-- которой выбор спотыкался, и она лежала в витрине готовой.
+--
+-- 🔴 ЧТО ЗДЕСЬ НЕ ХАРДКОД. Имён нашей базы нет ни одного: перечень регистров не
+-- перечисляется, а спрашивается — колонка ищется в каталоге движка (`duckdb_columns()`)
+-- И обязана быть объявлена КЛЮЧОМ в `$metadata` (`tmp3_key`), то есть платформа сама
+-- назвала её тождеством записи. `Recorder` — имя САМОЙ ПЛАТФОРМЫ 1С, одинаковое на любой
+-- конфигурации и языке; тот же класс факта, что `Ref_Key`, `DataVersion`, `LineNumber`
+-- (:415) и суффикс `_RecordType` (:146), и ровно так же оно проверяется по каталогу, а
+-- не предполагается. Значение приезжает как `StandardODATA.Document_X` — пространство
+-- имён OData; имя источника получается отбрасыванием этого префикса, как выше строится
+-- `label` (:205), и обязано найтись СРЕДИ ИСТОЧНИКОВ: выдуманных связей не заводим,
+-- ненайденное считается числом ниже, а не пропадает молча (п. 13).
+--
+-- 🔴 ПОРОГА ЗДЕСЬ НЕТ, И ЭТО НАМЕРЕННО. «Преобладающий регистратор» — `count(*)` по
+-- данным, а не правило из головы. Рядом со связью кладутся её доля и полный расклад,
+-- поэтому «схлопывать пару или спрашивать человека» решает тот, кто отвечает на вопрос,
+-- по числам — а не сборка, назначившая порог за него. [замер 05.08, ut_test] 81 источник
+-- с регистратором, у всех 81 регистратор нашёлся среди источников; доля преобладающего
+-- больше половины у 47, медиана 0,56, единственный регистратор у 11 — то есть «регистр
+-- агрегирует разные документы» это не редкость, а обычный случай, и объявлять такую
+-- связь однозначной было бы неправдой.
+CREATE OR REPLACE TABLE tmp3_regsrc AS
+SELECT s.tbl FROM tmp3_src s
+-- Фильтр по текущей базе обязателен: `duckdb_columns()` отдаёт колонки ВСЕХ
+-- присоединённых баз (`techContext` ловушка 25).
+WHERE EXISTS (SELECT 1 FROM duckdb_columns() c
+              WHERE c.database_name = current_database()
+                AND c.table_name = s.tbl AND c.column_name = 'Recorder_Type')
+  AND EXISTS (SELECT 1 FROM tmp3_key k
+              WHERE k.entity = lower(s.tbl) AND list_contains(k.key_cols, 'Recorder_Type'));
+
+CREATE OR REPLACE TABLE tmp3_writer (src_table VARCHAR, writer_raw VARCHAR, n BIGINT);
+
+PREPARE p_writer AS
+INSERT INTO tmp3_writer
+SELECT $1::VARCHAR, "Recorder_Type", count(*)
+FROM query_table($1)
+WHERE "Recorder_Type" IS NOT NULL AND "Recorder_Type" <> ''
+GROUP BY 2;
+
+-- Одна сущность не должна ронять такт — как и в сборке текста (:595). Не посчитавшееся
+-- не исчезает: оно попадает в число `writer_failed` ниже.
+\set ON_ERROR_STOP off
+SELECT 'EXECUTE p_writer(' || quote_literal(tbl) || ');' FROM tmp3_regsrc
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_link AS
+WITH w AS (
+  -- `StandardODATA.Document_X` -> `document_x`: отбрасывается пространство имён OData.
+  SELECT src_table, lower(regexp_replace(writer_raw, '^.*\.', '')) AS writer, sum(n) AS n
+  FROM tmp3_writer GROUP BY 1, 2),
+agg AS (
+  SELECT src_table, sum(n) AS total,
+         -- 🔴 ПОРЯДОК КЛЮЧЕЙ КАРТЫ ЗАДАЁТСЯ ЯВНО — как у `nums` (:529): сравнение `MAP`
+         -- в движке зависит от порядка, и без `ORDER BY` связь «менялась» бы каждый такт
+         -- у всех регистров, а число изменений перестало бы что-либо значить.
+         map_from_entries(list({'key': writer, 'value': n} ORDER BY writer)) AS all_writers,
+         -- Порядок ПОЛНЫЙ: по числу движений, при равенстве — по имени. Иначе выбор
+         -- преобладающего зависел бы от порядка чтения (`techContext` ловушки 29, 30).
+         (list(writer ORDER BY n DESC, writer))[1] AS top_writer,
+         (list(n      ORDER BY n DESC, writer))[1] AS top_n
+  FROM w GROUP BY src_table)
+SELECT src_table, all_writers, total, top_writer,
+       -- Связь заводится, только если регистратор ЕСТЬ среди источников. Доля идёт с ней
+       -- в паре: доля без связи — число, к которому нечего отнести.
+       CASE WHEN EXISTS (SELECT 1 FROM tmp3_src s WHERE s.tbl = top_writer)
+            THEN top_writer END AS written_by,
+       CASE WHEN EXISTS (SELECT 1 FROM tmp3_src s WHERE s.tbl = top_writer)
+            THEN top_n::DOUBLE / total END AS share
+FROM agg;
+
+-- Связь обновляется ОТДЕЛЬНЫМ `MERGE`, а не вместе с меткой, по одной причине: у метки
+-- изменение сбрасывает `emb` (:214), потому что меняется сам текст под вектором. Здесь
+-- текст не меняется — вектор метки обязан уцелеть, иначе каждая правка связи стоила бы
+-- пересчёта 1 502 векторов и денег эмбеддера.
+MERGE INTO search_tables t
+USING (SELECT src_table, written_by, share, all_writers FROM tmp3_link) x
+   ON t.src_table = x.src_table
+WHEN MATCHED AND (t.written_by       IS DISTINCT FROM x.written_by
+               OR t.written_by_share IS DISTINCT FROM x.share
+               OR t.written_by_all   IS DISTINCT FROM x.all_writers)
+     THEN UPDATE SET written_by = x.written_by, written_by_share = x.share,
+                     written_by_all = x.all_writers;
+
+-- Источник перестал быть регистром (или его движения исчезли) — связь уходит. Иначе
+-- ошибка одного прогона осталась бы в карте навсегда, как это уже было с источниками (:162).
+UPDATE search_tables SET written_by = NULL, written_by_share = NULL, written_by_all = NULL
+WHERE (written_by IS NOT NULL OR written_by_share IS NOT NULL OR written_by_all IS NOT NULL)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_link l WHERE l.src_table = search_tables.src_table);
+
+DELETE FROM search_quality WHERE k LIKE 'writer_%';
+INSERT INTO search_quality
+SELECT 'writer_sources', count(*), 'источников с регистратором (`Recorder_Type` в объявленном ключе)'
+FROM tmp3_regsrc
+UNION ALL
+SELECT 'writer_linked', count(*), 'источников получили связь «кто пишет»'
+FROM tmp3_link WHERE written_by IS NOT NULL
+UNION ALL
+SELECT 'writer_multi', count(*), 'из них пишутся более чем одним источником — связь не однозначна'
+FROM tmp3_link WHERE written_by IS NOT NULL AND len(map_keys(all_writers)) > 1
+UNION ALL
+-- 🔴 Регистратор есть в данных, а источника с таким именем нет: документ не загружен,
+-- закрыт правами или отсеян. Связь не заводится, но молчать об этом нельзя (п. 13).
+SELECT 'writer_unresolved', count(*), 'преобладающий регистратор не найден среди источников'
+FROM tmp3_link WHERE written_by IS NULL
+UNION ALL
+SELECT 'writer_failed', count(*), 'источников с регистратором без единой связи: нет движений или шаг не прошёл'
+FROM tmp3_regsrc r WHERE NOT EXISTS (SELECT 1 FROM tmp3_writer w WHERE w.src_table = r.tbl);
+
+SELECT 'связь «кто пишет»' AS шаг,
+       (SELECT count(*) FROM tmp3_regsrc) AS с_регистратором,
+       (SELECT count(*) FROM tmp3_link WHERE written_by IS NOT NULL) AS связей,
+       (SELECT count(*) FROM tmp3_link WHERE written_by IS NOT NULL
+                                         AND len(map_keys(all_writers)) > 1) AS пишут_несколько,
+       (SELECT round(median(share), 2) FROM tmp3_link WHERE written_by IS NOT NULL) AS медиана_доли;
+
 -- ============ 3. КОЛОНКА-НАИМЕНОВАНИЕ и КАРТА ССЫЛОК ============
 CREATE OR REPLACE TABLE tmp3_namecol (tbl VARCHAR, col VARCHAR, ord INT, score DOUBLE, std INT);
 PREPARE p_stats AS
