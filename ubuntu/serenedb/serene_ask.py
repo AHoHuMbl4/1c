@@ -39,6 +39,17 @@ import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+# Шаг «достаточен ли вопрос для ответа» вынесен ОТДЕЛЬНЫМ файлом (05.08): его правила —
+# чистые функции от разбора вопроса и от посчитанных чисел, и такие проверяются оффлайн,
+# без базы, сети и денег (`test_enough.py`). Здесь остаётся только то, чего в чистой
+# функции быть не может: обращение к модели, к базе и к гейту.
+# Отсутствие файла (раскладка прежним `deploy.sh`) гасит шаг, а не роняет сервис: отказ
+# при живых данных — дефект (п. 21), и он был бы куда хуже отключённой проверки.
+try:
+    import serene_enough
+except ImportError:                                # noqa: F401 — шаг просто выключен
+    serene_enough = None
+
 DSN = os.environ.get("SERENEDB_DSN_RO", "host=127.0.0.1 port=7890 user=serene_ro dbname=postgres")
 PGPASSWORD = os.environ.get("PGPASSWORD", "")
 # 🔴 РЕЗОЛВЕР ЧИТАЕТСЯ ОТДЕЛЬНОЙ РОЛЬЮ. `serene_ro`, которой исполняется SQL по данным,
@@ -5347,6 +5358,161 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 
+# ═══════════════ ШАГ «ДОСТАТОЧЕН ЛИ ВОПРОС ДЛЯ ОТВЕТА» (05.08) ═══════════════
+#
+# 🔴 ШАГ СТОИТ СНАРУЖИ `answer()`, И ЭТО НЕ УДОБСТВО, А УСЛОВИЕ ПРАВИЛЬНОСТИ. Круг арбитра
+# собирает ответы кандидатов ТЕМ ЖЕ `answer(..., focus=c, no_arbiter=True)`, и проверка
+# внутри превратила бы ответ кандидата в уточнение — тогда сравнивать стало бы нечего, и
+# арбитр-детектор замолчал бы. Ровно так 05.08 само себя гасило вето по синонимам
+# (разбор — врезка у `REQUIRE_SUPPORT` выше). Снаружи этой ошибки не бывает по построению:
+# подчинённые вызовы шага не видят вовсе.
+#
+# Что шагу нужно от соседей и почему это ничего не стоит: разбор вопроса (`parse_intent`
+# помнит ответ по ключу «вопрос + дата», поэтому вызов здесь отдаётся ДАРОМ — тот же
+# разбор потом возьмёт `answer`) и числа из `diag` уже собранного ответа.
+ENOUGH_ON = os.environ.get("ASK_ENOUGH", "1") not in ("0", "false", "no")
+# Память описаний вопроса — по тому же ключу и того же размера, что у шага 1: описание
+# зависит ровно от текста вопроса, данных оно не видит.
+_FACTS_MEMO = {}
+
+
+def question_facts(question, today):
+    """Описание вопроса моделью: на что он указывает, назван ли период и величина.
+
+    Один вызов на вопрос, с памятью. Модель здесь — языковой инструмент: в её задании
+    (`serene_enough.FACTS_SYS`) нет ни слова о том, отвечать или переспрашивать. Вердикт
+    собирает код (`serene_enough.verdict_after`) из этого описания и из чисел базы.
+
+    Не разобралось — `None`, и шаг молчит: сбой описания сам по себе уточнением не
+    становится, иначе перебои у поставщика модели превращались бы в вопросы человеку.
+    """
+    key = (today, question)
+    hit = _FACTS_MEMO.get(key)
+    if hit is not None:
+        return json.loads(hit)
+    try:
+        raw = ds_chat([{"role": "system", "content": serene_enough.FACTS_SYS},
+                       {"role": "user", "content": "Question: %s" % question}],
+                      max_tokens=200)
+    except Exception:                              # noqa: BLE001 — сеть/квота поставщика
+        return None
+    got = serene_enough.parse_facts(raw)
+    if got is None:
+        return None
+    if len(_FACTS_MEMO) >= max(1, INTENT_MEMO):
+        _FACTS_MEMO.clear()
+    _FACTS_MEMO[key] = json.dumps(got, ensure_ascii=False)
+    return got
+
+
+def entity_has_dates(src):
+    """Есть ли у источника хоть одна дата — числом из базы, а не догадкой по имени.
+
+    Нужно затем, чтобы вопрос о периоде задавался только там, где период у данных вообще
+    бывает: у справочника дат нет, и «за какой период» там означало бы выбор, которого в
+    данных не существует.
+
+    Запрос дешёвый по построению: `LIMIT 1` во вложенном выборе — движку достаточно найти
+    одну строку, полный проход сущности не делается. Не получилось — считаем, что дат нет:
+    отсутствие сведений оставляет вопрос человеку прежним, а не расширяет его.
+    """
+    if not src:
+        return False
+    try:
+        r = psql("SELECT count(*) FROM (SELECT 1 FROM %s WHERE src_table = %s "
+                 "  AND doc_date IS NOT NULL LIMIT 1) x" % (CORPUS, lit(src)))
+    except RuntimeError:
+        return False
+    try:
+        return int(_num(r[0][0])) > 0 if r and r[0] else False
+    except (TypeError, ValueError, IndexError):
+        return False
+
+
+def _gate_need(text, rows=(), agg=None, allowed=None, our_dates=None):
+    """Гейт для текста уточнения этого шага: числа плюс утечка ЕГО СОБСТВЕННОГО задания.
+
+    Общий `gate_out` сверяет утечку по списку `OUR_PROMPTS`, собранному до появления шага,
+    и задания `NEED_SYS` там нет. Дописывать в чужой список отсюда — правка гейта (шаг 7,
+    его ведёт другая сессия), поэтому недостающая проверка стоит своей строкой здесь, на
+    том же штатном `prompt_leak`. Пересказанное человеку задание читается как факт о его
+    данных ровно так же, как выдуманное число.
+    """
+    ok, bad = gate_out(text, rows, agg, allowed, our_dates)
+    leak = prompt_leak(text, [serene_enough.NEED_SYS])
+    if leak:
+        return False, list(bad) + ["утечка инструкции: %s" % leak]
+    return ok, bad
+
+
+def _need_clarify(question, slots, why, diag):
+    """Уточнение о недостающих параметрах вопроса. `None` — сформулировать не вышло.
+
+    `options` пуст намеренно: выбирать здесь не из чего — кнопки предлагают ИСТОЧНИКИ, а
+    спрашиваем мы про сам вопрос («какой товар, за какой период»). Человек отвечает новым,
+    более полным вопросом, и на нём шаг уже молчит: значение названо. Протокол моста от
+    этого не меняется — `[CLARIFICATION NEEDED]` он ставит по `kind`, а перечень вариантов
+    у него необязателен.
+    """
+    txt = serene_enough.need_say(question, slots, ds_chat, _gate_need, diag)
+    if not txt:
+        return None
+    d = dict(diag or {})
+    d["not_enough"] = {"чего_нет": [s.get("kind") for s in slots if isinstance(s, dict)],
+                       "почему": why}
+    return {"partial": None, "kind": "clarify", "text": txt, "options": [],
+            "sources": [], "diag": d}
+
+
+def answer_checked(question, focus=None, measure_pick=None, context=""):
+    """Ответ вместе с шагом «достаточен ли вопрос». Точка входа сервиса.
+
+    Порядок п. 21 сохранён: сперва пробуем ответить, уточняем только там, где ответа с
+    одним смыслом не существует. Дешёвая половина стоит ДО поиска и экономит весь прогон,
+    решающая — ПОСЛЕ счёта, потому что опирается на посчитанные числа.
+
+    🔴 Человек уже уточнял (`focus`, `measure`) — шаг молчит целиком. Иначе его же выбор
+    вернулся бы ему вопросом, и разговор не сходился бы ни на одном круге.
+    """
+    def plain():
+        return answer(question, focus=focus, measure_pick=measure_pick, context=context)
+
+    if not (ENOUGH_ON and serene_enough) or focus or measure_pick:
+        return plain()
+    today = time.strftime("%Y-%m-%d")
+    try:
+        intent = parse_intent(question, today)
+    except RuntimeError:
+        return plain()                             # разбора нет — решает обычный путь
+    need, slots, why = serene_enough.verdict_before(intent)
+    if need:
+        ask = _need_clarify(question, slots, why, {"шаг": "достаточность до поиска"})
+        if ask:
+            return ask
+    out = plain()
+    if not isinstance(out, dict) or out.get("kind") not in ("answer", "figures"):
+        return out
+    if not serene_enough.facts_wanted(intent):
+        return out
+    facts = question_facts(question, today)
+    if not facts:
+        return out
+    d = out.get("diag") or {}
+    счёт = d.get("счёт") or {}
+    # Из скольких записей сложился итог. `со_значением` точнее `строк`: складываются
+    # только записи с величиной, и именно их число решает, меняет ли выбор предмета ответ.
+    counted = счёт.get("со_значением")
+    if counted is None:
+        counted = счёт.get("строк", d.get("rows", 0))
+    need, slots, why = serene_enough.verdict_after(
+        intent, facts, counted, entity_has_dates(d.get("focus")))
+    if not need:
+        return out
+    ask = _need_clarify(question, slots, why,
+                        dict(d, шаг="достаточность после счёта"))
+    return ask or out
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -5395,8 +5561,10 @@ class Handler(BaseHTTPRequestHandler):
         # используется ТОЛЬКО арбитром. В отбор данных не попадает.
         context = (req.get("context") or "")[:4000]
         try:
-            out = answer(question, focus=focus, measure_pick=measure_pick,
-                         context=context)
+            # `answer_checked`, а не `answer`: вокруг ответа стоит шаг «достаточен ли
+            # вопрос» (05.08). Он же зовёт `answer` внутри, поэтому путь ответа прежний.
+            out = answer_checked(question, focus=focus, measure_pick=measure_pick,
+                                 context=context)
             # СВЕЖЕСТЬ ДАННЫХ — В КАЖДЫЙ ОТВЕТ (п. 18). Если 1С недоступна или такт падает,
             # корпус остаётся консистентным (защиты сборки), но СТАРЕЕТ, а бот об этом
             # молчал бы. Возраст последнего успешного такта делает старение видимым, а при
