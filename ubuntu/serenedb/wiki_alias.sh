@@ -20,6 +20,20 @@
 set -u
 DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 BOTUSER="${OPENCLAW_USER:-undebot}"
+# 🔴 КАК ЗАПУСКАТЬ ОТ ИМЕНИ БОТА — РЕШАЕТСЯ ПО ОКРУЖЕНИЮ, А НЕ ЗАШИТО В `sudo`. Профиль,
+# ключ модели и токен шлюза лежат у пользователя бота (0600), поэтому `openclaw agent`
+# запускается от него. Но `sudo` доступен не везде: рабочей сессии его закрывает среда, и
+# прогон упирался в просьбу к владельцу «наберите, пожалуйста». Способ выбирается сам:
+# уже бот — зовём напрямую, есть права администратора — `runuser`, иначе прежний `sudo`.
+if [ -n "${OPENCLAW_RUNAS:-}" ]; then
+  read -r -a RUNAS_BOT <<< "$OPENCLAW_RUNAS"
+elif [ "$(id -un)" = "$BOTUSER" ]; then
+  RUNAS_BOT=()
+elif [ "$(id -u)" = 0 ] && command -v runuser >/dev/null 2>&1; then
+  RUNAS_BOT=(runuser -u "$BOTUSER" --)
+else
+  RUNAS_BOT=(sudo -u "$BOTUSER" -H)
+fi
 BATCH="${WIKI_ALIAS_BATCH:-20}"
 # Развести конкретное слово, а не самое спорное: путь «сначала прогон, потом точечная правка».
 # Одинарные кавычки удваиваются сразу: слово приходит извне (переменная окружения), и в
@@ -106,7 +120,7 @@ while :; do
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
-  sudo -u "$BOTUSER" -H openclaw agent --agent main --session-key wiki-alias --json \
+  "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key wiki-alias --json \
     --message-file "$TMP/msg" \
     > "$TMP/ans" 2>"$TMP/err" || {
       # 🔴 ОДНА ОСЕЧКА НЕ ОСТАНАВЛИВАЕТ ВСЁ. [замер 30.07] на 143-й сущности из 686 модель
@@ -265,7 +279,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
       cat "$TMP/pay"
     } > "$TMP/msg"
     chmod 644 "$TMP/msg"
-    sudo -u "$BOTUSER" -H openclaw agent --agent main --session-key wiki-alias --json \
+    "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key wiki-alias --json \
       --message-file "$TMP/msg" > "$TMP/ans" 2>"$TMP/err" || {
         echo "разведение: пачка пропущена ($(head -c 100 "$TMP/err" | tr -d '\n'))" >&2; continue; }
     python3 - "$TMP/ans" "$TMP/rows.json" <<'PY2'
