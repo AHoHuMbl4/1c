@@ -22,7 +22,9 @@ DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 BOTUSER="${OPENCLAW_USER:-undebot}"
 BATCH="${WIKI_ALIAS_BATCH:-20}"
 # Развести конкретное слово, а не самое спорное: путь «сначала прогон, потом точечная правка».
-TARGET_WORD="${WIKI_ALIAS_WORD:-}"
+# Одинарные кавычки удваиваются сразу: слово приходит извне (переменная окружения), и в
+# запрос оно подставляется текстом — без этого апостроф в слове ломал бы запрос.
+TARGET_WORD="${WIKI_ALIAS_WORD:-}"; TARGET_WORD=${TARGET_WORD//\'/\'\'}
 CAP="${1:-0}"
 cd "$(dirname "$0")" || exit 1
 
@@ -37,6 +39,16 @@ TMP=$(mktemp -d "$EXCH/wiki-alias-XXXXXX") || { echo "алиасы: нет до�
 chmod 755 "$TMP"; trap 'rm -rf "$TMP"' EXIT
 done_total=0
 skipped=0
+
+# 🔴 БЮДЖЕТ ВРЕМЕНИ, А НЕ ЧИСЛО КРУГОВ. Шаг идёт в такте свежести, а такт обязан
+# укладываться в 20 минут (п. 17 TARGET.md). Число кругов этого не держит: круг — это вызов
+# модели, и его цена зависит от того, как модель отвечает сегодня. [замер 05.08] 40 кругов
+# на боевой базе — час, то есть предел «40» молча означал «час», и п. 17 не выполнялся.
+# Бюджет измеряет то, что и ограничено контрактом, — ВРЕМЯ. Не успевшее за бюджет никуда
+# не девается: работа идёт следующим тактом с того же места (оба прохода идемпотентны).
+BUDGET="${WIKI_ALIAS_MAX_SEC:-120}"
+t_start=$(date +%s)
+over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUDGET" ]; }
 while :; do
   # 🔴 ПАЧКА — ЭТО ГРУППА ПОХОЖИХ, А НЕ СЛУЧАЙНЫЕ СУЩНОСТИ ПОДРЯД.
   # [замер 30.07] описанные поодиночке страницы не различают соседей: у «Подтверждения
@@ -143,6 +155,7 @@ PY
   echo "алиасы: всего в базе $have"
   done_total=$((done_total + BATCH))
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
+  over_budget && { echo "алиасы: бюджет $BUDGET с исчерпан — остальные сущности возьмёт следующий такт"; break; }
 done
 # ── ВТОРОЙ ПРОХОД: РАЗВЕСТИ ТЕХ, КОГО НАЗЫВАЮТ ОДИНАКОВО ────────────────────────────
 # 🔴 Указание владельца 30.07: «если и там и там есть одно и то же описание, значит надо
@@ -158,10 +171,29 @@ done
 # в несколько сущностей. Это признак из данных, а не порог и не список слов.
 # Пересчитывается на каждом круге: разведённые пары из списка уходят сами.
 if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
-  rounds=0
+  # 🔴 ПАМЯТЬ О ЗАДАННЫХ ВОПРОСАХ — ИНАЧЕ ПРОХОД НЕ СХОДИТСЯ. [замер 05.08, боевая база]
+  # проход выбирал слово, спрашивал модель и обновлял `not_enough_for`. Но если модель не
+  # ответила разбираемым JSON («разведено сущностей: 0») или ответила, не назвав само слово
+  # в `not_enough_for`, слово оставалось спорным — и на следующем круге выбиралось СНОВА.
+  # Круги упирались в предел (40 из 40) КАЖДЫЙ такт, а число алиасов стояло на 697 семь
+  # тактов подряд: час вызовов модели за такт, ноль изменений. Это же и есть причина, по
+  # которой не выполнялся п. 17 — час из двух с четвертью уходил сюда.
+  #
+  # Отметка ставится ДО вызова модели (как у пропущенной пачки первого прохода): осечка
+  # модели тоже расходует попытку, иначе цикл снова закрутится на том же слове.
+  # Ключ отметки — слово И ОТПЕЧАТОК НАБОРА сущностей, которые им называются. Появилась
+  # новая сущность с тем же словом — отпечаток другой, вопрос задаётся заново. То есть это
+  # не «спросили один раз и забыли», а «спросили про ЭТО столкновение».
+  psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS search_alias_probe (alias VARCHAR, entities_fp VARCHAR, asked_at TIMESTAMP)" >/dev/null 2>&1
+  rounds=0 asked=0 stopped=""
+  # Предел кругов остаётся вторым ограничителем — на случай `WIKI_ALIAS_MAX_SEC=0`.
   while [ "$rounds" -lt "${WIKI_ALIAS_COLLISION_ROUNDS:-40}" ]; do
+    over_budget && { stopped=" (бюджет $BUDGET с исчерпан)"; break; }
     rounds=$((rounds + 1))
-    psql "$DSN" -tA -c "
+    # Слово выбирается ОТДЕЛЬНЫМ запросом: его отпечаток нужен, чтобы отметить попытку.
+    # `md5(string_agg(...))` — штатные функции движка (доки: Sql › Functions › Utility
+    # Functions; Sql › Functions › Aggregate Functions).
+    PICK=$(psql "$DSN" -tA -F$'\t' -c "
       WITH al AS (SELECT src_table, trim(lower(x.a)) AS alias
                     FROM search_entity_alias, unnest(str_split(aliases, ',')) AS x(a)
                    WHERE trim(x.a) <> ''),
@@ -172,17 +204,36 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
            -- прогон приёмки уже показал, ГДЕ система спуталась: разводим ровно тех, кто
            -- ошибся, а не ждём, пока очередь дойдёт. Цель владельца 30.07 — «сто процентов
            -- верных ответов, даже если для этого надо 2-3 раза переспросить»; значит
-           -- чинить надо по факту ошибки, а не подряд.
-           top AS (SELECT a.alias FROM al a JOIN dup d ON d.alias = a.alias
-                    WHERE ('$TARGET_WORD' = '' OR a.alias = lower('$TARGET_WORD'))
-                      AND NOT EXISTS (SELECT 1 FROM search_entity_alias s
-                                       WHERE s.src_table = a.src_table
-                                         AND s.not_enough_for ILIKE '%' || a.alias || '%')
-                    GROUP BY 1 ORDER BY count(DISTINCT a.src_table) DESC, 1 LIMIT 1)
+           -- чинить надо по факту ошибки, а не подряд. Названное слово память не блокирует:
+           -- владелец спрашивает повторно осознанно.
+           cand AS (SELECT a.alias,
+                           md5(string_agg(DISTINCT a.src_table, ',' ORDER BY a.src_table)) AS fp,
+                           count(DISTINCT a.src_table) AS n
+                      FROM al a JOIN dup d ON d.alias = a.alias
+                     WHERE ('$TARGET_WORD' = '' OR a.alias = lower('$TARGET_WORD'))
+                       AND NOT EXISTS (SELECT 1 FROM search_entity_alias s
+                                        WHERE s.src_table = a.src_table
+                                          AND s.not_enough_for ILIKE '%' || a.alias || '%')
+                     GROUP BY 1)
+      SELECT c.alias, c.fp FROM cand c
+       WHERE '$TARGET_WORD' <> ''
+          OR NOT EXISTS (SELECT 1 FROM search_alias_probe p
+                          WHERE p.alias = c.alias AND p.entities_fp = c.fp)
+       ORDER BY c.n DESC, c.alias LIMIT 1" 2>/dev/null)
+    [ -z "$PICK" ] && break
+    WORD=${PICK%%$'\t'*}; FP=${PICK##*$'\t'}
+    # Одинарные кавычки удваиваются: слово приходит из данных, а не от нас.
+    WORD_SQL=${WORD//\'/\'\'}
+    psql "$DSN" -q -c "INSERT INTO search_alias_probe VALUES ('$WORD_SQL', '$FP', now())" >/dev/null 2>&1
+    asked=$((asked + 1))
+    psql "$DSN" -tA -c "
+      WITH al AS (SELECT src_table, trim(lower(x.a)) AS alias
+                    FROM search_entity_alias, unnest(str_split(aliases, ',')) AS x(a)
+                   WHERE trim(x.a) <> '')
       SELECT to_json(list(struct_pack(entity := f.src_table, title := f.label,
                                       quantities := coalesce(f.measures,''))))
       FROM (SELECT f.* FROM wiki_entity_facts f
-             WHERE f.src_table IN (SELECT src_table FROM al WHERE alias = (SELECT alias FROM top))
+             WHERE f.src_table IN (SELECT src_table FROM al WHERE alias = '$WORD_SQL')
              -- 🔴 ПРЕДЕЛ ОБЯЗАТЕЛЕН: число сущностей на одно спорное слово растёт с размером
              -- базы (у нас со словом «НДС» их 18), а весь список уходит в модель — это п. 19,
              -- объём в модель не должен зависеть от размера базы. Не влезшие в пачку
@@ -190,7 +241,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
              ORDER BY f.src_table LIMIT $BATCH) f" \
       > "$TMP/pay" 2>/dev/null
     PAY=$(cat "$TMP/pay")
-    case "$PAY" in ''|'[]'|'null') break;; esac
+    case "$PAY" in ''|'[]'|'null') continue;; esac
     {
       printf '%s' "JSON only, no prose, no code fences. The record types below are ALL CALLED BY THE SAME WORD in this database — a person using that word could mean any of them. For each, in the SAME language as its title: (1) aliases — how a person refers to THIS one, keeping its own title and dropping words that fit the others equally well; (2) bestUsedFor — what only this one answers; (3) notEnoughFor — the other types from this list and what each answers instead. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
       cat "$TMP/pay"
@@ -240,7 +291,25 @@ PY2
              best_used_for:'VARCHAR', not_enough_for:'VARCHAR'}) n
       WHERE a.src_table = n.src_table" >/dev/null 2>&1
   done
-  echo "разведение столкновений: кругов $rounds"
+  # Молчания тут быть не должно: видно и сколько спросили, и сколько ОСТАЛОСЬ на следующий
+  # такт (упёрлись в предел кругов), и сколько столкновений модель разобрать не смогла —
+  # они лежат в `search_alias_probe` и сами собой больше не переспрашиваются.
+  left=$(psql "$DSN" -tAc "
+    WITH al AS (SELECT src_table, trim(lower(x.a)) AS alias
+                  FROM search_entity_alias, unnest(str_split(aliases, ',')) AS x(a)
+                 WHERE trim(x.a) <> ''),
+         dup AS (SELECT alias FROM al GROUP BY 1 HAVING count(DISTINCT src_table) > 1),
+         cand AS (SELECT a.alias,
+                         md5(string_agg(DISTINCT a.src_table, ',' ORDER BY a.src_table)) AS fp
+                    FROM al a JOIN dup d ON d.alias = a.alias
+                   WHERE NOT EXISTS (SELECT 1 FROM search_entity_alias s
+                                      WHERE s.src_table = a.src_table
+                                        AND s.not_enough_for ILIKE '%' || a.alias || '%')
+                   GROUP BY 1)
+    SELECT count(*) FROM cand c
+     WHERE NOT EXISTS (SELECT 1 FROM search_alias_probe p
+                        WHERE p.alias = c.alias AND p.entities_fp = c.fp)" 2>/dev/null)
+  echo "разведение столкновений: кругов $rounds$stopped, спрошено слов $asked, осталось неспрошенных ${left:-?}"
 fi
 
 [ "$skipped" -gt 0 ] && echo "алиасы: пачек пропущено из-за отказа модели: $skipped" >&2
