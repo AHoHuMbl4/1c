@@ -1,0 +1,138 @@
+#!/usr/bin/env python3
+"""Оффлайн-прогон ЗАЩИТ ШАГА 4: БЕЗ базы, БЕЗ сети, БЕЗ вызовов модели.
+
+Защиты шага 4 — это три правила, которые решают, уходит ответ человеку или вместо него
+уходит вопрос. Каждое из них уже однажды отвергло ВЕРНЫЙ ответ, а по п. 21 такой случай
+считается дефектом самой проверки. Отсюда этот прибор: проба каждого правила, которая стоит
+ноль и повторяется дословно:
+
+  · `figures_numbers` / `same_number` — совпадение прочтений доказывается ЧИСЛАМИ, в том
+    числе теми, что кандидат завернул в уточнение о своей величине;
+  · `alias_supported` — форма правила «подтверждает ли словарь синонимов выбор сущности»;
+  · `answers_diverge` — зеркальное правило, расхождение (проверяется здесь же, чтобы
+    правки одного не расходились с другим).
+
+Живые числа этим прибором не заменяются: сколько ответов вернулось на приёмочном наборе —
+меряет `work/acceptance/step4_bench.py` на боевой базе.
+
+Запуск:  python3 ubuntu/serenedb/test_step4_guards.py
+"""
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+os.environ.setdefault("ASK_TOKEN", "test")
+os.environ.setdefault("EMBED_BASE_URL", "-")
+os.environ.setdefault("EMBED_MODEL", "-")
+
+import serene_ask as A  # noqa: E402
+
+PASS = 0
+FAIL = []
+
+
+def t(name, cond):
+    global PASS
+    if cond:
+        PASS += 1
+        print("ok  -", name)
+    else:
+        FAIL.append(name)
+        print("FAIL-", name)
+
+
+# ── Числа кандидата: ответом стали или нет ──────────────────────────────────────────
+t("итог ответа берётся как число",
+  A.figures_numbers({"figures": {"sum": 100.0, "count": 3}}) == [100.0])
+t("итога нет — берётся число записей",
+  A.figures_numbers({"figures": {"count": 164}}) == [164])
+t("ни того, ни другого — чисел нет",
+  A.figures_numbers({"figures": {}}) == [])
+t("кандидата нет вовсе — чисел нет",
+  A.figures_numbers(None) == [])
+t("уточнение о величине несёт итоги всех подходящих величин",
+  sorted(A.figures_numbers({"kind": "clarify",
+                            "diag": {"measure_totals": {"Сумма": 10.0,
+                                                        "СуммаНДС": 2.0}}})) == [2.0, 10.0])
+t("встречный вопрос несёт своё посчитанное число",
+  A.figures_numbers({"kind": "clarify", "figures": {"sum": 71045277.59}}) == [71045277.59])
+t("уточнение о величине И встречный вопрос — числа складываются, не теряются",
+  sorted(A.figures_numbers({"kind": "clarify", "figures": {"sum": 5.0},
+                            "diag": {"measure_totals": {"А": 7.0}}})) == [5.0, 7.0])
+
+# ── Совпадение доказывается равенством, а не молчанием ──────────────────────────────
+t("равное число среди чисел соперника — совпадение доказано",
+  A.same_number(2456400.0, [1.0, 2456400.0]) is True)
+t("равных чисел нет — доказательства нет",
+  A.same_number(2456400.0, [1.0, 2.0]) is False)
+t("у соперника нет ни одного числа — доказательства нет",
+  A.same_number(100.0, []) is False)
+t("у нас нет числа — доказательства нет",
+  A.same_number(None, [100.0]) is False)
+t("целое и дробное одного значения — это одно число",
+  A.same_number(164, [164.0]) is True)
+t("строка вместо числа не роняет правило",
+  A.same_number(100.0, ["сто", None]) is False)
+t("сравнимая строка сравнивается как число",
+  A.same_number(100.0, ["100"]) is True)
+t("допуска нет: копейка расхождения — не совпадение",
+  A.same_number(100.0, [100.01]) is False)
+
+# ── Форма правила «подтверждает ли словарь синонимов выбор» ─────────────────────────
+t("знания о сущности нет — проверять нечем, выбор проходит",
+  A.alias_supported(0, 0, "catalog_a", "catalog_b", veto=True) is True)
+t("жёсткая форма: лидер той же семьи — подтверждено",
+  A.alias_supported(5, 0, "catalog_a", "catalog_a", veto=True) is True)
+t("жёсткая форма: лидер чужой — не подтверждено даже при своём совпадении",
+  A.alias_supported(5, 3, "catalog_a", "catalog_b", veto=True) is False)
+t("жёсткая форма без лидера (словарь молчит) — решает своё совпадение",
+  A.alias_supported(5, 3, "catalog_a", "", veto=True) is True)
+t("жёсткая форма без лидера и без своего совпадения — не подтверждено",
+  A.alias_supported(5, 0, "catalog_a", "", veto=True) is False)
+t("мягкая форма: довольно своего совпадения",
+  A.alias_supported(5, 1, "catalog_a", "catalog_b", veto=False) is True)
+t("мягкая форма: своего совпадения нет — не подтверждено",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=False) is False)
+t("семья, а не сущность: табличная часть подтверждается своей шапкой",
+  A.alias_supported(5, 0, "document_x", "document_x", veto=True) is True)
+
+# Форма «лидер обязан стоять ВЫШЕ выбора в общем порядке кандидатов». Места считаются по
+# семьям и берутся из того же порядка, которым шаг 3 отдаёт кандидатов модели.
+A.VETO_NEEDS_RANK = True
+t("лидера словаря нет в круге кандидатов — словарь один против всех, выбор проходит",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=2, rank_leader=-1) is True)
+t("лидер стоит НИЖЕ выбора — вето не срабатывает",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=1, rank_leader=7) is True)
+t("лидер стоит ВЫШЕ выбора — вето срабатывает",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=7, rank_leader=1) is False)
+t("выбора нет в круге кандидатов — сравнивать нечем, решает семья лидера",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=-1, rank_leader=1) is False)
+t("лидер той же семьи подтверждает и при худшем месте",
+  A.alias_supported(5, 0, "catalog_a", "catalog_a", veto=True,
+                    rank_cand=7, rank_leader=1) is True)
+A.VETO_NEEDS_RANK = False
+t("форма выключена — места не смотрятся, решает лидер",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=1, rank_leader=7) is False)
+A.VETO_NEEDS_RANK = os.environ.get("ASK_VETO_NEEDS_RANK", "1") == "1"
+
+# ── Зеркальное правило: расхождение ─────────────────────────────────────────────────
+t("одинаковые числа — расхождения нет",
+  A.answers_diverge([{"sum": 5.0}, {"sum": 5.0}]) is False)
+t("разные числа — расхождение",
+  A.answers_diverge([{"sum": 5.0}, {"sum": 6.0}]) is True)
+t("итог против числа записей — расхождение",
+  A.answers_diverge([{"sum": 5.0}, {"count": 5}]) is True)
+t("сравнивать нечем — расхождение (доказательства совпадения нет)",
+  A.answers_diverge([{"sum": 5.0}, {}]) is True)
+t("один кандидат — сравнивать не с чем, расхождения нет",
+  A.answers_diverge([{"sum": 5.0}]) is False)
+
+print("\n%d прошло, %d упало" % (PASS, len(FAIL)))
+for n in FAIL:
+    print("  ✗", n)
+sys.exit(1 if FAIL else 0)
