@@ -118,6 +118,26 @@ A.VETO_NEEDS_RANK = False
 t("форма выключена — места не смотрятся, решает лидер",
   A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
                     rank_cand=1, rank_leader=7) is False)
+
+# Вторая попытка подтверждения (п. 21): голова общего порядка кандидатов — независимое от
+# словаря подтверждение. Это НЕ послабление: не голова — правило работает как прежде.
+A.VETO_HEAD_WINS = True
+t("выбор возглавляет общий порядок и спора не было — подтверждение есть",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=0, rank_leader=3, undisputed=True) is True)
+t("🔴 спор был — вторая попытка не даётся, даже если выбор голова порядка",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=0, rank_leader=3, undisputed=False) is False)
+t("выбор не голова — вторая попытка не помогает, решает лидер словаря",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=1, rank_leader=3, undisputed=True) is False)
+t("выбора нет в круге кандидатов — второй попытке не на что опереться",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=-1, rank_leader=3, undisputed=True) is False)
+t("знания о сущности нет — вторая попытка не нужна, выбор и так проходит",
+  A.alias_supported(0, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=5, rank_leader=0, undisputed=False) is True)
+A.VETO_HEAD_WINS = os.environ.get("ASK_VETO_HEAD_WINS", "0") == "1"
 A.VETO_NEEDS_RANK = os.environ.get("ASK_VETO_NEEDS_RANK", "1") == "1"
 
 # ── Зеркальное правило: расхождение ─────────────────────────────────────────────────
