@@ -33,7 +33,8 @@ echo.
   /reference:System.Xml.Linq.dll ^
   /reference:System.IO.Compression.dll ^
   /reference:System.IO.Compression.FileSystem.dll ^
-  "%~dp0src\Sys.cs" "%~dp0src\Steps.cs" "%~dp0src\Program.cs"
+  /reference:System.Web.Extensions.dll ^
+  "%~dp0src\Sys.cs" "%~dp0src\Steps.cs" "%~dp0src\Packet.cs" "%~dp0src\Program.cs"
 
 if errorlevel 1 (
   echo.

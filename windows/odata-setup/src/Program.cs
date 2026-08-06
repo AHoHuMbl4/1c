@@ -32,13 +32,18 @@ namespace Oc1c
         public bool Force;
         public bool AutoResume;
         public string LogPath;
+        // Блок 2: агент пакетного транспорта (AGENT_TZ.md)
+        public string PacketSetupPath;      // --packet-setup: packet-setup.json от Ubuntu
+        public string PacketKit;            // --packet-kit: каталог комплекта (по умолчанию — рядом с exe)
+        public string PacketDir;            // --packet-dir: куда ставить (по умолчанию C:\1c\packet)
+        public bool SkipPacket;             // --skip-packet: не ставить агента даже при наличии комплекта
     }
 
     internal static class Program
     {
         const int TOTAL = 13;
-        const int EXIT_OK = 0, EXIT_ARGS = 5, EXIT_NOTADMIN = 2, EXIT_PREREQ = 3, EXIT_STEP = 4,
-                  EXIT_REBOOT = 10, EXIT_VERIFY = 20;
+        internal const int EXIT_OK = 0, EXIT_ARGS = 5, EXIT_NOTADMIN = 2, EXIT_PREREQ = 3, EXIT_STEP = 4,
+                  EXIT_REBOOT = 10, EXIT_VERIFY = 20, EXIT_PACKET = 30;
 
         static int Main(string[] argv)
         {
@@ -497,9 +502,12 @@ namespace Oc1c
                 if (Steps.OpenFirewall(o.OpenFirewall, out detail)) Log.Ok(detail);
             }
 
+            // ---------- блок 2: агент пакетного транспорта (только при наличии комплекта)
+            int packetExit = PacketSteps.Run(o, bref, url);
+
             Report(o, bref, plat, pool, url, scopeKeys);
             ClearResume();
-            return verifyExit;
+            return packetExit != EXIT_OK ? packetExit : verifyExit;
         }
 
         // ================================================================= осознанный выбор администратора
@@ -750,6 +758,7 @@ namespace Oc1c
                     case "--no-backup": o.NoBackup = true; need = false; break;
                     case "--use-default-pool": o.UseDefaultPool = true; need = false; break;
                     case "--auto-resume": o.AutoResume = true; need = false; break;
+                    case "--skip-packet": o.SkipPacket = true; need = false; break;
                     case "--base": o.BasePath = v; break;
                     case "--connstr": o.ConnStr = v; break;
                     case "--site": o.Site = v; break;
@@ -779,6 +788,9 @@ namespace Oc1c
                             break;
                         }
                     case "--log": o.LogPath = v; break;
+                    case "--packet-setup": o.PacketSetupPath = v; break;
+                    case "--packet-kit": o.PacketKit = v; break;
+                    case "--packet-dir": o.PacketDir = v; break;
                     case "--config": break;               // уже обработан
                     default:
                         if (k.StartsWith("--")) return "неизвестный ключ " + k;
@@ -834,6 +846,10 @@ namespace Oc1c
                                 break;
                             }
                         case "no-backup": if (v == "1" || v.ToLowerInvariant() == "true") o.NoBackup = true; break;
+                        case "packet-setup": o.PacketSetupPath = v; break;
+                        case "packet-kit": o.PacketKit = v; break;
+                        case "packet-dir": o.PacketDir = v; break;
+                        case "skip-packet": if (v == "1" || v.ToLowerInvariant() == "true") o.SkipPacket = true; break;
                     }
                 }
                 return null;
@@ -914,6 +930,17 @@ setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая нас�
   --config <файл>          файл настроек ключ=значение (см. setup-1c-odata.example.ini)
   --log <файл>             путь к логу (по умолчанию C:\1c\logs\setup-1c-odata_<дата>.log)
 
+БЛОК 2 — АГЕНТ ПАКЕТНОГО ТРАНСПОРТА (активен, когда рядом с exe лежит комплект
+  packet-setup.json + packet-agent.exe + age.exe + zstd.exe; комплект выдаётся с сервера
+  Ubuntu один раз на базу):
+  --packet-setup <файл>    путь к packet-setup.json (по умолчанию — рядом с exe)
+  --packet-kit <каталог>   каталог комплекта, если он не рядом с exe
+  --packet-dir <путь>      куда ставить агента (по умолчанию C:\1c\packet)
+  --skip-packet            не устанавливать агента, даже если комплект есть
+  Блок: префлайт (исходящий HTTPS на приёмник, место, целостность комплекта) ->
+  установка в C:\1c\packet + agent.ini (права только админам/SYSTEM) -> автозапуск
+  планировщиком -> пробная посылка. Код 0 — только при подтверждённой доставке.
+
 КОДЫ ВОЗВРАТА:
   0   успех
   2   запущено без прав администратора
@@ -922,6 +949,7 @@ setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая нас�
   5   ошибка в аргументах
   10  установлены компоненты IIS — нужна перезагрузка, затем запустить снова
   20  настройка выполнена, но итоговая проверка не прошла
+  30  агент пакетного транспорта: установка или пробная посылка не подтверждена
 ");
         }
     }
