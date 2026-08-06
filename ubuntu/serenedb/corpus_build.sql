@@ -184,6 +184,39 @@ WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_tab
 SELECT 'классификация' AS шаг, (SELECT count(*) FROM tmp3_src) AS сущностей_корпуса,
        (SELECT count(*) FROM tmp3_cls WHERE tbl IN (SELECT tbl FROM tmp3_src)) AS колонок;
 
+-- ============ 2-quater. ЧТО ПЕРЕЧИТЫВАТЬ: ТОЛЬКО ИЗМЕНИВШЕЕСЯ ============
+-- 🔴 Требование владельца 06.08: «обязательно не делать проходы по данным, которые не
+-- изменялись». Здесь оно и решается. [замер 06.08] стоило измениться одной строке — и
+-- сборка перечитывала ВСЕ 554 источника ДВАЖДЫ: один проход строит карту ссылок, другой
+-- собирает текст. 2258 операторов, 806 с, из них 724 с — именно эти два прохода; самый
+-- тяжёлый одиночный запрос всего 8,8 с, то есть дело не в тяжёлом запросе, а в том, что
+-- проходов столько же, сколько источников.
+--
+-- 🔴 ИДТИ ПО-ИЗМЕНИВШЕМУСЯ МОЖНО ТОЛЬКО ПРИ ТРЁХ УСЛОВИЯХ СРАЗУ, иначе полный проход:
+--   * синк сказал, какие таблицы изменились, И признал список полным
+--     (`changed_sources_ok = 1`: при ошибке загрузки хоть одной сущности список неполон);
+--   * боевой корпус не пуст — иначе собирать нечего и не с чем сравнивать;
+--   * карта ссылок сохранена с прошлого раза — иначе имена брать неоткуда.
+-- Ошибка при любом сомнении идёт в сторону лишней работы, а не потери данных.
+CREATE TABLE IF NOT EXISTS search_changed_sources (src_table VARCHAR);
+CREATE TABLE IF NOT EXISTS search_refmap (guid VARCHAR, name VARCHAR, owner VARCHAR);
+
+CREATE OR REPLACE TABLE tmp3_inc AS
+SELECT (coalesce((SELECT v FROM search_quality WHERE k = 'changed_sources_ok'), 0) = 1
+        AND (SELECT count(*) FROM search_corpus) > 0
+        AND (SELECT count(*) FROM search_refmap) > 0) AS on_;
+
+-- Изменившиеся источники — те, что назвал синк, и только из числа собираемых.
+CREATE OR REPLACE TABLE tmp3_changed AS
+SELECT s.tbl FROM tmp3_src s
+WHERE (SELECT on_ FROM tmp3_inc)
+  AND EXISTS (SELECT 1 FROM search_changed_sources c WHERE c.src_table = s.tbl);
+
+SELECT 'по-изменившемуся' AS шаг,
+       (SELECT on_ FROM tmp3_inc) AS можно,
+       (SELECT count(*) FROM tmp3_changed) AS изменилось_источников,
+       (SELECT count(*) FROM tmp3_src) AS всего_источников;
+
 -- ============ 2-бис. КАРТА СУЩНОСТЕЙ: метка и связь шапка↔часть ============
 -- 🔴 `search_tables` (имя сущности для выбора моделью + связь `parent`) ПЕРЕСОБИРАЕТСЯ
 -- ЗДЕСЬ. Прежде её наполнял только питоновский сборщик, а штатный такт не трогал — и она
@@ -412,10 +445,33 @@ FROM rows
 WHERE guid IS NOT NULL AND guid <> '00000000-0000-0000-0000-000000000000'
   AND names IS NOT NULL AND len(names) > 0;
 
+-- 🔴 КАРТА ССЫЛОК ЖИВЁТ МЕЖДУ ТАКТАМИ, А НЕ СТРОИТСЯ ЗАНОВО. Прежде `p_ref` шёл по каждому
+-- источнику-объекту КАЖДЫЙ раз — это половина тех 724 с, что уходили на проходы по
+-- неизменившимся данным. Теперь постоянная `search_refmap` хранит карту, а перечитываются
+-- только изменившиеся владельцы; остальные записи остаются как были.
+--
+-- Имена «до» снимаются ДО обновления: по ним ниже находится, у кого имя поменялось, —
+-- иначе в тексте документа осталось бы старое название контрагента, и это была бы тихая
+-- порча (п. 13), а не экономия.
+CREATE OR REPLACE TABLE tmp3_names_before AS
+SELECT guid, name FROM (
+  SELECT guid, name, owner, count(*) OVER (PARTITION BY owner, guid) AS вх
+  FROM search_refmap)
+QUALIFY row_number() OVER (PARTITION BY guid ORDER BY вх, owner, name) = 1;
+
 SELECT 'EXECUTE p_ref(' || quote_literal(s.tbl) || ');'
 FROM tmp3_src s JOIN tmp3_key k ON k.entity=lower(s.tbl)
 WHERE k.key_cols=['Ref_Key']
+  AND (NOT (SELECT on_ FROM tmp3_inc)
+       OR EXISTS (SELECT 1 FROM tmp3_changed c WHERE c.tbl = s.tbl))
 \gexec
+
+-- Перечитанные владельцы заменяются целиком, прочие остаются. При полном проходе
+-- заменяется вся карта — условие ниже покрывает оба случая одним выражением.
+DELETE FROM search_refmap
+WHERE NOT (SELECT on_ FROM tmp3_inc)
+   OR owner IN (SELECT DISTINCT owner FROM tmp3_refmap_raw);
+INSERT INTO search_refmap SELECT guid, name, owner FROM tmp3_refmap_raw;
 
 -- 🔴 КАРТА ССЫЛОК ОБЯЗАНА БЫТЬ ОДНОЗНАЧНОЙ, ИНАЧЕ КОРПУС НЕ ВОСПРОИЗВОДИМ.
 -- [замер 29.07, УТ] пересборка тех же данных дала 632 683 строки — ровно столько же, —
@@ -442,11 +498,43 @@ CREATE OR REPLACE TABLE tmp3_refmap AS
 SELECT guid, name, owner FROM (
   SELECT guid, name, owner,
          count(*) OVER (PARTITION BY owner, guid) AS вхождений_у_владельца
-  FROM tmp3_refmap_raw)
+  FROM search_refmap)
 QUALIFY row_number() OVER (PARTITION BY guid
         ORDER BY вхождений_у_владельца, owner, name) = 1;
 
 SELECT 'карта ссылок' AS шаг, count(*) AS записей FROM tmp3_refmap;
+
+-- ============ 3-бис. У КОГО ПОМЕНЯЛОСЬ ИМЯ ============
+-- 🔴 ЗДЕСЬ ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ЭКОНОМИЯ МОГЛА БЫ ИСПОРТИТЬ ДАННЫЕ. Имя ссылки попадает
+-- В ТЕКСТ строки («Контрагент: Ромашка»), поэтому переименование записи меняет текст у
+-- всех, кто на неё ссылается, — а их собственные таблицы при этом не менялись. Пропусти
+-- мы их, в корпусе осталось бы старое название при живом ключе: молчаливое расхождение
+-- текста и данных.
+--
+-- Ищем по СТАРОМУ имени в `refs` — там лежат ровно пары «реквизит: имя», по которым текст
+-- и собран. Это ОДИН проход по корпусу, а не проход по каждому источнику: разница между
+-- «прочитать одну таблицу» и «прочитать пятьсот».
+CREATE OR REPLACE TABLE tmp3_renamed AS
+SELECT b.guid, b.name AS old_name
+FROM tmp3_names_before b JOIN tmp3_refmap n USING (guid)
+WHERE (SELECT on_ FROM tmp3_inc) AND n.name IS DISTINCT FROM b.name;
+
+-- 🔴 ПРЕДЕЛ ОБЯЗАТЕЛЕН, И ОН ЖЕ ЗАЩИТА. Поиск по многим именам сразу стоит дороже полной
+-- пересборки, а массовое переименование — это и есть случай, когда собрать заново честнее.
+-- Порог не про правильность: при его превышении делается БОЛЬШЕ работы, а не меньше.
+CREATE OR REPLACE TABLE tmp3_build AS
+SELECT tbl FROM tmp3_src
+WHERE NOT (SELECT on_ FROM tmp3_inc)
+   OR (SELECT count(*) FROM tmp3_renamed) > 200
+   OR tbl IN (SELECT tbl FROM tmp3_changed)
+   OR tbl IN (SELECT DISTINCT c.src_table FROM search_corpus c
+                WHERE EXISTS (SELECT 1 FROM tmp3_renamed r
+                              WHERE r.old_name <> '' AND contains(c.refs, r.old_name)));
+
+SELECT 'к пересборке' AS шаг,
+       (SELECT count(*) FROM tmp3_renamed) AS переименовано,
+       (SELECT count(*) FROM tmp3_build) AS источников,
+       (SELECT count(*) FROM tmp3_src) AS всего;
 
 -- ============ 4. ДАТА ЗАПИСИ ============
 CREATE OR REPLACE TABLE tmp3_datecol AS
@@ -726,26 +814,31 @@ FROM g LEFT JOIN keyed k USING (rid);
 -- останов включён обратно сразу после цикла, чтобы настоящие сбои (метаданные, права)
 -- по-прежнему роняли такт.
 \set ON_ERROR_STOP off
-SELECT 'EXECUTE p_doc(' || quote_literal(tbl) || ');' FROM tmp3_src
+-- 🔴 ИДЁМ ПО `tmp3_build`, А НЕ ПО `tmp3_src`: перечитывается только изменившееся и то,
+-- у чего поменялось имя ссылки. Слияние к частичному набору готово по построению — оно
+-- удаляет строки только у сущностей, которые в этот раз собрались (`corpus_merge.sql`).
+SELECT 'EXECUTE p_doc(' || quote_literal(tbl) || ');' FROM tmp3_build
 \gexec
 \set ON_ERROR_STOP on
 
 -- Второй заход: то, что не собралось, — упрощённым вариантом.
 \set ON_ERROR_STOP off
 SELECT 'EXECUTE p_doc_plain(' || quote_literal(tbl) || ');'
-FROM tmp3_src s
+FROM tmp3_build s
 WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = s.tbl)
 \gexec
 \set ON_ERROR_STOP on
 
--- Чем кончился перебор — ЧИСЛАМИ В БАЗУ, а не в поток.
+-- Чем кончился перебор — ЧИСЛАМИ В БАЗУ, а не в поток. Считается по тому, что СОБИРАЛИ:
+-- иначе при частичной сборке все непересобиравшиеся сущности выглядели бы упавшими.
 DELETE FROM search_quality WHERE k IN ('build_degraded', 'build_failed');
 INSERT INTO search_quality
 SELECT 'build_failed', count(*), 'сущностей не собралось ни одним вариантом'
-FROM tmp3_src s WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = s.tbl);
+FROM tmp3_build s WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = s.tbl);
 
 SELECT 'сборка сущностей' AS шаг,
-       (SELECT count(*) FROM tmp3_src) AS всего,
+       (SELECT count(*) FROM tmp3_build) AS пересобирали,
+       (SELECT count(*) FROM tmp3_src) AS всего_источников,
        (SELECT count(DISTINCT src_table) FROM tmp3_corpus) AS собрано,
        (SELECT v FROM search_quality WHERE k = 'build_failed') AS не_собралось;
 
@@ -776,8 +869,12 @@ SELECT 'величин в строке' AS что,
        count(*) FILTER (WHERE nums IS NULL OR len(map_keys(nums)) = 0) AS строк_без_величин
 FROM tmp3_corpus;
 
+-- 🔴 СРАВНИВАЕМ ТОЛЬКО ТО, ЧТО ПЕРЕСОБИРАЛИ. При частичной сборке `tmp3_corpus` содержит
+-- лишь изменившиеся сущности, и без этого условия «нет в новой» показывало бы весь
+-- остальной корпус как пропавший — число, которое пугает и ничего не значит.
 SELECT 'нет в новой' AS сторона, count(*) FROM search_corpus c
-  WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table=c.src_table AND t.row_key=c.row_key)
+  WHERE c.src_table IN (SELECT tbl FROM tmp3_build)
+    AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table=c.src_table AND t.row_key=c.row_key)
 UNION ALL
 SELECT 'нет в боевой', count(*) FROM tmp3_corpus t
   WHERE NOT EXISTS (SELECT 1 FROM search_corpus c WHERE c.src_table=t.src_table AND c.row_key=t.row_key);

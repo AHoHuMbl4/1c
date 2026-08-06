@@ -348,6 +348,12 @@ def main():
 
     ok = empty = err = touched = unchanged = skipped_owner = skipped_service = 0
     seen_rows = {}                              # фактическое число строк по каждой сущности
+    # 🔴 КАКИЕ ТАБЛИЦЫ ВИТРИНЫ ДЕЙСТВИТЕЛЬНО ИЗМЕНИЛИСЬ. Нужно сборке корпуса: без этого
+    # списка она перечитывает ВСЕ источники, стоит измениться хоть одной строке —
+    # [замер 06.08] 806 с и 2258 операторов, из них 724 с это два прохода по всем 554
+    # источникам (карта ссылок и сборка текста). Требование владельца 06.08: «обязательно
+    # не делать проходы по данным, которые не изменялись».
+    changed_tables = set()
     # 🔴 ЧЕЙ ВЛАДЕЛЕЦ НЕ МЕНЯЛСЯ, ТОТ И САМ НЕ МЕНЯЛСЯ. У табличной части своей версии нет,
     # поэтому она читалась целиком каждый такт: [замер 05.08] 272 источника, 472 с, из них
     # 313 с — одна `Document_ПланПродаж_Товары`. Но её строки принадлежат документу, и
@@ -407,7 +413,9 @@ def main():
                     # «источник не менялся», и «источник забыли», неотличимо (п. 13).
                     changed = r.get("changed", r["rows"])
                     touched += changed
-                    if not changed:
+                    if changed:
+                        changed_tables.add(r["table"])
+                    else:
                         unchanged += 1
                         quiet.add(es)           # его части читать незачем
                     print("  %s: %s строк -> %s (полная, %ss%s)"
@@ -417,6 +425,7 @@ def main():
                 ok += 1
                 if r.get("changed") or r.get("gone"):
                     touched += r.get("changed", 0) + r.get("gone", 0)
+                    changed_tables.add(r["table"])
                     print(f"  {es}: дельта +{r.get('changed',0)}/-{r.get('gone',0)} "
                           f"({r['sec']}s)")
                 else:
@@ -431,6 +440,30 @@ def main():
           f"изменённых строк {touched}; источников без изменений {unchanged} "
           f"(из них не читали вовсе, потому что не менялся владелец: {skipped_owner}); "
           f"не грузим по решению: {skipped_service}")
+
+    # 🔴 СПИСОК ИЗМЕНИВШИХСЯ ТАБЛИЦ — ДЛЯ СБОРКИ КОРПУСА. Пишется ВСЕГДА, в том числе
+    # пустым: «ничего не менялось» и «мы не знаем, что менялось» — разные вещи, и сборка
+    # обязана их различать. Признак достоверности — отдельной строкой: если хоть одна
+    # сущность упала с ошибкой, список неполон, и сборка обязана вернуться к полному
+    # проходу. Ошибка только в сторону лишней работы.
+    try:
+        vals = ",".join("(%s)" % ("'" + t.replace("'", "''") + "'")
+                        for t in sorted(changed_tables))
+        sql = ("CREATE TABLE IF NOT EXISTS search_changed_sources (src_table VARCHAR);\n"
+               "GRANT SELECT ON search_changed_sources TO %s;\n"
+               "DELETE FROM search_changed_sources;\n" % _ro_role())
+        if vals:
+            sql += "INSERT INTO search_changed_sources SELECT * FROM (VALUES %s) AS s(t);\n" % vals
+        sql += ("DELETE FROM search_quality WHERE k = 'changed_sources_ok';\n"
+                "INSERT INTO search_quality VALUES ('changed_sources_ok', %d, "
+                "'список изменившихся таблиц полон: 1 — да, 0 — были ошибки загрузки');\n"
+                % (0 if err else 1))
+        subprocess.run(["psql", dsn, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+                       input=sql, capture_output=True, text=True, check=True)
+        print("изменились таблицы витрины: %d%s"
+              % (len(changed_tables), "" if not err else " (список неполон: были ошибки)"))
+    except Exception as e:                      # noqa: BLE001
+        print(f"⚠ список изменившихся таблиц не записан: {str(e)[:120]}")
 
     # 🔴 ФАКТИЧЕСКОЕ ЧИСЛО СТРОК — В ПРОФИЛЬ, КАЖДЫЙ ТАКТ. Перепись больше не спрашивает
     # `$count` у тех, кого мы грузим, поэтому число обязан вернуть тот, кто их загрузил.
