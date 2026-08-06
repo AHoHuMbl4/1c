@@ -53,6 +53,45 @@ _ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 _LOCK = threading.Lock()
 
 BASES: dict = {}
+_BASES_MTIME: float | None = None
+
+
+def _load_bases() -> bool:
+    """Прочитать файл баз в BASES; False — файл не читается или пуст."""
+    global _BASES_MTIME
+    try:
+        with open(PACKET_BASES, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict) or not data:
+        return False
+    BASES.clear()
+    BASES.update(data)
+    try:
+        _BASES_MTIME = os.path.getmtime(PACKET_BASES)
+    except OSError:
+        _BASES_MTIME = None
+    return True
+
+
+def _reload_bases_if_changed() -> None:
+    """Перечитать файл баз, если его mtime изменился с прошлого чтения.
+
+    Зовётся на /agent/config: config-builder (packet_config.py) переписывает
+    запись базы атомарно, и без перечитывания агент получал бы заставший конфиг
+    до перезапуска приёмника. Побочное следствие, принятое осознанно: токены и
+    identity на этом пути тоже становятся свежими без перезапуска. Битый или
+    полупустой файл игнорируется — остаётся прежняя версия (fail-stale, а не
+    fail-open и не падение работающего приёмника)."""
+    if _BASES_MTIME is None:
+        return
+    try:
+        mt = os.path.getmtime(PACKET_BASES)
+    except OSError:
+        return
+    if mt != _BASES_MTIME:
+        _load_bases()
 
 
 def init() -> bool:
@@ -63,17 +102,9 @@ def init() -> bool:
             "не может проверить ни один токен. Задайте PACKET_BASES.\n"
         )
         return False
-    try:
-        with open(PACKET_BASES, encoding="utf-8") as f:
-            data = json.load(f)
-    except (OSError, ValueError) as e:
-        sys.stderr.write(f"FATAL: файл баз {PACKET_BASES} не читается: {e}\n")
+    if not _load_bases():
+        sys.stderr.write(f"FATAL: файл баз {PACKET_BASES} не читается или пуст\n")
         return False
-    if not isinstance(data, dict) or not data:
-        sys.stderr.write(f"FATAL: файл баз {PACKET_BASES} пуст или не JSON-объект\n")
-        return False
-    BASES.clear()
-    BASES.update(data)
     os.makedirs(os.path.join(PACKET_ROOT, "inbox"), exist_ok=True)
     return True
 
@@ -422,6 +453,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self._err(401, "unauthorized")
             return self._get_status(base_id, pkg_id)
         if segs == ["v1", "agent", "config"]:
+            # Конфиг отдаём по свежей записи базы (перечитывание по mtime —
+            # см. _reload_bases_if_changed); токены при этом тоже свежие.
+            _reload_bases_if_changed()
             qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
             base_id = qs.get("base_id", [""])[0]
             if not _valid_id(base_id):

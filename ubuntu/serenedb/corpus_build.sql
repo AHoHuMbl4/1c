@@ -28,11 +28,27 @@
 -- Отсюда требования, которых у ночного прогона не было: замок от наложения тактов,
 -- докатка прерванного и цена такта, не зависящая от размера базы, а только от изменений.
 
--- ============ 1. $metadata: движок сам ходит в 1С и сам разбирает XML ============
+-- ============ 1. $metadata: снимок из пакета (packet_metadata), иначе шлюз ============
+-- Б1 (PLAN_MVP_PACKET_TRANSPORT §13): при пакетном транспорте движок до 1С не ходит —
+-- $metadata приезжает в пакете и лежит в packet_metadata (пишет packet_apply). Источник
+-- выбирается по наличию таблицы; ветки UNION ALL со стражами — когда есть снимок,
+-- шлюз не спрашивается вовсе. Таблица есть, но пуста → обе ветки пусты → стоп на
+-- проверке полноты ниже (пакетный контур без $metadata — поломка, а не повод идти
+-- в обход на шлюз, которого в том контуре может не быть).
+CREATE OR REPLACE TEMP TABLE tmp3_meta AS
+SELECT content AS xml FROM packet_metadata
+WHERE EXISTS (SELECT 1 FROM duckdb_tables()
+              WHERE table_name = 'packet_metadata' AND database_name = current_database())
+  AND fetched_ts = (SELECT max(fetched_ts) FROM packet_metadata)
+UNION ALL
+SELECT read_text(:'gate' || '/$metadata')
+WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables()
+                  WHERE table_name = 'packet_metadata' AND database_name = current_database());
+
 CREATE OR REPLACE TABLE tmp3_ent AS
 SELECT lower(regexp_extract(b,'Name="([^"]+)"',1)) AS entity, b AS body
-FROM (SELECT unnest(regexp_extract_all(content,'(?s)<EntityType\s.*?</EntityType>')) AS b
-      FROM read_text(:'gate' || '/$metadata'));
+FROM (SELECT unnest(regexp_extract_all(xml,'(?s)<EntityType\s.*?</EntityType>')) AS b
+      FROM tmp3_meta);
 
 CREATE OR REPLACE TABLE tmp3_prop AS
 SELECT entity, x.prop, x.edm FROM (
