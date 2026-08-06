@@ -1,0 +1,12 @@
+# fail2ban на msk-1-vm-uqv5: баны через pf (anchor "f2b/*" в /etc/pf.conf).
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+banaction = pf
+backend = auto
+
+[sshd]
+enabled = true
+port    = ssh
+logpath = /var/log/auth.log

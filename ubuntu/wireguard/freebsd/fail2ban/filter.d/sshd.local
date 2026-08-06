@@ -1,0 +1,4 @@
+# FreeBSD 16: OpenSSH логирует как sshd-session (OpenSSH ≥9.8 split-binary).
+# Стоковый _daemon=sshd не матчит ни строки (замер 06.08: 0 из 7706).
+[Definition]
+_daemon = sshd(?:-session)?

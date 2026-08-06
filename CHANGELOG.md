@@ -10,6 +10,32 @@
 
 ---
 
+## 06.08: агент Windows `packet-agent` (C#) + golden-проба формата `[код]`
+
+- `windows/packet-agent/src/PacketAgent.cs` (2157 строк, C# 5, csc .NET 4, без NuGet —
+  тот же инструментарий, что setup): CLI по AGENT_TZ §7 (`--version` / `--smoke` =
+  kind=meta с настоящим `$metadata` / демон тактов / single-instance named mutex,
+  второй экземпляр — код 0 для watchdog). Такт: `GET /agent/config` → проба версий
+  или контент-отпечаток (К1) → дельта/полное чтение с самонастройкой страницы (К6) →
+  чанки строго по сущностям (заголовок в каждой части) → zstd+age внешними exe →
+  PUT manifest/chunks → `status` → **индекс версий только после verified** (К2, план
+  обновления в `queue/<pkg>/plan.json` до отправки). `stale_seq` → seq+1M и resync.
+- Формулы отпечатков зафиксированы в контракте §5 (`version_fingerprint`,
+  `content_fingerprint`); §6 — чанк не смешивает сущности, заголовок в каждой части
+  (под apply UNION ALL); §5 — поле `key` сущности (QUALIFY-дедуп apply).
+- CSV — байт-в-байт контракт: `PyFloat` (repr CPython), `PyContainerStr`, `safe_col`
+  по кодпоинтам Unicode, UTF-8 без BOM.
+- **Golden-проба** `work/packet/golden/`: 3 живые фикстуры OData стенда + синтетика
+  (кавычки/переводы строк/float-формы/emoji — на живой базе сущностей с кавычками
+  нет, поиск по 4585 дал 0), `make_reference.py` гоняет настоящий `poc_load_entity`
+  по снимку `metadata.xml.zst` (20 МБ → 0,5), `probe.cmd` — `fc /b` на Windows.
+  `[замер]` эталоны 4/4 регенерируются побайтно из сжатого снимка.
+- ⚠ Не компилировался (нет csc/mono) — статический разбор (скобки, отсутствие C# 6+,
+  уникальность классов); первая сборка `build.cmd` и `probe.cmd` — на Windows,
+  зелёная проба — условие выката.
+
+---
+
 ## 06.08: Б1 закрыт — `corpus_build` читает `$metadata` двухрежимно `[код]`
 
 - `corpus_build.sql:31-52`: источник `$metadata` — снимок из `packet_metadata` (пишет
@@ -95,6 +121,20 @@
 - ⚠ Честная оговорка: на этой машине нет csc/mono — компиляция проверяется сборкой
   `build.cmd` на Windows; живой прогон с комплектом и smoke — отдельный шаг.
   Сам `packet-agent.exe` и генератор комплекта на Ubuntu — чужие треки, не входили.
+
+---
+
+## 06.08: fail2ban на FreeBSD (защита sshd опорного узла) `[замер]`
+
+- `py312-fail2ban` + pf: `/etc/pf.conf` = якорь `f2b/*` + `pass all` (фильтрации
+  кроме банов нет — локаут невозможен по построению). Jail `sshd`, бан 1h/10m/5
+  в таблицу `f2b-sshd`. Автозапуск `pf_enable`+`fail2ban_enable`.
+- 🔴 `[замер]` **стоковый фильтр молчал полностью**: FreeBSD 16 логирует sshd как
+  `sshd-session` (OpenSSH ≥9.8), `_daemon=sshd` не совпал ни разу (0/7706).
+  Починено `filter.d/sshd.local` (`_daemon = sshd(?:-session)?` → 3833 совпадения).
+- Проверки живьём: свежий фейл засчитан (`Currently failed: 1`), `banip`/`unbanip`
+  ходит в pf-таблицу, ssh-доступ после включения pf цел. Конфиги — в репозитории
+  `ubuntu/wireguard/freebsd/fail2ban/` + `pf.conf`.
 
 ---
 

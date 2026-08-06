@@ -84,6 +84,19 @@ Windows (TLS) → https://1c-gate.timpul.ru:443  [DNS → 201.34.130.46]
   паттерн писать так, чтобы не совпадал с собственной командной строкой, или
   убивать по pid (`HOW_NOT_TO`).
 
+## Защита узла: fail2ban (поднят 06.08)
+
+- `py312-fail2ban` + **pf** (был не загружен): `/etc/pf.conf` = `anchor "f2b/*"` +
+  `pass all` (фильтрации кроме банов нет, локаута быть не может по построению).
+- Jail `sshd` → `/var/log/auth.log`, бан в таблицу pf `f2b-sshd` (1h/10m/5).
+- 🔴 **Ловушка FreeBSD 16** `[замер]`: OpenSSH ≥9.8 логирует как `sshd-session`,
+  стоковый фильтр (`_daemon = sshd`) не матчил **0 из 7706 строк** — fail2ban
+  работал вхолостую. Чинится `filter.d/sshd.local` с `_daemon = sshd(?:-session)?`
+  (после правки 3833 совпадения). Проверено живьём: свежий фейл засчитывается
+  (`Currently failed: 1`), бан/анбан в pf-таблице ходит (`banip 203.0.113.7`).
+- Автозапуск: `pf_enable`, `fail2ban_enable` в `rc.conf`. Конфиги —
+  [`freebsd/fail2ban/`](freebsd/fail2ban/) + `freebsd/pf.conf`.
+
 ## Доступ сессии
 
 - FreeBSD root: ssh-ключ `~/.ssh-bridge/fbsd_ed25519` (пароль удалён 06.08).
