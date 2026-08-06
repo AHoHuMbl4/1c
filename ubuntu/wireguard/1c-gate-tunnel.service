@@ -1,0 +1,22 @@
+[Unit]
+Description=Обратный туннель приёмника: FreeBSD 127.0.0.1:6022 → packet_server 127.0.0.1:6090
+# Транспорт 1c-gate.timpul.ru → Ubuntu. WireGuard замерен нерабочим 06.08
+# (возвратный UDP FreeBSD→РФ-сервер не доходит), поэтому TCP: ssh -R,
+# инициатор — Ubuntu, входящих портов не нужно. ubuntu/wireguard/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -N -T \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -i /etc/ssh/gate-tunnel.ed25519 \
+    -R 127.0.0.1:6022:127.0.0.1:6090 \
+    gate-tunnel@201.34.130.46
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

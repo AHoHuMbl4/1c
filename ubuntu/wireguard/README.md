@@ -1,78 +1,95 @@
-# WireGuard-мост Ubuntu ↔ FreeBSD
+# Канал Ubuntu ↔ FreeBSD: приёмник `1c-gate.timpul.ru`
 
-Мост между этим сервером (витрина, SereneDB) и FreeBSD `201.34.130.46`
-(`msk-1-vm-uqv5`, FreeBSD 16.0-CURRENT) — опорный узел с белым IP для будущего
-канала с Windows на проде (план `docs/PLAN_MVP_PACKET_TRANSPORT.md`).
+Связь этого сервера (витрина, SereneDB, packet_server) с FreeBSD `201.34.130.46`
+(`msk-1-vm-uqv5`, FreeBSD 16.0-CURRENT) — опорным узлом с белым IP и доменом
+приёмника пакетного транспорта (`docs/PLAN_MVP_PACKET_TRANSPORT.md`).
 
-## Топология (замерено 06.08)
+## Транспорт: SSH reverse-туннель (TCP). 🔴 WireGuard замерен нерабочим 06.08
 
-- **FreeBSD** — белый IP прямо на `vtnet0`, файрволов нет. Сторона с
-  `ListenPort = 51820/udp`. Адрес в туннеле: **10.77.0.1**.
-- **Ubuntu (этот сервер)** — белого IP НЕТ: `eth0` = `192.168.56.42/24`,
-  исходящий NAT провайдера (`167.235.37.94`). Поэтому Ubuntu — всегда
-  инициатор, `PersistentKeepalive = 25` держит NAT-отображение.
-  Адрес в туннеле: **10.77.0.2**.
-- Туннельная подсеть: **10.77.0.0/24** (не пересекается с `192.168.56.0/24`).
+`[замер 06.08]` **возвратный UDP от FreeBSD до этого сервера не доходит вовсе** —
+ни WireGuard-хендшейки (инициации приходят, ответы уходят с FreeBSD и не доезжают),
+ни обычный UDP-эхо-ответ (проба plain-text: запрос дошёл, ответ нет, 2 порта).
+Исходящий UDP Ubuntu→FreeBSD при этом ходит (3/3), DNS-ответы от 8.8.8.8 доезжают —
+то есть режется именно путь «Европа → РФ-сервер» для UDP (гипотеза владельца с
+первого сообщения — подтвердилась). TCP по тому же пути чистый в обе стороны
+(SSH и HTTPS замерены). Вывод: WireGuard/AmneziaWG/udp2raw-in-UDP здесь мёртвы —
+обфускация не лечит потерю ВСЕХ возвратных UDP-дейтаграмм. Конфиги WG сохранены
+(`freebsd/wg0.conf.sample`, `setup-ubuntu-wg.sh`) на случай разблокировки; на
+FreeBSD `wireguard_enable=NO`, юнит `wg-quick@wg0` на Ubuntu можно остановить.
 
-## Проверка «не режет ли провайдер UDP» [замер 06.08]
+**Рабочая схема (замерена 06.08 end-to-end, HTTP 200, 0,34 с):**
 
-- Ubuntu → FreeBSD `51820/udp`: **3 пакета из 3 дошли** (nc-слушатель).
-- FreeBSD → Ubuntu `167.235.37.94:51820/udp`: **0 из 3** — входящий UDP на
-  NAT-провайдера не транслируется. UDP сам по себе не блокируется ни одной
-  стороной; заблокирован именно вход на этот сервер.
-- Вывод: WireGuard рабочий, но только с инициацией от Ubuntu. Это же значит,
-  что предположение плана «белый IP только у Ubuntu» неверно — белый IP есть
-  у FreeBSD, и для Windows за NAT узлом встречи будет именно он.
+```
+Windows (TLS) → https://1c-gate.timpul.ru:443  [DNS → 201.34.130.46]
+  → HAProxy на FreeBSD — TLS-терминация (Let's Encrypt, lego)
+  → 127.0.0.1:6022 — SSH reverse-туннель (ssh -R, инициатор Ubuntu, TCP/22)
+  → packet_server на Ubuntu 127.0.0.1:6090 (наружу не светит)
+```
+
+Входящих портов ни на Ubuntu, ни на Windows не нужно: обе стороны только
+инициируют исходящие соединения. Клиентский IP доезжает `X-Forwarded-For`
+(замер: `xff=167.235.37.94` в ответе пробного бэкенда). Плечо FreeBSD→Ubuntu
+шифрует SSH, плечо Windows→FreeBSD — TLS; сквозная шифрованность сохраняется.
+
+🔴 **Порт приёмника — 6090, не 6021:** `127.0.0.1:6021` занят шлюзом второй базы
+(`1c-odata-gateway@ut`, его `/health` отвечает `odata-gateway-ok`). При выкате
+`packet_server` задавать `PACKET_LISTEN=127.0.0.1:6090` (дефолт в коде —
+соседняя сессия).
 
 ## Состояние сторон
 
-**FreeBSD — ✅ поднято (06.08):**
-- `wireguard-tools` из pkg; конфиг `/usr/local/etc/wireguard/wg0.conf` (600);
-- автозапуск: `rc.conf` → `wireguard_enable=YES`, `wireguard_interfaces=wg0`;
-- ключи в `/usr/local/etc/wireguard/` (600), публичный:
-  `I4aSAqchQjUW7O4IC6ffrsN289r43U6Sjnfl5lKNB0E=`.
-
-**Ubuntu — ждёт root-шаг владельца:**
-```
-sudo sh ubuntu/wireguard/setup-ubuntu-wg.sh
-```
-Скрипт ставит `wireguard-tools`, пишет `/etc/wireguard/wg0.conf` (приватный
-ключ из `/home/claudedev/.ssh-bridge/wg-ubuntu-private.key`, в git его нет),
-включает `wg-quick@wg0` и пингует `10.77.0.1`.
-
-Доступ сессии к FreeBSD: ssh-ключ `~/.ssh-bridge/fbsd_ed25519`
-(парольный вход после установки ключа не нужен).
-
-## Релей `1c-gate.timpul.ru` (поднят 06.08, вторая половина дня)
-
-`[решение]` владельца: домен приёмника смотрит на FreeBSD; FreeBSD — **бесшовный
-мост**: Windows в установщике знает только `https://1c-gate.timpul.ru`, а принимает
-соединения Ubuntu. Цепочка:
-
-```
-Windows (TLS) → 1c-gate.timpul.ru:443 [DNS → 201.34.130.46]
-  → HAProxy на FreeBSD — TLS-терминация (Let's Encrypt, lego)
-  → по туннелю wg0 → packet_server на Ubuntu 10.77.0.2:6021 (наружу не светит)
-```
-
-- **TLS терминируется на FreeBSD** (LE-сертификат, `lego` + webroot HTTP-01 через
-  тот же HAProxy :80; продление — `periodic weekly 604.lego`, deploy-hook собирает
-  pem и делает `service haproxy reload`). Плечо FreeBSD→Ubuntu шифрует сам
-  WireGuard, поэтому сквозная шифрованность пути сохраняется.
-- **Клиентский IP доезжает** заголовком `X-Forwarded-For` (`option forwardfor`) —
-  замер 06.08: проба вернула реальный адрес клиента.
-- **Бэкенд с проверкой живости**: `httpchk GET /health` на `10.77.0.2:6021`
-  (ждёт 200; `/health` у packet_server без авторизации). Пока Ubuntu-сторона не
-  поднята, релей отвечает **503 — это замеренное ожидаемое состояние**, не дефект.
-- Таймауты 300 с под чанки до 64 МБ (контракт К8).
-- Конфиги FreeBSD версионируются в [`freebsd/`](freebsd/): `haproxy.conf`,
-  `lego.yml`, `lego.sh`, `deploy-certs.sh`, `rc.d/acmewww` (webroot-сервер
-  HTTP-01 на 127.0.0.1:8402), сниппеты `rc.conf`/`periodic.conf`, `wg0.conf.sample`
+**FreeBSD — ✅ поднята целиком (06.08):**
+- HAProxy 3.4: `:443` TLS → `127.0.0.1:6022` (`httpchk GET /health` ждёт 200);
+  `:80` — ACME HTTP-01 (webroot через `acmewww` на 127.0.0.1:8402) + редирект.
+  Пока туннель/приёмник не подняты — 503, это ожидаемое состояние.
+- Сертификат LE `CN=1c-gate.timpul.ru` выпущен (`lego`); продление —
+  `periodic weekly 604.lego` + `deploy-certs.sh` (pem → `haproxy reload`).
+- Юзер `gate-tunnel` (nologin): ssh-ключ с `restrict,port-forwarding,
+  permitlisten="127.0.0.1:6022"` — ключ только для проброса, шелла нет.
+- Автозапуск: `rc.conf` — `haproxy_enable`, `acmewww_enable` (wireguard — NO).
+- Конфиги версионируются в [`freebsd/`](freebsd/): `haproxy.conf`, `lego.yml`,
+  `lego.sh`, `deploy-certs.sh`, `rc.d/acmewww`, сниппеты, `wg0.conf.sample`
   (без ключей — ключи только на серверах).
-- Автозапуск на FreeBSD: `rc.conf` — `wireguard_enable`, `haproxy_enable`,
-  `acmewww_enable`; продление серта — `periodic.conf` (сниппеты в `freebsd/`).
-- ⚠️ Ловушка ssh: `service … start` без редиректа держит канал открытым
-  (daemon наследует stdout) — сессия виснет. Звать с `</dev/null >/dev/null 2>&1 &`.
-  Две причины починены: `daemon` в haproxy.conf (без него foreground, pidfile не
-  пишется, rc-status врёт) и `redirect … if !acme` (redirect обрабатывается РАНЬШЕ
-  use_backend — ACME-запросы улетали на https и HTTP-01 бы не прошёл).
+
+**Ubuntu — root-шаг владельца (постоянный туннель):**
+```
+sudo sh ubuntu/wireguard/setup-ubuntu-tunnel.sh
+```
+Ставит `/etc/ssh/gate-tunnel.ed25519` (600) + юнит `1c-gate-tunnel.service`
+(ssh -R, `Restart=always`), гасит ручной туннель пробы, включает и стартует.
+После этого сессия может перезапускать юнит сама (`systemctl restart
+1c-gate-tunnel` — правило polkit на `1c-*`).
+
+Затем — выкат `packet_server` с `PACKET_LISTEN=127.0.0.1:6090` (компонент
+соседней сессии): health-чек HAProxy позеленеет, цепочка замкнётся.
+
+## Замеры 06.08
+
+| Проверка | Итог |
+|---|---|
+| UDP Ubuntu → FreeBSD 51820 | 3/3 дошли |
+| UDP FreeBSD → Ubuntu (NAT) | 0/3 — нет прямого входа |
+| WG-хендшейк | инициации доходят, ответы уходят с FreeBSD и НЕ доезжают |
+| UDP-эхо (plain text, 2 порта) | запрос дошёл, ответ не дошёл — возвратный UDP мёртв |
+| TCP Ubuntu ↔ FreeBSD | чист в обе стороны (SSH, HTTPS) |
+| Сквозная цепочка домен → HAProxy → туннель → :6090 | **HTTP 200, 0,34 с**, `X-Forwarded-For` доезжает |
+
+## Ловушки (замеры 06.08)
+
+- `service … start` по ssh без редиректа держит канал (daemon наследует stdout) —
+  звать с `</dev/null >/dev/null 2>&1 &`.
+- HAProxy без `daemon` в конфиге — foreground: pidfile не пишется, rc-status врёт.
+- `redirect` в HAProxy обрабатывается РАНЬШЕ `use_backend` — ACME-путь чинится
+  условием `if !acme`, иначе HTTP-01 никогда не дойдёт до webroot.
+- `pkill -f <строка>` убивает и саму команду, если строка есть в её тексте —
+  паттерн писать так, чтобы не совпадал с собственной командной строкой, или
+  убивать по pid (`HOW_NOT_TO`).
+
+## Доступ сессии
+
+- FreeBSD root: ssh-ключ `~/.ssh-bridge/fbsd_ed25519` (пароль удалён 06.08).
+- Ключ туннеля: `~/.ssh-bridge/gate-tunnel.ed25519` → `/etc/ssh/` (скриптом);
+  на FreeBSD — только `permitlisten 127.0.0.1:6022`.
+- Приватный WG-ключ Ubuntu: `~/.ssh-bridge/wg-ubuntu-private.key` — лежит на
+  случай разблокировки UDP; `setup-ubuntu-wg.sh` поднимал `wg-quick@wg0`
+  (10.77.0.2, работает только исходящее плечо).

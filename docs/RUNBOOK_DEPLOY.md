@@ -40,14 +40,14 @@ Ubuntu LXC (наш, всё loopback):
 | — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` | root | алерт владельцу в Telegram при падении |
 | — | `nightly-eval.timer` | `nightly-eval.sh` | root | ⛔ **погашен 29.07**: гонял евал выведенного слоя braine и слал алерт владельцу **с боевого токена бота**. Поднимать не надо |
 
-**Мост наружу (06.08):** WireGuard `wg0` (`10.77.0.2` ↔ FreeBSD `201.34.130.46`,
-`10.77.0.1`, `:51820/udp`) — опорный узел с белым IP для пакетного транспорта с
-Windows за NAT. На FreeBSD же — **релей приёмника**: `1c-gate.timpul.ru:443`
-(HAProxy, TLS-терминация LE) → `packet_server` на `10.77.0.2:6021` по туннелю,
-наружу приёмник не светит. Ubuntu — инициатор туннеля: входящий UDP на этот LXC
-снаружи не транслируется ([замер 06.08], UDP сам не блокируется). Установка
-Ubuntu-стороны — один root-шаг: `ubuntu/wireguard/setup-ubuntu-wg.sh`; устройство,
-конфиги FreeBSD и замеры — `ubuntu/wireguard/README.md` + `ubuntu/wireguard/freebsd/`.
+**Мост наружу (06.08):** релей приёмника `1c-gate.timpul.ru:443` (HAProxy на
+FreeBSD `201.34.130.46`, TLS-терминация LE) → `127.0.0.1:6022` → **SSH
+reverse-туннель** (юнит `1c-gate-tunnel`, инициатор Ubuntu) → `packet_server`
+на `127.0.0.1:6090`; наружу приёмник не светит. 🔴 WireGuard замерен нерабочим
+06.08 (возвратный UDP Европа→РФ мёртв — ни WG, ни plain-эхо; TCP чист).
+Установка Ubuntu-стороны — один root-шаг: `ubuntu/wireguard/setup-ubuntu-tunnel.sh`;
+устройство, конфиги FreeBSD и замеры — `ubuntu/wireguard/README.md` +
+`ubuntu/wireguard/freebsd/`. 🔴 Порт приёмника 6090: :6021 занят шлюзом второй базы.
 
 ### Вторая база 1С (стенд, состояние на 02.08)
 
