@@ -51,7 +51,10 @@ namespace Oc1c
                 return "packet-setup.json: base_id пуст или не вида [a-z0-9_-]+ («" + p.BaseId + "»)";
             if (string.IsNullOrEmpty(p.Token))
                 return "packet-setup.json: token пуст — комплект не от этой установки";
-            if (string.IsNullOrEmpty(p.RecipientPubkey) || !p.RecipientPubkey.StartsWith("age1"))
+            // pubkey необязателен: канал уже шифрован TLS (Windows→FreeBSD) + SSH-туннелем
+            // (FreeBSD→Ubuntu) — решение владельца 06.08 «быстро, для пилота». Если поле
+            // есть — обязано быть age1… (age-слой добавится позже без смены установщика).
+            if (!string.IsNullOrEmpty(p.RecipientPubkey) && !p.RecipientPubkey.StartsWith("age1"))
                 return "packet-setup.json: recipient_pubkey не вида age1… («" + p.RecipientPubkey + "»)";
             if (string.IsNullOrEmpty(p.ReceiverUrl) ||
                 !p.ReceiverUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
@@ -126,21 +129,28 @@ namespace Oc1c
             }
             Log.AddSecret(ps.Token);
             Log.Ok("база «" + ps.BaseId + "», приёмник " + ps.ReceiverUrl);
+            if (string.IsNullOrEmpty(ps.RecipientPubkey))
+                Log.Info("комплект без age-ключа: канал шифруется TLS + SSH-туннелем (1c-gate), age добавится позже");
 
             string agentExe = Path.Combine(kit, "packet-agent.exe");
             string ageExe = Path.Combine(kit, "age.exe");
             string zstdExe = Path.Combine(kit, "zstd.exe");
+            // age.exe обязателен, только когда комплект с age-ключом; канал TLS+SSH
+            // (пилот без age-слоя) обходится без него. zstd нужен всегда (сжатие — §4).
+            bool needAge = !string.IsNullOrEmpty(ps.RecipientPubkey);
             bool kitOk = true;
             if (!File.Exists(agentExe)) { Log.Err("в комплекте нет packet-agent.exe (" + kit + ")"); kitOk = false; }
-            if (!File.Exists(ageExe)) { Log.Err("в комплекте нет age.exe (" + kit + ")"); kitOk = false; }
+            if (needAge && !File.Exists(ageExe)) { Log.Err("в комплекте нет age.exe (" + kit + ")"); kitOk = false; }
             if (!File.Exists(zstdExe)) { Log.Err("в комплекте нет zstd.exe (" + kit + ")"); kitOk = false; }
             if (!kitOk)
             {
-                Log.Fix("комплект неполный: положите рядом с setup exe файлы packet-agent.exe, age.exe, zstd.exe " +
-                        "из поставки (возможно, их удалил антивирус — проверьте карантин)");
+                Log.Fix("комплект неполный: положите рядом с setup exe файлы packet-agent.exe, zstd.exe" +
+                        (needAge ? ", age.exe" : "") +
+                        " из поставки (возможно, их удалил антивирус — проверьте карантин)");
                 return Program.EXIT_PREREQ;
             }
-            if (!RunsOk(ageExe, "--version", "age") || !RunsOk(zstdExe, "--version", "zstd"))
+            if (!RunsOk(zstdExe, "--version", "zstd") ||
+                (needAge && !RunsOk(ageExe, "--version", "age")))
             {
                 Log.Fix("комплект неполный или файлы заблокированы антивирусом — переустановите комплект");
                 return Program.EXIT_PREREQ;
@@ -279,10 +289,13 @@ namespace Oc1c
             try
             {
                 Directory.CreateDirectory(dataDir);
-                string[] names = { "packet-agent.exe", "age.exe", "zstd.exe" };
+                // age.exe может отсутствовать в комплекте без age-слоя — копируем то, что есть.
+                string[] names = { "packet-agent.exe", "zstd.exe", "age.exe" };
                 for (int i = 0; i < names.Length; i++)
                 {
-                    File.Copy(Path.Combine(kit, names[i]), Path.Combine(packetDir, names[i]), true);
+                    string srcExe = Path.Combine(kit, names[i]);
+                    if (!File.Exists(srcExe)) { Log.Skip(names[i] + " в комплекте нет — не копирую"); continue; }
+                    File.Copy(srcExe, Path.Combine(packetDir, names[i]), true);
                     Log.Ok("установлен " + names[i]);
                 }
             }
@@ -302,7 +315,8 @@ namespace Oc1c
             sb.AppendLine("base_id=" + ps.BaseId);
             sb.AppendLine("receiver_url=" + ps.ReceiverUrl);
             sb.AppendLine("token=" + ps.Token);
-            sb.AppendLine("recipient_pubkey=" + ps.RecipientPubkey);
+            if (!string.IsNullOrEmpty(ps.RecipientPubkey))
+                sb.AppendLine("recipient_pubkey=" + ps.RecipientPubkey);
             sb.AppendLine("odata_url=" + odataUrl.TrimEnd('/'));
             sb.AppendLine("odata_user=" + reader);
             sb.AppendLine("odata_password=" + (o.ReaderPassword == null ? "" : o.ReaderPassword));
