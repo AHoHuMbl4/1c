@@ -129,6 +129,31 @@ check("владелец: без Ref_Key владельца не ищем",
       L.owner_of("InformationRegister_Плоский_RecordType"), None)
 check("владелец: неизвестная сущность — None", L.owner_of("Совсем_Чужое"), None)
 
+# ── 4. Объективный признак «искать нечего»: всё двоичное, текста нет ─────────────────
+L._PROPS_CACHE.update({
+    # Защищённое хранилище 1С: владелец + двоичные данные. Слов нет.
+    "InformationRegister_Хранилище": [("Владелец", "Edm.String"), ("Владелец_Type", "Edm.String"),
+                                      ("Данные_Base64Data", "Edm.String"),
+                                      ("Данные_Type", "Edm.String")],
+    # Блоб есть, но есть и человеческий текст — такое грузим.
+    "InformationRegister_СБлобомИТекстом": [("Комментарий", "Edm.String"),
+                                            ("Данные_Base64Data", "Edm.String")],
+    # Двоичного нет вовсе — признак не про нас.
+    "InformationRegister_БезБлоба": [("Период", "Edm.DateTime"), ("Значение", "Edm.String")],
+    # Поток вместо base64 — тот же случай.
+    "Catalog_Поток": [("Ref_Key", "Edm.Guid"), ("DataVersion", "Edm.String"),
+                      ("Файл", "Edm.Stream")],
+})
+check("искать нечего: только владелец и двоичные данные",
+      L.only_binary("InformationRegister_Хранилище"), True)
+check("искать нечего: блоб рядом с человеческим текстом — грузим",
+      L.only_binary("InformationRegister_СБлобомИТекстом"), False)
+check("искать нечего: без двоичного признак не срабатывает",
+      L.only_binary("InformationRegister_БезБлоба"), False)
+check("искать нечего: Edm.Stream считается двоичным (техстроки за текст не идут)",
+      L.only_binary("Catalog_Поток"), True)
+check("искать нечего: незнакомая сущность — грузим", L.only_binary("Нет_Такой"), False)
+
 # ── итог ────────────────────────────────────────────────────────────────────────────
 if FAILS:
     print("ПРОБА НЕ ПРОШЛА, случаев с ошибкой: %d\n" % len(FAILS))

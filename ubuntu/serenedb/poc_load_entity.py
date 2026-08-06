@@ -449,6 +449,42 @@ def _mart_has(table, col):
         return False
 
 
+def only_binary(entity_set):
+    """Правда ли, что искать в этой сущности нечего по построению.
+
+    Объективный признак, без модели и без слов конкретной базы: всё содержимое —
+    двоичное (`Edm.Stream`, `Edm.Binary`, поля `*_Base64Data`), и человекочитаемых
+    строковых полей нет. Словесному поиску в такой сущности не за что зацепиться —
+    текста в ней просто нет.
+
+    `[замер 05.08, боевая база]` признак точен и узок: 35 источников, все до одного
+    размечены служебными, деловых — ноль. Времени он снимает мало (5 с из 379 с), поэтому
+    один не решает, но он единственный, который не зависит ни от чьего суждения.
+
+    Технические строки (`Ref_Key`, `DataVersion`, `*_Type`, `*_Key`, `Predefined…`) за
+    человеческий текст не считаются: это идентификаторы платформы, а не слова.
+
+    🔴 И составная ссылка тоже не текст, хотя объявлена строкой. 1С кодирует её ПАРОЙ
+    полей: `Владелец` и `Владелец_Type`. Пока пара не учитывалась, защищённое хранилище
+    (`Владелец`, `Данные_Base64Data`, `Владелец_Type`, `Данные_Type`, `Данные`) выглядело
+    как сущность с человеческим текстом — поймано оффлайн-пробой, а не чтением кода.
+    Признак «есть парное `_Type`» берётся из самих полей, а не из списка имён.
+    """
+    _load_metadata()
+    p = _PROPS_CACHE.get(entity_set) or _PROPS_CACHE.get(entity_set + "_RecordType") or []
+    if not p:
+        return False                            # не знаем — значит грузим
+    names = [n for n, _ in p]
+    typed = {n[:-5] for n in names if n.endswith("_Type")}   # у составной ссылки есть пара
+    blob = (any(n.endswith("_Base64Data") for n in names)
+            or any(t in ("Edm.Stream", "Edm.Binary") for _, t in p))
+    human = [n for n, t in p
+             if t == "Edm.String" and not n.endswith(("_Type", "_Key", "_Base64Data"))
+             and n not in typed
+             and n not in ("Ref_Key", "DataVersion", "Predefined", "PredefinedDataName")]
+    return blob and not human
+
+
 _OWNER_CACHE = {}
 
 

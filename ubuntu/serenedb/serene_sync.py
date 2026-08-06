@@ -135,6 +135,61 @@ def _profile_age():
         return 1e9
 
 
+def _service_skip(ents):
+    """Что не грузим вовсе и почему. Возвращает {сущность: причина}.
+
+    Решение владельца 06.08: служебные источники из загрузки убрать. `[замер 05.08]` они
+    стоили 379 с каждого такта на 712 источниках — телеметрия платформы (замеры времени,
+    204 тыс. строк пятью источниками), права доступа, статистика, лента новостей
+    платформы, обмены, версии объектов. Для ответа о бизнесе там нет ничего.
+
+    🔴 ТРЕБОВАНИЕ ВЛАДЕЛЬЦА — НАДЁЖНАЯ МЕТКА НА ЛЮБОЙ БАЗЕ. Структурного признака, который
+    сам по себе отделял бы служебное, в 1С нет, и это замерено, а не предположено: у 129
+    служебных источников (216 с) человеческий текст есть, а у 57 деловых его нет. Поэтому
+    признаков три, и они разной природы:
+
+      1. `only_binary` — объективный, из `$metadata`, ничьего суждения не требует;
+      2. разметка `search_entity_class = 'service'` — смысловая, её кладёт модель один раз
+         на сущность и хранит в базе; та же, по которой владелец 29.07 отменил векторы
+         служебным;
+      3. `search_entity_force` — слово владельца, перебивает оба: строка `skip` убирает
+         источник, строка `load` возвращает его, что бы ни решили первые два.
+
+    Осторожность в одну сторону: неразмеченное грузится. Ошибка «не загрузили нужное»
+    видна числом (таблица `search_entity_skipped` и строка в журнале) и лечится одной
+    строкой в `search_entity_force` — без правки кода и на любой базе.
+    """
+    if os.environ.get("SYNC_SKIP_SERVICE", "1") != "1":
+        return {}
+    dsn = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
+
+    def rows(sql):
+        p = subprocess.run(["psql", dsn, "-tA", "-F", "\t", "-c", sql],
+                           capture_output=True, text=True)
+        return [l.split("\t") for l in p.stdout.splitlines() if l] if p.returncode == 0 else []
+
+    subprocess.run(["psql", dsn, "-q", "-c",
+                    "CREATE TABLE IF NOT EXISTS search_entity_force "
+                    "(src_table VARCHAR, mode VARCHAR, why VARCHAR)"],
+                   capture_output=True, text=True)
+    cls = {r[0]: r[1] for r in rows("SELECT src_table, cls FROM search_entity_class") if len(r) > 1}
+    force = {r[0]: r[1] for r in rows("SELECT src_table, mode FROM search_entity_force") if len(r) > 1}
+
+    skip = {}
+    for es in ents:
+        t = L.safe_col(es).lower()
+        m = (force.get(t) or "").strip().lower()
+        if m == "load":
+            continue                            # слово владельца сильнее любого признака
+        if m == "skip":
+            skip[es] = "решение владельца (search_entity_force)"
+        elif cls.get(t) == "service":
+            skip[es] = "размечено служебным (search_entity_class)"
+        elif L.only_binary(es):
+            skip[es] = "всё содержимое двоичное, текста нет ($metadata)"
+    return skip
+
+
 def _profile_rows():
     """Прошлая перепись из витрины: {сущность: (строк, беда)}.
 
@@ -242,7 +297,35 @@ def main():
     # (табличная часть, регистр, первая загрузка) → `load_entity_delta` вернёт None, и
     # грузим полностью. Итог считаем по фактически затронутым строкам, чтобы было видно,
     # СКОЛЬКО работы такт реально сделал.
-    ok = empty = err = touched = unchanged = skipped_owner = 0
+    # 🔴 ЧТО НЕ ГРУЗИМ ВОВСЕ — РЕШАЕТСЯ ДО ЦИКЛА И ЗАПИСЫВАЕТСЯ В БАЗУ. Молчаливого
+    # отсутствия быть не должно: исключённое лежит в `search_entity_skipped` с причиной по
+    # каждому источнику, а в журнал идёт сводка. Это и есть то, чем «убрали служебное»
+    # отличается от «источник потерялся» (п. 13).
+    service_skip = _service_skip(ents)
+    if service_skip:
+        vals = ",".join("(%s,%s)" % ("'" + e.replace("'", "''") + "'",
+                                     "'" + w.replace("'", "''") + "'")
+                        for e, w in sorted(service_skip.items()))
+        try:
+            subprocess.run(["psql", dsn, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+                           input="CREATE TABLE IF NOT EXISTS search_entity_skipped "
+                                 "(entity VARCHAR, why VARCHAR, seen_at TIMESTAMP);\n"
+                                 "DELETE FROM search_entity_skipped;\n"
+                                 "INSERT INTO search_entity_skipped "
+                                 "SELECT e, w, now() FROM (VALUES %s) AS s(e, w);" % vals,
+                           capture_output=True, text=True, check=True)
+        except Exception as e:                  # noqa: BLE001
+            # Перечень не записался — значит исключённое стало невидимым, а это ровно то,
+            # чего быть не должно. Говорим вслух.
+            print("⚠ перечень неисключаемых источников не записан: %s" % str(e)[:120])
+        by_why = {}
+        for w in service_skip.values():
+            by_why[w] = by_why.get(w, 0) + 1
+        print("не грузим %d источников (перечень с причинами — search_entity_skipped): %s"
+              % (len(service_skip),
+                 "; ".join("%s — %d" % (w, n) for w, n in sorted(by_why.items()))))
+
+    ok = empty = err = touched = unchanged = skipped_owner = skipped_service = 0
     seen_rows = {}                              # фактическое число строк по каждой сущности
     # 🔴 ЧЕЙ ВЛАДЕЛЕЦ НЕ МЕНЯЛСЯ, ТОТ И САМ НЕ МЕНЯЛСЯ. У табличной части своей версии нет,
     # поэтому она читалась целиком каждый такт: [замер 05.08] 272 источника, 472 с, из них
@@ -260,6 +343,9 @@ def main():
     quiet = set()
     for es in ents:
         try:
+            if es in service_skip:
+                skipped_service += 1
+                continue                        # причина уже записана в search_entity_skipped
             owner = L.owner_of(es)
             if owner and owner in quiet:
                 # Витрина не трогается: у владельца за этот такт не изменилось ничего.
@@ -322,7 +408,8 @@ def main():
     # молчаливая потеря свежести, из-за которой п. 17 не выполнялся (п. 13).
     print(f"витрина: сущностей {ok}, пусто {empty}, ошибок {err}; "
           f"изменённых строк {touched}; источников без изменений {unchanged} "
-          f"(из них не читали вовсе, потому что не менялся владелец: {skipped_owner})")
+          f"(из них не читали вовсе, потому что не менялся владелец: {skipped_owner}); "
+          f"не грузим по решению: {skipped_service}")
 
     # 🔴 ФАКТИЧЕСКОЕ ЧИСЛО СТРОК — В ПРОФИЛЬ, КАЖДЫЙ ТАКТ. Перепись больше не спрашивает
     # `$count` у тех, кого мы грузим, поэтому число обязан вернуть тот, кто их загрузил.
