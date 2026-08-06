@@ -10,6 +10,60 @@
 
 ---
 
+## 06.08: установщик Windows 1.2.0 — блок 2 «агент пакетного транспорта» `[код]`
+
+ТЗ — `work/installer-exe/AGENT_TZ.md`. Существующие 13 шагов канала OData не тронуты
+ни строкой: блок активен только когда рядом с exe лежит комплект от Ubuntu
+(`packet-setup.json` + `packet-agent.exe` + `age.exe` + `zstd.exe`); без комплекта
+поведение идентично 1.1.0.
+
+- Новый `windows/odata-setup/src/Packet.cs`: валидация комплекта (base_id, `age1…`,
+  https), префлайт (исходящий HTTPS `GET /health` → `packet-server-ok`, место под
+  данные ≈ база/4 + индекс версий, запуск age/zstd `--version`), установка в
+  `C:\1c\packet\` + `agent.ini` (права только Administrators/SYSTEM, токен и пароль
+  читателя — в лог `***`), автозапуск планировщиком (ONSTART + сторож 5 мин под
+  SYSTEM), пробная посылка `packet-agent.exe --smoke` — код 0 только при
+  подтверждённой доставке; ошибки приёмника (`bad_auth`, `stale_seq`, `quarantined`…)
+  переводятся в строки ТЗ §6. Новый код выхода **30**.
+- Интеграция: `Program.cs` (ключи `--packet-setup/--packet-kit/--packet-dir/
+  --skip-packet`, вызов после шага 13, справка), `build.cmd` (+`Packet.cs`,
+  +`System.Web.Extensions.dll` — разбор JSON без NuGet), версия 1.2.0.
+- Контракт CLI агента, на который опирается установщик (`--version`, `--smoke`,
+  single-instance, демон по конфигу сервера), зафиксирован в `AGENT_TZ.md` §7.
+- ⚠ Честная оговорка: на этой машине нет csc/mono — компиляция проверяется сборкой
+  `build.cmd` на Windows; живой прогон с комплектом и smoke — отдельный шаг.
+  Сам `packet-agent.exe` и генератор комплекта на Ubuntu — чужие треки, не входили.
+
+---
+
+## 06.08: транспорт заменён на SSH reverse-туннель — WireGuard замерен мёртвым `[замер]`
+
+После root-шага владельца (`wg-quick@wg0` поднят) выяснилось: WG-хендшейк не
+сходится — инициации доходят до FreeBSD, ответы уходят и **не доезжают**. Проба
+plain-text UDP-эхо (2 порта): запрос дошёл, ответ нет → **возвратный UDP
+Европа→РФ-сервер режется весь, независимо от протокола** (гипотеза владельца
+подтверждена замером; исходящий UDP ходит, DNS от 8.8.8.8 доезжает, TCP чист
+в обе стороны). Обфускация (AmneziaWG и т.п.) мертва по построению. WG-конфиги
+сохранены выключенными (`wireguard_enable=NO`).
+
+- **Новый транспорт: ssh -R, инициатор Ubuntu** (`1c-gate-tunnel.service`,
+  `Restart=always`): FreeBSD `127.0.0.1:6022` → `packet_server` `127.0.0.1:6090`.
+  Юзер `gate-tunnel` на FreeBSD — nologin, ключ с `restrict,port-forwarding,
+  permitlisten="127.0.0.1:6022"`. Входящих портов нет ни на одной стороне.
+- `[замер]` **сквозная цепочка собрана и замерена вручную** (туннель из сессии +
+  пробный бэкенд): `https://1c-gate.timpul.ru/health` → HAProxy → туннель →
+  Ubuntu → **HTTP 200 за 0,34 с**, `X-Forwarded-For` = реальный IP клиента.
+- 🔴 **Порт приёмника — 6090, не 6021**: `127.0.0.1:6021` занят шлюзом второй
+  базы (`1c-odata-gateway@ut`). При выкате `packet_server` —
+  `PACKET_LISTEN=127.0.0.1:6090` (дефолт кода — соседняя сессия).
+- Остался root-шаг владельца: `sudo sh ubuntu/wireguard/setup-ubuntu-tunnel.sh`
+  (ключ → `/etc/ssh/`, юнит enable+start, ручной туннель пробы гасится).
+  Дальше юнит перезапускается сессией (`1c-*` под polkit).
+- Конфиги FreeBSD синхронизированы в `ubuntu/wireguard/freebsd/` (haproxy.conf →
+  backend 6022, rc.conf). Разбор и замеры — `ubuntu/wireguard/README.md`.
+
+---
+
 ## 06.08: релей `1c-gate.timpul.ru` на FreeBSD — TLS-терминация → Ubuntu по туннелю `[замер]`
 
 `[решение]` владельца: домен приёмника указывает на FreeBSD (DNS уже смотрит на
@@ -63,6 +117,33 @@
   исходников в `~/wg-build` (вне git) — на случай диагностики; модуль `wireguard`
   в ядре 7.0.0-22 есть (`/sys/module/wireguard`).
 - Топология и замеры — `ubuntu/wireguard/README.md`; карта сервисов — `RUNBOOK_DEPLOY.md` §0.
+
+---
+
+## 06.08: пакетный транспорт — apply `packet_apply` (шаг 6) `[код]` + ТЗ установщика
+
+- 🔴 `[замер]` **DDL в SereneDB не транзакционен**: `CREATE TABLE` коммитится немедленно
+  (WARNING движка «the statement commits immediately and is not undone by ROLLBACK»,
+  проба на живом инстансе). «Одна транзакция на пакет» (К7) невозможна с DDL — механика
+  атомарности переписана в контракте §8: **идемпотентные операции + контрактные таблицы
+  и маркер `applied` последней DML-транзакцией**; обрыв → пакет остаётся `verified` и
+  переприменяется целиком. Доки: Sql › Statements › Transaction Management.
+- `ubuntu/packet/packet_apply.py` — apply `verified → applied`: дешифровка+zstd чанков,
+  full (`CREATE OR REPLACE` + QUALIFY-дедуп + GRANT `serene_ro`), delta (TEMP + DELETE
+  по Ref_Key + INSERT), gone (DELETE пачками), `metadata` → таблица `packet_metadata`;
+  контрактная транзакция: `search_changed_sources`, `base_profile` (UPDATE rows +
+  INSERT отсутствующих — формы `serene_sync`), `mart_changed_ts`; К3: нарушение «одна
+  версия на Ref_Key» → `quarantined(mix_versions)`. `--dry-run` без обращений к базе.
+- `[замер]` проба `ubuntu/packet/test_packet_apply.py` — **24 проверки зелёные** на
+  живом движке: merge/delta/gone, контрактные таблицы формой `serene_sync`, повторный
+  заход — no-op, карантин mix_versions; гигиена `pkt_probe_*` с самоочисткой (после
+  пробы в базе не осталось ни таблиц, ни маркерных строк — подтверждено отдельным SQL).
+- Побазовость без изменений: контрактные таблицы живут в базе данных своей базы, как у
+  `serene_sync` — перезапись целиком корректна на одну базу контура.
+- `work/installer-exe/AGENT_TZ.md` — ТЗ для установщика (трек владельца): комплект
+  (agent exe + age.exe + zstd.exe + agent.ini из `packet-setup.json`), префлайт
+  (исходящий 443/TLS к `1c-gate.timpul.ru`, место, бинари, валидность комплекта),
+  пробная посылка до `verified` как условие кода выхода 0.
 
 ---
 

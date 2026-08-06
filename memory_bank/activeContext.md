@@ -8,29 +8,28 @@ _Обновлено: **2026-08-06.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-**WireGuard-мост + релей `1c-gate.timpul.ru` `[06.08]`: FreeBSD поднята целиком, Ubuntu ждёт root-шаг владельца.**
-`[решение]` владельца: мост к `201.34.130.46` (FreeBSD 16.0, белый IP на vtnet0) + бесшовный
-релей приёмника: домен `1c-gate.timpul.ru` (DNS → FreeBSD) — единственное, что знает Windows.
-`[замер]`: UDP Ubuntu→FreeBSD 3/3, вход на Ubuntu (NAT) 0/3 — Ubuntu инициатор, keepalive 25.
-Сделано: `wg0` = 10.77.0.1 (`:51820/udp`, rc.conf); **HAProxy `:443` (TLS-терминация, LE-серт
-через lego) → `packet_server` на 10.77.0.2:6021 по туннелю** (`:80` — ACME + редирект,
-`X-Forwarded-For` доезжает — замер; 503 до поднятия Ubuntu-стороны — ожидаемо). Конфиги —
-`ubuntu/wireguard/freebsd/`. Вход на FreeBSD — ssh-ключ `~/.ssh-bridge/fbsd_ed25519`.
-**Первое действие — владельцу:** `sudo sh ubuntu/wireguard/setup-ubuntu-wg.sh`, затем выкат
-`packet_server` с `PACKET_LISTEN=10.77.0.2:6021` (компонент соседней сессии — не трогать).
-Документ — [`ubuntu/wireguard/README.md`](../ubuntu/wireguard/README.md).
+**Канал `1c-gate.timpul.ru` → Ubuntu `[06.08]`: цепочка ЗАМЕРЕНА (HTTP 200, 0,34 с); остался root-шаг владельца — постоянный туннель.**
+`[решение]` владельца: домен приёмника на FreeBSD `201.34.130.46` (белый IP), бесшовный
+релей — Windows знает только домен. 🔴 **WireGuard замерен МЁРТВЫМ**: возвратный UDP
+Европа→РФ не доходит вовсе (ни WG-хендшейки, ни plain-эхо; TCP чист). Транспорт —
+**SSH reverse-туннель** (юнит `1c-gate-tunnel`, ssh -R `6022 → 127.0.0.1:6090`, инициатор
+Ubuntu). На FreeBSD: HAProxy `:443` (TLS, LE через lego) → `127.0.0.1:6022`, юзер
+`gate-tunnel` (nologin, ключ restrict+permitlisten). **Первое действие — владельцу:**
+`sudo sh ubuntu/wireguard/setup-ubuntu-tunnel.sh`; затем выкат `packet_server` с
+`PACKET_LISTEN=127.0.0.1:6090` (соседняя сессия; 🔴 порт 6090 — :6021 занят шлюзом
+второй базы). Разбор и замеры — [`ubuntu/wireguard/README.md`](../ubuntu/wireguard/README.md).
 
-**Пакетный транспорт MVP `[06.08]`: реализация НАЧАТА по слову владельца.**
-Endpoint — `https://1c-gate.timpul.ru` (белый IP только у Ubuntu, Windows за NAT,
-обратный канал — опрос `GET /agent/config`). Сделано: контракт
-[`docs/PACKET_CONTRACT.md`](../docs/PACKET_CONTRACT.md) (manifest_version=1), крипто
-`ubuntu/packet/packet_crypto.py` (обёртка age CLI, проба 14 случаев), приёмник
-`ubuntu/packet/packet_server.py` (inbox/status/config/verify→`verified`, лимиты
-карантина, проба 30 случаев). **Следующий шаг — apply в витрину** (контракт §9: merge
-одной транзакцией на пакет + контрактные таблицы; перед любым SQL — serenedb-docs),
-затем агент Windows (C#, golden-проба формата против `poc_load_entity`). План и
-камни — `docs/PLAN_MVP_PACKET_TRANSPORT.md` §13. Установщик — трек владельца
-(`work/installer-exe/`).
+**Пакетный транспорт `[06.08]`: идёт реализация (владелец), endpoint `1c-gate.timpul.ru`.**
+В main: контракт PACKET_CONTRACT v1, крипто packet_crypto (14 проб), приёмник packet_server
+(30), apply packet_apply (24; DDL не транзакционен → маркер, §8). Дальше — агент Windows (C#, golden-проба формата против `poc_load_entity`) + индекс версий, `corpus_build` на `$metadata` из пакета, E2E.
+**Установщик Windows 1.2.0 `[06.08]` — блок 2 «агент пакетов» СДЕЛАН** (слово владельца
+в этой сессии): `windows/odata-setup/src/Packet.cs` + интеграция в `Program.cs`
+(префлайт комплекта/связи/места, установка в `C:\1c\packet` + `agent.ini` с ACL,
+автозапуск планировщиком, smoke `--smoke` — код 0 только при подтверждённой доставке,
+новый код выхода 30). Без комплекта рядом с exe поведение = 1.1.0. Контракт CLI агента,
+на который опирается блок, — `work/installer-exe/AGENT_TZ.md` §7, статус — §8.
+⚠ Не проверено компиляцией (на этом сервере нет csc/mono) — первая сборка `build.cmd`
+на Windows; живой прогон — когда будет комплект и сам `packet-agent.exe`.
 
 **Гейты подключены к Kimi Code `[06.08]`: ✅ вторая среда исполнения под `claudedev`.**
 Конфиг `~/.kimi-code/config.toml` (root:root, ставит `install-gates.sh` из
