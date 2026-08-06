@@ -99,6 +99,7 @@ Windows шлёт шифрованные пакеты, Ubuntu принимает 
 | `packet_server.py` | **приёмник пакетов**: манифест + чанки → verify (age+sha256+zstd) до состояния `verified`; перевод в `applied` — apply-компонент (следующий шаг). Лимиты карантина, идемпотентность, `/health` |
 | `packet_apply.py` | **apply**: `verified → applied` — merge в витрину семантикой `poc_load_entity` (full/delta/gone) + контрактные таблицы последней DML-транзакцией. 🔴 DDL в движке не транзакционен: атомарность = идемпотентные операции + маркер в конце, обрыв → пакет остаётся `verified` и переприменяется |
 | `packet_kit.py` | **генератор комплекта базы**: identity age + токен + начальный конфиг + `packet-setup.json` для установщика. Вывод — `work/packet/kit/` (в git не входит, секреты), раскладка в `/etc` — за владельцем |
+| `packet_config.py` | **config-builder** (Б2): итоговый контур сущностей для агента по трём признакам (`search_entity_force` > `search_entity_class` > `only_binary`), `config_version` растёт только при изменении, `search_entity_skipped` с причинами. Приёмник перечитывает конфиг по mtime без перезапуска |
 | `test_packet_crypto.py` | оффлайн-проба крипты, 14 случаев |
 | `test_packet_server.py` | оффлайн-проба приёмника, 30 случаев: полный цикл, идемпотентность, карантин при подмене, лимиты 413/429, config-канал |
 | `test_packet_apply.py` | проба apply на живом движке, 24 проверки: merge/delta/gone, контрактные таблицы, идемпотентность, карантин `mix_versions`; гигиена `pkt_probe_*` с самоочисткой |
