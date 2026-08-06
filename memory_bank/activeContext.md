@@ -8,18 +8,17 @@ _Обновлено: **2026-08-06.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-**WireGuard-мост Ubuntu ↔ FreeBSD `[06.08]`: FreeBSD поднята, Ubuntu ждёт root-шаг владельца.**
-`[решение]` владельца (доступ root к FreeBSD выдан в сессии): мост к `201.34.130.46`
-(`msk-1-vm-uqv5`, FreeBSD 16.0, белый IP на vtnet0) — опорный узел для канала с Windows
-на проде. `[замер]`: UDP Ubuntu→FreeBSD 3/3, вход на Ubuntu (NAT `167.235.37.94`) 0/3 —
-Ubuntu инициатор, keepalive 25. Сделано: на FreeBSD `wg0` = 10.77.0.1 (`:51820/udp`,
-rc.conf, переживает ребут), пир Ubuntu прописан; ключи обеих сторон сгенерированы;
-вход сессии на FreeBSD — по ssh-ключу `~/.ssh-bridge/fbsd_ed25519` (пароль удалён).
-**Первое действие — владельцу:** `sudo sh ubuntu/wireguard/setup-ubuntu-wg.sh` на этом
-сервере (ставит wireguard-tools, пишет `/etc/wireguard/wg0.conf`, поднимает
-`wg-quick@wg0`, пингует 10.77.0.1). Подсеть туннеля 10.77.0.0/24. Документ —
-[`ubuntu/wireguard/README.md`](../ubuntu/wireguard/README.md); допущение плана
-«белый IP у Ubuntu» опровергнуто замером — помечено в `PLAN_MVP_PACKET_TRANSPORT.md` §6.
+**WireGuard-мост + релей `1c-gate.timpul.ru` `[06.08]`: FreeBSD поднята целиком, Ubuntu ждёт root-шаг владельца.**
+`[решение]` владельца: мост к `201.34.130.46` (FreeBSD 16.0, белый IP на vtnet0) + бесшовный
+релей приёмника: домен `1c-gate.timpul.ru` (DNS → FreeBSD) — единственное, что знает Windows.
+`[замер]`: UDP Ubuntu→FreeBSD 3/3, вход на Ubuntu (NAT) 0/3 — Ubuntu инициатор, keepalive 25.
+Сделано: `wg0` = 10.77.0.1 (`:51820/udp`, rc.conf); **HAProxy `:443` (TLS-терминация, LE-серт
+через lego) → `packet_server` на 10.77.0.2:6021 по туннелю** (`:80` — ACME + редирект,
+`X-Forwarded-For` доезжает — замер; 503 до поднятия Ubuntu-стороны — ожидаемо). Конфиги —
+`ubuntu/wireguard/freebsd/`. Вход на FreeBSD — ssh-ключ `~/.ssh-bridge/fbsd_ed25519`.
+**Первое действие — владельцу:** `sudo sh ubuntu/wireguard/setup-ubuntu-wg.sh`, затем выкат
+`packet_server` с `PACKET_LISTEN=10.77.0.2:6021` (компонент соседней сессии — не трогать).
+Документ — [`ubuntu/wireguard/README.md`](../ubuntu/wireguard/README.md).
 
 **Пакетный транспорт MVP `[06.08]`: реализация НАЧАТА по слову владельца.**
 Endpoint — `https://1c-gate.timpul.ru` (белый IP только у Ubuntu, Windows за NAT,

@@ -10,6 +10,33 @@
 
 ---
 
+## 06.08: релей `1c-gate.timpul.ru` на FreeBSD — TLS-терминация → Ubuntu по туннелю `[замер]`
+
+`[решение]` владельца: домен приёмника указывает на FreeBSD (DNS уже смотрит на
+`201.34.130.46`), FreeBSD — бесшовный мост: Windows знает только
+`https://1c-gate.timpul.ru`, принимает Ubuntu. Схема подтверждена таблицей портов
+владельца (443/TCP вход → TLS-терминация → packet_server :6021 наружу не светит).
+
+- **HAProxy 3.4 на FreeBSD**: `:443` TLS → `10.77.0.2:6021` по туннелю wg0; `:80` —
+  ACME HTTP-01 + редирект на https. `option forwardfor` — реальный IP клиента
+  доезжает заголовком. Бэкенд с `httpchk GET /health`. Конфиги — в репозитории,
+  `ubuntu/wireguard/freebsd/`.
+- **Сертификат Let's Encrypt выпущен** (`lego`, webroot через тот же HAProxy):
+  `[замер]` `https://1c-gate.timpul.ru` отвечает сертом CN=1c-gate.timpul.ru
+  (TLS 1.3, HTTP/2). Продление — `periodic weekly` + deploy-hook (pem → reload).
+- `[замер]` **сквозная проба** (временный echo-бэкенд): запрос с этого сервера
+  прошёл TLS → релей → бэкенд и вернул `x-forwarded-for=167.235.37.94`. После
+  пробы бэкенд переключён на `10.77.0.2:6021`; до поднятия Ubuntu-стороны релей
+  отвечает **503 — ожидаемо**.
+- Две ловушки ssh+rc (замер): `service start` без редиректа виснет (daemon держит
+  канал); haproxy без `daemon` в конфиге не пишет pidfile (rc-status врёт), а
+  `redirect` обрабатывается раньше `use_backend` — ACME-путь чинится условием
+  `if !acme`. Разбор — `ubuntu/wireguard/README.md`.
+- Осталось для полной цепочки: root-шаг `setup-ubuntu-wg.sh` на Ubuntu + выкат
+  `packet_server` с `PACKET_LISTEN=10.77.0.2:6021` (компонент соседней сессии).
+
+---
+
 ## 06.08: WireGuard-мост Ubuntu ↔ FreeBSD `201.34.130.46` `[замер]`
 
 `[решение]` владельца: мост между этим сервером и FreeBSD (доступ root выдан в

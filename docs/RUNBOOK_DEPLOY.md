@@ -42,9 +42,12 @@ Ubuntu LXC (наш, всё loopback):
 
 **Мост наружу (06.08):** WireGuard `wg0` (`10.77.0.2` ↔ FreeBSD `201.34.130.46`,
 `10.77.0.1`, `:51820/udp`) — опорный узел с белым IP для пакетного транспорта с
-Windows за NAT. Ubuntu — инициатор: входящий UDP на этот LXC снаружи не
-транслируется ([замер 06.08], UDP сам не блокируется). Установка — один root-шаг:
-`ubuntu/wireguard/setup-ubuntu-wg.sh`; устройство и замеры — `ubuntu/wireguard/README.md`.
+Windows за NAT. На FreeBSD же — **релей приёмника**: `1c-gate.timpul.ru:443`
+(HAProxy, TLS-терминация LE) → `packet_server` на `10.77.0.2:6021` по туннелю,
+наружу приёмник не светит. Ubuntu — инициатор туннеля: входящий UDP на этот LXC
+снаружи не транслируется ([замер 06.08], UDP сам не блокируется). Установка
+Ubuntu-стороны — один root-шаг: `ubuntu/wireguard/setup-ubuntu-wg.sh`; устройство,
+конфиги FreeBSD и замеры — `ubuntu/wireguard/README.md` + `ubuntu/wireguard/freebsd/`.
 
 ### Вторая база 1С (стенд, состояние на 02.08)
 

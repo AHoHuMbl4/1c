@@ -1,0 +1,18 @@
+storage: /usr/local/etc/ssl/lego
+
+accounts:
+  timpul:
+    email: hostmaster@timpul.ru
+    acceptsTermsOfService: true
+
+challenges:
+  http-webroot:
+    http:
+      webroot: /usr/local/www/lego
+
+certificates:
+  1c-gate.timpul.ru:
+    challenge: http-webroot
+    account: timpul
+    domains:
+      - 1c-gate.timpul.ru

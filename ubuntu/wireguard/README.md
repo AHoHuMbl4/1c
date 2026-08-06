@@ -42,3 +42,37 @@ sudo sh ubuntu/wireguard/setup-ubuntu-wg.sh
 
 Доступ сессии к FreeBSD: ssh-ключ `~/.ssh-bridge/fbsd_ed25519`
 (парольный вход после установки ключа не нужен).
+
+## Релей `1c-gate.timpul.ru` (поднят 06.08, вторая половина дня)
+
+`[решение]` владельца: домен приёмника смотрит на FreeBSD; FreeBSD — **бесшовный
+мост**: Windows в установщике знает только `https://1c-gate.timpul.ru`, а принимает
+соединения Ubuntu. Цепочка:
+
+```
+Windows (TLS) → 1c-gate.timpul.ru:443 [DNS → 201.34.130.46]
+  → HAProxy на FreeBSD — TLS-терминация (Let's Encrypt, lego)
+  → по туннелю wg0 → packet_server на Ubuntu 10.77.0.2:6021 (наружу не светит)
+```
+
+- **TLS терминируется на FreeBSD** (LE-сертификат, `lego` + webroot HTTP-01 через
+  тот же HAProxy :80; продление — `periodic weekly 604.lego`, deploy-hook собирает
+  pem и делает `service haproxy reload`). Плечо FreeBSD→Ubuntu шифрует сам
+  WireGuard, поэтому сквозная шифрованность пути сохраняется.
+- **Клиентский IP доезжает** заголовком `X-Forwarded-For` (`option forwardfor`) —
+  замер 06.08: проба вернула реальный адрес клиента.
+- **Бэкенд с проверкой живости**: `httpchk GET /health` на `10.77.0.2:6021`
+  (ждёт 200; `/health` у packet_server без авторизации). Пока Ubuntu-сторона не
+  поднята, релей отвечает **503 — это замеренное ожидаемое состояние**, не дефект.
+- Таймауты 300 с под чанки до 64 МБ (контракт К8).
+- Конфиги FreeBSD версионируются в [`freebsd/`](freebsd/): `haproxy.conf`,
+  `lego.yml`, `lego.sh`, `deploy-certs.sh`, `rc.d/acmewww` (webroot-сервер
+  HTTP-01 на 127.0.0.1:8402), сниппеты `rc.conf`/`periodic.conf`, `wg0.conf.sample`
+  (без ключей — ключи только на серверах).
+- Автозапуск на FreeBSD: `rc.conf` — `wireguard_enable`, `haproxy_enable`,
+  `acmewww_enable`; продление серта — `periodic.conf` (сниппеты в `freebsd/`).
+- ⚠️ Ловушка ssh: `service … start` без редиректа держит канал открытым
+  (daemon наследует stdout) — сессия виснет. Звать с `</dev/null >/dev/null 2>&1 &`.
+  Две причины починены: `daemon` в haproxy.conf (без него foreground, pidfile не
+  пишется, rc-status врёт) и `redirect … if !acme` (redirect обрабатывается РАНЬШЕ
+  use_backend — ACME-запросы улетали на https и HTTP-01 бы не прошёл).
