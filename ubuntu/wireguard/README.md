@@ -51,16 +51,15 @@ Windows (TLS) → https://1c-gate.timpul.ru:443  [DNS → 201.34.130.46]
   `lego.sh`, `deploy-certs.sh`, `rc.d/acmewww`, сниппеты, `wg0.conf.sample`
   (без ключей — ключи только на серверах).
 
-**Ubuntu — root-шаг владельца (постоянный туннель):**
-```
-sudo sh ubuntu/wireguard/setup-ubuntu-tunnel.sh
-```
-Ставит `/etc/ssh/gate-tunnel.ed25519` (600) + юнит `1c-gate-tunnel.service`
-(ssh -R, `Restart=always`), гасит ручной туннель пробы, включает и стартует.
-После этого сессия может перезапускать юнит сама (`systemctl restart
-1c-gate-tunnel` — правило polkit на `1c-*`).
+**Ubuntu — ✅ туннель в бою (06.08, юнит `1c-gate-tunnel.service`):**
+`active` + `enabled`, `Restart=always`. `[замер]` сквозная проба через туннель
+ЮНИТА (пробный бэкенд на :6090): `https://1c-gate.timpul.ru/health` → HTTP 200,
+`xff` клиента на месте. Строки `connect_to 127.0.0.1 port 6090: failed` в журнале
+юнита — health-чеки HAProxy, дошедшие по туннелю: пока приёмник не выкачен,
+это норма (снаружи — 502/503). Запуск — `setup-ubuntu-tunnel.sh` (выполнен
+владельцем 06.08); перезапуск — `systemctl restart 1c-gate-tunnel` (polkit `1c-*`).
 
-Затем — выкат `packet_server` с `PACKET_LISTEN=127.0.0.1:6090` (компонент
+Остался выкат `packet_server` с `PACKET_LISTEN=127.0.0.1:6090` (компонент
 соседней сессии): health-чек HAProxy позеленеет, цепочка замкнётся.
 
 ## Замеры 06.08

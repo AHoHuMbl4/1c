@@ -8,16 +8,18 @@ _Обновлено: **2026-08-06.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-**Канал `1c-gate.timpul.ru` → Ubuntu `[06.08]`: цепочка ЗАМЕРЕНА (HTTP 200, 0,34 с); остался root-шаг владельца — постоянный туннель.**
+**Канал `1c-gate.timpul.ru` → Ubuntu `[06.08]`: ✅ туннель В БОЮ (юнит), цепочка замерена; остался выкат packet_server на :6090.**
 `[решение]` владельца: домен приёмника на FreeBSD `201.34.130.46` (белый IP), бесшовный
 релей — Windows знает только домен. 🔴 **WireGuard замерен МЁРТВЫМ**: возвратный UDP
 Европа→РФ не доходит вовсе (ни WG-хендшейки, ни plain-эхо; TCP чист). Транспорт —
 **SSH reverse-туннель** (юнит `1c-gate-tunnel`, ssh -R `6022 → 127.0.0.1:6090`, инициатор
 Ubuntu). На FreeBSD: HAProxy `:443` (TLS, LE через lego) → `127.0.0.1:6022`, юзер
-`gate-tunnel` (nologin, ключ restrict+permitlisten). **Первое действие — владельцу:**
-`sudo sh ubuntu/wireguard/setup-ubuntu-tunnel.sh`; затем выкат `packet_server` с
-`PACKET_LISTEN=127.0.0.1:6090` (соседняя сессия; 🔴 порт 6090 — :6021 занят шлюзом
-второй базы). Разбор и замеры — [`ubuntu/wireguard/README.md`](../ubuntu/wireguard/README.md).
+`gate-tunnel` (nologin, ключ restrict+permitlisten). Root-шаг выполнен владельцем 06.08:
+юнит `active`+`enabled`; `[замер]` проба через туннель юнита — HTTP 200, xff на месте;
+`connect_to … 6090 failed` в журнале = health-чеки HAProxy, дошедшие по туннелю (норма,
+пока нет приёмника). **Осталось:** выкат `packet_server` с `PACKET_LISTEN=127.0.0.1:6090`
+(соседняя сессия; 🔴 порт 6090 — :6021 занят шлюзом второй базы). Разбор и замеры —
+[`ubuntu/wireguard/README.md`](../ubuntu/wireguard/README.md).
 
 **Пакетный транспорт `[06.08]`: идёт реализация (владелец), endpoint `1c-gate.timpul.ru`.**
 В main: контракт PACKET_CONTRACT v1, крипто packet_crypto (14 проб), приёмник packet_server
