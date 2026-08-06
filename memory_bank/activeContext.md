@@ -21,14 +21,17 @@ rc.conf, переживает ребут), пир Ubuntu прописан; кл�
 [`ubuntu/wireguard/README.md`](../ubuntu/wireguard/README.md); допущение плана
 «белый IP у Ubuntu» опровергнуто замером — помечено в `PLAN_MVP_PACKET_TRANSPORT.md` §6.
 
-**Пакетный транспорт MVP (без VPN) `[06.08]`: план записан и сверен с боевым кодом, кода нет.**
-Владелец: Windows тонкий (OData + агент посылок), Ubuntu — витрина и всё остальное;
-шифрованные чанки (zstd+AEAD), после первой full — дельта по `DataVersion`; белый IP
-только у Ubuntu, Windows за NAT (обратный канал — опрос `GET /agent/config`). Документ —
-[`docs/PLAN_MVP_PACKET_TRANSPORT.md`](../docs/PLAN_MVP_PACKET_TRANSPORT.md): §13 — сверка
-с `serene_sync`/`poc_load_entity` (3 блокирующих пробела + 10 камней, среди них
-контент-хеш, golden-проба `_cell`, `manifest_version`); §9 дополнен шагом 0. Реализацию
-не начинать, пока не скажут «делай». Установщик — трек владельца (`work/installer-exe/`).
+**Пакетный транспорт MVP `[06.08]`: реализация НАЧАТА по слову владельца.**
+Endpoint — `https://1c-gate.timpul.ru` (белый IP только у Ubuntu, Windows за NAT,
+обратный канал — опрос `GET /agent/config`). Сделано: контракт
+[`docs/PACKET_CONTRACT.md`](../docs/PACKET_CONTRACT.md) (manifest_version=1), крипто
+`ubuntu/packet/packet_crypto.py` (обёртка age CLI, проба 14 случаев), приёмник
+`ubuntu/packet/packet_server.py` (inbox/status/config/verify→`verified`, лимиты
+карантина, проба 30 случаев). **Следующий шаг — apply в витрину** (контракт §9: merge
+одной транзакцией на пакет + контрактные таблицы; перед любым SQL — serenedb-docs),
+затем агент Windows (C#, golden-проба формата против `poc_load_entity`). План и
+камни — `docs/PLAN_MVP_PACKET_TRANSPORT.md` §13. Установщик — трек владельца
+(`work/installer-exe/`).
 
 **Гейты подключены к Kimi Code `[06.08]`: ✅ вторая среда исполнения под `claudedev`.**
 Конфиг `~/.kimi-code/config.toml` (root:root, ставит `install-gates.sh` из

@@ -39,6 +39,27 @@
 
 ---
 
+## 06.08: пакетный транспорт — приёмник `packet_server` (шаг 3) `[код]`
+
+- `ubuntu/packet/packet_server.py` — приёмник по контракту §8: приём манифеста
+  (расшифровка сразу, проверки `manifest_version`/`base_id`/`package_id`/`stale_seq`),
+  приём чанков (идемпотентность, сверка `sha256_enc`, незаявленные — 409), `status`
+  с вычислением `missing`, **синхронная verify** (sha256 шифртекста → age-decrypt →
+  `zstd -d` → сверка `sha256_plain`) до состояния `verified`, карантин с кодом ошибки,
+  `GET /agent/config` (короткий ответ при равном `config_version`), `/health` для
+  сторожа. Fail-closed без файла баз. Лимиты К8 — настройки `PACKET_MAX_*`.
+  Хранение `PACKET_ROOT/inbox/<base>/<pkg>/`, все записи атомарны (temp+replace).
+  Перевод `verified → applied` — следующий шаг (apply-компонент).
+- Контракт уточнён по факту реализации: в URL — короткая форма `package_id`
+  (`<seq>-<rand8>`), состояние `verified` названо явно (вместо `verifying`).
+- `[замер]` проба `ubuntu/packet/test_packet_server.py` — **30 случаев зелёные**:
+  полный цикл receiving→verified, повторы no-op, карантин при подмене файла на диске,
+  `version_unsupported`, `stale_seq`, 401, path traversal, 413/429, config-канал.
+  Плюс ручная проверка fail-closed (без файла баз — FATAL, exit 2).
+- `MAP.md` — контур `ubuntu/packet/` внесён в карту.
+
+---
+
 ## 06.08: пакетный транспорт — реализация начата: контракт v1 + крипто-модуль `[код]`
 
 `[решение]` владельца: начата реализация `PLAN_MVP_PACKET_TRANSPORT`; endpoint
