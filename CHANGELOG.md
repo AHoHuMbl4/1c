@@ -10,6 +10,22 @@
 
 ---
 
+## 06.08: план MVP — пакетная доставка Windows→Ubuntu без VPN `[решение]`
+
+Обсуждение с владельцем (код не писался). Зафиксировано в
+[`docs/PLAN_MVP_PACKET_TRANSPORT.md`](docs/PLAN_MVP_PACKET_TRANSPORT.md):
+
+- MVP: Windows = 1С + OData + тонкий агент; вся подготовка/витрина/ответы — на Ubuntu;
+- без VPN: zstd → AEAD (age или AES-256-GCM + X25519), pubkey только на Windows;
+- транспорт = манифест + чанки с догрузкой `missing`, commit только целиком;
+- после первой `full` — дельта по той же механике `DataVersion`, что уже в
+  `serene_sync` / `load_entity_delta`; индекс версий для diff — на Windows;
+- TARGET п. 4/16 (PG на Windows) этим не закрывается — отложен явно.
+
+Опора на уже существующий `setup-1c-odata.exe` 1.1.0 (`windows/odata-setup/`).
+
+---
+
 ## 06.08: гейты подключены к Kimi Code — второй движок тех же правил под claudedev
 
 Сессии Kimi Code идут под тем же рабочим аккаунтом, и до этого дня они шли ВООБЩЕ без

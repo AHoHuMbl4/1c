@@ -1,12 +1,19 @@
 # Active Context
 
-_Обновлено: **2026-08-02.** Здесь — только живое: текущее состояние и «С ЧЕГО НАЧАТЬ».
+_Обновлено: **2026-08-06.** Здесь — только живое: текущее состояние и «С ЧЕГО НАЧАТЬ».
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
 ---
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
+
+**Пакетный транспорт MVP (без VPN) `[06.08]`: план записан, кода нет.**
+Владелец: Windows тонкий (OData + агент посылок), Ubuntu — витрина и всё остальное;
+шифрованные чанки (zstd+AEAD), после первой full — дельта по `DataVersion`. Документ —
+[`docs/PLAN_MVP_PACKET_TRANSPORT.md`](../docs/PLAN_MVP_PACKET_TRANSPORT.md). Реализацию
+не начинать, пока не скажут «делай». Установщик Windows — трек владельца
+(`windows/odata-setup/`, `work/installer-exe/`).
 
 **Гейты подключены к Kimi Code `[06.08]`: ✅ вторая среда исполнения под `claudedev`.**
 Конфиг `~/.kimi-code/config.toml` (root:root, ставит `install-gates.sh` из
