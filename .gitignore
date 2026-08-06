@@ -49,3 +49,9 @@ work/packet/kit/
 
 # Второе имя CLAUDE.md для Kimi Code — жёсткая ссылка, создаётся установщиком гейтов
 AGENTS.md
+
+# Локальная сборка packet-agent.exe (как у odata-setup) и вывод golden-пробы
+windows/packet-agent/build/
+work/packet/golden/out/
+# Распакованный probe.cmd снимок $metadata (в git лежит fixtures/metadata.xml.zst)
+work/packet/golden/fixtures/metadata.xml
