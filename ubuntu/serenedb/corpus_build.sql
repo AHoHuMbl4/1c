@@ -200,6 +200,10 @@ SELECT 'классификация' AS шаг, (SELECT count(*) FROM tmp3_src) A
 -- Ошибка при любом сомнении идёт в сторону лишней работы, а не потери данных.
 CREATE TABLE IF NOT EXISTS search_changed_sources (src_table VARCHAR);
 CREATE TABLE IF NOT EXISTS search_refmap (guid VARCHAR, name VARCHAR, owner VARCHAR);
+-- Права выдаются при создании: пересозданная таблица их теряет, и читатель молча получает
+-- пустоту — та же грабля, что разобрана в шапке `corpus_init.sql`.
+GRANT SELECT ON search_refmap TO serene_ro;
+GRANT SELECT ON search_changed_sources TO serene_ro;
 
 CREATE OR REPLACE TABLE tmp3_inc AS
 SELECT (coalesce((SELECT v FROM search_quality WHERE k = 'changed_sources_ok'), 0) = 1
