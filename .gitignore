@@ -41,5 +41,8 @@ work/config-dump/
 # Мусор от прогона test-hooks.sh: проба запускается из work/hooks и оставляет там свой .claude
 work/hooks/.claude/
 
+# Скачанный для разработки бинарь age (шифрование пакетов): в бой идёт пакет ОС
+work/packet/bin/
+
 # Второе имя CLAUDE.md для Kimi Code — жёсткая ссылка, создаётся установщиком гейтов
 AGENTS.md

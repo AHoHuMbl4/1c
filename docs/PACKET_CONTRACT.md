@@ -1,0 +1,166 @@
+# Контракт пакета: пакетный транспорт Windows → Ubuntu
+
+Заведён 2026-08-06. Шаг 1 порядка реализации [`PLAN_MVP_PACKET_TRANSPORT.md`](PLAN_MVP_PACKET_TRANSPORT.md) §9.
+**Версия контракта: `manifest_version = 1`.** Несовместимые изменения = новая версия,
+совместимые (новое необязательное поле) — без смены версии.
+
+Связано: `ubuntu/packet/` (реализация), `ubuntu/serenedb/poc_load_entity.py` (формат CSV —
+источник истины), `work/installer-exe/` (агент Windows — трек владельца).
+
+---
+
+## 1. Термины и идентичность
+
+- **`base_id`** — идентичность базы 1С (К9: побазовость с первой версии). Задаёт Ubuntu
+  при установке агента, в манифесте и в URL всегда. Строка `[a-z0-9_-]+`.
+- **`package_id`** — `<base_id>/<seq>-<rand8>`; `seq` — монотонный номер пакета базы
+  (растёт только на отправленных пакетах; разрывы допустимы — обрывы и «ноль изменений»),
+  `rand8` — 8 hex, защита от повторного использования `seq` после сброса агента.
+- **Пакет** — манифест + чанки. Неделимая единица применения (К7).
+
+## 2. Формат на диске (карантин приёмника)
+
+```
+inbox/<base_id>/<package_id>/
+  manifest.json.age        — манифест, зашифрован age
+  <chunk-name>.csv.zst.age — чанки: CSV → zstd → age
+```
+
+Имя чанка: `chunk-NNNNN` (5 цифр, от 00001). Служебные чанки: `metadata` (`$metadata`
+XML), `gone` (ключи на удаление), `index` (отпечаток индекса версий — контрольный,
+не для применения). Данные сущностей — только `chunk-NNNNN`.
+
+## 3. Криптография
+
+- Формат шифрования: **age v1** (https://age-encryption.org), получатель **X25519**,
+  passphrase-получатели запрещены. Каждый файл пакета — отдельный age-файл.
+- Private key (identity) — только на Ubuntu, `/etc/1c-packet-age.key`
+  (640 root:1c-secrets, как все секреты). Public key (recipient) уезжает в конфиг агента
+  при установке; ротация — через `GET /agent/config` (принимаются оба ключа на
+  grace-период, список живых identity — у приёмника).
+- Свой envelope-формат, ZipCrypto, AES-CBC + свой MAC, пароль в ini — запрещены
+  (анти-паттерны плана §11).
+- Реализация: штатный `age` CLI обеими сторонами (Ubuntu — пакет ОС; Windows — exe
+  рядом с агентом). Своя криптография не пишется.
+
+## 4. Сжатие
+
+- **zstd**, уровень 3 (в коридоре плана 1–3), порядок: **compress → encrypt**.
+- Каждый чанк — самостоятельный zstd-фрейм: догрузке и проверке не нужны соседи.
+- Ubuntu: `/usr/bin/zstd` (есть). Windows: `zstd.exe` рядом с агентом.
+
+## 5. Манифест (JSON до шифрования)
+
+```json
+{
+  "manifest_version": 1,
+  "package_id": "ut/000041-a1b2c3d4",
+  "base_id": "ut",
+  "seq": 41,
+  "kind": "full | delta | meta",
+  "created_utc": "2026-08-06T10:00:00Z",
+  "agent_version": "1.0.0",
+  "entities": [
+    {"name": "Catalog_Контрагенты", "op": "delta", "rows": 120,
+     "chunks": ["chunk-00003"],
+     "version_fingerprint": "sha256:…", "content_fingerprint": "sha256:…"}
+  ],
+  "gone": {"entities": ["Catalog_Контрагенты"], "chunks": ["gone"]},
+  "metadata": {"included": true, "fingerprint": "sha256:…", "chunks": ["metadata"]},
+  "chunks": [
+    {"name": "chunk-00003", "entity": "Catalog_Контрагенты",
+     "rows": 120, "bytes_plain": 34567, "bytes_enc": 8912,
+     "sha256_plain": "…", "sha256_enc": "…"}
+  ]
+}
+```
+
+- `kind=full` — первая заливка (или resync): все сущности контура + `metadata` обязателен.
+- `kind=delta` — изменённые сущности (`op`: `delta` | `full_entity` | `gone_only`),
+  `gone` при наличии удалённых ключей; `metadata` — только если отпечаток изменился.
+- `kind=meta` — только `$metadata` (схема изменилась без изменений данных).
+- Ноль изменений → **пакет не шлётся** (план §7).
+- `version_fingerprint` — отпечаток пары `(Ref_Key, DataVersion)` сущности после такта;
+  сверяется с локальным индексом агента. `content_fingerprint` — отпечаток содержимого
+  (К1: защита от ложных изменений; точные формулы фиксирует golden-проба агента, здесь —
+  наличие полей и их непрозрачность для приёмника).
+
+## 6. Чанкование
+
+- Размер чанка до распаковки: цель **16–32 МБ** (`full`); мелкая `delta` — один чанк.
+- Граница — по сущностям: сущность целиком в чанке; сущность больше 32 МБ — серия чанков
+  `chunk-NNNNN` подряд с полем `entity_part: "i/n"` в записи `chunks`.
+- `gone.csv`: колонки `entity,ref_key`, тот же CSV-контракт (§7).
+
+## 7. Формат данных в чанках (CSV)
+
+🔴 **Байт-в-байт контракт `poc_load_entity.py`** (К5 — самое молчаливое место):
+
+- header — имена колонок после `safe_col`; все значения — текст (витрина all-varchar);
+- булевы — `true`/`false` (как в JSON 1С, не `True/False`);
+- дата-время — `YYYY-MM-DD HH:MM:SS` (пробел, не `T`);
+- диалект — Python `csv` по умолчанию: quote `"`, удвоение кавычек, `\r\n`;
+- кодировка — UTF-8.
+- Соответствие проверяется **golden-пробой**: сохранённые ответы OData → CSV
+  Python-версии (эталон), вывод агента сверяется побайтно. До зелёной пробы агент в бой
+  не выкатывается.
+
+## 8. HTTP-протокол (endpoint `https://1c-gate.timpul.ru`)
+
+Все запросы: `Authorization: Bearer <token базы>` (токен выдаётся при установке, в конфиге
+агента; отдельно от шифрования тела). Только TLS. Только эти пути — остальное 404.
+
+```
+PUT  /v1/package/<base_id>/<package_id>/manifest      body = manifest.json.age
+PUT  /v1/package/<base_id>/<package_id>/chunk/<name>  body = <name>.csv.zst.age
+GET  /v1/package/<base_id>/<package_id>/status
+     → {"state": "receiving|verifying|applied|rejected|quarantined",
+        "received": [...], "missing": [...], "error": null|"…"}
+GET  /v1/agent/config?base_id=…&config_version=…&agent_version=…
+     → {"config_version": N, "entities": ["…"], "params": {"page_size": 10000,
+        "tact_seconds": 1200, "chunk_mb": 32}, "recipient_pubkey": "age1…"}
+     (304-подобно: config_version без изменений → {"config_version": N} только)
+```
+
+- Порядок заливки: манифест → чанки в любом порядке с повторами.
+- **Идемпотентность:** повтор `PUT` чанка с тем же `sha256_enc` — no-op; повтор манифеста
+  — no-op; повтор `package_id` в `applied` — весь пакет no-op.
+- **Догрузка:** обрыв → агент спрашивает `status`, шлёт только `missing`.
+- **Применение:** все чанки на месте → verify (age + sha256) → apply **одной транзакцией
+  на пакет** (К7) → `applied=true`. Сбой → `quarantined` + `error`, витрина не тронута.
+  Агент по `quarantined` не повторяет тот же пакет — ждёт решения (новый `seq`).
+- **seq:** `seq <= last_applied` → `rejected(stale_seq)`. Разрывы — норма.
+- **`manifest_version`:** неизвестная версия → `rejected(version_unsupported)` с
+  максимальной поддерживаемой в `error`. Агент старой версии продолжает работать, пока
+  приёмник принимает его версию (К10).
+- **Лимиты приёмника (К8):** чанк ≤ 64 МБ, чанков в пакете ≤ 4096, карантин ≤ 20 ГБ на
+  базу, пакетов в приёме ≤ 8 на базу; превышение — `rejected(limit_*)` и метрика.
+
+## 9. Что apply пишет в витрину (Б3 — контракт с ботом и сборкой)
+
+- merge сущностей: `delete по Ref_Key + insert` (документ целиком с ТЧ) — тот же SQL,
+  что у `load_entity_delta` / `load_entity`;
+- `gone` — delete по ключам;
+- `metadata` → таблица витрины `packet_metadata` (снимок `$metadata` + отпечаток);
+  `corpus_build` переключается на неё (Б1);
+- контрактные таблицы: `search_changed_sources` (список изменённых — пустой допустим),
+  `base_profile` (строки/счётчики из манифеста), `search_quality.mart_changed_ts`,
+  `search_entity_skipped` (причины из конфига, не вычисляются заново);
+- инвариант «одна версия на Ref_Key» проверяется при apply (К3): нарушение → пакет
+  в карантин с требованием `full_entity` resync.
+
+## 10. Конфиг агента (обратный канал, Б2)
+
+Источник истины отбора — Ubuntu (`search_entity_class` модели + `search_entity_force`
+владельца + `only_binary` из `$metadata`). Агент получает **итоговый список сущностей**
+и параметры такта через `GET /agent/config`; `config_version` растёт при любом изменении.
+Агент применяет новый конфиг со следующего такта; сам ничего не исключает и не добавляет.
+Исключённое видно в `search_entity_skipped` на Ubuntu (п. 13 TARGET).
+
+## 11. Отклонённые варианты (с причиной)
+
+- Один multi-GB файл на initial dump — невозобновляем (план §6).
+- Свой envelope вместо age — своя криптография; age — готовая коробка обеих сторон.
+- Шифрование пакета целиком одним файлом после сборки — теряется пофайловая догрузка.
+- Пасphrase-получатель age — пароль в конфиге Windows (анти-паттерн).
+- Вычисление отбора сущностей на Windows — второе место истины (Б2).
