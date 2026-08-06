@@ -12,6 +12,7 @@ Env: SERENEDB_DSN (rw=postgres), ETL_ODATA_BASE, CSV_DIR, ALIBABA_* (для ре
 import difflib
 import json
 import os
+import re
 import sys
 import time
 
@@ -135,6 +136,18 @@ def _profile_age():
         return 1e9
 
 
+def _ro_role():
+    """Имя читающей роли для `GRANT`, пропущенное через проверку.
+
+    🔴 Имя роли — ИДЕНТИФИКАТОР, а не значение: удвоением кавычек его не обезвредить, а
+    приходит оно из окружения. Поэтому пропускается только то, что идентификатором и
+    является, иначе берётся умолчание. Без проверки строка из `SERENE_RO_ROLE` уехала бы
+    в `GRANT` как есть, а он исполняется пишущей ролью.
+    """
+    ro = os.environ.get("SERENE_RO_ROLE", "serene_ro")
+    return ro if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", ro or "") else "serene_ro"
+
+
 def _service_skip(ents):
     """Что не грузим вовсе и почему. Возвращает {сущность: причина}.
 
@@ -168,9 +181,15 @@ def _service_skip(ents):
                            capture_output=True, text=True)
         return [l.split("\t") for l in p.stdout.splitlines() if l] if p.returncode == 0 else []
 
+    # 🔴 ПРАВА ВЫДАЮТСЯ СРАЗУ. Без `GRANT` читающая роль таблицу не видит, и «исключённое
+    # видно» превращается в «видно только в журнале» — то есть в то же молчание, против
+    # которого таблица и заведена (п. 13). Та же грабля, что разобрана в `corpus_init.sql`:
+    # пересозданная таблица теряет права, и читатель молча получает пустоту.
+    ro = _ro_role()
     subprocess.run(["psql", dsn, "-q", "-c",
                     "CREATE TABLE IF NOT EXISTS search_entity_force "
-                    "(src_table VARCHAR, mode VARCHAR, why VARCHAR)"],
+                    "(src_table VARCHAR, mode VARCHAR, why VARCHAR); "
+                    "GRANT SELECT ON search_entity_force TO %s;" % ro],
                    capture_output=True, text=True)
     cls = {r[0]: r[1] for r in rows("SELECT src_table, cls FROM search_entity_class") if len(r) > 1}
     force = {r[0]: r[1] for r in rows("SELECT src_table, mode FROM search_entity_force") if len(r) > 1}
@@ -310,9 +329,11 @@ def main():
             subprocess.run(["psql", dsn, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"],
                            input="CREATE TABLE IF NOT EXISTS search_entity_skipped "
                                  "(entity VARCHAR, why VARCHAR, seen_at TIMESTAMP);\n"
+                                 "GRANT SELECT ON search_entity_skipped TO %s;\n"
                                  "DELETE FROM search_entity_skipped;\n"
                                  "INSERT INTO search_entity_skipped "
-                                 "SELECT e, w, now() FROM (VALUES %s) AS s(e, w);" % vals,
+                                 "SELECT e, w, now() FROM (VALUES %s) AS s(e, w);"
+                                 % (_ro_role(), vals),
                            capture_output=True, text=True, check=True)
         except Exception as e:                  # noqa: BLE001
             # Перечень не записался — значит исключённое стало невидимым, а это ровно то,
