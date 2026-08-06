@@ -157,9 +157,12 @@ printf '# решение владельца\n' > "$G/memory_bank/owner-memory/pr
 # AGENTS.md — второе имя правил для Kimi (жёсткая ссылка в настоящем репозитории);
 # сторож сверяет его наличие и владельца наравне с CLAUDE.md.
 printf '# агенты\n' > "$G/AGENTS.md"
-# Stub подключения Kimi: сторож сверяет, что весь набор гейтов назван в конфиге второго
-# движка. Путь подставляется переменной-швом, настоящий конфиг проба не трогает.
-{ for g in $KIMI_GATES_REQUIRED; do printf 'command = "/srv/1c/.claude/hooks/%s.sh"\n' "$g"; done; } > "$G/kimi-config.toml"
+# Stub подключения Kimi — ИЗ КАНОНИЧЕСКОГО ШАБЛОНА с подменой пути под песочницу:
+# проба проверяет ту же проводку, что ставится вживую, а не второй список, который
+# обязан совпадать с настоящим и не совпадает (тот же урок, что с выборкой хуков 03.08).
+# Сторож разбирает TOML и сверяет пары (событие, команда), поэтому stub обязан быть
+# настоящим TOML, а не набором строк для грепа.
+sed "s|/srv/1c/.claude/hooks|$G/.claude/hooks|g" "$REPO/work/hooks/kimi-config.toml" > "$G/kimi-config.toml"
 export KIMI_CONFIG_TOML="$G/kimi-config.toml"
 cd "$G" || exit 1
 git init -q .; git config user.email t@t; git config user.name t
@@ -534,9 +537,36 @@ echo
 echo '== защита гейтов: подключение Kimi (hook_guard_armed) =='
 cd "$G" || exit 1
 [ -z "$(armed)" ]; say $? 'kimi-конфиг полон — нарушений нет'
+# 🔴 Владелец конфига НЕ проверяется: бинарь Kimi пересериализует его при старте
+# (rename в каталоге рабочего аккаунта), и сторож на владельце останавливал работу
+# на сам движок (06.08 10:14). Сторожится содержимое проводки.
+chown --reference=README.md "$KIMI_CONFIG_TOML" 2>/dev/null || true
 cp "$KIMI_CONFIG_TOML" "$TMP/kimi.bak"
 sed -i '/sniper-kimi/d' "$KIMI_CONFIG_TOML"
 OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'гейт убран из kimi-конфига — нарушение видно поимённо'
+cp "$TMP/kimi.bak" "$KIMI_CONFIG_TOML"
+# Пересадка на не то событие — на гейте, который подключён ОДИН раз (у check-prompt-rules
+# две записи, и переворот одной оставляет пару на месте: нашла проба, не чтение кода).
+python3 - "$KIMI_CONFIG_TOML" <<'PY'
+import sys
+p = sys.argv[1]
+lines = open(p, encoding="utf-8").read().splitlines(keepends=True)
+for i, l in enumerate(lines):
+    if "sniper-kimi.sh" in l and l.strip().startswith("command"):
+        for j in range(i, -1, -1):
+            if lines[j].strip().startswith("event"):
+                lines[j] = lines[j].replace("PreToolUse", "PostToolUse")
+                break
+        break
+open(p, "w", encoding="utf-8").writelines(lines)
+PY
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'гейт пересажен на не то событие — нарушение видно поимённо'
+cp "$TMP/kimi.bak" "$KIMI_CONFIG_TOML"
+sed -i 's|\.claude/hooks/sniper-kimi\.sh|/tmp/sniper-kimi.sh|' "$KIMI_CONFIG_TOML"
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'команда гейта указывает в чужой каталог — нарушение видно'
+cp "$TMP/kimi.bak" "$KIMI_CONFIG_TOML"
+printf 'это не toml {{{\n' > "$KIMI_CONFIG_TOML"
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'TOML'; say $? 'конфиг не разбирается — нарушение видно, а не «нет проводки»'
 rm -f "$KIMI_CONFIG_TOML"
 OUT=$(armed); printf '%s' "$OUT" | grep -q 'Kimi'; say $? 'kimi-конфиг снесён — нарушение видно'
 cp "$TMP/kimi.bak" "$KIMI_CONFIG_TOML"

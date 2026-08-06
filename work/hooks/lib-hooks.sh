@@ -186,25 +186,68 @@ hook_guard_armed() {
 "
   done
 
-  # 🔴 Тот же набор — у второго движка. Конфиг Kimi обязан быть на месте, принадлежать
-  # владельцу и содержать все гейты: иначе сессии Kimi работают без правил, и снаружи это
-  # не видно ни по одному срабатыванию — худший вид отказа, ради которого сторож и стоит.
-  local kc kg kowner
+  # 🔴 Тот же набор — у второго движка. Проверяется ДЕЙСТВЕННОЕ СОДЕРЖИМОЕ проводки
+  # (разбор TOML), а НЕ владелец файла: бинарь Kimi пересериализует свой конфиг при
+  # старте — rename в каталоге рабочего аккаунта, владелец и комментарии теряются
+  # (живой случай 06.08 10:14: проводка цела, владелец сменился, сторож честно
+  # остановил коммит — на сам движок). Владелец для ЭТОГО файла недостижим по
+  # устройству; недостижима и подмена смысла: каждый гейт обязан быть подключён к
+  # своему скрипту в root-каталоге .claude/hooks на правильном событии.
+  local kc kbad
   kc="$(kimi_config_path)"
   if [ ! -f "$kc" ]; then
     out="${out}  Kimi: $kc отсутствует — сессии Kimi идут вовсе без гейтов.
 "
   else
-    kowner="$(stat -c '%U' "$kc" 2>/dev/null)"
-    [ "$kowner" = root ] || out="${out}  Kimi: $kc принадлежит «$kowner», а должен root: конфиг гейтов подменён своим.
-"
-    for kg in $KIMI_GATES_REQUIRED; do
-      [ -x "$root/.claude/hooks/$kg.sh" ] || out="${out}  Kimi: гейт $kg.sh отсутствует или не исполняем.
-"
-      grep -q "$kg" "$kc" 2>/dev/null \
-        || out="${out}  Kimi: гейт $kg не подключён в $kc — в сессии Kimi он не зовётся.
-"
-    done
+    kbad="$(KIMI_CFG="$kc" KIMI_HOOKS_DIR="$root/.claude/hooks" python3 - <<'PY'
+import os, sys, tomllib
+
+cfg = os.environ["KIMI_CFG"]
+hooks_dir = os.environ["KIMI_HOOKS_DIR"]
+
+# Гейт → событие, на котором он обязан стоять: блокирующие — на блокируемых,
+# иначе проводку можно «сохранить», пересадив гейт туда, где он никогда не сработает.
+EXPECT = {
+    "session-start": "SessionStart",
+    "prompt-start": "UserPromptSubmit",
+    "prepare-diff": "PreToolUse",
+    "check-gates": "PreToolUse",
+    "check-sql-docs": "PreToolUse",
+    "check-prompt-rules": "PreToolUse",
+    "check-diff": "PreToolUse",
+    "check-docs": "PreToolUse",
+    "check-active-size": "PreToolUse",
+    "check-graph-fresh": "PreToolUse",
+    "check-golden": "PreToolUse",
+    "sniper-kimi": "PreToolUse",
+    "count-edits": "PostToolUse",
+    "check-write": "PostToolUse",
+    "check-deps": "PostToolUse",
+}
+
+try:
+    with open(cfg, "rb") as fh:
+        d = tomllib.load(fh)
+except Exception as e:
+    # Неразбираемый конфиг — это не «нет нарушений»: проводку проверить нельзя.
+    print("  Kimi: %s не разбирается как TOML (%s) — подключение гейтов не проверено.\n" % (cfg, e))
+    sys.exit(0)
+
+pairs = set()
+for h in d.get("hooks") or []:
+    pairs.add(((h.get("event") or ""), (h.get("command") or "").strip()))
+
+bad = []
+for gate, ev in EXPECT.items():
+    if (ev, "%s/%s.sh" % (hooks_dir, gate)) not in pairs:
+        bad.append("%s (%s)" % (gate, ev))
+    elif not os.access("%s/%s.sh" % (hooks_dir, gate), os.X_OK):
+        bad.append("%s (скрипт не исполняем)" % gate)
+if bad:
+    print("  Kimi: в %s проводка неполная или изменена: %s.\n  Ждутся [[hooks]] с event как выше и command=%s/<гейт>.sh\n" % (cfg, ", ".join(bad), hooks_dir))
+PY
+)"
+    [ -z "$kbad" ] || out="${out}${kbad}"
   fi
 
   # Вердикт `ask` в сессии, где вопрос никому не показывают, равен разрешению (замер 03.08).

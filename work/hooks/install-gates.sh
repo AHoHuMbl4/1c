@@ -84,16 +84,16 @@ else
 fi
 
 echo "== 3-тер. конфиг Kimi рабочего аккаунта =="
-# 🔴 Точка подключения гейтов Kimi — ~/.kimi-code/config.toml рабочего аккаунта, и она
-# обязана принадлежать владельцу наравне с остальными правилами: конфиг, который сессия
-# вправе переписать, — это гейты, которые сессия вправе снять. Подмена сносом видна
-# сторожу (hook_guard_armed) по смене владельца. Каталог остаётся рабочему аккаунту:
-# сессии, кэш и учётные данные лежат там же.
+# 🔴 Канон проводки гейтов Kimi — work/hooks/kimi-config.toml; ставится сюда с root:root
+# 644 как ОПОРНАЯ ТОЧКА. Живой файл бинарь Kimi волен пересериализовать (так он
+# персистит модель/каталог — замер 06.08): владелец и комментарии теряются, и это НЕ
+# нарушение. Сторож сверяет содержимое проводки (пары событие+команда на root-скрипты),
+# поэтому перезапись движка коммитов не останавливает, а отсоединение гейта — останавливает.
 KHOME="$(getent passwd claudedev 2>/dev/null | cut -d: -f6)"
 KDIR="${KHOME:-/home/claudedev}/.kimi-code"
 mkdir -p "$KDIR"
 install -m 644 -o root -g root "$SRC/kimi-config.toml" "$KDIR/config.toml" \
-  && echo "  $KDIR/config.toml — root:root 644"
+  && echo "  $KDIR/config.toml — канон из work/hooks/kimi-config.toml"
 chown claudedev:claudedev "$KDIR" 2>/dev/null || true
 # Бинарь ставится разово руками владельца: install -m 755 <источник> /usr/local/bin/kimi
 su -s /bin/bash claudedev -c 'command -v kimi' >/dev/null 2>&1 \
