@@ -10,6 +10,19 @@
 
 ---
 
+## 06.08: пакетный транспорт — генератор комплекта `packet_kit` `[код]`
+
+- `ubuntu/packet/packet_kit.py` — комплект базы по AGENT_TZ §2: identity age (600,
+  повторный прогон не затирает), токен Bearer (64 hex), начальный конфиг
+  (`config_version=1`, сущности из `base_profile` при `--dsn`), `packet-setup.json`
+  для установщика Windows, `bases-entry.json` для файла баз приёмника. Вывод —
+  `work/packet/kit/<base>/` (добавлен в `.gitignore`: секреты), раскладка `/etc` —
+  за владельцем.
+- `[замер]` проба `test_packet_kit.py` — **17 проверок зелёные**, включая сквозной
+  roundtrip: шифрование под выданный pubkey расшифровывается identity комплекта.
+
+---
+
 ## 06.08: установщик Windows 1.2.0 — блок 2 «агент пакетного транспорта» `[код]`
 
 ТЗ — `work/installer-exe/AGENT_TZ.md`. Существующие 13 шагов канала OData не тронуты
