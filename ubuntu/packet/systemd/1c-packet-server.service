@@ -1,0 +1,19 @@
+[Unit]
+# Приёмник пакетов пакетного транспорта Windows→Ubuntu (docs/PACKET_CONTRACT.md §8).
+# Один процесс на все базы (файл баз PACKET_BASES); слушает loopback или адрес
+# туннеля — наружу не светит, TLS-терминация на релее 1c-gate.timpul.ru.
+# Развёртывание: ubuntu/packet/deploy_packet.sh + /etc/1c-packet.env (600, не в git).
+Description=1C packet receiver (Windows→Ubuntu, docs/PACKET_CONTRACT.md §8)
+After=network-online.target serenedb.service
+Wants=network-online.target
+
+[Service]
+# PACKET_ROOT (умолчание /var/lib/1c-packet), PACKET_LISTEN, PACKET_BASES,
+# PACKET_AGE_BIN (до установки пакета ОС — dev-бинарь недопустим в бою).
+EnvironmentFile=/etc/1c-packet.env
+ExecStart=/usr/bin/python3 /opt/1c-packet/packet_server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

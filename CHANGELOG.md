@@ -10,6 +10,19 @@
 
 ---
 
+## 06.08: пакетный транспорт — юниты и раскладка контура (подготовка к развёртыванию) `[код]`
+
+- `ubuntu/packet/systemd/`: `1c-packet-server.service` (приёмник, один процесс на все
+  базы из `PACKET_BASES`; слушает loopback/адрес туннеля — наружу не светит, TLS на
+  релее), `1c-packet-apply.service` + `.timer` (apply каждые 2 мин, идемпотентен).
+  Подготовлены, **не развёрнуты** — развёртывание с E2E.
+- `ubuntu/packet/deploy_packet.sh` — раскладка в `/opt/1c-packet` атомарной подменой;
+  как `deploy.sh`, никого не перезапускает (напоминание печатается).
+- Полное описание развёртывания в RUNBOOK/ARCHITECTURE — с E2E (состав шагов ещё
+  движется: туннель, комплект, Windows-сборка).
+
+---
+
 ## 06.08: агент Windows `packet-agent` (C#) + golden-проба формата `[код]`
 
 - `windows/packet-agent/src/PacketAgent.cs` (2157 строк, C# 5, csc .NET 4, без NuGet —

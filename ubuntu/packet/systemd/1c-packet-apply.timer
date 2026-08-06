@@ -1,0 +1,10 @@
+[Unit]
+# Такт apply: цена захода ∝ числу пакетов verified, пустой заход — секунды.
+Description=1C packet apply timer (docs/PACKET_CONTRACT.md §9)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=2min
+
+[Install]
+WantedBy=timers.target

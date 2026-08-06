@@ -1,0 +1,13 @@
+[Unit]
+# Apply пакетов verified→applied (docs/PACKET_CONTRACT.md §9): merge в витрину
+# семантикой poc_load_entity + контрактные таблицы. Идемпотентен: обрыв посередине
+# безопасен, пакет переприменяется. Запускается таймером 1c-packet-apply.timer.
+Description=1C packet apply (verified→applied, docs/PACKET_CONTRACT.md §9)
+After=serenedb.service 1c-packet-server.service
+
+[Service]
+Type=oneshot
+# SERENEDB_DSN и PGPASSWORD — как у синка; PACKET_ROOT/PACKET_BASES — из 1c-packet.env.
+EnvironmentFile=/etc/1c-packet.env
+EnvironmentFile=-/etc/1c-serene-sync.env
+ExecStart=/usr/bin/python3 /opt/1c-packet/packet_apply.py
