@@ -104,6 +104,13 @@ Windows шлёт шифрованные пакеты, Ubuntu принимает 
 | `test_packet_server.py` | оффлайн-проба приёмника, 30 случаев: полный цикл, идемпотентность, карантин при подмене, лимиты 413/429, config-канал |
 | `test_packet_apply.py` | проба apply на живом движке, 24 проверки: merge/delta/gone, контрактные таблицы, идемпотентность, карантин `mix_versions`; гигиена `pkt_probe_*` с самоочисткой |
 
+### Пакетный транспорт — Windows-сторона (агент) и проба формата (06.08)
+
+| Файл | Что делает |
+|---|---|
+| `windows/packet-agent/src/PacketAgent.cs` | **агент пакетов** (C# 5, csc .NET 4, без NuGet — как setup): CLI по `AGENT_TZ §7` (--version/--smoke/демон/single-instance через mutex), такт: config → проба версий/контент-отпечаток → дельта → чанки → zstd+age (внешние exe) → отправка с догрузкой missing → индекс версий ПОСЛЕ verified (К2). Индекс — файлы `<entity>.idx` в data_dir |
+| `work/packet/golden/` | **golden-проба формата (К5)**: живые фикстуры OData стенда + `make_reference.py` (эталон через настоящий `poc_load_entity`) + `probe.cmd` (`fc /b` на Windows). Снимок $metadata — `metadata.xml.zst` (20 МБ → 0,5). Зелёная проба — условие выката агента |
+
 ### Модели — `/etc/1c-embed.env`, одно место на весь продукт
 
 🔴 **02.08 эмбеддер и реранкер переехали в контур владельца** (`Qwen3-Embedding-8B` +

@@ -1,0 +1,2157 @@
+// PacketAgent.cs — агент пакетного транспорта Windows -> Ubuntu.
+// Контракт: docs/PACKET_CONTRACT.md (manifest_version=1), CLI: work/installer-exe/AGENT_TZ.md §7.
+// Семантика выгрузки — байт-в-байт порт ubuntu/serenedb/poc_load_entity.py (К5),
+// проверяется golden-пробой work/packet/golden (probe.cmd, fc /b против reference).
+// C# 5 (csc.exe из .NET Framework 4), только стандартные сборки.
+using System;
+using System.Collections;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Net;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.RegularExpressions;
+using System.Threading;
+using System.Web.Script.Serialization;
+
+namespace PacketAgent
+{
+    // ============================ настройки (именованные константы) =============
+    // Каждое число можно переопределить ключом в agent.ini — имя ключа в скобках.
+    internal static class C
+    {
+        internal const string Version = "1.0.0";
+        internal const int ManifestVersion = 1;
+
+        internal const int PageSizeDefault = 10000;   // (page_size) размер страницы OData
+        internal const int PageMinDefault = 250;      // (page_min) нижний предел уменьшения страницы
+        internal const int TactSecondsDefault = 1200; // (tact_seconds) пауза между тактами без конфига сервера
+        internal const int ChunkMbDefault = 32;       // (chunk_mb) цель размера чанка до распаковки
+        internal const int ChunkMbMin = 4;            // нижний зажим chunk_mb
+        internal const int ChunkMbMax = 48;           // верхний зажим: лимит приёмника 64 МБ на чанк (К8)
+        internal const int HttpTimeoutSeconds = 600;  // (http_timeout) бюджет времени одного запроса к 1С
+        internal const int ReceiverTimeoutSeconds = 300; // (receiver_timeout) запрос к приёмнику
+        internal const int StatusPollSeconds = 5;     // (status_poll_seconds) пауза опроса status
+        internal const int StatusWaitSeconds = 900;   // (status_wait_seconds) предел ожидания verified/applied
+        internal const int ReceiverRetryMax = 5;      // повторы запроса к приёмнику при 5xx/таймауте
+        internal const int BackoffBaseSeconds = 2;    // экспоненциальная пауза: base*2^n
+        internal const int LogMaxBytes = 10 * 1024 * 1024; // ротация файла журнала по размеру
+        internal const int StaleSeqJump = 1000000;    // скачок seq при stale_seq (см. Tact)
+    }
+
+    // ============================ конфиг agent.ini ==============================
+    internal sealed class Cfg
+    {
+        internal string BaseId, ReceiverUrl, Token, RecipientPubkey;
+        internal string OdataUrl, OdataUser, OdataPassword, DataDir;
+        internal int PageSize = C.PageSizeDefault;
+        internal int PageMin = C.PageMinDefault;
+        internal int TactSeconds = C.TactSecondsDefault;
+        internal int ChunkMb = C.ChunkMbDefault;
+        internal string LogDir = @"C:\1c\logs";
+
+        internal static Cfg Load(string path)
+        {
+            if (!File.Exists(path))
+                throw new InvalidDataException("нет конфига " + path + " (его пишет установщик)");
+            Dictionary<string, string> kv = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string raw in File.ReadAllLines(path, Encoding.UTF8))
+            {
+                string line = raw.Trim();
+                if (line.Length == 0 || line.StartsWith("#") || line.StartsWith(";")) continue;
+                int eq = line.IndexOf('=');
+                if (eq <= 0) continue;
+                kv[line.Substring(0, eq).Trim()] = line.Substring(eq + 1).Trim();
+            }
+            Cfg c = new Cfg();
+            c.BaseId = Get(kv, "base_id", true);
+            c.ReceiverUrl = Get(kv, "receiver_url", true).TrimEnd('/');
+            c.Token = Get(kv, "token", true);
+            c.RecipientPubkey = Get(kv, "recipient_pubkey", true);
+            c.OdataUrl = Get(kv, "odata_url", true).TrimEnd('/');
+            c.OdataUser = Get(kv, "odata_user", true);
+            c.OdataPassword = Get(kv, "odata_password", true);
+            c.DataDir = Get(kv, "data_dir", true);
+            c.PageSize = GetInt(kv, "page_size", c.PageSize);
+            c.PageMin = GetInt(kv, "page_min", c.PageMin);
+            c.TactSeconds = GetInt(kv, "tact_seconds", c.TactSeconds);
+            c.ChunkMb = Math.Max(C.ChunkMbMin, Math.Min(C.ChunkMbMax, GetInt(kv, "chunk_mb", c.ChunkMb)));
+            c.LogDir = Get(kv, "log_dir", false) ?? c.LogDir;
+            Log.AddSecret(c.Token);
+            Log.AddSecret(c.OdataPassword);
+            return c;
+        }
+
+        static string Get(Dictionary<string, string> kv, string key, bool required)
+        {
+            string v;
+            if (kv.TryGetValue(key, out v) && v.Length > 0) return v;
+            if (required) throw new InvalidDataException("в agent.ini нет ключа " + key);
+            return null;
+        }
+
+        static int GetInt(Dictionary<string, string> kv, string key, int dflt)
+        {
+            string v;
+            int n;
+            if (kv.TryGetValue(key, out v) && int.TryParse(v, NumberStyles.Integer,
+                    CultureInfo.InvariantCulture, out n) && n > 0) return n;
+            return dflt;
+        }
+    }
+
+    // ============================ журнал ========================================
+    internal static class Log
+    {
+        static readonly List<string> Secrets = new List<string>();
+        static string _file;
+
+        internal static void AddSecret(string s)
+        {
+            if (!string.IsNullOrEmpty(s) && !Secrets.Contains(s)) Secrets.Add(s);
+        }
+
+        internal static void Init(string dir)
+        {
+            try
+            {
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                _file = Path.Combine(dir, "packet-agent.log");
+            }
+            catch { _file = null; }
+        }
+
+        static string Mask(string msg)
+        {
+            foreach (string s in Secrets) msg = msg.Replace(s, "***");
+            return msg;
+        }
+
+        internal static void Line(string msg)
+        {
+            string s = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+                       + " " + Mask(msg);
+            try { Console.WriteLine(s); } catch { }
+            if (_file == null) return;
+            try
+            {
+                lock (Secrets)
+                {
+                    if (File.Exists(_file) && new FileInfo(_file).Length > C.LogMaxBytes)
+                    {
+                        string old = _file + ".1";
+                        if (File.Exists(old)) File.Delete(old);
+                        File.Move(_file, old);
+                    }
+                    File.AppendAllText(_file, s + "\r\n", Encoding.UTF8);
+                }
+            }
+            catch { }
+        }
+    }
+
+    // ============================ Python-совместимое представление чисел ========
+    // _cell в poc возвращает значение как есть, а csv.writer применяет str(): для
+    // float это repr() CPython (shortest round-trip, порог научной записи 1e16,
+    // "5.0" у целых). Воспроизводим посимвольно, иначе row_key витрины поедет.
+    internal static class Py
+    {
+        internal static string PyFloat(double d)
+        {
+            if (double.IsNaN(d) || double.IsInfinity(d))
+                throw new InvalidDataException("нечисловое значение double — такого в JSON быть не может");
+            bool neg = BitConverter.DoubleToInt64Bits(d) < 0;
+            double a = neg ? -d : d;
+            if (a == 0.0) return neg ? "-0.0" : "0.0";
+            // Кратчайшая строка, читающаяся обратно в то же double (G1..G17).
+            string s = null;
+            for (int p = 1; p <= 17; p++)
+            {
+                s = a.ToString("G" + p.ToString(CultureInfo.InvariantCulture), CultureInfo.InvariantCulture);
+                double back;
+                if (double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out back) && back == a)
+                    break;
+            }
+            int exp = 0;
+            int ei = s.IndexOf('E');
+            if (ei >= 0)
+            {
+                exp = int.Parse(s.Substring(ei + 1), CultureInfo.InvariantCulture);
+                s = s.Substring(0, ei);
+            }
+            int dot = s.IndexOf('.');
+            int ip = dot < 0 ? s.Length : dot;
+            string digits = s.Replace(".", "");
+            int z = 0;
+            while (z < digits.Length && digits[z] == '0') z++;
+            digits = digits.Substring(z).TrimEnd('0');
+            int decpt = ip - z + exp;      // положение точки: value = 0.digits * 10^decpt
+            if (digits.Length == 0) { digits = "0"; decpt = 1; }
+            string res;
+            if (decpt > -4 && decpt <= 16) // правило repr() CPython
+            {
+                if (decpt <= 0) res = "0." + new string('0', -decpt) + digits;
+                else if (decpt >= digits.Length)
+                    res = digits + new string('0', decpt - digits.Length) + ".0";
+                else res = digits.Substring(0, decpt) + "." + digits.Substring(decpt);
+            }
+            else
+            {
+                int e2 = decpt - 1;
+                string mant = digits.Length == 1 ? digits
+                              : digits.Substring(0, 1) + "." + digits.Substring(1);
+                res = mant + "e" + (e2 < 0 ? "-" : "+")
+                      + Math.Abs(e2).ToString("00", CultureInfo.InvariantCulture);
+            }
+            return neg ? "-" + res : res;
+        }
+
+        // str() контейнера Python — редкий случай: у записи 2+ табличные части,
+        // flatten не срабатывает, и в ячейку уходит repr списка/словаря (как в poc).
+        internal static string PyContainerStr(object v)
+        {
+            StringBuilder sb = new StringBuilder();
+            ReprInto(v, sb);
+            return sb.ToString();
+        }
+
+        static void ReprInto(object v, StringBuilder sb)
+        {
+            if (v == null) { sb.Append("None"); return; }
+            if (v is bool) { sb.Append((bool)v ? "True" : "False"); return; }
+            string s = v as string;
+            if (s != null) { StrReprInto(s, sb); return; }
+            if (v is double) { sb.Append(PyFloat((double)v)); return; }
+            if (v is int || v is long || v is decimal)
+            {
+                sb.Append(Convert.ToString(v, CultureInfo.InvariantCulture));
+                return;
+            }
+            IDictionary<string, object> d = v as IDictionary<string, object>;
+            if (d != null)
+            {
+                sb.Append('{');
+                bool first = true;
+                foreach (KeyValuePair<string, object> kv in d)
+                {
+                    if (!first) sb.Append(", ");
+                    StrReprInto(kv.Key, sb);
+                    sb.Append(": ");
+                    ReprInto(kv.Value, sb);
+                    first = false;
+                }
+                sb.Append('}');
+                return;
+            }
+            IList l = v as IList;
+            if (l != null)
+            {
+                sb.Append('[');
+                for (int i = 0; i < l.Count; i++)
+                {
+                    if (i > 0) sb.Append(", ");
+                    ReprInto(l[i], sb);
+                }
+                sb.Append(']');
+                return;
+            }
+            throw new InvalidDataException("неподдерживаемый тип JSON-значения: " + v.GetType().Name);
+        }
+
+        // repr() строки Python: одинарные кавычки, если нет апострофа без кавычек —
+        // двойные; escapes \n \r \t \\ и \xXX для управляющих.
+        static void StrReprInto(string s, StringBuilder sb)
+        {
+            bool sq = s.IndexOf('\'') >= 0, dq = s.IndexOf('"') >= 0;
+            char q = (sq && !dq) ? '"' : '\'';
+            sb.Append(q);
+            foreach (char ch in s)
+            {
+                if (ch == q || ch == '\\') { sb.Append('\\'); sb.Append(ch); }
+                else if (ch == '\n') sb.Append("\\n");
+                else if (ch == '\r') sb.Append("\\r");
+                else if (ch == '\t') sb.Append("\\t");
+                else if (ch < 0x20 || ch == 0x7f)
+                    sb.Append("\\x" + ((int)ch).ToString("x2", CultureInfo.InvariantCulture));
+                else sb.Append(ch);
+                // NB: непечатные юникодные категории сверх \x7f Python экранирует
+                // как \xXX/\uXXXX по unicodedata; в данных 1С не встречается (golden).
+            }
+            sb.Append(q);
+        }
+    }
+
+    // ============================ safe_col / _cell / CSV (порт poc) =============
+    internal static class Fmt
+    {
+        // Все файлы, которые пишет агент (CSV, манифест, план, индекс) — UTF-8 БЕЗ
+        // BOM: манифест разбирает Python json на приёмнике, BOM его ломает.
+        internal static readonly Encoding NoBom = new UTF8Encoding(false);
+
+        // poc_load_entity.safe_col: str.isalnum() — категории L* и N* (Unicode),
+        // иначе '_'; strip('_') с краёв; пустое/с цифры — приставка "c_".
+        // Идём по КОДПОИНТАМ (суррогатные пары = один символ, как в Python).
+        internal static string SafeCol(string name)
+        {
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < name.Length; i++)
+            {
+                int cp;
+                if (char.IsHighSurrogate(name[i]) && i + 1 < name.Length
+                    && char.IsLowSurrogate(name[i + 1]))
+                {
+                    cp = char.ConvertToUtf32(name[i], name[i + 1]);
+                    i++;
+                }
+                else cp = name[i];
+                sb.Append(IsAlnum(cp) || cp == '_' ? char.ConvertFromUtf32(cp) : "_");
+            }
+            string s = sb.ToString().Trim('_');
+            if (s.Length == 0 || IsDigit(char.ConvertToUtf32(s, 0)))
+                s = "c_" + s;
+            return s;
+        }
+
+        static bool IsAlnum(int cp)
+        {
+            UnicodeCategory uc = CharUnicodeInfo.GetUnicodeCategory(char.ConvertFromUtf32(cp), 0);
+            switch (uc)
+            {
+                case UnicodeCategory.UppercaseLetter:
+                case UnicodeCategory.LowercaseLetter:
+                case UnicodeCategory.TitlecaseLetter:
+                case UnicodeCategory.ModifierLetter:
+                case UnicodeCategory.OtherLetter:
+                case UnicodeCategory.DecimalDigitNumber:
+                case UnicodeCategory.LetterNumber:
+                case UnicodeCategory.OtherNumber:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+
+        static bool IsDigit(int cp)
+        {
+            UnicodeCategory uc = CharUnicodeInfo.GetUnicodeCategory(char.ConvertFromUtf32(cp), 0);
+            return uc == UnicodeCategory.DecimalDigitNumber || uc == UnicodeCategory.OtherNumber;
+        }
+
+        static readonly Regex DatetimeRe =
+            new Regex(@"^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})$", RegexOptions.Compiled);
+
+        // poc_load_entity._cell + str() csv.writer'а.
+        // NB: целые за пределами Int64 JavaScriptSerializer читает как double, и
+        // Python-точность теряется — у 1С таких значений в текстовых выгрузках нет
+        // (проверяется golden-пробой при появлении).
+        internal static string Cell(object v)
+        {
+            if (v == null) return "";
+            if (v is bool) return ((bool)v) ? "true" : "false";
+            string s = v as string;
+            if (s != null)
+            {
+                Match m = DatetimeRe.Match(s);
+                return m.Success ? m.Groups[1].Value + " " + m.Groups[2].Value : s;
+            }
+            if (v is int || v is long) return Convert.ToString(v, CultureInfo.InvariantCulture);
+            if (v is decimal) return ((decimal)v).ToString(CultureInfo.InvariantCulture);
+            if (v is double) return Py.PyFloat((double)v);
+            if (v is IDictionary<string, object> || v is IList) return Py.PyContainerStr(v);
+            throw new InvalidDataException("неподдерживаемый тип значения ячейки: " + v.GetType().Name);
+        }
+
+        // Диалект Python csv по умолчанию: quote '"', удвоение, разделитель ',',
+        // конец строки CRLF. Файл — UTF-8 БЕЗ BOM.
+        internal static void CsvRow(Stream outStream, byte[] buf, IList<string> cells)
+        {
+            for (int i = 0; i < cells.Count; i++)
+            {
+                if (i > 0) WriteRaw(outStream, buf, ",");
+                WriteField(outStream, buf, cells[i] ?? "");
+            }
+            WriteRaw(outStream, buf, "\r\n");
+        }
+
+        static void WriteField(Stream outStream, byte[] buf, string cell)
+        {
+            bool quote = cell.IndexOfAny(new char[] { '"', ',', '\r', '\n' }) >= 0;
+            if (!quote) { WriteRaw(outStream, buf, cell); return; }
+            WriteRaw(outStream, buf, "\"");
+            WriteRaw(outStream, buf, cell.Replace("\"", "\"\""));
+            WriteRaw(outStream, buf, "\"");
+        }
+
+        // Запись строки в UTF-8 кусками под размер буфера: ячейка может быть
+        // мегабайтами (у 1С бывают строки по 19 МБ), а GetBytes требует, чтобы
+        // влезал весь кусок. Разрез не должен попадать внутрь суррогатной пары.
+        internal static void WriteRaw(Stream outStream, byte[] buf, string s)
+        {
+            int pos = 0;
+            while (pos < s.Length)
+            {
+                int chars = Math.Min(buf.Length / 4, s.Length - pos);
+                if (pos + chars < s.Length && char.IsHighSurrogate(s[pos + chars - 1]))
+                    chars--;
+                if (chars <= 0) chars = 1;
+                int n = Encoding.UTF8.GetBytes(s, pos, chars, buf, 0);
+                outStream.Write(buf, 0, n);
+                pos += chars;
+            }
+        }
+    }
+
+    // ============================ JSON ==========================================
+    internal static class Json
+    {
+        internal static JavaScriptSerializer Make()
+        {
+            JavaScriptSerializer js = new JavaScriptSerializer();
+            js.MaxJsonLength = int.MaxValue;   // страницы OData крупные
+            js.RecursionLimit = 1000;
+            return js;
+        }
+
+        // NB: Dictionary<string,object> в .NET Framework 4 сохраняет порядок вставки
+        // (без удалений) — на этом держится union колонок в порядке первого появления,
+        // как у dict в poc. JavaScriptSerializer даёт вложенные Dictionary и ArrayList.
+        internal static Dictionary<string, object> Obj(string json)
+        {
+            return Make().Deserialize<Dictionary<string, object>>(json);
+        }
+
+        internal static string Ser(object o)
+        {
+            return Make().Serialize(o);
+        }
+    }
+}
+
+namespace PacketAgent
+{
+    // ============================ $metadata (разбор как в poc) ==================
+    // Те же regex, что poc_load_entity._load_metadata: ключи и типы полей из XML.
+    internal sealed class Meta
+    {
+        readonly Dictionary<string, List<string>> _keys = new Dictionary<string, List<string>>();
+        readonly Dictionary<string, List<KeyValuePair<string, string>>> _props =
+            new Dictionary<string, List<KeyValuePair<string, string>>>();
+        readonly Dictionary<string, string> _ownerCache = new Dictionary<string, string>();
+        internal string Fingerprint;   // sha256:<hex> байт metadata.xml
+
+        internal static Meta Parse(byte[] xmlBytes)
+        {
+            Meta m = new Meta();
+            using (SHA256 sha = SHA256.Create())
+                m.Fingerprint = "sha256:" + BitConverter.ToString(
+                    sha.ComputeHash(xmlBytes)).Replace("-", "").ToLowerInvariant();
+            string xml = Encoding.UTF8.GetString(xmlBytes);
+            foreach (Match em in Regex.Matches(xml,
+                         @"<EntityType\s+Name=""([^""]+)""(.*?)</EntityType>",
+                         RegexOptions.Singleline))
+            {
+                string body = em.Groups[2].Value;
+                List<string> key = new List<string>();
+                Match km = Regex.Match(body, @"<Key>(.*?)</Key>", RegexOptions.Singleline);
+                if (km.Success)
+                    foreach (Match pm in Regex.Matches(km.Groups[1].Value,
+                                 @"<PropertyRef\s+Name=""([^""]+)"""))
+                        key.Add(pm.Groups[1].Value);
+                m._keys[em.Groups[1].Value] = key;
+                List<KeyValuePair<string, string>> props = new List<KeyValuePair<string, string>>();
+                foreach (Match pm in Regex.Matches(body,
+                             @"<Property\s+Name=""([^""]+)""\s+Type=""([^""]+)"""))
+                    props.Add(new KeyValuePair<string, string>(pm.Groups[1].Value, pm.Groups[2].Value));
+                m._props[em.Groups[1].Value] = props;
+            }
+            return m;
+        }
+
+        internal bool HasEntity(string entity)
+        {
+            return _props.ContainsKey(entity);
+        }
+
+        // declared_key из $metadata — источник правды, в т.ч. составной.
+        internal List<string> DeclaredKey(string entity)
+        {
+            List<string> k;
+            return _keys.TryGetValue(entity, out k) ? k : new List<string>();
+        }
+
+        // Свойства, объявленные самой сущностью (не вложенным типом) — защита
+        // реквизитов шапки при развороте (poc.own_props).
+        internal HashSet<string> OwnProps(string entity)
+        {
+            List<KeyValuePair<string, string>> p;
+            HashSet<string> s = new HashSet<string>();
+            if (_props.TryGetValue(entity, out p))
+                foreach (KeyValuePair<string, string> kv in p) s.Add(kv.Key);
+            return s;
+        }
+
+        // Порядок страниц — по объявленному ключу, без служебных *_Type (poc._order_by).
+        // Ключа нет — null (тогда одна страница либо честная ошибка полноты).
+        internal string OrderBy(string entity)
+        {
+            List<string> key = DeclaredKey(entity);
+            if (key.Count == 0) return null;
+            List<string> cols = new List<string>();
+            foreach (string k in key) if (!k.EndsWith("_Type", StringComparison.Ordinal)) cols.Add(k);
+            if (cols.Count == 0) cols = key;
+            return string.Join(",", cols.ToArray());
+        }
+
+        // Есть ли у сущности версионирование платформы (Ref_Key + DataVersion).
+        internal bool HasVersions(string entity)
+        {
+            HashSet<string> own = OwnProps(entity);
+            return own.Contains("Ref_Key") && own.Contains("DataVersion");
+        }
+
+        // Владелец табличной части (poc.owner_of): у части есть Ref_Key, нет своей
+        // DataVersion; кандидат — префикс имени от длинного к короткому, у которого
+        // и Ref_Key, и DataVersion есть. null — владельца нет (грузим полностью).
+        internal string OwnerOf(string entity)
+        {
+            string cached;
+            if (_ownerCache.TryGetValue(entity, out cached)) return cached;
+            string res = null;
+            HashSet<string> own = OwnProps(entity);
+            if (own.Contains("Ref_Key") && !own.Contains("DataVersion"))
+            {
+                string[] parts = entity.Split('_');
+                for (int cut = parts.Length - 1; cut > 0 && res == null; cut--)
+                {
+                    string cand = string.Join("_", parts, 0, cut);
+                    HashSet<string> cp = OwnProps(cand);
+                    if (cp.Contains("Ref_Key") && cp.Contains("DataVersion")) res = cand;
+                }
+            }
+            _ownerCache[entity] = res;
+            return res;
+        }
+
+        // $select без полей, которые OData 1С физически не отдаёт (poc._select_of):
+        // Edm.Stream / Edm.Binary. Запасной вариант, только после двух отказов.
+        internal string SelectOf(string entity)
+        {
+            List<KeyValuePair<string, string>> p;
+            if (!_props.TryGetValue(entity, out p)) return "";
+            List<string> keep = new List<string>();
+            List<string> bad = new List<string>();
+            foreach (KeyValuePair<string, string> kv in p)
+            {
+                if (kv.Value == "Edm.Stream" || kv.Value == "Edm.Binary") bad.Add(kv.Key);
+                else keep.Add(kv.Key);
+            }
+            if (bad.Count == 0 || keep.Count == 0) return "";
+            Log.Line("    " + entity + ": пропущены поля, которые OData 1С не отдаёт "
+                     + "(Edm.Stream/Edm.Binary): " + string.Join(", ", bad.ToArray()));
+            return string.Join(",", keep.ToArray());
+        }
+    }
+
+    // ============================ разворот вложенных наборов (poc._flatten_nested)
+    // Правило структурное: у записи ровно одно поле — непустой список объектов —
+    // настоящие строки лежат в нём, внешние скалярные поля общие. У ссылочного
+    // объекта (declared_key == [Ref_Key]) реквизиты шапки значениями строк не
+    // затираются; у обёртки набора строка и есть данные.
+    internal static class Flatten
+    {
+        internal static List<Dictionary<string, object>> Rows(
+            IList rows, string entity, Meta meta)
+        {
+            bool known = entity != null && meta != null && meta.HasEntity(entity);
+            // Синтетические фикстуры golden-пробы (entity не из $metadata) — режим
+            // entity_set=None у poc: без разворота. Боевая сущность без свойств в
+            // $metadata — fail-closed, как в poc.
+            if (entity != null && meta != null && !known && !entity.StartsWith("_", StringComparison.Ordinal))
+                throw new InvalidDataException("нет свойств " + entity + " в $metadata — "
+                    + "загрузка отменена, иначе реквизиты шапки будут затёрты значениями строк");
+            HashSet<string> own = known ? meta.OwnProps(entity) : new HashSet<string>();
+            List<string> dk = known ? meta.DeclaredKey(entity) : new List<string>();
+            bool isObject = known && dk.Count == 1 && dk[0] == "Ref_Key";
+
+            List<Dictionary<string, object>> outRows = new List<Dictionary<string, object>>();
+            foreach (object ro in rows)
+            {
+                IDictionary<string, object> r = ro as IDictionary<string, object>;
+                if (r == null) continue;
+                List<string> nested = new List<string>();
+                foreach (KeyValuePair<string, object> kv in r)
+                {
+                    IList l = kv.Value as IList;
+                    if (l != null && l.Count > 0 && l[0] is IDictionary<string, object>)
+                        nested.Add(kv.Key);
+                }
+                if (nested.Count != 1)
+                {
+                    outRows.Add(new Dictionary<string, object>(r));
+                    continue;
+                }
+                string k = nested[0];
+                Dictionary<string, object> outer = new Dictionary<string, object>();
+                foreach (KeyValuePair<string, object> kv in r)
+                    if (kv.Key != k) outer[kv.Key] = kv.Value;
+                foreach (object io in (IList)r[k])
+                {
+                    IDictionary<string, object> inner = io as IDictionary<string, object>;
+                    if (inner == null) continue;
+                    Dictionary<string, object> merged = new Dictionary<string, object>(outer);
+                    foreach (KeyValuePair<string, object> kv in inner)
+                    {
+                        if (isObject && own.Contains(kv.Key)) continue; // реквизит шапки не затирается
+                        merged[kv.Key] = kv.Value;
+                    }
+                    outRows.Add(merged);
+                }
+            }
+            return outRows;
+        }
+
+        // Union полей в порядке первого появления (poc: dict.fromkeys по строкам).
+        internal static List<string> UnionCols(List<Dictionary<string, object>> rows)
+        {
+            List<string> cols = new List<string>();
+            HashSet<string> seen = new HashSet<string>();
+            foreach (Dictionary<string, object> r in rows)
+                foreach (string k in r.Keys)
+                    if (seen.Add(k)) cols.Add(k);
+            return cols;
+        }
+
+        // Заголовок + строки в CSV-байты (UTF-8 без BOM, CRLF) — контракт К5.
+        internal static byte[] CsvBytes(List<string> cols, List<Dictionary<string, object>> rows,
+                                        int rowFrom, int rowTo)
+        {
+            MemoryStream ms = new MemoryStream();
+            byte[] buf = new byte[65536];
+            string[] header = new string[cols.Count];
+            for (int i = 0; i < cols.Count; i++) header[i] = Fmt.SafeCol(cols[i]);
+            Fmt.CsvRow(ms, buf, header);
+            for (int ri = rowFrom; ri < rowTo; ri++)
+            {
+                Dictionary<string, object> r = rows[ri];
+                string[] cells = new string[cols.Count];
+                for (int i = 0; i < cols.Count; i++)
+                {
+                    object v;
+                    cells[i] = Fmt.Cell(r.TryGetValue(cols[i], out v) ? v : null);
+                }
+                Fmt.CsvRow(ms, buf, cells);
+            }
+            return ms.ToArray();
+        }
+    }
+}
+
+namespace PacketAgent
+{
+    // 404 при дотяжке — записи уже нет в 1С (gone), отдельный тип, чтобы отличить
+    // от сбоев сети.
+    internal sealed class OdataNotFoundException : Exception
+    {
+        internal OdataNotFoundException(string msg) : base(msg) { }
+    }
+
+    // ============================ клиент OData 1С ===============================
+    // Порт poc_load_entity: fetch_all / проба версий / прямой доступ по ключу.
+    // Авторизация — HTTP Basic (ai_reader на IIS-публикации).
+    internal sealed class OData
+    {
+        readonly Cfg _cfg;
+        readonly string _auth;
+        Meta _meta;
+
+        internal OData(Cfg cfg, Meta meta)
+        {
+            _cfg = cfg;
+            _meta = meta;
+            _auth = "Basic " + Convert.ToBase64String(
+                Encoding.UTF8.GetBytes(cfg.OdataUser + ":" + cfg.OdataPassword));
+        }
+
+        internal Meta Meta { set { _meta = value; } }
+
+        HttpWebRequest NewRequest(string url)
+        {
+            HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+            req.Headers["Authorization"] = _auth;
+            req.Timeout = C.HttpTimeoutSeconds * 1000;
+            req.ReadWriteTimeout = C.HttpTimeoutSeconds * 1000;
+            return req;
+        }
+
+        internal static string Q(string s) { return Uri.EscapeDataString(s); }
+
+        static string ReadAll(HttpWebResponse resp)
+        {
+            using (Stream s = resp.GetResponseStream())
+            using (StreamReader r = new StreamReader(s, Encoding.UTF8))
+                return r.ReadToEnd();
+        }
+
+        // Сырые байты ответа (для $metadata — отпечаток считается по байтам).
+        internal byte[] GetBytes(string url)
+        {
+            HttpWebRequest req = NewRequest(url);
+            using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+            using (Stream s = resp.GetResponseStream())
+            using (MemoryStream ms = new MemoryStream())
+            {
+                s.CopyTo(ms);
+                return ms.ToArray();
+            }
+        }
+
+        internal byte[] GetMetadata()
+        {
+            return GetBytes(_cfg.OdataUrl + "/$metadata");
+        }
+
+        // _get_json: обычный запрос -> повтор -> $select без неотдаваемых полей.
+        // 404 — отдельное исключение (дотяжка удалённой записи). Таймауты и обрывы
+        // не повторяются здесь — их решает уменьшение страницы наверху (К6).
+        internal Dictionary<string, object> GetJson(string entity, Dictionary<string, string> prm,
+                                                    string key)
+        {
+            string seg = Q(entity) + (key != null ? "(guid'" + key + "')" : "");
+            string url = _cfg.OdataUrl + "/" + seg + "?" + BuildQuery(prm);
+            try
+            {
+                return Json.Obj(ReadAll((HttpWebResponse)NewRequest(url).GetResponse()));
+            }
+            catch (WebException we)
+            {
+                HttpWebResponse resp = we.Response as HttpWebResponse;
+                if (resp != null && resp.StatusCode == HttpStatusCode.NotFound)
+                {
+                    resp.Close();
+                    throw new OdataNotFoundException(entity + " " + (key ?? "") + ": HTTP 404");
+                }
+                CloseResp(we);
+            }
+            try {   // 2. просто ещё раз — часть отказов 1С разовые
+                return Json.Obj(ReadAll((HttpWebResponse)NewRequest(url).GetResponse()));
+            }
+            catch (WebException we) { CloseResp(we); }
+            string sel = _meta.SelectOf(entity);   // 3. по-другому
+            if (sel.Length == 0) throw new InvalidDataException(entity + ": 1С не отвечает");
+            Dictionary<string, string> p2 = new Dictionary<string, string>(prm);
+            p2["$select"] = sel;
+            string url2 = _cfg.OdataUrl + "/" + seg + "?" + BuildQuery(p2);
+            return Json.Obj(ReadAll((HttpWebResponse)NewRequest(url2).GetResponse()));
+        }
+
+        internal static void CloseResp(WebException we)
+        {
+            if (we.Response != null) we.Response.Close();
+        }
+
+        static string BuildQuery(Dictionary<string, string> prm)
+        {
+            List<string> parts = new List<string>();
+            foreach (KeyValuePair<string, string> kv in prm)
+                parts.Add(kv.Key + "=" + Q(kv.Value));
+            return string.Join("&", parts.ToArray());
+        }
+
+        // Проба версий БЕЗ перебора вариантов (poc._fetch_page_doc): подменённый
+        // $select сделал бы пробу дорогой.
+        internal Dictionary<string, object> FetchPageDoc(string entity, Dictionary<string, string> prm)
+        {
+            string url = _cfg.OdataUrl + "/" + Q(entity) + "?" + BuildQuery(prm);
+            return Json.Obj(ReadAll((HttpWebResponse)NewRequest(url).GetResponse()));
+        }
+
+        internal int CountOf(string entity)
+        {
+            try
+            {
+                HttpWebRequest req = NewRequest(_cfg.OdataUrl + "/" + Q(entity) + "/$count");
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                using (StreamReader r = new StreamReader(resp.GetResponseStream()))
+                    return int.Parse(r.ReadToEnd().Trim(), CultureInfo.InvariantCulture);
+            }
+            catch { return -1; }
+        }
+
+        static IList ValueOf(Dictionary<string, object> doc)
+        {
+            object v;
+            return doc.TryGetValue("value", out v) ? (v as IList ?? new ArrayList()) : new ArrayList();
+        }
+
+        static int ExpectedOf(Dictionary<string, object> doc)
+        {
+            object c;
+            if (!doc.TryGetValue("odata.count", out c) && !doc.TryGetValue("__count", out c))
+                return -1;
+            try { return Convert.ToInt32(c, CultureInfo.InvariantCulture); }
+            catch { return -1; }
+        }
+
+        // fetch_all: первая страница БЕЗ $orderby и с $inlinecount; данных больше
+        // страницы — заново с $orderby по объявленному ключу; HTTP-ошибка — страница
+        // вчетверо до page_min и сущность читается СНАЧАЛА; сверка с odata.count.
+        internal List<Dictionary<string, object>> FetchAll(string entity)
+        {
+            int expected = -1, page = _cfg.PageSize, skip = 0, shortPages = 0;
+            string order = "";
+            bool first = true;
+            List<Dictionary<string, object>> rows = new List<Dictionary<string, object>>();
+            while (true)
+            {
+                Dictionary<string, string> prm = new Dictionary<string, string>();
+                prm["$format"] = "json";
+                prm["$top"] = page.ToString(CultureInfo.InvariantCulture);
+                prm["$skip"] = skip.ToString(CultureInfo.InvariantCulture);
+                if (first) prm["$inlinecount"] = "allpages";
+                if (order.Length > 0) prm["$orderby"] = order;
+                IList v;
+                try
+                {
+                    Dictionary<string, object> doc = GetJson(entity, prm, null);
+                    v = ValueOf(doc);
+                    if (first)
+                    {
+                        first = false;
+                        expected = ExpectedOf(doc);
+                        if (v.Count >= page && (expected < 0 || expected > page))
+                        {
+                            order = _meta.OrderBy(entity) ?? "";
+                            if (order.Length > 0)
+                            {
+                                rows = new List<Dictionary<string, object>>();
+                                skip = 0; shortPages = 0;
+                                continue;
+                            }
+                        }
+                        if (expected < 0) expected = CountOf(entity);
+                    }
+                }
+                catch (Exception)
+                {
+                    // Страница уменьшается, а не сущность теряется (К6): при меньшей
+                    // странице появляется постраничность, а с ней обязателен $orderby,
+                    // поэтому начинаем сущность заново, а не продолжаем с середины.
+                    if (page <= _cfg.PageMin) throw;
+                    page = Math.Max(_cfg.PageMin, page / 4);
+                    order = (expected < 0 || expected > page) ? (_meta.OrderBy(entity) ?? "") : "";
+                    rows = new List<Dictionary<string, object>>();
+                    skip = 0; shortPages = 0; first = true;
+                    Log.Line("    " + entity + ": страница уменьшена до " + page
+                             + " — 1С не отдала крупную");
+                    continue;
+                }
+                if (v.Count == 0) break;
+                foreach (object o in v)
+                {
+                    IDictionary<string, object> d = o as IDictionary<string, object>;
+                    if (d != null) rows.Add(new Dictionary<string, object>(d));
+                }
+                skip += v.Count;
+                if (v.Count < page)
+                {
+                    shortPages++;
+                    if (expected >= 0 && rows.Count >= expected) break;
+                    if (expected < 0 && shortPages > 1) break;
+                }
+            }
+            return rows;
+        }
+
+        // Проба версий (порт пробы load_entity_delta): $select=Ref_Key,DataVersion,
+        // та же дисциплина страниц. null — проба неполная/не удалась: дельта отменяется.
+        internal Dictionary<string, string> ProbeVersions(string entity)
+        {
+            int expected = -1, top = _cfg.PageSize, skip = 0;
+            bool first = true;
+            Dictionary<string, string> probe = new Dictionary<string, string>();
+            while (true)
+            {
+                Dictionary<string, string> prm = new Dictionary<string, string>();
+                prm["$format"] = "json";
+                prm["$select"] = "Ref_Key,DataVersion";
+                prm["$top"] = top.ToString(CultureInfo.InvariantCulture);
+                prm["$skip"] = skip.ToString(CultureInfo.InvariantCulture);
+                if (first) prm["$inlinecount"] = "allpages";
+                if (!first && (expected < 0 || expected > top)) prm["$orderby"] = "Ref_Key";
+                IList page;
+                try
+                {
+                    Dictionary<string, object> doc = FetchPageDoc(entity, prm);
+                    page = ValueOf(doc);
+                    if (first)
+                    {
+                        first = false;
+                        expected = ExpectedOf(doc);
+                        if (expected < 0) expected = CountOf(entity);
+                        if (page.Count >= top && (expected < 0 || expected > top))
+                        {
+                            probe = new Dictionary<string, string>();
+                            skip = 0;
+                            continue;
+                        }
+                    }
+                }
+                catch (Exception)
+                {
+                    if (top <= _cfg.PageMin) return null;
+                    top = Math.Max(_cfg.PageMin, top / 4);
+                    probe = new Dictionary<string, string>();
+                    skip = 0; first = true;
+                    continue;
+                }
+                if (page.Count == 0) break;
+                foreach (object o in page)
+                {
+                    IDictionary<string, object> d = o as IDictionary<string, object>;
+                    if (d == null) continue;
+                    object rk, dv;
+                    if (!d.TryGetValue("Ref_Key", out rk) || rk == null) continue;
+                    d.TryGetValue("DataVersion", out dv);
+                    probe[Convert.ToString(rk, CultureInfo.InvariantCulture)] =
+                        dv == null ? "" : Convert.ToString(dv, CultureInfo.InvariantCulture);
+                }
+                skip += page.Count;
+                if (expected >= 0 && probe.Count >= expected) break;
+            }
+            // Неполная проба — не дельта: живые записи выглядели бы «удалёнными».
+            if (expected >= 0 && probe.Count < expected) return null;
+            return probe;
+        }
+
+        // Дотяжка записи прямым доступом Сущность(guid'…'). 404 — записи уже нет.
+        internal Dictionary<string, object> FetchByKey(string entity, string key)
+        {
+            Dictionary<string, string> prm = new Dictionary<string, string>();
+            prm["$format"] = "json";
+            Dictionary<string, object> obj = GetJson(entity, prm, key);
+            object rk;
+            if (obj != null && obj.TryGetValue("Ref_Key", out rk) && rk != null) return obj;
+            return null;
+        }
+    }
+}
+
+namespace PacketAgent
+{
+    // ============================ локальный индекс версий =======================
+    // data_dir/index/<entity>.idx — текстовый файл:
+    //   #packet-agent-index v1
+    //   version_fingerprint=sha256:<hex>     (может быть пустым)
+    //   content_fingerprint=sha256:<hex>     (может быть пустым)
+    //   Ref_Key\tDataVersion                 (по строке на запись, порядок — сортировка)
+    //
+    // 🔴 ФОРМУЛЫ ОТПЕЧАТКОВ (зафиксированы в PACKET_CONTRACT.md §5, непрозрачны
+    // для приёмника):
+    //   version_fingerprint = sha256( UTF8( "Ref_Key\tDataVersion\n" ... ) ),
+    //     строки в порядке сортировки Ref_Key (ordinal), DataVersion отсутствует → "";
+    //   content_fingerprint = sha256( CSV-байты полного прочтения ): заголовок +
+    //     строки ровно в том виде, в каком агент их пишет (К5), порядок строк —
+    //     порядок чтения fetch_all (при постраничности — $orderby по объявленному
+    //     ключу, что делает порядок стабильным).
+    // Потеря/порча индекса → полное прочтение сущности (контракт §10).
+    internal sealed class EntityIndex
+    {
+        internal Dictionary<string, string> Versions = new Dictionary<string, string>();
+        internal string VersionFp = "";
+        internal string ContentFp = "";
+
+        internal static string PathOf(string dataDir, string entity)
+        {
+            return Path.Combine(dataDir, "index", entity + ".idx");
+        }
+
+        internal static EntityIndex Load(string dataDir, string entity)
+        {
+            string path = PathOf(dataDir, entity);
+            if (!File.Exists(path)) return null;
+            try
+            {
+                EntityIndex idx = new EntityIndex();
+                foreach (string line in File.ReadAllLines(path, Encoding.UTF8))
+                {
+                    if (line.Length == 0 || line.StartsWith("#", StringComparison.Ordinal)) continue;
+                    if (line.StartsWith("version_fingerprint=", StringComparison.Ordinal))
+                    {
+                        idx.VersionFp = line.Substring("version_fingerprint=".Length);
+                        continue;
+                    }
+                    if (line.StartsWith("content_fingerprint=", StringComparison.Ordinal))
+                    {
+                        idx.ContentFp = line.Substring("content_fingerprint=".Length);
+                        continue;
+                    }
+                    int tab = line.IndexOf('\t');
+                    if (tab <= 0) continue;
+                    idx.Versions[line.Substring(0, tab)] = line.Substring(tab + 1);
+                }
+                return idx;
+            }
+            catch (Exception e)
+            {
+                Log.Line("индекс " + entity + " не читается (" + e.Message + ") — полное прочтение");
+                return null;
+            }
+        }
+
+        // Атомарная замена: temp + move (File.Replace на одном томе).
+        internal static void SaveAtomic(string dataDir, string entity,
+                                        Dictionary<string, string> versions,
+                                        string versionFp, string contentFp)
+        {
+            string path = PathOf(dataDir, entity);
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string tmp = path + ".tmp";
+            List<string> keys = versions != null
+                ? new List<string>(versions.Keys) : new List<string>();
+            keys.Sort(StringComparer.Ordinal);
+            using (StreamWriter w = new StreamWriter(tmp, false, Fmt.NoBom))
+            {
+                w.NewLine = "\n";
+                w.WriteLine("#packet-agent-index v1");
+                w.WriteLine("version_fingerprint=" + (versionFp ?? ""));
+                w.WriteLine("content_fingerprint=" + (contentFp ?? ""));
+                foreach (string k in keys)
+                    w.WriteLine(k + "\t" + (versions[k] ?? ""));
+            }
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
+        }
+
+        internal static string VersionFingerprint(Dictionary<string, string> versions)
+        {
+            List<string> keys = new List<string>(versions.Keys);
+            keys.Sort(StringComparer.Ordinal);
+            MemoryStream ms = new MemoryStream();
+            byte[] buf = new byte[65536];
+            foreach (string k in keys)
+                Fmt.WriteRaw(ms, buf, k + "\t" + (versions[k] ?? "") + "\n");
+            return "sha256:" + HashHex(ms.ToArray());
+        }
+
+        internal static string HashHex(byte[] bytes)
+        {
+            using (SHA256 sha = SHA256.Create())
+                return BitConverter.ToString(sha.ComputeHash(bytes))
+                    .Replace("-", "").ToLowerInvariant();
+        }
+    }
+
+    // ============================ состояние агента ==============================
+    // data_dir/state.json: seq последнего отправленного пакета, config_version,
+    // отпечаток $metadata, флаги resync/full_done, pubkey с сервера.
+    internal sealed class AgentState
+    {
+        internal long Seq;
+        internal long ConfigVersion;
+        internal string MetadataFingerprint = "";
+        internal bool Resync;
+        internal bool FullDone;
+        internal string RecipientPubkey = "";
+
+        string _path;   // присваивается в Load, дальше только Save
+
+        internal static AgentState Load(string dataDir)
+        {
+            AgentState st = new AgentState();
+            st._path = Path.Combine(dataDir, "state.json");
+            if (!File.Exists(st._path)) return st;
+            try
+            {
+                Dictionary<string, object> d = Json.Obj(File.ReadAllText(st._path, Encoding.UTF8));
+                st.Seq = GetLong(d, "seq");
+                st.ConfigVersion = GetLong(d, "config_version");
+                object v;
+                if (d.TryGetValue("metadata_fingerprint", out v) && v != null)
+                    st.MetadataFingerprint = Convert.ToString(v, CultureInfo.InvariantCulture);
+                st.Resync = GetBool(d, "resync");
+                st.FullDone = GetBool(d, "full_done");
+                if (d.TryGetValue("recipient_pubkey", out v) && v != null)
+                    st.RecipientPubkey = Convert.ToString(v, CultureInfo.InvariantCulture);
+            }
+            catch (Exception e)
+            {
+                Log.Line("state.json не читается (" + e.Message + ") — работаем с нуля");
+            }
+            return st;
+        }
+
+        static long GetLong(Dictionary<string, object> d, string k)
+        {
+            object v;
+            if (!d.TryGetValue(k, out v) || v == null) return 0;
+            try { return Convert.ToInt64(v, CultureInfo.InvariantCulture); }
+            catch { return 0; }
+        }
+
+        static bool GetBool(Dictionary<string, object> d, string k)
+        {
+            object v;
+            if (!d.TryGetValue(k, out v) || v == null) return false;
+            return v is bool && (bool)v;
+        }
+
+        internal void Save()
+        {
+            Dictionary<string, object> d = new Dictionary<string, object>();
+            d["seq"] = Seq;
+            d["config_version"] = ConfigVersion;
+            d["metadata_fingerprint"] = MetadataFingerprint;
+            d["resync"] = Resync;
+            d["full_done"] = FullDone;
+            d["recipient_pubkey"] = RecipientPubkey;
+            Directory.CreateDirectory(Path.GetDirectoryName(_path));
+            string tmp = _path + ".tmp";
+            File.WriteAllText(tmp, Json.Ser(d), Fmt.NoBom);
+            if (File.Exists(_path)) File.Replace(tmp, _path, null);
+            else File.Move(tmp, _path);
+        }
+    }
+
+    // ============================ клиент приёмника ==============================
+    internal sealed class ReceiverException : Exception
+    {
+        internal readonly string Code;
+        internal readonly int HttpStatus;
+        internal ReceiverException(string code, int status)
+            : base("приёмник: " + code + " (HTTP " + status + ")")
+        {
+            Code = code;
+            HttpStatus = status;
+        }
+    }
+
+    internal sealed class Receiver
+    {
+        readonly Cfg _cfg;
+
+        internal Receiver(Cfg cfg) { _cfg = cfg; }
+
+        // 5xx/таймаут/обрыв — экспоненциальная пауза и повтор; 4xx — код приёмника
+        // пробрасывается наверх (bad_auth/stale_seq/... виден в логе).
+        internal byte[] Request(string method, string path, byte[] body)
+        {
+            string url = _cfg.ReceiverUrl + path;
+            for (int attempt = 0; ; attempt++)
+            {
+                try
+                {
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                    req.Method = method;
+                    req.Headers["Authorization"] = "Bearer " + _cfg.Token;
+                    req.Timeout = C.ReceiverTimeoutSeconds * 1000;
+                    req.ReadWriteTimeout = C.ReceiverTimeoutSeconds * 1000;
+                    if (body != null)
+                    {
+                        req.ContentType = "application/octet-stream";
+                        req.ContentLength = body.Length;
+                        using (Stream s = req.GetRequestStream()) s.Write(body, 0, body.Length);
+                    }
+                    using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                    using (Stream s = resp.GetResponseStream())
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        s.CopyTo(ms);
+                        return ms.ToArray();
+                    }
+                }
+                catch (WebException we)
+                {
+                    HttpWebResponse resp = we.Response as HttpWebResponse;
+                    if (resp != null && (int)resp.StatusCode < 500)
+                    {
+                        string code = "http_" + (int)resp.StatusCode;
+                        try
+                        {
+                            using (StreamReader r = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                            {
+                                Dictionary<string, object> d = Json.Obj(r.ReadToEnd());
+                                object e;
+                                if (d != null && d.TryGetValue("error", out e) && e != null)
+                                    code = Convert.ToString(e, CultureInfo.InvariantCulture);
+                            }
+                        }
+                        catch { }
+                        int st = (int)resp.StatusCode;
+                        resp.Close();
+                        throw new ReceiverException(code, st);
+                    }
+                    OData.CloseResp(we);
+                    if (attempt >= C.ReceiverRetryMax)
+                        throw new ReceiverException("receiver_unreachable: " + we.Message, 0);
+                    int pause = C.BackoffBaseSeconds * (1 << attempt);
+                    Log.Line("приёмник недоступен (" + we.Message + "), повтор через " + pause + " с");
+                    Thread.Sleep(pause * 1000);
+                }
+            }
+        }
+
+        internal Dictionary<string, object> GetJson(string path)
+        {
+            return Json.Obj(Encoding.UTF8.GetString(Request("GET", path, null)));
+        }
+
+        internal Dictionary<string, object> GetConfig(long configVersion)
+        {
+            return GetJson("/v1/agent/config?base_id=" + OData.Q(_cfg.BaseId)
+                + "&config_version=" + configVersion.ToString(CultureInfo.InvariantCulture)
+                + "&agent_version=" + OData.Q(C.Version));
+        }
+
+        internal void PutManifest(string pkgShort, byte[] ageBytes)
+        {
+            Request("PUT", "/v1/package/" + OData.Q(_cfg.BaseId) + "/"
+                    + OData.Q(pkgShort) + "/manifest", ageBytes);
+        }
+
+        internal void PutChunk(string pkgShort, string name, byte[] bytes)
+        {
+            Request("PUT", "/v1/package/" + OData.Q(_cfg.BaseId) + "/"
+                    + OData.Q(pkgShort) + "/chunk/" + OData.Q(name), bytes);
+        }
+
+        internal Dictionary<string, object> GetStatus(string pkgShort)
+        {
+            return GetJson("/v1/package/" + OData.Q(_cfg.BaseId) + "/"
+                           + OData.Q(pkgShort) + "/status");
+        }
+
+        internal static string Str(Dictionary<string, object> d, string key)
+        {
+            object v;
+            return d != null && d.TryGetValue(key, out v) && v != null
+                ? Convert.ToString(v, CultureInfo.InvariantCulture) : null;
+        }
+
+        internal static List<string> StrList(Dictionary<string, object> d, string key)
+        {
+            List<string> res = new List<string>();
+            object v;
+            if (d == null || !d.TryGetValue(key, out v) || v == null) return res;
+            IList l = v as IList;
+            if (l == null) return res;
+            foreach (object o in l) res.Add(Convert.ToString(o, CultureInfo.InvariantCulture));
+            return res;
+        }
+
+        internal static long Long(Dictionary<string, object> d, string key, long dflt)
+        {
+            object v;
+            if (d == null || !d.TryGetValue(key, out v) || v == null) return dflt;
+            try { return Convert.ToInt64(v, CultureInfo.InvariantCulture); }
+            catch { return dflt; }
+        }
+    }
+}
+
+namespace PacketAgent
+{
+    // ============================ результат по сущности =========================
+    internal sealed class EntityResult
+    {
+        internal string Name, Op;                 // full | full_entity | delta | gone_only
+        internal List<string> Cols;               // сырые имена полей (до safe_col)
+        internal List<Dictionary<string, object>> Rows;
+        internal List<string> Key = new List<string>();   // объявленный ключ ($metadata)
+        internal Dictionary<string, string> NewVersions;  // null — версии в индексе не менять
+        internal string VersionFp, ContentFp;             // null — не менять
+        internal byte[] CsvFull;                          // null — данных нет (gone_only)
+    }
+
+    // ============================ сборка и отправка пакета ======================
+    internal sealed class Tact
+    {
+        readonly Cfg _cfg;
+        readonly string _exeDir;
+        AgentState _state;
+        Receiver _rx;
+        OData _odata;
+        Meta _meta;
+        byte[] _metaBytes;
+
+        internal Tact(Cfg cfg, string exeDir)
+        {
+            _cfg = cfg;
+            _exeDir = exeDir;
+            _state = AgentState.Load(cfg.DataDir);
+            _rx = new Receiver(cfg);
+            _odata = new OData(cfg, null);
+        }
+
+        string Pubkey
+        {
+            get
+            {
+                return !string.IsNullOrEmpty(_state.RecipientPubkey)
+                    ? _state.RecipientPubkey : _cfg.RecipientPubkey;
+            }
+        }
+
+        // ---------------- zstd / age (штатные CLI рядом с агентом) --------------
+        static void RunTool(string exe, string args)
+        {
+            ProcessStartInfo psi = new ProcessStartInfo(exe, args);
+            psi.UseShellExecute = false;
+            psi.RedirectStandardError = true;
+            psi.CreateNoWindow = true;
+            Process p = Process.Start(psi);
+            string err = p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            if (p.ExitCode != 0)
+                throw new InvalidOperationException(
+                    Path.GetFileName(exe) + " вернул " + p.ExitCode + ": " + err.Trim());
+        }
+
+        // Имя файла чанка в очереди — как _chunk_filename приёмника: служебные
+        // чанки (metadata/gone) без вставки «.csv».
+        static string ChunkFileName(string name)
+        {
+            return name + (name == "metadata" || name == "gone" || name == "index"
+                ? ".zst.age" : ".csv.zst.age");
+        }
+
+        // plain -> zstd -3 -> age -r recipient (контракт §3-4: compress -> encrypt).
+        Dictionary<string, object> WriteChunk(string queueDir, string name, byte[] plain)
+        {
+            string plainDir = Path.Combine(queueDir, "plain");
+            Directory.CreateDirectory(plainDir);
+            bool service = name == "metadata" || name == "gone" || name == "index";
+            string fp = Path.Combine(plainDir, service ? name : name + ".csv");
+            string fz = fp + ".zst";
+            File.WriteAllBytes(fp, plain);
+            RunTool(Path.Combine(_exeDir, "zstd.exe"),
+                    "-3 -q -f -o \"" + fz + "\" \"" + fp + "\"");
+            string enc = Path.Combine(queueDir, ChunkFileName(name));
+            RunTool(Path.Combine(_exeDir, "age.exe"),
+                    "-r " + Pubkey + " -o \"" + enc + "\" \"" + fz + "\"");
+            byte[] encBytes = File.ReadAllBytes(enc);
+            Dictionary<string, object> e = new Dictionary<string, object>();
+            e["name"] = name;
+            e["bytes_plain"] = plain.Length;
+            e["sha256_plain"] = EntityIndex.HashHex(plain);
+            e["bytes_enc"] = encBytes.Length;
+            e["sha256_enc"] = EntityIndex.HashHex(encBytes);
+            TryDelete(fp); TryDelete(fz);
+            return e;
+        }
+
+        static void TryDelete(string path)
+        {
+            try { if (File.Exists(path)) File.Delete(path); }
+            catch { }
+        }
+
+        static string Rand8()
+        {
+            byte[] b = new byte[4];
+            using (RNGCryptoServiceProvider rng = new RNGCryptoServiceProvider())
+                rng.GetBytes(b);
+            return BitConverter.ToString(b).Replace("-", "").ToLowerInvariant();
+        }
+
+        // Разбивка крупной сущности на серию чанков: граница по строкам, заголовок
+        // повторяется в каждой части (apply читает каждый чанк со своим header и
+        // склеивает UNION ALL), entity_part "i/n" в записи chunks (контракт §6).
+        static List<KeyValuePair<int, int>> SplitRows(EntityResult res, long limit)
+        {
+            List<KeyValuePair<int, int>> parts = new List<KeyValuePair<int, int>>();
+            long header = Flatten.CsvBytes(res.Cols, res.Rows, 0, 0).LongLength;
+            int from = 0;
+            long size = header;
+            for (int i = 0; i < res.Rows.Count; i++)
+            {
+                long rowLen = Flatten.CsvBytes(res.Cols, res.Rows, i, i + 1).LongLength - header;
+                if (size + rowLen > limit && i > from)
+                {
+                    parts.Add(new KeyValuePair<int, int>(from, i));
+                    from = i;
+                    size = header;
+                }
+                size += rowLen;
+            }
+            parts.Add(new KeyValuePair<int, int>(from, res.Rows.Count));
+            return parts;
+        }
+
+        // ------------------------------ главный такт ----------------------------
+        internal bool Run()
+        {
+            // Незавершённый пакет прошлого такта — сначала довозим его (догрузка).
+            string queueRoot = Path.Combine(_cfg.DataDir, "queue");
+            if (Directory.Exists(queueRoot))
+            {
+                string[] pending = Directory.GetDirectories(queueRoot);
+                Array.Sort(pending, StringComparer.Ordinal);
+                if (pending.Length > 0)
+                {
+                    Log.Line("незавершённый пакет " + Path.GetFileName(pending[0]) + " — довозка");
+                    return ResumePackage(pending[0]);
+                }
+            }
+
+            // (1) конфиг сервера: контур сущностей + параметры + pubkey
+            Dictionary<string, object> cfgDoc = _rx.GetConfig(_state.ConfigVersion);
+            long newCv = Receiver.Long(cfgDoc, "config_version", _state.ConfigVersion);
+            List<string> entities = Receiver.StrList(cfgDoc, "entities");
+            IDictionary<string, object> prm = null;
+            object pv;
+            if (cfgDoc.TryGetValue("params", out pv)) prm = pv as IDictionary<string, object>;
+            if (prm != null)
+            {
+                _cfg.PageSize = (int)Receiver.Long(new Dictionary<string, object>(prm), "page_size", _cfg.PageSize);
+                _cfg.TactSeconds = (int)Receiver.Long(new Dictionary<string, object>(prm), "tact_seconds", _cfg.TactSeconds);
+                int cmb = (int)Receiver.Long(new Dictionary<string, object>(prm), "chunk_mb", _cfg.ChunkMb);
+                _cfg.ChunkMb = Math.Max(C.ChunkMbMin, Math.Min(C.ChunkMbMax, cmb));
+            }
+            string pub = Receiver.Str(cfgDoc, "recipient_pubkey");
+            if (!string.IsNullOrEmpty(pub) && pub != Pubkey)
+            {
+                _state.RecipientPubkey = pub;   // смена pubkey применяется (контракт §3)
+                _state.Save();
+                Log.Line("приёмник прислал новый recipient pubkey — применён");
+            }
+            if (entities.Count == 0)
+            {
+                Log.Line("контур пуст — нечего отправлять");
+                _state.ConfigVersion = newCv;
+                _state.Save();
+                return true;
+            }
+
+            // $metadata: кэш + отпечаток; изменился — служебный чанк в пакете
+            _metaBytes = _odata.GetMetadata();
+            _meta = Meta.Parse(_metaBytes);
+            _odata.Meta = _meta;
+            try
+            {
+                Directory.CreateDirectory(Path.Combine(_cfg.DataDir, "cache"));
+                File.WriteAllBytes(Path.Combine(_cfg.DataDir, "cache", "metadata.xml"), _metaBytes);
+            }
+            catch (Exception e) { Log.Line("кэш metadata.xml не записан: " + e.Message); }
+            bool metaChanged = _state.MetadataFingerprint != _meta.Fingerprint;
+            bool firstRun = _state.Resync || !_state.FullDone;
+            Log.Line("такт: сущностей " + entities.Count + (firstRun ? ", ПОЛНАЯ заливка" : "")
+                     + (metaChanged ? ", $metadata изменился" : ""));
+
+            // (2) сбор изменений
+            List<EntityResult> results = new List<EntityResult>();
+            List<KeyValuePair<string, string>> gone = new List<KeyValuePair<string, string>>();
+            Dictionary<string, bool> ownerSilent = new Dictionary<string, bool>();
+            entities.Sort(StringComparer.Ordinal);   // владелец — префикс имени части → раньше
+            foreach (string e in entities)
+            {
+                try { ProcessEntity(e, firstRun, results, gone, ownerSilent); }
+                catch (Exception ex)
+                {
+                    // Сущность не прочиталась — индекс её не трогаем, такт падает:
+                    // молчаливая потеря недопустима (п. 13 TARGET).
+                    throw new InvalidOperationException(e + ": " + ex.Message, ex);
+                }
+            }
+
+            // (4) ноль изменений — пакет НЕ шлём (контракт §7)
+            bool anyData = results.Count > 0 || gone.Count > 0;
+            bool sendMeta = firstRun || metaChanged;
+            if (!anyData && !sendMeta)
+            {
+                Log.Line("изменений нет — пакет не отправляется");
+                _state.ConfigVersion = newCv;
+                _state.Save();
+                return true;
+            }
+            string kind = firstRun ? "full" : (anyData ? "delta" : "meta");
+
+            // (5)-(7) пакет: чанки, крипто, отправка, индекс ПОСЛЕ applied/verified (К2)
+            return SendPackage(kind, results, gone, sendMeta, newCv);
+        }
+
+        void ProcessEntity(string e, bool firstRun,
+                           List<EntityResult> results,
+                           List<KeyValuePair<string, string>> gone,
+                           Dictionary<string, bool> ownerSilent)
+        {
+            string owner = _meta.OwnerOf(e);
+            if (owner != null)
+            {
+                bool silent;
+                // Тихий владелец: дельта владельца пуста → его табличные части не читаем.
+                if (ownerSilent.TryGetValue(owner, out silent) && silent)
+                {
+                    Log.Line("    " + e + ": владелец " + owner + " не менялся — часть не читаем");
+                    return;
+                }
+            }
+            EntityIndex idx = null;
+            if (!firstRun && _meta.HasVersions(e))
+            {
+                Dictionary<string, string> ver1c = _odata.ProbeVersions(e);
+                idx = EntityIndex.Load(_cfg.DataDir, e);
+                if (ver1c != null && idx != null)
+                {
+                    List<string> changed = new List<string>();
+                    foreach (KeyValuePair<string, string> kv in ver1c)
+                    {
+                        string old;
+                        if (!idx.Versions.TryGetValue(kv.Key, out old) || old != kv.Value)
+                            changed.Add(kv.Key);
+                    }
+                    List<string> goneK = new List<string>();
+                    foreach (string k in idx.Versions.Keys)
+                        if (!ver1c.ContainsKey(k)) goneK.Add(k);
+                    if (changed.Count == 0 && goneK.Count == 0)
+                    {
+                        ownerSilent[e] = true;
+                        return;
+                    }
+                    ownerSilent[e] = false;
+                    List<Dictionary<string, object>> fetched = new List<Dictionary<string, object>>();
+                    Dictionary<string, string> fetchedOk = new Dictionary<string, string>();
+                    foreach (string k in changed)
+                    {
+                        Dictionary<string, object> obj = null;
+                        try { obj = _odata.FetchByKey(e, k); }
+                        catch (OdataNotFoundException) { goneK.Add(k); continue; } // удалили между пробой и тягой
+                        if (obj != null) { fetched.Add(obj); fetchedOk[k] = ver1c[k]; }
+                    }
+                    List<Dictionary<string, object>> flat = Flatten.Rows(fetched, e, _meta);
+                    EntityResult res = new EntityResult();
+                    res.Name = e;
+                    res.Key = _meta.DeclaredKey(e);
+                    // Индекс — только реально применённое (К2): старое минус gone
+                    // плюс успешно вытянутые версии; невытянутые повторятся завтра.
+                    Dictionary<string, string> nv = new Dictionary<string, string>(idx.Versions);
+                    foreach (string k in goneK) nv.Remove(k);
+                    foreach (KeyValuePair<string, string> kv in fetchedOk) nv[kv.Key] = kv.Value;
+                    res.NewVersions = nv;
+                    res.VersionFp = EntityIndex.VersionFingerprint(nv);
+                    if (flat.Count > 0)
+                    {
+                        res.Op = "delta";
+                        res.Rows = flat;
+                        res.Cols = Flatten.UnionCols(flat);
+                        res.CsvFull = Flatten.CsvBytes(res.Cols, flat, 0, flat.Count);
+                    }
+                    else res.Op = "gone_only";
+                    results.Add(res);
+                    foreach (string k in goneK)
+                        gone.Add(new KeyValuePair<string, string>(e, k));
+                    Log.Line("    " + e + ": дельта changed=" + changed.Count + " gone=" + goneK.Count);
+                    return;
+                }
+                Log.Line("    " + e + ": проба версий неполная или индекса нет — полное прочтение");
+            }
+
+            // Полное прочтение: firstRun, сущность без версий, fallback, табличная часть.
+            List<Dictionary<string, object>> rows = _odata.FetchAll(e);
+            List<Dictionary<string, object>> flatAll = Flatten.Rows(rows, e, _meta);
+            if (flatAll.Count == 0)
+            {
+                Log.Line("    " + e + ": пустая сущность");
+                ownerSilent[e] = true;
+                return;
+            }
+            List<string> cols = Flatten.UnionCols(flatAll);
+            byte[] csv = Flatten.CsvBytes(cols, flatAll, 0, flatAll.Count);
+            string contentFp = "sha256:" + EntityIndex.HashHex(csv);
+            string op;
+            if (firstRun) op = "full";
+            else if (owner != null) op = "full_entity";   // владелец менялся — шлём часть
+            else
+            {
+                if (idx == null) idx = EntityIndex.Load(_cfg.DataDir, e);
+                if (idx != null && idx.ContentFp == contentFp)
+                {
+                    ownerSilent[e] = true;   // К1: прочитали, сравнили — не изменилось
+                    Log.Line("    " + e + ": содержимое не изменилось (отпечаток К1)");
+                    return;
+                }
+                op = "full_entity";
+            }
+            EntityResult res2 = new EntityResult();
+            res2.Name = e;
+            res2.Op = op;
+            res2.Cols = cols;
+            res2.Rows = flatAll;
+            res2.CsvFull = csv;
+            res2.Key = _meta.DeclaredKey(e);
+            res2.ContentFp = contentFp;
+            if (_meta.HasVersions(e))
+            {
+                // Версии для индекса берём свежей пробой (дёшево) — иначе следующий
+                // такт счёл бы всю сущность изменившейся.
+                Dictionary<string, string> pr = _odata.ProbeVersions(e);
+                if (pr != null)
+                {
+                    res2.NewVersions = pr;
+                    res2.VersionFp = EntityIndex.VersionFingerprint(pr);
+                }
+            }
+            results.Add(res2);
+            ownerSilent[e] = false;
+            Log.Line("    " + e + ": " + op + ", строк " + flatAll.Count);
+        }
+
+        // Сборка пакета в очередь + отправка. План обновления индекса пишется ДО
+        // отправки (plan.json) — чтобы довозка после обрыва закончила тем же К2.
+        bool SendPackage(string kind, List<EntityResult> results,
+                         List<KeyValuePair<string, string>> gone,
+                         bool sendMeta, long newCv)
+        {
+            long seq = _state.Seq + 1;
+            string pkgShort = seq.ToString("D6", CultureInfo.InvariantCulture) + "-" + Rand8();
+            string queueDir = Path.Combine(_cfg.DataDir, "queue", pkgShort);
+            Directory.CreateDirectory(queueDir);
+
+            List<Dictionary<string, object>> chunkEntries = new List<Dictionary<string, object>>();
+            Dictionary<string, List<string>> entityChunks = new Dictionary<string, List<string>>();
+            long limit = (long)_cfg.ChunkMb * 1024 * 1024;
+            int chunkNo = 0;
+            foreach (EntityResult res in results)
+            {
+                entityChunks[res.Name] = new List<string>();
+                if (res.CsvFull == null) continue;
+                List<KeyValuePair<int, int>> parts = res.CsvFull.LongLength <= limit
+                    ? new List<KeyValuePair<int, int>> { new KeyValuePair<int, int>(0, res.Rows.Count) }
+                    : SplitRows(res, limit);
+                for (int i = 0; i < parts.Count; i++)
+                {
+                    chunkNo++;
+                    string name = "chunk-" + chunkNo.ToString("D5", CultureInfo.InvariantCulture);
+                    byte[] bytes = Flatten.CsvBytes(res.Cols, res.Rows, parts[i].Key, parts[i].Value);
+                    Dictionary<string, object> entry = WriteChunk(queueDir, name, bytes);
+                    entry["entity"] = res.Name;
+                    entry["rows"] = parts[i].Value - parts[i].Key;
+                    if (parts.Count > 1)
+                        entry["entity_part"] = (i + 1) + "/" + parts.Count;
+                    chunkEntries.Add(entry);
+                    entityChunks[res.Name].Add(name);
+                }
+            }
+            if (gone.Count > 0)
+            {
+                List<Dictionary<string, object>> g = new List<Dictionary<string, object>>();
+                foreach (KeyValuePair<string, string> kv in gone)
+                {
+                    Dictionary<string, object> r = new Dictionary<string, object>();
+                    r["entity"] = kv.Key;
+                    r["ref_key"] = kv.Value;
+                    g.Add(r);
+                }
+                byte[] bytes = Flatten.CsvBytes(
+                    new List<string> { "entity", "ref_key" }, g, 0, g.Count);
+                Dictionary<string, object> entry = WriteChunk(queueDir, "gone", bytes);
+                entry["rows"] = gone.Count;
+                chunkEntries.Add(entry);
+            }
+            if (sendMeta)
+            {
+                Dictionary<string, object> entry = WriteChunk(queueDir, "metadata", _metaBytes);
+                entry["rows"] = 0;
+                chunkEntries.Add(entry);
+            }
+
+            // Манифест (PACKET_CONTRACT §5)
+            Dictionary<string, object> m = new Dictionary<string, object>();
+            m["manifest_version"] = C.ManifestVersion;
+            m["package_id"] = _cfg.BaseId + "/" + pkgShort;
+            m["base_id"] = _cfg.BaseId;
+            m["seq"] = seq;
+            m["kind"] = kind;
+            m["created_utc"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+            m["agent_version"] = C.Version;
+            List<object> ents = new List<object>();
+            foreach (EntityResult res in results)
+            {
+                Dictionary<string, object> e = new Dictionary<string, object>();
+                e["name"] = res.Name;
+                e["op"] = res.Op;
+                e["rows"] = res.CsvFull == null ? 0 : res.Rows.Count;
+                e["chunks"] = entityChunks[res.Name].ToArray();
+                e["key"] = res.Key.ToArray();
+                if (res.VersionFp != null) e["version_fingerprint"] = res.VersionFp;
+                if (res.ContentFp != null) e["content_fingerprint"] = res.ContentFp;
+                ents.Add(e);
+            }
+            m["entities"] = ents.ToArray();
+            if (gone.Count > 0)
+            {
+                List<string> ge = new List<string>();
+                HashSet<string> seen = new HashSet<string>();
+                foreach (KeyValuePair<string, string> kv in gone)
+                    if (seen.Add(kv.Key)) ge.Add(kv.Key);
+                Dictionary<string, object> gd = new Dictionary<string, object>();
+                gd["entities"] = ge.ToArray();
+                gd["chunks"] = new string[] { "gone" };
+                m["gone"] = gd;
+            }
+            Dictionary<string, object> md = new Dictionary<string, object>();
+            md["included"] = sendMeta;
+            if (sendMeta)
+            {
+                md["fingerprint"] = _meta.Fingerprint;
+                md["chunks"] = new string[] { "metadata" };
+            }
+            m["metadata"] = md;
+            m["chunks"] = chunkEntries.ToArray();
+
+            File.WriteAllText(Path.Combine(queueDir, "manifest.json"), Json.Ser(m), Fmt.NoBom);
+            string mAge = Path.Combine(queueDir, "manifest.json.age");
+            RunTool(Path.Combine(_exeDir, "age.exe"),
+                    "-r " + Pubkey + " -o \"" + mAge + "\" \""
+                    + Path.Combine(queueDir, "manifest.json") + "\"");
+
+            // План обновления индекса (К2) — применится только после applied/verified.
+            Dictionary<string, object> plan = new Dictionary<string, object>();
+            plan["config_version"] = newCv;
+            plan["metadata_fingerprint"] = sendMeta ? _meta.Fingerprint : null;
+            plan["mark_full_done"] = kind == "full";
+            Dictionary<string, object> pe = new Dictionary<string, object>();
+            foreach (EntityResult res in results)
+            {
+                Dictionary<string, object> d = new Dictionary<string, object>();
+                d["versions"] = res.NewVersions;
+                d["version_fp"] = res.VersionFp;
+                d["content_fp"] = res.ContentFp;
+                pe[res.Name] = d;
+            }
+            plan["entities"] = pe;
+            File.WriteAllText(Path.Combine(queueDir, "plan.json"), Json.Ser(plan), Fmt.NoBom);
+
+            _state.Seq = seq;   // seq растёт только на отправленных пакетах
+            _state.Save();
+            Log.Line("пакет " + pkgShort + " kind=" + kind + ": сущностей " + results.Count
+                     + ", gone " + gone.Count + ", чанков " + chunkEntries.Count
+                     + (sendMeta ? ", +metadata" : ""));
+            return UploadAndFinish(pkgShort, queueDir);
+        }
+
+        // Отправка: манифест → чанки (повторы допустимы) → status до verified/applied.
+        bool UploadAndFinish(string pkgShort, string queueDir)
+        {
+            string mAge = Path.Combine(queueDir, "manifest.json.age");
+            try
+            {
+                _rx.PutManifest(pkgShort, File.ReadAllBytes(mAge));
+            }
+            catch (ReceiverException e)
+            {
+                if (e.Code.IndexOf("stale_seq", StringComparison.Ordinal) >= 0)
+                    return StaleSeq(queueDir);
+                Log.Line("манифест отклонён: " + e.Code + " — пакет снят, индекс не тронут");
+                DropQueue(queueDir);
+                return false;
+            }
+            string final = WaitFinal(pkgShort, queueDir);
+            string state = final, error = null;
+            int bar = final.IndexOf('|');
+            if (bar >= 0) { state = final.Substring(0, bar); error = final.Substring(bar + 1); }
+            if (state == "verified" || state == "applied")
+            {
+                FinalizePackage(pkgShort, queueDir);
+                return true;
+            }
+            if (state == "rejected" || state == "quarantined")
+            {
+                if (error != null && error.IndexOf("stale_seq", StringComparison.Ordinal) >= 0)
+                    return StaleSeq(queueDir);
+                // Карантин: пакет НЕ повторяем — ждём решения, следующий такт с новым seq.
+                Log.Line("пакет " + pkgShort + " " + state + " (" + error
+                         + ") — не повторяем, индекс не тронут");
+                DropQueue(queueDir);
+                return false;
+            }
+            // timeout/no_such_package и прочие сбои: очередь остаётся, довозим
+            // следующим тактом.
+            Log.Line("пакет " + pkgShort + " не подтверждён (" + state
+                     + (error != null ? " " + error : "") + ") — довозка следующим тактом");
+            return false;
+        }
+
+        // Опрос status с догрузкой missing до финального состояния.
+        string WaitFinal(string pkgShort, string queueDir)
+        {
+            int waited = 0, rounds = 0;
+            while (true)
+            {
+                if (++rounds > 2000) return "timeout|";
+                Dictionary<string, object> st;
+                try { st = _rx.GetStatus(pkgShort); }
+                catch (ReceiverException e) { return e.Code + "|"; }
+                string state = Receiver.Str(st, "state") ?? "";
+                if (state == "receiving")
+                {
+                    List<string> missing = Receiver.StrList(st, "missing");
+                    int sent = 0;
+                    foreach (string name in missing)
+                    {
+                        string f = Path.Combine(queueDir, ChunkFileName(name));
+                        if (File.Exists(f))
+                        {
+                            _rx.PutChunk(pkgShort, name, File.ReadAllBytes(f));
+                            sent++;
+                        }
+                    }
+                    if (sent > 0) continue;   // проверка синхронная в status
+                    if (missing.Count > 0)
+                        return "missing_local|";   // приёмник ждёт чанки, которых нет в очереди
+                }
+                else
+                {
+                    string err = Receiver.Str(st, "error");
+                    return state + "|" + (err ?? "");
+                }
+                if (waited >= C.StatusWaitSeconds) return "timeout|";
+                Thread.Sleep(C.StatusPollSeconds * 1000);
+                waited += C.StatusPollSeconds;
+            }
+        }
+
+        // К2: индекс обновляется ПОСЛЕ applied/verified, затем очередь удаляется.
+        void FinalizePackage(string pkgShort, string queueDir)
+        {
+            Dictionary<string, object> plan =
+                Json.Obj(File.ReadAllText(Path.Combine(queueDir, "plan.json"), Encoding.UTF8));
+            object eo;
+            if (plan.TryGetValue("entities", out eo))
+            {
+                IDictionary<string, object> ents = eo as IDictionary<string, object>;
+                if (ents != null)
+                    foreach (KeyValuePair<string, object> kv in ents)
+                    {
+                        IDictionary<string, object> d = kv.Value as IDictionary<string, object>;
+                        if (d == null) continue;
+                        EntityIndex idx = EntityIndex.Load(_cfg.DataDir, kv.Key);
+                        Dictionary<string, string> versions =
+                            idx != null ? idx.Versions : new Dictionary<string, string>();
+                        object vv;
+                        if (d.TryGetValue("versions", out vv) && vv != null)
+                        {
+                            IDictionary<string, object> vd = vv as IDictionary<string, object>;
+                            if (vd != null)
+                            {
+                                versions = new Dictionary<string, string>();
+                                foreach (KeyValuePair<string, object> p in vd)
+                                    versions[p.Key] = p.Value == null ? ""
+                                        : Convert.ToString(p.Value, CultureInfo.InvariantCulture);
+                            }
+                        }
+                        string vfp = Receiver.Str(new Dictionary<string, object>(d), "version_fp");
+                        string cfp = Receiver.Str(new Dictionary<string, object>(d), "content_fp");
+                        if (vfp == null && idx != null) vfp = idx.VersionFp;
+                        if (cfp == null && idx != null) cfp = idx.ContentFp;
+                        EntityIndex.SaveAtomic(_cfg.DataDir, kv.Key, versions, vfp, cfp);
+                    }
+            }
+            _state.ConfigVersion = Receiver.Long(plan, "config_version", _state.ConfigVersion);
+            string mfp = Receiver.Str(plan, "metadata_fingerprint");
+            if (mfp != null) _state.MetadataFingerprint = mfp;
+            object mfd;
+            if (plan.TryGetValue("mark_full_done", out mfd) && mfd is bool && (bool)mfd)
+            {
+                _state.FullDone = true;
+                _state.Resync = false;
+            }
+            _state.Save();
+            DropQueue(queueDir);
+            Log.Line("пакет " + pkgShort + " verified/applied — индекс обновлён, очередь снята");
+        }
+
+        // stale_seq: наш seq отстал от приёмника. Скачок вперёд и полный resync;
+        // индекс не трогаем — пакет не применялся.
+        bool StaleSeq(string queueDir)
+        {
+            _state.Resync = true;
+            _state.Seq += C.StaleSeqJump;
+            _state.Save();
+            DropQueue(queueDir);
+            Log.Line("приёмник: stale_seq — seq увеличен на " + C.StaleSeqJump
+                     + ", следующий такт — полный resync");
+            return false;
+        }
+
+        static void DropQueue(string queueDir)
+        {
+            try { Directory.Delete(queueDir, true); }
+            catch (Exception e) { Log.Line("очередь " + queueDir + " не удалена: " + e.Message); }
+        }
+
+        // Довозка незавершённого пакета: статус → missing → только их.
+        bool ResumePackage(string queueDir)
+        {
+            string pkgShort = Path.GetFileName(queueDir);
+            Dictionary<string, object> st;
+            try { st = _rx.GetStatus(pkgShort); }
+            catch (ReceiverException e)
+            {
+                if (e.Code == "no_such_package")
+                {
+                    // Приёмник пакета не знает (не доехал манифест): шлём сначала.
+                    string mAge = Path.Combine(queueDir, "manifest.json.age");
+                    if (File.Exists(mAge))
+                    {
+                        try { _rx.PutManifest(pkgShort, File.ReadAllBytes(mAge)); }
+                        catch (ReceiverException e2)
+                        {
+                            if (e2.Code.IndexOf("stale_seq", StringComparison.Ordinal) >= 0)
+                                return StaleSeq(queueDir);
+                            Log.Line("довозка: манифест отклонён: " + e2.Code);
+                            DropQueue(queueDir);
+                            return false;
+                        }
+                    }
+                    else
+                    {
+                        Log.Line("довозка: нет manifest.json.age — очередь битая, снята");
+                        DropQueue(queueDir);
+                        return false;
+                    }
+                }
+                else return false;   // приёмник недоступен — следующим тактом
+            }
+            return UploadAndFinish(pkgShort, queueDir);
+        }
+
+        // ------------------------------ smoke (AGENT_TZ §4) ----------------------
+        // Пакет kind=meta с настоящим $metadata: в витрине безобиден и полезен.
+        // true — только при подтверждённой доставке (verified/applied).
+        internal bool Smoke()
+        {
+            string queueRoot = Path.Combine(_cfg.DataDir, "queue");
+            if (Directory.Exists(queueRoot) && Directory.GetDirectories(queueRoot).Length > 0)
+            {
+                Log.Line("smoke: есть незавершённый пакет — сначала довозка штатным демоном");
+                return false;
+            }
+            _metaBytes = _odata.GetMetadata();
+            _meta = Meta.Parse(_metaBytes);
+            long seq = _state.Seq + 1;
+            string pkgShort = seq.ToString("D6", CultureInfo.InvariantCulture) + "-" + Rand8();
+            string queueDir = Path.Combine(queueRoot, pkgShort);
+            Directory.CreateDirectory(queueDir);
+
+            List<Dictionary<string, object>> chunkEntries = new List<Dictionary<string, object>>();
+            Dictionary<string, object> entry = WriteChunk(queueDir, "metadata", _metaBytes);
+            entry["rows"] = 0;
+            chunkEntries.Add(entry);
+
+            Dictionary<string, object> m = new Dictionary<string, object>();
+            m["manifest_version"] = C.ManifestVersion;
+            m["package_id"] = _cfg.BaseId + "/" + pkgShort;
+            m["base_id"] = _cfg.BaseId;
+            m["seq"] = seq;
+            m["kind"] = "meta";
+            m["created_utc"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+            m["agent_version"] = C.Version;
+            m["entities"] = new object[0];
+            Dictionary<string, object> md = new Dictionary<string, object>();
+            md["included"] = true;
+            md["fingerprint"] = _meta.Fingerprint;
+            md["chunks"] = new string[] { "metadata" };
+            m["metadata"] = md;
+            m["chunks"] = chunkEntries.ToArray();
+            File.WriteAllText(Path.Combine(queueDir, "manifest.json"), Json.Ser(m), Fmt.NoBom);
+            RunTool(Path.Combine(_exeDir, "age.exe"),
+                    "-r " + Pubkey + " -o \"" + Path.Combine(queueDir, "manifest.json.age")
+                    + "\" \"" + Path.Combine(queueDir, "manifest.json") + "\"");
+
+            Dictionary<string, object> plan = new Dictionary<string, object>();
+            plan["config_version"] = _state.ConfigVersion;
+            plan["metadata_fingerprint"] = _meta.Fingerprint;
+            plan["mark_full_done"] = false;
+            plan["entities"] = new Dictionary<string, object>();
+            File.WriteAllText(Path.Combine(queueDir, "plan.json"), Json.Ser(plan), Fmt.NoBom);
+
+            _state.Seq = seq;
+            _state.Save();
+            Log.Line("smoke: пакет " + pkgShort + " kind=meta — отправка");
+            bool ok = UploadAndFinish(pkgShort, queueDir);
+            Log.Line(ok ? "smoke: доставка подтверждена приёмником"
+                        : "smoke: доставка НЕ подтверждена");
+            return ok;
+        }
+    }
+}
+
+namespace PacketAgent
+{
+    // ============================ CLI (AGENT_TZ §7) =============================
+    //   packet-agent.exe --version                      версия, код 0
+    //   packet-agent.exe --smoke                        пробная посылка kind=meta,
+    //                                                   код 0 только при verified
+    //   packet-agent.exe                                демон тактов
+    //   packet-agent.exe --flatten <page.json> <e> <out.csv>   служебный режим
+    //                                                   golden-пробы (К5)
+    //   второй экземпляр — сразу код 0 (watchdog планировщика дёргает каждые 5 мин)
+    internal static class Program
+    {
+        static int Main(string[] args)
+        {
+            try { Console.OutputEncoding = Encoding.UTF8; } catch { }
+            // TLS 1.2 принудительно: enum Tls12 появился в .NET 4.5, а компилируем
+            // мы 4.0 — поэтому числом (3072), а не SecurityProtocolType.Tls12.
+            ServicePointManager.SecurityProtocol |= (SecurityProtocolType)3072;
+            string exeDir = Path.GetDirectoryName(
+                System.Reflection.Assembly.GetExecutingAssembly().Location);
+
+            if (args.Length == 1 && args[0] == "--version")
+            {
+                Console.WriteLine("packet-agent " + C.Version);
+                return 0;
+            }
+            if (args.Length == 4 && args[0] == "--flatten")
+                return FlattenMode(args[1], args[2], args[3]);
+            if (args.Length == 1 && args[0] == "--smoke")
+            {
+                Mutex single = AcquireSingle(exeDir);
+                if (single == null) return 0;   // работает другой экземпляр
+                using (single) return SmokeMode(exeDir);
+            }
+            if (args.Length == 0)
+            {
+                Mutex single = AcquireSingle(exeDir);
+                if (single == null) return 0;
+                using (single) return DaemonMode(exeDir);
+            }
+            Console.Error.WriteLine("использование: packet-agent.exe "
+                + "[--version | --smoke | --flatten <page.json> <entity> <out.csv>]");
+            return 2;
+        }
+
+        // Single-instance через named Mutex; имя привязано к каталогу установки.
+        static Mutex AcquireSingle(string exeDir)
+        {
+            string suffix = EntityIndex.HashHex(
+                Encoding.UTF8.GetBytes(exeDir.ToLowerInvariant())).Substring(0, 16);
+            foreach (string scope in new string[] { @"Global\", @"Local\" })
+            {
+                try
+                {
+                    bool created;
+                    Mutex m = new Mutex(true, scope + "1c-packet-agent-" + suffix, out created);
+                    if (created) return m;
+                    m.Close();
+                    return null;
+                }
+                catch (UnauthorizedAccessException) { }
+            }
+            return null;
+        }
+
+        static Cfg LoadCfg(string exeDir)
+        {
+            Cfg cfg = Cfg.Load(Path.Combine(exeDir, "agent.ini"));
+            Log.Init(cfg.LogDir);
+            return cfg;
+        }
+
+        // Демон тактов: неуспешный такт — запись в журнал (при выходе — код 1),
+        // демон продолжает со следующего такта; пауза между тактами — из конфига
+        // сервера, при серии сбоев — экспоненциальная (не чаще такта).
+        static int DaemonMode(string exeDir)
+        {
+            try
+            {
+                Cfg cfg = LoadCfg(exeDir);
+                Log.Line("packet-agent " + C.Version + " — демон тактов, база "
+                         + cfg.BaseId + ", данные " + cfg.DataDir);
+                int failures = 0;
+                while (true)
+                {
+                    try
+                    {
+                        new Tact(cfg, exeDir).Run();
+                        failures = 0;
+                    }
+                    catch (Exception e)
+                    {
+                        failures++;
+                        Log.Line("ТАКТ НЕ УДАЛСЯ: " + e.Message);
+                    }
+                    int sleep = cfg.TactSeconds;
+                    if (failures > 0)
+                        sleep = Math.Min(cfg.TactSeconds, 30 * (1 << Math.Min(failures, 5)));
+                    Thread.Sleep(sleep * 1000);
+                }
+            }
+            catch (Exception e)
+            {
+                Log.Line("критическая ошибка демона: " + e.Message);
+                Console.Error.WriteLine("packet-agent: " + e.Message);
+                return 1;
+            }
+        }
+
+        // --smoke: пакет kind=meta с настоящим $metadata; код 0 только при
+        // подтверждённой доставке, код приёмника печатается (установщик переводит
+        // его в строку по AGENT_TZ §6).
+        static int SmokeMode(string exeDir)
+        {
+            Cfg cfg;
+            try { cfg = LoadCfg(exeDir); }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("smoke: конфиг: " + e.Message);
+                return 1;
+            }
+            try
+            {
+                bool ok = new Tact(cfg, exeDir).Smoke();
+                return ok ? 0 : 1;
+            }
+            catch (ReceiverException e)
+            {
+                Log.Line("smoke: ошибка приёмника: " + e.Code);
+                Console.Error.WriteLine("smoke: ошибка приёмника: " + e.Code);
+                return 1;
+            }
+            catch (Exception e)
+            {
+                Log.Line("smoke: сбой: " + e.Message);
+                Console.Error.WriteLine("smoke: сбой: " + e.Message);
+                return 1;
+            }
+        }
+
+        // --flatten: разворот сохранённой страницы OData тем же кодом, что боевая
+        // выгрузка. Точка golden-пробы (work/packet/golden/probe.cmd, fc /b).
+        // $metadata — из metadata.xml рядом со страницей (снимок витрины).
+        static int FlattenMode(string pagePath, string entity, string outPath)
+        {
+            try
+            {
+                string metaPath = Path.Combine(
+                    Path.GetDirectoryName(Path.GetFullPath(pagePath)), "metadata.xml");
+                if (!File.Exists(metaPath))
+                {
+                    Console.Error.WriteLine("flatten: нет metadata.xml рядом со страницей: " + metaPath);
+                    return 2;
+                }
+                Meta meta = Meta.Parse(File.ReadAllBytes(metaPath));
+                Dictionary<string, object> doc = Json.Obj(File.ReadAllText(pagePath, Encoding.UTF8));
+                object v;
+                IList rows = doc.TryGetValue("value", out v) ? v as IList : null;
+                if (rows == null)
+                {
+                    Console.Error.WriteLine("flatten: в странице нет массива value");
+                    return 2;
+                }
+                List<Dictionary<string, object>> flat = Flatten.Rows(rows, entity, meta);
+                List<string> cols = Flatten.UnionCols(flat);
+                File.WriteAllBytes(outPath, Flatten.CsvBytes(cols, flat, 0, flat.Count));
+                Console.WriteLine(entity + ": " + flat.Count + " строк -> " + outPath);
+                return 0;
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("flatten: " + e.Message);
+                return 2;
+            }
+        }
+    }
+}
