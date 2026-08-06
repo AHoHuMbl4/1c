@@ -8,6 +8,8 @@ After=serenedb.service 1c-packet-server.service
 [Service]
 Type=oneshot
 # SERENEDB_DSN и PGPASSWORD — как у синка; PACKET_ROOT/PACKET_BASES — из 1c-packet.env.
-EnvironmentFile=/etc/1c-packet.env
+# Порядок значим: 1c-packet.env идёт ПОСЛЕДНИМ — его SERENEDB_DSN (база пакетного
+# контура) перекрывает синковый, остальное (PGPASSWORD) берётся из него.
 EnvironmentFile=-/etc/1c-serene-sync.env
+EnvironmentFile=/etc/1c-packet.env
 ExecStart=/usr/bin/python3 /opt/1c-packet/packet_apply.py

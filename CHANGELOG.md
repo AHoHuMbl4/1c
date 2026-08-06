@@ -10,6 +10,22 @@
 
 ---
 
+## 06.08: приёмник готов к развёртыванию — комплект `ut` и root-скрипт `[код]`
+
+- `packet_kit.py ut --dsn …ut_test`: первый боевой комплект — identity (600), токен,
+  конфиг `config_version=1` со **1589 сущностями** из переписи `base_profile`.
+  `packet-setup.json` — в установочный комплект Windows; `bases-entry.json` — основа
+  `/etc/1c-packet-bases.json`.
+- `work/packet/setup-receiver.sh` — весь root-шаг одной командой (`sudo sh …`):
+  каталоги (`/opt/1c-packet`, `/var/lib/1c-packet`, `packet-meta`), age v1.1.1 в
+  `/opt/1c-packet/bin`, identity и env в `/etc` (640 root:1c-secrets), раскладка кода,
+  юниты enable+start, проверка `/health` локально и сквозная через `1c-gate.timpul.ru`.
+  Порт **6090** (6021 занят шлюзом второй базы — `ubuntu/wireguard/README.md`).
+- `1c-packet-apply.service`: порядок EnvironmentFile — `1c-packet.env` последним
+  (его `SERENEDB_DSN=…ut_test` перекрывает синковый).
+
+---
+
 ## 06.08: пакетный транспорт — юниты и раскладка контура (подготовка к развёртыванию) `[код]`
 
 - `ubuntu/packet/systemd/`: `1c-packet-server.service` (приёмник, один процесс на все
