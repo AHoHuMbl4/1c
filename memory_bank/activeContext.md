@@ -8,12 +8,14 @@ _Обновлено: **2026-08-06.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-**Пакетный транспорт MVP (без VPN) `[06.08]`: план записан, кода нет.**
+**Пакетный транспорт MVP (без VPN) `[06.08]`: план записан и сверен с боевым кодом, кода нет.**
 Владелец: Windows тонкий (OData + агент посылок), Ubuntu — витрина и всё остальное;
-шифрованные чанки (zstd+AEAD), после первой full — дельта по `DataVersion`. Документ —
-[`docs/PLAN_MVP_PACKET_TRANSPORT.md`](../docs/PLAN_MVP_PACKET_TRANSPORT.md). Реализацию
-не начинать, пока не скажут «делай». Установщик Windows — трек владельца
-(`windows/odata-setup/`, `work/installer-exe/`).
+шифрованные чанки (zstd+AEAD), после первой full — дельта по `DataVersion`; белый IP
+только у Ubuntu, Windows за NAT (обратный канал — опрос `GET /agent/config`). Документ —
+[`docs/PLAN_MVP_PACKET_TRANSPORT.md`](../docs/PLAN_MVP_PACKET_TRANSPORT.md): §13 — сверка
+с `serene_sync`/`poc_load_entity` (3 блокирующих пробела + 10 камней, среди них
+контент-хеш, golden-проба `_cell`, `manifest_version`); §9 дополнен шагом 0. Реализацию
+не начинать, пока не скажут «делай». Установщик — трек владельца (`work/installer-exe/`).
 
 **Гейты подключены к Kimi Code `[06.08]`: ✅ вторая среда исполнения под `claudedev`.**
 Конфиг `~/.kimi-code/config.toml` (root:root, ставит `install-gates.sh` из
