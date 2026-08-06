@@ -166,8 +166,12 @@ GET  /health → {"status":"packet-server-ok"} — без авторизации
 - merge сущностей: `delete по Ref_Key + insert` (документ целиком с ТЧ) — тот же SQL,
   что у `load_entity_delta` / `load_entity`;
 - `gone` — delete по ключам;
-- `metadata` → таблица витрины `packet_metadata` (снимок `$metadata` + отпечаток);
-  `corpus_build` переключается на неё (Б1);
+- `metadata` → **файл** `<PACKET_META_DIR>/<base_id>/$metadata` (умолчание
+  `/var/lib/serenedb/packet-meta`, атомарная запись, читаем процессом движка).
+  Б1 закрыт БЕЗ правки боевой сборки (решение владельца 06.08): `corpus_build`
+  читает снимок своим прежним `read_text(:'gate' || '/$metadata')` — в пакетном
+  контуре `build.sh` получает `ETL_ODATA_BASE=<PACKET_META_DIR>/<base_id>`, и путь
+  сходится на файле снимка. Таблица для снимка не заводится;
 - контрактные таблицы: `search_changed_sources` (список изменённых — пустой допустим),
   `base_profile` (строки/счётчики из манифеста), `search_quality.mart_changed_ts`;
 - инвариант «одна версия на Ref_Key» проверяется при apply (К3): нарушение → пакет
@@ -178,11 +182,12 @@ GET  /health → {"status":"packet-server-ok"} — без авторизации
 ## 10. Конфиг агента (обратный канал, Б2)
 
 Источник истины отбора — Ubuntu (`search_entity_class` модели + `search_entity_force`
-владельца + `only_binary` из `$metadata`). Отдельный **config-builder** на Ubuntu
-считает контур теми же тремя признаками, что `serene_sync._service_skip`, пишет
-`search_entity_skipped` с причинами (п. 13 TARGET: исключённое видно) и раскладывает
-итоговый конфиг в файл базы приёмника (`config_version` растёт при любом изменении).
-Агент получает **итоговый список сущностей** и параметры такта через
+владельца + `only_binary` из снимка `$metadata` — того же файла §9). Отдельный
+**config-builder** на Ubuntu считает контур теми же тремя признаками, что
+`serene_sync._service_skip`, пишет `search_entity_skipped` с причинами (п. 13 TARGET:
+исключённое видно) и раскладывает итоговый конфиг в файл базы приёмника
+(`config_version` растёт при изменении `entities`/`params`; `params` уже записанные
+не затираются). Агент получает **итоговый список сущностей** и параметры такта через
 `GET /agent/config`; применяет новый конфиг со следующего такта; сам ничего не
 исключает и не добавляет.
 

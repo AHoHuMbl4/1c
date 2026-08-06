@@ -80,6 +80,8 @@ def scalar(sql: str) -> str:
 _TMP = tempfile.TemporaryDirectory()
 ROOT = os.path.join(_TMP.name, "root")
 WORK = os.path.join(_TMP.name, "work")
+META_DIR = os.path.join(_TMP.name, "packet-meta")
+META_FILE = os.path.join(META_DIR, BASE_ID, "$metadata")
 os.makedirs(ROOT)
 os.makedirs(WORK)
 IDENTITY = os.path.join(_TMP.name, "pktprobe.key")
@@ -158,6 +160,7 @@ def base_manifest(seq: int, rand: str, kind: str) -> dict:
 def run_apply(*extra) -> subprocess.CompletedProcess:
     env = dict(os.environ)
     env.update({"PACKET_ROOT": ROOT, "PACKET_BASES": BASES_PATH, "SERENEDB_DSN": DSN,
+                "PACKET_META_DIR": META_DIR,
                 "PACKET_AGE_BIN": os.environ.get("PACKET_AGE_BIN", ""),
                 "PACKET_AGE_KEYGEN_BIN": os.environ.get("PACKET_AGE_KEYGEN_BIN", "")})
     return subprocess.run([sys.executable,
@@ -179,7 +182,7 @@ def base_state() -> dict:
 # --- контрактные таблицы: снимок и восстановление --------------------------------
 
 _snap = {"changed_exists": False, "changed": [], "quality_ts": [],
-         "meta_table_exists": False, "profile_table_exists": False}
+         "profile_table_exists": False}
 
 
 def snapshot_contract():
@@ -190,11 +193,6 @@ def snapshot_contract():
         pass
     try:
         _snap["quality_ts"] = psql("SELECT k, v, note FROM search_quality WHERE k='mart_changed_ts'")
-    except RuntimeError:
-        pass
-    try:
-        psql("SELECT 1 FROM packet_metadata LIMIT 0")
-        _snap["meta_table_exists"] = True
     except RuntimeError:
         pass
     try:
@@ -230,12 +228,6 @@ def restore_contract():
             psql_exec("DROP TABLE IF EXISTS base_profile;")
     except RuntimeError as e:
         print(f"⚠ чистка base_profile: {str(e)[:150]}")
-    try:
-        psql_exec("DELETE FROM packet_metadata WHERE base_id = '%s';" % BASE_ID)
-        if not _snap["meta_table_exists"]:
-            psql_exec("DROP TABLE IF EXISTS packet_metadata;")
-    except RuntimeError as e:
-        print(f"⚠ чистка packet_metadata: {str(e)[:150]}")
 
 
 def cleanup():
@@ -306,10 +298,13 @@ def main() -> int:
         check("k1 на месте", rows.get("k1") == ("v1", "alpha"), repr(rows.get("k1")))
         grant = scalar("SELECT has_table_privilege('serene_ro', '%s', 'SELECT')" % TABLE)
         check("GRANT serene_ro есть", grant in ("t", "true", "True"), grant)
-        meta = psql("SELECT fingerprint, content FROM packet_metadata WHERE base_id='%s'" % BASE_ID)
-        check("packet_metadata обновлён",
-              len(meta) == 1 and meta[0][0] == META_FP and "pkt_probe_catalog" in meta[0][1],
-              repr(meta[:1])[:200])
+        check("снимок $metadata записан ФАЙЛОМ, байт-в-байт из чанка",
+              os.path.exists(META_FILE)
+              and open(META_FILE, "rb").read() == META_XML.encode("utf-8"))
+        check("таблица packet_metadata НЕ создаётся",
+              scalar("SELECT count(*) FROM duckdb_tables() "
+                     "WHERE database_name = current_database() "
+                     "AND table_name='packet_metadata'") == "0")
         src = psql("SELECT src_table FROM search_changed_sources")
         check("search_changed_sources содержит таблицу", (TABLE,) in src, repr(src)[:200])
         prof = psql("SELECT rows, key_props FROM base_profile WHERE entity='%s'" % TABLE)
@@ -330,14 +325,30 @@ def main() -> int:
         check("повторный заход состояние то же",
               pkg_state(pkg2)["state"] == "applied" and base_state()["last_applied_seq"] == 2)
 
+        # 4.5. Пакет kind=meta со свежим снимком: файл перезаписывается атомарно.
+        META_XML2 = "<metadata><entity>pkt_probe_catalog</entity><v>2</v></metadata>"
+        em2, cm2 = make_chunk("metadata", META_XML2.encode("utf-8"), "", 0)
+        m2m = base_manifest(3, "ddd00003", "meta")
+        m2m["metadata"] = {"included": True, "fingerprint": "sha256:probe-meta-2",
+                           "chunks": ["metadata"]}
+        m2m["chunks"] = [em2]
+        pkg2m = write_package(3, "ddd00003", "meta", m2m, {"metadata": cm2})
+        r = run_apply()
+        check("meta-пакет код 0", r.returncode == 0, r.stderr.strip()[-200:])
+        check("снимок перезаписан новым содержимым",
+              open(META_FILE, "rb").read() == META_XML2.encode("utf-8"))
+        check("meta-пакет applied", pkg_state(pkg2m)["state"] == "applied")
+        check("temp-файлов атомарной записи не осталось",
+              os.listdir(os.path.join(META_DIR, BASE_ID)) == ["$metadata"])
+
         # 5. mix_versions: две версии k1 в витрине → карантин, данные не тронуты.
         psql_exec('INSERT INTO "%s" VALUES (\'k1\', \'v9\', \'alpha-dup\');' % TABLE)
         d3 = csv_bytes([("k9", "v1", "omega")])
         e3, c3 = make_chunk("chunk-00001", d3, TABLE, 1)
-        m3 = base_manifest(3, "ccc00003", "delta")
+        m3 = base_manifest(4, "ccc00004", "delta")
         m3["entities"] = [{"name": TABLE, "op": "delta", "rows": 1, "chunks": ["chunk-00001"]}]
         m3["chunks"] = [e3]
-        pkg3 = write_package(3, "ccc00003", "delta", m3, {"chunk-00001": c3})
+        pkg3 = write_package(4, "ccc00004", "delta", m3, {"chunk-00001": c3})
         r = run_apply()
         st3 = pkg_state(pkg3)
         check("mix_versions: apply код 3", r.returncode == 3, f"rc={r.returncode}")
@@ -355,10 +366,13 @@ def main() -> int:
     markers = []
     try:
         markers += psql("SELECT 1 FROM base_profile WHERE entity LIKE 'pkt\\_probe%'")
-        markers += psql("SELECT 1 FROM packet_metadata WHERE base_id='%s'" % BASE_ID)
     except RuntimeError:
         pass
     check("после пробы маркерных строк нет", not markers)
+    check("после пробы таблицы packet_metadata нет",
+          scalar("SELECT count(*) FROM duckdb_tables() "
+                 "WHERE database_name = current_database() "
+                 "AND table_name='packet_metadata'") == "0")
 
     print()
     if FAILS:

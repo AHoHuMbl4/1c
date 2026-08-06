@@ -11,9 +11,10 @@
      (rows>0) ∩/∖ признаки search_entity_force (mode=load возвращает источник,
      mode=skip убирает — слово владельца сильнее остальных) и search_entity_class
      (cls='service'), с приоритетом force > class — форма serene_sync._service_skip;
-  2. only_binary — единственный признак в Python, это разбор снимка $metadata из
-     packet_metadata (её пишет packet_apply), а не запрос к данным; строки для
-     base_id нет — признак не применяется, остаются census+class+force;
+  2. only_binary — единственный признак в Python, это разбор снимка $metadata,
+     приехавшего файлом <PACKET_META_DIR>/<base_id>/$metadata (его пишет
+     packet_apply), а не запрос к данным; файла нет — признак не применяется,
+     остаются census+class+force;
   3. итог — в запись базы в PACKET_BASES (config.entities); config_version растёт
      на 1, только если список или params изменились (без изменений файл не трогается,
      и агент не дёргается);
@@ -44,6 +45,10 @@ import tempfile
 
 DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
 PACKET_BASES = os.environ.get("PACKET_BASES", "/etc/1c-packet-bases.json")
+# Каталог снимков $metadata (та же настройка, что у packet_apply): снимок едет
+# файлом <PACKET_META_DIR>/<base_id>/$metadata — боевой corpus_build.sql читает
+# его read_text'ом без правок (решение владельца 06.08).
+PACKET_META_DIR = os.environ.get("PACKET_META_DIR", "/var/lib/serenedb/packet-meta")
 
 # Параметры такта агента для начального конфига (форма ответа /agent/config —
 # контракт §8). Уже записанные в файле params сохраняются, эти значения —
@@ -225,24 +230,23 @@ def _skipped_sql(skip: dict) -> str:
 
 
 def _read_sources(dsn: str, base_id: str):
-    """Вердикты контура и снимок $metadata из витрины. Ровно три обращения:
-    существование таблиц признаков (/* tables */), контур одним запросом
-    (/* contour */), снимок (/* metadata */). Контур читается строго — его
-    падение означает, что переписи нет или она нечитаема, и заход отменяется;
-    снимок при отсутствии таблицы считается отсутствующим (признак only_binary
-    тогда не применяется — та же осторожность в одну сторону, что у serene_sync:
+    """Вердикты контура из витрины и снимок $metadata из файла. Ровно два
+    обращения к витрине: существование таблиц признаков (/* tables */) и контур
+    одним запросом (/* contour */). Контур читается строго — его падение
+    означает, что переписи нет или она нечитаема, и заход отменяется; снимка
+    может не быть (файл ещё не приезжал) — тогда признак only_binary не
+    применяется (та же осторожность в одну сторону, что у serene_sync:
     неразмеченное грузится)."""
     have = {r[0] for r in _rows(dsn, _TABLES_SQL) if r}
     rows = [(r[0], r[1]) for r in _rows(
         dsn, _contour_sql("search_entity_class" in have, "search_entity_force" in have))
         if len(r) > 1]
+    snap = os.path.join(PACKET_META_DIR, base_id, "$metadata")
     try:
-        meta = [r[0] for r in _rows(
-            dsn, "/* metadata */ SELECT content FROM packet_metadata WHERE base_id = %s"
-            % _lit(base_id)) if r]
-    except RuntimeError:
-        meta = []
-    props = _props_by_type(meta[0]) if meta else None
+        with open(snap, encoding="utf-8") as f:
+            props = _props_by_type(f.read())
+    except OSError:
+        props = None
     return rows, props
 
 

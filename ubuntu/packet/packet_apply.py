@@ -12,7 +12,7 @@ seq: манифест разбирается, чанки дешифруются 
 следующий заход повторяет его целиком.
 
 Конфиг — env: PACKET_ROOT, PACKET_BASES (JSON баз, формат packet_server),
-SERENEDB_DSN, PACKET_ZSTD_BIN, PACKET_APPLY_*. Только stdlib.
+SERENEDB_DSN, PACKET_ZSTD_BIN, PACKET_META_DIR, PACKET_APPLY_*. Только stdlib.
 """
 
 from __future__ import annotations
@@ -254,18 +254,40 @@ def _apply_gone(path: str, changed_tables: set) -> int:
     return total
 
 
+# Каталог снимков $metadata: <PACKET_META_DIR>/<base_id>/$metadata. Снимок едет
+# ФАЙЛОМ, а не таблицей: read_text в corpus_build.sql читает и локальные файлы,
+# поэтому боевой скрипт сборки работает без правок — build.sh получает
+# ETL_ODATA_BASE=<каталог>/<base_id>, и движок читает <каталог>/<base_id>/$metadata
+# (решение владельца 06.08: боевые скрипты сборки не трогаем).
+PACKET_META_DIR = os.environ.get("PACKET_META_DIR", "/var/lib/serenedb/packet-meta")
+
+
 def _apply_metadata(base_id: str, manifest: dict, path: str) -> None:
-    # Снимок $metadata: одна строка на base_id, обновление через DELETE+INSERT.
-    with open(path, encoding="utf-8") as f:
-        content = f.read()
-    fp = (manifest.get("metadata") or {}).get("fingerprint", "")
-    ts = manifest.get("created_utc") or time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    _psql("CREATE TABLE IF NOT EXISTS packet_metadata "
-          "(base_id TEXT, fetched_ts TIMESTAMP, fingerprint TEXT, content TEXT);\n"
-          "GRANT SELECT ON packet_metadata TO %s;\n"
-          "DELETE FROM packet_metadata WHERE base_id = %s;\n"
-          "INSERT INTO packet_metadata VALUES (%s, %s, %s, %s);\n"
-          % (RO_ROLE, _lit(base_id), _lit(base_id), _lit(ts), _lit(fp), _lit(content)))
+    """Снимок $metadata из чанка — в файл <PACKET_META_DIR>/<base_id>/$metadata.
+
+    Атомарно: temp+os.replace в том же каталоге — движок в любой момент видит
+    либо старый снимок целиком, либо новый. Файл читает процесс движка (в бою
+    apply идёт под root), поэтому владелец и режим выставляются явно."""
+    base_dir = os.path.join(PACKET_META_DIR, base_id)
+    os.makedirs(base_dir, exist_ok=True)
+    os.chmod(base_dir, 0o755)
+    fd, tmp = tempfile.mkstemp(dir=base_dir, prefix=".metadata-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as out, open(path, "rb") as src:
+            shutil.copyfileobj(src, out)
+        os.chmod(tmp, 0o644)
+        if os.geteuid() == 0:
+            try:
+                shutil.chown(tmp, user="serenedb", group="serenedb")
+            except LookupError as e:
+                raise RuntimeError(f"chown serenedb:serenedb: {e}")
+        os.replace(tmp, os.path.join(base_dir, "$metadata"))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 # --- контрактные таблицы (форма serene_sync) -----------------------------------

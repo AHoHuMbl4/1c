@@ -70,6 +70,17 @@ os.environ["PACKET_BASES"] = BASES_PATH
 import packet_config as PC  # noqa: E402
 import packet_server as S  # noqa: E402
 
+# Снимок $metadata — файлом, как в бою (packet_apply пишет, config читает).
+META_DIR = os.path.join(_TMP.name, "packet-meta")
+PC.PACKET_META_DIR = META_DIR
+
+
+def write_meta(content: str) -> None:
+    d = os.path.join(META_DIR, "ut")
+    os.makedirs(d, exist_ok=True)
+    with open(os.path.join(d, "$metadata"), "w", encoding="utf-8") as f:
+        f.write(content)
+
 FAILS: list[str] = []
 
 
@@ -83,14 +94,13 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 class FakeDB:
-    """Заготовки ответов по якорям запросов (/* tables */, /* contour */,
-    /* metadata */). contour=None — переписи нет: запрос падает, как настоящий
-    psql на несуществующей base_profile. meta=None — нет packet_metadata."""
+    """Заготовки ответов по якорям запросов (/* tables */, /* contour */).
+    contour=None — переписи нет: запрос падает, как настоящий psql на
+    несуществующей base_profile."""
 
-    def __init__(self, exist=("class", "force"), contour=(), meta=()):
+    def __init__(self, exist=("class", "force"), contour=()):
         self.exist = set(exist)
         self.contour = contour
-        self.meta = meta
         self.queries: list[str] = []
         self.execs: list[str] = []
 
@@ -107,10 +117,6 @@ class FakeDB:
             if self.contour is None:
                 raise RuntimeError("relation does not exist: base_profile")
             return list(self.contour)
-        if "/* metadata */" in sql:
-            if self.meta is None:
-                raise RuntimeError("relation does not exist: packet_metadata")
-            return list(self.meta)
         raise RuntimeError(f"unexpected sql: {sql[:80]}")
 
     def exec(self, dsn: str, sql: str):
@@ -164,7 +170,7 @@ EXPECTED_SKIPS = {"Catalog_Пропуск": PC.WHY_FORCE,
 
 
 def full_db() -> FakeDB:
-    return FakeDB(exist=("class", "force"), contour=list(CONTOUR), meta=[(META_XML,)])
+    return FakeDB(exist=("class", "force"), contour=list(CONTOUR))
 
 
 PORT = 0
@@ -224,19 +230,32 @@ def main() -> int:
     check("а2: verdict 'load' сильнее only_binary (Python-сторона признака)",
           "Catalog_Форсирован" in entities and "Catalog_Форсирован" not in skip)
     ent2, skip2 = PC.compute_contour(list(CONTOUR), None)
-    check("а2: без packet_metadata only_binary не применяется",
+    check("а2: без файла снимка only_binary не применяется",
           "Catalog_Бинарь" in ent2
           and skip2 == {k: v for k, v in EXPECTED_SKIPS.items() if k != "Catalog_Бинарь"},
           repr(skip2))
+    # то же на уровне _read_sources: пустой каталог снимков → props None
+    real_dir = PC.PACKET_META_DIR
+    PC.PACKET_META_DIR = os.path.join(_TMP.name, "packet-meta-empty")
+    db_src = full_db()
+    real_rows = PC._rows
+    PC._rows = db_src.rows
+    try:
+        _rows2, props2 = PC._read_sources("fake-dsn", "ut")
+    finally:
+        PC._rows = real_rows
+        PC.PACKET_META_DIR = real_dir
+    check("а2: _read_sources без файла — props None, признак не применяется",
+          props2 is None)
 
-    # -- (а3) на заход ровно три чтения: tables + contour + metadata, контур — один
+    # -- (а3) на заход ровно два чтения витрины: tables + contour, контур — один
+    write_meta(META_XML)
     db = full_db()
     run_config(db)
-    check("а3: три чтения на заход, contour-запрос ровно один",
-          len(db.queries) == 3
+    check("а3: два чтения витрины на заход, contour-запрос ровно один",
+          len(db.queries) == 2
           and sum("/* contour */" in q for q in db.queries) == 1
-          and sum("/* tables */" in q for q in db.queries) == 1
-          and sum("/* metadata */" in q for q in db.queries) == 1,
+          and sum("/* tables */" in q for q in db.queries) == 1,
           repr(db.queries)[:200])
 
     # -- (б) config_version растёт только при изменении; (в) чужие записи целы
