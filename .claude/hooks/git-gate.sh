@@ -59,8 +59,21 @@ fi
 # ── 3. Сами проверки ────────────────────────────────────────────────────────────────
 # 🔴 Полный набор, а не только «дешёвые»: правило, которое проверяется лишь в сессии с
 # хуками движка, не работает у владельца, в Cursor и в дочерней сессии.
+# 🔴 ДВА ЗАХОДА, ПОТОМУ ЧТО СООБЩЕНИЕ ПОЯВЛЯЕТСЯ ПОЗЖЕ ИНДЕКСА. `pre-commit` вызывается
+# «before obtaining the proposed commit log message» (man githooks), поэтому пометку
+# «Доки:» / «Числа:» там взять негде — в `.git/COMMIT_EDITMSG` лежит прошлый коммит.
+# Проверки, которые этой пометкой закрываются, гейт запускает из `commit-msg`, куда git
+# передаёт файл сообщения первым доводом. Поймала рабочая сессия, не проба: она честно
+# назвала раздел доков в коммите, а гейт со стороны git его не увидел.
+if [ -n "${1:-}" ] && [ -f "${1:-}" ]; then
+  export HOOK_MSG_FILE="$1"
+  GATES="check-sql-docs check-diff"
+else
+  GATES="check-docs check-graph-fresh check-active-size check-prompt-rules"
+fi
+
 FAKE='{"tool_input":{"command":"git commit"}}'
-for h in check-docs check-graph-fresh check-active-size check-sql-docs check-diff check-prompt-rules; do
+for h in $GATES; do
   # 🔴 Упавшая проверка — не пройденная проверка. Прежде здесь стояло `|| continue`:
   # хук, который не запустился (нет файла, нет python3, синтаксическая ошибка), молча
   # пропускал коммит — тот же fail-open, ради которого этот гейт и заводился.

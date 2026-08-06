@@ -154,6 +154,13 @@ mkdir -p "$G/memory_bank/owner-memory"
 printf '# правила\n' > "$G/CLAUDE.md"
 printf '# контракт\n' > "$G/TARGET.md"
 printf '# решение владельца\n' > "$G/memory_bank/owner-memory/probe.md"
+# AGENTS.md — второе имя правил для Kimi (жёсткая ссылка в настоящем репозитории);
+# сторож сверяет его наличие и владельца наравне с CLAUDE.md.
+printf '# агенты\n' > "$G/AGENTS.md"
+# Stub подключения Kimi: сторож сверяет, что весь набор гейтов назван в конфиге второго
+# движка. Путь подставляется переменной-швом, настоящий конфиг проба не трогает.
+{ for g in $KIMI_GATES_REQUIRED; do printf 'command = "/srv/1c/.claude/hooks/%s.sh"\n' "$g"; done; } > "$G/kimi-config.toml"
+export KIMI_CONFIG_TOML="$G/kimi-config.toml"
 cd "$G" || exit 1
 git init -q .; git config user.email t@t; git config user.name t
 git config core.hooksPath .githooks
@@ -460,6 +467,83 @@ OUT=$(printf '{"tool_input":{"command":"git commit -m x"}}' | bash .claude/hooks
 asks "$OUT"; [ $? = 1 ]; say $? 'то же слово в комментарии — на коммите молчит'
 git reset -q
 cd "$TMP" || exit 1
+
+# --- вброс состояния в Kimi (prompt-start.sh, UserPromptSubmit) --------------------
+echo
+echo '== prompt-start: вброс «С ЧЕГО НАЧАТЬ» один раз на сессию =='
+cd "$G" || exit 1
+printf '# С ЧЕГО НАЧАТЬ\nсвежая строка состояния\n' > memory_bank/activeContext.md
+OUT=$(printf '{"session_id":"probe-1","prompt":"x"}' | bash .claude/hooks/prompt-start.sh 2>/dev/null)
+printf '%s' "$OUT" | grep -q 'свежая строка состояния'; say $? 'первое сообщение сессии — вброс есть'
+OUT=$(printf '{"session_id":"probe-1","prompt":"y"}' | bash .claude/hooks/prompt-start.sh 2>/dev/null)
+[ -z "$OUT" ]; say $? 'второе сообщение той же сессии — молчит (метка)'
+OUT=$(printf '{"session_id":"probe-2","prompt":"x"}' | bash .claude/hooks/prompt-start.sh 2>/dev/null)
+printf '%s' "$OUT" | grep -q 'свежая строка состояния'; say $? 'другая сессия — вброс снова есть'
+rm -f .claude/state/prompt-start-probe-*
+
+# --- снайпер Kimi (sniper-kimi.sh) --------------------------------------------------
+# 🔴 Модель в пробе подменяется stub'ом через шов SNIPER_KIMI_CMD: проба обязана идти
+# без сервера и модели, а форма вызова и разбор вердикта — оставаться настоящими.
+echo
+echo '== снайпер Kimi: вердикт по маяку, упавшая проверка = остановка =='
+cd "$G" || exit 1
+git reset -q
+stub() { printf '#!/usr/bin/env bash\n%s\n' "$1" > "$TMP/sniper-stub.sh"; chmod +x "$TMP/sniper-stub.sh"; }
+sn_call() { printf '%s' "$1" | SNIPER_KIMI_CMD="$TMP/sniper-stub.sh" bash .claude/hooks/sniper-kimi.sh 2>/dev/null; }
+
+stub 'echo "VERDICT: OK"'
+OUT=$(sn_call '{"tool_input":{"command":"ls"}}')
+[ "$OUT" = '{}' ]; say $? 'на посторонней команде молчит'
+
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+asks "$OUT"; say $? 'пустой индекс — вердикта нет, останавливает (0d75629)'
+
+printf 'print(9)\n' > ubuntu/serenedb/sn.py; git add ubuntu/serenedb/sn.py
+# 🔴 Маяк со служебной разметкой — настоящий формат `kimi -p` (живые прогоны 06.08:
+# «  VERDICT: OK», «• VERDICT: OK»): разбор, требующий начала строки, останавливал
+# чистый коммит. Берётся последний маяк в выводе.
+stub 'echo "• болтовня с упоминанием VERDICT: OK в рассуждении"; echo "• VERDICT: OK"'
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+[ "$OUT" = '{}' ]; say $? 'VERDICT: OK (с разметкой kimi -p, последний маяк) — пропускает'
+
+stub 'echo "• ход рассуждения"; echo "FINDING: sn.py:1 — свой цикл вместо ts_compound — убрать"; echo "VERDICT: FINDINGS"'
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+asks "$OUT" && printf '%s' "$OUT" | grep -q 'FINDING: sn.py:1'
+say $? 'VERDICT: FINDINGS — останавливает, и в причине сама находка, а не шум вывода'
+
+stub 'echo "болтовня без маяка"'
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+asks "$OUT"; say $? 'ответ без маяка — вердикт не разобран, останавливает'
+
+stub 'exit 1'
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+asks "$OUT"; say $? 'модель упала — упавшая проверка = остановка'
+git reset -q; rm -f ubuntu/serenedb/sn.py
+
+# 🔴 Промт снайпера живёт в ДВУХ местах — agent-хук settings.json (Claude) и
+# sniper-kimi.sh (Kimi). Разъехавшиеся копии одного правила — тот самый дефект F248,
+# ради которого заводился lib-hooks.sh: находка обязана быть в обоих.
+echo
+echo '== снайпер: находка про OpenClaw — в обоих движках =='
+REAL="$(cd "$HOOKS/../.." && pwd)"
+grep -q 'openclaw-native' "$HOOKS/sniper-kimi.sh"; say $? 'sniper-kimi.sh — находка про OpenClaw на месте'
+grep -q 'openclaw-native' "$REAL/.claude/settings.json"; say $? 'agent-снайпер settings.json — та же находка на месте'
+
+# --- сторож: подключение Kimi -------------------------------------------------------
+echo
+echo '== защита гейтов: подключение Kimi (hook_guard_armed) =='
+cd "$G" || exit 1
+[ -z "$(armed)" ]; say $? 'kimi-конфиг полон — нарушений нет'
+cp "$KIMI_CONFIG_TOML" "$TMP/kimi.bak"
+sed -i '/sniper-kimi/d' "$KIMI_CONFIG_TOML"
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'гейт убран из kimi-конфига — нарушение видно поимённо'
+rm -f "$KIMI_CONFIG_TOML"
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'Kimi'; say $? 'kimi-конфиг снесён — нарушение видно'
+cp "$TMP/kimi.bak" "$KIMI_CONFIG_TOML"
+mv AGENTS.md "$TMP/ag.bak"
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'AGENTS.md'; say $? 'AGENTS.md снесён — нарушение видно поимённо'
+mv "$TMP/ag.bak" AGENTS.md
+[ -z "$(armed)" ]; say $? 'всё возвращено — нарушений снова нет'
 
 echo
 if [ "$FAILED" != 0 ]; then echo "🔴 ПРОВАЛОВ: $FAILED"; exit 1; fi

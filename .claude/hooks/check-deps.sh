@@ -96,7 +96,9 @@ except Exception:
     pass
 
 targets = []
-fp = (data.get("tool_input") or {}).get("file_path") or ""
+# У Claude поле пути — file_path, у Kimi — path (замер 06.08): принимаем оба.
+_ti = data.get("tool_input") or {}
+fp = _ti.get("file_path") or _ti.get("path") or ""
 if fp:
     targets = [os.path.relpath(fp, root) if os.path.isabs(fp) else fp]
 elif not first_run:

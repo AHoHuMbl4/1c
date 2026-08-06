@@ -7,8 +7,14 @@
 # незаметно, видно только по серии — поэтому считать должен механизм, а не память.
 set -uo pipefail
 
-STATE="${TMPDIR:-/tmp}/claude-edit-counts-${CLAUDE_SESSION_ID:-default}.txt"
-FILE=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("tool_input") or {}).get("file_path") or "")' 2>/dev/null)
+# Событие читается один раз: и путь, и идентификатор сессии. У Kimi идентификатор сессии
+# приходит в полезной нагрузке (session_id), у Claude — переменной CLAUDE_SESSION_ID; без
+# него счётчик был бы общим на все сессии, и чужие правки накручивали бы чужой счёт.
+# Поле пути у Kimi — `path`, у Claude — `file_path` (замер 06.08): принимаем оба.
+INPUT=$(cat)
+FILE=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; d=json.load(sys.stdin); ti=d.get("tool_input") or {}; print(ti.get("file_path") or ti.get("path") or "")' 2>/dev/null)
+SID=$(printf '%s' "$INPUT" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("session_id") or "")' 2>/dev/null)
+STATE="${TMPDIR:-/tmp}/hook-edit-counts-${CLAUDE_SESSION_ID:-${SID:-default}}.txt"
 [ -z "$FILE" ] && { echo '{}'; exit 0; }
 
 case "$FILE" in

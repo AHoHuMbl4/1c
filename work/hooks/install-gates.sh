@@ -72,6 +72,33 @@ else
   echo "  уже включён"
 fi
 
+echo "== 3-бис. AGENTS.md для Kimi =="
+# 🔴 Kimi читает в контекст AGENTS.md, а не CLAUDE.md (живой замер 06.08: содержимое
+# CLAUDE.md в сессию Kimi не попадает, модель признала это сама). Жёсткая ссылка — один
+# инод на два имени: правится CLAUDE.md, читают оба движка, рассинхрон невозможен по
+# построению. В git ссылка не едет — на новом клоне её создаёт этот же шаг.
+if [ ! -e AGENTS.md ]; then
+  ln CLAUDE.md AGENTS.md && echo "  AGENTS.md — жёсткая ссылка на CLAUDE.md"
+else
+  echo "  уже есть"
+fi
+
+echo "== 3-тер. конфиг Kimi рабочего аккаунта =="
+# 🔴 Точка подключения гейтов Kimi — ~/.kimi-code/config.toml рабочего аккаунта, и она
+# обязана принадлежать владельцу наравне с остальными правилами: конфиг, который сессия
+# вправе переписать, — это гейты, которые сессия вправе снять. Подмена сносом видна
+# сторожу (hook_guard_armed) по смене владельца. Каталог остаётся рабочему аккаунту:
+# сессии, кэш и учётные данные лежат там же.
+KHOME="$(getent passwd claudedev 2>/dev/null | cut -d: -f6)"
+KDIR="${KHOME:-/home/claudedev}/.kimi-code"
+mkdir -p "$KDIR"
+install -m 644 -o root -g root "$SRC/kimi-config.toml" "$KDIR/config.toml" \
+  && echo "  $KDIR/config.toml — root:root 644"
+chown claudedev:claudedev "$KDIR" 2>/dev/null || true
+# Бинарь ставится разово руками владельца: install -m 755 <источник> /usr/local/bin/kimi
+su -s /bin/bash claudedev -c 'command -v kimi' >/dev/null 2>&1 \
+  || echo "  ⚠ kimi не найден в PATH у claudedev — поставь бинарь в /usr/local/bin/kimi"
+
 echo "== 4. проба =="
 bash "$DST/test-hooks.sh"
 rc=$?

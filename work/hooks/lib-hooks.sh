@@ -110,6 +110,22 @@ hook_override_take() {
 # даже из оболочки), а беззащитная обёртка `.githooks/pre-commit` сведена к одной строке
 # вызова и сверяется отсюда.
 GATES_REQUIRED="check-docs check-graph-fresh check-active-size check-sql-docs check-diff check-prompt-rules check-golden check-gates prepare-diff"
+
+# 🔴 ВТОРОЙ ДВИЖОК — KIMI CODE (06.08). Сессии идут под тем же рабочим аккаунтом, и
+# правило, подключённое только в Claude Code, для сессии Kimi не существует. Подключение
+# у Kimi — записи `[[hooks]]` в `~/.kimi-code/config.toml` рабочего аккаунта (файла
+# `settings.json` у него нет). Вердикта `ask` в Kimi нет вовсе — только пропуск и блок
+# (код выхода 2), поэтому проверка «не понижен ли вердикт» там не нужна по устройству.
+KIMI_GATES_REQUIRED="session-start prompt-start prepare-diff check-gates check-sql-docs check-prompt-rules check-diff check-docs check-active-size check-graph-fresh check-golden sniper-kimi count-edits check-write check-deps"
+
+# Путь к конфигу Kimi рабочего аккаунта. KIMI_CONFIG_TOML — шов для пробы: песочница
+# подставляет свой stub и не трогает настоящий конфиг.
+kimi_config_path() {
+  if [ -n "${KIMI_CONFIG_TOML:-}" ]; then printf '%s' "$KIMI_CONFIG_TOML"; return 0; fi
+  local home
+  home="$(getent passwd claudedev 2>/dev/null | cut -d: -f6)"
+  printf '%s' "${home:-/home/claudedev}/.kimi-code/config.toml"
+}
 hook_guard_armed() {
   local root out=""
   root="$(hook_repo_root)" || { printf '%s' "Каталог репозитория не определён — проверить защиту нечем."; return 0; }
@@ -147,7 +163,10 @@ hook_guard_armed() {
   # Атрибут immutable в этом окружении недоступен (проверено: chattr +i отбит), поэтому
   # подмену ловим по владельцу: root — правило владельца, не root — подложено.
   local p owner
-  for p in .claude/hooks .githooks .claude/settings.json CLAUDE.md TARGET.md memory_bank/owner-memory; do
+  # 🔴 AGENTS.md — жёсткая ссылка на CLAUDE.md (06.08): Kimi читает в контекст AGENTS.md,
+  # а не CLAUDE.md (проверено живой сессией). Один инод на два имени — рассинхрон
+  # невозможен по построению, а подмена видна по владельцу, как у остальных правил.
+  for p in .claude/hooks .githooks .claude/settings.json CLAUDE.md AGENTS.md TARGET.md memory_bank/owner-memory; do
     if [ ! -e "$root/$p" ]; then
       out="${out}  правило пропало: $p (снесено или переименовано).
 "
@@ -166,6 +185,27 @@ hook_guard_armed() {
       || out="${out}  гейт $g не подключён в .claude/settings.json — в сессии он не зовётся.
 "
   done
+
+  # 🔴 Тот же набор — у второго движка. Конфиг Kimi обязан быть на месте, принадлежать
+  # владельцу и содержать все гейты: иначе сессии Kimi работают без правил, и снаружи это
+  # не видно ни по одному срабатыванию — худший вид отказа, ради которого сторож и стоит.
+  local kc kg kowner
+  kc="$(kimi_config_path)"
+  if [ ! -f "$kc" ]; then
+    out="${out}  Kimi: $kc отсутствует — сессии Kimi идут вовсе без гейтов.
+"
+  else
+    kowner="$(stat -c '%U' "$kc" 2>/dev/null)"
+    [ "$kowner" = root ] || out="${out}  Kimi: $kc принадлежит «$kowner», а должен root: конфиг гейтов подменён своим.
+"
+    for kg in $KIMI_GATES_REQUIRED; do
+      [ -x "$root/.claude/hooks/$kg.sh" ] || out="${out}  Kimi: гейт $kg.sh отсутствует или не исполняем.
+"
+      grep -q "$kg" "$kc" 2>/dev/null \
+        || out="${out}  Kimi: гейт $kg не подключён в $kc — в сессии Kimi он не зовётся.
+"
+    done
+  fi
 
   # Вердикт `ask` в сессии, где вопрос никому не показывают, равен разрешению (замер 03.08).
   # Смотрим только на САМИ ГЕЙТЫ: проба `test-hooks.sh` обязана называть оба вердикта, и

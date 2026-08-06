@@ -110,6 +110,22 @@ hook_override_take() {
 # даже из оболочки), а беззащитная обёртка `.githooks/pre-commit` сведена к одной строке
 # вызова и сверяется отсюда.
 GATES_REQUIRED="check-docs check-graph-fresh check-active-size check-sql-docs check-diff check-prompt-rules check-golden check-gates prepare-diff"
+
+# 🔴 ВТОРОЙ ДВИЖОК — KIMI CODE (06.08). Сессии идут под тем же рабочим аккаунтом, и
+# правило, подключённое только в Claude Code, для сессии Kimi не существует. Подключение
+# у Kimi — записи `[[hooks]]` в `~/.kimi-code/config.toml` рабочего аккаунта (файла
+# `settings.json` у него нет). Вердикта `ask` в Kimi нет вовсе — только пропуск и блок
+# (код выхода 2), поэтому проверка «не понижен ли вердикт» там не нужна по устройству.
+KIMI_GATES_REQUIRED="session-start prompt-start prepare-diff check-gates check-sql-docs check-prompt-rules check-diff check-docs check-active-size check-graph-fresh check-golden sniper-kimi count-edits check-write check-deps"
+
+# Путь к конфигу Kimi рабочего аккаунта. KIMI_CONFIG_TOML — шов для пробы: песочница
+# подставляет свой stub и не трогает настоящий конфиг.
+kimi_config_path() {
+  if [ -n "${KIMI_CONFIG_TOML:-}" ]; then printf '%s' "$KIMI_CONFIG_TOML"; return 0; fi
+  local home
+  home="$(getent passwd claudedev 2>/dev/null | cut -d: -f6)"
+  printf '%s' "${home:-/home/claudedev}/.kimi-code/config.toml"
+}
 hook_guard_armed() {
   local root out=""
   root="$(hook_repo_root)" || { printf '%s' "Каталог репозитория не определён — проверить защиту нечем."; return 0; }
@@ -117,6 +133,11 @@ hook_guard_armed() {
   local hp
   hp="$(git -C "$root" config core.hooksPath 2>/dev/null)"
   [ "$hp" = ".githooks" ] || out="${out}  core.hooksPath = «${hp:-не задан}», а должен быть .githooks — гейт коммита не зовётся вовсе.
+"
+
+  # Обёрток две: pre-commit (проверки по индексу) и commit-msg (проверки, закрываемые
+  # пометкой в сообщении — раньше сообщения просто нет). Пропажа любой из них — дыра.
+  [ -x "$root/.githooks/commit-msg" ] || out="${out}  .githooks/commit-msg отсутствует или не исполняем — пометки в коммите проверять нечем.
 "
 
   local w="$root/.githooks/pre-commit"
@@ -142,7 +163,10 @@ hook_guard_armed() {
   # Атрибут immutable в этом окружении недоступен (проверено: chattr +i отбит), поэтому
   # подмену ловим по владельцу: root — правило владельца, не root — подложено.
   local p owner
-  for p in .claude/hooks .githooks .claude/settings.json CLAUDE.md TARGET.md memory_bank/owner-memory; do
+  # 🔴 AGENTS.md — жёсткая ссылка на CLAUDE.md (06.08): Kimi читает в контекст AGENTS.md,
+  # а не CLAUDE.md (проверено живой сессией). Один инод на два имени — рассинхрон
+  # невозможен по построению, а подмена видна по владельцу, как у остальных правил.
+  for p in .claude/hooks .githooks .claude/settings.json CLAUDE.md AGENTS.md TARGET.md memory_bank/owner-memory; do
     if [ ! -e "$root/$p" ]; then
       out="${out}  правило пропало: $p (снесено или переименовано).
 "
@@ -161,6 +185,27 @@ hook_guard_armed() {
       || out="${out}  гейт $g не подключён в .claude/settings.json — в сессии он не зовётся.
 "
   done
+
+  # 🔴 Тот же набор — у второго движка. Конфиг Kimi обязан быть на месте, принадлежать
+  # владельцу и содержать все гейты: иначе сессии Kimi работают без правил, и снаружи это
+  # не видно ни по одному срабатыванию — худший вид отказа, ради которого сторож и стоит.
+  local kc kg kowner
+  kc="$(kimi_config_path)"
+  if [ ! -f "$kc" ]; then
+    out="${out}  Kimi: $kc отсутствует — сессии Kimi идут вовсе без гейтов.
+"
+  else
+    kowner="$(stat -c '%U' "$kc" 2>/dev/null)"
+    [ "$kowner" = root ] || out="${out}  Kimi: $kc принадлежит «$kowner», а должен root: конфиг гейтов подменён своим.
+"
+    for kg in $KIMI_GATES_REQUIRED; do
+      [ -x "$root/.claude/hooks/$kg.sh" ] || out="${out}  Kimi: гейт $kg.sh отсутствует или не исполняем.
+"
+      grep -q "$kg" "$kc" 2>/dev/null \
+        || out="${out}  Kimi: гейт $kg не подключён в $kc — в сессии Kimi он не зовётся.
+"
+    done
+  fi
 
   # Вердикт `ask` в сессии, где вопрос никому не показывают, равен разрешению (замер 03.08).
   # Смотрим только на САМИ ГЕЙТЫ: проба `test-hooks.sh` обязана называть оба вердикта, и
@@ -256,6 +301,46 @@ hook_command() {
   python3 -c 'import json,sys
 d=json.load(sys.stdin)
 print((d.get("tool_input") or {}).get("command") or "")' 2>/dev/null
+}
+
+# 🔴 ЧТО ИМЕННО УЙДЁТ В КОММИТ. В папке работает больше одной сессии, и коммитить положено
+# пат-спеком (`git commit -m … -- свои файлы`) — иначе подметёшь staged-файлы соседа
+# (`HOW_NOT_TO §3.34`). Но хуки движка смотрели ВЕСЬ индекс, а там лежит и чужое. Отсюда
+# ложные остановки: гейт требовал раздел доков за SQL, которого коммитящий не писал, — и
+# единственным выходом оставался аварийный люк, то есть беспокойство владельца из-за
+# чужого файла. Проверять надо ровно то, что уедет в историю.
+#
+# Пусто на выходе означает «пат-спека нет», то есть коммитится весь индекс — тогда гейты
+# смотрят его целиком, как раньше. Гейт коммита (git-gate) в этой функции не нуждается:
+# git уже показывает ему временный индекс, собранный по пат-спеку.
+hook_commit_pathspec() {
+  printf '%s' "$1" | tr ';&|' '\n\n\n' | awk '
+    /(^|[[:space:]])git([[:space:]]|$)/ {
+      for (i = 1; i <= NF; i++) if ($i == "--") { for (j = i + 1; j <= NF; j++) print $j; exit }
+    }'
+}
+
+# 🔴 ПОМЕТКА В САМОМ КОММИТЕ — способ закрыть гейт, не дёргая владельца. Гейт создаёт
+# момент («назови раздел доков», «объясни числа»), и закрыть его должен тот, кто работу
+# сделал. Прежде единственным выходом был аварийный люк, а его открывает владелец: человека
+# звали на каждый такой коммит за проверку, которую делал исполнитель. Пометка вдобавок
+# уезжает в историю вместе с кодом — люк такого следа не оставлял.
+#
+# Ищется и в команде (форма `-m …`), и в готовом сообщении (`-F -`, редактор): форма записи
+# коммита бывает разной, и на этом уже спотыкались (F248).
+# 🔴 СО СТОРОНЫ GIT СООБЩЕНИЕ ЕСТЬ ТОЛЬКО В `commit-msg`. `pre-commit` по документации
+# вызывается «before obtaining the proposed commit log message»: в `.git/COMMIT_EDITMSG`
+# там лежит текст ПРОШЛОГО коммита, и пометка не находится. Поймала рабочая сессия, не
+# проба. Поэтому проверки, закрываемые пометкой, гейт запускает из `commit-msg`, а путь к
+# файлу сообщения приходит сюда переменной HOOK_MSG_FILE.
+hook_commit_note() {  # $1 — регулярка ключей, например 'доки|docs'
+  local keys="$1" msg
+  msg="${HOOK_CMD_FOR_NOTE:-}"
+  if [ -n "${HOOK_MSG_FILE:-}" ] && [ -f "$HOOK_MSG_FILE" ]; then
+    msg="$msg
+$(cat "$HOOK_MSG_FILE" 2>/dev/null)"
+  fi
+  printf '%s' "$msg" | grep -ioE "($keys)[[:space:]]*:[[:space:]]*[^[:space:]].*" | head -1
 }
 
 # Это коммит?

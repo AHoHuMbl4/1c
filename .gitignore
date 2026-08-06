@@ -40,3 +40,6 @@ work/config-dump/
 
 # Мусор от прогона test-hooks.sh: проба запускается из work/hooks и оставляет там свой .claude
 work/hooks/.claude/
+
+# Второе имя CLAUDE.md для Kimi Code — жёсткая ссылка, создаётся установщиком гейтов
+AGENTS.md

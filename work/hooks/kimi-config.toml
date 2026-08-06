@@ -1,0 +1,193 @@
+# Конфиг Kimi Code рабочего аккаунта. Гейты проекта подключены здесь — это второй
+# движок тех же правил, что .claude/settings.json для Claude Code.
+#
+# 🔴 Файл принадлежит root и рабочему аккаунту на запись закрыт НАМЕРЕННО: это точка
+# подключения гейтов, а правило, которое исполнитель может переписать, — пожелание.
+# Подмена сносом видна сторожу hook_guard_armed по смене владельца. Правит — владелец.
+#
+# Отличия движка, учтённые в подключении (живые замеры 06.08):
+#   * вердикта ask нет — только пропуск и блок (код 2 / JSON deny): совпадает с правилом
+#     проекта «остановка, а не вопрос»;
+#   * SessionStart — наблюдатель, вывод в контекст не попадает: вброс «С ЧЕГО НАЧАТЬ»
+#     делает prompt-start.sh на UserPromptSubmit (один раз на сессию, меткой);
+#   * поле пути в полезной нагрузке — `path` (не `file_path`): скрипты принимают оба;
+#   * хуки на одно событие запускаются параллельно: снайпер снимает дифф сам;
+#   * хук, упавший или обрезанный таймаутом, — fail-open у движка: держим скрипты
+#     быстрыми, а последним рубежом стоит git-гейт (.githooks), который зовётся всегда.
+
+default_model = "kimi-code/k3-256k"
+default_permission_mode = "auto"
+
+# Профильные агенты проекта (serenedb-native, openclaw-native и др.) лежат в
+# .claude/agents — Kimi читает Claude-формат agent-файлов, а каталог .claude/agents
+# сам не сканирует (документация agents). Без этой строки сессии Kimi не видели бы
+# стражей штатных механизмов, и правило «спроси агента, прежде чем писать своё»
+# оставалось бы текстом без адресата.
+extra_agent_dirs = ["/srv/1c/.claude/agents"]
+
+[providers."managed:kimi-code"]
+type = "kimi"
+api_key = ""
+base_url = "https://api.kimi.com/coding/v1"
+
+[providers."managed:kimi-code".oauth]
+storage = "file"
+key = "oauth/kimi-code"
+
+[models."kimi-code/kimi-for-coding"]
+provider = "managed:kimi-code"
+model = "kimi-for-coding"
+max_context_size = 262144
+capabilities = [ "thinking", "always_thinking", "image_in", "video_in", "tool_use" ]
+display_name = "K2.7 Coding"
+
+[models."kimi-code/kimi-for-coding-highspeed"]
+provider = "managed:kimi-code"
+model = "kimi-for-coding-highspeed"
+max_context_size = 262144
+capabilities = [ "thinking", "always_thinking", "image_in", "video_in", "tool_use" ]
+display_name = "K2.7 Coding Highspeed"
+
+[models."kimi-code/k3"]
+provider = "managed:kimi-code"
+model = "k3"
+max_context_size = 1048576
+capabilities = [ "thinking", "always_thinking", "image_in", "video_in", "tool_use" ]
+display_name = "K3"
+support_efforts = [ "low", "high", "max" ]
+default_effort = "high"
+
+[models."kimi-code/k3-256k"]
+provider = "managed:kimi-code"
+model = "k3-256k"
+max_context_size = 262144
+capabilities = [ "thinking", "always_thinking", "image_in", "tool_use" ]
+display_name = "K3-256k"
+support_efforts = [ "low", "high", "max" ]
+default_effort = "high"
+
+[thinking]
+enabled = true
+effort = "high"
+
+[services.moonshot_search]
+base_url = "https://api.kimi.com/coding/v1/search"
+api_key = ""
+
+[services.moonshot_search.oauth]
+storage = "file"
+key = "oauth/kimi-code"
+
+[services.moonshot_fetch]
+base_url = "https://api.kimi.com/coding/v1/fetch"
+api_key = ""
+
+[services.moonshot_fetch.oauth]
+storage = "file"
+key = "oauth/kimi-code"
+
+# Вброс состояния работ. SessionStart оставлен ради следа в .claude/hooks.log;
+# сам вброс в контекст делает prompt-start.sh на первом сообщении сессии.
+[[hooks]]
+event = "SessionStart"
+matcher = "startup"
+command = "/srv/1c/.claude/hooks/session-start.sh"
+timeout = 10
+
+[[hooks]]
+event = "UserPromptSubmit"
+command = "/srv/1c/.claude/hooks/prompt-start.sh"
+timeout = 10
+
+# Перед правкой: правило не вписывается в промт.
+[[hooks]]
+event = "PreToolUse"
+matcher = "Write|Edit"
+command = "/srv/1c/.claude/hooks/check-prompt-rules.sh"
+timeout = 15
+
+# Перед командами оболочки: восемь детерминированных гейтов, подача диффа и снайпер.
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/prepare-diff.sh"
+timeout = 15
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-gates.sh"
+timeout = 15
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-sql-docs.sh"
+timeout = 15
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-prompt-rules.sh"
+timeout = 20
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-diff.sh"
+timeout = 20
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-docs.sh"
+timeout = 15
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-active-size.sh"
+timeout = 15
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-graph-fresh.sh"
+timeout = 15
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-golden.sh"
+timeout = 20
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/sniper-kimi.sh"
+timeout = 240
+
+# После правки: счётчик подбора, велосипед/подгонка, вброс связей графа.
+[[hooks]]
+event = "PostToolUse"
+matcher = "Write|Edit"
+command = "/srv/1c/.claude/hooks/count-edits.sh"
+timeout = 15
+
+[[hooks]]
+event = "PostToolUse"
+matcher = "Write|Edit"
+command = "/srv/1c/.claude/hooks/check-write.sh"
+timeout = 15
+
+[[hooks]]
+event = "PostToolUse"
+matcher = "Write|Edit"
+command = "/srv/1c/.claude/hooks/check-deps.sh"
+timeout = 15
+
+[[hooks]]
+event = "PostToolUse"
+matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-deps.sh"
+timeout = 15

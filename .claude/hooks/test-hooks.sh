@@ -126,7 +126,17 @@ G="$TMP/gate"; mkdir -p "$G/.claude/hooks" "$G/memory_bank" "$G/ubuntu/serenedb"
 # файлов в пробе — это второй список, который обязан совпадать с настоящим и не совпадает.
 cp "$REPO"/.claude/hooks/*.sh "$G/.claude/hooks/" 2>/dev/null
 cp "$HOOKS"/*.sh "$G/.claude/hooks/" 2>/dev/null   # проверяем ту версию, что правится
-cp "$REPO"/.githooks/pre-commit "$G/.githooks/"
+# 🔴 ОБЁРТКИ БЕРУТСЯ ИЗ УСТАНОВЛЕННОГО `.githooks`, а не из подготовительного каталога.
+# Проба, запущенная копией из `.claude/hooks/`, не находила там `commit-msg.thin` (туда
+# ставятся только `*.sh`) — и падала на «защита цела», хотя защита была цела: в реальном
+# репозитории обёртка стоит. Проба обязана смотреть на то же, что работает.
+cp "$REPO"/.githooks/pre-commit "$G/.githooks/" 2>/dev/null
+if [ -f "$REPO/.githooks/commit-msg" ]; then
+  cp "$REPO"/.githooks/commit-msg "$G/.githooks/"
+else
+  install -m 755 "$HOOKS/commit-msg.thin" "$G/.githooks/commit-msg" 2>/dev/null
+fi
+chmod +x "$G"/.githooks/* 2>/dev/null
 # Гейты сверяются с настройками сессии — в песочнице нужен свой settings.json с их именами.
 python3 - "$G" <<'PY'
 import json, sys
@@ -144,6 +154,13 @@ mkdir -p "$G/memory_bank/owner-memory"
 printf '# правила\n' > "$G/CLAUDE.md"
 printf '# контракт\n' > "$G/TARGET.md"
 printf '# решение владельца\n' > "$G/memory_bank/owner-memory/probe.md"
+# AGENTS.md — второе имя правил для Kimi (жёсткая ссылка в настоящем репозитории);
+# сторож сверяет его наличие и владельца наравне с CLAUDE.md.
+printf '# агенты\n' > "$G/AGENTS.md"
+# Stub подключения Kimi: сторож сверяет, что весь набор гейтов назван в конфиге второго
+# движка. Путь подставляется переменной-швом, настоящий конфиг проба не трогает.
+{ for g in $KIMI_GATES_REQUIRED; do printf 'command = "/srv/1c/.claude/hooks/%s.sh"\n' "$g"; done; } > "$G/kimi-config.toml"
+export KIMI_CONFIG_TOML="$G/kimi-config.toml"
 cd "$G" || exit 1
 git init -q .; git config user.email t@t; git config user.name t
 git config core.hooksPath .githooks
@@ -175,6 +192,21 @@ printf '{"type":"entity","name":"newcode.py","entityType":"компонент","
   > memory_bank/mcp-memory.json
 git add ubuntu/serenedb/newcode.py README.md memory_bank/mcp-memory.json
 gate pass 'код + документ + граф с сущностью компонента — коммит проходит'
+
+# 🔴 Пометка в сообщении проверяется НАСТОЯЩИМ коммитом: в pre-commit сообщения ещё нет
+# (man githooks: «before obtaining the proposed commit log message»), и первая редакция
+# читала .git/COMMIT_EDITMSG — то есть текст ПРОШЛОГО коммита. Нашла рабочая сессия.
+printf 'q = "SELECT src_table FROM search_idx"\n' > ubuntu/serenedb/gsql.py
+printf '\nстрока про gsql\n' >> README.md
+printf '{"type":"entity","name":"gsql.py","entityType":"компонент","observations":["проба"]}\n' \
+  >> memory_bank/mcp-memory.json
+git add ubuntu/serenedb/gsql.py README.md memory_bank/mcp-memory.json
+gate block 'SQL без пометки — коммит остановлен со стороны git'
+
+git add ubuntu/serenedb/gsql.py README.md memory_bank/mcp-memory.json
+git commit -qm 'правка. Доки: sql/functions/search/full-text' >/dev/null 2>&1
+say $? 'SQL с пометкой «Доки:» в сообщении — коммит проходит'
+git reset -q
 
 printf 'x\n' > windows/odata-setup/setup.cs; git add windows/odata-setup/setup.cs
 gate pass 'трек владельца (odata-setup) пропускается'
@@ -228,6 +260,49 @@ pr_case ask "$(python3 -c 'import json;print(json.dumps({"tool_input":{"file_pat
   'правило в поле instruction (текст уходит модели) — останавливает'
 pr_case pass "$(python3 -c 'import json;print(json.dumps({"tool_input":{"file_path":"/x/docs/HOW_NOT_TO.md","new_string":"Правило: разделитель равенства обязателен всегда.","old_string":""}}))')" \
   'правило в ДОКУМЕНТ — пропускает: документы для людей, а не для модели'
+
+# --- SQL: раздел доков и чужие файлы в общем индексе ------------------------------
+echo
+echo '== гейт SQL: раздел доков в коммите, чужое в индексе =='
+cd "$G" || exit 1
+git reset -q
+mkdir -p ubuntu/serenedb
+printf 'q = "SELECT src_table FROM search_idx"\n' > ubuntu/serenedb/sqlcode.py
+printf 'x = 1\n' > ubuntu/serenedb/plain.py
+git add ubuntu/serenedb/sqlcode.py ubuntu/serenedb/plain.py
+
+OUT=$(printf '{"tool_input":{"command":"git commit -m x"}}' | bash .claude/hooks/check-sql-docs.sh 2>/dev/null)
+asks "$OUT"; say $? 'SQL без названного раздела — останавливает'
+
+# 🔴 Раздел называет тот, кто коммитит, — строкой «Доки:» в сообщении. Прежде выходом был
+# только аварийный люк, то есть на каждый SQL-коммит дёргали владельца, хотя проверку
+# делал исполнитель. Названный раздел вдобавок уезжает в историю вместе с кодом.
+OUT=$(printf '{"tool_input":{"command":"git commit -m \x27правка. Доки: sql/functions/search/full-text\x27"}}' | bash .claude/hooks/check-sql-docs.sh 2>/dev/null)
+asks "$OUT"; [ $? = 1 ]; say $? 'раздел назван в сообщении — пропускает'
+
+# 🔴 Индекс общий на все сессии, коммит идёт пат-спеком. Гейт обязан смотреть только то,
+# что уедет в историю: чужой staged-файл с SQL не должен останавливать наш коммит.
+OUT=$(printf '{"tool_input":{"command":"git commit -m x -- ubuntu/serenedb/plain.py"}}' | bash .claude/hooks/check-sql-docs.sh 2>/dev/null)
+asks "$OUT"; [ $? = 1 ]; say $? 'чужой файл с SQL вне пат-спека — не мешает коммиту'
+
+OUT=$(printf '{"tool_input":{"command":"git commit -m x -- ubuntu/serenedb/sqlcode.py"}}' | bash .claude/hooks/check-sql-docs.sh 2>/dev/null)
+asks "$OUT"; say $? 'свой файл с SQL в пат-спеке — останавливает'
+git reset -q; rm -f ubuntu/serenedb/sqlcode.py ubuntu/serenedb/plain.py
+cd "$TMP" || exit 1
+
+# --- числа: объяснение в коммите ---------------------------------------------------
+echo
+echo '== гейт подгонки: числа объясняются в коммите =='
+cd "$G" || exit 1
+git reset -q
+printf 'LIMIT = 37\nTHRESHOLD = 0.83\n' > ubuntu/serenedb/nums.py
+git add ubuntu/serenedb/nums.py
+OUT=$(printf '{"tool_input":{"command":"git commit -m x"}}' | bash .claude/hooks/check-diff.sh 2>/dev/null)
+asks "$OUT"; say $? 'новые числа без объяснения — останавливает'
+OUT=$(printf '{"tool_input":{"command":"git commit -m \x27правка. Числа: бюджеты имитации, не отсечки правильности\x27"}}' | bash .claude/hooks/check-diff.sh 2>/dev/null)
+asks "$OUT"; [ $? = 1 ]; say $? 'числа объяснены в сообщении — пропускает'
+git reset -q; rm -f ubuntu/serenedb/nums.py
+cd "$TMP" || exit 1
 
 # --- большой дифф -----------------------------------------------------------------
 # 🔴 Гейты передавали дифф python-части ЧЕРЕЗ ОКРУЖЕНИЕ, и на крупном коммите это давало
@@ -354,6 +429,15 @@ printf '# контракт\n' > TARGET.md
 
 [ -z "$(armed)" ]; say $? 'всё возвращено — нарушений снова нет'
 
+echo '== check-gates: повышение прав вместо прямого вызова =='
+# 🔴 Сессии повышение прав закрыто её средой, а юниты проекта разрешены polkit напрямую.
+# Без этой подсказки попытка упирается намертво и превращается в просьбу к владельцу —
+# 04.08 такая просьба пришла дважды уже после того, как прямой путь был сделан.
+OUT=$(printf '{"tool_input":{"command":"sudo systemctl restart 1c-serene-ask@ut_test"}}' | bash .claude/hooks/check-gates.sh 2>/dev/null)
+asks "$OUT"; say $? 'повышение прав + systemctl — останавливает и называет прямую команду'
+OUT=$(printf '{"tool_input":{"command":"systemctl restart 1c-serene-ask@ut_test"}}' | bash .claude/hooks/check-gates.sh 2>/dev/null)
+asks "$OUT"; [ $? = 1 ]; say $? 'та же команда напрямую — молчит'
+
 echo '== check-gates: разоружение останавливает коммит =='
 cp .githooks/pre-commit "$TMP/wrap2.bak"
 printf '#!/usr/bin/env bash\nexit 0\n' > .githooks/pre-commit; chmod +x .githooks/pre-commit
@@ -383,6 +467,83 @@ OUT=$(printf '{"tool_input":{"command":"git commit -m x"}}' | bash .claude/hooks
 asks "$OUT"; [ $? = 1 ]; say $? 'то же слово в комментарии — на коммите молчит'
 git reset -q
 cd "$TMP" || exit 1
+
+# --- вброс состояния в Kimi (prompt-start.sh, UserPromptSubmit) --------------------
+echo
+echo '== prompt-start: вброс «С ЧЕГО НАЧАТЬ» один раз на сессию =='
+cd "$G" || exit 1
+printf '# С ЧЕГО НАЧАТЬ\nсвежая строка состояния\n' > memory_bank/activeContext.md
+OUT=$(printf '{"session_id":"probe-1","prompt":"x"}' | bash .claude/hooks/prompt-start.sh 2>/dev/null)
+printf '%s' "$OUT" | grep -q 'свежая строка состояния'; say $? 'первое сообщение сессии — вброс есть'
+OUT=$(printf '{"session_id":"probe-1","prompt":"y"}' | bash .claude/hooks/prompt-start.sh 2>/dev/null)
+[ -z "$OUT" ]; say $? 'второе сообщение той же сессии — молчит (метка)'
+OUT=$(printf '{"session_id":"probe-2","prompt":"x"}' | bash .claude/hooks/prompt-start.sh 2>/dev/null)
+printf '%s' "$OUT" | grep -q 'свежая строка состояния'; say $? 'другая сессия — вброс снова есть'
+rm -f .claude/state/prompt-start-probe-*
+
+# --- снайпер Kimi (sniper-kimi.sh) --------------------------------------------------
+# 🔴 Модель в пробе подменяется stub'ом через шов SNIPER_KIMI_CMD: проба обязана идти
+# без сервера и модели, а форма вызова и разбор вердикта — оставаться настоящими.
+echo
+echo '== снайпер Kimi: вердикт по маяку, упавшая проверка = остановка =='
+cd "$G" || exit 1
+git reset -q
+stub() { printf '#!/usr/bin/env bash\n%s\n' "$1" > "$TMP/sniper-stub.sh"; chmod +x "$TMP/sniper-stub.sh"; }
+sn_call() { printf '%s' "$1" | SNIPER_KIMI_CMD="$TMP/sniper-stub.sh" bash .claude/hooks/sniper-kimi.sh 2>/dev/null; }
+
+stub 'echo "VERDICT: OK"'
+OUT=$(sn_call '{"tool_input":{"command":"ls"}}')
+[ "$OUT" = '{}' ]; say $? 'на посторонней команде молчит'
+
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+asks "$OUT"; say $? 'пустой индекс — вердикта нет, останавливает (0d75629)'
+
+printf 'print(9)\n' > ubuntu/serenedb/sn.py; git add ubuntu/serenedb/sn.py
+# 🔴 Маяк со служебной разметкой — настоящий формат `kimi -p` (живые прогоны 06.08:
+# «  VERDICT: OK», «• VERDICT: OK»): разбор, требующий начала строки, останавливал
+# чистый коммит. Берётся последний маяк в выводе.
+stub 'echo "• болтовня с упоминанием VERDICT: OK в рассуждении"; echo "• VERDICT: OK"'
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+[ "$OUT" = '{}' ]; say $? 'VERDICT: OK (с разметкой kimi -p, последний маяк) — пропускает'
+
+stub 'echo "• ход рассуждения"; echo "FINDING: sn.py:1 — свой цикл вместо ts_compound — убрать"; echo "VERDICT: FINDINGS"'
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+asks "$OUT" && printf '%s' "$OUT" | grep -q 'FINDING: sn.py:1'
+say $? 'VERDICT: FINDINGS — останавливает, и в причине сама находка, а не шум вывода'
+
+stub 'echo "болтовня без маяка"'
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+asks "$OUT"; say $? 'ответ без маяка — вердикт не разобран, останавливает'
+
+stub 'exit 1'
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+asks "$OUT"; say $? 'модель упала — упавшая проверка = остановка'
+git reset -q; rm -f ubuntu/serenedb/sn.py
+
+# 🔴 Промт снайпера живёт в ДВУХ местах — agent-хук settings.json (Claude) и
+# sniper-kimi.sh (Kimi). Разъехавшиеся копии одного правила — тот самый дефект F248,
+# ради которого заводился lib-hooks.sh: находка обязана быть в обоих.
+echo
+echo '== снайпер: находка про OpenClaw — в обоих движках =='
+REAL="$(cd "$HOOKS/../.." && pwd)"
+grep -q 'openclaw-native' "$HOOKS/sniper-kimi.sh"; say $? 'sniper-kimi.sh — находка про OpenClaw на месте'
+grep -q 'openclaw-native' "$REAL/.claude/settings.json"; say $? 'agent-снайпер settings.json — та же находка на месте'
+
+# --- сторож: подключение Kimi -------------------------------------------------------
+echo
+echo '== защита гейтов: подключение Kimi (hook_guard_armed) =='
+cd "$G" || exit 1
+[ -z "$(armed)" ]; say $? 'kimi-конфиг полон — нарушений нет'
+cp "$KIMI_CONFIG_TOML" "$TMP/kimi.bak"
+sed -i '/sniper-kimi/d' "$KIMI_CONFIG_TOML"
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'гейт убран из kimi-конфига — нарушение видно поимённо'
+rm -f "$KIMI_CONFIG_TOML"
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'Kimi'; say $? 'kimi-конфиг снесён — нарушение видно'
+cp "$TMP/kimi.bak" "$KIMI_CONFIG_TOML"
+mv AGENTS.md "$TMP/ag.bak"
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'AGENTS.md'; say $? 'AGENTS.md снесён — нарушение видно поимённо'
+mv "$TMP/ag.bak" AGENTS.md
+[ -z "$(armed)" ]; say $? 'всё возвращено — нарушений снова нет'
 
 echo
 if [ "$FAILED" != 0 ]; then echo "🔴 ПРОВАЛОВ: $FAILED"; exit 1; fi

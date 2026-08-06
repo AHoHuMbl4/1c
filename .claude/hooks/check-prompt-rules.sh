@@ -41,13 +41,19 @@ export EVENT_JSON
 # Правило, которое ловит один способ правки из пяти, правилом не является. Поэтому тот же
 # разбор делается по индексу на коммите — и гейт коммита (`.githooks/pre-commit`) зовёт
 # этот хук наравне с остальными: git зовётся всегда, кто бы ни коммитил.
-if ! printf '%s' "$EVENT_JSON" | grep -q '"file_path"'; then
+# 🔴 Поле пути у движков зовётся по-разному: Claude шлёт `file_path`, Kimi — `path`
+# (замер полезной нагрузки 06.08, /tmp-ловушкой). Проверка ветки и разбор обязаны
+# принимать оба, иначе под Kimi хук молча уходил бы в ветку коммита и пропускал всё.
+if ! printf '%s' "$EVENT_JSON" | grep -qE '"(file_path|path)"'; then
   CMD=$(printf '%s' "$EVENT_JSON" | python3 -c 'import json,sys
 d=json.load(sys.stdin)
 print((d.get("tool_input") or {}).get("command") or "")' 2>/dev/null)
   is_git_commit "$CMD" || { echo '{}'; exit 0; }
   cd_repo || { hook_ask "Хук $(basename "$0") не смог определить каталог репозитория и ничего не проверил. Пропускать проверку молча нельзя."; exit 0; }
-  STAGED_DIFF="${DIFF_OVERRIDE:-$(git diff --cached -U0 2>/dev/null)}"
+  # При пат-спеке смотрим только названные пути: чужой staged-файл соседней сессии
+  # не должен останавливать наш коммит.
+  mapfile -t PS < <(hook_commit_pathspec "$CMD")
+  STAGED_DIFF="${DIFF_OVERRIDE:-$(git diff --cached -U0 -- "${PS[@]}" 2>/dev/null)}"
   [ -z "$STAGED_DIFF" ] && { echo '{}'; exit 0; }
   # 🔴 Дифф — ФАЙЛОМ, не окружением: на большом коммите переменная окружения упирается в
   # предел (`/usr/bin/python3: Argument list too long`, код 126), гейт считает проверку
@@ -144,7 +150,8 @@ except Exception:
     sys.exit(0)
 
 ti = ev.get("tool_input") or {}
-path = ti.get("file_path") or ""
+# У Claude поле пути — file_path, у Kimi — path (замер 06.08). Принимаем оба.
+path = ti.get("file_path") or ti.get("path") or ""
 # Edit даёт замену, Write — целое содержимое. Нас интересует только ДОБАВЛЯЕМЫЙ текст.
 added = ti.get("new_string")
 if added is None:

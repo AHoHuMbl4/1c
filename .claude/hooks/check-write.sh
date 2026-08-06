@@ -7,7 +7,10 @@
 # считает находкой и обрывает работу. Отбор файлов обязан быть детерминированным.
 set -uo pipefail
 
-FILE=$(python3 -c 'import json,sys; d=json.load(sys.stdin); print((d.get("tool_input") or {}).get("file_path") or "")' 2>/dev/null)
+# Поле пути у Claude — `file_path`, у Kimi — `path` (замер 06.08): принимаем оба.
+# 🔴 Эта строка однажды уже была потеряна: проба PostToolUse правила файл, а возврат
+# пробы через `git checkout --` затёр и исправление (06.08). Пробу откатывать точечно.
+FILE=$(python3 -c 'import json,sys; d=json.load(sys.stdin); ti=d.get("tool_input") or {}; print(ti.get("file_path") or ti.get("path") or "")' 2>/dev/null)
 case "$FILE" in
   *.py|*.js|*.mjs) ;;
   *) echo '{}'; exit 0 ;;               # не код — молча пропускаем
