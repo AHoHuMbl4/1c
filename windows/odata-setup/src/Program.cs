@@ -242,7 +242,21 @@ namespace Oc1c
                 }
                 if (string.IsNullOrEmpty(o.OpenFirewall))
                 {
-                    o.OpenFirewall = Win.SuggestFirewallCidr(o.UbuntuHost);
+                    // netsh remoteip принимает только IP: DNS-имя резолвим (разбор 07.08).
+                    string fwHost = o.UbuntuHost;
+                    try
+                    {
+                        System.Net.IPAddress ip;
+                        if (!System.Net.IPAddress.TryParse(fwHost, out ip))
+                        {
+                            System.Net.IPAddress[] addrs = System.Net.Dns.GetHostAddresses(fwHost);
+                            for (int ai = 0; ai < addrs.Length; ai++)
+                                if (addrs[ai].AddressFamily == System.Net.Sockets.AddressFamily.InterNetwork)
+                                { fwHost = addrs[ai].ToString(); break; }
+                        }
+                    }
+                    catch { /* оставляем как было — SuggestFirewallCidr вернёт null для не-IP */ }
+                    o.OpenFirewall = Win.SuggestFirewallCidr(fwHost);
                     Log.Info("брандмауэр: для входа к IIS:80 предложен remoteip=" + o.OpenFirewall +
                              " (из --ubuntu-host; переопределите --open-firewall при необходимости)");
                 }
@@ -252,7 +266,7 @@ namespace Oc1c
             Log.Step(4, TOTAL, "Компоненты IIS");
             string detail;
             int iis = Steps.EnsureIis(out detail);
-            if (iis < 0) { Log.Err(detail); Log.Fix("проверьте, что Windows позволяет установку компонентов (не Home-редакция с урезанным IIS), и повторите"); return EXIT_STEP; }
+            if (iis < 0) { Log.Err(detail); Log.Fix("проверьте доступ к источнику компонентов (Windows Update/WSUS или дистрибутив: dism /source / Install-WindowsFeature -Source) и повторите"); return EXIT_STEP; }
             if (iis == 1)
             {
                 Log.Warn(detail);
@@ -691,17 +705,38 @@ namespace Oc1c
             }
         }
 
+        // Секреты в resume/RunOnce НЕ пишем: resume.txt лежит в ProgramData (чтение
+        // всем пользователям), RunOnce — в реестре (разбор 07.08). После ребута
+        // продолжение спросит пароль заново, если он понадобится (состав OData).
+        static readonly string[] SecretArgs = new string[] {
+            "--admin-password", "--reader-password", "--admin-password-env", "--reader-password-env" };
+
+        static string SanitizedCmdLine(bool skipAutoResume)
+        {
+            string[] a = Environment.GetCommandLineArgs();
+            StringBuilder sb = new StringBuilder();
+            sb.Append("\"" + a[0] + "\"");
+            for (int i = 1; i < a.Length; i++)
+            {
+                if (skipAutoResume && a[i] == "--auto-resume") continue;
+                bool secret = false;
+                for (int j = 0; j < SecretArgs.Length; j++)
+                    if (a[i] == SecretArgs[j]) { secret = true; break; }
+                if (secret) { i++; continue; }   // пропускаем и значение
+                // кавычка внутри значения ломала склейку команды (разбор 07.08)
+                sb.Append(" \"" + a[i].Replace("\"", "") + "\"");
+            }
+            return sb.ToString().Trim();
+        }
+
         static void SaveResume(Opts o)
         {
             try
             {
                 string d = Path.GetDirectoryName(ResumeFile);
                 if (!Directory.Exists(d)) Directory.CreateDirectory(d);
-                string[] a = Environment.GetCommandLineArgs();
-                StringBuilder sb = new StringBuilder();
-                for (int i = 0; i < a.Length; i++) sb.Append("\"" + a[i] + "\" ");
-                File.WriteAllText(ResumeFile, sb.ToString().Trim(), new UTF8Encoding(true));
-                Log.Con("Команда для повторного запуска сохранена: " + ResumeFile);
+                File.WriteAllText(ResumeFile, SanitizedCmdLine(false), new UTF8Encoding(true));
+                Log.Con("Команда для повторного запуска сохранена: " + ResumeFile + " (без паролей)");
             }
             catch (Exception e) { Log.File("не сохранил resume: " + e.Message); }
         }
@@ -716,15 +751,10 @@ namespace Oc1c
         {
             try
             {
-                string[] a = Environment.GetCommandLineArgs();
-                StringBuilder sb = new StringBuilder();
-                sb.Append("\"" + a[0] + "\"");
-                for (int i = 1; i < a.Length; i++)
-                    if (a[i] != "--auto-resume") sb.Append(" \"" + a[i] + "\"");
                 using (RegistryKey k = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
                         .OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce", true))
                 {
-                    if (k != null) { k.SetValue("Setup1COData", sb.ToString()); Log.Ok("после перезагрузки настройка продолжится автоматически (RunOnce)"); }
+                    if (k != null) { k.SetValue("Setup1COData", SanitizedCmdLine(true)); Log.Ok("после перезагрузки настройка продолжится автоматически (RunOnce)"); }
                 }
             }
             catch (Exception e) { Log.Warn("не удалось включить авто-продолжение: " + e.Message); }
@@ -812,7 +842,17 @@ namespace Oc1c
             try
             {
                 if (!File.Exists(path)) return "файл конфигурации не найден: " + path;
-                string[] lines = File.ReadAllLines(path, Encoding.UTF8);
+                // Блокнот Win10 сохраняет ANSI по умолчанию — читаем UTF-8 строго,
+                // при невалидном UTF-8 откатываемся на системную ANSI (разбор 07.08).
+                string[] lines;
+                try
+                {
+                    lines = File.ReadAllLines(path, new UTF8Encoding(false, true));
+                }
+                catch (DecoderFallbackException)
+                {
+                    lines = File.ReadAllLines(path, Encoding.Default);
+                }
                 for (int i = 0; i < lines.Length; i++)
                 {
                     string l = lines[i].Trim();

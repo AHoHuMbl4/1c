@@ -201,7 +201,7 @@ namespace Oc1c
                 Log.Sim("скопировал бы packet-agent.exe, age.exe, age-keygen.exe, zstd.exe в " + packetDir);
                 Log.Sim("записал бы agent.ini (база «" + ps.BaseId + "», права — только администраторам и SYSTEM)");
             }
-            else if (!InstallFiles(kit, packetDir, dataDir, ps, o, odataUrl, thumbprint))
+            else if (!StopAgent() || !InstallFiles(kit, packetDir, dataDir, ps, o, odataUrl, thumbprint))
                 return Program.EXIT_PACKET;
             else if (File.Exists(pfxPath))
             {
@@ -469,6 +469,19 @@ namespace Oc1c
         // ============================================================ автозапуск
         const string TaskName = "1C Packet Agent";
         const string WatchdogName = "1C Packet Agent Watchdog";
+
+        // Перед заменой файлов: живой агент держит packet-agent.exe занятым
+        // («файл используется другим процессом» — прогон 07.08). Гасим задачи и
+        // процесс; «не запущен» — не ошибка. Прерванный такт не страшен: очередь
+        // чанков на диске, довозка штатная (К2).
+        static bool StopAgent()
+        {
+            Proc.Run("schtasks.exe", "/End /TN \"" + TaskName + "\"", 30000, Proc.Oem, null, null);
+            Proc.Run("schtasks.exe", "/End /TN \"" + WatchdogName + "\"", 30000, Proc.Oem, null, null);
+            ExecResult kill = Proc.Run("taskkill.exe", "/f /im packet-agent.exe", 30000, Proc.Oem, null, null);
+            if (kill.Ok) { Log.Info("прежний процесс packet-agent.exe остановлен"); System.Threading.Thread.Sleep(1000); }
+            return true;
+        }
 
         // Служба Windows требует служебного каркаса в самом exe; агент — обычная
         // программа-демон (такт задаётся сервером через конфиг), поэтому автозапуск —

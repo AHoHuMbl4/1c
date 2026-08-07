@@ -350,8 +350,11 @@ namespace Oc1c
             string script =
                 "$os = Get-CimInstance Win32_OperatingSystem; " +
                 "$free = [int]($os.FreePhysicalMemory/1024); $total = [int]($os.TotalVisibleMemorySize/1024); " +
-                "$cpu = -1; try { $cpu = [int]((Get-Counter '\\Processor(_Total)\\% Processor Time' " +
-                "-SampleInterval 1 -MaxSamples 1).CounterSamples[0].CookedValue) } catch {}; " +
+                // Имена счётчиков Get-Counter локализованы (на ru-Windows путь
+                // '\Processor(_Total)\% Processor Time' невалиден — разбор 07.08),
+                // поэтому CPU берём из CIM — локаленезависимо.
+                "$cpu = -1; try { $cpu = [int]((Get-CimInstance Win32_Processor | " +
+                "Measure-Object -Property LoadPercentage -Average).Average) } catch {}; " +
                 "Write-Output ('LOAD cpu=' + $cpu + ' ram_free_mb=' + $free + ' ram_total_mb=' + $total)";
             ExecResult r = Ps.Run(script, false, 30000, null);
             if (!r.Ok && r.All.IndexOf("LOAD ") < 0) return;

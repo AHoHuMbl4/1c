@@ -68,13 +68,26 @@ namespace Oc1c
             if (!string.IsNullOrEmpty(explicitDir)) roots.Add(explicitDir);
             else
             {
+                // Каталоги платформы: 1cv8 (обычная) и 1cv8t (учебная), в Program Files
+                // и в профиле пользователя (1cestart ставит в %LOCALAPPDATA%\1C).
                 string[] env = new string[] { "ProgramW6432", "ProgramFiles(x86)", "ProgramFiles" };
+                string[] sub = new string[] { "1cv8", "1cv8t" };
                 for (int i = 0; i < env.Length; i++)
                 {
                     string pf = Environment.GetEnvironmentVariable(env[i]);
-                    if (!string.IsNullOrEmpty(pf))
+                    if (string.IsNullOrEmpty(pf)) continue;
+                    for (int j = 0; j < sub.Length; j++)
                     {
-                        string c = Path.Combine(pf, "1cv8");
+                        string c = Path.Combine(pf, sub[j]);
+                        if (Directory.Exists(c) && !roots.Contains(c)) roots.Add(c);
+                    }
+                }
+                string lad = Environment.GetEnvironmentVariable("LOCALAPPDATA");
+                if (!string.IsNullOrEmpty(lad))
+                {
+                    for (int j = 0; j < sub.Length; j++)
+                    {
+                        string c = Path.Combine(Path.Combine(lad, "1C"), sub[j]);
                         if (Directory.Exists(c) && !roots.Contains(c)) roots.Add(c);
                     }
                 }
@@ -255,6 +268,38 @@ namespace Oc1c
         }
 
         // ============================================================ 4. компоненты IIS
+        // Server SKU: InstallationType = "Server" / "Server Core" (HKLM\...\CurrentVersion).
+        static bool IsServerSku()
+        {
+            try
+            {
+                object v = Microsoft.Win32.Registry.GetValue(
+                    @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion", "InstallationType", "");
+                return (v ?? "").ToString().StartsWith("Server", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        // Путь Windows Server: роль Web-Server через ServerManager.
+        static int EnsureIisServer(out string detail)
+        {
+            detail = "";
+            ExecResult sv = Ps.Run("try{ Import-Module ServerManager -EA Stop; (Get-WindowsFeature Web-Server).Installed }catch{ 'NOMODULE' }", false, 120000, null);
+            if (sv.Ok && sv.StdOut.IndexOf("True", StringComparison.OrdinalIgnoreCase) >= 0)
+            { detail = "Windows Server: роль Web-Server уже установлена"; return 0; }
+            if (sv.Ok && sv.StdOut.IndexOf("False", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                if (Ctx.DryRun) { Log.Sim("установил бы роль Web-Server (Install-WindowsFeature)"); return 2; }
+                ExecResult ins = Ps.Run("$r=Install-WindowsFeature Web-Server,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-CGI,Web-Basic-Auth,Web-Mgmt-Console -ErrorAction Stop; 'RESTART='+$r.RestartNeeded", false, 900000, null);
+                if (!ins.Ok) { detail = ins.Tail(3); return -1; }
+                detail = "роль Web-Server установлена (Server SKU)";
+                Ctx.Changed = true;
+                return ins.StdOut.IndexOf("RESTART=Yes", StringComparison.OrdinalIgnoreCase) >= 0 ? 1 : 2;
+            }
+            detail = "не удалось определить состояние компонентов IIS";
+            return -1;
+        }
+
         static readonly string[] IisRequired = new string[] {
             "IIS-WebServerRole","IIS-WebServer","IIS-CommonHttpFeatures","IIS-StaticContent","IIS-DefaultDocument",
             "IIS-HttpErrors","IIS-RequestFiltering","IIS-Security","IIS-ISAPIExtensions","IIS-ISAPIFilter","IIS-CGI",
@@ -266,6 +311,12 @@ namespace Oc1c
         public static int EnsureIis(out string detail)
         {
             detail = "";
+            // Server SKU: имена IIS-* — роли ServerManager, а не optional features.
+            // Get-WindowsOptionalFeature по ним на Server кидает «unknown feature»,
+            // per-item catch ниже писал Absent, скрипт завершался кодом 0 — и ветка
+            // ServerManager не выполнялась НИКОГДА (разбор 07.08). Поэтому Server
+            // определяем явно по реестру ДО выбора механизма.
+            if (IsServerSku()) return EnsureIisServer(out detail);
             StringBuilder sb = new StringBuilder();
             sb.AppendLine("$names=@('" + string.Join("','", IisRequired) + "','" + string.Join("','", IisOptional) + "')");
             sb.AppendLine("$out=@()");
@@ -276,22 +327,10 @@ namespace Oc1c
             ExecResult r = Ps.Run(sb.ToString(), false, 300000, null);
             if (!r.Ok)
             {
-                // Windows Server: возможен путь через ServerManager
+                // Клиентский путь недоступен — возможно, это Server (или Server Core):
+                // пробуем ServerManager. На клиенте без модуля ответит NOMODULE.
                 Log.Warn("Get-WindowsOptionalFeature недоступен: " + r.Tail(2));
-                ExecResult sv = Ps.Run("try{ Import-Module ServerManager -EA Stop; (Get-WindowsFeature Web-Server).Installed }catch{ 'NOMODULE' }", false, 120000, null);
-                if (sv.Ok && sv.StdOut.IndexOf("True", StringComparison.OrdinalIgnoreCase) >= 0)
-                { detail = "Windows Server: роль Web-Server уже установлена"; return 0; }
-                if (sv.Ok && sv.StdOut.IndexOf("False", StringComparison.OrdinalIgnoreCase) >= 0)
-                {
-                    if (Ctx.DryRun) { Log.Sim("установил бы роль Web-Server (Install-WindowsFeature)"); return 2; }
-                    ExecResult ins = Ps.Run("$r=Install-WindowsFeature Web-Server,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-CGI,Web-Basic-Auth,Web-Mgmt-Console -ErrorAction Stop; 'RESTART='+$r.RestartNeeded", false, 900000, null);
-                    if (!ins.Ok) { detail = ins.Tail(3); return -1; }
-                    detail = "роль Web-Server установлена (Server SKU)";
-                    Ctx.Changed = true;
-                    return ins.StdOut.IndexOf("RESTART=Yes", StringComparison.OrdinalIgnoreCase) >= 0 ? 1 : 2;
-                }
-                detail = "не удалось определить состояние компонентов IIS";
-                return -1;
+                return EnsureIisServer(out detail);
             }
 
             List<string> missing = new List<string>();
@@ -393,6 +432,22 @@ namespace Oc1c
             catch { return null; }
         }
 
+        // Идемпотентность публикации: сравнение ТОЧНОЕ. Подстрочное «buh» ловило
+        // чужую базу «buh2», и установщик шёл дальше с чужим default.vrd (разбор 07.08).
+        static bool IbMatches(string ib, BaseRef b)
+        {
+            if (ib == null) return false;
+            string want = b.IsFile ? b.Dir : b.Name;
+            if (string.IsNullOrEmpty(want)) return false;
+            // ib вида File='C:\1c\bases\ut'; (файловая) или Ref='name'; (клиент-серверная)
+            string val = ib.Trim().TrimEnd(';');
+            int q1 = val.IndexOf('\'');
+            int q2 = val.LastIndexOf('\'');
+            if (q1 < 0 || q2 <= q1) return false;
+            string inner = val.Substring(q1 + 1, q2 - q1 - 1);
+            return string.Equals(inner, want, StringComparison.OrdinalIgnoreCase);
+        }
+
         public static bool Publish(Platform p, BaseRef b, string site, string alias, string dir, bool force, out string detail)
         {
             detail = "";
@@ -400,8 +455,7 @@ namespace Oc1c
             if (File.Exists(vrd))
             {
                 string ib = VrdIb(vrd);
-                string want = b.IsFile ? b.Dir : b.Name;
-                if (ib != null && want != null && ib.IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0)
+                if (IbMatches(ib, b))
                 {
                     detail = "уже опубликовано (" + vrd + ")";
                     return true;
@@ -630,7 +684,9 @@ namespace Oc1c
                 string txt = list.StdOut;
                 int idx = txt.IndexOf(p.Wsisapi, StringComparison.OrdinalIgnoreCase);
                 string tail = txt.Substring(idx, Math.Min(220, txt.Length - idx));
-                if (Regex.IsMatch(tail, "allowed\\s*:\\s*\"?true", RegexOptions.IgnoreCase))
+                // appcmd /text:* печатает элементы коллекции как [path='...',allowed='true']
+                // — через '=', а не ':' (разбор 07.08): принимаем оба разделителя.
+                if (Regex.IsMatch(tail, "allowed\\s*[=:]\\s*\"?true", RegexOptions.IgnoreCase))
                 { detail = "разрешение ISAPI уже есть"; return true; }
 
                 if (Ctx.DryRun) { Log.Sim("включил бы allowed=true для " + p.Wsisapi); detail = "симуляция"; return true; }
