@@ -204,6 +204,24 @@ namespace Oc1c
             // ПУСТОМ составе OData (ложный зелёный smoke 07.08). Читаем первую
             // сущность состава теми же кредами, что пойдут в agent.ini.
             string probeUser = string.IsNullOrEmpty(o.ReaderUser) ? "ai_reader" : o.ReaderUser;
+            // Пользователь-читатель — единственный ручной шаг: предупреждаем явно и
+            // ждём подтверждения (решение владельца 07.08). Автоматику (пайп/--unattended)
+            // не донимаем — её ответом служит проба данных ниже.
+            if (!o.Unattended && !Console.IsInputRedirected && !Ctx.DryRun)
+            {
+                Console.WriteLine();
+                Console.WriteLine("       ВАЖНО: в 1С должен существовать пользователь-читатель «" + probeUser + "»");
+                Console.WriteLine("       с профилем «Только просмотр» — агент читает базу под ним.");
+                Console.Write("       Пользователь «" + probeUser + "» создан? (y/n): ");
+                string ans = Console.ReadLine();
+                if (!string.Equals((ans ?? "").Trim(), "y", StringComparison.OrdinalIgnoreCase))
+                {
+                    Log.Err("без пользователя-читателя агент не прочитает базу");
+                    Log.Fix("создайте «" + probeUser + "»: 1С:Предприятие → Администрирование → Пользователи, " +
+                            "профиль «Только просмотр» — и повторите запуск");
+                    return Program.EXIT_PREREQ;
+                }
+            }
             string probeDetail = "";
             if (!Ctx.DryRun && !Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
             {
@@ -624,6 +642,15 @@ namespace Oc1c
             }
             string tail = r.Tail(4);
             string code = KnownReceiverError(tail);
+            // stale_seq: комплект уже работал (seq израсходован) — канал при этом
+            // ДОКАЗАН (mTLS+Bearer прошли, приёмник ответил осмысленно), а данные
+            // агент зальёт сам полной перезаливкой (решение владельца 07.08).
+            // Это не провал установки.
+            if (tail.IndexOf("stale_seq", StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                Log.Warn("комплект уже использовался (stale_seq) — канал доказан; агент зальёт полную сам (resync)");
+                return true;
+            }
             if (code != null) Log.Err(code);
             else if (r.TimedOut) Log.Err("нет связи с приёмником: пробная посылка не завершилась за 10 минут");
             else Log.Err("пробная посылка не подтверждена: " + tail);

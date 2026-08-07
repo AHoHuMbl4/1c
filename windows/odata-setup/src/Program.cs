@@ -50,10 +50,16 @@ namespace Oc1c
             int rc = MainInner(argv);
             // Запуск двойным кликом: при ошибке окно исчезало вместе с текстом —
             // «после выбора базы окно закрылось и всё» (прогон владельца 07.08).
-            // Пауза только на ошибке и только у интерактивной консоли (пайпы не виснут).
+            // Ждём именно Esc: буферизованный Enter от прошлых вводов пролетал
+            // ReadLine мгновенно, и окно закрывалось снова (прогон 07.08, вечер).
             if (rc != EXIT_OK && !Console.IsInputRedirected)
             {
-                try { Console.WriteLine(); Console.WriteLine("Код выхода: " + rc + ". Нажмите Enter для закрытия окна…"); Console.ReadLine(); }
+                try
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("Код выхода: " + rc + ". Нажмите Esc для закрытия окна…");
+                    while (Console.ReadKey(true).Key != ConsoleKey.Escape) { }
+                }
                 catch { }
             }
             return rc;
