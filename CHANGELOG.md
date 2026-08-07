@@ -355,6 +355,33 @@ age/zstd v1.2.1/v1.5.7 win64 + ИНСТРУКЦИЯ.txt), build.cmd/probe.cmd �
 
 ---
 
+## 07.08: агент пакетного транспорта — сборка, golden, SMOKE end-to-end `[замер]`
+
+`[решение]` владельца 07.08: сразу с шифрованием (age), без пилотного plain-режима.
+
+- **Первая сборка агента** на стенде (ssh unde@192.168.56.1:2222, csc .NET 4):
+  собрался без правок кода, `packet-agent 1.0.0` (50 688 байт). Ловушка: `.cmd`
+  в репо был с LF — cmd.exe ломался на блочных скобках; переведён на CRLF в
+  репозитории (переносить батники только CRLF, sftp это не делает сам).
+- **Фикс агента** `windows/packet-agent/src/PacketAgent.cs`: у учётки 1С стенда
+  пароль легально пустой, а `Cfg.Get(required)` на пустом `odata_password=`
+  бросал «нет ключа» — сделан опциональным (пусто = анонимный Basic).
+- **Golden-проба ПРОЙДЕНА 4/4 побайтово** (`probe.cmd` на стенде): `--flatten`
+  всех фикстур, включая `_Synthetic_КаверзныеЗначения`, `fc /b` = эталон
+  `poc_load_entity.py` (контракт К5).
+- **Комплект `ut` дополнен официальными бинарями** `work/packet/kit/ut/bin/`:
+  age.exe/age-keygen.exe v1.1.1, zstd.exe v1.5.7 (win-amd64, sha256 в графе).
+- **SMOKE end-to-end ПРОШЁЛ** (стенд → домен): `packet-agent.exe --smoke` →
+  пакет `000001-780a8dd9` kind=meta с настоящим `$metadata`, режим **age**,
+  mTLS (`CN=ut`) + Bearer → **verified**, а на следующем тике `1c-packet-apply`
+  (2 мин) — **applied, seq=1**: `$metadata` (10,8 МБ) записан в
+  `/var/lib/serenedb/packet-meta/ut/`. Цепочка Windows→OData→zstd+age→
+  mTLS→релей→туннель→приёмник→витрина замкнута и замерена целиком.
+  Окружение smoke на стенде: pfx в `CurrentUser\My` (LocalMachine — дело
+  установщика), `agent.ini` рядом с exe (в git нет).
+
+---
+
 ## 07.08: приём пакетов переведён на mTLS (контракт §8 — два фактора) `[замер]`
 
 `[решение]` владельца: клиентский сертификат + Bearer. На FreeBSD:

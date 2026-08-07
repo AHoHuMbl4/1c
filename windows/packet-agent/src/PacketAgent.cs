@@ -85,7 +85,10 @@ namespace PacketAgent
             c.RecipientPubkey = Get(kv, "recipient_pubkey", false) ?? "";
             c.OdataUrl = Get(kv, "odata_url", true).TrimEnd('/');
             c.OdataUser = Get(kv, "odata_user", true);
-            c.OdataPassword = Get(kv, "odata_password", true);
+            // Пароль 1С бывает легально ПУСТЫМ (учётка без пароля — на стенде УТ
+            // именно так): Get(required) на пустом значении бросал «нет ключа».
+            // Отсутствие ключа и пустое значение равнозначны — анонимный Basic.
+            c.OdataPassword = Get(kv, "odata_password", false) ?? "";
             c.DataDir = Get(kv, "data_dir", true);
             c.ClientCertThumbprint = Get(kv, "client_cert_thumbprint", false);
             c.PageSize = GetInt(kv, "page_size", c.PageSize);            c.PageMin = GetInt(kv, "page_min", c.PageMin);

@@ -24,25 +24,22 @@ _Обновлено: **2026-08-07.** Здесь — только живое: т�
 `deploy_instance.sh`. Остановлен; умолчание убрано (рестарт всех активных `1c-mcp-ask@*`);
 мосты живы. Осталось владельцу (root): удалить `/etc/systemd/system/1c-mcp-ask.service`.
 
-**Канал `1c-gate.timpul.ru` → Ubuntu `[06.08]`: ✅ туннель В БОЮ (юнит), цепочка замерена; остался выкат packet_server на :6090.**
-`[решение]` владельца: домен приёмника на FreeBSD `201.34.130.46` (белый IP), бесшовный
-релей — Windows знает только домен. 🔴 **WireGuard замерен МЁРТВЫМ**: возвратный UDP
-Европа→РФ не доходит вовсе (ни WG-хендшейки, ни plain-эхо; TCP чист). Транспорт —
-**SSH reverse-туннель** (юнит `1c-gate-tunnel`, ssh -R `6022 → 127.0.0.1:6090`, инициатор
-Ubuntu). На FreeBSD: HAProxy `:443` (TLS, LE через lego) → `127.0.0.1:6022`, юзер
-`gate-tunnel` (nologin, ключ restrict+permitlisten). Root-шаг выполнен владельцем 06.08:
-юнит `active`+`enabled`; `[замер]` проба через туннель юнита — HTTP 200, xff на месте.
-✅ **07.08: приёмник В БОЮ** — `1c-packet-server` + `1c-packet-apply.timer` active,
-mTLS на релее (`verify required`, CA `1c-packet-ca`), сквозная `/health` с клиентским
-сертификатом → 200; без сертификата — обрыв рукопожатия. ⚠ Часы релея отстают ~2 мин:
-свежий сертификат отвергается до notBefore по ЕГО часам. Разбор —
-[`ubuntu/wireguard/README.md`](../ubuntu/wireguard/README.md).
+**Канал `1c-gate.timpul.ru` → Ubuntu `[06-07.08]`: ✅ В БОЮ целиком (туннель, приёмник, mTLS, fail2ban).**
+Домен → HAProxy на FreeBSD `201.34.130.46` (`:443`, mTLS `verify required`, CA `1c-packet-ca`)
+→ SSH reverse-туннель (юнит `1c-gate-tunnel`, `6022 → 127.0.0.1:6090`, инициатор Ubuntu) →
+`packet_server` + `1c-packet-apply.timer` — active. 🔴 WireGuard замерен МЁРТВЫМ (возвратный
+UDP Европа→РФ не доходит вовсе, TCP чист — `ubuntu/wireguard/README.md`, там же замеры
+скорости ~37 Мбит/с и живучести). Замеры: без серта обрыв TLS, с сертом `CN=ut` — 200.
+⚠ Часы релея отстают ~2 мин: свежий сертификат отвергается до notBefore по ЕГО часам.
 
-**Пакетный транспорт `[07.08]`: приёмник В БОЮ, всё в main, остался E2E с Windows.**
-Контур `ubuntu/packet/` (server/apply/kit/config, пробы зелёные), агент `windows/packet-agent/`
-(⚠ не компилировался — первая сборка на Windows), golden `work/packet/golden/`. mTLS + Bearer;
-пилот без age (контракт §2, `docs/PACKET_CONTRACT.md`). **E2E**: сборка агента → golden →
-установщик 1.2.0 с комплектом `work/packet/kit/ut/` → первая full → дельта.
+**Пакетный транспорт `[07.08]`: ✅ SMOKE E2E ПРОШЁЛ — цепочка замкнута; дальше первая full.**
+Контур `ubuntu/packet/` (server/apply/kit/config) В БОЮ, агент `windows/packet-agent/`
+СОБРАН на стенде (csc .NET 4; фикс пустого `odata_password`; build.cmd на CRLF — LF ломал
+cmd.exe). Golden-проба `--flatten` **4/4 побайтово**. Комплект `ut` дополнен офиц.
+age.exe/zstd.exe (`work/packet/kit/ut/bin/`). `[решение]` 07.08: сразу с age, без
+plain-пилота. **SMOKE**: пакет `000001-780a8dd9` kind=meta режим age через mTLS+Bearer →
+verified → **applied seq=1**, `$metadata` (10,8 МБ) в `/var/lib/serenedb/packet-meta/ut/`.
+**Дальше:** установщик 1.2.0 с комплектом → первая full → дельта.
 **Установщик Windows 1.2.0 `[06.08]` — блок 2 «агент пакетов» СДЕЛАН** (слово владельца
 в этой сессии): `windows/odata-setup/src/Packet.cs` + интеграция в `Program.cs`
 (префлайт комплекта/связи/места, установка в `C:\1c\packet` + `agent.ini` с ACL,
