@@ -128,23 +128,24 @@ namespace Oc1c
                 return Program.EXIT_OK;
             }
 
-            Log.Head("БЛОК 2: АГЕНТ ПАКЕТНОГО ТРАНСПОРТА (Windows -> Ubuntu)");
-            Log.Con("Канал: агент на этой машине шлёт зашифрованные пакеты на сервер,");
-            Log.Con("сам опрашивает конфиг. Входящие порты на Windows НЕ нужны.");
+            Log.Head("БЛОК 2: КАНАЛ ПЕРЕДАЧИ ДАННЫХ (автоматическая выгрузка 1С)");
+            Log.Con("На эту машину ставится агент: он сам отправляет данные на сервер");
+            Log.Con("по защищённому каналу. Открывать порты на этом компьютере НЕ нужно.");
 
             // ---------- 1. комплект и его валидность
-            Log.Step(1, 5, "Комплект установки (packet-setup.json)");
+            Log.Step(1, 6, "Комплект установки");
             PacketSetup ps;
             string err = PacketSetup.Load(setupPath, out ps);
             if (err != null)
             {
                 Log.Err(err);
-                Log.Fix("комплект генерируется на сервере Ubuntu один раз на базу — запросите свежий packet-setup.json");
+                Log.Fix("запросите свежий файл комплекта (packet-setup.json) у администратора сервера аналитики");
                 return Program.EXIT_PREREQ;
             }
             Log.AddSecret(ps.Token);
             Log.AddSecret(ps.ClientPfxPassword);
-            Log.Ok("база «" + ps.BaseId + "», приёмник " + ps.ReceiverUrl);
+            Log.Ok("комплект проверен (база «" + ps.BaseId + "»)");
+            Log.File("приёмник: " + ps.ReceiverUrl);
 
             string agentExe = Path.Combine(kit, "packet-agent.exe");
             string ageExe = Path.Combine(kit, "age.exe");
@@ -179,12 +180,10 @@ namespace Oc1c
                 return Program.EXIT_PREREQ;
             }
             if (File.Exists(agentExe)) RunsOk(agentExe, "--version", "packet-agent");   // диагностика в лог, не стоп
+            Log.Ok("служебные программы проверены");
 
-            // ---------- 1б. клиентский сертификат mTLS -> LocalMachine\My
-            // Релей (HAProxy) не пропускает запрос без сертификата нашего CA
-            // (контракт §8), поэтому импорт — ДО префлайта связи. Агент работает
-            // под SYSTEM (планировщик) — ключ в машинном контейнере + чтение SYSTEM.
-            Log.Step(2, 6, "Клиентский сертификат mTLS (импорт в LocalMachine\\My)");
+            // ---------- 2. защищённое соединение (клиентский сертификат)
+            Log.Step(2, 6, "Защищённое соединение (сертификат клиента)");
             string thumbprint = Ctx.DryRun ? null
                 : (File.Exists(pfxPath) ? ImportClientCert(pfxPath, ps.ClientPfxPassword) : existingThumb);
             if (!Ctx.DryRun && thumbprint == null)
@@ -193,13 +192,14 @@ namespace Oc1c
                 return Program.EXIT_PREREQ;
             }
             if (Ctx.DryRun) Log.Sim("импортировал бы " + ps.ClientPfx + " в LocalMachine\\My, права закрытого ключа — SYSTEM");
+            else Log.Ok("защищённое соединение настроено");
 
-            // ---------- 2. префлайт связи и места
-            Log.Step(3, 6, "Префлайт: связь с приёмником (mTLS) и место на диске");
+            // ---------- 3. префлайт связи, чтения базы и места
+            Log.Step(3, 6, "Проверка связи и чтения базы");
             if (!Ctx.DryRun && !HealthOk(ps.ReceiverUrl, thumbprint))
             {
-                Log.Fix("откройте ИСХОДЯЩИЙ 443/TCP на " + HostOf(ps.ReceiverUrl) +
-                        " (входящее на Windows не нужно по построению)");
+                Log.Fix("проверьте, что с этого компьютера разрешён исходящий интернет (443/TCP) " +
+                        "и связь не режется антивирусом/прокси");
                 return Program.EXIT_PREREQ;
             }
             if (Ctx.DryRun) Log.Sim("проверил бы https-префлайт приёмника с клиентским сертификатом");
@@ -208,32 +208,37 @@ namespace Oc1c
             // ПУСТОМ составе OData (ложный зелёный smoke 07.08). Читаем первую
             // сущность состава теми же кредами, что пойдут в agent.ini.
             string probeUser = string.IsNullOrEmpty(o.ReaderUser) ? "ai_reader" : o.ReaderUser;
-            // Пользователь-читатель — единственный ручной шаг: предупреждаем явно и
-            // ждём подтверждения (решение владельца 07.08). Автоматику (пайп/--unattended)
-            // не донимаем — её ответом служит проба данных ниже.
+            // Пользователь-читатель — единственный ручной шаг: ведём по шагам, ждём
+            // подтверждения и ПРОВЕРЯЕМ факт чтения, пока не получится (решение
+            // владельца 07.08). Автоматику (пайп/--unattended) не донимаем.
+            string probeDetail = "";
             if (!o.Unattended && !Console.IsInputRedirected && !Ctx.DryRun)
             {
-                Console.WriteLine();
-                Console.WriteLine("       ВАЖНО: в 1С должен существовать пользователь-читатель «" + probeUser + "»");
-                Console.WriteLine("       с профилем «Только просмотр» — агент читает базу под ним.");
-                Console.Write("       Пользователь «" + probeUser + "» создан? (y/n): ");
-                string ans = Console.ReadLine();
-                if (!string.Equals((ans ?? "").Trim(), "y", StringComparison.OrdinalIgnoreCase))
+                while (true)
                 {
-                    Log.Err("без пользователя-читателя агент не прочитает базу");
-                    Log.Fix("создайте «" + probeUser + "»: 1С:Предприятие → Администрирование → Пользователи, " +
-                            "профиль «Только просмотр» — и повторите запуск");
-                    return Program.EXIT_PREREQ;
+                    Console.WriteLine();
+                    Console.WriteLine("       НУЖЕН ПОЛЬЗОВАТЕЛЬ-ЧИТАТЕЛЬ в 1С (единственный ручной шаг):");
+                    Console.WriteLine("         1) откройте 1С:Предприятие этой базы под администратором;");
+                    Console.WriteLine("         2) Администрирование → Настройки пользователей и прав → Пользователи;");
+                    Console.WriteLine("         3) создайте пользователя «" + probeUser + "», профиль «Только просмотр», задайте пароль;");
+                    Console.WriteLine("         4) вернитесь сюда.");
+                    Console.Write("       Когда создадите — нажмите Enter (проверю сам). Q — прервать: ");
+                    string ans = Console.ReadLine();
+                    if (string.Equals((ans ?? "").Trim(), "q", StringComparison.OrdinalIgnoreCase))
+                    { Log.Err("прервано пользователем (читатель не создан)"); return Program.EXIT_PREREQ; }
+                    if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+                    { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
+                    Console.WriteLine("       Пока не читается: " + probeDetail);
+                    Console.WriteLine("       Проверьте имя/пароль и профиль — и попробуем ещё раз.");
                 }
             }
-            string probeDetail = "";
-            if (!Ctx.DryRun && !Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+            if (!Ctx.DryRun && probeDetail.Length == 0 && !Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
             {
                 Log.Err("данные базы не читаются: " + probeDetail);
-                Log.Fix("задайте состав OData (шаг 12 установщика, без --skip-scope) и проверьте права читателя — иначе агент будет слать такты из 404");
+                Log.Fix("задайте состав OData и проверьте права пользователя-читателя («" + probeUser + "»)");
                 return Program.EXIT_PREREQ;
             }
-            if (!Ctx.DryRun) Log.Ok("OData читается: " + probeDetail);
+            if (!Ctx.DryRun && probeDetail.Length > 0) { Log.Ok("чтение базы работает"); Log.File("проба данных: " + probeDetail); }
 
             string packetDir = string.IsNullOrEmpty(o.PacketDir) ? @"C:\1c\packet" : o.PacketDir;
             string dataDir = Path.Combine(packetDir, "data");
@@ -252,7 +257,7 @@ namespace Oc1c
             {
                 // pfx с паролем в открытом виде больше не нужен: сертификат в
                 // LocalMachine\My, отпечаток — в agent.ini (ТЗ §2).
-                try { File.Delete(pfxPath); Log.Ok(ps.ClientPfx + " удалён после импорта"); }
+                try { File.Delete(pfxPath); Log.File(ps.ClientPfx + " удалён после импорта"); }
                 catch (Exception e) { Log.Warn("не удалось удалить " + pfxPath + ": " + e.Message); }
             }
 
@@ -298,7 +303,7 @@ namespace Oc1c
                 if (File.Exists(setupPath))
                 {
                     File.Delete(setupPath);
-                    Log.Ok("packet-setup.json удалён (токен теперь только в agent.ini под ACL)");
+                    Log.File("packet-setup.json удалён (токен теперь только в agent.ini под ACL)");
                 }
             }
             catch (Exception e) { Log.Warn("не удалось удалить packet-setup.json: " + e.Message); }
@@ -308,7 +313,7 @@ namespace Oc1c
                 try
                 {
                     string p = Path.Combine(kit, names[i]);
-                    if (File.Exists(p)) { File.Delete(p); Log.Ok(names[i] + " удалён после импорта"); }
+                    if (File.Exists(p)) { File.Delete(p); Log.File(names[i] + " удалён после импорта"); }
                 }
                 catch (Exception e) { Log.Warn("не удалось удалить " + names[i] + ": " + e.Message); }
             }
@@ -318,7 +323,8 @@ namespace Oc1c
         static bool RunsOk(string exe, string args, string label)
         {
             ExecResult r = Proc.Run(exe, args, 30000, Proc.Oem, null, null);
-            if (r.Ok) { Log.Ok(label + " запускается: " + FirstLine(r.StdOut)); return true; }
+            // В консоль — одна сводка от вызывающего; детали версий — в лог (для нас).
+            if (r.Ok) { Log.File(label + " запускается: " + FirstLine(r.StdOut)); return true; }
             Log.Err(label + " не запускается (" + exe + "): " + r.Tail(2));
             return false;
         }
@@ -381,8 +387,8 @@ namespace Oc1c
                 store.Add(cert);
                 store.Close();
                 GrantKeyToSystem(cert);
-                Log.Ok("сертификат импортирован в LocalMachine\\My (" + cert.SubjectName.Name +
-                       ", отпечаток " + cert.Thumbprint + ")");
+                Log.File("сертификат импортирован в LocalMachine\\My (" + cert.SubjectName.Name +
+                         ", отпечаток " + cert.Thumbprint + ")");
                 return cert.Thumbprint;
             }
             catch (Exception e)
@@ -411,7 +417,7 @@ namespace Oc1c
                     new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
                     FileSystemRights.Read, AccessControlType.Allow));
                 File.SetAccessControl(keyFile, fs);
-                Log.Ok("закрытому ключу выдано чтение для SYSTEM");
+                Log.File("закрытому ключу выдано чтение для SYSTEM");
             }
             catch (Exception e) { Log.Warn("ACL закрытого ключа не выданы: " + e.Message); }
         }
@@ -486,7 +492,8 @@ namespace Oc1c
                     string body = sr.ReadToEnd();
                     if ((int)resp.StatusCode == 200 && body.IndexOf("packet-server-ok") >= 0)
                     {
-                        Log.Ok("приёмник отвечает: " + url + " -> packet-server-ok (mTLS)");
+                        Log.Ok("связь с сервером есть");
+                        Log.File("приёмник отвечает: " + url + " -> packet-server-ok (mTLS)");
                         return true;
                     }
                     Log.Err("приёмник ответил HTTP " + (int)resp.StatusCode + ", но не «packet-server-ok»");
@@ -546,7 +553,7 @@ namespace Oc1c
                     if (File.Exists(srcExe))
                     {
                         File.Copy(srcExe, dstExe, true);
-                        Log.Ok("установлен " + names[i]);
+                        Log.File("установлен " + names[i]);
                     }
                     else if (HasEmbedded(names[i]))
                     {
@@ -556,6 +563,7 @@ namespace Oc1c
                     }
                     else { Log.Skip(names[i] + " нет ни в комплекте, ни вшит — не копирую"); continue; }
                 }
+                Log.Ok("агент установлен в " + packetDir);
             }
             catch (Exception e)
             {
@@ -567,7 +575,7 @@ namespace Oc1c
             string ini = Path.Combine(packetDir, "agent.ini");
             string reader = string.IsNullOrEmpty(o.ReaderUser) ? "ai_reader" : o.ReaderUser;
             StringBuilder sb = new StringBuilder();
-            sb.AppendLine("# Агент пакетного транспорта 1С -> Ubuntu");
+            sb.AppendLine("# Агент пакетного транспорта 1С -> сервер аналитики");
             sb.AppendLine("# Создан setup-1c-odata " + Ctx.ToolVersion + " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
             sb.AppendLine("# Права на этот файл: только администраторы и SYSTEM (внутри — токен и пароль читателя).");
             sb.AppendLine("base_id=" + ps.BaseId);
@@ -583,7 +591,8 @@ namespace Oc1c
             {
                 File.WriteAllText(ini, sb.ToString(), new UTF8Encoding(true));
                 RestrictToAdmins(ini);
-                Log.Ok("записан agent.ini (доступ — только администраторам и службе)");
+                Log.Ok("настройки записаны (доступ — только администраторам и службе)");
+                Log.File("записан " + ini);
             }
             catch (Exception e)
             {
@@ -640,10 +649,11 @@ namespace Oc1c
             string tr = "\"" + agent + "\"";
             if (!Schtasks("/Create /F /TN \"" + TaskName + "\" /TR \"" + tr + "\" /SC ONSTART /RU SYSTEM /RL HIGHEST"))
                 return false;
-            Log.Ok("задача «" + TaskName + "»: запуск при старте системы под SYSTEM");
+            Log.File("задача «" + TaskName + "»: запуск при старте системы под SYSTEM");
             if (!Schtasks("/Create /F /TN \"" + WatchdogName + "\" /TR \"" + tr + "\" /SC MINUTE /MO 5 /RU SYSTEM /RL HIGHEST"))
                 return false;
-            Log.Ok("задача «" + WatchdogName + "»: сторож каждые 5 минут");
+            Log.File("задача «" + WatchdogName + "»: сторож каждые 5 минут");
+            Log.Ok("автозапуск настроен (планировщик задач)");
             ExecResult run = Proc.Run("schtasks.exe", "/Run /TN \"" + TaskName + "\"", 60000, Proc.Oem, null, null);
             if (run.Ok) Log.Ok("агент запущен");
             else Log.Warn("агент не стартовал сразу: " + run.Tail(2) + " — запустится сторожем в течение 5 минут");
@@ -670,7 +680,8 @@ namespace Oc1c
             ExecResult r = Proc.Run(agent, "--smoke", 600000, Proc.Oem, packetDir, null);
             if (r.Ok)
             {
-                Log.Ok("доставка подтверждена приёмником: " + FirstLine(r.StdOut));
+                Log.Ok("проверка доставки пройдена");
+                Log.File("доставка подтверждена приёмником: " + FirstLine(r.StdOut));
                 Log.Con("Лог агента и его работа — " + Path.Combine(packetDir, "data"));
                 return true;
             }
