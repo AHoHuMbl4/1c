@@ -196,11 +196,11 @@ namespace Oc1c
                     Log.Err("не указана база: --base <путь> или --connstr \"Srvr=...;Ref=...;\"");
                     return EXIT_ARGS;
                 }
-                List<string> found = Steps.ScanFileBases(@"C:\1c\bases");
+                List<string> found = Steps.FindFileBases(@"C:\1c\bases");
                 if (found.Count == 0)
                 {
-                    Log.Err("файловые базы в C:\\1c\\bases не найдены");
-                    Log.Fix("укажите путь явно: --base \"C:\\путь\\к\\базе\" (каталог с файлом 1Cv8.1CD)");
+                    Log.Err("файловые базы не найдены ни в реестре баз 1С (ibases.v8i), ни в C:\\1c\\bases");
+                    Log.Fix("укажите путь явно: --base \"C:\\путь\\к\\базе\" (каталог с файлом 1Cv8.1CD) или зарегистрируйте базу в списке 1cestart");
                     return EXIT_ARGS;
                 }
                 Log.Con("       Найденные базы:");

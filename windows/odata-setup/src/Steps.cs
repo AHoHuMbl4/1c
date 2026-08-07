@@ -169,6 +169,41 @@ namespace Oc1c
             return res;
         }
 
+        // Универсальный поиск баз (матрица «любая база», 07.08): не один захардкоженный
+        // каталог стенда, а штатный реестр баз 1С пользователя — ibases.v8i (то, что
+        // видит 1cestart), плюс скан типового каталога как запасной путь.
+        public static List<string> FindFileBases(string scanRoot)
+        {
+            List<string> res = new List<string>();
+            List<string> reg = RegisteredBasePaths();
+            for (int i = 0; i < reg.Count; i++) if (!res.Contains(reg[i])) res.Add(reg[i]);
+            List<string> scan = ScanFileBases(scanRoot);
+            for (int i = 0; i < scan.Count; i++) if (!res.Contains(scan[i])) res.Add(scan[i]);
+            return res;
+        }
+
+        // %APPDATA%\1C\1CEStart\ibases.v8i: строки вида Connect=File="C:\путь\к\базе";
+        static List<string> RegisteredBasePaths()
+        {
+            List<string> res = new List<string>();
+            try
+            {
+                string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+                string v8i = Path.Combine(appData, @"1C\1CEStart\ibases.v8i");
+                if (!File.Exists(v8i)) return res;
+                string txt = File.ReadAllText(v8i, Encoding.UTF8);
+                MatchCollection ms = Regex.Matches(txt, "Connect\\s*=\\s*File\\s*=\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                foreach (Match m in ms)
+                {
+                    string dir = m.Groups[1].Value;
+                    if (Directory.Exists(dir) && File.Exists(Path.Combine(dir, "1Cv8.1CD")) && !res.Contains(dir))
+                        res.Add(dir);
+                }
+            }
+            catch { }
+            return res;
+        }
+
         // ============================================================ 3. бэкап (правило проекта)
         public static bool BackupZip(BaseRef b, string backupDir)
         {
@@ -468,6 +503,26 @@ namespace Oc1c
             return string.Equals(inner, want, StringComparison.OrdinalIgnoreCase);
         }
 
+        // default.vrd на диске ≠ приложение в IIS: после переустановки IIS файл
+        // остался, а объекта APP нет (стенд 07.08) — «set app» на шаге пула падал
+        // с «must use exact identifier for APP object». Создаём приложение, если нет.
+        static bool EnsureIisApp(string site, string alias, string dir, out string detail)
+        {
+            detail = "";
+            // 🔴 appcmd list с идентификатором делает НЕТОЧНОЕ совпадение: по
+            // «Default Web Site/ut» вернул корневое приложение (замер 07.08) —
+            // поэтому сверяем саму строку APP "<site>/<alias>".
+            string want = "APP \"" + site + "/" + alias + "\"";
+            ExecResult app = Cmd("list app \"" + site + "/" + alias + "\"", 30000);
+            if (app.Ok && app.StdOut.IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0) return true;
+            if (Ctx.DryRun) { Log.Sim("создал бы приложение IIS " + site + "/" + alias + " -> " + dir); return true; }
+            ExecResult addApp = Cmd("add app /site.name:\"" + site + "\" /path:\"/" + alias + "\" /physicalPath:\"" + dir + "\"", 60000);
+            if (!addApp.Ok) { detail = "не создать приложение IIS " + site + "/" + alias + ": " + addApp.Tail(3); return false; }
+            Ctx.Changed = true;
+            Log.Ok("создано приложение IIS: " + site + "/" + alias + " -> " + dir);
+            return true;
+        }
+
         public static bool Publish(Platform p, BaseRef b, string site, string alias, string dir, bool force, out string detail)
         {
             detail = "";
@@ -477,6 +532,7 @@ namespace Oc1c
                 string ib = VrdIb(vrd);
                 if (IbMatches(ib, b))
                 {
+                    if (!EnsureIisApp(site, alias, dir, out detail)) return false;
                     detail = "уже опубликовано (" + vrd + ")";
                     return true;
                 }
@@ -518,6 +574,7 @@ namespace Oc1c
                 return false;
             }
             Ctx.Changed = true;
+            if (!EnsureIisApp(site, alias, dir, out detail)) return false;
             detail = "опубликовано: " + site + "/" + alias + " -> " + dir;
             return true;
         }
@@ -609,6 +666,12 @@ namespace Oc1c
 
         public static string CurrentAppPool(string site, string alias)
         {
+            // appcmd list с идентификатором совпадает НЕТОЧНО (по «Default Web Site/ut»
+            // возвращает корневое приложение — замер 07.08): сначала точная проверка
+            // существования, и только потом значение пула.
+            ExecResult ex = Cmd("list app \"" + site + "/" + alias + "\"", 30000);
+            if (!ex.Ok || ex.StdOut.IndexOf("APP \"" + site + "/" + alias + "\"", StringComparison.OrdinalIgnoreCase) < 0)
+                return null;
             ExecResult r = Cmd("list app \"" + site + "/" + alias + "\" /text:applicationPool", 30000);
             if (!r.Ok) return null;
             string s = r.StdOut.Trim();
@@ -623,8 +686,9 @@ namespace Oc1c
 
             if (!useDefault)
             {
+                // точное совпадение: appcmd list по неточному имени возвращает чужие объекты
                 ExecResult ex = Cmd("list apppool \"" + target + "\"", 30000);
-                if (!ex.Ok || ex.StdOut.Trim().Length == 0)
+                if (!ex.Ok || ex.StdOut.IndexOf("APPPOOL \"" + target + "\"", StringComparison.OrdinalIgnoreCase) < 0)
                 {
                     if (Ctx.DryRun) Log.Sim("создал бы пул приложений " + target);
                     else
@@ -696,6 +760,16 @@ namespace Oc1c
         {
             detail = "";
             if (!p.HasWeb) { detail = "wsisapi.dll отсутствует"; return false; }
+            // web.config публикации 1С несёт секцию <handlers>: на свежем IIS она
+            // заблокирована на уровне сервера — приложение отвечает 500.19
+            // 0x80070021 (замер на стенде 07.08). Снимаем блокировку handlers.
+            if (!Ctx.DryRun)
+            {
+                ExecResult un = Cmd("unlock config /section:handlers", 60000);
+                if (un.Ok) Log.Ok("секция handlers разблокирована на уровне сервера");
+                else Log.Warn("unlock config handlers: " + un.Tail(2));
+            }
+            else Log.Sim("разблокировал бы секцию handlers на уровне сервера");
             ExecResult list = Cmd("list config /section:isapiCgiRestriction /text:*", 60000);
             bool present = list.Ok && list.StdOut.IndexOf(p.Wsisapi, StringComparison.OrdinalIgnoreCase) >= 0;
             if (present)
