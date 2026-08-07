@@ -155,7 +155,11 @@ namespace Oc1c
             if (!File.Exists(ageKeygenExe) && !HasEmbedded("age-keygen.exe")) { Log.Err("в комплекте нет age-keygen.exe (" + kit + ")"); kitOk = false; }
             if (!File.Exists(zstdExe) && !HasEmbedded("zstd.exe")) { Log.Err("в комплекте нет zstd.exe (" + kit + ")"); kitOk = false; }
             string pfxPath = Path.Combine(kit, ps.ClientPfx);
-            if (!File.Exists(pfxPath)) { Log.Err("в комплекте нет " + ps.ClientPfx + " (" + kit + ") — mTLS-сертификат"); kitOk = false; }
+            // pfx удаляется после импорта (ТЗ §2) — при повторном запуске его нет:
+            // это не неполный комплект, если сертификат уже в LocalMachine\My.
+            string existingThumb = File.Exists(pfxPath) ? null : FindImportedCertThumb(ps.BaseId);
+            if (!File.Exists(pfxPath) && existingThumb == null) { Log.Err("в комплекте нет " + ps.ClientPfx + " (" + kit + ") — mTLS-сертификат, и ранее импортированного сертификата CN=" + ps.BaseId + " не найдено"); kitOk = false; }
+            else if (existingThumb != null) Log.Skip(ps.ClientPfx + " уже импортирован ранее (CN=" + ps.BaseId + ", LocalMachine\\My)");
             if (!kitOk)
             {
                 Log.Fix("комплект неполный: положите рядом с setup exe файлы packet-agent.exe, age.exe, age-keygen.exe, zstd.exe, " +
@@ -177,7 +181,8 @@ namespace Oc1c
             // (контракт §8), поэтому импорт — ДО префлайта связи. Агент работает
             // под SYSTEM (планировщик) — ключ в машинном контейнере + чтение SYSTEM.
             Log.Step(2, 6, "Клиентский сертификат mTLS (импорт в LocalMachine\\My)");
-            string thumbprint = Ctx.DryRun ? null : ImportClientCert(pfxPath, ps.ClientPfxPassword);
+            string thumbprint = Ctx.DryRun ? null
+                : (File.Exists(pfxPath) ? ImportClientCert(pfxPath, ps.ClientPfxPassword) : existingThumb);
             if (!Ctx.DryRun && thumbprint == null)
             {
                 Log.Fix("проверьте client_pfx_password в packet-setup.json и что pfx не битый");
@@ -194,6 +199,19 @@ namespace Oc1c
                 return Program.EXIT_PREREQ;
             }
             if (Ctx.DryRun) Log.Sim("проверил бы https-префлайт приёмника с клиентским сертификатом");
+
+            // Живая проба ДАННЫХ: /health приёмника и $metadata отвечают и при
+            // ПУСТОМ составе OData (ложный зелёный smoke 07.08). Читаем первую
+            // сущность состава теми же кредами, что пойдут в agent.ini.
+            string probeUser = string.IsNullOrEmpty(o.ReaderUser) ? "ai_reader" : o.ReaderUser;
+            string probeDetail = "";
+            if (!Ctx.DryRun && !Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+            {
+                Log.Err("данные базы не читаются: " + probeDetail);
+                Log.Fix("задайте состав OData (шаг 12 установщика, без --skip-scope) и проверьте права читателя — иначе агент будет слать такты из 404");
+                return Program.EXIT_PREREQ;
+            }
+            if (!Ctx.DryRun) Log.Ok("OData читается: " + probeDetail);
 
             string packetDir = string.IsNullOrEmpty(o.PacketDir) ? @"C:\1c\packet" : o.PacketDir;
             string dataDir = Path.Combine(packetDir, "data");
@@ -225,6 +243,16 @@ namespace Oc1c
 
             // ---------- 6. пробная посылка (данные, не «запустилось»)
             Log.Step(6, 6, "Пробная посылка (подтверждение доставки приёмником)");
+            // Повторная установка: seq комплекта уже израсходован прежним каналом —
+            // smoke упирается в stale_seq, а агент лечит сам (resync полной заливкой,
+            // решение владельца 07.08). Поэтому при живом state.json довозку доверяем
+            // демону, а не дублируем посылку.
+            string stateFile = Path.Combine(dataDir, "state.json");
+            if (!Ctx.DryRun && File.Exists(stateFile))
+            {
+                Log.Skip("повторная установка: канал уже доказан прежним smoke (есть " + stateFile + ") — довозка штатным демоном");
+                return Program.EXIT_OK;
+            }
             if (Ctx.DryRun)
             {
                 Log.Sim("запустил бы packet-agent.exe --smoke и ждал бы verified от приёмника");
@@ -334,6 +362,26 @@ namespace Oc1c
                 Log.Ok("закрытому ключу выдано чтение для SYSTEM");
             }
             catch (Exception e) { Log.Warn("ACL закрытого ключа не выданы: " + e.Message); }
+        }
+
+        // Сертификат базы уже в LocalMachine\My (pfx удалён после прошлой установки —
+        // повторный запуск обязан работать без pfx).
+        static string FindImportedCertThumb(string baseId)
+        {
+            try
+            {
+                X509Store store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+                store.Open(OpenFlags.ReadOnly);
+                try
+                {
+                    foreach (X509Certificate2 c in store.Certificates)
+                        if (c.HasPrivateKey && string.Equals(c.SubjectName.Name, "CN=" + baseId, StringComparison.OrdinalIgnoreCase))
+                            return c.Thumbprint;
+                }
+                finally { store.Close(); }
+            }
+            catch { }
+            return null;
         }
 
         static X509Certificate2 FindClientCert(string thumbprint)

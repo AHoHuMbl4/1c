@@ -489,7 +489,21 @@ namespace Oc1c
                     Steps.HttpProbe auth = Steps.Probe(url, vu, vp, 180000);
                     if (auth.Ok)
                     {
-                        if (auth.Collections > 0) Log.Ok("под «" + vu + "» -> 200, сущностей в OData: " + auth.Collections);
+                        if (auth.Collections > 0)
+                        {
+                            Log.Ok("под «" + vu + "» -> 200, сущностей в OData: " + auth.Collections);
+                            // Живая проба ДАННЫХ: 200 на корне бывает и при пустом
+                            // составе/битой публикации (прогон 07.08 — smoke был
+                            // «зелёным» при всех 404). Читаем первую сущность.
+                            string probeDetail;
+                            if (Steps.ProbeDataRead(url, vu, vp, out probeDetail)) Log.Ok(probeDetail);
+                            else
+                            {
+                                Log.Err(probeDetail);
+                                Log.Fix("состав OData пуст или читателю нет прав на данные: задайте состав (шаг 12, без --skip-scope) и проверьте профиль читателя");
+                                verifyExit = EXIT_VERIFY;
+                            }
+                        }
                         else
                         {
                             Log.Warn("под «" + vu + "» -> 200, но список сущностей ПУСТ");

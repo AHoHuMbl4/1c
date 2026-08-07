@@ -1096,6 +1096,11 @@ namespace Oc1c
                 s.AppendLine("if($added -eq 0){ throw 'в конфигурации не найдено ни одного объекта для публикации в OData' }");
                 s.AppendLine("try { $ib.УстановитьСоставСтандартногоИнтерфейсаOData($arr) } catch { $ib.SetStandardODataInterfaceContent($arr) }");
                 s.AppendLine("'ADDED=' + $added");
+                // Проверка факта (ложный «успех» 07.08): перечитываем состав ПОСЛЕ записи.
+                s.AppendLine("$af = -1");
+                s.AppendLine("try { $c2 = $null; try { $c2 = $ib.ПолучитьСоставСтандартногоИнтерфейсаOData() } catch { $c2 = $ib.GetStandardODataInterfaceContent() }; if($c2 -ne $null){ try { $af = [int]$c2.Количество() } catch { $af = [int]$c2.Count() } } } catch { $af = -1 }");
+                s.AppendLine("'AFTER=' + $af");
+                s.AppendLine("if($af -eq 0){ throw 'состав OData после записи ПУСТ (0 объектов) — запись не применилась' }");
             }
             s.AppendLine("'RESULT=OK'");
             s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
@@ -1208,6 +1213,14 @@ namespace Oc1c
 
             Match mc = Regex.Match(r.StdOut, @"CURRENT=(-?\d+)");
             if (mc.Success) current = int.Parse(mc.Groups[1].Value);
+            // Проверка факта: состав после записи не должен быть пуст (дублирует
+            // throw в скрипте — на случай старой платформы без AFTER).
+            Match maf = Regex.Match(r.StdOut, @"AFTER=(-?\d+)");
+            if (writeMode && maf.Success && int.Parse(maf.Groups[1].Value) == 0)
+            {
+                Log.Err("состав OData после записи ПУСТ (0 объектов) — запись не применилась");
+                return false;
+            }
             Match ma = Regex.Match(r.StdOut, @"ADDED=(\d+)");
             if (ma.Success) { added = int.Parse(ma.Groups[1].Value); Ctx.Changed = true; }
             Match ms = Regex.Match(r.StdOut, @"SKIPPED=(.+)");
@@ -1279,6 +1292,66 @@ namespace Oc1c
             }
             catch (Exception e) { pr.Error = e.Message; }
             return pr;
+        }
+
+        static string HttpGet(string url, string user, string pwd, int timeoutMs, out int status, out string body)
+        {
+            status = 0; body = "";
+            try
+            {
+                ServicePointManager.Expect100Continue = false;
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
+                req.Method = "GET";
+                req.Timeout = timeoutMs;
+                req.ReadWriteTimeout = timeoutMs;
+                req.UserAgent = "setup-1c-odata/" + Ctx.ToolVersion;
+                req.AllowAutoRedirect = false;
+                if (!string.IsNullOrEmpty(user))
+                    req.Headers["Authorization"] = "Basic " +
+                        Convert.ToBase64String(Encoding.UTF8.GetBytes(user + ":" + (pwd == null ? "" : pwd)));
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
+                {
+                    status = (int)resp.StatusCode;
+                    using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
+                        body = sr.ReadToEnd();
+                }
+                return null;
+            }
+            catch (WebException we)
+            {
+                HttpWebResponse resp = we.Response as HttpWebResponse;
+                if (resp != null) { status = (int)resp.StatusCode; return null; }
+                return we.Message;
+            }
+            catch (Exception e) { return e.Message; }
+        }
+
+        // Живая проба ДАННЫХ (прогон 07.08: smoke kind=meta был «зелёным» при ПУСТОМ
+        // составе — $metadata доступен всегда): корневой документ → первая сущность
+        // состава → GET ?$top=1 под читателем. Пустой состав или не-200 = ошибка.
+        public static bool ProbeDataRead(string odataUrl, string user, string pwd, out string detail)
+        {
+            detail = "";
+            string baseUrl = odataUrl.TrimEnd('/') + "/";
+            int status; string body;
+            string err = HttpGet(baseUrl + "?$format=json", user, pwd, 60000, out status, out body);
+            if (err != null) { detail = "OData не отвечает: " + err; return false; }
+            if (status == 401 || status == 403) { detail = "читатель не авторизуется (HTTP " + status + ") — проверьте пользователя/пароль"; return false; }
+            if (status != 200) { detail = "OData: HTTP " + status; return false; }
+            Match m = Regex.Match(body, "\"name\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+            if (!m.Success) m = Regex.Match(body, "<collection\\s+href=\"([^\"]+)\"", RegexOptions.IgnoreCase);
+            if (!m.Success) { detail = "состав OData ПУСТ — ни одной сущности в корневом документе"; return false; }
+            string entity = m.Groups[1].Value;
+            int status2; string body2;
+            err = HttpGet(baseUrl + entity + "?$top=1&$format=json", user, pwd, 120000, out status2, out body2);
+            if (err != null) { detail = "проба данных " + entity + ": " + err; return false; }
+            if (status2 != 200)
+            {
+                detail = "проба данных " + entity + ": HTTP " + status2 + " — состав не задался или читателю нет прав";
+                return false;
+            }
+            detail = "проба данных: " + entity + "?$top=1 -> HTTP 200";
+            return true;
         }
 
         // ============================================================ 13. брандмауэр (опционально)
