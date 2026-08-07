@@ -42,6 +42,8 @@ import packet_crypto as C  # noqa: E402
 DSN = "host=127.0.0.1 port=7890 user=postgres dbname=postgres"
 BASE_ID = "pktprobe"
 TABLE = "pkt_probe_catalog"
+TABLE2 = "pkt_probe_narrow"
+GHOST = "pkt_probe_ghost"
 META_FP = "sha256:probe-meta-1"
 META_XML = "<metadata><entity>pkt_probe_catalog</entity></metadata>"
 ZSTD = os.environ.get("PACKET_ZSTD_BIN", "/usr/bin/zstd")
@@ -243,10 +245,11 @@ def restore_contract():
 
 
 def cleanup():
-    try:
-        psql_exec('DROP TABLE IF EXISTS "%s";' % TABLE)
-    except RuntimeError as e:
-        print(f"⚠ drop {TABLE}: {str(e)[:150]}")
+    for t in (TABLE, TABLE2, GHOST):
+        try:
+            psql_exec('DROP TABLE IF EXISTS "%s";' % t)
+        except RuntimeError as e:
+            print(f"⚠ drop {t}: {str(e)[:150]}")
     restore_contract()
     _TMP.cleanup()
 
@@ -391,6 +394,77 @@ def main() -> int:
               len(rows) == 2 and rows.get("k7") == ("v3", "plain-b"), repr(rows)[:150])
         check("plain metadata записан файлом",
               open(META_FILE, "rb").read() == META_XML3.encode("utf-8"))
+
+        # 7. Узкая дельта (живой кейс 112/117): чанк уже таблицы витрины.
+        w_hdr = ("Ref_Key", "DataVersion", "Поле1", "Поле2", "Поле3")
+        e6, c6 = make_chunk("chunk-00001",
+                            csv_bytes([("k1", "v1", "a1", "b1", "c1"),
+                                       ("k2", "v1", "a2", "b2", "c2")], header=w_hdr),
+                            TABLE2, 2)
+        m6 = base_manifest(6, "fff00006", "full")
+        m6["entities"] = [{"name": TABLE2, "op": "full", "rows": 2,
+                           "chunks": ["chunk-00001"], "key": ["Ref_Key"]}]
+        m6["chunks"] = [e6]
+        pkg6 = write_package(6, "fff00006", "full", m6, {"chunk-00001": c6})
+
+        e7, c7 = make_chunk("chunk-00001",
+                            csv_bytes([("k2", "v2", "новое2"), ("k3", "v1", "новое3")],
+                                      header=("Ref_Key", "DataVersion", "Поле2")),
+                            TABLE2, 2)
+        m7 = base_manifest(7, "fff00007", "delta")
+        m7["entities"] = [{"name": TABLE2, "op": "delta", "rows": 2, "chunks": ["chunk-00001"]}]
+        m7["chunks"] = [e7]
+        pkg7 = write_package(7, "fff00007", "delta", m7, {"chunk-00001": c7})
+
+        # Колонка вперёд: Поле4 в чанке есть, в витрине нет — эталон применяет,
+        # в журнал идёт строка про несовпадение схем (п. 13, молчания нет).
+        e8, c8 = make_chunk("chunk-00001",
+                            csv_bytes([("k4", "v1", "x4", "y4")],
+                                      header=("Ref_Key", "DataVersion", "Поле2", "Поле4")),
+                            TABLE2, 1)
+        m8 = base_manifest(8, "fff00008", "delta")
+        m8["entities"] = [{"name": TABLE2, "op": "delta", "rows": 1, "chunks": ["chunk-00001"]}]
+        m8["chunks"] = [e8]
+        pkg8 = write_package(8, "fff00008", "delta", m8, {"chunk-00001": c8})
+
+        # Дельта на таблицу, которой в витрине нет (ждётся full_entity от агента).
+        e9, c9 = make_chunk("chunk-00001",
+                            csv_bytes([("g1", "v1", "ghost")]), GHOST, 1)
+        m9 = base_manifest(9, "fff00009", "delta")
+        m9["entities"] = [{"name": GHOST, "op": "delta", "rows": 1, "chunks": ["chunk-00001"]}]
+        m9["chunks"] = [e9]
+        pkg9 = write_package(9, "fff00009", "delta", m9, {"chunk-00001": c9})
+
+        r = run_apply()
+        check("7: заход код 3 (ghost-дельта в карантине)", r.returncode == 3,
+              f"rc={r.returncode} {r.stderr.strip()[-150:]}")
+        check("7: full/узкая/вперёд пакеты applied",
+              all(pkg_state(p)["state"] == "applied" for p in (pkg6, pkg7, pkg8)))
+        rows = dict((r_[0], r_[1:]) for r_ in psql(
+            'SELECT "Ref_Key","DataVersion","Поле1","Поле2","Поле3" FROM "%s"' % TABLE2))
+        check("7: узкая дельта — k2 заменён, Поле1/Поле3 пустые строки",
+              rows.get("k2") == ("v2", "", "новое2", ""), repr(rows.get("k2")))
+        check("7: узкая дельта — новая строка k3 тоже выровнена",
+              rows.get("k3") == ("v1", "", "новое3", ""), repr(rows.get("k3")))
+        check("7: нетронутая строка k1 цела",
+              rows.get("k1") == ("v1", "a1", "b1", "c1"), repr(rows.get("k1")))
+        check("7: колонка вперёд применилась, k4 без Поле4",
+              rows.get("k4") == ("v1", "", "x4", ""), repr(rows.get("k4")))
+        check("7: журнал назвал колонки чанка вне витрины",
+              "колонки чанка вне витрины" in r.stderr and "Поле4" in r.stderr,
+              r.stderr.strip()[-200:])
+        st9 = pkg_state(pkg9)
+        check("7: delta_without_table — пакет quarantined",
+              st9["state"] == "quarantined" and st9["error"] == "delta_without_table",
+              repr(st9))
+        check("7: ghost-таблица не создана",
+              scalar("SELECT count(*) FROM duckdb_tables() "
+                     "WHERE database_name = current_database() AND table_name='%s'"
+                     % GHOST) == "0")
+        r = run_apply()
+        check("7: повторный заход ghost не переприменяет",
+              r.returncode == 0 and pkg_state(pkg9)["state"] == "quarantined",
+              f"rc={r.returncode} {pkg_state(pkg9)}")
     finally:
         cleanup()
 

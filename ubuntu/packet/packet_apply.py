@@ -172,6 +172,12 @@ def _psql_scalar(sql: str) -> str:
     return p.stdout.strip()
 
 
+def _psql_col(sql: str) -> list[str]:
+    """Одна колонка строками; пустой ответ — пустой список."""
+    out = _psql_scalar(sql)
+    return [ln for ln in out.splitlines() if ln.strip()] if out else []
+
+
 class Quarantine(RuntimeError):
     # Сбой, после которого пакет уходит в quarantined с кодом причины.
     pass
@@ -224,6 +230,12 @@ def _csv_source(paths: list[str]) -> str:
     return "(" + " UNION ALL ".join(reads) + ")"
 
 
+def _csv_header(path: str) -> list[str]:
+    """Заголовок CSV-чанка (состав колонок дельты — он уже в safe_col-форме)."""
+    with open(path, newline="", encoding="utf-8") as f:
+        return next(csv.reader(f))
+
+
 def _full_sql(table: str, src: str, key_cols: list[str]) -> str:
     # Формы poc_load_entity.load_entity: дедуп QUALIFY по объявленному ключу,
     # без ключа — DISTINCT; DROP + CREATE, затем GRANT читающей роли.
@@ -251,13 +263,32 @@ def _check_mix_versions(table: str) -> None:
         raise Quarantine("mix_versions")
 
 
-def _delta_sql(table: str, src: str) -> str:
-    # Форма poc_load_entity.load_entity_delta: TEMP-таблица → DELETE по Ref_Key
-    # → INSERT. Повтор безопасен: DELETE снимает прошлую порцию тех же ключей.
+def _delta_sql(table: str, src: str, header: list[str]) -> str:
+    # Источник истины формы — poc_load_entity.load_entity_delta (строки ~707-736):
+    # состав колонок дельты выравнивается по ВИТРИНЕ (её список из duckdb_columns),
+    # недостающие — пустые строки ('' — так пишет эталон: _cell(None)). Свой вариант
+    # merge не заводим: надстройка поверх эталонной формы, не перепись (HOW_NOT_TO §3.40).
+    # TEMP-таблица → DELETE по Ref_Key → INSERT. Повтор безопасен: DELETE снимает
+    # прошлую порцию тех же ключей.
+    mart_cols = [r for r in _psql_col(
+        'SELECT column_name FROM duckdb_columns() WHERE table_name=%s '
+        "AND database_name = current_database() "  # ловушка №25: иначе видны чужие базы
+        'ORDER BY column_index' % _lit(table))]
+    if not mart_cols:
+        raise Quarantine("delta_without_table")
+    extra = [c for c in header if c not in mart_cols]
+    if extra:
+        # Поле появилось в 1С, а полная перезаливка сущности ещё не была: значения
+        # этих колонок до ближайшей full_entity не попадают (поведение эталона то же) —
+        # но молчать о несовпадении схем нельзя (п. 13).
+        _log("delta %s: колонки чанка вне витрины (ждут full_entity): %s"
+             % (table, ",".join(extra)))
+    sel = ", ".join('"%s"' % c if c in header else "''" for c in mart_cols)
+    cols = ", ".join('"%s"' % c for c in mart_cols)
     return ('CREATE OR REPLACE TEMP TABLE "d_%s" AS %s;\n'
             'DELETE FROM "%s" WHERE "Ref_Key" IN (SELECT "Ref_Key" FROM "d_%s");\n'
-            'INSERT INTO "%s" SELECT * FROM "d_%s";\n'
-            % (table, src, table, table, table, table))
+            'INSERT INTO "%s" (%s) SELECT %s FROM "d_%s";\n'
+            % (table, src, table, table, table, cols, sel, table))
 
 
 def _apply_gone(path: str, changed_tables: set) -> int:
@@ -407,10 +438,13 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                 if op not in _DATA_OPS:
                     continue
                 table = safe_col(ent.get("name", "")).lower()
-                src = _csv_source([files[c] for c in ent.get("chunks") or [] if c in files])
+                chunk_paths = [files[c] for c in ent.get("chunks") or [] if c in files]
+                src = _csv_source(chunk_paths)
                 if op == "delta":
+                    hdr = _csv_header(chunk_paths[0])
+                    merge = _delta_sql(table, src, hdr)  # здесь отсутствие таблицы — карантин
                     _check_mix_versions(table)
-                    _psql(_delta_sql(table, src))
+                    _psql(merge)
                 else:
                     key_cols = [safe_col(k) for k in ent.get("key") or []]
                     _psql(_full_sql(table, src, key_cols))
