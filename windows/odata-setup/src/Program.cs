@@ -206,28 +206,15 @@ namespace Oc1c
                 Log.Con("       Найденные базы:");
                 for (int i = 0; i < found.Count; i++) Log.Con("         " + (i + 1) + ") " + found[i]);
                 int num = 0;
-                if (!Console.IsInputRedirected && found.Count <= 9)
                 {
-                    // Выбор одной клавишей: цифра — и сразу поехали, без Enter.
-                    Console.Write("       Нажмите цифру базы (1-" + found.Count + "): ");
-                    while (true)
-                    {
-                        ConsoleKeyInfo key = Console.ReadKey(true);
-                        if (key.KeyChar >= '1' && key.KeyChar <= '0' + found.Count)
-                        { num = key.KeyChar - '0'; Console.WriteLine(new string(key.KeyChar, 1)); break; }
-                        if (key.Key == ConsoleKey.Escape) { Log.Err("выбор отменён"); return EXIT_ARGS; }
-                    }
-                }
-                else
-                {
-                    // Пайп/перенаправление или баз больше девяти — построчный ввод.
-                    Console.Write("       Выберите номер базы: ");
+                    // Вводится НОМЕР из списка, а не название/путь (по прогону 07.08
+                    // владелец вводил иначе — подсказка была неявной). Пустой/кривой
+                    // ввод — переспрашиваем, а не умираем.
+                    Console.Write("       Введите НОМЕР базы из списка (1-" + found.Count + ") и нажмите Enter: ");
                     string ans = Console.ReadLine();
-                    // Пустой/кривой ввод — переспрашиваем, а не умираем: двойной клик
-                    // по exe раньше закрывал окно без объяснений (прогон 07.08).
                     if (!int.TryParse(ans == null ? "" : ans.Trim(), out num) || num < 1 || num > found.Count)
                     {
-                    Console.Write("       Введите номер от 1 до " + found.Count + " и Enter: ");
+                    Console.Write("       Нужен номер цифрой — от 1 до " + found.Count + ", и Enter: ");
                     ans = Console.ReadLine();
                     if (!int.TryParse(ans == null ? "" : ans.Trim(), out num) || num < 1 || num > found.Count)
                     { Log.Err("некорректный выбор"); return EXIT_ARGS; }
