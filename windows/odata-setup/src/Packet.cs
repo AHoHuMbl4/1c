@@ -147,11 +147,13 @@ namespace Oc1c
             string ageKeygenExe = Path.Combine(kit, "age-keygen.exe");
             string zstdExe = Path.Combine(kit, "zstd.exe");
             // age обязателен всегда (решение 07.08), zstd нужен всегда (сжатие — §4).
+            // Каждый бинарь — либо файлом рядом с exe, либо вшит ресурсом в сам exe
+            // (build.cmd, каталог embed\): тогда установщик — один файл (07.08).
             bool kitOk = true;
-            if (!File.Exists(agentExe)) { Log.Err("в комплекте нет packet-agent.exe (" + kit + ")"); kitOk = false; }
-            if (!File.Exists(ageExe)) { Log.Err("в комплекте нет age.exe (" + kit + ")"); kitOk = false; }
-            if (!File.Exists(ageKeygenExe)) { Log.Err("в комплекте нет age-keygen.exe (" + kit + ")"); kitOk = false; }
-            if (!File.Exists(zstdExe)) { Log.Err("в комплекте нет zstd.exe (" + kit + ")"); kitOk = false; }
+            if (!File.Exists(agentExe) && !HasEmbedded("packet-agent.exe")) { Log.Err("в комплекте нет packet-agent.exe (" + kit + ")"); kitOk = false; }
+            if (!File.Exists(ageExe) && !HasEmbedded("age.exe")) { Log.Err("в комплекте нет age.exe (" + kit + ")"); kitOk = false; }
+            if (!File.Exists(ageKeygenExe) && !HasEmbedded("age-keygen.exe")) { Log.Err("в комплекте нет age-keygen.exe (" + kit + ")"); kitOk = false; }
+            if (!File.Exists(zstdExe) && !HasEmbedded("zstd.exe")) { Log.Err("в комплекте нет zstd.exe (" + kit + ")"); kitOk = false; }
             string pfxPath = Path.Combine(kit, ps.ClientPfx);
             if (!File.Exists(pfxPath)) { Log.Err("в комплекте нет " + ps.ClientPfx + " (" + kit + ") — mTLS-сертификат"); kitOk = false; }
             if (!kitOk)
@@ -160,12 +162,15 @@ namespace Oc1c
                         ps.ClientPfx + " из поставки (возможно, их удалил антивирус — проверьте карантин)");
                 return Program.EXIT_PREREQ;
             }
-            if (!RunsOk(zstdExe, "--version", "zstd") || !RunsOk(ageExe, "--version", "age"))
+            // --version проверяем у файлов комплекта; вшитые — после извлечения в шаге 4.
+            if (File.Exists(zstdExe) && !RunsOk(zstdExe, "--version", "zstd")) kitOk = false;
+            if (File.Exists(ageExe) && !RunsOk(ageExe, "--version", "age")) kitOk = false;
+            if (!kitOk)
             {
                 Log.Fix("комплект неполный или файлы заблокированы антивирусом — переустановите комплект");
                 return Program.EXIT_PREREQ;
             }
-            RunsOk(agentExe, "--version", "packet-agent");   // диагностика в лог, не стоп
+            if (File.Exists(agentExe)) RunsOk(agentExe, "--version", "packet-agent");   // диагностика в лог, не стоп
 
             // ---------- 1б. клиентский сертификат mTLS -> LocalMachine\My
             // Релей (HAProxy) не пропускает запрос без сертификата нашего CA
@@ -249,6 +254,38 @@ namespace Oc1c
         static string HostOf(string url)
         {
             try { return new Uri(url).Host; } catch { return url; }
+        }
+
+        // ============================================================ вшитые ресурсы (один exe)
+        // build.cmd кладёт бинарии комплекта ресурсами (каталог embed\ рядом с
+        // build.cmd): тогда установщик — один файл, а бинарии извлекаются при
+        // установке. Файл рядом с exe приоритетнее ресурса (обновление агента
+        // без пересборки установщика).
+        static bool HasEmbedded(string name)
+        {
+            string[] names = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceNames();
+            for (int i = 0; i < names.Length; i++)
+                if (string.Equals(names[i], name, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        static bool ExtractEmbedded(string name, string dest)
+        {
+            try
+            {
+                using (Stream s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+                {
+                    if (s == null) return false;
+                    using (FileStream f = File.Create(dest))
+                        s.CopyTo(f);
+                }
+                return true;
+            }
+            catch (Exception e)
+            {
+                Log.Err("не извлекается вшитый " + name + ": " + e.Message);
+                return false;
+            }
         }
 
         // ============================================================ mTLS: клиентский сертификат
@@ -405,9 +442,19 @@ namespace Oc1c
                 for (int i = 0; i < names.Length; i++)
                 {
                     string srcExe = Path.Combine(kit, names[i]);
-                    if (!File.Exists(srcExe)) { Log.Skip(names[i] + " в комплекте нет — не копирую"); continue; }
-                    File.Copy(srcExe, Path.Combine(packetDir, names[i]), true);
-                    Log.Ok("установлен " + names[i]);
+                    string dstExe = Path.Combine(packetDir, names[i]);
+                    if (File.Exists(srcExe))
+                    {
+                        File.Copy(srcExe, dstExe, true);
+                        Log.Ok("установлен " + names[i]);
+                    }
+                    else if (HasEmbedded(names[i]))
+                    {
+                        if (!ExtractEmbedded(names[i], dstExe)) return false;
+                        // вшитый — проверяем запуск уже на месте (префлайт шага 1 его не видел)
+                        if (!RunsOk(dstExe, "--version", names[i])) return false;
+                    }
+                    else { Log.Skip(names[i] + " нет ни в комплекте, ни вшит — не копирую"); continue; }
                 }
             }
             catch (Exception e)

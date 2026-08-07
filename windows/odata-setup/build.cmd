@@ -24,6 +24,17 @@ echo Компилятор: %CSC%
 echo Выход:      %OUT%
 echo.
 
+rem Вшивание бинарей комплекта (один exe на новую машину): если рядом есть
+rem каталог embed\ с packet-agent.exe/age.exe/age-keygen.exe/zstd.exe — они
+rem кладутся ресурсами внутрь exe, и установщик извлечёт их сам (Packet.cs).
+rem Нет embed\ — прежнее поведение: файлы должны лежать рядом с exe.
+set "RES="
+if exist "%~dp0embed\packet-agent.exe" set "RES=%RES% /resource:""%~dp0embed\packet-agent.exe"",packet-agent.exe"
+if exist "%~dp0embed\age.exe" set "RES=%RES% /resource:""%~dp0embed\age.exe"",age.exe"
+if exist "%~dp0embed\age-keygen.exe" set "RES=%RES% /resource:""%~dp0embed\age-keygen.exe"",age-keygen.exe"
+if exist "%~dp0embed\zstd.exe" set "RES=%RES% /resource:""%~dp0embed\zstd.exe"",zstd.exe"
+if defined RES echo Вшиваются ресурсы из embed\: %RES%
+
 "%CSC%" /nologo /target:exe /platform:anycpu /optimize+ /langversion:5 ^
   /win32manifest:"%~dp0src\app.manifest" ^
   /out:"%OUT%" ^
@@ -34,6 +45,7 @@ echo.
   /reference:System.IO.Compression.dll ^
   /reference:System.IO.Compression.FileSystem.dll ^
   /reference:System.Web.Extensions.dll ^
+  %RES% ^
   "%~dp0src\Sys.cs" "%~dp0src\Steps.cs" "%~dp0src\Packet.cs" "%~dp0src\Program.cs"
 
 if errorlevel 1 (
