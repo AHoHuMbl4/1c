@@ -1335,9 +1335,10 @@ namespace Oc1c
             string baseUrl = odataUrl.TrimEnd('/') + "/";
             int status; string body;
             string err = HttpGet(baseUrl + "?$format=json", user, pwd, 60000, out status, out body);
-            if (err != null) { detail = "OData не отвечает: " + err; return false; }
-            if (status == 401 || status == 403) { detail = "читатель не авторизуется (HTTP " + status + ") — проверьте пользователя/пароль"; return false; }
-            if (status != 200) { detail = "OData: HTTP " + status; return false; }
+            if (err != null) { detail = "OData не отвечает: " + err + " [" + baseUrl + "]"; return false; }
+            if (status == 401 || status == 403) { detail = "читатель не авторизуется (HTTP " + status + ") — проверьте пользователя/пароль [" + baseUrl + "]"; return false; }
+            if (status == 404) { detail = "публикация не найдена (HTTP 404) — не тот адрес/алиас: " + baseUrl; return false; }
+            if (status != 200) { detail = "OData: HTTP " + status + " [" + baseUrl + "]"; return false; }
             Match m = Regex.Match(body, "\"name\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
             if (!m.Success) m = Regex.Match(body, "<collection\\s+href=\"([^\"]+)\"", RegexOptions.IgnoreCase);
             if (!m.Success) { detail = "состав OData ПУСТ — ни одной сущности в корневом документе"; return false; }
@@ -1347,7 +1348,7 @@ namespace Oc1c
             if (err != null) { detail = "проба данных " + entity + ": " + err; return false; }
             if (status2 != 200)
             {
-                detail = "проба данных " + entity + ": HTTP " + status2 + " — состав не задался или читателю нет прав";
+                detail = "проба данных " + entity + ": HTTP " + status2 + " — состав не задался или читателю нет прав [" + baseUrl + entity + "]";
                 return false;
             }
             detail = "проба данных: " + entity + "?$top=1 -> HTTP 200";

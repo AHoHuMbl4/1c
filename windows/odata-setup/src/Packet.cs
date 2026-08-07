@@ -231,6 +231,8 @@ namespace Oc1c
                     if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
                     { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
                     Console.WriteLine("       Пока не читается: " + probeDetail);
+                    Console.WriteLine("       Проверьте: пароль, профиль «Только просмотр», что состав OData задан,");
+                    Console.WriteLine("       и что выбрана ИМЕННО та база, для которой выдан комплект («" + ps.BaseId + "»).");
                     Console.Write("       Enter — ввести пароль и проверить ещё раз, Q — прервать: ");
                     string ans = Console.ReadLine();
                     if (string.Equals((ans ?? "").Trim(), "q", StringComparison.OrdinalIgnoreCase))

@@ -317,7 +317,21 @@ namespace Oc1c
 
             // ---------- 6. публикация базы
             Log.Step(6, TOTAL, "Публикация базы в IIS");
-            if (!Steps.Publish(plat, bref, o.Site, o.Alias, o.Dir, o.Force, out detail)) return EXIT_STEP;
+            if (!Steps.Publish(plat, bref, o.Site, o.Alias, o.Dir, o.Force, out detail))
+            {
+                // На машине с несколькими базами алиас по умолчанию может быть занят
+                // другой базой — в интерактиве спрашиваем новый, а не умираем (07.08).
+                if (!o.Unattended && !Console.IsInputRedirected && !o.Force)
+                {
+                    Console.Write("       Алиас «" + o.Alias + "» занят другой базой. Введите другой алиас публикации (латиницей, например «" +
+                                  SafeAlias(bref) + "»): ");
+                    string na = (Console.ReadLine() ?? "").Trim().Trim('/');
+                    if (na.Length == 0) return EXIT_STEP;
+                    o.Alias = na; o.Dir = @"C:\inetpub\" + na;
+                    if (!Steps.Publish(plat, bref, o.Site, o.Alias, o.Dir, o.Force, out detail)) return EXIT_STEP;
+                }
+                else return EXIT_STEP;
+            }
             if (detail.StartsWith("уже")) Log.Skip(detail); else Log.Ok(detail);
 
             // ---------- 7. включение OData
@@ -566,6 +580,17 @@ namespace Oc1c
             Report(o, bref, plat, pool, url, scopeKeys);
             ClearResume();
             return packetExit != EXIT_OK ? packetExit : verifyExit;
+        }
+
+        // Предложение алиса из имени базы: только латиница/цифры (URL-safe).
+        static string SafeAlias(BaseRef b)
+        {
+            string d = b.IsFile ? Path.GetFileName(b.Dir.TrimEnd('\\')) : b.Name;
+            if (string.IsNullOrEmpty(d)) return "base1c";
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in d) sb.Append(char.IsLetterOrDigit(c) && c < 128 ? c : '_');
+            string s = sb.ToString().Trim('_');
+            return s.Length == 0 ? "base1c" : s;
         }
 
         // ================================================================= осознанный выбор администратора
