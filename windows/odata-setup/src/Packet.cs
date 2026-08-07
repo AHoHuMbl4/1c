@@ -9,6 +9,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Security.AccessControl;
+using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Security.Principal;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -18,10 +20,12 @@ namespace Oc1c
 {
     // ------------------------------------------------------- комплект от Ubuntu
     // packet-setup.json генерируется на Ubuntu один раз на базу:
-    // {"base_id":"ut","token":"…","recipient_pubkey":"age1…","receiver_url":"https://…"}
+    // {"base_id":"ut","token":"…","recipient_pubkey":"age1…","receiver_url":"https://…",
+    //  "client_pfx":"client.pfx","client_pfx_password":"…"}   (mTLS, контракт §8)
     internal class PacketSetup
     {
         public string BaseId, Token, RecipientPubkey, ReceiverUrl;
+        public string ClientPfx, ClientPfxPassword;   // mTLS: pfx из комплекта → LocalMachine\My
         public string JsonPath;     // откуда прочитан (для лога)
 
         static readonly Regex BaseIdRe = new Regex("^[a-z0-9_-]+$", RegexOptions.Compiled);
@@ -46,16 +50,23 @@ namespace Oc1c
             p.Token = Str(d, "token");
             p.RecipientPubkey = Str(d, "recipient_pubkey");
             p.ReceiverUrl = Str(d, "receiver_url");
+            p.ClientPfx = Str(d, "client_pfx");
+            p.ClientPfxPassword = Str(d, "client_pfx_password");
 
             if (string.IsNullOrEmpty(p.BaseId) || !BaseIdRe.IsMatch(p.BaseId))
                 return "packet-setup.json: base_id пуст или не вида [a-z0-9_-]+ («" + p.BaseId + "»)";
             if (string.IsNullOrEmpty(p.Token))
                 return "packet-setup.json: token пуст — комплект не от этой установки";
-            // pubkey необязателен: канал уже шифрован TLS (Windows→FreeBSD) + SSH-туннелем
-            // (FreeBSD→Ubuntu) — решение владельца 06.08 «быстро, для пилота». Если поле
-            // есть — обязано быть age1… (age-слой добавится позже без смены установщика).
-            if (!string.IsNullOrEmpty(p.RecipientPubkey) && !p.RecipientPubkey.StartsWith("age1"))
-                return "packet-setup.json: recipient_pubkey не вида age1… («" + p.RecipientPubkey + "»)";
+            // recipient_pubkey ОБЯЗАТЕЛЕН (решение владельца 07.08: шифрование age с
+            // первого пакета, пилот без age отменён). Пустой pubkey — сломанный
+            // комплект, а не plain-режим: агент без него шлёт открытые файлы, чего
+            // быть не должно.
+            if (string.IsNullOrEmpty(p.RecipientPubkey) || !p.RecipientPubkey.StartsWith("age1"))
+                return "packet-setup.json: recipient_pubkey пуст или не вида age1… — комплект сломан (шифрование age обязательно)";
+            // mTLS (контракт §8): без клиентского сертификата релей не пропускает
+            // запрос вовсе — комплект без pfx бесполезен.
+            if (string.IsNullOrEmpty(p.ClientPfx))
+                return "packet-setup.json: нет client_pfx — релей требует клиентский сертификат (mTLS)";
             if (string.IsNullOrEmpty(p.ReceiverUrl) ||
                 !p.ReceiverUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
                 return "packet-setup.json: receiver_url должен быть https://… («" + p.ReceiverUrl + "»)";
@@ -128,67 +139,87 @@ namespace Oc1c
                 return Program.EXIT_PREREQ;
             }
             Log.AddSecret(ps.Token);
+            Log.AddSecret(ps.ClientPfxPassword);
             Log.Ok("база «" + ps.BaseId + "», приёмник " + ps.ReceiverUrl);
-            if (string.IsNullOrEmpty(ps.RecipientPubkey))
-                Log.Info("комплект без age-ключа: канал шифруется TLS + SSH-туннелем (1c-gate), age добавится позже");
 
             string agentExe = Path.Combine(kit, "packet-agent.exe");
             string ageExe = Path.Combine(kit, "age.exe");
+            string ageKeygenExe = Path.Combine(kit, "age-keygen.exe");
             string zstdExe = Path.Combine(kit, "zstd.exe");
-            // age.exe обязателен, только когда комплект с age-ключом; канал TLS+SSH
-            // (пилот без age-слоя) обходится без него. zstd нужен всегда (сжатие — §4).
-            bool needAge = !string.IsNullOrEmpty(ps.RecipientPubkey);
+            // age обязателен всегда (решение 07.08), zstd нужен всегда (сжатие — §4).
             bool kitOk = true;
             if (!File.Exists(agentExe)) { Log.Err("в комплекте нет packet-agent.exe (" + kit + ")"); kitOk = false; }
-            if (needAge && !File.Exists(ageExe)) { Log.Err("в комплекте нет age.exe (" + kit + ")"); kitOk = false; }
+            if (!File.Exists(ageExe)) { Log.Err("в комплекте нет age.exe (" + kit + ")"); kitOk = false; }
+            if (!File.Exists(ageKeygenExe)) { Log.Err("в комплекте нет age-keygen.exe (" + kit + ")"); kitOk = false; }
             if (!File.Exists(zstdExe)) { Log.Err("в комплекте нет zstd.exe (" + kit + ")"); kitOk = false; }
+            string pfxPath = Path.Combine(kit, ps.ClientPfx);
+            if (!File.Exists(pfxPath)) { Log.Err("в комплекте нет " + ps.ClientPfx + " (" + kit + ") — mTLS-сертификат"); kitOk = false; }
             if (!kitOk)
             {
-                Log.Fix("комплект неполный: положите рядом с setup exe файлы packet-agent.exe, zstd.exe" +
-                        (needAge ? ", age.exe" : "") +
-                        " из поставки (возможно, их удалил антивирус — проверьте карантин)");
+                Log.Fix("комплект неполный: положите рядом с setup exe файлы packet-agent.exe, age.exe, age-keygen.exe, zstd.exe, " +
+                        ps.ClientPfx + " из поставки (возможно, их удалил антивирус — проверьте карантин)");
                 return Program.EXIT_PREREQ;
             }
-            if (!RunsOk(zstdExe, "--version", "zstd") ||
-                (needAge && !RunsOk(ageExe, "--version", "age")))
+            if (!RunsOk(zstdExe, "--version", "zstd") || !RunsOk(ageExe, "--version", "age"))
             {
                 Log.Fix("комплект неполный или файлы заблокированы антивирусом — переустановите комплект");
                 return Program.EXIT_PREREQ;
             }
             RunsOk(agentExe, "--version", "packet-agent");   // диагностика в лог, не стоп
 
+            // ---------- 1б. клиентский сертификат mTLS -> LocalMachine\My
+            // Релей (HAProxy) не пропускает запрос без сертификата нашего CA
+            // (контракт §8), поэтому импорт — ДО префлайта связи. Агент работает
+            // под SYSTEM (планировщик) — ключ в машинном контейнере + чтение SYSTEM.
+            Log.Step(2, 6, "Клиентский сертификат mTLS (импорт в LocalMachine\\My)");
+            string thumbprint = Ctx.DryRun ? null : ImportClientCert(pfxPath, ps.ClientPfxPassword);
+            if (!Ctx.DryRun && thumbprint == null)
+            {
+                Log.Fix("проверьте client_pfx_password в packet-setup.json и что pfx не битый");
+                return Program.EXIT_PREREQ;
+            }
+            if (Ctx.DryRun) Log.Sim("импортировал бы " + ps.ClientPfx + " в LocalMachine\\My, права закрытого ключа — SYSTEM");
+
             // ---------- 2. префлайт связи и места
-            Log.Step(2, 5, "Префлайт: связь с приёмником и место на диске");
-            if (!HealthOk(ps.ReceiverUrl))
+            Log.Step(3, 6, "Префлайт: связь с приёмником (mTLS) и место на диске");
+            if (!Ctx.DryRun && !HealthOk(ps.ReceiverUrl, thumbprint))
             {
                 Log.Fix("откройте ИСХОДЯЩИЙ 443/TCP на " + HostOf(ps.ReceiverUrl) +
                         " (входящее на Windows не нужно по построению)");
                 return Program.EXIT_PREREQ;
             }
+            if (Ctx.DryRun) Log.Sim("проверил бы https-префлайт приёмника с клиентским сертификатом");
 
             string packetDir = string.IsNullOrEmpty(o.PacketDir) ? @"C:\1c\packet" : o.PacketDir;
             string dataDir = Path.Combine(packetDir, "data");
             if (!DiskOk(bref, packetDir)) return Program.EXIT_PREREQ;
 
-            // ---------- 3. установка файлов и agent.ini
-            Log.Step(3, 5, "Установка агента в " + packetDir);
+            // ---------- 4. установка файлов и agent.ini
+            Log.Step(4, 6, "Установка агента в " + packetDir);
             if (Ctx.DryRun)
             {
-                Log.Sim("скопировал бы packet-agent.exe, age.exe, zstd.exe в " + packetDir);
+                Log.Sim("скопировал бы packet-agent.exe, age.exe, age-keygen.exe, zstd.exe в " + packetDir);
                 Log.Sim("записал бы agent.ini (база «" + ps.BaseId + "», права — только администраторам и SYSTEM)");
             }
-            else if (!InstallFiles(kit, packetDir, dataDir, ps, o, odataUrl))
+            else if (!InstallFiles(kit, packetDir, dataDir, ps, o, odataUrl, thumbprint))
                 return Program.EXIT_PACKET;
+            else if (File.Exists(pfxPath))
+            {
+                // pfx с паролем в открытом виде больше не нужен: сертификат в
+                // LocalMachine\My, отпечаток — в agent.ini (ТЗ §2).
+                try { File.Delete(pfxPath); Log.Ok(ps.ClientPfx + " удалён после импорта"); }
+                catch (Exception e) { Log.Warn("не удалось удалить " + pfxPath + ": " + e.Message); }
+            }
 
-            // ---------- 4. автозапуск (планировщик, SYSTEM)
-            Log.Step(4, 5, "Автозапуск агента (планировщик задач)");
+            // ---------- 5. автозапуск (планировщик, SYSTEM)
+            Log.Step(5, 6, "Автозапуск агента (планировщик задач)");
             if (Ctx.DryRun)
                 Log.Sim("создал бы задачи «" + TaskName + "» (при старте системы) и «" + WatchdogName + "» (каждые 5 мин) под SYSTEM");
             else if (!EnsureTasks(packetDir))
                 return Program.EXIT_PACKET;
 
-            // ---------- 5. пробная посылка (данные, не «запустилось»)
-            Log.Step(5, 5, "Пробная посылка (подтверждение доставки приёмником)");
+            // ---------- 6. пробная посылка (данные, не «запустилось»)
+            Log.Step(6, 6, "Пробная посылка (подтверждение доставки приёмником)");
             if (Ctx.DryRun)
             {
                 Log.Sim("запустил бы packet-agent.exe --smoke и ждал бы verified от приёмника");
@@ -220,8 +251,78 @@ namespace Oc1c
             try { return new Uri(url).Host; } catch { return url; }
         }
 
-        // Исходящий HTTPS на приёмник: TLS handshake + GET /health -> packet-server-ok.
-        static bool HealthOk(string receiverUrl)
+        // ============================================================ mTLS: клиентский сертификат
+        // Импорт client.pfx в LocalMachine\My (ТЗ §2). Возвращает отпечаток или null.
+        static string ImportClientCert(string pfxPath, string password)
+        {
+            try
+            {
+                X509Certificate2 cert = new X509Certificate2(pfxPath, password,
+                    X509KeyStorageFlags.MachineKeySet | X509KeyStorageFlags.PersistKeySet);
+                X509Store store = new X509Store(StoreName.My, StoreLocation.LocalMachine);
+                store.Open(OpenFlags.ReadWrite);
+                store.Add(cert);
+                store.Close();
+                GrantKeyToSystem(cert);
+                Log.Ok("сертификат импортирован в LocalMachine\\My (" + cert.SubjectName.Name +
+                       ", отпечаток " + cert.Thumbprint + ")");
+                return cert.Thumbprint;
+            }
+            catch (Exception e)
+            {
+                Log.Err("импорт " + pfxPath + " не удался: " + e.Message);
+                return null;
+            }
+        }
+
+        // Агент работает под SYSTEM (планировщик) — закрытый ключ в машинном
+        // контейнере обязан читаться SYSTEM. По умолчанию у MachineKeys SYSTEM и
+        // так имеет полный доступ, но правило добавляем явно — поведение не должно
+        // зависеть от умолчаний ОС (ТЗ §2).
+        static void GrantKeyToSystem(X509Certificate2 cert)
+        {
+            try
+            {
+                RSACryptoServiceProvider rsa = cert.PrivateKey as RSACryptoServiceProvider;
+                if (rsa == null) { Log.Warn("закрытый ключ не CSP (CNG) — права SYSTEM проверьте вручную"); return; }
+                string keyFile = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData),
+                    @"Microsoft\Crypto\RSA\MachineKeys\" + rsa.CspKeyContainerInfo.UniqueKeyContainerName);
+                if (!File.Exists(keyFile)) { Log.Warn("файл закрытого ключа не найден: " + keyFile); return; }
+                FileSecurity fs = File.GetAccessControl(keyFile);
+                fs.AddAccessRule(new FileSystemAccessRule(
+                    new SecurityIdentifier(WellKnownSidType.LocalSystemSid, null),
+                    FileSystemRights.Read, AccessControlType.Allow));
+                File.SetAccessControl(keyFile, fs);
+                Log.Ok("закрытому ключу выдано чтение для SYSTEM");
+            }
+            catch (Exception e) { Log.Warn("ACL закрытого ключа не выданы: " + e.Message); }
+        }
+
+        static X509Certificate2 FindClientCert(string thumbprint)
+        {
+            string norm = (thumbprint ?? "").Replace(" ", "").ToUpperInvariant();
+            if (norm.Length == 0) return null;
+            StoreLocation[] locs = { StoreLocation.LocalMachine, StoreLocation.CurrentUser };
+            for (int i = 0; i < locs.Length; i++)
+            {
+                X509Store store = new X509Store(StoreName.My, locs[i]);
+                try
+                {
+                    store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+                    X509Certificate2Collection found = store.Certificates.Find(
+                        X509FindType.FindByThumbprint, norm, false);
+                    if (found.Count > 0) return found[0];
+                }
+                catch { }
+                finally { store.Close(); }
+            }
+            return null;
+        }
+
+        // Исходящий HTTPS на приёмник: TLS handshake С КЛИЕНТСКИМ СЕРТИФИКАТОМ (mTLS,
+        // контракт §8) + GET /health -> packet-server-ok.
+        static bool HealthOk(string receiverUrl, string thumbprint)
         {
             string url = receiverUrl + "/health";
             try
@@ -235,13 +336,20 @@ namespace Oc1c
                 req.ReadWriteTimeout = 20000;
                 req.UserAgent = "setup-1c-odata/" + Ctx.ToolVersion;
                 req.AllowAutoRedirect = false;
+                X509Certificate2 cert = FindClientCert(thumbprint);
+                if (cert == null)
+                {
+                    Log.Err("клиентский сертификат (отпечаток " + thumbprint + ") не найден в хранилище — mTLS невозможен");
+                    return false;
+                }
+                req.ClientCertificates.Add(cert);
                 using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
                 using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
                 {
                     string body = sr.ReadToEnd();
                     if ((int)resp.StatusCode == 200 && body.IndexOf("packet-server-ok") >= 0)
                     {
-                        Log.Ok("приёмник отвечает: " + url + " -> packet-server-ok");
+                        Log.Ok("приёмник отвечает: " + url + " -> packet-server-ok (mTLS)");
                         return true;
                     }
                     Log.Err("приёмник ответил HTTP " + (int)resp.StatusCode + ", но не «packet-server-ok»");
@@ -254,7 +362,11 @@ namespace Oc1c
                 if (resp != null)
                     Log.Err("приёмник ответил HTTP " + (int)resp.StatusCode + " на " + url);
                 else
+                {
                     Log.Err("нет связи с приёмником: " + we.Message);
+                    if (we.Message.IndexOf("SSL/TLS", StringComparison.OrdinalIgnoreCase) >= 0)
+                        Log.Fix("TLS-рукопожатие отвергнуто: релей требует клиентский сертификат (mTLS) — проверьте импорт pfx (шаг 2)");
+                }
                 return false;
             }
             catch (Exception e)
@@ -284,13 +396,12 @@ namespace Oc1c
 
         // ============================================================ установка
         static bool InstallFiles(string kit, string packetDir, string dataDir,
-                                 PacketSetup ps, Opts o, string odataUrl)
+                                 PacketSetup ps, Opts o, string odataUrl, string thumbprint)
         {
             try
             {
                 Directory.CreateDirectory(dataDir);
-                // age.exe может отсутствовать в комплекте без age-слоя — копируем то, что есть.
-                string[] names = { "packet-agent.exe", "zstd.exe", "age.exe" };
+                string[] names = { "packet-agent.exe", "zstd.exe", "age.exe", "age-keygen.exe" };
                 for (int i = 0; i < names.Length; i++)
                 {
                     string srcExe = Path.Combine(kit, names[i]);
@@ -315,8 +426,8 @@ namespace Oc1c
             sb.AppendLine("base_id=" + ps.BaseId);
             sb.AppendLine("receiver_url=" + ps.ReceiverUrl);
             sb.AppendLine("token=" + ps.Token);
-            if (!string.IsNullOrEmpty(ps.RecipientPubkey))
-                sb.AppendLine("recipient_pubkey=" + ps.RecipientPubkey);
+            sb.AppendLine("recipient_pubkey=" + ps.RecipientPubkey);
+            sb.AppendLine("client_cert_thumbprint=" + thumbprint);   // mTLS на релее (контракт §8)
             sb.AppendLine("odata_url=" + odataUrl.TrimEnd('/'));
             sb.AppendLine("odata_user=" + reader);
             sb.AppendLine("odata_password=" + (o.ReaderPassword == null ? "" : o.ReaderPassword));

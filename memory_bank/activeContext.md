@@ -48,6 +48,10 @@ UDP Европа→РФ не доходит вовсе, TCP чист — `ubuntu
 на который опирается блок, — `work/installer-exe/AGENT_TZ.md` §7, статус — §8.
 ⚠ Не проверено компиляцией (на этом сервере нет csc/mono) — первая сборка `build.cmd`
 на Windows; живой прогон — когда будет комплект и сам `packet-agent.exe`.
+✅ **07.08: собран и пройден чек-лист владельца целиком** (сессия канала): блок не знал
+mTLS — дописан (pfx→LocalMachine\My + права SYSTEM, префлайт `/health` с сертом, thumbprint
+в agent.ini, pfx удаляется, age обязателен). Прогон: префлайт `packet-server-ok (mTLS)`,
+задачи Ready, smoke → applied seq=4, второй экземпляр код 0, **reboot — демон сам (~30 с)**.
 
 **Гейты подключены к Kimi Code `[06.08]`: ✅ вторая среда исполнения под `claudedev`.**
 Конфиг `~/.kimi-code/config.toml` (root:root, ставит `install-gates.sh` из

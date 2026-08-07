@@ -393,6 +393,28 @@ age/zstd v1.2.1/v1.5.7 win64 + ИНСТРУКЦИЯ.txt), build.cmd/probe.cmd �
 
 ---
 
+## 07.08: установщик 1.2.0 — mTLS в блоке агента + полный чек-лист пройден `[замер]`
+
+- 🔴 **Находка: блок 2 не знал mTLS вовсе** — префлайт связи шёл без клиентского
+  сертификата и упирался в обрыв handshake релеем («откройте 443»). Дописан
+  `windows/odata-setup/src/Packet.cs`: поля `client_pfx`/`client_pfx_password` из
+  packet-setup.json, импорт в `LocalMachine\My` (MachineKeySet) + явное чтение
+  закрытого ключа для SYSTEM, префлайт `/health` С сертификатом,
+  `client_cert_thumbprint` в agent.ini, pfx удаляется после импорта,
+  `recipient_pubkey` и `age.exe`/`age-keygen.exe` обязательны (решение 07.08).
+- `[замер]` **полный прогон на стенде, чек-лист владельца — всё зелёное:**
+  префлайт `packet-server-ok (mTLS)`; файлы в `C:\1c\packet`; agent.ini с ACL;
+  задачи «1C Packet Agent» (ONSTART) + Watchdog (5 мин) созданы и Ready; smoke
+  установщика — пакет `000004-30fb7f38` → verified → **applied seq=4** на Ubuntu;
+  **первый такт демона = FULL: 1589 сущностей, 1594 чанка (35 МБ) → applied**;
+  второй такт — дельта (1 сущность) → applied; второй экземпляр при живом демоне —
+  мгновенный код 0 (мьютекс); **reboot стенда: демон поднялся сам через ~30 с**
+  (бут 13:13:32, баннер демона 13:14:03), OData-шлюз после reboot отвечает 200.
+- Ловушка сессии: `powershell -Command` через cmd-ssh рвётся на кавычках/кириллице
+  — тесты писать .ps1-файлом и только ASCII (`sftp put` + `-ExecutionPolicy Bypass`).
+
+---
+
 ## 07.08: агент пакетного транспорта — сборка, golden, SMOKE end-to-end `[замер]`
 
 `[решение]` владельца 07.08: сразу с шифрованием (age), без пилотного plain-режима.
