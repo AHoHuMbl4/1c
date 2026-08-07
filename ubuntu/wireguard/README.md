@@ -93,6 +93,27 @@ Windows (TLS) → https://1c-gate.timpul.ru:443  [DNS → 201.34.130.46]
   паттерн писать так, чтобы не совпадал с собственной командной строкой, или
   убивать по pid (`HOW_NOT_TO`).
 
+## mTLS на приёме (включён 07.08, контракт §8)
+
+Приём пакетов — **два фактора**: клиентский сертификат + Bearer-токен базы.
+
+- `bind :443 ssl crt … verify required ca-file /usr/local/etc/haproxy/1c-packet-ca.crt`:
+  без клиентского сертификата, подписанного проектным CA (`CN=1c-packet-ca`),
+  TLS-рукопожатие обрывается. `[замер 07.08]`: `curl` без серта → код 56 (обрыв),
+  `openssl s_client` показывает `Acceptable client CA: CN=1c-packet-ca` (запрос
+  сертификата идёт); с сертом базы (`CN=ut`) — handshake проходит.
+- CN клиентского сертификата уходит бэкенду заголовком `X-SSL-Client-CN`
+  (`%[ssl_c_s_dn(cn)]`) — приёмник сверяет его с базой.
+- CA-гриф на FreeBSD: `/usr/local/etc/haproxy/1c-packet-ca.crt` (644);
+  источник — `/etc/1c-packet-ca.crt` на Ubuntu (копия в `work/packet/ca/`),
+  выдаёт компонент пакетов (`packet_kit.py`). Клиентские серты баз —
+  `work/packet/kit/<base>/`.
+- Порт 80 не тронут: ACME/редирект Let's Encrypt работает как раньше.
+- 🔴 Внешние проверки домена теперь требуют сертификат: без него домен молчит
+  (обрыв TLS) — это норма. Проверка в эксплуатации:
+  `curl --cert work/packet/kit/<base>/client.crt --key …/client-key.pem
+  https://1c-gate.timpul.ru/health` → `packet-server-ok`.
+
 ## Защита узла: fail2ban (поднят 06.08)
 
 - `py312-fail2ban` + **pf** (был не загружен): `/etc/pf.conf` = `anchor "f2b/*"` +
