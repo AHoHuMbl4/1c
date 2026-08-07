@@ -127,8 +127,20 @@ def csv_bytes(rows: list[tuple], header=("Ref_Key", "DataVersion", "Description"
     return buf.getvalue().encode("utf-8")
 
 
-def write_package(seq: int, rand: str, kind: str, manifest: dict, chunks: dict) -> str:
-    """Каталог пакета в inbox: manifest.json + чанки + state.json verified."""
+def make_chunk_plain(name: str, plain: bytes, entity: str, rows: int):
+    """Пилотный plain-режим: CSV/XML → zstd, без age. sha256_enc — отпечаток zst."""
+    z = subprocess.run([ZSTD, "-q", "-3", "-c"], input=plain,
+                       capture_output=True, check=True).stdout
+    entry = {"name": name, "entity": entity, "rows": rows,
+             "bytes_plain": len(plain), "bytes_enc": len(z),
+             "sha256_plain": sha256(plain), "sha256_enc": sha256(z)}
+    return entry, z
+
+
+def write_package(seq: int, rand: str, kind: str, manifest: dict, chunks: dict,
+                  plain: bool = False) -> str:
+    """Каталог пакета в inbox: manifest.json + чанки + state.json verified.
+    plain=True — пилотный режим без age: чанки хранятся как .zst/.csv.zst."""
     pkg_id = f"{seq:06d}-{rand}"
     pdir = os.path.join(ROOT, "inbox", BASE_ID, pkg_id)
     os.makedirs(pdir)
@@ -136,8 +148,8 @@ def write_package(seq: int, rand: str, kind: str, manifest: dict, chunks: dict) 
     with open(os.path.join(pdir, "manifest.json"), "w", encoding="utf-8") as f:
         json.dump(manifest, f, ensure_ascii=False)
     for name, data in chunks.items():
-        suffix = ".zst.age" if name in ("metadata", "gone", "index") else ".csv.zst.age"
-        with open(os.path.join(pdir, name + suffix), "wb") as f:
+        base = ".zst" if name in ("metadata", "gone", "index") else ".csv.zst"
+        with open(os.path.join(pdir, name + (base if plain else base + ".age")), "wb") as f:
             f.write(data)
     with open(os.path.join(pdir, "state.json"), "w", encoding="utf-8") as f:
         json.dump({"state": "verified", "error": None, "seq": seq}, f)
@@ -357,6 +369,28 @@ def main() -> int:
         check("mix_versions: дельта не применилась",
               scalar('SELECT count(*) FROM "%s" WHERE "Ref_Key"=\'k9\'' % TABLE) == "0")
         psql_exec('DELETE FROM "%s" WHERE "DataVersion"=\'v9\';' % TABLE)
+        # 6. Пилотный plain-пакет (без age): full + metadata, режим — по магии.
+        META_XML3 = "<metadata><entity>pkt_probe_catalog</entity><v>plain</v></metadata>"
+        pf_csv = csv_bytes([("k1", "v3", "plain-a"), ("k7", "v3", "plain-b")])
+        pe1, pc1 = make_chunk_plain("chunk-00001", pf_csv, TABLE, 2)
+        pem, pcm = make_chunk_plain("metadata", META_XML3.encode("utf-8"), "", 0)
+        m5 = base_manifest(5, "eee00005", "full")
+        m5["entities"] = [{"name": TABLE, "op": "full", "rows": 2,
+                           "chunks": ["chunk-00001"], "key": ["Ref_Key"]}]
+        m5["metadata"] = {"included": True, "fingerprint": "sha256:probe-meta-plain",
+                          "chunks": ["metadata"]}
+        m5["chunks"] = [pe1, pem]
+        pkg5 = write_package(5, "eee00005", "full", m5,
+                             {"chunk-00001": pc1, "metadata": pcm}, plain=True)
+        r = run_apply()
+        check("plain-пакет: apply код 0", r.returncode == 0, r.stderr.strip()[-200:])
+        check("plain-пакет applied", pkg_state(pkg5)["state"] == "applied")
+        rows = dict((r_[0], r_[1:]) for r_
+                    in psql('SELECT "Ref_Key","DataVersion","Description" FROM "%s"' % TABLE))
+        check("plain full заменил таблицу (2 строки, k7 на месте)",
+              len(rows) == 2 and rows.get("k7") == ("v3", "plain-b"), repr(rows)[:150])
+        check("plain metadata записан файлом",
+              open(META_FILE, "rb").read() == META_XML3.encode("utf-8"))
     finally:
         cleanup()
 

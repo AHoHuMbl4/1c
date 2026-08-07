@@ -96,6 +96,20 @@ def enc_manifest(m: dict) -> bytes:
     return open(enc, "rb").read()
 
 
+def make_chunk_plain(name: str, csv_bytes: bytes):
+    """Пилотный plain-режим: CSV → zstd, без age. sha256_enc — отпечаток zst."""
+    z = subprocess.run([ZSTD, "-q", "-3", "-c"], input=csv_bytes,
+                       capture_output=True, check=True).stdout
+    entry = {"name": name, "entity": "Catalog_Контрагенты", "rows": 2,
+             "bytes_plain": len(csv_bytes), "bytes_enc": len(z),
+             "sha256_plain": sha256(csv_bytes), "sha256_enc": sha256(z)}
+    return entry, z
+
+
+def plain_manifest(m: dict) -> bytes:
+    return json.dumps(m, ensure_ascii=False).encode()
+
+
 def manifest(pkg_id: str, seq: int, entries: list, version: int = 1) -> dict:
     return {"manifest_version": version, "package_id": f"ut/{pkg_id}",
             "base_id": "ut", "seq": seq, "kind": "delta",
@@ -106,11 +120,13 @@ def manifest(pkg_id: str, seq: int, entries: list, version: int = 1) -> dict:
 PORT = 0
 
 
-def req(method: str, path: str, body=None, token=TOKEN):
+def req(method: str, path: str, body=None, token=TOKEN, cn=None):
     conn = http.client.HTTPConnection("127.0.0.1", PORT, timeout=30)
     headers = {}
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
+    if cn is not None:
+        headers["X-SSL-Client-CN"] = cn
     conn.request(method, path, body=body, headers=headers)
     r = conn.getresponse()
     data = r.read()
@@ -225,6 +241,11 @@ def main() -> int:
           f"{st} {r}")
     st, r = req("GET", "/v1/nope")
     check("5: чужой путь — 404", st == 404, f"{st} {r}")
+    # 5а. mTLS-фактор: CN от релея, чужой базе — 401 даже с верным токеном
+    st, r = req("GET", f"/v1/package/ut/{pkg_a}/status", cn="other")
+    check("5а: чужой CN — 401 при верном токене", st == 401, f"{st} {r}")
+    st, r = req("GET", f"/v1/package/ut/{pkg_a}/status", cn="ut")
+    check("5а: CN базы — пропускает", st == 200, f"{st} {r}")
 
     # 6. чанк подменён на диске после заливки → status → quarantined
     ed, bd = make_chunk("chunk-00001", csv1)
@@ -291,6 +312,47 @@ def main() -> int:
     check("12: повтор манифеста — no-op 200", st == 200 and r.get("noop") is True, f"{st} {r}")
     st, r = req("GET", f"/v1/package/ut/{pkg_a}/status")
     check("12: состояние после повтора — verified", r.get("state") == "verified", f"{st} {r}")
+
+    # 13. plain-режим пилота (без age): тот же цикл, режим — по магии файлов
+    pe1, pb1 = make_chunk_plain("chunk-00001", csv1)
+    pkg_p = "000051-aabbccdd"
+    st, r = req("PUT", f"/v1/package/ut/{pkg_p}/manifest",
+                plain_manifest(manifest(pkg_p, 51, [pe1])))
+    check("13: plain manifest принят", st == 200 and r.get("state") == "receiving", f"{st} {r}")
+    check("13: в plain-режиме manifest.json.age не создаётся",
+          not os.path.exists(os.path.join(pkg_dir(pkg_p), "manifest.json.age"))
+          and os.path.exists(os.path.join(pkg_dir(pkg_p), "manifest.json")))
+    st, r = req("PUT", f"/v1/package/ut/{pkg_p}/chunk/chunk-00001", pb1)
+    check("13: plain чанк принят", st == 200, f"{st} {r}")
+    check("13: чанк хранится как .csv.zst",
+          os.path.exists(os.path.join(pkg_dir(pkg_p), "chunk-00001.csv.zst")))
+    st, r = req("GET", f"/v1/package/ut/{pkg_p}/status")
+    check("13: plain пакет собран — verified",
+          st == 200 and r.get("state") == "verified" and r.get("missing") == []
+          and r.get("error") is None, f"{st} {r}")
+    # подмена байта в plain-чанке на диске → quarantined (verify по магии)
+    pkg_q = "000052-aabbccdd"
+    pe2, pb2 = make_chunk_plain("chunk-00001", csv1)
+    req("PUT", f"/v1/package/ut/{pkg_q}/manifest", plain_manifest(manifest(pkg_q, 52, [pe2])))
+    req("PUT", f"/v1/package/ut/{pkg_q}/chunk/chunk-00001", pb2)
+    victim = os.path.join(pkg_dir(pkg_q), "chunk-00001.csv.zst")
+    raw = bytearray(open(victim, "rb").read())
+    raw[-1] ^= 0xFF
+    open(victim, "wb").write(raw)
+    st, r = req("GET", f"/v1/package/ut/{pkg_q}/status")
+    check("13: подмена plain-чанка на диске — quarantined",
+          st == 200 and r.get("state") == "quarantined"
+          and str(r.get("error", "")).startswith("verify_"), f"{st} {r}")
+    # магия-мусор → 409 bad_format
+    pkg_b = "000053-aabbccdd"
+    st, r = req("PUT", f"/v1/package/ut/{pkg_b}/manifest", b"\x00\x01binary-garbage")
+    check("13: манифест-мусор — 409 bad_format",
+          st == 409 and r.get("error") == "bad_format", f"{st} {r}")
+    pe3, _pb3 = make_chunk_plain("chunk-00001", csv1)
+    req("PUT", f"/v1/package/ut/{pkg_b}/manifest", plain_manifest(manifest(pkg_b, 53, [pe3])))
+    st, r = req("PUT", f"/v1/package/ut/{pkg_b}/chunk/chunk-00001", b"garbage-chunk")
+    check("13: чанк-мусор — 409 bad_format",
+          st == 409 and r.get("error") == "bad_format", f"{st} {r}")
 
     srv.shutdown()
     print(f"\n{'ПРОБА ЗЕЛЁНАЯ' if not FAILS else 'ПАДЕНИЯ: ' + ', '.join(FAILS)}")

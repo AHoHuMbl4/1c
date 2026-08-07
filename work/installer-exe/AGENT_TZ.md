@@ -34,6 +34,15 @@ Ubuntu): **base_id, токен Bearer, recipient pubkey (age1…)**. Устан�
  "receiver_url": "https://1c-gate.timpul.ru"}
 ```
 
+**С 06.08 (mTLS, решение владельца)** комплект дополнен клиентским сертификатом
+(контракт §8): файлы `client.pfx` + `client.crt` + `client-key.pem`, а в
+`packet-setup.json` — поля `client_pfx` (имя файла) и `client_pfx_password`.
+Сертификат выдаёт наш CA `1c-packet-ca`, `CN=<base_id>`; без него релей (HAProxy)
+не пропускает запрос вовсе. Установщик: импорт `client.pfx` в `LocalMachine\My`
+(пароль из `packet-setup.json`), отпечаток — в `agent.ini` полем
+`client_cert_thumbprint` (может быть с пробелами/в верхнем регистре — агент
+нормализует). Сам `.pfx` после импорта удалить.
+
 🔴 **`recipient_pubkey` — необязателен (решение владельца 06.08, «быстро, пилот»).**
 Канал уже шифрован на обоих плечах без age-слоя пакетов: TLS (Windows → FreeBSD,
 LE-сертификат домена) + SSH-туннель (FreeBSD → Ubuntu, `1c-gate-tunnel.service` →
@@ -52,6 +61,7 @@ base_id=ut
 receiver_url=https://1c-gate.timpul.ru
 token=…                    # Bearer, только в файл, в лог как ***
 recipient_pubkey=age1…     # только если поле есть в комплекте
+client_cert_thumbprint=…   # отпечаток из LocalMachine\My после импорта client.pfx (mTLS)
 odata_url=http://localhost/<публикация>/odata/standard.odata
 odata_user=ai_reader
 odata_password=…           # из существующих параметров exe, в лог как ***
@@ -66,6 +76,7 @@ data_dir=C:\1c\packet\data
 | место на диске под данные агента (очередь чанков ≈ размер базы сжатой + индекс версий) | стоп с цифрами, как в существующем префлайте |
 | `age.exe`/`zstd.exe` из комплекта запускаются (`--version`) | стоп: комплект неполный/антивирус |
 | `packet-setup.json` валиден (base_id `[a-z0-9_-]+`, токен непуст, pubkey — если есть, то формы `age1…`) | стоп: комплект не от этой установки |
+| `client.pfx` из комплекта импортируется в `LocalMachine\My` (пароль из packet-setup.json) | стоп: без клиентского сертификата релей не пропустит ни один запрос (mTLS, контракт §8) |
 
 ## 4. Пробная посылка (smoke test) — аналог проверки OData
 

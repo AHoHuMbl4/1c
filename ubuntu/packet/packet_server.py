@@ -7,10 +7,15 @@
 
 Хранение (PACKET_ROOT):
   inbox/<base_id>/state.json                       — last_applied_seq + состояния пакетов
-  inbox/<base_id>/<package_id>/manifest.json.age   — манифест как пришёл
-  inbox/<base_id>/<package_id>/manifest.json       — расшифрованный манифест
-  inbox/<base_id>/<package_id>/<name>.csv.zst.age  — чанки как пришли
+  inbox/<base_id>/<package_id>/manifest.json.age   — манифест как пришёл (age-режим)
+  inbox/<base_id>/<package_id>/manifest.json       — разобранный манифест (в plain-режиме
+                                                     это и есть файл как пришёл)
+  inbox/<base_id>/<package_id>/<name>.csv.zst.age  — чанки как пришли (age-режим)
+  inbox/<base_id>/<package_id>/<name>.csv.zst      — чанки как пришли (plain-режим пилота)
   inbox/<base_id>/<package_id>/state.json          — состояние пакета + error
+
+Режим каждого файла определяется магией (age-encryption.org/ или 28 B5 2F FD),
+не конфигом: оба режима принимаются одновременно (пилот без age-слоя 06.08).
 
 Конфиг — env: PACKET_ROOT, PACKET_LISTEN, PACKET_BASES (JSON баз:
 token/identity/config). Без файла баз — FATAL на старте. Только stdlib.
@@ -48,6 +53,13 @@ PACKET_MANIFEST_VERSION = 1
 
 # Чанки со служебными именами хранятся без вставки «.csv» (контракт §2).
 _SERVICE_CHUNKS = ("metadata", "gone", "index")
+
+# Режим файла определяется магией, а не конфигом (пилот без age-слоя, решение
+# владельца 06.08: канал шифрован TLS + SSH-туннелем + mTLS). Оба режима
+# принимаются одним приёмником одновременно. sha256_enc манифеста — отпечаток
+# файла как пришёл: в plain-режиме это отпечаток zst-файла.
+_AGE_MAGIC = b"age-encryption.org/"
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 
 _ID_RE = re.compile(r"[A-Za-z0-9_.-]+")
 _LOCK = threading.Lock()
@@ -125,8 +137,33 @@ def _pkg_dir(base_id: str, pkg_id: str) -> str:
     return os.path.join(_base_dir(base_id), pkg_id)
 
 
-def _chunk_filename(name: str) -> str:
-    return name + (".zst.age" if name in _SERVICE_CHUNKS else ".csv.zst.age")
+def _chunk_filenames(name: str) -> tuple[str, str]:
+    """Имена хранения чанка: (age-форма, plain-форма) — контракт §2."""
+    base = name + (".zst" if name in _SERVICE_CHUNKS else ".csv.zst")
+    return base + ".age", base
+
+
+def _chunk_stored(pkg_dir: str, name: str) -> str | None:
+    """Путь принятого чанка в любом из двух режимов, либо None."""
+    for fn in _chunk_filenames(name):
+        p = os.path.join(pkg_dir, fn)
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _sniff(path: str) -> str:
+    """Режим файла по магии: 'age' | 'zstd' | 'other'."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(len(_AGE_MAGIC))
+    except OSError:
+        return "other"
+    if head.startswith(_AGE_MAGIC):
+        return "age"
+    if head.startswith(_ZSTD_MAGIC):
+        return "zstd"
+    return "other"
 
 
 def _read_json(path: str, default):
@@ -236,22 +273,30 @@ def _verify_package(handler, base_id: str, pkg_id: str, manifest: dict) -> dict:
                             base_id, pkg_id, name, code)
         return _set_pkg_state(base_id, pkg_id, "quarantined", code)
 
+    kinds = set()
     for e in manifest["chunks"]:
         name = e["name"]
-        enc = os.path.join(pkg_dir, _chunk_filename(name))
-        if C.sha256_file(enc) != e["sha256_enc"]:
+        enc = _chunk_stored(pkg_dir, name)
+        if enc is None or C.sha256_file(enc) != e["sha256_enc"]:
             return fail("verify_hash_mismatch", name)
+        kind = _sniff(enc)
+        if kind not in ("age", "zstd"):
+            return fail("bad_format", name)
+        kinds.add(kind)
         fd, dec = tempfile.mkstemp(dir=pkg_dir, prefix=".verify-")
         os.close(fd)
         fd, plain = tempfile.mkstemp(dir=pkg_dir, prefix=".verify-")
         os.close(fd)
         try:
-            try:
-                C.decrypt_file(enc, dec, identity)
-            except C.PacketCryptoError:
-                return fail("verify_decrypt_failed", name)
+            src = enc                            # plain-режим: файл уже zst
+            if kind == "age":
+                try:
+                    C.decrypt_file(enc, dec, identity)
+                except C.PacketCryptoError:
+                    return fail("verify_decrypt_failed", name)
+                src = dec
             with open(plain, "wb") as out:
-                p = subprocess.run([ZSTD_BIN, "-d", "-q", "-c", dec],
+                p = subprocess.run([ZSTD_BIN, "-d", "-q", "-c", src],
                                    stdout=out, stderr=subprocess.PIPE)
             if p.returncode != 0:
                 return fail("verify_zstd_failed", name)
@@ -261,8 +306,9 @@ def _verify_package(handler, base_id: str, pkg_id: str, manifest: dict) -> dict:
         finally:
             _silent_unlink(dec)
             _silent_unlink(plain)
-    handler.log_message("VERIFIED base=%s pkg=%s chunks=%d",
-                        base_id, pkg_id, len(manifest["chunks"]))
+    handler.log_message("VERIFIED base=%s pkg=%s chunks=%d mode=%s",
+                        base_id, pkg_id, len(manifest["chunks"]),
+                        "+".join(sorted(kinds)))
     return _set_pkg_state(base_id, pkg_id, "verified", None)
 
 
@@ -308,6 +354,11 @@ class Handler(BaseHTTPRequestHandler):
             return False
         token = rec.get("token") or ""
         if not token:
+            return False
+        # mTLS-фактор (контракт §8): релей проставляет CN клиентского сертификата
+        # заголовком; если заголовок приехал — он обязан совпасть с базой пути.
+        cn = self.headers.get("X-SSL-Client-CN", "")
+        if cn and cn != base_id:
             return False
         return self.headers.get("Authorization", "") == f"Bearer {token}"
 
@@ -382,32 +433,43 @@ class Handler(BaseHTTPRequestHandler):
             if _inbox_bytes(base_id) >= PACKET_MAX_INBOX_BYTES:
                 return self._err(429, "limit_inbox_bytes")
         os.makedirs(pkg_dir, exist_ok=True)
-        age_tmp = os.path.join(pkg_dir, ".manifest.age.tmp")
         json_tmp = os.path.join(pkg_dir, ".manifest.json.tmp")
-        with open(age_tmp, "wb") as f:
-            f.write(body)
-        identity = BASES[base_id].get("identity", "")
-        try:
-            C.decrypt_file(age_tmp, json_tmp, identity)
-        except C.PacketCryptoError:
-            _silent_unlink(age_tmp)
-            _silent_unlink(json_tmp)
-            _set_pkg_state(base_id, pkg_id, "rejected", "manifest_decrypt_failed")
-            return self._err(409, "manifest_decrypt_failed")
+        age_tmp = None
+        if body.startswith(_AGE_MAGIC):
+            mode = "age"
+            age_tmp = os.path.join(pkg_dir, ".manifest.age.tmp")
+            with open(age_tmp, "wb") as f:
+                f.write(body)
+            identity = BASES[base_id].get("identity", "")
+            try:
+                C.decrypt_file(age_tmp, json_tmp, identity)
+            except C.PacketCryptoError:
+                _silent_unlink(age_tmp)
+                _silent_unlink(json_tmp)
+                _set_pkg_state(base_id, pkg_id, "rejected", "manifest_decrypt_failed")
+                return self._err(409, "manifest_decrypt_failed")
+        elif body.lstrip()[:1] == b"{":
+            # plain-режим пилота: манифест — открытый JSON, хранится как есть.
+            mode = "plain"
+            with open(json_tmp, "wb") as f:
+                f.write(body)
+        else:
+            return self._err(409, "bad_format")
         m = _read_json(json_tmp, None)
         err = _validate_manifest(m, base_id, pkg_id)
         if err is None and m["seq"] <= _base_state(base_id)["last_applied_seq"]:
             err = "stale_seq"
         if err is not None:
-            _silent_unlink(age_tmp)
+            _silent_unlink(age_tmp or json_tmp)
             _silent_unlink(json_tmp)
             _set_pkg_state(base_id, pkg_id, "rejected", err)
             return self._err(409, err)
-        os.replace(age_tmp, os.path.join(pkg_dir, "manifest.json.age"))
+        if age_tmp is not None:
+            os.replace(age_tmp, os.path.join(pkg_dir, "manifest.json.age"))
         os.replace(json_tmp, manifest_path)
         _set_pkg_state(base_id, pkg_id, "receiving", None, seq=m["seq"])
-        self.log_message("manifest принят base=%s pkg=%s seq=%d chunks=%d",
-                         base_id, pkg_id, m["seq"], len(m["chunks"]))
+        self.log_message("manifest принят base=%s pkg=%s seq=%d chunks=%d mode=%s",
+                         base_id, pkg_id, m["seq"], len(m["chunks"]), mode)
         return self._json(200, {"state": "receiving", "seq": m["seq"]})
 
     def _put_chunk(self, base_id: str, pkg_id: str, name: str):
@@ -425,18 +487,25 @@ class Handler(BaseHTTPRequestHandler):
         e = entries.get(name)
         if e is None:
             return self._err(409, "chunk_not_declared")
+        if body.startswith(_AGE_MAGIC):
+            fn = _chunk_filenames(name)[0]
+        elif body.startswith(_ZSTD_MAGIC):
+            fn = _chunk_filenames(name)[1]
+        else:
+            return self._err(409, "bad_format")
         sha = hashlib.sha256(body).hexdigest()
         if sha != e["sha256_enc"] or len(body) != e["bytes_enc"]:
             return self._err(409, "chunk_hash_mismatch")
-        dest = os.path.join(pkg_dir, _chunk_filename(name))
+        dest = os.path.join(pkg_dir, fn)
         if os.path.exists(dest) and C.sha256_file(dest) == sha:
             return self._json(200, {"state": st["state"], "chunk": name, "noop": True})
         tmp = dest + ".tmp"
         with open(tmp, "wb") as f:
             f.write(body)
         os.replace(tmp, dest)
-        self.log_message("chunk принят base=%s pkg=%s chunk=%s bytes=%d",
-                         base_id, pkg_id, name, len(body))
+        self.log_message("chunk принят base=%s pkg=%s chunk=%s bytes=%d mode=%s",
+                         base_id, pkg_id, name, len(body),
+                         "age" if fn.endswith(".age") else "plain")
         return self._json(200, {"state": st["state"], "chunk": name})
 
     # -- GET --
@@ -475,8 +544,7 @@ class Handler(BaseHTTPRequestHandler):
         received, missing = [], []
         if isinstance(manifest, dict):
             for e in manifest["chunks"]:
-                p = os.path.join(pkg_dir, _chunk_filename(e["name"]))
-                (received if os.path.exists(p) else missing).append(e["name"])
+                (received if _chunk_stored(pkg_dir, e["name"]) else missing).append(e["name"])
         # Проверка — синхронно в запросе status: пакеты мелкие, отдельный
         # фоновый воркер на этом шаге не заводится. verified — маркер, повторная
         # проверка по нему не гоняется.

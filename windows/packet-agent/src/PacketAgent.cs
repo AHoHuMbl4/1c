@@ -2,6 +2,11 @@
 // Контракт: docs/PACKET_CONTRACT.md (manifest_version=1), CLI: work/installer-exe/AGENT_TZ.md §7.
 // Семантика выгрузки — байт-в-байт порт ubuntu/serenedb/poc_load_entity.py (К5),
 // проверяется golden-пробой work/packet/golden (probe.cmd, fc /b против reference).
+// Транспорт: mTLS на релее (HAProxy проверяет клиентский сертификат по CA
+// 1c-packet-ca — без него запрос не проходит вовсе) + Bearer-токен вторым фактором.
+// Упаковка: recipient_pubkey задан → zstd+age (контракт §3-4); пуст/отсутствует →
+// plain-режим пилота (решение 06.08, AGENT_TZ §2): zstd остаётся, age снимается,
+// файлы без суффикса .age; приёмник различает режимы по магии файла.
 // C# 5 (csc.exe из .NET Framework 4), только стандартные сборки.
 using System;
 using System.Collections;
@@ -11,6 +16,7 @@ using System.Globalization;
 using System.IO;
 using System.Net;
 using System.Security.Cryptography;
+using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -46,11 +52,15 @@ namespace PacketAgent
     {
         internal string BaseId, ReceiverUrl, Token, RecipientPubkey;
         internal string OdataUrl, OdataUser, OdataPassword, DataDir;
+        internal string ClientCertThumbprint;   // client_cert_thumbprint — mTLS на релее
         internal int PageSize = C.PageSizeDefault;
         internal int PageMin = C.PageMinDefault;
         internal int TactSeconds = C.TactSecondsDefault;
         internal int ChunkMb = C.ChunkMbDefault;
         internal string LogDir = @"C:\1c\logs";
+
+        // Режим упаковки по конфигу: pubkey не задан → plain (пилот).
+        internal bool Plain { get { return string.IsNullOrEmpty(RecipientPubkey); } }
 
         internal static Cfg Load(string path)
         {
@@ -69,13 +79,16 @@ namespace PacketAgent
             c.BaseId = Get(kv, "base_id", true);
             c.ReceiverUrl = Get(kv, "receiver_url", true).TrimEnd('/');
             c.Token = Get(kv, "token", true);
-            c.RecipientPubkey = Get(kv, "recipient_pubkey", true);
+            // recipient_pubkey пуст/отсутствует → plain-режим (пилот 06.08, AGENT_TZ §2):
+            // zstd остаётся, снимается только age. Задан — упаковка zstd+age, как прежде.
+            // Pubkey может прийти и с сервера (/agent/config) — тогда режим сам станет age.
+            c.RecipientPubkey = Get(kv, "recipient_pubkey", false) ?? "";
             c.OdataUrl = Get(kv, "odata_url", true).TrimEnd('/');
             c.OdataUser = Get(kv, "odata_user", true);
             c.OdataPassword = Get(kv, "odata_password", true);
             c.DataDir = Get(kv, "data_dir", true);
-            c.PageSize = GetInt(kv, "page_size", c.PageSize);
-            c.PageMin = GetInt(kv, "page_min", c.PageMin);
+            c.ClientCertThumbprint = Get(kv, "client_cert_thumbprint", false);
+            c.PageSize = GetInt(kv, "page_size", c.PageSize);            c.PageMin = GetInt(kv, "page_min", c.PageMin);
             c.TactSeconds = GetInt(kv, "tact_seconds", c.TactSeconds);
             c.ChunkMb = Math.Max(C.ChunkMbMin, Math.Min(C.ChunkMbMax, GetInt(kv, "chunk_mb", c.ChunkMb)));
             c.LogDir = Get(kv, "log_dir", false) ?? c.LogDir;
@@ -99,6 +112,65 @@ namespace PacketAgent
             if (kv.TryGetValue(key, out v) && int.TryParse(v, NumberStyles.Integer,
                     CultureInfo.InvariantCulture, out n) && n > 0) return n;
             return dflt;
+        }
+    }
+
+    // ============================ mTLS: клиентский сертификат ===================
+    // Решение владельца 06.08: релей (HAProxy) проверяет клиентский сертификат
+    // агента по нашему CA 1c-packet-ca; без сертификата запрос не проходит вовсе.
+    // Bearer-токен остаётся вторым фактором. Сертификат импортирует установщик
+    // (client.pfx из комплекта -> LocalMachine\My), в agent.ini пишет отпечаток —
+    // certutil печатает его с пробелами и в верхнем регистре, при сравнении
+    // нормализуем (пробелы долой, регистр вверх).
+    internal static class Mtls
+    {
+        internal static X509Certificate2 Current;   // null — сетевые режимы не стартовали
+
+        // Поиск по отпечатку: LocalMachine\My, затем CurrentUser\My. null — не нашёл.
+        internal static X509Certificate2 Find(string thumbprint)
+        {
+            string norm = (thumbprint ?? "").Replace(" ", "").ToUpperInvariant();
+            if (norm.Length == 0) return null;
+            foreach (StoreLocation loc in new[] { StoreLocation.LocalMachine, StoreLocation.CurrentUser })
+            {
+                X509Store store = null;
+                try
+                {
+                    store = new X509Store(StoreName.My, loc);
+                    store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+                    X509Certificate2Collection found = store.Certificates.Find(
+                        X509FindType.FindByThumbprint, norm, false);
+                    if (found.Count > 0) return found[0];
+                }
+                catch (Exception e)
+                {
+                    Log.Line("хранилище My (" + loc + ") недоступно: " + e.Message);
+                }
+                finally
+                {
+                    if (store != null) store.Close();
+                }
+            }
+            return null;
+        }
+
+        // Проверка при старте сетевых режимов. null и сообщение — конфиг/хранилище
+        // не готовы; диагностика называет причину ДО похода в сеть.
+        internal static string LoadFor(string thumbprint)
+        {
+            if (string.IsNullOrEmpty((thumbprint ?? "").Replace(" ", "")))
+                return "в agent.ini нет client_cert_thumbprint — mTLS на релее обязателен "
+                       + "(сертификат импортирует установщик из client.pfx комплекта)";
+            X509Certificate2 cert = Find(thumbprint);
+            if (cert == null)
+                return "сертификат с отпечатком " + thumbprint + " не найден ни в "
+                       + "LocalMachine\\My, ни в CurrentUser\\My — переустановите комплект";
+            if (!cert.HasPrivateKey)
+                return "сертификат " + cert.Thumbprint + " импортирован БЕЗ закрытого ключа "
+                       + "(субъект: " + cert.Subject + ") — mTLS-рукопожатие невозможно, "
+                       + "импортируйте client.pfx заново";
+            Current = cert;
+            return null;
         }
     }
 
@@ -1133,6 +1205,10 @@ namespace PacketAgent
 
         internal Receiver(Cfg cfg) { _cfg = cfg; }
 
+        // Единственная фабрика HTTPS-запросов к приёмнику: config, manifest, chunks,
+        // status — все идут отсюда, клиентский сертификат mTLS прикрепляется здесь
+        // же (OData к локальному IIS идёт по HTTP и сертификата не требует, поэтому
+        // OData.NewRequest его сознательно не получает).
         // 5xx/таймаут/обрыв — экспоненциальная пауза и повтор; 4xx — код приёмника
         // пробрасывается наверх (bad_auth/stale_seq/... виден в логе).
         internal byte[] Request(string method, string path, byte[] body)
@@ -1145,6 +1221,8 @@ namespace PacketAgent
                     HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
                     req.Method = method;
                     req.Headers["Authorization"] = "Bearer " + _cfg.Token;
+                    if (Mtls.Current != null)
+                        req.ClientCertificates.Add(Mtls.Current);
                     req.Timeout = C.ReceiverTimeoutSeconds * 1000;
                     req.ReadWriteTimeout = C.ReceiverTimeoutSeconds * 1000;
                     if (body != null)
@@ -1163,6 +1241,16 @@ namespace PacketAgent
                 }
                 catch (WebException we)
                 {
+                    // Сервер отверг клиентский сертификат на рукопожатии: это НЕ
+                    // сетевая ошибка и не 5xx — повторять бессмысленно, а для разбора
+                    // отличие важно, поэтому отдельная строка и отдельный код.
+                    if (we.Status == WebExceptionStatus.SecureChannelFailure)
+                    {
+                        OData.CloseResp(we);
+                        Log.Line("сервер не принял клиентский сертификат "
+                                 + "(TLS handshake failure): " + we.Message);
+                        throw new ReceiverException("mtls_handshake_failure", 0);
+                    }
                     HttpWebResponse resp = we.Response as HttpWebResponse;
                     if (resp != null && (int)resp.StatusCode < 500)
                     {
@@ -1293,6 +1381,11 @@ namespace PacketAgent
             }
         }
 
+        // Действующий режим упаковки: pubkey (из agent.ini или присланный сервером)
+        // нет → plain (пилот): zstd остаётся, age снимается.
+        bool PlainMode { get { return string.IsNullOrEmpty(Pubkey); } }
+        string ModeName { get { return PlainMode ? "plain (пилот)" : "age"; } }
+
         // ---------------- zstd / age (штатные CLI рядом с агентом) --------------
         static void RunTool(string exe, string args)
         {
@@ -1309,14 +1402,23 @@ namespace PacketAgent
         }
 
         // Имя файла чанка в очереди — как _chunk_filename приёмника: служебные
-        // чанки (metadata/gone) без вставки «.csv».
-        static string ChunkFileName(string name)
+        // чанки (metadata/gone) без вставки «.csv». Plain-режим (пилот): те же
+        // имена без суффикса «.age» — приёмник различает режимы по магии файла
+        // (age-encryption.org/ vs zstd 28 B5 2F FD), имена чанков в манифесте
+        // и в missing не меняются.
+        string ChunkFileName(string name)
         {
-            return name + (name == "metadata" || name == "gone" || name == "index"
-                ? ".zst.age" : ".csv.zst.age");
+            bool service = name == "metadata" || name == "gone" || name == "index";
+            return name + (service ? ".zst" : ".csv.zst") + (PlainMode ? "" : ".age");
         }
 
-        // plain -> zstd -3 -> age -r recipient (контракт §3-4: compress -> encrypt).
+        // Тело манифеста для PUT: plain — сам manifest.json, age — manifest.json.age.
+        string ManifestBodyPath(string queueDir)
+        {
+            return Path.Combine(queueDir, PlainMode ? "manifest.json" : "manifest.json.age");
+        }
+
+        // plain: zstd -3; age: zstd -3 -> age -r recipient (контракт §3-4).
         Dictionary<string, object> WriteChunk(string queueDir, string name, byte[] plain)
         {
             string plainDir = Path.Combine(queueDir, "plain");
@@ -1328,16 +1430,26 @@ namespace PacketAgent
             RunTool(Path.Combine(_exeDir, "zstd.exe"),
                     "-3 -q -f -o \"" + fz + "\" \"" + fp + "\"");
             string enc = Path.Combine(queueDir, ChunkFileName(name));
-            RunTool(Path.Combine(_exeDir, "age.exe"),
-                    "-r " + Pubkey + " -o \"" + enc + "\" \"" + fz + "\"");
+            if (PlainMode)
+            {
+                if (File.Exists(enc)) File.Delete(enc);
+                File.Move(fz, enc);
+            }
+            else
+            {
+                RunTool(Path.Combine(_exeDir, "age.exe"),
+                        "-r " + Pubkey + " -o \"" + enc + "\" \"" + fz + "\"");
+                TryDelete(fz);
+            }
             byte[] encBytes = File.ReadAllBytes(enc);
             Dictionary<string, object> e = new Dictionary<string, object>();
             e["name"] = name;
             e["bytes_plain"] = plain.Length;
             e["sha256_plain"] = EntityIndex.HashHex(plain);
+            // В plain-режиме sha256_enc/bytes_enc — от zst-файла (как пришёл).
             e["bytes_enc"] = encBytes.Length;
             e["sha256_enc"] = EntityIndex.HashHex(encBytes);
-            TryDelete(fp); TryDelete(fz);
+            TryDelete(fp);
             return e;
         }
 
@@ -1390,8 +1502,21 @@ namespace PacketAgent
                 Array.Sort(pending, StringComparer.Ordinal);
                 if (pending.Length > 0)
                 {
-                    Log.Line("незавершённый пакет " + Path.GetFileName(pending[0]) + " — довозка");
-                    return ResumePackage(pending[0]);
+                    // Режим очереди виден по суффиксу .age (манифест или любой чанк —
+                    // обрыв мог случиться между записью manifest.json и шагом age).
+                    // Собрана в ДРУГОМ режиме (конфиг сменили между тактами) — молча не
+                    // догружаем: снимаем и пересобираем пакет заново этим же тактом.
+                    bool queueIsAge = File.Exists(Path.Combine(pending[0], "manifest.json.age"))
+                        || Directory.GetFiles(pending[0], "*.age").Length > 0;
+                    if (queueIsAge != PlainMode)
+                    {
+                        Log.Line("незавершённый пакет " + Path.GetFileName(pending[0]) + " — довозка");
+                        return ResumePackage(pending[0]);
+                    }
+                    Log.Line("очередь " + Path.GetFileName(pending[0]) + " собрана в режиме "
+                             + (queueIsAge ? "age" : "plain") + ", а конфиг теперь " + ModeName
+                             + " — очередь снята, пакет пересобирается заново");
+                    DropQueue(pending[0]);
                 }
             }
 
@@ -1701,10 +1826,10 @@ namespace PacketAgent
             m["chunks"] = chunkEntries.ToArray();
 
             File.WriteAllText(Path.Combine(queueDir, "manifest.json"), Json.Ser(m), Fmt.NoBom);
-            string mAge = Path.Combine(queueDir, "manifest.json.age");
-            RunTool(Path.Combine(_exeDir, "age.exe"),
-                    "-r " + Pubkey + " -o \"" + mAge + "\" \""
-                    + Path.Combine(queueDir, "manifest.json") + "\"");
+            if (!PlainMode)
+                RunTool(Path.Combine(_exeDir, "age.exe"),
+                        "-r " + Pubkey + " -o \"" + Path.Combine(queueDir, "manifest.json.age")
+                        + "\" \"" + Path.Combine(queueDir, "manifest.json") + "\"");
 
             // План обновления индекса (К2) — применится только после applied/verified.
             Dictionary<string, object> plan = new Dictionary<string, object>();
@@ -1725,7 +1850,8 @@ namespace PacketAgent
 
             _state.Seq = seq;   // seq растёт только на отправленных пакетах
             _state.Save();
-            Log.Line("пакет " + pkgShort + " kind=" + kind + ": сущностей " + results.Count
+            Log.Line("пакет " + pkgShort + " kind=" + kind + ", режим " + ModeName
+                     + ": сущностей " + results.Count
                      + ", gone " + gone.Count + ", чанков " + chunkEntries.Count
                      + (sendMeta ? ", +metadata" : ""));
             return UploadAndFinish(pkgShort, queueDir);
@@ -1734,10 +1860,23 @@ namespace PacketAgent
         // Отправка: манифест → чанки (повторы допустимы) → status до verified/applied.
         bool UploadAndFinish(string pkgShort, string queueDir)
         {
-            string mAge = Path.Combine(queueDir, "manifest.json.age");
+            string bodyPath = ManifestBodyPath(queueDir);
+            if (!File.Exists(bodyPath))
+            {
+                if (PlainMode)
+                {
+                    Log.Line("очередь " + pkgShort + " битая: нет manifest.json — снята");
+                    DropQueue(queueDir);
+                    return false;
+                }
+                // age-режим: .age не успел собраться (обрыв) — собираем из manifest.json.
+                RunTool(Path.Combine(_exeDir, "age.exe"),
+                        "-r " + Pubkey + " -o \"" + bodyPath + "\" \""
+                        + Path.Combine(queueDir, "manifest.json") + "\"");
+            }
             try
             {
-                _rx.PutManifest(pkgShort, File.ReadAllBytes(mAge));
+                _rx.PutManifest(pkgShort, File.ReadAllBytes(bodyPath));
             }
             catch (ReceiverException e)
             {
@@ -1892,10 +2031,10 @@ namespace PacketAgent
                 if (e.Code == "no_such_package")
                 {
                     // Приёмник пакета не знает (не доехал манифест): шлём сначала.
-                    string mAge = Path.Combine(queueDir, "manifest.json.age");
-                    if (File.Exists(mAge))
+                    string bodyPath = ManifestBodyPath(queueDir);
+                    if (File.Exists(bodyPath))
                     {
-                        try { _rx.PutManifest(pkgShort, File.ReadAllBytes(mAge)); }
+                        try { _rx.PutManifest(pkgShort, File.ReadAllBytes(bodyPath)); }
                         catch (ReceiverException e2)
                         {
                             if (e2.Code.IndexOf("stale_seq", StringComparison.Ordinal) >= 0)
@@ -1907,7 +2046,7 @@ namespace PacketAgent
                     }
                     else
                     {
-                        Log.Line("довозка: нет manifest.json.age — очередь битая, снята");
+                        Log.Line("довозка: нет " + Path.GetFileName(bodyPath) + " — очередь битая, снята");
                         DropQueue(queueDir);
                         return false;
                     }
@@ -1956,9 +2095,10 @@ namespace PacketAgent
             m["metadata"] = md;
             m["chunks"] = chunkEntries.ToArray();
             File.WriteAllText(Path.Combine(queueDir, "manifest.json"), Json.Ser(m), Fmt.NoBom);
-            RunTool(Path.Combine(_exeDir, "age.exe"),
-                    "-r " + Pubkey + " -o \"" + Path.Combine(queueDir, "manifest.json.age")
-                    + "\" \"" + Path.Combine(queueDir, "manifest.json") + "\"");
+            if (!PlainMode)
+                RunTool(Path.Combine(_exeDir, "age.exe"),
+                        "-r " + Pubkey + " -o \"" + Path.Combine(queueDir, "manifest.json.age")
+                        + "\" \"" + Path.Combine(queueDir, "manifest.json") + "\"");
 
             Dictionary<string, object> plan = new Dictionary<string, object>();
             plan["config_version"] = _state.ConfigVersion;
@@ -1969,7 +2109,7 @@ namespace PacketAgent
 
             _state.Seq = seq;
             _state.Save();
-            Log.Line("smoke: пакет " + pkgShort + " kind=meta — отправка");
+            Log.Line("smoke: пакет " + pkgShort + " kind=meta, режим " + ModeName + " — отправка");
             bool ok = UploadAndFinish(pkgShort, queueDir);
             Log.Line(ok ? "smoke: доставка подтверждена приёмником"
                         : "smoke: доставка НЕ подтверждена");
@@ -2058,8 +2198,18 @@ namespace PacketAgent
             try
             {
                 Cfg cfg = LoadCfg(exeDir);
+                string certErr = Mtls.LoadFor(cfg.ClientCertThumbprint);
+                if (certErr != null)
+                {
+                    Log.Line("mTLS: " + certErr);
+                    Console.Error.WriteLine("packet-agent: mTLS: " + certErr);
+                    return 2;   // приёмник не пропустит, но причина названа до сети
+                }
+                Log.Line("mTLS: клиентский сертификат " + Mtls.Current.Thumbprint
+                         + " (" + Mtls.Current.Subject + ")");
                 Log.Line("packet-agent " + C.Version + " — демон тактов, база "
-                         + cfg.BaseId + ", данные " + cfg.DataDir);
+                         + cfg.BaseId + ", данные " + cfg.DataDir
+                         + ", упаковка " + (cfg.Plain ? "plain (пилот)" : "age"));
                 int failures = 0;
                 while (true)
                 {
@@ -2098,6 +2248,13 @@ namespace PacketAgent
             {
                 Console.Error.WriteLine("smoke: конфиг: " + e.Message);
                 return 1;
+            }
+            string certErr = Mtls.LoadFor(cfg.ClientCertThumbprint);
+            if (certErr != null)
+            {
+                Log.Line("smoke: mTLS: " + certErr);
+                Console.Error.WriteLine("smoke: mTLS: " + certErr);
+                return 2;
             }
             try
             {

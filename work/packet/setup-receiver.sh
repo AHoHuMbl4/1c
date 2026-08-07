@@ -20,6 +20,27 @@ install -m 755 "$REPO/work/packet/bin/age/age" /opt/1c-packet/bin/age
 install -m 755 "$REPO/work/packet/bin/age/age-keygen" /opt/1c-packet/bin/age-keygen
 /opt/1c-packet/bin/age --version
 
+echo "== CA клиентских сертификатов (mTLS, контракт §8) — один раз"
+if [ ! -f /etc/1c-packet-ca.key ]; then
+  openssl genrsa -out /etc/1c-packet-ca.key 2048
+  chown root:1c-secrets /etc/1c-packet-ca.key && chmod 640 /etc/1c-packet-ca.key
+  openssl req -x509 -new -key /etc/1c-packet-ca.key -days 3650 -sha256 \
+    -subj "/CN=1c-packet-ca" \
+    -addext "basicConstraints=critical,CA:TRUE" \
+    -addext "keyUsage=critical,keyCertSign,cRLSign" \
+    -out /etc/1c-packet-ca.crt
+  chmod 644 /etc/1c-packet-ca.crt
+fi
+install -d -m 755 "$REPO/work/packet/ca"
+install -m 644 /etc/1c-packet-ca.crt "$REPO/work/packet/ca/1c-packet-ca.crt"
+echo "   CA-гриф для FreeBSD: $REPO/work/packet/ca/1c-packet-ca.crt"
+
+echo "== комплект $BASE с клиентским сертификатом (после CA)"
+su - claudedev -c "cd $REPO && \
+  PACKET_AGE_BIN=/opt/1c-packet/bin/age PACKET_AGE_KEYGEN_BIN=/opt/1c-packet/bin/age-keygen \
+  python3 ubuntu/packet/packet_kit.py $BASE \
+  --dsn 'host=127.0.0.1 port=7890 user=postgres dbname=ut_test'"
+
 echo "== identity и файл баз"
 install -m 640 -o root -g 1c-secrets "$REPO/work/packet/kit/$BASE/age.key" "/etc/1c-packet-age-$BASE.key"
 python3 - "$REPO/work/packet/kit/$BASE/bases-entry.json" << 'EOF'
@@ -59,5 +80,14 @@ sleep 2
 systemctl is-active 1c-packet-server
 curl -s --max-time 5 http://127.0.0.1:6090/health && echo
 echo "-- сквозная (домен → HAProxy → туннель → приёмник):"
-curl -s --max-time 15 https://1c-gate.timpul.ru/health && echo
+if curl -s --max-time 15 https://1c-gate.timpul.ru/health; then echo; else
+  echo "   (соединение отвергнуто без клиентского сертификата — так и задумано при mTLS)"
+fi
+if [ -f "$REPO/work/packet/kit/$BASE/client.crt" ]; then
+  echo "-- сквозная с клиентским сертификатом $BASE:"
+  curl -s --max-time 15 --cert "$REPO/work/packet/kit/$BASE/client.crt" \
+       --key "$REPO/work/packet/kit/$BASE/client-key.pem" \
+       https://1c-gate.timpul.ru/health && echo || \
+  echo "   (отказ — mTLS на релее ещё не включён: задание сессии FreeBSD)"
+fi
 echo "== готово. Комплект для Windows: $REPO/work/packet/kit/$BASE/packet-setup.json"

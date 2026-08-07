@@ -48,6 +48,11 @@ RO_ROLE = _ro_env if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _ro_env) else "sere
 
 # Чанки со служебными именами хранятся без вставки «.csv» (контракт §2).
 _SERVICE_CHUNKS = ("metadata", "gone", "index")
+# Режим файла — по магии, а не по конфигу (пилот без age-слоя 06.08); те же
+# константы, что у packet_server, — apply самостоятельный процесс, форма
+# хранения общая по контракту (шапка packet_server.py).
+_AGE_MAGIC = b"age-encryption.org/"
+_ZSTD_MAGIC = b"\x28\xb5\x2f\xfd"
 # Операции сущности, при которых данные заливаются чанками (остальные — gone_only).
 _DATA_OPS = ("full", "full_entity", "delta")
 
@@ -58,8 +63,24 @@ def _log(msg: str) -> None:
     sys.stderr.write("apply %s\n" % msg)
 
 
-def _chunk_filename(name: str) -> str:
-    return name + (".zst.age" if name in _SERVICE_CHUNKS else ".csv.zst.age")
+def _chunk_filenames(name: str) -> tuple[str, str]:
+    """Имена хранения чанка: (age-форма, plain-форма) — как у packet_server."""
+    base = name + (".zst" if name in _SERVICE_CHUNKS else ".csv.zst")
+    return base + ".age", base
+
+
+def _sniff(path: str) -> str:
+    """Режим файла по магии: 'age' | 'zstd' | 'other' (как у packet_server)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(len(_AGE_MAGIC))
+    except OSError:
+        return "other"
+    if head.startswith(_AGE_MAGIC):
+        return "age"
+    if head.startswith(_ZSTD_MAGIC):
+        return "zstd"
+    return "other"
 
 
 def _read_json(path: str, default):
@@ -160,15 +181,28 @@ class Quarantine(RuntimeError):
 
 
 def _decrypt_chunks(base_id: str, pkg_id: str, manifest: dict, tmp: str) -> dict:
-    """Все чанки пакета: age → zstd → открытый файл во временном каталоге."""
+    """Все чанки пакета: (age →) zstd → открытый файл во временном каталоге.
+
+    Режим каждого чанка — по магии: age расшифровывается, plain zst идёт сразу
+    в распаковку (пилот без age-слоя 06.08)."""
     identity = (BASES.get(base_id) or {}).get("identity", "")
     out = {}
     for e in manifest["chunks"]:
         name = e["name"]
-        enc = os.path.join(_pkg_dir(base_id, pkg_id), _chunk_filename(name))
+        enc = None
+        for fn in _chunk_filenames(name):
+            p = os.path.join(_pkg_dir(base_id, pkg_id), fn)
+            if os.path.exists(p):
+                enc = p
+                break
+        if enc is None:
+            raise RuntimeError("чанк не найден на диске: %s" % name)
         dec = os.path.join(tmp, name + ".zst")
+        if _sniff(enc) == "age":
+            C.decrypt_file(enc, dec, identity)
+        else:
+            dec = enc
         plain = os.path.join(tmp, name + (".csv" if name not in _SERVICE_CHUNKS else ""))
-        C.decrypt_file(enc, dec, identity)
         with open(plain, "wb") as fh:
             p = subprocess.run([ZSTD_BIN, "-d", "-q", "-c", dec],
                                stdout=fh, stderr=subprocess.PIPE)
