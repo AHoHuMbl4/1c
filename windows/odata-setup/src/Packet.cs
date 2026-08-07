@@ -224,8 +224,7 @@ namespace Oc1c
                 {
                     // Без этого вопроса проба шла с пустым паролем и крутила цикл
                     // вхолостую (прогон владельца 07.08).
-                    Console.Write("       Пароль пользователя «" + probeUser + "» (пусто — если без пароля), Enter: ");
-                    o.ReaderPassword = ReadPassword();
+                    o.ReaderPassword = Win.ReadPassword("Пароль пользователя «" + probeUser + "» (пусто — если без пароля)").Trim();
                     Log.AddSecret(o.ReaderPassword);
                     Console.WriteLine("       Проверяю доступ к базе… (может занять до минуты)");
                     if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
@@ -328,20 +327,6 @@ namespace Oc1c
                 }
                 catch (Exception e) { Log.Warn("не удалось удалить " + names[i] + ": " + e.Message); }
             }
-        }
-
-        // Ввод пароля без эха (звёздочки), .NET 4.
-        static string ReadPassword()
-        {
-            StringBuilder sb = new StringBuilder();
-            while (true)
-            {
-                ConsoleKeyInfo k = Console.ReadKey(true);
-                if (k.Key == ConsoleKey.Enter) { Console.WriteLine(); break; }
-                if (k.Key == ConsoleKey.Backspace) { if (sb.Length > 0) { sb.Length--; Console.Write("\b \b"); } }
-                else if (!char.IsControl(k.KeyChar)) { sb.Append(k.KeyChar); Console.Write("*"); }
-            }
-            return sb.ToString();
         }
 
         // ============================================================ префлайт-составляющие

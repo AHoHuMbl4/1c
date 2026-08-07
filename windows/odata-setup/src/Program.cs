@@ -5,6 +5,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text;
+using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
 namespace Oc1c
@@ -213,18 +214,17 @@ namespace Oc1c
                 for (int i = 0; i < found.Count; i++) Log.Con("         " + (i + 1) + ") " + found[i]);
                 int num = 0;
                 {
-                    // Вводится НОМЕР из списка, а не название/путь (по прогону 07.08
-                    // владелец вводил иначе — подсказка была неявной). Пустой/кривой
-                    // ввод — переспрашиваем, а не умираем.
-                    Console.Write("       Введите НОМЕР базы из списка (1-" + found.Count + ") и нажмите Enter: ");
-                    string ans = Console.ReadLine();
-                    if (!int.TryParse(ans == null ? "" : ans.Trim(), out num) || num < 1 || num > found.Count)
+                    // Крутим вопрос, пока не выбрано верно или отмена: пользователь
+                    // может ввести название, пустое, буквы (прогоны 07.08).
+                    while (true)
                     {
-                    Console.Write("       Нужен номер цифрой — от 1 до " + found.Count + ", и Enter: ");
-                    ans = Console.ReadLine();
-                    if (!int.TryParse(ans == null ? "" : ans.Trim(), out num) || num < 1 || num > found.Count)
-                    { Log.Err("некорректный выбор"); return EXIT_ARGS; }
-                }
+                        Console.Write("       Введите НОМЕР базы из списка (1-" + found.Count + ") и нажмите Enter (Q — отмена): ");
+                        string ans = (Console.ReadLine() ?? "").Trim();
+                        if (string.Equals(ans, "q", StringComparison.OrdinalIgnoreCase))
+                        { Log.Err("выбор базы отменён пользователем"); return EXIT_ARGS; }
+                        if (int.TryParse(ans, out num) && num >= 1 && num <= found.Count) break;
+                        Console.WriteLine("       Нужен номер цифрой от 1 до " + found.Count + " (не название). Вы ввели: «" + ans + "»");
+                    }
                 }
                 o.BasePath = found[num - 1];
                 Log.File("выбрана база: " + o.BasePath);
@@ -323,11 +323,15 @@ namespace Oc1c
                 // другой базой — в интерактиве спрашиваем новый, а не умираем (07.08).
                 if (!o.Unattended && !Console.IsInputRedirected && !o.Force)
                 {
-                    Console.Write("       Алиас «" + o.Alias + "» занят другой базой. Введите другой алиас публикации (латиницей, например «" +
-                                  SafeAlias(bref) + "»): ");
-                    string na = (Console.ReadLine() ?? "").Trim().Trim('/');
-                    if (na.Length == 0) return EXIT_STEP;
-                    o.Alias = na; o.Dir = @"C:\inetpub\" + na;
+                    while (true)
+                    {
+                        Console.Write("       Алиас «" + o.Alias + "» занят другой базой. Введите другой алиас (латиницей, например «" +
+                                      SafeAlias(bref) + "») или Q для отмены: ");
+                        string na = (Console.ReadLine() ?? "").Trim().Trim('/');
+                        if (string.Equals(na, "q", StringComparison.OrdinalIgnoreCase)) return EXIT_STEP;
+                        if (Regex.IsMatch(na, "^[A-Za-z0-9_-]+$")) { o.Alias = na; o.Dir = @"C:\inetpub\" + na; break; }
+                        Console.WriteLine("       Алиас — только латинские буквы, цифры, - и _. Вы ввели: «" + na + "»");
+                    }
                     if (!Steps.Publish(plat, bref, o.Site, o.Alias, o.Dir, o.Force, out detail)) return EXIT_STEP;
                 }
                 else return EXIT_STEP;
@@ -431,9 +435,25 @@ namespace Oc1c
             }
             else
             {
-                comOk = Steps.SetOdataComposition(plat, bref, o.AdminUser, o.AdminPassword, scopeKeys, true,
-                                                  o.ReaderUser, out cur, out added, out roles);
-                if (!comOk) return EXIT_STEP;
+                // Интерактив: неверный пароль админа 1С — не смерть, а повторный ввод
+                // (прогон владельца 07.08: «ввёл неверный пароль и программа закрылась»).
+                int attempts = 0;
+                while (true)
+                {
+                    comOk = Steps.SetOdataComposition(plat, bref, o.AdminUser, o.AdminPassword, scopeKeys, true,
+                                                      o.ReaderUser, out cur, out added, out roles);
+                    if (comOk) break;
+                    attempts++;
+                    if (o.Unattended || Console.IsInputRedirected || attempts >= 3) return EXIT_STEP;
+                    Console.Write("       Не получилось. Enter — ввести пароль ещё раз, Q — прервать: ");
+                    string a = (Console.ReadLine() ?? "").Trim();
+                    if (string.Equals(a, "q", StringComparison.OrdinalIgnoreCase)) return EXIT_STEP;
+                    Console.Write("       Пользователь 1С с полными правами (Enter = " + o.AdminUser + "): ");
+                    string u2 = (Console.ReadLine() ?? "").Trim();
+                    if (u2.Length > 0) o.AdminUser = u2;
+                    o.AdminPassword = Win.ReadPassword("Пароль пользователя " + o.AdminUser + " (ввод скрыт)");
+                    Log.AddSecret(o.AdminPassword);
+                }
                 if (cur >= 0) Log.Info("состав до запуска: " + cur + " объектов");
                 if (added > 0) Log.Ok("состав OData задан: " + added + " объектов");
                 else if (!Ctx.DryRun) Log.Skip("состав не менялся");
@@ -617,8 +637,17 @@ namespace Oc1c
             Log.Con("ВАШ ВЫБОР:");
             Log.Con("    1) Ввести пароль — состав задаст программа.");
             Log.Con("    2) Задам состав сам — туториал + база программой не меняется.");
-            Console.Write("       Ваш выбор [1/2]: ");
-            string ch = (Console.ReadLine() ?? "").Trim();
+            string ch;
+            // Мусорный ввод раньше молча означал «вариант 2» (прогоны 07.08) —
+            // крутим вопрос до осмысленного ответа.
+            while (true)
+            {
+                Console.Write("       Ваш выбор [1/2, Q — отмена]: ");
+                ch = (Console.ReadLine() ?? "").Trim();
+                if (ch == "1" || ch == "2") break;
+                if (string.Equals(ch, "q", StringComparison.OrdinalIgnoreCase)) { Log.Skip("отмена — состав остаётся ручным (вариант 2)"); return false; }
+                Console.WriteLine("       Ответьте 1 или 2 (цифрой). Вы ввели: «" + ch + "»");
+            }
             Log.File("выбор администратора: " + ch);
             if (ch != "1")
             {
