@@ -85,6 +85,10 @@ namespace Oc1c
 
     internal static class PacketSteps
     {
+        // Блок поднял канал пакетов — Report тогда не печатает «передайте на Ubuntu»:
+        // сервер получает всё через приёмник сам (решение владельца 07.08).
+        internal static bool Installed;
+
         // Коды ошибок приёмника (контракт §8) -> понятная строка (ТЗ §6).
         static readonly string[,] ReceiverErrors = new string[,]
         {
@@ -269,6 +273,8 @@ namespace Oc1c
             if (!Ctx.DryRun && File.Exists(stateFile))
             {
                 Log.Skip("повторная установка: канал уже доказан прежним smoke (есть " + stateFile + ") — довозка штатным демоном");
+                WipeKitSecrets(kit, setupPath, ps);
+                Installed = true;
                 return Program.EXIT_OK;
             }
             if (Ctx.DryRun)
@@ -277,7 +283,35 @@ namespace Oc1c
                 Log.Ok("блок агента: префлайт пройден (режим проверки — ничего не менялось)");
                 return Program.EXIT_OK;
             }
-            return Smoke(packetDir) ? Program.EXIT_OK : Program.EXIT_PACKET;
+            bool smoked = Smoke(packetDir);
+            if (smoked) { WipeKitSecrets(kit, setupPath, ps); Installed = true; }
+            return smoked ? Program.EXIT_OK : Program.EXIT_PACKET;
+        }
+
+        // Секреты комплекта после установки на машине не нужны: токен и пароль pfx
+        // живут в agent.ini под ACL (решение владельца 07.08). Стираем: сам
+        // packet-setup.json и остатки клиентского сертификата (pfx/crt/key).
+        static void WipeKitSecrets(string kit, string setupPath, PacketSetup ps)
+        {
+            try
+            {
+                if (File.Exists(setupPath))
+                {
+                    File.Delete(setupPath);
+                    Log.Ok("packet-setup.json удалён (токен теперь только в agent.ini под ACL)");
+                }
+            }
+            catch (Exception e) { Log.Warn("не удалось удалить packet-setup.json: " + e.Message); }
+            string[] names = { ps.ClientPfx, "client.crt", "client-key.pem" };
+            for (int i = 0; i < names.Length; i++)
+            {
+                try
+                {
+                    string p = Path.Combine(kit, names[i]);
+                    if (File.Exists(p)) { File.Delete(p); Log.Ok(names[i] + " удалён после импорта"); }
+                }
+                catch (Exception e) { Log.Warn("не удалось удалить " + names[i] + ": " + e.Message); }
+            }
         }
 
         // ============================================================ префлайт-составляющие

@@ -721,6 +721,16 @@ namespace Oc1c
             h.AppendLine("# Платформа: " + p.Version + " (" + (p.X86 ? "x86" : "x64") + "), пул IIS: " + pool);
 
             Log.Con("");
+            if (PacketSteps.Installed)
+            {
+                // Канал пакетов поднят: сервер получает всё через приёмник сам
+                // (конфиг — GET /agent/config), передавать ничего не нужно
+                // (решение владельца 07.08). Секреты комплекта с машины стёрты.
+                Log.Con("КАНАЛ ПАКЕТОВ ПОДНЯТ: сервер Ubuntu получает всё через 1c-gate.timpul.ru сам,");
+                Log.Con("передавать ничего не нужно. Секреты комплекта с машины стёрты (agent.ini — под ACL).");
+            }
+            else
+            {
             Log.Con("ПЕРЕДАТЬ АДМИНИСТРАТОРУ UBUNTU:");
             Log.Con(h.ToString());
 
@@ -735,6 +745,7 @@ namespace Oc1c
                 }
             }
             catch (Exception e) { Log.File("не удалось сохранить connection-файл: " + e.Message); }
+            }
 
             Log.Con("Полный лог: " + Log.Path);
         }
