@@ -221,11 +221,18 @@ namespace Oc1c
             catch { return false; }
         }
 
+        // Вид реестра под разрядность ОС: Registry64 на 32-битной Windows не
+        // поддержан (бросает) — там правильный вид Default (матрица ОС 07.08).
+        public static RegistryView RegView()
+        {
+            return Environment.Is64BitOperatingSystem ? RegistryView.Registry64 : RegistryView.Default;
+        }
+
         public static string RegStr(string subKey, string name)
         {
             try
             {
-                using (RegistryKey k = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64).OpenSubKey(subKey))
+                using (RegistryKey k = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegView()).OpenSubKey(subKey))
                 {
                     if (k == null) return null;
                     object v = k.GetValue(name);
@@ -251,7 +258,7 @@ namespace Oc1c
             why = "";
             try
             {
-                using (RegistryKey b = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64))
+                using (RegistryKey b = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegView()))
                 {
                     if (b.OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending") != null)
                     { why = "Component Based Servicing"; return true; }

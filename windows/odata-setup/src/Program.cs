@@ -751,7 +751,7 @@ namespace Oc1c
         {
             try
             {
-                using (RegistryKey k = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, RegistryView.Registry64)
+                using (RegistryKey k = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, Win.RegView())
                         .OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\RunOnce", true))
                 {
                     if (k != null) { k.SetValue("Setup1COData", SanitizedCmdLine(true)); Log.Ok("после перезагрузки настройка продолжится автоматически (RunOnce)"); }

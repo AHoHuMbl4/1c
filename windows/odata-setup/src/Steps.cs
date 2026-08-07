@@ -280,19 +280,39 @@ namespace Oc1c
             catch { return false; }
         }
 
-        // Путь Windows Server: роль Web-Server через ServerManager.
+        // Server Core: консоли управления (GUI) нет и не ставится — её пропускаем.
+        static bool IsServerCore()
+        {
+            try
+            {
+                object v = Microsoft.Win32.Registry.GetValue(
+                    @"HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion", "InstallationType", "");
+                return string.Equals((v ?? "").ToString(), "Server Core", StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        // Путь Windows Server (2016/2019/2022): роли через ServerManager. Проверяем
+        // не только Web-Server: роль может стоять без ISAPI/CGI — тогда 1С не отвечает.
         static int EnsureIisServer(out string detail)
         {
             detail = "";
-            ExecResult sv = Ps.Run("try{ Import-Module ServerManager -EA Stop; (Get-WindowsFeature Web-Server).Installed }catch{ 'NOMODULE' }", false, 120000, null);
-            if (sv.Ok && sv.StdOut.IndexOf("True", StringComparison.OrdinalIgnoreCase) >= 0)
-            { detail = "Windows Server: роль Web-Server уже установлена"; return 0; }
-            if (sv.Ok && sv.StdOut.IndexOf("False", StringComparison.OrdinalIgnoreCase) >= 0)
+            bool core = IsServerCore();
+            string feats = core
+                ? "Web-Server,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-CGI"
+                : "Web-Server,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-CGI,Web-Mgmt-Console";
+            ExecResult sv = Ps.Run("try{ Import-Module ServerManager -EA Stop; " +
+                "$need = @('" + feats.Replace(",", "','") + "'); " +
+                "$missing = @(Get-WindowsFeature $need | Where-Object { -not $_.Installed }); " +
+                "if ($missing.Count -eq 0) { 'ALLPRESENT' } else { 'MISSING' } } catch { 'NOMODULE' }", false, 180000, null);
+            if (sv.Ok && sv.StdOut.IndexOf("ALLPRESENT", StringComparison.OrdinalIgnoreCase) >= 0)
+            { detail = "Windows Server: роль Web-Server и ISAPI/CGI уже установлены"; return 0; }
+            if (sv.Ok && sv.StdOut.IndexOf("MISSING", StringComparison.OrdinalIgnoreCase) >= 0)
             {
-                if (Ctx.DryRun) { Log.Sim("установил бы роль Web-Server (Install-WindowsFeature)"); return 2; }
-                ExecResult ins = Ps.Run("$r=Install-WindowsFeature Web-Server,Web-ISAPI-Ext,Web-ISAPI-Filter,Web-CGI,Web-Basic-Auth,Web-Mgmt-Console -ErrorAction Stop; 'RESTART='+$r.RestartNeeded", false, 900000, null);
+                if (Ctx.DryRun) { Log.Sim("установил бы роли IIS (Install-WindowsFeature " + feats + ")"); return 2; }
+                ExecResult ins = Ps.Run("$r=Install-WindowsFeature " + feats + " -ErrorAction Stop; 'RESTART='+$r.RestartNeeded", false, 900000, null);
                 if (!ins.Ok) { detail = ins.Tail(3); return -1; }
-                detail = "роль Web-Server установлена (Server SKU)";
+                detail = "роль Web-Server установлена (Server SKU" + (core ? " Core, без консоли управления" : "") + ")";
                 Ctx.Changed = true;
                 return ins.StdOut.IndexOf("RESTART=Yes", StringComparison.OrdinalIgnoreCase) >= 0 ? 1 : 2;
             }
