@@ -775,8 +775,8 @@ namespace Oc1c
                 h.AppendLine("# Сервер аналитики (проверка с Windows): " + o.UbuntuHost + ":" + o.UbuntuPort);
             h.AppendLine("# Прямой LAN этой машины: http://" + lanIp + "/" + o.Alias + "/odata/standard.odata");
             h.AppendLine("# Если Ubuntu ходит через роутер — типичный стенд:");
-            h.AppendLine("# ODG_UPSTREAM=http://192.168.56.1:6003/" + o.Alias + "/odata/standard.odata");
-            h.AppendLine("#   (проброс 192.168.56.1:6003 -> " + lanIp + ":80)");
+            h.AppendLine("# ODG_UPSTREAM=http://<роутер>:<порт>/" + o.Alias + "/odata/standard.odata");
+            h.AppendLine("#   (проброс <роутер>:<порт> -> " + lanIp + ":80)");
             h.AppendLine("#");
             h.AppendLine("# Локальная проверка на этой машине: " + url);
             h.AppendLine("# База: " + b.Display);
@@ -788,7 +788,9 @@ namespace Oc1c
                 // Канал пакетов поднят: сервер получает всё через приёмник сам
                 // (конфиг — GET /agent/config), передавать ничего не нужно
                 // (решение владельца 07.08). Секреты комплекта с машины стёрты.
-                Log.Con("КАНАЛ ПАКЕТОВ ПОДНЯТ: сервер аналитики получает всё через 1c-gate.timpul.ru сам,");
+                Log.Con("КАНАЛ ПАКЕТОВ ПОДНЯТ: сервер аналитики получает всё через приёмник "
+                        + (string.IsNullOrEmpty(PacketSteps.ReceiverUrl) ? "" : PacketSteps.ReceiverUrl + " ")
+                        + "сам,");
                 Log.Con("передавать ничего не нужно. Секреты комплекта с машины стёрты (agent.ini — под ACL).");
             }
             else
@@ -1038,17 +1040,17 @@ setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая нас�
 РУКАМИ ОСТАЁТСЯ: создать в 1С пользователя-читателя (ai_reader) с нужными правами.
 
 ПРИМЕРЫ:
-  setup-1c-odata.exe --check --ubuntu-host 192.168.56.42
+  setup-1c-odata.exe --check --ubuntu-host <ip-сервера>
       префлайт + план (НИЧЕГО не меняет), проверка связи с сервером аналитики
 
-  setup-1c-odata.exe --base ""C:\1c\bases\buh_test"" --ubuntu-host 192.168.56.42 ^
-                     --external-url http://192.168.56.1:6003/1c/odata/standard.odata/
+  setup-1c-odata.exe --base ""C:\1c\bases\<база>"" --ubuntu-host <ip-сервера> ^
+                     --external-url http://<роутер>:<порт>/1c/odata/standard.odata/
       настройка + брандмауэр подсеть сервера + правильный ODG_UPSTREAM
 
-  setup-1c-odata.exe --base ""C:\1c\bases\buh_test"" --admin-user Администратор
+  setup-1c-odata.exe --base ""C:\1c\bases\<база>"" --admin-user Администратор
       обычная настройка; перед составом — выбор варианта 1 или 2
 
-  setup-1c-odata.exe --base ""C:\1c\bases\buh_test"" --skip-scope --reader-user ai_reader
+  setup-1c-odata.exe --base ""C:\1c\bases\<база>"" --skip-scope --reader-user ai_reader
       без пароля админа: IIS/OData, состав — вручную по туториалу
 
 КЛЮЧИ:
@@ -1073,7 +1075,7 @@ setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая нас�
   --no-backup              не делать бэкап (только если копия уже есть)
   --ubuntu-host <ip/имя>   сервер аналитики: проверка TCP с этой машины + подсказка firewall
   --ubuntu-port <порт>     порт пробы (по умолчанию 22 — SSH)
-  --open-firewall <сеть>   разрешить входящий TCP/80 с подсети, например 192.168.56.0/24
+  --open-firewall <сеть>   разрешить входящий TCP/80 с подсети, например 10.0.0.0/24
                            (если не задан, но задан --ubuntu-host — берётся его /24)
   --verify-url <url>       адрес для локальной проверки (по умолчанию http://localhost/<alias>/odata/standard.odata/)
   --external-url <url>     внешний путь (через роутер); попадёт в ODG_UPSTREAM

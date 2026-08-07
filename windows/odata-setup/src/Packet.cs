@@ -88,6 +88,9 @@ namespace Oc1c
         // Блок поднял канал пакетов — Report тогда не печатает «передайте на Ubuntu»:
         // сервер получает всё через приёмник сам (решение владельца 07.08).
         internal static bool Installed;
+        // Адрес приёмника из комплекта — для итогового сообщения (никаких констант
+        // нашей инфраструктуры в текстах: комплект — единственный источник).
+        internal static string ReceiverUrl;
 
         // Коды ошибок приёмника (контракт §8) -> понятная строка (ТЗ §6).
         static readonly string[,] ReceiverErrors = new string[,]
@@ -144,6 +147,7 @@ namespace Oc1c
             }
             Log.AddSecret(ps.Token);
             Log.AddSecret(ps.ClientPfxPassword);
+            ReceiverUrl = ps.ReceiverUrl;
             Log.Ok("комплект проверен (база «" + ps.BaseId + "»)");
             Log.File("приёмник: " + ps.ReceiverUrl);
 

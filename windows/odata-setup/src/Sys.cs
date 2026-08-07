@@ -405,7 +405,7 @@ namespace Oc1c
             }
         }
 
-        // Из «192.168.56.42» → «192.168.56.0/24» для правила брандмауэра (вход к IIS с подсети сервера).
+        // Из адреса сервера «10.7.0.42» → «10.7.0.0/24» для правила брандмауэра (вход к IIS с подсети сервера).
         public static string SuggestFirewallCidr(string host)
         {
             if (string.IsNullOrEmpty(host)) return null;
