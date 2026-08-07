@@ -31,15 +31,18 @@ _Обновлено: **2026-08-07.** Здесь — только живое: т�
 **SSH reverse-туннель** (юнит `1c-gate-tunnel`, ssh -R `6022 → 127.0.0.1:6090`, инициатор
 Ubuntu). На FreeBSD: HAProxy `:443` (TLS, LE через lego) → `127.0.0.1:6022`, юзер
 `gate-tunnel` (nologin, ключ restrict+permitlisten). Root-шаг выполнен владельцем 06.08:
-юнит `active`+`enabled`; `[замер]` проба через туннель юнита — HTTP 200, xff на месте;
-`connect_to … 6090 failed` в журнале = health-чеки HAProxy, дошедшие по туннелю (норма,
-пока нет приёмника). **Осталось:** выкат `packet_server` с `PACKET_LISTEN=127.0.0.1:6090`
-(соседняя сессия; 🔴 порт 6090 — :6021 занят шлюзом второй базы). Разбор и замеры —
+юнит `active`+`enabled`; `[замер]` проба через туннель юнита — HTTP 200, xff на месте.
+✅ **07.08: приёмник В БОЮ** — `1c-packet-server` + `1c-packet-apply.timer` active,
+mTLS на релее (`verify required`, CA `1c-packet-ca`), сквозная `/health` с клиентским
+сертификатом → 200; без сертификата — обрыв рукопожатия. ⚠ Часы релея отстают ~2 мин:
+свежий сертификат отвергается до notBefore по ЕГО часам. Разбор —
 [`ubuntu/wireguard/README.md`](../ubuntu/wireguard/README.md).
 
-**Пакетный транспорт `[06.08]`: идёт реализация (владелец), endpoint `1c-gate.timpul.ru`.**
-В main: контракт PACKET_CONTRACT v1, крипто packet_crypto (14 проб), приёмник packet_server
-(30), apply packet_apply (24; DDL не транзакционен → маркер, §8). Дальше — агент Windows (C#, golden-проба формата против `poc_load_entity`) + индекс версий, `corpus_build` на `$metadata` из пакета, E2E.
+**Пакетный транспорт `[07.08]`: приёмник В БОЮ, всё в main, остался E2E с Windows.**
+Контур `ubuntu/packet/` (server/apply/kit/config, пробы зелёные), агент `windows/packet-agent/`
+(⚠ не компилировался — первая сборка на Windows), golden `work/packet/golden/`. mTLS + Bearer;
+пилот без age (контракт §2, `docs/PACKET_CONTRACT.md`). **E2E**: сборка агента → golden →
+установщик 1.2.0 с комплектом `work/packet/kit/ut/` → первая full → дельта.
 **Установщик Windows 1.2.0 `[06.08]` — блок 2 «агент пакетов» СДЕЛАН** (слово владельца
 в этой сессии): `windows/odata-setup/src/Packet.cs` + интеграция в `Program.cs`
 (префлайт комплекта/связи/места, установка в `C:\1c\packet` + `agent.ini` с ACL,

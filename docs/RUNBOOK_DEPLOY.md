@@ -49,6 +49,22 @@ reverse-туннель** (юнит `1c-gate-tunnel`, инициатор Ubuntu) 
 устройство, конфиги FreeBSD и замеры — `ubuntu/wireguard/README.md` +
 `ubuntu/wireguard/freebsd/`. 🔴 Порт приёмника 6090: :6021 занят шлюзом второй базы.
 
+**Пакетный транспорт (развёрнут 07.08, контракт `docs/PACKET_CONTRACT.md`):** Windows
+больше не ждёт нашего подключения к OData — агент сам шлёт пакеты наружу. Два фактора:
+**mTLS** (клиентский сертификат от CA `1c-packet-ca`, `verify required` на HAProxy,
+CN уходит бэкенду заголовком `X-SSL-Client-CN`) + Bearer на приёмнике. Пилот — без
+age-слоя пакетов (решение владельца 06.08, контракт §2). Юниты: `1c-packet-server`
+(приёмник :6090, `/etc/1c-packet.env`, файл баз `/etc/1c-packet-bases.json`) и
+`1c-packet-apply.timer` (apply verified→applied каждые 2 мин, merge формами
+`poc_load_entity`). Развёртывание — root-шаг `work/packet/setup-receiver.sh`;
+раскладка кода — `ubuntu/packet/deploy_packet.sh` (без перезапуска юнитов).
+`[замер 07.08]` сквозная цепочка с клиентским сертификатом:
+`https://1c-gate.timpul.ru/health` → `packet-server-ok`; без сертификата — обрыв
+рукопожатия; конфиг-эндпоинт отдаёт 1589 сущностей и короткий ответ при равной
+`config_version`; чужой токен — 401. ⚠ Часы релея отстают ~2 мин: свежевыданный
+сертификат отвергается как «bad certificate» до наступления notBefore по ЕГО часам.
+
+
 ### Вторая база 1С (стенд, состояние на 02.08)
 
 Баз 1С у клиента бывает несколько. У каждой — **свой шлюз, своя база движка, свой
