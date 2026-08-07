@@ -47,6 +47,9 @@ work/packet/bin/
 # Комплекты баз пакетного транспорта (identity age, токены) — секреты, в git нельзя
 work/packet/kit/
 
+# Дистрибутивы установщиков по машинам/базам (1c-ai.exe + packet-setup.json + client.pfx) — те же секреты
+work/packet/dist/
+
 # Второе имя CLAUDE.md для Kimi Code — жёсткая ссылка, создаётся установщиком гейтов
 AGENTS.md
 
