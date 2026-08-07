@@ -214,29 +214,38 @@ namespace Oc1c
             string probeDetail = "";
             if (!o.Unattended && !Console.IsInputRedirected && !Ctx.DryRun)
             {
+                Console.WriteLine();
+                Console.WriteLine("       НУЖЕН ПОЛЬЗОВАТЕЛЬ-ЧИТАТЕЛЬ в 1С (единственный ручной шаг):");
+                Console.WriteLine("         1) откройте 1С:Предприятие этой базы под администратором;");
+                Console.WriteLine("         2) Администрирование → Настройки пользователей и прав → Пользователи;");
+                Console.WriteLine("         3) создайте пользователя «" + probeUser + "», профиль «Только просмотр», задайте пароль;");
+                Console.WriteLine("         4) вернитесь сюда.");
                 while (true)
                 {
-                    Console.WriteLine();
-                    Console.WriteLine("       НУЖЕН ПОЛЬЗОВАТЕЛЬ-ЧИТАТЕЛЬ в 1С (единственный ручной шаг):");
-                    Console.WriteLine("         1) откройте 1С:Предприятие этой базы под администратором;");
-                    Console.WriteLine("         2) Администрирование → Настройки пользователей и прав → Пользователи;");
-                    Console.WriteLine("         3) создайте пользователя «" + probeUser + "», профиль «Только просмотр», задайте пароль;");
-                    Console.WriteLine("         4) вернитесь сюда.");
-                    Console.Write("       Когда создадите — нажмите Enter (проверю сам). Q — прервать: ");
-                    string ans = Console.ReadLine();
-                    if (string.Equals((ans ?? "").Trim(), "q", StringComparison.OrdinalIgnoreCase))
-                    { Log.Err("прервано пользователем (читатель не создан)"); return Program.EXIT_PREREQ; }
+                    // Без этого вопроса проба шла с пустым паролем и крутила цикл
+                    // вхолостую (прогон владельца 07.08).
+                    Console.Write("       Пароль пользователя «" + probeUser + "» (пусто — если без пароля), Enter: ");
+                    o.ReaderPassword = ReadPassword();
+                    Log.AddSecret(o.ReaderPassword);
+                    Console.WriteLine("       Проверяю доступ к базе… (может занять до минуты)");
                     if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
                     { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
                     Console.WriteLine("       Пока не читается: " + probeDetail);
-                    Console.WriteLine("       Проверьте имя/пароль и профиль — и попробуем ещё раз.");
+                    Console.Write("       Enter — ввести пароль и проверить ещё раз, Q — прервать: ");
+                    string ans = Console.ReadLine();
+                    if (string.Equals((ans ?? "").Trim(), "q", StringComparison.OrdinalIgnoreCase))
+                    { Log.Err("прервано пользователем (читатель не подтверждён)"); return Program.EXIT_PREREQ; }
                 }
             }
-            if (!Ctx.DryRun && probeDetail.Length == 0 && !Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+            if (!Ctx.DryRun && probeDetail.Length == 0)
             {
-                Log.Err("данные базы не читаются: " + probeDetail);
-                Log.Fix("задайте состав OData и проверьте права пользователя-читателя («" + probeUser + "»)");
-                return Program.EXIT_PREREQ;
+                Log.Info("проверяю чтение базы (первая проба может идти до минуты)…");
+                if (!Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+                {
+                    Log.Err("данные базы не читаются: " + probeDetail);
+                    Log.Fix("задайте состав OData и проверьте права пользователя-читателя («" + probeUser + "»)");
+                    return Program.EXIT_PREREQ;
+                }
             }
             if (!Ctx.DryRun && probeDetail.Length > 0) { Log.Ok("чтение базы работает"); Log.File("проба данных: " + probeDetail); }
 
@@ -317,6 +326,20 @@ namespace Oc1c
                 }
                 catch (Exception e) { Log.Warn("не удалось удалить " + names[i] + ": " + e.Message); }
             }
+        }
+
+        // Ввод пароля без эха (звёздочки), .NET 4.
+        static string ReadPassword()
+        {
+            StringBuilder sb = new StringBuilder();
+            while (true)
+            {
+                ConsoleKeyInfo k = Console.ReadKey(true);
+                if (k.Key == ConsoleKey.Enter) { Console.WriteLine(); break; }
+                if (k.Key == ConsoleKey.Backspace) { if (sb.Length > 0) { sb.Length--; Console.Write("\b \b"); } }
+                else if (!char.IsControl(k.KeyChar)) { sb.Append(k.KeyChar); Console.Write("*"); }
+            }
+            return sb.ToString();
         }
 
         // ============================================================ префлайт-составляющие
