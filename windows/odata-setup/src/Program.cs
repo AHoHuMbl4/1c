@@ -47,6 +47,20 @@ namespace Oc1c
 
         static int Main(string[] argv)
         {
+            int rc = MainInner(argv);
+            // Запуск двойным кликом: при ошибке окно исчезало вместе с текстом —
+            // «после выбора базы окно закрылось и всё» (прогон владельца 07.08).
+            // Пауза только на ошибке и только у интерактивной консоли (пайпы не виснут).
+            if (rc != EXIT_OK && !Console.IsInputRedirected)
+            {
+                try { Console.WriteLine(); Console.WriteLine("Код выхода: " + rc + ". Нажмите Enter для закрытия окна…"); Console.ReadLine(); }
+                catch { }
+            }
+            return rc;
+        }
+
+        static int MainInner(string[] argv)
+        {
             try { Console.OutputEncoding = Encoding.UTF8; }
             catch { }
 
@@ -191,11 +205,34 @@ namespace Oc1c
                 }
                 Log.Con("       Найденные базы:");
                 for (int i = 0; i < found.Count; i++) Log.Con("         " + (i + 1) + ") " + found[i]);
-                Console.Write("       Выберите номер базы: ");
-                string ans = Console.ReadLine();
-                int num;
-                if (!int.TryParse(ans == null ? "" : ans.Trim(), out num) || num < 1 || num > found.Count)
-                { Log.Err("некорректный выбор"); return EXIT_ARGS; }
+                int num = 0;
+                if (!Console.IsInputRedirected && found.Count <= 9)
+                {
+                    // Выбор одной клавишей: цифра — и сразу поехали, без Enter.
+                    Console.Write("       Нажмите цифру базы (1-" + found.Count + "): ");
+                    while (true)
+                    {
+                        ConsoleKeyInfo key = Console.ReadKey(true);
+                        if (key.KeyChar >= '1' && key.KeyChar <= '0' + found.Count)
+                        { num = key.KeyChar - '0'; Console.WriteLine(new string(key.KeyChar, 1)); break; }
+                        if (key.Key == ConsoleKey.Escape) { Log.Err("выбор отменён"); return EXIT_ARGS; }
+                    }
+                }
+                else
+                {
+                    // Пайп/перенаправление или баз больше девяти — построчный ввод.
+                    Console.Write("       Выберите номер базы: ");
+                    string ans = Console.ReadLine();
+                    // Пустой/кривой ввод — переспрашиваем, а не умираем: двойной клик
+                    // по exe раньше закрывал окно без объяснений (прогон 07.08).
+                    if (!int.TryParse(ans == null ? "" : ans.Trim(), out num) || num < 1 || num > found.Count)
+                    {
+                    Console.Write("       Введите номер от 1 до " + found.Count + " и Enter: ");
+                    ans = Console.ReadLine();
+                    if (!int.TryParse(ans == null ? "" : ans.Trim(), out num) || num < 1 || num > found.Count)
+                    { Log.Err("некорректный выбор"); return EXIT_ARGS; }
+                }
+                }
                 o.BasePath = found[num - 1];
                 Log.File("выбрана база: " + o.BasePath);
             }
