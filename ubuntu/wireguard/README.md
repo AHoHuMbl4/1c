@@ -47,6 +47,8 @@ Windows (TLS) → https://1c-gate.timpul.ru:443  [DNS → 201.34.130.46]
 - Юзер `gate-tunnel` (nologin): ssh-ключ с `restrict,port-forwarding,
   permitlisten="127.0.0.1:6022"` — ключ только для проброса, шелла нет.
 - Автозапуск: `rc.conf` — `haproxy_enable`, `acmewww_enable` (wireguard — NO).
+- Время: зона `Europe/Moscow` (`/etc/localtime`), `ntpd_enable` +
+  `ntpd_sync_on_start` в `rc.conf` (07.08; часы шли точно, но в UTC).
 - Конфиги версионируются в [`freebsd/`](freebsd/): `haproxy.conf`, `lego.yml`,
   `lego.sh`, `deploy-certs.sh`, `rc.d/acmewww`, сниппеты, `wg0.conf.sample`
   (без ключей — ключи только на серверах).
