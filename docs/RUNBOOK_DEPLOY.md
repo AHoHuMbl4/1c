@@ -591,21 +591,27 @@ systemctl enable --now 1c-serene-ask.service     # отвечающий серв
 поднят, любое утверждение «свежесть обеспечена» в любом документе неверно.
 
 ### 10.7 Подключение к боту
-Бот ходит в отвечающий сервис через MCP-мост `ask_1c` (`1c-mcp-ask`, :6016), а мост — по
+Бот ходит в отвечающий сервис через MCP-мост `ask_1c` (`1c-mcp-ask@ut_test`, :6016), а мост — по
 `ASK_URL`. **`ASK_URL` — единственный рычаг выбора того, какой сервис (а значит, какая база
-1С) отвечает боту.** Задан он строкой `Environment=ASK_URL=…` в теле юнита
-`1c-mcp-ask.service`; штатный способ переопределить — drop-in:
+1С) отвечает боту.** С 02.08 мост — шаблонный юнит `1c-mcp-ask@<база>` с побазовым
+`/etc/1c-mcp-ask-<база>.env` (там и `MCP_PORT`, и `ASK_URL`); переопределение — drop-in
+на инстанс:
 
 ```bash
-systemctl edit 1c-mcp-ask        # [Service] Environment=ASK_URL=http://127.0.0.1:<порт>
-systemctl restart 1c-mcp-ask
+systemctl edit 1c-mcp-ask@ut_test        # [Service] Environment=ASK_URL=http://127.0.0.1:<порт>
+systemctl restart 1c-mcp-ask@ut_test
 ```
 
-Какую **базу движка** читает сам сервис ответов — задаёт `SERENEDB_DSN_RO`/`RESOLVER_DSN`
-в его окружении (`/etc/1c-serene-ask.env`).
+⚠ Одиночный `1c-mcp-ask.service` **снят 07.08**: у него нет `MCP_PORT`, умолчание :6016
+занято боевым инстансом, и рестарт по старому имени (его делал `deploy_instance.sh` по
+умолчанию) ставил юнит в петлю падений. На стенде остановлен и disabled; удаление файла
+из `/etc/systemd/system` — root-шаг. В репозитории файл пока лежит — не разворачивать.
 
-⚠ Если выносить `ASK_URL` в `/etc/1c-mcp-ask.env`, то `EnvironmentFile=` в юните надо
-поставить **ниже** строки `Environment=`, иначе значение из юнита перекроет env-файл.
+Какую **базу движка** читает сам сервис ответов — задаёт `SERENEDB_DSN_RO`/`RESOLVER_DSN`
+в его окружении (`/etc/1c-serene-ask-<база>.env`).
+
+⚠ Если выносить `ASK_URL` в env-файл, то `EnvironmentFile=` в юните надо
+ставить **ниже** строки `Environment=`, иначе значение из юнита перекроет env-файл.
 
 *Было ошибочно: «бот переключается одной строкой `BRAINE_URL` в `/etc/1c-mcp-braine.env` —
 и так же откатывается обратно». **Чем опровергнуто:** в `/etc/1c-mcp-braine.env` есть только
@@ -704,10 +710,15 @@ install -d /opt/openclaw-mcp && python3 -m venv /opt/openclaw-mcp/venv
 /opt/openclaw-mcp/venv/bin/pip install -r ubuntu/openclaw/requirements.txt   # офиц. MCP SDK
 /opt/openclaw-mcp/venv/bin/pip install matplotlib                            # ⬅ отрисовка графиков
 install -D ubuntu/openclaw/mcp_ask.py /opt/openclaw-mcp/mcp_ask.py
-install -m 644 ubuntu/openclaw/systemd/1c-mcp-ask.service /etc/systemd/system/
-# /etc/1c-mcp-ask.env (600): ASK_TOKEN=<токен serene_ask>, MCP_TOKEN=<свой, fail-closed>
-systemctl daemon-reload && systemctl enable --now 1c-mcp-ask
+install -m 644 ubuntu/openclaw/systemd/1c-mcp-ask@.service /etc/systemd/system/
+# /etc/1c-mcp-ask-<база>.env (600): ASK_URL=<сервис ответов этой базы>, MCP_PORT=<свой>,
+#   ASK_TOKEN=<токен serene_ask>, MCP_TOKEN=<свой, fail-closed>
+systemctl daemon-reload && systemctl enable --now 1c-mcp-ask@<база>
 ```
+
+⚠ Одиночный `1c-mcp-ask.service` снят 07.08 и не разворачивается: у него нет `MCP_PORT`,
+умолчание :6016 занято шаблонным инстансом, и запуск по старому имени — петля падений
+(замер 04-06.08: 36 980 рестартов).
 
 🔴 **`requirements.txt` неполон, и на этом молча теряется график.** В файле одна строка
 `mcp>=1.28`, а в боевом `/opt/openclaw-mcp/venv` стоят ещё `matplotlib`, `numpy`, `pillow`,
@@ -883,12 +894,9 @@ sudo -u undebot XDG_RUNTIME_DIR=/run/user/$(id -u undebot) systemctl --user enab
 
 #### Шаг 1. Свой мост MCP на эту базу
 
-Сейчас `1c-mcp-ask.service` — **один экземпляр** с зашитыми `ASK_URL=http://127.0.0.1:8099`
-и `MCP_PORT=6016`, то есть намертво привязан ко второй базе. Его надо сделать шаблоном —
-ровно так же, как это уже сделано для сервиса ответов (`1c-serene-ask@<база>`):
-
-Шаблон заведён: `ubuntu/openclaw/systemd/1c-mcp-ask@.service` (в юните не зашито ничего
-про конкретную базу). Побазовый `/etc/1c-mcp-ask-<база>.env`, права 600:
+Мост — шаблонный юнит `1c-mcp-ask@<база>` (заведён 02.08, одиночный `1c-mcp-ask` снят
+07.08): в юните не зашито ничего про конкретную базу. Побазовый `/etc/1c-mcp-ask-<база>.env`,
+права 600:
 
 ```bash
 # ASK_URL=http://127.0.0.1:8091   — сервис ответов ЭТОЙ базы (первая :8091, вторая :8099)

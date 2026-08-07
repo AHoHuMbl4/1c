@@ -26,7 +26,7 @@
 **Баз 1С бывает несколько, и у каждой свой контур целиком:** свой шлюз OData, своя база
 внутри движка, свой сервис ответов. На стенде их две: первая (Бухгалтерия 3.0, база движка
 `postgres`, `:8091`) и вторая (УТ 11.4.9, база `ut_test`, `:8099`). **Боевые ответы идут по
-второй** — это задано `ASK_URL` в юните `1c-mcp-ask`.
+второй** — это задано `ASK_URL` в юните `1c-mcp-ask@ut_test`.
 
 🔴 **02.08 оба сервиса ответов стали шаблонными юнитами** `1c-serene-ask@<база>` с
 побазовым `/etc/1c-serene-ask-<база>.env`. До этого боевая конфигурация второй базы жила
@@ -208,7 +208,7 @@ Windows шлёт шифрованные пакеты, Ubuntu принимает 
 |---|---|
 | `ubuntu/systemd/` | `1c-serene-pipeline.service/.timer` (боевой такт), `1c-serene-index.service` (**боевая** копия, на `build.sh`), `1c-odata-gateway@.service` (шаблон на каждую базу) |
 | `ubuntu/serenedb/systemd/` | `1c-serene-ask.service`, `1c-mcp-reports.service`, `1c-serene-sync.*`, ⚠ **двойник** `1c-serene-index.service/.timer` |
-| `ubuntu/openclaw/systemd/` | `1c-mcp-ask.service` (мост боевой базы), 🔴 **`1c-mcp-ask@.service` — шаблон моста на базу** (02.08), `openclaw-gateway-buh.service.d/env.conf` (drop-in второго шлюза), `1c-mcp-braine.service` + `override.conf` |
+| `ubuntu/openclaw/systemd/` | `1c-mcp-ask@.service` — **шаблон моста на базу; боевые — его инстансы** (`@ut_test` :6016, `@postgres` :6017). ⚠ `1c-mcp-ask.service` (одиночный) — СНЯТ 07.08: у него нет `MCP_PORT`, умолчание :6016 занято боевым инстансом, и рестарт по старому имени ставил его в петлю падений (36 980 рестартов за два дня). На стенде остановлен и disabled; удаление файла из `/etc/systemd/system` — root-шаг владельца. Также `openclaw-gateway-buh.service.d/env.conf` (drop-in второго шлюза), `1c-mcp-braine.service` + `override.conf` |
 | `ubuntu/1c-gateway/systemd/` | `1c-odata-gateway.service` (первая база) |
 | `ubuntu/1c-etl/systemd/`, `ubuntu/1c-config-ui/systemd/`, `ubuntu/monitoring/`, `ubuntu/serenedb/` | ETL, config-ui, монитор бота, юнит движка |
 
