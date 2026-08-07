@@ -267,8 +267,19 @@ def _load_bases(path: str) -> dict:
 def _write_bases_atomic(path: str, data: dict) -> None:
     # temp+replace в том же каталоге: приёмник в любой момент видит либо старый,
     # либо новый файл целиком, но не половину записи.
-    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)),
-                               prefix=".bases-", suffix=".tmp")
+    # Каталог может быть закрыт на создание файлов (боевая /etc: 640 root:1c-secrets,
+    # запись — по группе в сам файл) — тогда прямая запись с fsync; половину JSON
+    # приёмник переживает без падения (fail-stale: битый файл игнорируется до
+    # следующего mtime, замерено в пробе сервера).
+    try:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(os.path.abspath(path)),
+                                   prefix=".bases-", suffix=".tmp")
+    except PermissionError:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+            f.flush()
+            os.fsync(f.fileno())
+        return
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
