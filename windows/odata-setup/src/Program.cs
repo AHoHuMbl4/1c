@@ -647,6 +647,14 @@ namespace Oc1c
         static void Report(Opts o, BaseRef b, Platform p, string pool, string url, List<string> scopeKeys)
         {
             Log.Head("ИТОГ");
+            // Канал пакетов поднят — всё доказано (проба данных, доставка, задачи):
+            // финал одним словом (решение владельца 07.08). Подробности — в логе.
+            if (PacketSteps.Installed && !Ctx.DryRun)
+            {
+                Log.Con("Готово.");
+                Log.Con("Полный лог: " + Log.Path);
+                return;
+            }
             if (Ctx.DryRun) Log.Con("Режим проверки: ничего не менялось. Для настройки запустите без --check.");
             else Log.Con(Ctx.Changed ? "Настройка выполнена." : "Всё уже было настроено — изменений не потребовалось.");
             if (Log.Warnings > 0) Log.Con("Предупреждений: " + Log.Warnings + " (см. выше и в логе).");
