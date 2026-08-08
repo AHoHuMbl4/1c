@@ -216,12 +216,18 @@ namespace Oc1c
             // подтверждения и ПРОВЕРЯЕМ факт чтения, пока не получится (решение
             // владельца 07.08). Автоматику (пайп/--unattended) не донимаем.
             string probeDetail = "";
-            string baseTitle = (bref == null || string.IsNullOrEmpty(bref.Title)) ? "эта база" : ("«" + bref.Title + "»");
+            // Имя базы для человека: прежде всего — как в стартовом окне 1С (ibases.v8i),
+            // иначе имя каталога/Ref (прогон 08.08: путь вместо имени путал с другой базой).
+            string baseName = !string.IsNullOrEmpty(o.BaseName) ? o.BaseName
+                            : (bref == null ? null : bref.Title);
+            string baseTitle = string.IsNullOrEmpty(baseName) ? "эта база" : ("«" + baseName + "»");
             if (!o.Unattended && !Console.IsInputRedirected && !Ctx.DryRun)
             {
                 Console.WriteLine();
                 Console.WriteLine("       НУЖЕН ПОЛЬЗОВАТЕЛЬ-ЧИТАТЕЛЬ в 1С (единственный ручной шаг):");
                 Console.WriteLine("         1) откройте 1С:Предприятие базы " + baseTitle + " под администратором;");
+                if (string.IsNullOrEmpty(o.BaseName) && bref != null && bref.IsFile)
+                    Console.WriteLine("            (этой базы нет в стартовом списке 1С — добавьте её туда: в окне запуска кнопка «Добавить» → каталог " + bref.Dir + ")");
                 Console.WriteLine("         2) Администрирование → Настройки пользователей и прав → Пользователи;");
                 Console.WriteLine("         3) создайте пользователя «" + probeUser + "», профиль «Только просмотр», задайте пароль;");
                 Console.WriteLine("         4) вернитесь сюда.");

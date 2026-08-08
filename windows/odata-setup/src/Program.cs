@@ -13,6 +13,7 @@ namespace Oc1c
     internal class Opts
     {
         public string BasePath, ConnStr;
+        public string BaseName;             // имя из списка запуска 1С (ibases.v8i) — для подсказок человеку
         public string Site = "Default Web Site";
         public string Alias = "1c";
         public string Dir;
@@ -203,15 +204,18 @@ namespace Oc1c
                     Log.Err("не указана база: --base <путь> или --connstr \"Srvr=...;Ref=...;\"");
                     return EXIT_ARGS;
                 }
-                List<string> found = Steps.FindFileBases(@"C:\1c\bases");
+                List<FoundBase> found = Steps.FindFileBases(@"C:\1c\bases");
                 if (found.Count == 0)
                 {
                     Log.Err("файловые базы не найдены ни в реестре баз 1С (ibases.v8i), ни в C:\\1c\\bases");
                     Log.Fix("укажите путь явно: --base \"C:\\путь\\к\\базе\" (каталог с файлом 1Cv8.1CD) или зарегистрируйте базу в списке 1cestart");
                     return EXIT_ARGS;
                 }
-                Log.Con("       Найденные базы:");
-                for (int i = 0; i < found.Count; i++) Log.Con("         " + (i + 1) + ") " + found[i]);
+                Log.Con("       Найденные базы (имена — как в стартовом окне 1С):");
+                for (int i = 0; i < found.Count; i++)
+                    Log.Con("         " + (i + 1) + ") " + (string.IsNullOrEmpty(found[i].Name)
+                        ? found[i].Dir
+                        : found[i].Name + "   [" + found[i].Dir + "]"));
                 int num = 0;
                 {
                     // Крутим вопрос, пока не выбрано верно или отмена: пользователь
@@ -226,8 +230,9 @@ namespace Oc1c
                         Console.WriteLine("       Нужен номер цифрой от 1 до " + found.Count + " (не название). Вы ввели: «" + ans + "»");
                     }
                 }
-                o.BasePath = found[num - 1];
-                Log.File("выбрана база: " + o.BasePath);
+                o.BasePath = found[num - 1].Dir;
+                o.BaseName = found[num - 1].Name;
+                Log.File("выбрана база: " + o.BasePath + (string.IsNullOrEmpty(o.BaseName) ? "" : " (в списке 1С: " + o.BaseName + ")"));
             }
             BaseRef bref = Steps.ResolveBase(o.BasePath, o.ConnStr);
             if (bref == null)

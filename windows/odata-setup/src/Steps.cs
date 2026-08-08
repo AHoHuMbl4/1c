@@ -55,6 +55,16 @@ namespace Oc1c
         public string Title { get { return IsFile ? Path.GetFileName(Dir.TrimEnd('\\')) : Name; } }
     }
 
+    // Найденная файловая база: путь + имя из списка запуска 1С (ibases.v8i).
+    // Имя — то, что человек видит в стартовом окне 1cestart; показывать путь
+    // вместо имени — путаница (прогон владельца 08.08: в списке «buh_test» и
+    // «buh_test (Бухгалтерия - test)», а установщик писал C:\1c\bases\...).
+    internal class FoundBase
+    {
+        public string Name;              // имя (имена) из ibases.v8i; null — база найдена только сканом
+        public string Dir;
+    }
+
     internal static class Steps
     {
         public static string AppCmd
@@ -173,33 +183,61 @@ namespace Oc1c
 
         // Универсальный поиск баз (матрица «любая база», 07.08): не один захардкоженный
         // каталог стенда, а штатный реестр баз 1С пользователя — ibases.v8i (то, что
-        // видит 1cestart), плюс скан типового каталога как запасной путь.
-        public static List<string> FindFileBases(string scanRoot)
+        // видит 1cestart, с ИМЕНАМИ из стартового окна), плюс скан типового каталога
+        // как запасной путь.
+        public static List<FoundBase> FindFileBases(string scanRoot)
         {
-            List<string> res = new List<string>();
-            List<string> reg = RegisteredBasePaths();
-            for (int i = 0; i < reg.Count; i++) if (!res.Contains(reg[i])) res.Add(reg[i]);
+            List<FoundBase> res = RegisteredBases();
             List<string> scan = ScanFileBases(scanRoot);
-            for (int i = 0; i < scan.Count; i++) if (!res.Contains(scan[i])) res.Add(scan[i]);
+            for (int i = 0; i < scan.Count; i++)
+            {
+                string d = scan[i];
+                bool known = false;
+                for (int k = 0; k < res.Count; k++)
+                    if (string.Equals(res[k].Dir, d, StringComparison.OrdinalIgnoreCase)) { known = true; break; }
+                if (!known) res.Add(new FoundBase { Name = null, Dir = d });
+            }
             return res;
         }
 
-        // %APPDATA%\1C\1CEStart\ibases.v8i: строки вида Connect=File="C:\путь\к\базе";
-        static List<string> RegisteredBasePaths()
+        // %APPDATA%\1C\1CEStart\ibases.v8i: секции [<имя в стартовом окне>] со строкой
+        // Connect=File="C:\путь\к\базе"; Несколько секций могут указывать на ОДИН каталог
+        // (у владельца: «buh_test» и «buh_test (Бухгалтерия - test)» → один путь) — тогда
+        // это одна база, показываем оба имени через « / ».
+        static List<FoundBase> RegisteredBases()
         {
-            List<string> res = new List<string>();
+            List<FoundBase> res = new List<FoundBase>();
             try
             {
                 string appData = Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
                 string v8i = Path.Combine(appData, @"1C\1CEStart\ibases.v8i");
                 if (!File.Exists(v8i)) return res;
                 string txt = File.ReadAllText(v8i, Encoding.UTF8);
-                MatchCollection ms = Regex.Matches(txt, "Connect\\s*=\\s*File\\s*=\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
-                foreach (Match m in ms)
+                string cur = null;
+                string[] lines = txt.Split('\n');
+                for (int i = 0; i < lines.Length; i++)
                 {
+                    string line = lines[i].Trim();
+                    if (line.StartsWith("[") && line.EndsWith("]") && line.Length > 2)
+                    { cur = line.Substring(1, line.Length - 2); continue; }
+                    Match m = Regex.Match(line, "^Connect\\s*=\\s*File\\s*=\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                    if (!m.Success) continue;
                     string dir = m.Groups[1].Value;
-                    if (Directory.Exists(dir) && File.Exists(Path.Combine(dir, "1Cv8.1CD")) && !res.Contains(dir))
-                        res.Add(dir);
+                    if (!Directory.Exists(dir) || !File.Exists(Path.Combine(dir, "1Cv8.1CD"))) continue;
+                    FoundBase ex = null;
+                    for (int k = 0; k < res.Count; k++)
+                        if (string.Equals(res[k].Dir, dir, StringComparison.OrdinalIgnoreCase)) { ex = res[k]; break; }
+                    if (ex == null) res.Add(new FoundBase { Name = cur, Dir = dir });
+                    else if (!string.IsNullOrEmpty(cur))
+                    {
+                        // Сравнение ТОЛЬКО по целым именам через « / »: подстрока
+                        // ошибочно глотала «buh_test» внутри «buh_test (…тест)».
+                        bool has = false;
+                        string[] parts = (ex.Name ?? "").Split(new string[] { " / " }, StringSplitOptions.None);
+                        for (int p = 0; p < parts.Length; p++)
+                            if (string.Equals(parts[p], cur, StringComparison.OrdinalIgnoreCase)) { has = true; break; }
+                        if (!has) ex.Name = string.IsNullOrEmpty(ex.Name) ? cur : cur + " / " + ex.Name;
+                    }
                 }
             }
             catch { }
