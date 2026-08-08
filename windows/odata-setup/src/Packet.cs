@@ -225,9 +225,8 @@ namespace Oc1c
             {
                 Console.WriteLine();
                 Console.WriteLine("       НУЖЕН ПОЛЬЗОВАТЕЛЬ-ЧИТАТЕЛЬ в 1С (единственный ручной шаг):");
-                Console.WriteLine("         1) откройте 1С:Предприятие базы " + baseTitle + " под администратором;");
-                if (string.IsNullOrEmpty(o.BaseName) && bref != null && bref.IsFile)
-                    Console.WriteLine("            (этой базы нет в стартовом списке 1С — добавьте её туда: в окне запуска кнопка «Добавить» → каталог " + bref.Dir + ")");
+                Console.WriteLine("         1) откройте 1С:Предприятие базы " + baseTitle + " под администратором");
+                Console.WriteLine("            (клавиша O здесь — открою сам; если базы нет в стартовом списке 1С — это нормально, O открывает напрямую);");
                 Console.WriteLine("         2) Администрирование → Настройки пользователей и прав → Пользователи;");
                 Console.WriteLine("         3) создайте пользователя «" + probeUser + "», профиль «Только просмотр», задайте пароль;");
                 Console.WriteLine("            ОБЯЗАТЕЛЬНО включите галку «Вход в приложение разрешён» — без неё 1С");
@@ -254,10 +253,34 @@ namespace Oc1c
                     bool is401 = probeDetail.IndexOf("не авторизуется", StringComparison.OrdinalIgnoreCase) >= 0;
                     if (is401 && plat != null && plat.HasCom && !string.IsNullOrEmpty(o.AdminUser))
                         DiagnoseReader(plat, bref, o.AdminUser, o.AdminPassword, probeUser, baseTitle);
-                    Console.Write("       Enter — ещё раз, D — найти причину автоматически (спросит пароль администратора 1С), Q — прервать: ");
+                    Console.Write("       Enter — ещё раз, O — открыть базу в 1С, D — найти причину автоматически, Q — прервать: ");
                     string ans = (Console.ReadLine() ?? "").Trim();
                     if (string.Equals(ans, "q", StringComparison.OrdinalIgnoreCase))
                     { Log.Err("прервано пользователем (читатель не подтверждён)"); return Program.EXIT_PREREQ; }
+                    if (string.Equals(ans, "o", StringComparison.OrdinalIgnoreCase))
+                    {
+                        // Открыть базу в 1С:Предприятие за человека (прогон 08.08: базы нет
+                        // в стартовом списке — «нельзя создать пользователя»). /N подставляем
+                        // всегда; /P — только если пароль ПУСТОЙ: непустой пароль в командной
+                        // строке виден другим сеансам машины в списке процессов.
+                        if (plat != null && bref != null && bref.IsFile &&
+                            !string.IsNullOrEmpty(plat.V8Exe) && File.Exists(plat.V8Exe))
+                        {
+                            try
+                            {
+                                string v8args = "ENTERPRISE /F\"" + bref.Dir + "\"";
+                                if (!string.IsNullOrEmpty(o.AdminUser)) v8args += " /N\"" + o.AdminUser + "\"";
+                                if (o.AdminPassword != null && o.AdminPassword.Length == 0) v8args += " /P\"\"";
+                                System.Diagnostics.Process.Start(plat.V8Exe, v8args);
+                                Console.WriteLine("       Открываю 1С:Предприятие базы " + baseTitle + " — создайте там «" + probeUser +
+                                                  "» (галка «Вход в приложение разрешён» + «Записать и закрыть»!), затем вернитесь сюда.");
+                                Log.File("открыта база в 1С:Предприятие: " + bref.Dir);
+                            }
+                            catch (Exception ex) { Console.WriteLine("       не смог открыть 1С сам (" + ex.Message + ") — откройте базу вручную."); }
+                        }
+                        else Console.WriteLine("       Сам открыть не могу — откройте 1С:Предприятие базы " + baseTitle + " вручную.");
+                        continue;
+                    }
                     if (string.Equals(ans, "d", StringComparison.OrdinalIgnoreCase))
                     {
                         if (plat == null || !plat.HasCom) { Console.WriteLine("       Диагностика недоступна: нет COM-коннектора 1С."); continue; }
