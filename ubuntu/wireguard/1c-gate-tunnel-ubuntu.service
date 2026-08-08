@@ -1,0 +1,23 @@
+[Unit]
+Description=Обратный туннель приёмника: Ubuntu-релей 89.23.101.22 127.0.0.1:6022 → packet_server 127.0.0.1:6090
+# Второй туннель (миграция FreeBSD → Ubuntu-релей 08.08): параллельно со
+# 1c-gate-tunnel.service (FreeBSD) — оба релея живы одновременно, переключение
+# делает DNS. После вывода FreeBSD из контура этот юнит остаётся основным.
+# ubuntu/wireguard/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -N -T \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -i /etc/ssh/gate-tunnel.ed25519 \
+    -R 127.0.0.1:6022:127.0.0.1:6090 \
+    gate-tunnel@89.23.101.22
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,6 @@
+[Unit]
+Description=lego renew (LE) + deploy pem в HAProxy
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/lego-renew.sh

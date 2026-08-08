@@ -1,0 +1,9 @@
+[Unit]
+Description=Еженедельное продление LE-сертификата 1c-gate.timpul.ru
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+
+[Install]
+WantedBy=timers.target

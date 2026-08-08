@@ -1,0 +1,13 @@
+# fail2ban на релее 1c-gate (Ubuntu 26.04): sshd-jail (стоковый фильтр на
+# Ubuntu 26.04 рабочий — [замер 08.08] 18 failed засчитаны, бан реального
+# брутфорсера 181.78.32.239 подтверждён). ignoreip — свои: NAT основного
+# Ubuntu (туннель!) и FreeBSD-релей, пока жив.
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+ignoreip = 127.0.0.1/8 ::1 167.235.37.94 201.34.130.46
+backend = systemd
+
+[sshd]
+enabled = true
