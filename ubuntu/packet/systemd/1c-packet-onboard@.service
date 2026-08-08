@@ -1,0 +1,22 @@
+# Онбординг базы пакетного транспорта — root-часть, запуск рабочей сессией без sudo.
+#
+# Зачем. Выпуск новой базы (новый бизнес) требует записи в /etc (age identity,
+# merge в файл баз приёмника, каталог снимка $metadata) — это root. Сессия идёт под
+# claudedev и sudo ей закрыт средой. Выход — тот же приём, что 1c-wiki-alias: имя на
+# «1c-» подпадает под polkit-правило 50-claudedev-1c-units.rules, и сессия зовёт:
+#     systemctl start 1c-packet-onboard@<base_id>
+# Разрешение не расширяется: запускается ровно этот юнит и ровно этот скрипт,
+# base_id валидируется скриптом ([a-z0-9_-]).
+#
+# Установка юнита — один раз, владельцем (сессия в /etc/systemd не пишет):
+#     sudo install -m 644 /srv/1c/ubuntu/packet/systemd/1c-packet-onboard@.service /etc/systemd/system/
+#     sudo systemctl daemon-reload
+#
+# Полная процедура новой базы — work/packet/onboard-base.sh (зовёт этот юнит сама)
+# и docs/PACKET_ONBOARDING.md.
+[Unit]
+Description=Онбординг базы пакетного транспорта, root-часть: %i
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /srv/1c/work/packet/onboard-base-root.sh %i
