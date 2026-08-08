@@ -1225,6 +1225,7 @@ namespace Oc1c
 
             StringBuilder s = new StringBuilder();
             s.AppendLine("$GP=[Reflection.BindingFlags]::GetProperty");
+            s.AppendLine("$PUT=[Reflection.BindingFlags]::PutDispProperty");
             s.AppendLine("function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,@()) }");
             s.AppendLine("try {");
             s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
@@ -1252,6 +1253,10 @@ namespace Oc1c
             s.AppendLine("    $cu = $pm.СоздатьЭлемент()");
             s.AppendLine("    $cu.Наименование = $env:OC1C_READER");
             s.AppendLine("    $cu.ИдентификаторПользователяИБ = $guid");
+            // Замер 08.08 (guidprobe5-7): без Загрузка=true обработчики БСП при записи
+            // ЗАТИРАЮТ ИдентификаторПользователяИБ пустым GUID — элемент есть, связи нет.
+            s.AppendLine("    $od = P $cu 'ОбменДанными'");
+            s.AppendLine("    [__ComObject].InvokeMember('Загрузка', $PUT, $null, $od, @($true)) | Out-Null");
             s.AppendLine("    $cu.Записать()");
             s.AppendLine("    'CATUSER_CREATED=1'");
             s.AppendLine("  }");
@@ -1283,7 +1288,12 @@ namespace Oc1c
         // 'СправочникМенеджер.X') (через свойство НЕ достаётся), объект — СоздатьЭлемент()
         // (NewObject('СправочникОбъект.X') даёт объект, которому свойства не пишутся),
         // чтение свойств — InvokeMember(GetProperty), запись — прямое присваивание,
-        // методы — прямой вызов.
+        // методы — прямой вызов. GUID-реквизиты БСП: обработчики записи справочника
+        // «Пользователи» ЗАТИРАЮТ ИдентификаторПользователяИБ пустым GUID (замер
+        // guidprobe5-7: в объекте значение верное, после Записать — пустое) — запись
+        // связи только через ОбменДанными.Загрузка=true (InvokeMember, цепочка
+        // «.ОбменДанными.Загрузка» в PS недоступна); сам GUID COM-объектом маршалится
+        // нормально и в присваивании, и в параметре запроса.
         public static bool EnsureReaderRights(Platform p, BaseRef b, string adminUser, string adminPwd,
                                               string readerUser, out string detail)
         {
@@ -1294,6 +1304,7 @@ namespace Oc1c
 
             StringBuilder s = new StringBuilder();
             s.AppendLine("$GP=[Reflection.BindingFlags]::GetProperty");
+            s.AppendLine("$PUT=[Reflection.BindingFlags]::PutDispProperty");
             s.AppendLine("function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,@()) }");
             s.AppendLine("try {");
             s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
@@ -1370,8 +1381,30 @@ namespace Oc1c
             s.AppendLine("$q.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка КАК Сс ИЗ Справочник.Пользователи КАК Т ГДЕ Т.ИдентификаторПользователяИБ = &Ид'");
             s.AppendLine("$q.УстановитьПараметр('Ид', $guid)");
             s.AppendLine("$rr = $q.Выполнить().Выбрать()");
-            s.AppendLine("if (-not $rr.Следующий()) { 'RESULT=NO_CAT_USER'; exit 0 }");
-            s.AppendLine("$catUser = P $rr 'Сс'");
+            s.AppendLine("$catUser = $null");
+            s.AppendLine("if ($rr.Следующий()) { $catUser = P $rr 'Сс' } else {");
+            // Ремонт (замер 08.08, guidprobe5-7): обработчики БСП при обычной записи
+            // затирают ИдентификаторПользователяИБ пустым GUID — элемент версии до
+            // правки есть, но связи нет. Ищем по наименованию и перелинковываем
+            // записью в режиме ОбменДанными.Загрузка.
+            s.AppendLine("  $qn = $ib.NewObject('Запрос')");
+            s.AppendLine("  $qn.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка КАК Сс, Т.ИдентификаторПользователяИБ КАК Ид ИЗ Справочник.Пользователи КАК Т ГДЕ Т.Наименование = &Н'");
+            s.AppendLine("  $qn.УстановитьПараметр('Н', $env:OC1C_READER)");
+            s.AppendLine("  $rrn = $qn.Выполнить().Выбрать()");
+            s.AppendLine("  if ($rrn.Следующий()) {");
+            s.AppendLine("    $idStr = $ib.ЗначениеВСтрокуВнутр((P $rrn 'Ид'))");
+            s.AppendLine("    if ($idStr -like '*00000000-0000-0000-0000-000000000000}') {");
+            s.AppendLine("      $cobj = (P $rrn 'Сс').ПолучитьОбъект()");
+            s.AppendLine("      [__ComObject].InvokeMember('ИдентификаторПользователяИБ', $PUT, $null, $cobj, @($guid)) | Out-Null");
+            s.AppendLine("      $od = P $cobj 'ОбменДанными'");
+            s.AppendLine("      [__ComObject].InvokeMember('Загрузка', $PUT, $null, $od, @($true)) | Out-Null");
+            s.AppendLine("      $cobj.Записать()");
+            s.AppendLine("      $catUser = P $rrn 'Сс'");
+            s.AppendLine("      'RELINKED=1'");
+            s.AppendLine("    }");
+            s.AppendLine("  }");
+            s.AppendLine("}");
+            s.AppendLine("if ($catUser -eq $null) { 'RESULT=NO_CAT_USER'; exit 0 }");
             // --- БСП: 4) членство
             s.AppendLine("$q = $ib.NewObject('Запрос')");
             s.AppendLine("$q.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка КАК Сс ИЗ Справочник.ГруппыДоступа.Пользователи КАК Т ГДЕ Т.Ссылка = &Г И Т.Пользователь = &У'");
@@ -1411,9 +1444,11 @@ namespace Oc1c
                 bool pc = r.StdOut.IndexOf("PROFILE_CREATED=1") >= 0;
                 bool gc = r.StdOut.IndexOf("GROUP_CREATED=1") >= 0;
                 bool ma = r.StdOut.IndexOf("MEMBER_ADDED=1") >= 0;
+                bool rl = r.StdOut.IndexOf("RELINKED=1") >= 0;
                 detail = "профиль «" + pn + "»" + (pc ? " создан (ролей: " + roles + ")" : " уже был") +
                          (gc ? ", группа «Чтение (AI)» создана" : ", группа уже была") +
-                         (ma ? ", читатель включён" : ", читатель уже в группе");
+                         (ma ? ", читатель включён" : ", читатель уже в группе") +
+                         (rl ? ", связь элемента справочника восстановлена" : "");
             }
             return true;
         }
