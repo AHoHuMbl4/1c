@@ -1210,6 +1210,68 @@ namespace Oc1c
             return null;
         }
 
+        // Автосоздание пользователя-читателя (решение владельца 08.08: описание + Enter).
+        // Пароль — случайный, генерирует установщик: не нужен никому, остаётся только
+        // в agent.ini под ACL (строго сильнее ручного). Создаётся пользователь ИБ
+        // (скрыт из списка выбора — сервисный), а в БСП-базе — и элемент справочника
+        // «Пользователи» со связью по GUID (без него группы доступа его не видят).
+        public static bool CreateReaderUser(Platform p, BaseRef b, string adminUser, string adminPwd,
+                                            string readerUser, string readerPwd, out string detail)
+        {
+            detail = "";
+            if (p == null || !p.HasCom) { detail = "нет COM-коннектора 1С"; return false; }
+            if (string.IsNullOrEmpty(adminUser)) { detail = "нет учётных данных администратора 1С"; return false; }
+            if (Ctx.DryRun) { Log.Sim("создал бы пользователя ИБ «" + readerUser + "»"); detail = "симуляция"; return true; }
+
+            StringBuilder s = new StringBuilder();
+            s.AppendLine("$GP=[Reflection.BindingFlags]::GetProperty");
+            s.AppendLine("function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,@()) }");
+            s.AppendLine("try {");
+            s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
+            s.AppendLine("$ib = $connector.Connect($env:OC1C_CONNSTR)");
+            s.AppendLine("$users = P $ib 'ПользователиИнформационнойБазы'");
+            s.AppendLine("$u = $users.НайтиПоИмени($env:OC1C_READER)");
+            s.AppendLine("if ($u -ne $null) { 'RESULT=EXISTS'; exit 0 }");
+            s.AppendLine("$u = $users.СоздатьПользователя()");
+            s.AppendLine("$u.Имя = $env:OC1C_READER");
+            s.AppendLine("$u.ПолноеИмя = $env:OC1C_READER");
+            s.AppendLine("$u.АутентификацияСтандартная = $true");
+            s.AppendLine("$u.Пароль = $env:OC1C_READER_PWD");
+            s.AppendLine("$u.ПоказыватьВСпискеВыбора = $false");   // сервисная учётка — не светится в окне входа
+            s.AppendLine("$u.ЗапрещеноИзменятьПароль = $true");
+            s.AppendLine("$u.Записать()");
+            s.AppendLine("'USER_CREATED=1'");
+            // БСП: элемент справочника «Пользователи» со связью по GUID (для групп доступа)
+            s.AppendLine("$pm = $null; try { $pm = $ib.NewObject('СправочникМенеджер.Пользователи') } catch { $pm = $null }");
+            s.AppendLine("if ($pm -ne $null) {");
+            s.AppendLine("  $guid = $u.УникальныйИдентификатор()");
+            s.AppendLine("  $q = $ib.NewObject('Запрос')");
+            s.AppendLine("  $q.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка КАК Сс ИЗ Справочник.Пользователи КАК Т ГДЕ Т.ИдентификаторПользователяИБ = &Ид'");
+            s.AppendLine("  $q.УстановитьПараметр('Ид', $guid)");
+            s.AppendLine("  if ($q.Выполнить().Пустой()) {");
+            s.AppendLine("    $cu = $pm.СоздатьЭлемент()");
+            s.AppendLine("    $cu.Наименование = $env:OC1C_READER");
+            s.AppendLine("    $cu.ИдентификаторПользователяИБ = $guid");
+            s.AppendLine("    $cu.Записать()");
+            s.AppendLine("    'CATUSER_CREATED=1'");
+            s.AppendLine("  }");
+            s.AppendLine("}");
+            s.AppendLine("'RESULT=OK'");
+            s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
+
+            Dictionary<string, string> env = new Dictionary<string, string>();
+            env["OC1C_PROGID"] = p.ProgId;
+            env["OC1C_CONNSTR"] = b.ConnStrCom(adminUser, adminPwd);
+            env["OC1C_READER"] = readerUser;
+            env["OC1C_READER_PWD"] = readerPwd;
+            ExecResult r = Ps.Run(s.ToString(), p.X86, 600000, env);
+            if (r.All.IndexOf("RESULT=EXISTS") >= 0) { detail = "уже существует"; return true; }
+            if (r.All.IndexOf("RESULT=OK") < 0) { detail = "COM: " + ComErrorLine(r); return false; }
+            detail = "пользователь ИБ «" + readerUser + "» создан (скрыт из списка входа)" +
+                     (r.StdOut.IndexOf("CATUSER_CREATED=1") >= 0 ? ", элемент справочника «Пользователи» создан" : "");
+            return true;
+        }
+
         // Автоназначение прав читателю (решение владельца 08.08, «вариант А»): ручной
         // рецепт для УТ/КА/ERP — ~400 галочек ролей, непригоден; установщик уже пишет
         // в базу санкционированно (состав OData), это та же категория. Лестница по факту

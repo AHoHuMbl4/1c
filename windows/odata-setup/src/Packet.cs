@@ -290,7 +290,42 @@ namespace Oc1c
                     // админских кредов нет — тогда диагностика по клавише D ниже.
                     bool is401 = probeDetail.IndexOf("не авторизуется", StringComparison.OrdinalIgnoreCase) >= 0;
                     if (is401 && plat != null && plat.HasCom && !string.IsNullOrEmpty(o.AdminUser))
-                        DiagnoseReader(plat, bref, o.AdminUser, o.AdminPassword, probeUser, baseTitle);
+                    {
+                        string diag = DiagnoseReader(plat, bref, o.AdminUser, o.AdminPassword, probeUser, baseTitle);
+                        // Автосоздание читателя (решение владельца 08.08): описание + Enter.
+                        if (diag == "NOTFOUND")
+                        {
+                            Console.WriteLine();
+                            Console.WriteLine("       Могу создать пользователя сам. Что будет сделано:");
+                            Console.WriteLine("       - пользователь 1С «" + probeUser + "» ТОЛЬКО для чтения, скрыт из окна входа;");
+                            Console.WriteLine("       - пароль — случайный, его не будет знать никто: он останется только");
+                            Console.WriteLine("         в защищённых настройках агента на этом компьютере;");
+                            Console.WriteLine("       - профиль «Только просмотр» (при отсутствии) и группа доступа — как выше.");
+                            Console.Write("       Enter — создать самому, другое — создам вручную в 1С: ");
+                            string cr = (Console.ReadLine() ?? "").Trim();
+                            if (cr.Length == 0)
+                            {
+                                o.ReaderPassword = GenPassword();
+                                Log.AddSecret(o.ReaderPassword);
+                                string cd;
+                                if (!Steps.CreateReaderUser(plat, bref, o.AdminUser, o.AdminPassword, probeUser, o.ReaderPassword, out cd))
+                                    Console.WriteLine("       Не смог создать: " + cd);
+                                else
+                                {
+                                    Log.File("читатель создан установщиком: " + cd);
+                                    Console.WriteLine("       " + cd);
+                                    string rd;
+                                    if (Steps.EnsureReaderRights(plat, bref, o.AdminUser, o.AdminPassword, probeUser, out rd))
+                                    { Log.File("права читателю: " + rd); Console.WriteLine("       " + rd); rightsFixTried = true; }
+                                    else Console.WriteLine("       права пока не назначены: " + rd);
+                                    Console.WriteLine("       Проверяю чтение…");
+                                    if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+                                    { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
+                                    Console.WriteLine("       Пока не читается: " + probeDetail + " (Enter — проверить ещё раз)");
+                                }
+                            }
+                        }
+                    }
                     Console.Write("       Enter — проверить ещё раз, D — найти причину автоматически, Q — прервать: ");
                     string ans = (Console.ReadLine() ?? "").Trim();
                     if (string.Equals(ans, "q", StringComparison.OrdinalIgnoreCase))
@@ -604,14 +639,15 @@ namespace Oc1c
         // Место под данные агента: очередь чанков ≈ размер базы сжатой + индекс версий.
         // COM-диагностика 401 гейта читателя: OData не различает «нет пользователя»
         // и «неверный пароль», а COM по админским кредам — различает (прогоны 08.08).
-        static void DiagnoseReader(Platform plat, BaseRef bref, string adminUser, string adminPwd,
-                                   string reader, string baseTitle)
+        // Возвращает "NOTFOUND" / "FOUND" / null (определить не удалось).
+        static string DiagnoseReader(Platform plat, BaseRef bref, string adminUser, string adminPwd,
+                                     string reader, string baseTitle)
         {
             Console.WriteLine("       Смотрю пользователей базы " + baseTitle + "…");
             int curD, addedD; string rolesD;
             if (!Steps.SetOdataComposition(plat, bref, adminUser, adminPwd,
                                            new List<string>(), false, reader, out curD, out addedD, out rolesD))
-            { Log.File("диагностика читателя: COM-проверка не удалась (см. ошибку выше)"); return; }
+            { Log.File("диагностика читателя: COM-проверка не удалась (см. ошибку выше)"); return null; }
             if (rolesD == "__NOTFOUND__")
             {
                 Console.WriteLine("       Диагностика: пользователя «" + reader + "» в базе " + baseTitle +
@@ -620,13 +656,27 @@ namespace Oc1c
                 Console.WriteLine("       что пользователь информационной базы. Точный список — в Конфигураторе:");
                 Console.WriteLine("       Администрирование → Пользователи.");
                 Log.File("диагностика: «" + reader + "» в базе не найден");
+                return "NOTFOUND";
             }
-            else if (rolesD != null)
+            if (rolesD != null)
             {
                 Console.WriteLine("       Диагностика: пользователь «" + reader + "» в базе ЕСТЬ — значит, не подходит ПАРОЛЬ");
                 Console.WriteLine("       (проверьте раскладку клавиатуры RU/EN) или снята галка «Аутентификация 1С:Предприятия».");
                 Log.File("диагностика: «" + reader + "» найден, роли: " + rolesD);
+                return "FOUND";
             }
+            return null;
+        }
+
+        // Случайный пароль читателя (решение владельца 08.08): не знает никто,
+        // живёт только в agent.ini под ACL. 36 hex-символов из крипто-ГСЧ.
+        static string GenPassword()
+        {
+            byte[] buf = new byte[18];
+            using (var rng = new RNGCryptoServiceProvider()) rng.GetBytes(buf);
+            StringBuilder sb = new StringBuilder();
+            for (int i = 0; i < buf.Length; i++) sb.Append(buf[i].ToString("x2"));
+            return sb.ToString();
         }
 
         // Подсказка прав под конкретную базу (state — Steps.ReaderRightsState,
