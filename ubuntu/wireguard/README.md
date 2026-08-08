@@ -38,17 +38,19 @@ Windows (TLS) → https://1c-gate.timpul.ru:443  [DNS → 201.34.130.46]
 
 ## Состояние сторон
 
-**Ubuntu-релей `89.23.101.22` — ✅ поднят 08.08 (замена FreeBSD, миграция идёт параллельно):**
+**Ubuntu-релей `89.23.101.22` — ✅ В БОЮ с 08.08 (DNS переключён, FreeBSD выведен):**
+- `[замер 08.08]` боевая проверка по публичному DNS (с FreeBSD, свежий резолв):
+  health с сертом `ut` → **200 `packet-server-ok`**, без серта — обрыв TLS;
+  ACME-проба через домен (файл из webroot по HTTP) — отвечает, продление lego
+  будет работать. Туннель — юнит `1c-gate-tunnel-ubuntu.service` (active).
 - Ubuntu 26.04, 2 vCPU / 2 ГБ; HAProxy 3.2.9 + lego + fail2ban 1.1.0 из apt.
 - Конфиги версионируются в [`relay/`](relay/) — порт FreeBSD-версии: `haproxy.cfg`
   (`:443` TLS+mTLS → `127.0.0.1:6022`, `:80` ACME/редирект), `acmewww.service`
   (webroot на 127.0.0.1:8402), `lego.yml` + `lego-renew.{sh,service,timer}` +
   `deploy-certs.sh` (pem → `systemctl reload haproxy`), `jail.local`.
-- Сертификат LE и аккаунт скопированы с FreeBSD — TLS живёт ДО переключения DNS;
-  продление заработает само после него (HTTP-01 требует, чтобы домен смотрел сюда).
+- Сертификат LE и аккаунт скопированы с FreeBSD — TLS жил до переключения DNS.
 - Юзер `gate-tunnel` (nologin), тот же ключ с `restrict,port-forwarding,
-  permitlisten="127.0.0.1:6022"`. Туннель — юнит `1c-gate-tunnel-ubuntu.service`
-  (ставит `setup-ubuntu-tunnel-ubuntu.sh`, root-шаг на основном Ubuntu).
+  permitlisten="127.0.0.1:6022"`.
 - fail2ban: стоковый фильтр Ubuntu рабочий (замер 08.08: бан брутфорсера
   подтверждён); в `ignoreip` внесены свои IP (NAT основного сервера, FreeBSD) —
   иначе jail отсекает наш же туннель (проверено на себе: 4 неудачных входа при
@@ -56,25 +58,12 @@ Windows (TLS) → https://1c-gate.timpul.ru:443  [DNS → 201.34.130.46]
 - Зона `Europe/Moscow`, timesyncd синхронизирован.
 - Приватная сеть хостера: у релея `10.1.1.4` (решение владельца 08.08 — позже
   туда же подключат основной сервер; транспорт можно будет перевести на неё).
-- `[замер 08.08]` сквозная проба через `--resolve` (как будто DNS уже переключён):
-  health с клиентским сертом `ut` → **200 `packet-server-ok`**, без серта — обрыв
-  TLS (mTLS), `:80` → 301, ACME-путь жив. Цепочка: клиент → HAProxy (новый релей)
-  → туннель → `packet_server` :6090.
 
-**FreeBSD — ✅ поднята целиком (06.08), в контуре до вывода после миграции:**
-- HAProxy 3.4: `:443` TLS → `127.0.0.1:6022` (`httpchk GET /health` ждёт 200);
-  `:80` — ACME HTTP-01 (webroot через `acmewww` на 127.0.0.1:8402) + редирект.
-  Пока туннель/приёмник не подняты — 503, это ожидаемое состояние.
-- Сертификат LE `CN=1c-gate.timpul.ru` выпущен (`lego`); продление —
-  `periodic weekly 604.lego` + `deploy-certs.sh` (pem → `haproxy reload`).
-- Юзер `gate-tunnel` (nologin): ssh-ключ с `restrict,port-forwarding,
-  permitlisten="127.0.0.1:6022"` — ключ только для проброса, шелла нет.
-- Автозапуск: `rc.conf` — `haproxy_enable`, `acmewww_enable` (wireguard — NO).
-- Время: зона `Europe/Moscow` (`/etc/localtime`), `ntpd_enable` +
-  `ntpd_sync_on_start` в `rc.conf` (07.08; часы шли точно, но в UTC).
-- Конфиги версионируются в [`freebsd/`](freebsd/): `haproxy.conf`, `lego.yml`,
-  `lego.sh`, `deploy-certs.sh`, `rc.d/acmewww`, сниппеты, `wg0.conf.sample`
-  (без ключей — ключи только на серверах).
+**FreeBSD `201.34.130.46` — ⛔ ВЫВЕДЕНА из контура 08.08** (DNS ушёл на
+Ubuntu-релей, туннельный юнит `1c-gate-tunnel.service` на основном сервере
+остановлен; VM удаляется владельцем). Исторически (06.08–08.08) держала:
+HAProxy 3.4 TLS → `127.0.0.1:6022`, lego, юзер `gate-tunnel`, fail2ban+pf,
+зону MSK/ntpd. Конфиги остаются в [`freebsd/`](freebsd/) как образец порта.
 
 **Ubuntu — ✅ туннель в бою (06.08, юнит `1c-gate-tunnel.service`):**
 `active` + `enabled`, `Restart=always`. `[замер]` сквозная проба через туннель
