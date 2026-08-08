@@ -113,6 +113,17 @@ Windows шлёт шифрованные пакеты, Ubuntu принимает 
 | `windows/packet-agent/src/PacketAgent.cs` | **агент пакетов** (C# 5, csc .NET 4, без NuGet — как setup): CLI по `AGENT_TZ §7` (--version/--smoke/демон/single-instance через mutex), такт: config → проба версий/контент-отпечаток → дельта → чанки → zstd+age (внешние exe) → отправка с догрузкой missing → индекс версий ПОСЛЕ verified (К2). Индекс — файлы `<entity>.idx` в data_dir |
 | `work/packet/golden/` | **golden-проба формата (К5)**: живые фикстуры OData стенда + `make_reference.py` (эталон через настоящий `poc_load_entity`) + `probe.cmd` (`fc /b` на Windows). Снимок $metadata — `metadata.xml.zst` (20 МБ → 0,5). Зелёная проба — условие выката агента |
 
+### Почтовый приёмник — `ubuntu/mail/` (08.08, подготовлен)
+
+Компания пересылает выбранные письма на внутренний ящик; дальше их читает
+OpenClaw (чтение — отдельный трек, здесь его нет). Postfix (приём :25,
+`ai@<MAIL_DOMAIN>` + catch-all через `luser_relay`) → Maildir пользователя
+`aimail`; Dovecot отдаёт ящик по IMAP только на `127.0.0.1:143`. Установка —
+`install-mail.sh` (root, идемпотентно, со встроенным smoke-письмом), секрет —
+`/etc/1c-mail.env` (640 root:1c-secrets). Устройство и приёмка —
+`ubuntu/mail/README.md`. Место компонента в прод-контуре — открытый вопрос
+`docs/PLAN_PROD_LXC.md §7`.
+
 ### Модели — `/etc/1c-embed.env`, одно место на весь продукт
 
 🔴 **02.08 эмбеддер и реранкер переехали в контур владельца** (`Qwen3-Embedding-8B` +
