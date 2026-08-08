@@ -20,7 +20,7 @@ namespace Oc1c
 {
     // ------------------------------------------------------- комплект от Ubuntu
     // packet-setup.json генерируется на Ubuntu один раз на базу:
-    // {"base_id":"ut","token":"…","recipient_pubkey":"age1…","receiver_url":"https://…",
+    // {"base_id":"<база>","token":"…","recipient_pubkey":"age1…","receiver_url":"https://…",
     //  "client_pfx":"client.pfx","client_pfx_password":"…"}   (mTLS, контракт §8)
     internal class PacketSetup
     {
