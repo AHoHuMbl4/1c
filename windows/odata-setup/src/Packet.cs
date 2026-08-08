@@ -212,9 +212,9 @@ namespace Oc1c
             // ПУСТОМ составе OData (ложный зелёный smoke 07.08). Читаем первую
             // сущность состава теми же кредами, что пойдут в agent.ini.
             string probeUser = string.IsNullOrEmpty(o.ReaderUser) ? "ai_reader" : o.ReaderUser;
-            // Пользователь-читатель — единственный ручной шаг: ведём по шагам, ждём
-            // подтверждения и ПРОВЕРЯЕМ факт чтения, пока не получится (решение
-            // владельца 07.08). Автоматику (пайп/--unattended) не донимаем.
+            // Пользователь-читатель: при наличии админских кредов и COM установщик
+            // создаёт его САМ (решение владельца 08.08); ручная инструкция — запасной
+            // путь. Пробу чтения гоняем, пока не получится. Автоматику не донимаем.
             string probeDetail = "";
             // Имя базы для человека: прежде всего — как в стартовом окне 1С (ibases.v8i),
             // иначе имя каталога/Ref (прогон 08.08: путь вместо имени путал с другой базой).
@@ -228,7 +228,32 @@ namespace Oc1c
                 // факту базы, а не ветвиться. Один COM-запрос, кэшируем на весь гейт.
                 string rightsState = Steps.ReaderRightsState(plat, bref, o.AdminUser, o.AdminPassword);
                 bool rightsFixTried = false;
+                bool readerPwdAuto = false;   // пароль сгенерировали мы — не переспрашивать в цикле
+                bool gateDone = false;        // автосоздание + проба уже зелёные
+                bool readerKnown = false;     // читатель точно есть — инструкция без шагов создания
+                // Сначала диагностика и предложение создать читателя САМИ (решение
+                // владельца 08.08). До прогона 08.08 инструкция «создайте сами» шла
+                // первой и читалась как «программа ничего не делает».
+                if (plat != null && plat.HasCom && !string.IsNullOrEmpty(o.AdminUser))
+                {
+                    string diag0 = DiagnoseReader(plat, bref, o.AdminUser, o.AdminPassword, probeUser, baseTitle, false);
+                    readerKnown = (diag0 == "FOUND");
+                    if (diag0 == "NOTFOUND" &&
+                        OfferAndCreateReader(plat, bref, o, probeUser, odataUrl,
+                                             ref rightsFixTried, ref readerPwdAuto, out probeDetail))
+                        gateDone = true;
+                }
+                if (!gateDone)
+                {
                 Console.WriteLine();
+                if (readerKnown)
+                {
+                    Console.WriteLine("       Читатель «" + probeUser + "» в базе " + baseTitle + " уже есть —");
+                    Console.WriteLine("       осталось подтвердить пароль и права ТОЛЬКО на чтение:");
+                    PrintRightsHint(probeUser, rightsState, "         ");
+                }
+                else
+                {
                 Console.WriteLine("       НУЖЕН ПОЛЬЗОВАТЕЛЬ-ЧИТАТЕЛЬ в 1С (единственный ручной шаг):");
                 Console.WriteLine("         1) откройте 1С:Предприятие базы " + baseTitle + " под администратором;");
                 if (string.IsNullOrEmpty(o.BaseName) && bref != null && bref.IsFile)
@@ -240,12 +265,17 @@ namespace Oc1c
                 Console.WriteLine("            пользователя базы — запись остаётся только в справочнике) + «Записать и закрыть»;");
                 PrintRightsHint(probeUser, rightsState, "         ");
                 Console.WriteLine("         5) вернитесь сюда.");
+                }
                 while (true)
                 {
                     // Без этого вопроса проба шла с пустым паролем и крутила цикл
-                    // вхолостую (прогон владельца 07.08).
-                    o.ReaderPassword = Win.ReadPassword("Пароль пользователя «" + probeUser + "» (пусто — если без пароля)").Trim();
-                    Log.AddSecret(o.ReaderPassword);
+                    // вхолостую (прогон владельца 07.08). Пароль, сгенерированный при
+                    // автосоздании, не переспрашиваем — иначе он затирался вводом.
+                    if (!readerPwdAuto)
+                    {
+                        o.ReaderPassword = Win.ReadPassword("Пароль пользователя «" + probeUser + "» (пусто — если без пароля)").Trim();
+                        Log.AddSecret(o.ReaderPassword);
+                    }
                     Console.WriteLine("       Проверяю доступ к базе… (может занять до минуты)");
                     if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
                     { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
@@ -293,38 +323,10 @@ namespace Oc1c
                     {
                         string diag = DiagnoseReader(plat, bref, o.AdminUser, o.AdminPassword, probeUser, baseTitle);
                         // Автосоздание читателя (решение владельца 08.08): описание + Enter.
-                        if (diag == "NOTFOUND")
-                        {
-                            Console.WriteLine();
-                            Console.WriteLine("       Могу создать пользователя сам. Что будет сделано:");
-                            Console.WriteLine("       - пользователь 1С «" + probeUser + "» ТОЛЬКО для чтения, скрыт из окна входа;");
-                            Console.WriteLine("       - пароль — случайный, его не будет знать никто: он останется только");
-                            Console.WriteLine("         в защищённых настройках агента на этом компьютере;");
-                            Console.WriteLine("       - профиль «Только просмотр» (при отсутствии) и группа доступа — как выше.");
-                            Console.Write("       Enter — создать самому, другое — создам вручную в 1С: ");
-                            string cr = (Console.ReadLine() ?? "").Trim();
-                            if (cr.Length == 0)
-                            {
-                                o.ReaderPassword = GenPassword();
-                                Log.AddSecret(o.ReaderPassword);
-                                string cd;
-                                if (!Steps.CreateReaderUser(plat, bref, o.AdminUser, o.AdminPassword, probeUser, o.ReaderPassword, out cd))
-                                    Console.WriteLine("       Не смог создать: " + cd);
-                                else
-                                {
-                                    Log.File("читатель создан установщиком: " + cd);
-                                    Console.WriteLine("       " + cd);
-                                    string rd;
-                                    if (Steps.EnsureReaderRights(plat, bref, o.AdminUser, o.AdminPassword, probeUser, out rd))
-                                    { Log.File("права читателю: " + rd); Console.WriteLine("       " + rd); rightsFixTried = true; }
-                                    else Console.WriteLine("       права пока не назначены: " + rd);
-                                    Console.WriteLine("       Проверяю чтение…");
-                                    if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
-                                    { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
-                                    Console.WriteLine("       Пока не читается: " + probeDetail + " (Enter — проверить ещё раз)");
-                                }
-                            }
-                        }
+                        if (diag == "NOTFOUND" &&
+                            OfferAndCreateReader(plat, bref, o, probeUser, odataUrl,
+                                                 ref rightsFixTried, ref readerPwdAuto, out probeDetail))
+                            break;
                     }
                     Console.Write("       Enter — проверить ещё раз, D — найти причину автоматически, Q — прервать: ");
                     string ans = (Console.ReadLine() ?? "").Trim();
@@ -344,6 +346,7 @@ namespace Oc1c
                         DiagnoseReader(plat, bref, o.AdminUser, o.AdminPassword, probeUser, baseTitle);
                     }
                 }
+                } // !gateDone
             }
             if (!Ctx.DryRun && probeDetail.Length == 0)
             {
@@ -643,6 +646,14 @@ namespace Oc1c
         static string DiagnoseReader(Platform plat, BaseRef bref, string adminUser, string adminPwd,
                                      string reader, string baseTitle)
         {
+            return DiagnoseReader(plat, bref, adminUser, adminPwd, reader, baseTitle, true);
+        }
+
+        // probeFailed=true — вызов после неудачной пробы чтения (тексты про пароль/другую базу);
+        // false — упреждающая проверка до инструкций (нейтральные тексты).
+        static string DiagnoseReader(Platform plat, BaseRef bref, string adminUser, string adminPwd,
+                                     string reader, string baseTitle, bool probeFailed)
+        {
             Console.WriteLine("       Смотрю пользователей базы " + baseTitle + "…");
             int curD, addedD; string rolesD;
             if (!Steps.SetOdataComposition(plat, bref, adminUser, adminPwd,
@@ -650,22 +661,66 @@ namespace Oc1c
             { Log.File("диагностика читателя: COM-проверка не удалась (см. ошибку выше)"); return null; }
             if (rolesD == "__NOTFOUND__")
             {
-                Console.WriteLine("       Диагностика: пользователя «" + reader + "» в базе " + baseTitle +
-                                  " НЕТ — вероятно, он создан в другой базе (в списке запуска 1С легко открыть не ту).");
-                Console.WriteLine("       Важно: запись в справочнике «Пользователи» в 1С:Предприятие — НЕ то же самое,");
-                Console.WriteLine("       что пользователь информационной базы. Точный список — в Конфигураторе:");
-                Console.WriteLine("       Администрирование → Пользователи.");
+                if (probeFailed)
+                {
+                    Console.WriteLine("       Диагностика: пользователя «" + reader + "» в базе " + baseTitle +
+                                      " НЕТ — вероятно, он создан в другой базе (в списке запуска 1С легко открыть не ту).");
+                    Console.WriteLine("       Важно: запись в справочнике «Пользователи» в 1С:Предприятие — НЕ то же самое,");
+                    Console.WriteLine("       что пользователь информационной базы. Точный список — в Конфигураторе:");
+                    Console.WriteLine("       Администрирование → Пользователи.");
+                }
+                else Console.WriteLine("       Пользователя «" + reader + "» в базе " + baseTitle + " пока нет.");
                 Log.File("диагностика: «" + reader + "» в базе не найден");
                 return "NOTFOUND";
             }
             if (rolesD != null)
             {
-                Console.WriteLine("       Диагностика: пользователь «" + reader + "» в базе ЕСТЬ — значит, не подходит ПАРОЛЬ");
-                Console.WriteLine("       (проверьте раскладку клавиатуры RU/EN) или снята галка «Аутентификация 1С:Предприятия».");
+                if (probeFailed)
+                {
+                    Console.WriteLine("       Диагностика: пользователь «" + reader + "» в базе ЕСТЬ — значит, не подходит ПАРОЛЬ");
+                    Console.WriteLine("       (проверьте раскладку клавиатуры RU/EN) или снята галка «Аутентификация 1С:Предприятия».");
+                }
+                else Console.WriteLine("       Пользователь «" + reader + "» в базе есть.");
                 Log.File("диагностика: «" + reader + "» найден, роли: " + rolesD);
                 return "FOUND";
             }
             return null;
+        }
+
+        // Автосоздание читателя (решение владельца 08.08): описание + Enter, затем
+        // создание пользователя, права «Только просмотр» и проба чтения. true — гейт
+        // пройден (проба зелёная); false — пользователь выбрал ручной путь или не вышло.
+        static bool OfferAndCreateReader(Platform plat, BaseRef bref, Opts o, string probeUser,
+                                         string odataUrl, ref bool rightsFixTried, ref bool readerPwdAuto,
+                                         out string probeDetail)
+        {
+            probeDetail = "";
+            Console.WriteLine();
+            Console.WriteLine("       Могу создать пользователя сам. Что будет сделано:");
+            Console.WriteLine("       - пользователь 1С «" + probeUser + "» ТОЛЬКО для чтения, скрыт из окна входа;");
+            Console.WriteLine("       - пароль — случайный, его не будет знать никто: он останется только");
+            Console.WriteLine("         в защищённых настройках агента на этом компьютере;");
+            Console.WriteLine("       - профиль «Только просмотр» (при отсутствии) и группа доступа — как выше.");
+            Console.Write("       Enter — создать самому, другое — создам вручную в 1С: ");
+            string cr = (Console.ReadLine() ?? "").Trim();
+            if (cr.Length != 0) return false;
+            o.ReaderPassword = GenPassword();
+            Log.AddSecret(o.ReaderPassword);
+            string cd;
+            if (!Steps.CreateReaderUser(plat, bref, o.AdminUser, o.AdminPassword, probeUser, o.ReaderPassword, out cd))
+            { Console.WriteLine("       Не смог создать: " + cd); Log.File("автосоздание читателя не удалось: " + cd); return false; }
+            readerPwdAuto = true;
+            Log.File("читатель создан установщиком: " + cd);
+            Console.WriteLine("       " + cd);
+            string rd;
+            if (Steps.EnsureReaderRights(plat, bref, o.AdminUser, o.AdminPassword, probeUser, out rd))
+            { Log.File("права читателю: " + rd); Console.WriteLine("       " + rd); rightsFixTried = true; }
+            else Console.WriteLine("       права пока не назначены: " + rd);
+            Console.WriteLine("       Проверяю чтение…");
+            if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+            { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); return true; }
+            Console.WriteLine("       Пока не читается: " + probeDetail + " (Enter — проверить ещё раз)");
+            return false;
         }
 
         // Случайный пароль читателя (решение владельца 08.08): не знает никто,
