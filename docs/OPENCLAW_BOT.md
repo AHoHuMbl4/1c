@@ -220,6 +220,10 @@ That is all.» → «We started», остаток абзаца исчезал м
   заодно `web_search`, `image_generation`, `vision` — ассистент текстовый).
   ⚠ Грабля: `POST /api/v1/models/model/update` требует `access_grants` в теле,
   без него — 500 (ValidationError) [замер 08.08].
+- **«Предложено» на пустом чате** — это штатные prompt suggestions
+  (`ui.prompt_suggestions`, вшитые английские примеры Open WebUI). Заменены на
+  четыре русских вопроса про данные 1С (`POST /api/v1/configs/suggestions`) —
+  это же заготовка «шаблоны» в миниатюре; правится без кода, Admin → Interface.
 
 ### Заготовки фронта (направление владельца 08.08 — не план, не сделано)
 
