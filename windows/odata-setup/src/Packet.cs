@@ -216,11 +216,12 @@ namespace Oc1c
             // подтверждения и ПРОВЕРЯЕМ факт чтения, пока не получится (решение
             // владельца 07.08). Автоматику (пайп/--unattended) не донимаем.
             string probeDetail = "";
+            string baseTitle = (bref == null || string.IsNullOrEmpty(bref.Title)) ? "эта база" : ("«" + bref.Title + "»");
             if (!o.Unattended && !Console.IsInputRedirected && !Ctx.DryRun)
             {
                 Console.WriteLine();
                 Console.WriteLine("       НУЖЕН ПОЛЬЗОВАТЕЛЬ-ЧИТАТЕЛЬ в 1С (единственный ручной шаг):");
-                Console.WriteLine("         1) откройте 1С:Предприятие этой базы под администратором;");
+                Console.WriteLine("         1) откройте 1С:Предприятие базы " + baseTitle + " под администратором;");
                 Console.WriteLine("         2) Администрирование → Настройки пользователей и прав → Пользователи;");
                 Console.WriteLine("         3) создайте пользователя «" + probeUser + "», профиль «Только просмотр», задайте пароль;");
                 Console.WriteLine("         4) вернитесь сюда.");

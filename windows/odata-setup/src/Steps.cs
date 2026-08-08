@@ -51,6 +51,8 @@ namespace Oc1c
             return s;
         }
         public string Display { get { return IsFile ? ("файловая: " + Dir) : ("клиент-серверная: " + Srvr + " / " + Name); } }
+        // Короткое имя для подсказок человеку («базы X», а не «этой базы»).
+        public string Title { get { return IsFile ? Path.GetFileName(Dir.TrimEnd('\\')) : Name; } }
     }
 
     internal static class Steps
