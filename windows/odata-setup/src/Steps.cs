@@ -1174,6 +1174,42 @@ namespace Oc1c
             return null;
         }
 
+        // Состояние прав «только чтение» в конкретной базе (прогон 08.08: в УТ/КА
+        // поставляемого профиля «Только просмотр» НЕТ, в БП есть — подсказка обязана
+        // идти под эту базу, а не ветвиться текстом):
+        //   GROUP   — есть группа доступа с профилем «Только просмотр» (просто включить);
+        //   PROFILE — профиль есть, группы нет (создать группу);
+        //   NONE    — ни профиля, ни группы (УТ/КА: создать профиль по списку ролей);
+        //   null    — определить не удалось (нет COM, нет админ-кредов, не-БСП конфигурация).
+        public static string ReaderRightsState(Platform p, BaseRef b, string user, string pwd)
+        {
+            if (p == null || !p.HasCom || string.IsNullOrEmpty(user) || Ctx.DryRun) return null;
+            StringBuilder s = new StringBuilder();
+            s.AppendLine("try {");
+            s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
+            s.AppendLine("$ib = $connector.Connect($env:OC1C_CONNSTR)");
+            // Пустой() — метод, зовём напрямую (квирк COM 1С: методы — прямо,
+            // свойства — через InvokeMember; здесь свойства не нужны вовсе).
+            s.AppendLine("$q = $ib.NewObject('Запрос')");
+            s.AppendLine("$q.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка ИЗ Справочник.ГруппыДоступа КАК Т ГДЕ Т.Профиль.Наименование = &Н'");
+            s.AppendLine("$q.УстановитьПараметр('Н', 'Только просмотр')");
+            s.AppendLine("if (-not $q.Выполнить().Пустой()) { 'STATE=GROUP' } else {");
+            s.AppendLine("  $q2 = $ib.NewObject('Запрос')");
+            s.AppendLine("  $q2.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка ИЗ Справочник.ПрофилиГруппДоступа КАК Т ГДЕ Т.Наименование = &Н'");
+            s.AppendLine("  $q2.УстановитьПараметр('Н', 'Только просмотр')");
+            s.AppendLine("  if (-not $q2.Выполнить().Пустой()) { 'STATE=PROFILE' } else { 'STATE=NONE' }");
+            s.AppendLine("}");
+            s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
+            Dictionary<string, string> env = new Dictionary<string, string>();
+            env["OC1C_PROGID"] = p.ProgId;
+            env["OC1C_CONNSTR"] = b.ConnStrCom(user, pwd);
+            ExecResult r = Ps.Run(s.ToString(), p.X86, 180000, env);
+            Match m = Regex.Match(r.StdOut, @"STATE=(GROUP|PROFILE|NONE)");
+            if (m.Success) return m.Groups[1].Value;
+            Log.File("ReaderRightsState: не определено (" + ComErrorLine(r) + ")");
+            return null;
+        }
+
         // Возвращает true при успехе. current/added — что было и что стало.
         public static bool SetOdataComposition(Platform p, BaseRef b, string user, string pwd, List<string> scopeKeys,
                                                bool writeMode, string readerUser, out int current, out int added, out string roles)
