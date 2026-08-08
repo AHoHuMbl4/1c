@@ -229,8 +229,10 @@ namespace Oc1c
                 string rightsState = Steps.ReaderRightsState(plat, bref, o.AdminUser, o.AdminPassword);
                 Console.WriteLine();
                 Console.WriteLine("       НУЖЕН ПОЛЬЗОВАТЕЛЬ-ЧИТАТЕЛЬ в 1С (единственный ручной шаг):");
-                Console.WriteLine("         1) откройте 1С:Предприятие базы " + baseTitle + " под администратором");
-                Console.WriteLine("            (клавиша O здесь — открою сам; если базы нет в стартовом списке 1С — это нормально, O открывает напрямую);");
+                Console.WriteLine("         1) откройте 1С:Предприятие базы " + baseTitle + " под администратором.");
+                Console.WriteLine("            Если база ещё не открыта — нажмите здесь латинскую букву O: программа");
+                Console.WriteLine("            сама запустит 1С:Предприятие с этой базой (в список запуска 1С её");
+                Console.WriteLine("            добавлять не нужно);");
                 Console.WriteLine("         2) раздел «Администрирование» (в УТ — «НСИ и администрирование») →");
                 Console.WriteLine("            Настройки пользователей и прав → Пользователи;");
                 Console.WriteLine("         3) создайте пользователя «" + probeUser + "», задайте пароль;");
@@ -266,7 +268,7 @@ namespace Oc1c
                     bool is401 = probeDetail.IndexOf("не авторизуется", StringComparison.OrdinalIgnoreCase) >= 0;
                     if (is401 && plat != null && plat.HasCom && !string.IsNullOrEmpty(o.AdminUser))
                         DiagnoseReader(plat, bref, o.AdminUser, o.AdminPassword, probeUser, baseTitle);
-                    Console.Write("       Enter — ещё раз, O — открыть базу в 1С, D — найти причину автоматически, Q — прервать: ");
+                    Console.Write("       Enter — проверить ещё раз, O (латинская) — открыть базу в 1С за вас, D — найти причину автоматически, Q — прервать: ");
                     string ans = (Console.ReadLine() ?? "").Trim();
                     if (string.Equals(ans, "q", StringComparison.OrdinalIgnoreCase))
                     { Log.Err("прервано пользователем (читатель не подтверждён)"); return Program.EXIT_PREREQ; }
@@ -645,12 +647,19 @@ namespace Oc1c
             }
             else if (state == "NONE")
             {
-                Console.WriteLine(pad + "4) права ТОЛЬКО на чтение: в этой конфигурации профиля «Только просмотр» НЕТ");
-                Console.WriteLine(pad + "   (Управление торговлей / Комплексная автоматизация не поставляют его) — создайте:");
-                Console.WriteLine(pad + "   «Профили групп доступа» → Создать «Только просмотр» → отметьте роли поиском");
-                Console.WriteLine(pad + "   по словам: Базовые права, Запуск, Использование, Отчеты, Подсистема, Просмотр,");
-                Console.WriteLine(pad + "   Раздел, Чтение (выделить найденные → «Включить выделенные роли») → «Записать»;");
-                Console.WriteLine(pad + "   затем «Группы доступа» → Создать с этим профилем → пользователи: «" + reader + "»;");
+                Console.WriteLine(pad + "4) права ТОЛЬКО на чтение. Готового профиля чтения в этой конфигурации НЕТ");
+                Console.WriteLine(pad + "   (Управление торговлей / Комплексная автоматизация не поставляют его) —");
+                Console.WriteLine(pad + "   создаём сами, один раз на базу:");
+                Console.WriteLine(pad + "   а) «Профили групп доступа» → Создать → в поле «Наименование» напишите:");
+                Console.WriteLine(pad + "      Только просмотр   (это НАЗВАНИЕ нового профиля — готового пункта с таким");
+                Console.WriteLine(pad + "      именем в списке нет, искать его не надо);");
+                Console.WriteLine(pad + "   б) ниже — длинный список ролей с галочками. Вручную не ставьте: над списком");
+                Console.WriteLine(pad + "      есть ПОИСК. Введите слово  Чтение  → выделите все найденные (Ctrl+A) →");
+                Console.WriteLine(pad + "      «Включить выделенные роли». Повторите для слов: Базовые права, Запуск,");
+                Console.WriteLine(pad + "      Использование, Отчеты, Подсистема, Просмотр, Раздел;");
+                Console.WriteLine(pad + "   в) «Записать и закрыть»;");
+                Console.WriteLine(pad + "   г) «Группы доступа» → Создать → поле «Профиль» = Только просмотр → в таблицу");
+                Console.WriteLine(pad + "      «Пользователи» добавьте «" + reader + "» → «Записать и закрыть»;");
             }
             else
             {
