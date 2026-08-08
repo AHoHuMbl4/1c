@@ -227,6 +227,7 @@ namespace Oc1c
                 // «Только просмотр» поставляется, в УТ/КА — нет; текст должен идти по
                 // факту базы, а не ветвиться. Один COM-запрос, кэшируем на весь гейт.
                 string rightsState = Steps.ReaderRightsState(plat, bref, o.AdminUser, o.AdminPassword);
+                bool rightsFixTried = false;
                 Console.WriteLine();
                 Console.WriteLine("       НУЖЕН ПОЛЬЗОВАТЕЛЬ-ЧИТАТЕЛЬ в 1С (единственный ручной шаг):");
                 Console.WriteLine("         1) откройте 1С:Предприятие базы " + baseTitle + " под администратором;");
@@ -257,7 +258,30 @@ namespace Oc1c
                     {
                         if (rightsState == null && !string.IsNullOrEmpty(o.AdminUser))
                             rightsState = Steps.ReaderRightsState(plat, bref, o.AdminUser, o.AdminPassword);
-                        PrintRightsHint(probeUser, rightsState, "       ");
+                        // Вариант А (решение владельца 08.08): пробуем назначить права САМИ
+                        // один раз за прогон — ручной рецепт на сотни ролей непригоден.
+                        if (!rightsFixTried && !string.IsNullOrEmpty(o.AdminUser) && plat != null && plat.HasCom)
+                        {
+                            rightsFixTried = true;
+                            Console.WriteLine("       Пробую назначить права сам (профиль/группа «Только просмотр»)…");
+                            string fixDetail;
+                            if (Steps.EnsureReaderRights(plat, bref, o.AdminUser, o.AdminPassword, probeUser, out fixDetail))
+                            {
+                                Log.File("права читателю: " + fixDetail);
+                                Console.WriteLine("       Сделано: " + fixDetail);
+                                Console.WriteLine("       Проверяю чтение ещё раз…");
+                                if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+                                { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
+                                Console.WriteLine("       Пока не читается: " + probeDetail);
+                                Console.WriteLine("       (права могут применяться до минуты — нажмите Enter для повторной проверки)");
+                            }
+                            else
+                            {
+                                Console.WriteLine("       Не смог назначить сам: " + fixDetail);
+                                PrintRightsHint(probeUser, rightsState, "       ");
+                            }
+                        }
+                        else PrintRightsHint(probeUser, rightsState, "       ");
                     }
                     // Точная диагностика 401 через COM (прогон владельца 08.08: читатель
                     // был создан в ДРУГОЙ базе — в списке запуска 1С открывалась не та).

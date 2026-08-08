@@ -1210,6 +1210,152 @@ namespace Oc1c
             return null;
         }
 
+        // Автоназначение прав читателю (решение владельца 08.08, «вариант А»): ручной
+        // рецепт для УТ/КА/ERP — ~400 галочек ролей, непригоден; установщик уже пишет
+        // в базу санкционированно (состав OData), это та же категория. Лестница по факту
+        // базы, без имён конфигураций: БСП есть → профиль «Только просмотр» (синонимы:
+        // «Только чтение», «Аудитор») найти или создать по префиксам ролей → группа с
+        // ним найти или создать → читателя (элемент справочника «Пользователи» по GUID
+        // пользователя ИБ) включить. БСП нет → роли напрямую пользователю ИБ.
+        // Квирки COM 1С доказаны пробами на стенде 08.08: менеджер — NewObject(
+        // 'СправочникМенеджер.X') (через свойство НЕ достаётся), объект — СоздатьЭлемент()
+        // (NewObject('СправочникОбъект.X') даёт объект, которому свойства не пишутся),
+        // чтение свойств — InvokeMember(GetProperty), запись — прямое присваивание,
+        // методы — прямой вызов.
+        public static bool EnsureReaderRights(Platform p, BaseRef b, string adminUser, string adminPwd,
+                                              string readerUser, out string detail)
+        {
+            detail = "";
+            if (p == null || !p.HasCom) { detail = "нет COM-коннектора 1С"; return false; }
+            if (string.IsNullOrEmpty(adminUser)) { detail = "нет учётных данных администратора 1С"; return false; }
+            if (Ctx.DryRun) { Log.Sim("назначил бы читателю «" + readerUser + "» права «только чтение»"); detail = "симуляция"; return true; }
+
+            StringBuilder s = new StringBuilder();
+            s.AppendLine("$GP=[Reflection.BindingFlags]::GetProperty");
+            s.AppendLine("function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,@()) }");
+            s.AppendLine("try {");
+            s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
+            s.AppendLine("$ib = $connector.Connect($env:OC1C_CONNSTR)");
+            s.AppendLine("$users = P $ib 'ПользователиИнформационнойБазы'");
+            s.AppendLine("$u = $users.НайтиПоИмени($env:OC1C_READER)");
+            s.AppendLine("if ($u -eq $null) { 'RESULT=READER_NOTFOUND'; exit 0 }");
+            s.AppendLine("$md = P $ib 'Метаданные'");
+            s.AppendLine("$prefixes = @('Чтение','Просмотр','Базовые','Запуск','Использование','Раздел','Подсистема','Отчеты','Вывод')");
+            // Детектор БСП: менеджер справочника профилей создаётся — значит механизм есть.
+            s.AppendLine("$pm = $null");
+            s.AppendLine("try { $pm = $ib.NewObject('СправочникМенеджер.ПрофилиГруппДоступа') } catch { $pm = $null }");
+            s.AppendLine("if ($pm -eq $null) {");
+            // --- не-БСП: роли напрямую пользователю ИБ (затирать некому — БСП нет)
+            s.AppendLine("  $added = 0");
+            s.AppendLine("  foreach ($r in (P $md 'Роли')) {");
+            s.AppendLine("    $nm = P $r 'Имя'");
+            s.AppendLine("    foreach ($px in $prefixes) { if ($nm.StartsWith($px)) {");
+            s.AppendLine("      $has = $false; try { $has = $u.Роли.Содержит($r) } catch {}");
+            s.AppendLine("      if (-not $has) { $u.Роли.Добавить($r); $added++ }");
+            s.AppendLine("      break } }");
+            s.AppendLine("  }");
+            s.AppendLine("  if ($added -gt 0) { $u.Записать() }");
+            s.AppendLine("  'RESULT=OK'; 'MODE=DIRECT'; 'ROLES=' + $added; exit 0");
+            s.AppendLine("}");
+            // --- БСП: 1) профиль
+            s.AppendLine("$profRef = $null; $profName = ''");
+            s.AppendLine("foreach ($nm in @('Только просмотр','Только чтение','Аудитор')) {");
+            s.AppendLine("  $q = $ib.NewObject('Запрос')");
+            s.AppendLine("  $q.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка КАК Сс ИЗ Справочник.ПрофилиГруппДоступа КАК Т ГДЕ Т.Наименование = &Н'");
+            s.AppendLine("  $q.УстановитьПараметр('Н', $nm)");
+            s.AppendLine("  $rr = $q.Выполнить().Выбрать()");
+            s.AppendLine("  if ($rr.Следующий()) { $profRef = P $rr 'Сс'; $profName = $nm; break }");
+            s.AppendLine("}");
+            s.AppendLine("$profileCreated = 0; $rolesInProfile = 0");
+            s.AppendLine("if ($profRef -eq $null) {");
+            s.AppendLine("  $iomMap = @{}");
+            s.AppendLine("  $q = $ib.NewObject('Запрос')");
+            s.AppendLine("  $q.Текст = 'ВЫБРАТЬ Т.ПолноеИмя КАК П, Т.Ссылка КАК Сс ИЗ Справочник.ИдентификаторыОбъектовМетаданных КАК Т ГДЕ Т.ПолноеИмя ПОДОБНО &Ш'");
+            s.AppendLine("  $q.УстановитьПараметр('Ш', 'Роль.%')");
+            s.AppendLine("  $rr = $q.Выполнить().Выбрать()");
+            s.AppendLine("  while ($rr.Следующий()) { $iomMap[(P $rr 'П')] = P $rr 'Сс' }");
+            s.AppendLine("  $prof = $pm.СоздатьЭлемент()");
+            s.AppendLine("  $prof.Наименование = 'Только просмотр'");
+            s.AppendLine("  foreach ($r in (P $md 'Роли')) {");
+            s.AppendLine("    $nm = P $r 'Имя'");
+            s.AppendLine("    foreach ($px in $prefixes) { if ($nm.StartsWith($px)) {");
+            s.AppendLine("      $key = 'Роль.' + $nm");
+            s.AppendLine("      if ($iomMap.ContainsKey($key)) { $row = $prof.Роли.Добавить(); $row.Роль = $iomMap[$key]; $rolesInProfile++ }");
+            s.AppendLine("      break } }");
+            s.AppendLine("  }");
+            s.AppendLine("  if ($rolesInProfile -eq 0) { throw 'не нашлось ни одной роли чтения для профиля' }");
+            s.AppendLine("  $prof.Записать()");
+            s.AppendLine("  $profRef = P $prof 'Ссылка'");
+            s.AppendLine("  $profName = 'Только просмотр'; $profileCreated = 1");
+            s.AppendLine("}");
+            // --- БСП: 2) группа с этим профилем
+            s.AppendLine("$gm = $ib.NewObject('СправочникМенеджер.ГруппыДоступа')");
+            s.AppendLine("$q = $ib.NewObject('Запрос')");
+            s.AppendLine("$q.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка КАК Сс ИЗ Справочник.ГруппыДоступа КАК Т ГДЕ Т.Профиль = &П'");
+            s.AppendLine("$q.УстановитьПараметр('П', $profRef)");
+            s.AppendLine("$rr = $q.Выполнить().Выбрать()");
+            s.AppendLine("$grpRef = $null; $groupCreated = 0");
+            s.AppendLine("if ($rr.Следующий()) { $grpRef = P $rr 'Сс' } else {");
+            s.AppendLine("  $grp = $gm.СоздатьЭлемент()");
+            s.AppendLine("  $grp.Наименование = 'Чтение (AI)'");
+            s.AppendLine("  $grp.Профиль = $profRef");
+            s.AppendLine("  $grp.Записать()");
+            s.AppendLine("  $grpRef = P $grp 'Ссылка'; $groupCreated = 1");
+            s.AppendLine("}");
+            // --- БСП: 3) элемент справочника «Пользователи» по GUID пользователя ИБ
+            s.AppendLine("$guid = $u.УникальныйИдентификатор()");
+            s.AppendLine("$q = $ib.NewObject('Запрос')");
+            s.AppendLine("$q.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка КАК Сс ИЗ Справочник.Пользователи КАК Т ГДЕ Т.ИдентификаторПользователяИБ = &Ид'");
+            s.AppendLine("$q.УстановитьПараметр('Ид', $guid)");
+            s.AppendLine("$rr = $q.Выполнить().Выбрать()");
+            s.AppendLine("if (-not $rr.Следующий()) { 'RESULT=NO_CAT_USER'; exit 0 }");
+            s.AppendLine("$catUser = P $rr 'Сс'");
+            // --- БСП: 4) членство
+            s.AppendLine("$q = $ib.NewObject('Запрос')");
+            s.AppendLine("$q.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка КАК Сс ИЗ Справочник.ГруппыДоступа.Пользователи КАК Т ГДЕ Т.Ссылка = &Г И Т.Пользователь = &У'");
+            s.AppendLine("$q.УстановитьПараметр('Г', $grpRef); $q.УстановитьПараметр('У', $catUser)");
+            s.AppendLine("$memberAdded = 0");
+            s.AppendLine("if ($q.Выполнить().Пустой()) {");
+            s.AppendLine("  $grpObj = $grpRef.ПолучитьОбъект()");
+            s.AppendLine("  $row = $grpObj.Пользователи.Добавить()");
+            s.AppendLine("  $row.Пользователь = $catUser");
+            s.AppendLine("  $grpObj.Записать()");
+            s.AppendLine("  $memberAdded = 1");
+            s.AppendLine("}");
+            s.AppendLine("'RESULT=OK'; 'MODE=BSP'; 'PROFILE=' + $profName; 'PROFILE_CREATED=' + $profileCreated;");
+            s.AppendLine("'GROUP_CREATED=' + $groupCreated; 'MEMBER_ADDED=' + $memberAdded; 'ROLES=' + $rolesInProfile");
+            s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
+
+            Dictionary<string, string> env = new Dictionary<string, string>();
+            env["OC1C_PROGID"] = p.ProgId;
+            env["OC1C_CONNSTR"] = b.ConnStrCom(adminUser, adminPwd);
+            env["OC1C_READER"] = readerUser;
+            ExecResult r = Ps.Run(s.ToString(), p.X86, 600000, env);
+
+            if (r.All.IndexOf("RESULT=READER_NOTFOUND") >= 0)
+            { detail = "пользователя ИБ «" + readerUser + "» в базе нет"; return false; }
+            if (r.All.IndexOf("RESULT=NO_CAT_USER") >= 0)
+            { detail = "пользователь ИБ есть, но элемента в справочнике «Пользователи» нет — включите его в группу вручную"; return false; }
+            if (r.All.IndexOf("RESULT=OK") < 0)
+            { detail = "COM: " + ComErrorLine(r); return false; }
+
+            string mode = r.StdOut.IndexOf("MODE=DIRECT") >= 0 ? "DIRECT" : "BSP";
+            string roles = ""; Match mro = Regex.Match(r.StdOut, @"ROLES=(\d+)"); if (mro.Success) roles = mro.Groups[1].Value;
+            if (mode == "DIRECT")
+                detail = "роли чтения назначены пользователю ИБ напрямую (конфигурация без профилей): +" + roles + " ролей";
+            else
+            {
+                string pn = ""; Match mp = Regex.Match(r.StdOut, @"PROFILE=(.*)"); if (mp.Success) pn = mp.Groups[1].Value.Trim();
+                bool pc = r.StdOut.IndexOf("PROFILE_CREATED=1") >= 0;
+                bool gc = r.StdOut.IndexOf("GROUP_CREATED=1") >= 0;
+                bool ma = r.StdOut.IndexOf("MEMBER_ADDED=1") >= 0;
+                detail = "профиль «" + pn + "»" + (pc ? " создан (ролей: " + roles + ")" : " уже был") +
+                         (gc ? ", группа «Чтение (AI)» создана" : ", группа уже была") +
+                         (ma ? ", читатель включён" : ", читатель уже в группе");
+            }
+            return true;
+        }
+
         // Возвращает true при успехе. current/added — что было и что стало.
         public static bool SetOdataComposition(Platform p, BaseRef b, string user, string pwd, List<string> scopeKeys,
                                                bool writeMode, string readerUser, out int current, out int added, out string roles)
