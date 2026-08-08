@@ -595,7 +595,7 @@ namespace Oc1c
             }
 
             // ---------- блок 2: агент пакетного транспорта (только при наличии комплекта)
-            int packetExit = PacketSteps.Run(o, bref, url);
+            int packetExit = PacketSteps.Run(o, bref, url, plat);
 
             Report(o, bref, plat, pool, url, scopeKeys);
             ClearResume();

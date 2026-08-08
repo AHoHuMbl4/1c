@@ -114,7 +114,7 @@ namespace Oc1c
         // Возвращает код выхода: 0 — агент установлен и доставка подтверждена (или блок
         // не активен); EXIT_PREREQ — префлайт; EXIT_PACKET — установка/пробная посылка.
         // odataUrl — локальный адрес OData (agent.ini читает 1С с localhost).
-        public static int Run(Opts o, BaseRef bref, string odataUrl)
+        public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat)
         {
             if (o.SkipPacket)
             {
@@ -237,6 +237,25 @@ namespace Oc1c
                     Console.WriteLine("       Пока не читается: " + probeDetail);
                     Console.WriteLine("       Проверьте: пароль, профиль «Только просмотр», что состав OData задан,");
                     Console.WriteLine("       и что выбрана ИМЕННО та база, для которой выдан комплект («" + ps.BaseId + "»).");
+                    // Точная диагностика 401 через COM (прогон владельца 08.08: читатель
+                    // был создан в ДРУГОЙ базе — в списке запуска 1С открывалась не та).
+                    // OData на 401 не различает «нет пользователя» и «неверный пароль»,
+                    // а COM по админским кредам — различает.
+                    if (plat != null && plat.HasCom && !string.IsNullOrEmpty(o.AdminUser) &&
+                        probeDetail.IndexOf("не авторизуется", StringComparison.OrdinalIgnoreCase) >= 0)
+                    {
+                        Console.WriteLine("       Смотрю пользователей базы " + baseTitle + "…");
+                        int curD, addedD; string rolesD;
+                        if (Steps.SetOdataComposition(plat, bref, o.AdminUser, o.AdminPassword,
+                                                      new List<string>(), false, probeUser, out curD, out addedD, out rolesD))
+                        {
+                            if (rolesD == "__NOTFOUND__")
+                                Console.WriteLine("       Диагностика: пользователя «" + probeUser + "» в базе " + baseTitle +
+                                                  " НЕТ — вероятно, он создан в другой базе (в списке запуска 1С легко открыть не ту). Создайте его именно в " + baseTitle + ".");
+                            else if (rolesD != null)
+                                Console.WriteLine("       Диагностика: пользователь «" + probeUser + "» в базе есть — значит, не подходит ПАРОЛЬ или снята галка «Аутентификация 1С:Предприятия» в его карточке.");
+                        }
+                    }
                     Console.Write("       Enter — ввести пароль и проверить ещё раз, Q — прервать: ");
                     string ans = Console.ReadLine();
                     if (string.Equals((ans ?? "").Trim(), "q", StringComparison.OrdinalIgnoreCase))
