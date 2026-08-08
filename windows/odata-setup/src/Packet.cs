@@ -250,6 +250,8 @@ namespace Oc1c
                 {
                     Console.WriteLine("       Читатель «" + probeUser + "» в базе " + baseTitle + " уже есть —");
                     Console.WriteLine("       осталось подтвердить пароль и права ТОЛЬКО на чтение:");
+                    Console.WriteLine("         (если его создавала эта программа раньше — пароль никто не знает:");
+                    Console.WriteLine("          введите любой, после ошибки я предложу задать новый автоматически)");
                     PrintRightsHint(probeUser, rightsState, "         ");
                 }
                 else
@@ -326,6 +328,13 @@ namespace Oc1c
                         if (diag == "NOTFOUND" &&
                             OfferAndCreateReader(plat, bref, o, probeUser, odataUrl,
                                                  ref rightsFixTried, ref readerPwdAuto, out probeDetail))
+                            break;
+                        // Читатель есть, но пароль не подходит: если его создавала эта
+                        // программа раньше — пароль случайный и неизвестен никому
+                        // (прогон 08.08: цикл «введите пароль» был бесполезен).
+                        if (diag == "FOUND" &&
+                            OfferResetReaderPassword(plat, bref, o, probeUser, odataUrl,
+                                                     ref readerPwdAuto, out probeDetail))
                             break;
                     }
                     Console.Write("       Enter — проверить ещё раз, D — найти причину автоматически, Q — прервать: ");
@@ -701,7 +710,7 @@ namespace Oc1c
             Console.WriteLine("       - пароль — случайный, его не будет знать никто: он останется только");
             Console.WriteLine("         в защищённых настройках агента на этом компьютере;");
             Console.WriteLine("       - профиль «Только просмотр» (при отсутствии) и группа доступа — как выше.");
-            Console.Write("       Enter — создать самому, другое — создам вручную в 1С: ");
+            Console.Write("       Enter — создать автоматически (рекомендуется); любая другая клавиша — создам его сам в 1С: ");
             string cr = (Console.ReadLine() ?? "").Trim();
             if (cr.Length != 0) return false;
             o.ReaderPassword = GenPassword();
@@ -717,6 +726,35 @@ namespace Oc1c
             { Log.File("права читателю: " + rd); Console.WriteLine("       " + rd); rightsFixTried = true; }
             else Console.WriteLine("       права пока не назначены: " + rd);
             Console.WriteLine("       Проверяю чтение…");
+            if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+            { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); return true; }
+            Console.WriteLine("       Пока не читается: " + probeDetail + " (Enter — проверить ещё раз)");
+            return false;
+        }
+
+        // Сброс пароля читателя (прогон 08.08): читатель, созданный прошлым запуском
+        // этой программы, имеет случайный пароль, который никто не знает — цикл
+        // «введите пароль» в этом случае бесполезен. Enter — задаём новый сами.
+        static bool OfferResetReaderPassword(Platform plat, BaseRef bref, Opts o, string probeUser,
+                                             string odataUrl, ref bool readerPwdAuto, out string probeDetail)
+        {
+            probeDetail = "";
+            Console.WriteLine();
+            Console.WriteLine("       Если «" + probeUser + "» создавала эта программа прошлым запуском —");
+            Console.WriteLine("       пароль случайный, его никто не знает. Могу задать НОВЫЙ случайный:");
+            Console.WriteLine("       он останется только в защищённых настройках агента на этом компьютере.");
+            Console.Write("       Enter — задать новый пароль автоматически; другая клавиша — введу пароль сам: ");
+            string cr = (Console.ReadLine() ?? "").Trim();
+            if (cr.Length != 0) return false;
+            string np = GenPassword();
+            string rd;
+            if (!Steps.ResetReaderPassword(plat, bref, o.AdminUser, o.AdminPassword, probeUser, np, out rd))
+            { Console.WriteLine("       Не смог задать пароль: " + rd); Log.File("сброс пароля читателя не удался: " + rd); return false; }
+            o.ReaderPassword = np;
+            readerPwdAuto = true;
+            Log.AddSecret(np);
+            Log.File("сброс пароля читателя: " + rd);
+            Console.WriteLine("       Новый пароль задан. Проверяю чтение…");
             if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
             { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); return true; }
             Console.WriteLine("       Пока не читается: " + probeDetail + " (Enter — проверить ещё раз)");

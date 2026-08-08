@@ -1277,6 +1277,43 @@ namespace Oc1c
             return true;
         }
 
+        // Сброс пароля читателя (прогон 08.08): читатель, созданный прошлым запуском
+        // установщика, имеет случайный пароль, который никто не знает — вместо
+        // бесполезного цикла «введите пароль» задаём новый сами (по админским кредам).
+        public static bool ResetReaderPassword(Platform p, BaseRef b, string adminUser, string adminPwd,
+                                               string readerUser, string newPwd, out string detail)
+        {
+            detail = "";
+            if (p == null || !p.HasCom) { detail = "нет COM-коннектора 1С"; return false; }
+            if (string.IsNullOrEmpty(adminUser)) { detail = "нет учётных данных администратора 1С"; return false; }
+            if (Ctx.DryRun) { Log.Sim("задал бы новый пароль читателю «" + readerUser + "»"); detail = "симуляция"; return true; }
+
+            StringBuilder s = new StringBuilder();
+            s.AppendLine("$GP=[Reflection.BindingFlags]::GetProperty");
+            s.AppendLine("function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,@()) }");
+            s.AppendLine("try {");
+            s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
+            s.AppendLine("$ib = $connector.Connect($env:OC1C_CONNSTR)");
+            s.AppendLine("$users = P $ib 'ПользователиИнформационнойБазы'");
+            s.AppendLine("$u = $users.НайтиПоИмени($env:OC1C_READER)");
+            s.AppendLine("if ($u -eq $null) { 'RESULT=NOTFOUND'; exit 0 }");
+            s.AppendLine("$u.Пароль = $env:OC1C_READER_PWD");
+            s.AppendLine("$u.Записать()");
+            s.AppendLine("'RESULT=OK'");
+            s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
+
+            Dictionary<string, string> env = new Dictionary<string, string>();
+            env["OC1C_PROGID"] = p.ProgId;
+            env["OC1C_CONNSTR"] = b.ConnStrCom(adminUser, adminPwd);
+            env["OC1C_READER"] = readerUser;
+            env["OC1C_READER_PWD"] = newPwd;
+            ExecResult r = Ps.Run(s.ToString(), p.X86, 600000, env);
+            if (r.All.IndexOf("RESULT=NOTFOUND") >= 0) { detail = "пользователя ИБ «" + readerUser + "» в базе нет"; return false; }
+            if (r.All.IndexOf("RESULT=OK") < 0) { detail = "COM: " + ComErrorLine(r); return false; }
+            detail = "пароль читателя «" + readerUser + "» заменён на новый случайный";
+            return true;
+        }
+
         // Автоназначение прав читателю (решение владельца 08.08, «вариант А»): ручной
         // рецепт для УТ/КА/ERP — ~400 галочек ролей, непригоден; установщик уже пишет
         // в базу санкционированно (состав OData), это та же категория. Лестница по факту
@@ -1417,6 +1454,21 @@ namespace Oc1c
             s.AppendLine("  $grpObj.Записать()");
             s.AppendLine("  $memberAdded = 1");
             s.AppendLine("}");
+            // Гарантия прав (замер 08.08): членство в группе записано, а проба OData
+            // всё равно 401 — OData проверяет РОЛИ пользователя ИБ, которые БСП
+            // синхронизирует из профилей не мгновенно. Добавляем те же роли напрямую
+            // пользователю ИБ: набор совпадает с профилем (те же префиксы), поэтому
+            // поздняя БСП-синхронизация придёт к тому же результату, а не сотрёт.
+            s.AppendLine("$direct = 0");
+            s.AppendLine("foreach ($r in (P $md 'Роли')) {");
+            s.AppendLine("  $nm = P $r 'Имя'");
+            s.AppendLine("  foreach ($px in $prefixes) { if ($nm.StartsWith($px)) {");
+            s.AppendLine("    $has = $false; try { $has = $u.Роли.Содержит($r) } catch {}");
+            s.AppendLine("    if (-not $has) { $u.Роли.Добавить($r); $direct++ }");
+            s.AppendLine("    break } }");
+            s.AppendLine("}");
+            s.AppendLine("if ($direct -gt 0) { $u.Записать() }");
+            s.AppendLine("'ROLES_DIRECT=' + $direct");
             s.AppendLine("'RESULT=OK'; 'MODE=BSP'; 'PROFILE=' + $profName; 'PROFILE_CREATED=' + $profileCreated;");
             s.AppendLine("'GROUP_CREATED=' + $groupCreated; 'MEMBER_ADDED=' + $memberAdded; 'ROLES=' + $rolesInProfile");
             s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
@@ -1445,10 +1497,12 @@ namespace Oc1c
                 bool gc = r.StdOut.IndexOf("GROUP_CREATED=1") >= 0;
                 bool ma = r.StdOut.IndexOf("MEMBER_ADDED=1") >= 0;
                 bool rl = r.StdOut.IndexOf("RELINKED=1") >= 0;
+                string rd = ""; Match mrd = Regex.Match(r.StdOut, @"ROLES_DIRECT=(\d+)"); if (mrd.Success) rd = mrd.Groups[1].Value;
                 detail = "профиль «" + pn + "»" + (pc ? " создан (ролей: " + roles + ")" : " уже был") +
                          (gc ? ", группа «Чтение (AI)» создана" : ", группа уже была") +
                          (ma ? ", читатель включён" : ", читатель уже в группе") +
-                         (rl ? ", связь элемента справочника восстановлена" : "");
+                         (rl ? ", связь элемента справочника восстановлена" : "") +
+                         (rd.Length > 0 && rd != "0" ? ", +" + rd + " ролей напрямую пользователю ИБ" : "");
             }
             return true;
         }
