@@ -206,6 +206,36 @@ ufw пускает на 6090 **только с релея `10.1.1.4`** (плюс
   построению — FATAL с понятным текстом, это предохранитель);
 - ufw: 22/tcp открыт, 6090/tcp только с `10.1.1.4`, остальное входящее закрыто.
 
+**Бот-слой (добавлен 08.08 вечером — эталон v2; телеграм НЕ переносим, у
+компании будет веб-интерфейс владельца, решение 08.08):**
+
+- node v24.18.0 (NodeSource-репозиторий и пин перенесены с дева:
+  `nodesource.sources`, `preferences.d/nodejs`, keyring) + npm-пакет
+  `openclaw 2026.7.1-2` в `/usr/lib/node_modules/openclaw` — побайтно;
+- юзер `undebot` (uid 1001, linger) + user-юнит `openclaw-gateway.service`
+  (:18800) — файл юнита тот же; системная обёртка рестарта
+  `1c-openclaw-gateway-restart` — та же;
+- профиль `/home/undebot/.openclaw` — tar с дева целиком, затем на копии:
+  `channels.telegram.enabled=false`, удалён mcp-сервер `second-brain-reports`
+  (report_1c выведен, на юните его нет), вычищены sessions/logs/bak (дев-мусор,
+  ~270 МБ); персона, verify-гейт (`braine-verify`), memory-wiki, ключи — как на
+  деве. ask_1c в профиле зовёт `127.0.0.1:6016/mcp` — мост юнита на это же
+  место и встаёт;
+- `/opt/openclaw-mcp` (мост `mcp_ask.py`) + venv: пересобран под python3.14
+  с теми же пинами (`pip freeze` дева, 41 пакет, импорты проверены) — на юните
+  нет python3.12, а вернуть его не из чего (в репозитории Ubuntu 26.04 его нет);
+- шаблоны `1c-serene-ask@.service` и `1c-mcp-ask@.service`, общие env
+  (`1c-serene-ask.env` и пр.); роли `serene_ro`/`serene_resolver` заводятся на
+  копии штатным `setup.sh` (пароли у копии свои — так скрипт и устроен);
+- `1c-bot-monitor.service/.timer` + `/opt/1c-bot-monitor` — двери юнита
+  (:18800, :8091, :6090), свежесть по dbname=postgres; алерты идут владельцу
+  (это наш мониторинг, не канал компании);
+- ⚠ `/opt/openclaw` (client-bots, instagram-гайды) — НЕ переносится: это
+  эксперименты других проектов, к контуру 1С отношения не имеет.
+
+Порядок health на копии: приёмник :6090 → ask :8091 (503 до первой сборки —
+норма, честный отказ) → мост :6016 (401 без токена — слушает) → шлюз :18800.
+
 Привязка копии к компании (онбординг, ~5 минут, из сессии на деве):
 
 1. На деве: `packet_kit.py <base_id>` — комплект (CA один, живёт на деве).
@@ -215,6 +245,10 @@ ufw пускает на 6090 **только с релея `10.1.1.4`** (плюс
    `install -d -o serenedb -g serenedb /var/lib/serenedb/packet-meta/<base_id>`,
    `systemctl enable --now 1c-packet-server 1c-packet-apply.timer`
    (pipeline@postgres.timer — после первой сборки слоя).
+   Бот-слой на копии поднимается одинаково для любой компании (dbname всегда
+   postgres): роли `setup.sh`, затем `systemctl enable --now
+   1c-serene-ask@postgres 1c-mcp-ask@postgres`, старт user-шлюза undebot
+   и `1c-bot-monitor.timer` — после того, как ask позеленеет (первая сборка).
 3. Релей: backend по `CN=<base_id>` → `http://<внутр.ip копии>:6090`
    (сессия релея). ufw копии уже пускает 10.1.1.4 — править не надо.
 4. Дист установщика: как `onboard-base.sh` шаги 4–5 (dist + zip + S3).
