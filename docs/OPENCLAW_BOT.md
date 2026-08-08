@@ -232,6 +232,13 @@ That is all.» → «We started», остаток абзаца исчезал м
    «понимать, у какой базы что спрашивать». На стороне OpenClaw это ложится на
    агентов: `/v1` уже маршрутизирует `model=openclaw/<agentId>`; роутер — отдельный
    агент, выбирающий целевого. Записано как направление, реализация — бэк-трек.
+6. **Голос (микрофон).** В Open WebUI доступ к микрофону есть штатно; нужен внешний
+   API транскрибации (есть у владельца). Точка подключения проверена по коду сборки:
+   Admin → Audio (STT) или env `AUDIO_STT_ENGINE` + `AUDIO_STT_MODEL` +
+   `AUDIO_STT_OPENAI_API_BASE_URL` / `AUDIO_STT_OPENAI_API_KEY` — если API владельца
+   OpenAI-совместимый (`/v1/audio/transcriptions`), встаёт без кода; есть также
+   deepgram/azure/локальный whisper. Когда владелец даст endpoint и ключ — прописать
+   в `~/.open-webui.env` и проверить диктовку в чате.
 
 ## Zero-touch
 `linger=yes` → gateway стартует на буте без логина (проверено). Telegram long polling. Мониторинг
