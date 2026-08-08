@@ -56,6 +56,21 @@ DNS `1c-gate.timpul.ru` по 8.8.8.8/1.1.1.1/Яндексу — уже `89.23.10
 
 ---
 
+## 08.08: релей — маршрутизация по CN клиентского серта: medteh-ut → юнит в приватной сети `[замер]`
+
+`[решение]` владельца: в HAProxy релея добавлена маршрутизация по CN клиентского
+сертификата, не трогая дефолтный backend (туннель на дев):
+`acl cn_medteh_ut ssl_c_s_dn(cn) -m str medteh-ut` →
+`use_backend packet_unit_medteh_ut` (`server unit1 10.1.1.5:6090 check`).
+`[замер]`: `curl http://10.1.1.5:6090/health` с релея → packet-server-ok
+(приватная сеть хостера жива, у релея eth1=10.1.1.4); `haproxy -c` чистый,
+reload. Доказательство маршрута: с сертом `medteh-ut`
+`GET /v1/agent/config?base_id=medteh-ut` вернул полный конфиг юнита (дев на этот
+токен ответил бы 401), с сертом `ut` — по-прежнему дев. Конфиг —
+`ubuntu/wireguard/relay/haproxy.cfg`.
+
+---
+
 ## 08.08: DNS переключён — релей в бою на Ubuntu 89.23.101.22, FreeBSD выведен `[замер]`
 
 Владелец переключил A-запись `1c-gate.timpul.ru` (hostline, TTL 3600) на
