@@ -1342,6 +1342,11 @@ namespace Oc1c
             StringBuilder s = new StringBuilder();
             s.AppendLine("$GP=[Reflection.BindingFlags]::GetProperty");
             s.AppendLine("$PUT=[Reflection.BindingFlags]::PutDispProperty");
+            // Роли пользователя ИБ — особый случай (замер 08.08, rolesacc/rolesfix3):
+            // голый GetProperty возвращает NULL, прямой вызов методов коллекции —
+            // MethodNotFound; нужны явные флаги Public|Instance и InvokeMethod.
+            s.AppendLine("$GPI=[Reflection.BindingFlags]::GetProperty -bor [Reflection.BindingFlags]::Public -bor [Reflection.BindingFlags]::Instance");
+            s.AppendLine("$IMI=[Reflection.BindingFlags]::InvokeMethod -bor [Reflection.BindingFlags]::Public -bor [Reflection.BindingFlags]::Instance");
             s.AppendLine("function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,@()) }");
             s.AppendLine("try {");
             s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
@@ -1357,11 +1362,12 @@ namespace Oc1c
             s.AppendLine("if ($pm -eq $null) {");
             // --- не-БСП: роли напрямую пользователю ИБ (затирать некому — БСП нет)
             s.AppendLine("  $added = 0");
+            s.AppendLine("  $uRoles = [__ComObject].InvokeMember('Роли', $GPI, $null, $u, @())");
             s.AppendLine("  foreach ($r in (P $md 'Роли')) {");
             s.AppendLine("    $nm = P $r 'Имя'");
             s.AppendLine("    foreach ($px in $prefixes) { if ($nm.StartsWith($px)) {");
-            s.AppendLine("      $has = $false; try { $has = $u.Роли.Содержит($r) } catch {}");
-            s.AppendLine("      if (-not $has) { $u.Роли.Добавить($r); $added++ }");
+            s.AppendLine("      $has = [__ComObject].InvokeMember('Содержит', $IMI, $null, $uRoles, @($r))");
+            s.AppendLine("      if (-not $has) { [__ComObject].InvokeMember('Добавить', $IMI, $null, $uRoles, @($r)) | Out-Null; $added++ }");
             s.AppendLine("      break } }");
             s.AppendLine("  }");
             s.AppendLine("  if ($added -gt 0) { $u.Записать() }");
@@ -1460,11 +1466,12 @@ namespace Oc1c
             // пользователю ИБ: набор совпадает с профилем (те же префиксы), поэтому
             // поздняя БСП-синхронизация придёт к тому же результату, а не сотрёт.
             s.AppendLine("$direct = 0");
+            s.AppendLine("$uRoles = [__ComObject].InvokeMember('Роли', $GPI, $null, $u, @())");
             s.AppendLine("foreach ($r in (P $md 'Роли')) {");
             s.AppendLine("  $nm = P $r 'Имя'");
             s.AppendLine("  foreach ($px in $prefixes) { if ($nm.StartsWith($px)) {");
-            s.AppendLine("    $has = $false; try { $has = $u.Роли.Содержит($r) } catch {}");
-            s.AppendLine("    if (-not $has) { $u.Роли.Добавить($r); $direct++ }");
+            s.AppendLine("    $has = [__ComObject].InvokeMember('Содержит', $IMI, $null, $uRoles, @($r))");
+            s.AppendLine("    if (-not $has) { [__ComObject].InvokeMember('Добавить', $IMI, $null, $uRoles, @($r)) | Out-Null; $direct++ }");
             s.AppendLine("    break } }");
             s.AppendLine("}");
             s.AppendLine("if ($direct -gt 0) { $u.Записать() }");
