@@ -241,31 +241,34 @@ namespace Oc1c
                     if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
                     { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
                     Console.WriteLine("       Пока не читается: " + probeDetail);
-                    Console.WriteLine("       Проверьте: пароль, профиль «Только просмотр», что состав OData задан,");
+                    Log.File("проба чтения («" + probeUser + "»): " + probeDetail);
+                    Console.WriteLine("       Проверьте: пароль (раскладка RU/EN!), профиль «Только просмотр», что состав OData задан,");
                     Console.WriteLine("       и что выбрана ИМЕННО та база, для которой выдан комплект («" + ps.BaseId + "»).");
                     // Точная диагностика 401 через COM (прогон владельца 08.08: читатель
                     // был создан в ДРУГОЙ базе — в списке запуска 1С открывалась не та).
                     // OData на 401 не различает «нет пользователя» и «неверный пароль»,
-                    // а COM по админским кредам — различает.
-                    if (plat != null && plat.HasCom && !string.IsNullOrEmpty(o.AdminUser) &&
-                        probeDetail.IndexOf("не авторизуется", StringComparison.OrdinalIgnoreCase) >= 0)
-                    {
-                        Console.WriteLine("       Смотрю пользователей базы " + baseTitle + "…");
-                        int curD, addedD; string rolesD;
-                        if (Steps.SetOdataComposition(plat, bref, o.AdminUser, o.AdminPassword,
-                                                      new List<string>(), false, probeUser, out curD, out addedD, out rolesD))
-                        {
-                            if (rolesD == "__NOTFOUND__")
-                                Console.WriteLine("       Диагностика: пользователя «" + probeUser + "» в базе " + baseTitle +
-                                                  " НЕТ — вероятно, он создан в другой базе (в списке запуска 1С легко открыть не ту). Создайте его именно в " + baseTitle + ".");
-                            else if (rolesD != null)
-                                Console.WriteLine("       Диагностика: пользователь «" + probeUser + "» в базе есть — значит, не подходит ПАРОЛЬ или снята галка «Аутентификация 1С:Предприятия» в его карточке.");
-                        }
-                    }
-                    Console.Write("       Enter — ввести пароль и проверить ещё раз, Q — прервать: ");
-                    string ans = Console.ReadLine();
-                    if (string.Equals((ans ?? "").Trim(), "q", StringComparison.OrdinalIgnoreCase))
+                    // а COM по админским кредам — различает. В ручном режиме (вариант 2)
+                    // админских кредов нет — тогда диагностика по клавише D ниже.
+                    bool is401 = probeDetail.IndexOf("не авторизуется", StringComparison.OrdinalIgnoreCase) >= 0;
+                    if (is401 && plat != null && plat.HasCom && !string.IsNullOrEmpty(o.AdminUser))
+                        DiagnoseReader(plat, bref, o.AdminUser, o.AdminPassword, probeUser, baseTitle);
+                    Console.Write("       Enter — ещё раз, D — найти причину автоматически (спросит пароль администратора 1С), Q — прервать: ");
+                    string ans = (Console.ReadLine() ?? "").Trim();
+                    if (string.Equals(ans, "q", StringComparison.OrdinalIgnoreCase))
                     { Log.Err("прервано пользователем (читатель не подтверждён)"); return Program.EXIT_PREREQ; }
+                    if (string.Equals(ans, "d", StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (plat == null || !plat.HasCom) { Console.WriteLine("       Диагностика недоступна: нет COM-коннектора 1С."); continue; }
+                        if (string.IsNullOrEmpty(o.AdminUser))
+                        {
+                            Console.Write("       Пользователь 1С с полными правами: ");
+                            o.AdminUser = (Console.ReadLine() ?? "").Trim();
+                            if (o.AdminUser.Length == 0) continue;
+                        }
+                        o.AdminPassword = Win.ReadPassword("Пароль пользователя " + o.AdminUser + " (ввод скрыт)");
+                        Log.AddSecret(o.AdminPassword);
+                        DiagnoseReader(plat, bref, o.AdminUser, o.AdminPassword, probeUser, baseTitle);
+                    }
                 }
             }
             if (!Ctx.DryRun && probeDetail.Length == 0)
@@ -280,8 +283,7 @@ namespace Oc1c
             }
             if (!Ctx.DryRun && probeDetail.Length > 0) { Log.Ok("чтение базы работает"); Log.File("проба данных: " + probeDetail); }
 
-            string packetDir = string.IsNullOrEmpty(o.PacketDir) ? @"C:\1c\packet" : o.PacketDir;
-            string dataDir = Path.Combine(packetDir, "data");
+            string packetDir = string.IsNullOrEmpty(o.PacketDir) ? @"C:\1c\packet" : o.PacketDir;            string dataDir = Path.Combine(packetDir, "data");
             if (!DiskOk(bref, packetDir)) return Program.EXIT_PREREQ;
 
             // ---------- 4. установка файлов и agent.ini
@@ -561,6 +563,33 @@ namespace Oc1c
         }
 
         // Место под данные агента: очередь чанков ≈ размер базы сжатой + индекс версий.
+        // COM-диагностика 401 гейта читателя: OData не различает «нет пользователя»
+        // и «неверный пароль», а COM по админским кредам — различает (прогоны 08.08).
+        static void DiagnoseReader(Platform plat, BaseRef bref, string adminUser, string adminPwd,
+                                   string reader, string baseTitle)
+        {
+            Console.WriteLine("       Смотрю пользователей базы " + baseTitle + "…");
+            int curD, addedD; string rolesD;
+            if (!Steps.SetOdataComposition(plat, bref, adminUser, adminPwd,
+                                           new List<string>(), false, reader, out curD, out addedD, out rolesD))
+            { Log.File("диагностика читателя: COM-проверка не удалась (см. ошибку выше)"); return; }
+            if (rolesD == "__NOTFOUND__")
+            {
+                Console.WriteLine("       Диагностика: пользователя «" + reader + "» в базе " + baseTitle +
+                                  " НЕТ — вероятно, он создан в другой базе (в списке запуска 1С легко открыть не ту).");
+                Console.WriteLine("       Важно: запись в справочнике «Пользователи» в 1С:Предприятие — НЕ то же самое,");
+                Console.WriteLine("       что пользователь информационной базы. Точный список — в Конфигураторе:");
+                Console.WriteLine("       Администрирование → Пользователи.");
+                Log.File("диагностика: «" + reader + "» в базе не найден");
+            }
+            else if (rolesD != null)
+            {
+                Console.WriteLine("       Диагностика: пользователь «" + reader + "» в базе ЕСТЬ — значит, не подходит ПАРОЛЬ");
+                Console.WriteLine("       (проверьте раскладку клавиатуры RU/EN) или снята галка «Аутентификация 1С:Предприятия».");
+                Log.File("диагностика: «" + reader + "» найден, роли: " + rolesD);
+            }
+        }
+
         static bool DiskOk(BaseRef bref, string packetDir)
         {
             long baseMb = (bref != null && bref.IsFile) ? Win.DirSizeMb(bref.Dir) : 0;
