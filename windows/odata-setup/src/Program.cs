@@ -214,7 +214,7 @@ namespace Oc1c
                 Log.Con("       Найденные базы (имена — как в стартовом окне 1С):");
                 for (int i = 0; i < found.Count; i++)
                     Log.Con("         " + (i + 1) + ") " + (string.IsNullOrEmpty(found[i].Name)
-                        ? found[i].Dir
+                        ? found[i].Dir + "   (в стартовом списке 1С её нет — найдена на диске)"
                         : found[i].Name + "   [" + found[i].Dir + "]"));
                 int num = 0;
                 {
