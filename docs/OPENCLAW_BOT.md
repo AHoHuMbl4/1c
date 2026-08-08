@@ -164,6 +164,40 @@ That is all.» → «We started», остаток абзаца исчезал м
 не трогаем (не подключались). Эталонные репо `/opt/openclaw` (+ `/opt/openclaw-engine`) — read-only, в них
 не пишем/не коммитим. Токен `@test1c_mcp_bot` забран у braine-моста `tg-bridge` (он `stop+disable`).
 
+## Веб-фронт (Open WebUI + web-профиль гейтвея) [08.08]
+
+Решение владельца 08.08: веб-версия на Open WebUI (референс — Perplexity), OpenClaw остаётся
+в контуре целиком. Собрано на дев-сервере, слушает только внутреннюю сеть стенда; перенос
+на отдельную публичную VDS — следующий шаг («веб отдельно от бэка», то же решение).
+
+```
+браузер → http://192.168.56.42:8080  (Open WebUI, user-юнит claudedev)
+        → http://127.0.0.1:18801/v1  (OpenClaw web-профиль, chatCompletions, Bearer)
+        → MCP ask_1c :6016 (ut_test) / report_1c :6015 → конвейер ответа
+```
+
+- **Отдельный профиль `web`**, боевой бот `undebot` не тронут: state `~/.openclaw-web`
+  (700), user-юнит `openclaw-gateway-web.service` у `claudedev` (linger=yes). Конфиг собран
+  по эталону `instance/openclaw.json` + `gateway.http.endpoints.chatCompletions.enabled=true`.
+  Плагины: `deepseek` + `braine-verify` 1.1.0 (npm-pack из репо) — гейт чисел действует
+  и на веб-ответы. Тот же `tools.allow`.
+- **Open WebUI** — pip-venv `~/open-webui-venv` (CPU-torch: CUDA-слой ~3,4 ГБ не влезал
+  в дисковую квоту claudedev), данные `~/open-webui-data`, env `~/.open-webui.env` (600,
+  токен гейтвея), user-юнит `open-webui.service`. Админ `admin@1c.local`; регистрация
+  новых — роль `pending` до одобрения админом.
+- 🔴 **chatCompletions = полный операторский доступ к профилю** (доки сборки,
+  `gateway/openai-http-api.md`): только loopback, наружу не выставлять. При переносе на VDS
+  гейтвей остаётся на бэке, на VDS уезжает только Open WebUI + узкая точка подключения.
+- **Замеры 08.08:** `/v1/models` отдаёт `openclaw/default`; двухходовка по ключу `user`
+  (вопрос → уточнение сущности → «155 контрагентов») — сессия продолжается; SSE-стриминг
+  работает; полный путь через API Open WebUI: «Сколько всего номенклатуры» → 97 834
+  с пометками свежести/частичности (п. 13 показан клиенту).
+- **Грабли:** ключ deepseek подхватывается только из auth-store (`models auth paste-api-key`),
+  `EnvironmentFile` с `DEEPSEEK_API_KEY` НЕ срабатывает [замер 08.08]. Персона веб-профиля —
+  репо-версия `instance/AGENTS.md`: боевая копия 30.07 недоступна по правам (700),
+  развилка №45 для веба открыта. Маппинг чатов Open WebUI → сессии OpenClaw (поле `user`)
+  проверен ключом `conv:*`; шлёт ли Open WebUI `user` сам — проверить при переносе.
+
 ## Zero-touch
 `linger=yes` → gateway стартует на буте без логина (проверено). Telegram long polling. Мониторинг
 `1c-bot-monitor.timer` (алерт владельцу в Telegram при падении gateway/mcp/serenedb) — см. `ARCHITECTURE.md`.
