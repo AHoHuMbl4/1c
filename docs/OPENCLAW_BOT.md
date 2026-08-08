@@ -214,6 +214,12 @@ That is all.» → «We started», остаток абзаца исчезал м
 - `DEFAULT_MODELS` выставлен (`/api/v1/configs/models`). Лицензия Open WebUI требует
   сохранять бренд «Open WebUI» при 50+ пользователях (суффикс в заголовке остаётся — это норма,
   не недоделка); своя модель/имя интерфейса (`WEBUI_NAME=Ассистент 1С`) лицензии не нарушают.
+- **Интерпретатор кода выключен** (решение владельца 08.08): глобально
+  `ENABLE_CODE_EXECUTION=false` + `ENABLE_CODE_INTERPRETER=false`
+  (`/api/v1/configs/code_execution`) и в capabilities модели (`code_interpreter`,
+  заодно `web_search`, `image_generation`, `vision` — ассистент текстовый).
+  ⚠ Грабля: `POST /api/v1/models/model/update` требует `access_grants` в теле,
+  без него — 500 (ValidationError) [замер 08.08].
 
 ### Заготовки фронта (направление владельца 08.08 — не план, не сделано)
 
