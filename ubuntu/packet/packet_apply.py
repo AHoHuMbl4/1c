@@ -355,6 +355,28 @@ def _apply_metadata(base_id: str, manifest: dict, path: str) -> None:
         raise
 
 
+def _apply_skipped(base_id: str, skipped: list) -> None:
+    """Список сущностей, которые агент не смог прочитать (права/RLS/сбой 1С) —
+    в <PACKET_META_DIR>/<base_id>/skipped.json, атомарно. Машиночитаемая
+    видимость п. 13 TARGET на сервере: по этому файлу отличим «таблица пуста»
+    от «закрыто правами в базе-источнике»."""
+    base_dir = os.path.join(PACKET_META_DIR, base_id)
+    os.makedirs(base_dir, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=base_dir, prefix=".skipped-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as out:
+            json.dump({"updated_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                       "entities": skipped}, out, ensure_ascii=False, indent=1)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, os.path.join(base_dir, "skipped.json"))
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 # --- контрактные таблицы (форма serene_sync) -----------------------------------
 
 
@@ -425,13 +447,15 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
         return "planned"
     tmp = tempfile.mkdtemp(prefix="packet-apply-")
     os.chmod(tmp, 0o755)  # каталог читает процесс движка (read_csv)
-    for s in m.get("skipped") or []:
-        if isinstance(s, dict):
-            _log("base=%s pkg=%s SKIPPED entity=%s: %s"
-                 % (base_id, pkg_id, s.get("entity"), str(s.get("error"))[:200]))
     try:
         try:
             files = _decrypt_chunks(base_id, pkg_id, m, tmp)
+            for s in m.get("skipped") or []:
+                if isinstance(s, dict):
+                    _log("base=%s pkg=%s SKIPPED entity=%s: %s"
+                         % (base_id, pkg_id, s.get("entity"), str(s.get("error"))[:200]))
+            if isinstance(m.get("skipped"), list) and m["skipped"]:
+                _apply_skipped(base_id, m["skipped"])
             if (m.get("metadata") or {}).get("included") and "metadata" in files:
                 _apply_metadata(base_id, m, files["metadata"])
                 _log("base=%s pkg=%s metadata записан" % (base_id, pkg_id))
