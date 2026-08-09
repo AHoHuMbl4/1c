@@ -586,7 +586,7 @@ namespace Oc1c
                 Log.Warn("перепубликация поверх существующей (--force): ib=" + ib);
             }
 
-            if (p.Webinst == null || !p.HasWeb)
+            if ((p.Webinst == null || !p.HasWeb) && !Ctx.DryRun)
             {
                 // Модуль расширения веб-сервера можно доустановить без человека:
                 // msiexec /i <msi той же версии> WEBSERVEREXT=1 /qn (штатный modify,
@@ -637,7 +637,7 @@ namespace Oc1c
         // /i <msi той же версии> WEBSERVEREXT=1 /qn — штатный modify, свойство
         // задокументировано поставщиком. msiexec может отдать управление до
         // конца установки — ждём появления файлов до 2 минут.
-        static bool TryInstallWebServerExt(Platform p, out string detail)
+        public static bool TryInstallWebServerExt(Platform p, out string detail)
         {
             detail = "";
             // 0) один exe: ячейка webext-хранилища может быть прицеплена пакетом

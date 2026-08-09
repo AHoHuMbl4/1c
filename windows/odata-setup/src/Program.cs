@@ -189,8 +189,19 @@ namespace Oc1c
                 if (plat == null) plat = plats[0];
             }
             for (int i = 0; i < plats.Count; i++) Log.Info((plats[i] == plat ? "выбрана: " : "найдена: ") + plats[i].ToString());
+            if (!plat.HasWeb && !Ctx.DryRun)
+            {
+                // Сначала пробуем доустановить сами: ячейка пакета → дистрибутив
+                // (Steps.TryInstallWebServerExt). Только потом — ручной туториал.
+                string wdet;
+                if (Steps.TryInstallWebServerExt(plat, out wdet))
+                    Log.Ok("модуль расширения веб-сервера доустановлен программой: " + wdet);
+                else if (wdet.Length > 0)
+                    Log.Warn("автодоустановка модуля веб-сервера не удалась: " + wdet);
+            }
             if (!plat.HasWeb)
             {
+                if (Ctx.DryRun) { Log.Sim("веб-модуля нет — в боевом режиме доустановила бы сама (пакет/дистрибутив)"); }
                 Log.Err("в выбранной платформе НЕТ модуля расширения веб-сервера (bin\\wsisapi.dll)");
                 string tut = Steps.WebModuleTutorial(plat);
                 Log.Con("");
