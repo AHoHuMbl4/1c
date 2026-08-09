@@ -8,6 +8,7 @@ using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml.Linq;
+using Microsoft.Win32;
 
 namespace Oc1c
 {
@@ -585,6 +586,19 @@ namespace Oc1c
                 Log.Warn("перепубликация поверх существующей (--force): ib=" + ib);
             }
 
+            if (p.Webinst == null || !p.HasWeb)
+            {
+                // Модуль расширения веб-сервера можно доустановить без человека:
+                // msiexec /i <msi той же версии> WEBSERVEREXT=1 /qn (штатный modify,
+                // свойство задокументировано поставщиком). Дистрибутив ищем сами
+                // по InstallSource в Uninstall-ключе платформы (строго её версии).
+                string di;
+                if (TryInstallWebServerExt(p, out di))
+                    Log.Info("модуль расширения веб-сервера доустановлен самостоятельно: " + di);
+                else if (di.Length > 0)
+                    Log.Warn("автодоустановка модуля веб-сервера не удалась: " + di);
+            }
+
             if (p.Webinst == null)
             {
                 Log.Err("не найден webinst.exe в " + p.Bin);
@@ -617,6 +631,146 @@ namespace Oc1c
             if (!EnsureIisApp(site, alias, dir, out detail)) return false;
             detail = "опубликовано: " + site + "/" + alias + " -> " + dir;
             return true;
+        }
+
+        // Доустановка «Модулей расширения веб-сервера» без человека: msiexec
+        // /i <msi той же версии> WEBSERVEREXT=1 /qn — штатный modify, свойство
+        // задокументировано поставщиком. msiexec может отдать управление до
+        // конца установки — ждём появления файлов до 2 минут.
+        static bool TryInstallWebServerExt(Platform p, out string detail)
+        {
+            detail = "";
+            string msi = FindPlatformMsi(p);
+            if (msi == null) return false;   // дистрибутива на машине нет — ручной путь
+            Log.Info("найден дистрибутив платформы: " + msi);
+            Log.Info("доустанавливаю «Модули расширения веб-сервера» (msiexec WEBSERVEREXT=1)…");
+            ExecResult r = Proc.Run("msiexec.exe", "/i \"" + msi + "\" /qn /norestart WEBSERVEREXT=1",
+                                    600000, Proc.Oem, null, null);
+            string w = Path.Combine(p.Bin, "webinst.exe");
+            string i2 = Path.Combine(p.Bin, "wsisapi.dll");
+            for (int t = 0; t < 24 && (!File.Exists(w) || !File.Exists(i2)); t++)
+                System.Threading.Thread.Sleep(5000);
+            if (File.Exists(w)) p.Webinst = w;
+            if (File.Exists(i2)) p.Wsisapi = i2;
+            if (p.Webinst != null && p.HasWeb) { detail = "webinst.exe + wsisapi.dll на месте"; return true; }
+            detail = "msiexec exit=" + r.ExitCode + " " + r.Tail(3).Trim();
+            return false;
+        }
+
+        // MSI той же версии платформы: 1) Uninstall-ключи (обе разрядности),
+        // DisplayName «1C:Enterprise 8*»/«1С:Предприятие 8*», DisplayVersion строго
+        // = версии каталога платформы → InstallSource; 2) если дистрибутив удалён
+        // после установки — ограниченный поиск «1CEnterprise 8*.msi» по типовым
+        // местам (загрузки пользователей, корневые папки дисков, глубина 2) с
+        // проверкой ProductVersion внутри MSI через штатный WindowsInstaller.
+        // Разрядность MSI подбираем под разрядность платформы.
+        static string FindPlatformMsi(Platform p)
+        {
+            List<string> found = new List<string>();
+            List<RegistryView> views = new List<RegistryView>();
+            views.Add(Win.RegView());
+            if (Environment.Is64BitOperatingSystem) views.Add(RegistryView.Registry32);
+            for (int vi = 0; vi < views.Count; vi++)
+            {
+                RegistryKey root;
+                try { root = RegistryKey.OpenBaseKey(RegistryHive.LocalMachine, views[vi])
+                                .OpenSubKey(@"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"); }
+                catch { continue; }
+                if (root == null) continue;
+                using (root)
+                {
+                    foreach (string name in root.GetSubKeyNames())
+                    {
+                        using (RegistryKey k = root.OpenSubKey(name))
+                        {
+                            if (k == null) continue;
+                            object dn = k.GetValue("DisplayName");
+                            object dv = k.GetValue("DisplayVersion");
+                            if (dn == null || dv == null) continue;
+                            string dns = dn.ToString();
+                            if (!dns.StartsWith("1C:Enterprise 8") && !dns.StartsWith("1С:Предприятие 8")) continue;
+                            if (dv.ToString() != p.Version) continue;
+                            object src = k.GetValue("InstallSource");
+                            if (src == null || src.ToString().Length == 0 || !Directory.Exists(src.ToString())) continue;
+                            try { found.AddRange(Directory.GetFiles(src.ToString(), "*.msi")); } catch { }
+                        }
+                    }
+                }
+            }
+            if (found.Count == 0)
+            {
+                List<string> roots = new List<string>();
+                try
+                {
+                    string users = Environment.GetEnvironmentVariable("PUBLIC");
+                    if (users != null)
+                    {
+                        string up = Directory.GetParent(users).FullName;   // C:\Users
+                        foreach (string u in Directory.GetDirectories(up))
+                        {
+                            string d = Path.Combine(u, "Downloads");
+                            if (Directory.Exists(d)) roots.Add(d);
+                        }
+                    }
+                }
+                catch { }
+                try
+                {
+                    foreach (string dr in Directory.GetLogicalDrives())
+                        if (dr.Length > 1 && dr[0] != 'A' && dr[0] != 'a' && dr[0] != 'B' && dr[0] != 'b')
+                            roots.Add(dr);
+                }
+                catch { }
+                foreach (string r in roots)
+                    ScanMsi(r, 2, found);
+            }
+            string pick = null;
+            foreach (string m in found)
+            {
+                string pv = MsiProductVersion(m);
+                if (pv != null && pv != p.Version) continue;   // строго та же версия
+                bool x64 = m.IndexOf("x86-64", StringComparison.OrdinalIgnoreCase) >= 0;
+                if (x64 != p.X86) { pick = m; break; }
+                if (pick == null) pick = m;
+            }
+            return pick;
+        }
+
+        static void ScanMsi(string dir, int depth, List<string> found)
+        {
+            if (depth < 0) return;
+            string[] msis;
+            try { msis = Directory.GetFiles(dir, "1CEnterprise 8*.msi"); }
+            catch { return; }
+            found.AddRange(msis);
+            string[] sub;
+            try { sub = Directory.GetDirectories(dir); } catch { return; }
+            foreach (string s in sub)
+            {
+                string n = Path.GetFileName(s);
+                if (n.StartsWith(".")) continue;
+                ScanMsi(s, depth - 1, found);
+            }
+        }
+
+        // ProductVersion внутри MSI — через штатное COM-API Windows Installer
+        // (WindowsInstaller.Installer → OpenDatabase → Property). Недоступно —
+        // возвращаем null (файл не отбраковывается по версии).
+        static string MsiProductVersion(string msiPath)
+        {
+            try
+            {
+                Type t = Type.GetTypeFromProgID("WindowsInstaller.Installer");
+                if (t == null) return null;
+                dynamic wi = Activator.CreateInstance(t);
+                dynamic db = wi.OpenDatabase(msiPath, 0);
+                dynamic view = db.OpenView("SELECT `Value` FROM `Property` WHERE `Property`='ProductVersion'");
+                view.Execute();
+                dynamic rec = view.Fetch();
+                if (rec == null) return null;
+                return Convert.ToString(rec.StringData(1));
+            }
+            catch { return null; }
         }
 
         // ============================================================ 7. включить OData в default.vrd
