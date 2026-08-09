@@ -640,6 +640,36 @@ namespace Oc1c
         static bool TryInstallWebServerExt(Platform p, out string detail)
         {
             detail = "";
+            // 0) один exe: ячейка webext-хранилища может быть прицеплена пакетом
+            //    (webext/<версия>/<разрядность>/…). Копируем файлы в bin платформы.
+            string arch = p.X86 ? "x86" : "x64";
+            string cellDll = Payload.Find("webext/" + p.Version + "/" + arch + "/wsisapi.dll");
+            if (cellDll != null)
+            {
+                Log.Info("модуль веб-сервера " + p.Version + " " + arch + " — есть в комплекте установки, ставлю сам");
+                string cellDir = Path.GetDirectoryName(cellDll);
+                string[] files;
+                try { files = Directory.GetFiles(cellDir); }
+                catch (Exception e) { detail = "ячейка не читается: " + e.Message; return false; }
+                foreach (string f in files)
+                {
+                    string n = Path.GetFileName(f);
+                    if (!n.Equals("wsisapi.dll", StringComparison.OrdinalIgnoreCase)
+                        && !n.Equals("webinst.exe", StringComparison.OrdinalIgnoreCase)
+                        && !(n.StartsWith("webinst_", StringComparison.OrdinalIgnoreCase) && n.EndsWith(".res", StringComparison.OrdinalIgnoreCase)))
+                        continue;
+                    try { File.Copy(f, Path.Combine(p.Bin, n), true); }
+                    catch (Exception e) { detail = "не записать " + n + " в " + p.Bin + ": " + e.Message; return false; }
+                }
+                string wExe = Path.Combine(p.Bin, "webinst.exe");
+                string iDll = Path.Combine(p.Bin, "wsisapi.dll");
+                if (File.Exists(wExe)) p.Webinst = wExe;
+                if (File.Exists(iDll)) p.Wsisapi = iDll;
+                if (p.Webinst != null && p.HasWeb) { detail = "файлы из комплекта установки"; return true; }
+                detail = "скопировал, но файлов нет в " + p.Bin;
+                return false;
+            }
+            // 1) дистрибутив на машине (реестр / загрузки) → msiexec WEBSERVEREXT=1
             string msi = FindPlatformMsi(p);
             if (msi == null) return false;   // дистрибутива на машине нет — ручной путь
             Log.Info("найден дистрибутив платформы: " + msi);

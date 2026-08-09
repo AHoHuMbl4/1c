@@ -126,6 +126,12 @@ namespace Oc1c
                 ? Path.Combine(kit, "packet-setup.json") : o.PacketSetupPath;
             if (!File.Exists(setupPath) && string.IsNullOrEmpty(o.PacketSetupPath))
             {
+                // Один exe: комплект может быть в прицепленном пакете (Payload).
+                string inPayload = Payload.Find("packet-setup.json");
+                if (inPayload != null) { kit = Payload.Dir; setupPath = inPayload; }
+            }
+            if (!File.Exists(setupPath) && string.IsNullOrEmpty(o.PacketSetupPath))
+            {
                 // Комплекта нет — поведение как у версии 1.1.0: блок не активен.
                 Log.Skip("комплект пакетного транспорта не найден (packet-setup.json рядом с exe) — агент не устанавливается");
                 return Program.EXIT_OK;

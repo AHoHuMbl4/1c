@@ -46,7 +46,7 @@ if defined RES echo Вшиваются ресурсы из embed\: %RES%
   /reference:System.IO.Compression.FileSystem.dll ^
   /reference:System.Web.Extensions.dll ^
   %RES% ^
-  "%~dp0src\Sys.cs" "%~dp0src\Steps.cs" "%~dp0src\Packet.cs" "%~dp0src\Program.cs"
+  "%~dp0src\Sys.cs" "%~dp0src\Steps.cs" "%~dp0src\Packet.cs" "%~dp0src\Payload.cs" "%~dp0src\Program.cs"
 
 if errorlevel 1 (
   echo.

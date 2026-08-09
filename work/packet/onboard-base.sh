@@ -98,6 +98,11 @@ with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as z:
 print("zip:", zp, os.path.getsize(zp), "байт")
 EOF
 
+echo "== 4б/5 один файл (1c-ai-$BASE.exe = exe + комплект + webext)"
+python3 "$REPO/work/packet/pack-onefile.py" \
+  "$SRC_DIST/1c-ai.exe" "$KIT" "$REPO/work/packet/webext-store" \
+  "$DIST/1c-ai-$BASE.exe"
+
 echo "== 5/5 выкладка на S3 (installers/$BASE/)"
 set -a; source "${S3_ENV:-$HOME/.s3-1c/env}"; set +a
 ~/.venvs/s3/bin/python - "$DIST" "$BASE" << 'EOF'
@@ -109,6 +114,7 @@ s3 = boto3.client("s3", endpoint_url=os.environ["S3_ENDPOINT"],
                   region_name=os.environ.get("S3_REGION", "fsn1"))
 b = os.environ["S3_BUCKET"]
 for fn, key in [(f"1c-ai-{base}.zip", f"installers/{base}/1c-ai-{base}.zip"),
+                (f"1c-ai-{base}.exe", f"installers/{base}/1c-ai-{base}.exe"),
                 ("1c-ai.exe", f"installers/{base}/1c-ai.exe")]:
     s3.upload_file(os.path.join(dist, fn), b, key)
     s3.put_object_acl(Bucket=b, Key=key, ACL="public-read")

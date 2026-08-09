@@ -98,6 +98,10 @@ namespace Oc1c
             Log.AddSecret(o.AdminPassword);
             Log.AddSecret(o.ReaderPassword);
 
+            // Прицепленный пакет (один exe): комплект слота + webext-ячейки.
+            int pl = Payload.Extract();
+            if (pl > 0) Log.File("прицепленный пакет распакован во временную папку: файлов " + pl);
+
             try { return Run(o); }
             catch (Exception e)
             {

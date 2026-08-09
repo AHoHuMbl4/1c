@@ -50,6 +50,9 @@ work/packet/kit/
 # Дистрибутивы установщиков по машинам/базам (1c-ai.exe + packet-setup.json + client.pfx) — те же секреты
 work/packet/dist/
 
+# Хранилище webext (бинарники платформы 1С) — собственность 1С, в git нельзя
+work/packet/webext-store/
+
 # Второе имя CLAUDE.md для Kimi Code — жёсткая ссылка, создаётся установщиком гейтов
 AGENTS.md
 
