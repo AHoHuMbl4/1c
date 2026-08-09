@@ -406,16 +406,24 @@ namespace Oc1c
             Log.Step(6, 6, "Пробная посылка (подтверждение доставки приёмником)");
             // Повторная установка: seq комплекта уже израсходован прежним каналом —
             // smoke упирается в stale_seq, а агент лечит сам (resync полной заливкой,
-            // решение владельца 07.08). Поэтому при живом state.json довозку доверяем
+            // решение владельца 07.08). Поэтому при ДОКАЗАННОМ канале довозку доверяем
             // демону, а не дублируем посылку.
+            // 🔴 «state.json есть» ≠ «канал доказан» (замер 09.08): smoke упал на 401
+            // (старый токен), агент всё равно записал state, а следующая установка
+            // пропустила smoke по одному факту файла и отрапортовала успех — мета
+            // не уехала, контур на приёмнике пуст навсегда, агент молчит. Пропуск —
+            // только при подтверждённой доставке: smoke_ok=true (агент пишет после
+            // verified) или завершённая полная выгрузка (full_done=true).
             string stateFile = Path.Combine(dataDir, "state.json");
-            if (!Ctx.DryRun && File.Exists(stateFile))
+            if (!Ctx.DryRun && File.Exists(stateFile) && AgentChannelProven(stateFile))
             {
                 Log.Skip("повторная установка: канал уже доказан прежним smoke (есть " + stateFile + ") — довозка штатным демоном");
                 WipeKitSecrets(kit, setupPath, ps);
                 Installed = true;
                 return Program.EXIT_OK;
             }
+            if (!Ctx.DryRun && File.Exists(stateFile))
+                Log.Info("прежняя пробная посылка не подтвердила доставку — повторяю");
             if (Ctx.DryRun)
             {
                 Log.Sim("запустил бы packet-agent.exe --smoke и ждал бы verified от приёмника");
@@ -425,6 +433,24 @@ namespace Oc1c
             bool smoked = Smoke(packetDir);
             if (smoked) { WipeKitSecrets(kit, setupPath, ps); Installed = true; }
             return smoked ? Program.EXIT_OK : Program.EXIT_PACKET;
+        }
+
+        // Канал доказан по state.json агента: smoke_ok=true (после verified) или
+        // завершённая полная выгрузка. Битый/чужой файл — «не доказан» (smoke
+        // повторится; stale_seq в нём обрабатывается как успех).
+        static bool AgentChannelProven(string stateFile)
+        {
+            try
+            {
+                Dictionary<string, object> d = new JavaScriptSerializer()
+                    .Deserialize<Dictionary<string, object>>(File.ReadAllText(stateFile, Encoding.UTF8));
+                if (d == null) return false;
+                object v;
+                if (d.TryGetValue("smoke_ok", out v) && v is bool && (bool)v) return true;
+                if (d.TryGetValue("full_done", out v) && v is bool && (bool)v) return true;
+            }
+            catch { }
+            return false;
         }
 
         // Секреты комплекта после установки на машине не нужны: токен и пароль pfx

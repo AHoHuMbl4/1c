@@ -28,7 +28,7 @@ namespace PacketAgent
     // Каждое число можно переопределить ключом в agent.ini — имя ключа в скобках.
     internal static class C
     {
-        internal const string Version = "1.0.0";
+        internal const string Version = "1.0.1";
         internal const int ManifestVersion = 1;
 
         internal const int PageSizeDefault = 10000;   // (page_size) размер страницы OData
@@ -1225,6 +1225,10 @@ namespace PacketAgent
         internal string SkippedFp = "";     // отпечаток набора пропущенных сущностей (видимость п. 13)
         internal bool Resync;
         internal bool FullDone;
+        // Доставка подтверждена приёмником (smoke). Без флага «state.json есть»
+        // неотличим от «smoke упал» (замер 09.08: 401 → пакет снят, state записан,
+        // установщик пропустил повторный smoke — канал недоказан навсегда).
+        internal bool SmokeOk;
 
         string _path;   // присваивается в Load, дальше только Save
 
@@ -1245,6 +1249,7 @@ namespace PacketAgent
                     st.SkippedFp = Convert.ToString(v, CultureInfo.InvariantCulture);
                 st.Resync = GetBool(d, "resync");
                 st.FullDone = GetBool(d, "full_done");
+                st.SmokeOk = GetBool(d, "smoke_ok");
             }
             catch (Exception e)
             {
@@ -1277,6 +1282,7 @@ namespace PacketAgent
             d["skipped_fp"] = SkippedFp;
             d["resync"] = Resync;
             d["full_done"] = FullDone;
+            d["smoke_ok"] = SmokeOk;
             Directory.CreateDirectory(Path.GetDirectoryName(_path));
             string tmp = _path + ".tmp";
             File.WriteAllText(tmp, Json.Ser(d), Fmt.NoBom);
@@ -2392,6 +2398,7 @@ namespace PacketAgent
             _state.Save();
             Log.Line("smoke: пакет " + pkgShort + " kind=meta, режим " + ModeName + " — отправка");
             bool ok = UploadAndFinish(pkgShort, queueDir);
+            if (ok) { _state.SmokeOk = true; _state.Save(); }
             Log.Line(ok ? "smoke: доставка подтверждена приёмником"
                         : "smoke: доставка НЕ подтверждена");
             return ok;
