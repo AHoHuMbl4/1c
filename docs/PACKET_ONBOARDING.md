@@ -43,6 +43,27 @@ bash /srv/1c/work/packet/onboard-base.sh <base_id>
 5. **S3** — `installers/<base>/1c-ai-<base>.zip` (public-read), печатает ссылку
    для клиента.
 
+## Вариант: приёмник на отдельном VPS (юнит компании)
+
+Боевой путь: пакеты принимает не дев, а копия эталона (`PLAN_PROD_LXC.md §8.1`).
+Отличия от `onboard-base.sh` (который работает с дев-приёмником):
+
+1. Комплект — тот же `packet_kit.py <base>` на деве (CA один, живёт на деве).
+2. Слот заводится НА КОПИИ (доступ с дева — `ssh -A root@89.23.101.22 "ssh
+   root@<внутр.ip> '…'"`, ProxyJump не работает): identity, `bases.json` с ОДНОЙ
+   записью (атомарно temp+rename), `packet-meta/<base>`, код `/opt/1c-packet`
+   докладывается до HEAD репозитория, `systemctl enable --now 1c-packet-server
+   1c-packet-apply.timer`, pipeline-env `/etc/1c-serene-pipeline-postgres.env`
+   (без `SERENE_SRC_DIR` и `ODG_GATEWAY_TOKEN` — продуктовый режим, замер 09.08).
+3. Релей (haproxy 89.23.101.22): ACL по CN сертификата → backend
+   `10.1.1.x:6090 check` (образец — `cn_medteh_ut`), `haproxy -c`, reload.
+   ufw копии уже пускает 6090 с приватного IP релея (10.1.1.4).
+4. Приёмка: `GET /health` сертификатом базы через `1c-gate.timpul.ru` → 200,
+   плюс доказательство по журналу КОПИИ (запросы от 10.1.1.4), что ответила
+   именно она, а не дев. Отработано 09.08 для `novaya-baza` → `10.1.1.6`.
+5. Запись базы на ДЕВЕ после переезда снимается (отзыв — root-шаг, см. ниже):
+   пока она там, дев молча принял бы пакеты, если бы релей их туда пустил.
+
 ## Дальше (уже не этот скрипт)
 
 1. Клиент запускает `1c-ai.exe` из zip — установка IIS/OData + агент (см. ТЗ

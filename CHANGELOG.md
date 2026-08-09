@@ -10,7 +10,46 @@
 
 ---
 
-## 09.08: «установка прошла до конца» без единого принятого пакета — ложный пропуск smoke `[замер]`
+## 09.08: novaya-baza переехала на боевой VPS 10.1.1.6 — приём доказан через релей `[замер]`
+
+[решение] Владелец: тест «почти боевой» — пакеты принимает подготовленный VPS
+(копия эталона v2 §8.1 `PLAN_PROD_LXC`), не дев. Слот перенесён с новыми ключами
+(ротация токена и mTLS-сертификата, age identity сохранён по контракту §3);
+старому комплекту на прежнем стенде приёмник теперь отвечает 401 — так и задумано.
+
+- **[замер]** VPS 10.1.1.6 (копия эталона): identity `/etc/1c-packet-age-novaya-baza.key`
+  (640 root:1c-secrets), `/etc/1c-packet-bases.json` (одна запись, атомарно),
+  `packet-meta/novaya-baza` (serenedb:serenedb), код `/opt/1c-packet` доведён до
+  HEAD репозитория (в образе 08.08 не было `_apply_skipped` — skipped.json),
+  `1c-packet-server`+`1c-packet-apply.timer` enabled/active, локальный
+  `curl :6090/health` → `packet-server-ok`. pipeline-env
+  `/etc/1c-serene-pipeline-postgres.env` с `ETL_ODATA_BASE=…/packet-meta/novaya-baza`
+  — готов к первой сборке витрины.
+- **[замер]** Релей 89.23.101.22 (haproxy): ACL `cn_novaya_baza` +
+  `backend packet_unit_novaya_baza → 10.1.1.6:6090 check` (по образцу medteh-ut),
+  `haproxy -c` чист, reload. Сквозная проверка: `GET /health` сертификатом
+  novaya-baza через `1c-gate.timpul.ru` → HTTP 200, в журнале VPS — запросы от
+  10.1.1.4 (приватный IP релея), в журнале дева их НЕТ (туда ходят только
+  health-check'и default_backend). Маршрутизация по CN работает.
+- **[замер]** Часы копии отстают от дева на ~200 с (tar ругается «timestamp in
+  the future»): свежий клиентский сертификат первые минуты отвергается релеем
+  (notBefore) — повтор через ~1 мин проходит, как и записано в ловушках
+  `PACKET_ONBOARDING.md`. ufw копии уже пускает 6090 только с 10.1.1.4 — правок
+  не потребовалось (§8.1).
+- **[замер]** Комплект перевыпущен (`packet_kit.py novaya-baza`): токен
+  установщика == токену в bases.json VPS (сверено посимвольно). Дист пересобран:
+  `1c-ai-novaya-baza.exe` 10 864 063 байт (бинарь `fe374fed` с фиксом smoke_ok +
+  новый комплект + webext), zip, S3 `installers/novaya-baza/` обновлён
+  (ETag/md5 сверены; exe лёг multipart — ETag составной, размер совпал).
+- **Осталось владельцу (root на деве)**: снять запись novaya-baza из
+  `/etc/1c-packet-bases.json` ДЕВА — она мертва (релей по CN её туда больше не
+  пускает, токен протух), но по контракту отзыв — root-шаг. Команда выдана
+  владельцу в сессии.
+- Дальше: чистый прогон установщика на новой Windows (владелец) → smoke
+  `kind=meta` → витрина `1c-serene-pipeline@postgres` на VPS → `packet_config`
+  → первая полная выгрузка демоном.
+
+---
 
 Прогон владельца на новой машине (слот novaya-baza): установщик отработал кодом 0,
 а в журнале приёмника — только `PUT manifest -> 401` (16:17, просроченный токен из
