@@ -64,8 +64,18 @@ print(f"слот активен: баз в приёмнике {len(doc)} ({', '.
 EOF
 
 echo "== 3/5 проверка mTLS сертификатом $BASE (сквозная: релей → приёмник)"
-curl -s --max-time 20 --cert "$KIT/client.crt" --key "$KIT/client-key.pem" \
-     https://1c-gate.timpul.ru/health
+# Сертификат выдан секунды назад: при отставании часов релея он «ещё не
+# действителен» (bad certificate). Повторяем до минуты, прежде чем падать
+# (замер 09.08: проверка через ~1 мин после выпуска проходит).
+ok=""
+for i in 1 2 3; do
+  out=$(curl -s --max-time 20 --cert "$KIT/client.crt" --key "$KIT/client-key.pem" \
+        https://1c-gate.timpul.ru/health) && { ok=1; break; }
+  echo "mTLS попытка $i не прошла — пауза 20с (сертификат мог не наступить по notBefore)"
+  sleep 20
+done
+[ -n "$ok" ] || { echo "mTLS не прошёл после 3 попыток — стоп" >&2; exit 1; }
+echo "$out"
 echo
 
 echo "== 4/5 дистрибутив $DIST"
