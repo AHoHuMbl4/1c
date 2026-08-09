@@ -4,7 +4,7 @@
 # В пакет входят: комплект слота (packet-setup.json, client.pfx из kit_dir)
 # и все ячейки webext-хранилища (webext_dir/<версия>/<арх>/...).
 # Формат — см. windows/odata-setup/src/Payload.cs (читает сам exe).
-import json, os, struct, sys
+import hashlib, json, os, struct, sys
 
 def main():
     if len(sys.argv) != 5:
@@ -31,7 +31,10 @@ def main():
     entries = []
     for name, path in files:
         data = open(path, "rb").read()
-        entries.append({"n": name, "o": len(payload), "l": len(data)})
+        # h — sha256 содержимого: exe сверяет при распаковке (баг 09.08: чтение
+        # не от начала данных давало куски exe; хеш — страховка от порчи файла).
+        entries.append({"n": name, "o": len(payload), "l": len(data),
+                        "h": hashlib.sha256(data).hexdigest()})
         payload += data
     dirj = json.dumps(entries, separators=(",", ":")).encode("utf-8")
     with open(exe, "rb") as f:

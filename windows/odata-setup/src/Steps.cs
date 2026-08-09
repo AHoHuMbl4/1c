@@ -745,6 +745,49 @@ namespace Oc1c
             return false;
         }
 
+        // Самолечение bin платформы по пакету: если в пакете есть ячейка webext
+        // этой версии/разрядности, сверяем sha256 уже лежащих в bin файлов
+        // (webinst.exe, wsisapi.dll, webinst_*.res) с оглавлением пакета и
+        // перезаписываем несовпавшие. Замер 09.08: прогон с битой распаковкой
+        // скопировал в bin куски exe — файлы формально «на месте» (HasWeb=true),
+        // но это мусор: webinst не стартует («несовместим с 64-разрядной
+        // Windows»), wsisapi не грузится (IIS 500).
+        public static bool HealWebextFromPayload(Platform p, out string detail)
+        {
+            detail = "";
+            if (Ctx.DryRun || Payload.Dir == null) return false;
+            string arch = p.X86 ? "x86" : "x64";
+            string cellDll = Payload.Find("webext/" + p.Version + "/" + arch + "/wsisapi.dll");
+            if (cellDll == null) return false;
+            string cellDir = Path.GetDirectoryName(cellDll);
+            string[] files;
+            try { files = Directory.GetFiles(cellDir); }
+            catch (Exception e) { detail = "ячейка не читается: " + e.Message; return false; }
+            int healed = 0;
+            for (int i = 0; i < files.Length; i++)
+            {
+                string n = Path.GetFileName(files[i]);
+                string want = Payload.ExpectedHash("webext/" + p.Version + "/" + arch + "/" + n);
+                if (string.IsNullOrEmpty(want)) continue;
+                string dest = Path.Combine(p.Bin, n);
+                string got = null;
+                if (File.Exists(dest)) { try { got = Payload.Sha256Hex(dest); } catch { } }
+                if (got != null && got.Equals(want, StringComparison.OrdinalIgnoreCase)) continue;
+                try { File.Copy(files[i], dest, true); healed++; }
+                catch (Exception e) { detail = "не записать " + n + " в " + p.Bin + ": " + e.Message; }
+            }
+            string wExe = Path.Combine(p.Bin, "webinst.exe");
+            string iDll = Path.Combine(p.Bin, "wsisapi.dll");
+            p.Webinst = File.Exists(wExe) ? wExe : null;
+            p.Wsisapi = File.Exists(iDll) ? iDll : null;
+            if (healed > 0)
+            {
+                detail = "восстановлены файлы модуля веб-сервера в bin платформы (" + healed + " шт.)";
+                return true;
+            }
+            return false;
+        }
+
         // MSI той же версии платформы: 1) Uninstall-ключи (обе разрядности),
         // DisplayName «1C:Enterprise 8*»/«1С:Предприятие 8*», DisplayVersion строго
         // = версии каталога платформы → InstallSource; 2) если дистрибутив удалён
@@ -1980,8 +2023,20 @@ namespace Oc1c
                         using (StreamReader sr = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
                         {
                             string body = sr.ReadToEnd();
+                            // У страницы детальной ошибки IIS полезное (код 0x…,
+                            // модуль) далеко за первыми 400 символами — замер
+                            // 09.08: обрезка прятала причину 500. Вытаскиваем
+                            // код и модуль в начало сообщения, тело — в лог.
+                            string hint = "";
+                            if (pr.Status >= 500)
+                            {
+                                Match code = Regex.Match(body, @"0x[0-9a-fA-F]{8}");
+                                if (code.Success) hint = "[код " + code.Value + "] ";
+                                Log.File("тело ответа HTTP " + pr.Status + ": " +
+                                         body.Replace("\r", " ").Replace("\n", " "));
+                            }
                             if (body.Length > 400) body = body.Substring(0, 400);
-                            pr.Error = body.Replace("\r", " ").Replace("\n", " ");
+                            pr.Error = hint + body.Replace("\r", " ").Replace("\n", " ");
                         }
                     }
                     catch { }

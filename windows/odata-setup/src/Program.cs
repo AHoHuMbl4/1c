@@ -189,6 +189,11 @@ namespace Oc1c
                 if (plat == null) plat = plats[0];
             }
             for (int i = 0; i < plats.Count; i++) Log.Info((plats[i] == plat ? "выбрана: " : "найдена: ") + plats[i].ToString());
+            // Самолечение: файлы модуля могут быть на месте, но повреждены
+            // (замер 09.08 — в bin лежали куски exe от битой распаковки пакета).
+            string hdet;
+            if (Steps.HealWebextFromPayload(plat, out hdet)) Log.Ok(hdet);
+            else if (hdet.Length > 0) Log.Warn("самолечение модуля веб-сервера: " + hdet);
             if (!plat.HasWeb && !Ctx.DryRun)
             {
                 // Сначала пробуем доустановить сами: ячейка пакета → дистрибутив
@@ -586,7 +591,7 @@ namespace Oc1c
                         if (auth.Status == 401) Log.Fix("неверный пароль этого пользователя 1С");
                         else if (auth.Status == 404) Log.Fix("проверьте адрес публикации (--alias) и что база опубликована");
                         else if (auth.Status == 503) Log.Fix("пул приложений остановлен: appcmd start apppool \"" + pool + "\"");
-                        else if (auth.Status == 500) Log.Fix("ошибка 1С/IIS: разрядность пула, права на каталог базы или лицензия — см. лог");
+                        else if (auth.Status == 500) Log.Fix("ошибка 1С/IIS. По коду из строки выше: 0x800700c1 — разрядность пула/dll; 0x8007007e — wsisapi.dll битая или нет её зависимостей; 0x80070005 — права на каталог базы/bin платформы; прочее — лицензия. Полное тело ответа — в логе");
                         verifyExit = EXIT_VERIFY;
                     }
                 }
