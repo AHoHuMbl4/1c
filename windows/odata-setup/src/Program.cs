@@ -74,6 +74,12 @@ namespace Oc1c
         {
             try { Console.OutputEncoding = Encoding.UTF8; }
             catch { }
+            // И ввод тоже: conhost отдаёт Unicode, без этого ReadLine декодирует
+            // русские имена пользователей 1С в OEM — «Администратор (ФедоровБМ)»
+            // превращался в мусор, и 1С честно отвечала «неверный пароль»
+            // (прогон владельца 09.08; в логе 08.08 — «Ифидщифидщ»).
+            try { Console.InputEncoding = Encoding.UTF8; }
+            catch { }
 
             Opts o = new Opts();
             string err = ParseArgs(argv, o);
