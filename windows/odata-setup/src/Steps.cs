@@ -622,15 +622,73 @@ namespace Oc1c
             ExecResult r = Proc.Run(p.Webinst, args, 180000, Proc.Oem, p.Bin, null);
             if (!File.Exists(vrd))
             {
+                // webinst не стартовал (замер 09.08, Server 2019: «несовместимость
+                // с 64-разрядной версией Windows» — запуск 32-битного exe отклонён).
+                // Публикуем сами: default.vrd и web.config пишем штатным шаблоном,
+                // IIS-часть (приложение, пул, ISAPI) у нас и так своя.
+                string fb;
+                if (WritePublicationFiles(p, alias, dir, b.ConnStrPlain, out fb))
+                {
+                    Log.Warn("webinst не запустился — публикация записана программой (" + fb + ")");
+                    r = null;
+                }
+                else
+                {
                 Log.Err("публикация не удалась (exit=" + r.ExitCode + "): " + r.Tail(4));
                 Log.Fix("проверьте: запуск от администратора; IIS установлен; путь к базе доступен; " +
                         "в логе полный вывод webinst — " + Log.Path);
                 return false;
+                }
             }
             Ctx.Changed = true;
             if (!EnsureIisApp(site, alias, dir, out detail)) return false;
             detail = "опубликовано: " + site + "/" + alias + " -> " + dir;
             return true;
+        }
+
+        // Своя публикация без webinst (он может не стартовать на сервере, где
+        // заблокирован запуск 32-битных exe — замер 09.08, Server 2019). Пишем
+        // default.vrd и web.config тем же содержимым, что кладёт webinst; дальше
+        // штатные шаги (приложение IIS, пул, ISAPI, OData в vrd) идут как всегда.
+        static bool WritePublicationFiles(Platform p, string alias, string dir, string connStrPlain, out string detail)
+        {
+            detail = "";
+            try
+            {
+                string esc = connStrPlain.Replace("&", "&amp;").Replace("\"", "&quot;");
+                string vrdText =
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n" +
+                    "<point xmlns=\"http://v8.1c.ru/8.2/virtual-resource-system\"\r\n" +
+                    "                xmlns:xs=\"http://www.w3.org/2001/XMLSchema\"\r\n" +
+                    "                xmlns:xsi=\"http://www.w3.org/2001/XMLSchema-instance\"\r\n" +
+                    "                base=\"/" + alias + "\"\r\n" +
+                    "                ib=\"" + esc + "\">\r\n" +
+                    "        <ws pointEnableCommon=\"true\"/>\r\n" +
+                    "        <standardOdata enable=\"true\"\r\n" +
+                    "                        reuseSessions=\"autouse\"\r\n" +
+                    "                        sessionMaxAge=\"20\"\r\n" +
+                    "                        poolSize=\"10\"\r\n" +
+                    "                        poolTimeout=\"5\"/>\r\n" +
+                    "        <analytics enable=\"false\"/>\r\n" +
+                    "</point>\r\n";
+                File.WriteAllText(Path.Combine(dir, "default.vrd"), vrdText, new UTF8Encoding(false));
+
+                string wcfg =
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n" +
+                    "<configuration>\r\n" +
+                    "  <system.webServer>\r\n" +
+                    "    <handlers>\r\n" +
+                    "      <add name=\"1C Web-service Extension\" path=\"*\" verb=\"*\" modules=\"IsapiModule\"\r\n" +
+                    "           scriptProcessor=\"" + p.Wsisapi + "\" resourceType=\"Unspecified\" requireAccess=\"None\"\r\n" +
+                    "           preCondition=\"" + (p.X86 ? "bitness32" : "bitness64") + "\"/>\r\n" +
+                    "    </handlers>\r\n" +
+                    "  </system.webServer>\r\n" +
+                    "</configuration>\r\n";
+                File.WriteAllText(Path.Combine(dir, "web.config"), wcfg, new UTF8Encoding(false));
+                detail = "default.vrd + web.config записаны";
+                return true;
+            }
+            catch (Exception e) { detail = e.Message; return false; }
         }
 
         // Доустановка «Модулей расширения веб-сервера» без человека: msiexec
