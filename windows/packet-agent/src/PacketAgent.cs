@@ -732,6 +732,19 @@ namespace PacketAgent
         internal OdataNotFoundException(string msg) : base(msg) { }
     }
 
+    // Отказ в доступе (401/403, RLS 500 «ограничение доступа»): уменьшение страницы
+    // и повторы бессмысленны — прав от них не прибудет, а каждая попытка на
+    // RLS-сущности стоит десятки секунд (замер 09.08: регистры УТ по ~4 мин на
+    // пропуск → вся полная выгрузка растягивалась на сутки).
+    // Reason — машиночитаемая причина (ресерч 4.1/4.4, docs/research/): rls_or_no_right
+    // (401 + код 20; развилку решает allowedOnly-проба), auth_failed (401 без
+    // OData-тела — отказ веб-сервера), infra_blocked (403), rls_error (500 от RLS-шаблона).
+    internal sealed class OdataDeniedException : Exception
+    {
+        internal readonly string Reason;
+        internal OdataDeniedException(string msg, string reason) : base(msg) { Reason = reason; }
+    }
+
     // ============================ клиент OData 1С ===============================
     // Порт poc_load_entity: fetch_all / проба версий / прямой доступ по ключу.
     // Авторизация — HTTP Basic (ai_reader на IIS-публикации).
@@ -750,6 +763,11 @@ namespace PacketAgent
         }
 
         internal Meta Meta { set { _meta = value; } }
+
+        // Фолбэк allowedOnly=true (ресерч 4.4): читать только разрешённые записи —
+        // применяется наверху как ПОСЛЕДНЯЯ ступень после отказа RLS, чтобы отдать
+        // легально читаемое подмножество вместо полного пропуска сущности.
+        internal bool AllowedOnly;
 
         HttpWebRequest NewRequest(string url)
         {
@@ -793,6 +811,12 @@ namespace PacketAgent
         internal Dictionary<string, object> GetJson(string entity, Dictionary<string, string> prm,
                                                     string key)
         {
+            if (AllowedOnly && prm != null && !prm.ContainsKey("allowedOnly"))
+            {
+                Dictionary<string, string> p3 = new Dictionary<string, string>(prm);
+                p3["allowedOnly"] = "true";
+                prm = p3;
+            }
             string seg = Q(entity) + (key != null ? "(guid'" + key + "')" : "");
             string url = _cfg.OdataUrl + "/" + seg + "?" + BuildQuery(prm);
             try
@@ -801,18 +825,13 @@ namespace PacketAgent
             }
             catch (WebException we)
             {
-                HttpWebResponse resp = we.Response as HttpWebResponse;
-                if (resp != null && resp.StatusCode == HttpStatusCode.NotFound)
-                {
-                    resp.Close();
-                    throw new OdataNotFoundException(entity + " " + (key ?? "") + ": HTTP 404");
-                }
+                RethrowMapped(entity, key, we);
                 CloseResp(we);
             }
             try {   // 2. просто ещё раз — часть отказов 1С разовые
                 return Json.Obj(ReadAll((HttpWebResponse)NewRequest(url).GetResponse()));
             }
-            catch (WebException we) { CloseResp(we); }
+            catch (WebException we) { RethrowMapped(entity, key, we); CloseResp(we); }
             string sel = _meta.SelectOf(entity);   // 3. по-другому
             if (sel.Length == 0) throw new InvalidDataException(entity + ": 1С не отвечает");
             Dictionary<string, string> p2 = new Dictionary<string, string>(prm);
@@ -821,9 +840,66 @@ namespace PacketAgent
             return Json.Obj(ReadAll((HttpWebResponse)NewRequest(url2).GetResponse()));
         }
 
+        // Единый разбор HTTP-ошибок OData: 404 → OdataNotFoundException (gone),
+        // 401/403 и 500-RLS → OdataDeniedException (страница/повторы бессмысленны).
+        // Не замаплено — возврат, решает вызывающий.
+        static void RethrowMapped(string entity, string key, WebException we)
+        {
+            HttpWebResponse resp = we.Response as HttpWebResponse;
+            if (resp == null) return;
+            if (resp.StatusCode == HttpStatusCode.NotFound)
+            {
+                resp.Close();
+                throw new OdataNotFoundException(entity + " " + (key ?? "") + ": HTTP 404");
+            }
+            if (resp.StatusCode == HttpStatusCode.Unauthorized
+                || resp.StatusCode == HttpStatusCode.Forbidden)
+            {
+                HttpStatusCode sc = resp.StatusCode;
+                // Классификация (ресерч 4.1): 403 платформенный OData для прав не
+                // использует — это инфраструктура (IIS ACL/прокси). 401 с кодом 20 —
+                // «нет роли» или «RLS без allowedOnly» (развилка — allowedOnly-пробой
+                // наверху); 401 без OData-тела — отказ аутентификации веб-сервера.
+                if (sc == HttpStatusCode.Forbidden)
+                {
+                    resp.Close();
+                    throw new OdataDeniedException(entity + ": HTTP 403 — инфраструктурный отказ (IIS/прокси)", "infra_blocked");
+                }
+                string eb = ReadErrorBody(resp);
+                bool code20 = eb.IndexOf(">20<", StringComparison.Ordinal) >= 0
+                              || eb.IndexOf("\"code\":\"20\"", StringComparison.Ordinal) >= 0
+                              || eb.IndexOf("\"code\": \"20\"", StringComparison.Ordinal) >= 0
+                              || eb.IndexOf("\"code\":20", StringComparison.Ordinal) >= 0;
+                if (code20)
+                    throw new OdataDeniedException(entity + ": HTTP 401 (код 20 — права/RLS)", "rls_or_no_right");
+                throw new OdataDeniedException(entity + ": HTTP 401 без OData-тела — аутентификация (веб-сервер)", "auth_failed");
+            }
+            // 500: RLS-шаблон 1С падает с «ограничение доступа» в теле — это отказ,
+            // а не «крупная страница»; сужать её бесполезно (замер 09.08).
+            if (resp.StatusCode == HttpStatusCode.InternalServerError)
+            {
+                string eb = ReadErrorBody(resp);
+                if (eb.IndexOf("ограничен", StringComparison.OrdinalIgnoreCase) >= 0
+                    || eb.IndexOf("оступ запрещен", StringComparison.OrdinalIgnoreCase) >= 0)
+                    throw new OdataDeniedException(entity + ": HTTP 500 (ограничение доступа RLS)", "rls_error");
+            }
+        }
+
         internal static void CloseResp(WebException we)
         {
             if (we.Response != null) we.Response.Close();
+        }
+
+        static string ReadErrorBody(HttpWebResponse resp)
+        {
+            try
+            {
+                using (Stream s = resp.GetResponseStream())
+                using (StreamReader r = new StreamReader(s, Encoding.UTF8))
+                    return r.ReadToEnd();
+            }
+            catch { return ""; }
+            finally { try { resp.Close(); } catch { } }
         }
 
         static string BuildQuery(Dictionary<string, string> prm)
@@ -838,8 +914,23 @@ namespace PacketAgent
         // $select сделал бы пробу дорогой.
         internal Dictionary<string, object> FetchPageDoc(string entity, Dictionary<string, string> prm)
         {
+            if (AllowedOnly && prm != null && !prm.ContainsKey("allowedOnly"))
+            {
+                Dictionary<string, string> p3 = new Dictionary<string, string>(prm);
+                p3["allowedOnly"] = "true";
+                prm = p3;
+            }
             string url = _cfg.OdataUrl + "/" + Q(entity) + "?" + BuildQuery(prm);
-            return Json.Obj(ReadAll((HttpWebResponse)NewRequest(url).GetResponse()));
+            try
+            {
+                return Json.Obj(ReadAll((HttpWebResponse)NewRequest(url).GetResponse()));
+            }
+            catch (WebException we)
+            {
+                RethrowMapped(entity, null, we);
+                CloseResp(we);
+                throw;
+            }
         }
 
         internal int CountOf(string entity)
@@ -908,6 +999,8 @@ namespace PacketAgent
                         if (expected < 0) expected = CountOf(entity);
                     }
                 }
+                catch (OdataNotFoundException) { throw; }
+                catch (OdataDeniedException) { throw; }   // отказ в доступе — страница ни при чём
                 catch (Exception)
                 {
                     // Страница уменьшается, а не сущность теряется (К6): при меньшей
@@ -973,6 +1066,8 @@ namespace PacketAgent
                         }
                     }
                 }
+                catch (OdataNotFoundException) { throw; }
+                catch (OdataDeniedException) { throw; }   // отказ в доступе — страница ни при чём
                 catch (Exception)
                 {
                     if (top <= _cfg.PageMin) return null;
@@ -1692,15 +1787,54 @@ namespace PacketAgent
             foreach (string e in entities)
             {
                 try { ProcessEntity(e, firstRun, results, gone, ownerSilent); }
+                catch (OdataNotFoundException nfx)
+                {
+                    // Сущности нет в составе OData (уровень сущности, не ключа):
+                    // «не опубликовано», а не «запрещено» (ресерч 4.1, код 8).
+                    skipped.Add(new KeyValuePair<string, string>(e, "not_published: " + nfx.Message));
+                    Log.Line("    " + e + ": ПРОПУЩЕНА [not_published] (" + nfx.Message + ")");
+                }
+                catch (OdataDeniedException dex)
+                {
+                    // Классифицированный отказ (ресерч 4.4). auth_failed — глобально
+                    // (веб-сервер не пускает вообще) — такт бессмыслен, фаталим.
+                    if (dex.Reason == "auth_failed") throw;
+                    if (dex.Reason == "rls_or_no_right" || dex.Reason == "rls_error")
+                    {
+                        // Фолбэк ступени 1: allowedOnly=true — отдать легально
+                        // читаемое подмножество вместо полного пропуска; 401 и там —
+                        // значит нет ролевого права «Чтение» на объект (no_read_right).
+                        try
+                        {
+                            _odata.AllowedOnly = true;
+                            ProcessEntity(e, firstRun, results, gone, ownerSilent);
+                            skipped.Add(new KeyValuePair<string, string>(e,
+                                "rls_filtered: прочитано ЧАСТИЧНО — только записи, разрешённые RLS (" + dex.Message + ")"));
+                            Log.Line("    " + e + ": ЧАСТИЧНО [rls_filtered] — отдано разрешённое подмножество");
+                            continue;
+                        }
+                        catch (OdataDeniedException)
+                        {
+                            skipped.Add(new KeyValuePair<string, string>(e, "no_read_right: " + dex.Message));
+                            Log.Line("    " + e + ": ПРОПУЩЕНА [no_read_right] (" + dex.Message + ")");
+                        }
+                        catch (Exception ex2)
+                        {
+                            skipped.Add(new KeyValuePair<string, string>(e, ex2.Message));
+                            Log.Line("    " + e + ": ПРОПУЩЕНА (" + ex2.Message + ")");
+                        }
+                        finally { _odata.AllowedOnly = false; }
+                        continue;
+                    }
+                    skipped.Add(new KeyValuePair<string, string>(e, dex.Reason + ": " + dex.Message));
+                    Log.Line("    " + e + ": ПРОПУЩЕНА [" + dex.Reason + "] (" + dex.Message + ")");
+                }
                 catch (Exception ex)
                 {
-                    // Сущность не прочиталась (вне состава OData, RLS базы запрещает,
-                    // сбой 1С): пропускаем с ВИДИМОЙ отметкой — в журнал и в manifest
-                    // пакета. п. 13 TARGET: недопустима МОЛЧАЛИВАЯ потеря; показанная —
-                    // допустима. Индекс не трогаем — следующий такт попробует снова.
-                    // Замер 09.08: RLS-регистр УТ нечитаем ни одним не-полноправным
-                    // пользователем (проверено и штатным менеджером демо-базы) —
-                    // установщиком такое не чинится.
+                    // Сущность не прочиталась (сбой 1С/сети): пропускаем с ВИДИМОЙ
+                    // отметкой — в журнал и в manifest пакета. п. 13 TARGET:
+                    // недопустима МОЛЧАЛИВАЯ потеря; показанная — допустима.
+                    // Индекс не трогаем — следующий такт попробует снова.
                     skipped.Add(new KeyValuePair<string, string>(e, ex.Message));
                     Log.Line("    " + e + ": ПРОПУЩЕНА (" + ex.Message + ")");
                 }

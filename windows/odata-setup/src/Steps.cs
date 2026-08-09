@@ -1376,9 +1376,13 @@ namespace Oc1c
             s.AppendLine("  if ($added -gt 0) { $u.Записать() }");
             s.AppendLine("  'RESULT=OK'; 'MODE=DIRECT'; 'ROLES=' + $added; exit 0");
             s.AppendLine("}");
-            // --- БСП: 1) профиль
+            // --- БСП: 1) профиль. Берём/создаём ТОЛЬКО свой «Только просмотр»: дальше
+            // мы выставляем его видам доступа «Все разрешены, без исключений» (рецепт
+            // RLS, замер 09.08). Поставляемые/клиентские профили («Только чтение»,
+            // «Аудитор») переиспользовать нельзя: они могут быть назначены живым
+            // пользователям, и мутация их видов сняла бы с людей RLS-фильтрацию.
             s.AppendLine("$profRef = $null; $profName = ''");
-            s.AppendLine("foreach ($nm in @('Только просмотр','Только чтение','Аудитор')) {");
+            s.AppendLine("foreach ($nm in @('Только просмотр')) {");
             s.AppendLine("  $q = $ib.NewObject('Запрос')");
             s.AppendLine("  $q.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Т.Ссылка КАК Сс ИЗ Справочник.ПрофилиГруппДоступа КАК Т ГДЕ Т.Наименование = &Н'");
             s.AppendLine("  $q.УстановитьПараметр('Н', $nm)");
@@ -1479,6 +1483,66 @@ namespace Oc1c
             s.AppendLine("}");
             s.AppendLine("if ($direct -gt 0) { $u.Записать() }");
             s.AppendLine("'ROLES_DIRECT=' + $direct");
+            // Рецепт RLS (замер 09.08, docs/research/RLS_RECIPE_PROVEN.md): вид доступа
+            // отключается (ветка RLS исключается препроцессором), если по всем группам
+            // пользователя он «Все разрешены, без исключений». Иначе часть контура
+            // (цены, партнёры) не читается вовсе — п. 13. Две части рецепта:
+            // 1) всем используемым видам в профиле ВсеРазрешены=Истина; набор видов
+            //    читается из самой базы — ни одного имени в коде. Сравнение ссылок —
+            //    через ЗначениеВСтрокуВнутр (строки-результаты запросов по COM пустые —
+            //    HOW_NOT_TO §3.44, а строки-возвраты методов работают — замер);
+            s.AppendLine("$kindsTotal = 0; $kindsAdded = 0; $kindsSet = 0");
+            s.AppendLine("try {");
+            s.AppendLine("  $profObj = $profRef.ПолучитьОбъект()");
+            s.AppendLine("  $tab = $profObj.ВидыДоступа");
+            s.AppendLine("  $have = @{}");
+            s.AppendLine("  for ($i = 0; $i -lt [int]$tab.Количество(); $i++) {");
+            s.AppendLine("    $row = $tab.Получить($i)");
+            s.AppendLine("    $row.ВсеРазрешены = $true; $kindsSet++");
+            s.AppendLine("    $have[$ib.ЗначениеВСтрокуВнутр((P $row 'ВидДоступа'))] = $true");
+            s.AppendLine("  }");
+            s.AppendLine("  $qk = $ib.NewObject('Запрос')");
+            s.AppendLine("  $qk.Текст = 'ВЫБРАТЬ РАЗЛИЧНЫЕ Т.ВидДоступа КАК ВД ИЗ Справочник.ПрофилиГруппДоступа.ВидыДоступа КАК Т'");
+            s.AppendLine("  $rks = $qk.Выполнить().Выбрать()");
+            s.AppendLine("  while ($rks.Следующий()) {");
+            s.AppendLine("    $kindsTotal++");
+            s.AppendLine("    $kind = P $rks 'ВД'");
+            s.AppendLine("    if (-not $have.ContainsKey($ib.ЗначениеВСтрокуВнутр($kind))) {");
+            s.AppendLine("      $row = $tab.Добавить(); $row.ВидДоступа = $kind; $row.ВсеРазрешены = $true; $kindsAdded++");
+            s.AppendLine("    }");
+            s.AppendLine("  }");
+            s.AppendLine("  $profObj.Записать()");
+            s.AppendLine("} catch { 'KINDS_ERROR=' + $_.Exception.Message }");
+            s.AppendLine("'KINDS_TOTAL=' + $kindsTotal; 'KINDS_SET=' + $kindsSet; 'KINDS_ADDED=' + $kindsAdded");
+            // 2) читатель не должен состоять в чужих группах ДОСТУПА с ограничениями:
+            //    агрегат МИНИМУМ(ВсеРазрешеныБезИсключений) берётся по всем группам.
+            //    Группы пользователей (не группы доступа) на RLS не влияют — не трогаем.
+            s.AppendLine("$alienRemoved = 0; $alienLeft = 0");
+            s.AppendLine("try {");
+            s.AppendLine("  $qa = $ib.NewObject('Запрос')");
+            s.AppendLine("  $qa.Текст = 'ВЫБРАТЬ РАЗЛИЧНЫЕ С.ГруппаПользователей КАК Г ИЗ РегистрСведений.СоставыГруппПользователей КАК С ГДЕ С.Пользователь = &У'");
+            s.AppendLine("  $qa.УстановитьПараметр('У', $catUser)");
+            s.AppendLine("  $ras = $qa.Выполнить().Выбрать()");
+            s.AppendLine("  while ($ras.Следующий()) {");
+            s.AppendLine("    $gref = P $ras 'Г'");
+            s.AppendLine("    if ($ib.ЗначениеВСтрокуВнутр($gref) -eq $ib.ЗначениеВСтрокуВнутр($grpRef)) { continue }");
+            s.AppendLine("    $qg2 = $ib.NewObject('Запрос')");
+            s.AppendLine("    $qg2.Текст = 'ВЫБРАТЬ ПЕРВЫЕ 1 Г.Профиль КАК Проф ИЗ Справочник.ГруппыДоступа КАК Г ГДЕ Г.Ссылка = &Г'");
+            s.AppendLine("    $qg2.УстановитьПараметр('Г', $gref)");
+            s.AppendLine("    $rg2 = $qg2.Выполнить().Выбрать()");
+            s.AppendLine("    if (-not $rg2.Следующий()) { continue }"); // группа пользователей, не группа доступа
+            s.AppendLine("    if ($ib.ЗначениеВСтрокуВнутр((P $rg2 'Проф')) -eq $ib.ЗначениеВСтрокуВнутр($profRef)) { continue }"); // тот же профиль
+            s.AppendLine("    try {");
+            s.AppendLine("      $gobj = $gref.ПолучитьОбъект()");
+            s.AppendLine("      $gt = $gobj.Пользователи");
+            s.AppendLine("      for ($i = [int]$gt.Количество() - 1; $i -ge 0; $i--) {");
+            s.AppendLine("        if ($ib.ЗначениеВСтрокуВнутр((P ($gt.Получить($i)) 'Пользователь')) -eq $ib.ЗначениеВСтрокуВнутр($catUser)) { $gt.Удалить($i) }");
+            s.AppendLine("      }");
+            s.AppendLine("      $gobj.Записать(); $alienRemoved++");
+            s.AppendLine("    } catch { $alienLeft++ }");
+            s.AppendLine("  }");
+            s.AppendLine("} catch { 'ALIEN_ERROR=' + $_.Exception.Message }");
+            s.AppendLine("'ALIEN_REMOVED=' + $alienRemoved; 'ALIEN_LEFT=' + $alienLeft");
             s.AppendLine("'RESULT=OK'; 'MODE=BSP'; 'PROFILE=' + $profName; 'PROFILE_CREATED=' + $profileCreated;");
             s.AppendLine("'GROUP_CREATED=' + $groupCreated; 'MEMBER_ADDED=' + $memberAdded; 'ROLES=' + $rolesInProfile");
             s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
@@ -1508,11 +1572,17 @@ namespace Oc1c
                 bool ma = r.StdOut.IndexOf("MEMBER_ADDED=1") >= 0;
                 bool rl = r.StdOut.IndexOf("RELINKED=1") >= 0;
                 string rd = ""; Match mrd = Regex.Match(r.StdOut, @"ROLES_DIRECT=(\d+)"); if (mrd.Success) rd = mrd.Groups[1].Value;
+                string kt = ""; Match mkt = Regex.Match(r.StdOut, @"KINDS_TOTAL=(\d+)"); if (mkt.Success) kt = mkt.Groups[1].Value;
+                string ar = ""; Match mar = Regex.Match(r.StdOut, @"ALIEN_REMOVED=(\d+)"); if (mar.Success) ar = mar.Groups[1].Value;
+                string al = ""; Match mal = Regex.Match(r.StdOut, @"ALIEN_LEFT=(\d+)"); if (mal.Success) al = mal.Groups[1].Value;
                 detail = "профиль «" + pn + "»" + (pc ? " создан (ролей: " + roles + ")" : " уже был") +
                          (gc ? ", группа «Чтение (AI)» создана" : ", группа уже была") +
                          (ma ? ", читатель включён" : ", читатель уже в группе") +
                          (rl ? ", связь элемента справочника восстановлена" : "") +
-                         (rd.Length > 0 && rd != "0" ? ", +" + rd + " ролей напрямую пользователю ИБ" : "");
+                         (rd.Length > 0 && rd != "0" ? ", +" + rd + " ролей напрямую пользователю ИБ" : "") +
+                         (kt.Length > 0 ? ", видов доступа «все разрешены»: " + kt : "") +
+                         (ar.Length > 0 && ar != "0" ? ", выведен из чужих групп доступа: " + ar : "") +
+                         (al.Length > 0 && al != "0" ? ", НЕ УДАЛОСЬ вывести из чужих групп: " + al + " — RLS может резать часть данных" : "");
             }
             return true;
         }
