@@ -318,7 +318,7 @@ namespace Oc1c
                     // Точная диагностика 401 через COM (прогон владельца 08.08: читатель
                     // был создан в ДРУГОЙ базе — в списке запуска 1С открывалась не та).
                     // OData на 401 не различает «нет пользователя» и «неверный пароль»,
-                    // а COM по админским кредам — различает. В ручном режиме (вариант 2)
+                    // а COM по админским кредам — различает. Когда кредов нет (--skip-scope)
                     // админских кредов нет — тогда диагностика по клавише D ниже.
                     bool is401 = probeDetail.IndexOf("не авторизуется", StringComparison.OrdinalIgnoreCase) >= 0;
                     if (is401 && plat != null && plat.HasCom && !string.IsNullOrEmpty(o.AdminUser))
@@ -696,24 +696,24 @@ namespace Oc1c
             return null;
         }
 
-        // Автосоздание читателя (решение владельца 08.08): описание + Enter, затем
-        // создание пользователя, права «Только просмотр» и проба чтения. true — гейт
-        // пройден (проба зелёная); false — пользователь выбрал ручной путь или не вышло.
+        // Автосоздание читателя (решение владельца 08.08; 09.08 — единственный путь,
+        // «сделаю сам в 1С» убрано: человеку ничего не поручаем). Описание + Enter,
+        // затем создание пользователя, права «Только просмотр» и проба чтения.
+        // true — гейт пройден (проба зелёная); false — не вышло (дальше цикл с рецептами).
         static bool OfferAndCreateReader(Platform plat, BaseRef bref, Opts o, string probeUser,
                                          string odataUrl, ref bool rightsFixTried, ref bool readerPwdAuto,
                                          out string probeDetail)
         {
             probeDetail = "";
             Console.WriteLine();
-            Console.WriteLine("       Могу создать пользователя сам. Что будет сделано:");
+            Console.WriteLine("       Создам пользователя сам. Что будет сделано:");
             Console.WriteLine("       - пользователь 1С «" + probeUser + "» ТОЛЬКО для чтения, скрыт из окна входа;");
             Console.WriteLine("       - пароль — случайный, его не будет знать никто: он останется только");
             Console.WriteLine("         в защищённых настройках агента на этом компьютере;");
             Console.WriteLine("       - профиль «Только просмотр» и группа доступа «Чтение (AI)» с этим пользователем —");
             Console.WriteLine("         если их нет, создам сам; права строго только на чтение.");
-            Console.Write("       Enter — создать автоматически (рекомендуется); любая другая клавиша — создам его сам в 1С: ");
-            string cr = (Console.ReadLine() ?? "").Trim();
-            if (cr.Length != 0) return false;
+            Console.Write("       Enter — продолжить: ");
+            Console.ReadLine();
             o.ReaderPassword = GenPassword();
             Log.AddSecret(o.ReaderPassword);
             string cd;
@@ -742,11 +742,10 @@ namespace Oc1c
             probeDetail = "";
             Console.WriteLine();
             Console.WriteLine("       Если «" + probeUser + "» создавала эта программа прошлым запуском —");
-            Console.WriteLine("       пароль случайный, его никто не знает. Могу задать НОВЫЙ случайный:");
+            Console.WriteLine("       пароль случайный, его никто не знает. Задам НОВЫЙ случайный:");
             Console.WriteLine("       он останется только в защищённых настройках агента на этом компьютере.");
-            Console.Write("       Enter — задать новый пароль автоматически; другая клавиша — введу пароль сам: ");
-            string cr = (Console.ReadLine() ?? "").Trim();
-            if (cr.Length != 0) return false;
+            Console.Write("       Enter — продолжить: ");
+            Console.ReadLine();
             string np = GenPassword();
             string rd;
             if (!Steps.ResetReaderPassword(plat, bref, o.AdminUser, o.AdminPassword, probeUser, np, out rd))
