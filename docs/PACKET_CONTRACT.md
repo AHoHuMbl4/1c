@@ -83,6 +83,7 @@ XML), `gone` (ключи на удаление), `index` (отпечаток и�
      "version_fingerprint": "sha256:…", "content_fingerprint": "sha256:…"}
   ],
   "gone": {"entities": ["Catalog_Контрагенты"], "chunks": ["gone"]},
+  "skipped": [{"entity": "InformationRegister_…", "error": "…: HTTP 401"}],
   "metadata": {"included": true, "fingerprint": "sha256:…", "chunks": ["metadata"]},
   "chunks": [
     {"name": "chunk-00003", "entity": "Catalog_Контрагенты",
@@ -96,6 +97,12 @@ XML), `gone` (ключи на удаление), `index` (отпечаток и�
 - `kind=delta` — изменённые сущности (`op`: `delta` | `full_entity` | `gone_only`),
   `gone` при наличии удалённых ключей; `metadata` — только если отпечаток изменился.
 - `kind=meta` — только `$metadata` (схема изменилась без изменений данных).
+- `skipped` (опционально, с 09.08) — сущности контура, которые агент НЕ смог
+  прочитать (вне состава OData, RLS базы запрещает, сбой 1С): `[{"entity", "error"}]`.
+  Приёмник не отвергает; apply пишет каждую в журнал (`SKIPPED entity=…`). Агент
+  шлёт уведомление один раз при ИЗМЕНЕНИИ набора (отпечаток в state.json
+  `skipped_fp`); в обычных пакетах поле идёт всегда, когда есть пропуски.
+  Индекс пропущенной сущности не трогается — каждый такт пробует снова.
 - Ноль изменений → **пакет не шлётся** (план §7).
 - `key` в записи сущности — объявленный ключ из `$metadata` (для `full`/`full_entity`
   apply строит по нему QUALIFY-дедуп, как `poc_load_entity.load_entity`).

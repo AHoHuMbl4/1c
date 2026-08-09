@@ -425,6 +425,10 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
         return "planned"
     tmp = tempfile.mkdtemp(prefix="packet-apply-")
     os.chmod(tmp, 0o755)  # каталог читает процесс движка (read_csv)
+    for s in m.get("skipped") or []:
+        if isinstance(s, dict):
+            _log("base=%s pkg=%s SKIPPED entity=%s: %s"
+                 % (base_id, pkg_id, s.get("entity"), str(s.get("error"))[:200]))
     try:
         try:
             files = _decrypt_chunks(base_id, pkg_id, m, tmp)

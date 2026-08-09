@@ -1120,15 +1120,16 @@ namespace PacketAgent
 
     // ============================ состояние агента ==============================
     // data_dir/state.json: seq последнего отправленного пакета, config_version,
-    // отпечаток $metadata, флаги resync/full_done, pubkey с сервера.
+    // отпечаток $metadata, флаги resync/full_done. Pubkey сервера здесь НЕ живёт —
+    // его место вместе с контуром в config.json (ServerConfig).
     internal sealed class AgentState
     {
         internal long Seq;
         internal long ConfigVersion;
         internal string MetadataFingerprint = "";
+        internal string SkippedFp = "";     // отпечаток набора пропущенных сущностей (видимость п. 13)
         internal bool Resync;
         internal bool FullDone;
-        internal string RecipientPubkey = "";
 
         string _path;   // присваивается в Load, дальше только Save
 
@@ -1145,10 +1146,10 @@ namespace PacketAgent
                 object v;
                 if (d.TryGetValue("metadata_fingerprint", out v) && v != null)
                     st.MetadataFingerprint = Convert.ToString(v, CultureInfo.InvariantCulture);
+                if (d.TryGetValue("skipped_fp", out v) && v != null)
+                    st.SkippedFp = Convert.ToString(v, CultureInfo.InvariantCulture);
                 st.Resync = GetBool(d, "resync");
                 st.FullDone = GetBool(d, "full_done");
-                if (d.TryGetValue("recipient_pubkey", out v) && v != null)
-                    st.RecipientPubkey = Convert.ToString(v, CultureInfo.InvariantCulture);
             }
             catch (Exception e)
             {
@@ -1178,14 +1179,89 @@ namespace PacketAgent
             d["seq"] = Seq;
             d["config_version"] = ConfigVersion;
             d["metadata_fingerprint"] = MetadataFingerprint;
+            d["skipped_fp"] = SkippedFp;
             d["resync"] = Resync;
             d["full_done"] = FullDone;
-            d["recipient_pubkey"] = RecipientPubkey;
             Directory.CreateDirectory(Path.GetDirectoryName(_path));
             string tmp = _path + ".tmp";
             File.WriteAllText(tmp, Json.Ser(d), Fmt.NoBom);
             if (File.Exists(_path)) File.Replace(tmp, _path, null);
             else File.Move(tmp, _path);
+        }
+    }
+
+    // ============================ сохранённый конфиг сервера ====================
+    // data_dir/config.json — ПОСЛЕДНИЙ ПОЛНЫЙ конфиг с приёмника (entities, params,
+    // config_version, recipient_pubkey). Зачем: приёмник отвечает «304-подобно»
+    // ({"config_version": N} без entities), когда версия не изменилась, — без снимка
+    // на диске агент после рестарта/переустановки оставался без контура навсегда
+    // (живой E2E 07.08). Pubkey сервера тоже здесь — ротация через /agent/config.
+    internal sealed class ServerConfig
+    {
+        internal long ConfigVersion;
+        internal List<string> Entities = new List<string>();
+        internal Dictionary<string, object> Params = new Dictionary<string, object>();
+        internal string RecipientPubkey = "";
+
+        internal static string PathOf(string dataDir)
+        {
+            return Path.Combine(dataDir, "config.json");
+        }
+
+        internal static ServerConfig Load(string dataDir)
+        {
+            string path = PathOf(dataDir);
+            if (!File.Exists(path)) return null;
+            try
+            {
+                Dictionary<string, object> d = Json.Obj(File.ReadAllText(path, Encoding.UTF8));
+                ServerConfig c = new ServerConfig();
+                c.ConfigVersion = Receiver.Long(d, "config_version", 0);
+                c.Entities = Receiver.StrList(d, "entities");
+                object pv;
+                IDictionary<string, object> prm =
+                    d.TryGetValue("params", out pv) ? pv as IDictionary<string, object> : null;
+                if (prm != null)
+                    foreach (KeyValuePair<string, object> kv in prm) c.Params[kv.Key] = kv.Value;
+                c.RecipientPubkey = Receiver.Str(d, "recipient_pubkey") ?? "";
+                return c;
+            }
+            catch (Exception e)
+            {
+                Log.Line("config.json не читается (" + e.Message + ") — конфиг будет запрошен полностью");
+                return null;
+            }
+        }
+
+        // Полный ответ /agent/config (с ключом entities) → снимок. entities может
+        // быть и пустым массивом — это авторитетный «контур пуст», а не короткий ответ.
+        internal static ServerConfig FromDoc(Dictionary<string, object> doc)
+        {
+            ServerConfig c = new ServerConfig();
+            c.ConfigVersion = Receiver.Long(doc, "config_version", 0);
+            c.Entities = Receiver.StrList(doc, "entities");
+            object pv;
+            IDictionary<string, object> prm =
+                doc.TryGetValue("params", out pv) ? pv as IDictionary<string, object> : null;
+            if (prm != null)
+                foreach (KeyValuePair<string, object> kv in prm) c.Params[kv.Key] = kv.Value;
+            c.RecipientPubkey = Receiver.Str(doc, "recipient_pubkey") ?? "";
+            return c;
+        }
+
+        internal void Save(string dataDir)
+        {
+            Dictionary<string, object> d = new Dictionary<string, object>();
+            d["config_version"] = ConfigVersion;
+            d["entities"] = Entities.ToArray();
+            d["params"] = Params;
+            d["recipient_pubkey"] = RecipientPubkey;
+            string path = PathOf(dataDir);
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            string tmp = path + ".tmp";
+            File.WriteAllText(tmp, Json.Ser(d), Fmt.NoBom);
+            if (File.Exists(path)) File.Replace(tmp, path, null);
+            else File.Move(tmp, path);
         }
     }
 
@@ -1361,6 +1437,8 @@ namespace PacketAgent
         readonly Cfg _cfg;
         readonly string _exeDir;
         AgentState _state;
+        ServerConfig _savedConf;   // последний полный конфиг с диска (config.json)
+        ServerConfig _conf;        // действующий конфиг этого такта
         Receiver _rx;
         OData _odata;
         Meta _meta;
@@ -1371,16 +1449,21 @@ namespace PacketAgent
             _cfg = cfg;
             _exeDir = exeDir;
             _state = AgentState.Load(cfg.DataDir);
+            _savedConf = ServerConfig.Load(cfg.DataDir);
             _rx = new Receiver(cfg);
             _odata = new OData(cfg, null);
         }
 
+        // Pubkey: действующий конфиг такта → сохранённый config.json → agent.ini.
         string Pubkey
         {
             get
             {
-                return !string.IsNullOrEmpty(_state.RecipientPubkey)
-                    ? _state.RecipientPubkey : _cfg.RecipientPubkey;
+                if (_conf != null && !string.IsNullOrEmpty(_conf.RecipientPubkey))
+                    return _conf.RecipientPubkey;
+                if (_savedConf != null && !string.IsNullOrEmpty(_savedConf.RecipientPubkey))
+                    return _savedConf.RecipientPubkey;
+                return _cfg.RecipientPubkey;
             }
         }
 
@@ -1523,29 +1606,62 @@ namespace PacketAgent
                 }
             }
 
-            // (1) конфиг сервера: контур сущностей + параметры + pubkey
-            Dictionary<string, object> cfgDoc = _rx.GetConfig(_state.ConfigVersion);
-            long newCv = Receiver.Long(cfgDoc, "config_version", _state.ConfigVersion);
-            List<string> entities = Receiver.StrList(cfgDoc, "entities");
-            IDictionary<string, object> prm = null;
-            object pv;
-            if (cfgDoc.TryGetValue("params", out pv)) prm = pv as IDictionary<string, object>;
-            if (prm != null)
+            // (1) конфиг сервера: контур сущностей + параметры + pubkey.
+            // Опрашиваем с версией СОХРАНЁННОГО config.json: короткий ответ
+            // (304-подобный, без entities) → работаем на снимке с диска.
+            long ask = _savedConf != null ? _savedConf.ConfigVersion : 0;
+            // Действующий pubkey ДО этого такта — для детекта ротации (контракт §3).
+            string prevPub = _savedConf != null && !string.IsNullOrEmpty(_savedConf.RecipientPubkey)
+                ? _savedConf.RecipientPubkey : _cfg.RecipientPubkey;
+            Dictionary<string, object> cfgDoc = _rx.GetConfig(ask);
+            if (cfgDoc.ContainsKey("entities"))
             {
-                _cfg.PageSize = (int)Receiver.Long(new Dictionary<string, object>(prm), "page_size", _cfg.PageSize);
-                _cfg.TactSeconds = (int)Receiver.Long(new Dictionary<string, object>(prm), "tact_seconds", _cfg.TactSeconds);
-                int cmb = (int)Receiver.Long(new Dictionary<string, object>(prm), "chunk_mb", _cfg.ChunkMb);
+                _conf = ServerConfig.FromDoc(cfgDoc);   // полная выдача — персистим
+                _conf.Save(_cfg.DataDir);
+                _savedConf = _conf;
+            }
+            else if (_savedConf != null && _savedConf.Entities.Count > 0)
+            {
+                _conf = _savedConf;
+            }
+            else
+            {
+                // Fail-closed: короткий ответ, а сохранённого контура нет — нельзя
+                // принять «пусто» за «контур пуст». Принудительно полная выдача.
+                Log.Line("приёмник дал короткий ответ, а сохранённого контура нет "
+                         + "— повторный запрос с config_version=0");
+                Dictionary<string, object> doc0 = _rx.GetConfig(0);
+                if (doc0.ContainsKey("entities"))
+                {
+                    _conf = ServerConfig.FromDoc(doc0);
+                    if (_conf.Entities.Count > 0)
+                    {
+                        _conf.Save(_cfg.DataDir);
+                        _savedConf = _conf;
+                    }
+                }
+                if (_conf == null || _conf.Entities.Count == 0)
+                {
+                    Log.Line("ОШИБКА: приёмник не отдал контур (ни по config_version=" + ask
+                             + ", ни по 0) — такт пропущен");
+                    return false;   // ненормальная ситуация сервера, не «пустой контур»
+                }
+            }
+            long newCv = _conf.ConfigVersion;
+            List<string> entities = _conf.Entities;
+            if (_conf.Params.Count > 0)
+            {
+                _cfg.PageSize = (int)Receiver.Long(_conf.Params, "page_size", _cfg.PageSize);
+                _cfg.TactSeconds = (int)Receiver.Long(_conf.Params, "tact_seconds", _cfg.TactSeconds);
+                int cmb = (int)Receiver.Long(_conf.Params, "chunk_mb", _cfg.ChunkMb);
                 _cfg.ChunkMb = Math.Max(C.ChunkMbMin, Math.Min(C.ChunkMbMax, cmb));
             }
-            string pub = Receiver.Str(cfgDoc, "recipient_pubkey");
-            if (!string.IsNullOrEmpty(pub) && pub != Pubkey)
-            {
-                _state.RecipientPubkey = pub;   // смена pubkey применяется (контракт §3)
-                _state.Save();
+            // Ротация pubkey (контракт §3): новое место хранения — config.json.
+            if (!string.IsNullOrEmpty(_conf.RecipientPubkey) && _conf.RecipientPubkey != prevPub)
                 Log.Line("приёмник прислал новый recipient pubkey — применён");
-            }
             if (entities.Count == 0)
             {
+                // Авторитетный пустой контур: полная выдача с пустым entities.
                 Log.Line("контур пуст — нечего отправлять");
                 _state.ConfigVersion = newCv;
                 _state.Save();
@@ -1570,6 +1686,7 @@ namespace PacketAgent
             // (2) сбор изменений
             List<EntityResult> results = new List<EntityResult>();
             List<KeyValuePair<string, string>> gone = new List<KeyValuePair<string, string>>();
+            List<KeyValuePair<string, string>> skipped = new List<KeyValuePair<string, string>>();
             Dictionary<string, bool> ownerSilent = new Dictionary<string, bool>();
             entities.Sort(StringComparer.Ordinal);   // владелец — префикс имени части → раньше
             foreach (string e in entities)
@@ -1577,18 +1694,29 @@ namespace PacketAgent
                 try { ProcessEntity(e, firstRun, results, gone, ownerSilent); }
                 catch (Exception ex)
                 {
-                    // Сущность не прочиталась — индекс её не трогаем, такт падает:
-                    // молчаливая потеря недопустима (п. 13 TARGET).
-                    throw new InvalidOperationException(e + ": " + ex.Message, ex);
+                    // Сущность не прочиталась (вне состава OData, RLS базы запрещает,
+                    // сбой 1С): пропускаем с ВИДИМОЙ отметкой — в журнал и в manifest
+                    // пакета. п. 13 TARGET: недопустима МОЛЧАЛИВАЯ потеря; показанная —
+                    // допустима. Индекс не трогаем — следующий такт попробует снова.
+                    // Замер 09.08: RLS-регистр УТ нечитаем ни одним не-полноправным
+                    // пользователем (проверено и штатным менеджером демо-базы) —
+                    // установщиком такое не чинится.
+                    skipped.Add(new KeyValuePair<string, string>(e, ex.Message));
+                    Log.Line("    " + e + ": ПРОПУЩЕНА (" + ex.Message + ")");
                 }
             }
 
-            // (4) ноль изменений — пакет НЕ шлём (контракт §7)
+            // (4) ноль изменений — пакет НЕ шлём (контракт §7); исключение — изменился
+            // набор пропущенных: один пакет-уведомление, чтобы сервер увидел состав.
             bool anyData = results.Count > 0 || gone.Count > 0;
             bool sendMeta = firstRun || metaChanged;
-            if (!anyData && !sendMeta)
+            string skipFp = EntityIndex.HashHex(Encoding.UTF8.GetBytes(string.Join("\n",
+                skipped.ConvertAll(kv => kv.Key + "\t" + kv.Value).ToArray())));
+            bool skipChanged = skipped.Count > 0 && skipFp != _state.SkippedFp;
+            if (!anyData && !sendMeta && !skipChanged)
             {
-                Log.Line("изменений нет — пакет не отправляется");
+                Log.Line("изменений нет — пакет не отправляется"
+                         + (skipped.Count > 0 ? " (пропущенных: " + skipped.Count + " — уже сообщено)" : ""));
                 _state.ConfigVersion = newCv;
                 _state.Save();
                 return true;
@@ -1596,7 +1724,7 @@ namespace PacketAgent
             string kind = firstRun ? "full" : (anyData ? "delta" : "meta");
 
             // (5)-(7) пакет: чанки, крипто, отправка, индекс ПОСЛЕ applied/verified (К2)
-            return SendPackage(kind, results, gone, sendMeta, newCv);
+            return SendPackage(kind, results, gone, sendMeta, newCv, skipped, skipFp);
         }
 
         void ProcessEntity(string e, bool firstRun,
@@ -1729,7 +1857,8 @@ namespace PacketAgent
         // отправки (plan.json) — чтобы довозка после обрыва закончила тем же К2.
         bool SendPackage(string kind, List<EntityResult> results,
                          List<KeyValuePair<string, string>> gone,
-                         bool sendMeta, long newCv)
+                         bool sendMeta, long newCv,
+                         List<KeyValuePair<string, string>> skipped, string skipFp)
         {
             long seq = _state.Seq + 1;
             string pkgShort = seq.ToString("D6", CultureInfo.InvariantCulture) + "-" + Rand8();
@@ -1826,6 +1955,18 @@ namespace PacketAgent
                 md["chunks"] = new string[] { "metadata" };
             }
             m["metadata"] = md;
+            if (skipped != null && skipped.Count > 0)
+            {
+                List<object> sk = new List<object>();
+                foreach (KeyValuePair<string, string> kv in skipped)
+                {
+                    Dictionary<string, object> r = new Dictionary<string, object>();
+                    r["entity"] = kv.Key;
+                    r["error"] = kv.Value;
+                    sk.Add(r);
+                }
+                m["skipped"] = sk.ToArray();
+            }
             m["chunks"] = chunkEntries.ToArray();
 
             File.WriteAllText(Path.Combine(queueDir, "manifest.json"), Json.Ser(m), Fmt.NoBom);
@@ -1838,6 +1979,7 @@ namespace PacketAgent
             Dictionary<string, object> plan = new Dictionary<string, object>();
             plan["config_version"] = newCv;
             plan["metadata_fingerprint"] = sendMeta ? _meta.Fingerprint : null;
+            plan["skipped_fp"] = skipFp;
             plan["mark_full_done"] = kind == "full";
             Dictionary<string, object> pe = new Dictionary<string, object>();
             foreach (EntityResult res in results)
@@ -1993,6 +2135,8 @@ namespace PacketAgent
             _state.ConfigVersion = Receiver.Long(plan, "config_version", _state.ConfigVersion);
             string mfp = Receiver.Str(plan, "metadata_fingerprint");
             if (mfp != null) _state.MetadataFingerprint = mfp;
+            string sfp = Receiver.Str(plan, "skipped_fp");
+            if (sfp != null) _state.SkippedFp = sfp;
             object mfd;
             if (plan.TryGetValue("mark_full_done", out mfd) && mfd is bool && (bool)mfd)
             {

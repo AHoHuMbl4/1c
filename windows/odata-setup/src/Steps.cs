@@ -895,7 +895,10 @@ namespace Oc1c
             string s = (scope == null ? "" : scope.Trim().ToLowerInvariant());
             if (s == "" || s == "default")
             {
-                keys.Add("catalogs"); keys.Add("documents");
+                // Дефолт = all (замер 08.08): контур сервера строится по полной витрине
+                // $metadata (регистры включены), состав «только справочники+документы»
+                // давал 404 на регистрах и падение такта агента. Сужать — явным --scope.
+                foreach (KeyValuePair<string, string> kv in ScopeMap) keys.Add(kv.Key);
             }
             else if (s == "analytics")
             {
@@ -1722,28 +1725,47 @@ namespace Oc1c
             if (status == 401 || status == 403) { detail = "читатель не авторизуется (HTTP " + status + ") — проверьте пользователя/пароль [" + baseUrl + "]"; return false; }
             if (status == 404) { detail = "публикация не найдена (HTTP 404) — не тот адрес/алиас: " + baseUrl; return false; }
             if (status != 200) { detail = "OData: HTTP " + status + " [" + baseUrl + "]"; return false; }
-            Match m = Regex.Match(body, "\"name\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
-            if (!m.Success) m = Regex.Match(body, "<collection\\s+href=\"([^\"]+)\"", RegexOptions.IgnoreCase);
-            if (!m.Success) { detail = "состав OData ПУСТ — ни одной сущности в корневом документе"; return false; }
-            string entity = m.Groups[1].Value;
-            int status2; string body2;
-            err = HttpGet(baseUrl + entity + "?$top=1&$format=json", user, pwd, 120000, out status2, out body2);
-            if (err != null) { detail = "проба данных " + entity + ": " + err; return false; }
-            if (status2 != 200)
+            MatchCollection mm = Regex.Matches(body, "\"name\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+            if (mm.Count == 0)
             {
-                // 401 на сущности при 200 на корне = вход выполнен, но прав НЕТ
-                // (прогон 08.08: пользователь создан без профиля доступа — владелец
-                // читал это как «не тот пароль»). Различаем явно.
-                if (status2 == 401 || status2 == 403)
-                    detail = "вход выполнен (пароль верный), но у читателя НЕТ ПРАВ на чтение данных — " +
-                             "в карточке пользователя на вкладке «Права доступа» включите профиль " +
-                             "«Только просмотр» и пересохраните [" + baseUrl + entity + ": HTTP " + status2 + "]";
-                else
-                    detail = "проба данных " + entity + ": HTTP " + status2 + " — состав не задался или читателю нет прав [" + baseUrl + entity + "]";
-                return false;
+                Match m = Regex.Match(body, "<collection\\s+href=\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                if (m.Success) mm = Regex.Matches(body, "<collection\\s+href=\"([^\"]+)\"", RegexOptions.IgnoreCase);
             }
-            detail = "проба данных: " + entity + "?$top=1 -> HTTP 200";
-            return true;
+            if (mm.Count == 0) { detail = "состав OData ПУСТ — ни одной сущности в корневом документе"; return false; }
+            // Перебираем первые сущности состава: отдельная сущность может быть
+            // недоступна и при полных правах читателя — RLS базы (замер 09.08:
+            // регистр УТ не читается ни одним не-полноправным пользователем),
+            // сущность вне состава (404), сбой 1С (500). Проба о читателе, а не о
+            // конкретной сущности — принимаем первую читаемую.
+            int status2; string body2;
+            int denied = 0, notfound = 0, otherErr = 0, tried = 0;
+            string firstDenied = null, lastErr = null;
+            HashSet<string> seen = new HashSet<string>();
+            foreach (Match em in mm)
+            {
+                if (tried >= 30) break;
+                string entity = em.Groups[1].Value;
+                if (!seen.Add(entity)) continue;
+                tried++;
+                err = HttpGet(baseUrl + entity + "?$top=1&$format=json", user, pwd, 120000, out status2, out body2);
+                if (err != null) { detail = "проба данных " + entity + ": " + err; return false; }
+                if (status2 == 200) { detail = "проба данных: " + entity + "?$top=1 -> HTTP 200"; return true; }
+                if (status2 == 401 || status2 == 403) { denied++; if (firstDenied == null) firstDenied = entity + ": HTTP " + status2; continue; }
+                if (status2 == 404) { notfound++; continue; }
+                otherErr++; lastErr = entity + ": HTTP " + status2;
+            }
+            // 401 на ВСЕХ сущностях при 200 на корне = вход выполнен, но прав НЕТ
+            // (прогон 08.08: пользователь создан без профиля доступа — владелец
+            // читал это как «не тот пароль»). Различаем явно.
+            if (denied > 0)
+                detail = "вход выполнен (пароль верный), но ни одна из " + tried + " сущностей не читается — " +
+                         "у читателя НЕТ ПРАВ на чтение данных — в карточке пользователя на вкладке " +
+                         "«Права доступа» включите профиль «Только просмотр» и пересохраните [" + firstDenied + "]";
+            else if (notfound == tried)
+                detail = "состав OData не применился: все " + tried + " сущностей отвечают 404 [" + baseUrl + "]";
+            else
+                detail = "проба данных: ни одна из " + tried + " сущностей не прочиталась (" + lastErr + ") [" + baseUrl + "]";
+            return false;
         }
 
         // ============================================================ 13. брандмауэр (опционально)
