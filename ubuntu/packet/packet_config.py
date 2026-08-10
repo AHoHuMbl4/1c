@@ -128,10 +128,19 @@ def _props_by_type(xml: str) -> dict:
     return props
 
 
+def _entity_sets(xml: str) -> list[str]:
+    """Имена наборов сущностей (EntitySet) из снимка $metadata — для бутстрепа
+    контура на чистом юните (вариант А, решение владельца 10.08): перепись пуста
+    до первых данных, а данные идут только по контуру — круг разрывается снимком."""
+    return sorted(set(re.findall(r'<EntitySet\s+Name="([^"]+)"', xml)))
+
+
 def _only_binary(props: dict, entity_set: str) -> bool:
     """Семантика poc_load_entity.only_binary: всё содержимое двоичное, а
     человекочитаемых строковых полей нет. Не знаем сущность — считается грузимой."""
     p = props.get(entity_set) or props.get(entity_set + "_RecordType") or []
+    if not p:
+        return False
     if not p:
         return False
     names = [n for n, _ in p]
@@ -307,9 +316,25 @@ def run(base_id: str, dsn: str, bases_path: str, dry_run: bool = False) -> int:
              "конфиг не тронут")
         return 2
     if not rows:
-        _log(f"FATAL: перепись base_profile пуста — контур считать не из чего; "
-             "конфиг не тронут")
-        return 2
+        # Бутстреп чистого юнита (вариант А, решение владельца 10.08): перепись
+        # пуста до первых данных, а данные идут только по контуру — круг.
+        # Разрыв: первый контур — все наборы сущностей снимка $metadata
+        # (минус only_binary в compute_contour); перепись наполнится из первых
+        # пакетов, и дальнейшие заходы работают по ней, как прежде.
+        snap = os.path.join(PACKET_META_DIR, base_id, "$metadata")
+        try:
+            with open(snap, encoding="utf-8") as f:
+                xml = f.read()
+        except OSError:
+            xml = None
+        sets = _entity_sets(xml) if xml else []
+        if not sets:
+            _log("FATAL: перепись base_profile пуста и снимка $metadata нет (или в нём "
+                 "нет ни одного EntitySet) — контур считать не из чего; конфиг не тронут")
+            return 2
+        rows = [(es, "keep") for es in sets]
+        _log(f"бутстреп: перепись пуста — первый контур из снимка $metadata: "
+             f"{len(sets)} наборов сущностей")
     verdicts = {}
     for _es, v in rows:
         verdicts[v] = verdicts.get(v, 0) + 1
@@ -328,6 +353,15 @@ def run(base_id: str, dsn: str, bases_path: str, dry_run: bool = False) -> int:
         _log(f"  исключена {e}: {w}")
 
     old_cfg = rec.get("config") if isinstance(rec.get("config"), dict) else {}
+    # Полнота (п. 13 TARGET): сущность из прошлого контура не выбывает молча —
+    # например ещё пустая (rows=0) после бутстрепа из снимка. Выбывает только по
+    # явной причине (skip: force/class/only_binary).
+    prev = old_cfg.get("entities") if isinstance(old_cfg.get("entities"), list) else []
+    keep_prev = sorted(set(prev) - set(entities) - set(skip))
+    if keep_prev:
+        _log(f"сохранены из прошлого контура (сейчас вне отбора — пустые и т.п.): "
+             f"{len(keep_prev)}")
+        entities = sorted(set(entities) | set(keep_prev))
     params = old_cfg.get("params") or {
         "page_size": PACKET_CONFIG_PAGE_SIZE,
         "tact_seconds": PACKET_CONFIG_TACT_SECONDS,

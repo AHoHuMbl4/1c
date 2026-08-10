@@ -355,6 +355,20 @@ def _apply_metadata(base_id: str, manifest: dict, path: str) -> None:
         raise
 
 
+def _touch_first_data(base_id: str) -> None:
+    """Отметка «данные применены» для path-юнита первой сборки слоя
+    (1c-serene-firstbuild@<base>): до данных слой собирать нечего — сторож
+    «пустой корпус» пайплайна оборвёт такт, — поэтому первую сборку и таймер
+    свежести включает этот сигнал, а не появление снимка $metadata."""
+    try:
+        fd = os.open(os.path.join(PACKET_META_DIR, base_id, ".first-data"),
+                     os.O_CREAT | os.O_WRONLY, 0o644)
+        os.close(fd)
+    except OSError as e:
+        _log("base=%s: отметка .first-data не записана (%s) — данные применены, "
+             "первую сборку слоя запустить вручную" % (base_id, e))
+
+
 def _apply_skipped(base_id: str, skipped: list) -> None:
     """Список сущностей, которые агент не смог прочитать (права/RLS/сбой 1С) —
     в <PACKET_META_DIR>/<base_id>/skipped.json, атомарно. Машиночитаемая
@@ -507,6 +521,8 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
             return "quarantined"
         _mark_applied(base_id, pkg_id, seq)
         _log("APPLIED base=%s pkg=%s seq=%d" % (base_id, pkg_id, seq))
+        if profile:
+            _touch_first_data(base_id)
         return "applied"
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -1,13 +1,18 @@
 #!/bin/sh
-# Онбординг слота на юните компании: витрина → контур агента → таймер свежести.
+# Онбординг слота на юните компании: КОНТУР агента по снимку $metadata.
 # Зовётся path-юнитом 1c-serene-onboard@<base>.path, когда приёмник положил
 # первый снимок $metadata в packet-meta/<base>/ (приём пакетов сам делается
-# apply-таймером, он уже автоматический). Дальше цепочка идёт без человека:
-#   build.sh по снимку строит витрину → packet_config пишет контур в bases.json
-#   → агент забирает список сущностей своим тактом → полная выгрузка демоном
-#   → pipeline-таймер держит слой свежим.
-# Идемпотентно: метка .onboard-done не даёт пересобрать при повторном снимке
-# (resync пришлёт meta ещё раз — за это отвечает уже pipeline-таймер).
+# apply-таймером, он уже автоматический).
+#
+# Порядок 10.08 (вариант А): контур ПЕРВЫМ — на чистом юните перепись пуста,
+# и packet_config строит бутстреп-контур из снимка $metadata. Сборка слоя сюда
+# НЕ входит: до данных сторож «пустой корпус» пайплайна обрывает такт — первую
+# сборку и таймер свежести включает 1c-serene-firstbuild@<base> по отметке
+# .first-data от apply. Дальше без человека: агент забирает контур своим
+# тактом → полная выгрузка демоном → данные → первый билд слоя.
+#
+# Идемпотентно: метка .onboard-done не даёт перезаписать контур при повторном
+# снимке (resync пришлёт meta ещё раз — контур к тому моменту уже с данными).
 #
 #   onboard_unit.sh <base_id> [pipeline_db=postgres]
 set -eu
@@ -31,21 +36,23 @@ if [ -f "$STAMP" ]; then
 fi
 [ -f "$SNAP" ] || { echo "onboard_unit: нет снимка $SNAP — рано" >&2; exit 1; }
 
-# DSN и каталоги — из env-файла этой базы движка (его кладёт привязка копии,
+# DSN — из env-файла этой базы движка (его кладёт привязка копии,
 # PLAN_PROD_LXC §8.1); ничего о конкретной базе здесь не зашито.
+# 🔴 Файл рассчитан на systemd EnvironmentFile, где значение — вся строка после
+# «=». Источить его оболочкой (. file) нельзя: DSN содержит пробелы, и шелл
+# обрежет значение до первого слова (замер 10.08: psql ушёл на 5432 вместо 7890).
 ENV_FILE="/etc/1c-serene-pipeline-$DB.env"
 [ -f "$ENV_FILE" ] || { echo "onboard_unit: нет $ENV_FILE — привязка копии не сделана" >&2; exit 1; }
-set -a; . "$ENV_FILE"; set +a
-
-echo "== витрина слоя по снимку \$metadata (1c-serene-pipeline@$DB)"
-systemctl start "1c-serene-pipeline@$DB.service"
+DSN=$(sed -n 's/^SERENEDB_DSN=//p' "$ENV_FILE" | head -1)
+[ -n "$DSN" ] || { echo "onboard_unit: в $ENV_FILE нет SERENEDB_DSN" >&2; exit 1; }
 
 echo "== контур агента (packet_config $BASE → /etc/1c-packet-bases.json)"
-PACKET_BASES="${PACKET_BASES:-/etc/1c-packet-bases.json}" \
+SERENEDB_DSN="$DSN" PACKET_BASES="${PACKET_BASES:-/etc/1c-packet-bases.json}" \
   python3 /opt/1c-packet/packet_config.py "$BASE"
 
-echo "== таймер свежести (1c-serene-pipeline@$DB.timer)"
-systemctl enable --now "1c-serene-pipeline@$DB.timer"
-
 touch "$STAMP"
-echo "onboard_unit: слот $BASE настроен — дальше агент сам заберёт контур и начнёт полную выгрузку"
+# Глаз снят: снимок остаётся на месте, и без отключения path-юнит перезапускал
+# бы сервис по кругу (замер 10.08 — «Start request repeated too quickly»).
+systemctl disable --now "1c-serene-onboard@$BASE.path" 2>/dev/null || true
+echo "onboard_unit: контур $BASE записан — агент заберёт его своим тактом;"
+echo "  сборку слоя по первым данным включит 1c-serene-firstbuild@$BASE"

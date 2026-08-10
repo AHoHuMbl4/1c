@@ -168,6 +168,30 @@ EXPECTED_SKIPS = {"Catalog_Пропуск": PC.WHY_FORCE,
                   "Catalog_Служебный": PC.WHY_CLASS,
                   "Catalog_Бинарь": PC.WHY_BINARY}
 
+# Снимок с наборами сущностей (EntitySet) для бутстреп-пробы (ж): Обычный —
+# с текстом; Бинарь — всё двоичное (only_binary); Пустой — с текстом, но в
+# перепись не попадёт (rows=0) — проверка, что прошлый контур его не теряет.
+BOOT_XML = """<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"><Schema>
+<EntityType Name="Catalog_Обычный"><Key><PropertyRef Name="Ref_Key"/></Key>
+<Property Name="Ref_Key" Type="Edm.String"/>
+<Property Name="Наименование" Type="Edm.String"/>
+</EntityType>
+<EntityType Name="Catalog_Бинарь"><Key><PropertyRef Name="Ref_Key"/></Key>
+<Property Name="Ref_Key" Type="Edm.String"/>
+<Property Name="Хранилище" Type="Edm.Stream"/>
+<Property Name="Хранилище_Base64Data" Type="Edm.String"/>
+</EntityType>
+<EntityType Name="Document_Пустой"><Key><PropertyRef Name="Ref_Key"/></Key>
+<Property Name="Ref_Key" Type="Edm.String"/>
+<Property Name="Комментарий" Type="Edm.String"/>
+</EntityType>
+<EntityContainer Name="standard">
+<EntitySet Name="Catalog_Обычный" EntityType="standard.Catalog_Обычный"/>
+<EntitySet Name="Catalog_Бинарь" EntityType="standard.Catalog_Бинарь"/>
+<EntitySet Name="Document_Пустой" EntityType="standard.Document_Пустой"/>
+</EntityContainer>
+</Schema></edmx:Edmx>"""
+
 
 def full_db() -> FakeDB:
     return FakeDB(exist=("class", "force"), contour=list(CONTOUR))
@@ -264,8 +288,10 @@ def main() -> int:
     doc = load_file()
     check("б: первый заход — config_version 3 → 4",
           rc == 0 and doc["ut"]["config"]["config_version"] == 4, repr(doc["ut"]["config"]))
-    check("б: entities записаны итоговым списком",
-          doc["ut"]["config"]["entities"] == EXPECTED_ENTITIES,
+    # «Old» из прошлого контура сохранён юнион-правилом (п. 13): не в отборе и
+    # не исключён по причине — остаётся (с 10.08, бутстреп-изменение).
+    check("б: entities записаны итоговым списком (+ Old из прошлого контура)",
+          doc["ut"]["config"]["entities"] == sorted(EXPECTED_ENTITIES + ["Old"]),
           repr(doc["ut"]["config"]["entities"]))
     check("в: params из файла сохранены, не подменены умолчаниями",
           doc["ut"]["config"]["params"] == PARAMS, repr(doc["ut"]["config"]["params"]))
@@ -287,7 +313,8 @@ def main() -> int:
     doc = load_file()
     check("б: изменение контура — config_version 4 → 5",
           rc == 0 and doc["ut"]["config"]["config_version"] == 5
-          and doc["ut"]["config"]["entities"] == sorted(EXPECTED_ENTITIES + ["Catalog_Пропуск"]),
+          and doc["ut"]["config"]["entities"]
+          == sorted(EXPECTED_ENTITIES + ["Catalog_Пропуск", "Old"]),
           repr(doc["ut"]["config"]))
 
     # -- (г) search_entity_skipped — форма записи как у serene_sync (сверка чтением кода)
@@ -378,6 +405,43 @@ def main() -> int:
     check("гигиена: нет переписи и чужая база — отказ, файл не тронут",
           rc_empty == 2 and rc_unknown == 2 and open(BASES_PATH, "rb").read() == before,
           f"rc={rc_empty},{rc_unknown}")
+
+    # -- (ж) бутстреп чистого юнита (вариант А, 10.08): перепись пуста → первый
+    #         контур из снимка $metadata; прошлый контур молча не теряется (п. 13)
+    write_meta(BOOT_XML)
+    doc = load_file()  # чистый слот: контур пуст
+    doc["ut"]["config"] = {"config_version": 1, "entities": [], "params": PARAMS}
+    with open(BASES_PATH, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False)
+    db = FakeDB(exist=(), contour=())  # перепись пуста (чистый юнит)
+    rc = run_config(db)
+    doc = load_file()
+    check("ж: бутстреп — контур из снимка, код 0, версия 1 → 2",
+          rc == 0 and doc["ut"]["config"]["config_version"] == 2,
+          f"rc={rc} {repr(doc['ut']['config'])[:120]}")
+    check("ж: бутстреп — все наборы снимка, кроме only_binary",
+          doc["ut"]["config"]["entities"] == ["Catalog_Обычный", "Document_Пустой"],
+          repr(doc["ut"]["config"]["entities"]))
+    check("ж: бутстреп — only_binary исключён с видимой причиной",
+          any("Catalog_Бинарь" in sql and PC.WHY_BINARY in sql for sql in db.execs),
+          repr(db.execs)[:200])
+
+    # перепись появилась, но Document_Пустой в ней без строк (его нет в rows):
+    # из контура он выбывать НЕ обязан — позднее наполнение не теряем (п. 13)
+    db2 = FakeDB(exist=(), contour=[("Catalog_Обычный", "keep"), ("Catalog_Новый", "keep")])
+    rc = run_config(db2)
+    doc = load_file()
+    check("ж: пустая сущность из прошлого контура сохранена (rows=0 не выбывает)",
+          rc == 0 and doc["ut"]["config"]["entities"]
+          == ["Catalog_Новый", "Catalog_Обычный", "Document_Пустой"],
+          repr(doc["ut"]["config"]["entities"]))
+
+    # ни переписи, ни снимка — прежний отказ без записи
+    os.remove(os.path.join(META_DIR, "ut", "$metadata"))
+    before = open(BASES_PATH, "rb").read()
+    rc = run_config(FakeDB(exist=(), contour=()))
+    check("ж: нет ни переписи, ни снимка — отказ, файл не тронут",
+          rc == 2 and open(BASES_PATH, "rb").read() == before, f"rc={rc}")
 
     _TMP.cleanup()
     print(f"\n{'ПРОБА ЗЕЛЁНАЯ' if not FAILS else 'ПАДЕНИЯ: ' + ', '.join(FAILS)}")

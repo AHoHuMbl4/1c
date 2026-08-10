@@ -59,13 +59,15 @@ bash /srv/1c/work/packet/onboard-base.sh <base_id>
    `10.1.1.x:6090 check` (образец — `cn_medteh_ut`), `haproxy -c`, reload.
    ufw копии уже пускает 6090 с приватного IP релея (10.1.1.4).
 4. **Авто-онбординг (с 10.08, ручные шаги «Дальше» на юните не нужны):**
-   `systemctl enable --now 1c-serene-onboard@<base>.path` — дежурный глаз
-   ждёт первый снимок `$metadata` и сам запускает цепочку
-   (`onboard_unit.sh`): витрина `1c-serene-pipeline@postgres` → контур
-   `packet_config <base>` → таймер свежести `1c-serene-pipeline@postgres.timer`.
-   Агент забирает контур своим тактом, полная выгрузка идёт демоном —
-   от smoke до данных в витрине человек не нужен. Юниты —
-   `ubuntu/packet/systemd/1c-serene-onboard@.{path,service}`.
+   `systemctl enable --now 1c-serene-onboard@<base>.path
+   1c-serene-firstbuild@<base>.path` — два дежурных глаза. Первый ждёт снимок
+   `$metadata` и пишет контур агента (`onboard_unit.sh` → `packet_config`;
+   на чистом юните — бутстреп из снимка, контракт §10 «вариант А»). Второй
+   ждёт отметку `.first-data` от apply (первый пакет с данными) и включает
+   сборку слоя + таймер свежести (`firstbuild_unit.sh`). Оба глаза снимают
+   сами себя после срабатывания. Агент забирает контур своим тактом, полная
+   выгрузка идёт демоном — от smoke до слоя человек не нужен. Юниты —
+   `ubuntu/packet/systemd/1c-serene-{onboard,firstbuild}@.{path,service}`.
 5. Приёмка: `GET /health` сертификатом базы через `1c-gate.timpul.ru` → 200,
    плюс доказательство по журналу КОПИИ (запросы от 10.1.1.4), что ответила
    именно она, а не дев. Отработано 09.08 для `novaya-baza` → `10.1.1.6`.

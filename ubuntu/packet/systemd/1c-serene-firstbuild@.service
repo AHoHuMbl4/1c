@@ -1,0 +1,15 @@
+[Unit]
+# Первая сборка слоя на юните компании — по первым данным, не по снимку.
+# С 10.08 (вариант А) onboard пишет только контур; сборка ждёт отметку
+# .first-data от apply — до данных такт обрывается штатным сторожем пустого
+# корпуса, и крутить его по таймеру — шум и ложные алерты.
+Description=первая сборка слоя слота %i на юните (по первым данным) + таймер свежести
+After=serenedb.service 1c-packet-apply.service
+Wants=serenedb.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+# postgres — не выбор базы, а конвенция юнита: на копии dbname всегда postgres
+# (PLAN_PROD_LXC §8.1).
+ExecStart=/opt/1c-packet/firstbuild_unit.sh %i postgres

@@ -14,8 +14,9 @@ set -euo pipefail
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DST="${PACKET_DEPLOY_DIR:-/opt/1c-packet}"
 FILES="packet_server.py packet_apply.py packet_config.py packet_crypto.py packet_kit.py"
-# Исполняемые (755): авто-онбординг слота на юните (1c-serene-onboard@.service).
-EXEC_FILES="onboard_unit.sh"
+# Исполняемые (755): авто-онбординг слота на юните (1c-serene-onboard@.service,
+# 1c-serene-firstbuild@.service).
+EXEC_FILES="onboard_unit.sh firstbuild_unit.sh"
 
 [ -d "$DST" ] || { echo "нет рабочего каталога $DST — сначала work/packet/setup-receiver.sh" >&2; exit 2; }
 

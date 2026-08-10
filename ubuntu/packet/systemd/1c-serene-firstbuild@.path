@@ -1,0 +1,12 @@
+[Unit]
+# Дежурный глаз первой сборки: срабатывает, когда apply положил отметку
+# .first-data слота %i (первый пакет с данными применён). Запускает
+# 1c-serene-firstbuild@%i.service.
+Description=ждёт первые данные слота %i (.first-data) для первой сборки слоя
+
+[Path]
+PathExists=/var/lib/serenedb/packet-meta/%i/.first-data
+Unit=1c-serene-firstbuild@%i.service
+
+[Install]
+WantedBy=multi-user.target

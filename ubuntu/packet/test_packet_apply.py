@@ -353,8 +353,14 @@ def main() -> int:
         check("снимок перезаписан новым содержимым",
               open(META_FILE, "rb").read() == META_XML2.encode("utf-8"))
         check("meta-пакет applied", pkg_state(pkg2m)["state"] == "applied")
+        listing = os.listdir(os.path.join(META_DIR, BASE_ID))
         check("temp-файлов атомарной записи не осталось",
-              os.listdir(os.path.join(META_DIR, BASE_ID)) == ["$metadata"])
+              "$metadata" in listing
+              and not [f for f in listing
+                       if f.startswith(".metadata-") or f.endswith(".tmp")],
+              repr(listing))
+        check("отметка .first-data записана (ранее применялись данные)",
+              ".first-data" in listing, repr(listing))
 
         # 5. mix_versions: две версии k1 в витрине → карантин, данные не тронуты.
         psql_exec('INSERT INTO "%s" VALUES (\'k1\', \'v9\', \'alpha-dup\');' % TABLE)
