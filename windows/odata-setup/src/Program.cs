@@ -43,7 +43,7 @@ namespace Oc1c
 
     internal static class Program
     {
-        const int TOTAL = 13;
+        const int TOTAL = 14;
         internal const int EXIT_OK = 0, EXIT_ARGS = 5, EXIT_NOTADMIN = 2, EXIT_PREREQ = 3, EXIT_STEP = 4,
                   EXIT_REBOOT = 10, EXIT_VERIFY = 20, EXIT_PACKET = 30;
 
@@ -628,6 +628,12 @@ namespace Oc1c
                 if (Steps.OpenFirewall(o.OpenFirewall, out detail)) Log.Ok(detail);
             }
 
+            // ---------- 14. расширение чтения (роль AIReadAll)
+            // Мягкий шаг: фейл НЕ валит установку (предупреждение внутри), КС-база — пропуск.
+            Log.Step(14, TOTAL, "Расширение чтения (роль AIReadAll)");
+            if (!Steps.InstallAiExtension(plat, bref, o, pool, out detail)) return EXIT_STEP;
+            if (detail.StartsWith("пропущено")) Log.Skip(detail); else if (detail.Length > 0) Log.Ok(detail);
+
             // ---------- блок 2: агент пакетного транспорта (только при наличии комплекта)
             int packetExit = PacketSteps.Run(o, bref, url, plat);
 
@@ -1064,6 +1070,7 @@ setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая нас�
  11  резервная копия базы (перед изменением состава)
  12  состав OData: два варианта — пароль админа ИЛИ ручной туториал (--skip-scope)
  13  проверка HTTP + при необходимости брандмауэр для подсети сервера
+ 14  расширение чтения AIReadOnly (роль AIReadAll; только файловые базы; фейл не валит установку)
 
 РУКАМИ ОСТАЁТСЯ: создать в 1С пользователя-читателя (ai_reader) с нужными правами.
 

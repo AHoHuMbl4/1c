@@ -2135,6 +2135,116 @@ namespace Oc1c
             return false;
         }
 
+        // ============================================================ 14. расширение чтения AIReadOnly
+        // Расширение с генерируемой ролью AIReadAll: открывает по OData объекты, которые
+        // профиль «Только просмотр» не покрывает (~15%). Скрипт ai-ext.ps1 вшит в exe
+        // ресурсом (build.cmd) — извлекаем во временный файл и запускаем PowerShell
+        // разрядности платформы (в самом скрипте есть и самоперезапуск в 32 бита).
+        // Проверен только на файловых базах: на клиент-серверной без профиля КОРП
+        // загрузка расширений заблокирована платформой — там шаг пропускаем.
+        // Фейл шага НЕ валит установку: OData-чтение работает и без расширения.
+        public static bool InstallAiExtension(Platform plat, BaseRef bref, Opts o, string pool, out string detail)
+        {
+            detail = "";
+            if (!bref.IsFile)
+            {
+                Log.Warn("клиент-серверная база — расширение чтения пропускаю: без профиля КОРП загрузка расширений заблокирована платформой (проверено только на файловых базах)");
+                detail = "пропущено: клиент-серверная база";
+                return true;
+            }
+            if (Ctx.DryRun) { detail = "пропущено в режиме проверки (--check)"; return true; }
+            if (string.IsNullOrEmpty(o.AdminUser))
+            {
+                Log.Warn("нет учётных данных администратора 1С — расширение чтения не установлено; ~15% объектов останутся недоступны по OData");
+                detail = "пропущено: нет учётных данных администратора";
+                return true;
+            }
+
+            string tmp = ExtractScriptResource("ai-ext.ps1");
+            if (tmp == null)
+            {
+                Log.Warn("в exe нет вшитого ai-ext.ps1 (сборка без ресурса) — шаг пропущен; ~15% объектов останутся недоступны по OData");
+                detail = "пропущено: нет вшитого скрипта";
+                return true;
+            }
+            try
+            {
+                // Параметры — только через окружение процесса (в командной строке секретов нет).
+                Dictionary<string, string> env = new Dictionary<string, string>();
+                env["OC1C_EXT_USER"] = o.AdminUser;
+                env["OC1C_EXT_PWD"] = o.AdminPassword == null ? "" : o.AdminPassword;
+                env["OC1C_EXT_BASE"] = bref.Dir;
+                if (!string.IsNullOrEmpty(o.ReaderUser)) env["OC1C_EXT_READER"] = o.ReaderUser;
+                env["OC1C_EXT_READER_PWD"] = o.ReaderPassword == null ? "" : o.ReaderPassword;
+                env["OC1C_EXT_VRD"] = VrdPath(o.Dir);
+                if (!string.IsNullOrEmpty(pool)) env["OC1C_EXT_POOL"] = pool;
+
+                Log.Info("запуск ai-ext.ps1 (несколько прогонов конфигуратора — на большой базе 10+ минут)");
+                ExecResult r = Proc.Run(Ps.Exe(plat.X86),
+                    "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"& { try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}; & '" + tmp + "' }\"",
+                    30 * 60 * 1000, Encoding.UTF8, null, env);
+
+                // Ключевые маркеры скрипта — на консоль (полный вывод уже в логе — Proc.Run).
+                string[] marks = { "LOAD-EXIT", "UPDATEDB-EXIT", "EXT-FLAGS", "SETUP-ENDPOINT", "RESULT" };
+                string[] lines = r.All.Replace("\r\n", "\n").Split('\n');
+                for (int i = 0; i < lines.Length; i++)
+                {
+                    string ln = lines[i].Trim();
+                    if (ln.Length == 0) continue;
+                    for (int k = 0; k < marks.Length; k++)
+                        if (ln.IndexOf(marks[k], StringComparison.Ordinal) >= 0) { Log.Info(ln); break; }
+                }
+
+                if (!r.TimedOut && r.ExitCode == 0 && r.All.IndexOf("RESULT: OK") >= 0)
+                {
+                    Ctx.Changed = true;
+                    detail = "расширение AIReadOnly загружено, роль AIReadAll назначена читателю";
+                    return true;
+                }
+
+                string why = r.TimedOut ? "таймаут 30 минут" : "код выхода " + r.ExitCode;
+                Log.Err("расширение чтения не установлено (" + why + ")");
+                Log.Warn("установка продолжается, но ~15% объектов останутся недоступны по OData; подробности — в логе: " + Log.Path);
+                detail = "пропущено: расширение не установлено";
+                return true;   // мягкий фейл: OData-чтение работает и без расширения
+            }
+            finally
+            {
+                try { File.Delete(tmp); } catch { }
+            }
+        }
+
+        // Извлечь вшитый ресурс-скрипт во временный файл. UTF-8 с BOM обязателен:
+        // PS 5.1 читает .ps1 без BOM как ANSI, и кириллица в скрипте ломается.
+        static string ExtractScriptResource(string name)
+        {
+            try
+            {
+                using (Stream s = System.Reflection.Assembly.GetExecutingAssembly().GetManifestResourceStream(name))
+                {
+                    if (s == null) return null;
+                    using (MemoryStream ms = new MemoryStream())
+                    {
+                        s.CopyTo(ms);
+                        byte[] raw = ms.ToArray();
+                        string tmp = Path.Combine(Path.GetTempPath(), "ai-ext-" + Guid.NewGuid().ToString("N") + ".ps1");
+                        bool hasBom = raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF;
+                        using (FileStream f = File.Create(tmp))
+                        {
+                            if (!hasBom) { byte[] bom = { 0xEF, 0xBB, 0xBF }; f.Write(bom, 0, bom.Length); }
+                            f.Write(raw, 0, raw.Length);
+                        }
+                        return tmp;
+                    }
+                }
+            }
+            catch (Exception e)
+            {
+                Log.File("ai-ext: не удалось извлечь ресурс " + name + ": " + e.Message);
+                return null;
+            }
+        }
+
         // ============================================================ 13. брандмауэр (опционально)
         public static bool OpenFirewall(string cidr, out string detail)
         {

@@ -35,6 +35,11 @@ if exist "%~dp0embed\age-keygen.exe" set "RES=%RES% /resource:""%~dp0embed\age-k
 if exist "%~dp0embed\zstd.exe" set "RES=%RES% /resource:""%~dp0embed\zstd.exe"",zstd.exe"
 if defined RES echo Вшиваются ресурсы из embed\: %RES%
 
+rem Скрипт расширения чтения (шаг 14) вшивается безусловно — он всегда в репозитории.
+rem Через -EncodedCommand он не влезает в лимит командной строки, поэтому ресурсом,
+rem а при выполнении извлекается во временный файл (Steps.InstallAiExtension).
+set "RES=%RES% /resource:""%~dp0src\ai-ext.ps1"",ai-ext.ps1"
+
 "%CSC%" /nologo /target:exe /platform:anycpu /optimize+ /langversion:5 ^
   /win32manifest:"%~dp0src\app.manifest" ^
   /out:"%OUT%" ^
