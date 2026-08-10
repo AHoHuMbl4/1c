@@ -83,7 +83,13 @@ def issue_client_cert(base_id: str, out: str) -> str:
              "подпись сертификата CA")
     os.chmod(crt, 0o644)
     pfx_password = secrets.token_urlsafe(18)
-    _openssl(["pkcs12", "-export", "-inkey", key_pem, "-in", crt,
+    # PBE-SHA1-3DES + sha1 MAC: единственный формат PKCS#12, который читают
+    # Windows Server 2016 и старше (их CNG не понимает AES-256/PBES2 — отвечает
+    # «Сетевой пароль указан неверно», живой кейс klient-1, 10.08). Новые
+    # Windows принимают 3DES тоже — поэтому формат один на всех.
+    _openssl(["pkcs12", "-export", "-provider", "default", "-provider", "legacy",
+              "-certpbe", "PBE-SHA1-3DES", "-keypbe", "PBE-SHA1-3DES", "-macalg", "sha1",
+              "-inkey", key_pem, "-in", crt,
               "-out", pfx, "-passout", f"pass:{pfx_password}"], "сборка PKCS#12")
     os.chmod(pfx, 0o600)
     # CSR и extfile — промежуточные, в комплекте они мусор.
