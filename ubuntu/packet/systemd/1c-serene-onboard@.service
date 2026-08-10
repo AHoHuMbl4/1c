@@ -1,0 +1,15 @@
+[Unit]
+# Автоматический онбординг слота на юните компании (PLAN_PROD_LXC §8.1):
+# снимок $metadata появился → витрина → контур агента → таймер свежести.
+# До этого юнита три шага делались руками сессии на КАЖДУЮ базу — на деве
+# тоже; цена ручного шага известна по F001 (свежесть пропала незаметно).
+Description=онбординг слота %i на юните: витрина → контур агента → таймер свежести
+After=serenedb.service 1c-packet-server.service
+Wants=serenedb.service
+
+[Service]
+Type=oneshot
+TimeoutStartSec=infinity
+# postgres — не выбор базы, а конвенция юнита: на копии dbname всегда postgres
+# (PLAN_PROD_LXC §8.1: «бот-слой на копии поднимается одинаково, dbname всегда postgres»).
+ExecStart=/opt/1c-packet/onboard_unit.sh %i postgres

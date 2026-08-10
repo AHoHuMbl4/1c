@@ -1,0 +1,11 @@
+[Unit]
+# Дежурный глаз онбординга: срабатывает, когда приёмник положил первый снимок
+# $metadata слота %i (smoke агента с Windows). Запускает 1c-serene-onboard@%i.service.
+Description=ждёт первый снимок $metadata слота %i (авто-онбординг юнита)
+
+[Path]
+PathExists=/var/lib/serenedb/packet-meta/%i/$metadata
+Unit=1c-serene-onboard@%i.service
+
+[Install]
+WantedBy=multi-user.target
