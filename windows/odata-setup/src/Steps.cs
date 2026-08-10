@@ -2180,8 +2180,12 @@ namespace Oc1c
                 if (!string.IsNullOrEmpty(pool)) env["OC1C_EXT_POOL"] = pool;
 
                 Log.Info("запуск ai-ext.ps1 (несколько прогонов конфигуратора — на большой базе 10+ минут)");
+                // -File, а не -Command-обёртка: только так наружу выходит код выхода
+                // скрипта (через -Command "& ..." падающий exit 2 превращался в 0 —
+                // прогон 10.08: «ОШИБКА (код выхода 0)»). Кодировку консоли скрипт
+                // ставит сам в первых строках.
                 ExecResult r = Proc.Run(Ps.Exe(plat.X86),
-                    "-NoProfile -NonInteractive -ExecutionPolicy Bypass -Command \"& { try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch {}; & '" + tmp + "' }\"",
+                    "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + tmp + "\"",
                     30 * 60 * 1000, Encoding.UTF8, null, env);
 
                 // Ключевые маркеры скрипта — на консоль (полный вывод уже в логе — Proc.Run).

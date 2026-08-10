@@ -628,14 +628,17 @@ namespace Oc1c
                 if (Steps.OpenFirewall(o.OpenFirewall, out detail)) Log.Ok(detail);
             }
 
+            // ---------- блок 2: агент пакетного транспорта (только при наличии комплекта)
+            int packetExit = PacketSteps.Run(o, bref, url, plat);
+
             // ---------- 14. расширение чтения (роль AIReadAll)
+            // Стоит ПОСЛЕ блока агента: пользователь-читатель создаётся в PacketSteps,
+            // а шаг 14 назначает ему роль — на чистой машине раньше блока агента
+            // читателя ещё нет (живой прогон 10.08: «пользователь ai_reader не найден»).
             // Мягкий шаг: фейл НЕ валит установку (предупреждение внутри), КС-база — пропуск.
             Log.Step(14, TOTAL, "Расширение чтения (роль AIReadAll)");
             if (!Steps.InstallAiExtension(plat, bref, o, pool, out detail)) return EXIT_STEP;
             if (detail.StartsWith("пропущено")) Log.Skip(detail); else if (detail.Length > 0) Log.Ok(detail);
-
-            // ---------- блок 2: агент пакетного транспорта (только при наличии комплекта)
-            int packetExit = PacketSteps.Run(o, bref, url, plat);
 
             Report(o, bref, plat, pool, url, scopeKeys);
             ClearResume();
