@@ -1,0 +1,9 @@
+﻿<?xml version="1.0" encoding="UTF-8"?>
+<ConfigDumpInfo xmlns="http://v8.1c.ru/8.3/xcf/dumpinfo" xmlns:xen="http://v8.1c.ru/8.3/xcf/enums" xmlns:xs="http://www.w3.org/2001/XMLSchema" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" format="Hierarcical" version="2.20">
+	<ConfigVersions>
+		<Metadata name="Catalog.Валюты" id="e23f590f-88b3-468e-9b42-626987f57c25" configVersion="a06fc6e87f863c987a9a7893088f0fedf69a4fa4"/>
+		<Metadata name="Configuration.TmpExt" id="3464c073-7b56-4f73-a84b-1015049f16e6" configVersion="5e540e21dfc1712dc87182cca46522a72397945"/>
+		<Metadata name="Language.Руссский" id="53a233d1-db83-4de0-9e0b-a35470636c4e" configVersion="031138b8158a5bec4f711a6385d3b8462950ad3c"/>
+		<Metadata name="Role.Расш1_ОсновнаяРоль" id="83f3f19f-7e37-42ac-98c0-1301799b4eaf" configVersion="133dd44096c0e0f6b6a6c558fc48753317b7484e"/>
+	</ConfigVersions>
+</ConfigDumpInfo>
