@@ -1,0 +1,19 @@
+[Unit]
+# Исходящий NAT для юнитов приватной сети хостера (10.1.1.0/24) через релей.
+# Зачем (замер 10.08): у клонов болванки нет своего внешнего IP, а у выданного
+# хостером IP (201.34.142.0/24) наружу открыты только RU-адреса — зарубежные
+# (Cloudflare, github) фильтруются на краю хостера. Юнитам наружу нужны
+# эмбеддер/модель (слой ответов) и NTP — всё это ходит через релей.
+# Юниты: default route via 10.1.1.4 metric 50 (netplan eth1, переживает DHCP
+# дефолт публичного интерфейса с metric 100) + публичные DNS.
+Description=1C units NAT: MASQUERADE 10.1.1.0/24 -> eth0 (юниты ходят наружу через релей)
+After=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/bin/sh -c '/usr/sbin/iptables -t nat -C POSTROUTING -s 10.1.1.0/24 -o eth0 -j MASQUERADE 2>/dev/null || /usr/sbin/iptables -t nat -A POSTROUTING -s 10.1.1.0/24 -o eth0 -j MASQUERADE'
+ExecStop=/usr/sbin/iptables -t nat -D POSTROUTING -s 10.1.1.0/24 -o eth0 -j MASQUERADE
+
+[Install]
+WantedBy=multi-user.target
