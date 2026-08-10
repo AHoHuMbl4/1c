@@ -354,6 +354,34 @@ def main() -> int:
     check("13: чанк-мусор — 409 bad_format",
           st == 409 and r.get("error") == "bad_format", f"{st} {r}")
 
+    # 14. база, добавленная в файл ПОСЛЕ старта приёмника, обязана приниматься
+    # сразу (перечитывание по mtime в _auth_base), а не после /agent/config —
+    # живой случай 10.08: слот на юните получал 401 «токен отклонён» при верном
+    # токене, потому что перечитывание звучало только на пути конфига.
+    with open(BASES_PATH, encoding="utf-8") as f:
+        doc = json.load(f)
+    doc["buh2"] = {"token": "tok-buh2-proba", "identity": IDENTITY, "config": {
+        "config_version": 1, "entities": [],
+        "params": {"page_size": 10000, "tact_seconds": 1200, "chunk_mb": 32}}}
+    tmp = BASES_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(doc, f, ensure_ascii=False)
+    os.replace(tmp, BASES_PATH)
+    mt = os.path.getmtime(BASES_PATH)  # mtime обязан уехать вперёд даже на
+    os.utime(BASES_PATH, (mt + 2, mt + 2))  # грубой ФС (секундная точность)
+    m_b = {"manifest_version": 1, "package_id": "buh2/000061-bbbb2222",
+           "base_id": "buh2", "seq": 61, "kind": "delta",
+           "created_utc": "2026-08-10T07:00:00Z", "agent_version": "proba-1",
+           "entities": [], "chunks": []}
+    st, r = req("PUT", "/v1/package/buh2/000061-bbbb2222/manifest",
+                enc_manifest(m_b), token="tok-buh2-proba")
+    check("14: новая база без рестарта — manifest принят (не 401)",
+          st == 200 and r.get("state") == "receiving", f"{st} {r}")
+    st, r = req("PUT", "/v1/package/buh2/000062-bbbb2222/manifest",
+                enc_manifest({**m_b, "package_id": "buh2/000062-bbbb2222", "seq": 62}),
+                token="tok-ut-proba")
+    check("14: чужой токен для новой базы — 401", st == 401, f"{st} {r}")
+
     srv.shutdown()
     print(f"\n{'ПРОБА ЗЕЛЁНАЯ' if not FAILS else 'ПАДЕНИЯ: ' + ', '.join(FAILS)}")
     return 1 if FAILS else 0
