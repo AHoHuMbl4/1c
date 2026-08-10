@@ -257,15 +257,39 @@ ufw пускает на 6090 **только с релея `10.1.1.4`** (плюс
   режим (код лежит в `/opt/1c-mcp-reports`, источник данных — файлы packet-meta,
   не http-шлюз).
 
+🔴 Замеры 10.08 (перепроверка разбора копии `novaya-baza` — что подтвердилось):
+
+- **роли движка нужны apply с ПЕРВОГО data-пакета**, а не с бот-слоем:
+  контрактная транзакция делает `GRANT SELECT … TO serene_ro`
+  (`packet_apply.py:254,386`); без роли пакет в карантин `contract_tx_failed`.
+  Шаг `setup.sh` перенесён в начало привязки (шаг 2). На medteh (10.1.1.5)
+  роли заведены 08.08 — латентной поломки там нет (проверено `pg_roles`);
+  smoke `kind=meta` ловушку не показывал, потому что GRANT идёт в data-пакетах;
+- `/opt/openclaw-mcp` (venv 3.14, 222 МБ) обязан быть в образе эталона — копии
+  со снапшота v1 его не имеют. Механика важна: `base_profile` на пакетном
+  контуре пишет **apply** (`packet_apply.py:387+`), а не `serene_sync` — цепочка
+  «приём → витрина → контур → выгрузка» без venv работает (приёмник и apply на
+  системном python3); venv нужен бот-слою (мост :6016, сервис ответов :8091).
+  Проверка: `/opt/openclaw-mcp/venv/bin/python --version` → 3.14.x;
+- эмбеддер с копии проверять до сборки: `curl $EMBED_HEALTH_URL` → 200
+  (с medteh 200 — замер 10.08; у копии 10.1.1.6 была сетевая недоступность —
+  лечится сетью/хостером, код пайплайна не трогаем, сторож «не та модель» прав);
+- часы копии: `timedatectl` → `System clock synchronized: yes` (на medteh так
+  и есть — замер 10.08; у копии был сдвиг ~200 с, NTP — в образ эталона).
+
 1. На деве: `packet_kit.py <base_id>` — комплект (CA один, живёт на деве).
-2. На копию: identity → `/etc/1c-packet-age-<base_id>.key` (640 root:1c-secrets),
+2. 🔴 **Сначала роли движка, до включения приёмника:**
+   `bash /opt/1c-mcp-reports/setup.sh /etc/1c-mcp-reports.env` на копии
+   (пароли у копии свои — так скрипт устроен). Проверка: `SELECT rolname FROM
+   pg_roles` содержит `serene_ro`, `serene_resolver`.
+   Затем на копию: identity → `/etc/1c-packet-age-<base_id>.key` (640 root:1c-secrets),
    `/etc/1c-packet-bases.json` (одна запись, атомарно temp+rename),
    `/etc/1c-serene-pipeline-postgres.env` (`ETL_ODATA_BASE=/var/lib/serenedb/packet-meta/<base_id>`),
    `install -d -o serenedb -g serenedb /var/lib/serenedb/packet-meta/<base_id>`,
    `systemctl enable --now 1c-packet-server 1c-packet-apply.timer`
    (pipeline@postgres.timer — после первой сборки слоя).
    Бот-слой на копии поднимается одинаково для любой компании (dbname всегда
-   postgres): роли `setup.sh`, затем `systemctl enable --now
+   postgres): `systemctl enable --now
    1c-serene-ask@postgres 1c-mcp-ask@postgres`, старт user-шлюза undebot
    и `1c-bot-monitor.timer` — после того, как ask позеленеет (первая сборка).
 3. Релей: backend по `CN=<base_id>` → `http://<внутр.ip копии>:6090`
