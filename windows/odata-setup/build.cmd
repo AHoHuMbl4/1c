@@ -40,6 +40,10 @@ rem Через -EncodedCommand он не влезает в лимит коман
 rem а при выполнении извлекается во временный файл (Steps.InstallAiExtension).
 set "RES=%RES% /resource:""%~dp0src\ai-ext.ps1"",ai-ext.ps1"
 
+rem Генератор синтетического $metadata (манифест для агента, когда платформа
+rem отвечает 500 на корень/$metadata) — тоже всегда в репозитории, вшиваем.
+set "RES=%RES% /resource:""%~dp0src\manifest-gen.ps1"",manifest-gen.ps1"
+
 "%CSC%" /nologo /target:exe /platform:anycpu /optimize+ /langversion:5 ^
   /win32manifest:"%~dp0src\app.manifest" ^
   /out:"%OUT%" ^
