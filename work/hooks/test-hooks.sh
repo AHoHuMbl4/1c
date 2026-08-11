@@ -349,6 +349,15 @@ say $? 'непустой индекс — снайпер получает нас
 git reset -q; rm -f ubuntu/serenedb/sniper.py
 OUT=$(printf '{"tool_input":{"command":"ls"}}' | bash .claude/hooks/prepare-diff.sh 2>/dev/null)
 [ "$OUT" = '{}' ]; say $? 'на посторонней команде молчит'
+
+# 🔴 Граф исключён из ревью (11.08): он раздувал дифф снайпера до ~200 КБ, и модель не
+# укладывалась в таймаут (код 124 на пяти коммитах подряд). Коммит из одного графа —
+# не код, снайперу подаётся пометка, а не дифф.
+printf '{"type":"entity","name":"probe-g2","entityType":"x","observations":[]}\n' >> memory_bank/mcp-memory.json
+git add memory_bank/mcp-memory.json
+printf '{"tool_input":{"command":"git commit -m x"}}' | bash .claude/hooks/prepare-diff.sh >/dev/null 2>&1
+head -1 .claude/state/staged.diff | grep -q 'НЕ КОД'; say $? 'в коммите только граф — снайперу пометка «НЕ КОД»'
+git reset -q; git checkout -q -- memory_bank/mcp-memory.json
 cd "$TMP" || exit 1
 
 # --- аварийный люк ----------------------------------------------------------------
@@ -521,7 +530,25 @@ asks "$OUT"; say $? 'ответ без маяка — вердикт не раз
 stub 'exit 1'
 OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
 asks "$OUT"; say $? 'модель упала — упавшая проверка = остановка'
+
+# 🔴 Граф исключён из ревью (11.08) — иначе каждый коммит тащит ~200 КБ JSONL, и модель
+# не укладывается в таймаут. Коммит из одного графа модель не зовётся вовсе.
+# (индекс сначала чистим: прежний случай оставил sn.py staged — нашла проба)
 git reset -q; rm -f ubuntu/serenedb/sn.py
+printf '{"type":"entity","name":"probe-g1","entityType":"x","observations":[]}\n' >> memory_bank/mcp-memory.json
+git add memory_bank/mcp-memory.json
+stub 'exit 1'   # если снайпер позвал модель — это ошибка
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+[ "$OUT" = '{}' ]; say $? 'коммит из одного графа — модель не зовётся, пропуск'
+
+printf 'print(1)\n' > ubuntu/serenedb/sn2.py; git add ubuntu/serenedb/sn2.py
+stub 'echo "• VERDICT: OK"'
+OUT=$(sn_call '{"tool_input":{"command":"git commit -m x"}}')
+[ "$OUT" = '{}' ]; say $? 'код + граф — пропуск при OK'
+grep -q 'mcp-memory' .claude/state/staged-kimi.diff && r=1 || r=0; say $r 'граф не попадает в дифф снайпера при смешанном коммите'
+grep -q 'sn2.py' .claude/state/staged-kimi.diff; say $? 'код в диффе остался'
+git reset -q; rm -f ubuntu/serenedb/sn.py ubuntu/serenedb/sn2.py
+git checkout -q -- memory_bank/mcp-memory.json
 
 # 🔴 Промт снайпера живёт в ДВУХ местах — agent-хук settings.json (Claude) и
 # sniper-kimi.sh (Kimi). Разъехавшиеся копии одного правила — тот самый дефект F248,

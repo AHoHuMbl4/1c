@@ -170,7 +170,7 @@ timeout = 20
 event = "PreToolUse"
 matcher = "Bash"
 command = "/srv/1c/.claude/hooks/sniper-kimi.sh"
-timeout = 240
+timeout = 600
 
 # После правки: счётчик подбора, велосипед/подгонка, вброс связей графа.
 [[hooks]]
