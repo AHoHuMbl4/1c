@@ -1086,51 +1086,49 @@ namespace Oc1c
         }
 
         // ================================================================= автоотправка логов пакетным каналом
-        // Канал поднят (smoke подтверждён) — сервер получает лог установки сам,
-        // чанком log (CLI агента --send-log; код 0 только при verified). Демон на
-        // время отправки останавливается (single-instance mutex агента, кейс K5);
-        // любой отказ сети — Warn, отчёт НЕ валим: файл остаётся на месте.
+        // Канал поднят (smoke подтверждён) — сервер получает лог установки сам.
+        // Outbox (дефект живого прогона ЗУП 11.08): просто копируем файлы в
+        // <packet dir>\outbox — демон агента довезёт их своим тактом тем же
+        // лог-пакетом (служебный чанк log). Прежняя схема останавливала демон
+        // и звала --send-log, который отказывал при занятом single-instance
+        // mutex (первичная синхронизация держит его часами) — лог не уходил
+        // никогда. Демона здесь больше не трогаем вообще. Любой сбой
+        // копирования — Warn, отчёт НЕ валим: файл остаётся на месте.
         static void SendLogs(Opts o)
         {
             string pdir = string.IsNullOrEmpty(o.PacketDir) ? @"C:\1c\packet" : o.PacketDir;
             string agent = Path.Combine(pdir, "packet-agent.exe");
-            if (!File.Exists(agent)) { Log.File("send-log: нет " + agent + " — лог не отправлен"); return; }
-            // Кейс K5 (11.08): при живом демоне --send-log всегда отказывал
-            // (single-instance mutex) — лог никогда не уходил. Гасим демон на
-            // время отправки и запускаем обратно.
-            PacketSteps.StopAgent();
-            try
+            if (!File.Exists(agent)) { Log.File("outbox: нет " + agent + " — лог не отправлен"); return; }
+            string outbox = Path.Combine(pdir, "outbox");
+            try { Directory.CreateDirectory(outbox); }
+            catch (Exception e)
             {
-                SendOneLog(agent, Log.Path, "лог установки");
-                // Список исключений валидатора этого прогона — вторым вызовом, тоже
-                // терпимо к отказу (он нужен нам, если клиент захочет целый $metadata).
-                if (!string.IsNullOrEmpty(ExcludedListPath) && File.Exists(ExcludedListPath))
-                    SendOneLog(agent, ExcludedListPath, "список исключений состава");
+                Log.Warn("не создал outbox " + outbox + ": " + e.Message + " — лог остался на месте");
+                return;
             }
-            finally { PacketSteps.StartAgent(); }
+            StageToOutbox(outbox, Log.Path, "Лог установки");
+            // Список исключений валидатора этого прогона — тоже копией в outbox
+            // (он нужен нам, если клиент захочет целый $metadata).
+            if (!string.IsNullOrEmpty(ExcludedListPath) && File.Exists(ExcludedListPath))
+                StageToOutbox(outbox, ExcludedListPath, "Список исключений состава");
         }
 
-        static void SendOneLog(string agent, string path, string what)
+        static void StageToOutbox(string outbox, string path, string what)
         {
             if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
             // Лог ещё открыт нашим писателем, но с FileShare.Read (Sys.cs, Log.Init) —
-            // агент может читать файл напрямую, копия не нужна.
-            Log.File("send-log: отправляю " + what + ": " + path);
-            ExecResult r = Proc.Run(agent, "--send-log \"" + path + "\"", 120000, Proc.Oem,
-                                    Path.GetDirectoryName(agent), null);
-            // «работает другой экземпляр» — гонка остановки демона (K5): один повтор
-            // после паузы, mutex к этому моменту освобождён.
-            if (!r.TimedOut && r.ExitCode != 0 && r.All.IndexOf("другой экземпляр") >= 0)
+            // копирование в занятость файла не упирается.
+            try
             {
-                System.Threading.Thread.Sleep(4000);
-                r = Proc.Run(agent, "--send-log \"" + path + "\"", 120000, Proc.Oem,
-                             Path.GetDirectoryName(agent), null);
+                File.Copy(path, Path.Combine(outbox, Path.GetFileName(path)), true);
+                Log.Ok(what + " поставлен в outbox агента — демон доставит на сервер "
+                       + "своим тактом (" + Path.GetFileName(path) + ")");
             }
-            if (!r.TimedOut && r.ExitCode == 0)
-                Log.Ok(what + " отправлен на сервер (" + Path.GetFileName(path) + ")");
-            else
-                Log.Warn(what + " не ушёл на сервер, код " + (r.TimedOut ? "таймаут 120 с" : r.ExitCode.ToString()) +
-                         " — файл остался на месте: " + path);
+            catch (Exception e)
+            {
+                Log.Warn(what + " не скопирован в outbox: " + e.Message
+                         + " — файл остался на месте: " + path);
+            }
         }
 
         // ================================================================= возобновление после перезагрузки

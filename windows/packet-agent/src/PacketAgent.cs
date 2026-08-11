@@ -28,7 +28,7 @@ namespace PacketAgent
     // Каждое число можно переопределить ключом в agent.ini — имя ключа в скобках.
     internal static class C
     {
-        internal const string Version = "1.0.1";
+        internal const string Version = "1.0.2";   // outbox логов + skipped-only при обнулении (11.08)
         internal const int ManifestVersion = 1;
 
         internal const int PageSizeDefault = 10000;   // (page_size) размер страницы OData
@@ -1796,6 +1796,7 @@ namespace PacketAgent
                 Log.Line("контур пуст — нечего отправлять");
                 _state.ConfigVersion = newCv;
                 _state.Save();
+                ProcessOutbox();   // логи из outbox не зависят от контура
                 return true;
             }
 
@@ -1879,23 +1880,34 @@ namespace PacketAgent
 
             // (4) ноль изменений — пакет НЕ шлём (контракт §7); исключение — изменился
             // набор пропущенных: один пакет-уведомление, чтобы сервер увидел состав.
+            // Отпечаток сравнивается и при ПУСТОМ новом наборе (живой прогон ЗУП
+            // 11.08: права починились, skipped обнулился, а сервер показывал
+            // вчерашний skipped.json — такт «изменений нет» пакета не отправлял).
+            // Переход в пустой набор шлём тоже, секцией skipped из нуля записей
+            // (приёмник такой пакет принимает: _validate_manifest посторонних
+            // секций не режет, apply работает по наличию секций, kind игнорирует).
+            // «Уже сообщено» — только когда набор пуст и раньше ничего не уходило.
             bool anyData = results.Count > 0 || gone.Count > 0;
             bool sendMeta = firstRun || metaChanged;
             string skipFp = EntityIndex.HashHex(Encoding.UTF8.GetBytes(string.Join("\n",
                 skipped.ConvertAll(kv => kv.Key + "\t" + kv.Value).ToArray())));
-            bool skipChanged = skipped.Count > 0 && skipFp != _state.SkippedFp;
+            bool skipChanged = skipFp != _state.SkippedFp
+                               && (skipped.Count > 0 || _state.SkippedFp.Length > 0);
             if (!anyData && !sendMeta && !skipChanged)
             {
                 Log.Line("изменений нет — пакет не отправляется"
                          + (skipped.Count > 0 ? " (пропущенных: " + skipped.Count + " — уже сообщено)" : ""));
                 _state.ConfigVersion = newCv;
                 _state.Save();
+                ProcessOutbox();   // логи из outbox едут и «пустым» тактом
                 return true;
             }
             string kind = firstRun ? "full" : (anyData ? "delta" : "meta");
 
             // (5)-(7) пакет: чанки, крипто, отправка, индекс ПОСЛЕ applied/verified (К2)
-            return SendPackage(kind, results, gone, sendMeta, newCv, skipped, skipFp);
+            bool sent = SendPackage(kind, results, gone, sendMeta, newCv, skipped, skipFp);
+            ProcessOutbox();   // после основной работы — довозка логов из outbox
+            return sent;
         }
 
         void ProcessEntity(string e, bool firstRun,
@@ -2126,7 +2138,10 @@ namespace PacketAgent
                 md["chunks"] = new string[] { "metadata" };
             }
             m["metadata"] = md;
-            if (skipped != null && skipped.Count > 0)
+            // Секция skipped — ВСЕГДА, и пустой: «пропущенных больше нет» — такой
+            // же факт для сервера, как и новый состав (ЗУП 11.08: права починились,
+            // а skipped.json на сервере застыл). Apply реагирует на наличие секции.
+            if (skipped != null)
             {
                 List<object> sk = new List<object>();
                 foreach (KeyValuePair<string, string> kv in skipped)
@@ -2435,17 +2450,93 @@ namespace PacketAgent
             return ok;
         }
 
-        // ------------------------------ --send-log ------------------------------
-        // Отправка произвольного файла (лога установщика) служебным чанком `log`
-        // (договорённость с приёмником: имя чанка ровно "log", секция log в
-        // манифесте — по образцу metadata/gone, kind приёмник игнорирует).
+        // ------------------------------ outbox --------------------------------
+        // Каталог <packet dir>\outbox (рядом с agent.ini): установщик и CLI
+        // --send-log кладут сюда КОПИИ логов, демон довозит их своим тактом.
+        // До outbox (живой прогон ЗУП 11.08) лог установки уходил только CLI
+        // --send-log, который отказывал при занятом single-instance mutex, а
+        // первичная синхронизация держит mutex часами, — лог не уходил никогда.
+        // Вызов — в конце Run() после основной работы (все ветки выхода).
+        // seq: доставка идёт из того же процесса, что боевые пакеты, и тем же
+        // счётчиком _state.Seq + 1 с фиксацией ДО отправки — монотонность seq
+        // сохраняется сама, отдельного счётчика лог-пакетам не нужно.
+        internal int ProcessOutbox()
+        {
+            string outbox = Path.Combine(_exeDir, "outbox");
+            if (!Directory.Exists(outbox)) return 0;
+            string[] files = Directory.GetFiles(outbox);
+            if (files.Length == 0) return 0;
+            string queueRoot = Path.Combine(_cfg.DataDir, "queue");
+            if (Directory.Exists(queueRoot) && Directory.GetDirectories(queueRoot).Length > 0)
+            {
+                Log.Line("outbox: файлов " + files.Length
+                         + ", но есть незавершённый пакет — доставка логов следующим тактом");
+                return 0;
+            }
+            Array.Sort(files, StringComparer.Ordinal);
+            int sent = 0;
+            foreach (string f in files)
+            {
+                // Пустой файл нести на сервер нечего — убираем, чтобы не крутить
+                // его каждый такт.
+                if (new FileInfo(f).Length == 0)
+                {
+                    Log.Line("outbox: " + Path.GetFileName(f) + " пуст — удалён без отправки");
+                    TryDelete(f);
+                    continue;
+                }
+                if (!DeliverOutboxFile(f)) break;   // причина уже в журнале
+                sent++;
+            }
+            return sent;
+        }
+
+        // Доставка одного файла из outbox: успех (verified/applied) — копия
+        // удаляется; неудача (сеть, занятая очередь, отказ приёмника) — файл
+        // остаётся до следующего такта. false — и дальше по outbox не идём:
+        // при неудаче либо очередь осталась на довозку (сеть), либо приёмник
+        // отклонил пакет — обоим случаям повтор следующим тактом, а не штурм
+        // остальных файлов этим же тактом.
+        internal bool DeliverOutboxFile(string path)
+        {
+            string queueRoot = Path.Combine(_cfg.DataDir, "queue");
+            if (Directory.Exists(queueRoot) && Directory.GetDirectories(queueRoot).Length > 0)
+            {
+                Log.Line("outbox: есть незавершённый пакет — сначала довозка, "
+                         + Path.GetFileName(path) + " остаётся до следующего такта");
+                return false;
+            }
+            bool ok;
+            try { ok = SendLogBody(path); }
+            catch (Exception e)
+            {
+                Log.Line("outbox: " + Path.GetFileName(path) + " — сбой (" + e.Message
+                         + "), остаётся до следующего такта");
+                return false;
+            }
+            if (!ok)
+            {
+                Log.Line("outbox: " + Path.GetFileName(path)
+                         + " — доставка не подтверждена, остаётся до следующего такта");
+                return false;
+            }
+            TryDelete(path);   // verified/applied — копия в outbox больше не нужна
+            return true;
+        }
+
+        // ------------------------------ лог-пакет ------------------------------
+        // Общее тело отправки лог-файла для CLI --send-log и outbox-такта демона:
+        // пакет с одним служебным чанком `log` (договорённость с приёмником: имя
+        // чанка ровно "log", секция log в манифесте — по образцу metadata/gone,
+        // kind приёмник игнорирует), seq, чанк log, UploadAndFinish. Проверка
+        // незавершённой очереди — на вызывающем (DeliverOutboxFile).
         // seq: тот же монотонный счётчик, что у боевых пакетов, — _state.Seq + 1
         // с фиксацией ДО отправки, как smoke/SendPackage. Конфликта с боевыми
         // пакетами нет: seq только растёт и двигается одним процессом (снаружи
         // single-instance mutex). Ответ stale_seq разбирает общий StaleSeq:
         // скачок на StaleSeqJump + resync — безопасно и для лог-пакета.
         // true — только при подтверждённой доставке (verified/applied).
-        internal bool SendLog(string path)
+        bool SendLogBody(string path)
         {
             if (!File.Exists(path))
             {
@@ -2474,11 +2565,6 @@ namespace PacketAgent
                 return false;
             }
             string queueRoot = Path.Combine(_cfg.DataDir, "queue");
-            if (Directory.Exists(queueRoot) && Directory.GetDirectories(queueRoot).Length > 0)
-            {
-                Log.Line("send-log: есть незавершённый пакет — сначала довозка штатным демоном");
-                return false;
-            }
             long seq = _state.Seq + 1;
             string pkgShort = seq.ToString("D6", CultureInfo.InvariantCulture) + "-" + Rand8();
             string queueDir = Path.Combine(queueRoot, pkgShort);
@@ -2540,8 +2626,10 @@ namespace PacketAgent
     //   packet-agent.exe --version                      версия, код 0
     //   packet-agent.exe --smoke                        пробная посылка kind=meta,
     //                                                   код 0 только при verified
-    //   packet-agent.exe --send-log <path>              файл служебным чанком log,
-    //                                                   код 0 только при verified
+    //   packet-agent.exe --send-log <path>              копия файла в outbox +
+    //                                                   немедленная доставка, если
+    //                                                   mutex свободен; недоставленное
+    //                                                   довозит демон своим тактом
     //   packet-agent.exe                                демон тактов
     //   packet-agent.exe --flatten <page.json> <e> <out.csv>   служебный режим
     //                                                   golden-пробы (К5)
@@ -2572,16 +2660,22 @@ namespace PacketAgent
             }
             if (args.Length == 2 && args[0] == "--send-log")
             {
+                // Outbox (дефект живого прогона ЗУП 11.08): сначала копия в outbox —
+                // доставку гарантирует демон своим тактом. Прежняя схема (только
+                // немедленная отправка под mutex) отказывала всю первичную
+                // синхронизацию: mutex занят часами, и код 1 установщик/человек
+                // принимал за «не судьба».
+                string staged = StageToOutbox(exeDir, args[1]);
+                if (staged == null) return 1;
                 Mutex single = AcquireSingle(exeDir);
-                // Здесь, в отличие от --smoke, код 0 при занятом mutex НЕЛЬЗЯ:
-                // 0 означает «доставлено», а отправки не было — установщик
-                // принял бы молчаливый пропуск за успех.
                 if (single == null)
                 {
-                    Console.Error.WriteLine("send-log: работает другой экземпляр агента — отправка отменена");
-                    return 1;
+                    Console.WriteLine("send-log: работает демон — файл поставлен в outbox, "
+                                      + "демон довезёт своим тактом: " + staged);
+                    return 0;
                 }
-                using (single) return SendLogMode(exeDir, args[1]);
+                // Mutex свободен — немедленная попытка доставки из outbox.
+                using (single) return SendLogMode(exeDir, staged);
             }
             if (args.Length == 0)
             {
@@ -2706,10 +2800,37 @@ namespace PacketAgent
             }
         }
 
-        // --send-log <path>: произвольный файл (лог установщика) служебным
-        // чанком log по боевому каналу; код 0 только при подтверждённой
-        // доставке (verified/applied), как у smoke. Секреты — только из
-        // agent.ini (LoadCfg), в консоль/журнал они не попадают (Log.AddSecret).
+        // Копия файла в outbox рядом с agent.ini. Имя — как у источника: повторная
+        // постановка того же лога затирает недоставленную копию (свежая важнее).
+        // null — не получилось (причина напечатана).
+        static string StageToOutbox(string exeDir, string path)
+        {
+            try
+            {
+                if (!File.Exists(path))
+                {
+                    Console.Error.WriteLine("send-log: файла нет: " + path);
+                    return null;
+                }
+                string outbox = Path.Combine(exeDir, "outbox");
+                Directory.CreateDirectory(outbox);
+                string dst = Path.Combine(outbox, Path.GetFileName(path));
+                File.Copy(path, dst, true);
+                return dst;
+            }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("send-log: не удалось положить файл в outbox: " + e.Message);
+                return null;
+            }
+        }
+
+        // --send-log <path>: копия файла уже лежит в outbox (её путь передал Main),
+        // здесь — немедленная попытка доставки под свободным mutex; код 0 только
+        // при подтверждённой доставке (verified/applied), как у smoke. Не вышло
+        // (очередь занята, сеть) — файл остаётся в outbox, довезёт демон. Секреты —
+        // только из agent.ini (LoadCfg), в консоль/журнал они не попадают
+        // (Log.AddSecret).
         static int SendLogMode(string exeDir, string path)
         {
             Cfg cfg;
@@ -2728,13 +2849,17 @@ namespace PacketAgent
             }
             try
             {
-                bool ok = new Tact(cfg, exeDir).SendLog(path);
+                bool ok = new Tact(cfg, exeDir).DeliverOutboxFile(path);
+                if (!ok)
+                    Console.WriteLine("send-log: сейчас не доставлен — файл остаётся в outbox, "
+                                      + "демон довезёт своим тактом");
                 return ok ? 0 : 1;
             }
             catch (ReceiverException e)
             {
                 Log.Line("send-log: ошибка приёмника: " + e.Code);
-                Console.Error.WriteLine("send-log: ошибка приёмника: " + e.Code);
+                Console.Error.WriteLine("send-log: ошибка приёмника: " + e.Code
+                                        + " — файл остаётся в outbox, довезёт демон");
                 return 1;
             }
             catch (Exception e)

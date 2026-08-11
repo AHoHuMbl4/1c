@@ -998,8 +998,8 @@ namespace Oc1c
         // («файл используется другим процессом» — прогон 07.08). Гасим задачи и
         // процесс; «не запущен» — не ошибка. Прерванный такт не страшен: очередь
         // чанков на диске, довозка штатная (К2).
-        // internal с 11.08: вызывается и из Program.SendLogs — --send-log при живом
-        // демоне всегда отказывал (single-instance mutex, кейс K5).
+        // internal с 11.08 (v2): вызывался и из Program.SendLogs; с v2.1 SendLogs
+        // демона не трогает (outbox) — остановка осталась только для замены файлов.
         internal static bool StopAgent()
         {
             Proc.Run("schtasks.exe", "/End /TN \"" + TaskName + "\"", 30000, Proc.Oem, null, null);
@@ -1017,7 +1017,7 @@ namespace Oc1c
             return true;
         }
 
-        // Запуск демона задачей планировщика (после StopAgent для send-log).
+        // Запуск демона задачей планировщика (после StopAgent при замене файлов).
         internal static void StartAgent()
         {
             ExecResult run = Proc.Run("schtasks.exe", "/Run /TN \"" + TaskName + "\"", 60000, Proc.Oem, null, null);
