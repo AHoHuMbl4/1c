@@ -520,7 +520,10 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                 if isinstance(s, dict):
                     _log("base=%s pkg=%s SKIPPED entity=%s: %s"
                          % (base_id, pkg_id, s.get("entity"), str(s.get("error"))[:200]))
-            if isinstance(m.get("skipped"), list) and m["skipped"]:
+            # Пустой список — тоже сигнал: «пропущенных больше нет» (права в 1С
+            # починили) — skipped.json обязан очиститься, а не висеть вчерашним
+            # (замер 11.08, ЗУП: 693 no_read_right закрылись, файл застыл).
+            if isinstance(m.get("skipped"), list):
                 _apply_skipped(base_id, m["skipped"])
             if (m.get("metadata") or {}).get("included") and "metadata" in files:
                 _apply_metadata(base_id, m, files["metadata"])

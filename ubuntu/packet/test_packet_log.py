@@ -127,3 +127,27 @@ def test_log_without_source(no_mart):
     assert A.apply_package(BASE_ID, pkg_id, m, dry_run=False) == "applied"
     dst = os.path.join(LOGS_DIR, pkg_id + ".log")
     assert open(dst, "rb").read() == b"bare\n"
+
+
+def _skipped_pkg(seq: int, rand: str, skipped: list):
+    """Пакет без чанков, только секция skipped (skipped-only из v2.1)."""
+    pkg_id = f"{seq:06d}-{rand}"
+    pdir = os.path.join(ROOT, "inbox", BASE_ID, pkg_id)
+    os.makedirs(pdir)
+    manifest = {"manifest_version": 1, "base_id": BASE_ID, "seq": seq,
+                "kind": "meta", "created_utc": "2026-08-11T10:00:00Z",
+                "agent_version": "proba-1", "package_id": f"{BASE_ID}/{pkg_id}",
+                "entities": [], "skipped": skipped, "chunks": []}
+    return pkg_id, manifest
+
+
+def test_skipped_empty_clears_file(no_mart):
+    # Права в 1С починили: агент шлёт «skipped»: [] — файл обязан очиститься,
+    # а не висеть вчерашним (замер 11.08, ЗУП: 693 закрылись, skipped.json застыл).
+    pkg1, m1 = _skipped_pkg(10, "skp00001", [{"entity": "Catalog_X", "error": "no_read_right"}])
+    assert A.apply_package(BASE_ID, pkg1, m1, dry_run=False) == "applied"
+    dst = os.path.join(META_DIR, BASE_ID, "skipped.json")
+    assert len(json.load(open(dst, encoding="utf-8"))["entities"]) == 1
+    pkg2, m2 = _skipped_pkg(11, "skp00002", [])
+    assert A.apply_package(BASE_ID, pkg2, m2, dry_run=False) == "applied"
+    assert json.load(open(dst, encoding="utf-8"))["entities"] == []
