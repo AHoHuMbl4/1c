@@ -228,16 +228,48 @@ namespace Oc1c
             Log.Step(3, TOTAL, "База 1С");
             if (string.IsNullOrEmpty(o.BasePath) && string.IsNullOrEmpty(o.ConnStr))
             {
+                // Клиент-серверные базы: discovery через агент кластера (у первого
+                // прод-клиента с ERP на КС установщик базу сам не нашёл — админ
+                // вводил --connstr руками). Любая ошибка discovery — тихий фолбэк
+                // в прежнее поведение. Приоритет: явный --connstr/--base > discovery.
+                List<string> csBases = new List<string>();
+                string csHost = Environment.MachineName;
+                if (plat.HasCom)
+                {
+                    string csAuth;
+                    csBases = Steps.DiscoverCsBases(plat, out csAuth);
+                    if (csAuth == "REQUIRED")
+                        Log.Warn("агент кластера 1С требует учётную запись администратора кластера — автообнаружение клиент-серверных баз невозможно");
+                    for (int i = 0; i < csBases.Count; i++)
+                        Log.Info("обнаружена клиент-серверная база кластера: " + csBases[i]);
+                }
                 if (o.Unattended)
                 {
-                    Log.Err("не указана база: --base <путь> или --connstr \"Srvr=...;Ref=...;\"");
-                    return EXIT_ARGS;
+                    if (csBases.Count == 1)
+                    {
+                        o.ConnStr = "Srvr='" + csHost + "';Ref='" + csBases[0] + "';";
+                        Log.Ok("клиент-серверная база выбрана автоматически: " + csBases[0]);
+                    }
+                    else
+                    {
+                        Log.Err("не указана база: --base <путь> или --connstr \"Srvr=...;Ref=...;\"");
+                        if (csBases.Count > 1)
+                        {
+                            Log.Err("обнаружено несколько клиент-серверных баз — укажите нужную явно:");
+                            for (int i = 0; i < csBases.Count; i++)
+                                Log.Info("--connstr \"Srvr='" + csHost + "';Ref='" + csBases[i] + "';\"");
+                        }
+                        return EXIT_ARGS;
+                    }
                 }
-                List<FoundBase> found = Steps.FindFileBases(@"C:\1c\bases");
-                if (found.Count == 0)
+                else
                 {
-                    Log.Err("файловые базы не найдены ни в реестре баз 1С (ibases.v8i), ни в C:\\1c\\bases");
-                    Log.Fix("укажите путь явно: --base \"C:\\путь\\к\\базе\" (каталог с файлом 1Cv8.1CD) или зарегистрируйте базу в списке 1cestart");
+                List<FoundBase> found = Steps.FindFileBases(@"C:\1c\bases");
+                int totalBases = found.Count + csBases.Count;
+                if (totalBases == 0)
+                {
+                    Log.Err("базы не найдены: ни файловые (ibases.v8i, C:\\1c\\bases), ни клиент-серверные (агент кластера)");
+                    Log.Fix("укажите явно: --base \"C:\\путь\\к\\базе\" (каталог с файлом 1Cv8.1CD) или --connstr \"Srvr='сервер';Ref='имя_базы';\"");
                     return EXIT_ARGS;
                 }
                 Log.Con("       Найденные базы (имена — как в стартовом окне 1С):");
@@ -245,23 +277,36 @@ namespace Oc1c
                     Log.Con("         " + (i + 1) + ") " + (string.IsNullOrEmpty(found[i].Name)
                         ? found[i].Dir + "   (в стартовом списке 1С её нет — найдена на диске)"
                         : found[i].Name + "   [" + found[i].Dir + "]"));
+                for (int i = 0; i < csBases.Count; i++)
+                    Log.Con("         " + (found.Count + i + 1) + ") клиент-серверная: " + csBases[i] +
+                            "   (Srvr='" + csHost + "';Ref='" + csBases[i] + "')");
                 int num = 0;
                 {
                     // Крутим вопрос, пока не выбрано верно или отмена: пользователь
                     // может ввести название, пустое, буквы (прогоны 07.08).
                     while (true)
                     {
-                        Console.Write("       Введите НОМЕР базы из списка (1-" + found.Count + ") и нажмите Enter (Q — отмена): ");
+                        Console.Write("       Введите НОМЕР базы из списка (1-" + totalBases + ") и нажмите Enter (Q — отмена): ");
                         string ans = (Console.ReadLine() ?? "").Trim();
                         if (string.Equals(ans, "q", StringComparison.OrdinalIgnoreCase))
                         { Log.Err("выбор базы отменён пользователем"); return EXIT_ARGS; }
-                        if (int.TryParse(ans, out num) && num >= 1 && num <= found.Count) break;
-                        Console.WriteLine("       Нужен номер цифрой от 1 до " + found.Count + " (не название). Вы ввели: «" + ans + "»");
+                        if (int.TryParse(ans, out num) && num >= 1 && num <= totalBases) break;
+                        Console.WriteLine("       Нужен номер цифрой от 1 до " + totalBases + " (не название). Вы ввели: «" + ans + "»");
                     }
                 }
-                o.BasePath = found[num - 1].Dir;
-                o.BaseName = found[num - 1].Name;
-                Log.File("выбрана база: " + o.BasePath + (string.IsNullOrEmpty(o.BaseName) ? "" : " (в списке 1С: " + o.BaseName + ")"));
+                if (num <= found.Count)
+                {
+                    o.BasePath = found[num - 1].Dir;
+                    o.BaseName = found[num - 1].Name;
+                    Log.File("выбрана база: " + o.BasePath + (string.IsNullOrEmpty(o.BaseName) ? "" : " (в списке 1С: " + o.BaseName + ")"));
+                }
+                else
+                {
+                    string csName = csBases[num - found.Count - 1];
+                    o.ConnStr = "Srvr='" + csHost + "';Ref='" + csName + "';";
+                    Log.File("выбрана клиент-серверная база: " + o.ConnStr);
+                }
+                }
             }
             BaseRef bref = Steps.ResolveBase(o.BasePath, o.ConnStr);
             if (bref == null)
@@ -449,6 +494,15 @@ namespace Oc1c
                 return EXIT_STEP;
             }
 
+            // Состав после исключений валидатора — счётчик для отчёта (шаг 13) и
+            // манифест сущностей для пробы данных, когда корень/$metadata -> 500.
+            int compCount = -1;
+            List<string> compEntities = null;
+            // Исключения валидатора (шаг 12) идут дальше в генератор манифеста;
+            // skipByCompat — состав платформой неуправляем, манифест не генерируем.
+            List<string> exclude = null;
+            bool skipByCompat = false;
+
             // ---------- 12. состав OData (через COM)
             Log.Step(12, TOTAL, "Состав интерфейса OData (какие объекты отдавать)");
             if (o.SkipScope)
@@ -469,13 +523,47 @@ namespace Oc1c
             }
             else
             {
+                // Валидатор состава ДО установки: режим совместимости, ссылки на внешние
+                // источники данных и дубли имён свойств ломают генератор OData платформы
+                // (HTTP 500 на корне и $metadata — первый прод-клиент, ERP 2.4, 6835 объектов).
+                Log.Info("проверяю состав на объекты, ломающие OData (на большой базе — несколько минут)...");
+                Steps.CompositionValidation val = Steps.ValidateOdataComposition(plat, bref, o.AdminUser, o.AdminPassword, scopeKeys);
+                if (val == null || !val.Ok)
+                    Log.Warn("проверка состава не выполнилась (" + (val == null ? "?" : val.Error) + ") — продолжаю без исключений");
+                else if (val.CompatBlocked)
+                {
+                    Log.Warn("режим совместимости " + val.CompatValue + ": состав OData платформой НЕУПРАВЛЯЕМ (нужен режим 8.3.5 или новее)");
+                    Log.Fix("поднимите режим совместимости в Конфигураторе (свойства корня конфигурации) до 8.3.5+ и перезапустите программу — сейчас шаги состава пропускаются");
+                    skipByCompat = true;
+                }
+                else
+                {
+                    if (val.VidCount > 0) Log.Info("внешних источников данных в конфигурации: " + val.VidCount);
+                    if (val.Excluded.Count == 0) Log.Ok("объектов, ломающих OData, в составе не найдено");
+                    else
+                    {
+                        // Молчаливая потеря данных — дефект: перечень исключённого — на экран и в файл.
+                        Log.Warn("найдены объекты, ломающие генератор OData (с ними корень и $metadata отвечали бы HTTP 500): " + val.Excluded.Count);
+                        Log.Con("       Исключено из состава: " + val.Excluded.Count + ":");
+                        foreach (KeyValuePair<string, string> kv in val.Excluded)
+                            Log.Con("         - " + kv.Key + "   [" + kv.Value + "]");
+                        exclude = new List<string>(val.Excluded.Keys);
+                        SaveExcludedList(val.Excluded);
+                    }
+                }
+                if (skipByCompat)
+                {
+                    Log.Skip("установка состава OData пропущена — режим совместимости не позволяет (см. ЧТО ДЕЛАТЬ выше)");
+                }
+                else
+                {
                 // Интерактив: неверный пароль админа 1С — не смерть, а повторный ввод
                 // (прогон владельца 07.08: «ввёл неверный пароль и программа закрылась»).
                 int attempts = 0;
                 while (true)
                 {
                     comOk = Steps.SetOdataComposition(plat, bref, o.AdminUser, o.AdminPassword, scopeKeys, true,
-                                                      o.ReaderUser, out cur, out added, out roles);
+                                                      o.ReaderUser, exclude, out cur, out added, out roles, out compEntities);
                     if (comOk) break;
                     attempts++;
                     if (o.Unattended || Console.IsInputRedirected || attempts >= 3) return EXIT_STEP;
@@ -491,6 +579,7 @@ namespace Oc1c
                 if (cur >= 0) Log.Info("состав до запуска: " + cur + " объектов");
                 if (added > 0) Log.Ok("состав OData задан: " + added + " объектов");
                 else if (!Ctx.DryRun) Log.Skip("состав не менялся");
+                compCount = added > 0 ? added : cur;
 
                 if (!string.IsNullOrEmpty(o.ReaderUser))
                 {
@@ -520,8 +609,82 @@ namespace Oc1c
                         }
                     }
                 }
+                }
             }
             }   // конец блока --skip-scope
+
+            // ---------- манифест метаданных для агента (синтетический $metadata)
+            // У части баз платформа отвечает HTTP 500 на корень и $metadata при живых
+            // запросах к сущностям (шаг 13). Генерируем $metadata сами — обходом
+            // метаданных через COM (manifest-gen.ps1, вшит ресурсом); агент тогда
+            // читает файл (metadata_file в agent.ini), а не HTTP GET $metadata.
+            // Стоит ПОСЛЕ шага 12 (состав установлен, исключения валидатора известны)
+            // и ДО блока агента (его smoke читает metadata_file — файл обязан быть).
+            // Мягкий шаг: неуспех НЕ валит установку — агент остаётся на прежнем
+            // HTTP-режиме.
+            string metadataFile = null;
+            if (!o.SkipScope && !skipByCompat && !string.IsNullOrEmpty(o.AdminUser) && bref != null)
+            {
+                if (Ctx.DryRun)
+                {
+                    Log.Sim("сгенерировал бы манифест метаданных (manifest-gen.ps1 через COM)");
+                }
+                else
+                {
+                    string tmpM = Steps.ExtractScriptResource("manifest-gen.ps1");
+                    if (tmpM == null)
+                        Log.Warn("в exe нет вшитого manifest-gen.ps1 (сборка без ресурса) — агент будет работать по HTTP $metadata");
+                    else
+                    {
+                        try
+                        {
+                            string mdir = string.IsNullOrEmpty(o.PacketDir) ? @"C:\1c\packet" : o.PacketDir;
+                            if (!Directory.Exists(mdir)) Directory.CreateDirectory(mdir);
+                            string mout = Path.Combine(mdir, "metadata.xml");
+                            // Параметры — только через окружение процесса (в командной строке секретов нет).
+                            Dictionary<string, string> menv = new Dictionary<string, string>();
+                            menv["OC1C_PROGID"] = plat.ProgId;
+                            menv["OC1C_CONNSTR"] = bref.ConnStrCom(o.AdminUser, o.AdminPassword);
+                            menv["OC1C_MANIFEST_OUT"] = mout;
+                            if (exclude != null && exclude.Count > 0) menv["OC1C_EXCLUDE"] = string.Join(";", exclude.ToArray());
+                            Log.Info("генерирую манифест метаданных (обход метаданных через COM — на большой базе несколько минут)...");
+                            // -File, а не -Command-обёртка: только так наружу выходит код
+                            // выхода скрипта (прогон 10.08 — то же в ai-ext).
+                            ExecResult mr = Proc.Run(Ps.Exe(plat.X86),
+                                "-NoProfile -NonInteractive -ExecutionPolicy Bypass -File \"" + tmpM + "\"",
+                                20 * 60 * 1000, Encoding.UTF8, null, menv);
+                            // Ключевые маркеры генератора — на консоль (полный вывод уже в логе — Proc.Run).
+                            string[] mmarks = { "ENTITY-COUNT", "SET-COUNT", "SKIP-COUNT", "ELAPSED", "RESULT=", "ERROR=" };
+                            string[] mlines = mr.All.Replace("\r\n", "\n").Split('\n');
+                            for (int i = 0; i < mlines.Length; i++)
+                            {
+                                string ln = mlines[i].Trim();
+                                if (ln.Length == 0) continue;
+                                for (int k = 0; k < mmarks.Length; k++)
+                                    if (ln.IndexOf(mmarks[k], StringComparison.Ordinal) >= 0) { Log.Info(ln); break; }
+                            }
+                            if (!mr.TimedOut && mr.ExitCode == 0 && mr.All.IndexOf("RESULT=OK") >= 0 && File.Exists(mout))
+                            {
+                                metadataFile = mout;
+                                Ctx.Changed = true;
+                                Log.Ok("манифест метаданных сгенерирован: " + mout);
+                            }
+                            else
+                                Log.Warn("манифест метаданных не сгенерирован (" +
+                                         (mr.TimedOut ? "таймаут 20 минут" : "код выхода " + mr.ExitCode) +
+                                         ") — агент будет работать по HTTP $metadata (прежний режим)");
+                        }
+                        catch (Exception e)
+                        {
+                            Log.Warn("генерация манифеста не удалась: " + e.Message + " — агент будет работать по HTTP $metadata");
+                        }
+                        finally
+                        {
+                            try { File.Delete(tmpM); } catch { }
+                        }
+                    }
+                }
+            }
 
             // ---------- 13. проверка
             Log.Step(13, TOTAL, "Проверка: отвечает ли OData");
@@ -561,16 +724,30 @@ namespace Oc1c
                 if (!string.IsNullOrEmpty(vu))
                 {
                     Steps.HttpProbe auth = Steps.Probe(url, vu, vp, 180000);
+                    // Отдельная проба $metadata: при большом составе платформа отвечает
+                    // 500 на корень и/или $metadata, хотя сами сущности читаются
+                    // (первый прод-клиент, ERP 2.4, 6835 объектов).
+                    Steps.HttpProbe meta = Steps.Probe(url.TrimEnd('/') + "/$metadata", vu, vp, 180000);
                     if (auth.Ok)
                     {
                         if (auth.Collections > 0)
                         {
-                            Log.Ok("под «" + vu + "» -> 200, сущностей в OData: " + auth.Collections);
+                            // Счётчик — из состава после исключений (шаг 12); корневой
+                            // документ при большом составе может не открываться вовсе.
+                            Log.Ok("под «" + vu + "» -> 200, сущностей в OData: " + (compCount > 0 ? compCount : auth.Collections));
                             // Живая проба ДАННЫХ: 200 на корне бывает и при пустом
                             // составе/битой публикации (прогон 07.08 — smoke был
                             // «зелёным» при всех 404). Читаем первую сущность.
                             string probeDetail;
-                            if (Steps.ProbeDataRead(url, vu, vp, out probeDetail)) Log.Ok(probeDetail);
+                            if (Steps.ProbeDataRead(url, vu, vp, compEntities, out probeDetail))
+                            {
+                                Log.Ok(probeDetail);
+                                if (!meta.Ok)
+                                {
+                                    Log.Warn("$metadata отвечает HTTP " + meta.Status + " (известная болезнь платформы при большом составе) — данные читаются, агент работает по сгенерированному манифесту");
+                                    Log.Fix("ничего — работе это не мешает; если нужен целый $metadata — пришлите нам файл C:\\1c\\logs\\odata-excluded-*.txt");
+                                }
+                            }
                             else
                             {
                                 Log.Err(probeDetail);
@@ -585,13 +762,37 @@ namespace Oc1c
                             verifyExit = EXIT_VERIFY;
                         }
                     }
+                    else if (auth.Status == 500 || meta.Status == 500)
+                    {
+                        // Корень и/или $metadata -> 500 — известная болезнь платформы при
+                        // большом составе. Решает проба ДАННЫХ (по манифесту состава из
+                        // шага 12): сущности читаются — установка годится, это НЕ провал.
+                        string probeDetail;
+                        if (Steps.ProbeDataRead(url, vu, vp, compEntities, out probeDetail))
+                        {
+                            Log.Ok(probeDetail);
+                            Log.Warn("корень/$metadata недоступны (HTTP 500 — известная болезнь платформы при большом составе) — данные читаются, агент работает по сгенерированному манифесту");
+                            Log.Fix("ничего — работе это не мешает; если нужен целый корень/$metadata — пришлите нам файл C:\\1c\\logs\\odata-excluded-*.txt");
+                        }
+                        else
+                        {
+                            // Сущности не читаются — прежний FAIL.
+                            Log.Err("под «" + vu + "» -> HTTP " + auth.Status + " " + (auth.Error == null ? "" : auth.Error));
+                            if (probeDetail.Length > 0) Log.Err(probeDetail);
+                            if (auth.Status == 500) Log.Fix("ошибка 1С/IIS. По коду из строки выше: 0x800700c1 — разрядность пула/dll; 0x8007007e — wsisapi.dll битая или нет её зависимостей; 0x80070005 — права на каталог базы/bin платформы; прочее — лицензия. Полное тело ответа — в логе");
+                            else if (auth.Status == 401) Log.Fix("неверный пароль этого пользователя 1С");
+                            else if (auth.Status == 404) Log.Fix("проверьте адрес публикации (--alias) и что база опубликована");
+                            else if (auth.Status == 503) Log.Fix("пул приложений остановлен: appcmd start apppool \"" + pool + "\"");
+                            else Log.Fix("сущности OData не читаются — полный протокол пробы в логе: " + Log.Path);
+                            verifyExit = EXIT_VERIFY;
+                        }
+                    }
                     else
                     {
                         Log.Err("под «" + vu + "» -> HTTP " + auth.Status + " " + (auth.Error == null ? "" : auth.Error));
                         if (auth.Status == 401) Log.Fix("неверный пароль этого пользователя 1С");
                         else if (auth.Status == 404) Log.Fix("проверьте адрес публикации (--alias) и что база опубликована");
                         else if (auth.Status == 503) Log.Fix("пул приложений остановлен: appcmd start apppool \"" + pool + "\"");
-                        else if (auth.Status == 500) Log.Fix("ошибка 1С/IIS. По коду из строки выше: 0x800700c1 — разрядность пула/dll; 0x8007007e — wsisapi.dll битая или нет её зависимостей; 0x80070005 — права на каталог базы/bin платформы; прочее — лицензия. Полное тело ответа — в логе");
                         verifyExit = EXIT_VERIFY;
                     }
                 }
@@ -629,7 +830,8 @@ namespace Oc1c
             }
 
             // ---------- блок 2: агент пакетного транспорта (только при наличии комплекта)
-            int packetExit = PacketSteps.Run(o, bref, url, plat);
+            // metadataFile — сгенерированный манифест (null — агент работает по HTTP).
+            int packetExit = PacketSteps.Run(o, bref, url, plat, metadataFile);
 
             // ---------- 14. расширение чтения (роль AIReadAll)
             // Стоит ПОСЛЕ блока агента: пользователь-читатель создаётся в PacketSteps,
@@ -727,7 +929,38 @@ namespace Oc1c
             catch (Exception e) { Log.File("не сохранил " + fileName + ": " + e.Message); }
         }
 
+        // Список исключённых валидатором объектов — в C:\1c\logs\odata-excluded-<дата>.txt:
+        // это и честный след сокращения состава (молчаливая потеря данных — дефект),
+        // и материал для нас, если клиент захочет целый корень/$metadata (шаг 13
+        // предлагает прислать именно этот файл).
+        static void SaveExcludedList(Dictionary<string, string> excluded)
+        {
+            string f = Path.Combine(@"C:\1c\logs", "odata-excluded-" + DateTime.Now.ToString("yyyyMMdd") + ".txt");
+            if (Ctx.DryRun) { Log.Sim("сохранил бы список исключений в " + f); return; }
+            try
+            {
+                string dir = Path.GetDirectoryName(f);
+                if (!Directory.Exists(dir)) Directory.CreateDirectory(dir);
+                StringBuilder sb = new StringBuilder();
+                sb.AppendLine("# Исключено из состава OData установщиком setup-1c-odata " + Ctx.ToolVersion +
+                              " " + DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
+                sb.AppendLine("# Причины: ссылки на внешние источники данных и дубли имён свойств ломают");
+                sb.AppendLine("# генератор OData платформы (HTTP 500 на корне и $metadata).");
+                sb.AppendLine("# Формат строки: <ПолноеИмя>|<причина>");
+                foreach (KeyValuePair<string, string> kv in excluded)
+                    sb.AppendLine(kv.Key + "|" + kv.Value);
+                File.WriteAllText(f, sb.ToString(), new UTF8Encoding(true));
+                ExcludedListPath = f;
+                Log.Con("       Список исключений сохранён: " + f);
+            }
+            catch (Exception e) { Log.File("не сохранил список исключений: " + e.Message); }
+        }
+
         // ================================================================= итоговый отчёт
+        // Путь к файлу исключений валидатора ЭТОГО прогона (SaveExcludedList) —
+        // уходит на сервер вместе с логом (SendLogs).
+        static string ExcludedListPath;
+
         static void Report(Opts o, BaseRef b, Platform p, string pool, string url, List<string> scopeKeys)
         {
             Log.Head("ИТОГ");
@@ -736,6 +969,7 @@ namespace Oc1c
             if (PacketSteps.Installed && !Ctx.DryRun)
             {
                 Log.Con("Готово.");
+                SendLogs(o);
                 Log.Con("Полный лог: " + Log.Path);
                 return;
             }
@@ -849,6 +1083,54 @@ namespace Oc1c
             }
 
             Log.Con("Полный лог: " + Log.Path);
+        }
+
+        // ================================================================= автоотправка логов пакетным каналом
+        // Канал поднят (smoke подтверждён) — сервер получает лог установки сам,
+        // чанком log (CLI агента --send-log; код 0 только при verified). Демон на
+        // время отправки останавливается (single-instance mutex агента, кейс K5);
+        // любой отказ сети — Warn, отчёт НЕ валим: файл остаётся на месте.
+        static void SendLogs(Opts o)
+        {
+            string pdir = string.IsNullOrEmpty(o.PacketDir) ? @"C:\1c\packet" : o.PacketDir;
+            string agent = Path.Combine(pdir, "packet-agent.exe");
+            if (!File.Exists(agent)) { Log.File("send-log: нет " + agent + " — лог не отправлен"); return; }
+            // Кейс K5 (11.08): при живом демоне --send-log всегда отказывал
+            // (single-instance mutex) — лог никогда не уходил. Гасим демон на
+            // время отправки и запускаем обратно.
+            PacketSteps.StopAgent();
+            try
+            {
+                SendOneLog(agent, Log.Path, "лог установки");
+                // Список исключений валидатора этого прогона — вторым вызовом, тоже
+                // терпимо к отказу (он нужен нам, если клиент захочет целый $metadata).
+                if (!string.IsNullOrEmpty(ExcludedListPath) && File.Exists(ExcludedListPath))
+                    SendOneLog(agent, ExcludedListPath, "список исключений состава");
+            }
+            finally { PacketSteps.StartAgent(); }
+        }
+
+        static void SendOneLog(string agent, string path, string what)
+        {
+            if (string.IsNullOrEmpty(path) || !File.Exists(path)) return;
+            // Лог ещё открыт нашим писателем, но с FileShare.Read (Sys.cs, Log.Init) —
+            // агент может читать файл напрямую, копия не нужна.
+            Log.File("send-log: отправляю " + what + ": " + path);
+            ExecResult r = Proc.Run(agent, "--send-log \"" + path + "\"", 120000, Proc.Oem,
+                                    Path.GetDirectoryName(agent), null);
+            // «работает другой экземпляр» — гонка остановки демона (K5): один повтор
+            // после паузы, mutex к этому моменту освобождён.
+            if (!r.TimedOut && r.ExitCode != 0 && r.All.IndexOf("другой экземпляр") >= 0)
+            {
+                System.Threading.Thread.Sleep(4000);
+                r = Proc.Run(agent, "--send-log \"" + path + "\"", 120000, Proc.Oem,
+                             Path.GetDirectoryName(agent), null);
+            }
+            if (!r.TimedOut && r.ExitCode == 0)
+                Log.Ok(what + " отправлен на сервер (" + Path.GetFileName(path) + ")");
+            else
+                Log.Warn(what + " не ушёл на сервер, код " + (r.TimedOut ? "таймаут 120 с" : r.ExitCode.ToString()) +
+                         " — файл остался на месте: " + path);
         }
 
         // ================================================================= возобновление после перезагрузки

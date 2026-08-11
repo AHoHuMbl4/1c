@@ -1410,17 +1410,30 @@ namespace Oc1c
                 s.AppendLine("$arr = $null");
                 s.AppendLine("try { $arr = $ib.NewObject('Array') } catch { $arr = $ib.NewObject('Массив') }");
                 s.AppendLine("$added = 0; $skipped = @(); $addRu = $null");
+                // Исключения валидатора состава (OC1C_EXCLUDE): ссылки на внешние источники
+                // данных и дубли имён свойств ломают генератор OData платформы — с ними
+                // корень и $metadata отвечают HTTP 500 (ERP 2.4, 6835 объектов).
+                s.AppendLine("$exclSet = @{}");
+                s.AppendLine("if($env:OC1C_EXCLUDE){ foreach($e in ($env:OC1C_EXCLUDE -split ';')){ if($e){ $exclSet[$e.ToLower()] = $true } } }");
+                s.AppendLine("$excludedN = 0");
                 s.AppendLine("foreach($grp in ($env:OC1C_COLLECTIONS -split ';')){");
                 s.AppendLine("  if(-not $grp){ continue }");
                 s.AppendLine("  $coll = $null");
                 s.AppendLine("  foreach($n in ($grp -split ',')){ try { $coll = P $md $n; break } catch {} }");
                 s.AppendLine("  if($coll -eq $null){ $skipped += $grp; continue }");
                 s.AppendLine("  foreach($o in $coll){");
+                // ПолноеИмя у каждого объекта: и для проверки по списку исключений,
+                // и для маркера ENTITY= (манифест сущностей для пробы данных при 500 на корне).
+                s.AppendLine("    $ofn = ''");
+                s.AppendLine("    try { $ofn = [string]$o.ПолноеИмя() } catch { try { $ofn = [string]$o.FullName() } catch { $ofn = '' } }");
+                s.AppendLine("    if($ofn -ne '' -and $exclSet.ContainsKey($ofn.ToLower())){ $excludedN++; continue }");
+                s.AppendLine("    if($ofn -ne ''){ 'ENTITY=' + $ofn }");
                 s.AppendLine("    if($addRu -eq $null){ try { $arr.Добавить($o); $addRu = $true } catch { $arr.Add($o); $addRu = $false } }");
                 s.AppendLine("    elseif($addRu){ $arr.Добавить($o) } else { $arr.Add($o) }");
                 s.AppendLine("    $added++ }");
                 s.AppendLine("}");
                 s.AppendLine("if($skipped.Count -gt 0){ 'SKIPPED=' + ($skipped -join ' ') }");
+                s.AppendLine("if($excludedN -gt 0){ 'EXCLUDED-SKIPPED=' + $excludedN }");
                 s.AppendLine("if($added -eq 0){ throw 'в конфигурации не найдено ни одного объекта для публикации в OData' }");
                 s.AppendLine("try { $ib.УстановитьСоставСтандартногоИнтерфейсаOData($arr) } catch { $ib.SetStandardODataInterfaceContent($arr) }");
                 s.AppendLine("'ADDED=' + $added");
@@ -1876,7 +1889,19 @@ namespace Oc1c
         public static bool SetOdataComposition(Platform p, BaseRef b, string user, string pwd, List<string> scopeKeys,
                                                bool writeMode, string readerUser, out int current, out int added, out string roles)
         {
-            current = -1; added = 0; roles = null;
+            List<string> entities;
+            return SetOdataComposition(p, b, user, pwd, scopeKeys, writeMode, readerUser, null,
+                                       out current, out added, out roles, out entities);
+        }
+
+        // exclude — ПолныеИмена объектов, которые нельзя публиковать (валидатор состава);
+        // entities — OData-имена опубликованных сущностей (манифест для пробы данных
+        // на шаге 13, когда корень/$metadata отвечают 500 — известная болезнь платформы).
+        public static bool SetOdataComposition(Platform p, BaseRef b, string user, string pwd, List<string> scopeKeys,
+                                               bool writeMode, string readerUser, List<string> exclude,
+                                               out int current, out int added, out string roles, out List<string> entities)
+        {
+            current = -1; added = 0; roles = null; entities = new List<string>();
             if (!p.HasCom)
             {
                 Log.Err("не найден comcntr.dll в " + p.Bin + " — COM-коннектор недоступен");
@@ -1891,6 +1916,7 @@ namespace Oc1c
             env["OC1C_PROGID"] = p.ProgId;
             env["OC1C_CONNSTR"] = b.ConnStrCom(user, pwd);
             env["OC1C_COLLECTIONS"] = string.Join(";", colls.ToArray());
+            if (exclude != null && exclude.Count > 0) env["OC1C_EXCLUDE"] = string.Join(";", exclude.ToArray());
             if (!string.IsNullOrEmpty(readerUser)) env["OC1C_READER"] = readerUser;
 
             if (writeMode && Ctx.DryRun)
@@ -1964,12 +1990,283 @@ namespace Oc1c
             }
             Match ma = Regex.Match(r.StdOut, @"ADDED=(\d+)");
             if (ma.Success) { added = int.Parse(ma.Groups[1].Value); Ctx.Changed = true; }
-            Match ms = Regex.Match(r.StdOut, @"SKIPPED=(.+)");
+            // Якорь ^: «EXCLUDED-SKIPPED=…» не должен попадать в SKIPPED=.
+            Match ms = Regex.Match(r.StdOut, @"(?m)^SKIPPED=(.+)");
             if (ms.Success) Log.File("разделы, отсутствующие в конфигурации: " + ms.Groups[1].Value);
+            Match mx = Regex.Match(r.StdOut, @"EXCLUDED-SKIPPED=(\d+)");
+            if (mx.Success && mx.Groups[1].Value != "0")
+                Log.Info("пропущено по списку исключений валидатора: " + mx.Groups[1].Value + " объектов");
+            // Манифест опубликованных сущностей (маркеры ENTITY= из ComScript): проба
+            // данных на шаге 13 по нему, если корень/$metadata отвечают 500.
+            HashSet<string> seenEnt = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            foreach (Match me in Regex.Matches(r.StdOut, @"ENTITY=([^\r\n]+)"))
+            {
+                string en = ODataEntityName(me.Groups[1].Value.Trim());
+                if (en != null && seenEnt.Add(en)) entities.Add(en);
+            }
             Match mr = Regex.Match(r.StdOut, @"ROLES=(.*)");
             if (mr.Success) roles = mr.Groups[1].Value.Trim();
             if (r.StdOut.IndexOf("READER=NOTFOUND") >= 0) roles = "__NOTFOUND__";
             return true;
+        }
+
+        // Штатное именование сущностей OData платформой: «Справочник.Номенклатура» ->
+        // «Catalog_Номенклатура». Нужно для манифеста сущностей (проба данных, когда
+        // корень и $metadata отвечают 500). Это соглашение платформы, не привязка к базе.
+        static readonly Dictionary<string, string> ODataKindMap = BuildODataKindMap();
+        static Dictionary<string, string> BuildODataKindMap()
+        {
+            Dictionary<string, string> m = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            m["Справочник"] = "Catalog"; m["Catalog"] = "Catalog";
+            m["Документ"] = "Document"; m["Document"] = "Document";
+            m["РегистрНакопления"] = "AccumulationRegister"; m["AccumulationRegister"] = "AccumulationRegister";
+            m["РегистрСведений"] = "InformationRegister"; m["InformationRegister"] = "InformationRegister";
+            m["РегистрБухгалтерии"] = "AccountingRegister"; m["AccountingRegister"] = "AccountingRegister";
+            m["РегистрРасчета"] = "CalculationRegister"; m["CalculationRegister"] = "CalculationRegister";
+            m["ПланСчетов"] = "ChartOfAccounts"; m["ChartOfAccounts"] = "ChartOfAccounts";
+            m["ПланВидовХарактеристик"] = "ChartOfCharacteristicTypes"; m["ChartOfCharacteristicTypes"] = "ChartOfCharacteristicTypes";
+            m["ПланВидовРасчета"] = "ChartOfCalculationTypes"; m["ChartOfCalculationTypes"] = "ChartOfCalculationTypes";
+            m["Перечисление"] = "Enum"; m["Enum"] = "Enum";
+            m["Константа"] = "Constant"; m["Constant"] = "Constant";
+            m["ПланОбмена"] = "ExchangePlan"; m["ExchangePlan"] = "ExchangePlan";
+            m["БизнесПроцесс"] = "BusinessProcess"; m["BusinessProcess"] = "BusinessProcess";
+            m["Задача"] = "Task"; m["Task"] = "Task";
+            m["ЖурналДокументов"] = "DocumentJournal"; m["DocumentJournal"] = "DocumentJournal";
+            return m;
+        }
+        static string ODataEntityName(string fullName)
+        {
+            int dot = fullName.IndexOf('.');
+            if (dot <= 0 || dot >= fullName.Length - 1) return null;
+            string prefix;
+            if (!ODataKindMap.TryGetValue(fullName.Substring(0, dot), out prefix)) return null;
+            return prefix + "_" + fullName.Substring(dot + 1);
+        }
+
+        // Результат валидатора состава (read-only COM-прогон перед установкой состава).
+        public class CompositionValidation
+        {
+            public bool Ok;                     // скрипт отработал (RESULT=OK)
+            public string Error;                // почему нет, если не отработал
+            public bool CompatBlocked;          // режим совместимости ≤ 8.3.4 — состав платформой неуправляем
+            public string CompatValue = "";
+            public int VidCount = -1;           // внешних источников данных в конфигурации (-1 — не удалось считать)
+            // ПолноеИмя -> причина («ВИД-ссылка в …» / «дубль имени …» / «ВИД-ссылка в общем реквизите»).
+            public readonly Dictionary<string, string> Excluded = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        }
+
+        // Валидатор состава ДО установки: находит объекты, ломающие генератор OData
+        // платформы (HTTP 500 на корне и $metadata при живых запросах к сущностям —
+        // ERP 2.4, 6835 объектов). Ничего в базе не меняет — безопасен и в --check.
+        public static CompositionValidation ValidateOdataComposition(Platform p, BaseRef b, string user, string pwd, List<string> scopeKeys)
+        {
+            CompositionValidation v = new CompositionValidation();
+            if (p == null || !p.HasCom) { v.Error = "нет COM-коннектора 1С"; return v; }
+            if (string.IsNullOrEmpty(user)) { v.Error = "нет учётных данных администратора 1С"; return v; }
+
+            List<string> colls = new List<string>();
+            for (int i = 0; i < scopeKeys.Count; i++) colls.Add(ScopeMap[scopeKeys[i]]);
+            Dictionary<string, string> env = new Dictionary<string, string>();
+            env["OC1C_PROGID"] = p.ProgId;
+            env["OC1C_CONNSTR"] = b.ConnStrCom(user, pwd);
+            env["OC1C_COLLECTIONS"] = string.Join(";", colls.ToArray());
+
+            ExecResult r = Ps.Run(ValidateScript(), p.X86, 1800000, env);
+            if (r.TimedOut) { v.Error = "таймаут 30 минут (очень большая конфигурация)"; return v; }
+            if (r.All.IndexOf("RESULT=OK") < 0) { v.Error = ComErrorLine(r); return v; }
+            v.Ok = true;
+            Match mc = Regex.Match(r.StdOut, @"COMPAT=(BLOCKED|OK):(.*)");
+            if (mc.Success) { v.CompatBlocked = mc.Groups[1].Value == "BLOCKED"; v.CompatValue = mc.Groups[2].Value.Trim(); }
+            Match mv = Regex.Match(r.StdOut, @"VID-COUNT=(-?\d+)");
+            if (mv.Success) v.VidCount = int.Parse(mv.Groups[1].Value);
+            foreach (Match m in Regex.Matches(r.StdOut, @"EXCLUDED=([^\r\n|]+)\|([^\r\n]+)"))
+                v.Excluded[m.Groups[1].Value.Trim()] = m.Groups[2].Value.Trim();
+            return v;
+        }
+
+        // Скрипт валидатора (только чтение). Маркеры stdout:
+        //   COMPAT=OK:<значение> | COMPAT=BLOCKED:<значение>   (≤ 8.3.4 — состав неуправляем)
+        //   VID-COUNT=n                                        (внешних источников данных)
+        //   EXCLUDED=<ПолноеИмя>|<причина>
+        //   PROGRESS=n / EXCLUDED-COUNT=n / RESULT=OK
+        // Квирки COM 1С — как в ComScript: методы зовём прямо, свойства — через
+        // InvokeMember(GetProperty) с перебором рус/англ имён; каждый блок в try/catch.
+        static string ValidateScript()
+        {
+            StringBuilder s = new StringBuilder();
+            s.AppendLine("$GP=[Reflection.BindingFlags]::GetProperty");
+            s.AppendLine("function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,@()) }");
+            s.AppendLine("function PAny($o,$names){ $last=''; foreach($n in $names){ try { return (P $o $n) } catch { $last=$_.Exception.Message } } throw ('нет свойства ' + ($names -join '/') + ': ' + $last) }");
+            s.AppendLine("function FullName($o){ try { return [string]$o.ПолноеИмя() } catch { return [string]$o.FullName() } }");
+            s.AppendLine("function Cnt($c){ try { return [int]$c.Количество() } catch { return [int]$c.Count() } }");
+            // Имена стандартных реквизитов глазами OData-генератора (маппинг платформы).
+            s.AppendLine("$stdMap = @{ 'ссылка'='Ref_Key'; 'код'='Code'; 'наименование'='Description'; 'номер'='Number'; 'дата'='Date'; 'проведен'='Posted'; 'пометкаудаления'='DeletionMark'; 'родитель'='Parent_Key'; 'владелец'='Owner_Key'; 'этогруппа'='IsFolder'; 'предопределенное'='Predefined'; 'имяпредопределенныхданных'='PredefinedDataName'; 'регистратор'='Recorder_Key'; 'номерстроки'='LineNumber'; 'период'='Period'; 'активность'='Active'; 'виддвижения'='RecordType'; 'счет'='Account_Key' }");
+            s.AppendLine("$md = $null");
+            s.AppendLine("$vidCount = 0");
+            s.AppendLine("$excl = @{}");   // ключ — ПолноеИмя в НРег, значение — '<ПолноеИмя>|<причина>'
+            // Есть ли у атрибута тип-ссылка на внешний источник данных; возвращает имя реквизита или $null.
+            s.AppendLine("function TestVidAttr($a){");
+            s.AppendLine("  try {");
+            s.AppendLine("    $an = [string](PAny $a @('Имя','Name'))");
+            s.AppendLine("    $t = PAny $a @('Тип','Type')");
+            s.AppendLine("    $types = $null");
+            s.AppendLine("    try { $types = $t.Типы() } catch { try { $types = $t.Types() } catch { $types = $null } }");
+            s.AppendLine("    if($types -eq $null){ return $null }");
+            s.AppendLine("    foreach($tt in $types){");
+            s.AppendLine("      $mo = $null");
+            s.AppendLine("      try { $mo = $md.НайтиПоТипу($tt) } catch { try { $mo = $md.FindByType($tt) } catch { $mo = $null } }");
+            s.AppendLine("      if($mo -ne $null){");
+            s.AppendLine("        $mfn = ''");
+            s.AppendLine("        try { $mfn = FullName $mo } catch { $mfn = '' }");
+            s.AppendLine("        if($mfn.StartsWith('ВнешнийИсточникДанных') -or $mfn.StartsWith('ExternalDataSource')){ return $an }");
+            s.AppendLine("      }");
+            s.AppendLine("    }");
+            s.AppendLine("  } catch {}");
+            s.AppendLine("  return $null");
+            s.AppendLine("}");
+            // Проверка одного объекта метаданных: дубли имён свойств (всегда),
+            // ВИД-ссылки в типах реквизитов (когда ВИД в конфигурации есть).
+            s.AppendLine("function CheckObject($o){");
+            s.AppendLine("  $fn = ''");
+            s.AppendLine("  try { $fn = FullName $o } catch { return }");
+            s.AppendLine("  if($fn -eq ''){ return }");
+            s.AppendLine("  $fkey = $fn.ToLower()");
+            s.AppendLine("  if($excl.ContainsKey($fkey)){ return }");
+            s.AppendLine("  $dup = $null");
+            s.AppendLine("  try {");
+            s.AppendLine("    $names = @{}");
+            s.AppendLine("    $names['dataversion'] = $true");   // системное свойство, есть у каждой сущности
+            s.AppendLine("    foreach($cn in @(@('СтандартныеРеквизиты','StandardAttributes'),@('Реквизиты','Attributes'),@('Измерения','Dimensions'),@('Ресурсы','Resources'))){");
+            s.AppendLine("      $coll = $null");
+            s.AppendLine("      foreach($n in $cn){ try { $coll = P $o $n; break } catch {} }");
+            s.AppendLine("      if($coll -eq $null){ continue }");
+            s.AppendLine("      $isStd = ($cn[0] -eq 'СтандартныеРеквизиты')");
+            s.AppendLine("      foreach($a in $coll){");
+            s.AppendLine("        $an = $null");
+            s.AppendLine("        try { $an = [string](PAny $a @('Имя','Name')) } catch { continue }");
+            s.AppendLine("        if($isStd){ $lk = $an.ToLower(); if($stdMap.ContainsKey($lk)){ $an = $stdMap[$lk] } }");
+            s.AppendLine("        $al = $an.ToLower()");
+            s.AppendLine("        if($names.ContainsKey($al)){ $dup = $an; break }");
+            s.AppendLine("        $names[$al] = $true");
+            s.AppendLine("      }");
+            s.AppendLine("      if($dup -ne $null){ break }");
+            s.AppendLine("    }");
+            s.AppendLine("    if($dup -eq $null){");   // табличные части — навигационные свойства сущности
+            s.AppendLine("      $ts = $null");
+            s.AppendLine("      foreach($n in @('ТабличныеЧасти','TabularSections')){ try { $ts = P $o $n; break } catch {} }");
+            s.AppendLine("      if($ts -ne $null){ foreach($t in $ts){ try { $an = [string](PAny $t @('Имя','Name')); $al = $an.ToLower(); if($names.ContainsKey($al)){ $dup = $an; break }; $names[$al] = $true } catch {} } }");
+            s.AppendLine("    }");
+            s.AppendLine("  } catch {}");
+            s.AppendLine("  if($dup -ne $null){ $excl[$fkey] = $fn + '|дубль имени ' + $dup; return }");
+            s.AppendLine("  if($vidCount -gt 0){");
+            s.AppendLine("    $vidAttr = $null");
+            s.AppendLine("    try {");
+            s.AppendLine("      foreach($cn in @(@('Реквизиты','Attributes'),@('СтандартныеРеквизиты','StandardAttributes'),@('Измерения','Dimensions'),@('Ресурсы','Resources'))){");
+            s.AppendLine("        $coll = $null");
+            s.AppendLine("        foreach($n in $cn){ try { $coll = P $o $n; break } catch {} }");
+            s.AppendLine("        if($coll -eq $null){ continue }");
+            s.AppendLine("        foreach($a in $coll){ $hit = TestVidAttr $a; if($hit -ne $null){ $vidAttr = $hit; break } }");
+            s.AppendLine("        if($vidAttr -ne $null){ break }");
+            s.AppendLine("      }");
+            s.AppendLine("      if($vidAttr -eq $null){");   // реквизиты табличных частей
+            s.AppendLine("        $ts = $null");
+            s.AppendLine("        foreach($n in @('ТабличныеЧасти','TabularSections')){ try { $ts = P $o $n; break } catch {} }");
+            s.AppendLine("        if($ts -ne $null){ foreach($t in $ts){ if($vidAttr -ne $null){ break }; try { $rc = PAny $t @('Реквизиты','Attributes'); foreach($a in $rc){ $hit = TestVidAttr $a; if($hit -ne $null){ $vidAttr = [string](PAny $t @('Имя','Name')) + '.' + $hit; break } } } catch {} } }");
+            s.AppendLine("      }");
+            s.AppendLine("    } catch {}");
+            s.AppendLine("    if($vidAttr -ne $null){ $excl[$fkey] = $fn + '|ВИД-ссылка в ' + $vidAttr; return }");
+            s.AppendLine("  }");
+            s.AppendLine("}");
+            s.AppendLine("try {");
+            s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
+            s.AppendLine("$ib = $connector.Connect($env:OC1C_CONNSTR)");
+            s.AppendLine("$md = PAny $ib @('Metadata','Метаданные')");
+            // Режим совместимости: ≤ 8.3.4 — состав OData платформой неуправляем.
+            s.AppendLine("$cmv = ''");
+            s.AppendLine("try { $cmv = [string](PAny $md @('РежимСовместимости','CompatibilityMode')) } catch { $cmv = '?' }");
+            s.AppendLine("$mb = [regex]::Match($cmv, '(\\d+)_(\\d+)(_(\\d+))?')");
+            s.AppendLine("$blocked = $false");
+            s.AppendLine("if($mb.Success){ $maj = [int]$mb.Groups[1].Value; $min = [int]$mb.Groups[2].Value; $pat = 0; if($mb.Groups[4].Success){ $pat = [int]$mb.Groups[4].Value }; if($maj -lt 8 -or ($maj -eq 8 -and $min -lt 3) -or ($maj -eq 8 -and $min -eq 3 -and $pat -le 4)){ $blocked = $true } }");
+            s.AppendLine("if($blocked){ 'COMPAT=BLOCKED:' + $cmv } else { 'COMPAT=OK:' + $cmv }");
+            // Счётчик внешних источников данных.
+            s.AppendLine("try { $vid = PAny $md @('ВнешниеИсточникиДанных','ExternalDataSources'); if($vid -ne $null){ $vidCount = Cnt $vid } } catch { $vidCount = -1 }");
+            s.AppendLine("'VID-COUNT=' + $vidCount");
+            // Обход объектов публикуемых разделов.
+            s.AppendLine("$done = 0");
+            s.AppendLine("foreach($grp in ($env:OC1C_COLLECTIONS -split ';')){");
+            s.AppendLine("  if(-not $grp){ continue }");
+            s.AppendLine("  $coll = $null");
+            s.AppendLine("  foreach($n in ($grp -split ',')){ try { $coll = P $md $n; break } catch {} }");
+            s.AppendLine("  if($coll -eq $null){ continue }");
+            s.AppendLine("  foreach($o in $coll){");
+            s.AppendLine("    try { CheckObject $o } catch {}");
+            s.AppendLine("    $done++");
+            s.AppendLine("    if(($done % 500) -eq 0){ 'PROGRESS=' + $done }");
+            s.AppendLine("  }");
+            s.AppendLine("}");
+            // Общие реквизиты: одна ВИД-ссылка в общем реквизите тянет за собой десятки объектов.
+            s.AppendLine("if($vidCount -gt 0){");
+            s.AppendLine("  try {");
+            s.AppendLine("    $ca = PAny $md @('ОбщиеРеквизиты','CommonAttributes')");
+            s.AppendLine("    foreach($a in $ca){");
+            s.AppendLine("      try { $hit = TestVidAttr $a; if($hit -ne $null){ $cfn = FullName $a; if($cfn -ne '' -and -not $excl.ContainsKey($cfn.ToLower())){ $excl[$cfn.ToLower()] = $cfn + '|ВИД-ссылка в общем реквизите' } } } catch {}");
+            s.AppendLine("    }");
+            s.AppendLine("  } catch {}");
+            s.AppendLine("}");
+            s.AppendLine("foreach($k in $excl.Keys){ 'EXCLUDED=' + $excl[$k] }");
+            s.AppendLine("'EXCLUDED-COUNT=' + $excl.Count");
+            s.AppendLine("'RESULT=OK'");
+            s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
+            return s.ToString();
+        }
+
+        // Автообнаружение клиент-серверных баз через агент кластера (документированная
+        // цепочка COM): V83.COMConnector -> ConnectAgent('TCP://localhost:1540') ->
+        // GetClusters() -> GetInfoBases(кластер). Перебор администраторов кластера НЕ
+        // делаем: пустой список админов (дефолт) пускает с пустыми кредами; если кластер
+        // требует — фиксируем clusterAuth='REQUIRED'. Любая ошибка discovery (нет COM,
+        // служба агента не поднята) — тихий фолбэк: пустой список, причина только в лог.
+        public static List<string> DiscoverCsBases(Platform p, out string clusterAuth)
+        {
+            List<string> res = new List<string>();
+            clusterAuth = null;
+            if (p == null || !p.HasCom) return res;
+            if (Ctx.DryRun) { Log.Sim("искал бы клиент-серверные базы через агент кластера (TCP://localhost:1540)"); return res; }
+
+            StringBuilder s = new StringBuilder();
+            s.AppendLine("$GP=[Reflection.BindingFlags]::GetProperty");
+            s.AppendLine("function P($o,$n){ [__ComObject].InvokeMember($n,$GP,$null,$o,@()) }");
+            s.AppendLine("try {");
+            s.AppendLine("$connector = New-Object -ComObject $env:OC1C_PROGID");
+            s.AppendLine("$agent = $connector.ConnectAgent('TCP://localhost:1540')");
+            s.AppendLine("$clusters = $agent.GetClusters()");
+            s.AppendLine("foreach($cl in $clusters){");
+            s.AppendLine("  try { $agent.Authenticate($cl, '', '') } catch { 'CLUSTERAUTH=REQUIRED'; continue }");
+            s.AppendLine("  $ibs = $null");
+            s.AppendLine("  try { $ibs = $agent.GetInfoBases($cl) } catch { continue }");
+            s.AppendLine("  foreach($bi in $ibs){");
+            s.AppendLine("    try {");
+            s.AppendLine("      $nm = ''");
+            s.AppendLine("      foreach($pn in @('Name','Имя')){ try { $nm = [string](P $bi $pn); break } catch {} }");
+            s.AppendLine("      if($nm -ne ''){ 'CSBASE=' + $nm }");
+            s.AppendLine("    } catch {}");
+            s.AppendLine("  }");
+            s.AppendLine("}");
+            s.AppendLine("'RESULT=OK'");
+            s.AppendLine("} catch { 'ERROR=' + $_.Exception.Message; exit 1 }");
+
+            Dictionary<string, string> env = new Dictionary<string, string>();
+            env["OC1C_PROGID"] = p.ProgId;
+            ExecResult r = Ps.Run(s.ToString(), p.X86, 120000, env);
+            if (r.All.IndexOf("CLUSTERAUTH=REQUIRED") >= 0) clusterAuth = "REQUIRED";
+            foreach (Match m in Regex.Matches(r.StdOut, @"CSBASE=([^\r\n]+)"))
+            {
+                string nm = m.Groups[1].Value.Trim();
+                if (nm.Length > 0 && !res.Contains(nm)) res.Add(nm);
+            }
+            if (res.Count == 0 && r.All.IndexOf("RESULT=OK") < 0)
+                Log.File("discovery клиент-серверных баз: " + ComErrorLine(r));
+            return res;
         }
 
         // ============================================================ 12. проверка по HTTP
@@ -2084,6 +2381,14 @@ namespace Oc1c
         // состава → GET ?$top=1 под читателем. Пустой состав или не-200 = ошибка.
         public static bool ProbeDataRead(string odataUrl, string user, string pwd, out string detail)
         {
+            return ProbeDataRead(odataUrl, user, pwd, null, out detail);
+        }
+
+        // entityHints — манифест сущностей из шага 12 (маркеры ENTITY=): когда корень
+        // отвечает 500 (известная болезнь платформы при большом составе — ERP 2.4),
+        // список сущностей с корня не собрать, и проба идёт по манифесту состава.
+        public static bool ProbeDataRead(string odataUrl, string user, string pwd, List<string> entityHints, out string detail)
+        {
             detail = "";
             string baseUrl = odataUrl.TrimEnd('/') + "/";
             int status; string body;
@@ -2091,14 +2396,24 @@ namespace Oc1c
             if (err != null) { detail = "OData не отвечает: " + err + " [" + baseUrl + "]"; return false; }
             if (status == 401 || status == 403) { detail = "читатель не авторизуется (HTTP " + status + ") — проверьте пользователя/пароль [" + baseUrl + "]"; return false; }
             if (status == 404) { detail = "публикация не найдена (HTTP 404) — не тот адрес/алиас: " + baseUrl; return false; }
-            if (status != 200) { detail = "OData: HTTP " + status + " [" + baseUrl + "]"; return false; }
-            MatchCollection mm = Regex.Matches(body, "\"name\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
-            if (mm.Count == 0)
+            List<string> names = new List<string>();
+            if (status == 200)
             {
-                Match m = Regex.Match(body, "<collection\\s+href=\"([^\"]+)\"", RegexOptions.IgnoreCase);
-                if (m.Success) mm = Regex.Matches(body, "<collection\\s+href=\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                MatchCollection mm = Regex.Matches(body, "\"name\"\\s*:\\s*\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                if (mm.Count == 0)
+                {
+                    Match m = Regex.Match(body, "<collection\\s+href=\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                    if (m.Success) mm = Regex.Matches(body, "<collection\\s+href=\"([^\"]+)\"", RegexOptions.IgnoreCase);
+                }
+                foreach (Match em in mm) names.Add(em.Groups[1].Value);
+                if (names.Count == 0) { detail = "состав OData ПУСТ — ни одной сущности в корневом документе"; return false; }
             }
-            if (mm.Count == 0) { detail = "состав OData ПУСТ — ни одной сущности в корневом документе"; return false; }
+            else if (status == 500 && entityHints != null && entityHints.Count > 0)
+            {
+                names.AddRange(entityHints);
+                Log.File("корень OData -> HTTP 500; проба данных по манифесту состава (" + names.Count + " сущностей)");
+            }
+            else { detail = "OData: HTTP " + status + " [" + baseUrl + "]"; return false; }
             // Перебираем первые сущности состава: отдельная сущность может быть
             // недоступна и при полных правах читателя — RLS базы (замер 09.08:
             // регистр УТ не читается ни одним не-полноправным пользователем),
@@ -2108,10 +2423,10 @@ namespace Oc1c
             int denied = 0, notfound = 0, otherErr = 0, tried = 0;
             string firstDenied = null, lastErr = null;
             HashSet<string> seen = new HashSet<string>();
-            foreach (Match em in mm)
+            for (int ni = 0; ni < names.Count; ni++)
             {
                 if (tried >= 30) break;
-                string entity = em.Groups[1].Value;
+                string entity = names[ni];
                 if (!seen.Add(entity)) continue;
                 tried++;
                 err = HttpGet(baseUrl + entity + "?$top=1&$format=json", user, pwd, 120000, out status2, out body2);
@@ -2178,6 +2493,7 @@ namespace Oc1c
                 env["OC1C_EXT_READER_PWD"] = o.ReaderPassword == null ? "" : o.ReaderPassword;
                 env["OC1C_EXT_VRD"] = VrdPath(o.Dir);
                 if (!string.IsNullOrEmpty(pool)) env["OC1C_EXT_POOL"] = pool;
+                env["OC1C_EXT_ALIAS"] = o.Alias;   // пробы ai-ext обязаны идти в публикацию ЭТОГО алиаса (кейс K2, 11.08)
 
                 Log.Info("запуск ai-ext.ps1 (несколько прогонов конфигуратора — на большой базе 10+ минут)");
                 // -File, а не -Command-обёртка: только так наружу выходит код выхода
@@ -2220,7 +2536,7 @@ namespace Oc1c
 
         // Извлечь вшитый ресурс-скрипт во временный файл. UTF-8 с BOM обязателен:
         // PS 5.1 читает .ps1 без BOM как ANSI, и кириллица в скрипте ломается.
-        static string ExtractScriptResource(string name)
+        public static string ExtractScriptResource(string name)
         {
             try
             {
@@ -2231,7 +2547,8 @@ namespace Oc1c
                     {
                         s.CopyTo(ms);
                         byte[] raw = ms.ToArray();
-                        string tmp = Path.Combine(Path.GetTempPath(), "ai-ext-" + Guid.NewGuid().ToString("N") + ".ps1");
+                        string tmp = Path.Combine(Path.GetTempPath(),
+                            Path.GetFileNameWithoutExtension(name) + "-" + Guid.NewGuid().ToString("N") + ".ps1");
                         bool hasBom = raw.Length >= 3 && raw[0] == 0xEF && raw[1] == 0xBB && raw[2] == 0xBF;
                         using (FileStream f = File.Create(tmp))
                         {
@@ -2244,7 +2561,7 @@ namespace Oc1c
             }
             catch (Exception e)
             {
-                Log.File("ai-ext: не удалось извлечь ресурс " + name + ": " + e.Message);
+                Log.File("не удалось извлечь ресурс " + name + ": " + e.Message);
                 return null;
             }
         }

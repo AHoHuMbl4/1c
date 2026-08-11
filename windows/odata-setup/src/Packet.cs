@@ -116,6 +116,15 @@ namespace Oc1c
         // odataUrl — локальный адрес OData (agent.ini читает 1С с localhost).
         public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat)
         {
+            return Run(o, bref, odataUrl, plat, null);
+        }
+
+        // metadataFile — сгенерированный установщиком синтетический $metadata
+        // (manifest-gen.ps1, Program.cs): не null — пишется в agent.ini строкой
+        // metadata_file=, и агент читает манифест файлом вместо HTTP GET $metadata
+        // (у части баз платформа отвечает на $metadata HTTP 500 при живых сущностях).
+        public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat, string metadataFile)
+        {
             if (o.SkipPacket)
             {
                 Log.Skip("агент пакетного транспорта отключён ключом --skip-packet");
@@ -227,7 +236,15 @@ namespace Oc1c
             string baseName = !string.IsNullOrEmpty(o.BaseName) ? o.BaseName
                             : (bref == null ? null : bref.Title);
             string baseTitle = string.IsNullOrEmpty(baseName) ? "эта база" : ("«" + baseName + "»");
-            if (!o.Unattended && !Console.IsInputRedirected && !Ctx.DryRun)
+            // Кейс K5 (11.08): в unattended гейт читателя раньше не работал вовсе —
+            // на машине без ai_reader прогон умирал EXIT_PREREQ. Теперь при наличии
+            // админских кредов и COM читатель создаётся/сбрасывается АВТОМАТИЧЕСКИ
+            // (ReadLine при перенаправленном stdin вернёт null — подтверждение «Enter»
+            // в unattended не спрашиваем по смыслу AssumeYes), а ручной цикл с
+            // инструкциями в unattended пропускаем (вечный цикл по null-вводу).
+            bool interactiveGate = !o.Unattended && !Console.IsInputRedirected && !Ctx.DryRun;
+            bool autoGate = o.Unattended && !Ctx.DryRun && plat != null && plat.HasCom && !string.IsNullOrEmpty(o.AdminUser);
+            if (interactiveGate || autoGate)
             {
                 // Подсказка прав — под ЭТУ базу (решение владельца 08.08): в БП профиль
                 // «Только просмотр» поставляется, в УТ/КА — нет; текст должен идти по
@@ -248,8 +265,24 @@ namespace Oc1c
                         OfferAndCreateReader(plat, bref, o, probeUser, odataUrl,
                                              ref rightsFixTried, ref readerPwdAuto, out probeDetail))
                         gateDone = true;
+                    else if (autoGate && diag0 == "FOUND")
+                    {
+                        // unattended: проба с переданным паролем; не подошёл — новый
+                        // случайный автоматически (пароль всё равно живёт в agent.ini).
+                        if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+                        { gateDone = true; Log.Ok("читатель проверен: чтение базы работает"); }
+                        else if (OfferResetReaderPassword(plat, bref, o, probeUser, odataUrl,
+                                                          ref readerPwdAuto, out probeDetail))
+                            gateDone = true;
+                    }
                 }
-                if (!gateDone)
+                if (!gateDone && !interactiveGate)
+                {
+                    // unattended: ручной инструкции нет — фиксируем в лог, дальше
+                    // прямая проба (при неуспехе — EXIT_PREREQ как прежде).
+                    Log.File("читатель не подтверждён автоматически (unattended, diag/создание не дали зелёной пробы)");
+                }
+                if (!gateDone && interactiveGate)
                 {
                 Console.WriteLine();
                 if (readerKnown)
@@ -385,7 +418,7 @@ namespace Oc1c
                 Log.Sim("скопировал бы packet-agent.exe, age.exe, age-keygen.exe, zstd.exe в " + packetDir);
                 Log.Sim("записал бы agent.ini (база «" + ps.BaseId + "», права — только администраторам и SYSTEM)");
             }
-            else if (!StopAgent() || !InstallFiles(kit, packetDir, dataDir, ps, o, odataUrl, thumbprint))
+            else if (!StopAgent() || !InstallFiles(kit, packetDir, dataDir, ps, o, odataUrl, thumbprint, metadataFile))
                 return Program.EXIT_PACKET;
             else if (File.Exists(pfxPath))
             {
@@ -863,8 +896,11 @@ namespace Oc1c
         }
 
         // ============================================================ установка
+        // metadataFile — синтетический $metadata (если установщик сгенерировал):
+        // пишется в agent.ini строкой metadata_file= (режим манифеста агента).
         static bool InstallFiles(string kit, string packetDir, string dataDir,
-                                 PacketSetup ps, Opts o, string odataUrl, string thumbprint)
+                                 PacketSetup ps, Opts o, string odataUrl, string thumbprint,
+                                 string metadataFile)
         {
             try
             {
@@ -911,6 +947,14 @@ namespace Oc1c
             sb.AppendLine("odata_user=" + reader);
             sb.AppendLine("odata_password=" + (o.ReaderPassword == null ? "" : o.ReaderPassword));
             sb.AppendLine("data_dir=" + dataDir);
+            // Манифестный режим: синтетический $metadata файлом (платформа отвечает
+            // 500 на HTTP GET $metadata у части баз). Только если установщик его
+            // сгенерировал в этом прогоне — иначе агент работает по HTTP, как прежде.
+            if (!string.IsNullOrEmpty(metadataFile))
+            {
+                sb.AppendLine("metadata_file=" + metadataFile);
+                Log.File("agent.ini: режим манифеста (metadata_file=" + metadataFile + ")");
+            }
             try
             {
                 File.WriteAllText(ini, sb.ToString(), new UTF8Encoding(true));
@@ -954,13 +998,31 @@ namespace Oc1c
         // («файл используется другим процессом» — прогон 07.08). Гасим задачи и
         // процесс; «не запущен» — не ошибка. Прерванный такт не страшен: очередь
         // чанков на диске, довозка штатная (К2).
-        static bool StopAgent()
+        // internal с 11.08: вызывается и из Program.SendLogs — --send-log при живом
+        // демоне всегда отказывал (single-instance mutex, кейс K5).
+        internal static bool StopAgent()
         {
             Proc.Run("schtasks.exe", "/End /TN \"" + TaskName + "\"", 30000, Proc.Oem, null, null);
             Proc.Run("schtasks.exe", "/End /TN \"" + WatchdogName + "\"", 30000, Proc.Oem, null, null);
             ExecResult kill = Proc.Run("taskkill.exe", "/f /im packet-agent.exe", 30000, Proc.Oem, null, null);
-            if (kill.Ok) { Log.Info("прежний процесс packet-agent.exe остановлен"); System.Threading.Thread.Sleep(1000); }
+            if (kill.Ok) { Log.Info("прежний процесс packet-agent.exe остановлен"); }
+            // Кейс K5 (11.08): taskkill возвращается раньше, чем процесс умирает и
+            // named mutex освобождается (~2-5 с) — --send-log сразу после StopAgent
+            // получал «работает другой экземпляр». Ждём фактической смерти процесса.
+            for (int i = 0; i < 40; i++)
+            {
+                if (System.Diagnostics.Process.GetProcessesByName("packet-agent").Length == 0) break;
+                System.Threading.Thread.Sleep(500);
+            }
             return true;
+        }
+
+        // Запуск демона задачей планировщика (после StopAgent для send-log).
+        internal static void StartAgent()
+        {
+            ExecResult run = Proc.Run("schtasks.exe", "/Run /TN \"" + TaskName + "\"", 60000, Proc.Oem, null, null);
+            if (run.Ok) Log.File("агент перезапущен задачей «" + TaskName + "»");
+            else Log.File("агент не стартовал сразу: " + run.Tail(2) + " — запустится сторожем в течение 5 минут");
         }
 
         // Служба Windows требует служебного каркаса в самом exe; агент — обычная

@@ -55,7 +55,11 @@ namespace Oc1c
             {
                 string dir = System.IO.Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
-                _w = new StreamWriter(path, true, new UTF8Encoding(true));
+                // FileShare.ReadWrite явно (кейс K5, 11.08): send-log агентом идёт,
+                // пока лог ещё открыт нами — без явного share агент получал
+                // «файл используется другим процессом» и лог установки не уходил.
+                FileStream fs = new FileStream(path, FileMode.Append, FileAccess.Write, FileShare.ReadWrite);
+                _w = new StreamWriter(fs, new UTF8Encoding(true));
                 Path = path;
                 File("=== setup-1c-odata " + Ctx.ToolVersion + " === " + DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss"));
             }
