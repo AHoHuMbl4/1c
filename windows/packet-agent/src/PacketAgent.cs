@@ -52,6 +52,9 @@ namespace PacketAgent
     {
         internal string BaseId, ReceiverUrl, Token, RecipientPubkey;
         internal string OdataUrl, OdataUser, OdataPassword, DataDir;
+        // metadata_file — манифестный режим: синтетический $metadata файлом
+        // (его кладёт установщик), агент читает его вместо HTTP (Tact.LoadMetaBytes).
+        internal string MetadataFile;
         internal string ClientCertThumbprint;   // client_cert_thumbprint — mTLS на релее
         internal int PageSize = C.PageSizeDefault;
         internal int PageMin = C.PageMinDefault;
@@ -90,6 +93,11 @@ namespace PacketAgent
             // Отсутствие ключа и пустое значение равнозначны — анонимный Basic.
             c.OdataPassword = Get(kv, "odata_password", false) ?? "";
             c.DataDir = Get(kv, "data_dir", true);
+            // Манифестный режим (решение 11.08): у клиента на проде $metadata и
+            // корень OData отвечают HTTP 500 (баг платформы 8.3.27 при большом
+            // составе публикации), а запросы к сущностям работают — установщик
+            // генерирует синтетический $metadata из COM-метаданных и кладёт файлом.
+            c.MetadataFile = Get(kv, "metadata_file", false);
             c.ClientCertThumbprint = Get(kv, "client_cert_thumbprint", false);
             c.PageSize = GetInt(kv, "page_size", c.PageSize);            c.PageMin = GetInt(kv, "page_min", c.PageMin);
             c.TactSeconds = GetInt(kv, "tact_seconds", c.TactSeconds);
@@ -1573,6 +1581,26 @@ namespace PacketAgent
         bool PlainMode { get { return string.IsNullOrEmpty(Pubkey); } }
         string ModeName { get { return PlainMode ? "plain (пилот)" : "age"; } }
 
+        // Источник $metadata (решение 11.08): metadata_file задан — читаем
+        // синтетический файл установщика вместо HTTP (у клиента на проде
+        // $metadata по HTTP отвечает 500 — баг платформы 8.3.27 при большом
+        // составе публикации, а сущности читаются). Парсеру Meta.Parse нужны
+        // только EntityType/Key/Property — формат файла тот же XML, вся
+        // дальнейшая механика (отпечаток, metaChanged, служебный чанк) идёт
+        // от байт и от источника не зависит.
+        byte[] LoadMetaBytes()
+        {
+            if (string.IsNullOrEmpty(_cfg.MetadataFile))
+                return _odata.GetMetadata();
+            if (!File.Exists(_cfg.MetadataFile))
+                throw new InvalidDataException("metadata_file задан, но файла нет: "
+                                               + _cfg.MetadataFile);
+            byte[] bytes = File.ReadAllBytes(_cfg.MetadataFile);
+            if (bytes.Length == 0)
+                throw new InvalidDataException("metadata_file пуст: " + _cfg.MetadataFile);
+            return bytes;
+        }
+
         // ---------------- zstd / age (штатные CLI рядом с агентом) --------------
         static void RunTool(string exe, string args)
         {
@@ -1589,13 +1617,14 @@ namespace PacketAgent
         }
 
         // Имя файла чанка в очереди — как _chunk_filename приёмника: служебные
-        // чанки (metadata/gone) без вставки «.csv». Plain-режим (пилот): те же
-        // имена без суффикса «.age» — приёмник различает режимы по магии файла
-        // (age-encryption.org/ vs zstd 28 B5 2F FD), имена чанков в манифесте
-        // и в missing не меняются.
+        // чанки (metadata/gone/index/log) без вставки «.csv». Plain-режим (пилот):
+        // те же имена без суффикса «.age» — приёмник различает режимы по магии
+        // файла (age-encryption.org/ vs zstd 28 B5 2F FD), имена чанков в
+        // манифесте и в missing не меняются.
         string ChunkFileName(string name)
         {
-            bool service = name == "metadata" || name == "gone" || name == "index";
+            bool service = name == "metadata" || name == "gone" || name == "index"
+                           || name == "log";
             return name + (service ? ".zst" : ".csv.zst") + (PlainMode ? "" : ".age");
         }
 
@@ -1610,7 +1639,8 @@ namespace PacketAgent
         {
             string plainDir = Path.Combine(queueDir, "plain");
             Directory.CreateDirectory(plainDir);
-            bool service = name == "metadata" || name == "gone" || name == "index";
+            bool service = name == "metadata" || name == "gone" || name == "index"
+                           || name == "log";
             string fp = Path.Combine(plainDir, service ? name : name + ".csv");
             string fz = fp + ".zst";
             File.WriteAllBytes(fp, plain);
@@ -1769,8 +1799,9 @@ namespace PacketAgent
                 return true;
             }
 
-            // $metadata: кэш + отпечаток; изменился — служебный чанк в пакете
-            _metaBytes = _odata.GetMetadata();
+            // $metadata: кэш + отпечаток; изменился — служебный чанк в пакете.
+            // Источник — HTTP или файл установщика (манифестный режим, LoadMetaBytes).
+            _metaBytes = LoadMetaBytes();
             _meta = Meta.Parse(_metaBytes);
             _odata.Meta = _meta;
             try
@@ -2354,7 +2385,7 @@ namespace PacketAgent
                 Log.Line("smoke: есть незавершённый пакет — сначала довозка штатным демоном");
                 return false;
             }
-            _metaBytes = _odata.GetMetadata();
+            _metaBytes = LoadMetaBytes();   // HTTP или файл установщика (манифестный режим)
             _meta = Meta.Parse(_metaBytes);
             long seq = _state.Seq + 1;
             string pkgShort = seq.ToString("D6", CultureInfo.InvariantCulture) + "-" + Rand8();
@@ -2403,6 +2434,103 @@ namespace PacketAgent
                         : "smoke: доставка НЕ подтверждена");
             return ok;
         }
+
+        // ------------------------------ --send-log ------------------------------
+        // Отправка произвольного файла (лога установщика) служебным чанком `log`
+        // (договорённость с приёмником: имя чанка ровно "log", секция log в
+        // манифесте — по образцу metadata/gone, kind приёмник игнорирует).
+        // seq: тот же монотонный счётчик, что у боевых пакетов, — _state.Seq + 1
+        // с фиксацией ДО отправки, как smoke/SendPackage. Конфликта с боевыми
+        // пакетами нет: seq только растёт и двигается одним процессом (снаружи
+        // single-instance mutex). Ответ stale_seq разбирает общий StaleSeq:
+        // скачок на StaleSeqJump + resync — безопасно и для лог-пакета.
+        // true — только при подтверждённой доставке (verified/applied).
+        internal bool SendLog(string path)
+        {
+            if (!File.Exists(path))
+            {
+                Log.Line("send-log: файла нет: " + path);
+                return false;
+            }
+            // Читаем с FileShare.ReadWrite (кейс K5, 11.08): лог установщика ещё
+            // открыт его писателем — File.ReadAllBytes (FileShare.Read) получал
+            // «файл используется другим процессом», и лог не уходил на сервер.
+            byte[] body;
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+            {
+                body = new byte[fs.Length];
+                int off = 0;
+                while (off < body.Length)
+                {
+                    int n = fs.Read(body, off, body.Length - off);
+                    if (n <= 0) break;
+                    off += n;
+                }
+                if (off < body.Length) Array.Resize(ref body, off);
+            }
+            if (body.Length == 0)
+            {
+                Log.Line("send-log: файл пуст — не отправляем: " + path);
+                return false;
+            }
+            string queueRoot = Path.Combine(_cfg.DataDir, "queue");
+            if (Directory.Exists(queueRoot) && Directory.GetDirectories(queueRoot).Length > 0)
+            {
+                Log.Line("send-log: есть незавершённый пакет — сначала довозка штатным демоном");
+                return false;
+            }
+            long seq = _state.Seq + 1;
+            string pkgShort = seq.ToString("D6", CultureInfo.InvariantCulture) + "-" + Rand8();
+            string queueDir = Path.Combine(queueRoot, pkgShort);
+            Directory.CreateDirectory(queueDir);
+
+            List<Dictionary<string, object>> chunkEntries = new List<Dictionary<string, object>>();
+            Dictionary<string, object> entry = WriteChunk(queueDir, "log", body);
+            entry["rows"] = 0;
+            chunkEntries.Add(entry);
+
+            Dictionary<string, object> m = new Dictionary<string, object>();
+            m["manifest_version"] = C.ManifestVersion;
+            m["package_id"] = _cfg.BaseId + "/" + pkgShort;
+            m["base_id"] = _cfg.BaseId;
+            m["seq"] = seq;
+            m["kind"] = "log";
+            m["created_utc"] = DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+            m["agent_version"] = C.Version;
+            m["entities"] = new object[0];
+            // Чей это лог и когда писался — на сервере видно из манифеста.
+            Dictionary<string, object> lg = new Dictionary<string, object>();
+            lg["source"] = Path.GetFileName(path);
+            lg["source_modified_utc"] = File.GetLastWriteTimeUtc(path)
+                .ToString("yyyy-MM-ddTHH:mm:ssZ", CultureInfo.InvariantCulture);
+            lg["fingerprint"] = "sha256:" + EntityIndex.HashHex(body);
+            lg["chunks"] = new string[] { "log" };
+            m["log"] = lg;
+            m["chunks"] = chunkEntries.ToArray();
+            File.WriteAllText(Path.Combine(queueDir, "manifest.json"), Json.Ser(m), Fmt.NoBom);
+            if (!PlainMode)
+                RunTool(Path.Combine(_exeDir, "age.exe"),
+                        "-r " + Pubkey + " -o \"" + Path.Combine(queueDir, "manifest.json.age")
+                        + "\" \"" + Path.Combine(queueDir, "manifest.json") + "\"");
+
+            // plan.json — пустой (индекс и отпечатки не меняются): нужен, чтобы
+            // довозка оборванного лог-пакета штатным демоном прошла тем же К2.
+            Dictionary<string, object> plan = new Dictionary<string, object>();
+            plan["config_version"] = _state.ConfigVersion;
+            plan["metadata_fingerprint"] = null;
+            plan["mark_full_done"] = false;
+            plan["entities"] = new Dictionary<string, object>();
+            File.WriteAllText(Path.Combine(queueDir, "plan.json"), Json.Ser(plan), Fmt.NoBom);
+
+            _state.Seq = seq;
+            _state.Save();
+            Log.Line("send-log: пакет " + pkgShort + " (" + Path.GetFileName(path)
+                     + ", " + body.Length + " байт), режим " + ModeName + " — отправка");
+            bool ok = UploadAndFinish(pkgShort, queueDir);
+            Log.Line(ok ? "send-log: доставка подтверждена приёмником"
+                        : "send-log: доставка НЕ подтверждена");
+            return ok;
+        }
     }
 }
 
@@ -2411,6 +2539,8 @@ namespace PacketAgent
     // ============================ CLI (AGENT_TZ §7) =============================
     //   packet-agent.exe --version                      версия, код 0
     //   packet-agent.exe --smoke                        пробная посылка kind=meta,
+    //                                                   код 0 только при verified
+    //   packet-agent.exe --send-log <path>              файл служебным чанком log,
     //                                                   код 0 только при verified
     //   packet-agent.exe                                демон тактов
     //   packet-agent.exe --flatten <page.json> <e> <out.csv>   служебный режим
@@ -2440,6 +2570,19 @@ namespace PacketAgent
                 if (single == null) return 0;   // работает другой экземпляр
                 using (single) return SmokeMode(exeDir);
             }
+            if (args.Length == 2 && args[0] == "--send-log")
+            {
+                Mutex single = AcquireSingle(exeDir);
+                // Здесь, в отличие от --smoke, код 0 при занятом mutex НЕЛЬЗЯ:
+                // 0 означает «доставлено», а отправки не было — установщик
+                // принял бы молчаливый пропуск за успех.
+                if (single == null)
+                {
+                    Console.Error.WriteLine("send-log: работает другой экземпляр агента — отправка отменена");
+                    return 1;
+                }
+                using (single) return SendLogMode(exeDir, args[1]);
+            }
             if (args.Length == 0)
             {
                 Mutex single = AcquireSingle(exeDir);
@@ -2447,7 +2590,7 @@ namespace PacketAgent
                 using (single) return DaemonMode(exeDir);
             }
             Console.Error.WriteLine("использование: packet-agent.exe "
-                + "[--version | --smoke | --flatten <page.json> <entity> <out.csv>]");
+                + "[--version | --smoke | --send-log <path> | --flatten <page.json> <entity> <out.csv>]");
             return 2;
         }
 
@@ -2559,6 +2702,45 @@ namespace PacketAgent
             {
                 Log.Line("smoke: сбой: " + e.Message);
                 Console.Error.WriteLine("smoke: сбой: " + e.Message);
+                return 1;
+            }
+        }
+
+        // --send-log <path>: произвольный файл (лог установщика) служебным
+        // чанком log по боевому каналу; код 0 только при подтверждённой
+        // доставке (verified/applied), как у smoke. Секреты — только из
+        // agent.ini (LoadCfg), в консоль/журнал они не попадают (Log.AddSecret).
+        static int SendLogMode(string exeDir, string path)
+        {
+            Cfg cfg;
+            try { cfg = LoadCfg(exeDir); }
+            catch (Exception e)
+            {
+                Console.Error.WriteLine("send-log: конфиг: " + e.Message);
+                return 1;
+            }
+            string certErr = Mtls.LoadFor(cfg.ClientCertThumbprint);
+            if (certErr != null)
+            {
+                Log.Line("send-log: mTLS: " + certErr);
+                Console.Error.WriteLine("send-log: mTLS: " + certErr);
+                return 2;
+            }
+            try
+            {
+                bool ok = new Tact(cfg, exeDir).SendLog(path);
+                return ok ? 0 : 1;
+            }
+            catch (ReceiverException e)
+            {
+                Log.Line("send-log: ошибка приёмника: " + e.Code);
+                Console.Error.WriteLine("send-log: ошибка приёмника: " + e.Code);
+                return 1;
+            }
+            catch (Exception e)
+            {
+                Log.Line("send-log: сбой: " + e.Message);
+                Console.Error.WriteLine("send-log: сбой: " + e.Message);
                 return 1;
             }
         }

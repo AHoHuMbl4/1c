@@ -1,0 +1,6 @@
+== ИТОГ ==
+entities: A=2836 B=2836 (общих 2836, проигнорировано 0)
+only-in-A=0 only-in-B=0
+key-diff=0 prop-miss=0 prop-type=0 set-diff=0
+info: key-order=0 nullable=0
+RESULT=MATCH

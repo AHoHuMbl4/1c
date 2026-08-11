@@ -35,6 +35,11 @@ if (-not $U -or -not $BASE) {
 $ExtName  = "AIReadOnly"
 $RoleName = "AIReadAll"
 
+# Алиас публикации (кейс K2, 11.08: при --alias 1ctox пробы уходили на /1c —
+# чужую публикацию — и шаг 14 ложно падал с HTTP 401). По умолчанию "1c".
+$ALIAS = $env:OC1C_EXT_ALIAS
+if (-not $ALIAS) { $ALIAS = "1c" }
+
 $platformExe = Get-ChildItem 'C:\Program Files*\1cv8\*\bin\1cv8.exe' -ErrorAction SilentlyContinue |
     Sort-Object { [version]($_.Parent.Parent.Name) } | Select-Object -Last 1 -ExpandProperty FullName
 if (-not $platformExe) { "FATAL: платформа 1С не найдена"; exit 1 }
@@ -65,7 +70,7 @@ $sec = New-Object SecureString; foreach ($ch in $odataPass.ToCharArray()) { $sec
 $cred = New-Object PSCredential($odataUser, $sec)
 function Odata-Probe($entity) {
     try {
-        Invoke-WebRequest -Uri "http://localhost/1c/odata/standard.odata/$entity`?`$top=1" -Credential $cred -UseBasicParsing -TimeoutSec 60 | Out-Null
+        Invoke-WebRequest -Uri "http://localhost/$ALIAS/odata/standard.odata/$entity`?`$top=1" -Credential $cred -UseBasicParsing -TimeoutSec 60 | Out-Null
         return "200"
     } catch {
         $r = $_.Exception.Response
@@ -441,7 +446,7 @@ if (Test-Path $vrd) {
         $ruCls = ($sections | Where-Object { $_[1] -eq $ccls })[3]
         $checkRu = "$ruCls.$cnm"
     }
-    $url = "http://localhost/1c/hs/ai-setup/setup"
+    $url = "http://localhost/$ALIAS/hs/ai-setup/setup"
     if ($checkRu) { $url += "?check=" + [uri]::EscapeDataString($checkRu) }
     try {
         $resp = Invoke-WebRequest -Uri $url -Credential $credAdmin -UseBasicParsing -TimeoutSec 120
