@@ -47,7 +47,7 @@ _ro_env = os.environ.get("PACKET_APPLY_RO_ROLE", "serene_ro")
 RO_ROLE = _ro_env if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _ro_env) else "serene_ro"
 
 # Чанки со служебными именами хранятся без вставки «.csv» (контракт §2).
-_SERVICE_CHUNKS = ("metadata", "gone", "index")
+_SERVICE_CHUNKS = ("metadata", "gone", "index", "log")
 # Режим файла — по магии, а не по конфигу (пилот без age-слоя 06.08); те же
 # константы, что у packet_server, — apply самостоятельный процесс, форма
 # хранения общая по контракту (шапка packet_server.py).
@@ -202,7 +202,11 @@ def _decrypt_chunks(base_id: str, pkg_id: str, manifest: dict, tmp: str) -> dict
                 enc = p
                 break
         if enc is None:
-            raise RuntimeError("чанк не найден на диске: %s" % name)
+            # Пакет verified, а чанка на диске нет — необратимая порча пакета
+            # (кейс K5, 11.08: чанк log со старым именем log.csv.zst клал базу в
+            # вечный «failed» и останавливал применение всех поздних пакетов
+            # базы каждый такт таймера). Карантин, а не вечный повтор.
+            raise Quarantine("chunk_missing:%s" % name)
         dec = os.path.join(tmp, name + ".zst")
         if _sniff(enc) == "age":
             C.decrypt_file(enc, dec, identity)
@@ -391,6 +395,54 @@ def _apply_skipped(base_id: str, skipped: list) -> None:
         raise
 
 
+def _safe_log_name(s) -> str:
+    # Имя файла из недоверенной строки манифеста: только [A-Za-z0-9_.-], «..»
+    # свёрнуто (как _valid_id у packet_server), ведущие точки срезаны — итог не
+    # может ни выйти за каталог, ни стать скрытым файлом.
+    s = re.sub(r"[^A-Za-z0-9_.-]", "_", str(s))
+    while ".." in s:
+        s = s.replace("..", "__")
+    return s.lstrip(".")
+
+
+def _apply_log(base_id: str, pkg_id: str, section: dict, path: str) -> str:
+    """Служебный чанк `log` (лог установщика/агента) — в файл
+    <PACKET_META_DIR>/<base_id>/logs/<pkg>[_<source>].log, атомарно.
+
+    Секция манифеста: {"source": <имя исходного файла на агенте>, "chunks": ["log"]}.
+    Имя собирается из pkg_id и source через _safe_log_name; коллизия (повторная
+    посылка того же лога) прежний файл НЕ затирает — добавляется суффикс -2, -3…
+    Возвращает имя записанного файла."""
+    logs_dir = os.path.join(PACKET_META_DIR, base_id, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    name = _safe_log_name(pkg_id)
+    src = _safe_log_name(section.get("source") or "")
+    if src:
+        name += "_" + src
+    # Исходное имя уже с «.log» — второе расширение не добавляем, суффикс
+    # коллизии ставим перед расширением.
+    if name.endswith(".log"):
+        name = name[:-4]
+    dst = os.path.join(logs_dir, name + ".log")
+    n = 1
+    while os.path.exists(dst):
+        n += 1
+        dst = os.path.join(logs_dir, "%s-%d.log" % (name, n))
+    fd, tmp = tempfile.mkstemp(dir=logs_dir, prefix=".log-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as out, open(path, "rb") as src_f:
+            shutil.copyfileobj(src_f, out)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, dst)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+    return os.path.basename(dst)
+
+
 # --- контрактные таблицы (форма serene_sync) -----------------------------------
 
 
@@ -473,6 +525,9 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
             if (m.get("metadata") or {}).get("included") and "metadata" in files:
                 _apply_metadata(base_id, m, files["metadata"])
                 _log("base=%s pkg=%s metadata записан" % (base_id, pkg_id))
+            if (m.get("log") or {}).get("chunks") and "log" in files:
+                log_name = _apply_log(base_id, pkg_id, m["log"], files["log"])
+                _log("base=%s pkg=%s log сохранён: %s" % (base_id, pkg_id, log_name))
             changed_tables: set = set()
             profile: list[dict] = []
             for ent in m.get("entities") or []:

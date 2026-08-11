@@ -52,7 +52,7 @@ PACKET_MAX_ACTIVE_PACKAGES = int(os.environ.get("PACKET_MAX_ACTIVE_PACKAGES", "8
 PACKET_MANIFEST_VERSION = 1
 
 # Чанки со служебными именами хранятся без вставки «.csv» (контракт §2).
-_SERVICE_CHUNKS = ("metadata", "gone", "index")
+_SERVICE_CHUNKS = ("metadata", "gone", "index", "log")
 
 # Режим файла определяется магией, а не конфигом (пилот без age-слоя, решение
 # владельца 06.08: канал шифрован TLS + SSH-туннелем + mTLS). Оба режима
