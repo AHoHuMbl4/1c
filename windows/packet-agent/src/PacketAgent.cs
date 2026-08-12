@@ -28,7 +28,9 @@ namespace PacketAgent
     // Каждое число можно переопределить ключом в agent.ini — имя ключа в скобках.
     internal static class C
     {
-        internal const string Version = "1.0.2";   // outbox логов + skipped-only при обнулении (11.08)
+        internal const string Version = "1.0.3";   // сам чинит тупик пустого контура +
+                                                   // честный код смоука (12.08);
+                                                   // 1.0.2 — outbox логов + skipped-only
         internal const int ManifestVersion = 1;
 
         internal const int PageSizeDefault = 10000;   // (page_size) размер страницы OData
@@ -1793,9 +1795,37 @@ namespace PacketAgent
             if (entities.Count == 0)
             {
                 // Авторитетный пустой контур: полная выдача с пустым entities.
-                Log.Line("контур пуст — нечего отправлять");
+                // 🔴 Пустой контур + неотправленный снимок $metadata = ТУПИК НАВСЕГДА
+                // (живой прогон ERP 12.08, klient-1). Контур на сервере собирает глаз
+                // onboard по снимку $metadata, снимок привозит пакет kind=meta — а этот
+                // такт выходил РАНЬШЕ, чем до снимка доходило дело: «контур пуст —
+                // нечего отправлять» каждые 20 минут, и так до вмешательства человека
+                // (остановить демона, позвать --smoke руками). Ручной работы у клиента
+                // быть не должно, поэтому такт сам чинит причину: снимок не подтверждён
+                // приёмником — отправляем его, следующий такт получит готовый контур.
                 _state.ConfigVersion = newCv;
                 _state.Save();
+                bool metaSent = false;
+                try
+                {
+                    _metaBytes = LoadMetaBytes();
+                    _meta = Meta.Parse(_metaBytes);
+                    // Отпечаток совпал — снимок уже доехал и onboard дал пустой контур:
+                    // это НЕ тупик, а решение сервера. Повторно снимок не шлём.
+                    if (_state.MetadataFingerprint != _meta.Fingerprint)
+                    {
+                        Log.Line("контур пуст, а снимок $metadata приёмником не подтверждён "
+                                 + "— отправляю kind=meta: контур соберётся на сервере");
+                        metaSent = SendPackage("meta", new List<EntityResult>(),
+                                               new List<KeyValuePair<string, string>>(),
+                                               true, newCv, null, _state.SkippedFp);
+                    }
+                }
+                catch (Exception e)
+                {
+                    Log.Line("контур пуст, снимок $metadata прочитать не удалось: " + e.Message);
+                }
+                if (!metaSent) Log.Line("контур пуст — нечего отправлять");
                 ProcessOutbox();   // логи из outbox не зависят от контура
                 return true;
             }
@@ -2655,7 +2685,18 @@ namespace PacketAgent
             if (args.Length == 1 && args[0] == "--smoke")
             {
                 Mutex single = AcquireSingle(exeDir);
-                if (single == null) return 0;   // работает другой экземпляр
+                if (single == null)
+                {
+                    // 🔴 НЕ код 0 (живой прогон ERP 12.08): установщик читал нулевой код
+                    // как «доставка подтверждена» и печатал зелёную строку, хотя смоук
+                    // не выполнялся вовсе — ложно-зелёная установка, снимок $metadata на
+                    // сервер не уезжал. Правило «второй экземпляр выходит с 0» (§7) — про
+                    // ДЕМОНА, которого сторож дёргает каждые 5 минут; для смоука молчание
+                    // неотличимо от успеха, поэтому отдельный код и внятная строка.
+                    Console.Error.WriteLine("smoke: работает демон (single-instance) — пробная "
+                        + "посылка НЕ выполнена; остановите задачу «1C Packet Agent» и повторите");
+                    return 3;
+                }
                 using (single) return SmokeMode(exeDir);
             }
             if (args.Length == 2 && args[0] == "--send-log")

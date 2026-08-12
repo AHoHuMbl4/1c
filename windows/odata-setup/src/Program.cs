@@ -831,7 +831,9 @@ namespace Oc1c
 
             // ---------- блок 2: агент пакетного транспорта (только при наличии комплекта)
             // metadataFile — сгенерированный манифест (null — агент работает по HTTP).
-            int packetExit = PacketSteps.Run(o, bref, url, plat, metadataFile);
+            // compEntities — состав из шага 12: гейту читателя он нужен ровно так же,
+            // как шагу 13, иначе на базе с 500 на корне гейт зацикливается (12.08).
+            int packetExit = PacketSteps.Run(o, bref, url, plat, metadataFile, compEntities);
 
             // ---------- 14. расширение чтения (роль AIReadAll)
             // Стоит ПОСЛЕ блока агента: пользователь-читатель создаётся в PacketSteps,

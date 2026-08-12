@@ -114,17 +114,39 @@ namespace Oc1c
         // Возвращает код выхода: 0 — агент установлен и доставка подтверждена (или блок
         // не активен); EXIT_PREREQ — префлайт; EXIT_PACKET — установка/пробная посылка.
         // odataUrl — локальный адрес OData (agent.ini читает 1С с localhost).
+        // Манифест состава (маркеры ENTITY= шага 12): по нему идёт проба чтения,
+        // когда корень OData отвечает 500. Ставится в Run(), читается ProbeRead().
+        static List<string> _entityHints;
+
+        // Единая проба чтения блока агента. 🔴 ВСЕГДА с манифестом состава: у части
+        // баз корень OData отвечает HTTP 500 при живых сущностях (болезнь платформы
+        // при большом составе — ERP 2.4, 6835 объектов). Главный поток (шаг 13) это
+        // умеет с 11.08, а гейт читателя ходил только по корню и зацикливался на
+        // «OData: HTTP 500», хотя данные читались (живой прогон ERP 12.08: выход
+        // был только ключом --unattended вручную).
+        static bool ProbeRead(string odataUrl, string user, string pwd, out string detail)
+        {
+            return Steps.ProbeDataRead(odataUrl, user, pwd, _entityHints, out detail);
+        }
+
         public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat)
         {
-            return Run(o, bref, odataUrl, plat, null);
+            return Run(o, bref, odataUrl, plat, null, null);
+        }
+
+        public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat, string metadataFile)
+        {
+            return Run(o, bref, odataUrl, plat, metadataFile, null);
         }
 
         // metadataFile — сгенерированный установщиком синтетический $metadata
         // (manifest-gen.ps1, Program.cs): не null — пишется в agent.ini строкой
         // metadata_file=, и агент читает манифест файлом вместо HTTP GET $metadata
         // (у части баз платформа отвечает на $metadata HTTP 500 при живых сущностях).
-        public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat, string metadataFile)
+        public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat,
+                              string metadataFile, List<string> entityHints)
         {
+            _entityHints = entityHints;
             if (o.SkipPacket)
             {
                 Log.Skip("агент пакетного транспорта отключён ключом --skip-packet");
@@ -269,7 +291,7 @@ namespace Oc1c
                     {
                         // unattended: проба с переданным паролем; не подошёл — новый
                         // случайный автоматически (пароль всё равно живёт в agent.ini).
-                        if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+                        if (ProbeRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
                         { gateDone = true; Log.Ok("читатель проверен: чтение базы работает"); }
                         else if (OfferResetReaderPassword(plat, bref, o, probeUser, odataUrl,
                                                           ref readerPwdAuto, out probeDetail))
@@ -318,7 +340,7 @@ namespace Oc1c
                         Log.AddSecret(o.ReaderPassword);
                     }
                     Console.WriteLine("       Проверяю доступ к базе… (может занять до минуты)");
-                    if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+                    if (ProbeRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
                     { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
                     Console.WriteLine("       Пока не читается: " + probeDetail);
                     Log.File("проба чтения («" + probeUser + "»): " + probeDetail);
@@ -341,7 +363,7 @@ namespace Oc1c
                                 Log.File("права читателю: " + fixDetail);
                                 Console.WriteLine("       Сделано: " + fixDetail);
                                 Console.WriteLine("       Проверяю чтение ещё раз…");
-                                if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+                                if (ProbeRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
                                 { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); break; }
                                 Console.WriteLine("       Пока не читается: " + probeDetail);
                                 Console.WriteLine("       (права могут применяться до минуты — нажмите Enter для повторной проверки)");
@@ -399,7 +421,7 @@ namespace Oc1c
             if (!Ctx.DryRun && probeDetail.Length == 0)
             {
                 Log.Info("проверяю чтение базы (первая проба может идти до минуты)…");
-                if (!Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+                if (!ProbeRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
                 {
                     Log.Err("данные базы не читаются: " + probeDetail);
                     Log.Fix("задайте состав OData и проверьте права пользователя-читателя («" + probeUser + "»)");
@@ -428,15 +450,17 @@ namespace Oc1c
                 catch (Exception e) { Log.Warn("не удалось удалить " + pfxPath + ": " + e.Message); }
             }
 
-            // ---------- 5. автозапуск (планировщик, SYSTEM)
-            Log.Step(5, 6, "Автозапуск агента (планировщик задач)");
-            if (Ctx.DryRun)
-                Log.Sim("создал бы задачи «" + TaskName + "» (при старте системы) и «" + WatchdogName + "» (каждые 5 мин) под SYSTEM");
-            else if (!EnsureTasks(packetDir))
-                return Program.EXIT_PACKET;
-
-            // ---------- 6. пробная посылка (данные, не «запустилось»)
-            Log.Step(6, 6, "Пробная посылка (подтверждение доставки приёмником)");
+            // ---------- 5. пробная посылка (данные, не «запустилось»)
+            // 🔴 ПОРЯДОК: смоук ИДЁТ ДО автозапуска (живой прогон ERP 12.08). Раньше
+            // сначала создавались задачи планировщика и демон стартовал, а потом
+            // звался packet-agent.exe --smoke — второй экземпляр по контракту (§7)
+            // выходит немедленно с кодом 0, установщик читал код 0 как
+            // «доставка подтверждена» и печатал зелёную строку, хотя смоук НЕ
+            // выполнялся: снимок $metadata на сервер не уезжал, контур оставался
+            // пустым, и агент вставал в тупик «контур пуст» навсегда.
+            // После шага 4 демон гарантированно остановлен (StopAgent), поэтому
+            // здесь mutex свободен и смоук честный.
+            Log.Step(5, 6, "Пробная посылка (подтверждение доставки приёмником)");
             // Повторная установка: seq комплекта уже израсходован прежним каналом —
             // smoke упирается в stale_seq, а агент лечит сам (resync полной заливкой,
             // решение владельца 07.08). Поэтому при ДОКАЗАННОМ канале довозку доверяем
@@ -448,24 +472,35 @@ namespace Oc1c
             // только при подтверждённой доставке: smoke_ok=true (агент пишет после
             // verified) или завершённая полная выгрузка (full_done=true).
             string stateFile = Path.Combine(dataDir, "state.json");
-            if (!Ctx.DryRun && File.Exists(stateFile) && AgentChannelProven(stateFile))
-            {
-                Log.Skip("повторная установка: канал уже доказан прежним smoke (есть " + stateFile + ") — довозка штатным демоном");
-                WipeKitSecrets(kit, setupPath, ps);
-                Installed = true;
-                return Program.EXIT_OK;
-            }
-            if (!Ctx.DryRun && File.Exists(stateFile))
-                Log.Info("прежняя пробная посылка не подтвердила доставку — повторяю");
+            bool smoked;
             if (Ctx.DryRun)
             {
                 Log.Sim("запустил бы packet-agent.exe --smoke и ждал бы verified от приёмника");
+                Log.Sim("создал бы задачи «" + TaskName + "» (при старте системы) и «" + WatchdogName + "» (каждые 5 мин) под SYSTEM");
                 Log.Ok("блок агента: префлайт пройден (режим проверки — ничего не менялось)");
                 return Program.EXIT_OK;
             }
-            bool smoked = Smoke(packetDir);
-            if (smoked) { WipeKitSecrets(kit, setupPath, ps); Installed = true; }
-            return smoked ? Program.EXIT_OK : Program.EXIT_PACKET;
+            if (File.Exists(stateFile) && AgentChannelProven(stateFile))
+            {
+                Log.Skip("повторная установка: канал уже доказан прежним smoke (есть " + stateFile + ") — довозка штатным демоном");
+                smoked = true;
+            }
+            else
+            {
+                if (File.Exists(stateFile))
+                    Log.Info("прежняя пробная посылка не подтвердила доставку — повторяю");
+                smoked = Smoke(packetDir);
+            }
+            // Канал не доказан — автозапуск НЕ включаем: демон, поставленный на
+            // недоказанном канале, молча крутил бы пустые такты (живой прогон 12.08).
+            if (!smoked) return Program.EXIT_PACKET;
+            WipeKitSecrets(kit, setupPath, ps);
+            Installed = true;
+
+            // ---------- 6. автозапуск (планировщик, SYSTEM) — после доказанного канала
+            Log.Step(6, 6, "Автозапуск агента (планировщик задач)");
+            if (!EnsureTasks(packetDir)) return Program.EXIT_PACKET;
+            return Program.EXIT_OK;
         }
 
         // Канал доказан по state.json агента: smoke_ok=true (после verified) или
@@ -792,7 +827,7 @@ namespace Oc1c
             { Log.File("права читателю: " + rd); Console.WriteLine("       " + rd); rightsFixTried = true; }
             else Console.WriteLine("       права пока не назначены: " + rd);
             Console.WriteLine("       Проверяю чтение…");
-            if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+            if (ProbeRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
             { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); return true; }
             Console.WriteLine("       Пока не читается: " + probeDetail + " (Enter — проверить ещё раз)");
             return false;
@@ -820,7 +855,7 @@ namespace Oc1c
             Log.AddSecret(np);
             Log.File("сброс пароля читателя: " + rd);
             Console.WriteLine("       Новый пароль задан. Проверяю чтение…");
-            if (Steps.ProbeDataRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
+            if (ProbeRead(odataUrl, probeUser, o.ReaderPassword, out probeDetail))
             { Log.Ok("читатель проверен: чтение базы работает"); Log.File("проба: " + probeDetail); return true; }
             Console.WriteLine("       Пока не читается: " + probeDetail + " (Enter — проверить ещё раз)");
             return false;
@@ -1072,6 +1107,23 @@ namespace Oc1c
                 return true;
             }
             string tail = r.Tail(4);
+            // Код 3 агента (v1.0.3): смоук не выполнялся — mutex занят демоном. Раньше
+            // агент отвечал на это нулём, и установка была ложно-зелёной (12.08).
+            // При штатном порядке (смоук до автозапуска) сюда попасть нельзя — значит
+            // демон запущен чем-то ещё: гасим и повторяем один раз.
+            if (r.ExitCode == 3)
+            {
+                Log.Warn("смоук не выполнен: агент уже запущен — останавливаю и повторяю");
+                StopAgent();
+                r = Proc.Run(agent, "--smoke", 600000, Proc.Oem, packetDir, null);
+                if (r.Ok)
+                {
+                    Log.Ok("проверка доставки пройдена");
+                    Log.File("доставка подтверждена приёмником: " + FirstLine(r.StdOut));
+                    return true;
+                }
+                tail = r.Tail(4);
+            }
             string code = KnownReceiverError(tail);
             // stale_seq: комплект уже работал (seq израсходован) — канал при этом
             // ДОКАЗАН (mTLS+Bearer прошли, приёмник ответил осмысленно), а данные

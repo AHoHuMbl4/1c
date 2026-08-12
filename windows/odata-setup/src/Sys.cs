@@ -19,7 +19,7 @@ namespace Oc1c
         public static bool DryRun;              // --check: ничего не менять
         public static bool AssumeYes;           // --yes: без вопросов
         public static bool Changed;             // хоть что-то реально изменено
-        public const string ToolVersion = "1.2.1";  // outbox логов вместо --send-log с остановкой демона (11.08)
+        public const string ToolVersion = "1.2.2";  // гейт читателя по манифесту + смоук ДО автозапуска (12.08)
     }
 
     // ---------------------------------------------------------------- результат внешней команды
