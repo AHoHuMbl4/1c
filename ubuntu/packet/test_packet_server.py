@@ -9,13 +9,17 @@ from __future__ import annotations
 
 import hashlib
 import http.client
+import io
 import json
 import os
 import shutil
+import socket
+import struct
 import subprocess
 import sys
 import tempfile
 import threading
+import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -381,6 +385,33 @@ def main() -> int:
                 enc_manifest({**m_b, "package_id": "buh2/000062-bbbb2222", "seq": 62}),
                 token="tok-ut-proba")
     check("14: чужой токен для новой базы — 401", st == 401, f"{st} {r}")
+
+    # 15. обрыв keep-alive клиентом после успешного ответа — не ошибка приёмника:
+    # одна строка в журнале, без разбора стека. Живой случай 12.08 на okna:
+    # HAProxy релея закрывает соединение с RST, и на каждый успешный запрос
+    # агента шло по 20 строк traceback-а ConnectionResetError — настоящие
+    # ошибки в таком журнале не видны (CHANGELOG 12.08).
+    cap = io.StringIO()
+    real_err, sys.stderr = sys.stderr, cap
+    try:
+        s = socket.create_connection(("127.0.0.1", PORT), 5)
+        s.sendall(b"GET /health HTTP/1.1\r\nHost: x\r\nConnection: keep-alive\r\n\r\n")
+        head = s.recv(4096)
+        # RST вместо FIN — так рвёт соединение релей
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        s.close()
+        for _ in range(100):  # ждём, пока поток обработчика упрётся в обрыв
+            if "закрыто клиентом" in cap.getvalue() or "Traceback" in cap.getvalue():
+                break
+            time.sleep(0.05)
+    finally:
+        sys.stderr = real_err
+    log = cap.getvalue()
+    check("15: ответ до обрыва доставлен", head.split(b"\r\n", 1)[0].endswith(b"200 OK"),
+          head[:40])
+    check("15: обрыв соединения — без разбора стека", "Traceback" not in log, log[:400])
+    check("15: обрыв соединения — одна понятная строка",
+          log.count("соединение закрыто клиентом") == 1, log[:400])
 
     srv.shutdown()
     print(f"\n{'ПРОБА ЗЕЛЁНАЯ' if not FAILS else 'ПАДЕНИЯ: ' + ', '.join(FAILS)}")

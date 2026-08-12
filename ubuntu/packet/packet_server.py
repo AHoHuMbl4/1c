@@ -318,6 +318,24 @@ def _verify_package(handler, base_id: str, pkg_id: str, manifest: dict) -> dict:
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
+    def handle_error(self, request, client_address):
+        """Обрыв соединения клиентом — не ошибка приёмника, а обычный конец
+        keep-alive: ответ уже отдан, а пишущая сторона закрыла сокет с RST.
+
+        Так делает HAProxy релея после каждого запроса агента (замер 12.08 на
+        okna: за успешным `agent config … 200` идёт 20 строк traceback-а
+        `ConnectionResetError: [Errno 104]`). Печатать на это разбор стека —
+        значит прятать настоящие ошибки в шуме, поэтому обрыв сводится к одной
+        строке; всё остальное печатается разбором стека, как прежде."""
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError,
+                            ConnectionAbortedError)):
+            peer = client_address[0] if client_address else "?"
+            sys.stderr.write("pkt %s - соединение закрыто клиентом (%s)\n"
+                             % (peer, type(exc).__name__))
+            return
+        super().handle_error(request, client_address)
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
