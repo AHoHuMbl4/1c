@@ -64,6 +64,8 @@ odata_url=http://localhost/<публикация>/odata/standard.odata
 odata_user=ai_reader
 odata_password=…           # из существующих параметров exe, в лог как ***
 data_dir=C:\1c\packet\data
+progress_seconds=60        # (v1.1.0) отчёт хода такта не чаще раза в N секунд;
+                           # 0 — выключить. Ключ необязателен: нет — берётся 60
 metadata_file=C:\1c\packet\metadata.xml   # с 11.08 (v2): см. §9 — манифестный режим
 ```
 

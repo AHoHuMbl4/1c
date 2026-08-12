@@ -48,6 +48,9 @@ PACKET_MAX_CHUNK_BYTES = int(os.environ.get("PACKET_MAX_CHUNK_BYTES", str(64 * 1
 PACKET_MAX_CHUNKS_PER_PACKAGE = int(os.environ.get("PACKET_MAX_CHUNKS_PER_PACKAGE", "4096"))
 PACKET_MAX_INBOX_BYTES = int(os.environ.get("PACKET_MAX_INBOX_BYTES", str(20 * 1024 * 1024 * 1024)))
 PACKET_MAX_ACTIVE_PACKAGES = int(os.environ.get("PACKET_MAX_ACTIVE_PACKAGES", "8"))
+# Отчёт хода такта — маленький JSON; лимит отдельный и жёсткий, чтобы ручка
+# диагностики не стала каналом заливки данных.
+PACKET_MAX_PROGRESS_BYTES = int(os.environ.get("PACKET_MAX_PROGRESS_BYTES", "16384"))
 # Версия манифеста, которую понимает этот приёмник (контракт, шапка файла).
 PACKET_MANIFEST_VERSION = 1
 
@@ -410,6 +413,52 @@ class Handler(BaseHTTPRequestHandler):
             parts.append(b)
             left -= len(b)
         return b"".join(parts)
+
+    # -- POST --
+
+    def do_POST(self):
+        # Отчёт хода такта агента (контракт §8, НЕОБЯЗАТЕЛЬНАЯ ручка). Диагностика
+        # и только: ни seq, ни состояний пакетов, ни apply не трогает. Заведена
+        # 12.08 — до неё первый полный проход по тысячам сущностей шёл часами, и
+        # со стороны сервера «агент работает» было неотличимо от «агент умер».
+        segs = self._segments()
+        if segs == ["v1", "agent", "progress"]:
+            qs = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query)
+            base_id = qs.get("base_id", [""])[0]
+            if not _valid_id(base_id):
+                return self._err_early(400, "invalid_id")
+            if not self._auth_base(base_id):
+                return self._err_early(401, "unauthorized")
+            return self._post_progress(base_id)
+        return self._err_early(404, "not_found")
+
+    def _post_progress(self, base_id: str):
+        body = self._read_body(PACKET_MAX_PROGRESS_BYTES)
+        if body is None:
+            return
+        try:
+            doc = json.loads(body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            return self._err(400, "bad_json")
+        if not isinstance(doc, dict):
+            return self._err(400, "bad_json")
+        doc["received_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        # Пишем в каталог базы (создаётся первым же пакетом; отчёт может прийти
+        # и раньше — тогда каталог заводим сами, это не состояние пакета).
+        base_dir = _base_dir(base_id)
+        os.makedirs(base_dir, exist_ok=True)
+        dest = os.path.join(base_dir, "progress.json")
+        tmp = dest + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(doc, f, ensure_ascii=False)
+        os.replace(tmp, dest)
+        self.log_message(
+            "ход такта base=%s %s %s%s строк=%s/%s %sс agent=%s",
+            base_id, doc.get("phase"), doc.get("entity") or "",
+            (" %s/%s" % (doc.get("i"), doc.get("n"))) if doc.get("n") else "",
+            doc.get("rows_entity"), doc.get("rows_total"),
+            doc.get("elapsed_sec"), doc.get("agent_version"))
+        return self._json(200, {"ok": True})
 
     # -- PUT --
 

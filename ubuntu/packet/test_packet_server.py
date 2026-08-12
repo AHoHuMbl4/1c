@@ -413,6 +413,42 @@ def main() -> int:
     check("15: обрыв соединения — одна понятная строка",
           log.count("соединение закрыто клиентом") == 1, log[:400])
 
+    # 16. отчёт хода такта (POST /v1/agent/progress) — необязательная ручка
+    # диагностики: пишет progress.json и НЕ трогает ни seq, ни состояний пакетов
+    # (заведена 12.08 — до неё первый полный проход шёл часами вслепую).
+    seq_before = json.load(open(os.path.join(ROOT, "inbox", "ut", "state.json"),
+                                encoding="utf-8"))["last_applied_seq"]
+    prog = json.dumps({"phase": "read", "entity": "Catalog_Контрагенты", "i": 7,
+                       "n": 819, "rows_entity": 1200, "rows_total": 5000,
+                       "elapsed_sec": 42, "kind": "full", "seq": 3,
+                       "agent_version": "проба-1"}).encode()
+    st, r = req("POST", "/v1/agent/progress?base_id=ut", prog)
+    check("16: отчёт принят", st == 200 and r.get("ok") is True, f"{st} {r}")
+    pj = os.path.join(ROOT, "inbox", "ut", "progress.json")
+    saved = json.load(open(pj, encoding="utf-8")) if os.path.exists(pj) else {}
+    check("16: progress.json записан с отметкой времени",
+          saved.get("entity") == "Catalog_Контрагенты" and saved.get("i") == 7
+          and "received_utc" in saved, saved)
+    st, r = req("POST", "/v1/agent/progress?base_id=ut", prog, token="tok-chuzhoy")
+    check("16: чужой токен — 401", st == 401, f"{st} {r}")
+    st, r = req("POST", "/v1/agent/progress?base_id=ut", "не json".encode("utf-8"))
+    check("16: мусор вместо JSON — 400 bad_json",
+          st == 400 and r.get("error") == "bad_json", f"{st} {r}")
+    st, r = req("POST", "/v1/agent/progress?base_id=ut", b"x" * 20000)
+    check("16: перебор размера — 413", st == 413, f"{st} {r}")
+    st, r = req("POST", "/v1/package/ut/000041-aaaaaaaa/manifest", prog)
+    check("16: POST не открывает чужие пути — 404", st == 404, f"{st} {r}")
+    seq_after = json.load(open(os.path.join(ROOT, "inbox", "ut", "state.json"),
+                               encoding="utf-8"))["last_applied_seq"]
+    check("16: состояние пакетов не тронуто", seq_before == seq_after,
+          f"{seq_before} -> {seq_after}")
+    # Свежий отчёт затирает прежний (последний важнее истории).
+    st, _ = req("POST", "/v1/agent/progress?base_id=ut",
+                json.dumps({"phase": "done"}).encode())
+    saved2 = json.load(open(pj, encoding="utf-8"))
+    check("16: свежий отчёт заменяет прежний",
+          st == 200 and saved2.get("phase") == "done" and "entity" not in saved2, saved2)
+
     srv.shutdown()
     print(f"\n{'ПРОБА ЗЕЛЁНАЯ' if not FAILS else 'ПАДЕНИЯ: ' + ', '.join(FAILS)}")
     return 1 if FAILS else 0

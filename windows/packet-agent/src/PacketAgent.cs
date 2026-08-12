@@ -28,8 +28,8 @@ namespace PacketAgent
     // Каждое число можно переопределить ключом в agent.ini — имя ключа в скобках.
     internal static class C
     {
-        internal const string Version = "1.0.3";   // сам чинит тупик пустого контура +
-                                                   // честный код смоука (12.08);
+        internal const string Version = "1.1.0";   // отчёт хода такта на приёмник (12.08);
+                                                   // 1.0.3 — тупик пустого контура + код смоука;
                                                    // 1.0.2 — outbox логов + skipped-only
         internal const int ManifestVersion = 1;
 
@@ -47,6 +47,8 @@ namespace PacketAgent
         internal const int BackoffBaseSeconds = 2;    // экспоненциальная пауза: base*2^n
         internal const int LogMaxBytes = 10 * 1024 * 1024; // ротация файла журнала по размеру
         internal const int StaleSeqJump = 1000000;    // скачок seq при stale_seq (см. Tact)
+        internal const int ProgressSecondsDefault = 60; // (progress_seconds) отчёт хода такта; 0 — выключен
+        internal const int ProgressTimeoutSeconds = 10; // бюджет одной попытки отчёта (повторов нет)
     }
 
     // ============================ конфиг agent.ini ==============================
@@ -62,6 +64,7 @@ namespace PacketAgent
         internal int PageMin = C.PageMinDefault;
         internal int TactSeconds = C.TactSecondsDefault;
         internal int ChunkMb = C.ChunkMbDefault;
+        internal int ProgressSeconds = C.ProgressSecondsDefault;
         internal string LogDir = @"C:\1c\logs";
 
         // Режим упаковки по конфигу: pubkey не задан → plain (пилот).
@@ -104,6 +107,14 @@ namespace PacketAgent
             c.PageSize = GetInt(kv, "page_size", c.PageSize);            c.PageMin = GetInt(kv, "page_min", c.PageMin);
             c.TactSeconds = GetInt(kv, "tact_seconds", c.TactSeconds);
             c.ChunkMb = Math.Max(C.ChunkMbMin, Math.Min(C.ChunkMbMax, GetInt(kv, "chunk_mb", c.ChunkMb)));
+            // progress_seconds: 0 — законное значение «отчёты выключены», поэтому не
+            // через GetInt (он отбрасывает всё, что не больше нуля).
+            string psRaw;
+            int psVal;
+            if (kv.TryGetValue("progress_seconds", out psRaw)
+                && int.TryParse(psRaw, NumberStyles.Integer, CultureInfo.InvariantCulture, out psVal)
+                && psVal >= 0)
+                c.ProgressSeconds = psVal;
             c.LogDir = Get(kv, "log_dir", false) ?? c.LogDir;
             Log.AddSecret(c.Token);
             Log.AddSecret(c.OdataPassword);
@@ -208,7 +219,9 @@ namespace PacketAgent
             catch { _file = null; }
         }
 
-        static string Mask(string msg)
+        // internal: текст, уходящий с машины (отчёт хода такта), маскируется тем же
+        // списком секретов, что и локальный журнал.
+        internal static string Mask(string msg)
         {
             foreach (string s in Secrets) msg = msg.Replace(s, "***");
             return msg;
@@ -234,6 +247,136 @@ namespace PacketAgent
                 }
             }
             catch { }
+        }
+    }
+
+    // ============================ отчёт хода такта ==============================
+    // Слепое окно живого прогона (12.08, okna-1 и klient-1): после GET /agent/config
+    // агент к приёмнику не обращается, пока не соберёт весь пакет, — а первый полный
+    // проход по тысячам сущностей идёт часами. Со стороны сервера «агент работает»
+    // было неотличимо от «агент умер»: стадию восстанавливали по косвенным признакам
+    // (занятый mutex, ритм тактов сторожа). Отчёт: POST /v1/agent/progress не чаще
+    // progress_seconds (60 с; 0 в agent.ini — выключен) + та же строка в журнал.
+    //
+    // 🔴 Доставка пакетов от отчёта НЕ зависит и зависеть не может: одна попытка с
+    // коротким таймаутом, без повторов, любой сбой глотается. Отказ приёмника (404 —
+    // старая версия без ручки, 401 и прочие 4xx) выключает отчёты до конца такта;
+    // сетевой сбой прореживает попытки экспоненциально, чтобы недоступный приёмник
+    // не тормозил чтение 1С паузами таймаута.
+    // До Begin() (режимы --smoke, --send-log, --flatten) класс — no-op.
+    internal static class Progress
+    {
+        static Receiver _rx;
+        static int _interval;          // секунды; задаётся Begin()
+        static bool _off = true;       // до Begin() — всегда no-op
+        static bool _sentAny;          // такт уже «звучал» на приёмнике
+        static int _netFailures;       // подряд сетевых сбоев — для прореживания
+        static int _startTick, _lastTick;
+        static string _phase = "", _entity = "", _kind = "";
+        static long _i, _n, _rowsEntity, _rowsTotal, _seq;
+
+        internal static void Begin(Receiver rx, int intervalSeconds)
+        {
+            _rx = rx;
+            _interval = intervalSeconds;
+            _off = rx == null || intervalSeconds <= 0;
+            _sentAny = false;
+            _netFailures = 0;
+            _startTick = Environment.TickCount;
+            _lastTick = _startTick;
+            _phase = "config"; _entity = ""; _kind = "";
+            _i = 0; _n = 0; _rowsEntity = 0; _rowsTotal = 0; _seq = 0;
+        }
+
+        internal static void Kind(string kind, long seq) { _kind = kind; _seq = seq; }
+
+        internal static void Entity(string entity, long i, long n)
+        {
+            _rowsTotal += _rowsEntity;
+            _rowsEntity = 0;
+            _phase = "read"; _entity = entity; _i = i; _n = n;
+            TrySend(false);
+        }
+
+        // Строк прочитано в ТЕКУЩЕЙ сущности (абсолютное значение, не приращение).
+        internal static void Rows(long rowsInEntity)
+        {
+            _rowsEntity = rowsInEntity;
+            TrySend(false);
+        }
+
+        internal static void Chunks(long total)
+        {
+            _rowsTotal += _rowsEntity;
+            _rowsEntity = 0;
+            _phase = "send"; _entity = ""; _i = 0; _n = total;
+            TrySend(false);
+        }
+
+        // Отправлено чанков (фаза выставляется здесь же — довозка пакета прошлого
+        // такта начинается сразу с отправки, минуя чтение 1С).
+        internal static void ChunkSent(long sent)
+        {
+            _phase = "send"; _i = sent;
+            TrySend(false);
+        }
+
+        // Финал такта — форсированный отчёт, но только если такт уже «звучал»:
+        // короткие такты (изменений нет) не добавляют каналу ни одного запроса.
+        internal static void Done(bool ok)
+        {
+            if (_off || !_sentAny) return;
+            _phase = ok ? "done" : "not_confirmed";
+            _entity = "";
+            TrySend(true);
+        }
+
+        internal static void Fail(string message)
+        {
+            if (_off || !_sentAny) return;
+            _phase = "error";
+            _entity = Log.Mask(message ?? "");
+            TrySend(true);
+        }
+
+        static void TrySend(bool force)
+        {
+            if (_off) return;
+            int now = Environment.TickCount;
+            if (!force)
+            {
+                // Прореживание: базовый интервал, при сетевых сбоях реже (2^n).
+                long need = (long)_interval * 1000 << Math.Min(_netFailures, 5);
+                if (now - _lastTick < need) return;
+            }
+            _lastTick = now;
+            long elapsed = (now - _startTick) / 1000;
+            Log.Line("ход такта: " + _phase
+                     + (_entity.Length > 0 ? " " + _entity : "")
+                     + (_n > 0 ? " " + _i + "/" + _n : "")
+                     + (_rowsEntity > 0 ? ", строк " + _rowsEntity : "")
+                     + (_rowsTotal > 0 ? " (всего строк " + _rowsTotal + ")" : "")
+                     + ", " + elapsed + " с от начала такта");
+            Dictionary<string, object> d = new Dictionary<string, object>();
+            d["phase"] = _phase;
+            d["entity"] = _entity;
+            d["i"] = _i;
+            d["n"] = _n;
+            d["rows_entity"] = _rowsEntity;
+            d["rows_total"] = _rowsTotal;
+            d["elapsed_sec"] = elapsed;
+            d["kind"] = _kind;
+            d["seq"] = _seq;
+            d["agent_version"] = C.Version;
+            string verdict = _rx.PostProgress(Encoding.UTF8.GetBytes(Json.Ser(d)));
+            if (verdict == null) { _sentAny = true; _netFailures = 0; }
+            else if (verdict == "reject")
+            {
+                Log.Line("отчёт хода: приёмник отказал (нет ручки или права) — "
+                         + "отчёты выключены до конца такта");
+                _off = true;
+            }
+            else _netFailures++;   // сеть: попробуем позже и реже
         }
     }
 
@@ -1032,6 +1175,7 @@ namespace PacketAgent
                     if (d != null) rows.Add(new Dictionary<string, object>(d));
                 }
                 skip += v.Count;
+                Progress.Rows(rows.Count);   // ход внутри крупной сущности
                 if (v.Count < page)
                 {
                     shortPages++;
@@ -1098,6 +1242,7 @@ namespace PacketAgent
                         dv == null ? "" : Convert.ToString(dv, CultureInfo.InvariantCulture);
                 }
                 skip += page.Count;
+                Progress.Rows(probe.Count);   // ход пробы версий (дельта-путь)
                 if (expected >= 0 && probe.Count >= expected) break;
             }
             // Неполная проба — не дельта: живые записи выглядели бы «удалёнными».
@@ -1482,6 +1627,39 @@ namespace PacketAgent
                 + "&agent_version=" + OData.Q(C.Version));
         }
 
+        // Отчёт хода такта (Progress): сознательно НЕ через Request — у того повторы с
+        // экспоненциальной паузой, а отчёт обязан быть дешёвым и необязательным. Одна
+        // попытка, короткий таймаут, исключений не бросает. null — доставлен;
+        // "reject" — приёмник отказал (4xx: старая версия без ручки, нет права), звонить
+        // дальше бессмысленно; "net" — сеть/5xx, попробуем позже и реже.
+        internal string PostProgress(byte[] body)
+        {
+            try
+            {
+                HttpWebRequest req = (HttpWebRequest)WebRequest.Create(
+                    _cfg.ReceiverUrl + "/v1/agent/progress?base_id=" + OData.Q(_cfg.BaseId));
+                req.Method = "POST";
+                req.Headers["Authorization"] = "Bearer " + _cfg.Token;
+                if (Mtls.Current != null)
+                    req.ClientCertificates.Add(Mtls.Current);
+                req.Timeout = C.ProgressTimeoutSeconds * 1000;
+                req.ReadWriteTimeout = C.ProgressTimeoutSeconds * 1000;
+                req.ContentType = "application/json";
+                req.ContentLength = body.Length;
+                using (Stream s = req.GetRequestStream()) s.Write(body, 0, body.Length);
+                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse()) { }
+                return null;
+            }
+            catch (WebException we)
+            {
+                HttpWebResponse resp = we.Response as HttpWebResponse;
+                int st = resp != null ? (int)resp.StatusCode : 0;
+                OData.CloseResp(we);
+                return st > 0 && st < 500 ? "reject" : "net";
+            }
+            catch (Exception) { return "net"; }
+        }
+
         internal void PutManifest(string pkgShort, byte[] ageBytes)
         {
             Request("PUT", "/v1/package/" + OData.Q(_cfg.BaseId) + "/"
@@ -1713,6 +1891,7 @@ namespace PacketAgent
         // ------------------------------ главный такт ----------------------------
         internal bool Run()
         {
+            Progress.Begin(_rx, _cfg.ProgressSeconds);
             // Незавершённый пакет прошлого такта — сначала довозим его (догрузка).
             string queueRoot = Path.Combine(_cfg.DataDir, "queue");
             if (Directory.Exists(queueRoot))
@@ -1845,6 +2024,7 @@ namespace PacketAgent
             bool firstRun = _state.Resync || !_state.FullDone;
             Log.Line("такт: сущностей " + entities.Count + (firstRun ? ", ПОЛНАЯ заливка" : "")
                      + (metaChanged ? ", $metadata изменился" : ""));
+            Progress.Kind(firstRun ? "full" : "delta", _state.Seq + 1);
 
             // (2) сбор изменений
             List<EntityResult> results = new List<EntityResult>();
@@ -1852,8 +2032,10 @@ namespace PacketAgent
             List<KeyValuePair<string, string>> skipped = new List<KeyValuePair<string, string>>();
             Dictionary<string, bool> ownerSilent = new Dictionary<string, bool>();
             entities.Sort(StringComparer.Ordinal);   // владелец — префикс имени части → раньше
+            int entityNo = 0;
             foreach (string e in entities)
             {
+                Progress.Entity(e, ++entityNo, entities.Count);
                 try { ProcessEntity(e, firstRun, results, gone, ownerSilent); }
                 catch (OdataNotFoundException nfx)
                 {
@@ -2211,6 +2393,7 @@ namespace PacketAgent
 
             _state.Seq = seq;   // seq растёт только на отправленных пакетах
             _state.Save();
+            Progress.Chunks(chunkEntries.Count);
             Log.Line("пакет " + pkgShort + " kind=" + kind + ", режим " + ModeName
                      + ": сущностей " + results.Count
                      + ", gone " + gone.Count + ", чанков " + chunkEntries.Count
@@ -2295,6 +2478,7 @@ namespace PacketAgent
                         {
                             _rx.PutChunk(pkgShort, name, File.ReadAllBytes(f));
                             sent++;
+                            Progress.ChunkSent(sent);
                         }
                     }
                     if (sent > 0) continue;   // проверка синхронная в status
@@ -2781,12 +2965,14 @@ namespace PacketAgent
                 {
                     try
                     {
-                        new Tact(cfg, exeDir).Run();
+                        bool ok = new Tact(cfg, exeDir).Run();
+                        Progress.Done(ok);
                         failures = 0;
                     }
                     catch (Exception e)
                     {
                         failures++;
+                        Progress.Fail(e.Message);
                         Log.Line("ТАКТ НЕ УДАЛСЯ: " + e.Message);
                     }
                     int sleep = cfg.TactSeconds;
