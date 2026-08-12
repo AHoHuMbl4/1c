@@ -358,6 +358,8 @@ linger), `/opt/1c-bot-monitor`, все `1c-*` юниты (disabled до прив
 - uid `serenedb` = **999** (на .7 — 997; в образе Hetzner 997 занят `dhcpcd`),
   gid 982 тот же; владелец `/var/lib/serenedb` выставлен chown-ом;
 - ufw: `6090/tcp` только с `10.3.0.3` (EU-роутер), 22/tcp — как везде;
+- часовой пояс `Europe/Chisinau` (указание владельца 12.08: для этого бизнеса всё
+  по времени Кишинёва — журнал юнита совпадает с логами клиента; у .7 — UTC);
 - fail2ban `jail.local`: ignoreip = loopback + `10.3.0.0/24` + `2.28.54.129`
   + NAT дева (остальное — как `ubuntu/wireguard/unit-jail.local`);
 - **без** netplan `60-1c-nat.yaml`: у okna белый IP, исходящий интернет прямой,
