@@ -1,1 +1,2 @@
 *.zst binary
+*.cmd text eol=crlf

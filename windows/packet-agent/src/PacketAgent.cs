@@ -1995,6 +1995,9 @@ namespace PacketAgent
                     {
                         Log.Line("контур пуст, а снимок $metadata приёмником не подтверждён "
                                  + "— отправляю kind=meta: контур соберётся на сервере");
+                        // Иначе отчёт хода такта об этой ветке уходит с пустым kind и
+                        // seq=0 (замечено на живом прогоне пробы 12.08).
+                        Progress.Kind("meta", _state.Seq + 1);
                         metaSent = SendPackage("meta", new List<EntityResult>(),
                                                new List<KeyValuePair<string, string>>(),
                                                true, newCv, null, _state.SkippedFp);
