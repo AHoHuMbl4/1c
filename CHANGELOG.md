@@ -11,6 +11,42 @@
 
 ---
 
+## 12.08: okna-1 — первая EU-база на канале end-to-end `[замер]`
+
+Привязка первой базы EU-контура по рецепту `PACKET_ONBOARDING.md` (вариант VPS),
+с поправкой на EU: комплект `packet_kit.py okna-1 --receiver-url
+https://1c-gate.timpul.pro` (у скрипта `onboard-base.sh` флага нет — он шьёт
+RU-домен по умолчанию; для EU комплект собран прямым вызовом).
+
+Порядок и замеры:
+
+- **okna**: роли `serene_ro`/`serene_resolver` штатным `setup.sh` (пароли копии
+  свои — так скрипт устроен), identity + `bases.json` (одна запись, атомарно),
+  `packet-meta/okna-1`, pipeline-env; `1c-packet-server` + `1c-packet-apply.timer`
+  + глаза `1c-serene-onboard@okna-1.path` / `1c-serene-firstbuild@okna-1.path` —
+  все active, `/health` на :6090 → 200.
+- **Роутер** (2.28.54.129): домен `1c-gate.timpul.pro` в DNS указал владелец, но
+  на :443 стояла самоподписанная заглушка — выпущен настоящий LE-серт (HTTP-01
+  через webroot роутера, lego run 12.08), `lego.yml` переведён на .pro (старая
+  заготовка `1c-gate-eu.timpul.ru` снята — DNS под неё не заводился);
+  в `haproxy.cfg` добавлены `acl cn_okna_1` + `backend packet_unit_okna_1
+  (10.3.0.4:6090 check)` по образцу RU-релея; `haproxy -c` чист, reload.
+- **Приёмка**: `GET /health` сертификатом okna-1 через `https://1c-gate.timpul.pro`
+  → 200 (первые ~40 с — отказ по notBefore, как и на RU: часы; повтор прошёл);
+  без серта — обрыв TLS (rc=56); `GET /v1/agent/config?base_id=okna-1` с Bearer →
+  `config_version 1`, пустой контур (чистый слот). **Доказательство, что отвечает
+  okna, а не дев:** журнал `1c-packet-server` на okna — запросы от `10.3.0.3`
+  (роутер), включая сам config-запрос.
+- **Дист**: слот `work/packet/dist/okna-1/` из того же бинаря v2.1, что klient-1
+  (md5 совпал), zip + onefile `1c-ai-okna-1.exe` (10 978 077 байт). S3:
+  `installers/okna-1/` на twc и fsn1, обе ссылки проверены HTTP 200.
+
+Дальше без человека (глаза на месте): установщик у клиента → smoke `kind=meta` →
+onboard пишет контур → агент забирает → полная выгрузка → firstbuild собирает
+слой. Первый живой прогон покажет валидатор состава (K1 живая приёмка).
+
+---
+
 ## 12.08: EU-юнит okna (167.233.249.110) — копия юнита .7 побайтно `[замер]`
 
 Решение владельца 12.08: EU-контур — свой роутер (`pro-router`,

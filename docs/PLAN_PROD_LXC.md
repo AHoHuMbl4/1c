@@ -370,3 +370,14 @@ linger), `/opt/1c-bot-monitor`, все `1c-*` юниты (disabled до прив
 Привязка первой EU-базы — по шагам §8.1 (роли `setup.sh` → identity/bases.json →
 приёмник → backend на роутере по CN → dist установщика), после готовности
 EU-роутера.
+
+**Привязка `okna-1` выполнена 12.08** (роутер готов, домен `1c-gate.timpul.pro`):
+слот active (приёмник + apply-таймер + глаза onboard/firstbuild), на роутере
+выпущен LE-серт .pro (до этого стояла самоподписанная заглушка) и добавлен
+backend `cn_okna_1 → 10.3.0.4:6090`; приёмка `/health` и `/v1/agent/config`
+через домен с сертификатом okna-1 — 200, по журналу okna доказано, что отвечает
+она (запросы от 10.3.0.3). Дист `1c-ai-okna-1.exe` (бинарь v2.1, тот же md5, что
+у klient-1) на S3 twc + fsn1, слот `installers/okna-1/`. Разбор и замеры —
+CHANGELOG 12.08 («okna-1 — первая EU-база»). Отличие привязки EU от §8.1 одно:
+комплект собирается `packet_kit.py <base> --receiver-url
+https://1c-gate.timpul.pro` (у `onboard-base.sh` флага нет, он шьёт RU-домен).

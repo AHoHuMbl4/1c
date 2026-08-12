@@ -11,8 +11,11 @@ challenges:
       webroot: /var/www/lego
 
 certificates:
-  1c-gate-eu.timpul.ru:
+  # боевая точка входа EU-контура (DNS заведён владельцем 12.08, серт выпущен
+  # lego 12.08; прежний домен-заготовка 1c-gate-eu.timpul.ru снят — DNS под
+  # него не заводился)
+  1c-gate.timpul.pro:
     challenge: http-webroot
     account: timpul
     domains:
-      - 1c-gate-eu.timpul.ru
+      - 1c-gate.timpul.pro

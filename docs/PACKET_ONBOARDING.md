@@ -74,6 +74,18 @@ bash /srv/1c/work/packet/onboard-base.sh <base_id>
 6. Запись базы на ДЕВЕ после переезда снимается (отзыв — root-шаг, см. ниже):
    пока она там, дев молча принял бы пакеты, если бы релей их туда пустил.
 
+## Вариант: EU-контур (роутер `1c-gate.timpul.pro`, юнит okna)
+
+Тот же рецепт VPS, три поправки (прогон okna-1, 12.08):
+
+1. Комплект — с явным доменом: `packet_kit.py <base> --receiver-url
+   https://1c-gate.timpul.pro` (у `onboard-base.sh` флага нет — RU по умолчанию).
+2. Слот — на юните okna: доступ с дева напрямую `ssh -i ~/.ssh/id_ed25519_deploy
+   root@167.233.249.110` (белый IP, релей для ssh не нужен).
+3. Релей — pro-router `2.28.54.129` (deploy-ключ): ACL по CN → backend
+   `<внутр.ip юнита>:6090` (образец `cn_okna_1`); LE-серт домена — lego webroot
+   `/var/www/lego`, pem собирает `deploy-certs.sh`; `haproxy -c` + reload.
+
 ## Дальше (уже не этот скрипт)
 
 1. Клиент запускает `1c-ai.exe` из zip — установка IIS/OData + агент (см. ТЗ
