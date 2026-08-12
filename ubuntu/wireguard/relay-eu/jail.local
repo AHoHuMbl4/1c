@@ -1,0 +1,13 @@
+# fail2ban на EU-релее 1c-gate-eu (2.28.54.129, Ubuntu 26.04): sshd-jail.
+# ignoreip — свои: NAT основного сервера (туннель!) и RU-релей. Свой IP сюда
+# обязательно: jail отсекает наш же туннель (проверено на RU-релее 08.08:
+# 4 неудачных входа при разведке → бан основного NAT-IP).
+[DEFAULT]
+bantime  = 1h
+findtime = 10m
+maxretry = 5
+ignoreip = 127.0.0.1/8 ::1 167.235.37.94 89.23.101.22
+backend = systemd
+
+[sshd]
+enabled = true

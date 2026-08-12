@@ -40,13 +40,18 @@ Ubuntu LXC (наш, всё loopback):
 | — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` | root | алерт владельцу в Telegram при падении |
 | — | `nightly-eval.timer` | `nightly-eval.sh` | root | ⛔ **погашен 29.07**: гонял евал выведенного слоя braine и слал алерт владельцу **с боевого токена бота**. Поднимать не надо |
 
-**Мост наружу (06.08):** релей приёмника `1c-gate.timpul.ru:443` (HAProxy на
-FreeBSD `201.34.130.46`, TLS-терминация LE) → `127.0.0.1:6022` → **SSH
-reverse-туннель** (юнит `1c-gate-tunnel`, инициатор Ubuntu) → `packet_server`
-на `127.0.0.1:6090`; наружу приёмник не светит. 🔴 WireGuard замерен нерабочим
+**Мост наружу (обновлено 12.08):** релей приёмника `1c-gate.timpul.ru:443` — с 08.08
+это **Ubuntu-релей `89.23.101.22`** (HAProxy, TLS-терминация LE, mTLS) →
+`127.0.0.1:6022` → **SSH reverse-туннель** (юнит `1c-gate-tunnel-ubuntu`,
+инициатор Ubuntu) → `packet_server` на `127.0.0.1:6090`; наружу приёмник не
+светит. FreeBSD `201.34.130.46` выведена 08.08 (конфиги — образец порта).
+**EU-релей `2.28.54.129` (`1c-gate-eu.timpul.ru`) поднят 12.08** — копия для
+EU-рынка, конфиги `ubuntu/wireguard/relay-eu/`; ждёт DNS A-записи (владелец) и
+третьего туннеля (root-шаг `ubuntu/wireguard/setup-ubuntu-tunnel-eu.sh`, юнит
+`1c-gate-tunnel-eu`). 🔴 WireGuard замерен нерабочим
 06.08 (возвратный UDP Европа→РФ мёртв — ни WG, ни plain-эхо; TCP чист).
 Установка Ubuntu-стороны — один root-шаг: `ubuntu/wireguard/setup-ubuntu-tunnel.sh`;
-устройство, конфиги FreeBSD и замеры — `ubuntu/wireguard/README.md` +
+устройство, конфиги и замеры — `ubuntu/wireguard/README.md` +
 `ubuntu/wireguard/freebsd/`. 🔴 Порт приёмника 6090: :6021 занят шлюзом второй базы.
 
 **Пакетный транспорт (развёрнут 07.08, контракт `docs/PACKET_CONTRACT.md`):** Windows

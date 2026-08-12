@@ -18,6 +18,21 @@ _Сводка по стадиям контракта — [`docs/TARGET_STATUS.md
 Разбор — `SPEC_RETAIL_VS_SALES.md §4-бис`, CHANGELOG 06.08 вечер. Выключатель `ASK_NOT_FOR=0`.
 Первая база: золотой 4/4 после каждой версии, после выката «12 контрагентов + 1 папка».
 
+## 2026-08-12: EU-релей + перенос раздела «Канал 1c-gate.timpul.ru» из activeContext
+
+EU-релей `2.28.54.129` — разбор в [`CHANGELOG.md`](../CHANGELOG.md) 12.08 и
+`ubuntu/wireguard/README.md`. Ниже — раздел activeContext редакции 06-07.08,
+перенесённый 12.08 (порог 300 строк; эпоха FreeBSD-релея, выведена 08.08;
+актуальное устройство канала — в README):
+
+**Канал `1c-gate.timpul.ru` → Ubuntu `[06-07.08]`: ✅ В БОЮ целиком (туннель, приёмник, mTLS, fail2ban).**
+Домен → HAProxy на FreeBSD `201.34.130.46` (`:443`, mTLS `verify required`, CA `1c-packet-ca`)
+→ SSH reverse-туннель (юнит `1c-gate-tunnel`, `6022 → 127.0.0.1:6090`, инициатор Ubuntu) →
+`packet_server` + `1c-packet-apply.timer` — active. 🔴 WireGuard замерен МЁРТВЫМ (возвратный
+UDP Европа→РФ не доходит вовсе, TCP чист — `ubuntu/wireguard/README.md`, там же замеры
+скорости ~37 Мбит/с и живучести). Замеры: без серта обрыв TLS, с сертом `CN=ut` — 200.
+⚠ Часы релея отстают ~2 мин: свежий сертификат отвергается до notBefore по ЕГО часам.
+
 ## 2026-08-08: почтовый приёмник подготовлен + перенос плана 03.08 из activeContext
 
 Почта: `ubuntu/mail/` (Postfix+Dovecot, установка за владельцем) — разбор в

@@ -38,6 +38,24 @@ Windows (TLS) → https://1c-gate.timpul.ru:443  [DNS → 201.34.130.46]
 
 ## Состояние сторон
 
+**EU-релей `2.28.54.129` (`pro-router`, Ubuntu 26.04) — поднят 12.08, ждёт DNS и туннель:**
+копия RU-релея для EU-рынка, домен `1c-gate-eu.timpul.ru`. Конфиги —
+[`relay-eu/`](relay-eu/) (`haproxy.cfg`, `lego.yml`, `jail.local`; общие файлы —
+из `relay/`). Отличия от RU-релея: свой домен и нет backend'ов юнитов приватной
+сети (10.3.0.0/24 этого хостера до RU-юнитов 10.1.1.x не доходит — CN-маршрут
+добавляется по образцу `relay/haproxy.cfg`, когда появятся EU-юниты).
+HAProxy 3.2.9 + lego + fail2ban 1.1.0 из apt, пользователь `gate-tunnel`
+(тот же ключ, `restrict,permitlisten="127.0.0.1:6022"`), зона Europe/Moscow.
+`[замер 12.08]` приёмка с дева: без серта — обрыв TLS (код 56), `Acceptable
+client CA: CN=1c-packet-ca`, с сертом `ut` — handshake проходит, ответ 503
+(туннель ещё не поднят — норма), `:80` — 301 + ACME-путь доходит до webroot,
+fail2ban sshd-jail засчитывает failed. **Осталось два шага:** (1) владелец
+добавляет DNS A `1c-gate-eu.timpul.ru` → `2.28.54.129`, затем выпуск серта:
+`LEGO_CONFIG=/usr/local/etc/lego/lego.yml lego run && /usr/local/sbin/deploy-certs.sh`
+(сейчас на `:443` самоподписанная заглушка, чтобы HAProxy стартовал; deploy-certs
+подменит её сам); (2) root-шаг на деве: `sudo sh ubuntu/wireguard/setup-ubuntu-tunnel-eu.sh`
+— после него 503 → 200.
+
 **Ubuntu-релей `89.23.101.22` — ✅ В БОЮ с 08.08 (DNS переключён, FreeBSD выведен):**
 - `[замер 08.08]` боевая проверка по публичному DNS (с FreeBSD, свежий резолв):
   health с сертом `ut` → **200 `packet-server-ok`**, без серта — обрыв TLS;

@@ -1,0 +1,22 @@
+[Unit]
+Description=Обратный туннель приёмника: EU-релей 2.28.54.129 127.0.0.1:6022 → packet_server 127.0.0.1:6090
+# Третий туннель (EU-релей, 12.08): параллельно с 1c-gate-tunnel-ubuntu.service
+# (RU-релей) — оба релея живы одновременно, переключение делает DNS.
+# ubuntu/wireguard/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/ssh -N -T \
+    -o ServerAliveInterval=30 \
+    -o ServerAliveCountMax=3 \
+    -o ExitOnForwardFailure=yes \
+    -o StrictHostKeyChecking=accept-new \
+    -i /etc/ssh/gate-tunnel.ed25519 \
+    -R 127.0.0.1:6022:127.0.0.1:6090 \
+    gate-tunnel@2.28.54.129
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
