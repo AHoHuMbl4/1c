@@ -401,7 +401,10 @@ namespace Oc1c
             "IIS-HttpErrors","IIS-RequestFiltering","IIS-Security","IIS-ISAPIExtensions","IIS-ISAPIFilter","IIS-CGI",
             "IIS-WebServerManagementTools","IIS-ManagementConsole"
         };
-        static readonly string[] IisOptional = new string[] { "IIS-HttpLogging", "IIS-HttpCompressionStatic" };
+        // IIS-HttpLogging сознательно НЕ ставим (13.08, PLAN_FIRST_DUMP_SAFE §2.1):
+        // журнал IIS на потоке OData-выгрузки — лишние гигабайты на диске клиента,
+        // а диагностику канала даёт лог агента и отчёт хода такта.
+        static readonly string[] IisOptional = new string[] { "IIS-HttpCompressionStatic" };
 
         // Возвращает: 0 — всё на месте; 1 — включили, нужен ребут; 2 — включили без ребута; -1 — ошибка
         public static int EnsureIis(out string detail)
@@ -664,9 +667,13 @@ namespace Oc1c
                     "                base=\"/" + alias + "\"\r\n" +
                     "                ib=\"" + esc + "\">\r\n" +
                     "        <ws pointEnableCommon=\"true\"/>\r\n" +
+                    // sessionMaxAge — ВРЕМЯ ПРОСТОЯ сеанса (idle), не срок жизни.
+                    // 20 c (умолчание платформы) роняет сеанс в любую паузу выгрузки;
+                    // 3600 переживает паузу до часа (HTTP-таймаут агента 600 с).
+                    // PLAN_FIRST_DUMP_SAFE §2.1, 13.08.
                     "        <standardOdata enable=\"true\"\r\n" +
                     "                        reuseSessions=\"autouse\"\r\n" +
-                    "                        sessionMaxAge=\"20\"\r\n" +
+                    "                        sessionMaxAge=\"3600\"\r\n" +
                     "                        poolSize=\"10\"\r\n" +
                     "                        poolTimeout=\"5\"/>\r\n" +
                     "        <analytics enable=\"false\"/>\r\n" +
@@ -938,12 +945,21 @@ namespace Oc1c
                     od = new XElement(ns + "standardOdata",
                         new XAttribute("enable", "true"),
                         new XAttribute("reuseSessions", "autouse"),
-                        new XAttribute("sessionMaxAge", "20"),
+                        new XAttribute("sessionMaxAge", "3600"),
                         new XAttribute("poolSize", "10"),
                         new XAttribute("poolTimeout", "5"));
                     doc.Root.Add(od);
                 }
-                else od.SetAttributeValue("enable", "true");
+                else
+                {
+                    od.SetAttributeValue("enable", "true");
+                    // Умолчание платформы 20 с — это простой (idle): любая пауза
+                    // выгрузки роняет сеанс. Поднимаем только умолчание; значение,
+                    // выставленное админом руками, не трогаем (PLAN_FIRST_DUMP_SAFE §2.1).
+                    XAttribute sm = od.Attribute("sessionMaxAge");
+                    if (sm == null || sm.Value == "20")
+                        od.SetAttributeValue("sessionMaxAge", "3600");
+                }
 
                 doc.Save(vrd);
                 Ctx.Changed = true;

@@ -28,11 +28,12 @@ namespace PacketAgent
     // Каждое число можно переопределить ключом в agent.ini — имя ключа в скобках.
     internal static class C
     {
-        internal const string Version = "1.1.1";   // чанки на диск по ходу обхода: память
-                                                   // не растёт с размером базы (13.08);
+        internal const string Version = "1.1.2";   // щадящий режим для 1С: без COUNT, без
+                                                   // двойного скана, порции + возобновление
+                                                   // по индексу, хвост журнала в пакете (13.08);
+                                                   // 1.1.1 — чанки на диск по ходу обхода;
                                                    // 1.1.0 — отчёт хода такта на приёмник;
-                                                   // 1.0.3 — тупик пустого контура + код смоука;
-                                                   // 1.0.2 — outbox логов + skipped-only
+                                                   // 1.0.3 — тупик пустого контура + код смоука
         internal const int ManifestVersion = 1;
 
         internal const int PageSizeDefault = 10000;   // (page_size) размер страницы OData
@@ -51,6 +52,12 @@ namespace PacketAgent
         internal const int StaleSeqJump = 1000000;    // скачок seq при stale_seq (см. Tact)
         internal const int ProgressSecondsDefault = 60; // (progress_seconds) отчёт хода такта; 0 — выключен
         internal const int ProgressTimeoutSeconds = 10; // бюджет одной попытки отчёта (повторов нет)
+        internal const int RetryPauseSeconds = 30;    // пауза×N перед повтором упавшей страницы:
+                                                      // не бить тяжёлыми запросами по больному 1С
+        internal const int BatchMbDefault = 128;      // (batch_mb) порог отправки порции, МБ сжатой очереди
+        internal const int BatchSecondsDefault = 3600;// (batch_seconds) порцию — не реже раза в час,
+                                                      // даже если порог по объёму не набран
+        internal const int LogTailBytes = 256 * 1024; // хвост своего журнала в каждом пакете (чанк log)
     }
 
     // ============================ конфиг agent.ini ==============================
@@ -67,6 +74,8 @@ namespace PacketAgent
         internal int TactSeconds = C.TactSecondsDefault;
         internal int ChunkMb = C.ChunkMbDefault;
         internal int ProgressSeconds = C.ProgressSecondsDefault;
+        internal int BatchMb = C.BatchMbDefault;
+        internal int BatchSeconds = C.BatchSecondsDefault;
         internal string LogDir = @"C:\1c\logs";
 
         // Режим упаковки по конфигу: pubkey не задан → plain (пилот).
@@ -109,6 +118,8 @@ namespace PacketAgent
             c.PageSize = GetInt(kv, "page_size", c.PageSize);            c.PageMin = GetInt(kv, "page_min", c.PageMin);
             c.TactSeconds = GetInt(kv, "tact_seconds", c.TactSeconds);
             c.ChunkMb = Math.Max(C.ChunkMbMin, Math.Min(C.ChunkMbMax, GetInt(kv, "chunk_mb", c.ChunkMb)));
+            c.BatchMb = GetInt(kv, "batch_mb", c.BatchMb);
+            c.BatchSeconds = GetInt(kv, "batch_seconds", c.BatchSeconds);
             // progress_seconds: 0 — законное значение «отчёты выключены», поэтому не
             // через GetInt (он отбрасывает всё, что не больше нуля).
             string psRaw;
@@ -205,6 +216,10 @@ namespace PacketAgent
     {
         static readonly List<string> Secrets = new List<string>();
         static string _file;
+
+        // Путь файла журнала — для хвоста, уезжающего чанком log в каждом пакете
+        // (телеметрия 1.1.2: у нас нет доступа к машине клиента).
+        internal static string FilePath { get { return _file; } }
 
         internal static void AddSecret(string s)
         {
@@ -1088,17 +1103,9 @@ namespace PacketAgent
             }
         }
 
-        internal int CountOf(string entity)
-        {
-            try
-            {
-                HttpWebRequest req = NewRequest(_cfg.OdataUrl + "/" + Q(entity) + "/$count");
-                using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
-                using (StreamReader r = new StreamReader(resp.GetResponseStream()))
-                    return int.Parse(r.ReadToEnd().Trim(), CultureInfo.InvariantCulture);
-            }
-            catch { return -1; }
-        }
+        // CountOf/ExpectedOf удалены в 1.1.2 (PLAN_FIRST_DUMP_SAFE §2.2): COUNT по
+        // чужой СУБД на каждую сущность был тяжелейшей частью нашей нагрузки, а
+        // полноту чтения держит правило «конец — только пустая страница».
 
         static IList ValueOf(Dictionary<string, object> doc)
         {
@@ -1106,21 +1113,18 @@ namespace PacketAgent
             return doc.TryGetValue("value", out v) ? (v as IList ?? new ArrayList()) : new ArrayList();
         }
 
-        static int ExpectedOf(Dictionary<string, object> doc)
-        {
-            object c;
-            if (!doc.TryGetValue("odata.count", out c) && !doc.TryGetValue("__count", out c))
-                return -1;
-            try { return Convert.ToInt32(c, CultureInfo.InvariantCulture); }
-            catch { return -1; }
-        }
-
-        // fetch_all: первая страница БЕЗ $orderby и с $inlinecount; данных больше
-        // страницы — заново с $orderby по объявленному ключу; HTTP-ошибка — страница
-        // вчетверо до page_min и сущность читается СНАЧАЛА; сверка с odata.count.
+        // fetch_all: первая страница БЕЗ $orderby; данных больше страницы — заново
+        // с $orderby по объявленному ключу; HTTP-ошибка — пауза с нарастанием,
+        // страница вчетверо до page_min и сущность читается СНАЧАЛА.
+        // 🔴 Без $inlinecount и без /$count (1.1.2, PLAN_FIRST_DUMP_SAFE §2.2):
+        // COUNT миллионной таблицы ради числа в первом ответе — тяжёлый запрос к
+        // чужой СУБД на каждую сущность (ночь 12-13.08: 100 ГБ на диске клиента).
+        // Полноту вместо сверки с count держит правило конца: сущность закончена
+        // ТОЛЬКО пустой страницей — короткая страница продолжает чтение, а не
+        // обрывает его (цена — один лишний GET на сущность, потеря — ноль).
         internal List<Dictionary<string, object>> FetchAll(string entity)
         {
-            int expected = -1, page = _cfg.PageSize, skip = 0, shortPages = 0;
+            int page = _cfg.PageSize, skip = 0, retries = 0;
             string order = "";
             bool first = true;
             List<Dictionary<string, object>> rows = new List<Dictionary<string, object>>();
@@ -1130,7 +1134,6 @@ namespace PacketAgent
                 prm["$format"] = "json";
                 prm["$top"] = page.ToString(CultureInfo.InvariantCulture);
                 prm["$skip"] = skip.ToString(CultureInfo.InvariantCulture);
-                if (first) prm["$inlinecount"] = "allpages";
                 if (order.Length > 0) prm["$orderby"] = order;
                 IList v;
                 try
@@ -1140,18 +1143,16 @@ namespace PacketAgent
                     if (first)
                     {
                         first = false;
-                        expected = ExpectedOf(doc);
-                        if (v.Count >= page && (expected < 0 || expected > page))
+                        if (v.Count >= page)
                         {
                             order = _meta.OrderBy(entity) ?? "";
                             if (order.Length > 0)
                             {
                                 rows = new List<Dictionary<string, object>>();
-                                skip = 0; shortPages = 0;
+                                skip = 0;
                                 continue;
                             }
                         }
-                        if (expected < 0) expected = CountOf(entity);
                     }
                 }
                 catch (OdataNotFoundException) { throw; }
@@ -1162,15 +1163,22 @@ namespace PacketAgent
                     // странице появляется постраничность, а с ней обязателен $orderby,
                     // поэтому начинаем сущность заново, а не продолжаем с середины.
                     if (page <= _cfg.PageMin) throw;
+                    // Усилитель нагрузки (ночь 12-13.08): немедленный перезапуск
+                    // сущности бил тяжёлыми запросами по серверу, которому уже
+                    // плохо. Пауза с нарастанием даёт 1С отдышаться ДО повтора.
+                    retries++;
+                    int pause = C.RetryPauseSeconds * retries;
+                    Log.Line("    " + entity + ": страница не прочиталась — пауза "
+                             + pause + " с, затем повтор со страницей "
+                             + Math.Max(_cfg.PageMin, page / 4));
+                    Thread.Sleep(pause * 1000);
                     page = Math.Max(_cfg.PageMin, page / 4);
-                    order = (expected < 0 || expected > page) ? (_meta.OrderBy(entity) ?? "") : "";
+                    order = _meta.OrderBy(entity) ?? "";
                     rows = new List<Dictionary<string, object>>();
-                    skip = 0; shortPages = 0; first = true;
-                    Log.Line("    " + entity + ": страница уменьшена до " + page
-                             + " — 1С не отдала крупную");
+                    skip = 0; first = true;
                     continue;
                 }
-                if (v.Count == 0) break;
+                if (v.Count == 0) break;   // конец сущности — ТОЛЬКО пустая страница
                 foreach (object o in v)
                 {
                     IDictionary<string, object> d = o as IDictionary<string, object>;
@@ -1178,12 +1186,6 @@ namespace PacketAgent
                 }
                 skip += v.Count;
                 Progress.Rows(rows.Count);   // ход внутри крупной сущности
-                if (v.Count < page)
-                {
-                    shortPages++;
-                    if (expected >= 0 && rows.Count >= expected) break;
-                    if (expected < 0 && shortPages > 1) break;
-                }
             }
             return rows;
         }
@@ -1192,7 +1194,13 @@ namespace PacketAgent
         // та же дисциплина страниц. null — проба неполная/не удалась: дельта отменяется.
         internal Dictionary<string, string> ProbeVersions(string entity)
         {
-            int expected = -1, top = _cfg.PageSize, skip = 0;
+            // 🔴 Без $inlinecount и без /$count (1.1.2) — как в FetchAll: COUNT на
+            // каждую версионированную сущность каждые 20 минут и был самой частой
+            // тяжёлой операцией по чужой СУБД. Полноту пробы (от неё зависит gone —
+            // отсутствие ключа читается как удаление!) держит то же правило: конец —
+            // ТОЛЬКО пустая страница; сбой после уменьшения страницы — null, дельта
+            // отменяется, сущность честно читается полностью.
+            int top = _cfg.PageSize, skip = 0, retries = 0;
             bool first = true;
             Dictionary<string, string> probe = new Dictionary<string, string>();
             while (true)
@@ -1202,8 +1210,7 @@ namespace PacketAgent
                 prm["$select"] = "Ref_Key,DataVersion";
                 prm["$top"] = top.ToString(CultureInfo.InvariantCulture);
                 prm["$skip"] = skip.ToString(CultureInfo.InvariantCulture);
-                if (first) prm["$inlinecount"] = "allpages";
-                if (!first && (expected < 0 || expected > top)) prm["$orderby"] = "Ref_Key";
+                if (!first) prm["$orderby"] = "Ref_Key";
                 IList page;
                 try
                 {
@@ -1212,10 +1219,9 @@ namespace PacketAgent
                     if (first)
                     {
                         first = false;
-                        expected = ExpectedOf(doc);
-                        if (expected < 0) expected = CountOf(entity);
-                        if (page.Count >= top && (expected < 0 || expected > top))
+                        if (page.Count >= top)
                         {
+                            // Постраничность впереди — перечитываем с $orderby с нуля.
                             probe = new Dictionary<string, string>();
                             skip = 0;
                             continue;
@@ -1227,12 +1233,18 @@ namespace PacketAgent
                 catch (Exception)
                 {
                     if (top <= _cfg.PageMin) return null;
+                    retries++;
+                    int pause = C.RetryPauseSeconds * retries;   // не бить по больному серверу
+                    Log.Line("    " + entity + ": проба версий не прочиталась — пауза "
+                             + pause + " с и повтор со страницей "
+                             + Math.Max(_cfg.PageMin, top / 4));
+                    Thread.Sleep(pause * 1000);
                     top = Math.Max(_cfg.PageMin, top / 4);
                     probe = new Dictionary<string, string>();
                     skip = 0; first = true;
                     continue;
                 }
-                if (page.Count == 0) break;
+                if (page.Count == 0) break;   // конец — только пустая страница
                 foreach (object o in page)
                 {
                     IDictionary<string, object> d = o as IDictionary<string, object>;
@@ -1245,10 +1257,7 @@ namespace PacketAgent
                 }
                 skip += page.Count;
                 Progress.Rows(probe.Count);   // ход пробы версий (дельта-путь)
-                if (expected >= 0 && probe.Count >= expected) break;
             }
-            // Неполная проба — не дельта: живые записи выглядели бы «удалёнными».
-            if (expected >= 0 && probe.Count < expected) return null;
             return probe;
         }
 
@@ -1743,6 +1752,7 @@ namespace PacketAgent
         string _queueDir, _pkgShort;
         long _seq;
         int _chunkNo;
+        long _batchEncBytes;   // сжатых байт в текущей порции — порог отправки
         List<Dictionary<string, object>> _chunkEntries = new List<Dictionary<string, object>>();
 
         internal Tact(Cfg cfg, string exeDir)
@@ -1909,6 +1919,7 @@ namespace PacketAgent
                     if (parts.Count > 1)
                         entry["entity_part"] = (i + 1) + "/" + parts.Count;
                     _chunkEntries.Add(entry);
+                    _batchEncBytes += Convert.ToInt64(entry["bytes_enc"], CultureInfo.InvariantCulture);
                     res.Chunks.Add(name);
                 }
             }
@@ -2064,7 +2075,7 @@ namespace PacketAgent
                         Progress.Kind("meta", _state.Seq + 1);
                         metaSent = SendPackage("meta", new List<EntityResult>(),
                                                new List<KeyValuePair<string, string>>(),
-                                               true, newCv, null, _state.SkippedFp);
+                                               true, newCv, null, null, false);
                     }
                 }
                 catch (Exception e)
@@ -2093,7 +2104,13 @@ namespace PacketAgent
                      + (metaChanged ? ", $metadata изменился" : ""));
             Progress.Kind(firstRun ? "full" : "delta", _state.Seq + 1);
 
-            // (2) сбор изменений
+            // (2) сбор изменений — порциями (1.1.2, PLAN_FIRST_DUMP_SAFE §2.2).
+            // Раньше пакет уезжал ОДИН, после обхода всего контура: падение 1С на
+            // середине ERP обнуляло сутки чтения, а очередь росла на весь размер
+            // выгрузки. Теперь порция уезжает при наборе batch_mb сжатой очереди
+            // или раз в batch_seconds; после applied индекс покрывает отправленное,
+            // очередь удаляется, и возобновление НЕ перечитывает доехавшее.
+            // Пороги — про НАШУ машину (диск очереди), не про чужую схему.
             List<EntityResult> results = new List<EntityResult>();
             List<KeyValuePair<string, string>> gone = new List<KeyValuePair<string, string>>();
             List<KeyValuePair<string, string>> skipped = new List<KeyValuePair<string, string>>();
@@ -2102,6 +2119,10 @@ namespace PacketAgent
             int entityNo = 0;
             int flushed = 0;                          // сколько результатов уже на диске
             long chunkLimit = (long)_cfg.ChunkMb * 1024 * 1024;
+            long batchLimit = (long)_cfg.BatchMb * 1024 * 1024;
+            int batchStartTick = Environment.TickCount;
+            bool sendMetaPending = firstRun || (_state.MetadataFingerprint != _meta.Fingerprint);
+            string tactKind = firstRun ? "full" : "delta";
             foreach (string e in entities)
             {
                 Progress.Entity(e, ++entityNo, entities.Count);
@@ -2162,6 +2183,30 @@ namespace PacketAgent
                 // ни одного, поэтому идём по хвосту списка, а не по одному элементу.
                 for (; flushed < results.Count; flushed++)
                     FlushEntity(results[flushed], chunkLimit);
+
+                // Порция готова? Отправляем, не дожидаясь конца контура. Секция
+                // skipped в промежуточных порциях НЕ едет (null): её состав ясен
+                // только после всего обхода — уедет финальным пакетом.
+                if (_chunkEntries.Count > 0
+                    && (_batchEncBytes >= batchLimit
+                        || Environment.TickCount - batchStartTick >= (long)_cfg.BatchSeconds * 1000))
+                {
+                    Log.Line("порция: чанков " + _chunkEntries.Count + ", сжато "
+                             + (_batchEncBytes / (1024 * 1024)) + " МБ — отправка, обход продолжится");
+                    if (!SendPackage(tactKind, results, gone, sendMetaPending, newCv, null, null, false))
+                    {
+                        // Порция не подтверждена: очередь останется, ResumePackage
+                        // довезёт её следующим тактом, а индекс уже покрывает всё
+                        // отправленное ранее — перечитывания доехавшего не будет.
+                        Log.Line("порция не подтверждена — такт прерван, довозка и "
+                                 + "продолжение следующим тактом");
+                        ProcessOutbox();
+                        return false;
+                    }
+                    sendMetaPending = false;   // снимок уехал с первой порцией
+                    results.Clear(); gone.Clear(); flushed = 0;
+                    batchStartTick = Environment.TickCount;
+                }
             }
 
             // (4) ноль изменений — пакет НЕ шлём (контракт §7); исключение — изменился
@@ -2173,27 +2218,42 @@ namespace PacketAgent
             // (приёмник такой пакет принимает: _validate_manifest посторонних
             // секций не режет, apply работает по наличию секций, kind игнорирует).
             // «Уже сообщено» — только когда набор пуст и раньше ничего не уходило.
-            bool anyData = results.Count > 0 || gone.Count > 0;
-            bool sendMeta = firstRun || metaChanged;
+            bool anyData = _chunkEntries.Count > 0 || gone.Count > 0;
+            bool sendMeta = sendMetaPending;
             string skipFp = EntityIndex.HashHex(Encoding.UTF8.GetBytes(string.Join("\n",
                 skipped.ConvertAll(kv => kv.Key + "\t" + kv.Value).ToArray())));
             bool skipChanged = skipFp != _state.SkippedFp
                                && (skipped.Count > 0 || _state.SkippedFp.Length > 0);
             if (!anyData && !sendMeta && !skipChanged)
             {
+                // Сюда попадаем и когда ВСЁ уехало порциями: контур пройден,
+                // остался только финальный маркер полноты.
+                if (firstRun) MarkFullDone(newCv);
+                else { _state.ConfigVersion = newCv; _state.Save(); }
                 Log.Line("изменений нет — пакет не отправляется"
                          + (skipped.Count > 0 ? " (пропущенных: " + skipped.Count + " — уже сообщено)" : ""));
-                _state.ConfigVersion = newCv;
-                _state.Save();
                 ProcessOutbox();   // логи из outbox едут и «пустым» тактом
                 return true;
             }
             string kind = firstRun ? "full" : (anyData ? "delta" : "meta");
 
-            // (5)-(7) пакет: чанки, крипто, отправка, индекс ПОСЛЕ applied/verified (К2)
-            bool sent = SendPackage(kind, results, gone, sendMeta, newCv, skipped, skipFp);
+            // (5)-(7) финальный пакет: полный skipped, маркер полноты — только здесь,
+            // когда КАЖДАЯ сущность контура либо доехала, либо в skipped с причиной.
+            bool sent = SendPackage(kind, results, gone, sendMeta, newCv, skipped, skipFp, firstRun);
             ProcessOutbox();   // после основной работы — довозка логов из outbox
             return sent;
+        }
+
+        // Финальный маркер первой заливки, когда данные уже уехали порциями и
+        // финальному пакету нечего везти: контур пройден целиком — full_done.
+        void MarkFullDone(long newCv)
+        {
+            _state.ConfigVersion = newCv;
+            _state.MetadataFingerprint = _meta.Fingerprint;
+            _state.FullDone = true;
+            _state.Resync = false;
+            _state.Save();
+            Log.Line("первая заливка завершена порциями — full_done");
         }
 
         void ProcessEntity(string e, bool firstRun,
@@ -2212,12 +2272,16 @@ namespace PacketAgent
                     return;
                 }
             }
-            EntityIndex idx = null;
-            if (!firstRun && _meta.HasVersions(e))
+            // 🔴 Решение по сущности принимает ИНДЕКС, а не флаг такта (1.1.2):
+            // при возобновлении первой заливки (сбой, порционная отправка) сущности,
+            // уже доехавшие до applied, имеют индекс — их не читаем полностью заново.
+            // Раньше firstRun значил «FetchAll всего, игнорируя индекс», и падение
+            // 1С на середине ERP обнуляло сутки работы (ночь 12-13.08).
+            EntityIndex idx = EntityIndex.Load(_cfg.DataDir, e);
+            if (idx != null && _meta.HasVersions(e))
             {
                 Dictionary<string, string> ver1c = _odata.ProbeVersions(e);
-                idx = EntityIndex.Load(_cfg.DataDir, e);
-                if (ver1c != null && idx != null)
+                if (ver1c != null)
                 {
                     List<string> changed = new List<string>();
                     foreach (KeyValuePair<string, string> kv in ver1c)
@@ -2269,10 +2333,11 @@ namespace PacketAgent
                     Log.Line("    " + e + ": дельта changed=" + changed.Count + " gone=" + goneK.Count);
                     return;
                 }
-                Log.Line("    " + e + ": проба версий неполная или индекса нет — полное прочтение");
+                Log.Line("    " + e + ": проба версий неполная — полное прочтение");
             }
 
-            // Полное прочтение: firstRun, сущность без версий, fallback, табличная часть.
+            // Полное прочтение: нет индекса (первое чтение), сущность без версий,
+            // fallback пробы, табличная часть менявшегося владельца.
             List<Dictionary<string, object>> rows = _odata.FetchAll(e);
             List<Dictionary<string, object>> flatAll = Flatten.Rows(rows, e, _meta);
             if (flatAll.Count == 0)
@@ -2285,11 +2350,10 @@ namespace PacketAgent
             byte[] csv = Flatten.CsvBytes(cols, flatAll, 0, flatAll.Count);
             string contentFp = "sha256:" + EntityIndex.HashHex(csv);
             string op;
-            if (firstRun) op = "full";
+            if (firstRun && idx == null) op = "full";
             else if (owner != null) op = "full_entity";   // владелец менялся — шлём часть
             else
             {
-                if (idx == null) idx = EntityIndex.Load(_cfg.DataDir, e);
                 if (idx != null && idx.ContentFp == contentFp)
                 {
                     ownerSilent[e] = true;   // К1: прочитали, сравнили — не изменилось
@@ -2308,10 +2372,22 @@ namespace PacketAgent
             res2.ContentFp = contentFp;
             if (_meta.HasVersions(e))
             {
-                // Версии для индекса берём свежей пробой (дёшево) — иначе следующий
-                // такт счёл бы всю сущность изменившейся.
-                Dictionary<string, string> pr = _odata.ProbeVersions(e);
-                if (pr != null)
+                // Версии для индекса — из ТОЛЬКО ЧТО прочитанных строк (1.1.2).
+                // Раньше здесь звался ProbeVersions — второй полный проход по
+                // сущности, которую секунду назад дочитали: на первом такте ERP
+                // каждая версионированная таблица сканировалась дважды
+                // (PLAN_FIRST_DUMP_SAFE §2.2). FetchAll идёт без $select — Ref_Key
+                // и DataVersion уже в сырых строках верхнего уровня.
+                Dictionary<string, string> pr = new Dictionary<string, string>();
+                foreach (Dictionary<string, object> r in rows)
+                {
+                    object rk, dv;
+                    if (!r.TryGetValue("Ref_Key", out rk) || rk == null) continue;
+                    r.TryGetValue("DataVersion", out dv);
+                    pr[Convert.ToString(rk, CultureInfo.InvariantCulture)] =
+                        dv == null ? "" : Convert.ToString(dv, CultureInfo.InvariantCulture);
+                }
+                if (pr.Count > 0)
                 {
                     res2.NewVersions = pr;
                     res2.VersionFp = EntityIndex.VersionFingerprint(pr);
@@ -2324,10 +2400,13 @@ namespace PacketAgent
 
         // Сборка пакета в очередь + отправка. План обновления индекса пишется ДО
         // отправки (plan.json) — чтобы довозка после обрыва закончила тем же К2.
+        // skipped == null — промежуточная порция (секция skipped не едет, отпечаток
+        // не трогается); markFullDone — только финальный пакет первой заливки.
         bool SendPackage(string kind, List<EntityResult> results,
                          List<KeyValuePair<string, string>> gone,
                          bool sendMeta, long newCv,
-                         List<KeyValuePair<string, string>> skipped, string skipFp)
+                         List<KeyValuePair<string, string>> skipped, string skipFp,
+                         bool markFullDone)
         {
             // Чанки сущностей уже на диске: их пишет FlushEntity по ходу обхода,
             // чтобы память не росла с размером базы (13.08). Здесь остаются только
@@ -2359,6 +2438,27 @@ namespace PacketAgent
                 entry["rows"] = 0;
                 chunkEntries.Add(entry);
             }
+            // Хвост своего журнала — в КАЖДЫЙ пакет (телеметрия 1.1.2): доступа к
+            // машине клиента нет, и до этого причину ночного сбоя восстанавливали
+            // по косвенным признакам («пальцем в небо» — слово владельца 13.08).
+            // Сбой хвоста пакет не валит — телеметрия не смеет мешать доставке.
+            bool logIncluded = false;
+            try
+            {
+                string lf = Log.FilePath;
+                if (lf != null && File.Exists(lf))
+                {
+                    byte[] tail = ReadTail(lf, C.LogTailBytes);
+                    if (tail.Length > 0)
+                    {
+                        Dictionary<string, object> le = WriteChunk(queueDir, "log", tail);
+                        le["rows"] = 0;
+                        chunkEntries.Add(le);
+                        logIncluded = true;
+                    }
+                }
+            }
+            catch (Exception lex) { Log.Line("хвост журнала в пакет не вошёл: " + lex.Message); }
 
             // Манифест (PACKET_CONTRACT §5)
             Dictionary<string, object> m = new Dictionary<string, object>();
@@ -2404,6 +2504,15 @@ namespace PacketAgent
                 md["chunks"] = new string[] { "metadata" };
             }
             m["metadata"] = md;
+            if (logIncluded)
+            {
+                // Секция log (контракт §2/§9): apply кладёт файл в
+                // packet-meta/<base>/logs/<pkg>_<source>.log — диагностика, не витрина.
+                Dictionary<string, object> lg = new Dictionary<string, object>();
+                lg["source"] = "packet-agent.log";
+                lg["chunks"] = new string[] { "log" };
+                m["log"] = lg;
+            }
             // Секция skipped — ВСЕГДА, и пустой: «пропущенных больше нет» — такой
             // же факт для сервера, как и новый состав (ЗУП 11.08: права починились,
             // а skipped.json на сервере застыл). Apply реагирует на наличие секции.
@@ -2432,7 +2541,7 @@ namespace PacketAgent
             plan["config_version"] = newCv;
             plan["metadata_fingerprint"] = sendMeta ? _meta.Fingerprint : null;
             plan["skipped_fp"] = skipFp;
-            plan["mark_full_done"] = kind == "full";
+            plan["mark_full_done"] = markFullDone;
             Dictionary<string, object> pe = new Dictionary<string, object>();
             foreach (EntityResult res in results)
             {
@@ -2452,7 +2561,43 @@ namespace PacketAgent
                      + ": сущностей " + results.Count
                      + ", gone " + gone.Count + ", чанков " + chunkEntries.Count
                      + (sendMeta ? ", +metadata" : ""));
-            return UploadAndFinish(pkgShort, queueDir);
+            bool ok = UploadAndFinish(pkgShort, queueDir);
+            if (ok)
+            {
+                // Порция подтверждена и снята: следующая начинает свою очередь
+                // (EnsureQueueDir возьмёт свежий _state.Seq + 1).
+                _queueDir = null; _pkgShort = null;
+                _chunkNo = 0; _batchEncBytes = 0;
+                _chunkEntries = new List<Dictionary<string, object>>();
+            }
+            return ok;
+        }
+
+        // Хвост файла для чанка log: журнал открыт писателем — читаем с
+        // FileShare.ReadWrite (та же грабля, что у --send-log, HOW_NOT_TO §3.58).
+        static byte[] ReadTail(string path, int maxBytes)
+        {
+            using (FileStream fs = new FileStream(path, FileMode.Open, FileAccess.Read,
+                                                  FileShare.ReadWrite))
+            {
+                long from = Math.Max(0, fs.Length - maxBytes);
+                fs.Seek(from, SeekOrigin.Begin);
+                byte[] buf = new byte[fs.Length - from];
+                int off = 0;
+                while (off < buf.Length)
+                {
+                    int n = fs.Read(buf, off, buf.Length - off);
+                    if (n <= 0) break;
+                    off += n;
+                }
+                if (off < buf.Length)
+                {
+                    byte[] cut = new byte[off];
+                    Array.Copy(buf, cut, off);
+                    return cut;
+                }
+                return buf;
+            }
         }
 
         // Отправка: манифест → чанки (повторы допустимы) → status до verified/applied.

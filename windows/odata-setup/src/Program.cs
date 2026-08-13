@@ -39,6 +39,8 @@ namespace Oc1c
         public string PacketKit;            // --packet-kit: каталог комплекта (по умолчанию — рядом с exe)
         public string PacketDir;            // --packet-dir: куда ставить (по умолчанию C:\1c\packet)
         public bool SkipPacket;             // --skip-packet: не ставить агента даже при наличии комплекта
+        public bool RemoveLogcfg;           // --remove-logcfg: отложить чужой logcfg.xml в .bak (техжурнал);
+                                            // по умолчанию только предупреждаем — файл чужой (13.08)
     }
 
     internal static class Program
@@ -215,6 +217,39 @@ namespace Oc1c
                 Log.Con(new string('-', 74));
                 SaveTextBesideLog("1c-odata-добавить-веб-модуль.txt", tut);
                 return EXIT_PREREQ;
+            }
+            // Чужой техжурнал (PLAN_FIRST_DUMP_SAFE §2.1, ночь 12-13.08 на ERP):
+            // logcfg.xml в bin\conf пишет ГИГАБАЙТЫ В ЧАС под нагрузкой нашей
+            // выгрузки — лучший кандидат на «съело 100 ГБ за ночь». Мы его не
+            // кладём и БЕЗ ЯВНОГО ключа не трогаем (чужая настройка), но молчать
+            // о нём нельзя: предупреждение на экран и в лог (лог уезжает к нам
+            // outbox-ом — диагноз виден без захода на машину).
+            string logcfg = Path.Combine(plat.Bin ?? "", "conf", "logcfg.xml");
+            if (plat.Bin != null && File.Exists(logcfg))
+            {
+                long lcSize = 0;
+                try { lcSize = new FileInfo(logcfg).Length; } catch { }
+                if (o.RemoveLogcfg)
+                {
+                    string lcBak = logcfg + ".bak-" + DateTime.Now.ToString("yyyyMMdd_HHmmss");
+                    try
+                    {
+                        File.Move(logcfg, lcBak);
+                        Log.Warn("технологический журнал ОТКЛЮЧЁН по ключу --remove-logcfg: " +
+                                 logcfg + " -> " + lcBak);
+                    }
+                    catch (Exception e)
+                    {
+                        Log.Warn("не удалось отложить " + logcfg + ": " + e.Message);
+                    }
+                }
+                else
+                {
+                    Log.Warn("НА МАШИНЕ ВКЛЮЧЁН ТЕХНОЛОГИЧЕСКИЙ ЖУРНАЛ 1С: " + logcfg +
+                             " (" + lcSize + " байт). Под потоком выгрузки он пишет гигабайты в час");
+                    Log.Fix("проверьте каталог из logcfg.xml и место на диске; отключить при установке — " +
+                            "перезапуск с ключом --remove-logcfg (файл откладывается в .bak, не удаляется)");
+                }
             }
             Log.Ok("платформа " + plat.Version + " (" + (plat.X86 ? "x86" : "x64") + "), веб-модуль есть" +
                    (plat.HasCom ? ", COM-коннектор есть" : ", COM-коннектор НЕ найден"));
@@ -1227,6 +1262,7 @@ namespace Oc1c
                     case "--use-default-pool": o.UseDefaultPool = true; need = false; break;
                     case "--auto-resume": o.AutoResume = true; need = false; break;
                     case "--skip-packet": o.SkipPacket = true; need = false; break;
+                    case "--remove-logcfg": o.RemoveLogcfg = true; need = false; break;
                     case "--base": o.BasePath = v; break;
                     case "--connstr": o.ConnStr = v; break;
                     case "--site": o.Site = v; break;
@@ -1406,6 +1442,9 @@ setup-1c-odata " + Ctx.ToolVersion + @" — автоматическая нас�
   --skip-scope             не трогать состав OData вовсе (технический флаг: состав уже
                            задан администратором базы заранее)
   --auto-resume            продолжить автоматически после перезагрузки (RunOnce)
+  --remove-logcfg          отложить чужой logcfg.xml (техжурнал 1С) в .bak: под потоком
+                           выгрузки он пишет гигабайты в час. Без ключа — только
+                           предупреждение, файл не трогается
   --config <файл>          файл настроек ключ=значение (см. setup-1c-odata.example.ini)
   --log <файл>             путь к логу (по умолчанию C:\1c\logs\setup-1c-odata_<дата>.log)
 

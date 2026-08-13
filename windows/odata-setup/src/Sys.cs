@@ -19,7 +19,9 @@ namespace Oc1c
         public static bool DryRun;              // --check: ничего не менять
         public static bool AssumeYes;           // --yes: без вопросов
         public static bool Changed;             // хоть что-то реально изменено
-        public const string ToolVersion = "1.2.2";  // гейт читателя по манифесту + смоук ДО автозапуска (12.08)
+        public const string ToolVersion = "1.2.3";  // щадящий режим 1С: sessionMaxAge 3600, детектор
+                                                    // техжурнала (--remove-logcfg), без IIS-HttpLogging (13.08);
+                                                    // 1.2.2 — гейт по манифесту + смоук до автозапуска
     }
 
     // ---------------------------------------------------------------- результат внешней команды

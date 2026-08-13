@@ -10,11 +10,15 @@
 import json
 import os
 import sys
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 PORT = int(sys.argv[1])
 FIX = sys.argv[2]
+# FAKE_DELAY_MS — пауза на каждый запрос: имитация медленной 1С
+# (проверка порционной отправки и пауз-повторов агента).
+DELAY_MS = int(os.environ.get("FAKE_DELAY_MS", "0"))
 
 ENTITIES = {}
 for fn in sorted(os.listdir(FIX)):
@@ -31,6 +35,8 @@ class H(BaseHTTPRequestHandler):
         sys.stderr.write("odata %s\n" % (fmt % a))
 
     def do_GET(self):
+        if DELAY_MS:
+            time.sleep(DELAY_MS / 1000.0)
         u = urllib.parse.urlsplit(self.path)
         name = urllib.parse.unquote(u.path.strip("/").split("/")[-1])
         qs = urllib.parse.parse_qs(u.query)
