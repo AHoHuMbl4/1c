@@ -160,6 +160,20 @@ uniq_solo = A.mk_opts([UNIQ], {UNIQ: UNIQ_LABEL}, marks={}, by={UNIQ: 5})
 t("уникальной метке вид НЕ дописывается (привычный вид цел)",
   uniq_solo[0]["label"] == UNIQ_LABEL, uniq_solo[0]["label"])
 
+# --- 5. пояснение видно человеку, но в focus не входит -----------------------------
+OPTS2 = [dict(o, hint="отгрузочные документы; данные по 2026-12-31" if o["src"] == DOC
+              else "итоги по регистру; данные по 2026-08-28") for o in OPTS]
+M._ask = lambda *a, **kw: {"kind": "clarify", "text": "Что посчитать?", "options": OPTS2}
+out2 = M.ask_1c("сколько отгружено", "", "", "")
+picks2 = [p.strip() for p in re.findall(r"focus=([^\n|]+)", out2) if p.strip()]
+t("пояснение показано человеку", "отгрузочные документы" in out2 and "данные по" in out2)
+t("пояснение НЕ попало в focus (значение выбора прежнее)",
+  picks2 == picks, (picks2, picks))
+if picks2:
+    d2 = {}
+    t("выбор с пояснением всё так же сводится к таблице",
+      A.resolve_focus(picks2[0], d2) in (DOC, REG), (picks2[0], d2))
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

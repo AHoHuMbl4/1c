@@ -4136,6 +4136,50 @@ def disambiguate_labels(pairs, ambiguous=None):
     return out
 
 
+# Пояснение к варианту уточнения: «для чего годится» из словаря синонимов плюс дата
+# актуальности данных. Различает варианты не оно, а вид записи (`label_with_kind`) —
+# пояснение добавлено сверх него, чтобы человеку было понятно, что он выбирает.
+# «Для чего годится» пишет модель один раз при сборке словаря на языке базы, поэтому на
+# чужой базе оно появляется само; пока словарь пуст (первые такты новой базы), подпись
+# остаётся с одним видом записи, и выбор всё равно однозначен.
+# Дата ставится только там, где она РАЗЛИЧАЕТ: одинаковое «по 13.08» у всех вариантов
+# строку удлиняет и ничего не разводит. Берётся из корпуса, где её разобрала сборка;
+# у справочников даты нет по природе — тогда её просто не показываем.
+def opts_hints(srcs):
+    """Для каждого источника — короткое пояснение или ничего."""
+    srcs = [s for s in srcs if s]
+    if len(srcs) < 2:
+        return {}
+    lst = ", ".join(lit(s) for s in srcs)
+    what, when = {}, {}
+    try:
+        for r in psql("SELECT src_table, best_used_for FROM search_entity_alias "
+                      "WHERE src_table IN (%s)" % lst) or []:
+            if r and r[0] and len(r) > 1 and (r[1] or "").strip():
+                what[r[0]] = r[1].strip()
+    except RuntimeError:
+        pass
+    try:
+        for r in psql("SELECT src_table, max(doc_date)::VARCHAR FROM %s WHERE src_table IN (%s) "
+                      "AND doc_date IS NOT NULL GROUP BY 1" % (CORPUS, lst)) or []:
+            if r and r[0] and len(r) > 1 and (r[1] or "").strip():
+                when[r[0]] = r[1].strip()[:10]
+    except RuntimeError:
+        pass
+    if len(set(when.values())) < 2:      # дата одна на всех — не различает
+        when = {}
+    out = {}
+    for s in srcs:
+        parts = []
+        if what.get(s):
+            parts.append(what[s][:90])
+        if when.get(s):
+            parts.append("данные по %s" % when[s])
+        if parts:
+            out[s] = "; ".join(parts)
+    return out
+
+
 def mk_opts(srcs, lab_by, marks=None, by=None):
     """Варианты уточнения одним видом на все пять веток ответа.
 
@@ -4145,7 +4189,8 @@ def mk_opts(srcs, lab_by, marks=None, by=None):
     """
     marks, by = marks or {}, by or {}
     dis = disambiguate_labels([(s, lab_by.get(s, s)) for s in srcs])
-    return [{"src": s, "label": dis.get(s, lab_by.get(s, s)),
+    hint = opts_hints(srcs)
+    return [{"src": s, "label": dis.get(s, lab_by.get(s, s)), "hint": hint.get(s, ""),
              "distinct_by": marks.get(s, ""), "found": by.get(s, 0)} for s in srcs]
 
 

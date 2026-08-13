@@ -270,7 +270,12 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
                              % (name, o["measure"], o.get("entity_label") or ""))
             elif o.get("src"):
                 name = o.get("label") or o["src"]
-                lines.append("- %s | focus=%s" % (name, name))
+                # Пояснение стоит РЯДОМ с подписью, но в `focus` не входит: значением
+                # выбора остаётся ровно та строка, которую человек видит подписью, —
+                # длинный `focus` бот копировал бы с ошибками. Пусто — строка прежняя.
+                why = (o.get("hint") or "").strip()
+                lines.append(("- %s — %s | focus=%s" % (name, why, name)) if why
+                             else ("- %s | focus=%s" % (name, name)))
         out = CLARIFY_HINT
         if text:
             out += "\n\n" + text
