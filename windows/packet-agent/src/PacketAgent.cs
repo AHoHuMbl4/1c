@@ -28,7 +28,9 @@ namespace PacketAgent
     // Каждое число можно переопределить ключом в agent.ini — имя ключа в скобках.
     internal static class C
     {
-        internal const string Version = "1.1.0";   // отчёт хода такта на приёмник (12.08);
+        internal const string Version = "1.1.1";   // чанки на диск по ходу обхода: память
+                                                   // не растёт с размером базы (13.08);
+                                                   // 1.1.0 — отчёт хода такта на приёмник;
                                                    // 1.0.3 — тупик пустого контура + код смоука;
                                                    // 1.0.2 — outbox логов + skipped-only
         internal const int ManifestVersion = 1;
@@ -1718,6 +1720,10 @@ namespace PacketAgent
         internal Dictionary<string, string> NewVersions;  // null — версии в индексе не менять
         internal string VersionFp, ContentFp;             // null — не менять
         internal byte[] CsvFull;                          // null — данных нет (gone_only)
+        // Заполняются при сбросе сущности на диск (Tact.FlushEntity) — после него
+        // Rows/CsvFull/Cols обнуляются, а манифесту нужны только эти два поля.
+        internal int RowCount;
+        internal List<string> Chunks = new List<string>();
     }
 
     // ============================ сборка и отправка пакета ======================
@@ -1732,6 +1738,12 @@ namespace PacketAgent
         OData _odata;
         Meta _meta;
         byte[] _metaBytes;
+        // Состояние собираемого пакета: чанки пишутся по ходу обхода сущностей
+        // (FlushEntity), манифест и план — в конце (SendPackage).
+        string _queueDir, _pkgShort;
+        long _seq;
+        int _chunkNo;
+        List<Dictionary<string, object>> _chunkEntries = new List<Dictionary<string, object>>();
 
         internal Tact(Cfg cfg, string exeDir)
         {
@@ -1867,6 +1879,58 @@ namespace PacketAgent
         // Разбивка крупной сущности на серию чанков: граница по строкам, заголовок
         // повторяется в каждой части (apply читает каждый чанк со своим header и
         // склеивает UNION ALL), entity_part "i/n" в записи chunks (контракт §6).
+        // ---------------- сброс сущности на диск сразу после чтения --------------
+        // 🔴 Память агента не должна расти с размером базы. До 13.08 такт держал в
+        // ОЗУ ВСЁ сразу: по каждой сущности — строки словарями (Rows) и её CSV
+        // целиком (CsvFull), — и копил это до конца обхода, хотя чанки уже можно
+        // писать. На okna (819 сущностей, 1,68 ГБ CSV) прошло; на базе вдвое
+        // крупнее это упирается в память клиента, а снаружи выглядит как молчание
+        // агента — неотличимо от «долго читает» (klient-1, ERP, 9151 сущность).
+        // Теперь пик = ОДНА сущность: прочитали → записали чанки → освободили.
+        // Байты чанков не меняются: те же вызовы Flatten.CsvBytes в том же порядке
+        // (держится golden-пробой формата).
+        void FlushEntity(EntityResult res, long limit)
+        {
+            res.RowCount = res.Rows == null ? 0 : res.Rows.Count;
+            if (res.CsvFull != null)
+            {
+                EnsureQueueDir();
+                List<KeyValuePair<int, int>> parts = res.CsvFull.LongLength <= limit
+                    ? new List<KeyValuePair<int, int>> { new KeyValuePair<int, int>(0, res.Rows.Count) }
+                    : SplitRows(res, limit);
+                for (int i = 0; i < parts.Count; i++)
+                {
+                    _chunkNo++;
+                    string name = "chunk-" + _chunkNo.ToString("D5", CultureInfo.InvariantCulture);
+                    byte[] bytes = Flatten.CsvBytes(res.Cols, res.Rows, parts[i].Key, parts[i].Value);
+                    Dictionary<string, object> entry = WriteChunk(_queueDir, name, bytes);
+                    entry["entity"] = res.Name;
+                    entry["rows"] = parts[i].Value - parts[i].Key;
+                    if (parts.Count > 1)
+                        entry["entity_part"] = (i + 1) + "/" + parts.Count;
+                    _chunkEntries.Add(entry);
+                    res.Chunks.Add(name);
+                }
+            }
+            // Освобождаем тяжёлое: манифесту дальше нужны только RowCount, Chunks,
+            // Key и отпечатки. NewVersions остаётся — он нужен плану индекса (К2)
+            // и на порядок легче строк (две строки на запись против всех колонок).
+            res.Rows = null;
+            res.CsvFull = null;
+            res.Cols = null;
+        }
+
+        // Каталог очереди заводится лениво — первым чанком: такт без изменений
+        // не должен оставлять на диске пустой каталог.
+        void EnsureQueueDir()
+        {
+            if (_queueDir != null) return;
+            _seq = _state.Seq + 1;
+            _pkgShort = _seq.ToString("D6", CultureInfo.InvariantCulture) + "-" + Rand8();
+            _queueDir = Path.Combine(_cfg.DataDir, "queue", _pkgShort);
+            Directory.CreateDirectory(_queueDir);
+        }
+
         static List<KeyValuePair<int, int>> SplitRows(EntityResult res, long limit)
         {
             List<KeyValuePair<int, int>> parts = new List<KeyValuePair<int, int>>();
@@ -2036,6 +2100,8 @@ namespace PacketAgent
             Dictionary<string, bool> ownerSilent = new Dictionary<string, bool>();
             entities.Sort(StringComparer.Ordinal);   // владелец — префикс имени части → раньше
             int entityNo = 0;
+            int flushed = 0;                          // сколько результатов уже на диске
+            long chunkLimit = (long)_cfg.ChunkMb * 1024 * 1024;
             foreach (string e in entities)
             {
                 Progress.Entity(e, ++entityNo, entities.Count);
@@ -2091,6 +2157,11 @@ namespace PacketAgent
                     skipped.Add(new KeyValuePair<string, string>(e, ex.Message));
                     Log.Line("    " + e + ": ПРОПУЩЕНА (" + ex.Message + ")");
                 }
+                // Прочитанное — сразу на диск, память освобождаем (см. FlushEntity).
+                // Сущность может дать и несколько результатов (владелец + части), и
+                // ни одного, поэтому идём по хвосту списка, а не по одному элементу.
+                for (; flushed < results.Count; flushed++)
+                    FlushEntity(results[flushed], chunkLimit);
             }
 
             // (4) ноль изменений — пакет НЕ шлём (контракт §7); исключение — изменился
@@ -2258,36 +2329,14 @@ namespace PacketAgent
                          bool sendMeta, long newCv,
                          List<KeyValuePair<string, string>> skipped, string skipFp)
         {
-            long seq = _state.Seq + 1;
-            string pkgShort = seq.ToString("D6", CultureInfo.InvariantCulture) + "-" + Rand8();
-            string queueDir = Path.Combine(_cfg.DataDir, "queue", pkgShort);
-            Directory.CreateDirectory(queueDir);
-
-            List<Dictionary<string, object>> chunkEntries = new List<Dictionary<string, object>>();
-            Dictionary<string, List<string>> entityChunks = new Dictionary<string, List<string>>();
-            long limit = (long)_cfg.ChunkMb * 1024 * 1024;
-            int chunkNo = 0;
-            foreach (EntityResult res in results)
-            {
-                entityChunks[res.Name] = new List<string>();
-                if (res.CsvFull == null) continue;
-                List<KeyValuePair<int, int>> parts = res.CsvFull.LongLength <= limit
-                    ? new List<KeyValuePair<int, int>> { new KeyValuePair<int, int>(0, res.Rows.Count) }
-                    : SplitRows(res, limit);
-                for (int i = 0; i < parts.Count; i++)
-                {
-                    chunkNo++;
-                    string name = "chunk-" + chunkNo.ToString("D5", CultureInfo.InvariantCulture);
-                    byte[] bytes = Flatten.CsvBytes(res.Cols, res.Rows, parts[i].Key, parts[i].Value);
-                    Dictionary<string, object> entry = WriteChunk(queueDir, name, bytes);
-                    entry["entity"] = res.Name;
-                    entry["rows"] = parts[i].Value - parts[i].Key;
-                    if (parts.Count > 1)
-                        entry["entity_part"] = (i + 1) + "/" + parts.Count;
-                    chunkEntries.Add(entry);
-                    entityChunks[res.Name].Add(name);
-                }
-            }
+            // Чанки сущностей уже на диске: их пишет FlushEntity по ходу обхода,
+            // чтобы память не росла с размером базы (13.08). Здесь остаются только
+            // служебные чанки, манифест и план.
+            EnsureQueueDir();
+            long seq = _seq;
+            string pkgShort = _pkgShort;
+            string queueDir = _queueDir;
+            List<Dictionary<string, object>> chunkEntries = _chunkEntries;
             if (gone.Count > 0)
             {
                 List<Dictionary<string, object>> g = new List<Dictionary<string, object>>();
@@ -2326,8 +2375,10 @@ namespace PacketAgent
                 Dictionary<string, object> e = new Dictionary<string, object>();
                 e["name"] = res.Name;
                 e["op"] = res.Op;
-                e["rows"] = res.CsvFull == null ? 0 : res.Rows.Count;
-                e["chunks"] = entityChunks[res.Name].ToArray();
+                // RowCount и Chunks заполнены при сбросе на диск (FlushEntity):
+                // сами строки и CSV к этому моменту уже освобождены.
+                e["rows"] = res.Chunks.Count == 0 ? 0 : res.RowCount;
+                e["chunks"] = res.Chunks.ToArray();
                 e["key"] = res.Key.ToArray();
                 if (res.VersionFp != null) e["version_fingerprint"] = res.VersionFp;
                 if (res.ContentFp != null) e["content_fingerprint"] = res.ContentFp;
