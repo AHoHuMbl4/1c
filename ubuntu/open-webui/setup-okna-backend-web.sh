@@ -160,9 +160,32 @@ cfg = {
     "entries": {
       "deepseek": {"enabled": True},
       "memory-core": {"config": {}},
-      "braine-verify": {"enabled": True, "config": {"debug": True, "minDigitsWithRef": 1}},
+      # hooks.allowConversationAccess — без него движок БЛОКИРУЕТ типизированные хуки
+      # плагина («blocked because non-bundled plugins must set …allowConversationAccess»),
+      # то есть гейт числится включённым, а ходы не проверяет. В main-профиле поле
+      # стояло, сюда не было перенесено (журнал web-шлюза okna, 13.08).
+      "braine-verify": {"enabled": True, "config": {"debug": True, "minDigitsWithRef": 1},
+                        "hooks": {"allowConversationAccess": True}},
+      # 🔴 ВИКИ НУЖНА ТОМУ ПРОФИЛЮ, КОТОРЫЙ ОТВЕЧАЕТ. Персона идёт сперва в вики —
+      # перефразировать вопрос словами базы — и лишь потом зовёт данные. Живой чат
+      # клиента 13.08: у web-профиля вики не было вовсе, бот ответил «без вики я не
+      # могу определить нужный вид записей» и инструмент данных НЕ ПОЗВАЛ.
+      # Хранилище своё, в каталоге этого профиля: такт публикует сюда, получив
+      # OPENCLAW_PROFILE_ID=web (см. ниже про env такта).
+      "memory-wiki": {
+          "enabled": True,
+          "config": {
+              "vaultMode": "isolated",
+              "vault": {"path": f"{state}/wiki/main", "renderMode": "native"},
+              "search": {"backend": "shared", "corpus": "all"},
+              "context": {"includeCompiledDigestPrompt": False},
+              "render": {"preserveHumanBlocks": True, "createBacklinks": True,
+                         "createDashboards": True},
+              "ingest": {"autoCompile": True, "allowUrlIngest": False},
+          },
+      },
     },
-    "allow": ["deepseek", "braine-verify"],
+    "allow": ["deepseek", "braine-verify", "memory-wiki", "memory-core"],
   },
   "logging": {"level": "info", "file": f"{state}/logs/gateway.log"},
   "mcp": {
@@ -211,19 +234,28 @@ PY
   chown "$BOTUSER:$BOTUSER" "$STATE/workspace/openclaw-workspace-state.json"
 fi
 
-# verify-plugin из основного профиля
-if ! find "$STATE" -name verify-core.js 2>/dev/null | grep -q .; then
-  SRC=$(find "/home/$BOTUSER/.openclaw" -name verify-core.js -printf '%h\n' 2>/dev/null | head -1)
-  if [ -n "$SRC" ]; then
-    # сохраняем относительную структуру npm/projects/... чтобы движок нашёл
+# verify-plugin из основного профиля.
+# 🔴 КОПИРУЕТСЯ ВЕСЬ NPM-ПРОЕКТ, А НЕ КАТАЛОГ С КОДОМ. Движок держит плагин как проект
+# (`npm/projects/<имя>__…/` c `package.json` и `package-lock.json`), и признаёт его
+# установленным по проекту, а не по файлам внутри `node_modules`. Прежняя копия брала
+# каталог с `verify-core.js`, то есть без `package.json`, — и движок отвечал
+# «plugin not found: braine-verify», хотя файлы лежали на месте. Замер okna 13.08:
+# у web-профиля гейт ответов числился в настройках и НЕ РАБОТАЛ, то есть числа уходили
+# клиенту без проверки опоры.
+if ! find "$STATE/npm/projects" -maxdepth 3 -name package.json -path '*braine-verify*' \
+     2>/dev/null | grep -q .; then
+  SRCMOD=$(find "/home/$BOTUSER/.openclaw" -name verify-core.js -printf '%h\n' 2>/dev/null | head -1)
+  # от каталога модуля вверх до корня проекта: <проект>/node_modules/<модуль>
+  SRC=$(cd "$SRCMOD/../.." 2>/dev/null && pwd)
+  if [ -n "${SRC:-}" ] && [ -f "$SRC/package.json" ]; then
     REL=${SRC#/home/$BOTUSER/.openclaw/}
     DST="$STATE/$REL"
     install -d -m 755 -o "$BOTUSER" -g "$BOTUSER" "$(dirname "$DST")"
     cp -a "$SRC/." "$DST/"
     chown -R "$BOTUSER:$BOTUSER" "$(dirname "$DST")"
-    echo "verify-plugin → $DST"
+    echo "verify-plugin (проект целиком) → $DST"
   else
-    echo "⚠ verify-plugin не найден в основном профиле"
+    echo "⚠ verify-plugin не найден в основном профиле как npm-проект"
   fi
 fi
 
