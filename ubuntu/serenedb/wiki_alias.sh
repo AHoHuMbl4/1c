@@ -175,6 +175,14 @@ if m:
 open(sys.argv[2], 'w', encoding='utf-8').write(json.dumps(rows, ensure_ascii=False))
 print("алиасов разобрано: %d" % len(rows))
 PY
+  # 🔴 ФАЙЛ ЧИТАЕТ ДВИЖОК, А НЕ МЫ. Каталогу права выставлены при создании, но
+  # сам файл рождается с маской процесса: такт идёт из `build.sh`, где стоит
+  # `umask 077` (секреты), и `rows.json` выходил 600 root — движок (`serenedb`)
+  # получал «Permission denied», модель при этом отвечала исправно. Живой случай
+  # okna-1 13.08: словарь встал на 140 из 351 при «алиасов разобрано: 20» каждую
+  # пачку — то есть деньги за модель тратились, а словарь не рос. Права ставятся
+  # рядом с записью, как у `msg` выше.
+  chmod 644 "$TMP/rows.json" 2>/dev/null
   # Запись — ОДНИМ запросом из файла, без цикла по строкам (п. 20).
   psql "$DSN" -q -c "
     INSERT INTO $ALIAS_TABLE
@@ -316,6 +324,7 @@ if m:
 open(sys.argv[2], 'w', encoding='utf-8').write(json.dumps(rows, ensure_ascii=False))
 print("разведено сущностей: %d" % len(rows))
 PY2
+    chmod 644 "$TMP/rows.json" 2>/dev/null   # тот же случай, что в первом проходе
     psql "$DSN" -q -c "
       UPDATE $ALIAS_TABLE a SET aliases = n.aliases, best_used_for = n.best_used_for,
              not_enough_for = n.not_enough_for, seen_at = now()
