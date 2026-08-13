@@ -142,6 +142,33 @@ Code закрывает `.claude/hooks/`, — то есть защитой од�
 `memory`) для Kimi объявлены в `~/.kimi-code/mcp.json`: проектный `.mcp.json` Kimi 0.33
 не подхватывает (живой замер 06.08).
 
+🔴 **Тот же набор подключён к Cursor** (13.08, третий движок под тем же `claudedev`).
+Проводка — `.cursor/hooks.json` в git (root:root), гейты зовутся через
+`.claude/hooks/cursor-wrap.sh`. `.claude/settings.json` и `kimi-config.toml` не менялись.
+
+Отличия движка, найденные живыми замерами 13.08:
+
+- **matcher `Bash` из settings.json на команды `Shell` не срабатывает**: SessionStart
+  и Write из Claude-конфига зовутся, PreToolUse|Bash — нет (журнал: после десятков
+  Shell только session-start). Гейты на коммит из сессии — через `.cursor/hooks.json`
+  с матчером `Shell`;
+- **вброс SessionStart печатает текст, Cursor кладёт в контекст только JSON
+  `additional_context`**: адаптер оборачивает вывод `session-start.sh`;
+- **корневой `.mcp.json` не читается**: серверы `serenedb-docs` и `memory` — в
+  `.cursor/mcp.json` (как у Kimi — копия в домашнем конфиге);
+- **хука `type: agent` нет**: снайпер коммита — тот же `sniper-kimi.sh` (свой дифф,
+  бинарь `kimi` у claudedev уже есть);
+- **падение хука по умолчанию — пропуск**: у блокирующих гейтов в hooks.json стоит
+  `failClosed: true`; последний рубеж — git-гейт, как у Kimi;
+- **инструмент правки — `Write` и `StrReplace`**, не `Edit`: матчер файловых гейтов
+  — `Write|StrReplace`.
+
+Сторож `hook_guard_armed` сверяет содержимое `.cursor/hooks.json` (гейт через
+cursor-wrap на верном событии, failClosed у блокирующих) и состав `.cursor/mcp.json`.
+Снятие, пересадка, чужой путь, битый JSON — каждое останавливает коммит поимённо.
+Запуск сессии Cursor: `su - claudedev -c 'cd /srv/1c && cursor-agent'`. Под root
+каталог гейтов записываемый — это обход защиты правами.
+
 🔴 **Решение владельца 04.08: работа не должна упираться в защиту.** Дерево проекта целиком
 за рабочим аккаунтом — включая корень и `.claude/`, новые файлы заводятся где угодно.
 Сами файлы правил остаются `root` и на запись закрыты, но снести их и подложить свои

@@ -10,9 +10,10 @@
 # Что остаётся владельцу (root), то есть недоступно рабочему аккаунту на запись:
 #   .claude/hooks/         — гейты, библиотека, git-gate.sh, файл люка override.txt
 #   .githooks/             — обёртка гейта коммита
-#   .claude/settings.json  — подключение гейтов к сессии
-#   CLAUDE.md, TARGET.md   — правила и контракт
+#   .claude/settings.json  — подключение гейтов к сессии Claude
+#   CLAUDE.md, TARGET.md, AGENTS.md — правила и контракт
 #   memory_bank/owner-memory/ — решения владельца, пересмотру не подлежат
+#   .cursor/hooks.json, .cursor/mcp.json — проводка гейтов и MCP Cursor
 # Всё прочее — код, документы, память проекта, work/, .git — рабочему аккаунту:
 # документы правятся в тех же сессиях, что и код (иначе документ отстаёт от кода, а это
 # главная поломка проекта).
@@ -47,8 +48,8 @@ chown -R "$USER_NAME":"$USER_NAME" "$ROOT"
 echo "  chown -R $USER_NAME $ROOT"
 
 echo "== 3. правила — обратно владельцу =="
-PROTECTED_DIRS=".claude/hooks .githooks memory_bank/owner-memory"
-PROTECTED_FILES=".claude/settings.json CLAUDE.md TARGET.md"
+PROTECTED_DIRS=".claude/hooks .githooks memory_bank/owner-memory .cursor"
+PROTECTED_FILES=".claude/settings.json CLAUDE.md TARGET.md AGENTS.md .cursor/hooks.json .cursor/mcp.json"
 for d in $PROTECTED_DIRS; do
   [ -d "$d" ] || { echo "  ⚠ нет каталога $d"; continue; }
   chown -R root:root "$d"
@@ -145,7 +146,7 @@ echo "== 6. проверка от имени $USER_NAME =="
 # тем, что стоит сейчас, и «починка» затёрла бы рабочее. Поэтому снимок делается ДО проб и
 # возвращается после каждой.
 SNAP="$(mktemp -d)" || { echo "Не создан временный каталог — пробы не запускаю: без снимка они разрушительны."; exit 1; }
-PROTECTED_PATHS=".claude/hooks .githooks .claude/settings.json CLAUDE.md TARGET.md memory_bank/owner-memory"
+PROTECTED_PATHS=".claude/hooks .githooks .claude/settings.json CLAUDE.md TARGET.md AGENTS.md memory_bank/owner-memory .cursor/hooks.json .cursor/mcp.json"
 for p in $PROTECTED_PATHS; do
   [ -e "$ROOT/$p" ] || continue
   mkdir -p "$SNAP/$(dirname "$p")"
@@ -196,6 +197,8 @@ probe deny  'подложить свой хук'            'printf x > .claude/
 probe deny  'открыть себе люк'              'printf "check-docs сам себе" > .claude/hooks/override.txt'
 probe deny  'править обёртку гейта коммита' 'printf x >> .githooks/pre-commit'
 probe deny  'править настройки сессии'      'printf x >> .claude/settings.json'
+probe deny  'править проводку Cursor'       'printf x >> .cursor/hooks.json'
+probe deny  'править MCP Cursor'             'printf x >> .cursor/mcp.json'
 probe deny  'править правила'               'printf x >> CLAUDE.md'
 probe deny  'править контракт'              'printf x >> TARGET.md'
 probe deny  'снести правила и подложить свои' 'rm -f CLAUDE.md'
@@ -224,6 +227,7 @@ echo
 if [ "$FAIL" = 0 ]; then
   echo "Права разложены и проверены. Дальше сессии запускать от $USER_NAME:"
   echo "  su - $USER_NAME -c 'cd $ROOT && claude'"
+  echo "  su - $USER_NAME -c 'cd $ROOT && cursor-agent'   # Cursor: тот же аккаунт, иначе хуки root-ом обходятся"
 else
   echo "🔴 Проверка нашла расхождение — разбирать до конца, иначе защита неполная."
 fi

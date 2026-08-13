@@ -79,8 +79,10 @@ echo "== 3-бис. AGENTS.md для Kimi =="
 # построению. В git ссылка не едет — на новом клоне её создаёт этот же шаг.
 if [ ! -e AGENTS.md ]; then
   ln CLAUDE.md AGENTS.md && echo "  AGENTS.md — жёсткая ссылка на CLAUDE.md"
+elif [ "$(stat -c %i CLAUDE.md 2>/dev/null)" != "$(stat -c %i AGENTS.md 2>/dev/null)" ]; then
+  ln -f CLAUDE.md AGENTS.md && echo "  AGENTS.md — ссылка пересоздана (иноды разъехались)"
 else
-  echo "  уже есть"
+  echo "  уже есть, один инод"
 fi
 
 echo "== 3-тер. конфиг Kimi рабочего аккаунта =="
@@ -98,6 +100,27 @@ chown claudedev:claudedev "$KDIR" 2>/dev/null || true
 # Бинарь ставится разово руками владельца: install -m 755 <источник> /usr/local/bin/kimi
 su -s /bin/bash claudedev -c 'command -v kimi' >/dev/null 2>&1 \
   || echo "  ⚠ kimi не найден в PATH у claudedev — поставь бинарь в /usr/local/bin/kimi"
+
+echo "== 3-кват. проводка Cursor =="
+# Канон — .cursor/hooks.json и .cursor/mcp.json в git. Здесь только права:
+# сессия claudedev не должна переписать собственный запрет.
+mkdir -p .cursor
+if [ -f .cursor/hooks.json ]; then
+  chown root:root .cursor .cursor/hooks.json
+  chmod 755 .cursor
+  chmod 644 .cursor/hooks.json
+  echo "  .cursor/hooks.json — root:root 644"
+else
+  echo "  ⚠ нет .cursor/hooks.json — положи канон в git, иначе сессии Cursor без гейтов на Shell"
+fi
+if [ -f .cursor/mcp.json ]; then
+  chown root:root .cursor/mcp.json
+  chmod 644 .cursor/mcp.json
+  echo "  .cursor/mcp.json — root:root 644"
+else
+  echo "  ⚠ нет .cursor/mcp.json — MCP serenedb-docs/memory в Cursor не подключатся"
+fi
+# cursor-wrap.sh ставится шагом 1 вместе с прочими *.sh
 
 echo "== 4. проба =="
 bash "$DST/test-hooks.sh"
