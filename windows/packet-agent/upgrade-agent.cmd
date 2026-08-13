@@ -32,7 +32,7 @@ echo == 1/5 текущая версия:
 "%DIR%\packet-agent.exe" --version
 
 echo == 2/5 скачиваю новый агент
-powershell -NoProfile -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -Uri '%URL%' -OutFile '%DIR%\packet-agent.new.exe'"
+powershell -NoProfile -Command "$ProgressPreference='SilentlyContinue'; Invoke-WebRequest -UseBasicParsing -Uri '%URL%' -OutFile '%DIR%\packet-agent.new.exe'"
 if errorlevel 1 goto :fail_download
 "%DIR%\packet-agent.new.exe" --version
 if errorlevel 1 goto :fail_download
