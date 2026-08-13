@@ -91,10 +91,29 @@ SEC_ODG="odg_${LOCK_TAG}"
 # Прежние имена `ALIBABA_*` читаются как запасные — они остались в старых `/etc/*.env`,
 # но имя поставщика в имени настройки было враньём и уходит.
 IFS=',' read -r -a _KEYS <<< "${EMBED_API_KEYS:-${EMBED_API_KEY:-${ALIBABA_API_KEYS:-${ALIBABA_API_KEY:-}}}}"
+# 🔴 НЕСКОЛЬКО АДРЕСОВ — ПО ОДНОМУ НА КАРТУ, И В ТАКТЕ ТОЖЕ. `EMBED_HOSTS`
+# («адрес» или «адрес|ключ», через запятую) заводит по секрету НА АДРЕС — тот же
+# разбор, что в `embed_all.sh`. До 13.08 такт строил секреты только по ключам с
+# одним `EMBED_HOST`: живой замер на okna-1 — оба воркера в один адрес, GPU 0
+# 100%, GPU 1 0%, половина мощности эмбеддера простаивала при верно заполненном
+# `EMBED_HOSTS`. Без `EMBED_HOSTS` поведение прежнее: ключи × `EMBED_HOST`.
+IFS=',' read -r -a _HOSTS <<< "${EMBED_HOSTS:-${EMBED_HOST:-}}"
+[ ${#_HOSTS[@]} -gt 0 ] || _HOSTS=("${EMBED_HOST:-}")
+_PAIRS=()
+for _h in "${_HOSTS[@]}"; do
+  _h="$(printf '%s' "$_h" | tr -d ' ')"
+  [ -z "$_h" ] && continue
+  case "$_h" in
+    *"|"*) _PAIRS+=("$_h") ;;
+    *)     for _k0 in "${_KEYS[@]}"; do
+             _k0="$(printf '%s' "$_k0" | tr -d ' ')"
+             [ -z "$_k0" ] && continue
+             _PAIRS+=("$_h|$_k0")
+           done ;;
+  esac
+done
 SEC_EMB_LIST=""
-for _i in "${!_KEYS[@]}"; do
-  _k="$(printf '%s' "${_KEYS[$_i]}" | tr -d ' ')"
-  [ -z "$_k" ] && continue
+for _i in "${!_PAIRS[@]}"; do
   SEC_EMB_LIST="$SEC_EMB_LIST qwen_${LOCK_TAG}_${_i}"
 done
 SEC_EMB_LIST="${SEC_EMB_LIST# }"
@@ -136,8 +155,8 @@ SEC=$(mktemp); trap 'rm -f "$SEC"; cleanup' EXIT INT TERM HUP
   _n=0
   for _s in $SEC_EMB_LIST; do
     printf "CREATE OR REPLACE TEMPORARY SECRET %s (TYPE openai, api_key '%s', base_url '%s', embeddings_path '%s');\n" \
-           "$_s" "$(esc "$(printf '%s' "${_KEYS[$_n]}" | tr -d ' ')")" \
-           "$EMBED_HOST" "$EMBED_PATH"
+           "$_s" "$(esc "${_PAIRS[$_n]#*|}")" \
+           "${_PAIRS[$_n]%%|*}" "$EMBED_PATH"
     _n=$((_n + 1))
   done
 } > "$SEC"
