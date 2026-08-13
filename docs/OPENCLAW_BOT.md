@@ -188,6 +188,12 @@ That is all.» → «We started», остаток абзаца исчезал м
 - 🔴 **chatCompletions = полный операторский доступ к профилю** (доки сборки,
   `gateway/openai-http-api.md`): только loopback, наружу не выставлять. При переносе на VDS
   гейтвей остаётся на бэке, на VDS уезжает только Open WebUI + узкая точка подключения.
+
+### okna prod [13.08]
+
+Домен **`okna.timpul.pro`** → `openclaw-okna` (`2.28.49.158`, priv `10.3.0.2`).  
+Open WebUI + Caddy на фронте; web-гейтвей OpenClaw на okna-бэкенде (`10.3.0.4:18801`,
+`bind=lan`, ufw только с фронта). Скрипты — `ubuntu/open-webui/README.md`.
 - **Замеры 08.08:** `/v1/models` отдаёт `openclaw/default`; двухходовка по ключу `user`
   (вопрос → уточнение сущности → «155 контрагентов») — сессия продолжается; SSE-стриминг
   работает; полный путь через API Open WebUI: «Сколько всего номенклатуры» → 97 834
@@ -242,13 +248,13 @@ That is all.» → «We started», остаток абзаца исчезал м
    «понимать, у какой базы что спрашивать». На стороне OpenClaw это ложится на
    агентов: `/v1` уже маршрутизирует `model=openclaw/<agentId>`; роутер — отдельный
    агент, выбирающий целевого. Записано как направление, реализация — бэк-трек.
-6. **Голос (микрофон).** В Open WebUI доступ к микрофону есть штатно; нужен внешний
-   API транскрибации (есть у владельца). Точка подключения проверена по коду сборки:
-   Admin → Audio (STT) или env `AUDIO_STT_ENGINE` + `AUDIO_STT_MODEL` +
-   `AUDIO_STT_OPENAI_API_BASE_URL` / `AUDIO_STT_OPENAI_API_KEY` — если API владельца
-   OpenAI-совместимый (`/v1/audio/transcriptions`), встаёт без кода; есть также
-   deepgram/azure/локальный whisper. Когда владелец даст endpoint и ключ — прописать
-   в `~/.open-webui.env` и проверить диктовку в чате.
+6. **Голос (микрофон).** ✅ на prod okna `[замер 13.08]`: Whisper Large-v3 FP32
+   на GPU владельца (`lr0r1k1g-8006`), OpenAI-совместимый `/v1/audio/transcriptions`.
+   В Open WebUI: `AUDIO_STT_ENGINE=openai`, `AUDIO_STT_MODEL=whisper-large-v3`,
+   `AUDIO_STT_OPENAI_API_BASE_URL=…/v1`, ключ в env/`Admin → Audio`,
+   язык не фиксируем (`WHISPER_LANGUAGE` не задаём — UI / авто). Проверено: health ok;
+   `POST /api/v1/audio/transcriptions` через OWUI → 200. Ключ не в git
+   (`/etc/1c-open-webui-stt.env` при переустановке).
 
 ## Zero-touch
 `linger=yes` → gateway стартует на буте без логина (проверено). Telegram long polling. Мониторинг

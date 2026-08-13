@@ -129,6 +129,9 @@ unde@192.168.56.1` работает (проверено 28.07, `RUNBOOK §2`). �
 | `openclaw-gateway` (user) | 18800 | Движок OpenClaw (юзер `undebot`): Telegram `@test1c_mcp_bot`, DeepSeek-тон, verify-плагин (гейт кодом). |
 | `openclaw-gateway-web` (user) | 18801 | Веб-профиль OpenClaw (юзер `claudedev`, state `~/.openclaw-web`): OpenAI-совместимый `/v1` для веб-фронта, те же инструменты и гейт `braine-verify`. Только loopback — эндпоинт = полный операторский доступ (OPENCLAW_BOT.md, 08.08). |
 | `open-webui` (user) | 8080 | Веб-фронт (юзер `claudedev`, venv `~/open-webui-venv`): слушает **только** `192.168.56.42` (внутр. сеть стенда). Перенос на отдельную VDS — следующий шаг (решение 08.08). |
+| **okna prod** | | |
+| `openclaw-okna` | 2.28.49.158 / 10.3.0.2 | Open WebUI + Caddy: **`okna.timpul.pro`**. Юзер `webui`, loopback :8080. |
+| okna backend web | 10.3.0.4:18801 | OpenClaw `--profile web` у `undebot`; ufw только с 10.3.0.2. Установка — `ubuntu/open-webui/`. |
 | `1c-bot-monitor.timer` | — | Каждые 3 мин: проверка живости. ⚠ Сторожит **выведенный** слой: список `SYS_SERVICES` — `serenedb 1c-mcp-braine 1c-mcp-reports api`, ни одного из двух сервисов ответов там нет, а `api` — из braine. Состояние монитора: `down: api` |
 
 ⚠ **Замер по `1c-mcp-reports` [01.08]:** прежний инстанс за ~26,5 ч работы сжёг

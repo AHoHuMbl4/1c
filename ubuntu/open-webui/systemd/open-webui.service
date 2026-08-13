@@ -1,0 +1,12 @@
+[Unit]
+Description=Open WebUI — веб-фронт (okna)
+After=network-online.target
+
+[Service]
+EnvironmentFile=/home/webui/.open-webui.env
+ExecStart=/home/webui/open-webui-venv/bin/open-webui serve --host 127.0.0.1 --port 8080
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
