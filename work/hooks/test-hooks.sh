@@ -120,6 +120,12 @@ git commit -qm 'Золотой: невозможен — эмбеддер нед
 sleep 1; touch ubuntu/serenedb/new.py
 OUT=$(GOLDEN_EMBED_HEALTH=http://127.0.0.1:1 call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
 asks "$OUT"; [ $? = 1 ]; say $? 'эмбеддер мёртв + строка в HEAD — выкат проходит'
+git commit --allow-empty -qm 'описание: строка Золотой: в середине не закрывает'
+OUT=$(GOLDEN_EMBED_HEALTH=http://127.0.0.1:1 call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
+asks "$OUT"; say $? 'эмбеддер мёртв, Золотой: не с начала строки — выкат стоп'
+git commit --allow-empty -qm 'Золотой: невозможен — эмбеддер недоступен'
+OUT=$(GOLDEN_EMBED_HEALTH=http://127.0.0.1:1 call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
+asks "$OUT"; [ $? = 1 ]; say $? 'повтор: строка с начала HEAD — выкат проходит'
 python3 - <<'PY' &
 from http.server import BaseHTTPRequestHandler, HTTPServer
 class H(BaseHTTPRequestHandler):

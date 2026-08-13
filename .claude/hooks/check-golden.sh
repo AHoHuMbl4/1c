@@ -68,7 +68,7 @@ emb=0
 golden_embedder_status || emb=$?
 
 if [ "$emb" = 1 ]; then
-  NOTE="$(git log -1 --format=%B 2>/dev/null | grep -ioE 'золотой[[:space:]]*:[[:space:]]*[^[:space:]].*' | head -1)"
+  NOTE="$(git log -1 --format=%B 2>/dev/null | grep -im1 -E '^[[:space:]]*золотой[[:space:]]*:[[:space:]]*невозможен')"
   if [ -n "$NOTE" ]; then
     hook_log "check-golden" "пропуск: эмбеддер не отвечает, в HEAD есть пометка"
     echo '{}'; exit 0
