@@ -449,6 +449,26 @@ def main() -> int:
     check("16: свежий отчёт заменяет прежний",
           st == 200 and saved2.get("phase") == "done" and "entity" not in saved2, saved2)
 
+    # 17. число чанков в пакете не ограничено НАШИМ числом (13.08). Оно задаётся
+    # чужой схемой: не меньше чанка на непустую сущность. Прежний предел 4096 у
+    # ERP-контура (9151 сущность) отверг бы манифест и обнулил сутки чтения 1С.
+    wide = [dict(make_chunk("chunk-%05d" % i, b"x")[0]) for i in range(1, 4098)]
+    m_wide = {"manifest_version": 1, "package_id": "ut/000071-wide0001",
+              "base_id": "ut", "seq": 71, "kind": "full",
+              "created_utc": "2026-08-13T05:00:00Z", "agent_version": "проба-1",
+              "entities": [], "chunks": wide}
+    st, r = req("PUT", "/v1/package/ut/000071-wide0001/manifest", enc_manifest(m_wide))
+    check("17: 4097 чанков принято — предела по числу нет",
+          st == 200 and r.get("state") == "receiving", f"{st} {r}")
+    # Предел остаётся доступным: положительное значение в env включает его.
+    real_limit = S.PACKET_MAX_CHUNKS_PER_PACKAGE
+    S.PACKET_MAX_CHUNKS_PER_PACKAGE = 10
+    st, r = req("PUT", "/v1/package/ut/000072-wide0002/manifest",
+                enc_manifest({**m_wide, "package_id": "ut/000072-wide0002", "seq": 72}))
+    S.PACKET_MAX_CHUNKS_PER_PACKAGE = real_limit
+    check("17: заданный предел по-прежнему отвергает",
+          st == 409 and r.get("error") == "limit_chunks_per_package", f"{st} {r}")
+
     srv.shutdown()
     print(f"\n{'ПРОБА ЗЕЛЁНАЯ' if not FAILS else 'ПАДЕНИЯ: ' + ', '.join(FAILS)}")
     return 1 if FAILS else 0

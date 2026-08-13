@@ -45,7 +45,19 @@ ZSTD_BIN = os.environ.get("PACKET_ZSTD_BIN", "/usr/bin/zstd")
 # Лимиты — контракт К8 (docs/PACKET_CONTRACT.md §8). Превышение на создании
 # пакета — 429, внутри манифеста — rejected(limit_*).
 PACKET_MAX_CHUNK_BYTES = int(os.environ.get("PACKET_MAX_CHUNK_BYTES", str(64 * 1024 * 1024)))
-PACKET_MAX_CHUNKS_PER_PACKAGE = int(os.environ.get("PACKET_MAX_CHUNKS_PER_PACKAGE", "4096"))
+# 🔴 Числом НЕ ограничиваем (13.08, вопрос владельца: «а это сработает на любой
+# базе, самой большой? мы тут не хардкодим?»). Число чанков в первом full — это
+# свойство ЧУЖОЙ схемы: не меньше одного чанка на непустую сущность, крупные ещё
+# делятся по chunk_mb. okna-1: контур 819 → 400 чанков; ERP klient-1: контур
+# 9151 → ожидаемо ~4055. Любой предел, взятый из головы (был 4096, потом 20000),
+# однажды встретит базу крупнее, а цена несоразмерна ошибке: манифест
+# отвергается, агент снимает очередь и теряет ВЕСЬ проход (для ERP это сутки+
+# чтения 1С), следующий такт повторяет то же — круг без выхода.
+# Ресурсы держат пределы, которые говорят о НАШЕЙ машине, а не о чужой схеме:
+# размер чанка, объём карантина, число пакетов в приёме. Сверху число чанков и
+# так ограничено размером тела манифеста (тот же лимит чанка).
+# 0 (умолчание) — предела нет; положительное значение в env включает его.
+PACKET_MAX_CHUNKS_PER_PACKAGE = int(os.environ.get("PACKET_MAX_CHUNKS_PER_PACKAGE", "0"))
 PACKET_MAX_INBOX_BYTES = int(os.environ.get("PACKET_MAX_INBOX_BYTES", str(20 * 1024 * 1024 * 1024)))
 PACKET_MAX_ACTIVE_PACKAGES = int(os.environ.get("PACKET_MAX_ACTIVE_PACKAGES", "8"))
 # Отчёт хода такта — маленький JSON; лимит отдельный и жёсткий, чтобы ручка
@@ -252,7 +264,9 @@ def _validate_manifest(m, base_id: str, pkg_id: str):
     chunks = m.get("chunks")
     if not isinstance(chunks, list):
         return "manifest_invalid"
-    if len(chunks) > PACKET_MAX_CHUNKS_PER_PACKAGE:
+    # 0 — предела нет (умолчание, см. объявление): число чанков задаёт чужая
+    # схема, и наше число здесь однажды встретит базу крупнее.
+    if PACKET_MAX_CHUNKS_PER_PACKAGE > 0 and len(chunks) > PACKET_MAX_CHUNKS_PER_PACKAGE:
         return "limit_chunks_per_package"
     for e in chunks:
         if not isinstance(e, dict) or not _valid_id(str(e.get("name", ""))):
