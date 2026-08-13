@@ -68,7 +68,7 @@ Open WebUI + Caddy на `openclaw-okna` (`2.28.49.158` / `10.3.0.2`) → web-г�
 (вместе с историей установщика 1.2.0). Контракт — `docs/PACKET_CONTRACT.md`, прод-схема —
 `docs/PLAN_PROD_LXC.md`.
 
-**Гейты Claude + Kimi + Cursor `[13.08]`: ✅** — Cursor: `.cursor/hooks.json`, запуск от `claudedev` (`AGENTS.md`).
+**Гейты Claude + Kimi + Cursor `[13.08]`: ✅** — Cursor: `.cursor/hooks.json` без `sniper-kimi` (чужая квота — не параллель). Запуск от `claudedev`. Перезапустить `agent`, чтобы подхватить hooks.json.
 
 **Доля ответов (п. 21) `[06.08]`: ✅ 6 → 11 ВЕРНЫХ ПРИ НУЛЕ НЕВЕРНЫХ, ответ был в контракте.**
 _Предыстория дня (что держало ответы, три отвергнутые формы, пересборка словаря) перенесена

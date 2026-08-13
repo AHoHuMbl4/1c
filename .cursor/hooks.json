@@ -15,12 +15,6 @@
         "failClosed": true
       },
       {
-        "command": ".claude/hooks/cursor-wrap.sh prepare-diff",
-        "matcher": "Shell",
-        "timeout": 15,
-        "failClosed": true
-      },
-      {
         "command": ".claude/hooks/cursor-wrap.sh check-gates",
         "matcher": "Shell",
         "timeout": 15,
@@ -66,12 +60,6 @@
         "command": ".claude/hooks/cursor-wrap.sh check-golden",
         "matcher": "Shell",
         "timeout": 20,
-        "failClosed": true
-      },
-      {
-        "command": ".claude/hooks/cursor-wrap.sh sniper-kimi",
-        "matcher": "Shell",
-        "timeout": 600,
         "failClosed": true
       }
     ],

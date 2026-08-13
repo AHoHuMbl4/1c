@@ -648,10 +648,10 @@ import json, sys
 p = sys.argv[1]
 d = json.load(open(p, encoding="utf-8"))
 d["hooks"]["preToolUse"] = [h for h in d["hooks"]["preToolUse"]
-                            if "sniper-kimi" not in (h.get("command") or "")]
+                            if "check-golden" not in (h.get("command") or "")]
 json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
 PY
-OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'гейт убран из cursor-hooks — нарушение видно поимённо'
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'check-golden'; say $? 'гейт убран из cursor-hooks — нарушение видно поимённо'
 cp "$TMP/cursor-hooks.bak" .cursor/hooks.json
 
 python3 - .cursor/hooks.json <<'PY'
@@ -659,13 +659,13 @@ import json, sys
 p = sys.argv[1]
 d = json.load(open(p, encoding="utf-8"))
 for h in d["hooks"]["preToolUse"]:
-    if "sniper-kimi" in (h.get("command") or ""):
+    if "check-golden" in (h.get("command") or ""):
         d["hooks"].setdefault("postToolUse", []).append(h)
         d["hooks"]["preToolUse"].remove(h)
         break
 json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
 PY
-OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'гейт пересажен на не то событие — нарушение видно поимённо'
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'check-golden'; say $? 'гейт пересажен на не то событие — нарушение видно поимённо'
 cp "$TMP/cursor-hooks.bak" .cursor/hooks.json
 
 python3 - .cursor/hooks.json <<'PY'
@@ -673,12 +673,12 @@ import json, sys
 p = sys.argv[1]
 d = json.load(open(p, encoding="utf-8"))
 for h in d["hooks"]["preToolUse"]:
-    if "sniper-kimi" in (h.get("command") or ""):
-        h["command"] = "/tmp/cursor-wrap.sh sniper-kimi"
+    if "check-golden" in (h.get("command") or ""):
+        h["command"] = "/tmp/cursor-wrap.sh check-golden"
         break
 json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
 PY
-OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'команда гейта без cursor-wrap в .claude/hooks — нарушение видно'
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'check-golden'; say $? 'команда гейта без cursor-wrap в .claude/hooks — нарушение видно'
 cp "$TMP/cursor-hooks.bak" .cursor/hooks.json
 
 python3 - .cursor/hooks.json <<'PY'

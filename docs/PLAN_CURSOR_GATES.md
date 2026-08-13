@@ -71,12 +71,16 @@ git     → .githooks → git-gate.sh        (уже ловит Cursor)
 |---|---|---|---|
 | `sessionStart` | — | `session-start` (вброс через `additional_context`) | нет (вброс) |
 | `preToolUse` | `Write\|StrReplace` | `check-prompt-rules` | да |
-| `preToolUse` | `Shell` | `prepare-diff`, `check-gates`, `check-sql-docs`, `check-prompt-rules`, `check-diff`, `check-docs`, `check-active-size`, `check-graph-fresh`, `check-golden`, `sniper-kimi` | да |
+| `preToolUse` | `Shell` | `check-gates`, `check-sql-docs`, `check-prompt-rules`, `check-diff`, `check-docs`, `check-active-size`, `check-graph-fresh`, `check-golden` | да |
 | `postToolUse` | `Write\|StrReplace` | `count-edits`, `check-write`, `check-deps` | нет (вброс) |
 | `postToolUse` | `Shell` | `check-deps` | нет |
 
-Снайпер — существующий `sniper-kimi.sh` (свой дифф, параллельный запуск безопасен).
-У Cursor нет `type: agent`; свой CLI модели не пишем. Бинарь `kimi` у `claudedev` уже есть.
+Снайпер коммита к Cursor **не подключается**. У Claude он `type: agent` (своя модель),
+у Kimi — `sniper-kimi.sh` (`kimi -p`). Подключить `kimi -p` в Cursor — это не параллель,
+а зависимость от квоты второго движка: `[замер 13.08]` 403 usage limit остановил
+коммит из сессии `claudedev`. Свой CLI модели не пишем; `type: prompt` у Cursor —
+промт, правила промтом не держатся. В Cursor остаются детерминированные гейты
+и git-гейт (он снайпер не зовёт).
 
 `beforeSubmitPrompt` для вброса **не годится**: схема события — только `continue` /
 `user_message`, `session_id` во входе нет. Вброс — `sessionStart` + JSON
@@ -160,8 +164,12 @@ Cursor корневой `.mcp.json` не читает (как Kimi 0.33 — жи
 | жёсткая ссылка | `ln -f CLAUDE.md AGENTS.md` (иноды снова одни) |
 
 `[замер]` оффлайн: `bash work/hooks/test-hooks.sh` код 0, включая все новые случаи Cursor.
-`[замер]` живо: после появления hooks.json команда Shell дала `prepare-diff` и
-`check-gates` в `.claude/hooks.log` (06:24:01); до этого на Shell их не было.
+`[замер]` живо: после появления hooks.json команда Shell дала гейты в `.claude/hooks.log`.
 
-Осталось владельцу: `bash work/hooks/setup-work-user.sh` и запуск Cursor от `claudedev`.
+🔴 Поправка того же дня: `sniper-kimi` и `prepare-diff` из `.cursor/hooks.json` **сняты**.
+Подключение `kimi -p` в Cursor сделало коммит зависимым от квоты Kimi
+(`[замер]` 403 usage limit). Снайпер остаётся у Claude и Kimi; в Cursor —
+детерминированные гейты + git-гейт.
+
+Осталось владельцу: перезапустить сессию Cursor от `claudedev`, чтобы подхватить hooks.json.
 

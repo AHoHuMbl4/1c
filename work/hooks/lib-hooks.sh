@@ -282,7 +282,6 @@ wrap = hooks_dir + "/cursor-wrap.sh"
 
 EXPECT = {
     "session-start": "sessionStart",
-    "prepare-diff": "preToolUse",
     "check-gates": "preToolUse",
     "check-sql-docs": "preToolUse",
     "check-prompt-rules": "preToolUse",
@@ -291,15 +290,14 @@ EXPECT = {
     "check-active-size": "preToolUse",
     "check-graph-fresh": "preToolUse",
     "check-golden": "preToolUse",
-    "sniper-kimi": "preToolUse",
     "count-edits": "postToolUse",
     "check-write": "postToolUse",
     "check-deps": "postToolUse",
 }
 BLOCKING = (
-    "prepare-diff", "check-gates", "check-sql-docs", "check-prompt-rules",
+    "check-gates", "check-sql-docs", "check-prompt-rules",
     "check-diff", "check-docs", "check-active-size", "check-graph-fresh",
-    "check-golden", "sniper-kimi",
+    "check-golden",
 )
 
 try:

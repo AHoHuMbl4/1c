@@ -291,7 +291,8 @@ OpenClaw (чтение — отдельный трек, здесь его нет
 Matcher `Bash` из Claude-конфига на команды `Shell` не сработал. Канон:
 `.cursor/hooks.json` (гейты через `.claude/hooks/cursor-wrap.sh`) и `.cursor/mcp.json`
 (`serenedb-docs`, `memory`). Файлы — root:root, сторож сверяет содержимое.
-Claude и Kimi этот слой не читают. Последний рубеж git — общий на три движка.
+Claude и Kimi этот слой не читают. Снайпер `kimi -p` в Cursor **не** подключается
+(`[замер]` 403 квоты Kimi). Последний рубеж git — общий на три движка.
 
 
 ### Выведено из контура, не трогать
