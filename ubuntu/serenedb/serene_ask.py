@@ -2525,7 +2525,11 @@ def pick_entity(question, kind, cands, counts=None, match="", cut=None):
     # составной (ссылка на владельца + номер строки), а сам владелец найден по данным.
     # Это структурный факт, который модели неоткуда узнать из названия.
     parent_by = {r[0]: (r[2] if len(r) > 2 else "") for r in rs if r and r[0]}
-    names = [(c, label_by[c]) for c in cands if c in label_by]
+    # Одноимённым кандидатам дописывается вид записи: иначе в перечне стоят две
+    # неотличимые строки, и выбор модели между ними — догадка, а не выбор (п. 12).
+    # Ответ модели приходит НОМЕРОМ строки, поэтому подпись сопоставление не задевает.
+    _dis = disambiguate_labels([(c, label_by[c]) for c in cands if c in label_by])
+    names = [(c, _dis.get(c, label_by[c])) for c in cands if c in label_by]
     if len(names) < 2:
         return ([names[0][0]] if names else [], {}, {})
     # Рядом с названием — СКОЛЬКО СОВПАДЕНИЙ там нашлось. Это данные, а не схема, и
@@ -4030,6 +4034,119 @@ NOT_FOR = os.environ.get("ASK_NOT_FOR", "1") == "1"
 # Словарь со стеммингом — им сравниваются слово человека и название сущности.
 # Создаётся сборкой (`corpus_init.sql`), локаль наследует от основного словаря.
 STEM_DICT = os.environ.get("ASK_STEM_DICT", "search_dict_stem")
+# Сколько секунд держать в процессе перечень неоднозначных меток: он меняется тактом
+# сборки, а не между вопросами. Это бюджет обращений к базе, а не порог правильности.
+AMBIG_TTL = int(os.environ.get("ASK_AMBIG_TTL", "300"))
+
+# 🔴 ВИД ЗАПИСИ — ЕДИНСТВЕННОЕ, ЧТО РАЗЛИЧАЕТ ОДНОИМЁННЫЕ ИСТОЧНИКИ. Метка собирается
+# срезанием типа (`corpus_build.sql`: `regexp_replace(orig,'^[^_]+_','')`), поэтому
+# документ и одноимённый регистр получают ОДНУ строку. Живой прогон okna 13.08: человек
+# 23 раза уточнял «продажи за неделю» и не получил числа — в списке стояли два
+# неразличимых «Реализация ТМЦ» (документ и регистр накопления), выбор возвращался той
+# же строкой, `resolve_focus` честно не сводил её (п. 12) и круг замыкался.
+#
+# Вид берётся ИЗ ИМЕНИ ТИПА OData, то есть от ПЛАТФОРМЫ, а не от конкретной базы: набор
+# типов один у всех конфигураций 1С, поэтому это не привязка (девиз 29.07). Слово для
+# человека — перевод платформенного термина, не имя таблицы: `document_реализациятмц`
+# наружу по-прежнему не уходит (решение 03.08).
+_KIND_WORD = {
+    "catalog": "справочник",
+    "document": "документ",
+    "documentjournal": "журнал документов",
+    "accumulationregister": "регистр накопления",
+    "informationregister": "регистр сведений",
+    "accountingregister": "регистр бухгалтерии",
+    "calculationregister": "регистр расчёта",
+    "chartofaccounts": "план счетов",
+    "chartofcharacteristictypes": "план видов характеристик",
+    "chartofcalculationtypes": "план видов расчёта",
+    "businessprocess": "бизнес-процесс",
+    "task": "задача",
+    "exchangeplan": "план обмена",
+    "constant": "константа",
+    "enum": "перечисление",
+}
+
+
+def kind_word(src_table):
+    """Вид записи словом человека. Неизвестный тип — пустая строка (молча не гадаем)."""
+    head = str(src_table or "").split("_", 1)[0].lower()
+    return _KIND_WORD.get(head, "")
+
+
+def label_with_kind(src_table, label):
+    """Подпись, различающая одноимённые источники: «Реализация ТМЦ (документ)».
+
+    🔴 ПОДПИСЬ И `focus` — ОДНА СТРОКА. Отдельный «ключ выбора», не совпадающий с тем,
+    что видит человек, уже проходили 03.08: бот пересказывает клиенту всё, что видит в
+    ответе инструмента, и внутреннее имя утекало в чат мимо зачистки плагина. Поэтому
+    различитель кладётся В ТУ ЖЕ строку, которую человек читает и которую бот вернёт
+    в `focus`.
+    """
+    k = kind_word(src_table)
+    lab = (label or "").strip() or str(src_table)
+    return "%s (%s)" % (lab, k) if k else lab
+
+
+_AMBIG_CACHE = {"at": 0.0, "set": frozenset()}
+
+
+def ambiguous_labels():
+    """Метки, которые в БАЗЕ носит больше одного источника.
+
+    🔴 Считается по всей карте сущностей, а не по показанному списку. Живой замер okna
+    13.08: в вариантах стояла одна «Реализация ТМЦ», подпись выглядела однозначной — а
+    `resolve_focus` сводит по базе, где их две (документ и регистр), и выбор человека
+    снова отбрасывался. Различитель нужен там, где строка НЕ УНИКАЛЬНА В БАЗЕ, иначе
+    круг замыкается на сущности, которой в списке даже не было.
+
+    Ответ живёт в процессе несколько минут: карта сущностей меняется тактом сборки,
+    а не между вопросами.
+    """
+    now = time.time()
+    if now - _AMBIG_CACHE["at"] < AMBIG_TTL and _AMBIG_CACHE["set"]:
+        return _AMBIG_CACHE["set"]
+    try:
+        rows = psql("SELECT lower(replace(label,' ','')) FROM %s "
+                    "GROUP BY 1 HAVING count(*) > 1" % TABLES)
+    except RuntimeError:
+        return _AMBIG_CACHE["set"]
+    got = frozenset(r[0] for r in rows or [] if r and r[0])
+    _AMBIG_CACHE.update({"at": now, "set": got})
+    return got
+
+
+def disambiguate_labels(pairs, ambiguous=None):
+    """[(src, label)] -> {src: подпись}. Вид дописывается там, где метка неоднозначна.
+
+    Неоднозначной считается метка, совпавшая внутри списка ИЛИ носимая несколькими
+    источниками в базе. Где неоднозначности нет — подпись прежняя, а с ней и прежние
+    замеры выбора сущности.
+    """
+    if ambiguous is None:
+        ambiguous = ambiguous_labels()
+    norm = lambda s: "".join(str(s or "").lower().split())
+    seen = {}
+    for src, lab in pairs:
+        seen.setdefault(norm(lab), []).append(src)
+    out = {}
+    for src, lab in pairs:
+        many = len(seen.get(norm(lab), [])) > 1 or norm(lab) in ambiguous
+        out[src] = label_with_kind(src, lab) if many else ((lab or "").strip() or src)
+    return out
+
+
+def mk_opts(srcs, lab_by, marks=None, by=None):
+    """Варианты уточнения одним видом на все пять веток ответа.
+
+    Здесь же дописывается вид записи одноимённым источникам: подпись, которую читает
+    человек, и значение `focus`, которое возвращает бот, — одна и та же строка, поэтому
+    различитель ставится в этой точке, а не в мосте.
+    """
+    marks, by = marks or {}, by or {}
+    dis = disambiguate_labels([(s, lab_by.get(s, s)) for s in srcs])
+    return [{"src": s, "label": dis.get(s, lab_by.get(s, s)),
+             "distinct_by": marks.get(s, ""), "found": by.get(s, 0)} for s in srcs]
 
 
 def resolve_focus(focus, diag=None):
@@ -4067,10 +4184,27 @@ def resolve_focus(focus, diag=None):
             if diag is not None:
                 diag["focus_resolved"] = "%s -> %s" % (f, rows[0][0])
             return rows[0][0]
-        if len(rows) > 1 and diag is not None:
+        if len(rows) > 1:
             # Название неоднозначно — навязывать одно из двух нельзя (п. 12).
-            diag["focus_ambiguous"] = f
+            if diag is not None:
+                diag["focus_ambiguous"] = f
             return None
+        # Подпись с видом записи: «Реализация ТМЦ (документ)». Сравниваем не разбором
+        # строки, а СБОРКОЙ эталона у каждого кандидата — так же, как сведение по метке
+        # спрашивается у базы. Кандидаты сужаются по началу строки, поэтому перебора
+        # всей карты сущностей нет.
+        norm = lambda s: "".join(str(s or "").lower().split())
+        try:
+            rows = psql("SELECT src_table, label FROM %s WHERE %s LIKE "
+                        "lower(replace(label,' ','')) || '%%'"
+                        % (TABLES, lit(norm(f))))
+        except RuntimeError:
+            rows = []
+        for r in rows or []:
+            if r and r[0] and norm(label_with_kind(r[0], r[1] if len(r) > 1 else "")) == norm(f):
+                if diag is not None:
+                    diag["focus_resolved"] = "%s -> %s" % (f, r[0])
+                return r[0]
     except RuntimeError:
         return None                     # база недоступна — пусть решает общий путь
     if diag is not None:
@@ -5045,9 +5179,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # `KeyError('distinct_by')`. Это ещё одно доказательство, что она не работала ни
         # разу: путь, который никогда не исполнялся, донёс до продукта и дефект прав, и
         # дефект формы данных.
-        opts = [{"src": t, "label": lab_by.get(t, t), "distinct_by": marks.get(t, ""),
-                 "found": by.get(t, 0)}
-                for t in opts_src if t in lab_by]
+        opts = mk_opts([t for t in opts_src if t in lab_by], lab_by, marks, by)
         if len(opts) < 2:
             return None
         diag["unsupported_pick"] = cand
@@ -5316,8 +5448,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
             except RuntimeError:
                 lab_by = {}
-            opts = [{"src": c, "label": lab_by.get(c, c), "distinct_by": marks.get(c, ""),
-                     "found": by.get(c, 0)} for c in opts_src if c in lab_by]
+            opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by)
             if len(opts) > 1:
                 diag["writer_pair_unproven"] = diag["writer_pair"]
                 return {"partial": cut or None, "kind": "clarify",
@@ -5344,8 +5475,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     % (TABLES, ", ".join(lit(c) for c in src_of if c))) if r and r[0]}
             except RuntimeError:
                 lab_by = {}
-            opts = [{"src": c, "label": lab_by.get(c, c), "distinct_by": marks.get(c, ""),
-                     "found": by.get(c, 0)} for c in src_of if c]
+            opts = mk_opts([c for c in src_of if c], lab_by, marks, by)
             if len(opts) > 1:
                 diag["arbiter_detected"] = {
                     "кандидаты": src_of,
@@ -5388,9 +5518,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
                 except RuntimeError:
                     lab_by = {}
-                opts = [{"src": c, "label": lab_by.get(c, c),
-                         "distinct_by": marks.get(c, ""), "found": by.get(c, 0)}
-                        for c in opts_src if c in lab_by]
+                opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by)
                 if len(opts) > 1:
                     diag["single_was_rival"] = {"выбор": picked[0], "ответил": sole}
                     return {"partial": cut or None, "kind": "clarify",
@@ -5408,8 +5536,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 % (TABLES, ", ".join(lit(c) for c in picked))) if r and r[0]}
         except RuntimeError:
             lab_by = {}
-        opts = [{"src": t, "label": lab_by.get(t, t), "distinct_by": marks.get(t, ""),
-                 "found": by.get(t, 0)} for t in picked]
+        opts = mk_opts(list(picked), lab_by, marks, by)
         diag["ambiguous"] = [o["src"] for o in opts]
         return {"partial": cut or None, "kind": "clarify", "text": clarify_say(question, opts, diag),
                 "options": opts, "sources": [o["label"] for o in opts],

@@ -35,6 +35,15 @@ else
   RUNAS_BOT=(sudo -u "$BOTUSER" -H)
 fi
 BATCH="${WIKI_ALIAS_BATCH:-20}"
+# 🔴 ПУСТАЯ ЗАПИСЬ — ЭТО ПОПЫТКА, А НЕ ОТВЕТ. Осечка пачки помечает её сущности пустыми
+# строками, чтобы проход не ходил по кругу; но отбор пропускал их по одному факту наличия
+# записи, и сущность выбывала из словаря НАВСЕГДА. Живой случай okna 13.08: 140 записей из
+# 254 пустые (следствие дефекта прав на файле обмена), среди них обе «Реализация ТМЦ», —
+# то есть ровно те, чьё описание разводит одноимённые источники. Теперь пустая запись
+# переспрашивается, но не чаще этого срока: модель не жжётся на сущностях, которые она
+# и правда не может описать.
+RETRY_H="${WIKI_ALIAS_RETRY_H:-6}"
+case "$RETRY_H" in ''|*[!0-9]*) RETRY_H=6;; esac
 # Развести конкретное слово, а не самое спорное: путь «сначала прогон, потом точечная правка».
 # Одинарные кавычки удваиваются сразу: слово приходит извне (переменная окружения), и в
 # запрос оно подставляется текстом — без этого апостроф в слове ломал бы запрос.
@@ -85,7 +94,9 @@ while :; do
       SELECT f.src_table, t.emb FROM wiki_entity_facts f
       JOIN search_tables t ON t.src_table = f.src_table
       WHERE f.cls <> 'service'
-        AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE a WHERE a.src_table = f.src_table)
+        AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE a WHERE a.src_table = f.src_table
+                        AND (coalesce(a.aliases,'') <> ''
+                             OR a.seen_at > now() - INTERVAL $RETRY_H HOUR))
       ORDER BY f.src_table LIMIT 1)
     SELECT to_json(list(struct_pack(entity := src_table, title := label,
                                     quantities := coalesce(measures,''))))
@@ -93,7 +104,9 @@ while :; do
             FROM wiki_entity_facts f
             JOIN search_tables t ON t.src_table = f.src_table
            WHERE f.cls <> 'service'
-             AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE a WHERE a.src_table = f.src_table)
+             AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE a WHERE a.src_table = f.src_table
+                        AND (coalesce(a.aliases,'') <> ''
+                             OR a.seen_at > now() - INTERVAL $RETRY_H HOUR))
            ORDER BY d, f.src_table LIMIT $BATCH)" > "$TMP/pay" 2>/dev/null
   PAY=$(cat "$TMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
@@ -183,8 +196,16 @@ PY
   # пачку — то есть деньги за модель тратились, а словарь не рос. Права ставятся
   # рядом с записью, как у `msg` выше.
   chmod 644 "$TMP/rows.json" 2>/dev/null
-  # Запись — ОДНИМ запросом из файла, без цикла по строкам (п. 20).
+  # Запись — ОДНИМ запросом из файла, без цикла по строкам (п. 20). Пустая заготовка,
+  # оставшаяся от прежней осечки, сначала снимается: иначе ответ модели молча падал бы
+  # мимо словаря (`NOT IN` считает такую строку уже отвеченной), и переспрос был бы
+  # бесполезен — деньги за модель тратились бы вечно.
   psql "$DSN" -q -c "
+    DELETE FROM $ALIAS_TABLE WHERE coalesce(aliases,'') = '' AND src_table IN
+      (SELECT src_table FROM read_json('$TMP/rows.json',
+         columns := {src_table:'VARCHAR', aliases:'VARCHAR',
+                     best_used_for:'VARCHAR', not_enough_for:'VARCHAR'})
+       WHERE coalesce(aliases,'') <> '');
     INSERT INTO $ALIAS_TABLE
     SELECT src_table, aliases, best_used_for, not_enough_for, now()
     FROM read_json('$TMP/rows.json', columns := {src_table:'VARCHAR', aliases:'VARCHAR',
