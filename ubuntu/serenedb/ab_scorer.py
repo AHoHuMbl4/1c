@@ -44,8 +44,13 @@ def env_value(key, *paths):
 
 DSN = os.environ.get(
     "AB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=%s" % BASE)
-URL = "http://127.0.0.1:%s/ask" % (
-    env_value("ASK_LISTEN_PORT", ENV_COMMON, ENV_FILE) or "8091")
+_ask = os.environ.get("ASK_URL", "").strip().rstrip("/")
+LIVE_CONTOUR = bool(_ask)
+if LIVE_CONTOUR:
+    URL = _ask if _ask.endswith("/ask") else _ask + "/ask"
+else:
+    URL = "http://127.0.0.1:%s/ask" % (
+        env_value("ASK_LISTEN_PORT", ENV_COMMON, ENV_FILE) or "8091")
 # Шесть штатных моделей ранжирования движка. Седьмая, indri_dirichlet, исключена
 # замером: в нашей сборке она в этой форме запроса молча отдаёт ноль строк.
 # Список сужается окружением: правка, которая модель ранжирования не трогает (вес поля,
@@ -95,7 +100,7 @@ def truth(sql):
     return (p.stdout or "").strip()
 
 
-TOK = env_value("ASK_TOKEN", ENV_COMMON, ENV_FILE)
+TOK = os.environ.get("ASK_TOKEN") or env_value("ASK_TOKEN", ENV_COMMON, ENV_FILE)
 
 
 def ask(q):
@@ -139,6 +144,8 @@ def restart(scorer):
 
 def main():
     print("база %s, сервис %s, %s" % (BASE, URL, UNIT))
+    if LIVE_CONTOUR:
+        print("ASK_URL: no unit restart, live scorer on contour")
     gold = [(q, truth(sql)) for q, sql in GOLD]
     print("эталоны: " + ", ".join("%s" % t for _q, t in gold))
     # 🔴 Эталон, который не посчитался, — это молчащий прогон: сравнивать не с чем, и
@@ -149,8 +156,10 @@ def main():
                          % (len(blind), "; ".join(q[:40] for q in blind[:3])))
         return None
     table = {}
-    for sc in SCORERS:
-        restart(sc)
+    scorers = ["live"] if LIVE_CONTOUR else SCORERS
+    for sc in scorers:
+        if not LIVE_CONTOUR:
+            restart(sc)
         hits, secs, rows, errs = 0, 0.0, [], 0
         for q, want in gold:
             d, sec = ask(q)

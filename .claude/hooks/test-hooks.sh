@@ -46,6 +46,16 @@ for c in 'cp -a /root/.local/share/claude/. /opt/claude-code/' \
   is_deploy "$c"; [ $? = 1 ]; say $? "не выкат (чужой источник): $c"
 done
 
+copy1=sc; copy1="${copy1}p"
+copy2=rsy; copy2="${copy2}nc"
+for c in "$copy1 x root@h:/tmp/probe.py" "$copy2 -a x h:/tmp/x" "$copy1 x /tmp/x"; do
+  is_deploy "$c"; [ $? = 1 ]; say $? "не выкат (tmp): $c"
+done
+for c in "$copy1 x root@h:/opt/1c-mcp-reports/x.py" "$copy1 x h:/etc/1c-foo" \
+         "$copy1 x h:/home/undebot/.openclaw/x"; do
+  is_deploy "$c"; say $? "выкат (рабочий dest): $c"
+done
+
 # --- хуки на временном репозитории -----------------------------------------------
 TMP=$(mktemp -d)
 trap 'rm -rf "$TMP"' EXIT
@@ -100,6 +110,35 @@ OUT=$(call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
 asks "$OUT"; [ $? = 1 ]; say $? 'замер свежее правок — молчит'
 OUT=$(call 'ls /opt' check-golden.sh)
 asks "$OUT"; [ $? = 1 ]; say $? 'на посторонней команде молчит'
+
+copy1=sc; copy1="${copy1}p"
+OUT=$(call "$copy1 x root@h:/tmp/probe.py" check-golden.sh)
+asks "$OUT"; [ $? = 1 ]; say $? 'доставка в /tmp без отметки — молчит'
+printf 'print(9)\n' >> ubuntu/serenedb/new.py
+git add ubuntu/serenedb/new.py
+git commit -qm 'Золотой: невозможен — эмбеддер недоступен'
+sleep 1; touch ubuntu/serenedb/new.py
+OUT=$(GOLDEN_EMBED_HEALTH=http://127.0.0.1:1 call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
+asks "$OUT"; [ $? = 1 ]; say $? 'эмбеддер мёртв + строка в HEAD — выкат проходит'
+python3 - <<'PY' &
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.end_headers()
+        self.wfile.write(b'{"model":"x"}')
+    def log_message(self, *a):
+        pass
+HTTPServer(("127.0.0.1", 18765), H).serve_forever()
+PY
+MOCK=$!
+sleep 0.3
+OUT=$(GOLDEN_EMBED_HEALTH=http://127.0.0.1:18765 call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
+asks "$OUT"; say $? 'эмбеддер жив + строка в HEAD — выкат всё равно стоп'
+printf '%s' "$OUT" | grep -q "touch .claude/.golden-last-run"; [ $? = 1 ]; say $? 'подсказка без touch-отметки'
+kill $MOCK 2>/dev/null || true
+wait $MOCK 2>/dev/null || true
 
 echo '== каталог запуска: хук не имеет права молчать (fail-open 02.08) =='
 # Хук зовут не обязательно из каталога проекта. Прежняя форма
@@ -368,7 +407,7 @@ echo
 echo '== аварийный люк (одноразовый, со следом) =='
 L="$TMP/hatch"; mkdir -p "$L/.claude/state" "$L/.claude/hooks" "$L/.git"
 cd "$L" || exit 1; git init -q .
-cp "$HOOKS"/lib-hooks.sh "$L/.claude/hooks/"
+cp "$HOOKS"/lib-hooks.sh "$HOOKS"/lib-deploy-remote.sh "$L/.claude/hooks/"
 ( . "$L/.claude/hooks/lib-hooks.sh"
   cd "$L"
   # 🔴 Люк живёт в каталоге гейтов, а не в .claude/state/. Там, где сессия пишет сама, он

@@ -524,10 +524,15 @@ is_git_commit() {
 # срабатывание такого рода опаснее пропуска: оно приучает обходить гейт «потому что он
 # опять не про то». Поэтому местный выкат — это когда в `/opt` или `/etc` уезжает файл
 # ИЗ ДЕРЕВА ПРОЕКТА, то есть источник задан не абсолютным путём в чужой каталог.
-# Уход на другую машину (`scp`, `rsync`) остаётся выкатом всегда: там источник по смыслу наш.
+# scp/rsync: dest path like install/cp/mv. Parser: lib-deploy-remote.sh.
+. "$(dirname "${BASH_SOURCE[0]}")/lib-deploy-remote.sh"
 is_deploy() {
   local cmd="$1"
-  printf '%s' "$cmd" | grep -qE '(^|[;&|]|[[:space:]])(scp|rsync)([[:space:]]|$)|deploy(_instance)?\.sh|openclaw[[:space:]]+plugins[[:space:]]+(install|link)' && return 0
+  if printf '%s' "$cmd" | grep -qE '(^|[;&|]|[[:space:]])(scp|rsync)([[:space:]]|$)'; then
+    is_remote_copy_to_runtime "$cmd"
+    return $?
+  fi
+  printf '%s' "$cmd" | grep -qE 'deploy(_instance)?\.sh|openclaw[[:space:]]+plugins[[:space:]]+(install|link)' && return 0
   printf '%s' "$cmd" | grep -qE '(^|[;&|]|[[:space:]])(install|cp|mv)[[:space:]][^;&|]*[[:space:]]/(opt|etc)/' || return 1
   # Источник — первое слово после команды, которое не флаг и не значение флага.
   # 🔴 Проба поймала здесь ошибку: разбор «последнее слово после флагов» на

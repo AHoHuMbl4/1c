@@ -292,7 +292,8 @@ Matcher `Bash` из Claude-конфига на команды `Shell` не ср�
 `.cursor/hooks.json` (гейты через `.claude/hooks/cursor-wrap.sh`) и `.cursor/mcp.json`
 (`serenedb-docs`, `memory`). Файлы — root:root, сторож сверяет содержимое.
 Claude и Kimi этот слой не читают. Снайпер `kimi -p` в Cursor **не** подключается
-(`[замер]` 403 квоты Kimi). Последний рубеж git — общий на три движка.
+(`[замер]` 403 квоты Kimi). `check-golden`: scp/rsync в `/tmp` не выкат; мёртвый
+эмбеддер — строка `Золотой:` в HEAD. Последний рубеж git — общий на три движка.
 
 
 ### Выведено из контура, не трогать
