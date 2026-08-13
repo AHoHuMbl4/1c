@@ -1,10 +1,10 @@
 # Веб-фронт okna (Open WebUI + Caddy)
 
-Домен **`okna.timpul.pro`** → `openclaw-okna` (`2.28.49.158` / `10.3.0.2`).  
+Домен **`baulogistic.timpul.pro`** → `openclaw-okna` (`2.28.49.158` / `10.3.0.2`).  
 Бэкенд OpenClaw web-профиль → okna-юнит (`167.233.249.110` / `10.3.0.4` / `:18801`).
 
 ```
-браузер → https://okna.timpul.pro  (Caddy → Open WebUI :8080 loopback)
+браузер → https://baulogistic.timpul.pro  (Caddy → Open WebUI :8080 loopback)
         → http://10.3.0.4:18801/v1  (OpenClaw web, bind=lan, ufw только с 10.3.0.2)
         → 1c-mcp-ask@postgres → 1c-serene-ask@postgres
 ```
@@ -13,7 +13,7 @@
 
 ## Предусловия
 
-1. DNS: `okna.timpul.pro` A → `2.28.49.158`.
+1. DNS: `baulogistic.timpul.pro` A → `2.28.49.158`.
 2. Deploy-ключ с дева на оба сервера (`~/.ssh/id_ed25519_deploy`).
 3. На бэкенде: undebot + openclaw, `/etc/1c-serene-ask.env`, слот okna-1.
 4. Скрипты: rsync `ubuntu/open-webui/` → `/opt/1c-open-webui/` на оба хоста.
@@ -39,13 +39,18 @@ Ubuntu 24.04 (Python 3.12) — обычный venv; Ubuntu 26.04 (3.14) — Pyth
 🔴 ufw: сначала `22/tcp`, потом 80/443 (иначе SSH отрежется — случай 13.08).
 После старта WebUI — `systemctl reload caddy` (иначе LE не стартует).
 
+## Вход
+
+Админ: `anton@baulogistic.md` (пароль — у владельца, не в git).
+
 ## Приёмка
 
-- `curl -sI https://okna.timpul.pro/` → HTTP/2 200
+- `curl -sI https://baulogistic.timpul.pro/` → HTTP/2 200
 - Вход админом → одна модель «Ассистент 1С»
 - Брендинг: `configure-branding.py` (API 0.11: `OPENAI_API_CONFIGS["0"].model_ids`,
   `POST /api/v1/models/create` override, suggestions с `title: list[str]`).
   В env: `ENABLE_VERSION_UPDATE_CHECK=false` — без changelog-окна Open WebUI.
+- UI: `static/brand-ui.css` скрывает Workspace и селектор моделей (`#model`).
 - Вопрос по данным → уточнение → число
 - Голос (STT): Whisper Large-v3 на GPU владельца (`AUDIO_STT_ENGINE=openai`,
   `AUDIO_STT_OPENAI_API_BASE_URL` → `/v1`, модель `whisper-large-v3`; язык не фиксируем — выбор в UI / авто Whisper).

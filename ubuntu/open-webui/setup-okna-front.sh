@@ -1,12 +1,12 @@
 #!/bin/bash
 # Open WebUI + Caddy на openclaw-okna (2.28.49.158 / 10.3.0.2).
-# Домен: okna.timpul.pro → этот хост. Бэкенд OpenClaw web — 10.3.0.4:18801.
+# Домен: baulogistic.timpul.pro → этот хост. Бэкенд OpenClaw web — 10.3.0.4:18801.
 #
 # Запуск ОТ ROOT на фронте:
 #   GATEWAY_TOKEN=<из бэкенда> bash /opt/1c-open-webui/setup-okna-front.sh
 set -euo pipefail
 
-DOMAIN="${DOMAIN:-okna.timpul.pro}"
+DOMAIN="${DOMAIN:-baulogistic.timpul.pro}"
 BACKEND_IP="${BACKEND_IP:-10.3.0.4}"
 GATEWAY_PORT="${GATEWAY_PORT:-18801}"
 WEBUSER="${WEBUI_USER:-webui}"
@@ -103,6 +103,17 @@ if [ -f "$STT_ENV" ]; then
   chown "$WEBUSER:$WEBUSER" "$ENV_FILE"
   chmod 600 "$ENV_FILE"
   echo "STT: подмешан из $STT_ENV"
+fi
+
+# Скрыть Workspace и селектор моделей в UI (замер 13.08)
+if [ -f "$SCRIPT_DIR/static/brand-ui.css" ]; then
+  runuser -u "$WEBUSER" -- "$VENV/bin/python" - "$SCRIPT_DIR/static/brand-ui.css" <<'PY'
+import open_webui, pathlib, shutil, sys
+src = pathlib.Path(sys.argv[1])
+dst = pathlib.Path(open_webui.__file__).resolve().parent / "static" / ("custom" + ".css")
+shutil.copyfile(src, dst)
+print(dst)
+PY
 fi
 
 install -d -m 755 -o "$WEBUSER" -g "$WEBUSER" "/home/$WEBUSER/.config/systemd/user"

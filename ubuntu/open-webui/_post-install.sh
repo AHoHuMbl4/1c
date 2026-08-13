@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
-curl -sI -H 'Host: okna.timpul.pro' http://127.0.0.1/ | head -10
+curl -sI -H 'Host: baulogistic.timpul.pro' http://127.0.0.1/ | head -10
 echo ===DNS===
-getent hosts okna.timpul.pro || true
+getent hosts baulogistic.timpul.pro || true
 echo ===RELOAD_CADDY===
 systemctl reload caddy || systemctl restart caddy
 sleep 8

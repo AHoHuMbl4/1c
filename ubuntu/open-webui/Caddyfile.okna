@@ -1,5 +1,10 @@
-# okna.timpul.pro — TLS автоматически (Let's Encrypt).
+# baulogistic.timpul.pro — TLS автоматически (Let's Encrypt).
+# Старый okna.timpul.pro → редирект (закладки).
 __DOMAIN__ {
 	encode gzip
 	reverse_proxy 127.0.0.1:8080
+}
+
+okna.timpul.pro {
+	redir https://__DOMAIN__{uri} permanent
 }

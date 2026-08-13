@@ -1,6 +1,6 @@
 #!/bin/bash
 set -euo pipefail
-D=okna.timpul.pro
+D=baulogistic.timpul.pro
 curl -sI --resolve "${D}:443:127.0.0.1" "https://${D}/" | head -12
 echo ---
 ss -tlnp | grep -E ':443|:8080|:80 '

@@ -20,7 +20,7 @@ install -d -m 755 -o webui -g webui /home/webui/.config/systemd/user
 install -m 644 -o webui -g webui /opt/1c-open-webui/systemd/open-webui.service \
   /home/webui/.config/systemd/user/open-webui.service
 install -m 644 /opt/1c-open-webui/Caddyfile.okna /etc/caddy/Caddyfile
-sed -i "s|__DOMAIN__|okna.timpul.pro|g" /etc/caddy/Caddyfile
+sed -i "s|__DOMAIN__|baulogistic.timpul.pro|g" /etc/caddy/Caddyfile
 
 UID_WEB=$(id -u webui)
 systemctl start "user@${UID_WEB}.service" || true
@@ -49,4 +49,4 @@ OWUI_URL=http://127.0.0.1:8080 ADMIN_EMAIL=admin@okna.local ADMIN_PASS="$ADMIN_P
 echo "ADMIN_EMAIL=admin@okna.local"
 echo "ADMIN_PASS=$ADMIN_PASS"
 
-curl -sI "https://okna.timpul.pro/" | head -8 || true
+curl -sI "https://baulogistic.timpul.pro/" | head -8 || true

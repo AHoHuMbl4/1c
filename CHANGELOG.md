@@ -36,6 +36,7 @@ klient-1 один в один: **настоящий агент 1.0.2** (собр
 Фронт okna: Caddy на `baulogistic.timpul.pro` (DNS A → 2.28.49.158), `okna.timpul.pro`
 редирект; лого/favicon из baulogistik.md; UI без Workspace/`#sidebar-models`/`#model`.
 Админ-вход сменён на `anton@baulogistic.md` (пароль не в git).
+Лого перерисовано без сжатия (letterbox favicon, splash 640×152); CSS `object-fit: contain`.
 
 
 ## 13.08: okna UI — без Workspace и без выбора моделей `[замер]`

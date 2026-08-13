@@ -1,0 +1,28 @@
+/* Продуктовый UI: только чат с одним ассистентом. */
+
+/* «Рабочее пространство» — у admin иначе всегда в меню (OWUI frontend). */
+a[href="/workspace"],
+a[href^="/workspace/"] {
+  display: none !important;
+}
+
+/* Выбор моделей в шапке чата (id="model"). */
+#model,
+[id="model"] {
+  display: none !important;
+}
+
+/* «Модели» в левой колонке (id="sidebar-models"). */
+#sidebar-models,
+[id="sidebar-models"] {
+  display: none !important;
+}
+
+/* Лого не сжимать: в шапке/сайдбаре OWUI favicon в size-10/rounded. */
+img[src*="/static/favicon.png"],
+img[src*="/static/splash.png"],
+img[src*="/static/splash-dark.png"],
+img[src*="/static/logo.png"] {
+  object-fit: contain !important;
+  object-position: center !important;
+}
