@@ -5,6 +5,12 @@ After=network.target
 [Service]
 User=serenedb
 Group=serenedb
+# 🔴 Спилл larger-than-memory запросов идёт в «.tmp» ОТ CWD процесса (замер
+# 12.08 на okna-1: cwd=/ при ProtectSystem=strict → «Failed to create directory
+# ".tmp": Read-only file system», полный merge падал). CWD в каталоге данных
+# кладёт .tmp рядом с базой — путь уже в ReadWritePaths. На живых юнитах то же
+# сделано drop-in'ом /etc/systemd/system/serenedb.service.d/workdir.conf.
+WorkingDirectory=/var/lib/serenedb
 ExecStart=/usr/local/bin/serened --flagfile=/etc/serenedb/serened.conf
 Restart=always
 RestartSec=2

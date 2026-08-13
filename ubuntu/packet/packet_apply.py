@@ -46,6 +46,23 @@ PACKET_APPLY_GONE_BATCH = int(os.environ.get("PACKET_APPLY_GONE_BATCH", "1000"))
 _ro_env = os.environ.get("PACKET_APPLY_RO_ROLE", "serene_ro")
 RO_ROLE = _ro_env if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", _ro_env) else "serene_ro"
 
+# Потоки движка для сессий apply. 🔴 `SET threads` у движка ГЛОБАЛЕН, а не
+# сессионен: значение переживает разрыв соединения и меняет пул ВСЕГО движка
+# (живой замер 12.08: после apply с «SET threads=4» новая psql-сессия видит 4
+# при --cpu_threads=160 в conf; на okna-1 об это встал precheck сборки —
+# «пул исполнителей движка = 4»). Поэтому умолчание — НЕ ВМЕШИВАТЬСЯ (0):
+# apply не смеет молча переконфигурировать движок под собой. Память полного
+# merge держит не эта ручка, а предел строки read_csv (_csv_source: buffer
+# читателя = 16 × maximum_line_size) и спилл на диск (WorkingDirectory юнита
+# движка). Явный PACKET_APPLY_THREADS>0 остаётся как ручка, но помните: он
+# перекроит пул глобально до рестарта движка.
+# Доки: Configuration › Pragmas › Threads (SET threads = N).
+try:
+    APPLY_THREADS = int(os.environ.get("PACKET_APPLY_THREADS", "").strip() or "0")
+except ValueError:
+    APPLY_THREADS = 0
+_SQL_PREFIX = ("SET threads=%d;\n" % APPLY_THREADS) if APPLY_THREADS > 0 else ""
+
 # Чанки со служебными именами хранятся без вставки «.csv» (контракт §2).
 _SERVICE_CHUNKS = ("metadata", "gone", "index", "log")
 # Режим файла — по магии, а не по конфигу (пилот без age-слоя 06.08); те же
@@ -158,8 +175,10 @@ def _lit(v) -> str:
 def _psql(sql: str) -> None:
     # SQL идёт через stdin, а не аргументом -c: у argv жёсткий предел, и длинный
     # список ключей его перекрывает (разбор у poc_load_entity._psql_rows).
+    # Префикс SET threads — только здесь: у скалярных чтений тег «SET» ложился
+    # бы в stdout и ломал разбор числа (проба 12.08: «SET\n2» вместо «2»).
     p = subprocess.run(["psql", DSN, "-v", "ON_ERROR_STOP=1", "-f", "-"],
-                       input=sql, capture_output=True, text=True)
+                       input=_SQL_PREFIX + sql, capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError(p.stderr.strip()[:300])
 
@@ -225,9 +244,22 @@ def _decrypt_chunks(base_id: str, pkg_id: str, manifest: dict, tmp: str) -> dict
 
 def _csv_source(paths: list[str]) -> str:
     """SELECT-источник read_csv с опциями контракта poc_load_entity (header,
-    all_varchar, quote/escape, предел строки). Несколько чанков — UNION ALL."""
+    all_varchar, quote/escape, предел строки). Несколько чанков — UNION ALL.
+
+    🔴 Предел строки прижимается к крупнейшему файлу источника: buffer_size
+    читателя по умолчанию = 16 × maximum_line_size (доки: Data import and
+    export › Csv › Overview, parameters), и потолок 200 МиБ означал разовую
+    аллокацию 3,1 ГиБ — на юните с memory_limit 6 ГиБ это валило apply целиком
+    (живой случай okna-1 12.08, пакет 000002: 83 падения подряд, витрина пуста).
+    Строка CSV не бывает длиннее своего файла, поэтому фактический размер чанка
+    — честная верхняя граница без знания базы; env-потолок остаётся страховкой
+    от гигантского чанка."""
+    line_cap = PACKET_APPLY_CSV_MAX_LINE
+    sizes = [os.path.getsize(p) for p in paths if os.path.exists(p)]
+    if sizes:
+        line_cap = min(line_cap, max(sizes) + 4096)
     opts = ("header=true, all_varchar=true, quote='\"', escape='\"', "
-            "maximum_line_size=%d" % PACKET_APPLY_CSV_MAX_LINE)
+            "maximum_line_size=%d" % line_cap)
     reads = ["SELECT * FROM read_csv(%s, %s)" % (_lit(p), opts) for p in paths]
     if len(reads) == 1:
         return reads[0]
@@ -547,6 +579,21 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                     _psql(merge)
                 else:
                     key_cols = [safe_col(k) for k in ent.get("key") or []]
+                    # 🔴 Ключ дедупликации — только из колонок, которые в чанке
+                    # есть. У расчётных регистров OData не отдаёт Recorder
+                    # (живой случай okna-1 12.08: CalculationRegister_*_RecordType
+                    # объявил ключ [Recorder, LineNumber, Recorder_Type], в CSV —
+                    # RegistrationPeriod и пр.; QUALIFY по отсутствующей колонке
+                    # валил весь пакет). Пустое пересечение = штатная форма
+                    # «без ключа» (DISTINCT), потеря формы видна в журнале.
+                    if key_cols and chunk_paths:
+                        have = set(_csv_header(chunk_paths[0]))
+                        kept = [k for k in key_cols if k in have]
+                        if kept != key_cols:
+                            _log("base=%s pkg=%s entity=%s ключ урезан по колонкам "
+                                 "чанка: %s -> %s" % (base_id, pkg_id, table,
+                                                      key_cols, kept or "DISTINCT"))
+                            key_cols = kept
                     _psql(_full_sql(table, src, key_cols))
                 changed_tables.add(table)
                 profile.append({"entity": ent.get("name"), "key": ent.get("key") or [],

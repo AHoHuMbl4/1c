@@ -77,6 +77,61 @@ def scalar(sql: str) -> str:
     return rows[0][0] if rows else ""
 
 
+def _prefix_with(env_val):
+    # _SQL_PREFIX в отдельном процессе: модуль читает env при импорте.
+    env = dict(os.environ)
+    if env_val is None:
+        env.pop("PACKET_APPLY_THREADS", None)
+    else:
+        env["PACKET_APPLY_THREADS"] = env_val
+    code = "import packet_apply, sys; sys.stdout.write(packet_apply._SQL_PREFIX)"
+    p = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True,
+                       env=env, cwd=os.path.dirname(os.path.abspath(__file__)))
+    if p.returncode != 0:
+        raise RuntimeError("prefix probe: " + p.stderr[:200])
+    return p.stdout
+
+
+check("префикс threads: явный PACKET_APPLY_THREADS=7", _prefix_with("7") == "SET threads=7;\n")
+check("префикс threads: явный 0 выключает вмешательство", _prefix_with("0") == "")
+# SET threads у движка глобален (замер 12.08): умолчание — не трогать пул вовсе.
+check("префикс threads: умолчание — НЕ вмешиваться (SET threads глобален)",
+      _prefix_with(None) == "")
+
+
+def _line_cap_of(src: str) -> int:
+    import re as _re
+    m = _re.search(r"maximum_line_size=(\d+)", src)
+    return int(m.group(1)) if m else -1
+
+
+# _csv_source: предел строки прижимается к крупнейшему файлу источника —
+# buffer_size читателя = 16 × maximum_line_size, и потолок 200 МиБ означал
+# аллокацию 3,1 ГиБ (живой случай okna-1 12.08, apply падал 83 раза подряд).
+import packet_apply as _A  # noqa: E402
+
+_csvdir = tempfile.mkdtemp(prefix="pkt-csv-cap-")
+_small = os.path.join(_csvdir, "a.csv")
+_big = os.path.join(_csvdir, "b.csv")
+with open(_small, "wb") as _f:
+    _f.write(b"h\n" + b"x" * 100)
+with open(_big, "wb") as _f:
+    _f.write(b"h\n" + b"y" * 5000)
+check("read_csv: предел строки прижат к крупнейшему файлу (+4096)",
+      _line_cap_of(_A._csv_source([_small, _big])) == os.path.getsize(_big) + 4096)
+_saved_cap = _A.PACKET_APPLY_CSV_MAX_LINE
+_A.PACKET_APPLY_CSV_MAX_LINE = 3000
+try:
+    check("read_csv: env-потолок ниже размера файла — берётся потолок",
+          _line_cap_of(_A._csv_source([_big])) == 3000)
+finally:
+    _A.PACKET_APPLY_CSV_MAX_LINE = _saved_cap
+check("read_csv: файла нет — остаётся env-потолок",
+      _line_cap_of(_A._csv_source([os.path.join(_csvdir, "нет.csv")]))
+      == _A.PACKET_APPLY_CSV_MAX_LINE)
+shutil.rmtree(_csvdir, ignore_errors=True)
+
+
 # --- сборка фейковых пакетов ---------------------------------------------------
 
 _TMP = tempfile.TemporaryDirectory()
@@ -471,6 +526,40 @@ def main() -> int:
         check("7: повторный заход ghost не переприменяет",
               r.returncode == 0 and pkg_state(pkg9)["state"] == "quarantined",
               f"rc={r.returncode} {pkg_state(pkg9)}")
+
+        # 8. Ключ манифеста шире колонок чанка (живой кейс okna-1 12.08:
+        # CalculationRegister_*_RecordType объявляет Recorder, а OData расчётного
+        # регистра его не отдаёт). Ключ обязан урезаться до имеющихся колонок,
+        # пустое пересечение — DISTINCT; пакет применяется, а не падает.
+        CALC = "pkt_probe_calcreg"
+        NOKEY = "pkt_probe_nokey"
+        calc_csv = csv_bytes([("2026-01-01", "1", "a"), ("2026-01-01", "1", "b"),
+                              ("2026-01-01", "2", "c")],
+                             header=("RegistrationPeriod", "LineNumber", "Значение"))
+        nokey_csv = csv_bytes([("x", "y"), ("x", "y"), ("x", "z")],
+                              header=("A", "B"))
+        e10a, c10a = make_chunk("chunk-00001", calc_csv, CALC, 3)
+        e10b, c10b = make_chunk("chunk-00002", nokey_csv, NOKEY, 3)
+        m10 = base_manifest(10, "ggg00010", "full")
+        m10["entities"] = [
+            {"name": CALC, "op": "full", "rows": 3, "chunks": ["chunk-00001"],
+             "key": ["Recorder", "LineNumber", "Recorder_Type"]},
+            {"name": NOKEY, "op": "full", "rows": 3, "chunks": ["chunk-00002"],
+             "key": ["Recorder", "Recorder_Type"]}]
+        m10["chunks"] = [e10a, e10b]
+        pkg10 = write_package(10, "ggg00010", "full", m10,
+                              {"chunk-00001": c10a, "chunk-00002": c10b})
+        r = run_apply()
+        check("8: ключ шире чанка — apply код 0", r.returncode == 0,
+              r.stderr.strip()[-200:])
+        check("8: пакет applied", pkg_state(pkg10)["state"] == "applied")
+        check("8: дедуп по уцелевшей части ключа (LineNumber)",
+              scalar('SELECT count(*) FROM "%s"' % CALC) == "2")
+        check("8: ключа нет вовсе — DISTINCT (2 строки из 3)",
+              scalar('SELECT count(*) FROM "%s"' % NOKEY) == "2")
+        check("8: урезание ключа названо в журнале",
+              "ключ урезан" in (r.stderr + r.stdout))
+        psql_exec('DROP TABLE IF EXISTS "%s"; DROP TABLE IF EXISTS "%s";' % (CALC, NOKEY))
     finally:
         cleanup()
 
