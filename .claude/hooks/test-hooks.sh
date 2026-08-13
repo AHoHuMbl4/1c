@@ -164,6 +164,9 @@ printf '# агенты\n' > "$G/AGENTS.md"
 # настоящим TOML, а не набором строк для грепа.
 sed "s|/srv/1c/.claude/hooks|$G/.claude/hooks|g" "$REPO/work/hooks/kimi-config.toml" > "$G/kimi-config.toml"
 export KIMI_CONFIG_TOML="$G/kimi-config.toml"
+mkdir -p "$G/.cursor"
+cp "$REPO/.cursor/hooks.json" "$G/.cursor/hooks.json"
+cp "$REPO/.cursor/mcp.json" "$G/.cursor/mcp.json"
 cd "$G" || exit 1
 git init -q .; git config user.email t@t; git config user.name t
 git config core.hooksPath .githooks
@@ -603,5 +606,113 @@ mv "$TMP/ag.bak" AGENTS.md
 [ -z "$(armed)" ]; say $? 'всё возвращено — нарушений снова нет'
 
 echo
+# --- адаптер и сторож Cursor (13.08) ------------------------------------------
+echo
+echo '== cursor-wrap: вход Cursor, выход permission/additional_context =='
+cd "$G" || exit 1
+WRAP="$G/.claude/hooks/cursor-wrap.sh"
+wrap_call() { printf '%s' "$1" | CLAUDE_PROJECT_DIR="$G" bash "$WRAP" "$2" 2>/dev/null || true; }
+
+# session-start печатает текст — адаптер кладёт его в additional_context.
+printf '# С ЧЕГО НАЧАТЬ\nстрока состояния курсора\n' > memory_bank/activeContext.md
+OUT=$(wrap_call '{"session_id":"c-probe"}' session-start)
+printf '%s' "$OUT" | grep -q '"additional_context"' && printf '%s' "$OUT" | grep -q 'строка состояния курсора'
+say $? 'session-start через адаптер — JSON additional_context, не голый текст'
+
+# команда на верхнем уровне (beforeShellExecution / preToolUse Shell)
+printf 'print(1)\n' > ubuntu/serenedb/cursor_probe.py
+git add ubuntu/serenedb/cursor_probe.py
+OUT=$(wrap_call '{"command":"git commit -m x","tool_name":"Shell"}' check-docs)
+printf '%s' "$OUT" | grep -q '"permission": *"deny"'
+say $? 'check-docs на command сверху — permission deny (код без документов)'
+git reset -q
+rm -f ubuntu/serenedb/cursor_probe.py
+
+# afterFileEdit: file_path сверху + edits
+SAMPLE="$G/ubuntu/openclaw/instance/AGENTS.md"
+mkdir -p "$(dirname "$SAMPLE")"
+printf 'ты помощник.\n' > "$SAMPLE"
+OUT=$(wrap_call "$(python3 -c 'import json;print(json.dumps({"file_path":"'"$SAMPLE"'","edits":[{"old_string":"ты помощник.","new_string":"Ты обязан всегда звать ask_1c."}]}))')" check-prompt-rules)
+printf '%s' "$OUT" | grep -q '"permission": *"deny"'
+say $? 'check-prompt-rules на afterFileEdit (file_path+edits) — deny'
+rm -rf "$G/ubuntu/openclaw"
+
+echo
+echo '== защита гейтов: подключение Cursor (hook_guard_armed) =='
+cd "$G" || exit 1
+[ -z "$(armed)" ]; say $? 'cursor-проводка полна — нарушений нет'
+
+cp .cursor/hooks.json "$TMP/cursor-hooks.bak"
+python3 - .cursor/hooks.json <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+d["hooks"]["preToolUse"] = [h for h in d["hooks"]["preToolUse"]
+                            if "sniper-kimi" not in (h.get("command") or "")]
+json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
+PY
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'гейт убран из cursor-hooks — нарушение видно поимённо'
+cp "$TMP/cursor-hooks.bak" .cursor/hooks.json
+
+python3 - .cursor/hooks.json <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+for h in d["hooks"]["preToolUse"]:
+    if "sniper-kimi" in (h.get("command") or ""):
+        d["hooks"].setdefault("postToolUse", []).append(h)
+        d["hooks"]["preToolUse"].remove(h)
+        break
+json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
+PY
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'гейт пересажен на не то событие — нарушение видно поимённо'
+cp "$TMP/cursor-hooks.bak" .cursor/hooks.json
+
+python3 - .cursor/hooks.json <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+for h in d["hooks"]["preToolUse"]:
+    if "sniper-kimi" in (h.get("command") or ""):
+        h["command"] = "/tmp/cursor-wrap.sh sniper-kimi"
+        break
+json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
+PY
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'sniper-kimi'; say $? 'команда гейта без cursor-wrap в .claude/hooks — нарушение видно'
+cp "$TMP/cursor-hooks.bak" .cursor/hooks.json
+
+python3 - .cursor/hooks.json <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+for h in d["hooks"]["preToolUse"]:
+    if "check-docs" in (h.get("command") or ""):
+        h["failClosed"] = False
+        break
+json.dump(d, open(p, "w"), ensure_ascii=False, indent=2)
+PY
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'failClosed'; say $? 'failClosed снят у блокирующего — нарушение видно'
+cp "$TMP/cursor-hooks.bak" .cursor/hooks.json
+
+printf 'это не json {{{\n' > .cursor/hooks.json
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'JSON'; say $? 'hooks.json не разбирается — нарушение видно'
+cp "$TMP/cursor-hooks.bak" .cursor/hooks.json
+
+rm -f .cursor/hooks.json
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'Cursor'; say $? 'hooks.json снесён — нарушение видно'
+cp "$TMP/cursor-hooks.bak" .cursor/hooks.json
+
+python3 - .cursor/mcp.json <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p, encoding="utf-8"))
+del d["mcpServers"]["serenedb-docs"]
+json.dump(d, open(p, "w"), ensure_ascii=False)
+PY
+OUT=$(armed); printf '%s' "$OUT" | grep -q 'serenedb-docs'; say $? 'MCP без serenedb-docs — нарушение видно'
+cp "$REPO/.cursor/mcp.json" .cursor/mcp.json 2>/dev/null || true
+
+[ -z "$(armed)" ]; say $? 'всё возвращено — нарушений снова нет'
+
 if [ "$FAILED" != 0 ]; then echo "🔴 ПРОВАЛОВ: $FAILED"; exit 1; fi
 echo 'Хуки прошли пробу полностью.'

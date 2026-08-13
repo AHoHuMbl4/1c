@@ -25,7 +25,7 @@ SessionStart и Write из settings.json звались, PreToolUse|Bash на к
 (root:root) зовут те же гейты через адаптер `cursor-wrap.sh`. Сторож
 `hook_guard_armed` сверяет содержимое проводки (событие, wrap-путь, failClosed)
 и состав MCP. `test-hooks.sh` — прежние пробы Claude/Kimi зелёные плюс адаптер
-и сторож Cursor; прогон полный, код 0.
+и сторож Cursor; прогон полный, код 0. Живые копии в `.claude/hooks/` совпадают с каноном `work/hooks/` (включая `cursor-wrap.sh`).
 
 `[замер 13.08]` после появления hooks.json команда Shell в этой сессии дала
 `prepare-diff` и `check-gates` в журнале (06:24:01) — до этого на Shell их не было.

@@ -126,6 +126,20 @@ kimi_config_path() {
   home="$(getent passwd claudedev 2>/dev/null | cut -d: -f6)"
   printf '%s' "${home:-/home/claudedev}/.kimi-code/config.toml"
 }
+
+# Проводка Cursor в репозитории. CURSOR_HOOKS_JSON / CURSOR_MCP_JSON — швы для пробы.
+cursor_hooks_path() {
+  if [ -n "${CURSOR_HOOKS_JSON:-}" ]; then printf '%s' "$CURSOR_HOOKS_JSON"; return 0; fi
+  local r
+  r="$(hook_repo_root)" || { printf '%s' ""; return 1; }
+  printf '%s' "$r/.cursor/hooks.json"
+}
+cursor_mcp_path() {
+  if [ -n "${CURSOR_MCP_JSON:-}" ]; then printf '%s' "$CURSOR_MCP_JSON"; return 0; fi
+  local r
+  r="$(hook_repo_root)" || { printf '%s' ""; return 1; }
+  printf '%s' "$r/.cursor/mcp.json"
+}
 hook_guard_armed() {
   local root out=""
   root="$(hook_repo_root)" || { printf '%s' "Каталог репозитория не определён — проверить защиту нечем."; return 0; }
@@ -166,7 +180,7 @@ hook_guard_armed() {
   # 🔴 AGENTS.md — жёсткая ссылка на CLAUDE.md (06.08): Kimi читает в контекст AGENTS.md,
   # а не CLAUDE.md (проверено живой сессией). Один инод на два имени — рассинхрон
   # невозможен по построению, а подмена видна по владельцу, как у остальных правил.
-  for p in .claude/hooks .githooks .claude/settings.json CLAUDE.md AGENTS.md TARGET.md memory_bank/owner-memory; do
+  for p in .claude/hooks .githooks .claude/settings.json CLAUDE.md AGENTS.md TARGET.md memory_bank/owner-memory .cursor/hooks.json .cursor/mcp.json; do
     if [ ! -e "$root/$p" ]; then
       out="${out}  правило пропало: $p (снесено или переименовано).
 "
@@ -248,6 +262,110 @@ if bad:
 PY
 )"
     [ -z "$kbad" ] || out="${out}${kbad}"
+  fi
+
+  # Тот же набор у третьего движка (Cursor). Проводка в репозитории
+  # (.cursor/hooks.json): Cursor её не переписывает, в отличие от kimi-config.toml.
+  # Сторож сверяет содержимое, не grep.
+  local cj cbad
+  cj="$(cursor_hooks_path)"
+  if [ ! -f "$cj" ]; then
+    out="${out}  Cursor: $cj отсутствует — сессии Cursor идут без гейтов на Shell.
+"
+  else
+    cbad="$(CURSOR_HOOKS="$cj" CURSOR_HOOKS_DIR="$root/.claude/hooks" python3 - <<'PY'
+import json, os, sys
+
+cfg = os.environ["CURSOR_HOOKS"]
+hooks_dir = os.environ["CURSOR_HOOKS_DIR"]
+wrap = hooks_dir + "/cursor-wrap.sh"
+
+EXPECT = {
+    "session-start": "sessionStart",
+    "prepare-diff": "preToolUse",
+    "check-gates": "preToolUse",
+    "check-sql-docs": "preToolUse",
+    "check-prompt-rules": "preToolUse",
+    "check-diff": "preToolUse",
+    "check-docs": "preToolUse",
+    "check-active-size": "preToolUse",
+    "check-graph-fresh": "preToolUse",
+    "check-golden": "preToolUse",
+    "sniper-kimi": "preToolUse",
+    "count-edits": "postToolUse",
+    "check-write": "postToolUse",
+    "check-deps": "postToolUse",
+}
+BLOCKING = (
+    "prepare-diff", "check-gates", "check-sql-docs", "check-prompt-rules",
+    "check-diff", "check-docs", "check-active-size", "check-graph-fresh",
+    "check-golden", "sniper-kimi",
+)
+
+try:
+    d = json.load(open(cfg, encoding="utf-8"))
+except Exception as e:
+    print("  Cursor: %s не разбирается как JSON (%s) — подключение гейтов не проверено.\n" % (cfg, e))
+    sys.exit(0)
+
+pairs = set()
+fail_closed = set()
+for ev, items in (d.get("hooks") or {}).items():
+    if not isinstance(items, list):
+        continue
+    for h in items:
+        if not isinstance(h, dict):
+            continue
+        cmd = (h.get("command") or "").strip()
+        parts = cmd.split()
+        wrap_rel = ".claude/hooks/cursor-wrap.sh"
+        wrap_abs = hooks_dir + "/cursor-wrap.sh"
+        wrap_ok = len(parts) == 2 and parts[0] in (wrap_rel, wrap_abs)
+        gate = parts[1] if wrap_ok else ""
+        if wrap_ok and gate:
+            pairs.add((ev, gate))
+            if h.get("failClosed") is True:
+                fail_closed.add(gate)
+
+bad = []
+for gate, ev in EXPECT.items():
+    if (ev, gate) not in pairs:
+        bad.append("%s (%s)" % (gate, ev))
+    elif not os.access("%s/%s.sh" % (hooks_dir, gate), os.X_OK):
+        bad.append("%s (скрипт не исполняем)" % gate)
+if not os.access(wrap, os.X_OK):
+    bad.append("cursor-wrap (скрипт не исполняем)")
+soft = [g for g in BLOCKING if (EXPECT[g], g) in pairs and g not in fail_closed]
+if bad:
+    print("  Cursor: в %s проводка неполная или изменена: %s.\n  Ждётся command=.claude/hooks/cursor-wrap.sh <гейт> на событии как выше.\n" % (cfg, ", ".join(bad)))
+if soft:
+    print("  Cursor: failClosed снят у блокирующих гейтов: %s — падение хука станет пропуском.\n" % ", ".join(soft))
+PY
+)"
+    [ -z "$cbad" ] || out="${out}${cbad}"
+  fi
+
+  local mcp mcpbad
+  mcp="$(cursor_mcp_path)"
+  if [ ! -f "$mcp" ]; then
+    out="${out}  Cursor: $mcp отсутствует — MCP serenedb-docs и memory в сессии Cursor нет.
+"
+  else
+    mcpbad="$(python3 - "$mcp" <<'PY'
+import json, sys
+p = sys.argv[1]
+try:
+    d = json.load(open(p, encoding="utf-8"))
+except Exception as e:
+    print("  Cursor: %s не разбирается как JSON (%s).\n" % (p, e))
+    raise SystemExit
+srvs = d.get("mcpServers") or {}
+missing = [n for n in ("serenedb-docs", "memory") if n not in srvs]
+if missing:
+    print("  Cursor: в %s нет серверов: %s.\n" % (p, ", ".join(missing)))
+PY
+)"
+    [ -z "$mcpbad" ] || out="${out}${mcpbad}"
   fi
 
   # Вердикт `ask` в сессии, где вопрос никому не показывают, равен разрешению (замер 03.08).
