@@ -1,5 +1,15 @@
 # Журнал изменений
 
+## 14.08: 402 от 13.08 опровергнут; словарь на count не виновен `[замер]`
+
+`[замер]` с okna, ключ на месте: DeepSeek `/v1/models` 200, `chat/completions`
+200 на `deepseek-chat`, `deepseek-v4-flash`, `deepseek-v4-pro`. «Ждёт оплаты»
+в шапке сессии — протухло. Пустой `diag.measure` на «сколько … позавчера» —
+не «словарь не свёл»: want=count, compute нет, до словаря дело не дошло.
+Разбор — `HOW_NOT_TO §1.62`.
+
+---
+
 ## 14.08: JSON measure = say_measure, diag.measure сырой `[замер]` `[код]`
 
 Дыра после A2: compose и гейт уже без денег на count, а ключ ответа
