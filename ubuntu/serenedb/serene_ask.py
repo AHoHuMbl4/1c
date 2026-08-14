@@ -2330,91 +2330,84 @@ def clarify_complete(txt, opts):
     return extra if not body else body + "\n" + extra
 
 
+def _slot_fp(f):
+    """Отпечаток плейсхолдеров одного кандидата. Покрытие в сравнение не входит."""
+    if not isinstance(f, dict):
+        return None
+    skip = {"in_1c", "in_search", "missing", "_totals"}
+    fp = []
+    for k in sorted(f):
+        if k in skip or str(k).startswith("_"):
+            continue
+        v = f.get(k)
+        if v is None or (isinstance(v, str) and not str(v).strip()):
+            continue
+        if str(k).startswith("date"):
+            fp.append((k, str(v)))
+            continue
+        try:
+            fp.append((k, round(float(v), 2)))
+        except (TypeError, ValueError):
+            return None
+    return tuple(fp)
+
+
 def answers_diverge(figures):
     """Сошлись ли ПОСЧИТАННЫЕ ответы кандидатов на одном числе (задача 17).
 
-    Арбитр выбирает между готовыми ответами — и до 03.08 выбирал всегда, даже когда числа
-    в них РАЗНЫЕ. Но выбор между разными числами и есть выбор ответа за человека там, где
-    данные допускают оба прочтения, а п. 12 это прямо запрещает. Расхождение посчитанных
-    ответов — не подозрение, а ДОКАЗАННАЯ неоднозначность: обе величины честно посчитаны
-    базой, просто по разным сущностям.
-
-    Сравниваются числа, а не текст: разбор прозы модели был бы догадкой и ломался бы на
-    каждом языке ответа. Порога и допуска нет намеренно — «существенно» пришлось бы
-    выражать константой, подобранной под нашу базу.
-
-    Совпали — выбирать не из чего, вопрос был бы шумом (так бывает у документа и его
-    табличной части: `СуммаДокумента` = `СуммаСНДС` строк). Сравнивать нечем — решение
-    остаётся прежнему арбитру, новое правило молчит.
+    Сравнивается отпечаток плейсхолдеров compose, не заранее названное поле. Порога нет.
+    Совпали — выбирать не из чего. Сравнить нечем — расхождение, не согласие.
     """
     if len(figures) < 2:
         return False
-    keys, vals = set(), set()
+    fps = []
     for f in figures:
-        # 🔴 НЕСРАВНИМОЕ — ЭТО РАСХОЖДЕНИЕ, А НЕ СОГЛАСИЕ (04.08).
-        # Прежде каждый случай «сравнить нечем» возвращал False, то есть «числа сошлись»,
-        # и сущность выбирала модель-арбитр. Но доказательства совпадения при этом нет ни
-        # у одной стороны, а выбор между недоказанно разными ответами и есть выбор за
-        # человека, запрещённый п. 12. Правило перевёрнуто: арбитр отвечает, только когда
-        # совпадение ДОКАЗАНО; всё прочее — вопрос человеку.
-        # [замер 04.08] на вопросах 1-23 приёмки, живой сервис, отдельный экземпляр:
-        # неверных ответов 8 → 3, и шесть из восьми прежних несли пометку `арбитр` —
-        # то есть числа не сходились, детектор молчал, и выбор делала модель.
-        if not isinstance(f, dict):
+        fp = _slot_fp(f)
+        if not fp:
             return True
-        k = "sum" if f.get("sum") is not None else "count"
-        v = f.get(k)
-        if v is None:
-            return True
-        keys.add(k)
-        try:
-            vals.add(float(v))
-        except (TypeError, ValueError):
-            return True
-    if len(keys) > 1:
-        # У кандидатов посчитаны РАЗНЫЕ величины (у одного итог, у другого только число
-        # записей). Это не «разные вопросы, не наше дело», как считалось прежде: вопрос
-        # один, а ответить на него кандидаты могут только разным — значит прочтений два.
-        return True
-    money = []
-    saw_money = False
-    for f in figures:
-        tot = f.get("_totals")
-        if tot is not None:
-            saw_money = True
-            money.append(tuple(tot) if not isinstance(tot, tuple) else tot)
-        else:
-            money.append(None)
-    # 🔴 ИТОГИ ПО ВЕЛИЧИНАМ — ТОЖЕ ПОСЧИТАННЫЙ ОТВЕТ (okna 14.08).
-    # Когда величина не выбрана, в `figures` уходит только count (`count_figures`), а в
-    # текст — итоги всех полей (`diag.totals` → compose → гейт). Детектор сравнивал 19 и
-    # 19, модель-арбитр выбирала между 112 325.97 и 28 356.37, человеку уехала книга
-    # продаж. Совпадение count при разных деньгах — не доказанное согласие.
-    if saw_money and len(set(money)) > 1:
-        return True
-    return len(vals) > 1
+        fps.append(fp)
+    return len(set(fps)) > 1
+
+
+def compose_slot_values(agg, measure=None, folders=0, money=None):
+    """Числа, которые compose подставит в плейсхолдеры этого ответа.
+
+    Не `amount=` примеров строк и не покрытие (`in_1c` / `missing`): они не итог.
+    `money=None` — как `bool(measure)`: без выбранного поля денежных мест нет (A2).
+    """
+    if money is None:
+        money = bool(measure)
+    slots = {}
+    if not agg:
+        return slots
+    if agg.get("count") is not None:
+        slots["count"] = agg["count"]
+    if money:
+        ca = agg.get("count_amount")
+        if ca is not None and ca != agg.get("count"):
+            slots["count_amount"] = ca
+        for k in ("sum", "max", "min", "avg"):
+            if agg.get(k) is not None:
+                slots[k] = agg[k]
+    dmin = agg.get("date_min")
+    if dmin:
+        slots["date_min"] = dmin
+        if agg.get("date_max"):
+            slots["date_max"] = agg["date_max"]
+    nfold = folders if folders else (agg.get("folders") or 0)
+    if nfold:
+        slots["folders"] = nfold
+    if agg.get("undated"):
+        slots["undated"] = agg["undated"]
+    return slots
 
 
 def arbiter_figures(sub):
-    """Числа кандидата для детектора: поле `figures` плюс итоги, ушедшие в текст.
-
-    При невыбранной величине `figures` — счёт записей. Деньги при этом уже посчитаны
-    (`diag.totals`) и уходят в формулировку. Без них детектор слеп к классу
-    «верное число не по той сущности».
-    """
+    """Отпечаток кандидата = его `figures`, уже собранные как плейсхолдеры compose."""
     f = dict((sub or {}).get("figures") or {})
-    tot = ((sub or {}).get("diag") or {}).get("totals") or {}
-    vals = []
-    for v in tot.values():
-        amount = v[0] if isinstance(v, (list, tuple)) and v else v
-        if amount is None:
-            continue
-        try:
-            vals.append(round(float(amount), 2))
-        except (TypeError, ValueError):
-            continue
-    if vals:
-        f["_totals"] = tuple(sorted(vals))
+    for k in ("in_1c", "in_search", "missing"):
+        f.pop(k, None)
+    f.pop("_totals", None)
     return f
 
 
@@ -2595,6 +2588,47 @@ def same_number(ours, theirs):
         return any(float(x) == float(ours) for x in theirs if x is not None)
     except (TypeError, ValueError):
         return False
+
+
+def unresolved_quantity(measure, alts, want, compute, names, totals_by=None):
+    """Свести поле, когда вопрос про итог/max/min/avg, а величина ещё не выбрана.
+
+    `want=count|list` сюда не входит: там в compose нет денег, уточнение полей
+    было бы «НДС или карта» на «сколько продаж». Одна величина — брать её;
+    несколько с разными итогами — спрашивать тем же перечнем, что уже есть;
+    итоги совпали — брать первую, вопрос был бы шумом.
+    """
+    if measure or alts:
+        return measure, list(alts or [])
+    need = (want or "") == "sum" or (compute or "") in ("sum", "max", "min", "avg")
+    if not need:
+        return None, []
+    names = list(names or [])
+    if not names:
+        return None, []
+    if len(names) == 1:
+        return names[0], []
+    if measure_ambiguous(names, totals_by or {}):
+        return None, names
+    return names[0], []
+
+
+def mute_measure_blocks(sole, mute, cand_src):
+    """Одиночный ответ круга не отпускать, если соперник ушёл в уточнение полей
+    с другими итогами. Иначе A2 делает документ немым, а книгу с одним полем —
+    ответом. Совпадение чисел — как у writer_pair: вопрос был бы шумом.
+    """
+    свой = next((s for s in (cand_src or [])
+                 if (s.get("diag") or {}).get("focus") == sole), None)
+    наше = (figures_numbers(свой) or [None])[0]
+    for src, sub in (mute or {}).items():
+        if src == sole:
+            continue
+        if not (sub.get("diag") or {}).get("measure_ambiguous"):
+            continue
+        if not same_number(наше, figures_numbers(sub)):
+            return src
+    return None
 
 
 def measure_ambiguous(fits, totals):
@@ -3298,7 +3332,7 @@ def _ask_back(raw):
 
 
 def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
-            measure_used=None, folders=None):
+            measure_used=None, folders=None, money=True):
     payload = []
     shown = rows[:ROWS_TO_MODEL]
     # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
@@ -3350,16 +3384,19 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
     #
     # Значения СТРОК при этом остаются: цитата из записи (номер документа, дата, имя
     # стороны) моделью и должна копироваться, это не арифметика, а выписка.
-    has_money = bool(agg) and (agg.get("sum") or agg.get("max") or agg.get("min"))
+    has_money = bool(money) and bool(agg) and (
+        agg.get("sum") or agg.get("max") or agg.get("min"))
     if agg and not has_money:
-        # Денежной колонки у этой сущности нет. Передать sum=0 нельзя: модель ответит
-        # «0», и гейт согласится — ноль ведь посчитан. Отсутствие суммы и сумма,
-        # равная нулю, — разные вещи, и путать их нельзя.
+        # Нет выбранного поля (A2: want=count|list) или нет денежной колонки.
+        # Передать sum=0 нельзя: модель ответит «0», и гейт согласится.
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS. The values are not shown; each "
                  "placeholder below is replaced by the system with the exact figure:")
         body += "\n  count (number of records) -> {count}"
-        body += ("\n  (no numeric quantity matches the question for this record type — "
-                 "no placeholder other than {count} is available here)")
+        if agg.get("date_min"):
+            body += "\n  period                    -> {date_min} .. {date_max}"
+        if money:
+            body += ("\n  (no numeric quantity matches the question for this record type — "
+                     "no placeholder other than {count} is available here)")
     elif agg:
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS for the quantity «%s». The values "
                  "are not shown; each placeholder below is replaced by the system with "
@@ -3383,7 +3420,7 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         body += "\n  avg (average)             -> {avg}"
         if agg.get("date_min"):
             body += "\n  period                    -> {date_min} .. {date_max}"
-    if totals:
+    if totals and money:
         # Итоги по каждой величине — с ИМЕНАМИ из базы, но опять же без значений. Модель
         # сама возьмёт подходящую под вопрос величину; списать её итог ей неоткуда.
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS, by quantity name — values not "
@@ -5754,6 +5791,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # «сложился один» отпустил число СОПЕРНИКА как ответ на вопрос — выбор
             # наугад между прочтениями, замаскированный под согласие круга. Если выбор
             # модели молчит, а отвечает соперник, — прочтения два, и решает человек.
+            blocked = mute_measure_blocks(sole, mute, cand_src)
             if picked and single_is_rival(picked[0], sole):
                 opts_src = [picked[0], sole]
                 try:
@@ -5765,6 +5803,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by)
                 if len(opts) > 1:
                     diag["single_was_rival"] = {"выбор": picked[0], "ответил": sole}
+                    return {"partial": cut or None, "kind": "clarify",
+                            "text": clarify_say(question, opts, diag), "options": opts,
+                            "sources": [o["label"] for o in opts],
+                            "diag": dict(diag, sec=round(time.time() - t0, 2))}
+            if blocked:
+                opts_src = [x for x in (sole, blocked) if x]
+                try:
+                    lab_by = {r[0]: r[1] for r in psql(
+                        "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                        % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
+                except RuntimeError:
+                    lab_by = {}
+                opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by)
+                if len(opts) > 1:
+                    diag["mute_measure_rival"] = {"ответил": sole, "уточнение": blocked}
                     return {"partial": cut or None, "kind": "clarify",
                             "text": clarify_say(question, opts, diag), "options": opts,
                             "sources": [o["label"] for o in opts],
@@ -5960,6 +6013,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 diag["measure_guess_refused"] = how
     if plan.get("compute"):
         diag["compute"] = plan["compute"]
+    if not measure and not measure_alts:
+        _qn = measures_of(src)
+        _qt = {}
+        _need_q = ((intent.get("want") or "") == "sum"
+                   or (plan.get("compute") or "") in ("sum", "max", "min", "avg"))
+        if _need_q and len(_qn) > 1:
+            try:
+                _qt = {m: v for m, v, _mx, _mn
+                       in totals_of(src, match, preds, _qn)}
+            except RuntimeError:
+                _qt = {}
+        measure, measure_alts = unresolved_quantity(
+            measure, measure_alts, intent.get("want"), plan.get("compute"),
+            _qn, _qt)
     if measure_pick:                           # человек уже выбрал величину кнопкой
         _names = measures_of(src)
         _resolved = resolve_measure(measure_pick, _names,
@@ -6136,7 +6203,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # отвергался собственной проверкой и уходил в `figures`. Ровно тот дефект проверки,
     # который п. 21 называет дефектом, а не осторожностью. `folders` посчитан базой тем же
     # запросом, что и `count`, — обоснован по построению.
-    extra_vals = _filter_values(intent) + [x for t in (totals or []) for x in t[1:]] \
+    extra_vals = _filter_values(intent) + (
+        [x for t in (totals or []) for x in t[1:]] if measure else []) \
                  + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else []) \
                  + ([agg["undated"]] if (agg or {}).get("undated") else []) \
                  + ([agg["folders"]] if (agg or {}).get("folders") else [])
@@ -6146,8 +6214,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     counting_rows = (plan.get("compute") == "count") or (intent.get("want") == "count")
     say_measure = measure if (measure and not counting_rows) else None
     n_folders = (agg or {}).get("folders") or 0
-    raw = compose(question, rows, agg, totals=totals, coverage=cov,
-                  measure_used=say_measure, folders=n_folders)
+    money = bool(measure)
+    totals_shown = totals if money else []
+    raw = compose(question, rows, agg, totals=totals_shown, coverage=cov,
+                  measure_used=say_measure, folders=n_folders, money=money)
     text, claims = _split_answer(raw)
     ask_back = _ask_back(raw)
     # Рукопись ищется ДО подстановки: после неё посчитанное число стоит в тексте законно,
@@ -6158,8 +6228,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Числа неполноты идут в подстановку наравне с итогами: их модель тоже не видит.
     cov_slots = ({"in_1c": cov["in_1c"], "in_search": cov["in_search"],
                   "missing": cov["missing"]} if cov else None)
-    text, slots_bad = _fill_figures(text, agg, totals, bool(measure), cov_slots)
-    ask_back = _filled_ask(ask_back, agg, totals, measure, diag, cov_slots)
+    text, slots_bad = _fill_figures(text, agg, totals_shown, bool(measure), cov_slots)
+    ask_back = _filled_ask(ask_back, agg, totals_shown, measure, diag, cov_slots)
     # Место, которому нечего подставить, — отказ формулировки: модель сослалась на
     # величину, которой мы не считали. Это единственная проверка, оставшаяся от прежней
     # ролевой сверки, и она структурная, а не числовая.
@@ -6192,11 +6262,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # сходится с базой, он не уйдёт.
     if not ok and agg:
         diag["retry"] = bad[:3]
-        raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals,
-                       coverage=cov, measure_used=say_measure, folders=n_folders)
+        raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals_shown,
+                       coverage=cov, measure_used=say_measure, folders=n_folders,
+                       money=money)
         text2, claims2 = _split_answer(raw2)
         by_hand2 = copied_figures(text2, agg, rows)
-        text2, slots_bad2 = _fill_figures(text2, agg, totals, bool(measure), cov_slots)
+        text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, bool(measure), cov_slots)
         bad_roles2 = formulation_flaws(text2, slots_bad2) + by_hand2
         ok_roles2 = not bad_roles2
         bad_txt2 = []
@@ -6217,7 +6288,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # вместо даты. Гейт этого не ловит (цифр в заготовке нет), и вопрос выглядел
             # как поломка системы ровно в тот момент, когда система переспрашивает.
             text, claims = text2, claims2
-            ask_back = _filled_ask(_ask_back(raw2), agg, totals, measure, diag, cov_slots)
+            ask_back = _filled_ask(_ask_back(raw2), agg, totals_shown, measure, diag, cov_slots)
             ok, bad = True, []
             diag["retry_ok"] = True
         else:
@@ -6237,9 +6308,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         count=agg["count"], sum=_fmt(agg["sum"]))
                         if (TOTAL_TEXT and agg.get("sum") is not None)
                         else refuse_text(question)),
-                    "figures": {k: agg[k] for k in
-                                ("count", "count_amount", "sum", "min", "max", "avg", "folders",
-                                 "date_min", "date_max") if k in agg},
+                    "figures": compose_slot_values(agg, measure=measure,
+                                                    folders=n_folders, money=money),
                     "sources": [src.split("_", 1)[1] if "_" in src else src],
                     "completeness": cov,
                     "diag": dict(diag, gate_rejected=bad[:6])}
@@ -6284,10 +6354,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 # Величина не названа вопросом — тогда `agg` считает по пустому месту, и
                 # `sum: 0` был бы не «нулём», а «не считали». Отдаём то же, что видела
                 # модель: итоги по каждой величине сущности, с их именами из данных.
-                "figures": ({k: agg[k] for k in
-                             ("count", "count_amount", "sum", "min", "max", "avg", "folders",
-                              "date_min", "date_max") if k in agg} if (agg and measure)
-                            else count_figures(agg)),
+                "figures": compose_slot_values(agg, measure=measure,
+                                               folders=n_folders, money=money),
                 "totals": {m: {"sum": v, "max": mx, "min": mn} for m, v, mx, mn in (totals or [])},
                 "sources": [tag],
                 "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
@@ -6310,10 +6378,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # обязан сравнивать ЧИСЛА, посчитанные базой, а не разбирать прозу модели.
             # Разбор текста здесь был бы догадкой (п. 12) и ломался бы на каждом языке
             # ответа. Ветка уточнения отдаёт это поле с самого начала — теперь форма одна.
-            "figures": ({k: agg[k] for k in
-                         ("count", "count_amount", "sum", "min", "max", "avg", "folders",
-                          "date_min", "date_max") if k in agg} if (agg and measure)
-                        else count_figures(agg)),
+            "figures": compose_slot_values(agg, measure=measure,
+                                           folders=n_folders, money=money),
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 

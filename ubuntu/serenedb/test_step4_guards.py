@@ -151,13 +151,61 @@ t("сравнивать нечем — расхождение (доказате�
   A.answers_diverge([{"sum": 5.0}, {}]) is True)
 t("один кандидат — сравнивать не с чем, расхождения нет",
   A.answers_diverge([{"sum": 5.0}]) is False)
-t("один счёт, разные итоги полей — расхождение (okna 14.08)",
-  A.answers_diverge([{"count": 19, "_totals": (112325.97,)},
-                     {"count": 19, "_totals": (28356.37,)}]) is True)
-t("arbiter_figures достаёт деньги из diag.totals",
+t("величина выбрана, один счёт, разные суммы — расхождение",
+  A.answers_diverge([
+      A.compose_slot_values({"count": 19, "sum": 112325.97}, measure="Всего"),
+      A.compose_slot_values({"count": 19, "sum": 28356.37}, measure="Всего")]) is True)
+t("без величины деньги в отпечаток не входят: 19=19 не расхождение",
+  A.answers_diverge([
+      A.compose_slot_values({"count": 19, "sum": 112325.97}, measure=None),
+      A.compose_slot_values({"count": 19, "sum": 28356.37}, measure=None)]) is False)
+t("счёт совпал, среднее в плейсхолдерах разошлось — расхождение",
+  A.answers_diverge([{"count": 19, "avg": 100.0}, {"count": 19, "avg": 200.0}]) is True)
+t("счёт совпал, число папок разошлось — расхождение",
+  A.answers_diverge([
+      A.compose_slot_values({"count": 19}, folders=2, money=False),
+      A.compose_slot_values({"count": 19}, folders=5, money=False)]) is True)
+t("arbiter_figures не поднимает diag.totals",
   A.arbiter_figures({"figures": {"count": 19},
                      "diag": {"totals": {"Всего": [28356.37, 1, 1]}}})
-  == {"count": 19, "_totals": (28356.37,)})
+  == {"count": 19})
+
+# ── A2: свести поле только когда вопрос про итог/max/min/avg ────────────────────────
+t("want=count, величина пуста — поле не сводим",
+  A.unresolved_quantity(None, [], "count", None, ["Всего", "НДС"],
+                        {"Всего": 112325.97, "НДС": 18721}) == (None, []))
+t("want=list, величина пуста — поле не сводим",
+  A.unresolved_quantity(None, [], "list", None, ["Всего", "НДС"]) == (None, []))
+t("compute=max, два поля с разными итогами — уточнение полей",
+  A.unresolved_quantity(None, [], "count", "max", ["Всего", "НДС"],
+                        {"Всего": 100.0, "НДС": 20.0}) == (None, ["Всего", "НДС"]))
+t("want=sum, одно поле — берём его",
+  A.unresolved_quantity(None, [], "sum", None, ["Всего"]) == ("Всего", []))
+t("want=sum, итоги совпали — берём первое, вопрос был бы шумом",
+  A.unresolved_quantity(None, [], "sum", None, ["Всего", "Копия"],
+                        {"Всего": 100.0, "Копия": 100.0}) == ("Всего", []))
+t("want=sum, итоги разные — уточнение тем же перечнем",
+  A.unresolved_quantity(None, [], "sum", None, ["Всего", "НДС"],
+                        {"Всего": 112325.97, "НДС": 18721}) == (None, ["Всего", "НДС"]))
+
+# ── Одиночка круга: документ в уточнении полей, книга ответила ──────────────────────
+_book = {"diag": {"focus": "register_book"},
+         "figures": {"count": 19, "sum": 28356.37}}
+_mute_doc = {"document_sale": {"diag": {
+    "measure_ambiguous": ["Всего", "НДС"],
+    "measure_totals": {"Всего": 112325.97, "НДС": 18721.29}}}}
+t("книга ответила, документ в уточнении с другими итогами — держим круг",
+  A.mute_measure_blocks("register_book", _mute_doc, [_book]) == "document_sale")
+t("итоги совпали — вопрос был бы шумом, одиночку отпускаем",
+  A.mute_measure_blocks("register_book",
+                        {"document_sale": {"diag": {
+                            "measure_ambiguous": ["Всего", "Копия"],
+                            "measure_totals": {"Всего": 28356.37,
+                                               "Копия": 28356.37}}}},
+                        [_book]) is None)
+t("выбор модели = одиночка: single_is_rival молчит, mute всё равно держит",
+  A.single_is_rival("register_book", "register_book") is False
+  and A.mute_measure_blocks("register_book", _mute_doc, [_book]) == "document_sale")
 
 # ── Отсев по знанию «на что НЕ отвечает» (`not_for_excludes`) ───────────────────────
 # Форма: весь род вопроса накрыт ОДНОЙ записью без указателя на соседнюю сущность.

@@ -221,6 +221,32 @@ A.compose("сколько всего", ROWS, {"count": 249, "count_amount": 0, "
 t("денежной колонки нет — модель видит только место под счёт записей",
   "{count}" in SENT["body"] and "{total}" not in SENT["body"])
 
+# A2: want=count|list, величина не выбрана — денежных мест нет, даже если итоги
+# по полям посчитаны (они ушли бы в {total:ИМЯ} и детектор их не видел).
+A.compose("сколько продаж было всего позавчера", ROWS,
+          dict(AGG, count=19, sum=28356.37), totals=TOTALS, money=False)
+t("A2 count без величины: нет {total}/{max}/{avg} и нет {total:ИМЯ}",
+  "{count}" in SENT["body"]
+  and "{total" not in SENT["body"]
+  and "{max}" not in SENT["body"]
+  and "{avg}" not in SENT["body"])
+t("A2 count: отпечатки 19=19 при 112k vs 28k — не расхождение",
+  not A.answers_diverge([
+      A.compose_slot_values(dict(AGG, count=19, sum=112325.97), measure=None),
+      A.compose_slot_values(dict(AGG, count=19, sum=28356.37), measure=None)]))
+txt_nomoney, bad_nomoney = A._fill_figures(
+    "19 продаж на {total:Штуки}.", dict(AGG, count=19, sum=28356.37), [],
+    has_measure=False)
+t("A2 count: без totals_shown число поля в текст не встаёт",
+  "28356" not in txt_nomoney and "92" not in txt_nomoney and bad_nomoney)
+A.compose("покажи продажи", ROWS, AGG, totals=TOTALS, money=False)
+t("A2 list без величины: {total:ИМЯ} модели не показывается",
+  "{total" not in SENT["body"] and "{count}" in SENT["body"])
+t("A1 деньги в compose: величина выбрана — 112k vs 28k это расхождение",
+  A.answers_diverge([
+      A.compose_slot_values(dict(AGG, count=19, sum=112325.97), measure="Всего"),
+      A.compose_slot_values(dict(AGG, count=19, sum=28356.37), measure="Всего")]))
+
 A.compose("сколько складов", ROWS, dict(AGG, folders=25), totals=TOTALS, folders=25)
 t("отброшенные группы названы местом, а не числом (п. 13: сказать о потере — обязательно)",
   "{folders}" in SENT["body"] and " 25 " not in SENT["body"])
