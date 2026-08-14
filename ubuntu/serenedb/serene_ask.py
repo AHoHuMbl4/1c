@@ -2369,6 +2369,24 @@ def answers_diverge(figures):
     return len(set(fps)) > 1
 
 
+def answers_src_conflict(cands):
+    """Разные src при совпавшем отпечатке — не согласие (A3).
+
+    Список из двух и больше `{src, kind, figures}`. Отпечаток — тот же
+    `answers_diverge` по `figures` (слоты compose, не голое count).
+    True = спрашивать. Один src, меньше двух `answer`, или отпечатки
+    разошлись — False (расхождение чисел — ветка `answers_diverge`).
+    Соперника в круг не заводит: смотрит тех, кто уже дал `kind=answer`.
+    """
+    ans = [c for c in (cands or [])
+           if (c.get("kind") == "answer") and c.get("src")]
+    if len(ans) < 2:
+        return False
+    if answers_diverge([c.get("figures") or {} for c in ans]):
+        return False
+    return len({c["src"] for c in ans}) > 1
+
+
 def answer_money(want, compute, measure):
     """Нужны ли в этом ответе денежные числа.
 
@@ -5752,37 +5770,50 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         "text": clarify_say(question, opts, diag), "options": opts,
                         "sources": [o["label"] for o in opts],
                         "diag": dict(diag, sec=round(time.time() - t0, 2))}
-        if len(cand_ans) > 1 and ARBITER_DETECTS and \
-                answers_diverge([arbiter_figures(s) for s in cand_src]):
-            # 🔴 АРБИТР — ДЕТЕКТОР НЕОДНОЗНАЧНОСТИ, А НЕ ВЫБИРАЮЩИЙ (задача 17 реестра).
-            # Числа кандидатов посчитаны базой и РАЗОШЛИСЬ — значит вопросу отвечают разные
-            # объекты с разными величинами, и это доказанная неоднозначность, а не повод
-            # положиться на языковую догадку модели. Живой случай `[замер 03.08]`: на «на
-            # какую сумму мы закупили» кандидатами идут документ приобретения
-            # (`СуммаДокумента` 73 181 157,68) и регистр накопления «Закупки» (`Сумма`
-            # 1 137 949,71) — прежде выбирал арбитр, и в последнем прогоне приёмки выбрал
-            # регистр. Ошибка при этом честная по гейту: число посчитано верно, просто не по
-            # той сущности, — поэтому ловится это только здесь.
-            # Оба ответа уже собраны, то есть человеку предлагается выбор, за которым стоят
-            # реальные числа, а не догадка о том, что он имел в виду.
-            src_of = [s.get("diag", {}).get("focus") for s in cand_src]
-            try:
-                lab_by = {r[0]: r[1] for r in psql(
-                    "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                    % (TABLES, ", ".join(lit(c) for c in src_of if c))) if r and r[0]}
-            except RuntimeError:
-                lab_by = {}
-            opts = mk_opts([c for c in src_of if c], lab_by, marks, by)
-            if len(opts) > 1:
-                diag["arbiter_detected"] = {
-                    "кандидаты": src_of,
-                    "числа": [(s.get("figures") or {}).get("sum")
-                              if (s.get("figures") or {}).get("sum") is not None
-                              else (s.get("figures") or {}).get("count") for s in cand_src]}
-                return {"partial": cut or None, "kind": "clarify",
-                        "text": clarify_say(question, opts, diag), "options": opts,
-                        "sources": [o["label"] for o in opts],
-                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+        if len(cand_ans) > 1 and ARBITER_DETECTS:
+            _figs = [arbiter_figures(s) for s in cand_src]
+            _diverge = answers_diverge(_figs)
+            _src_c = answers_src_conflict([
+                {"src": (s.get("diag") or {}).get("focus"),
+                 "kind": s.get("kind"),
+                 "figures": f} for s, f in zip(cand_src, _figs)])
+            # A3 — только когда diverge уже ложь: совпавший счётчик не доказывает
+            # сущность (книга и реализации позавчера обе 19). Исключения «число
+            # одно — согласие» нет: цена — «контрагенты 155=155» станет уточнением.
+            if _diverge or _src_c:
+                # 🔴 АРБИТР — ДЕТЕКТОР НЕОДНОЗНАЧНОСТИ, А НЕ ВЫБИРАЮЩИЙ (задача 17 реестра).
+                # Числа кандидатов посчитаны базой и РАЗОШЛИСЬ — значит вопросу отвечают разные
+                # объекты с разными величинами, и это доказанная неоднозначность, а не повод
+                # положиться на языковую догадку модели. Живой случай `[замер 03.08]`: на «на
+                # какую сумму мы закупили» кандидатами идут документ приобретения
+                # (`СуммаДокумента` 73 181 157,68) и регистр накопления «Закупки» (`Сумма`
+                # 1 137 949,71) — прежде выбирал арбитр, и в последнем прогоне приёмки выбрал
+                # регистр. Ошибка при этом честная по гейту: число посчитано верно, просто не по
+                # той сущности, — поэтому ловится это только здесь.
+                # Оба ответа уже собраны, то есть человеку предлагается выбор, за которым стоят
+                # реальные числа, а не догадка о том, что он имел в виду.
+                src_of = [s.get("diag", {}).get("focus") for s in cand_src]
+                try:
+                    lab_by = {r[0]: r[1] for r in psql(
+                        "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                        % (TABLES, ", ".join(lit(c) for c in src_of if c))) if r and r[0]}
+                except RuntimeError:
+                    lab_by = {}
+                opts = mk_opts([c for c in src_of if c], lab_by, marks, by)
+                if len(opts) > 1:
+                    if _diverge:
+                        diag["arbiter_detected"] = {
+                            "кандидаты": src_of,
+                            "числа": [(s.get("figures") or {}).get("sum")
+                                      if (s.get("figures") or {}).get("sum") is not None
+                                      else (s.get("figures") or {}).get("count")
+                                      for s in cand_src]}
+                    if _src_c:
+                        diag["arbiter_src_conflict"] = {"кандидаты": src_of}
+                    return {"partial": cut or None, "kind": "clarify",
+                            "text": clarify_say(question, opts, diag), "options": opts,
+                            "sources": [o["label"] for o in opts],
+                            "diag": dict(diag, sec=round(time.time() - t0, 2))}
         if len(cand_ans) > 1:
             n = arbitrate(question, cand_ans, context)
             diag["arbiter"] = {"candidates": [s.get("diag", {}).get("focus") for s in cand_src],

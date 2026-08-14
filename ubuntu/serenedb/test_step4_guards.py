@@ -10,7 +10,8 @@
     числе теми, что кандидат завернул в уточнение о своей величине;
   · `alias_supported` — форма правила «подтверждает ли словарь синонимов выбор сущности»;
   · `answers_diverge` — зеркальное правило, расхождение (проверяется здесь же, чтобы
-    правки одного не расходились с другим).
+    правки одного не расходились с другим);
+  · `answers_src_conflict` — A3: совпавший отпечаток при разных src не согласие.
 
 Живые числа этим прибором не заменяются: сколько ответов вернулось на приёмочном наборе —
 меряет `work/acceptance/step4_bench.py` на боевой базе.
@@ -169,6 +170,49 @@ t("arbiter_figures не поднимает diag.totals",
   A.arbiter_figures({"figures": {"count": 19},
                      "diag": {"totals": {"Всего": [28356.37, 1, 1]}}})
   == {"count": 19})
+
+# ── A3: совпавший отпечаток при разных src — не согласие ────────────────────────────
+# Чистая функция на {src, kind, figures}. Не разбор исходника answer().
+# Отпечаток — answers_diverge / слоты compose, не голое count.
+_doc19 = A.compose_slot_values({"count": 19, "sum": 112325.97}, measure=None)
+_book19 = A.compose_slot_values({"count": 19, "sum": 28356.37}, measure=None)
+t("A3: 19=19 разные src оба answer — не согласие",
+  A.answers_src_conflict([
+      {"src": "document_sale", "kind": "answer", "figures": _doc19},
+      {"src": "register_book", "kind": "answer", "figures": _book19}]) is True)
+t("A3: один src — согласие",
+  A.answers_src_conflict([
+      {"src": "document_sale", "kind": "answer", "figures": _doc19},
+      {"src": "document_sale", "kind": "answer", "figures": _book19}]) is False)
+t("A3: три src, отпечаток совпал — не пара, не согласие",
+  A.answers_src_conflict([
+      {"src": "a", "kind": "answer", "figures": {"count": 155}},
+      {"src": "b", "kind": "answer", "figures": {"count": 155}},
+      {"src": "c", "kind": "answer", "figures": {"count": 155}}]) is True)
+t("A3: цена 155=155 разные src — не согласие",
+  A.answers_src_conflict([
+      {"src": "catalog_partners", "kind": "answer", "figures": {"count": 155}},
+      {"src": "catalog_contractors", "kind": "answer", "figures": {"count": 155}}]) is True)
+t("A3: отпечатки разошлись — не эта ветка (это answers_diverge)",
+  A.answers_src_conflict([
+      {"src": "a", "kind": "answer", "figures": {"count": 19, "avg": 100.0}},
+      {"src": "b", "kind": "answer", "figures": {"count": 19, "avg": 200.0}}]) is False)
+t("A3: отпечаток через arbiter_figures, покрытие не разводит",
+  A.answers_src_conflict([
+      {"src": "a", "kind": "answer", "figures": A.arbiter_figures(
+          {"figures": {"count": 19, "in_1c": 1, "_totals": {"x": 1}}})},
+      {"src": "b", "kind": "answer", "figures": A.arbiter_figures(
+          {"figures": {"count": 19, "in_1c": 99, "_totals": {"x": 2}}})}]) is True)
+t("A3: kind не answer — не эта ветка",
+  A.answers_src_conflict([
+      {"src": "a", "kind": "answer", "figures": {"count": 19}},
+      {"src": "b", "kind": "clarify", "figures": {"count": 19}}]) is False)
+t("A3: один кандидат — согласие не из чего снимать",
+  A.answers_src_conflict([
+      {"src": "a", "kind": "answer", "figures": {"count": 19}}]) is False)
+# answers_diverge на том же 19=19 без величины — по-прежнему ложь (функция не тронута).
+t("A3 не меняет answers_diverge: 19=19 без величины — не расхождение",
+  A.answers_diverge([_doc19, _book19]) is False)
 
 # ── A2: свести поле только когда вопрос про итог/max/min/avg ────────────────────────
 t("want=count + compute=sum + поле — денег нет (живой «сколько … всего»)",
