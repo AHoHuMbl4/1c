@@ -2417,6 +2417,46 @@ def answers_src_conflict(cands):
     return len({c["src"] for c in ans}) > 1
 
 
+def determined_answer_rivals(picked, par, writer_pair=None, alias_leader=None,
+                            known_src=None):
+    """Соперники стопа 2: уже определённые, без бюджета шага 3.
+
+    Семья (шапка/ТЧ), writer_pair, лидер словаря другой семьи. Не «следующий по
+    RRF» и не порог веса. known_src — узкий набор уже известных таблиц (кандидаты,
+    alias_top), из которого берётся не больше одного соседа по семье.
+    """
+    if not picked:
+        return []
+
+    def family(t):
+        return (par or {}).get(t) or t
+
+    fam0 = family(picked)
+    out, seen = [], {picked}
+
+    def add(t):
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+
+    if writer_pair:
+        add(writer_pair)
+    parent = (par or {}).get(picked) or ""
+    if parent and parent != picked:
+        add(parent)
+    for t in (known_src or []):
+        if t == picked:
+            continue
+        if family(t) == fam0:
+            add(t)
+            break
+    if alias_leader and family(alias_leader) != fam0:
+        add(alias_leader)
+    return out
+
+
+
+
 def answer_money(want, compute, measure):
     """Нужны ли в этом ответе денежные числа.
 
@@ -6720,6 +6760,40 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["arbiter_rivals"] = arb_pool[1:]
         шаг("круг арбитра", всего=len(arb_pool),
             соперники=",".join(arb_pool[1:]) or "—")
+
+    # Стоп 2: без focus/measure_pick ответ не уходит, пока посчитаны уже определённые
+    # соперники (семья, writer_pair, лидер словаря другой семьи). Вторая попытка
+    # (VETO_HEAD) не отменяется: вместо ответа вслепую соперник входит в круг.
+    if (picked and not focus and not measure_pick and not no_arbiter
+            and len(arb_pool) < ARBITER_MAX):
+        _lead = None
+        _ok_s2, _top_s2 = _alias_verdict(picked[0])
+        if _top_s2:
+            _lead = _top_s2[0][0]
+        _known = list(dict.fromkeys(
+            list(picked) + list(cands[:ARBITER_MAX])
+            + [t for t, _s in (_top_s2 or [])]
+            + ([diag["writer_pair"]] if diag.get("writer_pair") else [])))
+        _added = []
+        for r in determined_answer_rivals(
+                picked[0], par,
+                writer_pair=diag.get("writer_pair"),
+                alias_leader=_lead,
+                known_src=_known):
+            if len(arb_pool) >= ARBITER_MAX:
+                break
+            if r in arb_pool:
+                continue
+            if SKIP_SERVICE_RIVALS and r in служебные:
+                diag.setdefault("rival_service_skipped", []).append(r)
+                continue
+            arb_pool.append(r)
+            _added.append(r)
+        if _added:
+            diag["stop2_rivals"] = _added
+            diag["arbiter_rivals"] = arb_pool[1:]
+            шаг("стоп2 соперники", всего=len(arb_pool),
+                соперники=",".join(_added) or "—")
 
     def _checked(out):
         """Ответ уходит только если собственное знание базы подтверждает выбор сущности.

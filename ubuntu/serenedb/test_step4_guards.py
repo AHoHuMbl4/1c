@@ -366,6 +366,38 @@ t("mk_opts: все живые счета 0 — пустой перечень, н
 t("mk_opts без live — found из лексики, как прежде",
   A.mk_opts(["a"], {"a": "A"}, by={"a": 12})[0]["found"] == 12)
 
+
+# ── Стоп 2: определённые соперники до ответа без focus ─────────────────────────
+par = {"document_a": "", "document_a_lines": "document_a",
+       "register_x": "", "document_y": ""}
+t("стоп2: лидер словаря другой семьи — в соперниках",
+  A.determined_answer_rivals("document_a", par, alias_leader="register_x")
+  == ["register_x"])
+t("стоп2: parent семьи входит; лидер той же семьи не дублируется",
+  A.determined_answer_rivals("document_a_lines", par,
+                             alias_leader="document_a") == ["document_a"])
+t("стоп2: лидер той же семьи без parent/writer — пусто",
+  A.determined_answer_rivals(
+      "document_a", {"document_a": "", "document_b": "document_a"},
+      alias_leader="document_b") == [])
+t("стоп2: в answer круг стоп2 только без focus/measure_pick",
+  "not focus and not measure_pick and not no_arbiter" in open(
+      A.__file__, encoding="utf-8").read()
+  and "stop2_rivals" in open(A.__file__, encoding="utf-8").read())
+# parent of lines is document_a — already added as family; alias same family not duplicated
+t("стоп2: writer_pair входит",
+  A.determined_answer_rivals("register_x", par, writer_pair="document_y",
+                             alias_leader="register_x") == ["document_y"])
+t("стоп2: сосед по семье из known_src",
+  A.determined_answer_rivals("document_a", par,
+                             known_src=["document_a_lines", "register_x"])
+  == ["document_a_lines"])
+t("стоп2: пустой pick — пусто",
+  A.determined_answer_rivals("", par, alias_leader="register_x") == [])
+t("стоп2: VETO_HEAD по-прежнему подтверждает голову при undisputed",
+  A.alias_supported(5, 0, "catalog_a", "catalog_b", veto=True,
+                    rank_cand=0, rank_leader=3, undisputed=True) is True)
+
 print("\n%d прошло, %d упало" % (PASS, len(FAIL)))
 for n in FAIL:
     print("  ✗", n)
