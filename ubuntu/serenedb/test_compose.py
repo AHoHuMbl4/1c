@@ -329,6 +329,47 @@ t("нераспознанное место из подстановки — та 
 t("GUID в фигурных скобках не считается незаполненным местом",
   not A.formulation_flaws("Ссылка {a1b2c3d4-0000-1111-2222-333344445555}", []))
 
+
+# ------------------------------------------------- слот периода из prior
+chip = {"want": "count", "measure": "", "kind": "продажи", "terms": ["книга"],
+        "amount": {"op": "gt", "value": 1}, "about": "data",
+        "period": {}, "parse": {"assumed": []}}
+prior_sum = {"want": "sum", "measure": "Сумма", "kind": "продажи",
+             "terms": ["продано"], "amount": {}, "about": "data",
+             "period": {"from": "2026-08-12", "to": "2026-08-12"},
+             "parse": {"assumed": ["period.from", "period.to"]}}
+t("prior: пустой слот берёт период, want остаётся с chip",
+  A.apply_prior_period(chip, prior_sum) is True
+  and chip["period"] == {"from": "2026-08-12", "to": "2026-08-12"}
+  and chip["want"] == "count"
+  and chip["measure"] == ""
+  and chip["kind"] == "продажи"
+  and chip["terms"] == ["книга"]
+  and chip["amount"] == {"op": "gt", "value": 1})
+
+assumed_year = {"want": "count", "measure": "", "kind": "", "terms": [],
+                "amount": {}, "about": "data",
+                "period": {"from": "2025-08-14", "to": "2026-08-14"},
+                "parse": {"assumed": ["period.from", "period.to"]}}
+t("prior: год-от-сегодня (assumed) заменяется периодом prior",
+  A.apply_prior_period(assumed_year, prior_sum) is True
+  and assumed_year["period"]["from"] == "2026-08-12"
+  and assumed_year["want"] == "count")
+
+named = {"want": "count", "measure": "", "kind": "", "terms": [],
+         "amount": {}, "about": "data",
+         "period": {"from": "2026-08-12", "to": "2026-08-12"},
+         "parse": {"assumed": []}}
+t("prior: период chip не затирается, want prior не протекает",
+  A.apply_prior_period(named, prior_sum) is False
+  and named["period"] == {"from": "2026-08-12", "to": "2026-08-12"}
+  and named["want"] == "count")
+
+empty_prior = {"want": "sum", "period": {}, "parse": {"assumed": []}}
+chip2 = {"want": "count", "period": {}, "parse": {"assumed": []}}
+t("prior: пустой prior ничего не копирует",
+  A.apply_prior_period(chip2, empty_prior) is False and chip2["want"] == "count")
+
 print("\n%d проверок пройдено" % PASS)
 if FAIL:
     print("ПРОВАЛЕНО %d: %s" % (len(FAIL), "; ".join(FAIL)))

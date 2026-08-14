@@ -305,16 +305,15 @@ export function rewriteAsk1cParams(params, prompt, lock) {
     p.question = lock.question;
     if (matched.focus) p.focus = matched.focus;
     if (matched.measure) p.measure = matched.measure;
+    p.prior = "";
     return { params: p, action: "slot" };
   }
-  if (prompt) {
-    const pf = String(p.focus || "");
-    const sameThread = (lock.options || []).some(
-      (o) => o.focus && pf && normClarifyKey(o.focus) === normClarifyKey(pf));
-    p.question = (sameThread && lock.question)
-      ? (String(lock.question).trim() + " " + String(prompt).trim())
-      : prompt;
-  }
+  if (prompt) p.question = prompt;
+  const pf = String(p.focus || "");
+  const sameThread = (lock.options || []).some(
+    (o) => o.focus && pf && normClarifyKey(o.focus) === normClarifyKey(pf));
+  if (sameThread && lock.question) p.prior = lock.question;
+  else p.prior = "";
   return { params: p, action: "release" };
 }
 

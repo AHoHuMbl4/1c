@@ -178,12 +178,20 @@ export default definePluginEntry({
       const sessKey = sessKeyOf(ctx, event) || null;
       if (!sessKey) return;
       const lock = clarifyLocks.get(sessKey);
-      if (!lock) return;
+      if (!lock) {
+        const p = { ...(event.params || {}) };
+        if (p.prior) {
+          p.prior = "";
+          dbg(cfg, `before_tool_call strip prior sess=${sessKey}`);
+          return { params: p };
+        }
+        return;
+      }
       const promptRec = prompts.get(sessKey);
       const prompt = (promptRec && promptRec.text) || "";
       const { params, action } = rewriteAsk1cParams(event.params || {}, prompt, lock);
       if (action === "release") clarifyLocks.delete(sessKey);
-      dbg(cfg, `before_tool_call rewrite sess=${sessKey} action=${action} q=${String(params.question || "").slice(0, 80)} focus=${params.focus || ""}`);
+      dbg(cfg, `before_tool_call rewrite sess=${sessKey} action=${action} q=${String(params.question || "").slice(0, 80)} focus=${params.focus || ""} prior=${String(params.prior || "").slice(0, 80)}`);
       return { params };
     });
 

@@ -1,5 +1,26 @@
 # Журнал изменений
 
+## 14.08: prior вместо склейки — verify 1.1.4 `[замер]` `[код]`
+
+1.1.3 на release склеивал `lock.question + prompt`. Два желания в одной строке:
+сегодня parse_intent взял count, завтра может взять «продано» = сумму.
+
+`rewriteAsk1cParams`: не-слот всегда `question = prompt`; период замка — поле `prior`,
+не question и не context. Хук без замка снимает `prior` модели (merge params не умеет
+удалить ключ — пустая строка). Мост пробрасывает `prior` в `/ask`; `apply_prior_period`
+копирует только period, если слот пуст или целиком assumed. want/мера/kind — с chip.
+Версия **1.1.4**. Чипы WebUI не трогали.
+
+`[замер]` оффлайн: test-verify **86/0**; test_compose **70/0** (4 юнита prior);
+test_gate 106/0; test_mcp_ask 15/0.
+Живой `/ask` :8091: «сколько записей позавчера» + focus Книга → 19 без суммы;
+сумма позавчера → 26579.05 по 19. Chip+prior POST → 19 за 2026-08-12,
+`diag.period_from_prior=true`. Веб-шлюз inspect **1.1.4**, `before_tool_call`:
+clarify → чип «Посчитай количество по книге» → rewrite `action=release`
+`q=Посчитай количество по книге` `prior=сколько продано позавчера?` → **19 за позавчера**,
+не сумма и не 8341 за год. Выбор «Книга Продаж» → `action=slot`. Telegram/дев/чипы
+не трогали.
+
 ## 14.08: замок уточнения verify 1.1.3 + count_kind `[замер]` `[код]`
 
 Дефект: после clarify чип «Посчитай количество по книге» уходил в ask_1c с question

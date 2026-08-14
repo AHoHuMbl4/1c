@@ -4606,7 +4606,37 @@ def resolve_focus(focus, diag=None):
     return None
 
 
-def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False):
+def apply_prior_period(intent, prior_intent):
+    """Слот периода из prior, если текущий пуст или целиком assumed. Не want."""
+    src = {}
+    for k, v in ((prior_intent or {}).get("period") or {}).items():
+        if k in ("from", "to") and v:
+            src[k] = v
+    if not src:
+        return False
+    cur = {}
+    for k, v in (intent.get("period") or {}).items():
+        if k in ("from", "to") and v:
+            cur[k] = v
+    assumed = set((intent.get("parse") or {}).get("assumed") or [])
+    edges = list(cur)
+    empty = not edges
+    all_assumed = bool(edges) and all(("period." + e) in assumed for e in edges)
+    if not (empty or all_assumed):
+        return False
+    intent["period"] = src
+    parse = dict(intent.get("parse") or {})
+    rest = [a for a in (parse.get("assumed") or [])
+            if not str(a).startswith("period.")]
+    prior_assumed = [a for a in ((prior_intent.get("parse") or {}).get("assumed") or [])
+                     if str(a).startswith("period.")]
+    parse["assumed"] = rest + prior_assumed
+    intent["parse"] = parse
+    return True
+
+
+def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False,
+            prior=None):
     """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
 
     `focus` — сущность, ВЫБРАННАЯ человеком после уточнения (кнопкой или словом). Когда
@@ -4642,11 +4672,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 шаги[-1]["мс"], что,
                 " ".join("%s=%s" % (k, v) for k, v in чем.items())))
 
-    intent = parse_intent(question, time.strftime("%Y-%m-%d"))
+    today = time.strftime("%Y-%m-%d")
+    intent = parse_intent(question, today)
+    period_from_prior = False
+    if prior:
+        period_from_prior = apply_prior_period(intent, parse_intent(prior, today))
     preds = _predicates(intent)
     разбор = intent.get("parse") or {}
     diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind"),
             "parse": разбор, "шаги": шаги}
+    if period_from_prior:
+        diag["period_from_prior"] = True
     шаг("разбор вопроса", тип=intent.get("kind"), понятий=len(intent.get("terms") or []),
         величина=(intent.get("measure") or "—"), считать=(intent.get("want") or "—"),
         потеряно=(",".join(разбор.get("lost") or []) or "—"))
@@ -6668,7 +6704,7 @@ def _need_clarify(question, slots, why, diag):
             "sources": [], "diag": d}
 
 
-def answer_checked(question, focus=None, measure_pick=None, context=""):
+def answer_checked(question, focus=None, measure_pick=None, context="", prior=None):
     """Ответ вместе с шагом «достаточен ли вопрос». Точка входа сервиса.
 
     Порядок п. 21 сохранён: сперва пробуем ответить, уточняем только там, где ответа с
@@ -6679,7 +6715,8 @@ def answer_checked(question, focus=None, measure_pick=None, context=""):
     вернулся бы ему вопросом, и разговор не сходился бы ни на одном круге.
     """
     def plain():
-        return answer(question, focus=focus, measure_pick=measure_pick, context=context)
+        return answer(question, focus=focus, measure_pick=measure_pick, context=context,
+                      prior=prior)
 
     if not (ENOUGH_ON and serene_enough) or focus or measure_pick:
         return plain()
@@ -6764,11 +6801,13 @@ class Handler(BaseHTTPRequestHandler):
         # Предыдущий разговор ведёт OpenClaw; сюда он приходит строкой и
         # используется ТОЛЬКО арбитром. В отбор данных не попадает.
         context = (req.get("context") or "")[:4000]
+        # `prior` — канал одного вызова (хук замка), не память сессии.
+        prior = (req.get("prior") or "").strip() or None
         try:
             # `answer_checked`, а не `answer`: вокруг ответа стоит шаг «достаточен ли
             # вопрос» (05.08). Он же зовёт `answer` внутри, поэтому путь ответа прежний.
             out = answer_checked(question, focus=focus, measure_pick=measure_pick,
-                                 context=context)
+                                 context=context, prior=prior)
             # СВЕЖЕСТЬ ДАННЫХ — В КАЖДЫЙ ОТВЕТ (п. 18). Если 1С недоступна или такт падает,
             # корпус остаётся консистентным (защиты сборки), но СТАРЕЕТ, а бот об этом
             # молчал бы. Возраст последнего успешного такта делает старение видимым, а при

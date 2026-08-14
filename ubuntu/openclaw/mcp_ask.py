@@ -75,7 +75,7 @@ def _serve_with_auth(mcp_obj):
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="warning")
 
 
-def _ask(question, focus=None, measure=None, context=None):
+def _ask(question, focus=None, measure=None, context=None, prior=None):
     payload = {"question": question}
     if focus:
         payload["focus"] = focus
@@ -83,6 +83,8 @@ def _ask(question, focus=None, measure=None, context=None):
         payload["measure"] = measure
     if context:
         payload["context"] = context
+    if prior:
+        payload["prior"] = prior
     req = urllib.request.Request(ASK_URL + "/ask",
                                  data=json.dumps(payload).encode("utf-8"),
                                  method="POST")
@@ -220,7 +222,7 @@ def _with_partial(out, data):
 
 @mcp.tool()
 def ask_1c(question: str, focus: str = "", measure: str = "",
-           context: str = "") -> str:
+           context: str = "", prior: str = "") -> str:
     """Ask about data stored in the company's ERP system.
 
     Figures come from the database and are checked before they are returned; pass them
@@ -240,7 +242,8 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     :param context: optional background; not used for intent parsing.
     """
     try:
-        data = _ask(question, focus or None, measure or None, context or None)
+        data = _ask(question, focus or None, measure or None, context or None,
+                    prior or None)
     except urllib.error.HTTPError as e:
         return ERROR_REPLY.format(detail="HTTP %d" % e.code)
     except Exception as e:                     # noqa: BLE001 — сеть/таймаут

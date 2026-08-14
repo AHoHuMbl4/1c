@@ -430,8 +430,9 @@ t("clarify: prompt не из options → question текущий, release", () =
   const { params, action } = rewriteAsk1cParams({ question: "старое", focus: "Книга Продаж" },
     "Посчитай количество по книге", LOCK);
   assert.strictEqual(action, "release");
-  assert.strictEqual(params.question, "сколько продано позавчера Посчитай количество по книге");
+  assert.strictEqual(params.question, "Посчитай количество по книге");
   assert.strictEqual(params.focus, "Книга Продаж");
+  assert.strictEqual(params.prior, LOCK_Q);
 });
 t("clarify: без замка → none", () => {
   const { action } = rewriteAsk1cParams({ question: "x" }, "y", null);
@@ -473,6 +474,14 @@ t("clarify: release другой топик → только prompt", () => {
   const { params, action } = rewriteAsk1cParams({ question: "x" }, "сколько контрагентов", lock);
   assert.strictEqual(action, "release");
   assert.strictEqual(params.question, "сколько контрагентов");
+  assert.strictEqual(params.prior || "", "");
+});
+t("clarify: слот не ставит prior", () => {
+  const { params, action } = rewriteAsk1cParams({ question: "другое", prior: "модель" },
+    "Книга Продаж", LOCK);
+  assert.strictEqual(action, "slot");
+  assert.strictEqual(params.question, LOCK_Q);
+  assert.strictEqual(params.prior || "", "");
 });
 
 console.log(`\n${pass} tests passed`);
