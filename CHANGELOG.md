@@ -1,5 +1,30 @@
 # Журнал изменений
 
+## 14.08: паспорт набора кодом — ISO + метки базы, не глосс недели `[замер]` `[код]`
+
+Инвариант: цифра верна для скрытого фильтра; без окна/источника два верных
+рейтинга (07–14 и 10–14) выглядят враньём. Слой 1 — сделать набор видимым;
+кто его заполняет (prior / assumed / focus / зерно) не меняли.
+
+`[код]` `build_answer_passport` / `ensure_answer_passport` после
+`_fill_figures` + `ensure_n_groups_named`, до gate. В text (и figures:
+from/to/label/measure): окно ISO фильтра; label + `kind_word` (префикс OData);
+measure из nums; ось только grain=group и только метка target_src; form
+rank|compare. Маркеры `prior`/`assumed` рядом с ISO, не проза. Снятый
+`period_assumed_dropped` не выдаётся как применённый. clarify/no_data — без
+паспорта. src_table человеку не кладётся. Кусок, уже названный моделью, не
+дублируется. INTENT/ANSWER/apply_prior/PARTIAL/чипы/1.1.4/персона не трогали.
+
+`[замер]` оффлайн: test_passport **24/0**; test_compose **77/0**, test_gate
+**111/0**, test_axis **36/0**, test_axis_focus **15/0**, test_focus_loop **19/0**,
+test_mcp_ask **15/0**. Живой POST `:8091` `1c-serene-ask@postgres`, md5 ask
+`c64c9021`. Лидер количества «за неделю»: **869**, в text `2026-08-07..2026-08-14
+assumed`. «за эту неделю»: **524**, окно `2026-08-10..2026-08-14` (не подмена на
+07–14). prior + день: книга **19**, ISO дня + маркер `prior`. grain=row сумма
+за неделю: **681 990.12**/542, паспорт без оси. focus=номенклатура + сумма за
+неделю: **46 204.58**, не no_data. Справочник: **2381**. Книга позавчера 19=19
+без «не учтено». `emb IS NULL` **23432**. Restart только `1c-serene-ask@postgres`.
+
 ## 14.08: focus=каталог-ось → держатель строк, не no_data справочника `[замер]` `[код]`
 
 Свидетель okna сессия 2a960e42: без focus «какой товар» → отгрузки, Balama

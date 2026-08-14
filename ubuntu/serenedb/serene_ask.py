@@ -3705,6 +3705,119 @@ def ensure_n_groups_named(text, agg):
     return ((text or "").rstrip() + " · " + filled).strip()
 
 
+def build_answer_passport(period=None, period_dropped=False, origin="",
+                          src_label="", src_kind="", measure="",
+                          grain="row", axis_label="", form="number",
+                          text=""):
+    """Паспорт скрытого набора решений: ISO + метки базы + ASCII-маркеры. Чистая.
+
+    Слой 1 видимости (п. 13): человек видит, чем SQL отфильтровал. Не меняет счёт.
+    Без прозы продукта и без имён конфигурации в коде — только переданные подписи.
+    origin: ``prior`` | ``assumed`` | "" — машинный маркер рядом с окном, не фраза.
+    period_dropped: снятый assumed-фильтр не выдавать как применённый.
+    """
+    fields = {}
+    parts = []
+    t = text or ""
+
+    def _add(part, *needles):
+        if not part:
+            return
+        for n in (needles or (part,)):
+            if n and n in t:
+                return
+        parts.append(part)
+
+    if not period_dropped:
+        p = period or {}
+        pf = str(p.get("from") or "").strip()
+        pt = str(p.get("to") or "").strip()
+        if pf or pt:
+            if pf and pt:
+                window = "%s..%s" % (pf, pt)
+            else:
+                window = pf or pt
+            if origin in ("prior", "assumed"):
+                window = "%s %s" % (window, origin)
+            _add(window, pf, pt)
+            if pf:
+                fields["from"] = pf
+            if pt:
+                fields["to"] = pt
+
+    lab = (src_label or "").strip()
+    if lab:
+        kind = (src_kind or "").strip()
+        src_disp = "%s (%s)" % (lab, kind) if kind else lab
+        _add(src_disp, lab)
+        fields["label"] = lab
+
+    meas = (measure or "").strip()
+    if meas:
+        _add(meas, meas)
+        fields["measure"] = meas
+
+    if (grain or "row") == "group":
+        ax = (axis_label or "").strip()
+        if ax:
+            _add(ax, ax)
+
+    if form in ("rank", "compare"):
+        _add(form, form)
+
+    return (" · ".join(parts) if parts else ""), fields
+
+
+def ensure_answer_passport(text, frag):
+    """Дописать паспорт после цифр, до гейта (как ensure_n_groups_named)."""
+    if not (frag or "").strip():
+        return text or ""
+    t = (text or "").rstrip()
+    if not t:
+        return frag.strip()
+    if frag in t:
+        return t
+    return (t + " · " + frag.strip()).strip()
+
+
+def _table_label(src_table):
+    """Человеческая метка источника из search_tables. Пусто — не подставлять src."""
+    if not src_table:
+        return ""
+    try:
+        r = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
+                 % (TABLES, lit(src_table)))
+    except RuntimeError:
+        return ""
+    if not r or not r[0]:
+        return ""
+    return (r[0][0] or "").strip()
+
+
+def _passport_axis_label(col, axes):
+    """Подпись оси: label target_src из уже выбранных refcols. Нет метки — пусто."""
+    if not col:
+        return ""
+    target = ""
+    for a in axes or []:
+        if a.get("col") == col:
+            target = (a.get("target_src") or "").strip()
+            break
+    if not target:
+        return ""
+    return _table_label(target)
+
+
+def _passport_origin(intent, diag):
+    """Маркер происхождения окна: prior / assumed / ничего. Не проза."""
+    if (diag or {}).get("period_from_prior"):
+        return "prior"
+    assumed = ((intent or {}).get("parse") or {}).get("assumed") or []
+    if any(str(a).startswith("period.") for a in assumed):
+        return "assumed"
+    return ""
+
+
 def formulation_flaws(text, slots_bad=()):
     """Причины, по которым формулировка не доходит до человека (шаг 6, структурно).
 
@@ -7191,6 +7304,22 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         cov_slots["count_kind"] = kw_src
     text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots)
     text = ensure_n_groups_named(text, agg)
+    # Паспорт набора решений — кодом, после цифр, до гейта (как n_groups). Слой 1
+    # видимости: ISO фильтра + метки базы; счёт не меняет. clarify/no_data — ниже.
+    _pass_frag, pass_fields = build_answer_passport(
+        period=(intent or {}).get("period"),
+        period_dropped=bool(diag.get("period_assumed_dropped")),
+        origin=_passport_origin(intent, diag),
+        src_label=_table_label(src),
+        src_kind=kind_word(src) if src else "",
+        measure=measure or "",
+        grain=(agg or {}).get("grain") or grain_dec.get("grain") or "row",
+        axis_label=_passport_axis_label(
+            (agg or {}).get("col") or grain_dec.get("col"), axes),
+        form=(agg or {}).get("form") or grain_dec.get("form") or "number",
+        text=text)
+    text_core = text
+    text = ensure_answer_passport(text, _pass_frag)
     ask_back = _filled_ask(ask_back, agg, totals_shown, money, diag, cov_slots)
     # Место, которому нечего подставить, — отказ формулировки: модель сослалась на
     # величину, которой мы не считали. Это единственная проверка, оставшаяся от прежней
@@ -7231,6 +7360,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         by_hand2 = copied_figures(text2, agg, rows)
         text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, money, cov_slots)
         text2 = ensure_n_groups_named(text2, agg)
+        _pass_frag2, pass_fields2 = build_answer_passport(
+            period=(intent or {}).get("period"),
+            period_dropped=bool(diag.get("period_assumed_dropped")),
+            origin=_passport_origin(intent, diag),
+            src_label=_table_label(src),
+            src_kind=kind_word(src) if src else "",
+            measure=measure or "",
+            grain=(agg or {}).get("grain") or grain_dec.get("grain") or "row",
+            axis_label=_passport_axis_label(
+                (agg or {}).get("col") or grain_dec.get("col"), axes),
+            form=(agg or {}).get("form") or grain_dec.get("form") or "number",
+            text=text2)
+        text_core = text2
+        _pass_frag, pass_fields = _pass_frag2, pass_fields2
+        text2 = ensure_answer_passport(text2, _pass_frag2)
         bad_roles2 = formulation_flaws(text2, slots_bad2) + by_hand2
         ok_roles2 = not bad_roles2
         bad_txt2 = []
@@ -7268,12 +7412,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # `aggregate`). Тогда своя фраза с суммой не собирается: ноль на этом месте
             # был бы выдуманным числом, а не пустым местом. Числа всё равно уходят
             # структурой ниже, и вызывающий формулирует по ним.
+            _figs = compose_slot_values(agg, measure=measure,
+                                         folders=n_folders, money=money)
+            _figs.update(pass_fields or {})
             return {"partial": cut or None, "kind": "figures", "text": (TOTAL_TEXT.format(
                         count=agg["count"], sum=_fmt(agg["sum"]))
                         if (TOTAL_TEXT and agg.get("sum") is not None)
                         else refuse_text(question)),
-                    "figures": compose_slot_values(agg, measure=measure,
-                                                    folders=n_folders, money=money),
+                    "figures": _figs,
                     "sources": [src.split("_", 1)[1] if "_" in src else src],
                     "completeness": cov,
                     "diag": dict(diag, gate_rejected=bad[:6])}
@@ -7313,8 +7459,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             ask_back = ""
     if ask_back:
         diag["asked_back"] = True
+        # kind=clarify — паспорт счёта не клеить (счёта для человека как ответа не было).
         return {"partial": cut or None, "kind": "clarify",
-                "text": (text.strip() + "\n\n" + ask_back).strip(),
+                "text": ((text_core or text).strip() + "\n\n" + ask_back).strip(),
                 "question": ask_back, "options": [],
                 # Величина не названа вопросом — тогда `agg` считает по пустому месту, и
                 # `sum: 0` был бы не «нулём», а «не считали». Отдаём то же, что видела
@@ -7339,6 +7486,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Поле человеку — то же say_measure, что compose: на count пусто, даже если
     # словарь свёл колонку. Иначе мост допишет [величина: ИМЯ] без числа.
     # diag.measure выше — сырое поле; живой обход читает его, не этот ключ.
+    _figs = compose_slot_values(agg, measure=measure,
+                                folders=n_folders, money=money)
+    _figs.update(pass_fields or {})
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
             "completeness": cov, "measure": say_measure,
             # 🔴 ПОСЧИТАННЫЕ ЧИСЛА — ПОЛЕМ ОТВЕТА, А НЕ ТОЛЬКО ВНУТРИ ТЕКСТА (03.08).
@@ -7346,8 +7496,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # обязан сравнивать ЧИСЛА, посчитанные базой, а не разбирать прозу модели.
             # Разбор текста здесь был бы догадкой (п. 12) и ломался бы на каждом языке
             # ответа. Ветка уточнения отдаёт это поле с самого начала — теперь форма одна.
-            "figures": compose_slot_values(agg, measure=measure,
-                                           folders=n_folders, money=money),
+            # Паспорт набора (from/to/label/measure) — в figures тем же слоем видимости.
+            "figures": _figs,
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 
