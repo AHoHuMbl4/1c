@@ -31,35 +31,47 @@ def t(name, cond):
         print("FAIL-", name)
 
 
-# ---------------------------------------------- F251: имена, которые можно произнести
-named = M._named_partial({"reranked_of": 1502, "reranked": 60})
-t("F251: внутренние имена заменены на произносимые",
-  named == {"record_kinds_considered": 1502, "record_kinds_kept_after_ranking": 60})
-t("F251: числа при этом не меняются — гейт сверяет их с ответом инструмента",
-  set(named.values()) == {1502, 60})
+# ---------------------------------------------- F251: бюджет ≠ потеря счёта
+budget_only = {"reranked_of": 1502, "reranked": 60,
+               "intent_assumed": "period.from=2026-08-12"}
+out_budget = M._with_partial("ответ", {"partial": budget_only})
+t("PARTIAL: бюджет и assumed-only — без HINT и без блока",
+  out_budget == "ответ")
+t("PARTIAL: бюджет-only — нет «Not everything was taken into account»",
+  "Not everything was taken into account" not in out_budget
+  and "учли не всё" not in out_budget.lower())
 
-unknown = M._named_partial({"reranked_of": 7, "нечто_новое": 42})
-t("F251: неизвестный ключ числом наружу не идёт",
+loss = {"coverage_missing": 104, "undated_excluded": 3}
+named = M._named_partial(loss)
+t("PARTIAL: потеря счёта — произносимые имена",
+  named == {"rows_missing_from_search": 104,
+            "records_without_date_excluded": 3})
+t("PARTIAL: числа потери не меняются — гейт сверяет их с ответом инструмента",
+  set(named.values()) == {104, 3})
+
+unknown = M._named_partial({"coverage_missing": 7, "нечто_новое": 42})
+t("PARTIAL: неизвестный ключ числом наружу не идёт",
   42 not in unknown.values() and "нечто_новое" not in unknown)
-t("F251: но и не пропадает молча — сказано, что отсечка была (п. 13)",
+t("PARTIAL: но и не пропадает молча — сказано, что отсечка была (п. 13)",
   unknown.get("other_limits_applied") == 1)
 
-t("F251: пустая пометка не рождает блок",
+t("PARTIAL: пустая пометка не рождает блок",
   M._named_partial({}) == {} and M._named_partial(None) == {})
-t("F251: значения None отбрасываются (их нечего говорить)",
-  M._named_partial({"reranked": None}) == {})
+t("PARTIAL: значения None отбрасываются (их нечего говорить)",
+  M._named_partial({"coverage_missing": None}) == {})
 
-# ------------------------------------------------------- блок для модели собирается
-block = M._kv_block("PARTIAL", M._named_partial({"reranked_of": 1502, "reranked": 60}))
+block = M._kv_block("PARTIAL", M._named_partial(loss))
 t("PARTIAL: блок машинный, без прозы, с обоими числами",
-  block.startswith("PARTIAL:") and "record_kinds_considered=1502" in block
-  and "record_kinds_kept_after_ranking=60" in block)
-t("PARTIAL: целое печатается без хвоста .0 — иначе гейт сверяет «60.0» с «60»",
-  "=60\n" in block + "\n")
+  block.startswith("PARTIAL:") and "rows_missing_from_search=104" in block
+  and "records_without_date_excluded=3" in block)
+t("PARTIAL: целое печатается без хвоста .0 — иначе гейт сверяет «3.0» с «3»",
+  "=3\n" in block + "\n")
 
-out = M._with_partial("ответ", {"partial": {"reranked_of": 1502, "reranked": 60}})
-t("PARTIAL: приписывается к ответу, а не заменяет его",
-  out.startswith("ответ") and "PARTIAL:" in out)
+out_loss = M._with_partial("ответ", {"partial": loss})
+t("PARTIAL: потеря счёта — HINT и блок приписываются к ответу",
+  out_loss.startswith("ответ")
+  and "Not everything was taken into account" in out_loss
+  and "PARTIAL:" in out_loss)
 t("PARTIAL: без пометки ответ не трогается",
   M._with_partial("ответ", {"partial": None}) == "ответ")
 

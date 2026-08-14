@@ -163,20 +163,37 @@ def _kv_block(label, d):
 # КОДОМ: просьбу «не выдумывай смысл» модель читает и не исполняет (правило владельца).
 # Ключ, которому имени не нашлось, числом наружу не идёт вовсе — вместо него счётчик
 # «сколько ещё отсечек было»: потеря не молчаливая (п. 13), но и выдумать по ней нечего.
+# П. 19: бюджет отбора видов — не неполнота посчитанного множества. F251 переименовал
+# ключи, но речевой акт «учли не всё» остался — модель честно врала про «записи».
+PARTIAL_BUDGET_KEYS = frozenset({
+    "entities_shown", "entities_total",
+    "partial_shown", "partial_total",
+    "reranked", "reranked_of",
+})
+PARTIAL_ASSUMPTION_KEYS = frozenset({
+    "intent_assumed", "period_assumed_dropped",
+})
+PARTIAL_LOSS_KEYS = frozenset({
+    "coverage_missing", "undated_excluded", "intent_lost",
+})
+
 PARTIAL_LABELS = {
-    "entities_shown": "record_kinds_shown_to_model",
-    "entities_total": "record_kinds_matched_total",
-    "partial_shown": "partially_matching_kinds_shown",
-    "partial_total": "partially_matching_kinds_total",
-    "reranked": "record_kinds_kept_after_ranking",
-    "reranked_of": "record_kinds_considered",
+    "coverage_missing": "rows_missing_from_search",
+    "undated_excluded": "records_without_date_excluded",
     "intent_lost": "question_parts_not_understood",
-    "intent_assumed": "question_parts_assumed",
 }
 
 
+def _partial_count_loss(d):
+    """Пометки о неполноте ПОСЧИТАННОГО множества — единственный повод для PARTIAL_HINT."""
+    if not isinstance(d, dict):
+        return {}
+    return {k: v for k, v in d.items()
+            if v is not None and k in PARTIAL_LOSS_KEYS}
+
+
 def _named_partial(d):
-    """Пометки отсечки под именами, которые можно произнести человеку, не соврав."""
+    """Пометки потери счёта под именами, которые можно произнести человеку, не соврав."""
     if not isinstance(d, dict):
         return {}
     out, unnamed = {}, 0
@@ -194,9 +211,12 @@ def _named_partial(d):
 
 
 def _with_partial(out, data):
-    """Дописать, что учтено не всё (п. 13). Числа отсюда уходят боту, значит гейт их видит."""
-    block = _kv_block("PARTIAL", _named_partial(data.get("partial")))
-    return out + "\n\n" + PARTIAL_HINT + "\n\n" + block if block else out
+    """Дописать, что учтено не всё (п. 13) — только при потере счёта выбранного источника."""
+    loss = _partial_count_loss(data.get("partial"))
+    block = _kv_block("PARTIAL", _named_partial(loss))
+    if not block:
+        return out
+    return out + "\n\n" + PARTIAL_HINT + "\n\n" + block
 
 
 @mcp.tool()

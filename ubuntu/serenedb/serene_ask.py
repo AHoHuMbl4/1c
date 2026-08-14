@@ -2731,7 +2731,7 @@ def pick_measure(src_table, question, word):
     return (top, [], 'rerank')
 
 
-def pick_entity(question, kind, cands, counts=None, match="", cut=None):
+def pick_entity(question, kind, cands, counts=None, match="", diag=None):
     """Какая сущность имеется в виду — спрашиваем модель, но даём ей ТОЛЬКО НАЗВАНИЯ.
 
     Почему не вектором: замерено на живых данных — эмбеддинг не связывает «продажи» с
@@ -2842,9 +2842,10 @@ def pick_entity(question, kind, cands, counts=None, match="", cut=None):
             # снимать нельзя — перечень рос бы с числом сущностей базы (п. 19).
             sys.stderr.write("ask: перечень сущностей обрезан по бюджету промпта "
                              "(%d из %d, порядок по смыслу)\n" % (len(lines_out), len(names)))
-            if cut is not None:
-                cut["entities_shown"] = len(lines_out)
-                cut["entities_total"] = len(names)
+            if diag is not None:
+                sb = diag.setdefault("selection_budget", {})
+                sb["entities_shown"] = len(lines_out)
+                sb["entities_total"] = len(names)
             break
         lines_out.append(row)
         used += len(row) + 1
@@ -4667,7 +4668,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # допущение системы. Оно применяется, но человек про него узнаёт: молчаливое
     # допущение неотличимо от того, что он спросил сам (п. 12).
     if разбор.get("assumed"):
-        cut["intent_assumed"] = ", ".join(
+        diag["intent_assumed"] = ", ".join(
             "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
             for a in разбор["assumed"])
 
@@ -4797,7 +4798,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # система показывает всё недоехавшее, чтобы отсечка не стала молчаливой (п. 13).
         diag["by_partial"] = {t: part_lvl[t] for t in taken}
         if len(fit) > len(taken):
-            cut["partial_shown"], cut["partial_total"] = len(taken), len(fit)
+            sb = diag.setdefault("selection_budget", {})
+            sb["partial_shown"] = len(taken)
+            sb["partial_total"] = len(fit)
     # Табличные части попадают в кандидаты вместе со своей шапкой: искать их по словам
     # вопроса бесполезно — имени контрагента в строках товаров нет.
     # ⚠ ГРАНИЦА, ОСТАВЛЕННАЯ СОЗНАТЕЛЬНО: строки берутся у шапок, найденных СЛОВАМИ.
@@ -5134,8 +5137,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 diag["order_head"] = len(head3)
         head, tail = cands[:RERANK_TOP], cands[RERANK_TOP:]
         if tail:
-            cut["reranked_of"] = len(cands)
-            cut["reranked"] = len(head)
+            sb = diag.setdefault("selection_budget", {})
+            sb["reranked_of"] = len(cands)
+            sb["reranked"] = len(head)
         try:
             lab = {r[0]: r[1] for r in psql(
                 "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
@@ -5276,7 +5280,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     else:
         try:
             picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
-                                              counts_for_model, match, cut)
+                                              counts_for_model, match, diag)
         except RuntimeError:
             picked, marks, plan = [], {}, {}
             diag["degraded"] = "выбор сущности сделан без модели"
@@ -6053,9 +6057,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if not _probe:
             intent, preds = drop_period_preds(intent, preds)
             diag["period_assumed_dropped"] = True
-            if isinstance(cut, dict):
-                cut["period_assumed_dropped"] = "1"
-
     diag["focus"], diag["found"] = src, by.get(src, 0)
     шаг("сущность выбрана", сущность=(src or "—"), совпадений=by.get(src, 0),
         выбрал=("человек" if focus else "модель"),
@@ -6068,6 +6069,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     cov = _coverage_of(src)
     if cov:
         diag["incomplete"] = cov
+        if cov.get("missing", 0) > 0:
+            cut["coverage_missing"] = cov["missing"]
 
     # ВЕЛИЧИНА ВЫБИРАЕТСЯ ПО ВОПРОСУ — после того, как известна сущность: её величины
     # лежат в самих данных. Числовое условие («больше 500000») тоже применяется здесь,
@@ -6276,8 +6279,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if act == "drop_assumed":
             intent, preds = drop_period_preds(intent, preds)
             diag["period_assumed_dropped"] = True
-            if isinstance(cut, dict):
-                cut["period_assumed_dropped"] = "1"
             rows = rows_of(src, match, preds, TOPK, measure)
             act = empty_after_period_action(intent)
         if not rows and act != "empty_period":
@@ -6322,6 +6323,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _undated = 0
         if _undated:
             agg["undated"] = _undated
+            cut["undated_excluded"] = _undated
             if "счёт" in diag:
                 diag["счёт"]["без_даты_отброшено"] = _undated
             # 🔴 В `cov` это НЕ дописывается, хотя соблазн есть: у него читаются ИМЕННО
