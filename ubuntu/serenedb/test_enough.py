@@ -100,6 +100,13 @@ t("периода нет — не назван",
 t("период ВЫВЕДЕН системой (`assumed`) — за названный не считается",
   not E.period_given(intent(period={"from": "2025-08-05", "to": None},
                             parse={"assumed": ["period.from"]})))
+t("period_assumed: выведенный период опознан",
+  E.period_assumed(intent(period={"from": "2025-08-05", "to": None},
+                          parse={"assumed": ["period.from"]})))
+t("period_assumed: названный период — не догадка",
+  not E.period_assumed(intent(period={"from": "2017-12-01", "to": "2017-12-31"})))
+t("period_assumed: периода нет",
+  not E.period_assumed(intent()))
 
 # ═════════════════════════ дешёвая половина: до поиска ═════════════════════════
 t("итог просят, но не названо ни рода записей, ни значений — спросить",

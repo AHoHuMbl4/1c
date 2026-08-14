@@ -291,7 +291,13 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
         if block:
             return _with_partial(FIGURES_HINT + "\n\n" + block, data)
 
-    if kind == "no_data" or not text:
+    if kind == "no_data":
+        if text:
+            marker = "[NO DATA]"
+            out = text if text.startswith(marker) else (marker + " " + text)
+            return _with_partial(out, data)
+        return NO_DATA_REPLY
+    if not text:
         return NO_DATA_REPLY
 
     # Величина, по которой считали, названа рядом с ответом: у сущности бывает девять

@@ -346,6 +346,26 @@ t("отсеяны все — словарь молчит (пустая верш�
 t("отсев пуст — вершина как была",
   A.veto_top_without([("a", 9.0)], set()) == [("a", 9.0)])
 
+# ── Пустое после фильтра периода ≠ «данных нет» ────────────────────────────────
+t("выведенный период + пустые rows — снять догадку, не no_data",
+  A.empty_after_period_action({"period": {"from": "2026-05-14"},
+                               "parse": {"assumed": ["period.from"]}}) == "drop_assumed")
+t("названный период + пустые rows — пустой период, не существование",
+  A.empty_after_period_action({"period": {"from": "2026-05-14", "to": "2026-08-14"},
+                               "parse": {"assumed": []}}) == "empty_period")
+t("периода нет + пустые rows — no_data как прежде",
+  A.empty_after_period_action({"period": {}, "parse": {"assumed": []}}) == "no_data")
+t("выведенный период уже снят — повторно не снимаем",
+  A.empty_after_period_action({"period": {},
+                               "parse": {"assumed": ["period.from"]}}) == "no_data")
+t("mk_opts: живой счёт 0 не попадает в варианты",
+  A.mk_opts(["a", "b"], {"a": "A", "b": "B"}, live={"a": 0, "b": 5})
+  == [{"src": "b", "label": "B", "hint": "", "distinct_by": "", "found": 5}])
+t("mk_opts: все живые счета 0 — пустой перечень, не выбор из нулей",
+  A.mk_opts(["a", "b"], {"a": "A", "b": "B"}, live={"a": 0, "b": 0}) == [])
+t("mk_opts без live — found из лексики, как прежде",
+  A.mk_opts(["a"], {"a": "A"}, by={"a": 12})[0]["found"] == 12)
+
 print("\n%d прошло, %d упало" % (PASS, len(FAIL)))
 for n in FAIL:
     print("  ✗", n)

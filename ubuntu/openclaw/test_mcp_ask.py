@@ -63,6 +63,21 @@ t("PARTIAL: приписывается к ответу, а не заменяет
 t("PARTIAL: без пометки ответ не трогается",
   M._with_partial("ответ", {"partial": None}) == "ответ")
 
+# kind=no_data: маркер — префикс к text сервиса, как у verify-plugin, не замена
+saved_ask = M._ask
+M._ask = lambda *a, **k: {"kind": "no_data",
+                          "text": "проверенный ответ дать невозможно"}
+out_nd = M.ask_1c("q")
+t("no_data + непустой text: маркер как префикс",
+  out_nd.startswith("[NO DATA]") and "проверенный ответ дать невозможно" in out_nd)
+t("no_data + непустой text: не голая формула there is no such data",
+  "there is no such data" not in out_nd.lower())
+M._ask = lambda *a, **k: {"kind": "no_data", "text": ""}
+out_empty = M.ask_1c("q")
+t("no_data + пустой text: формула на месте",
+  "there is no such data" in out_empty.lower())
+M._ask = saved_ask
+
 print("\n%d проверок пройдено" % PASS)
 if FAIL:
     print("ПРОВАЛЕНО %d: %s" % (len(FAIL), "; ".join(FAIL)))

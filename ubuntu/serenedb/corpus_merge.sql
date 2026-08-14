@@ -158,6 +158,40 @@ WHERE NOT EXISTS (SELECT 1 FROM search_sources s WHERE s.src_table = c.src_table
 
 COMMIT;
 
+-- ============ 2-бис. ДАТА СОБЫТИЯ У ТАБЛИЧНОЙ ЧАСТИ ============
+-- `doc_date` — когда случился факт. Date/Period платформы стоит на шапке; у строк
+-- табличной части колонки нет, и `doc_date` оставался NULL. Фильтр ответа сравнивает
+-- именно его — при 100 % пустых дат `rows` пуст и `kind=no_data` срабатывал ДО счёта
+-- `undated`. Видимость потери ≠ тождество события (п. 13).
+--
+-- Своя дата на строке не затирается (`ch.doc_date IS NULL`). Родитель — из
+-- `search_tables.parent`. Контракт ключа тот же, что `children_by_parent` в
+-- `serene_ask.py`: `split_part(child.row_key,'|',1) = parent.row_key`.
+-- Штатно: UPDATE FROM other table (доки sql/statements/update#update-from-other-table);
+-- цель и источник — одна таблица, поэтому разные алиасы (Update from Same Table).
+-- Вектор не сбрасывается: дата не входит в отпечаток (комментарий у MERGE выше).
+--
+-- Инкремент: дети родителей, у которых в этом такте сменилась дата шапки
+-- (родитель в `tmp3_build`), и у которых своей колонки Date/Period нет
+-- (нет строки в `tmp3_datecol`). Иначе правка Date документа не доедет до строк.
+-- Доки: sql/statements/update#update-from-other-table
+UPDATE search_corpus AS ch
+   SET doc_date = par.doc_date
+  FROM search_tables AS m, search_corpus AS par
+ WHERE m.src_table = ch.src_table
+   AND m.parent IS NOT NULL
+   AND par.src_table = m.parent
+   AND par.row_key = split_part(ch.row_key, '|', 1)
+   AND par.doc_date IS NOT NULL
+   AND (
+        ch.doc_date IS NULL
+     OR (
+          NOT EXISTS (SELECT 1 FROM tmp3_datecol d WHERE d.tbl = ch.src_table)
+          AND EXISTS (SELECT 1 FROM tmp3_build b WHERE b.tbl = par.src_table)
+          AND ch.doc_date IS DISTINCT FROM par.doc_date
+        )
+   );
+
 -- ============ 3. ПУБЛИКАЦИЯ ПОИСКУ ============
 -- Именно REFRESH_INDEX (один индекс), а НЕ REFRESH_TABLE: последний на таблице с вектором
 -- дал 34 ГБ и смерть движка (замер 27.07).

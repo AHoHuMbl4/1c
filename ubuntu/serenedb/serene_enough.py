@@ -159,6 +159,18 @@ def period_given(intent):
     return bool(p.get("from") or p.get("to"))
 
 
+def period_assumed(intent):
+    """Период выведен системой (`parse.assumed`), а не назван в вопросе.
+
+    Пара к `period_given`: та — «человек задал», эта — «система догадалась».
+    Догадка не имеет права отказать (п. 12 + п. 21).
+    """
+    if not isinstance(intent, dict):
+        return False
+    assumed = set((intent.get("parse") or {}).get("assumed") or [])
+    return any(str(a).startswith("period") for a in assumed)
+
+
 def verdict_before(intent):
     """ДЕШЁВАЯ ПОЛОВИНА, до поиска: (спросить, слоты, причина).
 

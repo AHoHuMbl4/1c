@@ -94,6 +94,39 @@ UNION ALL   SELECT 'build_res',   (SELECT count(*) FROM resolver_index),        
 -- заново нечего. Хранится в `note`, потому что это строка, а не число.
 UNION ALL   SELECT 'build_sql_hash', 0, :'build_sql_hash';
 
+-- Табличная часть без даты при живом родителе — не молчать (п. 13). После наследования
+-- в corpus_merge это сироты (ключ шапки в корпусе не найден) либо родитель сам без даты.
+-- Имена сущностей не зашиты: parent из search_tables, ключ — контракт сборки.
+DELETE FROM search_quality WHERE k IN (
+  'child_undated_live_parent', 'child_orphan', 'child_all_null');
+INSERT INTO search_quality
+SELECT 'child_undated_live_parent', count(DISTINCT ch.src_table),
+       'табличных частей, где есть строки без даты при живом датированном родителе'
+FROM search_corpus ch
+JOIN search_tables m ON m.src_table = ch.src_table AND m.parent IS NOT NULL
+JOIN search_corpus par ON par.src_table = m.parent
+  AND par.row_key = split_part(ch.row_key, '|', 1)
+WHERE ch.doc_date IS NULL AND par.doc_date IS NOT NULL
+UNION ALL
+SELECT 'child_orphan', count(*),
+       'строк табличной части, чей parent.row_key в корпусе не найден'
+FROM search_corpus ch
+JOIN search_tables m ON m.src_table = ch.src_table AND m.parent IS NOT NULL
+WHERE NOT EXISTS (
+  SELECT 1 FROM search_corpus par
+  WHERE par.src_table = m.parent
+    AND par.row_key = split_part(ch.row_key, '|', 1))
+UNION ALL
+SELECT 'child_all_null', count(*),
+       'табличных частей, у которых дата пуста на всех строках'
+FROM (
+  SELECT t.src_table FROM search_tables t
+  JOIN search_corpus c ON c.src_table = t.src_table
+  WHERE t.parent IS NOT NULL
+  GROUP BY t.src_table
+  HAVING count(*) FILTER (WHERE c.doc_date IS NOT NULL) = 0
+) x;
+
 -- Итог — ДЕЛЬТОЙ, а не абсолютом.
 SELECT printf('корпус %d -> %d (%+d), сущностей %d -> %d, без вектора %d; резолвер %d -> %d',
               b_rows, a_rows, a_rows - b_rows, b_src, a_src, a_noemb, b_res, a_res) AS итог

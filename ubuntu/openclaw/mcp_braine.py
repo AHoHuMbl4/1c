@@ -118,7 +118,13 @@ def ask_1c(question: str) -> str:
     text = (data.get("text") or "").strip()
     sources = data.get("sources") or []
 
-    if kind == "no_data" or not text:
+    if kind == "no_data":
+        if text:
+            marker = "[НЕТ ДАННЫХ]"
+            out = text if text.startswith(marker) else (marker + " " + text)
+            return out
+        return NO_DATA_REPLY
+    if not text:
         return NO_DATA_REPLY
 
     out = text

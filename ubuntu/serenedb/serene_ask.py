@@ -2430,6 +2430,8 @@ def compose_slot_values(agg, measure=None, folders=0, money=None):
         slots["folders"] = nfold
     if agg.get("undated"):
         slots["undated"] = agg["undated"]
+    if agg.get("outside_period"):
+        slots["outside_period"] = agg["outside_period"]
     return slots
 
 
@@ -3425,6 +3427,11 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         body += "\n  count (number of records) -> {count}"
         if agg.get("date_min"):
             body += "\n  period                    -> {date_min} .. {date_max}"
+        if agg.get("undated"):
+            body += "\n  records without a date (not in the period filter) -> {undated}"
+        if agg.get("outside_period"):
+            body += ("\n  records matching everything except the period "
+                     "-> {outside_period}")
         if money:
             body += ("\n  (no numeric quantity matches the question for this record type — "
                      "no placeholder other than {count} is available here)")
@@ -4450,18 +4457,80 @@ def opts_hints(srcs):
     return out
 
 
-def mk_opts(srcs, lab_by, marks=None, by=None):
+def mk_opts(srcs, lab_by, marks=None, by=None, match="", preds=None, live=None):
     """Варианты уточнения одним видом на все пять веток ответа.
 
     Здесь же дописывается вид записи одноимённым источникам: подпись, которую читает
     человек, и значение `focus`, которое возвращает бот, — одна и та же строка, поэтому
     различитель ставится в этой точке, а не в мосте.
+
+    В перечень идёт только источник с живым счётом по тем же предикатам, что и ответ
+    (период). Поле `found` — лексические попадания, для этого не годится.
     """
     marks, by = marks or {}, by or {}
+    counted = live
+    if counted is None and preds is not None:
+        counted = live_src_counts(srcs, match, preds)
+    if counted is not None:
+        srcs = [s for s in srcs if counted.get(s, 0) > 0]
     dis = disambiguate_labels([(s, lab_by.get(s, s)) for s in srcs])
     hint = opts_hints(srcs)
+    found_of = counted if counted is not None else by
     return [{"src": s, "label": dis.get(s, lab_by.get(s, s)), "hint": hint.get(s, ""),
-             "distinct_by": marks.get(s, ""), "found": by.get(s, 0)} for s in srcs]
+             "distinct_by": marks.get(s, ""), "found": found_of.get(s, 0)} for s in srcs]
+
+
+def live_src_counts(srcs, match, preds):
+    """Живой счёт строк по тем же предикатам, что и ответ. None — база не ответила."""
+    if not srcs:
+        return {}
+    src = INDEX if match else CORPUS
+    folder = "NOT coalesce(map_extract_value(flags, 'IsFolder'), false)"
+    parts = []
+    for s in srcs:
+        where = [w for w in ([match] + list(preds or [])
+                             + ["src_table = %s" % lit(s), folder]) if w]
+        parts.append("SELECT %s AS t, count(*) AS n FROM %s WHERE %s"
+                     % (lit(s), src, " AND ".join(where)))
+    try:
+        rows = psql(" UNION ALL ".join(parts))
+    except RuntimeError:
+        return None
+    out = {}
+    for r in rows or []:
+        try:
+            if r and r[0]:
+                out[r[0]] = int(r[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+    return out
+
+
+def empty_after_period_action(intent):
+    """Что делать, когда после фильтра rows пуст. Кодом, не промтом.
+
+    Пустое после фильтра не равно «данных нет». Выведенный период не имеет права
+    отказать. Названный период с нулём внутри — речь про пустой период, не
+    kind=no_data про существование.
+    """
+    if serene_enough is None:
+        return "no_data"
+    p = (intent or {}).get("period") or {}
+    has_period = bool(p.get("from") or p.get("to"))
+    if serene_enough.period_assumed(intent) and has_period:
+        return "drop_assumed"
+    if serene_enough.period_given(intent):
+        return "empty_period"
+    return "no_data"
+
+
+def drop_period_preds(intent, preds):
+    """Снять датные предикаты. Возвращает (intent без period, preds без дат)."""
+    date_preds = set(_predicates(intent))
+    new_preds = [p for p in preds if p not in date_preds]
+    new_intent = dict(intent)
+    new_intent["period"] = {}
+    return new_intent, new_preds
 
 
 def resolve_focus(focus, diag=None):
@@ -5494,7 +5563,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # `KeyError('distinct_by')`. Это ещё одно доказательство, что она не работала ни
         # разу: путь, который никогда не исполнялся, донёс до продукта и дефект прав, и
         # дефект формы данных.
-        opts = mk_opts([t for t in opts_src if t in lab_by], lab_by, marks, by)
+        opts = mk_opts([t for t in opts_src if t in lab_by], lab_by, marks, by, match=match, preds=preds)
         if len(opts) < 2:
             return None
         diag["unsupported_pick"] = cand
@@ -5763,7 +5832,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
             except RuntimeError:
                 lab_by = {}
-            opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by)
+            opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by, match=match, preds=preds)
             if len(opts) > 1:
                 diag["writer_pair_unproven"] = diag["writer_pair"]
                 return {"partial": cut or None, "kind": "clarify",
@@ -5799,7 +5868,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         % (TABLES, ", ".join(lit(c) for c in src_of if c))) if r and r[0]}
                 except RuntimeError:
                     lab_by = {}
-                opts = mk_opts([c for c in src_of if c], lab_by, marks, by)
+                opts = mk_opts([c for c in src_of if c], lab_by, marks, by, match=match, preds=preds)
                 if len(opts) > 1:
                     if _diverge:
                         diag["arbiter_detected"] = {
@@ -5847,7 +5916,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
                 except RuntimeError:
                     lab_by = {}
-                opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by)
+                opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by, match=match, preds=preds)
                 if len(opts) > 1:
                     diag["single_was_rival"] = {"выбор": picked[0], "ответил": sole}
                     return {"partial": cut or None, "kind": "clarify",
@@ -5862,7 +5931,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
                 except RuntimeError:
                     lab_by = {}
-                opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by)
+                opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by, match=match, preds=preds)
                 if len(opts) > 1:
                     diag["mute_measure_rival"] = {"ответил": sole, "уточнение": blocked}
                     return {"partial": cut or None, "kind": "clarify",
@@ -5880,11 +5949,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 % (TABLES, ", ".join(lit(c) for c in picked))) if r and r[0]}
         except RuntimeError:
             lab_by = {}
-        opts = mk_opts(list(picked), lab_by, marks, by)
-        diag["ambiguous"] = [o["src"] for o in opts]
-        return {"partial": cut or None, "kind": "clarify", "text": clarify_say(question, opts, diag),
-                "options": opts, "sources": [o["label"] for o in opts],
-                "diag": dict(diag, sec=round(time.time() - t0, 2))}
+        opts = mk_opts(list(picked), lab_by, marks, by, match=match, preds=preds)
+        if len(opts) > 1:
+            diag["ambiguous"] = [o["src"] for o in opts]
+            return {"partial": cut or None, "kind": "clarify",
+                    "text": clarify_say(question, opts, diag),
+                    "options": opts, "sources": [o["label"] for o in opts],
+                    "diag": dict(diag, sec=round(time.time() - t0, 2))}
+        if len(opts) == 1:
+            picked = [opts[0]["src"]]
+        # все живые счета 0 — не выбор из нулей; дальше страж пустого периода
     # 🔴 НЕ ОТВЕЧАТЬ, ПОКА ВЫБОР СУЩНОСТИ НЕ ПОДТВЕРЖДЁН. Решение владельца 30.07 — «правило в
     # сервисе в этом случае», — принято ПОСЛЕ того, как оба штатных средства движка были
     # проверены замером и оказались недостаточны:
@@ -5970,6 +6044,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         preds = preds + [kid_pred[src]]
         match = ""
         diag["via_parent"] = True
+
+    # Выведенный период обнулил выборку — снять догадку и считать снова.
+    # Догадка не имеет права отказать (п. 12 + п. 21). Стоит до выбора величины:
+    # иначе все величины выглядят пустыми из-за чужого окна дат.
+    if src and empty_after_period_action(intent) == "drop_assumed":
+        _probe = rows_of(src, match, preds, 1)
+        if not _probe:
+            intent, preds = drop_period_preds(intent, preds)
+            diag["period_assumed_dropped"] = True
+            if isinstance(cut, dict):
+                cut["period_assumed_dropped"] = "1"
 
     diag["focus"], diag["found"] = src, by.get(src, 0)
     шаг("сущность выбрана", сущность=(src or "—"), совпадений=by.get(src, 0),
@@ -6185,8 +6270,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     preds = preds + _num_pred(intent, measure)
     rows = rows_of(src, match, preds, TOPK, measure)
     if not rows:
-        return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
-                "diag": dict(diag, sec=round(time.time() - t0, 2))}
+        # Ранний no_data стоял ДО счёта undated: при 100% строк без даты
+        # потеря была полной, и «данных нет» срабатывало про существование.
+        act = empty_after_period_action(intent)
+        if act == "drop_assumed":
+            intent, preds = drop_period_preds(intent, preds)
+            diag["period_assumed_dropped"] = True
+            if isinstance(cut, dict):
+                cut["period_assumed_dropped"] = "1"
+            rows = rows_of(src, match, preds, TOPK, measure)
+            act = empty_after_period_action(intent)
+        if not rows and act != "empty_period":
+            return {"partial": cut or None, "kind": "no_data",
+                    "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
+                    "diag": dict(diag, sec=round(time.time() - t0, 2))}
 
     agg = aggregate(src, match, preds, measure)
     шаг("посчитано базой", сущность=src, величина=(measure or "—"),
@@ -6225,12 +6322,25 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _undated = 0
         if _undated:
             agg["undated"] = _undated
-            diag["счёт"]["без_даты_отброшено"] = _undated
+            if "счёт" in diag:
+                diag["счёт"]["без_даты_отброшено"] = _undated
             # 🔴 В `cov` это НЕ дописывается, хотя соблазн есть: у него читаются ИМЕННО
             # ключи `in_1c`/`in_search`/`missing` (ниже, в белом списке гейта и в местах
             # подстановки), и словарь с другим составом уронил бы ответ `KeyError`-ом на
             # каждом вопросе с периодом. Число живёт в самом счёте (`agg`) и в объявлении
             # множества; в белый список гейта оно попадает отдельной строкой ниже.
+        try:
+            _o = psql("SELECT count(*) FROM %s WHERE %s AND doc_date IS NOT NULL"
+                      % (INDEX if match else CORPUS,
+                         " AND ".join([w for w in ([match] + _kept
+                                       + ["src_table = %s" % lit(src)]) if w])))
+            _outside = int(_o[0][0]) if _o and _o[0] else 0
+        except (RuntimeError, ValueError, IndexError):
+            _outside = 0
+        if _outside:
+            agg["outside_period"] = _outside
+            if "счёт" in diag:
+                diag["счёт"]["вне_периода"] = _outside
     # Числа неполноты разрешены гейту наравне с порогами вопроса: иначе фраза «не дошло
     # 104 строки» была бы отвергнута как выдумка, и система замолчала бы ровно там, где
     # обязана предупредить.
@@ -6255,6 +6365,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         [x for t in (totals or []) for x in t[1:]] if money else []) \
                  + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else []) \
                  + ([agg["undated"]] if (agg or {}).get("undated") else []) \
+                 + ([agg["outside_period"]] if (agg or {}).get("outside_period") else []) \
                  + ([agg["folders"]] if (agg or {}).get("folders") else [])
     # Границы периода отбора — на тех же правах, но по датной ветке гейта.
     our_dates = _filter_dates(intent)
