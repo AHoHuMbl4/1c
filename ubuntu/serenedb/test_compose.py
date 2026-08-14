@@ -331,15 +331,17 @@ t("GUID в фигурных скобках не считается незапо�
 
 
 # ------------------------------------------------- слот периода из prior
-chip = {"want": "count", "measure": "", "kind": "продажи", "terms": ["книга"],
-        "amount": {"op": "gt", "value": 1}, "about": "data",
-        "period": {}, "parse": {"assumed": []}}
-prior_sum = {"want": "sum", "measure": "Сумма", "kind": "продажи",
+# Фикстуры дат; today фиксирован. Слот — форма окна, не лексика конфигурации.
+_TODAY = "2026-08-14"
+prior_day = {"want": "sum", "measure": "Сумма", "kind": "продажи",
              "terms": ["продано"], "amount": {}, "about": "data",
              "period": {"from": "2026-08-12", "to": "2026-08-12"},
              "parse": {"assumed": ["period.from", "period.to"]}}
-t("prior: пустой слот берёт период, want остаётся с chip",
-  A.apply_prior_period(chip, prior_sum) is True
+chip = {"want": "count", "measure": "", "kind": "продажи", "terms": ["книга"],
+        "amount": {"op": "gt", "value": 1}, "about": "data",
+        "period": {}, "parse": {"assumed": []}}
+t("prior: пустой period + prior явный день → день; want с chip",
+  A.apply_prior_period(chip, prior_day, _TODAY) is True
   and chip["period"] == {"from": "2026-08-12", "to": "2026-08-12"}
   and chip["want"] == "count"
   and chip["measure"] == ""
@@ -347,28 +349,50 @@ t("prior: пустой слот берёт период, want остаётся �
   and chip["terms"] == ["книга"]
   and chip["amount"] == {"op": "gt", "value": 1})
 
-assumed_year = {"want": "count", "measure": "", "kind": "", "terms": [],
-                "amount": {}, "about": "data",
-                "period": {"from": "2025-08-14", "to": "2026-08-14"},
-                "parse": {"assumed": ["period.from", "period.to"]}}
-t("prior: год-от-сегодня (assumed) заменяется периодом prior",
-  A.apply_prior_period(assumed_year, prior_sum) is True
-  and assumed_year["period"]["from"] == "2026-08-12"
-  and assumed_year["want"] == "count")
+canon365 = {"want": "count", "measure": "", "kind": "", "terms": [],
+            "amount": {}, "about": "data",
+            "period": {"from": "2025-08-14", "to": "2026-08-14"},
+            "parse": {"assumed": ["period.from", "period.to"]}}
+t("prior: канон 365 дней к today + prior день → день",
+  A.apply_prior_period(canon365, prior_day, _TODAY) is True
+  and canon365["period"]["from"] == "2026-08-12"
+  and canon365["want"] == "count")
+
+canon_jan = {"want": "count", "measure": "", "kind": "", "terms": [],
+             "amount": {}, "about": "data",
+             "period": {"from": "2026-01-01", "to": "2026-08-14"},
+             "parse": {"assumed": ["period.from", "period.to"]}}
+t("prior: канон Jan 1..today + prior день → день",
+  A.apply_prior_period(canon_jan, prior_day, _TODAY) is True
+  and canon_jan["period"] == {"from": "2026-08-12", "to": "2026-08-12"})
+
+rel_win = {"want": "count", "measure": "", "kind": "", "terms": [],
+           "amount": {}, "about": "data",
+           "period": {"from": "2026-08-07", "to": "2026-08-14"},
+           "parse": {"assumed": ["period.from", "period.to"]}}
+t("prior: окно 5–8 дней к today + prior другой from → False, окно цело",
+  A.apply_prior_period(rel_win, prior_day, _TODAY) is False
+  and rel_win["period"] == {"from": "2026-08-07", "to": "2026-08-14"})
 
 named = {"want": "count", "measure": "", "kind": "", "terms": [],
          "amount": {}, "about": "data",
          "period": {"from": "2026-08-12", "to": "2026-08-12"},
          "parse": {"assumed": []}}
-t("prior: период chip не затирается, want prior не протекает",
-  A.apply_prior_period(named, prior_sum) is False
+t("prior: явный from/to не assumed-год + prior → False; want не течёт",
+  A.apply_prior_period(named, prior_day, _TODAY) is False
   and named["period"] == {"from": "2026-08-12", "to": "2026-08-12"}
   and named["want"] == "count")
 
 empty_prior = {"want": "sum", "period": {}, "parse": {"assumed": []}}
 chip2 = {"want": "count", "period": {}, "parse": {"assumed": []}}
-t("prior: пустой prior ничего не копирует",
-  A.apply_prior_period(chip2, empty_prior) is False and chip2["want"] == "count")
+t("prior: пустой prior → False",
+  A.apply_prior_period(chip2, empty_prior, _TODAY) is False and chip2["want"] == "count")
+
+canon_prior = {"want": "sum", "period": {"from": "2025-08-14", "to": "2026-08-14"},
+               "parse": {"assumed": ["period.from", "period.to"]}}
+chip3 = {"want": "count", "period": {}, "parse": {"assumed": []}}
+t("prior: канон-догадка prior не тащит год в пустой слот",
+  A.apply_prior_period(chip3, canon_prior, _TODAY) is False and chip3["period"] == {})
 
 _GAGG = dict(AGG, grain="group", col="Номенклатура", n_groups=80, max=36651.0,
              sum=46204.58,

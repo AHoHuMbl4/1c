@@ -5327,23 +5327,74 @@ def axis_focus_plan(focus, intent, measure_pick, match, preds, kid_pred, diag=No
     return ("clarify", payload, {s: live.get(s, 0) for s in payload})
 
 
-def apply_prior_period(intent, prior_intent):
-    """Слот периода из prior, если текущий пуст или целиком assumed. Не want."""
+def _day_ord(iso):
+    """YYYY-MM-DD → порядковый день, иначе None. Без календаря языка."""
+    try:
+        return int(time.mktime(time.strptime(str(iso), "%Y-%m-%d"))) // 86400
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def period_is_canon_guess(period, today):
+    """Канон-догадка по форме окна: to ≈ today и (год-от-today или Jan 1..to).
+
+    Не лексика и не parse.assumed. Известная коллизия: честный «~год → сегодня»
+    той же формы неотличим — слот для наследования пуст.
+    """
+    p = period or {}
+    fr, to = p.get("from"), p.get("to")
+    if not fr or not to:
+        return False
+    od_fr, od_to, od_today = _day_ord(fr), _day_ord(to), _day_ord(today)
+    if od_fr is None or od_to is None or od_today is None:
+        return False
+    if abs(od_to - od_today) > 1:
+        return False
+    span = od_to - od_fr
+    if 364 <= span <= 367:
+        return True
+    try:
+        _y, m, d = str(fr).split("-", 2)
+        if int(m) == 1 and int(d) == 1 and str(fr)[:4] == str(to)[:4]:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
+def period_slot_for_inherit(period, today):
+    """Слот периода для наследования: задан текстом (True) или пуст (False).
+
+    Пуст: нет from/to, либо окно — канон-догадка. Иначе задан текстом.
+    """
+    p = period or {}
+    fr, to = p.get("from"), p.get("to")
+    if not fr and not to:
+        return False
+    if fr and to and period_is_canon_guess(p, today):
+        return False
+    return True
+
+
+def apply_prior_period(intent, prior_intent, today=None):
+    """Слот периода из prior по форме окна, не по parse.assumed. Не want/ось/зерно.
+
+    1) текущий задан текстом → не трогать; 2) текущий пуст и prior задан текстом →
+    копировать period и assumed-метки периода; 3) prior пуст/канон-догадка → нет.
+    Датчик снятия фильтра (drop_assumed) — отдельно, здесь не меняется.
+    """
+    if not today:
+        today = time.strftime("%Y-%m-%d")
+    if period_slot_for_inherit(intent.get("period"), today):
+        return False
+    prior_p = (prior_intent or {}).get("period") or {}
+    if not period_slot_for_inherit(prior_p, today):
+        return False
     src = {}
-    for k, v in ((prior_intent or {}).get("period") or {}).items():
+    for k, v in prior_p.items():
         if k in ("from", "to") and v:
             src[k] = v
     if not src:
-        return False
-    cur = {}
-    for k, v in (intent.get("period") or {}).items():
-        if k in ("from", "to") and v:
-            cur[k] = v
-    assumed = set((intent.get("parse") or {}).get("assumed") or [])
-    edges = list(cur)
-    empty = not edges
-    all_assumed = bool(edges) and all(("period." + e) in assumed for e in edges)
-    if not (empty or all_assumed):
         return False
     intent["period"] = src
     parse = dict(intent.get("parse") or {})
@@ -5397,7 +5448,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     intent = parse_intent(question, today)
     period_from_prior = False
     if prior:
-        period_from_prior = apply_prior_period(intent, parse_intent(prior, today))
+        period_from_prior = apply_prior_period(intent, parse_intent(prior, today), today)
     preds = _predicates(intent)
     разбор = intent.get("parse") or {}
     diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind"),
