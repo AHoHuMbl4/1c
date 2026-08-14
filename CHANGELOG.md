@@ -1,9 +1,25 @@
 # Журнал изменений
 
-## 14.08: замок уточнения verify 1.1.2 + count_kind `[замер]` `[код]`
+## 14.08: замок уточнения verify 1.1.3 + count_kind `[замер]` `[код]`
 
-verify 1.1.2: before_tool_call замок clarify; mcp_ask без same question; serene_ask count_kind.
-Оффлайн: test-verify 83, test_compose 66, test_gate 106.
+Дефект: после clarify чип «Посчитай количество по книге» уходил в ask_1c с question
+первой фразы (сумма). CLARIFY_HINT велел «same question» — правило в тексте не держится.
+
+Код: замок на sessionKey в braine-verify (`rewriteAsk1cParams`): слот = label|focus|measure
+варианта → question замка + focus; иначе question = текущая фраза, focus не затирается;
+если focus из options замка — период замка одним полем того же вызова. `extractText`
+берёт MCP `structuredContent.result` (обёртка content.text OPTIONS не парсила — замок
+не ставился). `before_agent_run` пишет prompt без `askUrl`. CLARIFY_HINT без same
+question. `{count}` → `kind_word(src)`. Версия **1.1.3** (1.1.1 сожжена откатом чипов;
+1.1.2 выкатывался, но замок не ставился). Чипы WebUI не трогали.
+
+`[замер]` оффлайн: test-verify **85/0**, test_compose 66/0, test_gate 106/0.
+Живой `/ask` :8091: focus «Книга Продаж» «сколько записей позавчера» → count=19 без суммы;
+«какая сумма продаж позавчера» → 26579.05 по 19; «сколько продано позавчера» без focus →
+clarify. Веб-шлюз okna (`openclaw-gateway-web`, inspect 1.1.3, `before_tool_call` в typedHooks):
+clarify → чип «Посчитай количество по книге» → rewrite `action=release`
+`q=сколько продано позавчера Посчитай количество по книге focus=Книга Продаж` → **19**,
+не сумма; выбор «Книга Продаж» → `action=slot`. Telegram/дев/чипы/serenedb.service не трогали.
 
 ## 14.08: PARTIAL только при потере счёта выбранного источника `[замер]` `[код]`
 

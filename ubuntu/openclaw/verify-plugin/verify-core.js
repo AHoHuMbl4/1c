@@ -182,6 +182,25 @@ export function stripInternal(text) {
     .trim();
 }
 
+function unwrapMcpStructuredText(text) {
+  if (typeof text !== "string" || !text.startsWith("structuredContent:")) return "";
+  const i = text.indexOf("{");
+  if (i < 0) return "";
+  try {
+    const j = JSON.parse(text.slice(i));
+    return typeof j.result === "string" ? j.result : "";
+  } catch {
+    return "";
+  }
+}
+
+function mcpStructuredResult(o) {
+  const d = o && o.details;
+  if (d && d.structuredContent && typeof d.structuredContent.result === "string")
+    return d.structuredContent.result;
+  return "";
+}
+
 // достаём читаемый текст из результата MCP-инструмента произвольной формы
 export function extractText(result) {
   if (result == null) return "";
@@ -190,8 +209,23 @@ export function extractText(result) {
   if (Array.isArray(result)) return result.map(extractText).filter(Boolean).join("\n");
   if (typeof result === "object") {
     const o = result;
-    if (typeof o.text === "string") return o.text;
-    if (Array.isArray(o.content)) return o.content.map(extractText).filter(Boolean).join("\n");
+    const sc = mcpStructuredResult(o);
+    if (sc) return sc;
+    if (typeof o.text === "string") {
+      const inner = unwrapMcpStructuredText(o.text);
+      if (inner) return inner;
+      return o.text;
+    }
+    if (Array.isArray(o.content)) {
+      const parts = o.content.map((c) => {
+        if (c && typeof c.text === "string") {
+          const inner = unwrapMcpStructuredText(c.text);
+          if (inner) return inner;
+        }
+        return extractText(c);
+      }).filter(Boolean);
+      if (parts.length) return parts.join("\n");
+    }
     for (const k of ["result", "value", "data", "output", "message"]) {
       if (o[k] != null) {
         const t = extractText(o[k]);
@@ -273,7 +307,14 @@ export function rewriteAsk1cParams(params, prompt, lock) {
     if (matched.measure) p.measure = matched.measure;
     return { params: p, action: "slot" };
   }
-  p.question = prompt;
+  if (prompt) {
+    const pf = String(p.focus || "");
+    const sameThread = (lock.options || []).some(
+      (o) => o.focus && pf && normClarifyKey(o.focus) === normClarifyKey(pf));
+    p.question = (sameThread && lock.question)
+      ? (String(lock.question).trim() + " " + String(prompt).trim())
+      : prompt;
+  }
   return { params: p, action: "release" };
 }
 

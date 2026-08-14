@@ -160,13 +160,15 @@ export default definePluginEntry({
     // нужен для `before_agent_finalize`, где живёт числовая сверка.
     api.on("before_agent_run", async (event, ctx) => {
       const cfg = getCfg();
-      if (!cfg.askUrl) return;            // механизм выключен — переписку не читаем вовсе
       const sessKey = sessKeyOf(ctx, event) || (event && event.runId ? "run:" + event.runId : null);
-      if (!sessKey) return;
-      const q = (event && (event.prompt || event.input || "")) || "";
-      if (!q || typeof q !== "string") return;
-      prompts.set(sessKey, { at: Date.now(), text: q.slice(0, 2000) });
-      prune(prompts, cfg.refTtlMs);
+      if (sessKey) {
+        const q = (event && (event.prompt || event.input || "")) || "";
+        if (q && typeof q === "string") {
+          prompts.set(sessKey, { at: Date.now(), text: q.slice(0, 2000) });
+          prune(prompts, cfg.refTtlMs);
+        }
+      }
+      if (!cfg.askUrl) return;
     });
 
     api.on("before_tool_call", async (event, ctx) => {
@@ -202,7 +204,9 @@ export default definePluginEntry({
       refs.set(sessKey, merged);
       prune(refs, cfg.refTtlMs);
       if (isClarify(text, cfg.clarifyMarker)) {
-        const q = (event.params && event.params.question) || "";
+        const pr = event.params && typeof event.params === "object" ? event.params : {};
+        const q = String(pr.question || pr.q || "")
+          || ((prompts.get(sessKey) && prompts.get(sessKey).text) || "");
         const options = parseClarifyOptions(text);
         if (q && options.length) {
           clarifyLocks.set(sessKey, { at: Date.now(), question: q, options });

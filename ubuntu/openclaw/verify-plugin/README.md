@@ -10,7 +10,7 @@ braine («второго мозга»). Это требование владел
 сверяет **жёсткие числовые токены** исходящего сообщения с эталоном инструмента за этот же ход.
 Заземляет ОБА инструмента: факты `ask_1c` (braine) и числа `report_1c` (отчёты SereneDB).
 
-## Как работает (четыре хука)
+## Как работает (хуки)
 1. **`after_tool_call`** — когда бот зовёт MCP-инструмент (`ask_1c` **или** `report_1c`), захватываем
    его ответ как эталон хода. Ключ — **`ctx.sessionKey`** (у `message_sending` нет `runId`, а доставка
    идёт ПОСЛЕ `agent_end` → эталон нельзя терять; сбрасываем на новом `runId`, вызовы хода сливаются).
@@ -35,6 +35,11 @@ braine («второго мозга»). Это требование владел
    зачистку (у фото caption идёт мимо `content` хука `message_sending`). До 02.08 здесь звался
    только `stripInternal`, то есть подпись к графику — место, где числа и живут, — не сверялась
    с эталоном вообще.
+
+Плюс замок уточнения (14.08): `before_agent_run` кладёт текущий prompt; `before_tool_call`
+переписывает params `ask_1c` (слот / новый вопрос); `after_tool_call` ставит/снимает замок
+по маркеру `[CLARIFICATION NEEDED]` и строкам OPTIONS (текст — из MCP
+`structuredContent.result`); `session_end` снимает замок.
 
 Чистая логика — в `verify-core.js` (без зависимостей, тест `test-verify.mjs`).
 `index.js` — только подключение к хукам и состояние хода в памяти процесса.
@@ -67,9 +72,9 @@ braine («второго мозга»). Это требование владел
 
 ## Тест и установка
 ```bash
-node test-verify.mjs                 # оффлайн-юниты чистой логики (83 кейса, без базы и сети)
+node test-verify.mjs                 # оффлайн-юниты чистой логики (85 кейсов, без базы и сети)
 npm pack --pack-destination /tmp     # собрать tgz
-openclaw plugins install npm-pack:/tmp/openclaw-braine-verify-1.1.2.tgz --force
+openclaw plugins install npm-pack:/tmp/openclaw-braine-verify-1.1.3.tgz --force
 openclaw plugins inspect braine-verify --runtime --json   # проверить, что хуки зарегистрированы
 # включить: plugins.allow += "braine-verify"; plugins.entries.braine-verify.enabled = true
 ```

@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, evaluate, finalizeDecision, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseClarifyOptions, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, evaluate, extractText, finalizeDecision, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseClarifyOptions, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -430,7 +430,7 @@ t("clarify: prompt не из options → question текущий, release", () =
   const { params, action } = rewriteAsk1cParams({ question: "старое", focus: "Книга Продаж" },
     "Посчитай количество по книге", LOCK);
   assert.strictEqual(action, "release");
-  assert.strictEqual(params.question, "Посчитай количество по книге");
+  assert.strictEqual(params.question, "сколько продано позавчера Посчитай количество по книге");
   assert.strictEqual(params.focus, "Книга Продаж");
 });
 t("clarify: без замка → none", () => {
@@ -453,6 +453,26 @@ t("clarify: parse options из текста моста", () => {
 });
 t("clarify: normClarifyKey регистронезависим", () => {
   assert.strictEqual(normClarifyKey("Книга Продаж"), normClarifyKey("книга продаж"));
+});
+t("clarify: extractText из MCP structuredContent", () => {
+  const raw = "[CLARIFICATION NEEDED]\n\nOPTIONS:\n- Книга Продаж | focus=Книга Продаж\n- Реализация | focus=Реализация";
+  const toolResult = {
+    content: [{ type: "text", text: "structuredContent:\n{\n  \"result\": " + JSON.stringify(raw) + "\n}" }],
+    details: { structuredContent: { result: raw } },
+  };
+  const t = extractText(toolResult);
+  assert.strictEqual(parseClarifyOptions(t).length, 2);
+});
+
+
+t("clarify: release другой топик → только prompt", () => {
+  const lock = {
+    question: "сколько продано позавчера?",
+    options: [{ label: "Книга Продаж", focus: "Книга Продаж" }],
+  };
+  const { params, action } = rewriteAsk1cParams({ question: "x" }, "сколько контрагентов", lock);
+  assert.strictEqual(action, "release");
+  assert.strictEqual(params.question, "сколько контрагентов");
 });
 
 console.log(`\n${pass} tests passed`);
