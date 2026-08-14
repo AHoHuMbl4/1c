@@ -2192,7 +2192,12 @@ def measure_choice(names, word):
                    if sum(1 for m in same if m != n and m.startswith(n)) >= len(same) - 1]
         if len(base_of) == 1 and base_of[0].lower() != wl:
             return (base_of[0], [], 'base')
-        return (None, same, 'ask')
+        # Раз уж спрашиваем человека — показываются ВСЕ величины сущности, совпавшие
+        # со словом — первыми. Подстрока слепа к именованию базы: живой диалог okna
+        # 14.08 — на «сумму продаж» совпали только СуммаНДС и СуммаОплатыКарточкой,
+        # человек выбрал из двух неверных, а общий итог в этой базе зовётся «Всего»
+        # и в варианты не попал вовсе. Список короткий и приходит из данных.
+        return (None, same + [n for n in names if n not in same], 'ask')
     if len(same) == 1:
         return (same[0], [], 'substring')
     return (None, [], 'rerank')
