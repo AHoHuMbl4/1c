@@ -242,6 +242,38 @@ def _decrypt_chunks(base_id: str, pkg_id: str, manifest: dict, tmp: str) -> dict
     return out
 
 
+def _longest_raw_line(paths: list[str]) -> int:
+    """Длина самой длинной строки в файлах, в байтах. 0 — измерить не удалось.
+
+    Один последовательный проход блоками; сравнение делает bytes.split, то есть
+    работа идёт на скорости памяти, а не питоньего цикла (замер на 576 МБ чанков
+    klient-1 — 0,4 с). Считаются СЫРЫЕ строки: запись, разорванную переводом
+    строки внутри кавычек, счёт недооценит — этот запас добирается множителем
+    в _csv_source.
+    """
+    longest = 0
+    for p in paths:
+        try:
+            with open(p, "rb") as f:
+                carry = 0
+                while True:
+                    block = f.read(1 << 20)
+                    if not block:
+                        break
+                    parts = block.split(b"\n")
+                    if len(parts) == 1:
+                        carry += len(block)
+                        continue
+                    longest = max(longest, carry + len(parts[0]))
+                    for mid in parts[1:-1]:
+                        longest = max(longest, len(mid))
+                    carry = len(parts[-1])
+                longest = max(longest, carry)
+        except OSError:
+            return 0
+    return longest
+
+
 def _csv_source(paths: list[str]) -> str:
     """SELECT-источник read_csv с опциями контракта poc_load_entity (header,
     all_varchar, quote/escape, предел строки). Несколько чанков — UNION ALL.
@@ -253,11 +285,32 @@ def _csv_source(paths: list[str]) -> str:
     (живой случай okna-1 12.08, пакет 000002: 83 падения подряд, витрина пуста).
     Строка CSV не бывает длиннее своего файла, поэтому фактический размер чанка
     — честная верхняя граница без знания базы; env-потолок остаётся страховкой
-    от гигантского чанка."""
+    от гигантского чанка.
+
+    🔴 Одного размера файла НЕДОСТАТОЧНО, и это стоило простоя (klient-1 14.08,
+    пакет 000003). Буфер берётся НА КАЖДЫЙ read_csv в UNION ALL, поэтому сущность
+    из 18 чанков по 32 МБ просит 16 × 32 МБ × 18 = 9,2 ГБ при memory_limit
+    9,3 ГиБ — «could not allocate block» на каждом такте, 40 минут падений.
+    Мельче резать чанки бесполезно: общий буфер = 16 × объём сущности и от
+    нарезки не зависит (мельче чанк — больше читателей). Поэтому предел
+    считается по ФАКТУ, самой длинной строке: в том же чанке 6668 строк на
+    32 МБ, то есть ~4,8 КБ на строку — завышение было в тысячи раз."""
     line_cap = PACKET_APPLY_CSV_MAX_LINE
     sizes = [os.path.getsize(p) for p in paths if os.path.exists(p)]
     if sizes:
         line_cap = min(line_cap, max(sizes) + 4096)
+    # Множитель ×8 — запас на запись, разорванную переводами строк внутри
+    # кавычек (_longest_raw_line их не видит); пол 1 МиБ — чтобы не уйти ниже
+    # разумного (умолчание движка 2 МБ). Ошибка в меньшую сторону безопасна:
+    # читатель скажет «строка не влезла» громко, и потолок поднимается ключом
+    # PACKET_APPLY_CSV_MAX_LINE. Ошибка в большую — то самое падение по памяти.
+    longest = _longest_raw_line([p for p in paths if os.path.exists(p)])
+    if longest > 0:
+        line_cap = min(line_cap, max(longest * 8, 1 << 20))
+    if sizes and 16 * line_cap * len(paths) > (1 << 30):
+        _log("apply ВНИМАНИЕ буфер читателей ~%.1f ГиБ (%d чанков, предел строки "
+             "%d Б) — возможен отказ по памяти движка"
+             % (16 * line_cap * len(paths) / (1 << 30), len(paths), line_cap))
     opts = ("header=true, all_varchar=true, quote='\"', escape='\"', "
             "maximum_line_size=%d" % line_cap)
     reads = ["SELECT * FROM read_csv(%s, %s)" % (_lit(p), opts) for p in paths]

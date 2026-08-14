@@ -129,6 +129,37 @@ finally:
 check("read_csv: файла нет — остаётся env-потолок",
       _line_cap_of(_A._csv_source([os.path.join(_csvdir, "нет.csv")]))
       == _A.PACKET_APPLY_CSV_MAX_LINE)
+
+# 🔴 Одного размера файла мало: буфер берётся НА КАЖДЫЙ read_csv в UNION ALL,
+# поэтому сущность из многих крупных чанков просит 16 × размер × число чанков.
+# Живой случай klient-1 14.08: 18 чанков по 32 МБ = 9,2 ГБ при пределе 9,3 ГиБ,
+# apply падал каждые 2 минуты. Предел строки обязан считаться по ФАКТУ.
+_many = []
+for _i in range(5):
+    _p = os.path.join(_csvdir, "many%d.csv" % _i)
+    with open(_p, "wb") as _f:
+        _f.write(b"h\n" + (b"z" * 1000 + b"\n") * 3000)   # 3 МБ, строки по 1 КБ
+    _many.append(_p)
+_cap_many = _line_cap_of(_A._csv_source(_many))
+check("read_csv: предел строки считается по факту, а не по размеру файла",
+      _cap_many < os.path.getsize(_many[0]),
+      "предел %d, файл %d" % (_cap_many, os.path.getsize(_many[0])))
+check("read_csv: буфер многочанковой сущности удержан (klient-1 14.08)",
+      16 * _cap_many * len(_many) < 100 * 1024 * 1024,
+      "буфер %.1f МиБ" % (16 * _cap_many * len(_many) / 1048576))
+check("read_csv: пол предела — 1 МиБ (умолчание движка 2 МБ)",
+      _cap_many == 1024 * 1024, "предел %d" % _cap_many)
+
+_long = os.path.join(_csvdir, "long.csv")
+with open(_long, "wb") as _f:                      # одна строка 300 КБ + 3 МБ мелких:
+    _f.write(b"h\n" + b"w" * (300 * 1024) + b"\n"  # файл заведомо больше, чем строка×8,
+             + (b"w" * 1000 + b"\n") * 3000)       # иначе победит граница по файлу
+check("read_csv: длинная строка поднимает предел выше пола",
+      _line_cap_of(_A._csv_source([_long])) == 300 * 1024 * 8)
+check("_longest_raw_line: длина считается через границу блока чтения",
+      _A._longest_raw_line([_long]) == 300 * 1024)
+check("_longest_raw_line: файла нет — 0, работает прежняя граница",
+      _A._longest_raw_line([os.path.join(_csvdir, "нет.csv")]) == 0)
 shutil.rmtree(_csvdir, ignore_errors=True)
 
 
