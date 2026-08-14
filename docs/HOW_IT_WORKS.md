@@ -1440,9 +1440,12 @@ sole == picked).
 `doc_date` — когда случился факт. На строке есть Date/Period платформы — берётся она.
 Колонки нет, но `search_tables.parent` не пуст — дата родителя тем же контрактом ключа,
 что `children_by_parent`: `split_part(child.row_key,'|',1) = parent.row_key`. Своя дата
-на строке не затирается. Один `UPDATE … FROM` в `corpus_merge.sql` после переноса корпуса,
-до `VACUUM (REFRESH_INDEX) search_idx` (дата в INCLUDE индекса). Вектор не сбрасывается:
-дата не входит в отпечаток.
+на строке не затирается. В `corpus_merge.sql` после переноса корпуса: источник
+материализуется в `tmp3_child_date`, затем `UPDATE … FROM` этой таблицы
+(доки sql/statements/update#update-from-other-table). На 26.07.3
+`UPDATE ch FROM search_corpus par` на 441k рвёт соединение (`HOW_NOT_TO §1.65`).
+До `VACUUM (REFRESH_INDEX) search_idx` (дата в INCLUDE индекса). Вектор не
+сбрасывается: дата не входит в отпечаток.
 
 Условие по периоду сравнивает `doc_date`. После наследования без даты остаются сироты
 (ключ шапки в корпусе не найден) либо родитель сам без даты. Их число (`undated`) —

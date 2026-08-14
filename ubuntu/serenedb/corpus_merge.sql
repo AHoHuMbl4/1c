@@ -167,17 +167,20 @@ COMMIT;
 -- Своя дата на строке не затирается (`ch.doc_date IS NULL`). Родитель — из
 -- `search_tables.parent`. Контракт ключа тот же, что `children_by_parent` в
 -- `serene_ask.py`: `split_part(child.row_key,'|',1) = parent.row_key`.
--- Штатно: UPDATE FROM other table (доки sql/statements/update#update-from-other-table);
--- цель и источник — одна таблица, поэтому разные алиасы (Update from Same Table).
--- Вектор не сбрасывается: дата не входит в отпечаток (комментарий у MERGE выше).
+-- Штатно: UPDATE FROM other table (доки sql/statements/update#update-from-other-table).
+-- Цель и источник — одна таблица: на 26.07.3 `UPDATE ch FROM search_corpus par`
+-- на 441k строках рвёт соединение за 2 с (замер 14.08 okna). Доки «Same Table»
+-- дают correlated subquery; живой путь — материализовать источник в ДРУГУЮ
+-- таблицу, затем UPDATE FROM неё. `-c` несколько команд DDL не видит;
+-- `psql -f` в одном файле — видит. Вектор не сбрасывается.
 --
 -- Инкремент: дети родителей, у которых в этом такте сменилась дата шапки
 -- (родитель в `tmp3_build`), и у которых своей колонки Date/Period нет
 -- (нет строки в `tmp3_datecol`). Иначе правка Date документа не доедет до строк.
 -- Доки: sql/statements/update#update-from-other-table
-UPDATE search_corpus AS ch
-   SET doc_date = par.doc_date
-  FROM search_tables AS m, search_corpus AS par
+CREATE OR REPLACE TABLE tmp3_child_date AS
+SELECT ch.src_table, ch.row_key, par.doc_date
+  FROM search_corpus AS ch, search_tables AS m, search_corpus AS par
  WHERE m.src_table = ch.src_table
    AND m.parent IS NOT NULL
    AND par.src_table = m.parent
@@ -191,6 +194,12 @@ UPDATE search_corpus AS ch
           AND ch.doc_date IS DISTINCT FROM par.doc_date
         )
    );
+UPDATE search_corpus AS ch
+   SET doc_date = t.doc_date
+  FROM tmp3_child_date AS t
+ WHERE ch.src_table = t.src_table
+   AND ch.row_key = t.row_key;
+DROP TABLE tmp3_child_date;
 
 -- ============ 3. ПУБЛИКАЦИЯ ПОИСКУ ============
 -- Именно REFRESH_INDEX (один индекс), а НЕ REFRESH_TABLE: последний на таблице с вектором
