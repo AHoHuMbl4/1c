@@ -128,8 +128,84 @@ def decide_grain(axes, kind_hits, term_hits, compute=None, is_child=False,
         if is_child and len(cols) > 1:
             return {"grain": "row", "col": None, "form": "number",
                     "named_gis": [], "clarify": "axis"}
+        if rank_intent and not cols:
+            # Рейтинг без колонки оси: не grain=row с именем из строки как «лидером».
+            return {"grain": "row", "col": None, "form": "rank",
+                    "named_gis": [], "clarify": None}
     return {"grain": "row", "col": None, "form": "number",
             "named_gis": [], "clarify": None}
+
+
+def no_axis_member(dec):
+    """form=rank|compare без колонки оси — итог множества, не объект-имя из строки."""
+    dec = dec or {}
+    return (dec.get("form") in ("rank", "compare")
+            and not (dec.get("col") or "").strip())
+
+
+def rank_fold_choice(measure, names, totals, orders=None, n_rows=None):
+    """Рейтинг без выбранного поля: при живых nums у источника fold=count строк молча не берётся.
+
+    Кандидаты — имена полей из nums плюс счёт строк, если он материально другой
+    (итоги или порядок групп расходятся). Как measure_ambiguous: разные ответы →
+    уточнение. Пустой measure в alts — счёт строк (fold=count), не словарь слов.
+    """
+    if measure:
+        return measure, []
+    names = [n for n in (names or []) if n]
+    if not names:
+        return None, []
+    COUNT = ""
+    totals = dict(totals or {})
+    orders = dict(orders or {})
+    candidates = list(names)
+
+    def _tot(m):
+        if m == COUNT:
+            if n_rows is None:
+                return None
+            try:
+                return float(n_rows)
+            except (TypeError, ValueError):
+                return None
+        try:
+            return float(totals.get(m))
+        except (TypeError, ValueError):
+            return None
+
+    def _ord(m):
+        if m not in orders:
+            return None
+        return tuple(orders[m])
+
+    if n_rows is not None:
+        nr = _tot(COUNT)
+        different = False
+        if nr is None:
+            different = True
+        else:
+            for n in names:
+                t = _tot(n)
+                if t is None or t != nr:
+                    different = True
+                o, oc = _ord(n), _ord(COUNT)
+                if o is not None and oc is not None and o != oc:
+                    different = True
+        if different:
+            candidates = names + [COUNT]
+            totals[COUNT] = n_rows
+
+    if len(candidates) == 1:
+        return candidates[0], []
+    tot_seen, ord_seen = set(), set()
+    for c in candidates:
+        tot_seen.add(_tot(c))
+        o = _ord(c)
+        if o is not None:
+            ord_seen.add(o)
+    if len(tot_seen) > 1 or len(ord_seen) > 1:
+        return None, candidates
+    return candidates[0], []
 
 
 def asks_movement_magnitude(want, measure_word="", amount=None,

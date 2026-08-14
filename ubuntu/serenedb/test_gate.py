@@ -427,15 +427,17 @@ t("F250: настоящая дата по-прежнему дата, а не ч�
 t("F250: день вне календаря не заземляется чужой датой",
   not A.gate("значение 45.99", [row(when="2019-11-18")], None, [])[0])
 
-# Зерно group: max одной строки не проходит как итог товара; сумма группы — проходит.
+# Зерно group: max одной строки не проходит; лидер группы — проходит; sum = итог множества.
 _gagg = {"count": 542, "n_groups": 80, "grain": "group", "col": "Номенклатура",
-         "sum": 46204.58,
-         "groups": [{"name": "Balama Rollenband", "value": 46204.58, "count": 4}]}
-_grow = row(amount="36651.00", doc="Balama Rollenband | 100 шт. док. 5011")
+         "sum": 681990.12, "leader": 46204.58,
+         "groups": [{"name": "Alpha", "value": 46204.58, "count": 4}]}
+_grow = row(amount="36651.00", doc="Alpha | 100 шт. док. 5011")
 t("group: 36651 строки как товар за неделю не проходит",
-  not A.gate("Balama за неделю 36 651", [_grow], _gagg, [])[0])
-t("group: сумма группы 46 204.58 проходит",
-  A.gate("Balama за неделю 46 204.58", [], _gagg, [])[0])
+  not A.gate("Alpha за неделю 36 651", [_grow], _gagg, [])[0])
+t("group: лидер 46 204.58 проходит при другом sum",
+  A.gate("Alpha за неделю 46 204.58", [], _gagg, [])[0])
+t("group: итог множества 681 990.12 проходит",
+  A.gate("за неделю 681 990.12", [], _gagg, [])[0])
 t("group: max строки в r[2] белым списком не является",
   not A.gate("Итого 36 651", [_grow], _gagg, [])[0])
 t("A1 row-sum не сломан: 28 356.37 при money=True проходит",
@@ -443,6 +445,17 @@ t("A1 row-sum не сломан: 28 356.37 при money=True проходит",
 t("group: день периода из our_dates не режет ответ",
   A.gate("С 7 по 14 августа лидер 46 204.58", [], _gagg, [],
          ["2026-08-07", "2026-08-14"], True)[0])
+import serene_axis as _AX
+fld, alts = _AX.rank_fold_choice("", ["Qty", "Amt"],
+                                 {"Qty": 100.0, "Amt": 200.0},
+                                 {"Qty": ["a", "b"], "Amt": ["b", "a"]},
+                                 n_rows=15)
+t("rank_fold: два поля разный порядок → уточнение, не молча count",
+  fld is None and {a for a in alts} >= {"Qty", "Amt", ""})
+fld2, alts2 = _AX.rank_fold_choice("", ["Qty"], {"Qty": 15.0},
+                                   {"Qty": ["x"]}, n_rows=15)
+t("rank_fold: одно поле = счёту строк → взять поле",
+  fld2 == "Qty" and not alts2)
 
 print("\n%d проверок пройдено" % PASS)
 if FAIL:

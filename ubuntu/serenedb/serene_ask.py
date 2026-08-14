@@ -2451,6 +2451,10 @@ def compose_slot_values(agg, measure=None, folders=0, money=None):
         for k in keys:
             if agg.get(k) is not None:
                 slots[k] = agg[k]
+    if agg.get("grain") == "group":
+        lead = _group_leader(agg)
+        if lead is not None:
+            slots["leader"] = lead
     if agg.get("grain") == "group" and agg.get("n_groups") is not None:
         ng, shown = agg["n_groups"], len(agg.get("groups") or [])
         if ng > shown:
@@ -3317,6 +3321,18 @@ def resolve_member_names(src_table, col, groups, gis, target_src=""):
     return found or names
 
 
+def _group_leader(agg):
+    """Значение первой группы после ORDER — лидер, не итог множества."""
+    if not agg or agg.get("grain") != "group":
+        return None
+    if agg.get("leader") is not None:
+        return agg["leader"]
+    gs = agg.get("groups") or []
+    if not gs:
+        return None
+    return gs[0].get("value")
+
+
 def _group_fold(compute, measure):
     """Внутри группы: сумма меры (или счёт строк). max/min — порядок групп, не строка."""
     if (compute or "") == "count" or not measure:
@@ -3330,7 +3346,9 @@ def aggregate_groups(src_table, match, preds, measure, col, k, compute=None,
                      members=None):
     """GROUP BY оси ссылки. Тот же WHERE, что у aggregate. Без выгрузки строк.
 
-    n_groups — по всему множеству, не K. members — ровно эти ключи, без «топ остальных».
+    n_groups — по всему множеству, не K. sum — итог свёртки по всему base
+    (stats.fold_sum), не значение первой группы. Лидер — поле leader.
+    members — ровно эти ключи, без «топ остальных».
     """
     if not src_table or not col:
         return None
@@ -3377,7 +3395,7 @@ def aggregate_groups(src_table, match, preds, measure, col, k, compute=None,
         "  WHERE %(w)s AND %(nf)s"
         "), stats AS ("
         "  SELECT count(*) AS n_rows, count(DISTINCT g) AS n_groups,"
-        "         count(d) AS n_amt FROM base"
+        "         count(d) AS n_amt, sum(d) AS fold_sum FROM base"
         "), folded AS ("
         "  SELECT g, count(*) AS n, sum(d) AS s, min(d) AS mn, max(d) AS mx,"
         "         CASE WHEN count(d) > 0 THEN sum(d) / count(d) END AS a,"
@@ -3386,7 +3404,7 @@ def aggregate_groups(src_table, match, preds, measure, col, k, compute=None,
         "  FROM base WHERE %(mem)s GROUP BY g"
         ") "
         "SELECT f.g, f.n, f.s, f.mn, f.mx, f.a, f.n_amt, f.oor, "
-        "       st.n_rows, st.n_groups, st.n_amt "
+        "       st.n_rows, st.n_groups, st.n_amt, st.fold_sum "
         "FROM folded f, stats st "
         "ORDER BY %(ord)s %(dir)s NULLS LAST, f.g "
         "LIMIT %(k)d"
@@ -3400,11 +3418,13 @@ def aggregate_groups(src_table, match, preds, measure, col, k, compute=None,
     groups = []
     n_rows = n_groups = n_amt_all = 0
     oor = 0
+    fold_sum = None
     for row in rs or []:
-        row = list(row) + [None] * (11 - len(row))
+        row = list(row) + [None] * (12 - len(row))
         n_rows = int(row[8] or 0)
         n_groups = int(row[9] or 0)
         n_amt_all = int(row[10] or 0)
+        fold_sum = _numN(row[11])
         oor += int(row[7] or 0)
         val = _numN(row[2]) if fold == "sum" else (
             _numN(row[5]) if fold == "avg" else int(row[1] or 0))
@@ -3414,8 +3434,14 @@ def aggregate_groups(src_table, match, preds, measure, col, k, compute=None,
                        "sum": _numN(row[2]), "avg": None if _numN(row[5]) is None
                        else round(_numN(row[5]), 2)})
     leader = groups[0]["value"] if groups else None
+    if fold == "sum":
+        total = fold_sum
+    elif fold == "avg" and fold_sum is not None and n_amt_all:
+        total = round(fold_sum / n_amt_all, 2)
+    else:
+        total = None
     return {"count": n_rows, "n_groups": n_groups, "groups": groups,
-            "sum": leader if fold != "count" else None,
+            "sum": total, "leader": leader,
             "min": None, "max": None, "avg": None,
             "count_amount": n_amt_all,
             "src": src_table, "measure": measure, "out_of_range": oor,
@@ -3619,6 +3645,9 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
     if (agg or {}).get("grain") == "group":
         for k in ("max", "min"):
             known.pop(k, None)
+        lead = _group_leader(agg)
+        if lead is not None:
+            known["leader"] = lead
     # Числа неполноты (`{missing}`, `{in_1c}`, `{in_search}`) — такие же места, как итоги:
     # они посчитаны переписью, и списывать их модели тоже неоткуда. Кладутся ПОСЛЕ снятия
     # величин, иначе отсутствие выбранной величины уносило бы и предупреждение о потере.
@@ -3653,9 +3682,10 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
                         break
             if got is None and (agg or {}).get("grain") == "group":
                 got = _group_value_by_name(agg, name)
-        elif ((agg or {}).get("grain") == "group" and role in ("max", "min", "avg")):
-            # Лидер группы (agg.sum), не max/min одной строки корпуса.
-            got = known.get("sum")
+        elif ((agg or {}).get("grain") == "group"
+              and role in ("max", "min", "avg", "leader")):
+            # Лидер рейтинга (groups[0]), не итог множества и не max строки.
+            got = known.get("leader")
         else:
             got = known.get({"total": "sum"}.get(role, role))
         # 🔴 ПУСТОЕ ЗНАЧЕНИЕ — ТАКОЙ ЖЕ ОТКАЗ, КАК ОТСУТСТВУЮЩЕЕ. У сущности может не быть
@@ -4442,9 +4472,8 @@ def asked_figure_missing(text, agg, want, has_measure, folders=0):
         need = agg.get("sum")
     else:
         need = None
-    if (need is None and (agg or {}).get("grain") == "group" and has_measure
-            and agg.get("sum") is not None):
-        need = agg.get("sum")
+    if (need is None and (agg or {}).get("grain") == "group" and has_measure):
+        need = _group_leader(agg)
     if need is not None:
         have = _norm_numbers(text)
         nf = float(need)
@@ -4631,6 +4660,7 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True):
         if group_grain:
             allow(agg.get("sum"))
             allow(agg.get("n_groups"))
+            allow(agg.get("leader"))
             for g in agg.get("groups") or []:
                 allow(g.get("value"))
                 allow(g.get("count"))
@@ -7172,6 +7202,67 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 "diag": dict(diag, sec=round(time.time() - t0, 2),
                              reason="уточните ось группы")}
 
+    if (serene_axis and grain_dec.get("form") in ("rank", "compare")
+            and not measure):
+        _rn = [m for m, v, mx, mn in (totals or [])]
+        if not _rn:
+            _rn = measures_of(src)
+        if _rn:
+            _qt = {m: v for m, v, mx, mn in (totals or [])}
+            _nr = None
+            try:
+                _srcq = INDEX if match else CORPUS
+                _wq = [w for w in ([match] + list(preds or [])
+                                   + ["src_table = %s" % lit(src)]) if w]
+                _nfq = ("NOT coalesce(map_extract_value(flags, "
+                        "'IsFolder'), false)")
+                _cq = psql("SELECT count(*) FROM %s WHERE %s AND %s"
+                           % (_srcq, " AND ".join(_wq), _nfq))
+                _nr = int(_cq[0][0]) if _cq and _cq[0] else None
+            except (RuntimeError, TypeError, ValueError, IndexError):
+                _nr = None
+            measure, _rank_alts = serene_axis.rank_fold_choice(
+                measure, _rn, _qt, n_rows=_nr)
+            if _rank_alts:
+                names = [m for m in _rank_alts if m]
+                try:
+                    diag["measure_totals"] = {
+                        m: v for m, v, _mx, _mn
+                        in totals_of(src, match, preds, names)}
+                except RuntimeError:
+                    pass
+                if _nr is not None and "" in _rank_alts:
+                    diag.setdefault("measure_totals", {})[""] = _nr
+                diag["measure_ambiguous"] = _rank_alts
+                try:
+                    _lab = psql("SELECT label FROM %s WHERE src_table = %s "
+                                "LIMIT 1" % (TABLES, lit(src)))
+                    _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
+                except RuntimeError:
+                    _ent = ""
+                _caps = measure_captions(names, measure_aliases_of(src))
+                opts = []
+                for m in _rank_alts:
+                    if m:
+                        opts.append({"src": src, "measure": m,
+                                     "label": _caps[m], "distinct_by": "",
+                                     "entity_label": _ent})
+                    elif _nr is not None:
+                        opts.append({"src": src, "measure": "",
+                                     "label": _fmt(_nr), "distinct_by": "",
+                                     "entity_label": _ent})
+                return {"partial": cut or None, "kind": "clarify",
+                        "text": clarify_say(question, opts, diag)
+                                or ", ".join("«%s»" % o["label"]
+                                             for o in opts),
+                        "options": opts, "sources": [src],
+                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+            if measure:
+                diag["measure"] = measure
+                for e in _num_pred(intent, measure):
+                    if e not in preds:
+                        preds.append(e)
+
     if grain_dec.get("grain") == "group" and grain_dec.get("col") and serene_axis:
         _col = grain_dec["col"]
         _named = grain_dec.get("named_gis") or []
@@ -7215,6 +7306,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             return {"partial": cut or None, "kind": "no_data",
                     "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                     "diag": dict(diag, sec=round(time.time() - t0, 2))}
+    elif serene_axis and serene_axis.no_axis_member(grain_dec):
+        rows = []
+        agg = aggregate(src, match, preds, measure)
+        if not agg or not agg.get("count"):
+            act = empty_after_period_action(intent)
+            if act == "drop_assumed":
+                intent, preds = drop_period_preds(intent, preds)
+                diag["period_assumed_dropped"] = True
+                agg = aggregate(src, match, preds, measure)
+                act = empty_after_period_action(intent)
+            if (not agg or not agg.get("count")) and act != "empty_period":
+                return {"partial": cut or None, "kind": "no_data",
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "sources": [],
+                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
     else:
         rows = rows_of(src, match, preds, TOPK, measure)
         if not rows:

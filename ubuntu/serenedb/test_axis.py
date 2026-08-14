@@ -136,6 +136,28 @@ t("два держателя → clarify, не no_data",
 t("держателей нет → keep (честный путь каталога)",
   X.decide_axis_focus(True, False, []) == ("keep", None))
 
+
+# Рейтинг без оси: form=rank, не имя из строки как «лидер».
+dec = X.decide_grain([], [], {}, None, True, True)
+t("нет оси + rank_intent → form=rank grain=row без col",
+  dec["grain"] == "row" and dec["form"] == "rank" and not dec.get("col")
+  and X.no_axis_member(dec))
+t("нет оси + max без rank → form=number (экстремум документа)",
+  X.decide_grain([], [], {}, "max", False)["form"] == "number"
+  and not X.no_axis_member(X.decide_grain([], [], {}, "max", False)))
+fld, alts = X.rank_fold_choice("", ["Qty", "Amt"],
+                               {"Qty": 524.0, "Amt": 9000.0},
+                               {"Qty": ["a", "b"], "Amt": ["b", "a"]},
+                               n_rows=15)
+t("rank_fold_choice: разные итоги/порядки → уточнение",
+  fld is None and {a for a in alts} >= {"Qty", "Amt", ""})
+fld, alts = X.rank_fold_choice("Qty", ["Qty", "Amt"], {"Qty": 1}, n_rows=10)
+t("rank_fold_choice: мера уже задана → без кандидатов",
+  fld == "Qty" and not alts)
+fld, alts = X.rank_fold_choice("", ["Qty"], {"Qty": 15.0}, n_rows=15)
+t("rank_fold_choice: одно поле = счёту строк → взять поле",
+  fld == "Qty" and not alts)
+
 print("\nИТОГ: ok %d, FAIL %d" % (PASS, len(FAIL)))
 if FAIL:
     print("ПРОВАЛЕНО: %s" % "; ".join(FAIL))

@@ -1,5 +1,31 @@
 # Журнал изменений
 
+## 14.08: sum группы = итог множества; рейтинг без меры не count; нет оси — нет имени-лидера `[замер]` `[код]`
+
+Инвариант: цифра верна для своей роли. Лидер ≠ итог множества. Счёт строк ≠
+сумма поля количества. Имя из текста строки ≠ объект оси, если оси нет.
+
+`[код]` `aggregate_groups`: CTE `stats` — `sum(d) AS fold_sum` по всему base;
+`agg.sum` = fold_sum (fold=sum) / n_rows (count); `agg.leader` = groups[0].value.
+compose/figures/gate: `{total}`/`sum` = итог; лидер — `leader`/`groups[0]`.
+`rank_fold_choice` (serene_axis): form=rank|compare без measure при живых nums —
+уточнение из имён полей + счёт строк, если материально другой. `decide_grain`:
+rank_intent без cols → form=rank grain=row без col; `no_axis_member` → ответ
+итогом множества, без имени из строки. grain=row / prior / passport / focus-ось /
+PARTIAL / 1.1.4 / INTENT/ANSWER — не этот коммит.
+
+`[замер]` оффлайн: test_axis **41/0**, test_compose **82/0**, test_gate **114/0**,
+test_axis_focus **15/0**. Живой POST `:8091` `1c-serene-ask@postgres`, md5 ask
+`98d324ae`. Рейтинг 10–14 + Количество: лидер toc iS **524** (не Transmisie 15),
+`figures.sum` **8094.88** ≠ лидер. Без меры: clarify из nums (+ счёт **413**),
+не молча count. Топ-7 за 8 дней + Количество: лидер Stift **1104**,
+`figures.sum` **16800.88** (не 1104). Книга 10–14 + СуммаБезНДС: **122244.80**/56,
+без VEFASISTEM. focus=номенклатура + сумма: лидер Balama **46204.58**,
+итог множества **681990.12**. row сумма недели **681990.12**/542. каталог
+**2381**. книга позавчера **19**. `emb IS NULL` **23432**. Restart только
+`1c-serene-ask@postgres`. Доки: Sql › Query syntax › GROUP BY; Cookbook ›
+Search › Aggregate what matched.
+
 ## 14.08: наследование периода по форме окна, не по assumed `[замер]` `[код]`
 
 Инвариант: чип без дат после явного дня оставляет тот день; фраза с другим

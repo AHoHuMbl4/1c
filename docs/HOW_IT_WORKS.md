@@ -1466,10 +1466,17 @@ question того вызова и `options[]` (label/focus/measure как отд
 
 Карта `refs_map` собирается тем же SQL, что `nums`. Справочник осей
 `search_refcols` (src_table, col, target_src) — из метаданных, без имён конфигурации.
-Kind сводится к `target_src` как выбор сущности. Нет оси — зерно row; рейтинг «каких X»
-без оси не выдаётся. Счёт — один `GROUP BY map_extract_value` в базе
-(доки: Sql › Query syntax › GROUP BY; Cookbook › Search › Aggregate what matched).
-`n_groups` — по всему множеству, не K; если больше показанного — видно клиенту (п. 13).
+Kind сводится к `target_src` как выбор сущности. Нет оси (`search_refcols` пуст /
+колонки нет) при form=rank|compare — зерно row без объекта-имени из текста строки:
+итог множества, паспорт без оси; имя из строки не «лидер». Счёт — один
+`GROUP BY map_extract_value` в базе (доки: Sql › Query syntax › GROUP BY;
+Cookbook › Search › Aggregate what matched). В том же запросе CTE `stats` даёт
+`fold_sum` / `n_rows` по всему `base` (не LIMIT K): при grain=group поле `sum` —
+итог множества, `leader` — значение первой группы после ORDER. `{total}`/`figures.sum`
+= итог; лидер — `groups[0]` или слот `leader`. Рейтинг без выбранной меры при живых
+nums не молчит count строк: `rank_fold_choice` (как `measure_ambiguous`) — уточнение
+из имён полей + счёт строк, если он материально другой. `n_groups` — по всему
+множеству, не K; если больше показанного — видно клиенту (п. 13).
 
 Focus, который `resolve_focus` свёл к каталогу из `search_refcols.target_src`, —
 имя **оси**, не источник, пока вопрос не про записи самого справочника
