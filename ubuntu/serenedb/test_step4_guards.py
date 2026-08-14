@@ -177,6 +177,30 @@ t("want=sum + поле — деньги есть (A1 цел)",
   A.answer_money("sum", None, "Всего") is True)
 t("want=count + compute=count + поле — денег нет",
   A.answer_money("count", "count", "Всего") is False)
+
+# JSON человеку vs diag: два места, не вызов /ask и не копия моста.
+import inspect as _ins
+_ans = _ins.getsource(A.answer)
+_after = _ans.split("money = answer_money", 1)[1]
+_m = "Всего"
+t("смесь: JSON пустой при живом поле (закон OR)",
+  A.answer_money("count", "sum", _m) is False and bool(_m))
+t("гигиена: say_measure от money, counting_rows снят",
+  "say_measure = measure if money else None" in _after
+  and "counting_rows" not in _after)
+t("JSON kind=answer: measure = say_measure, не сырое поле",
+  '"measure": say_measure' in _after
+  and '"completeness": cov, "measure": measure' not in _after)
+t("diag.measure — сырое поле, не say_measure",
+  'diag["measure"] = measure' in _ans
+  and 'diag["measure"] = say_measure' not in _ans)
+t("want=sum: JSON имя останется (A1 на сумме)",
+  A.answer_money("sum", "sum", _m) is True)
+t("agg.measure не гасится",
+  '"measure": measure' in _ins.getsource(A.aggregate))
+t("options[].measure не гасится",
+  '"measure": m' in _ans)
+
 t("count+поле: отпечаток без суммы, 19=19 не расхождение",
   A.answers_diverge([
       A.compose_slot_values({"count": 19, "sum": 112325.97}, measure="Всего",

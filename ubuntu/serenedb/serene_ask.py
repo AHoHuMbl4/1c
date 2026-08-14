@@ -6219,7 +6219,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # отвергался собственной проверкой и уходил в `figures`. Ровно тот дефект проверки,
     # который п. 21 называет дефектом, а не осторожностью. `folders` посчитан базой тем же
     # запросом, что и `count`, — обоснован по построению.
-    counting_rows = (plan.get("compute") == "count") or (intent.get("want") == "count")
     money = answer_money(intent.get("want"), plan.get("compute"), measure)
     extra_vals = _filter_values(intent) + (
         [x for t in (totals or []) for x in t[1:]] if money else []) \
@@ -6229,7 +6228,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Границы периода отбора — на тех же правах, но по датной ветке гейта.
     our_dates = _filter_dates(intent)
     # Оговорки к ответу — в промт, а не приписью после: язык берётся из вопроса.
-    say_measure = measure if (measure and not counting_rows) else None
+    say_measure = measure if money else None
     n_folders = (agg or {}).get("folders") or 0
     totals_shown = totals if money else []
     raw = compose(question, rows, agg, totals=totals_shown, coverage=cov,
@@ -6389,8 +6388,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # оговорок разрешены гейту, то есть не будут отвергнуты как выдумка. Смысл прежний:
     # папка — не запись и в счёт не идёт, но человек, знающий про 252 строки, обязан
     # понять, откуда 227 (п. 13: молчаливая потеря — дефект).
+    # Поле человеку — то же say_measure, что compose: на count пусто, даже если
+    # словарь свёл колонку. Иначе мост допишет [величина: ИМЯ] без числа.
+    # diag.measure выше — сырое поле; живой обход читает его, не этот ключ.
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
-            "completeness": cov, "measure": measure,
+            "completeness": cov, "measure": say_measure,
             # 🔴 ПОСЧИТАННЫЕ ЧИСЛА — ПОЛЕМ ОТВЕТА, А НЕ ТОЛЬКО ВНУТРИ ТЕКСТА (03.08).
             # Их читает арбитр-детектор (задача 17): чтобы сравнить ответы кандидатов, он
             # обязан сравнивать ЧИСЛА, посчитанные базой, а не разбирать прозу модели.

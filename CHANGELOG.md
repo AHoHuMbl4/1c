@@ -1,5 +1,30 @@
 # Журнал изменений
 
+## 14.08: JSON measure = say_measure, diag.measure сырой `[замер]` `[код]`
+
+Дыра после A2: compose и гейт уже без денег на count, а ключ ответа
+`"measure"` нёс сырое поле. Мост при непустом `data.get("measure")`
+дописывает `[величина: ИМЯ]` без числа. Закон OR не тронут, мост не тронут.
+
+Одно новое: у `kind=answer` `"measure": say_measure`. Гигиена:
+`say_measure = measure if money else None`, `counting_rows` снят.
+`diag.measure`, `options[]`, вход моста, `agg.measure` не гасятся.
+
+`[замер]` оффлайн `test_step4_guards` 85: смесь want=count+compute=sum+поле —
+JSON `measure` = say_measure (пусто), `diag["measure"]` = сырое поле;
+want=sum имя останется. Мост — чтением кода: пустой `data.get("measure")`
+приписки не даёт (не замер, mcp_ask не менялся). Старые test_compose /
+test_gate к этому заходу не относятся.
+
+`[замер]` живой POST /ask okna (md5 d81b2a4e совпал, `/health` ok, корпус 634847):
+want=count, compute нет, json.measure пуст, **diag.measure пуст** — словарь
+поле снова не свёл (не обход «поле живо»). В тексте нет 28 356.37 / 112 325.97 /
+карты. retry `{total}` → ок. Книга, 19. want=sum на этом вопросе не было.
+
+Золотой первой базы не снимался: эмбеддер дева недоступен.
+
+---
+
 ## 14.08: money от вопроса, не от факта поля; тот же флаг на гейте `[замер]` `[код]`
 
 A2 держался за «поле пустое». `counting_rows` уже прятал имя величины на count,
