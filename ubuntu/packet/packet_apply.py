@@ -325,22 +325,77 @@ def _csv_header(path: str) -> list[str]:
         return next(csv.reader(f))
 
 
-def _full_sql(table: str, src: str, key_cols: list[str]) -> str:
-    # Формы poc_load_entity.load_entity: дедуп QUALIFY по объявленному ключу,
-    # без ключа — DISTINCT; DROP + CREATE, затем GRANT читающей роли.
-    # QUALIFY крепится к SELECT, поэтому UNION-источник оборачивается подзапросом.
+def _full_sql(table: str, src: str) -> str:
+    # Формы poc_load_entity.load_entity: DROP + CREATE, затем GRANT читающей роли.
+    #
+    # 🔴 Дедуп ведётся по ПОЛНОЙ строке (DISTINCT), а не по объявленному ключу.
+    # Объявленный ключ — ЗАЯВКА источника, а не факт: когда данные ей не отвечают,
+    # `QUALIFY row_number() PARTITION BY ключ` оставлял ОДНУ строку на ключ и
+    # молча выбрасывал остальные — п.13 (молчаливая потеря = дефект).
+    # Живой случай klient-1 14.08: 1С объявляет у регистра-НАБОРА
+    # AccumulationRegister_X ключ (Recorder, Recorder_Type) — одна запись на
+    # документ, а сами строки лежат вложенным списком RecordSet. Агент список
+    # разворачивает в плоские строки (правильно), но ключ в манифесте остаётся
+    # родительский и строку уже не различает. Итог на первой загрузке клиента:
+    # ДвиженияНоменклатураДоходыРасходы 141 586 строк → 8 783 в витрине (−93,8%),
+    # ВыручкаИСебестоимостьПродаж 117 049 → 19 572 (−83%), и НИ СЛОВА в журнале.
+    # Тот же механизм резал и по урезанному ключу (okna-1 12.08: от ключа
+    # оставался один LineNumber — строки разных документов сливались в одну).
+    # DISTINCT снимает ровно то, ради чего дедуп и заводился: полные повторы
+    # строк от перекрытия страниц и повторной отправки чанка. Строки, у которых
+    # ключ общий, а содержимое разное, — это данные, и они остаются.
+    # Уникальность ключа проверяется после загрузки (_check_key_identifies).
     wrapped = src if src.startswith("(") else None
-    if key_cols:
-        part = ", ".join('"%s"' % k for k in key_cols)
-        qual = "QUALIFY row_number() OVER (PARTITION BY %s ORDER BY %s) = 1" % (part, part)
-        select = ("SELECT * FROM %s AS q %s" % (wrapped, qual)) if wrapped \
-            else ("%s %s" % (src, qual))
-    else:
-        select = ("SELECT DISTINCT * FROM %s AS q" % wrapped) if wrapped \
-            else src.replace("SELECT *", "SELECT DISTINCT *", 1)
+    select = ("SELECT DISTINCT * FROM %s AS q" % wrapped) if wrapped \
+        else src.replace("SELECT *", "SELECT DISTINCT *", 1)
     return ('DROP TABLE IF EXISTS "%s";\n'
             'CREATE TABLE "%s" AS %s;\n'
             'GRANT SELECT ON "%s" TO %s;\n' % (table, table, select, table, RO_ROLE))
+
+
+def _check_key_identifies(base_id: str, pkg_id: str, table: str,
+                          key_cols: list[str]) -> None:
+    # Различает ли объявленный ключ строки витрины; не различает — строка в
+    # журнал. Не карантин и не отказ: строки на месте (дедуп идёт по полной
+    # строке). Смысл записи в том, что слияние дельты по неразличающему ключу
+    # трогает не ту строку, а группировка по нему даёт не то число, — и это
+    # видно до того, как по таблице ответят клиенту.
+    if not key_cols:
+        return
+    part = ", ".join('"%s"' % k for k in key_cols)
+    # Проверка наблюдательная: её отказ не смеет валить загрузку, которая уже
+    # прошла. Составной ключ считается как строковое значение — форма живьём
+    # проверена на klient-1 14.08 (count(DISTINCT (Recorder, Recorder_Type))
+    # вернул 19 572 из 117 049 строк).
+    try:
+        dup = int(_psql_scalar('SELECT count(*) - count(DISTINCT (%s)) FROM "%s"'
+                               % (part, table)))
+    except (RuntimeError, TypeError, ValueError) as e:
+        _log("base=%s pkg=%s entity=%s проверку ключа снять не удалось: %s"
+             % (base_id, pkg_id, table, e))
+        return
+    if dup > 0:
+        _log("apply ВНИМАНИЕ base=%s pkg=%s entity=%s объявленный ключ %s НЕ различает "
+             "строки: %d строк делят ключ с другими (строки сохранены, дельта по "
+             "такому ключу тронет не ту строку)" % (base_id, pkg_id, table, key_cols, dup))
+
+
+def _check_rows_landed(base_id: str, pkg_id: str, table: str, rows_sent) -> None:
+    # Прислано против легло. Сеть общая: ловит убыль любой природы, а не только
+    # ту, что уже знаем. После дедупа по полной строке единственная законная
+    # причина убыли — полные повторы строк (перекрытие страниц 1С, повторная
+    # отправка чанка), поэтому число называется тем, что оно есть, без тревоги.
+    if not isinstance(rows_sent, int) or rows_sent <= 0:
+        return
+    try:
+        got = int(_psql_scalar('SELECT count(*) FROM "%s"' % table))
+    except (RuntimeError, TypeError, ValueError):
+        return
+    if got < rows_sent:
+        d = rows_sent - got
+        _log("base=%s pkg=%s entity=%s прислано %d, легло %d, снято полных повторов "
+             "%d (%.1f%%)" % (base_id, pkg_id, table, rows_sent, got, d,
+                              100.0 * d / rows_sent))
 
 
 def _check_mix_versions(table: str) -> None:
@@ -670,7 +725,9 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                                  "чанка: %s -> %s" % (base_id, pkg_id, table,
                                                       key_cols, kept or "DISTINCT"))
                             key_cols = kept
-                    _psql(_full_sql(table, src, key_cols))
+                    _psql(_full_sql(table, src))
+                    _check_key_identifies(base_id, pkg_id, table, key_cols)
+                    _check_rows_landed(base_id, pkg_id, table, ent.get("rows"))
                 changed_tables.add(table)
                 profile.append({"entity": ent.get("name"), "key": ent.get("key") or [],
                                 "table": table})

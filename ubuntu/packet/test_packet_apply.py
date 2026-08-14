@@ -579,8 +579,13 @@ def main() -> int:
 
         # 8. Ключ манифеста шире колонок чанка (живой кейс okna-1 12.08:
         # CalculationRegister_*_RecordType объявляет Recorder, а OData расчётного
-        # регистра его не отдаёт). Ключ обязан урезаться до имеющихся колонок,
-        # пустое пересечение — DISTINCT; пакет применяется, а не падает.
+        # регистра его не отдаёт). Ключ урезается до имеющихся колонок, пустое
+        # пересечение — DISTINCT; пакет применяется, а не падает.
+        # 🔴 14.08: и урезанный ключ строк НЕ выбрасывает. Раньше дедуп шёл по
+        # уцелевшему LineNumber, и строки разных документов сливались в одну —
+        # молчаливая потеря (п.13). Теперь дедуп по полной строке: строки с общим
+        # ключом остаются, а факт «ключ не различает» уходит в журнал. Полный
+        # повтор строки (NOKEY) по-прежнему снимается — ради этого дедуп и есть.
         CALC = "pkt_probe_calcreg"
         NOKEY = "pkt_probe_nokey"
         calc_csv = csv_bytes([("2026-01-01", "1", "a"), ("2026-01-01", "1", "b"),
@@ -588,28 +593,53 @@ def main() -> int:
                              header=("RegistrationPeriod", "LineNumber", "Значение"))
         nokey_csv = csv_bytes([("x", "y"), ("x", "y"), ("x", "z")],
                               header=("A", "B"))
+        # Случай klient-1 14.08 в миниатюре: ключ регистра-НАБОРА целиком есть в
+        # чанке, но строк на документ несколько — после разворота RecordSet ключ
+        # (Recorder, Recorder_Type) строку не различает. Старая форма оставляла
+        # ОДНУ строку из четырёх.
+        REGSET = "pkt_probe_regset"
+        regset_csv = csv_bytes([("док-1", "Документ_Продажа", "1", "100"),
+                                ("док-1", "Документ_Продажа", "2", "200"),
+                                ("док-1", "Документ_Продажа", "3", "300"),
+                                ("док-2", "Документ_Продажа", "1", "400")],
+                               header=("Recorder", "Recorder_Type", "LineNumber", "Сумма"))
         e10a, c10a = make_chunk("chunk-00001", calc_csv, CALC, 3)
         e10b, c10b = make_chunk("chunk-00002", nokey_csv, NOKEY, 3)
+        e10c, c10c = make_chunk("chunk-00003", regset_csv, REGSET, 4)
         m10 = base_manifest(10, "ggg00010", "full")
         m10["entities"] = [
             {"name": CALC, "op": "full", "rows": 3, "chunks": ["chunk-00001"],
              "key": ["Recorder", "LineNumber", "Recorder_Type"]},
             {"name": NOKEY, "op": "full", "rows": 3, "chunks": ["chunk-00002"],
+             "key": ["Recorder", "Recorder_Type"]},
+            {"name": REGSET, "op": "full", "rows": 4, "chunks": ["chunk-00003"],
              "key": ["Recorder", "Recorder_Type"]}]
-        m10["chunks"] = [e10a, e10b]
+        m10["chunks"] = [e10a, e10b, e10c]
         pkg10 = write_package(10, "ggg00010", "full", m10,
-                              {"chunk-00001": c10a, "chunk-00002": c10b})
+                              {"chunk-00001": c10a, "chunk-00002": c10b,
+                               "chunk-00003": c10c})
         r = run_apply()
         check("8: ключ шире чанка — apply код 0", r.returncode == 0,
               r.stderr.strip()[-200:])
         check("8: пакет applied", pkg_state(pkg10)["state"] == "applied")
-        check("8: дедуп по уцелевшей части ключа (LineNumber)",
-              scalar('SELECT count(*) FROM "%s"' % CALC) == "2")
+        check("8: строки с общим урезанным ключом СОХРАНЕНЫ (3 из 3)",
+              scalar('SELECT count(*) FROM "%s"' % CALC) == "3",
+              "в витрине %s" % scalar('SELECT count(*) FROM "%s"' % CALC))
         check("8: ключа нет вовсе — DISTINCT (2 строки из 3)",
               scalar('SELECT count(*) FROM "%s"' % NOKEY) == "2")
         check("8: урезание ключа названо в журнале",
               "ключ урезан" in (r.stderr + r.stdout))
-        psql_exec('DROP TABLE IF EXISTS "%s"; DROP TABLE IF EXISTS "%s";' % (CALC, NOKEY))
+        check("8: неразличающий ключ назван в журнале",
+              "НЕ различает" in (r.stderr + r.stdout))
+        check("8: снятый полный повтор назван числом",
+              "снято полных повторов 1" in (r.stderr + r.stdout))
+        check("8: регистр-набор — все строки документа целы (4 из 4)",
+              scalar('SELECT count(*) FROM "%s"' % REGSET) == "4",
+              "в витрине %s" % scalar('SELECT count(*) FROM "%s"' % REGSET))
+        check("8: регистр-набор — суммы строк не потеряны (1000)",
+              scalar('SELECT sum(CAST("Сумма" AS BIGINT)) FROM "%s"' % REGSET) == "1000")
+        psql_exec('DROP TABLE IF EXISTS "%s"; DROP TABLE IF EXISTS "%s"; '
+                  'DROP TABLE IF EXISTS "%s";' % (CALC, NOKEY, REGSET))
     finally:
         cleanup()
 
