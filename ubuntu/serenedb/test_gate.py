@@ -434,17 +434,50 @@ _gagg = {"count": 542, "n_groups": 80, "grain": "group", "col": "Номенкл�
 _grow = row(amount="36651.00", doc="Alpha | 100 шт. док. 5011")
 t("group: 36651 строки как товар за неделю не проходит",
   not A.gate("Alpha за неделю 36 651", [_grow], _gagg, [])[0])
-t("group: лидер 46 204.58 проходит при другом sum",
-  A.gate("Alpha за неделю 46 204.58", [], _gagg, [])[0])
-t("group: итог множества 681 990.12 проходит",
-  A.gate("за неделю 681 990.12", [], _gagg, [])[0])
+t("group/rank: лидер 46 204.58 проходит при другом sum",
+  A.gate("Alpha за неделю 46 204.58", [], _gagg, [], None, True, "rank")[0])
+t("group/rank: итог множества 681 990.12 проходит",
+  A.gate("за неделю 681 990.12", [], _gagg, [], None, True, "rank")[0])
 t("group: max строки в r[2] белым списком не является",
-  not A.gate("Итого 36 651", [_grow], _gagg, [])[0])
+  not A.gate("Итого 36 651", [_grow], _gagg, [], None, True, "rank")[0])
 t("A1 row-sum не сломан: 28 356.37 при money=True проходит",
-  A.gate("Итого 28 356.37", [_row_amt], _agg_amt, [], None, True)[0])
-t("group: день периода из our_dates не режет ответ",
+  A.gate("Итого 28 356.37", [_row_amt], _agg_amt, [], None, True, "sum")[0])
+t("group/rank: день периода из our_dates не режет ответ",
   A.gate("С 7 по 14 августа лидер 46 204.58", [], _gagg, [],
-         ["2026-08-07", "2026-08-14"], True)[0])
+         ["2026-08-07", "2026-08-14"], True, "rank")[0])
+
+# Стоп 1: три разных числа в агрегате — монополия формы (синтетика без имён боевой базы).
+_TRI = {"count": 542, "sum": 16800.88, "leader": 1104.0, "grain": "group",
+        "n_groups": 7,
+        "groups": [{"name": "ItemA", "value": 1104.0, "count": 2},
+                   {"name": "ItemB", "value": 900.0, "count": 1}]}
+_TROW = row(amount="36651.00", doc="ItemA | qty 15 doc 5011")
+t("стоп1 mode: want=sum → sum",
+  A.answer_slot_mode("sum", "sum", form="number", grain="group") == "sum")
+t("стоп1 mode: want=count → count",
+  A.answer_slot_mode("count", "sum", form="number", grain="row") == "count")
+t("стоп1 mode: form=rank → rank",
+  A.answer_slot_mode("list", "", form="rank", grain="group") == "rank")
+t("стоп1 sum: лидер как итог режется",
+  not A.gate("Итого 1 104", [], _TRI, [], None, True, "sum")[0])
+t("стоп1 sum: число строки корпуса режется",
+  not A.gate("Итого 36 651", [_TROW], _TRI, [], None, True, "sum")[0])
+t("стоп1 sum: итог множества проходит",
+  A.gate("Итого 16 800.88 по 542 записям", [], _TRI, [], None, True, "sum")[0])
+t("стоп1 sum: счёт без итога — miss (лидер/счёт не закрывают want=sum)",
+  A.asked_figure_missing("Всего 542", _TRI, "sum", True) is not None
+  and A.asked_figure_missing("Лидер 1 104", _TRI, "sum", True) is not None)
+t("стоп1 count: сумма поля режется",
+  not A.gate("всего 16 800.88", [], _TRI, [], None, False, "count")[0])
+t("стоп1 count: лидер режется",
+  not A.gate("лидер 1 104", [], _TRI, [], None, False, "count")[0])
+t("стоп1 count: счёт проходит",
+  A.gate("всего 542", [], _TRI, [], None, False, "count")[0])
+t("стоп1 rank: группа проходит, строка корпуса нет",
+  A.gate("ItemA 1 104", [], _TRI, [], None, True, "rank")[0]
+  and not A.gate("ItemA 36 651", [_TROW], _TRI, [], None, True, "rank")[0])
+t("стоп1 rank: одна сумма множества без группы — miss лидера",
+  A.asked_figure_missing("Итого 16 800.88", _TRI, "list", True) is not None)
 import serene_axis as _AX
 fld, alts = _AX.rank_fold_choice("", ["Qty", "Amt"],
                                  {"Qty": 100.0, "Amt": 200.0},

@@ -399,22 +399,39 @@ _GAGG = dict(AGG, grain="group", col="Номенклатура", n_groups=80, ma
              groups=[{"name": "Alpha", "value": 46204.58, "count": 4}])
 import serene_axis as _AX
 _GROWS = _AX.group_rows(_GAGG["groups"])
-A.compose("какой товар больше продали", _GROWS, _GAGG, totals=TOTALS, money=True)
+A.compose("какой товар больше продали", _GROWS, _GAGG, totals=TOTALS, money=True,
+          slot_mode="rank")
 t("group: модели группы, не largest single",
   "GROUPS" in SENT["body"] and "{max}" not in SENT["body"]
   and "largest single" not in SENT["body"])
 t("group: сырой 36651 в задании как amount строки не стоит",
   "36651" not in SENT["body"] and "amount=36651" not in SENT["body"])
 t("group: имя группы модели видно, итог множества — местом {total}",
-  "Alpha" in SENT["body"] and "{total}" in SENT["body"])
-txt_g, bad_g = A._fill_figures("Лидер {max}, итог {total}.", _GAGG, [], True)
+  "Alpha" in SENT["body"] and "{total}" in SENT["body"]
+  and "{total:g0}" in SENT["body"])
+t("стоп1 rank: места {leader} в задании нет",
+  "{leader}" not in SENT["body"] and "leader" not in SENT["body"].lower().split("->")[0])
+txt_g, bad_g = A._fill_figures("Лидер {total:g0}, итог {total}.", _GAGG, [], True,
+                                 slot_mode="rank")
 _digits = lambda s: s.replace(" ", "").replace("\xa0", "")
-t("group: {max}=лидер, {total}=итог множества, не 36651 строки",
+t("group/rank: {total:g0}=группа, {total}=итог множества, не 36651",
   not bad_g and "46204" in _digits(txt_g) and "681990" in _digits(txt_g)
-  and "{max}" not in txt_g and "{total}" not in txt_g and "36651" not in txt_g)
-txt_gn, bad_gn = A._fill_figures("Итог {total:Alpha}.", _GAGG, [], True)
+  and "{total" not in txt_g and "36651" not in txt_g)
+txt_gn, bad_gn = A._fill_figures("Итог {total:Alpha}.", _GAGG, [], True, slot_mode="rank")
 t("group: {total:фрагмент имени} — значение этой группы",
   not bad_gn and "46204" in _digits(txt_gn))
+A.compose("сумма за период", _GROWS, _GAGG, totals=TOTALS, money=True, slot_mode="sum")
+t("стоп1 sum: мест групп и amount= в задании нет",
+  "{total:g" not in SENT["body"] and "amount=" not in SENT["body"]
+  and "{total}" in SENT["body"] and "{leader}" not in SENT["body"])
+slots_sum = A.compose_slot_values(_GAGG, measure="Сумма", money=True, slot_mode="sum")
+t("стоп1 sum: в слотах итог множества, без leader/g0",
+  slots_sum.get("sum") == 681990.12 and "leader" not in slots_sum
+  and "g0" not in slots_sum)
+slots_cnt = A.compose_slot_values(_GAGG, measure="Сумма", money=False, slot_mode="count")
+t("стоп1 count: в слотах только счёт (и служебное), без sum/leader",
+  slots_cnt.get("count") == _GAGG["count"] and "sum" not in slots_cnt
+  and "leader" not in slots_cnt and "g0" not in slots_cnt)
 txt_ng = A.ensure_n_groups_named("Лидер 46 204.58", _GAGG)
 t("group: n_groups > K дописывается числом",
   "80" in _digits(txt_ng)
@@ -423,10 +440,10 @@ t("group: want=sum без итога множества — дыра (лидер
   A.asked_figure_missing("Лидер 46 204.58", _GAGG, "sum", True) is not None)
 t("group: want=sum с итогом множества — ок",
   A.asked_figure_missing("Итого 681 990.12, групп 80", _GAGG, "sum", True) is None)
-slots_g = A.compose_slot_values(_GAGG, measure="Сумма", money=True)
-t("group: слот sum=итог множества, leader=топ, без max/min строки",
-  "max" not in slots_g and "min" not in slots_g
-  and slots_g.get("sum") == 681990.12 and slots_g.get("leader") == 46204.58)
+slots_g = A.compose_slot_values(_GAGG, measure="Сумма", money=True, slot_mode="rank")
+t("group/rank: слот sum=итог, g0=топ, без leader/max/min",
+  "max" not in slots_g and "min" not in slots_g and "leader" not in slots_g
+  and slots_g.get("sum") == 681990.12 and slots_g.get("g0") == 46204.58)
 
 print("\n%d проверок пройдено" % PASS)
 if FAIL:

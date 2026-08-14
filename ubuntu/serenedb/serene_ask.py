@@ -2429,21 +2429,51 @@ def answer_money(want, compute, measure):
     return bool(measure) and not counting
 
 
-def compose_slot_values(agg, measure=None, folders=0, money=None):
+def answer_slot_mode(want, compute, form=None, grain=None):
+    """Какие числовые слоты открыты форме ответа (стоп 1).
+
+    Режим сужает compose и белый список гейта до слотов одной формы: иначе
+    законные числа с разной ролью оказываются в одном допуске.
+
+      count — счёт (и служебные даты/папки); деньги / лидер / числа строк закрыты.
+      sum   — итог множества; лидер и цифры текста показанных строк закрыты.
+      rank  — группы по индексам; итог множества — отдельное место; `{leader}` нет.
+      list  — цитаты строк (прежний белый список строк).
+    """
+    counting = (compute or "") == "count" or (want or "") == "count"
+    if counting:
+        return "count"
+    form = (form or "").lower()
+    grain = (grain or "").lower()
+    if form in ("rank", "compare"):
+        return "rank"
+    if (want or "") == "sum" or (compute or "") in ("sum", "max", "min", "avg"):
+        return "sum"
+    if grain == "group":
+        return "rank"
+    return "list"
+
+
+def compose_slot_values(agg, measure=None, folders=0, money=None, slot_mode=None):
     """Числа, которые compose подставит в плейсхолдеры этого ответа.
 
     Не `amount=` примеров строк и не покрытие (`in_1c` / `missing`): они не итог.
-    Вызов из answer передаёт `money=` явно (тот же флаг, что compose и гейт).
-    `money=None` — как `bool(measure)`, только для проб без оси вопроса.
+    Вызов из answer передаёт `money=` и `slot_mode=` явно (тот же флаг, что compose
+    и гейт). `money=None` — как `bool(measure)`, только для проб без оси вопроса.
+    `slot_mode=None` — вывести из grain (group → rank, иначе list) для старых проб.
     """
     if money is None:
         money = bool(measure)
+    if slot_mode is None:
+        slot_mode = "rank" if (agg or {}).get("grain") == "group" else "list"
     slots = {}
     if not agg:
         return slots
     if agg.get("count") is not None:
         slots["count"] = agg["count"]
-    if money:
+    if slot_mode == "count":
+        pass
+    elif slot_mode == "sum" and money:
         ca = agg.get("count_amount")
         if ca is not None and ca != agg.get("count"):
             slots["count_amount"] = ca
@@ -2451,11 +2481,26 @@ def compose_slot_values(agg, measure=None, folders=0, money=None):
         for k in keys:
             if agg.get(k) is not None:
                 slots[k] = agg[k]
-    if agg.get("grain") == "group":
-        lead = _group_leader(agg)
-        if lead is not None:
-            slots["leader"] = lead
-    if agg.get("grain") == "group" and agg.get("n_groups") is not None:
+    elif slot_mode == "rank":
+        if money and agg.get("sum") is not None:
+            slots["sum"] = agg["sum"]
+        for i, g in enumerate((agg.get("groups") or [])[:ROWS_TO_MODEL]):
+            if g.get("value") is not None:
+                slots["g%d" % i] = g["value"]
+    elif money:
+        ca = agg.get("count_amount")
+        if ca is not None and ca != agg.get("count"):
+            slots["count_amount"] = ca
+        keys = ("sum",) if agg.get("grain") == "group" else ("sum", "max", "min", "avg")
+        for k in keys:
+            if agg.get(k) is not None:
+                slots[k] = agg[k]
+        if agg.get("grain") == "group":
+            lead = _group_leader(agg)
+            if lead is not None:
+                slots["leader"] = lead
+    if (slot_mode in ("rank", "list") and agg.get("grain") == "group"
+            and agg.get("n_groups") is not None):
         ng, shown = agg["n_groups"], len(agg.get("groups") or [])
         if ng > shown:
             slots["n_groups"] = ng
@@ -3610,7 +3655,7 @@ def _group_value_by_name(agg, name):
     return hits[0]
 
 
-def _fill_figures(text, agg, totals, has_measure=True, extra=None):
+def _fill_figures(text, agg, totals, has_measure=True, extra=None, slot_mode=None):
     """Подставить посчитанные базой числа на места, оставленные моделью.
 
     🔴 ЭТО ЗАМЕНА ПРОВЕРКИ УСТРОЙСТВОМ. Прежде модель писала число сама, а гейт ловил её
@@ -3631,6 +3676,17 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
     if not text:
         return text, []
     known = dict(agg or {})
+    if slot_mode is None:
+        slot_mode = "rank" if (agg or {}).get("grain") == "group" else "list"
+    if slot_mode == "count":
+        for k in ("sum", "max", "min", "avg", "leader", "count_amount"):
+            known.pop(k, None)
+    elif slot_mode == "sum":
+        known.pop("leader", None)
+    elif slot_mode == "rank":
+        known.pop("leader", None)
+        for k in ("max", "min", "avg"):
+            known.pop(k, None)
     # 🔴 БЕЗ ВЫБРАННОЙ ВЕЛИЧИНЫ БЕЗЫМЯННОЕ МЕСТО НЕ ЗАПОЛНЯЕТСЯ. Когда вопрос не назвал,
     # какую величину считать, `agg` считает по пустому месту и его `sum` равен нулю.
     # [замер 28.07] на «какие поступления были от ООО ТехноСнаб» ответ так и вышел:
@@ -3642,12 +3698,11 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
         for k in ("sum", "max", "min", "avg"):
             known.pop(k, None)
     # Зерно group: {max}/{min} одной строки — не итог объекта, на который строка ссылается.
+    # Стоп 1: {leader} заливается только в режиме list (цитаты/полный набор);
+    # rank — через {total:gN}; sum — только итог множества.
     if (agg or {}).get("grain") == "group":
         for k in ("max", "min"):
             known.pop(k, None)
-        lead = _group_leader(agg)
-        if lead is not None:
-            known["leader"] = lead
     # Числа неполноты (`{missing}`, `{in_1c}`, `{in_search}`) — такие же места, как итоги:
     # они посчитаны переписью, и списывать их модели тоже неоткуда. Кладутся ПОСЛЕ снятия
     # величин, иначе отсутствие выбранной величины уносило бы и предупреждение о потере.
@@ -3657,7 +3712,9 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
     by_name = {}
     for m, v, mx, mn in (totals or []):
         by_name[m] = {"total": v, "max": mx, "min": mn}
-    if (agg or {}).get("grain") == "group":
+    # Стоп 1: именованные группы — только rank/list. На sum итог множества безымянный.
+    if ((agg or {}).get("grain") == "group"
+            and slot_mode in ("rank", "list")):
         for i, g in enumerate((agg.get("groups") or [])[:ROWS_TO_MODEL]):
             by_name["g%d" % i] = {"total": g.get("value"), "max": g.get("value"),
                                   "min": g.get("value")}
@@ -3683,8 +3740,9 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
             if got is None and (agg or {}).get("grain") == "group":
                 got = _group_value_by_name(agg, name)
         elif ((agg or {}).get("grain") == "group"
-              and role in ("max", "min", "avg", "leader")):
-            # Лидер рейтинга (groups[0]), не итог множества и не max строки.
+              and role in ("max", "min", "avg", "leader")
+              and slot_mode == "list"):
+            # Только list: иначе rank заливает {total:gN}, sum — {total}=итог множества.
             got = known.get("leader")
         else:
             got = known.get({"total": "sum"}.get(role, role))
@@ -3944,7 +4002,7 @@ def copied_figures(text, agg, rows):
     return out
 
 
-def _filled_ask(ask, agg, totals, money, diag=None, extra=None):
+def _filled_ask(ask, agg, totals, money, diag=None, extra=None, slot_mode=None):
     """Уточняющий вопрос с подставленными числами — или пусто, если он вышел с изъяном.
 
     Разница с текстом ответа в том, чем платим за изъян. У ответа изъян ведёт ко второй
@@ -3953,7 +4011,8 @@ def _filled_ask(ask, agg, totals, money, diag=None, extra=None):
     не задавать вопроса вовсе. Второе честнее: ответ при этом остаётся целым и уходит
     человеку, а сорвавшийся вопрос виден в `diag`, а не в мессенджере.
     """
-    ask, slots_bad = _fill_figures(ask, agg, totals, bool(money), extra)
+    ask, slots_bad = _fill_figures(ask, agg, totals, bool(money), extra,
+                                     slot_mode=slot_mode)
     if not (ask or "").strip():
         return ""
     flaws = formulation_flaws(ask, slots_bad)
@@ -3982,12 +4041,14 @@ def _ask_back(raw):
 
 
 def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
-            measure_used=None, folders=None, money=True, src=None):
+            measure_used=None, folders=None, money=True, src=None, slot_mode=None):
     payload = []
     shown = rows[:ROWS_TO_MODEL]
     # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
     # места, длинные не режутся по произвольной границе.
     per_row = max(320, ROWS_BUDGET // max(1, len(shown)))
+    if slot_mode is None:
+        slot_mode = "rank" if (agg or {}).get("grain") == "group" else "list"
     for r in shown:
         # Строка, не влезшая в бюджет, помечается обрезанной. Прежде она обрывалась молча,
         # и модель цитировала обрубок как целое значение — «ООО Ромашка-Тор» вместо
@@ -3995,7 +4056,8 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         # адрес уходили человеку укороченными и выглядели настоящими (п. 13).
         head = r[5][:per_row] + ("…" if len(r[5]) > per_row else "")
         tail = []
-        if money and _num(r[2]):
+        # Стоп 1: amount= строки — только list. На sum/count/rank число строки — чужая роль.
+        if slot_mode == "list" and money and _num(r[2]):
             tail.append("amount=%s" % ("%d" % _num(r[2]) if _num(r[2]) == int(_num(r[2]))
                                        else "%.2f" % _num(r[2])))
         if r[3]:
@@ -4019,7 +4081,8 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
                      "of records is {count}):" if agg else "ROWS FOUND (%d):" % len(rows))
     body = "QUESTION: %s\n\n%s\n%s" % (
         question, head_line, "\n".join("- " + p for p in payload))
-    if agg and agg.get("grain") == "group":
+    # Стоп 1: места групп — rank/list. На sum только безымянный {total}=итог множества.
+    if agg and agg.get("grain") == "group" and slot_mode in ("rank", "list"):
         for i, g in enumerate((agg.get("groups") or [])[:ROWS_TO_MODEL]):
             nm = (g.get("name") or "").strip()
             if nm:
@@ -4085,12 +4148,18 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
             body += ("\n  count_amount (records having this quantity; sum and avg are "
                      "over these, and there are fewer of them than records) "
                      "-> {count_amount}")
-        body += "\n  sum (TOTAL)               -> {total}"
+        if slot_mode == "rank":
+            body += ("\n  sum (TOTAL of the whole matching set, not one group) "
+                     "-> {total}")
+        else:
+            body += "\n  sum (TOTAL)               -> {total}"
         if agg.get("grain") != "group":
             body += "\n  max (largest single)      -> {max}"
             body += "\n  min (smallest single)     -> {min}"
             body += "\n  avg (average)             -> {avg}"
-        elif agg.get("n_groups") is not None and agg["n_groups"] > len(agg.get("groups") or []):
+        elif (slot_mode in ("rank", "list")
+              and agg.get("n_groups") is not None
+              and agg["n_groups"] > len(agg.get("groups") or [])):
             body += ("\n  n_groups (distinct groups in the whole matching set; "
                      "only some are listed above) -> {n_groups}")
         if agg.get("date_min"):
@@ -4605,7 +4674,8 @@ def rows_seen(rows):
     return [list(r[:5]) + [(r[5] or "")[:per_row]] for r in shown]
 
 
-def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True):
+def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
+         slot_mode=None):
     """Каждое число ответа обязано встречаться в данных, в итоге или в наших условиях.
 
     Правило живёт в КОДЕ, а не в промте: промт — это пожелание, а не гарантия.
@@ -4646,18 +4716,45 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True):
     for t in (thresholds or []):
         allow(t)
     group_grain = bool(agg) and agg.get("grain") == "group"
+    if slot_mode is None:
+        slot_mode = "rank" if group_grain else "list"
+    # Стоп 1: цифры показанных строк — только list. Иначе счёт/лидер/сумма строки
+    # подписываются чужой ролью.
+    row_nums = slot_mode == "list"
     for r in rows:
-        allowed |= _norm_numbers(r[5])
-        allowed |= _norm_numbers(r[3])
+        if row_nums:
+            allowed |= _norm_numbers(r[5])
+            allowed |= _norm_numbers(r[3])
         # amount приходит из psql как «5000000.00» — через текстовый разбор это давало
         # ещё и 500000000. Берём числом.
         # Зерно group: число строки корпуса — не итог объекта. Белый список — группы.
-        if money and not group_grain:
+        if money and not group_grain and row_nums:
             allow(r[2])
     if agg:
         # ЧИСЛАМИ, а не текстом: прогон "%.2f" через разбор давал ещё и значение,
         # умноженное на 100 (дробная часть склеивалась с целой).
-        if group_grain:
+        if slot_mode == "count":
+            pass
+        elif slot_mode == "sum":
+            if money:
+                if group_grain:
+                    allow(agg.get("sum"))
+                    allow(agg.get("n_groups"))  # служебное множество, не роль итога
+                else:
+                    for key in ("sum", "min", "max", "avg"):
+                        if agg.get(key) is not None:
+                            allow(agg[key])
+        elif slot_mode == "rank" and group_grain:
+            allow(agg.get("sum"))
+            allow(agg.get("n_groups"))
+            for g in agg.get("groups") or []:
+                allow(g.get("value"))
+                allow(g.get("count"))
+                allow(g.get("value2"))
+                allow(g.get("count2"))
+                if money:
+                    allow(g.get("sum"))
+        elif group_grain:
             allow(agg.get("sum"))
             allow(agg.get("n_groups"))
             allow(agg.get("leader"))
@@ -4749,7 +4846,8 @@ def count_figures(agg):
     return out
 
 
-def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None, money=True):
+def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None, money=True,
+             slot_mode=None):
     """Один гейт на ВСЁ, что уходит человеку словами модели: числа + утечка инструкции.
 
     🔴 Заведён 04.08 (`F246`), потому что гейт стоял только на одной ветке из пяти.
@@ -4762,7 +4860,7 @@ def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None, money=True):
     факт о его данных независимо от того, вопрос это или ответ.
     """
     ok, bad = gate(text, list(rows or []), agg, allowed or [], our_dates,
-                   money=money)
+                   money=money, slot_mode=slot_mode)
     leak = prompt_leak(text, OUR_PROMPTS)
     if leak:
         ok, bad = False, list(bad) + ["утечка инструкции: %s" % leak]
@@ -7423,8 +7521,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # который п. 21 называет дефектом, а не осторожностью. `folders` посчитан базой тем же
     # запросом, что и `count`, — обоснован по построению.
     money = answer_money(intent.get("want"), plan.get("compute"), measure)
+    _form = (agg or {}).get("form") or grain_dec.get("form") or "number"
+    _grain = (agg or {}).get("grain") or grain_dec.get("grain") or "row"
+    slot_mode = answer_slot_mode(intent.get("want"), plan.get("compute"),
+                                 form=_form, grain=_grain)
+    diag["slot_mode"] = slot_mode
+    # Стоп 1: чужие итоги величин не расширяют белый список при монополии формы.
     _tot_extra = []
-    if money:
+    if money and slot_mode == "list":
         for _tm in (totals or []):
             if (agg or {}).get("grain") == "group":
                 _tot_extra.append(_tm[1])          # сумма поля, не max/min строки
@@ -7435,7 +7539,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                  + ([agg["undated"]] if (agg or {}).get("undated") else []) \
                  + ([agg["outside_period"]] if (agg or {}).get("outside_period") else []) \
                  + ([agg["folders"]] if (agg or {}).get("folders") else []) \
-                 + ([agg["n_groups"]] if (agg or {}).get("grain") == "group"
+                 + ([agg["n_groups"]] if slot_mode in ("rank", "list")
+                    and (agg or {}).get("grain") == "group"
                     and agg.get("n_groups") is not None else [])
     # Границы периода отбора — на тех же правах, но по датной ветке гейта.
     our_dates = _filter_dates(intent)
@@ -7444,7 +7549,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     n_folders = (agg or {}).get("folders") or 0
     totals_shown = [] if (agg or {}).get("grain") == "group" else (totals if money else [])
     raw = compose(question, rows, agg, totals=totals_shown, coverage=cov,
-                  measure_used=say_measure, folders=n_folders, money=money, src=src)
+                  measure_used=say_measure, folders=n_folders, money=money, src=src,
+                  slot_mode=slot_mode)
     text, claims = _split_answer(raw)
     ask_back = _ask_back(raw)
     # Рукопись ищется ДО подстановки: после неё посчитанное число стоит в тексте законно,
@@ -7459,7 +7565,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if kw_src:
         cov_slots = dict(cov_slots or {})
         cov_slots["count_kind"] = kw_src
-    text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots)
+    text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots,
+                                      slot_mode=slot_mode)
     text = ensure_n_groups_named(text, agg)
     # Паспорт набора решений — кодом, после цифр, до гейта (как n_groups). Слой 1
     # видимости: ISO фильтра + метки базы; счёт не меняет. clarify/no_data — ниже.
@@ -7477,7 +7584,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         text=text)
     text_core = text
     text = ensure_answer_passport(text, _pass_frag)
-    ask_back = _filled_ask(ask_back, agg, totals_shown, money, diag, cov_slots)
+    ask_back = _filled_ask(ask_back, agg, totals_shown, money, diag, cov_slots,
+                             slot_mode=slot_mode)
     # Место, которому нечего подставить, — отказ формулировки: модель сослалась на
     # величину, которой мы не считали. Это единственная проверка, оставшаяся от прежней
     # ролевой сверки, и она структурная, а не числовая.
@@ -7498,7 +7606,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # обрезки бюджетом. Числа из непоказанных строк белым списком быть не могут —
     # скопировать их модели неоткуда, а разрешение они давали.
     seen = rows_seen(rows)
-    ok_nums, bad_nums = gate(text, seen, agg, extra_vals, our_dates, money=money)
+    ok_nums, bad_nums = gate(text, seen, agg, extra_vals, our_dates, money=money,
+                               slot_mode=slot_mode)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     шаг("гейт исходящего", прошёл=bool(ok), причин=len(bad),
         первая=(bad[0][:60] if bad else "—"))
@@ -7512,10 +7621,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["retry"] = bad[:3]
         raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals_shown,
                        coverage=cov, measure_used=say_measure, folders=n_folders,
-                       money=money, src=src)
+                       money=money, src=src, slot_mode=slot_mode)
         text2, claims2 = _split_answer(raw2)
         by_hand2 = copied_figures(text2, agg, rows)
-        text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, money, cov_slots)
+        text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, money, cov_slots,
+                                            slot_mode=slot_mode)
         text2 = ensure_n_groups_named(text2, agg)
         _pass_frag2, pass_fields2 = build_answer_passport(
             period=(intent or {}).get("period"),
@@ -7545,7 +7655,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if leak2:
             ok_roles2, bad_roles2 = False, bad_roles2 + ["утечка инструкции: %s" % leak2]
         ok_nums2, bad_nums2 = gate(text2, seen, agg, extra_vals, our_dates,
-                                          money=money)
+                                          money=money, slot_mode=slot_mode)
         if ok_roles2 and ok_nums2 and (text2 or "").strip():
             # 🔴 УТОЧНЕНИЕ ВТОРОЙ ПОПЫТКИ ТОЖЕ ПРОХОДИТ ПОДСТАНОВКУ. Прежде здесь стояло
             # голое `_ask_back(raw2)`: числа в вопросе первой попытки подставлялись, а во
@@ -7553,7 +7663,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # вместо даты. Гейт этого не ловит (цифр в заготовке нет), и вопрос выглядел
             # как поломка системы ровно в тот момент, когда система переспрашивает.
             text, claims = text2, claims2
-            ask_back = _filled_ask(_ask_back(raw2), agg, totals_shown, money, diag, cov_slots)
+            ask_back = _filled_ask(_ask_back(raw2), agg, totals_shown, money, diag, cov_slots,
+                                    slot_mode=slot_mode)
             ok, bad = True, []
             diag["retry_ok"] = True
         else:
@@ -7570,7 +7681,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # был бы выдуманным числом, а не пустым местом. Числа всё равно уходят
             # структурой ниже, и вызывающий формулирует по ним.
             _figs = compose_slot_values(agg, measure=measure,
-                                         folders=n_folders, money=money)
+                                         folders=n_folders, money=money,
+                                         slot_mode=slot_mode)
             _figs.update(pass_fields or {})
             return {"partial": cut or None, "kind": "figures", "text": (TOTAL_TEXT.format(
                         count=agg["count"], sum=_fmt(agg["sum"]))
@@ -7609,7 +7721,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # вопрос снимается, ответ уходит обычным: это ослабление уточнения, а не ответа.
     if ask_back:
         ok_ask, bad_ask = gate_out(ask_back, seen, agg, extra_vals, our_dates,
-                                       money=money)
+                                       money=money, slot_mode=slot_mode)
         if not ok_ask:
             sys.stderr.write("ask ASKBACK GATE: числа вне данных: %s\n" % bad_ask[:4])
             diag["ask_back_rejected"] = bad_ask[:4]
@@ -7624,7 +7736,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 # `sum: 0` был бы не «нулём», а «не считали». Отдаём то же, что видела
                 # модель: итоги по каждой величине сущности, с их именами из данных.
                 "figures": compose_slot_values(agg, measure=measure,
-                                               folders=n_folders, money=money),
+                                               folders=n_folders, money=money,
+                                               slot_mode=slot_mode),
                 "totals": {m: {"sum": v, "max": mx, "min": mn} for m, v, mx, mn in (totals or [])},
                 "sources": [tag],
                 "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
@@ -7644,7 +7757,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # словарь свёл колонку. Иначе мост допишет [величина: ИМЯ] без числа.
     # diag.measure выше — сырое поле; живой обход читает его, не этот ключ.
     _figs = compose_slot_values(agg, measure=measure,
-                                folders=n_folders, money=money)
+                                folders=n_folders, money=money,
+                                slot_mode=slot_mode)
     _figs.update(pass_fields or {})
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
             "completeness": cov, "measure": say_measure,
