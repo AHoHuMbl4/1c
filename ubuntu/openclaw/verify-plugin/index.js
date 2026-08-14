@@ -27,7 +27,7 @@
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, digitBlob, evaluate, extractText, finalizeDecision, isServiceError, mergeRef, numericTokens, selfFetchNeeded, stripInternal, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, digitBlob, evaluate, extractText, finalizeDecision, isClarify, isServiceError, mergeRef, numericTokens, parseClarifyOptions, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny } from "./verify-core.js";
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
@@ -60,6 +60,7 @@ const inbound = new Map(); // sessKey -> { at, digits:Set<string>, blob:string }
 // пустого `inbound`. Текст берётся из `before_agent_run`, который даёт текущий ввод
 // пользователя и срабатывает всегда (доки `plugins/hooks.md`).
 const prompts = new Map(); // sessKey -> { at, text } (вопрос текущего хода)
+const clarifyLocks = new Map(); // sessKey -> { at, question, options[] }
 
 function prune(map, ttl) {
   const cut = Date.now() - ttl;
@@ -168,6 +169,22 @@ export default definePluginEntry({
       prune(prompts, cfg.refTtlMs);
     });
 
+    api.on("before_tool_call", async (event, ctx) => {
+      const cfg = getCfg();
+      const wants = cfg.toolNames && cfg.toolNames.length ? cfg.toolNames : [cfg.toolName];
+      if (!event || !toolMatchesAny(event.toolName, wants)) return;
+      const sessKey = sessKeyOf(ctx, event) || null;
+      if (!sessKey) return;
+      const lock = clarifyLocks.get(sessKey);
+      if (!lock) return;
+      const promptRec = prompts.get(sessKey);
+      const prompt = (promptRec && promptRec.text) || "";
+      const { params, action } = rewriteAsk1cParams(event.params || {}, prompt, lock);
+      if (action === "release") clarifyLocks.delete(sessKey);
+      dbg(cfg, `before_tool_call rewrite sess=${sessKey} action=${action} q=${String(params.question || "").slice(0, 80)} focus=${params.focus || ""}`);
+      return { params };
+    });
+
     // 1) захват эталона braine за ход (ключ = sessionKey; сброс при новом runId)
     api.on("after_tool_call", async (event, ctx) => {
       const cfg = getCfg();
@@ -184,7 +201,27 @@ export default definePluginEntry({
       merged.runId = runId;
       refs.set(sessKey, merged);
       prune(refs, cfg.refTtlMs);
+      if (isClarify(text, cfg.clarifyMarker)) {
+        const q = (event.params && event.params.question) || "";
+        const options = parseClarifyOptions(text);
+        if (q && options.length) {
+          clarifyLocks.set(sessKey, { at: Date.now(), question: q, options });
+          prune(clarifyLocks, cfg.refTtlMs);
+          dbg(cfg, `clarify_lock set sess=${sessKey} opts=${options.length} q=${q.slice(0, 80)}`);
+        }
+      } else if (clarifyLocks.has(sessKey)) {
+        clarifyLocks.delete(sessKey);
+        dbg(cfg, `clarify_lock clear sess=${sessKey}`);
+      }
       dbg(cfg, `after_tool_call tool=${event.toolName} sess=${sessKey} runId=${runId} refDigits=${merged.digits.size} noData=${merged.noData}`);
+    });
+
+    api.on("session_end", async (event, ctx) => {
+      const cfg = getCfg();
+      const sessKey = sessKeyOf(ctx, event);
+      if (sessKey && clarifyLocks.delete(sessKey)) {
+        dbg(cfg, `clarify_lock clear sess=${sessKey} reason=session_end`);
+      }
     });
 
     // 1b) 🔴 ХОД ЗАВЕРШАЕТСЯ ОТВЕТОМ, А К ДАННЫМ НЕ ОБРАЩАЛИСЬ — ГОНИМ МОДЕЛЬ ЗАНОВО.

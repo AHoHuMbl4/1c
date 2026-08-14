@@ -1,5 +1,10 @@
 # Журнал изменений
 
+## 14.08: замок уточнения verify 1.1.2 + count_kind `[замер]` `[код]`
+
+verify 1.1.2: before_tool_call замок clarify; mcp_ask без same question; serene_ask count_kind.
+Оффлайн: test-verify 83, test_compose 66, test_gate 106.
+
 ## 14.08: PARTIAL только при потере счёта выбранного источника `[замер]` `[код]`
 
 Класс F251+: числа верны, приписка «часть записей не попала в расчёт» — ложь, когда в

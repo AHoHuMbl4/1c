@@ -215,6 +215,17 @@ A.compose("средний чек", ROWS, dict(AGG, count=249, count_amount=249),
 t("числа сошлись — лишней строки на каждый вопрос не появляется",
   "count_amount" not in SENT["body"])
 
+
+# count_kind из kind_word(src) — не «документы» для регистра
+A.compose("сколько записей", ROWS, {"count": 19, "count_amount": 0, "sum": 0, "min": 0,
+                                  "max": 0, "avg": 0, "date_min": "", "date_max": "",
+                                  "folders": 0}, src="accumulationregister_продажи")
+t("count_kind: место kind_word в задании модели (не «documents»)",
+  "{count_kind}" in SENT["body"])
+t("count_kind: подстановка kind_word",
+  A._fill_figures("Найдено {count} {count_kind}.", {"count": 19}, [], extra={"count_kind": "регистр накопления"})[0]
+  == "Найдено 19 регистр накопления.")
+
 A.compose("сколько всего", ROWS, {"count": 249, "count_amount": 0, "sum": 0, "min": 0,
                                   "max": 0, "avg": 0, "date_min": "", "date_max": "",
                                   "folders": 0})

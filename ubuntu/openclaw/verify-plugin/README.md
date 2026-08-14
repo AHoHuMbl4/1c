@@ -67,9 +67,9 @@ braine («второго мозга»). Это требование владел
 
 ## Тест и установка
 ```bash
-node test-verify.mjs                 # оффлайн-юниты чистой логики (52 кейса, без базы и сети)
+node test-verify.mjs                 # оффлайн-юниты чистой логики (83 кейса, без базы и сети)
 npm pack --pack-destination /tmp     # собрать tgz
-openclaw plugins install npm-pack:/tmp/openclaw-braine-verify-1.0.0.tgz --force
+openclaw plugins install npm-pack:/tmp/openclaw-braine-verify-1.1.2.tgz --force
 openclaw plugins inspect braine-verify --runtime --json   # проверить, что хуки зарегистрированы
 # включить: plugins.allow += "braine-verify"; plugins.entries.braine-verify.enabled = true
 ```

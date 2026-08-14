@@ -3074,12 +3074,12 @@ in their own words.
 copying it from the figures below. Write a PLACEHOLDER instead, and the exact value will
 be substituted by the system:
 
-  {total}  {count}  {count_amount}  {max}  {min}  {avg}  {date_min}  {date_max}
+  {total}  {count}  {count_kind}  {count_amount}  {max}  {min}  {avg}  {date_min}  {date_max}
 
 When several quantities are given by name, address one of them: {total:NAME},
 {max:NAME}, {min:NAME} — NAME exactly as given below.
 
-Example: "Sold for {total} across {count} documents, the largest being {max}."
+Example: "Sold for {total} across {count} {count_kind}, the largest being {max}."
 
 Values that appear INSIDE a row — a document number, a tax id, a party's name, the date
 of one specific record — you copy verbatim from the rows. Those are quotations, not
@@ -3196,6 +3196,9 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
         # переписывает имя от руки, и «количество» вместо «Количество» роняло верный
         # ответ на ровном месте.
         role, name = mt.group(1).lower(), mt.group(2)
+        if role == "count_kind":
+            got = known.get("count_kind")
+            return got if got else ""
         if name:
             name = name.strip()
             got = by_name.get(name, {}).get(role)
@@ -3366,7 +3369,7 @@ def _ask_back(raw):
 
 
 def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
-            measure_used=None, folders=None, money=True):
+            measure_used=None, folders=None, money=True, src=None):
     payload = []
     shown = rows[:ROWS_TO_MODEL]
     # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
@@ -3425,6 +3428,9 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         # Передать sum=0 нельзя: модель ответит «0», и гейт согласится.
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS. The values are not shown; each "
                  "placeholder below is replaced by the system with the exact figure:")
+        kw = kind_word(src) if src else ""
+        if kw:
+            body += "\n  count_kind (record type noun) -> {count_kind}"
         body += "\n  count (number of records) -> {count}"
         if agg.get("date_min"):
             body += "\n  period                    -> {date_min} .. {date_max}"
@@ -3440,6 +3446,9 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS for the quantity «%s». The values "
                  "are not shown; each placeholder below is replaced by the system with "
                  "the exact figure:" % (agg.get("measure") or "-"))
+        kw = kind_word(src) if src else ""
+        if kw:
+            body += "\n  count_kind (record type noun) -> {count_kind}"
         body += "\n  count (number of records) -> {count}"
         # 🔴 ПО СКОЛЬКИМ ЗАПИСЯМ ПОСЧИТАНЫ sum И avg. `aggregate` считает `count_amount`
         # отдельно именно для этого («иначе среднее по 31 строке уходит как среднее по
@@ -6376,7 +6385,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     n_folders = (agg or {}).get("folders") or 0
     totals_shown = totals if money else []
     raw = compose(question, rows, agg, totals=totals_shown, coverage=cov,
-                  measure_used=say_measure, folders=n_folders, money=money)
+                  measure_used=say_measure, folders=n_folders, money=money, src=src)
     text, claims = _split_answer(raw)
     ask_back = _ask_back(raw)
     # Рукопись ищется ДО подстановки: после неё посчитанное число стоит в тексте законно,
@@ -6387,6 +6396,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Числа неполноты идут в подстановку наравне с итогами: их модель тоже не видит.
     cov_slots = ({"in_1c": cov["in_1c"], "in_search": cov["in_search"],
                   "missing": cov["missing"]} if cov else None)
+    kw_src = kind_word(src) if src else ""
+    if kw_src:
+        cov_slots = dict(cov_slots or {})
+        cov_slots["count_kind"] = kw_src
     text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots)
     ask_back = _filled_ask(ask_back, agg, totals_shown, money, diag, cov_slots)
     # Место, которому нечего подставить, — отказ формулировки: модель сослалась на
@@ -6423,7 +6436,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["retry"] = bad[:3]
         raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals_shown,
                        coverage=cov, measure_used=say_measure, folders=n_folders,
-                       money=money)
+                       money=money, src=src)
         text2, claims2 = _split_answer(raw2)
         by_hand2 = copied_figures(text2, agg, rows)
         text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, money, cov_slots)

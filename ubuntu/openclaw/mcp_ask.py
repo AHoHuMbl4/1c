@@ -125,8 +125,7 @@ PARTIAL_HINT = os.environ.get(
 CLARIFY_HINT = os.environ.get(
     "MCP_CLARIFY_HINT",
     "[CLARIFICATION NEEDED] Put the question below to the user in your own words with the "
-    "options. Then call this tool again with the same question and `focus` (and `measure` "
-    "if a quantity was chosen), copied verbatim from the list.")
+    "options.")
 
 
 def _num(v):
@@ -233,15 +232,12 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     is not an answer, and the figures still have to be counted here.
 
     The reply may instead ask to CLARIFY, when the question fits several record types or
-    several quantities. Then put that question to the user and call this tool again with
-    the same question plus `focus` (and `measure` if a quantity was chosen), copied
-    verbatim from the list given.
+    several quantities. Put that question to the user with the options from the tool.
 
     :param question: the user's question, in their own language, about company data.
-    :param focus: the kind of record to count over — either one you already know, or the
-        one the user picked after a clarification. Give it as it is written for people.
-    :param measure: quantity chosen by the user after a clarification, verbatim.
-    :param context: the conversation so far, used only to disambiguate the question.
+    :param focus: the kind of record to count over, as written for people.
+    :param measure: quantity name, as written for people.
+    :param context: optional background; not used for intent parsing.
     """
     try:
         data = _ask(question, focus or None, measure or None, context or None)

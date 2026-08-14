@@ -217,6 +217,67 @@ export function isClarify(text, marker) {
   return String(text || "").includes(marker || "[НУЖНО УТОЧНЕНИЕ");
 }
 
+export function normClarifyKey(s) {
+  return String(s || "").toLowerCase().replace(/\s+/g, "");
+}
+
+export function parseClarifyOptions(text) {
+  const options = [];
+  if (!text) return options;
+  for (const line of String(text).split("\n")) {
+    const m = line.match(/^\s*[-*]\s+(.+)$/);
+    if (!m) continue;
+    const rest = m[1].trim();
+    let labelPart = rest;
+    let tail = "";
+    const pipe = rest.indexOf(" | ");
+    if (pipe >= 0) {
+      labelPart = rest.slice(0, pipe).trim();
+      tail = rest.slice(pipe + 3);
+    }
+    const dash = labelPart.match(/^(.+?)\s+—\s+/);
+    const label = (dash ? dash[1] : labelPart).trim();
+    if (!label) continue;
+    let focus = "";
+    let measure = "";
+    for (const p of (tail ? tail.split("|") : [])) {
+      const kv = p.trim().match(/^(focus|measure)=(.*)$/i);
+      if (!kv) continue;
+      const v = kv[2].trim();
+      if (kv[1].toLowerCase() === "focus") focus = v;
+      else measure = v;
+    }
+    options.push({ label, focus, measure });
+  }
+  return options;
+}
+
+export function matchClarifyOption(prompt, options) {
+  const key = normClarifyKey(prompt);
+  if (!key) return null;
+  for (const opt of options || []) {
+    if (normClarifyKey(opt.label) === key) return opt;
+    if (opt.focus && normClarifyKey(opt.focus) === key) return opt;
+    if (opt.measure && normClarifyKey(opt.measure) === key) return opt;
+  }
+  return null;
+}
+
+export function rewriteAsk1cParams(params, prompt, lock) {
+  const p = { ...(params || {}) };
+  if (!lock) return { params: p, action: "none" };
+  const matched = matchClarifyOption(prompt, lock.options);
+  if (matched) {
+    p.question = lock.question;
+    if (matched.focus) p.focus = matched.focus;
+    if (matched.measure) p.measure = matched.measure;
+    return { params: p, action: "slot" };
+  }
+  p.question = prompt;
+  return { params: p, action: "release" };
+}
+
+
 // 🔴 СБОЙ СЕРВИСА ДАННЫХ — ЭТО НЕ «ДАННЫХ НЕТ» (п. 18 контракта). Признак нужен ДО
 // зачистки: после неё строка маркера уже вырезана, остаток пуст, и отличить сбой от
 // пустого ответа нечем — ровно так сбой и превращался в «нет данных».

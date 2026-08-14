@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, evaluate, finalizeDecision, isServiceError, mergeRef, numericTokens, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, evaluate, finalizeDecision, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseClarifyOptions, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -410,6 +410,49 @@ t("свой поход: служебный прогон нашей же сбор
   // по замыслу, и поход за данными жёг бы сервис на каждом таком ходе.
   assert.strictEqual(selfFetchNeeded(false, ASK, { text: "придумай слова" }, "agent:main:wiki-alias"), false);
   assert.strictEqual(selfFetchNeeded(false, ASK, { text: "сколько продали" }, "agent:main:telegram:direct:1"), true);
+});
+
+
+// --- замок уточнения (before_tool_call rewrite) ---
+
+const LOCK_Q = "сколько продано позавчера";
+const OPTS = [{ label: "Книга Продаж", focus: "Книга Продаж", measure: "" }];
+const LOCK = { question: LOCK_Q, options: OPTS };
+
+t("clarify: prompt совпал с label → question замка + focus", () => {
+  const { params, action } = rewriteAsk1cParams({ question: "другое", focus: "" },
+    "Книга Продаж", LOCK);
+  assert.strictEqual(action, "slot");
+  assert.strictEqual(params.question, LOCK_Q);
+  assert.strictEqual(params.focus, "Книга Продаж");
+});
+t("clarify: prompt не из options → question текущий, release", () => {
+  const { params, action } = rewriteAsk1cParams({ question: "старое", focus: "Книга Продаж" },
+    "Посчитай количество по книге", LOCK);
+  assert.strictEqual(action, "release");
+  assert.strictEqual(params.question, "Посчитай количество по книге");
+  assert.strictEqual(params.focus, "Книга Продаж");
+});
+t("clarify: без замка → none", () => {
+  const { action } = rewriteAsk1cParams({ question: "x" }, "y", null);
+  assert.strictEqual(action, "none");
+});
+t("clarify: нормализация пробелов в label", () => {
+  assert.ok(matchClarifyOption("  Книга   Продаж ", OPTS));
+});
+t("clarify: нечёткое «книга» ≠ «Книга Продаж»", () => {
+  assert.strictEqual(matchClarifyOption("книга", OPTS), null);
+});
+t("clarify: parse options из текста моста", () => {
+  const txt = "[CLARIFICATION NEEDED]\n\nOPTIONS:\n- Книга Продаж | focus=Книга Продаж\n- Сумма | measure=Сумма | focus=Реализация";
+  const o = parseClarifyOptions(txt);
+  assert.strictEqual(o.length, 2);
+  assert.strictEqual(o[0].label, "Книга Продаж");
+  assert.strictEqual(o[0].focus, "Книга Продаж");
+  assert.strictEqual(o[1].measure, "Сумма");
+});
+t("clarify: normClarifyKey регистронезависим", () => {
+  assert.strictEqual(normClarifyKey("Книга Продаж"), normClarifyKey("книга продаж"));
 });
 
 console.log(`\n${pass} tests passed`);
