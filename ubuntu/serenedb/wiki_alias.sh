@@ -53,11 +53,17 @@ TARGET_WORD="${WIKI_ALIAS_WORD:-}"; TARGET_WORD=${TARGET_WORD//\'/\'\'}
 # `work/entity-choice/alias_rank_bench.py`, не трогая тот словарь, по которому сейчас
 # отвечает бот. Иначе всякая проба словаря — это правка боевого поведения вслепую.
 ALIAS_TABLE="${ALIAS_TABLE:-search_entity_alias}"
+# Словарь величин — отдельная таблица: связь поле → слова. Имя настраивается той же
+# ручкой, что и у сущностей, чтобы прогон рядом не трогал боевой словарь.
+MEASURE_TABLE="${MEASURE_TABLE:-search_measure_alias}"
 CAP="${1:-0}"
 cd "$(dirname "$0")" || exit 1
 
 command -v openclaw >/dev/null 2>&1 || { echo "алиасы: openclaw не установлен — шаг пропущен"; exit 0; }
 psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $ALIAS_TABLE (src_table VARCHAR, aliases VARCHAR, best_used_for VARCHAR, not_enough_for VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
+psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $MEASURE_TABLE (src_table VARCHAR, measure VARCHAR, aliases VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
+# Без GRANT сервис молча считает «словаря нет» (RuntimeError → пустой alias_by).
+psql "$DSN" -q -c "GRANT SELECT ON $MEASURE_TABLE TO serene_ro" >/dev/null 2>&1
 
 # 🔴 ОБМЕН ФАЙЛАМИ — ТОЛЬКО ЧЕРЕЗ КАТАЛОГ, ЧИТАЕМЫЙ ДВИЖКОМ. [замер 30.07] `read_json` из
 # `/tmp/...` даёт «No files found»: процесс `serened` этот путь не видит. Тот же каталог, что у
@@ -108,6 +114,7 @@ while :; do
                         AND (coalesce(a.aliases,'') <> ''
                              OR a.seen_at > now() - INTERVAL $RETRY_H HOUR))
            ORDER BY d, f.src_table LIMIT $BATCH)" > "$TMP/pay" 2>/dev/null
+  chmod 644 "$TMP/pay" 2>/dev/null
   PAY=$(cat "$TMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
 
@@ -129,7 +136,7 @@ while :; do
     # задании нет намеренно — правило держится не текстом для модели, а формой ответа
     # (короткие именующие обороты) и прибором `work/entity-choice/alias_rank_bench.py`,
     # который меряет словарь числом: на каком месте эталонная сущность вопроса.
-    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — the SHORT NAMES a person here uses for this kind of record, including its own title, plus, for EVERY quantity listed for it, the short name of that value as people say it (a noun or a noun with the action word, 1-3 words each, no sentences); (2) bestUsedFor — the questions it answers; (3) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — the SHORT NAMES a person here uses for this kind of record, including its own title; names of its quantities do not belong here; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
@@ -147,47 +154,23 @@ while :; do
         SELECT entity, '', '', '', now() FROM read_json('$TMP/pay',
           columns := {entity:'VARCHAR', title:'VARCHAR', quantities:'VARCHAR'})
         WHERE entity NOT IN (SELECT src_table FROM $ALIAS_TABLE)" >/dev/null 2>&1
+      # Пустышка величины — та же семантика: попытка, не ответ. Без неё осечка
+      # пачки на доборе величин крутилась бы вечно; с непустым ответом её снимает
+      # DELETE перед INSERT ниже.
+      psql "$DSN" -q -c "INSERT INTO $MEASURE_TABLE
+        SELECT entity, trim(q), '', now()
+        FROM read_json('$TMP/pay',
+          columns := {entity:'VARCHAR', title:'VARCHAR', quantities:'VARCHAR'}),
+             unnest(str_split(quantities, ',')) AS x(q)
+        WHERE trim(q) <> ''
+          AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE a
+                          WHERE a.src_table = entity AND a.measure = trim(q))" >/dev/null 2>&1
       continue
     }
 
   # Разбор ответа модели — своим кодом это разрешено (п. 20: проверка ответа модели).
-  python3 - "$TMP/ans" "$TMP/rows.json" <<'PY'
-import json, re, sys
-raw = open(sys.argv[1], encoding='utf-8', errors='replace').read()
-text = ''
-try:
-    env = json.loads(raw)
-    def dig(o):
-        if isinstance(o, dict):
-            for k, v in o.items():
-                if k in ('text', 'content') and isinstance(v, str) and '{' in v:
-                    yield v
-                yield from dig(v)
-        elif isinstance(o, list):
-            for v in o:
-                yield from dig(v)
-    cands = list(dig(env))
-    text = max(cands, key=len) if cands else ''
-except ValueError:
-    text = raw
-m = re.search(r'\{.*\}', text, re.S)
-rows = []
-if m:
-    try:
-        for it in (json.loads(m.group(0)).get('items') or []):
-            e = (it.get('entity') or '').strip()
-            if not e:
-                continue
-            def j(x):
-                return ', '.join(str(i).strip() for i in (x or []) if str(i).strip())[:900]
-            rows.append({"src_table": e, "aliases": j(it.get('aliases')),
-                         "best_used_for": j(it.get('bestUsedFor')),
-                         "not_enough_for": j(it.get('notEnoughFor'))})
-    except ValueError:
-        pass
-open(sys.argv[2], 'w', encoding='utf-8').write(json.dumps(rows, ensure_ascii=False))
-print("алиасов разобрано: %d" % len(rows))
-PY
+  # Выдуманное имя величины отбрасывается: во входном списке его не было.
+  python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json"
   # 🔴 ФАЙЛ ЧИТАЕТ ДВИЖОК, А НЕ МЫ. Каталогу права выставлены при создании, но
   # сам файл рождается с маской процесса: такт идёт из `build.sh`, где стоит
   # `umask 077` (секреты), и `rows.json` выходил 600 root — движок (`serenedb`)
@@ -195,7 +178,7 @@ PY
   # okna-1 13.08: словарь встал на 140 из 351 при «алиасов разобрано: 20» каждую
   # пачку — то есть деньги за модель тратились, а словарь не рос. Права ставятся
   # рядом с записью, как у `msg` выше.
-  chmod 644 "$TMP/rows.json" 2>/dev/null
+  chmod 644 "$TMP/rows.json" "$TMP/measures.json" 2>/dev/null
   # Запись — ОДНИМ запросом из файла, без цикла по строкам (п. 20). Пустая заготовка,
   # оставшаяся от прежней осечки, сначала снимается: иначе ответ модели молча падал бы
   # мимо словаря (`NOT IN` считает такую строку уже отвеченной), и переспрос был бы
@@ -210,13 +193,109 @@ PY
     SELECT src_table, aliases, best_used_for, not_enough_for, now()
     FROM read_json('$TMP/rows.json', columns := {src_table:'VARCHAR', aliases:'VARCHAR',
                                                 best_used_for:'VARCHAR', not_enough_for:'VARCHAR'})
-    WHERE src_table NOT IN (SELECT src_table FROM $ALIAS_TABLE)" 2>&1 | grep -i error
+    WHERE src_table NOT IN (SELECT src_table FROM $ALIAS_TABLE);
+    DELETE FROM $MEASURE_TABLE WHERE coalesce(aliases,'') = '' AND src_table IN
+      (SELECT DISTINCT src_table FROM read_json('$TMP/measures.json',
+         columns := {src_table:'VARCHAR', measure:'VARCHAR', aliases:'VARCHAR'})
+       WHERE coalesce(aliases,'') <> '');
+    INSERT INTO $MEASURE_TABLE
+    SELECT src_table, measure, aliases, now()
+    FROM read_json('$TMP/measures.json',
+         columns := {src_table:'VARCHAR', measure:'VARCHAR', aliases:'VARCHAR'}) n
+    WHERE coalesce(n.aliases,'') <> ''
+      AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE a
+                      WHERE a.src_table = n.src_table AND a.measure = n.measure
+                        AND coalesce(a.aliases,'') <> '')" 2>&1 | grep -i error
 
   have=$(psql "$DSN" -tAc "SELECT count(*) FROM $ALIAS_TABLE" 2>/dev/null)
   echo "алиасы: всего в базе $have"
   done_total=$((done_total + BATCH))
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
   over_budget && { echo "алиасы: бюджет $BUDGET с исчерпан — остальные сущности возьмёт следующий такт"; break; }
+done
+# ── ДОБОР ВЕЛИЧИН: сущность описана, поля — нет ────────────────────────────────
+# Первый проход берёт тех, кого ещё нет в словаре сущностей. Уже описанные
+# (живой случай okna: сотни страниц без мер) в него не попадут, и словарь
+# величин остался бы пустым навсегда. Здесь пачка — сущности с непустым
+# алиасом записи, с величинами в данных и без единого непустого алиаса поля
+# (пустышка старше retry переспрашивается). Алиасы сущности НЕ перезаписываются.
+while :; do
+  over_budget && { echo "величины: бюджет $BUDGET с исчерпан — добор возьмёт следующий такт"; break; }
+  [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
+  psql "$DSN" -tA -c "
+    WITH seed AS (
+      SELECT f.src_table, t.emb FROM wiki_entity_facts f
+      JOIN search_tables t ON t.src_table = f.src_table
+      WHERE f.cls <> 'service'
+        AND coalesce(f.measures,'') <> ''
+        AND EXISTS (SELECT 1 FROM $ALIAS_TABLE a
+                    WHERE a.src_table = f.src_table AND coalesce(a.aliases,'') <> '')
+        AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE m
+                        WHERE m.src_table = f.src_table AND coalesce(m.aliases,'') <> '')
+        AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE m
+                        WHERE m.src_table = f.src_table
+                          AND coalesce(m.aliases,'') = ''
+                          AND m.seen_at > now() - INTERVAL $RETRY_H HOUR)
+      ORDER BY f.src_table LIMIT 1)
+    SELECT to_json(list(struct_pack(entity := src_table, title := label,
+                                    quantities := coalesce(measures,''))))
+    FROM (SELECT f.*, t.emb <=> (SELECT emb FROM seed) AS d
+            FROM wiki_entity_facts f
+            JOIN search_tables t ON t.src_table = f.src_table
+           WHERE f.cls <> 'service'
+             AND coalesce(f.measures,'') <> ''
+             AND EXISTS (SELECT 1 FROM $ALIAS_TABLE a
+                         WHERE a.src_table = f.src_table AND coalesce(a.aliases,'') <> '')
+             AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE m
+                             WHERE m.src_table = f.src_table AND coalesce(m.aliases,'') <> '')
+             AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE m
+                             WHERE m.src_table = f.src_table
+                               AND coalesce(m.aliases,'') = ''
+                               AND m.seen_at > now() - INTERVAL $RETRY_H HOUR)
+           ORDER BY d, f.src_table LIMIT $BATCH)" > "$TMP/pay" 2>/dev/null
+  chmod 644 "$TMP/pay" 2>/dev/null
+  PAY=$(cat "$TMP/pay")
+  case "$PAY" in ''|'[]'|'null') break;; esac
+  {
+    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — the SHORT NAMES a person here uses for this kind of record, including its own title; names of its quantities do not belong here; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+    cat "$TMP/pay"
+  } > "$TMP/msg"
+  chmod 644 "$TMP/msg"
+  "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key wiki-alias --json \
+    --message-file "$TMP/msg" \
+    > "$TMP/ans" 2>"$TMP/err" || {
+      skipped=$((skipped + 1))
+      echo "величины: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
+      psql "$DSN" -q -c "INSERT INTO $MEASURE_TABLE
+        SELECT entity, trim(q), '', now()
+        FROM read_json('$TMP/pay',
+          columns := {entity:'VARCHAR', title:'VARCHAR', quantities:'VARCHAR'}),
+             unnest(str_split(quantities, ',')) AS x(q)
+        WHERE trim(q) <> ''
+          AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE a
+                          WHERE a.src_table = entity AND a.measure = trim(q))" >/dev/null 2>&1
+      continue
+    }
+  python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json"
+  chmod 644 "$TMP/rows.json" "$TMP/measures.json" 2>/dev/null
+  # Только величины. rows.json с алиасами сущности здесь намеренно не пишется в
+  # ALIAS_TABLE: добор не имеет права перезаписать уже собранные описания записей.
+  psql "$DSN" -q -c "
+    DELETE FROM $MEASURE_TABLE WHERE coalesce(aliases,'') = '' AND src_table IN
+      (SELECT DISTINCT src_table FROM read_json('$TMP/measures.json',
+         columns := {src_table:'VARCHAR', measure:'VARCHAR', aliases:'VARCHAR'})
+       WHERE coalesce(aliases,'') <> '');
+    INSERT INTO $MEASURE_TABLE
+    SELECT src_table, measure, aliases, now()
+    FROM read_json('$TMP/measures.json',
+         columns := {src_table:'VARCHAR', measure:'VARCHAR', aliases:'VARCHAR'}) n
+    WHERE coalesce(n.aliases,'') <> ''
+      AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE a
+                      WHERE a.src_table = n.src_table AND a.measure = n.measure
+                        AND coalesce(a.aliases,'') <> '')" 2>&1 | grep -i error
+  have_m=$(psql "$DSN" -tAc "SELECT count(*) FROM $MEASURE_TABLE WHERE coalesce(aliases,'') <> ''" 2>/dev/null)
+  echo "величины: непустых в базе $have_m"
+  done_total=$((done_total + BATCH))
 done
 # ── ВТОРОЙ ПРОХОД: РАЗВЕСТИ ТЕХ, КОГО НАЗЫВАЮТ ОДИНАКОВО ────────────────────────────
 # 🔴 Указание владельца 30.07: «если и там и там есть одно и то же описание, значит надо
@@ -301,6 +380,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
              -- разведутся следующим кругом: слово останется спорным, пока их не разведут.
              ORDER BY f.src_table LIMIT $BATCH) f" \
       > "$TMP/pay" 2>/dev/null
+    chmod 644 "$TMP/pay" 2>/dev/null
     PAY=$(cat "$TMP/pay")
     case "$PAY" in ''|'[]'|'null') continue;; esac
     {
@@ -378,4 +458,8 @@ fi
 psql "$DSN" -tA -F' | ' -c "
   SELECT 'алиасов в базе', count(*) FROM $ALIAS_TABLE
   UNION ALL SELECT 'из них ПУСТЫХ (модель не ответила)', count(*) FROM $ALIAS_TABLE
+    WHERE coalesce(aliases,'') = ''
+  UNION ALL SELECT 'величин в словаре', count(*) FROM $MEASURE_TABLE
+    WHERE coalesce(aliases,'') <> ''
+  UNION ALL SELECT 'пустышек величин (модель не ответила)', count(*) FROM $MEASURE_TABLE
     WHERE coalesce(aliases,'') = ''"

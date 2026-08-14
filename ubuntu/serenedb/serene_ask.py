@@ -2113,6 +2113,18 @@ def measures_of(src_table):
         return []
 
 
+def measure_aliases_of(src_table):
+    # Нет таблицы или права -- пусто, путь прежний (подстрока имени колонки).
+    try:
+        rows = psql(
+            "SELECT measure, aliases FROM search_measure_alias "
+            "WHERE src_table = %s AND coalesce(aliases,'') <> ''"
+            % lit(src_table))
+        return {r[0]: r[1] for r in rows or [] if r and r[0]}
+    except RuntimeError:
+        return {}
+
+
 def totals_of(src_table, match, preds, measures):
     """Итоги ПО КАЖДОЙ величине сущности — одним запросом.
 
@@ -2159,7 +2171,28 @@ def totals_of(src_table, match, preds, measures):
     return out
 
 
-def measure_choice(names, word):
+def _alias_parts(raw):
+    """Алиасы поля: список или строка через запятую, как кладёт `wiki_alias.sh`."""
+    if isinstance(raw, (list, tuple)):
+        return [str(a).strip() for a in raw if str(a).strip()]
+    return [a.strip() for a in str(raw or "").split(",") if a.strip()]
+
+
+def _word_hits_text(wl, text):
+    t = (text or "").strip().lower()
+    if not t or len(wl) < 2 or len(t) < 2:
+        return False
+    return wl == t or wl in t or t in wl
+
+
+def split_ident(name):
+    """CamelCase и подчёркивания — в слова через пробел. Без знания конкретной базы."""
+    s = (name or "").replace("_", " ")
+    s = re.sub(r"([a-zа-яё0-9])([A-ZА-ЯЁ])", r"\1 \2", s)
+    return " ".join(s.split())
+
+
+def measure_choice(names, word, alias_by=None):
     """Чистая часть выбора величины: слово человека против имён величин ИЗ ДАННЫХ.
 
     Вынесена из `pick_measure` отдельной функцией по двум причинам, и обе — не про красоту:
@@ -2184,6 +2217,18 @@ def measure_choice(names, word):
     exact = [n for n in names if n.lower() == wl]
     if exact:
         return (exact[0], [], 'exact')
+    if alias_by:
+        covered = [n for n in names
+                   if any(_word_hits_text(wl, a) for a in _alias_parts(alias_by.get(n)))]
+        if len(covered) == 1:
+            return (covered[0], [], 'alias')
+        if len(covered) > 1:
+            base_of = [n for n in covered
+                       if sum(1 for m in covered if m != n and m.startswith(n))
+                       >= len(covered) - 1]
+            if len(base_of) == 1 and base_of[0].lower() != wl:
+                return (base_of[0], [], 'base')
+            return (None, covered, 'ask')
     same = sorted(n for n in names if wl in n.lower())
     if len(same) > 1:
         # Базовая величина снимает неоднозначность, если её частные виды — её же префиксы
@@ -2201,6 +2246,88 @@ def measure_choice(names, word):
     if len(same) == 1:
         return (same[0], [], 'substring')
     return (None, [], 'rerank')
+
+
+def measure_captions(measures, alias_by=None):
+    """Человеческая подпись величины. Одинаковые имена различаются разбором поля."""
+    alias_by = alias_by or {}
+    prim = {}
+    for m in measures:
+        parts = _alias_parts(alias_by.get(m))
+        prim[m] = parts[0] if parts else (split_ident(m) or m)
+    seen = {}
+    for v in prim.values():
+        seen[v.lower()] = seen.get(v.lower(), 0) + 1
+    out = {}
+    for m in measures:
+        cap = prim[m]
+        if seen.get(cap.lower(), 0) > 1:
+            extra = split_ident(m) or m
+            if extra.lower() != cap.lower():
+                cap = "%s (%s)" % (cap, extra)
+        out[m] = cap
+    return out
+
+
+def resolve_measure(text, measures, alias_by=None, diag=None):
+    """Свести выбор человека к имени поля. Неоднозначно или не узнали — None (п. 12)."""
+    if not text:
+        return None
+    t = str(text).strip()
+    if not t:
+        return None
+    if t in (measures or []):
+        return t
+    alias_by = alias_by or {}
+    caps = measure_captions(measures, alias_by)
+    norm = lambda s: "".join(str(s or "").lower().split())
+    nt = norm(t)
+    hit = [m for m, c in caps.items() if norm(c) == nt]
+    if len(hit) == 1:
+        return hit[0]
+    if len(hit) > 1:
+        if diag is not None:
+            diag["measure_ambiguous_pick"] = t
+        return None
+    hit = []
+    for m in measures:
+        if any(norm(a) == nt for a in _alias_parts(alias_by.get(m))):
+            hit.append(m)
+    if len(hit) == 1:
+        return hit[0]
+    if len(hit) > 1:
+        if diag is not None:
+            diag["measure_ambiguous_pick"] = t
+        return None
+    if diag is not None:
+        diag["measure_unknown"] = t
+    return None
+
+
+def slot_measure_uncovered(word, selected, names, alias_by=None):
+    """Вопрос назвал величину, выбранное поле её не покрывает, другое из names — покрывает."""
+    if not word or not selected or not names:
+        return False, []
+    got, alts, how = measure_choice(names, word, alias_by=alias_by)
+    covering = list(alts) if how == "ask" else ([got] if got else [])
+    if covering and selected not in covering:
+        return True, covering
+    return False, []
+
+
+def clarify_complete(txt, opts):
+    """Код не имеет права выкинуть пункт уточнения: чего нет в тексте модели — дописать."""
+    labels = [(o.get("label") or o.get("measure") or "").strip()
+              for o in (opts or [])]
+    labels = [x for x in labels if x]
+    if not labels:
+        return txt or ""
+    low = (txt or "").lower()
+    if all(lab.lower() in low for lab in labels):
+        return txt or ""
+    extra = ", ".join("«%s»" % lab for lab in labels)
+    body = (txt or "").rstrip()
+    return extra if not body else body + "\n" + extra
 
 
 def answers_diverge(figures):
@@ -2476,7 +2603,8 @@ def pick_measure(src_table, question, word):
     #     сущности ответ дал 71 045 277,59 вместо 73 181 157,68 — сущность та, величина нет.
     names = measures_of(src_table)
     wl = (word or "").strip().lower()
-    got, alts, how = measure_choice(names, word)
+    got, alts, how = measure_choice(names, word,
+                                    alias_by=measure_aliases_of(src_table))
     if how != 'rerank':
         return (got, alts, how)
     idx = rerank(word, names)
@@ -3885,7 +4013,7 @@ def clarify_say(question, opts, diag=None):
         return fallback
     ok, bad = gate_out(txt, [], None, _opt_values(opts))
     if ok:
-        return txt
+        return clarify_complete(txt, opts)
     sys.stderr.write("ask CLARIFY GATE: числа вне вариантов: %s\n" % bad[:4])
     if isinstance(diag, dict):
         diag["clarify_gate_rejected"] = bad[:4]
@@ -4173,6 +4301,29 @@ def opts_hints(srcs):
         pass
     if len(set(when.values())) < 2:      # дата одна на всех — не различает
         when = {}
+    built, miss = {}, {}
+    try:
+        for r in psql("SELECT src_table, last_built_at::VARCHAR FROM %s "
+                      "WHERE src_table IN (%s) AND last_built_at IS NOT NULL"
+                      % (TABLES, lst)) or []:
+            if r and r[0] and len(r) > 1 and (r[1] or "").strip():
+                built[r[0]] = r[1].strip()[:16]
+    except RuntimeError:
+        pass
+    if len(set(built.values())) < 2:
+        built = {}
+    try:
+        for r in psql("SELECT entity, (в_1С - в_корпусе) FROM search_coverage "
+                      "WHERE entity IN (%s) AND в_1С > в_корпусе" % lst) or []:
+            if r and r[0] and len(r) > 1:
+                try:
+                    miss[r[0]] = int(r[1])
+                except (TypeError, ValueError):
+                    pass
+    except RuntimeError:
+        pass
+    if not miss or len(set(miss.values())) < 2:
+        miss = {}
     out = {}
     for s in srcs:
         parts = []
@@ -4180,6 +4331,10 @@ def opts_hints(srcs):
             parts.append(what[s][:90])
         if when.get(s):
             parts.append("данные по %s" % when[s])
+        if built.get(s):
+            parts.append("в поиске с %s" % built[s])
+        if miss.get(s):
+            parts.append("не в поиске %s" % miss[s])
         if parts:
             out[s] = "; ".join(parts)
     return out
@@ -5741,7 +5896,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # табличной части дают одно и то же число, и вопрос о них был бы шумом, а шум
         # обесценивает настоящие уточнения.
         _word = (intent.get("measure") or "").strip()
-        _got, _alts, _how = measure_choice(measures_of(src), _word)
+        _malias = measure_aliases_of(src)
+        _got, _alts, _how = measure_choice(measures_of(src), _word,
+                                           alias_by=_malias)
         if _how == 'ask' and measure in _alts:
             _tot = {m: v for m, v, _mx, _mn in totals_of(src, match, preds, _alts)}
             if measure_ambiguous(_alts, _tot):
@@ -5765,7 +5922,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if plan.get("compute"):
         diag["compute"] = plan["compute"]
     if measure_pick:                           # человек уже выбрал величину кнопкой
-        measure, measure_alts = measure_pick, []
+        _names = measures_of(src)
+        _resolved = resolve_measure(measure_pick, _names,
+                                    measure_aliases_of(src), diag)
+        if _resolved:
+            measure, measure_alts = _resolved, []
+        elif measure_pick in _names:
+            measure, measure_alts = measure_pick, []
+        else:
+            diag["measure_pick_unresolved"] = measure_pick
     diag["measure"] = measure
     шаг("величина выбрана", величина=(measure or "—"),
         подходящих=len(measure_alts or []))
@@ -5810,6 +5975,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 diag["measure_all_zero" if _ноль else "measure_no_values"] = measure
                 measure, measure_alts = None, _alive
                 diag["measure"] = None
+    if SLOT_COVER and measure and not measure_pick:
+        _unc, _cov = slot_measure_uncovered(
+            (intent.get("measure") or "").strip(), measure,
+            measures_of(src), measure_aliases_of(src))
+        if _unc:
+            diag["slot_uncovered"] = {"слово": intent.get("measure"),
+                                       "выбрано": measure, "покрывают": _cov}
+            measure, measure_alts = None, _cov
+            diag["measure"] = None
     # Несколько величин подходят одинаково — спрашиваем, какую считать. Механизм тот же,
     # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
     if measure_alts:
@@ -5837,7 +6011,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
         except RuntimeError:
             _ent = ""
-        opts = [{"src": src, "measure": m, "label": m, "distinct_by": "",
+        _caps = measure_captions(measure_alts, measure_aliases_of(src))
+        opts = [{"src": src, "measure": m, "label": _caps[m], "distinct_by": "",
                  "entity_label": _ent}
                 for m in measure_alts]
         # 🔴 ВОПРОС ЗАДАЁТ МОДЕЛЬ, НА ЯЗЫКЕ СПРАШИВАЮЩЕГО. Здесь стояла наша русская фраза
@@ -5847,7 +6022,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # перечень величин, по нему выбор всё равно возможен.
         return {"partial": cut or None, "kind": "clarify",
                 "text": clarify_say(question, opts, diag)
-                        or ", ".join("«%s»" % m for m in measure_alts),
+                        or ", ".join("«%s»" % o["label"] for o in opts),
                 "options": opts, "sources": [src],
                 "diag": dict(diag, sec=round(time.time() - t0, 2))}
     # Величина не названа — считаем итоги по всем и показываем модели с именами.
@@ -6116,6 +6291,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
 # помнит ответ по ключу «вопрос + дата», поэтому вызов здесь отдаётся ДАРОМ — тот же
 # разбор потом возьмёт `answer`) и числа из `diag` уже собранного ответа.
 ENOUGH_ON = os.environ.get("ASK_ENOUGH", "1") not in ("0", "false", "no")
+# Veto of uncovered measure slot. Default OFF: do not enable without answer-rate measure.
+SLOT_COVER = os.environ.get("ASK_SLOT_COVER", "0") == "1"
 # Память описаний вопроса — по тому же ключу и того же размера, что у шага 1: описание
 # зависит ровно от текста вопроса, данных оно не видит.
 _FACTS_MEMO = {}

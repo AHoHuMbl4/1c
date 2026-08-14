@@ -267,7 +267,7 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
                 # или, того хуже, имя величины, поданное как сущность.
                 name = o.get("label") or o["measure"]
                 lines.append("- %s | measure=%s | focus=%s"
-                             % (name, o["measure"], o.get("entity_label") or ""))
+                             % (name, name, o.get("entity_label") or ""))
             elif o.get("src"):
                 name = o.get("label") or o["src"]
                 # Пояснение стоит РЯДОМ с подписью, но в `focus` не входит: значением

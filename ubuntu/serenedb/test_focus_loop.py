@@ -174,6 +174,27 @@ if picks2:
     t("выбор с пояснением всё так же сводится к таблице",
       A.resolve_focus(picks2[0], d2) in (DOC, REG), (picks2[0], d2))
 
+# --- 6. величина: подпись и значение выбора — одна человеческая строка ---------
+MEAS_OPTS = [
+    {"src": DOC, "measure": "ИтогПробный", "label": "оборот",
+     "entity_label": "Отгрузка Пробная (документ)", "distinct_by": ""},
+    {"src": DOC, "measure": "СуммаКартойПробная", "label": "оплата картой",
+     "entity_label": "Отгрузка Пробная (документ)", "distinct_by": ""},
+]
+M._ask = lambda *a, **kw: {"kind": "clarify", "text": "НДС или карта?",
+                           "options": MEAS_OPTS}
+out_m = M.ask_1c("сумма продаж", "", "", "")
+meas_picks = [p.strip() for p in re.findall(r"measure=([^\n|]+)", out_m) if p.strip()]
+t("величина: оба варианта показаны боту", len(meas_picks) == 2, meas_picks)
+t("величина: measure= совпадает с подписью (как focus у сущности)",
+  set(meas_picks) == {"оборот", "оплата картой"}, meas_picks)
+t("величина: внутренние имена полей боту не ушли",
+  "ИтогПробный" not in out_m and "СуммаКартойПробная" not in out_m, out_m)
+t("величина: выбор «оборот» сводится к полю",
+  A.resolve_measure("оборот", ["ИтогПробный", "СуммаКартойПробная"],
+                    {"ИтогПробный": "оборот, сумма продаж",
+                     "СуммаКартойПробная": "оплата картой"}) == "ИтогПробный")
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

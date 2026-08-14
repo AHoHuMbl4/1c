@@ -74,6 +74,18 @@ CREATE TABLE IF NOT EXISTS search_entity_alias (
   src_table VARCHAR, aliases VARCHAR, best_used_for VARCHAR, not_enough_for VARCHAR,
   seen_at TIMESTAMP);
 
+-- Словарь величин: человеческие имена к полю сущности. Связь поле → слова, а не
+-- мешок слов в алиасах сущности: иначе «сумма продаж» не отличить от «оплаты картой»,
+-- когда оба лежат одной строкой. Пустая запись — попытка, не ответ (тот же смысл,
+-- что у `search_entity_alias`): переспрос держит `wiki_alias.sh`.
+CREATE TABLE IF NOT EXISTS search_measure_alias (
+  src_table VARCHAR, measure VARCHAR, aliases VARCHAR, seen_at TIMESTAMP);
+
+-- Время последнего переноса сущности в поисковый слой. Пишет `corpus_merge` по
+-- фактически перенесённым (`tmp3_build`); такт-пропуск колонку не трогает.
+-- MERGE метки в `corpus_build` её не сбрасывает — там UPDATE только label/parent/emb.
+ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS last_built_at TIMESTAMP;
+
 -- Словарь и индекс. Поля индексируются по отдельности в ОДНОМ индексе — штатный шаблон
 -- движка: `doc` для широкого запроса, `refs` для адресности и веса, `src_table` без
 -- словаря (keyword) для фильтра уровня индекса.
@@ -123,6 +135,10 @@ GRANT SELECT ON search_entity_class TO serene_ro;
 -- в него: «сколько НДС заплатили поставщикам» отвечалось регистром вместо уточнения, хотя
 -- в алиасах верной сущности лежит дословно эта фраза.
 GRANT SELECT ON search_entity_alias TO serene_ro;
+-- Без права сервис ловит RuntimeError и считает «словаря величин нет» — выбор
+-- величины тогда молча идёт по подстроке имени колонки. Та же ловушка, что у
+-- алиасов сущности выше.
+GRANT SELECT ON search_measure_alias TO serene_ro;
 
 -- Индекс по алиасам: когда выбор сущности не подтверждён, соперников по вопросу ранжирует
 -- ДВИЖОК штатной `tfidf`, а не наш счёт общих слов. Разница принципиальная: [замер 30.07]
