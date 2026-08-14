@@ -228,6 +228,19 @@ t("диапазон без второй границы назван потере
 t("диапазон с двумя границами проходит",
   ok_parse('{"amount": {"op": "between", "value": 1, "value2": 9}}')["amount"]["value2"] == 9.0)
 t("amount = null не роняет разбор", ok_parse('{"amount": null}')["amount"] == {})
+t("amount без op — K, не порог",
+  ok_parse('{"amount": {"value": 5}}')["amount"] == {"op": None, "value": 5.0, "value2": None})
+t("amount без op не даёт предикат отбора",
+  A._num_pred(ok_parse('{"amount": {"value": 5}}'), "Количество") == [])
+t("period2 рядом с period, та же проверка типа",
+  ok_parse('{"period": {"from": "2026-08-07", "to": "2026-08-14"},'
+           ' "period2": {"from": "2026-07-31", "to": "2026-08-06"}}')["period2"]
+  == {"from": "2026-07-31", "to": "2026-08-06"})
+t("period2 перевёрнутый отбрасывается",
+  ok_parse('{"period2": {"from": "2026-08-14", "to": "2026-08-07"}}')["period2"] == {})
+t("period2 не словарём — потеря, один срез",
+  "period2" in ok_parse('{"period2": "прошлая неделя"}')["parse"]["lost"]
+  and ok_parse('{"period2": "прошлая неделя"}')["period2"] == {})
 
 # --------------------------------------------------------- повтор и отказ
 _d, _calls = parse("прошу прощения, не могу", '{"kind": "склад", "want": "count"}')

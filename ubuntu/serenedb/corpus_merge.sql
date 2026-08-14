@@ -96,6 +96,8 @@ ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS nums MAP(VARCHAR, DOUBLE);
 -- реквизиту по имени вместо подстрочного поиска в тексте (`corpus_build.sql`, is_flag).
 -- [проверено] `ADD COLUMN` при живом инвертированном индексе индекс не роняет.
 ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS flags MAP(VARCHAR, BOOLEAN);
+-- Карта ссылок строки. Вектор не сбрасывается: колонка не входит в doc_hash.
+ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS refs_map MAP(VARCHAR, VARCHAR);
 
 -- Время последнего переноса сущности в поисковый слой. Пишется ниже по фактически
 -- перенесённым (`tmp3_build`); такт-пропуск колонку не трогает.
@@ -118,10 +120,11 @@ USING tmp3_corpus AS s
 ON t.src_table = s.src_table AND t.row_key = s.row_key
 WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash THEN
      UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash,
-                nums = s.nums, flags = s.flags, doc_date = s.doc_date, emb = NULL
+                nums = s.nums, flags = s.flags, doc_date = s.doc_date,
+                refs_map = s.refs_map, emb = NULL
 WHEN NOT MATCHED THEN
-     INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, emb)
-     VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, NULL);
+     INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, refs_map, emb)
+     VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, s.refs_map, NULL);
 
 -- Величины и дата не входят в отпечаток, поэтому строки с неизменившимся текстом `MERGE`
 -- не трогает — а обновить их нужно. Вектор здесь не сбрасывается: текст тот же.
@@ -134,11 +137,13 @@ WHEN NOT MATCHED THEN
 -- текстом `MERGE` не срабатывает вовсе. При первом такте после `ADD COLUMN` отпечатки
 -- совпадают У ВСЕГО корпуса — без этой строки карта осталась бы пустой навсегда, и
 -- отбор «не папка» молча возвращал бы всё подряд.
-UPDATE search_corpus c SET nums = t.nums, flags = t.flags, doc_date = t.doc_date
+UPDATE search_corpus c SET nums = t.nums, flags = t.flags, doc_date = t.doc_date,
+                           refs_map = t.refs_map
 FROM tmp3_corpus t
 WHERE t.src_table = c.src_table AND t.row_key = c.row_key
   AND (c.nums IS DISTINCT FROM t.nums OR c.flags IS DISTINCT FROM t.flags
-       OR c.doc_date IS DISTINCT FROM t.doc_date);
+       OR c.doc_date IS DISTINCT FROM t.doc_date
+       OR c.refs_map IS DISTINCT FROM t.refs_map);
 
 -- Исчезнувшие строки удаляет БАЗА одним запросом — и только по сущностям, которые в этот
 -- раз ДЕЙСТВИТЕЛЬНО собрались. Прежний фильтр по `tmp3_src` был тавтологией: `tmp3_src`

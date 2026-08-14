@@ -49,6 +49,10 @@ try:
     import serene_enough
 except ImportError:                                # noqa: F401 — шаг просто выключен
     serene_enough = None
+try:
+    import serene_axis
+except ImportError:
+    serene_axis = None
 
 DSN = os.environ.get("SERENEDB_DSN_RO", "host=127.0.0.1 port=7890 user=serene_ro dbname=postgres")
 PGPASSWORD = os.environ.get("PGPASSWORD", "")
@@ -595,7 +599,7 @@ _ABOUT_OK = ("data", "coverage")
 # нулевые документы получал счёт ВСЕХ документов реализации: неверный ответ, ничем не
 # отличимый от верного (п. 3, п. 10).
 _AMOUNT_OPS = ("=", ">", "<", ">=", "<=", "between")
-_INTENT_FIELDS = ("terms", "kind", "measure", "want", "period", "amount", "about")
+_INTENT_FIELDS = ("terms", "kind", "measure", "want", "period", "period2", "amount", "about")
 # Сколько прогонов разбора допустимо на один вопрос и какой отрыв лидера считается
 # согласием. 1 прогон — прежнее поведение. Это бюджет ТОЧНОСТИ входа, а не подстройка
 # под базу: от данных и от языка он не зависит.
@@ -877,9 +881,30 @@ def _normalize_intent(d, question=""):
             lost.append("amount.value2")
         elif op:
             amount = {"op": op, "value": val, "value2": val2}
+        elif val is not None:
+            # Число без порога — K рейтинга, не условие отбора. _num_pred требует op.
+            amount = {"op": None, "value": val, "value2": val2}
     elif a_in:
         lost.append("amount")
     out["amount"] = amount
+
+    period2, p2_in = {}, d.get("period2")
+    if isinstance(p2_in, dict):
+        for edge in ("from", "to"):
+            raw_edge = p2_in.get(edge)
+            if raw_edge is None:
+                continue
+            iso = _intent_date(raw_edge)
+            if iso:
+                period2[edge] = iso
+            else:
+                lost.append("period2." + edge)
+    elif p2_in:
+        lost.append("period2")
+    if period2.get("from") and period2.get("to") and period2["from"] > period2["to"]:
+        lost.append("period2.order")
+        period2 = {}
+    out["period2"] = period2
 
     # 🔴 УСЛОВИЕ, КОТОРОГО В ВОПРОСЕ НЕ БЫЛО, — ДОГАДКА, И ОНА ВИДНА (п. 12).
     # [замер 04.08] «Сколько мы продали за год?» разбирается в период
@@ -1064,6 +1089,17 @@ def _num_pred(intent, measure):
     return []
 
 
+def period_preds(period):
+    """Предикаты одного диапазона дат. Второй срез — тот же вызов с period2."""
+    out = []
+    p = period or {}
+    if p.get("from"):
+        out.append("doc_date >= %s" % lit(p["from"]))
+    if p.get("to"):
+        out.append("doc_date < (%s::date + INTERVAL 1 day)" % lit(p["to"]))
+    return out
+
+
 def _predicates(intent):
     """Условия по дате — предикаты по INCLUDE-колонке индекса.
 
@@ -1072,13 +1108,7 @@ def _predicates(intent):
     «больше 500000» у документа про сумму, а у строки накладной могло бы оказаться
     про количество.
     """
-    out = []
-    p = intent.get("period") or {}
-    if p.get("from"):
-        out.append("doc_date >= %s" % lit(p["from"]))
-    if p.get("to"):
-        out.append("doc_date < (%s::date + INTERVAL 1 day)" % lit(p["to"]))
-    return out
+    return period_preds((intent or {}).get("period"))
 
 
 def _fetch(match_sql, preds, order, limit):
@@ -2417,9 +2447,14 @@ def compose_slot_values(agg, measure=None, folders=0, money=None):
         ca = agg.get("count_amount")
         if ca is not None and ca != agg.get("count"):
             slots["count_amount"] = ca
-        for k in ("sum", "max", "min", "avg"):
+        keys = ("sum",) if agg.get("grain") == "group" else ("sum", "max", "min", "avg")
+        for k in keys:
             if agg.get(k) is not None:
                 slots[k] = agg[k]
+    if agg.get("grain") == "group" and agg.get("n_groups") is not None:
+        ng, shown = agg["n_groups"], len(agg.get("groups") or [])
+        if ng > shown:
+            slots["n_groups"] = ng
     dmin = agg.get("date_min")
     if dmin:
         slots["date_min"] = dmin
@@ -3053,6 +3088,350 @@ def aggregate(src_table, match, preds, measure=None):
             "folders": int(row[8] or 0)}
 
 
+
+def src_is_child(src_table):
+    """Табличная часть: у источника заполнен parent. Не имя, а контракт сборки."""
+    if not src_table:
+        return False
+    try:
+        r = psql("SELECT parent FROM %s WHERE src_table = %s LIMIT 1"
+                 % (TABLES, lit(src_table)))
+    except RuntimeError:
+        return False
+    return bool(r and r[0] and (r[0][0] or "").strip())
+
+
+def refcols_of(src_table):
+    """Оси группы выбранного источника: col → target_src. Нет таблицы — пусто."""
+    if not src_table:
+        return []
+    try:
+        rs = psql("SELECT col, target_src FROM search_refcols "
+                  "WHERE src_table = %s AND col IS NOT NULL AND col <> '' "
+                  "ORDER BY col" % lit(src_table))
+    except RuntimeError:
+        return []
+    out = []
+    for r in rs or []:
+        if r and r[0]:
+            out.append({"col": r[0], "target_src": (r[1] or "") if len(r) > 1 else ""})
+    return out
+
+
+def kind_axis_hits(axes, kind_text):
+    """kind → оси, чей target_src сходится с родом тем же путём, что выбор сущности."""
+    kind_text = (kind_text or "").strip()
+    axes = [a for a in (axes or []) if a.get("col")]
+    if not kind_text or not axes:
+        return []
+    vals = ", ".join("(%s, %s)" % (lit(a["col"]), lit(a.get("target_src") or ""))
+                     for a in axes)
+    try:
+        rs = psql(
+            "WITH ax(col, target_src) AS (VALUES %s) "
+            "SELECT DISTINCT ax.col FROM ax "
+            "LEFT JOIN %s t ON t.src_table = ax.target_src "
+            "LEFT JOIN search_entity_alias a ON a.src_table = ax.target_src "
+            "WHERE list_has_any("
+            "        list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
+            "        list_filter(ts_lexize(%s, concat_ws(' ', t.label, a.aliases, "
+            "                                            a.best_used_for, ax.col)),"
+            "                    x -> length(x) >= 3))"
+            % (vals, TABLES, lit(STEM_DICT), lit(kind_text), lit(STEM_DICT)))
+    except RuntimeError:
+        rs = []
+    hits = [r[0] for r in rs or [] if r and r[0]]
+    if hits:
+        return hits
+    # Основы не сошлись (товар ↛ номенклатура). Дальше — тот же путь, что выбор
+    # сущности: смысл и словарь, пересечённые с target_src осей выбранного источника.
+    try:
+        found = set(meaning_candidates([], kind_text, kind_text, MEANING_TOP))
+    except RuntimeError:
+        found = set()
+    return [a["col"] for a in axes if a.get("target_src") in found]
+
+
+def kind_axis_rerank(axes, kind_text):
+    """Род не сошёлся основами — реранкер по меткам target_src (тот же, что выбор сущности)."""
+    kind_text = (kind_text or "").strip()
+    axes = [a for a in (axes or []) if a.get("col")]
+    if not kind_text or not axes:
+        return []
+    srcs = [a.get("target_src") for a in axes if a.get("target_src")]
+    labs = {}
+    if srcs:
+        try:
+            for r in psql("SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                          % (TABLES, ", ".join(lit(s) for s in srcs))) or []:
+                if r and r[0]:
+                    labs[r[0]] = (r[1] or r[0]).strip()
+        except RuntimeError:
+            return []
+    docs, cols = [], []
+    for a in axes:
+        docs.append(labs.get(a.get("target_src") or "", a["col"]))
+        cols.append(a["col"])
+    order = rerank(kind_text, docs)
+    if not order:
+        return []
+    return [cols[order[0]]]
+
+
+def term_ref_owners(groups):
+    """Для каждой группы terms — owner'ы search_refmap, чьё имя совпало."""
+    groups = list(groups or [])
+    parts = []
+    for gi, g in enumerate(groups):
+        for alt in (g or []):
+            if alt:
+                parts.append("SELECT %d AS gi, %s AS alt" % (gi, lit(str(alt))))
+    if not parts:
+        return {}
+    try:
+        rs = psql(
+            "WITH q AS (%s) "
+            "SELECT DISTINCT q.gi, m.owner FROM q "
+            "JOIN search_refmap m ON m.owner IS NOT NULL AND m.owner <> '' "
+            " AND (lower(m.name) = lower(q.alt) "
+            "      OR (length(q.alt) >= 3 AND lower(m.name) LIKE '%%' || lower(q.alt) || '%%') "
+            "      OR list_has_any(list_filter(ts_lexize(%s, m.name), x -> length(x) >= 3),"
+            "                      list_filter(ts_lexize(%s, q.alt), x -> length(x) >= 3)))"
+            % (" UNION ALL ".join(parts), lit(STEM_DICT), lit(STEM_DICT)))
+    except RuntimeError:
+        return {}
+    out = {}
+    for r in rs or []:
+        if r and r[1]:
+            out.setdefault(int(r[0]), []).append(r[1])
+    return out
+
+
+def term_axis_hits(src_table, axes, groups):
+    """Какие группы terms попали в какие оси выбранного источника."""
+    groups = list(groups or [])
+    axes = [a for a in (axes or []) if a.get("col")]
+    if not src_table or not axes or not groups:
+        return {}
+    parts = []
+    for gi, g in enumerate(groups):
+        for alt in (g or []):
+            if alt:
+                parts.append("SELECT %d AS gi, %s AS alt" % (gi, lit(str(alt))))
+    if not parts:
+        return {}
+    ax_sql = ", ".join("(%s, %s)" % (lit(a["col"]), lit(a.get("target_src") or ""))
+                       for a in axes)
+    try:
+        rs = psql(
+            "WITH q AS (%s), ax(col, target_src) AS (VALUES %s) "
+            "SELECT DISTINCT q.gi, ax.col FROM q CROSS JOIN ax "
+            "WHERE EXISTS ("
+            "  SELECT 1 FROM search_refmap m "
+            "  WHERE m.owner = ax.target_src AND ax.target_src <> '' "
+            "    AND (lower(m.name) = lower(q.alt) "
+            "         OR (length(q.alt) >= 3 AND lower(m.name) LIKE '%%' || lower(q.alt) || '%%') "
+            "         OR list_has_any("
+            "              list_filter(ts_lexize(%s, m.name), x -> length(x) >= 3),"
+            "              list_filter(ts_lexize(%s, q.alt), x -> length(x) >= 3)))) "
+            " OR EXISTS ("
+            "  SELECT 1 FROM %s c "
+            "  WHERE c.src_table = %s "
+            "    AND lower(coalesce(map_extract_value(c.refs_map, ax.col), '')) = lower(q.alt))"
+            % (" UNION ALL ".join(parts), ax_sql, lit(STEM_DICT), lit(STEM_DICT),
+               CORPUS, lit(src_table)))
+    except RuntimeError:
+        return {}
+    out = {}
+    for r in rs or []:
+        if r and r[1]:
+            out.setdefault(int(r[0]), []).append(r[1])
+    return out
+
+
+def resolve_member_names(src_table, col, groups, gis, target_src=""):
+    """Имена членов сравнения на оси — значения refs_map / имена search_refmap."""
+    names = []
+    for gi in gis or []:
+        if 0 <= gi < len(groups or []):
+            for a in groups[gi] or []:
+                if a and a not in names:
+                    names.append(str(a))
+    if not names:
+        return []
+    parts = " UNION ALL ".join("SELECT %s AS alt" % lit(n) for n in names)
+    try:
+        rs = psql(
+            "WITH q AS (%s), "
+            "vals AS ("
+            "  SELECT DISTINCT map_extract_value(refs_map, %s) AS val FROM %s "
+            "  WHERE src_table = %s AND refs_map IS NOT NULL) "
+            "SELECT DISTINCT v.val FROM q JOIN vals v "
+            "  ON lower(v.val) = lower(q.alt) "
+            "  OR (length(q.alt) >= 3 AND lower(v.val) LIKE '%%' || lower(q.alt) || '%%') "
+            "  OR list_has_any("
+            "       list_filter(ts_lexize(%s, v.val), x -> length(x) >= 3),"
+            "       list_filter(ts_lexize(%s, q.alt), x -> length(x) >= 3))"
+            % (parts, lit(col), CORPUS, lit(src_table), lit(STEM_DICT), lit(STEM_DICT)))
+    except RuntimeError:
+        return names
+    found = [r[0] for r in rs or [] if r and r[0]]
+    return found or names
+
+
+def _group_fold(compute, measure):
+    """Внутри группы: сумма меры (или счёт строк). max/min — порядок групп, не строка."""
+    if (compute or "") == "count" or not measure:
+        return "count"
+    if (compute or "") == "avg":
+        return "avg"
+    return "sum"
+
+
+def aggregate_groups(src_table, match, preds, measure, col, k, compute=None,
+                     members=None):
+    """GROUP BY оси ссылки. Тот же WHERE, что у aggregate. Без выгрузки строк.
+
+    n_groups — по всему множеству, не K. members — ровно эти ключи, без «топ остальных».
+    """
+    if not src_table or not col:
+        return None
+    try:
+        k = int(k)
+    except (TypeError, ValueError):
+        k = ROWS_TO_MODEL
+    k = max(1, min(k, ROWS_TO_MODEL))
+    # Сравнение: члены оси — сам фильтр. match по тексту иначе оставляет одно имя
+    # (11 строк Piesa) и второе имя в GROUP BY не входит.
+    where = [w for w in (
+        ([] if members else [match]) + list(preds or [])
+        + ["src_table = %s" % lit(src_table)]) if w]
+    # refs_map живёт на корпусе; search_idx INCLUDE его не несёт (corpus_init.sql).
+    src = CORPUS
+    folder_pred = "NOT coalesce(map_extract_value(flags, 'IsFolder'), false)"
+    m = ("map_extract(nums, %s)[1]" % lit(measure)) if measure else "NULL::DOUBLE"
+    d = ("TRY_CAST(%s AS DECIMAL(38,10))" % m) if measure else "NULL::DECIMAL(38,10)"
+    gexpr = "map_extract_value(refs_map, %s)" % lit(col)
+    mem_pred = "TRUE"
+    if members:
+        parts = []
+        for x in members:
+            if not str(x).strip():
+                continue
+            parts.append(
+                "list_has_all("
+                "list_filter(ts_lexize(%s, coalesce(g, '')), s -> length(s) >= 3),"
+                "list_filter(ts_lexize(%s, %s), s -> length(s) >= 3))"
+                % (lit(STEM_DICT), lit(STEM_DICT), lit(str(x))))
+        if parts:
+            mem_pred = "(" + " OR ".join(parts) + ")"
+    fold = _group_fold(compute, measure)
+    if fold == "count":
+        ord_expr = "n"
+    elif fold == "avg":
+        ord_expr = "a"
+    else:
+        ord_expr = "s"
+    direction = "ASC" if (compute or "") == "min" else "DESC"
+    sql = (
+        "WITH base AS ("
+        "  SELECT %(g)s AS g, %(d)s AS d, %(m)s AS mraw FROM %(src)s "
+        "  WHERE %(w)s AND %(nf)s"
+        "), stats AS ("
+        "  SELECT count(*) AS n_rows, count(DISTINCT g) AS n_groups,"
+        "         count(d) AS n_amt FROM base"
+        "), folded AS ("
+        "  SELECT g, count(*) AS n, sum(d) AS s, min(d) AS mn, max(d) AS mx,"
+        "         CASE WHEN count(d) > 0 THEN sum(d) / count(d) END AS a,"
+        "         count(d) AS n_amt,"
+        "         count(*) FILTER (mraw IS NOT NULL AND d IS NULL) AS oor "
+        "  FROM base WHERE %(mem)s GROUP BY g"
+        ") "
+        "SELECT f.g, f.n, f.s, f.mn, f.mx, f.a, f.n_amt, f.oor, "
+        "       st.n_rows, st.n_groups, st.n_amt "
+        "FROM folded f, stats st "
+        "ORDER BY %(ord)s %(dir)s NULLS LAST, f.g "
+        "LIMIT %(k)d"
+        % {"g": gexpr, "d": d, "m": m, "src": src, "w": " AND ".join(where),
+           "nf": folder_pred, "mem": mem_pred, "ord": ord_expr, "dir": direction,
+           "k": k})
+    try:
+        rs = psql(sql)
+    except RuntimeError:
+        return None
+    groups = []
+    n_rows = n_groups = n_amt_all = 0
+    oor = 0
+    for row in rs or []:
+        row = list(row) + [None] * (11 - len(row))
+        n_rows = int(row[8] or 0)
+        n_groups = int(row[9] or 0)
+        n_amt_all = int(row[10] or 0)
+        oor += int(row[7] or 0)
+        val = _numN(row[2]) if fold == "sum" else (
+            _numN(row[5]) if fold == "avg" else int(row[1] or 0))
+        if fold == "avg" and val is not None:
+            val = round(val, 2)
+        groups.append({"name": row[0] or "", "value": val, "count": int(row[1] or 0),
+                       "sum": _numN(row[2]), "avg": None if _numN(row[5]) is None
+                       else round(_numN(row[5]), 2)})
+    leader = groups[0]["value"] if groups else None
+    return {"count": n_rows, "n_groups": n_groups, "groups": groups,
+            "sum": leader if fold != "count" else None,
+            "min": None, "max": None, "avg": None,
+            "count_amount": n_amt_all,
+            "src": src_table, "measure": measure, "out_of_range": oor,
+            "grain": "group", "col": col, "k": k,
+            "scope": {"src": src, "where": " AND ".join(where),
+                      "folder_pred": folder_pred, "group_col": col},
+            "folders": 0}
+
+
+def merge_period2_groups(agg, agg2):
+    """Второй срез по ключу группы. Нет пары — пусто, не ноль."""
+    if not agg:
+        return agg
+    by2 = {}
+    for g in (agg2 or {}).get("groups") or []:
+        by2[g.get("name") or ""] = g
+    for g in agg.get("groups") or []:
+        other = by2.get(g.get("name") or "")
+        g["value2"] = None if other is None else other.get("value")
+        g["count2"] = None if other is None else other.get("count")
+        g["missing2"] = other is None
+    agg["period2"] = True
+    agg["n_groups2"] = (agg2 or {}).get("n_groups")
+    agg["n_rows2"] = (agg2 or {}).get("count")
+    return agg
+
+
+def axis_clarify_options(src, axes):
+    """Подписи осей из меток target_src — не имена конфигурации в коде."""
+    axes = [a for a in (axes or []) if a.get("col")]
+    if not axes:
+        return []
+    labs = {}
+    srcs = [a.get("target_src") for a in axes if a.get("target_src")]
+    if srcs:
+        try:
+            for r in psql("SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                          % (TABLES, ", ".join(lit(s) for s in srcs))) or []:
+                if r and r[0]:
+                    labs[r[0]] = (r[1] or r[0]).strip()
+        except RuntimeError:
+            pass
+    opts = []
+    seen = set()
+    for a in axes:
+        lab = labs.get(a.get("target_src") or "", a["col"])
+        if lab in seen:
+            continue
+        seen.add(lab)
+        opts.append({"src": src, "label": lab, "distinct_by": a["col"],
+                     "entity_label": lab})
+    return opts
+
+
 # ----------------------------------------------------------------- 4. формулировка
 ANSWER_SYS = """You answer an employee's question using ONLY the rows given to you.
 
@@ -3148,6 +3527,25 @@ SLOT = re.compile(r"\{\s*([A-Za-z_][A-Za-z_0-9]*)\s*(?::\s*([^}]*?)\s*)?\}")
 LEFTOVER = re.compile(r"\{\s*[^\W\d_][\w ]*(?:\s*:[^}]*)?\}", re.UNICODE)
 
 
+def _group_value_by_name(agg, name):
+    """Итог группы по фрагменту имени — {total:код} из названия, не мера totals."""
+    needle = (name or "").strip().lower()
+    if not needle:
+        return None
+    hits = []
+    for g in (agg or {}).get("groups") or []:
+        gn = (g.get("name") or "").lower()
+        if not gn:
+            continue
+        if needle == gn or (len(needle) >= 3 and needle in gn):
+            hits.append(g.get("value"))
+    if not hits:
+        return None
+    if len(hits) == 1:
+        return hits[0]
+    return hits[0]
+
+
 def _fill_figures(text, agg, totals, has_measure=True, extra=None):
     """Подставить посчитанные базой числа на места, оставленные моделью.
 
@@ -3179,6 +3577,10 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
     if not has_measure:
         for k in ("sum", "max", "min", "avg"):
             known.pop(k, None)
+    # Зерно group: {max}/{min} одной строки — не итог объекта, на который строка ссылается.
+    if (agg or {}).get("grain") == "group":
+        for k in ("max", "min"):
+            known.pop(k, None)
     # Числа неполноты (`{missing}`, `{in_1c}`, `{in_search}`) — такие же места, как итоги:
     # они посчитаны переписью, и списывать их модели тоже неоткуда. Кладутся ПОСЛЕ снятия
     # величин, иначе отсутствие выбранной величины уносило бы и предупреждение о потере.
@@ -3188,6 +3590,10 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
     by_name = {}
     for m, v, mx, mn in (totals or []):
         by_name[m] = {"total": v, "max": mx, "min": mn}
+    if (agg or {}).get("grain") == "group":
+        for i, g in enumerate((agg.get("groups") or [])[:ROWS_TO_MODEL]):
+            by_name["g%d" % i] = {"total": g.get("value"), "max": g.get("value"),
+                                  "min": g.get("value")}
     bad = []
 
     def one(mt):
@@ -3207,6 +3613,11 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
                     if k.lower() == name.lower():
                         got = v.get(role)
                         break
+            if got is None and (agg or {}).get("grain") == "group":
+                got = _group_value_by_name(agg, name)
+        elif ((agg or {}).get("grain") == "group" and role in ("max", "min", "avg")):
+            # Лидер группы (agg.sum), не max/min одной строки корпуса.
+            got = known.get("sum")
         else:
             got = known.get({"total": "sum"}.get(role, role))
         # 🔴 ПУСТОЕ ЗНАЧЕНИЕ — ТАКОЙ ЖЕ ОТКАЗ, КАК ОТСУТСТВУЮЩЕЕ. У сущности может не быть
@@ -3233,6 +3644,27 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None):
         return ("-" if neg else "") + grouped + ("." + frac if frac else "")
 
     return SLOT.sub(one, text), bad
+
+
+def ensure_n_groups_named(text, agg):
+    """п. 13: n_groups > K названо числом, даже если модель место не поставила."""
+    if (agg or {}).get("grain") != "group":
+        return text
+    ng = agg.get("n_groups")
+    shown = len(agg.get("groups") or [])
+    if ng is None or ng <= shown:
+        return text
+    have = _norm_numbers(text)
+    try:
+        nf = float(ng)
+    except (TypeError, ValueError):
+        return text
+    if nf in have or round(nf, 2) in have:
+        return text
+    filled, bad = _fill_figures("{n_groups}", agg, [], True)
+    if bad or not (filled or "").strip() or filled.strip().startswith("{"):
+        filled = _fmt(ng)
+    return ((text or "").rstrip() + " · " + filled).strip()
 
 
 def formulation_flaws(text, slots_bad=()):
@@ -3397,10 +3829,20 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
     # выборки выдан за размер множества (п. 13, молчаливая подмена). Числа здесь больше
     # нет вовсе: строки названы примерами, а за счётом модель идёт на место `{count}`.
     # Когда счёта нет (агрегат не посчитан), остаётся прежний вид — лучше него ничего.
-    head_line = ("ROWS (examples from the matching set, not the whole of it — the number "
-                 "of records is {count}):" if agg else "ROWS FOUND (%d):" % len(rows))
+    if agg and agg.get("grain") == "group":
+        head_line = ("GROUPS (one row = one value of the grouping axis; totals are "
+                     "computed in the database over all matching records, not a single "
+                     "line — the number of records is {count}):")
+    else:
+        head_line = ("ROWS (examples from the matching set, not the whole of it — the number "
+                     "of records is {count}):" if agg else "ROWS FOUND (%d):" % len(rows))
     body = "QUESTION: %s\n\n%s\n%s" % (
         question, head_line, "\n".join("- " + p for p in payload))
+    if agg and agg.get("grain") == "group":
+        for i, g in enumerate((agg.get("groups") or [])[:ROWS_TO_MODEL]):
+            nm = (g.get("name") or "").strip()
+            if nm:
+                body += "\n  %s: total -> {total:g%d}" % (nm, i)
     # 🔴 ЗНАЧЕНИЙ ПОСЧИТАННОГО МОДЕЛЬ НЕ ВИДИТ — ТОЛЬКО РОЛИ И ИМЕНА.
     #
     # Правило «числа ставит код» держалось двумя опорами: словами в промте и подстановкой
@@ -3463,9 +3905,13 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
                      "over these, and there are fewer of them than records) "
                      "-> {count_amount}")
         body += "\n  sum (TOTAL)               -> {total}"
-        body += "\n  max (largest single)      -> {max}"
-        body += "\n  min (smallest single)     -> {min}"
-        body += "\n  avg (average)             -> {avg}"
+        if agg.get("grain") != "group":
+            body += "\n  max (largest single)      -> {max}"
+            body += "\n  min (smallest single)     -> {min}"
+            body += "\n  avg (average)             -> {avg}"
+        elif agg.get("n_groups") is not None and agg["n_groups"] > len(agg.get("groups") or []):
+            body += ("\n  n_groups (distinct groups in the whole matching set; "
+                     "only some are listed above) -> {n_groups}")
         if agg.get("date_min"):
             body += "\n  period                    -> {date_min} .. {date_max}"
     if totals and money:
@@ -3474,8 +3920,11 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS, by quantity name — values not "
                  "shown, address them by name:")
         for m, v, mx, mn in totals:
-            body += ("\n  %s: total -> {total:%s}, largest single -> {max:%s}, "
-                     "smallest single -> {min:%s}" % (m, m, m, m))
+            if agg and agg.get("grain") == "group":
+                body += "\n  %s: total -> {total:%s}" % (m, m)
+            else:
+                body += ("\n  %s: total -> {total:%s}, largest single -> {max:%s}, "
+                         "smallest single -> {min:%s}" % (m, m, m, m))
     if coverage:
         # НЕПОЛНОТА ЭТОЙ СУЩНОСТИ. Модель обязана предупредить на языке вопроса — сами мы
         # приписать не можем: своя фраза была бы на одном языке независимо от вопроса.
@@ -3842,6 +4291,9 @@ def asked_figure_missing(text, agg, want, has_measure, folders=0):
         need = agg.get("sum")
     else:
         need = None
+    if (need is None and (agg or {}).get("grain") == "group" and has_measure
+            and agg.get("sum") is not None):
+        need = agg.get("sum")
     if need is not None:
         have = _norm_numbers(text)
         nf = float(need)
@@ -3857,6 +4309,14 @@ def asked_figure_missing(text, agg, want, has_measure, folders=0):
             have = _norm_numbers(text)
         if float(folders) not in have:
             return "отброшено %d — не названо в ответе" % folders
+    if (agg or {}).get("grain") == "group":
+        ng = agg.get("n_groups")
+        shown = len(agg.get("groups") or [])
+        if ng is not None and ng > shown:
+            if have is None:
+                have = _norm_numbers(text)
+            if float(ng) not in have:
+                return "групп %s — не названо в ответе" % ng
     return None
 
 
@@ -3918,7 +4378,8 @@ def _filter_dates(intent):
     назвавший период отбора. Тот же случай, что и с порогом суммы 27.07, только про дату.
     """
     p = (intent or {}).get("period") or {}
-    return [str(x) for x in (p.get("from"), p.get("to")) if x]
+    p2 = (intent or {}).get("period2") or {}
+    return [str(x) for x in (p.get("from"), p.get("to"), p2.get("from"), p2.get("to")) if x]
 
 
 LIST_MARKER = re.compile(r"^[ \t]*\d+[.)][ \t]+", re.M)
@@ -4004,17 +4465,29 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True):
 
     for t in (thresholds or []):
         allow(t)
+    group_grain = bool(agg) and agg.get("grain") == "group"
     for r in rows:
         allowed |= _norm_numbers(r[5])
         allowed |= _norm_numbers(r[3])
         # amount приходит из psql как «5000000.00» — через текстовый разбор это давало
         # ещё и 500000000. Берём числом.
-        if money:
+        # Зерно group: число строки корпуса — не итог объекта. Белый список — группы.
+        if money and not group_grain:
             allow(r[2])
     if agg:
         # ЧИСЛАМИ, а не текстом: прогон "%.2f" через разбор давал ещё и значение,
         # умноженное на 100 (дробная часть склеивалась с целой).
-        if money:
+        if group_grain:
+            allow(agg.get("sum"))
+            allow(agg.get("n_groups"))
+            for g in agg.get("groups") or []:
+                allow(g.get("value"))
+                allow(g.get("count"))
+                allow(g.get("value2"))
+                allow(g.get("count2"))
+                if money:
+                    allow(g.get("sum"))
+        elif money:
             for key in ("sum", "min", "max", "avg"):
                 if agg.get(key) is not None:
                     allow(agg[key])
@@ -4037,6 +4510,13 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True):
     # нами, значит дата верна по построению, даже если ровно в этот день строк нет.
     for s in (our_dates or []):
         known += _dates(s)
+        # День и месяц границ нашего периода — те же числа фильтра, что год (F245):
+        # «с 7 по 14 августа» иначе режет ответ, где модель повторила период.
+        for _kd, _kmo, _ky in _dates(s):
+            if _kd is not None:
+                allowed.add(float(_kd))
+            if _kmo is not None:
+                allowed.add(float(_kmo))
 
     # 🔴 ГОД ИЗВЕСТНОЙ ДАТЫ — ЭТО ЧИСЛО ИЗ ДАННЫХ (`F245`). Дата в строке (`2019-11-18`)
     # вырезается токенайзером как дата, поэтому «2019» отдельным числом в разрешённое не
@@ -4717,6 +5197,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
             for a in разбор["assumed"])
 
+    # Сравнение A и B — члены одной оси, не AND в одной строке. Схлопываем ДО probe.
+    terms_for_axis = [list(g) for g in (intent.get("terms") or [])]
+    if serene_axis:
+        try:
+            _own = term_ref_owners(terms_for_axis)
+            _merged, _sets = serene_axis.merge_compare_term_groups(
+                intent.get("terms") or [], _own)
+            if _sets:
+                intent["terms"] = _merged
+                diag["compare_merged"] = _sets
+        except RuntimeError:
+            pass
     exprs, kinds = probe(intent.get("terms") or [])
     diag["match_by"] = {k: v for k, v in kinds.items() if k != "_resolved"}
     # Разрешённые резолвером значения — В ОТВЕТ (п. 13): человек должен видеть, что «Питер»
@@ -6316,25 +6808,101 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if totals:
         diag["totals"] = {m: [v, mx, mn] for m, v, mx, mn in totals}
     preds = preds + _num_pred(intent, measure)
-    rows = rows_of(src, match, preds, TOPK, measure)
-    if not rows:
-        # Ранний no_data стоял ДО счёта undated: при 100% строк без даты
-        # потеря была полной, и «данных нет» срабатывало про существование.
-        act = empty_after_period_action(intent)
-        if act == "drop_assumed":
-            intent, preds = drop_period_preds(intent, preds)
-            diag["period_assumed_dropped"] = True
-            rows = rows_of(src, match, preds, TOPK, measure)
+    grain_dec = {"grain": "row", "col": None, "form": "number",
+                 "named_gis": [], "clarify": None}
+    axes = []
+    if serene_axis and src:
+        try:
+            axes = refcols_of(src)
+            _kh = kind_axis_hits(axes, intent.get("kind"))
+            _amt = intent.get("amount") or {}
+            _rank_intent = ((intent.get("want") or "") == "list"
+                            or (not _amt.get("op") and _amt.get("value") is not None))
+            if (not _kh and (plan.get("compute") in ("max", "min") or _rank_intent)):
+                _kh = kind_axis_rerank(axes, intent.get("kind"))
+            _th = term_axis_hits(src, axes, terms_for_axis)
+            grain_dec = serene_axis.decide_grain(
+                axes, _kh, _th, plan.get("compute"), src_is_child(src),
+                rank_intent=_rank_intent)
+        except RuntimeError:
+            pass
+    diag["grain"] = grain_dec.get("grain")
+    diag["axis_col"] = grain_dec.get("col")
+    diag["axis_form"] = grain_dec.get("form")
+    if grain_dec.get("clarify") == "axis":
+        opts = axis_clarify_options(src, axes)
+        return {"partial": cut or None, "kind": "clarify",
+                "text": clarify_say(question, opts, diag)
+                        or ", ".join("«%s»" % o["label"] for o in opts),
+                "options": opts, "sources": [src] if src else [],
+                "diag": dict(diag, sec=round(time.time() - t0, 2),
+                             reason="уточните ось группы")}
+
+    if grain_dec.get("grain") == "group" and grain_dec.get("col") and serene_axis:
+        _col = grain_dec["col"]
+        _named = grain_dec.get("named_gis") or []
+        _k = serene_axis.rank_k(intent.get("amount"), plan.get("compute"),
+                                len(_named), ROWS_TO_MODEL)
+        _members = None
+        if grain_dec.get("form") in ("compare", "number") and _named:
+            _members = []
+            for gi in _named:
+                if 0 <= gi < len(terms_for_axis):
+                    for a in terms_for_axis[gi] or []:
+                        if a and a not in _members:
+                            _members.append(str(a))
+            if grain_dec.get("form") == "compare":
+                _k = ROWS_TO_MODEL
+        agg = aggregate_groups(src, match, preds, measure, _col, _k,
+                               plan.get("compute"), _members)
+        if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
-        if not rows and act != "empty_period":
+            if act == "drop_assumed":
+                intent, preds = drop_period_preds(intent, preds)
+                diag["period_assumed_dropped"] = True
+                agg = aggregate_groups(src, match, preds, measure, _col, _k,
+                                       plan.get("compute"), _members)
+                act = empty_after_period_action(intent)
+            if (not agg or not agg.get("count")) and act != "empty_period":
+                return {"partial": cut or None, "kind": "no_data",
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "sources": [],
+                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+        p2 = intent.get("period2") or {}
+        if agg and (p2.get("from") or p2.get("to")):
+            _d1 = period_preds(intent.get("period"))
+            _rest = [p for p in preds if p not in _d1]
+            agg2 = aggregate_groups(src, match, _rest + period_preds(p2),
+                                    measure, _col, _k, plan.get("compute"),
+                                    _members)
+            agg = merge_period2_groups(agg, agg2)
+        rows = serene_axis.group_rows((agg or {}).get("groups") or [])
+        if not rows and not (agg or {}).get("count"):
             return {"partial": cut or None, "kind": "no_data",
                     "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                     "diag": dict(diag, sec=round(time.time() - t0, 2))}
-
-    agg = aggregate(src, match, preds, measure)
+    else:
+        rows = rows_of(src, match, preds, TOPK, measure)
+        if not rows:
+            # Ранний no_data стоял ДО счёта undated: при 100% строк без даты
+            # потеря была полной, и «данных нет» срабатывало про существование.
+            act = empty_after_period_action(intent)
+            if act == "drop_assumed":
+                intent, preds = drop_period_preds(intent, preds)
+                diag["period_assumed_dropped"] = True
+                rows = rows_of(src, match, preds, TOPK, measure)
+                act = empty_after_period_action(intent)
+            if not rows and act != "empty_period":
+                return {"partial": cut or None, "kind": "no_data",
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "sources": [],
+                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+        agg = aggregate(src, match, preds, measure)
     шаг("посчитано базой", сущность=src, величина=(measure or "—"),
         строк=(agg or {}).get("count"), итог=(agg or {}).get("sum"),
-        со_значением=(agg or {}).get("count_amount"))
+        со_значением=(agg or {}).get("count_amount"),
+        зерно=(agg or {}).get("grain") or "row",
+        групп=(agg or {}).get("n_groups"))
     # Множество, по которому посчитано, объявляется наружу целиком (см. `aggregate`):
     # по нему посторонний прибор пересчитывает итог независимо, а не верит нашему числу.
     # До модели `diag` не доходит.
@@ -6343,6 +6911,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                             строк=agg["count"], со_значением=agg["count_amount"],
                             групп_отброшено=agg["folders"],
                             вне_разрядности=agg["out_of_range"])
+    if agg:
+        diag["n_rows"] = agg.get("count")
+        if agg.get("n_groups") is not None:
+            diag["n_groups"] = agg["n_groups"]
+        if agg.get("grain"):
+            diag["счёт"] = dict(diag.get("счёт") or {}, зерно=agg.get("grain"),
+                                ось=agg.get("col"), форма=grain_dec.get("form"))
     # 🔴 ПЕРИОД ВЫБРАСЫВАЕТ СТРОКИ БЕЗ ДАТЫ — И ЭТО ОБЯЗАНО БЫТЬ ВИДНО ЧИСЛОМ (п. 13).
     #
     # Условие по периоду сравнивает `doc_date`, а строка без даты не проходит НИ ОДНО
@@ -6408,18 +6983,26 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # который п. 21 называет дефектом, а не осторожностью. `folders` посчитан базой тем же
     # запросом, что и `count`, — обоснован по построению.
     money = answer_money(intent.get("want"), plan.get("compute"), measure)
-    extra_vals = _filter_values(intent) + (
-        [x for t in (totals or []) for x in t[1:]] if money else []) \
+    _tot_extra = []
+    if money:
+        for _tm in (totals or []):
+            if (agg or {}).get("grain") == "group":
+                _tot_extra.append(_tm[1])          # сумма поля, не max/min строки
+            else:
+                _tot_extra.extend(_tm[1:])
+    extra_vals = _filter_values(intent) + _tot_extra \
                  + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else []) \
                  + ([agg["undated"]] if (agg or {}).get("undated") else []) \
                  + ([agg["outside_period"]] if (agg or {}).get("outside_period") else []) \
-                 + ([agg["folders"]] if (agg or {}).get("folders") else [])
+                 + ([agg["folders"]] if (agg or {}).get("folders") else []) \
+                 + ([agg["n_groups"]] if (agg or {}).get("grain") == "group"
+                    and agg.get("n_groups") is not None else [])
     # Границы периода отбора — на тех же правах, но по датной ветке гейта.
     our_dates = _filter_dates(intent)
     # Оговорки к ответу — в промт, а не приписью после: язык берётся из вопроса.
     say_measure = measure if money else None
     n_folders = (agg or {}).get("folders") or 0
-    totals_shown = totals if money else []
+    totals_shown = [] if (agg or {}).get("grain") == "group" else (totals if money else [])
     raw = compose(question, rows, agg, totals=totals_shown, coverage=cov,
                   measure_used=say_measure, folders=n_folders, money=money, src=src)
     text, claims = _split_answer(raw)
@@ -6437,6 +7020,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         cov_slots = dict(cov_slots or {})
         cov_slots["count_kind"] = kw_src
     text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots)
+    text = ensure_n_groups_named(text, agg)
     ask_back = _filled_ask(ask_back, agg, totals_shown, money, diag, cov_slots)
     # Место, которому нечего подставить, — отказ формулировки: модель сослалась на
     # величину, которой мы не считали. Это единственная проверка, оставшаяся от прежней
@@ -6476,6 +7060,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         text2, claims2 = _split_answer(raw2)
         by_hand2 = copied_figures(text2, agg, rows)
         text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, money, cov_slots)
+        text2 = ensure_n_groups_named(text2, agg)
         bad_roles2 = formulation_flaws(text2, slots_bad2) + by_hand2
         ok_roles2 = not bad_roles2
         bad_txt2 = []

@@ -569,7 +569,8 @@ QUALIFY row_number() OVER (PARTITION BY tbl ORDER BY pr, ord) = 1;
 -- ============ 6. СБОРКА ТЕКСТА ============
 CREATE OR REPLACE TABLE tmp3_corpus
   (src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
-   nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP);
+   nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP,
+   refs_map MAP(VARCHAR, VARCHAR), refs_own MAP(VARCHAR, VARCHAR));
 
 PREPARE p_doc AS
 INSERT INTO tmp3_corpus
@@ -605,7 +606,7 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
  j AS (
    SELECT u.rid, u.col, u.val, c.ord, c.kind, c.own_ref,
           list_position((SELECT key_cols FROM kc), u.col) AS keypos,
-          r.name AS refname,
+          r.name AS refname, r.owner AS refowner,
           (c.kind='ref' OR regexp_full_match(u.val,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')) AS is_guid,
           (c.kind IN ('text','flag') AND NOT c.is_companion AND c.col <> 'DataVersion'
            AND NOT regexp_matches(u.val,'^(https?://|/)')) AS in_text,
@@ -701,7 +702,7 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
               -- Проверяем ИМЕННО ту сущность, что объявила колонку.
               AND EXISTS (SELECT 1 FROM tmp3_src s2 WHERE lower(s2.tbl) = c.decl_entity))),
  pieces AS (
-   SELECT rid, ord, keypos, val, is_guid, refname, own_ref, col, is_num, is_measure, is_flag, is_dt, is_date,
+   SELECT rid, ord, keypos, val, is_guid, refname, refowner, own_ref, col, is_num, is_measure, is_flag, is_dt, is_date,
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
           WHEN is_guid AND refname IS NOT NULL THEN replace(col,'_Key','') || ': ' || refname
           WHEN is_guid THEN NULL
@@ -719,7 +720,7 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
 -- 🔴 ДВА УРОВНЯ, А НЕ ОДИН. `QUALIFY` не может ссылаться на ключ, который сам считается
 -- оконной функцией: движок отвечает `window function calls cannot be nested`. Ключ
 -- строится на внутреннем уровне, выбор одной строки на объект — на внешнем.
-SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt FROM (
+SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own FROM (
 SELECT src_table,
        -- 🔴 ОБЪЯВЛЕННЫЙ КЛЮЧ НЕ ВСЕГДА РАЗЛИЧАЕТ СТРОКИ. У регистров 1С отдаёт данные
        -- обёрткой (одна запись на регистратор, движения внутри списком), и объявленный
@@ -735,13 +736,13 @@ SELECT src_table,
        CASE WHEN NOT (SELECT on_ FROM fold)
              AND count(*) OVER (PARTITION BY src_table, rk) > 1
             THEN rk || '#' || sha1(doc) ELSE rk END AS row_key,
-       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, flags, dt
+       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, flags, dt, refs_map, refs_own
 FROM (
 SELECT src_table,
        -- Без объявленного ключа и без Ref_Key ключом становится отпечаток текста —
        -- как в боевом коде, иначе строки с пустым ключом затирают друг друга.
        coalesce(row_key, sha1(doc)) AS rk,
-       doc, refs, nums, flags, dt
+       doc, refs, nums, flags, dt, refs_map, refs_own
 FROM (
   SELECT $1::VARCHAR AS src_table,
          coalesce(any_value(k.row_key),
@@ -767,6 +768,21 @@ FROM (
          coalesce(map_from_entries(list({'key': col, 'value': try_cast(val AS BOOLEAN)} ORDER BY col)
                           FILTER (is_flag AND try_cast(val AS BOOLEAN) IS NOT NULL)),
                   MAP{}::MAP(VARCHAR, BOOLEAN)) AS flags,
+         -- Карта ссылок — как nums: колонка → имя (GUID, если имени нет). Ref_Key
+         -- табличной части — это parent-зерно, в ось группы не входит. ORDER BY col —
+         -- иначе MAP «меняется» каждый такт (как у nums).
+         coalesce(map_from_entries(list({'key': replace(col,'_Key',''),
+                                         'value': coalesce(refname, val)} ORDER BY col)
+                          FILTER (is_guid AND col <> 'Ref_Key'
+                                  AND coalesce(val,'') <> ''
+                                  AND val <> '00000000-0000-0000-0000-000000000000')),
+                  MAP{}::MAP(VARCHAR, VARCHAR)) AS refs_map,
+         -- Чей GUID: для search_refcols.target_src. В боевой корпус не уходит.
+         coalesce(map_from_entries(list({'key': replace(col,'_Key',''),
+                                         'value': refowner} ORDER BY col)
+                          FILTER (is_guid AND col <> 'Ref_Key'
+                                  AND refowner IS NOT NULL AND refowner <> '')),
+                  MAP{}::MAP(VARCHAR, VARCHAR)) AS refs_own,
          -- [замер 28.07] 312 строк корпуса имели `doc_date = 0001-01-01`: незаполненная
          -- дата 1С — валидный TIMESTAMP, и `try_cast` её принимал. «Самый ранний
          -- документ» отвечал первым годом нашей эры, а «даты нет» было неотличимо от
@@ -809,9 +825,10 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
               regexp_replace($1,'^[^_]*_','') || coalesce(' | ' || string_agg(c.col || ': ' || c.val, ' | '), '') AS doc
        FROM cells c WHERE c.val <> '' GROUP BY c.rid)
 -- Порядок колонок позиционный: src_table, row_key, doc, refs, doc_hash, nums, flags,
--- doc_date. У упрощённого пути ни величин, ни булевых реквизитов, ни дат нет — и это
--- честный NULL «не разбирали», а не пустая карта «разобрали, ничего не нашли».
-SELECT $1::VARCHAR, coalesce(k.rk, sha1(g.doc)), g.doc, '', sha1(g.doc), NULL, NULL, NULL
+-- doc_date, refs_map, refs_own. У упрощённого пути ни величин, ни булевых реквизитов, ни дат,
+-- ни карты ссылок нет — и это честный NULL «не разбирали», а не пустая карта.
+SELECT $1::VARCHAR, coalesce(k.rk, sha1(g.doc)), g.doc, '', sha1(g.doc),
+       NULL, NULL, NULL, NULL, NULL
 FROM g LEFT JOIN keyed k USING (rid);
 
 -- Первый заход: полная сборка. Ошибка ОДНОЙ сущности здесь не останавливает файл —
@@ -845,6 +862,47 @@ SELECT 'сборка сущностей' AS шаг,
        (SELECT count(*) FROM tmp3_src) AS всего_источников,
        (SELECT count(DISTINCT src_table) FROM tmp3_corpus) AS собрано,
        (SELECT v FROM search_quality WHERE k = 'build_failed') AS не_собралось;
+
+-- ============ 6-тер. СПРАВОЧНИК ОСЕЙ ГРУППЫ ============
+-- src_table, col, target_src. Цель — owner GUID из search_refmap. Пустая или
+-- неоднозначная цель в таблицу не кладётся (п. 13 — счётчиком).
+CREATE TABLE IF NOT EXISTS search_refcols (
+  src_table VARCHAR, col VARCHAR, target_src VARCHAR);
+GRANT SELECT ON search_refcols TO serene_ro;
+
+DELETE FROM search_refcols
+WHERE src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus);
+
+CREATE OR REPLACE TABLE tmp3_refcol_hits AS
+SELECT src_table,
+       unnest(map_keys(refs_own)) AS col,
+       unnest(map_values(refs_own)) AS target_src
+FROM tmp3_corpus
+WHERE refs_own IS NOT NULL AND len(map_keys(refs_own)) > 0;
+
+INSERT INTO search_refcols
+SELECT src_table, col, min(target_src)
+FROM tmp3_refcol_hits
+WHERE target_src IS NOT NULL AND target_src <> ''
+  AND EXISTS (SELECT 1 FROM search_tables s WHERE s.src_table = tmp3_refcol_hits.target_src)
+GROUP BY src_table, col
+HAVING count(DISTINCT target_src) = 1;
+
+DELETE FROM search_quality WHERE k = 'refcols_empty_target';
+INSERT INTO search_quality
+SELECT 'refcols_empty_target', count(*),
+       'осей ссылок без однозначной цели — в search_refcols не кладём'
+FROM (
+  SELECT DISTINCT src_table, unnest(map_keys(refs_map)) AS col
+  FROM tmp3_corpus
+  WHERE refs_map IS NOT NULL AND len(map_keys(refs_map)) > 0
+  EXCEPT
+  SELECT src_table, col FROM search_refcols
+) z;
+
+SELECT 'оси группы' AS шаг,
+       (SELECT count(*) FROM search_refcols) AS осей,
+       (SELECT coalesce(v,0) FROM search_quality WHERE k = 'refcols_empty_target') AS без_цели;
 
 -- ============ 7. СВЕРКА С БОЕВЫМ КОРПУСОМ ============
 SELECT 'строк: новая формула' AS что, count(*) AS сколько FROM tmp3_corpus

@@ -370,6 +370,34 @@ chip2 = {"want": "count", "period": {}, "parse": {"assumed": []}}
 t("prior: пустой prior ничего не копирует",
   A.apply_prior_period(chip2, empty_prior) is False and chip2["want"] == "count")
 
+_GAGG = dict(AGG, grain="group", col="Номенклатура", n_groups=80, max=36651.0,
+             sum=46204.58,
+             groups=[{"name": "Balama Rollenband", "value": 46204.58, "count": 4}])
+import serene_axis as _AX
+_GROWS = _AX.group_rows(_GAGG["groups"])
+A.compose("какой товар больше продали", _GROWS, _GAGG, totals=TOTALS, money=True)
+t("group: модели группы, не largest single",
+  "GROUPS" in SENT["body"] and "{max}" not in SENT["body"]
+  and "largest single" not in SENT["body"])
+t("group: сырой 36651 в задании как amount строки не стоит",
+  "36651" not in SENT["body"] and "amount=36651" not in SENT["body"])
+t("group: имя группы модели видно, итог группы — местом {total}",
+  "Balama Rollenband" in SENT["body" ] and "{total}" in SENT["body"])
+txt_g, bad_g = A._fill_figures("Лидер {total}, не {max}.", _GAGG, [], True)
+t("group: {max} = лидер группы, не 36651 строки",
+  not bad_g and "46204" in txt_g.replace(" ", "").replace("\xa0", "")
+  and "{max}" not in txt_g and "36651" not in txt_g)
+txt_gn, bad_gn = A._fill_figures("Итог {total:Balama}.", _GAGG, [], True)
+t("group: {total:фрагмент имени} — итог группы",
+  not bad_gn and "46204" in txt_gn.replace(" ", "").replace("\xa0", ""))
+txt_ng = A.ensure_n_groups_named("Лидер 46 204.58", _GAGG)
+t("group: n_groups > K дописывается числом",
+  "80" in txt_ng.replace(" ", "").replace("\xa0", "")
+  and A.asked_figure_missing(txt_ng, _GAGG, "list", True) is None)
+slots_g = A.compose_slot_values(_GAGG, measure="Сумма", money=True)
+t("group: слоты без max/min строки",
+  "max" not in slots_g and "min" not in slots_g and slots_g.get("sum") == 46204.58)
+
 print("\n%d проверок пройдено" % PASS)
 if FAIL:
     print("ПРОВАЛЕНО %d: %s" % (len(FAIL), "; ".join(FAIL)))

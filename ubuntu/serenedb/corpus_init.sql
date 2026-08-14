@@ -15,7 +15,7 @@
 CREATE TABLE IF NOT EXISTS search_corpus (
   src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
   nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP,
-  emb FLOAT[1024]);
+  refs_map MAP(VARCHAR, VARCHAR), emb FLOAT[1024]);
 
 -- 🔴 ДОБОР КОЛОНКИ ДЛЯ БАЗ, СОБРАННЫХ ПРЕЖНИМ КОДОМ. `CREATE TABLE IF NOT EXISTS` у
 -- существующей таблицы не делает НИЧЕГО — новая колонка из объявления выше в такую базу
@@ -26,6 +26,15 @@ CREATE TABLE IF NOT EXISTS search_corpus (
 -- Пока база не пересобрана, карта пуста, `coalesce(..., false)` читает это как «не папка»,
 -- и поведение совпадает с прежним — деградация плавная, а не отказ.
 ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS flags MAP(VARCHAR, BOOLEAN);
+-- Карта ссылок строки — как `nums`: колонка → имя (или GUID, если имени нет).
+-- GROUP BY оси, не разбор текста `refs`. Вектор не задет: колонка не входит в doc_hash.
+ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS refs_map MAP(VARCHAR, VARCHAR);
+
+-- Справочник осей группы: какая колонка refs_map на какой каталог ссылается.
+-- Берётся из kind='ref' и search_refmap.owner. Пустая цель в таблицу не кладётся.
+CREATE TABLE IF NOT EXISTS search_refcols (
+  src_table VARCHAR, col VARCHAR, target_src VARCHAR);
+GRANT SELECT ON search_refcols TO serene_ro;
 
 CREATE TABLE IF NOT EXISTS resolver_index (
   table_name VARCHAR, column_name VARCHAR, value VARCHAR, emb FLOAT[1024]);
@@ -123,6 +132,7 @@ CREATE INDEX IF NOT EXISTS search_idx ON search_corpus
 -- `serene_resolver` — отдельная роль под резолвер (positive control): SQL, который пишет
 -- модель, не должен дотягиваться до служебных эмбеддингов даже в обход валидатора.
 GRANT SELECT ON search_corpus  TO serene_ro;
+GRANT SELECT ON search_refcols TO serene_ro;
 GRANT SELECT ON search_tables  TO serene_ro;
 -- Свежесть данных (`build_ts`) и полнота (`cov_*`) — сервис ответов читает их, чтобы
 -- показать возраст данных и старение (п. 18), поэтому право нужно читающей роли.
@@ -156,5 +166,6 @@ SELECT 'объекты поиска на месте' AS шаг,
        (SELECT count(*) FROM duckdb_tables()
         WHERE database_name = current_database()
           AND table_name IN ('search_corpus','resolver_index','search_tables',
-                             'search_sources','search_meta','build_state')) AS таблиц,
+                             'search_sources','search_meta','build_state',
+                             'search_refcols')) AS таблиц,
        (SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'search_idx') AS индексов;
