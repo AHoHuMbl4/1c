@@ -171,6 +171,24 @@ t("arbiter_figures не поднимает diag.totals",
   == {"count": 19})
 
 # ── A2: свести поле только когда вопрос про итог/max/min/avg ────────────────────────
+t("want=count + compute=sum + поле — денег нет (живой «сколько … всего»)",
+  A.answer_money("count", "sum", "Всего") is False)
+t("want=sum + поле — деньги есть (A1 цел)",
+  A.answer_money("sum", None, "Всего") is True)
+t("want=count + compute=count + поле — денег нет",
+  A.answer_money("count", "count", "Всего") is False)
+t("count+поле: отпечаток без суммы, 19=19 не расхождение",
+  A.answers_diverge([
+      A.compose_slot_values({"count": 19, "sum": 112325.97}, measure="Всего",
+                            money=False),
+      A.compose_slot_values({"count": 19, "sum": 28356.37}, measure="Всего",
+                            money=False)]) is False)
+t("want=sum: 112k vs 28k в плейсхолдерах — расхождение",
+  A.answers_diverge([
+      A.compose_slot_values({"count": 19, "sum": 112325.97}, measure="Всего",
+                            money=True),
+      A.compose_slot_values({"count": 19, "sum": 28356.37}, measure="Всего",
+                            money=True)]) is True)
 t("want=count, величина пуста — поле не сводим",
   A.unresolved_quantity(None, [], "count", None, ["Всего", "НДС"],
                         {"Всего": 112325.97, "НДС": 18721}) == (None, []))

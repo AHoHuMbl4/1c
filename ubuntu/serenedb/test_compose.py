@@ -247,6 +247,34 @@ t("A1 деньги в compose: величина выбрана — 112k vs 28k �
       A.compose_slot_values(dict(AGG, count=19, sum=112325.97), measure="Всего"),
       A.compose_slot_values(dict(AGG, count=19, sum=28356.37), measure="Всего")]))
 
+# Живой разбор «сколько … всего»: want=count, compute=sum, поле уже есть.
+_agg_cnt = dict(AGG, count=19, sum=28356.37, measure="Всего")
+A.compose("сколько продаж было всего позавчера", ROWS, _agg_cnt,
+          totals=TOTALS, money=False)
+t("count+поле: нет {total} и нет amount= в задании",
+  "{total" not in SENT["body"] and "amount=" not in SENT["body"]
+  and "{count}" in SENT["body"])
+A.compose("сумма продаж", ROWS, _agg_cnt, totals=TOTALS, money=True)
+t("want=sum: {total} на месте, A1 не сломан",
+  "{total}" in SENT["body"] and "amount=" in SENT["body"])
+A.compose("сколько продаж было всего позавчера", ROWS, _agg_cnt,
+          totals=TOTALS, money=False,
+          corrections=["нераспознанное место: {total} (есть: нет)"])
+t("retry с тем же money=False: денежных мест в COMPUTED нет",
+  "-> {total}" not in SENT["body"] and "amount=" not in SENT["body"]
+  and "{count}" in SENT["body"])
+txt_fill, bad_fill = A._fill_figures(
+    "Итого {total}.", dict(AGG, sum=28356.37), TOTALS, has_measure=False)
+t("заливка при money=False: безымянный {total} не заполняется при живом sum",
+  "28356" not in txt_fill and bad_fill)
+import inspect as _ins
+_ans = _ins.getsource(A.answer)
+_after = _ans.split("money = answer_money", 1)[1]
+t("retry: fill и gate второй попытки на money, не на bool(measure)",
+  "bool(measure)" not in _after
+  and "_fill_figures(text2, agg, totals_shown, money" in _after
+  and "money=money" in _after)
+
 A.compose("сколько складов", ROWS, dict(AGG, folders=25), totals=TOTALS, folders=25)
 t("отброшенные группы названы местом, а не числом (п. 13: сказать о потере — обязательно)",
   "{folders}" in SENT["body"] and " 25 " not in SENT["body"])

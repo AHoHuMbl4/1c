@@ -2369,11 +2369,24 @@ def answers_diverge(figures):
     return len(set(fps)) > 1
 
 
+def answer_money(want, compute, measure):
+    """Нужны ли в этом ответе денежные числа.
+
+    Поле, которое модель назвала, само по себе денег не открывает: на «сколько»
+    (`want`/`compute` = count) их нет, даже если словарь свёл «всего» к колонке.
+    `want=list` сюда не входит: пустой want в разборе становится list, и иначе
+    деньги выключатся на вопросах про сумму, где разбор не сказал sum.
+    """
+    counting = (compute or "") == "count" or (want or "") == "count"
+    return bool(measure) and not counting
+
+
 def compose_slot_values(agg, measure=None, folders=0, money=None):
     """Числа, которые compose подставит в плейсхолдеры этого ответа.
 
     Не `amount=` примеров строк и не покрытие (`in_1c` / `missing`): они не итог.
-    `money=None` — как `bool(measure)`: без выбранного поля денежных мест нет (A2).
+    Вызов из answer передаёт `money=` явно (тот же флаг, что compose и гейт).
+    `money=None` — как `bool(measure)`, только для проб без оси вопроса.
     """
     if money is None:
         money = bool(measure)
@@ -3294,7 +3307,7 @@ def copied_figures(text, agg, rows):
     return out
 
 
-def _filled_ask(ask, agg, totals, measure, diag=None, extra=None):
+def _filled_ask(ask, agg, totals, money, diag=None, extra=None):
     """Уточняющий вопрос с подставленными числами — или пусто, если он вышел с изъяном.
 
     Разница с текстом ответа в том, чем платим за изъян. У ответа изъян ведёт ко второй
@@ -3303,7 +3316,7 @@ def _filled_ask(ask, agg, totals, measure, diag=None, extra=None):
     не задавать вопроса вовсе. Второе честнее: ответ при этом остаётся целым и уходит
     человеку, а сорвавшийся вопрос виден в `diag`, а не в мессенджере.
     """
-    ask, slots_bad = _fill_figures(ask, agg, totals, bool(measure), extra)
+    ask, slots_bad = _fill_figures(ask, agg, totals, bool(money), extra)
     if not (ask or "").strip():
         return ""
     flaws = formulation_flaws(ask, slots_bad)
@@ -3345,7 +3358,7 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         # адрес уходили человеку укороченными и выглядели настоящими (п. 13).
         head = r[5][:per_row] + ("…" if len(r[5]) > per_row else "")
         tail = []
-        if _num(r[2]):
+        if money and _num(r[2]):
             tail.append("amount=%s" % ("%d" % _num(r[2]) if _num(r[2]) == int(_num(r[2]))
                                        else "%.2f" % _num(r[2])))
         if r[3]:
@@ -3916,7 +3929,7 @@ def rows_seen(rows):
     return [list(r[:5]) + [(r[5] or "")[:per_row]] for r in shown]
 
 
-def gate(answer, rows, agg, thresholds=None, our_dates=None):
+def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True):
     """Каждое число ответа обязано встречаться в данных, в итоге или в наших условиях.
 
     Правило живёт в КОДЕ, а не в промте: промт — это пожелание, а не гарантия.
@@ -3961,13 +3974,15 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None):
         allowed |= _norm_numbers(r[3])
         # amount приходит из psql как «5000000.00» — через текстовый разбор это давало
         # ещё и 500000000. Берём числом.
-        allow(r[2])
+        if money:
+            allow(r[2])
     if agg:
         # ЧИСЛАМИ, а не текстом: прогон "%.2f" через разбор давал ещё и значение,
         # умноженное на 100 (дробная часть склеивалась с целой).
-        for key in ("sum", "min", "max", "avg"):
-            if agg.get(key) is not None:
-                allow(agg[key])
+        if money:
+            for key in ("sum", "min", "max", "avg"):
+                if agg.get(key) is not None:
+                    allow(agg[key])
         allow(agg["count"])
     # Числа из ВОПРОСА в белый список больше не идут. Вопрос — это аргумент, который
     # сочиняет модель бота: она сама пополняла список того, что ей разрешено сказать,
@@ -4038,7 +4053,7 @@ def count_figures(agg):
     return out
 
 
-def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None):
+def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None, money=True):
     """Один гейт на ВСЁ, что уходит человеку словами модели: числа + утечка инструкции.
 
     🔴 Заведён 04.08 (`F246`), потому что гейт стоял только на одной ветке из пяти.
@@ -4050,7 +4065,8 @@ def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None):
     Человеку разница не видна: «Вы про закупки на 73 млн или про регистр?» читается как
     факт о его данных независимо от того, вопрос это или ответ.
     """
-    ok, bad = gate(text, list(rows or []), agg, allowed or [], our_dates)
+    ok, bad = gate(text, list(rows or []), agg, allowed or [], our_dates,
+                   money=money)
     leak = prompt_leak(text, OUR_PROMPTS)
     if leak:
         ok, bad = False, list(bad) + ["утечка инструкции: %s" % leak]
@@ -6203,18 +6219,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # отвергался собственной проверкой и уходил в `figures`. Ровно тот дефект проверки,
     # который п. 21 называет дефектом, а не осторожностью. `folders` посчитан базой тем же
     # запросом, что и `count`, — обоснован по построению.
+    counting_rows = (plan.get("compute") == "count") or (intent.get("want") == "count")
+    money = answer_money(intent.get("want"), plan.get("compute"), measure)
     extra_vals = _filter_values(intent) + (
-        [x for t in (totals or []) for x in t[1:]] if measure else []) \
+        [x for t in (totals or []) for x in t[1:]] if money else []) \
                  + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else []) \
                  + ([agg["undated"]] if (agg or {}).get("undated") else []) \
                  + ([agg["folders"]] if (agg or {}).get("folders") else [])
     # Границы периода отбора — на тех же правах, но по датной ветке гейта.
     our_dates = _filter_dates(intent)
     # Оговорки к ответу — в промт, а не приписью после: язык берётся из вопроса.
-    counting_rows = (plan.get("compute") == "count") or (intent.get("want") == "count")
     say_measure = measure if (measure and not counting_rows) else None
     n_folders = (agg or {}).get("folders") or 0
-    money = bool(measure)
     totals_shown = totals if money else []
     raw = compose(question, rows, agg, totals=totals_shown, coverage=cov,
                   measure_used=say_measure, folders=n_folders, money=money)
@@ -6228,8 +6244,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Числа неполноты идут в подстановку наравне с итогами: их модель тоже не видит.
     cov_slots = ({"in_1c": cov["in_1c"], "in_search": cov["in_search"],
                   "missing": cov["missing"]} if cov else None)
-    text, slots_bad = _fill_figures(text, agg, totals_shown, bool(measure), cov_slots)
-    ask_back = _filled_ask(ask_back, agg, totals_shown, measure, diag, cov_slots)
+    text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots)
+    ask_back = _filled_ask(ask_back, agg, totals_shown, money, diag, cov_slots)
     # Место, которому нечего подставить, — отказ формулировки: модель сослалась на
     # величину, которой мы не считали. Это единственная проверка, оставшаяся от прежней
     # ролевой сверки, и она структурная, а не числовая.
@@ -6240,7 +6256,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # claims (промт велит оставлять их пустыми). Её смысл держит `asked_figure_missing`:
     # спрошенная величина обязана стоять в ответе цифрами, а отброшенное — быть названо
     # числом. Это и роль (`F285`), и числа прописью (`F286`), и оговорка о потере (`№9`).
-    miss = asked_figure_missing(text, agg, intent.get("want"), bool(measure), n_folders)
+    miss = asked_figure_missing(text, agg, intent.get("want"), money, n_folders)
     if miss:
         ok_roles, bad_roles = False, bad_roles + [miss]
     leak = prompt_leak(text, OUR_PROMPTS)
@@ -6250,7 +6266,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # обрезки бюджетом. Числа из непоказанных строк белым списком быть не могут —
     # скопировать их модели неоткуда, а разрешение они давали.
     seen = rows_seen(rows)
-    ok_nums, bad_nums = gate(text, seen, agg, extra_vals, our_dates)
+    ok_nums, bad_nums = gate(text, seen, agg, extra_vals, our_dates, money=money)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     шаг("гейт исходящего", прошёл=bool(ok), причин=len(bad),
         первая=(bad[0][:60] if bad else "—"))
@@ -6267,20 +6283,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                        money=money)
         text2, claims2 = _split_answer(raw2)
         by_hand2 = copied_figures(text2, agg, rows)
-        text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, bool(measure), cov_slots)
+        text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, money, cov_slots)
         bad_roles2 = formulation_flaws(text2, slots_bad2) + by_hand2
         ok_roles2 = not bad_roles2
         bad_txt2 = []
         # Вторая попытка проверяется ТЕМ ЖЕ набором, что первая: иначе послабление
         # прокралось бы через ретрай — ответ, отвергнутый за неназванную величину,
         # проходил бы со второго раза, не назвав её снова.
-        miss2 = asked_figure_missing(text2, agg, intent.get("want"), bool(measure), n_folders)
+        miss2 = asked_figure_missing(text2, agg, intent.get("want"), money, n_folders)
         if miss2:
             ok_roles2, bad_roles2 = False, bad_roles2 + [miss2]
         leak2 = prompt_leak(text2, OUR_PROMPTS)
         if leak2:
             ok_roles2, bad_roles2 = False, bad_roles2 + ["утечка инструкции: %s" % leak2]
-        ok_nums2, bad_nums2 = gate(text2, seen, agg, extra_vals, our_dates)
+        ok_nums2, bad_nums2 = gate(text2, seen, agg, extra_vals, our_dates,
+                                          money=money)
         if ok_roles2 and ok_nums2 and (text2 or "").strip():
             # 🔴 УТОЧНЕНИЕ ВТОРОЙ ПОПЫТКИ ТОЖЕ ПРОХОДИТ ПОДСТАНОВКУ. Прежде здесь стояло
             # голое `_ask_back(raw2)`: числа в вопросе первой попытки подставлялись, а во
@@ -6288,7 +6305,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # вместо даты. Гейт этого не ловит (цифр в заготовке нет), и вопрос выглядел
             # как поломка системы ровно в тот момент, когда система переспрашивает.
             text, claims = text2, claims2
-            ask_back = _filled_ask(_ask_back(raw2), agg, totals_shown, measure, diag, cov_slots)
+            ask_back = _filled_ask(_ask_back(raw2), agg, totals_shown, money, diag, cov_slots)
             ok, bad = True, []
             diag["retry_ok"] = True
         else:
@@ -6341,7 +6358,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # человека невыверенным — а он читает его как факт о своих данных. Не сошлось —
     # вопрос снимается, ответ уходит обычным: это ослабление уточнения, а не ответа.
     if ask_back:
-        ok_ask, bad_ask = gate_out(ask_back, seen, agg, extra_vals, our_dates)
+        ok_ask, bad_ask = gate_out(ask_back, seen, agg, extra_vals, our_dates,
+                                       money=money)
         if not ok_ask:
             sys.stderr.write("ask ASKBACK GATE: числа вне данных: %s\n" % bad_ask[:4])
             diag["ask_back_rejected"] = bad_ask[:4]
