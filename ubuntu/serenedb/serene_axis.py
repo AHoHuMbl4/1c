@@ -132,6 +132,55 @@ def decide_grain(axes, kind_hits, term_hits, compute=None, is_child=False,
             "named_gis": [], "clarify": None}
 
 
+def asks_movement_magnitude(want, measure_word="", amount=None,
+                            word_on_holders=False, word_on_catalog=False):
+    """Величина движений, а не счёт записей каталога. Без списка слов «справочник».
+
+    want=sum — итог поля. Слово меры совпало с nums держателя — то же.
+    Amount без порога — рейтинг (топ-N). Слово меры названо, но его нет в nums
+    каталога (чип «сумма»/«топ-5») — не счёт позиций справочника.
+    """
+    want = want or ""
+    word = (measure_word or "").strip()
+    amt = amount or {}
+    if want == "sum":
+        return True
+    if word_on_holders:
+        return True
+    if not amt.get("op") and amt.get("value") is not None:
+        return True
+    if word and not word_on_catalog:
+        return True
+    return False
+
+
+def catalog_self_question(want, asks_movement, catalog_has_measure,
+                          holders_have_measure):
+    """Каталог — верный источник, только если вопрос про ЕГО записи."""
+    want = want or ""
+    if want in ("count", "list") and not asks_movement:
+        return True
+    if catalog_has_measure and not holders_have_measure:
+        return True
+    return False
+
+
+def decide_axis_focus(is_axis, catalog_self, live_holders):
+    """Что делать с focus, который свелся к target_src оси.
+
+    keep — прежний путь (focus = источник). holder — один живой держатель.
+    clarify — несколько, спрашиваем, не no_data по справочнику.
+    """
+    if not is_axis or catalog_self:
+        return ("keep", None)
+    live = [h for h in (live_holders or []) if h]
+    if len(live) == 1:
+        return ("holder", live[0])
+    if len(live) > 1:
+        return ("clarify", list(live))
+    return ("keep", None)
+
+
 def group_rows(groups):
     """Свёрнутые группы в форме строки корпуса: модели уходят они, не сырые строки."""
     out = []

@@ -3118,6 +3118,44 @@ def refcols_of(src_table):
     return out
 
 
+def holders_of_target(target_src):
+    """Держатели оси: src_table из search_refcols, где target_src = этот каталог."""
+    if not target_src:
+        return []
+    try:
+        rs = psql("SELECT src_table, col FROM search_refcols "
+                  "WHERE target_src = %s AND src_table IS NOT NULL AND src_table <> '' "
+                  "AND src_table <> %s AND col IS NOT NULL AND col <> '' "
+                  "ORDER BY src_table, col"
+                  % (lit(target_src), lit(target_src)))
+    except RuntimeError:
+        return []
+    out, seen = [], set()
+    for r in rs or []:
+        if r and r[0] and r[1] and r[0] not in seen:
+            seen.add(r[0])
+            out.append({"src": r[0], "col": r[1]})
+    return out
+
+
+def measures_of_many(srcs):
+    """Ключи nums по нескольким источникам — один запрос."""
+    if not srcs:
+        return {}
+    try:
+        rs = psql(
+            "SELECT src_table, u.k FROM %s, unnest(map_keys(nums)) AS u(k) "
+            "WHERE nums IS NOT NULL AND src_table IN (%s) GROUP BY 1, 2"
+            % (CORPUS, ", ".join(lit(s) for s in srcs)))
+    except RuntimeError:
+        return {}
+    out = {}
+    for r in rs or []:
+        if r and r[0] and len(r) > 1 and r[1]:
+            out.setdefault(r[0], []).append(r[1])
+    return out
+
+
 def kind_axis_hits(axes, kind_text):
     """kind → оси, чей target_src сходится с родом тем же путём, что выбор сущности."""
     kind_text = (kind_text or "").strip()
@@ -4970,16 +5008,25 @@ def mk_opts(srcs, lab_by, marks=None, by=None, match="", preds=None, live=None):
              "distinct_by": marks.get(s, ""), "found": found_of.get(s, 0)} for s in srcs]
 
 
-def live_src_counts(srcs, match, preds):
-    """Живой счёт строк по тем же предикатам, что и ответ. None — база не ответила."""
+def live_src_counts(srcs, match, preds, pred_by=None, require_nums=False):
+    """Живой счёт строк по тем же предикатам, что и ответ. None — база не ответила.
+
+    pred_by: у табличной части — своё условие владельца (как via_parent), match
+    не кладётся. require_nums: строки с заполненной картой величин (мера ответа).
+    Источник: INDEX если у этой таблицы есть match, иначе CORPUS.
+    """
     if not srcs:
         return {}
-    src = INDEX if match else CORPUS
+    pred_by = pred_by or {}
     folder = "NOT coalesce(map_extract_value(flags, 'IsFolder'), false)"
+    nums = "nums IS NOT NULL AND len(map_keys(nums)) > 0" if require_nums else ""
     parts = []
     for s in srcs:
-        where = [w for w in ([match] + list(preds or [])
-                             + ["src_table = %s" % lit(s), folder]) if w]
+        m = "" if s in pred_by else match
+        extra = pred_by.get(s)
+        where = [w for w in ([m] + list(preds or []) + ([extra] if extra else [])
+                             + ["src_table = %s" % lit(s), folder, nums]) if w]
+        src = INDEX if m else CORPUS
         parts.append("SELECT %s AS t, count(*) AS n FROM %s WHERE %s"
                      % (lit(s), src, " AND ".join(where)))
     try:
@@ -5084,6 +5131,87 @@ def resolve_focus(focus, diag=None):
     if diag is not None:
         diag["focus_unknown"] = f
     return None
+
+
+
+def _word_hits_measure(names, word):
+    """Слово меры совпало с полем nums. 'single' без совпадения — не попадание."""
+    if not word or not names:
+        return False
+    _m, _alts, how = measure_choice(names, word)
+    if how in ("exact", "substring", "alias", "base", "ask"):
+        return True
+    if how == "single":
+        one = (names[0] or "").lower()
+        wl = word.strip().lower()
+        return bool(wl) and len(wl) >= 2 and (
+            one == wl or wl in one or (len(one) >= 2 and one in wl))
+    return False
+
+
+def axis_focus_plan(focus, intent, measure_pick, match, preds, kid_pred, diag=None):
+    """Focus, сведящийся к target_src оси, — имя оси, пока вопрос не про каталог.
+
+    None — прежний путь (focus = источник). Иначе ('holder', src, col) или
+    ('clarify', srcs, live).
+    """
+    if not focus or not serene_axis:
+        return None
+    holders = holders_of_target(focus)
+    if not holders:
+        return None
+    col_by = {h["src"]: h["col"] for h in holders}
+    holder_srcs = [h["src"] for h in holders]
+    word = (measure_pick or (intent or {}).get("measure") or "").strip()
+    want = (intent or {}).get("want") or ""
+    amount = (intent or {}).get("amount") or {}
+    nums_by = measures_of_many([focus] + holder_srcs)
+    cat_names = nums_by.get(focus) or []
+    word_on_catalog = _word_hits_measure(cat_names, word)
+    word_on_holders = False
+    if word:
+        for s in holder_srcs:
+            if _word_hits_measure(nums_by.get(s) or [], word):
+                word_on_holders = True
+                break
+    asks = serene_axis.asks_movement_magnitude(
+        want, word, amount, word_on_holders, word_on_catalog)
+    self_q = serene_axis.catalog_self_question(
+        want, asks, word_on_catalog, word_on_holders)
+    if self_q:
+        if diag is not None:
+            diag["focus_axis_keep"] = "catalog_self"
+        return None
+    live = live_src_counts(holder_srcs, match, preds,
+                           pred_by=kid_pred or {}, require_nums=asks)
+    if live is None:
+        return None
+    zeros = [s for s in holder_srcs if live.get(s, 0) == 0]
+    if zeros:
+        childish = set()
+        try:
+            rs = psql("SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
+                      % (TABLES, ", ".join(lit(s) for s in zeros)))
+            childish = {r[0] for r in (rs or [])
+                        if r and r[0] and (r[1] or "").strip()}
+        except RuntimeError:
+            pass
+        retry = [s for s in zeros if s in childish and s not in (kid_pred or {})]
+        if retry:
+            live2 = live_src_counts(retry, "", preds, require_nums=asks)
+            if live2:
+                live.update(live2)
+    live_holders = [s for s in holder_srcs if live.get(s, 0) > 0]
+    kind, payload = serene_axis.decide_axis_focus(True, False, live_holders)
+    if kind == "keep":
+        return None
+    if kind == "holder":
+        src = payload
+        col = col_by.get(src, "")
+        if diag is not None:
+            diag["focus_was_axis"] = {"было": focus, "стало": src, "ось": col}
+        return ("holder", src, col)
+    return ("clarify", payload, {s: live.get(s, 0) for s in payload})
 
 
 def apply_prior_period(intent, prior_intent):
@@ -5790,6 +5918,38 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # реально под условиями что-то содержит — берём её и не спрашиваем модель.
     if focus:
         focus = resolve_focus(focus, diag)
+    axis_plan = None
+    if focus:
+        axis_plan = axis_focus_plan(
+            focus, intent, measure_pick, match, preds, kid_pred, diag)
+    if axis_plan and axis_plan[0] == "clarify":
+        _srcs, _live = axis_plan[1], axis_plan[2]
+        try:
+            _lab = {r[0]: r[1] for r in psql(
+                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(c) for c in _srcs))) if r and r[0]}
+        except RuntimeError:
+            _lab = {}
+        _opts = mk_opts(_srcs, _lab, {}, by, match=match, preds=preds, live=_live)
+        if len(_opts) >= 2:
+            шаг("focus был осью — уточнить держателя", сколько=len(_opts))
+            return {"partial": cut or None, "kind": "clarify",
+                    "text": clarify_say(question, _opts, diag)
+                            or ", ".join("«%s»" % o["label"] for o in _opts),
+                    "options": _opts, "sources": [o["label"] for o in _opts],
+                    "diag": dict(diag, sec=round(time.time() - t0, 2))}
+        if len(_opts) == 1:
+            _s = _opts[0]["src"]
+            _col = next((h["col"] for h in holders_of_target(focus) if h["src"] == _s),
+                        "")
+            axis_plan = ("holder", _s, _col)
+        else:
+            axis_plan = None
+    if axis_plan and axis_plan[0] == "holder":
+        _hold, _acol = axis_plan[1], axis_plan[2]
+        diag["focus_was_axis"] = {"было": focus, "стало": _hold, "ось": _acol}
+        шаг("focus был осью", было=focus, стало=_hold, ось=(_acol or "—"))
+        focus = _hold
     if focus:
         picked, marks, plan = [focus], {}, {}
         diag["focus_forced"] = focus
@@ -6585,6 +6745,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         preds = preds + [kid_pred[src]]
         match = ""
         diag["via_parent"] = True
+    elif ((diag.get("focus_was_axis") or {}).get("стало") == src
+          and src_is_child(src)):
+        # Строки ТЧ не несут слово «номенклатура»; период остаётся в preds.
+        match = ""
+        diag["axis_holder_cleared_match"] = True
 
     # Выведенный период обнулил выборку — снять догадку и считать снова.
     # Догадка не имеет права отказать (п. 12 + п. 21). Стоит до выбора величины:
@@ -6815,6 +6980,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         try:
             axes = refcols_of(src)
             _kh = kind_axis_hits(axes, intent.get("kind"))
+            _was = diag.get("focus_was_axis") or {}
+            if _was.get("стало") == src and _was.get("ось"):
+                _acol = _was["ось"]
+                if any(a.get("col") == _acol for a in axes):
+                    _kh = [_acol]
             _amt = intent.get("amount") or {}
             _rank_intent = ((intent.get("want") or "") == "list"
                             or (not _amt.get("op") and _amt.get("value") is not None))

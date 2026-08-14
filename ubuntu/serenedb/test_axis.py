@@ -78,6 +78,11 @@ t("kind попал в две оси → clarify", dec["clarify"] == "axis")
 dec = X.decide_grain(AX_TWO, [], {}, "sum", True)
 t("sum без kind и без двух имён → row", dec["grain"] == "row")
 
+# Focus назвал ось: kind_hits = col оси, даже при want=sum — group, не row
+dec = X.decide_grain(AX_NOM, ["Номенклатура"], {}, "sum", True)
+t("ось из kind + sum → group (focus был осью)",
+  dec["grain"] == "group" and dec["col"] == "Номенклатура" and dec["form"] == "rank")
+
 # amount без порога / list при нескольких осях без kind — не рейтинг сырых строк
 dec = X.decide_grain(AX_TWO, [], {}, None, True, rank_intent=True)
 t("rank_intent + две оси без kind → clarify, не row-рейтинг",
@@ -93,6 +98,43 @@ t("K: amount 100 сверх cap → cap при max даёт 1 (имена 0)",
   X.rank_k({"value": 100}, "max", 0, 25) == 1)
 t("K: amount 5 при rank без max",
   X.rank_k({"value": 5}, "sum", 0, 25) == 5)
+
+# Focus = target_src оси, не источник
+t("count без величины движений → каталог",
+  X.catalog_self_question("count", False, False, True))
+t("list без величины движений → каталог",
+  X.catalog_self_question("list", False, False, True))
+t("sum — не счёт позиций каталога",
+  not X.catalog_self_question("sum", True, False, True))
+t("мера каталога есть, у держателей пусто → каталог",
+  X.catalog_self_question("sum", True, True, False))
+t("мера на держателях живая → не каталог",
+  not X.catalog_self_question("sum", True, False, True))
+
+t("want=sum → величина движений",
+  X.asks_movement_magnitude("sum"))
+t("слово меры на держателе → величина движений",
+  X.asks_movement_magnitude("list", "сумма", {}, True, False))
+t("топ-N amount без op → величина движений",
+  X.asks_movement_magnitude("list", "", {"value": 5}, False, False))
+t("чип «топ-5»: слово не поле каталога → движения",
+  X.asks_movement_magnitude("list", "топ-5", {}, False, False))
+t("count без слова меры → не движения",
+  not X.asks_movement_magnitude("count", "", {}, False, False))
+t("порог amount с op — не рейтинг",
+  not X.asks_movement_magnitude("list", "", {"op": ">", "value": 5}, False, False))
+
+t("не ось → keep",
+  X.decide_axis_focus(False, False, ["document_x"]) == ("keep", None))
+t("вопрос про каталог → keep",
+  X.decide_axis_focus(True, True, ["document_x"]) == ("keep", None))
+t("один держатель → holder",
+  X.decide_axis_focus(True, False, ["document_строки"]) == ("holder", "document_строки"))
+t("два держателя → clarify, не no_data",
+  X.decide_axis_focus(True, False, ["document_a", "document_b"])
+  == ("clarify", ["document_a", "document_b"]))
+t("держателей нет → keep (честный путь каталога)",
+  X.decide_axis_focus(True, False, []) == ("keep", None))
 
 print("\nИТОГ: ok %d, FAIL %d" % (PASS, len(FAIL)))
 if FAIL:
