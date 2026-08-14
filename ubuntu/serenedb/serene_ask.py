@@ -2376,7 +2376,46 @@ def answers_diverge(figures):
         # записей). Это не «разные вопросы, не наше дело», как считалось прежде: вопрос
         # один, а ответить на него кандидаты могут только разным — значит прочтений два.
         return True
+    money = []
+    saw_money = False
+    for f in figures:
+        tot = f.get("_totals")
+        if tot is not None:
+            saw_money = True
+            money.append(tuple(tot) if not isinstance(tot, tuple) else tot)
+        else:
+            money.append(None)
+    # 🔴 ИТОГИ ПО ВЕЛИЧИНАМ — ТОЖЕ ПОСЧИТАННЫЙ ОТВЕТ (okna 14.08).
+    # Когда величина не выбрана, в `figures` уходит только count (`count_figures`), а в
+    # текст — итоги всех полей (`diag.totals` → compose → гейт). Детектор сравнивал 19 и
+    # 19, модель-арбитр выбирала между 112 325.97 и 28 356.37, человеку уехала книга
+    # продаж. Совпадение count при разных деньгах — не доказанное согласие.
+    if saw_money and len(set(money)) > 1:
+        return True
     return len(vals) > 1
+
+
+def arbiter_figures(sub):
+    """Числа кандидата для детектора: поле `figures` плюс итоги, ушедшие в текст.
+
+    При невыбранной величине `figures` — счёт записей. Деньги при этом уже посчитаны
+    (`diag.totals`) и уходят в формулировку. Без них детектор слеп к классу
+    «верное число не по той сущности».
+    """
+    f = dict((sub or {}).get("figures") or {})
+    tot = ((sub or {}).get("diag") or {}).get("totals") or {}
+    vals = []
+    for v in tot.values():
+        amount = v[0] if isinstance(v, (list, tuple)) and v else v
+        if amount is None:
+            continue
+        try:
+            vals.append(round(float(amount), 2))
+        except (TypeError, ValueError):
+            continue
+    if vals:
+        f["_totals"] = tuple(sorted(vals))
+    return f
 
 
 def alias_supported(known, hit, cand_family, leader_family, veto=None,
@@ -5661,7 +5700,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         "sources": [o["label"] for o in opts],
                         "diag": dict(diag, sec=round(time.time() - t0, 2))}
         if len(cand_ans) > 1 and ARBITER_DETECTS and \
-                answers_diverge([s.get("figures") or {} for s in cand_src]):
+                answers_diverge([arbiter_figures(s) for s in cand_src]):
             # 🔴 АРБИТР — ДЕТЕКТОР НЕОДНОЗНАЧНОСТИ, А НЕ ВЫБИРАЮЩИЙ (задача 17 реестра).
             # Числа кандидатов посчитаны базой и РАЗОШЛИСЬ — значит вопросу отвечают разные
             # объекты с разными величинами, и это доказанная неоднозначность, а не повод
