@@ -261,7 +261,8 @@ def snapshot_contract():
     except RuntimeError:
         pass
     try:
-        _snap["quality_ts"] = psql("SELECT k, v, note FROM search_quality WHERE k='mart_changed_ts'")
+        _snap["quality_ts"] = psql("SELECT k, v, note FROM search_quality "
+                                   "WHERE k IN ('mart_changed_ts','changed_sources_ok')")
     except RuntimeError:
         pass
     try:
@@ -272,8 +273,8 @@ def snapshot_contract():
 
 
 def restore_contract():
-    # Восстановление снимка: apply переписывает search_changed_sources целиком
-    # и двигает mart_changed_ts — возвращаем как было до пробы.
+    # Восстановление снимка: apply ДОПИСЫВАЕТ отметки в search_changed_sources,
+    # двигает mart_changed_ts и ставит changed_sources_ok — возвращаем как было.
     try:
         if _snap["changed_exists"]:
             psql_exec("DELETE FROM search_changed_sources;")
@@ -285,7 +286,8 @@ def restore_contract():
     except RuntimeError as e:
         print(f"⚠ восстановление search_changed_sources: {str(e)[:150]}")
     try:
-        psql_exec("DELETE FROM search_quality WHERE k='mart_changed_ts';")
+        psql_exec("DELETE FROM search_quality "
+                  "WHERE k IN ('mart_changed_ts','changed_sources_ok');")
         for r in _snap["quality_ts"]:
             psql_exec("INSERT INTO search_quality VALUES ('%s', %s, '%s');"
                       % (r[0], r[1], r[2].replace("'", "''")))
@@ -338,12 +340,17 @@ def main() -> int:
         m1["chunks"] = [e1, em]
         pkg1 = write_package(1, "aaa00001", "full", m1, {"chunk-00001": c1, "metadata": cm})
 
-        delta_csv = csv_bytes([("k2", "v2", "beta2")])
-        e2, c2 = make_chunk("chunk-00001", delta_csv, TABLE, 1)
+        # 🔴 Дельта несёт ДУБЛИ строки — как агент, который кладёт шапку документа по
+        # копии на каждую строку табличной части (живой случай okna 14.08: документ с
+        # 79 позициями пришёл 79 копиями, витрина раздулась до 9633 строк при 8211
+        # документах). Вставка обязана дедуплицировать чанк по Ref_Key.
+        delta_csv = csv_bytes([("k2", "v2", "beta2"), ("k2", "v2", "beta2"),
+                               ("k2", "v2", "beta2")])
+        e2, c2 = make_chunk("chunk-00001", delta_csv, TABLE, 3)
         gone_csv = b"entity,ref_key\r\n" + TABLE.encode() + b",k3\r\n"
         eg, cg = make_chunk("gone", gone_csv, "", 1)
         m2 = base_manifest(2, "bbb00002", "delta")
-        m2["entities"] = [{"name": TABLE, "op": "delta", "rows": 1, "chunks": ["chunk-00001"]}]
+        m2["entities"] = [{"name": TABLE, "op": "delta", "rows": 3, "chunks": ["chunk-00001"]}]
         m2["gone"] = {"entities": [TABLE], "chunks": ["gone"]}
         m2["chunks"] = [e2, eg]
         pkg2 = write_package(2, "bbb00002", "delta", m2, {"chunk-00001": c2, "gone": cg})
@@ -356,7 +363,11 @@ def main() -> int:
         check("dry-run витрину не трогал",
               scalar("SELECT count(*) FROM duckdb_tables() WHERE table_name='%s'" % TABLE) == "0")
 
-        # 3. Боевой прогон.
+        # 3. Боевой прогон. Заранее ставится «чужая» отметка изменённого — как будто
+        # другой пакет применился, а сборка её ещё не потребила: apply обязан её
+        # пережить (дописывание), это проверяется после прогона.
+        psql_exec("CREATE TABLE IF NOT EXISTS search_changed_sources (src_table VARCHAR);\n"
+                  "INSERT INTO search_changed_sources VALUES ('pkt_probe_foreign_mark');")
         r = run_apply()
         check("apply код 0", r.returncode == 0, r.stderr.strip()[-300:])
 
@@ -377,6 +388,14 @@ def main() -> int:
                      "AND table_name='packet_metadata'") == "0")
         src = psql("SELECT src_table FROM search_changed_sources")
         check("search_changed_sources содержит таблицу", (TABLE,) in src, repr(src)[:200])
+        # Отметки ДОПИСЫВАЮТСЯ, а не переписываются: чужая отметка (например, от
+        # пакета, применённого во время долгой сборки) обязана пережить apply —
+        # прежняя перепись целиком затирала её до того, как сборка успевала прочесть.
+        check("отметка другой таблицы пережила apply (дописывание, не перепись)",
+              ("pkt_probe_foreign_mark",) in src, repr(src)[:200])
+        ok_flag = psql("SELECT v, note FROM search_quality WHERE k='changed_sources_ok'")
+        check("changed_sources_ok=1 поставлен самим apply (список полон по построению)",
+              len(ok_flag) == 1 and ok_flag[0][0] == "1", repr(ok_flag)[:150])
         prof = psql("SELECT rows, key_props FROM base_profile WHERE entity='%s'" % TABLE)
         check("base_profile: rows=2, ключ", len(prof) == 1 and prof[0][0] == "2"
               and prof[0][1] == "Ref_Key", repr(prof)[:200])

@@ -97,6 +97,10 @@ ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS nums MAP(VARCHAR, DOUBLE);
 -- [проверено] `ADD COLUMN` при живом инвертированном индексе индекс не роняет.
 ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS flags MAP(VARCHAR, BOOLEAN);
 
+-- Время последнего переноса сущности в поисковый слой. Пишется ниже по фактически
+-- перенесённым (`tmp3_build`); такт-пропуск колонку не трогает.
+ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS last_built_at TIMESTAMP;
+
 -- ============ 2. ЗАПИСЬ — ОДНОЙ ТРАНЗАКЦИЕЙ ============
 -- [замер] транзакции в этом движке работают: `BEGIN; MERGE; UPDATE; DELETE; ROLLBACK`
 -- откатывает всё до строки. Без транзакции обрыв посередине оставлял корпус в состоянии,
@@ -187,6 +191,20 @@ FROM (SELECT t.src_table,
              count(*) AS собрано
       FROM tmp3_corpus t GROUP BY t.src_table)
 WHERE в_корпусе <> собрано;
+
+-- ============ 5. ОТМЕТКИ ИЗМЕНЁННОГО ПОТРЕБЛЯЮТСЯ — И ТОЛЬКО ПЕРЕСОБРАННЫЕ ============
+-- На пакетном контуре отметки пишет apply (дописывая), а съедает их сборка — ровно те,
+-- что вошли в этот проход (`tmp3_build` зафиксирован в начале `corpus_build`). Отметка,
+-- поставленная apply ВО ВРЕМЯ сборки по уже пройденному источнику, здесь не удаляется:
+-- её данные этот проход не читал, и пересоберёт следующий такт. Прежде отметки не
+-- потреблял никто (синку это не нужно — он переписывает список целиком каждый прогон),
+-- и на юните они копились без дела при мёртвом инкременте (замер okna 14.08).
+DELETE FROM search_changed_sources
+WHERE src_table IN (SELECT tbl FROM tmp3_build);
+
+-- Фактически перенесённые в этом проходе. Такт-пропуск сюда не доходит.
+UPDATE search_tables SET last_built_at = now()
+WHERE src_table IN (SELECT tbl FROM tmp3_build);
 
 SELECT 'корпус' AS шаг, count(*) AS строк, count(DISTINCT src_table) AS сущностей,
        count(*) FILTER (WHERE emb IS NULL) AS ждут_вектора,

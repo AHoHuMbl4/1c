@@ -321,7 +321,16 @@ def _delta_sql(table: str, src: str, header: list[str]) -> str:
              % (table, ",".join(extra)))
     sel = ", ".join('"%s"' % c if c in header else "''" for c in mart_cols)
     cols = ", ".join('"%s"' % c for c in mart_cols)
-    return ('CREATE OR REPLACE TEMP TABLE "d_%s" AS %s;\n'
+    # 🔴 ЧАНК ДЕЛЬТЫ ДЕДУПЛИЦИРУЕТСЯ ПО Ref_Key — ровно так же, как полная загрузка
+    # (QUALIFY, форма эталона poc_load_entity). Живой случай okna 14.08: агент кладёт
+    # шапку документа в дельту ПО КОПИИ НА КАЖДУЮ СТРОКУ табличной части (документ с 79
+    # позициями пришёл 79 копиями), а вставка без дедупа накопила в витрине 9633 строки
+    # при 8211 документах — отсюда «1433 не в поиске» в каждом ответе бота (поиск-то
+    # дедуплицирует и показывал правду). Повтор пакета по-прежнему безопасен: DELETE
+    # снимает прошлую порцию тех же ключей.
+    return ('CREATE OR REPLACE TEMP TABLE "d_%s" AS '
+            'SELECT * FROM (%s) AS q '
+            'QUALIFY row_number() OVER (PARTITION BY "Ref_Key") = 1;\n'
             'DELETE FROM "%s" WHERE "Ref_Key" IN (SELECT "Ref_Key" FROM "d_%s");\n'
             'INSERT INTO "%s" (%s) SELECT %s FROM "d_%s";\n'
             % (table, src, table, table, table, cols, sel, table))
@@ -491,14 +500,28 @@ def _ensure_contract_tables() -> None:
 def _contract_tx(changed_tables: set, profile: list[dict]) -> None:
     """Последний шаг пакета: контрактные таблицы одной DML-транзакцией.
 
-    Формы повторяют serene_sync: search_changed_sources переписывается целиком
-    (пустой список законен), в base_profile обновляются строки затронутых
-    сущностей, в search_quality ставится отметка mart_changed_ts = now.
+    🔴 Отметки изменённого ДОПИСЫВАЮТСЯ, а не переписываются, — и apply объявляет
+    список полным (`changed_sources_ok = 1`). Прежняя форма повторяла serene_sync
+    (перепись целиком) — но у синка сборка идёт следом в том же процессе и съедает
+    список сразу, а на юните apply живёт своим таймером: второй пакет затирал
+    отметки первого до того, как их видела сборка. Флаг полноты на пакетном
+    контуре не ставил никто вовсе (его писал только синк, которого на юните нет
+    по построению) — путь «пересобрать изменившееся» был мёртв на каждом юните
+    (живой замер okna 14.08: витрина 9632, корпус 8199, такты завершались +0).
+    Полнота списка здесь — свойство устройства: apply — единственный писатель
+    витрины на пакетном контуре, и каждая применённая таблица попадает в
+    `changed_tables`. Потребляет отметки сборка (`corpus_merge`) — только те,
+    что пересобрала.
     """
-    sql = ["BEGIN;", "DELETE FROM search_changed_sources;"]
+    sql = ["BEGIN;"]
     if changed_tables:
         vals = ",".join("(%s)" % _lit(t) for t in sorted(changed_tables))
-        sql.append("INSERT INTO search_changed_sources SELECT * FROM (VALUES %s) AS s(t);" % vals)
+        sql.append("INSERT INTO search_changed_sources "
+                   "SELECT t FROM (VALUES %s) AS s(t) "
+                   "WHERE t NOT IN (SELECT src_table FROM search_changed_sources);" % vals)
+        sql.append("DELETE FROM search_quality WHERE k='changed_sources_ok';")
+        sql.append("INSERT INTO search_quality VALUES ('changed_sources_ok', 1, "
+                   "'список полон: витрину на пакетном контуре пишет только apply');")
     if profile:
         # Форма serene_sync: число строк обновляется, ключ и примечание сущности
         # в профиле сохраняются; вставляются только новые для профиля сущности.

@@ -203,10 +203,20 @@ SQL_HASH=$(cat corpus_build.sql poc_load_entity.py 2>/dev/null | md5sum | cut -d
 # Правильный источник — тот, кто знает: синк пишет `mart_changed_ts`, когда что-то залил.
 # 🔴 ОТСУТСТВИЕ ОТМЕТКИ = СОБИРАТЬ. Признак недостоверен ⇒ работаем. Иначе забытая отметка
 # снова тихо заморозила бы поиск.
+# 🔴 ПРОПУСК СВЕРЯЕТСЯ С МОМЕНТОМ ЧТЕНИЯ ВИТРИНЫ, А НЕ С КОНЦОМ ТАКТА.
+# `build_ts` пишется постчеком в конце КАЖДОГО такта — и пропущенного тоже. На пакетном
+# контуре apply живёт своим таймером, параллельно такту: изменение, применённое ВО ВРЕМЯ
+# такта, оказывалось «старше» свежего `build_ts`, и пропуск включался навсегда — [замер
+# okna 14.08] витрина 9632, корпус 8199, каждый такт честно писал «не менялись» и делал
+# ноль. На деве не стреляло: синк и сборка идут последовательно в одном процессе, во
+# время сборки витрину не пишет никто. Поэтому пропуск сверяется с `corpus_built_ts` —
+# временем, ЗАФИКСИРОВАННЫМ ДО чтения витрины и записанным только после удачного
+# слияния: всё, что легло в витрину позже этого момента (в том числе во время сборки),
+# на следующем такте старше отметки и пересоберётся. Отметки нет — собираем.
 SKIP_BUILD=$(psql "$DSN" -tA -c "SELECT CASE WHEN
       (SELECT count(*) FROM search_corpus) > 0
   AND (SELECT count(*) FROM search_quality WHERE k='mart_changed_ts') = 1
-  AND coalesce((SELECT v FROM search_quality WHERE k='build_ts'), 0)
+  AND coalesce((SELECT v FROM search_quality WHERE k='corpus_built_ts'), 0)
       > (SELECT v FROM search_quality WHERE k='mart_changed_ts')
   AND coalesce((SELECT note FROM search_quality WHERE k='build_sql_hash'), '') = '$SQL_HASH'
   -- Временные таблицы сборки нужны ПОСЛЕДУЮЩИМ шагам: резолверу (tmp3_cls, tmp3_ent,
@@ -220,11 +230,21 @@ SKIP_BUILD=$(psql "$DSN" -tA -c "SELECT CASE WHEN
 if [ "${FORCE_REBUILD:-0}" != "1" ] && [ "$SKIP_BUILD" = "1" ]; then
   echo "== 1-2. корпус НЕ пересобирается: данные и код сборки не менялись с прошлого такта"
 else
+  # Момент ДО чтения витрины: им станет `corpus_built_ts` после удачного слияния.
+  # Записывать сразу нельзя — упавшая сборка объявила бы себя состоявшейся, и
+  # следующий такт пропустил бы пересборку несобранного.
+  BUILD_READ_TS=$(date +%s)
+
   echo "== 1. корпус: движок читает \$metadata из $GATE и собирает текст"
   psql "$DSN" -q -v gate="$GATE" -f corpus_build.sql || fail "сборка корпуса"
 
   echo "== 2. слияние в боевой корпус и публикация индекса"
   psql "$DSN" -q -f corpus_merge.sql || fail "слияние корпуса"
+
+  psql "$DSN" -q -c "DELETE FROM search_quality WHERE k='corpus_built_ts';
+    INSERT INTO search_quality VALUES ('corpus_built_ts', $BUILD_READ_TS,
+      'момент чтения витрины последней удавшейся сборкой');" \
+    || fail "отметка corpus_built_ts"
 fi
 
 # 🔴 `fail`, а не «предупреждение». Прежде недосчитанные векторы печатались в журнал и
