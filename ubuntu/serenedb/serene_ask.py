@@ -5205,6 +5205,42 @@ def clarify_say(question, opts, diag=None):
     return fallback
 
 
+# 🔴 ВИТРИНА ИЗМЕРЯЕТСЯ ЖИВЬЁМ, А НЕ ПО ПЕРЕПИСИ (15.08, аудит §3). Перепись
+# (`search_coverage`) считает витрину только своим тактом; когда таймер сборки
+# остановлен, а витрина уже восстановлена, перепись показывает «полно» при разрыве в
+# сотни тысяч строк — прод был ложно зелёный. Поэтому самый полный слой считается
+# СЕЙЧАС штатным `query_table` (доки SereneDB: «SQL › Functions › Utility Functions —
+# query_table(tbl_name)»; имя — литерал, как в `coverage_build`).
+# Сравнение — по ОБЪЕКТАМ, а не по строкам: у ссылочного объекта табличная часть
+# развёрнута в витрине в несколько строк, а в корпусе объект — одна строка (та же
+# поправка, что `объектов_витрины` в переписи). Объект определяется ключом `Ref_Key`,
+# где такая колонка есть; где её нет (регистры) — строка и есть объект.
+def _vitrina_objects(src_table):
+    """Число объектов сущности в витрине. None — витрины нет или она не читается."""
+    try:
+        r = psql("SELECT (SELECT count(*) FROM duckdb_tables() "
+                 "  WHERE database_name = current_database() AND table_name = %(t)s), "
+                 "(SELECT count(*) FROM duckdb_columns() "
+                 "  WHERE database_name = current_database() AND table_name = %(t)s "
+                 "    AND column_name = 'Ref_Key')" % {"t": lit(src_table)})
+        has_vit, has_rk = int(_num(r[0][0])) > 0, int(_num(r[0][1])) > 0
+        if not has_vit:
+            return None
+        q = ("SELECT count(DISTINCT \"Ref_Key\") FROM query_table(%s)" if has_rk
+             else "SELECT count(*) FROM query_table(%s)") % lit(src_table)
+        return int(_num(psql(q)[0][0]))
+    except (RuntimeError, TypeError, ValueError, IndexError):
+        return None
+
+
+# 🔴 FAIL-CLOSED ПО САМОМУ ПОЛНОМУ СЛОЮ (15.08, аудит §3). Прежде неполнота
+# объявлялась только при `в_1С > в_корпусе` — по ДЕКЛАРАЦИИ источника из переписи.
+# После восстановления витрины декларация устарела (витрина полнее неё), перепись не
+# пересчитана, и ответы шли по заведомо неполному корпусу как полные: `в_1С` 8 295 =
+# `в_корпусе` 8 295 при 77 179 строках в витрине. Теперь неполнота — разрыв ЛЮБОГО
+# более полного доступного слоя с корпусом: декларация переписи, объекты витрины по
+# переписи и живое число объектов витрины (`_vitrina_objects`). Корпус считается так
+# же живьём — перепись здесь не аргумент ровно в той же мере.
 def _coverage_of(src_table):
     """Неполнота ИМЕННО ТОЙ сущности, по которой отвечаем (п. 13).
 
@@ -5214,16 +5250,104 @@ def _coverage_of(src_table):
     """
     if not src_table:
         return None
+    in_1c, obj_vit, corpus_n, reason = None, None, None, ""
     try:
-        r = psql("SELECT в_1С, в_корпусе, coalesce(причина,'') FROM search_coverage "
-                 "WHERE entity = %s AND в_1С > в_корпусе" % lit(src_table))
+        r = psql("SELECT в_1С, в_корпусе, объектов_витрины, coalesce(причина,'') "
+                 "FROM search_coverage WHERE entity = %s" % lit(src_table))
+        if r:
+            in_1c = int(_num(r[0][0]))
+            corpus_n = int(_num(r[0][1]))
+            obj_vit = int(_num(r[0][2])) if len(r[0]) > 2 else None
+            reason = r[0][3] if len(r[0]) > 3 else ""
     except RuntimeError:
-        return None                            # переписи нет — молчим, а не выдумываем
-    if not r:
+        pass                                 # переписи нет — решают живые слои
+    try:
+        corpus_n = int(_num(psql(
+            "SELECT count(*) FROM %s WHERE src_table = %s"
+            % (CORPUS, lit(src_table)))[0][0]))
+    except (RuntimeError, TypeError, ValueError, IndexError):
+        pass                                 # живого счёта нет — остаётся перепись
+    live_vit = _vitrina_objects(src_table)
+    layers = []
+    if in_1c is not None and in_1c > 0:
+        layers.append((in_1c, "декларация 1С"))
+    if obj_vit:
+        layers.append((obj_vit, "витрина (перепись)"))
+    if live_vit is not None:
+        layers.append((live_vit, "витрина"))
+    if not layers or corpus_n is None:
+        return None                          # полноту оценить нечем — молчим, не выдумываем
+    fuller, layer = max(layers, key=lambda x: x[0])
+    if fuller <= corpus_n:
         return None
-    return {"in_1c": int(_num(r[0][0])), "in_search": int(_num(r[0][1])),
-            "missing": int(_num(r[0][0])) - int(_num(r[0][1])),
-            "reason": r[0][2] if len(r[0]) > 2 else ""}
+    return {"in_1c": fuller, "in_search": corpus_n,
+            "missing": fuller - corpus_n, "layer": layer,
+            "reason": reason or "более полный слой (%s) новее корпуса" % layer}
+
+
+# 🔴 /health ВИДИТ ИЗВЕСТНЫЙ РАЗРЫВ ПОЛНОТЫ (15.08, аудит §3). До этого дверь
+# проверяла только доступность корпуса и число его строк: на проде она отвечала
+# `serene-ask-ok` при 590 955 строках, лежащих в витрине и не дошедших до корпуса.
+# Замер — живьём, как `_vitrina_objects`: переписи здесь не источник истины. Цена —
+# count по каждой таблице витрины (`[замер 15.08]`: 4,7 с на 1502 сущностях), поэтому
+# результат кэшируется на TTL: дверь опрашивается сторожем каждую минуту, а точность
+# «разрыв виден в течение TTL» для сигнала достаточна. Сначала `count(*)` по всем,
+# и только где строк больше, чем в корпусе, — честный пересчёт по объектам `Ref_Key`
+# (законный разворот табличной части тревогой не становится).
+_HEALTH_GAP_TTL = int(os.environ.get("ASK_HEALTH_GAP_TTL", "300"))
+_health_gap_cache = {"at": 0.0, "gap": None}
+
+
+def _measure_health_gap():
+    """Разрыв «витрина полнее корпуса» по всем сущностям. None — разрыва нет."""
+    r = psql("SELECT table_name FROM duckdb_tables() "
+             "WHERE database_name = current_database() "
+             "  AND table_name IN (SELECT src_table FROM %s)" % TABLES)
+    tabs = [x[0] for x in r if x and x[0]]
+    if not tabs:
+        return None
+    vit = {}
+    sql = " UNION ALL ".join(
+        "SELECT %s AS t, count(*) FROM query_table(%s)" % (lit(t), lit(t)) for t in tabs)
+    for x in psql(sql):
+        if x and x[0]:
+            vit[x[0]] = int(_num(x[1]))
+    corp = {x[0]: int(_num(x[1])) for x in psql(
+        "SELECT src_table, count(*) FROM %s GROUP BY 1" % CORPUS) if x and x[0]}
+    over = [t for t in tabs if vit.get(t, 0) > corp.get(t, 0)]
+    if not over:
+        return None
+    rk = {x[0] for x in psql(
+        "SELECT DISTINCT table_name FROM duckdb_columns() "
+        "WHERE database_name = current_database() AND column_name = 'Ref_Key' "
+        "  AND table_name IN (%s)" % ", ".join(lit(t) for t in over)) if x and x[0]}
+    gaps = {}
+    for t in over:
+        if t in rk:
+            n = int(_num(psql(
+                "SELECT count(DISTINCT \"Ref_Key\") FROM query_table(%s)"
+                % lit(t))[0][0]))
+        else:
+            n = vit[t]
+        if n > corp.get(t, 0):
+            gaps[t] = (n, corp.get(t, 0))
+    if not gaps:
+        return None
+    worst = sorted(gaps.items(), key=lambda kv: kv[1][0] - kv[1][1], reverse=True)[:5]
+    return {"entities": len(gaps),
+            "rows_missing": sum(v - c for v, c in gaps.values()),
+            "worst": [{"src": t, "витрина": v, "корпус": c} for t, (v, c) in worst]}
+
+
+def _health_gap():
+    """Кэш замера разрыва для /health. Ошибка замера — исключение: дверь «не знает»."""
+    now = time.time()
+    if _health_gap_cache["at"] and now - _health_gap_cache["at"] < _HEALTH_GAP_TTL:
+        return _health_gap_cache["gap"]
+    gap = _measure_health_gap()
+    _health_gap_cache["at"] = now
+    _health_gap_cache["gap"] = gap
+    return gap
 
 
 COVERAGE_SYS = """You answer an employee's question about how complete the company's data
@@ -8326,9 +8450,23 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.rstrip("/") == "/health":
             try:
                 n = psql("SELECT count(*) FROM %s" % CORPUS)[0][0]
-                return self._send(200, {"status": "serene-ask-ok", "corpus_rows": int(n)})
             except Exception as e:                      # noqa: BLE001
                 return self._send(503, {"status": "degraded", "error": str(e)[:200]})
+            # Известный разрыв полноты — дверь НЕ зелёная (аудит §3, п. 13/18).
+            # Формат ответа прежний (status + corpus_rows), поля добавляются: вызывающий
+            # (`1c-bot-monitor`) читает только HTTP-код, а разбор разрыва видит человек.
+            try:
+                gap = _health_gap()
+            except Exception as e:                      # noqa: BLE001 — дверь «не знает»,
+                return self._send(503, {"status": "degraded",  # а незнание ≠ зелёный
+                                        "corpus_rows": int(n),
+                                        "coverage_gap": "unknown",
+                                        "error": str(e)[:200]})
+            if gap:
+                return self._send(503, {"status": "degraded", "corpus_rows": int(n),
+                                        "coverage_gap": gap})
+            return self._send(200, {"status": "serene-ask-ok", "corpus_rows": int(n),
+                                    "coverage_gap": {"entities": 0, "rows_missing": 0}})
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
