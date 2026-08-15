@@ -2360,25 +2360,38 @@ def clarify_complete(txt, opts):
     return extra if not body else body + "\n" + extra
 
 
+# 🔴 ОТПЕЧАТОК ТИПИЗИРОВАН (15.08, аудит §5.2). Боевая форма `figures` — это
+# `compose_slot_values` ПЛЮС паспорт набора (`from`/`to`/`label`/`measure`,
+# `build_answer_passport`). Прежний отпечаток приводил к числу всё, что не `date*`,
+# и на строковых `label`/`measure` возвращал `None`; `answers_diverge` читал это как
+# расхождение, и ветка A3 (`answers_src_conflict`) на боевой форме была НЕДОСТИЖНА
+# (замер аудита на проде: `passport_A3=False`). Поэтому: числовые слоты — числами
+# (round 2), квалификаторы паспорта — строками, а `label` исключён вовсе — это метка
+# источника, производная `src`, и по ней совпавшие по числам прочтения различались бы
+# всегда. Нечисловое значение в непаспортном слоте сравнивается строкой: `None` от
+# паспорта больше не возникает, а разное по-прежнему даёт расхождение.
+_FP_SKIP = {"in_1c", "in_search", "missing", "_totals", "label"}
+_FP_STR = {"from", "to", "measure"}            # квалификаторы паспорта — строки
+
+
 def _slot_fp(f):
-    """Отпечаток плейсхолдеров одного кандидата. Покрытие в сравнение не входит."""
+    """Отпечаток плейсхолдеров одного кандидата. Покрытие и метка не входят."""
     if not isinstance(f, dict):
         return None
-    skip = {"in_1c", "in_search", "missing", "_totals"}
     fp = []
     for k in sorted(f):
-        if k in skip or str(k).startswith("_"):
+        if k in _FP_SKIP or str(k).startswith("_"):
             continue
         v = f.get(k)
         if v is None or (isinstance(v, str) and not str(v).strip()):
             continue
-        if str(k).startswith("date"):
+        if str(k).startswith("date") or k in _FP_STR:
             fp.append((k, str(v)))
             continue
         try:
             fp.append((k, round(float(v), 2)))
         except (TypeError, ValueError):
-            return None
+            fp.append((k, str(v)))
     return tuple(fp)
 
 
