@@ -720,6 +720,22 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
 -- 🔴 ДВА УРОВНЯ, А НЕ ОДИН. `QUALIFY` не может ссылаться на ключ, который сам считается
 -- оконной функцией: движок отвечает `window function calls cannot be nested`. Ключ
 -- строится на внутреннем уровне, выбор одной строки на объект — на внешнем.
+-- 🔴 ДАЖЕ С ОТПЕЧАТКОМ ТЕКСТА КЛЮЧ МОЖЕТ ПОВТОРИТЬСЯ: у развёрнутых строк одного
+-- регистратора текст бывает одинаков целиком (две одинаковые строки табличной части —
+-- в 1С их различает LineNumber, а у текста различия нет). [замер 15.08, okna-1] после
+-- починки дедупа приёмника (строки табчастей доезжают все) слияние остановила защита:
+-- 17 269 дублей ключа в tmp3_corpus. Схлопывать такие строки нельзя (п. 13): это
+-- разные движения, и в суммах нужны обе. Ключ дополняется порядковым номером по
+-- полному детерминированному порядку — набор ключей стабилен между тактами, пока
+-- стабильны данные, и обе строки остаются в корпусе.
+SELECT src_table,
+       CASE WHEN count(*) OVER (PARTITION BY src_table, row_key) > 1
+            THEN row_key || '#' || row_number() OVER (PARTITION BY src_table, row_key
+                                                      ORDER BY doc, refs, refs_map::VARCHAR,
+                                                               nums::VARCHAR, flags::VARCHAR, dt)
+            ELSE row_key END AS row_key,
+       doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own
+FROM (
 SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own FROM (
 SELECT src_table,
        -- 🔴 ОБЪЯВЛЕННЫЙ КЛЮЧ НЕ ВСЕГДА РАЗЛИЧАЕТ СТРОКИ. У регистров 1С отдаёт данные
@@ -796,7 +812,7 @@ FROM (
 -- загрузчика означать нечего не должно — это проверяется отдельным числом в отчёте.
 QUALIFY NOT (SELECT on_ FROM fold)
      OR row_number() OVER (PARTITION BY src_table, row_key
-          ORDER BY doc, refs, doc_hash) = 1;
+          ORDER BY doc, refs, doc_hash) = 1) qq;
 
 -- ============ 6-бис. УПРОЩЁННЫЙ ВАРИАНТ СБОРКИ (запасной) ============
 -- 🔴 ОДНА СУЩНОСТЬ НЕ ДОЛЖНА УБИВАТЬ ВЕСЬ ТАКТ. Полная сборка делает много тонкого:
