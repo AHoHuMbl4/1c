@@ -1,0 +1,33 @@
+[Unit]
+# Генератор словаря подписей веток развилок — запуск рабочей сессией без повышения прав.
+# Зеркало установленного 1c-wiki-alias.service (тот же механизм, описан в AGENTS.md).
+#
+# 🔴 Зачем. `branch_alias.sh` спрашивает штатного агента OpenClaw, а его профиль и ключ лежат
+# у пользователя бота (0600) — значит запускать надо от него. Рабочей сессии это недоступно
+# ни одним способом: она не бот, не администратор, и `sudo` ей закрывает среда. Выбор
+# способа внутри скрипта эту стену не пробивает — возможность даёт механизм, а не текст.
+#
+# Имя на «1c-» намеренно: под него подпадает polkit-правило 50-claudedev-1c-units.rules,
+# поэтому сессия зовёт прогон сама:
+#     systemctl start 1c-branch-alias        (следить: journalctl -u 1c-branch-alias -f)
+# Разрешение не расширяется: запускается ровно этот юнит и ровно этот скрипт.
+#
+# Параметры прогона сессия кладёт в свой файл (он ей доступен на запись, в отличие от /etc):
+#     /srv/1c/.claude/state/branch-alias.env
+# Например: SERENEDB_DSN=…, BRANCH_ALIAS_MAX_SEC=0, BRANCH_ALIAS_CAP=0,
+#           FORK_CLASS_TABLE=…, FORK_LABEL_TABLE=…
+Description=Генератор словаря подписей веток развилок (branch_alias.sh) от имени бота
+
+[Service]
+Type=oneshot
+TimeoutStartSec=0
+# Ключи моделей и адреса — там же, где их берёт остальной контур.
+EnvironmentFile=-/etc/1c-mcp-reports.env
+EnvironmentFile=-/etc/1c-embed.env
+# Параметры конкретного прогона — из каталога проекта, доступного рабочей сессии.
+EnvironmentFile=-/srv/1c/.claude/state/branch-alias.env
+WorkingDirectory=/srv/1c/ubuntu/serenedb
+ExecStart=/usr/sbin/runuser -u undebot --preserve-environment -- /bin/bash /srv/1c/ubuntu/serenedb/branch_alias.sh ${BRANCH_ALIAS_CAP}
+
+[Install]
+WantedBy=multi-user.target

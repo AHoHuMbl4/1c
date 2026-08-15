@@ -1,5 +1,17 @@
 # Журнал изменений
 
+## 15.08: юнит 1c-branch-alias — зеркало механизма 1c-wiki-alias `[код]`
+
+`[код]` `ubuntu/serenedb/systemd/1c-branch-alias.service` — юнит-обёртка запуска
+`branch_alias.sh` от имени бота, зеркало УСТАНОВЛЕННОГО (нешаблонного)
+`1c-wiki-alias.service`: тот же скелет (oneshot, `runuser -u undebot
+--preserve-environment`, ключи из `/etc/1c-mcp-reports.env` + `/etc/1c-embed.env`),
+параметры прогона — из `/srv/1c/.claude/state/branch-alias.env` (SERENEDB_DSN,
+BRANCH_ALIAS_MAX_SEC, BRANCH_ALIAS_CAP, FORK_*_TABLE). Имя на `1c-` — под
+polkit-правило `50-claudedev-1c-units.rules`, сессия зовёт `systemctl start
+1c-branch-alias` без sudo. Установка — владельцем (`cp` в `/etc/systemd/system`
++ `daemon-reload`), сессии в `/etc` не пишут.
+
 ## 15.08: klient-1 — витрина полна, вернулось 906 513 строк переприменением `[замер]`
 
 `[замер]` Порции 5…10 помечены `verified`, `last_applied_seq` откачен до 4
