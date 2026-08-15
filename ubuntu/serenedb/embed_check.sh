@@ -12,7 +12,13 @@
 # ОТВЕТЕ, а не то, что мы попросили. Ключ идёт файлом, а не аргументом: в командной
 # строке его видно любому `ps`.
 #
-# Использование: embed_check.sh   (0 — модель та, 1 — не та или сервис не отвечает)
+# 🔴 СВЕРКИ МОДЕЛИ МАЛО — НУЖЕН ЖИВОЙ ВЫЗОВ С КЛЮЧОМ (15.08). `/health` на этом сервисе
+# открыт без авторизации, и проверка по одному `/health` вернула 0 при НЕВАЛИДНОМ ключе:
+# ложный зелёный прибор, смысловой путь в бою был бы выключен молча. Поэтому после сверки
+# модели делается минимальный ЖИВОЙ вызов на каждую дверь с её ключом, и код 0 отдаётся
+# только за реальный вектор нужной размерности. 401/403 называются явно: «ключ не годится».
+#
+# Использование: embed_check.sh   (0 — модель та и оба ключа дают вектор нужной dim)
 # Окружение:     EMBED_BASE_URL, EMBED_API_KEY|EMBED_API_KEYS, EMBED_MODEL
 set -u
 
@@ -70,3 +76,61 @@ if [ "$GOT" != "$MODEL" ]; then
   exit 1
 fi
 echo "проверка эмбеддера: модель совпала ($GOT)"
+
+# 🔴 ЖИВОЙ ВЫЗОВ С КЛЮЧОМ — ПО ОДНОМУ НА ДВЕРЬ. `/health` ключа не спрашивает (живой
+# случай 15.08: модель совпала, оба ключа — «Invalid API key»), поэтому пригодность
+# ключа доказывается только вектором нужной размерности из ответа. Проверяются обе
+# двери, потому что ключи у них разные: вопросы — `/embed` с `EMBED_API_KEY`
+# (наш сервис ответов), документы — `/v1/embeddings` с `EMBED_API_KEYS` (движок,
+# `ai_embed`). Тело запроса повторяет боевое (`_embed_request` в `serene_ask.py`).
+live_door() {
+  # $1 — адрес, $2 — ключ, $3 — тело JSON, $4 — имя двери для сообщения
+  local out code body verdict
+  out=$(printf 'url = "%s"\nheader = "Authorization: Bearer %s"\nheader = "Content-Type: application/json"\nuser-agent = "%s"\ndata = %s\nsilent\nshow-error\nmax-time = 60\nwrite-out = "\\n%%{http_code}"\n' \
+          "$1" "$2" "${EMBED_UA:-curl/8.5.0}" "$3" | curl --config - 2>/dev/null)
+  code=$(printf '%s' "$out" | tail -n1)
+  body=$(printf '%s' "$out" | sed '$d')
+  case "$code" in
+    401|403)
+      echo "🔴 КЛЮЧ НЕ ГОДИТСЯ ($4): сервис ответил $code. Обновите ключ в /etc/1c-embed.env." >&2
+      return 1;;
+    200) ;;
+    *)
+      echo "проверка эмбеддера: $4 ответила кодом «$code» — сервис нездоров или ответ не разобран" >&2
+      return 1;;
+  esac
+  verdict=$(printf '%s' "$body" | python3 -c 'import json,sys
+want = int(sys.argv[1])
+try:
+    d = json.load(sys.stdin)
+    v = d["embeddings"][0] if "embeddings" in d else d["data"][0]["embedding"]
+    print("ok" if len(v) == want else "dim:%d" % len(v))
+except Exception:
+    print("bad")' "${EMBED_DIM:-1024}" 2>/dev/null)
+  case "$verdict" in
+    ok) echo "проверка эмбеддера: $4 — живой вектор, dim ${EMBED_DIM:-1024}"; return 0;;
+    dim:*)
+      echo "🔴 $4: вектор ДРУГОЙ размерности ($verdict, ждём ${EMBED_DIM:-1024}) — пространство несравнимо." >&2
+      return 1;;
+    *)
+      echo "проверка эмбеддера: $4 вернула 200 без вектора — ответ не разобран" >&2
+      return 1;;
+  esac
+}
+
+QURL="${EMBED_BASE_URL:-}${EMBED_QUERY_PATH:-/embed}"
+if [ -z "${EMBED_BASE_URL:-}" ] || [ -z "${EMBED_API_KEY:-}" ]; then
+  echo "проверка эмбеддера: не заданы EMBED_BASE_URL или EMBED_API_KEY (дверь вопроса)" >&2
+  exit 1
+fi
+live_door "$QURL" "$EMBED_API_KEY" \
+  '"{\"texts\":[\"ping\"],\"is_query\":true,\"dim\":'"${EMBED_DIM:-1024}"'}' \
+  "дверь вопроса $QURL" || exit 1
+
+if [ -z "$KEY" ]; then
+  echo "проверка эмбеддера: не задан EMBED_API_KEYS (дверь движка)" >&2
+  exit 1
+fi
+live_door "$URL" "$KEY" \
+  '"{\"model\":\"'"$MODEL"'\",\"dimensions\":'"${EMBED_DIM:-1024}"',\"input\":[\"ping\"]}"' \
+  "дверь движка $URL" || exit 1
