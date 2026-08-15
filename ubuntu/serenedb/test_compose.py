@@ -425,14 +425,19 @@ t("стоп1 sum: мест групп и amount= в задании нет",
   "{total:g" not in SENT["body"] and "amount=" not in SENT["body"]
   and "{total}" in SENT["body"] and "{leader}" not in SENT["body"])
 slots_sum = A.compose_slot_values(_GAGG, measure="Сумма", money=True, slot_mode="sum")
-t("стоп1 sum: в слотах итог множества, без leader/g0",
+t("стоп1 sum: в слотах итог множества, без leader/g0/count",
   slots_sum.get("sum") == 681990.12 and "leader" not in slots_sum
-  and "g0" not in slots_sum)
+  and "g0" not in slots_sum and "count" not in slots_sum)
+A.compose("сумма за период", _GROWS, _GAGG, totals=TOTALS, money=True, slot_mode="sum")
+t("стоп1 sum: места {count} в задании нет",
+  "count (number of records)" not in SENT["body"]
+  and "-> {count}" not in SENT["body"])
 slots_cnt = A.compose_slot_values(_GAGG, measure="Сумма", money=False, slot_mode="count")
 t("стоп1 count: в слотах только счёт (и служебное), без sum/leader",
   slots_cnt.get("count") == _GAGG["count"] and "sum" not in slots_cnt
   and "leader" not in slots_cnt and "g0" not in slots_cnt)
-txt_ng = A.ensure_n_groups_named("Лидер 46 204.58", _GAGG)
+txt_ng = A.ensure_n_groups_named(
+    "Лидер 46 204.58, итого 681 990.12", _GAGG)
 t("group: n_groups > K дописывается числом",
   "80" in _digits(txt_ng)
   and A.asked_figure_missing(txt_ng, _GAGG, "list", True) is None)
@@ -441,8 +446,9 @@ t("group: want=sum без итога множества — дыра (лидер
 t("group: want=sum с итогом множества — ок",
   A.asked_figure_missing("Итого 681 990.12, групп 80", _GAGG, "sum", True) is None)
 slots_g = A.compose_slot_values(_GAGG, measure="Сумма", money=True, slot_mode="rank")
-t("group/rank: слот sum=итог, g0=топ, без leader/max/min",
+t("group/rank: слот sum=итог, g0=топ, без leader/max/min/count",
   "max" not in slots_g and "min" not in slots_g and "leader" not in slots_g
+  and "count" not in slots_g
   and slots_g.get("sum") == 681990.12 and slots_g.get("g0") == 46204.58)
 
 print("\n%d проверок пройдено" % PASS)

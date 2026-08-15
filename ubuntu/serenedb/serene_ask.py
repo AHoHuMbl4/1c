@@ -2476,8 +2476,10 @@ def answer_slot_mode(want, compute, form=None, grain=None):
     законные числа с разной ролью оказываются в одном допуске.
 
       count — счёт (и служебные даты/папки); деньги / лидер / числа строк закрыты.
-      sum   — итог множества; лидер и цифры текста показанных строк закрыты.
-      rank  — группы по индексам; итог множества — отдельное место; `{leader}` нет.
+      sum   — итог множества; лидер, цифры строк и счёт записей закрыты
+              (счёт после гейта может дописать код — `ensure_count_named`).
+      rank  — группы по индексам; итог множества — отдельное место; `{leader}` нет;
+              счёт записей не свободен (как на sum); при sum≠лидер оба обязательны.
       list  — цитаты строк (прежний белый список строк).
     """
     counting = (compute or "") == "count" or (want or "") == "count"
@@ -2509,7 +2511,8 @@ def compose_slot_values(agg, measure=None, folders=0, money=None, slot_mode=None
     slots = {}
     if not agg:
         return slots
-    if agg.get("count") is not None:
+    # Стоп 1: count — слот модели только count/list (не sum/rank).
+    if agg.get("count") is not None and slot_mode in ("count", "list"):
         slots["count"] = agg["count"]
     if slot_mode == "count":
         pass
@@ -3723,8 +3726,10 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None, slot_mode=Non
             known.pop(k, None)
     elif slot_mode == "sum":
         known.pop("leader", None)
+        known.pop("count", None)
     elif slot_mode == "rank":
         known.pop("leader", None)
+        known.pop("count", None)
         for k in ("max", "min", "avg"):
             known.pop(k, None)
     # 🔴 БЕЗ ВЫБРАННОЙ ВЕЛИЧИНЫ БЕЗЫМЯННОЕ МЕСТО НЕ ЗАПОЛНЯЕТСЯ. Когда вопрос не назвал,
@@ -3831,6 +3836,27 @@ def ensure_n_groups_named(text, agg):
     if bad or not (filled or "").strip() or filled.strip().startswith("{"):
         filled = _fmt(ng)
     return ((text or "").rstrip() + " · " + filled).strip()
+
+
+def ensure_count_named(text, agg, slot_mode=None):
+    """Стоп 1: на sum/rank счёт строк дописывает код после гейта, не белый список.
+
+    Пока счёт не в тексте — служебный хвост из базы (как n_groups). Модель его
+    написать не может: слота нет, allow(count) на sum/rank закрыт.
+    """
+    if slot_mode not in ("sum", "rank"):
+        return text
+    cnt = (agg or {}).get("count")
+    if cnt is None:
+        return text
+    have = _norm_numbers(text)
+    try:
+        nf = float(cnt)
+    except (TypeError, ValueError):
+        return text
+    if nf in have or round(nf, 2) in have:
+        return text
+    return ((text or "").rstrip() + " · " + _fmt(nf)).strip()
 
 
 def build_answer_passport(period=None, period_dropped=False, origin="",
@@ -4113,12 +4139,20 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
     # нет вовсе: строки названы примерами, а за счётом модель идёт на место `{count}`.
     # Когда счёта нет (агрегат не посчитан), остаётся прежний вид — лучше него ничего.
     if agg and agg.get("grain") == "group":
-        head_line = ("GROUPS (one row = one value of the grouping axis; totals are "
-                     "computed in the database over all matching records, not a single "
-                     "line — the number of records is {count}):")
+        if slot_mode in ("sum", "rank"):
+            head_line = ("GROUPS (one row = one value of the grouping axis; totals are "
+                         "computed in the database over all matching records, not a "
+                         "single line):")
+        else:
+            head_line = ("GROUPS (one row = one value of the grouping axis; totals are "
+                         "computed in the database over all matching records, not a single "
+                         "line — the number of records is {count}):")
     else:
-        head_line = ("ROWS (examples from the matching set, not the whole of it — the number "
-                     "of records is {count}):" if agg else "ROWS FOUND (%d):" % len(rows))
+        if agg and slot_mode in ("sum", "rank"):
+            head_line = ("ROWS (examples from the matching set, not the whole of it):")
+        else:
+            head_line = ("ROWS (examples from the matching set, not the whole of it — the number "
+                         "of records is {count}):" if agg else "ROWS FOUND (%d):" % len(rows))
     body = "QUESTION: %s\n\n%s\n%s" % (
         question, head_line, "\n".join("- " + p for p in payload))
     # Стоп 1: места групп — rank/list. На sum только безымянный {total}=итог множества.
@@ -4175,7 +4209,9 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         kw = kind_word(src) if src else ""
         if kw:
             body += "\n  count_kind (record type noun) -> {count_kind}"
-        body += "\n  count (number of records) -> {count}"
+        # Стоп 1: на sum/rank счёт не слот модели (код может дописать после гейта).
+        if slot_mode in ("count", "list"):
+            body += "\n  count (number of records) -> {count}"
         # 🔴 ПО СКОЛЬКИМ ЗАПИСЯМ ПОСЧИТАНЫ sum И avg. `aggregate` считает `count_amount`
         # отдельно именно для этого («иначе среднее по 31 строке уходит как среднее по
         # 1344»), но до модели число не доходило вовсе — комментарий в `aggregate`
@@ -4573,18 +4609,32 @@ def asked_figure_missing(text, agg, want, has_measure, folders=0):
     if not agg:
         return None
     have = None
+    needs = []
     if want == "count":
-        need = agg.get("count")
+        needs.append(agg.get("count"))
     elif want == "sum" and has_measure:
         # Без выбранной величины `sum` считается по пустому месту: ноль значил бы «не
         # считали», а не «ноль», и требовать его в тексте было бы требованием выдумки.
-        need = agg.get("sum")
-    else:
-        need = None
-    if (need is None and (agg or {}).get("grain") == "group" and has_measure):
-        need = _group_leader(agg)
-    if need is not None:
-        have = _norm_numbers(text)
+        needs.append(agg.get("sum"))
+    elif (agg or {}).get("grain") == "group" and has_measure:
+        # Рейтинг/list по группам: лидер обязателен; если итог множества другой —
+        # он тоже (иначе «Топ 7, итого 1104» при sum≠leader проходит как ответ).
+        lead = _group_leader(agg)
+        needs.append(lead)
+        s = agg.get("sum")
+        if s is not None and lead is not None:
+            try:
+                if abs(float(s) - float(lead)) > 1e-9:
+                    needs.append(s)
+            except (TypeError, ValueError):
+                needs.append(s)
+        elif s is not None:
+            needs.append(s)
+    for need in needs:
+        if need is None:
+            continue
+        if have is None:
+            have = _norm_numbers(text)
         nf = float(need)
         if nf not in have and round(nf, 2) not in have:
             return "величина %s не названа цифрами" % _fmt(nf)
@@ -4809,7 +4859,10 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
             for key in ("sum", "min", "max", "avg"):
                 if agg.get(key) is not None:
                     allow(agg[key])
-        allow(agg["count"])
+        # Стоп 1: счёт строк — не свободный токен sum/rank (класс «15 рядом с суммой»).
+        # На count/list — слот формы. Показать счёт на sum/rank может код после гейта.
+        if slot_mode in ("count", "list"):
+            allow(agg["count"])
     # Числа из ВОПРОСА в белый список больше не идут. Вопрос — это аргумент, который
     # сочиняет модель бота: она сама пополняла список того, что ей разрешено сказать,
     # и через это проходило любое выдуманное число.
@@ -7685,6 +7738,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     шаг("гейт исходящего", прошёл=bool(ok), причин=len(bad),
         первая=(bad[0][:60] if bad else "—"))
+    if ok:
+        text = ensure_count_named(text, agg, slot_mode)
     # ОТВЕТ ОБЯЗАН ДОЙТИ, ЕСЛИ ОН ЕСТЬ. Решение владельца 27.07: «если данные есть, но по
     # нашей системе мы их не отдали — пропадает смысл проекта». Первая формулировка могла
     # не пройти проверку по своей вине (модель объявила число строк суммой), а данные при
@@ -7737,6 +7792,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # вместо даты. Гейт этого не ловит (цифр в заготовке нет), и вопрос выглядел
             # как поломка системы ровно в тот момент, когда система переспрашивает.
             text, claims = text2, claims2
+            text = ensure_count_named(text, agg, slot_mode)
             ask_back = _filled_ask(_ask_back(raw2), agg, totals_shown, money, diag, cov_slots,
                                     slot_mode=slot_mode)
             ok, bad = True, []

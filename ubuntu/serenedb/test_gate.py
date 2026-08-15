@@ -462,11 +462,21 @@ t("стоп1 sum: лидер как итог режется",
   not A.gate("Итого 1 104", [], _TRI, [], None, True, "sum")[0])
 t("стоп1 sum: число строки корпуса режется",
   not A.gate("Итого 36 651", [_TROW], _TRI, [], None, True, "sum")[0])
-t("стоп1 sum: итог множества проходит",
-  A.gate("Итого 16 800.88 по 542 записям", [], _TRI, [], None, True, "sum")[0])
+t("стоп1 sum: итог множества без счёта проходит",
+  A.gate("Итого 16 800.88", [], _TRI, [], None, True, "sum")[0])
+t("стоп1 sum: счёт строк в белом списке не свободен",
+  not A.gate("Итого 542", [], _TRI, [], None, True, "sum")[0]
+  and not A.gate("Итого 16 800.88 по 542 записям", [], _TRI, [], None, True, "sum")[0])
 t("стоп1 sum: счёт без итога — miss (лидер/счёт не закрывают want=sum)",
   A.asked_figure_missing("Всего 542", _TRI, "sum", True) is not None
   and A.asked_figure_missing("Лидер 1 104", _TRI, "sum", True) is not None)
+t("стоп1 rank: лидер как единственное итого при другом sum — miss",
+  A.asked_figure_missing("Топ 7, итого 1 104", _TRI, "list", True) is not None)
+t("стоп1 rank: группа + итог множества — ок",
+  A.asked_figure_missing("ItemA 1 104, итого 16 800.88, групп 7", _TRI, "list", True) is None)
+t("стоп1 sum: код дописывает счёт после гейта",
+  "542" in A.ensure_count_named("Итого 16 800.88", _TRI, "sum").replace(" ", "").replace("\xa0", "")
+  and A.ensure_count_named("Итого 16 800.88", _TRI, "count") == "Итого 16 800.88")
 t("стоп1 count: сумма поля режется",
   not A.gate("всего 16 800.88", [], _TRI, [], None, False, "count")[0])
 t("стоп1 count: лидер режется",
