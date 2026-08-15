@@ -419,6 +419,52 @@ def _check_rows_landed(base_id: str, pkg_id: str, table: str, rows_sent) -> None
                               100.0 * d / rows_sent))
 
 
+def _contour_gap(entities: list, tables: set, upto) -> list:
+    """Сущности контура, которые агент уже прошёл, а в витрине их нет.
+
+    Чистая функция — вся работа с файлами снаружи. `upto` — сущность, которую
+    агент читает сейчас (из progress.json): контур он обходит в том же порядке,
+    в каком получил, поэтому всё до неё либо доехало, либо потеряно. `upto=None`
+    — считаем по всему контуру (загрузка закончена или хода не знаем).
+    """
+    names = [e for e in entities if isinstance(e, str)]
+    if upto is not None and upto in names:
+        names = names[:names.index(upto)]
+    return [e for e in names if safe_col(e).lower() not in tables]
+
+
+def _check_contour_arrived(base_id: str) -> None:
+    # 🔴 Что НЕ доехало, приёмник не знает ниоткуда: секции skipped в манифестах
+    # klient-1 нет ни в одной порции (замер 15.08 — `skipped=null` во всех
+    # десяти), а сам агент пропуски классифицирует и пишет только в свой журнал
+    # — диагностический артефакт, не контракт. Живой случай того же дня:
+    # AccumulationRegister_СебестоимостьТоваров_RecordType агент читал 6,7 часа,
+    # прочитал 638 330 строк и выбросил по OutOfMemoryException; ещё 2 121
+    # сущность отпала по правам (HTTP 401). Приёмнику не сказали ни о чём.
+    # Поэтому счёт снимается здесь: контур известен (config.entities базы),
+    # витрина известна, разница — на виду.
+    # Пустая сущность от потерянной так не отличается (агент про «строк 0» тоже
+    # молчит), поэтому строка журнала называет вещи как есть, без тревоги.
+    rec = BASES.get(base_id) or {}
+    entities = ((rec.get("config") or {}).get("entities")) or []
+    if not entities:
+        return
+    try:
+        tables = set(_psql_col("SELECT table_name FROM duckdb_tables() "
+                               "WHERE database_name = current_database()"))
+    except RuntimeError as e:
+        _log("base=%s: контур сверить не удалось: %s" % (base_id, str(e)[:150]))
+        return
+    prog = _read_json(os.path.join(_base_dir(base_id), "progress.json"), {})
+    upto = prog.get("entity") if isinstance(prog, dict) else None
+    gap = _contour_gap(entities, tables, upto)
+    if not gap:
+        return
+    _log("base=%s контур %d, пройдено до %s, НЕ В ВИТРИНЕ %d (пусто или потеряно): %s%s"
+         % (base_id, len(entities), upto or "конца", len(gap), ", ".join(gap[:10]),
+            " …" if len(gap) > 10 else ""))
+
+
 def _check_mix_versions(table: str) -> None:
     # Инвариант К3 (контракт §9): одна версия на Ref_Key, запрос как у
     # poc_load_entity.load_entity_delta. Нарушение — карантин, дельту не льём.
@@ -848,15 +894,21 @@ def main() -> int:
         return 0
     bad = 0
     skip_bases: set = set()
+    touched: list = []
     for base_id, pkg_id, m in todo:
         if base_id in skip_bases:
             continue
         res = apply_package(base_id, pkg_id, m, args.dry_run)
+        if base_id not in touched:
+            touched.append(base_id)
         if res in ("failed", "quarantined"):
             bad += 1
             # Поздние пакеты этой базы строятся поверх ранних — после сбоя
             # база дальше не идёт, остальные базы продолжаются.
             skip_bases.add(base_id)
+    if not args.dry_run:
+        for base_id in touched:
+            _check_contour_arrived(base_id)
     return 3 if bad else 0
 
 

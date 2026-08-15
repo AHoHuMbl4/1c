@@ -99,6 +99,27 @@ check("префикс threads: умолчание — НЕ вмешиватьс�
       _prefix_with(None) == "")
 
 
+# Контур против витрины: что агент прошёл, а в витрине нет. Живой случай
+# klient-1 15.08 — сущность читалась 6,7 ч и выброшена агентом по
+# OutOfMemoryException, ещё 2 121 отпала по правам, и приёмнику не сказали
+# ничего: секции skipped нет ни в одном из десяти манифестов.
+import packet_apply as _A0  # noqa: E402
+
+_CONTOUR = ["Catalog_Аа", "Document_Бб", "AccumulationRegister_Вв", "Catalog_Гг"]
+check("контур: пройденное и отсутствующее названо",
+      _A0._contour_gap(_CONTOUR, {"catalog_аа"}, "Catalog_Гг")
+      == ["Document_Бб", "AccumulationRegister_Вв"])
+check("контур: непрочитанное ещё не потеря",
+      _A0._contour_gap(_CONTOUR, {"catalog_аа"}, "Document_Бб") == [])
+check("контур: ход неизвестен — считаем весь контур",
+      len(_A0._contour_gap(_CONTOUR, {"catalog_аа"}, None)) == 3)
+check("контур: всё доехало — пусто",
+      _A0._contour_gap(_CONTOUR, {"catalog_аа", "document_бб",
+                                  "accumulationregister_вв"}, "Catalog_Гг") == [])
+check("контур: имя сущности приводится к имени таблицы (safe_col+lower)",
+      _A0._contour_gap(["Document_Тест"], {"document_тест"}, None) == [])
+
+
 def _line_cap_of(src: str) -> int:
     import re as _re
     m = _re.search(r"maximum_line_size=(\d+)", src)

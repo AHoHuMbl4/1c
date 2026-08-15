@@ -33,6 +33,7 @@ psql идёт в 5432 и получает отказ; systemd тот же фай
 """
 import json
 import glob
+import os
 import sys
 
 sys.path.insert(0, "/opt/1c-packet")
@@ -52,31 +53,32 @@ for p in sorted(glob.glob("/var/lib/1c-packet/inbox/%s/*/manifest.json" % BASE))
         m = json.load(open(p, encoding="utf-8"))
     except (OSError, ValueError):
         continue
+    pkg = os.path.basename(os.path.dirname(p))
     for e in m.get("entities") or []:
         if e.get("op") in ("full", "full_entity") and isinstance(e.get("rows"), int):
-            sent[safe_col(e.get("name", "")).lower()] = (e["rows"], e.get("key") or [])
+            sent[safe_col(e.get("name", "")).lower()] = (e["rows"], e.get("key") or [], pkg)
 
 print("%-58s %10s %10s %12s" % ("таблица", "прислано", "легло", "потеряно"))
 plan, unfixable = [], []
 for t in sorted(sent):
     if t not in tables:
         continue
-    rows_sent, _key = sent[t]
+    rows_sent, _key, pkg = sent[t]
     got = int(_psql_scalar('SELECT count(*) FROM "%s"' % t))
     if got >= rows_sent:
         continue
     sib, lost = t + "_recordtype", rows_sent - got
     print("%-58s %10d %10d %8d (%4.1f%%)%s"
           % (t[:58], rows_sent, got, lost, 100.0 * lost / rows_sent,
-             "" if sib in tables else "  ← сестры нет"))
-    (plan if sib in tables else unfixable).append((t, sib, rows_sent, got))
+             "" if sib in tables else "  ← сестры нет, порция " + pkg))
+    (plan if sib in tables else unfixable).append((t, sib, rows_sent, got, pkg))
 
 if not plan and not unfixable:
     print("\nпотерь нет — пересобирать нечего")
     sys.exit(0)
 
 print("\n--- пересбор из сестёр _recordtype: %d таблиц" % len(plan))
-for t, sib, rows_sent, got in plan:
+for t, sib, rows_sent, got, _pkg in plan:
     cols_t = _psql_col("SELECT column_name FROM duckdb_columns() WHERE database_name "
                        "= current_database() AND table_name = '%s' ORDER BY column_index" % t)
     cols_s = set(_psql_col("SELECT column_name FROM duckdb_columns() WHERE database_name "
@@ -101,9 +103,16 @@ for t, sib, rows_sent, got in plan:
           % (t, got, now, rows_sent, "ok" if now >= rows_sent else "ВСЁ ЕЩЁ МЕНЬШЕ"))
 
 if unfixable:
-    print("\n--- сестры нет, из базы не восстановить (нужна повторная выгрузка): %d"
+    # 🔴 «Сестры нет» НЕ значит «данные потеряны»: сущность приехала своей
+    # порцией, и порция лежит на приёмнике целой. Восстановление — переприменить
+    # её (пометить пакет verified, откатить last_applied_seq), как делали okna
+    # 15.08. Прежний текст звал повторную выгрузку из 1С — и увёл на заход
+    # на Windows, которого нет и не будет (docs/PLAN_KEY_DEDUP_RECOVERY.md).
+    print("\n--- сестры нет: чинится ПЕРЕПРИМЕНЕНИЕМ порции, она цела на диске: %d"
           % len(unfixable))
-    for t, _s, rows_sent, got in unfixable:
-        print("  %s: %d из %d" % (t, got, rows_sent))
+    for t, _s, rows_sent, got, pkg in unfixable:
+        print("  %s: %d из %d — порция %s" % (t, got, rows_sent, pkg))
+    print("  как: пометить эти порции verified и откатить last_applied_seq до "
+          "предыдущей — приёмник применит их по порядку заново")
 if not APPLY:
     print("\nэто был план. с --apply — пересобрать")
