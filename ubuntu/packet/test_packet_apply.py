@@ -151,15 +151,35 @@ check("read_csv: пол предела — 1 МиБ (умолчание движ
       _cap_many == 1024 * 1024, "предел %d" % _cap_many)
 
 _long = os.path.join(_csvdir, "long.csv")
-with open(_long, "wb") as _f:                      # одна строка 300 КБ + 3 МБ мелких:
-    _f.write(b"h\n" + b"w" * (300 * 1024) + b"\n"  # файл заведомо больше, чем строка×8,
+_LONG_LINE = 2 * 1024 * 1024
+with open(_long, "wb") as _f:                      # одна запись 2 МБ + 3 МБ мелких:
+    _f.write(b"h\n" + b"w" * _LONG_LINE + b"\n"    # файл заведомо больше записи,
              + (b"w" * 1000 + b"\n") * 3000)       # иначе победит граница по файлу
-check("read_csv: длинная строка поднимает предел выше пола",
-      _line_cap_of(_A._csv_source([_long])) == 300 * 1024 * 8)
-check("_longest_raw_line: длина считается через границу блока чтения",
-      _A._longest_raw_line([_long]) == 300 * 1024)
-check("_longest_raw_line: файла нет — 0, работает прежняя граница",
-      _A._longest_raw_line([os.path.join(_csvdir, "нет.csv")]) == 0)
+check("read_csv: длинная запись поднимает предел выше пола",
+      _line_cap_of(_A._csv_source([_long])) == _LONG_LINE + 4096)
+check("_longest_record: запись без кавычек = физическая строка",
+      _A._longest_record([_long]) == _LONG_LINE)
+check("_longest_record: файла нет — 0, работает прежняя граница",
+      _A._longest_record([os.path.join(_csvdir, "нет.csv")]) == 0)
+
+# 🔴 Запись, разорванная переводами строк внутри кавычек (okna-1 15.08, пакет
+# 000002, chunk-00148): base64-картинка строками по ~100 Б, запись 1,2 МБ.
+# Счёт по физической строке занижал предел в тысячи раз — «CSV Error on Line: 1».
+_wrap = os.path.join(_csvdir, "wrap.csv")
+_rec = b'"' + (b"a" * 99 + b"\n") * 12000 + b'"'   # ~1,2 МБ, физ. строки ≤ 100 Б
+with open(_wrap, "wb") as _f:
+    _f.write(b"h1,h2\nv," + _rec + b"\n")
+check("_longest_record: запись с переносами в кавычках меряется целиком",
+      _A._longest_record([_wrap]) == len(_rec) + 2)
+check("read_csv: предел покрывает многострочную запись (okna-1 15.08)",
+      _line_cap_of(_A._csv_source([_wrap])) == len(_rec) + 2 + 4096)
+
+_esc = os.path.join(_csvdir, "esc.csv")
+_erow = b'x,"A""B"\n'
+with open(_esc, "wb") as _f:
+    _f.write(b"h\n" + _erow + b"short\n")
+check("_longest_record: удвоенные кавычки не ломают автомат",
+      _A._longest_record([_esc]) == len(_erow) - 1)
 shutil.rmtree(_csvdir, ignore_errors=True)
 
 
@@ -374,14 +394,19 @@ def main() -> int:
         # 🔴 Дельта несёт ДУБЛИ строки — как агент, который кладёт шапку документа по
         # копии на каждую строку табличной части (живой случай okna 14.08: документ с
         # 79 позициями пришёл 79 копиями, витрина раздулась до 9633 строк при 8211
-        # документах). Вставка обязана дедуплицировать чанк по Ref_Key.
+        # документах). Полные копии снимаются DISTINCT. 🔴 Но 15.08 замерено на живых
+        # чанках: строки развёрнутого документа РАЗЛИЧАЮТСЯ (LineNumber, ТМЦ_Key,
+        # Цена...) — дедуп дельты по Ref_Key оставлял одну строку документа и терял
+        # остальные (okna, document_реализациятмц −1346 строк). Дедуп — по полной
+        # строке, как у full: k4 приходит двумя РАЗНЫМИ строками и обе обязаны лечь.
         delta_csv = csv_bytes([("k2", "v2", "beta2"), ("k2", "v2", "beta2"),
-                               ("k2", "v2", "beta2")])
-        e2, c2 = make_chunk("chunk-00001", delta_csv, TABLE, 3)
+                               ("k2", "v2", "beta2"),
+                               ("k4", "v4", "строка 1"), ("k4", "v4", "строка 2")])
+        e2, c2 = make_chunk("chunk-00001", delta_csv, TABLE, 5)
         gone_csv = b"entity,ref_key\r\n" + TABLE.encode() + b",k3\r\n"
         eg, cg = make_chunk("gone", gone_csv, "", 1)
         m2 = base_manifest(2, "bbb00002", "delta")
-        m2["entities"] = [{"name": TABLE, "op": "delta", "rows": 3, "chunks": ["chunk-00001"]}]
+        m2["entities"] = [{"name": TABLE, "op": "delta", "rows": 5, "chunks": ["chunk-00001"]}]
         m2["gone"] = {"entities": [TABLE], "chunks": ["gone"]}
         m2["chunks"] = [e2, eg]
         pkg2 = write_package(2, "bbb00002", "delta", m2, {"chunk-00001": c2, "gone": cg})
@@ -403,11 +428,17 @@ def main() -> int:
         check("apply код 0", r.returncode == 0, r.stderr.strip()[-300:])
 
         n = scalar('SELECT count(*) FROM "%s"' % TABLE)
-        check("таблица создана, 2 строки после дельты", n == "2", f"rows={n}")
-        rows = dict((r_[0], r_[1:]) for r_ in psql('SELECT "Ref_Key","DataVersion","Description" FROM "%s"' % TABLE))
-        check("k2 заменён дельтой", rows.get("k2") == ("v2", "beta2"), repr(rows.get("k2")))
-        check("k3 удалён gone", "k3" not in rows)
-        check("k1 на месте", rows.get("k1") == ("v1", "alpha"), repr(rows.get("k1")))
+        check("таблица создана, 4 строки после дельты", n == "4", f"rows={n}")
+        rows = psql('SELECT "Ref_Key","DataVersion","Description" FROM "%s"' % TABLE)
+        by_ref = {}
+        for r_ in rows:
+            by_ref.setdefault(r_[0], []).append(r_[1:])
+        check("k2 заменён дельтой", by_ref.get("k2") == [("v2", "beta2")], repr(by_ref.get("k2")))
+        check("k4: обе РАЗНЫЕ строки развёрнутого документа легли (okna 15.08)",
+              sorted(by_ref.get("k4") or []) == [("v4", "строка 1"), ("v4", "строка 2")],
+              repr(by_ref.get("k4")))
+        check("k3 удалён gone", "k3" not in by_ref)
+        check("k1 на месте", by_ref.get("k1") == [("v1", "alpha")], repr(by_ref.get("k1")))
         grant = scalar("SELECT has_table_privilege('serene_ro', '%s', 'SELECT')" % TABLE)
         check("GRANT serene_ro есть", grant in ("t", "true", "True"), grant)
         check("снимок $metadata записан ФАЙЛОМ, байт-в-байт из чанка",
@@ -428,7 +459,7 @@ def main() -> int:
         check("changed_sources_ok=1 поставлен самим apply (список полон по построению)",
               len(ok_flag) == 1 and ok_flag[0][0] == "1", repr(ok_flag)[:150])
         prof = psql("SELECT rows, key_props FROM base_profile WHERE entity='%s'" % TABLE)
-        check("base_profile: rows=2, ключ", len(prof) == 1 and prof[0][0] == "2"
+        check("base_profile: rows=4, ключ", len(prof) == 1 and prof[0][0] == "4"
               and prof[0][1] == "Ref_Key", repr(prof)[:200])
         ts = scalar("SELECT count(*) FROM search_quality WHERE k='mart_changed_ts'")
         check("mart_changed_ts записан", ts == "1", ts)
