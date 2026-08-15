@@ -1,0 +1,366 @@
+{
+  "base": "postgres",
+  "entities": 178,
+  "reachable": 135,
+  "reason_classes": {
+    "нет алиаса": 43
+  },
+  "service_suspects": [],
+  "surface_hits": {
+    "alias": 0,
+    "card": 135,
+    "literal": 10,
+    "vector": 0
+  },
+  "threshold_top": 50,
+  "unreachable": 43,
+  "unreachable_entities": [
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Книга Учета Доходов ИРасходов",
+      "reason": "нет алиаса",
+      "src_table": "accumulationregister_книгаучетадоходовирасходов"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Виды Документов ЭДОБЗК",
+      "reason": "нет алиаса",
+      "src_table": "catalog_видыдокументовэдобзк"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Виды Доходов По Страховым Взносам",
+      "reason": "нет алиаса",
+      "src_table": "catalog_видыдоходовпостраховымвзносам"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Виды Налогов ИПлатежей ВБюджет",
+      "reason": "нет алиаса",
+      "src_table": "catalog_видыналоговиплатежейвбюджет"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Виды Общественно Полезной Деятельности СЗВК",
+      "reason": "нет алиаса",
+      "src_table": "catalog_видыобщественнополезнойдеятельностисзвк"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Звания Гражданского Воинского Учета",
+      "reason": "нет алиаса",
+      "src_table": "catalog_званиягражданскоговоинскогоучета"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Календари_Расписание Работы",
+      "reason": "нет алиаса",
+      "src_table": "catalog_календари_расписаниеработы"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Классификатор Банков",
+      "reason": "нет алиаса",
+      "src_table": "catalog_классификаторбанков"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Классификатор Полномочий ФНСМЧД002",
+      "reason": "нет алиаса",
+      "src_table": "catalog_классификаторполномочийфнсмчд002"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Основания Досрочного Назначения Пенсии Для СЗВК",
+      "reason": "нет алиаса",
+      "src_table": "catalog_основаниядосрочногоназначенияпенсиидлясзвк"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Особые Условия Труда Для СЗВКПФР",
+      "reason": "нет алиаса",
+      "src_table": "catalog_особыеусловиятрудадлясзвкпфр"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Правила Представления Отчетов Уплаты Налогов_Основания Продления Сроков",
+      "reason": "нет алиаса",
+      "src_table": "catalog_правилапредставленияотчетовуплатыналогов_основанияпродлениясроков"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Правила Представления Отчетов Уплаты Налогов_Условия",
+      "reason": "нет алиаса",
+      "src_table": "catalog_правилапредставленияотчетовуплатыналогов_условия"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Причины Увольнения ПФР",
+      "reason": "нет алиаса",
+      "src_table": "catalog_причиныувольненияпфр"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Программы Электронной Подписи ИШифрования",
+      "reason": "нет алиаса",
+      "src_table": "catalog_программыэлектроннойподписиишифрования"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Прочие Доходы ИРасходы",
+      "reason": "нет алиаса",
+      "src_table": "catalog_прочиедоходыирасходы"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Рабочие Места_MACАдреса",
+      "reason": "нет алиаса",
+      "src_table": "catalog_рабочиеместа_macадреса"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Состояние ВБраке",
+      "reason": "нет алиаса",
+      "src_table": "catalog_состояниевбраке"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Способы Доставки",
+      "reason": "нет алиаса",
+      "src_table": "catalog_способыдоставки"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Способы Отражения Расходов По Амортизации_Способы",
+      "reason": "нет алиаса",
+      "src_table": "catalog_способыотражениярасходовпоамортизации_способы"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Справки2 ЕГАИС",
+      "reason": "нет алиаса",
+      "src_table": "catalog_справки2егаис"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Степени Знания Языка",
+      "reason": "нет алиаса",
+      "src_table": "catalog_степенизнанияязыка"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Степени Родства Физических Лиц",
+      "reason": "нет алиаса",
+      "src_table": "catalog_степениродствафизическихлиц"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Территориальные Условия ПФР",
+      "reason": "нет алиаса",
+      "src_table": "catalog_территориальныеусловияпфр"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Поступление На Расчетный Счет_Расшифровка Платежа",
+      "reason": "нет алиаса",
+      "src_table": "document_поступлениенарасчетныйсчет_расшифровкаплатежа"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Поступление Товаров Услуг",
+      "reason": "нет алиаса",
+      "src_table": "document_поступлениетоваровуслуг"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Поступление Товаров Услуг_Товары",
+      "reason": "нет алиаса",
+      "src_table": "document_поступлениетоваровуслуг_товары"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Приходный Кассовый Ордер_Расшифровка Платежа",
+      "reason": "нет алиаса",
+      "src_table": "document_приходныйкассовыйордер_расшифровкаплатежа"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Расходный Кассовый Ордер_Расшифровка Платежа",
+      "reason": "нет алиаса",
+      "src_table": "document_расходныйкассовыйордер_расшифровкаплатежа"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Реализация Товаров Услуг_Товары",
+      "reason": "нет алиаса",
+      "src_table": "document_реализациятоваровуслуг_товары"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Реализация Товаров Услуг_Услуги",
+      "reason": "нет алиаса",
+      "src_table": "document_реализациятоваровуслуг_услуги"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Списание СРасчетного Счета_Расшифровка Платежа",
+      "reason": "нет алиаса",
+      "src_table": "document_списаниесрасчетногосчета_расшифровкаплатежа"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Данные Монитора Руководителя",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_данныемонитораруководителя"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Дополнительные Настройки Зарплата Кадры",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_дополнительныенастройкизарплатакадры"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Минимальная Оплата Труда РФ",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_минимальнаяоплататрударф"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Настройки Учета Маркируемой Продукции ИСМП",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_настройкиучетамаркируемойпродукцииисмп"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Настройки Учета УСН",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_настройкиучетаусн"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Порядок Отражения Зарплаты ВБух Учете",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_порядокотражениязарплатывбухучете"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Размер Вычетов НДФЛВторичный",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_размервычетовндфлвторичный"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Свойства Контрагентов СПАРКРиски",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_свойстваконтрагентовспаркриски"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Страховые Взносы Скидки КДоходам",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_страховыевзносыскидкикдоходам"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Счета Доходов ИРасходов ЕНВД",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_счетадоходовирасходовенвд"
+    },
+    {
+      "best_vector_rank": null,
+      "has_alias": false,
+      "has_emb": true,
+      "label": "Счета Учета Расчетов СКонтрагентами",
+      "reason": "нет алиаса",
+      "src_table": "informationregister_счетаучетарасчетовсконтрагентами"
+    }
+  ],
+  "unreachable_share": 0.2416,
+  "vector_live": false,
+  "vector_source": "search_entity_card"
+}

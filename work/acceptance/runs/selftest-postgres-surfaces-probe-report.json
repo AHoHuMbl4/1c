@@ -1,0 +1,19 @@
+{
+  "base": "postgres",
+  "entities": 5,
+  "reachable": 5,
+  "reason_classes": {},
+  "service_suspects": [],
+  "surface_hits": {
+    "alias": 0,
+    "card": 5,
+    "literal": 4,
+    "vector": 0
+  },
+  "threshold_top": 50,
+  "unreachable": 0,
+  "unreachable_entities": [],
+  "unreachable_share": 0.0,
+  "vector_live": false,
+  "vector_source": "search_entity_card"
+}
