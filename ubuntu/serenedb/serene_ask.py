@@ -2417,6 +2417,11 @@ def answers_src_conflict(cands):
     return len({c["src"] for c in ans}) > 1
 
 
+def stop2_active(focus=None, measure_pick=None, no_arbiter=False):
+    """Стоп 2 дописывает соперников в круг только без focus/measure_pick."""
+    return (not focus) and (not measure_pick) and (not no_arbiter)
+
+
 def determined_answer_rivals(picked, par, writer_pair=None, alias_leader=None,
                             known_src=None):
     """Соперники стопа 2: уже определённые, без бюджета шага 3.
@@ -6817,7 +6822,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Стоп 2: без focus/measure_pick ответ не уходит, пока посчитаны уже определённые
     # соперники (семья, writer_pair, лидер словаря другой семьи). Вторая попытка
     # (VETO_HEAD) не отменяется: вместо ответа вслепую соперник входит в круг.
-    if (picked and not focus and not measure_pick and not no_arbiter
+    if (picked and stop2_active(focus, measure_pick, no_arbiter)
             and len(arb_pool) < ARBITER_MAX):
         _lead = None
         _ok_s2, _top_s2 = _alias_verdict(picked[0])

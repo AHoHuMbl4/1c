@@ -380,10 +380,14 @@ t("стоп2: лидер той же семьи без parent/writer — пус�
   A.determined_answer_rivals(
       "document_a", {"document_a": "", "document_b": "document_a"},
       alias_leader="document_b") == [])
-t("стоп2: в answer круг стоп2 только без focus/measure_pick",
-  "not focus and not measure_pick and not no_arbiter" in open(
-      A.__file__, encoding="utf-8").read()
-  and "stop2_rivals" in open(A.__file__, encoding="utf-8").read())
+t("стоп2: без focus — stop2_active и чужой лидер словаря в rivals",
+  A.stop2_active(None, None, False)
+  and A.determined_answer_rivals("document_a", par, alias_leader="register_x")
+  == ["register_x"])
+t("стоп2: с focus — stop2_active молчит (круг стоп2 не открыт)",
+  not A.stop2_active("catalog_x", None, False)
+  and not A.stop2_active(None, "Сумма", False)
+  and not A.stop2_active(None, None, True))
 # parent of lines is document_a — already added as family; alias same family not duplicated
 t("стоп2: writer_pair входит",
   A.determined_answer_rivals("register_x", par, writer_pair="document_y",
