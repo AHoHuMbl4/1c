@@ -1,0 +1,26 @@
+{
+  "answered": 10,
+  "atoms_checked": 0,
+  "atoms_wrong": 0,
+  "base": "pg5",
+  "build_ts": 1786108051,
+  "classes": {
+    "ok": 5,
+    "не выбрана": 1,
+    "не достигнута": 4
+  },
+  "entities": 9,
+  "entities_reached": 4,
+  "entities_with_data": 9,
+  "questions_total": 10,
+  "sec_median": 22.39,
+  "unreachable_entities": [
+    "catalog_банки",
+    "catalog_валюты",
+    "catalog_контрагенты",
+    "catalog_организации",
+    "catalog_пользователи"
+  ],
+  "unreachable_share": 0.5556,
+  "wrong_atom_share": null
+}

@@ -1,0 +1,12 @@
+{"base": "postgres", "id": "pg5-1", "label": "Банки", "measure": null, "qkind": "count", "question": "Сколько Банки?", "src_table": "catalog_банки", "surface": "label"}
+{"base": "postgres", "id": "pg5-2", "label": "Валюты", "measure": null, "qkind": "count", "question": "Сколько Валюты?", "src_table": "catalog_валюты", "surface": "label"}
+{"base": "postgres", "id": "pg5-3", "label": "Контрагенты", "measure": null, "qkind": "count", "question": "Сколько Контрагенты?", "src_table": "catalog_контрагенты", "surface": "label"}
+{"base": "postgres", "id": "pg5-4", "label": "Организации", "measure": null, "qkind": "count", "question": "Сколько Организации?", "src_table": "catalog_организации", "surface": "label"}
+{"base": "postgres", "id": "pg5-5", "label": "Номенклатура", "measure": null, "qkind": "count", "question": "Сколько Номенклатура?", "src_table": "catalog_номенклатура", "surface": "label"}
+{"base": "postgres", "id": "pg5-6", "label": "Пользователи", "measure": null, "qkind": "count", "question": "Сколько Пользователи?", "src_table": "catalog_пользователи", "surface": "label"}
+{"base": "postgres", "id": "pg5-7", "label": "Курсы Валют", "measure": null, "qkind": "count", "question": "Сколько Курсы Валют?", "src_table": "informationregister_курсывалют", "surface": "label"}
+{"base": "postgres", "id": "pg5-8", "label": "Банковские Счета", "measure": null, "qkind": "count", "question": "Сколько Банковские Счета?", "src_table": "catalog_банковскиесчета", "surface": "label"}
+{"base": "postgres", "id": "pg5-9", "label": "Реализация Товаров Услуг", "measure": "СуммаДокумента", "qkind": "sum", "question": "Реализация Товаров Услуг: СуммаДокумента всего?", "src_table": "document_реализациятоваровуслуг", "surface": "label"}
+{"base": "postgres", "id": "pg5-10", "label": "Реализация Товаров Услуг", "measure": null, "qkind": "count", "question": "Сколько Реализация Товаров Услуг?", "src_table": "document_реализациятоваровуслуг", "surface": "label"}
+{"base": "postgres", "id": "pg5-11", "label": "Реализация Услуг", "measure": "Сумма", "qkind": "sum", "question": "Реализация Услуг: Сумма всего?", "src_table": "accumulationregister_реализацияуслуг", "surface": "label"}
+{"base": "postgres", "id": "pg5-12", "label": "Поступление Товаров Услуг", "measure": "СуммаДокумента", "qkind": "sum", "question": "Поступление Товаров Услуг: СуммаДокумента всего?", "src_table": "document_поступлениетоваровуслуг", "surface": "label"}
