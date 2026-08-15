@@ -29,6 +29,7 @@ Env: SERENEDB_DSN, DEEPSEEK_*, ALIBABA_* (см. /etc/1c-mcp-reports.env), ASK_TO
 Только stdlib.
 """
 import csv
+import hashlib
 import io
 import json
 import os
@@ -2199,6 +2200,193 @@ def totals_of(src_table, match, preds, measures):
         if b + 3 < len(row) and int(row[b + 1] or 0) > 0:
             out.append((m, _num(row[b]), _num(row[b + 2]), _num(row[b + 3])))
     return out
+
+
+# ---------------------------------------------------------------- детектор развилки
+# 🔴 ДЕТЕКТОР ИЗ ДАННЫХ, SHADOW И ALWAYS-ON (15.08, план `PLAN_ANSWER_CONTRACT` §3,
+# аудит §7). Сегодня развилка обнаруживается только по сигналам (расхождение выбора
+# модели с вектором/словарём → сомнение → круг арбитра ≤ ARBITER_MAX), и верная
+# сущность, не дошедшая до круга, даёт уверенный неверный ответ (три ошибки прогона
+# 03.08, все `сомнение=False`). Детектор убирает зависимость от сомнения: полный круг
+# кандидатов считается движком по общему WHERE вопроса, а классы эквивалентности —
+# типизированным атомом (тем же `_slot_fp`-подходом, что прибор A3). Модель в этом не
+# участвует вовсе (п. 19); счёт — штатный SQL движка (доки SereneDB: «SQL › Query
+# syntax › FILTER», «SQL › Functions › Map Functions — map_entries(map)»). Пока
+# детектор SHADOW: исходы не меняются, результат пишется только в `diag.fork` и след
+# шагов; снятие сигнальных защит — отдельное решение по замеру (шаг 5 плана).
+FORK_DETECT = os.environ.get("ASK_FORK_DETECT", "1") not in ("0", "false", "no")
+# Состав величин сущности меняется только пересборкой корпуса, а собирается он одним
+# проходом по корпусу (~2 с на 1502 сущностях, замер 15.08). Кэш с TTL: shadow-заметке
+# минутная свежесть не нужна, а цена вопроса не растёт (п. 19 — это не в модель, но и
+# не в ответ по времени).
+_FORK_MEAS_TTL = int(os.environ.get("ASK_FORK_MEAS_TTL", "600"))
+_fork_meas_cache = {"at": 0.0, "by_src": {}}
+
+
+def _measures_by_src(cands):
+    """{сущность: [величины]} для всего круга — одним запросом, как `measures_of`.
+
+    По одному обращению на сущность — это рост числа обращений с размером базы (п. 20),
+    поэтому карта строится одним проходом и кэшируется на `_FORK_MEAS_TTL` секунд.
+    """
+    now = time.time()
+    full = _fork_meas_cache["by_src"]
+    if full and now - _fork_meas_cache["at"] < _FORK_MEAS_TTL:
+        return {c: full.get(c, []) for c in cands}
+    try:
+        rows = psql("SELECT DISTINCT src_table, u.k FROM %s, unnest(map_keys(nums)) AS u(k) "
+                    "WHERE nums IS NOT NULL" % CORPUS)
+    except RuntimeError:
+        return {c: [] for c in cands}
+    full = {}
+    for r in rows:
+        if r and r[0] and r[1]:
+            full.setdefault(r[0], []).append(r[1])
+    _fork_meas_cache["at"] = now
+    _fork_meas_cache["by_src"] = full
+    return {c: full.get(c, []) for c in cands}
+
+
+def _aliases_by_src(cands):
+    """Алиасы величин для всего круга одним запросом. Нет таблицы — пусто (как у
+    `measure_aliases_of`): сведение идёт по именам, без словаря."""
+    if not cands:
+        return {}
+    try:
+        rows = psql(
+            "SELECT src_table, measure, aliases FROM search_measure_alias "
+            "WHERE src_table IN (%s) AND coalesce(aliases,'') <> ''"
+            % ", ".join(lit(c) for c in cands))
+    except RuntimeError:
+        return {}
+    out = {}
+    for r in rows:
+        if r and r[0] and r[1]:
+            out.setdefault(r[0], {})[r[1]] = r[2]
+    return out
+
+
+def _fork_relevant(word, names, alias_by):
+    """Величины сущности, относящиеся к слову вопроса — тем же правилом, что выбор
+    величины ответа (`measure_choice`, он же кормит `unresolved_quantity`/`measure_alts`).
+    Слова нет — величин в атоме нет, атом сводится к счёту и дискриминаторам.
+    Ветка `ask` у `measure_choice` возвращает подходящие ПЛЮС остальные для показа
+    человеку; детектору нужны только подходящие — иначе в атом и в запрос уходит весь
+    список величин сущности, включая несущие (`[замер 15.08]`: слово «сумма» собирало
+    258 колонок с `FTPПорт` вместо 144)."""
+    if not word or not names:
+        return []
+    got, alts, how = measure_choice(names, word, alias_by=alias_by)
+    if got:
+        return [got]
+    if how == "ask":
+        wl = word.strip().lower()
+        same = [n for n in alts if wl in n.lower()]
+        return same or list(alts)                # alts по алиасам — все подходящие
+    return list(alts)
+
+
+def fork_scan(match, preds, rel_by_src):
+    """Полный круг: счёт и суммы по общему WHERE вопроса (match + preds), в движке.
+
+    Два штатных запроса вместо сотен агрегатных колонок (доки SereneDB: «SQL ›
+    Functions › Map Functions — map_entries(map)», «SQL › Query syntax › FILTER»):
+      1. счёт и папки (`IsFolder` — признак платформы, тот же, что в `totals_of`) —
+         один GROUP BY по общему WHERE;
+      2. суммы относящихся величин — одним проходом `unnest(map_entries(nums))`,
+         только по сущностям, у которых такие величины есть.
+    Форма через колонки-FILTER замерена и отвергнута: 258 колонок × 623 тыс. строк —
+    22 с; unnest по тем же данным — 1,75 с (`[замер 15.08]`). Сложение — DECIMAL, как
+    в `aggregate`. `match` живёт в инвертированном индексе: отбор строк идёт
+    подзапросом `row_key IN (SELECT … FROM search_idx WHERE match)` — прямой `@@`
+    рядом с unnest движок отклоняет («TSQUERY outside @@ match», замер 15.08).
+    Отдельной колонки «вид записи» у `_RecordType`-сестёр в корпусе нет (замер 15.08:
+    ключей вида в `flags`/`nums` регистров нет) — сёстры разводятся самим GROUP BY:
+    каждая — свой src и свой атом.
+
+    Возвращает {src: {"count": N, "folders": F, "sums": {величина: сумма}}} и только
+    для сущностей с живым счётом: пустая ячейка пространства — не ветка развилки.
+    """
+    if not rel_by_src:
+        return {}
+    nf = "NOT coalesce(map_extract_value(flags, 'IsFolder'), false)"
+    isf = "coalesce(map_extract_value(flags, 'IsFolder'), false)"
+    rowfilter = ("row_key IN (SELECT row_key FROM %s WHERE %s)" % (INDEX, match)
+                 if match else "")
+    where = " AND ".join([w for w in ([rowfilter] + [p for p in preds if p] +
+                         ["src_table IN (%s)" % ", ".join(lit(t) for t in rel_by_src)])
+                         if w]) or "TRUE"
+    out = {}
+    try:
+        rows = psql("SELECT src_table, count(*) FILTER (%s), count(*) FILTER (%s) "
+                    "FROM %s WHERE %s GROUP BY 1" % (nf, isf, CORPUS, where))
+    except RuntimeError:
+        return {}
+    for r in rows:
+        if not r or not r[0]:
+            continue
+        try:
+            n = int(_num(r[1]))
+        except (TypeError, ValueError, IndexError):
+            continue
+        if n > 0:
+            out[r[0]] = {"count": n, "folders": int(_num(r[2])), "sums": {}}
+    if not out:
+        return {}
+    measures = sorted({m for ms in rel_by_src.values() for m in ms})
+    with_val = [t for t, ms in rel_by_src.items() if ms and t in out]
+    if measures and with_val:
+        where2 = " AND ".join([w for w in (
+            [rowfilter] + [p for p in preds if p]
+            + ["src_table IN (%s)" % ", ".join(lit(t) for t in with_val),
+               "nums IS NOT NULL", nf]) if w])
+        try:
+            for r in psql(
+                    "SELECT src_table, u.e.key, "
+                    "coalesce(sum(TRY_CAST(u.e.value AS DECIMAL(38,10))),0) "
+                    "FROM %s, unnest(map_entries(nums)) AS u(e) "
+                    "WHERE %s AND u.e.key IN (%s) GROUP BY 1, 2"
+                    % (CORPUS, where2, ", ".join(lit(m) for m in measures))):
+                if r and r[0] in out and r[1] in (rel_by_src.get(r[0]) or []):
+                    out[r[0]]["sums"][r[1]] = _num(r[2])
+        except RuntimeError:
+            pass                            # без сумм атом остаётся по счёту
+    return out
+
+
+def fork_classes(rows):
+    """Классы эквивалентности по типизированному атому БЕЗ src: счёт, папки и суммы —
+    числами (round 2), как в `_slot_fp`. Один класс — прочтения сошлись; несколько —
+    развилка видна кодом, без сомнения модели."""
+    by_atom = {}
+    for src, d in (rows or {}).items():
+        atom = [("count", d["count"]), ("folders", d["folders"])]
+        for m in sorted(d["sums"]):
+            atom.append((m, round(d["sums"][m], 2)))
+        by_atom.setdefault(tuple(atom), []).append(src)
+    return by_atom
+
+
+def _fork_log(classes, measure_ctx):
+    """Новый класс развилки — в журнал `search_fork_class`, если его завёл свой трек.
+
+    Таблица — точка обмена со словарём развилок (план §7): детектор фиксирует класс,
+    штатный агент один раз подписывает ветки. Таблицы нет (контур без этого трека) —
+    молча пропускаем: shadow не имеет права ломать ответ.
+    """
+    src_set = sorted({s for ss in classes.values() for s in ss})
+    if len(src_set) < 2:
+        return
+    fork_key = hashlib.sha1(
+        ("|".join(src_set) + "¦" + (measure_ctx or "")).encode("utf-8")).hexdigest()
+    try:
+        psql("INSERT INTO search_fork_class (fork_key, src_set, measure_ctx, seen_at, "
+             "seen_count) VALUES (%s, %s, %s, now(), 1) "
+             "ON CONFLICT (fork_key) DO UPDATE "
+             "SET seen_at = now(), seen_count = search_fork_class.seen_count + 1"
+             % (lit(fork_key), lit("{%s}" % ",".join(src_set)), lit(measure_ctx or "")))
+    except RuntimeError:
+        pass
 
 
 def _alias_parts(raw):
@@ -6314,6 +6502,37 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     diag["without_value"] = len(dropped)
         except RuntimeError:
             pass
+    # ДЕТЕКТОР РАЗВИЛКИ ИЗ ДАННЫХ (shadow, always-on) — сразу после того, как круг
+    # кандидатов собран окончательно и условия вопроса (`match`/`preds`) известны.
+    # Полный круг считается одним SQL (`fork_scan`), классы — типизированным атомом
+    # (`fork_classes`). Исходы НЕ меняются: результат уходит только в `diag.fork` и
+    # след шагов; в под-вызовах круга арбитра (`no_arbiter`) не считается — внешний
+    # вызов уже записал развилку того же вопроса.
+    if FORK_DETECT and not no_arbiter and len(cands) > 1:
+        _t_fork = time.time()
+        try:
+            _mword = (intent.get("measure") or "").strip()
+            _mbs = _measures_by_src(cands)
+            _als = _aliases_by_src(cands)
+            _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
+                    for c in cands}
+            _rows = fork_scan(match, preds, _rel)
+            _cls = fork_classes(_rows)
+            _atoms = [{"atom": [["%s" % k, v] for k, v in atom], "srcs": sorted(ss)}
+                      for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1]))]
+            diag["fork"] = {"classes": len(_cls),
+                            "srcs": sum(len(v) for v in _cls.values()),
+                            "atoms": _atoms[:10],
+                            "atoms_truncated": max(0, len(_atoms) - 10) or None,
+                            "cost_ms": int((time.time() - _t_fork) * 1000)}
+            шаг("детектор развилки", классов=len(_cls),
+                веток=diag["fork"]["srcs"], счёт_мс=diag["fork"]["cost_ms"])
+            if len(_cls) > 1:
+                _fork_log(_cls, _mword or (intent.get("want") or ""))
+        except Exception as _e:                         # noqa: BLE001 — shadow не имеет
+            diag["fork_error"] = str(_e)[:160]          # права менять исход ответа
+            sys.stderr.write("ask FORK: детектор не сработал: %s\n" % str(_e)[:160])
+
     # Параметры подсчёта, названные моделью: сущность, величина, что считать. Объявляются
     # ДО ветвления, чтобы ни один путь не оставил их неопределёнными.
     plan = {}
@@ -6893,8 +7112,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         mute = {}
         for c in arb_pool[:ARBITER_MAX]:
             try:
+                # 🔴 `prior` ПРОБРАСЫВАЕТСЯ ВО ВСЕ ПОД-ВЫЗОВЫ КРУГА (15.08). Без него
+                # кандидаты считались по РАЗНЫМ окнам периода: внешний вызов унаследовал
+                # период из `prior`, а соперники — нет, и сравнение атомов шло по числам,
+                # посчитанным за разное время. Развилка, «доказанная» таким сравнением,
+                # была бы артефактом прибора, а не данных.
                 sub = answer(question, focus=c, measure_pick=measure_pick,
-                             context=context, no_arbiter=True)
+                             context=context, no_arbiter=True, prior=prior)
             except Exception:                  # noqa: BLE001 — один кандидат не должен
                 continue                       # ронять весь ответ
             if sub.get("kind") in ("answer", "figures") and (sub.get("text") or "").strip():
@@ -6904,6 +7128,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 # Не сложившийся кандидат хранится ЦЕЛИКОМ, а не одним именем: его числа
                 # (посчитанные, но завёрнутые в уточнение) решают, есть ли расхождение.
                 mute[c] = sub
+            # 🔴 ПРИЧИНЫ partial СЛИВАЮТСЯ, А НЕ ЗАМЕНЯЮТСЯ (15.08). Под-ответ мог нести
+            # свою потерю (неполнота своей сущности, отброшенные строки); прежде она
+            # выбрасывалась вместе с под-ответом. Своя причина внешнего ответа старше:
+            # `setdefault`, замены нет.
+            for _k, _v in ((sub.get("partial") or {}).items()):
+                cut.setdefault(_k, _v)
             if PROBE:
                 sd = sub.get("diag") or {}
                 diag.setdefault("arb_probe", []).append({
