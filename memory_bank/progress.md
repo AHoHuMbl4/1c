@@ -4,6 +4,25 @@ _Сводка по стадиям контракта — [`docs/TARGET_STATUS.md
 Здесь — история по дням, новое сверху. Живое состояние и «с чего начать» — в
 [`activeContext.md`](activeContext.md)._
 
+## 2026-08-15: словарь развилок — контур подписей веток + перенос из activeContext (порог 300)
+
+Заведён контур человеческих подписей веток развилок (PLAN_ANSWER_CONTRACT §7):
+`ubuntu/serenedb/branch_alias.sh` + `branch_alias_parse.py` + `test_branch_alias.py`
+(10 оффлайн-проверок), таблицы `search_fork_class`/`search_fork_label` в
+`corpus_init.sql`. Дым на дев-ut_test зелёный — подробно CHANGELOG 15.08;
+пойманный цикл ретрая — HOW_NOT_TO §3.76.
+
+Перенесено из activeContext (закрытые стопы 14.08, всё ✅):
+
+- **Роли sum/лидер** — sum = итог множества, leader отдельно; rank без меры →
+  уточнение.
+- **Наследование периода по форме окна** — слот не по `parse.assumed`. Живой okna
+  до правки md5 `de2b76a6`: prior 19; 869 / 07–14; 524 / 10–14; row 681 990.12/542;
+  focus 46 204.58; 2381; книга 19=19; `emb IS NULL` 23432. Контур `1c-serene-ask@postgres`.
+- **focus=ось target_src** — чип «номенклатура» → отгрузки, не no_data.
+- **PARTIAL-loss** — HINT только при потере счёта. Мерило — okna.
+- **Замок 1.1.4 / A3** — prior не склейка. (Живой остаток A3 оставлен в activeContext.)
+
 ## 2026-08-15: витрина okna восстановлена полностью, приёмник — два фикса
 
 Выполнен план `PLAN_KEY_DEDUP_RECOVERY` (шаги 1–2): история 35 пакетов okna-1

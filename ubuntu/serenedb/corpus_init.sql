@@ -95,6 +95,27 @@ CREATE TABLE IF NOT EXISTS search_measure_alias (
 -- MERGE метки в `corpus_build` её не сбрасывает — там UPDATE только label/parent/emb.
 ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS last_built_at TIMESTAMP;
 
+-- КЛАССЫ РАЗВИЛОК И ЧЕЛОВЕЧЕСКИЕ ПОДПИСИ ИХ ВЕТОК (план `PLAN_ANSWER_CONTRACT.md` §7,
+-- аудит §12: ручная разметка отвергнута, подписи пишет штатный агент OpenClaw).
+-- Проблема: подпись «Реализация ТМЦ (документ)» не говорит человеку «это отгрузки,
+-- а не оплаты». Класс развилки — множество источников, по которым один и тот же
+-- вопрос даёт РАЗНЫЕ числа (документ ↔ его регистр, одноимённые источники); классов
+-- мало, и они не растут с языком.
+--
+-- `search_fork_class` ПИШЕТ детектор развилок (ответный контур): fork_key = sha1 от
+-- отсортированного src_set и величины, src_set — имена источников через запятую,
+-- seen_count — сколько раз развилка встретилась в ответах.
+CREATE TABLE IF NOT EXISTS search_fork_class (
+  fork_key VARCHAR, src_set VARCHAR, measure VARCHAR,
+  seen_at TIMESTAMP, seen_count INTEGER);
+
+-- `search_fork_label` ПИШЕТ `branch_alias.sh` штатным агентом OpenClaw, читает рендер
+-- веток. Подпись — СМЫСЛ ветки бизнес-языком, а не пересказ имени таблицы. Пустая
+-- запись — попытка, не ответ (тот же смысл, что у `search_entity_alias`): переспрос
+-- не чаще RETRY_H держит сам скрипт. Ключ пары — (fork_key, src), запись через MERGE.
+CREATE TABLE IF NOT EXISTS search_fork_label (
+  fork_key VARCHAR, src VARCHAR, label VARCHAR, seen_at TIMESTAMP);
+
 -- Словарь и индекс. Поля индексируются по отдельности в ОДНОМ индексе — штатный шаблон
 -- движка: `doc` для широкого запроса, `refs` для адресности и веса, `src_table` без
 -- словаря (keyword) для фильтра уровня индекса.
@@ -149,6 +170,11 @@ GRANT SELECT ON search_entity_alias TO serene_ro;
 -- величины тогда молча идёт по подстроке имени колонки. Та же ловушка, что у
 -- алиасов сущности выше.
 GRANT SELECT ON search_measure_alias TO serene_ro;
+-- Развилки и их подписи: рендер читает обе (класс — чтобы назвать развилку,
+-- подписи — чтобы показать ветки человеческими словами). Без GRANT та же молчаливая
+-- пустота, что у алиасов выше, — рендер считал бы «развилок нет» при живом журнале.
+GRANT SELECT ON search_fork_class TO serene_ro;
+GRANT SELECT ON search_fork_label TO serene_ro;
 
 -- Индекс по алиасам: когда выбор сущности не подтверждён, соперников по вопросу ранжирует
 -- ДВИЖОК штатной `tfidf`, а не наш счёт общих слов. Разница принципиальная: [замер 30.07]
@@ -167,5 +193,6 @@ SELECT 'объекты поиска на месте' AS шаг,
         WHERE database_name = current_database()
           AND table_name IN ('search_corpus','resolver_index','search_tables',
                              'search_sources','search_meta','build_state',
-                             'search_refcols')) AS таблиц,
+                             'search_refcols','search_fork_class',
+                             'search_fork_label')) AS таблиц,
        (SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'search_idx') AS индексов;
