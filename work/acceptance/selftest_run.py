@@ -31,8 +31,10 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 BASE = os.environ.get("ASK_BASE") or (sys.argv[1] if len(sys.argv) > 1 else "ut_test")
 LIMIT = int(sys.argv[2]) if len(sys.argv) > 2 else 0
 RUNS = os.path.join(ROOT, "work", "acceptance", "runs")
-LIST = os.path.join(RUNS, "selftest-%s.jsonl" % BASE)
-OUT = os.path.join(RUNS, "selftest-%s-results.jsonl" % BASE)
+# SELFTEST_LIST / SELFTEST_OUT — ярус 2 (стратифицированные 10 %) пишет в
+# отдельные файлы, полный набор не затирается; без переменных — прежние пути.
+LIST = os.environ.get("SELFTEST_LIST") or os.path.join(RUNS, "selftest-%s.jsonl" % BASE)
+OUT = os.environ.get("SELFTEST_OUT") or os.path.join(RUNS, "selftest-%s-results.jsonl" % BASE)
 PAUSE = float(os.environ.get("SELFTEST_PAUSE_SEC", "1"))
 # Живой ответ идёт 15-60 с (замер 15.08: clarify 38 с, answer 15 с), запас на
 # арбитра. Это бюджет ожидания прибора, а не порог правильности.

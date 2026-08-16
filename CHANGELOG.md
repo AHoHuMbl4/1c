@@ -1,5 +1,23 @@
 # Журнал изменений
 
+## 16.08: самопроверка трек C — выборка яруса 2 готова, /ask дева стоит на DeepSeek 402 `[замер]`
+
+`[замер]` Рестарт `1c-serene-ask@{ut_test,postgres}`: оба `/health` 200
+(103 808 / 623 565, coverage_gap 0). `embed_check` код 0 (Qwen3-Embedding-8B,
+dim 1024 на обеих дверях). Реранкер Qwen3-Reranker-8B живой и **меняет**
+порядок. `near_tables('Поступление Товаров Услуг')` на postgres — цель
+местом 1. `/ask` → 503: DeepSeek **402 Payment Required** (журнал юнита).
+
+`[код]` Приборы яруса 2: `selftest_sample_tier2.py` (каждая 10-я сущность,
+diff пуст), `selftest_run.py` принимает `SELFTEST_LIST`/`SELFTEST_OUT`.
+Выборка: postgres 18/178 → 62 вопросов, ut_test 70/697 → 334. Архивы
+полных прогонов с явным config: `*-results-config-vector-off-full-20260815`
+(postgres, 40× «19 517»/`catalog_поляформстатистики`) и
+`*-results-config-partial-llm402-full-20260816` (ut_test, обрыв на 402).
+HOW_NOT_TO §3.80 — молчаливая деградация реранкера. Разбор —
+`docs/SELFTEST_BASELINE.md`. Okna ярус 1+2 и branch_alias на актуальных
+классах — не сняты (ssh deploy-ключа и Node/openclaw на деве).
+
 ## 16.08: прод-замок волны-1 на okna — детектор развилок и подписи веток в бою `[замер]` `[код]`
 
 `[код]` Перед выкатом закрыт рассинхрон схемы словаря развилок: детектор
