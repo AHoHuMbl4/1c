@@ -103,10 +103,18 @@ ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS last_built_at TIMESTAMP;
 -- мало, и они не растут с языком.
 --
 -- `search_fork_class` ПИШЕТ детектор развилок (ответный контур): fork_key = sha1 от
--- отсортированного src_set и величины, src_set — имена источников через запятую,
--- seen_count — сколько раз развилка встретилась в ответах.
+-- отсортированного src_set и величины, src_set — имена источников через запятую в
+-- фигурных скобках («{a,b}», так пишет детектор; `branch_alias.sh` срезает скобки при
+-- разборе), seen_count — сколько раз развилка встретилась в ответах.
+-- 🔴 Колонка называется `measure_ctx`, а не `measure`: именно её пишет детектор
+-- (`serene_ask.py`, `_fork_log`), иначе его INSERT падает и класс теряется МОЛЧА.
+-- 🔴 `UNIQUE` на fork_key обязателен: детектор пишет `INSERT … ON CONFLICT (fork_key)
+-- DO UPDATE`, а цель конфликта требует уникального ограничения или индекса (доки
+-- SereneDB: Sql › Statements › INSERT › Defining a Conflict Target). [замер 16.08]
+-- на ut_test без UNIQUE вставка отвергается: «conflict target are not referenced by
+-- a UNIQUE/PRIMARY KEY CONSTRAINT or INDEX» — и shadow-заметка терялась бы молча.
 CREATE TABLE IF NOT EXISTS search_fork_class (
-  fork_key VARCHAR, src_set VARCHAR, measure VARCHAR,
+  fork_key VARCHAR UNIQUE, src_set VARCHAR, measure_ctx VARCHAR,
   seen_at TIMESTAMP, seen_count INTEGER);
 
 -- `search_fork_label` ПИШЕТ `branch_alias.sh` штатным агентом OpenClaw, читает рендер
@@ -173,7 +181,12 @@ GRANT SELECT ON search_measure_alias TO serene_ro;
 -- Развилки и их подписи: рендер читает обе (класс — чтобы назвать развилку,
 -- подписи — чтобы показать ветки человеческими словами). Без GRANT та же молчаливая
 -- пустота, что у алиасов выше, — рендер считал бы «развилок нет» при живом журнале.
-GRANT SELECT ON search_fork_class TO serene_ro;
+-- 🔴 INSERT/UPDATE на `search_fork_class` — осознанное ЕДИНСТВЕННОЕ исключение из
+-- read-only: журнал пишет детектор ответного сервиса, а у сервиса один DSN (ro-роль).
+-- Без права его вставка падает, RuntimeError ловится и класс теряется молча — контур
+-- словаря развилок мёртв при живом детекторе. `test_ro_role.py` исключает эту таблицу
+-- из пробы записи нарочно; остальная витрина по-прежнему физически read-only.
+GRANT SELECT, INSERT, UPDATE ON search_fork_class TO serene_ro;
 GRANT SELECT ON search_fork_label TO serene_ro;
 
 -- Индекс по алиасам: когда выбор сущности не подтверждён, соперников по вопросу ранжирует

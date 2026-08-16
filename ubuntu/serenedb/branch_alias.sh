@@ -57,9 +57,14 @@ command -v openclaw >/dev/null 2>&1 || { echo "развилки: openclaw не �
 # 🔴 DDL ДЕРЖИТСЯ И ЗДЕСЬ, а не только в `corpus_init.sql`: на базе без свежего init
 # контур иначе молча мёртв. GRANT — сразу: без него рендер ловит permission denied и
 # считает «развилок нет» при живом словаре (та же грабля, что у алиасов, HOW_NOT_TO §2.9).
-psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $FORK_CLASS_TABLE (fork_key VARCHAR, src_set VARCHAR, measure VARCHAR, seen_at TIMESTAMP, seen_count INTEGER)" >/dev/null 2>&1
+# Схема `search_fork_class` — ровно та, что пишет детектор (`serene_ask.py`, `_fork_log`):
+# колонка `measure_ctx` и UNIQUE на fork_key (его INSERT … ON CONFLICT без уникальной
+# цели конфликта отвергается движком — замер 16.08). INSERT/UPDATE для serene_ro —
+# единственное исключение из read-only: журнал пишет тот же DSN, что читает (подробнее —
+# `corpus_init.sql`).
+psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $FORK_CLASS_TABLE (fork_key VARCHAR UNIQUE, src_set VARCHAR, measure_ctx VARCHAR, seen_at TIMESTAMP, seen_count INTEGER)" >/dev/null 2>&1
 psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $FORK_LABEL_TABLE (fork_key VARCHAR, src VARCHAR, label VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
-psql "$DSN" -q -c "GRANT SELECT ON $FORK_CLASS_TABLE TO serene_ro" >/dev/null 2>&1
+psql "$DSN" -q -c "GRANT SELECT, INSERT, UPDATE ON $FORK_CLASS_TABLE TO serene_ro" >/dev/null 2>&1
 psql "$DSN" -q -c "GRANT SELECT ON $FORK_LABEL_TABLE TO serene_ro" >/dev/null 2>&1
 
 # 🔴 ОБМЕН ФАЙЛАМИ — ТОЛЬКО ЧЕРЕЗ КАТАЛОГ, ЧИТАЕМЫЙ ДВИЖКОМ (как в `wiki_alias.sh`):
@@ -80,21 +85,24 @@ over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUD
 # Отбор: классы, у которых ХОТЯ БЫ ОДНА ветка без непустой подписи (пустышка младше
 # RETRY_H часов — свежая попытка, не переспрашиваем). Класс берётся ЦЕЛИКОМ, чтобы
 # подписи веток одной развилки писались одним ответом и различались между собой.
+# 🔴 src_set детектор пишет в фигурных скобках («{a,b}») — скобки срезаются разбором
+# (`trim(x.s, '{} ')`), иначе первая и последняя ветки не сошлись бы с `search_tables`
+# и остались без подписи навсегда.
 NEED_SQL="
   WITH need AS (
-    SELECT c.fork_key, c.src_set, c.measure
+    SELECT c.fork_key, c.src_set, c.measure_ctx
     FROM $FORK_CLASS_TABLE c
     WHERE EXISTS (
       SELECT 1 FROM unnest(str_split(c.src_set, ',')) AS x(s)
       WHERE NOT EXISTS (
         SELECT 1 FROM $FORK_LABEL_TABLE l
-        WHERE l.fork_key = c.fork_key AND l.src = trim(x.s)
+        WHERE l.fork_key = c.fork_key AND l.src = trim(x.s, '{} ')
           AND (coalesce(l.label, '') <> ''
                OR l.seen_at > now() - INTERVAL $RETRY_H HOUR)))
     ORDER BY c.fork_key
     LIMIT $BATCH),
   srcs AS (
-    SELECT n.fork_key, n.measure, trim(x.s) AS src
+    SELECT n.fork_key, n.measure_ctx, trim(x.s, '{} ') AS src
     FROM need n, unnest(str_split(n.src_set, ',')) AS x(s))"
 
 # 🔴 ОТМЕТКА ПОПЫТКИ — MERGE, А НЕ «INSERT ГДЕ НЕТ». [замер 15.08, дым на ut_test]
@@ -120,7 +128,7 @@ while :; do
   psql "$DSN" -tA -c "$NEED_SQL
     SELECT to_json(list(struct_pack(fork_key := fork_key, measure := measure,
                                     sources := items)))
-    FROM (SELECT s.fork_key, max(s.measure) AS measure,
+    FROM (SELECT s.fork_key, max(s.measure_ctx) AS measure,
                  list(struct_pack(src := s.src,
                                   title := coalesce(t.label, s.src),
                                   bestUsedFor := coalesce(a.best_used_for, ''))
@@ -144,7 +152,7 @@ while :; do
   # 🔴 ЗАДАНИЕ ПЕРЕДАЁТСЯ ФАЙЛОМ, А НЕ АРГУМЕНТОМ (как в `wiki_alias.sh`): длинный
   # JSON в argv не доходит, у `openclaw agent` есть штатный `--message-file`.
   {
-    printf '%s' "JSON only, no prose, no code fences. Below are FORK CLASSES of one database. Each class lists record types (sources) whose data OVERLAP: the same business fact can be read from any of them, and totals by the shown measure DIFFER between them, so a person asking about that measure must choose a branch. For EVERY source of EVERY class write a short label that says what these records MEAN for the business — what kind of fact it is, and how it differs from the other sources of the same class; the person already sees the type name, so the label must add the meaning, not repeat the name. Use the SAME language as the titles. Schema: {\"forks\":[{\"fork_key\":\"<copy exactly>\",\"labels\":{\"<source name exactly>\":\"<label>\"}}]}. Input: "
+    printf '%s' "JSON only, no prose, no code fences. Below are FORK CLASSES of one database. Each class lists record types (sources) whose data OVERLAP: the same business fact can be read from any of them, and totals by the shown measure DIFFER between them, so a person asking about that measure must choose a branch. For EVERY source of EVERY class write a short label that says what these records MEAN for the business — what kind of fact it is, and how it differs from the other sources of the same class; the person already sees the type name, so the label must add the meaning, not repeat the name. Use the SAME language as the titles. Keys in labels are the technical source identifiers (the \"src\" field); each source also carries a human title, which is shown to the person separately and is not a key. Schema: {\"forks\":[{\"fork_key\":\"<copy exactly>\",\"labels\":{\"<technical source id exactly>\":\"<label>\"}}]}. Input: "
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
@@ -196,7 +204,7 @@ psql "$DSN" -tA -F' | ' -c "
     WHERE NOT EXISTS (
       SELECT 1 FROM unnest(str_split(c.src_set, ',')) AS x(s)
       WHERE NOT EXISTS (SELECT 1 FROM $FORK_LABEL_TABLE l
-                        WHERE l.fork_key = c.fork_key AND l.src = trim(x.s)
+                        WHERE l.fork_key = c.fork_key AND l.src = trim(x.s, '{} ')
                           AND coalesce(l.label, '') <> ''))
     GROUP BY c.fork_key) q
   UNION ALL SELECT 'непустых подписей веток', count(*) FROM $FORK_LABEL_TABLE

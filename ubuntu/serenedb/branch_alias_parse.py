@@ -23,8 +23,9 @@ MAX_LABEL = 900
 
 
 def known_forks(pay):
-    """fork_key -> список src класса из входной пачки (как в данных, не из модели)."""
+    """fork_key -> список src класса и title -> src из входной пачки."""
     out = {}
+    title_to_src = {}
     if isinstance(pay, dict):
         pay = pay.get("forks") or pay.get("items") or pay.get("value") or []
     for rec in pay or []:
@@ -37,12 +38,20 @@ def known_forks(pay):
         for s in rec.get("sources") or []:
             if isinstance(s, dict):
                 name = (s.get("src") or "").strip()
+                title = (s.get("title") or "").strip()
             else:
                 name = str(s).strip()
+                title = ""
             if name:
                 srcs.append(name)
-        out[fk] = srcs
+            if title:
+                title_to_src[norm(title)] = name
+        out[fk] = (srcs, title_to_src)
     return out
+
+
+def norm(s):
+    return "".join(str(s).lower().split())
 
 
 def parse_labels(text, pay):
@@ -60,16 +69,22 @@ def parse_labels(text, pay):
         if not isinstance(fork, dict):
             continue
         fk = (fork.get("fork_key") or "").strip()
-        allowed = known.get(fk)
-        if not allowed:
+        if fk not in known:
             continue
+        allowed, title_to_src = known[fk]
         labels = fork.get("labels")
         if not isinstance(labels, dict):
             continue
         for src, label in labels.items():
             src = (src or "").strip()
             if src not in allowed:
-                continue
+                # Модель часто использует человеческий title вместо src-идентификатора;
+                # сводим по title, если он однозначен.
+                ns = norm(src)
+                if ns in title_to_src and title_to_src[ns] in allowed:
+                    src = title_to_src[ns]
+                else:
+                    continue
             label = str(label or "").strip()[:MAX_LABEL]
             if not label:
                 continue
