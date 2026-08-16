@@ -242,9 +242,8 @@ def _decrypt_chunks(base_id: str, pkg_id: str, manifest: dict, tmp: str) -> dict
     return out
 
 
-def _longest_record(paths: list[str]) -> int:
-    """Длина самой длинной ЛОГИЧЕСКОЙ записи CSV в файлах, в байтах.
-    0 — измерить не удалось.
+def _longest_record_data(data: bytes) -> int:
+    """Длина самой длинной ЛОГИЧЕСКОЙ записи CSV в байтах данных.
 
     Запись может занимать много физических строк: поле в кавычках вправе
     содержать переводы строк (живой случай okna-1 15.08, пакет 000002,
@@ -252,42 +251,52 @@ def _longest_record(paths: list[str]) -> int:
     по ~280 Б; самая длинная физическая строка 280 Б, и счёт по ней занижал
     предел в тысячи раз — read_csv падал «CSV Error on Line: 1»).
 
-    Поэтому считаем точно, автоматом кавычек: экранирование по контракту —
-    удвоение (quote='"', escape='"'), а пара удвоенных кавычек даёт два
-    переключения состояния, то есть не меняет его, — поэтому хватает простого
-    переключателя на каждой кавычке, разбирать пары не нужно. Работа идёт на
-    скорости bytes.split, не питоньего цикла по байтам. Кавычки в данных
-    редки (поля с GUID/числами/датами агент не кавычит), так что цикл по
-    сегментам короткий; файл без кавычек уходит в быстрый путь.
+    Автомат кавычек: экранирование по контракту — удвоение (quote='"',
+    escape='"'), а пара удвоенных кавычек даёт два переключения состояния, то
+    есть не меняет его, — поэтому хватает простого переключателя на каждой
+    кавычке, разбирать пары не нужно. Работа идёт на скорости bytes.split, не
+    питоньего цикла по байтам. Кавычки в данных редки (поля с GUID/числами/
+    датами агент не кавычит), так что цикл по сегментам короткий; файл без
+    кавычек уходит в быстрый путь.
     """
+    if b'"' not in data:
+        return max((len(l) for l in data.split(b"\n")), default=0)
     longest = 0
+    cur = 0          # длина текущей записи с учётом уже пройденных сегментов
+    in_q = False     # состояние: внутри ли кавычек
+    segs = data.split(b'"')
+    for idx, seg in enumerate(segs):
+        if idx:
+            cur += 1             # сама кавычка — часть записи
+            in_q = not in_q
+        if in_q:
+            cur += len(seg)      # переводы строк внутри кавычек — тоже запись
+        else:
+            lines = seg.split(b"\n")
+            cur += len(lines[0])
+            for ln in lines[1:]:
+                longest = max(longest, cur)
+                cur = len(ln)
+    return max(longest, cur)
+
+
+def _longest_records(paths: list[str]) -> dict:
+    """По каждому файлу — самая длинная запись (0 — измерить не удалось)."""
+    out = {}
     for p in paths:
         try:
             with open(p, "rb") as f:
-                data = f.read()
+                out[p] = _longest_record_data(f.read())
         except OSError:
-            return 0
-        if b'"' not in data:
-            lines = data.split(b"\n")
-            longest = max(longest, max((len(l) for l in lines), default=0))
-            continue
-        cur = 0          # длина текущей записи с учётом уже пройденных сегментов
-        in_q = False     # состояние: внутри ли кавычек
-        segs = data.split(b'"')
-        for idx, seg in enumerate(segs):
-            if idx:
-                cur += 1             # сама кавычка — часть записи
-                in_q = not in_q
-            if in_q:
-                cur += len(seg)      # переводы строк внутри кавычек — тоже запись
-            else:
-                lines = seg.split(b"\n")
-                cur += len(lines[0])
-                for ln in lines[1:]:
-                    longest = max(longest, cur)
-                    cur = len(ln)
-        longest = max(longest, cur)
-    return longest
+            out[p] = 0
+    return out
+
+
+def _longest_record(paths: list[str]) -> int:
+    """Длина самой длинной ЛОГИЧЕСКОЙ записи CSV в файлах, в байтах.
+    0 — измерить не удалось. См. _longest_record_data.
+    """
+    return max(_longest_records(paths).values(), default=0)
 
 
 def _csv_source(paths: list[str]) -> str:
@@ -312,29 +321,41 @@ def _csv_source(paths: list[str]) -> str:
     считается по ФАКТУ, самой длинной ЗАПИСИ (а не физической строке — запись
     может быть разорвана переводами строк внутри кавычек, см. _longest_record):
     в том же чанке 6668 записей на 32 МБ, то есть ~4,8 КБ на запись —
-    завышение было в тысячи раз."""
-    line_cap = PACKET_APPLY_CSV_MAX_LINE
-    sizes = [os.path.getsize(p) for p in paths if os.path.exists(p)]
-    if sizes:
-        line_cap = min(line_cap, max(sizes) + 4096)
-    # Предел — по самой длинной ЛОГИЧЕСКОЙ записи (+4096 запаса): множитель ×8
-    # поверх самой длинной ФИЗИЧЕСКОЙ строки не выдержал встречи с base64,
-    # разбитым на строки (okna-1 15.08, пакет 000002: запись 2,6 МБ при строке
-    # 280 Б — «CSV Error on Line: 1», пакет не применялся). Пол 1 МиБ — чтобы
-    # не уйти ниже разумного (умолчание движка 2 МБ). Ошибка в меньшую сторону
-    # безопасна: читатель скажет «строка не влезла» громко, и потолок
-    # поднимается ключом PACKET_APPLY_CSV_MAX_LINE. Ошибка в большую — то самое
-    # падение по памяти.
-    longest = _longest_record([p for p in paths if os.path.exists(p)])
-    if longest > 0:
-        line_cap = min(line_cap, max(longest + 4096, 1 << 20))
-    if sizes and 16 * line_cap * len(paths) > (1 << 30):
-        _log("apply ВНИМАНИЕ буфер читателей ~%.1f ГиБ (%d чанков, предел строки "
+    завышение было в тысячи раз.
+
+    🔴 Предел — ПОФАЙЛОВЫЙ, у каждого read_csv свой (klient-1 16.08, пакет
+    000011). Один чанк с записью 22,4 МБ (base64 большого файла) среди 25
+    обычных давал общий предел 23,5 МБ × 16 × 26 читателей = 9,1 ГиБ — снова
+    «could not allocate block» при memory_limit 9,3 ГиБ. Гигантская запись —
+    свойство ОДНОГО файла, поэтому предел считается для каждого файла
+    отдельно: 16 × (23,5 МБ + 25 × 1 МиБ) ≈ 0,8 ГиБ. У чанков без гигантов
+    поведение прежнее: предел = max(запись + 4096, 1 МиБ), прижатый к размеру
+    файла и env-потолку."""
+    # Пол 1 МиБ на файл — чтобы не уйти ниже разумного (умолчание движка 2 МБ).
+    # Ошибка в меньшую сторону безопасна: читатель скажет «строка не влезла»
+    # громко, и потолок поднимается ключом PACKET_APPLY_CSV_MAX_LINE. Ошибка в
+    # большую — то самое падение по памяти.
+    caps: dict = {}
+    recs = _longest_records([p for p in paths if os.path.exists(p)])
+    for p in paths:
+        cap = PACKET_APPLY_CSV_MAX_LINE
+        try:
+            cap = min(cap, os.path.getsize(p) + 4096)
+        except OSError:
+            pass
+        rec = recs.get(p, 0)
+        if rec > 0:
+            cap = min(cap, max(rec + 4096, 1 << 20))
+        caps[p] = cap
+    if 16 * sum(caps.values()) > (1 << 30):
+        _log("apply ВНИМАНИЕ буфер читателей ~%.1f ГиБ (%d чанков, сумма пределов "
              "%d Б) — возможен отказ по памяти движка"
-             % (16 * line_cap * len(paths) / (1 << 30), len(paths), line_cap))
-    opts = ("header=true, all_varchar=true, quote='\"', escape='\"', "
-            "maximum_line_size=%d" % line_cap)
-    reads = ["SELECT * FROM read_csv(%s, %s)" % (_lit(p), opts) for p in paths]
+             % (16 * sum(caps.values()) / (1 << 30), len(paths), sum(caps.values())))
+    reads = []
+    for p in paths:
+        opts = ("header=true, all_varchar=true, quote='\"', escape='\"', "
+                "maximum_line_size=%d" % caps[p])
+        reads.append("SELECT * FROM read_csv(%s, %s)" % (_lit(p), opts))
     if len(reads) == 1:
         return reads[0]
     return "(" + " UNION ALL ".join(reads) + ")"

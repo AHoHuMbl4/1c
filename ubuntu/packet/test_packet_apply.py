@@ -126,6 +126,11 @@ def _line_cap_of(src: str) -> int:
     return int(m.group(1)) if m else -1
 
 
+def _line_caps_of(src: str) -> list:
+    import re as _re
+    return [int(x) for x in _re.findall(r"maximum_line_size=(\d+)", src)]
+
+
 # _csv_source: предел строки прижимается к крупнейшему файлу источника —
 # buffer_size читателя = 16 × maximum_line_size, и потолок 200 МиБ означал
 # аллокацию 3,1 ГиБ (живой случай okna-1 12.08, apply падал 83 раза подряд).
@@ -138,8 +143,9 @@ with open(_small, "wb") as _f:
     _f.write(b"h\n" + b"x" * 100)
 with open(_big, "wb") as _f:
     _f.write(b"h\n" + b"y" * 5000)
-check("read_csv: предел строки прижат к крупнейшему файлу (+4096)",
-      _line_cap_of(_A._csv_source([_small, _big])) == os.path.getsize(_big) + 4096)
+check("read_csv: предел ПОФАЙЛОВЫЙ — у каждого свой (+4096)",
+      _line_caps_of(_A._csv_source([_small, _big]))
+      == [os.path.getsize(_small) + 4096, os.path.getsize(_big) + 4096])
 _saved_cap = _A.PACKET_APPLY_CSV_MAX_LINE
 _A.PACKET_APPLY_CSV_MAX_LINE = 3000
 try:
@@ -170,6 +176,22 @@ check("read_csv: буфер многочанковой сущности удер
       "буфер %.1f МиБ" % (16 * _cap_many * len(_many) / 1048576))
 check("read_csv: пол предела — 1 МиБ (умолчание движка 2 МБ)",
       _cap_many == 1024 * 1024, "предел %d" % _cap_many)
+
+# 🔴 Один гигант среди мелких чанков (klient-1 16.08, пакет 000011): запись
+# 22,4 МБ в ОДНОМ чанке из 26 давала общий предел ×16×26 = 9,1 ГиБ — «could
+# not allocate block». Пофайловый предел: гигант платит только свой читатель.
+_giant = os.path.join(_csvdir, "giant.csv")
+_G = 5 * 1024 * 1024
+with open(_giant, "wb") as _f:
+    _f.write(b"h\n" + b"g" * _G)
+_mix = [_giant] + _many[:3]
+_caps_mix = _line_caps_of(_A._csv_source(_mix))
+check("read_csv: гигант среди мелких — предел гиганта только у его файла",
+      _caps_mix == [_G + 4096, 1024 * 1024, 1024 * 1024, 1024 * 1024],
+      repr(_caps_mix))
+check("read_csv: буфер с пофайловым пределом вдвое меньше общего",
+      16 * sum(_caps_mix) * 2 < 16 * (_G + 4096) * len(_mix),
+      "сумма %d" % sum(_caps_mix))
 
 _long = os.path.join(_csvdir, "long.csv")
 _LONG_LINE = 2 * 1024 * 1024
