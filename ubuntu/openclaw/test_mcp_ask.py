@@ -136,6 +136,43 @@ t("figures без атома: нет плоского sum=/count= (аудит §
   and "[FIGURES]" in out_legacy)
 M._ask = saved_ask
 
+
+# ---------------------------------------------- decision_id / presentation (план §6)
+opts_d = [
+    {"src": "document_a", "label": "Реализация", "distinct_by": "продажа", "found": 3,
+     "decision_id": "abc123XYZ"},
+    {"src": "document_b", "label": "Оплата", "distinct_by": "оплата", "found": 2,
+     "decision_id": "def456UVW"},
+]
+saved_ask = M._ask
+M._ask = lambda *a, **k: {"kind": "clarify", "text": "Что посчитать?", "options": opts_d}
+out_c = M.ask_1c("q")
+t("clarify: decision_id в OPTIONS и ATOM_JSON",
+  "decision_id=abc123XYZ" in out_c and "ATOM_JSON:" in out_c)
+t("clarify: PRESENTATION_JSON с callback=decision_id",
+  "PRESENTATION_JSON:" in out_c and "abc123XYZ" in out_c)
+pres = M._clarify_presentation(opts_d)
+t("presentation: кнопки label+callback, ≤64 байт",
+  pres is not None
+  and pres["blocks"][0]["buttons"][0]["label"] == "Реализация"
+  and pres["blocks"][0]["buttons"][0]["action"]["value"] == "ask1c:abc123XYZ")
+M._ask = lambda *a, **k: {"kind": "choice_error", "text": "Срок выбора истёк.",
+                          "error": "expired"}
+out_ce = M.ask_1c("q")
+t("choice_error: маркер видим мосту/гейту",
+  out_ce.startswith("[CHOICE ERROR]") and "истёк" in out_ce)
+# _ask пробрасывает decision_id
+seen = {}
+def capture(q, focus=None, measure=None, context=None, prior=None,
+            decision_id=None, user=None):
+    seen.update(decision_id=decision_id, user=user, q=q)
+    return {"kind": "answer", "text": "ok", "sources": []}
+M._ask = capture
+M.ask_1c("вопрос", decision_id="tid1", user="u9")
+t("_ask пробрасывает decision_id и user",
+  seen.get("decision_id") == "tid1" and seen.get("user") == "u9")
+M._ask = saved_ask
+
 print("\n%d проверок пройдено" % PASS)
 if FAIL:
     print("ПРОВАЛЕНО %d: %s" % (len(FAIL), "; ".join(FAIL)))

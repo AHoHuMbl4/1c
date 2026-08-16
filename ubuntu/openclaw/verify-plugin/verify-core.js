@@ -139,6 +139,8 @@ const LEAK_LINE_RES = [
   // что и в мост, — иначе новый маркер утекает клиенту молча.
   /^.*\[(?:НЕТ ДАННЫХ|ОТЧЁТ НЕ ВЫПОЛНЕН|ОШИБКА|NO DATA|CLARIFICATION NEEDED|SERVICE ERROR|FIGURES|PARTIAL)[^\]]*\].*$/gim,
   /^.*\bATOM_JSON:\b.*$/gim,
+  /^.*\bPRESENTATION_JSON:\b.*$/gim,
+  /^.*\[CHOICE ERROR[^\]]*\].*$/gim,
   /^FIGURES:\s*$/gim,
 ];
 // 🔴 ВНУТРЕННИЕ ИМЕНА ИСТОЧНИКОВ ИЗ БЛОКА ВАРИАНТОВ. Мост собирает уточнение машинным
@@ -149,7 +151,7 @@ const LEAK_LINE_RES = [
 // замена пустая, а здесь строка не удаляется, а укорачивается — метку варианта человек
 // обязан видеть, иначе выбирать ему будет не из чего.
 //   «- Реализация товаров | measure=Сумма | focus=Document_…» → «- Реализация товаров»
-const OPTION_TAIL_RE = /^([ \t]*[-*][ \t]+.*?)[ \t]*\|[ \t]*(?:measure|focus)=.*$/gim;
+const OPTION_TAIL_RE = /^([ \t]*[-*][ \t]+.*?)[ \t]*\|[ \t]*(?:measure|focus|decision_id)=.*$/gim;
 // 🔴 SQL РЕЖЕТСЯ ПО ФОРМЕ ЗАПРОСА, А НЕ ПО ДВУМ СЛОВАМ. Прежнее правило
 // (`WITH|SELECT … FROM …` до пустой строки) срабатывало на живой речи: [замер 02.08]
 // «We started with 3 suppliers from the north region. That is all.» → «We started» —
@@ -171,9 +173,42 @@ function looksLikeSql(span) {
 }
 const PATH_RE = /\/(?:home|var|opt|etc|tmp|usr|root)\/[^\s'")\]]+/gi; // абсолютные серверные пути
 
+function stripMarkedJsonBlocks(text) {
+  // ATOM_JSON / PRESENTATION_JSON + сбалансированный объект на следующих строках.
+  let t = String(text || "");
+  for (const marker of ["ATOM_JSON:", "PRESENTATION_JSON:"]) {
+    while (true) {
+      const i = t.indexOf(marker);
+      if (i < 0) break;
+      const after = t.slice(i + marker.length);
+      const startRel = after.indexOf("{");
+      if (startRel < 0) {
+        t = t.slice(0, i) + after.replace(/^\s*/, "");
+        break;
+      }
+      const from = i + marker.length + startRel;
+      let depth = 0, end = -1;
+      for (let k = from; k < t.length; k++) {
+        const ch = t[k];
+        if (ch === "{") depth++;
+        else if (ch === "}") {
+          depth--;
+          if (depth === 0) { end = k; break; }
+        }
+      }
+      if (end < 0) {
+        t = t.slice(0, i);
+        break;
+      }
+      t = t.slice(0, i) + t.slice(end + 1);
+    }
+  }
+  return t;
+}
+
 export function stripInternal(text) {
   if (!text) return text;
-  let t = String(text);
+  let t = stripMarkedJsonBlocks(String(text));
   for (const re of LEAK_LINE_RES) t = t.replace(re, "");
   t = t.replace(OPTION_TAIL_RE, "$1"); // не удаление строки, а обрезка машинного хвоста
   t = t.replace(SQL_CAND_RE, (m) => (looksLikeSql(m) ? "" : m));
@@ -276,22 +311,29 @@ export function parseClarifyOptions(text) {
     if (!label) continue;
     let focus = "";
     let measure = "";
+    let decision_id = "";
     for (const p of (tail ? tail.split("|") : [])) {
-      const kv = p.trim().match(/^(focus|measure)=(.*)$/i);
+      const kv = p.trim().match(/^(focus|measure|decision_id)=(.*)$/i);
       if (!kv) continue;
       const v = kv[2].trim();
-      if (kv[1].toLowerCase() === "focus") focus = v;
-      else measure = v;
+      const key = kv[1].toLowerCase();
+      if (key === "focus") focus = v;
+      else if (key === "measure") measure = v;
+      else decision_id = v;
     }
-    options.push({ label, focus, measure });
+    options.push({ label, focus, measure, decision_id });
   }
   return options;
 }
 
 export function matchClarifyOption(prompt, options) {
-  const key = normClarifyKey(prompt);
+  let raw = String(prompt || "").trim();
+  if (raw.startsWith("ask1c:")) raw = raw.slice("ask1c:".length).trim();
+  const key = normClarifyKey(raw);
   if (!key) return null;
   for (const opt of options || []) {
+    if (opt.decision_id && (raw === opt.decision_id || normClarifyKey(opt.decision_id) === key))
+      return opt;
     if (normClarifyKey(opt.label) === key) return opt;
     if (opt.focus && normClarifyKey(opt.focus) === key) return opt;
     if (opt.measure && normClarifyKey(opt.measure) === key) return opt;
@@ -305,8 +347,13 @@ export function rewriteAsk1cParams(params, prompt, lock) {
   const matched = matchClarifyOption(prompt, lock.options);
   if (matched) {
     p.question = lock.question;
-    if (matched.focus) p.focus = matched.focus;
-    if (matched.measure) p.measure = matched.measure;
+    if (matched.decision_id) {
+      p.decision_id = matched.decision_id;
+      // Билет — источник истины; сырой focus не подменяем как доказательство.
+    } else {
+      if (matched.focus) p.focus = matched.focus;
+      if (matched.measure) p.measure = matched.measure;
+    }
     p.prior = "";
     return { params: p, action: "slot" };
   }
@@ -393,7 +440,15 @@ export function atomLabels(payload) {
 export function presentationLabels(presentation) {
   const out = [];
   if (!presentation) return out;
-  const buttons = presentation.buttons || presentation.options || presentation;
+  let buttons = presentation.buttons || presentation.options || null;
+  if (!buttons && Array.isArray(presentation.blocks)) {
+    buttons = [];
+    for (const block of presentation.blocks) {
+      if (block && block.type === "buttons" && Array.isArray(block.buttons))
+        buttons.push(...block.buttons);
+    }
+  }
+  if (!buttons) buttons = presentation;
   if (!Array.isArray(buttons)) return out;
   for (const b of buttons) {
     if (typeof b === "string") out.push(b);
@@ -401,6 +456,43 @@ export function presentationLabels(presentation) {
       out.push(b.label || b.text || b.title || "");
   }
   return out.filter(Boolean);
+}
+
+/** Собрать presentation из options с decision_id (доки Message Presentation). */
+export function buildClarifyPresentation(options) {
+  const buttons = [];
+  for (const o of options || []) {
+    if (!o || typeof o !== "object") continue;
+    const lab = String(o.label || o.measure || "").trim();
+    const did = String(o.decision_id || "").trim();
+    if (!lab || !did) continue;
+    const cb = "ask1c:" + did;
+    if (Buffer.byteLength(cb, "utf8") > 64) continue;
+    buttons.push({ label: lab, action: { type: "callback", value: cb } });
+  }
+  if (!buttons.length) return null;
+  return { tone: "info", blocks: [{ type: "buttons", buttons }] };
+}
+
+export function parsePresentationJson(text) {
+  const s = String(text || "");
+  const i = s.indexOf("PRESENTATION_JSON:");
+  if (i < 0) return null;
+  const rest = s.slice(i + "PRESENTATION_JSON:".length).trim();
+  const start = rest.indexOf("{");
+  if (start < 0) return null;
+  let depth = 0, end = -1;
+  for (let k = start; k < rest.length; k++) {
+    const ch = rest[k];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) { end = k; break; }
+    }
+  }
+  if (end < 0) return null;
+  try { return JSON.parse(rest.slice(start, end + 1)); }
+  catch { return null; }
 }
 
 /** Подписи presentation сверяются с белым списком данных (атом/options). */

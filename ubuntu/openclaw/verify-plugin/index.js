@@ -27,7 +27,7 @@
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, digitBlob, evaluate, extractText, finalizeDecision, isClarify, isServiceError, mergeRef, numericTokens, parseClarifyOptions, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, buildClarifyPresentation, digitBlob, evaluate, extractText, finalizeDecision, isClarify, isServiceError, mergeRef, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny } from "./verify-core.js";
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
@@ -111,6 +111,30 @@ export default definePluginEntry({
       return { ...DEFAULTS, ...pc };
     };
 
+    // Telegram: callback=decision_id → снять кнопки и отдать id как текст хода
+    // (clarify_lock / rewriteAsk1cParams кладут decision_id в ask_1c). Доки:
+    // plugins/message-presentation.md, registerInteractiveHandler + clearButtons.
+    if (typeof api.registerInteractiveHandler === "function") {
+      try {
+        api.registerInteractiveHandler({
+          channel: "telegram",
+          namespace: "ask1c",
+          handler: async (ctx) => {
+            const payload = (ctx && ctx.callback && (ctx.callback.payload || ctx.callback.data)) || "";
+            try {
+              if (ctx && ctx.respond && typeof ctx.respond.clearButtons === "function")
+                await ctx.respond.clearButtons();
+            } catch (_) { /* снятие кнопок best-effort */ }
+            const text = String(payload || "").trim();
+            if (!text) return { handled: true };
+            return { handled: true, submitText: text };
+          },
+        });
+      } catch (e) {
+        // Старые сборки без интерактива — текстовый OPTIONS остаётся.
+      }
+    }
+
     // 🔴 СВОЙ ПОХОД ЗА ДАННЫМИ. Тот же сервис и тот же контракт, что у моста `ask_1c`:
     // второго места правды не заводим. Возвращаем ТЕКСТ в том же виде, в каком его отдал бы
     // инструмент, — дальше он идёт через `mergeRef`, как обычный эталон хода.
@@ -191,7 +215,7 @@ export default definePluginEntry({
       const prompt = (promptRec && promptRec.text) || "";
       const { params, action } = rewriteAsk1cParams(event.params || {}, prompt, lock);
       if (action === "release") clarifyLocks.delete(sessKey);
-      dbg(cfg, `before_tool_call rewrite sess=${sessKey} action=${action} q=${String(params.question || "").slice(0, 80)} focus=${params.focus || ""} prior=${String(params.prior || "").slice(0, 80)}`);
+      dbg(cfg, `before_tool_call rewrite sess=${sessKey} action=${action} q=${String(params.question || "").slice(0, 80)} focus=${params.focus || ""} decision_id=${params.decision_id || ""} prior=${String(params.prior || "").slice(0, 80)}`);
       return { params };
     });
 
@@ -357,7 +381,18 @@ export default definePluginEntry({
       const ref = refFor(sessKey);
       const inb = sessKey ? inbound.get(sessKey) || null : null;
 
-      const decision = evaluate(content, ref, inb, cfg);
+      const lock = sessKey ? clarifyLocks.get(sessKey) : null;
+      let presentation = parsePresentationJson(content)
+        || (lock && lock.options ? buildClarifyPresentation(lock.options) : null)
+        || null;
+      // Из ATOM_JSON options с decision_id — если текстовый OPTIONS без id.
+      if (!presentation) {
+        const atom = parseAtomJson(content);
+        if (atom && Array.isArray(atom.options))
+          presentation = buildClarifyPresentation(atom.options);
+      }
+
+      const decision = evaluate(content, ref, inb, cfg, presentation);
       if (decision.action === "cancel") {
         dbg(cfg, `message_sending sess=${sessKey} action=cancel`);
         return { cancel: true, cancelReason: "braine-verify: " + decision.reason };
@@ -368,10 +403,15 @@ export default definePluginEntry({
       const leaked = clean !== base;
       dbg(
         cfg,
-        `message_sending sess=${sessKey} action=${decision.action} hasRef=${!!ref} refNoData=${ref ? ref.noData : "-"} stripped=${leaked}`,
+        `message_sending sess=${sessKey} action=${decision.action} hasRef=${!!ref} refNoData=${ref ? ref.noData : "-"} stripped=${leaked} hasPres=${!!presentation}`,
       );
-      if (decision.action === "replace" || clean !== content) {
-        return { content: clean.trim() ? clean : emptyReply(base, ref, cfg) };
+      const outContent = (decision.action === "replace" || clean !== content)
+        ? (clean.trim() ? clean : emptyReply(base, ref, cfg))
+        : content;
+      if (presentation || decision.action === "replace" || clean !== content) {
+        const ret = { content: outContent };
+        if (presentation) ret.presentation = presentation;
+        return ret;
       }
       return undefined; // allow без изменений
     });
@@ -392,7 +432,18 @@ export default definePluginEntry({
       const ref = refFor(sessKey);
       const inb = sessKey ? inbound.get(sessKey) || null : null;
 
-      const decision = evaluate(p.text, ref, inb, cfg);
+      const lock = sessKey ? clarifyLocks.get(sessKey) : null;
+      let presentation = p.presentation
+        || parsePresentationJson(p.text)
+        || (lock && lock.options ? buildClarifyPresentation(lock.options) : null)
+        || null;
+      if (!presentation) {
+        const atom = parseAtomJson(p.text);
+        if (atom && Array.isArray(atom.options))
+          presentation = buildClarifyPresentation(atom.options);
+      }
+
+      const decision = evaluate(p.text, ref, inb, cfg, presentation);
       // `cancel` на этом пути отменить нечего (картинка уже уходит), поэтому подпись
       // заменяется честной строкой — это и есть поведение п. 21 «ответ обязан дойти».
       const base = decision.action === "replace" ? decision.content
@@ -400,9 +451,11 @@ export default definePluginEntry({
                  : p.text;
       const clean = cfg.stripInternal === false ? base : stripInternal(base);
       const out = clean.trim() ? clean : emptyReply(base, ref, cfg);
-      if (out === p.text) return undefined; // нечего менять
-      dbg(cfg, `reply_payload_sending action=${decision.action} hasRef=${!!ref} (was ${p.text.length} -> ${out.length})`);
-      return { payload: { ...p, text: out } };
+      if (out === p.text && !presentation) return undefined;
+      dbg(cfg, `reply_payload_sending action=${decision.action} hasRef=${!!ref} hasPres=${!!presentation} (was ${p.text.length} -> ${out.length})`);
+      const payload = { ...p, text: out };
+      if (presentation) payload.presentation = presentation;
+      return { payload };
     });
 
     // Эталон НЕ удаляем на agent_end (доставка идёт после него) — чистка по TTL в prune().

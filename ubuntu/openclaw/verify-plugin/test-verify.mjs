@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, evaluate, extractText, finalizeDecision, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, buildClarifyPresentation, evaluate, extractText, finalizeDecision, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -524,4 +524,42 @@ t("presentationAllowed: пустой presentation — true", () => {
   assert.strictEqual(presentationAllowed(null, new Set(["a"])), true);
 });
 
+// --- decision_id / presentation (план §6) ---
+t("clarify parse: decision_id из хвоста OPTIONS", () => {
+  const o = parseClarifyOptions(
+    "OPTIONS:\n- Книга Продаж | focus=Книга Продаж | decision_id=TidAb12\n");
+  assert.strictEqual(o[0].decision_id, "TidAb12");
+  assert.strictEqual(o[0].label, "Книга Продаж");
+});
+t("clarify: prompt=decision_id → slot с decision_id", () => {
+  const lock = { question: "сколько продали?", options: [
+    { label: "Книга Продаж", focus: "Книга Продаж", decision_id: "TidAb12" }] };
+  const { params, action } = rewriteAsk1cParams({ question: "другое" }, "TidAb12", lock);
+  assert.strictEqual(action, "slot");
+  assert.strictEqual(params.question, "сколько продали?");
+  assert.strictEqual(params.decision_id, "TidAb12");
+});
+t("buildClarifyPresentation: callback=decision_id", () => {
+  const p = buildClarifyPresentation([
+    { label: "А", decision_id: "id1" }, { label: "Б", decision_id: "id2" }]);
+  assert.ok(p && p.blocks[0].buttons.length === 2);
+  assert.strictEqual(p.blocks[0].buttons[0].action.value, "ask1c:id1");
+});
+t("stripInternal: PRESENTATION_JSON не уходит клиенту", () => {
+  const raw = "Уточните:\n- А\nPRESENTATION_JSON:\n" + JSON.stringify({
+    blocks: [{ type: "buttons", buttons: [{ label: "А", action: { type: "callback", value: "x" } }] }]
+  });
+  const out = stripInternal(raw);
+  assert.ok(!/PRESENTATION_JSON/.test(out));
+  assert.ok(!/"callback"/.test(out));
+});
+t("presentationAllowed: blocks.buttons из данных — allow", () => {
+  const tool = "ATOM_JSON:\n" + JSON.stringify({
+    atoms: [], options: [{ label: "А", decision_id: "x" }] });
+  const ref = mergeRef(null, tool, Date.now(), "[NO DATA]", "[CLARIFICATION NEEDED]", "[SERVICE ERROR]");
+  const pres = buildClarifyPresentation([{ label: "А", decision_id: "x" }]);
+  assert.strictEqual(presentationAllowed(pres, ref.labels), true);
+});
+
 console.log(`\n${pass} tests passed`);
+

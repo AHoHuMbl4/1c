@@ -384,10 +384,11 @@ t("стоп2: без focus — stop2_active и чужой лидер слова�
   A.stop2_active(None, None, False)
   and A.determined_answer_rivals("document_a", par, alias_leader="register_x")
   == ["register_x"])
-t("стоп2: с focus — stop2_active молчит (круг стоп2 не открыт)",
-  not A.stop2_active("catalog_x", None, False)
-  and not A.stop2_active(None, "Сумма", False)
-  and not A.stop2_active(None, None, True))
+t("стоп2: сырой focus НЕ гасит stop2 (аудит §10); гасит билет/RAW_TRUST/no_arbiter",
+  A.stop2_active("catalog_x", None, False)  # сырой focus — защита жива
+  and A.stop2_active(None, "Сумма", False)  # сырой measure — тоже
+  and not A.stop2_active(None, None, True)
+  and not A.stop2_active("catalog_x", None, False, {"ambiguity": "entity"}))
 # parent of lines is document_a — already added as family; alias same family not duplicated
 t("стоп2: writer_pair входит",
   A.determined_answer_rivals("register_x", par, writer_pair="document_y",

@@ -1,5 +1,30 @@
 # Журнал изменений
 
+## 16.08: шаг 3 плана ответов — доказуемый выбор (decision_id) `[код]` `[замер]`
+
+`[код]` `serene_ask.py`: процессное хранилище одноразовых билетов
+`decision_id` → {отпечаток вопроса, src/measure/axis, база, user, версия
+набора, TTL, nonce, used}. `kind=clarify` отдаёт `options[].decision_id`
+(≤64 байт). `/ask` принимает `decision_id`: валидный снимает одну
+неоднозначность; used/expired/unknown/mismatch/user_mismatch →
+`kind=choice_error` (видимо клиенту). Сырой `focus` больше не гасит
+достаточность, стоп 2 и финальную поддержку источника — только билет или
+аварийный `ASK_RAW_FOCUS_TRUST=1` (умолчание 0, временный). `mcp_ask.py`:
+проброс `decision_id`/`user`, OPTIONS+ATOM_JSON+PRESENTATION_JSON
+(`callback=ask1c:<id>`). `verify-plugin` 1.1.5: clarify_lock слотит
+`decision_id`, presentation из options, Telegram
+`registerInteractiveHandler` + `clearButtons`, strip PRESENTATION_JSON.
+
+`[замер]` Оффлайн: test_gate 130, test_step4_guards 110, test_a3_passport 14,
+test_fork_detector 13, test_answer_atom 18, test_decision_id 24, test_mcp_ask 27,
+test_focus_loop 19, test-verify 95 — все зелёные. Живой `:8097` (ut_test,
+не :8099/:8091): clarify «закупки» → 2 билета; выбор билетом → clarify
+величины (одна неоднозначность снята); reuse → `choice_error/used`;
+unknown → `choice_error`; сырой focus → clarify, не choice_error.
+md5: serene_ask `c466081e…`, mcp_ask `7098f90b…`, verify-core `dba4b0b1…`,
+index `4c1c1599…`.
+
+
 ## 16.08: самопроверка — ярус2 postgres vector+rerank; okna слепое пятно 0/254 `[замер]`
 
 `[замер]` Дев postgres 10 % через живой `/ask` (config=vector+rerank): 62 вопроса,

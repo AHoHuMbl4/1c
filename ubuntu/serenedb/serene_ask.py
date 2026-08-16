@@ -34,8 +34,10 @@ import io
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -2618,9 +2620,216 @@ def answers_src_conflict(cands):
     return len({c["src"] for c in ans}) > 1
 
 
-def stop2_active(focus=None, measure_pick=None, no_arbiter=False):
-    """Стоп 2 дописывает соперников в круг только без focus/measure_pick."""
-    return (not focus) and (not measure_pick) and (not no_arbiter)
+# ----------------------------------------------------------------- decision_id
+# Одноразовый билет выбора (план §6, аудит §10). Хранение — в процессе сервиса:
+# рестарт → старые билеты неизвестны. Сырой focus больше не доказывает выбор.
+RAW_FOCUS_TRUST = os.environ.get("ASK_RAW_FOCUS_TRUST", "0") == "1"
+DECISION_TTL_SEC = int(os.environ.get("ASK_DECISION_TTL_SEC", "3600"))
+_DECISION_LOCK = threading.Lock()
+_DECISIONS = {}  # id -> ticket
+
+
+def question_fingerprint(question):
+    """Отпечаток вопроса для сверки билета с повторным запросом."""
+    q = " ".join(str(question or "").strip().lower().split())
+    return hashlib.sha256(q.encode("utf-8")).hexdigest()[:32]
+
+
+def db_fingerprint(dsn=None):
+    """Имя базы из DSN — без секретов, только dbname=…."""
+    s = dsn if dsn is not None else DSN
+    m = re.search(r"(?:^|\s)dbname=([^\s]+)", str(s or ""))
+    return (m.group(1) if m else "").lower()
+
+
+def options_version(opts):
+    """Версия набора вариантов: стабильный хеш состава."""
+    rows = []
+    for o in opts or []:
+        if not isinstance(o, dict):
+            continue
+        rows.append("|".join([
+            str(o.get("src") or ""),
+            str(o.get("measure") if "measure" in o else ""),
+            str(o.get("label") or ""),
+            str(o.get("distinct_by") or ""),
+        ]))
+    rows.sort()
+    return hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()[:16]
+
+
+def ambiguity_of_options(opts):
+    """Предмет clarify: сущность / величина / ось."""
+    opts = [o for o in (opts or []) if isinstance(o, dict)]
+    if not opts:
+        return "entity"
+    if any("measure" in o for o in opts):
+        return "measure"
+    if all("found" not in o for o in opts) and any(o.get("distinct_by") for o in opts):
+        return "axis"
+    return "entity"
+
+
+def _new_decision_id():
+    # opaque, короткий: Telegram callback ≤ 64 байт.
+    return secrets.token_urlsafe(12)  # ~16 символов
+
+
+def _purge_decisions(now=None):
+    """Срок жизни — единственный вычиститель. used остаётся до TTL, чтобы
+    повторный клик видел ошибку used, а не unknown."""
+    now = now if now is not None else time.time()
+    dead = [k for k, t in _DECISIONS.items()
+            if float(t.get("expires_at") or 0) <= now]
+    for k in dead:
+        _DECISIONS.pop(k, None)
+
+
+def issue_decision(question, option, ambiguity, options_ver, user=None, parse=None):
+    """Выпустить билет на один вариант clarify. Возвращает decision_id."""
+    now = time.time()
+    tid = _new_decision_id()
+    ticket = {
+        "decision_id": tid,
+        "question_fp": question_fingerprint(question),
+        "question": str(question or "")[:2000],
+        "parse": parse,
+        "ambiguity": ambiguity,
+        "src": (option or {}).get("src"),
+        "measure": (option or {}).get("measure") if option and "measure" in option else None,
+        "grain": (option or {}).get("grain"),
+        "axis": (option or {}).get("distinct_by") if ambiguity == "axis" else None,
+        "label": (option or {}).get("label"),
+        "db": db_fingerprint(),
+        "user": (str(user).strip() if user else None) or None,
+        "options_version": options_ver,
+        "nonce": secrets.token_hex(8),
+        "created_at": now,
+        "expires_at": now + max(60, DECISION_TTL_SEC),
+        "used": False,
+    }
+    with _DECISION_LOCK:
+        _purge_decisions(now)
+        _DECISIONS[tid] = ticket
+    return tid
+
+
+def seal_clarify(out, question, user=None, parse=None):
+    """В каждый options[] clarify — decision_id; билеты в процессном хранилище."""
+    if not isinstance(out, dict) or out.get("kind") != "clarify":
+        return out
+    opts = out.get("options") or []
+    if not opts:
+        return out
+    amb = ambiguity_of_options(opts)
+    ver = options_version(opts)
+    sealed = []
+    for o in opts:
+        if not isinstance(o, dict):
+            continue
+        row = dict(o)
+        row["decision_id"] = issue_decision(
+            question, row, amb, ver, user=user, parse=parse)
+        sealed.append(row)
+    out = dict(out)
+    out["options"] = sealed
+    out.setdefault("diag", {})
+    if isinstance(out["diag"], dict):
+        out["diag"] = dict(out["diag"], decisions_sealed=len(sealed),
+                           ambiguity=amb, options_version=ver)
+    return out
+
+
+def consume_decision(decision_id, question, user=None):
+    """Проверить и погасить билет. (ticket, None) или (None, error_code)."""
+    tid = str(decision_id or "").strip()
+    if not tid:
+        return None, "unknown"
+    now = time.time()
+    with _DECISION_LOCK:
+        ticket = _DECISIONS.get(tid)
+        if not ticket:
+            _purge_decisions(now)
+            return None, "unknown"
+        if ticket.get("used"):
+            return None, "used"
+        if float(ticket.get("expires_at") or 0) <= now:
+            _DECISIONS.pop(tid, None)
+            _purge_decisions(now)
+            return None, "expired"
+        if ticket.get("db") and ticket["db"] != db_fingerprint():
+            return None, "mismatch"
+        if ticket.get("question_fp") != question_fingerprint(question):
+            return None, "mismatch"
+        if ticket.get("user"):
+            if not user or str(user).strip() != ticket["user"]:
+                return None, "user_mismatch"
+        ticket = dict(ticket)
+        ticket["used"] = True
+        _DECISIONS[tid] = ticket
+        return ticket, None
+
+
+def choice_error_response(error_code, decision_id=None):
+    """Видимая клиенту ошибка выбора — не молчаливый общий путь."""
+    texts = {
+        "unknown": "Этот вариант выбора больше недоступен. Задайте вопрос снова.",
+        "expired": "Срок выбора истёк. Задайте вопрос снова.",
+        "used": "Этот вариант уже был выбран. Задайте вопрос снова.",
+        "mismatch": "Выбор не подходит к этому вопросу. Задайте вопрос снова.",
+        "user_mismatch": "Выбор принадлежит другому пользователю. Задайте вопрос снова.",
+    }
+    code = error_code if error_code in texts else "unknown"
+    return {
+        "kind": "choice_error",
+        "text": texts[code],
+        "error": code,
+        "decision_id": decision_id,
+        "sources": [],
+        "partial": None,
+        "options": [],
+    }
+
+
+def reset_decisions_for_tests():
+    """Только оффлайн-пробы: очистить хранилище билетов."""
+    with _DECISION_LOCK:
+        _DECISIONS.clear()
+
+
+def choice_proven(trusted, ambiguity=None):
+    """Билет доказал выбор человека (и при необходимости — предмет неоднозначности)."""
+    if not trusted or not isinstance(trusted, dict):
+        return False
+    if ambiguity is None:
+        return True
+    return trusted.get("ambiguity") == ambiguity
+
+
+def guards_skip_for_choice(focus=None, measure_pick=None, trusted=None):
+    """Защиты гасит только доказанный билет или аварийный ASK_RAW_FOCUS_TRUST.
+
+    Сырой focus/measure сами по себе сюда не проходят (аудит §10).
+    """
+    if choice_proven(trusted, "entity") or choice_proven(trusted, "measure") \
+            or choice_proven(trusted, "axis"):
+        return True
+    if RAW_FOCUS_TRUST and (focus or measure_pick):
+        return True
+    return False
+
+
+def stop2_active(focus=None, measure_pick=None, no_arbiter=False, trusted=None):
+    """Стоп 2: соперники в круг, пока неоднозначность не доказана билетом.
+
+    Сырой focus/measure — подсказка отбора, не выбор человека (аудит §10, план §6).
+    Гасит стоп 2 только decision_id (trusted) или аварийный ASK_RAW_FOCUS_TRUST=1.
+    """
+    if no_arbiter:
+        return False
+    if guards_skip_for_choice(focus, measure_pick, trusted):
+        return False
+    return True
 
 
 def determined_answer_rivals(picked, par, writer_pair=None, alias_leader=None,
@@ -6235,15 +6444,13 @@ def apply_prior_period(intent, prior_intent, today=None):
 
 
 def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False,
-            prior=None):
+            prior=None, trusted=None):
     """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
 
-    `focus` — сущность, ВЫБРАННАЯ человеком после уточнения (кнопкой или словом). Когда
-    вопрос неоднозначен, система отвечает `kind=clarify` со списком сущностей; бот
-    показывает их кнопками, и выбор возвращается сюда как `focus`. Тогда выбор сущности не
-    гадается — берётся заданный, и ответ считается по нему. Так замыкается порядок п. 21:
-    ответ → уточняющий вопрос → ответ по выбору (решение владельца 28.07: «если после
-    уточнения даётся верный ответ, это ок»).
+    `focus` — подсказка отбора (сужает кандидатов через resolve_focus). Доказанный выбор
+    человека — только `trusted` из `decision_id` (план §6): сырой focus защиты не гасит.
+    Когда вопрос неоднозначен, система отвечает kind=clarify с options[].decision_id;
+    повтор с билетом снимает одну неоднозначность. Порядок п. 21 сохраняется.
 
     Порядок важен: сначала множество совпадений раскладывается по источникам ЦЕЛИКОМ,
     и только потом выбирается один источник и тянутся его строки. Обратный порядок
@@ -7470,7 +7677,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Стоп 2: без focus/measure_pick ответ не уходит, пока посчитаны уже определённые
     # соперники (семья, writer_pair, лидер словаря другой семьи). Вторая попытка
     # (VETO_HEAD) не отменяется: вместо ответа вслепую соперник входит в круг.
-    if (picked and stop2_active(focus, measure_pick, no_arbiter)
+    if (picked and stop2_active(focus, measure_pick, no_arbiter, trusted)
             and len(arb_pool) < ARBITER_MAX):
         _lead = None
         _ok_s2, _top_s2 = _alias_verdict(picked[0])
@@ -7507,7 +7714,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         Решение владельца 30.07: когда вопросу отвечает несколько РАЗНЫХ объектов —
         всегда переспрашивать, а не выбирать за человека.
         """
-        if not REQUIRE_SUPPORT or focus:
+        if not REQUIRE_SUPPORT or guards_skip_for_choice(focus, measure_pick, trusted):
             return out
         w = (out.get("diag") or {}).get("focus")
         if not w or out.get("kind") not in ("answer", "figures"):
@@ -7795,7 +8002,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # пара «регистр ← документ» нашлась (`writer_pair`), соперник в круг попал, а ответ всё
     # равно ушёл по регистру, потому что ответ документа не собрался.
     # Итоговый выбор по-прежнему проверяется — `_checked()` на всех ветках возврата арбитра.
-    if REQUIRE_SUPPORT and picked and not focus and not no_arbiter:
+    if REQUIRE_SUPPORT and picked and not guards_skip_for_choice(focus, measure_pick, trusted) and not no_arbiter:
         cand = picked[0]
         if cand != top_by_question:
             ok, top = _alias_verdict(cand)
@@ -8727,21 +8934,24 @@ def _need_clarify(question, slots, why, diag):
             "sources": [], "diag": d}
 
 
-def answer_checked(question, focus=None, measure_pick=None, context="", prior=None):
+def answer_checked(question, focus=None, measure_pick=None, context="", prior=None,
+                   trusted=None):
     """Ответ вместе с шагом «достаточен ли вопрос». Точка входа сервиса.
 
     Порядок п. 21 сохранён: сперва пробуем ответить, уточняем только там, где ответа с
     одним смыслом не существует. Дешёвая половина стоит ДО поиска и экономит весь прогон,
     решающая — ПОСЛЕ счёта, потому что опирается на посчитанные числа.
 
-    🔴 Человек уже уточнял (`focus`, `measure`) — шаг молчит целиком. Иначе его же выбор
-    вернулся бы ему вопросом, и разговор не сходился бы ни на одном круге.
+    🔴 Доказанный выбор (`trusted` из decision_id) — шаг достаточности молчит целиком,
+    иначе тот же выбор вернулся бы вопросом. Сырой focus/measure шаг не гасят (аудит §10),
+    кроме аварийного ASK_RAW_FOCUS_TRUST=1.
     """
     def plain():
         return answer(question, focus=focus, measure_pick=measure_pick, context=context,
-                      prior=prior)
+                      prior=prior, trusted=trusted)
 
-    if not (ENOUGH_ON and serene_enough) or focus or measure_pick:
+    if not (ENOUGH_ON and serene_enough) or guards_skip_for_choice(
+            focus, measure_pick, trusted):
         return plain()
     today = time.strftime("%Y-%m-%d")
     try:
@@ -8830,21 +9040,39 @@ class Handler(BaseHTTPRequestHandler):
         question = (req.get("question") or "").strip()
         if not question:
             return self._send(400, {"error": "empty question"})
-        # `focus` — сущность, выбранная человеком после уточнения (кнопка/слово).
+        # `focus` — подсказка отбора (модель/свободный текст). Доказанный выбор —
+        # только `decision_id` (план §6); сырой focus защиты не гасит.
         focus = (req.get("focus") or "").strip() or None
-        # Выбор величины кнопкой — такой же вход, как `focus`. Без него уточнение о
-        # величине было бы вопросом, на который нечем ответить.
+        # Выбор величины текстом — подсказка; билет меры тоже через decision_id.
         measure_pick = (req.get("measure") or "").strip() or None
         # Предыдущий разговор ведёт OpenClaw; сюда он приходит строкой и
         # используется ТОЛЬКО арбитром. В отбор данных не попадает.
         context = (req.get("context") or "")[:4000]
         # `prior` — канал одного вызова (хук замка), не память сессии.
         prior = (req.get("prior") or "").strip() or None
+        decision_id = (req.get("decision_id") or "").strip() or None
+        user = (req.get("user") or "").strip() or None
+        trusted = None
+        if decision_id:
+            ticket, err = consume_decision(decision_id, question, user=user)
+            if err:
+                return self._send(200, choice_error_response(err, decision_id))
+            # Билет снимает одну неоднозначность: подставляет src/measure из записи.
+            if ticket.get("src"):
+                focus = ticket["src"]
+            if ticket.get("ambiguity") == "measure" and "measure" in ticket:
+                measure_pick = ticket.get("measure") or None
+            if ticket.get("ambiguity") == "axis" and ticket.get("axis"):
+                # ось уже выбрана: focus = держатель (src), axis в trusted
+                focus = ticket.get("src") or focus
+            trusted = ticket
         try:
             # `answer_checked`, а не `answer`: вокруг ответа стоит шаг «достаточен ли
             # вопрос» (05.08). Он же зовёт `answer` внутри, поэтому путь ответа прежний.
             out = answer_checked(question, focus=focus, measure_pick=measure_pick,
-                                 context=context, prior=prior)
+                                 context=context, prior=prior, trusted=trusted)
+            if isinstance(out, dict) and out.get("kind") == "clarify":
+                out = seal_clarify(out, question, user=user)
             # СВЕЖЕСТЬ ДАННЫХ — В КАЖДЫЙ ОТВЕТ (п. 18). Если 1С недоступна или такт падает,
             # корпус остаётся консистентным (защиты сборки), но СТАРЕЕТ, а бот об этом
             # молчал бы. Возраст последнего успешного такта делает старение видимым, а при

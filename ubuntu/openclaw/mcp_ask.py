@@ -75,7 +75,8 @@ def _serve_with_auth(mcp_obj):
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="warning")
 
 
-def _ask(question, focus=None, measure=None, context=None, prior=None):
+def _ask(question, focus=None, measure=None, context=None, prior=None,
+         decision_id=None, user=None):
     payload = {"question": question}
     if focus:
         payload["focus"] = focus
@@ -85,6 +86,10 @@ def _ask(question, focus=None, measure=None, context=None, prior=None):
         payload["context"] = context
     if prior:
         payload["prior"] = prior
+    if decision_id:
+        payload["decision_id"] = decision_id
+    if user:
+        payload["user"] = user
     req = urllib.request.Request(ASK_URL + "/ask",
                                  data=json.dumps(payload).encode("utf-8"),
                                  method="POST")
@@ -227,7 +232,7 @@ _ATOM_PUBLIC = (
     "unit_or_currency", "period", "filters", "grain", "axis", "form",
     "completeness", "freshness", "excluded", "proof_status",
 )
-_OPT_PUBLIC = ("label", "entity_label", "hint", "found", "distinct_by")
+_OPT_PUBLIC = ("label", "entity_label", "hint", "found", "distinct_by", "decision_id")
 
 
 def _atoms_public(atoms):
@@ -353,9 +358,42 @@ def _with_partial(out, data):
     return out + "\n\n" + PARTIAL_HINT + "\n\n" + block
 
 
+
+def _clarify_presentation(opts):
+    """Штатный presentation: кнопки с callback=decision_id (Telegram ≤64 байт).
+
+    WebUI интерактивный presentation не несёт — там текст OPTIONS + свободный ввод
+    (замок 11). Свободный ввод рядом с кнопками остаётся доступным отдельно.
+    """
+    buttons = []
+    for o in opts or []:
+        if not isinstance(o, dict):
+            continue
+        lab = (o.get("label") or o.get("measure") or "").strip()
+        did = (o.get("decision_id") or "").strip()
+        if not lab or not did:
+            continue
+        cb = "ask1c:" + did
+        if len(cb.encode("utf-8")) > 64:
+            continue
+        # OpenClaw: callback_data = "namespace:payload" (interactive-registry).
+        buttons.append({
+            "label": lab,
+            "action": {"type": "callback", "value": "ask1c:" + did},
+        })
+    if not buttons:
+        return None
+    return {
+        "title": None,
+        "tone": "info",
+        "blocks": [{"type": "buttons", "buttons": buttons}],
+    }
+
+
 @mcp.tool()
 def ask_1c(question: str, focus: str = "", measure: str = "",
-           context: str = "", prior: str = "") -> str:
+           context: str = "", prior: str = "", decision_id: str = "",
+           user: str = "") -> str:
     """Ask about data stored in the company's ERP system.
 
     Figures come from the database and are checked before they are returned; pass them
@@ -368,15 +406,18 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
 
     The reply may instead ask to CLARIFY, when the question fits several record types or
     several quantities. Put that question to the user with the options from the tool.
+    Proven human choice after clarify is `decision_id` from the option (not raw focus).
 
     :param question: the user's question, in their own language, about company data.
-    :param focus: the kind of record to count over, as written for people.
+    :param focus: optional record-type hint as written for people (does not prove choice).
     :param measure: quantity name, as written for people.
     :param context: optional background; not used for intent parsing.
+    :param decision_id: one-time ticket from a clarify option (proves the human choice).
+    :param user: optional user id when the channel protocol supplies one.
     """
     try:
         data = _ask(question, focus or None, measure or None, context or None,
-                    prior or None)
+                    prior or None, decision_id or None, user or None)
     except urllib.error.HTTPError as e:
         return ERROR_REPLY.format(detail="HTTP %d" % e.code)
     except Exception as e:                     # noqa: BLE001 — сеть/таймаут
@@ -389,6 +430,13 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     # сказать про сбой, а не про пустую базу, иначе он решит, что данных нет.
     if kind == "unavailable":
         return ERROR_REPLY.format(detail=text[:120] or "unavailable")
+
+    if kind == "choice_error":
+        # Видимая ошибка выбора (просрочен/повтор/чужой) — не общий путь.
+        marker = "[CHOICE ERROR]"
+        body = text or "choice no longer valid"
+        out = body if body.startswith(marker) else (marker + " " + body)
+        return _with_partial(out, data)
 
     if kind == "clarify":
         opts = data.get("options") or []
@@ -409,6 +457,8 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
             if not isinstance(o, dict):
                 continue
             # `measure` заполнено — выбирается величина; иначе выбирается сущность.
+            did = (o.get("decision_id") or "").strip()
+            did_tail = (" | decision_id=%s" % did) if did else ""
             if o.get("measure"):
                 # ⚠ Имя величины остаётся внутренним (`НДСРегл`): это ключ данных, и
                 # человеческого имени у него сегодня нет ниоткуда. Отдельная работа.
@@ -418,16 +468,17 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
                 # `focus` не передаём вовсе: лучше пустое поле, чем внутреннее имя наружу
                 # или, того хуже, имя величины, поданное как сущность.
                 name = o.get("label") or o["measure"]
-                lines.append("- %s | measure=%s | focus=%s"
-                             % (name, name, o.get("entity_label") or ""))
+                lines.append("- %s | measure=%s | focus=%s%s"
+                             % (name, name, o.get("entity_label") or "", did_tail))
             elif o.get("src"):
                 name = o.get("label") or o["src"]
                 # Пояснение стоит РЯДОМ с подписью, но в `focus` не входит: значением
                 # выбора остаётся ровно та строка, которую человек видит подписью, —
                 # длинный `focus` бот копировал бы с ошибками. Пусто — строка прежняя.
                 why = (o.get("hint") or "").strip()
-                lines.append(("- %s — %s | focus=%s" % (name, why, name)) if why
-                             else ("- %s | focus=%s" % (name, name)))
+                base = (("- %s — %s | focus=%s" % (name, why, name)) if why
+                        else ("- %s | focus=%s" % (name, name)))
+                lines.append(base + did_tail)
         out = CLARIFY_HINT
         if text:
             out += "\n\n" + text
@@ -437,6 +488,14 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
         block = _atom_json_block(_atoms_of(data), opts)
         if block:
             out += "\n\n" + block
+        # Telegram: presentation с callback=decision_id (замок 11 — отдельно от WebUI).
+        pres = _clarify_presentation(opts)
+        if isinstance(data, dict) and data.get("presentation") is None and pres:
+            data = dict(data)
+            data["presentation"] = pres
+        if pres:
+            out += "\n\nPRESENTATION_JSON:\n" + json.dumps(
+                pres, ensure_ascii=False, default=str)
         return _with_partial(out, data)
 
     # 🔴 ГЕЙТ ОТКЛОНИЛ ПРОЗУ, ЧИСЛА ПОСЧИТАНЫ. `text` в этой ветке — НЕ ответ: это либо

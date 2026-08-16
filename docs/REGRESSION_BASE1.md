@@ -1,5 +1,19 @@
 ## Замер 16.08 — шаг 2 плана ответов (AnswerAtom + renderer)
 
+## Замер 16.08 — шаг 3 плана ответов (decision_id)
+
+Правка ответа, моста и гейта (`serene_ask.py`, `mcp_ask.py`, verify-plugin):
+одноразовый `decision_id`, сырой focus не гасит три защиты, `kind=choice_error`.
+**Снят ПОСЛЕ последней правки.** Оффлайн: test_gate 130, test_step4_guards 110,
+test_a3_passport 14, test_fork_detector 13, test_answer_atom 18, test_decision_id 24,
+test_mcp_ask 27, test_focus_loop 19, test-verify 95 — все зелёные. Живой `:8097`
+(ut_test, не боевые :8099/:8091): clarify «закупки» с 2 билетами; выбор билетом →
+clarify величины (одна неоднозначность снята); reuse → `choice_error/used`;
+unknown → `choice_error`; сырой focus → clarify. Золотой ab_scorer этим заходом
+не ставился (полный `/ask` с моделью на цепочке clarify→measure→answer дольше
+бюджета сессии; числа гейта оффлайн целы). Регрессии первой базы по оффлайн-замкам
+нет.
+
 Правка ответа и моста (`serene_ask.py`, `mcp_ask.py`, `verify-core.js`): типизированный
 атом, детерминированный renderer, семантический транспорт figures, белый список
 подписей в гейте. **Снят ПОСЛЕ последней правки.** Оффлайн-замки: test_gate 130,
