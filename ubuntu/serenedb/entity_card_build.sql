@@ -103,14 +103,22 @@ LEFT JOIN r                     ON r.src_table = t.src_table;
 -- Имена реквизитов в `card` не входят (см. выше), поэтому их появление и изменение
 -- пересчёта векторов не вызывает: `[замер 04.08]` иначе это 1 502 вектора на пустом
 -- месте — 45 с такта и деньги эмбеддера при том, что смысл карточки не поменялся.
+-- 🔴 СБРОС — ОТДЕЛЬНЫМ UPDATE ДО MERGE, а не `CASE` внутри него: `CASE` над
+-- FLOAT[1024] движок не вычисляет («Unimplemented type for case expression:
+-- FLOAT[1024]» — okna 16.08, после пересборки корпуса, когда ветка MATCHED с
+-- изменением текста сработала впервые при живых векторах). До MERGE сравнение
+-- `t.card IS DISTINCT FROM s.card` ещё осмысленно: старый текст на месте.
+UPDATE search_entity_card AS t SET emb = NULL
+FROM tmp_entity_card AS s
+WHERE t.src_table = s.src_table AND t.card IS DISTINCT FROM s.card;
+
 MERGE INTO search_entity_card AS t
 USING tmp_entity_card AS s
 ON t.src_table = s.src_table
 WHEN MATCHED AND (t.card IS DISTINCT FROM s.card OR t.attrs IS DISTINCT FROM s.attrs) THEN
      UPDATE SET label = s.label, parent = s.parent, aliases = s.aliases,
                 about = s.about, quantities = s.quantities, attrs = s.attrs,
-                card = s.card,
-                emb = CASE WHEN t.card IS DISTINCT FROM s.card THEN NULL ELSE t.emb END
+                card = s.card
 WHEN NOT MATCHED THEN
      INSERT (src_table, label, parent, aliases, about, quantities, attrs, card, emb)
      VALUES (s.src_table, s.label, s.parent, s.aliases, s.about, s.quantities,

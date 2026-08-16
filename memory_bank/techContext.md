@@ -938,3 +938,15 @@ create directory ".tmp": Read-only file system», запрос падает. Н�
 никогда — 62 ГБ RAM, спилла не было. Лечение: `WorkingDirectory=/var/lib/serenedb` в
 юните (drop-in на живых юнитах, внесено в `ubuntu/serenedb/serenedb.service`) — `.tmp`
 ложится рядом с данными, путь уже в `ReadWritePaths`.
+
+## Ловушка 50. `CASE` над `FLOAT[N]` не вычисляется — «Unimplemented type for case expression»
+
+`[замер 16.08, okna-1]` `MERGE ... UPDATE SET emb = CASE WHEN <усл> THEN NULL ELSE t.emb END`
+с колонкой `emb FLOAT[1024]` падает: `Unimplemented type for case expression:
+FLOAT[1024]` (такт, `entity_card_build.sql:117`). Латентно с 04.08 — стрельнуло только
+когда ветка `MATCHED` с изменением текста сработала при живых векторах (первая
+пересборка корпуса после восстановления витрины). Обход — приём `corpus_merge`:
+сброс вектора делается ОТДЕЛЬНЫМ `UPDATE ... SET emb = NULL ... WHERE <усл>` до MERGE
+(пока старое значение ещё на месте), а из `SET` в MERGE колонка с `CASE` убирается.
+Правило: ветвление по массивному типу — не через `CASE`, а через отдельный оператор
+с условием в `WHERE`.
