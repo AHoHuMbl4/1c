@@ -71,6 +71,24 @@ Content-Type: application/json
 взят ответ), `partial` (не `null` — часть данных не дошла, показать оговорку), `diag`
 (служебное; **пользователю не показывать**).
 
+
+🔴 **С 16.08 `kind=answer` и `kind=figures` несут типизированный атом** (план ответов §5,
+аудит §17): поля `atom` (один) и `atoms` (список). Строитель — `build_answer_atom` /
+`atom_from_agg` в `serene_ask.py`. Семантика: `operation`, `exact_value`,
+`display_value`, `measure_id`, `measure_label` (из данных, не проза модели),
+`unit_or_currency` (`unknown`, если единицы нет), `period` (from/to/origin),
+`filters`, `grain`/`axis`/`form`, `completeness`/`freshness`/`excluded`,
+`proof_status` (`computed` / `not_applicable` / `not_computed`). Внутренний `src`
+может быть в атоме сервиса; мост наружу его не отдаёт.
+
+🔴 **Мост `mcp_ask.py` больше не разворачивает `figures` в плоский `ключ=значение`**
+(аудит §8): для модели бота — семантические роли (`operation` / `value` /
+`measure_label` / `unit` / `period` / `proof_status`) и блок `ATOM_JSON` без
+внутренних имён таблиц/полей. Старые маркеры `[FIGURES]`, `[NO DATA]`,
+`[CLARIFICATION NEEDED]`, `OPTIONS` сохранены. Кто читает: бот — роли+текст;
+verify-plugin — числа и подписи из `ATOM_JSON`/OPTIONS (белый список + presentation);
+фронт `/ask` — поля `atom`/`atoms` напрямую.
+
 🔴 **В `figures` величинные ключи бывают `null`, и это НЕ ноль (с 04.08).** `sum`, `min`,
 `max`, `avg` равны `null`, когда считать было нечего: величина не выбрана либо у отобранных
 строк её нет ни в одной (`count_amount = 0`). Прежде на этом месте стоял `0`, и «посчитано,

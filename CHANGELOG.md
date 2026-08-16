@@ -1,5 +1,23 @@
 # Журнал изменений
 
+## 16.08: шаг 2 плана ответов — типизированный AnswerAtom и детерминированный renderer `[код]` `[замер]`
+
+`[код]` `serene_ask.py`: `build_answer_atom` / `atom_from_agg` / `render_atom_pair` /
+`fill_atom_pairs` (план §5, аудит §17). `kind=answer` и `kind=figures` несут
+`atom`/`atoms`; при нескольких парах compose открывает только `{pair:pN}`.
+Классы `diag.fork` — тем же строителем. `mcp_ask.py`: figures больше не
+плоский `ключ=значение` — семантические роли + `ATOM_JSON` без внутренних имён.
+`verify-core.js`: белый список подписей из атома/OPTIONS, проверка presentation.
+Старые маркеры протокола сохранены.
+
+`[замер]` Оффлайн: test_gate 130, test_step4_guards 110, test_a3_passport 14,
+test_fork_detector 13, test_answer_atom 18 (в т.ч. несобираемость перепутанных
+пар), test_mcp_ask 22, test_focus_loop 19, test-verify 90 — все зелёные. Живой
+инстанс `:8097` (отдельно от :8099/:8091): `/health` 200; атом из живого
+aggregate (152, подпись из `search_tables`); мост — роли без плоского KV.
+Полный `/ask` — DeepSeek 402 (как на юнитах дева 16.08). md5: serene_ask
+`3fb1f207…`, mcp_ask `08889203…`, verify-core `cac458bb…`.
+
 ## 16.08: самопроверка трек C — выборка яруса 2 готова, /ask дева стоит на DeepSeek 402 `[замер]`
 
 `[замер]` Рестарт `1c-serene-ask@{ut_test,postgres}`: оба `/health` 200

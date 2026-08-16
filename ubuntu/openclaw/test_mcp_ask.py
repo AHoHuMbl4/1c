@@ -90,6 +90,52 @@ t("no_data + пустой text: формула на месте",
   "there is no such data" in out_empty.lower())
 M._ask = saved_ask
 
+
+# ---------------------------------------------- атом / figures (план §5)
+atom = {
+    "operation": "sum",
+    "exact_value": 1310413.93,
+    "display_value": "1310413.93",
+    "measure_label": "Реализация ТМЦ",
+    "unit_or_currency": "unknown",
+    "period": {"from": "2025-07-01", "to": "2025-07-31", "origin": "prior"},
+    "proof_status": "computed",
+    "src": "document_реализациятмц",  # внутреннее — проверка: в текст бота не попадает
+}
+roles = M._atom_roles_block(atom)
+t("figures: роли — operation/value/measure_label, не плоский sum=",
+  "operation=sum" in roles and "value=1310413.93" in roles
+  and "measure_label=Реализация ТМЦ" in roles
+  and "sum=" not in roles)
+t("figures: src атома в ролях нет",
+  "document_реализациятмц" not in roles and "src=" not in roles)
+
+saved_ask = M._ask
+M._ask = lambda *a, **k: {
+    "kind": "figures", "text": "refuse",
+    "figures": {"sum": 1310413.93, "count": 19, "label": "X"},
+    "atom": atom, "atoms": [atom],
+}
+out_fig = M.ask_1c("q")
+t("figures: маркер FIGURES на месте (протокол цел)",
+  "[FIGURES]" in out_fig)
+t("figures: семантические роли, не key=value из figures",
+  "measure_label=Реализация ТМЦ" in out_fig
+  and "value=1310413.93" in out_fig
+  and "sum=1310413.93" not in out_fig
+  and "count=19" not in out_fig)
+t("figures: ATOM_JSON есть, внутреннего src нет",
+  "ATOM_JSON:" in out_fig and "document_реализациятмц" not in out_fig)
+t("figures: плоский figures без атома не разворачивается в KV",
+  True)  # ветка ниже
+M._ask = lambda *a, **k: {"kind": "figures", "text": "refuse",
+                          "figures": {"sum": 99, "count": 1}}
+out_legacy = M.ask_1c("q")
+t("figures без атома: нет плоского sum=/count= (аудит §8)",
+  "sum=99" not in out_legacy and "count=1" not in out_legacy
+  and "[FIGURES]" in out_legacy)
+M._ask = saved_ask
+
 print("\n%d проверок пройдено" % PASS)
 if FAIL:
     print("ПРОВАЛЕНО %d: %s" % (len(FAIL), "; ".join(FAIL)))

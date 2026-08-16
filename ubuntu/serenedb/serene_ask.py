@@ -2768,6 +2768,251 @@ def compose_slot_values(agg, measure=None, folders=0, money=None, slot_mode=None
     return slots
 
 
+# ═══════════════ AnswerAtom + детерминированный renderer (план §5, аудит §17) ═══════════════
+# Одно кодовое место собирает атом; пара «подпись + число + единица + оговорка» —
+# одной операцией `render_atom_pair`. Модель не получает значений и не пишет подписи:
+# при нескольких парах в задании только `{pair:p0}`… — код подставляет пару целиком.
+# Перепутанные подписи фразу не собирают: API смешать label одного атома с value другого отсутствует.
+UNIT_UNKNOWN = "unknown"                       # явная «единица неизвестна» (машинный маркер)
+PROOF_COMPUTED = "computed"
+PROOF_NA = "not_applicable"
+PROOF_UNCOUNTED = "not_computed"
+_ATOM_OPS = frozenset({"count", "sum", "max", "min", "avg", "rank", "compare", "list"})
+
+
+def atom_operation(want=None, compute=None, form=None, grain=None, slot_mode=None):
+    """Операция атома из уже принятых решений формы (не из прозы модели)."""
+    sm = slot_mode or answer_slot_mode(want, compute, form, grain)
+    if sm == "count":
+        return "count"
+    if sm == "rank":
+        return "compare" if (form or "").lower() == "compare" else "rank"
+    if sm == "sum":
+        c = (compute or "").lower()
+        if c in ("max", "min", "avg"):
+            return c
+        return "sum"
+    return "list"
+
+
+def _atom_exact_value(agg, operation, money):
+    """Точное значение базы для операции; без float-схлопывания сверх round в _fmt."""
+    if not agg:
+        return None
+    if operation == "count":
+        return agg.get("count")
+    if operation in ("max", "min", "avg"):
+        return agg.get(operation)
+    if operation in ("sum", "rank", "compare"):
+        if money and agg.get("sum") is not None:
+            return agg.get("sum")
+        return agg.get("count")
+    # list
+    if money and agg.get("sum") is not None:
+        return agg.get("sum")
+    return agg.get("count")
+
+
+def build_answer_atom(operation=None, exact_value=None, display_value=None,
+                      measure_id=None, measure_label=None,
+                      unit_or_currency=None, period=None, filters=None,
+                      grain=None, axis=None, form=None,
+                      completeness=None, freshness=None, excluded=None,
+                      proof_status=None, interpretation_id=None, src=None):
+    """Типизированный AnswerAtom (аудит §17). Одно место сборки.
+
+    `measure_label` — проверенная человеческая подпись из данных
+    (`search_measure_alias` / `search_tables`), не проза модели.
+    `unit_or_currency` пуст → явный маркер `unknown`.
+    `src` — доказательство/пересчёт; в клиентское сравнение A не входит.
+    """
+    op = (operation or "count").lower()
+    if op not in _ATOM_OPS:
+        op = "count"
+    status = proof_status or (
+        PROOF_COMPUTED if exact_value is not None else PROOF_UNCOUNTED)
+    unit = unit_or_currency if unit_or_currency is not None else UNIT_UNKNOWN
+    if not str(unit).strip():
+        unit = UNIT_UNKNOWN
+    disp = display_value
+    if disp is None and exact_value is not None:
+        disp = _fmt(exact_value)
+    atom = {
+        "operation": op,
+        "exact_value": exact_value,
+        "display_value": disp,
+        "measure_id": (measure_id or None),
+        "measure_label": (measure_label or "").strip() or None,
+        "unit_or_currency": unit,
+        "period": period or None,
+        "filters": filters or None,
+        "grain": grain or None,
+        "axis": axis or None,
+        "form": form or None,
+        "completeness": completeness or None,
+        "freshness": freshness or None,
+        "excluded": excluded or None,
+        "proof_status": status,
+    }
+    if interpretation_id:
+        atom["interpretation_id"] = interpretation_id
+    if src:
+        atom["src"] = src
+    return atom
+
+
+def atom_from_agg(agg, operation=None, measure_id=None, measure_label=None,
+                  money=True, period=None, period_origin="", filters=None,
+                  grain=None, axis=None, form=None, completeness=None,
+                  freshness=None, excluded=None, proof_status=None,
+                  interpretation_id=None, src=None, folders=0):
+    """Собрать атом из уже посчитанного `agg` и меток из данных."""
+    op = (operation or "count").lower()
+    if op not in _ATOM_OPS:
+        op = "count"
+    exact = _atom_exact_value(agg, op, money)
+    excl = dict(excluded or {}) if excluded else {}
+    nfold = folders if folders else ((agg or {}).get("folders") or 0)
+    if nfold and "folders" not in excl:
+        excl["folders"] = nfold
+    if (agg or {}).get("undated") and "undated" not in excl:
+        excl["undated"] = agg["undated"]
+    if (agg or {}).get("outside_period") and "outside_period" not in excl:
+        excl["outside_period"] = agg["outside_period"]
+    per = None
+    if period and (period.get("from") or period.get("to")):
+        per = {"from": period.get("from") or None,
+               "to": period.get("to") or None,
+               "origin": period_origin or None}
+    elif (agg or {}).get("date_min") or (agg or {}).get("date_max"):
+        per = {"from": (agg or {}).get("date_min") or None,
+               "to": (agg or {}).get("date_max") or None,
+               "origin": period_origin or None}
+    status = proof_status
+    if status is None:
+        status = PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED
+    return build_answer_atom(
+        operation=op, exact_value=exact, measure_id=measure_id,
+        measure_label=measure_label, unit_or_currency=UNIT_UNKNOWN,
+        period=per, filters=filters,
+        grain=grain or (agg or {}).get("grain"),
+        axis=axis, form=form or (agg or {}).get("form"),
+        completeness=completeness, freshness=freshness,
+        excluded=excl or None, proof_status=status,
+        interpretation_id=interpretation_id, src=src)
+
+
+def render_atom_pair(atom):
+    """Пара «подпись + число + единица + оговорка полноты» — ОДНОЙ операцией.
+
+    Нет API «подпись отдельно + число отдельно»: смешать label чужого атома с value
+    своего нет: такого API нет. Непосчитанный атом пары не даёт (None) — фраза не собирается.
+    """
+    if not isinstance(atom, dict):
+        return None
+    if atom.get("proof_status") == PROOF_UNCOUNTED:
+        return None
+    if atom.get("exact_value") is None and atom.get("display_value") is None:
+        return None
+    label = (atom.get("measure_label") or "").strip()
+    value = atom.get("display_value")
+    if value is None:
+        value = _fmt(atom.get("exact_value"))
+    unit = atom.get("unit_or_currency") or UNIT_UNKNOWN
+    parts = []
+    if label:
+        parts.append("%s: %s" % (label, value))
+    else:
+        parts.append(str(value))
+    if unit and unit != UNIT_UNKNOWN:
+        parts.append(str(unit))
+    elif unit == UNIT_UNKNOWN:
+        parts.append("(%s)" % UNIT_UNKNOWN)
+    excl = atom.get("excluded") or {}
+    if isinstance(excl, dict) and excl:
+        notes = []
+        if excl.get("folders"):
+            notes.append("folders=%s" % _fmt(excl["folders"]))
+        if excl.get("undated"):
+            notes.append("undated=%s" % _fmt(excl["undated"]))
+        if excl.get("outside_period"):
+            notes.append("outside_period=%s" % _fmt(excl["outside_period"]))
+        if notes:
+            parts.append("· " + ", ".join(notes))
+    comp = atom.get("completeness")
+    if isinstance(comp, dict) and comp.get("missing"):
+        parts.append("· missing=%s" % _fmt(comp["missing"]))
+    return " ".join(parts)
+
+
+def fill_atom_pairs(text, pairs):
+    """Подставить `{pair:p0}`… целыми парами. Одиночного числа/подписи здесь нет.
+
+    Нераспознанный индекс или непосчитанный атом — отказ места (как у `_fill_figures`):
+    заготовка человеку не уходит.
+    """
+    if not text:
+        return text, []
+    bad = []
+    catalog = list(pairs or [])
+
+    def one(mt):
+        role, name = mt.group(1).lower(), (mt.group(2) or "").strip()
+        if role != "pair":
+            return mt.group(0)
+        idx = None
+        if name.lower().startswith("p") and name[1:].isdigit():
+            idx = int(name[1:])
+        elif name.isdigit():
+            idx = int(name)
+        if idx is None or idx < 0 or idx >= len(catalog):
+            bad.append(mt.group(0))
+            return mt.group(0)
+        rendered = render_atom_pair(catalog[idx])
+        if not rendered:
+            bad.append(mt.group(0))
+            return mt.group(0)
+        return rendered
+
+    return SLOT.sub(one, text), bad
+
+
+def pair_slots_only(n_pairs):
+    """При нескольких парах одиночные числовые места закрыты структурно."""
+    return int(n_pairs or 0) > 1
+
+
+def atom_whitelist_labels(atoms):
+    """Подписи из данных, разрешённые гейту/verify (как метки вариантов уточнения)."""
+    out = []
+    for a in atoms or []:
+        if not isinstance(a, dict):
+            continue
+        lab = (a.get("measure_label") or "").strip()
+        if lab:
+            out.append(lab)
+    return out
+
+
+def atom_whitelist_numbers(atoms):
+    """Числа пар для белого списка гейта — только из атомов, не из прозы."""
+    out = []
+    for a in atoms or []:
+        if not isinstance(a, dict):
+            continue
+        if a.get("exact_value") is not None:
+            out.append(a["exact_value"])
+        excl = a.get("excluded") or {}
+        if isinstance(excl, dict):
+            for k in ("folders", "undated", "outside_period"):
+                if excl.get(k) is not None:
+                    out.append(excl[k])
+        comp = a.get("completeness") or {}
+        if isinstance(comp, dict) and comp.get("missing") is not None:
+            out.append(comp["missing"])
+    return out
+
+
 def arbiter_figures(sub):
     """Отпечаток кандидата = его `figures`, уже собранные как плейсхолдеры compose."""
     f = dict((sub or {}).get("figures") or {})
@@ -4140,6 +4385,18 @@ def ensure_answer_passport(text, frag):
     return (t + " · " + frag.strip()).strip()
 
 
+def measure_label_of(src_table, measure):
+    """Проверенная человеческая подпись величины из данных (alias / разбор имени).
+
+    Не проза модели: `measure_captions` + `measure_aliases_of`, как варианты уточнения.
+    Пустая величина — метка источника (`_table_label`), иначе операция без подписи.
+    """
+    if not measure:
+        return _table_label(src_table) or None
+    caps = measure_captions([measure], measure_aliases_of(src_table) if src_table else {})
+    return (caps.get(measure) or split_ident(measure) or measure).strip() or None
+
+
 def _table_label(src_table):
     """Человеческая метка источника из search_tables. Пусто — не подставлять src."""
     if not src_table:
@@ -4313,7 +4570,8 @@ def _ask_back(raw):
 
 
 def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
-            measure_used=None, folders=None, money=True, src=None, slot_mode=None):
+            measure_used=None, folders=None, money=True, src=None, slot_mode=None,
+            atom_pairs=None):
     payload = []
     shown = rows[:ROWS_TO_MODEL]
     # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
@@ -4321,6 +4579,8 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
     per_row = max(320, ROWS_BUDGET // max(1, len(shown)))
     if slot_mode is None:
         slot_mode = "rank" if (agg or {}).get("grain") == "group" else "list"
+    # При нескольких парах одиночные числовые места закрыты структурно (план §5).
+    pairs_only = pair_slots_only(len(atom_pairs or []))
     for r in shown:
         # Строка, не влезшая в бюджет, помечается обрезанной. Прежде она обрывалась молча,
         # и модель цитировала обрубок как целое значение — «ООО Ромашка-Тор» вместо
@@ -4349,12 +4609,18 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
             head_line = ("GROUPS (one row = one value of the grouping axis; totals are "
                          "computed in the database over all matching records, not a "
                          "single line):")
+        elif pairs_only:
+            head_line = ("GROUPS (one row = one value of the grouping axis; totals are "
+                         "computed in the database over all matching records, not a "
+                         "single line):")
         else:
             head_line = ("GROUPS (one row = one value of the grouping axis; totals are "
                          "computed in the database over all matching records, not a single "
                          "line — the number of records is {count}):")
     else:
-        if agg and slot_mode in ("sum", "rank"):
+        if pairs_only:
+            head_line = ("ROWS (examples from the matching set, not the whole of it):")
+        elif agg and slot_mode in ("sum", "rank"):
             head_line = ("ROWS (examples from the matching set, not the whole of it):")
         else:
             head_line = ("ROWS (examples from the matching set, not the whole of it — the number "
@@ -4362,7 +4628,9 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
     body = "QUESTION: %s\n\n%s\n%s" % (
         question, head_line, "\n".join("- " + p for p in payload))
     # Стоп 1: места групп — rank/list. На sum только безымянный {total}=итог множества.
-    if agg and agg.get("grain") == "group" and slot_mode in ("rank", "list"):
+    # При нескольких парах одиночные числовые места закрыты (план §5).
+    if (not pairs_only and agg and agg.get("grain") == "group"
+            and slot_mode in ("rank", "list")):
         for i, g in enumerate((agg.get("groups") or [])[:ROWS_TO_MODEL]):
             nm = (g.get("name") or "").strip()
             if nm:
@@ -4389,7 +4657,15 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
     # стороны) моделью и должна копироваться, это не арифметика, а выписка.
     has_money = bool(money) and bool(agg) and (
         agg.get("sum") or agg.get("max") or agg.get("min"))
-    if agg and not has_money:
+    if pairs_only:
+        # Несколько пар: модель видит только непрозрачные места {pair:pN}.
+        # Подпись и число подставляет код одной операцией — перепутать роли нечем.
+        body += ("\n\nCOMPUTED ANSWER PAIRS. Values and labels are not shown; each "
+                 "placeholder below is replaced by the system with the whole pair "
+                 "(label + value + unit + completeness note):")
+        for i, _a in enumerate(atom_pairs or []):
+            body += "\n  pair %d -> {pair:p%d}" % (i, i)
+    elif agg and not has_money:
         # Нет выбранного поля (A2: want=count|list) или нет денежной колонки.
         # Передать sum=0 нельзя: модель ответит «0», и гейт согласится.
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS. The values are not shown; each "
@@ -4446,7 +4722,7 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
                      "only some are listed above) -> {n_groups}")
         if agg.get("date_min"):
             body += "\n  period                    -> {date_min} .. {date_max}"
-    if totals and money:
+    if totals and money and not pairs_only:
         # Итоги по каждой величине — с ИМЕНАМИ из базы, но опять же без значений. Модель
         # сама возьмёт подходящую под вопрос величину; списать её итог ей неоткуда.
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS, by quantity name — values not "
@@ -6642,8 +6918,24 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     for c in cands}
             _rows = fork_scan(match, preds, _rel)
             _cls = fork_classes(_rows)
-            _atoms = [{"atom": [["%s" % k, v] for k, v in atom], "srcs": sorted(ss)}
-                      for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1]))]
+            # Классы несут атомы того же строителя (план §5); ключ класса — прежний
+            # типизированный отпечаток (count/folders/sums), без src.
+            _atoms = []
+            for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
+                d0 = _rows.get(sorted(ss)[0]) or {"count": 0, "folders": 0, "sums": {}}
+                # Первая величина словаря — мера контекста; подпись из данных, не проза.
+                _mid = next(iter(sorted(d0.get("sums") or {})), None)
+                _lab = (measure_label_of(sorted(ss)[0], _mid) if _mid
+                        else measure_label_of(sorted(ss)[0], None))
+                _built = build_answer_atom(
+                    operation=("sum" if _mid else "count"),
+                    exact_value=(d0["sums"][_mid] if _mid else d0["count"]),
+                    measure_id=_mid, measure_label=_lab,
+                    excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
+                    proof_status=PROOF_COMPUTED)
+                _atoms.append({"atom": _built,
+                               "fingerprint": [["%s" % k, v] for k, v in atom],
+                               "srcs": sorted(ss)})
             diag["fork"] = {"classes": len(_cls),
                             "srcs": sum(len(v) for v in _cls.values()),
                             "atoms": _atoms[:10],
@@ -8047,9 +8339,24 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     say_measure = measure if money else None
     n_folders = (agg or {}).get("folders") or 0
     totals_shown = [] if (agg or {}).get("grain") == "group" else (totals if money else [])
+    # Атом ответа — тем же строителем, что уходит в kind=answer/figures (план §5).
+    _answer_pairs = [atom_from_agg(
+        agg, operation=atom_operation(
+            intent.get("want"), plan.get("compute"),
+            form=_form, grain=_grain, slot_mode=slot_mode),
+        measure_id=(say_measure or measure or None),
+        measure_label=measure_label_of(src, say_measure or measure),
+        money=money,
+        period=(None if diag.get("period_assumed_dropped")
+                else (intent or {}).get("period")),
+        period_origin=_passport_origin(intent, diag),
+        grain=_grain, form=_form,
+        axis=_passport_axis_label(
+            (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
+        completeness=cov, folders=n_folders, src=src)]
     raw = compose(question, rows, agg, totals=totals_shown, coverage=cov,
                   measure_used=say_measure, folders=n_folders, money=money, src=src,
-                  slot_mode=slot_mode)
+                  slot_mode=slot_mode, atom_pairs=_answer_pairs)
     text, claims = _split_answer(raw)
     ask_back = _ask_back(raw)
     # Рукопись ищется ДО подстановки: после неё посчитанное число стоит в тексте законно,
@@ -8066,6 +8373,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         cov_slots["count_kind"] = kw_src
     text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots,
                                       slot_mode=slot_mode)
+    # Пары атомов: {pair:pN} → целая пара одной операцией (план §5).
+    if _answer_pairs:
+        text, pair_bad = fill_atom_pairs(text, _answer_pairs)
+        slots_bad = list(slots_bad) + list(pair_bad)
     text = ensure_n_groups_named(text, agg)
     # Паспорт набора решений — кодом, после цифр, до гейта (как n_groups). Слой 1
     # видимости: ISO фильтра + метки базы; счёт не меняет. clarify/no_data — ниже.
@@ -8122,11 +8433,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["retry"] = bad[:3]
         raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals_shown,
                        coverage=cov, measure_used=say_measure, folders=n_folders,
-                       money=money, src=src, slot_mode=slot_mode)
+                       money=money, src=src, slot_mode=slot_mode,
+                       atom_pairs=_answer_pairs)
         text2, claims2 = _split_answer(raw2)
         by_hand2 = copied_figures(text2, agg, rows)
         text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, money, cov_slots,
-                                            slot_mode=slot_mode)
+                                           slot_mode=slot_mode)
+        if _answer_pairs:
+            text2, pair_bad2 = fill_atom_pairs(text2, _answer_pairs)
+            slots_bad2 = list(slots_bad2) + list(pair_bad2)
         text2 = ensure_n_groups_named(text2, agg)
         _pass_frag2, pass_fields2 = build_answer_passport(
             period=(intent or {}).get("period"),
@@ -8186,11 +8501,26 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                          folders=n_folders, money=money,
                                          slot_mode=slot_mode)
             _figs.update(pass_fields or {})
+            # Типизированный атом (план §5): kind=figures несёт тот же строитель, что answer.
+            _atom = atom_from_agg(
+                agg, operation=atom_operation(
+                    intent.get("want"), plan.get("compute"),
+                    form=_form, grain=_grain, slot_mode=slot_mode),
+                measure_id=(say_measure or measure or None),
+                measure_label=measure_label_of(src, say_measure or measure),
+                money=money,
+                period=(None if diag.get("period_assumed_dropped")
+                        else (intent or {}).get("period")),
+                period_origin=_passport_origin(intent, diag),
+                grain=_grain, form=_form,
+                axis=_passport_axis_label(
+                    (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
+                completeness=cov, folders=n_folders, src=src)
             return {"partial": cut or None, "kind": "figures", "text": (TOTAL_TEXT.format(
                         count=agg["count"], sum=_fmt(agg["sum"]))
                         if (TOTAL_TEXT and agg.get("sum") is not None)
                         else refuse_text(question)),
-                    "figures": _figs,
+                    "figures": _figs, "atom": _atom, "atoms": [_atom],
                     "sources": [src.split("_", 1)[1] if "_" in src else src],
                     "completeness": cov,
                     "diag": dict(diag, gate_rejected=bad[:6])}
@@ -8262,6 +8592,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                 folders=n_folders, money=money,
                                 slot_mode=slot_mode)
     _figs.update(pass_fields or {})
+    # Типизированный атом (план §5 / аудит §17): одно место сборки, renderer отдельно.
+    _atom = atom_from_agg(
+        agg, operation=atom_operation(
+            intent.get("want"), plan.get("compute"),
+            form=_form, grain=_grain, slot_mode=slot_mode),
+        measure_id=(say_measure or measure or None),
+        measure_label=measure_label_of(src, say_measure or measure),
+        money=money,
+        period=(None if diag.get("period_assumed_dropped")
+                else (intent or {}).get("period")),
+        period_origin=_passport_origin(intent, diag),
+        grain=_grain, form=_form,
+        axis=_passport_axis_label(
+            (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
+        completeness=cov, folders=n_folders, src=src)
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
             "completeness": cov, "measure": say_measure,
             # 🔴 ПОСЧИТАННЫЕ ЧИСЛА — ПОЛЕМ ОТВЕТА, А НЕ ТОЛЬКО ВНУТРИ ТЕКСТА (03.08).
@@ -8270,7 +8615,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # Разбор текста здесь был бы догадкой (п. 12) и ломался бы на каждом языке
             # ответа. Ветка уточнения отдаёт это поле с самого начала — теперь форма одна.
             # Паспорт набора (from/to/label/measure) — в figures тем же слоем видимости.
-            "figures": _figs,
+            "figures": _figs, "atom": _atom, "atoms": [_atom],
             "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 

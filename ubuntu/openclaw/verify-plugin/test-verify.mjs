@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, evaluate, extractText, finalizeDecision, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseClarifyOptions, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, evaluate, extractText, finalizeDecision, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -482,6 +482,46 @@ t("clarify: слот не ставит prior", () => {
   assert.strictEqual(action, "slot");
   assert.strictEqual(params.question, LOCK_Q);
   assert.strictEqual(params.prior || "", "");
+});
+
+// --- атом: подписи и presentation (план §5) ---
+t("atom: parseAtomJson достаёт atoms/options", () => {
+  const raw = "hello\\nATOM_JSON:\\n" + JSON.stringify({
+    atoms: [{ measure_label: "Реализация ТМЦ", exact_value: 100 }],
+    options: [{ label: "Книга продаж" }],
+  });
+  const p = parseAtomJson(raw);
+  assert.ok(p);
+  assert.strictEqual(p.atoms[0].measure_label, "Реализация ТМЦ");
+  assert.strictEqual(p.options[0].label, "Книга продаж");
+});
+
+t("atom labels whitelist: presentation из данных — allow", () => {
+  const tool = "[FIGURES]\\n- value=100\\nATOM_JSON:\\n" + JSON.stringify({
+    atoms: [{ measure_label: "Реализация ТМЦ", exact_value: 100, display_value: "100" }],
+    options: [],
+  });
+  const r = mergeRef(null, tool, 1000, ND);
+  assert.ok(r.labels.has(normClarifyKey("Реализация ТМЦ")));
+  const d = evaluate("Итого 100.", r, null, {}, {
+    buttons: [{ label: "Реализация ТМЦ" }],
+  });
+  assert.strictEqual(d.action, "allow");
+});
+
+t("atom labels whitelist: чужая подпись presentation — replace", () => {
+  const tool = "ATOM_JSON:\\n" + JSON.stringify({
+    atoms: [{ measure_label: "Реализация ТМЦ", exact_value: 100, display_value: "100" }],
+  });
+  const r = mergeRef(null, tool, 1000, ND);
+  const d = evaluate("Итого 100.", r, null, {}, {
+    buttons: [{ label: "Выдуманная подпись" }],
+  });
+  assert.strictEqual(d.action, "replace");
+});
+
+t("presentationAllowed: пустой presentation — true", () => {
+  assert.strictEqual(presentationAllowed(null, new Set(["a"])), true);
 });
 
 console.log(`\n${pass} tests passed`);

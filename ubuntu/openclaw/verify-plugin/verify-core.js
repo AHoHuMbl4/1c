@@ -138,6 +138,8 @@ const LEAK_LINE_RES = [
   // перескажет их дословно, они уйдут человеку. Добавлять сюда обязательно тем же заходом,
   // что и в мост, — иначе новый маркер утекает клиенту молча.
   /^.*\[(?:НЕТ ДАННЫХ|ОТЧЁТ НЕ ВЫПОЛНЕН|ОШИБКА|NO DATA|CLARIFICATION NEEDED|SERVICE ERROR|FIGURES|PARTIAL)[^\]]*\].*$/gim,
+  /^.*\bATOM_JSON:\b.*$/gim,
+  /^FIGURES:\s*$/gim,
 ];
 // 🔴 ВНУТРЕННИЕ ИМЕНА ИСТОЧНИКОВ ИЗ БЛОКА ВАРИАНТОВ. Мост собирает уточнение машинным
 // форматом `- <метка> | measure=<величина> | focus=<src_table>` (`mcp_ask.py`), где
@@ -344,16 +346,100 @@ export function withoutListMarkers(text) {
     .replace(INLINE_MARKER_RE, "$1 ");
 }
 
+// ATOM_JSON из моста: атомы и options структурой (план §5). Подписи — из данных.
+export function parseAtomJson(text) {
+  const s = String(text || "");
+  const i = s.indexOf("ATOM_JSON:");
+  if (i < 0) return null;
+  const rest = s.slice(i + "ATOM_JSON:".length).trim();
+  const start = rest.indexOf("{");
+  if (start < 0) return null;
+  // Сбалансированный объект с начала JSON.
+  let depth = 0, end = -1;
+  for (let k = start; k < rest.length; k++) {
+    const ch = rest[k];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) { end = k; break; }
+    }
+  }
+  if (end < 0) return null;
+  try {
+    return JSON.parse(rest.slice(start, end + 1));
+  } catch {
+    return null;
+  }
+}
+
+export function atomLabels(payload) {
+  const out = new Set();
+  if (!payload || typeof payload !== "object") return out;
+  for (const a of (payload.atoms || [])) {
+    if (!a || typeof a !== "object") continue;
+    const lab = String(a.measure_label || "").trim();
+    if (lab) out.add(normClarifyKey(lab));
+  }
+  for (const o of (payload.options || [])) {
+    if (!o || typeof o !== "object") continue;
+    for (const k of ["label", "entity_label", "measure"]) {
+      const lab = String(o[k] || "").trim();
+      if (lab) out.add(normClarifyKey(lab));
+    }
+  }
+  return out;
+}
+
+export function presentationLabels(presentation) {
+  const out = [];
+  if (!presentation) return out;
+  const buttons = presentation.buttons || presentation.options || presentation;
+  if (!Array.isArray(buttons)) return out;
+  for (const b of buttons) {
+    if (typeof b === "string") out.push(b);
+    else if (b && typeof b === "object")
+      out.push(b.label || b.text || b.title || "");
+  }
+  return out.filter(Boolean);
+}
+
+/** Подписи presentation сверяются с белым списком данных (атом/options). */
+export function presentationAllowed(presentation, allowedNormKeys) {
+  const labels = presentationLabels(presentation);
+  if (!labels.length) return true;
+  if (!allowedNormKeys || !allowedNormKeys.size) return false;
+  return labels.every((lab) => allowedNormKeys.has(normClarifyKey(lab)));
+}
+
 export function mergeRef(prev, text, nowMs, noDataMarker, clarifyMarker, serviceErrorMarker) {
   const digits = numericTokens(text, 1); // все цифровые токены эталона; порог применяем на исходящем
   const blob = digitBlob(text);
   const isND = String(text).includes(noDataMarker);
   const isCl = isClarify(text, clarifyMarker);
   const isSE = isServiceError(text, serviceErrorMarker);
+  const payload = parseAtomJson(text);
+  const labels = atomLabels(payload);
+  // Числа из атомов — в белый список наравне с текстом моста (пара целиком из данных).
+  if (payload && Array.isArray(payload.atoms)) {
+    for (const a of payload.atoms) {
+      if (!a || typeof a !== "object") continue;
+      for (const v of [a.exact_value, a.display_value]) {
+        if (v == null) continue;
+        for (const t of numericTokens(String(v), 1)) digits.add(t);
+      }
+    }
+  }
+  // Подписи вариантов уточнения из текстового протокола OPTIONS — тоже в белый список.
+  for (const opt of parseClarifyOptions(text)) {
+    if (opt.label) labels.add(normClarifyKey(opt.label));
+  }
   if (!prev) {
-    return { at: nowMs, text: String(text), digits, blob, noData: isND, clarify: isCl, svcError: isSE };
+    return { at: nowMs, text: String(text), digits, blob, noData: isND, clarify: isCl,
+             svcError: isSE, labels };
   }
   for (const d of digits) prev.digits.add(d);
+  const mergedLabels = prev.labels || new Set();
+  for (const l of labels) mergedLabels.add(l);
   return {
     at: nowMs,
     text: prev.text ? prev.text + "\n" + String(text) : String(text),
@@ -364,6 +450,7 @@ export function mergeRef(prev, text, nowMs, noDataMarker, clarifyMarker, service
     clarify: Boolean(prev.clarify || isCl),
     // хоть один вызов упал — про сбой надо сказать честно, а не выдать за пустоту (п. 18)
     svcError: Boolean(prev.svcError || isSE),
+    labels: mergedLabels,
   };
 }
 
@@ -455,8 +542,24 @@ export function finalizeDecision(answer, ref, inb, cfg, haveRef) {
 //   { action: "allow" }                     — отдать «живой» ответ как есть
 //   { action: "replace", content: str }     — заменить (обоснованным ответом braine / «нет данных»)
 //   { action: "cancel", reason: str }       — не отправлять вовсе
-export function evaluate(content, ref, inb, cfg) {
+export function evaluate(content, ref, inb, cfg, presentation) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
+  if (!content && !presentation) return { action: "allow" };
+
+  // Presentation-кнопки: подписи сверяются с белым списком данных (атом/options).
+  if (presentation && ref && ref.labels && ref.labels.size) {
+    if (!presentationAllowed(presentation, ref.labels)) {
+      return { action: "replace", content: ref.text || c.unverifiedReply,
+               reason: "presentation label outside data whitelist" };
+    }
+  } else if (presentation && ref && (!ref.labels || !ref.labels.size)) {
+    const labs = presentationLabels(presentation);
+    if (labs.length) {
+      return { action: "replace", content: ref.text || c.unverifiedReply,
+               reason: "presentation without label whitelist" };
+    }
+  }
+
   if (!content) return { action: "allow" };
 
   // С эталоном сверяем всё, без эталона — только то, что похоже на факт. Нумерация

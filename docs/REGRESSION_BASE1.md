@@ -1,3 +1,18 @@
+## Замер 16.08 — шаг 2 плана ответов (AnswerAtom + renderer)
+
+Правка ответа и моста (`serene_ask.py`, `mcp_ask.py`, `verify-core.js`): типизированный
+атом, детерминированный renderer, семантический транспорт figures, белый список
+подписей в гейте. **Снят ПОСЛЕ последней правки.** Оффлайн-замки: test_gate 130,
+test_step4_guards 110, test_a3_passport 14, test_fork_detector 13, test_answer_atom 18,
+test_mcp_ask 22, test_focus_loop 19, test-verify 90 — все зелёные. Живой контур на
+отдельном инстансе `:8097` (не :8099/:8091): `/health` 200, корпус ut_test 623 565;
+атом собран из живого `aggregate` (catalog_банковскиесчетаконтрагентов → count=152,
+measure_label из `search_tables`); мост отдаёт `operation`/`value`/`measure_label`,
+без плоского `count=`/`sum=` и без `src`. Полный `/ask` на этом инстансе — 503
+(DeepSeek 402 Payment Required, тот же класс, что CHANGELOG 16.08 по юнитам дева);
+золотой ab_scorer этим заходом не ставился. Регрессии первой базы по числам гейта
+нет (оффлайн); эталон 06.08 по эмбеддеру этим шагом не перекрыт.
+
 ## Замер 15.08 — шаг 1 плана ответов (A3 + детектор + fail-closed)
 
 Правка ответа (`serene_ask.py`, коммиты 0d50ca1 и далее): типизированный

@@ -142,11 +142,144 @@ def _num(v):
 
 
 def _kv_block(label, d):
-    """Плоский блок `ключ=значение` — машинный, без прозы: язык клиента неизвестен."""
+    """Плоский блок `ключ=значение` — только для PARTIAL-потерь, не для figures.
+
+    Для `kind=figures` плоский словарь не используется (аудит §8–§9, план §5): иначе вторая модель
+    снова назначала бы ролям смысл. Числа ответа уходят семантическими ролями атома.
+    """
     if not isinstance(d, dict):
         return ""
     lines = ["- %s=%s" % (k, _num(v)) for k, v in d.items() if v is not None]
     return ("%s:\n%s" % (label, "\n".join(lines))) if lines else ""
+
+
+def _period_line(period):
+    if not isinstance(period, dict):
+        return ""
+    pf = str(period.get("from") or "").strip()
+    pt = str(period.get("to") or "").strip()
+    if not pf and not pt:
+        return ""
+    window = "%s..%s" % (pf, pt) if (pf and pt) else (pf or pt)
+    origin = str(period.get("origin") or "").strip()
+    return ("%s %s" % (window, origin)).strip() if origin else window
+
+
+def _atom_roles_block(atom, index=None):
+    """Текст для модели бота из атома: явные семантические роли, не плоский словарь.
+
+    Роли фиксированы кодом (operation / value / measure_label / unit / period /
+    completeness / proof_status). Переназначить «число к чужой подписи» нечем.
+    """
+    if not isinstance(atom, dict):
+        return ""
+    lines = []
+    if index is not None:
+        lines.append("pair=p%d" % index)
+    op = atom.get("operation")
+    if op:
+        lines.append("operation=%s" % op)
+    # value — display_value (уже отформатирован строителем), иначе exact
+    val = atom.get("display_value")
+    if val is None and atom.get("exact_value") is not None:
+        val = _num(atom["exact_value"])
+    if val is not None:
+        lines.append("value=%s" % val)
+    lab = (atom.get("measure_label") or "").strip()
+    if lab:
+        lines.append("measure_label=%s" % lab)
+    unit = atom.get("unit_or_currency")
+    if unit is not None and str(unit).strip():
+        lines.append("unit=%s" % unit)
+    per = _period_line(atom.get("period"))
+    if per:
+        lines.append("period=%s" % per)
+    excl = atom.get("excluded")
+    if isinstance(excl, dict) and excl:
+        bits = ["%s=%s" % (k, _num(v)) for k, v in excl.items() if v is not None]
+        if bits:
+            lines.append("excluded=%s" % ",".join(bits))
+    comp = atom.get("completeness")
+    if isinstance(comp, dict) and comp.get("missing") is not None:
+        lines.append("completeness_missing=%s" % _num(comp["missing"]))
+    ps = atom.get("proof_status")
+    if ps:
+        lines.append("proof_status=%s" % ps)
+    return "\n".join("- %s" % x for x in lines)
+
+
+def _atoms_of(data):
+    """Атомы ответа: список `atoms`, иначе одиночный `atom`, иначе пусто."""
+    atoms = data.get("atoms")
+    if isinstance(atoms, list) and atoms:
+        return [a for a in atoms if isinstance(a, dict)]
+    one = data.get("atom")
+    if isinstance(one, dict):
+        return [one]
+    return []
+
+
+# Поля атома/варианта, которые МОЖНО показать модели бота. Внутренний `src` и
+# `interpretation_id` — доказательство пересчёта; в текст инструмента не входят
+# (иначе снова утекут имена таблиц, как до 03.08).
+_ATOM_PUBLIC = (
+    "operation", "exact_value", "display_value", "measure_label",
+    "unit_or_currency", "period", "filters", "grain", "axis", "form",
+    "completeness", "freshness", "excluded", "proof_status",
+)
+_OPT_PUBLIC = ("label", "entity_label", "hint", "found", "distinct_by")
+
+
+def _atoms_public(atoms):
+    out = []
+    for a in atoms or []:
+        if not isinstance(a, dict):
+            continue
+        out.append({k: a[k] for k in _ATOM_PUBLIC if k in a and a[k] is not None})
+    return out
+
+
+def _options_public(opts):
+    out = []
+    for o in opts or []:
+        if not isinstance(o, dict):
+            continue
+        pub = {k: o[k] for k in _OPT_PUBLIC
+               if o.get(k) is not None and o.get(k) != ""}
+        if pub:
+            out.append(pub)
+    return out
+
+
+def _atom_json_block(atoms=None, options=None):
+    """JSON для гейта/канала: семантические роли без внутренних имён таблиц."""
+    payload = {"atoms": _atoms_public(atoms), "options": _options_public(options)}
+    if not payload["atoms"] and not payload["options"]:
+        return ""
+    return "ATOM_JSON:\n" + json.dumps(payload, ensure_ascii=False, default=str)
+
+
+def _figures_for_bot(data):
+    """Блок figures для модели: семантические роли атомов (+ JSON атомов/options).
+
+    Плоский `figures` key=value здесь не отдаётся — иначе вторая модель снова
+    переназначает роли (аудит §8). Старые маркеры протокола сохраняются.
+    """
+    atoms = _atoms_of(data)
+    parts = []
+    if atoms:
+        blocks = []
+        for i, a in enumerate(atoms):
+            b = _atom_roles_block(a, index=i if len(atoms) > 1 else None)
+            if b:
+                blocks.append(b)
+        if blocks:
+            parts.append("FIGURES:\n" + "\n\n".join(blocks))
+        # Структура проходит JSON-ом: канал/гейт читают роли, не пересобирают пары.
+        block = _atom_json_block(atoms, data.get("options"))
+        if block:
+            parts.append(block)
+    return "\n\n".join(parts)
 
 
 # 🔴 ВНУТРЕННИЙ СЧЁТЧИК, НАЗВАННЫЙ СВОИМ ИМЕНЕМ, СТАНОВИТСЯ ЛОЖЬЮ О ДАННЫХ (`F251`).
@@ -300,15 +433,22 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
             out += "\n\n" + text
         if lines:
             out += "\n\n%s:\n%s" % (CLARIFY_LABEL, "\n".join(lines))
+        # OPTIONS остаются текстовым протоколом; рядом — структура для гейта/канала.
+        block = _atom_json_block(_atoms_of(data), opts)
+        if block:
+            out += "\n\n" + block
         return _with_partial(out, data)
 
     # 🔴 ГЕЙТ ОТКЛОНИЛ ПРОЗУ, ЧИСЛА ПОСЧИТАНЫ. `text` в этой ветке — НЕ ответ: это либо
     # отказ (`refuse_text`), либо та самая непрошедшая формулировка. Пересылать его боту
     # значит отдать отказ, имея данные. Отдаём то, ради чего ветка и заведена, — числа.
     if kind == "figures":
-        block = _kv_block("FIGURES", data.get("figures"))
+        block = _figures_for_bot(data)
         if block:
             return _with_partial(FIGURES_HINT + "\n\n" + block, data)
+        # Атома нет (старый сервис) — плоский словарь figures не отдаём: лучше пусто,
+        # чем снова дать второй модели переназначить роли (аудит §8).
+        return _with_partial(FIGURES_HINT, data)
 
     if kind == "no_data":
         if text:
@@ -326,6 +466,10 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     m = (data.get("measure") or "").strip()
     if m and m.lower() not in text.lower():
         text += "\n\n[величина: %s]" % m
+    # Атом ответа — структурой рядом с текстом (гейт читает подписи/числа из ATOM_JSON).
+    block = _atom_json_block(_atoms_of(data), data.get("options"))
+    if block:
+        text += "\n\n" + block
     return _with_partial(text, data)
 
 

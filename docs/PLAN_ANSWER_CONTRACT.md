@@ -229,7 +229,7 @@ always-on рядом с существующими защитами, стату�
 `docs/SELFTEST_BASELINE.md`. Осталось: ярус 2 (10 % через `/ask`, в работе) и
 тот же замер на okna после выката волны-1.
 
-**Шаг 2. `AnswerAtom` + renderer** (§5).
+**Шаг 2. `AnswerAtom` + renderer** (§5). — ✅ закрыт 16.08 (`build_answer_atom`/`render_atom_pair`, мост без плоского KV, verify presentation).
 *Замок:* перестановка подпись↔число невозможна по построению (тест); гейт
 покрывает пары и presentation; `figures` несёт атомы.
 
