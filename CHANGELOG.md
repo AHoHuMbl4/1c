@@ -1,5 +1,16 @@
 # Журнал изменений
 
+## 16.08: самопроверка — ярус2 postgres vector+rerank; okna слепое пятно 0/254 `[замер]`
+
+`[замер]` Дев postgres 10 % через живой `/ask` (config=vector+rerank): 62 вопроса,
+atoms_wrong 0, недостижима 1/18 (`страховыевзносыскидкикдоходам`), fork у 60,
+arbiter_src_conflict 0; паттерн «19 517 / поляформстатистики» не воспроизвёлся.
+Поимённые wrong-focus — в `selftest-misses-postgres-tier2.jsonl`.
+
+`[замер]` Okna ярус 1 на боевом контуре: **0/254** недостижимых, vector_live,
+поверхности alias/card/literal/vector 138/162/113/72. Выборка яруса 2: 138
+вопросов, прогон стартовал. ut_test ярус 2 на деве — в работе (~334).
+
 ## 16.08: шаг 2 плана ответов — типизированный AnswerAtom и детерминированный renderer `[код]` `[замер]`
 
 `[код]` `serene_ask.py`: `build_answer_atom` / `atom_from_agg` / `render_atom_pair` /

@@ -43,11 +43,13 @@ from decimal import Decimal, InvalidOperation
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 BASE = os.environ.get("ASK_BASE") or (sys.argv[1] if len(sys.argv) > 1 else "ut_test")
 RUNS = os.path.join(ROOT, "work", "acceptance", "runs")
-LIST = os.path.join(RUNS, "selftest-%s.jsonl" % BASE)
-RESULTS = os.path.join(RUNS, "selftest-%s-results.jsonl" % BASE)
-TRUTH = os.path.join(RUNS, "selftest-%s-truth.json" % BASE)
-REPORT = os.path.join(RUNS, "selftest-%s-report.json" % BASE)
-MISSES = os.path.join(ROOT, "work", "acceptance", "selftest-misses-%s.jsonl" % BASE)
+# SELFTEST_* — ярус 2 (tier2) не затирает полный набор / старые отчёты.
+LIST = os.environ.get("SELFTEST_LIST") or os.path.join(RUNS, "selftest-%s.jsonl" % BASE)
+RESULTS = os.environ.get("SELFTEST_OUT") or os.path.join(RUNS, "selftest-%s-results.jsonl" % BASE)
+TRUTH = os.environ.get("SELFTEST_TRUTH") or os.path.join(RUNS, "selftest-%s-truth.json" % BASE)
+REPORT = os.environ.get("SELFTEST_REPORT") or os.path.join(RUNS, "selftest-%s-report.json" % BASE)
+MISSES = os.environ.get("SELFTEST_MISSES") or os.path.join(
+    ROOT, "work", "acceptance", "selftest-misses-%s.jsonl" % BASE)
 
 # Та же формула, что `aggregate` (serene_ask.py): папка — не запись, признак —
 # реквизит платформы IsFolder из типизированной карты flags.

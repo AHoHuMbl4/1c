@@ -1,0 +1,26 @@
+{
+  "answered": 62,
+  "atoms_checked": 26,
+  "atoms_wrong": 0,
+  "base": "postgres",
+  "build_ts": 1786108051,
+  "classes": {
+    "ok": 48,
+    "атом не объявлен": 4,
+    "не выбрана": 8,
+    "не достигнута": 1,
+    "сбой": 1
+  },
+  "entities": 18,
+  "entities_reached": 17,
+  "entities_with_data": 18,
+  "questions_total": 62,
+  "sec_median": 24.89,
+  "unreachable_entities": [
+    "informationregister_страховыевзносыскидкикдоходам"
+  ],
+  "unreachable_share": 0.0556,
+  "wrong_atom_share": 0.0,
+  "config": "vector+rerank; DeepSeek paid 16.08; /opt serene_ask md5 may differ from repo (neighbor edits)",
+  "note_00441": "intermittent TypeError float not subscriptable in /opt → 503; curl later 200 with focus informationregister_допустимыецелипогруппамветис count 2855"
+}
