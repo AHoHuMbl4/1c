@@ -16,7 +16,7 @@ test_fork_detector 13, test_answer_atom 18 (в т.ч. несобираемост
 инстанс `:8097` (отдельно от :8099/:8091): `/health` 200; атом из живого
 aggregate (152, подпись из `search_tables`); мост — роли без плоского KV.
 Полный `/ask` — DeepSeek 402 (как на юнитах дева 16.08). md5: serene_ask
-`3fb1f207…`, mcp_ask `08889203…`, verify-core `cac458bb…`.
+`ccfa680f…`, mcp_ask `a29b2a31…`, verify-core `5c5624e4…`.
 
 ## 16.08: самопроверка трек C — выборка яруса 2 готова, /ask дева стоит на DeepSeek 402 `[замер]`
 
