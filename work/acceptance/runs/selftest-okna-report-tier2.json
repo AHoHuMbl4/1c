@@ -1,0 +1,28 @@
+{
+  "answered": 138,
+  "atoms_checked": 20,
+  "atoms_wrong": 0,
+  "base": "postgres",
+  "build_ts": 1786875809,
+  "classes": {
+    "ok": 91,
+    "атом не объявлен": 6,
+    "не выбрана": 2,
+    "не достигнута": 17,
+    "не та величина": 1,
+    "сбой": 21
+  },
+  "entities": 26,
+  "entities_reached": 24,
+  "entities_with_data": 26,
+  "questions_total": 138,
+  "sec_median": 41.46,
+  "unreachable_entities": [
+    "accountingregister_плансчетовосновной2014",
+    "informationregister_составгрупптмц"
+  ],
+  "unreachable_share": 0.0769,
+  "wrong_atom_share": 0.0,
+  "config": "okna prod vector+rerank; md5 serene_ask 4ed9bc7b; /ask :8091",
+  "host": "167.233.249.110"
+}

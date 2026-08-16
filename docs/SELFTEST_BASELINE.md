@@ -279,13 +279,28 @@ answer 2 855 по верной сущности — нестабильность
 | vector_live | true |
 | поверхности | alias 138 / card 162 / literal 113 / vector 72 |
 
-Файлы: `runs/selftest-okna-surfaces.jsonl`, `…-report.json`.
-Выборка яруса 2 okna готова: 26/254 → **138** вопросов (`selftest-okna-tier2.jsonl`),
-прогон `/ask` на :8091 — в работе.
+### Okna — ярус 2 (10 %, config=vector+rerank) ✅
+
+| | |
+|---|---|
+| выборка | 26/254 сущностей, **138** вопросов |
+| HTTP | 200: 117 / **503: 21** |
+| kinds (200) | clarify 77 / answer 24 / figures 5 / no_data 11 |
+| atoms_wrong | **0** / 20 |
+| entities_reached | 24/26 (недостижимы: `accountingregister_плансчетовосновной2014`, `informationregister_составгрупптмц`) |
+| unreachable_share | 7,7 % |
+| `diag.fork` | 101; `arbiter_src_conflict` **0** |
+| sec_median | 41,5 с (~85 мин прогон) |
+
+Классы промахов: сбой 21, не достигнута 17, атом не объявлен 6, не выбрана 2
+(`инвентаризационнаяопись`→журнал, табчасть ТД→`documentjournal_общий`),
+не та величина 1. Файлы: `runs/selftest-okna-results-tier2.jsonl`,
+`…-report-tier2.json`, `selftest-misses-okna-tier2.jsonl`.
 
 ## Что НЕ сделано
 
-- Дев ut_test ярус 2 10 % (334 вопроса) — прогон идёт.
-- Okna ярус 2 10 % — прогон идёт.
-- `branch_alias.sh` на актуальных классах ut_test/okna.
-- `search_measure_alias` на ut_test по-прежнему пуст.
+- Дев ut_test ярус 2 10 % — прогон идёт (~88/334 на момент записи).
+- `1c-branch-alias` на ut_test — запущен, но пачки дают 0 подписей
+  (`SessionWriteLockTimeoutError` у openclaw-gateway); сироты 4, классов ~114.
+- `1c-wiki-alias` величины ut_test — после окончания ut_test яруса 2
+  (env уже на `dbname=ut_test`, боевые таблицы).
