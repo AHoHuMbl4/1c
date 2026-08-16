@@ -1,3 +1,17 @@
+## Замер 16.08 — шаг 4 плана ответов (исходы A/B/C)
+
+Правка ответа и моста (`serene_ask.py`, `mcp_ask.py`): детектор — судья
+неоднозначности; A/B/C; `ASK_FORK_OUTCOMES` (умолч. 1). **Снят ПОСЛЕ последней
+правки.** Оффлайн: test_gate 130, test_step4_guards 110, test_a3_passport 14,
+test_fork_detector 13, test_fork_outcomes 16, test_answer_atom 18,
+test_decision_id 24, test_mcp_ask 27, test-verify 95 — все зелёные. Живой
+`:8097` (ut_test, не :8099/:8091 — трек C самопроверки на :8099 не трогали):
+«закупки» → `kind=figures` outcome=B, 2 пары с подписями словаря, регистр
+1 137 949,71, `decision_id` у options; билет → clarify величины (сущность снята);
+«продали» → B, 2 подписанные пары. A — оффлайн-замки (один класс / несколько
+src → source_fixed=false). Круг арбитра не собирался (`arbiter` не выбирал).
+Регрессии первой базы по оффлайн-замкам нет.
+
 ## Замер 16.08 — шаг 2 плана ответов (AnswerAtom + renderer)
 
 ## Замер 16.08 — шаг 3 плана ответов (decision_id)

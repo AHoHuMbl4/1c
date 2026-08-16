@@ -1,5 +1,25 @@
 # Журнал изменений
 
+## 16.08: шаг 4 плана ответов — исходы A/B/C на классах `[код]` `[замер]`
+
+`[код]` `serene_ask.py`: детектор — судья неоднозначности после `arb_pool` и до
+круга под-вызовов. Исходы: A (источник-нейтральный ответ, `source_fixed=false`,
+`memory_eligible=false`), B (пары кодом + `options[].decision_id` на класс),
+C (`clarify` + `partial.fork_limitation`). Подписанные сёстры из
+`search_fork_label` входят в пул; подписи — `fork_labels_covering` (не только
+точный `fork_key`). Сигнальное сомнение при одном классе не создаёт вопрос.
+`arbitrate` при `ASK_FORK_OUTCOMES=1` не зовётся (код сохранён; `=0` —
+эвакуация волны-1). `mcp_ask.py`: figures с options/presentation; флаги A.
+`test_fork_outcomes.py` — 16 оффлайн-замков.
+
+`[замер]` Оффлайн: gate 130, step4_guards 110, a3 14, fork_detector 13,
+fork_outcomes 16, answer_atom 18, decision_id 24, mcp_ask 27, verify 95 —
+зелёные. Живой `:8097` ut_test: закупки → B (регистр 1 137 949,71 + документ;
+оба `decision_id`); билет → clarify величины; продажи → B. Латентность
+детекторного круга ~2,5–3,2 с (`cost_ms`) вместо N под-вызовов арбитра с
+моделью. md5: serene_ask `c6fe10e1…`, mcp_ask `d9e118a2…`.
+`ASK_FORK_OUTCOMES=0` временно возвращает shadow + старые исходы.
+
 ## 16.08: шаг 3 плана ответов — доказуемый выбор (decision_id) `[код]` `[замер]`
 
 `[код]` `serene_ask.py`: процессное хранилище одноразовых билетов

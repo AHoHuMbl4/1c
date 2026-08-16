@@ -502,12 +502,36 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     # отказ (`refuse_text`), либо та самая непрошедшая формулировка. Пересылать его боту
     # значит отдать отказ, имея данные. Отдаём то, ради чего ветка и заведена, — числа.
     if kind == "figures":
+        # Исход B: условные пары уже в text (код), плюс options с decision_id.
+        parts = [FIGURES_HINT]
+        if text and data.get("options"):
+            parts.append(text)
         block = _figures_for_bot(data)
         if block:
-            return _with_partial(FIGURES_HINT + "\n\n" + block, data)
-        # Атома нет (старый сервис) — плоский словарь figures не отдаём: лучше пусто,
-        # чем снова дать второй модели переназначить роли (аудит §8).
-        return _with_partial(FIGURES_HINT, data)
+            parts.append(block)
+        opts = data.get("options") or []
+        if opts:
+            lines_opts = []
+            for o in opts:
+                if not isinstance(o, dict):
+                    continue
+                name = o.get("label") or o.get("src") or ""
+                did = (o.get("decision_id") or "").strip()
+                if name:
+                    lines_opts.append("- %s | focus=%s%s" % (
+                        name, name, (" | decision_id=%s" % did) if did else ""))
+            if lines_opts:
+                parts.append("%s:\n%s" % (CLARIFY_LABEL, "\n".join(lines_opts)))
+            pres = _clarify_presentation(opts)
+            if isinstance(data, dict) and data.get("presentation") is None and pres:
+                data = dict(data)
+                data["presentation"] = pres
+            if pres:
+                parts.append("PRESENTATION_JSON:\n" + json.dumps(
+                    pres, ensure_ascii=False, default=str))
+        if data.get("source_fixed") is False:
+            parts.append("source_fixed=false memory_eligible=false")
+        return _with_partial("\n\n".join(parts), data)
 
     if kind == "no_data":
         if text:
@@ -529,6 +553,8 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     block = _atom_json_block(_atoms_of(data), data.get("options"))
     if block:
         text += "\n\n" + block
+    if data.get("source_fixed") is False:
+        text += "\n\nsource_fixed=false memory_eligible=false"
     return _with_partial(text, data)
 
 

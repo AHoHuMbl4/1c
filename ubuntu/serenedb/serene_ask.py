@@ -2214,9 +2214,11 @@ def totals_of(src_table, match, preds, measures):
 # типизированным атомом (тем же `_slot_fp`-подходом, что прибор A3). Модель в этом не
 # участвует вовсе (п. 19); счёт — штатный SQL движка (доки SereneDB: «SQL › Query
 # syntax › FILTER», «SQL › Functions › Map Functions — map_entries(map)»). Пока
-# детектор SHADOW: исходы не меняются, результат пишется только в `diag.fork` и след
-# шагов; снятие сигнальных защит — отдельное решение по замеру (шаг 5 плана).
+# детектор включён. По умолчанию он же судья неоднозначности (исходы A/B/C, план §2):
+# ASK_FORK_OUTCOMES=0 возвращает волну-1 (shadow + старые исходы) временно.
+# Снятие сигнальных защит — отдельное решение по замеру (шаг 5 плана).
 FORK_DETECT = os.environ.get("ASK_FORK_DETECT", "1") not in ("0", "false", "no")
+FORK_OUTCOMES = os.environ.get("ASK_FORK_OUTCOMES", "1") not in ("0", "false", "no")
 # Состав величин сущности меняется только пересборкой корпуса, а собирается он одним
 # проходом по корпусу (~2 с на 1502 сущностях, замер 15.08). Кэш с TTL: shadow-заметке
 # минутная свежесть не нужна, а цена вопроса не растёт (п. 19 — это не в модель, но и
@@ -2369,18 +2371,24 @@ def fork_classes(rows):
     return by_atom
 
 
+def fork_key_of(src_set, measure_ctx):
+    """Отпечаток класса развилки: sha1(sorted src + measure_ctx). Тот же, что `_fork_log`."""
+    srcs = sorted({s for s in (src_set or []) if s})
+    return hashlib.sha1(
+        ("|".join(srcs) + "¦" + (measure_ctx or "")).encode("utf-8")).hexdigest()
+
+
 def _fork_log(classes, measure_ctx):
     """Новый класс развилки — в журнал `search_fork_class`, если его завёл свой трек.
 
     Таблица — точка обмена со словарём развилок (план §7): детектор фиксирует класс,
     штатный агент один раз подписывает ветки. Таблицы нет (контур без этого трека) —
-    молча пропускаем: shadow не имеет права ломать ответ.
+    молча пропускаем: журнал не имеет права ломать ответ.
     """
     src_set = sorted({s for ss in classes.values() for s in ss})
     if len(src_set) < 2:
         return
-    fork_key = hashlib.sha1(
-        ("|".join(src_set) + "¦" + (measure_ctx or "")).encode("utf-8")).hexdigest()
+    fork_key = fork_key_of(src_set, measure_ctx)
     try:
         psql("INSERT INTO search_fork_class (fork_key, src_set, measure_ctx, seen_at, "
              "seen_count) VALUES (%s, %s, %s, now(), 1) "
@@ -2389,6 +2397,295 @@ def _fork_log(classes, measure_ctx):
              % (lit(fork_key), lit("{%s}" % ",".join(src_set)), lit(measure_ctx or "")))
     except RuntimeError:
         pass
+
+
+def fork_labels_of(fork_key, srcs):
+    """Проверенные подписи веток из `search_fork_label`: {src: label}. Пустые — пропуск.
+
+    Таблицы нет / права нет — пусто (как у алиасов): исход B тогда недостижим → C.
+    """
+    srcs = [s for s in (srcs or []) if s]
+    if not fork_key or not srcs:
+        return {}
+    try:
+        rows = psql(
+            "SELECT src, label FROM search_fork_label "
+            "WHERE fork_key = %s AND src IN (%s) AND coalesce(label,'') <> ''"
+            % (lit(fork_key), ", ".join(lit(s) for s in srcs)))
+    except RuntimeError:
+        return {}
+    out = {}
+    for r in rows or []:
+        if r and r[0] and r[1] and str(r[1]).strip():
+            out[r[0]] = str(r[1]).strip()
+    return out
+
+
+
+
+def fork_labels_covering(srcs):
+    """Подписи для набора src: ключ словаря, покрывающий все src, иначе частичный.
+
+    Возвращает ({src: label}, fork_key|None). Нужен, когда sha1(src_set¦ctx)
+    детектора не совпал с ключом, под которым агент писал подписи.
+    """
+    srcs = sorted({s for s in (srcs or []) if s})
+    if not srcs:
+        return {}, None
+    try:
+        rows = psql(
+            "SELECT fork_key, src, label FROM search_fork_label "
+            "WHERE src IN (%s) AND coalesce(label,'') <> ''"
+            % ", ".join(lit(s) for s in srcs))
+    except RuntimeError:
+        return {}, None
+    by_fk = {}
+    for r in rows or []:
+        if r and r[0] and r[1] and r[2] and str(r[2]).strip():
+            by_fk.setdefault(r[0], {})[r[1]] = str(r[2]).strip()
+    for k, m in by_fk.items():
+        if all(s in m for s in srcs):
+            return m, k
+    merged = {}
+    for m in by_fk.values():
+        merged.update(m)
+    return ({s: merged[s] for s in srcs if s in merged},
+            next(iter(by_fk), None))
+
+
+def fork_label_siblings(srcs):
+    """Другие src из ПОДПИСАННЫХ классов развилки, пересекающихся с `srcs`.
+
+    Если в arb_pool есть документ, а регистр подписан с ним в `search_fork_label`,
+    регистр входит в пространство исходов — иначе B на эталонной паре
+    недостижим, хотя словарь уже знает обе ветки (план §7).
+    """
+    srcs = [s for s in (srcs or []) if s]
+    if not srcs:
+        return []
+    try:
+        rows = psql(
+            "SELECT DISTINCT l2.src FROM search_fork_label l1 "
+            "JOIN search_fork_label l2 ON l1.fork_key = l2.fork_key "
+            "WHERE l1.src IN (%s) AND coalesce(l1.label,'') <> '' "
+            "  AND coalesce(l2.label,'') <> ''"
+            % ", ".join(lit(s) for s in srcs))
+    except RuntimeError:
+        return []
+    return [r[0] for r in (rows or []) if r and r[0]]
+
+
+def _fork_atom_of(row, srcs, measure_word=""):
+    """AnswerAtom класса из строки `fork_scan` (без src). Непосчитанное — PROOF_UNCOUNTED."""
+    d0 = row or {"count": 0, "folders": 0, "sums": {}}
+    src0 = sorted(srcs)[0] if srcs else ""
+    mid = next(iter(sorted(d0.get("sums") or {})), None)
+    if mid is None:
+        exact = d0.get("count")
+        op = "count"
+        lab = measure_label_of(src0, None) if src0 else None
+    else:
+        exact = d0["sums"][mid]
+        op = "sum"
+        lab = measure_label_of(src0, mid) if src0 else (split_ident(mid) or mid)
+    status = PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED
+    return build_answer_atom(
+        operation=op, exact_value=exact, measure_id=mid, measure_label=lab,
+        excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
+        proof_status=status)
+
+
+def _class_branch_label(srcs, labels_by_src):
+    """Подпись класса: первая непустая по отсортированным src. Нет — None."""
+    for s in sorted(srcs or []):
+        lab = (labels_by_src or {}).get(s)
+        if lab:
+            return lab
+    return None
+
+
+def ordered_fork_classes(classes, rows, measure_word=""):
+    """Классы в детерминированном порядке: по отпечатку атома (не по размеру/лидеру)."""
+    items = []
+    for atom_fp, ss in (classes or {}).items():
+        srcs = sorted(ss)
+        d0 = (rows or {}).get(srcs[0]) if srcs else None
+        built = _fork_atom_of(d0, srcs, measure_word)
+        items.append({"fingerprint": atom_fp, "srcs": srcs, "atom": built,
+                      "row": d0 or {"count": 0, "folders": 0, "sums": {}}})
+    items.sort(key=lambda it: (tuple((str(k), v) for k, v in it["fingerprint"]),
+                               tuple(it["srcs"])))
+    return items
+
+
+def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None):
+    """Исход A/B/C/unique/empty/unavailable по классам (план §2). Чистая логика.
+
+    A — один класс, src несколько, все ячейки посчитаны.
+    B — классов несколько, все посчитаны и у каждого есть подпись из словаря.
+    C — иначе (непосчитанное / неподписанное); unique — один класс и один src.
+    """
+    if scan_error:
+        return "unavailable", {"reason": "scan_error", "detail": str(scan_error)[:160]}
+    if not classes:
+        return "empty", {"reason": "no_live_cells"}
+    ordered = ordered_fork_classes(classes, rows, measure_ctx)
+    uncounted = [it for it in ordered
+                 if (it["atom"] or {}).get("proof_status") != PROOF_COMPUTED
+                 or (it["atom"] or {}).get("exact_value") is None]
+    if uncounted:
+        return "C", {"reason": "uncounted_cell",
+                     "classes": len(ordered),
+                     "uncounted": [it["srcs"] for it in uncounted]}
+    if len(ordered) == 1:
+        it = ordered[0]
+        if len(it["srcs"]) == 1:
+            return "unique", {"class": it}
+        return "A", {"class": it, "srcs": it["srcs"]}
+    src_set = sorted({s for it in ordered for s in it["srcs"]})
+    fk = fork_key_of(src_set, measure_ctx)
+    labels = fork_labels_of(fk, src_set)
+    # Точный fork_key мог смениться (measure_ctx) или класс в журнале устарел —
+    # подписи словаря всё равно живут по src: ищем ключ, покрывающий все srcs.
+    if len(labels) < len(src_set):
+        labels, fk2 = fork_labels_covering(src_set)
+        if fk2:
+            fk = fk2
+    missing = []
+    for it in ordered:
+        lab = _class_branch_label(it["srcs"], labels)
+        if not lab:
+            missing.append(it["srcs"])
+        else:
+            it["label"] = lab
+    if missing:
+        return "C", {"reason": "unsigned_class", "fork_key": fk,
+                     "classes": len(ordered), "unsigned": missing,
+                     "labels_found": len(labels)}
+    return "B", {"fork_key": fk, "classes": ordered, "labels": labels}
+
+
+def _fork_figures_of(atom):
+    """Плоские figures из атома класса — без метки источника."""
+    if not isinstance(atom, dict):
+        return {}
+    out = {}
+    if atom.get("operation") == "count" or atom.get("measure_id") is None:
+        if atom.get("exact_value") is not None:
+            out["count"] = atom["exact_value"]
+    else:
+        if atom.get("exact_value") is not None:
+            out["sum"] = atom["exact_value"]
+        excl = atom.get("excluded") or {}
+        if isinstance(excl, dict) and excl.get("folders") is not None:
+            out["folders"] = excl["folders"]
+    return out
+
+
+def fork_outcome_a(question, class_item, diag, cut=None, t0=None):
+    """Исход A: источник-нейтральный ответ. Src не закреплять (аудит §5.3)."""
+    atom = dict((class_item or {}).get("atom") or {})
+    atom.pop("src", None)
+    # Метка таблицы — производная src; в A её нет (паспорт без src_label).
+    mid = atom.get("measure_id")
+    if mid:
+        atom["measure_label"] = split_ident(mid) or mid
+    else:
+        atom["measure_label"] = None
+    text = render_atom_pair(atom) or (_fmt(atom.get("exact_value"))
+                                      if atom.get("exact_value") is not None else "")
+    figs = _fork_figures_of(atom)
+    d = dict(diag or {}, fork_outcome="A",
+             fork_srcs=list((class_item or {}).get("srcs") or []))
+    if t0 is not None:
+        d["sec"] = round(time.time() - t0, 2)
+    return {"partial": cut or None, "kind": "answer", "text": text,
+            "figures": figs, "atom": atom, "atoms": [atom],
+            "source_fixed": False, "memory_eligible": False,
+            "sources": [], "diag": d}
+
+
+def fork_outcome_b(question, payload, diag, cut=None, t0=None):
+    """Исход B: условные пары по классам + options с decision_id (на класс, не на src)."""
+    classes = list((payload or {}).get("classes") or [])
+    atoms, opts = [], []
+    for it in classes:
+        lab = (it.get("label") or "").strip()
+        atom = dict(it.get("atom") or {})
+        atom.pop("src", None)
+        if lab:
+            atom["measure_label"] = lab
+        atoms.append(atom)
+        srcs = list(it.get("srcs") or [])
+        rep = sorted(srcs)[0] if srcs else ""
+        row = it.get("row") or {}
+        opts.append({"src": rep, "label": lab or rep,
+                     "found": int(row.get("count") or 0),
+                     "distinct_by": lab or ""})
+    lines = [render_atom_pair(a) for a in atoms]
+    if any(x is None for x in lines):
+        return None
+    text = "\n".join(lines)
+    d = dict(diag or {}, fork_outcome="B",
+             fork_key=(payload or {}).get("fork_key"),
+             fork_classes=len(classes))
+    if t0 is not None:
+        d["sec"] = round(time.time() - t0, 2)
+    return {"partial": cut or None, "kind": "figures", "text": text,
+            "figures": {"pairs": len(atoms)},
+            "atom": atoms[0] if atoms else None, "atoms": atoms,
+            "options": opts,
+            "source_fixed": False, "memory_eligible": False,
+            "sources": [o["label"] for o in opts], "diag": d}
+
+
+def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
+                   lab_by=None, marks=None, by=None, match="", preds=None):
+    """Исход C: clarify; непосчитанное/неподписанное видно клиенту (п. 13)."""
+    c_why = (payload or {}).get("reason") or "fork"
+    ordered = ordered_fork_classes(classes, rows)
+    srcs = []
+    for it in ordered:
+        srcs.extend(it["srcs"])
+    srcs = list(dict.fromkeys(srcs))
+    lab_by = dict(lab_by or {})
+    if not lab_by and srcs:
+        try:
+            lab_by = {r[0]: r[1] for r in psql(
+                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(c) for c in srcs))) if r and r[0]}
+        except RuntimeError:
+            lab_by = {}
+    fk = (payload or {}).get("fork_key") or (fork_key_of(srcs, "") if srcs else "")
+    flab = fork_labels_of(fk, srcs) if srcs and fk else {}
+    for s, lab in flab.items():
+        if lab:
+            lab_by[s] = lab
+    live = {s: ((rows or {}).get(s) or {}).get("count", 0) for s in srcs}
+    opts = mk_opts(srcs, lab_by, marks or {}, by or {}, match=match, preds=preds,
+                   live=live)
+    partial = dict(cut or {})
+    lim = {"reason": c_why}
+    if payload.get("unsigned"):
+        lim["unsigned_classes"] = len(payload["unsigned"])
+    if payload.get("uncounted"):
+        lim["uncounted_classes"] = len(payload["uncounted"])
+    partial["fork_limitation"] = lim
+    d = dict(diag or {}, fork_outcome="C", fork_c_reason=c_why)
+    if t0 is not None:
+        d["sec"] = round(time.time() - t0, 2)
+    text = clarify_say(question, opts, d) if opts else ""
+    if not (text or "").strip() and opts:
+        text = ", ".join("«%s»" % (o.get("label") or "") for o in opts)
+    if c_why == "uncounted_cell":
+        note = "часть прочтений не удалось посчитать"
+        text = (text + ("\n" if text else "") + note).strip()
+    elif c_why == "unsigned_class":
+        note = "есть ветка без проверенной подписи"
+        text = (text + ("\n" if text else "") + note).strip()
+    return {"partial": partial or None, "kind": "clarify", "text": text or "?",
+            "options": opts, "sources": [o["label"] for o in opts],
+            "diag": d}
 
 
 def _alias_parts(raw):
@@ -2715,8 +3012,13 @@ def issue_decision(question, option, ambiguity, options_ver, user=None, parse=No
 
 
 def seal_clarify(out, question, user=None, parse=None):
-    """В каждый options[] clarify — decision_id; билеты в процессном хранилище."""
-    if not isinstance(out, dict) or out.get("kind") != "clarify":
+    """В каждый options[] — decision_id; билеты в процессном хранилище.
+
+    Работает для clarify и для figures с вариантами (исход B: пары + выбор класса).
+    """
+    if not isinstance(out, dict):
+        return out
+    if out.get("kind") not in ("clarify", "figures", "answer"):
         return out
     opts = out.get("options") or []
     if not opts:
@@ -7109,42 +7411,40 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     diag["without_value"] = len(dropped)
         except RuntimeError:
             pass
-    # ДЕТЕКТОР РАЗВИЛКИ ИЗ ДАННЫХ (shadow, always-on) — сразу после того, как круг
+    # ДЕТЕКТОР РАЗВИЛКИ ИЗ ДАННЫХ (по умолчанию) — сразу после того, как круг
     # кандидатов собран окончательно и условия вопроса (`match`/`preds`) известны.
     # Полный круг считается одним SQL (`fork_scan`), классы — типизированным атомом
-    # (`fork_classes`). Исходы НЕ меняются: результат уходит только в `diag.fork` и
-    # след шагов; в под-вызовах круга арбитра (`no_arbiter`) не считается — внешний
-    # вызов уже записал развилку того же вопроса.
+    # (`fork_classes`). При ASK_FORK_OUTCOMES=1 (умолчание) детектор — судья
+    # неоднозначности (исходы A/B/C, план §2): круг под-вызовов арбитра не собирается.
+    # ASK_FORK_OUTCOMES=0 — волна-1: только `diag.fork` + старые исходы. В под-вызовах
+    # (`no_arbiter`) и после доказанного билета (`trusted`) исходы не перехватывают.
     if FORK_DETECT and not no_arbiter and len(cands) > 1:
         _t_fork = time.time()
+        _scan_err = None
+        _rows, _cls = {}, {}
+        _mword = (intent.get("measure") or "").strip()
+        # Пространство исходов — голова списка кандидатов (тот же бюджет, что круг
+        # арбитра ×4), не вся база: иначе сотни несвязанных src с живым счётом
+        # дают C с сотнями вариантов и секунды на SQL. Полный перечень cands —
+        # по-прежнему источник отбора; детектор судит неоднозначность в голове.
+        _fork_pool = list(cands[:max(ARBITER_MAX * 4, 16)])
         try:
-            _mword = (intent.get("measure") or "").strip()
-            _mbs = _measures_by_src(cands)
-            _als = _aliases_by_src(cands)
+            _mbs = _measures_by_src(_fork_pool)
+            _als = _aliases_by_src(_fork_pool)
             _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
-                    for c in cands}
+                    for c in _fork_pool}
             _rows = fork_scan(match, preds, _rel)
             _cls = fork_classes(_rows)
-            # Классы несут атомы того же строителя (план §5); ключ класса — прежний
-            # типизированный отпечаток (count/folders/sums), без src.
             _atoms = []
             for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
                 d0 = _rows.get(sorted(ss)[0]) or {"count": 0, "folders": 0, "sums": {}}
-                # Первая величина словаря — мера контекста; подпись из данных, не проза.
-                _mid = next(iter(sorted(d0.get("sums") or {})), None)
-                _lab = (measure_label_of(sorted(ss)[0], _mid) if _mid
-                        else measure_label_of(sorted(ss)[0], None))
-                _built = build_answer_atom(
-                    operation=("sum" if _mid else "count"),
-                    exact_value=(d0["sums"][_mid] if _mid else d0["count"]),
-                    measure_id=_mid, measure_label=_lab,
-                    excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
-                    proof_status=PROOF_COMPUTED)
+                _built = _fork_atom_of(d0, sorted(ss), _mword)
                 _atoms.append({"atom": _built,
                                "fingerprint": [["%s" % k, v] for k, v in atom],
                                "srcs": sorted(ss)})
             diag["fork"] = {"classes": len(_cls),
                             "srcs": sum(len(v) for v in _cls.values()),
+                            "pool": len(_fork_pool),
                             "atoms": _atoms[:10],
                             "atoms_truncated": max(0, len(_atoms) - 10) or None,
                             "cost_ms": int((time.time() - _t_fork) * 1000)}
@@ -7152,10 +7452,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 веток=diag["fork"]["srcs"], счёт_мс=diag["fork"]["cost_ms"])
             if len(_cls) > 1:
                 _fork_log(_cls, _mword or (intent.get("want") or ""))
-        except Exception as _e:                         # noqa: BLE001 — shadow не имеет
-            diag["fork_error"] = str(_e)[:160]          # права менять исход ответа
+        except Exception as _e:                         # noqa: BLE001
+            _scan_err = _e
+            diag["fork_error"] = str(_e)[:160]
             sys.stderr.write("ask FORK: детектор не сработал: %s\n" % str(_e)[:160])
-
     # Параметры подсчёта, названные моделью: сущность, величина, что считать. Объявляются
     # ДО ветвления, чтобы ни один путь не оставил их неопределёнными.
     plan = {}
@@ -7562,10 +7862,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if (SIGNAL_DISAGREE and top_by_question and picked and not focus
             and top_by_question not in picked
             and not (SKIP_SERVICE_RIVALS and top_by_question in служебные)):
-        picked = list(dict.fromkeys(picked + [top_by_question]))
         diag["signals_disagree"] = top_by_question
         if _family(top_by_question) in {_family(x) for x in picked if x != top_by_question}:
             diag["signals_disagree_same_family"] = True
+        # При исходах A/B/C и одном классе детектора расхождение сигналов само по себе
+        # не создаёт вопрос человеку (план §3 / шаг 4): класс один → ответ; несколько
+        # уже ушли в B/C выше. Запись в diag — для замера шага 5.
+        if not (FORK_OUTCOMES and (diag.get("fork") or {}).get("classes") == 1):
+            picked = list(dict.fromkeys(picked + [top_by_question]))
 
     # НЕОДНОЗНАЧНЫЙ ВОПРОС — спрашиваем человека, а не угадываем за него.
     # Судья неоднозначности — модель: она видит и названия, и отличительные реквизиты
@@ -7613,8 +7917,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     #      задаётся числом совпадений, то есть размером сущности, и уверенности в выборе у
     #      нас нет никакой — это сомнение по факту сбоя, а не по данным. Круг арбитра при
     #      этом собирается и сравнивает ЧИСЛА, которые считает база: она-то работает.
-    doubt = (len(picked) > 1 or bool(diag.get("signals_disagree"))
-             or bool(diag.get("writer_pair")) or bool(diag.get("meaning_down")))
+    if FORK_OUTCOMES and (diag.get("fork") or {}).get("classes") == 1:
+        doubt = (len(picked) > 1 or bool(diag.get("writer_pair"))
+                 or bool(diag.get("meaning_down")))
+    else:
+        doubt = (len(picked) > 1 or bool(diag.get("signals_disagree"))
+                 or bool(diag.get("writer_pair")) or bool(diag.get("meaning_down")))
     arb_pool = list(picked)
     # Документ-регистратор идёт в круг ПЕРВЫМ соперником: он и есть второе прочтение,
     # а не «следующий по порядку отбора».
@@ -7724,6 +8032,87 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             return out
         ask = _alias_clarify(w, top)
         return ask or out
+
+    # Исходы A/B/C — после сборки arb_pool (writer_pair / стоп 2 / сомнение) и до
+    # круга под-вызовов. Пространство = arb_pool: именно те прочтения, между которыми
+    # иначе шёл бы арбитр (план §3). Сырой focus сюда не гасит (trusted уже выше).
+    if (FORK_OUTCOMES and FORK_DETECT and not no_arbiter and not trusted
+            and len(arb_pool) > 1):
+        _t_out = time.time()
+        _scan_err = None
+        _rows, _cls = {}, {}
+        _mword = (intent.get("measure") or "").strip()
+        try:
+            # Если в arb_pool есть участник подписанного класса — сужаем пул до
+            # этого класса (все подписанные сёстры из словаря). Словарь развилок —
+            # знание системы о конкурирующих прочтениях (план §7); сестра вне
+            # текущего cands всё равно входит, иначе B на эталоне недостижим при
+            # промахе поверхности. Без пересечения с словарём — весь arb_pool.
+            _sib = fork_label_siblings(arb_pool)
+            _hit = [s for s in arb_pool if s in set(_sib)]
+            if _sib and _hit:
+                _out_pool = list(dict.fromkeys(_hit + _sib))
+            else:
+                _out_pool = list(arb_pool)
+            _mbs = _measures_by_src(_out_pool)
+            _als = _aliases_by_src(_out_pool)
+            _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
+                    for c in _out_pool}
+            _rows = fork_scan(match, preds, _rel)
+            _cls = fork_classes(_rows)
+            if len(_cls) > 1:
+                _fork_log(_cls, _mword or (intent.get("want") or ""))
+            _prev = dict(diag.get("fork") or {})
+            _atoms = []
+            for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
+                d0 = _rows.get(sorted(ss)[0]) or {"count": 0, "folders": 0, "sums": {}}
+                _built = _fork_atom_of(d0, sorted(ss), _mword)
+                _atoms.append({"atom": _built,
+                               "fingerprint": [["%s" % k, v] for k, v in atom],
+                               "srcs": sorted(ss)})
+            diag["fork"] = dict(_prev,
+                                classes=len(_cls),
+                                srcs=sum(len(v) for v in _cls.values()),
+                                pool=len(_out_pool),
+                                atoms=_atoms[:10],
+                                atoms_truncated=max(0, len(_atoms) - 10) or None,
+                                cost_ms=int((_prev.get("cost_ms") or 0)
+                                            + (time.time() - _t_out) * 1000),
+                                outcome_pool="arb_pool")
+            шаг("детектор исходов", классов=len(_cls), пул=len(_out_pool),
+                счёт_мс=int((time.time() - _t_out) * 1000))
+        except Exception as _e:                         # noqa: BLE001
+            _scan_err = _e
+            diag["fork_error"] = str(_e)[:160]
+            sys.stderr.write("ask FORK outcome: %s\n" % str(_e)[:160])
+        _outc, _pay = resolve_fork_outcome(
+            _cls, _rows, measure_ctx=(_mword or (intent.get("want") or "")),
+            scan_error=_scan_err)
+        diag.setdefault("fork", {})["outcome"] = _outc
+        if _outc == "A":
+            шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
+            return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
+        if _outc == "B":
+            _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0)
+            if _bres is not None:
+                шаг("исход B", классов=len(_pay.get("classes") or []))
+                return _bres
+            _outc, _pay = "C", {"reason": "uncounted_cell",
+                                "detail": "pair_render_failed"}
+            diag["fork"]["outcome"] = "C"
+        if _outc == "C":
+            шаг("исход C", причина=_pay.get("reason") or "—")
+            return fork_outcome_c(
+                question, _pay, _cls, _rows, diag, cut=cut, t0=t0,
+                marks=marks, by=by, match=match, preds=preds)
+        if _outc == "unavailable":
+            return {"partial": cut or None, "kind": "unavailable",
+                    "text": "Не удалось проверить все прочтения вопроса. "
+                            "Повторите запрос.",
+                    "sources": [], "retry": True,
+                    "diag": dict(diag, fork_outcome="unavailable",
+                                 sec=round(time.time() - t0, 2))}
+        # unique / empty — ниже обычный круг или одиночный ответ
 
     if len(arb_pool) > 1 and not no_arbiter:
         # 🔴 СНАЧАЛА АРБИТР, ПОТОМ ЧЕЛОВЕК. Порядок п. 21: ответ → уточняющий вопрос →
@@ -7841,6 +8230,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # сущность (книга и реализации позавчера обе 19). Исключения «число
             # одно — согласие» нет: цена — «контрагенты 155=155» станет уточнением.
             if _diverge or _src_c:
+                # Исход A на позднем пути: числа сошлись, src разные — источник-нейтрально
+                # (тот же контракт, что ранний детектор). Расхождение чисел → C (clarify).
+                if FORK_OUTCOMES and _src_c and not _diverge and cand_src:
+                    _a_atom = (cand_src[0].get("atom")
+                               or (cand_src[0].get("atoms") or [None])[0])
+                    if isinstance(_a_atom, dict):
+                        _a_item = {"atom": dict(_a_atom),
+                                   "srcs": [((s.get("diag") or {}).get("focus")
+                                             or "") for s in cand_src]}
+                        _a_item["atom"].pop("src", None)
+                        шаг("исход A (круг)", srcs=len(_a_item["srcs"]))
+                        return fork_outcome_a(question, _a_item, diag, cut=cut, t0=t0)
                 # 🔴 АРБИТР — ДЕТЕКТОР НЕОДНОЗНАЧНОСТИ, А НЕ ВЫБИРАЮЩИЙ (задача 17 реестра).
                 # Числа кандидатов посчитаны базой и РАЗОШЛИСЬ — значит вопросу отвечают разные
                 # объекты с разными величинами, и это доказанная неоднозначность, а не повод
@@ -7875,6 +8276,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                             "sources": [o["label"] for o in opts],
                             "diag": dict(diag, sec=round(time.time() - t0, 2))}
         if len(cand_ans) > 1:
+            # Выбирающий arbitrate на ветке расхождения больше не зовётся (план §3):
+            # diverge/src_conflict выше уже ушли в clarify/A. Здесь атомы сошлись —
+            # выбирать моделью нечего. Код arbitrate сохранён; ASK_FORK_OUTCOMES=0
+            # возвращает прежний вызов (эвакуация волны-1).
+            if FORK_OUTCOMES:
+                out = dict(cand_src[0])
+                diag["arbiter"] = {"skipped": "fork_outcomes",
+                                   "candidates": [s.get("diag", {}).get("focus")
+                                                 for s in cand_src]}
+                out["diag"] = dict(out.get("diag", {}), arbiter=diag["arbiter"])
+                out["partial"] = cut or out.get("partial")
+                return _checked(out)
             n = arbitrate(question, cand_ans, context)
             diag["arbiter"] = {"candidates": [s.get("diag", {}).get("focus") for s in cand_src],
                                "chose": None if n is None else
@@ -9071,7 +9484,7 @@ class Handler(BaseHTTPRequestHandler):
             # вопрос» (05.08). Он же зовёт `answer` внутри, поэтому путь ответа прежний.
             out = answer_checked(question, focus=focus, measure_pick=measure_pick,
                                  context=context, prior=prior, trusted=trusted)
-            if isinstance(out, dict) and out.get("kind") == "clarify":
+            if isinstance(out, dict) and out.get("options"):
                 out = seal_clarify(out, question, user=user)
             # СВЕЖЕСТЬ ДАННЫХ — В КАЖДЫЙ ОТВЕТ (п. 18). Если 1С недоступна или такт падает,
             # корпус остаётся консистентным (защиты сборки), но СТАРЕЕТ, а бот об этом

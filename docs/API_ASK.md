@@ -76,6 +76,14 @@ Content-Type: application/json
 (служебное; **пользователю не показывать**).
 
 
+🔴 **С 16.08 шаг 4: исходы A/B/C.** `kind=answer` с `source_fixed=false` /
+`memory_eligible=false` — исход A (один атом, несколько src; метку источника в
+текст и паспорт не ставить, в память не писать). `kind=figures` с `atoms[]` и
+`options[].decision_id` — исход B (условные пары по классам; выбор билетом
+снимает сущность). `kind=clarify` с `partial.fork_limitation` — исход C
+(непосчитанное/неподписанное видно клиенту). Выключатель эвакуации сервиса:
+`ASK_FORK_OUTCOMES=0`.
+
 🔴 **С 16.08 `kind=answer` и `kind=figures` несут типизированный атом** (план ответов §5,
 аудит §17): поля `atom` (один) и `atoms` (список). Строитель — `build_answer_atom` /
 `atom_from_agg` в `serene_ask.py`. Семантика: `operation`, `exact_value`,
