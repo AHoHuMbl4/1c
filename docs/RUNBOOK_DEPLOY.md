@@ -500,8 +500,9 @@ cp ubuntu/serenedb/*.py ubuntu/serenedb/*.sh ubuntu/serenedb/*.sql ubuntu/serene
    ubuntu/serenedb/serene-entities.txt /opt/1c-mcp-reports/
 chmod +x /opt/1c-mcp-reports/*.sh
 cat > /etc/1c-mcp-reports.env <<EOF        # секреты не в git, chmod 600
-DEEPSEEK_API_KEY=<ключ>                        # NL→SQL + grounding-критик
-DEEPSEEK_BASE=https://api.deepseek.com
+DEEPSEEK_API_KEY=<ключ>                        # NL→SQL + grounding-критик; на своей vLLM — ключ того инстанса
+DEEPSEEK_BASE=https://api.deepseek.com         # OpenAI-совместимый корень: DeepSeek или своя vLLM
+DEEPSEEK_MODEL=deepseek-v4-pro                 # на своей модели: Qwen3.8-27B (имена читает код как есть)
 ALIBABA_API_KEY=<ключ>                         # эмбеддер резолвера (Qwen text-embedding-v4)
 ALIBABA_EMBED_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 EMBED_MODEL=text-embedding-v4
@@ -621,7 +622,21 @@ systemctl enable --now 1c-serene-ask.service     # отвечающий серв
 чистой машине. Юниты конвейера лежат в `ubuntu/systemd/`, а не в `ubuntu/serenedb/systemd/`.*
 `1c-serene-ask` читает `/etc/1c-mcp-reports.env` (ключи Alibaba/DeepSeek, пароли ролей) и
 необязательный `/etc/1c-serene-ask.env` (`ASK_TOKEN` — авторизация запросов, `ASK_*_BUDGET_CHARS` —
-символьные бюджеты контекста модели).
+символьные бюджеты контекста модели; `DEEPSEEK_MODEL` / `ASK_THINKING_OFF_BODY` — какая
+модель отвечает).
+
+🔴 **Своя модель ответов (vLLM), 17.08.** Имена переменных не называют поставщика:
+`serene_ask.py` ходит в `DEEPSEEK_BASE` + `DEEPSEEK_MODEL` по OpenAI-совместимому
+`/v1/chat/completions`. На стенде контур ответов переключён оркестратором:
+`DEEPSEEK_BASE` в `/etc/1c-mcp-reports.env` — корень vLLM
+(`https://a1f19thc-8000.thundercompute.net`), `DEEPSEEK_MODEL=Qwen3.8-27B` и
+`ASK_THINKING_OFF_BODY=1` в `/etc/1c-serene-ask.env`. `ASK_THINKING_OFF_BODY`
+кладёт `chat_template_kwargs.enable_thinking=false` **на верхний уровень тела**
+(vLLM `extra_body` игнорирует). Ключ — `DEEPSEEK_API_KEY` того же env-стека
+(на стенде совпадает с ключом эмбеддера в `/etc/1c-embed.env`). Вернуть DeepSeek:
+`DEEPSEEK_BASE=https://api.deepseek.com`, `DEEPSEEK_MODEL=deepseek-v4-pro`,
+`ASK_THINKING_OFF_BODY` убрать или `0`. Юнит подхватывает env только после
+`systemctl restart 1c-serene-ask@<база>` — `deploy.sh` его не рестартует.
 
 **Такт.** «Ночного» такта в продукте нет: `1c-serene-pipeline.timer` работает **по
 готовности** — следующий заход начинается, когда закончился предыдущий. Этого требует п. 17

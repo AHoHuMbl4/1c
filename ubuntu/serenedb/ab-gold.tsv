@@ -2,11 +2,28 @@
 # Файл ДАННЫХ, а не кода: имена сущностей, реквизитов и значения здесь — от
 # конкретной базы, и на другой конфигурации заменяется он, а не программа.
 # Путь задаётся переменной AB_GOLD_FILE; по умолчанию — этот файл рядом.
-Сколько всего мы продали?	SELECT sum("СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг
-What is the total amount of all sales?	SELECT sum("СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг
-На какую сумму мы продали ООО Северный Ветер?	SELECT sum(d."СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг d JOIN catalog_контрагенты k ON k."Ref_Key"=d."Контрагент_Key" WHERE k."Description" LIKE '%Северный Ветер%'
-Какие поступления были от ООО ТехноСнаб?	SELECT sum(d."СуммаДокумента")::BIGINT FROM document_поступлениетоваровуслуг d JOIN catalog_контрагенты k ON k."Ref_Key"=d."Контрагент_Key" WHERE k."Description" LIKE '%ТехноСнаб%'
-Покажи продажи за декабрь 2025 года	SELECT sum("СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг WHERE "Date">='2025-12-01' AND "Date"<'2026-01-01'
-Какие продажи были на сумму больше 500000 рублей?	SELECT sum("СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг WHERE "СуммаДокумента">500000
-Сколько банков в Казани?	SELECT count(*) FROM catalog_классификаторбанков WHERE upper("Город") LIKE '%КАЗАН%'
-Что покупало ООО Ромашка?	SELECT sum(d."СуммаДокумента")::BIGINT FROM document_реализациятоваровуслуг d JOIN catalog_контрагенты k ON k."Ref_Key"=d."Контрагент_Key" WHERE k."Description" LIKE '%Ромашка%'
+#
+# Семантика 17.08 (пакетная витрина ut_test, УТ 11.4.9):
+# - Сырые таблицы лежат в самой базе ut_test (duckdb_tables, database_name =
+#   current_database()). Соседняя присоединённая postgres — другая конфигурация
+#   (Бухгалтерия); без фильтра по базе «поступлениетоваровуслуг» видно там.
+# - Пакетный apply пишет все колонки как VARCHAR → суммы и даты через TRY_CAST
+#   (docs.serenedb.com/sql/expressions/cast#try_cast). coalesce(...,0): пустой
+#   отбор — честный ноль, а не NULL, иначе ab_scorer считает эталон «не посчитан».
+# - Продажи = шапка document_реализациятоваровуслуг (272 док. = 272 Ref_Key,
+#   табчасть отдельно). Закупки УТ = document_приобретениетоваровуслуг;
+#   document_поступлениетоваровуслуг на ut_test нет.
+# - JOIN catalog_контрагенты по Ref_Key=Контрагент_Key сходится (272/272).
+#   «ООО Ромашка», «ООО Северный Ветер», «ООО ТехноСнаб» в этой демо-базе нет
+#   (ближайшее имя — «Белый ветер», это другой контрагент) → 0 из данных, не
+#   подгонка. Даты реализаций 2015-02-01…2019-08-25 → декабрь 2025 тоже 0.
+# - Банки в Казани: catalog_классификаторбанков, Город «Г. КАЗАНЬ» (не папки).
+# Числа ниже не зашиты: каждый прогон считает их заново этим SQL.
+Сколько всего мы продали?	SELECT coalesce(sum(TRY_CAST("СуммаДокумента" AS DECIMAL(38,10)))::BIGINT,0) FROM document_реализациятоваровуслуг
+What is the total amount of all sales?	SELECT coalesce(sum(TRY_CAST("СуммаДокумента" AS DECIMAL(38,10)))::BIGINT,0) FROM document_реализациятоваровуслуг
+На какую сумму мы продали ООО Северный Ветер?	SELECT coalesce(sum(TRY_CAST(d."СуммаДокумента" AS DECIMAL(38,10)))::BIGINT,0) FROM document_реализациятоваровуслуг d JOIN catalog_контрагенты k ON k."Ref_Key"=d."Контрагент_Key" WHERE k."Description" LIKE '%Северный Ветер%'
+Какие поступления были от ООО ТехноСнаб?	SELECT coalesce(sum(TRY_CAST(d."СуммаДокумента" AS DECIMAL(38,10)))::BIGINT,0) FROM document_приобретениетоваровуслуг d JOIN catalog_контрагенты k ON k."Ref_Key"=d."Контрагент_Key" WHERE k."Description" LIKE '%ТехноСнаб%'
+Покажи продажи за декабрь 2025 года	SELECT coalesce(sum(TRY_CAST("СуммаДокумента" AS DECIMAL(38,10)))::BIGINT,0) FROM document_реализациятоваровуслуг WHERE TRY_CAST("Date" AS TIMESTAMP)>=TIMESTAMP '2025-12-01' AND TRY_CAST("Date" AS TIMESTAMP)<TIMESTAMP '2026-01-01'
+Какие продажи были на сумму больше 500000 рублей?	SELECT coalesce(sum(TRY_CAST("СуммаДокумента" AS DECIMAL(38,10)))::BIGINT,0) FROM document_реализациятоваровуслуг WHERE TRY_CAST("СуммаДокумента" AS DECIMAL(38,10))>500000
+Сколько банков в Казани?	SELECT count(*) FROM catalog_классификаторбанков WHERE upper("Город") LIKE '%КАЗАНЬ%'
+Что покупало ООО Ромашка?	SELECT coalesce(sum(TRY_CAST(d."СуммаДокумента" AS DECIMAL(38,10)))::BIGINT,0) FROM document_реализациятоваровуслуг d JOIN catalog_контрагенты k ON k."Ref_Key"=d."Контрагент_Key" WHERE k."Description" LIKE '%Ромашка%'

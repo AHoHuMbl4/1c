@@ -110,8 +110,11 @@ def ask(q):
     if TOK:
         req.add_header("Authorization", "Bearer " + TOK)
     t = time.time()
+    # Qwen3.8-27B vLLM: отдельные вопросы живут >300 с (замер 17.08: порог 500k —
+    # 514 с, clarify). Таймаут прибора не должен превращать долгий ответ в «сбой».
+    timeout = int(os.environ.get("AB_ASK_TIMEOUT", "600"))
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
             return json.loads(r.read()), round(time.time() - t, 2)
     except Exception as e:                       # noqa: BLE001
         return {"text": "", "diag": {"error": str(e)[:80]}}, round(time.time() - t, 2)
