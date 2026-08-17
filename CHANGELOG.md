@@ -1,3 +1,20 @@
+## 17.08: шаг 4 okna — B sum-пары, PROOF_NA, «Всего» на document_* `[код]` `[замер]`
+
+`[код]` `serene_ask.py`: статус `not_applicable` (PROOF_NA) — класс с живым
+count, но без релевантных величин sum-вопроса, не блокирует A/B; `rel_by_src`
+в `resolve_fork_outcome`/`ordered_fork_classes`. `_fork_headline_measure` и
+`_fork_relevant`: приоритет «Всего» на `document_*` без `*Документа`; пустой
+pool `_with_doc_hdr` больше не теряет «Всего». `test_fork_outcomes` 22/22,
+`test_fork_detector` 17/17.
+
+`[замер]` okna prod (`167.233.249.110`), md5 `8539aec6…`:
+«на какую сумму мы продали» → **figures B × 2** (не 129 count, не C×3):
+`1572493.22` + `79435925.51` (unknown). SQL `sum(Всего)` по корпусу:
+`1572493.2200000000` / `79435925.5099999999` — до копейки. `accumulationregister_кассовыеордера` → NA.
+`branch_alias.sh` (undebot, 5 классов): +59 подписей, 313 всего, 6 классов
+целиком. Регрессия: «сколько контрагентов/номенклатуры/складов» → clarify
+(2–6 вариантов), не B×238. «сколько мы продали» → clarify (2 ветки).
+
 ## 17.08: okna — OOM движка починен, такт свежести зелёный `[замер]`
 
 `[замер]` **Корень:** `--cpu_threads=160` + `memory_limit=6 GiB` на машине **7,6 GiB RAM,
@@ -52,9 +69,12 @@ SQL-сверка корпуса совпала (8223 / 3826 / 74705 / 348). Пр
 `/health`: `corpus_rows=1226413`, `status=degraded`, `coverage_gap` 142 строки.
 Чинит другое окно (словарь / branch_alias).
 
-`[замер]` :8097 — прогон 44 вопросов для **латентности** (код `bf927340…`,
-классификатор step4_bench старый — исходы не мерило). След:
+`[замер]` :8097 — прогон **44/44** для **латентности** (код `bf927340…`,
+классификатор step4_bench не мерил). След:
 `work/acceptance/runs/2026-08-17-step4-8097-predeploy.jsonl`.
+**ask sec** median=83, p90=296, max=468; **fork.cost_ms** p50=26 735, max=153 438
+(n=43). Прибор `answer_rate_probe`: `_PROBE_ARGV` — иначе `step4_bench` затирал
+диапазон `[от] [до]` при import.
 
 ## 17.08: учёт токенов DeepSeek в ds_chat → diag.tokens `[код]` `[замер]`
 

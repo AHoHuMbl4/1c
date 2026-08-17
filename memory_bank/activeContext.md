@@ -8,19 +8,14 @@ _Обновлено: **2026-08-17.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-🔴 **okna OOM + такт свежести ПОЧИНЕНЫ `[17.08]`**: `cpu_threads=4`, `memory_limit=
-6500MB`, swap 4 ГiБ, `BUILD_THREAD_MIN=4`. `/health` `freshness_lag=0`,
-`corpus_rows=1 227 192`, 3+ зелёных такта + `/ask`∥такт. NRestarts=1 (проба без
-swap). **Хвост:** снять swap когда найдём меньший `memory_limit`; ValueError
-packet-meta URL в sync; шаг 4 / ab_scorer / откат serene_ask — отдельно.
+🔴 **okna шаг 4 — B sum на проде `[17.08]`**: md5 `8539aec6…`; «на какую сумму мы
+продали» → **figures B × 2** (`1572493.22` + `79435925.51`, SQL `sum(Всего)` до
+копейки); `branch_alias` undebot +59 подписей (313 всего). PROOF_NA: кассовые
+ордера не блокируют B. **Хвост:** серия 6 + 44-прогон (402?); ab_scorer/golden;
+:8097 dev; полный прогон branch_alias (147 классов, 6 покрыты).
 
-🔴 **Шаг 4 — B по классам атомов починен `[17.08]`**: fork_label_siblings off,
-`_class_label_lookup`+dedupe+budget; want=sum/count; _fork_log per-class.
-**Хвост:** выкат okna + серия 6 + 44-прогон (402?). Атом: `_fork_headline_measure` вместо
-алфавитного `sorted(sums)[0]` (71M→73M на закупках). Интеграция
-`test_fork_atom_aggregate.py` 10/10 на ut_test. **Хвост шага 4:** okna прод
-(SSH 167.233.249.110 — ключ недоступен сессии); живой A/B на :8097 и 44
-вопроса — DeepSeek 402; ab_scorer/golden не обновлён.
+🔴 **okna OOM + такт свежести ПОЧИНЕНЫ `[17.08]`**: `cpu_threads=4`, `memory_limit=
+6500MB`, swap 4 ГiБ. `/health` зелёный. **Хвост:** снять swap; packet-meta URL.
 
 🔴 **Волна-1 (детектор развилок + словарь подписей веток) В БОЮ на okna
 `[16.08]`**: выкачен код из origin/main (md5 `4ed9bc7b…`, бэкап

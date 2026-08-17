@@ -2372,12 +2372,16 @@ def _fork_relevant(word, names, alias_by):
     got, alts, how = measure_choice(names, word, alias_by=alias_by)
 
     def _with_doc_hdr(pool):
-        if not pool or not ("сумм" in wl or wl == "sum"):
+        if not ("сумм" in wl or wl == "sum"):
             return pool
         out = list(pool)
         for h in _fork_headline_doc_measures(names):
             if h not in out:
                 out.append(h)
+        for n in names:
+            if (n or "").strip().lower() == "всего" and n not in out:
+                out.append(n)
+                break
         return out
 
     if got:
@@ -2598,17 +2602,26 @@ def _fork_headline_measure(src, sums, measure_word, alias_by=None):
         if hdr:
             hdr.sort(key=lambda n: (float(sums.get(n) or 0) == 0, len(n), n))
             return hdr[0]
+        vsego = [n for n in pool if (n or "").strip().lower() == "всего"]
+        if len(vsego) == 1:
+            return vsego[0]
+        vsego_all = [n for n in names if (n or "").strip().lower() == "всего"]
+        if len(vsego_all) == 1:
+            return vsego_all[0]
     if pool and not measure_ambiguous(pool, sums):
         return sorted(pool)[0]
     return None
 
 
-def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None):
+def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
+                  rel_measures=None):
     """AnswerAtom класса из строки `fork_scan` (без src). Непосчитанное — PROOF_UNCOUNTED.
 
     `want=sum` — только сумма по величине вопроса; без подходящей величины атом
     непосчитан, а не count ([замер 17.08]: «на какую сумму» → 129× count).
     `want=count` — счёт строк; суммы в атом не входят.
+    `rel_measures=[]` при sum-вопросе — доказанно не относится (план §3.3, §7.3):
+    величин вопроса у источника нет, хотя строки под WHERE есть; не блокирует A/B.
     """
     d0 = row or {"count": 0, "folders": 0, "sums": {}}
     src0 = sorted(srcs)[0] if srcs else ""
@@ -2619,10 +2632,16 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None):
             alias_by = measure_aliases_of(src0)
         except RuntimeError:
             alias_by = {}
+    sum_q = w == "sum" or (bool((measure_word or "").strip()) and w != "count")
+    if sum_q and rel_measures is not None and not rel_measures:
+        return build_answer_atom(
+            operation="sum", exact_value=None, measure_id=None, measure_label=None,
+            excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
+            proof_status=PROOF_NA)
     if w == "count":
         exact = d0.get("count")
         op, mid, lab = "count", None, measure_label_of(src0, None) if src0 else None
-    elif w == "sum" or (measure_word or "").strip():
+    elif sum_q:
         mid = _fork_headline_measure(src0, sums, measure_word, alias_by)
         if mid is None:
             exact, op, lab = None, "sum", None
@@ -2695,13 +2714,16 @@ def _dedupe_fork_classes(ordered):
     return out
 
 
-def ordered_fork_classes(classes, rows, measure_word="", want=None):
+def ordered_fork_classes(classes, rows, measure_word="", want=None, rel_by_src=None):
     """Классы в детерминированном порядке: по отпечатку атома (не по размеру/лидеру)."""
+    rel_by_src = rel_by_src or {}
     items = []
     for atom_fp, ss in (classes or {}).items():
         srcs = sorted(ss)
         d0 = (rows or {}).get(srcs[0]) if srcs else None
-        built = _fork_atom_of(d0, srcs, measure_word, want=want)
+        rep = srcs[0] if srcs else ""
+        rel = rel_by_src.get(rep) if rep in rel_by_src else None
+        built = _fork_atom_of(d0, srcs, measure_word, want=want, rel_measures=rel)
         items.append({"fingerprint": atom_fp, "srcs": srcs, "atom": built,
                       "row": d0 or {"count": 0, "folders": 0, "sums": {}}})
     items.sort(key=lambda it: (tuple((str(k), v) for k, v in it["fingerprint"]),
@@ -2709,32 +2731,46 @@ def ordered_fork_classes(classes, rows, measure_word="", want=None):
     return items
 
 
-def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=None):
+def _fork_applicable_classes(ordered):
+    """Классы, относящиеся к вопросу: NA (доказанно не относится) не конкурируют."""
+    return [it for it in (ordered or [])
+            if (it.get("atom") or {}).get("proof_status") != PROOF_NA]
+
+
+def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=None,
+                         rel_by_src=None):
     """Исход A/B/C/unique/empty/unavailable по классам (план §2). Чистая логика.
 
     A — один класс, src несколько, все ячейки посчитаны.
     B — классов несколько, все посчитаны и у каждого класса есть подпись (представитель).
     C — иначе (непосчитанное / неподписанное); unique — один класс и один src.
+    Статус NA (величина вопроса к источнику не относится) не блокирует A/B.
     """
     if scan_error:
         return "unavailable", {"reason": "scan_error", "detail": str(scan_error)[:160]}
     if not classes:
         return "empty", {"reason": "no_live_cells"}
-    ordered = ordered_fork_classes(classes, rows, measure_ctx, want=want)
-    uncounted = [it for it in ordered
+    ordered = ordered_fork_classes(classes, rows, measure_ctx, want=want,
+                                   rel_by_src=rel_by_src)
+    applicable = _fork_applicable_classes(ordered)
+    if not applicable:
+        return "empty", {"reason": "no_applicable_cells",
+                         "na_classes": len(ordered)}
+    uncounted = [it for it in applicable
                  if (it["atom"] or {}).get("proof_status") != PROOF_COMPUTED
                  or (it["atom"] or {}).get("exact_value") is None]
     if uncounted:
         return "C", {"reason": "uncounted_cell",
-                     "classes": len(ordered),
+                     "classes": len(applicable),
+                     "na_classes": len(ordered) - len(applicable),
                      "uncounted": [it["srcs"] for it in uncounted]}
-    if len(ordered) == 1:
-        it = ordered[0]
+    if len(applicable) == 1:
+        it = applicable[0]
         if len(it["srcs"]) == 1:
             return "unique", {"class": it}
         return "A", {"class": it, "srcs": it["srcs"]}
     missing, fk_seen = [], None
-    for it in ordered:
+    for it in applicable:
         lab, fk = _class_label_lookup(it["srcs"], measure_ctx)
         if fk and not fk_seen:
             fk_seen = fk
@@ -2742,11 +2778,14 @@ def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=No
             missing.append(it["srcs"])
         else:
             it["label"] = lab
-    ordered = _dedupe_fork_classes(ordered)
+    applicable = _dedupe_fork_classes(applicable)
     if missing:
         return "C", {"reason": "unsigned_class", "fork_key": fk_seen,
-                     "classes": len(ordered), "unsigned": missing}
-    return "B", {"fork_key": fk_seen, "classes": ordered}
+                     "classes": len(applicable),
+                     "na_classes": len(ordered) - len(applicable),
+                     "unsigned": missing}
+    return "B", {"fork_key": fk_seen, "classes": applicable,
+                 "na_classes": len(ordered) - len(applicable)}
 
 
 def _fork_figures_of(atom):
@@ -7686,7 +7725,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _atoms = []
             for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
                 d0 = _rows.get(sorted(ss)[0]) or {"count": 0, "folders": 0, "sums": {}}
-                _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant)
+                _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant,
+                               rel_measures=_rel.get(sorted(ss)[0]) if sorted(ss) else None)
                 _atoms.append({"atom": _built,
                                "fingerprint": [["%s" % k, v] for k, v in atom],
                                "srcs": sorted(ss)})
@@ -8307,7 +8347,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _atoms = []
             for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
                 d0 = _rows.get(sorted(ss)[0]) or {"count": 0, "folders": 0, "sums": {}}
-                _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant)
+                _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant,
+                               rel_measures=_rel.get(sorted(ss)[0]) if sorted(ss) else None)
                 _atoms.append({"atom": _built,
                                "fingerprint": [["%s" % k, v] for k, v in atom],
                                "srcs": sorted(ss)})
@@ -8328,7 +8369,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             sys.stderr.write("ask FORK outcome: %s\n" % str(_e)[:160])
         _outc, _pay = resolve_fork_outcome(
             _cls, _rows, measure_ctx=(_mword or _fwant or ""),
-            scan_error=_scan_err, want=_fwant or None)
+            scan_error=_scan_err, want=_fwant or None, rel_by_src=_rel)
         diag.setdefault("fork", {})["outcome"] = _outc
         if _outc == "A":
             шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))

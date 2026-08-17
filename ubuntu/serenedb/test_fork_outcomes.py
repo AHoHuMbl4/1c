@@ -92,7 +92,7 @@ def resolve_with_uncounted():
     rows = {"a": row(1, Сумма=1.0), "b": row(2, Сумма=2.0)}
     real_of = A.ordered_fork_classes
 
-    def boom(classes, rows, measure_word="", want=None):
+    def boom(classes, rows, measure_word="", want=None, rel_by_src=None):
         items = real_of(classes, rows, measure_word, want=want)
         items[0]["atom"]["proof_status"] = A.PROOF_UNCOUNTED
         items[0]["atom"]["exact_value"] = None
@@ -163,6 +163,21 @@ out, pay = A.resolve_fork_outcome(cls_m, many, "сумма")
 t("много src с одним атомом → A (одна пара), не по источникам",
   out == "A" and len(pay["srcs"]) == 5)
 
+
+
+# ── NA: sum-вопрос, нет релевантных величин — не блокирует B ───────────────
+na_rows = {"a": row(10, Сумма=100.0), "b": row(10, Сумма=200.0), "c": row(5)}
+na_cls = A.fork_classes(na_rows)
+A.fork_labels_of = _labs_ok
+out, pay = A.resolve_fork_outcome(
+    na_cls, na_rows, "сумма", want="sum",
+    rel_by_src={"a": ["Сумма"], "b": ["Сумма"], "c": []})
+t("NA класс не блокирует B",
+  out == "B" and len(pay.get("classes") or []) == 2
+  and pay.get("na_classes") == 1)
+atom_na = A._fork_atom_of(row(5), ["c"], "сумма", want="sum", rel_measures=[])
+t("want=sum без rel_measures → NA",
+  atom_na.get("proof_status") == A.PROOF_NA)
 
 # ── covering: подписи по src, не только по sha1(ctx) ───────────────────────────
 real_cov = A.fork_labels_covering

@@ -85,6 +85,11 @@ t("_fork_atom_of: exact_value = СуммаДокумента",
   A._fork_atom_of(row(249, **_zakup_doc),
                   ["document_приобретениетоваровуслуг"], "сумма")["exact_value"]
   == 73181157.68)
+t("headline: document_* без *Документа → Всего",
+  A._fork_headline_measure("document_отгрузка",
+      {"Всего": 79435925.51, "СуммаНДС": 1.0, "СуммаОплатыКарточкой": 2.0},
+      "сумма") == "Всего")
+
 t("headline: одна величина — она",
   A._fork_headline_measure("accumulationregister_закупки", {"Сумма": 1137949.71}, "сумма")
   == "Сумма")
