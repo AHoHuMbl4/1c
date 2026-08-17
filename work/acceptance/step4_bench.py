@@ -85,20 +85,35 @@ def ask(question):
         return {"kind": "сбой: %s" % str(e)[:40], "diag": {}}
 
 
+def _fork_outcome(diag):
+    d = diag or {}
+    return d.get("fork_outcome") or (d.get("fork") or {}).get("outcome")
+
+
 def verdict(out, want_family, fam_of):
-    # 🔴 СБОЙ ПРОВЕРЯЕТСЯ ПЕРВЫМ, И ЭТО НЕ ПОРЯДОК РАДИ ПОРЯДКА. В первой редакции условие
-    # «нет выбранной сущности → ОТКАЗ» стояло выше проверки вида ответа, и когда у модели
-    # ответов кончился баланс (`HTTP 402`, сервис честно отдаёт 503), прибор записал все
-    # 44 вопроса как «ОТКАЗ» за одну секунду — то есть выдал сломанный прогон за
-    # осмысленный замер. Различать «система отказалась» и «замер не состоялся» — то самое,
-    # на чём уже спотыкались (§0 `HOW_NOT_TO`, сломанный прибор приёмки 02.08).
+    # 🔴 СБОЙ ПРОВЕРЯЕТСЯ ПЕРВЫМ. Исходы A/B/C шага 4: B — figures без focus,
+    # прежняя логика «нет focus → ОТКАЗ» давала фантомные отказы ([замер 17.08]).
     kind = out.get("kind") or "?"
-    got = (out.get("diag") or {}).get("focus") or ""
-    if kind not in ("answer", "figures", "clarify", "no_data"):
+    diag = out.get("diag") or {}
+    got = diag.get("focus") or ""
+    fo = _fork_outcome(diag)
+    if kind not in ("answer", "figures", "clarify", "no_data", "unavailable"):
         return "СБОЙ", got
-    if kind == "clarify":
+    if kind == "unavailable":
+        return "ОТКАЗ", got
+    if kind == "clarify" or fo == "C":
         return "СПРОСИЛ", got
-    if kind == "no_data" or not got:
+    if kind == "no_data":
+        return "ОТКАЗ", got
+    if kind == "figures" and fo == "B":
+        return "УСЛОВНО", got
+    if kind == "answer" or fo == "A" or (kind == "figures" and fo in ("A", "unique")):
+        if not got:
+            return "ОТВЕТ", got
+        return ("ВЕРНО" if fam_of.get(got, got) == want_family else "НЕВЕРНО"), got
+    if kind == "figures" and (out.get("text") or out.get("atoms")):
+        return "ОТВЕТ", got
+    if not got:
         return "ОТКАЗ", got
     return ("ВЕРНО" if fam_of.get(got, got) == want_family else "НЕВЕРНО"), got
 
@@ -153,7 +168,10 @@ def main():
     print("МЕРИЛО ВЛАДЕЛЬЦА: СЧЁТ НЕВЕРНЫХ, ЦЕЛЬ НОЛЬ — вопросов %d, прогонов %d, %.0f мин"
           % (len(pairs), n, (time.time() - t_start) / 60.0))
     print("  🔴 НЕВЕРНО (цель — ноль) : %d" % tally.get("НЕВЕРНО", 0))
-    for k in ("ВЕРНО", "СПРОСИЛ", "ОТКАЗ", "СБОЙ"):
+    answered = tally.get("ВЕРНО", 0) + tally.get("УСЛОВНО", 0) + tally.get("ОТВЕТ", 0)
+    print("  ДОЛЯ ОТВЕТОВ (A/B/figures): %d/%d (%.0f%%)"
+          % (answered, len(pairs), 100.0 * answered / max(1, len(pairs))))
+    for k in ("ВЕРНО", "УСЛОВНО", "ОТВЕТ", "СПРОСИЛ", "ОТКАЗ", "СБОЙ"):
         if tally.get(k):
             print("     %-8s             : %d" % (k, tally[k]))
     bad = [(i, q, want, seen) for i, q, want, seen in per_q

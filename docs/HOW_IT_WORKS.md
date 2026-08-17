@@ -1161,9 +1161,12 @@ compose ПЛЮС паспорт (`from`/`to`/`label`/`measure`), а `_slot_fp` �
 клиенту (`partial.fork_limitation`). Сигнальное сомнение само по себе больше не
 создаёт вопрос: один класс → ответ (запись в `diag`); несколько → B/C.
 Выбирающий `arbitrate` при `ASK_FORK_OUTCOMES=1` не зовётся (код сохранён;
-`ASK_FORK_OUTCOMES=0` — эвакуация волны-1: shadow + старые исходы). Подписанные
-сёстры из словаря входят в пул исходов даже вне текущего `cands`. Подписи ищутся
-покрытием `src` (`fork_labels_covering`), не только точным `sha1(src¦ctx)`.
+`ASK_FORK_OUTCOMES=0` — эвакуация волны-1: shadow + старые исходы). Пул исходов = `arb_pool` (без `fork_label_siblings`: волна-1 раздувала пул до
+всех подписанных src одного fork_key). **B — одна пара на класс атома**, подпись класса
+— по представителю (`_class_label_lookup`); без подписи → C. `want=sum` — атом sum,
+не count. `_fork_log` пишет **каждый класс атомов** отдельной строкой в
+`search_fork_class`. `/health`: `coverage_gap.kind=freshness_lag`, если
+`mart_changed_ts` > `build_ts` (503 только при `systemic`).
 Выключатель детекции: `ASK_FORK_DETECT=0`.
 
 Зачем: гейт этот класс ошибок не ловит по построению — число посчитано верно, только не по

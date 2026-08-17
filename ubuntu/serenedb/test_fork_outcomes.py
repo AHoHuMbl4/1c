@@ -92,8 +92,8 @@ def resolve_with_uncounted():
     rows = {"a": row(1, Сумма=1.0), "b": row(2, Сумма=2.0)}
     real_of = A.ordered_fork_classes
 
-    def boom(classes, rows, measure_word=""):
-        items = real_of(classes, rows, measure_word)
+    def boom(classes, rows, measure_word="", want=None):
+        items = real_of(classes, rows, measure_word, want=want)
         items[0]["atom"]["proof_status"] = A.PROOF_UNCOUNTED
         items[0]["atom"]["exact_value"] = None
         return items
@@ -175,6 +175,45 @@ out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма")
 t("B через covering, когда точный fork_key пуст",
   out == "B" and pay.get("fork_key") == "fk_cover")
 A.fork_labels_covering = real_cov
+
+# ── want=sum: не count при пустых sums ────────────────────────────────────────
+atom_sum = A._fork_atom_of(row(100), ["x"], "сумма", want="sum")
+t("want=sum без величин → uncounted, не count",
+  atom_sum.get("operation") == "sum"
+  and atom_sum.get("exact_value") is None
+  and atom_sum.get("proof_status") == A.PROOF_UNCOUNTED)
+atom_cnt = A._fork_atom_of(row(100, Сумма=50.0), ["x"], "сумма", want="count")
+t("want=count → count, не sum",
+  atom_cnt.get("operation") == "count" and atom_cnt.get("exact_value") == 100)
+
+# ── широкий класс: десятки src, одна пара на класс атома ─────────────────────
+many_same = {"s%02d" % i: row(5, Сумма=50.0) for i in range(30)}
+cls_wide = A.fork_classes(many_same)
+t("30 src, один атом → 1 класс",
+  len(cls_wide) == 1 and len(next(iter(cls_wide.values()))) == 30)
+
+two_atoms = dict(many_same)
+two_atoms["t00"] = row(5, Сумма=99.0)
+cls2w = A.fork_classes(two_atoms)
+A.fork_labels_of = lambda fk, srcs: {}
+A.fork_labels_covering = lambda srcs: (
+    {sorted(srcs)[0]: "Класс A", list(cls2w.values())[1][0]: "Класс B"}
+    if len(srcs) == 1 else ({}, None))
+real_cov = A.fork_labels_covering
+def _cov(srcs):
+    m = {}
+    for ss in cls2w.values():
+        rep = sorted(ss)[0]
+        if rep in srcs:
+            m[rep] = "Класс-%s" % rep
+    return m, "fk"
+A.fork_labels_covering = _cov
+A.fork_labels_of = lambda fk, srcs: {s: "L-%s" % s for s in srcs}
+out, pay = A.resolve_fork_outcome(cls2w, two_atoms, "сумма", want="sum")
+t("2 класса атомов из 31 src → B с 2 парами, не 31",
+  out == "B" and len(pay.get("classes") or []) == 2)
+A.fork_labels_covering = real_cov
+
 
 print()
 if FAIL:

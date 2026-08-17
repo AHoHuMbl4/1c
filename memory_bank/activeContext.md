@@ -8,7 +8,9 @@ _Обновлено: **2026-08-16.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-🔴 **Шаг 4 — атом форка починен `[17.08]`**: `_fork_headline_measure` вместо
+🔴 **Шаг 4 — B по классам атомов починен `[17.08]`**: fork_label_siblings off,
+`_class_label_lookup`+dedupe+budget; want=sum/count; _fork_log per-class.
+**Хвост:** выкат okna + серия 6 + 44-прогон (402?). Атом: `_fork_headline_measure` вместо
 алфавитного `sorted(sums)[0]` (71M→73M на закупках). Интеграция
 `test_fork_atom_aggregate.py` 10/10 на ut_test. **Хвост шага 4:** okna прод
 (SSH 167.233.249.110 — ключ недоступен сессии); живой A/B на :8097 и 44
@@ -23,11 +25,10 @@ _Обновлено: **2026-08-16.** Здесь — только живое: т�
 подписал 2 реальных класса (254 подписи). Схема `search_fork_class` выровнена
 с детектором (`measure_ctx`, UNIQUE, GRANT INSERT/UPDATE serene_ro).
 
-🔴 **Самопроверка трек C `[17.08]`**: гвард `branch_alias` (инфра/биллинг →
-без пустышек, exit 2); ut_test очищен от **75 732** пустых fork-label.
-**Ждём «DeepSeek оплачен»** → `1c-branch-alias`, `1c-wiki-alias`, пересъём
-ut_test tier2, финальный `SELFTEST_BASELINE.md`. Postgres+okna tier2 ✅
-(atoms_wrong 0). Разбор — [`docs/SELFTEST_BASELINE.md`](../docs/SELFTEST_BASELINE.md).
+🔴 **Самопроверка трек C `[17.08]`**: гвард+чанкинг `branch_alias` в git (`3fd7774`);
+фон: `1c-branch-alias` ut_test (87+ подписей, 0 пустышек) + tier2 пересъём
+(334 в., ~15/334 на момент коммита, все 200). Дальше: wiki-alias → check →
+финальный baseline. Postgres+okna tier2 ✅.
 
 🔴 **Слепое пятно — базовое число снято `[15.08]`** (замок 17 плана ответов):
 прибор `work/acceptance/selftest_surfaces.py` (ярус 1, без модели, детерминирован

@@ -1,3 +1,38 @@
+## 17.08: шаг 4 — починка B по классам атомов, не по источникам `[код]` `[замер]`
+
+`[код]` `serene_ask.py`: исход B — одна пара на **класс типизированного атома**
+(`_class_label_lookup`, `_dedupe_fork_classes`, бюджет `FORK_PAIR_MAX`);
+`fork_label_siblings` → no-op (волна-1 раздувала arb_pool до 203 src);
+`want=sum|count` в `_fork_atom_of` (sum-вопрос не падает в count);
+`_fork_log` — отдельная строка `search_fork_class` на класс атомов;
+`/health` и `_coverage_of`: `freshness_lag` при `mart_changed_ts` > `build_ts`
+(503 только `systemic`). `step4_bench.py`: A/B/C/УСЛОВНО/ОТКАЗ; `test_fork_outcomes` 20/20.
+
+`[замер]` okna `/health`: 142 строки, 9 сущностей — **freshness_lag**
+(`mart_changed_ts` +17 с, `build_ts` +4622 с; last_built_at 15.08). Замки:
+gate 130, step4_guards 110, a3 14, fork_detector 16, fork_outcomes 20,
+fork_atom_aggregate 10, answer_atom 18, ds_tokens 9, verify 95, decision_id 24.
+
+## 17.08: okna — откат serene_ask после регрессии B×129 `[замер]`
+
+`[замер]` Выкат `bf927340…` (A/B/C + `_fork_headline_measure`) на okna
+(`167.233.249.110`): «на какую сумму мы продали» — **figures B × 129** (все
+`operation=count`, не sum); 16.08 было **clarify C** с 2 ветками (8223 / 3826).
+SQL-сверка корпуса совпала (8223 / 3826 / 74705 / 348). Причина: в
+`search_fork_label` под ключом `4fe595e5…` **203 подписи** (было 2) —
+`fork_label_siblings` раздувает пул до всего словаря. Серия 6 развилочных
+вопросов: продажи sum/count → B×129; контрагенты → clarify×8; декабрь → B×36;
+книга продаж → C×203; закупки sum → 503×3.
+
+**Откат:** `cp serene_ask.py.bak-20260817 → serene_ask.py`, md5
+`4ed9bc7bd2b9103d74571fc9b73576d4`, `systemctl restart 1c-serene-ask@postgres`.
+`/health`: `corpus_rows=1226413`, `status=degraded`, `coverage_gap` 142 строки.
+Чинит другое окно (словарь / branch_alias).
+
+`[замер]` :8097 — прогон 44 вопросов для **латентности** (код `bf927340…`,
+классификатор step4_bench старый — исходы не мерило). След:
+`work/acceptance/runs/2026-08-17-step4-8097-predeploy.jsonl`.
+
 ## 17.08: учёт токенов DeepSeek в ds_chat → diag.tokens `[код]` `[замер]`
 
 `[код]` `serene_ask.py`: `ds_chat` читает `usage` (in/out, cache hit/miss);

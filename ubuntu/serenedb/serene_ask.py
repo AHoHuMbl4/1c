@@ -2353,24 +2353,39 @@ def _aliases_by_src(cands):
     return out
 
 
+def _fork_headline_doc_measures(names):
+    """Итог шапки document_* — поля *Документа (метаданные платформы)."""
+    return sorted(n for n in (names or []) if n and str(n).lower().endswith("документа"))
+
+
 def _fork_relevant(word, names, alias_by):
     """Величины сущности, относящиеся к слову вопроса — тем же правилом, что выбор
     величины ответа (`measure_choice`, он же кормит `unresolved_quantity`/`measure_alts`).
     Слова нет — величин в атоме нет, атом сводится к счёту и дискриминаторам.
-    Ветка `ask` у `measure_choice` возвращает подходящие ПЛЮС остальные для показа
-    человеку; детектору нужны только подходящие — иначе в атом и в запрос уходит весь
-    список величин сущности, включая несущие (`[замер 15.08]`: слово «сумма» собирало
-    258 колонок с `FTPПорт` вместо 144)."""
+    Для sum-вопроса у document_* в пул добавляются поля *Документа: иначе в rel
+    остаётся только СуммаНДС и `_fork_headline_measure` не находит итог
+    ([замер 17.08 okna]: document_реализациятмц → uncounted → C вместо B).
+    """
     if not word or not names:
         return []
+    wl = word.strip().lower()
     got, alts, how = measure_choice(names, word, alias_by=alias_by)
+
+    def _with_doc_hdr(pool):
+        if not pool or not ("сумм" in wl or wl == "sum"):
+            return pool
+        out = list(pool)
+        for h in _fork_headline_doc_measures(names):
+            if h not in out:
+                out.append(h)
+        return out
+
     if got:
-        return [got]
+        return _with_doc_hdr([got])
     if how == "ask":
-        wl = word.strip().lower()
         same = [n for n in alts if wl in n.lower()]
-        return same or list(alts)                # alts по алиасам — все подходящие
-    return list(alts)
+        return _with_doc_hdr(same or list(alts))
+    return _with_doc_hdr(list(alts))
 
 
 def fork_scan(match, preds, rel_by_src):
@@ -2462,24 +2477,31 @@ def fork_key_of(src_set, measure_ctx):
 
 
 def _fork_log(classes, measure_ctx):
-    """Новый класс развилки — в журнал `search_fork_class`, если его завёл свой трек.
+    """Класс атомов — в журнал `search_fork_class` (план §7).
 
-    Таблица — точка обмена со словарём развилок (план §7): детектор фиксирует класс,
-    штатный агент один раз подписывает ветки. Таблицы нет (контур без этого трека) —
-    молча пропускаем: журнал не имеет права ломать ответ.
+    Каждая запись — один класс эквивалентности (src с одинаковым типизированным
+    атомом), а не весь набор конкурирующих веток разом: подписи в
+    `search_fork_label` привязаны к (fork_key, src) внутри класса. Волна-1 писала
+    sha1 от всех src сразу — branch_alias подписывал источники, а исход B шага 4
+    читал их как конкурирующие пары ([замер 17.08 okna]: 129 пар count вместо 2 sum).
     """
-    src_set = sorted({s for ss in classes.values() for s in ss})
-    if len(src_set) < 2:
+    if len(classes or {}) < 2:
         return
-    fork_key = fork_key_of(src_set, measure_ctx)
-    try:
-        psql("INSERT INTO search_fork_class (fork_key, src_set, measure_ctx, seen_at, "
-             "seen_count) VALUES (%s, %s, %s, now(), 1) "
-             "ON CONFLICT (fork_key) DO UPDATE "
-             "SET seen_at = now(), seen_count = search_fork_class.seen_count + 1"
-             % (lit(fork_key), lit("{%s}" % ",".join(src_set)), lit(measure_ctx or "")))
-    except RuntimeError:
-        pass
+    for srcs in classes.values():
+        src_set = sorted(s for s in (srcs or []) if s)
+        if len(src_set) < 1:
+            continue
+        fork_key = fork_key_of(src_set, measure_ctx)
+        try:
+            psql("INSERT INTO search_fork_class (fork_key, src_set, measure_ctx, seen_at, "
+                 "seen_count) VALUES (%s, %s, %s, now(), 1) "
+                 "ON CONFLICT (fork_key) DO UPDATE "
+                 "SET seen_at = now(), seen_count = search_fork_class.seen_count + 1, "
+                 "src_set = EXCLUDED.src_set, measure_ctx = EXCLUDED.measure_ctx"
+                 % (lit(fork_key), lit("{%s}" % ",".join(src_set)),
+                    lit(measure_ctx or "")))
+        except RuntimeError:
+            pass
 
 
 def fork_labels_of(fork_key, srcs):
@@ -2537,25 +2559,13 @@ def fork_labels_covering(srcs):
 
 
 def fork_label_siblings(srcs):
-    """Другие src из ПОДПИСАННЫХ классов развилки, пересекающихся с `srcs`.
+    """Устаревшее расширение пула (волна-1): все src одного fork_key из словаря.
 
-    Если в arb_pool есть документ, а регистр подписан с ним в `search_fork_label`,
-    регистр входит в пространство исходов — иначе B на эталонной паре
-    недостижим, хотя словарь уже знает обе ветки (план §7).
+    Шаг 4 не использует: fork_key волны-1 = sha1 всех src развилки, JOIN раздувает
+    arb_pool до сотен подписанных источников ([замер 17.08 okna]). Исходы B/C — только
+    arb_pool.
     """
-    srcs = [s for s in (srcs or []) if s]
-    if not srcs:
-        return []
-    try:
-        rows = psql(
-            "SELECT DISTINCT l2.src FROM search_fork_label l1 "
-            "JOIN search_fork_label l2 ON l1.fork_key = l2.fork_key "
-            "WHERE l1.src IN (%s) AND coalesce(l1.label,'') <> '' "
-            "  AND coalesce(l2.label,'') <> ''"
-            % ", ".join(lit(s) for s in srcs))
-    except RuntimeError:
-        return []
-    return [r[0] for r in (rows or []) if r and r[0]]
+    return []
 
 
 def _fork_headline_measure(src, sums, measure_word, alias_by=None):
@@ -2593,30 +2603,43 @@ def _fork_headline_measure(src, sums, measure_word, alias_by=None):
     return None
 
 
-def _fork_atom_of(row, srcs, measure_word="", alias_by=None):
-    """AnswerAtom класса из строки `fork_scan` (без src). Непосчитанное — PROOF_UNCOUNTED."""
+def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None):
+    """AnswerAtom класса из строки `fork_scan` (без src). Непосчитанное — PROOF_UNCOUNTED.
+
+    `want=sum` — только сумма по величине вопроса; без подходящей величины атом
+    непосчитан, а не count ([замер 17.08]: «на какую сумму» → 129× count).
+    `want=count` — счёт строк; суммы в атом не входят.
+    """
     d0 = row or {"count": 0, "folders": 0, "sums": {}}
     src0 = sorted(srcs)[0] if srcs else ""
     sums = d0.get("sums") or {}
+    w = (want or "").strip().lower()
     if alias_by is None and src0:
         try:
             alias_by = measure_aliases_of(src0)
         except RuntimeError:
             alias_by = {}
-    mid = _fork_headline_measure(src0, sums, measure_word, alias_by)
-    if mid is None:
-        if not sums:
-            exact = d0.get("count")
-            op = "count"
-            lab = measure_label_of(src0, None) if src0 else None
+    if w == "count":
+        exact = d0.get("count")
+        op, mid, lab = "count", None, measure_label_of(src0, None) if src0 else None
+    elif w == "sum" or (measure_word or "").strip():
+        mid = _fork_headline_measure(src0, sums, measure_word, alias_by)
+        if mid is None:
+            exact, op, lab = None, "sum", None
         else:
-            exact = None
-            op = "sum"
-            lab = None
+            exact, op = sums[mid], "sum"
+            lab = measure_label_of(src0, mid) if src0 else (split_ident(mid) or mid)
     else:
-        exact = sums[mid]
-        op = "sum"
-        lab = measure_label_of(src0, mid) if src0 else (split_ident(mid) or mid)
+        mid = _fork_headline_measure(src0, sums, measure_word, alias_by)
+        if mid is None:
+            if not sums:
+                exact, op, mid = d0.get("count"), "count", None
+                lab = measure_label_of(src0, None) if src0 else None
+            else:
+                exact, op, lab = None, "sum", None
+        else:
+            exact, op = sums[mid], "sum"
+            lab = measure_label_of(src0, mid) if src0 else (split_ident(mid) or mid)
     status = PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED
     return build_answer_atom(
         operation=op, exact_value=exact, measure_id=mid, measure_label=lab,
@@ -2633,13 +2656,52 @@ def _class_branch_label(srcs, labels_by_src):
     return None
 
 
-def ordered_fork_classes(classes, rows, measure_word=""):
+def _class_label_lookup(srcs, measure_ctx):
+    """Подпись класса по представителю (первый src после sort). B — по классу, не по src_set."""
+    srcs = sorted(s for s in (srcs or []) if s)
+    if not srcs:
+        return None, None
+    rep = srcs[0]
+    fk_cls = fork_key_of(srcs, measure_ctx)
+    labs = fork_labels_of(fk_cls, srcs)
+    lab = _class_branch_label(srcs, labs)
+    if lab:
+        return lab, fk_cls
+    cov, fk = fork_labels_covering([rep])
+    if cov.get(rep):
+        return cov[rep], fk or fk_cls
+    cov_all, fk2 = fork_labels_covering(srcs)
+    lab = _class_branch_label(srcs, cov_all)
+    return lab, (fk2 or fk_cls)
+
+
+def _dedupe_fork_classes(ordered):
+    """Одинаковые подпись+атом → одна пара (план §2, п. 13)."""
+    seen, out = {}, []
+    for it in ordered or []:
+        atom = it.get("atom") or {}
+        fp = it.get("fingerprint") or ()
+        key = ((it.get("label") or "").strip(),
+               tuple((str(k), v) for k, v in fp),
+               atom.get("operation"),
+               round(float(atom.get("exact_value")), 2)
+               if atom.get("exact_value") is not None else None)
+        if key in seen:
+            prev = seen[key]
+            prev["srcs"] = sorted(set(prev.get("srcs") or []) | set(it.get("srcs") or []))
+            continue
+        seen[key] = it
+        out.append(it)
+    return out
+
+
+def ordered_fork_classes(classes, rows, measure_word="", want=None):
     """Классы в детерминированном порядке: по отпечатку атома (не по размеру/лидеру)."""
     items = []
     for atom_fp, ss in (classes or {}).items():
         srcs = sorted(ss)
         d0 = (rows or {}).get(srcs[0]) if srcs else None
-        built = _fork_atom_of(d0, srcs, measure_word)
+        built = _fork_atom_of(d0, srcs, measure_word, want=want)
         items.append({"fingerprint": atom_fp, "srcs": srcs, "atom": built,
                       "row": d0 or {"count": 0, "folders": 0, "sums": {}}})
     items.sort(key=lambda it: (tuple((str(k), v) for k, v in it["fingerprint"]),
@@ -2647,18 +2709,18 @@ def ordered_fork_classes(classes, rows, measure_word=""):
     return items
 
 
-def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None):
+def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=None):
     """Исход A/B/C/unique/empty/unavailable по классам (план §2). Чистая логика.
 
     A — один класс, src несколько, все ячейки посчитаны.
-    B — классов несколько, все посчитаны и у каждого есть подпись из словаря.
+    B — классов несколько, все посчитаны и у каждого класса есть подпись (представитель).
     C — иначе (непосчитанное / неподписанное); unique — один класс и один src.
     """
     if scan_error:
         return "unavailable", {"reason": "scan_error", "detail": str(scan_error)[:160]}
     if not classes:
         return "empty", {"reason": "no_live_cells"}
-    ordered = ordered_fork_classes(classes, rows, measure_ctx)
+    ordered = ordered_fork_classes(classes, rows, measure_ctx, want=want)
     uncounted = [it for it in ordered
                  if (it["atom"] or {}).get("proof_status") != PROOF_COMPUTED
                  or (it["atom"] or {}).get("exact_value") is None]
@@ -2671,27 +2733,20 @@ def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None):
         if len(it["srcs"]) == 1:
             return "unique", {"class": it}
         return "A", {"class": it, "srcs": it["srcs"]}
-    src_set = sorted({s for it in ordered for s in it["srcs"]})
-    fk = fork_key_of(src_set, measure_ctx)
-    labels = fork_labels_of(fk, src_set)
-    # Точный fork_key мог смениться (measure_ctx) или класс в журнале устарел —
-    # подписи словаря всё равно живут по src: ищем ключ, покрывающий все srcs.
-    if len(labels) < len(src_set):
-        labels, fk2 = fork_labels_covering(src_set)
-        if fk2:
-            fk = fk2
-    missing = []
+    missing, fk_seen = [], None
     for it in ordered:
-        lab = _class_branch_label(it["srcs"], labels)
+        lab, fk = _class_label_lookup(it["srcs"], measure_ctx)
+        if fk and not fk_seen:
+            fk_seen = fk
         if not lab:
             missing.append(it["srcs"])
         else:
             it["label"] = lab
+    ordered = _dedupe_fork_classes(ordered)
     if missing:
-        return "C", {"reason": "unsigned_class", "fork_key": fk,
-                     "classes": len(ordered), "unsigned": missing,
-                     "labels_found": len(labels)}
-    return "B", {"fork_key": fk, "classes": ordered, "labels": labels}
+        return "C", {"reason": "unsigned_class", "fork_key": fk_seen,
+                     "classes": len(ordered), "unsigned": missing}
+    return "B", {"fork_key": fk_seen, "classes": ordered}
 
 
 def _fork_figures_of(atom):
@@ -2737,8 +2792,11 @@ def fork_outcome_a(question, class_item, diag, cut=None, t0=None):
 def fork_outcome_b(question, payload, diag, cut=None, t0=None):
     """Исход B: условные пары по классам + options с decision_id (на класс, не на src)."""
     classes = list((payload or {}).get("classes") or [])
+    total = len(classes)
+    shown = classes[:FORK_PAIR_MAX]
+    hidden = max(0, total - len(shown))
     atoms, opts = [], []
-    for it in classes:
+    for it in shown:
         lab = (it.get("label") or "").strip()
         atom = dict(it.get("atom") or {})
         atom.pop("src", None)
@@ -2755,13 +2813,23 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None):
     if any(x is None for x in lines):
         return None
     text = "\n".join(lines)
+    if hidden:
+        text += ("\n… ещё %d прочтений не показано" % hidden)
+    partial = dict(cut or {})
+    if hidden:
+        partial["fork_limitation"] = {"reason": "pair_budget",
+                                      "pairs_shown": len(shown),
+                                      "pairs_total": total,
+                                      "pairs_hidden": hidden}
     d = _diag_pack(diag, fork_outcome="B",
              fork_key=(payload or {}).get("fork_key"),
-             fork_classes=len(classes))
+             fork_classes=total, fork_pairs_shown=len(shown),
+             fork_pairs_hidden=hidden or None)
     if t0 is not None:
         d["sec"] = round(time.time() - t0, 2)
-    return {"partial": cut or None, "kind": "figures", "text": text,
-            "figures": {"pairs": len(atoms)},
+    return {"partial": partial or None, "kind": "figures", "text": text,
+            "figures": {"pairs": len(atoms), "pairs_total": total,
+                        "pairs_hidden": hidden or None},
             "atom": atoms[0] if atoms else None, "atoms": atoms,
             "options": opts,
             "source_fixed": False, "memory_eligible": False,
@@ -6196,9 +6264,25 @@ def _coverage_of(src_table):
     fuller, layer = max(layers, key=lambda x: x[0])
     if fuller <= corpus_n:
         return None
-    return {"in_1c": fuller, "in_search": corpus_n,
-            "missing": fuller - corpus_n, "layer": layer,
-            "reason": reason or "более полный слой (%s) новее корпуса" % layer}
+    gap = {"in_1c": fuller, "in_search": corpus_n,
+           "missing": fuller - corpus_n, "layer": layer,
+           "reason": reason or "более полный слой (%s) новее корпуса" % layer}
+    build_ts = mart_ts = None
+    try:
+        for r in psql("SELECT k, v FROM search_quality "
+                      "WHERE k IN ('build_ts','mart_changed_ts')"):
+            if r and r[0] == "build_ts":
+                build_ts = float(r[1])
+            elif r and r[0] == "mart_changed_ts":
+                mart_ts = float(r[1])
+    except RuntimeError:
+        pass
+    if mart_ts and build_ts and mart_ts > build_ts:
+        gap["kind"] = "freshness_lag"
+        gap["merge_pending_sec"] = int(mart_ts - build_ts)
+    else:
+        gap["kind"] = "systemic"
+    return gap
 
 
 # 🔴 /health ВИДИТ ИЗВЕСТНЫЙ РАЗРЫВ ПОЛНОТЫ (15.08, аудит §3). До этого дверь
@@ -6254,6 +6338,36 @@ def _measure_health_gap():
             "rows_missing": sum(v - c for v, c in gaps.values()),
             "worst": [{"src": t, "витрина": v, "корпус": c} for t, (v, c) in worst]}
 
+
+
+
+def _classify_health_gap(gap):
+    """Различение лага свежести и системной дыры для /health (п. 13, [замер 17.08 okna]).
+
+    Лаг: витрина новее последнего такта сборки (`mart_changed_ts` > `build_ts`) —
+    разрыв догоняется таймером merge, 503 не нужен. Системная: сборка уже прошла после
+    изменения витрины, а разрыв остался.
+    """
+    if not gap:
+        return None
+    out = dict(gap)
+    build_ts = mart_ts = None
+    try:
+        for r in psql("SELECT k, v FROM search_quality "
+                      "WHERE k IN ('build_ts','mart_changed_ts')"):
+            if r and r[0] == "build_ts":
+                build_ts = float(r[1])
+            elif r and r[0] == "mart_changed_ts":
+                mart_ts = float(r[1])
+    except RuntimeError:
+        pass
+    if mart_ts and build_ts and mart_ts > build_ts:
+        out["kind"] = "freshness_lag"
+        out["merge_pending_sec"] = int(mart_ts - build_ts)
+        out["build_age_sec"] = int(time.time() - build_ts)
+        return out
+    out["kind"] = "systemic"
+    return out
 
 def _health_gap():
     """Кэш замера разрыва для /health. Ошибка замера — исключение: дверь «не знает»."""
@@ -6383,6 +6497,8 @@ REQUIRE_SUPPORT = os.environ.get("ASK_REQUIRE_SUPPORT", "1") == "1"
 # Сколько готовых ответов отдавать арбитру. Больше двух-трёх не нужно: это
 # столько же полных ответов, сколько кандидатов, и время ответа растёт.
 ARBITER_MAX = int(os.environ.get("ASK_ARBITER_MAX", "3"))
+# Бюджет пар исхода B — тот же порядок, что у круга арбитра ×4 (план §2, п. 13).
+FORK_PAIR_MAX = max(ARBITER_MAX * 4, 16)
 # Арбитр работает ДЕТЕКТОРОМ: разошлись посчитанные числа кандидатов — спрашиваем человека,
 # а не даём модели выбрать между ними (задача 17). Выключатель нужен, чтобы прежнее
 # поведение можно было вернуть одним значением, если приёмка покажет обратное.
@@ -7554,6 +7670,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _scan_err = None
         _rows, _cls = {}, {}
         _mword = (intent.get("measure") or "").strip()
+        _fwant = (intent.get("want") or "").strip()
         # Пространство исходов — голова списка кандидатов (тот же бюджет, что круг
         # арбитра ×4), не вся база: иначе сотни несвязанных src с живым счётом
         # дают C с сотнями вариантов и секунды на SQL. Полный перечень cands —
@@ -7569,7 +7686,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _atoms = []
             for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
                 d0 = _rows.get(sorted(ss)[0]) or {"count": 0, "folders": 0, "sums": {}}
-                _built = _fork_atom_of(d0, sorted(ss), _mword)
+                _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant)
                 _atoms.append({"atom": _built,
                                "fingerprint": [["%s" % k, v] for k, v in atom],
                                "srcs": sorted(ss)})
@@ -8173,18 +8290,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _scan_err = None
         _rows, _cls = {}, {}
         _mword = (intent.get("measure") or "").strip()
+        _fwant = (intent.get("want") or "").strip()
         try:
-            # Если в arb_pool есть участник подписанного класса — сужаем пул до
-            # этого класса (все подписанные сёстры из словаря). Словарь развилок —
-            # знание системы о конкурирующих прочтениях (план §7); сестра вне
-            # текущего cands всё равно входит, иначе B на эталоне недостижим при
-            # промахе поверхности. Без пересечения с словарём — весь arb_pool.
-            _sib = fork_label_siblings(arb_pool)
-            _hit = [s for s in arb_pool if s in set(_sib)]
-            if _sib and _hit:
-                _out_pool = list(dict.fromkeys(_hit + _sib))
-            else:
-                _out_pool = list(arb_pool)
+            # Пространство исходов = arb_pool (без fork_label_siblings: волна-1
+            # раздувала пул до всех подписанных src одного fork_key — [замер 17.08]).
+            _out_pool = list(arb_pool)
             _mbs = _measures_by_src(_out_pool)
             _als = _aliases_by_src(_out_pool)
             _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
@@ -8197,7 +8307,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _atoms = []
             for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
                 d0 = _rows.get(sorted(ss)[0]) or {"count": 0, "folders": 0, "sums": {}}
-                _built = _fork_atom_of(d0, sorted(ss), _mword)
+                _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant)
                 _atoms.append({"atom": _built,
                                "fingerprint": [["%s" % k, v] for k, v in atom],
                                "srcs": sorted(ss)})
@@ -8217,8 +8327,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["fork_error"] = str(_e)[:160]
             sys.stderr.write("ask FORK outcome: %s\n" % str(_e)[:160])
         _outc, _pay = resolve_fork_outcome(
-            _cls, _rows, measure_ctx=(_mword or (intent.get("want") or "")),
-            scan_error=_scan_err)
+            _cls, _rows, measure_ctx=(_mword or _fwant or ""),
+            scan_error=_scan_err, want=_fwant or None)
         diag.setdefault("fork", {})["outcome"] = _outc
         if _outc == "A":
             шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
@@ -9562,11 +9672,19 @@ class Handler(BaseHTTPRequestHandler):
                                         "corpus_rows": int(n),
                                         "coverage_gap": "unknown",
                                         "error": str(e)[:200]})
-            if gap:
+            gap = _classify_health_gap(gap)
+            if gap and gap.get("kind") == "systemic":
                 return self._send(503, {"status": "degraded", "corpus_rows": int(n),
                                         "coverage_gap": gap})
+            if gap and gap.get("kind") == "freshness_lag":
+                return self._send(200, {"status": "serene-ask-ok", "corpus_rows": int(n),
+                                        "coverage_gap": gap,
+                                        "freshness": {"merge_pending_sec": gap.get(
+                                            "merge_pending_sec")}})
             return self._send(200, {"status": "serene-ask-ok", "corpus_rows": int(n),
-                                    "coverage_gap": {"entities": 0, "rows_missing": 0}})
+                                    "coverage_gap": gap or {"entities": 0,
+                                                            "rows_missing": 0,
+                                                            "kind": "none"}})
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):
