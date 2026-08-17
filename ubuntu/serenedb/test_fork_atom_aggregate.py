@@ -59,7 +59,8 @@ def check_pair(src, measure_word, match="", preds=None):
     if src not in rows:
         t("%s: fork_scan жив" % src, False, "нет строки")
         return
-    atom = A._fork_atom_of(rows[src], [src], measure_word)
+    atom = A._fork_atom_of(rows[src], [src], measure_word, want="sum",
+                          rel_measures=rel)
     mid = atom.get("measure_id")
     t("%s: measure_id выбран" % src, mid is not None, "mid=%s" % mid)
     agg = A.aggregate(src, match or None, preds, measure=mid)
@@ -70,6 +71,49 @@ def check_pair(src, measure_word, match="", preds=None):
                                  agg.get("sum") if agg else None, mid))
     t("%s: count совпал" % src,
       int(rows[src].get("count") or 0) == int((agg or {}).get("count") or -1))
+
+
+# ── форма «ложная пара» (замер okna 17.08): регистр, лексическая Сумма
+# тождественно 0, отвечающая Всего без лексики / живая мера вне rel.
+# До правки атом = 0 (computed) по мёртвой Сумма; после — Всего до копейки
+# либо NA, если ответить нечем. Без базы.
+_REG = "accumulationregister_реализациятмц"
+_als_reg = {"Сумма": "сумма", "Всего": "итого", "Количество": "кол-во"}
+_rel_reg = A._fork_relevant("сумма", ["Сумма", "Всего", "Количество"], _als_reg)
+t("форма: rel = лексическая Сумма + структурная Всего",
+  set(_rel_reg) == {"Сумма", "Всего"})
+_atom_reg = A._fork_atom_of(
+    {"count": 77381, "folders": 0,
+     "sums": {"Сумма": 0.0, "Всего": 79925955.81, "Количество": 100.0}},
+    [_REG], "сумма", alias_by=_als_reg, want="sum", rel_measures=_rel_reg)
+t("ложная пара: не 0 по мёртвой Сумма",
+  _atom_reg.get("exact_value") != 0 and _atom_reg.get("exact_value") is not None,
+  "atom=%s mid=%s status=%s" % (_atom_reg.get("exact_value"),
+                                _atom_reg.get("measure_id"),
+                                _atom_reg.get("proof_status")))
+_atom_fl = A._fork_atom_of(
+    {"count": 3826, "folders": 0,
+     "sums": {"Всего": 1572493.22, "СуммаБезНДС": 1310413.93}},
+    ["document_выручкаотреализациитмцфизлицо_номенклатура"], "сумма",
+    want="sum", rel_measures=["СуммаБезНДС", "Всего"])
+t("физлицо: Всего, не СуммаБезНДС",
+  _same(_atom_fl.get("exact_value"), 1572493.22)
+  and _atom_fl.get("measure_id") == "Всего",
+  "atom=%s mid=%s" % (_atom_fl.get("exact_value"), _atom_fl.get("measure_id")))
+t("ложная пара: Всего до копейки (мера без лексики «сумма»)",
+  _same(_atom_reg.get("exact_value"), 79925955.81)
+  and _atom_reg.get("measure_id") == "Всего"
+  and _atom_reg.get("proof_status") == A.PROOF_COMPUTED,
+  "atom=%s mid=%s" % (_atom_reg.get("exact_value"), _atom_reg.get("measure_id")))
+_rel_out = A._fork_relevant("сумма", ["Сумма", "Количество"], {"Сумма": "сумма"})
+_atom_na = A._fork_atom_of(
+    {"count": 10, "folders": 0, "sums": {"Сумма": 0.0, "Количество": 5.0}},
+    [_REG], "сумма", want="sum", rel_measures=_rel_out)
+t("регистр: лексическая Сумма мертва, живая мера вне rel → NA",
+  _atom_na.get("proof_status") == A.PROOF_NA
+  and _atom_na.get("exact_value") is None,
+  "status=%s val=%s rel=%s" % (_atom_na.get("proof_status"),
+                               _atom_na.get("exact_value"), _rel_out))
 
 
 try:

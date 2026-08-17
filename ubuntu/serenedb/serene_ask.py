@@ -2480,7 +2480,13 @@ def fork_scan(match, preds, rel_by_src):
                     "WHERE %s AND u.e.key IN (%s) GROUP BY 1, 2"
                     % (CORPUS, where2, ", ".join(lit(m) for m in measures))):
                 if r and r[0] in out and r[1] in (rel_by_src.get(r[0]) or []):
-                    out[r[0]]["sums"][r[1]] = _num(r[2])
+                    val = _numN(r[2])
+                    # тождественный ноль / пустой агрегат — не сумма (03.08);
+                    # coalesce в SELECT оставлен, отсев здесь, чтобы отпечаток
+                    # класса не нёс мёртвую величину.
+                    if val is None or round(val, 2) == 0.0:
+                        continue
+                    out[r[0]]["sums"][r[1]] = val
         except RuntimeError:
             pass                            # без сумм атом остаётся по счёту
     return out
@@ -2598,6 +2604,30 @@ def fork_label_siblings(srcs):
     return []
 
 
+def _fork_answering_sums(sums, rel_measures=None):
+    """Суммы, которыми атом sum-вопроса может ответить.
+
+    Тождественный ноль — незаполненное поле (правило 03.08, HOW_IT_WORKS), не
+    кандидат headline и не «0» в паре. Мера вне rel (без лексики слова вопроса)
+    в атом не входит: иначе регистр с мёртвой `Сумма` и живым `Количество`
+    отвечал бы нулём ([замер 17.08 okna] accumulationregister_реализациятмц).
+    """
+    rel = set(rel_measures) if rel_measures is not None else None
+    out = {}
+    for k, v in (sums or {}).items():
+        if not k:
+            continue
+        if rel is not None and k not in rel:
+            continue
+        try:
+            if round(float(v), 2) == 0.0:
+                continue
+        except (TypeError, ValueError):
+            continue
+        out[k] = v
+    return out
+
+
 def _fork_headline_measure(src, sums, measure_word, alias_by=None):
     """Одна «головная» величина класса — для exact_value атома и сверки с `aggregate`.
 
@@ -2617,23 +2647,27 @@ def _fork_headline_measure(src, sums, measure_word, alias_by=None):
     wl = (measure_word or "").strip()
     if not wl:
         return None
+    # Sum-вопрос: итог шапки раньше лексического частичного (СуммаНДС /
+    # СуммаБезНДС / точное «Сумма»=0). Иначе один substring-хит блокирует
+    # «Всего» ([замер 17.08 okna] физлицо 1 310 413,93 вместо 1 572 493,22;
+    # регистр реализациятмц → 0 при SQL 79 925 955,81). Не-sum слово
+    # («количество») до шапки не доходит — иначе Всего перебило бы штуки.
+    wl_l = wl.lower()
+    if "сумм" in wl_l or wl_l == "sum":
+        if (src or "").startswith("document_"):
+            hdr = sorted(n for n in names if n.lower().endswith("документа"))
+            if len(hdr) == 1:
+                return hdr[0]
+            if hdr:
+                hdr.sort(key=lambda n: (float(sums.get(n) or 0) == 0, len(n), n))
+                return hdr[0]
+        vsego = [n for n in names if (n or "").strip().lower() == "всего"]
+        if len(vsego) == 1:
+            return vsego[0]
     got, alts, how = measure_choice(names, wl, alias_by=alias_by or {})
     if got and got in sums:
         return got
     pool = list(alts) if how == "ask" and alts else names
-    if (src or "").startswith("document_"):
-        hdr = sorted(n for n in pool if n.lower().endswith("документа"))
-        if len(hdr) == 1:
-            return hdr[0]
-        if hdr:
-            hdr.sort(key=lambda n: (float(sums.get(n) or 0) == 0, len(n), n))
-            return hdr[0]
-        vsego = [n for n in pool if (n or "").strip().lower() == "всего"]
-        if len(vsego) == 1:
-            return vsego[0]
-        vsego_all = [n for n in names if (n or "").strip().lower() == "всего"]
-        if len(vsego_all) == 1:
-            return vsego_all[0]
     if pool and not measure_ambiguous(pool, sums):
         return sorted(pool)[0]
     return None
@@ -2648,10 +2682,11 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
     `want=count` — счёт строк; суммы в атом не входят.
     `rel_measures=[]` при sum-вопросе — доказанно не относится (план §3.3, §7.3):
     величин вопроса у источника нет, хотя строки под WHERE есть; не блокирует A/B.
+    Непустое rel, из которого после отсечения тождественного нуля ничего не
+    осталось (лексическая мера мертва, живая — вне rel) — тоже NA, не «0».
     """
     d0 = row or {"count": 0, "folders": 0, "sums": {}}
     src0 = sorted(srcs)[0] if srcs else ""
-    sums = d0.get("sums") or {}
     w = (want or "").strip().lower()
     if alias_by is None and src0:
         try:
@@ -2660,6 +2695,13 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
             alias_by = {}
     sum_q = w == "sum" or (bool((measure_word or "").strip()) and w != "count")
     if sum_q and rel_measures is not None and not rel_measures:
+        return build_answer_atom(
+            operation="sum", exact_value=None, measure_id=None, measure_label=None,
+            excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
+            proof_status=PROOF_NA)
+    sums = (_fork_answering_sums(d0.get("sums") or {}, rel_measures)
+            if sum_q else (d0.get("sums") or {}))
+    if sum_q and rel_measures is not None and not sums:
         return build_answer_atom(
             operation="sum", exact_value=None, measure_id=None, measure_label=None,
             excluded=({"folders": d0["folders"]} if d0.get("folders") else None),

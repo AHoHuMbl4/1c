@@ -179,6 +179,22 @@ atom_na = A._fork_atom_of(row(5), ["c"], "сумма", want="sum", rel_measures=
 t("want=sum без rel_measures → NA",
   atom_na.get("proof_status") == A.PROOF_NA)
 
+# лексическая Сумма тождественно 0, живая мера вне rel — NA, не «0», не блокирует B
+A.fork_labels_of = _labs_ok
+dead0 = {"a": row(10, Сумма=100.0), "b": row(10, Сумма=200.0),
+         "c": row(50, Сумма=0.0, Количество=5.0)}
+out, pay = A.resolve_fork_outcome(
+    A.fork_classes(dead0), dead0, "сумма", want="sum",
+    rel_by_src={"a": ["Сумма"], "b": ["Сумма"], "c": ["Сумма"]})
+t("мёртвая Сумма регистра → NA, B из живых",
+  out == "B" and len(pay.get("classes") or []) == 2
+  and pay.get("na_classes") == 1)
+atom_dead = A._fork_atom_of(row(50, Сумма=0.0, Количество=5.0), ["c"], "сумма",
+                           want="sum", rel_measures=["Сумма"])
+t("want=sum + тождественный 0 в rel → NA, не computed 0",
+  atom_dead.get("proof_status") == A.PROOF_NA
+  and atom_dead.get("exact_value") is None)
+
 # ── covering: подписи по src, не только по sha1(ctx) ───────────────────────────
 real_cov = A.fork_labels_covering
 A.fork_labels_covering = lambda srcs: (
