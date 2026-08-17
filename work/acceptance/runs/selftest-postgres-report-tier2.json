@@ -21,6 +21,6 @@
   ],
   "unreachable_share": 0.0556,
   "wrong_atom_share": 0.0,
-  "config": "vector+rerank; DeepSeek paid 16.08; /opt serene_ask md5 may differ from repo (neighbor edits)",
+  "config": "vector+rerank; DeepSeek paid 16.08; selftest_check rerun 17.08 (truth cache hit)",
   "note_00441": "intermittent TypeError float not subscriptable in /opt → 503; curl later 200 with focus informationregister_допустимыецелипогруппамветис count 2855"
 }

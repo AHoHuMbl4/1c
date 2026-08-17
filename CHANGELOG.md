@@ -1,5 +1,31 @@
 # Журнал изменений
 
+## 17.08: ложная пара регистра — NA / Всего, не «0» `[код]` `[замер]`
+
+`[замер]` okna 17.08, вопрос «на какую сумму мы продали», код `3d2ac2df…`: B×3,
+`accumulationregister_реализациятмц` = **0** при SQL `sum(Всего)` **79 925 955,81**.
+Корень: `_fork_headline_measure` (`serene_ask.py`, возврат `got` из `measure_choice`)
+брал точное имя `Сумма` (тождественно 0 на всех 77 381 строках; nonzero=0), а
+`Всего` в rel был только структурно (`_with_doc_hdr`). Гипотеза WHERE/PROOF_NA —
+опровергнута: count 77 381, rel `['Сумма','Всего']`. Интеграция
+`test_fork_atom_aggregate` 10/10 на ut_test это не ловила: там у регистра живая
+`Сумма`.
+
+`[код]` `_fork_answering_sums`: тождественный ноль и мера вне rel не входят в
+атом; пустой остаток при `want=sum` → `not_applicable` (план §2, не блокирует,
+не рендерится). `_fork_headline_measure`: `*Документа` / «Всего» раньше
+лексического частичного. `fork_scan` не кладёт нулевые суммы в отпечаток.
+Доки: sql/query_syntax/filter, sql/expressions/cast#try_cast,
+sql/data_types/nulls (агрегаты игнорируют NULL), sql/functions/map#map_entries.
+
+`[замер]` Замки: fork_detector 23, fork_outcomes 24, fork_atom_aggregate 15,
+test_gate 130, step4_guards 110, a3 14, answer_atom 18, ds_tokens 11,
+ask_journal 15, decision_id 24, focus_loop 19, mcp_ask 27, verify 95.
+Живой `/ask` `:8091` на `/opt` (`8539aec6…`) ещё B×3 с **0** (mid=`Сумма`).
+Проба нового кода против DSN okna (`/tmp`, `/opt` не тронут): Всего
+**1572493.22** / **79752611.64** / **79925955.81** = `aggregate` до копейки,
+нулей нет. md5 git `6ffa35a8…`. Выкат `/opt` — оркестратор.
+
 ## 17.08: золотой набор под пакетную витрину; Qwen на деве, откат okna `[решение]` `[замер]` `[код]`
 
 `[решение]` Контур ответов на своей модели: `DEEPSEEK_BASE` — OpenAI-совместимый

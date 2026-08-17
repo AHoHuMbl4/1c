@@ -1,3 +1,12 @@
+## Замер 17.08 — ложная пара регистра (атом форка ≠ 0)
+
+Правка `_fork_answering_sums` / `_fork_headline_measure` / `_fork_atom_of` в
+`serene_ask.py`. **Снят ПОСЛЕ последней правки.** Оффлайн: fork_detector 23,
+fork_outcomes 24, fork_atom_aggregate 15/15 (прежние ut_test 10/10 целы:
+document 73 181 157,68 и register 1 137 949,71), test_gate 130, answer_atom 18.
+Юниты не перезапускались; `/ask` первой базы не дергался. Проба нового
+кода — DSN okna (не `/opt`): три суммы = SQL, нулей нет.
+
 ## Замер 17.08 — золотой набор ut_test (пакетная витрина) + выкат дева
 
 Правка эталонов `ab-gold.tsv` и таймаута `ab_scorer.py`. **Снят ПОСЛЕ последней
