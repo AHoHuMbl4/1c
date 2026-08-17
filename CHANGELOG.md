@@ -1,3 +1,17 @@
+## 17.08: учёт токенов DeepSeek в ds_chat → diag.tokens `[код]` `[замер]`
+
+`[код]` `serene_ask.py`: `ds_chat` читает `usage` (in/out, cache hit/miss);
+накопление за `answer`/`answer_checked` в `diag.tokens`; journald —
+`ask TOKENS in=… out=…` без текста вопроса. `test_ds_tokens.py` — 9/9 оффлайн.
+
+`[замер]` Замки: gate 130, step4_guards 110, a3 14, fork_detector 16,
+fork_outcomes 16, answer_atom 18, decision_id 24, focus_loop 19, mcp_ask 27,
+verify 95, test_ds_tokens 9 — зелёные. Живой `:8097` (ASK_ENV_FILES ut_test,
+код из репо): «сколько документов реализация» —
+`{"calls": 4, "in": 5069, "out": 238, "cache_hit": 1920, "cache_miss": 3149}`;
+повтор → `{"calls": 1, "in": 3257, "out": 17, "cache_hit": 3200, "cache_miss": 57}`;
+journald `ask TOKENS in=604 out=71 hit=512 miss=92`. md5 serene_ask `bf927340…`.
+
 # Журнал изменений
 
 ## 17.08: шаг 4 — атом форка = aggregate (71M→73M) `[код]` `[замер]`

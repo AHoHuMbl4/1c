@@ -28,6 +28,7 @@
 Env: SERENEDB_DSN, DEEPSEEK_*, ALIBABA_* (см. /etc/1c-mcp-reports.env), ASK_TOKEN.
 Только stdlib.
 """
+import contextvars
 import csv
 import hashlib
 import io
@@ -377,6 +378,88 @@ def _fmt(v):
     return "%d" % v if v == int(v) else "%.2f" % v
 
 
+_token_acc = contextvars.ContextVar("token_acc", default=None)
+
+
+class _TokenAcc:
+    __slots__ = ("calls", "in_t", "out_t", "cache_hit", "cache_miss",
+                 "has_hit", "has_miss")
+
+    def __init__(self):
+        self.calls = 0
+        self.in_t = 0
+        self.out_t = 0
+        self.cache_hit = 0
+        self.cache_miss = 0
+        self.has_hit = False
+        self.has_miss = False
+
+    def add(self, usage):
+        self.calls += 1
+        self.in_t += int(usage.get("prompt_tokens") or 0)
+        self.out_t += int(usage.get("completion_tokens") or 0)
+        if "prompt_cache_hit_tokens" in usage:
+            self.has_hit = True
+            self.cache_hit += int(usage.get("prompt_cache_hit_tokens") or 0)
+        if "prompt_cache_miss_tokens" in usage:
+            self.has_miss = True
+            self.cache_miss += int(usage.get("prompt_cache_miss_tokens") or 0)
+
+    def diag_dict(self):
+        d = {"calls": self.calls, "in": self.in_t, "out": self.out_t}
+        if self.has_hit:
+            d["cache_hit"] = self.cache_hit
+        if self.has_miss:
+            d["cache_miss"] = self.cache_miss
+        return d
+
+
+def _token_acc_start():
+    _token_acc.set(_TokenAcc())
+
+
+def _token_acc_record(usage):
+    """Один вызов ds_chat: накопить usage и строку в journald (без текста вопроса)."""
+    if not isinstance(usage, dict):
+        return
+    acc = _token_acc.get()
+    if acc is None:
+        return
+    acc.add(usage)
+    line = ["ask TOKENS", "in=%d" % int(usage.get("prompt_tokens") or 0),
+            "out=%d" % int(usage.get("completion_tokens") or 0)]
+    if "prompt_cache_hit_tokens" in usage:
+        line.append("hit=%d" % int(usage.get("prompt_cache_hit_tokens") or 0))
+    if "prompt_cache_miss_tokens" in usage:
+        line.append("miss=%d" % int(usage.get("prompt_cache_miss_tokens") or 0))
+    sys.stderr.write(" ".join(line) + "\n")
+
+
+def _diag_pack(diag, **extra):
+    """Копия diag для ответа; сумма токенов ds_chat за один answer/answer_checked."""
+    d = dict(diag or {}, **extra)
+    acc = _token_acc.get()
+    if acc and acc.calls:
+        d["tokens"] = acc.diag_dict()
+    return d
+
+
+def _ds_chat_content(data):
+    """Текст ответа модели; usage учитывается, отсутствие choices/usage — не ошибка."""
+    if not isinstance(data, dict):
+        return None
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        _token_acc_record(usage)
+    choices = data.get("choices")
+    if not choices or not isinstance(choices, list):
+        return None
+    msg = choices[0].get("message") if isinstance(choices[0], dict) else None
+    if not isinstance(msg, dict):
+        return None
+    return msg.get("content")
+
+
 def ds_chat(messages, temperature=0, max_tokens=900):
     body = {"model": DS_MODEL, "temperature": temperature,
             "max_tokens": max_tokens, "messages": messages}
@@ -387,7 +470,7 @@ def ds_chat(messages, temperature=0, max_tokens=900):
     req.add_header("Authorization", "Bearer " + DS_KEY)
     req.add_header("Content-Type", "application/json")
     with urllib.request.urlopen(req, timeout=120) as r:
-        return json.loads(r.read())["choices"][0]["message"]["content"]
+        return _ds_chat_content(json.loads(r.read()))
 
 
 # 🔴 АРБИТР: ВЫБИРАЕТ ИЗ ГОТОВЫХ ОТВЕТОВ, А НЕ СОЧИНЯЕТ СВОЙ.
@@ -2641,7 +2724,7 @@ def fork_outcome_a(question, class_item, diag, cut=None, t0=None):
     text = render_atom_pair(atom) or (_fmt(atom.get("exact_value"))
                                       if atom.get("exact_value") is not None else "")
     figs = _fork_figures_of(atom)
-    d = dict(diag or {}, fork_outcome="A",
+    d = _diag_pack(diag, fork_outcome="A",
              fork_srcs=list((class_item or {}).get("srcs") or []))
     if t0 is not None:
         d["sec"] = round(time.time() - t0, 2)
@@ -2672,7 +2755,7 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None):
     if any(x is None for x in lines):
         return None
     text = "\n".join(lines)
-    d = dict(diag or {}, fork_outcome="B",
+    d = _diag_pack(diag, fork_outcome="B",
              fork_key=(payload or {}).get("fork_key"),
              fork_classes=len(classes))
     if t0 is not None:
@@ -2717,7 +2800,7 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
     if payload.get("uncounted"):
         lim["uncounted_classes"] = len(payload["uncounted"])
     partial["fork_limitation"] = lim
-    d = dict(diag or {}, fork_outcome="C", fork_c_reason=c_why)
+    d = _diag_pack(diag, fork_outcome="C", fork_c_reason=c_why)
     if t0 is not None:
         d["sec"] = round(time.time() - t0, 2)
     text = clarify_say(question, opts, d) if opts else ""
@@ -6230,11 +6313,11 @@ def _coverage_answer(question, diag, t0):
         sys.stderr.write("ask COVERAGE: перепись недоступна: %s\n" % str(e)[:160])
         return {"partial": None, "kind": "no_data", "sources": [],
                 "text": NO_DATA_TEXT or refuse_text(question),
-                "diag": dict(diag, error="перепись недоступна")}
+                "diag": _diag_pack(diag, error="перепись недоступна")}
     if not tot:
         return {"partial": None, "kind": "no_data", "sources": [],
                 "text": NO_DATA_TEXT or refuse_text(question),
-                "diag": dict(diag, error="перепись пуста — такт ещё не считал полноту")}
+                "diag": _diag_pack(diag, error="перепись пуста — такт ещё не считал полноту")}
     in_1c, in_search, n_lost, ent_lost, ent_denied = (int(_num(x)) for x in tot[0][:5])
     census = ["rows in source system: %d" % in_1c, "rows reached search: %d" % in_search,
               "rows missing: %d" % n_lost, "kinds of records fully missing: %d" % ent_lost,
@@ -6282,13 +6365,13 @@ def _coverage_answer(question, diag, t0):
                 "figures": {"rows_in_1c": in_1c, "rows_in_search": in_search,
                             "rows_missing": n_lost, "entities_missing": ent_lost,
                             "entities_denied": ent_denied},
-                "sources": [], "diag": dict(diag, gate_rejected=bad[:4],
+                "sources": [], "diag": _diag_pack(diag, gate_rejected=bad[:4],
                                             sec=round(time.time() - t0, 2))}
     return {"partial": None, "kind": "answer", "text": text.strip(), "sources": [],
             "figures": {"rows_in_1c": in_1c, "rows_in_search": in_search,
                         "rows_missing": n_lost, "entities_missing": ent_lost,
                         "entities_denied": ent_denied},
-            "diag": dict(diag, sec=round(time.time() - t0, 2), gate_ok=True)}
+            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2), gate_ok=True)}
 
 
 # ----------------------------------------------------------------- HTTP
@@ -6804,6 +6887,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     и только потом выбирается один источник и тянутся его строки. Обратный порядок
     (сперва top-N строк, потом группировка) терял целые таблицы.
     """
+    if _token_acc.get() is None:
+        _token_acc_start()
     t0 = time.time()
     # 🔴 ПОШАГОВЫЙ СЛЕД: КОГДА, ЧТО СДЕЛАНО И ЧТО ПОЛУЧИЛОСЬ. Требование владельца 03.08:
     # «на каждом шагу логировать можно — время, что делается и что происходит».
@@ -6906,7 +6991,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if matched_groups == 0:
             return {"partial": cut or None, "kind": "no_data", "sources": [],
                     "text": NO_DATA_TEXT or refuse_text(question),
-                    "diag": dict(diag, sec=round(time.time() - t0, 2),
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
                                  reason="значения из вопроса не найдены в данных")}
 
     match, k = match_expr(exprs, preds)
@@ -7050,7 +7135,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         by = tables_of("", preds)
     if not by and not extra:
         return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
-                "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
 
     # Кандидаты: те, где поиск ЧТО-ТО нашёл, плюс ближайшие по смыслу названия.
     # Кандидаты — те сущности, где поиск ДЕЙСТВИТЕЛЬНО что-то нашёл. Без отсечки по
@@ -7528,7 +7613,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     "text": clarify_say(question, _opts, diag)
                             or ", ".join("«%s»" % o["label"] for o in _opts),
                     "options": _opts, "sources": [o["label"] for o in _opts],
-                    "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
         if len(_opts) == 1:
             _s = _opts[0]["src"]
             _col = next((h["col"] for h in holders_of_target(focus) if h["src"] == _s),
@@ -7862,7 +7947,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         return {"partial": cut or None, "kind": "clarify",
                 "text": clarify_say(question, opts, diag),
                 "options": opts, "sources": [o["label"] for o in opts],
-                "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     # 🔴 ОДНА СЕМЬЯ — НЕ ОДНО ПРОЧТЕНИЕ. Здесь стояло `_family(top) not in {_family(x)…}`:
     # если вершина по вектору оказывалась ШАПКОЙ ИЛИ СОСЕДНЕЙ ТАБЛИЧНОЙ ЧАСТЬЮ того же
     # документа, расхождение сигналов не считалось расхождением вовсе, сомнение не
@@ -8156,7 +8241,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     "text": "Не удалось проверить все прочтения вопроса. "
                             "Повторите запрос.",
                     "sources": [], "retry": True,
-                    "diag": dict(diag, fork_outcome="unavailable",
+                    "diag": _diag_pack(diag, fork_outcome="unavailable",
                                  sec=round(time.time() - t0, 2))}
         # unique / empty — ниже обычный круг или одиночный ответ
 
@@ -8264,7 +8349,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 return {"partial": cut or None, "kind": "clarify",
                         "text": clarify_say(question, opts, diag), "options": opts,
                         "sources": [o["label"] for o in opts],
-                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
         if len(cand_ans) > 1 and ARBITER_DETECTS:
             _figs = [arbiter_figures(s) for s in cand_src]
             _diverge = answers_diverge(_figs)
@@ -8320,7 +8405,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     return {"partial": cut or None, "kind": "clarify",
                             "text": clarify_say(question, opts, diag), "options": opts,
                             "sources": [o["label"] for o in opts],
-                            "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
         if len(cand_ans) > 1:
             # Выбирающий arbitrate на ветке расхождения больше не зовётся (план §3):
             # diverge/src_conflict выше уже ушли в clarify/A. Здесь атомы сошлись —
@@ -8372,7 +8457,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     return {"partial": cut or None, "kind": "clarify",
                             "text": clarify_say(question, opts, diag), "options": opts,
                             "sources": [o["label"] for o in opts],
-                            "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
             if blocked:
                 opts_src = [x for x in (sole, blocked) if x]
                 try:
@@ -8387,7 +8472,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     return {"partial": cut or None, "kind": "clarify",
                             "text": clarify_say(question, opts, diag), "options": opts,
                             "sources": [o["label"] for o in opts],
-                            "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
             out["diag"] = dict(out.get("diag", {}), arbiter={"single": True})
             out["partial"] = cut or out.get("partial")
             return _checked(out)
@@ -8405,7 +8490,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             return {"partial": cut or None, "kind": "clarify",
                     "text": clarify_say(question, opts, diag),
                     "options": opts, "sources": [o["label"] for o in opts],
-                    "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
         if len(opts) == 1:
             picked = [opts[0]["src"]]
         # все живые счета 0 — не выбор из нулей; дальше страж пустого периода
@@ -8716,7 +8801,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 "text": clarify_say(question, opts, diag)
                         or ", ".join("«%s»" % o["label"] for o in opts),
                 "options": opts, "sources": [src],
-                "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     # Величина не названа — считаем итоги по всем и показываем модели с именами.
     totals = [] if measure else totals_of(src, match, preds, measures_of(src))
     if totals:
@@ -8754,7 +8839,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 "text": clarify_say(question, opts, diag)
                         or ", ".join("«%s»" % o["label"] for o in opts),
                 "options": opts, "sources": [src] if src else [],
-                "diag": dict(diag, sec=round(time.time() - t0, 2),
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
                              reason="уточните ось группы")}
 
     if (serene_axis and grain_dec.get("form") in ("rank", "compare")
@@ -8811,7 +8896,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                 or ", ".join("«%s»" % o["label"]
                                              for o in opts),
                         "options": opts, "sources": [src],
-                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
             if measure:
                 diag["measure"] = measure
                 for e in _num_pred(intent, measure):
@@ -8847,7 +8932,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
-                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
         p2 = intent.get("period2") or {}
         if agg and (p2.get("from") or p2.get("to")):
             _d1 = period_preds(intent.get("period"))
@@ -8860,7 +8945,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if not rows and not (agg or {}).get("count"):
             return {"partial": cut or None, "kind": "no_data",
                     "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
-                    "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     elif serene_axis and serene_axis.no_axis_member(grain_dec):
         rows = []
         agg = aggregate(src, match, preds, measure)
@@ -8875,7 +8960,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
-                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     else:
         rows = rows_of(src, match, preds, TOPK, measure)
         if not rows:
@@ -8891,7 +8976,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
-                        "diag": dict(diag, sec=round(time.time() - t0, 2))}
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
         agg = aggregate(src, match, preds, measure)
     шаг("посчитано базой", сущность=src, величина=(measure or "—"),
         строк=(agg or {}).get("count"), итог=(agg or {}).get("sum"),
@@ -9189,9 +9274,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     "figures": _figs, "atom": _atom, "atoms": [_atom],
                     "sources": [src.split("_", 1)[1] if "_" in src else src],
                     "completeness": cov,
-                    "diag": dict(diag, gate_rejected=bad[:6])}
+                    "diag": _diag_pack(diag, gate_rejected=bad[:6])}
         return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
-                "diag": dict(diag, gate_rejected=bad[:6])}
+                "diag": _diag_pack(diag, gate_rejected=bad[:6])}
 
     tag = src.split("_", 1)[1] if "_" in src else src
 
@@ -9238,7 +9323,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                                slot_mode=slot_mode),
                 "totals": {m: {"sum": v, "max": mx, "min": mn} for m, v, mx, mn in (totals or [])},
                 "sources": [tag],
-                "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
+                "diag": _diag_pack(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
     # 🔴 ОТВЕТ НАЗЫВАЕТ ВЕЛИЧИНУ, ПО КОТОРОЙ СЧИТАЛ. У сущности их бывает девять со словом
     # «сумма», и молчаливый выбор неотличим от догадки (п. 12). Дописывает КОД, а не модель:
@@ -9282,7 +9367,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # ответа. Ветка уточнения отдаёт это поле с самого начала — теперь форма одна.
             # Паспорт набора (from/to/label/measure) — в figures тем же слоем видимости.
             "figures": _figs, "atom": _atom, "atoms": [_atom],
-            "diag": dict(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
+            "diag": _diag_pack(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 
 # ═══════════════ ШАГ «ДОСТАТОЧЕН ЛИ ВОПРОС ДЛЯ ОТВЕТА» (05.08) ═══════════════
@@ -9386,7 +9471,7 @@ def _need_clarify(question, slots, why, diag):
     txt = serene_enough.need_say(question, slots, ds_chat, _gate_need, diag)
     if not txt:
         return None
-    d = dict(diag or {})
+    d = _diag_pack(diag or {})
     d["not_enough"] = {"чего_нет": [s.get("kind") for s in slots if isinstance(s, dict)],
                        "почему": why}
     return {"partial": None, "kind": "clarify", "text": txt, "options": [],
@@ -9405,6 +9490,7 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
     иначе тот же выбор вернулся бы вопросом. Сырой focus/measure шаг не гасят (аудит §10),
     кроме аварийного ASK_RAW_FOCUS_TRUST=1.
     """
+    _token_acc_start()
     def plain():
         return answer(question, focus=focus, measure_pick=measure_pick, context=context,
                       prior=prior, trusted=trusted)
