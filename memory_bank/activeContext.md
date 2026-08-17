@@ -14,12 +14,14 @@ _Обновлено: **2026-08-17.** Здесь — только живое: т�
 vs DSN: 1 572 493,22 / 79 752 611,64 / 79 925 955,81, нулей нет.
 md5 `6ffa35a8…`. **Выкат назначает оркестратор.**
 
-🔴 **okna web-бот на vLLM — СТОП и откат `[17.08]`**: штатный провайдер/allowlist
-выставлены, primary был `vllm/Qwen3.8-27B` (thinking=off), `max_model_len=16384`.
-Живой чат `:18801` → vLLM **400 без tool parser** (`ask_1c` не звался). Откат из
-`/home/undebot/.openclaw-web/openclaw.json.bak-qwen-20260817-183136`, снова
-DeepSeek flash; дым 200. Telegram не трогали. Дальше — только после
-`--enable-auto-tool-choice` + `--tool-call-parser` на инстансе vLLM (владелец).
+🔴 **okna web-бот на vLLM — СТОП, парсер жив `[17.08 вечер]`**: повторный
+перевод `:18801` на `vllm/Qwen3.8-27B` (thinking=off, ctx 16384, UA, ключ в
+env юнита до рестарта). Прямой vLLM `tool_calls`→`ask_1c` HTTP 200. Живой
+чат: Q0 ask_1c звался, ответа 349 нет; Q1 данные есть — «недоступны»; Q2
+без инструмента «0 шт». Откат из
+`/home/undebot/.openclaw-web/openclaw.json.bak-qwen-20260817-183136` +
+`openclaw-gateway-web`. DeepSeek flash, дым `/v1` 200. Telegram не трогали.
+Дальше — не парсер, а верность пересказа эталона `ask_1c`.
 
 🔴 **Шаг 5 журнала ЗАКРЫТ `[17.08]`**: `ask_journal` в базах postgres/ut_test;
 `ASK_JOURNAL=1`; одна точка `answer_checked`. test_ask_journal 15/15. Живая серия

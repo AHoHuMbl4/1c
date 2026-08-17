@@ -889,10 +889,13 @@ printf '%s\n' "$VLLM_API_KEY" | openclaw --profile web models auth paste-api-key
 openclaw --profile web models set vllm/Qwen3.8-27B
 ```
 
-🔴 **17.08 бот на этот инстанс не переведён:** vLLM отвечает 400 на
-`tool_choice=auto` без `--enable-auto-tool-choice` и `--tool-call-parser`.
-Словари (`supportsTools: false`) — другой контур. Пока парсер на инстансе
-не включён — primary веба остаётся `deepseek/deepseek-v4-flash`.
+🔴 **17.08 вечер: парсер на инстансе включён, бот всё равно не переведён.**
+Прямой `/v1` vLLM с `tool_choice=auto` отдаёт `tool_calls` → `ask_1c`
+(`qwen3_xml`, HTTP 200). Живой бот `:18801` инструмент зовёт, но числа из
+эталона не доезжают (эхо вопроса / ложный «нет данных» / выдуманный 0 без
+инструмента) — откат из bak. Словари (`supportsTools: false`) — другой контур.
+Primary веба остаётся `deepseek/deepseek-v4-flash`, пока Qwen не начнёт
+пересказывать эталон `ask_1c`.
 
 Откат: вернуть `openclaw.json` из бэкапа
 `/home/undebot/.openclaw-web/openclaw.json.bak-qwen-20260817-183136`

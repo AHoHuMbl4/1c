@@ -1,5 +1,33 @@
 # Журнал изменений
 
+## 17.08: бот OpenClaw на vLLM Qwen — стоп: парсер жив, числа не доезжают `[замер]` `[решение]`
+
+`[решение]` Повторный перевод веб-профиля okna (`~/.openclaw-web`, `:18801`)
+на `vllm/Qwen3.8-27B` после включения `qwen3_xml` на инстансе. Штатно:
+`plugins.allow` += vllm до enable; `models.providers.vllm` api=openai-completions,
+`contextWindow=16384`, `compat.thinkingFormat=qwen-chat-template`,
+`request.headers.User-Agent=OpenClaw/2026.7.1-2`; allowlist
+`vllm/Qwen3.8-27B` + `vllm/*` + `chat_template_kwargs.enable_thinking=false`;
+`models auth paste-api-key`; `VLLM_API_KEY` в `gateway.systemd.env` **до**
+рестарта. Рестарт только `openclaw-gateway-web` (`-M undebot@`). Telegram
+`:18800` не трогали (`ActiveEnterTimestamp` 13.08). Доки сборки:
+`providers/vllm.md`, `concepts/models.md`.
+
+`[замер]` Прямой vLLM `/v1/chat/completions` с `tool_choice=auto`: HTTP 200,
+`tool_calls` → `ask_1c`, `finish=tool_calls`, `max_model_len=16384`. `/ask`
+`:8091`: контрагенты **349** (B×3); продажи **1572493.22** / **79752611.64**
+(+ регистр 0 на текущем `/opt`). Живой `/v1` бота: Q0 ask_1c звался, ответ
+«Сколько контрагентов в базе?» без 349; Q1 ask_1c noData=false, ответ
+«данные недоступны» при живых суммах; Q2 без ask_1c — «Рога единорога — 0 шт».
+verify 95/95. Двухходовку не снимали — откат по Q2.
+
+Откат дословно:
+`cp -a /home/undebot/.openclaw-web/openclaw.json.bak-qwen-20260817-183136 /home/undebot/.openclaw-web/openclaw.json`
+и `systemctl --user -M undebot@ restart openclaw-gateway-web`.
+Сбойный конфиг: `openclaw.json.bak-failed-vllm-20260817-*`. После: primary
+`deepseek/deepseek-v4-flash`, `/health` live, дым `/v1` HTTP 200, ask_1c
+звался, Telegram не рестартился.
+
 ## 17.08: прод-замок ложной пары — okna на 6ffa35a8 `[замер]`
 
 Выкат оркестратором (сериализация выкатов): `/opt/1c-mcp-reports/serene_ask.py`
