@@ -1,0 +1,30 @@
+{
+  "date": "2026-08-17",
+  "model": "deepseek-v4-pro",
+  "port": 8099,
+  "serene_ask_md5": "8539aec6b558c4cf4f05747086787531",
+  "classifier": "step4_bench.py (git c788374)",
+  "balance_before": {
+    "is_available": true,
+    "balance_infos": [
+      {
+        "currency": "USD",
+        "total_balance": "1.93",
+        "granted_balance": "0.00",
+        "topped_up_balance": "1.93"
+      }
+    ]
+  },
+  "balance_after": {
+    "is_available": true,
+    "balance_infos": [
+      {
+        "currency": "USD",
+        "total_balance": "1.80",
+        "granted_balance": "0.00",
+        "topped_up_balance": "1.80"
+      }
+    ]
+  },
+  "cost_usd": 0.13
+}
