@@ -2475,17 +2475,63 @@ def fork_label_siblings(srcs):
     return [r[0] for r in (rows or []) if r and r[0]]
 
 
-def _fork_atom_of(row, srcs, measure_word=""):
+def _fork_headline_measure(src, sums, measure_word, alias_by=None):
+    """Одна «головная» величина класса — для exact_value атома и сверки с `aggregate`.
+
+    Алфавитный первый ключ в `sums` давал 71 045 277,59 (`СуммаВзаиморасчетов`)
+    вместо эталона 73 181 157,68 (`СуммаДокумента`) на document_* при слове «сумма»
+    ([замер 17.08]). Правило — `measure_choice`, плюс структурный приоритет: у
+    document_* итог шапки — поле *Документа* (имя из метаданных платформы), а не
+    варианты взаиморасчётов с тем же словом вопроса. Несколько подходящих с разными
+    итогами без такого приоритета — не выбираем молча (п. 12) → None.
+    """
+    sums = sums or {}
+    names = [n for n in sums if n]
+    if not names:
+        return None
+    if len(names) == 1:
+        return names[0]
+    wl = (measure_word or "").strip()
+    if not wl:
+        return None
+    got, alts, how = measure_choice(names, wl, alias_by=alias_by or {})
+    if got and got in sums:
+        return got
+    pool = list(alts) if how == "ask" and alts else names
+    if (src or "").startswith("document_"):
+        hdr = sorted(n for n in pool if n.lower().endswith("документа"))
+        if len(hdr) == 1:
+            return hdr[0]
+        if hdr:
+            hdr.sort(key=lambda n: (float(sums.get(n) or 0) == 0, len(n), n))
+            return hdr[0]
+    if pool and not measure_ambiguous(pool, sums):
+        return sorted(pool)[0]
+    return None
+
+
+def _fork_atom_of(row, srcs, measure_word="", alias_by=None):
     """AnswerAtom класса из строки `fork_scan` (без src). Непосчитанное — PROOF_UNCOUNTED."""
     d0 = row or {"count": 0, "folders": 0, "sums": {}}
     src0 = sorted(srcs)[0] if srcs else ""
-    mid = next(iter(sorted(d0.get("sums") or {})), None)
+    sums = d0.get("sums") or {}
+    if alias_by is None and src0:
+        try:
+            alias_by = measure_aliases_of(src0)
+        except RuntimeError:
+            alias_by = {}
+    mid = _fork_headline_measure(src0, sums, measure_word, alias_by)
     if mid is None:
-        exact = d0.get("count")
-        op = "count"
-        lab = measure_label_of(src0, None) if src0 else None
+        if not sums:
+            exact = d0.get("count")
+            op = "count"
+            lab = measure_label_of(src0, None) if src0 else None
+        else:
+            exact = None
+            op = "sum"
+            lab = None
     else:
-        exact = d0["sums"][mid]
+        exact = sums[mid]
         op = "sum"
         lab = measure_label_of(src0, mid) if src0 else (split_ident(mid) or mid)
     status = PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED

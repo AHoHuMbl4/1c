@@ -1,3 +1,12 @@
+## Замер 17.08 — шаг 4: атом форка = aggregate
+
+Правка `_fork_headline_measure` / `_fork_atom_of` в `serene_ask.py`: причина
+71M — строка `mid = next(iter(sorted(d0.get("sums") or {})), None)` (алфавит →
+`СуммаВзаиморасчетов`). **Снят ПОСЛЕ последней правки.** Оффлайн + интеграция
+ut_test: fork_detector 16, fork_atom_aggregate 10/10; document
+73 181 157,68 и регистр 1 137 949,71 до копейки. Полный `/ask` и ab_scorer —
+503 (DeepSeek 402). md5 `451c6b92…`.
+
 ## Замер 16.08 — шаг 4 плана ответов (исходы A/B/C)
 
 Правка ответа и моста (`serene_ask.py`, `mcp_ask.py`): детектор — судья

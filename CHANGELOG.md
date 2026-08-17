@@ -1,5 +1,33 @@
 # Журнал изменений
 
+## 17.08: шаг 4 — атом форка = aggregate (71M→73M) `[код]` `[замер]`
+
+`[код]` `serene_ask.py`: `_fork_headline_measure` — выбор головной величины
+класса (не `sorted(sums)[0]`). Баг: `_fork_atom_of` брал первую по алфавиту
+`СуммаВзаиморасчетов` → **71 045 277,59** вместо эталона `СуммаДокумента`
+**73 181 157,68** на `document_приобретениетоваровуслуг` ([замер 17.08]).
+Правило: `measure_choice` + для `document_*` приоритет поля *Документа*.
+`test_fork_detector.py` +3 пробы; `test_fork_atom_aggregate.py` — интеграция
+ut_test (10/10).
+
+`[замер]` Оффлайн: gate 130, step4_guards 110, a3 14, fork_detector 16,
+fork_outcomes 16, fork_atom_aggregate 10, answer_atom 18, decision_id 24,
+mcp_ask 27, verify 95 — зелёные. ut_test: atom==aggregate до копейки на паре
+закупок (документ 73 181 157,68 / регистр 1 137 949,71). fork_scan p50 ~426 мс
+(6 эталонных развилок, без модели). `/ask` на :8097 — 503 (DeepSeek 402);
+живой A/B и 44 вопроса — после оплаты. okna prod: SSH 167.233.249.110
+недоступен (ключ). md5 serene_ask `451c6b92…` (dev `/opt/1c-mcp-reports`).
+
+## 17.08: branch_alias — гвард инфра/биллинга, чистка ut_test `[замер]` `[код]`
+
+`[код]` `branch_alias_parse.py`: `is_infra_failure()`, `--infra-check` для
+`branch_alias.sh`; billing/lock/summarization — прогон прерывается без
+`mark_attempt` и пустышек (exit 2). `test_branch_alias.py` — 16/16 оффлайн.
+
+`[замер]` ut_test: удалено **75 732** пустых `search_fork_label`
+(`coalesce(label,'')=''`); осталось 4 непустых, 121 класс, покрытых 0.
+Повтор alias/wiki + ut_test tier2 — после оплаты DeepSeek.
+
 ## 16.08: самопроверка — okna ярус 2 10% (atoms_wrong 0) `[замер]`
 
 `[замер]` Okna боевой `:8091`, config=vector+rerank, md5 `4ed9bc7b`: 138 вопросов
