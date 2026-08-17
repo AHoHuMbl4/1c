@@ -8,6 +8,13 @@ _Обновлено: **2026-08-17.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **okna web-бот на vLLM — СТОП и откат `[17.08]`**: штатный провайдер/allowlist
+выставлены, primary был `vllm/Qwen3.8-27B` (thinking=off), `max_model_len=16384`.
+Живой чат `:18801` → vLLM **400 без tool parser** (`ask_1c` не звался). Откат из
+`/home/undebot/.openclaw-web/openclaw.json.bak-qwen-20260817-183136`, снова
+DeepSeek flash; дым 200. Telegram не трогали. Дальше — только после
+`--enable-auto-tool-choice` + `--tool-call-parser` на инстансе vLLM (владелец).
+
 🔴 **Qwen3.8-27B vLLM — замер ответов ЗАКРЫТ `[17.08]`**: код в git (`ASK_THINKING_OFF_BODY`,
 `:8098` dev); ворота зелёные (50/50 JSON), step4 **0/44 неверных**, но **ВЕРНО 2 vs 11**
 DeepSeek → **prod не переводим**. DeepSeek live 402. Следы:

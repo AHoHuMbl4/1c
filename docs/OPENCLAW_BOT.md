@@ -203,6 +203,14 @@ Open WebUI + Caddy на фронте; web-гейтвей OpenClaw на okna-бэ
   репо-версия `instance/AGENTS.md`: боевая копия 30.07 недоступна по правам (700),
   развилка №45 для веба открыта. Маппинг чатов Open WebUI → сессии OpenClaw (поле `user`)
   проверен ключом `conv:*`; шлёт ли Open WebUI `user` сам — проверить при переносе.
+- **Попытка Qwen3.8-27B `[замер 17.08]` — откат.** Конфиг-путь провайдера:
+  `/home/undebot/.openclaw-web/openclaw.json` (`openclaw --profile web`), ключи
+  `models.providers.vllm` + allowlist `agents.defaults.models` + `plugins.allow`.
+  Бэкап до правки:
+  `/home/undebot/.openclaw-web/openclaw.json.bak-qwen-20260817-183136`.
+  Инстанс `max_model_len=16384`; без UA Cloudflare 1010; чат → 400 tool parser.
+  Снова `deepseek/deepseek-v4-flash`. Telegram не переключали. Разбор —
+  CHANGELOG 17.08 и RUNBOOK §11.3-бис.
 
 ### Брендинг и права доступа [замер 08.08]
 

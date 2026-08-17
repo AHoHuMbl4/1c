@@ -3814,6 +3814,26 @@ A/B на **обоих** контурах (branch + wiki measures), не по о�
 только тот, кто уже смотрит.
 
 
+## 3.82 Рестарт живого веб-шлюза до ключа в env + vLLM словаря приняли за модель бота
+
+**Что сделал не так.** В `models.providers.vllm.apiKey` поставил `${VLLM_API_KEY}`
+по доке vLLM и рестартнул `openclaw-gateway-web` **до** строки в
+`gateway.systemd.env`. Для бота взял тот же инстанс, что словари
+(`supportsTools: false`): у словарей инструментов нет, у бота `ask_1c` обязателен.
+
+**Чем кончилось (17.08).** SecretRef fail-closed → crash-loop `:18801` (~2 мин,
+пока владелец тестировал okna). После env шлюз встал на Qwen, thinking=off,
+но живой чат — HTTP 400 `auto tool choice requires --enable-auto-tool-choice
+and --tool-call-parser`; инструмент не звался. Откат из
+`openclaw.json.bak-qwen-20260817-183136`. `plugins enable vllm` без id в
+`plugins.allow` тоже отказал («blocked by allowlist»).
+
+**Как надо.** Env юнита и allowlist — до рестарта. `1c-openclaw-gateway-restart`
+не трогает веб. Инстанс без tool parser — не primary бота. `contextWindow` брать
+с `max_model_len` `/v1/models` (16384), не из шаблона словаря (131072). С
+датацентрового IP — User-Agent в `models.providers.vllm.request.headers`.
+
+
 # 5. Короткий список перед началом работы
 1. Прочитал свои файлы по этой теме? Особенно таблицу «уже проверено».
 2. Эта задача заблокирована **нами** или ждёт кого-то снаружи? Внешнюю — отложить.

@@ -839,6 +839,50 @@ sudo -u undebot chmod 600 /home/undebot/.openclaw/.env
 sudo -u undebot openclaw models auth paste-api-key --provider deepseek --profile-id deepseek:default
 ```
 
+### 11.3-бис Свой OpenAI-совместимый провайдер (vLLM) — штатно, сборка 2026.7.1-2
+
+Доки установленной сборки: `/usr/lib/node_modules/openclaw/docs/providers/vllm.md`,
+allowlist — `/usr/lib/node_modules/openclaw/docs/concepts/models.md` («Model is not
+allowed»). Не `/opt/openclaw-engine`.
+
+Веб-профиль okna: `openclaw --profile web` (state `~/.openclaw-web`), не путать с
+telegram `~/.openclaw`. Рестарт веба — `systemctl --user restart openclaw-gateway-web`
+у `undebot`. Юнит-обёртка `1c-openclaw-gateway-restart` рестартит **только**
+`openclaw-gateway` (`:18800`).
+
+```bash
+# 1) закрытый plugins.allow — сначала id, потом enable (иначе «blocked by allowlist»)
+openclaw --profile web config set plugins.allow \
+  '["deepseek","braine-verify","memory-wiki","memory-core","vllm"]' --strict-json
+openclaw --profile web plugins enable vllm
+
+# 2) провайдер. apiKey=${VLLM_API_KEY} обязан быть в EnvironmentFile юнита
+#    ДО рестарта — иначе SecretRef валит весь шлюз (crash-loop, замер 17.08).
+openclaw --profile web config set models.providers.vllm '<json>' --strict-json --merge
+# в json: baseUrl …/v1, api=openai-completions, models[].id=Qwen3.8-27B,
+# contextWindow = served max_model_len (17.08: 16384, не 131072),
+# compat.thinkingFormat=qwen-chat-template,
+# request.headers.User-Agent (иначе Cloudflare 1010 с датацентрового IP).
+
+# 3) allowlist агента main — ДО models set
+openclaw --profile web config set agents.defaults.models \
+  '{"vllm/Qwen3.8-27B":{"params":{"chat_template_kwargs":{"enable_thinking":false}}},"vllm/*":{}}' \
+  --strict-json --merge
+
+printf '%s\n' "$VLLM_API_KEY" | openclaw --profile web models auth paste-api-key \
+  --provider vllm --profile-id vllm:default
+openclaw --profile web models set vllm/Qwen3.8-27B
+```
+
+🔴 **17.08 бот на этот инстанс не переведён:** vLLM отвечает 400 на
+`tool_choice=auto` без `--enable-auto-tool-choice` и `--tool-call-parser`.
+Словари (`supportsTools: false`) — другой контур. Пока парсер на инстансе
+не включён — primary веба остаётся `deepseek/deepseek-v4-flash`.
+
+Откат: вернуть `openclaw.json` из бэкапа
+`/home/undebot/.openclaw-web/openclaw.json.bak-qwen-20260817-183136`
+и рестарт `openclaw-gateway-web`.
+
 ### 11.4 verify-плагин (гейт анти-галлюцинаций, КОДОМ)
 ```bash
 cd ubuntu/openclaw/verify-plugin && node test-verify.mjs      # 52 оффлайн-юнита — все PASS

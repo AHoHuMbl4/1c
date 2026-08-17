@@ -1,5 +1,23 @@
 # Журнал изменений
 
+## 17.08: бот OpenClaw на vLLM Qwen — стоп: инстанс без tool parser `[замер]`
+
+Штатный путь сборки (`/usr/lib/node_modules/openclaw/docs/providers/vllm.md`,
+`concepts/models.md`): `models.providers.vllm` api=openai-completions;
+allowlist `agents.defaults.models` (`vllm/Qwen3.8-27B` + `vllm/*`); `plugins.allow`
++= vllm **до** `plugins enable`; ключ `models auth paste-api-key`; primary
+`openclaw --profile web models set vllm/Qwen3.8-27B`. thinking off уже был
+(`thinkingDefault` + qwen-chat-template + `enable_thinking: false`).
+
+`[замер]` okna web `~/.openclaw-web` (:18801): served Qwen3.8-27B,
+**max_model_len=16384**. Cloudflare 1010 без UA; с UA 200. Живой чат
+«сколько контрагентов» → **400** auto tool choice / tool-call-parser —
+ask_1c не звался. `/ask` той же фразы — figures/fork. `${VLLM_API_KEY}` без
+env юнита → crash-loop шлюза. Откат:
+`/home/undebot/.openclaw-web/openclaw.json.bak-qwen-20260817-183136`
++ restart `openclaw-gateway-web` (не `1c-openclaw-gateway-restart` — тот telegram).
+После: DeepSeek flash, дым 200. verify 95/95. Telegram не трогали.
+
 ## 17.08: установщик 1.3.0 — расширение чтения на клиент-серверных базах, до автозапуска агента `[код]`
 
 Реализована часть А плана `PLAN_EXT_CLIENT_SERVER.md` (первопричина потери 68 %
