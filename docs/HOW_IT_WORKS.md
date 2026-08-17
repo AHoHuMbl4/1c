@@ -1156,7 +1156,7 @@ compose ПЛЮС паспорт (`from`/`to`/`label`/`measure`), а `_slot_fp` �
 детектор выдаёт исход (план §2): **A** — один класс, несколько src → ответ
 источник-нейтрально (`source_fixed=false`, `memory_eligible=false`, паспорт без
 `src_label`); **B** — несколько классов, все посчитаны и подписаны в
-`search_fork_label` → условные пары кодом (`fill_atom_pairs` / `render_atom_pair`)
+`search_fork_label` (умолч. infer --gateway; BRANCH_ALIAS_INFER=local — без RPC 120 с) → условные пары кодом (`fill_atom_pairs` / `render_atom_pair`)
 + `options[].decision_id` на класс; **C** — иначе → `clarify`, ограничение видно
 клиенту (`partial.fork_limitation`). Сигнальное сомнение само по себе больше не
 создаёт вопрос: один класс → ответ (запись в `diag`); несколько → B/C.

@@ -32,8 +32,18 @@ _INFRA_RE = [
         r"summarization\s+failed",
         r"sessionwritelock",
         r"failovererror",
+        r"fallbacksummaryerror",
         r"gatewayclientrequesterror",
+        r"gatewaytransporterror",
+        r"gateway timeout",
         r"provider\b.*\bcooldown\b",
+        r"\bin cooldown\b",
+        r"html error page",
+        r"<!DOCTYPE\s+html",
+        r"<html[\s>]",
+        r"can'?t find the model",
+        r"model not found",
+        r"model you.?re using right now",
         r"llm request timed out",
         r"econnrefused",
         r"etimedout",
@@ -142,8 +152,18 @@ def parse_labels(text, pay):
 def main(argv):
     if len(argv) >= 2 and argv[1] == "--infra-check":
         # branch_alias.sh: stderr [ans] → exit 0 если прогон прервать (инфра).
-        err = open(argv[2], encoding="utf-8", errors="replace").read() if len(argv) > 2 else ""
-        ans = open(argv[3], encoding="utf-8", errors="replace").read() if len(argv) > 3 else ""
+        # Нет файла (осечка до записи ans) — пустая строка, не исключение:
+        # иначе bash `if cmd` видит ненулевой код и списывает пустышку.
+        def _read(path):
+            if not path:
+                return ""
+            try:
+                return open(path, encoding="utf-8", errors="replace").read()
+            except OSError:
+                return ""
+
+        err = _read(argv[2] if len(argv) > 2 else "")
+        ans = _read(argv[3] if len(argv) > 3 else "")
         return 0 if is_infra_failure(err, agent_blob(ans)) else 1
 
     ans_path, pay_path, rows_path = argv[1], argv[2], argv[3]

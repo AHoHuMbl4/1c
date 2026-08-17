@@ -1,5 +1,19 @@
 # Журнал изменений
 
+## 17.08: словарь развилок — infer `--local` по окружению; гвард vLLM `[код]`
+
+`[код]` `alias_infer_gateway.py`: умолчание `--gateway`; `BRANCH_ALIAS_INFER=local`
+(или `ALIAS_INFER_TRANSPORT=local`) — `--local` без RPC-потолка шлюза 120 с
+(доки сборки `cli/infer.md`; штатного раздельного таймаута у `--gateway` нет —
+константа `12e4` в CLI 2026.7.1-2). URL/ключ/модель в код не входят.
+
+`[код]` `branch_alias_parse.py`: HTML error page / `<!DOCTYPE html>`, model not
+found, cooldown, FallbackSummaryError — инфра (стоп, пустышек нет). `--infra-check`
+не падает на отсутствующий `ans` (живой okna: FailoverError списывал пустышки,
+потому что `open(ans)` кидал исключение и bash шёл в `mark_attempt`).
+`test_branch_alias.py` **25/25**. Доки: cli/infer.md.
+
+
 ## 17.08: эндпоинты моделей — на домены владельца `[замер]`
 
 Владелец прикрутил домены: `gpu-27b.timpul.pro` — LLM Qwen3.8-27B (RTX 6000

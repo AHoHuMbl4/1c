@@ -139,6 +139,40 @@ ENV_ERR = json.dumps({"result": {"payloads": [{"text": ERR_BILL}]}}, ensure_asci
 rows_env_err = P.parse_labels(P.text_from_agent(ENV_ERR), PAY)
 t("конверт со служебной ошибкой → ноль записей", rows_env_err == [], rows_env_err)
 
+# --- vLLM/инфра (замер 17.08 okna: HTML/cooldown списывали пустышки) ---
+ERR_HTML = (
+    "GatewayClientRequestError: FailoverError: The provider returned an HTML "
+    "error page instead of an API response."
+)
+ERR_MODEL = "Error: vllm can't find the model you're using right now."
+ERR_COOL = (
+    "FallbackSummaryError: All models failed (1): vllm/Qwen3.8-27B: "
+    "Provider vllm is in cooldown"
+)
+ERR_PAGE = "<!DOCTYPE html><html><body>502 Bad Gateway</body></html>"
+t("HTML error page — инфра", P.is_infra_failure(ERR_HTML))
+t("model not found — инфра", P.is_infra_failure(ERR_MODEL))
+t("vLLM cooldown — инфра", P.is_infra_failure(ERR_COOL))
+t("сырой HTML вместо JSON — инфра", P.is_infra_failure(ERR_PAGE))
+t("обычный JSON после vLLM-классов — не инфра", not P.is_infra_failure(ENV))
+
+# --infra-check: нет файла ans → не исключение, классификация по stderr.
+import tempfile as _tf  # noqa: E402
+_err_p = _tf.NamedTemporaryFile("w", suffix=".err", delete=False)
+_err_p.write(ERR_HTML)
+_err_p.close()
+_missing_ans = _err_p.name + ".no-ans"
+rc_infra = P.main(["x", "--infra-check", _err_p.name, _missing_ans])
+t("--infra-check HTML без ans → стоп (0)", rc_infra == 0, rc_infra)
+os.unlink(_err_p.name)
+
+import alias_infer_gateway as IG  # noqa: E402
+t("транспорт умолчание — gateway", IG.infer_transport_flag({}) == "--gateway")
+t("BRANCH_ALIAS_INFER=local — --local",
+  IG.infer_transport_flag({"BRANCH_ALIAS_INFER": "local"}) == "--local")
+t("неизвестное значение транспорта — gateway",
+  IG.infer_transport_flag({"BRANCH_ALIAS_INFER": "rpc"}) == "--gateway")
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))
