@@ -207,6 +207,9 @@ DS_KEY = os.environ.get("DEEPSEEK_API_KEY", "")
 # У провайдера доступны ровно два: `deepseek-v4-flash` и `deepseek-v4-pro`.
 DS_MODEL = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro")
 DS_THINKING = os.environ.get("DEEPSEEK_THINKING", "disabled")
+# vLLM/Qwen: thinking выключается через extra_body, а не полем DeepSeek.
+# Включать только на инстансе с ASK-моделью qwen — DeepSeek extra_body игнорирует.
+ASK_THINKING_OFF_BODY = os.environ.get("ASK_THINKING_OFF_BODY", "") in ("1", "true", "yes")
 
 # 🔴 ИМЯ НАСТРОЙКИ НЕ НАЗЫВАЕТ ПОСТАВЩИКА. Прежние `ALIBABA_*` читаются, но только как
 # запасной вариант: 02.08 эмбеддер переехал с dashscope на свой (Qwen3-Embedding-4B,
@@ -460,17 +463,30 @@ def _ds_chat_content(data):
     return msg.get("content")
 
 
-def ds_chat(messages, temperature=0, max_tokens=900):
+def _ds_chat_body(messages, temperature=0, max_tokens=900):
     body = {"model": DS_MODEL, "temperature": temperature,
             "max_tokens": max_tokens, "messages": messages}
     if DS_THINKING:
         body["thinking"] = {"type": DS_THINKING}
+    if ASK_THINKING_OFF_BODY:
+        # vLLM Qwen: kwargs на верхнем уровне тела; extra_body игнорируется [замер 17.08].
+        body["chat_template_kwargs"] = {"enable_thinking": False}
+    return body
+
+
+def ds_chat_post(body):
     req = urllib.request.Request(DS_BASE + "/v1/chat/completions",
                                  data=json.dumps(body).encode(), method="POST")
     req.add_header("Authorization", "Bearer " + DS_KEY)
     req.add_header("Content-Type", "application/json")
+    if EMBED_UA:
+        req.add_header("User-Agent", EMBED_UA)
     with urllib.request.urlopen(req, timeout=120) as r:
-        return _ds_chat_content(json.loads(r.read()))
+        return json.loads(r.read())
+
+
+def ds_chat(messages, temperature=0, max_tokens=900):
+    return _ds_chat_content(ds_chat_post(_ds_chat_body(messages, temperature, max_tokens)))
 
 
 # 🔴 АРБИТР: ВЫБИРАЕТ ИЗ ГОТОВЫХ ОТВЕТОВ, А НЕ СОЧИНЯЕТ СВОЙ.
@@ -689,6 +705,7 @@ _INTENT_FIELDS = ("terms", "kind", "measure", "want", "period", "period2", "amou
 # Сколько прогонов разбора допустимо на один вопрос и какой отрыв лидера считается
 # согласием. 1 прогон — прежнее поведение. Это бюджет ТОЧНОСТИ входа, а не подстройка
 # под базу: от данных и от языка он не зависит.
+INTENT_MAX_TOKENS = int(os.environ.get("ASK_INTENT_MAX_TOKENS", "400"))
 INTENT_SAMPLES = int(os.environ.get("ASK_INTENT_SAMPLES", "5"))
 INTENT_LEAD = int(os.environ.get("ASK_INTENT_LEAD", "3"))
 # Память разобранных вопросов: ключ — текст вопроса и дата, значение — готовый разбор.
@@ -1010,7 +1027,7 @@ def _normalize_intent(d, question=""):
 
 def _one_intent(msgs, question):
     """Один разбор вопроса моделью, проверенный по типам."""
-    raw = ds_chat(msgs, max_tokens=400)
+    raw = ds_chat(msgs, max_tokens=INTENT_MAX_TOKENS)
     d = _first_intent_object(raw)
     if d is None:
         # 🔴 ВТОРАЯ ПОПЫТКА, А НЕ ПУСТОЙ РАЗБОР. Прежняя редакция при неразобранном
@@ -1020,7 +1037,7 @@ def _one_intent(msgs, question):
         # шаг 1 занимает 1,6 с из 17,6 с ответа.
         raw2 = ds_chat(msgs + [{"role": "assistant", "content": (raw or "")[:400]},
                                {"role": "user", "content": "Return the JSON object."}],
-                       max_tokens=400)
+                       max_tokens=INTENT_MAX_TOKENS)
         d = _first_intent_object(raw2)
     if d is None:
         raise RuntimeError("модель не вернула разбор вопроса")

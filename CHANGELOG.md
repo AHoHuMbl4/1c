@@ -1,5 +1,33 @@
 # Журнал изменений
 
+## 17.08: замер Qwen3.8-27B vLLM как модели ответов (п.16) — код + ворота, prod не переводим `[замер]`
+
+`[код]` `serene_ask.py`: `ASK_THINKING_OFF_BODY` — `chat_template_kwargs.enable_thinking=false`
+**на верхнем уровне** тела (vLLM игнорирует `extra_body`, проверено
+`qwen_thinking_probe.py`); `ds_chat_post` + `User-Agent` (`EMBED_UA`, Cloudflare);
+`ASK_INTENT_MAX_TOKENS`. `test_ds_tokens.py` +11 проверок. Приборы:
+`work/acceptance/qwen_*`, `start-8098.sh`.
+
+`[замер]` Инстанс `:8098` ut_test → `a1f19thc-8000.thundercompute.net`, модель
+`Qwen3.8-27B`, ключ = embed. Прогоны: `runs/qwen-gates-20260817.json`,
+`qwen-ab-qwen-8098-20260817.tsv`, `qwen-latency-20260817.json`,
+`qwen-branch-chunks-20260817.json`. DeepSeek baseline live `:8099` — **402**
+(все 44 СБОЙ); сравнение с `p21-H-final` 06.08.
+
+| Критерий | Qwen :8098 | DeepSeek (06.08) |
+|---|---|---|
+| НЕВЕРНО | **0/44** | 0/44 |
+| Доля ответов (ВЕРНО+УСЛОВНО+…) | **18/44 (41%)** | 11/44 (25%) |
+| ВЕРНО (эталонная сущность) | 2 | 11 |
+| parse_intent 50 вопросов | 50/50, lost 0 | — |
+| детерминизм ×5 | стабилен | — |
+| /ask p50 / p90 | 64 с / 66 с | ~17–60 с |
+| branch_alias 3 чанка ds_chat | 45 с, JSON 3/3 | — |
+
+**Вердикт:** формальные пороги (0 ошибок, доля ответов не ниже, латентность <2×)
+выполнены, но **ВЕРНО 11→2** — регрессия выбора сущности; **на prod не переводим**
+до отдельного разбора или донастройки vLLM.
+
 ## 17.08: эмбеддер/реранкер/whisper переведены на новый хост владельца 178.63.211.188 `[замер]`
 
 `[замер]` Хост `lr0r1k1g-*.thundercompute.net` заменён на `178.63.211.188`

@@ -87,6 +87,17 @@ c2 = A._ds_chat_content({})
 t("пустой ответ → None", c2 is None)
 t("пустой ответ → tokens нет", "tokens" not in A._diag_pack({}))
 
+# ── ASK_THINKING_OFF_BODY: extra_body для vLLM/Qwen ─────────────────────────
+_old = A.ASK_THINKING_OFF_BODY
+A.ASK_THINKING_OFF_BODY = False
+b0 = A._ds_chat_body([{"role": "user", "content": "x"}])
+t("off: без extra_body", "extra_body" not in b0)
+A.ASK_THINKING_OFF_BODY = True
+b1 = A._ds_chat_body([{"role": "user", "content": "x"}])
+t("on: chat_template_kwargs thinking off", b1.get("chat_template_kwargs") == {
+    "enable_thinking": False})
+A.ASK_THINKING_OFF_BODY = _old
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL))

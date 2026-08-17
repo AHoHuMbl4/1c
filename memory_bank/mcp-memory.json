@@ -220,6 +220,7 @@
 {"type":"entity","name":"test_fork_atom_aggregate.py","entityType":"прибор (интеграционный)","observations":["Интеграционный замок шага 4: атом форка == aggregate до копейки на ut_test (ubuntu/serenedb/test_fork_atom_aggregate.py)","Эталон 17.08: document_приобретениетоваровуслуг 73 181 157,68; accumulationregister_закупки 1 137 949,71"]}
 {"type":"entity","name":"test_ds_tokens.py","entityType":"прибор (оффлайн-прогон)","observations":["Оффлайн-проба учёта usage DeepSeek: подмена urlopen, _diag_pack, ответ без usage (ubuntu/serenedb/test_ds_tokens.py, 17.08)","Запуск: python3 ubuntu/serenedb/test_ds_tokens.py — 9 случаев, без базы и сети"]}
 {"type":"entity","name":"alias_agent_bench.py","entityType":"прибор (замер агента словарей)","observations":["Замер накладных/thinking/A/B flash vs pro для branch_alias и wiki_alias: openclaw agent --json, парсинг usage и метрик парсером (ubuntu/serenedb/branch_alias_parse.py, wiki_alias_parse.py). Артефакты work/acceptance/runs/alias-bench-20260817-*.","[замер 17.08] gateway overhead control 3576 in; branch chunk40 6686 in / 1476 out; v4-pro thinking только off; winner pro (wiki coverage)."]}
+{"type":"entity","name":"Qwen3.8-27B vLLM","entityType":"внешний сервис","observations":["vLLM OpenAI-compatible на a1f19thc-8000.thundercompute.net, модель Qwen3.8-27B BF16; ключ общий с embed (EMBED_API_KEY)","thinking off: chat_template_kwargs.enable_thinking=false на верхнем уровне тела запроса — extra_body игнорируется [замер 17.08]","17.08 замер :8098 ut_test: ворота parse_intent 50/50, step4 0/44 NEVerno, 18/44 ответов (2 VERNO+16 USLOVNO) vs DeepSeek p21-H 11/44; p50 /ask 64с"]}
 {"type":"relation","from":"pipeline.sh","to":"deploy.sh","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"serene_sync.py","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"build.sh","relationType":"вызывает"}
@@ -551,3 +552,5 @@
 {"type":"relation","from":"test_ds_tokens.py","to":"serene_ask.py","relationType":"проверяет оффлайн (учёт токенов ds_chat)"}
 {"type":"relation","from":"alias_agent_bench.py","to":"branch_alias.sh","relationType":"меряет стоимость вызовов"}
 {"type":"relation","from":"alias_agent_bench.py","to":"wiki_alias.sh","relationType":"меряет стоимость вызовов"}
+{"type":"relation","from":"serene_ask.py","to":"Qwen3.8-27B vLLM","relationType":"вызывает (ответы LLM)"}
+{"type":"relation","from":"Qwen3.8-27B vLLM","to":"DeepSeek v4-pro","relationType":"альтернатива"}
