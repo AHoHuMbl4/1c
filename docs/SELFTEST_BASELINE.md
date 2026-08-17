@@ -297,10 +297,30 @@ answer 2 855 по верной сущности — нестабильность
 не та величина 1. Файлы: `runs/selftest-okna-results-tier2.jsonl`,
 `…-report-tier2.json`, `selftest-misses-okna-tier2.jsonl`.
 
-## Что НЕ сделано
+## Замер 17.08 (трек C): гвард branch_alias + прогоны после оплаты DeepSeek
 
-- Дев ut_test ярус 2 10 % — прогон идёт (~88/334 на момент записи).
-- `1c-branch-alias` на ut_test — запущен, но пачки дают 0 подписей
-  (`SessionWriteLockTimeoutError` у openclaw-gateway); сироты 4, классов ~114.
-- `1c-wiki-alias` величины ut_test — после окончания ut_test яруса 2
-  (env уже на `dbname=ut_test`, боевые таблицы).
+**Гвард** (`branch_alias.sh` / `branch_alias_parse.py`): billing / lock / summarization /
+TranscriptNotContinuable — прогон прерывается без `mark_attempt` (exit 2).
+`test_branch_alias.py` — 16/16 оффлайн.
+
+**Чанкинг** `[17.08]`: `BRANCH_ALIAS_SRC_CHUNK=40`, `BATCH=1` — класс с 1500
+источников режется; без чанкинга одна пачка = 4751 веток → 0 подписей и тысячи
+пустышек. Свежий `session-key` на каждый systemd-прогон.
+
+Чистка ut_test (до прогона): DELETE пустых label — **75 732 + 7 306 + 6 767**
+(три волны до стабилизации чанкинга).
+
+**В работе** (фон, 17.08 ~07:30 UTC):
+
+| Прогон | Статус |
+|---|---|
+| `1c-branch-alias` ut_test | идёт: 87+ непустых, 0 пустышек, 1+ класс покрыт |
+| ut_test tier2 334 вопроса | идёт: все HTTP 200 на первых ~15 |
+
+**Ожидает** после branch-alias: `1c-wiki-alias` (меры). После tier2:
+`selftest_check`, финальная сводка ярусов 1–2.
+
+### ut_test tier2 (предыдущий, недействителен)
+
+221×503 / 113×200 — billing; архив
+`selftest-ut_test-results-tier2.billing-invalid.jsonl`.

@@ -21,6 +21,53 @@ from wiki_alias_parse import text_from_agent
 
 MAX_LABEL = 900
 
+# Сбой шлюза/провайдера/сети — не ответ модели: попытку не списываем (branch_alias.sh).
+_INFRA_RE = [
+    re.compile(p, re.I)
+    for p in (
+        r"billing\s+error",
+        r"run\s+out\s+of\s+credits",
+        r"402\s+payment",
+        r"insufficient\s+balance",
+        r"summarization\s+failed",
+        r"sessionwritelock",
+        r"failovererror",
+        r"gatewayclientrequesterror",
+        r"provider\b.*\bcooldown\b",
+        r"llm request timed out",
+        r"econnrefused",
+        r"etimedout",
+        r"enotfound",
+        r"socket hang up",
+        r"rate\s+limit",
+        r"transcriptnotcontinuable",
+        r"openclaw_transcript_not_continuable",
+    )
+]
+
+
+def is_infra_failure(*chunks: str) -> bool:
+    """True, если текст — сбой инфра/биллинга/шлюза, а не разбор ответа модели."""
+    blob = "\n".join(c for c in chunks if c)
+    if not blob.strip():
+        return False
+    return any(rx.search(blob) for rx in _INFRA_RE)
+
+
+def agent_blob(raw: str) -> str:
+    """Весь текст ответа агента для классификации сбоев."""
+    parts = [raw or ""]
+    try:
+        parts.append(text_from_agent(raw))
+    except Exception:
+        pass
+    try:
+        env = json.loads(raw)
+        parts.append(json.dumps(env, ensure_ascii=False))
+    except ValueError:
+        pass
+    return "\n".join(parts)
+
 
 def known_forks(pay):
     """fork_key -> список src класса и title -> src из входной пачки."""
@@ -93,6 +140,12 @@ def parse_labels(text, pay):
 
 
 def main(argv):
+    if len(argv) >= 2 and argv[1] == "--infra-check":
+        # branch_alias.sh: stderr [ans] → exit 0 если прогон прервать (инфра).
+        err = open(argv[2], encoding="utf-8", errors="replace").read() if len(argv) > 2 else ""
+        ans = open(argv[3], encoding="utf-8", errors="replace").read() if len(argv) > 3 else ""
+        return 0 if is_infra_failure(err, agent_blob(ans)) else 1
+
     ans_path, pay_path, rows_path = argv[1], argv[2], argv[3]
     raw = open(ans_path, encoding="utf-8", errors="replace").read()
     try:

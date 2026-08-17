@@ -122,6 +122,23 @@ t("сырой JSON без конверта разбирается (запасн�
 for p in (raw_path, pay_path, rows_path):
     os.unlink(p)
 
+# --- инфра/биллинг: не ответ модели, разбор → 0 строк ---
+ERR_BILL = (
+    "GatewayClientRequestError: FailoverError: deepseek returned a billing error "
+    "— your API key has run out of credits"
+)
+ERR_LOCK = "SessionWriteLockTimeoutError: gateway write lock"
+ERR_SUM = "Summarization failed: context too large"
+t("billing error в stderr — инфра", P.is_infra_failure(ERR_BILL))
+t("SessionWriteLock — инфра", P.is_infra_failure(ERR_LOCK))
+t("Summarization failed — инфра", P.is_infra_failure(ERR_SUM))
+t("обычный JSON ответ — не инфра", not P.is_infra_failure(ENV))
+rows_err = P.parse_labels(ERR_BILL, PAY)
+t("ответ-ошибка (текст billing) → ноль записей", rows_err == [], rows_err)
+ENV_ERR = json.dumps({"result": {"payloads": [{"text": ERR_BILL}]}}, ensure_ascii=False)
+rows_env_err = P.parse_labels(P.text_from_agent(ENV_ERR), PAY)
+t("конверт со служебной ошибкой → ноль записей", rows_env_err == [], rows_env_err)
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

@@ -14,6 +14,15 @@ journald `ask TOKENS in=604 out=71 hit=512 miss=92`. md5 serene_ask `bf927340…
 
 # Журнал изменений
 
+## 17.08: branch_alias — гвард, чанкинг, прогоны ut_test `[замер]` `[код]`
+
+`[код]` Инфра/биллинг не пишет пустышек (exit 2); `BRANCH_ALIAS_SRC_CHUNK=40` для
+классов с сотнями источников; свежий session-key на прогон. DELETE пустых label:
+75732+7306+6767. Оффлайн test_branch_alias 16/16.
+
+`[замер]` После оплаты DeepSeek: branch-alias ut_test идёт (87+ подписей, 0
+пустышек); tier2 переснятие — 334 вопроса, первые ответы 200.
+
 ## 17.08: шаг 4 — атом форка = aggregate (71M→73M) `[код]` `[замер]`
 
 `[код]` `serene_ask.py`: `_fork_headline_measure` — выбор головной величины
@@ -31,8 +40,6 @@ mcp_ask 27, verify 95 — зелёные. ut_test: atom==aggregate до копе
 (6 эталонных развилок, без модели). `/ask` на :8097 — 503 (DeepSeek 402);
 живой A/B и 44 вопроса — после оплаты. okna prod: SSH 167.233.249.110
 недоступен (ключ). md5 serene_ask `451c6b92…` (dev `/opt/1c-mcp-reports`).
-
-## 17.08: branch_alias — гвард инфра/биллинга, чистка ut_test `[замер]` `[код]`
 
 `[код]` `branch_alias_parse.py`: `is_infra_failure()`, `--infra-check` для
 `branch_alias.sh`; billing/lock/summarization — прогон прерывается без

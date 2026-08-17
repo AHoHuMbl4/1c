@@ -43,6 +43,8 @@ fi
 # Сколько классов за одно обращение к модели. Класс несёт свои ветки (обычно 2-4
 # источника), поэтому десяток классов — это десятки подписей за вызов.
 BATCH="${BRANCH_ALIAS_BATCH:-10}"
+SRC_CHUNK="${BRANCH_ALIAS_SRC_CHUNK:-40}"
+case "$SRC_CHUNK" in ''|*[!0-9]*) SRC_CHUNK=40;; esac
 RETRY_H="${BRANCH_ALIAS_RETRY_H:-6}"
 case "$RETRY_H" in ''|*[!0-9]*) RETRY_H=6;; esac
 # 🔴 КУДА ПИСАТЬ. Умолчание — боевые таблицы; своё имя нужно, чтобы пробу словаря
@@ -74,6 +76,7 @@ TMP=$(mktemp -d "$EXCH/branch-alias-XXXXXX") || { echo "развилки: нет
 chmod 755 "$TMP"; trap 'rm -rf "$TMP"' EXIT
 done_total=0
 skipped=0
+aborted_infra=0
 
 # 🔴 БЮДЖЕТ ВРЕМЕНИ, А НЕ ЧИСЛО КРУГОВ (та же причина, что в `wiki_alias.sh`): шаг
 # обязан укладываться в такт свежести (п. 17 TARGET.md), а цена круга — это цена
@@ -82,12 +85,12 @@ BUDGET="${BRANCH_ALIAS_MAX_SEC:-120}"
 t_start=$(date +%s)
 over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUDGET" ]; }
 
-# Отбор: классы, у которых ХОТЯ БЫ ОДНА ветка без непустой подписи (пустышка младше
-# RETRY_H часов — свежая попытка, не переспрашиваем). Класс берётся ЦЕЛИКОМ, чтобы
-# подписи веток одной развилки писались одним ответом и различались между собой.
-# 🔴 src_set детектор пишет в фигурных скобках («{a,b}») — скобки срезаются разбором
-# (`trim(x.s, '{} ')`), иначе первая и последняя ветки не сошлись бы с `search_tables`
-# и остались без подписи навсегда.
+# 🔴 Свежий transcript на каждый прогон: битая сессия `branch-alias` от
+# биллингового прогона 16.08 ловила TranscriptNotContinuableError [17.08].
+BRANCH_ALIAS_SESSION="${BRANCH_ALIAS_SESSION_KEY:-branch-alias-$(date +%Y%m%d-%H%M%S)}"
+
+# Отбор: класс с неподписанными ветками; за один вызов модели — не больше
+# SRC_CHUNK веток (на ut_test класс может нести сотни источников [17.08]).
 NEED_SQL="
   WITH need AS (
     SELECT c.fork_key, c.src_set, c.measure_ctx
@@ -101,9 +104,21 @@ NEED_SQL="
                OR l.seen_at > now() - INTERVAL $RETRY_H HOUR)))
     ORDER BY c.fork_key
     LIMIT $BATCH),
-  srcs AS (
+  raw_srcs AS (
     SELECT n.fork_key, n.measure_ctx, trim(x.s, '{} ') AS src
-    FROM need n, unnest(str_split(n.src_set, ',')) AS x(s))"
+    FROM need n, unnest(str_split(n.src_set, ',')) AS x(s)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM $FORK_LABEL_TABLE l
+      WHERE l.fork_key = n.fork_key AND l.src = trim(x.s, '{} ')
+        AND (coalesce(l.label, '') <> ''
+             OR l.seen_at > now() - INTERVAL $RETRY_H HOUR))),
+  srcs AS (
+    SELECT fork_key, measure_ctx, src
+    FROM (
+      SELECT fork_key, measure_ctx, src,
+             row_number() OVER (PARTITION BY fork_key ORDER BY src) AS rn
+      FROM raw_srcs) z
+    WHERE rn <= $SRC_CHUNK)"
 
 # 🔴 ОТМЕТКА ПОПЫТКИ — MERGE, А НЕ «INSERT ГДЕ НЕТ». [замер 15.08, дым на ut_test]
 # INSERT с NOT EXISTS пропускал ветку, у которой пустышка УЖЕ лежит, но протухла:
@@ -156,16 +171,30 @@ while :; do
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
-  "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key branch-alias --json \
+  "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key "$BRANCH_ALIAS_SESSION" --json \
     --message-file "$TMP/msg" \
     > "$TMP/ans" 2>"$TMP/err" || {
-      # Одна осечка не останавливает прогон: пачка помечается попыткой, следующий
-      # проход вернётся к ней не раньше RETRY_H (как в `wiki_alias.sh`).
+      # 🔴 Биллинг, lock шлюза, summarization — не ответ модели: попытку не
+      # списываем, пустышек не пишем, прогон прерываем (замер 17.08: 75 732
+      # пустых label после billing error).
+      if python3 ./branch_alias_parse.py --infra-check "$TMP/err" "$TMP/ans" 2>/dev/null; then
+        aborted_infra=1
+        echo "развилки: прогон прерван — инфра/биллинг ($(head -c 160 "$TMP/err" | tr -d '\n'))" >&2
+        break
+      fi
+      # Иная осечка (таймаут без признаков инфры и т.п.) — попытка, RETRY_H.
       skipped=$((skipped + 1))
       echo "развилки: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
       mark_attempt
       continue
     }
+
+  # Ответ с кодом 0, но текст — служебная ошибка шлюза/провайдера.
+  if python3 ./branch_alias_parse.py --infra-check "$TMP/err" "$TMP/ans" 2>/dev/null; then
+    aborted_infra=1
+    echo "развилки: прогон прерван — инфра/биллинг в ответе агента" >&2
+    break
+  fi
 
   # Разбор ответа модели — своим кодом это разрешено (п. 20: проверка ответа модели).
   # В словарь попадают только пары (fork_key, src) из входной пачки с непустой
@@ -196,6 +225,7 @@ while :; do
 done
 
 [ "$skipped" -gt 0 ] && echo "развилки: пачек пропущено из-за отказа модели: $skipped" >&2
+[ "$aborted_infra" -gt 0 ] && echo "развилки: прогон прерван по инфра/биллингу — попытки не списаны" >&2
 # Молчания быть не должно: видно и покрытие, и пустышки-attempt'ы.
 psql "$DSN" -tA -F' | ' -c "
   SELECT 'классов развилок в базе', count(*) FROM $FORK_CLASS_TABLE
@@ -211,3 +241,5 @@ psql "$DSN" -tA -F' | ' -c "
     WHERE coalesce(label, '') <> ''
   UNION ALL SELECT 'пустышек (модель не ответила)', count(*) FROM $FORK_LABEL_TABLE
     WHERE coalesce(label, '') = ''"
+
+[ "$aborted_infra" -gt 0 ] && exit 2
