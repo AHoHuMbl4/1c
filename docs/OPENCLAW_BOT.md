@@ -202,7 +202,13 @@ Open WebUI + Caddy на фронте; web-гейтвей OpenClaw на okna-бэ
   `EnvironmentFile` с `DEEPSEEK_API_KEY` НЕ срабатывает [замер 08.08]. Персона веб-профиля —
   репо-версия `instance/AGENTS.md`: боевая копия 30.07 недоступна по правам (700),
   развилка №45 для веба открыта. Маппинг чатов Open WebUI → сессии OpenClaw (поле `user`)
-  проверен ключом `conv:*`; шлёт ли Open WebUI `user` сам — проверить при переносе.
+  проверен ключом `conv:*` в дымовых вызовах. **Open WebUI логин сам не шлёт:** тело
+  `user` заполняет только для pipeline-моделей (`openai.py`); заголовки
+  `X-OpenWebUI-User-*` — только при `ENABLE_FORWARD_USER_INFO_HEADERS`, а сборка
+  OpenClaw `2026.7.1-2` их не читает (`gateway/openai-http-api.md`: поле `user` или
+  `x-openclaw-session-key`). Живые сессии веба без `user` — `agent:main:openai:<uuid>`
+  на каждый запрос. Плагин тогда ставит `ask_1c.user=session:<sessionKey>` (сессия,
+  не человек).
 - **Попытка Qwen3.8-27B `[замер 17.08 день]` — откат (нет tool parser).** Конфиг-путь:
   `/home/undebot/.openclaw-web/openclaw.json` (`openclaw --profile web`), ключи
   `models.providers.vllm` + allowlist `agents.defaults.models` + `plugins.allow`.

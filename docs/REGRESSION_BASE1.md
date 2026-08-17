@@ -1,3 +1,14 @@
+## Замер 17.08 — личность канала → /ask.user (шаг 6, shadow)
+
+Плагин 1.1.6 + мост: `user`/`channel` от канала, фразы «запомни/забудь» сняты.
+**Снят ПОСЛЕ последней правки.** Оффлайн: test_gate 130, step4_guards 110,
+a3_passport 14, fork_detector 23, fork_outcomes 24, fork_atom_aggregate 15,
+answer_atom 18, ds_tokens 11, ask_journal 17, ask_choice_memory 48,
+decision_id 24, focus_loop 19, mcp_ask 31, test-verify 103. `serene_ask.py`
+md5 `a48d449d…` не менялся (ответный конвейер тот же). Юниты `/opt` не
+перезапускались; `:8099`/`:8091` не трогали. Регрессии первой базы по
+оффлайн-замкам нет. Применение памяти не включалось.
+
 ## Замер 17.08 — шаг 6 плана ответов (память выбора, shadow)
 
 Правка ответа (`serene_ask.py`, `ask_choice_mem.py`, `mcp_ask.py`) + DDL

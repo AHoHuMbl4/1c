@@ -51,17 +51,27 @@ t("класс: выбранный src в ключ не входит (ключ о
   "doc_a" not in k1 and len(k1) == 64)
 
 act, q = ACM.split_memory_action("запомни так")
-t("фраза: запомни так → remember, без вопроса данных",
-  act == "remember" and q == "")
+t("фраза без поля memory не память",
+  act is None and q == "запомни так")
 act, q = ACM.split_memory_action("Забудь.")
-t("фраза: забудь → forget", act == "forget" and q == "")
+t("фраза забудь без поля не память", act is None and q == "Забудь.")
 act, q = ACM.split_memory_action("сколько продали, запомни так")
-t("фраза: хвост снимается с вопроса данных",
-  act == "remember" and q == "сколько продали")
+t("хвост без поля не снимается",
+  act is None and q == "сколько продали, запомни так")
 act, q = ACM.split_memory_action("сколько продали", "remember")
-t("поле memory побеждает текст", act == "remember" and q == "сколько продали")
+t("поле memory=remember", act == "remember" and q == "сколько продали")
+act, q = ACM.split_memory_action("сколько продали", "forget")
+t("поле memory=forget", act == "forget" and q == "сколько продали")
 act, q = ACM.split_memory_action("сколько продали")
 t("обычный вопрос: не память", act is None and q == "сколько продали")
+act, q = ACM.split_memory_action("", "remember")
+t("пустое question + memory=remember", act == "remember" and q == "")
+t("два telegram id — разные hash",
+  ACM.user_hash_of("telegram:111") != ACM.user_hash_of("telegram:222")
+  and len(ACM.user_hash_of("telegram:111")) == 64)
+t("session fallback ≠ sender hash",
+  ACM.user_hash_of("session:agent:main:openai:abc")
+  != ACM.user_hash_of("telegram:111"))
 
 
 class Store:
@@ -337,9 +347,9 @@ if os.environ.get("PGPASSWORD"):
                          "fork": {"atoms": [
                              {"srcs": ["document_приобретениетоваровуслуг"]},
                              {"srcs": ["accumulationregister_закупки"]}]}}}
-    sealed_l = A.seal_clarify(live_out, "закупки live", user="live-u1")
+    sealed_l = A.seal_clarify(live_out, "закупки live", user="telegram:111")
     tid_l = sealed_l["options"][0]["decision_id"]
-    click_l = A.attach_memory_shadow(sealed_l, user="live-u1", action=None,
+    click_l = A.attach_memory_shadow(sealed_l, user="telegram:111", action=None,
                                      decision_id=tid_l)
     n_click = _psql(RW, "SELECT count(*) FROM ask_choice_memory")
     t("live: клик не пишет",
@@ -347,7 +357,7 @@ if os.environ.get("PGPASSWORD"):
       n_click.stdout + n_click.stderr[:80])
     rem_l = A.attach_memory_shadow(
         {"kind": "answer", "text": "", "diag": {}, "options": []},
-        user="live-u1", action="remember", decision_id=tid_l)
+        user="telegram:111", action="remember", decision_id=tid_l)
     t("live: запомни stored",
       (rem_l.get("diag") or {}).get("memory", {}).get("stored") is True,
       str((rem_l.get("diag") or {}).get("memory")))
@@ -355,34 +365,34 @@ if os.environ.get("PGPASSWORD"):
     t("live: строка есть",
       n_rem.returncode == 0 and int(n_rem.stdout.strip() or 0) >= 1,
       n_rem.stdout + n_rem.stderr[:80])
-    shadow = A.attach_memory_shadow(live_out, user="live-u1", action=None)
+    shadow = A.attach_memory_shadow(live_out, user="telegram:111", action=None)
     sm = (shadow.get("diag") or {}).get("memory") or {}
     t("live: shadow would_apply, text тот же",
       shadow.get("text") == "live-pairs"
       and (sm.get("would_apply_text") or "").startswith("память применилась бы:"),
       str(sm)[:200])
-    other_l = A.attach_memory_shadow(live_out, user="live-u2", action=None)
+    other_l = A.attach_memory_shadow(live_out, user="telegram:222", action=None)
     t("live: чужой user не видит",
       ((other_l.get("diag") or {}).get("memory") or {}).get("would_apply") is None)
     # коллизия: второй пользователь помнит другую ветку со СВОИМ билетом
-    sealed_u2 = A.seal_clarify(dict(live_out), "закупки live", user="live-u2")
+    sealed_u2 = A.seal_clarify(dict(live_out), "закупки live", user="telegram:222")
     tid_u2 = sealed_u2["options"][1]["decision_id"]
     rem_u2 = A.attach_memory_shadow(
         {"kind": "answer", "text": "", "diag": {}, "options": []},
-        user="live-u2", action="remember", decision_id=tid_u2)
+        user="telegram:222", action="remember", decision_id=tid_u2)
     t("live: u2 запомнил другую ветку",
       (rem_u2.get("diag") or {}).get("memory", {}).get("stored") is True,
       str((rem_u2.get("diag") or {}).get("memory")))
-    coll_l = A.attach_memory_shadow(live_out, user="live-u1", action=None)
+    coll_l = A.attach_memory_shadow(live_out, user="telegram:111", action=None)
     clm = (coll_l.get("diag") or {}).get("memory") or {}
     t("live: коллизия двух веток",
       (clm.get("collision") or {}).get("n_branches") == 2,
       str(clm.get("collision")))
-    bye_l = A.attach_memory_shadow(live_out, user="live-u1", action="forget",
+    bye_l = A.attach_memory_shadow(live_out, user="telegram:111", action="forget",
                                    decision_id=tid_l)
     t("live: забудь cancelled",
       (bye_l.get("diag") or {}).get("memory", {}).get("cancelled") is True)
-    after_l = A.attach_memory_shadow(live_out, user="live-u1", action=None)
+    after_l = A.attach_memory_shadow(live_out, user="telegram:111", action=None)
     t("live: после забудь would_apply нет",
       ((after_l.get("diag") or {}).get("memory") or {}).get("would_apply") is None)
     priv = _psql(RW, "SELECT has_table_privilege('serene_ro','ask_choice_memory','SELECT'),"
@@ -412,7 +422,7 @@ if os.environ.get("PGPASSWORD"):
     t("apply postgres", app2.returncode == 0, (app2.stderr or app2.stdout)[-200:])
     pg = _psql("host=127.0.0.1 port=7890 user=postgres dbname=postgres",
                "SELECT count(*) FROM ask_choice_memory")
-    t("чужая база: строк live-u1 нет (или таблица пуста этой памятью)",
+    t("чужая база: строк telegram:111 нет (или таблица пуста этой памятью)",
       pg.returncode == 0 and int(pg.stdout.strip() or 0) == 0,
       pg.stdout + pg.stderr[:80])
 else:

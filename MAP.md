@@ -255,9 +255,9 @@ OpenClaw (чтение — отдельный трек, здесь его нет
 | `serene_enough.py` | **шаг «достаточен ли вопрос»**: вопрос указывает на ОДИН неназванный предмет из класса («сколько штук **товара** мы продали») — спрашиваем, что за товар и за какой период, словами человека. Вердикт собирает КОД: языковой факт от модели (`FACTS_SYS` только ОПИСЫВАЕТ вопрос) плюс число из базы «итог сложен больше чем из одной записи». Признак «поле разбора пусто» негоден сам по себе: «сколько у нас контрагентов» тоже без предмета и периода, и это полный вопрос. Выключатель `ASK_ENOUGH=0` |
 | `test_enough.py` | оффлайн-проба шага: **75 случаев** без базы, сети и вызовов модели, включая связку с сервисом (молчит при `focus`/`measure`, не трогает отказ и чужое уточнение, не роняет сервис без файла) |
 | `ask_journal.sql` + `ask_journal_apply.sh` | **журнал исходов** (шаг 5): таблица `ask_journal`, GRANT INSERT/DELETE/`SELECT(id)` для `serene_ro`; `corpus_init.sql` не трогает |
-| `test_ask_journal.py` / `ask_journal_label.py` | замки журнала (15) и разметка selftest-потока прямой SQL-сводкой |
+| `test_ask_journal.py` / `ask_journal_label.py` | замки журнала (17) и разметка selftest-потока прямой SQL-сводкой |
 | `ask_choice_memory.sql` + `ask_choice_memory_apply.sh` | **память явного выбора** (шаг 6, shadow): таблица `ask_choice_memory`, GRANT INSERT/SELECT/UPDATE для `serene_ro`; клик не пишет |
-| `ask_choice_mem.py` / `test_ask_choice_memory.py` | ключ класса, remember/forget, shadow в diag; замки 44 |
+| `ask_choice_mem.py` / `test_ask_choice_memory.py` | ключ класса, remember/forget (только поле memory), shadow в diag; замки 48 |
 | `work/acceptance/selftest_*.py` | самопроверка из данных (ярус 1 — поверхности без модели; ярус 2 — живой `/ask` + сверка атома SQL). База замка 17 — `docs/SELFTEST_BASELINE.md`; регресс промахов — `selftest-misses-*-tier2.jsonl` |
 
 ### Проверка

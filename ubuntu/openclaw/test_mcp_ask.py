@@ -164,21 +164,25 @@ t("choice_error: маркер видим мосту/гейту",
 # _ask пробрасывает decision_id
 seen = {}
 def capture(q, focus=None, measure=None, context=None, prior=None,
-            decision_id=None, user=None, memory=None):
-    seen.update(decision_id=decision_id, user=user, q=q, memory=memory)
+            decision_id=None, user=None, memory=None, channel=None):
+    seen.update(decision_id=decision_id, user=user, q=q, memory=memory,
+                channel=channel)
     return {"kind": "answer", "text": "ok", "sources": []}
 M._ask = capture
 M.ask_1c("вопрос", decision_id="tid1", user="u9")
 t("_ask пробрасывает decision_id и user",
   seen.get("decision_id") == "tid1" and seen.get("user") == "u9")
 M.ask_1c("запомни так", decision_id="tid1", user="u9")
-t("фраза запомни так → memory=remember, вопрос не пустеет",
-  seen.get("memory") == "remember" and seen.get("q") == "запомни так")
+t("фраза без поля memory не ставит remember",
+  seen.get("memory") is None and seen.get("q") == "запомни так")
 M.ask_1c("сколько продали, запомни так", user="u9")
-t("хвост запомни снимается, memory=remember",
-  seen.get("memory") == "remember" and seen.get("q") == "сколько продали")
+t("хвост без поля не снимается",
+  seen.get("memory") is None and seen.get("q") == "сколько продали, запомни так")
 M.ask_1c("вопрос", memory="forget", user="u9")
 t("поле memory пробрасывается", seen.get("memory") == "forget")
+M.ask_1c("вопрос", user="telegram:111", channel="telegram")
+t("channel пробрасывается",
+  seen.get("channel") == "telegram" and seen.get("user") == "telegram:111")
 M._ask = saved_ask
 
 print("\n%d проверок пройдено" % PASS)

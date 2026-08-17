@@ -1,6 +1,6 @@
 {
   "name": "openclaw-braine-verify",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "type": "module",
   "description": "Code-level anti-hallucination gate over braine ask_1c for the OpenClaw bot layer",
   "main": "index.js",

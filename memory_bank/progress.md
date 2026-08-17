@@ -5,6 +5,12 @@ _Сводка по стадиям контракта — [`docs/TARGET_STATUS.md
 [`activeContext.md`](activeContext.md)._
 
 
+## 2026-08-17: личность канала → /ask.user (shadow)
+
+Плагин проводит Telegram `from.id` и session-fallback WebUI до `/ask.user`.
+Фразы remember/forget сняты. Живой `:8097` журнал: три разных `user_hash`.
+Память: telegram:111 не виден 222. В бой не выкатывали.
+
 ## 2026-08-17: шаг 6 — память выбора, shadow
 
 `ask_choice_memory`: личная область, ключ со входа, клик не пишет.

@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, buildClarifyPresentation, evaluate, extractText, finalizeDecision, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, buildClarifyPresentation, channelUserOf, evaluate, extractText, finalizeDecision, injectAskUser, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -559,6 +559,50 @@ t("presentationAllowed: blocks.buttons из данных — allow", () => {
   const ref = mergeRef(null, tool, Date.now(), "[NO DATA]", "[CLARIFICATION NEEDED]", "[SERVICE ERROR]");
   const pres = buildClarifyPresentation([{ label: "А", decision_id: "x" }]);
   assert.strictEqual(presentationAllowed(pres, ref.labels), true);
+});
+
+// --- личность канала → ask_1c.user ---
+t("channelUserOf: telegram senderId", () => {
+  const id = channelUserOf({ senderId: "111", channelId: "telegram", sessionKey: "agent:main" });
+  assert.strictEqual(id.user, "telegram:111");
+  assert.strictEqual(id.kind, "sender");
+  assert.strictEqual(id.channel, "telegram");
+});
+t("channelUserOf: channelContext.sender.id", () => {
+  const id = channelUserOf({ channelContext: { sender: { id: "222" } }, channel: "telegram" });
+  assert.strictEqual(id.user, "telegram:222");
+  assert.strictEqual(id.kind, "sender");
+});
+t("channelUserOf: session fallback без sender", () => {
+  const id = channelUserOf({ sessionKey: "agent:main:openai:abc", channelId: "webchat" });
+  assert.strictEqual(id.user, "session:agent:main:openai:abc");
+  assert.strictEqual(id.kind, "session");
+  assert.strictEqual(id.channel, "webchat");
+});
+t("channelUserOf: пустой ctx", () => {
+  const id = channelUserOf({}, {});
+  assert.strictEqual(id.user, "");
+  assert.strictEqual(id.kind, "none");
+});
+t("injectAskUser: заполняет user и channel", () => {
+  const p = injectAskUser({ question: "q" }, { user: "telegram:111", channel: "telegram", kind: "sender" });
+  assert.strictEqual(p.user, "telegram:111");
+  assert.strictEqual(p.channel, "telegram");
+  assert.strictEqual(p.question, "q");
+});
+t("injectAskUser: канал перекрывает user модели", () => {
+  const p = injectAskUser({ user: "model-said" }, { user: "telegram:111", kind: "sender", channel: "telegram" });
+  assert.strictEqual(p.user, "telegram:111");
+});
+t("injectAskUser: без identity не трогает params", () => {
+  const p = injectAskUser({ user: "keep" }, { user: "", kind: "none" });
+  assert.strictEqual(p.user, "keep");
+});
+t("rewriteAsk1cParams: сохраняет user", () => {
+  const { params, action } = rewriteAsk1cParams(
+    { question: "другое", user: "telegram:111" }, "Книга Продаж", LOCK);
+  assert.strictEqual(action, "slot");
+  assert.strictEqual(params.user, "telegram:111");
 });
 
 console.log(`\n${pass} tests passed`);

@@ -366,6 +366,37 @@ export function rewriteAsk1cParams(params, prompt, lock) {
   return { params: p, action: "release" };
 }
 
+// Личность канала → ask_1c.user. senderId есть в message/agent хуках
+// (docs/plugins/hooks.md), в before_tool_call его нет. sessionKey — честный
+// fallback, когда отправителя нет (Open WebUI /v1 не шлёт логин).
+export function channelUserOf(ctx, event) {
+  const c = ctx && typeof ctx === "object" ? ctx : {};
+  const e = event && typeof event === "object" ? event : {};
+  const senderObj = (c.channelContext && c.channelContext.sender) || {};
+  const senderId = String(c.senderId || senderObj.id || e.senderId || "").trim();
+  const channel = String(
+    c.channelId || c.channel || c.messageProvider || e.channelId || e.channel || ""
+  ).trim().toLowerCase();
+  const sess = String(c.sessionKey || e.sessionKey || "").trim();
+  if (senderId) {
+    const ch = channel || "channel";
+    return { user: ch + ":" + senderId, kind: "sender", channel: ch };
+  }
+  if (sess) {
+    return { user: "session:" + sess, kind: "session", channel: channel || "webchat" };
+  }
+  return { user: "", kind: "none", channel: channel };
+}
+
+// Канал перекрывает user модели: иначе модель могла бы писать в чужую память.
+export function injectAskUser(params, identity) {
+  const p = { ...(params || {}) };
+  if (!identity || !identity.user) return p;
+  p.user = identity.user;
+  if (identity.channel) p.channel = identity.channel;
+  return p;
+}
+
 
 // 🔴 СБОЙ СЕРВИСА ДАННЫХ — ЭТО НЕ «ДАННЫХ НЕТ» (п. 18 контракта). Признак нужен ДО
 // зачистки: после неё строка маркера уже вырезана, остаток пуст, и отличить сбой от

@@ -5,53 +5,16 @@
 diag, ответ (kind/text/figures) не меняется.
 """
 import hashlib
-import re
-
-# Свободная фраза → поле memory. Код, не промт.
-_CMD_REMEMBER = re.compile(
-    r"(?iu)^\s*(запомни(?:\s+(?:так|это|пожалуйста))?|"
-    r"remember(?:\s+this)?)\s*[.!]?\s*$")
-_CMD_FORGET = re.compile(
-    r"(?iu)^\s*(забудь(?:\s+(?:это|пожалуйста))?|"
-    r"forget(?:\s+this)?)\s*[.!]?\s*$")
-_TAIL_REMEMBER = re.compile(
-    r"(?iu)(?:[.,;]?\s+)(?:запомни(?:\s+(?:так|это))?|"
-    r"remember(?:\s+this)?)\s*$")
-_TAIL_FORGET = re.compile(
-    r"(?iu)(?:[.,;]?\s+)(?:забудь(?:\s+это)?|"
-    r"forget(?:\s+this)?)\s*$")
 
 
 def split_memory_action(question, explicit=None):
     """Вернуть (action, data_question). action: remember|forget|None.
 
-    Явное поле побеждает. Целое сообщение-команда → data_question пустой.
-    Хвост «… запомни так» снимается с вопроса данных.
+    Смысл только из поля memory (remember|forget). Текст вопроса не разбирается.
     """
     exp = str(explicit or "").strip().lower()
-    if exp in ("remember", "forget"):
-        action = exp
-    else:
-        action = None
-    q = str(question or "").strip()
-    if not q:
-        return action, ""
-    if _CMD_REMEMBER.match(q):
-        return action or "remember", ""
-    if _CMD_FORGET.match(q):
-        return action or "forget", ""
-    if action is None:
-        m = _TAIL_REMEMBER.search(q)
-        if m:
-            return "remember", q[:m.start()].strip()
-        m = _TAIL_FORGET.search(q)
-        if m:
-            return "forget", q[:m.start()].strip()
-    else:
-        m = (_TAIL_REMEMBER if action == "remember" else _TAIL_FORGET).search(q)
-        if m:
-            return action, q[:m.start()].strip()
-    return action, q
+    action = exp if exp in ("remember", "forget") else None
+    return action, str(question or "").strip()
 
 
 def user_hash_of(user):

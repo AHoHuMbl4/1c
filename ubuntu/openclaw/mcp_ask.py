@@ -33,7 +33,6 @@ MCP-сервер поверх `serene_ask` — даёт OpenClaw-боту инс
 """
 import json
 import os
-import re
 import sys
 import urllib.error
 import urllib.request
@@ -76,46 +75,8 @@ def _serve_with_auth(mcp_obj):
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="warning")
 
 
-_CMD_REMEMBER = re.compile(
-    r"(?iu)^[ \t]*(запомни(?:[ \t]+(?:так|это|пожалуйста))?|remember(?:[ \t]+this)?)[ \t]*[.!?]?[ \t]*$")
-_CMD_FORGET = re.compile(
-    r"(?iu)^[ \t]*(забудь(?:[ \t]+(?:это|пожалуйста))?|forget(?:[ \t]+this)?)[ \t]*[.!?]?[ \t]*$")
-_TAIL_REMEMBER = re.compile(
-    r"(?iu)(?:[.,;]?[ \t]+)(?:запомни(?:[ \t]+(?:так|это))?|remember(?:[ \t]+this)?)[ \t]*$")
-_TAIL_FORGET = re.compile(
-    r"(?iu)(?:[.,;]?[ \t]+)(?:забудь(?:[ \t]+это)?|forget(?:[ \t]+this)?)[ \t]*$")
-
-
-def split_memory_action(question, explicit=None):
-    exp = str(explicit or "").strip().lower()
-    action = exp if exp in ("remember", "forget") else None
-    q = str(question or "").strip()
-    if not q:
-        return action, q
-    if _CMD_REMEMBER.match(q):
-        return action or "remember", q
-    if _CMD_FORGET.match(q):
-        return action or "forget", q
-    if action is None:
-        m = _TAIL_REMEMBER.search(q)
-        if m:
-            rest = q[:m.start()].strip()
-            return "remember", rest or q
-        m = _TAIL_FORGET.search(q)
-        if m:
-            rest = q[:m.start()].strip()
-            return "forget", rest or q
-        return None, q
-    tail = _TAIL_REMEMBER if action == "remember" else _TAIL_FORGET
-    m = tail.search(q)
-    if m:
-        rest = q[:m.start()].strip()
-        return action, rest or q
-    return action, q
-
-
 def _ask(question, focus=None, measure=None, context=None, prior=None,
-         decision_id=None, user=None, memory=None):
+         decision_id=None, user=None, memory=None, channel=None):
     payload = {"question": question}
     if focus:
         payload["focus"] = focus
@@ -131,6 +92,8 @@ def _ask(question, focus=None, measure=None, context=None, prior=None,
         payload["user"] = user
     if memory:
         payload["memory"] = memory
+    if channel:
+        payload["channel"] = channel
     req = urllib.request.Request(ASK_URL + "/ask",
                                  data=json.dumps(payload).encode("utf-8"),
                                  method="POST")
@@ -434,7 +397,7 @@ def _clarify_presentation(opts):
 @mcp.tool()
 def ask_1c(question: str, focus: str = "", measure: str = "",
            context: str = "", prior: str = "", decision_id: str = "",
-           user: str = "", memory: str = "") -> str:
+           user: str = "", memory: str = "", channel: str = "") -> str:
     """Ask about data stored in the company's ERP system.
 
     Figures come from the database and are checked before they are returned; pass them
@@ -454,13 +417,16 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     :param measure: quantity name, as written for people.
     :param context: optional background; not used for intent parsing.
     :param decision_id: one-time ticket from a clarify option (proves the human choice).
-    :param user: optional user id when the channel protocol supplies one.
+    :param user: channel sender id when the plugin supplies one.
+    :param memory: remember or forget for an explicit preference.
+    :param channel: telegram or webchat when the plugin supplies one.
     """
     try:
-        mem_action, q_send = split_memory_action(question, memory or None)
-        data = _ask(q_send, focus or None, measure or None, context or None,
+        mem = str(memory or "").strip().lower()
+        mem_action = mem if mem in ("remember", "forget") else None
+        data = _ask(question, focus or None, measure or None, context or None,
                     prior or None, decision_id or None, user or None,
-                    memory=mem_action)
+                    memory=mem_action, channel=channel or None)
     except urllib.error.HTTPError as e:
         return ERROR_REPLY.format(detail="HTTP %d" % e.code)
     except Exception as e:                     # noqa: BLE001 — сеть/таймаут

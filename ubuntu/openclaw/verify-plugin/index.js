@@ -27,7 +27,7 @@
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, buildClarifyPresentation, digitBlob, evaluate, extractText, finalizeDecision, isClarify, isServiceError, mergeRef, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, buildClarifyPresentation, channelUserOf, digitBlob, evaluate, extractText, finalizeDecision, injectAskUser, isClarify, isServiceError, mergeRef, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny } from "./verify-core.js";
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
@@ -61,6 +61,7 @@ const inbound = new Map(); // sessKey -> { at, digits:Set<string>, blob:string }
 // пользователя и срабатывает всегда (доки `plugins/hooks.md`).
 const prompts = new Map(); // sessKey -> { at, text } (вопрос текущего хода)
 const clarifyLocks = new Map(); // sessKey -> { at, question, options[] }
+const identities = new Map(); // run:<id>|sess:<key> -> { user, kind, channel, at }
 
 function prune(map, ttl) {
   const cut = Date.now() - ttl;
@@ -74,6 +75,41 @@ function prune(map, ttl) {
 // ключ сессии для корреляции (в обоих хуках это ctx.sessionKey)
 function sessKeyOf(ctx, event) {
   return (ctx && ctx.sessionKey) || (event && event.sessionKey) || null;
+}
+
+function runIdOf(ctx, event) {
+  return (ctx && ctx.runId) || (event && event.runId) || null;
+}
+
+function storeIdentity(ctx, event) {
+  const rec = { ...channelUserOf(ctx, event), at: Date.now() };
+  if (!rec.user) return rec;
+  const runId = runIdOf(ctx, event);
+  const sess = sessKeyOf(ctx, event);
+  if (runId) identities.set("run:" + runId, rec);
+  if (sess) identities.set("sess:" + sess, rec);
+  prune(identities, 30 * 60 * 1000);
+  try {
+    const api = PLUGIN_API;
+    if (api && api.runContext && runId && typeof api.runContext.setRunContext === "function")
+      api.runContext.setRunContext({ runId, namespace: "ask1c.identity", value: rec });
+  } catch (_) { /* runContext — штатный scratch; нет API — Map */ }
+  return rec;
+}
+
+function loadIdentity(ctx, event) {
+  const runId = runIdOf(ctx, event);
+  const sess = sessKeyOf(ctx, event);
+  try {
+    const api = PLUGIN_API;
+    if (api && api.runContext && runId && typeof api.runContext.getRunContext === "function") {
+      const v = api.runContext.getRunContext({ runId, namespace: "ask1c.identity" });
+      if (v && v.user) return v;
+    }
+  } catch (_) { /* нет API — Map */ }
+  if (runId && identities.has("run:" + runId)) return identities.get("run:" + runId);
+  if (sess && identities.has("sess:" + sess)) return identities.get("sess:" + sess);
+  return channelUserOf(ctx, event);
 }
 
 // 🔴 ОТ ЗАЧИСТКИ НИЧЕГО НЕ ОСТАЛОСЬ — ЧТО СКАЗАТЬ ЧЕЛОВЕКУ. Раньше здесь стояла одна
@@ -141,7 +177,7 @@ export default definePluginEntry({
     //
     // Ошибка любого рода — это `null`, а не выдуманный ответ: молча подставить пустоту
     // значило бы выдать «данных нет» там, где сервис просто не ответил (п. 18).
-    const askService = async (cfg, question) => {
+    const askService = async (cfg, question, identity) => {
       const url = String(cfg.askUrl || "").trim();
       if (!url || !question) return null;
       const ctl = new AbortController();
@@ -155,9 +191,12 @@ export default definePluginEntry({
         const token = String(process.env[cfg.askTokenEnv || "ASK_TOKEN"] || cfg.askToken || "");
         const headers = { "Content-Type": "application/json" };
         if (token) headers.Authorization = "Bearer " + token;
+        const body = { question };
+        if (identity && identity.user) body.user = identity.user;
+        if (identity && identity.channel) body.channel = identity.channel;
         const r = await fetch(url, {
           method: "POST", headers, signal: ctl.signal,
-          body: JSON.stringify({ question }),
+          body: JSON.stringify(body),
         });
         if (!r.ok) return null;
         const d = await r.json();
@@ -184,6 +223,7 @@ export default definePluginEntry({
     // нужен для `before_agent_finalize`, где живёт числовая сверка.
     api.on("before_agent_run", async (event, ctx) => {
       const cfg = getCfg();
+      storeIdentity(ctx, event);
       const sessKey = sessKeyOf(ctx, event) || (event && event.runId ? "run:" + event.runId : null);
       if (sessKey) {
         const q = (event && (event.prompt || event.input || "")) || "";
@@ -200,23 +240,32 @@ export default definePluginEntry({
       const wants = cfg.toolNames && cfg.toolNames.length ? cfg.toolNames : [cfg.toolName];
       if (!event || !toolMatchesAny(event.toolName, wants)) return;
       const sessKey = sessKeyOf(ctx, event) || null;
-      if (!sessKey) return;
-      const lock = clarifyLocks.get(sessKey);
+      const identity = loadIdentity(ctx, event);
+      const lock = sessKey ? clarifyLocks.get(sessKey) : null;
+      let params = { ...(event.params || {}) };
+      let changed = false;
       if (!lock) {
-        const p = { ...(event.params || {}) };
-        if (p.prior) {
-          p.prior = "";
+        if (params.prior) {
+          params.prior = "";
+          changed = true;
           dbg(cfg, `before_tool_call strip prior sess=${sessKey}`);
-          return { params: p };
         }
-        return;
+      } else {
+        const promptRec = prompts.get(sessKey);
+        const prompt = (promptRec && promptRec.text) || "";
+        const rewritten = rewriteAsk1cParams(params, prompt, lock);
+        params = rewritten.params;
+        if (rewritten.action === "release") clarifyLocks.delete(sessKey);
+        changed = true;
+        dbg(cfg, `before_tool_call rewrite sess=${sessKey} action=${rewritten.action} q=${String(params.question || "").slice(0, 80)} focus=${params.focus || ""} decision_id=${params.decision_id || ""} prior=${String(params.prior || "").slice(0, 80)}`);
       }
-      const promptRec = prompts.get(sessKey);
-      const prompt = (promptRec && promptRec.text) || "";
-      const { params, action } = rewriteAsk1cParams(event.params || {}, prompt, lock);
-      if (action === "release") clarifyLocks.delete(sessKey);
-      dbg(cfg, `before_tool_call rewrite sess=${sessKey} action=${action} q=${String(params.question || "").slice(0, 80)} focus=${params.focus || ""} decision_id=${params.decision_id || ""} prior=${String(params.prior || "").slice(0, 80)}`);
-      return { params };
+      const injected = injectAskUser(params, identity);
+      if (injected.user !== params.user || injected.channel !== params.channel) {
+        changed = true;
+        dbg(cfg, `before_tool_call user=${injected.user || ""} kind=${(identity && identity.kind) || "none"} ch=${injected.channel || ""}`);
+      }
+      if (changed) return { params: injected };
+      return;
     });
 
     // 1) захват эталона braine за ход (ключ = sessionKey; сброс при новом runId)
@@ -314,7 +363,7 @@ export default definePluginEntry({
       // он наполняется только на доставке в канал.
       const qrec = (sessKey && prompts.get(sessKey)) || inb || null;
       if (selfFetchNeeded(haveRef, cfg, qrec, sessKey)) {
-        const own = await askService(cfg, qrec.text);
+        const own = await askService(cfg, qrec.text, loadIdentity(ctx, event));
         if (own) {
           ref2 = mergeRef(null, own, Date.now(), cfg.noDataMarker, cfg.clarifyMarker,
                           cfg.serviceErrorMarker);
@@ -357,6 +406,7 @@ export default definePluginEntry({
     // 2) числа из ввода пользователя + граница хода (эхо его номера — не галлюцинация)
     api.on("message_received", async (event, ctx) => {
       const cfg = getCfg();
+      storeIdentity(ctx, event);
       const sessKey = sessKeyOf(ctx, event);
       if (!sessKey) return;
       const now = Date.now();

@@ -1,5 +1,28 @@
 # Журнал изменений
 
+## 17.08: личность канала → /ask.user (шаг 6, shadow) `[код]` `[замер]`
+
+Плагин `braine-verify` 1.1.6 проводит отправителя до `/ask.user` штатными хуками
+OpenClaw 2026.7.1-2: `ctx.senderId` в `message_received`/`before_agent_run`
+(доки `plugins/hooks.md`), перенос через `runContext` + Map по `runId`,
+подстановка `{ params }` в `before_tool_call` (в tool-ctx личности нет).
+Telegram: `telegram:<from.id>`. WebUI: сборка не читает `X-OpenWebUI-User-*`,
+Open WebUI не кладёт тело `user` для не-pipeline — fallback `session:<sessionKey>`
+(сессия, не человек). Языковые списки «запомни/забудь» сняты: смысл только поле
+`memory`. Применение памяти не включалось.
+
+`[замер]` оффлайн: test_gate 130, step4_guards 110, a3_passport 14,
+fork_detector 23, fork_outcomes 24, fork_atom_aggregate 15, answer_atom 18,
+ds_tokens 11, ask_journal **17**, ask_choice_memory **48**, decision_id 24,
+focus_loop 19, mcp_ask **31**, test-verify **103**. Живой `:8097` (репо,
+ut_test, корпус 623 565, ASK_JOURNAL=1): HTTP `/ask` user=telegram:111 / 222 /
+session:… → `ask_journal` три разных `user_hash`, channel telegram|webchat;
+choice_error без модели. Live SQL памяти: telegram:111 не виден telegram:222.
+md5 `serene_ask.py` `a48d449d…` (не менялся), `ask_choice_mem.py` `38aa49d2…`,
+`mcp_ask.py` `69ba7818…`, `index.js` `6fabb598…`. `/opt` не трогали.
+
+Доки: plugins/hooks.md; plugins/sdk-overview.md (runContext); gateway/openai-http-api.md.
+
 ## 17.08: заведён план оркестратора полноты `[решение]`
 
 `docs/PLAN_ORCHESTRATOR.md` — ведомость сессии-оркестратора по части

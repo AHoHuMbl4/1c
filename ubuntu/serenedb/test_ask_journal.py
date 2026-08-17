@@ -86,8 +86,19 @@ try:
     t("журнал: текста вопроса в SQL нет", leaked == [], leaked[:1])
     t("журнал: q_hash = sha256 вопроса",
       any(hashlib.sha256(SECRET.encode()).hexdigest() in s for s in inserts))
+    uh = hashlib.sha256("u1".encode("utf-8")).hexdigest()
+    t("журнал: user_hash от user", any(uh in s for s in inserts))
     t("журнал: колонки question нет",
       all("question" not in s.lower().split("q_hash")[0] for s in inserts))
+    A._ask_journal_write("qA", {"kind": "no_data", "text": "", "diag": {}},
+                         A.time.monotonic(), user="telegram:111", channel="telegram")
+    A._ask_journal_write("qB", {"kind": "no_data", "text": "", "diag": {}},
+                         A.time.monotonic(), user="telegram:222", channel="telegram")
+    ha = hashlib.sha256("telegram:111".encode("utf-8")).hexdigest()
+    hb = hashlib.sha256("telegram:222".encode("utf-8")).hexdigest()
+    ins2 = [s for s in captured if s.strip().upper().startswith("INSERT")][-2:]
+    t("журнал: два user канала — разные hash",
+      any(ha in s for s in ins2) and any(hb in s for s in ins2) and ha != hb)
 finally:
     A.psql = old_psql
 
