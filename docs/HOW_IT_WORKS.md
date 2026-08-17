@@ -1165,7 +1165,16 @@ compose ПЛЮС паспорт (`from`/`to`/`label`/`measure`), а `_slot_fp` �
 всех подписанных src одного fork_key). **B — одна пара на класс атома**, подпись класса
 — по представителю (`_class_label_lookup`); без подписи → C. `want=sum` — атом sum,
 не count. `_fork_log` пишет **каждый класс атомов** отдельной строкой в
-`search_fork_class`. `/health`: `coverage_gap.kind=freshness_lag`, если
+`search_fork_class`.
+
+🔴 **Журнал исходов `ask_journal` (17.08, шаг 5 плана).** Одна точка записи —
+`answer_checked` (виды answer/figures/clarify/no_data/unavailable/choice_error).
+Текст вопроса в таблицу не кладётся: `q_hash` + `q_len`. Сервис (роль `serene_ro`)
+делает INSERT и ротацию DELETE по id; SELECT строк журнала у роли нет (кроме
+колонки `id`). Схема — `ask_journal.sql`, не `corpus_init.sql`. Выключатель
+`ASK_JOURNAL=1`. Ошибка записи считает `_JOURNAL_LOST` и не меняет ответ (п. 13).
+Клики/`decision_id` — поля `ticket_used`/`ticket_error` (телеметрия UX, не oracle).
+`/health`: `coverage_gap.kind=freshness_lag`, если
 `mart_changed_ts` > `build_ts` (503 только при `systemic`).
 Выключатель детекции: `ASK_FORK_DETECT=0`.
 

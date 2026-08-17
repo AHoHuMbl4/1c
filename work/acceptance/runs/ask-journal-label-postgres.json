@@ -1,0 +1,92 @@
+{
+  "base": "postgres",
+  "replayed": 586,
+  "results_seen": 428,
+  "journal_lost": 0,
+  "keep_n": 2772,
+  "entities": 231,
+  "journal": {
+    "by_outcome_version": [
+      {
+        "outcome": "answer",
+        "code_md5": "ae8b74e07a2c",
+        "alias_ver": "178|230|0",
+        "n": 70,
+        "uncounted_n": 0,
+        "truncated_n": 0,
+        "ticket_used": 0,
+        "ticket_error": 0,
+        "avg_latency_ms": "18321",
+        "partial_n": 0
+      },
+      {
+        "outcome": "clarify",
+        "code_md5": "ae8b74e07a2c",
+        "alias_ver": "178|230|0",
+        "n": 351,
+        "uncounted_n": 0,
+        "truncated_n": 0,
+        "ticket_used": 0,
+        "ticket_error": 0,
+        "avg_latency_ms": "28179",
+        "partial_n": 0
+      },
+      {
+        "outcome": "figures",
+        "code_md5": "ae8b74e07a2c",
+        "alias_ver": "178|230|0",
+        "n": 6,
+        "uncounted_n": 0,
+        "truncated_n": 0,
+        "ticket_used": 0,
+        "ticket_error": 0,
+        "avg_latency_ms": "22130",
+        "partial_n": 0
+      },
+      {
+        "outcome": "unavailable",
+        "code_md5": "ae8b74e07a2c",
+        "alias_ver": "178|230|0",
+        "n": 159,
+        "uncounted_n": 0,
+        "truncated_n": 0,
+        "ticket_used": 0,
+        "ticket_error": 0,
+        "avg_latency_ms": "83",
+        "partial_n": 0
+      }
+    ],
+    "total": 586,
+    "uncounted_rows": 0,
+    "truncated_rows": 0,
+    "selftest_rows": 586,
+    "live_rows": 0,
+    "question_columns": 0,
+    "kinds": {
+      "answer": 70,
+      "clarify": 351,
+      "figures": 6,
+      "unavailable": 159
+    }
+  },
+  "truth": {
+    "flow_kinds": {
+      "clarify": 335,
+      "answer": 85,
+      "figures": 7,
+      "нет результата": 158,
+      "unavailable": 1
+    },
+    "atom_ok": 26,
+    "atom_bad": 4,
+    "atom_skip": 398
+  },
+  "lock13_kinds": [
+    "answer",
+    "clarify",
+    "figures",
+    "unavailable"
+  ],
+  "uncounted_share": 0.0,
+  "truncated_share": 0.0
+}

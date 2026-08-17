@@ -2319,6 +2319,15 @@ def totals_of(src_table, match, preds, measures):
 # Снятие сигнальных защит — отдельное решение по замеру (шаг 5 плана).
 FORK_DETECT = os.environ.get("ASK_FORK_DETECT", "1") not in ("0", "false", "no")
 FORK_OUTCOMES = os.environ.get("ASK_FORK_OUTCOMES", "1") not in ("0", "false", "no")
+# Журнал исходов (план §8 шаг 5, аудит §14.5). ASK_JOURNAL=1 по умолчанию.
+# Ошибка записи не роняет ответ (п. 13): счётчик потерь, не исключение наружу.
+ASK_JOURNAL = os.environ.get("ASK_JOURNAL", "1") not in ("0", "false", "no")
+_JOURNAL_LOST = 0
+_JOURNAL_KEEP = None
+_JOURNAL_CODE_MD5 = None
+_JOURNAL_ALIAS_VER = None
+_JOURNAL_BUILD_TS = None
+_JOURNAL_BUILD_TS_AT = 0.0
 # Состав величин сущности меняется только пересборкой корпуса, а собирается он одним
 # проходом по корпусу (~2 с на 1502 сущностях, замер 15.08). Кэш с TTL: shadow-заметке
 # минутная свежесть не нужна, а цена вопроса не растёт (п. 19 — это не в модель, но и
@@ -9646,18 +9655,220 @@ def _need_clarify(question, slots, why, diag):
             "sources": [], "diag": d}
 
 
-def answer_checked(question, focus=None, measure_pick=None, context="", prior=None,
-                   trusted=None):
-    """Ответ вместе с шагом «достаточен ли вопрос». Точка входа сервиса.
+def _journal_keep_n():
+    """N последних строк: count(search_tables) × 6 видов × 2 (вопрос + клик)."""
+    global _JOURNAL_KEEP
+    env = os.environ.get("ASK_JOURNAL_KEEP")
+    if env and str(env).isdigit() and int(env) > 0:
+        return int(env)
+    if _JOURNAL_KEEP is not None:
+        return _JOURNAL_KEEP
+    try:
+        r = psql("SELECT count(*) FROM %s" % TABLES)
+        n = int(r[0][0]) if r and r[0] else 0
+        _JOURNAL_KEEP = max(n * 12, 72)
+    except (RuntimeError, ValueError, TypeError, IndexError):
+        _JOURNAL_KEEP = 72
+    return _JOURNAL_KEEP
 
-    Порядок п. 21 сохранён: сперва пробуем ответить, уточняем только там, где ответа с
-    одним смыслом не существует. Дешёвая половина стоит ДО поиска и экономит весь прогон,
-    решающая — ПОСЛЕ счёта, потому что опирается на посчитанные числа.
 
-    🔴 Доказанный выбор (`trusted` из decision_id) — шаг достаточности молчит целиком,
-    иначе тот же выбор вернулся бы вопросом. Сырой focus/measure шаг не гасят (аудит §10),
-    кроме аварийного ASK_RAW_FOCUS_TRUST=1.
-    """
+def _journal_code_md5():
+    global _JOURNAL_CODE_MD5
+    if _JOURNAL_CODE_MD5 is None:
+        h = hashlib.md5()
+        with open(os.path.abspath(__file__), "rb") as fh:
+            h.update(fh.read())
+        _JOURNAL_CODE_MD5 = h.hexdigest()
+    return _JOURNAL_CODE_MD5
+
+
+def _journal_build_ts():
+    global _JOURNAL_BUILD_TS, _JOURNAL_BUILD_TS_AT
+    now = time.time()
+    if _JOURNAL_BUILD_TS is not None and now - _JOURNAL_BUILD_TS_AT < 60:
+        return _JOURNAL_BUILD_TS
+    try:
+        r = psql("SELECT v FROM search_quality WHERE k='build_ts'")
+        _JOURNAL_BUILD_TS = str(r[0][0]) if r and r[0] else ""
+    except RuntimeError:
+        _JOURNAL_BUILD_TS = ""
+    _JOURNAL_BUILD_TS_AT = now
+    return _JOURNAL_BUILD_TS
+
+
+def _journal_alias_ver():
+    global _JOURNAL_ALIAS_VER
+    if _JOURNAL_ALIAS_VER is not None:
+        return _JOURNAL_ALIAS_VER
+    try:
+        r = psql(
+            "SELECT concat_ws('|',"
+            "(SELECT count(*)::VARCHAR FROM search_entity_alias),"
+            "(SELECT count(*)::VARCHAR FROM search_measure_alias),"
+            "(SELECT count(*)::VARCHAR FROM search_fork_label))")
+        _JOURNAL_ALIAS_VER = (r[0][0] if r and r[0] else "") or ""
+    except RuntimeError:
+        _JOURNAL_ALIAS_VER = ""
+    return _JOURNAL_ALIAS_VER
+
+
+def _journal_sql_int(v):
+    if v is None:
+        return "NULL"
+    try:
+        return str(int(v))
+    except (TypeError, ValueError):
+        return "NULL"
+
+
+def _journal_sql_bool(v):
+    if v is None:
+        return "NULL"
+    return "TRUE" if v else "FALSE"
+
+
+def _journal_atoms_slim(out):
+    atoms = []
+    if isinstance(out, dict):
+        raw = out.get("atoms") or ([out["atom"]] if out.get("atom") else [])
+        for a in raw[:20]:
+            if not isinstance(a, dict):
+                continue
+            atoms.append({k: a.get(k) for k in (
+                "operation", "exact_value", "measure_id", "measure_label",
+                "unit", "proof_status") if k in a})
+    return atoms
+
+
+def _journal_intent(out):
+    d = (out.get("diag") or {}) if isinstance(out, dict) else {}
+    return {k: d.get(k) for k in ("kind", "terms", "measure", "want") if d.get(k) not in (None, "", [])}
+
+
+def _journal_fork_keys(out):
+    d = (out.get("diag") or {}) if isinstance(out, dict) else {}
+    fork = d.get("fork") or {}
+    keys = fork.get("keys") or fork.get("fork_keys") or []
+    if not keys and fork.get("classes"):
+        keys = list(fork.get("src_set") or [])[:40]
+    if isinstance(keys, str):
+        return keys
+    return json.dumps(keys, ensure_ascii=False)[:2000]
+
+
+def _journal_uncounted_truncated(out):
+    d = (out.get("diag") or {}) if isinstance(out, dict) else {}
+    fork = d.get("fork") or {}
+    partial = (out.get("partial") or {}) if isinstance(out, dict) else {}
+    lim = partial.get("fork_limitation") or {}
+    unc = lim.get("uncounted_classes")
+    if unc is None:
+        unc = len(fork.get("uncounted") or [])
+    trn = fork.get("atoms_truncated")
+    if trn is None:
+        trn = lim.get("truncated") or 0
+    try:
+        unc = int(unc or 0)
+    except (TypeError, ValueError):
+        unc = 0
+    try:
+        trn = int(trn or 0)
+    except (TypeError, ValueError):
+        trn = 0
+    return unc, trn
+
+
+def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
+                       decision_id=None):
+    """Одна запись журнала. Текст вопроса в SQL не передаётся (аудит §14.5)."""
+    global _JOURNAL_LOST
+    if not ASK_JOURNAL:
+        return
+    try:
+        kind = (out or {}).get("kind") if isinstance(out, dict) else "unavailable"
+        if not kind:
+            kind = "unavailable"
+        d = (out.get("diag") or {}) if isinstance(out, dict) else {}
+        tokens = d.get("tokens") or {}
+        q = question if isinstance(question, str) else ""
+        q_hash = hashlib.sha256(q.encode("utf-8")).hexdigest()
+        user_hash = ""
+        if user:
+            user_hash = hashlib.sha256(str(user).encode("utf-8")).hexdigest()
+        ticket_used = bool(trusted) or bool(decision_id and kind != "choice_error")
+        ticket_error = ""
+        if kind == "choice_error":
+            ticket_error = str((out or {}).get("error") or "")
+            ticket_used = False
+        unc, trn = _journal_uncounted_truncated(out if isinstance(out, dict) else {})
+        age = d.get("data_age_sec")
+        partial = bool((out or {}).get("partial")) if isinstance(out, dict) else False
+        fork_out = d.get("fork_outcome") or (d.get("fork") or {}).get("outcome") or ""
+        atoms = json.dumps(_journal_atoms_slim(out if isinstance(out, dict) else {}),
+                           ensure_ascii=False)
+        intent = json.dumps(_journal_intent(out if isinstance(out, dict) else {}),
+                            ensure_ascii=False)
+        latency = int((time.monotonic() - t0) * 1000) if t0 else 0
+        nid = int(psql("SELECT nextval('ask_journal_id_seq')")[0][0])
+        sql = (
+            "INSERT INTO ask_journal ("
+            "id, db_name, channel, user_hash, q_hash, q_len, intent_json, outcome, "
+            "fork_outcome, atoms, fork_keys, ticket_used, ticket_error, code_md5, "
+            "build_ts, alias_ver, tokens_in, tokens_out, tokens_calls, latency_ms, "
+            "partial_flag, freshness_age_sec, uncounted, truncated, discarded_before"
+            ") VALUES (%s, current_database(), %s, %s, %s, %s, %s, %s, %s, %s::JSON, "
+            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            % (nid,
+               lit(channel or ""),
+               lit(user_hash),
+               lit(q_hash),
+               int(len(q)),
+               lit(intent),
+               lit(kind),
+               lit(str(fork_out or "")),
+               lit(atoms),
+               lit(_journal_fork_keys(out if isinstance(out, dict) else {})),
+               _journal_sql_bool(ticket_used),
+               lit(ticket_error),
+               lit(_journal_code_md5()),
+               lit(_journal_build_ts()),
+               lit(_journal_alias_ver()),
+               _journal_sql_int(tokens.get("in")),
+               _journal_sql_int(tokens.get("out")),
+               _journal_sql_int(tokens.get("calls")),
+               _journal_sql_int(latency),
+               _journal_sql_bool(partial),
+               _journal_sql_int(age),
+               _journal_sql_int(unc),
+               _journal_sql_int(trn),
+               _journal_sql_int(_JOURNAL_LOST)))
+        if q and q in sql:
+            raise RuntimeError("ask_journal: текст вопроса попал в SQL")
+        try:
+            psql(sql)
+        except RuntimeError as e:
+            if "Duplicate key" not in str(e):
+                raise
+            mx = psql("SELECT coalesce(max(id),0) FROM ask_journal")
+            top = int((mx[0][0] if mx and mx[0] else 0) or 0)
+            psql("SELECT setval('ask_journal_id_seq', %d)" % top)
+            nid = int(psql("SELECT nextval('ask_journal_id_seq')")[0][0])
+            # пересобрать INSERT с новым id (первое число VALUES)
+            head, rest = sql.split("VALUES (", 1)
+            rest = rest.split(",", 1)[1]
+            sql = "%sVALUES (%s,%s" % (head, nid, rest)
+            psql(sql)
+        keep = _journal_keep_n()
+        if nid > keep:
+            psql("DELETE FROM ask_journal WHERE id <= %d" % (nid - keep))
+    except Exception as e:                          # noqa: BLE001
+        _JOURNAL_LOST += 1
+        sys.stderr.write("ask journal LOST %d: %s\n" % (_JOURNAL_LOST, str(e)[:160]))
+
+
+def _answer_checked_core(question, focus=None, measure_pick=None, context="", prior=None,
+                         trusted=None):
+    """Тело ответа без журнала — все return идут через обёртку answer_checked."""
     _token_acc_start()
     def plain():
         return answer(question, focus=focus, measure_pick=measure_pick, context=context,
@@ -9698,6 +9909,46 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
     ask = _need_clarify(question, slots, why,
                         dict(d, шаг="достаточность после счёта"))
     return ask or out
+
+
+def answer_checked(question, focus=None, measure_pick=None, context="", prior=None,
+                   trusted=None, decision_id=None, user=None, channel=None):
+    """Ответ вместе с шагом «достаточен ли вопрос». Точка входа сервиса.
+
+    Порядок п. 21 сохранён: сперва пробуем ответить, уточняем только там, где ответа с
+    одним смыслом не существует. Дешёвая половина стоит ДО поиска и экономит весь прогон,
+    решающая — ПОСЛЕ счёта, потому что опирается на посчитанные числа.
+
+    🔴 Доказанный выбор (`trusted` из decision_id) — шаг достаточности молчит целиком,
+    иначе тот же выбор вернулся бы вопросом. Сырой focus/measure шаг не гасят (аудит §10),
+    кроме аварийного ASK_RAW_FOCUS_TRUST=1.
+
+    Журнал (шаг 5): одна точка на всех исходах, включая choice_error и unavailable.
+    """
+    t0 = time.monotonic()
+    out = None
+    try:
+        if decision_id and trusted is None:
+            ticket, err = consume_decision(decision_id, question, user=user)
+            if err:
+                out = choice_error_response(err, decision_id)
+                return out
+            if ticket.get("src"):
+                focus = ticket["src"]
+            if ticket.get("ambiguity") == "measure" and "measure" in ticket:
+                measure_pick = ticket.get("measure") or None
+            if ticket.get("ambiguity") == "axis" and ticket.get("axis"):
+                focus = ticket.get("src") or focus
+            trusted = ticket
+        out = _answer_checked_core(question, focus=focus, measure_pick=measure_pick,
+                                   context=context, prior=prior, trusted=trusted)
+        return out
+    except Exception:
+        out = {"kind": "unavailable", "text": "", "sources": [], "retry": True, "partial": None}
+        raise
+    finally:
+        _ask_journal_write(question, out, t0, trusted=trusted, user=user,
+                           channel=channel, decision_id=decision_id)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -9773,25 +10024,14 @@ class Handler(BaseHTTPRequestHandler):
         prior = (req.get("prior") or "").strip() or None
         decision_id = (req.get("decision_id") or "").strip() or None
         user = (req.get("user") or "").strip() or None
-        trusted = None
-        if decision_id:
-            ticket, err = consume_decision(decision_id, question, user=user)
-            if err:
-                return self._send(200, choice_error_response(err, decision_id))
-            # Билет снимает одну неоднозначность: подставляет src/measure из записи.
-            if ticket.get("src"):
-                focus = ticket["src"]
-            if ticket.get("ambiguity") == "measure" and "measure" in ticket:
-                measure_pick = ticket.get("measure") or None
-            if ticket.get("ambiguity") == "axis" and ticket.get("axis"):
-                # ось уже выбрана: focus = держатель (src), axis в trusted
-                focus = ticket.get("src") or focus
-            trusted = ticket
+        channel = (req.get("channel") or "http").strip() or "http"
         try:
             # `answer_checked`, а не `answer`: вокруг ответа стоит шаг «достаточен ли
             # вопрос» (05.08). Он же зовёт `answer` внутри, поэтому путь ответа прежний.
+            # decision_id потребляется там же — иначе choice_error минует журнал.
             out = answer_checked(question, focus=focus, measure_pick=measure_pick,
-                                 context=context, prior=prior, trusted=trusted)
+                                 context=context, prior=prior,
+                                 decision_id=decision_id, user=user, channel=channel)
             if isinstance(out, dict) and out.get("options"):
                 out = seal_clarify(out, question, user=user)
             # СВЕЖЕСТЬ ДАННЫХ — В КАЖДЫЙ ОТВЕТ (п. 18). Если 1С недоступна или такт падает,

@@ -19,6 +19,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("ASK_TOKEN", "test")
 
 import serene_ask as A       # noqa: E402
+A.ASK_JOURNAL = False
 import serene_enough as E    # noqa: E402
 
 PASS = 0

@@ -1,5 +1,34 @@
 # Журнал изменений
 
+## 17.08: шаг 5 — журнал ask_journal и разметка потока `[код]` `[замер]`
+
+Append-only журнал «вопрос → кандидаты → ответ → действие» (план §8, аудит §14.5).
+Таблица `ask_journal` **не** в `corpus_init.sql`: `ubuntu/serenedb/ask_journal.sql` +
+`ask_journal_apply.sh`. Текст вопроса не хранится (`q_hash` = sha256, `q_len`).
+`serene_ro`: INSERT + DELETE + `SELECT (id)` (ротация); SELECT/UPDATE таблицы нет.
+`N` = `count(search_tables)×6×2` (виды × вопрос+клик): postgres **2772**, ut_test **18024**.
+Выключатель `ASK_JOURNAL=1`. Одна точка — `answer_checked` (все 6 исходов, включая
+`choice_error`/`unavailable`). Ошибка записи не роняет ответ (`_JOURNAL_LOST`).
+
+`[замер]` оффлайн: `test_ask_journal` **15/15**; test_gate 130, step4_guards 110,
+a3 14, fork_detector 17, fork_outcomes 22, answer_atom 18, decision_id 24,
+compose 87, passport 24, axis 41, ds_tokens 11, step2 38, enough (зелёный),
+mcp_ask 27, focus_loop 19, test_ro_role PASS. Живой код **не** на `:8097` (порт
+занят чужим зависшим слушателем); серия на **`:8096`** (тот же бинарь репо,
+ut_test): `/health` 200, корпус 623 565; «Сколько у нас контрагентов?» →
+`figures` B, 39 с, строка журнала `q_len=27` tokens in=5142 out=195;
+«на какую сумму мы закупили» → `clarify`, 69 с, `q_len=26`; текста вопроса в
+значениях **0**. md5 `ae8b74e07a2c…`.
+
+`[замер]` разметка selftest (прямой SQL как selftest_check): postgres 586
+вопросов → journal 592 (6 видов): answer 71 / clarify 352 / figures 7 /
+no_data 1 / unavailable 160 / choice_error 1; uncounted=0 truncated=0;
+атом SQL 26 ok / 4 bad / 398 skip. ut_test 3194 → 3207: answer 25 / clarify 20
+/ figures 117 / no_data 1 / unavailable 3043 / choice_error 1 (+2 http);
+атом 16 ok / 0 bad / 318 skip. Доля unavailable на ut_test — нет живых
+результатов `/ask` у 2860 id (ярус 2 покрыл 334). Снятие сигнальных защит —
+отдельное решение, журнала для него достаточно.
+
 ## 17.08: бот OpenClaw на vLLM Qwen — стоп: инстанс без tool parser `[замер]`
 
 Штатный путь сборки (`/usr/lib/node_modules/openclaw/docs/providers/vllm.md`,

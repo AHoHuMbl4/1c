@@ -1,0 +1,92 @@
+{
+  "base": "ut_test",
+  "replayed": 3194,
+  "results_seen": 334,
+  "journal_lost": 0,
+  "keep_n": 18024,
+  "entities": 1502,
+  "journal": {
+    "by_outcome_version": [
+      {
+        "outcome": "answer",
+        "code_md5": "ae8b74e07a2c",
+        "alias_ver": "697|1800|3649",
+        "n": 24,
+        "uncounted_n": 0,
+        "truncated_n": 0,
+        "ticket_used": 0,
+        "ticket_error": 0,
+        "avg_latency_ms": "18354",
+        "partial_n": 0
+      },
+      {
+        "outcome": "clarify",
+        "code_md5": "ae8b74e07a2c",
+        "alias_ver": "697|1800|3649",
+        "n": 18,
+        "uncounted_n": 0,
+        "truncated_n": 0,
+        "ticket_used": 0,
+        "ticket_error": 0,
+        "avg_latency_ms": "64754",
+        "partial_n": 0
+      },
+      {
+        "outcome": "figures",
+        "code_md5": "ae8b74e07a2c",
+        "alias_ver": "697|1800|3649",
+        "n": 115,
+        "uncounted_n": 0,
+        "truncated_n": 0,
+        "ticket_used": 0,
+        "ticket_error": 0,
+        "avg_latency_ms": "106439",
+        "partial_n": 0
+      },
+      {
+        "outcome": "unavailable",
+        "code_md5": "ae8b74e07a2c",
+        "alias_ver": "697|1800|3649",
+        "n": 3042,
+        "uncounted_n": 0,
+        "truncated_n": 0,
+        "ticket_used": 0,
+        "ticket_error": 0,
+        "avg_latency_ms": "924",
+        "partial_n": 0
+      }
+    ],
+    "total": 3199,
+    "uncounted_rows": 0,
+    "truncated_rows": 0,
+    "selftest_rows": 3194,
+    "live_rows": 0,
+    "question_columns": 0,
+    "kinds": {
+      "answer": 24,
+      "clarify": 18,
+      "figures": 115,
+      "unavailable": 3042
+    }
+  },
+  "truth": {
+    "flow_kinds": {
+      "clarify": 18,
+      "нет результата": 2860,
+      "answer": 19,
+      "figures": 115,
+      "unavailable": 182
+    },
+    "atom_ok": 16,
+    "atom_bad": 0,
+    "atom_skip": 318
+  },
+  "lock13_kinds": [
+    "answer",
+    "clarify",
+    "figures",
+    "unavailable"
+  ],
+  "uncounted_share": 0.0,
+  "truncated_share": 0.0
+}

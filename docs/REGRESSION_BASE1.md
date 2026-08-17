@@ -1,4 +1,19 @@
+## Замер 17.08 — шаг 5 плана ответов (журнал ask_journal)
+
+Правка ответа (`serene_ask.py`) + DDL `ask_journal.sql` (не `corpus_init.sql`).
+**Снят ПОСЛЕ последней правки.** Оффлайн: test_ask_journal 15/15, test_gate 130,
+test_step4_guards 110, test_a3_passport 14, test_fork_detector 17,
+test_fork_outcomes 22, test_answer_atom 18, test_decision_id 24, test_mcp_ask 27,
+test_focus_loop 19, test_ro_role PASS. Живой инстанс нового кода: `:8096`
+(ut_test; `:8097` занят чужим зависшим слушателем): `/health` 200, корпус
+623 565; две строки `ask_journal` channel=http полные (`figures`/`clarify`,
+q_len 27/26, tokens, latency, code_md5 `ae8b74e07a2c…`); текста вопроса в
+таблице нет. Регрессии первой базы по оффлайн-замкам нет. Золотой ab_scorer
+этим заходом не ставился (полный `/ask` на 8 эталонах — бюджет модели; журнал
+не меняет счёт).
+
 ## Замер 17.08 — шаг 4: атом форка = aggregate
+
 
 Правка `_fork_headline_measure` / `_fork_atom_of` в `serene_ask.py`: причина
 71M — строка `mid = next(iter(sorted(d0.get("sums") or {})), None)` (алфавит →
