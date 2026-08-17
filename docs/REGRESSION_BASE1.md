@@ -1,3 +1,18 @@
+## Замер 17.08 — шаг 6 плана ответов (память выбора, shadow)
+
+Правка ответа (`serene_ask.py`, `ask_choice_mem.py`, `mcp_ask.py`) + DDL
+`ask_choice_memory.sql` (не `corpus_init.sql`). **Снят ПОСЛЕ последней правки.**
+Оффлайн: test_ask_choice_memory 44/44, test_gate 130, test_step4_guards 110,
+test_a3_passport 14, test_fork_detector 23, test_fork_outcomes 24,
+test_answer_atom 18, test_decision_id 24, test_mcp_ask 30, test_focus_loop 19.
+Живой инстанс нового кода: `:8097` (ut_test, не :8099/:8091): `/health` 200,
+корпус 623 565; клик `decision_id` → 0 строк памяти; «запомни так»+билет →
+stored; повтор класса → `diag.memory.would_apply_text`, kind не сменился;
+«забудь» → 0 active. Коллизия двух пользователей — `n_branches=2`. md5
+`a48d449d…`. Юниты `/opt` не перезапускались. Регрессии первой базы по
+оффлайн-замкам нет. Золотой ab_scorer этим заходом не ставился (память не
+меняет счёт).
+
 ## Замер 17.08 — ложная пара регистра (атом форка ≠ 0)
 
 Правка `_fork_answering_sums` / `_fork_headline_measure` / `_fork_atom_of` в

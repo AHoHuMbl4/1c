@@ -1,5 +1,25 @@
 # Журнал изменений
 
+## 17.08: шаг 6 — память выбора, shadow `[код]` `[замер]`
+
+Таблица `ask_choice_memory` **не** в `corpus_init.sql`: `ask_choice_memory.sql` +
+`ask_choice_memory_apply.sh`. Область база+пользователь (`user_hash`); ключ класса —
+отпечаток неоднозначности со входа (набор прочтений + величина + окно), не выбранный
+src. Обычный клик (`decision_id` без `memory`) не пишет. «Запомни» / «забудь» —
+явное поле `memory` или свободная фраза, распознанная кодом. Первый режим — SHADOW:
+строка и коллизии в `diag.memory`, ответ не меняется. Ручки «применить в бой» нет.
+
+`[замер]` оффлайн+SQL: test_ask_choice_memory **44/44**; test_gate 130, step4_guards 110,
+a3_passport 14, fork_detector 23, fork_outcomes 24, answer_atom 18, decision_id 24,
+mcp_ask 30, focus_loop 19. Живой `:8097` (репо, ut_test, корпус 623 565): клик → 0
+строк; «запомни так»+билет → stored; повтор класса → `память применилась бы: …`,
+kind тот же (clarify); «забудь» → 0 active. Коллизия двух пользователей на одном
+классе: `n_branches=2` (SQL live). md5 `serene_ask.py` `a48d449d…`. `/opt` не трогали.
+
+Доки: Sql › Statements › CREATE TABLE; Sql › Constraints › Unique;
+Sql › Statements › INSERT › DO UPDATE; Sql › Statements › UPDATE;
+Sql › Statements › GRANT; Security › Privileges.
+
 ## 17.08: словарь развилок — infer `--local` по окружению; гвард vLLM `[код]`
 
 `[код]` `alias_infer_gateway.py`: умолчание `--gateway`; `BRANCH_ALIAS_INFER=local`

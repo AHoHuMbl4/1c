@@ -33,6 +33,7 @@ MCP-сервер поверх `serene_ask` — даёт OpenClaw-боту инс
 """
 import json
 import os
+import re
 import sys
 import urllib.error
 import urllib.request
@@ -75,8 +76,46 @@ def _serve_with_auth(mcp_obj):
     uvicorn.run(app, host=MCP_HOST, port=MCP_PORT, log_level="warning")
 
 
+_CMD_REMEMBER = re.compile(
+    r"(?iu)^[ \t]*(запомни(?:[ \t]+(?:так|это|пожалуйста))?|remember(?:[ \t]+this)?)[ \t]*[.!?]?[ \t]*$")
+_CMD_FORGET = re.compile(
+    r"(?iu)^[ \t]*(забудь(?:[ \t]+(?:это|пожалуйста))?|forget(?:[ \t]+this)?)[ \t]*[.!?]?[ \t]*$")
+_TAIL_REMEMBER = re.compile(
+    r"(?iu)(?:[.,;]?[ \t]+)(?:запомни(?:[ \t]+(?:так|это))?|remember(?:[ \t]+this)?)[ \t]*$")
+_TAIL_FORGET = re.compile(
+    r"(?iu)(?:[.,;]?[ \t]+)(?:забудь(?:[ \t]+это)?|forget(?:[ \t]+this)?)[ \t]*$")
+
+
+def split_memory_action(question, explicit=None):
+    exp = str(explicit or "").strip().lower()
+    action = exp if exp in ("remember", "forget") else None
+    q = str(question or "").strip()
+    if not q:
+        return action, q
+    if _CMD_REMEMBER.match(q):
+        return action or "remember", q
+    if _CMD_FORGET.match(q):
+        return action or "forget", q
+    if action is None:
+        m = _TAIL_REMEMBER.search(q)
+        if m:
+            rest = q[:m.start()].strip()
+            return "remember", rest or q
+        m = _TAIL_FORGET.search(q)
+        if m:
+            rest = q[:m.start()].strip()
+            return "forget", rest or q
+        return None, q
+    tail = _TAIL_REMEMBER if action == "remember" else _TAIL_FORGET
+    m = tail.search(q)
+    if m:
+        rest = q[:m.start()].strip()
+        return action, rest or q
+    return action, q
+
+
 def _ask(question, focus=None, measure=None, context=None, prior=None,
-         decision_id=None, user=None):
+         decision_id=None, user=None, memory=None):
     payload = {"question": question}
     if focus:
         payload["focus"] = focus
@@ -90,6 +129,8 @@ def _ask(question, focus=None, measure=None, context=None, prior=None,
         payload["decision_id"] = decision_id
     if user:
         payload["user"] = user
+    if memory:
+        payload["memory"] = memory
     req = urllib.request.Request(ASK_URL + "/ask",
                                  data=json.dumps(payload).encode("utf-8"),
                                  method="POST")
@@ -393,7 +434,7 @@ def _clarify_presentation(opts):
 @mcp.tool()
 def ask_1c(question: str, focus: str = "", measure: str = "",
            context: str = "", prior: str = "", decision_id: str = "",
-           user: str = "") -> str:
+           user: str = "", memory: str = "") -> str:
     """Ask about data stored in the company's ERP system.
 
     Figures come from the database and are checked before they are returned; pass them
@@ -416,8 +457,10 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     :param user: optional user id when the channel protocol supplies one.
     """
     try:
-        data = _ask(question, focus or None, measure or None, context or None,
-                    prior or None, decision_id or None, user or None)
+        mem_action, q_send = split_memory_action(question, memory or None)
+        data = _ask(q_send, focus or None, measure or None, context or None,
+                    prior or None, decision_id or None, user or None,
+                    memory=mem_action)
     except urllib.error.HTTPError as e:
         return ERROR_REPLY.format(detail="HTTP %d" % e.code)
     except Exception as e:                     # noqa: BLE001 — сеть/таймаут

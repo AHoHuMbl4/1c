@@ -53,6 +53,7 @@ try:
     import serene_enough
 except ImportError:                                # noqa: F401 — шаг просто выключен
     serene_enough = None
+import ask_choice_mem as ACM
 try:
     import serene_axis
 except ImportError:
@@ -2323,6 +2324,11 @@ FORK_OUTCOMES = os.environ.get("ASK_FORK_OUTCOMES", "1") not in ("0", "false", "
 # Ошибка записи не роняет ответ (п. 13): счётчик потерь, не исключение наружу.
 ASK_JOURNAL = os.environ.get("ASK_JOURNAL", "1") not in ("0", "false", "no")
 _JOURNAL_LOST = 0
+# Память явного выбора (план §8 шаг 6, аудит §13). Первый режим — SHADOW:
+# строка пишется и видна в diag, ответ не меняет. Включение в бой — отдельное
+# решение после замера коллизий; ручки «применить» в этом шаге нет.
+ASK_CHOICE_MEMORY = os.environ.get("ASK_CHOICE_MEMORY", "1") not in ("0", "false", "no")
+_MEMORY_LOST = 0
 _JOURNAL_KEEP = None
 _JOURNAL_CODE_MD5 = None
 _JOURNAL_ALIAS_VER = None
@@ -3286,10 +3292,12 @@ def _purge_decisions(now=None):
         _DECISIONS.pop(k, None)
 
 
-def issue_decision(question, option, ambiguity, options_ver, user=None, parse=None):
+def issue_decision(question, option, ambiguity, options_ver, user=None, parse=None,
+                   class_meta=None):
     """Выпустить билет на один вариант clarify. Возвращает decision_id."""
     now = time.time()
     tid = _new_decision_id()
+    meta = class_meta if isinstance(class_meta, dict) else {}
     ticket = {
         "decision_id": tid,
         "question_fp": question_fingerprint(question),
@@ -3304,6 +3312,10 @@ def issue_decision(question, option, ambiguity, options_ver, user=None, parse=No
         "db": db_fingerprint(),
         "user": (str(user).strip() if user else None) or None,
         "options_version": options_ver,
+        "class_key": meta.get("class_key"),
+        "readings": list(meta.get("readings") or []),
+        "window_fp": meta.get("window_fp") or "",
+        "measure_ctx": meta.get("measure_ctx") or "",
         "nonce": secrets.token_hex(8),
         "created_at": now,
         "expires_at": now + max(60, DECISION_TTL_SEC),
@@ -3329,13 +3341,15 @@ def seal_clarify(out, question, user=None, parse=None):
         return out
     amb = ambiguity_of_options(opts)
     ver = options_version(opts)
+    class_meta = ACM.class_meta_of(out)
     sealed = []
     for o in opts:
         if not isinstance(o, dict):
             continue
         row = dict(o)
         row["decision_id"] = issue_decision(
-            question, row, amb, ver, user=user, parse=parse)
+            question, row, amb, ver, user=user, parse=parse,
+            class_meta=class_meta)
         sealed.append(row)
     out = dict(out)
     out["options"] = sealed
@@ -3376,6 +3390,29 @@ def consume_decision(decision_id, question, user=None):
         return ticket, None
 
 
+def peek_decision(decision_id, user=None):
+    """Прочитать билет без погашения. «Запомни» после клика: used до TTL жив."""
+    tid = str(decision_id or "").strip()
+    if not tid:
+        return None, "unknown"
+    now = time.time()
+    with _DECISION_LOCK:
+        ticket = _DECISIONS.get(tid)
+        if not ticket:
+            _purge_decisions(now)
+            return None, "unknown"
+        if float(ticket.get("expires_at") or 0) <= now:
+            _DECISIONS.pop(tid, None)
+            _purge_decisions(now)
+            return None, "expired"
+        if ticket.get("db") and ticket["db"] != db_fingerprint():
+            return None, "mismatch"
+        if ticket.get("user"):
+            if not user or str(user).strip() != ticket["user"]:
+                return None, "user_mismatch"
+        return dict(ticket), None
+
+
 def choice_error_response(error_code, decision_id=None):
     """Видимая клиенту ошибка выбора — не молчаливый общий путь."""
     texts = {
@@ -3401,6 +3438,20 @@ def reset_decisions_for_tests():
     """Только оффлайн-пробы: очистить хранилище билетов."""
     with _DECISION_LOCK:
         _DECISIONS.clear()
+
+
+def attach_memory_shadow(out, user=None, action=None, decision_id=None):
+    """Shadow-память: diag.memory, ответ не меняет. Ошибка не роняет ответ."""
+    global _MEMORY_LOST
+    box = [_MEMORY_LOST]
+    out = ACM.attach_choice_memory(
+        out, psql=psql, tables=TABLES, peek_decision=peek_decision,
+        user=user, action=action, decision_id=decision_id,
+        enabled=ASK_CHOICE_MEMORY, lost_box=box)
+    if box[0] != _MEMORY_LOST:
+        _MEMORY_LOST = box[0]
+        sys.stderr.write("ask memory LOST %d\n" % _MEMORY_LOST)
+    return out
 
 
 def choice_proven(trusted, ambiguity=None):
@@ -10051,9 +10102,13 @@ class Handler(BaseHTTPRequestHandler):
             req = json.loads(self.rfile.read(n) or b"{}")
         except ValueError:
             return self._send(400, {"error": "bad json"})
-        question = (req.get("question") or "").strip()
-        if not question:
+        raw_q = (req.get("question") or "").strip()
+        mem_explicit = (req.get("memory") or "").strip().lower() or None
+        mem_action, question = ACM.split_memory_action(raw_q, mem_explicit)
+        if not question and not mem_action:
             return self._send(400, {"error": "empty question"})
+        if not question and mem_action:
+            question = raw_q
         # `focus` — подсказка отбора (модель/свободный текст). Доказанный выбор —
         # только `decision_id` (план §6); сырой focus защиты не гасит.
         focus = (req.get("focus") or "").strip() or None
@@ -10068,14 +10123,26 @@ class Handler(BaseHTTPRequestHandler):
         user = (req.get("user") or "").strip() or None
         channel = (req.get("channel") or "http").strip() or "http"
         try:
-            # `answer_checked`, а не `answer`: вокруг ответа стоит шаг «достаточен ли
-            # вопрос» (05.08). Он же зовёт `answer` внутри, поэтому путь ответа прежний.
-            # decision_id потребляется там же — иначе choice_error минует журнал.
-            out = answer_checked(question, focus=focus, measure_pick=measure_pick,
-                                 context=context, prior=prior,
-                                 decision_id=decision_id, user=user, channel=channel)
-            if isinstance(out, dict) and out.get("options"):
-                out = seal_clarify(out, question, user=user)
+            # Команда «запомни»/«забудь» без вопроса данных: не гоняем разбор,
+            # клик сам по себе память не пишет (нужен mem_action).
+            data_q = ACM.split_memory_action(raw_q, mem_explicit)[1]
+            if mem_action and not data_q:
+                out = {"kind": "answer", "text": "", "sources": [],
+                       "partial": None, "diag": {}, "options": []}
+                out = attach_memory_shadow(out, user=user, action=mem_action,
+                                           decision_id=decision_id)
+            else:
+                question = data_q or question
+                # `answer_checked`, а не `answer`: вокруг ответа стоит шаг «достаточен ли
+                # вопрос» (05.08). Он же зовёт `answer` внутри, поэтому путь ответа прежний.
+                # decision_id потребляется там же — иначе choice_error минует журнал.
+                out = answer_checked(question, focus=focus, measure_pick=measure_pick,
+                                     context=context, prior=prior,
+                                     decision_id=decision_id, user=user, channel=channel)
+                if isinstance(out, dict) and out.get("options"):
+                    out = seal_clarify(out, question, user=user)
+                out = attach_memory_shadow(out, user=user, action=mem_action,
+                                           decision_id=decision_id)
             # СВЕЖЕСТЬ ДАННЫХ — В КАЖДЫЙ ОТВЕТ (п. 18). Если 1С недоступна или такт падает,
             # корпус остаётся консистентным (защиты сборки), но СТАРЕЕТ, а бот об этом
             # молчал бы. Возраст последнего успешного такта делает старение видимым, а при
@@ -10088,7 +10155,10 @@ class Handler(BaseHTTPRequestHandler):
                 age = None
             if age is not None and isinstance(out, dict):
                 out.setdefault("diag", {})["data_age_sec"] = age
-                out = stale_note(out, age, STALE_WARN_SEC, STALE_TEXT)
+                # Команда запомни/забудь без вопроса данных — не приписка свежести:
+                # это не ответ по данным, и пустой text не должен обрастать оговоркой.
+                if not (mem_action and not data_q):
+                    out = stale_note(out, age, STALE_WARN_SEC, STALE_TEXT)
             return self._send(200, out)
         except Exception as e:                          # noqa: BLE001
             # 🔴 ЧЕСТНЫЙ ОТКАЗ ПРИ СБОЕ (п. 18), А НЕ ВЫДУМАННЫЙ ОТВЕТ. Любое исключение

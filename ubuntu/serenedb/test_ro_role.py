@@ -22,7 +22,7 @@ def check(name, cond, detail=""):
 def _pick():
     """Реальная таблица витрины + её колонка — динамически (без вшитого имени).
 
-    `search_fork_class` и `ask_journal` исключены: это единственная таблица, куда ro-роль пишет по
+    `search_fork_class`, `ask_journal` и `ask_choice_memory` исключены: сюда ro-роль пишет по
     замыслу (журнал детектора развилок, у сервиса один DSN — см. corpus_init.sql),
     поэтому проба записи смотрит на остальную витрину.
 
@@ -30,7 +30,7 @@ def _pick():
     опытов без GRANT (res_emb_*, tmp3_*), и «запись отвергнута» на нечитаемой
     таблице ничего не доказывает, а контроль чтения на ней падает не по делу."""
     tables = run("SELECT table_name FROM duckdb_columns() WHERE schema_name='public' "
-                 "AND table_name NOT IN ('resolver_index','search_fork_class','ask_journal')").stdout.split()
+                 "AND table_name NOT IN ('resolver_index','search_fork_class','ask_journal','ask_choice_memory')").stdout.split()
     t = next((x for x in tables
               if run(f'SELECT * FROM "{x}" LIMIT 0').returncode == 0), "")
     c = run(f"SELECT column_name FROM duckdb_columns() WHERE schema_name='public' "
