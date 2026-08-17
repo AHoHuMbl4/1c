@@ -8,6 +8,16 @@ _Обновлено: **2026-08-17.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **dev `/opt/1c-mcp-reports` = origin/main `[17.08]`** — `deploy.sh` 18
+файлов; md5 ключевых совпадает (`8539aec6…` `serene_ask.py`). Golden live
+2/8, оффлайн-пробы без регрессий. `/health` ask `:8091`/`:8099` ok;
+живой `/ask` — **402 DeepSeek** после рестарта (ключ/баланс — владельцу).
+
+🔴 **dev pipeline `@postgres` — upstream IIS мёртв `[17.08]`**: шлюз :6011
+жив, но `192.168.56.1:6003` Connection refused → такт падает на `$metadata`;
+таймер inactive/enabled. Владельцу: поднять Windows OData **или** disable
+таймер (RUNBOOK §0). Зелёный такт первой базы не снят.
+
 🔴 **Словари: модель зафиксирована замером `[17.08]`** — `deepseek-v4-pro`,
 thinking **off** (`BRANCH_ALIAS_THINKING` / `WIKI_ALIAS_THINKING`); flash
 отвергнут (wiki measures 50 % vs 100 % pro). Накладные шлюза ~3576 in +

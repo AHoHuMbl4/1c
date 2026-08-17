@@ -36,13 +36,54 @@
 Протухший `RERANK_API_KEY` дева (запись 15.08, 401) закрыт новым ключом —
 живой вызов реранкера с дева успешен.
 
-⚠️ Попутно замечено (не относится к переезду, владельцу): на dev каталог
-выката `/opt/1c-mcp-reports` расходится с репозиторием (`build.sh`,
-`serene_ask.py`, `corpus_precheck.sql`, `embed_check.sh` — последний без
-живых проверок дверей от 15.08), а `1c-serene-pipeline@postgres` на dev
-failed с 07.08 на шаге корпуса (`$metadata` шлюза :6011). На okna тик
-пишет «синк: частичные ошибки» — `odata_census.py` получает путь
+⚠️ На okna тик пишет «синк: частичные ошибки» — `odata_census.py` получает путь
 `/var/lib/serenedb/packet-meta/okna-1/` вместо URL; такт при этом зелёный.
+
+
+## 17.08: dev — выкат `/opt/1c-mcp-reports` + диагностика pipeline первой базы `[замер]`
+
+`[замер]` Задача из записи 40b6567 (расхождение `/opt` и репозитория; pipeline
+`@postgres` failed с 07.08).
+
+**Выкат (`deploy.sh`, 18 файлов).** md5 до/после по ключевым файлам:
+
+| файл | до (opt) | после (opt = repo) |
+|---|---|---|
+| `build.sh` | `2d31a129…` | `277fbca0…` |
+| `serene_ask.py` | `451c6b92…` | `8539aec6…` |
+| `corpus_precheck.sql` | `b3c00ef5…` | `94e8d82b…` |
+| `embed_check.sh` | `edc48f97…` | `8058c09c…` |
+
+**Golden-гейт:** `ASK_URL=http://127.0.0.1:8091/ask AB_BASE=postgres
+AB_MARK_DIR=/srv/1c python3 ab_scorer.py` — live **2/8**, сбоев 0, отметка
+`.golden-last-run` (`postgres live 2/8`). Полный 8/8 не замок — без рестарта
+юнита (нет прав на `/etc/1c-serene-ask-postgres.env`).
+
+**Оффлайн-пробы после выката (HEAD):** `test_gate` 130, `test_fork_outcomes`
+22/22, `test_ds_tokens` 9, venv `test_decision_id` 24, `test_mcp_ask` 27,
+`test_focus_loop` 19 — без регрессий.
+
+**Сервисы ответов:** рестарт `1c-serene-ask@postgres` + `@ut_test`;
+`/health` `:8091` → 103808 строк, `:8099` → 623565, `coverage_gap` 0.
+Живой `/ask` после рестарта — **402 Payment Required** DeepSeek (журнал
+`1c-serene-ask@postgres`); до рестарта ab_scorer ответы получал.
+
+**Pipeline `@postgres` — корень не конфиг юнита, а мёртвый upstream 1С.**
+
+- `1c-odata-gateway` :6011 **active**, `/health` ok; Bearer →
+  `upstream unreachable: Connection refused` на `192.168.56.1:6003` (тот же
+  ответ на :6021 второй базы).
+- Такт 17.08: precheck ok (103808 / 115151), падение на
+  `read_text('$metadata')` — HTTP 0 (шлюз не достучался до IIS).
+- Пропуск сборки не срабатывает: `build_sql_hash` в БД `c7d3286…`, в
+  `/opt` после выката `bf54b555…`; `corpus_built_ts` отсутствует при живом
+  `mart_changed_ts`.
+- `ODG_GATEWAY_TOKEN` в `/etc/1c-serene-pipeline-postgres.env` — на месте;
+  таймер **inactive** (с 07.08), но **enabled** — `systemctl disable` из
+  сессии не прошёл (polkit). **Владельцу:** поднять IIS/проброс :6003 на
+  Windows-стенде **или** `systemctl disable --now
+  1c-serene-pipeline@postgres.timer` (RUNBOOK §0). Зелёный end-to-end
+  такт первой базы **не снят** — без живого OData.
 
 
 ## 17.08: замер стоимости агентских словарей (branch/wiki_alias) — pro, thinking off `[замер]`
