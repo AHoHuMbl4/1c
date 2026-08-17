@@ -131,20 +131,32 @@ namespace Oc1c
 
         public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat)
         {
-            return Run(o, bref, odataUrl, plat, null, null);
+            return Run(o, bref, odataUrl, plat, null, null, null);
         }
 
         public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat, string metadataFile)
         {
-            return Run(o, bref, odataUrl, plat, metadataFile, null);
+            return Run(o, bref, odataUrl, plat, metadataFile, null, null);
+        }
+
+        public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat,
+                              string metadataFile, List<string> entityHints)
+        {
+            return Run(o, bref, odataUrl, plat, metadataFile, entityHints, null);
         }
 
         // metadataFile — сгенерированный установщиком синтетический $metadata
         // (manifest-gen.ps1, Program.cs): не null — пишется в agent.ini строкой
         // metadata_file=, и агент читает манифест файлом вместо HTTP GET $metadata
         // (у части баз платформа отвечает на $metadata HTTP 500 при живых сущностях).
+        // beforeAutostart — шаг 14 основного потока (расширение чтения): зовётся
+        // между доказанным каналом и автозапуском агента, чтобы ПЕРВЫЙ полный
+        // проход шёл уже с правами (17.08: на klient-1 шаг стоял после автозапуска,
+        // и первая заливка ушла без 6228 сущностей; их дочитка в дельта-режиме —
+        // часы и дни). Раньше блока агента шаг нельзя: читателя создаёт этот блок.
         public static int Run(Opts o, BaseRef bref, string odataUrl, Platform plat,
-                              string metadataFile, List<string> entityHints)
+                              string metadataFile, List<string> entityHints,
+                              Func<bool> beforeAutostart)
         {
             _entityHints = entityHints;
             if (o.SkipPacket)
@@ -496,6 +508,11 @@ namespace Oc1c
             if (!smoked) return Program.EXIT_PACKET;
             WipeKitSecrets(kit, setupPath, ps);
             Installed = true;
+
+            // ---------- шаг 14 основного потока (расширение чтения) — ЗДЕСЬ,
+            // до автозапуска: задачи планировщика ещё не созданы, значит ни демон,
+            // ни сторож (каждые 5 мин) не начнут первый проход без прав.
+            if (beforeAutostart != null && !beforeAutostart()) return Program.EXIT_STEP;
 
             // ---------- 6. автозапуск (планировщик, SYSTEM) — после доказанного канала
             Log.Step(6, 6, "Автозапуск агента (планировщик задач)");

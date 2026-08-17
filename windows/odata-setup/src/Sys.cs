@@ -19,7 +19,12 @@ namespace Oc1c
         public static bool DryRun;              // --check: ничего не менять
         public static bool AssumeYes;           // --yes: без вопросов
         public static bool Changed;             // хоть что-то реально изменено
-        public const string ToolVersion = "1.2.3";  // щадящий режим 1С: sessionMaxAge 3600, детектор
+        public const string ToolVersion = "1.3.0";  // расширение чтения на клиент-серверных базах;
+                                                    // шаг 14 до автозапуска агента; мера — PROBE-401.
+                                                    // 🔴 НЕ ПРОВЕРЕНО на клиент-серверной базе живьём
+                                                    // (нужен сервер 1С на стенде) — в S3 не выкладывать
+                                                    // до прогона (PLAN_EXT_CLIENT_SERVER §А.3).
+                                                    // 1.2.3: щадящий режим 1С: sessionMaxAge 3600, детектор
                                                     // техжурнала (--remove-logcfg), без IIS-HttpLogging (13.08);
                                                     // 1.2.2 — гейт по манифесту + смоук до автозапуска
     }

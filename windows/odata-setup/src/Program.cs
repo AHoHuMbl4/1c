@@ -864,20 +864,36 @@ namespace Oc1c
                 if (Steps.OpenFirewall(o.OpenFirewall, out detail)) Log.Ok(detail);
             }
 
+            // ---------- 14. расширение чтения (роль AIReadAll) — как хук блока агента.
+            // Зовётся ИЗНУТРИ PacketSteps.Run между доказанным каналом и автозапуском:
+            // первый полный проход агента обязан идти уже с правами (17.08, klient-1:
+            // шаг стоял после автозапуска — первая заливка ушла без 6228 сущностей).
+            // Раньше блока агента шаг нельзя: читателя создаёт сам блок (прогон 10.08:
+            // «пользователь ai_reader не найден»). Мягкий шаг: фейл НЕ валит установку.
+            bool aiExtRan = false;
+            Func<bool> aiExtStep = delegate
+            {
+                aiExtRan = true;
+                string extDetail;
+                Log.Step(14, TOTAL, "Расширение чтения (роль AIReadAll)");
+                bool okExt = Steps.InstallAiExtension(plat, bref, o, pool, out extDetail);
+                if (okExt)
+                {
+                    if (extDetail.StartsWith("пропущено")) Log.Skip(extDetail);
+                    else if (extDetail.Length > 0) Log.Ok(extDetail);
+                }
+                return okExt;
+            };
+
             // ---------- блок 2: агент пакетного транспорта (только при наличии комплекта)
             // metadataFile — сгенерированный манифест (null — агент работает по HTTP).
             // compEntities — состав из шага 12: гейту читателя он нужен ровно так же,
             // как шагу 13, иначе на базе с 500 на корне гейт зацикливается (12.08).
-            int packetExit = PacketSteps.Run(o, bref, url, plat, metadataFile, compEntities);
+            int packetExit = PacketSteps.Run(o, bref, url, plat, metadataFile, compEntities, aiExtStep);
 
-            // ---------- 14. расширение чтения (роль AIReadAll)
-            // Стоит ПОСЛЕ блока агента: пользователь-читатель создаётся в PacketSteps,
-            // а шаг 14 назначает ему роль — на чистой машине раньше блока агента
-            // читателя ещё нет (живой прогон 10.08: «пользователь ai_reader не найден»).
-            // Мягкий шаг: фейл НЕ валит установку (предупреждение внутри), КС-база — пропуск.
-            Log.Step(14, TOTAL, "Расширение чтения (роль AIReadAll)");
-            if (!Steps.InstallAiExtension(plat, bref, o, pool, out detail)) return EXIT_STEP;
-            if (detail.StartsWith("пропущено")) Log.Skip(detail); else if (detail.Length > 0) Log.Ok(detail);
+            // Блок агента до автозапуска не дошёл (нет комплекта, --skip-packet, фейл
+            // раньше) — шаг 14 выполняется здесь, как в прежнем порядке.
+            if (!aiExtRan && !aiExtStep()) return EXIT_STEP;
 
             Report(o, bref, plat, pool, url, scopeKeys);
             ClearResume();
@@ -1001,6 +1017,9 @@ namespace Oc1c
         static void Report(Opts o, BaseRef b, Platform p, string pool, string url, List<string> scopeKeys)
         {
             Log.Head("ИТОГ");
+            // Итог шага 14 виден ВСЕГДА: молчаливый пропуск расширения чтения
+            // стоил klient-1 68% контура (17.08) — состояние прав называется явно.
+            if (Steps.AiExtSummary.Length > 0) Log.Con(Steps.AiExtSummary);
             // Канал пакетов поднят — всё доказано (проба данных, доставка, задачи):
             // финал одним словом (решение владельца 07.08). Подробности — в логе.
             if (PacketSteps.Installed && !Ctx.DryRun)

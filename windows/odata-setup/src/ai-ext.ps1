@@ -18,7 +18,10 @@ $script:hadFail = $false
 # ==== параметры: из переменных окружения (так вызывает установщик) ====
 $U = $env:OC1C_EXT_USER          # логин администратора ИБ
 $P = $env:OC1C_EXT_PWD           # его пароль (может быть пустым)
-$BASE = $env:OC1C_EXT_BASE       # путь к файловой базе, напр. C:\1C-bases\ut_demo
+$IBKIND = $env:OC1C_EXT_IB_KIND  # форма базы: file | server (выбирает установщик)
+$BASE = $env:OC1C_EXT_BASE       # file: путь к базе, напр. C:\1C-bases\ut_demo
+$SRVR = $env:OC1C_EXT_SRVR       # server: сервер 1С (Srvr строки подключения)
+$REF  = $env:OC1C_EXT_REF        # server: имя базы в кластере (Ref)
 $READER = $env:OC1C_EXT_READER   # пользователь-читатель
 $VRD = $env:OC1C_EXT_VRD         # путь к default.vrd публикации (необязательно)
 $POOL = $env:OC1C_EXT_POOL       # имя пула IIS (необязательно)
@@ -26,8 +29,18 @@ $AGENTINI = $env:OC1C_EXT_AGENTINI  # путь к agent.ini для проб (н�
 if (-not $READER) { $READER = "ai_reader" }
 if (-not $POOL) { $POOL = "1c-odata" }
 if (-not $AGENTINI) { $AGENTINI = 'C:\1c\packet\agent.ini' }
-if (-not $U -or -not $BASE) {
-    "FATAL: задайте OC1C_EXT_USER / OC1C_EXT_PWD / OC1C_EXT_BASE (логин-пароль администратора ИБ, путь к базе)"
+if (-not $IBKIND) { $IBKIND = "file" }
+if (-not $U) {
+    "FATAL: задайте OC1C_EXT_USER / OC1C_EXT_PWD (логин-пароль администратора ИБ)"
+    exit 1
+}
+if ($IBKIND -eq "server") {
+    if (-not $SRVR -or -not $REF) {
+        "FATAL: для клиент-серверной базы задайте OC1C_EXT_SRVR / OC1C_EXT_REF (сервер 1С и имя базы)"
+        exit 1
+    }
+} elseif (-not $BASE) {
+    "FATAL: задайте OC1C_EXT_BASE (путь к файловой базе)"
     exit 1
 }
 # ======================================================================
@@ -50,6 +63,20 @@ if ($isX86 -and [Environment]::Is64BitProcess) {
     exit $LASTEXITCODE
 }
 "PLATFORM: $platformExe"
+
+# Форма подключения — ОДНО место на весь скрипт (17.08: поддержана клиент-серверная;
+# прежде и COM, и все вызовы конфигуратора знали только файловую /F, из-за чего
+# установщик молча пропускал шаг на клиент-серверных базах — klient-1 потерял
+# 6228 из 9151 сущностей контура). Файловая форма оставлена БАЙТ В БАЙТ прежней
+# (без кавычек в /F) — она проверена живыми прогонами, регресс недопустим.
+if ($IBKIND -eq "server") {
+    $ibArg = "/S`"$SRVR\$REF`""
+    $comConn = "Srvr=`"$SRVR`";Ref=`"$REF`";Usr=`"$U`";Pwd=`"$P`";"
+} else {
+    $ibArg = "/F$BASE"
+    $comConn = "File=`"$BASE`";Usr=`"$U`";Pwd=`"$P`";"
+}
+"IB-KIND: $IBKIND"
 
 $GP = [Reflection.BindingFlags]::GetProperty -bor [Reflection.BindingFlags]::Public -bor [Reflection.BindingFlags]::Instance
 $IM = [Reflection.BindingFlags]::InvokeMethod -bor [Reflection.BindingFlags]::Public -bor [Reflection.BindingFlags]::Instance
@@ -98,7 +125,7 @@ $sections = @(
 
 # 1. перечисление метаданных
 $connector = New-Object -ComObject "V83.COMConnector"
-$ib = $connector.Connect("File=`"$BASE`";Usr=`"$U`";Pwd=`"$P`";")
+$ib = $connector.Connect($comConn)
 $md = P $ib "Метаданные"
 $objects = New-Object System.Collections.Generic.List[string]
 foreach ($s in $sections) {
@@ -109,24 +136,38 @@ foreach ($s in $sections) {
 "OBJECTS: $($objects.Count)"
 if ($objects.Count -eq 0) { "FATAL: метаданные пусты"; exit 1 }
 
-# 2. пробы ДО: первые объекты нескольких классов под читателем
+# 2. пробы ДО: до 20 сущностей — по 3 первых из массовых классов, по 1 из
+# остальных. Число отказов 401 «до» и «после» — ИЗМЕРИТЕЛЬ шага (маркеры
+# PROBE-401-*): прежняя оценка «~15% объектов» была выдумкой — на klient-1
+# закрытыми оказались 68% контура, и никто этого не увидел.
 $probeObjs = @()
-foreach ($want in @("InformationRegister", "Catalog", "Document", "Constant")) {
-    foreach ($o in $objects) { if ($o.StartsWith($want + ".")) { $probeObjs += $o; break } }
+$bigClasses = @("Catalog", "Document", "InformationRegister", "AccumulationRegister")
+foreach ($s in $sections) {
+    $cls = $s[1]
+    $take = 1; if ($bigClasses -contains $cls) { $take = 3 }
+    $got = 0
+    foreach ($o in $objects) {
+        if ($got -ge $take -or $probeObjs.Count -ge 20) { break }
+        if ($o.StartsWith($cls + ".")) { $probeObjs += $o; $got++ }
+    }
+    if ($probeObjs.Count -ge 20) { break }
 }
 $before401 = @()
+$beforeDenied = 0
 foreach ($o in $probeObjs) {
     $e = $o.Replace(".", "_")
     $code = Odata-Probe $e
     "BEFORE $e -> $code"
     if ($code -ne "200") { $before401 += $o }
+    if ($code -eq "401") { $beforeDenied++ }
 }
+"PROBE-401-BEFORE: $beforeDenied/$($probeObjs.Count)"
 
 # 3a. реальные UUID объектов основной конфигурации (ConfigDumpInfoOnly — быстрый
 # дамп одной карты id; ExtendedConfigurationObject контролируется при /UpdateDBCfg)
 $cdiDir = "$env:TEMP\AIReadOnly-cdi"
 Remove-Item $cdiDir -Recurse -Force -ErrorAction SilentlyContinue
-$aC = 'DESIGNER',"/F$BASE","/N`"$U`"","/P`"$P`"",'/DumpConfigToFiles',$cdiDir,'-ConfigDumpInfoOnly','/Out',"$env:TEMP\aiext-cdi.log",'/DisableStartupDialogs','/DisableStartupMessages'
+$aC = 'DESIGNER',$ibArg,"/N`"$U`"","/P`"$P`"",'/DumpConfigToFiles',$cdiDir,'-ConfigDumpInfoOnly','/Out',"$env:TEMP\aiext-cdi.log",'/DisableStartupDialogs','/DisableStartupMessages'
 $pC = Start-Process -FilePath $platformExe -ArgumentList $aC -Wait -PassThru
 "CDI-EXIT=$($pC.ExitCode)"
 $cdiFile = "$cdiDir\ConfigDumpInfo.xml"
@@ -146,7 +187,7 @@ $listContent = (($firstOfClass.Values | Sort-Object) -join "`n") + "`nConfigurat
 [IO.File]::WriteAllText($listFile, $listContent, (New-Object System.Text.UTF8Encoding($true)))
 $pdump = "$env:TEMP\AIReadOnly-pdump"
 Remove-Item $pdump -Recurse -Force -ErrorAction SilentlyContinue
-$a0 = 'DESIGNER',"/F$BASE","/N`"$U`"","/P`"$P`"",'/DumpConfigToFiles',$pdump,'-listFile',$listFile,'-format','Hierarchical','/Out',"$env:TEMP\aiext-pdump.log",'/DisableStartupDialogs','/DisableStartupMessages'
+$a0 = 'DESIGNER',$ibArg,"/N`"$U`"","/P`"$P`"",'/DumpConfigToFiles',$pdump,'-listFile',$listFile,'-format','Hierarchical','/Out',"$env:TEMP\aiext-pdump.log",'/DisableStartupDialogs','/DisableStartupMessages'
 $p0 = Start-Process -FilePath $platformExe -ArgumentList $a0 -Wait -PassThru
 "PDUMP-EXIT=$($p0.ExitCode)"
 if ($p0.ExitCode -ne 0) {
@@ -370,24 +411,38 @@ $module = @'
 Write-Utf8Bom "$root\HTTPServices\AISetup\Ext\Module.bsl" $module
 "FILES-WRITTEN: $root"
 
-# 5. загрузка расширения
-$a = 'DESIGNER',"/F$BASE","/N`"$U`"","/P`"$P`"",'/LoadConfigFromFiles',$root,'-Extension',$ExtName,'/Out',"$env:TEMP\aiext-load.log",'/DisableStartupDialogs','/DisableStartupMessages'
-$p1 = Start-Process -FilePath $platformExe -ArgumentList $a -Wait -PassThru
-"LOAD-EXIT=$($p1.ExitCode)"
-if ($p1.ExitCode -ne 0) {
-    $log = [IO.File]::ReadAllText("$env:TEMP\aiext-load.log")
-    "LOAD-LOG: " + $log.Substring(0, [Math]::Min(900, $log.Length))
-    exit 1
+# 5. загрузка расширения. На клиент-серверной базе конфигуратор может не войти
+# из-за сеансов — до 3 попыток с паузой 60 с (сеансы НЕ рубим: чужой прод).
+# Отказ профиля безопасности кластера — единственная честная причина «не смочь»:
+# называется отдельным маркером, а не прячется в общий фейл.
+function Invoke-DesignerW($argList, $logPath, $tag) {
+    for ($try = 1; $try -le 3; $try++) {
+        $pp = Start-Process -FilePath $platformExe -ArgumentList $argList -Wait -PassThru
+        $suffix = ""; if ($try -gt 1) { $suffix = " (попытка $try)" }
+        "$tag-EXIT=$($pp.ExitCode)$suffix"
+        if ($pp.ExitCode -eq 0) { return $true }
+        $lg = ""; try { $lg = [IO.File]::ReadAllText($logPath) } catch {}
+        if ($lg -match "профил[^\r\n]{0,60}безопасност|безопасност[^\r\n]{0,60}профил") {
+            "EXT-SECPROFILE-BLOCKED: кластер запрещает загрузку расширений профилем безопасности — нужно разрешение в консоли кластера 1С"
+            return $false
+        }
+        if ($try -lt 3 -and $lg -match "заблокирован|занята|монопольн|сеанс") {
+            "BUSY: база занята ($tag) — повтор через 60 с"
+            Start-Sleep -Seconds 60
+            continue
+        }
+        "$tag-LOG: " + $lg.Substring(0, [Math]::Min(900, $lg.Length))
+        return $false
+    }
+    return $false
 }
+$a = 'DESIGNER',$ibArg,"/N`"$U`"","/P`"$P`"",'/LoadConfigFromFiles',$root,'-Extension',$ExtName,'/Out',"$env:TEMP\aiext-load.log",'/DisableStartupDialogs','/DisableStartupMessages'
+if (-not (Invoke-DesignerW $a "$env:TEMP\aiext-load.log" "LOAD")) { exit 1 }
 
 # 5.5 применение расширения к конфигурации БД (без этого /LoadConfigFromFiles
 # расширение хранится, но не применено — HTTP-сервис даёт 404; ресерч 10.08)
-$aU = 'DESIGNER',"/F$BASE","/N`"$U`"","/P`"$P`"",'/UpdateDBCfg','-Extension',$ExtName,'/Out',"$env:TEMP\aiext-upd.log",'/DisableStartupDialogs','/DisableStartupMessages'
-$pU = Start-Process -FilePath $platformExe -ArgumentList $aU -Wait -PassThru
-"UPDATEDB-EXIT=$($pU.ExitCode)"
-if ($pU.ExitCode -ne 0) {
-    $lg = [IO.File]::ReadAllText("$env:TEMP\aiext-upd.log")
-    "UPDATEDB-LOG: " + $lg.Substring(0, [Math]::Min(900, $lg.Length))
+$aU = 'DESIGNER',$ibArg,"/N`"$U`"","/P`"$P`"",'/UpdateDBCfg','-Extension',$ExtName,'/Out',"$env:TEMP\aiext-upd.log",'/DisableStartupDialogs','/DisableStartupMessages'
+if (-not (Invoke-DesignerW $aU "$env:TEMP\aiext-upd.log" "UPDATEDB")) {
     "FATAL: расширение не применено к конфигурации БД"
     exit 1
 }
@@ -461,11 +516,17 @@ if (Test-Path $vrd) {
     }
 }
 
-# 8. пробы ПОСЛЕ
+# 8. пробы ПОСЛЕ: остаточный 401 = роль не покрыла объект — это фейл шага,
+# и он называется числом, а не оценкой.
+$afterDenied = 0
 foreach ($o in $probeObjs) {
     $e = $o.Replace(".", "_")
-    "AFTER $e -> " + (Odata-Probe $e)
+    $code = Odata-Probe $e
+    "AFTER $e -> $code"
+    if ($code -eq "401") { $afterDenied++ }
 }
+"PROBE-401-AFTER: $afterDenied/$($probeObjs.Count) (до расширения: $beforeDenied)"
+if ($afterDenied -gt 0) { $script:hadFail = $true }
 if ($script:hadFail) { "RESULT: FAIL"; exit 2 }
 "RESULT: OK"
 "DONE"

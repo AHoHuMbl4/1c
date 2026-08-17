@@ -2467,44 +2467,54 @@ namespace Oc1c
         }
 
         // ============================================================ 14. расширение чтения AIReadOnly
-        // Расширение с генерируемой ролью AIReadAll: открывает по OData объекты, которые
-        // профиль «Только просмотр» не покрывает (~15%). Скрипт ai-ext.ps1 вшит в exe
+        // Расширение с генерируемой ролью AIReadAll: открывает по OData объекты,
+        // которые профиль читателя не покрывает. Скрипт ai-ext.ps1 вшит в exe
         // ресурсом (build.cmd) — извлекаем во временный файл и запускаем PowerShell
         // разрядности платформы (в самом скрипте есть и самоперезапуск в 32 бита).
-        // Проверен только на файловых базах: на клиент-серверной без профиля КОРП
-        // загрузка расширений заблокирована платформой — там шаг пропускаем.
+        // 🔴 С 17.08 шаг работает и на клиент-серверных базах (форму подключения
+        // выбирает OC1C_EXT_IB_KIND). Прежний молчаливый пропуск «без профиля КОРП
+        // нельзя» был непроверенной гипотезой и стоил klient-1 6228 из 9151
+        // сущностей контура (68%) при обещанных в предупреждении «~15%»; реальная
+        // причина пропуска — скрипт знал только файловую форму /F.
+        // Мера шага — числа PROBE-401-BEFORE/AFTER из проб скрипта, не оценка.
         // Фейл шага НЕ валит установку: OData-чтение работает и без расширения.
+        public static string AiExtSummary = "";
         public static bool InstallAiExtension(Platform plat, BaseRef bref, Opts o, string pool, out string detail)
         {
             detail = "";
-            if (!bref.IsFile)
+            if (Ctx.DryRun)
             {
-                Log.Warn("клиент-серверная база — расширение чтения пропускаю: без профиля КОРП загрузка расширений заблокирована платформой (проверено только на файловых базах)");
-                detail = "пропущено: клиент-серверная база";
+                detail = "пропущено в режиме проверки (--check); боевой запуск установил бы расширение в "
+                       + (bref.IsFile ? ("файловую базу " + bref.Dir) : ("клиент-серверную базу " + bref.Srvr + "\\" + bref.Name));
                 return true;
             }
-            if (Ctx.DryRun) { detail = "пропущено в режиме проверки (--check)"; return true; }
             if (string.IsNullOrEmpty(o.AdminUser))
             {
-                Log.Warn("нет учётных данных администратора 1С — расширение чтения не установлено; ~15% объектов останутся недоступны по OData");
+                Log.Warn("нет учётных данных администратора 1С — расширение чтения не установлено; объекты, не покрытые профилем читателя, останутся недоступны по OData (их число покажет лог агента skipped)");
                 detail = "пропущено: нет учётных данных администратора";
+                AiExtSummary = "Расширение чтения НЕ установлено (нет учётных данных администратора 1С).";
                 return true;
             }
 
             string tmp = ExtractScriptResource("ai-ext.ps1");
             if (tmp == null)
             {
-                Log.Warn("в exe нет вшитого ai-ext.ps1 (сборка без ресурса) — шаг пропущен; ~15% объектов останутся недоступны по OData");
+                Log.Warn("в exe нет вшитого ai-ext.ps1 (сборка без ресурса) — шаг пропущен; объекты вне профиля читателя останутся недоступны по OData");
                 detail = "пропущено: нет вшитого скрипта";
+                AiExtSummary = "ВНИМАНИЕ расширение чтения НЕ установлено (в exe нет вшитого ai-ext.ps1).";
                 return true;
             }
             try
             {
                 // Параметры — только через окружение процесса (в командной строке секретов нет).
+                // Форму базы скрипт НЕ угадывает по строке — её называет установщик
+                // (девиз: не разбирать текст, когда структура известна).
                 Dictionary<string, string> env = new Dictionary<string, string>();
                 env["OC1C_EXT_USER"] = o.AdminUser;
                 env["OC1C_EXT_PWD"] = o.AdminPassword == null ? "" : o.AdminPassword;
-                env["OC1C_EXT_BASE"] = bref.Dir;
+                env["OC1C_EXT_IB_KIND"] = bref.IsFile ? "file" : "server";
+                if (bref.IsFile) env["OC1C_EXT_BASE"] = bref.Dir;
+                else { env["OC1C_EXT_SRVR"] = bref.Srvr; env["OC1C_EXT_REF"] = bref.Name; }
                 if (!string.IsNullOrEmpty(o.ReaderUser)) env["OC1C_EXT_READER"] = o.ReaderUser;
                 env["OC1C_EXT_READER_PWD"] = o.ReaderPassword == null ? "" : o.ReaderPassword;
                 env["OC1C_EXT_VRD"] = VrdPath(o.Dir);
@@ -2521,7 +2531,10 @@ namespace Oc1c
                     30 * 60 * 1000, Encoding.UTF8, null, env);
 
                 // Ключевые маркеры скрипта — на консоль (полный вывод уже в логе — Proc.Run).
-                string[] marks = { "LOAD-EXIT", "UPDATEDB-EXIT", "EXT-FLAGS", "SETUP-ENDPOINT", "RESULT" };
+                string[] marks = { "IB-KIND", "LOAD-EXIT", "UPDATEDB-EXIT", "EXT-FLAGS",
+                                   "SETUP-ENDPOINT", "PROBE-401", "EXT-SECPROFILE-BLOCKED",
+                                   "BUSY", "RESULT" };
+                string probes = "";
                 string[] lines = r.All.Replace("\r\n", "\n").Split('\n');
                 for (int i = 0; i < lines.Length; i++)
                 {
@@ -2529,19 +2542,30 @@ namespace Oc1c
                     if (ln.Length == 0) continue;
                     for (int k = 0; k < marks.Length; k++)
                         if (ln.IndexOf(marks[k], StringComparison.Ordinal) >= 0) { Log.Info(ln); break; }
+                    if (ln.StartsWith("PROBE-401-AFTER:", StringComparison.Ordinal)) probes = ln;
                 }
 
                 if (!r.TimedOut && r.ExitCode == 0 && r.All.IndexOf("RESULT: OK") >= 0)
                 {
                     Ctx.Changed = true;
                     detail = "расширение AIReadOnly загружено, роль AIReadAll назначена читателю";
+                    AiExtSummary = "Расширение чтения: установлено"
+                                 + (probes.Length > 0 ? "; " + probes : "") + ".";
                     return true;
                 }
 
+                // Мера последствий — число из проб, не оценка: «~15%» из прежнего
+                // текста на klient-1 обернулись 68% контура.
                 string why = r.TimedOut ? "таймаут 30 минут" : "код выхода " + r.ExitCode;
+                if (r.All.IndexOf("EXT-SECPROFILE-BLOCKED") >= 0)
+                    why = "кластер запрещает расширения профилем безопасности";
                 Log.Err("расширение чтения не установлено (" + why + ")");
-                Log.Warn("установка продолжается, но ~15% объектов останутся недоступны по OData; подробности — в логе: " + Log.Path);
-                detail = "пропущено: расширение не установлено";
+                Log.Warn("установка продолжается, но объекты вне профиля читателя останутся недоступны по OData"
+                       + (probes.Length > 0 ? " (" + probes + ")" : " (мера — PROBE-401 в логе)")
+                       + "; подробности — в логе: " + Log.Path);
+                detail = "пропущено: расширение не установлено (" + why + ")";
+                AiExtSummary = "ВНИМАНИЕ расширение чтения НЕ установлено (" + why + ")"
+                             + (probes.Length > 0 ? "; " + probes : "") + ".";
                 return true;   // мягкий фейл: OData-чтение работает и без расширения
             }
             finally
