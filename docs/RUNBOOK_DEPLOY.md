@@ -474,6 +474,18 @@ precheck требует `embed_workers+8` потоков). Swap **4 GiB** (`/swa
 `systemctl start 1c-serene-pipeline@<база>.service`; `/health` →
 `coverage_gap.kind=none`.
 
+🔴 **klient-1 `10.1.1.7` (через релей `89.23.101.22`) — 8 vCPU / 11.7 GiB, замер 17.08 вечер.**
+Тот же эталон, что okna: `--cpu_threads=4 --io_threads=4` (conf md5 `87cc7f60…`),
+`BUILD_THREAD_MIN=4`, `SET preserve_insertion_order=false`, `SET memory_limit='10000MB'`
+(= SHOW **9.3 GiB**). Swap на юните уже 8+4 GiB, новый не заводили. Рестарт `serenedb`
+обязателен: `SET threads=4` без рестарта не держит пул процесса, поднятого с
+`--cpu_threads=160`. Precheck и `ai_embed` (gpu-erw) проходят. Первая полная сборка
+(1457 источников, карта ссылок 458 254) на `EXECUTE p_doc` упирается в
+`failed to allocate (9.3 GiB/9.3 GiB used)` даже при `threads=4`. Пик systemd
+11.09 GiB, `NRestarts=0`. **Лимит не поднимать молча** — слово владельца. Таймер
+`1c-serene-pipeline@postgres` оставлен **disabled**, apply приоритетен. `/health`
+`corpus_rows=0`, пока нет решения по RAM/`memory_limit`.
+
 ### 10.2 Код аналитики + окружение
 
 🔴 **Раскладка кода — `deploy.sh`, а не `cp` руками.** [замер 28.07] забытое копирование

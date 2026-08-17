@@ -1,5 +1,41 @@
 # Журнал изменений
 
+## 17.08: klient-1 — слой поиска: precheck жив, p_doc не влезает в 9.3 GiB `[замер]`
+
+`[замер]` Юнит `10.1.1.7`: **8 vCPU / 11.7 GiB RAM** (`MemTotal=12241604 kB`),
+swap `/swapfile` 8 GiB (был) + `/swapfile-1c-build` 4 GiB (уже на диске).
+Витрина наполняется (`1c-packet-apply.timer` active; таблиц 1533→1553 за заход),
+корпус был 0. Таймер pipeline inactive; последний такт 14.08 — precheck
+`threads=4 < embed_workers+8` (conf при этом `--cpu_threads=160`, а `SET threads`
+с 15.08 жил в файле базы до рестарта).
+
+Доки: Configuration › Pragmas (Memory Limit, Threads); Cookbook › Performance ›
+Environment; Out-of-Memory Issues.
+
+**До:** conf md5 `8bfcc6d0…` — `cpu_threads=160`, `io_threads=16`;
+`SHOW threads=160`, `memory_limit=9.3 GiB`, `preserve_insertion_order=on`;
+`/opt/build.sh` md5 `2d31a129…` без `BUILD_THREAD_MIN`;
+`/health` `corpus_rows=0`.
+
+**После (конфиг по эталону 6665b21, лимит не поднимали):** conf md5 `87cc7f60…`
+— `cpu_threads=4`, `io_threads=4`; рестарт `serenedb` (иначе процесс держал пул 160);
+`SET memory_limit='10000MB'` (=SHOW 9.3 GiB), `preserve_insertion_order=false`;
+`BUILD_THREAD_MIN=4`; `/opt/build.sh` `277fbca0…`, `corpus_precheck.sql` `94e8d82b…`.
+`SHOW threads=4`. Apply не останавливали.
+
+`[замер]` Precheck+`ai_embed` зелёные (модель `Qwen3-Embedding-8B`, gpu-erw).
+Полная сборка: метаданные 9263 / классификация 1457 ист. / карта ссылок 458 254 —
+затем `EXECUTE p_doc` (`corpus_build.sql` стр. 825 на `/opt`) **failed to allocate
+(9.3 GiB/9.3 GiB used)** при уже `threads=4` и `preserve_insertion_order=off`.
+Пик systemd **11.09 GiB** (`MemoryPeak=11901943808`), RSS ~10.2 GiB, RAM 10/11 GiB,
+swap ~160 MiB. `NRestarts=0` (движок не убит OOM-killer'ом — упёрся в pragma).
+Лимит **не поднимали** (указание: стоп и замер). Такт остановлен, таймер снова
+**disabled**, чтобы не отбирать память у apply. `/health` `corpus_rows=0`.
+Трёх зелёных тактов нет — ждут решения по памяти (больше RAM / выше
+`memory_limit` / `threads=2`).
+
+Бэкапы на юните: `*.bak-k1tick-20260817-194003`.
+
 ## 17.08: опись полноты klient-1 — `docs/COMPLETENESS_KLIENT1.md` `[замер]`
 
 Оформлен шаг Б.1 / klient-1-1 / A1. Баланс по файлам скретчпада 17.08:
