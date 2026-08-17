@@ -1,3 +1,26 @@
+## 17.08: okna — OOM движка починен, такт свежести зелёный `[замер]`
+
+`[замер]` **Корень:** `--cpu_threads=160` + `memory_limit=6 GiB` на машине **7,6 GiB RAM,
+swap=0** после пересборки 16.08. Такт `1c-serene-pipeline@postgres` каждые 2 мин
+ронял `serened` OOM-killer на `corpus_build.sql:858` (`EXECUTE p_doc`): dmesg
+anon-rss **6,4–6,6 GiB**, NRestarts→220. `/ask` вторичен (503 после рестартов).
+Доки: Configuration › Pragmas (Memory Limit, Threads); Cookbook › Performance ›
+Environment; Out-of-Memory Issues.
+
+**До:** conf md5 `8bfcc6d0…` — `cpu_threads=160`; `SHOW threads=160`,
+`memory_limit=6.0 GiB`; `/health` `freshness_lag` 146→508 строк.
+
+**После:** conf md5 `87cc7f60…` — `cpu_threads=4`, `io_threads=4`;
+`SET memory_limit='6500MB'`, `preserve_insertion_order=false`;
+`BUILD_THREAD_MIN=4`; swap 4 GiB `/swapfile-1c-tick`. `SHOW threads=4`,
+`memory_limit=6.0 GiB`.
+
+`[замер]` Такты: догон 237 с + два холостых 44–46 с + параллель `/ask` clarify C
+19 с — все OK. NRestarts=1. `/health`: `rows_missing=0`, `kind=none`,
+`corpus_rows=1 227 192`.
+
+`[код]` `BUILD_THREAD_MIN` в `build.sh`/`corpus_precheck.sql`.
+
 ## 17.08: шаг 4 — починка B по классам атомов, не по источникам `[код]` `[замер]`
 
 `[код]` `serene_ask.py`: исход B — одна пара на **класс типизированного атома**

@@ -1,12 +1,18 @@
 # Active Context
 
-_Обновлено: **2026-08-16.** Здесь — только живое: текущее состояние и «С ЧЕГО НАЧАТЬ».
+_Обновлено: **2026-08-17.** Здесь — только живое: текущее состояние и «С ЧЕГО НАЧАТЬ».
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
 ---
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
+
+🔴 **okna OOM + такт свежести ПОЧИНЕНЫ `[17.08]`**: `cpu_threads=4`, `memory_limit=
+6500MB`, swap 4 ГiБ, `BUILD_THREAD_MIN=4`. `/health` `freshness_lag=0`,
+`corpus_rows=1 227 192`, 3+ зелёных такта + `/ask`∥такт. NRestarts=1 (проба без
+swap). **Хвост:** снять swap когда найдём меньший `memory_limit`; ValueError
+packet-meta URL в sync; шаг 4 / ab_scorer / откат serene_ask — отдельно.
 
 🔴 **Шаг 4 — B по классам атомов починен `[17.08]`**: fork_label_siblings off,
 `_class_label_lookup`+dedupe+budget; want=sum/count; _fork_log per-class.

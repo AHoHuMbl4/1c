@@ -447,6 +447,32 @@ current_database()'` → `postgres`; на стенде базы разведен
 ⚠ Пока это ставится **руками**; по плану автономности настройку обязан делать установщик
 (`PLAN_AUTONOMY`, ручной шаг №0).
 
+🔴 **Малые юниты (≤8 GiB RAM, 4 vCPU) — okna `167.233.249.110`, замер 17.08.** На
+полном корпусе ~1,2 M строк `cpu_threads=160` + `memory_limit=6 GiB` без swap
+убивает движок OOM-killer'ом на каждом такте (`corpus_build.sql:858`, `p_doc`).
+Доки: Configuration › Pragmas › Memory Limit / Threads; Cookbook › Performance ›
+Environment; Out-of-Memory Issues.
+
+```conf
+# /etc/serenedb/serened.conf — okna, 7,6 GiB RAM
+--cpu_threads=4       # = vCPU; параллель p_doc, не пул эмбеддера
+--io_threads=4
+```
+
+После рестарта движка (настройки **глобальны**, персистят в файле базы):
+
+```sql
+SET memory_limit = '6500MB';   -- ≈6,0 GiB; 5 GiB → allocate error на p_doc
+SET preserve_insertion_order = false;
+```
+
+В env такта (`/etc/1c-serene-pipeline-<база>.env`): `BUILD_THREAD_MIN=4` (иначе
+precheck требует `embed_workers+8` потоков). Swap **4 GiB** (`/swapfile-1c-tick`) —
+иначе `memory_limit=6 GiB` снова OOM за секунды; после стабилизации снять вместе с
+запасом по памяти. Проверка: `SHOW threads`, `SHOW memory_limit`; три такта
+`systemctl start 1c-serene-pipeline@<база>.service`; `/health` →
+`coverage_gap.kind=none`.
+
 ### 10.2 Код аналитики + окружение
 
 🔴 **Раскладка кода — `deploy.sh`, а не `cp` руками.** [замер 28.07] забытое копирование

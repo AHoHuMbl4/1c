@@ -84,12 +84,14 @@ FROM duckdb_columns() WHERE table_name = 'search_corpus' AND column_name = 'emb'
 --    запросы: при 64 потоках и пуле 6 движок переставал отвечать на посторонний SELECT.
 --    Поэтому проверка универсальна: она не знает ни про эту машину, ни про эту базу.
 SELECT CASE WHEN try_cast(current_setting('threads') AS BIGINT) IS NOT NULL
-             AND try_cast(current_setting('threads') AS BIGINT) < :embed_workers + 8
+             AND try_cast(current_setting('threads') AS BIGINT) < :thread_min
        THEN error('пул исполнителей движка = ' || current_setting('threads')
-                  || ', а досчёт просит ' || :embed_workers || ' потоков. Векторизация'
-                  || ' упрётся в пул и пойдёт в разы медленнее, БЕЗ ошибок. Задайте в'
-                  || ' /etc/serenedb/serened.conf: --cpu_threads=' || (:embed_workers + 32)
-                  || ' и --io_threads=8, затем перезапустите движок') END;
+                  || ', а досчёт просит ' || :embed_workers || ' потоков (минимум '
+                  || :thread_min || '). Векторизация упрётся в пул и пойдёт в разы'
+                  || ' медленнее, БЕЗ ошибок. Задайте в /etc/serenedb/serened.conf:'
+                  || ' --cpu_threads=' || greatest(:thread_min, :embed_workers + 32)
+                  || ' и --io_threads=8, затем перезапустите движок; на малых юнитах'
+                  || ' (≤8 ГиБ RAM) допустимо BUILD_THREAD_MIN=число vCPU') END;
 
 SELECT 'проверки до такта пройдены' AS шаг,
        (SELECT v FROM build_state WHERE k = 'before_rows') AS строк_в_корпусе,

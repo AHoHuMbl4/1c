@@ -31,6 +31,10 @@ DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 export SERENEDB_DSN="$DSN"
 GATE="${ETL_ODATA_BASE:-http://127.0.0.1:6011}"
 WORKERS="${BUILD_EMBED_WORKERS:-8}"
+# Минимум пула исполнителей для precheck. Умолчание embed_workers+8 (29.07); на
+# малых юнитах (≤8 ГиБ RAM) задают BUILD_THREAD_MIN=число vCPU — иначе precheck
+# не пустит threads=4, а 160 потоков убивает движок OOM-killer'ом (okna 17.08).
+THREAD_MIN="${BUILD_THREAD_MIN:-$((WORKERS + 8))}"
 # 🔴 МОДЕЛЬ И АДРЕС ЭМБЕДДЕРА ЗАДАЮТСЯ ЯВНО, УМОЛЧАНИЯ НЕТ. Смена модели меняет ВЕКТОРНОЕ
 # ПРОСТРАНСТВО: вектор вопроса от одной модели и вектор строки от другой сравниваются без
 # всякой ошибки и дают бессмысленную близость — это молчаливая неверность (п. 10, п. 13),
@@ -167,7 +171,8 @@ rm -f "$SEC"
 # Проверки до такта — после секретов: одна из них дёргает эмбеддер, чтобы убедиться, что
 # он жив, ДО того как слияние обнулит векторы у изменившихся строк.
 psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" -v embed_secret="$SEC_EMB" \
-     -v embed_workers="$WORKERS" -v embed_maxlen="$EMBED_MAXLEN" -f corpus_precheck.sql || fail "проверки до такта"
+     -v embed_workers="$WORKERS" -v embed_maxlen="$EMBED_MAXLEN" -v thread_min="$THREAD_MIN" \
+     -f corpus_precheck.sql || fail "проверки до такта"
 
 # ⚠ ЦЕНА ЧЕСТНОСТИ: пропуск теперь срабатывает РЕДКО. Отметку ставит любая полная
 # загрузка, а она применяется к 80% источников (дельта требует `Ref_Key`+`DataVersion`).
