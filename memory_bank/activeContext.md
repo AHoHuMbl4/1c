@@ -23,12 +23,11 @@ DeepSeek → **prod не переводим**. DeepSeek live 402. Следы:
 таймер inactive/enabled. Владельцу: поднять Windows OData **или** disable
 таймер (RUNBOOK §0). Зелёный такт первой базы не снят.
 
-🔴 **Словари: модель зафиксирована замером `[17.08]`** — `deepseek-v4-pro`,
-thinking **off** (`BRANCH_ALIAS_THINKING` / `WIKI_ALIAS_THINKING`); flash
-отвергнут (wiki measures 50 % vs 100 % pro). Накладные шлюза ~3576 in +
-payload; прибор `alias_agent_bench.py`, runs `alias-bench-20260817-*`.
-**Хвост:** дождаться `1c-branch-alias` ut_test (старт 10:20 UTC) →
-`1c-wiki-alias` measures; итоговое покрытие fork_label / measure_alias.
+🔴 **Словари на vLLM Qwen3.8-27B — дым OK, полный branch в фоне `[17.08]`**:
+flash/pro split окна К отменён; `alias_infer_gateway.py` → `infer model run --gateway`;
+`ensure_vllm_gateway.sh` патчит allowlist undebot. Дым: parsed=1, 39 с, $0.
+**Хвост:** `1c-branch-alias` ut_test CAP=0 (~1074 класса) → wiki measures vLLM;
+отчёт `runs/gateway-usage-20260815-20260817.md`.
 
 🔴 **okna шаг 4 — B sum на проде `[17.08]`**: md5 `8539aec6…`; «на какую сумму мы
 продали» → **figures B × 2** (`1572493.22` + `79435925.51`, SQL `sum(Всего)` до

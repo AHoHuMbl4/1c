@@ -557,6 +557,50 @@ def summarize_ab(results: dict) -> dict:
     return summary
 
 
+def mode_qwen_ab(run_dir: Path, n_chunks: int = 5) -> dict:
+    """A/B vLLM vs baseline pro (5 branch + 2 wiki), через production gateway."""
+    results = {"branch": [], "wiki": []}
+    for i in range(n_chunks):
+        sql = branch_need_sql(1, 40).replace(
+            "ORDER BY c.fork_key LIMIT 1",
+            f"ORDER BY c.fork_key LIMIT 1 OFFSET {i}",
+        )
+        pay = psql_json(
+            sql
+            + """
+    SELECT to_json(list(struct_pack(fork_key := fork_key, measure := measure,
+                                    sources := items)))
+    FROM (SELECT s.fork_key, max(s.measure_ctx) AS measure,
+                 list(struct_pack(src := s.src,
+                                  title := coalesce(t.label, s.src),
+                                  bestUsedFor := coalesce(a.best_used_for, ''))
+                      ORDER BY s.src) AS items
+          FROM srcs s
+          LEFT JOIN search_tables t ON t.src_table = s.src
+          LEFT JOIN search_entity_alias a ON a.src_table = s.src
+          GROUP BY s.fork_key ORDER BY s.fork_key) z"""
+        )
+        if not pay:
+            break
+        if isinstance(pay, dict):
+            pay = [pay]
+        for model in ("vllm/Qwen3.8-27B", "deepseek/deepseek-v4-pro"):
+            tag = f"branch_{i}_{model.split('/')[-1].replace('.', '_')}"
+            results["branch"].append(
+                run_branch_case(run_dir, tag, pay, gateway=True, model=model, thinking="off")
+            )
+    for wi in range(2):
+        pay = wiki_measure_payload(20)
+        if not pay:
+            break
+        for model in ("vllm/Qwen3.8-27B", "deepseek/deepseek-v4-pro"):
+            tag = f"wiki_{wi}_{model.split('/')[-1].replace('.', '_')}"
+            results["wiki"].append(
+                run_wiki_case(run_dir, tag, pay, gateway=True, model=model, thinking="off")
+            )
+    return summarize_ab(results)
+
+
 def main() -> int:
     mode = os.environ.get("ALIAS_BENCH_MODE", "overhead")
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -570,6 +614,9 @@ def main() -> int:
     elif mode == "ab":
         n = int(os.environ.get("ALIAS_BENCH_CHUNKS", "8"))
         report["result"] = mode_ab(run_dir, n)
+    elif mode == "qwen_ab":
+        n = int(os.environ.get("ALIAS_BENCH_CHUNKS", "5"))
+        report["result"] = mode_qwen_ab(run_dir, n)
     else:
         print(f"unknown mode {mode}", file=sys.stderr)
         return 2

@@ -57,12 +57,13 @@ ALIAS_TABLE="${ALIAS_TABLE:-search_entity_alias}"
 # ручкой, что и у сущностей, чтобы прогон рядом не трогал боевой словарь.
 MEASURE_TABLE="${MEASURE_TABLE:-search_measure_alias}"
 CAP="${1:-0}"
-# Модель/thinking — штатные флаги openclaw agent (замер 17.08).
-WIKI_ALIAS_MODEL="${WIKI_ALIAS_MODEL:-}"
+# Модель/thinking — infer model run --gateway (замер 17.08).
+# Умолчание — своя vLLM Qwen3.8-27B (0 $); DeepSeek — через WIKI_ALIAS_MODEL.
+WIKI_ALIAS_MODEL="${WIKI_ALIAS_MODEL:-vllm/Qwen3.8-27B}"
 WIKI_ALIAS_THINKING="${WIKI_ALIAS_THINKING:-off}"
-MODEL_ARGS=()
-[ -n "$WIKI_ALIAS_MODEL" ] && MODEL_ARGS=(--model "$WIKI_ALIAS_MODEL")
 cd "$(dirname "$0")" || exit 1
+
+bash "$(cd "$(dirname "$0")/.." && pwd)/openclaw/ensure_vllm_gateway.sh" || echo "алиасы: ensure_vllm — предупреждение" >&2
 
 command -v openclaw >/dev/null 2>&1 || { echo "алиасы: openclaw не установлен — шаг пропущен"; exit 0; }
 psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $ALIAS_TABLE (src_table VARCHAR, aliases VARCHAR, best_used_for VARCHAR, not_enough_for VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
@@ -145,10 +146,9 @@ while :; do
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
-  "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key wiki-alias --json \
-    --thinking "$WIKI_ALIAS_THINKING" "${MODEL_ARGS[@]}" \
-    --message-file "$TMP/msg" \
-    > "$TMP/ans" 2>"$TMP/err" || {
+  "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
+    --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
+    --ans "$TMP/ans" --err "$TMP/err" || {
       # 🔴 ОДНА ОСЕЧКА НЕ ОСТАНАВЛИВАЕТ ВСЁ. [замер 30.07] на 143-й сущности из 686 модель
       # не ответила в срок (`LLM request timed out`), и прежний код обрывал цикл целиком —
       # остальные 543 остались без описания из-за одной пачки. Теперь пачка пропускается,
@@ -177,6 +177,7 @@ while :; do
   # Разбор ответа модели — своим кодом это разрешено (п. 20: проверка ответа модели).
   # Выдуманное имя величины отбрасывается: во входном списке его не было.
   python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json"
+  python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true
   # 🔴 ФАЙЛ ЧИТАЕТ ДВИЖОК, А НЕ МЫ. Каталогу права выставлены при создании, но
   # сам файл рождается с маской процесса: такт идёт из `build.sh`, где стоит
   # `umask 077` (секреты), и `rows.json` выходил 600 root — движок (`serenedb`)
@@ -267,10 +268,9 @@ while :; do
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
-  "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key wiki-alias --json \
-    --thinking "$WIKI_ALIAS_THINKING" "${MODEL_ARGS[@]}" \
-    --message-file "$TMP/msg" \
-    > "$TMP/ans" 2>"$TMP/err" || {
+  "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
+    --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
+    --ans "$TMP/ans" --err "$TMP/err" || {
       skipped=$((skipped + 1))
       echo "величины: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
       psql "$DSN" -q -c "INSERT INTO $MEASURE_TABLE
@@ -284,6 +284,7 @@ while :; do
       continue
     }
   python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json"
+  python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true
   chmod 644 "$TMP/rows.json" "$TMP/measures.json" 2>/dev/null
   # Только величины. rows.json с алиасами сущности здесь намеренно не пишется в
   # ALIAS_TABLE: добор не имеет права перезаписать уже собранные описания записей.
@@ -395,10 +396,11 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
       cat "$TMP/pay"
     } > "$TMP/msg"
     chmod 644 "$TMP/msg"
-    "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key wiki-alias --json \
-      --thinking "$WIKI_ALIAS_THINKING" "${MODEL_ARGS[@]}" \
-      --message-file "$TMP/msg" > "$TMP/ans" 2>"$TMP/err" || {
+    "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
+      --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
+      --ans "$TMP/ans" --err "$TMP/err" || {
         echo "разведение: пачка пропущена ($(head -c 100 "$TMP/err" | tr -d '\n'))" >&2; continue; }
+    python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true
     python3 - "$TMP/ans" "$TMP/rows.json" <<'PY2'
 import json, re, sys
 raw = open(sys.argv[1], encoding='utf-8', errors='replace').read()

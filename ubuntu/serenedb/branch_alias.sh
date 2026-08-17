@@ -55,6 +55,11 @@ FORK_LABEL_TABLE="${FORK_LABEL_TABLE:-search_fork_label}"
 CAP="${1:-0}"
 cd "$(dirname "$0")" || exit 1
 
+# 🔴 vLLM для словарей [17.08]: патч allowlist шлюза undebot (идемпотентно, бэкап).
+# Ключ/URL — из EnvironmentFile embed; без sudo, от undebot через runuser.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+bash "$SCRIPT_DIR/../openclaw/ensure_vllm_gateway.sh" || echo "развилки: ensure_vllm — предупреждение (см. stderr)" >&2
+
 command -v openclaw >/dev/null 2>&1 || { echo "развилки: openclaw не установлен — шаг пропущен"; exit 0; }
 # 🔴 DDL ДЕРЖИТСЯ И ЗДЕСЬ, а не только в `corpus_init.sql`: на базе без свежего init
 # контур иначе молча мёртв. GRANT — сразу: без него рендер ловит permission denied и
@@ -88,13 +93,12 @@ over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUD
 # 🔴 Свежий transcript на каждый прогон: битая сессия `branch-alias` от
 # биллингового прогона 16.08 ловила TranscriptNotContinuableError [17.08].
 BRANCH_ALIAS_SESSION="${BRANCH_ALIAS_SESSION_KEY:-branch-alias-$(date +%Y%m%d-%H%M%S)}"
-# Модель и thinking — через штатные флаги openclaw agent (замер 17.08).
-BRANCH_ALIAS_MODEL="${BRANCH_ALIAS_MODEL:-}"
+# Модель и thinking — через infer model run --gateway (замер 17.08).
+# Умолчание — своя vLLM Qwen3.8-27B (0 $); DeepSeek pro — через BRANCH_ALIAS_MODEL.
+BRANCH_ALIAS_MODEL="${BRANCH_ALIAS_MODEL:-vllm/Qwen3.8-27B}"
 BRANCH_ALIAS_THINKING="${BRANCH_ALIAS_THINKING:-off}"
 ZERO_STREAK_MAX="${BRANCH_ALIAS_ZERO_STREAK_MAX:-3}"
 zero_streak=0
-MODEL_ARGS=()
-[ -n "$BRANCH_ALIAS_MODEL" ] && MODEL_ARGS=(--model "$BRANCH_ALIAS_MODEL")
 
 # Отбор: класс с неподписанными ветками; за один вызов модели — не больше
 # SRC_CHUNK веток (на ut_test класс может нести сотни источников [17.08]).
@@ -178,10 +182,10 @@ while :; do
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
-  "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key "$BRANCH_ALIAS_SESSION" --json \
-    --thinking "$BRANCH_ALIAS_THINKING" "${MODEL_ARGS[@]}" \
-    --message-file "$TMP/msg" \
-    > "$TMP/ans" 2>"$TMP/err" || {
+  t_agent=$(date +%s)
+  "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
+    --model "$BRANCH_ALIAS_MODEL" --thinking "$BRANCH_ALIAS_THINKING" \
+    --ans "$TMP/ans" --err "$TMP/err" || {
       # 🔴 Биллинг, lock шлюза, summarization — не ответ модели: попытку не
       # списываем, пустышек не пишем, прогон прерываем (замер 17.08: 75 732
       # пустых label после billing error).
@@ -198,6 +202,7 @@ while :; do
     }
 
   # Ответ с кодом 0, но текст — служебная ошибка шлюза/провайдера.
+  wall_ms=$(( ($(date +%s) - t_agent) * 1000 ))
   if python3 ./branch_alias_parse.py --infra-check "$TMP/err" "$TMP/ans" 2>/dev/null; then
     aborted_infra=1
     echo "развилки: прогон прерван — инфра/биллинг в ответе агента" >&2
@@ -209,6 +214,8 @@ while :; do
   # подписью; чужой класс и выдуманная ветка отбрасываются разбором.
   parsed_n=$(python3 ./branch_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" | awk '{print $NF}')
   case "$parsed_n" in ''|*[!0-9]*) parsed_n=0;; esac
+  python3 ./alias_usage_log.py --contour branch --ans "$TMP/ans" \
+    --model "$BRANCH_ALIAS_MODEL" --wall-ms "$wall_ms" --parsed "$parsed_n" 2>/dev/null || true
   if [ "$parsed_n" -eq 0 ]; then
     zero_streak=$((zero_streak + 1))
     if [ "$zero_streak" -ge "$ZERO_STREAK_MAX" ]; then
@@ -233,7 +240,7 @@ while :; do
              columns := {fork_key:'VARCHAR', src:'VARCHAR', label:'VARCHAR'})) n
     ON (t.fork_key = n.fork_key AND t.src = n.src)
     WHEN MATCHED THEN UPDATE SET label = n.label, seen_at = n.seen_at
-    WHEN NOT MATCHED THEN INSERT" 2>&1 | grep -i error
+    WHEN NOT MATCHED THEN INSERT" 2>&1 | { grep -i error || true; }
   # Ветки, которые модель обошла или подписала пустым, помечаются попыткой — иначе
   # следующий круг этого же прогона спросит их снова, и так до конца бюджета.
   mark_attempt

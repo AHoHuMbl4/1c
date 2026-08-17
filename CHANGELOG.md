@@ -1,5 +1,20 @@
 # Журнал изменений
 
+## 17.08: словарные контуры на vLLM Qwen3.8-27B через шлюз OpenClaw `[замер]`
+
+`[замер]` DeepSeek баланс мёртв (−0,06); сплит flash/pro окна К **отменён** — своя
+vLLM бесплатна. Провайдер `vllm` в `openclaw.json` undebot (`patch_vllm_provider.py`,
+`ensure_vllm_gateway.sh`, бэкап конфига); вызов — **`openclaw infer model run --gateway`**
+(`alias_infer_gateway.py`): `modelRun` без tool payload. Дым branch ut_test: **parsed=1**,
+wall **39 с**, **$0**, `alias-usage.jsonl`; покрытие 7→8 классов. Полный прогон ut_test
+(**1074** класса) — `1c-branch-alias` CAP=0 в фоне.
+
+**Usage 15–17.08:** `runs/gateway-usage-20260815-20260817.md` — bench/branch/wiki **~$0.05**
+(DeepSeek 17.08); vLLM **$0**; 15–16.08 и бот-диалоги в gateway.log не агрегируются.
+
+**Не сделано:** wiki measures vLLM; замок coverage/json_ok vs pro на полном branch.
+
+
 ## 17.08: DeepSeek pro на новом коде — честная клетка 2×2 для выбора модели `[замер]`
 
 `[замер]` Один платный прогон 44 ut_test на `:8099` (DeepSeek pro, код

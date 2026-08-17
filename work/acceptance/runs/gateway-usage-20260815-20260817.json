@@ -1,0 +1,63 @@
+{
+  "since": "2026-08-15",
+  "until": "2026-08-17",
+  "aggregate": {
+    "('2026-08-17', 'branch', 'vllm/Qwen3.8-27B')": {
+      "calls": 1,
+      "in": 0,
+      "out": 0,
+      "total": 0,
+      "usd": 0.0,
+      "ms": 39000
+    },
+    "('2026-08-17', 'branch', 'deepseek/deepseek-v4-flash')": {
+      "calls": 6,
+      "in": 58271,
+      "out": 7622,
+      "total": 94053,
+      "usd": 0.01108058,
+      "ms": 185214
+    },
+    "('2026-08-17', 'branch', 'deepseek/deepseek-v4-pro')": {
+      "calls": 6,
+      "in": 58250,
+      "out": 6415,
+      "total": 92825,
+      "usd": 0.014332080000000002,
+      "ms": 222573
+    },
+    "('2026-08-17', 'wiki', 'deepseek/deepseek-v4-flash')": {
+      "calls": 4,
+      "in": 21457,
+      "out": 8390,
+      "total": 41111,
+      "usd": 0.005668572,
+      "ms": 133635
+    },
+    "('2026-08-17', 'wiki', 'deepseek/deepseek-v4-pro')": {
+      "calls": 4,
+      "in": 21456,
+      "out": 10215,
+      "total": 42935,
+      "usd": 0.011899831999999999,
+      "ms": 195931
+    },
+    "('2026-08-17', 'branch', 'deepseek-v4-pro')": {
+      "calls": 3,
+      "in": 20029,
+      "out": 4137,
+      "total": 36161,
+      "usd": 0.007436772,
+      "ms": 112451
+    },
+    "('2026-08-17', 'bench', '?')": {
+      "calls": 1,
+      "in": 0,
+      "out": 0,
+      "total": 0,
+      "usd": 0.0,
+      "ms": 18738
+    }
+  },
+  "total_usd": 0.05041783600000001
+}
