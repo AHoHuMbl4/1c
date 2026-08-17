@@ -1,0 +1,69 @@
+{
+  "mode": "overhead",
+  "run_dir": "/srv/1c/work/acceptance/runs/alias-bench-20260817-overhead",
+  "dsn_db": "ut_test",
+  "result": {
+    "control": {
+      "msg_bytes": 26,
+      "exit": 0,
+      "error": "",
+      "ms": 25242,
+      "usage": {
+        "input": 3576,
+        "output": 12,
+        "cache_read": 11520,
+        "total": 7571,
+        "model": "deepseek-v4-pro",
+        "reasoning": null,
+        "duration_ms": 5855
+      }
+    },
+    "branch_chunk40": {
+      "tag": "branch_chunk40",
+      "kind": "branch",
+      "gateway": true,
+      "model": "deepseek-v4-pro",
+      "thinking": "off",
+      "msg_bytes": 8089,
+      "exit": 0,
+      "error": "",
+      "ms": 39350,
+      "usage": {
+        "input": 6686,
+        "output": 1476,
+        "cache_read": 13824,
+        "total": 12152,
+        "model": "deepseek-v4-pro",
+        "reasoning": null,
+        "duration_ms": 22642
+      },
+      "metrics": {
+        "json_ok": true,
+        "expected_src": 16,
+        "covered_src": 16,
+        "nonempty": 16,
+        "echo_name": 0,
+        "parsed_rows": 16
+      },
+      "samples": [
+        {
+          "fork_key": "0446cdf43cef385408d50b1205c67f075cd18e8c",
+          "src": "accumulationregister_выручкаисебестоимостьпродаж",
+          "label": "Себестоимость проданных товаров в связке с выручкой — для расчёта валовой маржи и прибыльности продаж"
+        },
+        {
+          "fork_key": "0446cdf43cef385408d50b1205c67f075cd18e8c",
+          "src": "accumulationregister_партиизатратнавыпуск",
+          "label": "Затраты на производство и выпуск продукции по партиям — производственная себестоимость, а не торговая"
+        },
+        {
+          "fork_key": "0446cdf43cef385408d50b1205c67f075cd18e8c",
+          "src": "accumulationregister_партиирасходовнасебестоимостьтоваров",
+          "label": "Дополнительные (косвенные) расходы, разнесённые на товарные партии — надбавка к базовой себестоимости до полной"
+        }
+      ]
+    },
+    "overhead_input_est": 3576,
+    "payload_input_est": 6686
+  }
+}

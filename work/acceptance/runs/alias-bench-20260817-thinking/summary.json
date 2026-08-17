@@ -1,0 +1,59 @@
+{
+  "mode": "thinking",
+  "run_dir": "/srv/1c/work/acceptance/runs/alias-bench-20260817-thinking",
+  "dsn_db": "ut_test",
+  "result": {
+    "off": {
+      "tag": "think_off",
+      "kind": "branch",
+      "gateway": true,
+      "model": "deepseek-v4-pro",
+      "thinking": "off",
+      "msg_bytes": 8089,
+      "exit": 0,
+      "error": "",
+      "ms": 33751,
+      "usage": {
+        "input": 6657,
+        "output": 1185,
+        "cache_read": 13696,
+        "total": 11857,
+        "model": "deepseek-v4-pro",
+        "reasoning": null,
+        "duration_ms": 18133
+      },
+      "metrics": {
+        "json_ok": true,
+        "expected_src": 16,
+        "covered_src": 16,
+        "nonempty": 16,
+        "echo_name": 0,
+        "parsed_rows": 16
+      },
+      "samples": [
+        {
+          "fork_key": "0446cdf43cef385408d50b1205c67f075cd18e8c",
+          "src": "accumulationregister_выручкаисебестоимостьпродаж",
+          "label": "Себестоимость по факту реализованных продаж — затраты только по проданному, для расчёта валовой маржи"
+        },
+        {
+          "fork_key": "0446cdf43cef385408d50b1205c67f075cd18e8c",
+          "src": "accumulationregister_партиизатратнавыпуск",
+          "label": "Производственная себестоимость выпущенной продукции, по партиям производства"
+        },
+        {
+          "fork_key": "0446cdf43cef385408d50b1205c67f075cd18e8c",
+          "src": "accumulationregister_партиирасходовнасебестоимостьтоваров",
+          "label": "Дополнительные и косвенные расходы, распределяемые на себестоимость товаров по партиям"
+        }
+      ]
+    },
+    "high_attempt": {
+      "thinking": "high",
+      "exit": 1,
+      "error": "GatewayClientRequestError: Error: Thinking level \"high\" is not supported for deepseek/deepseek-v4-pro. Use one of: off.",
+      "ms": 18738,
+      "usage": {}
+    }
+  }
+}

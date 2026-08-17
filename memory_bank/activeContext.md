@@ -8,6 +8,13 @@ _Обновлено: **2026-08-17.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **Словари: модель зафиксирована замером `[17.08]`** — `deepseek-v4-pro`,
+thinking **off** (`BRANCH_ALIAS_THINKING` / `WIKI_ALIAS_THINKING`); flash
+отвергнут (wiki measures 50 % vs 100 % pro). Накладные шлюза ~3576 in +
+payload; прибор `alias_agent_bench.py`, runs `alias-bench-20260817-*`.
+**Хвост:** дождаться `1c-branch-alias` ut_test (старт 10:20 UTC) →
+`1c-wiki-alias` measures; итоговое покрытие fork_label / measure_alias.
+
 🔴 **okna шаг 4 — B sum на проде `[17.08]`**: md5 `8539aec6…`; «на какую сумму мы
 продали» → **figures B × 2** (`1572493.22` + `79435925.51`, SQL `sum(Всего)` до
 копейки); `branch_alias` undebot +59 подписей (313 всего). PROOF_NA: кассовые

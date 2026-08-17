@@ -57,6 +57,11 @@ ALIAS_TABLE="${ALIAS_TABLE:-search_entity_alias}"
 # ручкой, что и у сущностей, чтобы прогон рядом не трогал боевой словарь.
 MEASURE_TABLE="${MEASURE_TABLE:-search_measure_alias}"
 CAP="${1:-0}"
+# Модель/thinking — штатные флаги openclaw agent (замер 17.08).
+WIKI_ALIAS_MODEL="${WIKI_ALIAS_MODEL:-}"
+WIKI_ALIAS_THINKING="${WIKI_ALIAS_THINKING:-off}"
+MODEL_ARGS=()
+[ -n "$WIKI_ALIAS_MODEL" ] && MODEL_ARGS=(--model "$WIKI_ALIAS_MODEL")
 cd "$(dirname "$0")" || exit 1
 
 command -v openclaw >/dev/null 2>&1 || { echo "алиасы: openclaw не установлен — шаг пропущен"; exit 0; }
@@ -141,6 +146,7 @@ while :; do
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
   "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key wiki-alias --json \
+    --thinking "$WIKI_ALIAS_THINKING" "${MODEL_ARGS[@]}" \
     --message-file "$TMP/msg" \
     > "$TMP/ans" 2>"$TMP/err" || {
       # 🔴 ОДНА ОСЕЧКА НЕ ОСТАНАВЛИВАЕТ ВСЁ. [замер 30.07] на 143-й сущности из 686 модель
@@ -262,6 +268,7 @@ while :; do
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
   "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key wiki-alias --json \
+    --thinking "$WIKI_ALIAS_THINKING" "${MODEL_ARGS[@]}" \
     --message-file "$TMP/msg" \
     > "$TMP/ans" 2>"$TMP/err" || {
       skipped=$((skipped + 1))
@@ -389,6 +396,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     } > "$TMP/msg"
     chmod 644 "$TMP/msg"
     "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key wiki-alias --json \
+      --thinking "$WIKI_ALIAS_THINKING" "${MODEL_ARGS[@]}" \
       --message-file "$TMP/msg" > "$TMP/ans" 2>"$TMP/err" || {
         echo "разведение: пачка пропущена ($(head -c 100 "$TMP/err" | tr -d '\n'))" >&2; continue; }
     python3 - "$TMP/ans" "$TMP/rows.json" <<'PY2'

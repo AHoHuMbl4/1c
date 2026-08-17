@@ -88,6 +88,13 @@ over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUD
 # 🔴 Свежий transcript на каждый прогон: битая сессия `branch-alias` от
 # биллингового прогона 16.08 ловила TranscriptNotContinuableError [17.08].
 BRANCH_ALIAS_SESSION="${BRANCH_ALIAS_SESSION_KEY:-branch-alias-$(date +%Y%m%d-%H%M%S)}"
+# Модель и thinking — через штатные флаги openclaw agent (замер 17.08).
+BRANCH_ALIAS_MODEL="${BRANCH_ALIAS_MODEL:-}"
+BRANCH_ALIAS_THINKING="${BRANCH_ALIAS_THINKING:-off}"
+ZERO_STREAK_MAX="${BRANCH_ALIAS_ZERO_STREAK_MAX:-3}"
+zero_streak=0
+MODEL_ARGS=()
+[ -n "$BRANCH_ALIAS_MODEL" ] && MODEL_ARGS=(--model "$BRANCH_ALIAS_MODEL")
 
 # Отбор: класс с неподписанными ветками; за один вызов модели — не больше
 # SRC_CHUNK веток (на ut_test класс может нести сотни источников [17.08]).
@@ -172,6 +179,7 @@ while :; do
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
   "${RUNAS_BOT[@]}" openclaw agent --agent main --session-key "$BRANCH_ALIAS_SESSION" --json \
+    --thinking "$BRANCH_ALIAS_THINKING" "${MODEL_ARGS[@]}" \
     --message-file "$TMP/msg" \
     > "$TMP/ans" 2>"$TMP/err" || {
       # 🔴 Биллинг, lock шлюза, summarization — не ответ модели: попытку не
@@ -199,7 +207,17 @@ while :; do
   # Разбор ответа модели — своим кодом это разрешено (п. 20: проверка ответа модели).
   # В словарь попадают только пары (fork_key, src) из входной пачки с непустой
   # подписью; чужой класс и выдуманная ветка отбрасываются разбором.
-  python3 ./branch_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json"
+  parsed_n=$(python3 ./branch_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" | awk '{print $NF}')
+  case "$parsed_n" in ''|*[!0-9]*) parsed_n=0;; esac
+  if [ "$parsed_n" -eq 0 ]; then
+    zero_streak=$((zero_streak + 1))
+    if [ "$zero_streak" -ge "$ZERO_STREAK_MAX" ]; then
+      echo "развилки: $zero_streak пачек подряд без разбора — стоп (окно B)" >&2
+      break
+    fi
+  else
+    zero_streak=0
+  fi
   # 🔴 ФАЙЛ ЧИТАЕТ ДВИЖОК, А НЕ МЫ: права — рядом с записью (живой случай okna 13.08
   # у словаря сущностей: файл 600 root → «Permission denied» при исправной модели).
   chmod 644 "$TMP/rows.json" 2>/dev/null

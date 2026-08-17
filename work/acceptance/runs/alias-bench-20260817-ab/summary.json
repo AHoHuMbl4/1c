@@ -1,0 +1,676 @@
+{
+  "mode": "ab",
+  "run_dir": "/srv/1c/work/acceptance/runs/alias-bench-20260817-ab",
+  "dsn_db": "ut_test",
+  "result": {
+    "branch": [
+      {
+        "model": "deepseek/deepseek-v4-flash",
+        "n": 5,
+        "json_ok": 5,
+        "avg_in": 11654.2,
+        "avg_out": 1524.4,
+        "avg_ms": 32735,
+        "coverage_pct": 89.5,
+        "echo_name": 0
+      },
+      {
+        "model": "deepseek/deepseek-v4-pro",
+        "n": 5,
+        "json_ok": 5,
+        "avg_in": 11650.0,
+        "avg_out": 1283.0,
+        "avg_ms": 41078,
+        "coverage_pct": 47.4,
+        "echo_name": 0
+      }
+    ],
+    "wiki": [
+      {
+        "model": "deepseek/deepseek-v4-flash",
+        "n": 2,
+        "json_ok": 2,
+        "avg_in": 10728.5,
+        "avg_out": 4195.0,
+        "avg_ms": 42780,
+        "coverage_pct": 50.0,
+        "echo_name": 0
+      },
+      {
+        "model": "deepseek/deepseek-v4-pro",
+        "n": 2,
+        "json_ok": 2,
+        "avg_in": 10728.0,
+        "avg_out": 5107.5,
+        "avg_ms": 70124,
+        "coverage_pct": 100.0,
+        "echo_name": 0
+      }
+    ],
+    "raw": {
+      "branch": [
+        {
+          "tag": "branch_0_deepseek-v4-flash",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-flash",
+          "thinking": "off",
+          "msg_bytes": 8089,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 30156,
+          "usage": {
+            "input": 10777,
+            "output": 844,
+            "cache_read": 5632,
+            "total": 17253,
+            "model": "deepseek-v4-flash",
+            "reasoning": null,
+            "duration_ms": 11700
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 16,
+            "covered_src": 0,
+            "nonempty": 0,
+            "echo_name": 0,
+            "parsed_rows": 0
+          },
+          "samples": []
+        },
+        {
+          "tag": "branch_0_deepseek-v4-pro",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-pro",
+          "thinking": "off",
+          "msg_bytes": 8089,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 41486,
+          "usage": {
+            "input": 10773,
+            "output": 891,
+            "cache_read": 5632,
+            "total": 17296,
+            "model": "deepseek-v4-pro",
+            "reasoning": null,
+            "duration_ms": 29466
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 16,
+            "covered_src": 16,
+            "nonempty": 16,
+            "echo_name": 0,
+            "parsed_rows": 16
+          },
+          "samples": [
+            {
+              "fork_key": "0446cdf43cef385408d50b1205c67f075cd18e8c",
+              "src": "accumulationregister_выручкаисебестоимостьпродаж",
+              "label": "Факт выручки и себестоимости именно по продажам: себестоимость, списанная при реализации, в связке с выручкой для расчёта валовой маржи и прибыльности сделок."
+            },
+            {
+              "fork_key": "0446cdf43cef385408d50b1205c67f075cd18e8c",
+              "src": "accumulationregister_партиизатратнавыпуск",
+              "label": "Затраты, отнесённые на выпуск готовой продукции по производственным партиям — производственная (заводская) себестоимость, а не торговая."
+            },
+            {
+              "fork_key": "0446cdf43cef385408d50b1205c67f075cd18e8c",
+              "src": "accumulationregister_партиирасходовнасебестоимостьтоваров",
+              "label": "Дополнительные/косвенные расходы, разнесённые на товарные партии сверх основной себестоимости — формирует полную себестоимость товара, а не только закупочную/производственную."
+            }
+          ]
+        },
+        {
+          "tag": "branch_1_deepseek-v4-flash",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-flash",
+          "thinking": "off",
+          "msg_bytes": 12440,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 30033,
+          "usage": {
+            "input": 11888,
+            "output": 1722,
+            "cache_read": 5632,
+            "total": 19242,
+            "model": "deepseek-v4-flash",
+            "reasoning": null,
+            "duration_ms": 16870
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 40,
+            "covered_src": 40,
+            "nonempty": 40,
+            "echo_name": 0,
+            "parsed_rows": 40
+          },
+          "samples": [
+            {
+              "fork_key": "05248160eb39d0f1c2f6d07458bfb4d5a346037d",
+              "src": "constant_максимальныйразмерфайлаобластиданных",
+              "label": "Константа настройки системы — предельный размер файла области данных; не является хозфактом, влияет только на тех. параметры хранения"
+            },
+            {
+              "fork_key": "05248160eb39d0f1c2f6d07458bfb4d5a346037d",
+              "src": "constant_минимальнаядостоверностьноменклатурыпродаваемойсовместно",
+              "label": "Порог достоверности для алгоритма кросс-продаж номенклатуры; настройка, а не факт учёта стоимости"
+            },
+            {
+              "fork_key": "05248160eb39d0f1c2f6d07458bfb4d5a346037d",
+              "src": "constant_минимальнаязначимостьноменклатурыпродаваемойсовместно",
+              "label": "Порог значимости в алгоритме совместных продаж; настройка анализа, не связано со стоимостью"
+            }
+          ]
+        },
+        {
+          "tag": "branch_1_deepseek-v4-pro",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-pro",
+          "thinking": "off",
+          "msg_bytes": 12440,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 47644,
+          "usage": {
+            "input": 11884,
+            "output": 1562,
+            "cache_read": 5632,
+            "total": 19078,
+            "model": "deepseek-v4-pro",
+            "reasoning": null,
+            "duration_ms": 33992
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 40,
+            "covered_src": 40,
+            "nonempty": 40,
+            "echo_name": 0,
+            "parsed_rows": 40
+          },
+          "samples": [
+            {
+              "fork_key": "05248160eb39d0f1c2f6d07458bfb4d5a346037d",
+              "src": "constant_максимальныйразмерфайлаобластиданных",
+              "label": "порог размера файла области данных (служебный лимит), а не хозяйственная забалансовая стоимость"
+            },
+            {
+              "fork_key": "05248160eb39d0f1c2f6d07458bfb4d5a346037d",
+              "src": "constant_минимальнаядостоверностьноменклатурыпродаваемойсовместно",
+              "label": "пороговое значение достоверности для совместно продаваемых товаров — настройка, не стоимость"
+            },
+            {
+              "fork_key": "05248160eb39d0f1c2f6d07458bfb4d5a346037d",
+              "src": "constant_минимальнаязначимостьноменклатурыпродаваемойсовместно",
+              "label": "порог значимости товара при совместной продаже — настройка аналитики, не стоимость"
+            }
+          ]
+        },
+        {
+          "tag": "branch_2_deepseek-v4-flash",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-flash",
+          "thinking": "off",
+          "msg_bytes": 19454,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 37932,
+          "usage": {
+            "input": 12930,
+            "output": 1833,
+            "cache_read": 5632,
+            "total": 20395,
+            "model": "deepseek-v4-flash",
+            "reasoning": null,
+            "duration_ms": 18832
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 40,
+            "covered_src": 40,
+            "nonempty": 40,
+            "echo_name": 0,
+            "parsed_rows": 40
+          },
+          "samples": [
+            {
+              "fork_key": "0537ff0c908defa982de1048c0ae0e916c33ac01",
+              "src": "accumulationregister_бонусныебаллы",
+              "label": "Начисленные и списанные бонусные баллы клиентам — лояльность, а не деньги; с НДС не связан"
+            },
+            {
+              "fork_key": "0537ff0c908defa982de1048c0ae0e916c33ac01",
+              "src": "accumulationregister_выручкаисебестоимостьпродаж",
+              "label": "Выручка и себестоимость продаж с НДС в составе выручки — экономический результат реализации, а не налоговые регистры"
+            },
+            {
+              "fork_key": "0537ff0c908defa982de1048c0ae0e916c33ac01",
+              "src": "accumulationregister_графикотгрузкитоваров",
+              "label": "План отгрузок товаров клиентам — плановый график, не факт реализации и не объём НДС"
+            }
+          ]
+        },
+        {
+          "tag": "branch_2_deepseek-v4-pro",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-pro",
+          "thinking": "off",
+          "msg_bytes": 19454,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 51450,
+          "usage": {
+            "input": 12924,
+            "output": 1746,
+            "cache_read": 5632,
+            "total": 20302,
+            "model": "deepseek-v4-pro",
+            "reasoning": null,
+            "duration_ms": 36658
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 40,
+            "covered_src": 0,
+            "nonempty": 0,
+            "echo_name": 0,
+            "parsed_rows": 0
+          },
+          "samples": []
+        },
+        {
+          "tag": "branch_3_deepseek-v4-flash",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-flash",
+          "thinking": "off",
+          "msg_bytes": 14795,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 33091,
+          "usage": {
+            "input": 12216,
+            "output": 2289,
+            "cache_read": 5632,
+            "total": 20137,
+            "model": "deepseek-v4-flash",
+            "reasoning": null,
+            "duration_ms": 20759
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 40,
+            "covered_src": 40,
+            "nonempty": 40,
+            "echo_name": 0,
+            "parsed_rows": 40
+          },
+          "samples": [
+            {
+              "fork_key": "05abebc3d15a450e24d33b3c6917bee0a852000f",
+              "src": "businessprocess_согласованиеценноменклатуры_результатысогласования",
+              "label": "ИТОГИ голосования по ценам номенклатуры: фиксирует утверждённые/отклонённые решения, версии и результаты — источник номер один для контроля согласований, другие источники процесса не дают итоговый вердикт"
+            },
+            {
+              "fork_key": "05abebc3d15a450e24d33b3c6917bee0a852000f",
+              "src": "businessprocess_типоваяпродажа",
+              "label": "сам стандартный процесс продажи: вехи и этапы типовой сделки — описывает ХОД сделки, а не итоговую цифру согласования цен; отличается от результатов согласования тем, что это процесс, а не вердикт"
+            },
+            {
+              "fork_key": "05abebc3d15a450e24d33b3c6917bee0a852000f",
+              "src": "catalog_банковскиесчетаконтрагентов",
+              "label": "справочник платёжных реквизитов партнёров/клиентов: реквизиты для расчётов с контрагентами — не организация, а внешняя сторона, счета кому мы платим"
+            }
+          ]
+        },
+        {
+          "tag": "branch_3_deepseek-v4-pro",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-pro",
+          "thinking": "off",
+          "msg_bytes": 14795,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 35199,
+          "usage": {
+            "input": 12214,
+            "output": 1541,
+            "cache_read": 5632,
+            "total": 19387,
+            "model": "deepseek-v4-pro",
+            "reasoning": null,
+            "duration_ms": 24409
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 40,
+            "covered_src": 0,
+            "nonempty": 0,
+            "echo_name": 0,
+            "parsed_rows": 0
+          },
+          "samples": []
+        },
+        {
+          "tag": "branch_4_deepseek-v4-flash",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-flash",
+          "thinking": "off",
+          "msg_bytes": 5934,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 32463,
+          "usage": {
+            "input": 10460,
+            "output": 934,
+            "cache_read": 5632,
+            "total": 17026,
+            "model": "deepseek-v4-flash",
+            "reasoning": null,
+            "duration_ms": 15330
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 16,
+            "covered_src": 16,
+            "nonempty": 16,
+            "echo_name": 0,
+            "parsed_rows": 16
+          },
+          "samples": [
+            {
+              "fork_key": "06a0181c9b685e0323f20d567bbb2233bda53407",
+              "src": "accumulationregister_расчетыспоставщиками",
+              "label": "фактическое состояние взаиморасчётов с поставщиками: накопленные обороты по задолженности, авансам и оплатам в денежном выражении — итоговая сумма к оплате/поступлению на текущий момент"
+            },
+            {
+              "fork_key": "06a0181c9b685e0323f20d567bbb2233bda53407",
+              "src": "accumulationregister_расчетыспоставщикамипланпоставок",
+              "label": "плановые суммы предстоящих поступлений от поставщиков по графику поставок — прогноз входящего денежного потока, а не фактическая задолженность"
+            },
+            {
+              "fork_key": "06a0181c9b685e0323f20d567bbb2233bda53407",
+              "src": "catalog_контрагенты",
+              "label": "справочник юридических лиц для бухгалтерии: ИНН и налоговые реквизиты контрагента — факт существования юрлица, без сумм взаиморасчётов"
+            }
+          ]
+        },
+        {
+          "tag": "branch_4_deepseek-v4-pro",
+          "kind": "branch",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-pro",
+          "thinking": "off",
+          "msg_bytes": 5934,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 29612,
+          "usage": {
+            "input": 10455,
+            "output": 675,
+            "cache_read": 5632,
+            "total": 16762,
+            "model": "deepseek-v4-pro",
+            "reasoning": null,
+            "duration_ms": 14237
+          },
+          "metrics": {
+            "json_ok": true,
+            "expected_src": 16,
+            "covered_src": 16,
+            "nonempty": 16,
+            "echo_name": 0,
+            "parsed_rows": 16
+          },
+          "samples": [
+            {
+              "fork_key": "06a0181c9b685e0323f20d567bbb2233bda53407",
+              "src": "accumulationregister_расчетыспоставщиками",
+              "label": "Фактические обороты взаиморасчётов с поставщиками — суммы к оплате и к поступлению, остатки кредиторской задолженности в динамике"
+            },
+            {
+              "fork_key": "06a0181c9b685e0323f20d567bbb2233bda53407",
+              "src": "accumulationregister_расчетыспоставщикамипланпоставок",
+              "label": "Плановые будущие поступления от поставщиков в деньгах — прогноз и график поставок, а не свершившиеся расчёты"
+            },
+            {
+              "fork_key": "06a0181c9b685e0323f20d567bbb2233bda53407",
+              "src": "catalog_контрагенты",
+              "label": "Юридические реквизиты (ИНН и др.) для бухгалтерского и налогового учёта контрагента"
+            }
+          ]
+        }
+      ],
+      "wiki": [
+        {
+          "tag": "wiki_0_deepseek-v4-flash",
+          "kind": "wiki_measures",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-flash",
+          "thinking": "off",
+          "msg_bytes": 6259,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 36869,
+          "usage": {
+            "input": 10727,
+            "output": 3372,
+            "cache_read": 5632,
+            "total": 19731,
+            "model": "deepseek-v4-flash",
+            "reasoning": null,
+            "duration_ms": 24322
+          },
+          "metrics": {
+            "json_ok": true,
+            "entities": 20,
+            "expected_quantities": 40,
+            "covered_quantities": 40,
+            "measure_nonempty": 40,
+            "parsed_entities": 20
+          },
+          "samples": [
+            {
+              "entity": "accumulationregister_бонусныебаллы",
+              "aliases": "Бонусные Баллы"
+            },
+            {
+              "entity": "catalog_бонусныепрограммылояльности",
+              "aliases": "Бонусные Программы Лояльности"
+            },
+            {
+              "entity": "accumulationregister_бонусныебаллы",
+              "measure": "КСписанию",
+              "aliases": "баллы к списанию, сумма к списанию"
+            },
+            {
+              "entity": "accumulationregister_бонусныебаллы",
+              "measure": "Начислено",
+              "aliases": "начисленные баллы, сумма начисления"
+            }
+          ]
+        },
+        {
+          "tag": "wiki_0_deepseek-v4-pro",
+          "kind": "wiki_measures",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-pro",
+          "thinking": "off",
+          "msg_bytes": 6259,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 66605,
+          "usage": {
+            "input": 10728,
+            "output": 4821,
+            "cache_read": 5632,
+            "total": 21181,
+            "model": "deepseek-v4-pro",
+            "reasoning": null,
+            "duration_ms": 51457
+          },
+          "metrics": {
+            "json_ok": true,
+            "entities": 20,
+            "expected_quantities": 40,
+            "covered_quantities": 40,
+            "measure_nonempty": 40,
+            "parsed_entities": 20
+          },
+          "samples": [
+            {
+              "entity": "accumulationregister_бонусныебаллы",
+              "aliases": "Бонусные Баллы, бонусные баллы, остатки бонусных баллов, регистр бонусных баллов"
+            },
+            {
+              "entity": "catalog_бонусныепрограммылояльности",
+              "aliases": "Бонусные Программы Лояльности, программы лояльности, бонусная программа, программа лояльности"
+            },
+            {
+              "entity": "accumulationregister_бонусныебаллы",
+              "measure": "КСписанию",
+              "aliases": "к списанию, доступно к списанию, баллы к списанию"
+            },
+            {
+              "entity": "accumulationregister_бонусныебаллы",
+              "measure": "Начислено",
+              "aliases": "начислено, начисленные баллы, баллы начислено"
+            }
+          ]
+        },
+        {
+          "tag": "wiki_1_deepseek-v4-flash",
+          "kind": "wiki_measures",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-flash",
+          "thinking": "off",
+          "msg_bytes": 6259,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 48690,
+          "usage": {
+            "input": 10730,
+            "output": 5018,
+            "cache_read": 5632,
+            "total": 21380,
+            "model": "deepseek-v4-flash",
+            "reasoning": null,
+            "duration_ms": 34925
+          },
+          "metrics": {
+            "json_ok": true,
+            "entities": 0,
+            "expected_quantities": 40,
+            "covered_quantities": 0,
+            "measure_nonempty": 0,
+            "parsed_entities": 0
+          },
+          "samples": []
+        },
+        {
+          "tag": "wiki_1_deepseek-v4-pro",
+          "kind": "wiki_measures",
+          "gateway": false,
+          "model": "deepseek/deepseek-v4-pro",
+          "thinking": "off",
+          "msg_bytes": 6259,
+          "exit": 0,
+          "error": "[plugins] plugins.allow is empty; discovered non-bundled plugins may auto-load: deepseek (/srv/1c/out/openclaw-dict-bench/state2/npm/projects/openclaw-deepseek-provider-2481ed984b/node_modules/@openclaw/deepseek-provider/dist/index.js). To trust them explicitly, set plugins.allow in openclaw.json (e.g. \"plugins\": { \"allow\": [\"deepseek\"] }). Run 'openclaw plugins list --enabled --verbose' or 'openclaw plugins inspect deepseek' to confirm plugin ids.\n[plugins] plugins.allow is empty; discovered no",
+          "ms": 73643,
+          "usage": {
+            "input": 10728,
+            "output": 5394,
+            "cache_read": 5632,
+            "total": 21754,
+            "model": "deepseek-v4-pro",
+            "reasoning": null,
+            "duration_ms": 58792
+          },
+          "metrics": {
+            "json_ok": true,
+            "entities": 20,
+            "expected_quantities": 40,
+            "covered_quantities": 40,
+            "measure_nonempty": 40,
+            "parsed_entities": 20
+          },
+          "samples": [
+            {
+              "entity": "accumulationregister_бонусныебаллы",
+              "aliases": "Бонусные Баллы, Бонусные баллы регистр, Регистр бонусных баллов, Накопление бонусных баллов"
+            },
+            {
+              "entity": "catalog_бонусныепрограммылояльности",
+              "aliases": "Бонусные Программы Лояльности, Программы лояльности, Бонусные программы, Программа лояльности"
+            },
+            {
+              "entity": "accumulationregister_бонусныебаллы",
+              "measure": "КСписанию",
+              "aliases": "К списанию, КСписанию, Баллы к списанию"
+            },
+            {
+              "entity": "accumulationregister_бонусныебаллы",
+              "measure": "Начислено",
+              "aliases": "Начислено, Начисленные баллы, Баллы начислено"
+            }
+          ]
+        }
+      ]
+    },
+    "decision": {
+      "winner": "pro",
+      "reason": "wiki measures coverage flash 50% < pro 100%; branch alone insufficient",
+      "flash_branch": {
+        "model": "deepseek/deepseek-v4-flash",
+        "n": 5,
+        "json_ok": 5,
+        "avg_in": 11654.2,
+        "avg_out": 1524.4,
+        "avg_ms": 32735,
+        "coverage_pct": 89.5,
+        "echo_name": 0
+      },
+      "flash_wiki": {
+        "model": "deepseek/deepseek-v4-flash",
+        "n": 2,
+        "json_ok": 2,
+        "avg_in": 10728.5,
+        "avg_out": 4195.0,
+        "avg_ms": 42780,
+        "coverage_pct": 50.0,
+        "echo_name": 0
+      },
+      "pro_branch": {
+        "model": "deepseek/deepseek-v4-pro",
+        "n": 5,
+        "json_ok": 5,
+        "avg_in": 11650.0,
+        "avg_out": 1283.0,
+        "avg_ms": 41078,
+        "coverage_pct": 47.4,
+        "echo_name": 0
+      },
+      "pro_wiki": {
+        "model": "deepseek/deepseek-v4-pro",
+        "n": 2,
+        "json_ok": 2,
+        "avg_in": 10728.0,
+        "avg_out": 5107.5,
+        "avg_ms": 70124,
+        "coverage_pct": 100.0,
+        "echo_name": 0
+      }
+    }
+  }
+}

@@ -3740,6 +3740,30 @@ seen_at, живая подпись не трогается (`WHEN MATCHED AND co
 endpoint, отвечающий без авторизации, не доказывает ничего из того, что
 требует авторизации.
 
+## 3.81 Словарные контуры: thinking DeepSeek v4 на шлюзе и «дешёвый» flash
+
+**Что сделал не так.** Считал, что расход ds_chat (ответы бота) покрывает
+и словари: `wiki_alias.sh` / `branch_alias.sh` зовут **штатного агента
+OpenClaw** через шлюз undebot — отдельный счётчик токенов, в `diag.tokens`
+сервиса ответов не попадает. Для DeepSeek v4 thinking по умолчанию
+оплачивается как output; в ds_chat он выключен (`DS_THINKING=disabled`),
+у агента — не проверялось.
+
+**Чем кончилось (17.08).** Замер `alias_agent_bench.py`: на боевом шлюзе
+`deepseek-v4-pro` **принимает только `--thinking off`** — `high` отклоняется
+до вызова провайдера; в `usage.reasoning` всегда `null`, thinking-токенов
+нет. Накладные на вызов: ~3576 input (системный контекст) + payload
+(~6686 input на чанк 8 КБ branch). A/B flash vs pro (thinking off): flash
+output дешевле (~3×), но на **wiki measures** coverage **50 % vs 100 %**
+(pro стабильнее на величинах) — flash для словарей не принят. Override
+`deepseek-v4-flash` на gateway **блокируется allowlist** агента main.
+
+**Как надо.** Перед сменой модели словарей — замер на том же чанке:
+валидность JSON, покрытие src парсером, echo_name, токены из
+`result.meta.agentMeta.usage`. Thinking держать **off** явным флагом
+(`BRANCH_ALIAS_THINKING` / `WIKI_ALIAS_THINKING`). Flash — только после
+A/B на **обоих** контурах (branch + wiki measures), не по одному.
+
 ## 3.80 Реранкер 401/сбой → порядок прежний, ответ выглядит «успешным»
 
 **Что сделал не так.** Считал, что живой эмбеддер = живой смысловой контур

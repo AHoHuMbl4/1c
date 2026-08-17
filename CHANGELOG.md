@@ -1,5 +1,42 @@
 # Журнал изменений
 
+## 17.08: замер стоимости агентских словарей (branch/wiki_alias) — pro, thinking off `[замер]`
+
+`[замер]` Прибор `work/entity-choice/alias_agent_bench.py`; артефакты
+`work/acceptance/runs/alias-bench-20260817-{overhead,thinking,ab}/`.
+
+**Накладные шлюза undebot** (`openclaw agent --json`, production path):
+контроль 26 B → input **3576**, output 12, cache_read 11520, total 7571;
+боевой чанк branch 8089 B → input **6686**, output 1476, total 12152,
+~39 с; `reasoning: null` — thinking-токенов нет.
+
+**Thinking:** для `deepseek/deepseek-v4-pro` шлюз принимает только
+`--thinking off`; `high` → ошибка «not supported… Use one of: off»
+(thinking/summary.json). До/после на одном чанке: off output 1185 vs
+блокировка high.
+
+**A/B flash vs pro** (local bench, thinking off, 5 branch + 2 wiki пачки
+ut_test):
+
+| контур | flash coverage | pro coverage | flash avg out | pro avg out |
+|---|---:|---:|---:|---:|
+| branch (5×40 src) | 89,5 % | 47,4 %* | 1524 | 1283 |
+| wiki measures (2×40) | **50 %** | **100 %** | 4195 | 5107 |
+
+\* pro: 2/5 чанков branch разобрались в 0 (нестабильность JSON), flash
+стабильнее на branch, но wiki flash второй пачкой = 0 entities.
+
+**Решение:** `deepseek-v4-pro`, thinking **off** (flash не принят: wiki
+50 % < 100 %). Контуры: `BRANCH_ALIAS_THINKING` / `WIKI_ALIAS_THINKING`
+(умолч. off), опционально `*_MODEL`; гвард «3 нуля = стоп»
+(`BRANCH_ALIAS_ZERO_STREAK_MAX=3`). Gateway override flash блокируется
+allowlist агента main.
+
+**Прогоны ut_test (вне пика, 10:20 UTC):** `systemctl start
+1c-branch-alias` — в ходе; `1c-wiki-alias` measures — после branch.
+До прогона: fork_label 1411 непустых, measure_alias 0.
+
+
 ## 17.08: okna возвращена на проверенный код; правило сериализации выкатов `[замер]` `[решение]`
 
 `[замер]` Окно Ф откатило okna за состояние 15.08 (`9d636592`, до волны-1):
