@@ -1,0 +1,522 @@
+{
+  "ts": "2026-08-17T16:25:12Z",
+  "model": "Qwen3.8-27B",
+  "base": "https://a1f19thc-8000.thundercompute.net",
+  "thinking_off_body": true,
+  "thinking": {
+    "simple_chat": [
+      {
+        "mode": "default",
+        "sec": 3.76,
+        "content_len": 98,
+        "reasoning_len": 0,
+        "reasoning_tokens": null,
+        "completion_tokens": 27,
+        "prompt_tokens": 58,
+        "usage_keys": [
+          "completion_tokens",
+          "prompt_tokens",
+          "prompt_tokens_details",
+          "total_tokens"
+        ],
+        "content_preview": "The user wants me to reply with exactly one word: \"OK\". This is a simple, direct instruction.\n\n\nOK",
+        "reasoning_preview": ""
+      },
+      {
+        "mode": "thinking_off",
+        "sec": 0.64,
+        "content_len": 2,
+        "reasoning_len": 0,
+        "reasoning_tokens": null,
+        "completion_tokens": 2,
+        "prompt_tokens": 18,
+        "usage_keys": [
+          "completion_tokens",
+          "prompt_tokens",
+          "prompt_tokens_details",
+          "total_tokens"
+        ],
+        "content_preview": "OK",
+        "reasoning_preview": ""
+      }
+    ],
+    "parse_intent_probe": [
+      {
+        "mode": "default",
+        "raw_len": 1674,
+        "json_blocks": 0,
+        "parse_ok": false,
+        "has_prose_outside_json": false,
+        "parsed_keys": [],
+        "raw_head": "We need answer user's request. Need convert question to JSON only. User Russian: \"На какую сумму мы продали товары в январе 2024?\" Means \"For what amount did we sell goods in January 2024?\" Need outpu"
+      },
+      {
+        "mode": "thinking_off_body",
+        "raw_len": 182,
+        "json_blocks": 1,
+        "parse_ok": true,
+        "has_prose_outside_json": false,
+        "parsed_keys": [
+          "about",
+          "amount",
+          "kind",
+          "measure",
+          "period",
+          "terms",
+          "want"
+        ],
+        "raw_head": "{\n  \"terms\": [],\n  \"amount\": null,\n  \"period\": {\n    \"from\": \"2024-01-01\",\n    \"to\": \"2024-01-31\"\n  },\n  \"want\": \"sum\",\n  \"measure\": \"сумма\",\n  \"kind\": \"продажи\",\n  \"about\": \"data\"\n}"
+      }
+    ]
+  },
+  "json_discipline": {
+    "n": 50,
+    "valid_rate": 1.0,
+    "valid": 50,
+    "failed": 0,
+    "post_trim_lost": 0,
+    "rows": [
+      {
+        "i": 1,
+        "q": "На какую сумму мы закупили товаров и услуг?",
+        "sec": 5.53,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 2,
+        "q": "Сколько НДС мы заплатили поставщикам?",
+        "sec": 7.67,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 3,
+        "q": "На какую сумму мы продали товаров и услуг?",
+        "sec": 7.25,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 4,
+        "q": "Сколько НДС в наших продажах?",
+        "sec": 7.94,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 5,
+        "q": "Сколько штук товара мы продали?",
+        "sec": 7.39,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 6,
+        "q": "Сколько штук мы закупили?",
+        "sec": 6.09,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 7,
+        "q": "Какая самая высокая цена за единицу в продажах?",
+        "sec": 7.47,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 8,
+        "q": "Сколько у нас партнёров?",
+        "sec": 8.05,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 9,
+        "q": "Сколько у нас контрагентов?",
+        "sec": 5.8,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 10,
+        "q": "Сколько позиций номенклатуры в справочнике?",
+        "sec": 6.37,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 11,
+        "q": "Сколько у нас организаций?",
+        "sec": 5.8,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 12,
+        "q": "Сколько у нас складов?",
+        "sec": 5.22,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 13,
+        "q": "Сколько документов реализации товаров и услуг?",
+        "sec": 5.8,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 14,
+        "q": "Сколько строк товаров во всех документах реализации?",
+        "sec": 5.73,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 15,
+        "q": "Сколько документов приобретения товаров и услуг?",
+        "sec": 5.93,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 16,
+        "q": "Сколько заказов клиентов оформлено и на какую сумму?",
+        "sec": 6.17,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 17,
+        "q": "Во что нам обошлись закупки?",
+        "sec": 5.97,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 18,
+        "q": "Кто нам поставляет товар?",
+        "sec": 5.19,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 19,
+        "q": "Сколько денег нам должны клиенты?",
+        "sec": 7.19,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 20,
+        "q": "Сколько мы отгрузили за всё время?",
+        "sec": 8.55,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 21,
+        "q": "На какую сумму мы продали ООО \"Ромашка\"?",
+        "sec": 10.67,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 22,
+        "q": "Сколько велосипедов мы продали?",
+        "sec": 7.18,
+        "error": null,
+        "lost": [],
+        "fixed": [
+          "kind/measure in terms:1"
+        ]
+      },
+      {
+        "i": 23,
+        "q": "Какая у нас была выручка за 2022 год?",
+        "sec": 11.19,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 24,
+        "q": "Сколько ноутбуков мы продали?",
+        "sec": 6.45,
+        "error": null,
+        "lost": [],
+        "fixed": [
+          "kind/measure in terms:1"
+        ]
+      },
+      {
+        "i": 25,
+        "q": "Сколько анкет заполнено?",
+        "sec": 5.6,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 26,
+        "q": "Сколько у нас товаров?",
+        "sec": 5.44,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 27,
+        "q": "На какую сумму?",
+        "sec": 5.43,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 28,
+        "q": "Сколько мы продали за год?",
+        "sec": 8.7,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 29,
+        "q": "Покажи сумму по приобретениям",
+        "sec": 6.15,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 30,
+        "q": "Какая самая крупная продажа и когда?",
+        "sec": 5.69,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 31,
+        "q": "Какая самая маленькая продажа?",
+        "sec": 8.48,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 32,
+        "q": "Средняя сумма документа реализации?",
+        "sec": 7.07,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 33,
+        "q": "Сколько денег поступило на расчётный счёт?",
+        "sec": 5.8,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 34,
+        "q": "Сколько мы списали с расчётного счёта?",
+        "sec": 6.1,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 35,
+        "q": "Сколько мы продали в декабре 2017 года?",
+        "sec": 8.64,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 36,
+        "q": "Сколько продали в 2016 году?",
+        "sec": 7.99,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 37,
+        "q": "Сколько мы продали в 2018 году?",
+        "sec": 9.26,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 38,
+        "q": "Когда была последняя продажа?",
+        "sec": 5.52,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 39,
+        "q": "Какой самый ранний документ в базе?",
+        "sec": 5.68,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 40,
+        "q": "Сколько мы продали Альтаиру?",
+        "sec": 10.74,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 41,
+        "q": "Что и на сколько мы закупали у Базы \"Электротовары\"?",
+        "sec": 13.87,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 42,
+        "q": "Сколько кроссовок ADIDAS мы продали?",
+        "sec": 6.76,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 43,
+        "q": "На какую сумму продали техники BOSCH?",
+        "sec": 7.52,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 44,
+        "q": "Какой ИНН у контрагента Алмаз?",
+        "sec": 10.03,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 45,
+        "q": "Сколько записей замеров времени в базе?",
+        "sec": 5.88,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 46,
+        "q": "Сколько ролей роздано профилям групп доступа?",
+        "sec": 7.5,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 47,
+        "q": "Сколько всего служебных записей в базе и сколько деловых?",
+        "sec": 8.67,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 48,
+        "q": "Сколько записей в регистре закупок и на какую сумму?",
+        "sec": 5.73,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 49,
+        "q": "Сколько товара сейчас на складах?",
+        "sec": 5.57,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      },
+      {
+        "i": 50,
+        "q": "Какой был самый высокий курс евро и когда?",
+        "sec": 8.22,
+        "error": null,
+        "lost": [],
+        "fixed": []
+      }
+    ]
+  },
+  "determinism": {
+    "question": "На какую сумму мы продали товары в январе 2024?",
+    "repeats": 5,
+    "unique": 1,
+    "stable": true,
+    "variants": [
+      "{\"about\": \"data\", \"amount\": {}, \"kind\": \"продажи\", \"measure\": \"сумма\", \"period\": {\"from\": \"2024-01-01\", \"to\": \"2024-01-31\"}, \"terms\": [], \"want\": \"sum\"}"
+    ]
+  },
+  "usage_sample": {
+    "usage": {
+      "prompt_tokens": 22,
+      "total_tokens": 46,
+      "completion_tokens": 24,
+      "prompt_tokens_details": null
+    },
+    "usage_keys": [
+      "completion_tokens",
+      "prompt_tokens",
+      "prompt_tokens_details",
+      "total_tokens"
+    ],
+    "message_keys": [
+      "annotations",
+      "audio",
+      "content",
+      "function_call",
+      "reasoning",
+      "refusal",
+      "role"
+    ],
+    "diag_tokens_shape": {
+      "calls": 0,
+      "in": 0,
+      "out": 0
+    }
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "date": "2026-08-17",
+  "quant": "FP8 weights + FP8 KV",
+  "goal_vram_gb": 48,
+  "model": "Qwen3.8-27B",
+  "vllm_base": "https://a1f19thc-8000.thundercompute.net",
+  "vllm_max_model_len": 16384,
+  "vllm_max_num_seqs": 8,
+  "vllm_tool_parser": "qwen3_xml",
+  "ask_port": 8098,
+  "dbname": "ut_test",
+  "ask_pid": 237970,
+  "ask_started": "2026-08-17T12:54:47",
+  "note": "Тот же процесс :8098, что снял BF16 (start-8098.sh, код репо). Бэкенд vLLM переключён владельцем на FP8; код процесса не перезапускался.",
+  "gates": {
+    "parse_intent": "50/50",
+    "lost": 0,
+    "determinism_unique": 1,
+    "determinism_repeats": 5,
+    "stable": true
+  },
+  "step4": {
+    "n": 44,
+    "wrong": 0,
+    "answered": 18,
+    "answered_pct": 41,
+    "ВЕРНО": 2,
+    "УСЛОВНО": 16,
+    "СПРОСИЛ": 26,
+    "ОТКАЗ": 0,
+    "СБОЙ": 0,
+    "fp8_vs_bf16_diffs": 0
+  },
+  "latency": {
+    "sequential_p50": 48.33,
+    "sequential_p90": 66.93,
+    "parallel4_p50": 48.31,
+    "parallel4_p90": 77.44,
+    "parallel4_max": 77.44
+  },
+  "rule": "FP8 принят, если неверных 0 и доля ответов не ниже BF16 (41%)",
+  "verdict": "accepted"
+}
