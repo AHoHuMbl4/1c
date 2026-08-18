@@ -1,5 +1,23 @@
 # Журнал изменений
 
+## 18.08: klient-1 — приоритетная сборка 10500MB: снова OOM на p_doc `[замер]` `[решение]`
+
+`[решение]` Оркестратор: `threads=2` не пробовать; разовый приоритет — stop
+`1c-packet-apply.timer`, `SET memory_limit='10500MB'` (= SHOW **9.7 GiB**),
+sync `/opt/corpus_build.sql` с origin/main, ручной такт, при повторном OOM —
+стоп и RAM владельца.
+
+`[замер]` 01:37–01:42 UTC: apply.timer остановлен (восстановлен после сбоя);
+`/opt/corpus_build.sql` **a2fb7ff4…** (было 43050f46…); precheck+`ai_embed`
+зелёные. Цикл `EXECUTE p_doc` (`corpus_build.sql:858`): **106/1457** сущностей,
+90 961 строк в `tmp3_corpus`, падение на **#108**
+`accumulationregister_себестоимостьтоваров` (**638 330** строк в источнике) —
+`failed to allocate 4.0 KiB (9.7 GiB/9.7 GiB used)`. Пик движка = лимит;
+systemd MemoryPeak **11.29 GiB** (включая предыдущий прогон, `NRestarts=1`).
+Swap ~0.4 GiB — не помог (лимит глобален на процесс). `search_corpus=0`.
+pipeline.timer **disabled**. Рабочий `memory_limit` под apply+такт **не замерен**.
+Дальше — RAM юнита (владелец).
+
 ## 18.08: проводка пользователя из каналов — выкат на okna `[замер]`
 
 Окно Ю (ab763e0): Telegram — личность отправителя через штатный хук сборки

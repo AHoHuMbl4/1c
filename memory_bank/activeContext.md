@@ -1,6 +1,6 @@
 # Active Context
 
-_Обновлено: **2026-08-17.** Здесь — только живое: текущее состояние и «С ЧЕГО НАЧАТЬ».
+_Обновлено: **2026-08-18.** Здесь — только живое: текущее состояние и «С ЧЕГО НАЧАТЬ».
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
@@ -8,12 +8,15 @@ _Обновлено: **2026-08-17.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-🔴 **klient-1 слой поиска — СТОП на p_doc `[17.08 вечер]`**: 8 vCPU / 11.7 GiB,
-conf `cpu_threads=4` (md5 `87cc7f60…`), `SHOW threads=4 memory_limit=9.3 GiB`,
-`BUILD_THREAD_MIN=4`, `/opt/build.sh` `277fbca0…`. Precheck+`ai_embed` зелёные.
-Полная сборка 1457 ист. → allocate 9.3/9.3 GiB на `EXECUTE p_doc`; пик 11.09 GiB;
-`NRestarts=0`; лимит не поднимали. Таймер pipeline **disabled**. Apply жив
-(1533→1553). Корпус 0. Дальше — слово владельца: RAM / `memory_limit` / `threads=2`.
+🔴 **klient-1 слой поиска — СТОП на p_doc, RAM владельца `[18.08]`**: 8 vCPU /
+11.7 GiB + swap 19 GiB. Оркестратор: apply.timer стоп на сборку → **10500MB**
+(SHOW **9.7 GiB**), sync `corpus_build.sql` **a2fb7ff4…**, ручной такт 5½ мин.
+Precheck+`ai_embed` зелёные; **106/1457** сущностей, 90 961 строк `tmp3_corpus`;
+OOM на **#108** `accumulationregister_себестоимостьтоваров` (638 330 строк) —
+`corpus_build.sql:858` `EXECUTE p_doc`, 9.7/9.7 GiB. Пик systemd 11.29 GiB;
+swap не спасает (лимит глобален). apply.timer **восстановлен**; pipeline.timer
+**disabled**; `search_corpus=0`. Рабочий limit под apply+такт не замерен.
+**Дальше — RAM юнита (владелец), не threads=2.**
 
 🔴 **Полноту данных ведёт сессия-оркестратор `[17.08]`**: очередь шагов,
 поправки к планам и критерий финиша — [`docs/PLAN_ORCHESTRATOR.md`](../docs/PLAN_ORCHESTRATOR.md).

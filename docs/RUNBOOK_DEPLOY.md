@@ -474,17 +474,21 @@ precheck требует `embed_workers+8` потоков). Swap **4 GiB** (`/swa
 `systemctl start 1c-serene-pipeline@<база>.service`; `/health` →
 `coverage_gap.kind=none`.
 
-🔴 **klient-1 `10.1.1.7` (через релей `89.23.101.22`) — 8 vCPU / 11.7 GiB, замер 17.08 вечер.**
+🔴 **klient-1 `10.1.1.7` (через релей `89.23.101.22`) — 8 vCPU / 11.7 GiB, замер 18.08.**
 Тот же эталон, что okna: `--cpu_threads=4 --io_threads=4` (conf md5 `87cc7f60…`),
-`BUILD_THREAD_MIN=4`, `SET preserve_insertion_order=false`, `SET memory_limit='10000MB'`
-(= SHOW **9.3 GiB**). Swap на юните уже 8+4 GiB, новый не заводили. Рестарт `serenedb`
-обязателен: `SET threads=4` без рестарта не держит пул процесса, поднятого с
-`--cpu_threads=160`. Precheck и `ai_embed` (gpu-erw) проходят. Первая полная сборка
-(1457 источников, карта ссылок 458 254) на `EXECUTE p_doc` упирается в
-`failed to allocate (9.3 GiB/9.3 GiB used)` даже при `threads=4`. Пик systemd
-11.09 GiB, `NRestarts=0`. **Лимит не поднимать молча** — слово владельца. Таймер
-`1c-serene-pipeline@postgres` оставлен **disabled**, apply приоритетен. `/health`
-`corpus_rows=0`, пока нет решения по RAM/`memory_limit`.
+`BUILD_THREAD_MIN=4`, `SET preserve_insertion_order=false`. `/opt/corpus_build.sql`
+**a2fb7ff4…** (= origin/main). Swap на юните **19 GiB** (три файла). Рестарт
+`serenedb` обязателен после смены conf. Precheck и `ai_embed` (gpu-erw) проходят.
+
+`[18.08]` Приоритетная сборка (оркестратор): stop `1c-packet-apply.timer`,
+`SET memory_limit='10500MB'` (= SHOW **9.7 GiB**), ручной такт. Цикл `EXECUTE p_doc`
+(`corpus_build.sql:858`): **106/1457** сущностей, затем OOM на
+`accumulationregister_себестоимостьтоваров` (638 330 строк в источнике) —
+`failed to allocate (9.7 GiB/9.7 GiB used)`; swap не помогает (лимит глобален на
+процесс). Пик systemd **11.29 GiB**. `search_corpus=0`. apply.timer восстановлен;
+`1c-serene-pipeline@postgres` timer **disabled**. **Без увеличения RAM юнита
+сборка не проходит** — слово владельца; рабочий `memory_limit` под apply+такт
+замерить после успешной первой сборки.
 
 ### 10.2 Код аналитики + окружение
 
