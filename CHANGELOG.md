@@ -1,3 +1,16 @@
+## 18.08: граница периода — полный день, outside_period без строк внутри окна `[код]` `[замер]`
+
+Дефект п.13 на okna: `doc_date <= 'YYYY-MM-DD'` против TIMESTAMP отбрасывает дневные
+отметки (17.08 — 331 строка регистра, при `<=` sum=0, outside_period=77381).
+
+Починка в `period_preds` (`serene_ask.py` ~1230): верхняя граница
+`doc_date < (to::date + INTERVAL 1 day)` (полусоткрытый интервал; на корпусе
+1.3 мс vs 7.5 мс у `::date`). `outside_period` — `NOT (period_preds)`, не все dated.
+
+`[замер]` `test_period_bounds.py` **8/8** + SQL okna: 331 строк / **766 578,68**;
+outside **77 050** (не 77 381); 16.08 — **0** строк. md5 `89671dc685eb2afb48a57fad334fcf76`.
+Живой okna `:8091` — выкат 18.08.
+
 ## 18.08: period_empty — «вчера» (assumed), не только period_given `[код]` `[замер]`
 
 Живой okna `:8091`: после выката 9cc11b02 `diag.period_empty=None` —

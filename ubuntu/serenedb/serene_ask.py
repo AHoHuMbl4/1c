@@ -1228,7 +1228,14 @@ def _num_pred(intent, measure):
 
 
 def period_preds(period):
-    """Предикаты одного диапазона дат. Второй срез — тот же вызов с period2."""
+    """Предикаты одного диапазона дат. Второй срез — тот же вызов с period2.
+
+    🔴 ВЕРХНЯЯ ГРАНИЦА — ПОЛУСОТКРЫТЫЙ ИНТЕРВАЛ, НЕ `<= 'YYYY-MM-DD'`. Строка даты
+    без времени приводится к полуночи; `doc_date <= '2026-08-17'` отбрасывает все
+    отметки дня (15:53 и т.д.), а `doc_date < (to::date + INTERVAL 1 day)` включает
+    весь день включительно. [замер 18.08, okna] 331 строка регистра vs 0 при `<=`.
+    На корпусе полусоткрытый путь быстрее `::date` (1.3 мс vs 7.5 мс на том же WHERE).
+    """
     out = []
     p = period or {}
     if p.get("from"):
@@ -10000,10 +10007,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # каждом вопросе с периодом. Число живёт в самом счёте (`agg`) и в объявлении
             # множества; в белый список гейта оно попадает отдельной строкой ниже.
         try:
-            _o = psql("SELECT count(*) FROM %s WHERE %s AND doc_date IS NOT NULL"
-                      % (INDEX if match else CORPUS,
-                         " AND ".join([w for w in ([match] + _kept
-                                       + ["src_table = %s" % lit(src)]) if w])))
+            _base = " AND ".join([w for w in ([match] + _kept
+                                   + ["src_table = %s" % lit(src)]) if w])
+            _period_ok = " AND ".join(_date_preds)
+            _o = psql("SELECT count(*) FROM %s WHERE %s AND doc_date IS NOT NULL "
+                      "AND NOT (%s)"
+                      % (INDEX if match else CORPUS, _base, _period_ok))
             _outside = int(_o[0][0]) if _o and _o[0] else 0
         except (RuntimeError, ValueError, IndexError):
             _outside = 0

@@ -8,6 +8,12 @@ _Обновлено: **2026-08-18.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **граница периода (п.13) — ЗАКРЫТ в git + okna `[18.08]`**: `period_preds`
+~1230 — `doc_date < (to::date + INTERVAL 1 day)`, не `<=`; `outside_period` через
+`NOT(period_preds)`. **8/8** `test_period_bounds.py`; okna `:8091` «вчера» → регистр
+**331** / **766 578,68**; outside **77 050**; 16.08 — **0** строк. md5
+**89671dc6…**. `/opt` okna выкатан 18.08.
+
 🔴 **пустой период (в т.ч. «вчера»/assumed) — код в git `[18.08]`**: okna
 `:8091` после 9cc11b02 всё ещё `figures`/refuse — `period_empty_outcome`
 смотрел только `empty_period`, а «вчера» → `drop_assumed`. Починка:
