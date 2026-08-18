@@ -2,7 +2,32 @@
 # Старый okna.timpul.pro → редирект (закладки).
 __DOMAIN__ {
 	encode gzip
-	reverse_proxy 127.0.0.1:8080
+
+	# Дашборды (Grafana, docs/DASHBOARD_GRAFANA.md).
+	# /dash/enter — адаптер сквозного входа (проверяет сессию OWUI, ставит
+	# cookie gf_jwt); handle НЕ срезает префикс — адаптеру нужен путь целиком.
+	handle /dash/enter* {
+		reverse_proxy 127.0.0.1:3002
+	}
+	handle /dash/healthz {
+		reverse_proxy 127.0.0.1:3002
+	}
+	# Остальное под /dash/ — Grafana. cookie gf_jwt копируется в заголовок
+	# X-JWT-Assertion на каждый запрос (auth.jwt); header_up замещает и
+	# клиентский заголовок, если вдруг прислали, — подмена снаружи закрыта.
+	# 🔴 handle, НЕ handle_path: Grafana 13 с serve_from_sub_path ждёт
+	# подпуть В запросе — со срезанным префиксом она 301-редиректит на
+	# себя же (петля) [замер 18.08].
+	handle /dash/* {
+		reverse_proxy 127.0.0.1:3001 {
+			header_up X-JWT-Assertion {http.request.cookie.gf_jwt}
+		}
+	}
+
+	# Чат (Open WebUI).
+	handle {
+		reverse_proxy 127.0.0.1:8080
+	}
 }
 
 okna.timpul.pro {

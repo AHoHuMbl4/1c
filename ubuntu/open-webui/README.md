@@ -45,6 +45,40 @@ Ubuntu 24.04 (Python 3.12) — обычный venv; Ubuntu 26.04 (3.14) — Pyth
 
 Админ: `anton@baulogistic.md` (пароль — у владельца, не в git).
 
+## Дашборды (Grafana)
+
+Решение владельца 18.08: страница дашбордов — Grafana на **этом же фронте**
+(10.3.0.2), подпуть `https://baulogistic.timpul.pro/dash/`. Дизайн и замеры —
+[`docs/DASHBOARD_GRAFANA.md`](../../docs/DASHBOARD_GRAFANA.md).
+
+```
+браузер → /dash/enter → 1c-dash-enter (:3002, dash_adapter.py)
+                          │ проверяет cookie `token` у OWUI (GET /api/v1/auths/),
+                          │ ставит cookie gf_jwt (RS256 JWT, 12 ч), 302
+        → Caddy handle /dash/* → Grafana (:3001, loopback)
+                          │ header_up X-JWT-Assertion = cookie gf_jwt → вход без формы
+Grafana → SereneDB бэкенда через 1c-serene-lan-relay (10.3.0.4:7890, ufw только 10.3.0.2)
+```
+
+Установка:
+
+```bash
+# бэкенд (10.3.0.4) — релей SereneDB на LAN (systemd-socket-proxyd, движок не трогаем):
+bash /opt/1c-open-webui/setup-okna-backend-serene-lan.sh
+# фронт (10.3.0.2):
+SERENE_RO_PW=<PGPASSWORD из /etc/1c-mcp-reports.env бэкенда> \
+  bash /opt/1c-open-webui/setup-okna-grafana.sh
+```
+
+- Вход — только сквозной: пользователь чата открывает `/dash/enter` и попадает
+  на дашборды без второго логина (роль: admin чата → Admin Grafana, остальные
+  Viewer). Нативный логин Grafana (admin, пароль в `/etc/1c-grafana.env`) —
+  запасной, для администрирования.
+- Ключи: приватный `/etc/1c-grafana-jwt-private.pem` (640 root:dashenter,
+  читает только адаптер), публичный у Grafana.
+- Пароль `serene_ro` — в `/etc/1c-grafana.env` (640 root:root) на фронте;
+  datasource создаётся скриптом через API.
+
 ## Приёмка
 
 - `curl -sI https://baulogistic.timpul.pro/` → HTTP/2 200
@@ -118,7 +152,10 @@ signin → Bearer. Скрипт ставит шаблон «скопироват
 |---|---|---|
 | 10.3.0.4 | `openclaw-gateway-web.service` (user) | `undebot` |
 | 10.3.0.4 | `1c-serene-ask@postgres`, `1c-mcp-ask@postgres` | system |
+| 10.3.0.4 | `1c-serene-lan-relay.socket/.service` (SereneDB → LAN для Grafana) | system |
 | 10.3.0.2 | `open-webui.service` (user) | `webui` |
 | 10.3.0.2 | `caddy.service` | system |
+| 10.3.0.2 | `1c-grafana.service` (:3001, подпуть /dash/) | `grafana` |
+| 10.3.0.2 | `1c-dash-enter.service` (:3002, сквозной вход) | `dashenter` |
 
 Разбор — `docs/OPENCLAW_BOT.md` (раздел «Веб-фронт» / okna prod).

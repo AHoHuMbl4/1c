@@ -32,6 +32,18 @@ VARCHAR → касты обязательны; API по uid; `allow_embedding=tr
 адаптера). Caddy-снипет в §2 документа на живом фронте не замерян.
 Открыто: размещение Grafana в продукте (§3.1), адаптер `/dash/enter`.
 
+🔴 **дашборды — ВЫКАТ на okna `[18.08]`**: решение владельца — Grafana на
+веб-сервере okna. Фронт: `1c-grafana` (:3001, подпуть `/dash/`), `1c-dash-enter`
+(:3002, `ubuntu/open-webui/dash_adapter.py`, свой venv — `/home/webui` закрыт);
+бэкенд: `1c-serene-lan-relay` (socket-proxyd 10.3.0.4:7890→127.0.0.1, ufw с
+10.3.0.2, движок не тронут). Живое: probe `PostgreSQL 18.3 (SereneDB 26.07.3)`;
+дашборд `/d/okna-sales` «Продажи okna» — 900 точек по `…реализациятмц_recordtype`;
+cookie `gf_jwt` → 200/логин из токена, гость → 302/401. Ловушки: pyjwt[crypto]
+(голый не умеет RS256); Caddy `handle`, НЕ `handle_path` (Grafana 13 ждёт
+подпуть в запросе — иначе 301-петля). **Клик владельца для финального хопа:**
+https://baulogistic.timpul.pro/dash/enter. Дальше: кнопка «добавить в
+дашборд» (OWUI Action → API панелей).
+
 🔴 **«позавчера» 503 / ложь all-time — код в git `[18.08]`**: d273e9d на бою
 снимал окно → 8246 / 79 752 611,64 за всё время → TypeError после TOKENS →
 503 (rid `2c934d58`). Окно держим (`period_window_empty`); ответ

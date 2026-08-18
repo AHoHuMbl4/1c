@@ -52,6 +52,18 @@
    копирует её в заголовок `X-JWT-Assertion`. И **`header_name` обязан
    быть задан явно**: с пустым `header_name` JWT-клиент не включается
    вовсе и `url_login` молча не работает [замер 18.08].
+7. **Голый `pyjwt` не умеет RS256** — `KeyError: 'RS256'` на первом же
+   обращении; ставить `pyjwt[crypto]` [замер 18.08, выкат okna].
+8. 🔴 **Grafana 13 с `serve_from_sub_path=true` ждёт подпуть В запросе**:
+   со срезанным префиксом (Caddy `handle_path`) отвечает 301 на себя же —
+   петля редиректов. Проксировать надо `handle` БЕЗ срезания
+   [замер 18.08, выкат okna].
+9. **`information_schema.columns` в SereneDB пуст** (а `\d` падает на
+   `pg_partition_ancestors`) — колонки смотреть через `pg_attribute`
+   [замер 18.08].
+10. **venv OWUI недоступен другому пользователю** (`/home/webui` закрыт,
+    `status=203/EXEC Permission denied`) — адаптеру свой venv
+    `/opt/1c-grafana/venv` [замер 18.08, выкат okna].
 
 ## §2. Целевая архитектура
 
@@ -113,13 +125,16 @@ handle_path /dash/* {
 
 ## §3. Открытые вопросы (не решать без владельца)
 
-1. Где живёт Grafana в продукте: на хосте коробки рядом с ask или на
-   фронте с Open WebUI (okna: фронт и бэкенд — разные машины).
+1. ~~Где живёт Grafana~~ → **решено 18.08**: на веб-сервере okna (10.3.0.2,
+   рядом с Open WebUI), подпуть `/dash/` того же домена. SereneDB остаётся
+   на бэкенде — фронт ходит через `1c-serene-lan-relay`
+   (systemd-socket-proxyd, 10.3.0.4:7890, ufw только с 10.3.0.2), движок
+   не перенастраивался. Для коробки (всё на одном хосте) релей не нужен —
+   datasource на 127.0.0.1.
 2. ~~Авторизация~~ → **решено 18.08** (решение владельца «та же, без
    второго логина»): сквозной вход по JWT через Caddy, схема и замеры —
-   §2/§1. Осталось замерить на живом фронте: адаптер `/dash/enter`,
-   читающий сессию OWUI (её cookie валидируется вызовом OWUI API), и
-   Caddy-снипет выше.
+   §2/§1. Реализация: `ubuntu/open-webui/dash_adapter.py` (юнит
+   `1c-dash-enter`), установка — `setup-okna-grafana.sh`.
 3. Какие ответы можно закреплять: только kind=answer/figures с посчитанным
    scope (clarify/no_data закреплять нечего).
 4. Коробка: Grafana — ещё один сервис в установщик (трек владельца,
@@ -127,9 +142,27 @@ handle_path /dash/* {
 
 ## §4. Текущее состояние
 
-Стенд поднят 18.08 на dev-машине: `http://127.0.0.1:3001`
-(admin / пароль по умолчанию в скрипте), демо-дашборд
-`/d/stand-from-chat` — два графика по живой витрине okna.
-Сквозной вход замерян: JWT в заголовке логинит без формы (`auth.jwt`,
-RSA-ключи генерит скрипт стенда), минтер ссылки — `work/grafana-stand/mint-jwt.py`.
-Выката на okna/klient-1 НЕ было; прод-размещение — решение владельца (§3.1).
+Стенд на dev-машине: `http://127.0.0.1:3001`, демо-дашборд `/d/stand-from-chat`;
+сквозной вход замерян, минтер ссылки — `work/grafana-stand/mint-jwt.py`.
+
+**Выкат okna 18.08** (решение владельца: Grafana на веб-сервере okna):
+
+- фронт 10.3.0.2: `1c-grafana` (:3001, подпуть `/dash/`, `/opt/1c-grafana`),
+  `1c-dash-enter` (:3002, `ubuntu/open-webui/dash_adapter.py`, свой venv),
+  Caddy: `handle /dash/enter*` → адаптер, `handle /dash/*` → Grafana с
+  `header_up X-JWT-Assertion {http.request.cookie.gf_jwt}` (без срезания
+  префикса — ловушка 8);
+- бэкенд 10.3.0.4: `1c-serene-lan-relay` (systemd-socket-proxyd,
+  10.3.0.4:7890 → 127.0.0.1:7890, ufw только с 10.3.0.2), движок не тронут;
+- datasource `serenedb-ro` → 10.3.0.4:7890 под `serene_ro`; probe
+  `select version()` через релей — `PostgreSQL 18.3 (SereneDB 26.07.3)`;
+- дашборд **`/d/okna-sales` «Продажи okna»** — 900 точек «сумма по дням»
+  по `accumulationregister_реализациятмц_recordtype` + stat; refresh 5m.
+
+Живой замер 18.08 (публичный https): cookie `gf_jwt` →
+`/dash/api/user` отдаёт пользователя из токена, `/dash/d/okna-sales` 200,
+`/dash/dashboards` 200; гость — 302 на `/dash/login`, API — 401;
+`/dash/enter` без сессии чата — 302 на чат, с левым token — 401; чат 200.
+Последний хоп (живая сессия OWUI → адаптер → дашборд) — клик владельца
+в браузере: `https://baulogistic.timpul.pro/dash/enter` (signup в OWUI
+закрыт, сессию извне не сделать).

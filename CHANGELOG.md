@@ -12,6 +12,32 @@
 пустом дне в журнале нет; F и E-себестоимость этими четырьмя коммитами не закрыты.
 Отчёт: `docs/CLARIFY_JOURNAL_OKNA_2026-08-18.md`.
 
+## 18.08: дашборды — выкат на okna: Grafana на фронте, сквозной вход жив `[замер]` `[решение]` `[код]`
+
+`[решение]` владельца: Grafana живёт на веб-сервере okna (10.3.0.2, рядом с
+Open WebUI). Выкат: `1c-grafana` (:3001, подпуть `/dash/`) + `1c-dash-enter`
+(:3002, адаптер `ubuntu/open-webui/dash_adapter.py` — проверяет сессию OWUI
+через `GET /api/v1/auths/`, ставит cookie `gf_jwt` RS256 12 ч) + Caddy
+(`handle /dash/*`, cookie→`X-JWT-Assertion`) + `1c-serene-lan-relay` на
+бэкенде (systemd-socket-proxyd 10.3.0.4:7890→127.0.0.1:7890, ufw только с
+10.3.0.2 — движок не тронут). Скрипты: `setup-okna-grafana.sh`,
+`setup-okna-backend-serene-lan.sh` в `/opt/1c-open-webui` на обоих хостах.
+
+`[замер]` живой по публичному https: datasource probe — `PostgreSQL 18.3
+(SereneDB 26.07.3)` через релей; дашборд «Продажи okna» `/d/okna-sales` —
+900 точек «сумма по дням» по `accumulationregister_реализациятмц_recordtype`;
+cookie `gf_jwt` → `/dash/api/user` логин из токена, страницы 200; гость →
+302 на `/dash/login`, API 401; `/dash/enter` без сессии → на чат, с левым
+token → 401; чат 200. Хоп «живая сессия OWUI → дашборд» — клик владельца
+(signup закрыт, сессию извне не сделать): https://baulogistic.timpul.pro/dash/enter
+
+Ловушки выката (все замером, в `docs/DASHBOARD_GRAFANA.md` §1): голый pyjwt
+не умеет RS256 → `pyjwt[crypto]`; Grafana 13 с `serve_from_sub_path` ждёт
+подпуть В запросе → Caddy `handle`, не `handle_path` (иначе 301-петля);
+venv OWUI недоступен другому пользователю → адаптеру свой
+`/opt/1c-grafana/venv`; `information_schema.columns` в SereneDB пуст →
+колонки через `pg_attribute`.
+
 ## 18.08: дашборды — сквозная авторизация OWUI→Grafana замерена `[замер]` `[решение]` `[код]`
 
 `[решение]` владельца: вход на страницу дашбордов — та же авторизация, что
