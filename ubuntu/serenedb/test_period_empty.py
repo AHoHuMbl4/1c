@@ -83,6 +83,69 @@ t("figures.outside_period", out.get("figures", {}).get("outside_period") == OKNA
 t("figures.count=0", out.get("figures", {}).get("count") == 0)
 t("diag.period_empty", out.get("diag", {}).get("period_empty") is True)
 
+# --- hotfix 18.08: пустое «позавчера» не recount all-time и не 503 ---
+intent_pz = {
+    "want": "sum",
+    "period": {"from": "2026-08-16", "to": "2026-08-16"},
+    "parse": {"assumed": ["period.from", "period.to"]},
+    "amount": {},
+}
+agg0 = dict(agg, count=0, sum=0.0, src="document_реализациятмц",
+            outside_period=8246)
+t("позавчера: period_empty при count=0",
+  A.period_empty_outcome(agg0, "drop_assumed", intent_pz, {}))
+alltime = dict(agg0, count=8246, sum=79752611.64, count_amount=8246,
+               date_min="2024-01-30", date_max="2026-12-31")
+t("all-time итог не period_empty при count>0",
+  not A.period_empty_outcome(alltime, "drop_assumed", intent_pz, {}))
+txt_pz = A.format_period_empty_text(
+    "сколько продали позавчера всего?", agg0, intent_pz, "Всего",
+    "document_реализациятмц", True)
+t("позавчера текст: 16.08", "16.08" in txt_pz, txt_pz)
+t("позавчера текст: нет all-time 79752611",
+  "79752611" not in txt_pz.replace(" ", "").replace("\u00a0", ""), txt_pz)
+
+try:
+    filled, _bad = A._fill_figures(
+        "За 16.08 продали {total} с {date_min} по {date_max}.",
+        alltime, [], True, {}, slot_mode="sum")
+    t("fill all-time: не TypeError", True)
+    t("fill all-time: сумма подставилась",
+      "79" in filled.replace("\u00a0", "").replace(" ", ""), filled)
+except TypeError as e:
+    t("fill all-time: не TypeError", False, e)
+
+rows_ok = [["k", "document_реализациятмц", 100.5, "2026-12-31", 0, "док"]] * 25
+rows_mix = rows_ok + [79752611.64]
+try:
+    A.copied_figures("Итого {total}.", alltime, rows_mix)
+    t("copied_figures: хвост-float не TypeError", True)
+except TypeError as e:
+    t("copied_figures: хвост-float не TypeError", False, e)
+try:
+    seen = A.rows_seen(rows_mix)
+    t("rows_seen: хвост-float не TypeError", True)
+    t("rows_seen: 25 строк корпуса", len(seen) == 25, len(seen))
+except TypeError as e:
+    t("rows_seen: хвост-float не TypeError", False, e)
+
+src = open(A.__file__, encoding="utf-8").read()
+t("пустое окно не зовёт drop_period_preds",
+  "intent, preds = drop_period_preds" not in src)
+t("флаг period_window_empty", "period_window_empty" in src)
+t("пустышка меры не пивотит пустое окно",
+  "if _мертва and not diag.get(\"period_window_empty\")" in src)
+t("compose не режет r[5] вслепую",
+  "doc, dt, amt = r[5], r[3], r[2]" in src)
+
+out_pz = A.build_period_empty_answer(
+    "сколько продали позавчера всего?", agg0, intent_pz, "Всего",
+    "document_реализациятмц", "", [], True, "sum",
+    None, None, {}, grain, [], 0, [], 0.0, "Всего")
+t("позавчера kind=answer", out_pz.get("kind") == "answer", out_pz.get("kind"))
+t("позавчера figures.sum=0 не all-time",
+  out_pz.get("figures", {}).get("sum") == 0.0, out_pz.get("figures"))
+
 print("\nИТОГ:", "ok — все %d проверок прошли" % PASS if not FAIL
       else "FAIL — %d из %d: %s" % (len(FAIL), PASS + len(FAIL), ", ".join(FAIL)))
 sys.exit(1 if FAIL else 0)

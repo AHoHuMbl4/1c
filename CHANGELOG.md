@@ -1,3 +1,22 @@
+## 18.08: «позавчера» 503 + ложь all-time — окно не снимать `[код]` `[замер]`
+
+Боевой okna `:8091` (rid `2c934d58b147960c`, 15:22): «сколько продали позавчера
+всего?» → билеты документ/итого → период 16.08 пуст, `drop_assumed` снял окно →
+база посчитала **всё время** (8246 / 79 752 611,64) → compose →
+`TypeError("'float' object is not subscriptable")` → 503. Если бы не падение,
+человек увидел бы «за 16.08 = 79 млн» — это итог all-time.
+
+Починка кодом (`serene_ask.py`): пустое окно не зовёт `drop_period_preds`;
+`diag.period_window_empty` держит фильтр; `period_empty_outcome` отдаёт
+kind=answer «за 16.08 записей нет» (sum=0), без общего итога. TypeError:
+`_fill_figures` через `_fmt_human`; `copied_figures`/`rows_seen`/`compose`
+не режут float-хвост как строку. Соседнее: даты min/max из `opts_hints` в
+hint уточнения — `clarify_say` кладёт их в `our_dates` гейта (rid `a74aaf64`).
+
+`[замер]` `test_period_empty` **30/30**, `test_measure_empty` **26/26**,
+`test_period_bounds` **3/3**, `test_terminal_round` **13/13**, `test_gate` **132/132**,
+`test_compose` **92/92**. Выкат `:8091` — оркестратор; живой прогон — владелец.
+
 ## 18.08: пустышка «Сумма» → пивот; «позавчера» не кратность `[код]` `[замер]`
 
 Боевой okna `:8091` (оркестратор, TRACE `29bb46f02037628f`): «сколько продали вчера

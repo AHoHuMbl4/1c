@@ -1,3 +1,13 @@
+## Замер 18.08 — «позавчера» period_empty, не 503 и не all-time
+
+Правка `ubuntu/serenedb/serene_ask.py` + `test_period_empty.py` + `test_gate.py`.
+**Снят ПОСЛЕ последней правки.** Оффлайн: `test_period_empty` **30/30**,
+`test_measure_empty` **26/26**, `test_period_bounds` **3/3**,
+`test_terminal_round` **13/13**, `test_gate` **132/132**, `test_compose` **92/92**.
+Пустое assumed-окно держит фильтр; ответ kind=answer sum=0, в тексте нет
+79 752 611,64. `/opt` и `:8091` не трогались (выкат — оркестратор). Регрессии
+первой базы по оффлайн-замкам нет.
+
 ## Замер 18.08 — корпус/витрина okna, ключ регистра, /health по дням
 
 Правка `corpus_build.sql` / `corpus_merge.sql` / `serene_ask.py` / `packet_apply.py`.

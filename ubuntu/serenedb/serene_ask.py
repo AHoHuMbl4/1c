@@ -5608,16 +5608,10 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None, slot_mode=Non
             return mt.group(0)
         if role in ("date_min", "date_max"):
             return str(got)
-        # Вид числа теперь наш, а не модели: разряды разделяем НЕРАЗРЫВНЫМ пробелом.
-        # Обычный пробел переносится по строке и рвёт число пополам, а гейт разбирает
-        # оба одинаково ([замер] `NUMTOK` включает U+00A0).
-        out = _fmt(got)
-        head, _, frac = out.partition(".")
-        neg, head = (head[0] == "-"), head.lstrip("-")
-        grouped = "\u00a0".join(
-            [head[:len(head) % 3 or 3]] + [head[i:i + 3] for i in
-                                           range(len(head) % 3 or 3, len(head), 3)])
-        return ("-" if neg else "") + grouped + ("." + frac if frac else "")
+        # Тот же группировщик, что `_fmt_human`: `head[0]` на пустой строке —
+        # IndexError, на float — TypeError not subscriptable (okna 18.08,
+        # rid 2c934d58, сразу после model TOKENS).
+        return _fmt_human(got)
 
     return SLOT.sub(one, text), bad
 
@@ -5845,7 +5839,11 @@ def copied_figures(text, agg, rows):
         return []
     in_rows = set()
     for r in (rows or []):
-        in_rows |= _norm_numbers(r[5]) | _norm_numbers(r[3])
+        try:
+            doc, dt = r[5], r[3]
+        except (TypeError, IndexError):
+            continue
+        in_rows |= _norm_numbers(doc) | _norm_numbers(dt)
         try:
             v = float(r[2])
             in_rows.add(round(v, 2))
@@ -5940,14 +5938,20 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         # и модель цитировала обрубок как целое значение — «ООО Ромашка-Тор» вместо
         # «ООО Ромашка-Торг». Числа так не портятся (их ставит код), а вот имя, номер или
         # адрес уходили человеку укороченными и выглядели настоящими (п. 13).
-        head = r[5][:per_row] + ("…" if len(r[5]) > per_row else "")
+        try:
+            doc, dt, amt = r[5], r[3], r[2]
+        except (TypeError, IndexError):
+            continue
+        if not isinstance(doc, str):
+            doc = "" if doc is None else str(doc)
+        head = doc[:per_row] + ("…" if len(doc) > per_row else "")
         tail = []
         # Стоп 1: amount= строки — только list. На sum/count/rank число строки — чужая роль.
-        if slot_mode == "list" and money and _num(r[2]):
-            tail.append("amount=%s" % ("%d" % _num(r[2]) if _num(r[2]) == int(_num(r[2]))
-                                       else "%.2f" % _num(r[2])))
-        if r[3]:
-            tail.append("date=%s" % r[3])
+        if slot_mode == "list" and money and _num(amt):
+            tail.append("amount=%s" % ("%d" % _num(amt) if _num(amt) == int(_num(amt))
+                                       else "%.2f" % _num(amt)))
+        if dt:
+            tail.append("date=%s" % dt)
         payload.append(head + ((" | " + " | ".join(tail)) if tail else ""))
     # 🔴 ЧИСЛО ПОКАЗАННЫХ СТРОК — НЕ ЧИСЛО ЗАПИСЕЙ, и подавать его как число записей
     # нельзя. `rows` обрезаны выборкой (`TOPK`), показываются из них первые
@@ -6599,7 +6603,16 @@ def rows_seen(rows):
     """
     shown = list(rows or [])[:ROWS_TO_MODEL]
     per_row = max(320, ROWS_BUDGET // max(1, len(shown)))
-    return [list(r[:5]) + [(r[5] or "")[:per_row]] for r in shown]
+    out = []
+    for r in shown:
+        try:
+            doc = r[5]
+        except (TypeError, IndexError):
+            continue
+        if not isinstance(doc, str):
+            doc = "" if doc is None else str(doc)
+        out.append(list(r[:5]) + [doc[:per_row]])
+    return out
 
 
 def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
@@ -6866,7 +6879,11 @@ def clarify_say(question, opts, diag=None):
     body = "\n".join(lines)
     if not body:
         return ""
-    ok, bad = gate_out(body, [], None, _opt_values(opts))
+    hint_dates = []
+    for o in (opts or []):
+        for k in ("label", "distinct_by", "hint", "entity_label"):
+            hint_dates.append(str(o.get(k) or ""))
+    ok, bad = gate_out(body, [], None, _opt_values(opts), hint_dates)
     if ok:
         return body
     sys.stderr.write("ask CLARIFY GATE: числа вне вариантов: %s\n" % bad[:4])
@@ -9780,14 +9797,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         match = ""
         diag["axis_holder_cleared_match"] = True
 
-    # Выведенный период обнулил выборку — снять догадку и считать снова.
-    # Догадка не имеет права отказать (п. 12 + п. 21). Стоит до выбора величины:
-    # иначе все величины выглядят пустыми из-за чужого окна дат.
-    if src and empty_after_period_action(intent) == "drop_assumed":
+    # Пустое окно (вчера/позавчера/названный день) не снимаем: иначе compose
+    # видит all-time итог и врёт «за 16.08 = 79 млн» (okna 18.08, rid 2c934d58).
+    # period_empty_outcome отвечает нулём за окно. Стоит до выбора величины,
+    # чтобы пустышка меры из-за окна не уводила в пивот.
+    if src and empty_after_period_action(intent) in ("drop_assumed", "empty_period"):
         _probe = rows_of(src, match, preds, 1)
         if not _probe:
-            intent, preds = drop_period_preds(intent, preds)
-            diag["period_assumed_dropped"] = True
+            diag["period_window_empty"] = True
     diag["focus"], diag["found"] = src, by.get(src, 0)
     шаг("сущность выбрана", сущность=(src or "—"), совпадений=by.get(src, 0),
         выбрал=("человек" if focus else "модель"),
@@ -9952,7 +9969,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if measure:
         _row = next((r for r in _all_tot if r and r[0] == measure), None)
         _мертва = (_row is None) or measure_row_all_zero(_row)
-        if _мертва:
+        if _мертва and not diag.get("period_window_empty"):
             _alive_rows = [r for r in _all_tot if r and r[0]
                            and not measure_row_all_zero(r)]
             _pick = None if diag.get("measure_pick_unresolved") else measure_pick
@@ -10155,17 +10172,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                plan.get("compute"), _members)
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
-            if act == "drop_assumed":
-                intent, preds = drop_period_preds(intent, preds)
-                diag["period_assumed_dropped"] = True
-                agg = aggregate_groups(src, match, preds, measure, _col, _k,
-                                       plan.get("compute"), _members)
-                act = empty_after_period_action(intent)
-            if (not agg or not agg.get("count")) and act != "empty_period":
+            if act not in ("empty_period", "drop_assumed"):
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
                         "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+            if not agg:
+                agg = {"count": 0, "sum": 0.0, "src": src, "measure": measure,
+                       "folders": 0, "out_of_range": 0, "count_amount": 0,
+                       "grain": "group", "col": _col}
         p2 = intent.get("period2") or {}
         if agg and (p2.get("from") or p2.get("to")):
             _d1 = period_preds(intent.get("period"))
@@ -10175,7 +10190,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                     _members)
             agg = merge_period2_groups(agg, agg2)
         rows = serene_axis.group_rows((agg or {}).get("groups") or [])
-        if not rows and not (agg or {}).get("count"):
+        if (not rows and not (agg or {}).get("count")
+                and empty_after_period_action(intent) not in ("empty_period", "drop_assumed")):
             return {"partial": cut or None, "kind": "no_data",
                     "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
@@ -10184,33 +10200,36 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         agg = aggregate(src, match, preds, measure)
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
-            if act == "drop_assumed":
-                intent, preds = drop_period_preds(intent, preds)
-                diag["period_assumed_dropped"] = True
-                agg = aggregate(src, match, preds, measure)
-                act = empty_after_period_action(intent)
-            if (not agg or not agg.get("count")) and act != "empty_period":
+            if act not in ("empty_period", "drop_assumed"):
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
                         "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+            if not agg:
+                agg = {"count": 0, "sum": 0.0, "src": src, "measure": measure,
+                       "folders": 0, "out_of_range": 0, "count_amount": 0}
     else:
         rows = rows_of(src, match, preds, TOPK, measure)
         if not rows:
             # Ранний no_data стоял ДО счёта undated: при 100% строк без даты
             # потеря была полной, и «данных нет» срабатывало про существование.
             act = empty_after_period_action(intent)
-            if act == "drop_assumed":
-                intent, preds = drop_period_preds(intent, preds)
-                diag["period_assumed_dropped"] = True
-                rows = rows_of(src, match, preds, TOPK, measure)
-                act = empty_after_period_action(intent)
-            if not rows and act != "empty_period":
+            if act not in ("empty_period", "drop_assumed"):
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
                         "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
         agg = aggregate(src, match, preds, measure)
+        if not agg:
+            act = empty_after_period_action(intent)
+            if act in ("empty_period", "drop_assumed"):
+                agg = {"count": 0, "sum": 0.0, "src": src, "measure": measure,
+                       "folders": 0, "out_of_range": 0, "count_amount": 0}
+            else:
+                return {"partial": cut or None, "kind": "no_data",
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "sources": [],
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     шаг("посчитано базой", сущность=src, величина=(measure or "—"),
         строк=(agg or {}).get("count"), итог=(agg or {}).get("sum"),
         со_значением=(agg or {}).get("count_amount"),

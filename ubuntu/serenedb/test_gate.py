@@ -380,6 +380,13 @@ _with = [dict(_opts[0], hint="отгрузки"), dict(_opts[1], hint="заку�
 t("F246: описание из hint входит в строку выбора",
   " — отгрузки" in A.clarify_say(_q, _with)
   and A.clarify_say(_q, _with).split("\n")[0].startswith("1. "))
+_dated = [dict(_opts[0], hint="данные по 2026-12-31"),
+          dict(_opts[1], hint="данные по 2024-01-30")]
+_d3 = {}
+_said3 = A.clarify_say(_q, _dated, _d3)
+t("F246: даты из hint не режут гейт",
+  "2026-12-31" in _said3 and "2024-01-30" in _said3
+  and not _d3.get("clarify_gate_rejected"))
 
 # ------------------- F247: заземляем на том, что модель ВИДЕЛА, а не на всей выборке
 # Гейт разрешал числа из ВСЕХ добытых строк (TOPK=40), тогда как модели показывается
