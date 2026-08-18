@@ -33,18 +33,25 @@ HOLD2 = "document_закупкапробная_номенклатура"
 COL = "Номенклатура"
 HDR = "document_отгрузкапробная"
 NOT_AXIS = "document_отгрузкапробная_номенклатура"
+DOC_SALE = "document_реализацияпробная"
+PKO = "document_пкопробный"
+COL_BASE = "ДокументОснование"
 
 _HOLDERS = {
     CAT: [(HOLD, COL)],
     "catalog_двеосипробные": [(HOLD, COL), (HOLD2, COL)],
+    DOC_SALE: [(PKO, COL_BASE)],
 }
 _NUMS = {
     CAT: ["Код"],
     HOLD: ["Сумма", "Количество"],
     HOLD2: ["Сумма", "Количество"],
+    DOC_SALE: ["Всего", "Сумма"],
+    PKO: ["СуммаДокумента"],
 }
-_LIVE = {HOLD: 542, HOLD2: 120, CAT: 2381}
-_PARENT = {HOLD: HDR, HOLD2: "document_закупкапробная", CAT: ""}
+_LIVE = {HOLD: 542, HOLD2: 120, CAT: 2381, DOC_SALE: 331, PKO: 4}
+_PARENT = {HOLD: HDR, HOLD2: "document_закупкапробная", CAT: "",
+           DOC_SALE: "", PKO: ""}
 _SQL = []
 
 
@@ -182,6 +189,22 @@ t("повтор живого счёта без лексики номенклат
 _LIVE.clear()
 _LIVE.update(_LIVE_ZERO)
 A.psql = _fake
+
+# Класс F: снятый документ реализации не пересаживается на ПКО
+plan, diag = _plan(DOC_SALE, "sum", "сумма")
+t("без билета документ+сумма → держатель ПКО (прежний путь оси)",
+  plan and plan[0] == "holder" and plan[1] == PKO, plan)
+diag_s = {}
+plan_s = A.axis_focus_plan(
+    DOC_SALE, {"want": "sum", "measure": "", "amount": {}}, "сумма",
+    "doc @@ x", ["doc_date >= '2026-08-07'"], {}, diag_s,
+    trusted=None, resolved={"src": DOC_SALE})
+t("settled документ + ДокументОснование → keep, не ПКО",
+  plan_s is None and diag_s.get("focus_axis_keep") == "entity_settled",
+  (plan_s, diag_s))
+plan_c, diag_c = _plan(CAT, "sum", "сумма")
+t("каталог без билета по-прежнему держатель",
+  plan_c and plan_c[0] == "holder" and plan_c[1] == HOLD, plan_c)
 
 print("\nИТОГ: ok %d, FAIL %d" % (PASS, len(FAIL)))
 if FAIL:

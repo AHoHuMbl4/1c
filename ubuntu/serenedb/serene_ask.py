@@ -3833,6 +3833,48 @@ def measure_already_proven(trusted=None, resolved=None, measure_pick=None):
     return "measure" in choice_levels_proven(trusted, resolved)
 
 
+def entity_choice_locked(trusted=None, resolved=None):
+    """True, если в resolved/trusted уже есть src сущности."""
+    return "entity" in choice_levels_proven(trusted, resolved)
+
+
+def hold_settled_entity(focus, trusted=None, resolved=None, found_by=None,
+                        measure_pick=None, holder_srcs=None):
+    """Какой src считать после билета: settled или пришедший focus.
+
+    entity+measure в resolved → settled. Focus из держателей оси settled
+    (ПКО при ДокументОснование) → settled. Settled с found>0 и focus с 0
+    → settled. Иначе focus. Класс F okna 18.08.
+    """
+    settled = (resolved or {}).get("src") or None
+    if not settled and isinstance(trusted, dict) and trusted.get("src"):
+        if entity_choice_locked(trusted, resolved):
+            settled = trusted.get("src")
+    if not settled:
+        return focus
+    if measure_already_proven(trusted, resolved, measure_pick):
+        return settled
+    if not entity_choice_locked(trusted, resolved):
+        return focus if focus else settled
+    if not focus or focus == settled:
+        return settled
+    if focus in set(holder_srcs or ()):
+        return settled
+    if found_by is None:
+        return focus
+    try:
+        settled_n = int(found_by.get(settled, 0) or 0)
+    except (TypeError, ValueError):
+        settled_n = 0
+    try:
+        new_n = int(found_by.get(focus, 0) or 0)
+    except (TypeError, ValueError):
+        new_n = 0
+    if settled_n > 0 and new_n == 0:
+        return settled
+    return focus
+
+
 def guards_skip_for_choice(focus=None, measure_pick=None, trusted=None):
     """Защиты гасит только доказанный билет или аварийный ASK_RAW_FOCUS_TRUST.
 
@@ -7926,13 +7968,19 @@ def _word_hits_measure(names, word):
     return False
 
 
-def axis_focus_plan(focus, intent, measure_pick, match, preds, kid_pred, diag=None):
+def axis_focus_plan(focus, intent, measure_pick, match, preds, kid_pred, diag=None,
+                    trusted=None, resolved=None):
     """Focus, сведящийся к target_src оси, — имя оси, пока вопрос не про каталог.
 
     None — прежний путь (focus = источник). Иначе ('holder', src, col) или
-    ('clarify', srcs, live).
+    ('clarify', srcs, live). При билете entity — None: документ реализации
+    остаётся источником, ПКО по ДокументОснование — класс F.
     """
     if not focus or not serene_axis:
+        return None
+    if entity_choice_locked(trusted, resolved):
+        if diag is not None:
+            diag["focus_axis_keep"] = "entity_settled"
         return None
     holders = holders_of_target(focus)
     if not holders:
@@ -8808,10 +8856,22 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # реально под условиями что-то содержит — берём её и не спрашиваем модель.
     if focus:
         focus = resolve_focus(focus, diag)
+    _settled_src = (resolved or {}).get("src") or (
+        (trusted or {}).get("src") if entity_choice_locked(trusted, resolved) else None)
+    _hold_src = [h["src"] for h in holders_of_target(_settled_src or "")] if (
+        entity_choice_locked(trusted, resolved) and _settled_src) else []
+    _held = hold_settled_entity(
+        focus, trusted, resolved, found_by=by, measure_pick=measure_pick,
+        holder_srcs=_hold_src)
+    if _held != focus:
+        шаг("сущность снята — осталась", было=(focus or "—"), осталось=_held)
+        diag["entity_held"] = {"было": focus, "осталось": _held}
+        focus = _held
     axis_plan = None
     if focus:
         axis_plan = axis_focus_plan(
-            focus, intent, measure_pick, match, preds, kid_pred, diag)
+            focus, intent, measure_pick, match, preds, kid_pred, diag,
+            trusted=trusted, resolved=resolved)
     if axis_plan and axis_plan[0] == "clarify":
         _srcs, _live = axis_plan[1], axis_plan[2]
         try:
@@ -8836,10 +8896,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         else:
             axis_plan = None
     if axis_plan and axis_plan[0] == "holder":
-        _hold, _acol = axis_plan[1], axis_plan[2]
-        diag["focus_was_axis"] = {"было": focus, "стало": _hold, "ось": _acol}
-        шаг("focus был осью", было=focus, стало=_hold, ось=(_acol or "—"))
-        focus = _hold
+        if entity_choice_locked(trusted, resolved):
+            axis_plan = None
+        else:
+            _hold, _acol = axis_plan[1], axis_plan[2]
+            diag["focus_was_axis"] = {"было": focus, "стало": _hold, "ось": _acol}
+            шаг("focus был осью", было=focus, стало=_hold, ось=(_acol or "—"))
+            focus = _hold
     if focus:
         picked, marks, plan = [focus], {}, {}
         diag["focus_forced"] = focus
@@ -8896,7 +8959,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 picked = list(dict.fromkeys((picked or []) + extra))
                 diag["code_ambiguous"] = extra
 
-    if picked:
+    if picked and not entity_choice_locked(trusted, resolved):
         picked = align_picked_to_terms(picked, cands, intent, diag)
 
     # 🔴 РАСХОЖДЕНИЕ НЕЗАВИСИМЫХ СИГНАЛОВ — ЭТО И ЕСТЬ НЕОДНОЗНАЧНОСТЬ.
@@ -11065,6 +11128,9 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
                 if recovered and recovered.get("options"):
                     out = recovered
                     return out
+                focus = hold_settled_entity(
+                    focus, None, resolved, found_by=None,
+                    measure_pick=measure_pick)
                 out = _answer_checked_core(
                     question, focus=focus, measure_pick=measure_pick,
                     context=context, prior=prior, trusted=None,
@@ -11089,6 +11155,11 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
         if "measure" in resolved and measure_pick is None:
             mp = resolved.get("measure")
             measure_pick = mp if mp not in (None, "") else measure_pick
+        _pin = hold_settled_entity(
+            focus, trusted, resolved, found_by=None,
+            measure_pick=measure_pick)
+        if _pin != focus:
+            focus = _pin
         out = _answer_checked_core(question, focus=focus, measure_pick=measure_pick,
                                    context=context, prior=prior, trusted=trusted,
                                    resolved=resolved)

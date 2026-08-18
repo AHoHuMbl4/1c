@@ -1,3 +1,28 @@
+## 18.08: класс F — снятая сущность не уезжает в ПКО/физлицо `[код]` `[замер]`
+
+Живой дефект okna (8/12 bot-rid): после выбора регистра/документа цепочка
+не отвечала, а пересаживалась на `document_приходныйкассовыйордер`
+(ось `ДокументОснование`, 4 строки vs 331) или на
+`document_выручкаотреализациитмцфизлицо_номенклатура` (0 совпадений).
+След: rid `83ca8b222ffcb01f`; «focus был осью … стало=ПКО».
+
+Обе гипотезы живые: (1) `axis_focus_plan` трактовал документ продаж как
+target_src оси и брал держателя ПКО; (2) после entity+measure сырой focus
+третьего hop перебивал `resolved.src`.
+
+Починка кодом: `hold_settled_entity` + `entity_choice_locked`;
+`axis_focus_plan` при билете не пересаживает; `answer_checked` пинит src
+после entity+measure; `align_picked_to_terms` на снятой сущности молчит.
+Каталог без билета по-прежнему уходит к держателю (test_axis_focus).
+
+`[замер]` оффлайн: `test_terminal_round` **24/24** (было 13; rid-рисунок
+hop ПКО/физлицо), `test_axis_focus` **18/18**; не упали period_empty 30,
+measure_empty 26, gate 132, compose 92, period_bounds 3, health_gap 14,
+fork_outcomes 24, decision_id 31. md5 `serene_ask.py`
+**`4ad9a272fb8fb354a9fff52f07b91517`**. `/opt` и `:8091` не трогали —
+выкат оркестратору. Живое: «сколько продали вчера всего?» → регистр →
+«итого» → число.
+
 ## 18.08: разметка журнала clarify/ответов okna — шаг 0 `[замер]`
 
 `[замер]` `journalctl -u 1c-serene-ask@postgres` за 3 суток + мост `1c-mcp-ask@postgres`.

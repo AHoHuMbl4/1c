@@ -111,6 +111,78 @@ try:
 finally:
     A._answer_checked_core = old_core
 
+# Класс F, rid 83ca8b22 / 13:23: третий hop не меняет снятую сущность.
+REG = "accumulationregister_реализациятмц"
+PKO = "document_приходныйкассовыйордер"
+FIZ = "document_выручкаотреализациитмцфизлицо_номенклатура"
+DOC = "document_реализациятмц"
+FOUND = {REG: 331, PKO: 4, FIZ: 0, DOC: 10}
+
+t("(а) entity+measure + focus=ПКО → регистр",
+  A.hold_settled_entity(PKO, None, {"src": REG, "measure": "Всего"},
+                        found_by=FOUND) == REG)
+t("(а) entity+measure + focus=физлицо → регистр",
+  A.hold_settled_entity(FIZ, None, {"src": REG, "measure": "Всего"},
+                        found_by=FOUND) == REG)
+t("(б) документ + держатель ПКО → документ",
+  A.hold_settled_entity(PKO, None, {"src": DOC},
+                        found_by=FOUND, holder_srcs=[PKO]) == DOC)
+t("(в) регистр 331 + физлицо 0 → регистр",
+  A.hold_settled_entity(FIZ, None, {"src": REG}, found_by=FOUND) == REG)
+t("без settled focus не трогаем",
+  A.hold_settled_entity(DOC, None, {}, found_by=FOUND) == DOC)
+t("entity_choice_locked по resolved.src",
+  A.entity_choice_locked(None, {"src": REG}))
+t("нулевой кандидат режется, если кто-то жив",
+  A.keep_empty_period_opts([REG, FIZ], FOUND, ["doc_date >= 'x'"]) == [REG])
+
+A.reset_decisions_for_tests()
+ent_opts_f = [
+    {"src": REG, "label": "Реализация ТМЦ (регистр)", "found": 331},
+    {"src": DOC, "label": "Реализация ТМЦ (документ)", "found": 10},
+]
+sealed_ef = A.seal_clarify({"kind": "clarify", "text": "?", "options": ent_opts_f},
+                           Q, user=USER)
+id_ef = sealed_ef["options"][0]["decision_id"]
+ticket_ef, _err = A.consume_decision(id_ef, Q, user=USER)
+A.accumulate_resolution(Q, USER, ticket_ef)
+meas_opts_f = [
+    {"src": REG, "measure": "Всего", "label": "итого", "distinct_by": ""},
+    {"src": REG, "measure": "Количество", "label": "кол-во", "distinct_by": ""},
+]
+sealed_mf = A.seal_clarify({"kind": "clarify", "text": "?", "options": meas_opts_f},
+                           Q, user=USER)
+id_mf = sealed_mf["options"][0]["decision_id"]
+ticket_mf, _err = A.consume_decision(id_mf, Q, user=USER)
+A.accumulate_resolution(Q, USER, ticket_mf)
+
+calls_f = []
+
+
+def _core_f(question, focus=None, measure_pick=None, context="", prior=None,
+            trusted=None, resolved=None):
+    calls_f.append(focus)
+    if focus in (PKO, FIZ, DOC) and (resolved or {}).get("src") == REG:
+        return {"kind": "clarify", "text": "касса?", "options": [
+            {"src": PKO, "label": "ПКО", "found": 4}], "sources": [], "partial": None}
+    return {"kind": "answer", "text": "766578.68", "sources": ["x"],
+            "partial": None, "diag": {}}
+
+
+old_core2 = A._answer_checked_core
+A._answer_checked_core = _core_f
+try:
+    out_hop = A.answer_checked(Q, focus=PKO, user=USER)
+    t("шаг3 rid-рисунок: hop ПКО после entity+measure → answer",
+      out_hop.get("kind") == "answer" and len(calls_f) == 1, out_hop.get("kind"))
+    t("шаг3: в core ушёл регистр, не ПКО", calls_f[0] == REG, calls_f)
+    out_fiz = A.answer_checked(Q, focus=FIZ, user=USER)
+    t("шаг3 rid-рисунок: hop физлицо 0 → answer",
+      out_fiz.get("kind") == "answer", out_fiz.get("kind"))
+    t("шаг3: физлицо не прошёл в core", calls_f[-1] == REG, calls_f)
+finally:
+    A._answer_checked_core = old_core2
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

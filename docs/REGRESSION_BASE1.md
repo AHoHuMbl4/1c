@@ -1,3 +1,14 @@
+## Замер 18.08 — класс F: ось не пересаживает settled-сущность
+
+Правка `ubuntu/serenedb/serene_ask.py` (`hold_settled_entity`,
+`axis_focus_plan` skip при билете). **Снят ПОСЛЕ последней правки.**
+Оффлайн: `test_terminal_round` **24/24**, `test_axis_focus` **18/18**,
+`test_period_empty` 30, `test_measure_empty` 26, `test_gate` 132,
+`test_compose` 92, `test_period_bounds` 3, `test_health_gap` 14,
+`test_fork_outcomes` 24, `test_decision_id` 31. Юниты `/opt` и `:8091`
+не трогались (выкат — оркестратор). Регрессии первой базы по оффлайн-замкам
+нет.
+
 ## Замер 18.08 — «позавчера»: вторая 503 (n_folders), хотфикс оркестратора
 
 Правка `ubuntu/serenedb/serene_ask.py` — только перенос двух присвоений
