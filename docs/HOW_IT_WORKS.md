@@ -1609,10 +1609,30 @@ Focus, который `resolve_focus` свёл к каталогу из `search_
 
 За один `answer()` / `answer_checked()` в `diag.tokens` копится сумма по вызовам:
 `calls`, `in`, `out`; если провайдер отдал — `cache_hit` / `cache_miss`
-(`prompt_cache_*` DeepSeek). Поля без данных в ответе не пишутся. На каждый вызов
-в journald юнита — строка `ask TOKENS in=… out=…` (и `hit=` / `miss=` при наличии),
-без текста вопроса и без ключей. Мост и клиент `diag` не читают; наружу токены не
-отдаются. Оффлайн-проба: `ubuntu/serenedb/test_ds_tokens.py`.
+(`prompt_cache_*` DeepSeek). Поля без данных в ответе не пишутся. На каждый вызов в journald — `TRACE <rid> model TOKENS 0 in=… out=…` (и `hit=` /
+`miss=` при наличии), без текста вопроса. Мост и клиент `diag` не читают; наружу токены
+не отдаются. Оффлайн-проба: `ubuntu/serenedb/test_ds_tokens.py`.
+
+#### Сквозной след по request-id (18.08)
+
+Один короткий **rid** (12–16 символов) на пользовательский вопрос, включая повтор с
+`decision_id` и команды памяти. Рождается на краю в verify-плагине, пробрасывается в
+`ask_1c.rid` → мост → `/ask` → все шаги сервиса и колонка `ask_journal.rid`. Без rid
+сервис генерирует сам.
+
+Единый формат строки (stderr / `gateway.log` / journald):
+
+`TRACE <rid> <слой> <шаг> <мс> <статус>`
+
+Слои: **gateway** (`received`, `agent_start`, `tool_call`, `reply_sent`), **bridge**
+(`ask_start`, `ask_reply`), **service** (бывшие `diag.шаги` — те же имена шагов),
+**model** (`TOKENS`), **plugin** (`pass` / `revise` / `block`). В статусе — только
+метки (`kind=…`, `тип=…`), не текст вопроса и не ключи.
+
+В ответе API по-прежнему `diag.шаги` (мс + поля шага). Переключатель stderr/journald:
+`ASK_TRACE=1` по умолчанию; выключение — `ASK_TRACE=0`. Сборка по rid:
+`bash work/acceptance/trace_rid.sh <rid>` (см. `RUNBOOK_DEPLOY`). Оффлайн:
+`ubuntu/serenedb/test_trace_rid.py`.
 
 Зачем: **гейт исходящего сверяет ответ с тем же `agg`, который посчитал шаг 5**, то есть
 своё же число и подтвердит. Пока множество не объявлено, «счёт не ошибается» — вера, а не

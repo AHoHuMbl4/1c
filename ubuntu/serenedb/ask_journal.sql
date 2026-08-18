@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS ask_journal (
   freshness_age_sec INTEGER,
   uncounted INTEGER,
   truncated INTEGER,
-  discarded_before INTEGER
+  discarded_before INTEGER,
+  rid VARCHAR
 );
 
 -- DEFAULT PRIVILEGES в нашей сборке на новые таблицы не накладываются
@@ -63,3 +64,6 @@ GRANT SELECT (id) ON ask_journal TO serene_ro;
 -- nextval для id требует UPDATE на последовательности
 -- (GRANT › Privileges by object type: SEQUENCE = USAGE, SELECT, UPDATE).
 GRANT USAGE, SELECT, UPDATE ON SEQUENCE ask_journal_id_seq TO serene_ro;
+
+-- Обновление существующих баз (идempotent).
+ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS rid VARCHAR;

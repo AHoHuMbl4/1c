@@ -164,7 +164,7 @@ t("choice_error: маркер видим мосту/гейту",
 # _ask пробрасывает decision_id
 seen = {}
 def capture(q, focus=None, measure=None, context=None, prior=None,
-            decision_id=None, user=None, memory=None, channel=None):
+            decision_id=None, user=None, memory=None, channel=None, rid=None):
     seen.update(decision_id=decision_id, user=user, q=q, memory=memory,
                 channel=channel)
     return {"kind": "answer", "text": "ok", "sources": []}
@@ -183,6 +183,13 @@ t("поле memory пробрасывается", seen.get("memory") == "forget"
 M.ask_1c("вопрос", user="telegram:111", channel="telegram")
 t("channel пробрасывается",
   seen.get("channel") == "telegram" and seen.get("user") == "telegram:111")
+seen_rid = {}
+def cap_rid(*a, rid=None, **k):
+    seen_rid["rid"] = rid
+    return {"kind": "answer", "text": "ok", "sources": []}
+M._ask = cap_rid
+M.ask_1c("q", rid="rid1deadbeef")
+t("rid пробрасывается в _ask", seen_rid.get("rid") == "rid1deadbeef")
 M._ask = saved_ask
 
 print("\n%d проверок пройдено" % PASS)

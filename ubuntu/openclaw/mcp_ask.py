@@ -32,6 +32,7 @@ MCP-сервер поверх `serene_ask` — даёт OpenClaw-боту инс
   MCP_TOKEN  (Bearer этого сервера; без него сервис НЕ стартует)
 """
 import json
+import time
 import os
 import sys
 import urllib.error
@@ -52,6 +53,16 @@ mcp = FastMCP("serene-ask", host=MCP_HOST, port=MCP_PORT)
 # молча открывать доступ — эту ошибку мы уже проходили на шлюзе и на прежнем мосте.
 # Заголовок передаётся штатным механизмом OpenClaw: `mcp.servers.<имя>.headers`.
 MCP_TOKEN = os.environ.get("MCP_TOKEN", "")
+
+_TRACE = os.environ.get("ASK_TRACE", "1") not in ("0", "false", "no")
+
+
+def _trace(rid, layer, step, ms, status="ok"):
+    if not _TRACE:
+        return
+    sys.stderr.write("TRACE %s %s %s %d %s\n" % (
+        (rid or "-"), layer, step, int(ms), status))
+
 
 
 def _serve_with_auth(mcp_obj):
@@ -76,7 +87,7 @@ def _serve_with_auth(mcp_obj):
 
 
 def _ask(question, focus=None, measure=None, context=None, prior=None,
-         decision_id=None, user=None, memory=None, channel=None):
+         decision_id=None, user=None, memory=None, channel=None, rid=None):
     payload = {"question": question}
     if focus:
         payload["focus"] = focus
@@ -94,6 +105,8 @@ def _ask(question, focus=None, measure=None, context=None, prior=None,
         payload["memory"] = memory
     if channel:
         payload["channel"] = channel
+    if rid:
+        payload["rid"] = rid
     req = urllib.request.Request(ASK_URL + "/ask",
                                  data=json.dumps(payload).encode("utf-8"),
                                  method="POST")
@@ -397,7 +410,7 @@ def _clarify_presentation(opts):
 @mcp.tool()
 def ask_1c(question: str, focus: str = "", measure: str = "",
            context: str = "", prior: str = "", decision_id: str = "",
-           user: str = "", memory: str = "", channel: str = "") -> str:
+           user: str = "", memory: str = "", channel: str = "", rid: str = "") -> str:
     """Ask about data stored in the company's ERP system.
 
     Figures come from the database and are checked before they are returned; pass them
@@ -421,18 +434,27 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     :param memory: remember or forget for an explicit preference.
     :param channel: telegram or webchat when the plugin supplies one.
     """
+    rid = (rid or "").strip() or None
+    _trace(rid, "bridge", "ask_start", 0, "ok")
+    t0 = time.monotonic()
     try:
         mem = str(memory or "").strip().lower()
         mem_action = mem if mem in ("remember", "forget") else None
         data = _ask(question, focus or None, measure or None, context or None,
                     prior or None, decision_id or None, user or None,
-                    memory=mem_action, channel=channel or None)
+                    memory=mem_action, channel=channel or None, rid=rid)
     except urllib.error.HTTPError as e:
+        ms = int((time.monotonic() - t0) * 1000)
+        _trace(rid, "bridge", "ask_reply", ms, "kind=error http=%d" % e.code)
         return ERROR_REPLY.format(detail="HTTP %d" % e.code)
     except Exception as e:                     # noqa: BLE001 — сеть/таймаут
+        ms = int((time.monotonic() - t0) * 1000)
+        _trace(rid, "bridge", "ask_reply", ms, "kind=error %s" % type(e).__name__)
         return ERROR_REPLY.format(detail=type(e).__name__)
 
+    ms = int((time.monotonic() - t0) * 1000)
     kind = data.get("kind", "")
+    _trace(rid, "bridge", "ask_reply", ms, "kind=%s" % (kind or "-"))
     text = (data.get("text") or "").strip()
 
     # Отказ сервиса — НЕ то же самое, что отсутствие данных (п. 18): клиенту надо

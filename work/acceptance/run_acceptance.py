@@ -320,8 +320,13 @@ def ask_trace(since_iso):
                            capture_output=True, text=True, timeout=60)
     except Exception:                               # noqa: BLE001 — журнал не обязателен
         return []
-    return [l.split('ask СЛЕД', 1)[1].strip()
-            for l in p.stdout.splitlines() if 'ask СЛЕД' in l]
+    out = []
+    for l in p.stdout.splitlines():
+        if 'TRACE ' in l and ' service ' in l:
+            out.append(l.split('TRACE ', 1)[1].strip())
+        elif 'ask СЛЕД' in l:
+            out.append(l.split('ask СЛЕД', 1)[1].strip())
+    return out
 
 
 def ask_bot(q, key, run):

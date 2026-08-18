@@ -8,6 +8,13 @@ _Обновлено: **2026-08-18.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **Сквозной rid + TRACE в git `[18.08]`**: `TRACE <rid> <слой> <шаг> <мс> <статус>`
+— verify→мост→`/ask`→`ask_journal.rid`; `ASK_TRACE=1` по умолчанию;
+`work/acceptance/trace_rid.sh <rid>`. Оффлайн **test_trace_rid 10/10**, прежние замки
+зелёные; **test-verify 106**, **mcp_ask 32**. **Выкат не делали** — md5/живой
+полный путь через journald назначает оркестратор; нужен `ask_journal_apply` (колонка
+`rid`).
+
 🔴 **Память шаг 6: DDL okna + apply за флагом `[18.08]`**: на okna таблицы
 `ask_journal`/`ask_choice_memory` (postgres :7890); живой `:8091` journal +1,
 remember stored, LOST=0. Код: `ASK_MEMORY_APPLY=0` shadow; `=1` — «помню: …»,

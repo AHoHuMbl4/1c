@@ -31,6 +31,31 @@ import { DEFAULTS, buildClarifyPresentation, channelUserOf, digitBlob, evaluate,
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
+function traceLog(cfg, rid, layer, step, ms, status) {
+  if (!traceEnabled(cfg)) return;
+  const line = traceLine(rid, layer, step, ms, status);
+  const api = PLUGIN_API;
+  try {
+    if (api && api.logger && typeof api.logger.info === "function") api.logger.info(line);
+    else console.error(line);
+  } catch {}
+}
+
+function ridFor(sessKey, cfg, create) {
+  if (!sessKey) return create ? newRid() : "";
+  const now = Date.now();
+  const ttl = (cfg && cfg.refTtlMs) || 10 * 60 * 1000;
+  let rec = turnRid.get(sessKey);
+  if (!rec || now - rec.at > ttl) {
+    if (!create) return "";
+    rec = { at: now, rid: newRid() };
+    turnRid.set(sessKey, rec);
+  }
+  rec.at = now;
+  prune(turnRid, ttl);
+  return rec.rid;
+}
+
 function dbg(cfg, line) {
   if (!cfg || !cfg.debug) return;
   const api = PLUGIN_API;
@@ -62,6 +87,7 @@ const inbound = new Map(); // sessKey -> { at, digits:Set<string>, blob:string }
 const prompts = new Map(); // sessKey -> { at, text } (вопрос текущего хода)
 const clarifyLocks = new Map(); // sessKey -> { at, question, options[] }
 const identities = new Map(); // run:<id>|sess:<key> -> { user, kind, channel, at }
+const turnRid = new Map(); // sessKey -> { at, rid }
 
 function prune(map, ttl) {
   const cut = Date.now() - ttl;
@@ -177,7 +203,7 @@ export default definePluginEntry({
     //
     // Ошибка любого рода — это `null`, а не выдуманный ответ: молча подставить пустоту
     // значило бы выдать «данных нет» там, где сервис просто не ответил (п. 18).
-    const askService = async (cfg, question, identity) => {
+    const askService = async (cfg, question, identity, sessKey) => {
       const url = String(cfg.askUrl || "").trim();
       if (!url || !question) return null;
       const ctl = new AbortController();
@@ -194,6 +220,8 @@ export default definePluginEntry({
         const body = { question };
         if (identity && identity.user) body.user = identity.user;
         if (identity && identity.channel) body.channel = identity.channel;
+        const rid = ridFor(sessKey, cfg, false) || ridFor(sessKey, cfg, true);
+        if (rid) body.rid = rid;
         const r = await fetch(url, {
           method: "POST", headers, signal: ctl.signal,
           body: JSON.stringify(body),
@@ -225,6 +253,8 @@ export default definePluginEntry({
       const cfg = getCfg();
       storeIdentity(ctx, event);
       const sessKey = sessKeyOf(ctx, event) || (event && event.runId ? "run:" + event.runId : null);
+      const rid = ridFor(sessKey, cfg, true);
+      traceLog(cfg, rid, "gateway", "agent_start", 0, "ok");
       if (sessKey) {
         const q = (event && (event.prompt || event.input || "")) || "";
         if (q && typeof q === "string") {
@@ -259,8 +289,10 @@ export default definePluginEntry({
         changed = true;
         dbg(cfg, `before_tool_call rewrite sess=${sessKey} action=${rewritten.action} q=${String(params.question || "").slice(0, 80)} focus=${params.focus || ""} decision_id=${params.decision_id || ""} prior=${String(params.prior || "").slice(0, 80)}`);
       }
-      const injected = injectAskUser(params, identity);
-      if (injected.user !== params.user || injected.channel !== params.channel) {
+      const rid = ridFor(sessKey, cfg, true);
+      let injected = injectAskUser(params, identity);
+      injected = injectAskRid(injected, rid);
+      if (injected.user !== params.user || injected.channel !== params.channel || injected.rid !== params.rid) {
         changed = true;
         dbg(cfg, `before_tool_call user=${injected.user || ""} kind=${(identity && identity.kind) || "none"} ch=${injected.channel || ""}`);
       }
@@ -298,6 +330,8 @@ export default definePluginEntry({
         clarifyLocks.delete(sessKey);
         dbg(cfg, `clarify_lock clear sess=${sessKey}`);
       }
+      const rid = ridFor(sessKey, cfg, false) || ridFor(sessKey, cfg, true);
+      traceLog(cfg, rid, "gateway", "tool_call", 0, event.error ? "error" : "ok");
       dbg(cfg, `after_tool_call tool=${event.toolName} sess=${sessKey} runId=${runId} refDigits=${merged.digits.size} noData=${merged.noData}`);
     });
 
@@ -363,7 +397,7 @@ export default definePluginEntry({
       // он наполняется только на доставке в канал.
       const qrec = (sessKey && prompts.get(sessKey)) || inb || null;
       if (selfFetchNeeded(haveRef, cfg, qrec, sessKey)) {
-        const own = await askService(cfg, qrec.text, loadIdentity(ctx, event));
+        const own = await askService(cfg, qrec.text, loadIdentity(ctx, event), sessKey);
         if (own) {
           ref2 = mergeRef(null, own, Date.now(), cfg.noDataMarker, cfg.clarifyMarker,
                           cfg.serviceErrorMarker);
@@ -381,6 +415,8 @@ export default definePluginEntry({
       // 🔴 УСПЕХ ГЕЙТА ПИШЕТСЯ В ЖУРНАЛ НАРАВНЕ С ОТКАЗОМ. Пока молчал только успех,
       // «проверил и пропустил» было неотличимо от «не звался вовсе» — ровно так дыра с
       // доставкой и прожила одиннадцать дней незамеченной.
+      const rid = ridFor(sessKey, cfg, false) || ridFor(sessKey, cfg, true);
+      traceLog(cfg, rid, "plugin", d.action === "revise" ? "revise" : "pass", 0, d.why || "ok");
       dbg(cfg, `before_agent_finalize sess=${sessKey} runId=${runId} action=${d.action} why=${d.why}`);
       if (d.action !== "revise") return;
       return {
@@ -411,6 +447,8 @@ export default definePluginEntry({
       if (!sessKey) return;
       const now = Date.now();
       lastInbound.set(sessKey, now);
+      const rid = ridFor(sessKey, cfg, true);
+      traceLog(cfg, rid, "gateway", "received", 0, "ok");
       const text = (event && event.content) || "";
       // Текст вопроса хранится, чтобы плагин мог САМ сходить за данными, когда модель
       // инструмент не позвала (см. `before_agent_finalize`). Ограничен сверху: в памяти
@@ -442,7 +480,10 @@ export default definePluginEntry({
           presentation = buildClarifyPresentation(atom.options);
       }
 
+      const rid = ridFor(sessKey, cfg, false) || ridFor(sessKey, cfg, true);
       const decision = evaluate(content, ref, inb, cfg, presentation);
+      const gate = decision.action === "cancel" ? "block" : (decision.action === "replace" ? "revise" : "pass");
+      traceLog(cfg, rid, "plugin", gate, 0, decision.reason || "ok");
       if (decision.action === "cancel") {
         dbg(cfg, `message_sending sess=${sessKey} action=cancel`);
         return { cancel: true, cancelReason: "braine-verify: " + decision.reason };
@@ -458,6 +499,7 @@ export default definePluginEntry({
       const outContent = (decision.action === "replace" || clean !== content)
         ? (clean.trim() ? clean : emptyReply(base, ref, cfg))
         : content;
+      traceLog(cfg, rid, "gateway", "reply_sent", 0, gate);
       if (presentation || decision.action === "replace" || clean !== content) {
         const ret = { content: outContent };
         if (presentation) ret.presentation = presentation;

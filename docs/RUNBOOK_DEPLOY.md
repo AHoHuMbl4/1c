@@ -830,6 +830,26 @@ systemctl daemon-reload && systemctl enable --now 1c-mcp-ask@<база>
 документам, 4 прогона из 4** (совпадает с живой 1С); «сколько мы продали» → бот **переспросил**
 «оптовые или розничные», а не выбрал сам.
 
+
+### 10.7-bis След по request-id (`trace_rid.sh`)
+
+После выката rid-логирования (18.08) зависание видно без разбора нескольких журналов:
+
+```bash
+bash work/acceptance/trace_rid.sh <rid>              # since по умолчанию «10 min ago»
+bash work/acceptance/trace_rid.sh <rid> "30 min ago"
+GATEWAY_LOG=/home/undebot/.openclaw-buh/logs/gateway.log bash work/acceptance/trace_rid.sh <rid>
+```
+
+Скрипт собирает строки `TRACE <rid> …` из `journalctl` юнитов `1c-serene-ask@*`,
+`1c-mcp-ask@*` и из `gateway.log` шлюза, сортирует по времени, печатает дельты между
+шагами (поле `<мс>` в строке — от начала ответа сервиса; между слоями смотреть `+Nms`
+между строками). Дыра **>30 с** между `tool_call` и `ask_reply` — зависание на мосте или
+сервисе; между `ask_reply` и `reply_sent` — на модели/гейте.
+
+Выключить stderr-след сервиса/моста: `ASK_TRACE=0` в env юнита. Rid в `ask_journal` —
+после `bash ubuntu/serenedb/ask_journal_apply.sh <база>` (колонка `rid`).
+
 ### 11.1-старое MCP-сервер `ask_1c` над braine (:6014) — выведен
 ```bash
 install -d /opt/openclaw-mcp && python3 -m venv /opt/openclaw-mcp/venv

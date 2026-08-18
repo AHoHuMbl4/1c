@@ -76,7 +76,7 @@ try:
     d1 = A._diag_pack({})
     t("ds_chat с usage → diag", d1.get("tokens") == {"calls": 1, "in": 11, "out": 3})
     log = _logs.getvalue()
-    t("journal: ask TOKENS без hit/miss", "ask TOKENS in=11 out=3" in log
+    t("journal: TRACE model TOKENS без hit/miss", "TRACE" in log and "model TOKENS" in log and "in=11 out=3" in log
       and "hit=" not in log and "miss=" not in log)
 finally:
     sys.stderr = _old_err

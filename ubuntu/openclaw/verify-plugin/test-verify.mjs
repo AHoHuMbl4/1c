@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, buildClarifyPresentation, channelUserOf, evaluate, extractText, finalizeDecision, injectAskUser, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, injectAskRid, newRid, traceLine, buildClarifyPresentation, channelUserOf, evaluate, extractText, finalizeDecision, injectAskUser, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -13,6 +13,9 @@ const t = (name, fn) => {
   pass++;
   console.log("ok  -", name);
 };
+t("newRid: 12-16 hex", () => { const r = newRid(); assert.ok(r.length >= 12 && r.length <= 16); });
+t("injectAskRid", () => assert.strictEqual(injectAskRid({question:"q"}, "abc").rid, "abc"));
+t("traceLine формат", () => assert.strictEqual(traceLine("abc", "gateway", "received", 0, "ok"), "TRACE abc gateway received 0 ok"));
 
 // --- toolMatches: MCP проецирует инструмент как <server>__ask_1c ---
 t("toolMatches: точное имя", () => assert.ok(toolMatches("ask_1c", "ask_1c")));

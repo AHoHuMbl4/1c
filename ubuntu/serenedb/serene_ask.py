@@ -115,6 +115,40 @@ TOPK = int(os.environ.get("ASK_TOPK", "40"))
 TRACE = os.environ.get("ASK_TRACE", "1") not in ("0", "false", "no")
 ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
 
+# Сквозной request-id: один на пользовательский вопрос (включая decision_id/memory).
+# Рождается на краю (verify-плагин); без него сервис генерирует сам. В stderr — только
+# rid+слой+шаг+мс+статус, без текста вопроса (приватность).
+_rid_ctx = contextvars.ContextVar("ask_rid", default="")
+
+
+def _new_rid():
+    return secrets.token_hex(8)[:16]
+
+
+def _rid_norm(rid):
+    rid = (rid or "").strip()
+    if not rid:
+        return _new_rid()
+    rid = "".join(c for c in rid if c.isalnum())[:16]
+    return rid or _new_rid()
+
+
+def _rid_get():
+    return _rid_ctx.get() or ""
+
+
+def _rid_enter(rid=None):
+    rid = _rid_norm(rid)
+    _rid_ctx.set(rid)
+    return rid
+
+
+def _trace_write(layer, step, ms, status="ok"):
+    if not TRACE:
+        return
+    sys.stderr.write("TRACE %s %s %s %d %s\n" % (
+        _rid_get() or "-", layer, step, int(ms), status))
+
 # Модель ранжирования — штатная функция движка, а не наша сортировка. Выбирается
 # окружением, чтобы сравнивать варианты A/B на одном наборе вопросов, а не спорить.
 #   bm25     — по умолчанию у движка (k1=1.2, b=0.75): штрафует длинные документы;
@@ -430,13 +464,13 @@ def _token_acc_record(usage):
     if acc is None:
         return
     acc.add(usage)
-    line = ["ask TOKENS", "in=%d" % int(usage.get("prompt_tokens") or 0),
-            "out=%d" % int(usage.get("completion_tokens") or 0)]
+    parts = ["in=%d" % int(usage.get("prompt_tokens") or 0),
+             "out=%d" % int(usage.get("completion_tokens") or 0)]
     if "prompt_cache_hit_tokens" in usage:
-        line.append("hit=%d" % int(usage.get("prompt_cache_hit_tokens") or 0))
+        parts.append("hit=%d" % int(usage.get("prompt_cache_hit_tokens") or 0))
     if "prompt_cache_miss_tokens" in usage:
-        line.append("miss=%d" % int(usage.get("prompt_cache_miss_tokens") or 0))
-    sys.stderr.write(" ".join(line) + "\n")
+        parts.append("miss=%d" % int(usage.get("prompt_cache_miss_tokens") or 0))
+    _trace_write("model", "TOKENS", 0, " ".join(parts))
 
 
 def _diag_pack(diag, **extra):
@@ -1323,6 +1357,8 @@ def probe(groups):
         vals = []
         for alt in group:
             vals = resolve_values(alt)
+            if not vals:
+                vals = _resolve_values_literal(alt)
             if vals:
                 break
         if vals:
@@ -2053,6 +2089,27 @@ RESOLVE_NEAR = int(os.environ.get("ASK_RESOLVE_NEAR", "12"))
 RESOLVE_KEEP = int(os.environ.get("ASK_RESOLVE_KEEP", "3"))
 
 
+def _resolve_values_literal(term):
+    """Подстрока в значениях резолвера — когда вектор недоступен или не нашёл.
+
+    «Казань» → «Г. КАЗАНЬ» в колонке Город: в doc-индексе города нет, а в
+    resolver_index значение лежит. Без этого probe объявляет no_data при живых
+    данных (B8-03).
+    """
+    core = re.sub(r"[^0-9a-zа-яё]", "", (term or "").lower())
+    if len(core) < 3:
+        return []
+    try:
+        rows = _resolver_psql(
+            "SELECT DISTINCT value FROM resolver_index "
+            "WHERE lower(value) LIKE '%%' || %s || '%%' "
+            "ORDER BY length(value), value LIMIT %d"
+            % (lit(core), RESOLVE_KEEP))
+        return [r[0] for r in rows if r and r[0]]
+    except RuntimeError:
+        return []
+
+
 def resolve_values(term):
     """Слово человека -> конкретные значения в базе («Питер» -> «Санкт-Петербург»).
 
@@ -2770,6 +2827,26 @@ def _class_label_lookup(srcs, measure_ctx):
     return lab, (fk2 or fk_cls)
 
 
+def count_question_skips_axis(intent, measure, grain_dec):
+    """Счёт записей сущности без оси — axis-clarify здесь лишний (B8-02).
+
+    «Сколько контрагентов» — row count по справочнику; оси Parent/Город — не
+    альтернативные прочтения вопроса, а шум структуры. Аудит §2: clarify только
+    при неподписанных/непосчитанных ветках, не при count без measure.
+    """
+    if (grain_dec or {}).get("clarify") != "axis":
+        return False
+    want = (intent or {}).get("want") or ""
+    if want not in ("count", "list"):
+        return False
+    amt = (intent or {}).get("amount") or {}
+    if amt.get("op") or amt.get("value") is not None:
+        return False
+    if measure:
+        return False
+    return True
+
+
 def _dedupe_fork_classes(ordered):
     """Одинаковые подпись+атом → одна пара (план §2, п. 13)."""
     seen, out = {}, []
@@ -2908,8 +2985,10 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None):
     """Исход B: условные пары по классам + options с decision_id (на класс, не на src)."""
     classes = list((payload or {}).get("classes") or [])
     total = len(classes)
-    shown = classes[:FORK_PAIR_MAX]
-    hidden = max(0, total - len(shown))
+    # Аудит §2: все посчитанные подписанные ветки — в ответ; pair_budget не режет
+    # эталонные B-пары (B8-01/04). Отсечение — только dedupe/NA/C в resolve_fork_outcome.
+    shown = classes
+    hidden = 0
     atoms, opts = [], []
     for it in shown:
         lab = (it.get("label") or "").strip()
@@ -2928,18 +3007,11 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None):
     if any(x is None for x in lines):
         return None
     text = "\n".join(lines)
-    if hidden:
-        text += ("\n… ещё %d прочтений не показано" % hidden)
     partial = dict(cut or {})
-    if hidden:
-        partial["fork_limitation"] = {"reason": "pair_budget",
-                                      "pairs_shown": len(shown),
-                                      "pairs_total": total,
-                                      "pairs_hidden": hidden}
     d = _diag_pack(diag, fork_outcome="B",
              fork_key=(payload or {}).get("fork_key"),
              fork_classes=total, fork_pairs_shown=len(shown),
-             fork_pairs_hidden=hidden or None)
+             fork_pairs_hidden=None)
     if t0 is not None:
         d["sec"] = round(time.time() - t0, 2)
     return {"partial": partial or None, "kind": "figures", "text": text,
@@ -6928,6 +7000,54 @@ def drop_period_preds(intent, preds):
     return new_intent, new_preds
 
 
+def _term_stems(intent):
+    """Основы слов из terms — для сопоставления с именем сущности."""
+    stems = set()
+    try:
+        for g in (intent or {}).get("terms") or []:
+            for alt in g or []:
+                if not alt:
+                    continue
+                kr = psql("SELECT ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(str(alt))))
+                stems |= {s for s in _stem_set(kr[0][0] if kr else "") if len(s) >= 3}
+                tail = str(alt).split("_", 1)[-1] if "_" in str(alt) else str(alt)
+                kr2 = psql("SELECT ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(tail)))
+                stems |= {s for s in _stem_set(kr2[0][0] if kr2 else "") if len(s) >= 3}
+    except RuntimeError:
+        pass
+    return stems
+
+
+def _src_covers_term_stems(src, term_stems):
+    if not src or not term_stems:
+        return False
+    parts = set()
+    try:
+        r = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1" % (TABLES, lit(src)))
+        lab = (r[0][0] if r and r[0] else "") or src
+        for chunk in (lab, src.split("_", 1)[-1] if "_" in src else src):
+            kr = psql("SELECT ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(chunk)))
+            parts |= {s for s in _stem_set(kr[0][0] if kr else "") if len(s) >= 3}
+    except RuntimeError:
+        return False
+    return term_stems <= parts
+
+
+def align_picked_to_terms(picked, cands, intent, diag):
+    """Единственный кандидат, чьё имя покрывает terms вопроса — он и есть сущность (B8-06)."""
+    if not picked or len(picked) != 1 or not cands:
+        return picked
+    term_stems = _term_stems(intent)
+    if not term_stems:
+        return picked
+    fits = [c for c in cands if _src_covers_term_stems(c, term_stems)]
+    if len(fits) == 1 and fits[0] != picked[0]:
+        if diag is not None:
+            diag["aligned_to_terms"] = {"was": picked[0], "became": fits[0]}
+        return [fits[0]]
+    return picked
+
+
 def resolve_focus(focus, diag=None):
     """Свести `focus` к ИМЕНИ ИСТОЧНИКА, как бы его ни назвали.
 
@@ -7183,11 +7303,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     шаги = []
 
     def шаг(что, **чем):
-        шаги.append(dict(шаг=что, мс=int((time.time() - t0) * 1000), **чем))
-        if TRACE:
-            sys.stderr.write("ask СЛЕД %6d мс  %-18s %s\n" % (
-                шаги[-1]["мс"], что,
-                " ".join("%s=%s" % (k, v) for k, v in чем.items())))
+        ms = int((time.time() - t0) * 1000)
+        шаги.append(dict(шаг=что, мс=ms, **чем))
+        status = (" ".join("%s=%s" % (k, v) for k, v in чем.items())
+                  if чем else "ok")
+        _trace_write("service", что, ms, status)
 
     today = time.strftime("%Y-%m-%d")
     intent = parse_intent(question, today)
@@ -7198,6 +7318,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     разбор = intent.get("parse") or {}
     diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind"),
             "parse": разбор, "шаги": шаги}
+    _fork_early = {"rows": None, "cls": None, "rel": None, "pool": None}
     if period_from_prior:
         diag["period_from_prior"] = True
     шаг("разбор вопроса", тип=intent.get("kind"), понятий=len(intent.get("terms") or []),
@@ -7859,6 +7980,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                             "atoms": _atoms[:10],
                             "atoms_truncated": max(0, len(_atoms) - 10) or None,
                             "cost_ms": int((time.time() - _t_fork) * 1000)}
+            _fork_early["rows"] = _rows
+            _fork_early["cls"] = _cls
+            _fork_early["rel"] = _rel
+            _fork_early["pool"] = _fork_pool
             шаг("детектор развилки", классов=len(_cls),
                 веток=diag["fork"]["srcs"], счёт_мс=diag["fork"]["cost_ms"])
             if len(_cls) > 1:
@@ -8455,15 +8580,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _mword = (intent.get("measure") or "").strip()
         _fwant = (intent.get("want") or "").strip()
         try:
-            # Пространство исходов = arb_pool (без fork_label_siblings: волна-1
-            # раздувала пул до всех подписанных src одного fork_key — [замер 17.08]).
-            _out_pool = list(arb_pool)
-            _mbs = _measures_by_src(_out_pool)
-            _als = _aliases_by_src(_out_pool)
-            _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
-                    for c in _out_pool}
-            _rows = fork_scan(match, preds, _rel)
-            _cls = fork_classes(_rows)
+            # Исход B — по полному раннему скану (cands[:16]), не по arb_pool[:3]:
+            # иначе эталонные B-пары отрезаются до 2–3 веток (B8-01/04).
+            if _fork_early.get("cls") and _fork_early.get("rows"):
+                _out_pool = list(_fork_early.get("pool") or [])
+                _rows = dict(_fork_early["rows"])
+                _cls = dict(_fork_early["cls"])
+                _rel = dict(_fork_early.get("rel") or {})
+            else:
+                _out_pool = list(arb_pool)
+                _mbs = _measures_by_src(_out_pool)
+                _als = _aliases_by_src(_out_pool)
+                _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
+                        for c in _out_pool}
+                _rows = fork_scan(match, preds, _rel)
+                _cls = fork_classes(_rows)
             if len(_cls) > 1:
                 _fork_log(_cls, _mword or (intent.get("want") or ""))
             _prev = dict(diag.get("fork") or {})
@@ -9107,6 +9238,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     diag["grain"] = grain_dec.get("grain")
     diag["axis_col"] = grain_dec.get("col")
     diag["axis_form"] = grain_dec.get("form")
+    if count_question_skips_axis(intent, measure, grain_dec):
+        grain_dec = {"grain": "row", "col": None, "form": "number",
+                     "named_gis": [], "clarify": None}
+        diag["axis_clarify_skipped"] = "count_without_measure"
     if grain_dec.get("clarify") == "axis":
         opts = axis_clarify_options(src, axes)
         return {"partial": cut or None, "kind": "clarify",
@@ -9876,7 +10011,7 @@ def _journal_uncounted_truncated(out):
 
 
 def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
-                       decision_id=None):
+                       decision_id=None, rid=None):
     """Одна запись журнала. Текст вопроса в SQL не передаётся (аудит §14.5)."""
     global _JOURNAL_LOST
     if not ASK_JOURNAL:
@@ -9907,14 +10042,16 @@ def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
                             ensure_ascii=False)
         latency = int((time.monotonic() - t0) * 1000) if t0 else 0
         nid = int(psql("SELECT nextval('ask_journal_id_seq')")[0][0])
+        jr = _rid_norm(rid or _rid_get())
         sql = (
             "INSERT INTO ask_journal ("
             "id, db_name, channel, user_hash, q_hash, q_len, intent_json, outcome, "
             "fork_outcome, atoms, fork_keys, ticket_used, ticket_error, code_md5, "
             "build_ts, alias_ver, tokens_in, tokens_out, tokens_calls, latency_ms, "
-            "partial_flag, freshness_age_sec, uncounted, truncated, discarded_before"
+            "partial_flag, freshness_age_sec, uncounted, truncated, discarded_before, "
+            "rid"
             ") VALUES (%s, current_database(), %s, %s, %s, %s, %s, %s, %s, %s::JSON, "
-            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
             % (nid,
                lit(channel or ""),
                lit(user_hash),
@@ -9938,7 +10075,8 @@ def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
                _journal_sql_int(age),
                _journal_sql_int(unc),
                _journal_sql_int(trn),
-               _journal_sql_int(_JOURNAL_LOST)))
+               _journal_sql_int(_JOURNAL_LOST),
+               lit(jr)))
         if q and q in sql:
             raise RuntimeError("ask_journal: текст вопроса попал в SQL")
         try:
@@ -10034,7 +10172,7 @@ def _try_memory_apply(question, out, user, focus, measure_pick, context, prior,
 
 def answer_checked(question, focus=None, measure_pick=None, context="", prior=None,
                    trusted=None, decision_id=None, user=None, channel=None,
-                   mem_action=None):
+                   mem_action=None, rid=None):
     """Ответ вместе с шагом «достаточен ли вопрос». Точка входа сервиса.
 
     Порядок п. 21 сохранён: сперва пробуем ответить, уточняем только там, где ответа с
@@ -10047,6 +10185,7 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
 
     Журнал (шаг 5): одна точка на всех исходах, включая choice_error и unavailable.
     """
+    rid = _rid_enter(rid)
     t0 = time.monotonic()
     out = None
     try:
@@ -10073,7 +10212,7 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
         raise
     finally:
         _ask_journal_write(question, out, t0, trusted=trusted, user=user,
-                           channel=channel, decision_id=decision_id)
+                           channel=channel, decision_id=decision_id, rid=rid)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -10154,6 +10293,7 @@ class Handler(BaseHTTPRequestHandler):
         decision_id = (req.get("decision_id") or "").strip() or None
         user = (req.get("user") or "").strip() or None
         channel = (req.get("channel") or "http").strip() or "http"
+        rid = (req.get("rid") or "").strip() or None
         try:
             # Команда «запомни»/«забудь» без вопроса данных: не гоняем разбор,
             # клик сам по себе память не пишет (нужен mem_action).
@@ -10171,7 +10311,7 @@ class Handler(BaseHTTPRequestHandler):
                 out = answer_checked(question, focus=focus, measure_pick=measure_pick,
                                      context=context, prior=prior,
                                      decision_id=decision_id, user=user, channel=channel,
-                                     mem_action=mem_action)
+                                     mem_action=mem_action, rid=rid)
                 if isinstance(out, dict) and out.get("options"):
                     out = seal_clarify(out, question, user=user)
                 out = attach_memory_shadow(out, user=user, action=mem_action,

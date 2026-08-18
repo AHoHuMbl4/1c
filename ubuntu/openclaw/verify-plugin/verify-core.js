@@ -1,3 +1,5 @@
+import crypto from "node:crypto";
+
 // verify-core — чистая (без зависимостей от OpenClaw SDK) логика анти-галлюцинационного
 // гейта. Вынесена отдельно, чтобы гонять юнит-тестами оффлайн. index.js только подключает
 // это к хукам движка. Принцип и политика описаны в index.js / OPENCLAW_BOT.md.
@@ -86,6 +88,7 @@ export const DEFAULTS = {
   refTtlMs: 10 * 60 * 1000, // сколько держать эталон хода в памяти
   debug: false, // console.log решения гейта (для диагностики)
   stripInternal: true, // детерминированно резать внутреннее (SQL/пути/маркеры) из исходящего — КОДОМ
+  trace: true, // TRACE rid по слоям; выключение: ASK_TRACE=0 или trace:false
 };
 
 // числовой токен = группы цифр, соединённые ОДИНОЧНЫМ разделителем тысяч/десятых
@@ -95,6 +98,32 @@ export const DEFAULTS = {
 // Разделителем внутри числа бывает и ДЕФИС: «8-999-123-45-67», «40702-81090-00000».
 // Без него выдуманные счета и телефоны распадались на короткие токены и проходили
 // порог highRiskDigits — проверено прогоном.
+
+export function traceEnabled(cfg) {
+  if (cfg && cfg.trace === false) return false;
+  const v = String(process.env.ASK_TRACE || "1").trim().toLowerCase();
+  return v !== "0" && v !== "false" && v !== "no";
+}
+
+export function newRid() {
+  return crypto.randomBytes(8).toString("hex").slice(0, 16);
+}
+
+export function traceLine(rid, layer, step, ms, status) {
+  return "TRACE " + String(rid || "-") + " " + layer + " " + step + " " + intMs(ms) + " " + String(status || "ok");
+}
+
+function intMs(ms) {
+  const n = Number(ms);
+  return Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+}
+
+export function injectAskRid(params, rid) {
+  const p = { ...(params || {}) };
+  if (rid) p.rid = rid;
+  return p;
+}
+
 const NUM_TOKEN_RE = new RegExp("\\d+(?:[ \\u00a0\\u202f\\u2009.,-]\\d+)*", "g");
 
 export function numericTokens(text, minDigits) {
