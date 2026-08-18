@@ -1,3 +1,14 @@
+## Замер 18.08 — «позавчера»: вторая 503 (n_folders), хотфикс оркестратора
+
+Правка `ubuntu/serenedb/serene_ask.py` — только перенос двух присвоений
+(`say_measure`, `n_folders`) выше раннего выхода `period_empty_outcome`.
+**Снят ПОСЛЕ правки.** Оффлайн у оркестратора: `test_period_empty` 30/30,
+`test_measure_empty` 26/26, `test_terminal_round` 13/13, `test_compose` 92,
+`test_gate` 132. Golden ut_test `:8098` на коде хотфикса: 1/8 — идентично
+прогону f56d75fd (известная дельта «декабрь 2025» — слабость dev-контура,
+не этой правки). Живое okna: падавшая цепочка «позавчера» → документ → «итого»
+→ kind=answer period_empty (не 503); «вчера» → регистр → «итого» = 766 578,68.
+
 ## Замер 18.08 — «позавчера» period_empty, не 503 и не all-time
 
 Правка `ubuntu/serenedb/serene_ask.py` + `test_period_empty.py` + `test_gate.py`.

@@ -10324,6 +10324,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     diag["slot_mode"] = slot_mode
     _period_act = empty_after_period_action(intent)
     diag["empty_after_period_action"] = _period_act
+    # 🔴 Имена для period_empty-ветки посчитаны ДО неё: ранний выход обязан видеть
+    # те же значения, что и основной путь. [замер 18.08, okna] UnboundLocalError
+    # `n_folders` → 503 на «позавчера» → документ → «итого»: присвоение стояло ниже.
+    say_measure = measure if money else None
+    n_folders = (agg or {}).get("folders") or 0
     if period_empty_outcome(agg, _period_act, intent, diag):
         return build_period_empty_answer(
             question, agg, intent, measure, src, match, preds, money, slot_mode,
@@ -10347,8 +10352,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Границы периода отбора — на тех же правах, но по датной ветке гейта.
     our_dates = _filter_dates(intent)
     # Оговорки к ответу — в промт, а не приписью после: язык берётся из вопроса.
-    say_measure = measure if money else None
-    n_folders = (agg or {}).get("folders") or 0
+    # (`say_measure`/`n_folders` посчитаны выше — до раннего выхода period_empty.)
     totals_shown = [] if (agg or {}).get("grain") == "group" else (totals if money else [])
     # Атом ответа — тем же строителем, что уходит в kind=answer/figures (план §5).
     _answer_pairs = [atom_from_agg(
