@@ -2328,6 +2328,8 @@ _JOURNAL_LOST = 0
 # строка пишется и видна в diag, ответ не меняет. Включение в бой — отдельное
 # решение после замера коллизий; ручки «применить» в этом шаге нет.
 ASK_CHOICE_MEMORY = os.environ.get("ASK_CHOICE_MEMORY", "1") not in ("0", "false", "no")
+# Применение памяти в ответ (план §8 шаг 6). 0=shadow (по умолчанию), 1=«помню: …».
+ASK_MEMORY_APPLY = os.environ.get("ASK_MEMORY_APPLY", "0") not in ("0", "false", "no")
 _MEMORY_LOST = 0
 _JOURNAL_KEEP = None
 _JOURNAL_CODE_MD5 = None
@@ -3468,6 +3470,8 @@ def guards_skip_for_choice(focus=None, measure_pick=None, trusted=None):
 
     Сырой focus/measure сами по себе сюда не проходят (аудит §10).
     """
+    if isinstance(trusted, dict) and trusted.get("from_memory"):
+        return True
     if choice_proven(trusted, "entity") or choice_proven(trusted, "measure") \
             or choice_proven(trusted, "axis"):
         return True
@@ -10004,8 +10008,33 @@ def _answer_checked_core(question, focus=None, measure_pick=None, context="", pr
     return ask or out
 
 
+
+
+def _try_memory_apply(question, out, user, focus, measure_pick, context, prior,
+                      trusted, mem_action):
+    """Повторный прогон с веткой из памяти (ASK_MEMORY_APPLY=1)."""
+    if (not ASK_MEMORY_APPLY or not ASK_CHOICE_MEMORY or not user or trusted
+            or mem_action):
+        return out, trusted
+    probe = ACM.probe_memory_apply(
+        out, psql=psql, tables=TABLES, user=user)
+    if not probe.get("can_apply"):
+        return out, trusted
+    br = probe["branch"]
+    mfocus = br.get("src") or None
+    mmeas = br.get("measure") or None
+    if mmeas == "":
+        mmeas = None
+    mem_trusted = ACM.memory_trusted(br)
+    out = _answer_checked_core(
+        question, focus=mfocus, measure_pick=mmeas or measure_pick,
+        context=context, prior=prior, trusted=mem_trusted)
+    out = ACM.finish_apply(out, probe)
+    return out, mem_trusted
+
 def answer_checked(question, focus=None, measure_pick=None, context="", prior=None,
-                   trusted=None, decision_id=None, user=None, channel=None):
+                   trusted=None, decision_id=None, user=None, channel=None,
+                   mem_action=None):
     """Ответ вместе с шагом «достаточен ли вопрос». Точка входа сервиса.
 
     Порядок п. 21 сохранён: сперва пробуем ответить, уточняем только там, где ответа с
@@ -10035,6 +10064,9 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
             trusted = ticket
         out = _answer_checked_core(question, focus=focus, measure_pick=measure_pick,
                                    context=context, prior=prior, trusted=trusted)
+        out, trusted = _try_memory_apply(
+            question, out, user, focus, measure_pick, context, prior,
+            trusted, mem_action)
         return out
     except Exception:
         out = {"kind": "unavailable", "text": "", "sources": [], "retry": True, "partial": None}
@@ -10138,7 +10170,8 @@ class Handler(BaseHTTPRequestHandler):
                 # decision_id потребляется там же — иначе choice_error минует журнал.
                 out = answer_checked(question, focus=focus, measure_pick=measure_pick,
                                      context=context, prior=prior,
-                                     decision_id=decision_id, user=user, channel=channel)
+                                     decision_id=decision_id, user=user, channel=channel,
+                                     mem_action=mem_action)
                 if isinstance(out, dict) and out.get("options"):
                     out = seal_clarify(out, question, user=user)
                 out = attach_memory_shadow(out, user=user, action=mem_action,

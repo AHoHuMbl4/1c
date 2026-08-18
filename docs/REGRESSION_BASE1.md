@@ -1,3 +1,24 @@
+## Замер 18.08 — память выбора: DDL okna + ASK_MEMORY_APPLY
+
+DDL `ask_journal`/`ask_choice_memory` на okna (`167.233.249.110`, postgres
+:7890): GRANT serene_ro ✓; живой `:8091` journal +1, remember stored, LOST=0.
+Код: `ASK_MEMORY_APPLY=0` shadow побайтово; `=1` — probe/finish_apply,
+коллизия→не применять. **Снят ПОСЛЕ последней правки.** Оффлайн:
+test_ask_choice_memory **56/56**, test_gate 130, step4_guards 110, fork_outcomes 24,
+decision_id 24, ask_journal 17, a3 14, answer_atom 18, fork_detector 23.
+md5 `serene_ask.py` **`617a0d02…`**, `ask_choice_mem.py` **`654847ad…`**.
+apply=1 на `:8105` (repo, ut_test): LLM **503** в сессии — E2E apply не замокнут;
+прод apply **не включали**. Включение okna — оркестратор.
+
+## Замер 18.08 — F2 p_doc_plain порядковый суффикс (§3.77)
+
+Правка `ubuntu/serenedb/corpus_build.sql` (plain-путь). **Снят ПОСЛЕ последней
+правки.** Живая проба: test_corpus_plain_key **8/8** (0 дублей ключа на
+синтетике обёртки; klient-1 блокер был **37 522** → ожидается **0** после
+выката и полного такта). Оффлайн: test_gate 130, test_fork_detector 23,
+test_delta — зелёные. md5 `corpus_build.sql` **`046d91f5559bdcc4f89801d755ae22d1`**.
+Юниты не выкатывались. Регрессии первой базы по оффлайн-замкам нет.
+
 ## Замер 17.08 — личность канала → /ask.user (шаг 6, shadow)
 
 Плагин 1.1.6 + мост: `user`/`channel` от канала, фразы «запомни/забудь» сняты.

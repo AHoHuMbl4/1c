@@ -98,17 +98,112 @@ def class_meta_of(out):
     }
 
 
-def would_apply_text(branch):
-    """Формулировка для diag (и для будущего видимого применения)."""
+def _branch_label_bits(branch):
     if not branch:
-        return ""
+        return []
     lab = (branch.get("label") or branch.get("src") or "").strip()
     bits = [lab] if lab else []
     if branch.get("measure"):
         bits.append(str(branch["measure"]))
     if branch.get("axis"):
         bits.append(str(branch["axis"]))
+    return bits
+
+
+def would_apply_text(branch):
+    """Формулировка для diag в shadow."""
+    bits = _branch_label_bits(branch)
     return "память применилась бы: " + " / ".join(bits) if bits else ""
+
+
+def apply_notice_text(branch):
+    """Видимая приписка при ASK_MEMORY_APPLY=1 — из записи, не проза модели."""
+    bits = _branch_label_bits(branch)
+    return "помню: " + " / ".join(bits) if bits else ""
+
+
+def memory_trusted(branch):
+    """Билет-подобный trusted для повторного прогона с памятью."""
+    br = branch or {}
+    meas = br.get("measure")
+    return {
+        "ambiguity": "entity",
+        "src": br.get("src") or "",
+        "measure": meas if meas not in (None, "") else None,
+        "axis": br.get("axis") or None,
+        "label": br.get("label") or "",
+        "from_memory": True,
+    }
+
+
+def _branch_live(hit, meta, psql, tables):
+    live_src = hit["src"] in set(meta.get("readings") or [])
+    live_ver = True
+    if hit.get("entity_ver") and meta.get("readings"):
+        now_ver = choice_entity_ver(psql, tables, meta["readings"])
+        live_ver = (not now_ver) or now_ver == hit["entity_ver"]
+    return live_src and live_ver
+
+
+def _is_ambiguous_out(out):
+    if not isinstance(out, dict):
+        return False
+    d = out.get("diag") or {}
+    fork = d.get("fork_outcome") or (d.get("fork") or {}).get("outcome") or ""
+    opts = out.get("options") or []
+    if out.get("kind") == "clarify" and opts:
+        return True
+    if out.get("kind") == "figures" and opts and fork in ("B", "C", ""):
+        return True
+    return fork in ("B", "C")
+
+
+def probe_memory_apply(out, *, psql, tables, user):
+    """Можно ли применить память к этому ответу (ASK_MEMORY_APPLY=1)."""
+    uh = user_hash_of(user)
+    if not uh or not isinstance(out, dict):
+        return {"can_apply": False, "reason": "no_user"}
+    meta = class_meta_of(out)
+    if not meta.get("readings"):
+        return {"can_apply": False, "reason": "no_class"}
+    ck = meta["class_key"]
+    coll = _memory_collisions(psql, ck)
+    if coll:
+        return {"can_apply": False, "reason": "collision", "collision": coll,
+                "class_key": ck}
+    hit = _memory_lookup(psql, uh, ck)
+    if not hit:
+        return {"can_apply": False, "reason": "miss", "class_key": ck}
+    live = _branch_live(hit, meta, psql, tables)
+    if not live:
+        return {"can_apply": False, "reason": "stale", "branch": hit,
+                "class_key": ck}
+    if not _is_ambiguous_out(out):
+        return {"can_apply": False, "reason": "not_ambiguous", "class_key": ck}
+    return {"can_apply": True, "branch": hit, "class_key": ck, "live": True}
+
+
+def finish_apply(out, probe):
+    """Приписка «помню: …» и diag.memory после повторного прогона."""
+    branch = (probe or {}).get("branch") or {}
+    notice = apply_notice_text(branch)
+    out = dict(out)
+    if notice and out.get("text"):
+        out["text"] = notice + "\n" + out["text"]
+    d = dict(out.get("diag") or {}) if isinstance(out.get("diag"), dict) else {}
+    mem = dict(d.get("memory") or {})
+    mem.update({
+        "mode": "apply",
+        "applied": True,
+        "apply_text": notice,
+        "branch": {"src": branch.get("src"), "measure": branch.get("measure"),
+                   "axis": branch.get("axis"), "label": branch.get("label")},
+        "class_key": probe.get("class_key"),
+        "live": True,
+    })
+    d["memory"] = mem
+    out["diag"] = d
+    return out
 
 
 def _lit(s):
@@ -319,15 +414,15 @@ def attach_choice_memory(out, *, psql, tables, peek_decision, user=None,
                 mem["class_key"] = ck
         ck = meta.get("class_key") or ""
         has_class = bool(meta.get("readings"))
-        if uh and ck and has_class:
+        preserved = ((out.get("diag") or {}).get("memory") or {})
+        if preserved.get("applied"):
+            mem.update({k: preserved[k] for k in ("mode", "applied", "apply_text",
+                                                  "branch", "class_key", "live")
+                        if k in preserved})
+        elif uh and ck and has_class:
             hit = _memory_lookup(psql, uh, ck)
             if hit:
-                live_src = hit["src"] in set(meta.get("readings") or [])
-                live_ver = True
-                if hit.get("entity_ver") and meta.get("readings"):
-                    now_ver = choice_entity_ver(psql, tables, meta["readings"])
-                    live_ver = (not now_ver) or now_ver == hit["entity_ver"]
-                live = live_src and live_ver
+                live = _branch_live(hit, meta, psql, tables)
                 branch = {"src": hit["src"], "measure": hit["measure"],
                           "axis": hit["axis"], "label": hit["label"]}
                 mem["would_apply"] = branch

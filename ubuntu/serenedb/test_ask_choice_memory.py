@@ -429,5 +429,42 @@ else:
     print("skip live (нет PGPASSWORD)")
 
 
+
+# ── apply=0 vs apply=1 ───────────────────────────────────────────────────────
+t("apply_notice из записи",
+  ACM.apply_notice_text({"label": "Отгрузки", "measure": "сумма"})
+  == "помню: Отгрузки / сумма")
+apply_opts = [
+    {"src": "document_a", "label": "Отгрузки", "found": 10},
+    {"src": "document_b", "label": "Оплаты", "found": 5},
+]
+probe_out = {"kind": "figures", "text": "пары", "options": apply_opts,
+             "diag": {"fork_outcome": "B", "fork": {"atoms": [
+                 {"srcs": ["document_a"]}, {"srcs": ["document_b"]}]},
+                      "measure": "сумма"}}
+ck_apply = ACM.class_meta_of(probe_out)["class_key"]
+st_apply = Store()
+_put(st_apply, "u1", ck_apply, "document_a", label="Отгрузки")
+st_apply.rows[(ACM.user_hash_of("u1"), ck_apply)]["entity_ver"] = ""
+pr = ACM.probe_memory_apply(probe_out, psql=st_apply.psql, tables="search_tables", user="u1")
+t("probe: can_apply без коллизии", pr.get("can_apply") is True, str(pr))
+sh = ACM.attach_choice_memory(
+    dict(probe_out), psql=st_apply.psql, tables="search_tables",
+    peek_decision=A.peek_decision, user="u1", enabled=True, lost_box=[0])
+t("apply=0: kind/text не меняются",
+  sh.get("kind") == "figures" and sh.get("text") == "пары")
+t("apply=0: mode=shadow", ((sh.get("diag") or {}).get("memory") or {}).get("mode") == "shadow")
+_put(st_apply, "u2", ck_apply, "document_b", label="Оплаты")
+pr_coll = ACM.probe_memory_apply(probe_out, psql=st_apply.psql, tables="search_tables", user="u1")
+t("probe: коллизия → can_apply false",
+  pr_coll.get("can_apply") is False and pr_coll.get("reason") == "collision")
+fin = ACM.finish_apply({"kind": "answer", "text": "1 234,56 руб.", "diag": {}}, pr)
+t("finish_apply: помню в text",
+  (fin.get("text") or "").startswith("помню: Отгрузки"))
+t("finish_apply: diag applied",
+  ((fin.get("diag") or {}).get("memory") or {}).get("applied") is True)
+pr_other = ACM.probe_memory_apply(probe_out, psql=st_apply.psql, tables="search_tables", user="u9")
+t("probe: чужой user miss", pr_other.get("can_apply") is False)
+
 print("\nИТОГ: %d ok, %d fail" % (PASS, len(FAIL)))
 sys.exit(1 if FAIL else 0)

@@ -1,4 +1,32 @@
+## 18.08: память выбора — DDL okna + ASK_MEMORY_APPLY `[код]` `[замер]`
+
+`[код]` `ask_choice_mem.py`: `probe_memory_apply`, `finish_apply`, `memory_trusted`,
+`apply_notice_text`; `serene_ask.py`: `ASK_MEMORY_APPLY` (0=shadow по умолчанию),
+`_try_memory_apply` в `answer_checked`. Коллизии — `ask_choice_memory_collisions.sql`.
+
+`[замер]` okna prod: DDL через SSH (postgres :7890); journal +1 на `/ask`, remember
+→ stored, `_JOURNAL_LOST`/`memory LOST` не растут. Оффлайн **56/56**
+`test_ask_choice_memory`, прежние замки зелёные. md5 `617a0d02…` / `654847ad…`.
+Prod `ASK_MEMORY_APPLY` не включали.
+
 # Журнал изменений
+
+## 18.08: F1 — census в packet-режиме (локальный packet-meta) `[код]` `[замер]`
+
+`[код]` `odata_census.py`: если `ETL_ODATA_BASE` — каталог (не URL), состав
+сущностей и `$metadata` читаются из файлов (`EntitySet` снимка, через
+`poc_load_entity.published_entity_sets()`); count — `count(*)` в витрине;
+закрытые — из `skipped.json` с причинами (`no_read_right` → «нет прав»).
+HTTP-режим (шлюз OData) без изменений.
+
+`[код]` `poc_load_entity.py`: `_is_local_base`, `_read_meta_xml` — общий
+разбор снимка `$metadata` для переписи и преполёта синка.
+
+`[замер]` `python3 ubuntu/serenedb/test_odata_census.py` — **17/17** (HTTP
+регресс + packet: `$metadata` без skipped, skipped с metadata, нет metadata →
+ValueError). `test_delta.py` — зелёный. Артефакт выката:
+`work/packet/rollout-f1-census.md`. Статус F1 в `PLAN_ORCHESTRATOR.md` →
+ожидает выката.
 
 ## 18.08: okna B7 — приёмка п. 21 по свежему корпусу `[замер]`
 

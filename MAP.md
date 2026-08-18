@@ -257,6 +257,7 @@ OpenClaw (чтение — отдельный трек, здесь его нет
 | `ask_journal.sql` + `ask_journal_apply.sh` | **журнал исходов** (шаг 5): таблица `ask_journal`, GRANT INSERT/DELETE/`SELECT(id)` для `serene_ro`; `corpus_init.sql` не трогает |
 | `test_ask_journal.py` / `ask_journal_label.py` | замки журнала (17) и разметка selftest-потока прямой SQL-сводкой |
 | `ask_choice_memory.sql` + `ask_choice_memory_apply.sh` | **память явного выбора** (шаг 6, shadow): таблица `ask_choice_memory`, GRANT INSERT/SELECT/UPDATE для `serene_ro`; клик не пишет |
+| `ask_choice_memory_collisions.sql` | SQL-отчёт коллизий классов памяти |
 | `ask_choice_mem.py` / `test_ask_choice_memory.py` | ключ класса, remember/forget (только поле memory), shadow в diag; замки 48 |
 | `work/acceptance/selftest_*.py` | самопроверка из данных (ярус 1 — поверхности без модели; ярус 2 — живой `/ask` + сверка атома SQL). База замка 17 — `docs/SELFTEST_BASELINE.md`; регресс промахов — `selftest-misses-*-tier2.jsonl` |
 

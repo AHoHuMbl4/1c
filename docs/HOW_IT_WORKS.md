@@ -176,11 +176,15 @@ Open WebUI кладёт тело `user` только для pipeline-модел�
 `session:<sessionKey>` — это сессия, не человек (без `user` в теле шлюз даёт
 новый UUID на каждый запрос, `gateway/openai-http-api.md`).
 
-Первый режим — SHADOW: строка пишется, в `diag.memory` видно
-`would_apply_text` («память применилась бы: …») и `collision`, ответ
-(`kind`/`text`/`figures`) не меняется. Включение в бой — отдельное решение.
-Схема — `ask_choice_memory.sql`, не `corpus_init.sql`. Выключатель
-`ASK_CHOICE_MEMORY=1`. Ошибка памяти не роняет ответ.
+Режимы: **`ASK_MEMORY_APPLY=0`** (по умолчанию, shadow) — строка
+пишется, в `diag.memory` видно `would_apply_text` («память применилась бы: …»)
+и `collision`, ответ (`kind`/`text`/`figures`) не меняется.
+**`ASK_MEMORY_APPLY=1`** — при повторном классе у того же user+база, если ветка
+жива и коллизии нет, повторный прогон с `memory_trusted` и видимой припиской
+«помню: …» (из записи, не проза модели); коллизия → clarify как прежде.
+На okna DDL журнала и памяти — отдельным apply-скриптом (не `corpus_init.sql`).
+Выключатель записи `ASK_CHOICE_MEMORY=1`. Ошибка памяти не роняет ответ.
+Метрика коллизий — `ask_choice_memory_collisions.sql`.
 
 
 ### 1. Намерение
