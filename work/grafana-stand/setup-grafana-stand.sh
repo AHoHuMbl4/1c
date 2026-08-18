@@ -39,6 +39,14 @@ fi
 
 # --- 2. конфиг -------------------------------------------------------------
 mkdir -p data logs plugins
+# Ключи сквозной авторизации (auth.jwt): адаптер подписывает короткоживущий
+# JWT приватным ключом, Grafana проверяет публичным и логинит без формы.
+# На стенде ключи в /dev/shm (эфемерно); в проде — /etc с правами 640.
+if [ ! -f jwt-private.pem ]; then
+    openssl genrsa -out jwt-private.pem 2048 2>/dev/null
+    openssl rsa -in jwt-private.pem -pubout -out jwt-public.pem 2>/dev/null
+    chmod 600 jwt-private.pem
+fi
 # allow_embedding=true — панели встраиваются iframe'ом (по умолчанию Grafana
 # шлёт X-Frame-Options: deny [замер 18.08]).
 cat > custom.ini <<EOF
@@ -58,6 +66,16 @@ reporting_enabled = false
 check_for_updates = false
 [users]
 allow_sign_up = false
+[auth.jwt]
+# Сквозной вход из чата: ссылка вида /d/<uid>?auth_token=<JWT> логинит
+# без формы (url_login). Проверка — публичным ключом; подписывает адаптер.
+enabled = true
+url_login = true
+header_name = X-JWT-Assertion
+key_file = $STAND_DIR/jwt-public.pem
+username_claim = sub
+email_claim = email
+auto_sign_up = true
 EOF
 
 # --- 3. запуск -------------------------------------------------------------

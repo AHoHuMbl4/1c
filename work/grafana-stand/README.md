@@ -10,6 +10,15 @@ bash work/grafana-stand/setup-grafana-stand.sh   # поднять/пересоз
 kill $(cat /dev/shm/grafana-stand/grafana.pid)   # остановить
 ```
 
+Сквозной вход (без формы логина): `[auth.jwt]` включён в конфиге стенда,
+RSA-ключи генерятся при первом запуске. Ссылка-вход:
+
+```bash
+python3 work/grafana-stand/mint-jwt.py --email ivan.petrov@example.org --name "Иван"
+# → http://127.0.0.1:3001/d/stand-from-chat?auth_token=…  (логинит первый запрос;
+#   постоянный вход — через cookie→header на прокси, см. docs/DASHBOARD_GRAFANA.md §2)
+```
+
 Демо-дашборд создаётся только при явно заданной витрине (хардкода базы нет):
 
 ```bash
