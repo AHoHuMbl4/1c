@@ -3,13 +3,24 @@
 # С 10.08 (вариант А) onboard пишет только контур; сборка ждёт отметку
 # .first-data от apply — до данных такт обрывается штатным сторожем пустого
 # корпуса, и крутить его по таймеру — шум и ложные алерты.
+#
+# 🔴 Restart= с пределом, не петля. [замер 14–17.08] firstbuild упал «Start
+# request repeated too quickly» и три дня молчал: path сразу стартовал снова.
+# Глаз снимается в начале скрипта; здесь — 5 попыток за час с паузой 2 мин.
+# Дальше failed, сторож 1c-bot-monitor пишет владельцу (TACT_FAIL_MAX_MIN).
 Description=первая сборка слоя слота %i на юните (по первым данным) + таймер свежести
 After=serenedb.service 1c-packet-apply.service
 Wants=serenedb.service
+StartLimitIntervalSec=1h
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
 TimeoutStartSec=infinity
+Restart=on-failure
+RestartSec=2min
+EnvironmentFile=-/etc/1c-embed.env
+EnvironmentFile=-/etc/1c-serene-pipeline-postgres.env
 # postgres — не выбор базы, а конвенция юнита: на копии dbname всегда postgres
 # (PLAN_PROD_LXC §8.1).
 ExecStart=/opt/1c-packet/firstbuild_unit.sh %i postgres

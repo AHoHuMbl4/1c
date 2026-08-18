@@ -31,9 +31,9 @@ DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 export SERENEDB_DSN="$DSN"
 GATE="${ETL_ODATA_BASE:-http://127.0.0.1:6011}"
 WORKERS="${BUILD_EMBED_WORKERS:-8}"
-# Минимум пула исполнителей для precheck. Умолчание embed_workers+8 (29.07); на
-# малых юнитах (≤8 ГиБ RAM) задают BUILD_THREAD_MIN=число vCPU — иначе precheck
-# не пустит threads=4, а 160 потоков убивает движок OOM-killer'ом (okna 17.08).
+# Минимум пула исполнителей для precheck. Умолчание embed_workers+8 (29.07).
+# На малой коробке box_tune.sh ставит BUILD_THREAD_MIN=cpu_threads (≤4) — иначе
+# precheck не пустит threads=4, а 160 потоков убивает движок (замер 17.08).
 THREAD_MIN="${BUILD_THREAD_MIN:-$((WORKERS + 8))}"
 # 🔴 МОДЕЛЬ И АДРЕС ЭМБЕДДЕРА ЗАДАЮТСЯ ЯВНО, УМОЛЧАНИЯ НЕТ. Смена модели меняет ВЕКТОРНОЕ
 # ПРОСТРАНСТВО: вектор вопроса от одной модели и вектор строки от другой сравниваются без

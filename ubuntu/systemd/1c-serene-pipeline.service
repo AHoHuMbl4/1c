@@ -4,6 +4,8 @@
 Description=1c-serene-pipeline — витрина (дельта из 1С) + сборка поискового слоя
 After=network.target serenedb.service 1c-odata-gateway.service
 Wants=serenedb.service
+StartLimitIntervalSec=1h
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
@@ -21,4 +23,6 @@ EnvironmentFile=/etc/1c-serene-sync.env
 # конвейера упал именно так: эмбеддер переехал в /etc/1c-embed.env, сервис ответов
 # этот файл читает, а конвейер — нет; пока конвейер стоял, расхождение не всплывало.
 EnvironmentFile=/etc/1c-embed.env
+Restart=on-failure
+RestartSec=3min
 ExecStart=/opt/1c-mcp-reports/pipeline.sh

@@ -22,6 +22,21 @@
 # Окружение:     EMBED_BASE_URL, EMBED_API_KEY|EMBED_API_KEYS, EMBED_MODEL
 set -u
 
+# 🔴 СНАЧАЛА ФОРМА АДРЕСА. [замер 17.08] EMBED_HOST=gpu-erw.timpul.pro без схемы
+# давал curl код 000 на двери движка; embed_check это ловил, но уже внутри такта —
+# firstbuild уходил в «repeated too quickly», и три дня никто не видел. Форма
+# (схема+хост+порт) проверяется ДО curl, чтобы отказ был мгновенным и понятным.
+_BOX_TUNE="$(cd "$(dirname "$0")" && pwd)/box_tune.sh"
+if [ -f "$_BOX_TUNE" ]; then
+  # shellcheck disable=SC1090
+  . "$_BOX_TUNE"
+  embed_hosts_form_check || exit 1
+fi
+if [ "${EMBED_CHECK_FORM_ONLY:-}" = 1 ]; then
+  echo "проверка эмбеддера: форма EMBED_HOST верна"
+  exit 0
+fi
+
 # 🔴 ПРОВЕРЯЕТСЯ ТА ЖЕ ДВЕРЬ, В КОТОРУЮ ПОЙДЁТ ДВИЖОК — `EMBED_HOST` + `EMBED_PATH`,
 # ровно то, что уходит в секрет `TYPE openai (base_url, embeddings_path)`. Проверять
 # соседний адрес бессмысленно: [замер 02.08] у нового сервиса путь движка `/v1/embeddings`,

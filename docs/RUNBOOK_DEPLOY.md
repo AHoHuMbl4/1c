@@ -34,11 +34,11 @@ Ubuntu LXC (наш, всё loopback):
 | `127.0.0.1:8091` | **`1c-serene-ask`** | `serene_ask.py` | root | **отвечающий сервис ПЕРВОЙ базы**: ищет индексом, считает базой. ⚠ [замер 02.08] юнит `enabled`, но `inactive`, на `:8091` никто не слушает; боевые ответы идёт с `:8099` — процесса вне systemd (см. таблицу второй базы ниже) |
 | — | `1c-serene-sync.timer` 03:40 | `serene_sync.py` | root | ⚠ **остановлен**: синк стал частью конвейера |
 | — | **`1c-serene-pipeline@postgres.timer`** | `pipeline.sh` | root | ⚠ **dev 17.08:** таймер **inactive** с 07.08, **enabled** — upstream `192.168.56.1:6003` (IIS OData первой базы) **Connection refused**; шлюз :6011 жив, `$metadata` → upstream unreachable. Такт падает на сборке корпуса. **Владельцу:** поднять Windows/IIS/проброс :6003 **или** `systemctl disable --now 1c-serene-pipeline@postgres.timer` — не держать вечный failed. `@ut_test` — отдельный env :6021, тот же upstream мёртв |
-| — | **`1c-serene-pipeline.timer`** (по готовности) | `pipeline.sh` | root | 🟢 **боевой такт**: раскладка кода → синк-дельта → сборка. Понятия «ночной» нет (п. 17) |
+| — | **`1c-serene-pipeline.timer`** (по готовности) | `pipeline.sh` | root | 🟢 **боевой такт**: раскладка кода → синк-дельта → сборка. Понятия «ночной» нет (п. 17). **с 18.08** юнит `Restart=on-failure` (3 мин, 5/час), форма `EMBED_HOST` до синка |
 | — | **`1c-serene-index.timer`** (`OnUnitActiveSec=20min`, `disabled`) | `build.sh` | root | ⚠ **таймер остановлен 28.07.** Сборка переехала в штатные средства движка: `build.sh` (корпус, величины, резолвер, индекс — одним SQL, без питона), и **живой юнит на неё переключён 28.07** (старый `ExecStart` сохранён в `.bak-20260728`). Таймер выключен, потому что такт целиком отдан `1c-serene-pipeline`. 🔴 Опасна не установленная копия, а **репозиторная** `ubuntu/serenedb/systemd/1c-serene-index.service` — она до сих пор зовёт `serene_search_build.py`, который при новом составе корпуса **сносит таблицу и индекс** (авария 28.07, `HOW_NOT_TO §2.9`); см. §10.6 |
 | `127.0.0.1:6015` | `1c-mcp-reports` | `mcp_reports.py` | root | ⚠ `report_1c` (NL→SQL) — **выведен из контура**, юнит ещё жив |
 | `127.0.0.1:18800` | `openclaw-gateway` (**user**-юнит) | `node …/openclaw` | **undebot** | бот: Telegram + DeepSeek-тон + verify-гейт |
-| — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` | root | алерт владельцу в Telegram при падении |
+| — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` + `tact_watch.sh` | root | алерт владельцу в Telegram при падении; **с 18.08** ещё: firstbuild/pipeline в `failed` дольше `TACT_FAIL_MAX_MIN` (умолч. 15 мин) |
 | — | `nightly-eval.timer` | `nightly-eval.sh` | root | ⛔ **погашен 29.07**: гонял евал выведенного слоя braine и слал алерт владельцу **с боевого токена бота**. Поднимать не надо |
 
 **Мост наружу (обновлено 12.08):** релей приёмника `1c-gate.timpul.ru:443` — с 08.08
@@ -445,8 +445,11 @@ current_database()'` → `postgres`; на стенде базы разведен
 желаемому числу одновременных обращений к эмбеддеру (`BUILD_EMBED_WORKERS` + запас на
 обычные запросы), верхняя граница — квота провайдера: признак, что упёрлись, — `HTTP 429`.
 
-⚠ Пока это ставится **руками**; по плану автономности настройку обязан делать установщик
-(`PLAN_AUTONOMY`, ручной шаг №0).
+**С 18.08 ставит `box_tune.sh`**, не руки: при онбординге и firstbuild меряет RAM/vCPU
+(прослойка, не хардкод базы) и пишет conf + `BUILD_THREAD_MIN` + swap под первую сборку.
+После успеха firstbuild возвращает `memory_limit` к 80 % RAM и снимает swap
+(`PLAN_KEY_DEDUP_RECOVERY §0`). Пороги — в коде (`ubuntu/serenedb/box_tune.sh`),
+синтетика `test_box_tune.py`. Живые юниты okna/klient-1 этим заходом не трогали.
 
 🔴 **Малые юниты (≤8 GiB RAM, 4 vCPU) — okna `167.233.249.110`, замер 17.08.** На
 полном корпусе ~1,2 M строк `cpu_threads=160` + `memory_limit=6 GiB` без swap

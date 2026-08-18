@@ -44,6 +44,14 @@ HEALTH_URLS="${HEALTH_URLS:-}"
 # споткнулся — отчитался «свежесть:port:не-прочитана».
 FRESH_MAX_MIN="${FRESH_MAX_MIN:-0}"
 FRESH_DSNS="${FRESH_DSNS:-}"
+# Такт (firstbuild/pipeline) в failed дольше N минут → токен в алерт.
+# 0 — не следить. Умолчание 15: firstbuild на klient-1 простоял 3 дня молча.
+TACT_FAIL_MAX_MIN="${TACT_FAIL_MAX_MIN:-15}"
+TACT_WATCH="${TACT_WATCH:-/opt/1c-bot-monitor/tact_watch.sh}"
+if [ ! -f "$TACT_WATCH" ]; then
+  _here="$(cd "$(dirname "$0")" && pwd)"
+  [ -f "$_here/tact_watch.sh" ] && TACT_WATCH="$_here/tact_watch.sh"
+fi
 
 mkdir -p "$(dirname "$STATE")"
 fails=""
@@ -110,6 +118,16 @@ if [ "${FRESH_MAX_MIN:-0}" -gt 0 ] 2>/dev/null && [ -n "$FRESH_DSNS" ]; then
       fails="$fails свежесть:$name:${age}мин"
     fi
   done <<< "$(printf '%s' "$FRESH_DSNS" | tr ';' '\n')"
+fi
+
+# --- 5. красный такт (firstbuild/pipeline failed дольше N минут) --------------
+# oneshot после успеха inactive — это норма; смотрим только failed. Path-юнит
+# больше не крутит сервис по кругу (disable сразу + Restart= с пределом).
+if [ "${TACT_FAIL_MAX_MIN:-0}" -gt 0 ] 2>/dev/null && [ -f "${TACT_WATCH:-}" ]; then
+  # shellcheck disable=SC1090
+  . "$TACT_WATCH"
+  _tact="$(tact_watch_tokens)"
+  [ -n "$_tact" ] && fails="$fails $_tact"
 fi
 
 now=$([ -z "$fails" ] && echo "ok" || echo "down:$fails")

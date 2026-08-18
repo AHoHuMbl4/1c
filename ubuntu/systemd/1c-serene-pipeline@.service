@@ -14,10 +14,16 @@
 Description=1c-serene-pipeline — такт свежести базы %i (дельта из 1С + сборка слоя поиска)
 After=network.target serenedb.service
 Wants=serenedb.service
+# 5 падений за час → failed, не петля. Таймер OnUnitInactiveSec=1min сам
+# повторит; Restart= ловит быстрый отказ (форма EMBED_HOST), пока таймер молчит.
+StartLimitIntervalSec=1h
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
 TimeoutStartSec=infinity
+Restart=on-failure
+RestartSec=3min
 WorkingDirectory=/opt/1c-mcp-reports
 # 🔴 ПОРЯДОК ЗНАЧИМ, последний слой перекрывает предыдущие:
 #   1. общие ключи и пароли ролей;

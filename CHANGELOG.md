@@ -1,5 +1,38 @@
 # Журнал изменений
 
+## 18.08: онбординг коробки — самонастройка вместо ручек (E4) `[код]` `[замер]`
+
+`[код]` Уроки ночи 17–18.08 ушли в установку/первый такт, без правок живых
+юнитов okna/klient-1.
+
+1. **Железо → conf.** `ubuntu/serenedb/box_tune.sh`: формула от RAM/vCPU
+   (не от имени базы). Порог small ≤16 GiB — пик p_doc 11.09 GiB.
+   Small: `cpu_threads=min(vcpu,4)`, `io_threads` те же, `BUILD_THREAD_MIN`
+   = потоки (иначе precheck требует workers+8), swap `max(4, ceil(RAM_GiB))`,
+   `memory_limit` первой сборки `ceil(1.5×RAM)` ГиБ (18GB / 11.7 GiB ≈ 1.54;
+   pin-block 9.3 = 80 % штатный, SEGV на 16GB, источники на 18GB+swap 12–20G).
+   Large: `cpu_threads≈1.5×RAM_GiB` в [16, 96] (замер 29.07: 96 на ~62 ГиБ),
+   `io_threads=8`, swap 0, лимит 80 %. После успеха firstbuild — возврат
+   `memory_limit` к 80 % и снятие swap (`PLAN_KEY_DEDUP_RECOVERY §0`);
+   потоки 4 на малой коробке не возвращаем к 160. Доки: Configuration ›
+   Pragmas › Memory Limit / Threads; Cookbook › Performance › Out-of-Memory
+   Issues. Зов: onboard + firstbuild; `pipeline.sh` — форма EMBED_HOST до синка.
+
+2. **Падение видно.** `1c-serene-firstbuild@` / `onboard@` / `pipeline@`:
+   `Restart=on-failure`, 2–3 мин, `StartLimitBurst=5` / 1 ч (не петля).
+   Path disable сразу (антилуп «repeated too quickly», 14–17.08).
+   `tact_watch.sh` в `1c-bot-monitor`: failed дольше `TACT_FAIL_MAX_MIN=15`
+   → алерт владельцу в Telegram (тот же канал, что падение бота).
+
+3. **EMBED_HOST до такта.** Форма схема+хост+порт в `embed_host_form_check`;
+   голый хост (замер 17.08, curl 000) отвергается до curl. Онбординг и
+   firstbuild зовут ещё живой `embed_check.sh`.
+
+`[замер]` синтетика `test_box_tune.py` **60/60** (железо инъекцией, без
+`/proc` в логике). Оффлайн-замки: `test_packet_crypto` зелёный,
+`test_wiki_alias_parse` 9/9, `test_validate` PASS, `test_packet_config`
+зелёный. Серверы не меняли.
+
 ## 18.08: синхронизация PLAN_OUR_SERVERS с фактами (E3) `[решение]`
 
 Вычеркнуто протухшее: Дев-3 (паритет приёмника ✅ 17.08), Дев-5 (эмбеддер

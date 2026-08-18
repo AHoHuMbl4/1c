@@ -4,13 +4,21 @@
 # бутстреп из снимка, вариант А 10.08). Сборка слоя — НЕ здесь: до данных её
 # обрывает штатный сторож пустого корпуса; её включает 1c-serene-firstbuild@
 # по отметке .first-data от apply.
+#
+# Restart= как у firstbuild: EMBED_HOST без схемы не должен крутить path в петле.
 Description=онбординг слота %i на юните: контур агента по снимку $metadata
 After=serenedb.service 1c-packet-server.service
 Wants=serenedb.service
+StartLimitIntervalSec=1h
+StartLimitBurst=5
 
 [Service]
 Type=oneshot
 TimeoutStartSec=infinity
+Restart=on-failure
+RestartSec=2min
+EnvironmentFile=-/etc/1c-embed.env
+EnvironmentFile=-/etc/1c-serene-pipeline-postgres.env
 # postgres — не выбор базы, а конвенция юнита: на копии dbname всегда postgres
 # (PLAN_PROD_LXC §8.1: «бот-слой на копии поднимается одинаково, dbname всегда postgres»).
 ExecStart=/opt/1c-packet/onboard_unit.sh %i postgres

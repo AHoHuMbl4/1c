@@ -22,6 +22,8 @@ useradd --system --no-create-home --shell /usr/sbin/nologin serenedb
 install -m0755 $SRC/usr/bin/serened /usr/local/bin/serened
 mkdir -p /etc/serenedb /var/lib/serenedb
 install -m0644 serened.conf /etc/serenedb/serened.conf   # loopback:7890, data=/var/lib/serenedb
+# самонастройка под RAM/vCPU (не руками): cpu_threads, io_threads, swap, BUILD_THREAD_MIN
+bash /path/to/ubuntu/serenedb/box_tune.sh apply
 chown -R serenedb:serenedb /var/lib/serenedb
 
 # 3) сервис (enabled = reboot-safe)
