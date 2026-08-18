@@ -1,3 +1,18 @@
+## 18.08: пустой named-период — kind=answer с нулём, не refuse `[код]` `[замер]`
+
+Живой okna: «сколько продали вчера всего?» → entity → «сумма» → `kind=figures` +
+«Проверенный ответ дать невозможно» при `sum=0`, `outside_period=77381` (17.08
+пусто, данные до 28.08). Гейт: `{count}` не заполнен, «величина 0 не названа
+цифрами».
+
+Починка: `period_empty_outcome` + `build_period_empty_answer` — короткий путь до
+compose/гейта; текст с 0, outside_period и ближайшими датами; `{count}=0` на
+sum при outside_period; fallback figures тоже уходит в period_empty.
+
+`[замер]` `test_period_empty.py` **14/14**; `test_terminal_round` **13/13**,
+`test_compose` **92/92**. md5 `serene_ask.py`: **9cc11b02022dcb885ebac079a47efaee**.
+Живой okna `:8091` — выкат оркестратору.
+
 # Журнал изменений
 
 ## 18.08: терминальный второй круг — снятые уровни не теряются `[код]` `[замер]`

@@ -3907,6 +3907,8 @@ def compose_slot_values(agg, measure=None, folders=0, money=None, slot_mode=None
         ca = agg.get("count_amount")
         if ca is not None and ca != agg.get("count"):
             slots["count_amount"] = ca
+        if agg.get("count") == 0 and agg.get("outside_period"):
+            slots["count"] = 0
         keys = ("sum",) if agg.get("grain") == "group" else ("sum", "max", "min", "avg")
         for k in keys:
             if agg.get(k) is not None:
@@ -5357,7 +5359,8 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None, slot_mode=Non
             known.pop(k, None)
     elif slot_mode == "sum":
         known.pop("leader", None)
-        known.pop("count", None)
+        if known.get("count") not in (0, 0.0):
+            known.pop("count", None)
     elif slot_mode == "rank":
         known.pop("leader", None)
         known.pop("count", None)
@@ -7272,6 +7275,154 @@ def empty_after_period_action(intent):
     if serene_enough.period_given(intent):
         return "empty_period"
     return "no_data"
+
+
+def period_empty_outcome(agg, act):
+    """Нулевой итог в названном периоде — честный ответ, не отказ (план §5, п. 21)."""
+    if act != "empty_period" or not agg:
+        return False
+    try:
+        return int(agg.get("count") or 0) == 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _period_day_label(pf, pt):
+    """ISO YYYY-MM-DD → DD.MM.YYYY; один день — DD.MM.YYYY."""
+    def one(iso):
+        s = str(iso or "").strip()
+        if len(s) < 10 or s[4:5] != "-":
+            return s
+        y, m, d = s[:10].split("-")
+        return "%s.%s.%s" % (d, m, y)
+
+    pf = str(pf or "").strip()
+    pt = str(pt or "").strip()
+    if pf and pt and pf[:10] == pt[:10]:
+        return one(pf)
+    if pf and pt:
+        return "%s–%s" % (one(pf), one(pt))
+    return one(pf or pt)
+
+
+def dates_outside_period_filter(src, match, preds, intent):
+    """Крайние doc_date по тем же условиям, но без фильтра периода."""
+    date_preds = set(_predicates(intent))
+    kept = [p for p in (preds or []) if p not in date_preds]
+    where = [w for w in ([match] + kept + ["src_table = %s" % lit(src),
+                        "doc_date IS NOT NULL"]) if w]
+    src_tbl = INDEX if match else CORPUS
+    try:
+        r = psql("SELECT min(doc_date), max(doc_date) FROM %s WHERE %s"
+                 % (src_tbl, " AND ".join(where)))
+        if r and r[0]:
+            return r[0][0], r[0][1]
+    except RuntimeError:
+        pass
+    return None, None
+
+
+def format_period_empty_text(question, agg, intent, measure, src, money,
+                             near_min=None, near_max=None):
+    """Текст «пусто за период»: ноль цифрами, outside_period, ближайшие даты."""
+    p = (intent or {}).get("period") or {}
+    pf = str(p.get("from") or "").strip()
+    pt = str(p.get("to") or "").strip()
+    window = _period_day_label(pf, pt)
+    outside = int(agg.get("outside_period") or 0)
+    mlabel = (measure_label_of(src, measure) if (measure and src) else "") or measure
+    cyr = any('\u0400' <= c <= '\u04ff' for c in (question or ''))
+    parts = []
+    if cyr:
+        if window:
+            parts.append("За %s записей в выбранном периоде нет" % window)
+        else:
+            parts.append("За выбранный период записей нет")
+        if money and measure:
+            parts.append("итог по «%s» — 0" % (mlabel or measure))
+        else:
+            parts.append("количество — 0")
+        if outside:
+            parts.append("вне периода в базе %s %s"
+                         % (_fmt(outside), kind_word(src) or "записей"))
+        if near_min or near_max:
+            if near_min and near_max and str(near_min)[:10] == str(near_max)[:10]:
+                parts.append("ближайшие данные за %s"
+                             % _period_day_label(str(near_min), str(near_min)))
+            elif near_min and near_max:
+                parts.append("ближайшие данные с %s по %s"
+                             % (_period_day_label(str(near_min), str(near_min)),
+                                _period_day_label(str(near_max), str(near_max))))
+            elif near_max:
+                parts.append("ближайшие данные за %s"
+                             % _period_day_label(str(near_max), str(near_max)))
+    else:
+        if window:
+            parts.append("No records in the selected period (%s)" % window)
+        else:
+            parts.append("No records in the selected period")
+        if money and measure:
+            parts.append("total for «%s» is 0" % (mlabel or measure))
+        else:
+            parts.append("count is 0")
+        if outside:
+            parts.append("%s records exist outside the period" % _fmt(outside))
+        if near_min or near_max:
+            parts.append("nearest data: %s .. %s" % (near_min or "—", near_max or "—"))
+    return ". ".join(parts) + "."
+
+
+def build_period_empty_answer(question, agg, intent, measure, src, match, preds,
+                              money, slot_mode, cov, cut, diag, grain_dec, axes,
+                              n_folders, rows, t0, say_measure):
+    """kind=answer при нуле в названном периоде — без compose/гейта."""
+    near_min, near_max = dates_outside_period_filter(src, match, preds, intent)
+    if near_min and not agg.get("date_min"):
+        agg = dict(agg, date_min=near_min, date_max=near_max or near_min)
+    text = format_period_empty_text(question, agg, intent, measure, src, money,
+                                    near_min, near_max)
+    _form = (agg or {}).get("form") or grain_dec.get("form") or "number"
+    _grain = (agg or {}).get("grain") or grain_dec.get("grain") or "row"
+    _pass_frag, pass_fields = build_answer_passport(
+        period=(intent or {}).get("period"),
+        period_dropped=bool(diag.get("period_assumed_dropped")),
+        origin=_passport_origin(intent, diag),
+        src_label=_table_label(src),
+        src_kind=kind_word(src) if src else "",
+        measure=measure or "",
+        grain=_grain,
+        axis_label=_passport_axis_label(
+            (agg or {}).get("col") or grain_dec.get("col"), axes) or "",
+        form=_form,
+        text=text)
+    text = ensure_answer_passport(text, _pass_frag)
+    _figs = compose_slot_values(agg, measure=measure, folders=n_folders,
+                                money=money, slot_mode=slot_mode)
+    if agg.get("count") is not None:
+        _figs["count"] = agg["count"]
+    _figs.update(pass_fields or {})
+    _atom = atom_from_agg(
+        agg, operation=atom_operation(
+            intent.get("want"), None,
+            form=_form, grain=_grain, slot_mode=slot_mode),
+        measure_id=(say_measure or measure or None),
+        measure_label=measure_label_of(src, say_measure or measure),
+        money=money,
+        period=(intent or {}).get("period"),
+        period_origin=_passport_origin(intent, diag),
+        grain=_grain, form=_form,
+        axis=_passport_axis_label(
+            (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
+        completeness=cov, folders=n_folders, src=src)
+    tag = src.split("_", 1)[1] if src and "_" in src else (src or "")
+    diag = dict(diag or {})
+    diag["period_empty"] = True
+    return {"partial": cut or None, "kind": "answer", "text": text,
+            "sources": [tag] if tag else [],
+            "completeness": cov, "measure": say_measure,
+            "figures": _figs, "atom": _atom, "atoms": [_atom],
+            "diag": _diag_pack(diag, rows=len(rows or []),
+                               sec=round(time.time() - t0, 2), gate_ok=True)}
 
 
 def drop_period_preds(intent, preds):
@@ -9868,6 +10019,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     slot_mode = answer_slot_mode(intent.get("want"), plan.get("compute"),
                                  form=_form, grain=_grain)
     diag["slot_mode"] = slot_mode
+    _period_act = empty_after_period_action(intent)
+    if period_empty_outcome(agg, _period_act):
+        return build_period_empty_answer(
+            question, agg, intent, measure, src, match, preds, money, slot_mode,
+            cov, cut, diag, grain_dec, axes, n_folders, rows, t0, say_measure)
     # Стоп 1: чужие итоги величин не расширяют белый список при монополии формы.
     _tot_extra = []
     if money and slot_mode == "list":
@@ -10044,6 +10200,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # отдаём их СТРУКТУРОЙ, а не своей прозой: свой текст был бы на одном языке
         # независимо от языка вопроса. Вызывающий формулирует сам.
         if agg:
+            if period_empty_outcome(agg, empty_after_period_action(intent)):
+                return build_period_empty_answer(
+                    question, agg, intent, measure, src, match, preds, money,
+                    slot_mode, cov, cut, diag, grain_dec, axes, n_folders, rows,
+                    t0, say_measure)
             # Итога может не быть вовсе — считать было нечего (`sum is None`, см.
             # `aggregate`). Тогда своя фраза с суммой не собирается: ноль на этом месте
             # был бы выдуманным числом, а не пустым местом. Числа всё равно уходят
