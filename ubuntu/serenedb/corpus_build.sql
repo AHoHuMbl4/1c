@@ -839,13 +839,30 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
            GROUP BY u.rid),
  g AS (SELECT c.rid,
               regexp_replace($1,'^[^_]*_','') || coalesce(' | ' || string_agg(c.col || ': ' || c.val, ' | '), '') AS doc
-       FROM cells c WHERE c.val <> '' GROUP BY c.rid)
+       FROM cells c WHERE c.val <> '' GROUP BY c.rid),
+ base AS (
+  SELECT $1::VARCHAR AS src_table,
+         coalesce(k.rk, sha1(g.doc)) AS row_key,
+         g.doc,
+         sha1(g.doc) AS doc_hash
+  FROM g LEFT JOIN keyed k USING (rid))
+-- 🔴 ЗЕРКАЛО §3.77 ПОЛНОГО ПУТИ (строки 731-736). У обёртки регистра объявленный ключ
+-- один на все движения; без суффикса две одинаковые по тексту строки дают один row_key,
+-- и сторож corpus_merge останавливает перенос ([замер 17.08 klient-1] 37 522 дубля).
+-- Суффикс только при count>1 — иначе сгорят существующие векторы у уникальных ключей.
+-- Порядок doc, doc_hash — детерминированный аналог полного ORDER BY doc, refs, …, dt.
+-- Ключи вида rk#N полного пути сюда не попадают: plain зовётся только для сущностей,
+-- которые полная сборка не собрала.
 -- Порядок колонок позиционный: src_table, row_key, doc, refs, doc_hash, nums, flags,
 -- doc_date, refs_map, refs_own. У упрощённого пути ни величин, ни булевых реквизитов, ни дат,
 -- ни карты ссылок нет — и это честный NULL «не разбирали», а не пустая карта.
-SELECT $1::VARCHAR, coalesce(k.rk, sha1(g.doc)), g.doc, '', sha1(g.doc),
-       NULL, NULL, NULL, NULL, NULL
-FROM g LEFT JOIN keyed k USING (rid);
+SELECT src_table,
+       CASE WHEN count(*) OVER (PARTITION BY src_table, row_key) > 1
+            THEN row_key || '#' || row_number() OVER (PARTITION BY src_table, row_key
+                                                      ORDER BY doc, doc_hash)
+            ELSE row_key END,
+       doc, '', doc_hash, NULL, NULL, NULL, NULL, NULL
+FROM base;
 
 -- Первый заход: полная сборка. Ошибка ОДНОЙ сущности здесь не останавливает файл —
 -- останов включён обратно сразу после цикла, чтобы настоящие сбои (метаданные, права)
