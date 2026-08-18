@@ -5135,15 +5135,14 @@ no data. Never ask about our database, tables or fields: ask about the person's 
 in their own words.
 
 🔴 NEVER WRITE A COMPUTED FIGURE YOURSELF. Not as digits, not in words, not even by
-copying it from the figures below. Write a PLACEHOLDER instead, and the exact value will
-be substituted by the system:
+copying it from the figures below. The system substitutes the placeholders that are
+listed later in the prompt under COMPUTED / GROUPS / PAIRS for this answer shape.
 
-  {total}  {count}  {count_kind}  {count_amount}  {max}  {min}  {avg}  {date_min}  {date_max}
+When several quantities are given by name, the named placeholders listed below keep the
+same form: {total:NAME}, {max:NAME}, {min:NAME} — NAME exactly as given below.
 
-When several quantities are given by name, address one of them: {total:NAME},
-{max:NAME}, {min:NAME} — NAME exactly as given below.
-
-Example: "Sold for {total} across {count} {count_kind}, the largest being {max}."
+Example: the COMPUTED sections below define which placeholders exist for this answer. The
+final text is formed from those placeholders after the model replies.
 
 Values that appear INSIDE a row — a document number, a tax id, a party's name, the date
 of one specific record — you copy verbatim from the rows. Those are quotations, not

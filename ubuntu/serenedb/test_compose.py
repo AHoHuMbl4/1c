@@ -265,9 +265,14 @@ A.compose("сколько продаж было всего позавчера", 
 t("count+поле: нет {total} и нет amount= в задании",
   "{total" not in SENT["body"] and "amount=" not in SENT["body"]
   and "{count}" in SENT["body"])
-A.compose("сумма продаж", ROWS, _agg_cnt, totals=TOTALS, money=True)
+A.compose("сумма продаж", ROWS, _agg_cnt, totals=TOTALS, money=True, slot_mode="sum")
 t("want=sum: {total} на месте, A1 не сломан",
-  "{total}" in SENT["body"] and "amount=" in SENT["body"])
+  "{total}" in SENT["body"] and "amount=" not in SENT["body"])
+t("стоп1 sum: системный промт больше не открывает глобальный каталог мест",
+  "{count}" not in SENT["sys"] and "{max}" not in SENT["sys"])
+t("стоп1 sum: если {count} не выведен в COMPUTED, модель его не видит",
+  "\n  count (number of records) -> {count}\n" not in SENT["body"]
+  and "number of records is {count}" not in SENT["body"])
 A.compose("сколько продаж было всего позавчера", ROWS, _agg_cnt,
           totals=TOTALS, money=False,
           corrections=["нераспознанное место: {total} (есть: нет)"])
@@ -445,6 +450,71 @@ t("group: want=sum без итога множества — дыра (лидер
   A.asked_figure_missing("Лидер 46 204.58", _GAGG, "sum", True) is not None)
 t("group: want=sum с итогом множества — ок",
   A.asked_figure_missing("Итого 681 990.12, групп 80", _GAGG, "sum", True) is None)
+
+# ------------------------------------------------- fallback: незаполнимое место -> figures
+_real = {
+    "parse_intent": A.parse_intent,
+    "probe": A.probe,
+    "match_expr": A.match_expr,
+    "tables_of": A.tables_of,
+    "meaning_candidates": A.meaning_candidates,
+    "children_by_parent": A.children_by_parent,
+    "resolve_focus": A.resolve_focus,
+    "pick_measure": A.pick_measure,
+    "measures_of": A.measures_of,
+    "measure_aliases_of": A.measure_aliases_of,
+    "totals_of": A.totals_of,
+    "rows_of": A.rows_of,
+    "aggregate": A.aggregate,
+    "_coverage_of": A._coverage_of,
+    "measure_label_of": A.measure_label_of,
+    "refcols_of": A.refcols_of,
+    "serene_axis": A.serene_axis,
+    "ds_chat": A.ds_chat,
+}
+try:
+    A.parse_intent = lambda q, today: {
+        "terms": [], "kind": "продажи", "measure": "всего", "want": "sum",
+        "parse": {}, "amount": {}, "period": {}, "about": "data"
+    }
+    A.probe = lambda terms: ([], {})
+    A.match_expr = lambda exprs, preds: ("", 0)
+    A.tables_of = lambda match, preds: {"document_sales": 3}
+    A.meaning_candidates = lambda exprs, kind_text, question, limit, exclude=None: []
+    A.children_by_parent = lambda by, match, preds: ({}, {})
+    A.resolve_focus = lambda focus, diag=None, opts=None: focus
+    A.pick_measure = lambda src, question, want: ("Всего", [], "single")
+    A.measures_of = lambda src: ["Всего"]
+    A.measure_aliases_of = lambda src: {}
+    A.totals_of = lambda src, match, preds, names: [("Всего", 766510.44, 3300.0, 10.0)]
+    A.rows_of = lambda src, match, preds, limit, measure=None: [row("10.00", "2026-08-18", "Документ 1")]
+    A.aggregate = lambda src, match, preds, measure: {
+        "count": 330, "count_amount": 330, "sum": 766510.44, "min": 10.0,
+        "max": 3300.0, "avg": 2322.76, "date_min": "2026-08-18",
+        "date_max": "2026-08-18", "src": src, "measure": measure,
+        "folders": 0, "grain": "row", "form": "number"
+    }
+    A._coverage_of = lambda src: None
+    A.measure_label_of = lambda src, measure: measure
+    A.refcols_of = lambda src: []
+    A.serene_axis = None
+    A.ds_chat = lambda messages, temperature=0, max_tokens=900: (
+        '{"text": "Итого {total} руб. по {count} записям.", "ask": null, "claims": {}}'
+        if "Reply with JSON only" in messages[0]["content"]
+        else "Не могу ответить точно."
+    )
+    out = A.answer("сколько продали вчера всего?", focus="document_sales", no_arbiter=True)
+    t("незаполнимое место в sum-ответе → kind=figures, не no_data",
+      out.get("kind") == "figures")
+    t("fallback figures сохраняет посчитанную сумму",
+      (out.get("figures") or {}).get("sum") == 766510.44)
+    t("fallback figures не отдаёт шаблон {count} клиенту",
+      "{count}" not in (out.get("text") or "")
+      and "gate_rejected" in (out.get("diag") or {}))
+finally:
+    for k, v in _real.items():
+        setattr(A, k, v)
+
 slots_g = A.compose_slot_values(_GAGG, measure="Сумма", money=True, slot_mode="rank")
 t("group/rank: слот sum=итог, g0=топ, без leader/max/min/count",
   "max" not in slots_g and "min" not in slots_g and "leader" not in slots_g
