@@ -30,6 +30,9 @@ SELECT 'corpus', count(*) FROM search_corpus
  WHERE src_table = 'accumulationregister_реализациятмц';
 
 CREATE TABLE IF NOT EXISTS search_changed_sources (src_table VARCHAR);
+CREATE TABLE IF NOT EXISTS search_coverage (
+  entity VARCHAR, в_1С BIGINT, в_витрине BIGINT, объектов_витрины BIGINT,
+  в_корпусе BIGINT, в_индексе BIGINT, с_вектором BIGINT, причина VARCHAR);
 
 -- Переотметка: то, что перепись уже назвала задержанным.
 INSERT INTO search_changed_sources
