@@ -27,7 +27,7 @@
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, buildClarifyPresentation, channelUserOf, digitBlob, evaluate, extractText, finalizeDecision, injectAskUser, isClarify, isServiceError, mergeRef, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, buildClarifyPresentation, channelUserOf, digitBlob, evaluate, extractText, finalizeDecision, injectAskUser, isClarify, isServiceError, mergeRef, newRid, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny, traceEnabled, traceLine } from "./verify-core.js";
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
