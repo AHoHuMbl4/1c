@@ -89,6 +89,29 @@ x-openclaw-session-key: chat-{{CHAT_ID}}{{TASK}}
 Проверка на живом контуре: `openclaw --profile web sessions --json` на юните — ключи
 разговоров выглядят как `agent:main:chat-<id чата>`, а не `openai:<uuid>`.
 
+## Follow-up чипы (Tasks)
+
+Чипы под ответом рисует Open WebUI своим генератором, не шлюзом OpenClaw.
+В установленной сборке (venv `/home/claudedev/open-webui-venv`):
+
+- UI: Admin → Settings → Tasks → Follow-up;
+- чтение: `GET /api/v1/tasks/config` (Bearer после `POST /api/v1/auths/signin`);
+- запись: `POST /api/v1/tasks/config/update` (роль админа), поля
+  `ENABLE_FOLLOW_UP_GENERATION` и `FOLLOW_UP_GENERATION_PROMPT_TEMPLATE`
+  (storage `task.follow_up.enable` / `task.follow_up.prompt_template`);
+- сам чип: `POST /api/v1/tasks/follow_up/completions` — отдельный вызов модели
+  по последним сообщениям (`{{MESSAGES:END:6}}`).
+
+Auth тот же, что у `configure-branding.py`: `ADMIN_EMAIL` / `ADMIN_PASS` →
+signin → Bearer. Скрипт ставит шаблон «скопировать нумерованные вопросы
+`1. …?` из последнего ответа ассистента и добавить «свой вариант»». Это не
+детерминированный канал: модель генератора может перефразировать или
+выкинуть пункт. Надёжный путь выбора — нумерованные строки в тексте +
+`resolve_focus` / замок плагина. Статические suggestions на экране чата
+для развилок не подходят (набор вариантов зависит от вопроса).
+
+Живой POST на прод-фронт этим шагом не делали — выкат оркестратору.
+
 ## Юниты
 
 | Хост | Юнит | Пользователь |

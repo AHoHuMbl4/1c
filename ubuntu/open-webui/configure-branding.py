@@ -24,6 +24,24 @@ DISPLAY = "Ассистент 1С"
 OPENAI_URL = os.environ.get("OPENAI_API_BASE_URL", "http://10.3.0.4:18801/v1")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("GATEWAY_TOKEN") or ""
 
+# Open WebUI 0.11: Admin → Settings → Tasks → Follow-up.
+# Штатный endpoint POST /api/v1/tasks/config/update, поле
+# FOLLOW_UP_GENERATION_PROMPT_TEMPLATE (storage task.follow_up.prompt_template).
+# Генератор чипов — отдельный вызов модели; извлечь нумерованные вопросы из
+# последнего ответа ассистента. Детерминизм этим шаблоном не держится: если
+# чип не совпал, выбор идёт номером/подписью в тексте (resolve_focus).
+FOLLOW_UP_PROMPT = """### Task:
+The last assistant message may list numbered questions a person can send next (lines like «1. …?»). Put those questions into follow_ups in the same order and wording, without the leading number. When numbered questions are present, add «свой вариант» as the last follow_up.
+
+When the last assistant message has no numbered questions, suggest 3-5 follow-up questions from the user's point of view, in the conversation language.
+
+### Output:
+JSON format: { "follow_ups": ["Question 1?", "Question 2?", "Question 3?"] }
+### Chat History:
+<chat_history>
+{{MESSAGES:END:6}}
+</chat_history>"""
+
 SUGGESTIONS = [
     {"title": ["Сколько контрагентов?", "всего в базе"], "content": "Сколько всего контрагентов в базе?"},
     {"title": ["Номенклатура", "сколько позиций"], "content": "Сколько всего номенклатуры в базе?"},
@@ -220,6 +238,16 @@ def main():
         perms["features"]["direct_tool_servers"] = False
         st, body = req("POST", "/api/v1/users/default/permissions", perms, token=auth)
         must_ok("users/default/permissions", st, body)
+
+    # 10) follow-up chips: copy numbered questions from last assistant message
+    st, tasks = req("GET", "/api/v1/tasks/config", token=auth)
+    if st == 200 and isinstance(tasks, dict):
+        tasks["ENABLE_FOLLOW_UP_GENERATION"] = True
+        tasks["FOLLOW_UP_GENERATION_PROMPT_TEMPLATE"] = FOLLOW_UP_PROMPT
+        st, body = req("POST", "/api/v1/tasks/config/update", tasks, token=auth)
+        must_ok("tasks/config/update", st, body)
+    else:
+        print(f"skip tasks/config get: {st} {tasks}", file=sys.stderr)
 
     # Проверка: список моделей для админа
     st, models = req("GET", "/api/models", token=auth)

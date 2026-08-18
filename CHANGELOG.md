@@ -24,6 +24,11 @@ Follow-up настраивается штатным API 0.11: `GET /api/v1/tasks
 Доки: Sql › Functions › Text Functions — string LIKE target
 (`resolve_focus` сводит чип/начало подписи через LIKE, не полным scan).
 
+`[замер]` оффлайн: `test_gate.py` **131**, `test-verify.mjs` **120**,
+`test_mcp_ask.py` **35**, `test_focus_loop.py` **26**. md5
+`configure-branding.py` `eada2986be8392eb124bf81ffaf7d2ff`. Код Tasks/Follow-up
+в скрипте брендинга; живой POST на фронт не делали.
+
 
 ## 18.08: выбор из уточнения без кухни протокола `[код]` `[замер]`
 
