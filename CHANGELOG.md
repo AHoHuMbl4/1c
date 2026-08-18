@@ -1,5 +1,22 @@
 # Журнал изменений
 
+## 18.08: терминальный второй круг — снятые уровни не теряются `[код]` `[замер]`
+
+Живой дефект okna: «сколько продали вчера всего?» → entity → measure → axis →
+снова measure (осцилляция). Причины в коде:
+`answer_checked` (~10614) хранил только последний билет — measure терялась на
+следующем hop; `answer()` (~9630) axis-clarify для sum/«всего» без разреза;
+`answer()` (~9547) повторный measure-clarify без проверки уже снятой меры.
+
+Починка: `_RESOLVED_CHOICES` + `accumulate_resolution`/`peek_resolved`;
+`total_question_skips_axis` / `question_wants_breakdown`; `measure_already_proven`
+блокирует повтор measure; axis из билета → `grain_dec.col`.
+
+`[замер]` оффлайн: `test_terminal_round.py` **13/13**, `test_decision_id.py` **31/31**,
+`test_focus_loop.py` **26/26**, `test_b9_routing.py` **9/9**. Dev `:8097` (код
+репо, DSN postgres): цепочка без axis-clarify; полный okna `:8091` — выкат
+оркестратору. md5 `serene_ask.py`: **2852a6b45e7c444542ea5077d490a2a1**.
+
 ## 18.08: stop1 sum не отдаёт ответ в restart из-за `{count}` `[код]` `[замер]`
 
 Причина живого stalled на okna: `ANSWER_SYS` перечислял глобальный каталог мест

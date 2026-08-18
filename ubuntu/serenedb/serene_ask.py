@@ -2906,6 +2906,40 @@ def count_question_skips_axis(intent, measure, grain_dec):
     return True
 
 
+def question_wants_breakdown(intent, plan=None):
+    """Ось уместна только при явном разрезе (топ/список/max/min), не для итога."""
+    intent = intent or {}
+    plan = plan or {}
+    want = intent.get("want") or ""
+    amt = intent.get("amount") or {}
+    if want == "list":
+        return True
+    if not amt.get("op") and amt.get("value") is not None:
+        return True
+    if (plan.get("compute") or "") in ("max", "min"):
+        return True
+    return False
+
+
+def total_question_skips_axis(intent, measure, grain_dec, plan=None, question="",
+                              trusted=None, resolved=None):
+    """Итог «всего»/sum без разреза — axis-clarify не задаётся (план владельца шаг 5)."""
+    if (grain_dec or {}).get("clarify") != "axis":
+        return False
+    if question_wants_breakdown(intent, plan):
+        return False
+    q = " ".join(str(question or "").lower().split())
+    if any(w in q for w in ("всего", "итого", "итог ", " overall", " in total")):
+        return True
+    want = (intent or {}).get("want") or ""
+    compute = (plan or {}).get("compute") or ""
+    if want == "sum" or compute == "sum":
+        return True
+    if measure_already_proven(trusted, resolved, measure):
+        return True
+    return False
+
+
 def _dedupe_fork_classes(ordered):
     """Одинаковые подпись+атом → одна пара (план §2, п. 13)."""
     seen, out = {}, []
@@ -3372,6 +3406,8 @@ DECISION_TTL_SEC = int(os.environ.get("ASK_DECISION_TTL_SEC", "3600"))
 _DECISION_LOCK = threading.Lock()
 _DECISIONS = {}  # id -> ticket
 _CLARIFY_BATCHES = {}  # batch_id -> snapshot options/text for reissue
+# Снятые неоднозначности в рамках одного вопроса (план §6, терминальный второй круг).
+_RESOLVED_CHOICES = {}  # (question_fp, user) -> {src, measure, axis, expires_at}
 
 
 def question_fingerprint(question):
@@ -3432,6 +3468,44 @@ def _purge_decisions(now=None):
               if float(b.get("expires_at") or 0) <= now]
     for k in dead_b:
         _CLARIFY_BATCHES.pop(k, None)
+    dead_r = [k for k, v in _RESOLVED_CHOICES.items()
+              if float(v.get("expires_at") or 0) <= now]
+    for k in dead_r:
+        _RESOLVED_CHOICES.pop(k, None)
+
+
+def _resolved_key(question, user):
+    return (question_fingerprint(question),
+            (str(user).strip() if user else None) or None)
+
+
+def peek_resolved(question, user=None):
+    """Накопленные снятые уровни (entity/measure/axis) для этого вопроса."""
+    key = _resolved_key(question, user)
+    with _DECISION_LOCK:
+        _purge_decisions()
+        acc = _RESOLVED_CHOICES.get(key)
+        return dict(acc) if acc else {}
+
+
+def accumulate_resolution(question, user, ticket):
+    """После успешного consume — запомнить снятый уровень до конца вопроса."""
+    if not ticket:
+        return
+    key = _resolved_key(question, user)
+    with _DECISION_LOCK:
+        _purge_decisions()
+        acc = dict(_RESOLVED_CHOICES.get(key) or {})
+        amb = ticket.get("ambiguity") or ""
+        if ticket.get("src"):
+            acc["src"] = ticket["src"]
+        if amb == "measure" and "measure" in ticket:
+            acc["measure"] = ticket.get("measure")
+        if amb == "axis" and ticket.get("axis"):
+            acc["axis"] = ticket.get("axis")
+        acc["expires_at"] = float(ticket.get("expires_at") or 0) or (
+            time.time() + max(60, DECISION_TTL_SEC))
+        _RESOLVED_CHOICES[key] = acc
 
 
 def issue_decision(question, option, ambiguity, options_ver, user=None, parse=None,
@@ -3652,6 +3726,7 @@ def reset_decisions_for_tests():
     with _DECISION_LOCK:
         _DECISIONS.clear()
         _CLARIFY_BATCHES.clear()
+        _RESOLVED_CHOICES.clear()
 
 
 def attach_memory_shadow(out, user=None, action=None, decision_id=None):
@@ -3675,6 +3750,30 @@ def choice_proven(trusted, ambiguity=None):
     if ambiguity is None:
         return True
     return trusted.get("ambiguity") == ambiguity
+
+
+def choice_levels_proven(trusted=None, resolved=None):
+    """Какие уровни неоднозначности уже сняты билетами в этом вопросе."""
+    levels = set()
+    if resolved:
+        if resolved.get("src"):
+            levels.add("entity")
+        if "measure" in resolved:
+            levels.add("measure")
+        if resolved.get("axis"):
+            levels.add("axis")
+    if isinstance(trusted, dict):
+        amb = trusted.get("ambiguity")
+        if amb in ("entity", "measure", "axis"):
+            levels.add(amb)
+    return levels
+
+
+def measure_already_proven(trusted=None, resolved=None, measure_pick=None):
+    """True, если measure уже выбран билетом или measure_pick."""
+    if measure_pick:
+        return True
+    return "measure" in choice_levels_proven(trusted, resolved)
 
 
 def guards_skip_for_choice(focus=None, measure_pick=None, trusted=None):
@@ -7546,7 +7645,7 @@ def apply_prior_period(intent, prior_intent, today=None):
 
 
 def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False,
-            prior=None, trusted=None):
+            prior=None, trusted=None, resolved=None):
     """Вопрос -> поиск в базе -> счёт в базе -> формулировка -> гейт.
 
     `focus` — подсказка отбора (сужает кандидатов через resolve_focus). Доказанный выбор
@@ -7560,6 +7659,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     """
     if _token_acc.get() is None:
         _token_acc_start()
+    resolved = dict(resolved or {})
+    if resolved.get("src") and not focus:
+        focus = resolved["src"]
+    if "measure" in resolved and measure_pick is None:
+        mp = resolved.get("measure")
+        measure_pick = mp if mp not in (None, "") else measure_pick
     t0 = time.time()
     # 🔴 ПОШАГОВЫЙ СЛЕД: КОГДА, ЧТО СДЕЛАНО И ЧТО ПОЛУЧИЛОСЬ. Требование владельца 03.08:
     # «на каждом шагу логировать можно — время, что делается и что происходит».
@@ -9439,7 +9544,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["measure"] = None
     # Несколько величин подходят одинаково — спрашиваем, какую считать. Механизм тот же,
     # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
-    if measure_alts:
+    if measure_alts and not measure_already_proven(trusted, resolved, measure_pick):
         diag["measure_ambiguous"] = measure_alts
         # 🔴 ЧИСЛА ПОДХОДЯЩИХ ВЕЛИЧИН СЧИТАЮТСЯ ЗДЕСЬ ЖЕ — ОНИ НУЖНЫ НЕ ЧЕЛОВЕКУ, А ПРОВЕРКЕ
         # НАД НАМИ (05.08). Этот же путь проходит КАНДИДАТ круга арбитра
@@ -9513,6 +9618,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         grain_dec = {"grain": "row", "col": None, "form": "number",
                      "named_gis": [], "clarify": None}
         diag["axis_clarify_skipped"] = "count_without_measure"
+    _prov_axis = None
+    if choice_proven(trusted, "axis"):
+        _prov_axis = (trusted or {}).get("axis")
+    elif resolved.get("axis"):
+        _prov_axis = resolved["axis"]
+    if _prov_axis:
+        grain_dec = {"grain": "group", "col": _prov_axis, "form": "number",
+                     "named_gis": [], "clarify": None}
+        diag["axis_from_choice"] = _prov_axis
+    if total_question_skips_axis(intent, measure, grain_dec, plan, question,
+                                 trusted=trusted, resolved=resolved):
+        grain_dec = {"grain": "row", "col": None, "form": "number",
+                     "named_gis": [], "clarify": None}
+        diag["axis_clarify_skipped"] = "total_without_breakdown"
     if grain_dec.get("clarify") == "axis":
         opts = axis_clarify_options(src, axes)
         return {"partial": cut or None, "kind": "clarify",
@@ -9523,7 +9642,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                              reason="уточните ось группы")}
 
     if (serene_axis and grain_dec.get("form") in ("rank", "compare")
-            and not measure):
+            and not measure
+            and not measure_already_proven(trusted, resolved, measure_pick)):
         _rn = [m for m, v, mx, mn in (totals or [])]
         if not _rn:
             _rn = measures_of(src)
@@ -10377,12 +10497,12 @@ def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
 
 
 def _answer_checked_core(question, focus=None, measure_pick=None, context="", prior=None,
-                         trusted=None):
+                         trusted=None, resolved=None):
     """Тело ответа без журнала — все return идут через обёртку answer_checked."""
     _token_acc_start()
     def plain():
         return answer(question, focus=focus, measure_pick=measure_pick, context=context,
-                      prior=prior, trusted=trusted)
+                      prior=prior, trusted=trusted, resolved=resolved)
 
     if not (ENOUGH_ON and serene_enough) or guards_skip_for_choice(
             focus, measure_pick, trusted):
@@ -10441,7 +10561,8 @@ def _try_memory_apply(question, out, user, focus, measure_pick, context, prior,
     mem_trusted = ACM.memory_trusted(br)
     out = _answer_checked_core(
         question, focus=mfocus, measure_pick=mmeas or measure_pick,
-        context=context, prior=prior, trusted=mem_trusted)
+        context=context, prior=prior, trusted=mem_trusted,
+        resolved=peek_resolved(question, user))
     out = ACM.finish_apply(out, probe)
     return out, mem_trusted
 
@@ -10464,6 +10585,7 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
     t0 = time.monotonic()
     out = None
     try:
+        resolved = peek_resolved(question, user)
         if decision_id and trusted is None:
             ticket, err = consume_decision(decision_id, question, user=user)
             if err:
@@ -10474,7 +10596,8 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
                     return out
                 out = _answer_checked_core(
                     question, focus=focus, measure_pick=measure_pick,
-                    context=context, prior=prior, trusted=None)
+                    context=context, prior=prior, trusted=None,
+                    resolved=resolved)
                 if isinstance(out, dict):
                     diag = dict(out.get("diag") or {})
                     diag["ticket_reissued"] = err
@@ -10488,8 +10611,16 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
             if ticket.get("ambiguity") == "axis" and ticket.get("axis"):
                 focus = ticket.get("src") or focus
             trusted = ticket
+            accumulate_resolution(question, user, ticket)
+            resolved = peek_resolved(question, user)
+        if resolved.get("src") and not focus:
+            focus = resolved["src"]
+        if "measure" in resolved and measure_pick is None:
+            mp = resolved.get("measure")
+            measure_pick = mp if mp not in (None, "") else measure_pick
         out = _answer_checked_core(question, focus=focus, measure_pick=measure_pick,
-                                   context=context, prior=prior, trusted=trusted)
+                                   context=context, prior=prior, trusted=trusted,
+                                   resolved=resolved)
         out, trusted = _try_memory_apply(
             question, out, user, focus, measure_pick, context, prior,
             trusted, mem_action)
