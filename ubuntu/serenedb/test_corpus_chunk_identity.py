@@ -113,8 +113,13 @@ WITH ml AS (SELECT current_setting('memory_limit') AS s),
 SELECT 2147483648.0 / 50000.0 AS ws_bytes_per_row, 0.25 AS mem_fraction,
        greatest(1000::BIGINT, floor((SELECT mem_bytes FROM mem) * 0.25 / (2147483648.0 / 50000.0))::BIGINT) AS chunk_rows
 FROM mem;
-CREATE OR REPLACE TABLE tmp3_entity_rows AS
-SELECT '{ENTITY}'::VARCHAR AS tbl, {n}::BIGINT AS nrows;
+CREATE OR REPLACE TABLE tmp3_entity_rows (tbl VARCHAR, nrows BIGINT);
+DELETE FROM tmp3_entity_rows;
+SELECT 'INSERT INTO tmp3_entity_rows SELECT '
+       || quote_literal(b.tbl) || ', count(*)::BIGINT FROM query_table('
+       || quote_literal(b.tbl) || ');'
+FROM tmp3_build b
+\\gexec
 CREATE OR REPLACE TABLE tmp3_pdoc_chunks AS
 SELECT e.tbl, gs AS lo, least(gs + cfg.chunk_rows - 1, e.nrows) AS hi, e.nrows
 FROM tmp3_entity_rows e CROSS JOIN tmp3_pdoc_cfg cfg

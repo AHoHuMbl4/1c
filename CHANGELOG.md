@@ -1,4 +1,33 @@
+## 18.08: сквозной rid и единый TRACE по слоям
+
+`TRACE <rid> <слой> <шаг> <мс> <статус>` — один request-id на вопрос (verify → mост →
+`/ask` → `diag.шаги`/journald/`ask_journal.rid`). Слои: gateway, bridge, service, model,
+plugin. `ASK_TRACE=1` по умолчанию. Читалка: `work/acceptance/trace_rid.sh`.
+
+`[код]` оффлайн: test_gate 130, step4_guards 110, a3_passport 14, fork_detector 23,
+fork_outcomes 24, fork_atom_aggregate 15, answer_atom 18, ds_tokens 11, ask_journal 16
+(1 live fail — SereneDB checkpoint), ask_choice_memory 54 (2 live fail — то же),
+test_trace_rid 10, mcp_ask 32, decision_id 24, focus_loop 19, test-verify 106.
+Живой полный путь через journald — после выката оркестратором.
+
 # Журнал изменений
+
+## 18.08: чанкование p_doc — lateral query_table → \\gexec с литералом `[код]` `[замер]`
+
+`[код]` `corpus_build.sql`: `tmp3_entity_rows` больше не зовёт `query_table(b.tbl)`
+из SELECT по колонке — движок 26.07.3 держит только литералы
+(«does not support lateral join column parameters»). Счёт строк — тот же
+приём, что `EXECUTE p_doc`: `INSERT … FROM query_table('…')` через `\\gexec`
+с `quote_literal(b.tbl)`. F2-суффикс `p_doc_plain` и полный путь мелких
+сущностей не тронуты. Доки: Sql › Functions › Table Functions (query_table).
+
+`[замер]` ut_test, `document_установкаценноменклатуры_товары` (12 062 строк),
+`memory_limit=1GB`: `chunk_rows=5820`, **3** порции (`tmp3_pdoc_chunks`),
+`test_corpus_chunk_identity.py` **8/8** — полная vs чанкованная сборка,
+doc_hash `91f7a8c6…` совпал; `entity_rows` через `\\gexec` (на `191113c`:610
+падает). Регресс: `test_corpus_plain_key.py` **8/8**, `test_delta` зелёный.
+md5 `corpus_build.sql` **`3c2abbce325ea6f99f48b0ef9d0955a6`**. Выкат klient-1
+— окно G оркестратора.
 
 ## 18.08: чанкованный p_doc сломан о lateral — откат на F2-only, сборка klient-1 ждёт правку `[замер]` `[решение]`
 

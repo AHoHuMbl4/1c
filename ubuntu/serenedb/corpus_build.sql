@@ -605,9 +605,15 @@ CREATE OR REPLACE TABLE tmp3_resume_pdoc AS
 SELECT coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01') < now() - INTERVAL '6 hours'
        AND (SELECT count(*) FROM tmp3_pdoc_progress) > 0 AS on_;
 
-CREATE OR REPLACE TABLE tmp3_entity_rows AS
-SELECT b.tbl, (SELECT count(*)::BIGINT FROM query_table(b.tbl)) AS nrows
-FROM tmp3_build b;
+-- query_table принимает только литерал имени таблицы, не колонку из JOIN
+-- (Sql › Functions › Table Functions › query_table; живой стопор 18.08:610).
+CREATE OR REPLACE TABLE tmp3_entity_rows (tbl VARCHAR, nrows BIGINT);
+DELETE FROM tmp3_entity_rows;
+SELECT 'INSERT INTO tmp3_entity_rows SELECT '
+       || quote_literal(b.tbl) || ', count(*)::BIGINT FROM query_table('
+       || quote_literal(b.tbl) || ');'
+FROM tmp3_build b
+\gexec
 
 CREATE OR REPLACE TABLE tmp3_pdoc_chunks AS
 SELECT e.tbl, gs AS lo, least(gs + cfg.chunk_rows - 1, e.nrows) AS hi, e.nrows
