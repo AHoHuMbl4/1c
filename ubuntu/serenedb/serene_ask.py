@@ -7277,12 +7277,29 @@ def empty_after_period_action(intent):
     return "no_data"
 
 
-def period_empty_outcome(agg, act):
-    """Нулевой итог в названном периоде — честный ответ, не отказ (план §5, п. 21)."""
-    if act != "empty_period" or not agg:
+def period_empty_outcome(agg, act, intent=None, diag=None):
+    """Нулевой итог в заданном окне — честный ответ, не отказ (план §5, п. 21).
+
+    `empty_period` — период назван в вопросе (`period_given`). «Вчера» и прочие
+    относительные окна помечаются `parse.assumed` → `drop_assumed`, но окно
+    задано явно: count=0 при outside_period>0 — тот же исход «пусто за период».
+    """
+    if not agg:
         return False
     try:
-        return int(agg.get("count") or 0) == 0
+        if int(agg.get("count") or 0) != 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if act == "empty_period":
+        return True
+    if (diag or {}).get("period_assumed_dropped"):
+        return False
+    pr = (intent or {}).get("period") or {}
+    if not (pr.get("from") or pr.get("to")):
+        return False
+    try:
+        return int(agg.get("outside_period") or 0) > 0
     except (TypeError, ValueError):
         return False
 
@@ -10020,7 +10037,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                  form=_form, grain=_grain)
     diag["slot_mode"] = slot_mode
     _period_act = empty_after_period_action(intent)
-    if period_empty_outcome(agg, _period_act):
+    diag["empty_after_period_action"] = _period_act
+    if period_empty_outcome(agg, _period_act, intent, diag):
         return build_period_empty_answer(
             question, agg, intent, measure, src, match, preds, money, slot_mode,
             cov, cut, diag, grain_dec, axes, n_folders, rows, t0, say_measure)
@@ -10200,7 +10218,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # отдаём их СТРУКТУРОЙ, а не своей прозой: свой текст был бы на одном языке
         # независимо от языка вопроса. Вызывающий формулирует сам.
         if agg:
-            if period_empty_outcome(agg, empty_after_period_action(intent)):
+            _pe_act = empty_after_period_action(intent)
+            diag["empty_after_period_action"] = _pe_act
+            if period_empty_outcome(agg, _pe_act, intent, diag):
                 return build_period_empty_answer(
                     question, agg, intent, measure, src, match, preds, money,
                     slot_mode, cov, cut, diag, grain_dec, axes, n_folders, rows,

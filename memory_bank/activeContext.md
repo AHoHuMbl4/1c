@@ -8,11 +8,11 @@ _Обновлено: **2026-08-18.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-🔴 **пустой named-период — код в git `[18.08]`**: okna «сколько продали
-вчера всего?» → entity → «сумма» → было `figures`/refuse при sum=0 и
-outside_period=77381. Починка: `build_period_empty_answer` → `kind=answer` с 0,
-outside_period и ближайшими датами; `{count}=0` на sum. Оффлайн **14/14**
-`test_period_empty.py`; md5 **9cc11b02…**. Живой okna `:8091` — выкат.
+🔴 **пустой период (в т.ч. «вчера»/assumed) — код в git `[18.08]`**: okna
+`:8091` после 9cc11b02 всё ещё `figures`/refuse — `period_empty_outcome`
+смотрел только `empty_period`, а «вчера» → `drop_assumed`. Починка:
+count=0 + outside_period + окно не снято; diag `empty_after_period_action`.
+**16/16** `test_period_empty.py`. Живой okna — повторный выкат md5 из коммита.
 
 🔴 **терминальный второй круг (measure↔axis) — код в git `[18.08]`**: осцилляция
 entity→measure→axis→measure закрыта (`_RESOLVED_CHOICES`, skip axis,

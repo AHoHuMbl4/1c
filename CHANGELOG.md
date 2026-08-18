@@ -1,3 +1,15 @@
+## 18.08: period_empty — «вчера» (assumed), не только period_given `[код]` `[замер]`
+
+Живой okna `:8091`: после выката 9cc11b02 `diag.period_empty=None` —
+«вчера» в `parse.assumed` → `empty_after_period_action=drop_assumed`, а
+`period_empty_outcome` требовал только `empty_period`.
+
+Починка: count=0 + outside_period>0 + окно в intent + фильтр не снят → тот же
+`build_period_empty_answer` до compose; `diag.empty_after_period_action`.
+
+`[замер]` `test_period_empty.py` **16/16** (в т.ч. drop_assumed+assumed).
+md5 `serene_ask.py`: см. коммит.
+
 ## 18.08: пустой named-период — kind=answer с нулём, не refuse `[код]` `[замер]`
 
 Живой okna: «сколько продали вчера всего?» → entity → «сумма» → `kind=figures` +
