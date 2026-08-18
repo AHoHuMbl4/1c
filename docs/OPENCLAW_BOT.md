@@ -267,13 +267,9 @@ Open WebUI + Caddy на фронте; web-гейтвей OpenClaw на okna-бэ
    «понимать, у какой базы что спрашивать». На стороне OpenClaw это ложится на
    агентов: `/v1` уже маршрутизирует `model=openclaw/<agentId>`; роутер — отдельный
    агент, выбирающий целевого. Записано как направление, реализация — бэк-трек.
-6. **Голос (микрофон).** ✅ на prod okna `[замер 13.08]`: Whisper Large-v3 FP32
-   на GPU владельца (с 17.08 — `178.63.211.188:8006`), OpenAI-совместимый `/v1/audio/transcriptions`.
-   В Open WebUI: `AUDIO_STT_ENGINE=openai`, `AUDIO_STT_MODEL=whisper-large-v3`,
-   `AUDIO_STT_OPENAI_API_BASE_URL=…/v1`, ключ в env/`Admin → Audio`,
-   язык не фиксируем (`WHISPER_LANGUAGE` не задаём — UI / авто). Проверено: health ok;
-   `POST /api/v1/audio/transcriptions` через OWUI → 200. Ключ не в git
-   (`/etc/1c-open-webui-stt.env` при переустановке).
+6. **Голос (микрофон).** ✅ на prod okna `[замер 18.08]`: Whisper Large-v3 на
+   `gpu-erw.timpul.pro:8006/v1`. 🔴 Значение `audio.stt.*` в `webui.db` перекрывает env —
+   при смене эндпоинта править БД (бэкап до правки). Ключ в `/etc/1c-open-webui-stt.env`.
 
 ## Zero-touch
 `linger=yes` → gateway стартует на буте без логина (проверено). Telegram long polling. Мониторинг

@@ -1,5 +1,22 @@
 # Журнал изменений
 
+## 18.08: финиш веб-фронта okna — memory-core + STT в БД `[замер]`
+
+**Замок 1 — memory-core web-профиль (10.3.0.4):** корень — в `~/.openclaw-web`
+не было `agents.defaults.memorySearch`, провайдер по умолчанию `openai` без ключа →
+`Memory index failed` каждые ~2 мин. Починка: `provider: openai-compatible`,
+`remote.baseUrl` из `/etc/1c-embed.env` (gpu-erw:8000/v1), `EMBED_API_KEY` в
+`gateway.systemd.env` + `OPENCLAW_SERVICE_MANAGED_ENV_KEYS`, `extraPaths` →
+`wiki/main/entities`. `[замер]` `openclaw memory index --force`: **255/255** файлов,
+277 chunks. Дозор журнала **35/35 опросов, memory_errors=0**, `LOCK_OK`
+07:12 +03 (старт 06:37). Код: `setup-okna-backend-web.sh`.
+
+**Замок 2 — STT Open WebUI (10.3.0.2):** `audio.stt.*` в `webui.db` перекрывает env —
+в БД оставался `lr0r1k1g-8006.thundercompute.net`. Бэкап `webui.db.bak-20260818-*`,
+UPDATE → `http://gpu-erw.timpul.pro:8006/v1`, env синхронизирован, restart webui.
+`[замер]` прямой POST `/v1/audio/transcriptions` → **HTTP 200** (whisper-large-v3);
+OWUI `:8080/health` 200. Скрипт: `work/acceptance/okna-web-stt-fix.sh`.
+
 ## 18.08: правка lateral выкачена, сборка klient-1 идёт на чанковании `[замер]`
 
 `[замер]` Окно G (`84c3bee`): `query_table(b.tbl)` → `\gexec` с литералом;

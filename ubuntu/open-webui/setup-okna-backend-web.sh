@@ -114,10 +114,27 @@ if [ -n "$DEEPSEEK_LINE" ]; then
   chown "$BOTUSER:$BOTUSER" "$STATE/gateway.systemd.env"
   chmod 600 "$STATE/gateway.systemd.env"
 fi
+# EMBED_API_KEY — для memory-core (openai-compatible эмбеддер юнита)
+EMBED_BASE_URL="${EMBED_BASE_URL:-http://gpu-erw.timpul.pro:8000/v1}"
+EMBED_MODEL="${EMBED_MODEL:-Qwen3-Embedding-8B}"
+if [ -f /etc/1c-embed.env ]; then
+  # shellcheck disable=SC1091
+  source /etc/1c-embed.env
+  if [ -n "${EMBED_API_KEY:-}" ]; then
+    grep -v '^EMBED_API_KEY=' "$STATE/gateway.systemd.env" 2>/dev/null >"$STATE/gateway.systemd.env.tmp" || true
+    printf 'EMBED_API_KEY=%s\n' "$EMBED_API_KEY" >>"$STATE/gateway.systemd.env.tmp"
+    mv "$STATE/gateway.systemd.env.tmp" "$STATE/gateway.systemd.env"
+    chown "$BOTUSER:$BOTUSER" "$STATE/gateway.systemd.env"
+    chmod 600 "$STATE/gateway.systemd.env"
+  fi
+fi
 
-python3 - "$STATE/openclaw.json" "$GATEWAY_PORT" "$GW_TOKEN" "$MCP_PORT" "$MCP_TOKEN" "$STATE" <<'PY'
+python3 - "$STATE/openclaw.json" "$GATEWAY_PORT" "$GW_TOKEN" "$MCP_PORT" "$MCP_TOKEN" "$STATE" "${EMBED_BASE_URL:-http://gpu-erw.timpul.pro:8000/v1}" "${EMBED_MODEL:-Qwen3-Embedding-8B}" <<'PY'
 import json, sys
-path, port, token, mcp_port, mcp_token, state = sys.argv[1:7]
+path, port, token, mcp_port, mcp_token, state, embed_base, embed_model = sys.argv[1:9]
+embed_base = embed_base.rstrip("/")
+if not embed_base.endswith("/v1"):
+  embed_base = embed_base + "/v1"
 cfg = {
   "gateway": {
     "port": int(port),
@@ -134,6 +151,20 @@ cfg = {
       "models": {"deepseek/deepseek-v4-flash": {}},
       "thinkingDefault": "off",
       "heartbeat": {"every": "0m"},
+      # Смысловой поиск вики (как main-профиль 02.08): без memorySearch
+      # провайдер по умолчанию openai без ключа → Memory index failed каждые ~2 мин.
+      "memorySearch": {
+          "enabled": True,
+          "provider": "openai-compatible",
+          "model": embed_model,
+          "remote": {
+              "baseUrl": embed_base,
+              "apiKey": "${EMBED_API_KEY}",
+              "nonBatchConcurrency": 2,
+          },
+          "extraPaths": [f"{state}/wiki/main/entities"],
+          "fallback": "none",
+      },
     }
   },
   "models": {
@@ -275,7 +306,7 @@ RestartSec=5
 TimeoutStopSec=30
 TimeoutStartSec=30
 EnvironmentFile=-${STATE}/gateway.systemd.env
-Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=DEEPSEEK_API_KEY
+Environment=OPENCLAW_SERVICE_MANAGED_ENV_KEYS=DEEPSEEK_API_KEY,EMBED_API_KEY
 Environment=HOME=/home/${BOTUSER}
 Environment=OPENCLAW_STATE_DIR=${STATE}
 

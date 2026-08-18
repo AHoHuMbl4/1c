@@ -27,7 +27,9 @@ bash /opt/1c-open-webui/setup-okna-backend-web.sh
 ```
 
 Печатает `GATEWAY_TOKEN=…`. Поднимает `1c-serene-ask@postgres`, `1c-mcp-ask@postgres`,
-`openclaw-gateway-web` (:18801, ufw с 10.3.0.2).
+`openclaw-gateway-web` (:18801, ufw с 10.3.0.2). Web-профиль включает
+`agents.defaults.memorySearch` (openai-compatible на `/etc/1c-embed.env`) и
+`EMBED_API_KEY` в env юнита — без этого memory-core шлёт `Memory index failed`.
 
 ### 2. Фронт (10.3.0.2)
 
@@ -54,6 +56,8 @@ Ubuntu 24.04 (Python 3.12) — обычный venv; Ubuntu 26.04 (3.14) — Pyth
 - Вопрос по данным → уточнение → число
 - Голос (STT): Whisper Large-v3 на GPU владельца (`AUDIO_STT_ENGINE=openai`,
   `AUDIO_STT_OPENAI_API_BASE_URL` → `/v1`, модель `whisper-large-v3`; язык не фиксируем — выбор в UI / авто Whisper).
+  🔴 **`audio.stt.*` в `webui.db` перекрывает env** — при смене эндпоинта править БД
+  (бэкап до правки) + env; см. `work/acceptance/okna-web-stt-fix.sh`.
   Ключ только в `/home/webui/.open-webui.env` (и Admin → Audio); не в git.
   Замер: `POST /api/v1/audio/transcriptions` через OWUI → 200, текст от Whisper.
 

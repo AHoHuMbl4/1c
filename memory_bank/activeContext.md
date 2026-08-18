@@ -8,6 +8,11 @@ _Обновлено: **2026-08-18.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **okna веб-фронт ЗАКРЫТ `[18.08]`**: memory-core web-профиль → gpu-erw embed
+(255/255 индекс, memory-error 0); STT webui.db → gpu-erw:8006/v1 (whisper 200).
+Скрипты `work/acceptance/okna-web-*-fix.sh`; код `setup-okna-backend-web.sh`.
+Дозор **LOCK_OK** 35/35, memory_errors=0 (06:37–07:12 +03).
+
 🔴 **Сквозной rid + TRACE в git `[18.08]`**: `TRACE <rid> <слой> <шаг> <мс> <статус>`
 — verify→мост→`/ask`→`ask_journal.rid`; `ASK_TRACE=1` по умолчанию;
 `work/acceptance/trace_rid.sh <rid>`. Оффлайн **test_trace_rid 10/10**, прежние замки
