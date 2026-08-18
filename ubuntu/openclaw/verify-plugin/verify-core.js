@@ -171,6 +171,8 @@ const LEAK_LINE_RES = [
   /^.*\bPRESENTATION_JSON:\b.*$/gim,
   /^.*\[CHOICE ERROR[^\]]*\].*$/gim,
   /^FIGURES:\s*$/gim,
+  /^.*\b(?:decision_id|choice_error|ask_1c|report_1c|[A-Za-z0-9_-]+__(?:ask|report)_1c)\b.*$/gim,
+  /^.*(?:тикет(?:а|у|ом|е|ы|ов)?|\btickets?\b).*$/gim,
 ];
 // 🔴 ВНУТРЕННИЕ ИМЕНА ИСТОЧНИКОВ ИЗ БЛОКА ВАРИАНТОВ. Мост собирает уточнение машинным
 // форматом `- <метка> | measure=<величина> | focus=<src_table>` (`mcp_ask.py`), где
@@ -180,7 +182,7 @@ const LEAK_LINE_RES = [
 // замена пустая, а здесь строка не удаляется, а укорачивается — метку варианта человек
 // обязан видеть, иначе выбирать ему будет не из чего.
 //   «- Реализация товаров | measure=Сумма | focus=Document_…» → «- Реализация товаров»
-const OPTION_TAIL_RE = /^([ \t]*[-*][ \t]+.*?)[ \t]*\|[ \t]*(?:measure|focus|decision_id)=.*$/gim;
+const OPTION_TAIL_RE = /^([ \t]*(?:[-*]|\d+[.)])[ \t]+.*?)[ \t]*\|[ \t]*(?:measure|focus|decision_id)=.*$/gim;
 // 🔴 SQL РЕЖЕТСЯ ПО ФОРМЕ ЗАПРОСА, А НЕ ПО ДВУМ СЛОВАМ. Прежнее правило
 // (`WITH|SELECT … FROM …` до пустой строки) срабатывало на живой речи: [замер 02.08]
 // «We started with 3 suppliers from the north region. That is all.» → «We started» —
@@ -238,7 +240,10 @@ function stripMarkedJsonBlocks(text) {
 export function stripInternal(text) {
   if (!text) return text;
   let t = stripMarkedJsonBlocks(String(text));
-  for (const re of LEAK_LINE_RES) t = t.replace(re, "");
+  for (const re of LEAK_LINE_RES) {
+    re.lastIndex = 0;
+    t = t.replace(re, "");
+  }
   t = t.replace(OPTION_TAIL_RE, "$1"); // не удаление строки, а обрезка машинного хвоста
   t = t.replace(SQL_CAND_RE, (m) => (looksLikeSql(m) ? "" : m));
   t = t.replace(PATH_RE, "");
@@ -321,11 +326,16 @@ export function normClarifyKey(s) {
   return String(s || "").toLowerCase().replace(/\s+/g, "");
 }
 
+export function stripChoiceNum(s) {
+  return String(s || "").replace(/^\d+[.)]\s+/, "").trim();
+}
+
 export function parseClarifyOptions(text) {
   const options = [];
   if (!text) return options;
   for (const line of String(text).split("\n")) {
-    const m = line.match(/^\s*[-*]\s+(.+)$/);
+    const numbered = /^\s*\d+[.)]\s+/.test(line);
+    const m = line.match(/^\s*(?:[-*]|\d+[.)])\s+(.+)$/);
     if (!m) continue;
     const rest = m[1].trim();
     let labelPart = rest;
@@ -350,24 +360,156 @@ export function parseClarifyOptions(text) {
       else if (key === "measure") measure = v;
       else decision_id = v;
     }
-    options.push({ label, focus, measure, decision_id });
+    if (numbered && !focus && !measure && !decision_id) continue;
+    options.push({ label, focus, measure, decision_id, hint: dash ? labelPart.slice(dash[0].length).trim() : "" });
+  }
+  const atom = parseAtomJson(text);
+  if (atom && Array.isArray(atom.options)) {
+    for (const o of atom.options) {
+      if (!o || typeof o !== "object") continue;
+      const lab = String(o.label || o.measure || "").trim();
+      const did = String(o.decision_id || "").trim();
+      if (!lab) continue;
+      const existing = options.find((x) =>
+        (did && x.decision_id === did)
+        || (x.label && normClarifyKey(x.label) === normClarifyKey(lab)));
+      if (existing) {
+        if (!existing.decision_id && did) existing.decision_id = did;
+        if (!existing.entity_label && o.entity_label) existing.entity_label = o.entity_label;
+        if (!existing.hint && o.hint) existing.hint = o.hint;
+      } else {
+        options.push({
+          label: lab,
+          focus: o.entity_label || lab,
+          measure: o.measure || "",
+          decision_id: did,
+          entity_label: o.entity_label || "",
+          hint: o.hint || "",
+        });
+      }
+    }
   }
   return options;
+}
+
+const CHIP_PREFIX_MIN = 3;
+
+function optionKey(o) {
+  return [
+    o.decision_id || "",
+    normClarifyKey(o.label),
+    normClarifyKey(o.focus),
+    normClarifyKey(o.measure),
+  ].join("|");
+}
+
+function uniqueOpts(arr) {
+  const seen = new Set();
+  const out = [];
+  for (const o of arr) {
+    const k = optionKey(o);
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push(o);
+  }
+  return out;
+}
+
+function optionFields(opt) {
+  return [opt.label, opt.focus, opt.measure, opt.entity_label, opt.hint];
+}
+
+function optionTokens(opt) {
+  const blob = optionFields(opt).map((f) => String(f || "")).join(" ");
+  return blob.toLowerCase().split(/[^0-9a-zа-яё]+/i).filter(Boolean);
 }
 
 export function matchClarifyOption(prompt, options) {
   let raw = String(prompt || "").trim();
   if (raw.startsWith("ask1c:")) raw = raw.slice("ask1c:".length).trim();
-  const key = normClarifyKey(raw);
+  const key = normClarifyKey(raw) || normClarifyKey(stripChoiceNum(raw));
   if (!key) return null;
-  for (const opt of options || []) {
+  const opts = options || [];
+
+  for (const opt of opts) {
     if (opt.decision_id && (raw === opt.decision_id || normClarifyKey(opt.decision_id) === key))
       return opt;
-    if (normClarifyKey(opt.label) === key) return opt;
-    if (opt.focus && normClarifyKey(opt.focus) === key) return opt;
-    if (opt.measure && normClarifyKey(opt.measure) === key) return opt;
   }
+
+  const exact = [];
+  for (const opt of opts) {
+    if (normClarifyKey(opt.label) === key || normClarifyKey(stripChoiceNum(opt.label)) === key) exact.push(opt);
+    else if (opt.focus && normClarifyKey(opt.focus) === key) exact.push(opt);
+    else if (opt.measure && normClarifyKey(opt.measure) === key) exact.push(opt);
+    else if (opt.entity_label && normClarifyKey(opt.entity_label) === key) exact.push(opt);
+  }
+  const exactU = uniqueOpts(exact);
+  if (exactU.length === 1) return exactU[0];
+  if (exactU.length > 1) return null;
+
+  const num = raw.match(/^\s*#?\s*(\d+)\s*[.)]?\s*$/);
+  if (num) {
+    const i = parseInt(num[1], 10);
+    if (i >= 1 && i <= opts.length) return opts[i - 1];
+    return null;
+  }
+
+  if (key.length >= CHIP_PREFIX_MIN) {
+    const pref = [];
+    for (const opt of opts) {
+      for (const f of optionFields(opt)) {
+        const nk = normClarifyKey(f);
+        if (!nk) continue;
+        if (nk.startsWith(key) || (key.startsWith(nk) && nk.length >= CHIP_PREFIX_MIN)) {
+          pref.push(opt);
+          break;
+        }
+      }
+    }
+    const prefU = uniqueOpts(pref);
+    if (prefU.length === 1) return prefU[0];
+    if (prefU.length > 1) return null;
+  }
+
+  const contain = [];
+  for (const opt of opts) {
+    for (const f of optionFields(opt)) {
+      const nk = normClarifyKey(stripChoiceNum(String(f || "")));
+      if (nk.length >= 8 && key.includes(nk)) {
+        contain.push(opt);
+        break;
+      }
+    }
+  }
+  const containU = uniqueOpts(contain);
+  if (containU.length === 1) return containU[0];
+  if (containU.length > 1) return null;
+
+  const tokHits = [];
+  for (const opt of opts) {
+    if (optionTokens(opt).includes(key)) tokHits.push(opt);
+  }
+  const tokU = uniqueOpts(tokHits);
+  if (tokU.length === 1) return tokU[0];
   return null;
+}
+
+export function looksLikeChoiceAttempt(prompt, options) {
+  let raw = String(prompt || "").trim();
+  if (raw.startsWith("ask1c:")) raw = raw.slice("ask1c:".length).trim();
+  if (!raw) return false;
+  if (/^\s*#?\s*\d+\s*[.)]?\s*$/.test(raw)) return true;
+  const key = normClarifyKey(raw);
+  if (key.length < 2) return false;
+  for (const opt of options || []) {
+    for (const f of optionFields(opt)) {
+      const nk = normClarifyKey(f);
+      if (!nk) continue;
+      if (nk.startsWith(key) || key.startsWith(nk) || nk.includes(key)) return true;
+    }
+    if (optionTokens(opt).includes(key)) return true;
+  }
+  return false;
 }
 
 export function rewriteAsk1cParams(params, prompt, lock) {
@@ -378,15 +520,24 @@ export function rewriteAsk1cParams(params, prompt, lock) {
     p.question = lock.question;
     if (matched.decision_id) {
       p.decision_id = matched.decision_id;
-      // Билет — источник истины; сырой focus не подменяем как доказательство.
     } else {
+      p.decision_id = "";
       if (matched.focus) p.focus = matched.focus;
       if (matched.measure) p.measure = matched.measure;
     }
     p.prior = "";
     return { params: p, action: "slot" };
   }
+  if (looksLikeChoiceAttempt(prompt, lock.options)) {
+    p.question = lock.question;
+    p.decision_id = "";
+    p.focus = "";
+    p.measure = "";
+    p.prior = "";
+    return { params: p, action: "refresh" };
+  }
   if (prompt) p.question = prompt;
+  p.decision_id = "";
   const pf = String(p.focus || "");
   const sameThread = (lock.options || []).some(
     (o) => o.focus && pf && normClarifyKey(o.focus) === normClarifyKey(pf));
@@ -394,6 +545,7 @@ export function rewriteAsk1cParams(params, prompt, lock) {
   else p.prior = "";
   return { params: p, action: "release" };
 }
+
 
 // Личность канала → ask_1c.user. senderId есть в message/agent хуках
 // (docs/plugins/hooks.md), в before_tool_call его нет. sessionKey — честный
@@ -694,6 +846,22 @@ export function finalizeDecision(answer, ref, inb, cfg, haveRef) {
 //   { action: "allow" }                     — отдать «живой» ответ как есть
 //   { action: "replace", content: str }     — заменить (обоснованным ответом braine / «нет данных»)
 //   { action: "cancel", reason: str }       — не отправлять вовсе
+export function missingClarifyOptions(content, ref) {
+  const opts = parseClarifyOptions((ref && ref.text) || "");
+  if (!opts.length) return [];
+  const hay = normClarifyKey(content || "");
+  const missing = [];
+  for (const opt of opts) {
+    const keys = [stripChoiceNum(opt.label), opt.focus, opt.measure]
+      .map((x) => normClarifyKey(x)).filter((x) => x && x.length >= 2);
+    if (!keys.length) continue;
+    if (!keys.some((k) => hay.includes(k))) {
+      missing.push(opt.focus || opt.label);
+    }
+  }
+  return missing;
+}
+
 export function evaluate(content, ref, inb, cfg, presentation) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
   if (!content && !presentation) return { action: "allow" };
@@ -713,6 +881,14 @@ export function evaluate(content, ref, inb, cfg, presentation) {
   }
 
   if (!content) return { action: "allow" };
+
+  if (ref && ref.clarify) {
+    const missing = missingClarifyOptions(content, ref);
+    if (missing.length) {
+      return { action: "replace", content: ref.text,
+               reason: "clarify options missing from render" };
+    }
+  }
 
   // С эталоном сверяем всё, без эталона — только то, что похоже на факт. Нумерация
   // пунктов снимается до токенизации: она разметка, а не число из данных (F287).

@@ -120,12 +120,17 @@ finally:
     A.ENOUGH_ON = True
 
 
-# ── choice_error через одну точку answer_checked ─────────────────────────────
+# ── невалидный билет через одну точку answer_checked → общий путь ────────────
 A.reset_decisions_for_tests()
 A.ASK_JOURNAL = False
+old_core = A._answer_checked_core
+A._answer_checked_core = lambda *a, **k: {
+    "kind": "no_data", "text": "общий путь", "options": [], "diag": {}, "partial": None}
 out = A.answer_checked("вопрос", decision_id="нет-такого-билета", channel="lock")
-t("choice_error из answer_checked", out.get("kind") == "choice_error"
-  and out.get("error") == "unknown")
+t("невалидный билет → не choice_error", out.get("kind") != "choice_error")
+t("невалидный билет → ticket_reissued в diag",
+  (out.get("diag") or {}).get("ticket_reissued") == "unknown")
+A._answer_checked_core = old_core
 
 
 # ── живой контур ─────────────────────────────────────────────────────────────

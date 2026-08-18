@@ -145,6 +145,10 @@ function loadIdentity(ctx, event) {
 // и по эталону хода: сбой мог прийти и первым вызовом инструмента, а не только в тексте.
 function emptyReply(base, ref, cfg) {
   if (isServiceError(base, cfg.serviceErrorMarker) || (ref && ref.svcError)) return cfg.serviceErrorReply;
+  if (ref && ref.clarify && ref.text) {
+    const c = stripInternal(ref.text);
+    if (c && c.trim()) return c;
+  }
   return cfg.noDataReply;
 }
 
@@ -286,6 +290,7 @@ export default definePluginEntry({
         const rewritten = rewriteAsk1cParams(params, prompt, lock);
         params = rewritten.params;
         if (rewritten.action === "release") clarifyLocks.delete(sessKey);
+        // refresh: тот же замок, свежий вызов без билета
         changed = true;
         dbg(cfg, `before_tool_call rewrite sess=${sessKey} action=${rewritten.action} q=${String(params.question || "").slice(0, 80)} focus=${params.focus || ""} decision_id=${params.decision_id || ""} prior=${String(params.prior || "").slice(0, 80)}`);
       }

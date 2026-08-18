@@ -3275,18 +3275,22 @@ def slot_measure_uncovered(word, selected, names, alias_by=None):
     return False, []
 
 
-def clarify_complete(txt, opts):
-    """Код не имеет права выкинуть пункт уточнения: чего нет в тексте модели — дописать."""
-    labels = [(o.get("label") or o.get("measure") or "").strip()
-              for o in (opts or [])]
-    labels = [x for x in labels if x]
-    if not labels:
+def clarify_complete(txt, opts, question=""):
+    """Код не имеет права выкинуть пункт уточнения: чего нет в тексте — дописать.
+
+    Форма пункта — нумерованная строка-вопрос (`format_clarify_options`): её
+    follow-up WebUI копирует в чип. Если все такие строки уже есть — не дублируем.
+    Проза, где мелькнули только подписи, нумерованными строками не считается.
+    """
+    lines = format_clarify_options(question, opts)
+    if not lines:
         return txt or ""
-    low = (txt or "").lower()
-    if all(lab.lower() in low for lab in labels):
-        return txt or ""
-    extra = ", ".join("«%s»" % lab for lab in labels)
     body = (txt or "").rstrip()
+    low = body.lower()
+    missing = [ln for ln in lines if ln.lower() not in low]
+    if not missing:
+        return body
+    extra = "\n".join(missing)
     return extra if not body else body + "\n" + extra
 
 
@@ -3367,6 +3371,7 @@ RAW_FOCUS_TRUST = os.environ.get("ASK_RAW_FOCUS_TRUST", "0") == "1"
 DECISION_TTL_SEC = int(os.environ.get("ASK_DECISION_TTL_SEC", "3600"))
 _DECISION_LOCK = threading.Lock()
 _DECISIONS = {}  # id -> ticket
+_CLARIFY_BATCHES = {}  # batch_id -> snapshot options/text for reissue
 
 
 def question_fingerprint(question):
@@ -3423,10 +3428,14 @@ def _purge_decisions(now=None):
             if float(t.get("expires_at") or 0) <= now]
     for k in dead:
         _DECISIONS.pop(k, None)
+    dead_b = [k for k, b in _CLARIFY_BATCHES.items()
+              if float(b.get("expires_at") or 0) <= now]
+    for k in dead_b:
+        _CLARIFY_BATCHES.pop(k, None)
 
 
 def issue_decision(question, option, ambiguity, options_ver, user=None, parse=None,
-                   class_meta=None):
+                   class_meta=None, batch_id=None):
     """Выпустить билет на один вариант clarify. Возвращает decision_id."""
     now = time.time()
     tid = _new_decision_id()
@@ -3453,6 +3462,7 @@ def issue_decision(question, option, ambiguity, options_ver, user=None, parse=No
         "created_at": now,
         "expires_at": now + max(60, DECISION_TTL_SEC),
         "used": False,
+        "batch_id": batch_id,
     }
     with _DECISION_LOCK:
         _purge_decisions(now)
@@ -3475,15 +3485,37 @@ def seal_clarify(out, question, user=None, parse=None):
     amb = ambiguity_of_options(opts)
     ver = options_version(opts)
     class_meta = ACM.class_meta_of(out)
+    batch_id = secrets.token_hex(8)
+    now = time.time()
+    plain = []
     sealed = []
     for o in opts:
         if not isinstance(o, dict):
             continue
         row = dict(o)
+        snap = dict(o)
+        snap.pop("decision_id", None)
+        plain.append(snap)
         row["decision_id"] = issue_decision(
             question, row, amb, ver, user=user, parse=parse,
-            class_meta=class_meta)
+            class_meta=class_meta, batch_id=batch_id)
         sealed.append(row)
+    with _DECISION_LOCK:
+        _CLARIFY_BATCHES[batch_id] = {
+            "kind": out.get("kind"),
+            "text": out.get("text"),
+            "options": plain,
+            "atoms": out.get("atoms"),
+            "atom": out.get("atom"),
+            "figures": out.get("figures"),
+            "partial": out.get("partial"),
+            "sources": out.get("sources") or [],
+            "question": str(question or "")[:2000],
+            "question_fp": question_fingerprint(question),
+            "user": (str(user).strip() if user else None) or None,
+            "parse": parse,
+            "expires_at": now + max(60, DECISION_TTL_SEC),
+        }
     out = dict(out)
     out["options"] = sealed
     out.setdefault("diag", {})
@@ -3546,8 +3578,56 @@ def peek_decision(decision_id, user=None):
         return dict(ticket), None
 
 
+def lookup_clarify_batch(decision_id, question, user=None, err=None):
+    """Снимок уточнения, из которого выпущен билет. user_mismatch — None."""
+    if err == "user_mismatch":
+        return None
+    now = time.time()
+    tid = str(decision_id or "").strip()
+    with _DECISION_LOCK:
+        _purge_decisions(now)
+        ticket = _DECISIONS.get(tid) if tid else None
+        if ticket:
+            bid = ticket.get("batch_id")
+            batch = _CLARIFY_BATCHES.get(bid) if bid else None
+            if batch and float(batch.get("expires_at") or 0) > now:
+                return dict(batch)
+        qfp = question_fingerprint(question)
+        user_n = (str(user).strip() if user else None) or None
+        for batch in _CLARIFY_BATCHES.values():
+            if batch.get("question_fp") != qfp:
+                continue
+            if batch.get("user") and batch["user"] != user_n:
+                continue
+            if float(batch.get("expires_at") or 0) <= now:
+                continue
+            return dict(batch)
+    return None
+
+
+def reissue_clarify(batch, err=None):
+    """Свежие options без билетов: Handler/seal_clarify выпустит новые id."""
+    if not isinstance(batch, dict):
+        return None
+    kind = batch.get("kind") or "clarify"
+    if kind not in ("clarify", "figures"):
+        kind = "clarify"
+    out = {
+        "kind": kind,
+        "text": batch.get("text") or "",
+        "options": [dict(o) for o in (batch.get("options") or []) if isinstance(o, dict)],
+        "sources": batch.get("sources") or [],
+        "partial": batch.get("partial"),
+        "diag": {"ticket_reissued": err or "unknown"},
+    }
+    for k in ("atoms", "atom", "figures"):
+        if batch.get(k) is not None:
+            out[k] = batch[k]
+    return out
+
+
 def choice_error_response(error_code, decision_id=None):
-    """Видимая клиенту ошибка выбора — не молчаливый общий путь."""
+    """Внутренний снимок ошибки билета (журнал). Клиенту не отдаётся."""
     texts = {
         "unknown": "Этот вариант выбора больше недоступен. Задайте вопрос снова.",
         "expired": "Срок выбора истёк. Задайте вопрос снова.",
@@ -3571,6 +3651,7 @@ def reset_decisions_for_tests():
     """Только оффлайн-пробы: очистить хранилище билетов."""
     with _DECISION_LOCK:
         _DECISIONS.clear()
+        _CLARIFY_BATCHES.clear()
 
 
 def attach_memory_shadow(out, user=None, action=None, decision_id=None):
@@ -6461,25 +6542,64 @@ def _opt_values(opts):
     return out
 
 
-def clarify_say(question, opts, diag=None):
-    """Уточняющий вопрос — от модели, но через гейт; не прошёл — перечень из ДАННЫХ.
+def clarify_choice_prompt(question, label):
+    """Короткая строка-вопрос варианта — форма, которую follow-up WebUI берёт чипом.
 
-    Молчания здесь не возникает: отвергнутая фраза заменяется перечислением меток
-    вариантов, то есть данными без прозы. Так уже сделано в уточнении о величине —
-    теперь это общий путь для всех уточнений, а не одна ветка из пяти.
+    Вопрос человека (язык спрашивающего) + человеческая подпись. Предлог не
+    зашивается: двоеточие не привязано к языку. Подпись, уже входящая в вопрос,
+    второй раз не дублируется.
     """
-    fallback = ", ".join("«%s»" % (o.get("label") or o.get("measure") or "")
-                         for o in (opts or []) if (o.get("label") or o.get("measure")))
-    txt = clarify_text(question, opts)
-    if not (txt or "").strip():
-        return fallback
-    ok, bad = gate_out(txt, [], None, _opt_values(opts))
+    stem = (question or "").strip().rstrip("?").strip()
+    lab = (label or "").strip()
+    if not lab:
+        return (stem + "?") if stem else ""
+    if lab.lower() in stem.lower():
+        return stem + "?"
+    if stem:
+        return "%s: %s?" % (stem, lab)
+    return lab + "?"
+
+
+def clarify_choice_line(n, question, opt):
+    """Одна строка выбора: «N. вопрос: Подпись? — описание»."""
+    lab = (opt.get("label") or opt.get("measure") or "").strip()
+    prompt = clarify_choice_prompt(question, lab)
+    hint = (opt.get("hint") or "").strip()
+    if hint:
+        return "%d. %s — %s" % (n, prompt, hint)
+    return "%d. %s" % (n, prompt)
+
+
+def format_clarify_options(question, opts):
+    """Все варианты уточнения одним видом строк. Пустых пунктов нет."""
+    lines, n = [], 0
+    for o in opts or []:
+        if not (o.get("label") or o.get("measure")):
+            continue
+        n += 1
+        lines.append(clarify_choice_line(n, question, o))
+    return lines
+
+
+def clarify_say(question, opts, diag=None):
+    """Уточнение — нумерованные строки-вопросы из ДАННЫХ, не проза модели.
+
+    Каждый пункт виден целиком (подпись + hint) и сам является коротким вопросом,
+    который follow-up-генератор WebUI может скопировать в чип. Молчания нет: пустой
+    перечень — пустая строка, вызывающий подставит свой fallback.
+    """
+    lines = format_clarify_options(question, opts)
+    body = "\n".join(lines)
+    if not body:
+        return ""
+    ok, bad = gate_out(body, [], None, _opt_values(opts))
     if ok:
-        return clarify_complete(txt, opts)
+        return body
     sys.stderr.write("ask CLARIFY GATE: числа вне вариантов: %s\n" % bad[:4])
     if isinstance(diag, dict):
         diag["clarify_gate_rejected"] = bad[:4]
-    return fallback
+    stripped = [dict(o, hint="") for o in (opts or [])]
+    return "\n".join(format_clarify_options(question, stripped))
 
 
 # 🔴 ВИТРИНА ИЗМЕРЯЕТСЯ ЖИВЬЁМ, А НЕ ПО ПЕРЕПИСИ (15.08, аудит §3). Перепись
@@ -6990,6 +7110,12 @@ def mk_opts(srcs, lab_by, marks=None, by=None, match="", preds=None, live=None):
         counted = live_src_counts(srcs, match, preds)
     if counted is not None:
         srcs = [s for s in srcs if counted.get(s, 0) > 0]
+    cov, _fk = fork_labels_covering(srcs)
+    if cov:
+        lab_by = dict(lab_by or {})
+        for src in srcs:
+            if cov.get(src):
+                lab_by[src] = cov[src]
     dis = disambiguate_labels([(s, lab_by.get(s, s)) for s in srcs])
     hint = opts_hints(srcs)
     found_of = counted if counted is not None else by
@@ -7122,7 +7248,7 @@ def align_picked_to_terms(picked, cands, intent, diag):
     return picked
 
 
-def resolve_focus(focus, diag=None):
+def resolve_focus(focus, diag=None, opts=None):
     """Свести `focus` к ИМЕНИ ИСТОЧНИКА, как бы его ни назвали.
 
     🔴 ЗАЧЕМ. `focus` приходит от бота, а бот берёт название оттуда, где его увидел —
@@ -7145,6 +7271,21 @@ def resolve_focus(focus, diag=None):
     f = str(focus).strip()
     if not f:
         return None
+    # Номер варианта из только что показанного уточнения — тот же порядок, что mk_opts.
+    if opts:
+        raw = f.rstrip(".)").strip()
+        if raw.isdigit():
+            n = int(raw)
+            if 1 <= n <= len(opts):
+                o = opts[n - 1] or {}
+                src = (o.get("src") or "").strip()
+                if src:
+                    if diag is not None:
+                        diag["focus_resolved"] = "%s -> %s" % (f, src)
+                    return src
+                lab = (o.get("label") or o.get("measure") or "").strip()
+                if lab:
+                    return resolve_focus(lab, diag, opts=None)
     try:
         rows = psql("SELECT src_table FROM %s WHERE src_table = %s LIMIT 1" % (TABLES, lit(f)))
         if rows and rows[0] and rows[0][0]:
@@ -7164,20 +7305,79 @@ def resolve_focus(focus, diag=None):
             return None
         # Подпись с видом записи: «Реализация ТМЦ (документ)». Сравниваем не разбором
         # строки, а СБОРКОЙ эталона у каждого кандидата — так же, как сведение по метке
-        # спрашивается у базы. Кандидаты сужаются по началу строки, поэтому перебора
-        # всей карты сущностей нет.
+        # спрашивается у базы. Кандидаты сужаются LIKE (доки: Sql › Functions › Text
+        # Functions — string LIKE target), поэтому перебора всей карты сущностей нет.
+        # Формы: точное равенство, начало подписи, подпись внутри строки-вопроса (чип).
         norm = lambda s: "".join(str(s or "").lower().split())
+        nf = norm(f)
         try:
             rows = psql("SELECT src_table, label FROM %s WHERE %s LIKE "
-                        "lower(replace(label,' ','')) || '%%'"
-                        % (TABLES, lit(norm(f))))
+                        "lower(replace(label,' ','')) || '%%' OR "
+                        "lower(replace(label,' ','')) LIKE %s || '%%'"
+                        % (TABLES, lit(nf), lit(nf)))
         except RuntimeError:
             rows = []
+        hits = []
         for r in rows or []:
-            if r and r[0] and norm(label_with_kind(r[0], r[1] if len(r) > 1 else "")) == norm(f):
+            if not (r and r[0]):
+                continue
+            src = r[0]
+            lab = r[1] if len(r) > 1 else ""
+            full = norm(label_with_kind(src, lab))
+            nlab = norm(lab)
+            if nf in (full, nlab):
+                hits.append((src, 4, len(full)))
+            elif (len(nf) >= 8 or "(" in f) and full.startswith(nf):
+                hits.append((src, 3, len(full)))
+            elif full and full in nf:
+                hits.append((src, 2, len(full)))
+            elif (len(nf) >= 8 or "(" in f) and nlab.startswith(nf):
+                hits.append((src, 1, len(full)))
+        if hits:
+            hits.sort(key=lambda x: (x[1], x[2]), reverse=True)
+            best = hits[0][1]
+            srcs = []
+            for src, rank, _ln in hits:
+                if rank != best:
+                    break
+                if src not in srcs:
+                    srcs.append(src)
+            if len(srcs) == 1:
                 if diag is not None:
-                    diag["focus_resolved"] = "%s -> %s" % (f, r[0])
-                return r[0]
+                    diag["focus_resolved"] = "%s -> %s" % (f, srcs[0])
+                return srcs[0]
+            if len(srcs) > 1:
+                if diag is not None:
+                    diag["focus_ambiguous"] = f
+                return None
+        try:
+            frows = psql(
+                "SELECT src, label FROM search_fork_label "
+                "WHERE coalesce(label,'') <> '' AND ("
+                "lower(replace(label,' ','')) = %s OR "
+                "lower(replace(label,' ','')) LIKE %s || '%%' OR "
+                "%s LIKE '%%' || lower(replace(label,' ','')) || '%%')"
+                % (lit(nf), lit(nf), lit(nf)))
+        except RuntimeError:
+            frows = []
+        fhits = []
+        for r in frows or []:
+            if not (r and r[0] and r[1]):
+                continue
+            nlab = norm(r[1])
+            if not nlab:
+                continue
+            if nf == nlab or ((len(nf) >= 8 or "(" in f) and nlab.startswith(nf)) or nlab in nf:
+                fhits.append(r[0])
+        fsrcs = list(dict.fromkeys(fhits))
+        if len(fsrcs) == 1:
+            if diag is not None:
+                diag["focus_resolved"] = "%s -> %s" % (f, fsrcs[0])
+            return fsrcs[0]
+        if len(fsrcs) > 1:
+            if diag is not None:
+                diag["focus_ambiguous"] = f
+            return None
     except RuntimeError:
         return None                     # база недоступна — пусть решает общий путь
     if diag is not None:
@@ -10104,6 +10304,10 @@ def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
         if kind == "choice_error":
             ticket_error = str((out or {}).get("error") or "")
             ticket_used = False
+        elif isinstance(d, dict):
+            ticket_error = str(d.get("ticket_reissued") or d.get("ticket_error") or "")
+            if ticket_error:
+                ticket_used = False
         unc, trn = _journal_uncounted_truncated(out if isinstance(out, dict) else {})
         age = d.get("data_age_sec")
         partial = bool((out or {}).get("partial")) if isinstance(out, dict) else False
@@ -10264,7 +10468,19 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
         if decision_id and trusted is None:
             ticket, err = consume_decision(decision_id, question, user=user)
             if err:
-                out = choice_error_response(err, decision_id)
+                batch = lookup_clarify_batch(decision_id, question, user, err)
+                recovered = reissue_clarify(batch, err) if batch else None
+                if recovered and recovered.get("options"):
+                    out = recovered
+                    return out
+                out = _answer_checked_core(
+                    question, focus=focus, measure_pick=measure_pick,
+                    context=context, prior=prior, trusted=None)
+                if isinstance(out, dict):
+                    diag = dict(out.get("diag") or {})
+                    diag["ticket_reissued"] = err
+                    diag["ticket_fallback"] = "general"
+                    out = dict(out, diag=diag)
                 return out
             if ticket.get("src"):
                 focus = ticket["src"]

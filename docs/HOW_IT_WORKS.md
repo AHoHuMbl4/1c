@@ -157,6 +157,22 @@
 продолжают работать. Сырой `focus` от модели — подсказка, не выбор (аудит §10).
 Каналы: Telegram — `presentation` с `callback=ask1c:<id>` и снятием кнопок;
 WebUI — текст OPTIONS + свободный ввод (возможности не приравниваются).
+Чип WebUI — текст без билета: плагин сводит его к варианту замка (подпись /
+начало / номер / уникальное слово / строка-вопрос) и подставляет `decision_id`.
+Невалидный билет сервис перевыпускает как обычный `clarify` со свежими id либо
+идёт общим путём. Строки с `decision_id` / «тикет» / именами инструментов режет
+`stripInternal`.
+
+Текст уточнения — нумерованные короткие вопросы из данных (`clarify_say`):
+`N. {вопрос}: {подпись}? — {hint}`. Это форма, которую follow-up-генератор
+Open WebUI (Admin → Settings → Tasks → Follow-up, API `GET/POST
+/api/v1/tasks/config[/update]`, поле `FOLLOW_UP_GENERATION_PROMPT_TEMPLATE`)
+может скопировать в чипы. Генератор — отдельный вызов модели
+(`POST /api/v1/tasks/follow_up/completions`); детерминизм шаблоном не
+держится. Если чип не совпал, выбор идёт номером, подписью или началом
+подписи (`resolve_focus` / `matchClarifyOption`). Статические suggestions
+WebUI для динамических вариантов не подходят. Если бот выкинул пункт OPTIONS
+при `kind=clarify`, плагин подменяет ответ эталоном моста (не промтом).
 
 ### 8b. Память выбора (`ask_choice_memory`, 17.08, shadow)
 
@@ -1208,7 +1224,8 @@ SQL `Всего` 79 925 955,81. Проба нового кода против т
 1 572 493,22 / 79 752 611,64 / 79 925 955,81 = `aggregate`, нулей нет.
 
 🔴 **Журнал исходов `ask_journal` (17.08, шаг 5 плана).** Одна точка записи —
-`answer_checked` (виды answer/figures/clarify/no_data/unavailable/choice_error).
+`answer_checked` (виды answer/figures/clarify/no_data/unavailable;
+`choice_error` — внутренний снимок, клиенту не отдаётся: перевыпуск или общий путь).
 Текст вопроса в таблицу не кладётся: `q_hash` + `q_len`. Сервис (роль `serene_ro`)
 делает INSERT и ротацию DELETE по id; SELECT строк журнала у роли нет (кроме
 колонки `id`). Схема — `ask_journal.sql`, не `corpus_init.sql`. Выключатель

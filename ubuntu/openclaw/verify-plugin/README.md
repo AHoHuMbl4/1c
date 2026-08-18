@@ -36,11 +36,12 @@ braine («второго мозга»). Это требование владел
    только `stripInternal`, то есть подпись к графику — место, где числа и живут, — не сверялась
    с эталоном вообще.
 
-Плюс замок уточнения (14.08, 1.1.4): `before_agent_run` кладёт текущий prompt;
-`before_tool_call` переписывает params `ask_1c` (слот / новый вопрос; период замка —
-поле `prior`, не склейка `question`); без замка хук снимает `prior` модели;
-`after_tool_call` ставит/снимает замок по маркеру `[CLARIFICATION NEEDED]` и строкам
-OPTIONS (текст — из MCP `structuredContent.result`); `session_end` снимает замок.
+Плюс замок уточнения (1.1.7): `before_agent_run` кладёт текущий prompt;
+`before_tool_call` переписывает params `ask_1c` (слот по подписи/началу/номеру/слову чипа,
+`refresh` при неоднозначном выборе без билета, иначе новый вопрос; stale `decision_id`
+снимается). `after_tool_call` ставит/снимает замок по маркеру `[CLARIFICATION NEEDED]`;
+`session_end` снимает замок. `stripInternal` режет строки протокола (`decision_id`,
+«тикет», имена инструментов).
 
 Чистая логика — в `verify-core.js` (без зависимостей, тест `test-verify.mjs`).
 `index.js` — только подключение к хукам и состояние хода в памяти процесса.
@@ -73,7 +74,7 @@ OPTIONS (текст — из MCP `structuredContent.result`); `session_end` сн
 
 ## Тест и установка
 ```bash
-node test-verify.mjs                 # оффлайн-юниты чистой логики (86 кейсов, без базы и сети)
+node test-verify.mjs                 # оффлайн-юниты чистой логики (118 кейсов, без базы и сети)
 npm pack --pack-destination /tmp     # собрать tgz
 openclaw plugins install npm-pack:/tmp/openclaw-braine-verify-1.1.4.tgz --force
 openclaw plugins inspect braine-verify --runtime --json   # проверить, что хуки зарегистрированы

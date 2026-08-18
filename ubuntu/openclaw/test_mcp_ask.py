@@ -156,11 +156,27 @@ t("presentation: кнопки label+callback, ≤64 байт",
   pres is not None
   and pres["blocks"][0]["buttons"][0]["label"] == "Реализация"
   and pres["blocks"][0]["buttons"][0]["action"]["value"] == "ask1c:abc123XYZ")
-M._ask = lambda *a, **k: {"kind": "choice_error", "text": "Срок выбора истёк.",
+calls_ce = []
+def _ce_then_clarify(q, focus=None, measure=None, context=None, prior=None,
+                     decision_id=None, user=None, memory=None, channel=None, rid=None):
+    calls_ce.append(decision_id)
+    if decision_id:
+        return {"kind": "choice_error", "text": "Срок выбора истёк. тикет.",
+                "error": "expired"}
+    return {"kind": "clarify", "text": "Что посчитать?", "options": opts_d}
+M._ask = _ce_then_clarify
+out_ce = M.ask_1c("q", decision_id="expired-tid")
+t("choice_error: повтор без билета → обычное уточнение",
+  "[CLARIFICATION NEEDED]" in out_ce and "Что посчитать?" in out_ce
+  and "[CHOICE ERROR]" not in out_ce
+  and "тикет" not in out_ce.lower()
+  and calls_ce[0] == "expired-tid" and calls_ce[1] is None)
+M._ask = lambda *a, **k: {"kind": "choice_error", "text": "Срок выбора истёк. тикет.",
                           "error": "expired"}
-out_ce = M.ask_1c("q")
-t("choice_error: маркер видим мосту/гейту",
-  out_ce.startswith("[CHOICE ERROR]") and "истёк" in out_ce)
+out_ce2 = M.ask_1c("q", decision_id="x")
+t("choice_error повтор не помог → без кухни протокола",
+  "[CHOICE ERROR]" not in out_ce2 and "тикет" not in out_ce2.lower()
+  and "[CLARIFICATION NEEDED]" in out_ce2)
 # _ask пробрасывает decision_id
 seen = {}
 def capture(q, focus=None, measure=None, context=None, prior=None,
@@ -191,6 +207,28 @@ M._ask = cap_rid
 M.ask_1c("q", rid="rid1deadbeef")
 t("rid пробрасывается в _ask", seen_rid.get("rid") == "rid1deadbeef")
 M._ask = saved_ask
+
+t("_choice_prompt: вопрос и подпись одной строкой",
+  M._choice_prompt("сколько продали вчера всего", "Реализация ТМЦ (документ)")
+  == "сколько продали вчера всего: Реализация ТМЦ (документ)?")
+opts_chip = [
+    {"src": "document_a", "label": "Реализация ТМЦ (документ)", "hint": "отгрузки",
+     "distinct_by": "", "found": 3, "decision_id": "abc123XYZ"},
+    {"src": "document_b", "label": "Реализация ТМЦ (регистр)", "hint": "итоги",
+     "distinct_by": "", "found": 2, "decision_id": "def456UVW"},
+]
+_saved_chip = M._ask
+M._ask = lambda *a, **k: {"kind": "clarify", "text":
+    "1. сколько продали вчера всего: Реализация ТМЦ (документ)? — отгрузки\n"
+    "2. сколько продали вчера всего: Реализация ТМЦ (регистр)? — итоги",
+    "options": opts_chip}
+out_chip = M.ask_1c("сколько продали вчера всего")
+t("clarify OPTIONS: строка-вопрос чипа, focus=подпись, hint рядом",
+  "сколько продали вчера всего: Реализация ТМЦ (документ)?" in out_chip
+  and "focus=Реализация ТМЦ (документ)" in out_chip
+  and " — отгрузки" in out_chip
+  and "focus=Реализация ТМЦ (регистр)" in out_chip)
+M._ask = _saved_chip
 
 print("\n%d проверок пройдено" % PASS)
 if FAIL:

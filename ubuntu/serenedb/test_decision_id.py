@@ -116,11 +116,47 @@ A.reset_decisions_for_tests()
 t("рестарт хранилища → старый билет unknown",
   A.consume_decision(ids[0], "На какую сумму продали?")[1] == "unknown")
 
-# choice_error_response visible
+# choice_error_response — внутренний снимок; клиенту answer_checked его не отдаёт
 err_out = A.choice_error_response("used", "x")
-t("ошибка выбора видима клиенту (kind=choice_error + text)",
+t("снимок ошибки билета собирается (kind=choice_error)",
   err_out["kind"] == "choice_error" and err_out["error"] == "used"
   and err_out["text"] and "sources" in err_out)
+
+A.reset_decisions_for_tests()
+opts_r = [
+    {"src": "document_a", "label": "Реализация (документ)", "distinct_by": "продажа", "found": 10},
+    {"src": "register_a", "label": "Продажи (регистр)", "distinct_by": "итоги", "found": 5},
+]
+q_r = "На какую сумму продали?"
+sealed_r = A.seal_clarify({"kind": "clarify", "text": "что посчитать?", "options": opts_r}, q_r)
+tid_r = sealed_r["options"][0]["decision_id"]
+A.consume_decision(tid_r, q_r)
+out_used = A.answer_checked(q_r, decision_id=tid_r)
+t("used → свежий clarify, не choice_error",
+  out_used.get("kind") == "clarify" and len(out_used.get("options") or []) == 2)
+txt_u = (out_used.get("text") or "") + str(out_used.get("diag") and "")
+t("used → в text нет тикет/decision_id",
+  "тикет" not in (out_used.get("text") or "").lower()
+  and "decision_id" not in (out_used.get("text") or "").lower())
+t("used → ticket_reissued=used",
+  (out_used.get("diag") or {}).get("ticket_reissued") == "used")
+labs = {o.get("label") for o in out_used["options"]}
+t("used → те же подписи",
+  "Реализация (документ)" in labs and "Продажи (регистр)" in labs)
+
+core_calls = []
+def _core_stub(*a, **k):
+    core_calls.append(1)
+    return {"kind": "no_data", "text": "общий путь", "options": [], "diag": {}, "partial": None}
+old_core = A._answer_checked_core
+A._answer_checked_core = _core_stub
+out_unk = A.answer_checked("вопрос", decision_id="нет-такого-билета")
+t("unknown → общий путь, не choice_error",
+  out_unk.get("kind") != "choice_error" and out_unk.get("kind") == "no_data")
+t("unknown → без слов про билеты",
+  "тикет" not in (out_unk.get("text") or "").lower())
+t("unknown → core звался", len(core_calls) == 1)
+A._answer_checked_core = old_core
 
 # measure options
 A.reset_decisions_for_tests()

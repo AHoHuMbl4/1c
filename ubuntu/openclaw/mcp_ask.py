@@ -376,6 +376,19 @@ def _with_partial(out, data):
 
 
 
+def _choice_prompt(question, label):
+    """Строка-вопрос варианта: тот же вид, что serene_ask.clarify_choice_prompt."""
+    stem = (question or "").strip().rstrip("?").strip()
+    lab = (label or "").strip()
+    if not lab:
+        return (stem + "?") if stem else ""
+    if lab.lower() in stem.lower():
+        return stem + "?"
+    if stem:
+        return "%s: %s?" % (stem, lab)
+    return lab + "?"
+
+
 def _clarify_presentation(opts):
     """Штатный presentation: кнопки с callback=decision_id (Telegram ≤64 байт).
 
@@ -405,6 +418,21 @@ def _clarify_presentation(opts):
         "tone": "info",
         "blocks": [{"type": "buttons", "buttons": buttons}],
     }
+
+
+def _without_ticket_talk(text):
+    """Строки протокола билета из текста моста: decision_id / тикет / имя инструмента."""
+    keep = []
+    for line in str(text or "").splitlines():
+        low = line.lower()
+        if "decision_id" in low or "choice error" in low or "choice_error" in low:
+            continue
+        if "тикет" in low or "ticket" in low:
+            continue
+        if "ask_1c" in low or "report_1c" in low:
+            continue
+        keep.append(line)
+    return "\n".join(keep).strip()
 
 
 @mcp.tool()
@@ -463,11 +491,24 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
         return ERROR_REPLY.format(detail=text[:120] or "unavailable")
 
     if kind == "choice_error":
-        # Видимая ошибка выбора (просрочен/повтор/чужой) — не общий путь.
-        marker = "[CHOICE ERROR]"
-        body = text or "choice no longer valid"
-        out = body if body.startswith(marker) else (marker + " " + body)
-        return _with_partial(out, data)
+        # Прозрачный повтор без билета: бот видит уточнение, не ошибку протокола.
+        try:
+            data2 = _ask(question, focus or None, measure or None, context or None,
+                         prior or None, None, user or None,
+                         memory=mem_action, channel=channel or None, rid=rid)
+        except Exception:  # noqa: BLE001 — тот же контур, что первый _ask
+            data2 = data
+        kind2 = data2.get("kind", "") if isinstance(data2, dict) else ""
+        if kind2 and kind2 != "choice_error":
+            data = data2
+            kind = kind2
+            text = (data.get("text") or "").strip()
+        else:
+            body = _without_ticket_talk(text)
+            out = CLARIFY_HINT
+            if body:
+                out += "\n\n" + body
+            return _with_partial(out, data if isinstance(data, dict) else {})
 
     if kind == "clarify":
         opts = data.get("options") or []
@@ -507,8 +548,9 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
                 # выбора остаётся ровно та строка, которую человек видит подписью, —
                 # длинный `focus` бот копировал бы с ошибками. Пусто — строка прежняя.
                 why = (o.get("hint") or "").strip()
-                base = (("- %s — %s | focus=%s" % (name, why, name)) if why
-                        else ("- %s | focus=%s" % (name, name)))
+                chip = _choice_prompt(question, name)
+                base = (("- %s — %s | focus=%s" % (chip, why, name)) if why
+                        else ("- %s | focus=%s" % (chip, name)))
                 lines.append(base + did_tail)
         out = CLARIFY_HINT
         if text:

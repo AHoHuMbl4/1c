@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, injectAskRid, newRid, traceLine, buildClarifyPresentation, channelUserOf, evaluate, extractText, finalizeDecision, injectAskUser, isServiceError, matchClarifyOption, mergeRef, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, injectAskRid, newRid, traceLine, buildClarifyPresentation, channelUserOf, evaluate, extractText, finalizeDecision, injectAskUser, isServiceError, looksLikeChoiceAttempt, matchClarifyOption, mergeRef, missingClarifyOptions, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripChoiceNum, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -444,8 +444,9 @@ t("clarify: без замка → none", () => {
 t("clarify: нормализация пробелов в label", () => {
   assert.ok(matchClarifyOption("  Книга   Продаж ", OPTS));
 });
-t("clarify: нечёткое «книга» ≠ «Книга Продаж»", () => {
-  assert.strictEqual(matchClarifyOption("книга", OPTS), null);
+t("clarify: начало подписи «книга» → Книга Продаж", () => {
+  assert.ok(matchClarifyOption("книга", OPTS));
+  assert.strictEqual(matchClarifyOption("книга", OPTS).label, "Книга Продаж");
 });
 t("clarify: parse options из текста моста", () => {
   const txt = "[CLARIFICATION NEEDED]\n\nOPTIONS:\n- Книга Продаж | focus=Книга Продаж\n- Сумма | measure=Сумма | focus=Реализация";
@@ -606,6 +607,110 @@ t("rewriteAsk1cParams: сохраняет user", () => {
     { question: "другое", user: "telegram:111" }, "Книга Продаж", LOCK);
   assert.strictEqual(action, "slot");
   assert.strictEqual(params.user, "telegram:111");
+});
+
+const TWO = [
+  { label: "сколько продали вчера всего: Реализация ТМЦ (документ)?",
+    focus: "Реализация ТМЦ (документ)", measure: "", decision_id: "d1" },
+  { label: "сколько продали вчера всего: Реализация ТМЦ (регистр)?",
+    focus: "Реализация ТМЦ (регистр)", measure: "", decision_id: "d2" },
+];
+t("clarify: выбор по номеру 1", () => {
+  assert.strictEqual(matchClarifyOption("1", TWO).focus, "Реализация ТМЦ (документ)");
+});
+t("clarify: выбор по номеру 2.", () => {
+  assert.strictEqual(matchClarifyOption("2.", TWO).decision_id, "d2");
+});
+t("clarify: выбор по полной подписи", () => {
+  assert.strictEqual(matchClarifyOption("Реализация ТМЦ (документ)", TWO).decision_id, "d1");
+});
+t("clarify: выбор по началу подписи", () => {
+  assert.strictEqual(matchClarifyOption("Реализация ТМЦ (док", TWO).decision_id, "d1");
+});
+t("clarify: выбор по строке-вопросу чипа", () => {
+  assert.strictEqual(matchClarifyOption(TWO[1].label, TWO).decision_id, "d2");
+});
+t("stripChoiceNum снимает N.", () => {
+  assert.strictEqual(stripChoiceNum("1. Сколько продали?"), "Сколько продали?");
+});
+const CLAR = "[CLARIFICATION NEEDED]\n\nOPTIONS:\n"
+  + "- сколько продали вчера всего: Реализация ТМЦ (документ)? — отгрузки | focus=Реализация ТМЦ (документ)\n"
+  + "- сколько продали вчера всего: Реализация ТМЦ (регистр)? — итоги | focus=Реализация ТМЦ (регистр)\n";
+t("missingClarifyOptions: оба пункта на месте — пусто", () => {
+  const r = mergeRef(null, CLAR, 1000, ND, "[CLARIFICATION NEEDED]", "[SERVICE ERROR]");
+  const bot = "1. сколько продали вчера всего: Реализация ТМЦ (документ)? — отгрузки\n"
+    + "2. сколько продали вчера всего: Реализация ТМЦ (регистр)? — итоги";
+  assert.deepStrictEqual(missingClarifyOptions(bot, r), []);
+  assert.strictEqual(evaluate(bot, r, null, {}).action, "allow");
+});
+t("missingClarifyOptions: один пункт выпал — replace", () => {
+  const r = mergeRef(null, CLAR, 1000, ND, "[CLARIFICATION NEEDED]", "[SERVICE ERROR]");
+  const bot = "Можно посчитать по реализации ТМЦ (документ).";
+  const miss = missingClarifyOptions(bot, r);
+  assert.ok(miss.length >= 1, String(miss));
+  const d = evaluate(bot, r, null, {});
+  assert.strictEqual(d.action, "replace");
+  assert.ok(String(d.reason).includes("missing"));
+});
+
+
+t("chip: регистр по слову подписи → slot decision_id", () => {
+  const opts = [
+    { label: "Реализация (документ)", focus: "Реализация (документ)", decision_id: "tidDoc" },
+    { label: "Продажи (регистр)", focus: "Продажи (регистр)", decision_id: "tidReg" },
+  ];
+  const lock = { question: "на какую сумму продали", options: opts };
+  const m = matchClarifyOption("регистр", opts);
+  assert.ok(m);
+  assert.strictEqual(m.decision_id, "tidReg");
+  const { params, action } = rewriteAsk1cParams({ question: "регистр" }, "регистр", lock);
+  assert.strictEqual(action, "slot");
+  assert.strictEqual(params.question, lock.question);
+  assert.strictEqual(params.decision_id, "tidReg");
+});
+t("chip: неоднозначное начало → refresh без билета", () => {
+  const amb = [
+    { label: "Книга Продаж", focus: "Книга Продаж", decision_id: "a" },
+    { label: "Книга Покупок", focus: "Книга Покупок", decision_id: "b" },
+  ];
+  assert.strictEqual(matchClarifyOption("книга", amb), null);
+  assert.ok(looksLikeChoiceAttempt("книга", amb));
+  const { params, action } = rewriteAsk1cParams(
+    { question: "книга", decision_id: "stale" }, "книга",
+    { question: "сколько продали", options: amb });
+  assert.strictEqual(action, "refresh");
+  assert.strictEqual(params.question, "сколько продали");
+  assert.strictEqual(params.decision_id, "");
+});
+t("chip: новый вопрос снимает stale decision_id", () => {
+  const lock = { question: "на какую сумму продали", options: [
+    { label: "Продажи (регистр)", focus: "Продажи (регистр)", decision_id: "tidReg" },
+  ]};
+  const { params, action } = rewriteAsk1cParams(
+    { question: "x", decision_id: "stale" }, "сколько контрагентов", lock);
+  assert.strictEqual(action, "release");
+  assert.strictEqual(params.decision_id, "");
+  assert.strictEqual(params.question, "сколько контрагентов");
+});
+t("chip: parse numbered OPTIONS с протоколом", () => {
+  const txt = "OPTIONS:\n1. сколько продали вчера всего: Реализация ТМЦ (документ)? — отгрузки | focus=Реализация ТМЦ (документ) | decision_id=d1\n2. сколько продали вчера всего: Реализация ТМЦ (регистр)? — итоги | focus=Реализация ТМЦ (регистр) | decision_id=d2";
+  const o = parseClarifyOptions(txt);
+  assert.strictEqual(o.length, 2);
+  assert.strictEqual(o[0].focus, "Реализация ТМЦ (документ)");
+  assert.strictEqual(o[1].decision_id, "d2");
+});
+t("chip: нумерованный вопрос без протокола не засоряет замок", () => {
+  const o = parseClarifyOptions("1. сколько продали вчера всего: Реализация ТМЦ (документ)?\n2. свой вариант?");
+  assert.strictEqual(o.length, 0);
+});
+t("stripInternal: подмена кухни протокола", () => {
+  const dirty = "тикет не проходит\ndecision_id=AbCdEf123\nинструмент ask_1c вернул choice_error\nsecond-brain__ask_1c timeout\nСумма 1572493";
+  const out = stripInternal(dirty);
+  assert.ok(!/тикет/i.test(out));
+  assert.ok(!/decision_id/i.test(out));
+  assert.ok(!/ask_1c/i.test(out));
+  assert.ok(!/choice_error/i.test(out));
+  assert.ok(/1572493/.test(out));
 });
 
 console.log(`\n${pass} tests passed`);

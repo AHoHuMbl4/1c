@@ -195,6 +195,32 @@ t("величина: выбор «оборот» сводится к полю",
                     {"ИтогПробный": "оборот, сумма продаж",
                      "СуммаКартойПробная": "оплата картой"}) == "ИтогПробный")
 
+# --- 7. номер / подпись / начало / строка-вопрос сводятся к src ---
+said = A.clarify_say("сколько отгружено", OPTS)
+labs = [o.get("label") or "" for o in OPTS]
+t("текст уточнения содержит оба варианта с полной подписью",
+  all(lab in said for lab in labs) and len(labs) == 2
+  and "Отгрузка Тробная" not in said and said.startswith("1. "),
+  said)
+t("форма строки выбора: N. вопрос: Подпись?",
+  "1. сколько отгружено: Отгрузка Пробная (документ)?" in said)
+d = {}
+t("выбор по номеру 1 → документ",
+  A.resolve_focus("1", d, opts=OPTS) == DOC, d)
+d = {}
+t("выбор по номеру 2 → регистр",
+  A.resolve_focus("2", d, opts=OPTS) == REG, d)
+d = {}
+t("выбор по полной подписи → документ",
+  A.resolve_focus(OPTS[0]["label"], d) == DOC, (OPTS[0]["label"], d))
+d = {}
+t("выбор по началу подписи → документ",
+  A.resolve_focus("Отгрузка Пробная (док", d) == DOC, d)
+chip = A.clarify_choice_prompt("сколько отгружено", OPTS[0]["label"])
+d = {}
+t("выбор по строке-вопросу (чип) → документ",
+  A.resolve_focus(chip, d) == DOC, (chip, d))
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))
