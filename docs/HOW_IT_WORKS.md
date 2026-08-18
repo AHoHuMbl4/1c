@@ -1698,7 +1698,11 @@ Focus, который `resolve_focus` свёл к каталогу из `search_
 `doc_date` — когда случился факт. На строке есть Date/Period платформы — берётся она.
 Колонки нет, но `search_tables.parent` не пуст — дата родителя тем же контрактом ключа,
 что `children_by_parent`: `split_part(child.row_key,'|',1) = parent.row_key`. Своя дата
-на строке не затирается. В `corpus_merge.sql` после переноса корпуса: источник
+на строке не затирается. Слияние корпуса с 18.08 идёт **пачками**
+(`tmp3_merge_jobs`, порция ~1e6 строк) с `CHECKPOINT` после каждой: одна
+транзакция на 15 млн на klient-1 заполнила WAL (`HOW_NOT_TO §1.60`). Фильтр
+пачки — `src_table IN (литералы)`, не EXISTS по стейджу (иначе spill `.tmp`).
+В `corpus_merge.sql` после переноса корпуса: источник
 материализуется в `tmp3_child_date`, затем `UPDATE … FROM` этой таблицы
 (доки sql/statements/update#update-from-other-table). На 26.07.3
 `UPDATE ch FROM search_corpus par` на 441k рвёт соединение (`HOW_NOT_TO §1.65`).

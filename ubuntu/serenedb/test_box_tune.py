@@ -259,6 +259,111 @@ def main() -> int:
     check("firstbuild calls box_tune_apply", "box_tune_apply_first_build" in fbsh)
     check("firstbuild calls embed_check", "embed_check.sh" in fbsh)
     check("firstbuild restore after pipeline", fbsh.find("pipeline@$DB") < fbsh.find("box_tune_restore") or "box_tune_restore" in fbsh)
+    check("firstbuild calls disk preflight", "box_tune_disk_preflight" in fbsh)
+
+    # --- 11. E4b префлайт диска: числа ночи klient-1 18.08 06:06 ---
+    # 30 ГиБ свободно, 15 148 327 строк: целиком WAL не влезет, пачка 1e6 — да.
+    r = bash(
+        f'set -euo pipefail; . "{TUNE}"; box_tune_disk_plan 31457280 42991616 15148327 17511219',
+    )
+    check("disk plan night exit 0", r.returncode == 0, r.stderr)
+    dplan: dict[str, str] = {}
+    for line in r.stdout.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            dplan[k] = v
+    check("night merge_unchunked=0", dplan.get("merge_unchunked") == "0", str(dplan))
+    check("night disk_ok=1", dplan.get("disk_ok") == "1", str(dplan))
+    check("night chunk 1e6", int(dplan.get("merge_chunk_rows", "0")) == 1_000_000, str(dplan.get("merge_chunk_rows")))
+    check("night wal_unchunked > 50GiB", int(dplan.get("wal_unchunked_kb", "0")) > 50 * 1024 * 1024, str(dplan.get("wal_unchunked_kb")))
+
+    r = bash(
+        f'set -euo pipefail; . "{TUNE}"; box_tune_disk_plan 31457280 42991616 600000 0',
+    )
+    d2: dict[str, str] = {}
+    for line in r.stdout.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            d2[k] = v
+    check("small corpus unchunked ok", d2.get("merge_unchunked") == "1", str(d2))
+    check("small corpus disk_ok", d2.get("disk_ok") == "1")
+
+    r = bash(
+        f'set -euo pipefail; . "{TUNE}"; box_tune_disk_plan 2097152 42991616 15148327 0',
+    )
+    d3: dict[str, str] = {}
+    for line in r.stdout.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            d3[k] = v
+    check("2GiB free disk_ok=0", d3.get("disk_ok") == "0", str(d3))
+
+    r = bash(
+        f'set -euo pipefail; . "{TUNE}"; box_tune_disk_plan 4194304 1000 0 0',
+    )
+    d4: dict[str, str] = {}
+    for line in r.stdout.splitlines():
+        if "=" in line:
+            k, v = line.split("=", 1)
+            d4[k] = v
+    check("no stage 4GiB < 8GiB stop", d4.get("disk_ok") == "0", str(d4))
+
+    r = bash(
+        f'set -euo pipefail; . "{TUNE}"; box_tune_disk_preflight',
+        env={
+            "BOX_TUNE_FREE_KB": "31457280",
+            "BOX_TUNE_ENGINE_KB": "42991616",
+            "BOX_TUNE_STAGE_ROWS": "15148327",
+            "BOX_TUNE_SQL": "0",
+        },
+    )
+    check("preflight night inject exit 0", r.returncode == 0, r.stderr)
+    check("preflight prints disk_ok=1", "disk_ok=1" in r.stdout, r.stdout)
+
+    r = bash(
+        f'set -euo pipefail; . "{TUNE}"; box_tune_disk_preflight',
+        env={
+            "BOX_TUNE_FREE_KB": "2097152",
+            "BOX_TUNE_ENGINE_KB": "42991616",
+            "BOX_TUNE_STAGE_ROWS": "15148327",
+            "BOX_TUNE_SQL": "0",
+        },
+    )
+    check("preflight tight exit 1", r.returncode != 0)
+    check("preflight tight names candidates", "swapfile-1c-build" in r.stderr or "Кандидаты" in r.stderr, r.stderr)
+
+    bsh = open(os.path.join(REPO, "ubuntu", "serenedb", "build.sh"), encoding="utf-8").read()
+    check("build.sh calls disk preflight before merge", "box_tune_disk_preflight" in bsh and bsh.find("box_tune_disk_preflight") < bsh.find("corpus_merge.sql"))
+    check("build.sh writes tmp3_merge_cfg", "tmp3_merge_cfg" in bsh)
+    merg = open(os.path.join(REPO, "ubuntu", "serenedb", "corpus_merge.sql"), encoding="utf-8").read()
+    check("merge chunks via gexec", "\\gexec" in merg and "tmp3_merge_jobs" in merg)
+    check("merge filters src_table IN not EXISTS-scan", "src_table IN (" in merg and "EXISTS (SELECT 1 FROM tmp3_merge_jobs" not in merg.split("слияние пачками")[1])
+    check("merge checkpoint per pack", "checkpoint()" in merg)
+    check("merge first-build 48h window", "INTERVAL '48 hours'" in merg)
+    check("build.sh writes merge baseline", "merge_engine_baseline_kb" in bsh)
+    check("merge does not wrap all in one BEGIN", merg.find("tmp3_merge_jobs") < merg.find("VACUUM (REFRESH_INDEX)") and "BEGIN;" not in merg.split("tmp3_merge_jobs")[1].split("VACUUM")[0])
+
+    r = bash(
+        f'set -euo pipefail; . "{TUNE}"; box_tune_disk_projected_engine_kb 61648164 8004024 15148327 42991616',
+    )
+    check("projected engine exit 0", r.returncode == 0, r.stderr)
+    projected = int(r.stdout.strip() or "0")
+    check("projected ~75GiB not 116GiB linear", 70 * 1024 * 1024 < projected < 80 * 1024 * 1024, str(projected))
+
+    r = bash(
+        f'set -euo pipefail; . "{TUNE}"; box_tune_disk_preflight',
+        env={
+            "BOX_TUNE_FREE_KB": "9860732",
+            "BOX_TUNE_ENGINE_KB": "61648164",
+            "BOX_TUNE_STAGE_ROWS": "15148327",
+            "BOX_TUNE_CORPUS_ROWS": "8004024",
+            "BOX_TUNE_ENGINE_BASELINE_KB": "42991616",
+            "BOX_TUNE_TOTAL_KB": "100663296",
+            "BOX_TUNE_SQL": "0",
+        },
+    )
+    check("partial merge preflight fail engine projection", r.returncode != 0, r.stderr)
+    check("partial merge mentions projected", "projected_engine_kb" in r.stdout, r.stdout)
 
     print()
     if FAILS:

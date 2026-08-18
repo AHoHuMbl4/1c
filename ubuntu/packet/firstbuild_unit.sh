@@ -38,6 +38,7 @@ if [ -f "$TUNE" ]; then
   BOX_TUNE_DSN="${BOX_TUNE_DSN:-$(sed -n 's/^SERENEDB_DSN=//p' "$ENV_FILE" | head -1)}"
   export BOX_TUNE_PIPELINE_ENV BOX_TUNE_DSN
   box_tune_apply_first_build
+  box_tune_disk_preflight || { echo "firstbuild_unit: диск не держит первую сборку/слияние — стоп (E4b)" >&2; exit 1; }
 fi
 
 if [ -x "$REPORTS/embed_check.sh" ]; then

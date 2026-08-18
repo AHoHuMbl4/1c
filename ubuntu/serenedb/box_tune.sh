@@ -16,9 +16,11 @@
 # Использование:
 #   . box_tune.sh
 #   box_tune_plan "$ram_kb" "$vcpu"          # печатает key=value
+#   box_tune_disk_plan free engine rows mem  # префлайт диска E4b (без df)
 #   embed_host_form_check "$EMBED_HOST"      # 0 — схема+хост+порт
 #   box_tune_apply_first_build               # conf + swap + env + SET (идемпотентно)
 #   box_tune_restore                         # memory_limit и swap после первой сборки
+#   box_tune_disk_preflight                  # стоп, если даже пачка слияния не влезет
 set -u
 
 # Порог «малая коробка»: пик p_doc 11.09 GiB; ниже 16 GiB первая сборка упирается в RAM,
@@ -274,6 +276,244 @@ box_tune_state_dir() {
   printf '%s\n' "${BOX_TUNE_STATE:-/var/lib/serenedb/box-tune.state}"
 }
 
+# --- префлайт диска (E4b, урок klient-1 18.08 06:06: WAL слияния 15,1 млн
+#     в одной транзакции заполнил диск, COMMIT → No space left on device) -----
+#
+# Формула из фактов ночи, не из имени базы: 15 148 327 строк × WAL транзакции
+# не влезли в 30 ГиБ свободных. Оценка WAL = 4096 байт/строка (запас к
+# ~1,4 КиБ текста строки + карты + накладные WAL). Пачка по умолчанию —
+# 1 000 000 строк (~4 ГиБ WAL). Логика НЕ читает df: только аргументы.
+# Чтение диска — box_tune_read_free_kb / engine_kb / stage_rows.
+
+BOX_TUNE_WAL_BPR="${BOX_TUNE_WAL_BPR:-4096}"
+BOX_TUNE_DISK_HEADROOM_KB="${BOX_TUNE_DISK_HEADROOM_KB:-$((2 * 1024 * 1024))}"
+BOX_TUNE_MERGE_CHUNK_ROWS="${BOX_TUNE_MERGE_CHUNK_ROWS:-1000000}"
+BOX_TUNE_DISK_MIN_FREE_KB="${BOX_TUNE_DISK_MIN_FREE_KB:-$((8 * 1024 * 1024))}"
+
+box_tune_read_free_kb() {
+  if [ -n "${BOX_TUNE_FREE_KB:-}" ]; then
+    printf '%s\n' "$BOX_TUNE_FREE_KB"
+    return 0
+  fi
+  local dir="${BOX_TUNE_ENGINE_DIR:-/var/lib/serenedb/engine_duckdb}"
+  df -Pk "$dir" 2>/dev/null | awk 'NR==2 { print $4; exit }'
+}
+
+box_tune_read_engine_kb() {
+  if [ -n "${BOX_TUNE_ENGINE_KB:-}" ]; then
+    printf '%s\n' "$BOX_TUNE_ENGINE_KB"
+    return 0
+  fi
+  local f="${BOX_TUNE_ENGINE_FILE:-/var/lib/serenedb/engine_duckdb/store.db}"
+  du -sk "$f" 2>/dev/null | awk '{ print $1; exit }'
+}
+
+box_tune_read_stage_rows() {
+  if [ -n "${BOX_TUNE_STAGE_ROWS:-}" ]; then
+    printf '%s\n' "$BOX_TUNE_STAGE_ROWS"
+    return 0
+  fi
+  local dsn="${BOX_TUNE_DSN:-${SERENEDB_DSN:-}}"
+  if [ -z "$dsn" ] || [ "${BOX_TUNE_SQL:-}" = 0 ]; then
+    printf '0\n'
+    return 0
+  fi
+  psql "$dsn" -tAc "SELECT coalesce((SELECT count(*) FROM tmp3_corpus), 0)" 2>/dev/null | tr -cd '0-9'
+  echo
+}
+
+box_tune_read_corpus_rows() {
+  if [ -n "${BOX_TUNE_CORPUS_ROWS:-}" ]; then
+    printf '%s\n' "$BOX_TUNE_CORPUS_ROWS"
+    return 0
+  fi
+  local dsn="${BOX_TUNE_DSN:-${SERENEDB_DSN:-}}"
+  if [ -z "$dsn" ] || [ "${BOX_TUNE_SQL:-}" = 0 ]; then
+    printf '0\n'
+    return 0
+  fi
+  psql "$dsn" -tAc "SELECT coalesce((SELECT count(*) FROM search_corpus), 0)" 2>/dev/null | tr -cd '0-9'
+  echo
+}
+
+box_tune_read_engine_baseline_kb() {
+  if [ -n "${BOX_TUNE_ENGINE_BASELINE_KB:-}" ]; then
+    printf '%s\n' "$BOX_TUNE_ENGINE_BASELINE_KB"
+    return 0
+  fi
+  local dsn="${BOX_TUNE_DSN:-${SERENEDB_DSN:-}}"
+  if [ -z "$dsn" ] || [ "${BOX_TUNE_SQL:-}" = 0 ]; then
+    printf '0\n'
+    return 0
+  fi
+  psql "$dsn" -tAc "SELECT coalesce((SELECT v FROM search_quality WHERE k='merge_engine_baseline_kb'), 0)" 2>/dev/null | tr -cd '0-9'
+  echo
+}
+
+box_tune_swap_on_disk_kb() {
+  local p sum=0 kb
+  for p in /swapfile-1c-build /swapfile-1c-build2 /swapfile-1c-build3; do
+    if [ -f "$p" ]; then
+      kb="$(du -sk "$p" 2>/dev/null | awk '{ print $1; exit }')"
+      case "$kb" in ''|*[!0-9]*) ;; *) sum=$((sum + kb)) ;; esac
+    fi
+  done
+  printf '%s\n' "$sum"
+}
+
+box_tune_disk_projected_engine_kb() {
+  local engine_kb="${1:-}" corpus_rows="${2:-0}" stage_rows="${3:-0}" baseline_kb="${4:-0}"
+  case "$engine_kb" in ''|*[!0-9]*) echo 0; return 0 ;; esac
+  case "$corpus_rows" in ''|*[!0-9]*) corpus_rows=0 ;; esac
+  case "$stage_rows" in ''|*[!0-9]*) stage_rows=0 ;; esac
+  case "$baseline_kb" in ''|*[!0-9]*) baseline_kb=0 ;; esac
+  if [ "$corpus_rows" -le 0 ] || [ "$stage_rows" -le "$corpus_rows" ]; then
+    printf '%s\n' "$engine_kb"
+    return 0
+  fi
+  if [ "$baseline_kb" -le 0 ] || [ "$baseline_kb" -ge "$engine_kb" ]; then
+    # Нет отметки до слияния — линейная экстраполяция (завышает, если baseline большой).
+    printf '%s\n' "$(( engine_kb * stage_rows / corpus_rows ))"
+    return 0
+  fi
+  local merged_kb=$(( engine_kb - baseline_kb ))
+  [ "$merged_kb" -gt 0 ] || merged_kb=0
+  printf '%s\n' "$(( baseline_kb + merged_kb * stage_rows / corpus_rows ))"
+}
+
+box_tune_disk_plan() {
+  local free_kb="${1:-}" engine_kb="${2:-}" stage_rows="${3:-}" mem_limit_kb="${4:-0}"
+  local wal_bpr chunk_rows headroom_kb min_free_kb
+  local wal_unchunked_kb chunk_wal_kb usable_kb
+  local merge_unchunked=1 disk_ok=1
+  case "$free_kb" in ''|*[!0-9]*) echo "box_tune_disk_plan: free_kb целое КиБ, получено «$free_kb»" >&2; return 2 ;; esac
+  case "$engine_kb" in ''|*[!0-9]*) echo "box_tune_disk_plan: engine_kb целое КиБ, получено «$engine_kb»" >&2; return 2 ;; esac
+  case "$stage_rows" in ''|*[!0-9]*) echo "box_tune_disk_plan: stage_rows целое, получено «$stage_rows»" >&2; return 2 ;; esac
+  case "$mem_limit_kb" in ''|*[!0-9]*) mem_limit_kb=0 ;; esac
+
+  wal_bpr="${BOX_TUNE_WAL_BPR}"
+  chunk_rows="${BOX_TUNE_MERGE_CHUNK_ROWS}"
+  headroom_kb="${BOX_TUNE_DISK_HEADROOM_KB}"
+  min_free_kb="${BOX_TUNE_DISK_MIN_FREE_KB}"
+  case "$wal_bpr" in ''|*[!0-9]*) wal_bpr=4096 ;; esac
+  case "$chunk_rows" in ''|*[!0-9]*) chunk_rows=1000000 ;; esac
+  case "$headroom_kb" in ''|*[!0-9]*) headroom_kb=$((2 * 1024 * 1024)) ;; esac
+  case "$min_free_kb" in ''|*[!0-9]*) min_free_kb=$((8 * 1024 * 1024)) ;; esac
+  [ "$chunk_rows" -ge 10000 ] || chunk_rows=10000
+
+  wal_unchunked_kb=$(( (stage_rows * wal_bpr + 1023) / 1024 ))
+  chunk_wal_kb=$(( (chunk_rows * wal_bpr + 1023) / 1024 ))
+  usable_kb=$((free_kb - headroom_kb))
+  [ "$usable_kb" -gt 0 ] || usable_kb=0
+
+  if [ "$stage_rows" -gt 0 ] && [ "$wal_unchunked_kb" -gt "$usable_kb" ]; then
+    merge_unchunked=0
+  fi
+  if [ "$stage_rows" -eq 0 ]; then
+    # До сборки строк ещё нет: стоп, если после swap не останется 8 ГиБ
+    # (ночь: 30 ГиБ свободных на слиянии; меньше 8 — даже пачка не жилец).
+    if [ "$free_kb" -lt "$min_free_kb" ]; then
+      disk_ok=0
+    fi
+  else
+    if [ "$chunk_wal_kb" -gt "$usable_kb" ]; then
+      if [ "$usable_kb" -le 0 ]; then
+        disk_ok=0
+        chunk_rows=0
+      else
+        chunk_rows=$(( usable_kb * 1024 / wal_bpr ))
+        if [ "$chunk_rows" -lt 10000 ]; then
+          disk_ok=0
+        fi
+      fi
+    fi
+  fi
+
+  printf 'free_kb=%s\n' "$free_kb"
+  printf 'engine_kb=%s\n' "$engine_kb"
+  printf 'stage_rows=%s\n' "$stage_rows"
+  printf 'mem_limit_kb=%s\n' "$mem_limit_kb"
+  printf 'wal_bytes_per_row=%s\n' "$wal_bpr"
+  printf 'wal_unchunked_kb=%s\n' "$wal_unchunked_kb"
+  printf 'merge_unchunked=%s\n' "$merge_unchunked"
+  printf 'merge_chunk_rows=%s\n' "$chunk_rows"
+  printf 'chunk_wal_kb=%s\n' "$(( (chunk_rows * wal_bpr + 1023) / 1024 ))"
+  printf 'headroom_kb=%s\n' "$headroom_kb"
+  printf 'disk_ok=%s\n' "$disk_ok"
+}
+
+box_tune_disk_candidates() {
+  # Кандидаты освободить — список, не удаление. Чужое (ОС-swap) не предлагаем.
+  local p
+  for p in /swapfile-1c-build /swapfile-1c-build2 /swapfile-1c-build3; do
+    if [ -f "$p" ]; then
+      printf '  %s (%s)\n' "$p" "$(du -h "$p" 2>/dev/null | awk '{print $1}')"
+    fi
+  done
+}
+
+box_tune_disk_preflight() {
+  local free_kb engine_kb stage_rows mem_limit_kb plan disk_ok chunk_rows unchunked
+  local corpus_rows baseline_kb projected_kb total_kb swap_kb headroom_kb engine_fit=1
+  free_kb="$(box_tune_read_free_kb)"
+  engine_kb="$(box_tune_read_engine_kb)"
+  [ -n "$engine_kb" ] || engine_kb=0
+  stage_rows="$(box_tune_read_stage_rows | tail -1)"
+  [ -n "$stage_rows" ] || stage_rows=0
+  corpus_rows="$(box_tune_read_corpus_rows | tail -1)"
+  [ -n "$corpus_rows" ] || corpus_rows=0
+  baseline_kb="$(box_tune_read_engine_baseline_kb | tail -1)"
+  [ -n "$baseline_kb" ] || baseline_kb=0
+  mem_limit_kb="${BOX_TUNE_MEM_LIMIT_KB:-0}"
+  plan="$(box_tune_disk_plan "$free_kb" "$engine_kb" "$stage_rows" "$mem_limit_kb")" || return $?
+  projected_kb="$(box_tune_disk_projected_engine_kb "$engine_kb" "$corpus_rows" "$stage_rows" "$baseline_kb")"
+  printf '%s\n' "$plan"
+  printf 'corpus_rows=%s\n' "$corpus_rows"
+  printf 'engine_baseline_kb=%s\n' "$baseline_kb"
+  printf 'projected_engine_kb=%s\n' "$projected_kb"
+  disk_ok="$(printf '%s\n' "$plan" | awk -F= '$1=="disk_ok"{print $2}')"
+  chunk_rows="$(printf '%s\n' "$plan" | awk -F= '$1=="merge_chunk_rows"{print $2}')"
+  unchunked="$(printf '%s\n' "$plan" | awk -F= '$1=="merge_unchunked"{print $2}')"
+  headroom_kb="$(printf '%s\n' "$plan" | awk -F= '$1=="headroom_kb"{print $2}')"
+  if [ "$unchunked" = 0 ]; then
+    echo "box_tune: слияние целиком не влезет в диск — пачки по $chunk_rows строк (урок 18.08 06:06 WAL)." >&2
+  fi
+  if [ "$disk_ok" != 1 ]; then
+    echo "box_tune: диск не держит даже пачку слияния (free_kb=$free_kb). Сам ничего вне стейджа не удаляю. Кандидаты владельцу:" >&2
+    box_tune_disk_candidates >&2
+    echo "  либо диск больше." >&2
+    return 1
+  fi
+  # [замер 18.08 klient-1] WAL-пачка прошла, но store.db вырос 41→59 ГiБ на 8/17
+  # пачек и COMMIT 9-й снова ENOSPC: нужен прогноз engine, не только WAL.
+  if [ "$stage_rows" -gt 0 ] && [ "$corpus_rows" -gt 0 ] && [ "$projected_kb" -gt "$engine_kb" ]; then
+    if [ -n "${BOX_TUNE_TOTAL_KB:-}" ]; then
+      total_kb="${BOX_TUNE_TOTAL_KB}"
+    else
+      total_kb="$(df -Pk "${BOX_TUNE_ENGINE_DIR:-/var/lib/serenedb/engine_duckdb}" 2>/dev/null | awk 'NR==2 { print $2; exit }')"
+    fi
+    swap_kb="$(box_tune_swap_on_disk_kb)"
+    case "$total_kb" in ''|*[!0-9]*) total_kb=0 ;; esac
+    case "$headroom_kb" in ''|*[!0-9]*) headroom_kb="${BOX_TUNE_DISK_HEADROOM_KB:-$((2 * 1024 * 1024))}" ;; esac
+    if [ "$total_kb" -gt 0 ]; then
+      used_kb=$(( total_kb - free_kb ))
+      non_engine_kb=$(( used_kb - engine_kb ))
+      [ "$non_engine_kb" -ge 0 ] || non_engine_kb=0
+      if [ "$(( non_engine_kb + projected_kb + headroom_kb ))" -gt "$total_kb" ]; then
+        engine_fit=0
+        disk_ok=0
+        echo "box_tune: прогноз store.db ${projected_kb} КiБ (сейчас ${engine_kb}, baseline ${baseline_kb}) + прочее ${non_engine_kb} КiБ > диск ${total_kb} КiБ (урок 18.08 18:08 klient-1)." >&2
+        echo "box_tune: swap на диске ${swap_kb} КiБ (build-swap можно снять после firstbuild). Сам не удаляю. Кандидаты владельцу:" >&2
+        box_tune_disk_candidates >&2
+        echo "  либо диск больше." >&2
+        return 1
+      fi
+    fi
+  fi
+  echo "box_tune: диск ok free_kb=$free_kb engine_kb=$engine_kb projected_kb=$projected_kb stage_rows=$stage_rows corpus_rows=$corpus_rows chunk_rows=$chunk_rows" >&2
+  return 0
+}
+
 box_tune_apply_first_build() {
   local ram_kb vcpu plan conf envf swapf state dsn
   local cpu_threads io_threads thread_min swap_gib limit_first limit_steady
@@ -356,6 +596,9 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
     plan)
       box_tune_plan "$(box_tune_read_ram_kb)" "$(box_tune_read_vcpu)"
       ;;
+    disk)
+      box_tune_disk_preflight
+      ;;
     apply|first-build)
       box_tune_apply_first_build
       ;;
@@ -366,7 +609,7 @@ if [ "${BASH_SOURCE[0]}" = "$0" ]; then
       embed_hosts_form_check
       ;;
     *)
-      echo "использование: box_tune.sh plan|apply|restore|embed-form" >&2
+      echo "использование: box_tune.sh plan|disk|apply|restore|embed-form" >&2
       exit 2
       ;;
   esac

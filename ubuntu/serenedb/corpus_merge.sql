@@ -16,8 +16,19 @@
 -- движка. Без проверки запуск в одиночку перенёс бы вчерашнюю сборку и снёс всё, чего
 -- в ней нет. Отметка ставится последней командой сборки — значит она же доказывает,
 -- что сборка дошла до конца, а не оборвалась.
+--
+-- Первая сборка: корпус ещё пуст, стейдж совпал со штампом, штамп моложе 48 ч —
+-- слияние после падения (диск, 06:06) можно догнать без пересборки 2,5 ч. Инкремент
+-- с непустым корпусом по-прежнему 6 часов: иначе вчерашний tmp3 затёр бы бой.
 SELECT CASE WHEN coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01')
                  < now() - INTERVAL '6 hours'
+            AND NOT (
+                 (SELECT count(*) FROM search_corpus) = 0
+             AND (SELECT собрано FROM tmp3_run) = (SELECT count(*) FROM tmp3_corpus)
+             AND (SELECT собрано FROM tmp3_run) > 0
+             AND coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01')
+                 >= now() - INTERVAL '48 hours'
+            )
        THEN error('corpus_merge: tmp3_* не от этого прогона — сначала corpus_build.sql') END;
 
 -- Сущность собралась ПУСТОЙ — главный сценарий тихой потери: витрина не долилась, шлюз
@@ -109,47 +120,97 @@ ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS refs_map MAP(VARCHAR, VARCHAR
 -- перенесённым (`tmp3_build`); такт-пропуск колонку не трогает.
 ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS last_built_at TIMESTAMP;
 
--- ============ 2. ЗАПИСЬ — ОДНОЙ ТРАНЗАКЦИЕЙ ============
--- [замер] транзакции в этом движке работают: `BEGIN; MERGE; UPDATE; DELETE; ROLLBACK`
--- откатывает всё до строки. Без транзакции обрыв посередине оставлял корпус в состоянии,
--- которое ничем не помечено и которое следующий прогон НЕ чинит: отпечатки уже совпали,
--- а векторов нет.
-BEGIN;
+-- ============ 2. ЗАПИСЬ — ПАЧКАМИ, КАЖДАЯ СО СВОИМ COMMIT ============
+-- [замер 18.08 klient-1] одна транзакция MERGE+UPDATE+DELETE на 15 148 327 строк
+-- писала WAL 1 ч 08 мин и умерла на COMMIT: store.db.wal — No space left on device.
+-- Откат вернул диск; стейдж цел. Пачка ≤ tmp3_merge_cfg.chunk_rows (префлайт E4b,
+-- умолчание 1 000 000 ≈ 4 ГиБ WAL). CHECKPOINT после пачки сбрасывает WAL в store.db
+-- (доки: sql/functions/utility#checkpointdatabase, Configuration › Pragmas ›
+-- Checkpointing, sql/statements/transactions). DELETE исчезнувших — ПОСЛЕ всех
+-- пачек: иначе недовставленная сущность выглядела бы «пропавшей».
+--
+-- [замер 18.08 klient-1] EXISTS по tmp3_merge_jobs в USING сканировал все 15,1 млн
+-- и за 3 мин налил /var/lib/serenedb/.tmp на 21 ГиБ (90 % диска). Фильтр —
+-- src_table IN (литералы пачки): движок отсекает до скана. Доки: MERGE INTO;
+-- sql/functions/utility#hash; Configuration › Pragmas › Temp Directory.
+CREATE TABLE IF NOT EXISTS tmp3_merge_cfg (chunk_rows BIGINT);
+INSERT INTO tmp3_merge_cfg (chunk_rows)
+SELECT 1000000 WHERE (SELECT count(*) FROM tmp3_merge_cfg) = 0;
+SELECT CASE WHEN (SELECT min(chunk_rows) FROM tmp3_merge_cfg) < 10000
+       THEN error('corpus_merge: chunk_rows < 10000') END;
 
--- Условие по отпечатку обязано остаться: без него молча пересчитываются все строки.
--- `IS DISTINCT FROM`, а не `<>`: при `NULL` в отпечатке сравнение дало бы `NULL`, ветка
--- не сработала бы, и строка навсегда осталась бы со старым текстом при живом ключе.
--- `emb = NULL` у изменившихся — честная отметка «вектор не посчитан», видимая запросом;
--- оставленный старый вектор при новом тексте был бы тихим расхождением смысла и текста.
-MERGE INTO search_corpus AS t
-USING tmp3_corpus AS s
-ON t.src_table = s.src_table AND t.row_key = s.row_key
-WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash THEN
-     UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash,
-                nums = s.nums, flags = s.flags, doc_date = s.doc_date,
-                refs_map = s.refs_map, emb = NULL
-WHEN NOT MATCHED THEN
-     INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, refs_map, emb)
-     VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, s.refs_map, NULL);
+CREATE OR REPLACE TABLE tmp3_merge_ents AS
+SELECT src_table, count(*)::BIGINT AS n FROM tmp3_corpus GROUP BY 1;
 
--- Величины и дата не входят в отпечаток, поэтому строки с неизменившимся текстом `MERGE`
--- не трогает — а обновить их нужно. Вектор здесь не сбрасывается: текст тот же.
--- 🔴 `doc_date` здесь не случайно. В текст дата попадает без времени (`substr(val,1,10)`),
--- поэтому смена времени внутри суток отпечаток НЕ меняет: `MERGE` строку пропускает, и
--- без этой строки `doc_date` оставался бы старым навсегда. [замер] 446 строк корпуса
--- несут дату с ненулевым временем, то есть попадают в этот класс.
--- 🔴 `flags` ОБЯЗАНЫ БЫТЬ ЗДЕСЬ, а не только в `MERGE`. Булев реквизит в отпечаток не
--- входит (он часть текста, но карта строится отдельно), поэтому у строк с неизменившимся
--- текстом `MERGE` не срабатывает вовсе. При первом такте после `ADD COLUMN` отпечатки
--- совпадают У ВСЕГО корпуса — без этой строки карта осталась бы пустой навсегда, и
--- отбор «не папка» молча возвращал бы всё подряд.
-UPDATE search_corpus c SET nums = t.nums, flags = t.flags, doc_date = t.doc_date,
-                           refs_map = t.refs_map
-FROM tmp3_corpus t
-WHERE t.src_table = c.src_table AND t.row_key = c.row_key
-  AND (c.nums IS DISTINCT FROM t.nums OR c.flags IS DISTINCT FROM t.flags
-       OR c.doc_date IS DISTINCT FROM t.doc_date
-       OR c.refs_map IS DISTINCT FROM t.refs_map);
+CREATE OR REPLACE TABLE tmp3_merge_jobs AS
+WITH cfg AS (SELECT chunk_rows FROM tmp3_merge_cfg LIMIT 1),
+small_ents AS (
+  SELECT e.src_table, e.n FROM tmp3_merge_ents e, cfg
+  WHERE e.n <= cfg.chunk_rows
+),
+large_ents AS (
+  SELECT e.src_table, e.n,
+         GREATEST(1, (e.n + cfg.chunk_rows - 1) // cfg.chunk_rows) AS n_parts
+  FROM tmp3_merge_ents e, cfg
+  WHERE e.n > cfg.chunk_rows
+),
+small_jobs AS (
+  SELECT s.src_table, s.n, 1::BIGINT AS n_parts, 0::BIGINT AS part,
+         ((sum(s.n) OVER (ORDER BY s.n DESC, s.src_table) - s.n)
+           // (SELECT chunk_rows FROM cfg)) AS job_id
+  FROM small_ents s
+),
+large_jobs AS (
+  SELECT l.src_table, l.n, l.n_parts, i.part,
+         1000000000 + row_number() OVER (ORDER BY l.src_table, i.part) AS job_id
+  FROM large_ents l
+  JOIN (SELECT unnest(range(64)) AS part) i ON i.part < l.n_parts
+)
+SELECT job_id, src_table, n, n_parts, part FROM small_jobs
+UNION ALL
+SELECT job_id, src_table, n, n_parts, part FROM large_jobs;
+
+SELECT 'слияние пачками' AS шаг, count(DISTINCT job_id) AS пачек,
+       count(*) AS назначений,
+       (SELECT chunk_rows FROM tmp3_merge_cfg LIMIT 1) AS порция,
+       max(n) AS макс_сущность
+FROM tmp3_merge_jobs;
+
+SELECT stmt FROM (
+  SELECT job_id, 1 AS ord,
+         'MERGE INTO search_corpus AS t USING (SELECT s.* FROM tmp3_corpus s WHERE s.src_table IN ('
+         || ins
+         || ')'
+         || CASE WHEN n_parts = 1 THEN ''
+            ELSE ' AND (hash(s.row_key) % ' || n_parts || ') = ' || part END
+         || ') AS s ON t.src_table = s.src_table AND t.row_key = s.row_key WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash THEN UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash, nums = s.nums, flags = s.flags, doc_date = s.doc_date, refs_map = s.refs_map, emb = NULL WHEN NOT MATCHED THEN INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, refs_map, emb) VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, s.refs_map, NULL);' AS stmt
+  FROM (
+    SELECT job_id,
+           string_agg(quote_literal(src_table), ', ') AS ins,
+           max(n_parts) AS n_parts,
+           min(part) AS part
+    FROM tmp3_merge_jobs GROUP BY job_id
+  ) g
+  UNION ALL
+  SELECT job_id, 2,
+         'UPDATE search_corpus c SET nums = t.nums, flags = t.flags, doc_date = t.doc_date, refs_map = t.refs_map FROM tmp3_corpus t WHERE t.src_table = c.src_table AND t.row_key = c.row_key AND (c.nums IS DISTINCT FROM t.nums OR c.flags IS DISTINCT FROM t.flags OR c.doc_date IS DISTINCT FROM t.doc_date OR c.refs_map IS DISTINCT FROM t.refs_map) AND t.src_table IN ('
+         || ins
+         || ')'
+         || CASE WHEN n_parts = 1 THEN ''
+            ELSE ' AND (hash(t.row_key) % ' || n_parts || ') = ' || part END
+         || ';'
+  FROM (
+    SELECT job_id,
+           string_agg(quote_literal(src_table), ', ') AS ins,
+           max(n_parts) AS n_parts,
+           min(part) AS part
+    FROM tmp3_merge_jobs GROUP BY job_id
+  ) g
+  UNION ALL
+  SELECT job_id, 3, 'SELECT checkpoint();'
+  FROM (SELECT DISTINCT job_id FROM tmp3_merge_jobs) x
+) z ORDER BY job_id, ord
+\gexec
 
 -- Исчезнувшие строки удаляет БАЗА одним запросом — и только по сущностям, которые в этот
 -- раз ДЕЙСТВИТЕЛЬНО собрались. Прежний фильтр по `tmp3_src` был тавтологией: `tmp3_src`
@@ -167,7 +228,7 @@ WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
 DELETE FROM search_corpus c
 WHERE NOT EXISTS (SELECT 1 FROM search_sources s WHERE s.src_table = c.src_table);
 
-COMMIT;
+SELECT checkpoint();
 
 -- ============ 2-бис. ДАТА СОБЫТИЯ У ТАБЛИЧНОЙ ЧАСТИ ============
 -- `doc_date` — когда случился факт. Date/Period платформы стоит на шапке; у строк

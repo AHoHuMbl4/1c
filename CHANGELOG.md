@@ -1,3 +1,22 @@
+## 18.08: E4b префлайт диска + слияние пачками klient-1 `[код]` `[замер]`
+
+`[код]` **E4b закрыт в git**: `box_tune_disk_plan/preflight` — оценка WAL
+(4096 б/строка, пачка 1e6), прогноз `projected_engine_kb` по
+`merge_engine_baseline_kb` + рост merged-части; стоп, если
+`non_engine+projected+headroom` > диск. `corpus_merge.sql` — 17 пачек +
+`CHECKPOINT` после каждой, окно 48 ч merge-only, фильтр `src_table IN (...)`.
+`build.sh`/`firstbuild_unit.sh` зовут префлайт. Оффлайн **86/86**
+`test_box_tune.py`. md5: `corpus_merge.sql` **00bf44a9** (klient-1 `/opt` =
+git).
+
+`[замер]` klient-1 18.08: стейдж **15 148 327** цел (`tmp3_corpus`,
+`tmp3_run`). Слияние пачками: **8/17** MERGE → `search_corpus`
+**8 004 024**; 9-я пачка **ENOSPC** 18:08 UTC (`store.db.wal`), откат
+COMMIT. Диск 96G: `store.db` **59G**, свободно **~9,5G**; прогноз финала
+**~75G** engine + 8G OS-swap при снятии build-swap **12G**. **Блокер
+владельца:** `swapoff`+`rm` `/swapfile-1c-build{,2}` → догон merge-only.
+`corpus_build.sql` на klient-1 **3c2abbce** — не трогать.
+
 ## 18.08: поправка к записи «шаг векторов встаёт наглухо» `[замер]`
 
 **Была неверна.** Запись 13ae02f говорила о воспроизводимом зависании шага

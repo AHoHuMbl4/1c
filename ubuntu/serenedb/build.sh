@@ -244,6 +244,26 @@ else
   psql "$DSN" -q -v gate="$GATE" -f corpus_build.sql || fail "сборка корпуса"
 
   echo "== 2. слияние в боевой корпус и публикация индекса"
+  MERGE_CHUNK_ROWS="${MERGE_CHUNK_ROWS:-1000000}"
+  if [ -f ./box_tune.sh ]; then
+    # shellcheck disable=SC1091
+    . ./box_tune.sh
+    _eng_kb="$(box_tune_read_engine_kb)"
+    if [ -n "$_eng_kb" ] && [ "$_eng_kb" -gt 0 ]; then
+      psql "$DSN" -q -c "INSERT INTO search_quality (k, v, note)
+        SELECT 'merge_engine_baseline_kb', ${_eng_kb}::DOUBLE,
+               'store.db KiB до первого слияния стейджа'
+        WHERE NOT EXISTS (SELECT 1 FROM search_quality WHERE k='merge_engine_baseline_kb');" \
+        || fail "отметка merge_engine_baseline_kb"
+    fi
+    BOX_TUNE_DSN="${BOX_TUNE_DSN:-$DSN}"
+    export BOX_TUNE_DSN
+    _disk_plan="$(box_tune_disk_preflight)" || fail "префлайт диска (E4b)"
+    _cr="$(printf '%s\n' "$_disk_plan" | awk -F= '$1=="merge_chunk_rows"{print $2}')"
+    case "$_cr" in ''|*[!0-9]*) ;; *) MERGE_CHUNK_ROWS="$_cr" ;; esac
+  fi
+  psql "$DSN" -q -c "CREATE OR REPLACE TABLE tmp3_merge_cfg AS SELECT ${MERGE_CHUNK_ROWS}::BIGINT AS chunk_rows;" \
+    || fail "конфиг пачек слияния"
   psql "$DSN" -q -f corpus_merge.sql || fail "слияние корпуса"
 
   psql "$DSN" -q -c "DELETE FROM search_quality WHERE k='corpus_built_ts';
