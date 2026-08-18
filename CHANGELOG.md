@@ -1,3 +1,18 @@
+# Журнал изменений
+
+## 18.08: память выбора — включена на okna (apply в бою) `[решение]` `[замер]`
+
+`[решение]` Шаг 6 завершён: `ASK_MEMORY_APPLY=1` на okna (env юнита; откат =
+одна строка). Код М6 (`617a0d02`, `654847ad`) выкачен оркестратором; DDL
+журнала и памяти применены окном М6 (гранты проверены).
+
+`[замер]` Живой E2E на :8091: вилка «на какую сумму мы продали» → билет →
+`memory=remember` (stored) → повтор — `mode: apply, applied: true`,
+видимое «помню: Выручка от продажи физлицу…», при этом оставшаяся величина
+(сумма без НДС/скидки) спрашивается честно — память снимает только свою
+неоднозначность. Изоляция по user подтверждена (чужой user — shadow).
+Синтетические строки e2e убраны, таблица памяти на проде чистая.
+
 ## 18.08: память выбора — DDL okna + ASK_MEMORY_APPLY `[код]` `[замер]`
 
 `[код]` `ask_choice_mem.py`: `probe_memory_apply`, `finish_apply`, `memory_trusted`,
@@ -60,7 +75,7 @@ ValueError). `test_delta.py` — зелёный. Артефакт выката:
 **Доказано:** `python3 ubuntu/serenedb/test_corpus_plain_key.py` **8/8** PASS
 (5 строк обёртки, **0** дублей, стабильность ключей на повторе). Оффлайн
 регресс первой базы: test_gate **130**, test_fork_detector **23**, test_delta —
-зелёные. md5 `corpus_build.sql` = **`046d91f5559bdcc4f89801d755ae22d1`**.
+зелёные. md5 `corpus_build.sql` = **`bffaa2ab1ef2ec7f453afbcbbe7d56a7`**.
 Выкат: `work/packet/rollout-f2-plain-key.md` (klient-1 + okna). Доки:
 SereneDB Window Functions — row_number.
 
