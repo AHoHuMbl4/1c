@@ -33,7 +33,25 @@ fi
 echo "== синк витрины (дельта из 1С)"
 # Частичные ошибки одной сущности не должны рушить весь такт: витрина обновляется тем,
 # что удалось, а сборка идёт по имеющемуся. Код возврата синка не прерывает конвейер.
+#
+# Packet: ETL_ODATA_BASE — каталог снимка. Синк отвечает changed=0 и делает
+# DELETE FROM search_changed_sources. Apply кладёт отметки дописыванием; снимок
+# до синка возвращает их сборке. Иначе merge видит пустой список и пересобирает 0
+# при живом расхождении (okna 18.08 18:41/18:51: «изменились таблицы витрины: 0»
+# → «пересобирали 0 из 351»). Доки: sql/statements/insert, sql/statements/delete.
+KEEP_MARKS=0
+if [ -d "${ETL_ODATA_BASE:-}" ]; then
+  KEEP_MARKS=1
+  psql "$SERENEDB_DSN" -q -v ON_ERROR_STOP=1 -c \
+    "CREATE OR REPLACE TABLE tmp_changed_keep AS SELECT src_table FROM search_changed_sources;" \
+    || KEEP_MARKS=0
+fi
 /opt/openclaw-mcp/venv/bin/python serene_sync.py || echo "синк: частичные ошибки, см. выше"
+if [ "$KEEP_MARKS" = 1 ]; then
+  n=$(psql "$SERENEDB_DSN" -tA -c \
+    "INSERT INTO search_changed_sources SELECT src_table FROM tmp_changed_keep WHERE src_table NOT IN (SELECT src_table FROM search_changed_sources); SELECT count(*) FROM search_changed_sources; DROP TABLE tmp_changed_keep;")
+  echo "packet: отметки search_changed_sources возвращены сборке, строк $n"
+fi
 
 echo "== сборка поискового слоя"
 exec ./build.sh

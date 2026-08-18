@@ -554,11 +554,26 @@ WHERE (SELECT on_ FROM tmp3_inc) AND n.name IS DISTINCT FROM b.name;
 -- 🔴 ПРЕДЕЛ ОБЯЗАТЕЛЕН, И ОН ЖЕ ЗАЩИТА. Поиск по многим именам сразу стоит дороже полной
 -- пересборки, а массовое переименование — это и есть случай, когда собрать заново честнее.
 -- Порог не про правильность: при его превышении делается БОЛЬШЕ работы, а не меньше.
+-- Догон задержанного: отметка могла исчезнуть до rebuild (packet-синк
+-- переписывал список). Берём источники, которые перепись уже назвала
+-- неполными или раздутыми, плюс табличные части их владельцев.
+CREATE TABLE IF NOT EXISTS search_coverage (
+  entity VARCHAR, в_1С BIGINT, в_витрине BIGINT, объектов_витрины BIGINT,
+  в_корпусе BIGINT, в_индексе BIGINT, с_вектором BIGINT, причина VARCHAR);
+CREATE OR REPLACE TABLE tmp3_lag AS
+SELECT lower(entity) AS tbl FROM search_coverage
+ WHERE причина IN ('собралось не полностью', 'не собралось в корпус',
+                   'в корпусе больше витрины');
+
 CREATE OR REPLACE TABLE tmp3_build AS
 SELECT tbl FROM tmp3_src
 WHERE NOT (SELECT on_ FROM tmp3_inc)
    OR (SELECT count(*) FROM tmp3_renamed) > 200
    OR tbl IN (SELECT tbl FROM tmp3_changed)
+   OR tbl IN (SELECT tbl FROM tmp3_lag)
+   OR tbl IN (SELECT s.tbl FROM tmp3_src s
+              WHERE EXISTS (SELECT 1 FROM search_tables t, tmp3_lag l
+                            WHERE t.src_table = s.tbl AND t.parent = l.tbl))
    OR tbl IN (SELECT DISTINCT c.src_table FROM search_corpus c
                 WHERE EXISTS (SELECT 1 FROM tmp3_renamed r
                               WHERE r.old_name <> '' AND contains(c.refs, r.old_name)));

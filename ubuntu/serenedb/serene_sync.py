@@ -20,6 +20,7 @@ import time
 import odata_census as C
 import subprocess
 import poc_load_entity as L
+from changed_sources_sql import changed_sources_sql
 
 # Список сущностей — СОБСТВЕННЫЙ у serene (версионируется в git, деплоится рядом со скриптом),
 # НЕ копия braine: две копии разъезжаются. Все имена в нём заведомо из живого OData (+ преполёт
@@ -471,24 +472,16 @@ def main():
     # сущность упала с ошибкой, список неполон, и сборка обязана вернуться к полному
     # проходу. Ошибка только в сторону лишней работы.
     try:
-        vals = ",".join("(%s)" % ("'" + t.replace("'", "''") + "'")
-                        for t in sorted(changed_tables))
-        sql = ("CREATE TABLE IF NOT EXISTS search_changed_sources (src_table VARCHAR);\n"
-               "GRANT SELECT ON search_changed_sources TO %s;\n"
-               "DELETE FROM search_changed_sources;\n" % _ro_role())
-        if vals:
-            sql += "INSERT INTO search_changed_sources SELECT * FROM (VALUES %s) AS s(t);\n" % vals
-        # Признак ставится в 1 только здесь — то есть только когда цикл дошёл до конца.
-        # Упавшие поштучно сущности список не портят: каждая из них уже добавлена в него
-        # как «возможно изменившаяся», и сборка их перечитает.
-        sql += ("DELETE FROM search_quality WHERE k = 'changed_sources_ok';\n"
-                "INSERT INTO search_quality VALUES ('changed_sources_ok', 1, "
-                "'список изменившихся таблиц полон: синк дошёл до конца');\n")
+        packet = L._is_local_base()
+        sql = changed_sources_sql(changed_tables, packet=packet, role=_ro_role())
         subprocess.run(["psql", dsn, "-q", "-v", "ON_ERROR_STOP=1", "-f", "-"],
                        input=sql, capture_output=True, text=True, check=True)
-        print("изменились таблицы витрины: %d%s"
-              % (len(changed_tables),
-                 "" if not err else " (в том числе %d упавших — их перечитаем)" % err))
+        extra = ""
+        if err:
+            extra = " (в том числе %d упавших — их перечитаем)" % err
+        if packet:
+            extra += " (packet: список не затирался, дописано %d)" % len(changed_tables)
+        print("изменились таблицы витрины: %d%s" % (len(changed_tables), extra))
     except Exception as e:                      # noqa: BLE001
         print(f"⚠ список изменившихся таблиц не записан: {str(e)[:120]}")
 

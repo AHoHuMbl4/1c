@@ -1,3 +1,17 @@
+## 18.08: packet-синк больше не съедает отметки до rebuild `[код]` `[замер]`
+
+`[замер]` журнал okna `1c-serene-pipeline@postgres` 18:41:04 и 18:51:13:
+«изменились таблицы витрины: 0» → «сборка сущностей | 0 | 351». Синк в
+packet (`changed=0`, пробы у агента) делал `DELETE FROM search_changed_sources`
+до сборки; merge пустой `tmp3_build` не удалял ничего. Табчасти: «не читаем —
+владелец Document_РеализацияТМЦ не менялся». Корпус 17.08 331 vs витрина 176.
+
+`[код]` замок: `changed_sources_sql.py` (packet без DELETE, HTTP как раньше);
+`pipeline.sh` снимок `tmp_changed_keep`; `tmp3_lag` из coverage («собралось не
+полностью» / «в корпусе больше витрины») в `tmp3_build`; repair SQL —
+переотметка. Оффлайн `test_changed_sources_lock.py` **17/17**, health_gap 14.
+Доки: sql/statements/insert, sql/statements/delete, sql/statements/merge_into.
+
 ## 18.08: класс F — снятая сущность не уезжает в ПКО/физлицо `[код]` `[замер]`
 
 Живой дефект okna (8/12 bot-rid): после выбора регистра/документа цепочка
