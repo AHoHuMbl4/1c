@@ -309,6 +309,26 @@ def _flatten_nested(rows, entity_set=None):
     return out, changed
 
 
+def _mart_row_count(table):
+    """Число строк в витрине; 0, если таблицы ещё нет."""
+    try:
+        n = _psql_rows('SELECT count(*) FROM "%s"' % table)
+        return int(n[0][0]) if n else 0
+    except RuntimeError:
+        return 0
+
+
+def _packet_skip_entity(es, table, t0, *, delta=False):
+    """Packet-режим: данные несёт агент, HTTP-пробы на юните не делаем."""
+    print("    %s: packet-режим: пробы данных у агента" % es, file=sys.stderr)
+    n = _mart_row_count(table)
+    dt = round(time.time() - t0, 2)
+    if delta:
+        return {"entity": es, "table": table, "rows": n, "delta": True,
+                "changed": 0, "gone": 0, "sec": dt}
+    return {"entity": es, "table": table, "rows": n, "sec": dt, "changed": 0}
+
+
 def fetch_all(entity_set):
     """Выгрузить сущность целиком, со сверкой количества.
 
@@ -321,6 +341,8 @@ def fetch_all(entity_set):
     Поэтому: идём до ПУСТОЙ страницы и сверяем итог с `$count`. Расхождение — ошибка,
     а не «загрузили сколько получилось».
     """
+    if _is_local_base():
+        raise RuntimeError("%s: packet-режим: пробы данных у агента" % entity_set)
     # 🔴 СЧЁТ ПРИХОДИТ ВМЕСТЕ С ДАННЫМИ, А НЕ ОТДЕЛЬНЫМ ЗАПРОСОМ. `$inlinecount=allpages` —
     # штатная возможность OData 3.0, которую 1С поддерживает: в ответе появляется поле
     # `odata.count` (проверено на живой 1С — 176 в `odata.count` при `$top=2`, и ровно
@@ -631,6 +653,8 @@ def load_entity_delta(es, ro_role="serene_ro"):
     `false`/дата — формат JSON 1С. Ни одного имени и ни одного порога под конкретную базу.
     """
     table = safe_col(es).lower()
+    if _is_local_base():
+        return _packet_skip_entity(es, table, time.time(), delta=True)
     if not (_mart_has(table, "Ref_Key") and _mart_has(table, "DataVersion")):
         return None
     # 🔴 РАЗВЁРНУТЫЙ НАБОР ДЕЛЬТЕ НЕ ПОМЕХА — И ЭТО БЫЛА ГЛАВНАЯ ПРИЧИНА, ПО КОТОРОЙ ЕЁ
@@ -795,6 +819,8 @@ def load_entity(es, ro_role="serene_ro"):
     GRANT SELECT ro-роли (default privileges на SereneDB не всегда покрывают новые таблицы).
     Возвращает dict со статистикой. Переиспользуется штатным синком (serene_sync.py)."""
     table = safe_col(es).lower()
+    if _is_local_base():
+        return _packet_skip_entity(es, table, time.time(), delta=False)
     csv_path = os.path.join(CSV_DIR, f"{table}.csv")
     t0 = time.time()
     rows = fetch_all(es)

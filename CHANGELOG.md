@@ -1,5 +1,20 @@
 # Журнал изменений
 
+## 18.08: F1 раунд 2 — packet-синк без HTTP-проб данных `[код]` `[замер]`
+
+`[код]` `poc_load_entity.py`: при локальном `ETL_ODATA_BASE` (packet-meta)
+`load_entity_delta`/`load_entity` не строят OData-URL — строка в журнал
+«packet-режим: пробы данных у агента», `changed=0`, число строк из витрины;
+`fetch_all` — RuntimeError (защита от прямого вызова). Данные на юните несёт
+агент (`packet_apply`), не HTTP. Тест `test_packet_data_skip.py` **14/14**;
+регресс census `test_odata_census.py` **17/17**.
+
+`[замер]` Дефект okna 05:30: после раунда 1 census зелёный, но синк падал на
+`unknown url type: '/var/lib/serenedb/packet-meta/…?$top=250…'` и «страница
+уменьшена до 250» — мёртвые OData-пробы пустых/закрытых сущностей. После
+раунда 2 этих строк в журнале такта быть не должно; приёмка — оркестратор
+после выката.
+
 ## 18.08: F2+чанкование выкачены на оба юнита, сборка klient-1 на HEAD `[замер]`
 
 `[замер]` Оба юнита `/opt/1c-mcp-reports/corpus_build.sql` = `b838cd145238`
