@@ -15,7 +15,8 @@ _Обновлено: **2026-08-18.** Здесь — только живое: т�
 
 🔴 **Сквозной rid + TRACE в git `[18.08]`**: `TRACE <rid> <слой> <шаг> <мс> <статус>`
 — verify→мост→`/ask`→`ask_journal.rid`; `ASK_TRACE=1` по умолчанию;
-`work/acceptance/trace_rid.sh <rid>`. Оффлайн **test_trace_rid 10/10**, прежние замки
+`work/acceptance/trace_rid.sh <rid>` (парсер: время — голое целое+ms, токены/строки —
+`in=`/`строк=` без ms; `--selftest` на `f9859de24c71bdd2`). Оффлайн **test_trace_rid 10/10**, прежние замки
 зелёные; **test-verify 106**, **mcp_ask 32**. **Выкат не делали** — md5/живой
 полный путь через journald назначает оркестратор; нужен `ask_journal_apply` (колонка
 `rid`).
