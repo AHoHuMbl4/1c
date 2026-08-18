@@ -1,3 +1,21 @@
+## 18.08: rank axis ticket + measure anchor + stock no_data `[код]` `[замер]`
+
+`[код]` три дефекта рядом с классом F (62869c2), механику F не трогаем:
+**1)** билет оси «по номенклатуре» сохраняет `grain=group` и `form=rank`, не
+схлопывает в скаляр grand-total; **2)** «какого товара больше всего» → ось из
+kind (refs_map.ТМЦ), мера `Количество` через `rank_measure_hint`, term_hits
+фильтруются kind_hits при rank; **3)** вопрос про остаток при пустом
+`search_meta.balance_registers` → честный `no_data` (класс из $metadata:
+RecordType у `_RecordType` остаточного регистра, `corpus_build.sql` §1-бис).
+Оффлайн **13/13** `test_rank_axis_anchor.py`; прежние замки зелёные
+(terminal_round 24, axis_focus 18, period_empty 30, measure_empty 26, gate 132,
+compose 92, period_bounds 3, health_gap 14, fork_outcomes 24, decision_id 31).
+md5 ask **`d442630f`**.
+
+`[замер]` эталон okna (корпус догнан): топ Количество по refs_map.ТМЦ —
+Piesa 96 602, Stift 95 870, Balama 83 794; итог 2 128 160,40. Живая приёмка
+(а–в) — после выката оркестратором на `:8091`.
+
 ## 18.08: E4b префлайт диска + слияние пачками klient-1 `[код]` `[замер]`
 
 `[код]` **E4b закрыт в git**: `box_tune_disk_plan/preflight` — оценка WAL

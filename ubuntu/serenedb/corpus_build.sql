@@ -86,6 +86,20 @@ FROM (SELECT coalesce(max(v), 0) AS prev FROM search_quality WHERE k = 'meta_ent
 DELETE FROM search_quality WHERE k = 'meta_entities';
 INSERT INTO search_quality SELECT 'meta_entities', count(*), 'сущностей в $metadata' FROM tmp3_ent;
 
+
+-- ============ 1-бис. РЕГИСТРЫ ОСТАТКОВ (RegisterKind=Balance в $metadata) ============
+-- RecordType в свойствах _RecordType — признак остаточного регистра накопления
+-- (manifest-gen.ps1: ВидРегистра *Остатки*/*Balance*). Класс из метаданных, не слова.
+DELETE FROM search_meta WHERE k = 'balance_registers';
+INSERT INTO search_meta
+SELECT 'balance_registers',
+       coalesce(string_agg(regexp_replace(e.entity, '_recordtype$', ''), ','
+                ORDER BY e.entity), '')
+FROM tmp3_ent e
+WHERE e.entity LIKE 'accumulationregister_%_recordtype'
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity AND lower(p.prop) = 'recordtype');
+
 SELECT 'метаданные' AS шаг, (SELECT count(*) FROM tmp3_ent) AS сущностей,
        (SELECT count(*) FROM tmp3_prop) AS свойств,
        (SELECT count(*) FROM tmp3_key WHERE len(key_cols) > 0) AS с_ключом;

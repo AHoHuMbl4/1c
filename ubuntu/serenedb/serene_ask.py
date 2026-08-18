@@ -2997,6 +2997,109 @@ def total_question_skips_axis(intent, measure, grain_dec, plan=None, question=""
     return False
 
 
+
+
+def rank_intent_from(intent, plan=None):
+    """Рейтинг/топ: want=list или amount без порога, либо max/min."""
+    intent = intent or {}
+    plan = plan or {}
+    amt = intent.get("amount") or {}
+    if (intent.get("want") or "") == "list":
+        return True
+    if not amt.get("op") and amt.get("value") is not None:
+        return True
+    if (plan.get("compute") or "") in ("max", "min"):
+        return True
+    return False
+
+
+def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis):
+    """Билет оси: grain=group сохраняется; form=rank при рейтинговом вопросе."""
+    rankish = rank_intent_from(intent, plan) or (
+        (grain_dec or {}).get("form") in ("rank", "compare"))
+    form = "rank" if rankish else ((grain_dec or {}).get("form") or "number")
+    return {"grain": "group", "col": prov_axis, "form": form,
+            "named_gis": [], "clarify": None}
+
+
+def rank_measure_hint(names, intent, question, alias_by=None):
+    """Рейтинг без явной меры: количество товара, не себестоимость/сумма."""
+    names = list(names or [])
+    if not names:
+        return None
+    if (intent or {}).get("measure"):
+        return None
+    if not rank_intent_from(intent):
+        return None
+    q = (question or "").lower()
+    kind = ((intent or {}).get("kind") or "").lower()
+    hints = []
+    if any(w in q for w in ("сколько", "больше всего", "top", "most", "maximum",
+                            "лидер", "leader")):
+        hints.append("количество")
+    if any(w in kind for w in ("товар", "номенклатур", "product", "item", "goods")):
+        hints.append("количество")
+    if any(w in q for w in ("товар", "номенклатур", "product", "item", "goods")):
+        hints.append("количество")
+    seen = set()
+    for hint in hints:
+        if hint in seen:
+            continue
+        seen.add(hint)
+        got, _alts, how = measure_choice(names, hint, alias_by=alias_by or {})
+        if got and how in ("exact", "substring", "alias", "base", "single"):
+            return got
+    return None
+
+
+_BALANCE_REGS = {"at": 0.0, "set": None}
+
+
+def balance_registers():
+    """Регистры остатков из search_meta (RecordType в $metadata при сборке)."""
+    now = time.time()
+    if (_BALANCE_REGS["set"] is not None
+            and now - _BALANCE_REGS["at"] < 300):
+        return _BALANCE_REGS["set"]
+    try:
+        r = psql("SELECT v FROM search_meta WHERE k = 'balance_registers' LIMIT 1")
+        raw = (r[0][0] or "") if r and r[0] else ""
+        got = frozenset(x.strip() for x in str(raw).split(",") if x.strip())
+    except RuntimeError:
+        got = frozenset()
+    _BALANCE_REGS.update({"at": now, "set": got})
+    return got
+
+
+def question_asks_stock_balance(question):
+    """Вопрос про остаток на складе — триггер проверки пространства остатков."""
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return False
+    markers = ("остат", "на складе", "in stock", "on warehouse", "inventory balance")
+    return any(m in q for m in markers)
+
+
+def stock_balance_no_data(question, diag, cut, t0):
+    """Нет регистров остатков в корпусе — честный no_data (план §2, п. 21)."""
+    if not question_asks_stock_balance(question):
+        return None
+    if balance_registers():
+        return None
+    cyr = any("\u0400" <= c <= "\u04ff" for c in (question or ""))
+    if cyr:
+        text = ("Данных об остатках нет в подключённых источниках; "
+                "могу показать топ проданных или переданных на хранение.")
+    else:
+        text = ("No stock balance data in connected sources; "
+                "I can show top sold or transferred items instead.")
+    diag = dict(diag or {})
+    diag["stock_balance_gap"] = True
+    return {"partial": cut or None, "kind": "no_data", "text": text, "sources": [],
+            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                               reason="нет регистров остатков")}
+
+
 def _dedupe_fork_classes(ordered):
     """Одинаковые подпись+атом → одна пара (план §2, п. 13)."""
     seen, out = {}, []
@@ -8208,6 +8311,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
             for a in разбор["assumed"])
 
+    _stock_gap = stock_balance_no_data(question, diag, cut, t0)
+    if _stock_gap:
+        return _stock_gap
+
     # Сравнение A и B — члены одной оси, не AND в одной строке. Схлопываем ДО probe.
     terms_for_axis = [list(g) for g in (intent.get("terms") or [])]
     if serene_axis:
@@ -9921,7 +10028,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
 
     measure, measure_alts = None, []
     how = ""
-    if plan.get("quantity") and plan["quantity"] in measures_of(src):
+    _mnames = measures_of(src)
+    _malias = measure_aliases_of(src)
+    _rank_intent = rank_intent_from(intent, plan)
+    _mhint = (rank_measure_hint(_mnames, intent, question, _malias)
+              if not measure_pick else None)
+    if plan.get("quantity") and plan["quantity"] in _mnames:
         measure = plan["quantity"]
         diag["measure_by_plan"] = True
         # 🔴 ГЕЙТ ВЕЛИЧИНЫ (задача 16 реестра «право на ответ (б)»). Имя, названное моделью,
@@ -9943,9 +10055,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if measure_ambiguous(_alts, _tot):
                 measure, measure_alts = None, _alts
                 diag["measure_gate"] = {"слово": _word, "подошли": _alts}
+    elif _mhint:
+        measure, measure_alts, how = _mhint, [], "rank_hint"
+        diag["measure_rank_hint"] = _mhint
     else:
         measure, measure_alts, how = pick_measure(src, question,
                                                   (intent.get("measure") or ""))
+        if (_rank_intent and how == "rerank" and _mhint
+                and measure and measure != _mhint):
+            measure, how = _mhint, "rank_hint"
+            diag["measure_rank_hint"] = _mhint
         # 🔴 ДОГАДКА РЕРАНКЕРА НЕ ГОДИТСЯ ТАМ, ГДЕ СПРАШИВАЮТ ВЕЛИЧИНУ. [замер 30.07]
         # «Сколько НДС мы заплатили поставщикам?» — модель не смогла назвать величину
         # (её у выбранного регистра нет), и прежний путь молча брал «КОплате»: ответ
@@ -10113,12 +10232,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 _acol = _was["ось"]
                 if any(a.get("col") == _acol for a in axes):
                     _kh = [_acol]
-            _amt = intent.get("amount") or {}
-            _rank_intent = ((intent.get("want") or "") == "list"
-                            or (not _amt.get("op") and _amt.get("value") is not None))
+            _rank_intent = rank_intent_from(intent, plan)
             if (not _kh and (plan.get("compute") in ("max", "min") or _rank_intent)):
                 _kh = kind_axis_rerank(axes, intent.get("kind"))
             _th = term_axis_hits(src, axes, terms_for_axis)
+            if _kh and _rank_intent:
+                _kh_set = set(_kh)
+                _th = {gi: [c for c in (cs or []) if c in _kh_set]
+                       for gi, cs in (_th or {}).items()}
+                _th = {gi: cs for gi, cs in _th.items() if cs}
             grain_dec = serene_axis.decide_grain(
                 axes, _kh, _th, plan.get("compute"), src_is_child(src),
                 rank_intent=_rank_intent)
@@ -10137,8 +10259,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     elif resolved.get("axis"):
         _prov_axis = resolved["axis"]
     if _prov_axis:
-        grain_dec = {"grain": "group", "col": _prov_axis, "form": "number",
-                     "named_gis": [], "clarify": None}
+        grain_dec = grain_dec_from_axis_ticket(intent, plan, grain_dec, _prov_axis)
         diag["axis_from_choice"] = _prov_axis
     if total_question_skips_axis(intent, measure, grain_dec, plan, question,
                                  trusted=trusted, resolved=resolved):
