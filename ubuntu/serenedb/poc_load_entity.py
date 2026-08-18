@@ -79,21 +79,55 @@ UNSERVABLE_TYPES = ("Edm.Stream", "Edm.Binary")
 _SELECT_WARNED = set()
 
 
-def _load_metadata():
-    """Один разбор `$metadata` на процесс: ключи и типы полей."""
-    if _KEYS_CACHE or _PROPS_CACHE:
-        return
-    try:
-        xml = urllib.request.urlopen(
-            _odata_auth(ODATA + "/$metadata"), timeout=HTTP_TIMEOUT).read().decode("utf-8", "replace")
-    except Exception:                           # noqa: BLE001
-        return
+def _is_local_base(base=None):
+    """ETL_ODATA_BASE — каталог packet-meta (файлы), а не HTTP URL."""
+    b = (base if base is not None else ODATA).strip()
+    return not (b.startswith("http://") or b.startswith("https://"))
+
+
+def _local_meta_path(base=None):
+    """Путь к снимку `$metadata` в packet-режиме."""
+    if not _is_local_base(base):
+        return None
+    return os.path.join((base if base is not None else ODATA).rstrip("/"), "$metadata")
+
+
+def _read_meta_xml(base=None):
+    """XML `$metadata` из каталога packet-meta или None."""
+    path = _local_meta_path(base)
+    if not path or not os.path.isfile(path):
+        return None
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
+def _parse_metadata_xml(xml):
+    """Разбор XML `$metadata` в кэши ключей и свойств."""
     for m in re.finditer(r'<EntityType\s+Name="([^"]+)"(.*?)</EntityType>', xml, re.S):
         km = re.search(r"<Key>(.*?)</Key>", m.group(2), re.S)
         _KEYS_CACHE[m.group(1)] = (
             re.findall(r'<PropertyRef\s+Name="([^"]+)"', km.group(1)) if km else [])
         _PROPS_CACHE[m.group(1)] = re.findall(
             r'<Property\s+Name="([^"]+)"\s+Type="([^"]+)"', m.group(2))
+
+
+def _load_metadata():
+    """Один разбор `$metadata` на процесс: ключи и типы полей."""
+    if _KEYS_CACHE or _PROPS_CACHE:
+        return
+    xml = None
+    if _is_local_base():
+        xml = _read_meta_xml()
+    else:
+        try:
+            xml = urllib.request.urlopen(
+                _odata_auth(ODATA + "/$metadata"), timeout=HTTP_TIMEOUT
+            ).read().decode("utf-8", "replace")
+        except Exception:                       # noqa: BLE001
+            return
+    if not xml:
+        return
+    _parse_metadata_xml(xml)
 
 
 def declared_key(entity_set):
@@ -390,9 +424,15 @@ def fetch_all(entity_set):
 
 
 def published_entity_sets():
-    """Множество имён entity set, РЕАЛЬНО опубликованных в OData (служебный документ) — источник
-    правды об именах сущностей. Нужен, чтобы валидировать рукописный выбор против реальности, а не
-    верить памяти. Возвращает None при сетевой ошибке (тогда преполёт пропускается — без ложной тревоги)."""
+    """Множество имён entity set, РЕАЛЬНО опубликованных в OData — источник
+    правды об именах сущностей. В packet-режиме (ETL_ODATA_BASE — каталог) состав
+    берётся из EntitySet снимка `$metadata`; по HTTP — из служебного документа.
+    Возвращает None при ошибке (преполёт пропускается — без ложной тревоги)."""
+    if _is_local_base():
+        xml = _read_meta_xml()
+        if not xml:
+            return None
+        return set(re.findall(r'<EntitySet\s+Name="([^"]+)"', xml))
     try:
         url = f"{ODATA}/?" + urllib.parse.urlencode({"$format": "json"})
         doc = json.load(urllib.request.urlopen(_odata_auth(url), timeout=60))

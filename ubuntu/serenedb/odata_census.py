@@ -6,9 +6,11 @@
 ручного разбора — значит состав данных система определяет сама, а не человек галочками.
 
 Что делает:
-  1. служебный документ OData -> перечень ВСЕХ сущностей;
+  1. служебный документ OData (HTTP) или EntitySet снимка `$metadata` (packet) ->
+     перечень ВСЕХ сущностей;
   2. `$metadata` -> объявленный ключ каждой (в т.ч. составной) и типы свойств;
-  3. `$count` по каждой, параллельно -> непустые / пустые / закрытые правами;
+  3. `$count` по каждой (HTTP) или count(*) в витрине (packet), параллельно ->
+     непустые / пустые / закрытые правами;
   4. профиль сохраняется в витрину: клиент видит, что именно система не видит.
 
 Пункт 4 важен отдельно: часть сущностей закрыта правами читателя — это законно, но
@@ -20,17 +22,25 @@ import concurrent.futures as cf
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 
+import poc_load_entity as L
+
 ODATA = os.environ.get("ETL_ODATA_BASE", "http://127.0.0.1:6011").rstrip("/")
 PARALLEL = int(os.environ.get("CENSUS_PARALLEL", "12"))
 TIMEOUT = float(os.environ.get("CENSUS_TIMEOUT", "60"))
+DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
 
-# Виды сущностей, для которых перепись имеет смысл, берутся из самой базы: мы не решаем,
-# что «бизнес», а что нет — грузим всё, что непусто и доступно.
+# В packet-режиме закрытые сущности приходят из skipped.json агента (не из HTTP).
+_SKIP_RIGHTS = frozenset({"no_read_right", "rls_filtered", "access_denied", "auth_failed"})
+
+
+def _is_local():
+    return L._is_local_base(ODATA)
 
 
 def _auth(req):
@@ -47,8 +57,58 @@ def _get(url, timeout=None):
         return r.read()
 
 
+def _lit(v):
+    return "'" + str(v).replace("'", "''") + "'"
+
+
+def _skipped_map():
+    """{сущность: error} из skipped.json packet-meta; пусто, если файла нет."""
+    if not _is_local():
+        return {}
+    path = os.path.join(ODATA, "skipped.json")
+    if not os.path.isfile(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        doc = json.load(f)
+    out = {}
+    for e in doc.get("entities") or []:
+        name = e.get("entity") or e.get("name") or ""
+        if name:
+            out[name] = e.get("error") or ""
+    return out
+
+
+def _problem_from_skip(err):
+    if not err:
+        return "нет прав"
+    low = err.lower()
+    if err in _SKIP_RIGHTS or "right" in low or "401" in low or "403" in low or "rls" in low:
+        return "нет прав"
+    return err
+
+
+def _mart_count(entity):
+    """Число строк сущности в локальной витрине; 0, если таблицы ещё нет."""
+    table = L.safe_col(entity).lower()
+    sql = (
+        "SELECT CASE WHEN EXISTS (SELECT 1 FROM duckdb_tables() "
+        "WHERE database_name = current_database() AND table_name = %s) "
+        "THEN (SELECT count(*) FROM \"%s\") ELSE 0 END"
+        % (_lit(table), table.replace('"', '""'))
+    )
+    p = subprocess.run(["psql", DSN, "-tAc", sql], capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(p.stderr.strip()[:200])
+    return int(p.stdout.strip() or "0")
+
+
 def entity_sets():
-    """Все опубликованные сущности из служебного документа OData."""
+    """Все опубликованные сущности: HTTP — служебный документ; packet — EntitySet `$metadata`."""
+    if _is_local():
+        pub = L.published_entity_sets()
+        if pub is None:
+            raise ValueError("нет снимка $metadata в %s" % ODATA)
+        return sorted(pub)
     url = "%s/?%s" % (ODATA, urllib.parse.urlencode({"$format": "json"}))
     doc = json.loads(_get(url))
     return sorted({e.get("name", "") for e in doc.get("value", []) if e.get("name")})
@@ -56,7 +116,12 @@ def entity_sets():
 
 def metadata():
     """Объявленные ключи и типы: {сущность: {"key": [...], "props": {имя: тип}}}."""
-    xml = _get(ODATA + "/$metadata", timeout=300).decode("utf-8", "replace")
+    if _is_local():
+        xml = L._read_meta_xml(ODATA)
+    else:
+        xml = _get(ODATA + "/$metadata", timeout=300).decode("utf-8", "replace")
+    if not xml:
+        return {}
     out = {}
     for m in re.finditer(r'<EntityType\s+Name="([^"]+)"(.*?)</EntityType>', xml, re.S):
         name, body = m.group(1), m.group(2)
@@ -67,12 +132,20 @@ def metadata():
     return out
 
 
-def count_one(es):
+def count_one(es, skipped=None):
     """Сколько строк. Различаем ПУСТО и ЗАКРЫТО ПРАВАМИ — это разные вещи.
 
     Раньше любая ошибка превращалась в -1 и сущность просто исчезала из кандидатов;
     закрытая правами и пустая были неотличимы, и клиенту про это не говорили.
     """
+    if _is_local():
+        skipped = skipped if skipped is not None else _skipped_map()
+        if es in skipped:
+            return es, -1, _problem_from_skip(skipped[es])
+        try:
+            return es, _mart_count(es), ""
+        except Exception as e:                  # noqa: BLE001
+            return es, -1, type(e).__name__
     url = "%s/%s/$count" % (ODATA, urllib.parse.quote(es))
     try:
         return es, int(_get(url).decode().strip()), ""
@@ -96,9 +169,14 @@ def census(sets=None, meta=None):
     """Полная перепись. Возвращает список записей по каждой сущности."""
     sets = sets if sets is not None else entity_sets()
     meta = meta if meta is not None else metadata()
+    skipped = _skipped_map() if _is_local() else None
     rows = []
     with cf.ThreadPoolExecutor(max_workers=PARALLEL) as pool:
-        for es, n, err in pool.map(count_one, sets):
+        if skipped is not None:
+            it = pool.map(lambda es: count_one(es, skipped), sets)
+        else:
+            it = pool.map(count_one, sets)
+        for es, n, err in it:
             info = meta.get(es, {})
             rows.append({
                 "entity": es,
