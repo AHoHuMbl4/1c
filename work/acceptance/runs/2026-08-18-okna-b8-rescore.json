@@ -1,0 +1,900 @@
+{
+  "truth": {
+    "B8-01": [
+      1572493.22,
+      79752611.64,
+      79925955.81
+    ],
+    "B8-02": [
+      349.0
+    ],
+    "B8-03": [
+      37.0
+    ],
+    "B8-04": [
+      8246.0,
+      3826.0,
+      1310413.93
+    ],
+    "B8-05": [
+      74907.0
+    ],
+    "B8-06": [
+      77381.0
+    ]
+  },
+  "total_ok": 5,
+  "total": 30,
+  "per_case": {
+    "B8-01": {
+      "ok_runs": 0,
+      "kinds": [
+        "figures",
+        "figures",
+        "figures",
+        "figures",
+        "figures"
+      ],
+      "partials": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "diag349_runs": 0
+    },
+    "B8-02": {
+      "ok_runs": 0,
+      "kinds": [
+        "clarify",
+        "clarify",
+        "clarify",
+        "clarify",
+        "clarify"
+      ],
+      "partials": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "diag349_runs": 5
+    },
+    "B8-03": {
+      "ok_runs": 0,
+      "kinds": [
+        "no_data",
+        "no_data",
+        "no_data",
+        "no_data",
+        "no_data"
+      ],
+      "partials": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "diag349_runs": 0
+    },
+    "B8-04": {
+      "ok_runs": 0,
+      "kinds": [
+        "figures",
+        "figures",
+        "figures",
+        "figures",
+        "figures"
+      ],
+      "partials": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "diag349_runs": 0
+    },
+    "B8-05": {
+      "ok_runs": 5,
+      "kinds": [
+        "figures",
+        "figures",
+        "figures",
+        "figures",
+        "figures"
+      ],
+      "partials": [
+        1,
+        1,
+        1,
+        1,
+        1
+      ],
+      "diag349_runs": 0
+    },
+    "B8-06": {
+      "ok_runs": 0,
+      "kinds": [
+        "answer",
+        "answer",
+        "answer",
+        "answer",
+        "answer"
+      ],
+      "partials": [
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "diag349_runs": 0
+    }
+  },
+  "rows": [
+    {
+      "id": "B8-01",
+      "run": 1,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        1572493.22,
+        79925955.81
+      ],
+      "matched": [
+        {
+          "expected": 79752611.64,
+          "got": 79752611.64
+        }
+      ],
+      "text_head": "Справочник МБП и остаточная стоимость — малоценка с остаточной стоимостью.: 12966.38 (unknown)\nРеализация ТМЦ с оплатой карточкой и долгом к",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "94fb029b4a02ca80eb36fa753db96754644ad9ec7c6e0a28f7ce4a873eee4d92"
+      },
+      "sec": 14.71
+    },
+    {
+      "id": "B8-01",
+      "run": 2,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        1572493.22,
+        79925955.81
+      ],
+      "matched": [
+        {
+          "expected": 79752611.64,
+          "got": 79752611.64
+        }
+      ],
+      "text_head": "Справочник МБП и остаточная стоимость — малоценка с остаточной стоимостью.: 12966.38 (unknown)\nРеализация ТМЦ с оплатой карточкой и долгом к",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "94fb029b4a02ca80eb36fa753db96754644ad9ec7c6e0a28f7ce4a873eee4d92"
+      },
+      "sec": 13.15
+    },
+    {
+      "id": "B8-01",
+      "run": 3,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        1572493.22,
+        79925955.81
+      ],
+      "matched": [
+        {
+          "expected": 79752611.64,
+          "got": 79752611.64
+        }
+      ],
+      "text_head": "Справочник МБП и остаточная стоимость — малоценка с остаточной стоимостью.: 12966.38 (unknown)\nРеализация ТМЦ с оплатой карточкой и долгом к",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "94fb029b4a02ca80eb36fa753db96754644ad9ec7c6e0a28f7ce4a873eee4d92"
+      },
+      "sec": 13.16
+    },
+    {
+      "id": "B8-01",
+      "run": 4,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        1572493.22,
+        79925955.81
+      ],
+      "matched": [
+        {
+          "expected": 79752611.64,
+          "got": 79752611.64
+        }
+      ],
+      "text_head": "Справочник МБП и остаточная стоимость — малоценка с остаточной стоимостью.: 12966.38 (unknown)\nРеализация ТМЦ с оплатой карточкой и долгом к",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "94fb029b4a02ca80eb36fa753db96754644ad9ec7c6e0a28f7ce4a873eee4d92"
+      },
+      "sec": 12.75
+    },
+    {
+      "id": "B8-01",
+      "run": 5,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        1572493.22,
+        79925955.81
+      ],
+      "matched": [
+        {
+          "expected": 79752611.64,
+          "got": 79752611.64
+        }
+      ],
+      "text_head": "Справочник МБП и остаточная стоимость — малоценка с остаточной стоимостью.: 12966.38 (unknown)\nРеализация ТМЦ с оплатой карточкой и долгом к",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "94fb029b4a02ca80eb36fa753db96754644ad9ec7c6e0a28f7ce4a873eee4d92"
+      },
+      "sec": 12.9
+    },
+    {
+      "id": "B8-02",
+      "run": 1,
+      "kind": "clarify",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        349.0
+      ],
+      "matched": [],
+      "text_head": "Имеете в виду контрагентов, города, договоры, расчетные счета, страны, физических лиц, валюты или типы цен?\n«Контрагенты», «Города», «Догово",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 11,
+      "fork_outcome": null,
+      "diag349": true,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "8f3489912972d706edd27a9916660fd1a92fbd4a03f5718f2310def6b5efa3b7"
+      },
+      "sec": 20.45
+    },
+    {
+      "id": "B8-02",
+      "run": 2,
+      "kind": "clarify",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        349.0
+      ],
+      "matched": [],
+      "text_head": "Имеете в виду контрагентов, города, договоры, расчетные счета, страны, физических лиц, валюты или типы цен?\n«Контрагенты», «Города», «Догово",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 11,
+      "fork_outcome": null,
+      "diag349": true,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "aefad54848574cbb87f828b3b6abbf17bd714d51ceed37e9bf16b741146783a7"
+      },
+      "sec": 13.86
+    },
+    {
+      "id": "B8-02",
+      "run": 3,
+      "kind": "clarify",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        349.0
+      ],
+      "matched": [],
+      "text_head": "Имеете в виду контрагентов, города, договоры, расчетные счета, страны, физических лиц, валюты или типы цен?\n«Контрагенты», «Города», «Догово",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 11,
+      "fork_outcome": null,
+      "diag349": true,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "52d2f7b1994434d1b39ac4331590f1a27a0495780658c55e4736d9e79fa21c15"
+      },
+      "sec": 13.91
+    },
+    {
+      "id": "B8-02",
+      "run": 4,
+      "kind": "clarify",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        349.0
+      ],
+      "matched": [],
+      "text_head": "Имеете в виду контрагентов, города, договоры, расчетные счета, страны, физических лиц, валюты или типы цен?\n«Контрагенты», «Города», «Догово",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 11,
+      "fork_outcome": null,
+      "diag349": true,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "aefad54848574cbb87f828b3b6abbf17bd714d51ceed37e9bf16b741146783a7"
+      },
+      "sec": 13.91
+    },
+    {
+      "id": "B8-02",
+      "run": 5,
+      "kind": "clarify",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        349.0
+      ],
+      "matched": [],
+      "text_head": "Имеете в виду контрагентов, города, договоры, расчетные счета, страны, физических лиц, валюты или типы цен?\n«Контрагенты», «Города», «Догово",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 11,
+      "fork_outcome": null,
+      "diag349": true,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "bb430e2d889979b02225761bde763b6d8f3a2e814d47db8c44680a39b6f8cde8"
+      },
+      "sec": 13.71
+    },
+    {
+      "id": "B8-03",
+      "run": 1,
+      "kind": "no_data",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        37.0
+      ],
+      "matched": [],
+      "text_head": "Проверенный ответ на этот вопрос в данный момент дать невозможно.",
+      "nums_text_only": [],
+      "fork_pool": null,
+      "fork_classes": null,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow"
+      },
+      "sec": 1.74
+    },
+    {
+      "id": "B8-03",
+      "run": 2,
+      "kind": "no_data",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        37.0
+      ],
+      "matched": [],
+      "text_head": "Проверенный ответ на этот вопрос в данный момент дать невозможно.",
+      "nums_text_only": [],
+      "fork_pool": null,
+      "fork_classes": null,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow"
+      },
+      "sec": 1.65
+    },
+    {
+      "id": "B8-03",
+      "run": 3,
+      "kind": "no_data",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        37.0
+      ],
+      "matched": [],
+      "text_head": "Проверенный ответ на этот вопрос в данный момент дать невозможно.",
+      "nums_text_only": [],
+      "fork_pool": null,
+      "fork_classes": null,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow"
+      },
+      "sec": 1.61
+    },
+    {
+      "id": "B8-03",
+      "run": 4,
+      "kind": "no_data",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        37.0
+      ],
+      "matched": [],
+      "text_head": "Проверенный ответ на этот вопрос в данный момент дать невозможно.",
+      "nums_text_only": [],
+      "fork_pool": null,
+      "fork_classes": null,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow"
+      },
+      "sec": 1.66
+    },
+    {
+      "id": "B8-03",
+      "run": 5,
+      "kind": "no_data",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        37.0
+      ],
+      "matched": [],
+      "text_head": "Проверенный ответ на этот вопрос в данный момент дать невозможно.",
+      "nums_text_only": [],
+      "fork_pool": null,
+      "fork_classes": null,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow"
+      },
+      "sec": 1.62
+    },
+    {
+      "id": "B8-04",
+      "run": 1,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        3826.0,
+        1310413.93
+      ],
+      "matched": [
+        {
+          "expected": 8246.0,
+          "got": 8246.0
+        }
+      ],
+      "text_head": "Количество единиц товара в сформированных комплектах: 1 (unknown)\nНазначения использования МБП.: 2 (unknown)\nРеализация ТМЦ с оплатой карточ",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "24056e30ec4682c57c434b3fadc4bfe2c590c741248f123d737876e17554a331"
+      },
+      "sec": 14.43
+    },
+    {
+      "id": "B8-04",
+      "run": 2,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        3826.0,
+        1310413.93
+      ],
+      "matched": [
+        {
+          "expected": 8246.0,
+          "got": 8246.0
+        }
+      ],
+      "text_head": "Количество единиц товара в сформированных комплектах: 1 (unknown)\nНазначения использования МБП.: 2 (unknown)\nРеализация ТМЦ с оплатой карточ",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "24056e30ec4682c57c434b3fadc4bfe2c590c741248f123d737876e17554a331"
+      },
+      "sec": 12.64
+    },
+    {
+      "id": "B8-04",
+      "run": 3,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        3826.0,
+        1310413.93
+      ],
+      "matched": [
+        {
+          "expected": 8246.0,
+          "got": 8246.0
+        }
+      ],
+      "text_head": "Количество единиц товара в сформированных комплектах: 1 (unknown)\nНазначения использования МБП.: 2 (unknown)\nРеализация ТМЦ с оплатой карточ",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "24056e30ec4682c57c434b3fadc4bfe2c590c741248f123d737876e17554a331"
+      },
+      "sec": 12.67
+    },
+    {
+      "id": "B8-04",
+      "run": 4,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        3826.0,
+        1310413.93
+      ],
+      "matched": [
+        {
+          "expected": 8246.0,
+          "got": 8246.0
+        }
+      ],
+      "text_head": "Количество единиц товара в сформированных комплектах: 1 (unknown)\nНазначения использования МБП.: 2 (unknown)\nРеализация ТМЦ с оплатой карточ",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "24056e30ec4682c57c434b3fadc4bfe2c590c741248f123d737876e17554a331"
+      },
+      "sec": 12.69
+    },
+    {
+      "id": "B8-04",
+      "run": 5,
+      "kind": "figures",
+      "ok": false,
+      "partial": 1,
+      "total": 3,
+      "missing": [
+        3826.0,
+        1310413.93
+      ],
+      "matched": [
+        {
+          "expected": 8246.0,
+          "got": 8246.0
+        }
+      ],
+      "text_head": "Количество единиц товара в сформированных комплектах: 1 (unknown)\nНазначения использования МБП.: 2 (unknown)\nРеализация ТМЦ с оплатой карточ",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "24056e30ec4682c57c434b3fadc4bfe2c590c741248f123d737876e17554a331"
+      },
+      "sec": 12.54
+    },
+    {
+      "id": "B8-05",
+      "run": 1,
+      "kind": "figures",
+      "ok": true,
+      "partial": 1,
+      "total": 1,
+      "missing": [],
+      "matched": [
+        {
+          "expected": 74907.0,
+          "got": 74907.0
+        }
+      ],
+      "text_head": "Оплата карточкой и долг клиента: 79752611.64 (unknown)\nОтражает суммы продаж, зафиксированные в налоговом реестре: 79918206.97 (unknown)",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "57509af403957fc4b021cf2034eae6dc3fae785ab3ddbf40309f4b7aa0dd1d10"
+      },
+      "sec": 15.64
+    },
+    {
+      "id": "B8-05",
+      "run": 2,
+      "kind": "figures",
+      "ok": true,
+      "partial": 1,
+      "total": 1,
+      "missing": [],
+      "matched": [
+        {
+          "expected": 74907.0,
+          "got": 74907.0
+        }
+      ],
+      "text_head": "Оплата карточкой и долг клиента: 79752611.64 (unknown)\nОтражает суммы продаж, зафиксированные в налоговом реестре: 79918206.97 (unknown)",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "57509af403957fc4b021cf2034eae6dc3fae785ab3ddbf40309f4b7aa0dd1d10"
+      },
+      "sec": 12.93
+    },
+    {
+      "id": "B8-05",
+      "run": 3,
+      "kind": "figures",
+      "ok": true,
+      "partial": 1,
+      "total": 1,
+      "missing": [],
+      "matched": [
+        {
+          "expected": 74907.0,
+          "got": 74907.0
+        }
+      ],
+      "text_head": "Оплата карточкой и долг клиента: 79752611.64 (unknown)\nОтражает суммы продаж, зафиксированные в налоговом реестре: 79918206.97 (unknown)",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "57509af403957fc4b021cf2034eae6dc3fae785ab3ddbf40309f4b7aa0dd1d10"
+      },
+      "sec": 12.55
+    },
+    {
+      "id": "B8-05",
+      "run": 4,
+      "kind": "figures",
+      "ok": true,
+      "partial": 1,
+      "total": 1,
+      "missing": [],
+      "matched": [
+        {
+          "expected": 74907.0,
+          "got": 74907.0
+        }
+      ],
+      "text_head": "Оплата карточкой и долг клиента: 79752611.64 (unknown)\nОтражает суммы продаж, зафиксированные в налоговом реестре: 79918206.97 (unknown)",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "57509af403957fc4b021cf2034eae6dc3fae785ab3ddbf40309f4b7aa0dd1d10"
+      },
+      "sec": 12.55
+    },
+    {
+      "id": "B8-05",
+      "run": 5,
+      "kind": "figures",
+      "ok": true,
+      "partial": 1,
+      "total": 1,
+      "missing": [],
+      "matched": [
+        {
+          "expected": 74907.0,
+          "got": 74907.0
+        }
+      ],
+      "text_head": "Оплата карточкой и долг клиента: 79752611.64 (unknown)\nОтражает суммы продаж, зафиксированные в налоговом реестре: 79918206.97 (unknown)",
+      "nums_text_only": [],
+      "fork_pool": 3,
+      "fork_classes": 3,
+      "fork_outcome": "B",
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "57509af403957fc4b021cf2034eae6dc3fae785ab3ddbf40309f4b7aa0dd1d10"
+      },
+      "sec": 12.4
+    },
+    {
+      "id": "B8-06",
+      "run": 1,
+      "kind": "answer",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        77381.0
+      ],
+      "matched": [],
+      "text_head": "По реализации ТМЦ найдено 74 407 регистр накопления за период с 2022-02-18 по 2026-08-28. · Книга Продаж (регистр накопления) · Всего",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 2,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "cf5127419bc3461aa009b25f7acf74a1a465b88aa04842d1e611eee1c7c1a587"
+      },
+      "sec": 23.91
+    },
+    {
+      "id": "B8-06",
+      "run": 2,
+      "kind": "answer",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        77381.0
+      ],
+      "matched": [],
+      "text_head": "По реализации ТМЦ найдено 74 407 регистр накопления за период с 2022-02-18 по 2026-08-28. · Книга Продаж (регистр накопления) · Всего",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 2,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "cf5127419bc3461aa009b25f7acf74a1a465b88aa04842d1e611eee1c7c1a587"
+      },
+      "sec": 21.92
+    },
+    {
+      "id": "B8-06",
+      "run": 3,
+      "kind": "answer",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        77381.0
+      ],
+      "matched": [],
+      "text_head": "По реализации ТМЦ найдено 74 407 регистр накопления за период с 2022-02-18 по 2026-08-28. · Книга Продаж (регистр накопления) · Всего",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 2,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "cf5127419bc3461aa009b25f7acf74a1a465b88aa04842d1e611eee1c7c1a587"
+      },
+      "sec": 21.51
+    },
+    {
+      "id": "B8-06",
+      "run": 4,
+      "kind": "answer",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        77381.0
+      ],
+      "matched": [],
+      "text_head": "По реализации ТМЦ найдено 74 407 регистр накопления за период с 2022-02-18 по 2026-08-28. · Книга Продаж (регистр накопления) · Всего",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 2,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "cf5127419bc3461aa009b25f7acf74a1a465b88aa04842d1e611eee1c7c1a587"
+      },
+      "sec": 22.75
+    },
+    {
+      "id": "B8-06",
+      "run": 5,
+      "kind": "answer",
+      "ok": false,
+      "partial": 0,
+      "total": 1,
+      "missing": [
+        77381.0
+      ],
+      "matched": [],
+      "text_head": "По реализации ТМЦ найдено 74 407 регистр накопления за период с 2022-02-18 по 2026-08-28. · Книга Продаж (регистр накопления) · Всего",
+      "nums_text_only": [],
+      "fork_pool": 16,
+      "fork_classes": 2,
+      "fork_outcome": null,
+      "diag349": false,
+      "memory": {
+        "mode": "shadow",
+        "class_key": "cf5127419bc3461aa009b25f7acf74a1a465b88aa04842d1e611eee1c7c1a587"
+      },
+      "sec": 29.94
+    }
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "health": {
+    "status": "serene-ask-ok",
+    "corpus_rows": 1548892,
+    "coverage_gap": {
+      "entities": 0,
+      "rows_missing": 0,
+      "kind": "none"
+    }
+  },
+  "serene_ask_md5": "617a0d02ba9b549fe01e0b6fa49c2ed6",
+  "DEEPSEEK_MODEL": "Qwen3.8-27B",
+  "ASK_MEMORY_APPLY": "1"
+}
