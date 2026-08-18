@@ -69,6 +69,17 @@ invalidation, не этот шаг). md5: `serene_ask.py`
 `304da9cd2fed819d1536e7b458a6c3b8`. `/opt` не трогали — выкат оркестратору.
 Живой чип→число на okna — после выката (до: `/opt` отдаёт `choice_error`).
 
+## 18.08: hotfix okna выбор "1" (decision_id не доходил)
+
+`before_tool_call` в `verify-plugin` теперь берёт текст выбора из `inbound.text`
+(message_received), а не из prompt агента; так `rewriteAsk1cParams` распознаёт
+`looksLikeChoiceAttempt('1')` и ставит `decision_id` в params `ask_1c`.
+
+`[замер]` оффлайн: `test-verify.mjs` **120/120**, `test_mcp_ask.py` **35/35**,
+`test_focus_loop.py` **26/26**, `test_decision_id.py` **31/31**. md5:
+`index.js` `ea31f6d7b93b7c9fffe42a30f184d590`. /opt не трогали — выкат
+оркестратору.
+
 ## 18.08: онбординг коробки — самонастройка вместо ручек (E4) `[код]` `[замер]`
 
 `[код]` Уроки ночи 17–18.08 ушли в установку/первый такт, без правок живых

@@ -19,6 +19,8 @@ suggestions не подходят. `/opt` и живой фронт не трог
 брендинга оркестратору. Живой: «сколько продали вчера всего?» → оба пункта
 и 79 752 611,64 / 79 925 955,81 — после выката.
 
+Hotfix: выбор «1» в okna больше не отпускал замок; rewrite берёт выбор из inbound.text (message_received), поэтому decision_id уходит в params `ask_1c`.
+
 🔴 **E4 онбординг коробки — код ЗАКРЫТ `[18.08]`**: `box_tune.sh` железо→conf
 (формулы из ночи: small ≤16 GiB → threads=4, limit 1.5×RAM, swap ceil(RAM);
 large → пул эмбеддера ≤96); Restart= 5/час у firstbuild/pipeline; форма

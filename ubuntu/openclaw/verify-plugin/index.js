@@ -286,7 +286,9 @@ export default definePluginEntry({
         }
       } else {
         const promptRec = prompts.get(sessKey);
-        const prompt = (promptRec && promptRec.text) || "";
+        const inbRec = inbound.get(sessKey) || null;
+        const promptFromUser = (inbRec && typeof inbRec.text === "string") ? inbRec.text : "";
+        const prompt = promptFromUser || ((promptRec && promptRec.text) || "");
         const rewritten = rewriteAsk1cParams(params, prompt, lock);
         params = rewritten.params;
         if (rewritten.action === "release") clarifyLocks.delete(sessKey);
