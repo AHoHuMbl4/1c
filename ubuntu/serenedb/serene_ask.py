@@ -1359,11 +1359,18 @@ def probe(groups):
             vals = resolve_values(alt)
             if not vals:
                 vals = _resolve_values_literal(alt)
+            _resolved_kind = "resolved"
+            if not vals:
+                vals = _resolve_values_corpus(alt)
+                _resolved_kind = "corpus_literal"
             if vals:
                 break
         if vals:
-            exprs = ["ts_phrase(%s)" % lit(v) for v in vals]
-            per_group[gi] = (0, exprs, "resolved")
+            if _resolved_kind == "corpus_literal":
+                exprs = ["ts_like(%s)" % lit(v) for v in vals]
+            else:
+                exprs = ["ts_phrase(%s)" % lit(v) for v in vals]
+            per_group[gi] = (0, exprs, _resolved_kind)
             diag.setdefault("_resolved", {})[gi] = vals
 
     out = []
@@ -2104,10 +2111,62 @@ def _resolve_values_literal(term):
             "SELECT DISTINCT value FROM resolver_index "
             "WHERE lower(value) LIKE '%%' || %s || '%%' "
             "ORDER BY length(value), value LIMIT %d"
-            % (lit(core), RESOLVE_KEEP))
-        return [r[0] for r in rows if r and r[0]]
+            % (lit(core), RESOLVE_KEEP * 4))
+        prefixes = {core}
+        if len(core) >= 5:
+            prefixes.add(core[:5])
+        if len(core) >= 4:
+            prefixes.add(core[:4])
+        out = []
+        for r in rows or []:
+            if not r or not r[0]:
+                continue
+            words = re.findall(r"[0-9a-zа-яё]+", str(r[0]).lower())
+            hit = False
+            for w in words:
+                if len(w) < 3:
+                    continue
+                for pref in prefixes:
+                    if len(pref) < 3:
+                        continue
+                    if w.startswith(pref) or pref.startswith(w[: len(pref)]):
+                        hit = True
+                        break
+                if hit:
+                    break
+            if hit:
+                out.append(r[0])
+            if len(out) >= RESOLVE_KEEP:
+                break
+        return out
     except RuntimeError:
         return []
+
+
+def _resolve_values_corpus(term):
+    """Подстрока в doc-индексе — когда резолвер не знает город (B8-03)."""
+    core = re.sub(r"[^0-9a-zа-яё]", "", (term or "").lower())
+    if len(core) < 3:
+        return []
+    prefixes = {core}
+    if len(core) >= 5:
+        prefixes.add(core[:5])
+    if len(core) >= 4:
+        prefixes.add(core[:4])
+    try:
+        for pref in sorted(prefixes, key=len, reverse=True):
+            if len(pref) < 3:
+                continue
+            pat = "%" + pref + "%"
+            r = psql("SELECT count(*) FROM %s WHERE doc @@ ts_like(%s)"
+                     % (INDEX, lit(pat)))
+            if r and int(r[0][0]) > 0:
+                return [pat]
+    except RuntimeError:
+        return []
+    return []
+
+
 
 
 def resolve_values(term):
@@ -7034,13 +7093,28 @@ def _src_covers_term_stems(src, term_stems):
 
 
 def align_picked_to_terms(picked, cands, intent, diag):
-    """Единственный кандидат, чьё имя покрывает terms вопроса — он и есть сущность (B8-06)."""
-    if not picked or len(picked) != 1 or not cands:
+    """B8-06: picked, не покрывающий stems terms, заменяется единственным cand, который покрывает."""
+    if not picked or len(picked) != 1:
         return picked
     term_stems = _term_stems(intent)
     if not term_stems:
         return picked
-    fits = [c for c in cands if _src_covers_term_stems(c, term_stems)]
+    pool = list(dict.fromkeys(list(cands or []) + list(picked)))
+    fits = [c for c in pool if _src_covers_term_stems(c, term_stems)]
+    if not fits and term_stems:
+        try:
+            core = sorted(term_stems, key=len, reverse=True)[0]
+            pat = "%%" + core + "%%"
+            extra = [r[0] for r in psql(
+                "SELECT src_table FROM %s WHERE lower(replace(label, ' ', '')) LIKE %s "
+                "OR lower(src_table) LIKE %s LIMIT 12"
+                % (TABLES, lit(pat), lit(pat))) if r and r[0]]
+            pool = list(dict.fromkeys(pool + extra))
+            fits = [c for c in pool if _src_covers_term_stems(c, term_stems)]
+        except RuntimeError:
+            pass
+    if picked[0] in fits and _src_covers_term_stems(picked[0], term_stems):
+        return picked
     if len(fits) == 1 and fits[0] != picked[0]:
         if diag is not None:
             diag["aligned_to_terms"] = {"was": picked[0], "became": fits[0]}
@@ -8087,6 +8161,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 picked = list(dict.fromkeys((picked or []) + extra))
                 diag["code_ambiguous"] = extra
 
+    if picked:
+        picked = align_picked_to_terms(picked, cands, intent, diag)
+
     # 🔴 РАСХОЖДЕНИЕ НЕЗАВИСИМЫХ СИГНАЛОВ — ЭТО И ЕСТЬ НЕОДНОЗНАЧНОСТЬ.
     # [замер 30.07] реранкер на вопрос «На какую сумму мы закупили товаров и услуг?»
     # пять раз подряд ставит первым «Суммы Документов В Валюте Регл» — по совпадению слов
@@ -8580,21 +8657,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _mword = (intent.get("measure") or "").strip()
         _fwant = (intent.get("want") or "").strip()
         try:
-            # Исход B — по полному раннему скану (cands[:16]), не по arb_pool[:3]:
-            # иначе эталонные B-пары отрезаются до 2–3 веток (B8-01/04).
-            if _fork_early.get("cls") and _fork_early.get("rows"):
-                _out_pool = list(_fork_early.get("pool") or [])
-                _rows = dict(_fork_early["rows"])
-                _cls = dict(_fork_early["cls"])
-                _rel = dict(_fork_early.get("rel") or {})
-            else:
-                _out_pool = list(arb_pool)
-                _mbs = _measures_by_src(_out_pool)
-                _als = _aliases_by_src(_out_pool)
-                _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
-                        for c in _out_pool}
-                _rows = fork_scan(match, preds, _rel)
-                _cls = fork_classes(_rows)
+            # Исход B — по полному arb_pool (соперники развилки), не по cands[:16]:
+            # ранний скан по отбору тянет посторонние классы (B8-01 регресс);
+            # arb_pool[:3] отрезал эталонные пары — pair_budget снят в fork_outcome_b.
+            _out_pool = list(arb_pool)
+            _mbs = _measures_by_src(_out_pool)
+            _als = _aliases_by_src(_out_pool)
+            _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
+                    for c in _out_pool}
+            _rows = fork_scan(match, preds, _rel)
+            _cls = fork_classes(_rows)
             if len(_cls) > 1:
                 _fork_log(_cls, _mword or (intent.get("want") or ""))
             _prev = dict(diag.get("fork") or {})

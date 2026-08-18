@@ -1,5 +1,32 @@
 # Журнал изменений
 
+## 18.08: B9 маршрутизация /ask okna `[код]` `[замер]`
+
+Четыре правки в `serene_ask.py` (без промт-правил, модель не трогали):
+
+1. count/list без величины не уходит в axis-clarify (`count_question_skips_axis`).
+2. `fork_outcome_b` без `pair_budget`; исход B считается по `arb_pool`, не по `cands[:16]`.
+3. probe: `_resolve_values_literal` (слово целиком, не «оказания» на «казан») + `ts_like` по префиксу (`_resolve_values_corpus`).
+4. `align_picked_to_terms` — сущность должна покрывать terms вопроса.
+
+`[замер]` оффлайн: test_gate 130, fork_detector 23, step4_guards 110, a3_passport 14,
+fork_outcomes 24, answer_atom 18, decision_id 24, mcp_ask 32, focus_loop 19,
+test_b9_routing **9/9**. test_ask_journal / test_ask_choice_memory: live-fail из-за
+WAL `__sdb_store` invalidated на деве (не код). md5 `serene_ask.py` **`4d055802858f9b01804bd40bade5f069`**.
+
+`[замер]` живой okna `:8097` (код из репо в `/tmp`, `/opt` и `:8091` не трогали), 6×3:
+
+| ID | до (B8 `:8091` ×5) | после (`:8097` ×3) |
+|---|---|---|
+| B8-01 | figures, 1/3 сумм | figures, 1/3 (79 752 611,64 есть; нет 1 572 493,22 и 79 925 955,81) |
+| B8-02 | clarify, 349 только в diag | **answer 349 в text 3/3** |
+| B8-03 | no_data | no_data (resolver_index без «Г. КАЗАНЬ») |
+| B8-04 | figures, не те пары | figures, эталоны 8 246/3 826/1 310 413,93 не все в text |
+| B8-05 | figures 74 907 | **figures 74 907 3/3** |
+| B8-06 | answer 74 407 | answer 74 407 (книга продаж+период; align не сменил picked) |
+
+Полных **6/18**. Выкат на бой не делали.
+
 ## 18.08: финиш веб-фронта okna — memory-core + STT в БД `[замер]`
 
 **Замок 1 — memory-core web-профиль (10.3.0.4):** корень — в `~/.openclaw-web`

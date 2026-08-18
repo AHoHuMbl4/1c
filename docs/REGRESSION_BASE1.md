@@ -1,3 +1,12 @@
+## Замер 18.08 — B9 маршрутизация /ask (okna)
+
+Правка `ubuntu/serenedb/serene_ask.py` + `test_b9_routing.py`. **Снят ПОСЛЕ последней правки.**
+Оффлайн: test_gate 130, fork_detector 23, step4_guards 110, a3 14, fork_outcomes 24,
+answer_atom 18, decision_id 24, mcp_ask 32, focus_loop 19, test_b9_routing 9/9.
+Живой прогон — okna `:8097` (не юнит `:8091`); первая база этим заходом `/ask` golden.sh
+не гонялась (локальный `:8097` слушал postgres 103808 — чужой инстанс сессии).
+Юниты `/opt` не перезапускались. Регрессии первой базы по оффлайн-замкам нет.
+
 ## Замер 18.08 — память выбора: DDL okna + ASK_MEMORY_APPLY
 
 DDL `ask_journal`/`ask_choice_memory` на okna (`167.233.249.110`, postgres

@@ -1193,7 +1193,10 @@ compose ПЛЮС паспорт (`from`/`to`/`label`/`measure`), а `_slot_fp` �
 всех подписанных src одного fork_key). **B — одна пара на класс атома**, подпись класса
 — по представителю (`_class_label_lookup`); без подписи → C. `want=sum` — атом sum,
 не count. `_fork_log` пишет **каждый класс атомов** отдельной строкой в
-`search_fork_class`.
+`search_fork_class`. **B9 (18.08):** `fork_outcome_b` не режет `FORK_PAIR_MAX`;
+count/list без величины пропускает axis-clarify (`count_question_skips_axis`);
+`align_picked_to_terms` сводит сущность к единственному cand, покрывающему terms;
+probe: literal-резолвер + `ts_like` по префиксу, если вектор/ILIKE не нашли значение.
 
 Тождественно нулевая величина в атоме форка — не «0» в паре (тот же класс, что
 правило 03.08 на одиночном ответе). `_fork_answering_sums` отсекает нули и меры
