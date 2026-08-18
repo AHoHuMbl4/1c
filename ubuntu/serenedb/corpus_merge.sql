@@ -76,7 +76,13 @@ FROM (SELECT count(*) AS уйдёт FROM search_corpus c
                         WHERE t.src_table = c.src_table AND t.row_key = c.row_key)
         AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
                         WHERE t.src_table = c.src_table
-                          AND t.row_key = regexp_replace(c.row_key, '#[0-9a-f]{40}$', '')));
+                          AND t.row_key = regexp_replace(c.row_key, '#[0-9a-f]{40}$', ''))
+        -- Смена формы ключа (в ключ регистра дописали LineNumber) — не потеря
+        -- объекта: GUID регистратора/ссылки — первый кусок ключа, склеенного `|`.
+        AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                        WHERE t.src_table = c.src_table
+                          AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '|', 1)
+                          AND split_part(c.row_key, '|', 1) <> ''));
 
 -- Сужение величин — не ошибка, но и не пустяк: строка теряет числа, оставаясь на месте,
 -- и по журналу это неотличимо от «их там и не было». Считаем ДО записи, пока прежнее

@@ -40,10 +40,31 @@ SELECT entity, x.prop, x.edm FROM (
   FROM (SELECT entity, unnest(regexp_extract_all(body,'<Property\s+Name="([^"]+)"\s+Type="([^"]+)"')) AS s
         FROM tmp3_ent));
 
+-- Объявленный ключ обёртки регистра — `{Recorder, Recorder_Type}`: одна запись на
+-- документ. Движения различает платформенный `LineNumber` (имя 1С, не базы). Без
+-- него ключ корпуса — GUID|тип или GUID|тип#sha1(текст): смена Period меняет
+-- отпечаток, MERGE вставляет новую строку, старая живёт до DELETE всей сущности.
+-- [замер 18.08 okna] 155 строк 17.08 в корпусе при 176 в витрине — те же Recorder,
+-- Period уже 19.08. Дописываем LineNumber ТОЛЬКО если колонка есть в витрине и
+-- ключ уже содержит Recorder (доки: sql/functions/list#list_concat).
 CREATE OR REPLACE TABLE tmp3_key AS
-SELECT entity, regexp_extract_all(regexp_extract(body,'(?s)<Key>(.*?)</Key>',1),
-                                  '<PropertyRef\s+Name="([^"]+)"',1) AS key_cols
-FROM tmp3_ent;
+WITH raw AS (
+  SELECT entity, regexp_extract_all(regexp_extract(body,'(?s)<Key>(.*?)</Key>',1),
+                                    '<PropertyRef\s+Name="([^"]+)"',1) AS key_cols
+  FROM tmp3_ent
+), lined AS (
+  SELECT table_name AS entity
+    FROM duckdb_columns()
+   WHERE database_name = current_database() AND column_name = 'LineNumber'
+)
+SELECT r.entity,
+       CASE WHEN list_contains(r.key_cols, 'LineNumber') THEN r.key_cols
+            WHEN NOT list_contains(r.key_cols, 'Recorder') THEN r.key_cols
+            WHEN l.entity IS NULL THEN r.key_cols
+            ELSE list_concat(r.key_cols, ['LineNumber'])
+       END AS key_cols
+FROM raw r
+LEFT JOIN lined l ON l.entity = r.entity;
 
 -- 🔴 Ответ 200 с НЕ ТЕМ телом (страница ошибки IIS, обрезанный XML, смена формата) даёт
 -- пустые таблицы без единой ошибки. Дальше: ключей нет -> `keypos` пуст у всех колонок
@@ -68,6 +89,13 @@ INSERT INTO search_quality SELECT 'meta_entities', count(*), 'сущностей
 SELECT 'метаданные' AS шаг, (SELECT count(*) FROM tmp3_ent) AS сущностей,
        (SELECT count(*) FROM tmp3_prop) AS свойств,
        (SELECT count(*) FROM tmp3_key WHERE len(key_cols) > 0) AS с_ключом;
+
+DELETE FROM search_quality WHERE k = 'key_linenumber_appended';
+INSERT INTO search_quality
+SELECT 'key_linenumber_appended', count(*),
+       'регистров: в ключ корпуса добавлен LineNumber'
+FROM tmp3_key
+WHERE list_contains(key_cols, 'Recorder') AND list_contains(key_cols, 'LineNumber');
 
 -- ============ 2. КЛАССИФИКАЦИЯ КОЛОНОК ============
 -- ТАБЛИЦА, а не VIEW: коррелированный подзапрос к представлению с оконной функцией

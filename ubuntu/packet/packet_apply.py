@@ -495,6 +495,21 @@ def _check_mix_versions(table: str) -> None:
         raise Quarantine("mix_versions")
 
 
+def _delta_delete_clause(table: str, mart_cols: list) -> str:
+    """DELETE дельты: Ref_Key если есть, иначе Recorder+LineNumber регистра."""
+    nat = [c for c in ("Recorder", "LineNumber", "Recorder_Type") if c in mart_cols]
+    if "Ref_Key" in mart_cols:
+        return ('DELETE FROM "%s" WHERE "Ref_Key" IN '
+                '(SELECT "Ref_Key" FROM "d_%s");\n' % (table, table))
+    if "Recorder" in nat and "LineNumber" in nat:
+        eqs = " AND ".join(
+            '"%s"."%s" IS NOT DISTINCT FROM "d_%s"."%s"' % (table, c, table, c)
+            for c in nat)
+        return ('DELETE FROM "%s" WHERE EXISTS (SELECT 1 FROM "d_%s" '
+                'WHERE %s);\n' % (table, table, eqs))
+    raise Quarantine("delta_without_key")
+
+
 def _delta_sql(table: str, src: str, header: list[str]) -> str:
     # Источник истины формы — poc_load_entity.load_entity_delta (строки ~707-736):
     # состав колонок дельты выравнивается по ВИТРИНЕ (её список из duckdb_columns),
@@ -528,11 +543,18 @@ def _delta_sql(table: str, src: str, header: list[str]) -> str:
     # «прислано/легло» есть только у full). Полные копии (шапка без полей ТЧ)
     # DISTINCT снимает — случай 14.08 «79 копий» закрыт тем же. Повтор пакета
     # по-прежнему безопасен: DELETE снимает прошлую порцию тех же ключей.
+    # Регистр без Ref_Key: естественный ключ строки — Recorder+LineNumber
+    # (+ Recorder_Type, если колонка есть). DELETE по отсутствующему Ref_Key
+    # на 26.07.3 падает; full_entity этот путь не берёт, дельта регистра — да.
+    if "Ref_Key" not in mart_cols:
+        nat = [c for c in ("Recorder", "LineNumber", "Recorder_Type") if c in mart_cols]
+        _log("delta %s: нет Ref_Key, слияние по %s" % (table, nat))
+    delete_sql = _delta_delete_clause(table, mart_cols)
     return ('CREATE OR REPLACE TEMP TABLE "d_%s" AS '
             'SELECT DISTINCT * FROM (%s) AS q;\n'
-            'DELETE FROM "%s" WHERE "Ref_Key" IN (SELECT "Ref_Key" FROM "d_%s");\n'
+            '%s'
             'INSERT INTO "%s" (%s) SELECT %s FROM "d_%s";\n'
-            % (table, src, table, table, table, cols, sel, table))
+            % (table, src, delete_sql, table, cols, sel, table))
 
 
 def _apply_gone(path: str, changed_tables: set) -> int:

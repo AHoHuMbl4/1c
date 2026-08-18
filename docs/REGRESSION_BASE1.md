@@ -1,3 +1,12 @@
+## Замер 18.08 — корпус/витрина okna, ключ регистра, /health по дням
+
+Правка `corpus_build.sql` / `corpus_merge.sql` / `serene_ask.py` / `packet_apply.py`.
+**Снят ПОСЛЕ последней правки.** Оффлайн: `test_health_gap` 14/14,
+`test_delta_register_key` 5/5, `test_period_bounds` 3 (живые SQL этой машины нет).
+Первая база `/ask` golden этим заходом не гонялась: выкат и рестарт сервисов
+запрещены (оркестратор). Юниты `/opt` не трогались. Регрессии первой базы по
+оффлайн-замкам нет. Живой okna — после flock и выката.
+
 ## Замер 18.08 — stop1 sum / fallback figures (`serene_ask.py`)
 
 Правка `ubuntu/serenedb/serene_ask.py` + `test_compose.py`. **Снят ПОСЛЕ
