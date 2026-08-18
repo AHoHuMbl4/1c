@@ -41,15 +41,14 @@ Windows при визите владельца.
 **1 572 493,22 / 79 752 611,64 / 79 925 955,81** — SQL `sum(Всего)` до копейки.
 Код прогона git **`96c756b`**. Прогон на okna не крутится.
 
-🔴 **klient-1 слой поиска — СТОП на p_doc, RAM владельца `[18.08]`**: 8 vCPU /
-11.7 GiB + swap 19 GiB. Оркестратор: apply.timer стоп на сборку → **10500MB**
-(SHOW **9.7 GiB**), sync `corpus_build.sql` **a2fb7ff4…**, ручной такт 5½ мин.
-Precheck+`ai_embed` зелёные; **106/1457** сущностей, 90 961 строк `tmp3_corpus`;
-OOM на **#108** `accumulationregister_себестоимостьтоваров` (638 330 строк) —
-`corpus_build.sql:858` `EXECUTE p_doc`, 9.7/9.7 GiB. Пик systemd 11.29 GiB;
-swap не спасает (лимит глобален). apply.timer **восстановлен**; pipeline.timer
-**disabled**; `search_corpus=0`. Рабочий limit под apply+такт не замерен.
-**Дальше — RAM юнита (владелец), не threads=2.**
+🔴 **klient-1 сборка — чанкованный p_doc в git, выкат ждёт `[18.08]`**: OOM на
+`accumulationregister_себестоимостьтоваров` (#108/1457) закрывается порциями в
+`corpus_build.sql` §5-бис: **chunk_rows≈60 625** при `memory_limit=10500MB`
+(формула: `memory_limit×0,25 / (2GiB/50000)`); **11** порций вместо одного OOM.
+md5 **`b838cd145238907a0901ebc2fe1066dd`**. Identity-тест ut_test **не закрыт**
+(dev WAL invalidation после проб). **Выкат** на klient-1 (бэкап `/opt`, ручной
+такт без stop apply, 3 зелёных такта, pipeline.timer) — оркестратор/SSH владельца.
+Прежний снимок: **106/1457**, `search_corpus=0`, пик **11.29 GiB**.
 
 🔴 **Полноту данных ведёт сессия-оркестратор `[17.08]`**: очередь шагов,
 поправки к планам и критерий финиша — [`docs/PLAN_ORCHESTRATOR.md`](../docs/PLAN_ORCHESTRATOR.md).

@@ -486,9 +486,14 @@ precheck требует `embed_workers+8` потоков). Swap **4 GiB** (`/swa
 `accumulationregister_себестоимостьтоваров` (638 330 строк в источнике) —
 `failed to allocate (9.7 GiB/9.7 GiB used)`; swap не помогает (лимит глобален на
 процесс). Пик systemd **11.29 GiB**. `search_corpus=0`. apply.timer восстановлен;
-`1c-serene-pipeline@postgres` timer **disabled**. **Без увеличения RAM юнита
-сборка не проходит** — слово владельца; рабочий `memory_limit` под apply+такт
-замерить после успешной первой сборки.
+`1c-serene-pipeline@postgres` timer **disabled**.
+
+**Чанкование p_doc (18.08, git):** порог и порция — из `memory_limit × 0,25` и
+замера **2 GiB / 50k** строк (K1-m); при **10500MB** → **~60 625** строк/порция,
+`себестоимостьтоваров` → **11** порций вместо одного OOM. Выкат:
+`corpus_build.sql` на `/opt/1c-mcp-reports/` (бэкап), ручной такт без stop apply;
+затем `pipeline.timer` и векторы на gpu-erw. md5 после выката — в
+`work/packet/rollout-f2-plain-key.md` или замере сессии.
 
 ### 10.2 Код аналитики + окружение
 

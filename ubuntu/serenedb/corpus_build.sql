@@ -567,10 +567,83 @@ QUALIFY row_number() OVER (PARTITION BY tbl ORDER BY pr, ord) = 1;
 
 
 -- ============ 6. СБОРКА ТЕКСТА ============
-CREATE OR REPLACE TABLE tmp3_corpus
+
+-- ============ 5-бис. ЧАНКОВАНИЕ p_doc (крупные сущности) ============
+-- [замер K1-m 18.08, klient-1] `EXECUTE p_doc` на accumulationregister_себестоимостьтоваров
+-- (638 330 строк, 100 колонок) — in-memory working set >9,7 GiB (unspillable); та же
+-- логика порциями по 50 000 строк — 638 330/638 330, RSS ~2 GiB на порцию.
+--
+-- 🔴 ПОРОГ И РАЗМЕР ПОРЦИИ — ВЫВЕДЕНЫ, НЕ ПОДОБРАНЫ:
+--   ws_bytes_per_row = 2 GiB / 50 000  (замер рабочего набора на строку этой формы);
+--   chunk_budget     = memory_limit × 0,25  (50k строк ≈ 21 % лимита 9,7 GiB);
+--   chunk_rows       = floor(chunk_budget / ws_bytes_per_row);
+--   порог чанкования = chunk_rows: больше — порции, иначе — прежний `p_doc` целиком.
+-- На другой коробке пересчитается от `SHOW memory_limit` (Configuration › Pragmas › Memory Limit).
+CREATE OR REPLACE TABLE tmp3_pdoc_cfg AS
+WITH ml AS (SELECT current_setting('memory_limit') AS s),
+     mem AS (
+       SELECT CASE WHEN s LIKE '%GiB' THEN try_cast(regexp_extract(s, '^([0-9.]+)', 1) AS DOUBLE) * power(1024::BIGINT, 3)
+                   WHEN s LIKE '%GB'  THEN try_cast(regexp_extract(s, '^([0-9.]+)', 1) AS DOUBLE) * power(1000::BIGINT, 3)
+                   WHEN upper(s) LIKE '%MIB' OR upper(s) LIKE '%MB'
+                        THEN try_cast(regexp_extract(s, '^([0-9.]+)', 1) AS DOUBLE) * power(1024::BIGINT, 2)
+                   ELSE try_cast(regexp_extract(s, '^([0-9.]+)', 1) AS DOUBLE) END AS mem_bytes
+       FROM ml)
+SELECT 2147483648.0 / 50000.0 AS ws_bytes_per_row,
+       0.25 AS mem_fraction,
+       greatest(1000::BIGINT,
+                floor((SELECT mem_bytes FROM mem) * 0.25
+                      / (2147483648.0 / 50000.0))::BIGINT) AS chunk_rows
+FROM mem;
+
+CREATE TABLE IF NOT EXISTS tmp3_pdoc_progress (tbl VARCHAR PRIMARY KEY, rid_hi BIGINT, nrows BIGINT);
+CREATE TABLE IF NOT EXISTS tmp3_pdoc_stage (
+  src_table VARCHAR, rk VARCHAR, doc VARCHAR, refs VARCHAR,
+  nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP,
+  refs_map MAP(VARCHAR, VARCHAR), refs_own MAP(VARCHAR, VARCHAR));
+
+CREATE OR REPLACE TABLE tmp3_resume_pdoc AS
+SELECT coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01') < now() - INTERVAL '6 hours'
+       AND (SELECT count(*) FROM tmp3_pdoc_progress) > 0 AS on_;
+
+CREATE OR REPLACE TABLE tmp3_entity_rows AS
+SELECT b.tbl, (SELECT count(*)::BIGINT FROM query_table(b.tbl)) AS nrows
+FROM tmp3_build b;
+
+CREATE OR REPLACE TABLE tmp3_pdoc_chunks AS
+SELECT e.tbl, gs AS lo, least(gs + cfg.chunk_rows - 1, e.nrows) AS hi, e.nrows
+FROM tmp3_entity_rows e
+CROSS JOIN tmp3_pdoc_cfg cfg
+CROSS JOIN LATERAL (SELECT unnest(generate_series(1::BIGINT, e.nrows, cfg.chunk_rows)) AS gs) g
+WHERE e.nrows > cfg.chunk_rows;
+
+DELETE FROM search_quality WHERE k IN ('pdoc_chunk_rows', 'pdoc_chunk_entities', 'pdoc_resume');
+INSERT INTO search_quality SELECT 'pdoc_chunk_rows', chunk_rows, current_setting('memory_limit')
+FROM tmp3_pdoc_cfg;
+INSERT INTO search_quality SELECT 'pdoc_chunk_entities', count(DISTINCT tbl), 'сущностей выше порога'
+FROM tmp3_pdoc_chunks;
+INSERT INTO search_quality SELECT 'pdoc_resume', (SELECT on_::INT FROM tmp3_resume_pdoc),
+  CASE WHEN (SELECT on_ FROM tmp3_resume_pdoc) THEN 'докатка чанков' ELSE 'свежий такт' END;
+
+CREATE TABLE IF NOT EXISTS tmp3_corpus
   (src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
    nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP,
    refs_map MAP(VARCHAR, VARCHAR), refs_own MAP(VARCHAR, VARCHAR));
+DELETE FROM tmp3_corpus WHERE NOT (SELECT on_ FROM tmp3_resume_pdoc);
+
+DELETE FROM tmp3_pdoc_stage s
+WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_chunks c WHERE c.tbl = s.src_table)
+  AND NOT (SELECT on_ FROM tmp3_resume_pdoc);
+DELETE FROM tmp3_pdoc_progress p
+WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_chunks c WHERE c.tbl = p.tbl)
+  AND (NOT (SELECT on_ FROM tmp3_resume_pdoc)
+       OR EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = p.tbl));
+
+SELECT 'pdoc лимиты' AS шаг,
+       (SELECT ws_bytes_per_row FROM tmp3_pdoc_cfg)::BIGINT AS ws_байт_на_строку,
+       (SELECT chunk_rows FROM tmp3_pdoc_cfg) AS порция_строк,
+       (SELECT v FROM search_quality WHERE k = 'pdoc_chunk_entities') AS крупных,
+       (SELECT note FROM search_quality WHERE k = 'pdoc_resume') AS режим;
+
 
 PREPARE p_doc AS
 INSERT INTO tmp3_corpus
@@ -814,6 +887,231 @@ QUALIFY NOT (SELECT on_ FROM fold)
      OR row_number() OVER (PARTITION BY src_table, row_key
           ORDER BY doc, refs, doc_hash) = 1) qq;
 
+
+PREPARE p_doc_chunk AS
+INSERT INTO tmp3_pdoc_stage
+WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
+ -- 🔴 ОДНО ВЫРАЖЕНИЕ НА ДВА МЕСТА. Прежде условие «есть где взять» стояло только у
+ -- отбрасывания колонок, а свёртка строк была безусловной: там, где условие защитило
+ -- колонки, строки всё равно схлопывались до одной — и данные табличной части исчезали.
+ -- Защита стояла на входе, а потеря происходила на выходе. Теперь оба места смотрят
+ -- в одно выражение, и разойтись не могут по построению.
+ --
+ -- Подчёркивания В САМОМ имени экранируются: имя объекта 1С законно бывает с
+ -- подчёркиванием (отраслевые префиксы), и без экранирования `Catalog_Мои_Товары`
+ -- считался бы дочерним для `Catalog_Мои`.
+ fold AS (SELECT (SELECT key_cols FROM kc) = ['Ref_Key'] AS on_),
+ -- coalesce ДО unpivot: иначе пустые ячейки исчезают вовсе (UNPIVOT роняет NULL), и
+ -- составной ключ схлопывается. Боевой ключ выглядит как «160.1|||ЛЕПРО|___|ЗП80РК» —
+ -- пустые сегменты значимы, они держат позицию. Без них разные строки дают ОДИН ключ,
+ -- то есть строка теряется молча (п. 13). Замерено: 789 строк из 97 965.
+ -- ОБРЕЗКА ЗНАЧЕНИЯ. Хранилища и вложения приезжают в витрину как текст, и без обрезки
+ -- строка корпуса вырастает до сотен тысяч символов. [замер 27.07] без неё самый длинный
+ -- текст стал 560 400 символов против 15 724 у боевого кода, и две такие строки не могут
+ -- получить вектор вовсе: у эмбеддера предел длины входа 33 000. Режем ЗНАЧЕНИЕ, а не
+ -- строку целиком — так теряется хвост вложения, а не реквизиты (боевой аналог — clip()).
+ src AS (SELECT row_number() OVER () AS rid, substr(coalesce(COLUMNS(*)::VARCHAR, ''), 1, 20000) FROM query_table($1)),
+ src_f AS (SELECT * FROM src WHERE rid BETWEEN $2::BIGINT AND $3::BIGINT),
+ cells AS (SELECT * FROM src_f UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (rid))))),
+ -- Ключ собирается ОТДЕЛЬНО и до отбрасывания пустых: он про тождество строки,
+ -- а не про текст. Порядок сегментов — объявленный порядок ключа из $metadata.
+ keyed AS (
+   SELECT u.rid, string_agg(u.val, '|' ORDER BY list_position((SELECT key_cols FROM kc), u.col)) AS row_key
+   FROM cells u
+   WHERE list_position((SELECT key_cols FROM kc), u.col) IS NOT NULL
+   GROUP BY u.rid),
+ j AS (
+   SELECT u.rid, u.col, u.val, c.ord, c.kind, c.own_ref,
+          list_position((SELECT key_cols FROM kc), u.col) AS keypos,
+          r.name AS refname, r.owner AS refowner,
+          (c.kind='ref' OR regexp_full_match(u.val,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')) AS is_guid,
+          (c.kind IN ('text','flag') AND NOT c.is_companion AND c.col <> 'DataVersion'
+           AND NOT regexp_matches(u.val,'^(https?://|/)')) AS in_text,
+          (c.kind = 'num') AS is_num,
+          -- Булев реквизит — ОТДЕЛЬНАЯ карта, как и величины, и по той же причине:
+          -- обращаться к реквизиту по имени, а не искать подстроку в тексте документа.
+          -- [ревизия 30.07] `contains(doc, 'IsFolder: true')` — подстрочный поиск: литерал
+          -- может встретиться в комментарии или наименовании, и запись молча выпадет из
+          -- счёта. Сегодня совпадений нет (375 = 375 по граничному regexp), но булевых
+          -- реквизитов в корпусе 830 имён у 376 301 строки — на следующем совпадёт.
+          -- Агент `serenedb-native` проверил на живом движке: штатного способа достать
+          -- именованный реквизит из УЖЕ СОБРАННОГО текста у движка нет, `ts_phrase` даёт
+          -- ровно те же ложные срабатывания. Значит карта строится при сборке.
+          (c.kind = 'flag') AS is_flag,
+          -- 🔴 ВЕЛИЧИНА И ЧИСЛО В ТЕКСТЕ — РАЗНЫЕ ВЕЩИ, И ЭТО ОПЛАЧЕНО ОШИБКОЙ.
+          -- [замер 30.07] `SurrogateKey` попал в карту величин у 656 сущностей,
+          -- `LineNumber` — у 359, и на вопрос «сколько штук закупили» система отвечала
+          -- «считано по величине SurrogateKey». Складывать ключ бессмысленно: это
+          -- тождество строки, а не измерение.
+          --
+          -- Первая моя попытка исключила их из `is_num` — то есть СРАЗУ и из величин, и из
+          -- ТЕКСТА строки. Слияние отказало: «дублей ключа 1368». У обёрток регистров ключ
+          -- объявлен как `{Recorder, Recorder_Type}` и строки НЕ различает — их различал
+          -- именно номер строки в тексте. Без него тексты совпали, отпечатки совпали.
+          -- Защита сработала и перенос остановила, корпус остался цел.
+          --
+          -- Поэтому признаки разведены: в тексте число остаётся (оно про тождество
+          -- строки), в карту величин не идёт (там только то, что можно складывать).
+          -- Отличаем двумя правилами и БЕЗ списка слов о конкретной базе:
+          --   1) колонка входит в объявленный ключ (`$metadata` → `kc`) — тот же источник,
+          --      что `Ref_Key`; снимает `SurrogateKey` целиком (656 → 0);
+          --   2) `LineNumber`/`SurrogateKey` — имена САМОЙ ПЛАТФОРМЫ 1С, одинаковые на
+          --      любой конфигурации и языке. Нужны потому, что у обёрток регистров первое
+          --      правило их не ловит: [замер] уцелели 95 сущностей из 359. Тот же класс
+          --      факта, что `Ref_Key` и `DataVersion`.
+          (c.kind = 'num'
+           AND list_position((SELECT key_cols FROM kc), u.col) IS NULL
+           AND u.col NOT IN ('LineNumber', 'SurrogateKey')) AS is_measure,
+          -- ВСЕ даты строки, а не только выбранная. Прежде дата, не ставшая `doc_date`,
+          -- не попадала НИКУДА: ни в текст, ни в величины. [замер 28.07] так пропадали
+          -- 83 колонки и 30 909 значений, а у 24 сущностей не оставалось ни одной даты
+          -- вовсе — «когда открыт счёт», «до какого числа действует договор», «дата
+          -- регистрации контрагента» отвечать было нечем. `doc_date` по-прежнему одна:
+          -- она про фильтр по периоду, а текст — про то, что человек может спросить.
+          (c.kind = 'date') AS is_date,
+          (SELECT 1 FROM tmp3_datecol   d WHERE d.tbl=$1 AND d.col=u.col) AS is_dt
+   FROM cells u JOIN tmp3_cls c ON c.tbl=$1 AND c.col=u.col
+   -- 🔴 СОЕДИНЯЕМСЯ ТОЛЬКО С GUID-ОБРАЗНЫМИ ЗНАЧЕНИЯМИ. Прежде ключом соединения было
+   -- ЛЮБОЕ значение ячейки. Два следствия, оба плохие:
+   --   1) движок хеширует все ячейки подряд (миллионы) против 39 тыс. записей карты —
+   --      лишняя работа на каждой сущности;
+   --   2) 🔴 значение с БИТОЙ КОДИРОВКОЙ роняет соединение целиком:
+   --      `Invalid unicode (byte sequence mismatch) detected in value construction`.
+   --      [замер 28.07, вторая база] на `catalog_правилаинтеграциис1сдокументооборотом`
+   --      это убивало сборку ВСЕЙ сущности, а с `ON_ERROR_STOP on` — и весь такт.
+   --      Проверено: исходное значение соединяется, а после нашей же обрезки
+   --      `substr(…,1,20000)` — падает. То есть дефект наш, а не данных: на первой базе
+   --      он просто не стрелял, потому что там не было таких значений.
+   -- GUID по определению ASCII, поэтому битые байты до хеша не доходят вовсе.
+   -- Ссылкой может быть ТОЛЬКО GUID — значит сужение не теряет ни одной связи.
+   LEFT JOIN tmp3_refmap r
+          ON r.guid = CASE WHEN regexp_full_match(u.val,
+               '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+             THEN u.val END
+   -- 🔴 У ССЫЛОЧНОГО ОБЪЕКТА ПОЛЯ ВЛОЖЕННОГО ТИПА В ТЕКСТ НЕ ИДУТ.
+   -- Вложенная табличная часть разворачивается загрузчиком в ту же таблицу, и её колонки
+   -- (`LineNumber`, номенклатура, количество…) попадали в текст объекта, размножая строки:
+   -- [замер 29.07] партнёров 216 строк на 164 объекта, раздуто 85 сущностей / 9 155 строк.
+   -- Бот отвечал «216 партнёров» вместо 164, и гейт это пропускал: 216 действительно
+   -- посчитано базой — посчитано не то.
+   -- Эти колонки НЕ теряются: табличная часть — отдельная сущность 1С, она загружена и в
+   -- корпусе есть у всех затронутых родителей (проверено).
+   -- Признак `own_prop` считается один раз в `tmp3_cls`; ключевые колонки не отбрасываются
+   -- никогда — иначе рассыпется тождество строки.
+   -- У обёрток наборов записей (регистры, ключ ≠ `['Ref_Key']`) поведение прежнее: там
+   -- вложенные строки и есть данные, [замер] сворачивание занизило бы число проводок вдвое.
+   -- 🔴 ВЫБРАСЫВАЕМ ТОЛЬКО ТО, ЧТО ЕСТЬ ГДЕ ВЗЯТЬ. Колонки вложенного типа убираются из
+   -- текста объекта лишь при условии, что сама вложенная сущность ЗАГРУЖЕНА и есть в
+   -- источниках. Иначе это не перенос, а потеря.
+   -- [замер 30.07] на второй базе дочерняя есть у всех затронутых — и я этого условия не
+   -- увидел. На ПЕРВОЙ базе из 41 затронутой сущности у **25 дочерней нет вовсе**: без
+   -- условия их колонки исчезли бы из текста, а взять их было бы негде.
+   -- Одна база снова умолчала о случае, которого в ней нет.
+   -- `coalesce(own_prop, true)` — БЕЗОПАСНОЕ НАПРАВЛЕНИЕ. `own_prop` считается через
+   -- LEFT JOIN, и у колонки, которую не объявлял НИКТО, он NULL. Без `coalesce` всё
+   -- выражение давало NULL, и `WHERE` выбрасывал ячейку — то есть терялось ровно то, про
+   -- что неизвестно, где его взять. Считаем такую колонку своей: лишний текст дешевле
+   -- потери.
+   WHERE u.val <> ''
+     AND NOT (coalesce(c.own_ref, false) AND NOT coalesce(c.own_prop, true)
+              AND list_position((SELECT key_cols FROM kc), u.col) IS NULL
+              AND (SELECT on_ FROM fold)
+              -- Проверяем ИМЕННО ту сущность, что объявила колонку.
+              AND EXISTS (SELECT 1 FROM tmp3_src s2 WHERE lower(s2.tbl) = c.decl_entity))),
+ pieces AS (
+   SELECT rid, ord, keypos, val, is_guid, refname, refowner, own_ref, col, is_num, is_measure, is_flag, is_dt, is_date,
+     CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
+          WHEN is_guid AND refname IS NOT NULL THEN replace(col,'_Key','') || ': ' || refname
+          WHEN is_guid THEN NULL
+          WHEN is_num AND try_cast(val AS DOUBLE) IS NOT NULL THEN col || ': ' ||
+               CASE WHEN try_cast(val AS DOUBLE) = floor(try_cast(val AS DOUBLE))
+                    THEN printf('%d', try_cast(val AS BIGINT))
+                    ELSE printf('%.2f', try_cast(val AS DOUBLE)) END
+          -- Незаполненная дата приезжает из 1С как `0001-01-01` — это НЕ дата, а пустое
+          -- место, и в тексте ему делать нечего.
+          WHEN is_date THEN nullif(col || ': ' || substr(val,1,10), col || ': 0001-01-01')
+          WHEN in_text THEN col || ': ' || val
+          ELSE NULL END AS piece,
+     CASE WHEN is_guid THEN 0 WHEN is_num THEN 2 WHEN is_date THEN 3 ELSE 1 END AS prio
+   FROM j)
+-- 🔴 ДВА УРОВНЯ, А НЕ ОДИН. `QUALIFY` не может ссылаться на ключ, который сам считается
+-- оконной функцией: движок отвечает `window function calls cannot be nested`. Ключ
+-- строится на внутреннем уровне, выбор одной строки на объект — на внешнем.
+-- 🔴 ДАЖЕ С ОТПЕЧАТКОМ ТЕКСТА КЛЮЧ МОЖЕТ ПОВТОРИТЬСЯ: у развёрнутых строк одного
+-- регистратора текст бывает одинаков целиком (две одинаковые строки табличной части —
+-- в 1С их различает LineNumber, а у текста различия нет). [замер 15.08, okna-1] после
+-- починки дедупа приёмника (строки табчастей доезжают все) слияние остановила защита:
+-- 17 269 дублей ключа в tmp3_corpus. Схлопывать такие строки нельзя (п. 13): это
+-- разные движения, и в суммах нужны обе. Ключ дополняется порядковым номером по
+-- полному детерминированному порядку — набор ключей стабилен между тактами, пока
+-- стабильны данные, и обе строки остаются в корпусе.
+SELECT src_table, rk, doc, refs, nums, flags, dt AS doc_date, refs_map, refs_own
+FROM (
+SELECT src_table, coalesce(row_key, sha1(doc)) AS rk, doc, refs, nums, flags, dt, refs_map, refs_own
+FROM (
+  SELECT $1::VARCHAR AS src_table,
+         coalesce(any_value(k.row_key),
+                  max(val) FILTER (is_guid AND col='Ref_Key' AND own_ref)) AS row_key,
+         regexp_replace($1,'^[^_]*_','') || coalesce(' | ' || string_agg(piece,' | ' ORDER BY prio, ord)
+                                                     FILTER (piece IS NOT NULL), '') AS doc,
+         coalesce(string_agg(piece,' | ' ORDER BY ord) FILTER (is_guid AND refname IS NOT NULL), '') AS refs,
+         map_from_entries(list({'key': col, 'value': try_cast(val AS DOUBLE)} ORDER BY col)
+                          FILTER (is_measure AND try_cast(val AS DOUBLE) IS NOT NULL)) AS nums,
+         coalesce(map_from_entries(list({'key': col, 'value': try_cast(val AS BOOLEAN)} ORDER BY col)
+                          FILTER (is_flag AND try_cast(val AS BOOLEAN) IS NOT NULL)),
+                  MAP{}::MAP(VARCHAR, BOOLEAN)) AS flags,
+         coalesce(map_from_entries(list({'key': replace(col,'_Key',''),
+                                         'value': coalesce(refname, val)} ORDER BY col)
+                          FILTER (is_guid AND col <> 'Ref_Key'
+                                  AND coalesce(val,'') <> ''
+                                  AND val <> '00000000-0000-0000-0000-000000000000')),
+                  MAP{}::MAP(VARCHAR, VARCHAR)) AS refs_map,
+         coalesce(map_from_entries(list({'key': replace(col,'_Key',''),
+                                         'value': refowner} ORDER BY col)
+                          FILTER (is_guid AND col <> 'Ref_Key'
+                                  AND refowner IS NOT NULL AND refowner <> '')),
+                  MAP{}::MAP(VARCHAR, VARCHAR)) AS refs_own,
+         max(nullif(try_cast(val AS TIMESTAMP), TIMESTAMP '0001-01-01 00:00:00'))
+             FILTER (is_dt IS NOT NULL) AS dt
+  FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g) h;
+
+
+PREPARE p_doc_finalize AS
+INSERT INTO tmp3_corpus
+WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
+fold AS (SELECT (SELECT key_cols FROM kc) = ['Ref_Key'] AS on_),
+base AS (
+  SELECT src_table, rk, doc, refs, nums, flags, doc_date AS dt, refs_map, refs_own
+  FROM tmp3_pdoc_stage WHERE src_table = $1
+),
+dedup AS (
+  SELECT DISTINCT src_table, rk, doc, refs, nums, flags, dt, refs_map, refs_own
+  FROM base
+),
+mid AS (
+  SELECT src_table,
+         CASE WHEN NOT (SELECT on_ FROM fold)
+               AND count(*) OVER (PARTITION BY src_table, rk) > 1
+              THEN rk || '#' || sha1(doc) ELSE rk END AS row_key,
+         doc, refs, sha1(doc || chr(0) || refs) AS doc_hash,
+         nums, flags, dt, refs_map, refs_own
+  FROM dedup
+),
+fin AS (
+  SELECT src_table,
+         CASE WHEN count(*) OVER (PARTITION BY src_table, row_key) > 1
+              THEN row_key || '#' || row_number() OVER (PARTITION BY src_table, row_key
+                                                        ORDER BY doc, refs, refs_map::VARCHAR,
+                                                                 nums::VARCHAR, flags::VARCHAR, dt)
+              ELSE row_key END AS row_key,
+         doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own
+  FROM mid
+)
+SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own
+FROM fin
+QUALIFY NOT (SELECT on_ FROM fold)
+     OR row_number() OVER (PARTITION BY src_table, row_key ORDER BY doc, refs, doc_hash) = 1;
+
 -- ============ 6-бис. УПРОЩЁННЫЙ ВАРИАНТ СБОРКИ (запасной) ============
 -- 🔴 ОДНА СУЩНОСТЬ НЕ ДОЛЖНА УБИВАТЬ ВЕСЬ ТАКТ. Полная сборка делает много тонкого:
 -- разрешает ссылки по карте, собирает карту величин, выбирает дату. Любой из этих шагов
@@ -871,8 +1169,50 @@ FROM base;
 -- 🔴 ИДЁМ ПО `tmp3_build`, А НЕ ПО `tmp3_src`: перечитывается только изменившееся и то,
 -- у чего поменялось имя ссылки. Слияние к частичному набору готово по построению — оно
 -- удаляет строки только у сущностей, которые в этот раз собрались (`corpus_merge.sql`).
-SELECT 'EXECUTE p_doc(' || quote_literal(tbl) || ');' FROM tmp3_build
+SELECT 'EXECUTE p_doc(' || quote_literal(b.tbl) || ');'
+FROM tmp3_build b
+JOIN tmp3_entity_rows e ON e.tbl = b.tbl
+CROSS JOIN tmp3_pdoc_cfg cfg
+WHERE e.nrows <= cfg.chunk_rows
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = b.tbl)
 \gexec
+
+SELECT stmt FROM (
+  SELECT c.tbl, c.lo, 1 AS ord,
+         'EXECUTE p_doc_chunk(' || quote_literal(c.tbl) || ', ' || c.lo || ', ' || c.hi || ');' AS stmt
+  FROM tmp3_pdoc_chunks c
+  LEFT JOIN tmp3_pdoc_progress p ON p.tbl = c.tbl
+  WHERE c.hi > coalesce(p.rid_hi, 0)
+    AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = c.tbl)
+  UNION ALL
+  SELECT c.tbl, c.lo, 2,
+         'INSERT INTO tmp3_pdoc_progress (tbl, rid_hi, nrows) SELECT '
+           || quote_literal(c.tbl) || ', ' || c.hi || '::BIGINT, ' || c.nrows
+           || '::BIGINT ON CONFLICT (tbl) DO UPDATE SET rid_hi = excluded.rid_hi, nrows = excluded.nrows;'
+  FROM tmp3_pdoc_chunks c
+  LEFT JOIN tmp3_pdoc_progress p ON p.tbl = c.tbl
+  WHERE c.hi > coalesce(p.rid_hi, 0)
+    AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = c.tbl)
+) z ORDER BY tbl, lo, ord
+\gexec
+
+SELECT 'EXECUTE p_doc_finalize(' || quote_literal(f.tbl) || ');'
+FROM (
+  SELECT c.tbl
+  FROM tmp3_pdoc_chunks c
+  JOIN tmp3_pdoc_progress p ON p.tbl = c.tbl
+  GROUP BY c.tbl, p.nrows
+  HAVING max(p.rid_hi) >= p.nrows
+     AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = c.tbl)
+) f
+\gexec
+
+DELETE FROM tmp3_pdoc_stage s
+USING (SELECT DISTINCT tbl FROM tmp3_pdoc_chunks) c
+WHERE s.src_table = c.tbl
+  AND EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = c.tbl);
+DELETE FROM tmp3_pdoc_progress p
+WHERE EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = p.tbl);
 \set ON_ERROR_STOP on
 
 -- Второй заход: то, что не собралось, — упрощённым вариантом.

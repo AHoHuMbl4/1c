@@ -1,5 +1,23 @@
 # Журнал изменений
 
+## 18.08: corpus_build — чанкованный p_doc для крупных сущностей `[код]` `[замер]`
+
+`[код]` `corpus_build.sql`: порог и размер порции **выведены** из `SHOW memory_limit`
+и замера K1-m (2 GiB / 50 000 строк на `accumulationregister_себестоимостьтоваров`):
+`chunk_rows = max(1000, floor(memory_limit × 0,25 / (2GiB/50000)))`; сущности
+крупнее — `p_doc_chunk` (rid-порции в `tmp3_pdoc_stage`) + `p_doc_finalize`
+(полнорядный `DISTINCT` + те же суффиксы `#`/`#sha1`, что полный p_doc); мелкие —
+прежний `EXECUTE p_doc`. Докатка: `tmp3_pdoc_progress` + сохранение `tmp3_corpus`
+при `tmp3_run` старше 6 ч. Утилита `apply_pdoc_chunk_patch.py`; тест
+`test_corpus_chunk_identity.py`. Доки: Configuration › Pragmas › Memory Limit.
+
+`[замер]` ut_test, `document_установкаценноменклатуры_товары` (12 062 строк),
+`memory_limit=1GB`: формула → **chunk_rows=1000**, **13** порций (план
+`tmp3_pdoc_chunks`); полный прогон identity **не завершён** — dev-движок после
+проб с `150MB`/`4GB`: `Checkpoint failed … store.db.wal` (нужен рестарт
+`serenedb`, сессия без sudo). При **9700MB** (klient-1): **chunk_rows≈60 625**,
+`себестоимостьтоваров` 638 330 → **11** порций (~2 GiB RSS/порция по K1-m).
+
 ## 18.08: память выбора — включена на okna (apply в бою) `[решение]` `[замер]`
 
 `[решение]` Шаг 6 завершён: `ASK_MEMORY_APPLY=1` на okna (env юнита; откат =
