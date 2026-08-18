@@ -416,6 +416,19 @@ def _fmt(v):
     return "%d" % v if v == int(v) else "%.2f" % v
 
 
+def _fmt_human(v):
+    """То же _fmt, разряды неразрывным пробелом — как подстановка гейта."""
+    out = _fmt(v)
+    head, _, frac = out.partition(".")
+    neg, head = (head[:1] == "-"), head.lstrip("-")
+    if not head:
+        head = "0"
+    grouped = "\u00a0".join(
+        [head[:len(head) % 3 or 3]] + [head[i:i + 3] for i in
+                                       range(len(head) % 3 or 3, len(head), 3)])
+    return ("-" if neg else "") + grouped + (("." + frac) if frac else "")
+
+
 _token_acc = contextvars.ContextVar("token_acc", default=None)
 
 
@@ -1606,6 +1619,43 @@ def tables_of(match, preds):
         except (ValueError, IndexError):
             pass
     return out
+
+
+def date_only_kind_filter(by, match, kind_ok):
+    """Пустой match: группировка по дате — не совпадение слов вопроса.
+
+    tables_of('', preds) отдаёт всех, у кого есть строка в окне. В день без
+    продаж это «Курсы валют» вместо вилки реализаций. kind_ok — сущности шага 3.
+    Нет kind_ok — не фильтруем: проверять нечем.
+    Возвращает (kept_by, dropped_srcs).
+    """
+    by = dict(by or {})
+    if match or not by:
+        return by, []
+    if not kind_ok:
+        return by, []
+    ok = set(kind_ok)
+    dropped = [s for s in by if s not in ok]
+    kept = {s: n for s, n in by.items() if s in ok}
+    return kept, dropped
+
+
+def keep_empty_period_opts(srcs, counted, preds):
+    """Вилка прочтений в пустом окне: если все кандидаты пусты по дате — оставить.
+
+    Иначе (кто-то жив) — прежнее: в перечень только живой счёт. counted is None
+    — база не ответила, список не режем.
+    """
+    srcs = list(srcs or [])
+    if counted is None:
+        return srcs
+    live = [s for s in srcs if counted.get(s, 0) > 0]
+    if live:
+        return live
+    dated = any("doc_date" in str(p) for p in (preds or []))
+    if dated:
+        return srcs
+    return live
 
 
 def alias_hits(exprs, limit):
@@ -4432,6 +4482,120 @@ def mute_measure_blocks(sole, mute, cand_src):
     return None
 
 
+def measure_row_all_zero(row):
+    """Итог totals_of (имя, sum, max, min) тождественно нулевой. Нет строки — тоже пусто."""
+    if not row or len(row) < 4:
+        return True
+    try:
+        return float(row[1]) == 0 and float(row[2]) == 0 and float(row[3]) == 0
+    except (TypeError, ValueError, IndexError):
+        return True
+
+
+def alive_measure_names(totals):
+    """Имена величин с хотя бы одним ненулевым значением. Один список из totals_of."""
+    return [r[0] for r in (totals or []) if r and r[0] and not measure_row_all_zero(r)]
+
+
+def filter_dead_measure_alts(alts, totals):
+    """Опции меры: не предлагать величину, у которой по сущности ноль ненулевых.
+
+    Пустой totals — база не ответила, резать нечем: оставляем как было.
+    """
+    if not totals:
+        return list(alts or [])
+    alive = set(alive_measure_names(totals))
+    return [m for m in (alts or []) if m in alive]
+
+
+def measure_asked_explicitly(word, measure, how, measure_pick=None):
+    """Человек назвал эту величину словами или старым билетом — не молчаливый выбор."""
+    if measure_pick and measure:
+        return True
+    if not measure:
+        return False
+    if (how or "") not in ("exact", "substring", "alias", "base", "single"):
+        return False
+    return bool((word or "").strip())
+
+
+def format_measure_empty_pivot(dead, dead_label, alive_totals, captions=None,
+                               question=""):
+    """Пивот: спрошенная величина пуста, живые — цифрами из базы (гейт их видит)."""
+    captions = captions or {}
+    dlab = dead_label or dead or ""
+    bits = []
+    for m, v, _mx, _mn in (alive_totals or []):
+        lab = captions.get(m) or m
+        bits.append("«%s» — %s" % (lab, _fmt_human(v)))
+    cyr = any('\u0400' <= c <= '\u04ff' for c in (question or "") + dlab)
+    if cyr:
+        text = "По «%s» нет значений ни в одной записи" % dlab
+        if bits:
+            text += "; есть " + ", ".join(bits)
+        return text + "."
+    text = "No values in any record for «%s»" % dlab
+    if bits:
+        text += "; available: " + ", ".join(bits)
+    return text + "."
+
+
+def build_measure_empty_pivot(question, dead, src, alive_totals, cut, diag, t0,
+                              intent, how="", measure_pick=None):
+    """kind=answer: спрошенная величина пуста, живые цифрами из базы."""
+    names = [dead] + [r[0] for r in (alive_totals or []) if r and r[0]]
+    try:
+        caps = measure_captions(names, measure_aliases_of(src) if src else {})
+    except RuntimeError:
+        caps = {n: n for n in names if n}
+    dead_label = (caps.get(dead) if caps else None) or dead
+    text = format_measure_empty_pivot(dead, dead_label, alive_totals, caps, question)
+    _pass_frag, pass_fields = build_answer_passport(
+        period=(intent or {}).get("period"),
+        period_dropped=False,
+        origin=_passport_origin(intent, diag),
+        src_label=_table_label(src) if src else "",
+        src_kind=kind_word(src) if src else "",
+        measure=dead_label or dead or "",
+        grain="row",
+        axis_label="",
+        form="number",
+        text=text)
+    text = ensure_answer_passport(text, _pass_frag)
+    figs = {}
+    if alive_totals:
+        figs["sum"] = alive_totals[0][1]
+        for m, v, _mx, _mn in alive_totals:
+            if m:
+                figs["total:%s" % m] = v
+    figs.update(pass_fields or {})
+    first = alive_totals[0] if alive_totals else None
+    fake_agg = {
+        "count": 0, "sum": (first[1] if first else 0.0),
+        "min": None, "max": None, "avg": None,
+        "measure": (first[0] if first else dead), "src": src,
+        "grain": "row", "form": "number",
+    }
+    _atom = atom_from_agg(
+        fake_agg, operation="sum",
+        measure_id=(first[0] if first else dead),
+        measure_label=(caps.get(first[0]) if first and caps else None) or (first[0] if first else dead),
+        money=True,
+        period=(intent or {}).get("period"),
+        period_origin=_passport_origin(intent, diag),
+        grain="row", form="number",
+        axis=None, completeness=None, folders=0, src=src)
+    tag = src.split("_", 1)[1] if src and "_" in src else (src or "")
+    diag = dict(diag or {})
+    diag["measure_empty_pivot"] = dead
+    return {"partial": cut or None, "kind": "answer", "text": text,
+            "sources": [tag] if tag else [],
+            "measure": dead_label or dead,
+            "figures": figs, "atom": _atom, "atoms": [_atom],
+            "diag": _diag_pack(diag, rows=0,
+                               sec=round(time.time() - t0, 2), gate_ok=True)}
+
+
 def measure_ambiguous(fits, totals):
     """Меняет ли выбор величины ОТВЕТ. Иначе неоднозначности нет, а вопрос был бы шумом.
 
@@ -5863,7 +6027,9 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         kw = kind_word(src) if src else ""
         if kw:
             body += "\n  count_kind (record type noun) -> {count_kind}"
-        body += "\n  count (number of records) -> {count}"
+        # sum=0.0 делает has_money ложным; {count} на sum/rank — дыра 5ca1b66.
+        if slot_mode not in ("sum", "rank"):
+            body += "\n  count (number of records) -> {count}"
         if agg.get("date_min"):
             body += "\n  period                    -> {date_min} .. {date_max}"
         if agg.get("undated"):
@@ -5871,7 +6037,7 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         if agg.get("outside_period"):
             body += ("\n  records matching everything except the period "
                      "-> {outside_period}")
-        if money:
+        if money and slot_mode not in ("sum", "rank"):
             body += ("\n  (no numeric quantity matches the question for this record type — "
                      "no placeholder other than {count} is available here)")
     elif agg:
@@ -6819,8 +6985,46 @@ _HEALTH_GAP_TTL = int(os.environ.get("ASK_HEALTH_GAP_TTL", "300"))
 _health_gap_cache = {"at": 0.0, "gap": None}
 
 
+def _assemble_health_gap(total_gaps, day_gaps):
+    """Собрать coverage_gap из итогов и дневных разниц. None — разрыва нет."""
+    rows_missing = 0
+    rows_extra = 0
+    worst_candidates = []
+    seen_dated = {src for src, _d, _v, _c in (day_gaps or [])}
+    for src, d, v, c in day_gaps or []:
+        v, c = int(v), int(c)
+        if v > c:
+            rows_missing += v - c
+        elif c > v:
+            rows_extra += c - v
+        if v != c:
+            worst_candidates.append(
+                (abs(v - c), {"src": src, "d": str(d) if d is not None else "",
+                              "витрина": v, "корпус": c}))
+    for src, (v, c) in (total_gaps or {}).items():
+        if src in seen_dated:
+            continue
+        v, c = int(v), int(c)
+        if v > c:
+            rows_missing += v - c
+        elif c > v:
+            rows_extra += c - v
+        if v != c:
+            worst_candidates.append(
+                (abs(v - c), {"src": src, "витрина": v, "корпус": c}))
+    if rows_missing == 0 and rows_extra == 0:
+        return None
+    ents = {item["src"] for _n, item in worst_candidates}
+    worst = [item for _n, item in sorted(worst_candidates, key=lambda x: x[0],
+                                         reverse=True)[:5]]
+    out = {"entities": len(ents), "rows_missing": rows_missing, "worst": worst}
+    if rows_extra:
+        out["rows_extra"] = rows_extra
+    return out
+
+
 def _measure_health_gap():
-    """Разрыв «витрина полнее корпуса» по всем сущностям. None — разрыва нет."""
+    """Разрыв витрина↔корпус, включая лишнее в корпусе и дни Period/Date."""
     r = psql("SELECT table_name FROM duckdb_tables() "
              "WHERE database_name = current_database() "
              "  AND table_name IN (SELECT src_table FROM %s)" % TABLES)
@@ -6836,28 +7040,58 @@ def _measure_health_gap():
     corp = {x[0]: int(_num(x[1])) for x in psql(
         "SELECT src_table, count(*) FROM %s GROUP BY 1" % CORPUS) if x and x[0]}
     over = [t for t in tabs if vit.get(t, 0) > corp.get(t, 0)]
-    if not over:
-        return None
-    rk = {x[0] for x in psql(
-        "SELECT DISTINCT table_name FROM duckdb_columns() "
-        "WHERE database_name = current_database() AND column_name = 'Ref_Key' "
-        "  AND table_name IN (%s)" % ", ".join(lit(t) for t in over)) if x and x[0]}
-    gaps = {}
-    for t in over:
+    under = [t for t in tabs if corp.get(t, 0) > vit.get(t, 0)]
+    rk = set()
+    if over:
+        rk = {x[0] for x in psql(
+            "SELECT DISTINCT table_name FROM duckdb_columns() "
+            "WHERE database_name = current_database() AND column_name = 'Ref_Key' "
+            "  AND table_name IN (%s)" % ", ".join(lit(t) for t in over)) if x and x[0]}
+    total_gaps = {}
+    for t in set(over + under):
         if t in rk:
             n = int(_num(psql(
                 "SELECT count(DISTINCT \"Ref_Key\") FROM query_table(%s)"
                 % lit(t))[0][0]))
         else:
-            n = vit[t]
-        if n > corp.get(t, 0):
-            gaps[t] = (n, corp.get(t, 0))
-    if not gaps:
-        return None
-    worst = sorted(gaps.items(), key=lambda kv: kv[1][0] - kv[1][1], reverse=True)[:5]
-    return {"entities": len(gaps),
-            "rows_missing": sum(v - c for v, c in gaps.values()),
-            "worst": [{"src": t, "витрина": v, "корпус": c} for t, (v, c) in worst]}
+            n = vit.get(t, 0)
+        c = corp.get(t, 0)
+        if n != c:
+            total_gaps[t] = (n, c)
+
+    dated = {}
+    dc = psql("SELECT table_name, column_name FROM duckdb_columns() "
+              "WHERE database_name = current_database() "
+              "  AND column_name IN ('Period','Date') "
+              "  AND table_name IN (SELECT src_table FROM %s)" % TABLES)
+    for x in dc or []:
+        if not x or not x[0]:
+            continue
+        t, col = x[0], x[1]
+        # Period (регистры) — всегда: итоги гасят разворот по дням.
+        # Date (документы) — только если итог уже разошёлся (дорого иначе).
+        if col == "Period" or t in total_gaps:
+            if t not in dated or col == "Period":
+                dated[t] = col
+
+    day_gaps = []
+    if dated:
+        parts = []
+        for t, col in dated.items():
+            parts.append(
+                "SELECT %s AS t, v.d, coalesce(v.n,0), coalesce(c.n,0) FROM "
+                "(SELECT try_cast(\"%s\" AS TIMESTAMP)::date AS d, count(*) AS n "
+                " FROM query_table(%s) GROUP BY 1) v "
+                "FULL OUTER JOIN "
+                "(SELECT doc_date::date AS d, count(*) AS n FROM %s "
+                " WHERE src_table = %s GROUP BY 1) c USING (d) "
+                "WHERE coalesce(v.n,0) IS DISTINCT FROM coalesce(c.n,0)"
+                % (lit(t), col, lit(t), CORPUS, lit(t)))
+        for x in psql(" UNION ALL ".join(parts)):
+            if x and x[0]:
+                day_gaps.append((x[0], x[1], int(_num(x[2])), int(_num(x[3]))))
+
+    return _assemble_health_gap(total_gaps, day_gaps)
 
 
 
@@ -7209,15 +7443,16 @@ def mk_opts(srcs, lab_by, marks=None, by=None, match="", preds=None, live=None):
     человек, и значение `focus`, которое возвращает бот, — одна и та же строка, поэтому
     различитель ставится в этой точке, а не в мосте.
 
-    В перечень идёт только источник с живым счётом по тем же предикатам, что и ответ
-    (период). Поле `found` — лексические попадания, для этого не годится.
+    В перечень идёт источник с живым счётом по тем же предикатам, что и ответ
+    (период). Если в датированном окне пусты ВСЕ кандидаты — оставляем их:
+    вилка прочтений, после выбора отвечает period_empty.
     """
     marks, by = marks or {}, by or {}
     counted = live
     if counted is None and preds is not None:
         counted = live_src_counts(srcs, match, preds)
     if counted is not None:
-        srcs = [s for s in srcs if counted.get(s, 0) > 0]
+        srcs = keep_empty_period_opts(srcs, counted, preds)
     cov, _fk = fork_labels_covering(srcs)
     if cov:
         lab_by = dict(lab_by or {})
@@ -8013,6 +8248,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # отдаёт ВСЕ сущности, и вычитание оставило бы голову пустой (`[замер 04.08]` живой
     # ответ: «шаг 3 добавил 0» при 1 502 буквальных кандидатах).
     found_by_meaning = meaning_candidates(exprs, kind_text, question, MEANING_TOP)
+    if not match:
+        by, _inc = date_only_kind_filter(by, match, found_by_meaning)
+        if _inc:
+            diag["date_incidental"] = _inc
     extra = [t for t in found_by_meaning if t not in by]
     if extra:
         diag["by_meaning"] = extra
@@ -9601,6 +9840,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["focus"], diag["found"] = src, by.get(src, 0)
 
     measure, measure_alts = None, []
+    how = ""
     if plan.get("quantity") and plan["quantity"] in measures_of(src):
         measure = plan["quantity"]
         diag["measure_by_plan"] = True
@@ -9683,9 +9923,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # ни одного значения ни в одной строке. Константы, подобранной под нашу базу, здесь
     # нет, слов и языка нет тоже, поэтому правило одинаково верно на любой конфигурации.
     #
-    # Выбор человека (`measure_pick`) не перебиваем: спросил именно это поле — считаем его
-    # и отвечаем нулём честно. Заменяем только МОЛЧАЛИВЫЙ выбор — модели или реранкера.
-    # Альтернативы берём из данных: величины той же сущности, у которых значения есть.
+    # Явный запрос (слова или билет) пустой величины — не ноль и не отказ, а пивот:
+    # «по „Сумма“ нет значений; есть „Всего“ — N» (числа из базы, гейту разрешены).
+    # Молчаливый выбор по-прежнему снимаем и предлагаем только живые. Один totals_of
+    # на все имена сущности — не запрос на каждого кандидата.
     #
     # 🔴 ВТОРАЯ ДВЕРЬ К ТОМУ ЖЕ НУЛЮ: ВЕЛИЧИНЫ НЕТ НИ У ОДНОЙ ОТОБРАННОЙ СТРОКИ.
     # Правило 03.08 смотрело только в `totals_of`, а тот отдаёт пару, лишь когда строк со
@@ -9697,16 +9938,33 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # посчитанного и проходит гейт — тот же исход, ради которого правило 03.08 и заведено,
     # только через другую дверь. Отсюда одно условие на оба случая: считать было нечего
     # ЛИБО всё тождественно ноль.
-    if measure and not measure_pick:
-        _t1 = totals_of(src, match, preds, [measure])
-        _пусто = not _t1                                   # ни одной строки со значением
-        _ноль = bool(_t1) and _t1[0][1] == 0 and _t1[0][2] == 0 and _t1[0][3] == 0
-        if _пусто or _ноль:
-            _alive = [m for m, v, mx, mn in totals_of(src, match, preds, measures_of(src))
-                      if not (v == 0 and mx == 0 and mn == 0)]
-            if _alive:
-                diag["measure_all_zero" if _ноль else "measure_no_values"] = measure
-                measure, measure_alts = None, _alive
+    _all_tot = []
+    if measure or measure_alts:
+        try:
+            _all_tot = totals_of(src, match, preds, measures_of(src))
+        except RuntimeError:
+            _all_tot = []
+    if measure_alts:
+        _kept = filter_dead_measure_alts(measure_alts, _all_tot)
+        if _kept != list(measure_alts):
+            diag["measure_alts_dead"] = [m for m in measure_alts if m not in set(_kept)]
+        measure_alts = _kept
+    if measure:
+        _row = next((r for r in _all_tot if r and r[0] == measure), None)
+        _мертва = (_row is None) or measure_row_all_zero(_row)
+        if _мертва:
+            _alive_rows = [r for r in _all_tot if r and r[0]
+                           and not measure_row_all_zero(r)]
+            _pick = None if diag.get("measure_pick_unresolved") else measure_pick
+            _explicit = measure_asked_explicitly(
+                (intent.get("measure") or "").strip(), measure, how, _pick)
+            if _explicit:
+                return build_measure_empty_pivot(
+                    question, measure, src, _alive_rows, cut, diag, t0,
+                    intent, how=how, measure_pick=measure_pick)
+            if _alive_rows:
+                diag["measure_all_zero" if _row is not None else "measure_no_values"] = measure
+                measure, measure_alts = None, [r[0] for r in _alive_rows]
                 diag["measure"] = None
     if SLOT_COVER and measure and not measure_pick:
         _unc, _cov = slot_measure_uncovered(
