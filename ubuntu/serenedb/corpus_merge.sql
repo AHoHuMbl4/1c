@@ -17,13 +17,20 @@
 -- в ней нет. Отметка ставится последней командой сборки — значит она же доказывает,
 -- что сборка дошла до конца, а не оборвалась.
 --
--- Первая сборка: корпус ещё пуст, стейдж совпал со штампом, штамп моложе 48 ч —
--- слияние после падения (диск, 06:06) можно догнать без пересборки 2,5 ч. Инкремент
--- с непустым корпусом по-прежнему 6 часов: иначе вчерашний tmp3 затёр бы бой.
+-- Первая сборка / merge-only: корпус пуст ИЛИ перенос оборвался на пачках
+-- (`search_corpus` < `tmp3_corpus`), стейдж совпал со штампом, штамп моложе 48 ч —
+-- слияние после падения (диск ENOSPC, checkpoint) можно догнать без пересборки.
+-- [замер 18.08 klient-1] после 8/17 пачек `search_corpus`=8M — прежнее «только
+-- при count=0» блокировало догон через 6 ч. Инкремент с полным корпусом — 6 часов:
+-- иначе вчерашний tmp3 затёр бы бой.
 SELECT CASE WHEN coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01')
                  < now() - INTERVAL '6 hours'
             AND NOT (
-                 (SELECT count(*) FROM search_corpus) = 0
+                 (
+                     (SELECT count(*) FROM search_corpus) = 0
+                  OR (SELECT count(*) FROM search_corpus)
+                       < (SELECT count(*) FROM tmp3_corpus)
+                 )
              AND (SELECT собрано FROM tmp3_run) = (SELECT count(*) FROM tmp3_corpus)
              AND (SELECT собрано FROM tmp3_run) > 0
              AND coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01')

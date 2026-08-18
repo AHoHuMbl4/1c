@@ -1,3 +1,24 @@
+## 18.08: klient-1 первая сборка — слияние закрыто `[замер]` `[код]`
+
+`[замер]` klient-1 18.08: догон merge-only после апгрейда диска **96G→155G**.
+Старт 18:55 UTC (`/var/tmp/klient1-merge-e4b.sh`): 8/17 пачек уже были (8 004
+024) — быстрый MERGE 0; пачки 9–17 догнаны; **exit 0** 21:08 UTC.
+`search_corpus` **15 148 327** / 1457 сущностей, дублей ключа **0**, сверка
+сущностей **0** расхождений; `/health` ok; store.db **60G**, свободно **67G**.
+Pipeline timer **active**, такт идёт (resolver embed 2,2M). Рестарт **serenedb**
+20:38 UTC (checkpoint invalidated, WAL 115K — без OOM-петли). Build-swap **12G**
+включены на время merge (`swapon`, не сняты). Юниты: serenedb/packet/ask
+**active**; firstbuild unit **not loaded** (ожидаемо).
+
+`[код]` `corpus_merge.sql`: окно 48 ч merge-only расширено на **частичный**
+перенос (`search_corpus` < `tmp3_corpus`), иначе догон после 8/17 блокировался
+сторожем «tmp3_* не от этого прогона». md5 **59f7e6e8**. Доки:
+sql/statements/merge_into, sql/functions/utility#checkpointdatabase.
+
+**Владельцу:** `box_tune_restore` — memory_limit **12.4 GiB** (build); снять
+`/swapfile-1c-build{,2}` (**12G**). **Векторы:** ~15,1M `emb IS NULL` + 2,2M
+resolver → gpu-erw (8 workers): порядок **3–7 суток** непрерывного embed.
+
 ## 18.08: стопор векторов okna — всё-таки стопор: висячий HTTP к эмбеддеру `[замер]`
 
 `[замер]` Развитие записи 13ae02f (и её поправки): очередь `emb is null`

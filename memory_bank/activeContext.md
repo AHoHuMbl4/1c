@@ -14,15 +14,15 @@ rank в скаляр; «товар» → номенклатура + Количе
 (terminal_round 24, axis_focus 18, … decision_id 31). md5 ask **`d442630f`**.
 Выкат `:8091` — оркестратор. Живое (а–в) — владелец после выката.
 
-🔴 **klient-1 merge-only — БЛОКЕР ДИСК `[18.08]`**: стейдж **15 148 327**
-цел; `search_corpus` **8 004 024** (8/17 пачек, md5 merge **00bf44a9**).
-9-я пачка ENOSPC 18:08 UTC. **Владелец:** снять build-swap (**12G** на
-диске): `swapoff /swapfile-1c-build2 && rm …` (8G), `swapoff
-/swapfile-1c-build && rm …` (4G); вставить baseline
-`merge_engine_baseline_kb=42991616` (41G до слияния); догон
-`/var/tmp/klient1-merge-e4b.sh` или `build.sh` merge-only. Прогноз финала
-store.db **~75G** на 96G диске. `corpus_build.sql` **3c2abbce** — не
-затирать. E4b в git (**86/86**). Юниты pipeline/firstbuild **failed**.
+🔴 **klient-1 первая сборка — СЛИЯНИЕ ЗАКРЫТО `[18.08]`**: `search_corpus`
+**15 148 327** / 1457 сущностей; `/health` ok; store.db **60G** (155G диск,
+67G своб). Пачки **17/17**, exit 0 (21:08 UTC). Догон: ENOSPC на 96G →
+апгрейд диска; checkpoint-invalidated → **рестарт serenedb** (WAL 115K,
+без OOM-петли); правка 48h-окна для частичного merge в git. Pipeline timer
+**active**, такт идёт (resolver embed). **Дальше:** векторы gpu-erw (~15,1M,
+отдельное окно); `box_tune_restore` — владельцу (memory_limit 12.4GiB,
+build-swap 12G активны). `corpus_build.sql` **3c2abbce** на `/opt` — не
+трогать.
 
 🔴 **догон корпуса okna ЗАКРЫТ `[18.08]`**: регистр 77527=витрина, дни 17.08
 176 / 693 688,38; 18.08 81; 19.08 247 — призраков нет. `/health` freshness_lag.
