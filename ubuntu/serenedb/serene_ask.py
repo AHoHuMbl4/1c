@@ -3154,6 +3154,13 @@ def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
             "named_gis": [], "clarify": None}
 
 
+def _rank_wants_quantity(question):
+    q = (question or "").lower()
+    return (any(w in q for w in ("товар", "номенклатур", "product", "item", "goods"))
+            and any(w in q for w in ("больше всего", "сколько", "top", "most",
+                                     "maximum", "лидер", "leader")))
+
+
 def rank_measure_hint(names, intent, question, alias_by=None):
     """Рейтинг без явной меры: количество товара, не себестоимость/сумма."""
     names = list(names or [])
@@ -6982,20 +6989,13 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
                         if agg.get(key) is not None:
                             allow(agg[key])
         elif slot_mode == "rank" and group_grain:
-            allow(agg.get("leader"))
-            allow(agg.get("count"))
-            allow(agg.get("count_amount"))
-            allow(agg.get("n_groups"))
-            _ng = agg.get("n_groups")
-            _shown_g = len(agg.get("groups") or [])
-            if _ng is not None and _ng > _shown_g:
-                allow(agg.get("sum"))
+            for k in ("sum", "leader", "count", "count_amount",
+                      "n_groups", "min", "max", "avg"):
+                allow(agg.get(k))
             for g in agg.get("groups") or []:
-                allow(g.get("value"))
-                allow(g.get("count"))
-                allow(g.get("value2"))
-                allow(g.get("count2"))
-                allow(g.get("sum"))
+                for gk in ("value", "count", "value2", "count2",
+                            "sum", "avg"):
+                    allow(g.get(gk))
         elif group_grain:
             allow(agg.get("sum"))
             allow(agg.get("n_groups"))
@@ -10223,7 +10223,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     else:
         measure, measure_alts, how = pick_measure(src, question,
                                                   (intent.get("measure") or ""))
-        if _rank_intent and how == "rerank":
+        if (_rank_intent and not _mhint
+                and _rank_wants_quantity(question)
+                and len(_mnames) > 1):
+            measure, measure_alts = None, _mnames
+            how = "rank_no_quantity"
+            diag["measure_rank_no_quantity"] = True
+        elif _rank_intent and how == "rerank":
             _hint2 = _mhint or rank_measure_hint(_mnames, intent, question, _malias)
             if _hint2:
                 measure, measure_alts, how = _hint2, [], "rank_hint"

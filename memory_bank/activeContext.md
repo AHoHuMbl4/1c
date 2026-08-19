@@ -65,11 +65,12 @@ Okna `:8091` **3/10**, 2 сбоя, склад no_data ✓; `/opt` ask **`d442630
 git cd1789b (`372b529e`) — **повтор приёмки после выката rank-hotfix**.
 md5 tsv **`6db327ad`**, scorer **`e3368d07`**, гейт **`9d63b8a5`**.
 
-🔴 **rank gate bad float + регистр из табчастей — код в git `[19.08]`**:
-(в) живой 503 после cd1789b — `gate()` возвращал float в `bad_nums`, шаг()
-резал `bad[0][:60]` → TypeError; fix + rank whitelist leader/count. (б)
-`prefer_entity_for_rank` поднимает регистр по `written_by` (rid `7337254b`).
-Оффлайн **29/29** + F-замки. md5 ask **`99266ba9`**. Выкат `:8091` — оркестратор.
+🔴 **rank gate полная поверхность agg — код в git `[19.08]`**:
+Заход-4: белый список гейта rank/group = ВСЯ числовая поверхность agg
+(sum/leader/count/count_amount/n_groups/min/max/avg + value/count/sum/avg
+каждой группы). Закрывает 217.10 / 0.50 / 12. `_rank_wants_quantity`:
+если товар+рейтинг, а Количество нет в мерах — спрос, не автовыбор Курса.
+Оффлайн **42/132/92/24/18/30/26**. md5 ask **`d5a67487`**. Выкат — оркестратор.
 
 🔴 **klient-1 первая сборка — СЛИЯНИЕ ЗАКРЫТО `[18.08]`**: `search_corpus`
 **15 148 327** / 1457 сущностей; `/health` ok; store.db **60G** (155G диск,

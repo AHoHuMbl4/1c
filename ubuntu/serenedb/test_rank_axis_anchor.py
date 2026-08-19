@@ -218,8 +218,38 @@ ok217, bad217g = A.gate(
 t("rank gate leader 3 проходит", ok217, bad217g)
 ok217b, bad217b = A.gate(
     "лидер 217.10", SEEN217, AGG217, [1], [], money=True, slot_mode="rank")
-t("rank gate 217.10 отвергнут", not ok217b and bad217b, bad217b)
-t("rank gate bad217 str", bad217b and isinstance(bad217b[0], str), bad217b)
+t("rank gate 217.10 теперь в поверхности agg", ok217b, bad217b)
+t("rank gate bad217 пусто", not bad217b, bad217b)
+
+# --- full agg surface: все числа agg разрешены ---
+AGG_BIG = {
+    "count": 77557, "sum": 2128249.4, "leader": 96602.0, "measure": "Количество",
+    "grain": "group", "col": "refs_map.Номенклатура", "form": "rank", "n_groups": 1558,
+    "groups": [
+        {"name": "Piesa A", "value": 96602.0, "count": 200, "sum": 500.0, "avg": 0.50},
+        {"name": "Piesa B", "value": 80000.0, "count": 150, "sum": 300.0, "avg": 0.40},
+    ],
+    "folders": 0, "count_amount": 77557, "min": 0.01, "max": 96602.0, "avg": 27.42,
+}
+SEEN_BIG = [("a","b","c","d","e","text")] * 3
+_ok_big1, _bad_big1 = A.gate(
+    "Piesa A 96602", SEEN_BIG, AGG_BIG, [1], [], money=True, slot_mode="rank")
+t("agg surface: leader 96602 проходит", _ok_big1, _bad_big1)
+_ok_big2, _bad_big2 = A.gate(
+    "итого 2128249.4 по 0.50", SEEN_BIG, AGG_BIG, [1], [], money=True, slot_mode="rank")
+t("agg surface: sum + avg группы проходит", _ok_big2, _bad_big2)
+_ok_big3, _bad_big3 = A.gate(
+    "число 999999", SEEN_BIG, AGG_BIG, [1], [], money=True, slot_mode="rank")
+t("agg surface: чужое число отвергнуто", not _ok_big3, _bad_big3)
+_ok_big4, _bad_big4 = A.gate(
+    "avg 27.42 min 0.01", SEEN_BIG, AGG_BIG, [1], [], money=True, slot_mode="rank")
+t("agg surface: agg min/max/avg проходит", _ok_big4, _bad_big4)
+
+# --- rank_measure_hint: _rank_wants_quantity ---
+t("_rank_wants_quantity: товар + больше всего",
+  A._rank_wants_quantity("какого товара больше всего передали?"), "")
+t("_rank_wants_quantity: без слова товар",
+  not A._rank_wants_quantity("сколько продали за месяц?"), "")
 
 # --- prefer: три табчасти, регистр по written_by ---
 def _fake_psql3(q):
