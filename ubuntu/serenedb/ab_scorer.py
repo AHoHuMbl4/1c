@@ -90,8 +90,23 @@ else:
         TOK = os.environ.get("ASK_TOKEN")
 
 
+MODES = ("sql", "kind", "fork", "pivot")
+
+
+def parse_opts(text):
+    """Третье поле строки набора: CLS=<класс> PICK=<клик>|<клик>… (порядок кликов важен)."""
+    chunk = text or ""
+    picks = []
+    head = chunk
+    if "PICK=" in chunk:
+        head, tail = chunk.split("PICK=", 1)
+        picks = [p.strip() for p in tail.split("|") if p.strip()]
+    cls = head.split("CLS=", 1)[1].strip() if "CLS=" in head else ""
+    return cls, picks
+
+
 def load_gold(path):
-    """Строки набора: sql-эталон или MODE=kind (без числового SQL)."""
+    """Строки набора: sql-эталон или MODE=… плюс опции (класс и клики по развилке)."""
     out = []
     try:
         fh = open(path, encoding="utf-8")
@@ -106,12 +121,18 @@ def load_gold(path):
             if "\t" not in line:
                 sys.stderr.write("строка без табуляции пропущена: %s\n" % line[:60])
                 continue
-            q, spec = line.split("\t", 1)
-            spec = spec.strip()
-            if spec == "MODE=kind":
-                out.append({"q": q.strip(), "mode": "kind"})
+            cols = line.split("\t")
+            q, spec = cols[0].strip(), cols[1].strip()
+            cls, picks = parse_opts(cols[2] if len(cols) > 2 else "")
+            row = {"q": q, "cls": cls, "picks": picks}
+            if spec.startswith("MODE="):
+                row["mode"] = spec.split("=", 1)[1].strip()
+                if row["mode"] not in MODES or row["mode"] == "sql":
+                    sys.stderr.write("неизвестный режим строки: %s\n" % spec[:40])
+                    sys.exit(1)
             else:
-                out.append({"q": q.strip(), "mode": "sql", "sql": spec})
+                row["mode"], row["sql"] = "sql", spec
+            out.append(row)
     if not out:
         sys.stderr.write("набор вопросов пуст: %s\n" % path)
         sys.exit(1)
@@ -128,8 +149,13 @@ def truth(sql):
     return (p.stdout or "").strip()
 
 
-def ask(q):
-    body = json.dumps({"question": q}).encode()
+def ask(q, decision_id=None):
+    """Заход в сервис. `decision_id` — билет выбранного варианта: то же, что клик
+    человека по кнопке уточнения (мост шлёт тот же вопрос и билет)."""
+    payload = {"question": q}
+    if decision_id:
+        payload["decision_id"] = decision_id
+    body = json.dumps(payload).encode()
     req = urllib.request.Request(URL, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
     if TOK:
@@ -175,6 +201,102 @@ def kind_row_ok(d):
     if (d.get("kind") or "") != "no_data":
         return False
     return not aggregate_totals_in_text(d.get("text") or "")
+
+
+def norm_name(s):
+    """Имя поля и его человеческая подпись — одно и то же с точностью до пробелов."""
+    return "".join(str(s or "").lower().split())
+
+
+def option_matches(opt, pick):
+    """Совпадает ли вариант уточнения с кликом набора.
+
+    Клик задаётся тем, что база знает о себе сама: `src:` — имя сущности, `axis:` —
+    колонка разреза (`distinct_by`), `measure:` — имя величины (подпись сервиса —
+    та же строка с пробелами), `label:` — кусок подписи.
+    """
+    if ":" not in pick:
+        return False
+    what, val = pick.split(":", 1)
+    what, val = what.strip(), val.strip()
+    if what == "src":
+        return (opt.get("src") or "") == val
+    if what == "axis":
+        return (opt.get("distinct_by") or "") == val
+    if what == "measure":
+        return norm_name(opt.get("label")) == norm_name(val)
+    if what == "label":
+        return norm_name(val) in norm_name(opt.get("label"))
+    return False
+
+
+def clickable(d):
+    """Ответ, где человеку предложен выбор: уточнение или пары исхода B."""
+    return (d.get("kind") in ("clarify", "figures")) and bool(d.get("options"))
+
+
+def pick_option(d, picks):
+    """Первый непотраченный клик, для которого есть вариант. (билет, метка, остаток)."""
+    opts = [o for o in (d.get("options") or []) if isinstance(o, dict)]
+    for i, pick in enumerate(picks):
+        for o in opts:
+            if option_matches(o, pick) and (o.get("decision_id") or ""):
+                return o["decision_id"], pick, picks[i + 1:]
+    return None, "", picks
+
+
+def leaks_internal_name(d):
+    """Утечка внутреннего имени сущности в подписи варианта (человеку это не имя)."""
+    marks = ("catalog_", "document_", "accumulationregister_", "informationregister_",
+             "accountingregister_", "calculationregister_", "documentjournal_",
+             "chartofaccounts_", "chartofcharacteristictypes_", "exchangeplan_",
+             "constant_", "src_table")
+    blobs = [str(o.get("label") or "") for o in (d.get("options") or [])
+             if isinstance(o, dict)] + [str(d.get("text") or "")]
+    return any(m in b.lower() for b in blobs for m in marks)
+
+
+def fork_row_ok(d):
+    """Класс «вилка»: спрошено, а не угадано, и обе подписи человеческие."""
+    if d.get("kind") != "clarify":
+        return False, "не уточнение (%s)" % (d.get("kind") or "—")
+    opts = [o for o in (d.get("options") or []) if isinstance(o, dict)]
+    if len(opts) < 2:
+        return False, "вариантов меньше двух"
+    if any(not str(o.get("label") or "").strip() for o in opts):
+        return False, "вариант без подписи"
+    if leaks_internal_name(d):
+        return False, "в подписи внутреннее имя сущности"
+    return True, ""
+
+
+def zero_claimed(d):
+    """Ответ подан как ноль: ноль в разобранном значении или голый 0 в тексте."""
+    atoms = [a for a in ([d.get("atom")] + list(d.get("atoms") or [])) if isinstance(a, dict)]
+    for a in atoms:
+        v = a.get("exact_value")
+        if isinstance(v, (int, float)) and float(v) == 0.0:
+            return True
+    claims = ((d.get("diag") or {}).get("claims") or {})
+    for v in claims.values():
+        try:
+            if v is not None and float(v) == 0.0:
+                return True
+        except (TypeError, ValueError):
+            continue
+    return bool(re.search(r"(?<![\d,.])0(?:[.,]0+)?(?![\d,.])", d.get("text") or ""))
+
+
+def pivot_row_ok(d):
+    """Класс «величина-пустышка»: пустую величину не выдают за ответ «0».
+
+    Годится и честный пивот на живую величину, и уточнение с перечнем величин;
+    негодно — «0» как ответ и отказ при данных в сущности (п. 21)."""
+    if d.get("kind") == "no_data":
+        return False, "отказ при данных в сущности"
+    if zero_claimed(d):
+        return False, "пустая величина подана как «0»"
+    return True, ""
 
 
 def restart(scorer):
@@ -238,6 +360,63 @@ def write_mark(best_sc, hits, n, errs):
     return best_sc
 
 
+MAX_CLICKS = int(os.environ.get("AB_MAX_CLICKS", "3"))
+
+
+def number_ok(d, want):
+    """Число эталона встретилось в ответе: в тексте или в разобранных значениях."""
+    claims = ((d.get("diag") or {}).get("claims") or {})
+    got = digits(d.get("text") or "") | {re.sub(r"\D", "", str(v))
+                                         for v in claims.values() if v is not None}
+    return re.sub(r"\D", "", want) in got
+
+
+def check_row(row, d):
+    """Годен ли ответ по классу строки набора. Возвращает (годен, причина)."""
+    mode = row["mode"]
+    if mode == "kind":
+        if (d.get("kind") or "") != "no_data":
+            return False, "не no_data (%s)" % (d.get("kind") or "—")
+        if aggregate_totals_in_text(d.get("text") or ""):
+            return False, "в отказе есть число итога"
+        return True, ""
+    if mode == "fork":
+        return fork_row_ok(d)
+    if mode == "pivot":
+        return pivot_row_ok(d)
+    if number_ok(d, row["want"]):
+        return True, ""
+    return False, "нет числа эталона (%s)" % (d.get("kind") or "—")
+
+
+def run_row(row):
+    """Заход и, если сервис спросил, клики по развилке — как это делает человек."""
+    picks = list(row.get("picks") or [])
+    secs, clicks, did = 0.0, 0, None
+    d, sec = ask(row["q"])
+    secs += sec
+    err = ((d.get("diag") or {}).get("error") or "")
+    ok, why = check_row(row, d)
+    while not ok and not err and clickable(d) and clicks < MAX_CLICKS:
+        did, pick, rest = pick_option(d, picks)
+        if not did:
+            why = why or "нет варианта под клик"
+            break
+        picks = rest
+        clicks += 1
+        d, sec = ask(row["q"], decision_id=did)
+        secs += sec
+        err = ((d.get("diag") or {}).get("error") or "")
+        ok, why = check_row(row, d)
+        if (d.get("kind") or "") == "choice_error":
+            why = "билет не принят (choice_error)"
+            break
+    return {"ok": ok, "why": "" if ok else (why or "—"), "clicks": clicks,
+            "sec": round(secs, 2), "err": bool(err),
+            "kind": d.get("kind"), "focus": (d.get("diag") or {}).get("focus"),
+            "rid": (d.get("diag") or {}).get("rid") or ""}
+
+
 def main():
     label = CONTOUR or GOLD_MODE or BASE
     print("контур %s, база %s, сервис %s, %s" % (label, BASE, URL, UNIT))
@@ -245,18 +424,13 @@ def main():
         print("live: без рестарта юнита")
     gold = []
     for row in GOLD:
-        if row["mode"] == "kind":
-            gold.append((row["q"], None, "kind"))
-        else:
-            gold.append((row["q"], truth(row["sql"]), "sql"))
-    shown = []
-    for q, t, mode in gold:
-        if mode == "kind":
-            shown.append("%s:kind" % q[:24])
-        else:
-            shown.append(t or "?")
-    print("эталоны: " + ", ".join(shown))
-    blind = [q for q, t, mode in gold if mode == "sql" and not t]
+        r = dict(row)
+        r["want"] = truth(row["sql"]) if row["mode"] == "sql" else None
+        gold.append(r)
+    print("эталоны: " + ", ".join(
+        (r["want"] or "?") if r["mode"] == "sql" else "%s:%s" % (r["q"][:20], r["mode"])
+        for r in gold))
+    blind = [r["q"] for r in gold if r["mode"] == "sql" and not r["want"]]
     if blind:
         sys.stderr.write("эталон не посчитан у %d вопросов: %s\n"
                          % (len(blind), "; ".join(q[:40] for q in blind[:3])))
@@ -267,28 +441,23 @@ def main():
         if not LIVE_CONTOUR:
             restart(sc)
         hits, secs, rows, errs = 0, 0.0, [], 0
-        for q, want, mode in gold:
-            d, sec = ask(q)
-            text = d.get("text") or ""
-            diag = d.get("diag") or {}
-            if diag.get("error"):
-                errs += 1
-            if mode == "kind":
-                ok = kind_row_ok(d)
-            else:
-                claims = diag.get("claims") or {}
-                got = digits(text) | {re.sub(r"\D", "", str(v)) for v in claims.values()
-                                      if v is not None}
-                ok = re.sub(r"\D", "", want) in got
-            hits += 1 if ok else 0
-            secs += sec
-            rows.append((q, ok, diag.get("focus") or d.get("kind"), sec))
+        for r in gold:
+            res = run_row(r)
+            errs += 1 if res["err"] else 0
+            hits += 1 if res["ok"] else 0
+            secs += res["sec"]
+            rows.append((r, res))
         table[sc] = (hits, round(secs / len(gold), 2), rows, errs)
         print("\n== %s: верных %d/%d, средняя %.2f с%s"
               % (sc, hits, len(gold), secs / len(gold),
                  ", СБОЕВ %d" % errs if errs else ""))
-        for q, ok, focus, sec in rows:
-            print("   %s %-46s %-38s %.1fс" % ("+" if ok else "-", q[:46], (focus or "—")[:38], sec))
+        for r, res in rows:
+            print("   %s %-52s %-26s кликов %d  %s%s  %.1fс"
+                  % ("+" if res["ok"] else "-", r["q"][:52], (r["cls"] or "—")[:26],
+                     res["clicks"], (res["kind"] or "—"),
+                     "" if res["ok"] else "  ← %s" % res["why"][:60], res["sec"]))
+            if not res["ok"] and res["rid"]:
+                print("       rid %s" % res["rid"])
 
     print("\n" + "=" * 62)
     best = max(table.items(), key=lambda kv: (kv[1][0], -kv[1][1]))
