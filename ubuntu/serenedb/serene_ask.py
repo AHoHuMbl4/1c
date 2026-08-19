@@ -11501,6 +11501,64 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
                            channel=channel, decision_id=decision_id, rid=rid)
 
 
+
+
+def _build_ask_scope(out, question):
+    """Извлечь спецификацию счёта из diag и вернуть dict для панели дашборда."""
+    if not isinstance(out, dict):
+        return None
+    kind = out.get('kind', '')
+    if kind not in ('answer', 'figures'):
+        return None
+    d = (out.get('diag') or {}).get('счёт')
+    if not d or not d.get('src'):
+        return None
+    return {
+        'src': d['src'],
+        'where': d.get('where', ''),
+        'measure': d.get('величина', ''),
+        'axis': d.get('ось') or None,
+        'period_col': 'Period',
+        'title': (question or '')[:120].strip() or 'panel',
+    }
+
+
+def _persist_ask_scope(out, question):
+    """Сохранить ask_scope в ответе и в таблице ask_scope (для кнопки дашборда)."""
+    scope = _build_ask_scope(out, question)
+    if not scope:
+        return
+    text = (out.get('text') or '').strip()
+    if not text:
+        return
+    import hashlib
+    h = hashlib.sha256(text.encode('utf-8')).hexdigest()
+    out['ask_scope'] = scope
+    out['ask_scope_sha256'] = h
+    spec_json = json.dumps(scope, ensure_ascii=False, separators=(',', ':'))
+    try:
+        _resolver_psql("INSERT INTO ask_scope (answer_sha256, spec, created_at) "
+                       "VALUES (%s, %s, now()) "
+                       "ON CONFLICT (answer_sha256) DO UPDATE SET spec = EXCLUDED.spec, "
+                       "created_at = EXCLUDED.created_at" % (lit(h), lit(spec_json)))
+    except Exception:
+        pass
+
+
+def _ensure_ask_scope_table():
+    """Создать таблицу ask_scope если не существует (при старте сервиса)."""
+    if not RESOLVER_DSN:
+        return
+    try:
+        _resolver_psql("CREATE TABLE IF NOT EXISTS ask_scope ("
+                       "answer_sha256 VARCHAR PRIMARY KEY, "
+                       "spec VARCHAR NOT NULL, "
+                       "created_at TIMESTAMP NOT NULL DEFAULT now())")
+        _resolver_psql("GRANT SELECT ON ask_scope TO serene_ro")
+    except Exception:
+        sys.stderr.write('WARN: ask_scope table creation failed (non-fatal)\n')
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -11618,6 +11676,7 @@ class Handler(BaseHTTPRequestHandler):
                 # это не ответ по данным, и пустой text не должен обрастать оговоркой.
                 if not (mem_action and not data_q):
                     out = stale_note(out, age, STALE_WARN_SEC, STALE_TEXT)
+            _persist_ask_scope(out, question)
             return self._send(200, out)
         except Exception as e:                          # noqa: BLE001
             # 🔴 ЧЕСТНЫЙ ОТКАЗ ПРИ СБОЕ (п. 18), А НЕ ВЫДУМАННЫЙ ОТВЕТ. Любое исключение

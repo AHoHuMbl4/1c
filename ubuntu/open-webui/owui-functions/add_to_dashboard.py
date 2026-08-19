@@ -19,6 +19,7 @@ description: Кнопка под ответом: закрепляет посчи
 # и НЕ пытается угадать источник по тексту ответа: догадка здесь была бы
 # ровно тем дефектом, ради которого числа считает база (п. 12).
 
+import hashlib
 from typing import Optional
 
 import requests
@@ -30,6 +31,9 @@ class Action:
         adapter_url: str = Field(
             default="http://127.0.0.1:3002/dash/add",
             description="Ручка адаптера дашбордов (loopback фронта)")
+        scope_url: str = Field(
+            default="http://127.0.0.1:3002/dash/scope",
+            description="Ручка получения спецификации по хешу ответа")
         timeout_sec: int = Field(default=20, description="Потолок ожидания адаптера")
 
     def __init__(self):
@@ -44,12 +48,27 @@ class Action:
 
         messages = body.get("messages") or []
         message = messages[-1] if messages else {}
-        scope = ((message.get("metadata") or {}).get("ask_scope")
-                 or (body.get("metadata") or {}).get("ask_scope"))
-        if not scope:
+        text = (message.get("content") or "").strip()
+        if not text:
+            await say("Закреплять нечего: пустой ответ.")
+            return None
+
+        answer_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        try:
+            sr = requests.post(self.valves.scope_url,
+                               json={"answer_sha256": answer_sha},
+                               timeout=self.valves.timeout_sec)
+        except requests.RequestException as exc:
+            await say(f"Не удалось получить спецификацию: {exc}")
+            return None
+        if sr.status_code == 404:
             await say("Закреплять нечего: в ответе нет спецификации счёта "
                       "(источник и величина). Кнопка работает на ответах с числом.")
             return None
+        if sr.status_code != 200:
+            await say(f"Спецификация не получена ({sr.status_code}): {sr.text.strip()}")
+            return None
+        scope = sr.json()
 
         await say("Добавляю панель…", done=False)
         cookie = ""

@@ -1,3 +1,24 @@
+## 19.08: стык ask_scope — спецификация счёта наружу через SereneDB `[код]`
+
+`[код]` **Путь B** (через SereneDB, без новых портов/ручек): `serene_ask.py`
+записывает `ask_scope` (sha256 текста ответа → JSON спецификации: src, where,
+measure, axis, period_col, title) в таблицу `ask_scope` при каждом ответе
+`kind=answer/figures` с посчитанным scope. Кнопка `add_to_dashboard.py` вычисляет
+sha256 текста ответа, запрашивает scope у `dash_adapter.py` `/dash/scope` (SELECT
+через Grafana `/api/ds/query` → relay → SereneDB), получает спецификацию и отдаёт
+в `/dash/add` для создания панели.
+
+Таблица `ask_scope` — `ubuntu/serenedb/ask_scope_table.sql` (CREATE от postgres,
+GRANT SELECT → serene_ro, INSERT/UPDATE → serene_resolver). На dev-стенде создана
+в обеих базах; на okna — при выкате.
+
+Оффлайн: SQL обоих видов панелей (`timeseries` по дням, `barchart` по оси)
+генерируется корректно из спецификации; запросы проверены на живой SereneDB
+(6 строк «по дням», ошибка «колонка не найдена» с подсказкой годных — на
+негодной оси). Smoke gold: `0err/8`.
+
+Доки: `DASHBOARD_GRAFANA.md §2.2` — путь B выбран и описан.
+
 ## 19.08: гейт rank/group — числа из имён групп в белый список `[код]`
 
 `[код]` Числа внутри строковых подписей групп (`g["name"]`) добавлены в whitelist

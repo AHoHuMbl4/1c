@@ -168,7 +168,10 @@ class Handler(BaseHTTPRequestHandler):
         Модель тут не участвует — она не пишет запрос и не видит схему
         (п. 19, 20 TARGET.md).
         """
-        if urlparse(self.path).path != f"{DASH_PREFIX}/add":
+        route = urlparse(self.path).path
+        if route == f"{DASH_PREFIX}/scope":
+            return self._handle_scope()
+        if route != f"{DASH_PREFIX}/add":
             self._send(404, b"not found\n")
             return
         user = self._session_user()
@@ -208,6 +211,52 @@ class Handler(BaseHTTPRequestHandler):
                            "title": out["title"], "sql": out["rawSql"]},
                           ensure_ascii=False).encode()
         self._send(200, body, "application/json; charset=utf-8")
+
+    def _handle_scope(self):
+        """POST /dash/scope: по sha256 текста ответа вернуть спецификацию счёта.
+
+        Кнопка «добавить в дашборд» вычисляет sha256 текста ответа и запрашивает
+        спецификацию, которую serene_ask записал в таблицу ask_scope. Путь не
+        требует сессии чата — хеш ответа сам по себе непредсказуем (TTL ~час).
+        """
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > 4096:
+            self._send(400, b"bad request\n")
+            return
+        try:
+            body = json.loads(self.rfile.read(length))
+        except json.JSONDecodeError:
+            self._send(400, b"bad json\n")
+            return
+        sha = str(body.get("answer_sha256") or "").strip()
+        if not sha or len(sha) != 64:
+            self._send(400, b"answer_sha256 required (64 hex chars)\n")
+            return
+        if not GRAFANA_PW:
+            self._send(503, b"no GRAFANA_ADMIN_PASSWORD\n")
+            return
+        try:
+            g = Grafana(GRAFANA_URL, GRAFANA_PW)
+            ds = g.default_datasource()
+            sql = "SELECT spec FROM ask_scope WHERE answer_sha256 = '%s'" % sha.replace("'", "''")
+            result = g.call("POST", "/api/ds/query",
+                            {"queries": [{"refId": "A", "datasource": ds,
+                                          "rawSql": sql, "format": "table"}],
+                             "from": "now-1h", "to": "now"})
+            frames = result.get("results", {}).get("A", {}).get("frames", [])
+            values = []
+            for f in frames:
+                vals = (f.get("data", {}).get("values") or [])
+                if vals and vals[0]:
+                    values.extend(vals[0])
+            if not values:
+                self._send(404, b"scope not found\n")
+                return
+            spec = json.loads(values[0])
+            self._send(200, json.dumps(spec, ensure_ascii=False).encode(),
+                       "application/json; charset=utf-8")
+        except Exception as exc:
+            self._send(502, f"scope lookup failed: {exc}\n".encode())
 
     do_HEAD = do_GET
 
