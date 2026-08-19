@@ -1,0 +1,40 @@
+{
+  "uid": "okna-sales",
+  "title": "Продажи okna",
+  "tags": ["okna"],
+  "time": {"from": "now-180d", "to": "now"},
+  "refresh": "5m",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Реализация ТМЦ: сумма по дням",
+      "datasource": {"type": "postgres", "uid": "${DS_SERENEDB}"},
+      "gridPos": {"h": 9, "w": 14, "x": 0, "y": 0},
+      "fieldConfig": {"defaults": {"unit": "currencyRUB"}, "overrides": []},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "time_series",
+          "datasource": {"type": "postgres", "uid": "${DS_SERENEDB}"},
+          "rawSql": "SELECT date_trunc('day', \"Period\"::timestamp) AS time, sum(\"Сумма\"::DECIMAL) AS value FROM accumulationregister_реализациятмц_recordtype GROUP BY 1 ORDER BY 1"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Строк в витрине",
+      "datasource": {"type": "postgres", "uid": "${DS_SERENEDB}"},
+      "gridPos": {"h": 9, "w": 5, "x": 14, "y": 0},
+      "targets": [
+        {
+          "refId": "A",
+          "format": "table",
+          "datasource": {"type": "postgres", "uid": "${DS_SERENEDB}"},
+          "rawSql": "SELECT count(*) AS \"Строк\" FROM accumulationregister_реализациятмц_recordtype"
+        }
+      ]
+    }
+  ]
+}

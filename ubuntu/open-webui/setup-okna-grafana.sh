@@ -23,6 +23,8 @@ BACKEND_IP="${BACKEND_IP:-10.3.0.4}"
 VERSION="${GRAFANA_VERSION:-13.2.0}"
 BUILD="${GRAFANA_BUILD:-32077357341}"
 BASE=/opt/1c-grafana
+# Семена дашбордов контура (пусто = не ставить; для okna: grafana/contours/okna).
+DASHBOARD_SEEDS_DIR="${DASHBOARD_SEEDS_DIR:-}"
 DATA=/var/lib/1c-grafana
 ENVF=/etc/1c-grafana.env
 KEY_PRIV=/etc/1c-grafana-jwt-private.pem
@@ -77,8 +79,9 @@ set -a; . "$ENVF"; set +a
 : "${SERENE_RO_PW:?нужен SERENE_RO_PW (env или $ENVF) — пароль serene_ro с бэкенда}"
 
 # --- 4. конфиг Grafana ---------------------------------------------------------
-# Подпуть /dash/: Caddy (handle_path) срезает префикс, Grafana добавляет его
-# обратно в ссылках (serve_from_sub_path). auth.jwt: вход по заголовку от
+# Подпуть /dash/: Caddy проксирует БЕЗ срезания префикса (handle, не
+# handle_path — ловушка 8), Grafana ждёт подпуть в запросе
+# (serve_from_sub_path). auth.jwt: вход по заголовку от
 # Caddy (cookie gf_jwt → X-JWT-Assertion); header_name обязателен явно,
 # url_login первым запросом сессии не даёт [замер 18.08, docs/DASHBOARD_GRAFANA.md].
 cat > "$BASE/custom.ini" <<EOF
@@ -161,14 +164,14 @@ echo "✅ grafana :3001 и dash-enter :3002 подняты"
 
 # --- 6. Caddy -------------------------------------------------------------------
 # Шаблон Caddyfile.okna уже содержит блоки /dash/* (handle enter → :3002,
-# handle_path /dash/* → :3001 с подстановкой cookie в заголовок).
+# handle /dash/* → :3001 с подстановкой cookie в заголовок, префикс не срезаем).
 sed "s/__DOMAIN__/$DOMAIN/g" "$SCRIPT_DIR/Caddyfile.okna" > /etc/caddy/Caddyfile
 caddy validate --config /etc/caddy/Caddyfile >/dev/null
 systemctl reload caddy
 echo "✅ caddy перечитал Caddyfile (блоки /dash/* активны)"
 
 # --- 7. datasource SereneDB (через релей бэкенда) --------------------------------
-export GRAFANA_ADMIN_PASSWORD BACKEND_IP
+export GRAFANA_ADMIN_PASSWORD BACKEND_IP SCRIPT_DIR DASHBOARD_SEEDS_DIR
 python3 - <<'PYEOF'
 import json, os, base64, time, urllib.request, urllib.error
 
@@ -196,7 +199,12 @@ ds_body = {
     "name": "serenedb-ro", "type": "postgres", "access": "proxy",
     "url": f"{os.environ['BACKEND_IP']}:7890", "user": "serene_ro",
     "database": "postgres",
-    "jsonData": {"sslmode": "disable", "postgresVersion": 1500},
+    # 🔴 имя базы обязано лежать в jsonData: Grafana 13 у postgres читает его
+    # оттуда, а не из поля верхнего уровня. С одним верхним полем панели дают
+    # «You do not currently have a default database configured for this data
+    # source» и No data [замер 19.08, живой okna].
+    "jsonData": {"sslmode": "disable", "postgresVersion": 1500,
+                 "database": "postgres"},
     "secureJsonData": {"password": os.environ["SERENE_RO_PW"]},
     "readOnly": True}
 old = next((d for d in all_ds if d["name"] == "serenedb-ro"), None)
@@ -215,6 +223,42 @@ frames = res["results"]["A"].get("frames", [])
 if not frames:
     raise SystemExit(f"probe не вернул данных: {res}")
 print("✅ probe select version():", frames[0]["data"]["values"][0][0][:60])
+
+# --- 8. семена дашбордов контура ------------------------------------------------
+# Дашборд, созданный руками в UI, живёт только в grafana.db — переустановка
+# теряет его молча [19.08]. Семя — снимок дашборда КОНТУРА: в его панелях стоят
+# имена таблиц конкретной базы 1С, поэтому в установку по умолчанию оно НЕ
+# входит (иначе коробка на чужой базе получила бы панели с чужими именами).
+# Каталог задаётся снаружи: DASHBOARD_SEEDS_DIR=grafana/contours/okna.
+# uid datasource в семени — плейсхолдер ${DS_SERENEDB} (на другой машине другой).
+# Существующий дашборд НЕ перетирается: его правит пользователь (и будущая
+# кнопка «добавить в дашборд» дописывает панели через API).
+import glob, pathlib
+
+seeds_dir = os.environ.get("DASHBOARD_SEEDS_DIR", "").strip()
+seeds = []
+if seeds_dir:
+    if not os.path.isabs(seeds_dir):
+        seeds_dir = os.path.join(os.environ["SCRIPT_DIR"], seeds_dir)
+    seeds = sorted(glob.glob(os.path.join(seeds_dir, "*.json")))
+    if not seeds:
+        raise SystemExit(f"DASHBOARD_SEEDS_DIR={seeds_dir}: семян не найдено")
+else:
+    print("семена дашбордов не заданы (DASHBOARD_SEEDS_DIR пуст) — пропускаем")
+for path in seeds:
+    raw = pathlib.Path(path).read_text(encoding="utf-8").replace("${DS_SERENEDB}", uid)
+    model = json.loads(raw)
+    try:
+        call("GET", f"/api/dashboards/uid/{model['uid']}")
+        print(f"дашборд {model['uid']}: уже есть, не трогаем")
+        continue
+    except urllib.error.HTTPError as e:
+        if e.code != 404:
+            raise
+    call("POST", "/api/dashboards/db",
+         {"dashboard": model, "overwrite": False,
+          "message": "seed из репозитория (setup-okna-grafana.sh)"})
+    print(f"✅ дашборд {model['uid']} восстановлен из семени")
 PYEOF
 
 echo "Готово: https://$DOMAIN/dash/enter — вход из чата без второго логина."
