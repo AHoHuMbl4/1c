@@ -66,6 +66,75 @@ A._BALANCE_REGS.update({"set": frozenset(["accumulationregister_остатки"]
 t("stock with balance regs → proceed",
   A.stock_balance_no_data("остаток на складе", {}, {}, time.time()) is None)
 
+
+
+# --- hotfix: rank n_groups=1 (okna передача на хранение, rid 5b6da6da) ---
+AGG1 = {
+    "count": 19, "sum": 21.0, "leader": 21.0, "measure": "Количество",
+    "grain": "group", "col": "refs_map.ТМЦ", "form": "rank", "n_groups": 1,
+    "groups": [{"name": "Prod A", "value": 21.0, "count": 19}],
+    "folders": 0, "count_amount": 19,
+}
+ROWS1 = A.serene_axis.group_rows(AGG1["groups"])
+q_storage = "какого товара больше всего передали на хранение?"
+try:
+    filled, bad = A._fill_figures(
+        "Топ: {total:g0}, всего {total}.", AGG1, [], True, slot_mode="rank")
+    t("rank n_groups=1 fill без TypeError", True)
+    t("rank n_groups=1 g0=21", "21" in filled.replace("\u00a0", ""), filled)
+    t("rank n_groups=1 total=21", filled.count("21") >= 2, filled)
+except TypeError as e:
+    t("rank n_groups=1 fill без TypeError", False, e)
+try:
+    A.copied_figures("Итого.", AGG1, ROWS1 + [21.0])
+    t("rank n_groups=1 copied_figures+float хвост", True)
+except TypeError as e:
+    t("rank n_groups=1 copied_figures+float хвост", False, e)
+try:
+    seen = A.rows_seen(ROWS1 + [21.0])
+    ok, _ = A.gate("21", seen, AGG1, [21.0, 1], [], money=True, slot_mode="rank")
+    t("rank n_groups=1 gate+float хвост", ok)
+except TypeError as e:
+    t("rank n_groups=1 gate+float хвост", False, e)
+
+# --- hotfix: rank intent из «больше всего» при want=sum ---
+intent_sale = {"want": "sum", "kind": "товар", "amount": {}}
+t("rank intent «продали за всё время»",
+  A.rank_intent_from(intent_sale, {}, "какого товара больше всего продали за всё время?"))
+hint_sale = A.rank_measure_hint(
+    names, intent_sale, "какого товара больше всего продали за всё время?")
+t("rank measure «продали» → Количество", hint_sale == "Количество", hint_sale)
+
+# --- hotfix: count_kind не на rank ---
+src = open(A.__file__, encoding="utf-8").read()
+t("compose: count_kind закрыт на rank",
+  'if kw and slot_mode != "rank":' in src)
+
+# --- prefer entity: табчасть не первая ---
+class _Fake:
+    pass
+
+
+def _fake_psql(q):
+    if "parent FROM" in q:
+        return [
+            ("document_реализациятмц_номенклатура", "Реализация", "document_реализациятмц"),
+            ("accumulationregister_реализациятмц", "Регистр", ""),
+        ]
+    raise RuntimeError("no db")
+
+
+_old_psql = A.psql
+A.psql = _fake_psql
+try:
+    got = A.prefer_entity_for_rank(
+        ["document_реализациятмц_номенклатура", "accumulationregister_реализациятмц"],
+        intent_sale, "какого товара больше всего продали за всё время?")
+    t("prefer rank: регистр перед табчастью",
+      got[0] == "accumulationregister_реализациятмц", got)
+finally:
+    A.psql = _old_psql
+
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))
 if FAIL:
     print("failed:", ", ".join(FAIL))

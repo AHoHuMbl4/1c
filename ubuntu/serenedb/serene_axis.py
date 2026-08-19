@@ -261,6 +261,8 @@ def group_rows(groups):
     """Свёрнутые группы в форме строки корпуса: модели уходят они, не сырые строки."""
     out = []
     for g in groups or []:
+        if not isinstance(g, dict):
+            continue
         name = g.get("name") or ""
         val = g.get("value")
         n = g.get("count")

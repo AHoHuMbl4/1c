@@ -418,7 +418,11 @@ def _fmt(v):
 
 def _fmt_human(v):
     """То же _fmt, разряды неразрывным пробелом — как подстановка гейта."""
+    if isinstance(v, (list, dict, tuple)):
+        return str(v)
     out = _fmt(v)
+    if not isinstance(out, str):
+        out = str(out)
     head, _, frac = out.partition(".")
     neg, head = (head[:1] == "-"), head.lstrip("-")
     if not head:
@@ -2999,8 +3003,22 @@ def total_question_skips_axis(intent, measure, grain_dec, plan=None, question=""
 
 
 
-def rank_intent_from(intent, plan=None):
-    """Рейтинг/топ: want=list или amount без порога, либо max/min."""
+def rank_question_text(question):
+    """Фразы рейтинга в тексте вопроса — не только want=list."""
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return False
+    markers = (
+        "больше всего", "больше всех", "наибольш", "наименьш",
+        "какого товар", "какой товар", "какая номенклатур",
+        "top ", " most ", "maximum", "leader", "лидер", "рейтинг",
+        "топ-", "топ ",
+    )
+    return any(m in q for m in markers)
+
+
+def rank_intent_from(intent, plan=None, question=""):
+    """Рейтинг/топ: want=list, amount без порога, max/min или фраза вопроса."""
     intent = intent or {}
     plan = plan or {}
     amt = intent.get("amount") or {}
@@ -3010,12 +3028,57 @@ def rank_intent_from(intent, plan=None):
         return True
     if (plan.get("compute") or "") in ("max", "min"):
         return True
+    if rank_question_text(question):
+        return True
     return False
 
 
-def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis):
+def product_axis_pref(cols):
+    """Ось номенклатуры/ТМЦ — приоритет для рейтинга товара."""
+    cols = list(cols or [])
+    hits = []
+    for c in cols:
+        cl = (c or "").lower()
+        if any(w in cl for w in ("тмц", "номенклатур", "nomencl", "product", "goods")):
+            hits.append(c)
+    return hits[0] if len(hits) == 1 else None
+
+
+def prefer_entity_for_rank(cands, intent, question, plan=None):
+    """Рейтинг товара: регистр/документ вместо табличной части в вилке."""
+    if not rank_intent_from(intent, plan, question):
+        return cands
+    q = (question or "").lower()
+    kind = ((intent or {}).get("kind") or "").lower()
+    productish = (
+        any(w in q for w in ("товар", "номенклатур", "product", "item", "goods"))
+        or any(w in kind for w in ("товар", "номенклатур", "product", "item", "goods"))
+    )
+    if not productish or len(cands or []) < 2:
+        return cands
+    try:
+        rs = psql(
+            "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
+            % (TABLES, ", ".join(lit(c) for c in cands)))
+    except RuntimeError:
+        return cands
+    parent_by = {r[0]: (r[2] if len(r) > 2 else "") for r in rs or [] if r and r[0]}
+    children = [c for c in cands if parent_by.get(c)]
+    if not children:
+        return cands
+    tops = [c for c in cands if c not in children]
+    if not tops:
+        return cands
+    reg_doc = [c for c in tops
+               if str(c).startswith(("accumulationregister_", "document_"))]
+    if reg_doc:
+        return reg_doc + [c for c in tops if c not in reg_doc] + children
+    return tops + children
+
+
+def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
     """Билет оси: grain=group сохраняется; form=rank при рейтинговом вопросе."""
-    rankish = rank_intent_from(intent, plan) or (
+    rankish = rank_intent_from(intent, plan, question) or (
         (grain_dec or {}).get("form") in ("rank", "compare"))
     form = "rank" if rankish else ((grain_dec or {}).get("form") or "number")
     return {"grain": "group", "col": prov_axis, "form": form,
@@ -3029,7 +3092,7 @@ def rank_measure_hint(names, intent, question, alias_by=None):
         return None
     if (intent or {}).get("measure"):
         return None
-    if not rank_intent_from(intent):
+    if not rank_intent_from(intent, question=question):
         return None
     q = (question or "").lower()
     kind = ((intent or {}).get("kind") or "").lower()
@@ -4189,6 +4252,10 @@ def _atom_exact_value(agg, operation, money):
     if operation in ("max", "min", "avg"):
         return agg.get(operation)
     if operation in ("sum", "rank", "compare"):
+        if (agg or {}).get("grain") == "group":
+            lead = _group_leader(agg)
+            if lead is not None:
+                return lead
         if money and agg.get("sum") is not None:
             return agg.get("sum")
         return agg.get("count")
@@ -5667,7 +5734,8 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None, slot_mode=Non
     """
     if not text:
         return text, []
-    known = dict(agg or {})
+    known = {k: v for k, v in (agg or {}).items()
+             if k not in ("groups", "scope") and not isinstance(v, (list, dict))}
     if slot_mode is None:
         slot_mode = "rank" if (agg or {}).get("grain") == "group" else "list"
     if slot_mode == "count":
@@ -6135,6 +6203,8 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
     if (not pairs_only and agg and agg.get("grain") == "group"
             and slot_mode in ("rank", "list")):
         for i, g in enumerate((agg.get("groups") or [])[:ROWS_TO_MODEL]):
+            if not isinstance(g, dict):
+                continue
             nm = (g.get("name") or "").strip()
             if nm:
                 body += "\n  %s: total -> {total:g%d}" % (nm, i)
@@ -6174,7 +6244,7 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS. The values are not shown; each "
                  "placeholder below is replaced by the system with the exact figure:")
         kw = kind_word(src) if src else ""
-        if kw:
+        if kw and slot_mode != "rank":
             body += "\n  count_kind (record type noun) -> {count_kind}"
         # sum=0.0 делает has_money ложным; {count} на sum/rank — дыра 5ca1b66.
         if slot_mode not in ("sum", "rank"):
@@ -6194,7 +6264,7 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
                  "are not shown; each placeholder below is replaced by the system with "
                  "the exact figure:" % (agg.get("measure") or "-"))
         kw = kind_word(src) if src else ""
-        if kw:
+        if kw and slot_mode != "rank":
             body += "\n  count_kind (record type noun) -> {count_kind}"
         # Стоп 1: на sum/rank счёт не слот модели (код может дописать после гейта).
         if slot_mode in ("count", "list"):
@@ -6866,7 +6936,10 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
     # Даты: названная дата обязана совпасть с датой из данных ПОКОМПОНЕНТНО.
     known = []
     for r in rows:
-        known += _dates(r[3]) + _dates(r[5])
+        try:
+            known += _dates(r[3]) + _dates(r[5])
+        except (TypeError, IndexError):
+            continue
     # Границы периода (`date_min`/`date_max`) посчитаны базой по ВСЕМУ множеству, а `rows`
     # — лишь показанная выборка (LIMIT): строки с крайней датой в ней может не быть.
     # [замер 28.07] из-за этого верный ответ с «28.02.2026» (это `date_max`) отвергался
@@ -9036,6 +9109,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             match = code_filter
     else:
         try:
+            cands = prefer_entity_for_rank(cands, intent, question)
             picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
                                               counts_for_model, match, diag)
         except RuntimeError:
@@ -10030,7 +10104,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     how = ""
     _mnames = measures_of(src)
     _malias = measure_aliases_of(src)
-    _rank_intent = rank_intent_from(intent, plan)
+    _rank_intent = rank_intent_from(intent, plan, question)
     _mhint = (rank_measure_hint(_mnames, intent, question, _malias)
               if not measure_pick else None)
     if plan.get("quantity") and plan["quantity"] in _mnames:
@@ -10061,7 +10135,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     else:
         measure, measure_alts, how = pick_measure(src, question,
                                                   (intent.get("measure") or ""))
-        if (_rank_intent and how == "rerank" and _mhint
+        if _rank_intent and how == "rerank":
+            _hint2 = _mhint or rank_measure_hint(_mnames, intent, question, _malias)
+            if _hint2:
+                measure, measure_alts, how = _hint2, [], "rank_hint"
+                diag["measure_rank_hint"] = _hint2
+            elif len(_mnames) > 1:
+                measure, measure_alts = None, _mnames
+                diag["measure_guess_refused"] = "rank_rerank"
+        elif (_rank_intent and how == "rerank" and _mhint
                 and measure and measure != _mhint):
             measure, how = _mhint, "rank_hint"
             diag["measure_rank_hint"] = _mhint
@@ -10232,9 +10314,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 _acol = _was["ось"]
                 if any(a.get("col") == _acol for a in axes):
                     _kh = [_acol]
-            _rank_intent = rank_intent_from(intent, plan)
+            _rank_intent = rank_intent_from(intent, plan, question)
             if (not _kh and (plan.get("compute") in ("max", "min") or _rank_intent)):
                 _kh = kind_axis_rerank(axes, intent.get("kind"))
+            if _rank_intent and len(_kh or []) > 1:
+                _pref = product_axis_pref(_kh)
+                if _pref:
+                    _kh = [_pref]
             _th = term_axis_hits(src, axes, terms_for_axis)
             if _kh and _rank_intent:
                 _kh_set = set(_kh)
@@ -10259,7 +10345,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     elif resolved.get("axis"):
         _prov_axis = resolved["axis"]
     if _prov_axis:
-        grain_dec = grain_dec_from_axis_ticket(intent, plan, grain_dec, _prov_axis)
+        grain_dec = grain_dec_from_axis_ticket(
+            intent, plan, grain_dec, _prov_axis, question)
         diag["axis_from_choice"] = _prov_axis
     if total_question_skips_axis(intent, measure, grain_dec, plan, question,
                                  trusted=trusted, resolved=resolved):
@@ -10278,6 +10365,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if (serene_axis and grain_dec.get("form") in ("rank", "compare")
             and not measure
             and not measure_already_proven(trusted, resolved, measure_pick)):
+        _mhint_fold = rank_measure_hint(
+            measures_of(src), intent, question, measure_aliases_of(src))
+        if _mhint_fold:
+            measure = _mhint_fold
+            diag["measure_rank_hint"] = _mhint_fold
         _rn = [m for m, v, mx, mn in (totals or [])]
         if not _rn:
             _rn = measures_of(src)
@@ -10295,8 +10387,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 _nr = int(_cq[0][0]) if _cq and _cq[0] else None
             except (RuntimeError, TypeError, ValueError, IndexError):
                 _nr = None
-            measure, _rank_alts = serene_axis.rank_fold_choice(
-                measure, _rn, _qt, n_rows=_nr)
+            if not measure:
+                measure, _rank_alts = serene_axis.rank_fold_choice(
+                    measure, _rn, _qt, n_rows=_nr)
+            else:
+                _rank_alts = []
             if _rank_alts:
                 names = [m for m in _rank_alts if m]
                 try:
@@ -10567,7 +10662,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     cov_slots = ({"in_1c": cov["in_1c"], "in_search": cov["in_search"],
                   "missing": cov["missing"]} if cov else None)
     kw_src = kind_word(src) if src else ""
-    if kw_src:
+    if kw_src and slot_mode != "rank":
         cov_slots = dict(cov_slots or {})
         cov_slots["count_kind"] = kw_src
     text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots,
