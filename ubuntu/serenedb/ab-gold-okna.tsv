@@ -1,36 +1,14 @@
-# Приёмочный набор: собран ИЗ ДАННЫХ базы генератором ab_gold_build.py.
-# Руками здесь ничего не правится — правится генератор и набор пересобирается.
-# Формат: вопрос <TAB> эталонный SQL или MODE=… <TAB> опции (PICK=, CLS=).
-# Числа не зашиты: эталон считает SQL при каждом прогоне (ab_scorer.py).
-# PICK — клик человека по развилке (то же, что кнопка в боте): src/measure/axis.
-# Сущность набора: accumulationregister_реализациятмц (Реализация ТМЦ), денежная величина «Всего», штучная «Количество».
-# класс 1 итог периода
-Сколько всего по «Реализация ТМЦ» за вчера?	SELECT coalesce(round(sum(nums['Всего']), 2), 0) FROM search_corpus WHERE src_table = 'accumulationregister_реализациятмц' AND doc_date >= CURRENT_DATE - INTERVAL 1 day AND doc_date < CURRENT_DATE	CLS=1 итог периода PICK=src:accumulationregister_реализациятмц|measure:Всего
-# класс 1 итог периода
-Сколько всего по «Реализация ТМЦ» за позавчера?	SELECT coalesce(round(sum(nums['Всего']), 2), 0) FROM search_corpus WHERE src_table = 'accumulationregister_реализациятмц' AND doc_date >= CURRENT_DATE - INTERVAL 2 day AND doc_date < CURRENT_DATE - INTERVAL 1 day	CLS=1 итог периода PICK=src:accumulationregister_реализациятмц|measure:Всего
-# класс 1 итог периода
-Сколько всего по «Реализация ТМЦ» за сегодня?	SELECT coalesce(round(sum(nums['Всего']), 2), 0) FROM search_corpus WHERE src_table = 'accumulationregister_реализациятмц' AND doc_date >= CURRENT_DATE AND doc_date < CURRENT_DATE + INTERVAL 1 day	CLS=1 итог периода PICK=src:accumulationregister_реализациятмц|measure:Всего
-# класс 1 итог периода
-Сколько всего по «Реализация ТМЦ» за текущий месяц?	SELECT coalesce(round(sum(nums['Всего']), 2), 0) FROM search_corpus WHERE src_table = 'accumulationregister_реализациятмц' AND doc_date >= date_trunc('month', CURRENT_DATE) AND doc_date < CURRENT_DATE + INTERVAL 1 day	CLS=1 итог периода PICK=src:accumulationregister_реализациятмц|measure:Всего
-# класс 2 пустой день
-Сколько всего по «Реализация ТМЦ» за 16 августа 2026 года?	SELECT coalesce(round(sum(nums['Всего']), 2), 0) FROM search_corpus WHERE src_table = 'accumulationregister_реализациятмц' AND doc_date >= '2026-08-16' AND doc_date < '2026-08-16'::date + INTERVAL 1 day	CLS=2 пустой день PICK=src:accumulationregister_реализациятмц|measure:Всего
-# класс 3 счёт справочника
-Сколько записей в справочнике «Номенклатура»?	SELECT count(*) FROM search_corpus WHERE src_table = 'catalog_номенклатура' AND NOT coalesce(flags['IsFolder'], false)	CLS=3 счёт справочника PICK=src:catalog_номенклатура
-# класс 3 счёт справочника
-Сколько записей в справочнике «Контрагенты»?	SELECT count(*) FROM search_corpus WHERE src_table = 'catalog_контрагенты' AND NOT coalesce(flags['IsFolder'], false)	CLS=3 счёт справочника PICK=src:catalog_контрагенты
-# класс 4 rank top-1 по количеству
-Покажи топ-1 по величине «Количество» в разрезе «ТМЦ» за всё время по «Реализация ТМЦ».	SELECT round(sum(nums['Количество']), 2) s FROM search_corpus WHERE src_table = 'accumulationregister_реализациятмц' GROUP BY refs_map['ТМЦ'] ORDER BY s DESC LIMIT 1 OFFSET 0	CLS=4 rank top-1 по количеству PICK=src:accumulationregister_реализациятмц|axis:ТМЦ|measure:Количество
-# класс 4 rank top-3 по сумме
-Покажи топ-3 по величине «Всего» в разрезе «ТМЦ» за всё время по «Реализация ТМЦ».	SELECT round(sum(nums['Всего']), 2) s FROM search_corpus WHERE src_table = 'accumulationregister_реализациятмц' GROUP BY refs_map['ТМЦ'] ORDER BY s DESC LIMIT 1 OFFSET 2	CLS=4 rank top-3 по сумме PICK=src:accumulationregister_реализациятмц|axis:ТМЦ|measure:Всего
-# класс 5 top-1 по сумме, вторая ось
-Кто в лидерах по величине «Всего» в разрезе «Контрагент» за всё время по «Реализация ТМЦ»?	SELECT round(sum(nums['Всего']), 2) s FROM search_corpus WHERE src_table = 'accumulationregister_реализациятмц' GROUP BY refs_map['Контрагент'] ORDER BY s DESC LIMIT 1 OFFSET 0	CLS=5 top-1 по сумме, вторая ось PICK=src:accumulationregister_реализациятмц|axis:Контрагент|measure:Всего
-# класс 6 вилка регистр-документ
-Сколько было «Реализация ТМЦ» за июль 2026?	MODE=fork	CLS=6 вилка регистр-документ
-# класс 7 величина-пустышка
-Какой итог по величине «Сумма» в «Реализация ТМЦ» за всё время?	MODE=pivot	CLS=7 величина-пустышка PICK=src:accumulationregister_реализациятмц
-# класс 8 остатки: no_data
-Какие сейчас остатки по «Номенклатура» на складах?	MODE=kind	CLS=8 остатки: no_data
-# класс 9 прошлый месяц
-Сколько всего по «Реализация ТМЦ» за июль 2026?	SELECT coalesce(round(sum(nums['Всего']), 2), 0) FROM search_corpus WHERE src_table = 'accumulationregister_реализациятмц' AND doc_date >= '2026-07-01'::date AND doc_date < ('2026-07-01'::date + INTERVAL 1 month)	CLS=9 прошлый месяц PICK=src:accumulationregister_реализациятмц|measure:Всего
-# класс 9 счёт документов за месяц
-Сколько документов «Реализация ТМЦ» за июль 2026?	SELECT count(*) FROM search_corpus WHERE src_table = 'document_реализациятмц' AND doc_date >= '2026-07-01'::date AND doc_date < ('2026-07-01'::date + INTERVAL 1 month)	CLS=9 счёт документов за месяц PICK=src:document_реализациятмц
+# Приёмочный набор okna: вопрос <TAB> SQL или MODE=kind.
+# Числа не зашиты — эталон считается SQL при каждом прогоне.
+# Семантика 19.08: search_corpus, map_extract/map_extract_value, doc_date.
+# «На складе» — MODE=kind: ответ no_data без чисел итогов в text.
+Сколько продали вчера?	SELECT coalesce(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10)))::BIGINT,0) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= CURRENT_DATE - INTERVAL 1 day AND doc_date < CURRENT_DATE
+Сколько продали позавчера?	SELECT coalesce(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10)))::BIGINT,0) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= CURRENT_DATE - INTERVAL 2 day AND doc_date < CURRENT_DATE - INTERVAL 1 day
+Сколько продали сегодня?	SELECT coalesce(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10)))::BIGINT,0) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= CURRENT_DATE AND doc_date < CURRENT_DATE + INTERVAL 1 day
+Сколько у нас контрагентов?	SELECT count(*) FROM search_corpus WHERE src_table='catalog_контрагенты'
+Сколько банков в справочнике?	SELECT count(*) FROM search_corpus WHERE src_table='catalog_банки'
+Какого товара больше всего продали за всё время?	SELECT round(sum(TRY_CAST(map_extract(nums,'Количество')[1] AS DECIMAL(38,10))),2) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' GROUP BY map_extract_value(refs_map,'ТМЦ') ORDER BY 1 DESC LIMIT 1
+Кому мы больше всего продали за всё время?	SELECT round(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10))),2) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' GROUP BY map_extract_value(refs_map,'Контрагент') ORDER BY 1 DESC LIMIT 1
+Сколько документов реализации за декабрь 2025?	SELECT count(*) FROM search_corpus WHERE src_table='document_реализациятмц' AND doc_date >= '2025-12-01' AND doc_date < '2026-01-01'
+Какого товара больше всего передали на хранение?	SELECT round(sum(TRY_CAST(map_extract(nums,'Количество')[1] AS DECIMAL(38,10))),2) FROM search_corpus WHERE src_table='document_передачатмцнаответственноехранение_номенклатура' GROUP BY map_extract_value(refs_map,'ТМЦ') ORDER BY 1 DESC LIMIT 1
+Какого товара больше всего на складе?	MODE=kind
