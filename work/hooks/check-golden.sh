@@ -19,7 +19,7 @@ NEWEST=$(find $SRC_DIRS -type f \( -name '*.py' -o -name '*.js' -o -name '*.mjs'
 
 golden_smoke_mark_ok() {
   [ -f "$MARK" ] || return 1
-  read -r line _ < "$MARK" 2>/dev/null || return 1
+  IFS= read -r line < "$MARK" 2>/dev/null || return 1
   [[ "$line" == smoke\ * ]] && [[ "$line" == *0err/* ]]
 }
 
