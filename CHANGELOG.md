@@ -1,3 +1,11 @@
+## 19.08: ab_scorer v2 — режимы digits/kind/clarify/name [код][замер]
+
+[код] ab_scorer.py — TSV v2 (digits/kind/clarify/name), clarify-follow, name pairs.
+Офлайн test_ab_scorer_v2_modes.py 14/14.
+[замер] Live okna 25 вопросов: 5/25, сбоев 0. Провалы — лишний clarify (12),
+число не сошлось (5), имя не найдено (2), kind не тот (1), пустой эталон (1).
+md5 ab_scorer.py: см. коммит.
+
 ## 19.08: fix unit для штучных/денежных мер + убрать хардкод валюты `[код]`
 
 `[код]` В `ubuntu/serenedb/serene_ask.py`:

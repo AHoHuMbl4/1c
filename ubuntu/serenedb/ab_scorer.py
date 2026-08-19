@@ -11,7 +11,7 @@
 
 Контуры (решение владельца 18.08):
   AB_GOLD_MODE=smoke AB_BASE=ut_test — до выката: 0 сбоев обращения, порог верных не нужен
-  AB_CONTOUR=okna — после выката на okna: ab-gold-okna.tsv, числа + kind=no_data для склада
+  AB_CONTOUR=okna — после выката на okna: ab-gold-okna.tsv (v2: digits/kind/clarify/name)
   AB_BASE=ut_test — прежний набор ab-gold.tsv (A/B или live по ASK_URL)
 """
 import json
@@ -31,6 +31,7 @@ UNIT = "1c-serene-ask@%s.service" % BASE
 ENV_COMMON = "/etc/1c-serene-ask.env"
 ENV_PG = "/etc/1c-serene-ask-postgres.env"
 ENV_MCP = "/etc/1c-mcp-reports.env"
+ASK_USER = os.environ.get("AB_ASK_USER", "gold-v2")
 
 
 def env_value(key, *paths):
@@ -91,7 +92,10 @@ else:
 
 
 def load_gold(path):
-    """Строки набора: sql-эталон или MODE=kind (без числового SQL)."""
+    """Строки набора:
+    - v2: вопрос<TAB>SQL<TAB>режим (digits/kind/clarify/name)
+    - legacy: вопрос<TAB>SQL (digits) или вопрос<TAB>MODE=kind
+    """
     out = []
     try:
         fh = open(path, encoding="utf-8")
@@ -106,19 +110,28 @@ def load_gold(path):
             if "\t" not in line:
                 sys.stderr.write("строка без табуляции пропущена: %s\n" % line[:60])
                 continue
-            q, spec = line.split("\t", 1)
-            spec = spec.strip()
-            if spec == "MODE=kind":
-                out.append({"q": q.strip(), "mode": "kind"})
+            parts = line.split("\t")
+            if len(parts) == 2:
+                q, spec = parts
+                spec = spec.strip()
+                if spec == "MODE=kind":
+                    out.append({"q": q.strip(), "mode": "kind", "sql": None})
+                else:
+                    out.append({"q": q.strip(), "mode": "digits", "sql": spec})
+            elif len(parts) == 3:
+                q, sql, mode = parts
+                out.append({
+                    "q": q.strip(),
+                    "sql": sql.strip(),
+                    "mode": (mode or "").strip().lower(),
+                })
             else:
-                out.append({"q": q.strip(), "mode": "sql", "sql": spec})
+                sys.stderr.write("слишком много колонок пропущено: %s\n" % line[:120])
+                continue
     if not out:
         sys.stderr.write("набор вопросов пуст: %s\n" % path)
         sys.exit(1)
     return out
-
-
-GOLD = load_gold(GOLD_FILE)
 
 
 def truth(sql):
@@ -128,8 +141,11 @@ def truth(sql):
     return (p.stdout or "").strip()
 
 
-def ask(q):
-    body = json.dumps({"question": q}).encode()
+def ask(q, decision_id=None, user=None):
+    body = {"question": q, "user": user or ASK_USER}
+    if decision_id:
+        body["decision_id"] = decision_id
+    body = json.dumps(body).encode()
     req = urllib.request.Request(URL, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
     if TOK:
@@ -148,6 +164,123 @@ def digits(text):
     return {re.sub(r"\D", "", m) for m in re.findall(
         "[\\d\u0020\u00a0\u2007\u2009\u202f\u200b'.,]{1,}", text or "")
             if re.sub(r"\D", "", m)}
+
+
+def extract_number_digits_candidates(d):
+    """Из ответа: собираем все числа, которые могут быть в text/claims/figures/totals."""
+    got = set()
+    if not isinstance(d, dict):
+        return got
+    got |= digits(d.get("text") or "")
+    diag = d.get("diag") or {}
+    if isinstance(diag, dict):
+        claims = diag.get("claims") or {}
+        if isinstance(claims, dict):
+            for v in claims.values():
+                if v is not None:
+                    got |= digits(str(v))
+    figures = d.get("figures") or {}
+    if isinstance(figures, dict):
+        for v in figures.values():
+            if v is not None:
+                got |= digits(str(v))
+    totals = d.get("totals") or {}
+    if isinstance(totals, dict):
+        for v in totals.values():
+            if v is not None:
+                got |= digits(str(v))
+    return got
+
+
+def want_number_digits(want):
+    """Нормализуем эталонную строку в 'ключ' для digits()."""
+    if want is None:
+        return ""
+    return re.sub(r"\D", "", str(want))
+
+
+def parse_float_or_none(s):
+    s = str(s).strip() if s is not None else ""
+    if not s:
+        return None
+    s = s.replace("\u00a0", " ").replace(" ", "")
+    s = s.replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return None
+
+
+def option_text(o):
+    """Какой текст вариантов используем для поиска подстроки."""
+    if not isinstance(o, dict):
+        return ""
+    parts = []
+    for k in ("label", "text", "focus", "src", "measure", "grain", "distinct_by"):
+        v = o.get(k)
+        if v:
+            parts.append(str(v))
+    return " ".join(parts).strip()
+
+
+def choose_clarify_option(options, needle):
+    """Выбираем вариант clarify по подстроке (case-insensitive)."""
+    needle = str(needle or "").strip().lower()
+    if not needle or not isinstance(options, list):
+        return None
+    for o in options:
+        if not isinstance(o, dict):
+            continue
+        hay = option_text(o).lower()
+        if needle in hay:
+            return o
+    return None
+
+
+def ask_with_clarify_follow(question, branch_needle=None, max_steps=6, user=None):
+    """Если сервис ответил clarify и варианты можно однозначно выбрать — идём дальше.
+
+    Важно: для digits/kind ветвление отключается (branch_needle=None), иначе появится
+    "ремонт" провалов.
+    """
+    user = user or ASK_USER
+    out0, out = None, None
+    decision_id = None
+    for _step in range(max_steps):
+        out, _sec = ask(question, decision_id=decision_id, user=user)
+        if out0 is None:
+            out0 = out
+        if (out or {}).get("kind") != "clarify":
+            break
+        if not branch_needle:
+            break
+        opts = out.get("options") or []
+        chosen = choose_clarify_option(opts, branch_needle)
+        if not chosen:
+            break
+        decision_id = chosen.get("decision_id")
+        if not decision_id:
+            break
+    return out0, out
+
+
+def kind_expected_for_kind_mode(sql, want):
+    """Выводим ожидаемый d.kind для режима kind из SQL-эталона.
+
+    В v2 у режима kind SQL часто возвращает 0, а точный d.kind определяется
+    типом вопроса: период/счёт vs наличие складских остатков.
+    """
+    if not sql:
+        return "no_data"  # legacy
+    w = parse_float_or_none(want)
+    is_zero = (w == 0.0)
+    if is_zero:
+        # по okna-live: период с нулём отдаёт figures (сравните с no_data на складе)
+        if "accumulationregister_реализациятмц" in sql or "doc_date" in sql:
+            return "figures"
+        return "no_data"
+    # при ненулевом эталоне вопрос должен закончиться обычным ответом
+    return "answer"
 
 
 def aggregate_totals_in_text(text):
@@ -175,6 +308,104 @@ def kind_row_ok(d):
     if (d.get("kind") or "") != "no_data":
         return False
     return not aggregate_totals_in_text(d.get("text") or "")
+
+
+def score_digits(want, out):
+    want_key = want_number_digits(want)
+    if not want_key:
+        return False, "число не сошлось", "пустой эталон"
+    got = extract_number_digits_candidates(out)
+    ok = want_key in got
+    if ok:
+        return True, "", "ok"
+    return False, "число не сошлось", "want=%s got=%s" % (want_key, ",".join(sorted(got))[:120])
+
+
+def score_kind(sql, want, out):
+    expected = kind_expected_for_kind_mode(sql, want)
+    got_kind = (out or {}).get("kind") or ""
+    if got_kind == "clarify" and expected != "clarify":
+        return False, "лишний clarify", "want kind=%s got kind=clarify" % expected
+    if got_kind != expected:
+        return False, "kind не тот", "want kind=%s got kind=%s" % (expected, got_kind or "—")
+    if expected == "no_data":
+        if not kind_row_ok(out):
+            return False, "число/итоги в no_data", "text has totals"
+    return True, "", "ok"
+
+
+def parse_name_pairs(want_str):
+    """Разбираем SQL-эталон для name в список пар (имя, число|None).
+
+    Форматы в реальном v2:
+    - top-1: "<name>|<number>" (или другой разделитель колонок psql)
+    - top-3: "name = num | name2 = num2 | ..."
+    """
+    s = (want_str or "").strip()
+    if not s:
+        return []
+
+    pairs = []
+    # top-3 style
+    for m in re.finditer(r"(?P<name>[^=|]+?)\s*=\s*(?P<num>-?\d+(?:[.,]\d+)?)", s):
+        nm = m.group("name").strip()
+        nn = m.group("num").strip().replace(",", ".")
+        if nm and nn:
+            pairs.append((nm, nn))
+    if pairs:
+        return pairs
+
+    # top-1 style: <name><sep><number>
+    m = re.match(r"^(?P<name>.+?)\s*(?:[\t| ]+)\s*(?P<num>-?\d+(?:[.,]\d+)?)\s*$", s)
+    if m:
+        nm = m.group("name").strip()
+        nn = m.group("num").strip().replace(",", ".")
+        return [(nm, nn)]
+
+    return [(s, None)]
+
+
+def score_clarify(want, out):
+    if (out or {}).get("kind") != "clarify":
+        got_kind = (out or {}).get("kind") or ""
+        return False, "kind не тот", "want kind=clarify got kind=%s" % got_kind
+    opts = (out or {}).get("options") or []
+    if not opts:
+        return True, "", "clarify without options"
+    needle = str(want or "").strip()
+    if not needle:
+        return True, "", "clarify options ok"
+    for o in opts:
+        if needle.lower() in (option_text(o).lower() or ""):
+            return True, "", "ok"
+    return False, "подстрока clarify не найдена", "needle=%s" % needle
+
+
+def score_name(want, out):
+    text = (out or {}).get("text") or ""
+    got_kind = (out or {}).get("kind") or ""
+    pairs = parse_name_pairs(want)
+    if not pairs:
+        return False, "имя не найдено", "empty name etalon"
+
+    # ожидаемое имя: хотя бы по одной подстроке
+    names_missing = []
+    nums_missing = []
+    got_digits = extract_number_digits_candidates(out)
+    for nm, nn in pairs:
+        if nm:
+            if str(nm).strip().lower() not in str(text).lower():
+                names_missing.append(nm)
+        if nn is not None:
+            nn_key = want_number_digits(nn)
+            if nn_key and nn_key not in got_digits:
+                nums_missing.append(nn)
+
+    if names_missing:
+        return False, "имя не найдено", "missing=%s got_kind=%s" % (",".join(names_missing)[:80], got_kind)
+    if nums_missing:
+        return False, "число не сошлось", "missing nums=%s got_kind=%s" % (",".join(nums_missing)[:80], got_kind)
+    return True, "", "ok"
 
 
 def restart(scorer):
@@ -239,56 +470,118 @@ def write_mark(best_sc, hits, n, errs):
 
 
 def main():
+    gold = load_gold(GOLD_FILE)
     label = CONTOUR or GOLD_MODE or BASE
     print("контур %s, база %s, сервис %s, %s" % (label, BASE, URL, UNIT))
     if LIVE_CONTOUR:
         print("live: без рестарта юнита")
-    gold = []
-    for row in GOLD:
-        if row["mode"] == "kind":
-            gold.append((row["q"], None, "kind"))
-        else:
-            gold.append((row["q"], truth(row["sql"]), "sql"))
+
+    # предвычислим эталоны: они задают проверку и, для clarify/name, ветку.
+    computed = []
     shown = []
-    for q, t, mode in gold:
-        if mode == "kind":
-            shown.append("%s:kind" % q[:24])
+    blind = []
+    for row in gold:
+        q = row["q"]
+        mode = row["mode"]
+        if row.get("sql"):
+            want = truth(row["sql"])
+            if not want:
+                blind.append(q)
         else:
-            shown.append(t or "?")
-    print("эталоны: " + ", ".join(shown))
-    blind = [q for q, t, mode in gold if mode == "sql" and not t]
+            want = None
+        computed.append((q, row.get("sql"), row.get("mode"), want))
+        shown.append("%s:%s=%s" % (mode, q[:18], (want or "")[:18]))
+
     if blind:
         sys.stderr.write("эталон не посчитан у %d вопросов: %s\n"
                          % (len(blind), "; ".join(q[:40] for q in blind[:3])))
         return None
+
+    print("эталоны: " + ", ".join(shown))
     table = {}
     scorers = ["live"] if LIVE_CONTOUR else SCORERS
     for sc in scorers:
         if not LIVE_CONTOUR:
             restart(sc)
-        hits, secs, rows, errs = 0, 0.0, [], 0
-        for q, want, mode in gold:
-            d, sec = ask(q)
-            text = d.get("text") or ""
-            diag = d.get("diag") or {}
-            if diag.get("error"):
-                errs += 1
-            if mode == "kind":
-                ok = kind_row_ok(d)
+        hits, secs, errs = 0, 0.0, 0
+        rows = []
+        failures = []
+
+        for q, sql, mode, want in computed:
+            branch_needle = None
+            if mode in ("clarify", "name"):
+                branch_needle = want
+                if mode == "name" and want:
+                    # для ветки уточнения по имени берем первое имя
+                    np = parse_name_pairs(want)
+                    if np and np[0][0]:
+                        branch_needle = np[0][0]
+
+            t0 = time.time()
+            out0 = outf = None
+            if mode in ("digits", "kind"):
+                out0, outf = ask_with_clarify_follow(q, branch_needle=None, user=ASK_USER)
+            elif mode == "clarify":
+                out0, outf = ask_with_clarify_follow(q, branch_needle=want, user=ASK_USER)
+            elif mode == "name":
+                out0, outf = ask_with_clarify_follow(q, branch_needle=branch_needle, user=ASK_USER)
             else:
-                claims = diag.get("claims") or {}
-                got = digits(text) | {re.sub(r"\D", "", str(v)) for v in claims.values()
-                                      if v is not None}
-                ok = re.sub(r"\D", "", want) in got
+                out0, outf = ask_with_clarify_follow(q, branch_needle=None, user=ASK_USER)
+
+            sec = round(time.time() - t0, 2)
+            if (out0 or {}).get("diag", {}).get("error"):
+                errs += 1
+
+            ok = False
+            defect = ""
+            fact = ""
+            if mode == "digits":
+                ok, defect, fact = score_digits(want, out0)
+            elif mode == "kind":
+                ok, defect, fact = score_kind(sql, want, out0)
+            elif mode == "clarify":
+                ok, defect, fact = score_clarify(want, out0)
+            elif mode == "name":
+                ok, defect, fact = score_name(want, outf)
+                # если в финале всё равно clarify — это "лишний clarify"
+                if not ok and (outf or {}).get("kind") == "clarify":
+                    defect = defect or "лишний clarify"
+            else:
+                ok, defect, fact = False, "неизвестный режим", "mode=%s" % mode
+
             hits += 1 if ok else 0
             secs += sec
-            rows.append((q, ok, diag.get("focus") or d.get("kind"), sec))
-        table[sc] = (hits, round(secs / len(gold), 2), rows, errs)
+            got_kind = (out0 or {}).get("kind") or "—"
+            rows.append((q, mode, ok, defect, got_kind, fact, sec))
+            if not ok:
+                failures.append((q, mode, defect or "FAIL", got_kind, fact))
+
+        table[sc] = (hits, round(secs / len(computed), 2), rows, errs)
         print("\n== %s: верных %d/%d, средняя %.2f с%s"
-              % (sc, hits, len(gold), secs / len(gold),
+              % (sc, hits, len(computed), secs / len(computed),
                  ", СБОЕВ %d" % errs if errs else ""))
-        for q, ok, focus, sec in rows:
-            print("   %s %-46s %-38s %.1fс" % ("+" if ok else "-", q[:46], (focus or "—")[:38], sec))
+
+        # Markdown-таблица на отчёт.
+        print("\n| question | mode | verdict | fact |")
+        print("|---|---|---|---|")
+        for q, mode, ok, defect, got_kind, fact, sec in rows:
+            verdict = "OK" if ok else "FAIL"
+            # fact: компактно, но с достаточным контекстом
+            kind_part = "kind=%s" % got_kind
+            fact_part = fact or ""
+            time_part = "%.1fs" % sec
+            if ok:
+                cell = "%s; %s; %s" % (kind_part, time_part, fact_part)
+            else:
+                cell = "%s; %s; %s; class=%s" % (kind_part, time_part, fact_part, defect)
+            q_cell = (q or "").replace("\n", " ").replace("|", "\\|")
+            cell = cell.replace("\n", " ").replace("|", "\\|")
+            print("| %s | %s | %s | %s |" % (q_cell[:120], mode, verdict, cell[:160]))
+
+        if failures:
+            print("\nПровалы (всего %d):" % len(failures))
+            for q, mode, defect, got_kind, fact in failures:
+                print("- %s | %s | %s (got %s)" % (mode, q[:60], defect, got_kind))
 
     print("\n" + "=" * 62)
     best = max(table.items(), key=lambda kv: (kv[1][0], -kv[1][1]))
