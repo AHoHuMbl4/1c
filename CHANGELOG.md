@@ -29,7 +29,7 @@ md5: `verify-core.js` `7d3c1fc0`, `index.js` `f215bc47`, `mcp_ask.py`
 traceback :10717). Rank+group: whitelist `leader`/`count`/`count_amount`.
 `prefer_entity_for_rank`: подъём `accumulationregister_*` по `written_by` родителя
 табчасти; фильтр на сборе `cands`. Оффлайн **29/29** `test_rank_axis_anchor.py` +
-F-замки. md5 ask **`ea718df0`**. Выкат `:8091` — оркестратор.
+F-замки. md5 ask **`99266ba9`**. Выкат `:8091` — оркестратор.
 
 ## 19.08: скрипт fix-golden-mark-in-tests.sh под smoke-отметку `[код]` `[замер]`
 

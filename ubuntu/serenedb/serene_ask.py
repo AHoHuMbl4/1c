@@ -416,6 +416,22 @@ def _fmt(v):
     return "%d" % v if v == int(v) else "%.2f" % v
 
 
+def _fmt_gate_bad(v):
+    """Строковое представление элемента отказа гейтa (float → _fmt)."""
+    if isinstance(v, float):
+        return _fmt(v)
+    if isinstance(v, int):
+        return str(v)
+    return str(v)
+
+
+def _gate_bad_preview(bad, limit=60):
+    """Срез первой причины гейта для шага/журнала (str + limit)."""
+    if not bad:
+        return "—"
+    return _fmt_gate_bad(bad[0])[:limit]
+
+
 def _fmt_human(v):
     """То же _fmt, разряды неразрывным пробелом — как подстановка гейта."""
     if isinstance(v, (list, dict, tuple)):
@@ -3058,22 +3074,56 @@ def prefer_entity_for_rank(cands, intent, question, plan=None):
         return cands
     try:
         rs = psql(
-            "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
+            "SELECT src_table, parent, written_by FROM %s WHERE src_table IN (%s)"
             % (TABLES, ", ".join(lit(c) for c in cands)))
     except RuntimeError:
         return cands
-    parent_by = {r[0]: (r[2] if len(r) > 2 else "") for r in rs or [] if r and r[0]}
+    parent_by = {}
+    for r in rs or []:
+        if not r or not r[0]:
+            continue
+        parent_by[r[0]] = (r[1] if len(r) > 1 else "") or ""
+    docs = set()
+    for c in cands:
+        p = parent_by.get(c) or ""
+        if p.startswith("document_"):
+            docs.add(p)
+    lifted = []
+    if docs:
+        try:
+            for r in psql(
+                    "SELECT src_table FROM %s WHERE src_table LIKE "
+                    "'accumulationregister_%%' AND written_by IN (%s)"
+                    % (TABLES, ", ".join(lit(d) for d in docs))) or []:
+                if r and r[0] and r[0] not in lifted:
+                    lifted.append(r[0])
+        except RuntimeError:
+            pass
     children = [c for c in cands if parent_by.get(c)]
-    if not children:
-        return cands
     tops = [c for c in cands if c not in children]
-    if not tops:
-        return cands
     reg_doc = [c for c in tops
                if str(c).startswith(("accumulationregister_", "document_"))]
     if reg_doc:
-        return reg_doc + [c for c in tops if c not in reg_doc] + children
-    return tops + children
+        ordered = lifted + reg_doc + [c for c in tops if c not in reg_doc] + children
+    elif lifted:
+        ordered = lifted + list(cands)
+    elif not tops:
+        doc_parents = []
+        for c in cands:
+            p = parent_by.get(c) or ""
+            if p and p not in doc_parents:
+                doc_parents.append(p)
+        reg_doc_parents = [p for p in doc_parents
+                           if str(p).startswith(("accumulationregister_", "document_"))]
+        ordered = lifted + reg_doc_parents + list(cands)
+    else:
+        ordered = tops + children
+    out, seen = [], set()
+    for c in ordered:
+        if c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out
 
 
 def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
@@ -6902,6 +6952,9 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
                             allow(agg[key])
         elif slot_mode == "rank" and group_grain:
             allow(agg.get("sum"))
+            allow(agg.get("leader"))
+            allow(agg.get("count"))
+            allow(agg.get("count_amount"))
             allow(agg.get("n_groups"))
             for g in agg.get("groups") or []:
                 allow(g.get("value"))
@@ -6971,7 +7024,8 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
     # Токен обоснован, если ХОТЯ БЫ ОДНО его прочтение есть в данных. Нумерация пунктов
     # утверждением о данных не является и снимается до разбора (`F248`).
     answer = without_list_markers(answer)
-    bad = [sorted(r)[0] for r in _tokens(answer) if not (r & allowed)]
+    bad = [_fmt_gate_bad(sorted(r)[0])
+           for r in _tokens(answer) if not (r & allowed)]
 
     for d, mo, y in _dates(answer):
         ok = any(kd == d and kmo == mo and (y is None or ky is None or ky == y)
@@ -8602,6 +8656,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # а выдуманный счёт был бы враньём в том самом поле, которым модель различает
     # кандидатов. Порядок ниже всё равно пересобирается по смыслу и реранкером.
     cands = list(by) + [t for t in extra if t not in by]
+    cands = prefer_entity_for_rank(cands, intent, question)
     шаг("кандидаты собраны", всего=len(cands))
     # 🔴 «НА ЧТО НЕ ОТВЕЧАЕТ» — ВТОРАЯ ПОЛОВИНА ЗНАНИЯ УСТАНОВКИ, И ОНА НАКОНЕЦ ЧИТАЕТСЯ.
     # Установочный агент пишет про каждую сущность две половины: «на что отвечает»
@@ -9109,7 +9164,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             match = code_filter
     else:
         try:
-            cands = prefer_entity_for_rank(cands, intent, question)
             picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
                                               counts_for_model, match, diag)
         except RuntimeError:
@@ -10714,7 +10768,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                slot_mode=slot_mode)
     ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
     шаг("гейт исходящего", прошёл=bool(ok), причин=len(bad),
-        первая=(bad[0][:60] if bad else "—"))
+        первая=_gate_bad_preview(bad))
     if ok:
         text = ensure_count_named(text, agg, slot_mode)
     # ОТВЕТ ОБЯЗАН ДОЙТИ, ЕСЛИ ОН ЕСТЬ. Решение владельца 27.07: «если данные есть, но по
@@ -10724,8 +10778,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # проверяем её ТЕМ ЖЕ гейтом. Ослабления проверки здесь нет: если и второй ответ не
     # сходится с базой, он не уйдёт.
     if not ok and agg:
-        diag["retry"] = bad[:3]
-        raw2 = compose(question, rows, agg, corrections=bad[:3], totals=totals_shown,
+        diag["retry"] = [_fmt_gate_bad(x) for x in bad[:3]]
+        raw2 = compose(question, rows, agg,
+                       corrections=[_fmt_gate_bad(x) for x in bad[:3]],
+                       totals=totals_shown,
                        coverage=cov, measure_used=say_measure, folders=n_folders,
                        money=money, src=src, slot_mode=slot_mode,
                        atom_pairs=_answer_pairs)

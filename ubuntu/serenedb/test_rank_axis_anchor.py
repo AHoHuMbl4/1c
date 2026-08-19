@@ -116,10 +116,12 @@ class _Fake:
 
 
 def _fake_psql(q):
-    if "parent FROM" in q:
+    if "written_by IN" in q:
+        return [("accumulationregister_реализациятмц",)]
+    if "parent, written_by" in q or "parent FROM" in q:
         return [
-            ("document_реализациятмц_номенклатура", "Реализация", "document_реализациятмц"),
-            ("accumulationregister_реализациятмц", "Регистр", ""),
+            ("document_реализациятмц_номенклатура", "document_реализациятмц", ""),
+            ("accumulationregister_реализациятмц", "", ""),
         ]
     raise RuntimeError("no db")
 
@@ -134,6 +136,65 @@ try:
       got[0] == "accumulationregister_реализациятмц", got)
 finally:
     A.psql = _old_psql
+
+
+# --- cd1789b follow-up: gate bad float → 503 на шаг() ---
+AGG_LIVE = {
+    "count": 19, "sum": 21.0, "leader": 21.0, "measure": "Количество",
+    "grain": "group", "col": "refs_map.ТМЦ", "form": "rank", "n_groups": 1,
+    "groups": [{"name": "Prod A", "value": 21.0, "count": 19}],
+    "folders": 0, "count_amount": 19,
+}
+ROWS_LIVE = A.serene_axis.group_rows(AGG_LIVE["groups"])
+SEEN_LIVE = A.rows_seen(ROWS_LIVE)
+text_live = "Наибольшее количество — «Prod A»: 21."
+ok_live, bad_live = A.gate(text_live, SEEN_LIVE, AGG_LIVE, [1], [], money=True,
+                           slot_mode="rank")
+t("live rank gate проходит на 21", ok_live, bad_live)
+t("gate bad — строки, не float",
+  not bad_live or all(isinstance(x, str) for x in bad_live), bad_live)
+# воспроизведение bad_nums[0]=float до фикса: preview не падает
+try:
+    _p = A._gate_bad_preview([22.0])
+    t("gate preview float не TypeError", True)
+    t("gate preview float → str", isinstance(_p, str) and "22" in _p, _p)
+except TypeError as e:
+    t("gate preview float не TypeError", False, e)
+# число вне белого списка — строка в bad
+_ok_x, bad_x = A.gate("лидер 22", SEEN_LIVE, AGG_LIVE, [1], [], money=True,
+                      slot_mode="rank")
+t("gate reject 22: bad[0] str", bad_x and isinstance(bad_x[0], str), bad_x)
+# симуляция шага answer(): раньше bad[0][:60] на float → 503
+try:
+    bad_sim = bad_x or [22.0]
+    _ = A._gate_bad_preview(bad_sim)
+    t("answer шаг: preview на float-bad не падает", True)
+except TypeError as e:
+    t("answer шаг: preview на float-bad не падает", False, e)
+
+# --- prefer: две табчасти → регистр через written_by ---
+def _fake_psql2(q):
+    if "written_by IN" in q:
+        return [("accumulationregister_реализациятмц",)]
+    if "parent, written_by" in q or "parent FROM" in q:
+        return [
+            ("document_реализациятмц_номенклатура", "document_реализациятмц", ""),
+            ("document_передача_номенклатура", "document_передача", ""),
+        ]
+    raise RuntimeError("no db")
+
+
+_old2 = A.psql
+A.psql = _fake_psql2
+try:
+    q_all = "какого товара больше всего продали за всё время?"
+    got2 = A.prefer_entity_for_rank(
+        ["document_реализациятмц_номенклатура", "document_передача_номенклатура"],
+        intent_sale, q_all)
+    t("prefer all-child: регистр первым",
+      got2 and got2[0] == "accumulationregister_реализациятмц", got2)
+finally:
+    A.psql = _old2
 
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))
 if FAIL:
