@@ -64,6 +64,11 @@ export const DEFAULTS = {
     + "answer using only the grounded answer below; do not add, round, recompute or invent "
     + "any number. If the grounded answer says there is no data, say exactly that and give "
     + "no figures.",
+  protocolLeakReviseReason:
+    "The answer mentions internal protocol, tickets, or tool reasoning visible to the user.",
+  protocolLeakReviseInstruction:
+    "Rewrite for the user using ONLY the grounded answer below when present. "
+    + "Omit tools, tickets, decision_id, and reasoning about the call.",
   // Тексты — для МОДЕЛИ, не для человека, поэтому по-английски и без предметных примеров:
   // продукт коробочный, язык клиента заранее неизвестен.
   reviseReason: "This turn ended without consulting the company data tool.",
@@ -173,6 +178,9 @@ const LEAK_LINE_RES = [
   /^FIGURES:\s*$/gim,
   /^.*\b(?:decision_id|choice_error|ask_1c|report_1c|[A-Za-z0-9_-]+__(?:ask|report)_1c)\b.*$/gim,
   /^.*(?:тикет(?:а|у|ом|е|ы|ов)?|\btickets?\b).*$/gim,
+  /^.*\bdecision_id\b.*\b(?:ignore|ignored|reject|expir|fresh|re-ask|reask|ticket)\b.*$/gim,
+  /^.*\b(?:expiring|fresh)\s+(?:ticket|options?)\b.*$/gim,
+  /^.*\b(?:search_knowledge|grep_knowledge|list_knowledge|list_automation|query_knowledge)\w*\b.*$/gim,
 ];
 // 🔴 ВНУТРЕННИЕ ИМЕНА ИСТОЧНИКОВ ИЗ БЛОКА ВАРИАНТОВ. Мост собирает уточнение машинным
 // форматом `- <метка> | measure=<величина> | focus=<src_table>` (`mcp_ask.py`), где
@@ -251,6 +259,57 @@ export function stripInternal(text) {
     .replace(/[ \t]+\n/g, "\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+export function hasProtocolLeak(text, cfg) {
+  const c = { ...DEFAULTS, ...(cfg || {}) };
+  if (c.stripInternal === false || !text) return false;
+  const raw = String(text);
+  const clean = stripInternal(raw);
+  if (clean !== raw.trim()) return true;
+  for (const line of raw.split("\n")) {
+    const low = line.toLowerCase();
+    if (/\bdecision_id\b/.test(low)
+        && /\b(?:ignore|ignored|reject|expir|fresh|re-ask|reask|ticket)\b/.test(low))
+      return true;
+    if (/\b(?:search_knowledge|grep_knowledge|list_knowledge|list_automation)\b/.test(low))
+      return true;
+  }
+  return false;
+}
+
+export function localeFromInbound(inb) {
+  const q = (inb && typeof inb.text === "string") ? inb.text : "";
+  return /[\u0400-\u04FF]/.test(q) ? "ru" : "";
+}
+
+const BLOCKED_SIDE_TOOL_RES = [
+  /^wiki_/i,
+  /^memory_search$/i,
+  /search_knowledge/i,
+  /grep_knowledge/i,
+  /list_knowledge/i,
+  /list_automation/i,
+  /query_knowledge/i,
+];
+
+export function isBlockedSideTool(name) {
+  const n = String(name || "");
+  return BLOCKED_SIDE_TOOL_RES.some((re) => re.test(n));
+}
+
+export function dataTurnActive(sessKey, maps) {
+  if (!sessKey || !maps) return false;
+  const { prompts, clarifyLocks, refs, lastInbound } = maps;
+  if (clarifyLocks && clarifyLocks.has(sessKey)) return true;
+  const qrec = prompts && prompts.get(sessKey);
+  if (qrec && qrec.text && String(qrec.text).trim()) return true;
+  const ref = refs && refs.get(sessKey);
+  if (ref) {
+    const li = lastInbound && lastInbound.get(sessKey);
+    if (!li || ref.at >= li) return true;
+  }
+  return false;
 }
 
 function unwrapMcpStructuredText(text) {
@@ -515,6 +574,21 @@ export function looksLikeChoiceAttempt(prompt, options) {
 export function rewriteAsk1cParams(params, prompt, lock) {
   const p = { ...(params || {}) };
   if (!lock) return { params: p, action: "none" };
+  if (p.decision_id) {
+    const ids = new Set((lock.options || [])
+      .map((o) => String(o.decision_id || "").trim()).filter(Boolean));
+    const tid = String(p.decision_id || "").trim();
+    if (ids.size && !ids.has(tid)) {
+      p.decision_id = "";
+      if (looksLikeChoiceAttempt(prompt, lock.options) || matchClarifyOption(prompt, lock.options)) {
+        p.question = lock.question || p.question;
+        p.focus = "";
+        p.measure = "";
+        p.prior = "";
+        return { params: p, action: "refresh" };
+      }
+    }
+  }
   const matched = matchClarifyOption(prompt, lock.options);
   if (matched) {
     p.question = lock.question;
@@ -822,22 +896,43 @@ export function selfFetchNeeded(haveRef, cfg, inb, sessKey) {
   return !!(inb && typeof inb.text === "string" && inb.text.trim());
 }
 
+function localeReviseSuffix(inb) {
+  return localeFromInbound(inb) === "ru"
+    ? "\nUse Russian if the user question was in Russian."
+    : "";
+}
+
 export function finalizeDecision(answer, ref, inb, cfg, haveRef) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
   if (!haveRef) {
     if (c.requireDataTool === false) return { action: "pass", why: "require-data-tool-off" };
     return { action: "revise", why: "no-data-tool", reason: c.reviseReason,
-             instruction: c.reviseInstruction, idempotencyKey: "require-data-tool" };
+             instruction: c.reviseInstruction + localeReviseSuffix(inb),
+             idempotencyKey: "require-data-tool" };
   }
   if (c.verifyOnFinalize === false) return { action: "pass", why: "verify-on-finalize-off" };
   if (!answer) return { action: "pass", why: "no-answer-text" };
   const d = evaluate(answer, ref, inb, c);
+  if (hasProtocolLeak(answer, c)) {
+    const src = d.action === "replace" && d.content ? d.content
+              : (ref && ref.text) ? ref.text : answer;
+    const grounded = boundedGrounded(stripInternal(src), c);
+    return {
+      action: "revise", why: "protocol-leak", reason: c.protocolLeakReviseReason,
+      instruction: (grounded
+        ? c.protocolLeakReviseInstruction + localeReviseSuffix(inb)
+          + "\n\nGrounded answer:\n" + grounded
+        : c.protocolLeakReviseInstruction + localeReviseSuffix(inb)),
+      idempotencyKey: "protocol-leak",
+    };
+  }
   if (d.action === "allow") return { action: "pass", why: "figures-ok" };
   const grounded = boundedGrounded(d.action === "replace" ? d.content : "", c);
   return {
     action: "revise", why: "figures", reason: c.figureReviseReason,
-    instruction: grounded ? c.figureReviseInstruction + "\n\nGrounded answer:\n" + grounded
-                          : c.figureReviseInstruction,
+    instruction: (grounded
+      ? c.figureReviseInstruction + localeReviseSuffix(inb) + "\n\nGrounded answer:\n" + grounded
+      : c.figureReviseInstruction + localeReviseSuffix(inb)),
     idempotencyKey: "verify-figures",
   };
 }

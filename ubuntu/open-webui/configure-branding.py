@@ -157,6 +157,21 @@ def main():
                 "code_interpreter": False,
                 "citations": False,
             },
+            # OWUI builtin tools (search_knowledge_files, list_automations, …) —
+            # не путь к данным 1С; модель уходит в RAG после сбоев билета (okna 19.08).
+            "builtinTools": {
+                "knowledge": False,
+                "automations": False,
+                "chats": False,
+                "memory": False,
+                "web_search": False,
+                "notes": False,
+                "channels": False,
+                "calendar": False,
+                "tasks": False,
+                "files": False,
+                "subagents": False,
+            },
         },
         "params": {},
         "access_grants": [{"principal_type": "user", "principal_id": "*", "permission": "read"}],

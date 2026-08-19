@@ -8,6 +8,16 @@ _Обновлено: **2026-08-18.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **веб-чат okna — утечка протокола/RAG — код в git `[19.08]`**: baulogistic
+утекали EN-рассуждения про decision_id/tickets (путь `/v1` без
+`message_sending`); кручение stale билета; fallback в OWUI knowledge-tools.
+Fix: verify-plugin **1.1.8** (`hasProtocolLeak` на finalize, EN strip,
+stale-id refresh, block wiki/RAG side tools), `configure-branding.py`
+`builtinTools.*=false`, docstring `mcp_ask.py`. Оффлайн **126/126** +
+**35/35**. md5 core **`7d3c1fc0`**, index **`f215bc47`**, mcp **`798caaad`**,
+branding **`9cf2f1eb`**. Выкат web-гейт + branding на фронте — оркестратор;
+живой «какой самый продаваемый товар вчера?» — после выката.
+
 🔴 **золотой okna + smoke-гейт — код в git `[19.08]`**: `ab-gold-okna.tsv`
 (10 вопросов), `ab_scorer.py` (`AB_CONTOUR=okna`, `AB_GOLD_MODE=smoke`),
 `check-golden.sh` (smoke `0err/N` до выката). Smoke ut_test **0err/8** ✓.
@@ -15,11 +25,11 @@ Okna `:8091` **3/10**, 2 сбоя, склад no_data ✓; `/opt` ask **`d442630
 git cd1789b (`372b529e`) — **повтор приёмки после выката rank-hotfix**.
 md5 tsv **`6db327ad`**, scorer **`e3368d07`**, гейт **`9d63b8a5`**.
 
-🔴 **rank hotfix n_groups=1 + якорение — код в git `[19.08]`**: (в) 503
-TypeError на rank групп=1 (передача на хранение) — слоты/gate; (б) «больше всего»
-из текста → Количество + ось ТМЦ, не «записей» у суммы, регистр/документ вместо
-табчасти. Оффлайн **22/22** `test_rank_axis_anchor.py` + F-замки зелёные.
-md5 ask **`372b529e`**. Выкат `:8091` — оркестратор; живое (б)(в) — владелец.
+🔴 **rank gate bad float + регистр из табчастей — код в git `[19.08]`**:
+(в) живой 503 после cd1789b — `gate()` возвращал float в `bad_nums`, шаг()
+резал `bad[0][:60]` → TypeError; fix + rank whitelist leader/count. (б)
+`prefer_entity_for_rank` поднимает регистр по `written_by` (rid `7337254b`).
+Оффлайн **29/29** + F-замки. md5 ask **`ea718df0`**. Выкат `:8091` — оркестратор.
 
 🔴 **klient-1 первая сборка — СЛИЯНИЕ ЗАКРЫТО `[18.08]`**: `search_corpus`
 **15 148 327** / 1457 сущностей; `/health` ok; store.db **60G** (155G диск,

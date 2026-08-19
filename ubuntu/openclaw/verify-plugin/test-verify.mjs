@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, injectAskRid, newRid, traceLine, buildClarifyPresentation, channelUserOf, evaluate, extractText, finalizeDecision, injectAskUser, isServiceError, looksLikeChoiceAttempt, matchClarifyOption, mergeRef, missingClarifyOptions, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripChoiceNum, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, hasProtocolLeak, injectAskRid, isBlockedSideTool, localeFromInbound, newRid, traceLine, buildClarifyPresentation, channelUserOf, evaluate, extractText, finalizeDecision, injectAskUser, isServiceError, looksLikeChoiceAttempt, matchClarifyOption, mergeRef, missingClarifyOptions, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripChoiceNum, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -711,6 +711,41 @@ t("stripInternal: подмена кухни протокола", () => {
   assert.ok(!/ask_1c/i.test(out));
   assert.ok(!/choice_error/i.test(out));
   assert.ok(/1572493/.test(out));
+});
+
+
+t("stripInternal: EN reasoning decision_id", () => {
+  const dirty = "The decision_id keeps getting ignored and the tool re-asks with fresh options. expiring tickets";
+  const out = stripInternal(dirty);
+  assert.strictEqual(out.trim(), "");
+});
+t("hasProtocolLeak: detects EN ticket reasoning", () => {
+  assert.ok(hasProtocolLeak("The decision_id keeps getting ignored", DEFAULTS));
+  assert.ok(!hasProtocolLeak("Piesa sold 96602 units yesterday", DEFAULTS));
+});
+t("rewrite: stale decision_id → refresh", () => {
+  const lock = { question: "q", options: [
+    { label: "A", focus: "A", decision_id: "fresh1" },
+  ] };
+  const { params, action } = rewriteAsk1cParams(
+    { question: "q", decision_id: "stale" }, "1", lock);
+  assert.strictEqual(action, "refresh");
+  assert.strictEqual(params.decision_id, "");
+});
+t("isBlockedSideTool: OWUI knowledge tools", () => {
+  assert.ok(isBlockedSideTool("search_knowledge_files"));
+  assert.ok(isBlockedSideTool("list_automations"));
+  assert.ok(!isBlockedSideTool("serene-ask__ask_1c"));
+});
+t("finalizeDecision: protocol leak → revise", () => {
+  const ref = { text: "Вариант 1 или 2?", digits: new Set(), blob: "", noData: false, clarify: true };
+  const d = finalizeDecision("The decision_id is rejected again", ref, null, DEFAULTS, true);
+  assert.strictEqual(d.action, "revise");
+  assert.strictEqual(d.why, "protocol-leak");
+});
+t("localeFromInbound: cyrillic question", () => {
+  assert.strictEqual(localeFromInbound({ text: "сколько продали?" }), "ru");
+  assert.strictEqual(localeFromInbound({ text: "how many?" }), "");
 });
 
 console.log(`\n${pass} tests passed`);

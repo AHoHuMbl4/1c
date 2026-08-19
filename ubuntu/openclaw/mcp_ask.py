@@ -452,12 +452,14 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     The reply may instead ask to CLARIFY, when the question fits several record types or
     several quantities. Put that question to the user with the options from the tool.
     Proven human choice after clarify is `decision_id` from the option (not raw focus).
+    Each ticket is single-use; a used or unknown id yields a fresh clarify with new
+    options — the id on the latest OPTIONS line is the one to pass back.
 
     :param question: the user's question, in their own language, about company data.
     :param focus: optional record-type hint as written for people (does not prove choice).
     :param measure: quantity name, as written for people.
     :param context: optional background; not used for intent parsing.
-    :param decision_id: one-time ticket from a clarify option (proves the human choice).
+    :param decision_id: one-time ticket copied from the latest clarify option.
     :param user: channel sender id when the plugin supplies one.
     :param memory: remember or forget for an explicit preference.
     :param channel: telegram or webchat when the plugin supplies one.

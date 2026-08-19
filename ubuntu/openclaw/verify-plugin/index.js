@@ -27,7 +27,7 @@
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, buildClarifyPresentation, channelUserOf, digitBlob, evaluate, extractText, finalizeDecision, injectAskRid, injectAskUser, isClarify, isServiceError, mergeRef, newRid, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny, traceEnabled, traceLine } from "./verify-core.js";
+import { DEFAULTS, buildClarifyPresentation, channelUserOf, dataTurnActive, digitBlob, evaluate, extractText, finalizeDecision, injectAskRid, injectAskUser, isBlockedSideTool, isClarify, isServiceError, mergeRef, newRid, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny, traceEnabled, traceLine } from "./verify-core.js";
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
@@ -271,9 +271,14 @@ export default definePluginEntry({
 
     api.on("before_tool_call", async (event, ctx) => {
       const cfg = getCfg();
+      const sessKey = sessKeyOf(ctx, event) || null;
+      if (event && event.toolName && isBlockedSideTool(event.toolName)
+          && dataTurnActive(sessKey, { prompts, clarifyLocks, refs, lastInbound })) {
+        dbg(cfg, `before_tool_call block side tool=${event.toolName} sess=${sessKey}`);
+        return { block: true, blockReason: "braine-verify: data turn uses ask_1c only" };
+      }
       const wants = cfg.toolNames && cfg.toolNames.length ? cfg.toolNames : [cfg.toolName];
       if (!event || !toolMatchesAny(event.toolName, wants)) return;
-      const sessKey = sessKeyOf(ctx, event) || null;
       const identity = loadIdentity(ctx, event);
       const lock = sessKey ? clarifyLocks.get(sessKey) : null;
       let params = { ...(event.params || {}) };
