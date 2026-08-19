@@ -11,6 +11,7 @@
 [замер] оффлайн: doc+reg 49155.96 diff count → 1 class, `resolve → A`; склад diff sum → 2.
 
 Замки: fork_detector **27/27**, fork_outcomes **24/24**; 22/31/110/56/132/92/18/30/26 — 0 fail.
+md5 ask `5b179fdb`, fork_detector `c97379b4`. `test_entity_ambiguity_ab_sum.py` удалён.
 
 ## 19.08: векторизация klient-1 — потолок был в потоках движка, а не в GPU [замер][код]
 
