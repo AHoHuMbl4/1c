@@ -3049,6 +3049,25 @@ def rank_intent_from(intent, plan=None, question=""):
     return False
 
 
+
+
+def rank_leader_answer_text(agg, measure_label=None):
+    """Текст ответа топ-1 по первой группе (имя + value), без итога множества."""
+    if not agg or agg.get("grain") != "group":
+        return None
+    gs = agg.get("groups") or []
+    if not gs or not isinstance(gs[0], dict):
+        return None
+    nm = (gs[0].get("name") or "").strip()
+    val = gs[0].get("value")
+    if val is None:
+        val = _group_leader(agg)
+    if val is None:
+        return None
+    if nm:
+        return "«%s»: %s" % (nm, _fmt_human(val))
+    return _fmt_human(val)
+
 def product_axis_pref(cols):
     """Ось номенклатуры/ТМЦ — приоритет для рейтинга товара."""
     cols = list(cols or [])
@@ -3108,14 +3127,7 @@ def prefer_entity_for_rank(cands, intent, question, plan=None):
     elif lifted:
         ordered = lifted + list(cands)
     elif not tops:
-        doc_parents = []
-        for c in cands:
-            p = parent_by.get(c) or ""
-            if p and p not in doc_parents:
-                doc_parents.append(p)
-        reg_doc_parents = [p for p in doc_parents
-                           if str(p).startswith(("accumulationregister_", "document_"))]
-        ordered = lifted + reg_doc_parents + list(cands)
+        ordered = lifted + list(cands)
     else:
         ordered = tops + children
     out, seen = [], set()
@@ -3123,6 +3135,13 @@ def prefer_entity_for_rank(cands, intent, question, plan=None):
         if c not in seen:
             seen.add(c)
             out.append(c)
+    if lifted and docs:
+        drop = {c for c in out
+                if str(c).startswith("document_") and parent_by.get(c) in docs}
+        if drop:
+            out = [c for c in out if c not in drop]
+        front = lifted + [c for c in out if c not in lifted]
+        out = front
     return out
 
 
@@ -4229,7 +4248,10 @@ def compose_slot_values(agg, measure=None, folders=0, money=None, slot_mode=None
             if agg.get(k) is not None:
                 slots[k] = agg[k]
     elif slot_mode == "rank":
-        if money and agg.get("sum") is not None:
+        _ng = agg.get("n_groups")
+        _shown_g = len(agg.get("groups") or [])
+        if (money and agg.get("sum") is not None
+                and _ng is not None and _ng > _shown_g):
             slots["sum"] = agg["sum"]
         for i, g in enumerate((agg.get("groups") or [])[:ROWS_TO_MODEL]):
             if g.get("value") is not None:
@@ -5798,6 +5820,10 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None, slot_mode=Non
     elif slot_mode == "rank":
         known.pop("leader", None)
         known.pop("count", None)
+        _ng = (agg or {}).get("n_groups")
+        _shown_g = len((agg or {}).get("groups") or [])
+        if _ng is not None and _ng <= _shown_g:
+            known.pop("sum", None)
         for k in ("max", "min", "avg"):
             known.pop(k, None)
     # 🔴 БЕЗ ВЫБРАННОЙ ВЕЛИЧИНЫ БЕЗЫМЯННОЕ МЕСТО НЕ ЗАПОЛНЯЕТСЯ. Когда вопрос не назвал,
@@ -6189,6 +6215,8 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
             atom_pairs=None):
     payload = []
     shown = rows[:ROWS_TO_MODEL]
+    if slot_mode == "rank" and (agg or {}).get("grain") == "group":
+        shown = []
     # Бюджет делится на число показываемых строк: короткие строки не занимают чужого
     # места, длинные не режутся по произвольной границе.
     per_row = max(320, ROWS_BUDGET // max(1, len(shown)))
@@ -6332,8 +6360,11 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
                      "over these, and there are fewer of them than records) "
                      "-> {count_amount}")
         if slot_mode == "rank":
-            body += ("\n  sum (TOTAL of the whole matching set, not one group) "
-                     "-> {total}")
+            _ng = agg.get("n_groups")
+            _shown_g = len(agg.get("groups") or [])
+            if _ng is not None and _ng > _shown_g:
+                body += ("\n  sum (TOTAL of the whole matching set, not one group) "
+                         "-> {total}")
         else:
             body += "\n  sum (TOTAL)               -> {total}"
         if agg.get("grain") != "group":
@@ -6951,18 +6982,20 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
                         if agg.get(key) is not None:
                             allow(agg[key])
         elif slot_mode == "rank" and group_grain:
-            allow(agg.get("sum"))
             allow(agg.get("leader"))
             allow(agg.get("count"))
             allow(agg.get("count_amount"))
             allow(agg.get("n_groups"))
+            _ng = agg.get("n_groups")
+            _shown_g = len(agg.get("groups") or [])
+            if _ng is not None and _ng > _shown_g:
+                allow(agg.get("sum"))
             for g in agg.get("groups") or []:
                 allow(g.get("value"))
                 allow(g.get("count"))
                 allow(g.get("value2"))
                 allow(g.get("count2"))
-                if money:
-                    allow(g.get("sum"))
+                allow(g.get("sum"))
         elif group_grain:
             allow(agg.get("sum"))
             allow(agg.get("n_groups"))
@@ -9050,7 +9083,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # арбитра ×4), не вся база: иначе сотни несвязанных src с живым счётом
         # дают C с сотнями вариантов и секунды на SQL. Полный перечень cands —
         # по-прежнему источник отбора; детектор судит неоднозначность в голове.
-        _fork_pool = list(cands[:max(ARBITER_MAX * 4, 16)])
+        _fork_pool = prefer_entity_for_rank(
+            list(cands[:max(ARBITER_MAX * 4, 16)]), intent, question)
         try:
             _mbs = _measures_by_src(_fork_pool)
             _als = _aliases_by_src(_fork_pool)
@@ -10839,6 +10873,19 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     diag["claims"] = claims or None
     if not ok:
         sys.stderr.write("ask GATE: числа вне данных: %s\n" % bad[:6])
+        if (slot_mode == "rank" and (agg or {}).get("grain") == "group"
+                and (agg.get("groups") or [])):
+            _rank_txt = rank_leader_answer_text(agg, say_measure or measure)
+            if _rank_txt:
+                _ok_r, _bad_r = gate(_rank_txt, seen, agg, extra_vals, our_dates,
+                                     money=money, slot_mode=slot_mode)
+                if _ok_r:
+                    _rank_txt = ensure_count_named(_rank_txt, agg, slot_mode)
+                    _rank_txt = ensure_answer_passport(_rank_txt, _pass_frag)
+                    diag["rank_deterministic"] = True
+                    return {"partial": cut or None, "kind": "answer",
+                            "text": _rank_txt, "sources": [src] if src else [],
+                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
         # Гейт отклонил формулировку модели. Числа при этом посчитаны базой и верны —
         # отдаём их СТРУКТУРОЙ, а не своей прозой: свой текст был бы на одном языке
         # независимо от языка вопроса. Вызывающий формулирует сам.

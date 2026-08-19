@@ -82,7 +82,7 @@ try:
         "Топ: {total:g0}, всего {total}.", AGG1, [], True, slot_mode="rank")
     t("rank n_groups=1 fill без TypeError", True)
     t("rank n_groups=1 g0=21", "21" in filled.replace("\u00a0", ""), filled)
-    t("rank n_groups=1 total=21", filled.count("21") >= 2, filled)
+    t("rank n_groups=1 total не sum", "{total}" in filled or filled.count("21") == 1, filled)
 except TypeError as e:
     t("rank n_groups=1 fill без TypeError", False, e)
 try:
@@ -195,6 +195,63 @@ try:
       got2 and got2[0] == "accumulationregister_реализациятмц", got2)
 finally:
     A.psql = _old2
+
+
+# --- e82abb5 follow-up: 217.10 в rank-тексте, детерминированный топ-1 ---
+AGG217 = {
+    "count": 19, "sum": 217.10, "leader": 3.0, "measure": "Количество",
+    "grain": "group", "col": "refs_map.ТМЦ", "form": "rank", "n_groups": 1,
+    "groups": [{"name": "Prod X", "value": 3.0, "count": 19, "sum": 21.0}],
+    "folders": 0, "count_amount": 19,
+}
+ROWS217 = A.serene_axis.group_rows(AGG217["groups"])
+SEEN217 = A.rows_seen(ROWS217)
+text217 = "Наибольшее количество — «Prod X»: {total}."
+filled217, bad217 = A._fill_figures(text217, AGG217, [], True, slot_mode="rank")
+t("rank fill: {total} не подставляет sum множества",
+  "217" not in filled217.replace("\u00a0", ""), filled217)
+t("rank fill: g0 через rank_leader",
+  "3" in (A.rank_leader_answer_text(AGG217) or ""))
+ok217, bad217g = A.gate(
+    A.rank_leader_answer_text(AGG217) or "", SEEN217, AGG217, [1], [],
+    money=True, slot_mode="rank")
+t("rank gate leader 3 проходит", ok217, bad217g)
+ok217b, bad217b = A.gate(
+    "лидер 217.10", SEEN217, AGG217, [1], [], money=True, slot_mode="rank")
+t("rank gate 217.10 отвергнут", not ok217b and bad217b, bad217b)
+t("rank gate bad217 str", bad217b and isinstance(bad217b[0], str), bad217b)
+
+# --- prefer: три табчасти, регистр по written_by ---
+def _fake_psql3(q):
+    if "written_by IN" in q:
+        return [("accumulationregister_реализациятмц",)]
+    if "parent, written_by" in q:
+        return [
+            ("document_реализациятмц_номенклатура", "document_реализациятмц", ""),
+            ("document_передачаврознице_номенклатура", "document_передачаврознице", ""),
+            ("document_реализациятмц_массабрутто", "document_реализациятмц", ""),
+        ]
+    raise RuntimeError("no db")
+
+_old3 = A.psql
+A.psql = _fake_psql3
+try:
+    q3 = "какого товара больше всего продали за всё время?"
+    c3 = [
+        "document_реализациятмц_номенклатура",
+        "document_передачаврознице_номенклатура",
+        "document_реализациятмц_массабрутто",
+    ]
+    got3 = A.prefer_entity_for_rank(c3, intent_sale, q3)
+    t("prefer 3 tabparts: регистр первый",
+      got3 and got3[0] == "accumulationregister_реализациятмц", got3)
+    t("prefer 3 tabparts: табчасти сняты",
+      not any(x.startswith("document_") and A.prefer_entity_for_rank.__name__
+              for x in got3),
+      [x for x in got3 if x.startswith("document_")])
+finally:
+    A.psql = _old3
+
 
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))
 if FAIL:

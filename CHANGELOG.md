@@ -1,3 +1,10 @@
+## 19.08: rank 217.10 → figures + табчасти вместо регистра `[код]` `[замер]`
+
+`[код]` okna rid `7a1362c8`: rank групп=1 — `{total}` подставлял итог множества
+217.10 вместо value группы; compose без row-примеров; `rank_leader_answer_text`
+→ kind=answer. `prefer_entity_for_rank` снимает tabparts при lifted register;
+fork_pool через prefer. Оффлайн **36/36** rank + F-замки. md5 ask **`79d2dca3`**.
+
 ## 19.08: веб-чат okna — утечка протокола, кручение билета, RAG `[код]` `[замер]`
 
 Живой дефект baulogistic.timpul.pro (19.08): английские рассуждения про
