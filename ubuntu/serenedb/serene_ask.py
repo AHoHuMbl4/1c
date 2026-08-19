@@ -5930,7 +5930,7 @@ def ensure_n_groups_named(text, agg):
     filled, bad = _fill_figures("{n_groups}", agg, [], True)
     if bad or not (filled or "").strip() or filled.strip().startswith("{"):
         filled = _fmt(ng)
-    return ((text or "").rstrip() + " · " + filled).strip()
+    return ((text or "").rstrip() + " · всего позиций: " + filled).strip()
 
 
 def ensure_count_named(text, agg, slot_mode=None):
@@ -5951,7 +5951,24 @@ def ensure_count_named(text, agg, slot_mode=None):
         return text
     if nf in have or round(nf, 2) in have:
         return text
-    return ((text or "").rstrip() + " · " + _fmt(nf)).strip()
+    return ((text or "").rstrip() + " · всего записей: " + _fmt(nf)).strip()
+
+
+
+def postprocess_money_answer_text(text):
+    """money=True: убрать неверные «шт»/«количество» из текста ответа."""
+    if not (text or "").strip():
+        return text
+    t = str(text)
+    # Неверная единица для денег.
+    t = re.sub(r"\b(шт|штук)\.?", "руб.", t,
+               flags=re.IGNORECASE | re.UNICODE)
+    # Бьём «Общее количество ...», а также оставшиеся «количество».
+    t = re.sub(r"\bОбщее\s+количество\b", "Общая сумма", t,
+               flags=re.IGNORECASE | re.UNICODE)
+    t = re.sub(r"\bколичество\b", "сумма", t,
+               flags=re.IGNORECASE | re.UNICODE)
+    return t
 
 
 def build_answer_passport(period=None, period_dropped=False, origin="",
@@ -10889,6 +10906,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 if _ok_r:
                     _rank_txt = ensure_count_named(_rank_txt, agg, slot_mode)
                     _rank_txt = ensure_answer_passport(_rank_txt, _pass_frag)
+                    if money:
+                        _rank_txt = postprocess_money_answer_text(_rank_txt)
                     diag["rank_deterministic"] = True
                     return {"partial": cut or None, "kind": "answer",
                             "text": _rank_txt, "sources": [src] if src else [],
@@ -11018,6 +11037,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         axis=_passport_axis_label(
             (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
         completeness=cov, folders=n_folders, src=src)
+    if money:
+        text = postprocess_money_answer_text(text)
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
             "completeness": cov, "measure": say_measure,
             # 🔴 ПОСЧИТАННЫЕ ЧИСЛА — ПОЛЕМ ОТВЕТА, А НЕ ТОЛЬКО ВНУТРИ ТЕКСТА (03.08).

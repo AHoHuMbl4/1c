@@ -3,6 +3,7 @@
 import os
 import sys
 import time
+import re
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.environ.setdefault("ASK_TOKEN", "test")
@@ -244,6 +245,26 @@ t("agg surface: чужое число отвергнуто", not _ok_big3, _bad_
 _ok_big4, _bad_big4 = A.gate(
     "avg 27.42 min 0.01", SEEN_BIG, AGG_BIG, [1], [], money=True, slot_mode="rank")
 t("agg surface: agg min/max/avg проходит", _ok_big4, _bad_big4)
+
+# money postprocess guard
+wrong_money = (
+    "Наибольшее количество продаж — 3 205 385.44 шт. "
+    "Общее количество по всем перечисленным позициям: 80 316 522.36 шт."
+)
+fixed_money = A.postprocess_money_answer_text(wrong_money)
+t("money postprocess: нет «шт» и «количество»", (
+    "шт" not in (fixed_money or "").lower()
+    and "количество" not in (fixed_money or "").lower()
+), fixed_money)
+
+# rank tail guard: no bare numbers right after `·`
+demo_txt = "Наибольшее значение по рангу."
+demo_ng = A.ensure_n_groups_named(demo_txt, AGG_BIG)
+demo_full = A.ensure_count_named(demo_ng, AGG_BIG, "rank")
+t("rank tail: n_groups worded", "всего позиций:" in (demo_ng or ""), demo_ng)
+t("rank tail: count worded", "всего записей:" in (demo_full or ""), demo_full)
+t("rank tail: нет «· 1558»/«· 77557»", not re.search(r"·\\s*\\d", demo_full or ""),
+  demo_full)
 
 # --- rank_measure_hint: _rank_wants_quantity ---
 t("_rank_wants_quantity: товар + больше всего",

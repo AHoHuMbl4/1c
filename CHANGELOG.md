@@ -1,3 +1,11 @@
+## 19.08: fix money unit «шт/количество» и word-anchored rank tail `[код]`
+
+`[код]` В `ubuntu/serenedb/serene_ask.py`:
+- `ensure_n_groups_named()` и `ensure_count_named()` теперь добавляют хвосты как `· всего позиций: {n}` и `· всего записей: {n}` (вместо `· {n}`) — оффлайн предотвращает утечку «голых чисел» в тексте rank-ответа.
+- Добавлена `postprocess_money_answer_text()` для `money=True`: замена `шт/штук` → `руб.` и `количество` → `сумма` в готовом тексте ответа.
+
+`[замер]` Оффлайн-прогон: `test_rank_axis_anchor.py test_gate.py test_compose.py test_terminal_round.py test_axis_focus.py test_period_empty.py test_measure_empty.py` — все зелёные (0 fail), включая новые проверки “money postprocess” и “rank tail guard”.
+
 ## 19.08: фикс panel_from_scope из ask_scope — period_col и алиасы `[код]`
 
 `[код]` В `ubuntu/serenedb/serene_ask.py` `_build_ask_scope` теперь:
