@@ -6996,6 +6996,7 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
                 for gk in ("value", "count", "value2", "count2",
                             "sum", "avg"):
                     allow(g.get(gk))
+                allowed |= _norm_numbers(g.get("name") or "")
         elif group_grain:
             allow(agg.get("sum"))
             allow(agg.get("n_groups"))

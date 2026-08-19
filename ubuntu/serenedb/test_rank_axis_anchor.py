@@ -251,6 +251,27 @@ t("_rank_wants_quantity: товар + больше всего",
 t("_rank_wants_quantity: без слова товар",
   not A._rank_wants_quantity("сколько продали за месяц?"), "")
 
+# --- числа в именах групп заземлены ---
+AGG_NAME = {
+    "count": 100, "sum": 500.0, "leader": 96602.0, "measure": "Количество",
+    "grain": "group", "col": "refs_map.Номенклатура", "form": "rank", "n_groups": 2,
+    "groups": [
+        {"name": "Piesa inchidere toc HG VEKA - 0,5 mm", "value": 96602.0, "count": 50, "sum": 250.0, "avg": 5.0},
+        {"name": "str Uzinelor 12 G", "value": 80000.0, "count": 50, "sum": 250.0, "avg": 5.0},
+    ],
+    "folders": 0, "count_amount": 100,
+}
+SEEN_NAME = [("a","b","c","d","e","text")] * 3
+_ok_n1, _bad_n1 = A.gate(
+    "Piesa inchidere toc HG VEKA - 0,5 mm (96 602 шт)", SEEN_NAME, AGG_NAME, [1], [], money=True, slot_mode="rank")
+t("name nums: 0.5 из имени проходит", _ok_n1, _bad_n1)
+_ok_n2, _bad_n2 = A.gate(
+    "str Uzinelor 12 G — 80 000", SEEN_NAME, AGG_NAME, [1], [], money=True, slot_mode="rank")
+t("name nums: 12 из адреса проходит", _ok_n2, _bad_n2)
+_ok_n3, _bad_n3 = A.gate(
+    "всего 777 штук", SEEN_NAME, AGG_NAME, [1], [], money=True, slot_mode="rank")
+t("name nums: 777 вне полей/имён отвергнуто", not _ok_n3, _bad_n3)
+
 # --- prefer: три табчасти, регистр по written_by ---
 def _fake_psql3(q):
     if "written_by IN" in q:
