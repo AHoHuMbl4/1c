@@ -23,6 +23,17 @@ unknown не в тексте, rank=compose по единице, env перекр
 Существующие: 132/92/18/24/26/56/24/31/30/18/15 = **486 ok, 0 fail**.
 md5 ask `286cd4b1`, замки `b5807b22`, atom `c9890dd7`, rank `8158f064`, env `167a7249`.
 
+## 19.08: убираем лишний clarify на sum — сверяем только итог и округляем [код]
+
+[код] serene_ask.py:
+- `answers_diverge()`: для суммовых фигур расхождение считаем только по `sum` (округление до 2 знаков), чтобы разные `src`, но одинаковый итог, не запускали `kind="clarify"`.
+- `same_number()`: сравнение чисел делается через `_intent_number` и округление до 2 знаков, чтобы микродроби не превращались в «не совпало».
+
+Граф: добавлено наблюдение в `memory_bank/mcp-memory.json` для `serene_ask-ut (:8099)` (ветка sum/diverge → меньше лишних clarify).
+
+Замки: `python3 ubuntu/serenedb/test_gate.py` **132/0**; `python3 ubuntu/serenedb/test_step4_guards.py` **110/0**.
+
+
 ## 19.08: аудит дашбордов и контура — хардкод, языки, гранты [код]
 
 [код] corpus_init.sql — GRANT SELECT ON search_meta TO serene_ro, serene_resolver

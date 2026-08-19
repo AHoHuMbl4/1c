@@ -3678,6 +3678,25 @@ def answers_diverge(figures):
     """
     if len(figures) < 2:
         return False
+
+    # Контракт: для суммовых вопросов важна финальная цифра, а не служебные
+    # поля (например `count_amount`). Разные src могут по-разному заполнять
+    # вспомогательные слоты при совпавшем итоговом числе — тогда арбитраж
+    # ошибочно уходил в `clarify`.
+    if isinstance(figures[0], dict) and figures[0].get("sum") is not None:
+        try:
+            sums = []
+            for f in figures:
+                if not isinstance(f, dict):
+                    return True
+                v = _intent_number(f.get("sum"))
+                if v is None:
+                    return True
+                sums.append(round(float(v), 2))
+            return len(set(sums)) > 1
+        except Exception:  # noqa: BLE001
+            pass
+
     fps = []
     for f in figures:
         fp = _slot_fp(f)
@@ -3685,7 +3704,6 @@ def answers_diverge(figures):
             return True
         fps.append(fp)
     return len(set(fps)) > 1
-
 
 def answers_src_conflict(cands):
     """Разные src при совпавшем отпечатке — не согласие (A3).
@@ -4744,10 +4762,21 @@ def same_number(ours, theirs):
     if ours is None:
         return False
     try:
-        return any(float(x) == float(ours) for x in theirs if x is not None)
+        ours_f = _intent_number(ours)
+        if ours_f is None:
+            return False
+        ours_f = round(float(ours_f), 2)
+        for x in (theirs or []):
+            if x is None:
+                continue
+            x_f = _intent_number(x)
+            if x_f is None:
+                continue
+            if round(float(x_f), 2) == ours_f:
+                return True
+        return False
     except (TypeError, ValueError):
         return False
-
 
 def unresolved_quantity(measure, alts, want, compute, names, totals_by=None):
     """Свести поле, когда вопрос про итог/max/min/avg, а величина ещё не выбрана.
