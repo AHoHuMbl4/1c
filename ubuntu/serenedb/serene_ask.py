@@ -11513,12 +11513,36 @@ def _build_ask_scope(out, question):
     d = (out.get('diag') or {}).get('счёт')
     if not d or not d.get('src'):
         return None
+    src_base = d.get('src')
+    where = (d.get('where') or '').strip()
+    folder_pred = (d.get('folder_pred') or '').strip()
+    if folder_pred:
+        where = (where + " AND " if where else "") + folder_pred
+
+    measure_key = (d.get('величина') or '').strip()
+    if not measure_key:
+        return None
+
+    axis_key = (d.get('ось') or '').strip() or None
+
+    measure_col = "__ask_value"
+    axis_col = "__ask_axis"
+    select_parts = [
+        "*",
+        "map_extract(nums, %s)[1] AS %s" % (lit(measure_key), measure_col),
+    ]
+    if axis_key:
+        select_parts.append(
+            "map_extract_value(refs_map, %s) AS %s" % (lit(axis_key), axis_col)
+        )
+
+    src = "(SELECT %s FROM %s)" % (", ".join(select_parts), src_base)
     return {
-        'src': d['src'],
-        'where': d.get('where', ''),
-        'measure': d.get('величина', ''),
-        'axis': d.get('ось') or None,
-        'period_col': 'Period',
+        'src': src,
+        'where': where,
+        'measure': measure_col,
+        'axis': axis_col if axis_key else None,
+        'period_col': 'doc_date',
         'title': (question or '')[:120].strip() or 'panel',
     }
 

@@ -1,3 +1,15 @@
+## 19.08: фикс panel_from_scope из ask_scope — period_col и алиасы `[код]`
+
+`[код]` В `ubuntu/serenedb/serene_ask.py` `_build_ask_scope` теперь:
+- ставит `period_col='doc_date'` (реальная колонка корпуса), вместо `Period`;
+- добавляет `folder_pred` в `where`, чтобы панель пересчитала тот же набор множеств;
+- оборачивает `scope.src` в подзапрос и экспонирует величину/ось вычислениями `map_extract(nums, <ключ>)` и `map_extract_value(refs_map, <ось>)` под алиасами `__ask_value`/`__ask_axis`, которые `panel_from_scope.py` использует в SQL.
+
+Ожидаемый эффект: живой `panel_from_scope.py --spec ...` больше не падает на `Referenced column "Period" not found in FROM clause` и возвращает `rows: N > 0` для случаев:
+(1) без оси — «сколько продали вчера?»;
+(2) с осью — «какого товара больше всего продали за всё время?».
+
+
 ## 19.08: стык ask_scope — спецификация счёта наружу через SereneDB `[код]`
 
 `[код]` **Путь B** (через SereneDB, без новых портов/ручек): `serene_ask.py`
