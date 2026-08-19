@@ -1,3 +1,13 @@
+## 19.08: скрипт fix-golden-mark-in-tests.sh под smoke-отметку `[код]` `[замер]`
+
+`[код]` `work/hooks/fix-golden-mark-in-tests.sh` — под root меняет в
+`work/hooks/test-hooks.sh` две строки `touch .claude/.golden-last-run` на
+`echo 'smoke ut_test live 0err/8' > .claude/.golden-last-run` (новый
+двухуровневый check-golden ждёт отметку с текстом `smoke … 0err/N`, пустой
+touch её не проходит). Идемпотентен, бэкап с ts, стоп при неожиданном
+содержимом. `[замер]` замена проверена на копии файла: 2 строки, проверка
+строки 145 («подсказка без touch-отметки») не задета.
+
 ## 19.08: золотой набор okna + smoke-гейт ut_test `[код]` `[замер]`
 
 `[код]` `ab-gold-okna.tsv`, `ab_scorer.py` (`AB_CONTOUR=okna`, `AB_GOLD_MODE=smoke`), `check-golden.sh`.
