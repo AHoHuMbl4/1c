@@ -48,7 +48,17 @@ def main() -> int:
             args.url.rstrip("/") + path, method=method,
             data=json.dumps(body).encode() if body is not None else None,
             headers={"Content-Type": "application/json", "Authorization": auth})
-        return json.loads(urllib.request.urlopen(req, timeout=60).read())
+        try:
+            return json.loads(urllib.request.urlopen(req, timeout=60).read())
+        except urllib.error.HTTPError as exc:
+            # Панель с битым запросом отвечает 400/500 — это НАХОДКА приёмки,
+            # а не повод падать: тело несёт ошибку базы, её и показываем
+            # [замер 19.08: панель с несуществующей колонкой роняла приёмку].
+            body_text = exc.read().decode("utf-8", "replace")
+            try:
+                return json.loads(body_text)
+            except json.JSONDecodeError:
+                return {"results": {"A": {"error": f"HTTP {exc.code}: {body_text[:300]}"}}}
 
     bad, checked = [], 0
     for item in call("GET", "/api/search?type=dash-db"):

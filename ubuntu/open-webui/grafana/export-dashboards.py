@@ -29,6 +29,9 @@ import sqlite3
 import sys
 
 DS_PLACEHOLDER = "${DS_SERENEDB}"
+# Тип postgres-datasource Grafana 13 отдаёт плагином, а создаётся он как postgres
+# [замер 19.08] — семя должно ловить оба имени.
+PG_TYPES = ("postgres", "grafana-postgresql-datasource")
 # Поля, которые ставит сама Grafana при сохранении: в семя не уносим.
 DROP_KEYS = {"version", "id", "schemaVersion", "weekStart", "fiscalYearStartMonth",
              "editable", "graphTooltip", "links", "annotations", "preload"}
@@ -37,8 +40,8 @@ DROP_KEYS = {"version", "id", "schemaVersion", "weekStart", "fiscalYearStartMont
 def replace_ds(node, ds_uids: set[str]):
     """Рекурсивно заменить uid datasource на плейсхолдер."""
     if isinstance(node, dict):
-        if node.get("type") == "postgres" and node.get("uid") in ds_uids:
-            return {"type": "postgres", "uid": DS_PLACEHOLDER}
+        if node.get("type") in PG_TYPES and node.get("uid") in ds_uids:
+            return {"type": node["type"], "uid": DS_PLACEHOLDER}
         return {k: replace_ds(v, ds_uids) for k, v in node.items()}
     if isinstance(node, list):
         return [replace_ds(v, ds_uids) for v in node]
@@ -53,7 +56,7 @@ def main() -> int:
     args = ap.parse_args()
 
     con = sqlite3.connect(f"file:{args.db}?mode=ro", uri=True)
-    ds_uids = {r[0] for r in con.execute("select uid from data_source where type='postgres'")}
+    ds_uids = {r[0] for r in con.execute("select uid from data_source")}
     out = pathlib.Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
 

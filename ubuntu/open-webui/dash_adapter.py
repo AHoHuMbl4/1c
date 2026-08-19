@@ -7,8 +7,11 @@ JWT для Grafana в cookie `gf_jwt`. Дальше Caddy копирует cooki
 `X-JWT-Assertion` на каждый запрос /dash/* — Grafana ([auth.jwt]) впускает
 без формы логина под тем же логином (docs/DASHBOARD_GRAFANA.md §2).
 
-    GET /dash/enter?to=/d/<uid>   — вход: Set-Cookie gf_jwt + 302 на /dash<to>
-    GET /dash/healthz             — 200 ok (проверка юнита)
+    GET  /dash/enter?to=/d/<uid>  — вход: Set-Cookie gf_jwt + 302 на /dash<to>
+    GET  /dash/healthz            — 200 ok (проверка юнита)
+    POST /dash/add                — «добавить в дашборд»: спецификация счёта
+                                    (diag.счёт от serene_ask) → панель в личном
+                                    дашборде пользователя, ответ — ссылка на неё
 
 Env (юнит читает /etc/1c-grafana.env):
     OWUI_URL             http://127.0.0.1:8080
@@ -16,14 +19,19 @@ Env (юнит читает /etc/1c-grafana.env):
     JWT_TTL_SEC          43200 (12 ч — время жизни cookie-сессии дашбордов)
     LISTEN               127.0.0.1:3002
     DASH_PREFIX          /dash
+    GRAFANA_URL          http://127.0.0.1:3001
+    GRAFANA_ADMIN_PASSWORD  для /dash/add (панель заводится от имени админа,
+                            дашборд получает пользователь чата)
 
 Запускается своим venv'ом (/opt/1c-grafana/venv, pyjwt) под пользователем
 dashenter. venv OWUI не подходит: /home/webui ему недоступен [замер 18.08].
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.request
@@ -33,14 +41,33 @@ from urllib.parse import parse_qs, urlparse
 
 import jwt
 
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "grafana"))
+from panel_from_scope import Grafana, SpecError  # noqa: E402
+
 OWUI_URL = os.environ.get("OWUI_URL", "http://127.0.0.1:8080").rstrip("/")
 KEY_FILE = os.environ.get("JWT_PRIVATE_KEY_FILE", "/etc/1c-grafana-jwt-private.pem")
 TTL = int(os.environ.get("JWT_TTL_SEC", "43200"))
 LISTEN = os.environ.get("LISTEN", "127.0.0.1:3002")
 DASH_PREFIX = os.environ.get("DASH_PREFIX", "/dash")
 
+GRAFANA_URL = os.environ.get("GRAFANA_URL", "http://127.0.0.1:3001")
+GRAFANA_PW = os.environ.get("GRAFANA_ADMIN_PASSWORD", "")
+# Панель кладётся в личный дашборд пользователя чата: uid из его id, а не из
+# имени — имя человек меняет, дашборд от этого не должен раздваиваться.
+DASH_UID_PREFIX = "ask-"
+# Тело запроса /dash/add — спецификация счёта, а не текст: потолок мал нарочно.
+MAX_BODY = 16 * 1024
+
 # Роль OWUI → роль Grafana. Админ чата управляет и дашбордами.
 ROLE_MAP = {"admin": "Admin", "user": "Viewer", "pending": "Viewer"}
+
+
+def user_dashboard(user: dict) -> tuple[str, str]:
+    """(uid, заголовок) личного дашборда пользователя чата."""
+    key = str(user.get("id") or user.get("email") or "")
+    uid = DASH_UID_PREFIX + hashlib.sha1(key.encode()).hexdigest()[:12]
+    who = user.get("name") or user.get("email") or "чат"
+    return uid, f"Панели — {who}"
 
 
 def owui_session_user(token_cookie: str) -> dict | None:
@@ -124,6 +151,63 @@ class Handler(BaseHTTPRequestHandler):
         jar_out["gf_jwt"]["max-age"] = TTL
         self._send(302, extra=[("Location", f"{DASH_PREFIX}{to}"),
                                ("Set-Cookie", jar_out.output(header="").strip())])
+
+    def _session_user(self) -> dict | None:
+        """Пользователь чата по его же cookie. Нет сессии — None."""
+        jar = cookies.SimpleCookie(self.headers.get("Cookie", ""))
+        morsel = jar.get("token")
+        if morsel is None or not morsel.value:
+            return None
+        return owui_session_user(morsel.value)
+
+    def do_POST(self):
+        """«Добавить в дашборд»: спецификация счёта → панель у этого пользователя.
+
+        🔴 SQL панели собирается ДЕТЕРМИНИРОВАННО из спецификации, посчитанной
+        базой (`diag.счёт` от serene_ask): источник, условие, величина, ось.
+        Модель тут не участвует — она не пишет запрос и не видит схему
+        (п. 19, 20 TARGET.md).
+        """
+        if urlparse(self.path).path != f"{DASH_PREFIX}/add":
+            self._send(404, b"not found\n")
+            return
+        user = self._session_user()
+        if not user or not user.get("email"):
+            self._send(401, b"session not valid; open the chat and log in first\n")
+            return
+        if not GRAFANA_PW:
+            self._send(503, "нет GRAFANA_ADMIN_PASSWORD в окружении юнита\n".encode())
+            return
+
+        length = int(self.headers.get("Content-Length") or 0)
+        if length <= 0 or length > MAX_BODY:
+            self._send(413, f"тело запроса вне 1..{MAX_BODY} байт\n".encode())
+            return
+        try:
+            spec = json.loads(self.rfile.read(length))
+        except json.JSONDecodeError:
+            self._send(400, b"body is not json\n")
+            return
+        if not isinstance(spec, dict):
+            self._send(400, b"spec must be an object\n")
+            return
+
+        uid, title = user_dashboard(user)
+        try:
+            out = Grafana(GRAFANA_URL, GRAFANA_PW).add_panel(uid, title, spec)
+        except SpecError as exc:
+            # Спецификация не годится — говорим чем именно, а не «ошибка».
+            self._send(400, f"спецификация не годится: {exc}\n".encode())
+            return
+        except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
+            self._send(502, f"grafana недоступна: {exc}\n".encode())
+            return
+
+        body = json.dumps({"url": f"{DASH_PREFIX}/d/{out['uid']}?viewPanel={out['panel_id']}",
+                           "dashboard_uid": out["uid"], "panel_id": out["panel_id"],
+                           "title": out["title"], "sql": out["rawSql"]},
+                          ensure_ascii=False).encode()
+        self._send(200, body, "application/json; charset=utf-8")
 
     do_HEAD = do_GET
 
