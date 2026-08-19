@@ -4,7 +4,7 @@
 # Идемпотентен, с бэкапом и проверкой. Запуск: sudo bash work/hooks/fix-golden-mark-in-tests.sh
 set -euo pipefail
 
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/../.."
 OLD="touch .claude/.golden-last-run"
 NEW="echo 'smoke ut_test live 0err/8' > .claude/.golden-last-run"
 
