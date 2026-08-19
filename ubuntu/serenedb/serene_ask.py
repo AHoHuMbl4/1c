@@ -59,7 +59,7 @@ try:
 except ImportError:
     serene_axis = None
 
-DSN = os.environ.get("SERENEDB_DSN_RO", "host=127.0.0.1 port=7890 user=serene_ro dbname=postgres")
+DSN = os.environ.get("SERENEDB_DSN_RO")
 PGPASSWORD = os.environ.get("PGPASSWORD", "")
 # 🔴 РЕЗОЛВЕР ЧИТАЕТСЯ ОТДЕЛЬНОЙ РОЛЬЮ. `serene_ro`, которой исполняется SQL по данным,
 # к `resolver_index` доступа НЕ имеет — это positive control: SQL, который пишет модель,
@@ -300,6 +300,8 @@ STALE_TEXT = os.environ.get(
 # ----------------------------------------------------------------- инфраструктура
 def psql(sql):
     env = dict(os.environ)
+    if not DSN:
+        raise RuntimeError("SERENEDB_DSN_RO is required")
     if PGPASSWORD:
         env["PGPASSWORD"] = PGPASSWORD
     # SQL идёт в stdin, а НЕ аргументом `-c`. У одного аргумента командной строки
@@ -3722,10 +3724,20 @@ def question_fingerprint(question):
 
 
 def db_fingerprint(dsn=None):
-    """Имя базы из DSN — без секретов, только dbname=…."""
-    s = dsn if dsn is not None else DSN
-    m = re.search(r"(?:^|\s)dbname=([^\s]+)", str(s or ""))
-    return (m.group(1) if m else "").lower()
+    """Имя базы через current_database(), без парсинга DSN.
+
+    В оффлайн-тестах (где DSN не задан) возвращаем '' и не делаем сравнение
+    по db-фингерпринту.
+    """
+    use_dsn = dsn if dsn is not None else DSN
+    if not use_dsn:
+        return ''
+    try:
+        rows = psql("SELECT lower(current_database())")
+        return (rows[0][0] if rows and rows[0] and rows[0][0] else '').lower()
+    except Exception:
+        # Fail-open: без доступа к БД сравнение билетов по базе не делаем.
+        return ''
 
 
 def options_version(opts):

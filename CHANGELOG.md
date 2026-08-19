@@ -40,6 +40,14 @@ datasource выбирается по uid/isDefault/единственный (н�
 md5: corpus_init 3a9a6ea6, panel fdf16c23, dash 6b355282, add 8fd61114,
 mcp 56868dc8, test_panel af21a025.
 
+## 19.08: serene_ask db_fingerprint/DSN — отказ от regex и дефолта [код]
+
+[код] serene_ask.py:
+- `SERENEDB_DSN_RO` без умолчания: `psql()` явно падает `RuntimeError`, если переменная не задана.
+- `db_fingerprint()`: имя базы берётся через `SELECT lower(current_database())`, а не regex-парсинг DSN.
+  В оффлайн-тестах без DSN функция fail-open возвращает '' и сравнение по db пропускается.
+Замки: `python3 ubuntu/serenedb/test_decision_id.py` — 31/31.
+
 ## 19.08: ab_scorer v2 — режимы digits/kind/clarify/name [код][замер]
 
 [код] ab_scorer.py — TSV v2 (digits/kind/clarify/name), clarify-follow, name pairs.
