@@ -1,3 +1,28 @@
+## 19.08: единицы измерения — из данных, не из слов [код]
+
+[код] serene_ask.py — пакет «unit from data»:
+- `_measure_is_quantity` удалена: словарь RU/EN слов («количество», «qty», «штук»)
+  решал, штучная мера или денежная — на Cantitate/Miktar/数量 объявлял деньгами.
+  Теперь характер определяется флагом `money` (уже решён по интенту + операции).
+- `_unit_for_measure(measure, money)`: money=True → env `ASK_MONEY_UNIT`,
+  money=False → пустая строка. Без данных — без единицы (п. 12).
+- `UNIT_UNKNOWN` / `(unknown)` убран из вывода: `build_answer_atom` при пустой
+  единице ставит `""` (было `UNIT_UNKNOWN`); `render_atom_pair` не печатает
+  `(unknown)` — если единица неизвестна, ничего не показываем.
+- `rank_leader_answer_text` принимает `unit=` и ставит единицу рядом с числом
+  (было: fallback = «имя: число» без единицы, `postprocess` потом regex-правил).
+- `postprocess_money_answer_text` нейтрализована (identity): перезапись прозы
+  русскими regex убрана — она не работала на нерусском и переписывала верное
+  «количество» в неверное «сумму» на неопознанной мере.
+- `atom_from_agg` принимает `unit_or_currency=` и по умолчанию зовёт
+  `_unit_for_measure(measure_id, money)`.
+- env example: `ASK_MONEY_UNIT` добавлен в
+  `systemd/1c-serene-ask-БАЗА.env.example` с комментарием.
+Замки: test_unit_from_data.py **22/0** (unit из данных, без данных — без единицы,
+unknown не в тексте, rank=compose по единице, env перекрывает, grep нет хардкода).
+Существующие: 132/92/18/24/26/56/24/31/30/18/15 = **486 ok, 0 fail**.
+md5 ask `286cd4b1`, замки `b5807b22`, atom `c9890dd7`, rank `8158f064`, env `167a7249`.
+
 ## 19.08: аудит дашбордов и контура — хардкод, языки, гранты [код]
 
 [код] corpus_init.sql — GRANT SELECT ON search_meta TO serene_ro, serene_resolver

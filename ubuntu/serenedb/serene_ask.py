@@ -3052,8 +3052,11 @@ def rank_intent_from(intent, plan=None, question=""):
 
 
 
-def rank_leader_answer_text(agg, measure_label=None):
-    """Текст ответа топ-1 по первой группе (имя + value), без итога множества."""
+def rank_leader_answer_text(agg, measure_label=None, unit=""):
+    """Текст ответа топ-1 по первой группе (имя + value + единица).
+
+    Единица берётся тем же путём, что и compose: из данных через `_unit_for_measure`.
+    """
     if not agg or agg.get("grain") != "group":
         return None
     gs = agg.get("groups") or []
@@ -3065,9 +3068,11 @@ def rank_leader_answer_text(agg, measure_label=None):
         val = _group_leader(agg)
     if val is None:
         return None
+    u = (unit or "").strip()
+    suffix = (" " + u) if u and u != UNIT_UNKNOWN else ""
     if nm:
-        return "«%s»: %s" % (nm, _fmt_human(val))
-    return _fmt_human(val)
+        return "«%s»: %s%s" % (nm, _fmt_human(val), suffix)
+    return "%s%s" % (_fmt_human(val), suffix)
 
 def product_axis_pref(cols):
     """Ось номенклатуры/ТМЦ — приоритет для рейтинга товара."""
@@ -4363,9 +4368,7 @@ def build_answer_atom(operation=None, exact_value=None, display_value=None,
         op = "count"
     status = proof_status or (
         PROOF_COMPUTED if exact_value is not None else PROOF_UNCOUNTED)
-    unit = unit_or_currency if unit_or_currency is not None else UNIT_UNKNOWN
-    if not str(unit).strip():
-        unit = UNIT_UNKNOWN
+    unit = unit_or_currency if unit_or_currency is not None else ""
     disp = display_value
     if disp is None and exact_value is not None:
         disp = _fmt(exact_value)
@@ -4397,7 +4400,8 @@ def atom_from_agg(agg, operation=None, measure_id=None, measure_label=None,
                   money=True, period=None, period_origin="", filters=None,
                   grain=None, axis=None, form=None, completeness=None,
                   freshness=None, excluded=None, proof_status=None,
-                  interpretation_id=None, src=None, folders=0):
+                  interpretation_id=None, src=None, folders=0,
+                  unit_or_currency=None):
     """Собрать атом из уже посчитанного `agg` и меток из данных."""
     op = (operation or "count").lower()
     if op not in _ATOM_OPS:
@@ -4425,7 +4429,9 @@ def atom_from_agg(agg, operation=None, measure_id=None, measure_label=None,
         status = PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED
     return build_answer_atom(
         operation=op, exact_value=exact, measure_id=measure_id,
-        measure_label=measure_label, unit_or_currency=UNIT_UNKNOWN,
+        measure_label=measure_label,
+        unit_or_currency=(unit_or_currency if unit_or_currency is not None
+                          else _unit_for_measure(measure_id, money)),
         period=per, filters=filters,
         grain=grain or (agg or {}).get("grain"),
         axis=axis, form=form or (agg or {}).get("form"),
@@ -4450,7 +4456,7 @@ def render_atom_pair(atom):
     value = atom.get("display_value")
     if value is None:
         value = _fmt(atom.get("exact_value"))
-    unit = atom.get("unit_or_currency") or UNIT_UNKNOWN
+    unit = atom.get("unit_or_currency") or ""
     parts = []
     if label:
         parts.append("%s: %s" % (label, value))
@@ -4458,8 +4464,6 @@ def render_atom_pair(atom):
         parts.append(str(value))
     if unit and unit != UNIT_UNKNOWN:
         parts.append(str(unit))
-    elif unit == UNIT_UNKNOWN:
-        parts.append("(%s)" % UNIT_UNKNOWN)
     excl = atom.get("excluded") or {}
     if isinstance(excl, dict) and excl:
         notes = []
@@ -5957,49 +5961,28 @@ def ensure_count_named(text, agg, slot_mode=None):
 
 
 
-def _measure_is_quantity(measure):
-    """Мера штучная (Количество и т. п.), а не денежная."""
-    if not measure:
-        return False
-    m = (measure or "").lower()
-    return any(w in m for w in ("количество", "кол-во", "кол.", "quantity", "qty", "count",
-                                 "штук", "единиц"))
+def _unit_for_measure(measure, money=True):
+    """Единица измерения из данных: env-валюта для денежных мер, пустая для штучных.
 
-
-def _unit_for_measure(measure):
-    """Юнит для числа ответа: шт для штучных, валюта из окружения для денежных."""
-    if _measure_is_quantity(measure):
-        return "шт"
+    Определяется флагом `money` (уже решён по данным выше — интент + операция),
+    а не словарём RU/EN слов в имени меры: имя «Cantitate»/«Miktar»/«数量»
+    словарь не знает. Не знаем единицу — не пишем ничего (п. 12).
+    ASK_MONEY_UNIT (env) — перекрытие: сначала данные, env — fallback.
+    """
+    if not money:
+        return ""
     return MONEY_UNIT
 
 
 def postprocess_money_answer_text(text, unit=""):
-    """Привести единицу измерения: шт→юнит, количество→сумма.
+    """Единица измерения: данные → атом → render_atom_pair.
 
-    unit="шт" — штучная мера, оставить шт; unit=валюта — заменить шт→валюту;
-    unit="" — убрать единицу, не подставлять ничего (п. 12).
+    Перезапись прозы модели регулярками убрана: она работала только
+    на русском, а на нераспознанной мере переписывала верное в неверное.
+    Единица уходит в атом рядом с числом — `render_atom_pair`.
+    Функция оставлена для обратной совместимости вызовов.
     """
-    if not (text or "").strip():
-        return text
-    t = str(text)
-    u = (unit or "").strip()
-    if u == "шт":
-        pass
-    elif u:
-        t = re.sub(r"\b(шт|штук)\.?", u, t,
-                   flags=re.IGNORECASE | re.UNICODE)
-    else:
-        t = re.sub(r"\s*\b(шт|штук)\.?", "", t,
-                   flags=re.IGNORECASE | re.UNICODE)
-    if u != "шт":
-        t = re.sub(r"\bОбщее\s+количество\b", "Общая сумма", t,
-                   flags=re.IGNORECASE | re.UNICODE)
-        t = re.sub(r"\bколичество\b", "сумма", t,
-                   flags=re.IGNORECASE | re.UNICODE)
-        t = re.sub(r"наибольшее\s+сумма", "наибольшая сумма", t,
-                   flags=re.IGNORECASE | re.UNICODE)
-        t = re.sub(r"\(сумма\)", "(итого)", t)
-    return t
+    return text
 
 def build_answer_passport(period=None, period_dropped=False, origin="",
                           src_label="", src_kind="", measure="",
@@ -10929,15 +10912,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         sys.stderr.write("ask GATE: числа вне данных: %s\n" % bad[:6])
         if (slot_mode == "rank" and (agg or {}).get("grain") == "group"
                 and (agg.get("groups") or [])):
-            _rank_txt = rank_leader_answer_text(agg, say_measure or measure)
+            _rank_unit = _unit_for_measure(measure, money)
+            _rank_txt = rank_leader_answer_text(agg, say_measure or measure, unit=_rank_unit)
             if _rank_txt:
                 _ok_r, _bad_r = gate(_rank_txt, seen, agg, extra_vals, our_dates,
                                      money=money, slot_mode=slot_mode)
                 if _ok_r:
                     _rank_txt = ensure_count_named(_rank_txt, agg, slot_mode)
                     _rank_txt = ensure_answer_passport(_rank_txt, _pass_frag)
-                    if money:
-                        _rank_txt = postprocess_money_answer_text(_rank_txt, _unit_for_measure(measure))
                     diag["rank_deterministic"] = True
                     return {"partial": cut or None, "kind": "answer",
                             "text": _rank_txt, "sources": [src] if src else [],

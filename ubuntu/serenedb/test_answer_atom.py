@@ -47,13 +47,13 @@ t("атом: operation/exact/display/measure_label/unit",
   and a["exact_value"] == 1310413.93
   and a["display_value"] == "1310413.93"
   and a["measure_label"] == "Реализация ТМЦ"
-  and a["unit_or_currency"] == A.UNIT_UNKNOWN
+  and a["unit_or_currency"] == ""
   and a["period"]["origin"] == "prior"
   and a["proof_status"] == A.PROOF_COMPUTED)
 
-t("единица пустая → явный unknown",
+t("единица пустая → пустая строка (п. 12: не знаем — не пишем)",
   A.build_answer_atom(exact_value=1, unit_or_currency="")["unit_or_currency"]
-  == A.UNIT_UNKNOWN)
+  == "")
 
 t("atom_from_agg: count без величины",
   A.atom_from_agg({"count": 19}, operation="count", money=False)["exact_value"] == 19)
@@ -66,11 +66,11 @@ t("atom_operation: count/sum/rank/compare",
 
 # ── renderer ───────────────────────────────────────────────────────────────────
 pair = A.render_atom_pair(a)
-t("render_atom_pair: подпись + число + unknown одной строкой",
+t("render_atom_pair: подпись + число, без unknown (п. 12)",
   pair is not None
   and "Реализация ТМЦ" in pair
   and "1310413.93" in pair
-  and "unknown" in pair)
+  and "unknown" not in pair)
 
 unc = A.build_answer_atom(operation="sum", exact_value=None,
                           measure_label="X", proof_status=A.PROOF_UNCOUNTED)

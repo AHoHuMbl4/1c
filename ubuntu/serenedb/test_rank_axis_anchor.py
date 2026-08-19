@@ -246,42 +246,14 @@ _ok_big4, _bad_big4 = A.gate(
     "avg 27.42 min 0.01", SEEN_BIG, AGG_BIG, [1], [], money=True, slot_mode="rank")
 t("agg surface: agg min/max/avg проходит", _ok_big4, _bad_big4)
 
-# money postprocess guard: unit-aware
-wrong_money = (
-    "Наибольшее количество продаж — 3 205 385.44 шт. "
-    "Общее количество по всем перечисленным позициям: 80 316 522.36 шт."
-)
-
-# штучная мера → unit="шт", шт остаются
-fixed_qty = A.postprocess_money_answer_text(wrong_money, unit="шт")
-t("money postprocess: штучная мера — шт остаётся",
-  "шт" in (fixed_qty or ""), fixed_qty)
-
-# денежная мера без env → unit="", шт убирается, валюта не подставляется
-fixed_no_env = A.postprocess_money_answer_text(wrong_money, unit="")
-t("money postprocess: без env — нет «шт»",
-  "шт" not in (fixed_no_env or "").lower(), fixed_no_env)
-t("money postprocess: без env — нет «количество»",
-  "количество" not in (fixed_no_env or "").lower(), fixed_no_env)
-
-# денежная мера с env → unit="лей", "лей" появляется
-fixed_lei = A.postprocess_money_answer_text(wrong_money, unit="лей")
-t("money postprocess: env=лей — лей в тексте",
-  "лей" in (fixed_lei or ""), fixed_lei)
-t("money postprocess: env=лей — нет «шт»",
-  "шт" not in (fixed_lei or "").lower(), fixed_lei)
-
-# наибольшее сумма → наибольшая сумма
-grammar_in = "Наибольшее сумма продаж — 500 000."
-grammar_out = A.postprocess_money_answer_text(grammar_in, unit="лей")
-t("money postprocess: наибольшая сумма (род)",
-  "наибольшая сумма" in (grammar_out or "").lower(), grammar_out)
-
-# (сумма) → (итого) для денежных
-parens_in = "Товар X: 96 620 (сумма)"
-parens_out = A.postprocess_money_answer_text(parens_in, unit="")
-t("money postprocess: (сумма)→(итого)",
-  "(итого)" in (parens_out or ""), parens_out)
+# postprocess_money_answer_text: identity (перезапись прозы убрана, единица — в атоме)
+sample = "Наибольшее количество продаж — 3 205 385.44"
+t("postprocess_money: identity — текст не меняется",
+  A.postprocess_money_answer_text(sample, unit="лей") == sample, "")
+t("postprocess_money: пустой текст — identity",
+  A.postprocess_money_answer_text("", unit="руб.") == "", "")
+t("postprocess_money: None unit — identity",
+  A.postprocess_money_answer_text(sample) == sample, "")
 
 # grep-замок: литерала «руб.»/«рубл» (валюта) в serene_ask.py нет
 import ast as _ast
@@ -296,19 +268,15 @@ for _node in _ast.walk(_tree):
             break
 t("grep-замок: литерала «руб.» в serene_ask.py нет (код)", not _has_rub, "")
 
-# _measure_is_quantity
-t("_measure_is_quantity: Количество",
-  A._measure_is_quantity("Количество"), "")
-t("_measure_is_quantity: СуммаДокумента — не штуки",
-  not A._measure_is_quantity("СуммаДокумента"), "")
-t("_measure_is_quantity: None",
-  not A._measure_is_quantity(None), "")
-t("_measure_is_quantity: КОплате — не штуки",
-  not A._measure_is_quantity("КОплате"), "")
-
-# _unit_for_measure
-t("_unit_for_measure: Количество → шт",
-  A._unit_for_measure("Количество") == "шт", A._unit_for_measure("Количество"))
+# _unit_for_measure: единица из данных (money flag), не из словаря
+t("_unit_for_measure: money=False → пусто",
+  A._unit_for_measure("Количество", money=False) == "", A._unit_for_measure("Количество", money=False))
+t("_unit_for_measure: money=True → MONEY_UNIT (env)",
+  A._unit_for_measure("Сумма", money=True) == A.MONEY_UNIT, A._unit_for_measure("Сумма", money=True))
+t("_unit_for_measure: None money=False → пусто",
+  A._unit_for_measure(None, money=False) == "", "")
+t("_unit_for_measure: неизвестная мера money=True → env",
+  A._unit_for_measure("Cantitate", money=True) == A.MONEY_UNIT, "")
 
 # rank tail guard: no bare numbers right after `·`
 demo_txt = "Наибольшее значение по рангу."
