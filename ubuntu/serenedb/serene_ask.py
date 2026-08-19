@@ -4778,6 +4778,72 @@ def same_number(ours, theirs):
     except (TypeError, ValueError):
         return False
 
+def entity_ambiguity_ab_sum_eligible(intent, plan, diag):
+    '''Когда entity-ambiguity решаем числом: sum + fork.outcome == "empty" + окно периода.'''
+    if (diag or {}).get('fork', {}).get('outcome') != 'empty':
+        return False
+    if (plan or {}).get('compute') != 'sum':
+        return False
+    p = (intent or {}).get('period') or {}
+    return bool(p.get('from') or p.get('to'))
+
+
+def entity_ambiguity_ab_sum_case(sums_by_src, leader_src, opts):
+    '''A/B/C по числам и «человеческим подписям» (distinct_by).'''
+    if not isinstance(sums_by_src, dict) or not sums_by_src:
+        return None
+    if leader_src not in sums_by_src:
+        return None
+    rounded = {}
+    for src, v in sums_by_src.items():
+        if v is None:
+            return None
+        v2 = _intent_number(v)
+        if v2 is None:
+            return None
+        rounded[src] = round(float(v2), 2)
+    if len(set(rounded.values())) == 1:
+        return ('A', None)
+
+    sig = next((o.get('distinct_by') for o in (opts or [])
+                 if o.get('src') != leader_src and o.get('distinct_by')), None)
+    if sig:
+        return ('B', sig)
+    return ('C', None)
+
+
+def entity_ambiguity_ab_sum_luke_text(case, signature=None):
+    if case == 'B':
+        return 'Есть другое прочтение с подписью: %s.' % (signature or '—')
+    if case == 'C':
+        return 'Есть другое прочтение этого вопроса, но итог может отличаться.'
+    return ''
+
+
+def entity_ambiguity_ab_sum_build_out(leader_out, outer_diag, case, signature=None):
+    '''Собрать финальный `kind="answer"` без вариантов уточнения.'''
+    if not isinstance(leader_out, dict):
+        return None
+    out = dict(leader_out)
+    out.pop('options', None)
+    out['sources'] = []
+
+    out['diag'] = dict(out.get('diag') or {})
+    out['diag'].update(dict(outer_diag or {}))
+    out['diag']['ambiguity'] = 'entity'
+    out['diag']['entity_ab_case'] = case
+
+    out['text'] = (out.get('text') or '').strip()
+    if case in ('B', 'C'):
+        luke = entity_ambiguity_ab_sum_luke_text(case, signature=signature)
+        if luke:
+            out['text'] = (out['text'] + "\n\n⚠ " + luke).strip()
+
+    if out.get('kind') == 'figures':
+        out['kind'] = 'answer'
+    return out
+
+
 def unresolved_quantity(measure, alts, want, compute, names, totals_by=None):
     """Свести поле, когда вопрос про итог/max/min/avg, а величина ещё не выбрана.
 
@@ -10102,6 +10168,32 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             lab_by = {}
         opts = mk_opts(list(picked), lab_by, marks, by, match=match, preds=preds)
         if len(opts) > 1:
+            # A/B/C для sum-вопросов при `fork.outcome == "empty"`.
+            if (entity_ambiguity_ab_sum_eligible(intent, plan, diag)
+                    and len(picked) == 2):
+                try:
+                    leader_src = picked[0]
+                    cand_outs, cand_sums = {}, {}
+                    for src in picked:
+                        sub = answer(question, focus=src, measure_pick=measure_pick,
+                                     context=context, no_arbiter=True, prior=prior)
+                        if not isinstance(sub, dict):
+                            raise RuntimeError('bad_sub')
+                        figs = sub.get('figures') or {}
+                        s = figs.get('sum') if isinstance(figs, dict) else None
+                        if s is None:
+                            raise RuntimeError('no_sum')
+                        cand_outs[src] = sub
+                        cand_sums[src] = s
+                    case_sig = entity_ambiguity_ab_sum_case(cand_sums, leader_src, opts)
+                    if case_sig:
+                        case, sig = case_sig
+                        override = entity_ambiguity_ab_sum_build_out(
+                            cand_outs[leader_src], diag, case, signature=sig)
+                        if override:
+                            return override
+                except Exception:
+                    pass
             diag["ambiguous"] = [o["src"] for o in opts]
             return {"partial": cut or None, "kind": "clarify",
                     "text": clarify_say(question, opts, diag),

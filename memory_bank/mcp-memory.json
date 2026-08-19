@@ -720,3 +720,6 @@
 {"type":"relation","from":"ubuntu/serenedb/ask_scope_table.sql","to":"ask_scope (таблица SereneDB)","relationType":"создаёт и выдаёт права"}
 {"type":"relation","from":"test_ab_scorer_v2_modes.py","to":"ab_scorer.py","relationType":"tests"}
 {"type":"relation","from":"test_unit_from_data.py","to":"serene_ask.py","relationType":"проверяет оффлайн (единицы из данных, не из слов)"}
+{"type": "entity", "name": "test_entity_ambiguity_ab_sum.py", "entityType": "прибор (оффлайн-прогон)", "observations": ["Оффлайн-замок: entity-ambiguity при fork.outcome=empty для sum-вопросов (A/B/C по кандидату) без clarify на case A. Источник: ubuntu/serenedb/test_entity_ambiguity_ab_sum.py."]}
+{"type": "entity", "name": "serene_ask.py", "entityType": "сервисный код (ответы)", "observations": ["19.08 [код]: ветка entity-ambiguity (len(picked)>1) для sum-вопросов при diag.fork.outcome == empty теперь применяет A/B/C-контракт: совпадение rounded sum итогов возвращает kind=answer лидера без kind=clarify/options; расхождение при distinct_by возвращает лидер + текст люка (case B/C). Диаг содержит ambiguity=entity. Источник: ubuntu/serenedb/serene_ask.py."]}
+{"type": "relation", "from": "test_entity_ambiguity_ab_sum.py", "to": "serene_ask.py", "relationType": "проверяет оффлайн (entity-ambiguity A/B/C для sum)"}

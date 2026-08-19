@@ -34,6 +34,21 @@ md5 ask `286cd4b1`, замки `b5807b22`, atom `c9890dd7`, rank `8158f064`, env
 Замки: `python3 ubuntu/serenedb/test_gate.py` **132/0**; `python3 ubuntu/serenedb/test_step4_guards.py` **110/0**.
 
 
+## 19.08: entity-ambiguity clarify убираем на sum при fork.outcome=empty [код]
+
+[код] `ubuntu/serenedb/serene_ask.py`:
+- В точке `len(picked)>1` (entity-ambiguity) добавлена A/B/C-ветка для sum-вопросов при `diag.fork.outcome == "empty"` и окне периода: система принудительно считает итог у двух кандидатов и при совпадении отдаёт число лидера сразу (case A) без `kind="clarify"`/options.
+- При расхождении итогов и наличии/отсутствии `distinct_by` система возвращает лидирующее число + текст «другое прочтение» (cases B/C) без вариантов уточнения.
+- Добавлены helper'ы: `entity_ambiguity_ab_sum_eligible`, `entity_ambiguity_ab_sum_case`, `entity_ambiguity_ab_sum_build_out`.
+
+Замки (оффлайн):
+- `python3 ubuntu/serenedb/test_gate.py` 132/0
+- `python3 ubuntu/serenedb/test_step4_guards.py` 110/0
+- `python3 ubuntu/serenedb/test_entity_ambiguity_ab_sum.py` 15/15
+- `python3 ubuntu/serenedb/test_fork_outcomes.py` 24/24
+- `python3 ubuntu/serenedb/test_terminal_round.py` 24/24
+
+
 ## 19.08: аудит дашбордов и контура — хардкод, языки, гранты [код]
 
 [код] corpus_init.sql — GRANT SELECT ON search_meta TO serene_ro, serene_resolver
