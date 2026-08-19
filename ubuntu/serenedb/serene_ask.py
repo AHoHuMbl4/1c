@@ -4778,14 +4778,68 @@ def same_number(ours, theirs):
     except (TypeError, ValueError):
         return False
 
+def entity_ab_effective_compute(intent, plan):
+    """Что считаем: plan.compute от pick_entity, иначе intent.want от parse_intent."""
+    return (plan or {}).get('compute') or (intent or {}).get('want') or ''
+
+
 def entity_ambiguity_ab_sum_eligible(intent, plan, diag):
     '''Когда entity-ambiguity решаем числом: sum + fork.outcome == "empty" + окно периода.'''
+    return entity_ambiguity_ab_sum_skip(intent, plan, diag, picked_len=2) is None
+
+
+def entity_ambiguity_ab_sum_skip(intent, plan, diag, picked_len):
+    """Причина, почему A/B/C на entity не применяется. None — можно пробовать."""
+    if picked_len != 2:
+        return 'picked=%d' % picked_len
     if (diag or {}).get('fork', {}).get('outcome') != 'empty':
-        return False
-    if (plan or {}).get('compute') != 'sum':
-        return False
+        return 'fork.outcome=%s' % ((diag or {}).get('fork') or {}).get('outcome')
+    eff = entity_ab_effective_compute(intent, plan)
+    if eff != 'sum':
+        return 'compute=%s' % (eff or '—')
     p = (intent or {}).get('period') or {}
-    return bool(p.get('from') or p.get('to'))
+    if not (p.get('from') or p.get('to')):
+        return 'no_period'
+    return None
+
+
+def entity_ambiguity_ab_probe_measure(src, intent, question, match, preds):
+    """Величина для под-ответа entity_ab: без clarify, лидер src уже известен."""
+    names = measures_of(src)
+    if not names:
+        return None
+    if len(names) == 1:
+        return names[0]
+    mword = (intent.get('measure') or '').strip()
+    try:
+        totals = {m: v for m, v, _mx, _mn in totals_of(src, match, preds, names)}
+    except RuntimeError:
+        totals = {}
+    mid = _fork_headline_measure(src, totals, mword, measure_aliases_of(src))
+    if mid:
+        return mid
+    m, _alts = unresolved_quantity(None, [], intent.get('want'), 'sum', names, totals)
+    return m
+
+
+def entity_ambiguity_ab_sum_from_sub(sub):
+    """Итог sum из под-ответа. (число, None) или (None, причина)."""
+    if not isinstance(sub, dict):
+        return None, 'bad_sub'
+    nums = figures_numbers(sub)
+    if nums:
+        return nums[0], None
+    kind = sub.get('kind')
+    sd = sub.get('diag') or {}
+    if kind == 'clarify':
+        if sd.get('measure_ambiguous'):
+            return None, 'sub_clarify_measure'
+        if sd.get('ambiguous'):
+            return None, 'sub_clarify_entity'
+        return None, 'sub_clarify'
+    if kind in ('answer', 'figures'):
+        return None, 'no_sum'
+    return None, 'sub_%s' % (kind or '—')
 
 
 def entity_ambiguity_ab_sum_case(sums_by_src, leader_src, opts):
@@ -4842,6 +4896,44 @@ def entity_ambiguity_ab_sum_build_out(leader_out, outer_diag, case, signature=No
     if out.get('kind') == 'figures':
         out['kind'] = 'answer'
     return out
+
+
+def entity_ambiguity_ab_sum_attempt(question, intent, plan, diag, picked, opts,
+                                    measure_pick, match, preds, context, prior,
+                                    answer_fn=None):
+    """Проба A/B/C на entity-ambiguity; diag мутируется, override или None."""
+    if answer_fn is None:
+        answer_fn = answer
+    diag['plan_compute'] = plan.get('compute')
+    diag['entity_ab_compute'] = entity_ab_effective_compute(intent, plan)
+    _ab_skip = entity_ambiguity_ab_sum_skip(intent, plan, diag, len(picked))
+    if _ab_skip is not None:
+        diag['entity_ab_skip'] = _ab_skip
+        return None
+    leader_src = picked[0]
+    cand_outs, cand_sums = {}, {}
+    for src in picked:
+        _probe_m = (measure_pick
+                    or entity_ambiguity_ab_probe_measure(
+                        src, intent, question, match, preds))
+        if not _probe_m:
+            diag['entity_ab_skip'] = '%s:no_probe_measure' % src
+            return None
+        sub = answer_fn(question, focus=src, measure_pick=_probe_m,
+                        context=context, no_arbiter=True, prior=prior)
+        s, err = entity_ambiguity_ab_sum_from_sub(sub)
+        if err:
+            diag['entity_ab_skip'] = '%s:%s' % (src, err)
+            return None
+        cand_outs[src] = sub
+        cand_sums[src] = s
+    case_sig = entity_ambiguity_ab_sum_case(cand_sums, leader_src, opts)
+    if not case_sig:
+        diag['entity_ab_skip'] = 'case_none'
+        return None
+    case, sig = case_sig
+    return entity_ambiguity_ab_sum_build_out(
+        cand_outs[leader_src], diag, case, signature=sig)
 
 
 def unresolved_quantity(measure, alts, want, compute, names, totals_by=None):
@@ -10169,31 +10261,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         opts = mk_opts(list(picked), lab_by, marks, by, match=match, preds=preds)
         if len(opts) > 1:
             # A/B/C для sum-вопросов при `fork.outcome == "empty"`.
-            if (entity_ambiguity_ab_sum_eligible(intent, plan, diag)
-                    and len(picked) == 2):
-                try:
-                    leader_src = picked[0]
-                    cand_outs, cand_sums = {}, {}
-                    for src in picked:
-                        sub = answer(question, focus=src, measure_pick=measure_pick,
-                                     context=context, no_arbiter=True, prior=prior)
-                        if not isinstance(sub, dict):
-                            raise RuntimeError('bad_sub')
-                        figs = sub.get('figures') or {}
-                        s = figs.get('sum') if isinstance(figs, dict) else None
-                        if s is None:
-                            raise RuntimeError('no_sum')
-                        cand_outs[src] = sub
-                        cand_sums[src] = s
-                    case_sig = entity_ambiguity_ab_sum_case(cand_sums, leader_src, opts)
-                    if case_sig:
-                        case, sig = case_sig
-                        override = entity_ambiguity_ab_sum_build_out(
-                            cand_outs[leader_src], diag, case, signature=sig)
-                        if override:
-                            return override
-                except Exception:
-                    pass
+            override = entity_ambiguity_ab_sum_attempt(
+                question, intent, plan, diag, picked, opts,
+                measure_pick, match, preds, context, prior)
+            if override:
+                return override
             diag["ambiguous"] = [o["src"] for o in opts]
             return {"partial": cut or None, "kind": "clarify",
                     "text": clarify_say(question, opts, diag),

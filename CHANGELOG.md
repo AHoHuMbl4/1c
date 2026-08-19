@@ -1,3 +1,25 @@
+## 19.08: entity-ambiguity — diag entity_ab_skip, compute из intent.want [код]
+
+[код] `ubuntu/serenedb/serene_ask.py` (возврат 2 okna «сколько продали вчера?»):
+- **Что молчало:** `entity_ambiguity_ab_sum_eligible` смотрел только `plan.compute`; у живого
+  вопроса `plan.compute` пуст → `eligible=False` молча, плюс `except Exception: pass` прятал
+  сбой под-ответов (`sub_clarify_measure` / `no_sum`).
+- `entity_ab_effective_compute`: `plan.compute or intent.want` — sum из parse_intent, если
+  pick_entity не заполнил plan.
+- `entity_ambiguity_ab_sum_skip` / `diag.entity_ab_skip` — причина видна снаружи
+  (`compute=—`, `picked=N`, `src:sub_clarify_measure`, …); `diag.plan_compute`,
+  `diag.entity_ab_compute`.
+- `entity_ambiguity_ab_probe_measure` + `measure_pick` в под-вызовах — без вложенного clarify
+  по величине при `no_arbiter`.
+- `entity_ambiguity_ab_sum_attempt` — общая проба A/B/C (тестируема оффлайн).
+
+[замер] оффлайн-воспроизведение живого пути: `entity_ab_compute='sum'`, `plan_compute=None`,
+`entity_ab_case=A`, `entity_ab_skip` отсутствует; при sub_clarify —
+`entity_ab_skip='…:sub_clarify_measure'`.
+
+Замки: test_entity_ambiguity_ab_sum **24/24**; 22/31/110/56/132/92/23/24/18/30/26 — **0 fail**.
+md5 ask `264643ee`, замок `0a6befdf`.
+
 ## 19.08: единицы измерения — из данных, не из слов [код]
 
 [код] serene_ask.py — пакет «unit from data»:
