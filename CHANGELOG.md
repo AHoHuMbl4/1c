@@ -1,3 +1,9 @@
+## 19.08: золотой набор okna + smoke-гейт ut_test `[код]` `[замер]`
+
+`[код]` `ab-gold-okna.tsv`, `ab_scorer.py` (`AB_CONTOUR=okna`, `AB_GOLD_MODE=smoke`), `check-golden.sh`.
+
+`[замер]` smoke ut_test `:8099` — 0 сбоев/8. Okna `:8091` — 3/10, 2 сбоя, склад ok; okna `/opt` не cd1789b.
+
 ## 19.08: rank hotfix — n_groups=1 503 + якорение живого пути `[код]` `[замер]`
 
 `[код]` `serene_ask.py` / `serene_axis.py`: rank с **групп=1** (okna «передача на

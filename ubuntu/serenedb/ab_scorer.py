@@ -8,6 +8,11 @@
 ранжирования, ответы сверяются с независимым эталоном.
 
 Запуск на сервере: python3 ab_scorer.py
+
+Контуры (решение владельца 18.08):
+  AB_GOLD_MODE=smoke AB_BASE=ut_test — до выката: 0 сбоев обращения, порог верных не нужен
+  AB_CONTOUR=okna — после выката на okna: ab-gold-okna.tsv, числа + kind=no_data для склада
+  AB_BASE=ut_test — прежний набор ab-gold.tsv (A/B или live по ASK_URL)
 """
 import json
 import os
@@ -17,16 +22,15 @@ import sys
 import time
 import urllib.request
 
-# 🔴 НАБОР ПРИВЯЗАН К ИМЕНОВАННОЙ БАЗЕ, а не к одному юниту. 02.08 сервис ответов стал
-# шаблонным (`1c-serene-ask@<база>`) с побазовым `/etc/1c-serene-ask-<база>.env`, и прежняя
-# редакция этого не знала: она писала `ASK_SCORER` в ОБЩИЙ env (где его перекрывает
-# побазовый — то есть замер молча мерил неизменённый скорер) и рестартовала нешаблонный
-# юнит, чей порт держит уже поднятый экземпляр. Прогон либо падал, либо врал.
-BASE = os.environ.get("AB_BASE", "postgres")
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+CONTOUR = os.environ.get("AB_CONTOUR", "").strip().lower()
+GOLD_MODE = os.environ.get("AB_GOLD_MODE", "").strip().lower()
+BASE = os.environ.get("AB_BASE", "ut_test" if GOLD_MODE == "smoke" else "postgres")
 ENV_FILE = "/etc/1c-serene-ask-%s.env" % BASE
 UNIT = "1c-serene-ask@%s.service" % BASE
-# Общий env: там лежит только то, что одинаково для всех баз (`ASK_TOKEN`).
 ENV_COMMON = "/etc/1c-serene-ask.env"
+ENV_PG = "/etc/1c-serene-ask-postgres.env"
+ENV_MCP = "/etc/1c-mcp-reports.env"
 
 
 def env_value(key, *paths):
@@ -42,34 +46,52 @@ def env_value(key, *paths):
     return out
 
 
-DSN = os.environ.get(
-    "AB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=%s" % BASE)
-_ask = os.environ.get("ASK_URL", "").strip().rstrip("/")
-LIVE_CONTOUR = bool(_ask)
-if LIVE_CONTOUR:
-    URL = _ask if _ask.endswith("/ask") else _ask + "/ask"
-else:
-    URL = "http://127.0.0.1:%s/ask" % (
-        env_value("ASK_LISTEN_PORT", ENV_COMMON, ENV_FILE) or "8091")
-# Шесть штатных моделей ранжирования движка. Седьмая, indri_dirichlet, исключена
-# замером: в нашей сборке она в этой форме запроса молча отдаёт ноль строк.
-# Список сужается окружением: правка, которая модель ранжирования не трогает (вес поля,
-# бакеты булева запроса), проверяется прогоном на ОДНОЙ модели — иначе каждый замер
-# стоит шести перезапусков боевого сервиса и меряет заодно то, что не менялось.
-SCORERS = [s for s in os.environ.get(
-    "AB_SCORERS", "bm25,bm25_b0,tfidf,lm_jm,lm_dirichlet,dfi").split(",") if s]
+def ensure_pgpassword():
+    if os.environ.get("PGPASSWORD"):
+        return
+    pw = env_value("PGPASSWORD", ENV_MCP)
+    if pw:
+        os.environ["PGPASSWORD"] = pw
 
-# Приёмочный набор лежит в ФАЙЛЕ ДАННЫХ, а не в коде. Прежде пары «вопрос → эталонный
-# SQL» были записаны здесь же, и вместе с ними в программу попадали имена сущностей,
-# реквизитов и значения конкретной базы («Ромашка», «КАЗАН», `СуммаДокумента`). На чужой
-# конфигурации такой замер не воспроизводится, а править пришлось бы код — то есть это
-# был хардкод, ничем не отличающийся от прочих.
-GOLD_FILE = os.environ.get(
-    "AB_GOLD_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "ab-gold.tsv"))
+
+if CONTOUR == "okna":
+    GOLD_FILE = os.environ.get(
+        "AB_GOLD_FILE", os.path.join(_SCRIPT_DIR, "ab-gold-okna.tsv"))
+    ensure_pgpassword()
+    DSN = os.environ.get("AB_DSN") or env_value(
+        "SERENEDB_DSN_RO", ENV_PG) or env_value("SERENEDB_DSN", ENV_PG)
+    _ask = os.environ.get("ASK_URL", "").strip().rstrip("/") or "http://127.0.0.1:8091"
+    URL = _ask if _ask.endswith("/ask") else _ask + "/ask"
+    TOK = os.environ.get("ASK_TOKEN") or env_value("ASK_TOKEN", ENV_COMMON)
+    LIVE_CONTOUR = True
+    UNIT = "1c-serene-ask@okna.service"
+    SCORERS = ["live"]
+else:
+    GOLD_FILE = os.environ.get(
+        "AB_GOLD_FILE", os.path.join(_SCRIPT_DIR, "ab-gold.tsv"))
+    ensure_pgpassword()
+    DSN = os.environ.get(
+        "AB_DSN", "host=127.0.0.1 port=7890 user=serene_ro dbname=%s" % BASE)
+    _ask = os.environ.get("ASK_URL", "").strip().rstrip("/")
+    LIVE_CONTOUR = bool(_ask) or GOLD_MODE == "smoke"
+    if _ask:
+        URL = _ask if _ask.endswith("/ask") else _ask + "/ask"
+    else:
+        URL = "http://127.0.0.1:%s/ask" % (
+            env_value("ASK_LISTEN_PORT", ENV_COMMON, ENV_FILE) or "8091")
+    SCORERS = [s for s in os.environ.get(
+        "AB_SCORERS", "bm25,bm25_b0,tfidf,lm_jm,lm_dirichlet,dfi").split(",") if s]
+    if GOLD_MODE == "smoke":
+        LIVE_CONTOUR = True
+        SCORERS = ["live"]
+    if not os.environ.get("ASK_TOKEN"):
+        TOK = env_value("ASK_TOKEN", ENV_COMMON, ENV_FILE)
+    else:
+        TOK = os.environ.get("ASK_TOKEN")
 
 
 def load_gold(path):
-    """Пары «вопрос → SQL» из файла. Строка: вопрос, табуляция, запрос."""
+    """Строки набора: sql-эталон или MODE=kind (без числового SQL)."""
     out = []
     try:
         fh = open(path, encoding="utf-8")
@@ -84,8 +106,12 @@ def load_gold(path):
             if "\t" not in line:
                 sys.stderr.write("строка без табуляции пропущена: %s\n" % line[:60])
                 continue
-            q, sql = line.split("\t", 1)
-            out.append((q.strip(), sql.strip()))
+            q, spec = line.split("\t", 1)
+            spec = spec.strip()
+            if spec == "MODE=kind":
+                out.append({"q": q.strip(), "mode": "kind"})
+            else:
+                out.append({"q": q.strip(), "mode": "sql", "sql": spec})
     if not out:
         sys.stderr.write("набор вопросов пуст: %s\n" % path)
         sys.exit(1)
@@ -97,10 +123,9 @@ GOLD = load_gold(GOLD_FILE)
 
 def truth(sql):
     p = subprocess.run(["psql", DSN, "-tA", "-c", sql], capture_output=True, text=True)
+    if p.returncode:
+        sys.stderr.write("psql: %s\n" % ((p.stderr or p.stdout or "").strip()[:200]))
     return (p.stdout or "").strip()
-
-
-TOK = os.environ.get("ASK_TOKEN") or env_value("ASK_TOKEN", ENV_COMMON, ENV_FILE)
 
 
 def ask(q):
@@ -110,8 +135,6 @@ def ask(q):
     if TOK:
         req.add_header("Authorization", "Bearer " + TOK)
     t = time.time()
-    # Qwen3.8-27B vLLM: отдельные вопросы живут >300 с (замер 17.08: порог 500k —
-    # 514 с, clarify). Таймаут прибора не должен превращать долгий ответ в «сбой».
     timeout = int(os.environ.get("AB_ASK_TIMEOUT", "600"))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
@@ -122,22 +145,39 @@ def ask(q):
 
 def digits(text):
     """Цифровые последовательности ответа — сравниваем по ним, без учёта разрядки."""
-    # Разделители разрядов — ТЕ ЖЕ, что понимает гейт (`serene_ask.NUMTOK`), включая
-    # НЕРАЗРЫВНЫЙ пробел U+00A0. Иначе набор не видит числа, которые система отдаёт
-    # правильно: [замер 28.07] после перехода на подстановку чисел кодом ответы стали
-    # печататься с U+00A0, и набор показал 1 из 8 при восьми верных ответах.
-    # Определение «что считается разделителем разрядов» обязано быть одно на проект.
     return {re.sub(r"\D", "", m) for m in re.findall(
         "[\\d\u0020\u00a0\u2007\u2009\u202f\u200b'.,]{1,}", text or "")
             if re.sub(r"\D", "", m)}
 
 
-def restart(scorer):
-    """Сменить функцию ранжирования у сервиса ИМЕНОВАННОЙ базы и перезапустить его.
+def aggregate_totals_in_text(text):
+    """Числа итогов в text при kind=no_data — брак; годы и мелочь (минуты) — можно."""
+    for tok in re.findall(r"[\d\u0020\u00a0\u2007\u2009\u202f\u200b'.,]+", text or ""):
+        bare = re.sub(r"\D", "", tok)
+        if not bare:
+            continue
+        if re.search(r"\d[\s\u00a0\u202f\u2009]\d{3}", tok):
+            return True
+        if re.search(r"[.,]\d", tok):
+            return True
+        try:
+            n = int(bare)
+        except ValueError:
+            continue
+        if 1900 <= n <= 2099:
+            continue
+        if n >= 1000:
+            return True
+    return False
 
-    Пишем в побазовый env: он последний в списке `EnvironmentFile` юнита, то есть
-    перекрывает общий. Запись в общий не имела бы никакого действия — и не имела.
-    """
+
+def kind_row_ok(d):
+    if (d.get("kind") or "") != "no_data":
+        return False
+    return not aggregate_totals_in_text(d.get("text") or "")
+
+
+def restart(scorer):
     lines = [l for l in open(ENV_FILE, encoding="utf-8") if not l.startswith("ASK_SCORER=")]
     lines.append("ASK_SCORER=%s\n" % scorer)
     open(ENV_FILE, "w", encoding="utf-8").writelines(lines)
@@ -145,15 +185,78 @@ def restart(scorer):
     time.sleep(4)
 
 
+def mark_path(name):
+    root = os.environ.get("AB_MARK_DIR") or os.environ.get("CLAUDE_PROJECT_DIR") or ""
+    if not root:
+        try:
+            root = subprocess.run(
+                ["git", "-C", _SCRIPT_DIR, "rev-parse", "--show-toplevel"],
+                capture_output=True, text=True, check=True).stdout.strip()
+        except Exception:                        # noqa: BLE001
+            root = ""
+    mark_dir = os.path.join(root, ".claude") if root else ""
+    if not mark_dir or not os.path.isdir(mark_dir):
+        return ""
+    return os.path.join(mark_dir, name)
+
+
+def write_mark(best_sc, hits, n, errs):
+    if CONTOUR == "okna":
+        if errs or hits < n:
+            sys.stderr.write(
+                "\n🔴 отметка .golden-okna-last-run НЕ поставлена: сбоев %d, верных %d из %d.\n"
+                % (errs, hits, n))
+            return None
+        path = mark_path(".golden-okna-last-run")
+        line = "okna %s %d/%d\n" % (best_sc, hits, n)
+    elif GOLD_MODE == "smoke":
+        if errs:
+            sys.stderr.write(
+                "\n🔴 отметка smoke НЕ поставлена: сбоев %d из %d вопросов.\n" % (errs, n))
+            return None
+        path = mark_path(".golden-last-run")
+        line = "smoke %s %s 0err/%d\n" % (BASE, best_sc, n)
+    else:
+        if errs or not hits:
+            sys.stderr.write(
+                "\n🔴 отметка .golden-last-run НЕ поставлена: сбоев %d, верных %d из %d.\n"
+                % (errs, hits, n))
+            return None
+        path = mark_path(".golden-last-run")
+        line = "%s %s %d/%d\n" % (BASE, best_sc, hits, n)
+    if not path:
+        sys.stderr.write(
+            "\n🔴 отметка НЕ поставлена: не найден каталог .claude репозитория.\n"
+            "   AB_MARK_DIR=/путь/к/репозиторию\n")
+        return None
+    try:
+        open(path, "w").write(line)
+        print("отметка: %s" % line.strip())
+    except Exception as e:                       # noqa: BLE001
+        sys.stderr.write("отметку записать не удалось: %s\n" % e)
+        return None
+    return best_sc
+
+
 def main():
-    print("база %s, сервис %s, %s" % (BASE, URL, UNIT))
+    label = CONTOUR or GOLD_MODE or BASE
+    print("контур %s, база %s, сервис %s, %s" % (label, BASE, URL, UNIT))
     if LIVE_CONTOUR:
-        print("ASK_URL: no unit restart, live scorer on contour")
-    gold = [(q, truth(sql)) for q, sql in GOLD]
-    print("эталоны: " + ", ".join("%s" % t for _q, t in gold))
-    # 🔴 Эталон, который не посчитался, — это молчащий прогон: сравнивать не с чем, и
-    # «верных 0 из 8» означало бы не качество ответов, а неработающий psql.
-    blind = [q for q, t in gold if not t]
+        print("live: без рестарта юнита")
+    gold = []
+    for row in GOLD:
+        if row["mode"] == "kind":
+            gold.append((row["q"], None, "kind"))
+        else:
+            gold.append((row["q"], truth(row["sql"]), "sql"))
+    shown = []
+    for q, t, mode in gold:
+        if mode == "kind":
+            shown.append("%s:kind" % q[:24])
+        else:
+            shown.append(t or "?")
+    print("эталоны: " + ", ".join(shown))
+    blind = [q for q, t, mode in gold if mode == "sql" and not t]
     if blind:
         sys.stderr.write("эталон не посчитан у %d вопросов: %s\n"
                          % (len(blind), "; ".join(q[:40] for q in blind[:3])))
@@ -164,19 +267,22 @@ def main():
         if not LIVE_CONTOUR:
             restart(sc)
         hits, secs, rows, errs = 0, 0.0, [], 0
-        for q, want in gold:
+        for q, want, mode in gold:
             d, sec = ask(q)
             text = d.get("text") or ""
             diag = d.get("diag") or {}
             if diag.get("error"):
                 errs += 1
-            claims = diag.get("claims") or {}
-            got = digits(text) | {re.sub(r"\D", "", str(v)) for v in claims.values()
-                                  if v is not None}
-            ok = re.sub(r"\D", "", want) in got
+            if mode == "kind":
+                ok = kind_row_ok(d)
+            else:
+                claims = diag.get("claims") or {}
+                got = digits(text) | {re.sub(r"\D", "", str(v)) for v in claims.values()
+                                      if v is not None}
+                ok = re.sub(r"\D", "", want) in got
             hits += 1 if ok else 0
             secs += sec
-            rows.append((q, ok, diag.get("focus"), sec))
+            rows.append((q, ok, diag.get("focus") or d.get("kind"), sec))
         table[sc] = (hits, round(secs / len(gold), 2), rows, errs)
         print("\n== %s: верных %d/%d, средняя %.2f с%s"
               % (sc, hits, len(gold), secs / len(gold),
@@ -191,57 +297,9 @@ def main():
               % (sc, hits, len(gold), avg, "  сбоев %d" % errs if errs else "",
                  "   <= лучший" if sc == best[0] else ""))
 
-    # 🔴 ОТМЕТКА СТАВИТСЯ ТОЛЬКО ЗА СОСТОЯВШИЙСЯ ЗАМЕР (`№4`, `F172`). Прежде она
-    # писалась безусловно, в самом конце, — и хук «замер до выката» закрывался прогоном,
-    # где сервис не отвечал вовсе, а верных было 0 из 8. Гейт, засчитывающий провальный
-    # прогон, замером не является (п. 11 контракта).
-    #
-    # «Состоялся» — это ни одного сбоя обращения и хоть один верный ответ. Порог качества
-    # тут намеренно не ставится: решать «выкатывать ли при 6/8» — не дело отметки, это
-    # видно в её тексте и в выводе выше.
     hits, _avg, _rows, errs = best[1]
-    if errs or not hits:
-        sys.stderr.write(
-            "\n🔴 отметка .golden-last-run НЕ поставлена: сбоев %d, верных %d из %d.\n"
-            "   Это не замер, а неудавшийся прогон — хук перед выкатом обязан спросить.\n"
-            % (errs, hits, len(gold)))
-        return None
-    # 🔴 ОТМЕТКУ ЧИТАЕТ КОММИТ-ХУК, А ОН ЖИВЁТ В РЕПОЗИТОРИИ. Прежде путь считался как
-    # «три каталога вверх от скрипта»: из репозитория это давало корень, а из рабочего
-    # каталога `/opt/1c-mcp-reports` — **корень файловой системы**, то есть
-    # `/.claude/.golden-last-run`. А запускать велено именно из рабочего каталога
-    # (`REGRESSION_BASE1 §0`), значит в документированном способе отметка не ставилась
-    # НИКОГДА и гейт перед выкатом её не видел. Тот же класс, что «хуки не вызывались
-    # вовсе» (`HOW_NOT_TO §1.42`): защита, которая молча не срабатывает.
-    root = os.environ.get("AB_MARK_DIR") or os.environ.get("CLAUDE_PROJECT_DIR") or ""
-    if not root:
-        try:
-            root = subprocess.run(
-                ["git", "-C", os.path.dirname(os.path.abspath(__file__)),
-                 "rev-parse", "--show-toplevel"],
-                capture_output=True, text=True, check=True).stdout.strip()
-        except Exception:                        # noqa: BLE001 — вне репозитория
-            root = ""
-    mark_dir = os.path.join(root, ".claude") if root else ""
-    if not mark_dir or not os.path.isdir(mark_dir):
-        # Молча не пишем — говорим. Иначе прогон выглядит удавшимся, а гейт остаётся слеп.
-        sys.stderr.write(
-            "\n🔴 отметка НЕ поставлена: не найден репозиторий (запуск из %s).\n"
-            "   Замер СОСТОЯЛСЯ (%s, верных %d из %d) — не поставлена только отметка для\n"
-            "   коммит-хука. Укажите каталог: AB_MARK_DIR=/путь/к/репозиторию\n"
-            % (os.path.dirname(os.path.abspath(__file__)), best[0], hits, len(gold)))
-        return best[0]
-    try:
-        open(os.path.join(mark_dir, ".golden-last-run"), "w").write(
-            "%s %s %d/%d\n" % (BASE, best[0], hits, len(gold)))
-    except Exception as e:                       # noqa: BLE001
-        sys.stderr.write("отметку записать не удалось: %s\n" % e)
-        return None
-    return best[0]
+    return write_mark(best[0], hits, len(gold), errs)
 
 
 if __name__ == "__main__":
-    # 🔴 Код возврата ведём от РЕЗУЛЬТАТА (`№4`). Прежде здесь стояло `0 if main() else 0`
-    # — то есть успех при любом исходе, включая молчащий сервис. Всё, что смотрит на код
-    # возврата (руки, юниты, хуки), считало неудавшийся прогон удавшимся.
     sys.exit(0 if main() else 1)

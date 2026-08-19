@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Перед выкатом: золотой набор прогнан после последней правки исходников.
-# Отметку ставит состоявшийся прогон ubuntu/serenedb/ab_scorer.py
-# (.claude/.golden-last-run). touch этого файла гейт не предлагает.
+# Перед выкатом: smoke-прогон золотого набора ut_test (0 сбоев обращения).
+# После выката на okna: приёмка AB_CONTOUR=okna (числа + kind) — см. REGRESSION_BASE1 §0.
+# Отметку smoke ставит AB_GOLD_MODE=smoke → .claude/.golden-last-run (префикс smoke).
+# touch этого файла гейт не предлагает.
 set -uo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib-hooks.sh"
@@ -16,13 +17,23 @@ SRC_DIRS="ubuntu/serenedb ubuntu/openclaw ubuntu/1c-gateway ubuntu/1c-etl ubuntu
 NEWEST=$(find $SRC_DIRS -type f \( -name '*.py' -o -name '*.js' -o -name '*.mjs' \) \
          -newer "$MARK" 2>/dev/null | head -5)
 
+golden_smoke_mark_ok() {
+  [ -f "$MARK" ] || return 1
+  read -r line _ < "$MARK" 2>/dev/null || return 1
+  [[ "$line" == smoke\ * ]] && [[ "$line" == *0err/* ]]
+}
+
 if [ ! -f "$MARK" ]; then
-  WHY="Золотой набор ни разу не прогонялся после появления этой проверки.
+  WHY="Золотой smoke ut_test ни разу не прогонялся после появления этой проверки.
 Выкат без замера — это то самое «сначала на боевой, потом посмотрим»."
+elif ! golden_smoke_mark_ok; then
+  WHY="Отметка .golden-last-run есть, но это не smoke-прогон ut_test (нужен префикс smoke … 0err/N).
+ДО выката — только smoke: 0 сбоев обращения, порог верных не ставится.
+После выката на okna — приёмка AB_CONTOUR=okna (числа), см. REGRESSION_BASE1 §0."
 elif [ -n "$NEWEST" ]; then
-  WHY="Исходники правились ПОСЛЕ последнего прогона золотого набора:
+  WHY="Исходники правились ПОСЛЕ последнего smoke-прогона:
 $(printf '%s\n' "$NEWEST" | sed 's/^/  /')
-Последний прогон: $(date -r "$MARK" '+%Y-%m-%d %H:%M' 2>/dev/null)"
+Последний smoke: $(date -r "$MARK" '+%Y-%m-%d %H:%M' 2>/dev/null)"
 else
   echo '{}'; exit 0
 fi
@@ -59,9 +70,10 @@ raise SystemExit(1)
 '
 }
 
-RUN_HELP="Прогон: python3 ubuntu/serenedb/ab_scorer.py
-  контур юнита: AB_BASE=<база>
-  контур по URL без рестарта юнита: ASK_URL=http://127.0.0.1:8091/ask AB_BASE=<база> python3 ubuntu/serenedb/ab_scorer.py
+RUN_HELP="Smoke ДО выката (0 сбоев, порог верных не нужен):
+  AB_GOLD_MODE=smoke AB_BASE=ut_test ASK_URL=http://127.0.0.1:8099/ask python3 ubuntu/serenedb/ab_scorer.py
+Приёмка ПОСЛЕ выката на okna (числа + kind склад):
+  AB_CONTOUR=okna python3 ubuntu/serenedb/ab_scorer.py
 Отметку ставит только состоявшийся прогон, не touch."
 
 emb=0

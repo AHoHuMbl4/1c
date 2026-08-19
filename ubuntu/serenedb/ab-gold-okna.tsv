@@ -1,0 +1,14 @@
+# Приёмочный набор okna: вопрос <TAB> SQL или MODE=kind.
+# Числа не зашиты — эталон считается SQL при каждом прогоне.
+# Семантика 19.08: search_corpus, map_extract/map_extract_value, doc_date.
+# «На складе» — MODE=kind: ответ no_data без чисел итогов в text.
+Сколько продали вчера?	SELECT coalesce(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10)))::BIGINT,0) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= CURRENT_DATE - INTERVAL 1 day AND doc_date < CURRENT_DATE
+Сколько продали позавчера?	SELECT coalesce(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10)))::BIGINT,0) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= CURRENT_DATE - INTERVAL 2 day AND doc_date < CURRENT_DATE - INTERVAL 1 day
+Сколько продали сегодня?	SELECT coalesce(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10)))::BIGINT,0) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= CURRENT_DATE AND doc_date < CURRENT_DATE + INTERVAL 1 day
+Сколько у нас контрагентов?	SELECT count(*) FROM search_corpus WHERE src_table='catalog_контрагенты'
+Сколько банков в справочнике?	SELECT count(*) FROM search_corpus WHERE src_table='catalog_банки'
+Какого товара больше всего продали за всё время?	SELECT round(sum(TRY_CAST(map_extract(nums,'Количество')[1] AS DECIMAL(38,10))),2) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' GROUP BY map_extract_value(refs_map,'ТМЦ') ORDER BY 1 DESC LIMIT 1
+Кому мы больше всего продали за всё время?	SELECT round(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10))),2) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' GROUP BY map_extract_value(refs_map,'Контрагент') ORDER BY 1 DESC LIMIT 1
+Сколько документов реализации за декабрь 2025?	SELECT count(*) FROM search_corpus WHERE src_table='document_реализациятмц' AND doc_date >= '2025-12-01' AND doc_date < '2026-01-01'
+Какого товара больше всего передали на хранение?	SELECT round(sum(TRY_CAST(map_extract(nums,'Количество')[1] AS DECIMAL(38,10))),2) FROM search_corpus WHERE src_table='document_передачатмцнаответственноехранение_номенклатура' GROUP BY map_extract_value(refs_map,'ТМЦ') ORDER BY 1 DESC LIMIT 1
+Какого товара больше всего на складе?	MODE=kind

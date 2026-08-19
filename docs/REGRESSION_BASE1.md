@@ -1,3 +1,15 @@
+## Замер 19.08 — золотой набор okna + smoke-гейт ut_test
+
+Правка `ab-gold-okna.tsv`, `ab_scorer.py` (AB_CONTOUR=okna, AB_GOLD_MODE=smoke,
+MODE=kind), `check-golden.sh` (smoke-отметка). **Снят ПОСЛЕ последней правки.**
+Smoke ut_test `:8099`: **0err/8**, верных 1/8 (порог не ставится), отметка
+`smoke ut_test live 0err/8`. Okna `:8091`: **3/10**, **2 сбоя**; склад
+`no_data` ✓; `serene_ask.py` на okna md5 **`d442630f…`** — **не cd1789b**
+(`372b529e…` в git); повтор приёмки — после выката rank-hotfix оркестратором.
+md5: `ab-gold-okna.tsv` **`6db327ad`**, `ab_scorer.py` **`e3368d07`**, `check-golden.sh`
+**`9d63b8a5`**. Прогоны: `runs/2026-08-19-golden-smoke-ut_test.txt`,
+`runs/2026-08-19-okna-gold.txt`.
+
 ## Замер 18.08 — класс F: ось не пересаживает settled-сущность
 
 Правка `ubuntu/serenedb/serene_ask.py` (`hold_settled_entity`,
@@ -1074,11 +1086,23 @@ SERENEDB_DSN_RO=<...dbname=postgres> PGPASSWORD=<...> \
 |---|---|---|---|
 | 1 | такт конвейера доходит до конца | падение сборки, слияния, векторов | `systemctl start 1c-serene-pipeline.service` |
 | 2 | перепись полноты и `search_quality` | молчаливую потерю строк (п. 13) | внутри такта, шаг 7 |
-| 3 | **приёмочный набор** | ухудшение ОТВЕТОВ при исправной сборке | `python3 ab_scorer.py` в `/opt/1c-mcp-reports` |
+| 3 | **приёмочный набор** | ухудшение ОТВЕТОВ при исправной сборке | `ab_scorer.py` — см. два уровня ниже |
 
 🔴 Третий уровень — единственный, который ловит ухудшение качества ответа. Первые два
 могут быть зелёными, а бот при этом отвечать хуже: сборка не знает, что такое «верный
 ответ».
+
+### Золотой набор: два уровня (решение владельца 18.08)
+
+| Когда | Контур | Набор | Критерий | Команда | Отметка |
+|---|---|---|---|---|---|
+| **ДО выката** | ut_test `:8099` | `ab-gold.tsv` (8 вопросов) | **0 сбоев обращения**; порог верных **не ставится** — ловит «сервис не отвечает» | `AB_GOLD_MODE=smoke AB_BASE=ut_test ASK_URL=http://127.0.0.1:8099/ask python3 ubuntu/serenedb/ab_scorer.py` | `.claude/.golden-last-run` → строка `smoke ut_test live 0err/8` |
+| **ПОСЛЕ выката** | okna `:8091` | `ab-gold-okna.tsv` (10 вопросов) | **9 числовых** — цифра эталона в text+claims; **склад** — `kind=no_data`, в text **нет чисел итогов** (годы/минуты — можно) | на okna: `AB_CONTOUR=okna python3 ubuntu/serenedb/ab_scorer.py` | `.claude/.golden-okna-last-run` |
+
+Гейт `check-golden` перед выкатом смотрит **только smoke-отметку** (префикс `smoke`, суффикс
+`0err/N`). `AB_BASE=ut_test` без `AB_GOLD_MODE=smoke` — прежний A/B-прогон с порогом
+«хоть один верный». DSN okna: `/etc/1c-serene-ask-postgres.env`, `PGPASSWORD` —
+`/etc/1c-mcp-reports.env`, токен — `/etc/1c-serene-ask.env`.
 
 ---
 
