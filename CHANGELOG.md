@@ -1,12 +1,48 @@
+## 19.08: веб-чат okna — утечка протокола, кручение билета, RAG `[код]` `[замер]`
+
+Живой дефект baulogistic.timpul.pro (19.08): английские рассуждения про
+`decision_id`/tickets, кручение старого билета, уход в OWUI
+`search_knowledge_files` / `list_automations`.
+
+1. **Модель/профиль.** Web-профиль: `deepseek/deepseek-v4-flash`,
+   `thinkingDefault=off` (`setup-okna-backend-web.sh`); ASK_THINKING_OFF_BODY
+   на `:8091` — только сервис ответов, не бот.
+2. **Плагин 1.1.8.** `stripInternal` + `hasProtocolLeak` на
+   `before_agent_finalize` (путь `/v1` без `message_sending`); EN-паттерны;
+   `localeFromInbound` → русский revise при кириллице в вопросе. Stale
+   `decision_id` → refresh только на том же выборе; `isBlockedSideTool` для
+   wiki/RAG на ходе данных.
+3. **Билет.** `mcp_ask.py` docstring: одноразовый id, свежий clarify после
+   used/unknown. Мост по-прежнему повторяет без билета на `choice_error`.
+4. **OWUI.** `configure-branding.py`: `meta.builtinTools.knowledge/automations/…`
+   = false — builtin RAG не в набор инструментов модели.
+
+`[замер]` оффлайн: `test-verify.mjs` **126/126**, `test_mcp_ask.py` **35/35**.
+md5: `verify-core.js` `7d3c1fc0`, `index.js` `f215bc47`, `mcp_ask.py`
+`798caaad`, `configure-branding.py` `9cf2f1eb`. `/opt` и живой чат — выкат
+оркестратору + `configure-branding.py` на фронте.
+
+## 19.08: gate bad float → 503 + rank whitelist + регистр из табчастей `[код]` `[замер]`
+
+`[код]` `serene_ask.py`: `gate()` отдаёт `_fmt_gate_bad` (строки, не float);
+`_gate_bad_preview` — шаг/ретрай не падают на `bad[0][:60]` (okna rid `5b6da6da`,
+traceback :10717). Rank+group: whitelist `leader`/`count`/`count_amount`.
+`prefer_entity_for_rank`: подъём `accumulationregister_*` по `written_by` родителя
+табчасти; фильтр на сборе `cands`. Оффлайн **29/29** `test_rank_axis_anchor.py` +
+F-замки. md5 ask **`ea718df0`**. Выкат `:8091` — оркестратор.
+
 ## 19.08: скрипт fix-golden-mark-in-tests.sh под smoke-отметку `[код]` `[замер]`
 
 `[код]` `work/hooks/fix-golden-mark-in-tests.sh` — под root меняет в
-`work/hooks/test-hooks.sh` две строки `touch .claude/.golden-last-run` на
+`work/hooks/test-hooks.sh` и в установленной копии `.claude/hooks/test-hooks.sh`
+две строки `touch .claude/.golden-last-run` на
 `echo 'smoke ut_test live 0err/8' > .claude/.golden-last-run` (новый
 двухуровневый check-golden ждёт отметку с текстом `smoke … 0err/N`, пустой
 touch её не проходит). Идемпотентен, бэкап с ts, стоп при неожиданном
 содержимом. `[замер]` замена проверена на копии файла: 2 строки, проверка
-строки 145 («подсказка без touch-отметки») не задета.
+строки 145 («подсказка без touch-отметки») не задета; install-gates до правки
+ставил непропатченную копию — провал «замер свежее правок — молчит» закрывается
+этим скриптом.
 
 ## 19.08: золотой набор okna + smoke-гейт ut_test `[код]` `[замер]`
 
