@@ -64,6 +64,8 @@ ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS written_by_all MAP(VARCHAR, B
 CREATE TABLE IF NOT EXISTS search_sources (src_table VARCHAR, seen_at TIMESTAMP);
 
 CREATE TABLE IF NOT EXISTS search_meta (k VARCHAR, v VARCHAR);
+GRANT SELECT ON search_meta TO serene_ro;
+GRANT SELECT ON search_meta TO serene_resolver;
 CREATE TABLE IF NOT EXISTS search_quality (k VARCHAR, v BIGINT, note VARCHAR);
 CREATE TABLE IF NOT EXISTS build_state (ts TIMESTAMP, k VARCHAR, v BIGINT);
 -- Разметка «о таком спрашивают / это служебное». Заводится ЗДЕСЬ, а не только в

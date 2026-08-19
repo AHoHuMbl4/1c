@@ -32,6 +32,7 @@ MCP-сервер поверх `serene_ask` — даёт OpenClaw-боту инс
   MCP_TOKEN  (Bearer этого сервера; без него сервис НЕ стартует)
 """
 import json
+import re
 import time
 import os
 import sys
@@ -427,7 +428,7 @@ def _without_ticket_talk(text):
         low = line.lower()
         if "decision_id" in low or "choice error" in low or "choice_error" in low:
             continue
-        if "тикет" in low or "ticket" in low:
+        if re.search(r'ticket[:\s=]|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', low):
             continue
         if "ask_1c" in low or "report_1c" in low:
             continue
@@ -623,7 +624,7 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     # поле пробрасывается отдельно, чтобы бот мог сказать это своими словами.
     m = (data.get("measure") or "").strip()
     if m and m.lower() not in text.lower():
-        text += "\n\n[величина: %s]" % m
+        text += "\n\n[measure: %s]" % m
     # Атом ответа — структурой рядом с текстом (гейт читает подписи/числа из ATOM_JSON).
     block = _atom_json_block(_atoms_of(data), data.get("options"))
     if block:

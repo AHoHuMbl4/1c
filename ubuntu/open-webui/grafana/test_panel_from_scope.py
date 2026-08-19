@@ -16,10 +16,15 @@ DS = {"type": "postgres", "uid": "uid1"}
 
 class BuildSql(unittest.TestCase):
     def test_дни_касты_обязательны(self):
-        sql, fmt, kind = ps.build_sql({"src": SRC, "measure": "Сумма"})
+        sql, fmt, kind = ps.build_sql({"src": SRC, "measure": "Сумма",
+                                       "period_col": "Period"})
         self.assertIn('"Period"::timestamp', sql)
         self.assertIn('sum("Сумма"::DECIMAL)', sql)
         self.assertEqual((fmt, kind), ("time_series", "timeseries"))
+
+    def test_timeseries_без_period_col_отказ(self):
+        with self.assertRaises(ps.SpecError):
+            ps.build_sql({"src": SRC, "measure": "Сумма"})
 
     def test_ось_даёт_barchart_с_потолком_показа(self):
         sql, fmt, kind = ps.build_sql({"src": SRC, "measure": "Сумма",
@@ -30,11 +35,13 @@ class BuildSql(unittest.TestCase):
 
     def test_условие_из_scope_попадает_в_запрос(self):
         sql, _, _ = ps.build_sql({"src": SRC, "measure": "Сумма",
+                                  "period_col": "doc_date",
                                   "where": "doc_date >= '2026-08-01'"})
         self.assertIn("WHERE doc_date >= '2026-08-01'", sql)
 
     def test_без_условия_нет_пустого_where(self):
-        sql, _, _ = ps.build_sql({"src": SRC, "measure": "Сумма", "where": "  "})
+        sql, _, _ = ps.build_sql({"src": SRC, "measure": "Сумма",
+                                  "period_col": "doc_date", "where": "  "})
         self.assertNotIn("WHERE", sql)
 
     def test_итог_одним_числом(self):
@@ -44,7 +51,7 @@ class BuildSql(unittest.TestCase):
 
     def test_пустая_величина_отказ(self):
         with self.assertRaises(ps.SpecError):
-            ps.build_sql({"src": SRC, "measure": ""})
+            ps.build_sql({"src": SRC, "measure": "", "kind": "stat"})
 
     def test_точка_с_запятой_отказ(self):
         for spec in ({"src": f"{SRC}; DROP TABLE x", "measure": "Сумма"},
@@ -61,8 +68,8 @@ class BuildSql(unittest.TestCase):
 
 class MakePanel(unittest.TestCase):
     def test_панель_несёт_запрос_и_datasource(self):
-        panel = ps.make_panel({"src": SRC, "measure": "Сумма", "title": "Продажи"},
-                              DS, panel_id=7, y=18)
+        panel = ps.make_panel({"src": SRC, "measure": "Сумма", "title": "Продажи",
+                               "period_col": "Period"}, DS, panel_id=7, y=18)
         self.assertEqual(panel["id"], 7)
         self.assertEqual(panel["gridPos"]["y"], 18)
         self.assertEqual(panel["datasource"], DS)
@@ -76,7 +83,7 @@ class MakePanel(unittest.TestCase):
         self.assertIn(str(ps.AXIS_ROWS), panel["title"])
 
     def test_без_заголовка_берётся_величина(self):
-        panel = ps.make_panel({"src": SRC, "measure": "Сумма"}, DS, 1, 0)
+        panel = ps.make_panel({"src": SRC, "measure": "Сумма", "kind": "stat"}, DS, 1, 0)
         self.assertEqual(panel["title"], "Сумма")
 
 

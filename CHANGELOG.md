@@ -1,3 +1,20 @@
+## 19.08: аудит дашбордов и контура — хардкод, языки, гранты [код]
+
+[код] corpus_init.sql — GRANT SELECT ON search_meta TO serene_ro, serene_resolver
+(на боевом okna грантов не было, сервис читал search_meta без права).
+[код] panel_from_scope.py — period_col обязателен (убрана догадка or "Period");
+datasource выбирается по uid/isDefault/единственный (не первый в списке);
+окно дашборда now-1y (было now-90d зашито); заголовок top N (не «топ»);
+все SpecError и stderr на английском.
+[код] dash_adapter.py — убрано okna из docstring; заголовок Panels — {who}
+(было «Панели»); все HTTP-ошибки на английском.
+[код] add_to_dashboard.py — все клиентские сообщения на английском.
+[код] mcp_ask.py — маркер [measure: %s] (было [величина: %s]); фильтр
+протокола по формату UUID/ticket: (было по словам «тикет»/«ticket»).
+Замки: panel 12/12 (+1 test_timeseries_без_period_col_отказ).
+md5: corpus_init 3a9a6ea6, panel fdf16c23, dash 6b355282, add 8fd61114,
+mcp 56868dc8, test_panel af21a025.
+
 ## 19.08: ab_scorer v2 — режимы digits/kind/clarify/name [код][замер]
 
 [код] ab_scorer.py — TSV v2 (digits/kind/clarify/name), clarify-follow, name pairs.

@@ -50,7 +50,7 @@ class Action:
         message = messages[-1] if messages else {}
         text = (message.get("content") or "").strip()
         if not text:
-            await say("Закреплять нечего: пустой ответ.")
+            await say("Nothing to pin: empty answer.")
             return None
 
         answer_sha = hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -59,18 +59,18 @@ class Action:
                                json={"answer_sha256": answer_sha},
                                timeout=self.valves.timeout_sec)
         except requests.RequestException as exc:
-            await say(f"Не удалось получить спецификацию: {exc}")
+            await say(f"Failed to fetch scope: {exc}")
             return None
         if sr.status_code == 404:
-            await say("Закреплять нечего: в ответе нет спецификации счёта "
-                      "(источник и величина). Кнопка работает на ответах с числом.")
+            await say("Nothing to pin: the answer has no scope "
+                      "(source and measure). The button works on numeric answers.")
             return None
         if sr.status_code != 200:
-            await say(f"Спецификация не получена ({sr.status_code}): {sr.text.strip()}")
+            await say(f"Scope not available ({sr.status_code}): {sr.text.strip()}")
             return None
         scope = sr.json()
 
-        await say("Добавляю панель…", done=False)
+        await say("Adding panel…", done=False)
         cookie = ""
         if __request__ is not None:
             cookie = __request__.headers.get("cookie", "")
@@ -79,10 +79,10 @@ class Action:
                                  headers={"Cookie": cookie},
                                  timeout=self.valves.timeout_sec)
         except requests.RequestException as exc:
-            await say(f"Адаптер дашбордов недоступен: {exc}")
+            await say(f"Dashboard adapter unavailable: {exc}")
             return None
         if resp.status_code != 200:
-            await say(f"Панель не добавлена ({resp.status_code}): {resp.text.strip()}")
+            await say(f"Panel not added ({resp.status_code}): {resp.text.strip()}")
             return None
 
         out = resp.json()

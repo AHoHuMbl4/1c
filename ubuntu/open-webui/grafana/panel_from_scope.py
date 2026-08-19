@@ -40,26 +40,26 @@ AXIS_ROWS = 50
 
 
 class SpecError(ValueError):
-    """Спецификация не годится: пустое поле или опасный текст."""
+    """Spec rejected: missing field or disallowed text."""
 
 
 def _ident(name: str, what: str) -> str:
-    """Имя колонки/таблицы из спецификации ask. Кавычки, ; и комментарий — отказ."""
+    """Column/table name from ask spec. Quotes, ; and comments are rejected."""
     value = str(name or "").strip()
     if not value:
-        raise SpecError(f"{what}: пусто")
+        raise SpecError(f"{what}: empty")
     for bad in ('"', ";", "--", "/*", "*/"):
         if bad in value:
-            raise SpecError(f"{what}: недопустимый текст {bad!r}")
+            raise SpecError(f"{what}: disallowed text {bad!r}")
     return value
 
 
 def _condition(where: str) -> str:
-    """Условие приходит из scope самого ask (его собрал не человек и не модель)."""
+    """Condition from ask scope (built by code, not by a human or a model)."""
     value = str(where or "").strip()
     for bad in (";", "--", "/*", "*/"):
         if bad in value:
-            raise SpecError(f"условие: недопустимый текст {bad!r}")
+            raise SpecError(f"condition: disallowed text {bad!r}")
     return value
 
 
@@ -67,7 +67,7 @@ def build_sql(spec: dict) -> tuple[str, str, str]:
     """(rawSql, формат для Grafana, вид панели) из спецификации счёта."""
     kind = spec.get("kind") or ("barchart" if spec.get("axis") else "timeseries")
     if kind not in KINDS:
-        raise SpecError(f"вид панели {kind!r} не из {KINDS}")
+        raise SpecError(f"panel kind {kind!r} not in {KINDS}")
     src = _ident(spec.get("src"), "источник")
     measure = _ident(spec.get("measure"), "величина")
     where = _condition(spec.get("where"))
@@ -81,7 +81,10 @@ def build_sql(spec: dict) -> tuple[str, str, str]:
         return (f'SELECT "{axis}"::VARCHAR AS metric, sum("{measure}"::DECIMAL) AS value'
                 f" FROM {src}{tail} GROUP BY 1 ORDER BY 2 DESC LIMIT {AXIS_ROWS}",
                 "table", kind)
-    period = _ident(spec.get("period_col") or "Period", "колонка периода")
+    period_col = spec.get("period_col")
+    if not period_col:
+        raise SpecError("period_col is required in spec for timeseries")
+    period = _ident(period_col, "period_col")
     return (f'SELECT date_trunc(\'day\', "{period}"::timestamp) AS time,'
             f' sum("{measure}"::DECIMAL) AS value FROM {src}{tail}'
             " GROUP BY 1 ORDER BY 1", "time_series", kind)
@@ -92,7 +95,7 @@ def make_panel(spec: dict, datasource: dict, panel_id: int, y: int) -> dict:
     sql, fmt, kind = build_sql(spec)
     title = str(spec.get("title") or "").strip() or spec.get("measure") or "Панель"
     if kind == "barchart":
-        title = f"{title} — топ {AXIS_ROWS}"
+        title = f"{title} — top {AXIS_ROWS}"
     return {
         "id": panel_id,
         "type": kind,
@@ -119,10 +122,23 @@ class Grafana:
         return json.loads(urllib.request.urlopen(req, timeout=60).read())
 
     def default_datasource(self) -> dict:
-        for ds in self.call("GET", "/api/datasources"):
-            if ds.get("type") in PG_TYPES:
+        """Postgres-datasource: по uid из env, isDefault, или единственный экземпляр."""
+        wanted_uid = os.environ.get("GRAFANA_DS_UID", "").strip()
+        all_pg = [ds for ds in self.call("GET", "/api/datasources")
+                  if ds.get("type") in PG_TYPES]
+        if not all_pg:
+            raise RuntimeError("no postgres datasource in Grafana")
+        if wanted_uid:
+            for ds in all_pg:
+                if ds.get("uid") == wanted_uid:
+                    return {"type": ds["type"], "uid": ds["uid"]}
+            raise RuntimeError(f"datasource uid={wanted_uid!r} not found")
+        for ds in all_pg:
+            if ds.get("isDefault"):
                 return {"type": ds["type"], "uid": ds["uid"]}
-        raise RuntimeError(f"в Grafana нет datasource типов {PG_TYPES}")
+        if len(all_pg) == 1:
+            return {"type": all_pg[0]["type"], "uid": all_pg[0]["uid"]}
+        raise RuntimeError("multiple postgres datasources, set GRAFANA_DS_UID")
 
     def dashboard(self, uid: str, title: str) -> dict:
         try:
@@ -132,7 +148,7 @@ class Grafana:
                 raise
         # Первая панель пользователя — заводим дашборд под него.
         return {"uid": uid, "title": title, "panels": [], "tags": ["ask"],
-                "time": {"from": "now-90d", "to": "now"}, "refresh": "5m"}
+                "time": {"from": "now-1y", "to": "now"}, "refresh": "5m"}
 
     def check_query(self, datasource: dict, sql: str, fmt: str, window: dict) -> int:
         """Прогнать запрос панели до закрепления: ошибка базы — наверх, строки — числом.
@@ -151,9 +167,9 @@ class Grafana:
             try:
                 res = json.loads(payload)["results"]["A"]
             except (json.JSONDecodeError, KeyError):
-                raise SpecError(f"запрос не выполнился: HTTP {exc.code}") from exc
+                raise SpecError(f"query failed: HTTP {exc.code}") from exc
         if res.get("error"):
-            raise SpecError(f"запрос не выполнился: {res['error']}")
+            raise SpecError(f"query failed: {res['error']}")
         rows = 0
         for frame in res.get("frames", []):
             values = frame.get("data", {}).get("values") or []
@@ -188,7 +204,7 @@ def main() -> int:
 
     password = os.environ.get("GRAFANA_ADMIN_PASSWORD") or sys.stdin.readline().strip()
     if not password:
-        print("нет пароля админа: env GRAFANA_ADMIN_PASSWORD или stdin", file=sys.stderr)
+        print("no admin password: set GRAFANA_ADMIN_PASSWORD or pipe to stdin", file=sys.stderr)
         return 2
     with open(args.spec, encoding="utf-8") as fh:
         spec = json.load(fh)

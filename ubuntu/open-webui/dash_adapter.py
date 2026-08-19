@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""dash_adapter — сквозной вход из Open WebUI в Grafana (дашборды okna).
+"""dash_adapter — сквозной вход из Open WebUI в Grafana (дашборды).
 
 Точка входа страницы дашбордов. Пользователь уже залогинен в чате (OWUI);
 адаптер подтверждает его сессию у самого OWUI и выдаёт короткоживущий
@@ -66,8 +66,8 @@ def user_dashboard(user: dict) -> tuple[str, str]:
     """(uid, заголовок) личного дашборда пользователя чата."""
     key = str(user.get("id") or user.get("email") or "")
     uid = DASH_UID_PREFIX + hashlib.sha1(key.encode()).hexdigest()[:12]
-    who = user.get("name") or user.get("email") or "чат"
-    return uid, f"Панели — {who}"
+    who = user.get("name") or user.get("email") or "chat"
+    return uid, f"Panels — {who}"
 
 
 def owui_session_user(token_cookie: str) -> dict | None:
@@ -179,12 +179,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send(401, b"session not valid; open the chat and log in first\n")
             return
         if not GRAFANA_PW:
-            self._send(503, "нет GRAFANA_ADMIN_PASSWORD в окружении юнита\n".encode())
+            self._send(503, b"GRAFANA_ADMIN_PASSWORD not set\n")
             return
 
         length = int(self.headers.get("Content-Length") or 0)
         if length <= 0 or length > MAX_BODY:
-            self._send(413, f"тело запроса вне 1..{MAX_BODY} байт\n".encode())
+            self._send(413, f"body size outside 1..{MAX_BODY}\n".encode())
             return
         try:
             spec = json.loads(self.rfile.read(length))
@@ -200,10 +200,10 @@ class Handler(BaseHTTPRequestHandler):
             out = Grafana(GRAFANA_URL, GRAFANA_PW).add_panel(uid, title, spec)
         except SpecError as exc:
             # Спецификация не годится — говорим чем именно, а не «ошибка».
-            self._send(400, f"спецификация не годится: {exc}\n".encode())
+            self._send(400, f"spec rejected: {exc}\n".encode())
             return
         except (urllib.error.URLError, RuntimeError, TimeoutError) as exc:
-            self._send(502, f"grafana недоступна: {exc}\n".encode())
+            self._send(502, f"grafana unavailable: {exc}\n".encode())
             return
 
         body = json.dumps({"url": f"{DASH_PREFIX}/d/{out['uid']}?viewPanel={out['panel_id']}",
