@@ -65,6 +65,12 @@ Okna `:8091` **3/10**, 2 сбоя, склад no_data ✓; `/opt` ask **`d442630
 git cd1789b (`372b529e`) — **повтор приёмки после выката rank-hotfix**.
 md5 tsv **`6db327ad`**, scorer **`e3368d07`**, гейт **`9d63b8a5`**.
 
+🔴 **fork NA want=sum без measure — код в git, выкат `:8091` `[19.08]`**:
+«сколько продали вчера?» → `fork.classes=1`, было `outcome=empty` (NA при
+посчитанном `Всего`); fix `_fork_relevant`/`_fork_headline_measure` + rel по
+`want=sum`; `diag.fork.outcome_reason`/`na_classes`. Оффлайн **34/34** +
+outcomes **24/24**; md5 ask **`ef318b60`**. Живой A + **49155.96** — оркестратор.
+
 🔴 **rank gate числа из имён групп — код в git `[19.08]`**:
 Заход-5: `_norm_numbers(g["name"])` в whitelist — числа внутри подписей
 («0,5 mm», «12 G») заземлены. Плюс полная числовая поверхность agg полей.

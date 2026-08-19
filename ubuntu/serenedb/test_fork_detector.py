@@ -90,6 +90,33 @@ out_live, pay_live = A.resolve_fork_outcome(
     cls_live, rows_live, measure_ctx="", want="sum", rel_by_src=rel_live)
 t("live okna: resolve_fork_outcome → A", out_live == "A" and len(pay_live.get("srcs") or []) == 2)
 
+# Замок prod-пути: measure пуст, want=sum — rel не [], атом computed, не NA при SQL-сумме
+_mbs_live = {DOC: ["Всего", "СуммаНДС", "СуммаОплатыКарточкой"],
+             REG: ["Всего", "Сумма", "Количество"]}
+_rel_prod = {c: A._fork_relevant("", _mbs_live.get(c) or [], {}, want="sum") for c in rows_live}
+t("prod: want=sum без measure → rel содержит Всего",
+  _rel_prod[DOC] == ["Всего"] and _rel_prod[REG] == ["Всего"])
+atom_prod = A._fork_atom_of(rows_live[DOC], [DOC], "", want="sum",
+                            rel_measures=_rel_prod[DOC])
+t("prod: sum посчитана + rel Всего → computed, не NA",
+  atom_prod.get("proof_status") == A.PROOF_COMPUTED
+  and atom_prod.get("exact_value") == LIVE_SUM
+  and atom_prod.get("measure_id") == "Всего")
+cls_prod = A.fork_classes(rows_live, "", want="sum", rel_by_src=_rel_prod)
+out_prod, pay_prod = A.resolve_fork_outcome(
+    cls_prod, rows_live, measure_ctx="", want="sum", rel_by_src=_rel_prod)
+t("prod: writer_pair classes=1 → outcome A, не empty",
+  out_prod == "A" and pay_prod.get("reason") is None)
+t("regression: rel=[] при want=sum и Всего в row — NA (контроль связки)",
+  A._fork_atom_of(rows_live[DOC], [DOC], "", want="sum", rel_measures=[]).get("proof_status")
+  == A.PROOF_NA)
+cls_na = A.fork_classes(rows_live, "", want="sum", rel_by_src={DOC: [], REG: []})
+out_na, pay_na = A.resolve_fork_outcome(
+    cls_na, rows_live, "", want="sum", rel_by_src={DOC: [], REG: []})
+t("offline: no_applicable_cells → outcome_reason + na_classes",
+  out_na == "empty" and pay_na.get("reason") == "no_applicable_cells"
+  and pay_na.get("na_classes") == 1)
+
 # разный смысл (склад) — классы не схлопываются
 t("разный sum — два класса (контроль §11)",
   len(A.fork_classes(
@@ -100,8 +127,12 @@ t("разный sum — два класса (контроль §11)",
 # ── _fork_relevant ────────────────────────────────────────────────────────────
 t("точное совпадение слова — одна величина",
   A._fork_relevant("сумма", ["Сумма", "СуммаНДС"], {}) == ["Сумма"])
-t("слова нет — величин в атоме нет",
+t("слова нет — величин в атоме нет (не sum)",
   A._fork_relevant("", ["Сумма"], {}) == [])
+t("want=sum без слова — headline Всего в rel",
+  A._fork_relevant("", ["Сумма", "Всего"], {}, want="sum") == ["Всего"])
+t("want=sum без слова — fallback на все имена, если нет headline",
+  A._fork_relevant("", ["Сумма"], {}, want="sum") == ["Сумма"])
 t("величин нет — атом по счёту",
   A._fork_relevant("сумма", [], {}) == [])
 t("несколько подходящих — все в атом (как measure_alts)",

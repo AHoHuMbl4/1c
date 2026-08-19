@@ -2588,15 +2588,39 @@ def _fork_headline_doc_measures(names):
     return sorted(n for n in (names or []) if n and str(n).lower().endswith("документа"))
 
 
-def _fork_relevant(word, names, alias_by):
+def _fork_relevant(word, names, alias_by, want=None):
     """Величины сущности, относящиеся к слову вопроса — тем же правилом, что выбор
     величины ответа (`measure_choice`, он же кормит `unresolved_quantity`/`measure_alts`).
-    Слова нет — величин в атоме нет, атом сводится к счёту и дискриминаторам.
+    Слова нет и want≠sum — величин в атоме нет, атом сводится к счёту.
+    want=sum без имени поля («сколько продали») — headline-меры (Всего, *Документа),
+    иначе rel=[] → PROOF_NA при посчитанном SQL ([замер 19.08 okna]: fork.classes=1,
+    outcome=empty/no_applicable_cells).
     Для sum-вопроса у document_* в пул добавляются поля *Документа: иначе в rel
     остаётся только СуммаНДС и `_fork_headline_measure` не находит итог
     ([замер 17.08 okna]: document_реализациятмц → uncounted → C вместо B).
     """
-    if not word or not names:
+    if not names:
+        return []
+    wl = (word or "").strip().lower()
+    w = (want or "").strip().lower()
+
+    def _sum_headline_pool():
+        out = []
+        for h in _fork_headline_doc_measures(names):
+            if h not in out:
+                out.append(h)
+        for n in names:
+            if (n or "").strip().lower() == "всего" and n not in out:
+                out.append(n)
+                break
+        return out
+
+    if not wl:
+        if w == "sum":
+            pool = _sum_headline_pool()
+            return pool if pool else list(names)
+        return []
+    if not word:
         return []
     wl = word.strip().lower()
     got, alts, how = measure_choice(names, word, alias_by=alias_by)
@@ -2873,7 +2897,7 @@ def _fork_answering_sums(sums, rel_measures=None):
     return out
 
 
-def _fork_headline_measure(src, sums, measure_word, alias_by=None):
+def _fork_headline_measure(src, sums, measure_word, alias_by=None, want=None):
     """Одна «головная» величина класса — для exact_value атома и сверки с `aggregate`.
 
     Алфавитный первый ключ в `sums` давал 71 045 277,59 (`СуммаВзаиморасчетов`)
@@ -2890,7 +2914,21 @@ def _fork_headline_measure(src, sums, measure_word, alias_by=None):
     if len(names) == 1:
         return names[0]
     wl = (measure_word or "").strip()
+    w = (want or "").strip().lower()
     if not wl:
+        if w == "sum":
+            if (src or "").startswith("document_"):
+                hdr = sorted(n for n in names if n.lower().endswith("документа"))
+                if len(hdr) == 1:
+                    return hdr[0]
+                if hdr:
+                    hdr.sort(key=lambda n: (float(sums.get(n) or 0) == 0, len(n), n))
+                    return hdr[0]
+            vsego = [n for n in names if (n or "").strip().lower() == "всего"]
+            if len(vsego) == 1:
+                return vsego[0]
+            if len(names) == 1:
+                return names[0]
         return None
     # Sum-вопрос: итог шапки раньше лексического частичного (СуммаНДС /
     # СуммаБезНДС / точное «Сумма»=0). Иначе один substring-хит блокирует
@@ -2955,14 +2993,14 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
         exact = d0.get("count")
         op, mid, lab = "count", None, measure_label_of(src0, None) if src0 else None
     elif sum_q:
-        mid = _fork_headline_measure(src0, sums, measure_word, alias_by)
+        mid = _fork_headline_measure(src0, sums, measure_word, alias_by, want=w)
         if mid is None:
             exact, op, lab = None, "sum", None
         else:
             exact, op = sums[mid], "sum"
             lab = measure_label_of(src0, mid) if src0 else (split_ident(mid) or mid)
     else:
-        mid = _fork_headline_measure(src0, sums, measure_word, alias_by)
+        mid = _fork_headline_measure(src0, sums, measure_word, alias_by, want=w)
         if mid is None:
             if not sums:
                 exact, op, mid = d0.get("count"), "count", None
@@ -9204,7 +9242,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         try:
             _mbs = _measures_by_src(_fork_pool)
             _als = _aliases_by_src(_fork_pool)
-            _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
+            _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {},
+                                      want=_fwant or None)
                     for c in _fork_pool}
             _rows = fork_scan(match, preds, _rel)
             _cls = fork_classes(_rows, _mword, want=_fwant, rel_by_src=_rel)
@@ -9847,7 +9886,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _out_pool = list(arb_pool)
             _mbs = _measures_by_src(_out_pool)
             _als = _aliases_by_src(_out_pool)
-            _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
+            _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {},
+                                      want=_fwant or None)
                     for c in _out_pool}
             _rows = fork_scan(match, preds, _rel)
             _cls = fork_classes(_rows, _mword, want=_fwant, rel_by_src=_rel)
@@ -9882,6 +9922,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _cls, _rows, measure_ctx=(_mword or _fwant or ""),
             scan_error=_scan_err, want=_fwant or None, rel_by_src=_rel)
         diag.setdefault("fork", {})["outcome"] = _outc
+        if isinstance(_pay, dict):
+            if _pay.get("reason"):
+                diag["fork"]["outcome_reason"] = _pay["reason"]
+            if "na_classes" in _pay:
+                diag["fork"]["na_classes"] = _pay["na_classes"]
         if _outc == "A":
             шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
             return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)

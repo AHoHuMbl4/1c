@@ -1,3 +1,17 @@
+## 19.08: fork NA при want=sum без measure — rel Всего + diag outcome_reason [код]
+
+[код] `ubuntu/serenedb/serene_ask.py` (возврат 5, `PLAN_ANSWER_CONTRACT` §2–§3):
+- **Дефект:** «сколько продали вчера?» → `intent.measure` пуст, `want=sum`;
+  `_fork_relevant("", names)` → `[]` (:2599) → `_fork_atom_of` `PROOF_NA` (:2942)
+  при SQL `Всего=49155.96`; `fork.classes=1`, `outcome=empty/no_applicable_cells`.
+- **Починка:** `_fork_relevant(..., want=sum)` — headline pool (Всего, *Документа);
+  `_fork_headline_measure(..., want=sum)` — структурный выбор без лексемы;
+  call sites передают `want=_fwant`; `diag.fork.outcome_reason` + `na_classes`.
+
+[замер] оффлайн: prod-path doc+reg → outcome A; `rel=[]` контроль → NA +
+`reason=no_applicable_cells`, `na_classes=1`. fork_detector **34/34**, outcomes **24/24**.
+md5 ask `ef318b60`.
+
 ## 19.08: fork_classes по AnswerAtom — исход A без латания clarify [код]
 
 [код] `ubuntu/serenedb/serene_ask.py` (возврат 4, `PLAN_ANSWER_CONTRACT` §2–§3):
