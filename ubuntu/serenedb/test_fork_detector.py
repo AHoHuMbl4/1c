@@ -37,30 +37,67 @@ def row(n, folders=0, **sums):
     return {"count": n, "folders": folders, "sums": sums}
 
 
-# ── fork_classes: классы по типизированному атому без src ───────────────────────────
-t("одинаковый атом у двух src — один класс (A, согласие)",
-  len(A.fork_classes({"a": row(19, Сумма=100.0), "b": row(19, Сумма=100.0)})) == 1)
-t("разные суммы — два класса (развилка видна кодом)",
-  len(A.fork_classes({"a": row(19, Сумма=100.0), "b": row(19, Сумма=200.0)})) == 2)
-t("разный счёт — два класса",
-  len(A.fork_classes({"a": row(19), "b": row(20)})) == 2)
-t("папки — дискриминатор: 19 записей ≠ 19 групп",
-  len(A.fork_classes({"a": row(19, 0), "b": row(19, 5)})) == 2)
-t("копейка в сумме — округление round 2, один класс",
-  len(A.fork_classes({"a": row(1, Сумма=100.001), "b": row(1, Сумма=100.004)})) == 1)
-t("копейка расхождения — разные классы, допуска нет",
-  len(A.fork_classes({"a": row(1, Сумма=100.0), "b": row(1, Сумма=100.01)})) == 2)
-t("величины с разными именами не схлопываются: разные атомы",
-  len(A.fork_classes({"a": row(1, Сумма=5.0), "b": row(1, Стоимость=5.0)})) == 2)
-t("src в атом не входит: три src с одним атомом — один класс из трёх",
-  sorted(A.fork_classes({"a": row(7), "b": row(7), "c": row(7)}).values(),
-         key=len)[-1] == ["a", "b", "c"] or
-  sorted(next(iter(A.fork_classes({"a": row(7), "b": row(7), "c": row(7)}).values())))
-  == ["a", "b", "c"])
-t("пустой круг — классов нет",
-  A.fork_classes({}) == {})
+_MW = "сумма"
+_REL_SUM = lambda names: {s: list(names) for s in names}
 
-# ── _fork_relevant: величины, относящиеся к слову вопроса ────────────────────────────
+
+# ── fork_classes: классы по AnswerAtom без src ────────────────────────────────
+t("одинаковый атом у двух src — один класс (A, согласие)",
+  len(A.fork_classes({"a": row(19, Сумма=100.0), "b": row(19, Сумма=100.0)},
+                     _MW, want="sum",
+                     rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})) == 1)
+t("разные суммы — два класса (развилка видна кодом)",
+  len(A.fork_classes({"a": row(19, Сумма=100.0), "b": row(19, Сумма=200.0)},
+                     _MW, want="sum",
+                     rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})) == 2)
+t("разный счёт — два класса (count)",
+  len(A.fork_classes({"a": row(19), "b": row(20)}, want="count")) == 2)
+t("папки — дискриминатор для count: 19 записей ≠ 19 групп",
+  len(A.fork_classes({"a": row(19, 0), "b": row(19, 5)}, want="count")) == 2)
+t("копейка в сумме — округление round 2, один класс",
+  len(A.fork_classes({"a": row(1, Сумма=100.001), "b": row(1, Сумма=100.004)},
+                     _MW, want="sum",
+                     rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})) == 1)
+t("копейка расхождения — разные классы, допуска нет",
+  len(A.fork_classes({"a": row(1, Сумма=100.0), "b": row(1, Сумма=100.01)},
+                     _MW, want="sum",
+                     rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})) == 2)
+t("величины с разными именами не схлопываются: разные атомы",
+  len(A.fork_classes({"a": row(1, Сумма=5.0), "b": row(1, Стоимость=5.0)},
+                     _MW, want="sum",
+                     rel_by_src={"a": ["Сумма"], "b": ["Стоимость"]})) == 2)
+t("src в атом не входит: три src с одним атомом — один класс из трёх",
+  len(A.fork_classes({"a": row(7), "b": row(7), "c": row(7)}, want="count")) == 1
+  and sorted(next(iter(A.fork_classes(
+      {"a": row(7), "b": row(7), "c": row(7)}, want="count").values()))) == ["a", "b", "c"])
+t("пустой круг — классов нет", A.fork_classes({}) == {})
+
+# ── Живой okna 19.08: writer_pair document_реализациятмц + register, same Всего ─
+# SQL: обе ветки 49155.96 за день; count/folders разли — не разный ответ (§3).
+DOC = "document_реализациятмц"
+REG = "accumulationregister_реализациятмц"
+LIVE_SUM = 49155.96
+rows_live = {DOC: row(824, folders=2, Всего=LIVE_SUM),
+             REG: row(156, folders=0, Всего=LIVE_SUM)}
+rel_live = {DOC: ["Всего"], REG: ["Всего"]}
+cls_live = A.fork_classes(rows_live, "", want="sum", rel_by_src=rel_live)
+t("live okna: doc+reg same Всего, diff count → 1 class", len(cls_live) == 1)
+fp_live = next(iter(cls_live))
+t("live okna: fp поля = op/status/value/measure_id",
+  fp_live[:3] == ("sum", A.PROOF_COMPUTED, round(LIVE_SUM, 2))
+  and fp_live[3] == "Всего")
+out_live, pay_live = A.resolve_fork_outcome(
+    cls_live, rows_live, measure_ctx="", want="sum", rel_by_src=rel_live)
+t("live okna: resolve_fork_outcome → A", out_live == "A" and len(pay_live.get("srcs") or []) == 2)
+
+# разный смысл (склад) — классы не схлопываются
+t("разный sum — два класса (контроль §11)",
+  len(A.fork_classes(
+      {"inv": row(10, Количество=100.0), "xfer": row(10, Количество=50.0)},
+      "количество", want="sum",
+      rel_by_src={"inv": ["Количество"], "xfer": ["Количество"]})) == 2)
+
+# ── _fork_relevant ────────────────────────────────────────────────────────────
 t("точное совпадение слова — одна величина",
   A._fork_relevant("сумма", ["Сумма", "СуммаНДС"], {}) == ["Сумма"])
 t("слова нет — величин в атоме нет",
@@ -71,7 +108,7 @@ t("несколько подходящих — все в атом (как measur
   sorted(A._fork_relevant("цена", ["ЦенаЗакупки", "ЦенаПродажи"], {}))
   == ["ЦенаЗакупки", "ЦенаПродажи"])
 
-# ── _fork_headline_measure: не алфавит, а СуммаДокумента на document_* ─────────────
+# ── _fork_headline_measure ────────────────────────────────────────────────────
 _zakup_doc = {
     "СуммаДокумента": 73181157.68,
     "СуммаВзаиморасчетов": 71045277.59,
@@ -93,12 +130,10 @@ t("headline: Всего раньше единственного substring Сум
   A._fork_headline_measure(
       "document_выручкаотреализациитмцфизлицо_номенклатура",
       {"Всего": 1572493.22, "СуммаБезНДС": 1310413.93}, "сумма") == "Всего")
-
 t("headline: одна величина — она",
   A._fork_headline_measure("accumulationregister_закупки", {"Сумма": 1137949.71}, "сумма")
   == "Сумма")
 
-# регистр: точное «Сумма»=0 не должно выигрывать у живого «Всего» (форма okna 17.08)
 _reg_sums = {"Сумма": 0.0, "Всего": 79925955.81}
 _live = A._fork_answering_sums(_reg_sums, ["Сумма", "Всего"])
 t("answering_sums: мёртвая Сумма выбывает, Всего остаётся",

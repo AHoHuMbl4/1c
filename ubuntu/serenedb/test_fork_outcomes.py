@@ -40,17 +40,23 @@ def row(n, folders=0, **sums):
     return {"count": n, "folders": folders, "sums": sums}
 
 
+def fc_sum(rows):
+    rel = {s: list((rows[s].get("sums") or {}).keys()) for s in rows}
+    return A.fork_classes(rows, "сумма", want="sum", rel_by_src=rel)
+
+
+
 # ── resolve_fork_outcome ──────────────────────────────────────────────────────
-cls1 = A.fork_classes({"a": row(19, Сумма=100.0), "b": row(19, Сумма=100.0)})
+cls1 = fc_sum({"a": row(19, Сумма=100.0), "b": row(19, Сумма=100.0)})
 rows1 = {"a": row(19, Сумма=100.0), "b": row(19, Сумма=100.0)}
-out, pay = A.resolve_fork_outcome(cls1, rows1, measure_ctx="сумма")
+out, pay = A.resolve_fork_outcome(cls1, rows1, measure_ctx="сумма", want="sum", rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})
 t("A: один класс, два src", out == "A" and len(pay["srcs"]) == 2)
 
-cls_u = A.fork_classes({"a": row(19, Сумма=100.0)})
-out, pay = A.resolve_fork_outcome(cls_u, {"a": row(19, Сумма=100.0)}, "сумма")
+cls_u = fc_sum({"a": row(19, Сумма=100.0)})
+out, pay = A.resolve_fork_outcome(cls_u, {"a": row(19, Сумма=100.0)}, "сумма", want="sum", rel_by_src={"a": ["Сумма"]})
 t("unique: один класс, один src", out == "unique")
 
-cls2 = A.fork_classes({"a": row(10, Сумма=100.0), "b": row(10, Сумма=200.0)})
+cls2 = fc_sum({"a": row(10, Сумма=100.0), "b": row(10, Сумма=200.0)})
 rows2 = {"a": row(10, Сумма=100.0), "b": row(10, Сумма=200.0)}
 
 
@@ -59,7 +65,7 @@ def _labs(fk, srcs):
 
 
 A.fork_labels_of = _labs
-out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма")
+out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма", want="sum", rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})
 t("C: несколько классов без подписей", out == "C" and pay["reason"] == "unsigned_class")
 
 
@@ -68,14 +74,14 @@ def _labs_ok(fk, srcs):
 
 
 A.fork_labels_of = _labs_ok
-out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма")
+out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма", want="sum", rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})
 t("B: несколько классов с подписями",
   out == "B" and len(pay["classes"]) == 2
   and all(c.get("label") for c in pay["classes"]))
 
 # непосчитанная ячейка
 unc = {"a": row(10, Сумма=100.0), "b": row(10, Сумма=200.0)}
-cls_u2 = A.fork_classes(unc)
+cls_u2 = fc_sum(unc)
 # подменим атом на uncounted через прямую сборку payload
 ordered = A.ordered_fork_classes(cls_u2, unc)
 ordered[0]["atom"] = A.build_answer_atom(
@@ -88,7 +94,7 @@ ordered[0]["atom"] = A.build_answer_atom(
 
 
 def resolve_with_uncounted():
-    classes = A.fork_classes({"a": row(1, Сумма=1.0), "b": row(2, Сумма=2.0)})
+    classes = fc_sum({"a": row(1, Сумма=1.0), "b": row(2, Сумма=2.0)})
     rows = {"a": row(1, Сумма=1.0), "b": row(2, Сумма=2.0)}
     real_of = A.ordered_fork_classes
 
@@ -124,7 +130,7 @@ t("детерминизм ordered_fork_classes",
 
 # перестановка: B строит пары только через render; порядок = ordered
 A.fork_labels_of = _labs_ok
-out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма")
+out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма", want="sum", rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})
 bres = A.fork_outcome_b("сколько?", pay, {})
 t("B: две пары, labels свои",
   bres and bres["kind"] == "figures"
@@ -200,9 +206,9 @@ real_cov = A.fork_labels_covering
 A.fork_labels_covering = lambda srcs: (
     {"a": "Отгрузки", "b": "Оплаты"}, "fk_cover")
 A.fork_labels_of = lambda fk, srcs: {}  # точный ключ пуст
-cls2 = A.fork_classes({"a": row(10, Сумма=100.0), "b": row(10, Сумма=200.0)})
+cls2 = fc_sum({"a": row(10, Сумма=100.0), "b": row(10, Сумма=200.0)})
 rows2 = {"a": row(10, Сумма=100.0), "b": row(10, Сумма=200.0)}
-out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма")
+out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма", want="sum", rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})
 t("B через covering, когда точный fork_key пуст",
   out == "B" and pay.get("fork_key") == "fk_cover")
 A.fork_labels_covering = real_cov

@@ -2696,16 +2696,57 @@ def fork_scan(match, preds, rel_by_src):
     return out
 
 
-def fork_classes(rows):
-    """Классы эквивалентности по типизированному атому БЕЗ src: счёт, папки и суммы —
-    числами (round 2), как в `_slot_fp`. Один класс — прочтения сошлись; несколько —
-    развилка видна кодом, без сомнения модели."""
+def _fork_atom_equiv_fp(atom):
+    """Отпечаток AnswerAtom для классов эквивалентности — без src-шелухи (план §3, §5).
+
+    Не входят: measure_label, display_value, unit, completeness, freshness, src.
+    Для sum — не count/folders строк (документ vs регистр при том же итоге).
+    Для count — folders остаётся дискриминатором (записи vs группы).
+    """
+    if not isinstance(atom, dict):
+        return None
+    op = (atom.get("operation") or "count").lower()
+    status = atom.get("proof_status") or PROOF_UNCOUNTED
+    if status == PROOF_NA:
+        return (op, status)
+    ev = atom.get("exact_value")
+    if ev is not None:
+        try:
+            ev = round(float(ev), 2)
+        except (TypeError, ValueError):
+            ev = str(ev)
+    mid = atom.get("measure_id")
+    fp = (op, status, ev, mid)
+    if op == "count":
+        excl = atom.get("excluded") or {}
+        if isinstance(excl, dict) and excl.get("folders") is not None:
+            fp = fp + (("folders", int(excl["folders"])),)
+    return fp
+
+
+def _fork_fp_diag(fp):
+    if not isinstance(fp, tuple):
+        return []
+    out = []
+    for i, x in enumerate(fp):
+        if isinstance(x, tuple) and len(x) == 2:
+            out.append([str(x[0]), x[1]])
+        else:
+            out.append(["%d" % i, x])
+    return out
+
+
+def fork_classes(rows, measure_word="", want=None, rel_by_src=None):
+    """Классы эквивалентности по полному AnswerAtom без src (план §3, §5)."""
+    rel_by_src = rel_by_src if rel_by_src is not None else {}
     by_atom = {}
     for src, d in (rows or {}).items():
-        atom = [("count", d["count"]), ("folders", d["folders"])]
-        for m in sorted(d["sums"]):
-            atom.append((m, round(d["sums"][m], 2)))
-        by_atom.setdefault(tuple(atom), []).append(src)
+        rel = rel_by_src[src] if src in rel_by_src else None
+        built = _fork_atom_of(d, [src], measure_word, want=want, rel_measures=rel)
+        fp = _fork_atom_equiv_fp(built)
+        if fp is None:
+            continue
+        by_atom.setdefault(fp, []).append(src)
     return by_atom
 
 
@@ -3253,8 +3294,12 @@ def _dedupe_fork_classes(ordered):
     for it in ordered or []:
         atom = it.get("atom") or {}
         fp = it.get("fingerprint") or ()
-        key = ((it.get("label") or "").strip(),
-               tuple((str(k), v) for k, v in fp),
+        if isinstance(fp, tuple) and fp and not (
+                isinstance(fp[0], (list, tuple)) and len(fp[0]) == 2):
+            fp_key = fp
+        else:
+            fp_key = tuple((str(k), v) for k, v in fp)
+        key = ((it.get("label") or "").strip(), fp_key,
                atom.get("operation"),
                round(float(atom.get("exact_value")), 2)
                if atom.get("exact_value") is not None else None)
@@ -3279,8 +3324,7 @@ def ordered_fork_classes(classes, rows, measure_word="", want=None, rel_by_src=N
         built = _fork_atom_of(d0, srcs, measure_word, want=want, rel_measures=rel)
         items.append({"fingerprint": atom_fp, "srcs": srcs, "atom": built,
                       "row": d0 or {"count": 0, "folders": 0, "sums": {}}})
-    items.sort(key=lambda it: (tuple((str(k), v) for k, v in it["fingerprint"]),
-                               tuple(it["srcs"])))
+    items.sort(key=lambda it: (it["fingerprint"], tuple(it["srcs"])))
     return items
 
 
@@ -4777,164 +4821,6 @@ def same_number(ours, theirs):
         return False
     except (TypeError, ValueError):
         return False
-
-def entity_ab_effective_compute(intent, plan):
-    """Что считаем: plan.compute от pick_entity, иначе intent.want от parse_intent."""
-    return (plan or {}).get('compute') or (intent or {}).get('want') or ''
-
-
-def entity_ambiguity_ab_sum_eligible(intent, plan, diag):
-    '''Когда entity-ambiguity решаем числом: sum + fork.outcome == "empty" + окно периода.'''
-    return entity_ambiguity_ab_sum_skip(intent, plan, diag, picked_len=2) is None
-
-
-def entity_ambiguity_ab_sum_skip(intent, plan, diag, picked_len):
-    """Причина, почему A/B/C на entity не применяется. None — можно пробовать."""
-    if picked_len != 2:
-        return 'picked=%d' % picked_len
-    if (diag or {}).get('fork', {}).get('outcome') != 'empty':
-        return 'fork.outcome=%s' % ((diag or {}).get('fork') or {}).get('outcome')
-    eff = entity_ab_effective_compute(intent, plan)
-    if eff != 'sum':
-        return 'compute=%s' % (eff or '—')
-    p = (intent or {}).get('period') or {}
-    if not (p.get('from') or p.get('to')):
-        return 'no_period'
-    return None
-
-
-def entity_ambiguity_ab_probe_measure(src, intent, question, match, preds):
-    """Величина для под-ответа entity_ab: без clarify, лидер src уже известен."""
-    names = measures_of(src)
-    if not names:
-        return None
-    if len(names) == 1:
-        return names[0]
-    mword = (intent.get('measure') or '').strip()
-    try:
-        totals = {m: v for m, v, _mx, _mn in totals_of(src, match, preds, names)}
-    except RuntimeError:
-        totals = {}
-    mid = _fork_headline_measure(src, totals, mword, measure_aliases_of(src))
-    if mid:
-        return mid
-    m, _alts = unresolved_quantity(None, [], intent.get('want'), 'sum', names, totals)
-    return m
-
-
-def entity_ambiguity_ab_sum_from_sub(sub):
-    """Итог sum из под-ответа. (число, None) или (None, причина)."""
-    if not isinstance(sub, dict):
-        return None, 'bad_sub'
-    nums = figures_numbers(sub)
-    if nums:
-        return nums[0], None
-    kind = sub.get('kind')
-    sd = sub.get('diag') or {}
-    if kind == 'clarify':
-        if sd.get('measure_ambiguous'):
-            return None, 'sub_clarify_measure'
-        if sd.get('ambiguous'):
-            return None, 'sub_clarify_entity'
-        return None, 'sub_clarify'
-    if kind in ('answer', 'figures'):
-        return None, 'no_sum'
-    return None, 'sub_%s' % (kind or '—')
-
-
-def entity_ambiguity_ab_sum_case(sums_by_src, leader_src, opts):
-    '''A/B/C по числам и «человеческим подписям» (distinct_by).'''
-    if not isinstance(sums_by_src, dict) or not sums_by_src:
-        return None
-    if leader_src not in sums_by_src:
-        return None
-    rounded = {}
-    for src, v in sums_by_src.items():
-        if v is None:
-            return None
-        v2 = _intent_number(v)
-        if v2 is None:
-            return None
-        rounded[src] = round(float(v2), 2)
-    if len(set(rounded.values())) == 1:
-        return ('A', None)
-
-    sig = next((o.get('distinct_by') for o in (opts or [])
-                 if o.get('src') != leader_src and o.get('distinct_by')), None)
-    if sig:
-        return ('B', sig)
-    return ('C', None)
-
-
-def entity_ambiguity_ab_sum_luke_text(case, signature=None):
-    if case == 'B':
-        return 'Есть другое прочтение с подписью: %s.' % (signature or '—')
-    if case == 'C':
-        return 'Есть другое прочтение этого вопроса, но итог может отличаться.'
-    return ''
-
-
-def entity_ambiguity_ab_sum_build_out(leader_out, outer_diag, case, signature=None):
-    '''Собрать финальный `kind="answer"` без вариантов уточнения.'''
-    if not isinstance(leader_out, dict):
-        return None
-    out = dict(leader_out)
-    out.pop('options', None)
-    out['sources'] = []
-
-    out['diag'] = dict(out.get('diag') or {})
-    out['diag'].update(dict(outer_diag or {}))
-    out['diag']['ambiguity'] = 'entity'
-    out['diag']['entity_ab_case'] = case
-
-    out['text'] = (out.get('text') or '').strip()
-    if case in ('B', 'C'):
-        luke = entity_ambiguity_ab_sum_luke_text(case, signature=signature)
-        if luke:
-            out['text'] = (out['text'] + "\n\n⚠ " + luke).strip()
-
-    if out.get('kind') == 'figures':
-        out['kind'] = 'answer'
-    return out
-
-
-def entity_ambiguity_ab_sum_attempt(question, intent, plan, diag, picked, opts,
-                                    measure_pick, match, preds, context, prior,
-                                    answer_fn=None):
-    """Проба A/B/C на entity-ambiguity; diag мутируется, override или None."""
-    if answer_fn is None:
-        answer_fn = answer
-    diag['plan_compute'] = plan.get('compute')
-    diag['entity_ab_compute'] = entity_ab_effective_compute(intent, plan)
-    _ab_skip = entity_ambiguity_ab_sum_skip(intent, plan, diag, len(picked))
-    if _ab_skip is not None:
-        diag['entity_ab_skip'] = _ab_skip
-        return None
-    leader_src = picked[0]
-    cand_outs, cand_sums = {}, {}
-    for src in picked:
-        _probe_m = (measure_pick
-                    or entity_ambiguity_ab_probe_measure(
-                        src, intent, question, match, preds))
-        if not _probe_m:
-            diag['entity_ab_skip'] = '%s:no_probe_measure' % src
-            return None
-        sub = answer_fn(question, focus=src, measure_pick=_probe_m,
-                        context=context, no_arbiter=True, prior=prior)
-        s, err = entity_ambiguity_ab_sum_from_sub(sub)
-        if err:
-            diag['entity_ab_skip'] = '%s:%s' % (src, err)
-            return None
-        cand_outs[src] = sub
-        cand_sums[src] = s
-    case_sig = entity_ambiguity_ab_sum_case(cand_sums, leader_src, opts)
-    if not case_sig:
-        diag['entity_ab_skip'] = 'case_none'
-        return None
-    case, sig = case_sig
-    return entity_ambiguity_ab_sum_build_out(
-        cand_outs[leader_src], diag, case, signature=sig)
-
 
 def unresolved_quantity(measure, alts, want, compute, names, totals_by=None):
     """Свести поле, когда вопрос про итог/max/min/avg, а величина ещё не выбрана.
@@ -9321,14 +9207,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
                     for c in _fork_pool}
             _rows = fork_scan(match, preds, _rel)
-            _cls = fork_classes(_rows)
+            _cls = fork_classes(_rows, _mword, want=_fwant, rel_by_src=_rel)
             _atoms = []
-            for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
-                d0 = _rows.get(sorted(ss)[0]) or {"count": 0, "folders": 0, "sums": {}}
+            for fp, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
+                rep = sorted(ss)[0]
+                d0 = _rows.get(rep) or {"count": 0, "folders": 0, "sums": {}}
                 _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant,
-                               rel_measures=_rel.get(sorted(ss)[0]) if sorted(ss) else None)
+                               rel_measures=_rel.get(rep))
                 _atoms.append({"atom": _built,
-                               "fingerprint": [["%s" % k, v] for k, v in atom],
+                               "fingerprint": _fork_fp_diag(fp),
                                "srcs": sorted(ss)})
             diag["fork"] = {"classes": len(_cls),
                             "srcs": sum(len(v) for v in _cls.values()),
@@ -9963,17 +9850,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {})
                     for c in _out_pool}
             _rows = fork_scan(match, preds, _rel)
-            _cls = fork_classes(_rows)
+            _cls = fork_classes(_rows, _mword, want=_fwant, rel_by_src=_rel)
             if len(_cls) > 1:
                 _fork_log(_cls, _mword or (intent.get("want") or ""))
             _prev = dict(diag.get("fork") or {})
             _atoms = []
-            for atom, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
-                d0 = _rows.get(sorted(ss)[0]) or {"count": 0, "folders": 0, "sums": {}}
+            for fp, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
+                rep = sorted(ss)[0]
+                d0 = _rows.get(rep) or {"count": 0, "folders": 0, "sums": {}}
                 _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant,
-                               rel_measures=_rel.get(sorted(ss)[0]) if sorted(ss) else None)
+                               rel_measures=_rel.get(rep))
                 _atoms.append({"atom": _built,
-                               "fingerprint": [["%s" % k, v] for k, v in atom],
+                               "fingerprint": _fork_fp_diag(fp),
                                "srcs": sorted(ss)})
             diag["fork"] = dict(_prev,
                                 classes=len(_cls),
@@ -10137,16 +10025,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if _diverge or _src_c:
                 # Исход A на позднем пути: числа сошлись, src разные — источник-нейтрально
                 # (тот же контракт, что ранний детектор). Расхождение чисел → C (clarify).
-                if FORK_OUTCOMES and _src_c and not _diverge and cand_src:
-                    _a_atom = (cand_src[0].get("atom")
-                               or (cand_src[0].get("atoms") or [None])[0])
-                    if isinstance(_a_atom, dict):
-                        _a_item = {"atom": dict(_a_atom),
-                                   "srcs": [((s.get("diag") or {}).get("focus")
-                                             or "") for s in cand_src]}
-                        _a_item["atom"].pop("src", None)
-                        шаг("исход A (круг)", srcs=len(_a_item["srcs"]))
-                        return fork_outcome_a(question, _a_item, diag, cut=cut, t0=t0)
                 # 🔴 АРБИТР — ДЕТЕКТОР НЕОДНОЗНАЧНОСТИ, А НЕ ВЫБИРАЮЩИЙ (задача 17 реестра).
                 # Числа кандидатов посчитаны базой и РАЗОШЛИСЬ — значит вопросу отвечают разные
                 # объекты с разными величинами, и это доказанная неоднозначность, а не повод
@@ -10260,12 +10138,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             lab_by = {}
         opts = mk_opts(list(picked), lab_by, marks, by, match=match, preds=preds)
         if len(opts) > 1:
-            # A/B/C для sum-вопросов при `fork.outcome == "empty"`.
-            override = entity_ambiguity_ab_sum_attempt(
-                question, intent, plan, diag, picked, opts,
-                measure_pick, match, preds, context, prior)
-            if override:
-                return override
             diag["ambiguous"] = [o["src"] for o in opts]
             return {"partial": cut or None, "kind": "clarify",
                     "text": clarify_say(question, opts, diag),
