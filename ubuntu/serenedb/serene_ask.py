@@ -71,6 +71,7 @@ RESOLVER_PW = os.environ.get("RESOLVER_PW", "")
 LISTEN_HOST = os.environ.get("ASK_LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("ASK_LISTEN_PORT", "8091"))
 ASK_TOKEN = os.environ.get("ASK_TOKEN", "")
+MONEY_UNIT = os.environ.get("ASK_MONEY_UNIT", "")
 
 CORPUS, INDEX, TABLES = "search_corpus", "search_idx", "search_tables"
 # Разметка сущностей «о чём спрашивают / служебное» — её кладёт такт (`classify_entities.py`)
@@ -5955,21 +5956,50 @@ def ensure_count_named(text, agg, slot_mode=None):
 
 
 
-def postprocess_money_answer_text(text):
-    """money=True: убрать неверные «шт»/«количество» из текста ответа."""
+
+def _measure_is_quantity(measure):
+    """Мера штучная (Количество и т. п.), а не денежная."""
+    if not measure:
+        return False
+    m = (measure or "").lower()
+    return any(w in m for w in ("количество", "кол-во", "кол.", "quantity", "qty", "count",
+                                 "штук", "единиц"))
+
+
+def _unit_for_measure(measure):
+    """Юнит для числа ответа: шт для штучных, валюта из окружения для денежных."""
+    if _measure_is_quantity(measure):
+        return "шт"
+    return MONEY_UNIT
+
+
+def postprocess_money_answer_text(text, unit=""):
+    """Привести единицу измерения: шт→юнит, количество→сумма.
+
+    unit="шт" — штучная мера, оставить шт; unit=валюта — заменить шт→валюту;
+    unit="" — убрать единицу, не подставлять ничего (п. 12).
+    """
     if not (text or "").strip():
         return text
     t = str(text)
-    # Неверная единица для денег.
-    t = re.sub(r"\b(шт|штук)\.?", "руб.", t,
-               flags=re.IGNORECASE | re.UNICODE)
-    # Бьём «Общее количество ...», а также оставшиеся «количество».
-    t = re.sub(r"\bОбщее\s+количество\b", "Общая сумма", t,
-               flags=re.IGNORECASE | re.UNICODE)
-    t = re.sub(r"\bколичество\b", "сумма", t,
-               flags=re.IGNORECASE | re.UNICODE)
+    u = (unit or "").strip()
+    if u == "шт":
+        pass
+    elif u:
+        t = re.sub(r"\b(шт|штук)\.?", u, t,
+                   flags=re.IGNORECASE | re.UNICODE)
+    else:
+        t = re.sub(r"\s*\b(шт|штук)\.?", "", t,
+                   flags=re.IGNORECASE | re.UNICODE)
+    if u != "шт":
+        t = re.sub(r"\bОбщее\s+количество\b", "Общая сумма", t,
+                   flags=re.IGNORECASE | re.UNICODE)
+        t = re.sub(r"\bколичество\b", "сумма", t,
+                   flags=re.IGNORECASE | re.UNICODE)
+        t = re.sub(r"наибольшее\s+сумма", "наибольшая сумма", t,
+                   flags=re.IGNORECASE | re.UNICODE)
+        t = re.sub(r"\(сумма\)", "(итого)", t)
     return t
-
 
 def build_answer_passport(period=None, period_dropped=False, origin="",
                           src_label="", src_kind="", measure="",
@@ -10907,7 +10937,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     _rank_txt = ensure_count_named(_rank_txt, agg, slot_mode)
                     _rank_txt = ensure_answer_passport(_rank_txt, _pass_frag)
                     if money:
-                        _rank_txt = postprocess_money_answer_text(_rank_txt)
+                        _rank_txt = postprocess_money_answer_text(_rank_txt, _unit_for_measure(measure))
                     diag["rank_deterministic"] = True
                     return {"partial": cut or None, "kind": "answer",
                             "text": _rank_txt, "sources": [src] if src else [],
@@ -11038,7 +11068,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
         completeness=cov, folders=n_folders, src=src)
     if money:
-        text = postprocess_money_answer_text(text)
+        text = postprocess_money_answer_text(text, _unit_for_measure(measure))
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
             "completeness": cov, "measure": say_measure,
             # 🔴 ПОСЧИТАННЫЕ ЧИСЛА — ПОЛЕМ ОТВЕТА, А НЕ ТОЛЬКО ВНУТРИ ТЕКСТА (03.08).

@@ -1,3 +1,23 @@
+## 19.08: fix unit для штучных/денежных мер + убрать хардкод валюты `[код]`
+
+`[код]` В `ubuntu/serenedb/serene_ask.py`:
+- Убран хардкод `руб.` из `postprocess_money_answer_text`. Валюта берётся из
+  окружения `ASK_MONEY_UNIT` (заполняет установка контура). Не задана — числа
+  идут без слова валюты (п. 12: отсутствие лучше неверного).
+- Добавлена `_measure_is_quantity(measure)`: Количество, qty и т. п. → юнит «шт»;
+  денежные меры → `ASK_MONEY_UNIT`; определяет `_unit_for_measure(measure)`.
+- `postprocess_money_answer_text(text, unit="")`: unit="шт" — шт остаются;
+  unit=валюта — шт→валюта; unit="" — шт убираются без подстановки.
+- Грамматика: «наибольшее сумма» → «наибольшая сумма»; «(сумма)» → «(итого)».
+- Оба call-site (rank deterministic + main answer) передают `_unit_for_measure(measure)`.
+
+`[замер]` Оффлайн: 61+132+92+24+18+30+26 = 383 ок, 0 fail. Новые замки:
+штучная мера → «шт» ✓; без env → без валюты ✓; env=лей → «лей» ✓;
+grep-замок «руб.» в коде ✓; «наибольшая сумма» ✓; «(итого)» ✓;
+`_measure_is_quantity` ✓; `_unit_for_measure` ✓.
+
+md5 ask `e1079ab0`, test `6cfe6b0a`.
+
 ## 19.08: fix money unit «шт/количество» и word-anchored rank tail `[код]`
 
 `[код]` В `ubuntu/serenedb/serene_ask.py`:

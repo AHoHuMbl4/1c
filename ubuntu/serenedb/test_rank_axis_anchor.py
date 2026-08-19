@@ -246,16 +246,69 @@ _ok_big4, _bad_big4 = A.gate(
     "avg 27.42 min 0.01", SEEN_BIG, AGG_BIG, [1], [], money=True, slot_mode="rank")
 t("agg surface: agg min/max/avg проходит", _ok_big4, _bad_big4)
 
-# money postprocess guard
+# money postprocess guard: unit-aware
 wrong_money = (
     "Наибольшее количество продаж — 3 205 385.44 шт. "
     "Общее количество по всем перечисленным позициям: 80 316 522.36 шт."
 )
-fixed_money = A.postprocess_money_answer_text(wrong_money)
-t("money postprocess: нет «шт» и «количество»", (
-    "шт" not in (fixed_money or "").lower()
-    and "количество" not in (fixed_money or "").lower()
-), fixed_money)
+
+# штучная мера → unit="шт", шт остаются
+fixed_qty = A.postprocess_money_answer_text(wrong_money, unit="шт")
+t("money postprocess: штучная мера — шт остаётся",
+  "шт" in (fixed_qty or ""), fixed_qty)
+
+# денежная мера без env → unit="", шт убирается, валюта не подставляется
+fixed_no_env = A.postprocess_money_answer_text(wrong_money, unit="")
+t("money postprocess: без env — нет «шт»",
+  "шт" not in (fixed_no_env or "").lower(), fixed_no_env)
+t("money postprocess: без env — нет «количество»",
+  "количество" not in (fixed_no_env or "").lower(), fixed_no_env)
+
+# денежная мера с env → unit="лей", "лей" появляется
+fixed_lei = A.postprocess_money_answer_text(wrong_money, unit="лей")
+t("money postprocess: env=лей — лей в тексте",
+  "лей" in (fixed_lei or ""), fixed_lei)
+t("money postprocess: env=лей — нет «шт»",
+  "шт" not in (fixed_lei or "").lower(), fixed_lei)
+
+# наибольшее сумма → наибольшая сумма
+grammar_in = "Наибольшее сумма продаж — 500 000."
+grammar_out = A.postprocess_money_answer_text(grammar_in, unit="лей")
+t("money postprocess: наибольшая сумма (род)",
+  "наибольшая сумма" in (grammar_out or "").lower(), grammar_out)
+
+# (сумма) → (итого) для денежных
+parens_in = "Товар X: 96 620 (сумма)"
+parens_out = A.postprocess_money_answer_text(parens_in, unit="")
+t("money postprocess: (сумма)→(итого)",
+  "(итого)" in (parens_out or ""), parens_out)
+
+# grep-замок: литерала «руб.»/«рубл» (валюта) в serene_ask.py нет
+import ast as _ast
+with open("serene_ask.py") as _f:
+    _tree = _ast.parse(_f.read())
+_rub_pat = re.compile(r"руб[.лей]|рубл", re.IGNORECASE)
+_has_rub = False
+for _node in _ast.walk(_tree):
+    if isinstance(_node, _ast.Constant) and isinstance(_node.value, str):
+        if _rub_pat.search(_node.value):
+            _has_rub = True
+            break
+t("grep-замок: литерала «руб.» в serene_ask.py нет (код)", not _has_rub, "")
+
+# _measure_is_quantity
+t("_measure_is_quantity: Количество",
+  A._measure_is_quantity("Количество"), "")
+t("_measure_is_quantity: СуммаДокумента — не штуки",
+  not A._measure_is_quantity("СуммаДокумента"), "")
+t("_measure_is_quantity: None",
+  not A._measure_is_quantity(None), "")
+t("_measure_is_quantity: КОплате — не штуки",
+  not A._measure_is_quantity("КОплате"), "")
+
+# _unit_for_measure
+t("_unit_for_measure: Количество → шт",
+  A._unit_for_measure("Количество") == "шт", A._unit_for_measure("Количество"))
 
 # rank tail guard: no bare numbers right after `·`
 demo_txt = "Наибольшее значение по рангу."
