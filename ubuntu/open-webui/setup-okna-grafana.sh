@@ -259,6 +259,42 @@ for path in seeds:
          {"dashboard": model, "overwrite": False,
           "message": "seed из репозитория (setup-okna-grafana.sh)"})
     print(f"✅ дашборд {model['uid']} восстановлен из семени")
+
+# --- 9. приёмка: панели отдают данные -------------------------------------------
+# probe select version() ходит НЕ тем путём, что панель: с datasource без
+# jsonData.database probe проходил, а панели давали No data [замер 19.08,
+# ловушка 11]. Поэтому приёмка гоняет rawSql каждой панели каждого дашборда
+# через /api/ds/query — то же, что делает открытая страница.
+bad = []
+for item in call("GET", "/api/search?type=dash-db"):
+    dash = call("GET", f"/api/dashboards/uid/{item['uid']}")["dashboard"]
+    for panel in dash.get("panels", []):
+        for target in panel.get("targets", []):
+            sql = target.get("rawSql")
+            if not sql:
+                continue
+            # Окно — из самого дашборда (и panel.timeFrom, если панель его
+            # переопределяет), как у открытой страницы. Зашивать своё нельзя:
+            # на базе с другой историей исправная панель дала бы 0 строк.
+            win = dash.get("time") or {}
+            q = {"queries": [{"refId": "A", "datasource": panel["datasource"],
+                              "rawSql": sql, "format": target.get("format", "table")}],
+                 "from": panel.get("timeFrom") or win.get("from", "now-6h"),
+                 "to": win.get("to", "now")}
+            res = call("POST", "/api/ds/query", q)["results"]["A"]
+            if res.get("error"):
+                bad.append(f"{dash['title']} / {panel.get('title')}: {res['error']}")
+                continue
+            rows = 0
+            for frame in res.get("frames", []):
+                values = frame.get("data", {}).get("values") or []
+                rows = max(rows, len(values[0]) if values else 0)
+            mark = "✅" if rows else "⚠️ пусто"
+            print(f"{mark} панель «{panel.get('title')}» ({dash['title']}): строк {rows}")
+            if not rows:
+                bad.append(f"{dash['title']} / {panel.get('title')}: 0 строк")
+if bad:
+    raise SystemExit("панели не отдают данные:\n  " + "\n  ".join(bad))
 PYEOF
 
 echo "Готово: https://$DOMAIN/dash/enter — вход из чата без второго логина."

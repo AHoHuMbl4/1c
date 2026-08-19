@@ -172,17 +172,24 @@ handle_path /dash/* {
 - дашборд **`/d/okna-sales` «Продажи okna»** — 900 точек «сумма по дням»
   по `accumulationregister_реализациятмц_recordtype` + stat; refresh 5m.
 
-### Выкат правки 19.08 (этой сессией не сделан)
+### Выкат правки 19.08 — сделан
 
-Правки лежат в репозитории; на фронт их несёт штатный путь — тот же
-установщик: он идемпотентен и пароль `serene_ro` берёт из `/etc/1c-grafana.env`,
-так что секрета в командной строке нет.
+Штатный путь: `rsync` `ubuntu/open-webui/` → `/opt/1c-open-webui/` на фронте,
+затем на фронте под root `DASHBOARD_SEEDS_DIR=grafana/contours/okna bash
+/opt/1c-open-webui/setup-okna-grafana.sh` (идемпотентен, пароль `serene_ro`
+берёт из `/etc/1c-grafana.env` — секрета в командной строке нет).
 
-1. Синхронизировать `ubuntu/open-webui/` репозитория в `/opt/1c-open-webui/`
-   на фронте (`rsync -az` под deploy-ключом).
-2. Прогнать на фронте под root `bash /opt/1c-open-webui/setup-okna-grafana.sh`.
+Живой результат 19.08: `datasource serenedb-ro uid: efvkf4hx4a1vkd`,
+probe `PostgreSQL 18.3 (SereneDB 26.07.3)`, `дашборд okna-sales: уже есть,
+не трогаем` (живой не перетёрт). `json_data` datasource на фронте стал
+`{"database":"postgres","postgresVersion":1500,"sslmode":"disable"}` —
+имя базы на месте.
 
-Приёмка — **открытый дашборд с данными**, а не probe установщика (ловушка 11).
+**Приёмка выката — шаг 9 установщика**, а не probe: он гоняет `rawSql`
+каждой панели каждого дашборда через `/api/ds/query` (тот же путь, что у
+открытой страницы) и печатает число строк; пустая или ошибочная панель
+роняет установку. Заведён после ловушки 11, где probe проходил, а панели
+были пусты.
 
 **19.08 — сквозной вход подтверждён владельцем, панели чинились.**
 Клик по `https://baulogistic.timpul.pro/dash/enter` из браузера с сессией
