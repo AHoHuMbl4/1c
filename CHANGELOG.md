@@ -1,3 +1,16 @@
+## 21.08: fork NA — глагол «продали» ≠ пустая мера, headline при want=sum [код]
+
+[код] `ubuntu/serenedb/serene_ask.py` (возврат 6, `PLAN_ANSWER_CONTRACT` §3):
+- **Дефект:** живой okna `intent.величина="продали"`, `want=sum`; `_fork_relevant`
+  не совпадал ни с одним именем → `rel=[]` → `PROOF_NA` → `empty/no_applicable_cells`
+  при SQL `Всего=49155.96` и `fork.classes=1`. Починка af935cc ловила только `word=""`.
+- **Правило:** want=sum и слово не разрешилось → headline-pool (Всего, *Документа);
+  NA только если мера названа явно (`_fork_word_names_measure`) и поля нет.
+- `_fork_headline_measure` — тот же headline для глагола при want=sum.
+
+[замер] оффлайн: word=продали → rel Всего, COMPUTED 49155.96, outcome A;
+себестоимость без поля → []; склад — 2 класса. fork_detector **41/41**, outcomes **24/24**. md5 ask `ae6aab27`.
+
 ## 21.08: дозамер DATA_SCOPE — корень 401 и цена по слоям закрыты числом [замер][код]
 
 [замер] `docs/DATA_SCOPE_2026-08-21.md §9` (вторая сессия, тот же день):

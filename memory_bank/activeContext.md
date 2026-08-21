@@ -79,6 +79,12 @@ Okna `:8091` **3/10**, 2 сбоя, склад no_data ✓; `/opt` ask **`d442630
 git cd1789b (`372b529e`) — **повтор приёмки после выката rank-hotfix**.
 md5 tsv **`6db327ad`**, scorer **`e3368d07`**, гейт **`9d63b8a5`**.
 
+🔴 **fork «продали»→headline — код в git, выкат `:8091` `[21.08]`**:
+живой TRACE: `величина=продали`, `rel=[]` → NA/empty при SQL Всего; fix
+`_fork_relevant`/`_fork_headline_measure` — want=sum + неразрешённое слово →
+headline; NA только для явной меры без поля. Оффлайн **41/41** + **24/24**;
+живой A + **49155.96** — оркестратор.
+
 🔴 **fork NA want=sum без measure — код в git, выкат `:8091` `[19.08]`**:
 «сколько продали вчера?» → `fork.classes=1`, было `outcome=empty` (NA при
 посчитанном `Всего`); fix `_fork_relevant`/`_fork_headline_measure` + rel по

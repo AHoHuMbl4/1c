@@ -2588,13 +2588,43 @@ def _fork_headline_doc_measures(names):
     return sorted(n for n in (names or []) if n and str(n).lower().endswith("документа"))
 
 
+def _fork_word_names_measure(wl):
+    """Слово вопроса называет величину (поле), а не глагол действия («продали»).
+
+    Нужно отличить «себестоимость» (мера названа → NA, если поля нет) от
+    «продали» (глагол вопроса, measure_choice → rerank/[] → не доказательство NA;
+    [замер 21.08 okna] intent.величина=продали, want=sum, SQL Всего посчитан).
+    Морфемы — общие имена величин платформы, не привязка к базе.
+    """
+    if not wl:
+        return False
+    hints = ("сумм", "колич", "цен", "стоим", "себестоим", "всего", "итог",
+             "оборот", "остат", "ндс", "аванс", "скид", "нацен", "выруч",
+             "оплат", "задолж", "прибыл", "убыт")
+    return any(h in wl for h in hints)
+
+
+def _fork_sum_headline_pool(names):
+    """Headline-меры sum-вопроса: *Документа и Всего (план §3, замер 17–21.08)."""
+    out = []
+    for h in _fork_headline_doc_measures(names):
+        if h not in out:
+            out.append(h)
+    for n in names or []:
+        if (n or "").strip().lower() == "всего" and n not in out:
+            out.append(n)
+            break
+    return out
+
+
 def _fork_relevant(word, names, alias_by, want=None):
     """Величины сущности, относящиеся к слову вопроса — тем же правилом, что выбор
     величины ответа (`measure_choice`, он же кормит `unresolved_quantity`/`measure_alts`).
     Слова нет и want≠sum — величин в атоме нет, атом сводится к счёту.
-    want=sum без имени поля («сколько продали») — headline-меры (Всего, *Документа),
-    иначе rel=[] → PROOF_NA при посчитанном SQL ([замер 19.08 okna]: fork.classes=1,
-    outcome=empty/no_applicable_cells).
+    want=sum и слово не разрешилось ни в одну меру источника — headline-pool
+    (Всего, *Документа): глагол «продали» ≠ доказательство NA ([замер 21.08 okna]
+    rel=[] → empty/no_applicable_cells при SQL Всего=49155.96). NA — только когда
+    мера названа явно и её у источника нет («себестоимость» вне names).
     Для sum-вопроса у document_* в пул добавляются поля *Документа: иначе в rel
     остаётся только СуммаНДС и `_fork_headline_measure` не находит итог
     ([замер 17.08 okna]: document_реализациятмц → uncounted → C вместо B).
@@ -2604,38 +2634,23 @@ def _fork_relevant(word, names, alias_by, want=None):
     wl = (word or "").strip().lower()
     w = (want or "").strip().lower()
 
-    def _sum_headline_pool():
-        out = []
-        for h in _fork_headline_doc_measures(names):
-            if h not in out:
-                out.append(h)
-        for n in names:
-            if (n or "").strip().lower() == "всего" and n not in out:
-                out.append(n)
-                break
-        return out
+    def _sum_fallback():
+        pool = _fork_sum_headline_pool(names)
+        return pool if pool else list(names)
 
     if not wl:
         if w == "sum":
-            pool = _sum_headline_pool()
-            return pool if pool else list(names)
+            return _sum_fallback()
         return []
-    if not word:
-        return []
-    wl = word.strip().lower()
     got, alts, how = measure_choice(names, word, alias_by=alias_by)
 
     def _with_doc_hdr(pool):
         if not ("сумм" in wl or wl == "sum"):
             return pool
         out = list(pool)
-        for h in _fork_headline_doc_measures(names):
+        for h in _fork_sum_headline_pool(names):
             if h not in out:
                 out.append(h)
-        for n in names:
-            if (n or "").strip().lower() == "всего" and n not in out:
-                out.append(n)
-                break
         return out
 
     if got:
@@ -2643,6 +2658,11 @@ def _fork_relevant(word, names, alias_by, want=None):
     if how == "ask":
         same = [n for n in alts if wl in n.lower()]
         return _with_doc_hdr(same or list(alts))
+    # не разрешилось: want=sum + не имя меры → headline; имя меры без поля → []
+    if w == "sum" and not alts:
+        if _fork_word_names_measure(wl):
+            return []
+        return _sum_fallback()
     return _with_doc_hdr(list(alts))
 
 
@@ -2915,27 +2935,38 @@ def _fork_headline_measure(src, sums, measure_word, alias_by=None, want=None):
         return names[0]
     wl = (measure_word or "").strip()
     w = (want or "").strip().lower()
+    wl_l = wl.lower()
+
+    def _pick_sum_headline():
+        if (src or "").startswith("document_"):
+            hdr = sorted(n for n in names if n.lower().endswith("документа"))
+            if len(hdr) == 1:
+                return hdr[0]
+            if hdr:
+                hdr.sort(key=lambda n: (float(sums.get(n) or 0) == 0, len(n), n))
+                return hdr[0]
+        vsego = [n for n in names if (n or "").strip().lower() == "всего"]
+        if len(vsego) == 1:
+            return vsego[0]
+        if len(names) == 1:
+            return names[0]
+        return None
+
     if not wl:
         if w == "sum":
-            if (src or "").startswith("document_"):
-                hdr = sorted(n for n in names if n.lower().endswith("документа"))
-                if len(hdr) == 1:
-                    return hdr[0]
-                if hdr:
-                    hdr.sort(key=lambda n: (float(sums.get(n) or 0) == 0, len(n), n))
-                    return hdr[0]
-            vsego = [n for n in names if (n or "").strip().lower() == "всего"]
-            if len(vsego) == 1:
-                return vsego[0]
-            if len(names) == 1:
-                return names[0]
+            return _pick_sum_headline()
         return None
     # Sum-вопрос: итог шапки раньше лексического частичного (СуммаНДС /
     # СуммаБезНДС / точное «Сумма»=0). Иначе один substring-хит блокирует
     # «Всего» ([замер 17.08 okna] физлицо 1 310 413,93 вместо 1 572 493,22;
     # регистр реализациятмц → 0 при SQL 79 925 955,81). Не-sum слово
     # («количество») до шапки не доходит — иначе Всего перебило бы штуки.
-    wl_l = wl.lower()
+    # Глагол вопроса («продали») при want=sum — тот же headline, что пустое слово
+    # ([замер 21.08 okna]); явная мера («себестоимость») сюда не входит.
+    if w == "sum" and not _fork_word_names_measure(wl_l) and "сумм" not in wl_l and wl_l != "sum":
+        picked = _pick_sum_headline()
+        if picked is not None:
+            return picked
     if "сумм" in wl_l or wl_l == "sum":
         if (src or "").startswith("document_"):
             hdr = sorted(n for n in names if n.lower().endswith("документа"))

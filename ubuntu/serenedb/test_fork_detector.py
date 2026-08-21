@@ -117,6 +117,29 @@ t("offline: no_applicable_cells → outcome_reason + na_classes",
   out_na == "empty" and pay_na.get("reason") == "no_applicable_cells"
   and pay_na.get("na_classes") == 1)
 
+# Живой путь 21.08: intent.величина="продали" (глагол), не "" — af935cc не ловил
+_rel_verb = {c: A._fork_relevant("продали", _mbs_live.get(c) or [], {}, want="sum")
+             for c in rows_live}
+t("prod: word=продали want=sum → rel Всего (не [])",
+  _rel_verb[DOC] == ["Всего"] and _rel_verb[REG] == ["Всего"])
+atom_verb = A._fork_atom_of(rows_live[DOC], [DOC, REG], "продали", want="sum",
+                            rel_measures=_rel_verb[DOC])
+t("prod: продали + Всего в row → COMPUTED 49155.96, не NA",
+  atom_verb.get("proof_status") == A.PROOF_COMPUTED
+  and atom_verb.get("exact_value") == LIVE_SUM
+  and atom_verb.get("measure_id") == "Всего")
+cls_verb = A.fork_classes(rows_live, "продали", want="sum", rel_by_src=_rel_verb)
+out_verb, pay_verb = A.resolve_fork_outcome(
+    cls_verb, rows_live, measure_ctx="продали", want="sum", rel_by_src=_rel_verb)
+t("prod: продали writer_pair → outcome A",
+  out_verb == "A" and len(pay_verb.get("srcs") or []) == 2)
+t("NA: себестоимость названа, у источника нет → rel=[]",
+  A._fork_relevant("себестоимость", _mbs_live[DOC], {}, want="sum") == [])
+atom_sebes = A._fork_atom_of(rows_live[DOC], [DOC], "себестоимость", want="sum",
+                             rel_measures=[])
+t("NA: себестоимость + rel=[] → PROOF_NA",
+  atom_sebes.get("proof_status") == A.PROOF_NA)
+
 # разный смысл (склад) — классы не схлопываются
 t("разный sum — два класса (контроль §11)",
   len(A.fork_classes(
@@ -133,6 +156,11 @@ t("want=sum без слова — headline Всего в rel",
   A._fork_relevant("", ["Сумма", "Всего"], {}, want="sum") == ["Всего"])
 t("want=sum без слова — fallback на все имена, если нет headline",
   A._fork_relevant("", ["Сумма"], {}, want="sum") == ["Сумма"])
+t("want=sum + продали → headline Всего",
+  A._fork_relevant("продали", ["Сумма", "Всего", "Количество"], {}, want="sum")
+  == ["Всего"])
+t("want=sum + себестоимость без поля → [] (NA)",
+  A._fork_relevant("себестоимость", ["Сумма", "Всего"], {}, want="sum") == [])
 t("величин нет — атом по счёту",
   A._fork_relevant("сумма", [], {}) == [])
 t("несколько подходящих — все в атом (как measure_alts)",
