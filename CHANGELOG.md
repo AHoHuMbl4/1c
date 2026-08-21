@@ -39,6 +39,21 @@
 Доки: Configuration › Pragmas (database_size, storage_info); Sql › Functions ›
 Metadata Functions (duckdb_tables).
 
+## 21.08: DATA_SCOPE §10.6 — дозамер okna: контур не пересчитан, полные слепки [замер][код]
+
+[замер] `docs/DATA_SCOPE_2026-08-21.md §10.6`: контур агента okna
+(`config_version=2`, 819 сущ.) содержит **все 97** service и **48**
+`_RecordType` — `packet_config` не перезапускался после разметки 12.08,
+служебное едет по каналу и сегодня (манифесты 21.08) и выбрасывается синком
+(0,3% enc — вопрос правильности, не денег). Канал возит **полные слепки**:
+ops `delta` 218 / `full_entity` 979 / `full` 363; план счетов 49×~188 тыс.
+строк; у `_RecordType` дельт нет вовсе. Данные теней не читает ни один слой
+[код: corpus_build.sql:148 отсев; 91-101 — только имена из `$metadata`;
+serene_report/report_query/mcp_reports — упоминаний нет]. Store okna
+**24,2 GiB**. §10.3 поправлен не молча: «контур уже исключает» опровергнуто —
+`skipped` пишет синк. Вырезание теней из контура — решение владельца.
+Доки: Configuration › Pragmas (database_size).
+
 ## 21.08: DATA_SCOPE — тот же вопрос по okna [замер]
 
 [замер] `docs/DATA_SCOPE_2026-08-21.md` §10: на okna class жив; service **1%**
