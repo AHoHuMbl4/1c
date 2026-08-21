@@ -129,7 +129,10 @@ EMBED_HTTP_TIMEOUT=600     # SET GLOBAL, иначе длинные полосы 
    `embed_missing.sh` `left()`: сначала `(SELECT src_table FROM … WHERE emb IS NULL)`,
    антисоединение снаружи. Не глушить stderr у этого count. Замок
    `test_embed_left_count.py`. Доки: partial-reading / avoid unnecessary columns.
-
+6. **curl 200 ≠ ai_embed жив.** TEMPORARY SECRET переживает смену `EMBED_HOST`:
+   curl бьёт в env, движок — в `duckdb_secrets().base_url`. Сторож
+   `embed_secrets_base_url_check`. Не класть путь в `base_url` (double-path →
+   JSON 404).
 ## 7. Чего делать НЕ надо
 
 - не гнать оператор больше 16 строк — упадёт на `Vector::SetSize`;

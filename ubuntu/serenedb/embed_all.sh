@@ -100,6 +100,11 @@ done
 # Вывод гасится целиком: при ошибке psql печатает ОПЕРАТОР, а в нём ключ.
 psql "$DSN" -q -f "$SEC" >/dev/null 2>&1 || { echo "секреты не созданы" >&2; rm -f "$SEC"; exit 1; }
 rm -f "$SEC"
+if [ -f "$(dirname "$0")/box_tune.sh" ]; then
+  # shellcheck disable=SC1091
+  . "$(dirname "$0")/box_tune.sh"
+  embed_secrets_base_url_check || { echo "base_url секретов openai не совпал с EMBED_HOST" >&2; exit 1; }
+fi
 export EMBED_SECRETS="${LIST# }"
 
 cleanup() {

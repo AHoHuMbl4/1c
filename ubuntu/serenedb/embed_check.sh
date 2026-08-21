@@ -149,3 +149,10 @@ fi
 live_door "$URL" "$KEY" \
   '"{\"model\":\"'"$MODEL"'\",\"dimensions\":'"${EMBED_DIM:-1024}"',\"input\":[\"ping\"]}"' \
   "дверь движка $URL" || exit 1
+
+# 🔴 После curl — сверка ЖИВЫХ секретов движка с EMBED_HOST (ловушка 54-bis /
+# замер 21.08 klient-1: curl 200, ai_embed 404 HTML, потому что TEMPORARY SECRET
+# указывал на старый thundercompute URL). Без DSN — пропуск (как form-only).
+if [ -n "${SERENEDB_DSN:-}" ] && declare -F embed_secrets_base_url_check >/dev/null 2>&1; then
+  embed_secrets_base_url_check || exit 1
+fi

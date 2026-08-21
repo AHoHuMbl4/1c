@@ -9,6 +9,11 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
 
+🔴 **ai_embed 404 = устаревший SECRET base_url, не UA `[21.08]`**: klient-1
+curl EMBED_HOST 200; ai_embed 404 HTML — секреты на старом хосте при новом env.
+Fix: recreate SECRET + `embed_secrets_base_url_check`. ai_embed **0,42с**/1024.
+Замок **5/5**. Выкат box_tune/embed_check/build/embed_all — оркестратор.
+
 🔴 **возврат 12 — clarify vs прод, проба 8/8 с /opt `[21.08]`**: после lock
 канона ALIAS_VETO/`ask_back` давали clarify при верном числе; qty-канон для
 ранга. Кандидат только из `/opt/1c-mcp-reports`. Live `:8092` **8/8**.

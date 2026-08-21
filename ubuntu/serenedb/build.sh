@@ -167,6 +167,12 @@ SEC=$(mktemp); trap 'rm -f "$SEC"; cleanup' EXIT INT TERM HUP
 # Вывод гасится целиком: при ошибке psql печатает ОПЕРАТОР, а в нём ключ.
 psql "$DSN" -q -f "$SEC" >/dev/null 2>&1 || fail "секреты не созданы"
 rm -f "$SEC"
+# 🔴 base_url секрета = то, что в EMBED_HOST сейчас (не вчерашний TEMPORARY).
+if [ -f ./box_tune.sh ]; then
+  # shellcheck disable=SC1091
+  . ./box_tune.sh
+  embed_secrets_base_url_check || fail "base_url секретов openai не совпал с EMBED_HOST"
+fi
 
 # Проверки до такта — после секретов: одна из них дёргает эмбеддер, чтобы убедиться, что
 # он жив, ДО того как слияние обнулит векторы у изменившихся строк.

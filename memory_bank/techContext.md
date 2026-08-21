@@ -1030,3 +1030,25 @@ search_corpus», потому что `left()` глушил stderr (`2>/dev/null`
 `SELECT count(*) FROM (SELECT <лёгкие колонки> FROM T WHERE emb IS NULL) T
 WHERE <ROWS_WHERE>` — `emb IS NULL` остаётся Column Filter, в CTE уходит только
 `src_table` / `table_name`. Замок: `test_embed_left_count.py`.
+
+## Ловушка 55. ai_embed 404 HTML от LB при curl 200 — устаревший TEMPORARY SECRET
+
+`[замер 21.08, klient-1]` curl на EMBED_HOST (`/v1/embeddings`, UA движка и
+curl/8.5.0) → **200 / 0,2 с**. `SELECT ai_embed` → HTTP 404 с HTML/JS страницы
+LB (маркер `minInterval`), 20–40 с.
+
+В `duckdb_secrets()` у `emb_postgres_*` `base_url` оставался на старом хосте
+эмбеддера, тогда как `/etc/1c-embed.env` уже указывал на новый. TEMPORARY SECRET
+живёт до рестарта движка (доки `configuration/secrets_manager#temporary-secrets`);
+смена env без `CREATE OR REPLACE` оставляет старый URL. `embed_check` по curl
+зелёный — он бьёт в env, не в секрет.
+
+Форма секрета штатная: `TYPE openai, api_key, base_url, embeddings_path`
+(`sql/functions/ai#providers`). Путь только в `embeddings_path`: полный URL в
+`base_url` → движок допишет путь → JSON `404 Not Found` (double-path).
+`EXTRA_HTTP_HEADERS` у openai нет; `custom_user_agent` на лету не меняется.
+
+Лечение: `CREATE OR REPLACE TEMPORARY SECRET` с `base_url` из `EMBED_HOST`.
+Сторож: `embed_secrets_base_url_check` (`box_tune.sh` → embed_check/build/embed_all).
+Замок `test_embed_secret_url_check.py`.
+

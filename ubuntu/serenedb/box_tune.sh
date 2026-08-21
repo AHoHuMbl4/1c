@@ -178,6 +178,56 @@ embed_hosts_form_check() {
   return 0
 }
 
+# 🔴 base_url ЖИВОГО секрета = EMBED_HOST из env. [замер 21.08, klient-1]
+# TEMPORARY SECRET живёт до рестарта движка (доки secrets_manager#temporary-secrets).
+# Env уже указывал на gpu-erw, а в duckdb_secrets() оставались
+# https://*.thundercompute.net — ai_embed ловил HTML/JS-страницу LB (minInterval)
+# как «OpenAI embeddings API returned HTTP 404», curl на EMBED_HOST при этом
+# давал 200. embed_check по curl зелёный, такт шёл в никуда.
+# Форма секрета штатная (TYPE openai, base_url, embeddings_path) —
+# доки sql/functions/ai#providers; путь в base_url не класть (иначе
+# движок дописывает /v1/embeddings → JSON 404 Not Found).
+embed_secrets_base_url_check() {
+  local dsn="${SERENEDB_DSN:-}" raw one host expect="" name bu bad=0
+  [ -n "$dsn" ] || return 0
+  raw="${EMBED_HOSTS:-${EMBED_HOST:-}}"
+  [ -n "$raw" ] || return 0
+  IFS=',' read -r -a _eh <<< "$raw"
+  for one in "${_eh[@]}"; do
+    one="$(printf '%s' "$one" | tr -d ' ')"
+    [ -z "$one" ] && continue
+    host="${one%%|*}"
+    host="${host%/}"
+    expect="${expect}|${host}"
+  done
+  expect="${expect#|}"
+  [ -n "$expect" ] || return 0
+  while IFS=$'\t' read -r name rest; do
+    [ -n "$name" ] || continue
+    bu=$(printf '%s' "$rest" | sed -n 's/.*base_url=\([^;]*\).*/\1/p')
+    [ -n "$bu" ] || continue
+    case "|$expect|" in
+      *"|${bu}"*|*"${bu%/}"*) ;;
+      *)
+        echo "🔴 секрет $name: base_url=$bu не из EMBED_HOST(S) ($expect)." >&2
+        echo "   TEMPORARY SECRET переживает смену env до рестарта движка; ai_embed" >&2
+        echo "   ходит по старому URL (404 HTML от LB), curl по новому — 200." >&2
+        bad=1
+        ;;
+    esac
+    case "$bu" in
+      */embeddings*|*/v1/*)
+        echo "🔴 секрет $name: base_url содержит путь ($bu) — движок допишет embeddings_path," >&2
+        echo "   получится double-path и JSON 404 Not Found (замер 21.08)." >&2
+        bad=1
+        ;;
+    esac
+  done < <(psql "$dsn" -tA -F$'\t' -c \
+    "SELECT name, secret_string FROM duckdb_secrets()
+     WHERE type = 'openai' AND (name LIKE 'emb_%' OR name LIKE 'qwen_%')" 2>/dev/null)
+  [ "$bad" = 0 ]
+}
+
 # --- запись conf / env / swap / pragma ----------------------------------------
 
 box_tune_upsert_flag() {
