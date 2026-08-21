@@ -1008,5 +1008,7 @@ HTTP-клиента движка при срабатывании **`http_timeout
 нужен именно **GLOBAL** (как уже записано в `docs/EMBED_BULK_HOWTO.md` §5).
 Лимитов на число текстов/символов/токенов за вызов `ai_embed` и async/очереди
 эмбеддинга в доках **нет** (`sql/functions/ai`: «Each ai_embed call is a network
-request»; «Provider failures … surface as a query error»). Обрезка входа длиннее
-контекста модели там тоже не описана.
+request»; «Provider failures … surface as a query error»). Живой вход длиннее
+контекста модели — HTTP 400 провайдера целиком и быстро, не таймаут (замер 21.08).
+`embed_missing.sh` `http_timeout` не поднимает — при больших пачках остаётся default
+30 с, хотя `docs/EMBED_BULK_HOWTO.md` §5 требует `SET GLOBAL` / `EMBED_HTTP_TIMEOUT`.

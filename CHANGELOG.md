@@ -9,25 +9,27 @@
 `ai_embed(txt, model, secret)` (не curl). Секрет — `TYPE openai` + `base_url` /
 `embeddings_path` (`embed_all.sh`). Доки: https://docs.serenedb.com/sql/functions/ai
 
-**Откуда текст ошибки:** живой дев 26.07.3, висящий TCP на loopback +
+**Откуда текст ошибки:** живой дев 26.07.3 — висящий/медленный OpenAI-стенд +
 `SET GLOBAL http_timeout = 3` → ровно `Timeout was reached error for HTTP POST to
-'http://127.0.0.1:19093/v1/embeddings'` за ~7 с. После пробы возвращено
-`SET GLOBAL http_timeout = 60`.
+'…/v1/embeddings'` (curl `CURLE_OPERATION_TIMEDOUT` через httpfs default-клиент).
+При `httpfs_client_implementation=httplib` текст другой. Движок после проб возвращён
+к default: `http_timeout=30`, `http_retries=3` (первый SHOW сессии был 60/0 — чужой
+override; сейчас снова 30/3).
 
-**Таймаут:** параметр `http_timeout`, default **30** с (доки configuration/overview),
-scope GLOBAL (`duckdb_settings`), описание «HTTP timeout read/write/connection/retry
-(in seconds)». У нас на деве факт **60**. Задаётся `SET GLOBAL http_timeout = N`
-(sql/statements/set). В SECRET openai поля `timeout` нет. Сессионный SET без GLOBAL
-на путь `ai_embed` не сработал (замер).
+**Таймаут:** `http_timeout`, default **30** с (configuration/overview), scope GLOBAL.
+Действует **только** `SET GLOBAL` (сессионный SET меняет `current_setting`, но
+`ai_embed` ждёт по GLOBAL — замер). Попыток: `1 + http_retries`. В SECRET openai
+поля `timeout` нет. `embed_missing.sh` `http_timeout` **не ставит** (в отличие от
+EMBED_BULK_HOWTO §5 / `EMBED_HTTP_TIMEOUT=600`).
 
-**Пачки / async / длинный вход:** в доках `ai_embed` — лимитов на тексты/символы/токены
-и фоновой очереди **нет**; «Each ai_embed call is a network request»; отказы
-провайдера = ошибка запроса. Обрезка сверх контекста модели **не описана**.
-Наши `EMBED_BATCH_*` / `EMBED_MAXLEN` — обвязка shell, не ручки движка.
+**Пачки / async / длинный вход:** в доках лимитов и async **нет**. Живой движок
+сам шлёт до **64** текстов в одном POST (`input`-массив; ручки размера нет).
+Вход длиннее контекста модели — **не обрезает и не висит**: HTTP 400 провайдера
+целиком и быстро (замер), не таймаут. Наши `EMBED_BATCH_*` — shell-обвязка.
 
-**Рекомендуемая ручка по докам:** `SET GLOBAL http_timeout = <секунды>` (и вернуть
-`RESET GLOBAL` / прежнее значение после окна). Уменьшение `EMBED_BATCH_CHARS` —
-наша обвязка, не параметр SereneDB.
+**Рекомендуемая ручка по докам:** `SET GLOBAL http_timeout = <секунды>` на окно
+досчёта (потом `RESET GLOBAL` / прежнее). При `EMBED_BATCH_CHARS=65000` и default
+30 с длинные пачки бьют в этот потолок штатно.
 
 ## 21.08: петля clarify в OWUI — текстовый выбор резолвит мост [код]
 
