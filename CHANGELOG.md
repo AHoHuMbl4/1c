@@ -1,3 +1,14 @@
+## 21.08: граница деловых/неделовых в витрине — замер DATA_SCOPE [замер][код]
+
+[замер] `docs/DATA_SCOPE_2026-08-21.md`: на klient-1 `search_entity_class` **пуста**
+(classify → HTTP 401), четыре адресные сущности **5 503 279** строк = **27,3%**
+витрины, все с векторами; канал **481,5 МиБ** plain / **211,1 МиБ** enc;
+оценка векторизации **≈5,9 ч** при ~260 стр/с. okna/ut_test/postgres — class
+работает, service без emb. Потеря «Казань»: города в `Город` справочников;
+иерархии FIAS — 0 вхождений. Границы кода: контур
+`packet_config.py:180-224` / корпус `corpus_build.sql:192-198` (без class) /
+векторы `build.sh:330-332`. Состояние okna/klient-1 не менялось.
+
 ## 19.08: fork NA при want=sum без measure — rel Всего + diag outcome_reason [код]
 
 [код] `ubuntu/serenedb/serene_ask.py` (возврат 5, `PLAN_ANSWER_CONTRACT` §2–§3):
