@@ -169,6 +169,12 @@ timeout = 20
 [[hooks]]
 event = "PreToolUse"
 matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-live-probe.sh"
+timeout = 20
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
 command = "/srv/1c/.claude/hooks/sniper-kimi.sh"
 timeout = 600
 

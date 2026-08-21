@@ -1,3 +1,13 @@
+## Замер 21.08 — живая проба AB_PROBE=okna против боя :8091
+
+Прибор `AB_PROBE=okna` + `ab-probe-okna.tsv` (8 вопросов) против боевого
+`:8091`. **Снят как самопроверка прибора** (обязан показать известные красные).
+Результат: **4/8**, 0 сбоев обращения; отметка `.probe-okna-last-run` **не**
+поставлена. FAIL: прошлый месяц (число ≠ 2 767 450.98); воскресенье → clarify;
+«почему ноль» → clarify; name-лидер недели. Гейт `check-live-probe` в git;
+установка: `bash work/hooks/install-gates.sh`. Процедура кандидата — ниже
+§«Живая проба okna».
+
 ## Замер 19.08 — золотой набор okna + smoke-гейт ut_test
 
 Правка `ab-gold-okna.tsv`, `ab_scorer.py` (AB_CONTOUR=okna, AB_GOLD_MODE=smoke,
@@ -1097,12 +1107,85 @@ SERENEDB_DSN_RO=<...dbname=postgres> PGPASSWORD=<...> \
 | Когда | Контур | Набор | Критерий | Команда | Отметка |
 |---|---|---|---|---|---|
 | **ДО выката** | ut_test `:8099` | `ab-gold.tsv` (8 вопросов) | **0 сбоев обращения**; порог верных **не ставится** — ловит «сервис не отвечает» | `AB_GOLD_MODE=smoke AB_BASE=ut_test ASK_URL=http://127.0.0.1:8099/ask python3 ubuntu/serenedb/ab_scorer.py` | `.claude/.golden-last-run` → строка `smoke ut_test live 0err/8` |
-| **ПОСЛЕ выката** | okna `:8091` | `ab-gold-okna.tsv` (10 вопросов) | **9 числовых** — цифра эталона в text+claims; **склад** — `kind=no_data`, в text **нет чисел итогов** (годы/минуты — можно) | на okna: `AB_CONTOUR=okna python3 ubuntu/serenedb/ab_scorer.py` | `.claude/.golden-okna-last-run` |
+| **ПОСЛЕ выката** | okna `:8091` | `ab-gold-okna.tsv` (10+ вопросов) | **числа** эталона в text+claims; **склад/петли** — `kind` | на okna: `AB_CONTOUR=okna python3 ubuntu/serenedb/ab_scorer.py` | `.claude/.golden-okna-last-run` |
 
 Гейт `check-golden` перед выкатом смотрит **только smoke-отметку** (префикс `smoke`, суффикс
 `0err/N`). `AB_BASE=ut_test` без `AB_GOLD_MODE=smoke` — прежний A/B-прогон с порогом
 «хоть один верный». DSN okna: `/etc/1c-serene-ask-postgres.env`, `PGPASSWORD` —
 `/etc/1c-mcp-reports.env`, токен — `/etc/1c-serene-ask.env`.
+
+### Живая проба okna ДО коммита `serene_ask.py` (решение владельца 21.08)
+
+Оффлайн-замки мокают кандидатов; бой даёт другой набор — три возврата подряд (9/10/11:
+июль-0, воскресенье-clarify, пустой figures). Закрывается **механизмом**, не дисциплиной.
+
+| | |
+|---|---|
+| **Когда** | перед коммитом, затрагивающим `ubuntu/serenedb/serene_ask.py` |
+| **Набор** | `ab-probe-okna.tsv` (~8): вчера→answer+число; неделя→B-лидер регистра; склад→clarify; петли→no_data; прошлый месяц→answer+число регистра; воскресенье→answer(0); «почему ноль»→answer\|no_data; прайс→число каталога |
+| **Эталон** | live SQL через `truth()` в момент прогона (те же SQL, что в `ab-gold-okna.tsv`) |
+| **Критерий** | kind + число; отметка только при **0 сбоев** (все вопросы верны) |
+| **Отметка** | `.claude/.probe-okna-last-run` → `okna probe live 0err/8` |
+| **Гейт** | `check-live-probe.sh`: отметка свежее `serene_ask.py` и с `0err` |
+
+Процедура прогона кандидата на okna (не бой `:8091`):
+
+```bash
+# с дева (ключ deploy):
+scp -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_deploy \
+  ubuntu/serenedb/serene_ask.py root@167.233.249.110:/tmp/serene_ask_probe.py
+scp -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_deploy \
+  ubuntu/serenedb/ab_scorer.py ubuntu/serenedb/ab-probe-okna.tsv \
+  root@167.233.249.110:/tmp/
+
+ssh -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_deploy \
+  root@167.233.249.110 bash -s <<'REMOTE'
+set -euo pipefail
+load_env() {
+  local p line key val
+  for p in "$@"; do
+    [ -r "$p" ] || continue
+    while IFS= read -r line || [ -n "$line" ]; do
+      line="${line%%#*}"
+      line="${line#"${line%%[![:space:]]*}"}"
+      [ -z "$line" ] && continue
+      [[ "$line" != *=* ]] && continue
+      key="${line%%=*}"; val="${line#*=}"
+      val="${val#"${val%%[![:space:]]*}"}"
+      val="${val%"${val##*[![:space:]]}"}"
+      if [ "${#val}" -ge 2 ] && [ "${val:0:1}" = "${val: -1}" ]; then
+        case "${val:0:1}" in \"|\') val="${val:1:-1}";; esac
+      fi
+      export "$key=$val"
+    done < "$p"
+  done
+}
+# 🔴 построчный export, НЕ source — как start-8097-okna.sh
+load_env /etc/1c-mcp-reports.env /etc/1c-embed.env /etc/1c-serene-ask.env \
+         /etc/1c-serene-ask-postgres.env
+export ASK_LISTEN_PORT=8092
+export PYTHONPATH=/opt/1c-mcp-reports:${PYTHONPATH:-}
+pkill -f 'serene_ask_probe.py' 2>/dev/null || true
+/opt/openclaw-mcp/venv/bin/python /tmp/serene_ask_probe.py >/tmp/serene_ask_probe.log 2>&1 &
+echo $! >/tmp/serene_ask_probe.pid
+for i in $(seq 1 30); do
+  curl -sf -m 2 http://127.0.0.1:8092/health >/dev/null && break
+  sleep 1
+done
+cd /tmp
+AB_PROBE=okna ASK_URL=http://127.0.0.1:8092/ask AB_MARK_DIR=/srv/1c \
+  /opt/openclaw-mcp/venv/bin/python /tmp/ab_scorer.py
+rc=$?
+kill "$(cat /tmp/serene_ask_probe.pid)" 2>/dev/null || true
+exit $rc
+REMOTE
+```
+
+Самопроверка прибора: прогон `AB_PROBE=okna ASK_URL=http://127.0.0.1:8091/ask` против
+**боя** обязан показать красным известные живые дефекты. Если против боя зелёная —
+проба ничего не меряет.
+
+Установка гейта (владелец, root): `bash work/hooks/install-gates.sh`.
 
 ---
 

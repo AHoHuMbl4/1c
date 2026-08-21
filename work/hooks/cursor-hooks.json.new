@@ -1,0 +1,95 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": ".claude/hooks/cursor-wrap.sh session-start",
+        "timeout": 10
+      }
+    ],
+    "preToolUse": [
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-prompt-rules",
+        "matcher": "Write|StrReplace",
+        "timeout": 15,
+        "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-gates",
+        "matcher": "Shell",
+        "timeout": 15,
+        "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-sql-docs",
+        "matcher": "Shell",
+        "timeout": 15,
+        "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-prompt-rules",
+        "matcher": "Shell",
+        "timeout": 20,
+        "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-diff",
+        "matcher": "Shell",
+        "timeout": 20,
+        "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-docs",
+        "matcher": "Shell",
+        "timeout": 15,
+        "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-active-size",
+        "matcher": "Shell",
+        "timeout": 15,
+        "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-graph-fresh",
+        "matcher": "Shell",
+        "timeout": 15,
+        "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-golden",
+        "matcher": "Shell",
+        "timeout": 20,
+        "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-live-probe",
+        "matcher": "Shell",
+        "timeout": 20,
+        "failClosed": true
+      }
+    ],
+    "postToolUse": [
+      {
+        "command": ".claude/hooks/cursor-wrap.sh count-edits",
+        "matcher": "Write|StrReplace",
+        "timeout": 15
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-write",
+        "matcher": "Write|StrReplace",
+        "timeout": 15
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-deps",
+        "matcher": "Write|StrReplace",
+        "timeout": 15
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-deps",
+        "matcher": "Shell",
+        "timeout": 15
+      }
+    ]
+  }
+}

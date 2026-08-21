@@ -66,3 +66,7 @@ work/packet/golden/fixtures/metadata.xml
 # рабочие артефакты калибровки, в git нельзя (в git лежат только diff/отчёт/генератор)
 work/manifest-diff/*.xml
 work/manifest-diff/tox/
+
+# Отметка живой пробы okna до коммита serene_ask — локальная
+.claude/.probe-okna-last-run
+.claude/.golden-okna-last-run

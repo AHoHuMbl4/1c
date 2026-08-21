@@ -1,3 +1,17 @@
+## 21.08: гейт живой пробы okna — AB_PROBE + check-live-probe [код]
+
+[код] `AB_PROBE=okna` в `ab_scorer.py` + набор `ab-probe-okna.tsv` (~8):
+отметка `.claude/.probe-okna-last-run` только при **0 сбоев** и всех верных.
+Clarify с `CAST(NULL)`/пустым эталоном → `want=""` (не blind). Гейт
+`check-live-probe.sh` перед коммитом `serene_ask.py`; проводка в
+`git-gate` / `lib-hooks` / `test-hooks` / `install-gates` / kimi / Cursor.
+Процедура — `docs/REGRESSION_BASE1.md` §живая проба.
+
+[замер] самопроверка прибора против боя `:8091`: **4/8**, 0 сбоев обращения;
+отметка **не** поставлена. Красные FAIL: прошлый месяц (число ≠ регистра);
+воскресенье → clarify; «почему ноль» → clarify. Установка гейта владельцем:
+`bash work/hooks/install-gates.sh`. Выкат/deploy не делали.
+
 ## 21.08: возврат 11 — sticky focus/stop2; замок на кандидатах okna [код]
 
 [код] `serene_ask.py` после live 1/4 на 96c184a (okna :8091 ~13:20 UTC):

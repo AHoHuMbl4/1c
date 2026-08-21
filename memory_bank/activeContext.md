@@ -9,6 +9,13 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
 
+🔴 **гейт живой пробы okna — код в git, установка за владельцем `[21.08]`**:
+`AB_PROBE=okna` + `check-live-probe.sh` блокирует коммит `serene_ask.py` без
+свежей отметки `0err/N`. Самопроверка против боя `:8091` — **4/8**, отметка
+не писалась (красные: прошлый месяц / воскресенье clarify / почему ноль
+clarify). Установка: `bash work/hooks/install-gates.sh`. Процедура —
+`REGRESSION_BASE1` §живая проба. Deploy не делали.
+
 🔴 **возврат 11 — sticky focus/stop2, код в git `[21.08]`**: live 1/4 на 96c184a:
 июль 0 на передаче ТМЦ (sticky); воскресенье clarify после lock (stop2).
 Fix: `sales_refuse_sticky_focus`, stop2 не при lock, memory noncanon refuse.

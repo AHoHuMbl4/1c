@@ -12,6 +12,7 @@
 Контуры (решение владельца 18.08):
   AB_GOLD_MODE=smoke AB_BASE=ut_test — до выката: 0 сбоев обращения, порог верных не нужен
   AB_CONTOUR=okna — после выката на okna: ab-gold-okna.tsv (v2: digits/kind/clarify/name)
+  AB_PROBE=okna — до коммита serene_ask.py: ab-probe-okna.tsv (~8), отметка .probe-okna-last-run
   AB_BASE=ut_test — прежний набор ab-gold.tsv (A/B или live по ASK_URL)
 """
 import json
@@ -24,6 +25,7 @@ import urllib.request
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 CONTOUR = os.environ.get("AB_CONTOUR", "").strip().lower()
+PROBE = os.environ.get("AB_PROBE", "").strip().lower()
 GOLD_MODE = os.environ.get("AB_GOLD_MODE", "").strip().lower()
 BASE = os.environ.get("AB_BASE", "ut_test" if GOLD_MODE == "smoke" else "postgres")
 ENV_FILE = "/etc/1c-serene-ask-%s.env" % BASE
@@ -55,9 +57,12 @@ def ensure_pgpassword():
         os.environ["PGPASSWORD"] = pw
 
 
-if CONTOUR == "okna":
+if PROBE == "okna" or CONTOUR == "okna":
+    _probe_gold = os.path.join(_SCRIPT_DIR, "ab-probe-okna.tsv")
+    _okna_gold = os.path.join(_SCRIPT_DIR, "ab-gold-okna.tsv")
     GOLD_FILE = os.environ.get(
-        "AB_GOLD_FILE", os.path.join(_SCRIPT_DIR, "ab-gold-okna.tsv"))
+        "AB_GOLD_FILE",
+        _probe_gold if PROBE == "okna" else _okna_gold)
     ensure_pgpassword()
     DSN = os.environ.get("AB_DSN") or env_value(
         "SERENEDB_DSN_RO", ENV_PG) or env_value("SERENEDB_DSN", ENV_PG)
@@ -329,6 +334,14 @@ def score_digits(want, out):
     return False, "число не сошлось", "want=%s got=%s" % (want_key, ",".join(sorted(got))[:120])
 
 
+def score_digits_probe(want, out):
+    """Проба okna: kind answer|figures + число эталона (ловит clarify и чужое число)."""
+    got_kind = (out or {}).get("kind") or ""
+    if got_kind not in ("answer", "figures"):
+        return False, "kind не тот", "want kind=answer|figures got kind=%s" % (got_kind or "—")
+    return score_digits(want, out)
+
+
 def score_kind(sql, want, out, question=""):
     expected = kind_expected_for_kind_mode(sql, want, question=question)
     got_kind = (out or {}).get("kind") or ""
@@ -446,7 +459,15 @@ def mark_path(name):
 
 
 def write_mark(best_sc, hits, n, errs):
-    if CONTOUR == "okna":
+    if PROBE == "okna":
+        if errs or hits < n:
+            sys.stderr.write(
+                "\n🔴 отметка .probe-okna-last-run НЕ поставлена: сбоев %d, верных %d из %d.\n"
+                % (errs, hits, n))
+            return None
+        path = mark_path(".probe-okna-last-run")
+        line = "okna probe live 0err/%d\n" % n
+    elif CONTOUR == "okna":
         if errs or hits < n:
             sys.stderr.write(
                 "\n🔴 отметка .golden-okna-last-run НЕ поставлена: сбоев %d, верных %d из %d.\n"
@@ -485,7 +506,7 @@ def write_mark(best_sc, hits, n, errs):
 
 def main():
     gold = load_gold(GOLD_FILE)
-    label = CONTOUR or GOLD_MODE or BASE
+    label = ("probe-" + PROBE) if PROBE else (CONTOUR or GOLD_MODE or BASE)
     print("контур %s, база %s, сервис %s, %s" % (label, BASE, URL, UNIT))
     if LIVE_CONTOUR:
         print("live: без рестарта юнита")
@@ -499,9 +520,13 @@ def main():
         mode = row["mode"]
         if row.get("sql"):
             # digits/kind: пустой SUM = 0 продаж (валидный эталон), не blind
+            # clarify: CAST(NULL)/пустой — sentinel «любой clarify», не blind
             want = truth(row["sql"], empty_as_zero=(mode in ("digits", "kind")))
             if not want:
-                blind.append(q)
+                if mode == "clarify":
+                    want = ""
+                else:
+                    blind.append(q)
         else:
             want = None
         computed.append((q, row.get("sql"), row.get("mode"), want))
@@ -551,7 +576,10 @@ def main():
             defect = ""
             fact = ""
             if mode == "digits":
-                ok, defect, fact = score_digits(want, out0)
+                if PROBE == "okna":
+                    ok, defect, fact = score_digits_probe(want, out0)
+                else:
+                    ok, defect, fact = score_digits(want, out0)
             elif mode == "kind":
                 ok, defect, fact = score_kind(sql, want, out0, question=q)
             elif mode == "clarify":
@@ -570,6 +598,10 @@ def main():
             rows.append((q, mode, ok, defect, got_kind, fact, sec))
             if not ok:
                 failures.append((q, mode, defect or "FAIL", got_kind, fact))
+                # красная строка для отчёта гейта / живой самопроверки
+                sys.stderr.write(
+                    "🔴 FAIL %s | %s | %s (got %s) %s\n"
+                    % (mode, (q or "")[:60], defect or "FAIL", got_kind, fact or ""))
 
         table[sc] = (hits, round(secs / len(computed), 2), rows, errs)
         print("\n== %s: верных %d/%d, средняя %.2f с%s"

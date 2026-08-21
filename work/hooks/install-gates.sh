@@ -7,8 +7,9 @@
 #
 # Что делает:
 #   1. ставит все гейты из work/hooks/ в .claude/hooks/ (755);
-#   2. подключает check-gates.sh в .claude/settings.json, если его там ещё нет;
-#   3. включает core.hooksPath=.githooks;
+#   1-тер. канон lib-hooks/test-hooks из *.new + check-live-probe;
+#   2. подключает check-gates / prepare-diff / check-live-probe в settings.json;
+#   3. включает core.hooksPath=.githooks; Kimi; Cursor (+ check-live-probe);
 #   4. прогоняет пробу и печатает итог.
 # Повторный запуск безопасен: каждый шаг проверяет состояние, а не делает вслепую.
 set -uo pipefail
@@ -22,6 +23,21 @@ for f in "$SRC"/*.sh; do
   [ "$b" = "install-gates.sh" ] && continue
   install -m 755 "$f" "$DST/$b" && echo "  поставлен $b"
 done
+
+echo "== 1-тер. канон lib-hooks/test-hooks + check-live-probe =="
+# Файлы root:root в work/hooks сессия не переписывает; актуальный канон — *.new.
+for pair in "lib-hooks.sh:644" "test-hooks.sh:755"; do
+  f="${pair%%:*}"; mode="${pair##*:}"
+  if [ -f "$SRC/$f.new" ]; then
+    install -m "$mode" -o root -g root "$SRC/$f.new" "$SRC/$f"
+    install -m "$mode" -o root -g root "$SRC/$f.new" "$DST/$f"
+    echo "  поставлен $f из $f.new"
+  fi
+done
+if [ -f "$SRC/check-live-probe.sh" ]; then
+  install -m 755 -o root -g root "$SRC/check-live-probe.sh" "$DST/check-live-probe.sh"
+  echo "  поставлен check-live-probe.sh"
+fi
 
 echo "== 1-бис. обёртка гейта коммита =="
 # 🔴 Обёртка ставится ПОСЛЕ гейтов и только вместе с ними: тонкая обёртка без
@@ -53,7 +69,8 @@ tpl = ('"${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pw
 want = [("check-gates", 15, "Проверка: гейты не разоружены"),
         # 🔴 Подавальщик диффа обязан стоять В ЦЕПОЧКЕ РАНЬШЕ снайпера-агента: тот читает
         # уже готовый файл вместо того, чтобы лезть в оболочку, которой ему могут не дать.
-        ("prepare-diff", 15, "Дифф подан снайперу")]
+        ("prepare-diff", 15, "Дифф подан снайперу"),
+        ("check-live-probe", 20, "Проверка: живая проба okna до коммита serene_ask")]
 for name, timeout, msg in want:
     if any(name in h.get("command", "") for h in bash["hooks"]):
         print("  уже подключён:", name)
@@ -121,6 +138,14 @@ else
   echo "  ⚠ нет .cursor/mcp.json — MCP serenedb-docs/memory в Cursor не подключатся"
 fi
 # cursor-wrap.sh ставится шагом 1 вместе с прочими *.sh
+
+echo "== 3-квин. Cursor: check-live-probe =="
+if [ -f "$SRC/cursor-hooks.json.new" ]; then
+  install -m 644 -o root -g root "$SRC/cursor-hooks.json.new" .cursor/hooks.json
+  echo "  .cursor/hooks.json — из cursor-hooks.json.new"
+else
+  echo "  ⚠ нет cursor-hooks.json.new — проводка Cursor не обновлена"
+fi
 
 echo "== 4. проба =="
 bash "$DST/test-hooks.sh"

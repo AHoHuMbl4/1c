@@ -69,7 +69,7 @@ if [ -n "${1:-}" ] && [ -f "${1:-}" ]; then
   export HOOK_MSG_FILE="$1"
   GATES="check-sql-docs check-diff"
 else
-  GATES="check-docs check-graph-fresh check-active-size check-prompt-rules"
+  GATES="check-docs check-graph-fresh check-active-size check-prompt-rules check-live-probe"
 fi
 
 FAKE='{"tool_input":{"command":"git commit"}}'
