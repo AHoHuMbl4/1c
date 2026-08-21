@@ -71,6 +71,29 @@ def test_kind():
     ok, defect, _fact = S.score_kind(sql_stock, "0", mk_out("no_data", text="нет данных"))
     t("kind: stock+0 => no_data", ok, (defect, _fact))
 
+    q_diag = "почему в воскресенье продаж ноль, это сбой?"
+    ok, defect, _fact = S.score_kind(
+        sql_period, "0", mk_out("answer", text="продаж не было"), question=q_diag)
+    t("kind: диагностика нуля => answer OK", ok, (defect, _fact))
+    ok, defect, _fact = S.score_kind(
+        sql_period, "0", mk_out("no_data", text="нет данных"), question=q_diag)
+    t("kind: диагностика нуля => no_data OK", ok, (defect, _fact))
+    ok, defect, _fact = S.score_kind(
+        sql_period, "0", mk_out("figures", text="0"), question=q_diag)
+    t("kind: диагностика нуля => figures FAIL", not ok, (defect, _fact))
+
+
+def test_truth_empty_as_zero():
+    # без psql: проверяем только ветку empty_as_zero на пустом результате через mock нельзя
+    # здесь — контракт score_digits("0", ...) и gold coalesce в TSV
+    ok, defect, fact = S.score_digits("0", mk_out("answer", text="Итого 0"))
+    t("digits: эталон 0 (воскресенье без продаж) считается", ok, (defect, fact))
+    rows = S.load_gold(os.path.join(ROOT, "ab-gold-okna.tsv"))
+    sun = [r for r in rows if "воскресенье" in r["q"] and r["mode"] == "digits"]
+    t("gold #16: coalesce в SQL воскресенья",
+      bool(sun) and "coalesce(" in (sun[0].get("sql") or "").lower(),
+      sun[0].get("sql")[:80] if sun else "missing")
+
 
 def test_clarify():
     out = mk_out(
@@ -115,6 +138,7 @@ def main():
     test_load_gold()
     test_digits()
     test_kind()
+    test_truth_empty_as_zero()
     test_clarify()
     test_name()
     test_choose_clarify_option()

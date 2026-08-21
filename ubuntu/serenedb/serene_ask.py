@@ -2666,8 +2666,15 @@ def _fork_relevant(word, names, alias_by, want=None):
     return _with_doc_hdr(list(alts))
 
 
+def _fork_pool_excluded(pool, rows):
+    """Src из пула без живой ячейки скана — явная причина (п. 13), не молчание."""
+    rows = rows or {}
+    return [{"src": s, "reason": "no_live_cells"}
+            for s in (pool or []) if s and s not in rows]
+
+
 def fork_scan(match, preds, rel_by_src):
-    """Полный круг: счёт и суммы по общему WHERE вопроса (match + preds), в движке.
+    """Полный круг: счёт и суммы по preds + src пула, в движке.
 
     Два штатных запроса вместо сотен агрегатных колонок (доки SereneDB: «SQL ›
     Functions › Map Functions — map_entries(map)», «SQL › Query syntax › FILTER»):
@@ -2677,9 +2684,13 @@ def fork_scan(match, preds, rel_by_src):
          только по сущностям, у которых такие величины есть.
     Форма через колонки-FILTER замерена и отвергнута: 258 колонок × 623 тыс. строк —
     22 с; unnest по тем же данным — 1,75 с (`[замер 15.08]`). Сложение — DECIMAL, как
-    в `aggregate`. `match` живёт в инвертированном индексе: отбор строк идёт
-    подзапросом `row_key IN (SELECT … FROM search_idx WHERE match)` — прямой `@@`
-    рядом с unnest движок отклоняет («TSQUERY outside @@ match», замер 15.08).
+    в `aggregate`.
+
+    🔴 `match` в скан НЕ входит. Пул уже отобран (cands / arb_pool); повторный text-match
+    по корпусу асимметричен: документ и регистр одной продажи индексируются разным
+    текстом, и ветка регистра молча получает count=0 при живом SQL по периоду
+    ([замер 21.08 okna] «на этой неделе»: pool=3, register SUM=1.4M, fork.srcs=1).
+    Параметр `match` сохранён в сигнатуре для совместимости вызовов; на WHERE не влияет.
     Отдельной колонки «вид записи» у `_RecordType`-сестёр в корпусе нет (замер 15.08:
     ключей вида в `flags`/`nums` регистров нет) — сёстры разводятся самим GROUP BY:
     каждая — свой src и свой атом.
@@ -2691,9 +2702,8 @@ def fork_scan(match, preds, rel_by_src):
         return {}
     nf = "NOT coalesce(map_extract_value(flags, 'IsFolder'), false)"
     isf = "coalesce(map_extract_value(flags, 'IsFolder'), false)"
-    rowfilter = ("row_key IN (SELECT row_key FROM %s WHERE %s)" % (INDEX, match)
-                 if match else "")
-    where = " AND ".join([w for w in ([rowfilter] + [p for p in preds if p] +
+    _ = match  # см. docstring: match не в WHERE
+    where = " AND ".join([w for w in ([p for p in preds if p] +
                          ["src_table IN (%s)" % ", ".join(lit(t) for t in rel_by_src)])
                          if w]) or "TRUE"
     out = {}
@@ -2717,7 +2727,7 @@ def fork_scan(match, preds, rel_by_src):
     with_val = [t for t, ms in rel_by_src.items() if ms and t in out]
     if measures and with_val:
         where2 = " AND ".join([w for w in (
-            [rowfilter] + [p for p in preds if p]
+            [p for p in preds if p]
             + ["src_table IN (%s)" % ", ".join(lit(t) for t in with_val),
                "nums IS NOT NULL", nf]) if w])
         try:
@@ -9290,6 +9300,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["fork"] = {"classes": len(_cls),
                             "srcs": sum(len(v) for v in _cls.values()),
                             "pool": len(_fork_pool),
+                            "pool_srcs": list(_fork_pool),
+                            "live_srcs": sorted(_rows.keys()),
+                            "excluded": _fork_pool_excluded(_fork_pool, _rows) or None,
                             "atoms": _atoms[:10],
                             "atoms_truncated": max(0, len(_atoms) - 10) or None,
                             "cost_ms": int((time.time() - _t_fork) * 1000)}
@@ -9934,10 +9947,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 _atoms.append({"atom": _built,
                                "fingerprint": _fork_fp_diag(fp),
                                "srcs": sorted(ss)})
+            _excl = _fork_pool_excluded(_out_pool, _rows)
             diag["fork"] = dict(_prev,
                                 classes=len(_cls),
                                 srcs=sum(len(v) for v in _cls.values()),
                                 pool=len(_out_pool),
+                                pool_srcs=list(_out_pool),
+                                live_srcs=sorted(_rows.keys()),
+                                excluded=_excl or None,
                                 atoms=_atoms[:10],
                                 atoms_truncated=max(0, len(_atoms) - 10) or None,
                                 cost_ms=int((_prev.get("cost_ms") or 0)

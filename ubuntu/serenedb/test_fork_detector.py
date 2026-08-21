@@ -212,6 +212,13 @@ t("headline регистра: Всего раньше точной живой С
       "accumulationregister_реализациятмц",
       {"Сумма": 1.0, "Всего": 79925955.81}, "сумма") == "Всего")
 
+# п.13: src пула без живой ячейки — явная причина, не молчание
+t("excluded: pool src без row → no_live_cells",
+  A._fork_pool_excluded(["a", "b", "c"], {"a": row(1), "b": row(2)})
+  == [{"src": "c", "reason": "no_live_cells"}])
+t("excluded: все живые → []",
+  A._fork_pool_excluded(["a", "b"], {"a": row(1), "b": row(2)}) == [])
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL))

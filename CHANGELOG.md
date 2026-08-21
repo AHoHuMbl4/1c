@@ -1,3 +1,17 @@
+## 21.08: fork B-форма + неделя без match + scorer воскресенье=0 [код]
+
+[код] возврат 7 (`PLAN_ANSWER_CONTRACT` §2 B, п. 13):
+- **B:** замок — `kind=figures`, обе пары в тексте, `options` люк, `memory_eligible=false`
+  (не clarify-меню; в память только нажатие).
+- **Неделя srcs=1:** `fork_scan` повторно клал `match` на корпус → регистр молча
+  `count=0` при живом SQL по периоду; match убран из WHERE скана (пул уже отобран).
+  В diag: `pool_srcs` / `live_srcs` / `excluded` (`no_live_cells`).
+- **Scorer:** `#16` gold `coalesce(...,0)`; `truth(..., empty_as_zero)` для digits/kind;
+  `#17` диагностика нуля → kind `answer|no_data`.
+
+[замер] оффлайн: detector **43**, outcomes **26**, ab_scorer **19**; база 24/31/56/132/92/18/30/26.
+md5 ask `3c022b6e`, scorer `be4d4118`.
+
 ## 21.08: fork NA — глагол «продали» ≠ пустая мера, headline при want=sum [код]
 
 [код] `ubuntu/serenedb/serene_ask.py` (возврат 6, `PLAN_ANSWER_CONTRACT` §3):

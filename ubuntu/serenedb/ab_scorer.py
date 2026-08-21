@@ -134,11 +134,15 @@ def load_gold(path):
     return out
 
 
-def truth(sql):
+def truth(sql, empty_as_zero=False):
+    """Эталон из SQL. Пустой SUM (нет строк) — валидный 0 при empty_as_zero (digits/kind)."""
     p = subprocess.run(["psql", DSN, "-tA", "-c", sql], capture_output=True, text=True)
     if p.returncode:
         sys.stderr.write("psql: %s\n" % ((p.stderr or p.stdout or "").strip()[:200]))
-    return (p.stdout or "").strip()
+    out = (p.stdout or "").strip()
+    if not out and empty_as_zero:
+        return "0"
+    return out
 
 
 def ask(q, decision_id=None, user=None):
@@ -264,16 +268,20 @@ def ask_with_clarify_follow(question, branch_needle=None, max_steps=6, user=None
     return out0, out
 
 
-def kind_expected_for_kind_mode(sql, want):
+def kind_expected_for_kind_mode(sql, want, question=""):
     """Выводим ожидаемый d.kind для режима kind из SQL-эталона.
 
     В v2 у режима kind SQL часто возвращает 0, а точный d.kind определяется
     типом вопроса: период/счёт vs наличие складских остатков.
+    Диагностика нуля («почему… сбой?») — answer/no_data, не figures ([замер 21.08]).
     """
     if not sql:
         return "no_data"  # legacy
     w = parse_float_or_none(want)
     is_zero = (w == 0.0)
+    ql = (question or "").lower()
+    if is_zero and any(x in ql for x in ("почему", "сбой", "ошибк", "баг")):
+        return "diagnostic_zero"
     if is_zero:
         # по okna-live: период с нулём отдаёт figures (сравните с no_data на складе)
         if "accumulationregister_реализациятмц" in sql or "doc_date" in sql:
@@ -321,9 +329,15 @@ def score_digits(want, out):
     return False, "число не сошлось", "want=%s got=%s" % (want_key, ",".join(sorted(got))[:120])
 
 
-def score_kind(sql, want, out):
-    expected = kind_expected_for_kind_mode(sql, want)
+def score_kind(sql, want, out, question=""):
+    expected = kind_expected_for_kind_mode(sql, want, question=question)
     got_kind = (out or {}).get("kind") or ""
+    if expected == "diagnostic_zero":
+        if got_kind in ("answer", "no_data"):
+            if got_kind == "no_data" and not kind_row_ok(out):
+                return False, "число/итоги в no_data", "text has totals"
+            return True, "", "ok"
+        return False, "kind не тот", "want kind=answer|no_data got kind=%s" % (got_kind or "—")
     if got_kind == "clarify" and expected != "clarify":
         return False, "лишний clarify", "want kind=%s got kind=clarify" % expected
     if got_kind != expected:
@@ -484,7 +498,8 @@ def main():
         q = row["q"]
         mode = row["mode"]
         if row.get("sql"):
-            want = truth(row["sql"])
+            # digits/kind: пустой SUM = 0 продаж (валидный эталон), не blind
+            want = truth(row["sql"], empty_as_zero=(mode in ("digits", "kind")))
             if not want:
                 blind.append(q)
         else:
@@ -538,7 +553,7 @@ def main():
             if mode == "digits":
                 ok, defect, fact = score_digits(want, out0)
             elif mode == "kind":
-                ok, defect, fact = score_kind(sql, want, out0)
+                ok, defect, fact = score_kind(sql, want, out0, question=q)
             elif mode == "clarify":
                 ok, defect, fact = score_clarify(want, out0)
             elif mode == "name":

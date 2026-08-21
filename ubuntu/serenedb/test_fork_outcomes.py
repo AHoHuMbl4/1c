@@ -147,6 +147,17 @@ t("B: options на класс (по одному src-представителю)
   len(bres["options"]) == 2
   and all(o.get("src") and o.get("label") for o in bres["options"]))
 
+# §2 B / аудит §6: обе пары в основном тексте (не меню clarify); память только по нажатию
+t("B §2: kind=figures, не clarify-меню",
+  bres.get("kind") == "figures"
+  and "100" in (bres.get("text") or "")
+  and "200" in (bres.get("text") or "")
+  and "\n" in (bres.get("text") or ""))
+t("B §2: люк options есть, memory_eligible=false (только нажатие)",
+  len(bres.get("options") or []) >= 2
+  and bres.get("memory_eligible") is False
+  and bres.get("source_fixed") is False)
+
 # ── A: без метки источника ────────────────────────────────────────────────────
 out, pay = A.resolve_fork_outcome(cls1, rows1, "сумма")
 ares = A.fork_outcome_a("сколько?", pay["class"], {})
