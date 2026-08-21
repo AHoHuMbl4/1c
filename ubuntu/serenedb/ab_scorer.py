@@ -208,6 +208,25 @@ def want_number_digits(want):
     return re.sub(r"\D", "", str(want))
 
 
+def number_digit_keys(want):
+    """Эквиваленты числа для digits: 1668.00 ≡ 1668.0 ≡ 1668 ([замер 21.08] name)."""
+    keys = set()
+    raw = want_number_digits(want)
+    if raw:
+        keys.add(raw)
+    f = parse_float_or_none(want)
+    if f is None:
+        return keys
+    if abs(f - round(f)) < 1e-9:
+        keys.add(str(int(round(f))))
+    s = ("%f" % f).rstrip("0").rstrip(".")
+    k = want_number_digits(s)
+    if k:
+        keys.add(k)
+    keys.add(want_number_digits("%.2f" % f))
+    return {k for k in keys if k}
+
+
 def parse_float_or_none(s):
     s = str(s).strip() if s is not None else ""
     if not s:
@@ -424,8 +443,7 @@ def score_name(want, out):
             if str(nm).strip().lower() not in str(text).lower():
                 names_missing.append(nm)
         if nn is not None:
-            nn_key = want_number_digits(nn)
-            if nn_key and nn_key not in got_digits:
+            if number_digit_keys(nn) and not (number_digit_keys(nn) & got_digits):
                 nums_missing.append(nn)
 
     if names_missing:

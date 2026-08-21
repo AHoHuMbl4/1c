@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Замки: канон продаж/меры/прайса; полный путь intent→канон→исход (возврат 8–10)."""
+"""Замки: канон продаж/меры/прайса; полный путь + живые кандидаты okna (возврат 8–11)."""
 import os
 import sys
 import time
@@ -287,6 +287,129 @@ t("path4: номенклатура — product-catalog",
   A._is_product_catalog("catalog_номенклатура"))
 t("path4: noise tabpart",
   A._is_price_list_noise("document_установкаценноменклатуры_номенклатура"))
+
+
+# --- возврат 11: живые кандидаты okna (не мок «только helper») ---
+# Как на бою: регистр с июлем + документ передачи (мёртвый 2024) + журналы.
+OKNA_CANDS = [
+    "documentjournal_розничнаяторговля",
+    "documentjournal_оптоваяторговля",
+    "document_передачатмцврозничнуюторговлю_номенклатура",
+    "document_реализациятмц",
+    "accumulationregister_книгапродаж",
+    "accumulationregister_реализациятмц",
+]
+OKNA_JULY_Q = "сколько продали в прошлом месяце?"
+OKNA_SUN_Q = "сколько наторговали в прошедшее воскресенье?"
+OKNA_WHY_Q = "почему в воскресенье продаж ноль, это сбой?"
+
+
+def _fake_okna(q):
+    if "written_by IN" in q:
+        return [("accumulationregister_реализациятмц",),
+                ("accumulationregister_книгапродаж",)]
+    if "parent, written_by" in q:
+        return [
+            ("documentjournal_розничнаяторговля", "", ""),
+            ("documentjournal_оптоваяторговля", "", ""),
+            ("document_передачатмцврозничнуюторговлю_номенклатура", "", ""),
+            ("document_реализациятмц", "", ""),
+            ("accumulationregister_реализациятмц", "", "document_реализациятмц"),
+            ("accumulationregister_книгапродаж", "", "document_реализациятмц"),
+        ]
+    if "LIKE 'accumulationregister_" in q and "written_by" in q:
+        return [("accumulationregister_реализациятмц",),
+                ("accumulationregister_книгапродаж",)]
+    if "SELECT written_by FROM" in q:
+        return [("document_реализациятмц",)]
+    raise RuntimeError(q[:140])
+
+
+A.psql = _fake_okna
+A._measures_by_src = _fake_mbs
+try:
+    # path july: sticky focus на мёртвый документ → refuse → канон регистр
+    _f, _tr, _res, _clr = A.sales_refuse_sticky_focus(
+        "document_передачатмцврозничнуюторговлю_номенклатура",
+        {"ambiguity": "entity", "src": "document_передачатмцврозничнуюторговлю_номенклатура",
+         "from_memory": True},
+        {"src": "document_передачатмцврозничнуюторговлю_номенклатура"},
+        {"want": "sum", "kind": "продажи", "measure": "продали"},
+        OKNA_JULY_Q, OKNA_CANDS)
+    t("okna july: sticky focus снят", _f is None, _f)
+    t("okna july: memory trusted сброшен", _tr is None, _tr)
+    t("okna july: resolved.src снят", not (_res or {}).get("src"), _res)
+    t("okna july: cleared→канон регистр",
+      _clr and _clr.get("стало") == "accumulationregister_реализациятмц", _clr)
+    _canon = A.sales_canon_src(OKNA_CANDS,
+                               {"want": "sum", "measure": "продали"}, OKNA_JULY_Q)
+    t("okna july: sales_canon_src = реализациятмц",
+      _canon == "accumulationregister_реализациятмц", _canon)
+    # после refuse + force: singleton, не документ
+    _p, _a, _d = A.sales_canon_force_pool(
+        _canon,
+        picked=["document_передачатмцврозничнуюторговлю_номенклатура"],
+        arb_pool=list(OKNA_CANDS), doubt=True)
+    t("okna july: pool singleton канон", _a == [_canon] and not _d, (_p, _a, _d))
+
+    # path sunday: lock + stop2-shaped rivals → force снова singleton
+    _sun_lock = A.sales_canon_src(
+        ["documentjournal_розничнаяторговля", "documentjournal_оптоваяторговля"],
+        {"want": "sum", "measure": "торги"}, OKNA_SUN_Q)
+    t("okna sunday: cold→регистр",
+      _sun_lock == "accumulationregister_реализациятмц", _sun_lock)
+    _p2, _a2, _d2 = A.sales_canon_force_pool(
+        _sun_lock,
+        picked=[_sun_lock],
+        arb_pool=[_sun_lock, "document_передачатмцврозничнуюторговлю_номенклатура"],
+        doubt=False)
+    t("okna sunday: после stop2-rivals снова 1",
+      _a2 == [_sun_lock] and len(_a2) == 1, _a2)
+    t("okna sunday: не clarify источников (нет 2+ в pool)",
+      len(_a2) == 1)
+
+    # path why: coverage refuse + sales + lock → singleton (не книга)
+    t("okna why: period_zero_why", A.period_zero_why_question(OKNA_WHY_Q))
+    _why_cands = ["documentjournal_розничнаяторговля",
+                  "accumulationregister_книгапродаж",
+                  "accumulationregister_реализациятмц"]
+    _why_lock = A.sales_canon_src(
+        _why_cands, {"want": "sum", "kind": "продажи"}, OKNA_WHY_Q)
+    t("okna why: lock не книгапродаж",
+      _why_lock == "accumulationregister_реализациятмц", _why_lock)
+    _p3, _a3, _d3 = A.sales_canon_force_pool(
+        _why_lock, [_why_lock],
+        [_why_lock, "accumulationregister_книгапродаж"], True)
+    t("okna why: singleton без книги",
+      _a3 == [_why_lock], _a3)
+
+    # decision_id hatch: явный выбор документа НЕ снимаем
+    _fh, _th, _rh, _ch = A.sales_refuse_sticky_focus(
+        "document_реализациятмц",
+        {"ambiguity": "entity", "src": "document_реализациятмц"},
+        {},
+        {"want": "sum", "measure": "продали"}, OKNA_JULY_Q, OKNA_CANDS)
+    t("okna hatch: decision_id документ сохранён",
+      _fh == "document_реализациятмц" and _ch is None, (_fh, _ch))
+
+    # noncanon detector
+    t("okna noncanon: передача",
+      A.sales_noncanon_focus(
+          "document_передачатмцврозничнуюторговлю_номенклатура"))
+    t("okna noncanon: регистр канон — False",
+      not A.sales_noncanon_focus("accumulationregister_реализациятмц"))
+    t("okna noncanon: книга — True",
+      A.sales_noncanon_focus("accumulationregister_книгапродаж"))
+    t("okna name: money force off",
+      not A.sales_force_money_measure({"want": "list"},
+                                      "что лучше всего продавалось на этой неделе?"))
+    t("okna name: qty = Количество",
+      A.sales_qty_measure(["Всего", "Количество", "Сумма"]) == "Количество")
+    t("okna sum: money force on",
+      A.sales_force_money_measure({"want": "sum"}, "сколько продали вчера?"))
+finally:
+    A.psql = _old
+    A._measures_by_src = _real_mbs
 
 print("PASS", PASS, "FAIL", len(FAIL))
 sys.exit(0 if not FAIL else 1)

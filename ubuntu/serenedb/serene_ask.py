@@ -3458,6 +3458,40 @@ def sales_money_measure(names, alias_by=None):
     return None
 
 
+
+def sales_qty_measure(names, alias_by=None):
+    """Мера лидера продаж — количество, не деньги (эталон name SQL okna)."""
+    names = list(names or [])
+    alias_by = alias_by or {}
+    for n in names:
+        blob = " ".join([str(n)] + list(alias_by.get(n) or [])).lower()
+        if any(h in blob for h in ("колич", "quantity", "qty", "шт", "единиц")):
+            if any(x in blob for x in ("сумм", "всего", "amount", "total", "себестоим")):
+                continue
+            return n
+    return None
+
+
+def sales_force_money_measure(intent, question=""):
+    """Денежный канон меры — только итог «сколько», не ранг «что/какой продавался».
+
+    [замер 21.08] «что лучше всего продавалось» + sales_money_measure→Всего давало
+    чужого лидера (деньги); эталон name — ORDER BY Количество.
+    """
+    if not sales_sum_intent(intent, question):
+        return False
+    q = " ".join(str(question or "").lower().split())
+    if any(w in q for w in (
+            "лучше всего", "хуже всего", "топ продаж", "лидер продаж",
+            "best sell", "top sell", "most sold")):
+        return False
+    if (("что " in q or q.startswith("что") or "какой " in q or "какая " in q
+         or "какие " in q or "which " in q or "what " in q)
+            and any(w in q for w in ("продава", "продало", "продали", "sold", "sales"))):
+        return False
+    return True
+
+
 def sales_canon_force_pool(locked, picked=None, arb_pool=None, doubt=False):
     """После lock канона — один источник, без развилки соперников.
 
@@ -3467,6 +3501,61 @@ def sales_canon_force_pool(locked, picked=None, arb_pool=None, doubt=False):
     if not locked:
         return list(picked or []), list(arb_pool or picked or []), bool(doubt)
     return [locked], [locked], False
+
+
+def sales_ticket_hatch(trusted):
+    """Явный люк документа: decision_id без from_memory (не sticky/память)."""
+    if not isinstance(trusted, dict) or not trusted.get("src"):
+        return False
+    if trusted.get("from_memory"):
+        return False
+    return bool(choice_proven(trusted, "entity") or trusted.get("ambiguity") == "entity")
+
+
+def sales_noncanon_focus(src):
+    """Focus, который для sales_sum не канон (док/журнал/книга/ТЧ передачи)."""
+    s = str(src or "")
+    if not s:
+        return False
+    low = s.lower()
+    if s.startswith("accumulationregister_"):
+        return ("книга" in low or "ндс" in low or "vat" in low)
+    return True
+
+
+def sales_refuse_sticky_focus(focus, trusted, resolved, intent, question, cands):
+    """Снять sticky focus/память/resolved, если это не канон продаж.
+
+    [замер 21.08 okna возврат 11]: «прошлый месяц» → focus_forced=
+    document_передачатмц… (данные до 2024) при живом регистре июль 2.7M.
+    Память/resolved без decision_id не люк §6bis.
+    Возвращает (focus, trusted, resolved, cleared_diag|None).
+    """
+    if not sales_sum_intent(intent, question):
+        return focus, trusted, resolved, None
+    if sales_ticket_hatch(trusted):
+        return focus, trusted, resolved, None
+    pool = list(cands or [])
+    if focus and focus not in pool:
+        pool = [focus] + pool
+    canon = sales_canon_src(pool, intent, question)
+    if not canon:
+        return focus, trusted, resolved, None
+    sticky = focus or (resolved or {}).get("src") or (
+        (trusted or {}).get("src") if isinstance(trusted, dict) else None)
+    if not sticky or sticky == canon:
+        return focus, trusted, resolved, None
+    if not sales_noncanon_focus(sticky):
+        return focus, trusted, resolved, None
+    cleared = {"было": sticky, "стало": canon,
+               "from_memory": bool(isinstance(trusted, dict)
+                                   and trusted.get("from_memory")),
+               "had_resolved": bool((resolved or {}).get("src"))}
+    if isinstance(trusted, dict) and trusted.get("from_memory"):
+        trusted = None
+    if isinstance(resolved, dict) and resolved.get("src"):
+        resolved = {k: v for k, v in resolved.items() if k != "src"}
+    return None, trusted, resolved, cleared
 
 
 def _is_price_list_noise(src):
@@ -8442,7 +8531,8 @@ def format_period_empty_text(question, agg, intent, measure, src, money,
         else:
             parts.append("За выбранный период записей нет")
         if money and measure:
-            parts.append("итог по «%s» — 0" % (mlabel or measure))
+            # 0.00 — ключ digits эталона SUM()::text «0.00» → «000» (AB_PROBE)
+            parts.append("итог по «%s» — 0.00" % (mlabel or measure))
         else:
             parts.append("количество — 0")
         if outside:
@@ -8465,7 +8555,7 @@ def format_period_empty_text(question, agg, intent, measure, src, money,
         else:
             parts.append("No records in the selected period")
         if money and measure:
-            parts.append("total for «%s» is 0" % (mlabel or measure))
+            parts.append("total for «%s» is 0.00" % (mlabel or measure))
         else:
             parts.append("count is 0")
         if outside:
@@ -8501,6 +8591,8 @@ def build_period_empty_answer(question, agg, intent, measure, src, match, preds,
     text = ensure_answer_passport(text, _pass_frag)
     _figs = compose_slot_values(agg, measure=measure, folders=n_folders,
                                 money=money, slot_mode=slot_mode)
+    if money and measure:
+        _figs["sum"] = "0.00"
     if agg.get("count") is not None:
         _figs["count"] = agg["count"]
     _figs.update(pass_fields or {})
@@ -9662,6 +9754,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Параметры подсчёта, названные моделью: сущность, величина, что считать. Объявляются
     # ДО ветвления, чтобы ни один путь не оставил их неопределёнными.
     plan = {}
+    # sales_sum: sticky focus/память на документ ≠ канон — снять до focus_forced
+    # ([замер 21.08] возврат 11: июль 0 на передаче ТМЦ при 2.7M на регистре).
+    focus, trusted, resolved, _sales_clr = sales_refuse_sticky_focus(
+        focus, trusted, resolved, intent, question, cands)
+    if _sales_clr:
+        diag["sales_canon_refused_focus"] = _sales_clr
+        шаг("канон продаж: снят sticky focus", было=_sales_clr["было"],
+            стало=_sales_clr["стало"])
     # ВЫБОР ЧЕЛОВЕКА ПОСЛЕ УТОЧНЕНИЯ важнее догадки: если задан `focus` и такая сущность
     # реально под условиями что-то содержит — берём её и не спрашиваем модель.
     if focus:
@@ -10244,7 +10344,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Стоп 2: без focus/measure_pick ответ не уходит, пока посчитаны уже определённые
     # соперники (семья, writer_pair, лидер словаря другой семьи). Вторая попытка
     # (VETO_HEAD) не отменяется: вместо ответа вслепую соперник входит в круг.
+    # При lock канона стоп2 не наращивает соперников ([замер 21.08] воскресенье
+    # clarify после sales_canon_locked из-за stop2/src_conflict).
     if (picked and stop2_active(focus, measure_pick, no_arbiter, trusted)
+            and not diag.get("sales_canon_locked")
+            and not diag.get("catalog_count_locked")
             and len(arb_pool) < ARBITER_MAX):
         _lead = None
         _ok_s2, _top_s2 = _alias_verdict(picked[0])
@@ -10274,6 +10378,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["arbiter_rivals"] = arb_pool[1:]
             шаг("стоп2 соперники", всего=len(arb_pool),
                 соперники=",".join(_added) or "—")
+    # Повторный singleton: стоп2/doubt могли добавить соперников после первого force.
+    picked, arb_pool, doubt = sales_canon_force_pool(
+        diag.get("sales_canon_locked") or diag.get("catalog_count_locked"),
+        picked, arb_pool, doubt)
 
     def _checked(out):
         """Ответ уходит только если собственное знание базы подтверждает выбор сущности.
@@ -10281,7 +10389,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         Решение владельца 30.07: когда вопросу отвечает несколько РАЗНЫХ объектов —
         всегда переспрашивать, а не выбирать за человека.
         """
-        if not REQUIRE_SUPPORT or guards_skip_for_choice(focus, measure_pick, trusted):
+        if (not REQUIRE_SUPPORT or guards_skip_for_choice(focus, measure_pick, trusted)
+                or diag.get("sales_canon_locked") or diag.get("catalog_count_locked")):
             return out
         w = (out.get("diag") or {}).get("focus")
         if not w or out.get("kind") not in ("answer", "figures"):
@@ -10670,7 +10779,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # пара «регистр ← документ» нашлась (`writer_pair`), соперник в круг попал, а ответ всё
     # равно ушёл по регистру, потому что ответ документа не собрался.
     # Итоговый выбор по-прежнему проверяется — `_checked()` на всех ветках возврата арбитра.
-    if REQUIRE_SUPPORT and picked and not guards_skip_for_choice(focus, measure_pick, trusted) and not no_arbiter:
+    # Канон продаж/прайса уже зафиксировал src — ALIAS_VETO не должен уводить в
+    # clarify соперников ([замер 21.08] возврат 12: воскресенье/прайс →
+    # unsupported_pick на каноне при живом ответе на проде).
+    if (REQUIRE_SUPPORT and picked
+            and not guards_skip_for_choice(focus, measure_pick, trusted)
+            and not no_arbiter
+            and not diag.get("sales_canon_locked")
+            and not diag.get("catalog_count_locked")):
         cand = picked[0]
         if cand != top_by_question:
             ok, top = _alias_verdict(cand)
@@ -10859,15 +10975,23 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             measure, measure_alts = measure_pick, []
         else:
             diag["measure_pick_unresolved"] = measure_pick
-    # Канон «продали»: мера = денежная сумма регистра; clarify по мере недопустим.
+    # Канон «продали»: итог «сколько» → деньги; ранг «что продавалось» → Количество.
     if (sales_sum_intent(intent, question) and not measure_pick
             and (diag.get("sales_canon_locked") or src)):
-        _sm = sales_money_measure(measures_of(src), measure_aliases_of(src))
+        _names = measures_of(src)
+        _als = measure_aliases_of(src)
+        if sales_force_money_measure(intent, question):
+            _sm = sales_money_measure(_names, _als)
+            _how = "sales_canon"
+        else:
+            _sm = sales_qty_measure(_names, _als)
+            _how = "sales_qty_canon"
         if _sm:
             if measure != _sm or measure_alts:
                 diag["sales_measure_canon"] = {
-                    "было": measure, "alts": list(measure_alts or []), "стало": _sm}
-            measure, measure_alts, how = _sm, [], "sales_canon"
+                    "было": measure, "alts": list(measure_alts or []), "стало": _sm,
+                    "how": _how}
+            measure, measure_alts, how = _sm, [], _how
     diag["measure"] = measure
     шаг("величина выбрана", величина=(measure or "—"),
         подходящих=len(measure_alts or []))
@@ -11569,6 +11693,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             sys.stderr.write("ask ASKBACK GATE: числа вне данных: %s\n" % bad_ask[:4])
             diag["ask_back_rejected"] = bad_ask[:4]
             ask_back = ""
+    # Канон уже ответил числом — встречный вопрос модели («какой месяц?») превращает
+    # kind=answer в clarify без options ([замер 21.08] июль 2.7M + ask_back → scorer FAIL).
+    if ask_back and (diag.get("sales_canon_locked") or diag.get("catalog_count_locked")):
+        diag["ask_back_dropped"] = "canon_locked"
+        ask_back = ""
     if ask_back:
         diag["asked_back"] = True
         # kind=clarify — паспорт счёта не клеить (счёта для человека как ответа не было).
@@ -12020,6 +12149,10 @@ def _try_memory_apply(question, out, user, focus, measure_pick, context, prior,
     mmeas = br.get("measure") or None
     if mmeas == "":
         mmeas = None
+    # sales_sum: память на документ/журнал/книгу не применяем — канон регистр
+    # ([замер 21.08] память → передача ТМЦ → июль 0).
+    if mfocus and sales_sum_intent({}, question) and sales_noncanon_focus(mfocus):
+        return out, trusted
     mem_trusted = ACM.memory_trusted(br)
     out = _answer_checked_core(
         question, focus=mfocus, measure_pick=mmeas or measure_pick,

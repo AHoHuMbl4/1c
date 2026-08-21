@@ -9,6 +9,11 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
 
+🔴 **возврат 12 — clarify vs прод, проба 8/8 с /opt `[21.08]`**: после lock
+канона ALIAS_VETO/`ask_back` давали clarify при верном числе; qty-канон для
+ранга. Кандидат только из `/opt/1c-mcp-reports`. Live `:8092` **8/8**.
+md5 ask `c560aebe`. Выкат `:8091` — оркестратор.
+
 🔴 **check-golden = probe+HEAD, не smoke ut_test `[21.08]`**: владелец снял
 smoke как блокер выката (§3.90). Выкат: `.probe-okna-last-run` (`okna probe`
 + `0err/N`) **и** md5 SRC_DIRS = HEAD. Канон `check-golden.sh.new`; установка

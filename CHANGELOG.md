@@ -1,3 +1,20 @@
+## 21.08: возврат 12 — alias/ask_back/qty + проба 8/8 с /opt [замер]
+
+[замер] кандидат на okna `:8092` из `/opt/1c-mcp-reports` (не `/tmp`): **8/8**,
+0 сбоев. md5 ask `c560aebe`, scorer `b08790ce`, test **60/60**.
+
+[код] почему clarify при живом числе на проде:
+1. после `sales_canon`/`catalog_count` lock — `ALIAS_VETO` → `unsupported_pick`
+   (воскресенье/прайс); skip veto при lock;
+2. июль: число 2 767 450.98 + `ask_back` «какой месяц?» → kind=clarify без options;
+   `ask_back_dropped=canon_locked`;
+3. `period_empty` money → текст/figures `0.00` (digits эталона);
+4. ранг «что продавалось» — `sales_qty_measure` (Количество), не `Всего`;
+5. `ab_scorer.number_digit_keys`: 1668.00 ≡ 1668.0 ≡ 1668.
+
+Процедура пробы — `REGRESSION_BASE1` §живая проба (`cp` в `/opt`). Выкат `:8091` —
+оркестратор. Отметка `.probe-okna-last-run` = `okna probe live 0err/8`.
+
 ## 21.08: check-golden — probe+HEAD, не smoke ut_test [код]
 
 [код] `check-golden.sh` перед выкатом: свежая `.probe-okna-last-run`

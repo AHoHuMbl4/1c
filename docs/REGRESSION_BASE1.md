@@ -1141,6 +1141,8 @@ Smoke ut_test больше не блокер (решение владельца 
 
 Процедура прогона кандидата на okna (не бой `:8091`):
 
+🔴 Кандидат копировать в `/opt/1c-mcp-reports` под отдельным именем и запускать оттуда. Не оставлять только в `/tmp`: `sys.path[0]` подхватывает старый `ask_choice_mem.py` из каталога скрипта.
+
 ```bash
 # с дева (ключ deploy):
 scp -o BatchMode=yes -o IdentitiesOnly=yes -i ~/.ssh/id_ed25519_deploy \
@@ -1176,14 +1178,15 @@ load_env /etc/1c-mcp-reports.env /etc/1c-embed.env /etc/1c-serene-ask.env \
          /etc/1c-serene-ask-postgres.env
 export ASK_LISTEN_PORT=8092
 export PYTHONPATH=/opt/1c-mcp-reports:${PYTHONPATH:-}
+cp -a /tmp/serene_ask_probe.py /opt/1c-mcp-reports/serene_ask_probe.py
 pkill -f 'serene_ask_probe.py' 2>/dev/null || true
-/opt/openclaw-mcp/venv/bin/python /tmp/serene_ask_probe.py >/tmp/serene_ask_probe.log 2>&1 &
+cd /opt/1c-mcp-reports
+/opt/openclaw-mcp/venv/bin/python /opt/1c-mcp-reports/serene_ask_probe.py >/tmp/serene_ask_probe.log 2>&1 &
 echo $! >/tmp/serene_ask_probe.pid
 for i in $(seq 1 30); do
   curl -sf -m 2 http://127.0.0.1:8092/health >/dev/null && break
   sleep 1
 done
-cd /tmp
 AB_PROBE=okna ASK_URL=http://127.0.0.1:8092/ask AB_MARK_DIR=/srv/1c \
   /opt/openclaw-mcp/venv/bin/python /tmp/ab_scorer.py
 rc=$?
