@@ -7457,8 +7457,12 @@ def _coverage_of(src_table):
         pass                                 # живого счёта нет — остаётся перепись
     live_vit = _vitrina_objects(src_table)
     layers = []
+    # в_1С часто = строки разворота, корпус = объекты. [замер 21.08 okna]
+    # document_реализациятмц: в_1С=71601 vs объектов=8297 → ложный incomplete.
     if in_1c is not None and in_1c > 0:
-        layers.append((in_1c, "декларация 1С"))
+        obj_ref = obj_vit or live_vit
+        if obj_ref is None or in_1c <= obj_ref:
+            layers.append((in_1c, "декларация 1С"))
     if obj_vit:
         layers.append((obj_vit, "витрина (перепись)"))
     if live_vit is not None:

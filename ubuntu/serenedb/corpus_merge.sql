@@ -77,30 +77,47 @@ FROM (SELECT src_table, row_key FROM tmp3_corpus GROUP BY 1, 2 HAVING count(*) >
 -- причине сменилось 64 107 ключей — защита остановила бы законный перенос, и корпус
 -- замер бы навсегда, а такт падал бы бесконечно.
 --
--- Отпечаток отсекается по СВОЕМУ ЖЕ формату (`sha1` — ровно 40 шестнадцатеричных знаков),
--- а не по первому `#`: составной ключ склеен через `|`, и в данных 1С `#` встречается.
+-- Отпечаток отсекается по СВОЕМУ ЖЕ формату. Два вида суффикса после `#`:
+--   1) `sha1` — ровно 40 шестнадцатеричных знаков (ключ регистра без LineNumber);
+--   2) порядковый номер (`row_number`) — цифры: когда fold ещё не схлопывал
+--      разворот шапки, `QUALIFY` дописывал `#1`, `#2`… к одному Ref_Key.
+-- [замер 21.08 okna] `document_установкаценноменклатуры`: корпус 321 757 ключей
+-- `guid#N`, стейдж 439 plain GUID; сторож видел «удаление 322 119 / 1 550 088»
+-- (20 %) и крутил такт в fail-loop с 20:01 20.08. `split_part(...,'#',1)` —
+-- тот же объект; DELETE ниже по exact key всё равно снимет лишние `#N`.
+-- Составной ключ склеен через `|`, и в данных 1С `#` встречается — поэтому
+-- режем только ХВОСТ после последнего осмысленного совпадения со стейджем,
+-- а не «всё до первого `#`» вслепую.
 SELECT CASE WHEN (SELECT count(*) FROM search_corpus) > 0
              AND уйдёт::DOUBLE / (SELECT count(*) FROM search_corpus) > 0.1
        THEN error('corpus_merge: удаление снесло бы ' || уйдёт || ' объектов из '
                   || (SELECT count(*) FROM search_corpus) || ' — остановлено') END
 FROM (SELECT count(*) AS уйдёт FROM search_corpus c
       WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
-        -- Два РАЗДЕЛЬНЫХ анти-соединения, а не одно `IN (ключ, обрезанный ключ)`:
+        -- РАЗДЕЛЬНЫЕ анти-соединения, а не одно `IN (ключ, обрезанный ключ)`:
         -- список внутри `IN` лишает движок равенства, и он уходит в перебор. [замер 30.07]
         -- одним `IN` запрос не уложился в две минуты на 623 565 строках; двумя — 0,2 с.
-        -- Второе проверяется только у тех строк, что не нашлись по своему ключу, поэтому
-        -- регулярное выражение считается для единиц, а не для всего корпуса.
         AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
                         WHERE t.src_table = c.src_table AND t.row_key = c.row_key)
         AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
                         WHERE t.src_table = c.src_table
                           AND t.row_key = regexp_replace(c.row_key, '#[0-9a-f]{40}$', ''))
+        -- Тот же объект под ключом `guid#<row_number>` (fold-догон шапки).
+        AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                        WHERE t.src_table = c.src_table
+                          AND t.row_key = split_part(c.row_key, '#', 1)
+                          AND position('#' in c.row_key) > 0)
         -- Смена формы ключа (в ключ регистра дописали LineNumber) — не потеря
         -- объекта: GUID регистратора/ссылки — первый кусок ключа, склеенного `|`.
         AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
                         WHERE t.src_table = c.src_table
                           AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '|', 1)
-                          AND split_part(c.row_key, '|', 1) <> ''));
+                          AND split_part(c.row_key, '|', 1) <> '')
+        AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                        WHERE t.src_table = c.src_table
+                          AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '#', 1)
+                          AND position('#' in c.row_key) > 0
+                          AND split_part(c.row_key, '#', 1) <> ''));
 
 -- Сужение величин — не ошибка, но и не пустяк: строка теряет числа, оставаясь на месте,
 -- и по журналу это неотличимо от «их там и не было». Считаем ДО записи, пока прежнее

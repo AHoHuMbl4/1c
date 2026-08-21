@@ -67,6 +67,8 @@ msrc = os.path.join(os.path.dirname(os.path.abspath(__file__)), "corpus_merge.sq
 mtxt = open(msrc, encoding="utf-8").read()
 t("merge сторож: split_part первого куска ключа",
   "split_part(t.row_key, '|', 1) = split_part(c.row_key, '|', 1)" in mtxt)
+t("merge сторож: guid#N = тот же объект",
+  "t.row_key = split_part(c.row_key, '#', 1)" in mtxt)
 
 print("PASS %d FAIL %d" % (PASS, len(FAIL)))
 sys.exit(1 if FAIL else 0)
