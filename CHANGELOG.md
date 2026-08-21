@@ -1,3 +1,17 @@
+## 21.08: ai_embed 404 HTML — устаревший base_url секрета [замер]
+
+[замер] klient-1: curl на EMBED_HOST → 200/0,2с; ai_embed → 404 HTML
+(minInterval) ~21–42с. В duckdb_secrets() emb_postgres_* ещё на старом
+хосте эмбеддера, env уже на новом. UA не при чём (curl с UA движка тоже 200).
+Double-path: base_url с /v1/embeddings → JSON 404 Not Found за 0,4с.
+
+[код] embed_secrets_base_url_check в box_tune.sh; зов из
+embed_check/build/embed_all. Замок 5/5; test_box_tune 86/86. На klient-1
+секреты пересозданы; ai_embed → dim 1024 за 0,42с. После клина запросов —
+restart serenedb (таймер pipeline подхватил). Выкат сторожа — оркестратор.
+
+Доки: sql/functions/ai#providers; secrets_manager#temporary-secrets.
+
 ## 21.08: возврат 12 — alias/ask_back/qty + проба 8/8 с /opt [замер]
 
 [замер] кандидат на okna `:8092` из `/opt/1c-mcp-reports` (не `/tmp`): **8/8**,
