@@ -7,7 +7,7 @@
 #
 # Что делает:
 #   1. ставит все гейты из work/hooks/ в .claude/hooks/ (755);
-#   1-тер. канон lib-hooks/test-hooks из *.new + check-live-probe;
+#   1-тер. канон lib-hooks/test-hooks/check-golden из *.new + check-live-probe;
 #   2. подключает check-gates / prepare-diff / check-live-probe в settings.json;
 #   3. включает core.hooksPath=.githooks; Kimi; Cursor (+ check-live-probe);
 #   4. прогоняет пробу и печатает итог.
@@ -24,9 +24,9 @@ for f in "$SRC"/*.sh; do
   install -m 755 "$f" "$DST/$b" && echo "  поставлен $b"
 done
 
-echo "== 1-тер. канон lib-hooks/test-hooks + check-live-probe =="
+echo "== 1-тер. канон lib-hooks/test-hooks/check-golden + check-live-probe =="
 # Файлы root:root в work/hooks сессия не переписывает; актуальный канон — *.new.
-for pair in "lib-hooks.sh:644" "test-hooks.sh:755"; do
+for pair in "lib-hooks.sh:644" "test-hooks.sh:755" "check-golden.sh:755"; do
   f="${pair%%:*}"; mode="${pair##*:}"
   if [ -f "$SRC/$f.new" ]; then
     install -m "$mode" -o root -g root "$SRC/$f.new" "$SRC/$f"

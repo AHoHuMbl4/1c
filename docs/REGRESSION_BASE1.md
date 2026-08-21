@@ -1,3 +1,12 @@
+## Замер 21.08 — check-golden: выкат = probe+HEAD (не smoke ut_test)
+
+Владелец снял smoke ut_test как блокер выката (HOW_NOT_TO §3.90). Гейт
+`check-golden` теперь: (1) валидная `.probe-okna-last-run` (`okna probe …`
+и `0err/N` от `AB_PROBE=okna`); (2) md5 `*.py|js|mjs` в SRC_DIRS = содержимому
+`HEAD` (неотслеживаемые — грязь). Smoke / `.golden-last-run` выкат не открывает.
+Вторичный люк: эмбеддер мёртв + `Золотой: невозможен` в сообщении HEAD.
+Канон: `work/hooks/check-golden.sh.new`; `bash work/hooks/install-gates.sh`.
+
 ## Замер 21.08 — живая проба AB_PROBE=okna против боя :8091
 
 Прибор `AB_PROBE=okna` + `ab-probe-okna.tsv` (8 вопросов) против боевого
@@ -6,7 +15,8 @@
 поставлена. FAIL: прошлый месяц (число ≠ 2 767 450.98); воскресенье → clarify;
 «почему ноль» → clarify; name-лидер недели. Гейт `check-live-probe` в git;
 установка: `bash work/hooks/install-gates.sh`. Процедура кандидата — ниже
-§«Живая проба okna».
+§«Живая проба okna». Та же отметка открывает **выкат** через `check-golden`
+(probe+HEAD), не smoke ut_test.
 
 ## Замер 19.08 — золотой набор okna + smoke-гейт ut_test
 
@@ -1102,17 +1112,18 @@ SERENEDB_DSN_RO=<...dbname=postgres> PGPASSWORD=<...> \
 могут быть зелёными, а бот при этом отвечать хуже: сборка не знает, что такое «верный
 ответ».
 
-### Золотой набор: два уровня (решение владельца 18.08)
+### Золотой набор / выкат (обновление 21.08, HOW_NOT_TO §3.90)
 
-| Когда | Контур | Набор | Критерий | Команда | Отметка |
+| Когда | Контур | Набор | Критерий | Команда | Отметка / гейт |
 |---|---|---|---|---|---|
-| **ДО выката** | ut_test `:8099` | `ab-gold.tsv` (8 вопросов) | **0 сбоев обращения**; порог верных **не ставится** — ловит «сервис не отвечает» | `AB_GOLD_MODE=smoke AB_BASE=ut_test ASK_URL=http://127.0.0.1:8099/ask python3 ubuntu/serenedb/ab_scorer.py` | `.claude/.golden-last-run` → строка `smoke ut_test live 0err/8` |
-| **ПОСЛЕ выката** | okna `:8091` | `ab-gold-okna.tsv` (10+ вопросов) | **числа** эталона в text+claims; **склад/петли** — `kind` | на okna: `AB_CONTOUR=okna python3 ubuntu/serenedb/ab_scorer.py` | `.claude/.golden-okna-last-run` |
+| **ДО выката** | okna-кандидат (проба) | `ab-probe-okna.tsv` | **0 сбоев** + дерево SRC_DIRS = HEAD (md5) | `AB_PROBE=okna … ab_scorer.py` | `.probe-okna-last-run`; гейт `check-golden` |
+| **ПОСЛЕ выката** | okna `:8091` | `ab-gold-okna.tsv` | **числа** + **kind** склад/петли | `AB_CONTOUR=okna python3 ubuntu/serenedb/ab_scorer.py` | `.golden-okna-last-run` |
+| фильтр брака (не блокер выката) | ut_test | `ab-gold.tsv` / smoke | 0 сбоев обращения | `AB_GOLD_MODE=smoke AB_BASE=ut_test …` | `.golden-last-run` — **выкат не открывает** |
 
-Гейт `check-golden` перед выкатом смотрит **только smoke-отметку** (префикс `smoke`, суффикс
-`0err/N`). `AB_BASE=ut_test` без `AB_GOLD_MODE=smoke` — прежний A/B-прогон с порогом
-«хоть один верный». DSN okna: `/etc/1c-serene-ask-postgres.env`, `PGPASSWORD` —
-`/etc/1c-mcp-reports.env`, токен — `/etc/1c-serene-ask.env`.
+Гейт `check-golden` перед выкатом: валидная проба okna **и** md5 исходников = HEAD.
+Smoke ut_test больше не блокер (решение владельца 21.08). DSN okna:
+`/etc/1c-serene-ask-postgres.env`, `PGPASSWORD` — `/etc/1c-mcp-reports.env`,
+токен — `/etc/1c-serene-ask.env`.
 
 ### Живая проба okna ДО коммита `serene_ask.py` (решение владельца 21.08)
 

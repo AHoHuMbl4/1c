@@ -1,3 +1,16 @@
+## 21.08: check-golden — probe+HEAD, не smoke ut_test [код]
+
+[код] `check-golden.sh` перед выкатом: свежая `.probe-okna-last-run`
+(`okna probe … 0err/N`) **и** md5 исходников SRC_DIRS = `git show HEAD`.
+Smoke ut_test / `.golden-last-run` выкат больше не открывает (HOW_NOT_TO §3.90).
+Вторичный люк сохранён: эмбеддер мёртв + строка `Золотой: невозможен` в HEAD.
+Канон — `work/hooks/check-golden.sh.new`; установка: `bash work/hooks/install-gates.sh`.
+Пробы в `test-hooks.sh.new`. См. `docs/REGRESSION_BASE1.md` §живая проба / golden.
+
+[замер] оффлайн-секция check-golden в test-hooks: deny без отметки; deny на
+грязном дереве при валидной пробе; pass при дерево=HEAD + probe; non-deploy молчит;
+люк эмбеддера — как прежде.
+
 ## 21.08: гейт живой пробы okna — AB_PROBE + check-live-probe [код]
 
 [код] `AB_PROBE=okna` в `ab_scorer.py` + набор `ab-probe-okna.tsv` (~8):
