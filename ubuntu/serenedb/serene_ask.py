@@ -3273,6 +3273,149 @@ def prefer_entity_for_rank(cands, intent, question, plan=None):
     return out
 
 
+def sales_sum_intent(intent, question=""):
+    """Вопрос про сумму/оборот продаж («продали», «наторговали») — не остаток/прайс."""
+    intent = intent or {}
+    q = " ".join(str(question or "").lower().split())
+    want = (intent.get("want") or "").strip().lower()
+    kind = (intent.get("kind") or "").strip().lower()
+    measure = (intent.get("measure") or "").strip().lower()
+    if question_asks_stock_balance(question):
+        return False
+    if any(w in q for w in ("прайс", "price list", "в прайсе")):
+        return False
+    sale_q = any(w in q for w in (
+        "продали", "продал", "продаж", "наторговали", "наторгова",
+        "выручк", "оборот", "sold", "sales", "revenue"))
+    sale_k = any(w in kind for w in ("продаж", "торг", "выруч", "sale", "revenue"))
+    sale_m = any(w in measure for w in (
+        "продали", "продал", "продаж", "наторговали", "торги", "sold", "sales"))
+    compare_period = (
+        any(w in q for w in ("лучше", "хуже", "больше чем", "меньше чем",
+                             "больше, чем", "меньше, чем"))
+        and any(w in q for w in ("недел", "месяц", "квартал", "week", "month"))
+        and not any(w in q for w in (
+            "сотрудник", "табель", "зарплат", "фота", "отработ", "employee", "payroll"))
+    )
+    if not (sale_q or sale_k or sale_m or compare_period):
+        return False
+    if want in ("sum", "count", "list", ""):
+        return True
+    return want not in ("avg",)
+
+
+def _sales_register_score(src, measures):
+    """Движения с количеством+итого выше книги НДС/VAT по тому же регистратору."""
+    s = (src or "").lower()
+    ms = {(m or "").lower() for m in (measures or [])}
+    score = 0
+    if any("количество" in m or m in ("quantity", "qty", "count") for m in ms):
+        score += 10
+    if any(m in ("всего", "сумма", "total", "amount") or "всего" in m for m in ms):
+        score += 3
+    if any("ндс" in m or "vat" in m for m in ms) and score < 10:
+        score -= 4
+    if "книга" in s or "ндс" in s or "vat" in s:
+        score -= 8
+    if "реализац" in s or "продаж" in s or "sale" in s:
+        score += 2
+    return score
+
+
+def prefer_entity_for_sales(cands, intent, question):
+    """Канон «продали»: регистр движений по written_by; документ — люк (план §2/§7).
+
+    Gold/okna и A2: эталон — accumulationregister_* регистратора продажи.
+    Документ↔регистр при расхождении атомов (внутридневная доставка) не развилка:
+    отвечаем регистром. Документ остаётся в пуле только если регистра нет.
+    Среди регистров одного регистратора — с Количество+Всего, не книга НДС.
+    """
+    if not sales_sum_intent(intent, question):
+        return cands
+    cands = list(cands or [])
+    if not cands:
+        return cands
+    try:
+        rs = psql(
+            "SELECT src_table, parent, written_by FROM %s WHERE src_table IN (%s)"
+            % (TABLES, ", ".join(lit(c) for c in cands)))
+    except RuntimeError:
+        return cands
+    parent_by, writer_by = {}, {}
+    for r in rs or []:
+        if not r or not r[0]:
+            continue
+        parent_by[r[0]] = (r[1] if len(r) > 1 else "") or ""
+        writer_by[r[0]] = (r[2] if len(r) > 2 else "") or ""
+    docs = set()
+    for c in cands:
+        if str(c).startswith("document_"):
+            docs.add(c)
+        p = parent_by.get(c) or ""
+        if p.startswith("document_"):
+            docs.add(p)
+        w = writer_by.get(c) or ""
+        if w.startswith("document_"):
+            docs.add(w)
+    lifted = []
+    if docs:
+        try:
+            for r in psql(
+                    "SELECT src_table FROM %s WHERE src_table LIKE "
+                    "'accumulationregister_%%' AND written_by IN (%s)"
+                    % (TABLES, ", ".join(lit(d) for d in docs))) or []:
+                if r and r[0] and r[0] not in lifted:
+                    lifted.append(r[0])
+        except RuntimeError:
+            pass
+    # Холодный подъём: BM25 увёл на журналы/кассу — канон продаж всё равно из written_by.
+    if not lifted:
+        try:
+            cold = [r[0] for r in psql(
+                "SELECT src_table FROM %s WHERE src_table LIKE "
+                "'accumulationregister_%%' AND coalesce(written_by,'') "
+                "LIKE 'document_%%'" % TABLES) or [] if r and r[0]]
+        except RuntimeError:
+            cold = []
+        if cold:
+            try:
+                m_cold = _measures_by_src(cold)
+            except Exception:  # noqa: BLE001
+                m_cold = {}
+            cold.sort(key=lambda s: (-_sales_register_score(s, m_cold.get(s) or []), s))
+            if _sales_register_score(cold[0], m_cold.get(cold[0]) or []) >= 8:
+                lifted = [cold[0]]
+                try:
+                    wb = psql("SELECT written_by FROM %s WHERE src_table=%s LIMIT 1"
+                              % (TABLES, lit(cold[0])))
+                    if wb and wb[0] and wb[0][0]:
+                        docs = set(docs) | {wb[0][0]}
+                except RuntimeError:
+                    pass
+    if not lifted:
+        return cands
+    mbs = {}
+    try:
+        mbs = _measures_by_src(lifted + [c for c in cands if c not in lifted])
+    except Exception:  # noqa: BLE001
+        mbs = {}
+    lifted.sort(key=lambda s: (-_sales_register_score(s, mbs.get(s) or []), s))
+    canon = lifted[0]
+    drop_docs = set(docs)
+    demote_regs = [r for r in lifted[1:]]
+    out, seen = [], set()
+    for c in [canon] + [x for x in cands if x not in drop_docs and x not in demote_regs
+                        and x != canon] + demote_regs:
+        if c and c not in seen:
+            if c in drop_docs:
+                continue
+            seen.add(c)
+            out.append(c)
+    if canon not in seen:
+        out.insert(0, canon)
+    return out or cands
+
+
 def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
     """Билет оси: grain=group сохраняется; form=rank при рейтинговом вопросе."""
     rankish = rank_intent_from(intent, plan, question) or (
@@ -3347,11 +3490,60 @@ def question_asks_stock_balance(question):
     return any(m in q for m in markers)
 
 
-def stock_balance_no_data(question, diag, cut, t0):
-    """Нет регистров остатков в корпусе — честный no_data (план §2, п. 21)."""
+def balance_registers_with_goods(regs=None):
+    """Остаточные регистры, у которых в корпусе есть ось ТМЦ (склады/товары).
+
+    `balance_registers` из $metadata включает RecordType-регистры без товарной оси
+    (зарплата, ОС, номера БСО) — их наличие не значит «есть остатки на складе».
+    """
+    regs = regs if regs is not None else balance_registers()
+    if not regs:
+        return frozenset()
+    try:
+        rows = psql(
+            "SELECT DISTINCT src_table FROM %s WHERE src_table IN (%s) "
+            "AND map_extract_value(refs_map, 'ТМЦ') IS NOT NULL"
+            % (CORPUS, ", ".join(lit(r) for r in regs)))
+    except RuntimeError:
+        return frozenset()
+    return frozenset(r[0] for r in (rows or []) if r and r[0])
+
+
+def stock_asks_named_product(question, intent=None):
+    """Именованный товар в вопросе про остаток (не общее «товара на складе»)."""
+    q = " ".join(str(question or "").lower().split())
+    if not q or not question_asks_stock_balance(question):
+        return False
+    intent = intent or {}
+    measure = (intent.get("measure") or "").strip().lower()
+    generic = ("товар", "товара", "товаров", "номенклатур", "остаток", "остатка",
+               "остатки", "остатков", "product", "item", "goods", "stock", "inventory")
+    if measure and measure not in generic and not any(g in measure for g in (
+            "остат", "склад", "stock", "invent")):
+        return True
+    stripped = q
+    for m in ("сколько", "осталось", "остаток", "остатка", "остатки",
+              "на складе", "на склад", "in stock", "on warehouse", "inventory",
+              "у нас", "есть", "всего"):
+        stripped = stripped.replace(m, " ")
+    tokens = [t for t in stripped.split() if len(t) >= 3 and t not in generic]
+    return bool(tokens)
+
+
+def stock_balance_no_data(question, diag, cut, t0, intent=None):
+    """Нет товарных остатков в корпусе — честный no_data (план §2, п. 21).
+
+    Пустой `balance_registers` → no_data. Непустой без оси ТМЦ + именованный товар
+    → no_data. Общий «сколько товара на складе?» — не глушим (clarify).
+    """
     if not question_asks_stock_balance(question):
         return None
-    if balance_registers():
+    regs = balance_registers()
+    goods = balance_registers_with_goods(regs)
+    if goods:
+        return None
+    named = stock_asks_named_product(question, intent)
+    if regs and not named:
         return None
     cyr = any("\u0400" <= c <= "\u04ff" for c in (question or ""))
     if cyr:
@@ -3362,9 +3554,14 @@ def stock_balance_no_data(question, diag, cut, t0):
                 "I can show top sold or transferred items instead.")
     diag = dict(diag or {})
     diag["stock_balance_gap"] = True
+    if named and regs:
+        diag["stock_balance_named_absent"] = True
+    reason = ("нет товарных остатков" if named and regs
+              else "нет регистров остатков")
     return {"partial": cut or None, "kind": "no_data", "text": text, "sources": [],
             "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                               reason="нет регистров остатков")}
+                               reason=reason)}
+
 
 
 def _dedupe_fork_classes(ordered):
@@ -8670,7 +8867,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
             for a in разбор["assumed"])
 
-    _stock_gap = stock_balance_no_data(question, diag, cut, t0)
+    _stock_gap = stock_balance_no_data(question, diag, cut, t0, intent=intent)
     if _stock_gap:
         return _stock_gap
 
@@ -8889,6 +9086,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # кандидатов. Порядок ниже всё равно пересобирается по смыслу и реранкером.
     cands = list(by) + [t for t in extra if t not in by]
     cands = prefer_entity_for_rank(cands, intent, question)
+    cands = prefer_entity_for_sales(cands, intent, question)
     шаг("кандидаты собраны", всего=len(cands))
     # 🔴 «НА ЧТО НЕ ОТВЕЧАЕТ» — ВТОРАЯ ПОЛОВИНА ЗНАНИЯ УСТАНОВКИ, И ОНА НАКОНЕЦ ЧИТАЕТСЯ.
     # Установочный агент пишет про каждую сущность две половины: «на что отвечает»
@@ -9282,8 +9480,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # арбитра ×4), не вся база: иначе сотни несвязанных src с живым счётом
         # дают C с сотнями вариантов и секунды на SQL. Полный перечень cands —
         # по-прежнему источник отбора; детектор судит неоднозначность в голове.
-        _fork_pool = prefer_entity_for_rank(
-            list(cands[:max(ARBITER_MAX * 4, 16)]), intent, question)
+        _fork_pool = prefer_entity_for_sales(
+            prefer_entity_for_rank(
+                list(cands[:max(ARBITER_MAX * 4, 16)]), intent, question),
+            intent, question)
         try:
             _mbs = _measures_by_src(_fork_pool)
             _als = _aliases_by_src(_fork_pool)

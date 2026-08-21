@@ -1,3 +1,18 @@
+## 21.08: возврат 8 — канон «продали»=регистр; петли→no_data [код]
+
+[код] `ubuntu/serenedb/serene_ask.py` + замок `test_sales_canon_prefer.py` (15/15):
+- **Решение (PLAN §6bis):** сумма продаж — `accumulationregister_*` по `written_by`;
+  документ — люк; внутридневной doc≠reg не развилка (gold A2).
+- `prefer_entity_for_sales` / `sales_sum_intent`: подъём регистра, снятие документа,
+  demote книги НДС, cold-lift с журналов; сравнение недель — sales intent.
+- `balance_registers_with_goods` + `stock_asks_named_product`: именованный товар без
+  ТМЦ-остатков → `no_data`; общий «товара на складе» не глушим.
+
+[замер] оффлайн: sales_canon **15/15**; fork_detector **43**, outcomes **26**,
+period_empty **30**, rank_axis **56**, gate **132**, compose **92**, answer_atom **18**,
+ab_scorer_v2 **19**, fork_atom **15** — 0 fail. md5 ask — в сообщении коммита.
+Выкат `/opt`+okna — оркестратор (smoke-отметка — только для выката владельца).
+
 ## 21.08: разведка таймаута ai_embed — ручка `http_timeout` [замер]
 
 [замер] Без правок кода/конфигов. Симптом klient-1: после раунда resolver
@@ -71,7 +86,7 @@ N одинаковых → эскалация один раз, затем отк
 **Оркестратору (okna / klient-1, выкат):**
 | файл | md5 |
 |---|---|
-| `ubuntu/packet/packet_config.py` | `8b2b2da469a80b00fb1a1cd6283ef822` |
+| `ubuntu/packet/packet_config.py` | `4bf8177f262824285c2d32ea6f13b7c6` |
 | `ubuntu/packet/test_packet_config.py` | `75535eeef2cdb2218c2145d09860a3e6` |
 | `ubuntu/serenedb/serene_sync.py` | `6ad2db11d452f1da20bbb92e2a0a2e29` |
 | `ubuntu/serenedb/build.sh` | `3d33fe16d075c1ff90381974233cc4a6` |
@@ -120,6 +135,16 @@ resolver раунд: 1013 посчитано, **16** не сдвинулись; 
 ≈ **23 ч** на 7,3 млн null корпуса; при историческом пуле ~260 стр/с ≈ **8 ч**.
 На klient-1 (workers=3, длинные `doc`) будет медленнее — ориентир **0,5–2 сут**
 непрерывного такта. Resolver: 16 хвост после timeout — отдельный докат.
+
+## 21.08: klient-1 — чистка service emb после c160c49 [замер]
+
+[замер] klient-1 после выката `c160c49`: `UPDATE … emb=NULL` только у service
+(строки целы). Corpus **5 663 216→0**, resolver **605 784→0**; business emb
+без изменения (corpus 2 185 215, resolver 1 631 772). `__sdb_store` 88.7 GiB
+(пик 96.2 при откате первого UPDATE). Батч по таблице + EXISTS для resolver;
+Доки: Constraint Checking in UPDATE / IS NULL / EXISTS. DATA_SCOPE §9.12.
+Контроль после такта — в activeContext (pipeline: снят `-x` с `build.sh`
+при выкате → 126, `chmod a+x` восстановлен).
 
 ## 21.08: возврат 2 — fail-closed разметка + service вне resolver/emb [код]
 

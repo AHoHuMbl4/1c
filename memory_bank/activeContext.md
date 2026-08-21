@@ -9,6 +9,12 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
 
+🔴 **возврат 8 — канон «продали» в git, выкат ждёт оркестратора `[21.08]`**:
+PLAN §6bis: регистр по `written_by`, документ люк; intraday не fork. Код
+`prefer_entity_for_sales` + stock named→no_data. Замок **15/15**. md5 ask
+в коммите. Rank/прайс/покупают (#5–6) — следующий заход. Smoke ut_test
+отметка — только выкат владельца (HOW_NOT_TO §3.90).
+
 🔴 **контур: тени `_RecordType` + пересчёт после class `[21.08]`**: код в git
 (`packet_config` shadow + `build.sh` 2-тер/`PACKET_BASE_ID`; `serene_sync`).
 Дев: ut **782→695**, RT-витрина postgres/ut_test очищена; bases.json — поставить
@@ -39,11 +45,13 @@ GPU. SSH на `178.63.211.188` (nvidia-smi) из сессии не пустил 
 Секрет openai timeout не принимает. Штатного batch/async в доках нет.
 Разведка в CHANGELOG / techContext ловушка 53; код не меняли.
 
-🔴 **возврат 2: fail-closed разметка + service без emb — код в git `[21.08]`**:
-classify exit 2 → стоп такта; resolver/labels/card не берут service.
-`test_classify_fail_closed` 11/11. md5 build `3234fcdf`, classify `5db1cbce`,
-resolver `d8c5ea64`. Чистка emb klient-1 (5,66M + 0,61M) — после выката
-оркестратором. DATA_SCOPE §9.12.
+🔴 **возврат 2: чистка service emb на klient-1 сделана `[21.08]`**: после
+выката `c160c49` corpus **5 663 216→0**, resolver **605 784→0**; строки
+целы; business emb не трогали. `__sdb_store` 88.7 GiB. DATA_SCOPE §9.12.
+Контроль «не пересчиталось»: pipeline после чистки упал на `build.sh`
+Permission denied (выкат без `+x`) — `chmod a+x` + перезапуск; такт
+идёт (`build`/`embed_missing` resolver). После inactive — пересчёт
+service emb должен остаться **0**.
 
 🔴 **okna sync-лаг закрыт `[21.08]`**: корень — merge-сторож не узнавал
 `guid#N` у `document_установкаценноменклатуры` (321 757→439) → fail-loop с
