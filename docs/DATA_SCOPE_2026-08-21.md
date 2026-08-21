@@ -386,6 +386,33 @@ activeContext) → 82,4 ГиБ при 6 673 645 посчитанных вект�
 почему деловые регистры (`себестоимостьтоваров` 638 529 и др.) до сих пор без
 векторов, — и это прямое следствие того, что четвёрка съела окно первой.
 
+### 9.11 Статус после замены ключа `[замер 21.08, сессия замены]`
+
+**Ключ заменён, разметка пошла.** Отпечаток `DEEPSEEK_API_KEY` на klient-1:
+`5e489a22…` (= дев). В `/etc/1c-mcp-reports.env` добавлен
+`DEEPSEEK_MODEL=Qwen3.8-27B` — без него pipeline-classify давал **HTTP 404**
+(дефолт `deepseek-v4-flash`; подтверждение прогноза §9.2).
+
+| показатель | число |
+|---|---:|
+| `search_sources` / `search_entity_class` / unc | 1457 / **1457** / **0** |
+| business / service | 428 / 1029 |
+| addr4 (`…иерархия`×2, `…адресныеобъекты`, `…доп.адресныесведения`) | все **service** |
+| corpus строк service / из них с emb / без emb | 5 972 192 / **5 663 216** / 308 976 |
+| resolver service с emb / всего service | **605 784** / 605 784 |
+| addr4 corpus с emb | 5 503 279 (= все) |
+| corpus всего emb / noemb | 7 573 645 / 7 574 682 |
+
+`/ask` «сколько всего клиентов?» → **HTTP 200**, `kind=clarify` (не 401).
+Юниты: ask **active**; pipeline **activating** (`embed_missing search_corpus`,
+workers=3). Ставка эмбеда за 45 с: corpus **0 стр/с**, resolver_noemb=16 → 0 —
+деградация GPU-сервиса, не тюнили. Удаление service-векторов — отдельное
+решение владельца (здесь только объём).
+
+Ловушка classify на Qwen: без `chat_template_kwargs.enable_thinking=false`
+батч упирается в `timeout=180` (в git правка `classify_entities.py`; на
+klient-1 для добора разметки гоняли временную копию с thinking off).
+
 ---
 
 ## 10. Тот же вопрос про okna: собираем ли лишнее? `[замер 21.08]`

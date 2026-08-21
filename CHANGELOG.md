@@ -1,3 +1,17 @@
+## 21.08: klient-1 — ключ gpu-27b заменён, class полный, /ask жив [замер][код]
+
+[замер] klient-1: `DEEPSEEK_API_KEY` в `/etc/1c-mcp-reports.env` → fp
+`5e489a22…` (= дев); добавлен `DEEPSEEK_MODEL=Qwen3.8-27B` (pipeline без него
+давал classify **404**). `search_entity_class` **1457/1457**, business/service
+**428/1029**; addr4 → `service`. Corpus service с emb **5 663 216**, resolver
+service emb **605 784** (объём под чистку, не удаляли). `/ask` HTTP **200**
+(`clarify`, не 401). Pipeline activating; эмбед `search_corpus` ставка **0/с**
+за 45 с (деградация GPU). Документ: `DATA_SCOPE_2026-08-21.md` §9.11.
+
+[код] `classify_entities.py`: по умолчанию шлёт thinking off /
+`enable_thinking=false` (как `serene_ask`) — иначе батч на Qwen/gpu-27b
+timeout 180 с. md5 `4cd381ff`.
+
 ## 21.08: okna sync-лаг — сторож merge не узнавал guid#N + ложный incomplete [замер][код]
 
 [замер] okna 21.08: `merge_pending_sec` ~52 652 и рос; `coverage_gap.rows_missing` ~78 832.

@@ -15,19 +15,16 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 15; неделя на `:8091` снова `answer` (1 341 782.36). Timer возвращён —
 `build_ts`/векторы 439 price-doc догонит такт.
 
-🔴 **граница данных витрины — замер готов + дозамер `[21.08]`**:
-[`docs/DATA_SCOPE_2026-08-21.md`](../docs/DATA_SCOPE_2026-08-21.md). На klient-1
-class пуст (classify 401) → 5,5M адресных с векторами. На okna class жив:
-service 1% без emb; дорогое лишнее — `_RecordType` ~28% витрины/~50% канала
-(в корпус нет). Чинить auth на klient — владельцу. Базы не трогали.
-Дозамер §9: **корень 401 — на klient-1 лежит другой `DEEPSEEK_API_KEY`**
-(отпечатки расходятся с дев/okna; замена — владелец), тем же 401 лежит и
-`/ask`; вдобавок `DEEPSEEK_MODEL` живёт в `1c-serene-ask.env`, который юнит
-pipeline не грузит (имя по умолчанию на gpu-27b → 404 — проверить первым
-тактом после замены ключа). Сухой прогон модели: вся четвёрка → service —
-механизм цел. Резолвер тоже платит (362 748 адресных значений с emb, фильтра
-class у `resolver_build.sql` нет). Попутно: pipeline@postgres на klient-1
-**failed с 03:11 20.08** (SIGTERM эмбед-прохода), эмбеддинг стоит на 6,67/15,1M.
+🔴 **klient-1 ключ gpu-27b заменён, class полный `[21.08]`**:
+[`docs/DATA_SCOPE_2026-08-21.md`](../docs/DATA_SCOPE_2026-08-21.md) §9.11.
+`DEEPSEEK_API_KEY` → fp `5e489a22…`; в `1c-mcp-reports.env` добавлен
+`DEEPSEEK_MODEL=Qwen3.8-27B` (иначе pipeline-classify → 404).
+`search_entity_class` **1457/1457**, business/service **428/1029**; addr4 →
+`service`. `/ask` HTTP 200 (не 401). Объём под чистку (не удаляли): corpus
+service с emb **5 663 216** + resolver service emb **605 784**. Pipeline
+activating, `embed_missing search_corpus` — ставка **0 стр/с** за 45 с
+(деградация GPU). В git: `classify_entities.py` выключает thinking как ask
+(иначе timeout на Qwen). Выкат classify на `/opt` klient-1 — оркестратор.
 
 🔴 **кнопка «в дашборд» — фронт готов, ждёт одно поле от бэкенда `[19.08]`**:
 Action OWUI → `POST /dash/add` → `panel_from_scope.py` собирает панель из

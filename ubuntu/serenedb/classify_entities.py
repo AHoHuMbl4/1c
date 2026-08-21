@@ -100,11 +100,17 @@ def ask(items):
     """Один батч в модель. Пусто — значит не получилось; вызывающий не падает."""
     if not DS_KEY:
         return {}
-    body = json.dumps({
+    body_obj = {
         "model": DS_MODEL, "temperature": 0, "max_tokens": 4000,
         "messages": [{"role": "system", "content": SYS},
                      {"role": "user", "content": json.dumps(items, ensure_ascii=False)}],
-    }).encode()
+    }
+    # vLLM/Qwen: как serene_ask (ASK_THINKING_OFF_BODY). Иначе timeout на gpu-27b [замер 21.08].
+    if os.environ.get("ASK_THINKING_OFF_BODY", "") in ("1", "true", "yes") or \
+       os.environ.get("DEEPSEEK_THINKING", "disabled") == "disabled":
+        body_obj["chat_template_kwargs"] = {"enable_thinking": False}
+        body_obj["thinking"] = {"type": "disabled"}
+    body = json.dumps(body_obj).encode()
     req = urllib.request.Request(DS_BASE + "/v1/chat/completions", data=body, method="POST")
     req.add_header("Authorization", "Bearer " + DS_KEY)
     req.add_header("Content-Type", "application/json")
