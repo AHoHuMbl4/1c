@@ -9,6 +9,13 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
 
+🔴 **контур: тени `_RecordType` + пересчёт после class `[21.08]`**: код в git
+(`packet_config` shadow + `build.sh` 2-тер/`PACKET_BASE_ID`; `serene_sync`).
+Дев: ut **782→695**, RT-витрина postgres/ut_test очищена; bases.json — поставить
+из `work/packet/bases-contour-recalc-20260821.json` (root). okna/klient-1 —
+оркестратор (md5 в CHANGELOG). Service в витрине не удаляли — объём в §10.7,
+ждёт слова владельца.
+
 🔴 **петля clarify OWUI — мост резолвит текст кодом `[21.08]`**:
 `mcp_ask_pending` + проводка в `mcp_ask.py`. Текст/focus без `decision_id` →
 билет; повтор вопроса → те же опции; N одинаковых → эскалация → отказ.
@@ -25,6 +32,12 @@ emb **7,85 млн**, null ≈**7,3 млн**, resolver null **16**; pipeline 
 на `embed_missing` — окна «0 стр/с» = COUNT/CREATE todo/UPDATE part, не мёртвый
 GPU. SSH на `178.63.211.188` (nvidia-smi) из сессии не пустил floor. Прогноз
 хвоста: ~8–23 ч @ 260…87 стр/с, на workers=3 дольше. CHANGELOG 21.08.
+
+🔴 **таймаут ai_embed = `http_timeout` `[21.08]`**: доки + живой дев 26.07.3 —
+ошибка `Timeout was reached … HTTP POST …/v1/embeddings` от GLOBAL
+`http_timeout` (default 30, у нас 60). Ручка: `SET GLOBAL http_timeout = N`.
+Секрет openai timeout не принимает. Штатного batch/async в доках нет.
+Разведка в CHANGELOG / techContext ловушка 53; код не меняли.
 
 🔴 **возврат 2: fail-closed разметка + service без emb — код в git `[21.08]`**:
 classify exit 2 → стоп такта; resolver/labels/card не берут service.

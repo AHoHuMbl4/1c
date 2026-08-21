@@ -1,3 +1,34 @@
+## 21.08: разведка таймаута ai_embed — ручка `http_timeout` [замер]
+
+[замер] Без правок кода/конфигов. Симптом klient-1: после раунда resolver
+`Timeout was reached error for HTTP POST …/v1/embeddings`, дальше 0 строк;
+одиночный curl на тот же endpoint — 200 за 0,2 с; отличие контуров —
+`EMBED_BATCH_CHARS` 65000 vs 12000.
+
+**Механизм у нас:** `embed_missing.sh` / `embed_all.sh` зовут штатную SQL
+`ai_embed(txt, model, secret)` (не curl). Секрет — `TYPE openai` + `base_url` /
+`embeddings_path` (`embed_all.sh`). Доки: https://docs.serenedb.com/sql/functions/ai
+
+**Откуда текст ошибки:** живой дев 26.07.3, висящий TCP на loopback +
+`SET GLOBAL http_timeout = 3` → ровно `Timeout was reached error for HTTP POST to
+'http://127.0.0.1:19093/v1/embeddings'` за ~7 с. После пробы возвращено
+`SET GLOBAL http_timeout = 60`.
+
+**Таймаут:** параметр `http_timeout`, default **30** с (доки configuration/overview),
+scope GLOBAL (`duckdb_settings`), описание «HTTP timeout read/write/connection/retry
+(in seconds)». У нас на деве факт **60**. Задаётся `SET GLOBAL http_timeout = N`
+(sql/statements/set). В SECRET openai поля `timeout` нет. Сессионный SET без GLOBAL
+на путь `ai_embed` не сработал (замер).
+
+**Пачки / async / длинный вход:** в доках `ai_embed` — лимитов на тексты/символы/токены
+и фоновой очереди **нет**; «Each ai_embed call is a network request»; отказы
+провайдера = ошибка запроса. Обрезка сверх контекста модели **не описана**.
+Наши `EMBED_BATCH_*` / `EMBED_MAXLEN` — обвязка shell, не ручки движка.
+
+**Рекомендуемая ручка по докам:** `SET GLOBAL http_timeout = <секунды>` (и вернуть
+`RESET GLOBAL` / прежнее значение после окна). Уменьшение `EMBED_BATCH_CHARS` —
+наша обвязка, не параметр SereneDB.
+
 ## 21.08: петля clarify в OWUI — текстовый выбор резолвит мост [код]
 
 [код] Живая петля в профиле «Ассистент 1С» (OWUI): пользователь выбирает вариант
@@ -11,6 +42,45 @@ N одинаковых → эскалация один раз, затем отк
 16/16; `test_focus_loop` 26/26. md5: `mcp_ask.py`=`1a023d92`,
 `mcp_ask_pending.py`=`68fc6dd7`. Выкат `/opt/openclaw-mcp/` (оба файла) +
 юнит `1c-mcp-ask@postgres` — оркестратор.
+
+## 21.08: контур доставки — service + тени `_RecordType`, пересчёт после разметки [код][замер]
+
+[код] Решения владельца (2)/(3): лишние тени OData убираем на всех базах;
+контур пересчитывается после разметки (не только онбординг).
+
+**Правило (универсально, без списка имён):**
+- `packet_config._contour_sql`: `force` > `shadow` (`*_RecordType`/`*_RowType`,
+  суффикс платформы OData) > `class=service`; Python `compute_contour` /
+  `_is_odata_shadow` — страховка бутстрепа.
+- Зеркало: `serene_sync._service_skip` — тот же суффикс.
+- Пересчёт: `build.sh` шаг `2-тер` при `PACKET_BASE_ID`; вручную —
+  `python3 packet_config.py <base_id>`.
+
+**Замер дев:**
+- `ut` / `ut_test`: контур **782 → 695** (−87 `_RecordType`); service в контуре
+  уже был 0. `/etc/1c-packet-bases.json` не писался (640 root) → готовый файл
+  `work/packet/bases-contour-recalc-20260821.json` (ver **4**).
+- Витрина `_RecordType` удалена: postgres **3/324 → 0**; ut_test **87/137 159 → 0**.
+- Service в витрине (не удаляли): postgres **53 сущ. / 36 985 стр.**; ut_test
+  **805 / 257 991**. Удаление — отдельным словом владельца.
+- Замок: `test_packet_config` зелёный (в т.ч. `а2-замок`: `balance_registers` из
+  `$metadata`/tmp3_ent, не из витрины теней).
+
+**Оркестратору (okna / klient-1, выкат):**
+| файл | md5 |
+|---|---|
+| `ubuntu/packet/packet_config.py` | `8b2b2da469a80b00fb1a1cd6283ef822` |
+| `ubuntu/packet/test_packet_config.py` | `75535eeef2cdb2218c2145d09860a3e6` |
+| `ubuntu/serenedb/serene_sync.py` | `6ad2db11d452f1da20bbb92e2a0a2e29` |
+| `ubuntu/serenedb/build.sh` | `3d33fe16d075c1ff90381974233cc4a6` |
+
+После выката на каждой базе: `PACKET_BASE_ID=<slot>` в pipeline.env;
+`python3 /opt/1c-packet/packet_config.py <slot>`; DROP таблиц
+`%_recordtype`/`%_rowtype` (форма — `duckdb_tables`, Доки: Metadata Functions);
+на деве — ещё `install` bases JSON + `chmod 660` на PACKET_BASES. Канал:
+следующий манифест без `_RecordType`/service в `entities`.
+
+Доки: `DATA_SCOPE` §10.7, `PACKET_CONTRACT` §10, `MAP`.
 
 ## 21.08: GPU-эмбеддер — утренняя деградация снялась, рестарт не нужен [замер]
 
