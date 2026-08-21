@@ -41,6 +41,8 @@ import urllib.request
 
 from mcp.server.fastmcp import FastMCP
 
+import mcp_ask_pending as _pending
+
 ASK_URL = os.environ.get("ASK_URL", "http://127.0.0.1:8099").rstrip("/")
 ASK_TOKEN = os.environ.get("ASK_TOKEN", "")
 MCP_HOST = os.environ.get("MCP_HOST", "127.0.0.1")
@@ -428,12 +430,55 @@ def _without_ticket_talk(text):
         low = line.lower()
         if "decision_id" in low or "choice error" in low or "choice_error" in low:
             continue
-        if re.search(r'ticket[:\s=]|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}', low):
+        if "тикет" in low or "ticket" in low:
+            continue
+        if re.search(
+                r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b",
+                low):
             continue
         if "ask_1c" in low or "report_1c" in low:
             continue
         keep.append(line)
     return "\n".join(keep).strip()
+
+
+def _format_clarify_out(question, data):
+    """Текст clarify для модели (OPTIONS + ATOM_JSON + presentation)."""
+    opts = data.get("options") or []
+    text = (data.get("text") or "").strip()
+    lines = []
+    for o in opts:
+        if not isinstance(o, dict):
+            continue
+        did = (o.get("decision_id") or "").strip()
+        did_tail = (" | decision_id=%s" % did) if did else ""
+        if o.get("measure"):
+            name = o.get("label") or o["measure"]
+            lines.append("- %s | measure=%s | focus=%s%s"
+                         % (name, name, o.get("entity_label") or "", did_tail))
+        elif o.get("src") or o.get("label"):
+            name = o.get("label") or o.get("src") or ""
+            why = (o.get("hint") or "").strip()
+            chip = _choice_prompt(question, name)
+            base = (("- %s — %s | focus=%s" % (chip, why, name)) if why
+                    else ("- %s | focus=%s" % (chip, name)))
+            lines.append(base + did_tail)
+    out = CLARIFY_HINT
+    if text:
+        out += "\n\n" + text
+    if lines:
+        out += "\n\n%s:\n%s" % (CLARIFY_LABEL, "\n".join(lines))
+    block = _atom_json_block(_atoms_of(data), opts)
+    if block:
+        out += "\n\n" + block
+    pres = _clarify_presentation(opts)
+    if isinstance(data, dict) and data.get("presentation") is None and pres:
+        data = dict(data)
+        data["presentation"] = pres
+    if pres:
+        out += "\n\nPRESENTATION_JSON:\n" + json.dumps(
+            pres, ensure_ascii=False, default=str)
+    return _with_partial(out, data)
 
 
 @mcp.tool()
@@ -468,9 +513,26 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     rid = (rid or "").strip() or None
     _trace(rid, "bridge", "ask_start", 0, "ok")
     t0 = time.monotonic()
+    mem = str(memory or "").strip().lower()
+    mem_action = mem if mem in ("remember", "forget") else None
+
+    resolved = _pending.apply_pending_before_ask(
+        question, focus, measure, decision_id, user, channel)
+    question = resolved["question"]
+    focus = resolved["focus"]
+    measure = resolved["measure"]
+    decision_id = resolved["decision_id"]
+    if resolved.get("refuse"):
+        ms = int((time.monotonic() - t0) * 1000)
+        _trace(rid, "bridge", "ask_reply", ms, "kind=loop_refuse")
+        return _pending.CLARIFY_LOOP_REFUSE
+    if resolved.get("short_circuit") is not None:
+        data = resolved["short_circuit"]
+        ms = int((time.monotonic() - t0) * 1000)
+        _trace(rid, "bridge", "ask_reply", ms, "kind=clarify pending_replay")
+        return _format_clarify_out(question, data)
+
     try:
-        mem = str(memory or "").strip().lower()
-        mem_action = mem if mem in ("remember", "forget") else None
         data = _ask(question, focus or None, measure or None, context or None,
                     prior or None, decision_id or None, user or None,
                     memory=mem_action, channel=channel or None, rid=rid)
@@ -491,6 +553,7 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     # Отказ сервиса — НЕ то же самое, что отсутствие данных (п. 18): клиенту надо
     # сказать про сбой, а не про пустую базу, иначе он решит, что данных нет.
     if kind == "unavailable":
+        _pending.clear_pending(user, channel)
         return ERROR_REPLY.format(detail=text[:120] or "unavailable")
 
     if kind == "choice_error":
@@ -514,71 +577,21 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
             return _with_partial(out, data if isinstance(data, dict) else {})
 
     if kind == "clarify":
-        opts = data.get("options") or []
-        lines = []
-        # 🔴 ВНУТРЕННЕЕ ИМЯ ТАБЛИЦЫ МОДЕЛИ НЕ ОТДАЁТСЯ — И ЭТО ПО ПОСТРОЕНИЮ, А НЕ ФИЛЬТРОМ.
-        # Было: `- Реализация Товаров Услуг | focus=document_реализациятоваровуслуг`, и
-        # docstring велел скопировать `focus` дословно. Дальше бот пересказывал варианты
-        # человеку своими словами — и внутреннее имя уходило клиенту мимо `ask_1c`, то есть
-        # мимо зачистки плагина (`F218` закрывал её только на ответах инструмента).
-        # [замер 03.08] так утекли «Реализация Товаров Услуг_Товары», `НДСРегл`, `НДСУпр`.
-        # Стало: боту виден ОДИН и тот же человеческий текст — и как подпись варианта, и
-        # как значение `focus`. Скопировать нечего, кроме того, что и так предназначено
-        # человеку. Обратно в имя источника его сводит сервис (`resolve_focus`, 02.08) —
-        # он принимает человеческое название наравне с внутренним, спрашивая базу, а не
-        # разбирая строку. [замер 03.08] меток 1 502, различных 1 496: неоднозначны 6, и на
-        # них `resolve_focus` честно возвращает «не свёл» и уходит обычным путём выбора.
-        for o in opts:
-            if not isinstance(o, dict):
-                continue
-            # `measure` заполнено — выбирается величина; иначе выбирается сущность.
-            did = (o.get("decision_id") or "").strip()
-            did_tail = (" | decision_id=%s" % did) if did else ""
-            if o.get("measure"):
-                # ⚠ Имя величины остаётся внутренним (`НДСРегл`): это ключ данных, и
-                # человеческого имени у него сегодня нет ниоткуда. Отдельная работа.
-                # 🔴 `focus` здесь — СУЩНОСТЬ, а не величина: в этой ветке `label` занят
-                # именем величины, поэтому человеческое имя сущности приходит отдельным
-                # полем `entity_label` (заведено в `serene_ask` тем же заходом). Пусто —
-                # `focus` не передаём вовсе: лучше пустое поле, чем внутреннее имя наружу
-                # или, того хуже, имя величины, поданное как сущность.
-                name = o.get("label") or o["measure"]
-                lines.append("- %s | measure=%s | focus=%s%s"
-                             % (name, name, o.get("entity_label") or "", did_tail))
-            elif o.get("src"):
-                name = o.get("label") or o["src"]
-                # Пояснение стоит РЯДОМ с подписью, но в `focus` не входит: значением
-                # выбора остаётся ровно та строка, которую человек видит подписью, —
-                # длинный `focus` бот копировал бы с ошибками. Пусто — строка прежняя.
-                why = (o.get("hint") or "").strip()
-                chip = _choice_prompt(question, name)
-                base = (("- %s — %s | focus=%s" % (chip, why, name)) if why
-                        else ("- %s | focus=%s" % (chip, name)))
-                lines.append(base + did_tail)
-        out = CLARIFY_HINT
-        if text:
-            out += "\n\n" + text
-        if lines:
-            out += "\n\n%s:\n%s" % (CLARIFY_LABEL, "\n".join(lines))
-        # OPTIONS остаются текстовым протоколом; рядом — структура для гейта/канала.
-        block = _atom_json_block(_atoms_of(data), opts)
-        if block:
-            out += "\n\n" + block
-        # Telegram: presentation с callback=decision_id (замок 11 — отдельно от WebUI).
-        pres = _clarify_presentation(opts)
-        if isinstance(data, dict) and data.get("presentation") is None and pres:
-            data = dict(data)
-            data["presentation"] = pres
-        if pres:
-            out += "\n\nPRESENTATION_JSON:\n" + json.dumps(
-                pres, ensure_ascii=False, default=str)
-        return _with_partial(out, data)
+        # Внутренние имена таблиц модели не отдаются (F218 / замер 03.08) —
+        # форматирование в _format_clarify_out; pending помнит билеты для текста.
+        _pending.store_pending(user, channel, question, data, bump_streak=True)
+        return _format_clarify_out(question, data)
+
 
     # 🔴 ГЕЙТ ОТКЛОНИЛ ПРОЗУ, ЧИСЛА ПОСЧИТАНЫ. `text` в этой ветке — НЕ ответ: это либо
     # отказ (`refuse_text`), либо та самая непрошедшая формулировка. Пересылать его боту
     # значит отдать отказ, имея данные. Отдаём то, ради чего ветка и заведена, — числа.
     if kind == "figures":
         # Исход B: условные пары уже в text (код), плюс options с decision_id.
+        if data.get("options"):
+            _pending.store_pending(user, channel, question, data, bump_streak=True)
+        else:
+            _pending.clear_pending(user, channel)
         parts = [FIGURES_HINT]
         if text and data.get("options"):
             parts.append(text)
@@ -610,14 +623,17 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
         return _with_partial("\n\n".join(parts), data)
 
     if kind == "no_data":
+        _pending.clear_pending(user, channel)
         if text:
             marker = "[NO DATA]"
             out = text if text.startswith(marker) else (marker + " " + text)
             return _with_partial(out, data)
         return NO_DATA_REPLY
     if not text:
+        _pending.clear_pending(user, channel)
         return NO_DATA_REPLY
 
+    _pending.clear_pending(user, channel)
     # Величина, по которой считали, названа рядом с ответом: у сущности бывает девять
     # величин со словом «сумма», и молчаливый выбор неотличим от догадки (п. 12).
     # `serene_ask` уже дописывает это в текст, если модель не назвала сама, — здесь

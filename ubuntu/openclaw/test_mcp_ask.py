@@ -17,6 +17,9 @@ os.environ.setdefault("ASK_URL", "http://127.0.0.1:1/ask")
 os.environ.setdefault("ASK_TOKEN", "test")
 
 import mcp_ask as M  # noqa: E402
+import mcp_ask_pending as P  # noqa: E402
+
+P.reset_pending_clarify_for_tests()
 
 PASS, FAIL = 0, []
 
@@ -138,6 +141,7 @@ M._ask = saved_ask
 
 
 # ---------------------------------------------- decision_id / presentation (план §6)
+P.reset_pending_clarify_for_tests()
 opts_d = [
     {"src": "document_a", "label": "Реализация", "distinct_by": "продажа", "found": 3,
      "decision_id": "abc123XYZ"},
@@ -199,6 +203,7 @@ t("поле memory пробрасывается", seen.get("memory") == "forget"
 M.ask_1c("вопрос", user="telegram:111", channel="telegram")
 t("channel пробрасывается",
   seen.get("channel") == "telegram" and seen.get("user") == "telegram:111")
+P.reset_pending_clarify_for_tests()
 seen_rid = {}
 def cap_rid(*a, rid=None, **k):
     seen_rid["rid"] = rid
@@ -229,6 +234,60 @@ t("clarify OPTIONS: строка-вопрос чипа, focus=подпись, hi
   and " — отгрузки" in out_chip
   and "focus=Реализация ТМЦ (регистр)" in out_chip)
 M._ask = _saved_chip
+
+# ---------------------------------------------- pending clarify (петля OWUI 21.08)
+P.reset_pending_clarify_for_tests()
+opts_loop = [
+    {"src": "a", "label": "Номенклатура перемещения ТМЦ", "found": 3,
+     "decision_id": "tidLoopA"},
+    {"src": "b", "label": "Остатки на складах", "found": 2,
+     "decision_id": "tidLoopB"},
+]
+Q_LOOP = "список остатков на складе топ 10"
+calls_loop = []
+def _ask_loop(q, focus=None, measure=None, context=None, prior=None,
+              decision_id=None, user=None, memory=None, channel=None, rid=None):
+    calls_loop.append({"q": q, "decision_id": decision_id, "user": user})
+    if decision_id == "tidLoopA":
+        return {"kind": "answer", "text": "топ готов", "sources": []}
+    return {"kind": "clarify", "text": "Что показать?", "options": opts_loop}
+M._ask = _ask_loop
+out0 = M.ask_1c(Q_LOOP, user="u-loop", channel="webchat")
+t("петля-дефект до фикса воспроизводим как clarify",
+  "[CLARIFICATION NEEDED]" in out0 and "tidLoopA" in out0)
+out_txt = M.ask_1c("Номенклатура перемещения ТМЦ", user="u-loop", channel="webchat")
+t("текст-выбор без билета → ask_1c резолвит",
+  "топ готов" in out_txt
+  and any(c.get("decision_id") == "tidLoopA" for c in calls_loop)
+  and any(c.get("q") == Q_LOOP for c in calls_loop if c.get("decision_id")))
+
+P.reset_pending_clarify_for_tests()
+calls_loop.clear()
+M._ask = _ask_loop
+M.ask_1c(Q_LOOP, user="u-loop2", channel="webchat")
+ids_first = "tidLoopA"
+out_same = M.ask_1c(Q_LOOP, user="u-loop2", channel="webchat")
+t("повтор вопроса → те же билеты без нового /ask",
+  ids_first in out_same and "tidLoopB" in out_same
+  and len(calls_loop) == 1)
+
+P.reset_pending_clarify_for_tests()
+calls_loop.clear()
+M._ask = _ask_loop
+M.ask_1c(Q_LOOP, user="u-loop3", channel="webchat")
+refuse_hit = False
+esc_hit = False
+for _ in range(8):
+    o = M.ask_1c(Q_LOOP, user="u-loop3", channel="webchat")
+    if "не распознан" in o:
+        esc_hit = True
+    if "unresolved after repeated" in o or "[NO DATA]" in o and "Clarification" in o:
+        refuse_hit = True
+        break
+t("5 одинаковых clarify → эскалация затем отказ, не петля",
+  esc_hit and refuse_hit and len(calls_loop) == 1)
+
+P.reset_pending_clarify_for_tests()
 
 print("\n%d проверок пройдено" % PASS)
 if FAIL:
