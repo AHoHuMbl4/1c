@@ -1,3 +1,38 @@
+## 21.08: возврат 11 — sticky focus/stop2; замок на кандидатах okna [код]
+
+[код] `serene_ask.py` после live 1/4 на 96c184a (okna :8091 ~13:20 UTC):
+- **#1 прошлый месяц:** `focus_forced=document_передачатмц…` (данные до 2024),
+  итог 0 при SQL регистра июль **2 767 450.98**. Sticky память/resolved без
+  decision_id. Fix: `sales_refuse_sticky_focus` + refuse memory noncanon.
+- **#2/#3 воскресенье:** `sales_canon_locked` был, но stop2/`src_conflict`
+  снова давали clarify. Fix: stop2 не при lock; повторный `sales_canon_force_pool`.
+- **#4 прайс:** 2384 — ок, без правки.
+
+[замер] оффлайн sales_canon **57/57** (okna-кандидаты july/sunday/why);
+43/26/22/31/110/56/132/92/18/30/26/15 + choice_memory 56 — 0 fail.
+md5 ask в коммите. Выкат — оркестратор.
+
+## 21.08: left() embed_missing — count без проекции emb [код]
+
+[код] `ubuntu/serenedb/embed_missing.sh`: `left()` больше не делает
+`count(*) FROM T WHERE emb IS NULL AND NOT EXISTS(...)` в одном уровне —
+на 26.07.3 план кладёт `emb` в CTE (`Projections: emb, src_table`) и на
+klient-1 (~15 млн × FLOAT[1024]) уходит в OOM (~3 м 15 с). Новая форма:
+`SELECT count(*) FROM (SELECT <лёгкие колонки> FROM T WHERE emb IS NULL) T
+WHERE <ROWS_WHERE>`; stderr больше не глушится. Доки:
+`data_import_and_export/parquet/overview#partial-reading`.
+
+[замер] замок `test_embed_left_count.py` — **12/12**: план new без
+`Projections: emb`, old с emb; синтетика 50k NULL FLOAT[1024] new==old=40000;
+ut_test `search_corpus` (623 565 строк) left() **2,9 с**, без OOM.
+md5 в коммите. Выкат `embed_missing.sh` на klient-1 — оркестратор
+(такт сам подхватит OnUnitInactiveSec=1min).
+
+⚠️ На деве при разборе был `SET temp_directory='/tmp/serene-left-test'` —
+у `serenedb` PrivateTmp, каталог с хоста не виден; нужен **рестарт
+`serenedb` владельцем**, чтобы вернуть штатный temp (иначе тяжёлый spill
+ломается). К фиксу left() не относится.
+
 ## 21.08: возврат 10 — мера/pool/coverage/прайс на живом пути [код]
 
 [код] `serene_ask.py` после live 0/4 на b1dab55 (okna :8091 ~12:30 UTC):

@@ -1012,3 +1012,21 @@ request»; «Provider failures … surface as a query error»). Живой вх�
 контекста модели — HTTP 400 провайдера целиком и быстро, не таймаут (замер 21.08).
 `embed_missing.sh` `http_timeout` не поднимает — при больших пачках остаётся default
 30 с, хотя `docs/EMBED_BULK_HOWTO.md` §5 требует `SET GLOBAL` / `EMBED_HTTP_TIMEOUT`.
+
+## Ловушка 54. `count(*) WHERE emb IS NULL AND NOT EXISTS(...)` проецирует FLOAT[1024] в CTE
+
+`[замер 21.08, сборка 26.07.3]` `EXPLAIN SELECT count(*) FROM search_corpus
+WHERE emb IS NULL AND NOT EXISTS (SELECT 1 FROM search_entity_class e
+WHERE e.src_table = search_corpus.src_table AND e.cls = 'service')` —
+в плане **`Projections: emb, src_table`** у SEQ_SCAN, затем CTE антисоединения.
+На klient-1 (~15 млн строк корпуса) этот count уходил в OOM за ~3 м 15 с
+(~6 ГБ свободно): такт pipeline падал на шаге 5 с «не удалось прочитать
+search_corpus», потому что `left()` глушил stderr (`2>/dev/null`).
+
+Доки: читать только нужные колонки
+(`data_import_and_export/parquet/overview#partial-reading`; то же правило для
+собственного columnar-формата в `cookbook/performance/how_to_tune_workloads`
+— avoid reading unnecessary data). Лечение в `embed_missing.sh`: 
+`SELECT count(*) FROM (SELECT <лёгкие колонки> FROM T WHERE emb IS NULL) T
+WHERE <ROWS_WHERE>` — `emb IS NULL` остаётся Column Filter, в CTE уходит только
+`src_table` / `table_name`. Замок: `test_embed_left_count.py`.

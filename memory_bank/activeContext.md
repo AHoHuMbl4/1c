@@ -9,11 +9,19 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
 
-🔴 **возврат 10 — мера/pool/coverage/прайс, код в git `[21.08]`**: live 0/4 на
-b1dab55: measure-clarify; воскресенье clarify; why→пустой figures; прайс
-321757. Fix: `sales_money_measure`, `sales_canon_force_pool`, coverage refuse,
-`catalog_count_locked`. Замок **41/41** + 43/26/22/31/110/56/132/92/18/30/26/15.
-md5 в коммите. Выкат+повтор 4 вопросов — оркестратор.
+🔴 **возврат 11 — sticky focus/stop2, код в git `[21.08]`**: live 1/4 на 96c184a:
+июль 0 на передаче ТМЦ (sticky); воскресенье clarify после lock (stop2).
+Fix: `sales_refuse_sticky_focus`, stop2 не при lock, memory noncanon refuse.
+Замок **57/57** на кандидатах okna. md5 в коммите. Выкат+повтор 1–3 —
+оркестратор.
+
+🔴 **left() embed_missing — OOM count по emb, код в git `[21.08]`**: klient-1
+fail-loop шага 5 («не удалось прочитать search_corpus») — `left()` сканировал
+`emb` в CTE. Fix: подзапрос только лёгких колонок + stderr. Замок
+`test_embed_left_count.py` **12/12**, ut_test left **2,9 с**. Выкат
+`embed_missing.sh` на klient-1 — оркестратор; приёмка: шаг 5 жив, растёт
+`count(emb)` корпуса. На деве после разбора нужен рестарт `serenedb`
+(сломан temp_directory → PrivateTmp).
 
 🔴 **возврат 8 — канон «продали» в git, выкат ждёт оркестратора `[21.08]`**:
 PLAN §6bis: регистр по `written_by`, документ люк; intraday не fork. Код
