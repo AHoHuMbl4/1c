@@ -193,11 +193,17 @@ measure_label, единица, период, фильтры, зерно/ось/�
 | **Внутридневной разрыв доставки** | doc≠reg за «сегодня» **не** создаёт развилку; отвечаем регистром (золото) |
 | **Среди регистров одного регистратора** | движения с Количество+Всего выше книги НДС (`книгапродаж`) |
 | **Пустой названный период** | `answer(0)` / `period_empty`, не clarify журналов |
+| **Мера при sales_sum** | денежный канон (`Всего` / `*Документа`); clarify по мере недопустим (возврат 10) |
+| **После lock канона** | `arb_pool` = один src; соперники не наращиваются (иначе clarify при fork empty) |
+| **«почему ноль / сбой»** | не `about=coverage` → figures; тот же sales path → period_empty |
+| **«позиций в прайсе»** | `catalog_*` товаров, не строки установки цен |
 | **Именованный товар «на складе» без товарных остатков** | `no_data`; общий «товара на складе» — clarify |
 | **Открытый день (доставка)** | ответ с регистра; freshness/merge_pending уже в partial — отдельная «в пути»-метка не нужна, пока поток не затих |
 
-Код: `prefer_entity_for_sales`, `sales_sum_intent`, `stock_asks_named_product` /
-`balance_registers_with_goods` в `serene_ask.py`. Замок: `test_sales_canon_prefer.py`.
+Код: `prefer_entity_for_sales`, `sales_sum_intent`, `sales_money_measure`,
+`sales_canon_force_pool`, `catalog_count_src`, `stock_asks_named_product` /
+`balance_registers_with_goods` в `serene_ask.py`. Замок: `test_sales_canon_prefer.py`
+(полный путь intent→канон→исход).
 
 ---
 

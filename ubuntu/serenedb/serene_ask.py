@@ -3436,6 +3436,55 @@ def sales_canon_src(cands, intent, question):
     return top
 
 
+def sales_money_measure(names, alias_by=None):
+    """Канон меры «сколько продали» — денежная сумма регистра (Всего / *Документа).
+
+    Clarify по мере здесь недопустим: слово «продали» фиксирует денежный итог,
+    не количество и не себестоимость ([замер 21.08 okna] возврат 10).
+    """
+    names = list(names or [])
+    if not names:
+        return None
+    pool = _fork_sum_headline_pool(names)
+    if pool:
+        return pool[0]
+    alias_by = alias_by or {}
+    for n in names:
+        blob = " ".join([str(n)] + list(alias_by.get(n) or [])).lower()
+        if any(h in blob for h in ("всего", "сумм", "amount", "total", "выруч", "оборот")):
+            if "колич" in blob or "себестоим" in blob or "quantity" in blob:
+                continue
+            return n
+    return None
+
+
+def sales_canon_force_pool(locked, picked=None, arb_pool=None, doubt=False):
+    """После lock канона — один источник, без развилки соперников.
+
+    Живой путь воскресенья [замер 21.08]: lock есть, fork empty, а arb_pool
+    снова обрастал tabpart/журналами → clarify источников вместо period_empty.
+    """
+    if not locked:
+        return list(picked or []), list(arb_pool or picked or []), bool(doubt)
+    return [locked], [locked], False
+
+
+def _is_price_list_noise(src):
+    s = str(src or "").lower()
+    return ("установкацен" in s or "ценыноменклатур" in s
+            or s.startswith("informationregister_цены")
+            or (s.startswith("document_") and "цен" in s and "номенклатур" in s))
+
+
+def _is_product_catalog(src):
+    s = str(src or "").lower()
+    if not s.startswith("catalog_"):
+        return False
+    if any(x in s for x in ("вид", "тип", "групп", "type", "kind", "group")):
+        return False
+    return any(k in s for k in ("номенклатур", "nomencl", "товар", "product", "goods"))
+
+
 def prefer_entity_for_catalog_count(cands, intent, question):
     """«Позиций в прайсе» — catalog_номенклатура, не цены/установка цен."""
     intent = intent or {}
@@ -3448,25 +3497,36 @@ def prefer_entity_for_catalog_count(cands, intent, question):
     if any(w in q for w in ("прода", "куп", "остат", "склад")):
         return cands
     cands = list(cands or [])
-    cats = [c for c in cands if str(c).startswith("catalog_") and any(
-        k in str(c).lower() for k in ("номенклатур", "nomencl", "товар", "product"))]
+    cats = [c for c in cands if _is_product_catalog(c)]
     if not cats:
-        # холодный подъём: в пуле только цены
         try:
             rows = psql(
                 "SELECT src_table FROM %s WHERE src_table LIKE 'catalog_%%' "
-                "AND (src_table LIKE '%%номенклатур%%' OR src_table LIKE '%%nomencl%%') "
-                "ORDER BY src_table LIMIT 8" % TABLES)
-            cats = [r[0] for r in (rows or []) if r and r[0]]
+                "AND (src_table LIKE '%%номенклатур%%' OR src_table LIKE '%%nomencl%%' "
+                "OR src_table LIKE '%%товар%%' OR src_table LIKE '%%product%%') "
+                "ORDER BY src_table LIMIT 24" % TABLES)
+            cats = [r[0] for r in (rows or []) if r and r[0] and _is_product_catalog(r[0])]
         except RuntimeError:
             cats = []
     if not cats:
         return cands
+    cats.sort(key=lambda s: (0 if str(s).lower() in (
+        "catalog_номенклатура", "catalog_nomenclature", "catalog_товары",
+        "catalog_products", "catalog_goods") else 1, str(s)))
     head = cats[0]
-    rest = [c for c in cands if c != head and not (
-        str(c).startswith(("document_установкацен", "informationregister_цены"))
-        or "установкацен" in str(c) or "ценыноменклатур" in str(c))]
+    rest = [c for c in cands if c != head and not _is_price_list_noise(c)]
     return [head] + rest
+
+
+def catalog_count_src(cands, intent, question):
+    """Src канона «прайс» = справочник товаров — или None."""
+    preferred = prefer_entity_for_catalog_count(list(cands or []), intent, question)
+    if not preferred:
+        return None
+    top = preferred[0]
+    if not _is_product_catalog(top):
+        return None
+    return top
 
 
 def period_zero_why_question(question):
@@ -8915,8 +8975,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # «чего нет», «не загрузилось» был бы хардкодом под язык (`HOW_NOT_TO §3.9`), а
     # продукт коробочный и конфигурация может быть любой.
     if (intent.get("about") or "") == "coverage":
-        diag["about"] = "coverage"
-        return _coverage_answer(question, diag, t0)
+        # «почему продаж ноль, это сбой?» — не перепись системы, а period_empty
+        # по продажам ([замер 21.08 okna] about=coverage → пустой figures).
+        if period_zero_why_question(question):
+            intent["about"] = "data"
+            if (intent.get("want") or "") == "list":
+                intent["want"] = "sum"
+            diag["about_coverage_refused"] = "period_zero_why"
+        else:
+            diag["about"] = "coverage"
+            return _coverage_answer(question, diag, t0)
     # Что не доехало до модели — уходит в ОТВЕТ, а не в журнал (п. 13). Объявлено здесь,
     # потому что ранние ветки возврата (нет совпадений) отвечают раньше выбора сущности.
     cut = {}
@@ -10079,9 +10147,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["period_zero_why"] = True
         if (intent.get("want") or "") == "list":
             intent["want"] = "sum"
+    # «прайс» = справочник товаров; документ установки цен — шум ([замер 21.08] 321757).
+    if (not focus and not no_arbiter and picked
+            and not entity_choice_locked(trusted, resolved)
+            and not diag.get("sales_canon_locked")):
+        _cat = catalog_count_src(cands, intent, question)
+        if _cat:
+            if picked[0] != _cat:
+                diag["catalog_count_override"] = {"было": list(picked), "стало": _cat}
+                шаг("канон прайса", было=picked[0], стало=_cat)
+            picked = [_cat]
+            diag["catalog_count_locked"] = _cat
     writer_pair = writer.get(picked[0]) if picked else None
     if (writer_pair and picked and writer_pair not in picked
-            and not diag.get("sales_canon_locked")):
+            and not diag.get("sales_canon_locked")
+            and not diag.get("catalog_count_locked")):
         diag["writer_pair"] = writer_pair
     #   4. 🔴 (05.08) смысловой путь ОТКАЗАЛ (`meaning_down`). Тогда порядок кандидатов
     #      задаётся числом совпадений, то есть размером сущности, и уверенности в выборе у
@@ -10098,11 +10178,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # а не «следующий по порядку отбора». При каноне продаж документ — люк, не соперник.
     if (diag.get("writer_pair") and picked and not focus and not no_arbiter
             and not diag.get("sales_canon_locked")
+            and not diag.get("catalog_count_locked")
             and len(arb_pool) < ARBITER_MAX):
         arb_pool.append(diag["writer_pair"])
     if sales_sum_intent(intent, question):
         arb_pool = prefer_entity_for_sales(arb_pool, intent, question)
     arb_pool = prefer_entity_for_catalog_count(arb_pool, intent, question)
+    # Lock канона: один источник → period_empty / ответ, не clarify соперников.
+    picked, arb_pool, doubt = sales_canon_force_pool(
+        diag.get("sales_canon_locked") or diag.get("catalog_count_locked"),
+        picked, arb_pool, doubt)
     if doubt and picked and not focus and not no_arbiter and len(arb_pool) < ARBITER_MAX:
         fam = {_family(x) for x in arb_pool}
         # 🔴 СОПЕРНИК БЕРЁТСЯ ПО ПОРЯДКУ ОТБОРА, И ЭТО РЕШЕНО ЗАМЕРОМ, А НЕ ВКУСОМ.
@@ -10774,6 +10859,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             measure, measure_alts = measure_pick, []
         else:
             diag["measure_pick_unresolved"] = measure_pick
+    # Канон «продали»: мера = денежная сумма регистра; clarify по мере недопустим.
+    if (sales_sum_intent(intent, question) and not measure_pick
+            and (diag.get("sales_canon_locked") or src)):
+        _sm = sales_money_measure(measures_of(src), measure_aliases_of(src))
+        if _sm:
+            if measure != _sm or measure_alts:
+                diag["sales_measure_canon"] = {
+                    "было": measure, "alts": list(measure_alts or []), "стало": _sm}
+            measure, measure_alts, how = _sm, [], "sales_canon"
     diag["measure"] = measure
     шаг("величина выбрана", величина=(measure or "—"),
         подходящих=len(measure_alts or []))
@@ -10832,11 +10926,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 return build_measure_empty_pivot(
                     question, measure, src, _alive_rows, cut, diag, t0,
                     intent, how=how, measure_pick=measure_pick)
-            if _alive_rows:
+            # sales_sum: не уводить в measure-clarify; денежный канон держим
+            # (пустой период → period_empty / 0, не «какую меру?»).
+            if diag.get("sales_measure_canon"):
+                _keep = sales_money_measure(
+                    [r[0] for r in _alive_rows], measure_aliases_of(src))
+                if _keep:
+                    measure, measure_alts = _keep, []
+                    diag["measure"] = _keep
+                    diag["sales_measure_alive"] = _keep
+                # иначе оставляем канон — дальше period/агрегат
+            elif _alive_rows:
                 diag["measure_all_zero" if _row is not None else "measure_no_values"] = measure
                 measure, measure_alts = None, [r[0] for r in _alive_rows]
                 diag["measure"] = None
-    if SLOT_COVER and measure and not measure_pick:
+    if SLOT_COVER and measure and not measure_pick and not diag.get("sales_measure_canon"):
         _unc, _cov = slot_measure_uncovered(
             (intent.get("measure") or "").strip(), measure,
             measures_of(src), measure_aliases_of(src))
@@ -10847,7 +10951,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["measure"] = None
     # Несколько величин подходят одинаково — спрашиваем, какую считать. Механизм тот же,
     # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
-    if measure_alts and not measure_already_proven(trusted, resolved, measure_pick):
+    if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
+            and not diag.get("sales_measure_canon")):
         diag["measure_ambiguous"] = measure_alts
         # 🔴 ЧИСЛА ПОДХОДЯЩИХ ВЕЛИЧИН СЧИТАЮТСЯ ЗДЕСЬ ЖЕ — ОНИ НУЖНЫ НЕ ЧЕЛОВЕКУ, А ПРОВЕРКЕ
         # НАД НАМИ (05.08). Этот же путь проходит КАНДИДАТ круга арбитра

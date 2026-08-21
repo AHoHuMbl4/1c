@@ -1,3 +1,20 @@
+## 21.08: возврат 10 — мера/pool/coverage/прайс на живом пути [код]
+
+[код] `serene_ask.py` после live 0/4 на b1dab55 (okna :8091 ~12:30 UTC):
+- **#1 прошлый месяц:** lock регистра → measure_guess_refused → clarify
+  (итого/кол-во/себестоимость). Fix: `sales_money_measure` = Всего; clarify
+  меры при `sales_sum_intent` недопустим (`sales_measure_canon`).
+- **#2 воскресенье:** lock был, fork empty, arb_pool снова обрастал → clarify
+  источников. Fix: `sales_canon_force_pool` → singleton, doubt=False →
+  period_empty.
+- **#3 why-zero+сбой:** about=coverage → пустой figures. Fix: refuse coverage
+  при `period_zero_why` → data/sum → канон продаж.
+- **#4 прайс:** 321757 tabpart установки цен. Fix: `catalog_count_locked` +
+  cold-lift `catalog_номенклатура`, noise filter.
+
+[замер] оффлайн sales_canon **41/41**; 43/26/22/31/110/56/132/92/18/30/26/15 —
+0 fail. md5 ask в коммите. Выкат — оркестратор.
+
 ## 21.08: возврат 9 — канон lock + воскресенье/прайс [код]
 
 [код] `serene_ask.py` после 9/25 на a6a9362 (okna):

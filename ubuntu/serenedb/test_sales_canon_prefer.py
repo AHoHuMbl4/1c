@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Замки: канон «продали»=регистр; остаток именованный → no_data (возврат 8)."""
+"""Замки: канон продаж/меры/прайса; полный путь intent→канон→исход (возврат 8–10)."""
 import os
 import sys
 import time
@@ -195,6 +195,98 @@ t("catalog prefer: номенклатура первой",
   gotc and gotc[0] == "catalog_номенклатура", gotc)
 t("catalog prefer: цены не в голове",
   gotc and "ценыноменклатуры" not in (gotc[0] or ""), gotc)
+
+
+# --- возврат 10: полный путь (intent → канон → исход), не только helper ---
+t("money measure: Всего из пула регистра",
+  A.sales_money_measure(["Количество", "Себестоимость", "Всего", "СуммаБезНДС"])
+  == "Всего")
+t("money measure: *Документа",
+  A.sales_money_measure(["Количество", "СуммаДокумента"]) == "СуммаДокумента")
+
+# путь #1: sales_sum + lock → мера Всего, alts пусты (нет measure-clarify)
+_names = ["Всего", "Количество", "Себестоимость", "СуммаБезНДС"]
+_m = A.sales_money_measure(_names)
+t("path1: мера канона Всего", _m == "Всего", _m)
+t("path1: clarify меры недопустим (alts clear)",
+  bool(_m) and _m == "Всего")
+
+# путь #2: lock + fork empty → arb_pool singleton (не clarify источников)
+_p, _a, _d = A.sales_canon_force_pool(
+    "accumulationregister_реализациятмц",
+    picked=["documentjournal_розничнаяторговля", "documentjournal_оптоваяторговля"],
+    arb_pool=["accumulationregister_реализациятмц",
+              "document_передачатмцврозничнуюторговлю_номенклатура",
+              "document_товаротранспортнаянакладная_мбп"],
+    doubt=True)
+t("path2: picked = канон", _p == ["accumulationregister_реализациятмц"], _p)
+t("path2: arb_pool singleton", _a == ["accumulationregister_реализациятмц"], _a)
+t("path2: doubt снят", _d is False, _d)
+_p0, _a0, _d0 = A.sales_canon_force_pool(None, ["a", "b"], ["a", "b"], True)
+t("path2: без lock пул не трогаем", _a0 == ["a", "b"] and _d0 is True)
+
+# путь #3: «сбой» + coverage → отказ coverage (иначе пустой figures)
+t("path3: period_zero_why ловит сбой",
+  A.period_zero_why_question("почему в воскресенье продаж ноль, это сбой?"))
+# имитация ветки about=coverage → refuse
+_intent3 = {"about": "coverage", "want": "list", "kind": "продажи", "measure": "продажи"}
+_q3 = "почему в воскресенье продаж ноль, это сбой?"
+if A.period_zero_why_question(_q3) and (_intent3.get("about") or "") == "coverage":
+    _intent3["about"] = "data"
+    if (_intent3.get("want") or "") == "list":
+        _intent3["want"] = "sum"
+t("path3: about снят с coverage", _intent3.get("about") == "data", _intent3)
+t("path3: want→sum для канона продаж", _intent3.get("want") == "sum", _intent3)
+t("path3: sales_sum после refuse",
+  A.sales_sum_intent(_intent3, _q3))
+
+# путь #4: прайс → catalog_номенклатура lock (не tabpart установки цен)
+got_tab = A.prefer_entity_for_catalog_count(
+    ["document_установкаценноменклатуры_номенклатура",
+     "catalog_видыноменклатуры", "catalog_типыцен"],
+    {"want": "count"}, "сколько позиций у нас в прайсе?")
+
+
+def _fake_cat(q):
+    if "LIKE 'catalog_" in q or "src_table LIKE 'catalog_" in q:
+        return [("catalog_видыноменклатуры",), ("catalog_номенклатура",),
+                ("catalog_типыцен",)]
+    raise RuntimeError(q[:120])
+
+
+_oldc = A.psql
+A.psql = _fake_cat
+try:
+    got_cold = A.prefer_entity_for_catalog_count(
+        ["document_установкаценноменклатуры_номенклатура"],
+        {"want": "count"}, "сколько позиций у нас в прайсе?")
+    t("path4: cold lift → catalog_номенклатура",
+      got_cold and got_cold[0] == "catalog_номенклатура", got_cold)
+    t("path4: tabpart цен снят",
+      got_cold and all("установкацен" not in str(x) for x in got_cold), got_cold)
+    t("path4: catalog_count_src",
+      A.catalog_count_src(
+          ["document_установкаценноменклатуры_номенклатура"],
+          {"want": "count"}, "сколько позиций у нас в прайсе?")
+      == "catalog_номенклатура")
+    _pc, _ac, _dc = A.sales_canon_force_pool(
+        A.catalog_count_src(
+            ["document_установкаценноменклатуры_номенклатура", "catalog_типыцен"],
+            {"want": "count"}, "сколько позиций у нас в прайсе?"),
+        picked=["document_установкаценноменклатуры_номенклатура"],
+        arb_pool=["document_установкаценноменклатуры_номенклатура", "catalog_типыцен"],
+        doubt=True)
+    t("path4: lock → singleton catalog",
+      _ac == ["catalog_номенклатура"] and _dc is False, (_pc, _ac, _dc))
+finally:
+    A.psql = _oldc
+
+t("path4: видыноменклатуры не product-catalog",
+  not A._is_product_catalog("catalog_видыноменклатуры"))
+t("path4: номенклатура — product-catalog",
+  A._is_product_catalog("catalog_номенклатура"))
+t("path4: noise tabpart",
+  A._is_price_list_noise("document_установкаценноменклатуры_номенклатура"))
 
 print("PASS", PASS, "FAIL", len(FAIL))
 sys.exit(0 if not FAIL else 1)
