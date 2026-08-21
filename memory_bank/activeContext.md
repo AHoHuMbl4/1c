@@ -9,6 +9,15 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
 
+🔴 **GPU-эмбеддер снова в норме, рестарт не делали `[21.08]`**: утром
+таймауты `:8000/v1/embeddings` (08:44/09:25) + VRAM health 16,52 ГБ + batch3
+1,4–2,2 с. Сейчас без рестарта: health **15,16 ГБ**, batch16 dev **~0,09–0,13 с**
+(цель ~0,2), sustained short-text **~87 стр/с**. klient-1: corpus **15,15 млн**,
+emb **7,85 млн**, null ≈**7,3 млн**, resolver null **16**; pipeline activating
+на `embed_missing` — окна «0 стр/с» = COUNT/CREATE todo/UPDATE part, не мёртвый
+GPU. SSH на `178.63.211.188` (nvidia-smi) из сессии не пустил floor. Прогноз
+хвоста: ~8–23 ч @ 260…87 стр/с, на workers=3 дольше. CHANGELOG 21.08.
+
 🔴 **возврат 2: fail-closed разметка + service без emb — код в git `[21.08]`**:
 classify exit 2 → стоп такта; resolver/labels/card не берут service.
 `test_classify_fail_closed` 11/11. md5 build `3234fcdf`, classify `5db1cbce`,
@@ -28,9 +37,8 @@ resolver `d8c5ea64`. Чистка emb klient-1 (5,66M + 0,61M) — после в
 `search_entity_class` **1457/1457**, business/service **428/1029**; addr4 →
 `service`. `/ask` HTTP 200 (не 401). Объём под чистку (не удаляли): corpus
 service с emb **5 663 216** + resolver service emb **605 784**. Pipeline
-activating, `embed_missing search_corpus` — ставка **0 стр/с** за 45 с
-(деградация GPU). В git: `classify_entities.py` выключает thinking как ask
-(иначе timeout на Qwen). Выкат classify на `/opt` klient-1 — оркестратор.
+был activating с «0 стр/с» — см. блок GPU выше (сервис ожил). Выкат classify
+на `/opt` klient-1 — оркестратор.
 
 🔴 **кнопка «в дашборд» — фронт готов, ждёт одно поле от бэкенда `[19.08]`**:
 Action OWUI → `POST /dash/add` → `panel_from_scope.py` собирает панель из
