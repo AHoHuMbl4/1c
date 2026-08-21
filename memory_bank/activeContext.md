@@ -9,6 +9,12 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
 
+🔴 **возврат 2: fail-closed разметка + service без emb — код в git `[21.08]`**:
+classify exit 2 → стоп такта; resolver/labels/card не берут service.
+`test_classify_fail_closed` 11/11. md5 build `3234fcdf`, classify `5db1cbce`,
+resolver `d8c5ea64`. Чистка emb klient-1 (5,66M + 0,61M) — после выката
+оркестратором. DATA_SCOPE §9.12.
+
 🔴 **okna sync-лаг закрыт `[21.08]`**: корень — merge-сторож не узнавал
 `guid#N` у `document_установкаценноменклатуры` (321 757→439) → fail-loop с
 20:01 20.08. Фикс в git+`/opt`; ручной merge: корпус 1 229 060, rows_missing

@@ -21,7 +21,9 @@
 #
 # Ключи берутся из `EMBED_API_KEYS` (через запятую) либо из одиночного `EMBED_API_KEY`
 # (прежние `ALIBABA_*` читаются как запасные). На каждый создаётся свой временный секрет,
-# потоки раскладываются по ключам по кругу. Секреты именуются по базе — они у движка
+# потоки раскладываются по ключам по кругу. 🔴 Механизм задумывался против квоты облака
+# на аккаунт; на своих картах несколько ключей смысла не имеют — там ограничитель другой
+# (`threads` движка и память клиента, см. `docs/EMBED_BULK_HOWTO.md`). Секреты именуются по базе — они у движка
 # ОБЩИЕ НА ИНСТАНС, и одно имя на все базы гасило бы эмбеддер соседней сборки
 # (`techContext` ловушка 26).
 #
@@ -52,6 +54,15 @@ IFS=',' read -r -a KEYS <<< "${EMBED_API_KEYS:-${EMBED_API_KEY:-${ALIBABA_API_KE
 # Зачем: [замер 02.08] балансировщик перед несколькими копиями эмбеддера отдавал
 # скорость ОДНОЙ из них при любом числе потоков, а прямое обращение к каждой —
 # кратно больше. Один «удобный» адрес стоил половины мощности.
+# 🔴 ЭТО ВЕРНО НЕ ПРО ЛЮБОЙ БАЛАНСИР. [замер 19.08, klient-1] балансир с раскладкой
+# least-inflight дал 71,3 строк/с против 74,5 у четырёх прямых адресов — то есть
+# наравне, а при добавлении карт он ещё и не требует правки настроек. Плохим был
+# конкретный балансир 02.08, а не сам приём; прежняя формулировка обобщала лишнее.
+# Проверять надо замером на своём балансире, а не отвергать заранее.
+# 🔴 И ГЛАВНОЕ: число адресов не поднимает одновременность само по себе — наружу уходит
+# ровно `threads` запросов (доки how_to_tune_workloads#querying-remote-files, [замер
+# 20.08]: 42 потока → ровно 18 запросов при threads=18). Адреса делят нагрузку между
+# картами, а не увеличивают её. Разбор — `docs/EMBED_BULK_HOWTO.md`.
 IFS=',' read -r -a HOSTS <<< "${EMBED_HOSTS:-${EMBED_HOST:-}}"
 [ ${#HOSTS[@]} -gt 0 ] || HOSTS=("${EMBED_HOST:-}")
 # Адрес и модель эмбеддера задаются явно: умолчание с именем поставщика однажды уже
@@ -136,14 +147,21 @@ for tgt in $TARGETS; do
   case "$tgt" in
     labels)
       # Метки сущностей — по ним идёт выбор сущности. Их полторы тысячи, считаются минуты.
+      # Service не эмбеддим: отбор кандидатов их отсекает по class (возврат 2).
       echo "== метки сущностей  $(date -u +%H:%M:%S)"
-      ./embed_missing.sh search_tables label "$N" "src_table" || echo "метки: проход с ошибкой" >&2
+      ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
+                              WHERE e.src_table = search_tables.src_table AND e.cls = 'service')" \
+        ./embed_missing.sh search_tables label "$N" "src_table" || echo "метки: проход с ошибкой" >&2
       ;;
     resolver)
       # Вход обрезается ЗДЕСЬ, а не в таблице: `resolver_index.value` идёт в предикат
       # `WHERE`, и обрезанное значение перестало бы совпадать с данными.
+      # Service в resolver_build уже не попадает; фильтр — второй рубеж.
       echo "== резолвер  $(date -u +%H:%M:%S)"
-      ./embed_missing.sh resolver_index "substr(value,1,$MAXLEN)" "$N" "table_name,column_name,value" \
+      ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
+                              WHERE lower(e.src_table) = lower(resolver_index.table_name)
+                                AND e.cls = 'service')" \
+        ./embed_missing.sh resolver_index "substr(value,1,$MAXLEN)" "$N" "table_name,column_name,value" \
         || echo "резолвер: проход с ошибкой" >&2
       ;;
     corpus)
@@ -172,7 +190,10 @@ for tgt in $TARGETS; do
       # 🔴 В такт НЕ включено: цель по умолчанию не входит в `TARGETS`, зовётся только явно
       # (`EMBED_TARGETS=card`). Включать в конвейер — после решения по числу (Ф5).
       echo "== карточки сущностей  $(date -u +%H:%M:%S)"
-      ./embed_missing.sh search_entity_card "substr(card,1,$MAXLEN)" "$N" "src_table" \
+      # Service в entity_card_build уже отфильтрован; ROWS_WHERE — второй рубеж.
+      ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
+                              WHERE e.src_table = search_entity_card.src_table AND e.cls = 'service')" \
+        ./embed_missing.sh search_entity_card "substr(card,1,$MAXLEN)" "$N" "src_table" \
         || echo "карточки: проход с ошибкой" >&2
       # 🔴 Отметка модели ставится ВСЕГДА, а не только при перевекторизации: без неё
       # `serene_ask.emb_ready(CARD)` отвечает «не готово», и сервис молча работает по

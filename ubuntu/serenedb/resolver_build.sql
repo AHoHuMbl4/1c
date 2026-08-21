@@ -67,7 +67,11 @@ WHERE NOT regexp_matches(val, '^(https?://|/)')
   AND NOT regexp_full_match(val,
         '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}');
 
-SELECT 'EXECUTE p_val(' || quote_literal(tbl) || ');' FROM tmp3_src
+SELECT 'EXECUTE p_val(' || quote_literal(tbl) || ');' FROM tmp3_src s
+WHERE NOT EXISTS (
+  SELECT 1 FROM search_entity_class e
+  WHERE lower(e.src_table) = lower(s.tbl) AND e.cls = 'service'
+)
 \gexec
 
 -- Колонки-измерения выводятся из значений, а не считаются отдельным проходом по данным.
@@ -108,6 +112,15 @@ USING (SELECT tbl, col, val FROM res_val) s
       THEN DELETE
  WHEN NOT MATCHED THEN
       INSERT (table_name, column_name, value, emb) VALUES (s.tbl, s.col, s.val, NULL);
+
+-- 🔴 SERVICE НЕ В РЕЗОЛВЕРЕ (возврат 2 / 21.08, DATA_SCOPE §9.4). Бизнес-вопросов к
+-- служебным сущностям нет: ни значения, ни их векторы. Даже если таблица не попала в
+-- tmp3_src в этот такт, старые строки service снимаем явно (MERGE их иначе не тронет).
+DELETE FROM resolver_index r
+WHERE EXISTS (
+  SELECT 1 FROM search_entity_class e
+  WHERE lower(e.src_table) = lower(r.table_name) AND e.cls = 'service'
+);
 
 -- ============ 4. ОТЧЁТ — В БАЗУ, А НЕ В ЖУРНАЛ ============
 -- П. 13: потеря обязана быть видна запросом, а не только тому, кто смотрел в консоль.

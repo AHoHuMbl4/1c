@@ -413,6 +413,18 @@ workers=3). Ставка эмбеда за 45 с: corpus **0 стр/с**, resolv
 батч упирается в `timeout=180` (в git правка `classify_entities.py`; на
 klient-1 для добора разметки гоняли временную копию с thinking off).
 
+### 9.12 Возврат 2: fail-closed + чистка service-векторов `[код 21.08]`
+
+**Код в git** (выкат на klient-1/okna — оркестратор): без успешной разметки такт
+останавливается; service не попадает в resolver и не получает emb (corpus уже
+фильтровался; дыра была в soft-fail classify + resolver без class).
+
+Чистка `UPDATE … SET emb=NULL` по service на klient-1 — **после выката**: иначе
+следующий такт со старым `resolver_build` снова вставит service-значения.
+Целевые объёмы (замер оркестратора): corpus service emb **5 663 216**, resolver
+service emb **605 784**. Строки корпуса/резолвера не удалять — только `emb`.
+
+
 ---
 
 ## 10. Тот же вопрос про okna: собираем ли лишнее? `[замер 21.08]`

@@ -94,7 +94,11 @@ SELECT t.src_table,
 FROM search_tables t
 LEFT JOIN search_entity_alias a ON a.src_table = t.src_table
 LEFT JOIN q                     ON q.src_table = t.src_table
-LEFT JOIN r                     ON r.src_table = t.src_table;
+LEFT JOIN r                     ON r.src_table = t.src_table
+WHERE NOT EXISTS (
+  SELECT 1 FROM search_entity_class e
+  WHERE e.src_table = t.src_table AND e.cls = 'service'
+);
 
 -- Изменившимся карточкам вектор сбрасывается, неизменившиеся его сохраняют. Сравнение по
 -- самому тексту карточки: отдельного отпечатка тут не нужно — строк полторы тысячи, а не

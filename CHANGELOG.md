@@ -1,3 +1,14 @@
+## 21.08: возврат 2 — fail-closed разметка + service вне resolver/emb [код]
+
+[код] без разметки такт больше не считает векторы «одним проходом»:
+- `classify_entities.py`: полный провал модели → exit 2; потолок MAX_PER_RUN → 0.
+- `build.sh` 2-бис: `|| fail` вместо «ВНИМАНИЕ»; ROWS_WHERE service на метках и resolver.
+- `resolver_build.sql`: p_val без service + DELETE service из `resolver_index`.
+- `embed_all.sh` / `entity_card_build.sql`: service не получает emb (labels/resolver/card).
+Оффлайн `test_classify_fail_closed.py` **11/11**. md5: build `3234fcdf`, classify
+`5db1cbce`, resolver `d8c5ea64`, embed_all `4de80d70`, card `47606c34`.
+Чистка emb на klient-1 — после выката оркестратором (иначе resolver снова наполнится).
+
 ## 21.08: klient-1 — ключ gpu-27b заменён, class полный, /ask жив [замер][код]
 
 [замер] klient-1: `DEEPSEEK_API_KEY` в `/etc/1c-mcp-reports.env` → fp
