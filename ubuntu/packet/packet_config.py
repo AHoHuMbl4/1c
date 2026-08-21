@@ -2,24 +2,28 @@
 """Config-builder пакетного транспорта: итоговый контур сущностей для агента.
 
 Контракт — docs/PACKET_CONTRACT.md §10, камень Б2 плана PLAN_MVP_PACKET_TRANSPORT §13.
-Источник истины отбора — Ubuntu: контур считается здесь теми же тремя признаками,
+Источник истины отбора — Ubuntu: контур считается здесь теми же признаками,
 что serene_sync._service_skip, и агент получает готовый список через GET /agent/config
 (сам агент ничего не исключает и не добавляет).
 
 Один заход на базу:
   1. отбор контура — ОДНИМ запросом в движке (п. 20 TARGET): перепись base_profile
      (rows>0) ∩/∖ признаки search_entity_force (mode=load возвращает источник,
-     mode=skip убирает — слово владельца сильнее остальных) и search_entity_class
-     (cls='service'), с приоритетом force > class — форма serene_sync._service_skip;
-  2. only_binary — единственный признак в Python, это разбор снимка $metadata,
-     приехавшего файлом <PACKET_META_DIR>/<base_id>/$metadata (его пишет
-     packet_apply), а не запрос к данным; файла нет — признак не применяется,
-     остаются census+class+force;
+     mode=skip убирает — слово владельца сильнее остальных), платформенные тени
+     OData (`*_RecordType`/`*_RowType`) и search_entity_class (cls='service'),
+     с приоритетом force > shadow > class — форма serene_sync._service_skip;
+  2. only_binary — разбор снимка $metadata (файл
+     <PACKET_META_DIR>/<base_id>/$metadata от packet_apply), не запрос к данным;
+     файла нет — признак не применяется; тени режутся и без снимка (суффикс
+     платформы — тот же, что corpus_build.sql);
   3. итог — в запись базы в PACKET_BASES (config.entities); config_version растёт
      на 1, только если список или params изменились (без изменений файл не трогается,
      и агент не дёргается);
   4. search_entity_skipped перезаписывается причинами в форме serene_sync (п. 13
      TARGET: исключённое видно с причиной).
+
+Пересчёт — штатная операция, не только онбординг: тот же бинарь зовётся после
+разметки из build.sh (PACKET_BASE_ID) и вручную `packet_config <base_id>`.
 
 Файл баз переписывается атомарно (temp+replace) read-modify-write: токены, identity
 и записи других баз сохраняются как были.
@@ -72,6 +76,13 @@ _BINARY_TYPES = ("Edm.Stream", "Edm.Binary")
 WHY_FORCE = "решение владельца (search_entity_force)"
 WHY_CLASS = "размечено служебным (search_entity_class)"
 WHY_BINARY = "всё содержимое двоичное, текста нет ($metadata)"
+WHY_SHADOW = "тень регистра OData (_RecordType/_RowType, $metadata)"
+
+# Платформенные суффиксы плоских теней регистра в OData 1С. Это контракт платформы
+# (одинаковы при любом языке конфигурации), не список бизнес-имён — то же
+# соглашение, что corpus_build.sql:192-197. Имена теней нужны сборке корпуса
+# только из снимка $metadata (balance_registers); строки витрины не читаются.
+_SHADOW_SUFFIXES = ("_RecordType", "_RowType")
 
 
 def _log(msg: str) -> None:
@@ -154,12 +165,28 @@ def _only_binary(props: dict, entity_set: str) -> bool:
     return blob and not human
 
 
+def _is_odata_shadow(entity_set: str, props: dict | None = None) -> bool:
+    """Плоская тень регистра OData 1С — по суффиксу платформы, не по списку имён.
+
+    Регистр отдаётся дважды: обёрткой и `<Регистр>_RecordType` с теми же движениями
+    (corpus_build.sql:184-191). Связь с базовой сущностью — в самом имени
+    (суффикс отрезает обёртку); `props` не нужен для решения и оставлен для
+    симметрии с only_binary / будущих ужесточений. Без снимка и со снимком
+    правило одно — как отсев в corpus_build.sql:192-197."""
+    es = str(entity_set or "")
+    for suf in _SHADOW_SUFFIXES:
+        if es.endswith(suf) and len(es) > len(suf):
+            return True
+    return False
+
+
 # --- контур: отбор одним SQL в движке ---------------------------------------------
 #
-# П. 20 TARGET: отбор (перепись ∩/∖ признаки с приоритетом force > class) делает
-# движок одним запросом — три запроса со склейкой в Python были сочтены снайпером
-# собственной обработкой данных вне базы. В Python остаётся ровно то, чего у движка
-# нет: разбор снимка $metadata (признак only_binary).
+# П. 20 TARGET: отбор (перепись ∩/∖ признаки с приоритетом force > shadow > class)
+# делает движок одним запросом — три запроса со склейкой в Python были сочтены
+# снайпером собственной обработкой данных вне базы. В Python остаётся ровно то,
+# чего у движка нет: разбор снимка $metadata (only_binary) и страховка теней на
+# бутстреп-пути (все EntitySet с keep).
 # [замер-основание 06.08, живая ut_test, сборка 26.07.3] форма запроса ниже даёт
 # то же, что прежняя Python-склейка: keep=784, service=805 — число в число.
 
@@ -180,34 +207,37 @@ _SAFE_COL_SQL = ("lower(trim(BOTH '_' FROM "
 def _contour_sql(has_class: bool, has_force: bool) -> str:
     """Один запрос контура: (entity, verdict) для каждой непустой сущности.
 
-    Ветки CASE и JOIN'ы включаются только для существующих таблиц признаков:
-    нет class — нет ветки 'service', нет обеих — голый 'keep'. Порядок веток в
-    CASE — приоритет serene_sync._service_skip: слово владельца (force) раньше
-    разметки (class)."""
+    JOIN force/class — если таблицы признаков есть. Ветка shadow в CASE — по
+    суффиксу платформы OData (без отдельной таблицы). Ряд веток CASE совпадает
+    с serene_sync._service_skip: force, затем shadow, затем class."""
     branches = []
     joins = []
     if has_force:
         branches.append("WHEN lower(trim(COALESCE(f.mode,''))) = 'load' THEN 'load'")
         branches.append("WHEN lower(trim(COALESCE(f.mode,''))) = 'skip' THEN 'skip'")
         joins.append("LEFT JOIN search_entity_force f ON f.src_table = k.k")
+    # Доки: Metadata Functions / duckdb_tables — отбор имён таблиц; суффикс —
+    # контракт OData 1С (corpus_build.sql:192-197), не словарь конфигурации.
+    branches.append(
+        "WHEN k.entity ILIKE '%\\_RecordType' ESCAPE '\\' "
+        "OR k.entity ILIKE '%\\_RowType' ESCAPE '\\' THEN 'shadow'")
     if has_class:
         branches.append("WHEN c.cls = 'service' THEN 'service'")
         joins.append("LEFT JOIN search_entity_class c ON c.src_table = k.k")
     head = ("/* contour */ WITH src AS (SELECT entity, %s AS k0 FROM base_profile "
             "WHERE rows > 0), keyed AS (SELECT entity, CASE WHEN k0 = '' OR k0 ~ '^[0-9]' "
             "THEN 'c_' || k0 ELSE k0 END AS k FROM src) " % _SAFE_COL_SQL)
-    if not branches:
-        return head + "SELECT k.entity, 'keep' AS verdict FROM keyed k ORDER BY 1;"
     case = "CASE %s ELSE 'keep' END AS verdict" % " ".join(branches)
-    return head + "SELECT k.entity, %s FROM keyed k %s ORDER BY 1;" % (case, " ".join(joins))
+    return head + "SELECT k.entity, %s FROM keyed k %s ORDER BY 1;" % (
+        case, " ".join(joins))
 
 
 def compute_contour(rows: list, props: dict | None) -> tuple[list[str], dict]:
     """Итоговый контур и причины по ответу движка (entity, verdict).
 
-    'load' — грузим (слово владельца сильнее любого признака), 'skip'/'service' —
-    причина из вердикта; only_binary применяется здесь, к вердикту 'keep', — это
-    разбор $metadata, а не запрос к данным."""
+    'load' — грузим (слово владельца сильнее любого признака, включая тень),
+    'skip'/'shadow'/'service' — причина из вердикта; only_binary и страховка
+    теней на бутстреп-пути (вердикт 'keep') — разбор имени/$metadata."""
     skip = {}
     entities = []
     for es, verdict in rows:
@@ -215,6 +245,8 @@ def compute_contour(rows: list, props: dict | None) -> tuple[list[str], dict]:
             entities.append(es)
         elif verdict == "skip":
             skip[es] = WHY_FORCE
+        elif verdict == "shadow" or _is_odata_shadow(es, props):
+            skip[es] = WHY_SHADOW
         elif verdict == "service":
             skip[es] = WHY_CLASS
         elif props is not None and _only_binary(props, es):
@@ -355,7 +387,7 @@ def run(base_id: str, dsn: str, bases_path: str, dry_run: bool = False) -> int:
     old_cfg = rec.get("config") if isinstance(rec.get("config"), dict) else {}
     # Полнота (п. 13 TARGET): сущность из прошлого контура не выбывает молча —
     # например ещё пустая (rows=0) после бутстрепа из снимка. Выбывает только по
-    # явной причине (skip: force/class/only_binary).
+    # явной причине (skip: force/shadow/class/only_binary).
     prev = old_cfg.get("entities") if isinstance(old_cfg.get("entities"), list) else []
     keep_prev = sorted(set(prev) - set(entities) - set(skip))
     if keep_prev:
@@ -394,7 +426,12 @@ def run(base_id: str, dsn: str, bases_path: str, dry_run: bool = False) -> int:
     new_cfg["params"] = params
     rec["config"] = new_cfg
     data[base_id] = rec
-    _write_bases_atomic(bases_path, data)
+    try:
+        _write_bases_atomic(bases_path, data)
+    except PermissionError as e:
+        _log(f"FATAL: нет записи в {bases_path}: {e}; контур посчитан "
+             f"({len(entities)} сущ.), файл баз не обновлён")
+        return 2
     _log(f"записано: config_version {cur} → {cur + 1}, сущностей {len(entities)}, "
          "токены и записи других баз сохранены")
     return 0

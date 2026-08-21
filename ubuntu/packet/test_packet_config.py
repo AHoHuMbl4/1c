@@ -161,12 +161,16 @@ META_XML = """<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"><
 # не играет — он вычислен движком до нас (живой замер 784/805, шапка файла).
 CONTOUR = [("Catalog_Альфа", "keep"), ("Catalog_Обычный", "keep"),
            ("Catalog_Форсирован", "load"), ("Catalog_Пропуск", "skip"),
-           ("Catalog_Служебный", "service"), ("Catalog_Бинарь", "keep")]
+           ("Catalog_Служебный", "service"), ("Catalog_Бинарь", "keep"),
+           ("AccumulationRegister_Продажи_RecordType", "shadow"),
+           ("Catalog_Строка_RowType", "keep")]
 
 EXPECTED_ENTITIES = ["Catalog_Альфа", "Catalog_Обычный", "Catalog_Форсирован"]
 EXPECTED_SKIPS = {"Catalog_Пропуск": PC.WHY_FORCE,
                   "Catalog_Служебный": PC.WHY_CLASS,
-                  "Catalog_Бинарь": PC.WHY_BINARY}
+                  "Catalog_Бинарь": PC.WHY_BINARY,
+                  "AccumulationRegister_Продажи_RecordType": PC.WHY_SHADOW,
+                  "Catalog_Строка_RowType": PC.WHY_SHADOW}
 
 # Снимок с наборами сущностей (EntitySet) для бутстреп-пробы (ж): Обычный —
 # с текстом; Бинарь — всё двоичное (only_binary); Пустой — с текстом, но в
@@ -185,10 +189,15 @@ BOOT_XML = """<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"><
 <Property Name="Ref_Key" Type="Edm.String"/>
 <Property Name="Комментарий" Type="Edm.String"/>
 </EntityType>
+<EntityType Name="AccumulationRegister_Продажи_RecordType">
+<Property Name="Period" Type="Edm.DateTime"/>
+<Property Name="RecordType" Type="Edm.String"/>
+</EntityType>
 <EntityContainer Name="standard">
 <EntitySet Name="Catalog_Обычный" EntityType="standard.Catalog_Обычный"/>
 <EntitySet Name="Catalog_Бинарь" EntityType="standard.Catalog_Бинарь"/>
 <EntitySet Name="Document_Пустой" EntityType="standard.Document_Пустой"/>
+<EntitySet Name="AccumulationRegister_Продажи_RecordType" EntityType="standard.AccumulationRegister_Продажи_RecordType"/>
 </EntityContainer>
 </Schema></edmx:Edmx>"""
 
@@ -240,22 +249,53 @@ def main() -> int:
           and "search_entity_force" not in sql_class
           and "search_entity_class" in sql_class)
     sql_none = PC._contour_sql(has_class=False, has_force=False)
-    check("а: без обеих — голый keep без JOIN",
-          "'keep' AS verdict" in sql_none and "JOIN" not in sql_none)
+    check("а: без class/force — ветка shadow есть, JOIN нет",
+          "'shadow'" in sql_none and "JOIN" not in sql_none
+          and "search_entity_class" not in sql_none
+          and "search_entity_force" not in sql_none)
+    check("а: ветка shadow раньше class (force > shadow > class)",
+          sql_both.index("'shadow'") < sql_both.index("'service'"))
     check("а: запрос существования — с фильтром по текущей базе (ловушка №25)",
           "/* tables */" in PC._TABLES_SQL
           and "database_name = current_database()" in PC._TABLES_SQL)
 
-    # -- (а2) Python-часть: only_binary по снимку + раскладка вердиктов движка
+    # -- (а2) Python-часть: only_binary + тени по снимку + раскладка вердиктов
     entities, skip = PC.compute_contour(list(CONTOUR), PC._props_by_type(META_XML))
-    check("а2: контур — keep/load минус only_binary", entities == EXPECTED_ENTITIES,
+    check("а2: контур — keep/load минус only_binary и тени", entities == EXPECTED_ENTITIES,
           repr(entities))
     check("а2: причины по каждому исключённому", skip == EXPECTED_SKIPS, repr(skip))
     check("а2: verdict 'load' сильнее only_binary (Python-сторона признака)",
           "Catalog_Форсирован" in entities and "Catalog_Форсирован" not in skip)
+    # force=load сильнее тени
+    ent_load_shadow, skip_load_shadow = PC.compute_contour(
+        [("AccumulationRegister_Продажи_RecordType", "load")],
+        PC._props_by_type(META_XML))
+    check("а2: verdict 'load' сильнее тени _RecordType",
+          ent_load_shadow == ["AccumulationRegister_Продажи_RecordType"]
+          and skip_load_shadow == {})
+    check("а2: _is_odata_shadow — суффикс платформы, не список имён",
+          PC._is_odata_shadow("InformationRegister_Цены_RecordType")
+          and PC._is_odata_shadow("Catalog_X_RowType")
+          and not PC._is_odata_shadow("Catalog_Обычный")
+          and not PC._is_odata_shadow("_RecordType"))
+    # Замок: признак остаточного регистра читает ИМЕНА из $metadata (corpus_build
+    # §1-бис → search_meta.balance_registers), не строки витрины. Вырез теней из
+    # контура/витрины этот путь не ломает — в SQL нет обращения к duckdb_tables
+    # теней, только к tmp3_ent/tmp3_prop снимка.
+    corpus_sql = open(os.path.join(_REPO, "ubuntu", "serenedb", "corpus_build.sql"),
+                      encoding="utf-8").read()
+    bal_pos = corpus_sql.find("balance_registers")
+    bal_chunk = corpus_sql[bal_pos:bal_pos + 500] if bal_pos >= 0 else ""
+    check("а2-замок: balance_registers из tmp3_ent снимка, не из витрины теней",
+          bal_pos >= 0
+          and "tmp3_ent" in bal_chunk
+          and "duckdb_tables" not in bal_chunk
+          and "_recordtype" in bal_chunk.lower())
     ent2, skip2 = PC.compute_contour(list(CONTOUR), None)
-    check("а2: без файла снимка only_binary не применяется",
+    check("а2: без файла снимка only_binary не применяется, тени режутся суффиксом",
           "Catalog_Бинарь" in ent2
+          and "AccumulationRegister_Продажи_RecordType" not in ent2
+          and "Catalog_Строка_RowType" not in ent2
           and skip2 == {k: v for k, v in EXPECTED_SKIPS.items() if k != "Catalog_Бинарь"},
           repr(skip2))
     # то же на уровне _read_sources: пустой каталог снимков → props None
@@ -336,10 +376,10 @@ def main() -> int:
               fragment in sync_src and fragment in written)
     check("г: GRANT той же читающей роли, что у serene_sync (serene_ro)",
           "GRANT SELECT ON search_entity_skipped TO serene_ro" in written)
-    for why in (PC.WHY_FORCE, PC.WHY_CLASS, PC.WHY_BINARY):
+    for why in (PC.WHY_FORCE, PC.WHY_CLASS, PC.WHY_BINARY, PC.WHY_SHADOW):
         check(f"г: причина «{why[:30]}…» дословно из serene_sync",
               why in sync_src and why in written)
-    check("г: все три исключения попали в VALUES",
+    check("г: все исключения (force/class/binary/shadow) попали в VALUES",
           all(e in written for e in EXPECTED_SKIPS))
 
     # -- (е) packet_server отдаёт новый config_version без перезапуска
@@ -419,11 +459,15 @@ def main() -> int:
     check("ж: бутстреп — контур из снимка, код 0, версия 1 → 2",
           rc == 0 and doc["ut"]["config"]["config_version"] == 2,
           f"rc={rc} {repr(doc['ut']['config'])[:120]}")
-    check("ж: бутстреп — все наборы снимка, кроме only_binary",
+    check("ж: бутстреп — все наборы снимка, кроме only_binary и теней",
           doc["ut"]["config"]["entities"] == ["Catalog_Обычный", "Document_Пустой"],
           repr(doc["ut"]["config"]["entities"]))
     check("ж: бутстреп — only_binary исключён с видимой причиной",
           any("Catalog_Бинарь" in sql and PC.WHY_BINARY in sql for sql in db.execs),
+          repr(db.execs)[:200])
+    check("ж: бутстреп — тень _RecordType исключена с видимой причиной",
+          any("AccumulationRegister_Продажи_RecordType" in sql and PC.WHY_SHADOW in sql
+              for sql in db.execs),
           repr(db.execs)[:200])
 
     # перепись появилась, но Document_Пустой в ней без строк (его нет в rows):

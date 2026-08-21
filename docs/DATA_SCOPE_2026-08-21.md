@@ -419,10 +419,25 @@ klient-1 для добора разметки гоняли временную к
 останавливается; service не попадает в resolver и не получает emb (corpus уже
 фильтровался; дыра была в soft-fail classify + resolver без class).
 
-Чистка `UPDATE … SET emb=NULL` по service на klient-1 — **после выката**: иначе
-следующий такт со старым `resolver_build` снова вставит service-значения.
-Целевые объёмы (замер оркестратора): corpus service emb **5 663 216**, resolver
-service emb **605 784**. Строки корпуса/резолвера не удалять — только `emb`.
+Чистка на klient-1 **сделана** `[замер 21.08]` после выката `c160c49` (md5
+сошлись). Строки не удаляли — только `emb=NULL`. Один большой `UPDATE … FROM`
+не закоммитился (убит при остановке pipeline); добито батчем по `src_table`
+с SQL-литералами `'…'` (JSON `"…"` SereneDB читает как имя колонки).
+
+| | до | после |
+|---|---:|---:|
+| corpus service emb | **5 663 216** | **0** |
+| resolver service emb | **605 784** | **0** |
+| corpus service rows | 5 972 192 | 5 972 192 |
+| resolver service rows | 605 784 | 605 784 |
+| corpus business emb | 2 185 215 | 2 185 215 |
+| resolver business emb | 1 631 772 | 1 631 772 |
+| `__sdb_store` (PRAGMA database_size) | 88.7 GiB → (пик 96.2 при откате) | **88.7 GiB** |
+
+Corpus: 960 service-таблиц, ~60 мин; resolver: `UPDATE … WHERE EXISTS (class=service)`
+→ `UPDATE 605784` за 86 с. Контроль «не пересчиталось» — после следующего
+полного такта (pipeline после чистки: `build.sh` без `+x` → exit 126;
+восстановлен `chmod a+x *.sh`, такт перезапущен).
 
 
 ---
@@ -523,5 +538,33 @@ okna, 53% plain-канала) сегодня не потребляет ни од
 попадал в корпус и был **шумом** при выборе сущности (вопрос уходил в тень с
 1 записью вместо документа с 6), то есть довод в ту же сторону, не против.
 
-**Хранение okna:** `PRAGMA database_size` — store **24,2 ГиБ** used
-(99 220 × 256 КиБ). `[замер 21.08]`
+## 10.7 Статус решений владельца (2)/(3): контур + тени `[код]` `[замер 21.08]`
+
+**Решение (2)** — лишнее `_RecordType` убираем на всех базах; **(3)** — пересчёт
+контура после разметки обязателен.
+
+| что | где | статус |
+|---|---|---|
+| правило тени `_RecordType`/`_RowType` (суффикс OData) | `packet_config._contour_sql` + `compute_contour` / `_is_odata_shadow`; зеркало `serene_sync._service_skip` | в git |
+| service из class в контуре | уже было в SQL (`cls='service'`); **не хватало пересчёта** | пересчёт — штатный шаг |
+| пересчёт после classify | `build.sh` шаг `2-тер` при `PACKET_BASE_ID` | в git |
+| команда вручную | `python3 packet_config.py <base_id>` | была; теперь и после разметки |
+
+**Дев (этот хост):**
+- `ut` (DSN `ut_test`): dry/live-счёт **782 → 695** (−87 `_RecordType`); service
+  в контуре уже был 0 (class жив). Файл `/etc/1c-packet-bases.json` **640
+  root:1c-secrets** — запись из `claudedev` отказала; готовый файл
+  `work/packet/bases-contour-recalc-20260821.json` (config_version **4**,
+  RecordType **0**) — установить оркестратору/root.
+- витрина `_RecordType`: **postgres** 3 табл. / 324 стр. → 0; **ut_test** 87 /
+  137 159 → 0. `search_meta.balance_registers` не из витрины (замок теста
+  `а2-замок` + чтение кода `corpus_build.sql:91-101`).
+- service в витрине (**не удаляли**, п.13 корпус): postgres **53** сущ. /
+  **36 985** стр.; ut_test **805** / **257 991**. Удаление сырых строк
+  service — **отдельным словом владельца**.
+
+**okna / klient-1:** выкат кода + `packet_config <base>` + DROP теней — оркестратор
+(md5 в CHANGELOG). Ожидаемо по замеру §10.6: okna −48 `_RecordType` из контура
+и −97 service; klient-1 −service (class 1029) и тени по суффиксу.
+
+---

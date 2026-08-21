@@ -285,6 +285,32 @@ echo "== 2-бис. разметка сущностей (что бизнес, ч�
 python3 classify_entities.py \
   || fail "разметка сущностей недоступна (модель/401/404) — без разметки векторы не считаем"
 
+# 🔴 ПЕРЕСЧЁТ КОНТУРА АГЕНТА ПОСЛЕ РАЗМЕТКИ. [замер 21.08, DATA_SCOPE §9.7/§10.6]
+# packet_config раньше звался только онбордингом: после появления class service и
+# тени _RecordType продолжали ехать по каналу (okna: 97 service + 48 RecordType в
+# entities). Теперь — штатный шаг такта, когда задан PACKET_BASE_ID (слот в
+# PACKET_BASES). Без изменений config_version не растёт — агент не дёргается.
+if [ -n "${PACKET_BASE_ID:-}" ]; then
+  echo "== 2-тер. пересчёт контура агента (packet_config $PACKET_BASE_ID)"
+  _pc="${PACKET_CONFIG_PY:-}"
+  if [ -z "$_pc" ]; then
+    if [ -f /opt/1c-packet/packet_config.py ]; then
+      _pc=/opt/1c-packet/packet_config.py
+    elif [ -f "${SERENE_SRC_DIR:-}/../packet/packet_config.py" ]; then
+      _pc="${SERENE_SRC_DIR}/../packet/packet_config.py"
+    elif [ -f /srv/1c/ubuntu/packet/packet_config.py ]; then
+      _pc=/srv/1c/ubuntu/packet/packet_config.py
+    fi
+  fi
+  if [ -n "$_pc" ]; then
+    SERENEDB_DSN="$DSN" PACKET_BASES="${PACKET_BASES:-/etc/1c-packet-bases.json}" \
+      python3 "$_pc" "$PACKET_BASE_ID" \
+      || fail "пересчёт контура агента"
+  else
+    echo "WARN: PACKET_BASE_ID=$PACKET_BASE_ID, но packet_config.py не найден — контур не пересчитан" >&2
+  fi
+fi
+
 # 🔴 ПОРЯДОК ВЕКТОРИЗАЦИИ: ДЕШЁВОЕ И НУЖНОЕ — РАНЬШЕ ДОРОГОГО. Сначала метки сущностей,
 # потом резолвер, и только затем корпус. Причина не в экономии, а в том, что первый такт
 # на незнакомой базе идёт часами и может оборваться:
