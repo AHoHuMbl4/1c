@@ -39,6 +39,13 @@
 Доки: Configuration › Pragmas (database_size, storage_info); Sql › Functions ›
 Metadata Functions (duckdb_tables).
 
+## 21.08: DATA_SCOPE — тот же вопрос по okna [замер]
+
+[замер] `docs/DATA_SCOPE_2026-08-21.md` §10: на okna class жив; service **1%**
+витрины / **0** векторов / **0,3%** канала. Дорогое «лишнее» — `_RecordType`
+(**27,8%** витрины, **~53%** plain канала), в корпус не входит. FIAS-блока нет.
+Состояние okna не менялось.
+
 ## 21.08: граница деловых/неделовых в витрине — замер DATA_SCOPE [замер][код]
 
 [замер] `docs/DATA_SCOPE_2026-08-21.md`: на klient-1 `search_entity_class` **пуста**
