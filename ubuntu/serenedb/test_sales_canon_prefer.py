@@ -159,5 +159,42 @@ finally:
 gap0 = A.stock_balance_no_data("остаток на складе", {}, {}, time.time())
 t("пустой balance_registers → no_data", gap0 and gap0.get("kind") == "no_data", gap0)
 
+
+# --- override helpers ---
+A.psql = _fake
+A._measures_by_src = _fake_mbs
+try:
+    got3 = A.prefer_entity_for_sales(
+        ["document_реализациятмц", "accumulationregister_книгапродаж",
+         "accumulationregister_реализациятмц"],
+        {"want": "sum", "kind": "продажи", "measure": "продали"},
+        "сколько продали в прошлом месяце?")
+    t("prefer: книгапродаж снята из пула",
+      "accumulationregister_книгапродаж" not in got3, got3)
+    t("prefer: документ снят", "document_реализациятмц" not in got3, got3)
+    t("sales_canon_src lock",
+      A.sales_canon_src(
+          ["document_реализациятмц", "accumulationregister_книгапродаж"],
+          {"want": "sum", "measure": "продали"},
+          "сколько продали?") == "accumulationregister_реализациятмц")
+finally:
+    A.psql = _old
+    A._measures_by_src = _real_mbs
+
+t("period_zero_why sunday",
+  A.period_zero_why_question("почему в воскресенье продаж ноль, это сбой?"))
+t("period_zero_why not plain sales",
+  not A.period_zero_why_question("сколько продали в воскресенье?"))
+
+# catalog prefer
+gotc = A.prefer_entity_for_catalog_count(
+    ["informationregister_ценыноменклатуры", "document_установкаценноменклатуры",
+     "catalog_номенклатура"],
+    {"want": "count"}, "сколько позиций у нас в прайсе?")
+t("catalog prefer: номенклатура первой",
+  gotc and gotc[0] == "catalog_номенклатура", gotc)
+t("catalog prefer: цены не в голове",
+  gotc and "ценыноменклатуры" not in (gotc[0] or ""), gotc)
+
 print("PASS", PASS, "FAIL", len(FAIL))
 sys.exit(0 if not FAIL else 1)

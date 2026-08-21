@@ -194,6 +194,7 @@ measure_label, единица, период, фильтры, зерно/ось/�
 | **Среди регистров одного регистратора** | движения с Количество+Всего выше книги НДС (`книгапродаж`) |
 | **Пустой названный период** | `answer(0)` / `period_empty`, не clarify журналов |
 | **Именованный товар «на складе» без товарных остатков** | `no_data`; общий «товара на складе» — clarify |
+| **Открытый день (доставка)** | ответ с регистра; freshness/merge_pending уже в partial — отдельная «в пути»-метка не нужна, пока поток не затих |
 
 Код: `prefer_entity_for_sales`, `sales_sum_intent`, `stock_asks_named_product` /
 `balance_registers_with_goods` в `serene_ask.py`. Замок: `test_sales_canon_prefer.py`.

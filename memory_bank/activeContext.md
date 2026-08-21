@@ -9,6 +9,11 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
 
+🔴 **возврат 9 — lock канона продаж в git `[21.08]`**: override picked→регистр;
+книга/документ сняты; cold-lift воскресенья; прайс→catalog; why-zero→sum.
+Замок **22/22**. md5 в коммите. Выкат+scorer okna — оркестратор. Хвост:
+rank/top-N, #13 не продаётся, #20 distinct покупатели.
+
 🔴 **возврат 8 — канон «продали» в git, выкат ждёт оркестратора `[21.08]`**:
 PLAN §6bis: регистр по `written_by`, документ люк; intraday не fork. Код
 `prefer_entity_for_sales` + stock named→no_data. Замок **15/15**. md5 ask
@@ -45,13 +50,11 @@ GPU. SSH на `178.63.211.188` (nvidia-smi) из сессии не пустил 
 Секрет openai timeout не принимает. Штатного batch/async в доках нет.
 Разведка в CHANGELOG / techContext ловушка 53; код не меняли.
 
-🔴 **возврат 2: чистка service emb на klient-1 сделана `[21.08]`**: после
-выката `c160c49` corpus **5 663 216→0**, resolver **605 784→0**; строки
-целы; business emb не трогали. `__sdb_store` 88.7 GiB. DATA_SCOPE §9.12.
-Контроль «не пересчиталось»: pipeline после чистки упал на `build.sh`
-Permission denied (выкат без `+x`) — `chmod a+x` + перезапуск; такт
-идёт (`build`/`embed_missing` resolver). После inactive — пересчёт
-service emb должен остаться **0**.
+🔴 **возврат 2: чистка service emb klient-1 + контроль такта `[21.08]`**:
+после `c160c49` corpus/resolver service emb **5 663 216/605 784→0**;
+после такта service emb **0**, resolver service rows **0**, business
+corpus emb **2 185 215** цел; `resolver_values=1 631 785`. Выкат без
+`+x` на `build.sh` → 126, починено `chmod`. DATA_SCOPE §9.12.
 
 🔴 **okna sync-лаг закрыт `[21.08]`**: корень — merge-сторож не узнавал
 `guid#N` у `document_установкаценноменклатуры` (321 757→439) → fail-loop с

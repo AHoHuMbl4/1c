@@ -1,3 +1,20 @@
+## 21.08: возврат 9 — канон lock + воскресенье/прайс [код]
+
+[код] `serene_ask.py` после 9/25 на a6a9362 (okna):
+- **#7 июль:** в пуле были `книгапродаж`+`document` (2 800 514.18), канон
+  `accumulationregister_реализациятмц` (2 767 450.98) не закреплялся. Fix:
+  demote-соседей снимаем из пула; `sales_canon_override` принудительно ставит
+  picked=канон; `writer_pair` при lock не заводит документ в arb_pool.
+- **#16:** cold-lift не срабатывал при пустых measures (порог ≥8). Имя
+  реализац/продаж ≥2 — достаточно; дальше lock → period_empty при 0 строк.
+- **#17:** `period_zero_why_question` → want=sum, не figures.
+- **#19:** `prefer_entity_for_catalog_count` — catalog_номенклатура вместо цен.
+- **#2/#6/#14/#15:** действия не требуется (внутридневной дрейф); freshness уже
+  в ответе. Rank/top-N и #13/#20 — следующий заход.
+
+[замер] оффлайн sales_canon **22/22**; 43/26/19/15/22/31/110/56/132/92/18/30 —
+0 fail. md5 ask в коммите. Выкат — оркестратор.
+
 ## 21.08: возврат 8 — канон «продали»=регистр; петли→no_data [код]
 
 [код] `ubuntu/serenedb/serene_ask.py` + замок `test_sales_canon_prefer.py` (15/15):
@@ -143,8 +160,9 @@ resolver раунд: 1013 посчитано, **16** не сдвинулись; 
 без изменения (corpus 2 185 215, resolver 1 631 772). `__sdb_store` 88.7 GiB
 (пик 96.2 при откате первого UPDATE). Батч по таблице + EXISTS для resolver;
 Доки: Constraint Checking in UPDATE / IS NULL / EXISTS. DATA_SCOPE §9.12.
-Контроль после такта — в activeContext (pipeline: снят `-x` с `build.sh`
-при выкате → 126, `chmod a+x` восстановлен).
+После такта: service emb **0**, resolver service rows **0**,
+business corpus emb **2 185 215**, `resolver_values=1 631 785` /
+`resolver_no_emb=0`. Выкат без `+x` на `build.sh` → 126, `chmod` ок.
 
 ## 21.08: возврат 2 — fail-closed разметка + service вне resolver/emb [код]
 

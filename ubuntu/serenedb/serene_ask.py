@@ -3383,7 +3383,12 @@ def prefer_entity_for_sales(cands, intent, question):
             except Exception:  # noqa: BLE001
                 m_cold = {}
             cold.sort(key=lambda s: (-_sales_register_score(s, m_cold.get(s) or []), s))
-            if _sales_register_score(cold[0], m_cold.get(cold[0]) or []) >= 8:
+            # >=8 — есть Количество+итог; иначе при пустых measures имя движения
+            # (реализац/продаж) всё равно канон: иначе воскресенье остаётся на журналах.
+            _sc0 = _sales_register_score(cold[0], m_cold.get(cold[0]) or [])
+            _nm0 = (cold[0] or "").lower()
+            if _sc0 >= 8 or (
+                    _sc0 >= 2 and any(k in _nm0 for k in ("реализац", "продаж", "sale"))):
                 lifted = [cold[0]]
                 try:
                     wb = psql("SELECT written_by FROM %s WHERE src_table=%s LIMIT 1"
@@ -3402,10 +3407,12 @@ def prefer_entity_for_sales(cands, intent, question):
     lifted.sort(key=lambda s: (-_sales_register_score(s, mbs.get(s) or []), s))
     canon = lifted[0]
     drop_docs = set(docs)
-    demote_regs = [r for r in lifted[1:]]
+    # Соседи по регистратору (книга НДС и пр.) — не в авто-пуле: иначе модель
+    # выбирает книгу, а канон движений молчит ([замер 21.08] июль B doc+книга).
+    demote_regs = set(lifted[1:])
     out, seen = [], set()
     for c in [canon] + [x for x in cands if x not in drop_docs and x not in demote_regs
-                        and x != canon] + demote_regs:
+                        and x != canon]:
         if c and c not in seen:
             if c in drop_docs:
                 continue
@@ -3414,6 +3421,65 @@ def prefer_entity_for_sales(cands, intent, question):
     if canon not in seen:
         out.insert(0, canon)
     return out or cands
+
+
+def sales_canon_src(cands, intent, question):
+    """Src канона продаж после prefer — или None."""
+    if not sales_sum_intent(intent, question):
+        return None
+    preferred = prefer_entity_for_sales(list(cands or []), intent, question)
+    if not preferred:
+        return None
+    top = preferred[0]
+    if not str(top).startswith("accumulationregister_"):
+        return None
+    return top
+
+
+def prefer_entity_for_catalog_count(cands, intent, question):
+    """«Позиций в прайсе» — catalog_номенклатура, не цены/установка цен."""
+    intent = intent or {}
+    q = " ".join(str(question or "").lower().split())
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return cands
+    if not any(w in q for w in ("прайс", "price list", "в прайсе", "номенклатур")):
+        return cands
+    if any(w in q for w in ("прода", "куп", "остат", "склад")):
+        return cands
+    cands = list(cands or [])
+    cats = [c for c in cands if str(c).startswith("catalog_") and any(
+        k in str(c).lower() for k in ("номенклатур", "nomencl", "товар", "product"))]
+    if not cats:
+        # холодный подъём: в пуле только цены
+        try:
+            rows = psql(
+                "SELECT src_table FROM %s WHERE src_table LIKE 'catalog_%%' "
+                "AND (src_table LIKE '%%номенклатур%%' OR src_table LIKE '%%nomencl%%') "
+                "ORDER BY src_table LIMIT 8" % TABLES)
+            cats = [r[0] for r in (rows or []) if r and r[0]]
+        except RuntimeError:
+            cats = []
+    if not cats:
+        return cands
+    head = cats[0]
+    rest = [c for c in cands if c != head and not (
+        str(c).startswith(("document_установкацен", "informationregister_цены"))
+        or "установкацен" in str(c) or "ценыноменклатур" in str(c))]
+    return [head] + rest
+
+
+def period_zero_why_question(question):
+    """«Почему в воскресенье ноль / это сбой?» — не figures, а period_empty."""
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return False
+    why = any(w in q for w in ("почему", "зачем", "сбой", "ошибк", "why", "broken", "bug"))
+    zero = any(w in q for w in ("ноль", "нуль", "нуле", "zero", "empty", "нет продаж",
+                                  "продаж нет"))
+    day = any(w in q for w in ("воскресен", "sunday", "недел", "день", "вчера"))
+    return bool(why and (zero or day))
+
 
 
 def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
@@ -9087,6 +9153,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     cands = list(by) + [t for t in extra if t not in by]
     cands = prefer_entity_for_rank(cands, intent, question)
     cands = prefer_entity_for_sales(cands, intent, question)
+    cands = prefer_entity_for_catalog_count(cands, intent, question)
     шаг("кандидаты собраны", всего=len(cands))
     # 🔴 «НА ЧТО НЕ ОТВЕЧАЕТ» — ВТОРАЯ ПОЛОВИНА ЗНАНИЯ УСТАНОВКИ, И ОНА НАКОНЕЦ ЧИТАЕТСЯ.
     # Установочный агент пишет про каждую сущность две половины: «на что отвечает»
@@ -9480,9 +9547,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # арбитра ×4), не вся база: иначе сотни несвязанных src с живым счётом
         # дают C с сотнями вариантов и секунды на SQL. Полный перечень cands —
         # по-прежнему источник отбора; детектор судит неоднозначность в голове.
-        _fork_pool = prefer_entity_for_sales(
-            prefer_entity_for_rank(
-                list(cands[:max(ARBITER_MAX * 4, 16)]), intent, question),
+        _fork_pool = prefer_entity_for_catalog_count(
+            prefer_entity_for_sales(
+                prefer_entity_for_rank(
+                    list(cands[:max(ARBITER_MAX * 4, 16)]), intent, question),
+                intent, question),
             intent, question)
         try:
             _mbs = _measures_by_src(_fork_pool)
@@ -9994,8 +10063,25 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     #      базу (п. 9). Поэтому связь не решает, а лишь ЗАВОДИТ второе прочтение в круг
     #      арбитра: спрашивает человека арбитр-детектор и только тогда, когда посчитанные
     #      числа разошлись. Сошлись — ответ уходит как прежде, цена правила равна счёту.
+    # Канон «продали»: регистр движений, не выбор модели и не книга НДС.
+    # Документ-регистратор в writer_pair не заводим — люк только по focus.
+    if (not focus and not no_arbiter and picked
+            and not entity_choice_locked(trusted, resolved)
+            and sales_sum_intent(intent, question)):
+        _canon = sales_canon_src(cands, intent, question)
+        if _canon:
+            if picked[0] != _canon:
+                diag["sales_canon_override"] = {"было": list(picked), "стало": _canon}
+                шаг("канон продаж", было=picked[0], стало=_canon)
+            picked = [_canon]
+            diag["sales_canon_locked"] = _canon
+    if period_zero_why_question(question) and sales_sum_intent(intent, question):
+        diag["period_zero_why"] = True
+        if (intent.get("want") or "") == "list":
+            intent["want"] = "sum"
     writer_pair = writer.get(picked[0]) if picked else None
-    if writer_pair and picked and writer_pair not in picked:
+    if (writer_pair and picked and writer_pair not in picked
+            and not diag.get("sales_canon_locked")):
         diag["writer_pair"] = writer_pair
     #   4. 🔴 (05.08) смысловой путь ОТКАЗАЛ (`meaning_down`). Тогда порядок кандидатов
     #      задаётся числом совпадений, то есть размером сущности, и уверенности в выборе у
@@ -10009,10 +10095,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                  or bool(diag.get("writer_pair")) or bool(diag.get("meaning_down")))
     arb_pool = list(picked)
     # Документ-регистратор идёт в круг ПЕРВЫМ соперником: он и есть второе прочтение,
-    # а не «следующий по порядку отбора».
+    # а не «следующий по порядку отбора». При каноне продаж документ — люк, не соперник.
     if (diag.get("writer_pair") and picked and not focus and not no_arbiter
+            and not diag.get("sales_canon_locked")
             and len(arb_pool) < ARBITER_MAX):
         arb_pool.append(diag["writer_pair"])
+    if sales_sum_intent(intent, question):
+        arb_pool = prefer_entity_for_sales(arb_pool, intent, question)
+    arb_pool = prefer_entity_for_catalog_count(arb_pool, intent, question)
     if doubt and picked and not focus and not no_arbiter and len(arb_pool) < ARBITER_MAX:
         fam = {_family(x) for x in arb_pool}
         # 🔴 СОПЕРНИК БЕРЁТСЯ ПО ПОРЯДКУ ОТБОРА, И ЭТО РЕШЕНО ЗАМЕРОМ, А НЕ ВКУСОМ.
