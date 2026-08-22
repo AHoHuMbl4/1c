@@ -350,6 +350,24 @@ SQL
 
 ---
 
+## Временно остановленные сервисы GPU (22.08)
+
+🔴 **Вернуть после завершения пересчёта 4B, до переключения бота** (§8).
+
+| Сервис | Хост | pid (на момент остановки) | cmdline для рестарта (на хосте, пользователь ubuntu) |
+|---|---|---|---|
+| **whisper** | gpu-1c | 4346 | `cd /home/ubuntu/qwen_services && .venv/bin/python3 whisper_server.py` |
+| **vLLM Qwen3.8-27B** | gpu-qwen27b | 162708 | `cd /home/ubuntu/llm_services && .venv/bin/python3 .venv/bin/vllm serve /home/ubuntu/models/Qwen3.8-27B-FP8 --host 0.0.0.0 --port 8000 --served-model-name Qwen3.8-27B --dtype auto --max-model-len 131072 --gpu-memory-utilization 0.78 --api-key <из env> --trust-remote-code --quantization fp8 --kv-cache-dtype fp8 --max-num-seqs 8 --enable-auto-tool-choice --tool-call-parser qwen3_xml --enforce-eager` |
+| **diarize (pyannote)** | gpu-qwen27b | 48862 | `cd /home/ubuntu/pyannote_services && .venv/bin/python3 diarize_server.py` |
+
+**Не тронуты:** rerank `:8005` (прод `RERANK_URL`) и embed `:8000`/`:8002` (прод `EMBED_HOSTS` + сам пересчёт 4B).
+
+[замер 22.08] Остановка не ускорила пересчёт (~320 req/min суммарно как было) — упор в compute
+embed-серверов, не в конкуренцию за VRAM. VRAM: gpu-qwen27b 48240→10350 MiB (−37,9 ГБ),
+gpu-1c 39800→29973 MiB.
+
+---
+
 ## 6. Контур бота (undebot + openclaw gateway)
 
 | Параметр | Значение |
