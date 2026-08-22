@@ -33,11 +33,14 @@ extra_agent_dirs = ["/srv/1c/.claude/agents"]
 [providers."managed:kimi-code"]
 type = "kimi"
 api_key = ""
-base_url = "https://api.kimi.com/coding/v1"
+# 0.38.0: endpoints переехали на kimi.ai и oauth_host обязателен — без него
+# клиент не находит креды («no credential configured», обрыв 22.08).
+base_url = "https://api.kimi.ai/coding/v1"
 
 [providers."managed:kimi-code".oauth]
 storage = "file"
-key = "oauth/kimi-code"
+key = "oauth/kimi-code-env-0e4f99c69cc27850"
+oauth_host = "https://auth.kimi.ai"
 
 [models."kimi-code/kimi-for-coding"]
 provider = "managed:kimi-code"
@@ -85,20 +88,22 @@ default_model = "kimi-code/kimi-for-coding"
 force = true
 
 [services.moonshot_search]
-base_url = "https://api.kimi.com/coding/v1/search"
+base_url = "https://api.kimi.ai/coding/v1/search"
 api_key = ""
 
 [services.moonshot_search.oauth]
 storage = "file"
-key = "oauth/kimi-code"
+key = "oauth/kimi-code-env-0e4f99c69cc27850"
+oauth_host = "https://auth.kimi.ai"
 
 [services.moonshot_fetch]
-base_url = "https://api.kimi.com/coding/v1/fetch"
+base_url = "https://api.kimi.ai/coding/v1/fetch"
 api_key = ""
 
 [services.moonshot_fetch.oauth]
 storage = "file"
-key = "oauth/kimi-code"
+key = "oauth/kimi-code-env-0e4f99c69cc27850"
+oauth_host = "https://auth.kimi.ai"
 
 # Вброс состояния работ. SessionStart оставлен ради следа в .claude/hooks.log;
 # сам вброс в контекст делает prompt-start.sh на первом сообщении сессии.

@@ -1,3 +1,24 @@
+## 22.08: Обрыв Kimi у claudedev (40111 no credential) — починка [замер] [код]
+
+[замер] Симптом: `kimi` под claudedev — «provider managed:kimi-code has no credential
+configured», logout/login не помогал. Корень — два слоя: (1) `su - claudedev -c 'kimi'`
+— неинтерактивный логин-шелл, `.bashrc` с экспортом `~/.kimi-code/bin` в PATH отсекался
+по `case $- in *i*` → резолвился `/usr/local/bin/kimi` 0.33.0 вместо автообновлённого
+0.38.0; (2) канон `work/hooks/kimi-config.toml` остался от эпохи 0.33.0: endpoints
+`api.kimi.com` без `oauth_host` — 0.38.0 с таким конфигом креды не находит.
+
+[код] Починено: `~claudedev/.profile` — PATH на `~/.kimi-code/bin` + экспорт
+`KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL=1` (шаг 4 оркестрации закрыт);
+канон конфига — `api.kimi.ai` + `oauth_host = "https://auth.kimi.ai"` (3 секции);
+`/usr/local/bin/kimi` обновлён до 0.38.0 (старый — `kimi.bak-0.33.0`);
+`test-hooks.sh`(.new): зачистка staged `new.py` перед секцией check-golden —
+случай «дерево = HEAD + отметка пробы — проходит» падал ложно (ПРОВАЛОВ: 1 у владельца).
+Доказательство: `install-gates.sh` → «Хуки прошли пробу полностью»;
+`kimi -p` под claudedev отвечает. Числа: версии 0.33.0/0.38.0 — факты замера.
+
+⚠️ Креды claudedev подменены свежими из `/root/.kimi-code/credentials/` (тот же
+managed-аккаунт); бэкапы — `config.toml.bak-20260822`, `credentials/*.bak-20260822`.
+
 ## 22.08: Режим оркестрации Kimi → cursor-agent [решение] [код]
 
 [решение] Владелец: Kimi (k3) — оркестратор, исполнители — свежие процессы

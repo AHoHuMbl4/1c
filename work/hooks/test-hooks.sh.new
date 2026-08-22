@@ -105,6 +105,9 @@ asks "$OUT"; [ $? = 1 ]; say $? 'на посторонней команде мо
 echo '== check-golden: probe+HEAD до выката (HOW_NOT_TO §3.90) =='
 mkdir -p ubuntu/serenedb .claude
 rm -f .claude/.probe-okna-last-run .claude/.golden-last-run
+# new.py из секции check-docs остался в индексе и в дереве — без зачистки
+# случай «дерево = HEAD + отметка пробы — проходит» ниже падает ложно (22.08)
+git reset -q; git clean -fdq -- ubuntu/serenedb
 # дерево = HEAD (real.py из init), отметки нет
 OUT=$(call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
 asks "$OUT"; say $? 'выкат без отметки пробы — стоп'

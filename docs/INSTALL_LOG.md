@@ -215,6 +215,17 @@ ERROR: Column 'amount' has unsupported type DECIMAL(14,2) and can not be indexed
 
 ## Грабли окружения (повторяются, держать под рукой)
 
+### Kimi Code
+- **`su - claudedev -c '... kimi'` давал старый бинарь** (обрыв 22.08, 40111 «no credential
+  configured»). Экспорт `~/.kimi-code/bin` в PATH жил в `.bashrc`, который для неинтерактивного
+  шелла отсекается по `case $- in *i*` → резолвился `/usr/local/bin/kimi` 0.33.0, а он не читает
+  креды формата 0.38.0. → Дубль PATH в `~claudedev/.profile` (читается логин-шеллом всегда);
+  `/usr/local/bin/kimi` обновлён до 0.38.0. Правило: версию проверять `su - claudedev -c 'which kimi;
+  kimi --version'`, а не из интерактивного шелла.
+- **Канон `work/hooks/kimi-config.toml` должен совпадать с эпохой бинаря**: 0.38.0 требует
+  `base_url = https://api.kimi.ai/coding/v1` и `oauth_host = "https://auth.kimi.ai"` в секциях
+  oauth; конфиг от 0.33.0 (`api.kimi.com`, без oauth_host) даёт тот же 40111 даже с живым токеном.
+
 ### PowerShell
 - **`$args` — автоматическая переменная.** Назвал так параметр функции → всё сломалось.
   Аналогично `R` — это алиас `Invoke-History`, функцию с таким именем не вызвать.
