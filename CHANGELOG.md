@@ -1,3 +1,26 @@
+## 22.08: Бот-контур на новой okna из локальных артефактов; порт MCP 6016 [замер]
+
+[замер] На новой okna (10.10.10.12) установлены node **v24.18.0** (tarball nodejs.org →
+`/usr --strip-components=1`) и openclaw **2026.7.1-2** (копия `/usr/lib/node_modules/openclaw/`
+со старой, **32027** файлов, md5 openclaw.mjs `4699fc3d…` совпал) — egress новой коробки
+закрыт runtime floor'ом, поэтому артефакты подложены локально (`/root/stage/`).
+`loginctl enable-linger undebot`, мост `1c-mcp-ask@postgres` **active**, слушает
+127.0.0.1:**6016** (`MCP_PORT=6016` в `/etc/1c-mcp-ask-postgres.env`; инвентарь 6014 был
+неверен — живой конфиг undebot держит единственный MCP-сервер `serene-ask` на 6016,
+6014/6015 — только в старых сессиях). НЕ запущены до переключения (polling-конфликт):
+openclaw-gateway, openclaw-gateway-web, 1c-packet-server, 1c-packet-apply.timer,
+1c-serene-pipeline@postgres.timer, 1c-bot-monitor.timer. Правка `docs/NETWORK.md` 6014→6016.
+Числа: версии/порты в тексте.
+
+## 22.08: Сетевая схема продукта — docs/NETWORK.md [код]
+
+[код] Создан `docs/NETWORK.md`: карта сети RU|EU cloud|gpu-хосты|LXC, таблица адресов,
+процедура подключения выделенного сервера к vSwitch **4003** (`10.3.1.0/24`),
+RU↔EU туннель (WireGuard UDP 51820, ~44 мс, ~192/240 Mbps), потоки данных
+(Telegram-бот, пакетный канал 1С, миграции rsync, эмбеддинги), правила сетевой
+гигиены. Ссылки добавлены в `docs/ARCHITECTURE.md` и `README.md`. Факты — замеры
+22.08. Числа: замеры в тексте документа.
+
 ## 22.08: Переезд okna на новую коробку (gpu-erw) [замер]
 
 [замер] okna **167.233.249.110** → LXD **10.10.10.12** (`ssh -p 2202 root@gpu-erw.timpul.pro`,

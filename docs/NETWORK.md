@@ -138,7 +138,7 @@ Windows 1С (klient-1) → ru-router 89.23.101.22 → WG → pro-router 2.28.54.
 
 | Поток | Путь | Примечание |
 |---|---|---|
-| **Telegram-бот (ask)** | `openclaw-gateway` (undebot, 127.0.0.1:18800; веб 0.0.0.0:18801) → MCP `second-brain` 127.0.0.1:6014 (`1c-mcp-ask@postgres`) → `ask` 127.0.0.1:8091 (`1c-serene-ask@postgres`) → SereneDB 127.0.0.1:7890 | Polling, egress-only; inbound не нужен |
+| **Telegram-бот (ask)** | `openclaw-gateway` (undebot, 127.0.0.1:18800; веб 0.0.0.0:18801) → MCP `serene-ask` 127.0.0.1:6016 (`1c-mcp-ask@postgres`, `MCP_PORT=6016` в `/etc/1c-mcp-ask-postgres.env`) → `ask` 127.0.0.1:8091 (`1c-serene-ask@postgres`) → SereneDB 127.0.0.1:7890 | Polling, egress-only; inbound не нужен. [замер 22.08] живой конфиг undebot: единственный MCP-сервер — `serene-ask` на 6016; 6014/6015 встречаются только в старых сессиях/бэкапах, не в `mcp.servers` |
 | **Канал данных 1С (пакетный)** | Windows-клиент → mTLS `1c-gate*.timpul.ru` → reverse SSH → 127.0.0.1:6090 (`1c-packet-server`) | :6090 — приёмник пакетов, НЕ OData-шлюз. При переключении reverse-туннель перенацеливается на новую коробку |
 | **Миграции** | rsync old→new напрямую: 110,8 МБ/с внутри Hetzner | S3 (`s3.twcstorage.ru`) — только мелочь; квота ~1 ГБ, на 95 ГБ — 403 QuotaExceeded |
 | **Эмбеддинги** | Контейнеры → `http://10.3.1.11:8000` / `http://10.3.1.12:8002` | Внутренние адреса; `EMBED_HOSTS` новой okna переключён на них [замер 22.08]. Запасной путь — те же хосты по публичным IP |
