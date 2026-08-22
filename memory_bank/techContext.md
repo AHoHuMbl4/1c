@@ -1062,7 +1062,7 @@ LB (маркер `minInterval`), 20–40 с.
 | Ловушка / факт | Статус |
 |---|---|
 | Tarball 26.08.1 | **[замер 22.08]** orchestrator: 38 224 045 байт в каталоге |
-| Cancel-тест | таблица **500 000** строк, `pg_cancel_backend` после ≥60 с сборки |
+| `memory_limit` в flagfile | **убран** — в 26.08.1 только `SET memory_limit` (pragmas); RSS-сторож — `measure-cmd.sh` |
 | WAL-гейт | `start-sandbox.sh --keep-wal` — реплей прерванной сборки |
 | Recall | exact: `f1_corpus_vec ORDER BY <#>`; approx: `*_idx`; данные — **search_corpus emb** |
 | Копия store.db | готова (11 ГБ), бой не тронут |
