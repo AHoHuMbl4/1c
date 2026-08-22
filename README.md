@@ -114,6 +114,7 @@ Windows (1С)              Ubuntu LXC (весь наш контроль)
 | Документ | О чём |
 |---|---|
 | [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | **Устройство системы целиком** — слои, потоки, безопасность, zero-touch |
+| [`docs/NETWORK.md`](docs/NETWORK.md) | **Сетевая схема** — публичные точки, vSwitch 4003, RU↔EU туннель, потоки данных |
 | [`docs/OPENCLAW_BOT.md`](docs/OPENCLAW_BOT.md) | **Бот-слой OpenClaw**: тон над мозгами, гейт анти-галлюцинаций КОДОМ, нативные правила |
 | [`docs/SERENEDB.md`](docs/SERENEDB.md) | **Аналитика/отчёты на SereneDB**: витрина, NL→SQL, графики, резолвер, read-only роль |
 | [`docs/RUNBOOK_DEPLOY.md`](docs/RUNBOOK_DEPLOY.md) | **🚀 Сквозной деплой** (эталон): §1-6 1С/OData/read-only → §7-8 braine → §9 карта сервисов → **§10 SereneDB** + новая база → **§11 OpenClaw-бот** |
