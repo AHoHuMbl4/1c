@@ -4,8 +4,8 @@
 NameError sys в esc_rid. Fix: rid_norm как serene_ask; SQL по norm + fallback q_hash;
 import sys в lib-probe.
 
-[замер] test_probe_protocol **16/16**. md5: probe_protocol a0f28181, lib-probe d83874ee,
-test_probe 3f529e34. Перепрогон okna-ask-dump — оркестратор.
+[замер] test_probe_protocol **16/16**. md5: probe_protocol 4cde0a31, lib-probe 5c7a356a,
+test_probe fb4a79b0. okna-ask-dump «петли» `:8091` — journal ok, no_data, code_md5=c560aebe.
 
 ## 22.08: PROBE fix — code_md5 из journal, verify локально, exit 1 [код]
 
