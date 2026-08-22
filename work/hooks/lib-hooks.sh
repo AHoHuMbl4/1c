@@ -109,14 +109,14 @@ hook_override_take() {
 # Разделение труда: сам этот набор лежит в `.claude/hooks/` (среда не даёт писать туда
 # даже из оболочки), а беззащитная обёртка `.githooks/pre-commit` сведена к одной строке
 # вызова и сверяется отсюда.
-GATES_REQUIRED="check-docs check-graph-fresh check-active-size check-sql-docs check-diff check-prompt-rules check-golden check-gates prepare-diff"
+GATES_REQUIRED="check-docs check-graph-fresh check-active-size check-sql-docs check-diff check-prompt-rules check-golden check-live-probe check-gates prepare-diff"
 
 # 🔴 ВТОРОЙ ДВИЖОК — KIMI CODE (06.08). Сессии идут под тем же рабочим аккаунтом, и
 # правило, подключённое только в Claude Code, для сессии Kimi не существует. Подключение
 # у Kimi — записи `[[hooks]]` в `~/.kimi-code/config.toml` рабочего аккаунта (файла
 # `settings.json` у него нет). Вердикта `ask` в Kimi нет вовсе — только пропуск и блок
 # (код выхода 2), поэтому проверка «не понижен ли вердикт» там не нужна по устройству.
-KIMI_GATES_REQUIRED="session-start prompt-start prepare-diff check-gates check-sql-docs check-prompt-rules check-diff check-docs check-active-size check-graph-fresh check-golden sniper-kimi count-edits check-write check-deps"
+KIMI_GATES_REQUIRED="session-start prompt-start prepare-diff check-gates check-sql-docs check-prompt-rules check-diff check-docs check-active-size check-graph-fresh check-golden check-live-probe sniper-kimi count-edits check-write check-deps"
 
 # Путь к конфигу Kimi рабочего аккаунта. KIMI_CONFIG_TOML — шов для пробы: песочница
 # подставляет свой stub и не трогает настоящий конфиг.
@@ -233,6 +233,7 @@ EXPECT = {
     "check-active-size": "PreToolUse",
     "check-graph-fresh": "PreToolUse",
     "check-golden": "PreToolUse",
+    "check-live-probe": "PreToolUse",
     "sniper-kimi": "PreToolUse",
     "count-edits": "PostToolUse",
     "check-write": "PostToolUse",
@@ -290,6 +291,7 @@ EXPECT = {
     "check-active-size": "preToolUse",
     "check-graph-fresh": "preToolUse",
     "check-golden": "preToolUse",
+    "check-live-probe": "preToolUse",
     "count-edits": "postToolUse",
     "check-write": "postToolUse",
     "check-deps": "postToolUse",
@@ -297,7 +299,7 @@ EXPECT = {
 BLOCKING = (
     "check-gates", "check-sql-docs", "check-prompt-rules",
     "check-diff", "check-docs", "check-active-size", "check-graph-fresh",
-    "check-golden",
+    "check-golden", "check-live-probe",
 )
 
 try:

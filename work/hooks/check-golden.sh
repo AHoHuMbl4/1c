@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Перед выкатом: smoke-прогон золотого набора ut_test (0 сбоев обращения).
-# После выката на okna: приёмка AB_CONTOUR=okna (числа + kind) — см. REGRESSION_BASE1 §0.
-# Отметку smoke ставит AB_GOLD_MODE=smoke → .claude/.golden-last-run (префикс smoke).
+# Перед выкатом: живая проба okna (AB_PROBE) + дерево исходников = HEAD по md5.
+# ut_test smoke больше не блокер выката (HOW_NOT_TO §3.90, решение владельца 21.08).
+# Отметку ставит AB_PROBE=okna → .claude/.probe-okna-last-run (okna probe … 0err/N).
 # touch этого файла гейт не предлагает.
+# Вторичный люк: эмбеддер мёртв + в HEAD строка «Золотой: невозможен» — когда пробу
+# снять нельзя; основной путь — probe+HEAD.
 set -uo pipefail
 
 . "$(dirname "${BASH_SOURCE[0]}")/lib-hooks.sh"
@@ -11,29 +13,67 @@ is_deploy "$CMD" || { echo '{}'; exit 0; }
 
 cd_repo || { hook_ask "Хук $(basename "$0") не определил каталог репозитория и ничего не проверил. Подтвердите шаг вручную."; exit 0; }
 
-MARK=".claude/.golden-last-run"
+MARK=".claude/.probe-okna-last-run"
 SRC_DIRS="ubuntu/serenedb ubuntu/openclaw ubuntu/1c-gateway ubuntu/1c-etl ubuntu/1c-config-ui"
 
-NEWEST=$(find $SRC_DIRS -type f \( -name '*.py' -o -name '*.js' -o -name '*.mjs' \) \
-         -newer "$MARK" 2>/dev/null | head -5)
-
-golden_smoke_mark_ok() {
+probe_mark_ok() {
   [ -f "$MARK" ] || return 1
   IFS= read -r line < "$MARK" 2>/dev/null || return 1
-  [[ "$line" == smoke\ * ]] && [[ "$line" == *0err/* ]]
+  [[ "$line" == okna\ probe\ * ]] && [[ "$line" == *0err/* ]]
 }
 
-if [ ! -f "$MARK" ]; then
-  WHY="Золотой smoke ut_test ни разу не прогонялся после появления этой проверки.
-Выкат без замера — это то самое «сначала на боевой, потом посмотрим»."
-elif ! golden_smoke_mark_ok; then
-  WHY="Отметка .golden-last-run есть, но это не smoke-прогон ut_test (нужен префикс smoke … 0err/N).
-ДО выката — только smoke: 0 сбоев обращения, порог верных не ставится.
-После выката на okna — приёмка AB_CONTOUR=okna (числа), см. REGRESSION_BASE1 §0."
-elif [ -n "$NEWEST" ]; then
-  WHY="Исходники правились ПОСЛЕ последнего smoke-прогона:
-$(printf '%s\n' "$NEWEST" | sed 's/^/  /')
-Последний smoke: $(date -r "$MARK" '+%Y-%m-%d %H:%M' 2>/dev/null)"
+# 0 = чисто; 1 = грязно. Список расхождений — на stdout (до 5 строк).
+tree_matches_head() {
+  local f disk head bad="" n=0
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    if [ ! -f "$f" ]; then
+      n=$((n + 1)); [ "$n" -le 5 ] && bad="${bad}
+  $f (нет в дереве)"
+      continue
+    fi
+    disk=$(md5sum -- "$f" | awk '{print $1}')
+    if ! git cat-file -e "HEAD:$f" 2>/dev/null; then
+      n=$((n + 1)); [ "$n" -le 5 ] && bad="${bad}
+  $f (нет в HEAD)"
+      continue
+    fi
+    head=$(git show "HEAD:$f" | md5sum | awk '{print $1}')
+    if [ "$disk" != "$head" ]; then
+      n=$((n + 1)); [ "$n" -le 5 ] && bad="${bad}
+  $f"
+    fi
+  done < <(git ls-files -- $SRC_DIRS 2>/dev/null | grep -E '\.(py|js|mjs)$' || true)
+
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    n=$((n + 1)); [ "$n" -le 5 ] && bad="${bad}
+  $f (не в git)"
+  done < <(git ls-files --others --exclude-standard -- $SRC_DIRS 2>/dev/null \
+            | grep -E '\.(py|js|mjs)$' || true)
+
+  if [ "$n" -gt 0 ]; then
+    printf '%s\n' "${bad#"${bad%%[![:space:]]*}"}"
+    return 1
+  fi
+  return 0
+}
+
+WHY=""
+if ! probe_mark_ok; then
+  if [ ! -f "$MARK" ]; then
+    WHY="Живая проба okna (.probe-okna-last-run) ни разу не ставилась после появления этой проверки.
+Выкат без AB_PROBE=okna — это то самое «сначала на боевой, потом посмотрим».
+Smoke ut_test больше не открывает выкат (HOW_NOT_TO §3.90)."
+  else
+    WHY="Отметка .probe-okna-last-run есть, но это не успешная проба okna
+(нужен префикс «okna probe …» и суффикс 0err/N).
+Отметку ставит только AB_PROBE=okna при 0 сбоев, не touch."
+  fi
+elif ! DIRTY=$(tree_matches_head); then
+  WHY="Исходники в SRC_DIRS отличаются от HEAD (md5) или есть неотслеживаемые *.py|js|mjs:
+$DIRTY
+Выкат только из закоммиченного дерева, совпадающего с рабочей копией."
 else
   echo '{}'; exit 0
 fi
@@ -70,11 +110,13 @@ raise SystemExit(1)
 '
 }
 
-RUN_HELP="Smoke ДО выката (0 сбоев, порог верных не нужен):
-  AB_GOLD_MODE=smoke AB_BASE=ut_test ASK_URL=http://127.0.0.1:8099/ask python3 ubuntu/serenedb/ab_scorer.py
-Приёмка ПОСЛЕ выката на okna (числа + kind склад):
+RUN_HELP="Живая проба ДО выката (кандидат okna, см. REGRESSION_BASE1 §живая проба):
+  AB_PROBE=okna ASK_URL=http://127.0.0.1:8092/ask python3 ubuntu/serenedb/ab_scorer.py
+Отметку .claude/.probe-okna-last-run ставит только прогон с 0 сбоев (okna probe … 0err/N).
+Дерево *.py|js|mjs в SRC_DIRS должно совпадать с HEAD по md5 (без неотслеживаемых).
+Приёмка ПОСЛЕ выката на okna (числа + kind):
   AB_CONTOUR=okna python3 ubuntu/serenedb/ab_scorer.py
-Отметку ставит только состоявшийся прогон, не touch."
+Smoke ut_test выкат не открывает."
 
 emb=0
 golden_embedder_status || emb=$?
@@ -85,7 +127,7 @@ if [ "$emb" = 1 ]; then
     hook_log "check-golden" "пропуск: эмбеддер не отвечает, в HEAD есть пометка"
     echo '{}'; exit 0
   fi
-  WHY="Золотой набор невозможен: эмбеддер не отвечает.
+  WHY="Живая проба невозможна: эмбеддер не отвечает.
 Прогон сейчас гейт не закроет. В коммите (HEAD) нужна строка:
   Золотой: невозможен — эмбеддер недоступен
 После этого повтори выкат. Люк не нужен.
