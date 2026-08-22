@@ -70,3 +70,10 @@ work/manifest-diff/tox/
 # Отметка живой пробы okna до коммита serene_ask — локальная
 .claude/.probe-okna-last-run
 .claude/.golden-okna-last-run
+
+# Ф1: песочница SereneDB 26.08.1 — данные 11 ГБ, бинарь, tarball, результаты замеров
+work/sandbox-26081/data/
+work/sandbox-26081/serened
+work/sandbox-26081/serenedb-*.tar.gz
+work/sandbox-26081/results/
+work/sandbox-26081/logs/

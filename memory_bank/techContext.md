@@ -1052,3 +1052,24 @@ LB (маркер `minInterval`), 20–40 с.
 Сторож: `embed_secrets_base_url_check` (`box_tune.sh` → embed_check/build/embed_all).
 Замок `test_embed_secret_url_check.py`.
 
+---
+
+## SereneDB 26.08.1 — песочница Ф1 (PLAN_UPGRADE_NATIVE) [22.08]
+
+**Отдельный каталог:** `work/sandbox-26081/`, `--server_directory=…/data`, порт **7895**
+(7890 — бой). `memory_limit=40 GiB` — на dev работают другие процессы.
+
+| Ловушка / факт | Статус |
+|---|---|
+| Tarball 26.08.1 | **[замер 22.08]** orchestrator: 38 224 045 байт в каталоге |
+| Cancel-тест | таблица **500 000** строк, `pg_cancel_backend` после ≥60 с сборки |
+| WAL-гейт | `start-sandbox.sh --keep-wal` — реплей прерванной сборки |
+| Recall | exact: `f1_corpus_vec ORDER BY <#>`; approx: `*_idx`; данные — **search_corpus emb** |
+| Копия store.db | готова (11 ГБ), бой не тронут |
+| dev corpus ≠ okna 1.23M | на dev **103 808** строк; масштаб okna — синтетика `range(1230000)` |
+| ANN при `metric=ip` | запрос через **`<#>`**, не `<=>` (PLAN_VECTOR_CHECKS §2) |
+| IVF прогон | `f1-run-all.sh` + `measure-cmd.sh` (peak RSS, потолок 40 ГБ) |
+
+Полный отчёт и ворота GO/NO-GO: `docs/UPGRADE_F1_REPORT.md`. Цифры IVF — после прогона в
+`work/sandbox-26081/results/`.
+

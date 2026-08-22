@@ -1,3 +1,15 @@
+## 22.08: Ф1 песочница 26.08.1 — инфра + baseline, IVF BLOCKER [замер] [код]
+
+[код] `work/sandbox-26081/`: sandbox.conf (:7895, memory_limit 40 GiB), extract/start/stop,
+measure-cmd.sh, f1-run-all.sh; копия store.db 11 ГБ; `docs/UPGRADE_F1_REPORT.md`.
+
+[замер] baseline бой :7890 → baseline-prod.tsv: corpus 103808, text «продажи» 1940,
+emb 1024 dim 66823 строк. Tarball 38 224 045 байт (orchestrator). Прогон f1-run-all.sh.
+
+[код] Правки прогона: cancel 500k, WAL --keep-wal, recall на search_corpus emb (exact=таблица).
+
+Доки: PLAN_VECTOR_CHECKS (таблица Ф1), techContext (ловушки 26.08.1).
+
 ## 22.08: Ф3 — инвентарь PG, доки «PostgreSQL не в продукте» [замер] [код]
 
 [замер] dev :5432: postgresql@16-main active/enabled; ss -tnp — 0 соединений; open-webui и 1c-etl disabled/inactive; живые DSN — :7890.
