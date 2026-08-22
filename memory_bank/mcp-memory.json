@@ -293,6 +293,11 @@
 {"type":"entity","name":"check-live-probe.sh","entityType":"хук (гейт коммита)","observations":["21.08: гейт живой пробы okna перед коммитом serene_ask.py — отметка .claude/.probe-okna-last-run свежее файла и с 0err/N (work/hooks/check-live-probe.sh)","Критерий отметки: 0 сбоев обращения и все вопросы верны; при провале отметка НЕ ставится (ubuntu/serenedb/ab_scorer.py AB_PROBE)","Установка: bash work/hooks/install-gates.sh (владелец, root). Источник: work/hooks/install-gates.sh; docs/REGRESSION_BASE1.md §живая проба"]}
 {"type":"entity","name":"AB_PROBE","entityType":"режим прибора","observations":["21.08: AB_PROBE=okna → набор ab-probe-okna.tsv (~8 вопросов), отметка .probe-okna-last-run, без рестарта юнита при ASK_URL (ubuntu/serenedb/ab_scorer.py)","Самопроверка прибора: против боя :8091 обязан показать красным известные живые дефекты (docs/REGRESSION_BASE1.md)","[замер 21.08] live :8091 4/8, 0 сбоев; FAIL: прошлый месяц (число), воскресенье (clarify), почему ноль (clarify); отметка не поставлена. Источник: terminals/755644","21.08: отметка AB_PROBE также открывает выкат через check-golden (вместе с деревом = HEAD), не только коммит serene_ask через check-live-probe. Источник: work/hooks/check-golden.sh.new; HOW_NOT_TO §3.90"]}
 {"type":"entity","name":"test_embed_secret_url_check.py","entityType":"test","observations":["Замок embed_secrets_base_url_check: совпадение/рассинхрон TEMPORARY SECRET.base_url с EMBED_HOST и double-path. Источник: ubuntu/serenedb/test_embed_secret_url_check.py. 21.08: 5/5."]}
+{"type":"entity","name":"test_stock_balance_path.py","entityType":"test","observations":["22.08 оффлайн замок универсального пути остатков 22/22 incl GRANT"]}
+{"type":"entity","name":"search_balance_map","entityType":"table","observations":["Карта баланс-источников из $metadata; corpus_init.sql + corpus_build.sql §1-ter"]}
+{"type":"entity","name":"probe_protocol.py","entityType":"прибор (протокол замера)","observations":["Единый формат строки PROBE: rid, port, code_md5, q_len, outcome, question (work/acceptance/probe_protocol.py:1)","verify_journal: q_hash=sha256(question), сверка q_len в ask_journal через postgres DSN (не serene_ro)","Оффлайн-замки: test_probe_protocol.py 8/8 [замер 22.08]","scan_shell_bug: ловит ssh bash -s \"$Q\" — обрезка многословного вопроса (HOW_NOT_TO §3.94)"]}
+{"type":"entity","name":"verify_gold_no_data.py","entityType":"прибор (эталоны gold)","observations":["SQL-доказательство no_data в ab-gold-okna.tsv / ab-probe-okna.tsv по balance_registers и search_balance_map (work/acceptance/verify_gold_no_data.py)","Дефект эталона если складские данные есть — gold не правится молча [код 22.08]"]}
+{"type":"entity","name":"env-map.sh","entityType":"прибор (карта окружения)","observations":["SSH-снимок okna/klient-1/dev: unit, port, md5 deploy vs HEAD, search_meta.balance_registers (work/acceptance/env-map.sh)","Запуск оркестратором; вывод в RUNBOOK_DEPLOY §9.1"]}
 {"type":"relation","from":"pipeline.sh","to":"deploy.sh","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"serene_sync.py","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"build.sh","relationType":"вызывает"}
@@ -764,3 +769,11 @@
 {"type":"relation","from":"embed_check.sh","to":"box_tune.sh","relationType":"вызывает embed_secrets_base_url_check"}
 {"type":"relation","from":"embed_all.sh","to":"box_tune.sh","relationType":"вызывает embed_secrets_base_url_check после CREATE SECRET"}
 {"type":"relation","from":"test_embed_secret_url_check.py","to":"box_tune.sh","relationType":"проверяет"}
+{"type":"relation","from":"test_stock_balance_path.py","to":"serene_ask.py","relationType":"проверяет оффлайн"}
+{"type":"relation","from":"corpus_build.sql","to":"search_balance_map","relationType":"наполняет"}
+{"type":"relation","from":"corpus_init.sql","to":"search_balance_map","relationType":"заводит GRANT serene_ro"}
+{"type":"relation","from":"serene_ask.py","to":"search_balance_map","relationType":"читает"}
+{"type":"relation","from":"ab_scorer.py","to":"probe_protocol.py","relationType":"пишет строки PROBE через"}
+{"type":"relation","from":"okna-ask-dump.sh","to":"probe_protocol.py","relationType":"использует и сверяет journal через"}
+{"type":"relation","from":"verify_gold_no_data.py","to":"ab-gold-okna.tsv","relationType":"проверяет эталоны"}
+{"type":"relation","from":"env-map.sh","to":"serene_ask.py","relationType":"опрашивает md5"}

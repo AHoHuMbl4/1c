@@ -1,3 +1,59 @@
+## 22.08: машинно-проверяемые факты — протокол PROBE, journal verify, gold SQL [код]
+
+[код] После §3.94 (обрезка `ssh bash -s "$Q"` → q_len=5): единый протокол замера
+`work/acceptance/probe_protocol.py` + `lib-probe.sh` — строка PROBE с rid/port/code_md5/q_len/outcome/question.
+Подключены `okna-ask-dump.sh`, `okna-ask-save.sh`, `ab_scorer.py` (rid в /ask + PROBE_RECORD).
+После dump/save — сверка ask_journal (postgres DSN): q_hash + q_len; несовпадение → exit 1.
+
+[код] `verify_gold_no_data.py` — no_data в gold только с SQL-доказательством; `env-map.sh` — снимок okna/klient-1/dev.
+
+[замер] оффлайн test_probe_protocol **8/8**; scan work/acceptance/*.sh: bash -s "$VAR" только resume-8097-range (LO/HI).
+md5: probe_protocol bce75353, lib-probe bfdd4cbe, test_probe c54447d4, verify_gold f10d504d, env-map 2db02dc8, dump 6224cc76, ab_scorer bdde17ab.
+Живые dump okna + gold verify — оркестратор.
+
+## 22.08: универсальный путь остатков — карта, без раннего no_data [код]
+
+[код] okna `:8091` md5 `c560aebe`: «Какие остатки товаров на складах?» → ложный
+`no_data` (rid `4ba366b6`): `stock_asks_named_product` считал «какие» товаром;
+`stock_balance_no_data` до probe. Fix: один путь «разбор → кандидаты →
+структурная пригодность → ответ/clarify/no_data»; `search_balance_map` +
+бутстрап в `corpus_build.sql`; GRANT `serene_ro` в `corpus_init.sql`; мост →
+clarify; RuntimeError meta/карты не маскируется под no_data; `prior` без user;
+`okna-ask-dump.sh` heredoc + rid/md5/port/q_len.
+
+[замер] оффлайн: stock_balance_path **24/24**; sales_canon **60/60**;
+rank_axis **56/56**. md5 ask **`1ab7d928`**. Живая проба okna `:8092` — после
+fix missing-table (карта ещё не на okna → пустая, не crash); прогон и отметка
+`.probe-okna-last-run` — оркестратор (`REGRESSION_BASE1` §0). Хвост: сальdo
+бухсчёта (обороты + ввод остатков), wiki-alias баланс-источников, выкат
+`corpus_init` + такт сборки на okna/klient-1.
+
+## 22.08: сырое хранилище на Windows отменено — база хранится у нас [решение]
+
+[решение] Владелец 22.08: **«сырое хранилище на Windows — неактуально, база хранится у
+нас»**. Отменяет решение 26.07 («PostgreSQL на Windows + `postgres_attach`»,
+`memory_bank/owner-memory/project-architecture-pg-windows-attach.md`).
+
+Что меняется:
+- целевая схема больше не предполагает `ATTACH (TYPE postgres, READ_ONLY)` → `VIEW`;
+  корпус и индекс строятся по РОДНЫМ таблицам SereneDB — как они и построены сейчас;
+- ограничение «`RETURNING` не реализован для attach-нутых Postgres-таблиц» перестаёт быть
+  препятствием целевой архитектуры (оно касалось только отменённой схемы);
+- `/etc/1c-pg-windows.env` и всё, что ходит в `192.168.56.1:5432`, становится наследием —
+  выводить отдельным заходом, чтобы документы не разворачивали мёртвый слой.
+
+Что НЕ меняется: PostgreSQL 16 в LXC (`:5432`) остаётся — его требует OpenWebUI (pgvector),
+это не наш выбор размещения данных.
+
+Записано в `docs/ARCHITECTURE.md` §0 (прежняя формулировка оставлена зачёркнутой с
+разбором, а не стёрта). 🔴 Файл решения в `memory_bank/owner-memory/` принадлежит root и
+рабочему аккаунту на запись закрыт — обновить его может только владелец.
+
+[факт] Проверка на живой сборке 26.07.3 (тем же заходом): режима «поиск там, где данные
+лежат» у нас НЕТ — `CREATE SERVER` отвечает `syntax error at or near "SERVER"`,
+`pg_foreign_server` пуст, из расширений есть только `postgres_scanner`; `ATTACH (TYPE
+postgres)` при этом поддержан. Версия: `PostgreSQL 18.3 (SereneDB 26.07.3)`.
+
 ## 21.08: scorer 25 против возврата 12 на бою — 14/25 [замер]
 
 [замер] `AB_CONTOUR=okna` против `:8091` после выката возврата 12:

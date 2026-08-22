@@ -24,6 +24,13 @@ import time
 import urllib.request
 
 _SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_ACCEPTANCE = os.path.normpath(os.path.join(_SCRIPT_DIR, "..", "..", "work", "acceptance"))
+if os.path.isdir(_ACCEPTANCE) and _ACCEPTANCE not in sys.path:
+    sys.path.insert(0, _ACCEPTANCE)
+try:
+    import probe_protocol as _probe_protocol
+except ImportError:
+    _probe_protocol = None
 CONTOUR = os.environ.get("AB_CONTOUR", "").strip().lower()
 PROBE = os.environ.get("AB_PROBE", "").strip().lower()
 GOLD_MODE = os.environ.get("AB_GOLD_MODE", "").strip().lower()
@@ -150,10 +157,37 @@ def truth(sql, empty_as_zero=False):
     return out
 
 
-def ask(q, decision_id=None, user=None):
+def _probe_port_from_url():
+    m = re.search(r":(\d+)(?:/ask)?$", (URL or "").rstrip("/"))
+    return m.group(1) if m else "?"
+
+
+def _probe_emit_ask(question, out, rid=None):
+    if _probe_protocol is None:
+        return
+    record = os.environ.get("PROBE_RECORD", "").strip()
+    try:
+        _probe_protocol.emit(
+            rid=rid or _probe_protocol.new_rid("ab"),
+            port=_probe_port_from_url(),
+            code_md5_val=_probe_protocol.code_md5(
+                os.environ.get("PROBE_CODE_PATH", "/opt/1c-mcp-reports/serene_ask.py"),
+                short=True,
+            ),
+            question=question,
+            outcome=(out or {}).get("kind") or "—",
+            record_path=record or None,
+        )
+    except Exception:                            # noqa: BLE001
+        pass
+
+
+def ask(q, decision_id=None, user=None, rid=None):
     body = {"question": q, "user": user or ASK_USER}
     if decision_id:
         body["decision_id"] = decision_id
+    if rid:
+        body["rid"] = rid
     body = json.dumps(body).encode()
     req = urllib.request.Request(URL, data=body, method="POST")
     req.add_header("Content-Type", "application/json")
@@ -163,9 +197,13 @@ def ask(q, decision_id=None, user=None):
     timeout = int(os.environ.get("AB_ASK_TIMEOUT", "600"))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            return json.loads(r.read()), round(time.time() - t, 2)
+            out = json.loads(r.read())
+            _probe_emit_ask(q, out, rid=rid)
+            return out, round(time.time() - t, 2)
     except Exception as e:                       # noqa: BLE001
-        return {"text": "", "diag": {"error": str(e)[:80]}}, round(time.time() - t, 2)
+        out = {"text": "", "diag": {"error": str(e)[:80]}}
+        _probe_emit_ask(q, out, rid=rid)
+        return out, round(time.time() - t, 2)
 
 
 def digits(text):
@@ -265,7 +303,7 @@ def choose_clarify_option(options, needle):
     return None
 
 
-def ask_with_clarify_follow(question, branch_needle=None, max_steps=6, user=None):
+def ask_with_clarify_follow(question, branch_needle=None, max_steps=6, user=None, rid=None):
     """Если сервис ответил clarify и варианты можно однозначно выбрать — идём дальше.
 
     Важно: для digits/kind ветвление отключается (branch_needle=None), иначе появится
@@ -275,7 +313,7 @@ def ask_with_clarify_follow(question, branch_needle=None, max_steps=6, user=None
     out0, out = None, None
     decision_id = None
     for _step in range(max_steps):
-        out, _sec = ask(question, decision_id=decision_id, user=user)
+        out, _sec = ask(question, decision_id=decision_id, user=user, rid=rid)
         if out0 is None:
             out0 = out
         if (out or {}).get("kind") != "clarify":
@@ -577,14 +615,21 @@ def main():
 
             t0 = time.time()
             out0 = outf = None
+            ask_rid = (
+                _probe_protocol.new_rid("ab") if _probe_protocol and (PROBE or LIVE_CONTOUR)
+                else None)
             if mode in ("digits", "kind"):
-                out0, outf = ask_with_clarify_follow(q, branch_needle=None, user=ASK_USER)
+                out0, outf = ask_with_clarify_follow(
+                    q, branch_needle=None, user=ASK_USER, rid=ask_rid)
             elif mode == "clarify":
-                out0, outf = ask_with_clarify_follow(q, branch_needle=want, user=ASK_USER)
+                out0, outf = ask_with_clarify_follow(
+                    q, branch_needle=want, user=ASK_USER, rid=ask_rid)
             elif mode == "name":
-                out0, outf = ask_with_clarify_follow(q, branch_needle=branch_needle, user=ASK_USER)
+                out0, outf = ask_with_clarify_follow(
+                    q, branch_needle=branch_needle, user=ASK_USER, rid=ask_rid)
             else:
-                out0, outf = ask_with_clarify_follow(q, branch_needle=None, user=ASK_USER)
+                out0, outf = ask_with_clarify_follow(
+                    q, branch_needle=None, user=ASK_USER, rid=ask_rid)
 
             sec = round(time.time() - t0, 2)
             if (out0 or {}).get("diag", {}).get("error"):

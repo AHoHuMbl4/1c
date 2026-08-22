@@ -8,6 +8,16 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **PROBE + journal verify — код в git `[22.08]`**: протокол `probe_protocol.py`/`lib-probe.sh`; dump/save/ab_scorer пишут строку PROBE и сверяют q_len в ask_journal. Замок test_probe_protocol **8/8**. Живая проба okna (многословный вопрос, rid в отчёт) + verify_gold на okna/klient-1 — оркестратор. env-map.sh → RUNBOOK §9.1.
+
+🔴 **универсальный путь остатков — staged, коммит ждёт пробу okna `[22.08]`**:
+okna «Какие остатки…» → ложный no_data (md5 c560aebe): «какие»=товар +
+ранний stock_balance_no_data. Fix: карта `search_balance_map`, мост→clarify,
+structural filter, prior без user, missing-table→пустая карта. Замок **24/24**;
+md5 ask **1ab7d928**. Следующее: живая проба `:8092` **0err/8** → коммит;
+выкат corpus_init+build, ab_scorer okna ≥14/25, сальdo счёта, wiki-alias.
+
+
 
 🔴 **ai_embed 404 = устаревший SECRET base_url, не UA `[21.08]`**: klient-1
 curl EMBED_HOST 200; ai_embed 404 HTML — секреты на старом хосте при новом env.

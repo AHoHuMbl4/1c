@@ -387,6 +387,28 @@ systemctl start 1c-etl.service                                   # первый 
 - `tg-bridge` (braine-фронт Telegram) — **disabled**: Telegram держит OpenClaw `@test1c_mcp_bot`.
 - Итог: перезагрузка любой из машин → всё восстанавливается без ручных действий; мониторинг алертит, если что-то не встало.
 
+### 9.1 Карта окружения (генерируется, не помнится)
+
+Снимок «юнит → порт → md5 развёрнутого `serene_ask.py` → совпадает ли с HEAD →
+`search_meta.balance_registers` + GRANT `serene_ro`» — **не из памяти**, а командой:
+
+```bash
+bash work/acceptance/env-map.sh
+```
+
+Запускает **орchestrator** (окна без SSH). Хосты: okna `167.233.249.110`, klient-1
+через релей `89.23.101.22` → `10.1.1.7`, dev (локальный LXC). Вывод — markdown-таблица
+для вставки сюда или в отчёт приёмки. HEAD md5 печатается в шапке.
+
+**Протокол замера проб** (строка `PROBE\\trid=…\\tport=…\\tcode_md5=…\\tq_len=…\\toutcome=…`):
+`work/acceptance/probe_protocol.py` + `lib-probe.sh`. Приборы `okna-ask-dump.sh`,
+`okna-ask-save.sh`, `ab_scorer.py` (PROBE/CONTOUR) пишут строку и сверяют `q_len` с
+`ask_journal` (postgres DSN). Оффлайн-замки: `python3 work/acceptance/test_probe_protocol.py`.
+
+**Эталоны no_data из данных:** `python3 work/acceptance/verify_gold_no_data.py --host okna`
+— SQL-доказательство по `balance_registers` / `search_balance_map`; дефект эталона, если
+данные есть (кандидат: «сколько петель осталось на складе?»). Gold не правится молча.
+
 ---
 
 ## 10. SereneDB-аналитика: развёртывание + подключение НОВОЙ 1С-базы
