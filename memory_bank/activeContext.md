@@ -8,7 +8,18 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-🔴 **PROBE + journal verify — код в git `[22.08]`**: протокол `probe_protocol.py`/`lib-probe.sh`; dump/save/ab_scorer пишут строку PROBE и сверяют q_len в ask_journal. Замок test_probe_protocol **8/8**. Живая проба okna (многословный вопрос, rid в отчёт) + verify_gold на okna/klient-1 — оркестратор. env-map.sh → RUNBOOK §9.1.
+🔴 **PROBE rid_norm verify — код в git, okna жив `[22.08]`**: verify/shell ищут
+rid_norm (16 alnum) как serene_ask; lib-probe без esc_rid/sys NameError. Замок
+**16/16**. okna «петли» `:8091` — journal ok, no_data, code_md5=c560aebe.
+md5: probe_protocol 4cde0a31, lib-probe 5c7a356a.
+
+🔴 **PROBE + journal verify — код в git `[22.08]`**: протокол `probe_protocol.py`/`lib-probe.sh`; dump/save/ab_scorer пишут строку PROBE и сверяют q_len в ask_journal. env-map.sh → RUNBOOK §9.1.
+
+🔴 **проба okna 5/8 — fix в дереве, повтор — оркестратор `[22.08]`**:
+кандидат `1ab7d928`: воскресенье no_data (→ `sales_period_empty`); петли clarify
+каталог (→ named terms + balance-only/no_data); неделя figures (→ rank без re-gate).
+Именованность — только `intent.terms`, без словаря вопросительных слов. md5 **`dc0fc4e3`**.
+Замки **25+62+56**. Коммит+проба `:8092` 0err/8 — оркестратор.
 
 🔴 **универсальный путь остатков — staged, коммит ждёт пробу okna `[22.08]`**:
 okna «Какие остатки…» → ложный no_data (md5 c560aebe): «какие»=товар +
