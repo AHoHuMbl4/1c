@@ -63,12 +63,43 @@ class TestProbeProtocol(unittest.TestCase):
     def test_verify_journal_ok(self):
         q = MULTI
         rid = "probe-test"
+        norm = P.rid_norm(rid)
         with patch.object(P, "_psql_row", return_value=(0, "%d|%s|no_data|%s|c560aebe" % (
-                P.q_len(q), P.q_hash(q), rid))):
+                P.q_len(q), P.q_hash(q), norm))):
             ok, msg, meta = P.verify_journal(q, rid=rid, wait_sec=0)
         self.assertTrue(ok, msg)
         self.assertEqual(meta["got_len"], P.q_len(q))
         self.assertEqual(meta["code_md5"], "c560aebe")
+
+    def test_rid_norm_matches_service(self):
+        raw = "probe-20260822T073752Z-1042431"
+        self.assertEqual(P.rid_norm(raw), "probe20260822T07")
+
+    def test_verify_journal_rid_with_dashes(self):
+        """Сырой rid с дефисами: сверка по rid_norm из журнала (замер 22.08)."""
+        q = MULTI
+        raw_rid = "probe-20260822T073752Z-1042431"
+        norm = P.rid_norm(raw_rid)
+        row = "%d|%s|no_data|%s|c560aebe" % (P.q_len(q), P.q_hash(q), norm)
+        ok, msg, meta = P.verify_journal(q, rid=raw_rid, journal_row=row)
+        self.assertTrue(ok, msg)
+        self.assertEqual(meta["rid"], norm)
+
+    def test_journal_lookup_sql_uses_rid_norm(self):
+        raw = "probe-20260822T073752Z-1042431"
+        sql = P.journal_lookup_sql(rid=raw)
+        self.assertIn("probe20260822T07", sql)
+        self.assertNotIn("073752Z", sql)
+
+    def test_journal_sql_cli(self):
+        import subprocess
+        raw = "probe-20260822T073752Z-1042431"
+        p = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "probe_protocol.py"),
+             "journal-sql", "--rid", raw],
+            capture_output=True, text=True, check=True,
+        )
+        self.assertIn("probe20260822T07", p.stdout)
 
     def test_verify_journal_fail_len(self):
         q = MULTI
@@ -80,7 +111,8 @@ class TestProbeProtocol(unittest.TestCase):
     def test_finish_uses_journal_code_md5_not_local(self):
         q = MULTI
         rid = "probe-test"
-        row = "%d|%s|no_data|%s|c560aebe" % (P.q_len(q), P.q_hash(q), rid)
+        row = "%d|%s|no_data|%s|c560aebe" % (
+            P.q_len(q), P.q_hash(q), P.rid_norm(rid))
         ok, msg, line = P.finish_probe(
             q, rid=rid, port=8091, outcome="no_data", journal_row=row)
         self.assertTrue(ok, msg)
@@ -90,7 +122,8 @@ class TestProbeProtocol(unittest.TestCase):
     def test_finish_rejects_empty_code_md5(self):
         q = MULTI
         rid = "probe-test"
-        row = "%d|%s|no_data|%s|" % (P.q_len(q), P.q_hash(q), rid)
+        row = "%d|%s|no_data|%s|" % (
+            P.q_len(q), P.q_hash(q), P.rid_norm(rid))
         ok, msg, line = P.finish_probe(
             q, rid=rid, port=8091, outcome="no_data", journal_row=row)
         self.assertFalse(ok)

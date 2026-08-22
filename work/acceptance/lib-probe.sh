@@ -9,12 +9,14 @@ probe_rid() {
   echo "probe-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 }
 
-# Читает строку ask_journal по rid на удалённом хосте (только psql, без python там).
+# Читает строку ask_journal на удалённом хосте (psql). rid — норма как в сервисе;
+# если по rid пусто — fallback по q_hash вопроса.
 # Печатает: q_len|q_hash|outcome|rid|code_md5
 probe_ssh_journal_row() {
-  local key="$1" host="$2" rid="$3"
-  local esc_rid
-  esc_rid="$(python3 -c 'print(sys.argv[1].replace("\x27", "\x27\x27"))' "$rid")"
+  local key="$1" host="$2" rid="$3" question="$4"
+  local norm qhash
+  norm="$(python3 "$PROBE_PY" rid-norm "$rid")"
+  qhash="$(python3 -c 'import hashlib,sys; print(hashlib.sha256(sys.argv[1].encode("utf-8")).hexdigest())' "$question")"
   ssh -o BatchMode=yes -o IdentitiesOnly=yes -i "$key" "$host" "bash -s" <<REMOTE
 set -euo pipefail
 load_env() {
@@ -30,7 +32,15 @@ load_env
 unset PGUSER PGDATABASE
 DSN="\${ASK_JOURNAL_RW_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 sleep 1.5
-psql "\$DSN" -tA -c "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') FROM ask_journal WHERE rid = '${esc_rid}' ORDER BY id DESC LIMIT 1"
+ROW=\$(psql "\$DSN" -tA -c "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') FROM ask_journal WHERE rid = '${norm}' ORDER BY id DESC LIMIT 1")
+if [ -z "\$ROW" ]; then
+  ROW=\$(psql "\$DSN" -tA -c "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') FROM ask_journal WHERE q_hash = '${qhash}' ORDER BY id DESC LIMIT 1")
+fi
+if [ -z "\$ROW" ]; then
+  echo "journal not found rid_norm=${norm}" >&2
+  exit 1
+fi
+echo "\$ROW"
 REMOTE
 }
 

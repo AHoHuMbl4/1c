@@ -39,7 +39,7 @@ REMOTE
 KIND="$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d.get("kind") or "—")' "$OUT_LOCAL" 2>/dev/null || echo parse_fail)"
 
 JROW=""
-if ! JROW="$(probe_ssh_journal_row "$KEY" "$HOST" "$RID")"; then
+if ! JROW="$(probe_ssh_journal_row "$KEY" "$HOST" "$RID" "$Q")"; then
   probe_fail "journal fetch failed (ssh/psql)"
 fi
 if [[ -z "$JROW" ]]; then

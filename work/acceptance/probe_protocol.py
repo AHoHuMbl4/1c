@@ -41,6 +41,34 @@ def new_rid(prefix: str = "probe") -> str:
     return "%s-%s-%d" % (prefix, ts, os.getpid())
 
 
+def rid_norm(rid: str | None) -> str:
+    """Как serene_ask._rid_norm: alnum, max 16 (журнал пишет норму, не сырой payload)."""
+    import secrets
+
+    rid = (rid or "").strip()
+    if not rid:
+        return secrets.token_hex(8)[:16]
+    out = "".join(c for c in rid if c.isalnum())[:16]
+    return out or secrets.token_hex(8)[:16]
+
+
+def journal_lookup_sql(rid: str | None = None, question: str | None = None) -> str:
+    """SQL выборки строки журнала: сначала rid_norm, иначе q_hash."""
+    if rid:
+        esc = rid_norm(rid).replace("'", "''")
+        return (
+            "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') "
+            "FROM ask_journal WHERE rid = '%s' ORDER BY id DESC LIMIT 1" % esc
+        )
+    if question:
+        esc = q_hash(question).replace("'", "''")
+        return (
+            "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') "
+            "FROM ask_journal WHERE q_hash = '%s' ORDER BY id DESC LIMIT 1" % esc
+        )
+    raise ValueError("journal_lookup_sql: need rid or question")
+
+
 def code_md5(path: str | None = None, short: bool = False) -> str:
     """Md5 развёрнутого файла на *этой* машине. Не для PROBE с удалённого /ask."""
     p = path or os.environ.get("PROBE_CODE_PATH", "/opt/1c-mcp-reports/serene_ask.py")
@@ -173,18 +201,9 @@ def verify_journal(
 
         esc_hash = expected_hash.replace("'", "''")
         if rid:
-            esc_rid = rid.replace("'", "''")
-            sql = (
-                "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') "
-                "FROM ask_journal WHERE rid = '%s' ORDER BY id DESC LIMIT 1"
-                % esc_rid
-            )
+            sql = journal_lookup_sql(rid=rid)
         else:
-            sql = (
-                "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') "
-                "FROM ask_journal WHERE q_hash = '%s' ORDER BY id DESC LIMIT 1"
-                % esc_hash
-            )
+            sql = journal_lookup_sql(question=question)
 
         rc, raw = _psql_row(dsn, sql)
 
@@ -216,8 +235,9 @@ def verify_journal(
         "code_md5": got_code_md5,
     }
 
-    if rid and got_rid != rid:
-        return False, "journal rid mismatch: sent=%s got=%s" % (rid, got_rid), meta
+    if rid and got_rid != rid_norm(rid):
+        return False, "journal rid mismatch: sent_norm=%s got=%s" % (
+            rid_norm(rid), got_rid), meta
     if got_hash != expected_hash:
         return False, "q_hash mismatch (sent %d chars, journal hash other)" % expected_len, meta
     if got_len != expected_len:
@@ -273,6 +293,32 @@ def scan_shell_bug(root: str) -> list[tuple[str, int, str]]:
                 if pat.search(line):
                     bad.append((path, i, line.strip()))
     return bad
+
+
+def _cli_rid_norm(argv: list[str]) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("rid")
+    args = ap.parse_args(argv)
+    print(rid_norm(args.rid))
+    return 0
+
+
+def _cli_journal_sql(argv: list[str]) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--rid", default="")
+    ap.add_argument("--question", default="")
+    args = ap.parse_args(argv)
+    if args.rid:
+        print(journal_lookup_sql(rid=args.rid))
+    elif args.question:
+        print(journal_lookup_sql(question=args.question))
+    else:
+        ap.error("need --rid or --question")
+    return 0
 
 
 def _cli_format(argv: list[str]) -> int:
@@ -357,6 +403,10 @@ def main(argv: list[str] | None = None) -> int:
     cmd, rest = argv[0], argv[1:]
     if cmd == "format":
         return _cli_format(rest)
+    if cmd == "rid-norm":
+        return _cli_rid_norm(rest)
+    if cmd == "journal-sql":
+        return _cli_journal_sql(rest)
     if cmd == "finish":
         return _cli_finish(rest)
     if cmd == "verify":

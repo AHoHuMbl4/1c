@@ -1,4 +1,24 @@
+## 22.08: PROBE rid_norm + sys fix (возврат #2 приборов) [код]
+
+[код] Живой прогон: journal ищет сырой rid, сервис пишет rid_norm (16 alnum);
+NameError sys в esc_rid. Fix: rid_norm как serene_ask; SQL по norm + fallback q_hash;
+import sys в lib-probe.
+
+[замер] test_probe_protocol **16/16**. md5: probe_protocol a0f28181, lib-probe d83874ee,
+test_probe 3f529e34. Перепрогон okna-ask-dump — оркестратор.
+
 ## 22.08: PROBE fix — code_md5 из journal, verify локально, exit 1 [код]
+
+## 22.08: проба okna 5/8 — три регрессии кандидата [код]
+
+[код] проба `1ab7d928` на `:8092` — 0 сбоев, 5/8. Fix: именованность только из
+`intent.terms` (снят `_QUESTION_WORDS`/len>=3); named-stock → только balance-capable,
+пусто → `no_data` (не catalog clarify); `sales_period_empty` для нуля в окне при lock
+канона; rank_deterministic без повторного гейта на кодовый текст.
+
+[замер] оффлайн: stock **25/25**; sales_canon **62/62**; rank **56/56**. md5 ask
+**`dc0fc4e3`**. Повторная проба — оркестратор (`/tmp/probe-v13`).
+
 
 [код] Оркестратор rid probe-20260822T064643Z: три дефекта. (1) code_md5 брался из
 локального дерева (1ab7d928) вместо journal (c560aebe) — PROBE теперь только
