@@ -42,8 +42,8 @@ def new_rid(prefix: str = "probe") -> str:
 
 
 def code_md5(path: str | None = None, short: bool = False) -> str:
-    p = path or os.environ.get(
-        "PROBE_CODE_PATH", "/srv/1c/ubuntu/serenedb/serene_ask.py")
+    """Md5 развёрнутого файла на *этой* машине. Не для PROBE с удалённого /ask."""
+    p = path or os.environ.get("PROBE_CODE_PATH", "/opt/1c-mcp-reports/serene_ask.py")
     try:
         with open(p, "rb") as fh:
             digest = hashlib.md5(fh.read()).hexdigest()
@@ -156,32 +156,40 @@ def verify_journal(
     rid: str | None = None,
     dsn: str | None = None,
     wait_sec: float = 0.0,
+    journal_row: str | None = None,
 ) -> tuple[bool, str, dict[str, Any]]:
-    """Сверка q_len/q_hash в ask_journal. True = замер действителен."""
+    """Сверка q_len/q_hash[/code_md5] в ask_journal. True = замер действителен."""
     expected_len = q_len(question)
     expected_hash = q_hash(question)
-    dsn = journal_dsn(dsn)
-    if wait_sec > 0:
-        import time
-
-        time.sleep(wait_sec)
-
-    esc_hash = expected_hash.replace("'", "''")
-    if rid:
-        esc_rid = rid.replace("'", "''")
-        sql = (
-            "SELECT q_len, q_hash, outcome, rid FROM ask_journal "
-            "WHERE rid = '%s' ORDER BY id DESC LIMIT 1" % esc_rid
-        )
+    if journal_row is not None:
+        raw = (journal_row or "").strip()
+        rc = 0 if raw else 1
     else:
-        sql = (
-            "SELECT q_len, q_hash, outcome, rid FROM ask_journal "
-            "WHERE q_hash = '%s' ORDER BY id DESC LIMIT 1" % esc_hash
-        )
+        dsn = journal_dsn(dsn)
+        if wait_sec > 0:
+            import time
 
-    rc, raw = _psql_row(dsn, sql)
+            time.sleep(wait_sec)
+
+        esc_hash = expected_hash.replace("'", "''")
+        if rid:
+            esc_rid = rid.replace("'", "''")
+            sql = (
+                "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') "
+                "FROM ask_journal WHERE rid = '%s' ORDER BY id DESC LIMIT 1"
+                % esc_rid
+            )
+        else:
+            sql = (
+                "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') "
+                "FROM ask_journal WHERE q_hash = '%s' ORDER BY id DESC LIMIT 1"
+                % esc_hash
+            )
+
+        rc, raw = _psql_row(dsn, sql)
+
     if rc != 0:
-        return False, "journal read failed: %s" % raw[:200], {}
+        return False, "journal read failed: %s" % (raw[:200] if journal_row is None else "empty row"), {}
 
     if not raw:
         return False, "journal row not found (q_hash=%s… rid=%s)" % (
@@ -192,6 +200,7 @@ def verify_journal(
         return False, "unexpected journal row: %r" % raw[:120], {}
 
     got_len_s, got_hash, got_outcome, got_rid = parts[0], parts[1], parts[2], parts[3]
+    got_code_md5 = parts[4].strip() if len(parts) > 4 else ""
     try:
         got_len = int(got_len_s)
     except ValueError:
@@ -204,8 +213,11 @@ def verify_journal(
         "got_hash": got_hash,
         "outcome": got_outcome,
         "rid": got_rid,
+        "code_md5": got_code_md5,
     }
 
+    if rid and got_rid != rid:
+        return False, "journal rid mismatch: sent=%s got=%s" % (rid, got_rid), meta
     if got_hash != expected_hash:
         return False, "q_hash mismatch (sent %d chars, journal hash other)" % expected_len, meta
     if got_len != expected_len:
@@ -213,8 +225,35 @@ def verify_journal(
             "q_len mismatch: sent=%d journal=%d — probe truncated or wrong question"
             % (expected_len, got_len)
         ), meta
-    return True, "journal ok q_len=%d rid=%s outcome=%s" % (
-        got_len, got_rid, got_outcome), meta
+    if not got_code_md5:
+        return False, "journal code_md5 empty — нет штампа версии кода", meta
+    return True, "journal ok q_len=%d rid=%s outcome=%s code_md5=%s" % (
+        got_len, got_rid, got_outcome, got_code_md5), meta
+
+
+def finish_probe(
+    question: str,
+    *,
+    rid: str,
+    port: int | str,
+    outcome: str,
+    journal_row: str,
+    record_path: str | None = None,
+) -> tuple[bool, str, str]:
+    """После /ask: сверка журнала и PROBE-строка. code_md5 — только из journal_row."""
+    ok, msg, meta = verify_journal(question, rid=rid, journal_row=journal_row)
+    if not ok:
+        return False, msg, ""
+    code = meta.get("code_md5") or ""
+    line = emit(
+        rid=rid,
+        port=port,
+        code_md5_val=code,
+        question=question,
+        outcome=outcome or meta.get("outcome") or "—",
+        record_path=record_path,
+    )
+    return True, msg, line
 
 
 def scan_shell_bug(root: str) -> list[tuple[str, int, str]]:
@@ -258,6 +297,29 @@ def _cli_format(argv: list[str]) -> int:
     return 0
 
 
+def _cli_finish(argv: list[str]) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--rid", required=True)
+    ap.add_argument("--port", default=os.environ.get("OKNA_ASK_PORT", "8091"))
+    ap.add_argument("--outcome", default="—")
+    ap.add_argument("--record", default="")
+    ap.add_argument("--journal-row", required=True)
+    ap.add_argument("question")
+    args = ap.parse_args(argv)
+    ok, msg, _line = finish_probe(
+        args.question,
+        rid=args.rid,
+        port=args.port,
+        outcome=args.outcome,
+        journal_row=args.journal_row,
+        record_path=args.record or None,
+    )
+    print(msg)
+    return 0 if ok else 1
+
+
 def _cli_verify(argv: list[str]) -> int:
     import argparse
 
@@ -295,6 +357,8 @@ def main(argv: list[str] | None = None) -> int:
     cmd, rest = argv[0], argv[1:]
     if cmd == "format":
         return _cli_format(rest)
+    if cmd == "finish":
+        return _cli_finish(rest)
     if cmd == "verify":
         return _cli_verify(rest)
     if cmd == "scan-sh":

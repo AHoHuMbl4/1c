@@ -9,32 +9,42 @@ probe_rid() {
   echo "probe-$(date -u +%Y%m%dT%H%M%SZ)-$$"
 }
 
-probe_code_md5() {
-  local f="${1:-/srv/1c/ubuntu/serenedb/serene_ask.py}"
-  python3 -c 'import hashlib,sys; p=sys.argv[1]; print(hashlib.md5(open(p,"rb").read()).hexdigest()[:8])' "$f" 2>/dev/null \
-    || md5sum "$f" 2>/dev/null | awk '{print substr($1,1,8)}' || echo "?"
+# Читает строку ask_journal по rid на удалённом хосте (только psql, без python там).
+# Печатает: q_len|q_hash|outcome|rid|code_md5
+probe_ssh_journal_row() {
+  local key="$1" host="$2" rid="$3"
+  local esc_rid
+  esc_rid="$(python3 -c 'print(sys.argv[1].replace("\x27", "\x27\x27"))' "$rid")"
+  ssh -o BatchMode=yes -o IdentitiesOnly=yes -i "$key" "$host" "bash -s" <<REMOTE
+set -euo pipefail
+load_env() {
+  for p in /etc/1c-mcp-reports.env /etc/1c-serene-ask-postgres.env; do
+    [ -r "\$p" ] || continue
+    while IFS= read -r line || [ -n "\$line" ]; do
+      line="\${line%%#*}"; [[ "\$line" != *=* ]] && continue
+      export "\${line%%=*}=\${line#*=}"
+    done < "\$p"
+  done
+}
+load_env
+unset PGUSER PGDATABASE
+DSN="\${ASK_JOURNAL_RW_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
+sleep 1.5
+psql "\$DSN" -tA -c "SELECT q_len, q_hash, outcome, rid, coalesce(code_md5, '') FROM ask_journal WHERE rid = '${esc_rid}' ORDER BY id DESC LIMIT 1"
+REMOTE
 }
 
-# Печать + запись строки PROBE. Аргументы: rid port code_md5 outcome question [record_file]
-probe_emit() {
-  local rid="$1" port="$2" cmd5="$3" outcome="$4" question="$5" record="${6:-}"
-  python3 "$PROBE_PY" format \
-    --rid "$rid" --port "$port" --code-md5 "$cmd5" --outcome "$outcome" \
+# Сверка + PROBE-строка локально; code_md5 только из journal_row. exit 1 при провале.
+probe_finish() {
+  local question="$1" rid="$2" port="$3" outcome="$4" journal_row="$5" record="${6:-}"
+  python3 "$PROBE_PY" finish \
+    --rid "$rid" --port "$port" --outcome "$outcome" \
+    --journal-row "$journal_row" \
     ${record:+--record "$record"} \
-    "$question" >&2
+    "$question"
 }
 
-# Сверка ask_journal после /ask. DSN: PROBE_JOURNAL_DSN или postgres@7890.
-probe_verify_journal() {
-  local question="$1" rid="${2:-}" wait="${3:-1.5}"
-  local args=(verify --wait "$wait")
-  [[ -n "$rid" ]] && args+=(--rid "$rid")
-  [[ -n "${PROBE_JOURNAL_DSN:-}" ]] && args+=(--dsn "$PROBE_JOURNAL_DSN")
-  python3 "$PROBE_PY" "${args[@]}" "$question"
-}
-
-# Громкий провал самопроверки
-probe_fail_journal() {
+probe_fail() {
   echo "🔴 PROBE INVALID: $*" >&2
   exit 1
 }

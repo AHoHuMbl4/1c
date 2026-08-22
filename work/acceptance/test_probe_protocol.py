@@ -63,18 +63,59 @@ class TestProbeProtocol(unittest.TestCase):
     def test_verify_journal_ok(self):
         q = MULTI
         rid = "probe-test"
-        with patch.object(P, "_psql_row", return_value=(0, "%d|%s|no_data|%s" % (
+        with patch.object(P, "_psql_row", return_value=(0, "%d|%s|no_data|%s|c560aebe" % (
                 P.q_len(q), P.q_hash(q), rid))):
             ok, msg, meta = P.verify_journal(q, rid=rid, wait_sec=0)
         self.assertTrue(ok, msg)
         self.assertEqual(meta["got_len"], P.q_len(q))
+        self.assertEqual(meta["code_md5"], "c560aebe")
 
     def test_verify_journal_fail_len(self):
         q = MULTI
-        with patch.object(P, "_psql_row", return_value=(0, "5|%s|no_data|r1" % P.q_hash(q))):
+        with patch.object(P, "_psql_row", return_value=(0, "5|%s|no_data|r1|abcd" % P.q_hash(q))):
             ok, msg, _meta = P.verify_journal(q, rid="r1", wait_sec=0)
         self.assertFalse(ok)
         self.assertIn("q_len mismatch", msg)
+
+    def test_finish_uses_journal_code_md5_not_local(self):
+        q = MULTI
+        rid = "probe-test"
+        row = "%d|%s|no_data|%s|c560aebe" % (P.q_len(q), P.q_hash(q), rid)
+        ok, msg, line = P.finish_probe(
+            q, rid=rid, port=8091, outcome="no_data", journal_row=row)
+        self.assertTrue(ok, msg)
+        parsed = P.parse_line(line)
+        self.assertEqual(parsed["code_md5"], "c560aebe")
+
+    def test_finish_rejects_empty_code_md5(self):
+        q = MULTI
+        rid = "probe-test"
+        row = "%d|%s|no_data|%s|" % (P.q_len(q), P.q_hash(q), rid)
+        ok, msg, line = P.finish_probe(
+            q, rid=rid, port=8091, outcome="no_data", journal_row=row)
+        self.assertFalse(ok)
+        self.assertIn("code_md5 empty", msg)
+        self.assertEqual(line, "")
+
+    def test_finish_cli_exit_code(self):
+        import subprocess
+        q = MULTI
+        rid = "r1"
+        bad_row = "5|%s|no_data|r1|abc" % P.q_hash(q)
+        p = subprocess.run(
+            [sys.executable, os.path.join(ROOT, "probe_protocol.py"), "finish",
+             "--rid", rid, "--port", "8091", "--outcome", "no_data",
+             "--journal-row", bad_row, q],
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(p.returncode, 0, p.stdout + p.stderr)
+
+    def test_dump_script_no_local_code_md5(self):
+        dump = open(os.path.join(ROOT, "okna-ask-dump.sh"), encoding="utf-8").read()
+        self.assertNotIn("probe_code_md5", dump)
+        self.assertNotIn("/srv/1c/ubuntu/serenedb/serene_ask.py", dump)
+        self.assertIn("probe_finish", dump)
+        self.assertIn("probe_ssh_journal_row", dump)
 
     def test_scan_shell_finds_bad_pattern(self):
         with tempfile.TemporaryDirectory() as td:

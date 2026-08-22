@@ -1,3 +1,14 @@
+## 22.08: PROBE fix — code_md5 из journal, verify локально, exit 1 [код]
+
+[код] Оркестратор rid probe-20260822T064643Z: три дефекта. (1) code_md5 брался из
+локального дерева (1ab7d928) вместо journal (c560aebe) — PROBE теперь только
+ask_journal.code_md5 через finish_probe. (2) verify на okna: ModuleNotFoundError +
+вопрос как команда bash — journal fetch psql на удалённой, verify локально.
+(3) INVALID при exit 0 — probe_finish/probe_fail exit 1.
+
+[замер] test_probe_protocol **12/12**. md5: probe_protocol 99f5d645, lib-probe ed352f68,
+okna-ask-dump 37694f39, test_probe cf22c402. Живой перепрогон — оркестратор.
+
 ## 22.08: машинно-проверяемые факты — протокол PROBE, journal verify, gold SQL [код]
 
 [код] После §3.94 (обрезка `ssh bash -s "$Q"` → q_len=5): единый протокол замера
