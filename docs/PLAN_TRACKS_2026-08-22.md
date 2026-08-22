@@ -48,19 +48,20 @@
 Разработка в work/hooks/, установка владельцем: bash work/hooks/install-gates.sh.
 Приёмка оркестратором — только пробоями + test-hooks.sh зелёный.
 
-## Трек 4. klient-1 — ЖДЁТ РЕШЕНИЕ ВЛАДЕЛЬЦА («рестартуй» или нет)
+## Трек 4. klient-1 — клин вылечен (окно владельца), init применён; ЖДЁМ такт
 
-- Сделано: corpus_init.sql + corpus_build.sql из HEAD в /opt (md5 3a9a6ea6 / e0d61ec9).
-- Стоп: SereneDB в клине — юнит active, «ready» в журнале 06:57 местного, порт 7890 не
-  принимает соединения (2 пробы connect timeout; хост пуст, load 0.09). init с грантами
-  не выполнен (умер по таймауту на соединении).
-- Пайплайн: таймер dead, такт убит SIGKILL 06:42 местного — это окно владельца
-  (ускорение эмбеддинга, embed_pool.sh с 06:31 — тоже заблокирован клином).
-- Дальше по слову владельца: systemctl restart serenedb → повтор init (минута) →
-  проверка гранта → **такт только после завершения окна владельца** → balance_registers
-  наполнится (corpus_build 1-бис) → перезамер «остатки на складах» :8091 klient-1
-  (базлайн 22.08: no_data при живом accumulationregister_товарынаскладах).
-- Базлайн-факт: search_meta.balance_registers на klient-1 пуст; гранта serene_ro не было.
+- Окно владельца нашло корень клина: memory_limit движка 12,4 ГиБ (80 %) → 8,0 ГиБ по
+  докам (cookbook/performance/oom: индексы не buffer-managed); /usr/local/sbin/
+  serenedb-memlimit.sh + systemd-дропин — лимит встаёт после каждого старта; проверено
+  рестартом (порт жив через 5 с, лимит 8 GiB). Запись об этом — в CHANGELOG их окном.
+- Сделано оркестратором: corpus_init.sql + corpus_build.sql из HEAD в /opt
+  (md5 3a9a6ea6 / e0d61ec9); init применён ПОЛНОСТЬЮ (вызов как у build.sh:
+  -v dict_locale=russian; INIT_OK), грант serene_ro→search_meta проверен: t.
+- Осталось: окно владельца завершает прогон досчёта → оркестратор стартует таймер/такт
+  (таймер dead, такт убит SIGKILL 06:42) → corpus_build 1-бис наполнит
+  balance_registers → перезамер «остатки на складах» :8091 klient-1
+  (базлайн 22.08: no_data при живом accumulationregister_товарынаскладах) → новая ставка
+  досчёта и ETA.
 
 ## Решения, ждущие владельца
 
