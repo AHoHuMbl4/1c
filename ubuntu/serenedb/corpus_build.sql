@@ -100,6 +100,58 @@ WHERE e.entity LIKE 'accumulationregister_%_recordtype'
   AND EXISTS (SELECT 1 FROM tmp3_prop p
               WHERE p.entity = e.entity AND lower(p.prop) = 'recordtype');
 
+-- ============ 1-тер. КАРТА БАЛАНС-ИСТОЧНИКОВ ($metadata, без имён конфигурации) ============
+-- Три формы: accumulation_balance (RecordType-тень), accounting (Дт/Кт), accumulation_warehouse
+-- (складской регистр с количеством). Имена сущностей не перечисляются — только свойства OData.
+DELETE FROM search_balance_map;
+INSERT INTO search_balance_map
+SELECT src_table, form, has_record_type, has_debit_credit, has_period, has_ext_dimension, now()
+FROM (
+  SELECT regexp_replace(e.entity, '_recordtype$', '') AS src_table,
+         'accumulation_balance' AS form,
+         true AS has_record_type,
+         false AS has_debit_credit,
+         EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity AND lower(p.prop) = 'period')
+           AS has_period,
+         EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity
+                 AND lower(p.prop) LIKE 'extdimension%') AS has_ext_dimension
+  FROM tmp3_ent e
+  WHERE e.entity LIKE 'accumulationregister_%_recordtype'
+    AND EXISTS (SELECT 1 FROM tmp3_prop p
+                WHERE p.entity = e.entity AND lower(p.prop) = 'recordtype')
+  UNION ALL
+  SELECT e.entity AS src_table,
+         'accounting' AS form,
+         false AS has_record_type,
+         true AS has_debit_credit,
+         EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity AND lower(p.prop) = 'period')
+           AS has_period,
+         EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity
+                 AND lower(p.prop) LIKE 'extdimension%') AS has_ext_dimension
+  FROM tmp3_ent e
+  WHERE e.entity LIKE 'accountingregister_%'
+    AND e.entity NOT LIKE '%_recordtype'
+    AND EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity
+                AND lower(p.prop) IN ('accountdr', 'accountcr'))
+  UNION ALL
+  SELECT e.entity AS src_table,
+         'accumulation_warehouse' AS form,
+         EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity
+                 AND lower(p.prop) = 'recordtype') AS has_record_type,
+         false AS has_debit_credit,
+         EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity AND lower(p.prop) = 'period')
+           AS has_period,
+         EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity
+                 AND lower(p.prop) LIKE 'extdimension%') AS has_ext_dimension
+  FROM tmp3_ent e
+  WHERE e.entity LIKE 'accumulationregister_%'
+    AND e.entity NOT LIKE '%_recordtype'
+    AND EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity
+                AND lower(p.prop) IN ('quantity', 'количество'))
+    AND EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity AND lower(p.prop) = 'period')
+) u
+WHERE coalesce(src_table, '') <> '';
+
 SELECT 'метаданные' AS шаг, (SELECT count(*) FROM tmp3_ent) AS сущностей,
        (SELECT count(*) FROM tmp3_prop) AS свойств,
        (SELECT count(*) FROM tmp3_key WHERE len(key_cols) > 0) AS с_ключом;

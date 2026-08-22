@@ -130,34 +130,19 @@ finally:
     A.psql = _old
     A._measures_by_src = _real_mbs
 
-# --- stock named ---
-A._BALANCE_REGS.update({"at": time.time(), "set": frozenset([
-    "accumulationregister_номерабсо", "accumulationregister_расчетныеначисления"])})
-_real_goods = A.balance_registers_with_goods
-
-
-def _no_goods(regs=None):
-    return frozenset()
-
-
-A.balance_registers_with_goods = _no_goods
-try:
-    gap = A.stock_balance_no_data(
-        "сколько петель осталось на складе?", {}, {}, time.time(),
-        intent={"measure": "петли", "want": "sum", "kind": "остаток"})
-    t("петли: no_data при balance без ТМЦ", gap and gap.get("kind") == "no_data", gap)
-    t("петли: named_absent",
-      gap and (gap.get("diag") or {}).get("stock_balance_named_absent"), gap)
-    gen = A.stock_balance_no_data(
-        "сколько товара на складе?", {}, {}, time.time(),
-        intent={"measure": "товара", "want": "sum", "kind": "товар"})
-    t("товар на складе: не глушим (clarify путь)", gen is None, gen)
-finally:
-    A.balance_registers_with_goods = _real_goods
-    A._BALANCE_REGS.update({"at": 0.0, "set": frozenset()})
-
-gap0 = A.stock_balance_no_data("остаток на складе", {}, {}, time.time())
-t("пустой balance_registers → no_data", gap0 and gap0.get("kind") == "no_data", gap0)
+# --- stock path (возврат 22.08): ранний no_data снят; «какие» не товар ---
+t("какие остатки: not named product",
+  not A.stock_asks_named_product("Какие остатки товаров на складах?"))
+t("сколько товара: not named (generic)",
+  not A.stock_asks_named_product(
+      "сколько товара на складе?",
+      intent={"measure": "товара", "want": "sum", "kind": "товар"}))
+t("петли: named product",
+  A.stock_asks_named_product(
+      "сколько петель осталось на складе?",
+      intent={"terms": [["петли"]], "want": "sum", "kind": "остаток"}))
+t("sales intent не склад", not A.sales_sum_intent(
+    {"want": "sum"}, "Какие остатки товаров на складах?"))
 
 
 # --- override helpers ---
@@ -303,6 +288,33 @@ OKNA_JULY_Q = "сколько продали в прошлом месяце?"
 OKNA_SUN_Q = "сколько наторговали в прошедшее воскресенье?"
 OKNA_WHY_Q = "почему в воскресенье продаж ноль, это сбой?"
 
+t("sales_period_empty: canon+zero sunday",
+  A.sales_period_empty(
+      {"count": 0, "sum": 0.0}, "drop_assumed",
+      {"want": "sum", "period": {"from": "2026-08-17", "to": "2026-08-17"},
+       "parse": {"assumed": ["period.from"]}},
+      {"sales_canon_locked": "accumulationregister_реализациятмц"},
+      OKNA_SUN_Q))
+
+t("sales_canon_engaged: override без lock",
+  A.sales_canon_engaged(
+      {"sales_canon_override": {"было": ["x"], "стало": "accumulationregister_реализациятмц"}},
+      "accumulationregister_реализациятмц")
+  == "accumulationregister_реализациятмц")
+t("sales_period_empty: override+zero sunday",
+  A.sales_period_empty(
+      {"count": 0, "sum": 0.0}, "no_data",
+      {"want": "sum", "period": {"from": "2026-08-17", "to": "2026-08-17"}},
+      {"sales_canon_override": {"стало": "accumulationregister_реализациятмц"},
+       "focus": "accumulationregister_реализациятмц"},
+      OKNA_SUN_Q))
+t("sales_period_empty: not without canon",
+  not A.sales_period_empty(
+      {"count": 0, "sum": 0.0}, "drop_assumed",
+      {"want": "sum"}, {}, OKNA_SUN_Q))
+
+
+
 
 def _fake_okna(q):
     if "written_by IN" in q:
@@ -407,6 +419,76 @@ try:
       A.sales_qty_measure(["Всего", "Количество", "Сумма"]) == "Количество")
     t("okna sum: money force on",
       A.sales_force_money_measure({"want": "sum"}, "сколько продали вчера?"))
+
+    # fork: канон excluded no_live_cells → period_empty, не clarify (22.08 okna)
+    _fork = {
+        "classes": 1,
+        "pool": 2,
+        "pool_srcs": [
+            "accumulationregister_реализациятмц",
+            "informationregister_курсывалют",
+        ],
+        "live_srcs": ["informationregister_курсывалют"],
+        "excluded": [
+            {"src": "accumulationregister_реализациятмц", "reason": "no_live_cells"},
+        ],
+    }
+    _why_int = {"want": "sum", "kind": "продажи",
+                "period": {"from": "2026-08-17", "to": "2026-08-17"}}
+    t("okna why fork: canon empty src",
+      A.sales_fork_canon_empty_src(
+          _why_int, {}, OKNA_WHY_Q, _fork, OKNA_CANDS)
+      == "accumulationregister_реализациятмц")
+    t("okna why fork: blocks clarify on C",
+      A.sales_fork_blocks_clarify(
+          "C", {"reason": "uncounted_cell"}, _why_int, {}, OKNA_WHY_Q,
+          OKNA_CANDS, _fork))
+    t("okna why fork: blocks unique noise",
+      A.sales_fork_blocks_clarify(
+          "unique",
+          {"class": {"srcs": ["informationregister_курсывалют"]}},
+          _why_int, {}, OKNA_WHY_Q, OKNA_CANDS, _fork))
+    t("okna why fork: not rank",
+      not A.sales_fork_canon_empty_src(
+          _why_int, {}, "что лучше всего продавалось на этой неделе?",
+          _fork, OKNA_CANDS))
+
+    # assumed period: intent без period, окно в preds/diag — live okna 22.08
+    _why_assumed_int = {
+        "want": "sum", "kind": "продажи",
+        "parse": {"assumed": ["period.from", "period.to"]},
+    }
+    _why_assumed_diag = {
+        "about_coverage_refused": "period_zero_why",
+        "intent_assumed": "period.from=2026-08-16, period.to=2026-08-16",
+    }
+    _preds_sun = ["doc_date >= '2026-08-16'",
+                  "doc_date < ('2026-08-16'::date + INTERVAL 1 day)"]
+    t("okna why assumed: period via preds not intent",
+      A.sales_period_window_active(_why_assumed_int, _why_assumed_diag, _preds_sun))
+    t("okna why assumed: canon empty src",
+      A.sales_fork_canon_empty_src(
+          _why_assumed_int, _why_assumed_diag, OKNA_WHY_Q,
+          _fork, OKNA_CANDS)
+      == "accumulationregister_реализациятмц")
+    t("okna why assumed: blocks clarify on C",
+      A.sales_fork_blocks_clarify(
+          "C", {"reason": "uncounted_cell"}, _why_assumed_int,
+          _why_assumed_diag, OKNA_WHY_Q, OKNA_CANDS, _fork))
+    t("okna why assumed: blocks unique noise",
+      A.sales_fork_blocks_clarify(
+          "unique",
+          {"class": {"srcs": ["informationregister_курсывалют"]}},
+          _why_assumed_int, _why_assumed_diag, OKNA_WHY_Q, OKNA_CANDS, _fork))
+
+    # lock без picked (модель не назвала src)
+    _canon_only = A.sales_canon_src(OKNA_CANDS, _why_int, OKNA_WHY_Q)
+    t("okna why: cold canon без picked",
+      _canon_only == "accumulationregister_реализациятмц", _canon_only)
+    _p4, _a4, _d4 = A.sales_canon_force_pool(
+        _canon_only, [], OKNA_CANDS, True)
+    t("okna why: force pool без picked",
+      _p4 == [_canon_only] and _a4 == [_canon_only] and not _d4, (_p4, _a4, _d4))
 finally:
     A.psql = _old
     A._measures_by_src = _real_mbs

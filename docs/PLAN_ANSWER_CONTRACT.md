@@ -199,13 +199,41 @@ measure_label, единица, период, фильтры, зерно/ось/�
 | **Ранг «что продавалось»** | мера Количество (`sales_qty_measure`), не Всего (возврат 12) |
 | **«почему ноль / сбой»** | не `about=coverage` → figures; тот же sales path → period_empty |
 | **«позиций в прайсе»** | `catalog_*` товаров, не строки установки цен |
-| **Именованный товар «на складе» без товарных остатков** | `no_data`; общий «товара на складе» — clarify |
+| **Именованный товар «на складе» без товарных остатков** | ~~ранний `no_data`~~ **снято 22.08** — см. §6ter |
 | **Открытый день (доставка)** | ответ с регистра; freshness/merge_pending уже в partial — отдельная «в пути»-метка не нужна, пока поток не затих |
 
 Код: `prefer_entity_for_sales`, `sales_sum_intent`, `sales_money_measure`,
-`sales_canon_force_pool`, `catalog_count_src`, `stock_asks_named_product` /
-`balance_registers_with_goods` в `serene_ask.py`. Замок: `test_sales_canon_prefer.py`
-(полный путь intent→канон→исход).
+`sales_canon_force_pool`, `catalog_count_src` в `serene_ask.py`. Замок:
+`test_sales_canon_prefer.py` (полный путь intent→канон→исход).
+
+---
+
+## 6ter. Универсальный путь остатков (возврат 22.08, замер okna/klient-1)
+
+**Диагноз по фактам (не класс-ветка под один вопрос).**
+
+| Факт | Чем доказан |
+|---|---|
+| okna `:8091`, md5 `c560aebe`: «Какие остатки товаров на складах?» → `no_data` | rid `4ba366b6`, пробы `2a800fe7`/`c7f6c31f`/`0039b8e6` |
+| Корень v1: `stock_asks_named_product` по словарю токенов — аудит: класс-ветка под язык; **v2: только `intent.terms`**, scaffold = kind+маркеры |
+| okna: `balance_registers` непуст (9), ось ТМЦ пуста; остаток — `accountingregister_плансчетовосновной2014`, 217.1, 158 350 с qty | SQL 21–22.08 |
+| klient-1: `no_data` при `accumulationregister_товарынаскладах`; реестр пуст; GRANT на meta нет | оркестратор 22.08 `:8091` |
+| `okna-ask-dump.sh` резал вопрос до первого слова — прошлые замеры недействительны | `:6`, heredoc исправлен |
+
+**Путь:** разбор → кандидаты → структурная пригодность → ответ/clarify/no_data.
+
+| Правило | Смысл |
+|---|---|
+| Ранний `stock_balance_no_data` **снят** | `no_data` только после пустого общего поиска (п. 21) |
+| `search_balance_map` | бутстрап `$metadata`; GRANT в `corpus_init.sql`; выкат init — отдельный шаг |
+| Ошибка чтения карты | `RuntimeError` → unavailable (п. 18), не `no_data` |
+| Словарный мост | alias не принёс баланс-источник, карта не пуста → clarify со списком |
+| Структурная пригодность | мера, Period, RecordType или Дт/Кт, непустота; не добавляет кандидатов |
+| Память | без `user` — `prior` не наследуется |
+| Сальдо бухсчёта | хвост счёта после выката карты (обороты + ввод остатков) |
+
+Код: `balance_map_rows`, `filter_balance_structural`, `balance_bridge_clarify`.
+Замок: `test_stock_balance_path.py` **25/25**; `sales_period_empty` в sales_canon **62/62**; md5 ask в коммите.
 
 ---
 

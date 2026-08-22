@@ -66,6 +66,20 @@ CREATE TABLE IF NOT EXISTS search_sources (src_table VARCHAR, seen_at TIMESTAMP)
 CREATE TABLE IF NOT EXISTS search_meta (k VARCHAR, v VARCHAR);
 GRANT SELECT ON search_meta TO serene_ro;
 GRANT SELECT ON search_meta TO serene_resolver;
+
+-- Карта баланс-источников: структура из $metadata (форма, Period, Дт/Кт или RecordType).
+-- Наполняется `corpus_build.sql`; ответ читает через `balance_map_rows` в `serene_ask.py`.
+-- Пустая на первом такте — норма; выкат `corpus_init` на развёрнутые базы — отдельный шаг.
+CREATE TABLE IF NOT EXISTS search_balance_map (
+  src_table VARCHAR,
+  form VARCHAR,
+  has_record_type BOOLEAN,
+  has_debit_credit BOOLEAN,
+  has_period BOOLEAN,
+  has_ext_dimension BOOLEAN,
+  seen_at TIMESTAMP);
+GRANT SELECT ON search_balance_map TO serene_ro;
+GRANT SELECT ON search_balance_map TO serene_resolver;
 CREATE TABLE IF NOT EXISTS search_quality (k VARCHAR, v BIGINT, note VARCHAR);
 CREATE TABLE IF NOT EXISTS build_state (ts TIMESTAMP, k VARCHAR, v BIGINT);
 -- Разметка «о таком спрашивают / это служебное». Заводится ЗДЕСЬ, а не только в
@@ -208,7 +222,7 @@ SELECT 'объекты поиска на месте' AS шаг,
        (SELECT count(*) FROM duckdb_tables()
         WHERE database_name = current_database()
           AND table_name IN ('search_corpus','resolver_index','search_tables',
-                             'search_sources','search_meta','build_state',
-                             'search_refcols','search_fork_class',
+                             'search_sources','search_meta','search_balance_map',
+                             'build_state','search_refcols','search_fork_class',
                              'search_fork_label')) AS таблиц,
        (SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'search_idx') AS индексов;

@@ -3124,6 +3124,8 @@ def question_wants_breakdown(intent, plan=None):
 def total_question_skips_axis(intent, measure, grain_dec, plan=None, question="",
                               trusted=None, resolved=None):
     """Итог «всего»/sum без разреза — axis-clarify не задаётся (план владельца шаг 5)."""
+    if rank_intent_from(intent, plan, question):
+        return False
     if (grain_dec or {}).get("clarify") != "axis":
         return False
     if question_wants_breakdown(intent, plan):
@@ -3148,12 +3150,18 @@ def rank_question_text(question):
     if not q:
         return False
     markers = (
-        "больше всего", "больше всех", "наибольш", "наименьш",
+        "больше всего", "больше всех", "лучше всего", "лучше всех",
+        "наибольш", "наименьш",
         "какого товар", "какой товар", "какая номенклатур",
         "top ", " most ", "maximum", "leader", "лидер", "рейтинг",
         "топ-", "топ ",
     )
-    return any(m in q for m in markers)
+    if any(m in q for m in markers):
+        return True
+    if "лучше" in q and any(w in q for w in (
+            "продав", "продаж", "продал", "sold", "sales", "sell")):
+        return True
+    return False
 
 
 def rank_intent_from(intent, plan=None, question=""):
@@ -3195,6 +3203,62 @@ def rank_leader_answer_text(agg, measure_label=None, unit=""):
     if nm:
         return "«%s»: %s%s" % (nm, _fmt_human(val), suffix)
     return "%s%s" % (_fmt_human(val), suffix)
+
+
+def rank_product_axis_col(src, axes, intent, question, plan=None):
+    """Ось номенклатуры для rank-fallback, когда grain=row на живом пути."""
+    axes = list(axes or [])
+    cols = [a.get("col") for a in axes if a.get("col")]
+    if not cols and src:
+        try:
+            axes = refcols_of(src)
+            cols = [a.get("col") for a in axes if a.get("col")]
+        except RuntimeError:
+            cols = []
+    pref = product_axis_pref(cols)
+    if pref:
+        return pref
+    if rank_intent_from(intent, plan, question):
+        _kh = kind_axis_hits(axes, (intent or {}).get("kind"))
+        if not _kh:
+            _kh = kind_axis_rerank(axes, (intent or {}).get("kind"))
+        pref = product_axis_pref(_kh or cols)
+        if pref:
+            return pref
+    return None
+
+
+def rank_gate_fallback_answer(question, agg, src, match, preds, measure, money,
+                              intent, plan, diag, axes, cut, t0, _pass_frag,
+                              say_measure, serene_axis=None):
+    """После провала гейта: топ-1 из aggregate_groups, без текста модели."""
+    if not rank_intent_from(intent, plan, question):
+        return None
+    _rank_agg = agg
+    if ((agg or {}).get("grain") != "group" or not (agg.get("groups") or [])):
+        _col = rank_product_axis_col(src, axes, intent, question, plan)
+        if not (_col and src and measure):
+            return None
+        _rank_agg = aggregate_groups(
+            src, match, preds, measure, _col, 1,
+            plan.get("compute") if plan else "sum")
+        if _rank_agg:
+            diag["rank_gate_reaggregate"] = _col
+    if not _rank_agg or not (_rank_agg.get("groups") or []):
+        return None
+    _unit = _unit_for_measure(measure, money)
+    _txt = rank_leader_answer_text(_rank_agg, say_measure or measure, unit=_unit)
+    if not _txt:
+        return None
+    _slot = "rank"
+    _txt = ensure_count_named(_txt, _rank_agg, _slot)
+    _txt = ensure_answer_passport(_txt, _pass_frag)
+    diag["rank_deterministic"] = True
+    return {"partial": cut or None, "kind": "answer",
+            "text": _txt, "sources": [src] if src else [],
+            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                               gate_ok=True)}
+
 
 def product_axis_pref(cols):
     """Ось номенклатуры/ТМЦ — приоритет для рейтинга товара."""
@@ -3503,6 +3567,36 @@ def sales_canon_force_pool(locked, picked=None, arb_pool=None, doubt=False):
     return [locked], [locked], False
 
 
+def sales_canon_engaged(diag, src=None):
+    """Канон продаж зафиксирован или фактически выбран (lock мог не успеть).
+
+    Живой путь [замер 22.08 okna]: override пересадил на регистр, но
+    sales_canon_locked не попал в diag → sales_period_empty не срабатывал.
+    """
+    d = diag or {}
+    locked = d.get("sales_canon_locked")
+    if locked:
+        return locked
+    ov = d.get("sales_canon_override") or {}
+    if isinstance(ov, dict) and ov.get("стало"):
+        return ov["стало"]
+    s = src or d.get("focus")
+    if (s and str(s).startswith("accumulationregister_")
+            and not sales_noncanon_focus(s)):
+        return s
+    return None
+
+
+def _zero_period_not_missing(intent, diag, question, act, src=None):
+    """Пустое окно при каноне продаж — period_empty, не no_data про отсутствие базы."""
+    if act in ("empty_period", "drop_assumed"):
+        return True
+    if sales_sum_intent(intent, question) and sales_canon_engaged(diag, src):
+        pr = (intent or {}).get("period") or {}
+        return bool(pr.get("from") or pr.get("to"))
+    return False
+
+
 def sales_ticket_hatch(trusted):
     """Явный люк документа: decision_id без from_memory (не sticky/память)."""
     if not isinstance(trusted, dict) or not trusted.get("src"):
@@ -3678,31 +3772,75 @@ def rank_measure_hint(names, intent, question, alias_by=None):
 
 
 _BALANCE_REGS = {"at": 0.0, "set": None}
+_BALANCE_MAP = {"at": 0.0, "rows": None}
+
+_STOCK_MARKERS = (
+    "остат", "на складе", "in stock", "on warehouse", "inventory balance",
+    "stoc", "depozit", "magazin", "inventar",
+)
 
 
 def balance_registers():
-    """Регистры остатков из search_meta (RecordType в $metadata при сборке)."""
+    """Регистры остатков из search_meta (RecordType в $metadata при сборке).
+
+    RuntimeError при чтении — сбой контура (п. 18), не «пустой реестр».
+    """
     now = time.time()
     if (_BALANCE_REGS["set"] is not None
             and now - _BALANCE_REGS["at"] < 300):
         return _BALANCE_REGS["set"]
-    try:
-        r = psql("SELECT v FROM search_meta WHERE k = 'balance_registers' LIMIT 1")
-        raw = (r[0][0] or "") if r and r[0] else ""
-        got = frozenset(x.strip() for x in str(raw).split(",") if x.strip())
-    except RuntimeError:
-        got = frozenset()
+    r = psql("SELECT v FROM search_meta WHERE k = 'balance_registers' LIMIT 1")
+    raw = (r[0][0] or "") if r and r[0] else ""
+    got = frozenset(x.strip() for x in str(raw).split(",") if x.strip())
     _BALANCE_REGS.update({"at": now, "set": got})
     return got
 
 
+def balance_map_rows():
+    """Карта баланс-источников из search_balance_map ($metadata при сборке).
+
+    Таблицы ещё нет (corpus_init не выкатили) — пустая карта, не сбой.
+    RuntimeError на отказ доступа / обрыв — сбой контура (п. 18), не no_data.
+    """
+    now = time.time()
+    if (_BALANCE_MAP["rows"] is not None
+            and now - _BALANCE_MAP["at"] < 300):
+        return _BALANCE_MAP["rows"]
+    try:
+        rows = psql(
+            "SELECT src_table, form, has_record_type, has_debit_credit, "
+            "has_period, has_ext_dimension FROM search_balance_map")
+    except RuntimeError as e:
+        msg = str(e).lower()
+        if "search_balance_map" in msg and (
+                "does not exist" in msg or "catalog" in msg
+                or "not found" in msg or "не существует" in msg):
+            rows = []
+        else:
+            raise
+    _BALANCE_MAP.update({"at": now, "rows": rows or []})
+    return _BALANCE_MAP["rows"]
+
+
+def balance_capable_sources():
+    """Множество src_table, пригодных для остатков по карте метаданных."""
+    return frozenset(r[0] for r in (balance_map_rows() or []) if r and r[0])
+
+
+def balance_capable_or_registers():
+    """Карта баланс-источников; если corpus_init ещё не выкатили — реестр $metadata."""
+    cap = balance_capable_sources()
+    if cap:
+        return cap
+    return balance_registers()
+
+
 def question_asks_stock_balance(question):
-    """Вопрос про остаток на складе — триггер проверки пространства остатков."""
+    """Вопрос про остаток на складе — триггер универсального пути остатков."""
     q = " ".join(str(question or "").lower().split())
     if not q:
         return False
-    markers = ("остат", "на складе", "in stock", "on warehouse", "inventory balance")
-    return any(m in q for m in markers)
+    return any(m in q for m in _STOCK_MARKERS)
 
 
 def balance_registers_with_goods(regs=None):
@@ -3714,68 +3852,192 @@ def balance_registers_with_goods(regs=None):
     regs = regs if regs is not None else balance_registers()
     if not regs:
         return frozenset()
-    try:
-        rows = psql(
-            "SELECT DISTINCT src_table FROM %s WHERE src_table IN (%s) "
-            "AND map_extract_value(refs_map, 'ТМЦ') IS NOT NULL"
-            % (CORPUS, ", ".join(lit(r) for r in regs)))
-    except RuntimeError:
-        return frozenset()
+    rows = psql(
+        "SELECT DISTINCT src_table FROM %s WHERE src_table IN (%s) "
+        "AND map_extract_value(refs_map, 'ТМЦ') IS NOT NULL"
+        % (CORPUS, ", ".join(lit(r) for r in regs)))
     return frozenset(r[0] for r in (rows or []) if r and r[0])
 
 
-def stock_asks_named_product(question, intent=None):
-    """Именованный товар в вопросе про остаток (не общее «товара на складе»)."""
+def _stems_of_text(s):
+    """Основы текста через STEM_DICT; оффлайн/сбой — одно слово _intent_word."""
+    s = (s or "").strip()
+    if not s:
+        return set()
+    stems = set()
+    try:
+        kr = psql("SELECT ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(s)))
+        stems = {x for x in _stem_set(kr[0][0] if kr else "") if len(x) >= 3}
+    except RuntimeError:
+        stems = set()
+    if not stems:
+        w = _intent_word(s)
+        if len(w) >= 3:
+            stems = {w}
+    return stems
+
+
+def _stock_scaffold_stems(intent, question):
+    """Основы «темы» остатков: kind + маркеры вопроса; measure — отдельно (именованность)."""
+    parts = []
+    v = (intent or {}).get("kind") or ""
+    if v:
+        parts.append(str(v))
     q = " ".join(str(question or "").lower().split())
-    if not q or not question_asks_stock_balance(question):
+    for m in _STOCK_MARKERS:
+        if m in q:
+            parts.append(m)
+    out = set()
+    for part in parts:
+        out |= _stems_of_text(part)
+    return out
+
+
+def stock_asks_named_product(question, intent=None):
+    """Именованный товар — terms разбора и measure (live: «петли» часто в measure)."""
+    if not question_asks_stock_balance(question):
         return False
     intent = intent or {}
-    measure = (intent.get("measure") or "").strip().lower()
-    generic = ("товар", "товара", "товаров", "номенклатур", "остаток", "остатка",
-               "остатки", "остатков", "product", "item", "goods", "stock", "inventory")
-    if measure and measure not in generic and not any(g in measure for g in (
-            "остат", "склад", "stock", "invent")):
+    scaffold = _stock_scaffold_stems(intent, question)
+
+    def _is_named_term(text):
+        s = _intent_text(text)
+        if not s:
+            return False
+        kind = (_intent_text((intent or {}).get("kind") or "") or "").lower()
+        sl = s.lower()
+        if kind and (kind in sl or sl in kind):
+            return False
+        t_st = _stems_of_text(s)
+        return bool(t_st and not (t_st <= scaffold))
+
+    if _is_named_term((intent or {}).get("measure")):
         return True
-    stripped = q
-    for m in ("сколько", "осталось", "остаток", "остатка", "остатки",
-              "на складе", "на склад", "in stock", "on warehouse", "inventory",
-              "у нас", "есть", "всего"):
-        stripped = stripped.replace(m, " ")
-    tokens = [t for t in stripped.split() if len(t) >= 3 and t not in generic]
-    return bool(tokens)
+    for group in (intent.get("terms") or []):
+        alts = group if isinstance(group, (list, tuple)) else [group]
+        for alt in alts:
+            if _is_named_term(alt):
+                return True
+    return False
 
 
-def stock_balance_no_data(question, diag, cut, t0, intent=None):
-    """Нет товарных остатков в корпусе — честный no_data (план §2, п. 21).
+def stock_balance_named_no_data(question, diag, cut, t0):
+    """Именованный остаток без баланс-источника — no_data после пустого поиска (п. 21)."""
+    d = dict(diag or {})
+    d["stock_named_absent"] = True
+    return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question),
+            "sources": [],
+            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
+                               reason="именованный товар не в баланс-источниках")}
 
-    Пустой `balance_registers` → no_data. Непустой без оси ТМЦ + именованный товар
-    → no_data. Общий «сколько товара на складе?» — не глушим (clarify).
+
+def _balance_map_by_src():
+    """src → строка карты (form, структурные признаки)."""
+    out = {}
+    for r in balance_map_rows() or []:
+        if r and r[0]:
+            out[r[0]] = r
+    return out
+
+
+def filter_balance_structural(cands, diag=None):
+    """Отсев кандидатов без структурной пригодности для остатков (план §2).
+
+    Фильтрует, не добавляет. Требует: мера в nums, непустота, Period, баланс-структура
+    (RecordType или Дт/Кт) по карте $metadata.
     """
-    if not question_asks_stock_balance(question):
+    cands = list(cands or [])
+    if not cands:
+        return cands
+    bm = _balance_map_by_src()
+    if not bm:
+        return cands
+    in_map = [c for c in cands if c in bm]
+    if not in_map:
+        return cands
+    rows = psql(
+        "SELECT src_table FROM %s WHERE src_table IN (%s) "
+        "  AND nums IS NOT NULL AND len(map_keys(nums)) > 0 "
+        "GROUP BY 1 HAVING count(*) > 0"
+        % (CORPUS, ", ".join(lit(c) for c in in_map)))
+    live = {r[0] for r in (rows or []) if r and r[0]}
+    kept = []
+    dropped = []
+    for c in cands:
+        if c not in bm:
+            kept.append(c)
+            continue
+        row = bm[c]
+        form = (row[1] or "").strip()
+        has_rt = bool(row[2]) if len(row) > 2 else False
+        has_dk = bool(row[3]) if len(row) > 3 else False
+        has_period = bool(row[4]) if len(row) > 4 else False
+        struct_ok = has_period and (has_rt or has_dk or form == "accumulation_warehouse")
+        if c in live and struct_ok:
+            kept.append(c)
+        else:
+            dropped.append(c)
+    if diag is not None and dropped:
+        diag["balance_structural_drop"] = sorted(dropped)
+    return kept
+
+
+def balance_bridge_clarify(question, capable, diag, cut, t0, labels=None):
+    """Словарный мост не принёс баланс-источник — clarify со списком пригодных."""
+    labels = labels or {}
+    srcs = sorted(capable)
+    if not srcs:
         return None
-    regs = balance_registers()
-    goods = balance_registers_with_goods(regs)
-    if goods:
-        return None
-    named = stock_asks_named_product(question, intent)
-    if regs and not named:
-        return None
+    lab_by = {}
+    missing = [s for s in srcs if s not in labels]
+    if missing:
+        for r in psql(
+                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(s) for s in missing))):
+            if r and r[0]:
+                lab_by[r[0]] = r[1] or r[0]
+    lab_by.update(labels)
+    opts = [{"src": s, "label": lab_by.get(s, s), "hint": "",
+             "distinct_by": "", "found": 0} for s in srcs]
+    dis = disambiguate_labels([(o["src"], o["label"]) for o in opts])
+    for o in opts:
+        o["label"] = dis.get(o["src"], o["label"])
     cyr = any("\u0400" <= c <= "\u04ff" for c in (question or ""))
     if cyr:
-        text = ("Данных об остатках нет в подключённых источниках; "
-                "могу показать топ проданных или переданных на хранение.")
+        text = ("Вопрос про остатки — уточните источник из списка "
+                "(без разреза по складам/товарам, если не указано иное).")
     else:
-        text = ("No stock balance data in connected sources; "
-                "I can show top sold or transferred items instead.")
-    diag = dict(diag or {})
-    diag["stock_balance_gap"] = True
-    if named and regs:
-        diag["stock_balance_named_absent"] = True
-    reason = ("нет товарных остатков" if named and regs
-              else "нет регистров остатков")
-    return {"partial": cut or None, "kind": "no_data", "text": text, "sources": [],
-            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                               reason=reason)}
+        text = ("Stock balance question — pick a source from the list "
+                "(aggregate, no warehouse/item breakdown unless specified).")
+    d = dict(diag or {})
+    d["balance_bridge"] = "clarify"
+    d["balance_capable"] = srcs
+    return {"partial": cut or None, "kind": "clarify", "text": text,
+            "options": opts, "sources": [o["label"] for o in opts],
+            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
+                               reason="мост не принёс баланс-источник")}
+
+
+def stock_balance_is_sales_noise(src):
+    """Признак «регистр продаж/сверки», не складской остаток (по имени src)."""
+    s = (src or "").lower()
+    if "книгапродаж" in s:
+        return True
+    if "актсверки" in s or "reconciliation" in s:
+        return True
+    if "реализац" in s and s.startswith("accumulationregister_"):
+        return True
+    return False
+
+
+def filter_stock_balance_sales_noise(cands, question, diag=None):
+    """Негативный отсев: продажи/акт сверки не отвечают на остатки."""
+    if not question_asks_stock_balance(question):
+        return cands
+    out = [c for c in (cands or []) if not stock_balance_is_sales_noise(c)]
+    if diag is not None and len(out) < len(cands or []):
+        diag["stock_sales_noise_drop"] = sorted(set(cands or []) - set(out))
+    return out
 
 
 
@@ -8497,6 +8759,111 @@ def _period_day_label(pf, pt):
     return one(pf or pt)
 
 
+
+
+def sales_period_empty(agg, act, intent, diag, question):
+    """Нулевые продажи в названном окне — period_empty, даже если outside_period не посчитан."""
+    if period_empty_outcome(agg, act, intent, diag):
+        return True
+    if not sales_sum_intent(intent, question):
+        return False
+    try:
+        if int((agg or {}).get("count") or 0) != 0:
+            return False
+    except (TypeError, ValueError):
+        return False
+    if act in ("empty_period", "drop_assumed"):
+        return bool(sales_canon_engaged(diag))
+    if sales_canon_engaged(diag):
+        return sales_period_window_active(intent, diag)
+    return False
+
+
+def sales_period_window_active(intent, diag=None, preds=None):
+    """Окно периода задано: явно, assumed (parse/diag) или preds doc_date."""
+    pr = (intent or {}).get("period") or {}
+    if pr.get("from") or pr.get("to"):
+        return True
+    if empty_after_period_action(intent) in ("empty_period", "drop_assumed"):
+        return True
+    if preds and any("doc_date" in str(p) for p in (preds or [])):
+        return True
+    if "period." in str((diag or {}).get("intent_assumed") or ""):
+        return True
+    assumed = ((intent or {}).get("parse") or {}).get("assumed") or []
+    return any(str(a).startswith("period.") for a in assumed)
+
+
+def sales_fork_canon_empty_src(intent, diag, question, fork_diag, cands=None):
+    """Канон продаж в fork excluded (no_live_cells) = нулевые продажи за период.
+
+    Живой путь [замер 22.08 okna]: «почему… продаж ноль» — picked=[], fork pool=2,
+    регистр реализации excluded, курсы валют live → clarify вместо period_empty.
+    """
+    if not sales_sum_intent(intent, question):
+        return None
+    if rank_intent_from(intent, question=question):
+        return None
+    if not sales_period_window_active(intent, diag):
+        return None
+    canon = sales_canon_engaged(diag) or sales_canon_src(list(cands or []),
+                                                           intent, question)
+    if not canon:
+        return None
+    fd = fork_diag or {}
+    for item in (fd.get("excluded") or []):
+        if isinstance(item, dict) and item.get("src") == canon:
+            if item.get("reason") == "no_live_cells":
+                return canon
+    pool = fd.get("pool_srcs") or []
+    live = set(fd.get("live_srcs") or [])
+    if canon in pool and canon not in live:
+        return canon
+    return None
+
+
+def try_sales_fork_period_empty_answer(question, intent, diag, cut, t0, cands,
+                                       fork_diag):
+    """Ответ 0.00 по канону продаж, если fork исключил его как no_live_cells."""
+    canon = sales_fork_canon_empty_src(intent, diag, question, fork_diag, cands)
+    if not canon and diag.get("period_window_empty"):
+        _locked = sales_canon_engaged(diag) or diag.get("sales_canon_locked")
+        if _locked and sales_period_window_active(intent, diag):
+            canon = _locked
+    if not canon:
+        return None
+    if not sales_canon_engaged(diag):
+        diag["sales_canon_locked"] = canon
+    agg = {"count": 0, "sum": 0.0, "grain": "row", "form": "number"}
+    measure = None
+    try:
+        _mn = measures_of(canon)
+        if sales_force_money_measure(intent, question):
+            measure = sales_money_measure(_mn)
+    except RuntimeError:
+        pass
+    money = answer_money(intent.get("want"), "sum", measure)
+    diag["sales_fork_period_empty"] = canon
+    return build_period_empty_answer(
+        question, agg, intent, measure, canon, "", [], money, "sum",
+        None, cut, diag, {"grain": "row", "form": "number"}, [], 0, [], t0,
+        measure if money else None)
+
+
+def sales_fork_blocks_clarify(outcome, payload, intent, diag, question, cands,
+                              fork_diag):
+    """Fork C/empty/unique по постороннему src — не вместо period_empty канона."""
+    canon = sales_fork_canon_empty_src(intent, diag, question, fork_diag, cands)
+    if not canon:
+        return False
+    if outcome in ("C", "empty"):
+        return True
+    if outcome == "unique":
+        u_srcs = set((payload.get("class") or {}).get("srcs") or [])
+        return bool(u_srcs) and canon not in u_srcs
+    return False
+
+
 def dates_outside_period_filter(src, match, preds, intent):
     """Крайние doc_date по тем же условиям, но без фильтра периода."""
     date_preds = set(_predicates(intent))
@@ -9080,6 +9447,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Что не доехало до модели — уходит в ОТВЕТ, а не в журнал (п. 13). Объявлено здесь,
     # потому что ранние ветки возврата (нет совпадений) отвечают раньше выбора сущности.
     cut = {}
+    # Именованный остаток без balance-источника — до отбора/модели/форка ([замер 22.08 okna]).
+    if question_asks_stock_balance(question) and stock_asks_named_product(question, intent):
+        _cap_early = balance_capable_or_registers()
+        _goods_early = balance_registers_with_goods(_cap_early) if _cap_early else frozenset()
+        if not _cap_early or not _goods_early:
+            diag["stock_named_early"] = True
+            return stock_balance_named_no_data(question, diag, cut, t0)
     # Условие вопроса, снятое на разборе (период не датой, порог не числом, понятие сверх
     # бюджета), расширяет множество ответа против того, о чём спросили. Такая потеря
     # выходит человеку тем же путём, что и остальные (п. 13), а не остаётся в журнале.
@@ -9092,10 +9466,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["intent_assumed"] = ", ".join(
             "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
             for a in разбор["assumed"])
-
-    _stock_gap = stock_balance_no_data(question, diag, cut, t0, intent=intent)
-    if _stock_gap:
-        return _stock_gap
 
     # Сравнение A и B — члены одной оси, не AND в одной строке. Схлопываем ДО probe.
     terms_for_axis = [list(g) for g in (intent.get("terms") or [])]
@@ -9314,6 +9684,32 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     cands = prefer_entity_for_rank(cands, intent, question)
     cands = prefer_entity_for_sales(cands, intent, question)
     cands = prefer_entity_for_catalog_count(cands, intent, question)
+    if question_asks_stock_balance(question):
+        capable = balance_capable_or_registers()
+        cands = filter_stock_balance_sales_noise(cands, question, diag)
+        named = stock_asks_named_product(question, intent)
+        if named:
+            _goods_cap = balance_registers_with_goods(capable) if capable else frozenset()
+            if not capable or not _goods_cap:
+                return stock_balance_named_no_data(question, diag, cut, t0)
+            cands = [c for c in cands if c in _goods_cap or c in capable]
+            cands = filter_balance_structural(cands, diag)
+            if not cands:
+                return stock_balance_named_no_data(question, diag, cut, t0)
+        else:
+            if capable:
+                hit = [c for c in cands if c in capable]
+                if not hit:
+                    bridge = balance_bridge_clarify(
+                        question, capable, diag, cut, t0)
+                    if bridge:
+                        return bridge
+            cands = filter_balance_structural(cands, diag)
+            if not cands and capable:
+                bridge = balance_bridge_clarify(
+                    question, capable, diag, cut, t0)
+                if bridge:
+                    return bridge
     шаг("кандидаты собраны", всего=len(cands))
     # 🔴 «НА ЧТО НЕ ОТВЕЧАЕТ» — ВТОРАЯ ПОЛОВИНА ЗНАНИЯ УСТАНОВКИ, И ОНА НАКОНЕЦ ЧИТАЕТСЯ.
     # Установочный агент пишет про каждую сущность две половины: «на что отвечает»
@@ -9697,6 +10093,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # неоднозначности (исходы A/B/C, план §2): круг под-вызовов арбитра не собирается.
     # ASK_FORK_OUTCOMES=0 — волна-1: только `diag.fork` + старые исходы. В под-вызовах
     # (`no_arbiter`) и после доказанного билета (`trusted`) исходы не перехватывают.
+    if question_asks_stock_balance(question) and stock_asks_named_product(question, intent):
+        _cap_pf = balance_capable_or_registers()
+        _goods_pf = balance_registers_with_goods(_cap_pf) if _cap_pf else frozenset()
+        if not _cap_pf or not _goods_pf:
+            diag["stock_named_pre_fork"] = True
+            return stock_balance_named_no_data(question, diag, cut, t0)
     if FORK_DETECT and not no_arbiter and len(cands) > 1:
         _t_fork = time.time()
         _scan_err = None
@@ -9751,6 +10153,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _scan_err = _e
             diag["fork_error"] = str(_e)[:160]
             sys.stderr.write("ask FORK: детектор не сработал: %s\n" % str(_e)[:160])
+    # «почему ноль / сбой» + канон excluded no_live_cells → period_empty ДО выбора
+    # сущности/меры ([замер 22.08 okna]: курсы валют live, регистр пуст → clarify).
+    if (not no_arbiter and not focus
+            and not entity_choice_locked(trusted, resolved)
+            and (period_zero_why_question(question)
+                 or diag.get("about_coverage_refused") == "period_zero_why")
+            and sales_sum_intent(intent, question)
+            and (diag.get("fork") or {}).get("excluded")):
+        _sfpe0 = try_sales_fork_period_empty_answer(
+            question, intent, diag, cut, t0, cands, diag.get("fork"))
+        if _sfpe0 is not None:
+            шаг("канон продаж: fork excluded → period_empty (до выбора)",
+                src=diag.get("sales_fork_period_empty"))
+            return _sfpe0
     # Параметры подсчёта, названные моделью: сущность, величина, что считать. Объявляются
     # ДО ветвления, чтобы ни один путь не оставил их неопределёнными.
     plan = {}
@@ -10233,14 +10649,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     #      числа разошлись. Сошлись — ответ уходит как прежде, цена правила равна счёту.
     # Канон «продали»: регистр движений, не выбор модели и не книга НДС.
     # Документ-регистратор в writer_pair не заводим — люк только по focus.
-    if (not focus and not no_arbiter and picked
+    if (not focus and not no_arbiter
             and not entity_choice_locked(trusted, resolved)
             and sales_sum_intent(intent, question)):
         _canon = sales_canon_src(cands, intent, question)
         if _canon:
-            if picked[0] != _canon:
-                diag["sales_canon_override"] = {"было": list(picked), "стало": _canon}
-                шаг("канон продаж", было=picked[0], стало=_canon)
+            _prev = list(picked or [])
+            if not _prev or _prev[0] != _canon:
+                diag["sales_canon_override"] = {"было": _prev, "стало": _canon}
+                шаг("канон продаж", было=(_prev[0] if _prev else "—"),
+                    стало=_canon)
             picked = [_canon]
             diag["sales_canon_locked"] = _canon
     if period_zero_why_question(question) and sales_sum_intent(intent, question):
@@ -10463,6 +10881,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 diag["fork"]["outcome_reason"] = _pay["reason"]
             if "na_classes" in _pay:
                 diag["fork"]["na_classes"] = _pay["na_classes"]
+        if sales_fork_blocks_clarify(_outc, _pay, intent, diag, question, cands,
+                                     diag.get("fork")):
+            _sfpe = try_sales_fork_period_empty_answer(
+                question, intent, diag, cut, t0, cands, diag.get("fork"))
+            if _sfpe is not None:
+                шаг("канон продаж: fork excluded → period_empty",
+                    src=diag.get("sales_fork_period_empty"))
+                return _sfpe
         if _outc == "A":
             шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
             return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
@@ -10811,7 +11237,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # (`focus`) так не перебиваем — он назвал сущность сам.
         probe_rows = rows_of(src, match, preds, 1) if src else []
         if not probe_rows and by:
-            src = max(by.items(), key=lambda kv: kv[1])[0]
+            _hold_canon = (
+                sales_sum_intent(intent, question)
+                and empty_after_period_action(intent) in ("drop_assumed", "empty_period")
+                and (diag.get("sales_canon_locked") == src
+                     or sales_fork_canon_empty_src(
+                         intent, diag, question, diag.get("fork"), cands) == src))
+            if not _hold_canon:
+                src = max(by.items(), key=lambda kv: kv[1])[0]
     # Выбрана табличная часть — отбор идёт ПО ШАПКЕ. Её собственный текст слов вопроса
     # не содержит (имя контрагента стоит в шапке), поэтому искать по нему нечего:
     # условие заменяется на «владелец строки попал в совпадения».
@@ -10833,7 +11266,19 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _probe = rows_of(src, match, preds, 1)
         if not _probe:
             diag["period_window_empty"] = True
+            _sfpe1 = try_sales_fork_period_empty_answer(
+                question, intent, diag, cut, t0, cands, diag.get("fork"))
+            if _sfpe1 is not None:
+                шаг("канон продаж: period_window_empty → period_empty",
+                    src=diag.get("sales_fork_period_empty"))
+                return _sfpe1
     diag["focus"], diag["found"] = src, by.get(src, 0)
+    if (sales_sum_intent(intent, question) and src
+            and not diag.get("sales_canon_locked")
+            and not diag.get("catalog_count_locked")):
+        _canon_src = sales_canon_src(list(cands or []) + [src], intent, question)
+        if _canon_src and src == _canon_src:
+            diag["sales_canon_locked"] = _canon_src
     шаг("сущность выбрана", сущность=(src or "—"), совпадений=by.get(src, 0),
         выбрал=("человек" if focus else "модель"),
         сомнение=bool(diag.get("signals_disagree")))
@@ -11269,7 +11714,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                plan.get("compute"), _members)
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
-            if act not in ("empty_period", "drop_assumed"):
+            if not _zero_period_not_missing(intent, diag, question, act, src):
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -11288,7 +11733,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             agg = merge_period2_groups(agg, agg2)
         rows = serene_axis.group_rows((agg or {}).get("groups") or [])
         if (not rows and not (agg or {}).get("count")
-                and empty_after_period_action(intent) not in ("empty_period", "drop_assumed")):
+                and not _zero_period_not_missing(
+                    intent, diag, question, empty_after_period_action(intent), src)):
             return {"partial": cut or None, "kind": "no_data",
                     "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
@@ -11297,7 +11743,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         agg = aggregate(src, match, preds, measure)
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
-            if act not in ("empty_period", "drop_assumed"):
+            if not _zero_period_not_missing(intent, diag, question, act, src):
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -11311,7 +11757,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # Ранний no_data стоял ДО счёта undated: при 100% строк без даты
             # потеря была полной, и «данных нет» срабатывало про существование.
             act = empty_after_period_action(intent)
-            if act not in ("empty_period", "drop_assumed"):
+            if not _zero_period_not_missing(intent, diag, question, act, src):
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -11418,6 +11864,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     _grain = (agg or {}).get("grain") or grain_dec.get("grain") or "row"
     slot_mode = answer_slot_mode(intent.get("want"), plan.get("compute"),
                                  form=_form, grain=_grain)
+    if rank_intent_from(intent, plan, question) and slot_mode == "sum":
+        slot_mode = "rank"
     diag["slot_mode"] = slot_mode
     _period_act = empty_after_period_action(intent)
     diag["empty_after_period_action"] = _period_act
@@ -11426,7 +11874,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # `n_folders` → 503 на «позавчера» → документ → «итого»: присвоение стояло ниже.
     say_measure = measure if money else None
     n_folders = (agg or {}).get("folders") or 0
-    if period_empty_outcome(agg, _period_act, intent, diag):
+    if sales_period_empty(agg, _period_act, intent, diag, question):
         return build_period_empty_answer(
             question, agg, intent, measure, src, match, preds, money, slot_mode,
             cov, cut, diag, grain_dec, axes, n_folders, rows, t0, say_measure)
@@ -11603,27 +12051,19 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     diag["claims"] = claims or None
     if not ok:
         sys.stderr.write("ask GATE: числа вне данных: %s\n" % bad[:6])
-        if (slot_mode == "rank" and (agg or {}).get("grain") == "group"
-                and (agg.get("groups") or [])):
-            _rank_unit = _unit_for_measure(measure, money)
-            _rank_txt = rank_leader_answer_text(agg, say_measure or measure, unit=_rank_unit)
-            if _rank_txt:
-                _ok_r, _bad_r = gate(_rank_txt, seen, agg, extra_vals, our_dates,
-                                     money=money, slot_mode=slot_mode)
-                if _ok_r:
-                    _rank_txt = ensure_count_named(_rank_txt, agg, slot_mode)
-                    _rank_txt = ensure_answer_passport(_rank_txt, _pass_frag)
-                    diag["rank_deterministic"] = True
-                    return {"partial": cut or None, "kind": "answer",
-                            "text": _rank_txt, "sources": [src] if src else [],
-                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+        _rank_fb = rank_gate_fallback_answer(
+            question, agg, src, match, preds, measure, money,
+            intent, plan, diag, axes, cut, t0, _pass_frag, say_measure,
+            serene_axis=serene_axis)
+        if _rank_fb:
+            return _rank_fb
         # Гейт отклонил формулировку модели. Числа при этом посчитаны базой и верны —
         # отдаём их СТРУКТУРОЙ, а не своей прозой: свой текст был бы на одном языке
         # независимо от языка вопроса. Вызывающий формулирует сам.
         if agg:
             _pe_act = empty_after_period_action(intent)
             diag["empty_after_period_action"] = _pe_act
-            if period_empty_outcome(agg, _pe_act, intent, diag):
+            if sales_period_empty(agg, _pe_act, intent, diag, question):
                 return build_period_empty_answer(
                     question, agg, intent, measure, src, match, preds, money,
                     slot_mode, cov, cut, diag, grain_dec, axes, n_folders, rows,
@@ -12179,6 +12619,9 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
     rid = _rid_enter(rid)
     t0 = time.monotonic()
     out = None
+    # Без user — анонимный вызов: prior и память сессии не влияют на исход.
+    if not user:
+        prior = None
     try:
         resolved = peek_resolved(question, user)
         if decision_id and trusted is None:

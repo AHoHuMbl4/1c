@@ -52,20 +52,19 @@ t("rank measure skip when measure set",
 t("rank measure skip on sum",
   A.rank_measure_hint(names, {"want": "sum"}, "сколько всего") is None)
 
-# --- дефект 3: остаток без balance_registers → no_data ---
-A._BALANCE_REGS.update({"at": 0.0, "set": frozenset()})
+# --- остаток: универсальный путь (22.08), ранний no_data снят ---
 t("stock balance question",
   A.question_asks_stock_balance("какого товара больше всего на складе?"))
 t("movement question not stock",
   not A.question_asks_stock_balance("какого товара больше всего по реализации"))
-gap = A.stock_balance_no_data(
-    "какого товара больше всего на складе?", {}, {}, time.time())
-t("stock gap kind=no_data", gap and gap.get("kind") == "no_data", gap)
-t("stock gap honest text", gap and "остатках" in (gap.get("text") or ""), gap)
-
-A._BALANCE_REGS.update({"set": frozenset(["accumulationregister_остатки"])})
-t("stock with balance regs → proceed",
-  A.stock_balance_no_data("остаток на складе", {}, {}, time.time()) is None)
+t("какого: not named (question word)",
+  not A.stock_asks_named_product("какого товара больше всего на складе?"))
+A._BALANCE_MAP.update({"at": time.time(), "rows": [
+    ("accountingregister_x", "accounting", False, True, True, True),
+]})
+t("capable from map", "accountingregister_x" in A.balance_capable_sources())
+t("sales noise on stock q",
+  A.stock_balance_is_sales_noise("accumulationregister_реализациятмц"))
 
 
 
@@ -346,6 +345,55 @@ finally:
     A.psql = _old3
 
 
+
+
+# --- 22.08: live okna rank question + row-grain gate fallback ---
+_q_live = "что лучше всего продавалось на этой неделе?"
+t("rank_question_text: лучше+продав", A.rank_question_text(_q_live))
+t("rank_intent from live q",
+  A.rank_intent_from({"want": "sum"}, {"compute": "sum"}, _q_live))
+t("total skips axis off for rank",
+  not A.total_question_skips_axis({"want": "sum"}, "Количество",
+                                  {"clarify": "axis"}, {"compute": "sum"}, _q_live))
+_agg_row = {"grain": "row", "count": 728, "sum": 31009.32, "measure": "Количество",
+            "groups": None}
+_grp_agg = {"grain": "group", "col": "refs_map.ТМЦ", "n_groups": 1,
+            "groups": [{"name": "Товар А", "value": 420.0, "count": 10}],
+            "measure": "Количество", "sum": 420.0}
+_called = []
+def _fake_agg(*a, **k):
+    _called.append(a)
+    return dict(_grp_agg)
+_old_agg = A.aggregate_groups
+A.aggregate_groups = _fake_agg
+_old_rpc = A.rank_product_axis_col
+A.rank_product_axis_col = lambda *a, **k: "refs_map.ТМЦ"
+try:
+    fb = A.rank_gate_fallback_answer(
+        _q_live, _agg_row, "accumulationregister_реализациятмц", "", {}, "Количество",
+        True, {"want": "sum"}, {"compute": "sum"}, {}, [], {}, time.time(), "", "Количество")
+    t("rank_gate_fallback: row agg → answer", fb and fb.get("kind") == "answer", fb)
+    t("rank_gate_fallback: reaggregate called", bool(_called), _called)
+finally:
+    A.aggregate_groups = _old_agg
+    A.rank_product_axis_col = _old_rpc
+
+# slot_mode: rank intent без grain=group
+_sm2 = A.answer_slot_mode("sum", "sum", form="number", grain="row")
+if A.rank_intent_from({"want": "sum"}, {"compute": "sum"}, _q_live) and _sm2 == "sum":
+    _sm2 = "rank"
+t("live rank: row grain still → slot_mode rank", _sm2 == "rank", _sm2)
+
+
+# live okna: want=sum + grain=group (legacy sim) + rank question → slot_mode rank
+_q = "что лучше всего продавалось на этой неделе?"
+_int = {"want": "sum", "kind": "продажи"}
+_plan = {"compute": "sum"}
+_form, _grain = "number", "group"
+_sm = A.answer_slot_mode(_int.get("want"), _plan.get("compute"), form=_form, grain=_grain)
+if A.rank_intent_from(_int, _plan, _q) and _sm == "sum":
+    _sm = "rank"
+t("live rank: sum+group intent → slot_mode rank", _sm == "rank", _sm)
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))
 if FAIL:
     print("failed:", ", ".join(FAIL))
