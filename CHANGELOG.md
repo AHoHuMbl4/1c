@@ -1,3 +1,9 @@
+## 22.08: Ф3 — инвентарь PG, доки «PostgreSQL не в продукте» [замер] [код]
+
+[замер] dev :5432: postgresql@16-main active/enabled; ss -tnp — 0 соединений; open-webui и 1c-etl disabled/inactive; живые DSN — :7890.
+
+[код] 1c-pg-windows.env — сирота; ATTACH в пайплайне не используется. Доки: README, ARCHITECTURE, RUNBOOK §9, MAP, INSTALL_LOG §Ф3; черновик docs/drafts/project-architecture-pg-windows-attach.md; граф mcp-memory обновлён. Снос PG — [действие владельца, в работе].
+
 ## 22.08: PROBE rid_norm + sys fix (возврат #2 приборов) [код]
 
 [код] Живой прогон: journal ищет сырой rid, сервис пишет rid_norm (16 alnum);
@@ -73,8 +79,10 @@ fix missing-table (карта ещё не на okna → пустая, не crash
 - `/etc/1c-pg-windows.env` и всё, что ходит в `192.168.56.1:5432`, становится наследием —
   выводить отдельным заходом, чтобы документы не разворачивали мёртвый слой.
 
-Что НЕ меняется: PostgreSQL 16 в LXC (`:5432`) остаётся — его требует OpenWebUI (pgvector),
-это не наш выбор размещения данных.
+**Было ошибочно** (уточнено Ф3 22.08): «PostgreSQL 16 в LXC (:5432) остаётся — его
+требует OpenWebUI». **Чем опровергнуто:** braine выведен 26.07, `open-webui.service`
+(system) disabled/inactive, соединений к :5432 нет; пакет — наследие, **[действие
+владельца, в работе]** снос (Ф3 `docs/INSTALL_LOG.md`).
 
 Записано в `docs/ARCHITECTURE.md` §0 (прежняя формулировка оставлена зачёркнутой с
 разбором, а не стёрта). 🔴 Файл решения в `memory_bank/owner-memory/` принадлежит root и

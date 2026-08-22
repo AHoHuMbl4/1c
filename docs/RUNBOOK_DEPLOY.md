@@ -364,10 +364,13 @@ systemctl start 1c-etl.service                                   # первый 
 ## 9. Zero-touch: что переживает ребут
 Полная карта портов/юзеров — в §0. Всё `enabled`; после ребута любой машины стек поднимается сам.
 - **Windows:** IIS (W3SVC) = Automatic; публикация/состав OData/пользователи — персистентны. После ребута OData сам доступен.
-- **LXC — system-сервисы (`enabled`), [замер 01.08]:** `postgresql`, `serenedb`,
+- **LXC — system-сервисы (`enabled`), [замер 01.08, уточнено 22.08]:** **`serenedb`**,
   **`1c-odata-gateway`**, **`1c-config-ui`**, **`1c-mcp-ask`**, **`1c-mcp-braine`**,
   **`1c-mcp-reports`**, **`1c-serene-ask`**, **`1c-odata-gateway@ut`** (шлюз второй базы);
   таймеры **`1c-serene-pipeline`** (по готовности) и **`1c-bot-monitor`** (каждые 3 мин).
+  ⚠ **`postgresql@16-main` (:5432) тоже `enabled`, но это наследие braine, не продукт:**
+  `open-webui.service` (system) и `1c-etl` — `disabled`/`inactive`; живые сервисы ходят
+  на SereneDB `:7890`. **[действие владельца, в работе]** — снос пакетов PG на dev (Ф3).
 
   ⚠ `1c-odata-gateway@ut` `enabled` — то есть после ребута он **стартует**, но с пустым
   `ODG_PASS` (см. таблицу второй базы в §0) будет отвечать 401 на все запросы.

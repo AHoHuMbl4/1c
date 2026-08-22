@@ -247,13 +247,61 @@ ERROR: Column 'amount' has unsupported type DECIMAL(14,2) and can not be indexed
 
 ---
 
+## 22.08 — Ф3: инвентарь PostgreSQL (dev) и репо-слой [замер]
+
+**Решение 22.08:** PostgreSQL как компонент продукта выводится (`docs/PLAN_UPGRADE_NATIVE.md`
+Ф3). Ниже — снимок dev без смены состояния серверов.
+
+### Dev: `postgresql@16-main` на `127.0.0.1:5432`
+
+| Факт | Доказательство |
+|---|---|
+| Кластер online | `pg_lsclusters` → `16 main 5432 online postgres /var/lib/postgresql/16/main` |
+| Пакеты | `postgresql-16`, `postgresql-16-pgvector`, `postgresql-client-16` (client **оставляем** — нужен `psql` к SereneDB) |
+| Слушатель | `ss -tln` → `127.0.0.1:5432` |
+| Юнит | `postgresql@16-main.service` active/enabled; meta `postgresql.service` exited |
+| Соединений нет | `ss -tnp \| grep :5432` → пусто (замер 22.08) |
+| БД при установке braine | `openwebui`, `mem0` — `docs/UBUNTU_SETUP.md` (размеры/`pg_stat` — у оркестратора: `sudo -u postgres psql`, у `claudedev` peer/password auth не проходит) |
+
+**Потребители `:5432` на dev — на момент замера нет.** Единственная systemd-зависимость —
+`open-webui.service` (`Wants=postgresql.service`), но сам `open-webui.service`:
+`disabled`/`inactive` (braine выведен 26.07). `1c-etl.service`/`timer` — `disabled`/`inactive`;
+`oc_etl.py` пишет в GitLab KB, не в PG.
+
+Все живые DSN продукта — `host=127.0.0.1 port=7890` (`build.sh`, env-файлы `1c-serene-*`).
+В репозитории **нет** `port=5432` / `postgresql://` в исполняемом коде (`grep ubuntu/` — пусто;
+упоминания `:5432` — только комментарии-ловушки в `onboard_unit.sh`, приборах).
+
+**[действие владельца, в работе]:** `apt purge postgresql-16 postgresql-16-pgvector`,
+`systemctl disable postgresql@16-main`, удаление `/etc/1c-pg-windows.env`.
+
+### Windows PostgreSQL
+
+Установлен headless 25–26.07 (ниже в этом файле). **[действие владельца, в работе]:**
+остановка/удаление службы PG на Windows — оркестратор/владелец (Ф3.2 плана).
+
+### Репо-инвентарь слоя PG / attach
+
+| Область | Где | Статус |
+|---|---|---|
+| `/etc/1c-pg-windows.env` | PGW_HOST/PORT/USER/DB | **сирота:** `grep PGW_` по `ubuntu/`, `work/acceptance/`, `/opt/1c-mcp-reports`, `/opt/1c-etl` → пусто; ни один `1c-*.service` не подключает файл |
+| `ATTACH (TYPE postgres)` в пайплайне | `serene_sync.py`, `build.sh`, `pipeline.sh` | **не используется** — витрина нативная |
+| Запрет слова attach в SQL бота | `serene_report.py:76` | regex FORBIDDEN (не postgres_attach) |
+| Целевая схема PG+attach | `docs/TARGET_ARCHITECTURE.md`, `docs/BOXED_BLOCKERS.md`, `memory_bank/owner-memory/project-architecture-pg-windows-attach.md` | **отменена 22.08** — черновик правки owner-memory: `docs/drafts/project-architecture-pg-windows-attach.md` |
+| История braine+pgvector | `docs/UBUNTU_SETUP.md`, RUNBOOK §7–8 | выведено 26.07, развёртывание с нуля пропускать |
+| `1c-etl` | `ubuntu/1c-etl/oc_etl.py` | KB→GitLab, не PG; timer disabled |
+| «Поиск поверх Postgres» | — | **в репо нет** такой формулировки (единственное — задача Ф3 в `PLAN_UPGRADE_NATIVE.md`) |
+
+---
+
 ## Что осталось нерешённым
 
 | # | Проблема | Что нужно |
 |---|---|---|
-| 1 | PostgreSQL на Windows headless | один вход по RDP и запуск установщика руками |
-| 2 | Замер ресурсов СУБД рядом с 1С | зависит от п.1 |
-| 3 | SereneDB на Windows | только через WSL2/Docker — требуется `wsl --install` + перезагрузка |
+| 1 | PostgreSQL на Windows в контуре | **[действие владельца, в работе]** остановка/удаление службы (Ф3.2); установка headless была 25–26.07 — история выше |
+| 2 | PostgreSQL 16 на dev (:5432) | **[действие владельца, в работе]** снос пакетов после подтверждения, что braine/OWUI не вернутся (Ф3.3) |
+| 3 | `/etc/1c-pg-windows.env` | **[действие владельца, в работе]** удаление вместе с выводом Windows-PG |
+| 4 | SereneDB на Windows | только через WSL2/Docker — требуется `wsl --install` + перезагрузка |
 
 ## 03.08 — плагин claude-code-harness 5.6.0 (пилот)
 
