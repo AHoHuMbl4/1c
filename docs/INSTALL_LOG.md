@@ -258,6 +258,57 @@ ERROR: Column 'amount' has unsupported type DECIMAL(14,2) and can not be indexed
 
 ---
 
+---
+
+## 22.08 — переезд okna (167.233.249.110 → gpu-erw LXD) [замер]
+
+**Что делали:** перенос боевого контура okna на новую коробку (LXD `10.10.10.12` на
+`gpu-erw.timpul.pro`, хост **gpu-1c** `178.63.211.188`, RTX 6000 Ada, **125 ГБ RAM / 40 vCPU / 400 ГБ**,
+Ubuntu **26.04**).
+
+### Доступы
+
+| Роль | Адрес / порт |
+|---|---|
+| Старая okna (источник) | `167.233.249.110`, SSH root + deploy-ключ с dev |
+| Новая okna (цель) | `10.10.10.12`, снаружи `ssh -p 2202 root@gpu-erw.timpul.pro` |
+| Сосед klient-1 (позже) | `10.10.10.11`, SSH `:2201` |
+| Ключ миграции old→new | `/root/.ssh/id_ed25519_migrate` → `authorized_keys` цели; **удалить после всех миграций** |
+| S3 мелочь | `s3.twcstorage.ru`, bucket `klient1-migration` (~365 МБ); store.db **не влезает** (квота ~1 ГБ, 403) |
+
+### rsync и стена формата
+
+- rsync `store.db` **27 206 889 472** байт за **3:54** (**110,8 МБ/с**); tar конфигов/юнитов/`/opt`/`/home/undebot` без venv.
+- **26.08.1 НЕ открыл** rsync-копию: `FATAL: serialized data has 5 element(s), expected 4`.
+- **26.07.3** открывает за **5 с** (`search_corpus` **1 230 156**). Dev-копия (Ф1) — 26.08.1 открыл.
+
+### EXPORT/IMPORT (канонический путь)
+
+Доки: `sql/statements/export_and_import_database`. Процедура и ловушки — `docs/RUNBOOK_MIGRATE_OKNA.md` §3.4.
+
+| Ловушка | Суть | Лечение |
+|---|---|---|
+| 1 | IMPORT `syntax error at or near ")"` | В `schema.sql` — `USING inverted ()` (пустые скобки из `duckdb_indexes().sql`, `serene_search_build.py:55`). Удалить 3 строки; индексы — `corpus_init.sql`, `entity_card_build.sql` |
+| 2 | `schema public already exists` | `DROP SCHEMA public CASCADE` перед IMPORT |
+| 3 | IMPORT не переносит роли, словари, views, backing индексов | Роли из `/etc/1c-*.env`; `corpus_init.sql -v dict_locale=ru_RU.utf8`; views `wiki_entity_facts` → `wiki_pages`; DROP `search_idx`/`alias_idx`/`entity_card_idx` перед CREATE INDEX |
+
+**Итог:** **418** таблиц count **1-в-1**; `search_idx` **1 230 156**; alias/entity_card **254**; wiki **254/351**; **26.08.1**, `:7890` отвечает.
+
+### vSwitch 4003
+
+Подсеть **10.3.1.0/24**, Robot → vSwitch → Add servers (иначе RX=0). На хостах: VLAN `eno1.4003`, mtu **1400**, IP **10.3.1.11** / **10.3.1.12**, маршрут `10.3.0.0/16 via 10.3.1.1`; netplan `/etc/netplan/02-vswitch.yaml`. Эмбеддеры: **10.3.1.11:8000**, **10.3.1.12:8002** — `EMBED_HOSTS` на okna переключён. Контейнер okna → `10.3.0.4` за **3,3 мс**.
+
+### Что осталось
+
+| # | Шаг | Статус |
+|---|---|---|
+| 1 | Пересчёт эмбеддингов 4B (`EMBED_RESET=1`, labels **254** ~1 с — идёт) | ⏳ |
+| 2 | Приёмка §7 (`docs/RUNBOOK_MIGRATE_OKNA.md`): probe 8, scorer ≥14/25 | ⏳ |
+| 3 | Переключение prod §8: бот, Telegram, OData :6090, DNS | ⏳ |
+| 4 | Контур бота undebot + openclaw gateway на цели | ⏳ |
+
+---
+
 ## 22.08 — Ф3: инвентарь PostgreSQL (dev) и репо-слой [замер]
 
 **Решение 22.08:** PostgreSQL как компонент продукта выводится (`docs/PLAN_UPGRADE_NATIVE.md`

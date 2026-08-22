@@ -117,6 +117,20 @@
 | IMPORT DATABASE | **FAIL** — `ERROR: syntax error at or near ")"` (в `schema.sql` inverted-индексы экспортируются как `USING inverted ();`) |
 | IMPORT одной таблицы (COPY) | **OK** — `search_entity_alias` 178=178 |
 
+### Дополнение 22.08: IMPORT на okna — опровергнут «баг движка»
+
+**[замер 22.08]** Перенос okna `store.db` (27 206 889 472 байт) на **26.08.1** через
+EXPORT/IMPORT **успешен** после обхода трёх ловушек (`docs/RUNBOOK_MIGRATE_OKNA.md` §3.4).
+
+| Утверждение Ф1 (§6, песочница dev) | Чем опровергнуто |
+|---|---|
+| «IMPORT DATABASE блокирован багом export inverted DDL» | Причина **не в движке**: `schema.sql` экспорта содержит `CREATE INDEX ... USING inverted ()` с **пустыми скобками** — так отдаёт `duckdb_indexes().sql` (комментарий `ubuntu/serenedb/serene_search_build.py:55`). Удалить 3 строки → IMPORT проходит; индексы пересоздать `corpus_init.sql` / `entity_card_build.sql` |
+| «Полный IMPORT невозможен» | На okna: EXPORT 27 ГБ → **2,4 ГБ** (~20 с); после правки schema + `DROP SCHEMA public CASCADE` + ручной довоз ролей/словарей/views — **418** таблиц count **1-в-1**, `search_idx` **1 230 156**, сервис **26.08.1** на `:7890` |
+
+**Вердикт (уточнение):** IMPORT DATABASE **работает**; блокер Ф1 — **артефакт экспорта**
+(inverted DDL с пустыми скобками), не регресс 26.08.1. Канонический путь переноса store.db —
+EXPORT/IMPORT + процедура §3.4 ранбука (в т.ч. для klient-1).
+
 ---
 
 ## Новые замеры (22.08)
@@ -157,7 +171,7 @@ TEMPORARY SECRET с уникальным именем (`f1_emb_*`); модель
 | 3 | Рестарт после прерванной сборки | **GO** | `ivf-wal.tsv`: OK, smoke count |
 | 4 | Совместимость store.db | **GO** | `compat.tsv` |
 
-**Итог векторной части:** **условный GO** — порог и масштаб okna починены, recall/quant OK, но **cancel NO-GO** → Ф5: только с запасом RAM; полный IMPORT DATABASE блокирован багом export inverted DDL.
+**Итог векторной части:** **условный GO** — порог и масштаб okna починены, recall/quant OK, но **cancel NO-GO** → Ф5: только с запасом RAM. Полный IMPORT DATABASE на песочнице **FAIL** из-за пустых `inverted ()` в export schema — **не баг движка** (опровергнуто переносом okna 22.08, см. §6 дополнение).
 
 **Ответы на новые вопросы:**
 

@@ -1,3 +1,17 @@
+## 22.08: Переезд okna на новую коробку (gpu-erw) [замер]
+
+[замер] okna **167.233.249.110** → LXD **10.10.10.12** (`ssh -p 2202 root@gpu-erw.timpul.pro`,
+хост gpu-1c **178.63.211.188**, RTX 6000 Ada, 125 ГБ RAM / 40 vCPU / 400 ГБ, Ubuntu 26.04).
+rsync **27 206 889 472** байт за 3:54 (**110,8 МБ/с**); tar конфигов без venv.
+Стена формата: **26.08.1** не открыл rsync-копию (`serialized data has 5 element(s), expected 4`);
+**26.07.3** — 5 с, `search_corpus` **1 230 156**. Обход: EXPORT/IMPORT DATABASE (доки
+`sql/statements/export_and_import_database`): 27 ГБ → **2,4 ГБ**, ~20 с; ловушки inverted `()`,
+`DROP SCHEMA public`, роли/словари/views/индексы вручную — **418** таблиц **1-в-1**,
+`search_idx` **1 230 156**, alias/entity_card **254**, wiki **254/351**; **26.08.1** `:7890` жив.
+vSwitch **4003** (`10.3.1.0/24`, эмбеддеры `10.3.1.11:8000` / `10.3.1.12:8002`). S3 для больших файлов
+непригоден (квота ~1 ГБ). Пересчёт 4B **идёт** (`EMBED_RESET=1`, labels 254 ~1 с).
+Ранбуки: `docs/RUNBOOK_MIGRATE_OKNA.md`, `docs/INSTALL_LOG.md`. Доки: sql/statements/export_and_import_database.
+
 ## 22.08: Ф1 песочница SereneDB 26.08.1 — замеры завершены [замер]
 
 [замер] `work/sandbox-26081` :7895 на копии dev store.db. Ворота: порог 5k/6k **GO**

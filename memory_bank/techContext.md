@@ -58,6 +58,10 @@ sdb_scored_terms_limit = 1024 (молча усекает ранжировани�
 | 🔴 Параллельный `UPDATE ... ai_embed(...)` в ОДНУ таблицу роняет движок | [замер 28.07] четырнадцать таких запросов одновременно — `SIGSEGV`, systemd поднял через 3 с, данные уцелели, но фоновый досчёт встал **молча**. Обход: каждый поток пишет в СВОЮ таблицу, перенос одним запросом в конце. Кандидат в баг-репорт вендору |
 | Секреты исчезают при рестарте движка | они живут в памяти; после падения и подъёма `ai_embed` перестаёт работать с `secret not found`, пока секрет не создан заново |
 | Запись однопоточная | DDL во время массовой записи встаёт в очередь и блокирует чтения. Проверки на копиях ставить **до** или **после** записи |
+| 🔴 **EXPORT/IMPORT не переносит роли, словари, views** | [замер 22.08 okna] после `IMPORT DATABASE` вручную: `CREATE ROLE` + пароли из `/etc/1c-*.env`; `corpus_init.sql -v dict_locale=ru_RU.utf8`; views `wiki_entity_facts` → `wiki_pages` (порядок!); DROP backing-таблиц `search_idx`/`alias_idx`/`entity_card_idx` перед CREATE INDEX. Процедура — `docs/RUNBOOK_MIGRATE_OKNA.md` §3.4 |
+| 🔴 **inverted-индексы в export ломают IMPORT** | [замер 22.08] `schema.sql` содержит `CREATE INDEX ... USING inverted ()` — пустые скобки из `duckdb_indexes().sql` (`serene_search_build.py:55`); IMPORT падает `syntax error at or near ")"`. Лечение: удалить строки, пересоздать индексы нашими SQL |
+| **`DROP SCHEMA public CASCADE` перед IMPORT** | [замер 22.08] иначе `schema public already exists` |
+| 🔴 **rsync store.db ≠ открытие на новой версии** | [замер 22.08 okna] 26.08.1: `serialized data has 5 element(s), expected 4`; 26.07.3 открывает. Канон переноса — EXPORT/IMPORT, не прямой rsync+upgrade |
 
 **Инструмент, о котором стоит помнить:** `CREATE TEXT SEARCH DICTIONARY zz(help)` —
 движок печатает справочник всех шаблонов и опций **именно нашей сборки**. Не нужно
@@ -1057,18 +1061,20 @@ LB (маркер `minInterval`), 20–40 с.
 ## SereneDB 26.08.1 — песочница Ф1 (PLAN_UPGRADE_NATIVE) [22.08]
 
 **Отдельный каталог:** `work/sandbox-26081/`, `--server_directory=…/data`, порт **7895**
-(7890 — бой). `memory_limit=40 GiB` — на dev работают другие процессы.
+(7890 — бой). Потолок RSS при замерах — **40 ГБ** (`measure-cmd.sh`); `SET memory_limit` — в сессии при необходимости.
 
 | Ловушка / факт | Статус |
 |---|---|
 | Tarball 26.08.1 | **[замер 22.08]** orchestrator: 38 224 045 байт в каталоге |
 | `memory_limit` в flagfile | **убран** — в 26.08.1 только `SET memory_limit` (pragmas); RSS-сторож — `measure-cmd.sh` |
+| Cancel-тест | таблица **500 000** строк, `pg_cancel_backend` после ≥60 с сборки |
 | WAL-гейт | `start-sandbox.sh --keep-wal` — реплей прерванной сборки |
 | Recall | exact: `f1_corpus_vec ORDER BY <#>`; approx: `*_idx`; данные — **search_corpus emb** |
 | Копия store.db | готова (11 ГБ), бой не тронут |
 | dev corpus ≠ okna 1.23M | на dev **103 808** строк; масштаб okna — синтетика `range(1230000)` |
 | ANN при `metric=ip` | запрос через **`<#>`**, не `<=>` (PLAN_VECTOR_CHECKS §2) |
 | IVF прогон | `f1-run-all.sh` + `measure-cmd.sh` (peak RSS, потолок 40 ГБ) |
+| EXPORT/IMPORT okna [замер 22.08] | EXPORT 27 ГБ→2,4 ГБ ~20 с; inverted `()` в schema — не баг движка; IMPORT после правки + DROP SCHEMA + ручной довоз; 418 таблиц 1-в-1; `docs/RUNBOOK_MIGRATE_OKNA.md` §3.4 |
 
 Полный отчёт и ворота GO/NO-GO: `docs/UPGRADE_F1_REPORT.md`. Цифры IVF — после прогона в
 `work/sandbox-26081/results/`.
