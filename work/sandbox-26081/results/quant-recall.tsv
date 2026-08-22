@@ -1,0 +1,4 @@
+metric|nprobe|recall@10_mean|queries|exact_source|approx_index
+ip_none|8|1|50|f1_corpus_exact brute row_number|f1_corpus_ip_idx
+sq8|8|1|50|f1_corpus_exact brute row_number|f1_corpus_sq8_idx
+rabitq|8|1|50|f1_corpus_exact brute row_number|f1_corpus_rabitq_idx

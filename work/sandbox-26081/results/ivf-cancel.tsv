@@ -1,0 +1,9 @@
+phase|value
+rows|500000
+build_start|2026-08-22T09:21:12+00:00
+backend_pid_found_after_sec|2|pid=1392155896
+CREATE INDEX
+pg_cancel_backend|pid=1392155896|result=f|rss_kb_before=4032884
+after_15s|active_builds=1|rss_kb=4032808|client_alive=no
+after_30s|active_builds=1|rss_kb=4032752|client_alive=no
+after_60s|active_builds=1|rss_kb=4033032|client_alive=no

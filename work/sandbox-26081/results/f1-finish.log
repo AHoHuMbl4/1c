@@ -1,0 +1,45 @@
+=== Ф1 finish 2026-08-22T13:17:26+00:00 ===
+--- recall ---
+metric|nprobe|recall@10_mean|queries|exact_source|approx_index
+ip_none|8|2|50|f1_corpus_exact subquery LIMIT 10|f1_corpus_ip_idx
+sq8|8|1.984|50|f1_corpus_exact subquery LIMIT 10|f1_corpus_sq8_idx
+rabitq|8|1.984|50|f1_corpus_exact subquery LIMIT 10|f1_corpus_rabitq_idx
+--- nprobe grid ---
+index|nprobe|rerank_factor|recall@10|median_ms|runs|query_k
+ip|4|1|1|0|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+ip|16|1|1|0|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+ip|32|1|1|0|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+sq8|4|4|1|0|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+sq8|16|4|1|0|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+sq8|32|4|1|0|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+rabitq|4|4|1|0|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+rabitq|16|4|1|0|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+rabitq|32|4|1|0|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+--- bulk embed ---
+test|rows|batch|result|wall_sec|rows_per_sec|note
+ctas_float1024|64|-1|OK|5.513|64|generated vectors dim=1024
+ctas_float1024|10000|-1|OK|0.498|10000|generated vectors dim=1024
+ctas_float1024|100000|-1|OK|5.483|100000|generated vectors dim=1024
+ Success 
+---------
+ t
+(1 row)
+
+ai_embed|64|64|OK|0.345|185.59|secret=f1_emb_1787404662_1882850 model=Qwen3-Embedding-8B
+ai_embed|256|256|OK|0.829|308.62|secret=f1_emb_1787404662_1882850 model=Qwen3-Embedding-8B
+--- okna kNN exact vs ivf ---
+WARNING:  DDL is not transactional: the statement commits immediately and is not undone by ROLLBACK
+mode|nprobe|median_ms|runs|rows|query_key|note
+exact_none|0|DROP INDEX
+0|3|1230000|informationregister_видыпродукциипогруппамветис|АттестованныйСпециалист|Группа03строка3РыбаИМорепродукты|07b0ce9e-d08b-4566-9b4c-40063512b7af|StandardODATA.ГруппыПродукцииАттестованныхСпециалистов|DROP INDEX; table ORDER BY <#> LIMIT 10
+ivf_ip|4|SET
+0|3|1230000|informationregister_видыпродукциипогруппамветис|АттестованныйСпециалист|Группа03строка3РыбаИМорепродукты|07b0ce9e-d08b-4566-9b4c-40063512b7af|StandardODATA.ГруппыПродукцииАттестованныхСпециалистов|f1_okna_idx sdb_nprobe=4
+ivf_ip|16|SET
+0|3|1230000|informationregister_видыпродукциипогруппамветис|АттестованныйСпециалист|Группа03строка3РыбаИМорепродукты|07b0ce9e-d08b-4566-9b4c-40063512b7af|StandardODATA.ГруппыПродукцииАттестованныхСпециалистов|f1_okna_idx sdb_nprobe=16
+ivf_ip|32|SET
+0|3|1230000|informationregister_видыпродукциипогруппамветис|АттестованныйСпециалист|Группа03строка3РыбаИМорепродукты|07b0ce9e-d08b-4566-9b4c-40063512b7af|StandardODATA.ГруппыПродукцииАттестованныхСпециалистов|f1_okna_idx sdb_nprobe=32
+--- export/import ---
+step|result|detail
+export|OK|dir=/srv/1c/work/sandbox-26081/results/export-test2 nfiles=340 schema.sql=yes load.sql=yes
+import|FAIL|ERROR:  syntax error at or near ")"
+=== Ф1 finish done 2026-08-22T13:22:40+00:00 ===

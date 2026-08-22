@@ -1,151 +1,150 @@
 # Ф1: SereneDB 26.08.1 на песочнице — отчёт замеров
 
-Дата: 2026-08-22. Исполнитель: окно разработки dev (`claudedev`). Оркестратор
-перепроверяет цифры независимо.
+Дата: 2026-08-22. Исполнитель: cursor-agent (dev, `claudedev`). Бой `:7890` **не тронут**.
+
+Песочница: `work/sandbox-26081`, порт **7895**, бинарь **26.08.1**, копия `store.db` dev.
 
 ---
 
-## Статус сессии
-
-| Шаг | Статус | Как измерено |
-|---|---|---|
-| 1. Tarball 26.08.1 | **готово** | `stat`: **38 224 045** байт, `work/sandbox-26081/serenedb-26.08.1-linux-amd64.tar.gz` |
-| 2. Песочница `:7895` | **готово** | `sandbox.conf`; `start-sandbox.sh [--keep-wal]` |
-| 3. Копия `store.db` | **готово** | 10 829 967 360 байт; бой не тронут |
-| 4–6. Прогон | **см. results/** | `bash work/sandbox-26081/f1-run-all.sh` |
-
-**Методика (правки 22.08):**
-
-- **Cancel:** `f1_cancel500k` (500 000 × 1024), `pg_cancel_backend` после ≥60 с активной сборки.
-- **WAL:** рестарт с `--keep-wal` (не переименовывать `store.db.wal`).
-- **Recall:** exact = `f1_corpus_vec ORDER BY emb <#> q` (таблица без inverted-пути); approx = `f1_corpus_*_idx`; векторы — `search_corpus.emb` (66 823 строк). Сетка: `sdb_nprobe` / `sdb_rerank_factor` (доки maintenance#session-settings).
-
-```bash
-bash /srv/1c/work/sandbox-26081/f1-run-all.sh
-```
-
----
-
-## Окружение (факты оркестратора — не перемерялись)
+## Окружение
 
 | Параметр | Значение |
 |---|---|
-| Бой dev | SereneDB **26.07.3**, `:7890`, юнит `serenedb`, `store.db` 11 ГБ в `/var/lib/serenedb/engine_duckdb` — **не тронут** |
-| okna корпус | **1,23 млн** строк (оркестратор) |
-| klient-1 корпус | **18,3 млн** (оркестратор) |
-| Эмбеддер | Qwen3-Embedding-4B, **dim=1024**, norm≈1 (оркестратор) |
-| dev RAM / диск | 62 ГБ / **180 ГБ** свободно (оркестратор) |
-
-Песочница: `--memory_limit=40.0 GiB` (в `sandbox.conf`), `--cpu_threads=6`, `--io_threads=4`, журнал в `work/sandbox-26081/logs/`.
+| Бой dev | SereneDB **26.07.3**, `:7890` — не изменялся |
+| Песочница | SereneDB **26.08.1**, `:7895`, `--memory_limit=40 GiB` |
+| Корпус замеров | `search_corpus.emb` **66 823** × `FLOAT[1024]`, norm≈1.0001 (sample) |
+| Синтетика okna | `f1_okna` **1 230 000** × `FLOAT[1024]` |
+| Эмбеддер (живой `/etc/1c-embed.env`) | **Qwen3-Embedding-8B**, dim=1024 |
 
 ---
 
-## Базовая линия боя dev (`:7890`) — [замер 22.08]
+## §3 Совместимость (26.07.3 → 26.08.1)
 
-Источник: `psql host=127.0.0.1 port=7890`, файл `work/sandbox-26081/baseline-prod.tsv`.
-
-| Метрика | Значение | SQL |
-|---|---|---|
-| version | PostgreSQL 18.3 (SereneDB **26.07.3**) | `SELECT version()` |
-| search_corpus | **103 808** | `count(*)` |
-| search_tables | 231 | |
-| resolver_index | 115 151 | |
-| search_entity_alias | 178 | |
-| emb NOT NULL | 66 823 | `emb FLOAT[1024]` |
-| текстовый поиск «продажи» | **1 940** | `count(*) FROM search_idx WHERE doc @@ 'продажи'` |
-| duckdb_tables (не internal) | 1 896 | |
-
-Примечание: dev-контур (ut_test/postgres) **не** содержит 1,23 млн строк okna — масштаб okna в §4 воспроизводится **синтетикой** `range(1230000)` × `FLOAT[1024]` на песочнице, как указано в `PLAN_UPGRADE_NATIVE.md` Ф1.
-
----
-
-## §3 Совместимость данных (26.07.3 → 26.08.1)
-
-**Ожидаемая проверка** (после запуска 26.08.1 на копии):
-
-1. `SELECT version()` содержит `26.08.1`
-2. Count'ы таблиц = baseline-prod (таблица выше)
-3. `count(*) FROM search_idx WHERE doc @@ 'продажи'` = **1940**
-4. Zstd `.col` layout (изменение в 26.07.5) — неявно: если count'ы и BM25 совпали, снимок читается
+Источник: `results/compat.tsv`.
 
 | Метрика | Sandbox :7895 | Prod :7890 | Совпало |
 |---|---|---|---|
-| *(заполнится f1-run-all.sh)* | | | |
+| search_corpus | 103 808 | 103 808 | yes |
+| search_tables | 231 | 231 | yes |
+| resolver_index | 115 151 | 115 151 | yes |
+| search_entity_alias | 178 | 178 | yes |
+| text «продажи» | 1 940 | 1 940 | yes |
+| emb NOT NULL | 66 823 | 66 823 | check |
+
+**Вердикт:** **GO** — снимок читается, BM25 совпал.
 
 ---
 
 ## §4 IVF — ворота 1
 
-Сценарий: `docs/SERENEDB_IVF_ISSUE_RU.md`, адаптация под **dim=1024**, `metric='ip'`
-(нормированные векторы, оркестратор).
+### 4.1 Порог 5 000 → 6 000 (`results/ivf-threshold.tsv`)
 
-### 4.1 Порог 5 000 → 6 000
-
-| Строк | dim | metric | Ожидание 26.07.3 | Результат 26.08.1 |
+| Строк | dim | metric | wall_sec | peak_rss_kb |
 |---|---|---|---|---|
-| 5 000 | 1024 | ip | ~1 с, 0 МБ прироста | wall=… peak_rss_kb=… |
-| 6 000 | 1024 | ip | не завершилось, +ГБ RAM | wall=… peak_rss_kb=… |
+| 5 000 | 1024 | ip | **3** | 2 300 208 (~2,2 ГБ) |
+| 6 000 | 1024 | ip | **8** | 2 235 044 (~2,1 ГБ) |
 
-Измерение: `measure-cmd.sh` — wall_sec + peak RSS всех процессов с `flagfile=…/sandbox.conf`, потолок **40 ГБ** → kill.
+На 26.07.3 6k не завершалось (+ГБ RAM). **Вердикт:** **GO** — порог ушёл.
 
-### 4.2 Отменяемость
+### 4.2 Отменяемость (`results/ivf-cancel.tsv`)
 
-Таблица **500 000** строк (`f1_cancel500k`), сборка `f1_cancel500k_idx`. После обнаружения
-backend pid — пауза ≥60 с, затем `pg_cancel_backend`. Лог: `results/ivf-cancel.tsv`.
+| Проверка | 26.08.1 |
+|---|---|
+| `pg_cancel_backend(pid)` после ≥60 с | **f** |
+| `active_builds` через 15/30/60 с | **1 / 1 / 1** |
+| RSS kb (стабилен) | ~4 032 808 |
 
-| Проверка | 26.07.3 | 26.08.1 |
-|---|---|---|
-| `pg_cancel_backend(pid)` | `t`, работа продолжается | … |
-| RSS через 15/30/60 с после cancel | растёт | … |
+**Доки:** `search_docs` по `pg_cancel_backend` / async index build — **штатного способа отмены фоновой сборки inverted/IVF не описано**. Блог [State of Serene, July 2026 — CREATE INDEX stopped blocking your writes](https://blog.serenedb.com/state-of-serene-2026-07#create-index-stopped-blocking-your-writes): сборка идёт параллельно записям, клиент может отключиться — согласуется с `client_alive=no`, а `pg_stat_activity` всё ещё показывает активный `CREATE INDEX`.
 
-### 4.3 WAL + рестарт
+**Вердикт:** **NO-GO** — отменяемость не восстановлена; вход в процедуру **Ф5**: сборки IVF только при запасе памяти, без опоры на cancel.
 
-После cancel-теста: `stop-sandbox.sh`, затем `start-sandbox.sh --keep-wal` (WAL **не**
-переименовывается). Лог: `results/ivf-wal.tsv`.
+### 4.3 WAL + рестарт (`results/ivf-wal.tsv`)
 
-| Проверка | 26.07.3 | 26.08.1 |
-|---|---|---|
-| `store.db.wal` после прерванной сборки | есть | bytes=… |
-| Рестарт песочницы | OOM-петля | OK/FAIL, startup_sec=… |
+| Проверка | 26.08.1 |
+|---|---|
+| `store.db.wal` bytes | 419 972 |
+| Рестарт `--keep-wal` | **OK**, startup_sec=**0** |
+| `count(search_corpus)` после | 103 808 |
 
-### 4.4 Объём okna (~1,23 млн × 1024)
+**Вердикт:** **GO** — OOM-петли нет.
 
-| Метрика | Значение | Как |
-|---|---|---|
-| Строк | 1 230 000 | `CREATE TABLE … FROM range(1230000)` |
-| wall_sec | … | measure-cmd, timeout 3600 с |
-| peak_rss_kb | … | measure-cmd |
-| index size | … | `duckdb_indexes().estimated_size` |
+### 4.4 Объём okna 1,23M (`results/ivf-okna-scale.tsv`)
 
----
-
-## §5 Квантизация (нормированные + ip)
-
-Доки: `sql/indexes/inverted/vector-search#quantization`. Данные: `f1_corpus_vec` =
-`search_corpus.emb` (NOT NULL). Exact baseline — запрос к **таблице**, не к `*_idx`.
-
-| quant | Сборка 50k×1024 | recall@10 vs exact | Примечание |
-|---|---|---|---|
-| none (ip) | … | … | baseline |
-| sq8 | … | … | |
-| rabitq | … | … | |
-
-Сетка `sdb_nprobe` × `sdb_rerank_factor`: файл `results/quant-grid.tsv` (если прогон завершён).
-
-Запрос ANN: оператор **`<#>`**, не `<=>` (ловушка PLAN_VECTOR_CHECKS §2).
+| Метрика | Значение |
+|---|---|
+| wall_sec | **74** |
+| peak_rss_kb | **13 606 708** (~13,0 ГБ) |
 
 ---
 
-## §6 Наличие фич в 26.08.1
+## §5 Квантизация и recall
 
-| Фича | Доки | Проверка | Результат |
-|---|---|---|---|
-| `solr_synonyms` короткий | create_text_search_dictionary/solr-synonyms | `CREATE … SYNONYMS='car, automobile, auto'` + `ts_lexize` | … |
-| `solr_synonyms` длинный (254+ строк) | тот же | inline SYNONYMS из `search_entity_alias` (260 строк) | … |
-| RRF / `RANK()` | cookbook/reciprocal-rank-fusion; PR #992 | `rank() OVER (ORDER BY …)` в SQL | … |
-| `REFRESH_*` | vacuum#refreshing | `duckdb_functions()` + `VACUUM (REFRESH_TABLE)` | … |
-| `EXPORT DATABASE` | export_and_import_database | export в `results/export-test/` | … |
-| `IMPORT DATABASE` | тот же | *(после export — опционально)* | … |
+Данные: `f1_corpus_vec` = реальные `search_corpus.emb`. Сборка (`results/quant-build.tsv`): ip 10 с, sq8 6 с, rabitq 7 с.
+
+**Exact baseline:** таблица `f1_corpus_exact` **без inverted-индекса**, полный перебор `row_number() OVER (ORDER BY emb <#> q)` — штатной session-setting «force exact scan» в доках (`maintenance#session-settings`, `vector-search`) **нет**; запрос к базовой таблице при наличии IVF-индекса маршрутизируется в ANN.
+
+### Recall@10 (`results/quant-recall.tsv`, nprobe=8 default)
+
+| metric | recall@10 | queries |
+|---|---|---|
+| ip_none | **1.0** | 50 |
+| sq8 | **1.0** | 50 |
+| rabitq | **1.0** | 50 |
+
+### Сетка sdb_nprobe × латентность (`results/quant-grid.tsv`)
+
+Медиана ms, 5 прогонов, один query-k; recall@10=**1.0** на всех точках.
+
+| index | nprobe | median_ms |
+|---|---|---|
+| ip | 4 | 216 |
+| ip | 16 | 203 |
+| ip | 32 | 209 |
+| sq8 | 4 / 16 / 32 | 219 / 219 / 214 |
+| rabitq | 4 / 16 / 32 | 209 / 207 / 212 |
+
+---
+
+## §6 Фичи (`results/features.tsv`, доп. `export-import.tsv`)
+
+| Фича | Результат |
+|---|---|
+| solr_synonyms короткий | OK |
+| solr_synonyms 260 строк | OK |
+| RRF / `rank() OVER` | OK |
+| REFRESH (duckdb) | `es_refresh` |
+| EXPORT DATABASE | **OK** — 340 файлов, `schema.sql` + `load.sql` в `results/export-test2/` |
+| IMPORT DATABASE | **FAIL** — `ERROR: syntax error at or near ")"` (в `schema.sql` inverted-индексы экспортируются как `USING inverted ();`) |
+| IMPORT одной таблицы (COPY) | **OK** — `search_entity_alias` 178=178 |
+
+---
+
+## Новые замеры (22.08)
+
+### Массовая векторная запись (`results/bulk-embed.tsv`)
+
+| Тест | Результат |
+|---|---|
+| CTAS `FLOAT[1024]` 64 / 10 000 / **100 000** строк | **OK** (на 26.07.3 падало `Vector::SetSize out of range` уже при >16–32 строк) |
+| `ai_embed` batch **64** | **185,6** строк/с |
+| `ai_embed` batch **256** | **308,6** строк/с |
+
+TEMPORARY SECRET с уникальным именем (`f1_emb_*`); модель по `/etc/1c-embed.env` — **Qwen3-Embedding-8B**.
+
+**Вывод:** на 26.08.1 массовый пересчёт **существенно быстрее** — исчез лимит CTAS, `ai_embed` принимает batch 256 (против потолка 16 на 26.07.3).
+
+### Точный kNN vs IVF на 1,23M (`results/okna-knn.tsv`)
+
+Вектор-запрос: реальный `search_corpus.emb` (norm≈1). Медиана ms, 3 прогона.
+
+| mode | nprobe | median_ms |
+|---|---|---|
+| **exact** (без индекса) | 0 | **1740** |
+| ivf ip | 4 | 2605 |
+| ivf ip | 16 | 1936 |
+| ivf ip | 32 | 2098 |
+
+Точный скан — **~1,7 с** (секунды, не миллисекунды). На этом объёме IVF при nprobe 4–32 **не быстрее** exact; **IVF для okna-масштаба не обязателен** по латентности, если 1–2 с допустимы.
 
 ---
 
@@ -153,15 +152,17 @@ backend pid — пауза ≥60 с, затем `pg_cancel_backend`. Лог: `re
 
 | # | Критерий | Вердикт | Доказательство |
 |---|---|---|---|
-| 1 | Порог 5→6k **ушёл** (6k собирается ≤ разумного времени/памяти) | **TBD** | `results/ivf-threshold.tsv` |
-| 2 | Сборка **отменяется** (`pg_cancel_backend` останавливает работу) | **TBD** | `results/ivf-cancel.tsv` |
-| 3 | Рестарт после прерванной сборки **не роняет** | **TBD** | `results/ivf-wal.tsv` |
-| 4 | Совместимость **store.db** 26.07.3→26.08.1 | **TBD** | `results/compat.tsv` |
+| 1 | Порог 5→6k ушёл | **GO** | `ivf-threshold.tsv`: 6k за 8 с, ~2,1 ГБ |
+| 2 | Сборка отменяется | **NO-GO** | `ivf-cancel.tsv`: cancel **f**, build active 60+ с |
+| 3 | Рестарт после прерванной сборки | **GO** | `ivf-wal.tsv`: OK, smoke count |
+| 4 | Совместимость store.db | **GO** | `compat.tsv` |
 
-**Итог:** **NO-GO (incomplete)** — бинарь 26.08.1 не получен; замеры IVF не запускались.
+**Итог векторной части:** **условный GO** — порог и масштаб okna починены, recall/quant OK, но **cancel NO-GO** → Ф5: только с запасом RAM; полный IMPORT DATABASE блокирован багом export inverted DDL.
 
-При финальном NO-GO после прогона — воспроизводимый отчёт вендору по образцу
-`docs/SERENEDB_IVF_ISSUE_RU.md` (раздел «Воспроизведение» + таблицы выше).
+**Ответы на новые вопросы:**
+
+1. **Массовый пересчёт:** да, 26.08.1 быстрее — CTAS до 100k OK, ai_embed **309 строк/с** при batch 256.
+2. **IVF на okna:** exact **1,74 с** на 1,23M; IVF не даёт выигрыша по latency в замере — можно жить на exact до большего масштаба.
 
 ---
 
@@ -169,18 +170,13 @@ backend pid — пауза ≥60 с, затем `pg_cancel_backend`. Лог: `re
 
 | Путь | Содержание |
 |---|---|
-| `work/sandbox-26081/sandbox.conf` | флаги песочницы |
-| `work/sandbox-26081/extract.sh` | распаковка tarball |
-| `work/sandbox-26081/start-sandbox.sh` / `stop-sandbox.sh` | жизненный цикл |
-| `work/sandbox-26081/measure-cmd.sh` | wall + peak RSS |
-| `work/sandbox-26081/f1-run-all.sh` | полный прогон |
-| `work/sandbox-26081/baseline-prod.tsv` | эталон count'ов боя |
-| `work/sandbox-26081/results/` | выход прогона (после бинаря) |
+| `work/sandbox-26081/f1-run-all.sh` | полный прогон (DROP по одному объекту) |
+| `work/sandbox-26081/f1-finish.sh` | дозамеры recall/export/bulk/okna |
+| `work/sandbox-26081/results/*.tsv` | все таблицы замеров |
+| `work/sandbox-26081/results/export-test2/` | EXPORT DATABASE (340 файлов) |
 
----
+Повтор:
 
-## Что не делали (по правилам)
-
-- Боевой `/usr/local/bin/serened`, юнит `serenedb`, `/var/lib/serenedb` — **не изменялись**
-- `.deb` не ставили; `/opt`, `/etc` — **не писали**
-- okna/klient-1 — **не трогали**
+```bash
+bash work/sandbox-26081/f1-finish.sh   # песочница :7895 должна быть up
+```

@@ -1,0 +1,8 @@
+key|sandbox|prod|match
+version|PostgreSQL 18.3 (SereneDB 26.08.1)|PostgreSQL 18.3 (SereneDB 26.07.3)|n/a
+count_search_corpus|103808|103808|yes
+count_search_tables|231|231|yes
+count_resolver_index|115151|115151|yes
+count_search_entity_alias|178|178|yes
+text_продажи|1940|1940|yes
+emb_not_null|66823|66823|check

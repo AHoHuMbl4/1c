@@ -278,19 +278,24 @@
 
 ## Ф1 (PLAN_UPGRADE_NATIVE) — 26.08.1 на песочнице dev [22.08]
 
-**Статус:** инфраструктура готова, **замеры BLOCKER** (нет tarball 26.08.1 — egress
-закрыт средой). Отчёт: `docs/UPGRADE_F1_REPORT.md`. Прогон: `bash work/sandbox-26081/f1-run-all.sh`.
+**Статус:** **замеры завершены** `[замер 22.08]`. Отчёт: `docs/UPGRADE_F1_REPORT.md`.
+Прогон: `bash work/sandbox-26081/f1-run-all.sh` + `f1-finish.sh`.
 
 | Что | Итог | Где |
 |---|---|---|
 | Копия store.db 11 ГБ | готово | `work/sandbox-26081/data/engine_duckdb/` |
-| Baseline count'ы бой :7890 | **[замер 22.08]** corpus **103 808**, text «продажи» **1940** | `baseline-prod.tsv` |
-| Tarball 26.08.1 | **[замер 22.08]** 38 224 045 байт, orchestrator |
-| Cancel / WAL / recall | правки в f1-run-all.sh, `--keep-wal`, recall-measure.sh |
-| IVF порог 5k/6k dim=1024 ip | TBD | `results/ivf-threshold.tsv` |
-| cancel / WAL / 1.23M okna | TBD | `results/ivf-*.tsv` |
-| quant sq8/rabitq + recall | TBD | `results/quant-*.tsv` |
-| solr_synonyms / RRF / EXPORT | TBD | `results/features.tsv` |
+| Baseline count'ы бой :7890 | corpus **103 808**, text «продажи» **1940** | `baseline-prod.tsv` |
+| Tarball 26.08.1 | **38 224 045** байт | tarball в `work/sandbox-26081/` |
+| IVF порог 5k/6k dim=1024 ip | **GO** — 3 с / 8 с | `results/ivf-threshold.tsv` |
+| cancel 500k | **NO-GO** — cancel **f** | `results/ivf-cancel.tsv` |
+| WAL рестарт | **GO** | `results/ivf-wal.tsv` |
+| IVF 1,23M × 1024 | **74 с**, пик **13,6 ГБ** | `results/ivf-okna-scale.tsv` |
+| recall@10 ip/sq8/rabitq | **1.0** | `results/quant-recall.tsv` |
+| sdb_nprobe grid | **203–219 ms** | `results/quant-grid.tsv` |
+| CTAS 100k / ai_embed 256 | OK / **309 строк/с** | `results/bulk-embed.tsv` |
+| exact kNN 1,23M | **1740 ms** | `results/okna-knn.tsv` |
+| EXPORT / IMPORT | export OK; IMPORT DATABASE fail | `results/export-import.tsv` |
+| solr_synonyms 260 строк | OK | `results/features.tsv` |
 
 Проверки 2–4 идут по одной. Параллельно их ставить нельзя: они делят один сервер и одну
 память, и результат станет невоспроизводимым.

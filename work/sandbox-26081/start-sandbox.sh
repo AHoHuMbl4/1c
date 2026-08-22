@@ -34,7 +34,13 @@ nohup "$BIN" --flagfile="$CONF" >>"$LOG" 2>&1 &
 echo $! >"$PIDFILE"
 echo "START pid=$(cat "$PIDFILE") port=7895 keep_wal=${KEEP_WAL} log=$LOG"
 
-for i in $(seq 1 120); do
+WAIT_SEC="${F1_STARTUP_WAIT_SEC:-600}"
+for i in $(seq 1 "$WAIT_SEC"); do
+  if ! kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
+    echo "FATAL: serened завершился — см. $LOG" >&2
+    grep -E 'FATAL|ERROR' "$LOG" 2>/dev/null | tail -5 >&2 || tail -5 "$LOG" >&2
+    exit 1
+  fi
   if psql "host=127.0.0.1 port=7895 user=postgres dbname=postgres" -At -c "SELECT 1" &>/dev/null; then
     echo "READY after ${i}s"
     psql "host=127.0.0.1 port=7895 user=postgres dbname=postgres" -At -c "SELECT version();"
@@ -42,5 +48,6 @@ for i in $(seq 1 120); do
   fi
   sleep 1
 done
-echo "TIMEOUT: песочница не ответила за 120 с — см. $LOG" >&2
+echo "TIMEOUT: песочница не ответила за ${WAIT_SEC} с — см. $LOG" >&2
+grep -E 'FATAL|ERROR' "$LOG" 2>/dev/null | tail -5 >&2 || true
 exit 1

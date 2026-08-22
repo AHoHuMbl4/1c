@@ -12,6 +12,8 @@ echo "=== Ф1 $(date -Is) ==="
 
 "$ROOT/extract.sh"
 "$ROOT/start-sandbox.sh"
+chmod +x "$ROOT/bootstrap-data.sh"
+"$ROOT/bootstrap-data.sh"
 
 psql_s() { psql "$DSN" -v ON_ERROR_STOP=1 "$@"; }
 psql_prod() { psql "$PROD_DSN" -v ON_ERROR_STOP=1 "$@"; }
@@ -45,8 +47,9 @@ echo "--- §3 compat ---"
 
 # §4 порог 5k/6k (завершение vs зависание)
 echo "--- §4 threshold 5k/6k ---"
+psql_s -q -c "DROP TABLE IF EXISTS f1_t5 CASCADE;"
+psql_s -q -c "DROP TABLE IF EXISTS f1_t6 CASCADE;"
 psql_s -q <<'SQL'
-DROP TABLE IF EXISTS f1_t5, f1_t6 CASCADE;
 CREATE TABLE f1_t5 AS SELECT i::VARCHAR AS k,
   list_transform(range(1024), x -> (random()::FLOAT * 2 - 1))::FLOAT[1024] AS emb
   FROM range(5000) s(i);
@@ -64,8 +67,8 @@ SQL
 
 # §4 cancel — ≥500k строк, сборка минуты; pg_cancel_backend
 echo "--- §4 cancel (500k) ---"
+psql_s -q -c "DROP TABLE IF EXISTS f1_cancel500k CASCADE;"
 psql_s -q <<'SQL'
-DROP TABLE IF EXISTS f1_cancel500k CASCADE;
 CREATE TABLE f1_cancel500k AS SELECT i::VARCHAR AS k,
   list_transform(range(1024), x -> (random()::FLOAT * 2 - 1))::FLOAT[1024] AS emb
   FROM range(500000) s(i);
@@ -121,8 +124,8 @@ fi
 
 # §4 okna-scale 1.23M
 echo "--- §4 okna 1.23M ---"
+psql_s -q -c "DROP TABLE IF EXISTS f1_okna CASCADE;"
 psql_s -q <<'SQL'
-DROP TABLE IF EXISTS f1_okna CASCADE;
 CREATE TABLE f1_okna AS SELECT i::VARCHAR AS k,
   list_transform(range(1024), x -> (random()::FLOAT * 2 - 1))::FLOAT[1024] AS emb
   FROM range(1230000) s(i);
@@ -135,8 +138,8 @@ echo "index_est_bytes|${idx_sz}" | tee -a "$RES/ivf-okna-scale.tsv"
 
 # §5 quantization — реальные векторы search_corpus (без индекса на baseline-таблице)
 echo "--- §5 quant (corpus emb) ---"
+psql_s -q -c "DROP TABLE IF EXISTS f1_corpus_vec CASCADE;"
 psql_s -q <<'SQL'
-DROP TABLE IF EXISTS f1_corpus_vec CASCADE;
 CREATE TABLE f1_corpus_vec AS
   SELECT src_table || '|' || row_key AS k, emb
   FROM search_corpus WHERE emb IS NOT NULL;

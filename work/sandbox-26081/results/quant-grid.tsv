@@ -1,0 +1,10 @@
+index|nprobe|rerank_factor|recall@10|median_ms|runs|query_k
+ip|4|1|1|216|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+ip|16|1|1|203|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+ip|32|1|1|209|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+sq8|4|4|1|219|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+sq8|16|4|1|219|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+sq8|32|4|1|214|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+rabitq|4|4|1|209|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+rabitq|16|4|1|207|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563
+rabitq|32|4|1|212|5|catalog_видырегистровучета|815ecfe2-f5a5-11ee-b6bf-6045cb9b4563

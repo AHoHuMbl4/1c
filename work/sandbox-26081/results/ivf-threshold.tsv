@@ -1,0 +1,5 @@
+test|metric
+CREATE INDEX
+ivf_5k_1024_ip|wall_sec=3|peak_rss_kb=2300208|rc=0
+CREATE INDEX
+ivf_6k_1024_ip|wall_sec=8|peak_rss_kb=2235044|rc=0

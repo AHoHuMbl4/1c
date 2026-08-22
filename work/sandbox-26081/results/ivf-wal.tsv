@@ -1,0 +1,4 @@
+wal_bytes|419972
+restart|OK|startup_sec=0
+version_after_restart|PostgreSQL 18.3 (SereneDB 26.08.1)
+select_smoke|103808

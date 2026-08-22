@@ -1,3 +1,13 @@
+## 22.08: Ф1 песочница SereneDB 26.08.1 — замеры завершены [замер]
+
+[замер] `work/sandbox-26081` :7895 на копии dev store.db. Ворота: порог 5k/6k **GO**
+(3 с/8 с); cancel **NO-GO** (`pg_cancel_backend`=f); WAL-рестарт **GO**; compat **GO**.
+IVF 1,23M×1024 — 74 с, 13,6 ГБ. recall@10=1.0 (ip/sq8/rabitq, 66k corpus). CTAS
+FLOAT[1024] 100k OK; ai_embed batch 256 → 309 строк/с (26.07.3: fail >32 строк).
+Exact kNN 1,23M — медиана 1740 ms; IVF не быстрее. EXPORT OK (340 files); IMPORT
+DATABASE fail `syntax error at or near ")"`. Отчёт: `docs/UPGRADE_F1_REPORT.md`.
+Доки: sql/indexes/inverted/vector-search.
+
 ## 22.08: Универсальный путь остатков и канон продаж (возвраты 13–17) [код+замер]
 
 [код+замер] Универсальный путь остатков и канон продаж (возвраты 13–17): ранний no_data

@@ -1,0 +1,4 @@
+step|result|detail
+export|OK|dir=/srv/1c/work/sandbox-26081/results/export-test2 nfiles=340 schema.sql=yes load.sql=yes
+import_full|FAIL|ERROR:  syntax error at or near ")"
+import_copy_one|OK|search_entity_alias=178 expected=178 match=yes csv=public_search_entity_alias.csv

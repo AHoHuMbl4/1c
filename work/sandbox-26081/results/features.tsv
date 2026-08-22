@@ -1,0 +1,16 @@
+feature|result
+ Success 
+---------
+(0 rows)
+
+solr_synonyms_short|{auto,automobile,car}
+ Success 
+---------
+(0 rows)
+
+solr_synonyms_260_lines|OK
+1
+1
+1
+rank_over|OK
+refresh_funcs|es_refresh

@@ -1,0 +1,6 @@
+CREATE INDEX
+quant_build_ip_none|wall_sec=10|peak_rss_kb=9393932|rc=0
+CREATE INDEX
+quant_build_sq8|wall_sec=6|peak_rss_kb=9439028|rc=0
+CREATE INDEX
+quant_build_rabitq|wall_sec=7|peak_rss_kb=9423916|rc=0

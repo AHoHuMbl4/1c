@@ -1,0 +1,6 @@
+test|rows|batch|result|wall_sec|rows_per_sec|note
+ctas_float1024|64|-1|OK|5.513|64|generated vectors dim=1024
+ctas_float1024|10000|-1|OK|0.498|10000|generated vectors dim=1024
+ctas_float1024|100000|-1|OK|5.483|100000|generated vectors dim=1024
+ai_embed|64|64|OK|0.345|185.59|secret=f1_emb TEMPORARY model=Qwen3-Embedding-8B
+ai_embed|256|256|OK|0.829|308.62|secret=f1_emb TEMPORARY model=Qwen3-Embedding-8B
