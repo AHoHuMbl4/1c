@@ -75,6 +75,15 @@ default_effort = "high"
 enabled = true
 effort = "high"
 
+# Субагенты Kimi — на дешёвой модели (оркестратор остаётся на k3-256k). Привязка
+# держится рантаймом: force отклоняет любую явную модель спауна — «забыть» после
+# компакшна невозможно. Фича экспериментальная: без KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL=1
+# в окружении сессии секция inert (доки Kimi Code, config-files → secondary_model).
+# Регламент оркестрации cursor-agent — docs/ORCHESTRATION_CURSOR.md.
+[secondary_model]
+default_model = "kimi-code/kimi-for-coding"
+force = true
+
 [services.moonshot_search]
 base_url = "https://api.kimi.com/coding/v1/search"
 api_key = ""

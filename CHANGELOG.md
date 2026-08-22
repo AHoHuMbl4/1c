@@ -1,3 +1,18 @@
+## 22.08: Режим оркестрации Kimi → cursor-agent [решение] [код]
+
+[решение] Владелец: Kimi (k3) — оркестратор, исполнители — свежие процессы
+`cursor-agent -p --force --model auto` (auto = самый дешёвый режим Cursor),
+1 задача = 1 процесс; параллель — swarm обёрток. Регламент — `docs/ORCHESTRATION_CURSOR.md`.
+
+[код] `work/hooks/kimi-config.toml`: `[secondary_model] default_model = "kimi-code/kimi-for-coding",
+force = true` — субагенты Kimi принудительно на дешёвой модели, привязка рантаймом
+(требует `KIMI_CODE_EXPERIMENTAL_SECONDARY_MODEL=1`; доки Kimi Code, config-files →
+secondary_model). TOML проверен разбором. Указатель — шапка activeContext.
+
+[замер] `cursor-agent --help`/`--list-models` 22.08: `-p` неинтерактив, `--model auto`
+в списке (текущая по умолчанию). Установка канона + env-флаг + абзац в AGENTS.md —
+за владельцем (§7 документа).
+
 ## 22.08: Ф1 песочница 26.08.1 — инфра + baseline, IVF BLOCKER [замер] [код]
 
 [код] `work/sandbox-26081/`: sandbox.conf (:7895, memory_limit 40 GiB), extract/start/stop,

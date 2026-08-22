@@ -8,6 +8,12 @@ _Обновлено: **2026-08-21.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **Режим оркестрации (владелец, 22.08)**: задачи исполнителям — через свежие
+вызовы `cursor-agent -p --force --model auto` (1 задача = 1 процесс = чистый
+контекст), параллель — swarm обёрток. Регламент: `docs/ORCHESTRATION_CURSOR.md`.
+Субагенты Kimi — на дешёвой модели: `[secondary_model]` в каноне конфига, ставит
+владелец + env-флаг (§6–7 документа).
+
 🔴 **PROBE rid_norm verify — код в git, okna жив `[22.08]`**: verify/shell ищут
 rid_norm (16 alnum) как serene_ask; lib-probe без esc_rid/sys NameError. Замок
 **16/16**. okna «петли» `:8091` — journal ok, no_data, code_md5=c560aebe.
