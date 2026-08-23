@@ -1,3 +1,12 @@
+## 23.08: канон GPU обновлён владельцем — whisper/diarize остановлены, 27B 64k [решение]
+
+[решение] Владелец: embed на 49.13.97.101:8002 падал по памяти — починен; whisper
+(188:8006) и pyannote/diarize (101:8001) ОСТАНОВЛЕНЫ — GPU под пересчёт klient-1;
+Qwen3.8-27B контекст 64k. Ключ один на все эндпоинты. Канон в docs/NETWORK.md §2.1
+обновлён; старая okna помечена удалённой.
+[замер] Пересчёт klient-1 жив: resolver 1 279 762/1 631 933 (11:40 UTC), GPU 100%%.
+Числа: resolver 1279762/1631933; GPU util 100%%; 27B ctx 64k.
+
 ## 23.08: root-fix dev выполнен: psql, hardlink, пул движка [замер]
 
 [замер] (root-cursor, промт prompt-root-fix-dev.md): postgresql-client-16 возвращён
