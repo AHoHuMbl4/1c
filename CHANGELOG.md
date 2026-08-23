@@ -1,3 +1,16 @@
+## 23.08: /health okna — object-level coverage_gap, ложный 503 снят [код][замер]
+
+[код] `serene_ask.py`: `_measure_health_gap` считает витрину через `_vitrina_objects`;
+Ref_Key — по `tmp3_key` (как `coverage_build`), не по duckdb_columns. Systemic 503 только
+при объектном долге корпуса (`_real_corpus_object_gaps`); «не опубликовано в индекс» —
+`kind=index_publish`, не 503. Замок `test_health_gap.py` **22/22**.
+
+[замер] okna `:8091` до: `/health` **503**, gap **38** сущностей / **423234** missing
+(строки разворота vs объекты корпуса). После (**760c3923**): **200** `serene-ask-ok`,
+gap **0/0**; AB_PROBE **8/8**, 0 сбоев. 6 каталогов «не опубликовано в индекс» (~148
+строк) — index publish, руками не чинили.
+Числа: entities 38→0; rows_missing 423234→0; HTTP 503→200; probe 8/8.
+
 ## 23.08: Ф6.1 SQL-RRF за ASK_SQL_RRF — corpus_ivf в слиянии кандидатов [код][замер]
 
 [код] `serene_ask.py`: флаг `ASK_SQL_RRF=1` добавляет пятую ветвь RRF — ANN по

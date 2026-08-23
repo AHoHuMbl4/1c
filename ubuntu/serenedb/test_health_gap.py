@@ -70,5 +70,50 @@ t("merge сторож: split_part первого куска ключа",
 t("merge сторож: guid#N = тот же объект",
   "t.row_key = split_part(c.row_key, '#', 1)" in mtxt)
 
+
+
+# Ref_Key: строки витрины >> корпус, объекты равны — gap нет ([замер 23.08 okna]).
+g = A._assemble_health_gap({"document_x": (439, 439)}, [])
+t("Ref_Key equal objects: no gap", g is None, g)
+
+g = A._assemble_health_gap({"document_x": (500, 439)}, [])
+t("Ref_Key objects missing: gap", g and g["rows_missing"] == 61 and g["entities"] == 1, g)
+t("Ref_Key worst objects not rows",
+  g and g["worst"][0]["витрина"] == 500 and g["worst"][0]["корпус"] == 439, g)
+
+# _classify: index publish без объектного долга — не systemic.
+real_psql, real_classify = A.psql, A._real_corpus_object_gaps
+A._real_corpus_object_gaps = lambda: False
+g = A._classify_health_gap({"entities": 6, "rows_missing": 148, "worst": [
+    {"src": "catalog_a", "витрина": 10, "корпус": 8}]})
+t("index publish not systemic", g and g.get("kind") == "index_publish", g)
+A._real_corpus_object_gaps = lambda: True
+g = A._classify_health_gap({"entities": 1, "rows_missing": 5, "worst": []})
+t("real object gap stays systemic", g and g.get("kind") == "systemic", g)
+A.psql, A._real_corpus_object_gaps = real_psql, real_classify
+
+# _measure_health_gap: mock _vitrina_objects — объекты равны корпусу.
+_vo_calls = []
+def mock_vo(t):
+    _vo_calls.append(t)
+    return {"document_doc": 100, "catalog_plain": 50}.get(t)
+def mock_rk(t):
+    return t == "document_doc"
+real_vo, real_rk, real_psql2 = A._vitrina_objects, A._table_has_ref_key, A.psql
+A._vitrina_objects, A._table_has_ref_key = mock_vo, mock_rk
+def mock_psql2(sql):
+    if "duckdb_tables()" in sql and "src_table" in sql:
+        return [["document_doc"], ["catalog_plain"]]
+    if "GROUP BY 1" in sql and "search_corpus" in sql:
+        return [["document_doc", 100], ["catalog_plain", 50]]
+    if "Period" in sql or "Date" in sql:
+        return []
+    return []
+A.psql = mock_psql2
+g = A._measure_health_gap()
+A._vitrina_objects, A._table_has_ref_key, A.psql = real_vo, real_rk, real_psql2
+t("measure uses _vitrina_objects", _vo_calls == ["document_doc", "catalog_plain"], _vo_calls)
+t("measure equal objects no gap", g is None, g)
+
 print("PASS %d FAIL %d" % (PASS, len(FAIL)))
 sys.exit(1 if FAIL else 0)

@@ -8158,17 +8158,35 @@ def clarify_say(question, opts, diag=None):
 # развёрнута в витрине в несколько строк, а в корпусе объект — одна строка (та же
 # поправка, что `объектов_витрины` в переписи). Объект определяется ключом `Ref_Key`,
 # где такая колонка есть; где её нет (регистры) — строка и есть объект.
+def _entity_counts_objects(src_table):
+    """Сущность считается по Ref_Key — как `coverage_build` / tmp3_key, не duckdb_columns."""
+    try:
+        r = psql("SELECT count(*) FROM tmp3_key "
+                 "WHERE entity = lower(%s) AND key_cols = ['Ref_Key']"
+                 % lit(src_table))
+        if int(_num(r[0][0])) > 0:
+            return True
+    except RuntimeError:
+        pass
+    try:
+        r = psql("SELECT count(*) FROM duckdb_columns() "
+                 "WHERE database_name = current_database() "
+                 "  AND table_name = %s AND column_name = 'Ref_Key'"
+                 % lit(src_table))
+        return int(_num(r[0][0])) > 0
+    except RuntimeError:
+        return False
+
+
 def _vitrina_objects(src_table):
     """Число объектов сущности в витрине. None — витрины нет или она не читается."""
     try:
-        r = psql("SELECT (SELECT count(*) FROM duckdb_tables() "
-                 "  WHERE database_name = current_database() AND table_name = %(t)s), "
-                 "(SELECT count(*) FROM duckdb_columns() "
-                 "  WHERE database_name = current_database() AND table_name = %(t)s "
-                 "    AND column_name = 'Ref_Key')" % {"t": lit(src_table)})
-        has_vit, has_rk = int(_num(r[0][0])) > 0, int(_num(r[0][1])) > 0
-        if not has_vit:
+        r = psql("SELECT count(*) FROM duckdb_tables() "
+                 "WHERE database_name = current_database() AND table_name = %s"
+                 % lit(src_table))
+        if int(_num(r[0][0])) == 0:
             return None
+        has_rk = _entity_counts_objects(src_table)
         q = ("SELECT count(DISTINCT \"Ref_Key\") FROM query_table(%s)" if has_rk
              else "SELECT count(*) FROM query_table(%s)") % lit(src_table)
         return int(_num(psql(q)[0][0]))
@@ -8299,6 +8317,11 @@ def _assemble_health_gap(total_gaps, day_gaps):
     return out
 
 
+def _table_has_ref_key(src_table):
+    """Есть ли Ref_Key у сущности (делегат `_entity_counts_objects`)."""
+    return _entity_counts_objects(src_table)
+
+
 def _measure_health_gap():
     """Разрыв витрина↔корпус, включая лишнее в корпусе и дни Period/Date."""
     r = psql("SELECT table_name FROM duckdb_tables() "
@@ -8307,31 +8330,18 @@ def _measure_health_gap():
     tabs = [x[0] for x in r if x and x[0]]
     if not tabs:
         return None
-    vit = {}
-    sql = " UNION ALL ".join(
-        "SELECT %s AS t, count(*) FROM query_table(%s)" % (lit(t), lit(t)) for t in tabs)
-    for x in psql(sql):
-        if x and x[0]:
-            vit[x[0]] = int(_num(x[1]))
+    vit, rk = {}, set()
+    for t in tabs:
+        if _table_has_ref_key(t):
+            rk.add(t)
+        n = _vitrina_objects(t)
+        if n is not None:
+            vit[t] = n
     corp = {x[0]: int(_num(x[1])) for x in psql(
         "SELECT src_table, count(*) FROM %s GROUP BY 1" % CORPUS) if x and x[0]}
-    over = [t for t in tabs if vit.get(t, 0) > corp.get(t, 0)]
-    under = [t for t in tabs if corp.get(t, 0) > vit.get(t, 0)]
-    rk = set()
-    if over:
-        rk = {x[0] for x in psql(
-            "SELECT DISTINCT table_name FROM duckdb_columns() "
-            "WHERE database_name = current_database() AND column_name = 'Ref_Key' "
-            "  AND table_name IN (%s)" % ", ".join(lit(t) for t in over)) if x and x[0]}
     total_gaps = {}
-    for t in set(over + under):
-        if t in rk:
-            n = int(_num(psql(
-                "SELECT count(DISTINCT \"Ref_Key\") FROM query_table(%s)"
-                % lit(t))[0][0]))
-        else:
-            n = vit.get(t, 0)
-        c = corp.get(t, 0)
+    for t in tabs:
+        n, c = vit.get(t, 0), corp.get(t, 0)
         if n != c:
             total_gaps[t] = (n, c)
 
@@ -8354,15 +8364,23 @@ def _measure_health_gap():
     if dated:
         parts = []
         for t, col in dated.items():
+            if t in rk and col == "Date":
+                vit_day = (
+                    "SELECT try_cast(\"%s\" AS TIMESTAMP)::date AS d, "
+                    "count(DISTINCT \"Ref_Key\") AS n FROM query_table(%s) GROUP BY 1"
+                    % (col, lit(t)))
+            else:
+                vit_day = (
+                    "SELECT try_cast(\"%s\" AS TIMESTAMP)::date AS d, count(*) AS n "
+                    " FROM query_table(%s) GROUP BY 1" % (col, lit(t)))
             parts.append(
                 "SELECT %s AS t, v.d, coalesce(v.n,0), coalesce(c.n,0) FROM "
-                "(SELECT try_cast(\"%s\" AS TIMESTAMP)::date AS d, count(*) AS n "
-                " FROM query_table(%s) GROUP BY 1) v "
+                "(%s) v "
                 "FULL OUTER JOIN "
                 "(SELECT doc_date::date AS d, count(*) AS n FROM %s "
                 " WHERE src_table = %s GROUP BY 1) c USING (d) "
                 "WHERE coalesce(v.n,0) IS DISTINCT FROM coalesce(c.n,0)"
-                % (lit(t), col, lit(t), CORPUS, lit(t)))
+                % (lit(t), vit_day, CORPUS, lit(t)))
         for x in psql(" UNION ALL ".join(parts)):
             if x and x[0]:
                 day_gaps.append((x[0], x[1], int(_num(x[2])), int(_num(x[3]))))
@@ -8372,12 +8390,29 @@ def _measure_health_gap():
 
 
 
+def _real_corpus_object_gaps():
+    """Есть ли сущности с объектами витрины > в корпусе — реальный долг, не index publish.
+
+    [замер 23.08 okna] 423k «missing» были строки разворота vs объекты корпуса.
+    «не опубликовано в индекс» при полном корпусе — publish search_idx, не потеря данных;
+    такой разрыв не оправдывает systemic 503.
+    """
+    try:
+        r = psql("SELECT count(*) FROM search_coverage "
+                 "WHERE объектов_витрины > в_корпусе "
+                 "  AND coalesce(причина,'') <> %s"
+                 % lit("не опубликовано в индекс"))
+        return int(_num(r[0][0])) > 0
+    except RuntimeError:
+        return None
+
+
 def _classify_health_gap(gap):
     """Различение лага свежести и системной дыры для /health (п. 13, [замер 17.08 okna]).
 
     Лаг: витрина новее последнего такта сборки (`mart_changed_ts` > `build_ts`) —
     разрыв догоняется таймером merge, 503 не нужен. Системная: сборка уже прошла после
-    изменения витрины, а разрыв остался.
+    изменения витрины, а разрыв остался — только при объектном долге корпуса.
     """
     if not gap:
         return None
@@ -8396,6 +8431,10 @@ def _classify_health_gap(gap):
         out["kind"] = "freshness_lag"
         out["merge_pending_sec"] = int(mart_ts - build_ts)
         out["build_age_sec"] = int(time.time() - build_ts)
+        return out
+    real = _real_corpus_object_gaps()
+    if real is False:
+        out["kind"] = "index_publish"
         return out
     out["kind"] = "systemic"
     return out
