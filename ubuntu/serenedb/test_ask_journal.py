@@ -80,10 +80,12 @@ try:
                              trusted={"src": "x"} if kind != "choice_error" else None,
                              user="u1", channel="lock",
                              decision_id="d1" if kind == "choice_error" else None)
-    inserts = [s for s in captured if s.strip().upper().startswith("INSERT")]
+    inserts = [s for s in captured if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")]
     t("журнал: INSERT на каждый вид", len(inserts) == 6, "n=%d" % len(inserts))
-    leaked = [s for s in captured if SECRET in s]
-    t("журнал: текста вопроса в SQL нет", leaked == [], leaked[:1])
+    leaked = [s for s in captured if SECRET in s and "ask_journal_text" not in s]
+    t("журнал: текста вопроса в ask_journal нет", leaked == [], leaked[:1])
+    text_rows = [s for s in captured if "ask_journal_text" in s and SECRET in s]
+    t("журнал: текст в ask_journal_text", len(text_rows) == 6, len(text_rows))
     t("журнал: q_hash = sha256 вопроса",
       any(hashlib.sha256(SECRET.encode()).hexdigest() in s for s in inserts))
     uh = hashlib.sha256("u1".encode("utf-8")).hexdigest()
@@ -96,7 +98,7 @@ try:
                          A.time.monotonic(), user="telegram:222", channel="telegram")
     ha = hashlib.sha256("telegram:111".encode("utf-8")).hexdigest()
     hb = hashlib.sha256("telegram:222".encode("utf-8")).hexdigest()
-    ins2 = [s for s in captured if s.strip().upper().startswith("INSERT")][-2:]
+    ins2 = [s for s in captured if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")][-2:]
     t("журнал: два user канала — разные hash",
       any(ha in s for s in ins2) and any(hb in s for s in ins2) and ha != hb)
 finally:
@@ -167,6 +169,7 @@ if os.environ.get("PGPASSWORD"):
                          text=True, capture_output=True, env=env)
     t("apply ut_test", app.returncode == 0, (app.stderr or app.stdout)[-200:])
     _psql(RW, "DELETE FROM ask_journal")
+    _psql(RW, "DELETE FROM ask_journal_text")
     _psql(RW, "SELECT setval('ask_journal_id_seq', 1, false)")
     A.DSN = RO
     A.PGPASSWORD = os.environ.get("PGPASSWORD", "")

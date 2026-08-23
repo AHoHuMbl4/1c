@@ -1252,15 +1252,20 @@ SQL `Всего` 79 925 955,81. Проба нового кода против т
 `period_window_empty` ещё не даёт пивотить пустышку меры из-за нуля в окне.
 `period_preds` не менялись.
 
-🔴 **Журнал исходов `ask_journal` (17.08, шаг 5 плана).** Одна точка записи —
-`answer_checked` (виды answer/figures/clarify/no_data/unavailable;
+🔴 **Журнал исходов `ask_journal` (17.08, шаг 5 плана; расширен 23.08).** Одна точка
+записи — `answer_checked` (виды answer/figures/clarify/no_data/unavailable;
 `choice_error` — внутренний снимок, клиенту не отдаётся: перевыпуск или общий путь).
-Текст вопроса в таблицу не кладётся: `q_hash` + `q_len`. Сервис (роль `serene_ro`)
-делает INSERT и ротацию DELETE по id; SELECT строк журнала у роли нет (кроме
-колонки `id`). Схема — `ask_journal.sql`, не `corpus_init.sql`. Выключатель
-`ASK_JOURNAL=1`. Ошибка записи считает `_JOURNAL_LOST` и не меняет ответ (п. 13).
-Клики/`decision_id` — поля `ticket_used`/`ticket_error` (телеметрия UX, не oracle).
-`/health`: `coverage_gap.kind=freshness_lag`, если
+В `ask_journal` текста вопроса нет: `q_hash` + `q_len`. Текст — в отдельной таблице
+`ask_journal_text(id, q_text)`: `serene_ro` только INSERT/DELETE/`SELECT(id)`, чтение
+`q_text` — у postgres (разметка). С 23.08 (шаг 1 плана A/B/C): `doubt` (сомнение из
+`diag`), `clarify_options` (варианты слоя 2 с подписями при `kind=clarify`), `atoms`
+(slim из ответа или `diag.fork.atoms`, дедуп), `ticket_variant` (подпись погашенного
+билета). Сервис (`serene_ro`) делает INSERT и ротацию DELETE по id обеих таблиц;
+SELECT строк журнала у роли нет (кроме `id`). Схема — `ask_journal.sql`, не
+`corpus_init.sql`. Выключатель `ASK_JOURNAL=1`. Ошибка записи считает `_JOURNAL_LOST`
+и не меняет ответ (п. 13); сбой `ask_journal_text` — best-effort, журнал и ротация
+не откатываются. Клики/`decision_id` — `ticket_used`/`ticket_error`/`ticket_variant`
+(телеметрия UX, не oracle). `/health`: `coverage_gap.kind=freshness_lag`, если
 `mart_changed_ts` > `build_ts` (503 только при `systemic`).
 Выключатель детекции: `ASK_FORK_DETECT=0`.
 
@@ -1790,6 +1795,8 @@ focus.** Без `focus`/`measure_pick` в круг арбитра дописыв
 отменяется: соперник считается, при расхождении — уточнение. С focus круг
 стоп 2 молчит. `[замер 15.08]` на okna: без focus фразы уходят в clarify с
 `arbiter_rivals`; с focus `stop2_rivals` пуст — проводку оставили.
+
+**[замер 23.08 okna]** Рейтинг «что лучше всего продавалось»: при `rank_intent` ось номенклатуры выбирается кодом (`rank_product_axis_col` → `diag.rank_axis_auto`), не axis-clarify по всем refcols регистра (ловушка: `compute=max` от pick_entity).
 
 🔴 **Стоп 1 (14.08, дыры rank/счёт 15.08; закрытие prompt-leak 18.08): форма ответа монопольна для числа.**
 Пока вопрос — итог, счёт или рейтинг, `answer_slot_mode` сужает и места compose,

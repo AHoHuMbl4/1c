@@ -10800,6 +10800,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     picked, arb_pool, doubt = sales_canon_force_pool(
         diag.get("sales_canon_locked") or diag.get("catalog_count_locked"),
         picked, arb_pool, doubt)
+    # В diag для журнала (ask_journal.doubt) — после финального force.
+    diag["doubt"] = bool(doubt)
 
     def _checked(out):
         """Ответ уходит только если собственное знание базы подтверждает выбор сущности.
@@ -11578,7 +11580,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 if any(a.get("col") == _acol for a in axes):
                     _kh = [_acol]
             _rank_intent = rank_intent_from(intent, plan, question)
-            if (not _kh and (plan.get("compute") in ("max", "min") or _rank_intent)):
+            # Рейтинг «что продавалось»: ось номенклатуры (ТМЦ) — до axis-clarify
+            # ([замер 23.08 okna] compute=max от pick_entity + len(kind_hits)>1 →
+            # clarify по 6 осям; rank_product_axis_col был только в gate-fallback).
+            if _rank_intent:
+                _pcol = rank_product_axis_col(
+                    src, axes, intent, question, plan)
+                if _pcol:
+                    _kh = [_pcol]
+                    diag["rank_axis_auto"] = _pcol
+            if (not _kh and (plan.get("compute") in ("max", "min")
+                             or _rank_intent)):
                 _kh = kind_axis_rerank(axes, intent.get("kind"))
             if _rank_intent and len(_kh or []) > 1:
                 _pref = product_axis_pref(_kh)
@@ -11617,8 +11629,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                      "named_gis": [], "clarify": None}
         diag["axis_clarify_skipped"] = "total_without_breakdown"
     if grain_dec.get("clarify") == "axis":
-        opts = axis_clarify_options(src, axes)
-        return {"partial": cut or None, "kind": "clarify",
+        if rank_intent_from(intent, plan, question):
+            _pcol = rank_product_axis_col(
+                src, axes, intent, question, plan)
+            if _pcol:
+                grain_dec = {"grain": "group", "col": _pcol, "form": "rank",
+                             "named_gis": [], "clarify": None}
+                diag["rank_axis_auto"] = _pcol
+                diag["grain"] = grain_dec["grain"]
+                diag["axis_col"] = _pcol
+                diag["axis_form"] = "rank"
+        if grain_dec.get("clarify") != "axis":
+            pass
+        else:
+            opts = axis_clarify_options(src, axes)
+            return {"partial": cut or None, "kind": "clarify",
                 "text": clarify_say(question, opts, diag)
                         or ", ".join("«%s»" % o["label"] for o in opts),
                 "options": opts, "sources": [src] if src else [],
@@ -12382,16 +12407,81 @@ def _journal_sql_bool(v):
 
 
 def _journal_atoms_slim(out):
+    """Различные атомы ответа или детектора (diag.fork.atoms) — slim JSON."""
     atoms = []
-    if isinstance(out, dict):
-        raw = out.get("atoms") or ([out["atom"]] if out.get("atom") else [])
-        for a in raw[:20]:
-            if not isinstance(a, dict):
+    if not isinstance(out, dict):
+        return atoms
+    raw = out.get("atoms") or ([out["atom"]] if out.get("atom") else [])
+    if not raw:
+        # На clarify out.atoms пуст; ветки живут в детекторе (разметка 339 clarify).
+        fork = (out.get("diag") or {}).get("fork") or {}
+        raw = []
+        for item in (fork.get("atoms") or []):
+            if not isinstance(item, dict):
                 continue
-            atoms.append({k: a.get(k) for k in (
-                "operation", "exact_value", "measure_id", "measure_label",
-                "unit", "proof_status") if k in a})
+            raw.append(item["atom"] if isinstance(item.get("atom"), dict) else item)
+    seen = set()
+    for a in raw[:20]:
+        if not isinstance(a, dict):
+            continue
+        slim = {k: a.get(k) for k in (
+            "operation", "exact_value", "measure_id", "measure_label",
+            "unit", "proof_status") if k in a}
+        if not slim:
+            continue
+        fp = tuple(sorted((k, str(v)) for k, v in slim.items()))
+        if fp in seen:
+            continue
+        seen.add(fp)
+        atoms.append(slim)
     return atoms
+
+
+def _journal_clarify_options(out):
+    """Варианты слоя 2 (человеческие подписи) — только при kind=clarify."""
+    if not isinstance(out, dict) or out.get("kind") != "clarify":
+        return None
+    opts = out.get("options") or []
+    if not opts:
+        return None
+    slim = []
+    for o in opts[:40]:
+        if not isinstance(o, dict):
+            continue
+        row = {k: o.get(k) for k in (
+            "label", "src", "measure", "hint", "distinct_by", "decision_id")
+            if o.get(k) not in (None, "")}
+        if row:
+            slim.append(row)
+    return slim or None
+
+
+def _journal_doubt(out):
+    """Признак сомнения модели из diag (ставится в конвейере)."""
+    if not isinstance(out, dict):
+        return None
+    d = out.get("diag") or {}
+    if "doubt" in d:
+        return bool(d.get("doubt"))
+    if "сомнение" in d:
+        return bool(d.get("сомнение"))
+    return None
+
+
+def _journal_ticket_variant(out, trusted=None):
+    """Какой вариант погашен билетом (label/src из trusted или diag)."""
+    if isinstance(trusted, dict):
+        lab = trusted.get("label") or trusted.get("src") or ""
+        if lab:
+            return str(lab)[:500]
+    if not isinstance(out, dict):
+        return None
+    d = out.get("diag") or {}
+    for k in ("ticket_variant", "chosen_label", "focus_forced"):
+        v = d.get(k)
+        if v not in (None, ""):
+            return str(v)[:500]
+    return None
 
 
 def _journal_intent(out):
@@ -12434,7 +12524,7 @@ def _journal_uncounted_truncated(out):
 
 def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
                        decision_id=None, rid=None):
-    """Одна запись журнала. Текст вопроса в SQL не передаётся (аудит §14.5)."""
+    """Одна запись журнала. Текст вопроса — в ask_journal_text, не в ask_journal."""
     global _JOURNAL_LOST
     if not ASK_JOURNAL:
         return
@@ -12466,47 +12556,69 @@ def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
                            ensure_ascii=False)
         intent = json.dumps(_journal_intent(out if isinstance(out, dict) else {}),
                             ensure_ascii=False)
+        clarify_opts = _journal_clarify_options(out if isinstance(out, dict) else {})
+        clarify_json = (json.dumps(clarify_opts, ensure_ascii=False)
+                        if clarify_opts is not None else None)
+        doubt = _journal_doubt(out if isinstance(out, dict) else {})
+        ticket_var = _journal_ticket_variant(
+            out if isinstance(out, dict) else {}, trusted=trusted)
         latency = int((time.monotonic() - t0) * 1000) if t0 else 0
         nid = int(psql("SELECT nextval('ask_journal_id_seq')")[0][0])
         jr = _rid_norm(rid or _rid_get())
-        sql = (
-            "INSERT INTO ask_journal ("
-            "id, db_name, channel, user_hash, q_hash, q_len, intent_json, outcome, "
-            "fork_outcome, atoms, fork_keys, ticket_used, ticket_error, code_md5, "
-            "build_ts, alias_ver, tokens_in, tokens_out, tokens_calls, latency_ms, "
-            "partial_flag, freshness_age_sec, uncounted, truncated, discarded_before, "
-            "rid"
-            ") VALUES (%s, current_database(), %s, %s, %s, %s, %s, %s, %s, %s::JSON, "
-            "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-            % (nid,
-               lit(channel or ""),
-               lit(user_hash),
-               lit(q_hash),
-               int(len(q)),
-               lit(intent),
-               lit(kind),
-               lit(str(fork_out or "")),
-               lit(atoms),
-               lit(_journal_fork_keys(out if isinstance(out, dict) else {})),
-               _journal_sql_bool(ticket_used),
-               lit(ticket_error),
-               lit(_journal_code_md5()),
-               lit(_journal_build_ts()),
-               lit(_journal_alias_ver()),
-               _journal_sql_int(tokens.get("in")),
-               _journal_sql_int(tokens.get("out")),
-               _journal_sql_int(tokens.get("calls")),
-               _journal_sql_int(latency),
-               _journal_sql_bool(partial),
-               _journal_sql_int(age),
-               _journal_sql_int(unc),
-               _journal_sql_int(trn),
-               _journal_sql_int(_JOURNAL_LOST),
-               lit(jr)))
-        if q and q in sql:
-            raise RuntimeError("ask_journal: текст вопроса попал в SQL")
-        try:
+
+        def _insert_row(nid):
+            sql = (
+                "INSERT INTO ask_journal ("
+                "id, db_name, channel, user_hash, q_hash, q_len, intent_json, outcome, "
+                "fork_outcome, atoms, fork_keys, ticket_used, ticket_error, code_md5, "
+                "build_ts, alias_ver, tokens_in, tokens_out, tokens_calls, latency_ms, "
+                "partial_flag, freshness_age_sec, uncounted, truncated, discarded_before, "
+                "rid, doubt, clarify_options, ticket_variant"
+                ") VALUES (%s, current_database(), %s, %s, %s, %s, %s, %s, %s, %s::JSON, "
+                "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                "%s, %s)"
+                % (nid,
+                   lit(channel or ""),
+                   lit(user_hash),
+                   lit(q_hash),
+                   int(len(q)),
+                   lit(intent),
+                   lit(kind),
+                   lit(str(fork_out or "")),
+                   lit(atoms),
+                   lit(_journal_fork_keys(out if isinstance(out, dict) else {})),
+                   _journal_sql_bool(ticket_used),
+                   lit(ticket_error),
+                   lit(_journal_code_md5()),
+                   lit(_journal_build_ts()),
+                   lit(_journal_alias_ver()),
+                   _journal_sql_int(tokens.get("in")),
+                   _journal_sql_int(tokens.get("out")),
+                   _journal_sql_int(tokens.get("calls")),
+                   _journal_sql_int(latency),
+                   _journal_sql_bool(partial),
+                   _journal_sql_int(age),
+                   _journal_sql_int(unc),
+                   _journal_sql_int(trn),
+                   _journal_sql_int(_JOURNAL_LOST),
+                   lit(jr),
+                   _journal_sql_bool(doubt) if doubt is not None else "NULL",
+                   ("%s::JSON" % lit(clarify_json)) if clarify_json is not None else "NULL",
+                   lit(ticket_var) if ticket_var is not None else "NULL"))
+            # Не `q in sql`: короткое «q» ложно совпадает с q_hash/q_len.
+            if q and (lit(q) in sql or lit(q[:8000]) in sql):
+                raise RuntimeError("ask_journal: текст вопроса попал в SQL")
             psql(sql)
+            # Текст — best-effort: сбой text не откатывает журнал и ротацию (шаг 5).
+            if q:
+                try:
+                    psql("INSERT INTO ask_journal_text (id, q_text) VALUES (%s, %s)"
+                         % (nid, lit(q[:8000])))
+                except RuntimeError as te:
+                    sys.stderr.write("ask_journal_text LOST: %s\n" % str(te)[:120])
+
+        try:
+            _insert_row(nid)
         except RuntimeError as e:
             if "Duplicate key" not in str(e):
                 raise
@@ -12514,17 +12626,18 @@ def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
             top = int((mx[0][0] if mx and mx[0] else 0) or 0)
             psql("SELECT setval('ask_journal_id_seq', %d)" % top)
             nid = int(psql("SELECT nextval('ask_journal_id_seq')")[0][0])
-            # пересобрать INSERT с новым id (первое число VALUES)
-            head, rest = sql.split("VALUES (", 1)
-            rest = rest.split(",", 1)[1]
-            sql = "%sVALUES (%s,%s" % (head, nid, rest)
-            psql(sql)
+            _insert_row(nid)
         keep = _journal_keep_n()
         if nid > keep:
             psql("DELETE FROM ask_journal WHERE id <= %d" % (nid - keep))
+            try:
+                psql("DELETE FROM ask_journal_text WHERE id <= %d" % (nid - keep))
+            except RuntimeError:
+                pass
     except Exception as e:                          # noqa: BLE001
         _JOURNAL_LOST += 1
         sys.stderr.write("ask journal LOST %d: %s\n" % (_JOURNAL_LOST, str(e)[:160]))
+
 
 
 def _answer_checked_core(question, focus=None, measure_pick=None, context="", prior=None,
@@ -12667,6 +12780,12 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
         out = _answer_checked_core(question, focus=focus, measure_pick=measure_pick,
                                    context=context, prior=prior, trusted=trusted,
                                    resolved=resolved)
+        if isinstance(out, dict) and isinstance(trusted, dict):
+            _tv = trusted.get("label") or trusted.get("src")
+            if _tv:
+                _d = dict(out.get("diag") or {})
+                _d.setdefault("ticket_variant", _tv)
+                out = dict(out, diag=_d)
         out, trusted = _try_memory_apply(
             question, out, user, focus, measure_pick, context, prior,
             trusted, mem_action)

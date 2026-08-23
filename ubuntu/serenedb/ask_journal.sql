@@ -65,5 +65,25 @@ GRANT SELECT (id) ON ask_journal TO serene_ro;
 -- (GRANT › Privileges by object type: SEQUENCE = USAGE, SELECT, UPDATE).
 GRANT USAGE, SELECT, UPDATE ON SEQUENCE ask_journal_id_seq TO serene_ro;
 
--- Обновление существующих баз (идempotent).
+-- Обновление существующих баз (idempotent).
 ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS rid VARCHAR;
+-- Шаг 1 плана A/B/C (расширение журнала clarify, 23.08):
+-- сомнение модели, варианты слоя 2, погашенный вариант билета.
+-- atoms уже был; ADD IF NOT EXISTS — для свежих баз без колонки.
+ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS doubt BOOLEAN;
+ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS clarify_options JSON;
+ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS atoms JSON;
+ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS ticket_variant VARCHAR;
+
+-- Текст вопроса — ОТДЕЛЬНАЯ таблица (приватность шага 5: в ask_journal текста нет).
+-- serene_ro пишет (INSERT) и ротирует (DELETE + SELECT id); SELECT q_text — нет.
+-- Чтение текста — только пишущей ролью (postgres), как разметка selftest.
+CREATE TABLE IF NOT EXISTS ask_journal_text (
+  id BIGINT PRIMARY KEY,
+  q_text VARCHAR
+);
+
+REVOKE ALL ON ask_journal_text FROM PUBLIC;
+REVOKE SELECT, UPDATE, TRUNCATE, REFERENCES, TRIGGER ON ask_journal_text FROM serene_ro;
+GRANT INSERT, DELETE ON ask_journal_text TO serene_ro;
+GRANT SELECT (id) ON ask_journal_text TO serene_ro;

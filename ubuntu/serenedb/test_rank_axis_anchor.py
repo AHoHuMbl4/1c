@@ -393,6 +393,27 @@ _form, _grain = "number", "group"
 _sm = A.answer_slot_mode(_int.get("want"), _plan.get("compute"), form=_form, grain=_grain)
 if A.rank_intent_from(_int, _plan, _q) and _sm == "sum":
     _sm = "rank"
+
+# --- 23.08 okna: rank axis auto (compute=max, multi kind_hits → ТМЦ, не clarify) ---
+_axes6 = [
+    {"col": "ВидДеятельности", "target_src": "catalog_видыдеятельности"},
+    {"col": "Договор", "target_src": "catalog_договоры"},
+    {"col": "Контрагент", "target_src": "catalog_контрагенты"},
+    {"col": "ТМЦ", "target_src": "catalog_номенклатура"},
+]
+_int_w = {"want": "sum", "kind": "продажи", "measure": "Количество"}
+_plan_max = {"compute": "max", "quantity": "Количество"}
+_pcol = A.rank_product_axis_col(
+    "accumulationregister_реализациятмц", _axes6, _int_w, _q_live, _plan_max)
+t("rank week: product axis col", _pcol == "ТМЦ", _pcol)
+import serene_axis as _ax
+_gd6 = _ax.decide_grain(_axes6, [_pcol], {}, "max", False, rank_intent=True)
+t("rank week: grain group on ТМЦ", _gd6.get("grain") == "group"
+  and _gd6.get("col") == "ТМЦ" and not _gd6.get("clarify"), _gd6)
+_gd_bad = _ax.decide_grain(_axes6, [a["col"] for a in _axes6], {}, "max",
+                            False, rank_intent=True)
+t("rank week: multi hits would clarify", _gd_bad.get("clarify") == "axis", _gd_bad)
+
 t("live rank: sum+group intent → slot_mode rank", _sm == "rank", _sm)
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))
 if FAIL:

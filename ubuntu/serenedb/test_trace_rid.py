@@ -87,9 +87,10 @@ try:
     A._rid_enter(RID_IN)
     A._ask_journal_write(SECRET, {"kind": "answer", "diag": {}},
                          A.time.monotonic(), rid=RID_IN)
-    ins = [s for s in captured if s.strip().upper().startswith("INSERT")][-1]
+    ins = [s for s in captured
+           if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")][-1]
     t("journal: rid в INSERT", ("'%s'" % RID_IN) in ins or ('"%s"' % RID_IN) in ins)
-    t("journal: текст вопроса не в SQL", SECRET not in ins)
+    t("journal: текст вопроса не в ask_journal", SECRET not in ins)
 finally:
     A.psql = old_psql
 

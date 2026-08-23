@@ -1,3 +1,20 @@
+## 23.08: rank «лучше всего на неделе» — авто-ось ТМЦ, не axis-clarify [код]+[замер]
+
+[замер] okna `:8091` после журнала (md5 f8d4aa16): AB_PROBE **7/8** — «что лучше
+всего продавалось на этой неделе?» стабильно **clarify** по 6 осям (journal id
+847–857, `compute=max`, `measure_by_plan=Количество`, `rank_product_axis_col` не
+вызывался до axis-clarify). Прямой `answer()` на коробке давал **answer** (grain=row,
+gate fail → rank_deterministic) — расхождение из-за раннего axis-clarify на HTTP-пути.
+SQL-лидер недели: **42084** / **42083** по **1668** шт (Количество, регистр
+реализациятмц).
+[код] Перед `decide_grain` и запасной разворот перед axis-clarify: при `rank_intent`
+→ `rank_product_axis_col` (ТМЦ) → `grain=group form=rank`, `diag.rank_axis_auto`.
+Замок `test_rank_axis_anchor.py` **66/66** (+3). md5 ask **863567dd**.
+[замер] Выкат okna `:8091` f8d4aa16→863567dd; AB_PROBE **8/8**, 0 сбоев; name-вопрос
+→ answer с **42083 Capac balama** (SQL-лидер недели).
+Числа: замки 66/66, 74/0, 27/0, AB_PROBE 8/8, md5 863567dd.
+Доки: sql/statements/alter_table (journal DDL); логика оси — PLAN_ANSWER_CONTRACT §6бис.
+
 ## 23.08: Ф6.1 разведка — гибридный RRF в SQL на 26.08.1 [замер]
 
 [замер] Боевая okna SereneDB **26.08.1**: штатный hybrid = SQL-паттерн RRF
@@ -12,6 +29,20 @@ py vs oneshot SQL **0.995/0.995** (min 0.9, qid17 9/10). Лексика пуст
 Доки: sql/indexes/inverted/hybrid-search#score-fusion;
 cookbook/search/reciprocal-rank-fusion; cookbook/search/hybrid-search;
 sql/indexes/inverted/ranking#combining-ranked-queries.
+
+## 23.08: расширение журнала clarify (doubt/options/atoms/ticket/text) [код]+[замер]
+
+[код] `ask_journal`: колонки `doubt`, `clarify_options`, `ticket_variant`; текст вопроса
+в `ask_journal_text` (не в ask_journal). `serene_ask._ask_journal_write` заполняет поля;
+`diag.doubt` после финального force; atoms из fork при clarify; ticket_variant из
+trusted. Ошибка text — best-effort. Замок `test_journal_fields.py` **20/20**;
+`test_ask_journal` **19/19**, `test_trace_rid` **10/10**.
+[замер] okna (`gpu-erw:2202`): DDL + выкат `serene_ask.py` md5 **d0945244→f8d4aa16**;
+пробы `:8091`: rid `jfclar23a1b2c3d4` clarify opts_n=9 + q_text; rid `jfansw23a1b2c3d4`
+answer 0.00 + atoms sum. Отклонение: на balance_bridge clarify `atoms=[]`, `doubt` NULL
+(путь до сигнала сомнения/fork).
+Числа: journal id 844/845; opts_n 9; answer exact_value 0.0; code_md5 f8d4aa16.
+Доки: не требовалось (DDL колонок, не запросы к данным).
 
 ## 23.08: TARGET_STATUS обновлён по замерам 22–23.08 [замер]
 
