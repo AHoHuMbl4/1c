@@ -1,3 +1,20 @@
+## 23.08: Ф5 — IVF-индексы на боевой okna 26.08.1 [замер]
+
+[замер] На боевой okna (SereneDB **26.08.1**, `:7890`, 125 ГБ RAM) собраны
+`resolver_ivf_idx` и `corpus_ivf_idx` (`metric='ip'`, без quant; текстовые индексы
+не трогали). Нормы emb ≈1 (resolver/corpus SAMPLE ~1000). Сборки: resolver
+**3,36 с** / ~312 МБ; corpus **28,4 с** / ~5,32 ГБ / peak used ≈**12,4 ГБ**.
+`search_tables` (254 emb) — IVF пропущен. recall@10 IVF vs exact = **1,0**
+(197q, nprobe=8); латентность медиана 50: exact **510 мс**, IVF 4/8/32 =
+**530/530/540 мс** (не быстрее exact). Доки обновлены: PLAN_VECTOR_CHECKS,
+VECTOR_DECISION §11, SERENEDB, activeContext. Граф: `okna_corpus_ivf_idx`,
+`okna_resolver_ivf_idx`.
+Числа: resolver 69621; corpus docs 1230156 / emb 1206662; index_size
+327432428 / 5716893109; recall 197/197; lat 510/530/530/540 мс.
+Доки: sql/indexes/inverted/vector-search#creating-a-vector-index;
+sql/functions/vector#norms; sql/statements/vacuum#refreshing--refresh_;
+sql/indexes/inverted/maintenance#session-settings.
+
 ## 23.08: Приёмка переезда okna + канон GPU на vSwitch [замер]
 
 [замер] Новая okna переведена на внутренние GPU-адреса vSwitch 4003 (`10.3.1.11` /

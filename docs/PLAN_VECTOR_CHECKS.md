@@ -297,6 +297,35 @@
 | EXPORT / IMPORT | export OK; IMPORT DATABASE fail | `results/export-import.tsv` |
 | solr_synonyms 260 строк | OK | `results/features.tsv` |
 
+## Ф5 — IVF на боевой okna 26.08.1 [23.08]
+
+**Статус:** **собрано на боевом контуре** `[замер 23.08]` (бот не пользовался; правило 16.08).
+Хост `gpu-erw.timpul.pro:7890`, SereneDB **26.08.1**, 125 ГБ RAM. Метрика **`ip`**
+(нормы ≈1 — см. ниже). Имена: `resolver_ivf_idx`, `corpus_ivf_idx` (текстовые
+`search_idx`/`alias_idx`/`entity_card_idx` не трогали).
+
+| Что | Итог |
+|---|---|
+| Норма resolver SAMPLE 1000 | min **0,9968** / avg **0,99995** / max **1,0032** / p50 **0,99993** |
+| Норма corpus SAMPLE ~981 | min **0,9969** / avg **0,99996** / max **1,0030** / p50 **0,99999** |
+| Выбранная метрика | **`ip`** (нормированные → ip ≡ cosine; quant доступен) |
+| `resolver_ivf_idx` | **69 621** строк; wall **3,36 с**; peak used ≈**9,6 ГБ**; `index_size` **327 432 428** (~312 МБ) |
+| `search_tables` IVF | **пропуск**: 254 emb — nlist≈32, ANN бессмысленен vs exact |
+| `corpus_ivf_idx` | **1 230 156** docs (emb NOT NULL **1 206 662**); wall **28,4 с**; peak used ≈**12,4 ГБ**; `index_size` **5 716 893 109** (~5,32 ГБ) |
+| `VACUUM (REFRESH_TABLE)` | после каждой сборки — штатно |
+| recall@10 nprobe=8 | **1,0** на **197** случайных query-векторах (vs exact на `f5_exact_ref` без IVF) |
+| recall@10 nprobe=4 / 32 | **1,0** на 50q каждый |
+| Латентность kNN медиана 50 прогонов | exact **510 мс**; IVF nprobe 4/8/32 = **530 / 530 / 540 мс** |
+| Вывод по скорости | IVF на okna-масштабе **не быстрее** exact (подтверждает Ф1 §6); запас RAM << 100 ГБ STOP |
+
+Доки: `sql/indexes/inverted/vector-search#creating-a-vector-index`,
+`sql/functions/vector#norms`, `sql/statements/vacuum#refreshing--refresh_`,
+`sql/indexes/inverted/maintenance#session-settings` (`sdb_nprobe`),
+`sdb_metrics.index_size`.
+
+**Отклонение от брифа:** живой `resolver_index` = **69 621**, не 128 674
+(число 128 674 из приёмки переезда/пересчёта 4B — сверить отдельно; IVF собран на факте).
+
 Проверки 2–4 идут по одной. Параллельно их ставить нельзя: они делят один сервер и одну
 память, и результат станет невоспроизводимым.
 
