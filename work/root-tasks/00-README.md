@@ -11,7 +11,7 @@
 
 | Область | Факт |
 |---|---|
-| `/etc/1c-embed.env` | права `640 root:1c-secrets`; модель **`Qwen3-Embedding-8B`** (канон — **4B**); хосты **`gpu-erw.timpul.pro`** (канон — vSwitch `10.3.1.11` / `10.3.1.12`); `EMBED_DIM=1024`; `EMBED_BATCH_CHARS=12000` (канон — **60000**) |
+| `/etc/1c-embed.env` | права `640 root:1c-secrets`; модель **`Qwen3-Embedding-8B`** (канон — **4B**); хосты **`gpu-erw.timpul.pro`** (канон для dev — внешние `178.63.211.188` / `49.13.97.101` (vSwitch с dev недоступен, владелец 23.08)); `EMBED_DIM=1024`; `EMBED_BATCH_CHARS=12000` (канон — **60000**) |
 | okna (ожидание) | по CHANGELOG/NETWORK 23.08 уже на 4B + vSwitch; сверка — команда ниже |
 | PostgreSQL dev | пакеты `postgresql-16`, `postgresql-16-pgvector`, `postgresql-client-16`; **`127.0.0.1:5432` слушает** (`postgresql@16-main` active); соединений к :5432 нет |
 | SereneDB | **`127.0.0.1:7890`**, юнит `serenedb.service`, бинарь `/usr/local/bin/serened` — **не** пакет postgres |
@@ -28,10 +28,10 @@ ssh -i ~/.ssh/id_ed25519_deploy -p 2202 root@gpu-erw.timpul.pro \
 
 - `EMBED_MODEL=Qwen3-Embedding-4B`
 - `EMBED_DIM=1024`
-- `EMBED_HOSTS` — оба: `http://10.3.1.11:8000|…`, `http://10.3.1.12:8002|…` (ключ тот же)
-- `EMBED_BASE_URL=http://10.3.1.11:8000`
-- `EMBED_HEALTH_URL=http://10.3.1.11:8001/health`
-- `RERANK_URL=http://10.3.1.11:8005/rerank`
+- `EMBED_HOSTS` — оба: `http://178.63.211.188:8000|…`, `http://49.13.97.101:8002|…` (ключ тот же)
+- `EMBED_BASE_URL=http://178.63.211.188:8000`
+- `EMBED_HEALTH_URL=http://178.63.211.188:8001/health`
+- `RERANK_URL=http://178.63.211.188:8005/rerank`
 - `EMBED_BATCH_CHARS=60000`
 
 ---
@@ -57,7 +57,7 @@ chmod +x 01-embed-env.sh 02-purge-pg.sh
 
 ```bash
 grep -v -iE 'key|token|pass|secret' /etc/1c-embed.env | grep -E '^(EMBED_|BUILD_|RERANK_)'
-# EMBED_MODEL=Qwen3-Embedding-4B, EMBED_DIM=1024, vSwitch-хосты, BATCH_CHARS=60000
+# EMBED_MODEL=Qwen3-Embedding-4B, EMBED_DIM=1024, внешние хосты GPU, BATCH_CHARS=60000
 
 # Живость эндпоинтов (ключ из env, не печатать):
 set -a; source /etc/1c-embed.env; set +a

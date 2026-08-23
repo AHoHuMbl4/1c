@@ -1,5 +1,5 @@
 #!/bin/bash
-# Ф4: перевести /etc/1c-embed.env dev на канон 4B + vSwitch (23.08).
+# Ф4: перевести /etc/1c-embed.env dev на канон 4B (23.08). Хосты — ВНЕШНИЕ IP (dev не видит vSwitch 10.3.1.x — владелец, 23.08).
 # Root-only. Секреты (KEY/TOKEN/PASS) не меняет. Юниты НЕ перезапускает.
 set -euo pipefail
 
@@ -7,8 +7,10 @@ ENV_FILE=/etc/1c-embed.env
 TS=$(date +%Y%m%d-%H%M%S)
 BAK="${ENV_FILE}.bak-${TS}"
 
-H11=10.3.1.11
-H12=10.3.1.12
+# dev до GPU ходит только по ВНЕШНИМ адресам (vSwitch 10.3.1.x с dev недоступен — владелец, 23.08).
+# Порты те же, что в каноне: embed 8000/8002, health 8001, rerank 8005.
+H11=178.63.211.188
+H12=49.13.97.101
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
