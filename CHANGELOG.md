@@ -1,3 +1,22 @@
+## 23.08: klient-1 — хвосты контура + старт пересчёта 4B (15,1M) [замер]
+
+[замер] Контейнер klient1 (:2201): **гранты** `serene_ro` — `GRANT SELECT ON ALL
+TABLES IN SCHEMA public` + default privileges (как `setup.sh` на okna); health после:
+`permission denied` на `accumulationregister_прочаявыручка` **ушёл**, status
+**degraded** только по `coverage_gap` (277 сущностей, 119 621 строк). **Код ask**
+выкат HEAD: md5 **d0945244 → 863567dd** (бэкап `.bak-d0945244`). **DDL журнала**
+`ask_journal.sql` применён: колонки `doubt`, `clarify_options`, `ticket_variant`,
+`rid`, `atoms`; таблица `ask_journal_text`. Проба «сколько наторговали в прошедшее
+воскресенье?» → **answer 0.00** (rid `k1sun24a1b2c3d4`, journal `outcome=answer`,
+`code_md5=863567dd…`, `ask_journal_text` row=1). **Пересчёт 4B:** `EMBED_RESET=1`,
+`EMBED_TARGETS=labels resolver corpus` (`search_entity_card` нет — `card` снят),
+`EMBED_BATCH_CHARS` **12000→60000**; эндпоинты `10.3.1.11:8000` и `10.3.1.12:8002`
+HTTP **200**; pid **12576**, старт **2026-08-23T08:16:15Z**; через 5 мин процесс
+жив, labels **428/428**, resolver в работе, ошибок в логе нет (первые две строки —
+холостой старт без `load_env`).
+Числа: corpus 15148327; md5 863567dd; grant has_select=t; probe rid k1sun24a1b2c3d4;
+embed pid 12576; labels 428/428; targets labels+resolver+corpus; batch 60000.
+
 ## 23.08: пакетный гейт okna — HAProxy → 10.3.1.11:6090; backend DOWN (firewall) [замер]
 
 [замер] pro-router: backup haproxy.cfg.bak-20260823; backend `packet_unit_okna_1`
