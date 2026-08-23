@@ -1,3 +1,13 @@
+## 23.08: TARGET_STATUS обновлён по замерам 22–23.08 [замер]
+
+[замер] `docs/TARGET_STATUS.md`: шапка → 23.08; обоснования пп. 2/3/5/6/10/12/13/16/21
+по свежим числам (стадии **не** сдвигались). Числа: scorer старая=новая **8/25**;
+4B корпус **1 206 662** / резолвер **128 674** / карточки **254**; IVF recall@10
+**0,9995**/200q, lat exact **510** / IVF ~**530** мс (не быстрее); переезд **418**
+таблиц 1-в-1; ask LLM **Qwen3.8-27B** локально (`DEEPSEEK_BASE`→`10.3.1.12`),
+DeepSeek облако — веб-фронт. Источники: CHANGELOG 22–23.08, NETWORK §2.1,
+PLAN_ANSWER_CONTRACT, PLAN_UPGRADE_NATIVE, work/clarify-journal-okna.md (339 clarify).
+
 ## 23.08: Ф5 IVF okna — перепроверка recall/latency [замер]
 
 [замер] Вторая сессия: индексы `resolver_ivf_idx`/`corpus_ivf_idx` уже на бою
