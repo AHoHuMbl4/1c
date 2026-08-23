@@ -1,3 +1,18 @@
+## 23.08: Ф6.1 разведка — гибридный RRF в SQL на 26.08.1 [замер]
+
+[замер] Боевая okna SereneDB **26.08.1**: штатный hybrid = SQL-паттерн RRF
+(доки Hybrid Search / Cookbook RRF), отдельного оператора нет. BM25(`search_idx`)
++ IVF(`corpus_ivf_idx`, `<#>`/`ip`) + `SUM(1.0/(60+rank))` — работает; smoke
+~**1673** мс. Эквивалентность формуле `serene_ask` (`RRF_K=60`, `RANK`): на 20
+вопросах gold okna top-10 py vs docs-`ROW_NUMBER` на тех же ветках **1.0/1.0**;
+py vs oneshot SQL **0.995/0.995** (min 0.9, qid17 9/10). Лексика пуста 16/20
+(`продали`…). `@@` на базовой `search_corpus` — ошибка дословно про inverted.
+Фактура: `docs/F6_HYBRID_FACTS.md`. Код ask не трогали.
+Числа: set/ord 1.0 и 0.995; empty_lex 16/20; oneshot ~1.7–2.4 с (окно 50).
+Доки: sql/indexes/inverted/hybrid-search#score-fusion;
+cookbook/search/reciprocal-rank-fusion; cookbook/search/hybrid-search;
+sql/indexes/inverted/ranking#combining-ranked-queries.
+
 ## 23.08: TARGET_STATUS обновлён по замерам 22–23.08 [замер]
 
 [замер] `docs/TARGET_STATUS.md`: шапка → 23.08; обоснования пп. 2/3/5/6/10/12/13/16/21
