@@ -93,16 +93,24 @@
 Разработка в work/hooks/, установка владельцем: bash work/hooks/install-gates.sh.
 Приёмка оркестратором — только пробоями + test-hooks.sh зелёный.
 
-## Трек 4bis. klient-1 NEW (LXD :2201) — IMPORT 26.08.1 БАЗА ГОТОВА [23.08]
+## Трек 4bis. klient-1 NEW (LXD :2201) — ask/mcp подняты, пробы [23.08]
 
 - [замер] Контейнер klient1: SereneDB **26.08.1** `:7890`, IMPORT экспорта старой
   (parquet+zstd). Сверка count: `search_corpus` **15 148 327**, `resolver_index`
   **1 631 933**, `search_tables` **1 457** (=эталон); `search_idx` после REFRESH =
   corpus; `entity_card` нет на источнике; роли+словари из `corpus_init.sql`.
+- [замер] Контур ответов: env GPU vSwitch (4B embed hosts, rerank, deepseek base);
+  `1c-serene-ask@postgres` + `1c-mcp-ask@postgres` **active** (`:8091`/`:6016`);
+  venv mcp OK. Пробы: воскресенье **0.00**; неделя — answer без имени ТМЦ (emb
+  mismatch ожидаем); петли **no_data**; склад **clarify**. `ask_journal` нет;
+  scorer gold klient-1 нет. packet/pipeline/bot/gateway **не** стартовали.
 - Отклонения: пакетный `IMPORT DATABASE`/load → SEGV/OOM; рабочий путь —
   schema+load + resume COPY; выкинут битый `search_corpus_todo`; public_tables
-  1519≠1518; SSH >6 из‑за стен. **Не делали:** embed-пересчёт, ask/mcp/packet/gateway.
-- Дальше оркестратор: выкат контура сервисов, 4B embed, приёмка.
+  1519≠1518; SSH >6 из‑за стен; health degraded (RO на прочаявыручка); rank-неделя
+  ушёл в Закупки без emb. **Не делали:** embed-пересчёт 4B, packet/gateway,
+  переключение с старой коробки.
+- Дальше оркестратор: embed 4B пересчёт, ask_journal DDL, gold klient-1,
+  переключение трафика (решение владельца).
 
 ## Трек 4. klient-1 — клин вылечен (окно владельца), init применён; ЖДЁМ такт
 

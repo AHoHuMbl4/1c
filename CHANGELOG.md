@@ -1,3 +1,22 @@
+## 23.08: контур ask/mcp klient-1 на новой коробке (:2201) [замер]
+
+[замер] Контейнер klient1: env под vSwitch GPU (`EMBED_HOSTS` → `10.3.1.11:8000` +
+`10.3.1.12:8002`, `EMBED_MODEL=Qwen3-Embedding-4B`, `RERANK_URL` → `10.3.1.11:8005`,
+`DEEPSEEK_BASE` → `10.3.1.12:8000`; ключи из старого файла). venv `/opt/openclaw-mcp`
+OK (Python 3.14.4, `mcp_ask` импорт). Старт **только**
+`1c-serene-ask@postgres` + `1c-mcp-ask@postgres` — оба **active**; `:8091`/`:6016`
+listen; packet/pipeline/bot/openclaw **не** тронуты (inactive). Пробы `:8091`
+(md5 serene_ask **d0945244**): воскресенье → **answer 0.00** (rid `k1sun23a1b2c3d4`);
+«лучше на неделе» → **answer «883»** по регистру **Закупки**, не имя ТМЦ (ожидаемо:
+вектора старой 8B-модели, `emb_ready` выключит смысл до Ф4); петли → **no_data**
+(не unavailable); «сколько товара» → **clarify** (3 opts, fork C). Таблица
+`ask_journal` **отсутствует** на импортированной базе — журнал по rid не читается;
+`ask_journal_apply` на `/opt` нет. Scorer: **gold klient-1 отсутствует**
+(`ab-gold-klient*.tsv` нет) — пропуск. health **degraded**: `permission denied`
+`accumulationregister_прочаявыручка` у health-check.
+Числа: corpus 15148327; units 2/2 active; probes 4/4 HTTP200; scorer skip;
+md5 d0945244; ports 8091+6016.
+
 ## 23.08: IMPORT klient-1 → SereneDB 26.08.1 (контейнер :2201) [замер]
 
 [замер] Новая коробка klient1 (`gpu-erw:2201`, 125 ГБ RAM): экспорт 26.07.3
