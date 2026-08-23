@@ -1,3 +1,18 @@
+## 23.08: Ф6.1 SQL-RRF за ASK_SQL_RRF — corpus_ivf в слиянии кандидатов [код][замер]
+
+[код] `serene_ask.py`: флаг `ASK_SQL_RRF=1` добавляет пятую ветвь RRF — ANN по
+`corpus_ivf_idx` (`emb <#>`, без `WHERE emb IS NOT NULL`), oneshot
+`SUM(1.0/(60+rank))`; выключен — прежние четыре ветви. Ошибка SQL-RRF →
+python-RRF fallback + `diag.sql_rrf_fallback`. Замок `test_sql_rrf.py` **7/7**.
+
+[замер] okna `:8091` (flag=0) vs `:8092` (flag=1), ab-gold-okna **24/25**
+(«топ-3 за вчера» — blind этalon): **12/12** совпадение вердиктов, латентность
+**48.35** с vs **49.17** с средняя. `:8091` flag не включён; `:8092`
+`ASK_SQL_RRF=1` + `/tmp/serene_ask_f61_8092.env`. deploy md5 **05706a6a**,
+бэкап `.bak-863567dd…`.
+Числа: scorer 12/24=12/24; latency 48.35s/49.17s.
+Доки: Hybrid Search › Score fusion; Cookbook › Reciprocal Rank Fusion.
+
 ## 23.08: старый сервер okna удалён владельцем; чистка новой okna [замер]
 
 [замер] Владелец удалил старую okna (167.233.249.110) — переезд закрыт окончательно.

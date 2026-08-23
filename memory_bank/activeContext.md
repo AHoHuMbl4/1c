@@ -17,7 +17,11 @@ resolver **1631933** / search_tables **1457**; search_idx=corpus; entity_card н
 6 осей → `rank_axis_auto` (ТМЦ); md5 **863567dd** на `:8091`; AB_PROBE **8/8**,
 лидер **42083 Capac balama**. Коммит+push — этот заход.
 
-🔴 **Ф6.1 hybrid RRF — фактура готова `[23.08]`**: `docs/F6_HYBRID_FACTS.md`.
+🔴 **Ф6.1 SQL-RRF код+okna :8092 `[23.08]`**: `ASK_SQL_RRF=1`, corpus_ivf
+ветвь; md5 **05706a6a** на okna `/opt`; scorer 24q **12/12** вердиктов;
+`:8091` без флага. Замок **7/7**. Дальше — бой :8091 решение владельца.
+
+🔴 **Ф6.1 hybrid RRF — фактура `[23.08]`**: `docs/F6_HYBRID_FACTS.md`.
 На 26.08.1 SQL-RRF (BM25+IVF, k=60) работает; ≡ python-RRF top-10 **0.995**
 (set/ord). Синтаксис не блокер; дальше Ф6.1 код (ANN корпуса в кандидаты) —
 оркестратор.

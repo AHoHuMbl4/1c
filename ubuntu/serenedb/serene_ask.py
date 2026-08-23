@@ -1777,7 +1777,7 @@ def question_exprs(exprs, kind_text):
     return list(exprs) + [e for e in exprs_kind if e not in exprs]
 
 
-def meaning_candidates(exprs, kind_text, question, limit, exclude=()):
+def meaning_candidates(exprs, kind_text, question, limit, exclude=(), diag=None):
     """ШАГ 3 ЦЕЛИКОМ: кандидаты, добытые не буквальным совпадением слов записи.
 
     Собран в одном месте по двум причинам. Первая: у шага появился свой прибор
@@ -1805,7 +1805,7 @@ def meaning_candidates(exprs, kind_text, question, limit, exclude=()):
     изменились бы выражения буквального отбора, то есть тихо поменялся бы шаг 2.
     """
     exprs_all = question_exprs(exprs, kind_text)
-    out = _fused_candidates(exprs_all, kind_text, question, limit)
+    out = _fused_candidates(exprs_all, kind_text, question, limit, diag=diag)
     if out is None:
         # Слияние не собралось (нет карточки, лёг эмбеддер, старая база) — прежний путь:
         # те же поверхности по отдельности, порядок «одна за другой».
@@ -1820,7 +1820,95 @@ def meaning_candidates(exprs, kind_text, question, limit, exclude=()):
     return [t for t in out if t not in exclude]
 
 
-def _fused_candidates(exprs, kind_text, question, limit):
+def _corpus_ivf_ready():
+    """Есть ли IVF по корпусу и векторы той же модели — для ветви Ф6.1."""
+    hit = _CORPUS_IVF_CACHE.get("ok")
+    if hit is not None and time.time() - hit[1] < 60:
+        return hit[0]
+    ok = False
+    if emb_ready(CORPUS):
+        try:
+            ok = bool(psql(
+                "SELECT 1 FROM duckdb_indexes() WHERE index_name = %s LIMIT 1"
+                % lit(CORPUS_IVF_IDX)))
+        except RuntimeError:
+            ok = False
+    _CORPUS_IVF_CACHE["ok"] = (ok, time.time())
+    return ok
+
+
+def _rrf_entity_branches(exprs, kind_text, question, limit):
+    """Четыре ветви сущностей для RRF — alias, card, near(question), near(kind)."""
+    expr = None
+    if exprs:
+        expr = exprs[0] if len(exprs) == 1 else             "ts_compound(NULL, NULL, [%s], 1)" % ", ".join(exprs)
+    branches = []
+    if expr:
+        branches.append(
+            "SELECT src_table, RANK() OVER (ORDER BY s DESC, src_table) AS rank FROM ("
+            "SELECT src_table, %s AS s FROM %s WHERE aliases @@ %s "
+            "ORDER BY s DESC, src_table LIMIT %d) t"
+            % (SCORERS.get(SCORER, SCORERS["bm25"]) % ALIAS_INDEX, ALIAS_INDEX, expr, limit))
+        branches.append(
+            "SELECT src_table, RANK() OVER (ORDER BY s DESC, src_table) AS rank FROM ("
+            "SELECT src_table, %s AS s FROM %s WHERE %s "
+            "ORDER BY s DESC, src_table LIMIT %d) t"
+            % (SCORERS.get(SCORER, SCORERS["bm25"]) % CARD_INDEX, CARD_INDEX,
+               " OR ".join("%s @@ %s" % (f, expr) for f in CARD_FIELDS), limit))
+    src = CARD if emb_ready(CARD) else (TABLES if emb_ready(TABLES) else "")
+    if src:
+        for text in (question, kind_text):
+            if not text:
+                continue
+            try:
+                vec = _vec(text)
+            except RuntimeError:
+                continue
+            branches.append(
+                "SELECT src_table, RANK() OVER (ORDER BY d, src_table) AS rank FROM ("
+                "SELECT src_table, emb <=> %s AS d FROM %s WHERE emb IS NOT NULL "
+                "ORDER BY d, src_table LIMIT %d) t" % (vec, src, limit))
+    return branches
+
+
+def _rrf_corpus_branch(vec, limit):
+    """Пятая ветвь: kNN по corpus_ivf_idx, агрегат по src_table (без WHERE emb)."""
+    return (
+        "SELECT src_table, RANK() OVER (ORDER BY cnt DESC, src_table) AS rank FROM ("
+        "SELECT src_table, count(*) AS cnt FROM ("
+        "SELECT src_table FROM %s ORDER BY emb <#> %s, src_table, row_key LIMIT %d"
+        ") t GROUP BY src_table ORDER BY cnt DESC, src_table LIMIT %d) t2"
+        % (CORPUS_IVF_IDX, vec, TOPK, limit))
+
+
+def _fused_sql_rrf(branches, limit):
+    """Oneshot SQL-RRF по шаблону доков (Hybrid Search › Score fusion)."""
+    sql = ("WITH fused AS (%s) SELECT src_table, SUM(1.0/(%d + rank)) AS rrf "
+           "FROM fused GROUP BY src_table ORDER BY rrf DESC, src_table LIMIT %d"
+           % (" UNION ALL ".join(branches), RRF_K, limit * len(branches)))
+    return [r[0] for r in psql(sql) if r and r[0]]
+
+
+def _fused_python_rrf(branches, limit):
+    """Python-RRF: каждая ветвь отдельно, слияние SUM(1/(k+rank)) — этalon/fallback."""
+    scores = {}
+    for branch in branches:
+        try:
+            rows = psql(
+                "SELECT src_table FROM (%s) b ORDER BY rank, src_table" % branch)
+        except RuntimeError:
+            continue
+        for rank, row in enumerate(rows or [], start=1):
+            if row and row[0]:
+                src = row[0]
+                scores[src] = scores.get(src, 0) + 1.0 / (RRF_K + rank)
+    if not scores:
+        return None
+    cap = limit * len(branches)
+    return sorted(scores, key=lambda t: (-scores[t], t))[:cap]
+
+
+def _fused_candidates(exprs, kind_text, question, limit, diag=None):
     """Те же четыре поверхности, но СЛИТЫЕ ПО МЕСТАМ и ОДНИМ ЗАПРОСОМ внутри движка.
 
     🔴 Зачем слияние. Порядок, в котором кандидаты уходят дальше, решает, что вообще
@@ -1845,45 +1933,33 @@ def _fused_candidates(exprs, kind_text, question, limit):
     Возвращает `None`, если ни одна ветвь не собралась: тогда зовущий откатывается на
     прежний путь, а не остаётся без кандидатов.
     """
-    expr = None
-    if exprs:
-        expr = exprs[0] if len(exprs) == 1 else \
-            "ts_compound(NULL, NULL, [%s], 1)" % ", ".join(exprs)
-    branches = []
-    if expr:
-        branches.append(
-            "SELECT src_table, RANK() OVER (ORDER BY s DESC, src_table) AS rank FROM ("
-            "SELECT src_table, %s AS s FROM %s WHERE aliases @@ %s "
-            "ORDER BY s DESC, src_table LIMIT %d) t"
-            % (SCORERS.get(SCORER, SCORERS["bm25"]) % ALIAS_INDEX, ALIAS_INDEX, expr, limit))
-        branches.append(
-            "SELECT src_table, RANK() OVER (ORDER BY s DESC, src_table) AS rank FROM ("
-            "SELECT src_table, %s AS s FROM %s WHERE %s "
-            "ORDER BY s DESC, src_table LIMIT %d) t"
-            % (SCORERS.get(SCORER, SCORERS["bm25"]) % CARD_INDEX, CARD_INDEX,
-               " OR ".join("%s @@ %s" % (f, expr) for f in CARD_FIELDS), limit))
-    src = CARD if emb_ready(CARD) else (TABLES if emb_ready(TABLES) else "")
-    if src:
-        for text in (question, kind_text):
-            if not text:
-                continue
-            try:
-                vec = _vec(text)            # кэшируется на текст: см. `embed_one`
-            except RuntimeError:
-                continue                    # эмбеддер лёг — остаются лексические ветви
-            branches.append(
-                "SELECT src_table, RANK() OVER (ORDER BY d, src_table) AS rank FROM ("
-                "SELECT src_table, emb <=> %s AS d FROM %s WHERE emb IS NOT NULL "
-                "ORDER BY d, src_table LIMIT %d) t" % (vec, src, limit))
+    branches = _rrf_entity_branches(exprs, kind_text, question, limit)
     if not branches:
         return None
-    sql = ("WITH fused AS (%s) SELECT src_table, SUM(1.0/(%d + rank)) AS rrf "
-           "FROM fused GROUP BY src_table ORDER BY rrf DESC, src_table LIMIT %d"
-           % (" UNION ALL ".join(branches), RRF_K, limit * len(branches)))
+    if ASK_SQL_RRF and _corpus_ivf_ready():
+        try:
+            qvec = _vec(question)
+        except RuntimeError:
+            qvec = None
+        if qvec:
+            branches = list(branches) + [_rrf_corpus_branch(qvec, limit)]
+            try:
+                out = _fused_sql_rrf(branches, limit)
+                if diag is not None:
+                    diag["sql_rrf"] = True
+                return out
+            except RuntimeError:
+                if diag is not None:
+                    diag["sql_rrf_fallback"] = True
+                branches = _rrf_entity_branches(exprs, kind_text, question, limit)
+                try:
+                    return _fused_python_rrf(branches, limit)
+                except RuntimeError:
+                    return None
     try:
-        return [r[0] for r in psql(sql) if r and r[0]]
+        return _fused_sql_rrf(branches, limit)
     except RuntimeError:
-        return None                         # слияние не прошло — зовущий откатится
+        return None
 
 
 def near_tables(text, limit):
@@ -2337,6 +2413,11 @@ CARD_FIELDS = ("label", "aliases", "about", "quantities", "attrs")
 # 60 — умолчание исходной статьи и Elasticsearch, названное в доках SereneDB
 # («Cookbook → Search → Reciprocal Rank Fusion», раздел «k — top-rank weight»).
 RRF_K = int(os.environ.get('ASK_RRF_K', '60'))
+# Ф6.1: гибридная поверхность — ANN по корпусу (corpus_ivf_idx) в слиянии RRF.
+# Выключен — прежние четыре ветви без корпуса; включён — пятая ветвь + oneshot SQL.
+ASK_SQL_RRF = os.environ.get('ASK_SQL_RRF', '0') == '1'
+CORPUS_IVF_IDX = os.environ.get('ASK_CORPUS_IVF_IDX', 'corpus_ivf_idx')
+_CORPUS_IVF_CACHE = {}
 # Жёсткая проверка выбора сущности по подсказке базы: подтверждает ЛИДЕР ранжирования
 # синонимов, а не всякое общее слово.
 # 🔴 ВКЛЮЧЕНА 04.08 — и это смена МЕРИЛА, а не пересмотр прежнего замера.
@@ -9571,7 +9652,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # ниже он служит головой итогового порядка, а буквальный отбор при пустых понятиях
     # отдаёт ВСЕ сущности, и вычитание оставило бы голову пустой (`[замер 04.08]` живой
     # ответ: «шаг 3 добавил 0» при 1 502 буквальных кандидатах).
-    found_by_meaning = meaning_candidates(exprs, kind_text, question, MEANING_TOP)
+    found_by_meaning = meaning_candidates(exprs, kind_text, question, MEANING_TOP, diag=diag)
     if not match:
         by, _inc = date_only_kind_filter(by, match, found_by_meaning)
         if _inc:
