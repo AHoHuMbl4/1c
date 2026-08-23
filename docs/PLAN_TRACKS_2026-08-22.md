@@ -93,6 +93,17 @@
 Разработка в work/hooks/, установка владельцем: bash work/hooks/install-gates.sh.
 Приёмка оркестратором — только пробоями + test-hooks.sh зелёный.
 
+## Трек 4bis. klient-1 NEW (LXD :2201) — IMPORT 26.08.1 БАЗА ГОТОВА [23.08]
+
+- [замер] Контейнер klient1: SereneDB **26.08.1** `:7890`, IMPORT экспорта старой
+  (parquet+zstd). Сверка count: `search_corpus` **15 148 327**, `resolver_index`
+  **1 631 933**, `search_tables` **1 457** (=эталон); `search_idx` после REFRESH =
+  corpus; `entity_card` нет на источнике; роли+словари из `corpus_init.sql`.
+- Отклонения: пакетный `IMPORT DATABASE`/load → SEGV/OOM; рабочий путь —
+  schema+load + resume COPY; выкинут битый `search_corpus_todo`; public_tables
+  1519≠1518; SSH >6 из‑за стен. **Не делали:** embed-пересчёт, ask/mcp/packet/gateway.
+- Дальше оркестратор: выкат контура сервисов, 4B embed, приёмка.
+
 ## Трек 4. klient-1 — клин вылечен (окно владельца), init применён; ЖДЁМ такт
 
 - Окно владельца нашло корень клина: memory_limit движка 12,4 ГиБ (80 %) → 8,0 ГиБ по

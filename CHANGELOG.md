@@ -1,3 +1,26 @@
+## 23.08: IMPORT klient-1 → SereneDB 26.08.1 (контейнер :2201) [замер]
+
+[замер] Новая коробка klient1 (`gpu-erw:2201`, 125 ГБ RAM): экспорт 26.07.3
+(`/root/stage/klient1-export`, ~15,2 ГБ, 1522 файла) → движок **26.08.1** `:7890`.
+Канон §3.4 RUNBOOK_MIGRATE_OKNA: из `schema.sql` сняты строки
+`CREATE INDEX … USING inverted ()` — **2** (не 3 как на okna); оригинал
+`schema.sql.orig`. `IMPORT DATABASE` как единый шаг на этой базе **не прошёл**:
+ProtectHome закрыл `/root` → hardlink в `/var/lib/serenedb/klient1-export`;
+битый UTF-8 в `emb_postgres_search_corpus_todo.parquet` (таблица выкинута из
+schema/load); без `WorkingDirectory=/var/lib/serenedb` — `.tmp` RO; при
+`memory_limit` 40/100 ГБ — OOM/SEGV на пакетном COPY. Рабочий путь: wipe store →
+`psql -f schema.sql` (**17 с**) → `load.sql` до SEGV на стр. 670 → догрузка
+оставшихся **850** COPY по одному (**552 с**, 0 fail). Роли `serene_ro` /
+`serene_resolver` из `PGPASSWORD`/`RESOLVER_PW` в `/etc/1c-mcp-reports.env`;
+`corpus_init.sql` `-v dict_locale=ru_RU.utf8`; `entity_card` — **нет на источнике**.
+Сверка: corpus/resolver/search_tables = эталон; `search_idx` = corpus;
+`alias_idx` = 0 (пустой `search_entity_alias`); public_tables **1519** vs эталон
+**1518** (+1 после init / без todo). Ask/mcp/packet/embed **не** запускались.
+Числа: corpus 15148327; resolver 1631933; search_tables 1457; search_idx 15148327;
+alias_idx 0; tables 1519; inverted_stripped 2; schema 17 с; resume 552 с.
+Доки: sql/statements/export_and_import_database; configuration/pragmas#memory-limit
+(SET, не flagfile).
+
 ## 23.08: rank «лучше всего на неделе» — авто-ось ТМЦ, не axis-clarify [код]+[замер]
 
 [замер] okna `:8091` после журнала (md5 f8d4aa16): AB_PROBE **7/8** — «что лучше

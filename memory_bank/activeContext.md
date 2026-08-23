@@ -8,6 +8,11 @@ _Обновлено: **2026-08-23.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **IMPORT klient-1 26.08.1 — база готова `[23.08]`**: corpus **15148327** /
+resolver **1631933** / search_tables **1457**; search_idx=corpus; entity_card нет;
+роли+corpus_init. Дальше: ask/mcp/packet + embed 4B — оркестратор.
+
+
 🔴 **rank okna «лучше всего на неделе» — выкат+AB 8/8 `[23.08]`**: axis-clarify
 6 осей → `rank_axis_auto` (ТМЦ); md5 **863567dd** на `:8091`; AB_PROBE **8/8**,
 лидер **42083 Capac balama**. Коммит+push — этот заход.
