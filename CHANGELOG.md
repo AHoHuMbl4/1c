@@ -1,3 +1,13 @@
+## 23.08: пакетный гейт okna — HAProxy → 10.3.1.11:6090; backend DOWN (firewall) [замер]
+
+[замер] pro-router: backup haproxy.cfg.bak-20260823; backend `packet_unit_okna_1`
+`10.3.0.4:6090` → `10.3.1.11:6090`; haproxy -c exit 0; reload OK. gpu-1c: LXD
+`proxy6090` (listen 10.3.1.11:6090 → connect 10.10.10.12:6090); health local 200.
+okna: 1c-packet-server active, 0.0.0.0:6090. pro-router→gpu-1c: ping 2/2; TCP 8000
+open, 6090+18090 timeout; tcpdump 0 SYN; HAProxy backend DOWN (L4TOUT). Reverse SSH
+не найден. `docs/NETWORK.md` §5.
+Числа: backend 10.3.1.11:6090; ping 2/2; 8000 open/6090 timeout; backend DOWN.
+
 ## 23.08: контур ask/mcp klient-1 на новой коробке (:2201) [замер]
 
 [замер] Контейнер klient1: env под vSwitch GPU (`EMBED_HOSTS` → `10.3.1.11:8000` +

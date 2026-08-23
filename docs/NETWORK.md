@@ -60,7 +60,7 @@ RU (клиент)                         EU (Hetzner)
 |---|---|---|---|---|
 | **gpu-erw.timpul.pro** / **gpu-1c** | 178.63.211.188 | 10.3.1.11/24 (`eno1.4003`), 10.10.10.1 (`lxdbr0`) | GPU-хост + LXD-гипервизор (FSN1-DC20, RTX 6000 Ada) | SSH 22, форварды 2201→klient1, 2202→okna; embed :8000, rerank :8005, whisper :8006 |
 | **LXC klient1** | — (NAT хоста) | 10.10.10.11/24 | Контур klient-1 (125 ГБ RAM / 40 vCPU / 400 ГБ, Ubuntu 26.04) | SSH 22 внутри LXD; доступ извне — только через 178.63.211.188:2201 |
-| **LXC okna** | — (NAT хоста) | 10.10.10.12/24 | Новый контур okna (125 ГБ RAM / 40 vCPU / 400 ГБ, Ubuntu 26.04) | SSH 22 внутри LXD; доступ извне — только через 178.63.211.188:2202 |
+| **LXC okna** | — (NAT хоста) | 10.10.10.12/24 | Новый контур okna (125 ГБ RAM / 40 vCPU / 400 ГБ, Ubuntu 26.04) | SSH 22 внутри LXD; доступ извне — только через 178.63.211.188:2202; **пакетный приёмник** `:6090` (`1c-packet-server`) — с EU cloud network через LXD `proxy6090` на `10.3.1.11:6090` хоста |
 | **gpu-qwen27b** | 49.13.97.101 | 10.3.1.12/24 (`eno1.4003`) | Второй GPU-хост (NBG1-DC6, RTX 6000 Ada) | SSH 22 (файрвол для 201.34.142.160); LLM :8000, diarize :8001, embed :8002 |
 | **okna (старая)** | 167.233.249.110 | 10.3.0.4/24 (cloud network) | Старый контур okna | Бой и откат до конца приёмки переезда |
 | **pro-router** | 2.28.54.129 | 10.3.0.3/24 | EU-конец RU↔EU туннеля | WireGuard UDP 51820; HAProxy 80/443 (mTLS-релей пакетов) |
@@ -163,7 +163,7 @@ Windows 1С (klient-1) → ru-router 89.23.101.22 → WG → pro-router 2.28.54.
 | Поток | Путь | Примечание |
 |---|---|---|
 | **Telegram-бот (ask)** | `openclaw-gateway` (undebot, 127.0.0.1:18800; веб 0.0.0.0:18801) → MCP `serene-ask` 127.0.0.1:6016 (`1c-mcp-ask@postgres`, `MCP_PORT=6016` в `/etc/1c-mcp-ask-postgres.env`) → `ask` 127.0.0.1:8091 (`1c-serene-ask@postgres`) → SereneDB 127.0.0.1:7890 | Polling, egress-only; inbound не нужен. [замер 22.08] живой конфиг undebot: единственный MCP-сервер — `serene-ask` на 6016; 6014/6015 встречаются только в старых сессиях/бэкапах, не в `mcp.servers` |
-| **Канал данных 1С (пакетный)** | Windows-клиент → mTLS `1c-gate*.timpul.ru` → reverse SSH → 127.0.0.1:6090 (`1c-packet-server`) | :6090 — приёмник пакетов, НЕ OData-шлюз. При переключении reverse-туннель перенацеливается на новую коробку |
+| **Канал данных 1С (пакетный)** | Windows-клиент → mTLS `1c-gate*.timpul.pro` / `1c-gate.timpul.ru` → **HAProxy pro-router** (`2.28.54.129`, `:443`, CN `okna-1` → backend `packet_unit_okna_1`) → `10.3.1.11:6090` на gpu-1c (**LXD `proxy6090`**: `listen=tcp:10.3.1.11:6090` → `connect=tcp:10.10.10.12:6090` в LXC okna) → `1c-packet-server` | :6090 — приёмник пакетов, НЕ OData-шлюз. Reverse SSH на новой okna **не найден** [замер 23.08] — путь только через HAProxy. 🔴 **[замер 23.08]** HAProxy уже на `10.3.1.11:6090`, LXD proxy жив (curl с gpu-1c → `/health` 200), но backend **DOWN**: TCP `:6090` с pro-router (`10.3.0.3`) timeout при живом `:8000`; tcpdump на `eno1.4003` — 0 SYN → блокировка **вне хоста** (Hetzner firewall whitelist); открытие `:6090` from `10.3.0.0/16` — владелец |
 | **Миграции** | rsync old→new напрямую: 110,8 МБ/с внутри Hetzner | S3 (`s3.twcstorage.ru`) — только мелочь; квота ~1 ГБ, на 95 ГБ — 403 QuotaExceeded |
 | **Эмбеддинги / rerank / LLM / whisper / diarize** | Контейнеры → канон §2.1 (`10.3.1.11` / `10.3.1.12`) | Внутренние адреса первичны [замер 23.08 новая okna]. Запасной путь — публичные IP тех же хостов |
 
