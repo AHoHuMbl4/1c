@@ -1,3 +1,13 @@
+## 23.08: пакет root-заданий dev (Ф3/Ф4/Ф3.5/Ф7.5) [код]
+
+[код] `work/root-tasks/`: инструкция `00-README.md`, скрипты `01-embed-env.sh`
+(4B + vSwitch в `/etc/1c-embed.env`, секреты не трогает), `02-purge-pg.sh`
+(apt purge postgresql-16*, проверка SereneDB :7890), обновлённый текст owner-memory
+(отмена PG+attach 26.07), patch `04-claude-md/claude-md.patch` (снять обход WebFetch
+для `read_section`). Разведка dev: embed **8B** + legacy gpu-erw; postgres-16 на
+`:5432`; CLAUDE.md — абзац WebFetch ещё не снят. SSH okna — владелец.
+Числа: embed MODEL 8B→4B (скрипт); pg пакеты 5 шт; patch 1 строка.
+
 ## 23.08: /health okna — object-level coverage_gap, ложный 503 снят [код][замер]
 
 [код] `serene_ask.py`: `_measure_health_gap` считает витрину через `_vitrina_objects`;
