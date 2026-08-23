@@ -1,3 +1,11 @@
+## 23.08: wiki-alias на dev — VLLM_BASE_URL добавлен, шлюз перепатчен [замер]
+
+[замер] (владелец, root): `/etc/1c-embed.env` + VLLM_BASE_URL=http://49.13.97.101:8000/v1,
+VLLM_API_KEY (=EMBED_API_KEY); `systemctl start 1c-wiki-alias` 11:48 UTC:
+ensure_vllm перепатчил openclaw.json провайдера vllm (Qwen3.8-27B), шлюз перезапущен
+11:51. Одна пачка 11:55 — gateway timeout 120s; endpoint после патча отвечает.
+Числа: VLLM_BASE_URL :8000/v1; gw restart 11:51; 1 пачка timeout 120s.
+
 ## 23.08: канон GPU обновлён владельцем — whisper/diarize остановлены, 27B 64k [решение]
 
 [решение] Владелец: embed на 49.13.97.101:8002 падал по памяти — починен; whisper
