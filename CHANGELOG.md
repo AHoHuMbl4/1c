@@ -1,3 +1,15 @@
+## 23.08: root-fix dev выполнен: psql, hardlink, пул движка [замер]
+
+[замер] (root-cursor, промт prompt-root-fix-dev.md): postgresql-client-16 возвращён
+(version() OK, сервера нет); hardlink CLAUDE.md↔AGENTS.md восстановлен (один inode,
+links=2, .orig удалён); пул движка dev через SQL SET threads=160, mem=46.5 GiB
+(было 2/~1 GiB) — источник threads=2 найден: сегодняшние .test_*.sql с SET threads=2/
+memory_limit 1GB гонялись против живого :7890, не из conf. Precheck зелёный.
+Красное, НЕ чинено: /health dev-ask :8091/:8099 — 90–300 с (холодный gap, TTL 300 с);
+wiki-alias ждёт VLLM_BASE_URL=unset (гейт отдаёт HTML);
+OData :6011/$metadata HTTP 0; embed :8001 down (health :8000 — 200).
+Числа: threads 2→160; mem ~1 GiB→46.5 GiB; /health 90–300 с холодный.
+
 ## 23.08: Ф6.1 бой — КРАСНЫЙ прогон, откат; окно убито сторожем [замер]
 
 [замер] okna :8091, тот же код (md5 760c3923) и флаг ASK_SQL_RRF=1: scorer 24q
