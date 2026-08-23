@@ -350,9 +350,14 @@ SQL
 
 ---
 
-## Временно остановленные сервисы GPU (22.08)
+## Временно остановленные сервисы GPU (22.08) → возвращены (23.08)
 
-🔴 **Вернуть после завершения пересчёта 4B, до переключения бота** (§8).
+🟢 **[замер 23.08]** Владелец вернул whisper / vLLM Qwen3.8-27B / diarize после пересчёта 4B.
+Живая проверка с новой okna: whisper `:8006` health 200, LLM `:8000` `/v1/models` → `Qwen3.8-27B`,
+embed `:8000`/`:8002` dim 1024, rerank `:8005` 200. Канон адресов — внутренние vSwitch
+(`docs/NETWORK.md` §2.1).
+
+Историческая запись остановки 22.08 (для разбора):
 
 | Сервис | Хост | pid (на момент остановки) | cmdline для рестарта (на хосте, пользователь ubuntu) |
 |---|---|---|---|
@@ -360,7 +365,7 @@ SQL
 | **vLLM Qwen3.8-27B** | gpu-qwen27b | 162708 | `cd /home/ubuntu/llm_services && .venv/bin/python3 .venv/bin/vllm serve /home/ubuntu/models/Qwen3.8-27B-FP8 --host 0.0.0.0 --port 8000 --served-model-name Qwen3.8-27B --dtype auto --max-model-len 131072 --gpu-memory-utilization 0.78 --api-key <из env> --trust-remote-code --quantization fp8 --kv-cache-dtype fp8 --max-num-seqs 8 --enable-auto-tool-choice --tool-call-parser qwen3_xml --enforce-eager` |
 | **diarize (pyannote)** | gpu-qwen27b | 48862 | `cd /home/ubuntu/pyannote_services && .venv/bin/python3 diarize_server.py` |
 
-**Не тронуты:** rerank `:8005` (прод `RERANK_URL`) и embed `:8000`/`:8002` (прод `EMBED_HOSTS` + сам пересчёт 4B).
+**Не трогались при остановке 22.08:** rerank `:8005` и embed `:8000`/`:8002`.
 
 [замер 22.08] Остановка не ускорила пересчёт (~320 req/min суммарно как было) — упор в compute
 embed-серверов, не в конкуренцию за VRAM. VRAM: gpu-qwen27b 48240→10350 MiB (−37,9 ГБ),
@@ -403,6 +408,13 @@ curl -sS -H "Authorization: Bearer $(grep ASK_TOKEN /etc/1c-serene-ask.env | cut
 
 Все пункты — **на цели**, после §3–§5. Старая okna параллельно **остаётся эталоном отката**.
 
+**Статус приёмки [замер 23.08]:** пересчёт 4B завершён (не-service: корпус **1 206 662**,
+резолвер **128 674**, карточки **254**; service **23 494+97** без вектора по политике);
+GPU-сервисы возвращены; env новой okna — на каноне vSwitch (`NETWORK.md` §2.1);
+пробы ask **4/4** по kind (`code_md5=d0945244`); scorer-25 паритет старая=новая=**8/25**
+(регрессии переезда нет; провалы — дрейф дат gold против снапшота 22.08 + известные просадки).
+Порог «≥14/25» (§7 п.8) **ещё не достигнут** — не блокер переезда на паритете со старой.
+
 | # | Критерий | Команда / ожидание |
 |---|---|---|
 | 1 | Движок **26.08.1** | `SELECT version();` → содержит `26.08.1` |
@@ -412,7 +424,7 @@ curl -sS -H "Authorization: Bearer $(grep ASK_TOKEN /etc/1c-serene-ask.env | cut
 | 5 | Петли → no_data | «сколько петель осталось на складе?» → **no_data** |
 | 6 | Склад → clarify | «сколько товара на складе?» → **clarify** с вариантами |
 | 7 | Неделя → answer с именем | rank-вопрос про неделю → **answer** с именем лидера |
-| 8 | Scorer ≥14/25 | после пересчёта 4B (ожидание по `PLAN_UPGRADE_NATIVE` Ф4) |
+| 8 | Scorer ≥14/25 | после пересчёта 4B (ожидание по `PLAN_UPGRADE_NATIVE` Ф4); **факт 23.08: 8/25 = паритет со старой** |
 
 ### 7.1 Scorer (эталон 25 вопросов)
 
@@ -508,7 +520,7 @@ AB_PROBE=okna AB_BASE=postgres ASK_LISTEN_PORT=8091 \
 |---|---|
 | Старая okna (источник) | `167.233.249.110`, SSH root + deploy-ключ с dev |
 | Новая okna (цель) | `10.10.10.12`, снаружи `ssh -p 2202 root@gpu-erw.timpul.pro` |
-| Хост эмбеддера | `178.63.211.188`, внутри LXD `10.10.10.1:8000` |
+| Хост эмбеддера / GPU | канон vSwitch: `10.3.1.11` (gpu-1c), `10.3.1.12` (gpu-qwen27b); из LXD также `10.10.10.1` NAT; публичные — запасной путь (`NETWORK.md` §2.1) |
 | Сосед klient-1 | `10.10.10.11`, SSH `:2201` |
 | S3 (мелкие артефакты) | `s3.twcstorage.ru`, bucket `klient1-migration` (~365 МБ); **store.db непригоден** — квота ~1 ГБ, 403 QuotaExceeded |
 | vSwitch шлюз | `10.3.1.1` (ICMP не отвечает — норма) |
