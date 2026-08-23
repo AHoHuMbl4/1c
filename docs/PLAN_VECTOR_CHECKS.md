@@ -318,6 +318,17 @@
 | Латентность kNN медиана 50 прогонов | exact **510 мс**; IVF nprobe 4/8/32 = **530 / 530 / 540 мс** |
 | Вывод по скорости | IVF на okna-масштабе **не быстрее** exact (подтверждает Ф1 §6); запас RAM << 100 ГБ STOP |
 
+**Перепроверка тем же днём (вторая сессия, индексы уже стояли):**
+
+| Что | Итог |
+|---|---|
+| Норма `l2_norm` SAMPLE 1000 | corpus avg **1,000024** (min 0,996981 / max 1,003058); resolver avg **1,000007** |
+| recall@10 nprobe=8 | **0,9995** на **200** случайных emb (exact LATERAL на `f5_corpus_exact` без IVF, 12 с) |
+| Латентность медиана **51** прогон | exact **510 мс**; IVF nprobe 4/8/16/32 = **1370 / 1402 / 1374 / 1390 мс** |
+| Ловушка замера | IVF-запрос с `WHERE emb IS NOT NULL` на `corpus_ivf_idx` раздувает медиану до ~1,4 с; без фильтра (см. строку выше) — ~530 мс. Оба режима **медленнее или ≈ exact** |
+| `index_size` (повтор) | resolver **327 451 137**; corpus **5 697 936 492** (~5,70 ГБ) |
+| SSH | лимит 5 превышен на **+1** (упавший 4-й заход + добор latency) |
+
 Доки: `sql/indexes/inverted/vector-search#creating-a-vector-index`,
 `sql/functions/vector#norms`, `sql/statements/vacuum#refreshing--refresh_`,
 `sql/indexes/inverted/maintenance#session-settings` (`sdb_nprobe`),

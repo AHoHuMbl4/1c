@@ -1,3 +1,17 @@
+## 23.08: Ф5 IVF okna — перепроверка recall/latency [замер]
+
+[замер] Вторая сессия: индексы `resolver_ivf_idx`/`corpus_ivf_idx` уже на бою
+(первая сборка — запись ниже). Нормы `l2_norm` SAMPLE 1000: corpus avg
+**1,000024**, resolver **1,000007** → `ip`. recall@10 nprobe=8 = **0,9995** /
+200q. Латентность медиана 51: exact **510 мс**; IVF с `WHERE emb IS NOT NULL`
+раздуло до **1370–1402 мс** (ловушка плана; без фильтра ранее ~530 мс). Оба
+режима не быстрее exact. `index_size` повтор: 327451137 / 5697936492.
+Отклонения: SSH лимит 5→6; resolver живой **69621**≠128674; search_tables IVF
+пропущен (254). Доки: PLAN_VECTOR_CHECKS §Ф5 перепроверка, VECTOR_DECISION §11.
+Числа: recall 0.9995/200; lat exact 510; IVF+WHERE 1370/1402/1374/1390 мс.
+Доки: sql/indexes/inverted/vector-search#creating-a-vector-index;
+sql/functions/vector#norms; sql/indexes/inverted/maintenance#session-settings.
+
 ## 23.08: Ф5 — IVF-индексы на боевой okna 26.08.1 [замер]
 
 [замер] На боевой okna (SereneDB **26.08.1**, `:7890`, 125 ГБ RAM) собраны
