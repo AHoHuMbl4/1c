@@ -2200,6 +2200,28 @@ def _corpus_ivf_ready():
     return ok
 
 
+def _resolver_ivf_ready():
+    """Есть ли IVF по резолверу значений — для пути Ф6.2.
+
+    Спрашиваем через `_resolver_psql` (роль `serene_resolver`), не через
+    `psql`/`serene_ro`: к `resolver_index` / его IVF у `serene_ro` доступа нет.
+    Нет индекса или роли — False, вызывающий тихо уходит в exact.
+    """
+    hit = _RESOLVER_IVF_CACHE.get("ok")
+    if hit is not None and time.time() - hit[1] < 60:
+        return hit[0]
+    ok = False
+    if emb_ready("resolver_index"):
+        try:
+            ok = bool(_resolver_psql(
+                "SELECT 1 FROM duckdb_indexes() WHERE index_name = %s LIMIT 1"
+                % lit(RESOLVER_IVF_IDX)))
+        except RuntimeError:
+            ok = False
+    _RESOLVER_IVF_CACHE["ok"] = (ok, time.time())
+    return ok
+
+
 def _rrf_entity_branches(exprs, kind_text, question, limit):
     """Четыре ветви сущностей для RRF — alias, card, near(question), near(kind)."""
     expr = None
@@ -2711,16 +2733,25 @@ def resolve_values(term):
         vec = _vec(term)
     except Exception:                          # noqa: BLE001 — эмбеддер недоступен
         return []
-    near = _resolver_psql(
-        # 🔴 ТОЛЬКО СТРОКИ С ВЕКТОРОМ. Без этого условия запрос не отдаёт «ничего», когда
-        # векторов нет: `<=>` от NULL даёт NULL, такие строки уходят в конец, и когда
-        # вектора нет НИ У КОГО, порядок целиком решает разделитель равенства — то есть
-        # возвращается первое по алфавиту под видом «ближайшего по смыслу». Это молчаливо
-        # неверный ответ (п. 10), а не пустой. Условие делает случай честным: нет
-        # векторов — нет и близких, вызывающий остаётся без подсказки и спрашивает.
-        "SELECT DISTINCT value FROM resolver_index WHERE emb IS NOT NULL "
-        "ORDER BY emb <=> %s, value LIMIT %d"
-        % (vec, RESOLVE_NEAR))
+    # Ф6.2: при ASK_RESOLVER_IVF=1 и готовом индексе — ANN через IVF (metric=ip → `<#>`),
+    # без `WHERE emb IS NOT NULL` (ловушка латентности на IVF, как у корпуса Ф6.1).
+    # Флаг выключен или индекса нет — бит-в-бит прежний exact по `resolver_index`.
+    if ASK_RESOLVER_IVF and _resolver_ivf_ready():
+        near = _resolver_psql(
+            "SELECT DISTINCT value FROM %s "
+            "ORDER BY emb <#> %s, value LIMIT %d"
+            % (RESOLVER_IVF_IDX, vec, RESOLVE_NEAR))
+    else:
+        near = _resolver_psql(
+            # 🔴 ТОЛЬКО СТРОКИ С ВЕКТОРОМ. Без этого условия запрос не отдаёт «ничего», когда
+            # векторов нет: `<=>` от NULL даёт NULL, такие строки уходят в конец, и когда
+            # вектора нет НИ У КОГО, порядок целиком решает разделитель равенства — то есть
+            # возвращается первое по алфавиту под видом «ближайшего по смыслу». Это молчаливо
+            # неверный ответ (п. 10), а не пустой. Условие делает случай честным: нет
+            # векторов — нет и близких, вызывающий остаётся без подсказки и спрашивает.
+            "SELECT DISTINCT value FROM resolver_index WHERE emb IS NOT NULL "
+            "ORDER BY emb <=> %s, value LIMIT %d"
+            % (vec, RESOLVE_NEAR))
     vals = [r[0] for r in near if r and r[0]]
     if not vals:
         return []
@@ -2781,6 +2812,12 @@ RRF_K = int(os.environ.get('ASK_RRF_K', '60'))
 ASK_SQL_RRF = os.environ.get('ASK_SQL_RRF', '0') == '1'
 CORPUS_IVF_IDX = os.environ.get('ASK_CORPUS_IVF_IDX', 'corpus_ivf_idx')
 _CORPUS_IVF_CACHE = {}
+# Ф6.2: резолвер значений через IVF (resolver_ivf_idx) вместо exact kNN.
+# Выключен по умолчанию — прежний `emb <=>` по `resolver_index` + `WHERE emb IS NOT NULL`;
+# включён — `emb <#>` по индексу без фильтра NULL (ловушка латентности IVF).
+ASK_RESOLVER_IVF = os.environ.get('ASK_RESOLVER_IVF', '0') == '1'
+RESOLVER_IVF_IDX = os.environ.get('ASK_RESOLVER_IVF_IDX', 'resolver_ivf_idx')
+_RESOLVER_IVF_CACHE = {}
 # Жёсткая проверка выбора сущности по подсказке базы: подтверждает ЛИДЕР ранжирования
 # синонимов, а не всякое общее слово.
 # 🔴 ВКЛЮЧЕНА 04.08 — и это смена МЕРИЛА, а не пересмотр прежнего замера.
@@ -9068,6 +9105,14 @@ def _coverage_of(src_table):
 _HEALTH_GAP_TTL = int(os.environ.get("ASK_HEALTH_GAP_TTL", "300"))
 _health_gap_cache = {"at": 0.0, "gap": None}
 _health_gap_lock = threading.Lock()
+# Ф6.4: штатная свежесть inverted через sdb_metrics (num_buffered_docs и пр.).
+# Выключен по умолчанию — прежняя эвристика mart/build; включён — native-поля
+# рядом с merge_pending_sec, эвристика вторым рубежом. VACUUM из /health не зовём.
+# Имя индекса — из env/конфига, не хардкод базы (умолч. search_idx = INDEX).
+ASK_HEALTH_NATIVE_FRESHNESS = (
+    os.environ.get("ASK_HEALTH_NATIVE_FRESHNESS", "0") == "1")
+ASK_HEALTH_SEARCH_IDX = os.environ.get("ASK_HEALTH_SEARCH_IDX", "search_idx")
+_HEALTH_RELNAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def _assemble_health_gap(total_gaps, day_gaps):
@@ -9180,6 +9225,82 @@ def _classify_health_gap(gap):
         return out
     out["kind"] = "systemic"
     return out
+
+
+def _health_search_idx_name():
+    """Имя inverted-индекса для native freshness — из env, не из конкретной базы."""
+    name = ASK_HEALTH_SEARCH_IDX or "search_idx"
+    if not _HEALTH_RELNAME_RE.match(name):
+        raise ValueError("ASK_HEALTH_SEARCH_IDX: bad identifier")
+    return name
+
+
+def _measure_native_index_freshness():
+    """Штатные метрики inverted: buffer/failed по индексу + process refresh_*.
+
+    Один SELECT (UNION): per-index num_buffered_docs / num_failed_commits и
+    process gauges refresh_pending / refresh_active. Без VACUUM (REFRESH_*).
+    Доки: Maintenance › sdb_metrics; фактура docs/F6_FRESHNESS_FACTS.md §6.
+    """
+    idx = _health_search_idx_name()
+    sql = (
+        "SELECT 'index' AS kind,"
+        " MAX(CASE WHEN m.metric = 'num_buffered_docs' THEN m.value END),"
+        " MAX(CASE WHEN m.metric = 'num_failed_commits' THEN m.value END),"
+        " NULL, NULL"
+        " FROM sdb_metrics m"
+        " JOIN pg_class c ON c.oid = m.relation_id"
+        " WHERE c.relname = %s"
+        " GROUP BY 1"
+        " UNION ALL"
+        " SELECT 'process', NULL, NULL,"
+        " MAX(CASE WHEN metric = 'refresh_pending' THEN value END),"
+        " MAX(CASE WHEN metric = 'refresh_active' THEN value END)"
+        " FROM sdb_metrics"
+        " WHERE relation_id IS NULL"
+        "   AND metric IN ('refresh_pending', 'refresh_active')"
+        % lit(idx)
+    )
+    rows = psql(sql)
+    out = {
+        "index_buffered_docs": None,
+        "index_failed_commits": None,
+        "refresh_pending": None,
+        "refresh_active": None,
+    }
+    for r in rows or []:
+        if not r:
+            continue
+        kind = r[0]
+        if kind == "index":
+            b, f = _numN(r[1]), _numN(r[2])
+            if b is not None:
+                out["index_buffered_docs"] = int(b)
+            if f is not None:
+                out["index_failed_commits"] = int(f)
+        elif kind == "process":
+            p, a = _numN(r[3]), _numN(r[4])
+            if p is not None:
+                out["refresh_pending"] = int(p)
+            if a is not None:
+                out["refresh_active"] = int(a)
+    return out
+
+
+def _attach_native_freshness(freshness, native=None, native_error=None):
+    """Дописать native-поля; ошибка чтения — явный degraded, не подмена merge_pending."""
+    if freshness is None:
+        freshness = {}
+    if native is not None:
+        freshness["index_buffered_docs"] = native.get("index_buffered_docs")
+        freshness["index_failed_commits"] = native.get("index_failed_commits")
+        freshness["refresh_pending"] = native.get("refresh_pending")
+        freshness["refresh_active"] = native.get("refresh_active")
+    elif native_error is not None:
+        freshness["index_metrics"] = "unknown"
+        freshness["error"] = str(native_error)[:200]
+    return freshness
+
 
 def _health_gap():
     """Кэш замера разрыва для /health. Ошибка замера — исключение: дверь «не знает»."""
@@ -13885,18 +14006,37 @@ class Handler(BaseHTTPRequestHandler):
                                         "coverage_gap": "unknown",
                                         "error": str(e)[:200]})
             gap = _classify_health_gap(gap)
+            # Ф6.4: при флаге — штатные sdb_metrics рядом с эвристикой; VACUUM не зовём.
+            native = native_err = None
+            if ASK_HEALTH_NATIVE_FRESHNESS:
+                try:
+                    native = _measure_native_index_freshness()
+                except Exception as e:                      # noqa: BLE001
+                    native_err = str(e)[:200]
             if gap and gap.get("kind") == "systemic":
-                return self._send(503, {"status": "degraded", "corpus_rows": int(n),
-                                        "coverage_gap": gap})
+                body = {"status": "degraded", "corpus_rows": int(n),
+                        "coverage_gap": gap}
+                if ASK_HEALTH_NATIVE_FRESHNESS:
+                    body["freshness"] = _attach_native_freshness(
+                        {}, native, native_err)
+                return self._send(503, body)
             if gap and gap.get("kind") == "freshness_lag":
-                return self._send(200, {"status": "serene-ask-ok", "corpus_rows": int(n),
+                freshness = {"merge_pending_sec": gap.get("merge_pending_sec")}
+                if ASK_HEALTH_NATIVE_FRESHNESS:
+                    freshness = _attach_native_freshness(
+                        freshness, native, native_err)
+                return self._send(200, {"status": "serene-ask-ok",
+                                        "corpus_rows": int(n),
                                         "coverage_gap": gap,
-                                        "freshness": {"merge_pending_sec": gap.get(
-                                            "merge_pending_sec")}})
-            return self._send(200, {"status": "serene-ask-ok", "corpus_rows": int(n),
-                                    "coverage_gap": gap or {"entities": 0,
-                                                            "rows_missing": 0,
-                                                            "kind": "none"}})
+                                        "freshness": freshness})
+            body = {"status": "serene-ask-ok", "corpus_rows": int(n),
+                    "coverage_gap": gap or {"entities": 0,
+                                            "rows_missing": 0,
+                                            "kind": "none"}}
+            if ASK_HEALTH_NATIVE_FRESHNESS:
+                body["freshness"] = _attach_native_freshness(
+                    {}, native, native_err)
+            return self._send(200, body)
         return self._send(404, {"error": "not found"})
 
     def do_POST(self):

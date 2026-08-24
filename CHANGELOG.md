@@ -1,3 +1,69 @@
+## 24.08: повторная AB_PROBE боя после кандидата Ф6.2/Ф6.4 [замер]
+
+[замер] `AB_PROBE=okna` через `:18091` (бой `11d8f158`, флаги IVF/freshness выкл.):
+**8/8**, средняя **8,22 с**, маркер `okna probe live 0err/8`. Кандидат в дереве
+md5 `a4b64c18…` (Ф6.2+Ф6.4 за env=0) — бой не переключали.
+
+## 24.08: Ф6.4 штатная свежесть `/health` за env-флагом [код]
+
+[код] `GET /health` в `serene_ask.py`: при `ASK_HEALTH_NATIVE_FRESHNESS=1` —
+один SELECT `sdb_metrics`×`pg_class` + process gauges →
+`freshness.index_buffered_docs` / `index_failed_commits` / `refresh_pending` /
+`refresh_active` рядом с `merge_pending_sec`. Умолчание `=0` — бит-в-бит
+прежняя эвристика `_classify_health_gap`. Имя индекса — `ASK_HEALTH_SEARCH_IDX`
+(умолч. `search_idx`). Ошибка метрик — `index_metrics=unknown` в JSON, не 503 и
+не подмена buffered→merge. `VACUUM (REFRESH_*)` из `/health` не зовётся.
+Оффлайн-замок `test_health_native_freshness.py`. Бой не включён.
+
+## 24.08: Ф6.3 фактура `solr_synonyms` (docs-only) [замер]
+
+[замер] Штатный `CREATE TEXT SEARCH DICTIONARY` / `solr_synonyms` /
+`ts_lexize` на SereneDB **26.08.1** (sandbox `:7895`): bare и pipeline
+text→solr раскрывают класс; DROP+CREATE обновляет карту; inline SYNONYMS
+до ~20 к правил / ~400 КБ — OK; argv `psql -c` упирается раньше движка.
+Стемминг до синонимов обязателен (`складе` без stem ≠ класс). Локальный
+`:7890` — timeout. Фактура: `docs/F6_SYNONYMS_FACTS.md`. Код
+`serene_ask.py` не трогали; применение за env — не начато.
+
+## 24.08: §7bis инвентарь бизнес-справочников — локальный [замер]
+
+[замер] По локальным следам (без живого OData okna):
+`work/biz-refs-inventory.md` — кандидаты календарь/валюты/гео с путями
+`docs/completeness-okna/*`, `work/manifest-diff/live-metadata-ut11.xml`,
+`docs/completeness-klient1/arrived.txt`; точки чтения `$metadata` —
+`corpus_build.sql` / `poc_load_entity.py` / packet-meta. На okna в контуре есть
+`InformationRegister_Календарь` и валюты/города/страны; типовой
+производственный календарь УТ локально на okna не найден. Статус в
+`docs/PLAN_ANSWER_CONTRACT.md` §7bis. Код ask не трогали.
+
+## 24.08: Ф6.4 фактура свежести `/health` (docs-only) [замер]
+
+[замер] Штатные средства свежести inverted на SereneDB **26.08.1** (sandbox
+`:7895`): `sdb_metrics.num_buffered_docs` / `refresh_pending` отвечают;
+`duckdb_indexes()` без колонки возраста; `sdb_index_stats` — отказ движка
+(`does not exist`). Локальный `:7890` — `timeout expired` (нагрузка). На той же
+базе `mart_changed_ts − build_ts = 137` с при `buffered=0` — слои разные.
+Фактура: `docs/F6_FRESHNESS_FACTS.md`. Код `serene_ask.py` не трогали.
+
+## 24.08: health-фикс на бое okna :8091 [замер]
+
+[замер] Кандидат md5 **11d8f158** выкатан на okna `/opt/1c-mcp-reports/serene_ask.py`
+(юнит `1c-serene-ask@postgres`, порт `:8091`). `GET /health` через туннель `:18091` →
+HTTP 200 за **~0,05–0,08 с** (раньше залипал). `AB_PROBE=okna` на
+`ASK_URL=http://127.0.0.1:18091/ask`, лог `/tmp/probe-okna-boy-20260824.log`: live
+верных **8/8**, средняя **55,98 с**, отметка `okna probe live 0err/8`. Outcomes:
+answer/answer/clarify/no_data/answer/answer/answer/answer. В строках PROBE
+`code_md5=760c3923` — md5 локального файла на деве у scorera, НЕ md5 бойца; канон
+выкладки — **11d8f158**.
+
+## 24.08: Ф6.2 резолвер значений через IVF за env-флагом [код]
+
+[код] `resolve_values` в `serene_ask.py`: при `ASK_RESOLVER_IVF=1` и готовом
+`resolver_ivf_idx` — kNN `emb <#>` по IVF без `WHERE emb IS NOT NULL`; умолчание
+`ASK_RESOLVER_IVF=0` — прежний exact `emb <=>` по `resolver_index`. Имя индекса —
+`ASK_RESOLVER_IVF_IDX`. Гарды `_shares_chars` / rerank / `RESOLVE_KEEP` не тронуты.
+Оффлайн-замок `test_resolver_ivf.py`. Бой не включался.
+
 ## 24.08: Шаблон промта обёртки — жёсткий, в регламент §4 [код]
 
 [код] Обёртки (субагенты на `[secondary_model]`) получают механический шаблон: один

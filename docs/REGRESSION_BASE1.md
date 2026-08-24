@@ -1,10 +1,18 @@
+**[замер 24.08]** После выката health-фикса на бой okna `:8091` (md5 **11d8f158**,
+`/opt/1c-mcp-reports/serene_ask.py`, юнит `1c-serene-ask@postgres`): `GET /health`
+через туннель `:18091` → HTTP 200 за **~0,05–0,08 с**; AB_PROBE **8/8**, 0 сбоев,
+средняя **55,98 с**, маркер `okna probe live 0err/8` (лог
+`/tmp/probe-okna-boy-20260824.log`). Outcomes: answer/answer/clarify/no_data/
+answer×4. В PROBE `code_md5=760c3923` — md5 локального файла scorera на деве, не
+бойца; канон выкладки — **11d8f158**. Первая база (okna бой) после health-фикса
+цела.
+
 **[замер 24.08]** `/health` залипал из‑за цикла по сущностям, не из‑за
 очереди с `/ask`. На этом хосте (не okna): `GET :8091/health` и `:8099/health`
 — curl 28 / 0 байт при живом юните; `POST /ask` на `:8091` в то же время —
 HTTP 401 за **0,05 с** (токен стенда не совпал — дверь HTTP жива). После правки
-кода (ещё не выкатано в `/opt`): `_measure_health_gap` = `SELECT` из
-`search_coverage`; оффлайн `test_health_gap` **23/23**. Боевая проба okna —
-оркестратор после выката.
+кода: `_measure_health_gap` = `SELECT` из `search_coverage`; оффлайн
+`test_health_gap` **23/23**. Выкат на бой okna и живая проба — абзац выше.
 
 **[замер 24.08]** W-трек + rank на бое okna `:8091` (md5 **50b13be1**, после
 ПОСЛЕДНЕЙ правки): первая база цела — AB_PROBE **8/8**, 0 сбоев, средняя **34,27 с**,
