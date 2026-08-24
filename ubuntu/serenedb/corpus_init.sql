@@ -80,6 +80,18 @@ CREATE TABLE IF NOT EXISTS search_balance_map (
   seen_at TIMESTAMP);
 GRANT SELECT ON search_balance_map TO serene_ro;
 GRANT SELECT ON search_balance_map TO serene_resolver;
+
+-- Карта оси дат графика: prop-имена из $metadata (дата / ключ вида / часы).
+-- Наполняется corpus_build.sql §1-кватер; пустая — норма (оси в базе нет).
+CREATE TABLE IF NOT EXISTS search_calendar_map (
+  src_table VARCHAR,
+  date_col VARCHAR,
+  day_key_col VARCHAR,
+  hours_col VARCHAR,
+  seen_at TIMESTAMP);
+GRANT SELECT ON search_calendar_map TO serene_ro;
+GRANT SELECT ON search_calendar_map TO serene_resolver;
+
 CREATE TABLE IF NOT EXISTS search_quality (k VARCHAR, v BIGINT, note VARCHAR);
 CREATE TABLE IF NOT EXISTS build_state (ts TIMESTAMP, k VARCHAR, v BIGINT);
 -- Разметка «о таком спрашивают / это служебное». Заводится ЗДЕСЬ, а не только в
@@ -170,6 +182,30 @@ CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict (
 CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict_stem (
   template = 'copy_from', from = 'search_dict', stemming = true);
 
+-- ── Ф6.3 словарь синонимов (query-side solr_synonyms) ─────────────────────────
+-- Доки: CREATE TEXT SEARCH DICTIONARY › solr_synonyms; Cookbook › Synonyms;
+-- фактура: docs/F6_SYNONYMS_FACTS.md. Имя — параметр :"solr_syn_dict" (build.sh /
+-- ASK_SOLR_SYNONYMS_DICT → умолч. search_dict_syn), не имя базы клиента.
+-- Карта SYNONYMS здесь пустая-заготовка: IF NOT EXISTS карту не обновляет
+-- (ловушка §5.2 фактуры). Наполнение — DROP+CREATE файлом после wiki_alias
+-- (`solr_synonyms_build.py`). Индекс корпуса не трогаем — только ts_lexize.
+--
+-- Кэш «моста на лету» (PLAN_UPGRADE_NATIVE §7-бис): подтверждённые связки
+-- пишутся сюда отдельной таблицей; компилятор UNION-ит их с search_entity_alias
+-- и помечает источник в комментарии SQL-файла.
+CREATE TABLE IF NOT EXISTS search_synonym_bridge (
+  rule VARCHAR,
+  seen_at TIMESTAMP);
+GRANT SELECT ON search_synonym_bridge TO serene_ro;
+
+CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS :"solr_syn_dict" (
+  template = 'solr_synonyms',
+  synonyms = '');
+-- Отдельного GRANT USAGE ON TEXT SEARCH DICTIONARY в SereneDB нет
+-- (доки GRANT › Privileges by object type: TABLE/SEQUENCE/FUNCTION/…; словаря
+-- нет). Как у search_dict_stem: создатель — postgres, ts_lexize под serene_ro
+-- отвечает без отдельного права. Держим право на таблицу-источник + precheck.
+
 CREATE INDEX IF NOT EXISTS search_idx ON search_corpus
   USING inverted(doc search_dict, refs search_dict, src_table)
   INCLUDE (src_table, row_key, doc_date);
@@ -218,11 +254,34 @@ GRANT SELECT ON alias_idx TO serene_ro;
 GRANT SELECT ON resolver_index TO serene_resolver;
 REVOKE SELECT ON resolver_index FROM serene_ro;
 
+
+-- Precheck оси дат графика: ключи calendar_* либо все три (после build), либо
+-- ни одного (до первого такта). Частичный набор — дефект сборки. Пустой v —
+-- оси в этой базе нет, не ошибка. GRANT на карту обязателен.
+SELECT CASE
+  WHEN (SELECT count(*) FROM information_schema.role_table_grants
+        WHERE privilege_type = 'SELECT' AND grantee = 'serene_ro'
+          AND table_name = 'search_calendar_map') = 0
+       THEN error('serene_ro без SELECT на search_calendar_map')
+  WHEN (SELECT count(*) FROM search_meta
+        WHERE k IN ('calendar_registers', 'calendar_day_kinds',
+                    'calendar_working_day_keys'))
+       NOT IN (0, 3)
+       THEN error('search_meta calendar_*: частичный набор (нужно 0 или 3 ключа)')
+  WHEN EXISTS (
+         SELECT 1 FROM search_meta
+         WHERE k IN ('calendar_registers', 'calendar_day_kinds',
+                     'calendar_working_day_keys') AND v IS NULL)
+       THEN error('search_meta calendar_*: v IS NULL (ожидается VARCHAR, пусто при отсутствии)')
+END;
+
 SELECT 'объекты поиска на месте' AS шаг,
        (SELECT count(*) FROM duckdb_tables()
         WHERE database_name = current_database()
           AND table_name IN ('search_corpus','resolver_index','search_tables',
-                             'search_sources','search_meta','search_balance_map',
+                             'search_sources','search_meta','search_balance_map','search_calendar_map',
                              'build_state','search_refcols','search_fork_class',
-                             'search_fork_label')) AS таблиц,
-       (SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'search_idx') AS индексов;
+                             'search_fork_label','search_synonym_bridge')) AS таблиц,
+       (SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'search_idx') AS индексов,
+       (SELECT CASE WHEN ts_lexize(:'solr_syn_dict', 'x') IS NOT NULL
+               THEN 1 ELSE 0 END) AS solr_syn_dict_ok;

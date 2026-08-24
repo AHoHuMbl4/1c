@@ -15,19 +15,21 @@ AB_PROBE **8/8** ~**55,98 с**; маркер `okna probe live 0err/8`.
 `ASK_RESOLVER_IVF` и Ф6.4 `ASK_HEALTH_NATIVE_FRESHNESS` **включены на
 стейджинге** (кандидат `a8e0316f` → `serene_ask_probe.py`): AB_PROBE **8/8**
 44,19 с; `/health` 200 0,13 с с native `freshness`; `_resolver_ivf_ready()`=True,
-IVF `<#>` отвечает. Бой :8091 — `11d8f158` без новых флагов. Ф6.3
-`ASK_SOLR_SYNONYMS` в git (замок 14/0), на :8092 не включён — словаря в базе
-ещё нет (следующий шаг Ф6.3: завести `solr_synonyms` + наполнить wiki-alias).
+IVF `<#>` отвечает. Бой :8091 — `11d8f158` без новых флагов.
 
-🔴 **§7bis `[24.08]`**: инвентарь `work/biz-refs-inventory.md`; проект оси
-принят — `work/calendar-axis-design.md` (6 разделов; `InformationRegister_Календарь`
-↔ `ДниНедели`; `ASK_CALENDAR_AXIS` умолч.0; лидер calendar_days; внедрение:
-corpus_build.sql → ask-код → замки/словарь/скорир).
+🔴 **Ф6.3 шаг 2 в дереве `[24.08]`** (коммит — оркестратор):
+`solr_synonyms_build.py` + `corpus_init`/`precheck`/`wiki_alias`/`build.sh`;
+замки **28/0** + **14/0**. Ask-флаг уже в git; на :8092 словарь ещё не
+выкатан — следующий шаг: выкат init+compile на стейджинг + `ASK_SOLR_SYNONYMS=1`.
 
-🔴 **дальше**: (1) Ф6.3 — словарь синонимов в базе okna + включение флага на
-:8092; (2) §7bis шаг 1 — `corpus_build.sql` search_meta-карта календаря (агент);
-(3) перемер латентности Ф6.1 на свободном GPU; (4) klient-1 embed 4B —
-EMBED_RUNNING (PID 12576, corpus после resolver) — крон/оркестратор.
+🔴 **§7bis шаг 1 в дереве `[24.08]`**: `corpus_build.sql` §1-кватер +
+`search_calendar_map` / GRANT в `corpus_init.sql`; ключи `calendar_*` в
+`search_meta`; замок `test_calendar_meta_build.py` **30/0**. Ask / флаг
+`ASK_CALENDAR_AXIS` — следующий шаг (не этот заход). Коммит — оркестратор.
+
+🔴 **дальше**: (1) Ф6.3 — выкат словаря на okna :8092 + флаг; (2) §7bis шаг 2 —
+ask-код за `ASK_CALENDAR_AXIS` (умолч.0) + проба `:8092`; (3) перемер
+латентности Ф6.1 на свободном GPU; (4) klient-1 embed 4B — EMBED_RUNNING.
 
 🔴 **rank okna «лучше всего на неделе» — выкат+AB 8/8 `[23.08]`**: axis-clarify
 6 осей → `rank_axis_auto` (ТМЦ); md5 **863567dd** на `:8091`; AB_PROBE **8/8**,

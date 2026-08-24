@@ -1,3 +1,24 @@
+## 24.08: Ф6.3 шаг 2 — компиляция solr_synonyms из таблиц [код]
+
+[код] Query-side словарь `solr_synonyms`: в `corpus_init.sql` — заготовка
+`CREATE … IF NOT EXISTS :"solr_syn_dict"` (имя из `SOLR_SYN_DICT` /
+`ASK_SOLR_SYNONYMS_DICT`, умолч. `search_dict_syn`) + таблица
+`search_synonym_bridge` (кэш моста) + GRANT SELECT; в `corpus_precheck.sql` —
+наличие таблицы, GRANT и `ts_lexize(dict)`. Компилятор
+`solr_synonyms_build.py`: SELECT из `search_entity_alias` + bridge → Solr-карта
+(bi `a, b` / one-way `lhs => rhs`) → DROP+CREATE **файлом** в `CSV_DIR` (не в
+git); лимиты по фактуре §3.2 — 20 000 правил / 400 КБ, сверх — `LimitError`
+(п. 13). Пустые источники — словарь не пересоздаётся. Хвост `wiki_alias.sh`
+зовёт compile `--apply`. `build.sh` передаёт `-v solr_syn_dict`. Списков слов
+в коде нет. Оффлайн-замки: `test_solr_synonyms_build.py` **28/0**,
+`test_solr_synonyms_apply.py` **14/0**. Бой/okna не трогали. Доки:
+CREATE TEXT SEARCH DICTIONARY › solr_synonyms; GRANT › Privileges by object
+type; ts_lexize; Cookbook › Synonyms.
+
+## 24.08: §7bis шаг 1 — карта оси дат графика в корпусе [код]
+
+`corpus_build.sql` §1-кватер: структурный отбор `informationregister_*` (дата≠Period + Guid*_Key + numeric) и `chartofcharacteristictypes_*` → `search_meta` ключи `calendar_registers` / `calendar_day_kinds` / `calendar_working_day_keys` + таблица `search_calendar_map`. Рабочие ключи — join витрины, `hours > 0` и непустой `Description` из данных (без литералов конфигурации). Нет сущностей — пустые ключи, не ошибка. `corpus_init.sql`: DDL/GRANT `search_calendar_map`, precheck тройки ключей. Замок `test_calendar_meta_build.py` **30/0**. Ask не менялся. Доки: query/query_table, format %I/%L, string_agg.
+
 ## 24.08: Ф6.2/Ф6.4 включены на стейджинге okna :8092 [замер]
 
 [замер] кандидат `a8e0316f` → `/opt/1c-mcp-reports/serene_ask_probe.py` на okna

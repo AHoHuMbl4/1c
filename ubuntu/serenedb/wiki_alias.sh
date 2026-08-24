@@ -479,3 +479,13 @@ psql "$DSN" -tA -F' | ' -c "
     WHERE coalesce(aliases,'') <> ''
   UNION ALL SELECT 'пустышек величин (модель не ответила)', count(*) FROM $MEASURE_TABLE
     WHERE coalesce(aliases,'') = ''"
+
+# ── Ф6.3: Solr-словарь синонимов из таблиц (не списки в коде) ─────────────────
+# SELECT → карта → DROP+CREATE файлом (argv ломается на длинной карте, фактура §5.3).
+# Пустые источники — словарь не трогаем. Лимит сверх фактуры — честная ошибка.
+SOLR_SYN_DICT="${ASK_SOLR_SYNONYMS_DICT:-${SOLR_SYN_DICT:-search_dict_syn}}"
+SOLR_OUT="${CSV_DIR:-/var/lib/serenedb}/solr_synonyms_${SOLR_SYN_DICT}.sql"
+python3 ./solr_synonyms_build.py compile \
+  --dsn "$DSN" --dict "$SOLR_SYN_DICT" --alias-table "$ALIAS_TABLE" \
+  --out "$SOLR_OUT" --apply \
+  || echo "solr synonyms: шаг не прошёл, такт/юнит продолжается" >&2

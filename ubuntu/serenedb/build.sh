@@ -44,6 +44,10 @@ EMBED_MODEL="${EMBED_MODEL:-}"
 [ -n "$EMBED_MODEL" ] || { echo "СБОРКА ПРЕРВАНА: не задан EMBED_MODEL (модель эмбеддера)" >&2; exit 1; }
 EMBED_DIM="${EMBED_DIM:-1024}"
 DICT_LOCALE="${SEARCH_DICT_LOCALE:-ru_RU.utf8}"
+# Ф6.3: имя query-side словаря solr_synonyms (как STEM_DICT — не имя базы клиента).
+# ASK_SOLR_SYNONYMS_DICT в ask; здесь то же имя уходит в corpus_init / wiki_alias.
+SOLR_SYN_DICT="${ASK_SOLR_SYNONYMS_DICT:-${SOLR_SYN_DICT:-search_dict_syn}}"
+export SOLR_SYN_DICT ASK_SOLR_SYNONYMS_DICT="${ASK_SOLR_SYNONYMS_DICT:-$SOLR_SYN_DICT}"
 # 🔴 ОДИН ИСТОЧНИК ПРЕДЕЛА ДЛИНЫ. Строки длиннее него вектор получить не могут; на это
 # опираются и досчёт, и проверки до/после такта. Пока число было скопировано в три файла,
 # оно могло разойтись молча — и проверка начала бы ждать того, чего не бывает.
@@ -140,7 +144,8 @@ fail() { echo "СБОРКА ПРЕРВАНА: $1" >&2; exit 1; }
 ./embed_check.sh || fail "эмбеддер отдаёт не ту модель, которую просим"
 
 echo "== 0. объекты поиска и проверки до такта"
-psql "$DSN" -q -v dict_locale="$DICT_LOCALE" -f corpus_init.sql || fail "развёртывание объектов"
+psql "$DSN" -q -v dict_locale="$DICT_LOCALE" -v solr_syn_dict="$SOLR_SYN_DICT" \
+  -f corpus_init.sql || fail "развёртывание объектов"
 
 # Секреты подаются ФАЙЛОМ с правами 600, а не аргументом командной строки: в командной
 # строке они видны любому `ps`. Одинарные кавычки внутри значения удваиваются — иначе
@@ -178,6 +183,7 @@ fi
 # он жив, ДО того как слияние обнулит векторы у изменившихся строк.
 psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" -v embed_secret="$SEC_EMB" \
      -v embed_workers="$WORKERS" -v embed_maxlen="$EMBED_MAXLEN" -v thread_min="$THREAD_MIN" \
+     -v solr_syn_dict="$SOLR_SYN_DICT" \
      -f corpus_precheck.sql || fail "проверки до такта"
 
 # ⚠ ЦЕНА ЧЕСТНОСТИ: пропуск теперь срабатывает РЕДКО. Отметку ставит любая полная

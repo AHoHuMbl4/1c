@@ -152,9 +152,233 @@ FROM (
 ) u
 WHERE coalesce(src_table, '') <> '';
 
+-- ============ 1-кватер. ОСЬ ДАТ ГРАФИКА ($metadata + join витрины, без имён конфигурации) ============
+-- Регистр сведений: дата (не платформенный Period) + Guid*_Key + число (часы).
+-- Виды дня: ChartOfCharacteristicTypes_* (префикс OData-платформы) с Ref_Key+Description.
+-- Ключи видов дня с положительными часами: Ref_Key, у которых в регистре число > 0
+-- и непустой подписью в данных витрины (не список литералов в SQL). Нет сущностей —
+-- ключи пустые строки, ось честно выключена (как пустой balance_registers).
+-- Доки: sql/functions/utility#queryquery_string; cookbook/sql_features/query_and_query_table_functions;
+-- sql/functions/text#format-syntax (%I/%L); sql/functions/aggregates#string_aggarg-sep.
+
+CREATE OR REPLACE TABLE tmp3_cal_reg AS
+SELECT e.entity AS src_table
+FROM tmp3_ent e
+WHERE e.entity LIKE 'informationregister_%'
+  AND e.entity NOT LIKE '%\_recordtype' ESCAPE '\'
+  AND e.entity NOT LIKE '%\_rowtype' ESCAPE '\'
+  AND EXISTS (
+    SELECT 1 FROM tmp3_prop p
+    WHERE p.entity = e.entity
+      AND p.edm IN ('Edm.DateTime', 'Edm.Date')
+      AND lower(p.prop) <> 'period')
+  AND EXISTS (
+    SELECT 1 FROM tmp3_prop p
+    WHERE p.entity = e.entity
+      AND p.edm = 'Edm.Guid'
+      AND p.prop LIKE '%\_Key' ESCAPE '\')
+  AND EXISTS (
+    SELECT 1 FROM tmp3_prop p
+    WHERE p.entity = e.entity
+      AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                    'Edm.Int64', 'Edm.Byte'))
+  AND EXISTS (
+    SELECT 1 FROM tmp3_ent c
+    WHERE c.entity LIKE 'chartofcharacteristictypes_%'
+      AND c.entity NOT LIKE '%\_recordtype' ESCAPE '\'
+      AND c.entity NOT LIKE '%\_rowtype' ESCAPE '\');
+
+CREATE OR REPLACE TABLE tmp3_cal_chart AS
+SELECT e.entity AS src_table
+FROM tmp3_ent e
+WHERE e.entity LIKE 'chartofcharacteristictypes_%'
+  AND e.entity NOT LIKE '%\_recordtype' ESCAPE '\'
+  AND e.entity NOT LIKE '%\_rowtype' ESCAPE '\'
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity AND lower(p.prop) = 'ref_key')
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity AND lower(p.prop) = 'description')
+  AND EXISTS (SELECT 1 FROM tmp3_cal_reg);
+
+-- Карта колонок: prop-имена из $metadata (дата / Guid*_Key / число). Уточнение
+-- day_key↔chart и hours — по данным ниже; здесь — стабильный выбор ORDER BY prop.
+CREATE OR REPLACE TABLE tmp3_cal_map AS
+SELECT r.src_table,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = r.src_table
+           AND p.edm IN ('Edm.DateTime', 'Edm.Date')
+           AND lower(p.prop) <> 'period'
+         ORDER BY p.prop LIMIT 1) AS date_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = r.src_table
+           AND p.edm = 'Edm.Guid' AND p.prop LIKE '%\_Key' ESCAPE '\'
+         ORDER BY p.prop LIMIT 1) AS day_key_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = r.src_table
+           AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                         'Edm.Int64', 'Edm.Byte')
+         ORDER BY p.prop LIMIT 1) AS hours_col
+FROM tmp3_cal_reg r;
+
+DELETE FROM search_calendar_map;
+INSERT INTO search_calendar_map
+SELECT m.src_table, m.date_col, m.day_key_col, m.hours_col, now()
+FROM tmp3_cal_map m
+WHERE coalesce(m.src_table, '') <> ''
+  AND coalesce(m.date_col, '') <> ''
+  AND coalesce(m.day_key_col, '') <> ''
+  AND coalesce(m.hours_col, '') <> '';
+
+-- Реальные имена таблиц витрины (регистр / план видов) для query_table.
+CREATE OR REPLACE TABLE tmp3_cal_live AS
+SELECT m.src_table, m.date_col, m.day_key_col, m.hours_col,
+       (SELECT t.table_name FROM duckdb_tables() t
+         WHERE t.database_name = current_database()
+           AND lower(t.table_name) = m.src_table
+         LIMIT 1) AS src_real,
+       (SELECT t.table_name FROM duckdb_tables() t
+         WHERE t.database_name = current_database()
+           AND lower(t.table_name) = c.src_table
+         LIMIT 1) AS chart_real,
+       c.src_table AS chart_entity
+FROM tmp3_cal_map m
+CROSS JOIN tmp3_cal_chart c;
+
+-- Какой Guid*_Key стыкуется с каким планом видов — по пересечению значений с Ref_Key.
+CREATE OR REPLACE TABLE tmp3_cal_keyhits (
+  src_table VARCHAR, chart_entity VARCHAR, key_col VARCHAR, hits BIGINT);
+
+\set ON_ERROR_STOP off
+SELECT format(
+  'INSERT INTO tmp3_cal_keyhits SELECT %L, %L, %L, count(*)::BIGINT '
+  'FROM query_table(%L) reg '
+  'INNER JOIN query_table(%L) kind ON reg.%I = kind.%I '
+  'WHERE reg.%I IS NOT NULL',
+  l.src_table, l.chart_entity, p.prop, l.src_real, l.chart_real,
+  p.prop, 'Ref_Key', p.prop)
+FROM tmp3_cal_live l
+JOIN tmp3_prop p ON p.entity = l.src_table
+                AND p.edm = 'Edm.Guid'
+                AND p.prop LIKE '%\_Key' ESCAPE '\'
+WHERE l.src_real IS NOT NULL AND l.chart_real IS NOT NULL
+\gexec
+\set ON_ERROR_STOP on
+
+-- Лучшая пара (регистр, key_col, chart) и числовой столбец «часы»:
+-- тот numeric, у которого есть и строки > 0, и строки без положительного значения.
+CREATE OR REPLACE TABLE tmp3_cal_besthour (
+  src_table VARCHAR, hours_col VARCHAR, pos_n BIGINT, zero_n BIGINT);
+
+\set ON_ERROR_STOP off
+SELECT format(
+  'INSERT INTO tmp3_cal_besthour SELECT %L, %L, '
+  'count(*) FILTER (WHERE try_cast(reg.%I AS DOUBLE) > 0)::BIGINT, '
+  'count(*) FILTER (WHERE coalesce(try_cast(reg.%I AS DOUBLE), 0) <= 0)::BIGINT '
+  'FROM query_table(%L) reg',
+  l.src_table, p.prop, p.prop, p.prop, l.src_real)
+FROM (SELECT DISTINCT src_table, src_real FROM tmp3_cal_live
+      WHERE src_real IS NOT NULL) l
+JOIN tmp3_prop p ON p.entity = l.src_table
+                AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                              'Edm.Int64', 'Edm.Byte')
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_cal_resolved AS
+WITH kh AS (
+  SELECT src_table, chart_entity, key_col, hits,
+         row_number() OVER (
+           PARTITION BY src_table
+           ORDER BY hits DESC, chart_entity, key_col) AS rn
+  FROM tmp3_cal_keyhits WHERE hits > 0
+),
+hh AS (
+  SELECT src_table, hours_col, pos_n, zero_n,
+         row_number() OVER (
+           PARTITION BY src_table
+           ORDER BY (pos_n > 0 AND zero_n > 0) DESC, pos_n DESC, hours_col) AS rn
+  FROM tmp3_cal_besthour WHERE pos_n > 0
+)
+SELECT m.src_table,
+       m.date_col,
+       coalesce(kh.key_col, m.day_key_col) AS day_key_col,
+       coalesce(hh.hours_col, m.hours_col) AS hours_col,
+       l.src_real,
+       l.chart_real,
+       coalesce(kh.chart_entity, l.chart_entity) AS chart_entity
+FROM tmp3_cal_map m
+LEFT JOIN kh ON kh.src_table = m.src_table AND kh.rn = 1
+LEFT JOIN hh ON hh.src_table = m.src_table AND hh.rn = 1
+LEFT JOIN LATERAL (
+  SELECT src_real, chart_real, chart_entity FROM tmp3_cal_live x
+  WHERE x.src_table = m.src_table
+    AND (kh.chart_entity IS NULL OR x.chart_entity = kh.chart_entity)
+  ORDER BY x.chart_entity LIMIT 1
+) l ON true;
+
+-- Уточнённая карта колонок (если join витрины прошёл).
+DELETE FROM search_calendar_map;
+INSERT INTO search_calendar_map
+SELECT r.src_table, r.date_col, r.day_key_col, r.hours_col, now()
+FROM tmp3_cal_resolved r
+WHERE coalesce(r.src_table, '') <> ''
+  AND coalesce(r.date_col, '') <> ''
+  AND coalesce(r.day_key_col, '') <> ''
+  AND coalesce(r.hours_col, '') <> '';
+
+-- Ref_Key видов с положительным числом часов и непустой подписью в данных.
+CREATE OR REPLACE TABLE tmp3_cal_workkeys (kind_key VARCHAR);
+
+\set ON_ERROR_STOP off
+SELECT format(
+  'INSERT INTO tmp3_cal_workkeys '
+  'SELECT DISTINCT reg.%I::VARCHAR '
+  'FROM query_table(%L) reg '
+  'INNER JOIN query_table(%L) kind ON reg.%I = kind.%I '
+  'WHERE try_cast(reg.%I AS DOUBLE) > 0 '
+  '  AND coalesce(kind.%I::VARCHAR, '''') <> '''' '
+  '  AND reg.%I IS NOT NULL',
+  r.day_key_col, r.src_real, r.chart_real, r.day_key_col, 'Ref_Key',
+  r.hours_col, 'Description', r.day_key_col)
+FROM tmp3_cal_resolved r
+WHERE r.src_real IS NOT NULL AND r.chart_real IS NOT NULL
+  AND coalesce(r.day_key_col, '') <> '' AND coalesce(r.hours_col, '') <> ''
+\gexec
+\set ON_ERROR_STOP on
+
+DELETE FROM search_meta
+ WHERE k IN ('calendar_registers', 'calendar_day_kinds', 'calendar_working_day_keys');
+
+INSERT INTO search_meta
+SELECT 'calendar_registers',
+       coalesce(string_agg(src_table, ',' ORDER BY src_table), '')
+FROM tmp3_cal_reg;
+
+INSERT INTO search_meta
+SELECT 'calendar_day_kinds',
+       coalesce(string_agg(DISTINCT chart_entity, ',' ORDER BY chart_entity), '')
+FROM (
+  SELECT chart_entity FROM tmp3_cal_resolved WHERE coalesce(chart_entity, '') <> ''
+  UNION ALL
+  SELECT src_table FROM tmp3_cal_chart
+) u;
+
+INSERT INTO search_meta
+SELECT 'calendar_working_day_keys',
+       coalesce(string_agg(DISTINCT kind_key, ',' ORDER BY kind_key), '')
+FROM tmp3_cal_workkeys
+WHERE coalesce(kind_key, '') <> '';
+
+SELECT 'ось дат графика' AS шаг,
+       (SELECT v FROM search_meta WHERE k = 'calendar_registers') AS registers,
+       (SELECT v FROM search_meta WHERE k = 'calendar_day_kinds') AS day_kinds,
+       (SELECT count(*) FROM tmp3_cal_workkeys
+         WHERE coalesce(kind_key, '') <> '') AS working_keys;
+
 SELECT 'метаданные' AS шаг, (SELECT count(*) FROM tmp3_ent) AS сущностей,
        (SELECT count(*) FROM tmp3_prop) AS свойств,
        (SELECT count(*) FROM tmp3_key WHERE len(key_cols) > 0) AS с_ключом;
+
 
 DELETE FROM search_quality WHERE k = 'key_linenumber_appended';
 INSERT INTO search_quality
