@@ -1,3 +1,12 @@
+## 24.08: Ф6.3 query-side solr_synonyms за env [код]
+
+[код] `same_concept_groups` в `serene_ask.py`: при `ASK_SOLR_SYNONYMS=1` и
+имени `ASK_SOLR_SYNONYMS_DICT` — дополнительно `ts_lexize(<dict>, …)` рядом со
+`STEM_DICT`; термы объединяются (стемминг до класса, не вместо). Умолчание
+`=0` — SQL без словаря синонимов. Имя словаря без хардкод-дефолта; списков
+слов в коде нет; `wiki_alias.sh` не трогали. Оффлайн-замок
+`test_solr_synonyms_apply.py`. Бой не включён.
+
 ## 24.08: повторная AB_PROBE боя после кандидата Ф6.2/Ф6.4 [замер]
 
 [замер] `AB_PROBE=okna` через `:18091` (бой `11d8f158`, флаги IVF/freshness выкл.):

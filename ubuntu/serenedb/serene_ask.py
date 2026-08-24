@@ -793,6 +793,10 @@ INTENT_ALTS = int(os.environ.get("ASK_INTENT_ALTS", "6"))
 # Словарь, которым движок приводит написания к одному терму. Заводится сборкой
 # (`corpus_init.sql`), локаль берёт из настройки базы — своего разбора слов у нас нет.
 STEM_DICT = os.environ.get("ASK_STEM_DICT", "search_dict_stem")
+# Ф6.3: query-side `solr_synonyms` рядом со стеммингом (docs/F6_SYNONYMS_FACTS.md §6).
+# Умолч. выкл.; имя словаря без дефолта — карта правил в БД, не списки слов в коде.
+ASK_SOLR_SYNONYMS = os.environ.get("ASK_SOLR_SYNONYMS", "0") == "1"
+ASK_SOLR_SYNONYMS_DICT = os.environ.get("ASK_SOLR_SYNONYMS_DICT", "")
 
 
 def _json_blocks(raw):
@@ -938,21 +942,37 @@ def _intent_word(s):
 #
 # Ошибка в сторону слияния расширяет отбор (то же понятие, больше написаний), в обратную —
 # отбирает пустоту, поэтому при недоступности словаря группы остаются как есть.
+#
+# Ф6.3: при ASK_SOLR_SYNONYMS=1 и имени ASK_SOLR_SYNONYMS_DICT — дополнительно
+# `ts_lexize` по словарю синонимов; термы объединяются со стеммом (фактура §3.2/§6:
+# стемминг до класса, не вместо; списков слов в коде нет).
 def same_concept_groups(groups):
     """Свести группы, которые движок считает одним понятием. (группы, сколько сведено)."""
     if len(groups) < 2:
         return groups, 0
     flat = [a for g in groups for a in g]
-    sel = ", ".join("ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(a)) for a in flat)
+    use_syn = ASK_SOLR_SYNONYMS and bool(ASK_SOLR_SYNONYMS_DICT)
+    cols = []
+    for a in flat:
+        cols.append("ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(a)))
+        if use_syn:
+            cols.append("ts_lexize(%s, %s)" % (lit(ASK_SOLR_SYNONYMS_DICT), lit(a)))
     try:
-        row = psql("SELECT " + sel)[0]
+        row = psql("SELECT " + ", ".join(cols))[0]
     except RuntimeError:
         return groups, 0
     merged, stems, k = [], [], 0
     for g in groups:
         merged.append(list(g))
-        stems.append([frozenset(_stem_set(row[k + n])) for n in range(len(g))])
-        k += len(g)
+        g_stems = []
+        for _n in range(len(g)):
+            s = _stem_set(row[k])
+            k += 1
+            if use_syn:
+                s = s | _stem_set(row[k])
+                k += 1
+            g_stems.append(frozenset(s))
+        stems.append(g_stems)
     i = 0
     while i < len(merged):
         j = i + 1

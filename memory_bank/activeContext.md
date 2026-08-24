@@ -11,18 +11,21 @@ _Обновлено: **2026-08-24.** Здесь — только живое: т�
 🔴 **бой okna :8091 `[24.08]`**: md5 **11d8f158**; `/health` 200 **~0,05 с**;
 AB_PROBE **8/8** ~**55,98 с**; маркер `okna probe live 0err/8`.
 
-🔴 **в дереве, не в бою `[24.08]`**: Ф6.2 `ASK_RESOLVER_IVF` умолч.0, замок
-`test_resolver_ivf.py` **18/0**; Ф6.4 `ASK_HEALTH_NATIVE_FRESHNESS` умолч.0,
-замки health_gap **23/0** + native **32/0**; md5 кандидата **a4b64c18…**.
+🔴 **в git (e400657), не в бою `[24.08]`**: Ф6.2 `ASK_RESOLVER_IVF` умолч.0,
+замок `test_resolver_ivf.py` **18/0**; Ф6.4 `ASK_HEALTH_NATIVE_FRESHNESS`
+умолч.0, замки health_gap **23/0** + native **32/0**.
 
-🔴 **Ф6.3 `[24.08]`**: фактура `docs/F6_SYNONYMS_FACTS.md`; код применения не
-начат.
+🔴 **Ф6.3 в дереве, не в git `[24.08]`**: `ASK_SOLR_SYNONYMS` умолч.0 +
+`ASK_SOLR_SYNONYMS_DICT` без дефолта; `same_concept_groups` + `ts_lexize`;
+замок `test_solr_synonyms_apply.py` **14/0**; md5 ask **a8e0316f…**; код за
+env, бой не включён. Фактура `docs/F6_SYNONYMS_FACTS.md`.
 
 🔴 **§7bis `[24.08]`**: локальный инвентарь `work/biz-refs-inventory.md`; дальше
 — живой `$metadata` okna.
 
-🔴 **дальше**: коммит кандидата → флаги на `:8092` (не бой) → §7bis metadata →
-Ф6.3 код за env. klient-1 embed 4B ещё идёт — крон/оркестратор.
+🔴 **дальше**: свежая проба okna → пат-спек коммит Ф6.3 → флаги на `:8092`
+(не бой) → §7bis metadata. klient-1 embed 4B: EMBED_RUNNING (PID 12576,
+corpus после resolver) — крон/оркестратор.
 
 🔴 **rank okna «лучше всего на неделе» — выкат+AB 8/8 `[23.08]`**: axis-clarify
 6 осей → `rank_axis_auto` (ТМЦ); md5 **863567dd** на `:8091`; AB_PROBE **8/8**,

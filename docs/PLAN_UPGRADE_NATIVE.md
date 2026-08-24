@@ -227,7 +227,7 @@
    (`/usr/lib/node_modules/openclaw/docs/cli/infer.md` Behavior; умолчание
    `alias_infer_gateway.py`). Замер: gw 619,25 с exit 1 / loc 1034,38 с exit 0
    (пачка 20, prompt 5581 B, vllm/Qwen3.8-27B).
-   **Ф6.3 (24.08):** фактура в `docs/F6_SYNONYMS_FACTS.md`; код применения не начат.
+   **Ф6.3 (24.08):** фактура в `docs/F6_SYNONYMS_FACTS.md`; код за флагом `ASK_SOLR_SYNONYMS` (умолч. 0), бой не включён.
 4. **Свежесть**: `/health` переводится на штатную интроспекцию/`REFRESH_*`; самодельные
    `merge_pending`-эвристики остаются вторым рубежом до замера, потом снимаются.
    **Ф6.4 (24.08):** фактура в `docs/F6_FRESHNESS_FACTS.md`; код за `ASK_HEALTH_NATIVE_FRESHNESS` (умолч. 0), бой не включён.
