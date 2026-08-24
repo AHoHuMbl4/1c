@@ -325,6 +325,7 @@
 {"type":"entity","name":"ubuntu/serenedb/test_solr_synonyms_apply.py","entityType":"offline-test","observations":["24.08: оффлайн-замок Ф6.3 ASK_SOLR_SYNONYMS (14 ok). serene_ask.py:same_concept_groups."]}
 {"type":"entity","name":"ubuntu/serenedb/test_solr_synonyms_apply.py","entityType":"offline-test","observations":["24.08: оффлайн-замок Ф6.3 ASK_SOLR_SYNONYMS 14/0; флаг ASK_SOLR_SYNONYMS умолч.0. ubuntu/serenedb/test_solr_synonyms_apply.py."]}
 {"type":"entity","name":"serene_ask.py","entityType":"сервисный код (ответы)","observations":["24.08 [код] Ф6.3: same_concept_groups + ts_lexize(ASK_SOLR_SYNONYMS_DICT) рядом со STEM_DICT. Источник: docs/F6_SYNONYMS_FACTS.md §6."]}
+{"type":"entity","name":"work/calendar-axis-design.md","entityType":"work_doc","observations":["[24.08] Проект оси развилки календарные/рабочие дни (PLAN_ANSWER_CONTRACT §7bis): данные InformationRegister_Календарь ↔ ChartOfCharacteristicTypes_ДниНедели (витрина okna 12085/5), один SQL счёта рабочих дней, детектор always-on при search_meta-карте, лидер calendar_days=status quo, B/C-люк с подписями §7, память только нажатием, ASK_CALENDAR_AXIS умолч.0; внедрение 3 шага: corpus_build.sql → ask-код → замки/словарь/скорир (work/calendar-axis-design.md)"]}
 {"type":"relation","from":"pipeline.sh","to":"deploy.sh","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"serene_sync.py","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"build.sh","relationType":"вызывает"}
@@ -843,3 +844,4 @@
 {"type":"relation","from":"serene_ask.py","to":"test_solr_synonyms_apply.py","relationType":"имеет_замок"}
 {"type":"relation","from":"ubuntu/serenedb/test_solr_synonyms_apply.py","to":"serene_ask.py","relationType":"проверяет"}
 {"type":"relation","from":"serene_ask.py","to":"ubuntu/serenedb/test_solr_synonyms_apply.py","relationType":"имеет_замок"}
+{"type":"relation","from":"work/calendar-axis-design.md","to":"serene_ask.py","relationType":"проектирует расширение (ASK_CALENDAR_AXIS)"}

@@ -1,3 +1,14 @@
+## 24.08: Ф6.2/Ф6.4 включены на стейджинге okna :8092 [замер]
+
+[замер] кандидат `a8e0316f` → `/opt/1c-mcp-reports/serene_ask_probe.py` на okna
+(бой :8091 не тронут), флаги `ASK_SQL_RRF=1 ASK_RESOLVER_IVF=1
+ASK_HEALTH_NATIVE_FRESHNESS=1`. AB_PROBE :8092 — **8/8, 0 сбоев, 44.19 с**
+(латентность поднята пересчётом klient-1 на общем эмбеддере; перемер Ф6.1 — на
+свободном GPU). `/health` — 200 за 0.13 с, native `freshness`: buffered 0 /
+failed_commits 0 / refresh_pending 0 / refresh_active 0. Ф6.2 живой путь:
+`_resolver_ivf_ready()` = True (0.10 с), IVF `<#>` по `resolver_ivf_idx`
+отвечает. Ф6.3 на стейджинге остаётся 0 (словарь в базе ещё не заведён).
+
 ## 24.08: Ф6.3 query-side solr_synonyms за env [код]
 
 [код] `same_concept_groups` в `serene_ask.py`: при `ASK_SOLR_SYNONYMS=1` и

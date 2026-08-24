@@ -11,21 +11,23 @@ _Обновлено: **2026-08-24.** Здесь — только живое: т�
 🔴 **бой okna :8091 `[24.08]`**: md5 **11d8f158**; `/health` 200 **~0,05 с**;
 AB_PROBE **8/8** ~**55,98 с**; маркер `okna probe live 0err/8`.
 
-🔴 **в git (e400657), не в бою `[24.08]`**: Ф6.2 `ASK_RESOLVER_IVF` умолч.0,
-замок `test_resolver_ivf.py` **18/0**; Ф6.4 `ASK_HEALTH_NATIVE_FRESHNESS`
-умолч.0, замки health_gap **23/0** + native **32/0**.
+🔴 **в git (e400657+5c22a72), флаги на okna :8092 `[24.08 вечер]`**: Ф6.2
+`ASK_RESOLVER_IVF` и Ф6.4 `ASK_HEALTH_NATIVE_FRESHNESS` **включены на
+стейджинге** (кандидат `a8e0316f` → `serene_ask_probe.py`): AB_PROBE **8/8**
+44,19 с; `/health` 200 0,13 с с native `freshness`; `_resolver_ivf_ready()`=True,
+IVF `<#>` отвечает. Бой :8091 — `11d8f158` без новых флагов. Ф6.3
+`ASK_SOLR_SYNONYMS` в git (замок 14/0), на :8092 не включён — словаря в базе
+ещё нет (следующий шаг Ф6.3: завести `solr_synonyms` + наполнить wiki-alias).
 
-🔴 **Ф6.3 в дереве, не в git `[24.08]`**: `ASK_SOLR_SYNONYMS` умолч.0 +
-`ASK_SOLR_SYNONYMS_DICT` без дефолта; `same_concept_groups` + `ts_lexize`;
-замок `test_solr_synonyms_apply.py` **14/0**; md5 ask **a8e0316f…**; код за
-env, бой не включён. Фактура `docs/F6_SYNONYMS_FACTS.md`.
+🔴 **§7bis `[24.08]`**: инвентарь `work/biz-refs-inventory.md`; проект оси
+принят — `work/calendar-axis-design.md` (6 разделов; `InformationRegister_Календарь`
+↔ `ДниНедели`; `ASK_CALENDAR_AXIS` умолч.0; лидер calendar_days; внедрение:
+corpus_build.sql → ask-код → замки/словарь/скорир).
 
-🔴 **§7bis `[24.08]`**: локальный инвентарь `work/biz-refs-inventory.md`; дальше
-— живой `$metadata` okna.
-
-🔴 **дальше**: свежая проба okna → пат-спек коммит Ф6.3 → флаги на `:8092`
-(не бой) → §7bis metadata. klient-1 embed 4B: EMBED_RUNNING (PID 12576,
-corpus после resolver) — крон/оркестратор.
+🔴 **дальше**: (1) Ф6.3 — словарь синонимов в базе okna + включение флага на
+:8092; (2) §7bis шаг 1 — `corpus_build.sql` search_meta-карта календаря (агент);
+(3) перемер латентности Ф6.1 на свободном GPU; (4) klient-1 embed 4B —
+EMBED_RUNNING (PID 12576, corpus после resolver) — крон/оркестратор.
 
 🔴 **rank okna «лучше всего на неделе» — выкат+AB 8/8 `[23.08]`**: axis-clarify
 6 осей → `rank_axis_auto` (ТМЦ); md5 **863567dd** на `:8091`; AB_PROBE **8/8**,
