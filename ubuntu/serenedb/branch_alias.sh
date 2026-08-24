@@ -94,9 +94,9 @@ over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUD
 # биллингового прогона 16.08 ловила TranscriptNotContinuableError [17.08].
 BRANCH_ALIAS_SESSION="${BRANCH_ALIAS_SESSION_KEY:-branch-alias-$(date +%Y%m%d-%H%M%S)}"
 # Модель и thinking — через infer model run (замер 17.08). Умолчание транспорта
-# — --gateway; BRANCH_ALIAS_INFER=local обходит потолок RPC шлюза 120 с
-# (cli/infer.md; замер 17.08 okna). Модель — vLLM Qwen3.8-27B (0 $);
-# DeepSeek pro — через BRANCH_ALIAS_MODEL.
+# — --local (cli/infer.md Behavior; [замер 24.08] wiki-alias: --gateway = RPC 120 с).
+# BRANCH_ALIAS_INFER=gateway — только короткая проба маршрутизации.
+# Модель — vLLM Qwen3.8-27B (0 $); DeepSeek pro — через BRANCH_ALIAS_MODEL.
 BRANCH_ALIAS_MODEL="${BRANCH_ALIAS_MODEL:-vllm/Qwen3.8-27B}"
 BRANCH_ALIAS_THINKING="${BRANCH_ALIAS_THINKING:-off}"
 ZERO_STREAK_MAX="${BRANCH_ALIAS_ZERO_STREAK_MAX:-3}"

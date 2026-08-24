@@ -167,11 +167,15 @@ t("--infra-check HTML без ans → стоп (0)", rc_infra == 0, rc_infra)
 os.unlink(_err_p.name)
 
 import alias_infer_gateway as IG  # noqa: E402
-t("транспорт умолчание — gateway", IG.infer_transport_flag({}) == "--gateway")
+t("транспорт умолчание — local", IG.infer_transport_flag({}) == "--local")
 t("BRANCH_ALIAS_INFER=local — --local",
   IG.infer_transport_flag({"BRANCH_ALIAS_INFER": "local"}) == "--local")
-t("неизвестное значение транспорта — gateway",
-  IG.infer_transport_flag({"BRANCH_ALIAS_INFER": "rpc"}) == "--gateway")
+t("BRANCH_ALIAS_INFER=gateway — --gateway",
+  IG.infer_transport_flag({"BRANCH_ALIAS_INFER": "gateway"}) == "--gateway")
+t("ALIAS_INFER_TRANSPORT=gateway — --gateway",
+  IG.infer_transport_flag({"ALIAS_INFER_TRANSPORT": "gateway"}) == "--gateway")
+t("неизвестное значение транспорта — local",
+  IG.infer_transport_flag({"BRANCH_ALIAS_INFER": "rpc"}) == "--local")
 
 print()
 if FAIL:

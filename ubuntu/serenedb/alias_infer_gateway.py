@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Один вызов модели через `openclaw infer model run` без tool surface.
 
-Умолчание — `--gateway` (modelRun / promptMode=none, доки cli/infer.md).
-`--local` — lean completion без RPC-потолка шлюза 120 с; включается окружением
-`BRANCH_ALIAS_INFER=local` или `ALIAS_INFER_TRANSPORT=local` (ключ, URL и id
-модели в код не входят: их даёт конфиг OpenClaw / EnvironmentFile). Промпт
-из файла (обход лимита argv у длинных JSON-пачек).
+Умолчание — `--local` (доки установленной сборки `cli/infer.md` Behavior:
+stateless `model run` defaults to local; gateway не нужен). 🔴 [замер 24.08]
+`--gateway` режет RPC-потолком 120000 ms (`GatewayTransportError`); на пачке
+wiki-alias 20 сущностей / vLLM Qwen3.8-27B: gw 619 с exit 1, loc 1034 с exit 0.
+Потолок в схеме/конфиге не поднимается (`timeoutMs: 12e4` литерал в CLI).
+`ALIAS_INFER_TRANSPORT=gateway` / `BRANCH_ALIAS_INFER=gateway` — только короткая
+проба маршрутизации. Ключ/URL/id модели в код не входят (конфиг OpenClaw).
+Промпт из файла (обход лимита argv у длинных JSON-пачек).
 """
 from __future__ import annotations
 
@@ -18,14 +21,14 @@ from pathlib import Path
 
 
 def infer_transport_flag(env: dict | None = None) -> str:
-    """`--gateway` или `--local`; иное значение окружения → gateway."""
+    """`--local` или `--gateway`; иное/пустое → local (штатный default model run)."""
     src = env if env is not None else os.environ
     raw = (
         src.get("BRANCH_ALIAS_INFER")
         or src.get("ALIAS_INFER_TRANSPORT")
-        or "gateway"
+        or "local"
     ).strip().lower()
-    return "--local" if raw == "local" else "--gateway"
+    return "--gateway" if raw == "gateway" else "--local"
 
 
 def main() -> int:

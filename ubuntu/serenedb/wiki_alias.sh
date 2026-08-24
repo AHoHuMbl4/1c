@@ -18,6 +18,10 @@
 # Идемпотентно: спрашиваются только сущности, которых ещё нет в словаре.
 # Использование: wiki_alias.sh [сущностей за прогон]   (0 или пусто = все оставшиеся)
 set -u
+# Одноразовый замер infer (work/acceptance/measure_wiki_alias_infer.sh): WIKI_ALIAS_MEASURE=1
+if [ "${WIKI_ALIAS_MEASURE:-0}" = "1" ]; then
+  exec bash "$(cd "$(dirname "$0")/../.." && pwd)/work/acceptance/measure_wiki_alias_infer.sh"
+fi
 DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 BOTUSER="${OPENCLAW_USER:-undebot}"
 # 🔴 КАК ЗАПУСКАТЬ ОТ ИМЕНИ БОТА — РЕШАЕТСЯ ПО ОКРУЖЕНИЮ, А НЕ ЗАШИТО В `sudo`. Профиль,
@@ -57,8 +61,10 @@ ALIAS_TABLE="${ALIAS_TABLE:-search_entity_alias}"
 # ручкой, что и у сущностей, чтобы прогон рядом не трогал боевой словарь.
 MEASURE_TABLE="${MEASURE_TABLE:-search_measure_alias}"
 CAP="${1:-0}"
-# Модель/thinking — infer model run --gateway (замер 17.08).
-# Умолчание — своя vLLM Qwen3.8-27B (0 $); DeepSeek — через WIKI_ALIAS_MODEL.
+# Модель/thinking — infer model run через alias_infer_gateway.py.
+# 🔴 Транспорт: умолчание --local (cli/infer.md). [замер 24.08] --gateway =
+# RPC-потолок 120 с → GatewayTransportError; loc 1034 с / пачка 20 — exit 0.
+# Умолчание модели — своя vLLM Qwen3.8-27B (0 $); DeepSeek — через WIKI_ALIAS_MODEL.
 WIKI_ALIAS_MODEL="${WIKI_ALIAS_MODEL:-vllm/Qwen3.8-27B}"
 WIKI_ALIAS_THINKING="${WIKI_ALIAS_THINKING:-off}"
 cd "$(dirname "$0")" || exit 1
