@@ -435,9 +435,11 @@ klient-1 для добора разметки гоняли временную к
 | `__sdb_store` (PRAGMA database_size) | 88.7 GiB → (пик 96.2 при откате) | **88.7 GiB** |
 
 Corpus: 960 service-таблиц, ~60 мин; resolver: `UPDATE … WHERE EXISTS (class=service)`
-→ `UPDATE 605784` за 86 с. Контроль «не пересчиталось» — после следующего
-полного такта (pipeline после чистки: `build.sh` без `+x` → exit 126;
-восстановлен `chmod a+x *.sh`, такт перезапущен).
+→ `UPDATE 605784` за 86 с. Контроль после такта `[замер]`: corpus/resolver service emb **0**;
+resolver service rows **0** (DELETE из `resolver_build` после MERGE);
+`resolver_values=1 631 785`, `resolver_no_emb=0`; corpus business emb
+**2 185 215** без изменения. Pipeline после чистки: `build.sh` без `+x` →
+exit 126; `chmod a+x *.sh` восстановлен, такт(ы) прошли.
 
 
 ---

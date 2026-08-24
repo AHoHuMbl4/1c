@@ -366,8 +366,8 @@ def _fake_agg(*a, **k):
     return dict(_grp_agg)
 _old_agg = A.aggregate_groups
 A.aggregate_groups = _fake_agg
-_old_rpc = A.rank_product_axis_col
-A.rank_product_axis_col = lambda *a, **k: "refs_map.ТМЦ"
+_old_res = A.rank_axis_resolve
+A.rank_axis_resolve = lambda *a, **k: ("refs_map.ТМЦ", [])
 try:
     fb = A.rank_gate_fallback_answer(
         _q_live, _agg_row, "accumulationregister_реализациятмц", "", {}, "Количество",
@@ -376,7 +376,7 @@ try:
     t("rank_gate_fallback: reaggregate called", bool(_called), _called)
 finally:
     A.aggregate_groups = _old_agg
-    A.rank_product_axis_col = _old_rpc
+    A.rank_axis_resolve = _old_res
 
 # slot_mode: rank intent без grain=group
 _sm2 = A.answer_slot_mode("sum", "sum", form="number", grain="row")
@@ -395,6 +395,7 @@ if A.rank_intent_from(_int, _plan, _q) and _sm == "sum":
     _sm = "rank"
 
 # --- 23.08 okna: rank axis auto (compute=max, multi kind_hits → ТМЦ, не clarify) ---
+# 24.08: ось — pick/rerank по вопросу (не product_axis_pref по именам колонок).
 _axes6 = [
     {"col": "ВидДеятельности", "target_src": "catalog_видыдеятельности"},
     {"col": "Договор", "target_src": "catalog_договоры"},
@@ -403,8 +404,13 @@ _axes6 = [
 ]
 _int_w = {"want": "sum", "kind": "продажи", "measure": "Количество"}
 _plan_max = {"compute": "max", "quantity": "Количество"}
-_pcol = A.rank_product_axis_col(
-    "accumulationregister_реализациятмц", _axes6, _int_w, _q_live, _plan_max)
+_old_pick_ax = A.rank_axis_pick
+A.rank_axis_pick = lambda q, k, axes: ["ТМЦ", "Договор"]
+try:
+    _pcol = A.rank_product_axis_col(
+        "accumulationregister_реализациятмц", _axes6, _int_w, _q_live, _plan_max)
+finally:
+    A.rank_axis_pick = _old_pick_ax
 t("rank week: product axis col", _pcol == "ТМЦ", _pcol)
 import serene_axis as _ax
 _gd6 = _ax.decide_grain(_axes6, [_pcol], {}, "max", False, rank_intent=True)

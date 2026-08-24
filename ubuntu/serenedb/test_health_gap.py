@@ -92,28 +92,31 @@ g = A._classify_health_gap({"entities": 1, "rows_missing": 5, "worst": []})
 t("real object gap stays systemic", g and g.get("kind") == "systemic", g)
 A.psql, A._real_corpus_object_gaps = real_psql, real_classify
 
-# _measure_health_gap: mock _vitrina_objects — объекты равны корпусу.
+# _measure_health_gap: один SELECT search_coverage, не цикл _vitrina_objects.
 _vo_calls = []
-def mock_vo(t):
-    _vo_calls.append(t)
-    return {"document_doc": 100, "catalog_plain": 50}.get(t)
-def mock_rk(t):
-    return t == "document_doc"
-real_vo, real_rk, real_psql2 = A._vitrina_objects, A._table_has_ref_key, A.psql
-A._vitrina_objects, A._table_has_ref_key = mock_vo, mock_rk
+real_vo, real_psql2 = A._vitrina_objects, A.psql
+def mock_vo(name):
+    _vo_calls.append(name)
+    return 0
+A._vitrina_objects = mock_vo
 def mock_psql2(sql):
-    if "duckdb_tables()" in sql and "src_table" in sql:
-        return [["document_doc"], ["catalog_plain"]]
-    if "GROUP BY 1" in sql and "search_corpus" in sql:
-        return [["document_doc", 100], ["catalog_plain", 50]]
-    if "Period" in sql or "Date" in sql:
-        return []
+    if "FROM search_coverage" in sql and "объектов_витрины" in sql:
+        return [["document_doc", 100, 100], ["catalog_plain", 50, 50]]
     return []
 A.psql = mock_psql2
 g = A._measure_health_gap()
-A._vitrina_objects, A._table_has_ref_key, A.psql = real_vo, real_rk, real_psql2
-t("measure uses _vitrina_objects", _vo_calls == ["document_doc", "catalog_plain"], _vo_calls)
+A._vitrina_objects, A.psql = real_vo, real_psql2
+t("measure does not scan vitrina per entity", _vo_calls == [], _vo_calls)
 t("measure equal objects no gap", g is None, g)
+
+def mock_psql_gap(sql):
+    if "FROM search_coverage" in sql and "объектов_витрины" in sql:
+        return [["document_doc", 120, 100]]
+    return []
+A.psql = mock_psql_gap
+g = A._measure_health_gap()
+A.psql = real_psql2
+t("measure coverage missing", g and g["rows_missing"] == 20 and g["entities"] == 1, g)
 
 print("PASS %d FAIL %d" % (PASS, len(FAIL)))
 sys.exit(1 if FAIL else 0)

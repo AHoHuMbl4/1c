@@ -42,9 +42,11 @@ many = [{"atom": {"operation": "sum", "exact_value": i, "proof_status": A.PROOF_
          "label": "L%d" % i, "srcs": ["s%d" % i], "row": {"count": 1}}
         for i in range(20)]
 pay = {"classes": many, "fork_key": "fk"}
-bres = A.fork_outcome_b("сколько?", pay, {})
-t("B: все 20 пар в ответе, без pair_budget",
+bres = A.fork_outcome_b("сколько?", pay, {}, picked_src="s5")
+t("B: лидер в text, 19 в люке, atoms=20",
   bres and len(bres.get("atoms") or []) == 20
+  and len(bres.get("options") or []) == 19
+  and "L5" in (bres.get("text") or "")
   and (bres.get("partial") or {}).get("fork_limitation") is None)
 t("B: pairs_hidden null",
   (bres.get("figures") or {}).get("pairs_hidden") is None)

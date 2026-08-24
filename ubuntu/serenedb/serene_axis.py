@@ -128,6 +128,14 @@ def decide_grain(axes, kind_hits, term_hits, compute=None, is_child=False,
         if is_child and len(cols) > 1:
             return {"grain": "row", "col": None, "form": "number",
                     "named_gis": [], "clarify": "axis"}
+        if rank_intent and len(cols) == 1:
+            # Одна ссылочная ось у источника — GROUP BY без kind-hit.
+            return {"grain": "group", "col": cols[0], "form": "rank",
+                    "named_gis": [], "clarify": None}
+        if rank_intent and len(cols) > 1:
+            # Несколько осей без выбора — честный уточняющий исход, не grain=row.
+            return {"grain": "row", "col": None, "form": "number",
+                    "named_gis": [], "clarify": "axis"}
         if rank_intent and not cols:
             # Рейтинг без колонки оси: не grain=row с именем из строки как «лидером».
             return {"grain": "row", "col": None, "form": "rank",

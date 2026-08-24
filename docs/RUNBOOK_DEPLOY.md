@@ -508,6 +508,13 @@ precheck требует `embed_workers+8` потоков). Swap **4 GiB** (`/swa
 **a2fb7ff4…** (= origin/main). Swap на юните **19 GiB** (три файла). Рестарт
 `serenedb` обязателен после смены conf. Precheck и `ai_embed` (gpu-erw) проходят.
 
+**Прогресс пересчёта векторов** (фаза `embed_all.sh` / `embed_missing.sh`): во время
+раунда `count(emb)` в корпусе стоит до `transfer`; живые числа — через
+`ubuntu/serenedb/embed_progress.sh` (сумма `emb_<база>_search_corpus_part_*`, два снимка
+с интервалом → скорость). Подробности и что не работает под нагрузкой —
+`docs/EMBED_BULK_HOWTO.md` §8. На klient-1 при живом досчёте полный count по корпусу
+>300 с; задайте `EMBED_SCOPE_TOTAL` = деловые строки без вектора на старте раунда.
+
 `[18.08]` Приоритетная сборка (оркестратор): stop `1c-packet-apply.timer`,
 `SET memory_limit='10500MB'` (= SHOW **9.7 GiB**), ручной такт. Цикл `EXECUTE p_doc`
 (`corpus_build.sql:858`): **106/1457** сущностей, затем OOM на

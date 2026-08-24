@@ -30,6 +30,7 @@ Env: SERENEDB_DSN, DEEPSEEK_*, ALIBABA_* (см. /etc/1c-mcp-reports.env), ASK_TO
 """
 import contextvars
 import csv
+import datetime
 import hashlib
 import io
 import json
@@ -1278,6 +1279,368 @@ def period_preds(period):
         out.append("doc_date >= %s" % lit(p["from"]))
     if p.get("to"):
         out.append("doc_date < (%s::date + INTERVAL 1 day)" % lit(p["to"]))
+    return out
+
+
+# ── Окна периода W (план §3): форма по границам дат, не по лексике вопроса ──
+_ORIGIN_ASSUMED = "assumed"
+_ORIGIN_PRIOR = "prior"
+_ORIGIN_EXPLICIT = "explicit"
+_ORIGIN_NONE = "none"
+_WINDOW_FORM_IDS = frozenset({
+    "none", "explicit", "mtd", "full_month", "wtd", "full_week",
+    "drop_assumed", "prior",
+})
+
+
+def _calendar_date(iso):
+    """YYYY-MM-DD → date. Иначе None."""
+    try:
+        return datetime.date.fromisoformat(str(iso or "")[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def _month_range(d):
+    """Первый и последний день календарного месяца d."""
+    start = d.replace(day=1)
+    if start.month == 12:
+        end = start.replace(day=31)
+    else:
+        end = (start.replace(month=start.month + 1) - datetime.timedelta(days=1))
+    return start, end
+
+
+def _week_range_monday(d):
+    """Неделя пн–вс (Europe/Chisinau: календарная дата без TZ-сдвига)."""
+    start = d - datetime.timedelta(days=d.weekday())
+    end = start + datetime.timedelta(days=6)
+    return start, end
+
+
+def _is_seven_day_span(fr_d, to_d):
+    """Ровно семь календарных дней (to − from == 6). Иначе False."""
+    if not fr_d or not to_d:
+        return False
+    return (to_d - fr_d).days == 6
+
+
+def _is_current_calendar_week(fr_d, to_d, td):
+    """Окно совпадает с WTD или полной пн–вс текущей календарной недели."""
+    if not td or not fr_d or not to_d:
+        return False
+    ws, we = _week_range_monday(td)
+    if fr_d != ws:
+        return False
+    return to_d == td or to_d == we
+
+
+def _assumed_sliding_week_not_calendar(fr_d, to_d, td):
+    """assumed 7 дней (любое выравнивание), конец сегодня/вчера, ≠ календарной неделе.
+
+    Два прочтения одной оси W (§2–3): календарная неделя (лидер) и скользящие
+    7 дней (люк). Не лексика — только границы и длина. explicit/prior снаружи.
+    """
+    if not td or not _is_seven_day_span(fr_d, to_d):
+        return False
+    if to_d not in (td, td - datetime.timedelta(days=1)):
+        return False
+    return not _is_current_calendar_week(fr_d, to_d, td)
+
+
+def _iso_date(d):
+    return d.isoformat()
+
+
+def _period_origin(intent, period_from_prior=False):
+    """Машинный origin окна из parse/diag, не из прозы вопроса."""
+    if period_from_prior:
+        return _ORIGIN_PRIOR
+    parse = (intent or {}).get("parse") or {}
+    assumed = parse.get("assumed") or []
+    if any(str(a).startswith("period.") for a in assumed):
+        return _ORIGIN_ASSUMED
+    p = (intent or {}).get("period") or {}
+    if p.get("from") or p.get("to"):
+        return _ORIGIN_EXPLICIT
+    return _ORIGIN_NONE
+
+
+def window_fp_of(period, origin=None):
+    """Машинный отпечаток окна: from|to|origin."""
+    p = period or {}
+    o = origin if origin is not None else (p.get("origin") or _ORIGIN_NONE)
+    return "%s|%s|%s" % (p.get("from") or "", p.get("to") or "", o)
+
+
+def _period_form_id(period, today):
+    """Id формы окна — только сравнением границ с today."""
+    td = _calendar_date(today)
+    p = period or {}
+    fr, to = p.get("from"), p.get("to")
+    if not td or not fr or not to:
+        return "explicit" if (fr or to) else "none"
+    fr_d, to_d = _calendar_date(fr), _calendar_date(to)
+    if not fr_d or not to_d:
+        return "explicit"
+    ms, me = _month_range(td)
+    ws, we = _week_range_monday(td)
+    if fr_d == ms and to_d == td and to_d != me:
+        return "mtd"
+    if fr_d == ms and to_d == me:
+        return "full_month"
+    if fr_d == ws and to_d == td and to_d != we:
+        return "wtd"
+    if fr_d == ws and to_d == we:
+        return "full_week"
+    return "explicit"
+
+
+def _window_reading(period, origin, form_id=None, today=None):
+    p = dict(period or {})
+    o = origin or _ORIGIN_NONE
+    if o:
+        p["origin"] = o
+    fid = form_id or _period_form_id(p, today)
+    if fid in _WINDOW_FORM_IDS:
+        p["interpretation_id"] = fid
+    return {
+        "period": p,
+        "origin": o,
+        "window_fp": window_fp_of(p, o),
+        "interpretation_id": fid,
+    }
+
+
+def period_readings(intent, today=None, period_from_prior=False):
+    """Конечный перечень прочтений W по форме диапазона (план §3).
+
+    MTD vs полный месяц, WTD vs полная неделя — по форме границ относительно today
+    (`_period_form_id`), без имён сущностей и без списков русских слов.
+
+    «без окна» (`drop_assumed`) — только когда в разборе нет from/to: вопрос не
+    назвал период. Явный/относительный период (есть from|to) — не ветка drop.
+    """
+    if not today:
+        today = time.strftime("%Y-%m-%d")
+    td = _calendar_date(today)
+    if not td:
+        return [_window_reading({}, _ORIGIN_NONE, "none", today)]
+
+    p = dict((intent or {}).get("period") or {})
+    fr, to = p.get("from"), p.get("to")
+    origin = _period_origin(intent, period_from_prior)
+
+    if not fr and not to:
+        out = [_window_reading({}, _ORIGIN_NONE, "none", today)]
+        if origin == _ORIGIN_ASSUMED:
+            out.append(_window_reading({}, "drop_assumed", "drop_assumed", today))
+        return out
+
+    fr_d = _calendar_date(fr)
+    to_d = _calendar_date(to)
+    if not fr_d or not to_d:
+        return [_window_reading(p, origin, "explicit", today)]
+
+    ms, me = _month_range(td)
+    ws, we = _week_range_monday(td)
+    # origin=assumed + ровно 7 дней, конец сегодня/вчера, ≠ текущая календарная
+    # неделя: в перечень — wtd/full_week (лидер) и исходное скользящее (люк).
+    # explicit/prior не трогаем — «прошлая неделя» и follow-up держат своё окно.
+    sliding_hatch = None
+    if origin == _ORIGIN_ASSUMED and _assumed_sliding_week_not_calendar(fr_d, to_d, td):
+        sliding_hatch = dict(p)
+        p = dict(p)
+        p["from"] = _iso_date(ws)
+        p["to"] = _iso_date(we)
+        fr_d, to_d = ws, we
+    readings, seen = [], set()
+
+    def _add(period, orig, fid):
+        r = _window_reading(period, orig, fid, today)
+        if r["window_fp"] in seen:
+            return
+        seen.add(r["window_fp"])
+        readings.append(r)
+
+    # Раскрытие только если разбор уже месяц/неделя текущего календаря
+    # (mtd|full_month|wtd|full_week). Одиночный день на 1-е / пн — explicit.
+    fid = _period_form_id(p, today)
+    if fid in ("mtd", "full_month"):
+        mtd = {"from": _iso_date(ms), "to": _iso_date(td)}
+        full = {"from": _iso_date(ms), "to": _iso_date(me)}
+        if mtd["to"] == full["to"]:
+            _add(full, origin, "full_month")
+        else:
+            _add(mtd, origin, "mtd")
+            _add(full, origin, "full_month")
+    elif fid in ("wtd", "full_week"):
+        wtd = {"from": _iso_date(ws), "to": _iso_date(td)}
+        full = {"from": _iso_date(ws), "to": _iso_date(we)}
+        if wtd["to"] == full["to"]:
+            _add(full, origin, "full_week")
+        else:
+            _add(wtd, origin, "wtd")
+            _add(full, origin, "full_week")
+    else:
+        _add(p, origin, "explicit")
+
+    # Люк: исходные скользящие 7 дней рядом с календарной неделей (§2–3).
+    if sliding_hatch is not None:
+        _add(sliding_hatch, origin, "explicit")
+
+    # from/to уже есть → период назван; drop_assumed сюда не входит (§3).
+    return readings if readings else [_window_reading(p, origin, "explicit", today)]
+
+
+def render_window_label(period, origin=None, today=None):
+    """Подпись W-ветки: ISO-даты + машинный origin/id формы (план §7).
+
+    Без кириллических литералов — только `_period_day_label` и ascii id формы.
+    """
+    p = period or {}
+    fr, to = p.get("from"), p.get("to")
+    if not fr and not to:
+        o = origin or p.get("origin") or _ORIGIN_NONE
+        return o if o != _ORIGIN_NONE else None
+    dates = _period_day_label(fr, to)
+    fid = p.get("interpretation_id") or _period_form_id(p, today)
+    o = origin or p.get("origin") or _ORIGIN_NONE
+    parts = [dates]
+    if fid and fid not in ("explicit", "none"):
+        parts.append(fid)
+    if o in (_ORIGIN_ASSUMED, _ORIGIN_PRIOR):
+        parts.append(o)
+    return " · ".join(parts)
+
+
+# Лидер оси W по умолчанию: MTD/WTD (с начала периода по сегодня), не полный календарь.
+_WINDOW_LEADER_FORMS = ("mtd", "wtd")
+
+
+def prefer_window_leader(readings):
+    """Reading-лидер для основного ответа: mtd/wtd, иначе первое прочтение."""
+    readings = list(readings or [])
+    if not readings:
+        return None
+    for prefer in _WINDOW_LEADER_FORMS:
+        for rd in readings:
+            if (rd.get("interpretation_id") or "") == prefer:
+                return rd
+    return readings[0]
+
+
+def apply_period_leader(intent, today=None, period_from_prior=False):
+    """Подключить period_readings к основному ответу (фаза B, план §2/§3).
+
+    Лидер по умолчанию — MTD/WTD; полный месяц/неделя остаются конкурирующим
+    прочтением для детектора. Возвращает список readings (для diag / исходов).
+    """
+    intent = intent if isinstance(intent, dict) else {}
+    readings = period_readings(intent, today, period_from_prior=period_from_prior)
+    leader = prefer_window_leader(readings)
+    if leader is None:
+        return readings
+    pr = dict(leader.get("period") or {})
+    if leader.get("origin"):
+        pr["origin"] = leader["origin"]
+    if leader.get("interpretation_id"):
+        pr["interpretation_id"] = leader["interpretation_id"]
+    if pr.get("from") or pr.get("to") or leader.get("interpretation_id") in (
+            "none", "drop_assumed"):
+        intent["period"] = pr
+    return readings
+
+
+def sales_compare_intent(intent, question=""):
+    """Сравнение двух окон продаж («лучше/больше чем»), не rank по оси.
+
+    [замер 24.08 okna] «что лучше всего продавалось на этой неделе» содержит
+    «лучше» + период → прежний путь уводил в compare (diff двух WTD), grain=row,
+    без имени лидера при живых данных GROUP BY ТМЦ. Суперлатив/топ — rank.
+    """
+    intent = intent or {}
+    q = " ".join(str(question or "").lower().split())
+    if not sales_sum_intent(intent, question):
+        return False
+    # Суперлатив / top-N: «лучше всего», «больше всех» — ось, не два окна.
+    if any(w in q for w in (
+            "лучше всего", "хуже всего", "лучше всех", "хуже всех",
+            "больше всего", "меньше всего", "больше всех", "меньше всех",
+            "топ-", "топ ", " top", "лидер", "рейтинг", "leader", "ranking")):
+        return False
+    if rank_intent_from(intent, question=question) and not any(
+            w in q for w in (" чем", "чем ", " vs", "против", "по сравнению",
+                             "compared", " versus")):
+        return False
+    return any(w in q for w in (
+        "лучше", "хуже", "больше чем", "меньше чем",
+        "больше, чем", "меньше, чем"))
+
+
+def sales_compare_windows(intent, today, question=""):
+    """Два окна для compare-продаж: текущее vs prior (неделя/месяц по форме).
+
+    Возвращает (period, period2, form_id). Без лексики — только границы дат.
+    """
+    td = _calendar_date(today)
+    if not td:
+        p = (intent or {}).get("period") or {}
+        p2 = (intent or {}).get("period2") or {}
+        return p, p2, "explicit"
+    p = dict((intent or {}).get("period") or {})
+    fr_d = _calendar_date(p.get("from")) if p.get("from") else None
+    ms, _me = _month_range(td)
+    ws, _we = _week_range_monday(td)
+
+    if fr_d and fr_d == ws:
+        cur = {"from": _iso_date(ws), "to": _iso_date(td)}
+        prev_ws = ws - datetime.timedelta(days=7)
+        prev_to = prev_ws + (td - ws)
+        prev = {"from": _iso_date(prev_ws), "to": _iso_date(prev_to)}
+        return cur, prev, "wtd"
+
+    if fr_d and fr_d == ms:
+        cur = {"from": _iso_date(ms), "to": _iso_date(td)}
+        if ms.month == 1:
+            prev_ms = ms.replace(year=ms.year - 1, month=12, day=1)
+        else:
+            prev_ms = ms.replace(month=ms.month - 1, day=1)
+        _pms, prev_me = _month_range(prev_ms)
+        prev_to = prev_ms.replace(day=min(td.day, prev_me.day))
+        prev = {"from": _iso_date(prev_ms), "to": _iso_date(prev_to)}
+        return cur, prev, "mtd"
+
+    p2 = dict((intent or {}).get("period2") or {})
+    if p2.get("from") or p2.get("to"):
+        return p, p2, "explicit"
+    return p, {}, "explicit"
+
+
+def aggregate_compare_sales(src, match, period1, period2, measure):
+    """Diff двух сумм продаж (form=compare). Один src, два окна."""
+    if not src or not measure:
+        return None
+    a1 = aggregate(src, match, period_preds(period1 or {}), measure)
+    a2 = aggregate(src, match, period_preds(period2 or {}), measure)
+    if not a1 or not a2:
+        return None
+    s1, s2 = a1.get("sum"), a2.get("sum")
+    if s1 is None or s2 is None:
+        return None
+    try:
+        diff = round(float(s1) - float(s2), 2)
+    except (TypeError, ValueError):
+        return None
+    out = dict(a1)
+    out.update({
+        "sum": diff,
+        "form": "compare",
+        "grain": "row",
+        "compare_base": s1,
+        "compare_other": s2,
+        "period2": True,
+    })
     return out
 
 
@@ -2831,19 +3194,106 @@ def fork_scan(match, preds, rel_by_src):
     return out
 
 
+def fork_scan_readings(match, readings, rel_by_src):
+    """Мульти-скан: readings × fork_scan; ячейки (src, window_fp) со статусом."""
+    rel_by_src = rel_by_src or {}
+    readings = readings or [{}]
+    cells = []
+    merged_rows = {}
+    period_by_src = {}
+    for rd in readings:
+        pr = dict(rd.get("period") or {})
+        if rd.get("origin"):
+            pr["origin"] = rd["origin"]
+        if rd.get("interpretation_id"):
+            pr["interpretation_id"] = rd["interpretation_id"]
+        preds_w = (period_preds(pr) if (pr.get("from") or pr.get("to")) else [])
+        scan = fork_scan(match, preds_w, rel_by_src)
+        wfp = rd.get("window_fp") or window_fp_of(pr, rd.get("origin"))
+        for src in rel_by_src:
+            if src in scan:
+                row = scan[src]
+                cells.append({"src": src, "window_fp": wfp, "period": pr,
+                              "row": row, "status": "computed"})
+                merged_rows[(src, wfp)] = row
+                period_by_src[(src, wfp)] = pr
+            else:
+                cells.append({"src": src, "window_fp": wfp, "period": pr,
+                              "row": None, "status": "no_live_cells"})
+    return cells, merged_rows, period_by_src
+
+
+def fork_classes_windowed(merged_rows, period_by_src, measure_word="", want=None,
+                          rel_by_src=None):
+    """Классы по ячейкам (src, window_fp); один src — несколько окон."""
+    rel_by_src = rel_by_src if rel_by_src is not None else {}
+    by_atom = {}
+    meta_by_fp = {}
+    for key, d in (merged_rows or {}).items():
+        src, wfp = key
+        rel = rel_by_src.get(src)
+        period = period_by_src.get(key)
+        built = _fork_atom_of(d, [src], measure_word, want=want, rel_measures=rel,
+                              period=period)
+        fp = _fork_atom_equiv_fp(built)
+        if fp is None:
+            continue
+        by_atom.setdefault(fp, []).append(src)
+        if fp not in meta_by_fp:
+            meta_by_fp[fp] = {"row": d, "period": period, "window_fp": wfp,
+                              "atom": built}
+    fork_classes._meta_by_fp = meta_by_fp
+    return by_atom
+
+
+def fork_detector_scan(match, preds, intent, today, rel_by_src,
+                         period_from_prior=False, measure_word="", want=None):
+    """Один или несколько readings → rows + classes + cells для diag."""
+    readings = period_readings(intent, today, period_from_prior=period_from_prior)
+    if len(readings) <= 1:
+        rd = readings[0] if readings else {"period": {}}
+        pr = rd.get("period") or {}
+        use_preds = (period_preds(pr) if (pr.get("from") or pr.get("to"))
+                     else list(preds or []))
+        rows = fork_scan(match, use_preds, rel_by_src)
+        pmeta = {}
+        if pr.get("from") or pr.get("to"):
+            for s in rows:
+                pmeta[s] = pr
+        cls = fork_classes(rows, measure_word, want=want, rel_by_src=rel_by_src,
+                           period_meta=pmeta)
+        return rows, cls, readings, []
+    cells, merged, pby = fork_scan_readings(match, readings, rel_by_src)
+    cls = fork_classes_windowed(merged, pby, measure_word, want=want,
+                                  rel_by_src=rel_by_src)
+    rows = {s: merged[(s, w)] for (s, w) in merged}
+    return rows, cls, readings, cells
+
+
+def _window_tuple_from_period(period):
+    """(origin, from, to) для отпечатка класса — окно W входит в эквивалентность."""
+    pr = period or {}
+    return (
+        pr.get("origin") or pr.get("interpretation_id") or _ORIGIN_NONE,
+        pr.get("from") or "",
+        pr.get("to") or "",
+    )
+
+
 def _fork_atom_equiv_fp(atom):
     """Отпечаток AnswerAtom для классов эквивалентности — без src-шелухи (план §3, §5).
 
     Не входят: measure_label, display_value, unit, completeness, freshness, src.
     Для sum — не count/folders строк (документ vs регистр при том же итоге).
     Для count — folders остаётся дискриминатором (записи vs группы).
+    Окно W (origin, from, to) — дискриминатор класса при разных прочтениях периода.
     """
     if not isinstance(atom, dict):
         return None
     op = (atom.get("operation") or "count").lower()
     status = atom.get("proof_status") or PROOF_UNCOUNTED
     if status == PROOF_NA:
-        return (op, status)
+        return (op, status) + (_window_tuple_from_period(atom.get("period")),)
     ev = atom.get("exact_value")
     if ev is not None:
         try:
@@ -2856,6 +3306,7 @@ def _fork_atom_equiv_fp(atom):
         excl = atom.get("excluded") or {}
         if isinstance(excl, dict) and excl.get("folders") is not None:
             fp = fp + (("folders", int(excl["folders"])),)
+    fp = fp + (_window_tuple_from_period(atom.get("period")),)
     return fp
 
 
@@ -2871,25 +3322,38 @@ def _fork_fp_diag(fp):
     return out
 
 
-def fork_classes(rows, measure_word="", want=None, rel_by_src=None):
+def fork_classes(rows, measure_word="", want=None, rel_by_src=None,
+                   period_meta=None):
     """Классы эквивалентности по полному AnswerAtom без src (план §3, §5)."""
     rel_by_src = rel_by_src if rel_by_src is not None else {}
+    period_meta = period_meta or {}
     by_atom = {}
+    meta_by_fp = {}
     for src, d in (rows or {}).items():
         rel = rel_by_src[src] if src in rel_by_src else None
-        built = _fork_atom_of(d, [src], measure_word, want=want, rel_measures=rel)
+        period = period_meta.get(src)
+        built = _fork_atom_of(d, [src], measure_word, want=want, rel_measures=rel,
+                              period=period)
         fp = _fork_atom_equiv_fp(built)
         if fp is None:
             continue
         by_atom.setdefault(fp, []).append(src)
+        if fp not in meta_by_fp:
+            meta_by_fp[fp] = {"row": d, "period": period, "atom": built}
+    fork_classes._meta_by_fp = meta_by_fp
     return by_atom
 
 
-def fork_key_of(src_set, measure_ctx):
-    """Отпечаток класса развилки: sha1(sorted src + measure_ctx). Тот же, что `_fork_log`."""
+def fork_key_of(src_set, measure_ctx, window_fp=""):
+    """Отпечаток класса развилки: sha1(sorted src + measure_ctx [+ window_fp]).
+
+    window_fp пуст — совместимость с подписями src-пар волны-1.
+    """
     srcs = sorted({s for s in (src_set or []) if s})
-    return hashlib.sha1(
-        ("|".join(srcs) + "¦" + (measure_ctx or "")).encode("utf-8")).hexdigest()
+    payload = "|".join(srcs) + "¦" + (measure_ctx or "")
+    if window_fp:
+        payload += "¦" + str(window_fp)
+    return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
 def _fork_log(classes, measure_ctx):
@@ -3079,7 +3543,7 @@ def _fork_headline_measure(src, sums, measure_word, alias_by=None, want=None):
 
 
 def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
-                  rel_measures=None):
+                  rel_measures=None, period=None):
     """AnswerAtom класса из строки `fork_scan` (без src). Непосчитанное — PROOF_UNCOUNTED.
 
     `want=sum` — только сумма по величине вопроса; без подходящей величины атом
@@ -3136,7 +3600,8 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
     return build_answer_atom(
         operation=op, exact_value=exact, measure_id=mid, measure_label=lab,
         excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
-        proof_status=status)
+        proof_status=status, period=period,
+        interpretation_id=(period or {}).get("interpretation_id"))
 
 
 def _class_branch_label(srcs, labels_by_src):
@@ -3148,13 +3613,18 @@ def _class_branch_label(srcs, labels_by_src):
     return None
 
 
-def _class_label_lookup(srcs, measure_ctx):
+def _class_label_lookup(srcs, measure_ctx, atom=None, today=None):
     """Подпись класса по представителю (первый src после sort). B — по классу, не по src_set."""
     srcs = sorted(s for s in (srcs or []) if s)
     if not srcs:
         return None, None
+    period = (atom or {}).get("period") if isinstance(atom, dict) else None
+    wfp = window_fp_of(period, (period or {}).get("origin")) if period else ""
+    wlab = render_window_label(period, today=today) if period else None
     rep = srcs[0]
-    fk_cls = fork_key_of(srcs, measure_ctx)
+    fk_cls = fork_key_of(srcs, measure_ctx, window_fp=wfp)
+    if wlab:
+        return wlab, fk_cls
     labs = fork_labels_of(fk_cls, srcs)
     lab = _class_branch_label(srcs, labs)
     if lab:
@@ -3286,70 +3756,290 @@ def rank_leader_answer_text(agg, measure_label=None, unit=""):
     return "%s%s" % (_fmt_human(val), suffix)
 
 
-def rank_product_axis_col(src, axes, intent, question, plan=None):
-    """Ось номенклатуры для rank-fallback, когда grain=row на живом пути."""
+# Классификация оси rank: модели — только имена осей из данных (п.19), без строк.
+AXIS_PICK_SYS = """You map a user's question to a grouping axis.
+
+You get the question and a numbered list of axis names available on the chosen
+record type. Labels come from the database; they are dimensions for GROUP BY.
+Reply with one JSON object and nothing else:
+  {"axes": [numbers]}
+Numbers are 1-based indices from the list, best first.
+One number when one axis fits the question clearly.
+Several numbers when different axes would answer different readings of the same
+question (at most three).
+Empty list when no axis fits.
+Reply with indices only; naming totals or inventing axis names is outside this step."""
+
+
+def rank_axis_label_rows(axes):
+    """[(col, label)] для осей: метка target_src из search_tables, иначе имя колонки."""
+    axes = [a for a in (axes or []) if a.get("col")]
+    if not axes:
+        return []
+    srcs = [a.get("target_src") for a in axes if a.get("target_src")]
+    labs = {}
+    if srcs:
+        try:
+            for r in psql("SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                          % (TABLES, ", ".join(lit(s) for s in srcs))) or []:
+                if r and r[0]:
+                    labs[r[0]] = (r[1] or r[0]).strip()
+        except RuntimeError:
+            labs = {}
+    out = []
+    for a in axes:
+        col = a["col"]
+        ts = (a.get("target_src") or "").strip()
+        lab = labs.get(ts) or col
+        if ts and lab != col:
+            lab = "%s (%s)" % (lab, col)
+        out.append((col, lab))
+    return out
+
+
+def rank_axes_rerank(query, axes):
+    """Полный порядок осей штатным rerank по меткам (вопрос → ось, не kind→источник)."""
+    query = (query or "").strip()
+    rows = rank_axis_label_rows(axes)
+    if not query or not rows:
+        return []
+    docs = [lab for _c, lab in rows]
+    cols = [c for c, _lab in rows]
+    order = rerank(query, docs)
+    if not order:
+        return []
+    return [cols[i] for i in order if 0 <= i < len(cols)]
+
+
+def rank_axis_pick(question, kind, axes):
+    """Ось rank: модель видит только имена/метки осей источника (п.19).
+
+    Возвращает упорядоченный список col (лучший первый). Пусто — сигнала нет,
+    вызывающий идёт на rerank/hits. Сбой сети — пусто, не отказ ответа.
+    """
+    axes = [a for a in (axes or []) if a.get("col")]
+    if not axes:
+        return []
+    if len(axes) == 1:
+        return [axes[0]["col"]]
+    rows = rank_axis_label_rows(axes)
+    if len(rows) < 2:
+        return [rows[0][0]] if rows else []
+    listing = "\n".join("%d. %s" % (i + 1, lab) for i, (_c, lab) in enumerate(rows))
+    ask_text = (question or "").strip()
+    if kind and kind.strip():
+        ask_text = ("%s (%s)" % (ask_text, kind.strip())).strip() if ask_text else kind.strip()
+    if not ask_text:
+        return []
+    try:
+        raw = ds_chat(
+            [{"role": "system", "content": AXIS_PICK_SYS},
+             {"role": "user",
+              "content": "%s\n\nAxes:\n%s" % (ask_text, listing)}],
+            max_tokens=80)
+    except Exception as e:                     # noqa: BLE001 — сеть/квота
+        sys.stderr.write("ask: axis-pick without model (%s)\n" % str(e)[:80])
+        return []
+    txt = (raw or "").strip()
+    got = []
+    try:
+        j = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
+        if isinstance(j, dict):
+            got = [int(x) for x in (j.get("axes") or []) if str(x).strip().isdigit()]
+    except (ValueError, KeyError, TypeError):
+        got = [int(x) for x in re.findall(r"\d+", txt)]
+    cols = [c for c, _lab in rows]
+    picked = []
+    for i in got:
+        if i == 0:
+            continue
+        if 1 <= i <= len(cols) and cols[i - 1] not in picked:
+            picked.append(cols[i - 1])
+        if len(picked) >= 3:
+            break
+    return picked
+
+
+def rank_axis_resolve(src, axes, intent, question, plan=None):
+    """Ось GROUP BY для rank: классификация вопроса по перечню осей источника.
+
+    Порядок сигнала (без предпочтения имён колонок и без словарей языка):
+      1) модель по короткому списку имён/меток осей (rank_axis_pick);
+      2) stem/meaning вопроса ∩ target_src (kind_axis_hits на question);
+      3) штатный rerank вопроса по меткам осей;
+      4) kind-hits только если вопроса нет (kind = род источника, не ось).
+    Две+ правдоподобные — лидер + люк (§2), не молчаливый выбор первой.
+    Возвращает (col, alts). Нет оси — (None, pool).
+    """
     axes = list(axes or [])
-    cols = [a.get("col") for a in axes if a.get("col")]
-    if not cols and src:
+    if not axes and src:
         try:
             axes = refcols_of(src)
-            cols = [a.get("col") for a in axes if a.get("col")]
         except RuntimeError:
-            cols = []
-    pref = product_axis_pref(cols)
-    if pref:
-        return pref
-    if rank_intent_from(intent, plan, question):
-        _kh = kind_axis_hits(axes, (intent or {}).get("kind"))
-        if not _kh:
-            _kh = kind_axis_rerank(axes, (intent or {}).get("kind"))
-        pref = product_axis_pref(_kh or cols)
-        if pref:
-            return pref
-    return None
+            axes = []
+    cols = [a.get("col") for a in axes if a.get("col")]
+    if not cols:
+        return None, []
+    if len(cols) == 1:
+        return cols[0], []
+    kind = ((intent or {}).get("kind") or "").strip()
+    q = (question or "").strip()
+    picked = []
+    if q or kind:
+        picked = rank_axis_pick(q, kind, axes)
+    if not picked and q:
+        picked = list(kind_axis_hits(axes, q) or [])
+    if not picked and q:
+        ordered = rank_axes_rerank(q, axes)
+        if ordered:
+            if len(cols) == 2:
+                # Ровно две оси источника — оба прочтения (§2): лидер + люк.
+                picked = [c for c in ordered if c in cols]
+                for c in cols:
+                    if c not in picked:
+                        picked.append(c)
+            else:
+                # Топ rerank по вопросу; без словарного «ТМЦ важнее».
+                picked = [ordered[0]]
+    if not picked and kind and not q:
+        picked = list(kind_axis_hits(axes, kind) or [])
+        if not picked:
+            picked = list(kind_axis_rerank(axes, kind) or [])
+    if not picked and kind and q:
+        # Kind без вопроса ошибочно брал одну ось (Договор на «продажи»).
+        # При живом вопросе kind только дополняет, если совпал с rerank-топом.
+        ordered = rank_axes_rerank(q, axes)
+        kh = list(kind_axis_hits(axes, kind) or [])
+        if ordered:
+            picked = [ordered[0]]
+            for c in kh:
+                if c != picked[0] and c not in picked:
+                    picked.append(c)
+                    break
+        elif kh:
+            picked = kh
+    if not picked:
+        return None, list(cols)
+    if len(picked) == 1:
+        return picked[0], []
+    return picked[0], picked[1:]
+
+
+def rank_product_axis_col(src, axes, intent, question, plan=None):
+    """Совместимость: одна ось rank (без люка). См. rank_axis_resolve."""
+    col, _alts = rank_axis_resolve(src, axes, intent, question, plan)
+    return col
+
+
+def rank_leader_atom(agg, measure, money, src=None, intent=None, diag=None,
+                     axes=None, grain_dec=None, cov=None, folders=0):
+    """AnswerAtom лидера: подпись = имя группы из данных, не measure_label."""
+    if not agg or agg.get("grain") != "group":
+        return None
+    gs = agg.get("groups") or []
+    if not gs or not isinstance(gs[0], dict):
+        return None
+    nm = (gs[0].get("name") or "").strip()
+    val = gs[0].get("value")
+    if val is None:
+        val = _group_leader(agg)
+    if val is None:
+        return None
+    axis_lab = _passport_axis_label(
+        (agg or {}).get("col") or (grain_dec or {}).get("col"), axes) or None
+    per = None
+    if not (diag or {}).get("period_assumed_dropped"):
+        pr = (intent or {}).get("period") or {}
+        if pr.get("from") or pr.get("to"):
+            per = {"from": pr.get("from"), "to": pr.get("to"),
+                   "origin": (_passport_origin(intent, diag)
+                              if intent is not None else None)}
+    excl = {"folders": folders} if folders else None
+    return build_answer_atom(
+        operation="rank", exact_value=val,
+        measure_id=measure or (agg or {}).get("measure"),
+        measure_label=nm or measure_label_of(src, measure),
+        unit_or_currency=_unit_for_measure(measure, money),
+        period=per, grain="group", form="rank", axis=axis_lab,
+        completeness=cov, excluded=excl, src=src,
+        proof_status=PROOF_COMPUTED)
+
+
+def rank_deterministic_answer(question, agg, src, match, preds, measure, money,
+                              intent, plan, diag, axes, cut, t0, _pass_frag,
+                              say_measure, grain_dec=None, cov=None,
+                              hatch_alts=None):
+    """Ответ топ-1 кодом (§5 / п.19): имя из GROUP BY, модель не выбирает."""
+    if not rank_intent_from(intent, plan, question):
+        return None
+    _rank_agg = agg
+    _col = None
+    _need = (
+        (agg or {}).get("grain") != "group"
+        or not (agg.get("groups") or [])
+        or not ((agg.get("groups") or [{}])[0].get("name") or "").strip()
+    )
+    if _need:
+        _col, _alts = rank_axis_resolve(src, axes, intent, question, plan)
+        if hatch_alts is None:
+            hatch_alts = _alts
+        if not (_col and src and measure):
+            return None
+        _k = 1
+        if serene_axis:
+            try:
+                _k = serene_axis.rank_k(
+                    (intent or {}).get("amount"),
+                    (plan or {}).get("compute"), 0, ROWS_TO_MODEL)
+            except Exception:
+                _k = 1
+        _rank_agg = aggregate_groups(
+            src, match, preds, measure, _col, _k,
+            (plan or {}).get("compute") or "sum")
+        if _rank_agg:
+            diag["rank_reaggregate"] = _col
+    if not _rank_agg or not (_rank_agg.get("groups") or []):
+        return None
+    if not ((_rank_agg.get("groups") or [{}])[0].get("name") or "").strip():
+        return None
+    _unit = _unit_for_measure(measure, money)
+    _txt = rank_leader_answer_text(_rank_agg, say_measure or measure, unit=_unit)
+    if not _txt:
+        return None
+    _txt = ensure_count_named(_txt, _rank_agg, "rank")
+    _txt = ensure_answer_passport(_txt, _pass_frag)
+    _atom = rank_leader_atom(
+        _rank_agg, say_measure or measure, money, src=src, intent=intent,
+        diag=diag, axes=axes, grain_dec=grain_dec or {
+            "col": _rank_agg.get("col"), "grain": "group", "form": "rank"},
+        cov=cov, folders=(_rank_agg.get("folders") or 0))
+    opts = []
+    for acol in (hatch_alts or []):
+        if not acol or acol == (_rank_agg.get("col") or _col):
+            continue
+        lab = _passport_axis_label(acol, axes) or acol
+        opts.append({"src": src, "label": lab, "distinct_by": acol,
+                     "entity_label": lab})
+    diag["rank_deterministic"] = True
+    if opts:
+        diag["rank_axis_hatch"] = [o["distinct_by"] for o in opts]
+    out = {"partial": cut or None, "kind": "answer",
+           "text": _txt, "sources": [src] if src else [],
+           "atom": _atom, "atoms": [_atom] if _atom else [],
+           "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                              gate_ok=True)}
+    if opts:
+        out["options"] = opts
+    return out
 
 
 def rank_gate_fallback_answer(question, agg, src, match, preds, measure, money,
                               intent, plan, diag, axes, cut, t0, _pass_frag,
                               say_measure, serene_axis=None):
     """После провала гейта: топ-1 из aggregate_groups, без текста модели."""
-    if not rank_intent_from(intent, plan, question):
-        return None
-    _rank_agg = agg
-    if ((agg or {}).get("grain") != "group" or not (agg.get("groups") or [])):
-        _col = rank_product_axis_col(src, axes, intent, question, plan)
-        if not (_col and src and measure):
-            return None
-        _rank_agg = aggregate_groups(
-            src, match, preds, measure, _col, 1,
-            plan.get("compute") if plan else "sum")
-        if _rank_agg:
-            diag["rank_gate_reaggregate"] = _col
-    if not _rank_agg or not (_rank_agg.get("groups") or []):
-        return None
-    _unit = _unit_for_measure(measure, money)
-    _txt = rank_leader_answer_text(_rank_agg, say_measure or measure, unit=_unit)
-    if not _txt:
-        return None
-    _slot = "rank"
-    _txt = ensure_count_named(_txt, _rank_agg, _slot)
-    _txt = ensure_answer_passport(_txt, _pass_frag)
-    diag["rank_deterministic"] = True
-    return {"partial": cut or None, "kind": "answer",
-            "text": _txt, "sources": [src] if src else [],
-            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                               gate_ok=True)}
-
-
-def product_axis_pref(cols):
-    """Ось номенклатуры/ТМЦ — приоритет для рейтинга товара."""
-    cols = list(cols or [])
-    hits = []
-    for c in cols:
-        cl = (c or "").lower()
-        if any(w in cl for w in ("тмц", "номенклатур", "nomencl", "product", "goods")):
-            hits.append(c)
-    return hits[0] if len(hits) == 1 else None
+    return rank_deterministic_answer(
+        question, agg, src, match, preds, measure, money, intent, plan, diag,
+        axes, cut, t0, _pass_frag, say_measure)
 
 
 def prefer_entity_for_rank(cands, intent, question, plan=None):
@@ -4146,18 +4836,68 @@ def _dedupe_fork_classes(ordered):
     return out
 
 
+# Контракт 23.08 исход C (неподписанные ветки): число лидера + фраза, без имён веток.
+FORK_OTHER_READING = "есть другое прочтение"
+
+
+def _class_window_form(it):
+    """interpretation_id окна класса (ось W) — из period/atom, не из прозы."""
+    p = (it or {}).get("period") or {}
+    if not (p.get("from") or p.get("to") or p.get("interpretation_id")):
+        p = ((it or {}).get("atom") or {}).get("period") or {}
+    return (p.get("interpretation_id")
+            or ((it or {}).get("atom") or {}).get("interpretation_id") or "")
+
+
+def fork_leader_class(picked_src, classes):
+    """Класс лидера люка: эквивалентность, содержащая picked[0] конвейера.
+
+    Не новая лестница — повторное использование победителя шага 4 до детектора.
+    Возвращает (leader_item, rest_items) или None, если picked не в live-классе.
+    Журнал/разметка: atoms[0] = лидер при порядке [leader] + rest (см. fork_outcome_b).
+
+    Ось W: один src в нескольких классах (mtd vs full_month) — лидер = mtd/wtd
+    (фаза B); без формы окна неоднозначность остаётся None, как раньше.
+    """
+    src = str(picked_src or "").strip()
+    if not src or not classes:
+        return None
+    matching, rest = [], []
+    for it in classes:
+        if src in (it.get("srcs") or []):
+            matching.append(it)
+        else:
+            rest.append(it)
+    if not matching:
+        return None
+    if len(matching) == 1:
+        return matching[0], rest
+    preferred = [it for it in matching
+                 if _class_window_form(it) in _WINDOW_LEADER_FORMS]
+    if not preferred:
+        return None
+    leader = preferred[0]
+    rest2 = [it for it in matching if it is not leader] + rest
+    return leader, rest2
+
+
 def ordered_fork_classes(classes, rows, measure_word="", want=None, rel_by_src=None):
     """Классы в детерминированном порядке: по отпечатку атома (не по размеру/лидеру)."""
     rel_by_src = rel_by_src or {}
+    meta = getattr(fork_classes, "_meta_by_fp", {}) or {}
     items = []
     for atom_fp, ss in (classes or {}).items():
         srcs = sorted(ss)
-        d0 = (rows or {}).get(srcs[0]) if srcs else None
+        m = meta.get(atom_fp) or {}
+        d0 = m.get("row") or ((rows or {}).get(srcs[0]) if srcs else None)
         rep = srcs[0] if srcs else ""
         rel = rel_by_src.get(rep) if rep in rel_by_src else None
-        built = _fork_atom_of(d0, srcs, measure_word, want=want, rel_measures=rel)
+        period = m.get("period")
+        built = _fork_atom_of(
+            d0, srcs, measure_word, want=want, rel_measures=rel, period=period)
         items.append({"fingerprint": atom_fp, "srcs": srcs, "atom": built,
-                      "row": d0 or {"count": 0, "folders": 0, "sums": {}}})
+                      "row": d0 or {"count": 0, "folders": 0, "sums": {}},
+                      "period": period, "window_fp": m.get("window_fp")})
     items.sort(key=lambda it: (it["fingerprint"], tuple(it["srcs"])))
     return items
 
@@ -4169,7 +4909,7 @@ def _fork_applicable_classes(ordered):
 
 
 def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=None,
-                         rel_by_src=None):
+                         rel_by_src=None, today=None):
     """Исход A/B/C/unique/empty/unavailable по классам (план §2). Чистая логика.
 
     A — один класс, src несколько, все ячейки посчитаны.
@@ -4202,7 +4942,8 @@ def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=No
         return "A", {"class": it, "srcs": it["srcs"]}
     missing, fk_seen = [], None
     for it in applicable:
-        lab, fk = _class_label_lookup(it["srcs"], measure_ctx)
+        lab, fk = _class_label_lookup(it["srcs"], measure_ctx,
+                                      atom=it.get("atom"), today=today)
         if fk and not fk_seen:
             fk_seen = fk
         if not lab:
@@ -4259,14 +5000,15 @@ def fork_outcome_a(question, class_item, diag, cut=None, t0=None):
             "sources": [], "diag": d}
 
 
-def fork_outcome_b(question, payload, diag, cut=None, t0=None):
-    """Исход B: условные пары по классам + options с decision_id (на класс, не на src)."""
+def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None):
+    """Исход B: ответ лидера (picked[0]→класс) + люк с остальными ветками."""
     classes = list((payload or {}).get("classes") or [])
     total = len(classes)
-    # Аудит §2: все посчитанные подписанные ветки — в ответ; pair_budget не режет
-    # эталонные B-пары (B8-01/04). Отсечение — только dedupe/NA/C в resolve_fork_outcome.
-    shown = classes
-    hidden = 0
+    split = fork_leader_class(picked_src, classes)
+    if split is None:
+        return None
+    leader_it, rest = split
+    shown = [leader_it] + rest
     atoms, opts = [], []
     for it in shown:
         lab = (it.get("label") or "").strip()
@@ -4275,36 +5017,82 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None):
         if lab:
             atom["measure_label"] = lab
         atoms.append(atom)
+    leader_atom = atoms[0] if atoms else None
+    text = render_atom_pair(leader_atom) if leader_atom else None
+    if text is None:
+        return None
+    for it in rest:
+        lab = (it.get("label") or "").strip()
         srcs = list(it.get("srcs") or [])
         rep = sorted(srcs)[0] if srcs else ""
         row = it.get("row") or {}
         opts.append({"src": rep, "label": lab or rep,
                      "found": int(row.get("count") or 0),
                      "distinct_by": lab or ""})
-    lines = [render_atom_pair(a) for a in atoms]
-    if any(x is None for x in lines):
-        return None
-    text = "\n".join(lines)
     partial = dict(cut or {})
     d = _diag_pack(diag, fork_outcome="B",
              fork_key=(payload or {}).get("fork_key"),
              fork_classes=total, fork_pairs_shown=len(shown),
-             fork_pairs_hidden=None)
+             fork_pairs_hidden=None,
+             fork_leader_src=str(picked_src or "")[:200] or None)
     if t0 is not None:
         d["sec"] = round(time.time() - t0, 2)
     return {"partial": partial or None, "kind": "figures", "text": text,
             "figures": {"pairs": len(atoms), "pairs_total": total,
-                        "pairs_hidden": hidden or None},
-            "atom": atoms[0] if atoms else None, "atoms": atoms,
+                        "pairs_hidden": None},
+            "atom": leader_atom, "atoms": atoms,
             "options": opts,
             "source_fixed": False, "memory_eligible": False,
             "sources": [o["label"] for o in opts], "diag": d}
 
 
 def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
-                   lab_by=None, marks=None, by=None, match="", preds=None):
-    """Исход C: clarify; непосчитанное/неподписанное видно клиенту (п. 13)."""
+                   lab_by=None, marks=None, by=None, match="", preds=None,
+                   picked_src=None):
+    """Исход C: непосчитанное/неподписанное видно клиенту (п. 13).
+
+    Контракт 23.08 (unsigned): число лидера + FORK_OTHER_READING, без имён веток.
+    """
     c_why = (payload or {}).get("reason") or "fork"
+    if c_why == "unsigned_class" and picked_src:
+        applicable = _fork_applicable_classes(
+            ordered_fork_classes(classes, rows))
+        split = fork_leader_class(picked_src, applicable)
+        if split is None:
+            d = _diag_pack(diag, fork_outcome="C", fork_c_reason="leader_missing")
+            if t0 is not None:
+                d["sec"] = round(time.time() - t0, 2)
+            return {"partial": cut or None, "kind": "unavailable",
+                    "text": "Не удалось проверить все прочтения вопроса. "
+                            "Повторите запрос.",
+                    "sources": [], "retry": True, "diag": d}
+        leader_it, _rest = split
+        leader_atom = dict(leader_it.get("atom") or {})
+        leader_atom.pop("src", None)
+        pair = render_atom_pair(leader_atom)
+        if pair is None:
+            d = _diag_pack(diag, fork_outcome="C", fork_c_reason="leader_render")
+            if t0 is not None:
+                d["sec"] = round(time.time() - t0, 2)
+            return {"partial": cut or None, "kind": "unavailable",
+                    "text": "Не удалось проверить все прочтения вопроса. "
+                            "Повторите запрос.",
+                    "sources": [], "retry": True, "diag": d}
+        text = "%s · %s" % (pair, FORK_OTHER_READING)
+        partial = dict(cut or {})
+        lim = {"reason": c_why}
+        if payload.get("unsigned"):
+            lim["unsigned_classes"] = len(payload["unsigned"])
+        partial["fork_limitation"] = lim
+        d = _diag_pack(diag, fork_outcome="C", fork_c_reason=c_why,
+                 fork_leader_src=str(picked_src or "")[:200] or None)
+        if t0 is not None:
+            d["sec"] = round(time.time() - t0, 2)
+        return {"partial": partial or None, "kind": "figures", "text": text,
+                "atom": leader_atom, "atoms": [leader_atom],
+                "options": [],
+                "source_fixed": False, "memory_eligible": False,
+                "sources": [], "diag": d}
     ordered = ordered_fork_classes(classes, rows)
     srcs = []
     for it in ordered:
@@ -8186,7 +8974,7 @@ def _vitrina_objects(src_table):
                  % lit(src_table))
         if int(_num(r[0][0])) == 0:
             return None
-        has_rk = _entity_counts_objects(src_table)
+        has_rk = _table_has_ref_key(src_table)
         q = ("SELECT count(DISTINCT \"Ref_Key\") FROM query_table(%s)" if has_rk
              else "SELECT count(*) FROM query_table(%s)") % lit(src_table)
         return int(_num(psql(q)[0][0]))
@@ -8269,14 +9057,17 @@ def _coverage_of(src_table):
 # 🔴 /health ВИДИТ ИЗВЕСТНЫЙ РАЗРЫВ ПОЛНОТЫ (15.08, аудит §3). До этого дверь
 # проверяла только доступность корпуса и число его строк: на проде она отвечала
 # `serene-ask-ok` при 590 955 строках, лежащих в витрине и не дошедших до корпуса.
-# Замер — живьём, как `_vitrina_objects`: переписи здесь не источник истины. Цена —
-# count по каждой таблице витрины (`[замер 15.08]`: 4,7 с на 1502 сущностях), поэтому
-# результат кэшируется на TTL: дверь опрашивается сторожем каждую минуту, а точность
-# «разрыв виден в течение TTL» для сигнала достаточна. Сначала `count(*)` по всем,
-# и только где строк больше, чем в корпусе, — честный пересчёт по объектам `Ref_Key`
-# (законный разворот табличной части тревогой не становится).
+# Живой обход `query_table` по каждой сущности на GET /health растёт с базой (п. 20)
+# и не укладывается в таймаут сторожа: `[замер 24.08]` 3 таблицы × `_vitrina_objects`
+# = 26 с (по 4 `psql()` на сущность); локальные `:8091`/`:8099` — 0 байт / curl 28
+# при том, что журнал потом пишет 200 + BrokenPipe. Перепись `search_coverage`
+# считает те же объекты внутри движка (`coverage_build.sql`, `query_table` + `Ref_Key`).
+# Дверь читает её одним SQL. Живой `_vitrina_objects` остаётся у `_coverage_of`
+# отвечаемой сущности, не у сторожа. Кэш — на TTL и под замком (без него повтор
+# сторожа, пока первый замер ещё идёт, запускал бы второй полный обход).
 _HEALTH_GAP_TTL = int(os.environ.get("ASK_HEALTH_GAP_TTL", "300"))
 _health_gap_cache = {"at": 0.0, "gap": None}
+_health_gap_lock = threading.Lock()
 
 
 def _assemble_health_gap(total_gaps, day_gaps):
@@ -8323,70 +9114,21 @@ def _table_has_ref_key(src_table):
 
 
 def _measure_health_gap():
-    """Разрыв витрина↔корпус, включая лишнее в корпусе и дни Period/Date."""
-    r = psql("SELECT table_name FROM duckdb_tables() "
-             "WHERE database_name = current_database() "
-             "  AND table_name IN (SELECT src_table FROM %s)" % TABLES)
-    tabs = [x[0] for x in r if x and x[0]]
-    if not tabs:
-        return None
-    vit, rk = {}, set()
-    for t in tabs:
-        if _table_has_ref_key(t):
-            rk.add(t)
-        n = _vitrina_objects(t)
-        if n is not None:
-            vit[t] = n
-    corp = {x[0]: int(_num(x[1])) for x in psql(
-        "SELECT src_table, count(*) FROM %s GROUP BY 1" % CORPUS) if x and x[0]}
-    total_gaps = {}
-    for t in tabs:
-        n, c = vit.get(t, 0), corp.get(t, 0)
-        if n != c:
-            total_gaps[t] = (n, c)
+    """Разрыв витрина↔корпус из переписи — один SQL, не цикл по сущностям.
 
-    dated = {}
-    dc = psql("SELECT table_name, column_name FROM duckdb_columns() "
-              "WHERE database_name = current_database() "
-              "  AND column_name IN ('Period','Date') "
-              "  AND table_name IN (SELECT src_table FROM %s)" % TABLES)
-    for x in dc or []:
+    Перепись считает объекты витрины тем же `query_table`/`Ref_Key`, что
+    `_vitrina_objects` (`coverage_build.sql`). Дверь не повторяет этот обход
+    на каждый GET /health: это N×`psql()` и N полных count, и растёт с базой.
+    """
+    r = psql("SELECT entity, объектов_витрины, в_корпусе FROM search_coverage")
+    total_gaps = {}
+    for x in r or []:
         if not x or not x[0]:
             continue
-        t, col = x[0], x[1]
-        # Period (регистры) — всегда: итоги гасят разворот по дням.
-        # Date (документы) — только если итог уже разошёлся (дорого иначе).
-        if col == "Period" or t in total_gaps:
-            if t not in dated or col == "Period":
-                dated[t] = col
-
-    day_gaps = []
-    if dated:
-        parts = []
-        for t, col in dated.items():
-            if t in rk and col == "Date":
-                vit_day = (
-                    "SELECT try_cast(\"%s\" AS TIMESTAMP)::date AS d, "
-                    "count(DISTINCT \"Ref_Key\") AS n FROM query_table(%s) GROUP BY 1"
-                    % (col, lit(t)))
-            else:
-                vit_day = (
-                    "SELECT try_cast(\"%s\" AS TIMESTAMP)::date AS d, count(*) AS n "
-                    " FROM query_table(%s) GROUP BY 1" % (col, lit(t)))
-            parts.append(
-                "SELECT %s AS t, v.d, coalesce(v.n,0), coalesce(c.n,0) FROM "
-                "(%s) v "
-                "FULL OUTER JOIN "
-                "(SELECT doc_date::date AS d, count(*) AS n FROM %s "
-                " WHERE src_table = %s GROUP BY 1) c USING (d) "
-                "WHERE coalesce(v.n,0) IS DISTINCT FROM coalesce(c.n,0)"
-                % (lit(t), vit_day, CORPUS, lit(t)))
-        for x in psql(" UNION ALL ".join(parts)):
-            if x and x[0]:
-                day_gaps.append((x[0], x[1], int(_num(x[2])), int(_num(x[3]))))
-
-    return _assemble_health_gap(total_gaps, day_gaps)
-
+        v, c = int(_num(x[1])), int(_num(x[2]))
+        if v != c:
+            total_gaps[x[0]] = (v, c)
+    return _assemble_health_gap(total_gaps, [])
 
 
 
@@ -8444,10 +9186,14 @@ def _health_gap():
     now = time.time()
     if _health_gap_cache["at"] and now - _health_gap_cache["at"] < _HEALTH_GAP_TTL:
         return _health_gap_cache["gap"]
-    gap = _measure_health_gap()
-    _health_gap_cache["at"] = now
-    _health_gap_cache["gap"] = gap
-    return gap
+    with _health_gap_lock:
+        now = time.time()
+        if _health_gap_cache["at"] and now - _health_gap_cache["at"] < _HEALTH_GAP_TTL:
+            return _health_gap_cache["gap"]
+        gap = _measure_health_gap()
+        _health_gap_cache["at"] = now
+        _health_gap_cache["gap"] = gap
+        return gap
 
 
 COVERAGE_SYS = """You answer an employee's question about how complete the company's data
@@ -8469,7 +9215,7 @@ Reply with JSON only, no text outside it:
 
 # Все НАШИ системные сообщения в одном месте: по ним `prompt_leak` ловит утечку
 # инструкции в ответ клиенту точным совпадением строки (`№27`).
-OUR_PROMPTS = [INTENT_SYS, PICK_SYS, CLARIFY_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS]
+OUR_PROMPTS = [INTENT_SYS, PICK_SYS, AXIS_PICK_SYS, CLARIFY_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS]
 
 def _coverage_answer(question, diag, t0):
     """Ответ о полноте данных — из переписи, а не из корпуса (п. 13).
@@ -9531,6 +10277,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     period_from_prior = False
     if prior:
         period_from_prior = apply_prior_period(intent, parse_intent(prior, today), today)
+    # Фаза B: лидер окна MTD/WTD в основной preds; полный календарь — конкурент детектора.
+    _w_readings = apply_period_leader(intent, today, period_from_prior=period_from_prior)
     preds = _predicates(intent)
     разбор = intent.get("parse") or {}
     diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind"),
@@ -9538,6 +10286,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     _fork_early = {"rows": None, "cls": None, "rel": None, "pool": None}
     if period_from_prior:
         diag["period_from_prior"] = True
+    if _w_readings:
+        diag["period_readings"] = len(_w_readings)
+        _wl = prefer_window_leader(_w_readings)
+        if _wl and _wl.get("interpretation_id"):
+            diag["period_leader"] = _wl["interpretation_id"]
     шаг("разбор вопроса", тип=intent.get("kind"), понятий=len(intent.get("terms") or []),
         величина=(intent.get("measure") or "—"), считать=(intent.get("want") or "—"),
         потеряно=(",".join(разбор.get("lost") or []) or "—"))
@@ -10241,22 +10994,30 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {},
                                       want=_fwant or None)
                     for c in _fork_pool}
-            _rows = fork_scan(match, preds, _rel)
-            _cls = fork_classes(_rows, _mword, want=_fwant, rel_by_src=_rel)
+            _rows, _cls, _readings, _cells = fork_detector_scan(
+                match, preds, intent, today, _rel,
+                period_from_prior=period_from_prior,
+                measure_word=_mword, want=_fwant or None)
+            _meta = getattr(fork_classes, "_meta_by_fp", {}) or {}
             _atoms = []
             for fp, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
+                m = _meta.get(fp) or {}
                 rep = sorted(ss)[0]
-                d0 = _rows.get(rep) or {"count": 0, "folders": 0, "sums": {}}
-                _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant,
-                               rel_measures=_rel.get(rep))
+                d0 = m.get("row") or _rows.get(rep) or {"count": 0, "folders": 0, "sums": {}}
+                _built = _fork_atom_of(
+                    d0, sorted(ss), _mword, want=_fwant,
+                    rel_measures=_rel.get(rep), period=m.get("period"))
                 _atoms.append({"atom": _built,
                                "fingerprint": _fork_fp_diag(fp),
-                               "srcs": sorted(ss)})
+                               "srcs": sorted(ss),
+                               "window_fp": m.get("window_fp")})
             diag["fork"] = {"classes": len(_cls),
                             "srcs": sum(len(v) for v in _cls.values()),
                             "pool": len(_fork_pool),
                             "pool_srcs": list(_fork_pool),
                             "live_srcs": sorted(_rows.keys()),
+                            "readings": len(_readings),
+                            "window_cells": (len(_cells) if _cells else None),
                             "excluded": _fork_pool_excluded(_fork_pool, _rows) or None,
                             "atoms": _atoms[:10],
                             "atoms_truncated": max(0, len(_atoms) - 10) or None,
@@ -10944,8 +11705,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Исходы A/B/C — после сборки arb_pool (writer_pair / стоп 2 / сомнение) и до
     # круга под-вызовов. Пространство = arb_pool: именно те прочтения, между которыми
     # иначе шёл бы арбитр (план §3). Сырой focus сюда не гасит (trusted уже выше).
+    # Фаза B: при одном src (канон продаж) ось W всё равно открывает B/C, если
+    # readings > 1; compare «лучше/больше чем» — отдельный путь diff, не W-люк.
+    _window_fork = (len(_w_readings) > 1
+                    and not sales_compare_intent(intent, question))
     if (FORK_OUTCOMES and FORK_DETECT and not no_arbiter and not trusted
-            and len(arb_pool) > 1):
+            and (len(arb_pool) > 1 or _window_fork)):
         _t_out = time.time()
         _scan_err = None
         _rows, _cls = {}, {}
@@ -10961,20 +11726,26 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {},
                                       want=_fwant or None)
                     for c in _out_pool}
-            _rows = fork_scan(match, preds, _rel)
-            _cls = fork_classes(_rows, _mword, want=_fwant, rel_by_src=_rel)
+            _rows, _cls, _readings, _cells = fork_detector_scan(
+                match, preds, intent, today, _rel,
+                period_from_prior=period_from_prior,
+                measure_word=_mword, want=_fwant or None)
             if len(_cls) > 1:
                 _fork_log(_cls, _mword or (intent.get("want") or ""))
             _prev = dict(diag.get("fork") or {})
+            _meta = getattr(fork_classes, "_meta_by_fp", {}) or {}
             _atoms = []
             for fp, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
+                m = _meta.get(fp) or {}
                 rep = sorted(ss)[0]
-                d0 = _rows.get(rep) or {"count": 0, "folders": 0, "sums": {}}
-                _built = _fork_atom_of(d0, sorted(ss), _mword, want=_fwant,
-                               rel_measures=_rel.get(rep))
+                d0 = m.get("row") or _rows.get(rep) or {"count": 0, "folders": 0, "sums": {}}
+                _built = _fork_atom_of(
+                    d0, sorted(ss), _mword, want=_fwant,
+                    rel_measures=_rel.get(rep), period=m.get("period"))
                 _atoms.append({"atom": _built,
                                "fingerprint": _fork_fp_diag(fp),
-                               "srcs": sorted(ss)})
+                               "srcs": sorted(ss),
+                               "window_fp": m.get("window_fp")})
             _excl = _fork_pool_excluded(_out_pool, _rows)
             diag["fork"] = dict(_prev,
                                 classes=len(_cls),
@@ -10982,6 +11753,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                 pool=len(_out_pool),
                                 pool_srcs=list(_out_pool),
                                 live_srcs=sorted(_rows.keys()),
+                                readings=len(_readings),
+                                window_cells=(len(_cells) if _cells else None),
                                 excluded=_excl or None,
                                 atoms=_atoms[:10],
                                 atoms_truncated=max(0, len(_atoms) - 10) or None,
@@ -10996,7 +11769,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             sys.stderr.write("ask FORK outcome: %s\n" % str(_e)[:160])
         _outc, _pay = resolve_fork_outcome(
             _cls, _rows, measure_ctx=(_mword or _fwant or ""),
-            scan_error=_scan_err, want=_fwant or None, rel_by_src=_rel)
+            scan_error=_scan_err, want=_fwant or None, rel_by_src=_rel,
+            today=today)
         diag.setdefault("fork", {})["outcome"] = _outc
         if isinstance(_pay, dict):
             if _pay.get("reason"):
@@ -11015,7 +11789,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
             return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
         if _outc == "B":
-            _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0)
+            _picked0 = picked[0] if picked else None
+            _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0,
+                                   picked_src=_picked0)
             if _bres is not None:
                 шаг("исход B", классов=len(_pay.get("classes") or []))
                 return _bres
@@ -11026,7 +11802,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             шаг("исход C", причина=_pay.get("reason") or "—")
             return fork_outcome_c(
                 question, _pay, _cls, _rows, diag, cut=cut, t0=t0,
-                marks=marks, by=by, match=match, preds=preds)
+                marks=marks, by=by, match=match, preds=preds,
+                picked_src=(picked[0] if picked else None))
         if _outc == "unavailable":
             return {"partial": cut or None, "kind": "unavailable",
                     "text": "Не удалось проверить все прочтения вопроса. "
@@ -11700,22 +12477,25 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 if any(a.get("col") == _acol for a in axes):
                     _kh = [_acol]
             _rank_intent = rank_intent_from(intent, plan, question)
-            # Рейтинг «что продавалось»: ось номенклатуры (ТМЦ) — до axis-clarify
-            # ([замер 23.08 okna] compute=max от pick_entity + len(kind_hits)>1 →
-            # clarify по 6 осям; rank_product_axis_col был только в gate-fallback).
+            # Рейтинг: ось из refcols+kind до axis-clarify ([замер 23.08]/
+            # [замер 24.08] не только ТМЦ — клиент/контрагент тем же путём).
+            _rank_hatch = []
             if _rank_intent:
-                _pcol = rank_product_axis_col(
+                _pcol, _rank_hatch = rank_axis_resolve(
                     src, axes, intent, question, plan)
                 if _pcol:
                     _kh = [_pcol]
                     diag["rank_axis_auto"] = _pcol
+                if _rank_hatch:
+                    diag["rank_axis_alts"] = list(_rank_hatch)
             if (not _kh and (plan.get("compute") in ("max", "min")
                              or _rank_intent)):
-                _kh = kind_axis_rerank(axes, intent.get("kind"))
-            if _rank_intent and len(_kh or []) > 1:
-                _pref = product_axis_pref(_kh)
-                if _pref:
-                    _kh = [_pref]
+                # Rank: порядок по вопросу, не по kind (kind = род источника).
+                if _rank_intent and (question or "").strip():
+                    _ord = rank_axes_rerank(question, axes)
+                    _kh = _ord[:1] if _ord else []
+                if not _kh:
+                    _kh = kind_axis_rerank(axes, intent.get("kind"))
             _th = term_axis_hits(src, axes, terms_for_axis)
             if _kh and _rank_intent:
                 _kh_set = set(_kh)
@@ -11725,6 +12505,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             grain_dec = serene_axis.decide_grain(
                 axes, _kh, _th, plan.get("compute"), src_is_child(src),
                 rank_intent=_rank_intent)
+            if _rank_intent:
+                diag["rank_axis_hatch_pending"] = list(_rank_hatch or [])
         except RuntimeError:
             pass
     diag["grain"] = grain_dec.get("grain")
@@ -11750,12 +12532,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["axis_clarify_skipped"] = "total_without_breakdown"
     if grain_dec.get("clarify") == "axis":
         if rank_intent_from(intent, plan, question):
-            _pcol = rank_product_axis_col(
+            _pcol, _halts = rank_axis_resolve(
                 src, axes, intent, question, plan)
             if _pcol:
                 grain_dec = {"grain": "group", "col": _pcol, "form": "rank",
                              "named_gis": [], "clarify": None}
                 diag["rank_axis_auto"] = _pcol
+                if _halts:
+                    diag["rank_axis_alts"] = list(_halts)
+                    diag["rank_axis_hatch_pending"] = list(_halts)
                 diag["grain"] = grain_dec["grain"]
                 diag["axis_col"] = _pcol
                 diag["axis_form"] = "rank"
@@ -11840,7 +12625,23 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     if e not in preds:
                         preds.append(e)
 
-    if grain_dec.get("grain") == "group" and grain_dec.get("col") and serene_axis:
+    agg, rows = None, None
+    if (sales_compare_intent(intent, question) and src and measure):
+        _p1, _p2, _cmp_form = sales_compare_windows(intent, today, question)
+        if ((_p1.get("from") or _p1.get("to"))
+                and (_p2.get("from") or _p2.get("to"))):
+            _cagg = aggregate_compare_sales(src, match, _p1, _p2, measure)
+            if _cagg:
+                agg, rows = _cagg, []
+                intent["period"] = _p1
+                intent["period2"] = _p2
+                diag["compare_sales"] = _cmp_form
+                grain_dec = {"grain": "row", "col": None, "form": "compare",
+                             "named_gis": [], "clarify": None}
+                diag["grain"] = "row"
+                diag["axis_form"] = "compare"
+
+    if agg is None and grain_dec.get("grain") == "group" and grain_dec.get("col") and serene_axis:
         _col = grain_dec["col"]
         _named = grain_dec.get("named_gis") or []
         _k = serene_axis.rank_k(intent.get("amount"), plan.get("compute"),
@@ -11883,7 +12684,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             return {"partial": cut or None, "kind": "no_data",
                     "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-    elif serene_axis and serene_axis.no_axis_member(grain_dec):
+    elif agg is None and serene_axis and serene_axis.no_axis_member(grain_dec):
         rows = []
         agg = aggregate(src, match, preds, measure)
         if not agg or not agg.get("count"):
@@ -11896,7 +12697,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if not agg:
                 agg = {"count": 0, "sum": 0.0, "src": src, "measure": measure,
                        "folders": 0, "out_of_range": 0, "count_amount": 0}
-    else:
+    elif agg is None:
         rows = rows_of(src, match, preds, TOPK, measure)
         if not rows:
             # Ранний no_data стоял ДО счёта undated: при 100% строк без даты
@@ -12044,6 +12845,53 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Оговорки к ответу — в промт, а не приписью после: язык берётся из вопроса.
     # (`say_measure`/`n_folders` посчитаны выше — до раннего выхода period_empty.)
     totals_shown = [] if (agg or {}).get("grain") == "group" else (totals if money else [])
+    # Rank: имя лидера из GROUP BY кодом (§5 / п.19), до compose.
+    if rank_intent_from(intent, plan, question) and measure and src:
+        _pass_early, _pf = build_answer_passport(
+            period=(intent or {}).get("period"),
+            period_dropped=bool(diag.get("period_assumed_dropped")),
+            origin=_passport_origin(intent, diag),
+            src_label=_table_label(src),
+            src_kind=kind_word(src) if src else "",
+            measure=measure or "",
+            grain=(agg or {}).get("grain") or grain_dec.get("grain") or "row",
+            axis_label=_passport_axis_label(
+                (agg or {}).get("col") or grain_dec.get("col"), axes),
+            form=(agg or {}).get("form") or grain_dec.get("form") or "number",
+            text="")
+        _det = rank_deterministic_answer(
+            question, agg, src, match, preds, measure, money,
+            intent, plan, diag, axes, cut, t0, _pass_early, say_measure,
+            grain_dec=grain_dec, cov=cov,
+            hatch_alts=(diag.get("rank_axis_hatch_pending")
+                        or diag.get("rank_axis_alts")))
+        if _det:
+            if _det.get("figures") is None:
+                _det["figures"] = compose_slot_values(
+                    agg if (agg or {}).get("grain") == "group" else (
+                        _det.get("atom") and agg) or agg,
+                    measure=measure, folders=n_folders, money=money,
+                    slot_mode="rank")
+                _det["figures"].update(_pf or {})
+            return _det
+        # Нет оси — честный clarify по осям из данных, не «нет имени в строках».
+        if ((agg or {}).get("grain") != "group"
+                or not ((agg.get("groups") or [{}])[0].get("name") or "").strip()):
+            _ax = axes or []
+            if not _ax and src:
+                try:
+                    _ax = refcols_of(src)
+                except RuntimeError:
+                    _ax = []
+            opts = axis_clarify_options(src, _ax)
+            if opts:
+                diag["rank_axis_missing"] = True
+                return {"partial": cut or None, "kind": "clarify",
+                        "text": clarify_say(question, opts, diag)
+                                or ", ".join("«%s»" % o["label"] for o in opts),
+                        "options": opts, "sources": [src] if src else [],
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                           reason="уточните ось группы")}
     # Атом ответа — тем же строителем, что уходит в kind=answer/figures (план §5).
     _answer_pairs = [atom_from_agg(
         agg, operation=atom_operation(
@@ -12558,8 +13406,14 @@ def _journal_atoms_slim(out):
 
 
 def _journal_clarify_options(out):
-    """Варианты слоя 2 (человеческие подписи) — только при kind=clarify."""
-    if not isinstance(out, dict) or out.get("kind") != "clarify":
+    """Варианты слоя 2 — clarify или B-люк (kind=figures с options).
+
+    B-люк: только не-лидерские варианты; лидер = atoms[0] (порядок [leader]+rest).
+    """
+    if not isinstance(out, dict):
+        return None
+    kind = out.get("kind")
+    if kind not in ("clarify", "figures"):
         return None
     opts = out.get("options") or []
     if not opts:

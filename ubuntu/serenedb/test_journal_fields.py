@@ -148,6 +148,30 @@ try:
     empty = {"kind": "no_data", "text": "", "diag": {"doubt": False}, "partial": None}
     t("no_data: options null", A._journal_clarify_options(empty) is None)
     t("no_data: atoms []", A._journal_atoms_slim(empty) == [])
+
+    captured.clear()
+    b_hatch = {
+        "kind": "figures",
+        "text": "Отгрузки: 100.00",
+        "options": [{"label": "Оплаты", "src": "b", "decision_id": "d2"}],
+        "atoms": [
+            {"operation": "sum", "exact_value": "100.00", "measure_label": "Отгрузки"},
+            {"operation": "sum", "exact_value": "200.00", "measure_label": "Оплаты"},
+        ],
+        "diag": {"doubt": True, "fork_outcome": "B"},
+        "partial": None,
+    }
+    A._ask_journal_write(Q_CLARIFY, b_hatch, time.monotonic() - 0.01,
+                         user="u-b", channel="probe")
+    inserts = [s for s in captured if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")]
+    sql = inserts[0] if inserts else ""
+    bopts = A._journal_clarify_options(b_hatch)
+    t("B-люк: clarify_options только hatch",
+      isinstance(bopts, list) and len(bopts) == 1 and bopts[0].get("label") == "Оплаты", bopts)
+    t("B-люк: atoms[0] лидер",
+      A._journal_atoms_slim(b_hatch)[0].get("measure_label") == "Отгрузки"
+      and "100" in sql)
+
 finally:
     A.psql = old_psql
 
@@ -164,6 +188,7 @@ try:
     out = A.answer_checked(Q_CLARIFY, channel="probe", user="u-fail")
     t("fail-open: ответ clarify", out.get("kind") == "clarify", str(out)[:80])
     t("fail-open: LOST вырос", A._JOURNAL_LOST > lost_before, A._JOURNAL_LOST)
+
 finally:
     A.psql = old_psql
     A.ENOUGH_ON = True

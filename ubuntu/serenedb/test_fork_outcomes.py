@@ -131,32 +131,41 @@ t("детерминизм ordered_fork_classes",
 # перестановка: B строит пары только через render; порядок = ordered
 A.fork_labels_of = _labs_ok
 out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма", want="sum", rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})
-bres = A.fork_outcome_b("сколько?", pay, {})
-t("B: две пары, labels свои",
+bres = A.fork_outcome_b("сколько?", pay, {}, picked_src="a")
+t("B: text = одна пара лидера (picked=a)",
   bres and bres["kind"] == "figures"
   and len(bres["atoms"]) == 2
-  and len(bres["options"]) == 2
-  and "Отгрузки" in bres["text"] and "Оплаты" in bres["text"])
+  and len(bres["options"]) == 1
+  and "Отгрузки" in bres["text"] and "100" in bres["text"]
+  and "Оплаты" not in bres["text"] and "200" not in bres["text"])
 # порядок текста = порядок atoms = ordered; смешать нельзя API
 swapped = "Оплаты: 100"
 # exact values: a has 100, b has 200; labels from _labs_ok by src
 # after ordered sort by fingerprint — whichever first
 t("B: source_fixed/memory_eligible false",
   bres.get("source_fixed") is False and bres.get("memory_eligible") is False)
-t("B: options на класс (по одному src-представителю)",
-  len(bres["options"]) == 2
+t("B: options только не-лидерские классы",
+  len(bres["options"]) == 1
+  and bres["options"][0].get("label") == "Оплаты"
   and all(o.get("src") and o.get("label") for o in bres["options"]))
 
 # §2 B / аудит §6: обе пары в основном тексте (не меню clarify); память только по нажатию
 t("B §2: kind=figures, не clarify-меню",
   bres.get("kind") == "figures"
   and "100" in (bres.get("text") or "")
-  and "200" in (bres.get("text") or "")
-  and "\n" in (bres.get("text") or ""))
-t("B §2: люк options есть, memory_eligible=false (только нажатие)",
-  len(bres.get("options") or []) >= 2
+  and "200" not in (bres.get("text") or "")
+  and "\n" not in (bres.get("text") or ""))
+t("B §2: люк options = N-1, memory_eligible=false (только нажатие)",
+  len(bres.get("options") or []) == 1
   and bres.get("memory_eligible") is False
   and bres.get("source_fixed") is False)
+
+# ── лидер люка (контракт 23.08) ───────────────────────────────────────────────
+split = A.fork_leader_class("a", pay.get("classes") or [])
+t("fork_leader_class: picked в классе a",
+  split and split[0].get("label") == "Отгрузки" and len(split[1]) == 1)
+t("B: atoms[0] = лидер", bres["atoms"][0].get("measure_label") == "Отгрузки")
+t("fork_leader_class: чужой src → None", A.fork_leader_class("z", pay.get("classes") or []) is None)
 
 # ── A: без метки источника ────────────────────────────────────────────────────
 out, pay = A.resolve_fork_outcome(cls1, rows1, "сумма")

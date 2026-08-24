@@ -133,6 +133,7 @@ EMBED_HTTP_TIMEOUT=600     # SET GLOBAL, иначе длинные полосы 
    curl бьёт в env, движок — в `duckdb_secrets().base_url`. Сторож
    `embed_secrets_base_url_check`. Не класть путь в `base_url` (double-path →
    JSON 404).
+
 ## 7. Чего делать НЕ надо
 
 - не гнать оператор больше 16 строк — упадёт на `Vector::SetSize`;
@@ -141,3 +142,45 @@ EMBED_HTTP_TIMEOUT=600     # SET GLOBAL, иначе длинные полосы 
 - не строить индекс ради обратной записи — доки прямо говорят, что на join он не влияет;
 - не ставить две копии модели на карту — это не даёт ничего и съедает VRAM;
 - не смешивать длинные и короткие строки в одной пачке.
+
+## 8. Как узнать прогресс пересчёта
+
+**Во время раунда** `embed_missing.sh` переносит векторы в корпус только в конце
+(`transfer` после всех part-таблиц). Счётчик `count(emb)` в `search_corpus` стоит
+часами — это не поломка, а устройство раунда (§6.3).
+
+**Живой прирост** — сумма строк в рабочих таблицах `emb_<база>_<таблица>_part_<N>`.
+Перечень этих таблиц скрипт спрашивает у движка (`duckdb_tables()` с фильтром
+`current_database()`), а сумму берёт одним `query_table(<список>, true)` — номера не
+перебираются и число воркеров подсчёт не ограничивает (24.08, находка снайпера по
+п. 20 TARGET.md). Каталог или сумма недоступны — в выводе стоят `parts_incomplete`
+и `parts_incomplete_reason`, числа не занижаются молча.
+Инструмент: `ubuntu/serenedb/embed_progress.sh` (два снимка с интервалом дают
+скорость):
+
+```bash
+# один снимок
+./embed_progress.sh search_corpus
+
+# скорость за 60 с (меряет прирост в part-таблицах)
+./embed_progress.sh search_corpus 60
+```
+
+Если полный `left()`-count по корпусу недоступен под нагрузкой (типично >120 с на
+klient-1 при живом `embed_all`), задайте объём очереди вручную один раз:
+`EMBED_SCOPE_TOTAL=<деловые строки без вектора на старте раунда>`. После первого
+удавшегося полного count значение запоминается в `/tmp/embed_progress_<база>_<таблица>.json`.
+
+**Что не работает под нагрузкой** ([замер 23.08 klient-1]):
+
+| способ | результат |
+|---|---|
+| `count(*) FILTER (WHERE emb IS NULL)` по всему корпусу | >300 с, не ответил |
+| лёгкий `left()` по одной крупной сущности (643k строк) | 105 с |
+| `duckdb_tables()` / `sdb_metrics` | >120 с, очередь за embed |
+| `search_quality.cov_noemb_pending` | устаревает до следующего `coverage_build.sql` |
+| `SET statement_timeout` | не enforced движком 26.07.3 |
+
+**Штатный механизм:** partial reading / projection pushdown — считать только
+`src_table`, не проецировать `FLOAT[1024]` ([partial-reading](https://docs.serenedb.com/data_import_and_export/parquet/overview#partial-reading));
+форма как `left()` в `embed_missing.sh`, замок `test_embed_left_count.py`.
