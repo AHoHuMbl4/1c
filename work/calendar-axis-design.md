@@ -1,8 +1,8 @@
 # Ось развилки «календарные vs рабочие дни» (okna, §7bis)
 
-**Статус:** шаг 1 (корпус) в дереве — `corpus_build.sql` §1-кватер +
-`search_calendar_map` / precheck в `corpus_init.sql`; замок
-`test_calendar_meta_build.py` 30/0. Ask/флаг — шаг 2. Коммит — оркестратор.  
+**Статус:** шаг 1 (корпус) + шаг 2 (ask за `ASK_CALENDAR_AXIS` умолч.0) в
+дереве; замки `test_calendar_meta_build` 30/0, `test_calendar_axis` 36/0.
+Бой не включён. Коммит — оркестратор.  
 **Дата:** 2026-08-24  
 **Опора:** [`work/biz-refs-inventory.md`](biz-refs-inventory.md) (живой замер okna 24.08),  
 [`docs/PLAN_ANSWER_CONTRACT.md`](../docs/PLAN_ANSWER_CONTRACT.md) §2 / §7 / §7bis,  

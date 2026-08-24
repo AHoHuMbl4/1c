@@ -1299,6 +1299,7 @@ def period_preds(period):
         out.append("doc_date >= %s" % lit(p["from"]))
     if p.get("to"):
         out.append("doc_date < (%s::date + INTERVAL 1 day)" % lit(p["to"]))
+    out.extend(_working_day_doc_preds(p))
     return out
 
 
@@ -1311,6 +1312,15 @@ _WINDOW_FORM_IDS = frozenset({
     "none", "explicit", "mtd", "full_month", "wtd", "full_week",
     "drop_assumed", "prior",
 })
+# §7bis: day-basis окна. Env умолч. 0 — бой не включён.
+ASK_CALENDAR_AXIS = os.environ.get("ASK_CALENDAR_AXIS", "0") == "1"
+_DAY_BASIS_CALENDAR = "calendar_days"
+_DAY_BASIS_WORKING = "working_days"
+_DAY_BASIS_IDS = frozenset({_DAY_BASIS_CALENDAR, _DAY_BASIS_WORKING})
+_DAY_BASIS_LEADER_DEFAULT = _DAY_BASIS_CALENDAR
+_CALENDAR_REGS = {"at": 0.0, "set": None}
+_CALENDAR_WORK_KEYS = {"at": 0.0, "set": None}
+_CALENDAR_MAP = {"at": 0.0, "rows": None}
 
 
 def _calendar_date(iso):
@@ -1387,10 +1397,17 @@ def _period_origin(intent, period_from_prior=False):
 
 
 def window_fp_of(period, origin=None):
-    """Машинный отпечаток окна: from|to|origin."""
+    """Машинный отпечаток окна: from|to|origin[+|day_basis].
+
+    day_basis пуст — тот же fp, что до §7bis (совместимость W / drop_assumed).
+    """
     p = period or {}
     o = origin if origin is not None else (p.get("origin") or _ORIGIN_NONE)
-    return "%s|%s|%s" % (p.get("from") or "", p.get("to") or "", o)
+    base = "%s|%s|%s" % (p.get("from") or "", p.get("to") or "", o)
+    db = (p.get("day_basis") or "").strip()
+    if db:
+        return base + "|" + db
+    return base
 
 
 def _period_form_id(period, today):
@@ -1416,7 +1433,7 @@ def _period_form_id(period, today):
     return "explicit"
 
 
-def _window_reading(period, origin, form_id=None, today=None):
+def _window_reading(period, origin, form_id=None, today=None, day_basis=None):
     p = dict(period or {})
     o = origin or _ORIGIN_NONE
     if o:
@@ -1424,12 +1441,21 @@ def _window_reading(period, origin, form_id=None, today=None):
     fid = form_id or _period_form_id(p, today)
     if fid in _WINDOW_FORM_IDS:
         p["interpretation_id"] = fid
-    return {
+    db = (day_basis if day_basis is not None else p.get("day_basis")) or ""
+    db = str(db).strip()
+    if db:
+        p["day_basis"] = db
+    else:
+        p.pop("day_basis", None)
+    out = {
         "period": p,
         "origin": o,
         "window_fp": window_fp_of(p, o),
         "interpretation_id": fid,
     }
+    if db:
+        out["day_basis"] = db
+    return out
 
 
 def period_readings(intent, today=None, period_from_prior=False):
@@ -1570,6 +1596,190 @@ def apply_period_leader(intent, today=None, period_from_prior=False):
             "none", "drop_assumed"):
         intent["period"] = pr
     return readings
+
+
+def _sql_ident(name):
+    """Идентификатор колонки/таблицы в SQL (двойные кавычки)."""
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def calendar_registers():
+    """Регистры календаря из search_meta (сборка §1-кватер). Как balance_registers."""
+    now = time.time()
+    if (_CALENDAR_REGS["set"] is not None
+            and now - _CALENDAR_REGS["at"] < 300):
+        return _CALENDAR_REGS["set"]
+    try:
+        r = psql("SELECT v FROM search_meta WHERE k = 'calendar_registers' LIMIT 1")
+    except RuntimeError:
+        r = []
+    raw = (r[0][0] or "") if r and r[0] else ""
+    got = frozenset(x.strip() for x in str(raw).split(",") if x.strip())
+    _CALENDAR_REGS.update({"at": now, "set": got})
+    return got
+
+
+def calendar_working_day_keys():
+    """Ref_Key видов day-basis=working из search_meta (витрина, не литералы)."""
+    now = time.time()
+    if (_CALENDAR_WORK_KEYS["set"] is not None
+            and now - _CALENDAR_WORK_KEYS["at"] < 300):
+        return _CALENDAR_WORK_KEYS["set"]
+    try:
+        r = psql(
+            "SELECT v FROM search_meta WHERE k = 'calendar_working_day_keys' LIMIT 1")
+    except RuntimeError:
+        r = []
+    raw = (r[0][0] or "") if r and r[0] else ""
+    got = frozenset(x.strip() for x in str(raw).split(",") if x.strip())
+    _CALENDAR_WORK_KEYS.update({"at": now, "set": got})
+    return got
+
+
+def calendar_map_rows():
+    """Карта search_calendar_map: (src_table, date_col, day_key_col, hours_col).
+
+    Таблицы нет / пусто — [] (ось честно выключена), не сбой контура.
+    """
+    now = time.time()
+    if (_CALENDAR_MAP["rows"] is not None
+            and now - _CALENDAR_MAP["at"] < 300):
+        return _CALENDAR_MAP["rows"]
+    try:
+        rows = psql(
+            "SELECT src_table, date_col, day_key_col, hours_col "
+            "FROM search_calendar_map")
+    except RuntimeError as e:
+        msg = str(e).lower()
+        if "search_calendar_map" in msg and (
+                "does not exist" in msg or "catalog" in msg
+                or "not found" in msg or "не существует" in msg):
+            rows = []
+        else:
+            raise
+    clean = []
+    for r in rows or []:
+        if not r or not r[0] or not r[1] or not r[2]:
+            continue
+        clean.append((str(r[0]), str(r[1]), str(r[2]),
+                      str(r[3]) if len(r) > 3 and r[3] else ""))
+    _CALENDAR_MAP.update({"at": now, "rows": clean})
+    return clean
+
+
+def calendar_axis_open():
+    """Ось открыта: флаг + непустые registers/keys + карта (как balance_registers)."""
+    if not ASK_CALENDAR_AXIS:
+        return False
+    return bool(calendar_registers() and calendar_working_day_keys()
+                and calendar_map_rows())
+
+
+def calendar_day_basis_prefer(intent=None, trusted=None):
+    """Лидер day-basis: ticket/intent, иначе calendar_days (§2.4). Без phrase-list."""
+    if isinstance(trusted, dict):
+        db = (trusted.get("day_basis") or "").strip()
+        if db in _DAY_BASIS_IDS:
+            return db
+        for k in ("day_basis", "src", "label"):
+            v = str(trusted.get(k) or "").strip()
+            if v in _DAY_BASIS_IDS:
+                return v
+    intent = intent or {}
+    db = str(intent.get("day_basis") or "").strip()
+    if db in _DAY_BASIS_IDS:
+        return db
+    pr = intent.get("period") or {}
+    db = str(pr.get("day_basis") or "").strip()
+    if db in _DAY_BASIS_IDS:
+        return db
+    return _DAY_BASIS_LEADER_DEFAULT
+
+
+def _day_basis_reading(base_rd, day_basis):
+    """Одно прочтение окна с координатой day_basis (тот же from/to/origin/form)."""
+    base = base_rd or {}
+    pr = dict(base.get("period") or {})
+    origin = base.get("origin") or pr.get("origin") or _ORIGIN_NONE
+    fid = base.get("interpretation_id") or pr.get("interpretation_id")
+    return _window_reading(pr, origin, form_id=fid, day_basis=day_basis)
+
+
+def calendar_axis_readings(base_reading, prefer=None):
+    """0..2 day-basis reading одного окна. Флаг off / нет карты → [].
+
+    Открытая ось даёт оба прочтения сразу: calendar_days + working_days (§2.1).
+    Лидер порядка — prefer (§2.4); default = calendar_days.
+    """
+    if not calendar_axis_open():
+        return []
+    pr = (base_reading or {}).get("period") or {}
+    if not (pr.get("from") and pr.get("to")):
+        return []
+    prefer = prefer if prefer in _DAY_BASIS_IDS else _DAY_BASIS_LEADER_DEFAULT
+    order = [_DAY_BASIS_CALENDAR, _DAY_BASIS_WORKING]
+    if prefer == _DAY_BASIS_WORKING:
+        order = [_DAY_BASIS_WORKING, _DAY_BASIS_CALENDAR]
+    return [_day_basis_reading(base_reading, db) for db in order]
+
+
+def expand_readings_calendar_axis(readings, prefer=None):
+    """Подмешать day-basis к period_readings. Флаг off — бит-в-бит тот же список."""
+    readings = list(readings or [])
+    if not ASK_CALENDAR_AXIS or not calendar_axis_open():
+        return readings
+    out = []
+    for rd in readings:
+        cal = calendar_axis_readings(rd, prefer=prefer)
+        if cal:
+            out.extend(cal)
+        else:
+            out.append(rd)
+    return out
+
+
+def prefer_day_basis_leader(readings, prefer=None):
+    """Reading-лидер по day_basis (§2.4); иначе первое прочтение с окном."""
+    readings = list(readings or [])
+    if not readings:
+        return None
+    prefer = prefer if prefer in _DAY_BASIS_IDS else _DAY_BASIS_LEADER_DEFAULT
+    for rd in readings:
+        if (rd.get("day_basis") or (rd.get("period") or {}).get("day_basis")
+                ) == prefer:
+            return rd
+    return readings[0]
+
+
+def _working_day_doc_preds(period):
+    """Предикат корпуса: doc_date ∈ дат day-basis=working из карты (один SQL, §1.3).
+
+    Доки: sql/functions/utility#utility-table-functions (query_table).
+    """
+    p = period or {}
+    if not ASK_CALENDAR_AXIS or p.get("day_basis") != _DAY_BASIS_WORKING:
+        return []
+    keys = list(calendar_working_day_keys() or [])
+    rows = calendar_map_rows() or []
+    fr, to = p.get("from"), p.get("to")
+    if not keys or not rows or not fr or not to:
+        return []
+    key_sql = ", ".join(lit(k) for k in keys)
+    parts = []
+    for src, date_col, day_key_col, _hours in rows:
+        parts.append(
+            "SELECT DISTINCT try_cast(k.%s AS DATE) "
+            "FROM query_table(%s) k "
+            "WHERE k.%s IN (%s) "
+            "  AND try_cast(k.%s AS DATE) >= %s::date "
+            "  AND try_cast(k.%s AS DATE) <= %s::date"
+            % (_sql_ident(date_col), lit(src), _sql_ident(day_key_col), key_sql,
+               _sql_ident(date_col), lit(fr),
+               _sql_ident(date_col), lit(to)))
+    if not parts:
+        return []
+    union = " UNION ".join(parts)
+    return ["try_cast(doc_date AS DATE) IN (%s)" % union]
 
 
 def sales_compare_intent(intent, question=""):
@@ -3264,6 +3474,8 @@ def fork_scan_readings(match, readings, rel_by_src):
             pr["origin"] = rd["origin"]
         if rd.get("interpretation_id"):
             pr["interpretation_id"] = rd["interpretation_id"]
+        if rd.get("day_basis"):
+            pr["day_basis"] = rd["day_basis"]
         preds_w = (period_preds(pr) if (pr.get("from") or pr.get("to")) else [])
         scan = fork_scan(match, preds_w, rel_by_src)
         wfp = rd.get("window_fp") or window_fp_of(pr, rd.get("origin"))
@@ -3295,18 +3507,32 @@ def fork_classes_windowed(merged_rows, period_by_src, measure_word="", want=None
         fp = _fork_atom_equiv_fp(built)
         if fp is None:
             continue
-        by_atom.setdefault(fp, []).append(src)
+        bucket = by_atom.setdefault(fp, [])
+        if src not in bucket:
+            bucket.append(src)
         if fp not in meta_by_fp:
             meta_by_fp[fp] = {"row": d, "period": period, "window_fp": wfp,
                               "atom": built}
+        else:
+            # при слиянии равных атомов day-basis — держать лидера calendar в meta
+            cur = meta_by_fp[fp].get("period") or {}
+            if ((period or {}).get("day_basis") == _DAY_BASIS_CALENDAR
+                    and cur.get("day_basis") != _DAY_BASIS_CALENDAR):
+                meta_by_fp[fp] = {"row": d, "period": period, "window_fp": wfp,
+                                  "atom": built}
     fork_classes._meta_by_fp = meta_by_fp
     return by_atom
 
 
 def fork_detector_scan(match, preds, intent, today, rel_by_src,
-                         period_from_prior=False, measure_word="", want=None):
+                         period_from_prior=False, measure_word="", want=None,
+                         day_basis_prefer=None, trusted=None):
     """Один или несколько readings → rows + classes + cells для diag."""
     readings = period_readings(intent, today, period_from_prior=period_from_prior)
+    prefer = day_basis_prefer
+    if prefer is None:
+        prefer = calendar_day_basis_prefer(intent, trusted=trusted)
+    readings = expand_readings_calendar_axis(readings, prefer=prefer)
     if len(readings) <= 1:
         rd = readings[0] if readings else {"period": {}}
         pr = rd.get("period") or {}
@@ -3328,7 +3554,11 @@ def fork_detector_scan(match, preds, intent, today, rel_by_src,
 
 
 def _window_tuple_from_period(period):
-    """(origin, from, to) для отпечатка класса — окно W входит в эквивалентность."""
+    """(origin, from, to) для отпечатка класса — окно W входит в эквивалентность.
+
+    day_basis в fp НЕ входит: равные числа calendar/working → один класс → A (§3.4);
+    разные числа разводит exact_value. day_basis живёт в window_fp / period / labels.
+    """
     pr = period or {}
     return (
         pr.get("origin") or pr.get("interpretation_id") or _ORIGIN_NONE,
@@ -3677,9 +3907,19 @@ def _class_label_lookup(srcs, measure_ctx, atom=None, today=None):
         return None, None
     period = (atom or {}).get("period") if isinstance(atom, dict) else None
     wfp = window_fp_of(period, (period or {}).get("origin")) if period else ""
-    wlab = render_window_label(period, today=today) if period else None
     rep = srcs[0]
     fk_cls = fork_key_of(srcs, measure_ctx, window_fp=wfp)
+    db = ((period or {}).get("day_basis") or "").strip()
+    if db:
+        # §7bis: подписи day-basis только из словаря §7, не auto-wlab → иначе C.
+        labs = fork_labels_of(fk_cls, [db])
+        if labs.get(db):
+            return labs[db], fk_cls
+        cov, fk = fork_labels_covering([db])
+        if cov.get(db):
+            return cov[db], fk or fk_cls
+        return None, fk_cls
+    wlab = render_window_label(period, today=today) if period else None
     if wlab:
         return wlab, fk_cls
     labs = fork_labels_of(fk_cls, srcs)
@@ -4906,7 +5146,17 @@ def _class_window_form(it):
             or ((it or {}).get("atom") or {}).get("interpretation_id") or "")
 
 
-def fork_leader_class(picked_src, classes):
+def _class_day_basis(it):
+    """day_basis класса (§7bis) — из period/atom, не из прозы."""
+    p = (it or {}).get("period") or {}
+    if not p.get("day_basis"):
+        p = ((it or {}).get("atom") or {}).get("period") or {}
+    return (p.get("day_basis")
+            or ((it or {}).get("atom") or {}).get("day_basis")
+            or (it or {}).get("day_basis") or "").strip()
+
+
+def fork_leader_class(picked_src, classes, day_basis_prefer=None):
     """Класс лидера люка: эквивалентность, содержащая picked[0] конвейера.
 
     Не новая лестница — повторное использование победителя шага 4 до детектора.
@@ -4914,7 +5164,8 @@ def fork_leader_class(picked_src, classes):
     Журнал/разметка: atoms[0] = лидер при порядке [leader] + rest (см. fork_outcome_b).
 
     Ось W: один src в нескольких классах (mtd vs full_month) — лидер = mtd/wtd
-    (фаза B); без формы окна неоднозначность остаётся None, как раньше.
+    (фаза B). Ось day-basis (§2.4): среди оставшихся — calendar_days (или ticket).
+    Без формы окна и без day_basis неоднозначность остаётся None, как раньше.
     """
     src = str(picked_src or "").strip()
     if not src or not classes:
@@ -4931,11 +5182,27 @@ def fork_leader_class(picked_src, classes):
         return matching[0], rest
     preferred = [it for it in matching
                  if _class_window_form(it) in _WINDOW_LEADER_FORMS]
-    if not preferred:
-        return None
-    leader = preferred[0]
-    rest2 = [it for it in matching if it is not leader] + rest
-    return leader, rest2
+    pool = preferred if preferred else list(matching)
+    prefer_db = (day_basis_prefer if day_basis_prefer in _DAY_BASIS_IDS
+                 else _DAY_BASIS_LEADER_DEFAULT)
+    has_db = any(_class_day_basis(it) for it in pool)
+    if has_db:
+        db_pref = [it for it in pool if _class_day_basis(it) == prefer_db]
+        if db_pref:
+            pool = db_pref
+    if len(pool) == 1:
+        leader = pool[0]
+        rest2 = [it for it in matching if it is not leader] + rest
+        return leader, rest2
+    if preferred and not has_db:
+        leader = preferred[0]
+        rest2 = [it for it in matching if it is not leader] + rest
+        return leader, rest2
+    if has_db and pool:
+        leader = pool[0]
+        rest2 = [it for it in matching if it is not leader] + rest
+        return leader, rest2
+    return None
 
 
 def ordered_fork_classes(classes, rows, measure_word="", want=None, rel_by_src=None):
@@ -5057,11 +5324,13 @@ def fork_outcome_a(question, class_item, diag, cut=None, t0=None):
             "sources": [], "diag": d}
 
 
-def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None):
+def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None,
+                   day_basis_prefer=None):
     """Исход B: ответ лидера (picked[0]→класс) + люк с остальными ветками."""
     classes = list((payload or {}).get("classes") or [])
     total = len(classes)
-    split = fork_leader_class(picked_src, classes)
+    split = fork_leader_class(picked_src, classes,
+                              day_basis_prefer=day_basis_prefer)
     if split is None:
         return None
     leader_it, rest = split
@@ -5083,9 +5352,13 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None):
         srcs = list(it.get("srcs") or [])
         rep = sorted(srcs)[0] if srcs else ""
         row = it.get("row") or {}
-        opts.append({"src": rep, "label": lab or rep,
-                     "found": int(row.get("count") or 0),
-                     "distinct_by": lab or ""})
+        db = _class_day_basis(it)
+        opt = {"src": (db or rep), "label": lab or rep,
+               "found": int(row.get("count") or 0),
+               "distinct_by": lab or ""}
+        if db:
+            opt["day_basis"] = db
+        opts.append(opt)
     partial = dict(cut or {})
     d = _diag_pack(diag, fork_outcome="B",
              fork_key=(payload or {}).get("fork_key"),
@@ -5105,7 +5378,7 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None):
 
 def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
                    lab_by=None, marks=None, by=None, match="", preds=None,
-                   picked_src=None):
+                   picked_src=None, day_basis_prefer=None):
     """Исход C: непосчитанное/неподписанное видно клиенту (п. 13).
 
     Контракт 23.08 (unsigned): число лидера + FORK_OTHER_READING, без имён веток.
@@ -5114,7 +5387,8 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
     if c_why == "unsigned_class" and picked_src:
         applicable = _fork_applicable_classes(
             ordered_fork_classes(classes, rows))
-        split = fork_leader_class(picked_src, applicable)
+        split = fork_leader_class(picked_src, applicable,
+                                  day_basis_prefer=day_basis_prefer)
         if split is None:
             d = _diag_pack(diag, fork_outcome="C", fork_c_reason="leader_missing")
             if t0 is not None:
@@ -5582,6 +5856,9 @@ def issue_decision(question, option, ambiguity, options_ver, user=None, parse=No
         "measure": (option or {}).get("measure") if option and "measure" in option else None,
         "grain": (option or {}).get("grain"),
         "axis": (option or {}).get("distinct_by") if ambiguity == "axis" else None,
+        "day_basis": ((option or {}).get("day_basis")
+                      if (option or {}).get("day_basis") in _DAY_BASIS_IDS
+                      else None),
         "label": (option or {}).get("label"),
         "db": db_fingerprint(),
         "user": (str(user).strip() if user else None) or None,
@@ -10420,6 +10697,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         period_from_prior = apply_prior_period(intent, parse_intent(prior, today), today)
     # Фаза B: лидер окна MTD/WTD в основной preds; полный календарь — конкурент детектора.
     _w_readings = apply_period_leader(intent, today, period_from_prior=period_from_prior)
+    _day_prefer = calendar_day_basis_prefer(intent, trusted=trusted)
+    _ask_readings = expand_readings_calendar_axis(_w_readings, prefer=_day_prefer)
+    # Ticket/словарь сдвинул day-basis на working — основной preds тоже фильтрует.
+    if (_day_prefer == _DAY_BASIS_WORKING and calendar_axis_open()
+            and isinstance(intent.get("period"), dict)
+            and (intent["period"].get("from") or intent["period"].get("to"))):
+        intent["period"] = dict(intent["period"])
+        intent["period"]["day_basis"] = _DAY_BASIS_WORKING
     preds = _predicates(intent)
     разбор = intent.get("parse") or {}
     diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind"),
@@ -10432,6 +10717,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _wl = prefer_window_leader(_w_readings)
         if _wl and _wl.get("interpretation_id"):
             diag["period_leader"] = _wl["interpretation_id"]
+    if _ask_readings and len(_ask_readings) != len(_w_readings):
+        diag["calendar_readings"] = len(_ask_readings)
+        diag["day_basis_leader"] = _day_prefer
     шаг("разбор вопроса", тип=intent.get("kind"), понятий=len(intent.get("terms") or []),
         величина=(intent.get("measure") or "—"), считать=(intent.get("want") or "—"),
         потеряно=(",".join(разбор.get("lost") or []) or "—"))
@@ -11138,7 +11426,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _rows, _cls, _readings, _cells = fork_detector_scan(
                 match, preds, intent, today, _rel,
                 period_from_prior=period_from_prior,
-                measure_word=_mword, want=_fwant or None)
+                measure_word=_mword, want=_fwant or None,
+                day_basis_prefer=_day_prefer, trusted=trusted)
             _meta = getattr(fork_classes, "_meta_by_fp", {}) or {}
             _atoms = []
             for fp, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
@@ -11848,7 +12137,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # иначе шёл бы арбитр (план §3). Сырой focus сюда не гасит (trusted уже выше).
     # Фаза B: при одном src (канон продаж) ось W всё равно открывает B/C, если
     # readings > 1; compare «лучше/больше чем» — отдельный путь diff, не W-люк.
-    _window_fork = (len(_w_readings) > 1
+    _window_fork = (len(_ask_readings) > 1
                     and not sales_compare_intent(intent, question))
     if (FORK_OUTCOMES and FORK_DETECT and not no_arbiter and not trusted
             and (len(arb_pool) > 1 or _window_fork)):
@@ -11870,7 +12159,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _rows, _cls, _readings, _cells = fork_detector_scan(
                 match, preds, intent, today, _rel,
                 period_from_prior=period_from_prior,
-                measure_word=_mword, want=_fwant or None)
+                measure_word=_mword, want=_fwant or None,
+                day_basis_prefer=_day_prefer, trusted=trusted)
             if len(_cls) > 1:
                 _fork_log(_cls, _mword or (intent.get("want") or ""))
             _prev = dict(diag.get("fork") or {})
@@ -11932,7 +12222,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if _outc == "B":
             _picked0 = picked[0] if picked else None
             _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0,
-                                   picked_src=_picked0)
+                                   picked_src=_picked0,
+                                   day_basis_prefer=_day_prefer)
             if _bres is not None:
                 шаг("исход B", классов=len(_pay.get("classes") or []))
                 return _bres
@@ -11944,7 +12235,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             return fork_outcome_c(
                 question, _pay, _cls, _rows, diag, cut=cut, t0=t0,
                 marks=marks, by=by, match=match, preds=preds,
-                picked_src=(picked[0] if picked else None))
+                picked_src=(picked[0] if picked else None),
+                day_basis_prefer=_day_prefer)
         if _outc == "unavailable":
             return {"partial": cut or None, "kind": "unavailable",
                     "text": "Не удалось проверить все прочтения вопроса. "

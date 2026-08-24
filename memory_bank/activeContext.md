@@ -22,13 +22,13 @@ IVF `<#>` отвечает. Бой :8091 — `11d8f158` без новых фла
 замки **28/0** + **14/0**. Ask-флаг уже в git; на :8092 словарь ещё не
 выкатан — следующий шаг: выкат init+compile на стейджинг + `ASK_SOLR_SYNONYMS=1`.
 
-🔴 **§7bis шаг 1 в дереве `[24.08]`**: `corpus_build.sql` §1-кватер +
-`search_calendar_map` / GRANT в `corpus_init.sql`; ключи `calendar_*` в
-`search_meta`; замок `test_calendar_meta_build.py` **30/0**. Ask / флаг
-`ASK_CALENDAR_AXIS` — следующий шаг (не этот заход). Коммит — оркестратор.
+🔴 **§7bis шаг 2 в дереве `[24.08]`**: `ASK_CALENDAR_AXIS` (умолч.0) в
+`serene_ask.py` — day-basis readings + исходы A/B/C через W-трек; md5 ask
+`1a068d75`; замок `test_calendar_axis.py` **36/0**. Бой не включён. Коммит —
+оркестратор. Шаг 1 корпуса уже в дереве.
 
-🔴 **дальше**: (1) Ф6.3 — выкат словаря на okna :8092 + флаг; (2) §7bis шаг 2 —
-ask-код за `ASK_CALENDAR_AXIS` (умолч.0) + проба `:8092`; (3) перемер
+🔴 **дальше**: (1) Ф6.3 — выкат словаря на okna :8092 + флаг; (2) §7bis —
+выкат ask на `:8092` + `ASK_CALENDAR_AXIS=1` + проба; (3) перемер
 латентности Ф6.1 на свободном GPU; (4) klient-1 embed 4B — EMBED_RUNNING.
 
 🔴 **rank okna «лучше всего на неделе» — выкат+AB 8/8 `[23.08]`**: axis-clarify

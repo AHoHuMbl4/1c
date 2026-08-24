@@ -1,3 +1,50 @@
+## 24.08: Ф6.3 словарь в базе okna + флаг на :8092 [замер]
+
+[замер] `corpus_init.sql` применён на okna write-DSN (`solr_syn_dict_ok=1`, 12
+объектов); `solr_synonyms_build.py compile --apply` собрал `search_dict_syn` из
+254 строк `search_entity_alias` → **221 правило / 23 305 байт**; `ts_lexize`
+отвечает (`окно`→`{окно}`, `sale`→`{sale}`). Стейджинг `:8092` перезапущен со
+всеми флагами Ф6 (`SQL_RRF`+`RESOLVER_IVF`+`HEALTH_NATIVE_FRESHNESS`+
+`SOLR_SYNONYMS=1`): `/health` 200 за 0.10 с, AB_PROBE **8/8, 0 сбоев**,
+средняя **69,02 с**.
+
+🔴 Рост средней (44,19 → 69,02 с) — **не Ф6.3, а очередь эмбеддера**: живая
+проба с okna в тот же момент — `10.3.1.11:8000/health` 200 за **0,003 с**, а
+`POST /v1/embeddings` — таймаут **25 с** (000); второй хост `10.3.1.12:8002`
+закрыт (embed снят владельцем ради 27B), реранкер `:8005` жив (0,155 с). GPU
+занят пересчётом 4B klient-1. Вывод прежний: сравнимый замер латентности
+(Ф6.1 и Ф6.3) — только после конца пересчёта.
+
+## 24.08: ось календаря на :8092 — флаг включён, карта ещё пуста [замер]
+
+[замер] кандидат `cd0ce6d4` выложен в `serene_ask_probe.py` (`:8092`,
+`ASK_CALENDAR_AXIS=1` вместе с остальными флагами Ф6): `/health` 200 за
+0.09 с, `/ask` отвечает. При этом `SELECT k FROM search_meta WHERE k LIKE
+'calendar%'` на okna — **пусто**: `corpus_build.sql` в `/opt` от 18.08, без
+блока 1-кватер. Значит `calendar_axis_open()` = False и ось честно закрыта
+(no-op) — ровно как задумано для базы без карты. AB_PROBE на этом кандидате —
+**8/8, 0 сбоев, средняя 48,62 с** (эмбеддер по-прежнему под очередью
+пересчёта klient-1), маркер `okna probe live 0err/8`. Ключи появятся после выката
+нового `corpus_build.sql` и следующего такта; выкат отложен: такт
+`1c-serene-pipeline@postgres` стартовал 18:58 UTC, сериализация `/opt`
+(одно окно за раз) — правило 17.08.
+
+## 24.08: §7bis шаг 2 — ASK_CALENDAR_AXIS в serene_ask [код]
+
+[код] Ось day-basis `calendar_days`/`working_days` в `serene_ask.py` за
+`ASK_CALENDAR_AXIS` (умолч. `"0"`). При 0 — бит-в-бит прежний W-трек (без
+нового SQL). При 1 + непустых `search_meta.calendar_*` + `search_calendar_map`:
+`calendar_axis_readings` / `expand_readings_calendar_axis` рядом с
+`period_readings`; day-basis в `window_fp`; фильтр working — один SQL
+`query_table` + IN ключей из meta (§1.3); исходы через
+`resolve_fork_outcome` / `fork_outcome_*`; лидер §2.4 (`calendar_days`, сдвиг
+ticket); подписи day-basis только из `search_fork_label` (нет → C); journal
+`ticket_variant` только при trusted. Списков русских триггеров нет. Оффлайн:
+`test_calendar_axis.py` **36/0**; регресс `test_fork_window_readings` **40/0**,
+`test_fork_outcomes` **29/0**, `test_solr_synonyms_apply` **14/0**. md5 ask
+до `a8e0316f…` / после `1a068d75…`. Бой :8091 / стейджинг :8092 не трогали.
+Доки: sql/functions/utility#utility-table-functions (query_table).
+
 ## 24.08: Ф6.3 шаг 2 — компиляция solr_synonyms из таблиц [код]
 
 [код] Query-side словарь `solr_synonyms`: в `corpus_init.sql` — заготовка
