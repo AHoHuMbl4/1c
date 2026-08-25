@@ -1,3 +1,12 @@
+**[замер 25.08]** Rank-путь (`ASK_SALES_RANK_CANON=1`, md5 **de942da5**) на
+стейджинге okna `:8092` (`serene_ask_probe.py`, флаги Ф6 + calendar + rank-canon).
+Полный скорер okna **24**: **19/24**, сбоев **0** (было **15/24**); класс K1+K2+K3
+**4/4 OK**, остальные 20 — прежние OK не краснели (5 FAIL = K4/K5/K6). AB_PROBE
+**8/8**, средняя **10,00 с**, отметка `okna probe live 0err/8`. Оффлайн:
+`test_sales_rank_canon.py` **34/0**; `test_sales_canon_prefer` **74/0**;
+`test_rank_leader_path` **26/0**; fork/calendar **29+40+43+36+13/0**. Бой `:8091`
+не трогали. Первая база на стейджинге цела по AB_PROBE.
+
 **[замер 25.08]** После починки scorera (`aggregate_totals_in_text`: возраст по
 единице «мин/сек» рядом с числом, порог `n≥1000` снят): кандидат day-basis /
 fork_label (md5 **65af566ad22084f368bf85bebfdd7125**) на стейджинге okna `:8092`

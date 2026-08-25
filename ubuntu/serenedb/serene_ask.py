@@ -1310,10 +1310,13 @@ _ORIGIN_EXPLICIT = "explicit"
 _ORIGIN_NONE = "none"
 _WINDOW_FORM_IDS = frozenset({
     "none", "explicit", "mtd", "full_month", "wtd", "full_week",
-    "drop_assumed", "prior",
+    "prev_week", "drop_assumed", "prior",
 })
 # §7bis: day-basis окна. Env умолч. 0 — бой не включён.
 ASK_CALENDAR_AXIS = os.environ.get("ASK_CALENDAR_AXIS", "0") == "1"
+# Rank×sales канон (E/M/W): умолч. 0 — бой не включён (work/rank-path-fix-design.md).
+ASK_SALES_RANK_CANON = os.environ.get("ASK_SALES_RANK_CANON", "0") == "1"
+_PERIOD_RELATIVE_FORMS = {"at": 0.0, "map": None}
 _DAY_BASIS_CALENDAR = "calendar_days"
 _DAY_BASIS_WORKING = "working_days"
 _DAY_BASIS_IDS = frozenset({_DAY_BASIS_CALENDAR, _DAY_BASIS_WORKING})
@@ -1345,6 +1348,17 @@ def _week_range_monday(d):
     """Неделя пн–вс (Europe/Chisinau: календарная дата без TZ-сдвига)."""
     start = d - datetime.timedelta(days=d.weekday())
     end = start + datetime.timedelta(days=6)
+    return start, end
+
+
+def _prev_week_range(d):
+    """Предыдущая календарная неделя: [date_trunc(week)−7d, date_trunc(week)).
+
+    Доки: sql/functions/date#date_truncpart-date (форма границ как в эталоне gold).
+    """
+    ws, _we = _week_range_monday(d)
+    start = ws - datetime.timedelta(days=7)
+    end = ws - datetime.timedelta(days=1)
     return start, end
 
 
@@ -1430,6 +1444,10 @@ def _period_form_id(period, today):
         return "wtd"
     if fr_d == ws and to_d == we:
         return "full_week"
+    if ASK_SALES_RANK_CANON:
+        pws, pwe = _prev_week_range(td)
+        if fr_d == pws and to_d == pwe:
+            return "prev_week"
     return "explicit"
 
 
@@ -1528,12 +1546,22 @@ def period_readings(intent, today=None, period_from_prior=False):
         else:
             _add(wtd, origin, "wtd")
             _add(full, origin, "full_week")
+    elif fid == "prev_week":
+        pws, pwe = _prev_week_range(td)
+        _add({"from": _iso_date(pws), "to": _iso_date(pwe)}, origin, "prev_week")
     else:
         _add(p, origin, "explicit")
 
     # Люк: исходные скользящие 7 дней рядом с календарной неделей (§2–3).
     if sliding_hatch is not None:
         _add(sliding_hatch, origin, "explicit")
+
+    # Rank-канон W: при текущей неделе добавить prev_week (форма gold, §2.3).
+    if ASK_SALES_RANK_CANON:
+        have = {r.get("interpretation_id") for r in readings}
+        if have & {"wtd", "full_week"} and "prev_week" not in have:
+            pws, pwe = _prev_week_range(td)
+            _add({"from": _iso_date(pws), "to": _iso_date(pwe)}, origin, "prev_week")
 
     # from/to уже есть → период назван; drop_assumed сюда не входит (§3).
     return readings if readings else [_window_reading(p, origin, "explicit", today)]
@@ -1564,11 +1592,18 @@ def render_window_label(period, origin=None, today=None):
 _WINDOW_LEADER_FORMS = ("mtd", "wtd")
 
 
-def prefer_window_leader(readings):
-    """Reading-лидер для основного ответа: mtd/wtd, иначе первое прочтение."""
+def prefer_window_leader(readings, prefer_form=None):
+    """Reading-лидер для основного ответа: mtd/wtd, иначе первое прочтение.
+
+    prefer_form — ticket/словарь (например prev_week); иначе статус-кво §2.3.
+    """
     readings = list(readings or [])
     if not readings:
         return None
+    if prefer_form:
+        for rd in readings:
+            if (rd.get("interpretation_id") or "") == prefer_form:
+                return rd
     for prefer in _WINDOW_LEADER_FORMS:
         for rd in readings:
             if (rd.get("interpretation_id") or "") == prefer:
@@ -1576,15 +1611,77 @@ def prefer_window_leader(readings):
     return readings[0]
 
 
-def apply_period_leader(intent, today=None, period_from_prior=False):
+def period_relative_forms():
+    """Словарь относительных окон: form_id → фразы (данные, не литералы ask)."""
+    now = time.time()
+    if (_PERIOD_RELATIVE_FORMS["map"] is not None
+            and now - _PERIOD_RELATIVE_FORMS["at"] < 300):
+        return _PERIOD_RELATIVE_FORMS["map"]
+    got = {}
+    try:
+        r = psql("SELECT v FROM search_meta WHERE k = 'period_relative_forms' LIMIT 1")
+        raw = (r[0][0] or "") if r and r[0] else ""
+        if raw:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, dict):
+                got = {str(k): [str(x) for x in (v or [])]
+                       for k, v in parsed.items()}
+    except (RuntimeError, ValueError, TypeError):
+        got = {}
+    if not got:
+        try:
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "period_relative_forms.json")
+            with open(p, encoding="utf-8") as f:
+                parsed = json.load(f)
+            if isinstance(parsed, dict):
+                got = {str(k): [str(x) for x in (v or [])]
+                       for k, v in parsed.items()}
+        except (OSError, ValueError, TypeError):
+            got = {}
+    _PERIOD_RELATIVE_FORMS.update({"at": now, "map": got})
+    return got
+
+
+def period_form_from_question(question):
+    """form_id относительного окна по фразам словаря (данные). Иначе None."""
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return None
+    for form_id, phrases in (period_relative_forms() or {}).items():
+        for ph in phrases or []:
+            p = " ".join(str(ph).lower().split())
+            if p and p in q:
+                return form_id
+    return None
+
+
+def apply_period_leader(intent, today=None, period_from_prior=False, question=""):
     """Подключить period_readings к основному ответу (фаза B, план §2/§3).
 
     Лидер по умолчанию — MTD/WTD; полный месяц/неделя остаются конкурирующим
     прочтением для детектора. Возвращает список readings (для diag / исходов).
     """
     intent = intent if isinstance(intent, dict) else {}
+    prefer_form = None
+    # Словарь relative period (prev_week) — для sum и rank; без конкурирующего
+    # wtd при лидере prev (иначе figures B показывает чужое окно).
+    if ASK_SALES_RANK_CANON:
+        prefer_form = period_form_from_question(question)
+        pr0 = intent.get("period") or {}
+        if (pr0.get("interpretation_id") or "") == "prev_week":
+            prefer_form = "prev_week"
+        if prefer_form == "prev_week":
+            td = _calendar_date(today) or _calendar_date(time.strftime("%Y-%m-%d"))
+            if td:
+                pws, pwe = _prev_week_range(td)
+                origin = _period_origin(intent, period_from_prior)
+                intent["period"] = {
+                    "from": _iso_date(pws), "to": _iso_date(pwe),
+                    "interpretation_id": "prev_week", "origin": origin,
+                }
     readings = period_readings(intent, today, period_from_prior=period_from_prior)
-    leader = prefer_window_leader(readings)
+    leader = prefer_window_leader(readings, prefer_form=prefer_form)
     if leader is None:
         return readings
     pr = dict(leader.get("period") or {})
@@ -4071,6 +4168,7 @@ def rank_question_text(question):
     markers = (
         "больше всего", "больше всех", "лучше всего", "лучше всех",
         "наибольш", "наименьш",
+        "лучших", "лучший", "лучшие", "лучшего", "лучшая",
         "какого товар", "какой товар", "какая номенклатур",
         "top ", " most ", "maximum", "leader", "лидер", "рейтинг",
         "топ-", "топ ",
@@ -4347,31 +4445,44 @@ def rank_deterministic_answer(question, agg, src, match, preds, measure, money,
         or not (agg.get("groups") or [])
         or not ((agg.get("groups") or [{}])[0].get("name") or "").strip()
     )
+    _sales_rg = sales_rank_engaged(intent, plan, question, [src] if src else None)
     if _need:
         _col, _alts = rank_axis_resolve(src, axes, intent, question, plan)
         if hatch_alts is None:
             hatch_alts = _alts
         if not (_col and src and measure):
             return None
-        _k = 1
-        if serene_axis:
-            try:
-                _k = serene_axis.rank_k(
-                    (intent or {}).get("amount"),
-                    (plan or {}).get("compute"), 0, ROWS_TO_MODEL)
-            except Exception:
-                _k = 1
+        if _sales_rg:
+            _k = _sales_rank_top_n(intent, plan, question)
+            _compute = "sum"
+        else:
+            _k = 1
+            if serene_axis:
+                try:
+                    _k = serene_axis.rank_k(
+                        (intent or {}).get("amount"),
+                        (plan or {}).get("compute"), 0, ROWS_TO_MODEL)
+                except Exception:
+                    _k = 1
+            _compute = (plan or {}).get("compute") or "sum"
         _rank_agg = aggregate_groups(
-            src, match, preds, measure, _col, _k,
-            (plan or {}).get("compute") or "sum")
+            src, match, preds, measure, _col, _k, _compute)
         if _rank_agg:
             diag["rank_reaggregate"] = _col
+            if _sales_rg:
+                diag["sales_rank_k"] = _k
+                diag["sales_rank_compute"] = _compute
     if not _rank_agg or not (_rank_agg.get("groups") or []):
         return None
     if not ((_rank_agg.get("groups") or [{}])[0].get("name") or "").strip():
         return None
     _unit = _unit_for_measure(measure, money)
-    _txt = rank_leader_answer_text(_rank_agg, say_measure or measure, unit=_unit)
+    if _sales_rg:
+        _k_txt = _sales_rank_top_n(intent, plan, question)
+        _txt = rank_groups_answer_text(
+            _rank_agg, say_measure or measure, unit=_unit, k=_k_txt)
+    else:
+        _txt = rank_leader_answer_text(_rank_agg, say_measure or measure, unit=_unit)
     if not _txt:
         return None
     _txt = ensure_count_named(_txt, _rank_agg, "rank")
@@ -4525,19 +4636,162 @@ def _sales_register_score(src, measures):
     return score
 
 
-def prefer_entity_for_sales(cands, intent, question):
+def sales_lift_possible(cands):
+    """Структурный подъём sales-register по written_by из кандидатов (без cold).
+
+    True, если в cands уже есть не-книга accumulationregister_* либо document_*
+    (или parent/written_by → document), с которого поднимается регистр движений.
+    """
+    cands = list(cands or [])
+    if not cands:
+        return False
+    for c in cands:
+        if (str(c).startswith("accumulationregister_")
+                and not sales_noncanon_focus(c)):
+            return True
+    try:
+        rs = psql(
+            "SELECT src_table, parent, written_by FROM %s WHERE src_table IN (%s)"
+            % (TABLES, ", ".join(lit(c) for c in cands)))
+    except RuntimeError:
+        return False
+    docs = set()
+    for r in rs or []:
+        if not r or not r[0]:
+            continue
+        c = r[0]
+        if str(c).startswith("document_"):
+            docs.add(c)
+        p = (r[1] if len(r) > 1 else "") or ""
+        if p.startswith("document_"):
+            docs.add(p)
+        w = (r[2] if len(r) > 2 else "") or ""
+        if w.startswith("document_"):
+            docs.add(w)
+    for c in cands:
+        if str(c).startswith("document_"):
+            docs.add(c)
+    if not docs:
+        return False
+    try:
+        lifted = psql(
+            "SELECT src_table FROM %s WHERE src_table LIKE "
+            "'accumulationregister_%%' AND written_by IN (%s) LIMIT 1"
+            % (TABLES, ", ".join(lit(d) for d in docs)))
+    except RuntimeError:
+        return False
+    return bool(lifted and lifted[0] and lifted[0][0])
+
+
+def sales_rank_engaged(intent, plan=None, question="", cands=None):
+    """Gate rank×sales: флаг ∧ сильная форма rank ∧ structural lift (§2.1/§9).
+
+    Сильная форма — уже существующие детекторы: фраза рейтинга, sales_sum,
+    max/min или amount без порога. Голый want=list («как у нас дела?») —
+    не включает канон.
+    """
+    if not ASK_SALES_RANK_CANON:
+        return False
+    if not rank_intent_from(intent, plan, question):
+        return False
+    intent = intent or {}
+    plan = plan or {}
+    amt = intent.get("amount") or {}
+    strong = (
+        sales_sum_intent(intent, question)
+        or rank_question_text(question)
+        or (plan.get("compute") or "") in ("max", "min")
+        or (not amt.get("op") and amt.get("value") is not None)
+    )
+    if not strong:
+        return False
+    return sales_lift_possible(cands)
+
+
+
+def _sales_rank_top_n(intent, plan, question):
+    """K для rank×sales: amount / топ-N в тексте / иначе 1."""
+    intent = intent or {}
+    plan = plan or {}
+    amt = intent.get("amount") or {}
+    if not amt.get("op") and amt.get("value") is not None:
+        try:
+            n = int(float(amt["value"]))
+            if float(amt["value"]) == float(n) and 1 <= n <= ROWS_TO_MODEL:
+                return n
+        except (TypeError, ValueError):
+            pass
+    q = " ".join(str(question or "").lower().split())
+    m = re.search(r"(?:топ|top)\s*-?\s*(\d+)", q)
+    if m:
+        return max(1, min(int(m.group(1)), ROWS_TO_MODEL))
+    m = re.search(r"\b(\d+)\s*(?:лучш|best)\b", q)
+    if m:
+        return max(1, min(int(m.group(1)), ROWS_TO_MODEL))
+    if any(w in q for w in ("лучших", "лучший", "лучшие", "лучшего")) and any(
+            w in q for w in ("три ", "трое ", "трёх ", "трех ")):
+        return 3
+    if (plan.get("compute") or "") in ("max", "min"):
+        return 1
+    if serene_axis:
+        try:
+            k = serene_axis.rank_k(
+                intent.get("amount"), plan.get("compute"), 0, ROWS_TO_MODEL)
+            if isinstance(k, int) and 2 <= k < ROWS_TO_MODEL:
+                return k
+        except Exception:
+            pass
+    return 1
+
+
+def rank_groups_answer_text(agg, measure_label=None, unit="", k=None):
+    """Текст топ-K: «имя»: n · «имя2»: n2 … (скорер name/top-3)."""
+    if not agg or agg.get("grain") != "group":
+        return None
+    gs = [g for g in (agg.get("groups") or []) if isinstance(g, dict)]
+    if not gs:
+        return None
+    try:
+        lim = int(k) if k is not None else len(gs)
+    except (TypeError, ValueError):
+        lim = len(gs)
+    lim = max(1, min(lim, len(gs), ROWS_TO_MODEL))
+    u = (unit or "").strip()
+    suffix = (" " + u) if u and u != UNIT_UNKNOWN else ""
+    parts = []
+    for g in gs[:lim]:
+        nm = (g.get("name") or "").strip()
+        val = g.get("value")
+        if val is None:
+            continue
+        if nm:
+            parts.append("«%s»: %s%s" % (nm, _fmt_human(val), suffix))
+        else:
+            parts.append("%s%s" % (_fmt_human(val), suffix))
+    if not parts:
+        return None
+    if len(parts) == 1:
+        return parts[0]
+    return " · ".join(parts)
+
+
+def prefer_entity_for_sales(cands, intent, question, plan=None, allow_cold=None):
     """Канон «продали»: регистр движений по written_by; документ — люк (план §2/§7).
 
     Gold/okna и A2: эталон — accumulationregister_* регистратора продажи.
     Документ↔регистр при расхождении атомов (внутридневная доставка) не развилка:
     отвечаем регистром. Документ остаётся в пуле только если регистра нет.
     Среди регистров одного регистратора — с Количество+Всего, не книга НДС.
+    Rank-канон (ASK_SALES_RANK_CANON): вход без sales_sum_intent; cold-lift выкл.
     """
-    if not sales_sum_intent(intent, question):
+    rank_gate = sales_rank_engaged(intent, plan, question, cands)
+    if not sales_sum_intent(intent, question) and not rank_gate:
         return cands
     cands = list(cands or [])
     if not cands:
         return cands
+    if allow_cold is None:
+        allow_cold = not rank_gate
     try:
         rs = psql(
             "SELECT src_table, parent, written_by FROM %s WHERE src_table IN (%s)"
@@ -4572,7 +4826,8 @@ def prefer_entity_for_sales(cands, intent, question):
         except RuntimeError:
             pass
     # Холодный подъём: BM25 увёл на журналы/кассу — канон продаж всё равно из written_by.
-    if not lifted:
+    # Rank-путь: только lift из cands (риск ложного cold на справочнике) — §9 проекта.
+    if not lifted and allow_cold:
         try:
             cold = [r[0] for r in psql(
                 "SELECT src_table FROM %s WHERE src_table LIKE "
@@ -4626,11 +4881,13 @@ def prefer_entity_for_sales(cands, intent, question):
     return out or cands
 
 
-def sales_canon_src(cands, intent, question):
+def sales_canon_src(cands, intent, question, plan=None):
     """Src канона продаж после prefer — или None."""
-    if not sales_sum_intent(intent, question):
+    rank_gate = sales_rank_engaged(intent, plan, question, cands)
+    if not sales_sum_intent(intent, question) and not rank_gate:
         return None
-    preferred = prefer_entity_for_sales(list(cands or []), intent, question)
+    preferred = prefer_entity_for_sales(
+        list(cands or []), intent, question, plan=plan)
     if not preferred:
         return None
     top = preferred[0]
@@ -4675,12 +4932,84 @@ def sales_qty_measure(names, alias_by=None):
     return None
 
 
+def _alias_role_in_question(question, measure_name, alias_by):
+    """Алиас меры (из данных) попал в текст — без имени поля (ловушка «лучше всего»)."""
+    q = " ".join(str(question or "").lower().split())
+    if not q or not measure_name:
+        return False
+    parts = [str(a) for a in (alias_by or {}).get(measure_name) or []]
+    words = q.split()
+    for raw in parts:
+        a = "".join(str(raw).lower().split())
+        if len(a) < 3:
+            continue
+        if a in q:
+            return True
+        stem = a[:max(4, len(a) - 2)] if len(a) >= 4 else a
+        for w in words:
+            if len(w) < 3:
+                continue
+            if w.startswith(stem) or stem.startswith(w[:max(3, len(w) - 2)]):
+                return True
+    return False
+
+
+def _sales_product_rank_qty(intent, question):
+    """Товарный рейтинг продаж → Количество (те же фразы, что force_money=False)."""
+    if _rank_wants_quantity(question):
+        return True
+    if not sales_sum_intent(intent, question):
+        return False
+    q = " ".join(str(question or "").lower().split())
+    if any(w in q for w in (
+            "лучше всего", "хуже всего", "топ продаж", "лидер продаж",
+            "best sell", "top sell", "most sold")):
+        return True
+    if (("что " in q or q.startswith("что") or "какой " in q or "какая " in q
+         or "какие " in q or "which " in q or "what " in q)
+            and any(w in q for w in ("продава", "продало", "продали", "sold", "sales"))):
+        return True
+    return False
+
+
+def sales_rank_canon_measure(names, intent, question, alias_by=None):
+    """Мера rank×sales: роль из measure_choice/алиасов, не force_money.
+
+    money — алиас из данных в слове/вопросе; qty — товарный рейтинг; иначе None
+    (ответный путь добирает money для клиентского rank без qty).
+    """
+    names = list(names or [])
+    alias_by = alias_by or {}
+    if not names:
+        return None, None
+    word = ((intent or {}).get("measure") or "").strip()
+    if word:
+        got, alts, how = measure_choice(names, word, alias_by=alias_by)
+        if got and how in ("exact", "substring", "alias", "base", "single"):
+            return got, "role_choice"
+        if how == "ask" and alts:
+            return None, "role_ask"
+    m = sales_money_measure(names, alias_by)
+    if m and (
+            (word and _alias_role_in_question(word, m, alias_by))
+            or _alias_role_in_question(question, m, alias_by)):
+        return m, "sales_money_role"
+    if _sales_product_rank_qty(intent, question):
+        q = sales_qty_measure(names, alias_by)
+        if q:
+            return q, "sales_qty_canon"
+    return None, None
+
+
 def sales_force_money_measure(intent, question=""):
     """Денежный канон меры — только итог «сколько», не ранг «что/какой продавался».
 
     [замер 21.08] «что лучше всего продавалось» + sales_money_measure→Всего давало
     чужого лидера (деньги); эталон name — ORDER BY Количество.
+    При ASK_SALES_RANK_CANON денежный force на любом rank_intent выкл. (§2.4).
     """
+    if ASK_SALES_RANK_CANON and rank_intent_from(intent, question=question):
+        return False
     if not sales_sum_intent(intent, question):
         return False
     q = " ".join(str(question or "").lower().split())
@@ -10767,7 +11096,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if prior:
         period_from_prior = apply_prior_period(intent, parse_intent(prior, today), today)
     # Фаза B: лидер окна MTD/WTD в основной preds; полный календарь — конкурент детектора.
-    _w_readings = apply_period_leader(intent, today, period_from_prior=period_from_prior)
+    _w_readings = apply_period_leader(
+        intent, today, period_from_prior=period_from_prior, question=question)
     _day_prefer = calendar_day_basis_prefer(intent, trusted=trusted)
     _ask_readings = expand_readings_calendar_axis(_w_readings, prefer=_day_prefer)
     # Ticket/словарь сдвинул day-basis на working — основной preds тоже фильтрует.
@@ -10785,7 +11115,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["period_from_prior"] = True
     if _w_readings:
         diag["period_readings"] = len(_w_readings)
-        _wl = prefer_window_leader(_w_readings)
+        _pf = None
+        if ASK_SALES_RANK_CANON:
+            _pf = period_form_from_question(question)
+            pr0 = intent.get("period") or {}
+            if (pr0.get("interpretation_id") or "") == "prev_week":
+                _pf = "prev_week"
+        _wl = prefer_window_leader(_w_readings, prefer_form=_pf)
         if _wl and _wl.get("interpretation_id"):
             diag["period_leader"] = _wl["interpretation_id"]
     if _ask_readings and len(_ask_readings) != len(_w_readings):
@@ -12033,8 +12369,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Документ-регистратор в writer_pair не заводим — люк только по focus.
     if (not focus and not no_arbiter
             and not entity_choice_locked(trusted, resolved)
-            and sales_sum_intent(intent, question)):
-        _canon = sales_canon_src(cands, intent, question)
+            and (sales_sum_intent(intent, question)
+                 or sales_rank_engaged(intent, plan, question, cands))):
+        _canon = sales_canon_src(cands, intent, question, plan=plan)
         if _canon:
             _prev = list(picked or [])
             if not _prev or _prev[0] != _canon:
@@ -12081,8 +12418,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             and not diag.get("catalog_count_locked")
             and len(arb_pool) < ARBITER_MAX):
         arb_pool.append(diag["writer_pair"])
-    if sales_sum_intent(intent, question):
-        arb_pool = prefer_entity_for_sales(arb_pool, intent, question)
+    if (sales_sum_intent(intent, question)
+            or sales_rank_engaged(intent, plan, question, arb_pool)):
+        arb_pool = prefer_entity_for_sales(
+            arb_pool, intent, question, plan=plan)
     arb_pool = prefer_entity_for_catalog_count(arb_pool, intent, question)
     # Lock канона: один источник → period_empty / ответ, не clarify соперников.
     picked, arb_pool, doubt = sales_canon_force_pool(
@@ -12676,10 +13015,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     src=diag.get("sales_fork_period_empty"))
                 return _sfpe1
     diag["focus"], diag["found"] = src, by.get(src, 0)
-    if (sales_sum_intent(intent, question) and src
+    if ((sales_sum_intent(intent, question)
+             or sales_rank_engaged(intent, plan, question,
+                                   list(cands or []) + [src]))
+            and src
             and not diag.get("sales_canon_locked")
             and not diag.get("catalog_count_locked")):
-        _canon_src = sales_canon_src(list(cands or []) + [src], intent, question)
+        _canon_src = sales_canon_src(
+            list(cands or []) + [src], intent, question, plan=plan)
         if _canon_src and src == _canon_src:
             diag["sales_canon_locked"] = _canon_src
     шаг("сущность выбрана", сущность=(src or "—"), совпадений=by.get(src, 0),
@@ -12824,11 +13167,27 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         else:
             diag["measure_pick_unresolved"] = measure_pick
     # Канон «продали»: итог «сколько» → деньги; ранг «что продавалось» → Количество.
-    if (sales_sum_intent(intent, question) and not measure_pick
+    # Rank×sales (ASK_SALES_RANK_CANON): qty|money по роли из алиасов, не force_money.
+    _rank_sales = sales_rank_engaged(
+        intent, plan, question, list(cands or []) + ([src] if src else []))
+    if ((sales_sum_intent(intent, question) or _rank_sales) and not measure_pick
             and (diag.get("sales_canon_locked") or src)):
         _names = measures_of(src)
         _als = measure_aliases_of(src)
-        if sales_force_money_measure(intent, question):
+        if _rank_sales:
+            _sm, _how = sales_rank_canon_measure(
+                _names, intent, question, _als)
+            if _how == "role_ask":
+                _sm = None
+            if not _sm and not _rank_wants_quantity(question):
+                _sm = sales_money_measure(_names, _als)
+                if _sm:
+                    _how = "sales_rank_money"
+            if not _sm:
+                _sm = sales_qty_measure(_names, _als)
+                if _sm:
+                    _how = "sales_qty_canon"
+        elif sales_force_money_measure(intent, question):
             _sm = sales_money_measure(_names, _als)
             _how = "sales_canon"
         else:
@@ -12924,7 +13283,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Несколько величин подходят одинаково — спрашиваем, какую считать. Механизм тот же,
     # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
     if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
-            and not diag.get("sales_measure_canon")):
+            and not diag.get("sales_measure_canon")
+            and not _rank_sales):
         diag["measure_ambiguous"] = measure_alts
         # 🔴 ЧИСЛА ПОДХОДЯЩИХ ВЕЛИЧИН СЧИТАЮТСЯ ЗДЕСЬ ЖЕ — ОНИ НУЖНЫ НЕ ЧЕЛОВЕКУ, А ПРОВЕРКЕ
         # НАД НАМИ (05.08). Этот же путь проходит КАНДИДАТ круга арбитра
@@ -13148,8 +13508,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if agg is None and grain_dec.get("grain") == "group" and grain_dec.get("col") and serene_axis:
         _col = grain_dec["col"]
         _named = grain_dec.get("named_gis") or []
-        _k = serene_axis.rank_k(intent.get("amount"), plan.get("compute"),
-                                len(_named), ROWS_TO_MODEL)
+        _sales_rg = sales_rank_engaged(
+            intent, plan, question, [src] if src else None)
+        if _sales_rg and measure:
+            _k = _sales_rank_top_n(intent, plan, question)
+            _compute_g = "sum"
+        else:
+            _k = serene_axis.rank_k(intent.get("amount"), plan.get("compute"),
+                                    len(_named), ROWS_TO_MODEL)
+            _compute_g = plan.get("compute")
         _members = None
         if grain_dec.get("form") in ("compare", "number") and _named:
             _members = []
@@ -13161,7 +13528,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if grain_dec.get("form") == "compare":
                 _k = ROWS_TO_MODEL
         agg = aggregate_groups(src, match, preds, measure, _col, _k,
-                               plan.get("compute"), _members)
+                               _compute_g, _members)
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
             if not _zero_period_not_missing(intent, diag, question, act, src):
