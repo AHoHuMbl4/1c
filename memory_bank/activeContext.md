@@ -1,6 +1,6 @@
 # Active Context
 
-_Обновлено: **2026-08-25.** Здесь — только живое: текущее состояние и «С ЧЕГО НАЧАТЬ».
+_Обновлено: **2026-08-25** (сводка ночи в документы). Здесь — только живое.
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
@@ -8,202 +8,69 @@ _Обновлено: **2026-08-25.** Здесь — только живое: т�
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
-🔴 **оффлайн-замки `[25.08]`**: свод `docs/LOCKS_SWEEP_2026-08-25.md` —
-79 файлов, **2150** оффлайн-случаев **0** падений; 9 live (SereneDB :7890
-timeout) не зачтены. Замки подтянуты к коду (не serene_ask.py).
+🔴 **сводка ночи 25.08** (коммиты `a67eec7`…`588d080`; живые `/ask` не
+снимали — Qwen3.8-27B выключен владельцем):
 
-🔴 **бой okna :8091 `[24.08]`**: md5 **11d8f158**; `/health` 200 **~0,05 с**;
-AB_PROBE **8/8** ~**55,98 с**; маркер `okna probe live 0err/8`.
+| Тема | Факт | Числа |
+|---|---|---|
+| Ф6.3 хвост | `solr_synonyms` в такте `build.sh` шаг **7-solr**, fail-closed | замки **26/0** + **28/0** |
+| Ф6.6 аудит | `docs/F6_HARDCODE_AUDIT.md` | **12** находок: **1** argv (города), **9** законны, **2** оставлены |
+| Ф6.6 #11 | warehouse в `corpus_build` — отбор по Edm, не `IN quantity/количество` | сверка okna **3 ⊂ 13** |
+| Ф6.5 | `docs/F6_ROLLOUT_CHECKLIST.md` + `f6_rollout_measure.sh` | замок **15/0** |
+| §7bis шаг 3 | `ab-calendar-axis-okna.tsv` в AB/scorer | **6** вопросов; замки **22/0** + **19/0** |
+| §7bis след. | проект валютной оси `work/currency-axis-design.md` | валют **6**, курсов **3824**, FX-шапок **40**/8240; Σ **78 789 043** vs **79 164 480** |
+| память | `ask_choice_memory` на okna | **0** строк при журнале **1445**, fork B+C **142**, ticket_used **104** → в бой нельзя |
+| замки | `docs/LOCKS_SWEEP_2026-08-25.md` | **79** файлов, **2150** оффлайн **0** падений; **9** live не зачтены |
+| dev :7890 | `docs/DEV_ENGINE_HANG_2026-08-25.md` | ESTAB **337**, ask@ut_test **232** psql, CPU **0 %**, WAL застыл с **24.08** |
 
-🔴 **в git (e400657+5c22a72), флаги на okna :8092 `[24.08 вечер]`**: Ф6.2
-`ASK_RESOLVER_IVF` и Ф6.4 `ASK_HEALTH_NATIVE_FRESHNESS` **включены на
-стейджинге** (кандидат `a8e0316f` → `serene_ask_probe.py`): AB_PROBE **8/8**
-44,19 с; `/health` 200 0,13 с с native `freshness`; `_resolver_ivf_ready()`=True,
-IVF `<#>` отвечает. Бой :8091 — `11d8f158` без новых флагов.
+🔴 **где мы по планам**
 
-🔴 **Ф6.3 шаг 2 в дереве `[24.08]`** (коммит — оркестратор):
-`solr_synonyms_build.py` + `corpus_init`/`precheck`/`wiki_alias`/`build.sh`;
-замки **28/0** + **14/0**. Ask-флаг уже в git; на :8092 словарь ещё не
-выкатан — следующий шаг: выкат init+compile на стейджинг + `ASK_SOLR_SYNONYMS=1`.
+- [`PLAN_UPGRADE_NATIVE.md`](../docs/PLAN_UPGRADE_NATIVE.md) **Ф6**: код Ф6.1–6.4
+  + хвост Ф6.3 (такт) + аудит Ф6.6 + чеклист Ф6.5 в дереве. Бой `:8091` —
+  `ASK_SQL_RRF` без IVF/freshness/solr. Стейджинг `:8092` — Ф6.1/6.2/6.4
+  (и словарь/solr после выката 24.08). Порядок боя — чеклист Ф6.5 (сначала
+  freshness → IVF → solr; calendar на okna пока no-op).
+- [`PLAN_ANSWER_CONTRACT.md`](../docs/PLAN_ANSWER_CONTRACT.md) **§7bis**: шаги
+  1–3 календаря в дереве (`corpus` карта + `ASK_CALENDAR_AXIS` + AB-набор).
+  На okna `search_meta.calendar_*` **пусты** — пакетный контур не отдаёт
+  `$metadata`; `calendar_axis_open()` = false. Следующая ось — **валютная**
+  (только проект, кода нет).
 
-🔴 **§7bis шаг 2 в дереве `[24.08]`**: `ASK_CALENDAR_AXIS` (умолч.0) в
-`serene_ask.py` — day-basis readings + исходы A/B/C через W-трек; md5 ask
-`1a068d75`; замок `test_calendar_axis.py` **36/0**. Бой не включён. Коммит —
-оркестратор. Шаг 1 корпуса уже в дереве.
+🔴 **ждёт включения 27B** (без модели живые пробы/выкат не гонять):
 
-🔴 **дальше**: (1) Ф6.3 — выкат словаря на okna :8092 + флаг; (2) §7bis —
-выкат ask на `:8092` + `ASK_CALENDAR_AXIS=1` + проба; (3) перемер
-латентности Ф6.1 на свободном GPU; (4) klient-1 embed 4B — EMBED_RUNNING.
+1. выкат такта с 7-solr / словарь на контурах + `ASK_SOLR_SYNONYMS=1` где надо;
+2. проба `:8092` с календарной осью после появления карты `calendar_*`;
+3. прибор Ф6.5 ДО/ПОСЛЕ на бое по чеклисту;
+4. перемер латентности Ф6.1 на свободном GPU.
 
-🔴 **rank okna «лучше всего на неделе» — выкат+AB 8/8 `[23.08]`**: axis-clarify
-6 осей → `rank_axis_auto` (ТМЦ); md5 **863567dd** на `:8091`; AB_PROBE **8/8**,
-лидер **42083 Capac balama**. Коммит+push — этот заход.
+🔴 **заблокировано (не код этой ночи)**
 
-🔴 **Ф6.1 SQL-RRF код+okna :8092 `[23.08]`**: `ASK_SQL_RRF=1`, corpus_ivf
-ветвь; md5 **05706a6a** на okna `/opt`; scorer 24q **12/12** вердиктов;
-`:8091` без флага. Замок **7/7**. Дальше — бой :8091 решение владельца.
+1. **dev SereneDB `:7890` залип** — рестарт за владельцем (WAL ненулевой, риск
+   OOM-петли; см. `DEV_ENGINE_HANG_2026-08-25.md`).
+2. **такт / карта календаря на okna** — пакетный контур не отдаёт `$metadata`
+   → `calendar_*` пусты; включение `ASK_CALENDAR_AXIS` на okna бессмысленно
+   до починки контура / выката карты.
+3. **память выбора в бой** — замер коллизий непоказателен (`memory_total=0`).
 
-🔴 **Ф6.1 hybrid RRF — фактура `[23.08]`**: `docs/F6_HYBRID_FACTS.md`.
-На 26.08.1 SQL-RRF (BM25+IVF, k=60) работает; ≡ python-RRF top-10 **0.995**
-(set/ord). Синтаксис не блокер; дальше Ф6.1 код (ANN корпуса в кандидаты) —
-оркестратор.
+🔴 **бой okna `:8091` `[24.08]`**: md5 **11d8f158**; `/health` ~**0,05 с**;
+AB_PROBE **8/8** ~**55,98 с**; маркер `okna probe live 0err/8`. Флаги
+IVF/freshness/solr/calendar на бое **выкл.**
 
+🔴 **стейджинг `:8092` `[24.08]`**: кандидат с Ф6.2+Ф6.4; AB **8/8**;
+`/health` native freshness **0,13 с**. Календарная карта в meta ещё пуста.
 
-🔴 **журнал clarify расширен на okna `[23.08]`**: `doubt`/`clarify_options`/
-`ticket_variant` + `ask_journal_text`; md5 ask **f8d4aa16**; пробы rid
-`jfclar23a1b2c3d4` (clarify opts=9) / `jfansw23a1b2c3d4` (answer 0.00). Дальше —
-разметка куч / шаг плана A/B/C — оркестратор.
+🔴 **режим оркестрации (владелец, 22.08)**: исполнители — свежие
+`cursor-agent -p --force --model auto`; регламент
+[`docs/ORCHESTRATION_CURSOR.md`](../docs/ORCHESTRATION_CURSOR.md).
 
-🔴 **Режим оркестрации (владелец, 22.08)**: задачи исполнителям — через свежие
-вызовы `cursor-agent -p --force --model auto` (1 задача = 1 процесс = чистый
-контекст), параллель — swarm обёрток. Регламент: `docs/ORCHESTRATION_CURSOR.md`.
-Субагенты Kimi — на дешёвой модели: `[secondary_model]` в каноне конфига, ставит
-владелец + env-флаг (§6–7 документа).
+🔴 **Ф5 IVF okna `[23.08]`**: `resolver_ivf_idx` 69 621 + `corpus_ivf_idx`
+1,23M; recall@10≈**1.0**; дальше — Ф6 в бой по чеклисту + слово владельца.
 
-🔴 **Ф5 IVF на боевой okna — собрано + перепроверено `[23.08]`**: SereneDB
-26.08.1 `:7890`; `resolver_ivf_idx` (69 621, ~312 МБ) + `corpus_ivf_idx` (1,23M,
-~5,7 ГБ); metric=`ip` (нормы≈1); recall@10=**1.0** / перепроверка **0,9995**/200q;
-lat exact **510** / IVF ~**530** мс (не быстрее; `WHERE emb` на IVF — ловушка
-~1,4 с). `search_tables` IVF пропущен (254). Дальше Ф6 / scorer ≥14/25 /
-переключение бота — оркестратор.
+🔴 **канон GPU vSwitch `[23.08]`**: `10.3.1.11` / `10.3.1.12`
+([`docs/NETWORK.md`](../docs/NETWORK.md) §2.1). 27B сейчас выключен владельцем.
 
-🔴 **канон GPU на vSwitch + приёмка переезда okna `[23.08]`**: внутренние адреса
-`10.3.1.11` / `10.3.1.12` первичны (`docs/NETWORK.md` §2.1); новая okna env
-переведена; whisper/vLLM/diarize возвращены владельцем. Пробы ask **4/4** kind,
-scorer старая=новая=**8/25**, `code_md5=d0945244`. Пересчёт 4B: корпус 1 206 662 /
-резолвер 128 674 / карточки 254 (не-service). Живой count resolver на Ф5 =
-**69 621** (сверить с 128 674).
+🔴 **кнопка «в дашборд» `[19.08]`**: фронт готов; ждёт `ask_scope` в метаданных
+OWUI + админ-функцию. Подробности — `progress.md` / `DASHBOARD_GRAFANA`.
 
-🔴 **PROBE rid_norm verify — код в git, okna жив `[22.08]`**: verify/shell ищут
-rid_norm (16 alnum) как serene_ask; lib-probe без esc_rid/sys NameError. Замок
-**16/16**. okna «петли» `:8091` — journal ok, no_data, code_md5=c560aebe.
-md5: probe_protocol 4cde0a31, lib-probe 5c7a356a.
-
-🔴 **PROBE + journal verify — код в git `[22.08]`**: протокол `probe_protocol.py`/`lib-probe.sh`; dump/save/ab_scorer пишут строку PROBE и сверяют q_len в ask_journal. env-map.sh → RUNBOOK §9.1.
-
-🔴 **проба okna 5/8 — fix в дереве, повтор — оркестратор `[22.08]`**:
-кандидат `1ab7d928`: воскресенье no_data (→ `sales_period_empty`); петли clarify
-каталог (→ named terms + balance-only/no_data); неделя figures (→ rank без re-gate).
-Именованность — только `intent.terms`, без словаря вопросительных слов. md5 **`dc0fc4e3`**.
-Замки **25+62+56**. Коммит+проба `:8092` 0err/8 — оркестратор.
-
-🔴 **универсальный путь остатков — staged, коммит ждёт пробу okna `[22.08]`**:
-okna «Какие остатки…» → ложный no_data (md5 c560aebe): «какие»=товар +
-ранний stock_balance_no_data. Fix: карта `search_balance_map`, мост→clarify,
-structural filter, prior без user, missing-table→пустая карта. Замок **24/24**;
-md5 ask **1ab7d928**. Следующее: живая проба `:8092` **0err/8** → коммит;
-выкат corpus_init+build, ab_scorer okna ≥14/25, сальdo счёта, wiki-alias.
-
-
-
-🔴 **ai_embed 404 = устаревший SECRET base_url, не UA `[21.08]`**: klient-1
-curl EMBED_HOST 200; ai_embed 404 HTML — секреты на старом хосте при новом env.
-Fix: recreate SECRET + `embed_secrets_base_url_check`. ai_embed **0,42с**/1024.
-Замок **5/5**. Выкат box_tune/embed_check/build/embed_all — оркестратор.
-
-🔴 **возврат 12 — clarify vs прод, проба 8/8 с /opt `[21.08]`**: после lock
-канона ALIAS_VETO/`ask_back` давали clarify при верном числе; qty-канон для
-ранга. Кандидат только из `/opt/1c-mcp-reports`. Live `:8092` **8/8**.
-md5 ask `c560aebe`. Выкат `:8091` — оркестратор.
-
-🔴 **check-golden = probe+HEAD, не smoke ut_test `[21.08]`**: владелец снял
-smoke как блокер выката (§3.90). Выкат: `.probe-okna-last-run` (`okna probe`
-+ `0err/N`) **и** md5 SRC_DIRS = HEAD. Канон `check-golden.sh.new`; установка
-`bash work/hooks/install-gates.sh`. REGRESSION_BASE1 обновлён.
-
-🔴 **гейт живой пробы okna — код в git, установка за владельцем `[21.08]`**:
-`AB_PROBE=okna` + `check-live-probe.sh` блокирует коммит `serene_ask.py` без
-свежей отметки `0err/N`. Самопроверка против боя `:8091` — **4/8**, отметка
-не писалась (красные: прошлый месяц / воскресенье clarify / почему ноль
-clarify). Установка: `bash work/hooks/install-gates.sh`. Процедура —
-`REGRESSION_BASE1` §живая проба. Deploy не делали.
-
-🔴 **возврат 11 — sticky focus/stop2, код в git `[21.08]`**: live 1/4 на 96c184a:
-июль 0 на передаче ТМЦ (sticky); воскресенье clarify после lock (stop2).
-Fix: `sales_refuse_sticky_focus`, stop2 не при lock, memory noncanon refuse.
-Замок **57/57** на кандидатах okna. md5 в коммите. Выкат+повтор 1–3 —
-оркестратор.
-
-🔴 **left() embed_missing — OOM count по emb, код в git `[21.08]`**: klient-1
-fail-loop шага 5 («не удалось прочитать search_corpus») — `left()` сканировал
-`emb` в CTE. Fix: подзапрос только лёгких колонок + stderr. Замок
-`test_embed_left_count.py` **12/12**, ut_test left **2,9 с**. Выкат
-`embed_missing.sh` на klient-1 — оркестратор; приёмка: шаг 5 жив, растёт
-`count(emb)` корпуса. На деве после разбора нужен рестарт `serenedb`
-(сломан temp_directory → PrivateTmp).
-
-🔴 **возврат 8 — канон «продали» в git, выкат ждёт оркестратора `[21.08]`**:
-PLAN §6bis: регистр по `written_by`, документ люк; intraday не fork. Код
-`prefer_entity_for_sales` + stock named→no_data. Замок **15/15**. md5 ask
-в коммите. Rank/прайс/покупают (#5–6) — следующий заход. Smoke ut_test
-отметка — только выкат владельца (HOW_NOT_TO §3.90).
-
-🔴 **контур: тени `_RecordType` + пересчёт после class `[21.08]`**: код в git
-(`packet_config` shadow + `build.sh` 2-тер/`PACKET_BASE_ID`; `serene_sync`).
-Дев: ut **782→695**, RT-витрина postgres/ut_test очищена; bases.json — поставить
-из `work/packet/bases-contour-recalc-20260821.json` (root). okna/klient-1 —
-оркестратор (md5 в CHANGELOG). Service в витрине не удаляли — объём в §10.7,
-ждёт слова владельца.
-
-🔴 **петля clarify OWUI — мост резолвит текст кодом `[21.08]`**:
-`mcp_ask_pending` + проводка в `mcp_ask.py`. Текст/focus без `decision_id` →
-билет; повтор вопроса → те же опции; N одинаковых → эскалация → отказ.
-`test_mcp_ask` **39/39**, pending **16/16**, `test_decision_id` **31/31**.
-md5 `mcp_ask.py` / `mcp_ask_pending.py` — в отчёте коммита. Выкат
-`/opt/openclaw-mcp/` + `1c-mcp-ask@postgres` — оркестратор. serene_ask не
-трогали.
-
-🔴 **GPU-эмбеддер снова в норме, рестарт не делали `[21.08]`**: утром
-таймауты `:8000/v1/embeddings` (08:44/09:25) + VRAM health 16,52 ГБ + batch3
-1,4–2,2 с. Сейчас без рестарта: health **15,16 ГБ**, batch16 dev **~0,09–0,13 с**
-(цель ~0,2), sustained short-text **~87 стр/с**. klient-1: corpus **15,15 млн**,
-emb **7,85 млн**, null ≈**7,3 млн**, resolver null **16**; pipeline activating
-на `embed_missing` — окна «0 стр/с» = COUNT/CREATE todo/UPDATE part, не мёртвый
-GPU. SSH на `178.63.211.188` (nvidia-smi) из сессии не пустил floor. Прогноз
-хвоста: ~8–23 ч @ 260…87 стр/с, на workers=3 дольше. CHANGELOG 21.08.
-
-🔴 **таймаут ai_embed = `http_timeout` `[21.08]`**: доки + живой дев 26.07.3 —
-ошибка `Timeout was reached … HTTP POST …/v1/embeddings` от GLOBAL
-`http_timeout` (default 30, у нас 60). Ручка: `SET GLOBAL http_timeout = N`.
-Секрет openai timeout не принимает. Штатного batch/async в доках нет.
-Разведка в CHANGELOG / techContext ловушка 53; код не меняли.
-
-🔴 **возврат 2: чистка service emb klient-1 + контроль такта `[21.08]`**:
-после `c160c49` corpus/resolver service emb **5 663 216/605 784→0**;
-после такта service emb **0**, resolver service rows **0**, business
-corpus emb **2 185 215** цел; `resolver_values=1 631 785`. Выкат без
-`+x` на `build.sh` → 126, починено `chmod`. DATA_SCOPE §9.12.
-
-🔴 **okna sync-лаг закрыт `[21.08]`**: корень — merge-сторож не узнавал
-`guid#N` у `document_установкаценноменклатуры` (321 757→439) → fail-loop с
-20:01 20.08. Фикс в git+`/opt`; ручной merge: корпус 1 229 060, rows_missing
-15; неделя на `:8091` снова `answer` (1 341 782.36). Timer возвращён —
-`build_ts`/векторы 439 price-doc догонит такт.
-
-🔴 **klient-1 ключ gpu-27b заменён, class полный `[21.08]`**:
-[`docs/DATA_SCOPE_2026-08-21.md`](../docs/DATA_SCOPE_2026-08-21.md) §9.11.
-`DEEPSEEK_API_KEY` → fp `5e489a22…`; в `1c-mcp-reports.env` добавлен
-`DEEPSEEK_MODEL=Qwen3.8-27B` (иначе pipeline-classify → 404).
-`search_entity_class` **1457/1457**, business/service **428/1029**; addr4 →
-`service`. `/ask` HTTP 200 (не 401). Объём под чистку (не удаляли): corpus
-service с emb **5 663 216** + resolver service emb **605 784**. Pipeline
-был activating с «0 стр/с» — см. блок GPU выше (сервис ожил). Выкат classify
-на `/opt` klient-1 — оркестратор.
-
-🔴 **кнопка «в дашборд» — фронт готов, ждёт одно поле от бэкенда `[19.08]`**:
-Action OWUI → `POST /dash/add` → `panel_from_scope.py` собирает панель из
-спецификации счёта (`src`/`where`/`measure`/`axis`) и кладёт в личный дашборд
-`ask-<sha1(id)>`; закрепляет **только после проверки запроса** через
-`/api/ds/query`. Оффлайн **11/11**; живьём: панель по дням **900 строк**,
-разрез **1 строка**, битая ось — отказ с перечнем годных колонок от SereneDB,
-самопроверочный дашборд удалён; ручка: без сессии **401**, чужой путь **404**.
-Ловушки **13** (тип datasource — `grafana-postgresql-datasource`) и **14**
-(битый запрос = HTTP 400, ошибка в теле). **Дальше, два хвоста:** (1) бэкенд
-— положить `ask_scope` (это `diag.счёт`) в метаданные сообщения OWUI, контракт
-в `DASHBOARD_GRAFANA §2.1`: `diag` до чата не доходит, а `:8091` с фронта
-закрыт ufw; (2) установить функцию в OWUI — нужен админ чата (Admin →
-Functions). Caddy-маршрут `/dash/add` в git есть, на фронте не применён
-(кнопка ходит по loopback, ей он не нужен).
-
-
-🔴 **Полноту данных ведёт оркестратор** — [`docs/PLAN_ORCHESTRATOR.md`](../docs/PLAN_ORCHESTRATOR.md).
+🔴 **Полноту данных ведёт оркестратор** —
+[`docs/PLAN_ORCHESTRATOR.md`](../docs/PLAN_ORCHESTRATOR.md).
