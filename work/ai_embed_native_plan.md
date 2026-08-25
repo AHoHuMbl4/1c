@@ -115,3 +115,15 @@ SQL). Качество пути: оба бьют в тот же `10.3.1.11:8000`
 
 Наблюдение у `serene_ask.py` + сущность замка `ubuntu/serenedb/test_ai_embed_question.py`
 в `memory_bank/mcp-memory.json` (этот коммит).
+
+## 8. Проход 2 (25.08)
+
+- `git apply work/ai_embed_native.patch` — чисто (exit 0).
+- Замок `test_ai_embed_question.py` **14/0** (мок HTTP: `EMBED_API=texts`; умолч. в ask — `openai`).
+- `test_embed_secret_url_check.py` OK.
+- Baseline стейджинг `:18092`: AB_PROBE **8/8**, средняя **8,09 с**; живой `/ask` 200.
+- Выкат на `gpu-erw:2202` `/opt/1c-mcp-reports/serene_ask_probe.py` + `ASK_EMBED_NATIVE=1` —
+  **RUNTIME_FLOOR:egress** (scp/ssh). Оркестратору: scp файла, setsid nohup с флагами
+  стейджинга + `ASK_EMBED_NATIVE=1`, лог `/tmp/serene_ask_probe_8092.log`, затем AB_PROBE
+  и медиана «до/после». Бой `:8091` не трогать.
+

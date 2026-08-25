@@ -283,6 +283,31 @@ RERANK_KEY = os.environ.get("RERANK_API_KEY") or EMBED_KEY  # ключ рера�
 # `search_tables.emb`. Разойдётся — сравнение векторов упадёт, а не ошибётся молча.
 EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
 
+# Штатный путь вопрос-эмбеддинга через ai_embed (п. 7 TARGET). Умолч. 0 — прежний HTTP.
+# Имя секрета — из env (как embed_missing.sh / build.sh), не из кода.
+def _embed_secret_name_from_env():
+    raw = (os.environ.get("EMBED_SECRET") or os.environ.get("EMBED_SECRETS") or "").strip()
+    if raw:
+        return raw.split()[0]
+    return "ask_embed"
+
+
+EMBED_SECRET_NAME = _embed_secret_name_from_env()
+EMBED_PATH = os.environ.get("EMBED_PATH", "/v1/embeddings")
+ASK_EMBED_NATIVE = os.environ.get("ASK_EMBED_NATIVE", "0") == "1"
+_EMBED_SECRET_LOCK = threading.Lock()
+_EMBED_SECRET_READY = False
+
+
+def _reload_embed_native_env():
+    global EMBED_SECRET_NAME, EMBED_PATH, ASK_EMBED_NATIVE, _EMBED_SECRET_READY, EMBED_DIM
+    EMBED_SECRET_NAME = _embed_secret_name_from_env()
+    EMBED_PATH = os.environ.get("EMBED_PATH", "/v1/embeddings")
+    ASK_EMBED_NATIVE = os.environ.get("ASK_EMBED_NATIVE", "0") == "1"
+    EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
+    _EMBED_SECRET_READY = False
+
+
 # Единственные две строки, которые уходят человеку от НАС, а не от модели: ответ модели
 # всегда на языке вопроса. Вынесены в окружение, чтобы локализовать без правки кода.
 # Две строки, уходящие человеку не от модели. Умолчания НЕТ намеренно: русский текст
@@ -338,6 +363,12 @@ def psql(sql):
 
 def lit(s):
     return "'" + str(s).replace("'", "''") + "'"
+
+
+def _embed_host_base():
+    raw = (os.environ.get("EMBED_HOST") or EMBED_URL or "").strip()
+    raw = raw.strip('"').strip("'")
+    return raw.rstrip("/")
 
 
 # 🔴 ВЕКТОРЫ РАЗНЫХ МОДЕЛЕЙ НЕСРАВНИМЫ, И ЭТО НЕ ВИДНО НИОТКУДА.
@@ -639,6 +670,77 @@ EMB_RETRY_PAUSE = float(os.environ.get("ASK_EMB_RETRY_PAUSE", "0.4"))
 EMB_TIMEOUT = int(os.environ.get("ASK_EMB_TIMEOUT", "60"))
 
 
+def _ensure_embed_secret():
+    """TEMPORARY SECRET openai из env, если в движке ещё нет имени EMBED_SECRET_NAME."""
+    global _EMBED_SECRET_READY
+    if _EMBED_SECRET_READY:
+        return
+    with _EMBED_SECRET_LOCK:
+        if _EMBED_SECRET_READY:
+            return
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", EMBED_SECRET_NAME or ""):
+            raise RuntimeError("ASK_EMBED_NATIVE: недопустимое EMBED_SECRET")
+        try:
+            rows = psql("SELECT 1 FROM duckdb_secrets() WHERE name = %s LIMIT 1"
+                          % lit(EMBED_SECRET_NAME))
+            if rows:
+                _EMBED_SECRET_READY = True
+                return
+        except RuntimeError:
+            pass
+        host = _embed_host_base()
+        if not host:
+            raise RuntimeError("ASK_EMBED_NATIVE: не задан EMBED_HOST/EMBED_BASE_URL")
+        path = (EMBED_PATH or "/v1/embeddings").strip()
+        sec_sql = ("CREATE OR REPLACE TEMPORARY SECRET %s "
+                   "(TYPE openai, api_key %s, base_url %s, embeddings_path %s)"
+                   % (EMBED_SECRET_NAME, lit(EMBED_KEY or ""), lit(host), lit(path)))
+        try:
+            psql(sec_sql)
+        except RuntimeError as e:
+            msg = str(e)
+            raise RuntimeError("ASK_EMBED_NATIVE: секрет эмбеддера недоступен: %s"
+                               % msg[:200]) from e
+        _EMBED_SECRET_READY = True
+
+
+def _embed_one_native(text):
+    """Один вектор вопроса через ai_embed; secret/model — литералы (требование движка)."""
+    _ensure_embed_secret()
+    model_lit = EMBED_MODEL.replace("'", "''")
+    secret_lit = EMBED_SECRET_NAME.replace("'", "''")
+    sql = ("SELECT to_json(ai_embed(%s, '%s', '%s')::FLOAT[%d])"
+           % (lit(text), model_lit, secret_lit, EMBED_DIM))
+    last = None
+    rows = None
+    for attempt in range(EMB_RETRY + 1):
+        try:
+            rows = psql(sql)
+            break
+        except RuntimeError as e:
+            last = e
+            msg = str(e).lower()
+            if attempt < EMB_RETRY and ("timeout" in msg or "connect" in msg
+                                        or "temporarily" in msg):
+                time.sleep(EMB_RETRY_PAUSE * (2 ** attempt))
+                continue
+            raise
+    else:
+        raise RuntimeError("ai_embed недоступен: %s" % type(last).__name__)
+    if not rows or not rows[0]:
+        raise RuntimeError("ai_embed вернул пустой ответ")
+    try:
+        vec = json.loads(rows[0][0])
+    except (json.JSONDecodeError, TypeError, IndexError) as e:
+        raise RuntimeError("ai_embed: битый JSON вектора") from e
+    if not isinstance(vec, list):
+        raise RuntimeError("ai_embed: ожидали массив FLOAT")
+    if len(vec) != EMBED_DIM:
+        raise RuntimeError("ai_embed: размерность %d, ожидали %d"
+                           % (len(vec), EMBED_DIM))
+    return [float(x) for x in vec]
+
+
 def embed_one(text):
     """Вектор ВОПРОСА. Документы считает движок, сюда они не попадают.
 
@@ -662,6 +764,12 @@ def embed_one(text):
     hit = _EMB_ONE_CACHE.get(text)
     if hit is not None:
         return hit
+    if ASK_EMBED_NATIVE:
+        vec = _embed_one_native(text)
+        if len(_EMB_ONE_CACHE) >= EMB_ONE_CACHE_MAX:
+            _EMB_ONE_CACHE.clear()
+        _EMB_ONE_CACHE[text] = vec
+        return vec
     # 🔴 ПОВТОР ПЕРЕД ТЕМ, КАК СЧИТАТЬ ЭМБЕДДЕР УПАВШИМ (05.08, решение владельца).
     # Сбой эмбеддера теперь не проходит молча: смысловой путь выключается, и ответ уходит
     # в уточнение (`meaning_down`). Это верно для настоящего отказа и неверно для секундной

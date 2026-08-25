@@ -12,11 +12,15 @@ scp на gpu-erw заблокирован `RUNTIME_FLOOR:egress`). K5a «дек�
 Оффлайн: `test_atom_terminal.py` **27/0**; fork/calendar/rank **295/0**. Бой `:8091`
 не трогали.
 
-`work/ai_embed_native.patch`): живой okna, N=7, медиана embed **0,031 с** (HTTP
-`EMBED_API=texts`) vs **0,091 с** (`ai_embed` через psql); dim **1024**;
-`Qwen3-Embedding-4B` / vLLM `10.3.1.11:8000`. Оффлайн-замок `test_ask_embed_native.py`
-— после применения патча. AB_PROBE `:8092` с `ASK_EMBED_NATIVE=1` — ждёт коммита K5
-(`ASK_ATOM_TERMINAL`) и выката. Бой `:8091` не трогали.
+**[замер 25.08]** `ASK_EMBED_NATIVE` проход 2: патч применён в `serene_ask.py`
+(md5 **0c712abd**); оффлайн `test_ai_embed_question.py` **14/0**,
+`test_embed_secret_url_check.py` OK. Стейджинг-туннель `:18092` (HTTP-путь, флаг
+ещё не выкатан): живой `/ask` 200; AB_PROBE **8/8**, средняя **8,09 с**, отметка
+`okna probe live 0err/8`. Латентность embed на okna (проход 1, N=6): HTTP **31,1 мс**
+vs `ai_embed` **66,5 мс**; dim **1024**. Выкат файла на gpu-erw `:8092` с
+`ASK_EMBED_NATIVE=1` — `RUNTIME_FLOOR:egress` (scp/ssh); после выката оркестратором —
+повтор AB и медиана «до/после». Бой `:8091` не трогали. Первая база на стейджинге
+цела по AB_PROBE (HTTP-контур).
 
 **[замер 25.08]** Rank-путь (`ASK_SALES_RANK_CANON=1`, md5 **de942da5**) на
 стейджинге okna `:8092` (`serene_ask_probe.py`, флаги Ф6 + calendar + rank-canon).
