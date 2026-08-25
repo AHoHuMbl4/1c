@@ -1316,6 +1316,8 @@ _WINDOW_FORM_IDS = frozenset({
 ASK_CALENDAR_AXIS = os.environ.get("ASK_CALENDAR_AXIS", "0") == "1"
 # Rank×sales канон (E/M/W): умолч. 0 — бой не включён (work/rank-path-fix-design.md).
 ASK_SALES_RANK_CANON = os.environ.get("ASK_SALES_RANK_CANON", "0") == "1"
+# Computed-атом терминален (K5): умолч. 0 — бой не включён (work/silent-refusal-fix-design.md).
+ASK_ATOM_TERMINAL = os.environ.get("ASK_ATOM_TERMINAL", "0") == "1"
 _PERIOD_RELATIVE_FORMS = {"at": 0.0, "map": None}
 _DAY_BASIS_CALENDAR = "calendar_days"
 _DAY_BASIS_WORKING = "working_days"
@@ -5724,6 +5726,101 @@ def fork_outcome_a(question, class_item, diag, cut=None, t0=None):
             "sources": [], "diag": d}
 
 
+
+def fork_outcome_unique(question, class_item, diag, cut=None, t0=None):
+    """Исход unique: один класс, один src, atom computed → ответ (K5a).
+
+    Тот же строитель, что исход A (`render_atom_pair`); в diag — `fork_outcome=unique`.
+    """
+    atom = dict((class_item or {}).get("atom") or {})
+    mid = atom.get("measure_id")
+    if mid and not (atom.get("measure_label") or "").strip():
+        atom["measure_label"] = split_ident(mid) or mid
+    text = render_atom_pair(atom) or (_fmt(atom.get("exact_value"))
+                                      if atom.get("exact_value") is not None else "")
+    if not (text or "").strip():
+        return None
+    figs = _fork_figures_of(atom)
+    srcs = list((class_item or {}).get("srcs") or [])
+    tag = ""
+    if srcs:
+        s0 = srcs[0]
+        tag = s0.split("_", 1)[1] if "_" in s0 else s0
+    d = _diag_pack(diag, fork_outcome="unique", fork_srcs=srcs)
+    if t0 is not None:
+        d["sec"] = round(time.time() - t0, 2)
+    return {"partial": cut or None, "kind": "answer", "text": text,
+            "figures": figs, "atom": atom, "atoms": [atom],
+            "source_fixed": False, "memory_eligible": False,
+            "sources": [tag] if tag else [], "diag": d}
+
+
+def _rivals_figures_empty(figures_list):
+    """Соперники без ненулевого числового отпечатка (пустые / нули)."""
+    if not figures_list:
+        return True
+    for f in figures_list:
+        if not isinstance(f, dict):
+            return False
+        for k, v in f.items():
+            if k in ("in_1c", "in_search", "missing", "_totals", "label") or str(k).startswith("_") or str(k).startswith("date"):
+                continue
+            if k in ("from", "to", "measure"):
+                continue
+            try:
+                if round(float(v), 2) != 0.0:
+                    return False
+            except (TypeError, ValueError):
+                if v is not None and str(v).strip():
+                    return False
+    return True
+
+
+def prefer_mute_computed_over_clarify(mute, picked_src, figures_list,
+                                      question="", cut=None, diag=None, t0=None):
+    """Mute-лидер с computed atom вместо entity-clarify по пустым соперникам (K5a).
+
+    При выключенном ASK_ATOM_TERMINAL возвращает None.
+    """
+    if not ASK_ATOM_TERMINAL or not picked_src or not mute:
+        return None
+    if not _rivals_figures_empty(figures_list):
+        return None
+    sub = mute.get(picked_src)
+    if not isinstance(sub, dict):
+        return None
+    atom = dict(sub.get("atom") or {})
+    if (atom.get("proof_status") != PROOF_COMPUTED
+            or atom.get("exact_value") is None):
+        return None
+    text = render_atom_pair(atom)
+    if not (text or "").strip():
+        return None
+    figs = dict(sub.get("figures") or {}) or _fork_figures_of(atom)
+    d = _diag_pack(diag or {}, mute_computed_terminal=picked_src)
+    if t0 is not None:
+        d["sec"] = round(time.time() - t0, 2)
+    return {"partial": cut or sub.get("partial"),
+            "kind": "figures", "text": text,
+            "figures": figs, "atom": atom, "atoms": [atom],
+            "sources": list(sub.get("sources") or []),
+            "diag": d}
+
+
+def atom_terminal_gate_text(atom, question, agg=None):
+    """Текст после отклонения прозы гейтом: пара атома или TOTAL_TEXT/refuse (K5b)."""
+    if ASK_ATOM_TERMINAL and isinstance(atom, dict):
+        if (atom.get("proof_status") == PROOF_COMPUTED
+                and atom.get("exact_value") is not None):
+            pair = render_atom_pair(atom)
+            if pair:
+                return pair
+    if TOTAL_TEXT and agg is not None and agg.get("sum") is not None:
+        return TOTAL_TEXT.format(count=agg.get("count"), sum=_fmt(agg["sum"]))
+    return refuse_text(question)
+
+
+
 def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None,
                    day_basis_prefer=None):
     """Исход B: ответ лидера (picked[0]→класс) + люк с остальными ветками."""
@@ -6651,7 +6748,9 @@ def answer_slot_mode(want, compute, form=None, grain=None):
         return "count"
     form = (form or "").lower()
     grain = (grain or "").lower()
-    if form in ("rank", "compare"):
+    if form == "compare":
+        return "compare" if ASK_ATOM_TERMINAL else "rank"
+    if form == "rank":
         return "rank"
     if (want or "") == "sum" or (compute or "") in ("sum", "max", "min", "avg"):
         return "sum"
@@ -6680,6 +6779,9 @@ def compose_slot_values(agg, measure=None, folders=0, money=None, slot_mode=None
         slots["count"] = agg["count"]
     if slot_mode == "count":
         pass
+    elif slot_mode == "compare" and money:
+        if agg.get("sum") is not None:
+            slots["sum"] = agg["sum"]
     elif slot_mode == "sum" and money:
         ca = agg.get("count_amount")
         if ca is not None and ca != agg.get("count"):
@@ -6748,8 +6850,10 @@ def atom_operation(want=None, compute=None, form=None, grain=None, slot_mode=Non
     sm = slot_mode or answer_slot_mode(want, compute, form, grain)
     if sm == "count":
         return "count"
+    if sm == "compare" or (form or "").lower() == "compare":
+        return "compare"
     if sm == "rank":
-        return "compare" if (form or "").lower() == "compare" else "rank"
+        return "rank"
     if sm == "sum":
         c = (compute or "").lower()
         if c in ("max", "min", "avg"):
@@ -8266,6 +8370,11 @@ def _fill_figures(text, agg, totals, has_measure=True, extra=None, slot_mode=Non
     if slot_mode == "count":
         for k in ("sum", "max", "min", "avg", "leader", "count_amount"):
             known.pop(k, None)
+    elif slot_mode == "compare":
+        known.pop("leader", None)
+        known.pop("count", None)
+        for k in ("max", "min", "avg"):
+            known.pop(k, None)
     elif slot_mode == "sum":
         known.pop("leader", None)
         if known.get("count") not in (0, 0.0):
@@ -9450,6 +9559,9 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
         # умноженное на 100 (дробная часть склеивалась с целой).
         if slot_mode == "count":
             pass
+        elif slot_mode == "compare":
+            if money:
+                allow(agg.get("sum"))
         elif slot_mode == "sum":
             if money:
                 if group_grain:
@@ -12626,6 +12738,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 шаг("канон продаж: fork excluded → period_empty",
                     src=diag.get("sales_fork_period_empty"))
                 return _sfpe
+        if ASK_ATOM_TERMINAL and _outc == "unique":
+            _uatom = ((_pay.get("class") or {}).get("atom") or {})
+            if (_uatom.get("proof_status") == PROOF_COMPUTED
+                    and _uatom.get("exact_value") is not None):
+                _ures = fork_outcome_unique(
+                    question, _pay.get("class"), diag, cut=cut, t0=t0)
+                if _ures is not None:
+                    шаг("исход unique→ответ",
+                        value=_uatom.get("exact_value"))
+                    return _ures
         if _outc == "A":
             шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
             return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
@@ -12803,6 +12925,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                       for s in cand_src]}
                     if _src_c:
                         diag["arbiter_src_conflict"] = {"кандидаты": src_of}
+                    _mute_term = prefer_mute_computed_over_clarify(
+                        mute, (picked[0] if picked else None), _figs,
+                        question=question, cut=cut, diag=diag, t0=t0)
+                    if _mute_term is not None:
+                        шаг("mute computed→ответ", src=picked[0] if picked else None)
+                        return _mute_term
                     return {"partial": cut or None, "kind": "clarify",
                             "text": clarify_say(question, opts, diag), "options": opts,
                             "sources": [o["label"] for o in opts],
@@ -13681,7 +13809,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     _grain = (agg or {}).get("grain") or grain_dec.get("grain") or "row"
     slot_mode = answer_slot_mode(intent.get("want"), plan.get("compute"),
                                  form=_form, grain=_grain)
-    if rank_intent_from(intent, plan, question) and slot_mode == "sum":
+    if (rank_intent_from(intent, plan, question) and slot_mode == "sum"
+            and (_form or "").lower() != "compare"):
         slot_mode = "rank"
     diag["slot_mode"] = slot_mode
     _period_act = empty_after_period_action(intent)
@@ -13955,10 +14084,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 axis=_passport_axis_label(
                     (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
                 completeness=cov, folders=n_folders, src=src)
-            return {"partial": cut or None, "kind": "figures", "text": (TOTAL_TEXT.format(
-                        count=agg["count"], sum=_fmt(agg["sum"]))
-                        if (TOTAL_TEXT and agg.get("sum") is not None)
-                        else refuse_text(question)),
+            return {"partial": cut or None, "kind": "figures",
+                    "text": atom_terminal_gate_text(_atom, question, agg=agg),
                     "figures": _figs, "atom": _atom, "atoms": [_atom],
                     "sources": [src.split("_", 1)[1] if "_" in src else src],
                     "completeness": cov,

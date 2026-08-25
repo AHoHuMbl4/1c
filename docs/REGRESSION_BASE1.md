@@ -1,4 +1,12 @@
-**[замер 25.08]** Подготовка нативного вопрос-эмбеддинга (`ASK_EMBED_NATIVE`, патч
+**[замер 25.08]** K5 atom-terminal (`ASK_ATOM_TERMINAL=1`, md5 **70bc8dab**) на
+локальном probe okna `:18093` (DSN `:17890`, флаги Ф6 + rank-canon; **не** канон `:8092` —
+scp на gpu-erw заблокирован `RUNTIME_FLOOR:egress`). K5a «декабрь 2025» → **OK** atom
+**307** (было clarify на `:18092`); K5b «этот vs прошлый месяц» → figures с atom
+**1755883.45**, не refuse (scorer digits vs gold **1 049 991,33** — хвост compare).
+Полный скорер: `:18092` **19/25**, `:18093` **16/25** (proxy, не зачёт выката).
+Оффлайн: `test_atom_terminal.py` **27/0**; fork/calendar/rank **295/0**. Бой `:8091`
+не трогали.
+
 `work/ai_embed_native.patch`): живой okna, N=7, медиана embed **0,031 с** (HTTP
 `EMBED_API=texts`) vs **0,091 с** (`ai_embed` через psql); dim **1024**;
 `Qwen3-Embedding-4B` / vLLM `10.3.1.11:8000`. Оффлайн-замок `test_ask_embed_native.py`

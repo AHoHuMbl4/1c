@@ -24,6 +24,22 @@ diff) и шаг 0 [`PLAN_ANSWER_CONTRACT.md`](PLAN_ANSWER_CONTRACT.md) (разм
 
 Бой `:8091` флаг не включали.
 
+
+## 0bis. Класс K5 закрыт [замер 25.08]
+
+Проект [`work/silent-refusal-fix-design.md`](../work/silent-refusal-fix-design.md):
+флаг `ASK_ATOM_TERMINAL` (умолч. 0) на локальном probe `:18093` (тот же DSN okna
+через `:17890`, флаги Ф6 + `ASK_SALES_RANK_CANON=1`).
+
+| | До (стейджинг `:18092`, rank-canon, без atom) | После (`ASK_ATOM_TERMINAL=1`, md5 **70bc8dab**) |
+|---|---|---|
+| K5a декабрь 2025 | FAIL clarify (307 в atom, снаружи нет) | **OK** figures, atom **307** |
+| K5b MTD vs прошлый месяц | FAIL figures+refuse (atom 1755883.45 скрыт) | atom **1755883.45** в text/figures; scorer digits **FAIL** vs gold **1 049 991,33** (хвост compare, не K5) |
+| Полный набор 25 | **19/25** | локальный proxy **16/25** — не канон (код не на `:8092`; позавчera и др. расходятся с `:18092` без правок atom) |
+| Оффлайн замки §6.1 | — | `test_atom_terminal.py` **27/0** + fork/calendar/rank **295/0** |
+
+Бой `:8091` не трогали. Каноническая приёмка — после scp/restart `:8092` оркестратором.
+
 ---
 ## 1. Условия замера
 
@@ -173,7 +189,7 @@ diff) и шаг 0 [`PLAN_ANSWER_CONTRACT.md`](PLAN_ANSWER_CONTRACT.md) (разм
 
 ---
 
-### K5. Ответ в atoms есть, наружу отказ (2)
+### K5. Ответ в atoms есть, наружу отказ (2) — ✅ закрыт 25.08 (atom наружу; K5b gold — хвост compare)
 
 Молчаливая потеря: число уже посчитано в атомах/`proof_status=computed`, клиент
 получает clarify/figures без этого числа (п. 13 TARGET).

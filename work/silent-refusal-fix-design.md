@@ -1,6 +1,6 @@
 # Класс K5: ответ в atoms есть, наружу отказ (okna)
 
-**Статус:** проект (код ask / эталоны / набор вопросов не писались).  
+**Статус:** исполнен 25.08 (`ASK_ATOM_TERMINAL`, md5 **70bc8dab**); выкат на `:8092` — оркестратор (scp `RUNTIME_FLOOR:egress`).  
 **Дата:** 2026-08-25  
 **Опора:** [`docs/SCORER_CLASSES_2026-08-25.md`](../docs/SCORER_CLASSES_2026-08-25.md)
 (класс K5, 2 вопроса), [`docs/PLAN_ANSWER_CONTRACT.md`](../docs/PLAN_ANSWER_CONTRACT.md)
