@@ -131,10 +131,21 @@ t("опечатки: у длинного слова расстояние 2",
   "ts_levenshtein('контрагенты', 2)" in " ".join(sql))
 
 # ------------------------------------------------------- цена шага: один запрос на всё
-_, sql = with_base(counts_for(set()),
-                   lambda: A.probe([["Ромашка", "ООО Ромашка"], ["декабрь"]]))
-t("цена: все слова и все их написания проверяются ОДНИМ запросом",
-  len(sql) == 1)
+# B8-03 / 214d579: при нуле hits probe зовёт _resolve_values_corpus — отдельные
+# ts_like по префиксам. Цена самого probe — по-прежнему один UNION ALL; фолбэк
+# резолвера здесь глушим, иначе замок мерит чужой путь.
+_real_rv, _real_rvl, _real_rvc = A.resolve_values, A._resolve_values_literal, A._resolve_values_corpus
+A.resolve_values = lambda term: []
+A._resolve_values_literal = lambda term: []
+A._resolve_values_corpus = lambda term: []
+try:
+    _, sql = with_base(counts_for(set()),
+                       lambda: A.probe([["Ромашка", "ООО Ромашка"], ["декабрь"]]))
+    t("цена: все слова и все их написания проверяются ОДНИМ запросом",
+      len(sql) == 1 and " UNION ALL " in sql[0])
+finally:
+    A.resolve_values, A._resolve_values_literal, A._resolve_values_corpus = (
+        _real_rv, _real_rvl, _real_rvc)
 
 # ------------------------------------------------------- 🔴 резолвер: найденное — найдено
 # Разрешённое резолвером понятие («Питер» -> «Санкт-Петербург») — это НАЙДЕННОЕ понятие:

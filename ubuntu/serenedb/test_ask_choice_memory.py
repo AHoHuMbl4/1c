@@ -325,7 +325,20 @@ def _clean_env():
             if not k.startswith("BASH_FUNC") and k not in ("BASH_ENV", "BASH_OPTS")}
 
 
-if os.environ.get("PGPASSWORD"):
+def _engine_alive(dsn, timeout_sec=5):
+    # Без ответа движка живой блок зависает (замер 25.08 :7890). Оффлайн уже
+    # прогнан; живое помечаем отдельно, не выдаём пропуск за успех.
+    try:
+        p = subprocess.run(
+            ["psql", dsn, "-v", "ON_ERROR_STOP=1", "-tAc", "SELECT 1"],
+            text=True, capture_output=True, env=dict(os.environ),
+            timeout=timeout_sec)
+        return p.returncode == 0 and (p.stdout or "").strip() == "1"
+    except subprocess.TimeoutExpired:
+        return False
+
+
+if os.environ.get("PGPASSWORD") and _engine_alive(RW):
     env = _clean_env()
     env["ASK_JOURNAL_RW_DSN"] = RW
     app = subprocess.run(
@@ -425,6 +438,8 @@ if os.environ.get("PGPASSWORD"):
     t("чужая база: строк telegram:111 нет (или таблица пуста этой памятью)",
       pg.returncode == 0 and int(pg.stdout.strip() or 0) == 0,
       pg.stdout + pg.stderr[:80])
+elif os.environ.get("PGPASSWORD"):
+    print("skip live (движок не отвечает — требует живого контура)")
 else:
     print("skip live (нет PGPASSWORD)")
 

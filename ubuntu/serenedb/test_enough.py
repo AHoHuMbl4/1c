@@ -213,7 +213,10 @@ ANSWER_OUT = {"kind": "answer", "text": "26 239,5 штук", "sources": ["Тов
                        "счёт": {"строк": 990, "со_значением": 990}}}
 
 
-def fake_answer(question, focus=None, measure_pick=None, context=""):
+def fake_answer(question, focus=None, measure_pick=None, context="",
+                no_arbiter=False, prior=None, trusted=None, resolved=None):
+    # prior/trusted/resolved/no_arbiter — сигнатура answer() после W-трека;
+    # мок без них ронял TypeError в answer_checked (замок отставал от кода).
     CALLS["answer"] += 1
     return dict(ANSWER_OUT)
 
@@ -249,13 +252,28 @@ t("полный вопрос отвечается, а не переспраши�
 A.question_facts = fake_facts
 A.parse_intent = lambda q, today: intent(want="sum", kind="продажи")
 CALLS.update(answer=0, facts=0)
-out = A.answer_checked("Сколько штук товара мы продали?", focus="Реализация Товаров Услуг")
-t("человек уже выбрал источник — шаг молчит целиком", out["kind"] == "answer")
-t("при выборе человека модель об описании не спрашивается", CALLS["facts"] == 0)
+# 81be89e / аудит §10: сырой focus шаг достаточности не гасит (только trusted
+# билет или ASK_RAW_FOCUS_TRUST=1). Прежний замок «focus= → молчит» устарел.
+out = A.answer_checked("Сколько штук товара мы продали?",
+                       focus="Реализация Товаров Услуг")
+t("сырой focus шаг достаточности не гасит (аудит §10)",
+  out["kind"] == "clarify" and CALLS["facts"] >= 1)
 
 CALLS.update(answer=0, facts=0)
-out = A.answer_checked("Сколько штук?", measure_pick="Количество")
-t("человек уже выбрал величину — шаг молчит", out["kind"] == "answer")
+out = A.answer_checked(
+    "Сколько штук товара мы продали?",
+    focus="Реализация Товаров Услуг",
+    trusted={"src": "document_реализациятоваровуслуг", "ambiguity": "entity",
+             "label": "Реализация Товаров Услуг"})
+t("билет entity — шаг молчит целиком", out["kind"] == "answer")
+t("билет entity — описание не спрашивается", CALLS["facts"] == 0)
+
+CALLS.update(answer=0, facts=0)
+out = A.answer_checked(
+    "Сколько штук?",
+    measure_pick="Количество",
+    trusted={"measure": "Количество", "ambiguity": "measure"})
+t("билет measure — шаг молчит", out["kind"] == "answer")
 
 A.parse_intent = lambda q, today: intent(want="sum")
 CALLS.update(answer=0, facts=0)

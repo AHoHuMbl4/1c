@@ -162,7 +162,20 @@ def _psql(dsn, sql, pw=None):
                           text=True, capture_output=True, env=env)
 
 
-if os.environ.get("PGPASSWORD"):
+def _engine_alive(dsn, timeout_sec=5):
+    # Без ответа движка живой блок зависает навечно (замер 25.08 :7890).
+    # Оффлайн-часть уже прогнана; живое — отдельно, не маскируем пропуском успеха.
+    try:
+        p = subprocess.run(
+            ["psql", dsn, "-v", "ON_ERROR_STOP=1", "-tAc", "SELECT 1"],
+            text=True, capture_output=True, env=dict(os.environ),
+            timeout=timeout_sec)
+        return p.returncode == 0 and (p.stdout or "").strip() == "1"
+    except subprocess.TimeoutExpired:
+        return False
+
+
+if os.environ.get("PGPASSWORD") and _engine_alive(RW):
     env = dict(os.environ)
     env["ASK_JOURNAL_RW_DSN"] = RW
     app = subprocess.run(["bash", os.path.join(HERE, "ask_journal_apply.sh"), "ut_test"],
@@ -226,6 +239,8 @@ if os.environ.get("PGPASSWORD"):
       len(bits) == 4 and bits[0].strip().startswith("f") and bits[1].strip().startswith("t")
       and bits[2].strip().startswith("f") and bits[3].strip().startswith("t"),
       priv.stdout.strip())
+elif os.environ.get("PGPASSWORD"):
+    print("skip live (движок не отвечает — требует живого контура)")
 else:
     print("skip live (нет PGPASSWORD)")
 

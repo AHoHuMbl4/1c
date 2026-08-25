@@ -480,7 +480,9 @@ try:
     A.probe = lambda terms: ([], {})
     A.match_expr = lambda exprs, preds: ("", 0)
     A.tables_of = lambda match, preds: {"document_sales": 3}
-    A.meaning_candidates = lambda exprs, kind_text, question, limit, exclude=None: []
+    # diag= — с meaning_candidates(..., diag=) в serene_ask (свежие правки 24.08);
+    # старый мок без kwargs ронял TypeError до проверок figures-fallback.
+    A.meaning_candidates = lambda exprs, kind_text, question, limit, exclude=None, diag=None: []
     A.children_by_parent = lambda by, match, preds: ({}, {})
     A.resolve_focus = lambda focus, diag=None, opts=None: focus
     A.pick_measure = lambda src, question, want: ("Всего", [], "single")

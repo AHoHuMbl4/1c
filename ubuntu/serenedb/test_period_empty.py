@@ -78,7 +78,10 @@ out = A.build_period_empty_answer(
     Q, agg, intent_yesterday, "Всего", agg["src"], "", [], True, "sum",
     None, None, {}, grain, [], 0, [], 0.0, "Всего")
 t("kind=answer", out.get("kind") == "answer", out.get("kind"))
-t("figures.sum=0", out.get("figures", {}).get("sum") == 0.0)
+# bfe4166: при money+measure figures.sum — строка "0.00" (деньги в figures),
+# не float 0.0; ноль в периоде по-прежнему, без all-time подмены.
+t("figures.sum=0", out.get("figures", {}).get("sum") in (0, 0.0, "0.00"),
+  out.get("figures", {}).get("sum"))
 t("figures.outside_period", out.get("figures", {}).get("outside_period") == OKNA_OUTSIDE)
 t("figures.count=0", out.get("figures", {}).get("count") == 0)
 t("diag.period_empty", out.get("diag", {}).get("period_empty") is True)
@@ -143,8 +146,10 @@ out_pz = A.build_period_empty_answer(
     "document_реализациятмц", "", [], True, "sum",
     None, None, {}, grain, [], 0, [], 0.0, "Всего")
 t("позавчера kind=answer", out_pz.get("kind") == "answer", out_pz.get("kind"))
+# bfe4166: sum как "0.00"; проверка — не all-time 79752611.
 t("позавчера figures.sum=0 не all-time",
-  out_pz.get("figures", {}).get("sum") == 0.0, out_pz.get("figures"))
+  out_pz.get("figures", {}).get("sum") in (0, 0.0, "0.00"),
+  out_pz.get("figures"))
 
 print("\nИТОГ:", "ok — все %d проверок прошли" % PASS if not FAIL
       else "FAIL — %d из %d: %s" % (len(FAIL), PASS + len(FAIL), ", ".join(FAIL)))

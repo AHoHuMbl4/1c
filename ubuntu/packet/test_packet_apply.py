@@ -58,16 +58,25 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 def psql(sql: str):
-    p = subprocess.run(["psql", DSN, "-tA", "--csv", "-v", "ON_ERROR_STOP=1", "-f", "-"],
-                       input=sql, capture_output=True, text=True)
+    # timeout: при мёртвом :7890 subprocess без лимита зависает (замер 25.08).
+    try:
+        p = subprocess.run(
+            ["psql", DSN, "-tA", "--csv", "-v", "ON_ERROR_STOP=1", "-f", "-"],
+            input=sql, capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("psql timeout (движок не отвечает)") from e
     if p.returncode != 0:
         raise RuntimeError(p.stderr.strip()[:300])
     return [tuple(r) for r in csvmod.reader(io.StringIO(p.stdout)) if r]
 
 
 def psql_exec(sql: str):
-    p = subprocess.run(["psql", DSN, "-v", "ON_ERROR_STOP=1", "-f", "-"],
-                       input=sql, capture_output=True, text=True)
+    try:
+        p = subprocess.run(
+            ["psql", DSN, "-v", "ON_ERROR_STOP=1", "-f", "-"],
+            input=sql, capture_output=True, text=True, timeout=20)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError("psql timeout (движок не отвечает)") from e
     if p.returncode != 0:
         raise RuntimeError(p.stderr.strip()[:300])
 

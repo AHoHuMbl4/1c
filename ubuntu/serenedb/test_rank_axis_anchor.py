@@ -255,8 +255,9 @@ t("postprocess_money: None unit — identity",
   A.postprocess_money_answer_text(sample) == sample, "")
 
 # grep-замок: литерала «руб.»/«рубл» (валюта) в serene_ask.py нет
+# путь через A.__file__: замок гоняется и из корня репо, не только из cwd serenedb.
 import ast as _ast
-with open("serene_ask.py") as _f:
+with open(A.__file__, encoding="utf-8") as _f:
     _tree = _ast.parse(_f.read())
 _rub_pat = re.compile(r"руб[.лей]|рубл", re.IGNORECASE)
 _has_rub = False
