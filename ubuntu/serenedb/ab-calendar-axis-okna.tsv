@@ -1,0 +1,22 @@
+# Вопросы оси «календарные vs рабочие дни» — okna (§7bis / work/calendar-axis-design.md §5.2).
+# Это ТЕСТОВЫЕ ДАННЫЕ конкретного стенда okna, а не часть продукта: на другой базе
+# набор будет другим (как golden-questions.txt / ab-gold-okna.tsv).
+#
+# Подключение: AB_CALENDAR_AXIS=okna (или 1) — иначе набор не читается.
+# С контуром okna: AB_CONTOUR=okna AB_CALENDAR_AXIS=okna (или AB_PROBE=okna …).
+# Явный AB_GOLD_FILE перекрывает.
+#
+# Формат: вопрос<TAB>эталонный SQL или игла clarify<TAB>режим
+# Режимы: digits / kind / clarify (как ab-gold-okna.tsv).
+# Числа эталона руками не заданы — truth() считает SQL при живом прогоне.
+# Эталон (числа / kind / люк) снимается замером на витрине с calendar_*;
+# офлайн здесь только состав вопросов и режимы.
+#
+# §5.2 п.6 (follow-up): тот же вопрос, что п.4; clarify + игла «по рабочим дням»
+# (люк B, когда calendar≠working). Число после клика ticket — живой замер.
+Сколько продаж за рабочие дни этой недели?	WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d), wk AS (SELECT trim(unnest(string_split(v, ','))) AS day_key FROM search_meta WHERE k = 'calendar_working_day_keys' AND coalesce(v, '') <> ''), work_dates AS (SELECT DISTINCT try_cast(k."Дата" AS DATE) AS d FROM query_table('informationregister_календарь') k WHERE cast(k."День_Key" AS VARCHAR) IN (SELECT day_key FROM wk) AND try_cast(k."Дата" AS DATE) >= date_trunc('week', (SELECT d FROM today)) AND try_cast(k."Дата" AS DATE) <= (SELECT d FROM today)) SELECT coalesce(round(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10))),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= date_trunc('week', today.d) AND doc_date < today.d + INTERVAL 1 day AND try_cast(doc_date AS DATE) IN (SELECT d FROM work_dates)	digits
+Выручка за будни с начала месяца	WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d), wk AS (SELECT trim(unnest(string_split(v, ','))) AS day_key FROM search_meta WHERE k = 'calendar_working_day_keys' AND coalesce(v, '') <> ''), work_dates AS (SELECT DISTINCT try_cast(k."Дата" AS DATE) AS d FROM query_table('informationregister_календарь') k WHERE cast(k."День_Key" AS VARCHAR) IN (SELECT day_key FROM wk) AND try_cast(k."Дата" AS DATE) >= date_trunc('month', (SELECT d FROM today)) AND try_cast(k."Дата" AS DATE) <= (SELECT d FROM today)) SELECT coalesce(round(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10))),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= date_trunc('month', today.d) AND doc_date < today.d + INTERVAL 1 day AND try_cast(doc_date AS DATE) IN (SELECT d FROM work_dates)	digits
+Продажи за календарную неделю	WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10))),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= date_trunc('week', today.d) AND doc_date < today.d + INTERVAL 1 day	digits
+Сколько отгрузили с 1 по 15	WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10))),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= date_trunc('month', today.d) AND doc_date < date_trunc('month', today.d) + INTERVAL 15 day	digits
+Продажи в праздники	SELECT 0	kind
+Сколько отгрузили с 1 по 15	по рабочим дням	clarify

@@ -14,6 +14,9 @@
   AB_CONTOUR=okna — после выката на okna: ab-gold-okna.tsv (v2: digits/kind/clarify/name)
   AB_PROBE=okna — до коммита serene_ask.py: ab-probe-okna.tsv (~8), отметка .probe-okna-last-run
   AB_BASE=ut_test — прежний набор ab-gold.tsv (A/B или live по ASK_URL)
+  AB_CALENDAR_AXIS=okna|1 — набор оси календаря ab-calendar-axis-okna.tsv (§7bis §5.2);
+    умолчание пусто: набор не подключён. Вместе с AB_CONTOUR/AB_PROBE=okna.
+    AB_GOLD_FILE перекрывает любой выбор.
 """
 import json
 import os
@@ -34,6 +37,7 @@ except ImportError:
 CONTOUR = os.environ.get("AB_CONTOUR", "").strip().lower()
 PROBE = os.environ.get("AB_PROBE", "").strip().lower()
 GOLD_MODE = os.environ.get("AB_GOLD_MODE", "").strip().lower()
+CALENDAR_AXIS = os.environ.get("AB_CALENDAR_AXIS", "").strip().lower()
 BASE = os.environ.get("AB_BASE", "ut_test" if GOLD_MODE == "smoke" else "postgres")
 ENV_FILE = "/etc/1c-serene-ask-%s.env" % BASE
 UNIT = "1c-serene-ask@%s.service" % BASE
@@ -41,6 +45,28 @@ ENV_COMMON = "/etc/1c-serene-ask.env"
 ENV_PG = "/etc/1c-serene-ask-postgres.env"
 ENV_MCP = "/etc/1c-mcp-reports.env"
 ASK_USER = os.environ.get("AB_ASK_USER", "gold-v2")
+CALENDAR_AXIS_ON = frozenset(("1", "okna", "yes", "true"))
+
+
+def resolve_gold_file(environ=None, script_dir=None):
+    """Путь к TSV набора. AB_GOLD_FILE > AB_CALENDAR_AXIS > AB_PROBE/AB_CONTOUR > ab-gold.tsv.
+
+    AB_CALENDAR_AXIS пуст — набор оси не выбирается.
+    """
+    env = environ if environ is not None else os.environ
+    sd = script_dir if script_dir is not None else _SCRIPT_DIR
+    explicit = (env.get("AB_GOLD_FILE") or "").strip()
+    if explicit:
+        return explicit
+    cal = (env.get("AB_CALENDAR_AXIS") or "").strip().lower()
+    if cal in CALENDAR_AXIS_ON:
+        return os.path.join(sd, "ab-calendar-axis-okna.tsv")
+    probe = (env.get("AB_PROBE") or "").strip().lower()
+    contour = (env.get("AB_CONTOUR") or "").strip().lower()
+    if probe == "okna" or contour == "okna":
+        name = "ab-probe-okna.tsv" if probe == "okna" else "ab-gold-okna.tsv"
+        return os.path.join(sd, name)
+    return os.path.join(sd, "ab-gold.tsv")
 
 
 def env_value(key, *paths):
@@ -64,12 +90,8 @@ def ensure_pgpassword():
         os.environ["PGPASSWORD"] = pw
 
 
+GOLD_FILE = resolve_gold_file()
 if PROBE == "okna" or CONTOUR == "okna":
-    _probe_gold = os.path.join(_SCRIPT_DIR, "ab-probe-okna.tsv")
-    _okna_gold = os.path.join(_SCRIPT_DIR, "ab-gold-okna.tsv")
-    GOLD_FILE = os.environ.get(
-        "AB_GOLD_FILE",
-        _probe_gold if PROBE == "okna" else _okna_gold)
     ensure_pgpassword()
     DSN = os.environ.get("AB_DSN") or env_value(
         "SERENEDB_DSN_RO", ENV_PG) or env_value("SERENEDB_DSN", ENV_PG)
@@ -80,8 +102,6 @@ if PROBE == "okna" or CONTOUR == "okna":
     UNIT = "1c-serene-ask@okna.service"
     SCORERS = ["live"]
 else:
-    GOLD_FILE = os.environ.get(
-        "AB_GOLD_FILE", os.path.join(_SCRIPT_DIR, "ab-gold.tsv"))
     ensure_pgpassword()
     DSN = os.environ.get(
         "AB_DSN", "host=127.0.0.1 port=7890 user=serene_ro dbname=%s" % BASE)
@@ -103,12 +123,24 @@ else:
         TOK = os.environ.get("ASK_TOKEN")
 
 
+def _is_sql_spec(spec):
+    """Средняя колонка — SQL-эталон (WITH/SELECT), а не литерал иглы clarify."""
+    s = (spec or "").strip()
+    if not s:
+        return False
+    return bool(re.match(r"(?is)^\s*(with\b|select\b)", s))
+
+
 def load_gold(path):
     """Строки набора:
     - v2: вопрос<TAB>SQL<TAB>режим (digits/kind/clarify/name)
+    - clarify: средняя колонка — SELECT… или литерал иглы люка (без WITH/SELECT)
     - legacy: вопрос<TAB>SQL (digits) или вопрос<TAB>MODE=kind
+
+    Пустой файл и файл без ни одной разобранной строки — sys.exit(1) с текстом в stderr.
     """
     out = []
+    bad = 0
     try:
         fh = open(path, encoding="utf-8")
     except OSError as e:
@@ -120,7 +152,8 @@ def load_gold(path):
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             if "\t" not in line:
-                sys.stderr.write("строка без табуляции пропущена: %s\n" % line[:60])
+                bad += 1
+                sys.stderr.write("строка без табуляции: %s\n" % line[:60])
                 continue
             parts = line.split("\t")
             if len(parts) == 2:
@@ -138,12 +171,25 @@ def load_gold(path):
                     "mode": (mode or "").strip().lower(),
                 })
             else:
-                sys.stderr.write("слишком много колонок пропущено: %s\n" % line[:120])
+                bad += 1
+                sys.stderr.write("слишком много колонок: %s\n" % line[:120])
                 continue
     if not out:
-        sys.stderr.write("набор вопросов пуст: %s\n" % path)
+        why = "битый набор (%d строк без разбора)" % bad if bad else "набор вопросов пуст"
+        sys.stderr.write("%s: %s\n" % (why, path))
         sys.exit(1)
     return out
+
+
+def row_want_spec(row):
+    """Что уходит в truth()/score: SQL или литерал иглы clarify."""
+    mode = (row.get("mode") or "").strip().lower()
+    spec = row.get("sql")
+    if mode == "clarify" and spec and not _is_sql_spec(spec):
+        return ("needle", spec.strip())
+    if spec:
+        return ("sql", spec)
+    return ("empty", "")
 
 
 def truth(sql, empty_as_zero=False):
@@ -574,10 +620,13 @@ def main():
     for row in gold:
         q = row["q"]
         mode = row["mode"]
-        if row.get("sql"):
+        kind, spec = row_want_spec(row)
+        if kind == "needle":
+            want = spec
+        elif kind == "sql":
             # digits/kind: пустой SUM = 0 продаж (валидный эталон), не blind
             # clarify: CAST(NULL)/пустой — sentinel «любой clarify», не blind
-            want = truth(row["sql"], empty_as_zero=(mode in ("digits", "kind")))
+            want = truth(spec, empty_as_zero=(mode in ("digits", "kind")))
             if not want:
                 if mode == "clarify":
                     want = ""
