@@ -399,23 +399,31 @@ def kind_expected_for_kind_mode(sql, want, question=""):
     return "answer"
 
 
+# Число возраста/свежести в приписке сопровождается единицей времени («N мин»),
+# а не величиной: 1439 мин — лаг, не итог ([замер 25.08]).
+_AGE_UNIT_NUM = re.compile(
+    r"[\d\u0020\u00a0\u2007\u2009\u202f\u200b'.,]+"
+    r"\s*(?:мин(?:ут(?:а|ы)?)?|сек(?:унд(?:а|ы)?)?)\b",
+    re.IGNORECASE,
+)
+
+
 def aggregate_totals_in_text(text):
-    """Числа итогов в text при kind=no_data — брак; годы и мелочь (минуты) — можно."""
-    for tok in re.findall(r"[\d\u0020\u00a0\u2007\u2009\u202f\u200b'.,]+", text or ""):
+    """Числа итогов в text при kind=no_data — брак.
+
+    Возраст/свежесть снимается по единице времени рядом с числом (структура
+    приписки), а не по порогу величины. Порог n≥1000 убран: он путал минуты
+    лага с итогом. Итог в тексте продукта — с группировкой разрядов или с
+    дробной частью; голое целое без того и другого сюда не относится.
+    """
+    scrubbed = _AGE_UNIT_NUM.sub(" ", text or "")
+    for tok in re.findall(r"[\d\u0020\u00a0\u2007\u2009\u202f\u200b'.,]+", scrubbed):
         bare = re.sub(r"\D", "", tok)
         if not bare:
             continue
         if re.search(r"\d[\s\u00a0\u202f\u2009]\d{3}", tok):
             return True
         if re.search(r"[.,]\d", tok):
-            return True
-        try:
-            n = int(bare)
-        except ValueError:
-            continue
-        if 1900 <= n <= 2099:
-            continue
-        if n >= 1000:
             return True
     return False
 

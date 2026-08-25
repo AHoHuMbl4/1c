@@ -480,6 +480,126 @@ psql "$DSN" -tA -F' | ' -c "
   UNION ALL SELECT 'пустышек величин (модель не ответила)', count(*) FROM $MEASURE_TABLE
     WHERE coalesce(aliases,'') = ''"
 
+# ── §7 / §7bis: подписи веток развилок (day-basis + src) ───────────────────────
+# Классы day-basis пишет детектор в search_fork_class с src_set=calendar_days,working_days
+# (id веток, не таблицы данных). Тот же контур, что branch_alias.sh: агент OpenClaw,
+# branch_alias_parse, MERGE в search_fork_label. Русских подписей в коде нет.
+FORK_CLASS_TABLE="${FORK_CLASS_TABLE:-search_fork_class}"
+FORK_LABEL_TABLE="${FORK_LABEL_TABLE:-search_fork_label}"
+DAY_BASIS_FORK_BATCH="${DAY_BASIS_FORK_BATCH:-10}"
+DAY_BASIS_FORK_RETRY_H="${DAY_BASIS_FORK_RETRY_H:-$RETRY_H}"
+DAY_BASIS_FORK_MAX_SEC="${DAY_BASIS_FORK_MAX_SEC:-60}"
+DAY_BASIS_IDS="'calendar_days','working_days'"
+t_fork_start=$(date +%s)
+fork_over_budget() {
+  [ "$DAY_BASIS_FORK_MAX_SEC" != "0" ] \
+    && [ $(( $(date +%s) - t_fork_start )) -ge "$DAY_BASIS_FORK_MAX_SEC" ]
+}
+psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $FORK_CLASS_TABLE (fork_key VARCHAR UNIQUE, src_set VARCHAR, measure_ctx VARCHAR, seen_at TIMESTAMP, seen_count INTEGER)" >/dev/null 2>&1
+psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $FORK_LABEL_TABLE (fork_key VARCHAR, src VARCHAR, label VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
+psql "$DSN" -q -c "GRANT SELECT, INSERT, UPDATE ON $FORK_CLASS_TABLE TO serene_ro" >/dev/null 2>&1
+psql "$DSN" -q -c "GRANT SELECT ON $FORK_LABEL_TABLE TO serene_ro" >/dev/null 2>&1
+DAY_BASIS_NEED_SQL="
+  WITH need AS (
+    SELECT c.fork_key, c.src_set, c.measure_ctx
+    FROM $FORK_CLASS_TABLE c
+    WHERE c.src_set <> ''
+      AND NOT EXISTS (
+        SELECT 1 FROM unnest(str_split(c.src_set, ',')) AS x(s)
+        WHERE trim(x.s, '{} ') NOT IN ($DAY_BASIS_IDS))
+      AND EXISTS (
+        SELECT 1 FROM unnest(str_split(c.src_set, ',')) AS x(s)
+        WHERE trim(x.s, '{} ') IN ($DAY_BASIS_IDS))
+      AND EXISTS (
+        SELECT 1 FROM unnest(str_split(c.src_set, ',')) AS x(s)
+        WHERE NOT EXISTS (
+          SELECT 1 FROM $FORK_LABEL_TABLE l
+          WHERE l.fork_key = c.fork_key AND l.src = trim(x.s, '{} ')
+            AND (coalesce(l.label, '') <> ''
+                 OR l.seen_at > now() - INTERVAL $DAY_BASIS_FORK_RETRY_H HOUR)))
+    ORDER BY c.fork_key
+    LIMIT $DAY_BASIS_FORK_BATCH),
+  raw_srcs AS (
+    SELECT n.fork_key, n.measure_ctx, trim(x.s, '{} ') AS src
+    FROM need n, unnest(str_split(n.src_set, ',')) AS x(s)
+    WHERE NOT EXISTS (
+      SELECT 1 FROM $FORK_LABEL_TABLE l
+      WHERE l.fork_key = n.fork_key AND l.src = trim(x.s, '{} ')
+        AND (coalesce(l.label, '') <> ''
+             OR l.seen_at > now() - INTERVAL $DAY_BASIS_FORK_RETRY_H HOUR))),
+  srcs AS (SELECT fork_key, measure_ctx, src FROM raw_srcs)"
+mark_day_fork_attempt() {
+  psql "$DSN" -q -c "
+    MERGE INTO $FORK_LABEL_TABLE t
+    USING (SELECT fork_key, src, '' AS label, now() AS seen_at
+           FROM read_json('$TMP/dayforkflat', columns := {fork_key:'VARCHAR', src:'VARCHAR'})) p
+    ON (t.fork_key = p.fork_key AND t.src = p.src)
+    WHEN MATCHED AND coalesce(t.label, '') = '' THEN UPDATE SET seen_at = p.seen_at
+    WHEN NOT MATCHED THEN INSERT" >/dev/null 2>&1
+}
+day_fork_done=0
+while :; do
+  fork_over_budget && break
+  psql "$DSN" -tA -c "$DAY_BASIS_NEED_SQL
+    SELECT to_json(list(struct_pack(fork_key := fork_key, measure := measure,
+                                    sources := items)))
+    FROM (SELECT s.fork_key, max(s.measure_ctx) AS measure,
+                 list(struct_pack(src := s.src, title := s.src,
+                                  branchKind := 'day_basis_window',
+                                  scope := CASE s.src
+                                    WHEN 'calendar_days' THEN 'all calendar dates in the period window'
+                                    WHEN 'working_days' THEN 'only dates marked working in the calendar register'
+                                    ELSE '' END)
+                      ORDER BY s.src) AS items
+          FROM srcs s
+          GROUP BY s.fork_key
+          ORDER BY s.fork_key) z" > "$TMP/dayforkpay" 2>/dev/null
+  chmod 644 "$TMP/dayforkpay" 2>/dev/null
+  DF_PAY=$(cat "$TMP/dayforkpay")
+  case "$DF_PAY" in ''|'[]'|'null') break;; esac
+  psql "$DSN" -tA -c "$DAY_BASIS_NEED_SQL
+    SELECT to_json(list(struct_pack(fork_key := fork_key, src := src))) FROM srcs" \
+    > "$TMP/dayforkflat" 2>/dev/null
+  chmod 644 "$TMP/dayforkflat" 2>/dev/null
+  {
+    printf '%s' "JSON only, no prose, no code fences. Below are FORK CLASSES with day-basis branches of one database. Each class is one period window and one measure context; branches are machine ids calendar_days (all calendar dates in the window) and working_days (only working dates per the calendar register in data). For EVERY branch id of EVERY class write a short label that tells a person HOW the number was counted for that branch — not repeating the id. Use the SAME language as the measure field. Keys in labels are the branch ids exactly (the src field). Schema: {\"forks\":[{\"fork_key\":\"<copy exactly>\",\"labels\":{\"<branch id exactly>\":\"<label>\"}}]}. Input: "
+    cat "$TMP/dayforkpay"
+  } > "$TMP/dayforkmsg"
+  chmod 644 "$TMP/dayforkmsg"
+  "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/dayforkmsg" \
+    --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
+    --ans "$TMP/dayforkans" --err "$TMP/dayforkerr" || {
+      if python3 ./branch_alias_parse.py --infra-check "$TMP/dayforkerr" "$TMP/dayforkans" 2>/dev/null; then
+        echo "day-basis развилки: прогон прерван — инфра/биллинг" >&2
+        break
+      fi
+      echo "day-basis развилки: пачка пропущена ($(head -c 120 "$TMP/dayforkerr" | tr -d '\n'))" >&2
+      mark_day_fork_attempt
+      continue
+    }
+  if python3 ./branch_alias_parse.py --infra-check "$TMP/dayforkerr" "$TMP/dayforkans" 2>/dev/null; then
+    echo "day-basis развилки: прогон прерван — инфра в ответе" >&2
+    break
+  fi
+  python3 ./branch_alias_parse.py "$TMP/dayforkans" "$TMP/dayforkpay" "$TMP/dayforkrows.json" >/dev/null 2>&1 || true
+  chmod 644 "$TMP/dayforkrows.json" 2>/dev/null
+  psql "$DSN" -q -c "
+    MERGE INTO $FORK_LABEL_TABLE t
+    USING (SELECT fork_key, src, label, now() AS seen_at
+           FROM read_json('$TMP/dayforkrows.json',
+             columns := {fork_key:'VARCHAR', src:'VARCHAR', label:'VARCHAR'})) n
+    ON (t.fork_key = n.fork_key AND t.src = n.src)
+    WHEN MATCHED THEN UPDATE SET label = n.label, seen_at = n.seen_at
+    WHEN NOT MATCHED THEN INSERT" 2>&1 | { grep -i error || true; }
+  mark_day_fork_attempt
+  day_fork_done=$((day_fork_done + 1))
+done
+# Обычные src/окно классы — тот же штатный генератор (рядом, не вместо systemd-юнита).
+if [ -x ./branch_alias.sh ]; then
+  BRANCH_ALIAS_MAX_SEC="${BRANCH_ALIAS_MAX_SEC:-60}" ./branch_alias.sh "${BRANCH_ALIAS_CAP:-10}" \
+    || echo "развилки src: шаг не прошёл, такт продолжается" >&2
+fi
+
 # ── Ф6.3: Solr-словарь синонимов из таблиц (не списки в коде) ─────────────────
 # SELECT → карта → DROP+CREATE файлом (argv ломается на длинной карте, фактура §5.3).
 # Пустые источники — словарь не трогаем. Лимит сверх фактуры — честная ошибка.

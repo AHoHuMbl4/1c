@@ -3643,6 +3643,66 @@ def fork_key_of(src_set, measure_ctx, window_fp=""):
     return hashlib.sha1(payload.encode("utf-8")).hexdigest()
 
 
+def _window_fp_base(period, origin=None):
+    """Отпечаток окна без координаты day_basis — ключ §7bis-веток в словаре."""
+    p = dict(period or {})
+    p.pop("day_basis", None)
+    return window_fp_of(p, origin if origin is not None else p.get("origin"))
+
+
+def _fork_key_for_period(srcs, measure_ctx, period):
+    """fork_key класса: для day-basis — базовое окно + src таблицы, не id ветки."""
+    pr = period or {}
+    db = (pr.get("day_basis") or "").strip()
+    if db in _DAY_BASIS_IDS:
+        wfp = _window_fp_base(pr, pr.get("origin"))
+    elif pr.get("from") or pr.get("to") or pr.get("origin"):
+        wfp = window_fp_of(pr, pr.get("origin"))
+    else:
+        wfp = ""
+    return fork_key_of(sorted(s for s in (srcs or []) if s), measure_ctx, window_fp=wfp)
+
+
+def _fork_day_basis_groups(classes, meta_by_fp):
+    """(data_srcs, base_wfp) → множество id веток day-basis; fp → ключ группы."""
+    groups = {}
+    fp_to_gkey = {}
+    for fp, srcs in (classes or {}).items():
+        meta = (meta_by_fp or {}).get(fp) or {}
+        period = meta.get("period") or {}
+        db = (period.get("day_basis") or "").strip()
+        if db not in _DAY_BASIS_IDS:
+            continue
+        base_wfp = _window_fp_base(period, period.get("origin"))
+        ds = tuple(sorted(s for s in (srcs or []) if s))
+        if not ds:
+            continue
+        gkey = (ds, base_wfp)
+        groups.setdefault(gkey, set()).add(db)
+        fp_to_gkey[fp] = gkey
+    return groups, fp_to_gkey
+
+
+def _fork_log_day_basis(classes, measure_ctx, meta_by_fp):
+    """§7bis: класс day-basis → очередь подписей с id веток calendar_days/working_days."""
+    groups, _fp_to_gkey = _fork_day_basis_groups(classes, meta_by_fp)
+    for (data_srcs, base_wfp), dbs in groups.items():
+        if len(dbs) < 2:
+            continue
+        branch_set = sorted(dbs)
+        fork_key = fork_key_of(list(data_srcs), measure_ctx, window_fp=base_wfp)
+        try:
+            psql("INSERT INTO search_fork_class (fork_key, src_set, measure_ctx, seen_at, "
+                 "seen_count) VALUES (%s, %s, %s, now(), 1) "
+                 "ON CONFLICT (fork_key) DO UPDATE "
+                 "SET seen_at = now(), seen_count = search_fork_class.seen_count + 1, "
+                 "src_set = EXCLUDED.src_set, measure_ctx = EXCLUDED.measure_ctx"
+                 % (lit(fork_key), lit("{%s}" % ",".join(branch_set)),
+                    lit(measure_ctx or "")))
+        except RuntimeError:
+            pass
+
+
 def _fork_log(classes, measure_ctx):
     """Класс атомов — в журнал `search_fork_class` (план §7).
 
@@ -3651,14 +3711,26 @@ def _fork_log(classes, measure_ctx):
     `search_fork_label` привязаны к (fork_key, src) внутри класса. Волна-1 писала
     sha1 от всех src сразу — branch_alias подписывал источники, а исход B шага 4
     читал их как конкурирующие пары ([замер 17.08 okna]: 129 пар count вместо 2 sum).
+
+    §7bis day-basis: при нескольких классах одного src/окна с разным day_basis —
+    одна запись с src_set=id веток (_DAY_BASIS_*), не дубли по таблице данных.
     """
     if len(classes or {}) < 2:
         return
-    for srcs in classes.values():
+    meta_by_fp = getattr(fork_classes, "_meta_by_fp", {}) or {}
+    groups, fp_to_gkey = _fork_day_basis_groups(classes, meta_by_fp)
+    day_variant_fps = {fp for fp, gk in fp_to_gkey.items()
+                       if len(groups.get(gk, ())) >= 2}
+    _fork_log_day_basis(classes, measure_ctx, meta_by_fp)
+    for fp, srcs in classes.items():
+        if fp in day_variant_fps:
+            continue
         src_set = sorted(s for s in (srcs or []) if s)
         if len(src_set) < 1:
             continue
-        fork_key = fork_key_of(src_set, measure_ctx)
+        meta = meta_by_fp.get(fp) or {}
+        period = meta.get("period") or {}
+        fork_key = _fork_key_for_period(src_set, measure_ctx, period)
         try:
             psql("INSERT INTO search_fork_class (fork_key, src_set, measure_ctx, seen_at, "
                  "seen_count) VALUES (%s, %s, %s, now(), 1) "
@@ -3906,12 +3978,11 @@ def _class_label_lookup(srcs, measure_ctx, atom=None, today=None):
     if not srcs:
         return None, None
     period = (atom or {}).get("period") if isinstance(atom, dict) else None
-    wfp = window_fp_of(period, (period or {}).get("origin")) if period else ""
     rep = srcs[0]
-    fk_cls = fork_key_of(srcs, measure_ctx, window_fp=wfp)
+    fk_cls = _fork_key_for_period(srcs, measure_ctx, period)
     db = ((period or {}).get("day_basis") or "").strip()
-    if db:
-        # §7bis: подписи day-basis только из словаря §7, не auto-wlab → иначе C.
+    if db in _DAY_BASIS_IDS:
+        # §7bis: подписи day-basis по (fork_key базового окна, id ветки) из §7.
         labs = fork_labels_of(fk_cls, [db])
         if labs.get(db):
             return labs[db], fk_cls
