@@ -1,3 +1,8 @@
+🔴 **Гейт выката (25.08):** AB_PROBE **8/8** — необходим, **не** достаточен как
+«первая база цела». Перед стейджингом/боем — полный скорер (`AB_CONTOUR=okna`,
+≥25) и `ubuntu/serenedb/check_deploy_gate.py` против базлайна
+[`docs/DEPLOY_GATE.md`](DEPLOY_GATE.md) (сейчас **20/25**, без новых FAIL).
+
 **[замер 25.08]** K5 atom-terminal (`ASK_ATOM_TERMINAL=1`, md5 **70bc8dab**) на
 локальном probe okna `:18093` (DSN `:17890`, флаги Ф6 + rank-canon; **не** канон `:8092` —
 scp на gpu-erw заблокирован `RUNTIME_FLOOR:egress`). K5a «декабрь 2025» → **OK** atom
