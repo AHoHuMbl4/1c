@@ -1,3 +1,10 @@
+**[замер 25.08]** Подготовка нативного вопрос-эмбеддинга (`ASK_EMBED_NATIVE`, патч
+`work/ai_embed_native.patch`): живой okna, N=7, медиана embed **0,031 с** (HTTP
+`EMBED_API=texts`) vs **0,091 с** (`ai_embed` через psql); dim **1024**;
+`Qwen3-Embedding-4B` / vLLM `10.3.1.11:8000`. Оффлайн-замок `test_ask_embed_native.py`
+— после применения патча. AB_PROBE `:8092` с `ASK_EMBED_NATIVE=1` — ждёт коммита K5
+(`ASK_ATOM_TERMINAL`) и выката. Бой `:8091` не трогали.
+
 **[замер 25.08]** Rank-путь (`ASK_SALES_RANK_CANON=1`, md5 **de942da5**) на
 стейджинге okna `:8092` (`serene_ask_probe.py`, флаги Ф6 + calendar + rank-canon).
 Полный скорер okna **24**: **19/24**, сбоев **0** (было **15/24**); класс K1+K2+K3
