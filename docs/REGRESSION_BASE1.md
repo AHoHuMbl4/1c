@@ -3,6 +3,12 @@
 ≥25) и `ubuntu/serenedb/check_deploy_gate.py` против базлайна
 [`docs/DEPLOY_GATE.md`](DEPLOY_GATE.md) (сейчас **20/25**, без новых FAIL).
 
+**[замер 25.08]** `ASK_ENTITY_FORM=1` на стейджинге `:8092` (кандидат `/tmp/serene_ask_ef.py`,
+md5 **52e275e5**): гейт `entity_form_pre_entity_ok` — форма не отвечает до выбора
+сущности, если `classes>1` (не молчаливый лидер на развилке). AB_PROBE **8/8**,
+средняя **29,84 с**, отметка `okna probe live 0err/8`. Оффлайн `test_entity_form.py`
+**40/0**. Бой `:8091` не трогали. Полный скорер 25q — следом; 8/8 не закрывает п. 13.
+
 **[замер 25.08]** K5 atom-terminal (`ASK_ATOM_TERMINAL=1`, md5 **70bc8dab**) на
 локальном probe okna `:18093` (DSN `:17890`, флаги Ф6 + rank-canon; **не** канон `:8092` —
 scp на gpu-erw заблокирован `RUNTIME_FLOOR:egress`). K5a «декабрь 2025» → **OK** atom

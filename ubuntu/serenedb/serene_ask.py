@@ -1424,8 +1424,11 @@ _WINDOW_FORM_IDS = frozenset({
 ASK_CALENDAR_AXIS = os.environ.get("ASK_CALENDAR_AXIS", "0") == "1"
 # Rank×sales канон (E/M/W): умолч. 0 — бой не включён (work/rank-path-fix-design.md).
 ASK_SALES_RANK_CANON = os.environ.get("ASK_SALES_RANK_CANON", "0") == "1"
-# Computed-атом терминален (K5): умолч. 0 — бой не включён (work/silent-refusal-fix-design.md).
+# Computed-атом терминален (K5): умолч. 0 — бой не включён (work/silent-refusal-form-design.md).
 ASK_ATOM_TERMINAL = os.environ.get("ASK_ATOM_TERMINAL", "0") == "1"
+# Форма атома F ∈ {distinct_axis, complement, compare}: умолч. 0
+# (work/entity-compare-form-design.md; K4/K6).
+ASK_ENTITY_FORM = os.environ.get("ASK_ENTITY_FORM", "0") == "1"
 _PERIOD_RELATIVE_FORMS = {"at": 0.0, "map": None}
 _DAY_BASIS_CALENDAR = "calendar_days"
 _DAY_BASIS_WORKING = "working_days"
@@ -1995,6 +1998,9 @@ def sales_compare_intent(intent, question=""):
     [замер 24.08 okna] «что лучше всего продавалось на этой неделе» содержит
     «лучше» + период → прежний путь уводил в compare (diff двух WTD), grain=row,
     без имени лидера при живых данных GROUP BY ТМЦ. Суперлатив/топ — rank.
+
+    ASK_ENTITY_FORM: голый want=list не блокирует compare (K4); суперлатив —
+    по-прежнему rank. Новых языковых маркеров нет.
     """
     intent = intent or {}
     q = " ".join(str(question or "").lower().split())
@@ -2006,9 +2012,18 @@ def sales_compare_intent(intent, question=""):
             "больше всего", "меньше всего", "больше всех", "меньше всех",
             "топ-", "топ ", " top", "лидер", "рейтинг", "leader", "ranking")):
         return False
-    if rank_intent_from(intent, question=question) and not any(
-            w in q for w in (" чем", "чем ", " vs", "против", "по сравнению",
-                             "compared", " versus")):
+    _vs = any(w in q for w in (" чем", "чем ", " vs", "против", "по сравнению",
+                               "compared", " versus"))
+    if ASK_ENTITY_FORM:
+        # Сильный rank (текст/amount) без «чем» — не compare.
+        # want=list сам по себе — не rank для входа compare.
+        amt = intent.get("amount") or {}
+        strong_rank = (
+            rank_question_text(question)
+            or (not amt.get("op") and amt.get("value") is not None))
+        if strong_rank and not _vs:
+            return False
+    elif rank_intent_from(intent, question=question) and not _vs:
         return False
     return any(w in q for w in (
         "лучше", "хуже", "больше чем", "меньше чем",
@@ -2019,6 +2034,7 @@ def sales_compare_windows(intent, today, question=""):
     """Два окна для compare-продаж: текущее vs prior (неделя/месяц по форме).
 
     Возвращает (period, period2, form_id). Без лексики — только границы дат.
+    ASK_ENTITY_FORM: period = прошлая полная неделя/месяц → пара (WTD/MTD, prior).
     """
     td = _calendar_date(today)
     if not td:
@@ -2027,6 +2043,7 @@ def sales_compare_windows(intent, today, question=""):
         return p, p2, "explicit"
     p = dict((intent or {}).get("period") or {})
     fr_d = _calendar_date(p.get("from")) if p.get("from") else None
+    to_d = _calendar_date(p.get("to")) if p.get("to") else None
     ms, _me = _month_range(td)
     ws, _we = _week_range_monday(td)
 
@@ -2048,10 +2065,391 @@ def sales_compare_windows(intent, today, question=""):
         prev = {"from": _iso_date(prev_ms), "to": _iso_date(prev_to)}
         return cur, prev, "mtd"
 
+    if ASK_ENTITY_FORM and fr_d and to_d:
+        pws, pwe = _prev_week_range(td)
+        if fr_d == pws and to_d == pwe:
+            cur = {"from": _iso_date(ws), "to": _iso_date(td)}
+            prev = {"from": _iso_date(pws), "to": _iso_date(pwe)}
+            return cur, prev, "wtd"
+        if ms.month == 1:
+            prev_ms = ms.replace(year=ms.year - 1, month=12, day=1)
+        else:
+            prev_ms = ms.replace(month=ms.month - 1, day=1)
+        _pms, prev_me = _month_range(prev_ms)
+        if fr_d == prev_ms and to_d == prev_me:
+            cur = {"from": _iso_date(ms), "to": _iso_date(td)}
+            prev_to = prev_ms.replace(day=min(td.day, prev_me.day))
+            prev = {"from": _iso_date(prev_ms), "to": _iso_date(prev_to)}
+            return cur, prev, "mtd"
+
     p2 = dict((intent or {}).get("period2") or {})
     if p2.get("from") or p2.get("to"):
         return p, p2, "explicit"
     return p, {}, "explicit"
+
+
+
+def entity_form_catalogs_for_kind(kind, allow_meaning=True):
+    """catalog_* по основам label/alias; запасной — meaning_candidates.
+
+    allow_meaning=False: только stem/label SQL. Без явного окна F не берёт
+    fuzzy meaning (иначе «прайс» → catalog_договоры и distinct чужой оси).
+    """
+    kind = (kind or "").strip()
+    if not kind:
+        return []
+    out = []
+    try:
+        rs = psql(
+            "SELECT t.src_table FROM %s t "
+            "LEFT JOIN search_entity_alias a ON a.src_table = t.src_table "
+            "WHERE t.src_table LIKE 'catalog_%%' AND list_has_any("
+            "  list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
+            "  list_filter(ts_lexize(%s, concat_ws(' ', t.label, a.aliases, "
+            "                                      a.best_used_for)),"
+            "              x -> length(x) >= 3))"
+            % (TABLES, lit(STEM_DICT), lit(kind), lit(STEM_DICT)))
+        out = [r[0] for r in (rs or []) if r and r[0]]
+    except RuntimeError:
+        out = []
+    if out:
+        return out
+    if not allow_meaning:
+        return []
+    try:
+        found = meaning_candidates([], kind, kind, MEANING_TOP) or []
+    except (RuntimeError, ValueError, TypeError):
+        found = []
+    return [s for s in found if str(s).startswith("catalog_")]
+
+
+def entity_form_expand_pool(pool, intent=None):
+    """Каталоги из kind + sales-держатели осей (search_refcols / основы)."""
+    out = list(pool or [])
+    seen = set(out)
+    kind = ((intent or {}).get("kind") or "").strip()
+    if kind:
+        for s in entity_form_catalogs_for_kind(kind):
+            if s not in seen:
+                seen.add(s)
+                out.append(s)
+    for cat in [s for s in list(out) if str(s).startswith("catalog_")]:
+        for h in holders_of_target(cat) or []:
+            hs = (h.get("src") or "").strip()
+            if not hs.startswith("accumulationregister_"):
+                continue
+            if sales_noncanon_focus(hs):
+                continue
+            if hs not in seen:
+                seen.add(hs)
+                out.append(hs)
+    return out
+
+
+def entity_form_rolling_year(today):
+    """Окно «год назад → today» для distinct без явного period (форма границ)."""
+    td = _calendar_date(today) or _calendar_date(time.strftime("%Y-%m-%d"))
+    if not td:
+        return {}
+    try:
+        start = td.replace(year=td.year - 1)
+    except ValueError:
+        start = td - datetime.timedelta(days=365)
+    return {"from": _iso_date(start), "to": _iso_date(td),
+            "origin": _ORIGIN_ASSUMED, "interpretation_id": "rolling_12m"}
+
+
+def entity_form_applicable(intent, pool):
+    """F открыта: want=count + catalog + sales.
+
+    Явное окно — для complement. Distinct без окна — только если в сыром пуле
+    уже есть движение (document_/register), иначе «всего клиентов» остаётся
+    счётом справочника.
+    """
+    if not ASK_ENTITY_FORM:
+        return False
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    raw = list(pool or [])
+    has_movement = any(
+        (str(s).startswith("accumulationregister_") and not sales_noncanon_focus(s))
+        or str(s).startswith("document_")
+        for s in raw)
+    pool = entity_form_expand_pool(raw, intent)
+    has_cat = any(str(s).startswith("catalog_") for s in pool)
+    has_sales = any(
+        str(s).startswith("accumulationregister_") and not sales_noncanon_focus(s)
+        for s in pool)
+    if not (has_cat and has_sales):
+        return False
+    period = intent.get("period") or {}
+    if period.get("from") or period.get("to"):
+        return True
+    return bool(has_movement)
+
+
+def entity_form_collapse_guard(early_classes=0, arb_pool_len=1,
+                               form_applicable=False):
+    """Early classes>1 при схлопнутом arb_pool: исход на пуле или метка пропуска."""
+    try:
+        early_classes = int(early_classes or 0)
+        arb_pool_len = int(arb_pool_len or 0)
+    except (TypeError, ValueError):
+        early_classes, arb_pool_len = 0, 0
+    if early_classes <= 1 or arb_pool_len > 1:
+        return {"silent_unique": False, "action": "none"}
+    if form_applicable:
+        return {"silent_unique": False, "action": "resolve_early"}
+    return {"silent_unique": False, "action": "skip",
+            "fork_outcome_skipped": "arb_pool_collapsed"}
+
+
+def entity_form_pre_entity_ok(early_classes=0, form_n=1):
+    """True: один класс развилки и ровно одна форма по пулу (шаг pre_entity)."""
+    try:
+        early_classes = int(early_classes or 0)
+    except (TypeError, ValueError):
+        early_classes = 0
+    try:
+        form_n = int(form_n if form_n is not None else 0)
+    except (TypeError, ValueError):
+        form_n = 0
+    if early_classes > 1:
+        return False
+    if form_n != 1:
+        return False
+    return True
+
+
+def entity_form_atom_distinct(src="", axis="", value=None, period=None):
+    """AnswerAtom формы distinct_axis (COUNT DISTINCT по оси ссылки)."""
+    try:
+        ev = None if value is None else round(float(value), 2)
+    except (TypeError, ValueError):
+        ev = value
+    return build_answer_atom(
+        operation="count", exact_value=ev, measure_id=None,
+        measure_label=None, axis=(axis or None), form="distinct_axis",
+        proof_status=(PROOF_COMPUTED if ev is not None else PROOF_UNCOUNTED),
+        period=period, src=(src or None), grain="axis")
+
+
+def entity_form_atom_complement(catalog_src="", sales_src="", axis="",
+                                catalog_n=None, distinct_n=None, period=None):
+    """AnswerAtom формы complement = |catalog| − distinct_axis(sales)."""
+    try:
+        c = float(catalog_n) if catalog_n is not None else None
+        d = float(distinct_n) if distinct_n is not None else None
+        ev = None if c is None or d is None else round(c - d, 2)
+    except (TypeError, ValueError):
+        ev = None
+    return build_answer_atom(
+        operation="count", exact_value=ev, measure_id=None,
+        measure_label=None, axis=(axis or None), form="complement",
+        proof_status=(PROOF_COMPUTED if ev is not None else PROOF_UNCOUNTED),
+        period=period, src=(sales_src or catalog_src or None), grain="axis",
+        excluded=({"catalog": catalog_src, "sales": sales_src,
+                   "catalog_n": catalog_n, "distinct_n": distinct_n}
+                  if (catalog_src or sales_src) else None))
+
+
+def aggregate_distinct_axis(src_table, match, preds, axis_col):
+    """COUNT DISTINCT refs_map[axis] в движке.
+
+    Доки: Sql › Functions › Aggregate Functions › DISTINCT Clause in Aggregate
+    Functions (count(DISTINCT …)).
+    """
+    if not src_table or not axis_col:
+        return None
+    where = [w for w in (
+        [match] + list(preds or [])
+        + ["src_table = %s" % lit(src_table),
+           "map_extract_value(refs_map, %s) IS NOT NULL" % lit(axis_col)]) if w]
+    folder_pred = "NOT coalesce(map_extract_value(flags, 'IsFolder'), false)"
+    try:
+        r = psql(
+            "SELECT count(DISTINCT map_extract_value(refs_map, %s)) "
+            "FILTER (%s) FROM %s WHERE %s"
+            % (lit(axis_col), folder_pred, CORPUS, " AND ".join(where)))
+    except RuntimeError:
+        return None
+    if not r or not r[0] or r[0][0] in ("", None):
+        return None
+    try:
+        n = int(_num(r[0][0]))
+    except (TypeError, ValueError):
+        return None
+    return {"count": n, "sum": None, "src": src_table, "form": "distinct_axis",
+            "axis": axis_col, "grain": "axis"}
+
+
+def entity_form_axis_on_sales(catalog_src, sales_srcs):
+    """Ось refs_map на sales, чей target_src = catalog (search_refcols).
+
+    Среди держателей — канон продаж по _sales_register_score (не книга/импорт).
+    """
+    catalog_src = (catalog_src or "").strip()
+    sales_srcs = [s for s in (sales_srcs or []) if s]
+    if not catalog_src or not sales_srcs:
+        return None, None
+    pairs = []
+    for s in sales_srcs:
+        for a in (refcols_of(s) or []):
+            if (a.get("target_src") or "") == catalog_src and a.get("col"):
+                pairs.append((s, a["col"]))
+                break
+    if not pairs:
+        for h in holders_of_target(catalog_src) or []:
+            if h.get("src") in sales_srcs and h.get("col"):
+                pairs.append((h["src"], h["col"]))
+    if not pairs:
+        return None, None
+    mbs = {}
+    try:
+        mbs = _measures_by_src([s for s, _c in pairs]) or {}
+    except RuntimeError:
+        mbs = {}
+    pairs.sort(key=lambda sc: (
+        -_sales_register_score(sc[0], mbs.get(sc[0]) or []),
+        sc[0]))
+    return pairs[0][0], pairs[0][1]
+
+
+def entity_form_structs(intent, pool, today=None):
+    """Все структурные кандидаты F по пулу (form+meta), без SQL-счёта.
+
+    Порядок как у entity_form_pick: сырой пул, затем kind. Нужен для
+    pre_entity: «форма по пулу не единственная» = len>1.
+    """
+    if not entity_form_applicable(intent, pool):
+        return []
+    raw = list(pool or [])
+    raw_set = set(raw)
+    period0 = dict((intent or {}).get("period") or {})
+    has_period0 = bool(period0.get("from") or period0.get("to"))
+    pool = entity_form_expand_pool(raw, intent)
+    cats = [s for s in pool if str(s).startswith("catalog_")]
+    sales = [s for s in pool
+             if str(s).startswith("accumulationregister_")
+             and not sales_noncanon_focus(s)]
+    period = dict(period0)
+    has_period = has_period0
+    kind = ((intent or {}).get("kind") or "").strip()
+    # Без окна — только stem/label SQL; meaning оставляем для complement с окном.
+    found = set(entity_form_catalogs_for_kind(
+        kind, allow_meaning=has_period0)) if kind else set()
+    # Без окна: только kind→catalog. Dump соседних catalog_* не повод для F.
+    if not has_period:
+        if not found:
+            return []
+        cats = [c for c in cats if c in found]
+        if not cats:
+            return []
+        # kind → товарный catalog: счёт строк справочника, не DISTINCT sales
+        if all(_is_product_catalog(c) for c in cats):
+            return []
+    # сначала каталоги из сырого пула/cands, затем совпавшие с kind
+    cats.sort(key=lambda c: (
+        0 if c in raw_set else 1,
+        0 if c in found else 1,
+        c))
+    out = []
+    for cat in cats:
+        src_s, axis = entity_form_axis_on_sales(cat, sales)
+        if not src_s or not axis:
+            continue
+        if _is_product_catalog(cat):
+            if not has_period:
+                continue
+            out.append(("complement", {
+                "catalog_src": cat, "sales_src": src_s, "axis": axis,
+                "period": dict(period)}))
+            continue
+        per = dict(period)
+        if not has_period:
+            per = entity_form_rolling_year(today)
+            if not (per.get("from") or per.get("to")):
+                continue
+        out.append(("distinct_axis", {
+            "catalog_src": cat, "sales_src": src_s, "axis": axis,
+            "period": per}))
+    return out
+
+
+def entity_form_pick(intent, pool, today=None):
+    """Выбрать (form, meta) из структуры пула: complement | distinct_axis | None.
+
+    Без явного окна F смотрит только catalog, на который указывает kind
+    (не весь dump развилки): иначе счёт справочника уходит в distinct по
+    соседней оси, которую держат те же строки sales.
+    """
+    structs = entity_form_structs(intent, pool, today=today)
+    if not structs:
+        return None, {}
+    return structs[0][0], structs[0][1]
+
+
+def entity_form_compute(form, meta, match=""):
+    """Посчитать атом выбранной формы F внутри движка."""
+    if not form or not meta:
+        return None
+    period = meta.get("period") or {}
+    preds = period_preds(period) if (period.get("from") or period.get("to")) else []
+    axis = meta.get("axis") or ""
+    sales = meta.get("sales_src") or ""
+    cat = meta.get("catalog_src") or ""
+    if form == "distinct_axis":
+        agg = aggregate_distinct_axis(sales, match, preds, axis)
+        if not agg:
+            return None
+        return entity_form_atom_distinct(
+            src=sales, axis=axis, value=agg.get("count"), period=period)
+    if form == "complement":
+        cat_agg = aggregate(cat, "", [], None)  # каталог без date-pred
+        dist = aggregate_distinct_axis(sales, match, preds, axis)
+        if not cat_agg or dist is None:
+            return None
+        return entity_form_atom_complement(
+            catalog_src=cat, sales_src=sales, axis=axis,
+            catalog_n=cat_agg.get("count"), distinct_n=dist.get("count"),
+            period=period)
+    return None
+
+
+def try_entity_form_answer(question, intent, pool, match="", diag=None,
+                          cut=None, t0=None, today=None, when=None,
+                          early_classes=0):
+    """Ответ формой F или None. На when=pre_entity зовёт entity_form_pre_entity_ok."""
+    if not ASK_ENTITY_FORM:
+        return None
+    pool = entity_form_expand_pool(pool, intent)
+    structs = entity_form_structs(intent, pool, today=today)
+    if not structs:
+        return None
+    if when == "pre_entity":
+        if not entity_form_pre_entity_ok(
+                early_classes=early_classes, form_n=len(structs)):
+            return None
+    form, meta = structs[0][0], structs[0][1]
+    atom = entity_form_compute(form, meta, match=match)
+    if not atom or atom.get("exact_value") is None:
+        return None
+    text = render_atom_pair(atom) or _fmt(atom.get("exact_value"))
+    if not (text or "").strip():
+        return None
+    d = _diag_pack(diag or {}, entity_form=form,
+                   entity_form_axis=meta.get("axis"),
+                   entity_form_sales=meta.get("sales_src"),
+                   entity_form_catalog=meta.get("catalog_src"))
+    if t0 is not None:
+        d["sec"] = round(time.time() - t0, 2)
+    figs = _fork_figures_of(atom)
+    return {"partial": cut or None, "kind": "answer", "text": text,
+            "figures": figs, "atom": atom, "atoms": [atom],
+            "source_fixed": False, "memory_eligible": False,
+            "sources": [], "diag": d}
 
 
 def aggregate_compare_sales(src, match, period1, period2, measure):
@@ -3669,7 +4067,11 @@ def fork_scan(match, preds, rel_by_src):
 
 
 def fork_scan_readings(match, readings, rel_by_src):
-    """Мульти-скан: readings × fork_scan; ячейки (src, window_fp) со статусом."""
+    """Мульти-скан: readings × fork_scan; ячейки (src, window_fp) со статусом.
+
+    ASK_ENTITY_FORM: catalog_* сканируется без date-pred (иначе ложный
+    no_live_cells на справочнике без doc_date в корпусе — K6.1).
+    """
     rel_by_src = rel_by_src or {}
     readings = readings or [{}]
     cells = []
@@ -3684,7 +4086,17 @@ def fork_scan_readings(match, readings, rel_by_src):
         if rd.get("day_basis"):
             pr["day_basis"] = rd["day_basis"]
         preds_w = (period_preds(pr) if (pr.get("from") or pr.get("to")) else [])
-        scan = fork_scan(match, preds_w, rel_by_src)
+        if ASK_ENTITY_FORM and preds_w:
+            cat_rel = {s: m for s, m in rel_by_src.items()
+                       if str(s).startswith("catalog_")}
+            dated_rel = {s: m for s, m in rel_by_src.items() if s not in cat_rel}
+            scan = {}
+            if dated_rel:
+                scan.update(fork_scan(match, preds_w, dated_rel))
+            if cat_rel:
+                scan.update(fork_scan(match, [], cat_rel))
+        else:
+            scan = fork_scan(match, preds_w, rel_by_src)
         wfp = rd.get("window_fp") or window_fp_of(pr, rd.get("origin"))
         for src in rel_by_src:
             if src in scan:
@@ -3745,7 +4157,18 @@ def fork_detector_scan(match, preds, intent, today, rel_by_src,
         pr = rd.get("period") or {}
         use_preds = (period_preds(pr) if (pr.get("from") or pr.get("to"))
                      else list(preds or []))
-        rows = fork_scan(match, use_preds, rel_by_src)
+        if ASK_ENTITY_FORM and use_preds:
+            cat_rel = {s: m for s, m in (rel_by_src or {}).items()
+                       if str(s).startswith("catalog_")}
+            dated_rel = {s: m for s, m in (rel_by_src or {}).items()
+                         if s not in cat_rel}
+            rows = {}
+            if dated_rel:
+                rows.update(fork_scan(match, use_preds, dated_rel))
+            if cat_rel:
+                rows.update(fork_scan(match, [], cat_rel))
+        else:
+            rows = fork_scan(match, use_preds, rel_by_src)
         pmeta = {}
         if pr.get("from") or pr.get("to"):
             for s in rows:
@@ -3800,6 +4223,8 @@ def _fork_atom_equiv_fp(atom):
         excl = atom.get("excluded") or {}
         if isinstance(excl, dict) and excl.get("folders") is not None:
             fp = fp + (("folders", int(excl["folders"])),)
+    if ASK_ENTITY_FORM:
+        fp = fp + ((atom.get("form") or ""), (atom.get("axis") or ""))
     fp = fp + (_window_tuple_from_period(atom.get("period")),)
     return fp
 
@@ -12091,6 +12516,24 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _scan_err = _e
             diag["fork_error"] = str(_e)[:160]
             sys.stderr.write("ask FORK: детектор не сработал: %s\n" % str(_e)[:160])
+    # ASK_ENTITY_FORM: форма F до выбора сущности моделью (K6).
+    # pre_entity + classes>1 = молчаливый лидер — гейт в try_entity_form_answer.
+    # Пул F — все catalog_/register_/document_ из cands (без head-среза круга).
+    if ASK_ENTITY_FORM and not no_arbiter and not trusted and not focus:
+        _ef_pool0 = list(dict.fromkeys(
+            list((_fork_early.get("pool") or []))
+            + [c for c in (cands or []) if str(c).startswith("catalog_")]
+            + [c for c in (cands or [])
+               if str(c).startswith("accumulationregister_")
+               or str(c).startswith("document_")]))
+        _ef0 = try_entity_form_answer(
+            question, intent, _ef_pool0, match=match, diag=diag, cut=cut, t0=t0,
+            today=today, when="pre_entity",
+            early_classes=(diag.get("fork") or {}).get("classes") or 0)
+        if _ef0 is not None:
+            шаг("форма сущности", form=((_ef0.get("diag") or {}).get("entity_form")),
+                when="pre_entity")
+            return _ef0
     # «почему ноль / сбой» + канон excluded no_live_cells → period_empty ДО выбора
     # сущности/меры ([замер 22.08 okna]: курсы валют live, регистр пуст → clarify).
     if (not no_arbiter and not focus
@@ -12744,6 +13187,23 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # В diag для журнала (ask_journal.doubt) — после финального force.
     diag["doubt"] = bool(doubt)
 
+    # ASK_ENTITY_FORM: distinct/complement до круга (K6), структура пула+окно.
+    # Пул F — все catalog_/register_/document_ из cands (без head-среза круга).
+    if ASK_ENTITY_FORM and not no_arbiter and not trusted:
+        _ef_pool = list(dict.fromkeys(
+            list(arb_pool or [])
+            + list((_fork_early.get("pool") or []))
+            + [c for c in (cands or []) if str(c).startswith("catalog_")]
+            + [c for c in (cands or [])
+               if str(c).startswith("accumulationregister_")
+               or str(c).startswith("document_")]))
+        _ef = try_entity_form_answer(
+            question, intent, _ef_pool, match=match, diag=diag, cut=cut, t0=t0,
+            today=today)
+        if _ef is not None:
+            шаг("форма сущности", form=((_ef.get("diag") or {}).get("entity_form")))
+            return _ef
+
     def _checked(out):
         """Ответ уходит только если собственное знание базы подтверждает выбор сущности.
 
@@ -12769,8 +13229,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # readings > 1; compare «лучше/больше чем» — отдельный путь diff, не W-люк.
     _window_fork = (len(_ask_readings) > 1
                     and not sales_compare_intent(intent, question))
+    _ef_guard = entity_form_collapse_guard(
+        early_classes=(diag.get("fork") or {}).get("classes") or 0,
+        arb_pool_len=len(arb_pool or []),
+        form_applicable=entity_form_applicable(
+            intent, list(arb_pool or []) + list((_fork_early.get("pool") or []))))
+    if _ef_guard.get("fork_outcome_skipped"):
+        diag.setdefault("fork", {})["fork_outcome_skipped"] = (
+            _ef_guard["fork_outcome_skipped"])
+    _ef_early = (_ef_guard.get("action") == "resolve_early")
     if (FORK_OUTCOMES and FORK_DETECT and not no_arbiter and not trusted
-            and (len(arb_pool) > 1 or _window_fork)):
+            and (len(arb_pool) > 1 or _window_fork or _ef_early)):
         _t_out = time.time()
         _scan_err = None
         _rows, _cls = {}, {}
@@ -12781,6 +13250,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # ранний скан по отбору тянет посторонние классы (B8-01 регресс);
             # arb_pool[:3] отрезал эталонные пары — pair_budget снят в fork_outcome_b.
             _out_pool = list(arb_pool)
+            if _ef_early and (_fork_early.get("pool") or []):
+                _out_pool = list(dict.fromkeys(
+                    list(_fork_early.get("pool") or []) + list(arb_pool)))
             _mbs = _measures_by_src(_out_pool)
             _als = _aliases_by_src(_out_pool)
             _rel = {c: _fork_relevant(_mword, _mbs.get(c) or [], _als.get(c) or {},
@@ -13740,6 +14212,26 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                              "named_gis": [], "clarify": None}
                 diag["grain"] = "row"
                 diag["axis_form"] = "compare"
+                if ASK_ENTITY_FORM:
+                    _catom = atom_from_agg(
+                        agg, operation="compare",
+                        measure_id=measure,
+                        measure_label=measure_label_of(src, measure) if src else measure,
+                        money=True, period=_p1, form="compare",
+                        src=src)
+                    _ctext = render_atom_pair(_catom) or _fmt(agg.get("sum"))
+                    if (_ctext or "").strip():
+                        шаг("форма compare", diff=agg.get("sum"), windows=_cmp_form)
+                        return {
+                            "partial": cut or None, "kind": "answer",
+                            "text": _ctext,
+                            "figures": _fork_figures_of(_catom),
+                            "atom": _catom, "atoms": [_catom],
+                            "source_fixed": False, "memory_eligible": False,
+                            "sources": [src.split("_", 1)[-1] if src and "_" in src
+                                        else (src or "")],
+                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2)),
+                        }
 
     if agg is None and grain_dec.get("grain") == "group" and grain_dec.get("col") and serene_axis:
         _col = grain_dec["col"]
@@ -13954,7 +14446,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # (`say_measure`/`n_folders` посчитаны выше — до раннего выхода period_empty.)
     totals_shown = [] if (agg or {}).get("grain") == "group" else (totals if money else [])
     # Rank: имя лидера из GROUP BY кодом (§5 / п.19), до compose.
-    if rank_intent_from(intent, plan, question) and measure and src:
+    # ASK_ENTITY_FORM: compare уже собрал diff — не перетирать rank (K4).
+    _cmp_form_locked = bool(
+        ASK_ENTITY_FORM and (
+            diag.get("compare_sales")
+            or (agg or {}).get("form") == "compare"
+            or (grain_dec or {}).get("form") == "compare"))
+    if (rank_intent_from(intent, plan, question) and measure and src
+            and not _cmp_form_locked):
         _pass_early, _pf = build_answer_passport(
             period=(intent or {}).get("period"),
             period_dropped=bool(diag.get("period_assumed_dropped")),

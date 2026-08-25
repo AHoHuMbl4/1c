@@ -187,6 +187,13 @@ diff) и шаг 0 [`PLAN_ANSWER_CONTRACT.md`](PLAN_ANSWER_CONTRACT.md) (разм
 Ответ: `«Основной договор / 0000000001»: 728 · … · Договоры · rank` — count/rank по
 договору, не сравнение двух сумм. Число эталона в тексте нет.
 
+**Код [25.08]:** `ASK_ENTITY_FORM` (умолч. 0) — вход compare при `want=list`,
+достройка окон prev_week→WTD+prior, атом `form=compare` без rank
+(`serene_ask.py`, `work/entity-compare-form-design.md` §B). Гейт
+`entity_form_pre_entity_ok`: при `classes>1` форма на pre_entity не отвечает.
+Оффлайн `test_entity_form.py` **40/0**. Живой AB_PROBE `:18092` **8/8**
+(md5 **52e275e5**). Полный скорер 25q ещё нет; класс не закрыт.
+
 ---
 
 ### K5. Ответ в atoms есть, наружу отказ (2) — ✅ закрыт 25.08 (atom наружу; K5b gold — хвост compare)
@@ -218,6 +225,11 @@ diff) и шаг 0 [`PLAN_ANSWER_CONTRACT.md`](PLAN_ANSWER_CONTRACT.md) (разм
    Эталон: DISTINCT контрагент в продажах за 12 мес = **141**.  
    Ответ: рассуждение по **карточкам** `catalog_контрагенты` («Всего в выборке 353…»),
    `kind=clarify`, без count distinct по продажам.
+
+**Код [25.08]:** тот же `ASK_ENTITY_FORM` — формы `distinct_axis` /
+`complement`, catalog-скан без date-pred; гейт pre_entity при `classes>1`
+форму не отдаёт (`entity_form_pre_entity_ok`). Оффлайн **40/0**. AB_PROBE
+**8/8**. Полный скорер 25q ещё нет; класс не закрыт.
 
 ---
 
