@@ -421,6 +421,19 @@ psql "$DSN" -q -f coverage_build.sql || fail "перепись полноты"
 ./wiki_alias.sh "${WIKI_ALIAS_PER_TACT:-100}" || echo "алиасы: шаг не прошёл, такт продолжается" >&2
 ./wiki_publish.sh || echo "вики: шаг не прошёл, такт продолжается" >&2
 
+# Ф6.3: Solr-словарь синонимов из таблиц — каждый такт, после наполнения alias/bridge.
+# wiki_alias тоже зовёт compile (мягко); здесь — fail-closed: лимит / нет таблиц / нет
+# прав видны в journal и в коде возврата такта. DROP+CREATE файлом (IF NOT EXISTS карту
+# не меняет — F6_SYNONYMS_FACTS §5.2); пустые источники — словарь не трогаем (код 0).
+# Имя — тот же SOLR_SYN_DICT / ASK_SOLR_SYNONYMS_DICT, что уходит в corpus_init.
+echo "== 7-solr. словарь синонимов (solr_synonyms ← alias+bridge)"
+SOLR_OUT="${CSV_DIR:-/var/lib/serenedb}/solr_synonyms_${SOLR_SYN_DICT}.sql"
+python3 ./solr_synonyms_build.py compile \
+  --dsn "$DSN" --dict "$SOLR_SYN_DICT" \
+  --alias-table "${ALIAS_TABLE:-search_entity_alias}" \
+  --out "$SOLR_OUT" --apply \
+  || fail "компиляция словаря solr_synonyms ($SOLR_SYN_DICT)"
+
 # 🔴 Карточка сущности — поверхность отбора кандидатов. Идёт ПОСЛЕ алиасов не случайно:
 # она их в себя и вбирает, вместе с описанием сущности от того же агента. Раньше алиасов
 # карточка собралась бы без них и была бы вектором одной метки — тем самым слабым сигналом,
