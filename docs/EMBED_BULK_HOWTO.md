@@ -184,3 +184,74 @@ klient-1 при живом `embed_all`), задайте объём очеред�
 **Штатный механизм:** partial reading / projection pushdown — считать только
 `src_table`, не проецировать `FLOAT[1024]` ([partial-reading](https://docs.serenedb.com/data_import_and_export/parquet/overview#partial-reading));
 форма как `left()` в `embed_missing.sh`, замок `test_embed_left_count.py`.
+
+## 9. Готовая обвязка: `embed_bulk.sh`
+
+С 25.08 рядом с тактовым путём лежит массовый режим:
+`ubuntu/serenedb/embed_bulk.sh`. Он закрывает ограничения §3: своя
+`ATTACH … (ROW_GROUP_SIZE …)` на поток, оператор 16 строк, `SET GLOBAL threads`
+и `SET GLOBAL http_timeout` отдельными операторами на простое, длинный круг
+(`EMBED_POOL_PER_STREAM`), перенос в корпус в конце круга, повтор пачки при
+сетевом отказе, постоянная метка файлов (докатка после обрыва), снимок
+прироста в рабочих базах по ходу.
+
+### Одна команда (одна карта, умолчания §4–§5)
+
+```bash
+cd /srv/1c/ubuntu/serenedb
+export SERENEDB_DSN='host=127.0.0.1 port=17891 user=postgres dbname=postgres'
+export EMBED_HOST='http://10.3.1.11:8000'
+export EMBED_PATH='/v1/embeddings'
+export EMBED_MODEL='…'          # как в /etc/1c-embed.env
+export EMBED_API_KEY='…'
+export EMBED_THREADS=3          # карта насыщается на трёх
+export EMBED_POOL_PER_STREAM=50000
+export EMBED_HTTP_TIMEOUT=600
+export EMBED_WORK_DIR=/var/lib/serenedb
+ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
+  WHERE e.src_table = search_corpus.src_table AND e.cls = 'service')" \
+  ./embed_bulk.sh search_corpus 'substr(doc,1,20000)' 'src_table,row_key'
+```
+
+Параметры только из окружения; имён конкретных баз/сущностей в скрипте нет.
+Умолчание `EMBED_THREADS=3` — под одну карту (замер §4).
+
+### Прогресс
+
+По ходу круга скрипт печатает JSON `bulk_progress` с числом строк в рабочих
+файлах `${EMBED_WORK_DIR}/emb_<база>_<таблица>_wN.db`. После переноса в корпус
+тот же снимок, что и для такта:
+
+```bash
+./embed_progress.sh search_corpus 60
+```
+
+### Остановка
+
+`Ctrl-C` / `systemctl stop` — безопасно: посчитанное лежит в `wN.db`, следующий
+запуск делает `transfer_attached` и продолжает с `emb IS NULL`. Живой прогон
+владельцем; обвязка сама ничего не стартует.
+
+### Замки
+
+`test_embed_bulk.py` — оффлайн: ATTACH на поток, batch≤16, GLOBAL отдельно,
+повтор, докатка.
+
+## 10. Защита такта от большого остатка
+
+Ошибка 25.08: разовый досчёт ~7,86 млн строк гнали тактовым
+`embed_missing`/`embed_all` (~13 строк/с → ~7 суток) вместо bulk (~168 строк/с).
+
+Механизм: `ubuntu/serenedb/embed_tick_guard.sh`, зовётся из `embed_missing.sh`
+и из ветки `corpus` в `embed_all.sh` **до** начала счёта `ai_embed`.
+
+| ручка | умолчание | смысл |
+|---|---|---|
+| `EMBED_TICK_MAX_REMAINING` | `100000` | порог остатка для такта |
+| `EMBED_ALLOW_LARGE_TICK=1` | выкл. | явный обход (малая дельта / отладка) |
+
+Оценка остатка: `pg_class.reltuples` по `emb_*_todo` − Σ `*_part_*` (как
+`docs/EMBED_ETA_KLIENT1.md`); если todo нет — capped `count` с `LIMIT порог+1`
+(без полного left). Выше порога — код 2 и текст с `embed_bulk.sh`.
+
+Замок: `test_embed_tick_guard.py` (большой → stop+bulk; малый → ok; обход → ok).

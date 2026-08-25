@@ -202,6 +202,20 @@ drop_parts() {
 # Докатка: если прошлый прогон оборвался, его векторы уже посчитаны и оплачены.
 transfer
 
+# 🔴 ЗАЩИТА ОТ ТАКТА НА БОЛЬШОМ ОСТАТКЕ (25.08). Тактовый путь — для дельты;
+# разовая сборка миллионов строк на нём даёт ~15 строк/с вместо ~168 (HOWTO §3).
+# Оценка — pg_class.reltuples (docs/EMBED_ETA_KLIENT1.md); обход —
+# EMBED_ALLOW_LARGE_TICK=1. До начала счёта ai_embed, до полного left().
+# shellcheck disable=SC1091
+. "$(dirname "$0")/embed_tick_guard.sh"
+embed_tick_guard_check "$TBL" "$TAG"
+_guard_rc=$?
+if [ "$_guard_rc" -eq 2 ]; then
+  exit 2
+elif [ "$_guard_rc" -ne 0 ]; then
+  exit "$_guard_rc"
+fi
+
 n=$(left) || exit 1
 [ -z "$n" ] && { echo "не удалось прочитать $TBL: пустой ответ" >&2; exit 1; }
 if [ "$n" = "0" ]; then

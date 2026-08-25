@@ -171,10 +171,28 @@ for tgt in $TARGETS; do
       ;;
     corpus)
       echo "== корпус, НЕ служебные сущности  $(date -u +%H:%M:%S)"
+      # 🔴 ЗАЩИТА (25.08): большой остаток — не тактом. До счёта; порог
+      # EMBED_TICK_MAX_REMAINING; обход EMBED_ALLOW_LARGE_TICK=1.
+      # shellcheck disable=SC1091
+      . "$(dirname "$0")/embed_tick_guard.sh"
+      embed_tick_guard_check "search_corpus" "emb_${DB}_search_corpus"
+      _g=$?
+      if [ "$_g" -eq 2 ]; then
+        echo "embed_all: остаток корпуса велик для такта — ubuntu/serenedb/embed_bulk.sh" >&2
+        exit 2
+      elif [ "$_g" -ne 0 ]; then
+        exit "$_g"
+      fi
       ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
                               WHERE e.src_table = search_corpus.src_table AND e.cls = 'service')" \
-        ./embed_missing.sh search_corpus "substr(doc,1,$MAXLEN)" "$N" "src_table,row_key" \
-          || echo "корпус (бизнес): проход с ошибкой" >&2
+        ./embed_missing.sh search_corpus "substr(doc,1,$MAXLEN)" "$N" "src_table,row_key"
+      _em=$?
+      if [ "$_em" -eq 2 ]; then
+        echo "embed_all: остаток велик — ubuntu/serenedb/embed_bulk.sh" >&2
+        exit 2
+      elif [ "$_em" -ne 0 ]; then
+        echo "корпус (бизнес): проход с ошибкой" >&2
+      fi
       # Служебным вектор не считается — решение владельца 29.07. Они целиком в корпусе и в
       # текстовом индексе (находятся по словам), а отсутствие вектора названо в переписи
       # причиной (`cov_noemb_service`). Вернуть прежнее: `EMBED_SERVICE=1`.
