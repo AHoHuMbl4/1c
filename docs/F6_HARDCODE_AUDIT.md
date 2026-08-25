@@ -41,7 +41,7 @@ inline из данных, не из кода).
 | 8 | `build_resolver_index.py` | Устаревший путь; комментарии «питер»/city | **законно (вне такта)**: такт зовёт только `resolver_build.sql` (`build.sh`); питон не в диффах Ф6; исполняемых списков сущностей нет |
 | 9 | `serene_ask.py` Ф6.2/Ф6.3/Ф6.4 / SQL_RRF | IVF / `ts_lexize(dict)` / `sdb_metrics` / RRF — имена индексов из env | **законно** (чтение): списков слов/сущностей в добавленном коде нет; словарь и meta — из БД |
 | 10 | `serene_ask.py:1654-1656` (`calendar_map_rows`, §7bis) | Распознавание `"не существует"` в тексте ошибки движка рядом с en | **требует правки serene_ask.py — оставлено оркестратору**: не список данных, но привязка к локали сообщения; достаточно en/`Catalog Error` как в `solr_synonyms_build.py` |
-| 11 | `corpus_build.sql:150` `IN ('quantity', 'количество')` (карта остатков, **до** §1-кватер) | Русское имя свойства рядом с английским | **вне диффа Ф6** (строка старше календаря); зафиксировано для оркестратора — не чинилось в этом заходе |
+| 11 | `corpus_build.sql` §1-тер `accumulation_warehouse` | было: `IN ('quantity', 'количество')` | **починено** — отбор по `p.edm IN (Edm.Double/Decimal/Int*)` + Period, без языковых имён; `LineNumber`/`SurrogateKey` вне ресурса; диагностика `balance_map` rows_n; замок `test_balance_map_meta_build.py` **18/0**; okna: старое 3 ⊂ новое 13 |
 | 12 | тесты `test_calendar_*`, `test_solr_*`, `test_resolver_ivf` | Кириллица в фикстурах / негативный grep «Календарь» / TRIG | **законно**: шапка замка; TRIG **запрещает** триггеры в calendar-хелперах ask |
 
 ## Итог
@@ -49,9 +49,9 @@ inline из данных, не из кода).
 | | |
 |---|---|
 | Находок в таблице | **12** |
-| Починено | **1** (`measure_resolver.py`) |
+| Починено | **2** (`measure_resolver.py`, `corpus_build` §1-тер #11) |
 | Законно | **9** |
-| Оставлено оркестратору (`serene_ask` / вне диффа) | **2** (#10, #11) |
+| Оставлено оркестратору (`serene_ask`) | **1** (#10) |
 
 **Самая опасная находка (до правки):** список городов стенда в `measure_resolver.py` —
 исполняемый перечень значений конкретной базы; на чужой базе замер молча мерял бы не то.
@@ -74,13 +74,16 @@ inline из данных, не из кода).
 | `test_resolver_ivf.py` | **18/0** |
 | `test_health_native_freshness.py` | **32/0** |
 | `test_sql_rrf.py` | **7/0** |
+| `test_balance_map_meta_build.py` | **18/0** |
 
-Сумма: **195/0**.
+Сумма: **213/0** (195+18).
 
 ## Правки этого захода
 
 - `ubuntu/serenedb/measure_resolver.py` — термы из argv
 - `ubuntu/serenedb/test_measure_resolver_terms.py` — оффлайн-замок
+- `ubuntu/serenedb/corpus_build.sql` §1-тер — warehouse по Edm numeric (находка #11)
+- `ubuntu/serenedb/test_balance_map_meta_build.py` — оффлайн-замок #11
 - `docs/F6_HARDCODE_AUDIT.md` — этот отчёт
 - `memory_bank/mcp-memory.json` — наблюдения с источником
 

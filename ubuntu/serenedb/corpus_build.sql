@@ -102,7 +102,10 @@ WHERE e.entity LIKE 'accumulationregister_%_recordtype'
 
 -- ============ 1-тер. КАРТА БАЛАНС-ИСТОЧНИКОВ ($metadata, без имён конфигурации) ============
 -- Три формы: accumulation_balance (RecordType-тень), accounting (Дт/Кт), accumulation_warehouse
--- (складской регистр с количеством). Имена сущностей не перечисляются — только свойства OData.
+-- (накопление с числовым ресурсом Edm + Period). Имена сущностей и языковые имена ресурсов
+-- не перечисляются — только префиксы OData-платформы и типы Edm (как §1-кватер для часов).
+-- LineNumber/SurrogateKey — имена платформы, в ресурс не входят (тот же класс, что в is_measure).
+-- Доки: sql/expressions/subqueries#exists; sql/functions/duckdb_table_functions#duckdb_columns.
 DELETE FROM search_balance_map;
 INSERT INTO search_balance_map
 SELECT src_table, form, has_record_type, has_debit_credit, has_period, has_ext_dimension, now()
@@ -147,10 +150,19 @@ FROM (
   WHERE e.entity LIKE 'accumulationregister_%'
     AND e.entity NOT LIKE '%_recordtype'
     AND EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity
-                AND lower(p.prop) IN ('quantity', 'количество'))
+                AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                              'Edm.Int64', 'Edm.Byte')
+                AND p.prop NOT IN ('LineNumber', 'SurrogateKey'))
     AND EXISTS (SELECT 1 FROM tmp3_prop p WHERE p.entity = e.entity AND lower(p.prop) = 'period')
 ) u
 WHERE coalesce(src_table, '') <> '';
+
+-- Пустая карта = 0 строк после DELETE+INSERT (видно в журнале такта), не скрытый пропуск.
+SELECT 'balance_map' AS step,
+       (SELECT count(*) FROM search_balance_map) AS rows_n,
+       (SELECT count(*) FROM search_balance_map WHERE form = 'accumulation_balance') AS balance_n,
+       (SELECT count(*) FROM search_balance_map WHERE form = 'accounting') AS accounting_n,
+       (SELECT count(*) FROM search_balance_map WHERE form = 'accumulation_warehouse') AS warehouse_n;
 
 -- ============ 1-кватер. ОСЬ ДАТ ГРАФИКА ($metadata + join витрины, без имён конфигурации) ============
 -- Регистр сведений: дата (не платформенный Period) + Guid*_Key + число (часы).
