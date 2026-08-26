@@ -158,10 +158,10 @@ inline строка). `CREATE … IF NOT EXISTS` карту не меняет (�
 | **`build.sh` шаг `== 7-solr`** | каждый такт, **после** `wiki_alias.sh` / `wiki_publish.sh`, **до** карточки сущности | **fail-closed**: `|| fail "компиляция словаря…"` — такт останавливается, код ≠ 0 |
 
 Компилятор: `ubuntu/serenedb/solr_synonyms_build.py compile --apply`.
-Источники — `search_entity_alias.aliases` (bi-классы) + `search_synonym_bridge.rule`
-(слот кэша моста на лету, PLAN §7-бис). 🔴 Писателя bridge в дереве нет
-(`grep` по `ubuntu/`: ни INSERT, ни MERGE) — таблица пустая, пока мост не
-реализован; компилятор читает её без падения. Имя словаря — `ASK_SOLR_SYNONYMS_DICT` / `SOLR_SYN_DICT`
+Источник — `search_entity_alias.aliases` (bi-классы). Слот
+`search_synonym_bridge` снят (С3, [`SYNONYM_BRIDGE_DECISION.md`](SYNONYM_BRIDGE_DECISION.md)):
+писателя не было, целевой кэш «моста на лету» — та же alias-таблица.
+Имя словаря — `ASK_SOLR_SYNONYMS_DICT` / `SOLR_SYN_DICT`
 (умолч. `search_dict_syn`), то же, что `-v solr_syn_dict` в `corpus_init` /
 `corpus_precheck`. DDL уходит **файлом** в
 `${CSV_DIR:-/var/lib/serenedb}/solr_synonyms_<dict>.sql` (argv ломается раньше —

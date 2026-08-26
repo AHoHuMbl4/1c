@@ -33,7 +33,7 @@ inline из данных, не из кода).
 |---|---|---|---|
 | 1 | `measure_resolver.py` (бывш. `TERMS = ["спб", "питере", …]`) | Список городов/термов конкретной базы в исполняемом коде стендового замера | **починено** — термы только из `argv`; без аргументов usage+код 2; замок `test_measure_resolver_terms.py` **4/0** |
 | 2 | `solr_synonyms_build.py:29-30` `MAX_RULES`/`MAX_BYTES` | Числовые потолки карты | **законно**: бюджет движка по живому замеру `F6_SYNONYMS_FACTS` §3.2; сверх лимита — `LimitError`, тихой обрезки нет (п. 13) |
-| 3 | `solr_synonyms_build.py` | Имена `search_entity_alias` / `search_synonym_bridge` / `search_dict_syn` | **законно**: имена **наших** служебных таблиц/словаря (контракт корпуса), не сущностей 1С; override через env/`--alias-table`/`--dict` |
+| 3 | `solr_synonyms_build.py` | Имена `search_entity_alias` / `search_dict_syn` | **законно**: имена **наших** служебных таблиц/словаря (контракт корпуса), не сущностей 1С; override через env/`--alias-table`/`--dict`. Слот `search_synonym_bridge` снят (С3) |
 | 4 | `corpus_build.sql` §1-кватер (~164–370) | `informationregister_%`, `chartofcharacteristictypes_%`, `Ref_Key`, `Description`, `*_Key`, `Edm.*` | **законно**: префиксы и поля **платформенного** OData 1С из `$metadata` / витрины; имён конфигурации («Календарь», «ДниНедели», «Рабочий») в SQL нет (замок meta **30/0**) |
 | 5 | `corpus_build.sql` §1-кватер `ORDER BY prop LIMIT 1` | Выбор колонки даты/ключа/часов при нескольких кандидатах | **законно**: стабильный структурный выбор, затем уточнение join-ом витрины (`tmp3_cal_keyhits` / `besthour`); не список слов и не имя сущности |
 | 6 | `corpus_init.sql` / `build.sh` / precheck Ф6.3 | Пустая заготовка `solr_synonyms`, `SOLR_SYN_DICT` из env | **законно**: словарь наполняется из таблиц (`solr_synonyms_build`); имя не имя базы клиента |
@@ -58,7 +58,7 @@ inline из данных, не из кода).
 
 **Пустой результат по диффам Ф6 production-пути:** в добавленном коде словаря
 синонимов, карты календаря, IVF-резолвера, native freshness и SQL-RRF **имён
-сущностей/счетов и языковых списков слов данных нет** — слова живут в alias/bridge/
+сущностей/счетов и языковых списков слов данных нет** — слова живут в alias /
 `search_meta`/`search_calendar_map` либо приходят из `$metadata`.
 
 ## Замки (офлайн, 25.08)

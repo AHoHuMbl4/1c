@@ -188,17 +188,10 @@ CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict_stem (
 -- ASK_SOLR_SYNONYMS_DICT → умолч. search_dict_syn), не имя базы клиента.
 -- Карта SYNONYMS здесь пустая-заготовка: IF NOT EXISTS карту не обновляет
 -- (ловушка §5.2 фактуры). Наполнение — DROP+CREATE файлом после wiki_alias
--- (`solr_synonyms_build.py`). Индекс корпуса не трогаем — только ts_lexize.
---
--- Кэш «моста на лету» (PLAN_UPGRADE_NATIVE §7-бис): слот под подтверждённые
--- связки, которые компилятор solr_synonyms_build.py читает рядом с
--- search_entity_alias. 🔴 Писателя в дереве нет (grep 25.08: ни INSERT, ни
--- MERGE в search_synonym_bridge) — мост на лету ещё не реализован (§7 плана:
--- отдельная работа). Таблица пустая по построению, пока мост не начнёт писать.
-CREATE TABLE IF NOT EXISTS search_synonym_bridge (
-  rule VARCHAR,
-  seen_at TIMESTAMP);
-GRANT SELECT ON search_synonym_bridge TO serene_ro;
+-- (`solr_synonyms_build.py` ← только `search_entity_alias`). Индекс корпуса
+-- не трогаем — только ts_lexize. Orphan-слот кэша моста снят (С3,
+-- docs/SYNONYM_BRIDGE_DECISION.md): писателя не было, целевой кэш —
+-- alias-таблица.
 
 CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS :"solr_syn_dict" (
   template = 'solr_synonyms',
@@ -283,7 +276,7 @@ SELECT 'объекты поиска на месте' AS шаг,
           AND table_name IN ('search_corpus','resolver_index','search_tables',
                              'search_sources','search_meta','search_balance_map','search_calendar_map',
                              'build_state','search_refcols','search_fork_class',
-                             'search_fork_label','search_synonym_bridge')) AS таблиц,
+                             'search_fork_label')) AS таблиц,
        (SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'search_idx') AS индексов,
        (SELECT CASE WHEN ts_lexize(:'solr_syn_dict', 'x') IS NOT NULL
                THEN 1 ELSE 0 END) AS solr_syn_dict_ok;

@@ -45,6 +45,24 @@ def _restore(saved):
     A.ASK_SALES_RANK_CANON = os.environ.get("ASK_SALES_RANK_CANON", "0") == "1"
 
 
+def _ef_flag(on):
+    saved = os.environ.get("ASK_ENTITY_FORM")
+    if on:
+        os.environ["ASK_ENTITY_FORM"] = "1"
+    else:
+        os.environ.pop("ASK_ENTITY_FORM", None)
+    A.ASK_ENTITY_FORM = os.environ.get("ASK_ENTITY_FORM", "0") == "1"
+    return saved
+
+
+def _ef_restore(saved):
+    if saved is None:
+        os.environ.pop("ASK_ENTITY_FORM", None)
+    else:
+        os.environ["ASK_ENTITY_FORM"] = saved
+    A.ASK_ENTITY_FORM = os.environ.get("ASK_ENTITY_FORM", "0") == "1"
+
+
 t("ASK_SALES_RANK_CANON default off", A.ASK_SALES_RANK_CANON is False)
 
 _NAMES = ["Всего", "Количество", "Себестоимость", "СуммаНДС", "Курс"]
@@ -259,18 +277,82 @@ try:
         ["Всего", "СуммаНДС"], _intent_top3, _q_top3, _ALS, product_axis=True)
     t("rule: product_axis без qty-меры → None",
       _m9 is None, (_m9, _how9))
-    # call-site: product_axis блокирует money-fallback
-    _pa = True
-    _sm, _how = A.sales_rank_canon_measure(
-        _NAMES, _intent_top3, _q_top3, _ALS, product_axis=_pa)
-    if (not _sm and not _pa
-            and not A._rank_wants_quantity(_q_top3)):
-        _sm = A.sales_money_measure(_NAMES, _ALS)
-    if not _sm:
-        _sm = A.sales_qty_measure(_NAMES, _ALS)
-    t("rule: call-site sim топ-3 товара → Количество не Всего",
-      _sm == "Количество", _sm)
+    # живой путь answer(): sales_rank_resolve_measure (не inline fallback)
+    _sm_live, _how_live = A.sales_rank_resolve_measure(
+        _NAMES, _intent_top3, _q_top3, _ALS,
+        src="accumulationregister_реализациятмц", axes=_AX_PROD)
+    t("live: resolve_measure топ-3 товара → Количество",
+      _sm_live == "Количество" and _how_live in ("sales_qty_canon", "sales_rank_hint_canon"),
+      (_sm_live, _how_live))
+    # client rank через тот же resolver → money
+    _sm_cli, _how_cli = A.sales_rank_resolve_measure(
+        _NAMES, {"want": "list", "kind": "клиент"},
+        "какой клиент больше всех купил в этом месяце", _ALS,
+        src="accumulationregister_реализациятмц", axes=_AX_CLIENT)
+    t("live: resolve_measure клиент → Всего",
+      _sm_cli == "Всего" and _how_cli == "sales_rank_money",
+      (_sm_cli, _how_cli))
+    # ранний rank_measure_hint не должен обходить resolver на rank×sales
+    _eng_top3 = A.sales_rank_engaged(
+        _intent_top3, {}, _q_top3,
+        ["accumulationregister_реализациятмц"])
+    t("live: rank_sales_early для топ-3 товара",
+      _eng_top3, _eng_top3)
+    _mh_early = A.rank_measure_hint(_NAMES, _intent_top3, _q_top3, _ALS)
+    t("live: hint есть, но answer пропускает при engaged",
+      _mh_early == "Количество" and _eng_top3,
+      (_mh_early, _eng_top3))
 finally:
+    _restore(_sv)
+
+# ── K-regress: мера ранга не имеет права на compare-путь ─────────────────────
+# [замер 26.08 okna] после sales_rank_resolve_measure compare «неделя лучше/хуже»
+# ушёл в qty через engaged(want=list)+product_axis fallback → FAIL want=money-diff.
+# Домен: sales_rank_engaged только для ранжирования; compare → sum/money.
+_q_cmp_week = "эта неделя лучше прошлой или хуже?"
+_intent_cmp_list = {"want": "list", "kind": "продажи"}
+_AX_FALLBACK_PROD = [
+    {"col": "ТМЦ", "target_src": "catalog_номенклатура"},
+    {"col": "Контрагент", "target_src": "catalog_контрагенты"},
+]
+_sv = _flag(True)
+_sv_ef = _ef_flag(True)
+_old_lift = A.sales_lift_possible
+_old_hits = A.kind_axis_hits
+_old_rar = A.rank_axis_resolve
+try:
+    A.sales_lift_possible = lambda cands: True
+    A.kind_axis_hits = lambda axes, text: []
+    A.rank_axis_resolve = lambda src, axes, intent, question, plan=None: (
+        (axes[0]["col"], []) if axes else (None, []))
+    t("regress: compare intent при want=list",
+      A.sales_compare_intent(_intent_cmp_list, _q_cmp_week))
+    _eng_cmp = A.sales_rank_engaged(
+        _intent_cmp_list, {}, _q_cmp_week, ["document_реализациятмц"])
+    t("regress: sales_rank_engaged OFF на compare",
+      not _eng_cmp, _eng_cmp)
+    t("regress: force_money ON на compare (sum-путь)",
+      A.sales_force_money_measure(_intent_cmp_list, _q_cmp_week))
+    # если resolve всё же позвали — ответный путь не должен: qty через
+    # product_axis fallback при отсутствии hit по вопросу = влияние ранга.
+    _sm_cmp, _how_cmp = A.sales_rank_resolve_measure(
+        _NAMES, _intent_cmp_list, _q_cmp_week, _ALS,
+        src="accumulationregister_реализациятмц", axes=_AX_FALLBACK_PROD,
+        plan={}, diag={})
+    t("regress: resolve на compare не навязывает qty через ось",
+      not (_sm_cmp == "Количество" and _how_cmp == "sales_qty_canon"
+           and _eng_cmp),
+      (_sm_cmp, _how_cmp, _eng_cmp))
+    # топ-N товара по-прежнему engaged (класс, который чинили)
+    t("regress: топ-3 товара всё ещё engaged",
+      A.sales_rank_engaged(
+          _intent_top3, {}, _q_top3,
+          ["accumulationregister_реализациятмц"]))
+finally:
+    A.sales_lift_possible = _old_lift
+    A.kind_axis_hits = _old_hits
+    A.rank_axis_resolve = _old_rar
+    _ef_restore(_sv_ef)
     _restore(_sv)
 
 # ── sum-путь при флаге 0 и 1 без rank не меняется ────────────────────────────

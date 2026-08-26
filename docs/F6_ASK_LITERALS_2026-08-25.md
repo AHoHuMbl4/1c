@@ -683,8 +683,7 @@ K5 языковых DATA не добавил.
 |---|---|---|
 | `search_entity_alias` | синонимы сущностей (wiki-alias) | `ubuntu/serenedb/corpus_init.sql` |
 | `search_measure_alias` | алиасы величин | `ubuntu/serenedb/corpus_init.sql` |
-| `search_synonym_bridge` | кэш моста синонимов | `ubuntu/serenedb/corpus_init.sql` |
-| `search_dict_syn` + Solr map | query-side синонимы (Ф6.3) | `solr_synonyms_build.py` / такт 7-solr |
+| `search_dict_syn` + Solr map | query-side синонимы (Ф6.3; источник — alias) | `solr_synonyms_build.py` / такт 7-solr |
 | `period_relative_forms` | относительные окна («прошлую неделю»…) | `search_meta` + файл `ubuntu/serenedb/period_relative_forms.json` |
 | `search_meta` (`balance_registers`, calendar_*) | регистры/карта из `$metadata` | сборка корпуса |
 

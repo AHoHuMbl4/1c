@@ -437,12 +437,12 @@ psql "$DSN" -q -f coverage_build.sql || fail "перепись полноты"
 ./wiki_alias.sh "${WIKI_ALIAS_PER_TACT:-100}" || echo "алиасы: шаг не прошёл, такт продолжается" >&2
 ./wiki_publish.sh || echo "вики: шаг не прошёл, такт продолжается" >&2
 
-# Ф6.3: Solr-словарь синонимов из таблиц — каждый такт, после наполнения alias/bridge.
+# Ф6.3: Solr-словарь синонимов из search_entity_alias — каждый такт, после wiki_alias.
 # wiki_alias тоже зовёт compile (мягко); здесь — fail-closed: лимит / нет таблиц / нет
 # прав видны в journal и в коде возврата такта. DROP+CREATE файлом (IF NOT EXISTS карту
 # не меняет — F6_SYNONYMS_FACTS §5.2); пустые источники — словарь не трогаем (код 0).
 # Имя — тот же SOLR_SYN_DICT / ASK_SOLR_SYNONYMS_DICT, что уходит в corpus_init.
-echo "== 7-solr. словарь синонимов (solr_synonyms ← alias+bridge)"
+echo "== 7-solr. словарь синонимов (solr_synonyms ← alias)"
 SOLR_OUT="${CSV_DIR:-/var/lib/serenedb}/solr_synonyms_${SOLR_SYN_DICT}.sql"
 python3 ./solr_synonyms_build.py compile \
   --dsn "$DSN" --dict "$SOLR_SYN_DICT" \

@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""Замки: единицы измерения — из данных, не из слов.
+"""Замки: единица — от роли выбранной меры, не от валюты документа.
 
-Пять замков:
-1. Единица из данных: money=True → env, money=False → пусто
+1. Денежная роль + money=True → env; qty/unknown + money=True → пусто
 2. Без данных — без единицы: пустой MONEY_UNIT → пустая единица
 3. «unknown» не уходит в текст: render_atom_pair не печатает (unknown)
 4. rank fallback = compose по единице: rank_leader_answer_text принимает unit
 5. env перекрывает: ASK_MONEY_UNIT заполнен → появляется в ответе
+6. atom_from_agg / rank_leader_atom — тот же путь
+8. Живой дефект 26.08 + англ. меры через алиасы данных
 """
 import sys, os, re
 sys.path.insert(0, os.path.dirname(__file__))
@@ -26,27 +27,29 @@ def t(name, cond, detail=""):
         print("FAIL-", name, "|", detail)
 
 
-# ═══ 1. Единица из данных (money flag, не словарь) ═══════════════════════════
+# ═══ 1. Единица от роли меры (не от answer_money / валюты документа) ═════════
 
-t("unit_data: money=True → env (MONEY_UNIT)",
-  A._unit_for_measure("Сумма", money=True) == A.MONEY_UNIT, "")
-t("unit_data: money=False → пусто",
-  A._unit_for_measure("Количество", money=False) == "", "")
-t("unit_data: нерусская мера money=True → env",
-  A._unit_for_measure("Cantitate", money=True) == A.MONEY_UNIT, "")
-t("unit_data: нерусская мера money=False → пусто",
-  A._unit_for_measure("Miktar", money=False) == "", "")
+t("unit_data: money-роль + money=True → env (MONEY_UNIT)",
+  A._unit_for_measure("Total", money=True) == A.MONEY_UNIT, "")
+t("unit_data: money=False → пусто (даже money-роль)",
+  A._unit_for_measure("Total", money=False) == "", "")
+t("unit_data: qty-роль + money=True → пусто (живой дефект 26.08)",
+  A._unit_for_measure("Quantity", money=True) == "", "")
+t("unit_data: qty EN money=False → пусто",
+  A._unit_for_measure("Quantity", money=False) == "", "")
 t("unit_data: None measure money=False → пусто",
   A._unit_for_measure(None, money=False) == "", "")
+t("unit_data: None measure money=True → пусто (не выдумывать)",
+  A._unit_for_measure(None, money=True) == "", "")
 
 # ═══ 2. Без данных — без единицы ═════════════════════════════════════════════
 
 saved = A.MONEY_UNIT
 A.MONEY_UNIT = ""
-t("no_data: MONEY_UNIT пуст, money=True → пустая единица",
-  A._unit_for_measure("Сумма", money=True) == "", "")
+t("no_data: MONEY_UNIT пуст, money=True money-роль → пустая единица",
+  A._unit_for_measure("Total", money=True) == "", "")
 t("no_data: MONEY_UNIT пуст, money=False → пусто",
-  A._unit_for_measure("Количество", money=False) == "", "")
+  A._unit_for_measure("Quantity", money=False) == "", "")
 A.MONEY_UNIT = saved
 
 # ═══ 3. «unknown» не уходит в текст ══════════════════════════════════════════
@@ -98,11 +101,11 @@ t("rank_unit: UNIT_UNKNOWN — нет в тексте",
 saved2 = A.MONEY_UNIT
 A.MONEY_UNIT = "₺"
 t("env_override: MONEY_UNIT=₺ → _unit_for_measure отдаёт ₺",
-  A._unit_for_measure("СуммаДокумента", money=True) == "₺", "")
+  A._unit_for_measure("AmountTotal", money=True) == "₺", "")
 
 atom_env = A.build_answer_atom(
     exact_value=77.0, measure_label="Итого",
-    unit_or_currency=A._unit_for_measure("СуммаДокумента", money=True))
+    unit_or_currency=A._unit_for_measure("AmountTotal", money=True))
 pair_env = A.render_atom_pair(atom_env)
 t("env_override: ₺ в render_atom_pair",
   pair_env is not None and "₺" in pair_env, pair_env)
@@ -114,14 +117,19 @@ saved3 = A.MONEY_UNIT
 A.MONEY_UNIT = "€"
 agg_simple = {"count": 10, "sum": 50000.0, "grain": "row"}
 atom_agg = A.atom_from_agg(agg_simple, operation="sum",
-                            measure_id="Сумма", money=True)
-t("atom_agg: money=True → unit = MONEY_UNIT",
+                            measure_id="Total", money=True)
+t("atom_agg: money-роль → unit = MONEY_UNIT",
   atom_agg.get("unit_or_currency") == "€", atom_agg.get("unit_or_currency"))
 
-atom_agg_qty = A.atom_from_agg(agg_simple, operation="count",
-                                measure_id="Количество", money=False)
-t("atom_agg: money=False → unit пусто",
+atom_agg_qty = A.atom_from_agg(agg_simple, operation="sum",
+                                measure_id="Quantity", money=True)
+t("atom_agg: qty + money=True (answer_money) → unit пусто",
   atom_agg_qty.get("unit_or_currency") == "", atom_agg_qty.get("unit_or_currency"))
+
+atom_agg_cnt = A.atom_from_agg(agg_simple, operation="count",
+                                measure_id="Quantity", money=False)
+t("atom_agg: money=False → unit пусто",
+  atom_agg_cnt.get("unit_or_currency") == "", atom_agg_cnt.get("unit_or_currency"))
 A.MONEY_UNIT = saved3
 
 # ═══ 7. postprocess_money_answer_text = identity ═════════════════════════════
@@ -131,6 +139,61 @@ t("postprocess: identity — текст не меняется",
   A.postprocess_money_answer_text(sample, unit="лей") == sample, "")
 t("postprocess: пустой текст — identity",
   A.postprocess_money_answer_text("") == "", "")
+
+# ═══ 8. Живой дефект 26.08: qty + валюта базы ≠ денежная единица ═════════════
+
+saved4 = A.MONEY_UNIT
+A.MONEY_UNIT = "лей"
+_names = ["Total", "Quantity"]
+_als = {"Total": ["amount", "revenue"], "Quantity": ["qty", "pieces"]}
+
+t("live: qty + money=True + MONEY_UNIT=лей → пусто",
+  A._unit_for_measure("Quantity", money=True, names=_names, alias_by=_als) == "",
+  A._unit_for_measure("Quantity", money=True, names=_names, alias_by=_als))
+t("live: money-роль + money=True → лей",
+  A._unit_for_measure("Total", money=True, names=_names, alias_by=_als) == "лей",
+  A._unit_for_measure("Total", money=True, names=_names, alias_by=_als))
+t("live: неизвестная мера Frobnitz → пусто (не выдумывать)",
+  A._unit_for_measure("Frobnitz", money=True, names=["Frobnitz", "Other"]) == "",
+  A._unit_for_measure("Frobnitz", money=True, names=["Frobnitz", "Other"]))
+
+# Англоязычные выдуманные меры через алиасы данных (не RU-имена)
+_en_names = ["WidgetRevenue", "WidgetCount"]
+_en_als = {"WidgetRevenue": ["amount", "total"], "WidgetCount": ["quantity", "qty"]}
+t("en: WidgetCount qty-роль + money=True → пусто",
+  A._unit_for_measure("WidgetCount", money=True, names=_en_names, alias_by=_en_als) == "", "")
+t("en: WidgetRevenue money-роль + money=True → лей",
+  A._unit_for_measure("WidgetRevenue", money=True, names=_en_names, alias_by=_en_als) == "лей", "")
+t("en: dim WidgetCount → qty",
+  A._measure_dimension("WidgetCount", names=_en_names, alias_by=_en_als) == "qty", "")
+t("en: dim WidgetRevenue → money",
+  A._measure_dimension("WidgetRevenue", names=_en_names, alias_by=_en_als) == "money", "")
+
+agg_live = {
+    "count": 100, "sum": 5000.0, "grain": "group",
+    "groups": [{"name": "Widget A", "value": 2675.0}],
+    "n_groups": 3,
+}
+atom_live = A.rank_leader_atom(agg_live, "Quantity", True)
+t("live: rank_leader_atom qty → unit пусто",
+  atom_live is not None and atom_live.get("unit_or_currency") == "",
+  atom_live.get("unit_or_currency") if atom_live else None)
+t("live: rank_leader_atom qty measure_id сохранился",
+  atom_live is not None and atom_live.get("measure_id") == "Quantity", "")
+pair_live = A.render_atom_pair(atom_live) if atom_live else None
+t("live: render qty — нет «лей»",
+  pair_live is not None and "лей" not in pair_live, pair_live)
+
+atom_money = A.rank_leader_atom(agg_live, "Total", True)
+t("live: rank_leader_atom money → unit лей",
+  atom_money is not None and atom_money.get("unit_or_currency") == "лей",
+  atom_money.get("unit_or_currency") if atom_money else None)
+txt_qty = A.rank_groups_answer_text(
+    agg_live, "Quantity",
+    unit=A._unit_for_measure("Quantity", True, names=_names, alias_by=_als), k=3)
+t("live: rank text qty — имя есть, «лей» нет",
+  txt_qty is not None and "Widget A" in txt_qty and "лей" not in txt_qty, txt_qty)
+A.MONEY_UNIT = saved4
 
 # ═══ grep-замок: «шт» / «руб» / RU-слов для единицы в _unit_for_measure нет ═
 

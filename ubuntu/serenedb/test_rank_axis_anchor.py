@@ -268,15 +268,17 @@ for _node in _ast.walk(_tree):
             break
 t("grep-замок: литерала «руб.» в serene_ask.py нет (код)", not _has_rub, "")
 
-# _unit_for_measure: единица из данных (money flag), не из словаря
+# _unit_for_measure: единица от роли меры, не от answer_money вслепую
 t("_unit_for_measure: money=False → пусто",
-  A._unit_for_measure("Количество", money=False) == "", A._unit_for_measure("Количество", money=False))
-t("_unit_for_measure: money=True → MONEY_UNIT (env)",
-  A._unit_for_measure("Сумма", money=True) == A.MONEY_UNIT, A._unit_for_measure("Сумма", money=True))
+  A._unit_for_measure("Quantity", money=False) == "", A._unit_for_measure("Quantity", money=False))
+t("_unit_for_measure: money-роль → MONEY_UNIT (env)",
+  A._unit_for_measure("Total", money=True) == A.MONEY_UNIT, A._unit_for_measure("Total", money=True))
 t("_unit_for_measure: None money=False → пусто",
   A._unit_for_measure(None, money=False) == "", "")
-t("_unit_for_measure: неизвестная мера money=True → env",
-  A._unit_for_measure("Cantitate", money=True) == A.MONEY_UNIT, "")
+t("_unit_for_measure: qty + money=True → пусто (не валюта)",
+  A._unit_for_measure("Quantity", money=True) == "", "")
+t("_unit_for_measure: неизвестная мера money=True → пусто",
+  A._unit_for_measure("Cantitate", money=True) == "", "")
 
 # rank tail guard: no bare numbers right after `·`
 demo_txt = "Наибольшее значение по рангу."

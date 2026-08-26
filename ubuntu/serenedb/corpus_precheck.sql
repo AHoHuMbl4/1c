@@ -93,24 +93,11 @@ SELECT CASE WHEN try_cast(current_setting('threads') AS BIGINT) IS NOT NULL
                   || ' и --io_threads=8, затем перезапустите движок; на малых юнитах'
                   || ' (≤8 ГиБ RAM) допустимо BUILD_THREAD_MIN=число vCPU') END;
 
--- 7. Ф6.3 словарь синонимов. Урок search_meta: новая таблица/словарь → GRANT в init
---    + проверка здесь. Без словаря ts_lexize(ASK_SOLR_SYNONYMS_DICT) под флагом
---    молча деградирует в RuntimeError→группы как есть; с пустой картой passthrough
---    — норма до первого wiki_alias compile.
-SELECT CASE WHEN count(*) = 0
-       THEN error('нет таблицы search_synonym_bridge — сначала corpus_init.sql') END
-FROM duckdb_tables()
-WHERE database_name = current_database() AND table_name = 'search_synonym_bridge';
-
-SELECT CASE
-  WHEN count(*) FILTER (WHERE grantee = 'serene_ro'
-                        AND table_name = 'search_synonym_bridge') = 0
-  THEN error('serene_ro потерял SELECT на search_synonym_bridge — кэш моста для '
-             || 'solr_synonyms будет молча пуст')
-  END
-FROM information_schema.role_table_grants
-WHERE privilege_type = 'SELECT' AND table_name = 'search_synonym_bridge';
-
+-- 7. Ф6.3 словарь синонимов. Без словаря ts_lexize(ASK_SOLR_SYNONYMS_DICT)
+--    под флагом молча деградирует в RuntimeError→группы как есть; с пустой
+--    картой passthrough — норма до первого wiki_alias compile.
+--    Источник карты — только search_entity_alias (GRANT на неё — выше в init;
+--    orphan-слот кэша моста снят, С3 / SYNONYM_BRIDGE_DECISION.md).
 -- Словарь существует и отвечает: имя из -v solr_syn_dict (как в corpus_init).
 SELECT CASE WHEN ts_lexize(:'solr_syn_dict', 'x') IS NULL
        THEN error('словарь ' || :'solr_syn_dict' || ' не отвечает ts_lexize — '

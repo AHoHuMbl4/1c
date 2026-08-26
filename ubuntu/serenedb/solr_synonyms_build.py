@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Ф6.3: компиляция Solr-карты синонимов из таблиц → DROP+CREATE словарь файлом.
 
-Списков слов в коде нет: правила приходят из search_entity_alias (wiki-alias)
-и search_synonym_bridge (слот кэша моста на лету, PLAN §7-бис). Читатель —
-этот модуль; писателя bridge в дереве нет (таблица обычно пуста). Здесь только
+Списков слов в коде нет: правила приходят из search_entity_alias (wiki-alias).
+Отдельный orphan-слот кэша моста снят (С3, docs/SYNONYM_BRIDGE_DECISION.md):
+писателя не было, целевой кэш «моста на лету» — та же alias-таблица. Здесь только
 формат Solr и лимиты по фактуре docs/F6_SYNONYMS_FACTS.md §3.2 (~20 000 правил
 / ~400 КБ inline OK; длиннее — честная ошибка, п. 13 TARGET).
 
@@ -32,7 +32,6 @@ MAX_BYTES = 400_000
 
 DEFAULT_DICT = "search_dict_syn"
 ALIAS_TABLE_DEFAULT = "search_entity_alias"
-BRIDGE_TABLE = "search_synonym_bridge"
 
 
 class LimitError(ValueError):
@@ -88,30 +87,8 @@ def rule_from_alias_csv(aliases: str) -> str | None:
     return ", ".join(uniq)
 
 
-def rule_one_way(lhs: str, rhs: str) -> str | None:
-    """Одностороннее правило Solr: lhs => rhs (каждый бок — один или несколько термов)."""
-    left = [escape_term(t) for t in split_alias_csv(lhs)]
-    right = [escape_term(t) for t in split_alias_csv(rhs)]
-    left = [t for t in left if t]
-    right = [t for t in right if t]
-    if not left or not right:
-        return None
-    return "%s => %s" % (", ".join(left), ", ".join(right))
-
-
-def rule_from_bridge_row(rule: str) -> str | None:
-    """Строка кэша моста уже в Solr-формате; нормализуем термы и экранирование."""
-    raw = (rule or "").strip()
-    if not raw or raw.startswith("#"):
-        return None
-    if "=>" in raw:
-        left, right = raw.split("=>", 1)
-        return rule_one_way(left, right)
-    return rule_from_alias_csv(raw)
-
-
-def compile_rules(alias_rows, bridge_rows=None) -> str:
-    """Собрать Solr-карту: одна строка — одно правило. Источники раздельно по смыслу."""
+def compile_rules(alias_rows) -> str:
+    """Собрать Solr-карту: одна строка — одно правило. Источник — alias CSV."""
     rules = []
     seen = set()
 
@@ -129,15 +106,6 @@ def compile_rules(alias_rows, bridge_rows=None) -> str:
             add(rule_from_alias_csv(row.get("aliases") or ""))
         else:
             add(rule_from_alias_csv(str(row)))
-
-    for row in bridge_rows or []:
-        if isinstance(row, dict):
-            if "lhs" in row or "rhs" in row:
-                add(rule_one_way(row.get("lhs") or "", row.get("rhs") or ""))
-            else:
-                add(rule_from_bridge_row(row.get("rule") or ""))
-        else:
-            add(rule_from_bridge_row(str(row)))
 
     rules.sort(key=lambda r: r.lower())
     return "\n".join(rules)
@@ -170,8 +138,6 @@ def render_ddl(dict_name: str, solr_map: str) -> str:
     body = [
         "-- Ф6.3 solr_synonyms: пересоздание карты",
         "-- источник wiki-alias: search_entity_alias.aliases (двусторонние классы)",
-        "-- источник bridge:     search_synonym_bridge.rule "
-        "(слот моста на лету; писателя в дереве нет — обычно пусто)",
         "-- Доки: https://docs.serenedb.com/sql/statements/create_text_search_dictionary/solr-synonyms",
         "\\set ON_ERROR_STOP on",
         "DROP TEXT SEARCH DICTIONARY IF EXISTS %s;" % name,
@@ -184,46 +150,33 @@ def render_ddl(dict_name: str, solr_map: str) -> str:
     return "\n".join(body)
 
 
-def fetch_source_rows(dsn: str, alias_table: str) -> tuple[list[dict], list[dict]]:
-    """Один SELECT на источник → JSON. Обработка классов — в compile_rules, не в SQL-цикле."""
+def fetch_source_rows(dsn: str, alias_table: str) -> list[dict]:
+    """Один SELECT → JSON рядов alias. Обработка классов — в compile_rules, не в SQL-цикле."""
     # Имя таблицы — только [A-Za-z0-9_], как ALIAS_TABLE у wiki_alias.
     if not alias_table or not all(c.isalnum() or c == "_" for c in alias_table):
         raise ValueError("некорректное имя alias-таблицы: %r" % alias_table)
 
-    def one(sql: str) -> list:
-        r = subprocess.run(
-            ["psql", dsn, "-tAc", sql],
-            capture_output=True, text=True, check=False)
-        if r.returncode != 0:
-            err = (r.stderr or r.stdout or "").strip()
-            # Нет таблицы bridge на старой базе — пустой источник, не падение такта.
-            if "search_synonym_bridge" in sql and (
-                    "does not exist" in err.lower()
-                    or "not found" in err.lower()
-                    or "Catalog Error" in err):
-                return []
-            raise RuntimeError("psql: %s" % (err[:400] or "exit %d" % r.returncode))
-        raw = (r.stdout or "").strip()
-        if not raw or raw in ("null", "NULL"):
-            return []
-        try:
-            data = json.loads(raw)
-        except ValueError as e:
-            raise RuntimeError("psql JSON: %s" % e) from e
-        return data if isinstance(data, list) else []
-
-    # Источник wiki-alias (комментарий в DDL).
     # list() по пустому набору → NULL; coalesce даёт строку «[]» для json.loads.
+    # Доки: SELECT / to_json / list — штатный путь выгрузки; карта пишется
+    # CREATE TEXT SEARCH DICTIONARY › solr_synonyms (SYNONYMS inline).
     alias_sql = (
         "SELECT coalesce("
         "(SELECT to_json(list(struct_pack(aliases := aliases))) "
         " FROM %s WHERE coalesce(trim(aliases), '') <> ''), '[]')" % alias_table)
-    # Источник кэш моста.
-    bridge_sql = (
-        "SELECT coalesce("
-        "(SELECT to_json(list(struct_pack(rule := rule))) "
-        " FROM %s WHERE coalesce(trim(rule), '') <> ''), '[]')" % BRIDGE_TABLE)
-    return one(alias_sql), one(bridge_sql)
+    r = subprocess.run(
+        ["psql", dsn, "-tAc", alias_sql],
+        capture_output=True, text=True, check=False)
+    if r.returncode != 0:
+        err = (r.stderr or r.stdout or "").strip()
+        raise RuntimeError("psql: %s" % (err[:400] or "exit %d" % r.returncode))
+    raw = (r.stdout or "").strip()
+    if not raw or raw in ("null", "NULL"):
+        return []
+    try:
+        data = json.loads(raw)
+    except ValueError as e:
+        raise RuntimeError("psql JSON: %s" % e) from e
+    return data if isinstance(data, list) else []
 
 
 def compile_from_db(dsn: str, alias_table: str, dict_name: str, out_path: str) -> int:
@@ -231,8 +184,8 @@ def compile_from_db(dsn: str, alias_table: str, dict_name: str, out_path: str) -
 
     Возвращает 0 и не трогает out_path при пустой карте (старый файл не применяется).
     """
-    alias_rows, bridge_rows = fetch_source_rows(dsn, alias_table)
-    solr_map = compile_rules(alias_rows, bridge_rows)
+    alias_rows = fetch_source_rows(dsn, alias_table)
+    solr_map = compile_rules(alias_rows)
     if not solr_map.strip():
         print("solr synonyms: пустые источники — словарь не пересоздаётся", file=sys.stderr)
         return 0
@@ -253,7 +206,7 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser(description="Ф6.3 compile solr_synonyms dictionary")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    c = sub.add_parser("compile", help="SELECT из alias+bridge → DDL-файл")
+    c = sub.add_parser("compile", help="SELECT из search_entity_alias → DDL-файл")
     c.add_argument("--dsn", default=os.environ.get(
         "SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres"))
     c.add_argument("--dict", default=os.environ.get(
@@ -269,9 +222,8 @@ def main(argv=None) -> int:
     w.add_argument("--map-file", required=True)
     w.add_argument("--out", required=True)
 
-    t = sub.add_parser("compile-rows", help="JSON рядов → карта/DDL (оффлайн)")
+    t = sub.add_parser("compile-rows", help="JSON рядов alias → карта/DDL (оффлайн)")
     t.add_argument("--alias-json", default="")
-    t.add_argument("--bridge-json", default="")
     t.add_argument("--dict", default=DEFAULT_DICT)
     t.add_argument("--out-map", default="")
     t.add_argument("--out-ddl", default="")
@@ -287,8 +239,7 @@ def main(argv=None) -> int:
 
     if args.cmd == "compile-rows":
         alias_rows = json.loads(open(args.alias_json, encoding="utf-8").read()) if args.alias_json else []
-        bridge_rows = json.loads(open(args.bridge_json, encoding="utf-8").read()) if args.bridge_json else []
-        solr_map = compile_rules(alias_rows, bridge_rows)
+        solr_map = compile_rules(alias_rows)
         check_limits(solr_map)
         if args.out_map:
             open(args.out_map, "w", encoding="utf-8").write(solr_map)

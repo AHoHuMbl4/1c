@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
-"""Оффлайн-замок Ф6.3 шаг 2: компиляция Solr-карты из alias/bridge без LLM/сети.
+"""Оффлайн-замок Ф6.3 шаг 2: компиляция Solr-карты из search_entity_alias без LLM/сети.
 
-(а) фиктивные строки → ожидаемая Solr-строка (bi / one-way / экранирование запятых);
+(а) фиктивные строки → ожидаемая Solr-строка (bi / экранирование запятых);
 (б) пустая alias-таблица → пустая карта, DDL не пишется / словарь не пересоздаётся;
-(в) сверх лимита → LimitError, не тихая обрезка (п. 13 TARGET).
+(в) сверх лимита → LimitError, не тихая обрезка (п. 13 TARGET);
+(г) слот search_synonym_bridge снят (С3): ветка bridge в сборке отсутствует.
 """
 from __future__ import annotations
 
+import inspect
 import os
 import sys
 import tempfile
@@ -34,19 +36,11 @@ alias_rows = [
     {"aliases": ""},
     {"aliases": "  zebra , yak  "},
 ]
-bridge_rows = [
-    {"rule": "laptop => notebook"},
-    {"lhs": "car", "rhs": "auto"},
-    {"rule": "tv, television, telly"},
-]
-got = B.compile_rules(alias_rows, bridge_rows)
+got = B.compile_rules(alias_rows)
 lines = got.splitlines()
 t("bi class from alias CSV", "alpha, beta, gamma" in lines, got)
 t("bi class trimmed", "zebra, yak" in lines, got)
 t("single term skipped", "one" not in lines and not any(l == "one" for l in lines), got)
-t("one-way from bridge rule", "laptop => notebook" in lines, got)
-t("one-way from lhs/rhs", "car => auto" in lines, got)
-t("bi from bridge rule", "television, telly, tv" in lines or "tv, television, telly" in lines, got)
 # порядок термов в bi-классе — как в источнике после escape; сортировка — по строкам правил
 t("rules sorted case-insensitive", lines == sorted(lines, key=str.lower), lines)
 
@@ -64,15 +58,15 @@ t("escaped comma in CSV input kept",
 t("raw escape_term for DDL safety", B.escape_term("foo,bar") == "foo\\,bar")
 
 # --- (б) пустая таблица ---
-empty_map = B.compile_rules([], [])
+empty_map = B.compile_rules([])
 t("empty sources → empty map", empty_map == "", repr(empty_map))
-empty_map2 = B.compile_rules([{"aliases": ""}, {"aliases": "solo"}], [])
+empty_map2 = B.compile_rules([{"aliases": ""}, {"aliases": "solo"}])
 t("only singles → empty map (no recreate)", empty_map2 == "", repr(empty_map2))
 
 with tempfile.TemporaryDirectory() as td:
     ddl_path = os.path.join(td, "out.sql")
     # simulate compile-rows empty: DDL not written
-    rc_map = B.compile_rules([], [{"rule": ""}])
+    rc_map = B.compile_rules([{"aliases": ""}])
     if not rc_map.strip():
         # не вызываем render — как compile_from_db
         wrote = False
@@ -116,7 +110,6 @@ ddl = B.render_ddl("search_dict_syn", "a, b\nlaptop => notebook")
 t("ddl has DROP", "DROP TEXT SEARCH DICTIONARY IF EXISTS search_dict_syn" in ddl, ddl[:200])
 t("ddl has CREATE solr_synonyms", "template = 'solr_synonyms'" in ddl, ddl[:300])
 t("ddl marks wiki-alias source", "search_entity_alias" in ddl)
-t("ddl marks bridge source", "search_synonym_bridge" in ddl)
 t("ddl embeds map", "a, b" in ddl and "laptop => notebook" in ddl)
 t("no synonym literals in module defaults beyond format",
   "остатк" not in open(B.__file__, encoding="utf-8").read()
@@ -125,6 +118,37 @@ t("no synonym literals in module defaults beyond format",
 # лимиты из фактуры
 t("MAX_RULES = 20000 (facts §3.2)", B.MAX_RULES == 20_000)
 t("MAX_BYTES = 400000 (facts §3.2)", B.MAX_BYTES == 400_000)
+
+# --- (г) С3: bridge-path снят — замок против возврата ---
+src = open(B.__file__, encoding="utf-8").read()
+t("no BRIDGE_TABLE const", "BRIDGE_TABLE" not in src and not hasattr(B, "BRIDGE_TABLE"))
+t("no search_synonym_bridge literal", "search_synonym_bridge" not in src)
+t("no rule_from_bridge_row", "rule_from_bridge_row" not in src
+  and not hasattr(B, "rule_from_bridge_row"))
+t("no rule_one_way helper", "rule_one_way" not in src and not hasattr(B, "rule_one_way"))
+t("no --bridge-json CLI", "--bridge-json" not in src)
+sig = inspect.signature(B.compile_rules)
+t("compile_rules takes only alias_rows",
+  list(sig.parameters) == ["alias_rows"], list(sig.parameters))
+t("ddl does not mark bridge source", "search_synonym_bridge" not in ddl
+  and "bridge" not in ddl.lower())
+
+root = os.path.dirname(os.path.abspath(__file__))
+init_sql = open(os.path.join(root, "corpus_init.sql"), encoding="utf-8").read()
+pre_sql = open(os.path.join(root, "corpus_precheck.sql"), encoding="utf-8").read()
+build_sh = open(os.path.join(root, "build.sh"), encoding="utf-8").read()
+t("corpus_init has no CREATE search_synonym_bridge",
+  "CREATE TABLE IF NOT EXISTS search_synonym_bridge" not in init_sql)
+t("corpus_precheck has no bridge table name",
+  "search_synonym_bridge" not in pre_sql)
+t("corpus_precheck no error about missing bridge table",
+  "нет таблицы search_" not in pre_sql
+  and "кэш моста для" not in pre_sql)
+t("build.sh echo is alias-only",
+  "alias+bridge" not in build_sh
+  and any(
+      "7-solr" in ln and "alias" in ln and "bridge" not in ln
+      for ln in build_sh.splitlines() if ln.lstrip().startswith("echo")))
 
 print()
 print("Итог:", PASS, "ok,", len(FAIL), "fail")

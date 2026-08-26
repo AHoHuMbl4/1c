@@ -156,9 +156,8 @@ with tempfile.TemporaryDirectory() as td:
 
 # --- (в) идемпотентность: одна карта → один и тот же DDL дважды ---
 alias_rows = [{"aliases": "alpha, beta"}, {"aliases": "gamma, delta, epsilon"}]
-bridge_rows = [{"rule": "laptop => notebook"}]
-m1 = B.compile_rules(alias_rows, bridge_rows)
-m2 = B.compile_rules(alias_rows, bridge_rows)
+m1 = B.compile_rules(alias_rows)
+m2 = B.compile_rules(alias_rows)
 t("compile_rules stable", m1 == m2 and bool(m1.strip()), repr(m1)[:120])
 try:
     B.check_limits(m1)
@@ -184,6 +183,14 @@ with tempfile.TemporaryDirectory() as td:
     rules = [ln for ln in m1.splitlines() if ln.strip()]
     t("no duplicate rules in map", len(rules) == len(set(r.lower() for r in rules)),
       rules)
+
+# С3: шаг такта не ссылается на снятый bridge-слот
+t("build has no alias+bridge wording", "alias+bridge" not in build)
+t("build has no search_synonym_bridge", "search_synonym_bridge" not in build)
+t("module has no bridge path",
+  "search_synonym_bridge" not in open(B.__file__, encoding="utf-8").read()
+  and not hasattr(B, "BRIDGE_TABLE")
+  and not hasattr(B, "rule_from_bridge_row"))
 
 print()
 print("Итог:", PASS, "ok,", len(FAIL), "fail")
