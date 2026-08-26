@@ -70,7 +70,8 @@ want = [("check-gates", 15, "Проверка: гейты не разоруже�
         # 🔴 Подавальщик диффа обязан стоять В ЦЕПОЧКЕ РАНЬШЕ снайпера-агента: тот читает
         # уже готовый файл вместо того, чтобы лезть в оболочку, которой ему могут не дать.
         ("prepare-diff", 15, "Дифф подан снайперу"),
-        ("check-live-probe", 20, "Проверка: живая проба okna до коммита serene_ask")]
+        ("check-live-probe", 20, "Проверка: живая проба okna до коммита serene_ask"),
+        ("check-gold-split", 15, "Проверка: код ответа и приёмочный набор не в одном коммите")]
 for name, timeout, msg in want:
     if any(name in h.get("command", "") for h in bash["hooks"]):
         print("  уже подключён:", name)
@@ -103,16 +104,54 @@ else
 fi
 
 echo "== 3-тер. конфиг Kimi рабочего аккаунта =="
-# 🔴 Канон проводки гейтов Kimi — work/hooks/kimi-config.toml; ставится сюда с root:root
-# 644 как ОПОРНАЯ ТОЧКА. Живой файл бинарь Kimi волен пересериализовать (так он
-# персистит модель/каталог — замер 06.08): владелец и комментарии теряются, и это НЕ
-# нарушение. Сторож сверяет содержимое проводки (пары событие+команда на root-скрипты),
-# поэтому перезапись движка коммитов не останавливает, а отсоединение гейта — останавливает.
+# 🔴 Канон проводки гейтов — work/hooks/kimi-config.toml. Живой ~/.kimi-code/config.toml
+# держит провайдеров, oauth и модели владельца; [замер 26.08] полная перезапись каноном
+# снесла Foveance :8800 и свой oauth-слот. Поэтому: конфига нет → полный канон;
+# конфиг есть → бэкап + влить только [[hooks]] из канона, остальное не трогать.
+# Сторож по-прежнему сверяет пары событие+команда на root-скрипты.
 KHOME="$(getent passwd claudedev 2>/dev/null | cut -d: -f6)"
 KDIR="${KHOME:-/home/claudedev}/.kimi-code"
 mkdir -p "$KDIR"
-install -m 644 -o root -g root "$SRC/kimi-config.toml" "$KDIR/config.toml" \
-  && echo "  $KDIR/config.toml — канон из work/hooks/kimi-config.toml"
+KCFG="$KDIR/config.toml"
+KCANON="$SRC/kimi-config.toml"
+if [ ! -f "$KCFG" ]; then
+  install -m 644 -o claudedev -g claudedev "$KCANON" "$KCFG" \
+    && echo "  $KCFG — полный канон (файла не было)"
+else
+  bak="$KCFG.bak-$(date +%Y%m%d-%H%M%S)"
+  cp -a "$KCFG" "$bak" && echo "  бэкап → $bak"
+  python3 - "$KCFG" "$KCANON" <<'PY'
+import re, sys
+from pathlib import Path
+
+live_path, canon_path = Path(sys.argv[1]), Path(sys.argv[2])
+live = live_path.read_text(encoding="utf-8")
+canon = canon_path.read_text(encoding="utf-8")
+
+# Блок [[hooks]] — только до следующей секции, начинающейся с "[".
+# Иначе при hooks посередине живого файла (бинарь Kimi так кладёт) последний
+# блок съедал бы [providers]/[models] до EOF ([замер 26.08] на копии).
+hook_re = re.compile(r"(?m)^\[\[hooks\]\]\n(?:(?!\[).*\n)*")
+canon_hooks = hook_re.findall(canon)
+if not canon_hooks:
+    print("  🔴 в каноне нет [[hooks]] — конфиг не трогаю", file=sys.stderr)
+    sys.exit(1)
+
+# Вырезать все [[hooks]] из живого; провайдеры/oauth/модели — где бы ни стояли — остаются.
+body = hook_re.sub("", live)
+# Сжать пустые дыры после вырезания из середины.
+body = re.sub(r"\n{3,}", "\n\n", body).rstrip() + "\n\n"
+merged = body + "".join(canon_hooks)
+if not merged.endswith("\n"):
+    merged += "\n"
+live_path.write_text(merged, encoding="utf-8")
+
+n = len(canon_hooks)
+print(f"  {live_path}: влиты {n} блоков [[hooks]] из канона; преамбула живого сохранена")
+PY
+  chown claudedev:claudedev "$KCFG" 2>/dev/null || true
+  chmod 644 "$KCFG" 2>/dev/null || true
+fi
 chown claudedev:claudedev "$KDIR" 2>/dev/null || true
 # Бинарь ставится разово руками владельца: install -m 755 <источник> /usr/local/bin/kimi
 su -s /bin/bash claudedev -c 'command -v kimi' >/dev/null 2>&1 \
@@ -150,6 +189,13 @@ fi
 echo "== 4. проба =="
 bash "$DST/test-hooks.sh"
 rc=$?
+echo "== 4-бис. проба check-gold-split (И5) =="
+if [ -x "$SRC/test-gold-split.sh" ]; then
+  bash "$SRC/test-gold-split.sh" || rc=1
+else
+  echo "  ⚠ нет work/hooks/test-gold-split.sh"
+  rc=1
+fi
 
 echo
 if [ "$rc" = 0 ]; then

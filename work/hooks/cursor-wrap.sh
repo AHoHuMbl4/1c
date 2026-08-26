@@ -8,6 +8,13 @@
 # перевести выход.
 #
 # Подключается только из .cursor/hooks.json. Claude и Kimi этот файл не зовут.
+#
+# 🔴 ПОЛЕЗНАЯ НАГРУЗКА — ФАЙЛОМ, НЕ ОКРУЖЕНИЕМ. Было `export CURSOR_WRAP_INPUT="$INPUT"`
+# и то же для OUT: на Write CHANGELOG.md (~1,5 МБ) execve python3/bash упирался в
+# ARG_MAX («Argument list too long»). После export каждый следующий дочерний процесс
+# тоже падал — гейт не отрабатывал, а failClosed у блокирующих превращал это в стоп
+# или обход через оболочку. Поймано живой правкой CHANGELOG из Cursor, не чтением кода.
+# Образец уже в check-sql-docs / check-prompt-rules (дифф коммита → DIFF_FILE).
 set -uo pipefail
 
 GATE="${1:-}"
@@ -29,11 +36,22 @@ printf '%s %-11s %s\n' "$(date '+%d.%m %H:%M:%S')" "cursor-wrap" "$GATE" >> "$DI
 # Блокирующие — наоборот: упавшая проверка = стоп, не пропуск (git-gate то же правило).
 INJECT="session-start prompt-start check-deps count-edits check-write"
 
-INPUT=$(cat)
-export CURSOR_WRAP_INPUT="$INPUT"
-NORMALIZED="$(python3 - <<'PY'
+IN_FILE="$(mktemp)" || deny_now "cursor-wrap: не удалось создать временный файл для входа."
+OUT_FILE="$(mktemp)" || { rm -f "$IN_FILE"; deny_now "cursor-wrap: не удалось создать временный файл для выхода."; }
+trap 'rm -f "$IN_FILE" "$OUT_FILE"' EXIT
+
+cat > "$IN_FILE"
+# Префикс IN_FILE= обязан стоять на КОМАНДЕ python3 (как DIFF_FILE= в check-sql-docs),
+# а не на присваивании NORMALIZED=… — иначе os.environ пуст и нормализация молча
+# отдаёт {} (проба 26.08: session_id из CURSOR_CONVERSATION_ID + tool_input {}).
+NORMALIZED="$(IN_FILE="$IN_FILE" python3 - <<'PY'
 import json, os, sys
-raw = os.environ.get("CURSOR_WRAP_INPUT") or ""
+in_path = os.environ.get("IN_FILE") or ""
+try:
+    with open(in_path, encoding="utf-8", errors="replace") as fh:
+        raw = fh.read()
+except Exception:
+    raw = ""
 try:
     d = json.loads(raw) if raw.strip() else {}
 except Exception:
@@ -44,10 +62,10 @@ ti = dict(d.get("tool_input") or {}) if isinstance(d.get("tool_input"), dict) el
 cmd = ti.get("command") or d.get("command") or ""
 if cmd:
     ti["command"] = cmd
-path = (ti.get("file_path") or ti.get("path") or d.get("file_path") or d.get("path") or "")
-if path:
-    ti["file_path"] = path
-    ti["path"] = path
+fpath = (ti.get("file_path") or ti.get("path") or d.get("file_path") or d.get("path") or "")
+if fpath:
+    ti["file_path"] = fpath
+    ti["path"] = fpath
 edits = d.get("edits")
 if isinstance(edits, list) and edits and not ti.get("new_string"):
     ti["old_string"] = "\n".join((e or {}).get("old_string") or "" for e in edits if isinstance(e, dict))
@@ -61,18 +79,22 @@ if sid:
 d["tool_input"] = ti
 print(json.dumps(d, ensure_ascii=False))
 PY
-)"
+)" || deny_now "cursor-wrap: нормализация входа не отработала."
 
 OUT=""
 RC=0
 OUT="$(printf '%s' "$NORMALIZED" | bash "$SCRIPT")" || RC=$?
 
-export CURSOR_WRAP_OUT="$OUT"
-export CURSOR_WRAP_GATE="$GATE"
-export CURSOR_WRAP_INJECT="$INJECT"
-TRANSLATED="$(python3 - <<'PY'
+printf '%s' "$OUT" > "$OUT_FILE"
+# Тот же приём: префикс OUT_FILE= на команде python3, не на TRANSLATED=.
+TRANSLATED="$(OUT_FILE="$OUT_FILE" python3 - <<'PY'
 import json, os, sys
-blob = os.environ.get("CURSOR_WRAP_OUT") or ""
+path = os.environ.get("OUT_FILE") or ""
+try:
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        blob = fh.read()
+except Exception:
+    blob = ""
 stripped = blob.strip()
 if not stripped:
     print("{}")

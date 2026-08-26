@@ -68,7 +68,12 @@ printf '# doc\n' > README.md
 git add -A; git commit -qm init
 
 # Хук зовётся так же, как его зовёт движок: событие JSON на stdin.
-call() { printf '{"tool_input":{"command":%s}}' "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1")" | bash "$HOOKS/$2" 2>/dev/null; }
+# Канон *.new (check-golden и др.) — до install-gates; после установки в DST только *.sh.
+call() {
+  local path="$HOOKS/$2"
+  [ -f "$HOOKS/$2.new" ] && path="$HOOKS/$2.new"
+  printf '{"tool_input":{"command":%s}}' "$(python3 -c 'import json,sys;print(json.dumps(sys.argv[1]))' "$1")" | bash "$path" 2>/dev/null
+}
 # 🔴 Ждём именно `deny`. Прежде проба ждала `ask` — и была зелёной ровно в тот день, когда
 # замер показал, что `ask` в фоновой сессии равен разрешению: правка, которую хук обязан
 # остановить, прошла молча. Проба, согласная с дефектом, хуже отсутствующей.
@@ -97,27 +102,35 @@ asks "$OUT"; say $? 'та же проверка на форме `git -C … comm
 OUT=$(call 'git status' check-docs.sh)
 asks "$OUT"; [ $? = 1 ]; say $? 'на посторонней команде молчит'
 
-echo '== check-golden: замер до выката (№14) =='
-mkdir -p ubuntu/serenedb
+echo '== check-golden: probe+HEAD до выката (HOW_NOT_TO §3.90) =='
+mkdir -p ubuntu/serenedb .claude
+rm -f .claude/.probe-okna-last-run .claude/.golden-last-run
+# new.py из секции check-docs остался в индексе и в дереве — без зачистки
+# случай «дерево = HEAD + отметка пробы — проходит» ниже падает ложно (22.08)
+git reset -q; git clean -fdq -- ubuntu/serenedb
+# дерево = HEAD (real.py из init), отметки нет
 OUT=$(call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
-asks "$OUT"; say $? 'выкат deploy.sh без отметки замера — спрашивает'
-touch .claude/.golden-last-run
-sleep 1; touch ubuntu/serenedb/new.py
+asks "$OUT"; say $? 'выкат без отметки пробы — стоп'
+
+echo 'okna probe live 0err/8' > .claude/.probe-okna-last-run
+printf 'print(dirty)\n' > ubuntu/serenedb/real.py
 OUT=$(call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
-asks "$OUT"; say $? 'исходники правились после замера — спрашивает'
-touch .claude/.golden-last-run
+asks "$OUT"; say $? 'грязное дерево + отметка пробы — стоп'
+
+git checkout -q -- ubuntu/serenedb/real.py
 OUT=$(call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
-asks "$OUT"; [ $? = 1 ]; say $? 'замер свежее правок — молчит'
+asks "$OUT"; [ $? = 1 ]; say $? 'дерево = HEAD + отметка пробы — проходит'
+
 OUT=$(call 'ls /opt' check-golden.sh)
 asks "$OUT"; [ $? = 1 ]; say $? 'на посторонней команде молчит'
 
 copy1=sc; copy1="${copy1}p"
+rm -f .claude/.probe-okna-last-run
 OUT=$(call "$copy1 x root@h:/tmp/probe.py" check-golden.sh)
 asks "$OUT"; [ $? = 1 ]; say $? 'доставка в /tmp без отметки — молчит'
-printf 'print(9)\n' >> ubuntu/serenedb/new.py
-git add ubuntu/serenedb/new.py
-git commit -qm 'Золотой: невозможен — эмбеддер недоступен'
-sleep 1; touch ubuntu/serenedb/new.py
+
+# вторичный люк: эмбеддер мёртв + «Золотой: невозможен» в HEAD (проба невозможна)
+git commit --allow-empty -qm 'Золотой: невозможен — эмбеддер недоступен'
 OUT=$(GOLDEN_EMBED_HEALTH=http://127.0.0.1:1 call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
 asks "$OUT"; [ $? = 1 ]; say $? 'эмбеддер мёртв + строка в HEAD — выкат проходит'
 git commit --allow-empty -qm 'описание: строка Золотой: в середине не закрывает'
@@ -140,11 +153,31 @@ HTTPServer(("127.0.0.1", 18765), H).serve_forever()
 PY
 MOCK=$!
 sleep 0.3
+# эмбеддер жив — люк не действует; без отметки пробы выкат стоп
 OUT=$(GOLDEN_EMBED_HEALTH=http://127.0.0.1:18765 call 'ubuntu/serenedb/deploy.sh' check-golden.sh)
-asks "$OUT"; say $? 'эмбеддер жив + строка в HEAD — выкат всё равно стоп'
-printf '%s' "$OUT" | grep -q "touch .claude/.golden-last-run"; [ $? = 1 ]; say $? 'подсказка без touch-отметки'
+asks "$OUT"; say $? 'эмбеддер жив + строка в HEAD без пробы — выкат стоп'
+printf '%s' "$OUT" | grep -qiE 'touch .claude/\.(probe-okna|golden)-last-run'; [ $? = 1 ]; say $? 'подсказка без touch-отметки'
 kill $MOCK 2>/dev/null || true
 wait $MOCK 2>/dev/null || true
+
+echo '== check-live-probe: живая проба до коммита serene_ask.py =='
+mkdir -p ubuntu/serenedb .claude
+rm -f .claude/.probe-okna-last-run
+printf 'print(1)\n' > ubuntu/serenedb/serene_ask.py
+git add ubuntu/serenedb/serene_ask.py 2>/dev/null || true
+OUT=$(call 'git commit -m x -- ubuntu/serenedb/serene_ask.py' check-live-probe.sh)
+asks "$OUT"; say $? 'коммит serene_ask.py без отметки пробы — стоит'
+echo 'okna probe live 0err/8' > .claude/.probe-okna-last-run
+sleep 1; touch ubuntu/serenedb/serene_ask.py
+OUT=$(call 'git commit -m x -- ubuntu/serenedb/serene_ask.py' check-live-probe.sh)
+asks "$OUT"; say $? 'отметка старше serene_ask.py — стоит'
+touch ubuntu/serenedb/serene_ask.py
+sleep 1
+echo 'okna probe live 0err/8' > .claude/.probe-okna-last-run
+OUT=$(call 'git commit -m x -- ubuntu/serenedb/serene_ask.py' check-live-probe.sh)
+asks "$OUT"; [ $? = 1 ]; say $? '0err и отметка свежее — проходит'
+OUT=$(call 'git commit -m x -- README.md' check-live-probe.sh)
+asks "$OUT"; [ $? = 1 ]; say $? 'коммит без serene_ask.py — молчит'
 
 echo '== каталог запуска: хук не имеет права молчать (fail-open 02.08) =='
 # Хук зовут не обязательно из каталога проекта. Прежняя форма
@@ -186,7 +219,7 @@ chmod +x "$G"/.githooks/* 2>/dev/null
 python3 - "$G" <<'PY'
 import json, sys
 gates = ["check-docs", "check-graph-fresh", "check-active-size", "check-sql-docs",
-         "check-diff", "check-prompt-rules", "check-golden", "check-gates", "prepare-diff"]
+         "check-diff", "check-prompt-rules", "check-golden", "check-live-probe", "check-gates", "prepare-diff"]
 hooks = [{"type": "command", "command": ".claude/hooks/%s.sh" % g} for g in gates]
 json.dump({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": hooks}]}},
           open(sys.argv[1] + "/.claude/settings.json", "w"), ensure_ascii=False)

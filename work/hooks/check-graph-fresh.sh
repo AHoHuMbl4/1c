@@ -7,6 +7,17 @@
 # Не блокирует, а выносит владельцу, как остальные снайперы.
 set -uo pipefail
 
+# 🔴 STAGED_OVERRIDE снять ДО любого внешнего бинарника. Если вызывающий (проба)
+# положил в окружение мегабайтный список, то уже `dirname`/`python3` в lib-hooks и
+# hook_command падают с ARG_MAX — до записи в STAGED_FILE дело не доходит. printf и
+# unset —builtin; путь без mktemp. (живой замер 26.08, W2)
+_STAGED_BOOT=""
+if [ -n "${STAGED_OVERRIDE+x}" ]; then
+  _STAGED_BOOT="${TMPDIR:-/tmp}/hook-staged-$$.$RANDOM"
+  printf '%s' "$STAGED_OVERRIDE" > "$_STAGED_BOOT"
+  unset STAGED_OVERRIDE
+fi
+
 . "$(dirname "${BASH_SOURCE[0]}")/lib-hooks.sh"
 CMD=$(hook_command)
 # Опознаватель общий на все хуки (`lib-hooks.sh`): подстрока «git commit» пропускала
@@ -25,10 +36,24 @@ GRAPH="memory_bank/mcp-memory.json"
 # Проверяем ровно то, что уйдёт в коммит: при пат-спеке — только названные пути,
 # иначе чужой staged-файл соседней сессии останавливал бы наш коммит.
 mapfile -t PS < <(hook_commit_pathspec "$CMD")
-STAGED="${STAGED_OVERRIDE:-$(git diff --cached --name-status -- "${PS[@]}" 2>/dev/null)}"
+if [ -n "$_STAGED_BOOT" ]; then
+  STAGED=$(<"$_STAGED_BOOT")
+  rm -f "$_STAGED_BOOT"
+  _STAGED_BOOT=""
+else
+  STAGED="$(git diff --cached --name-status -- "${PS[@]}" 2>/dev/null)"
+fi
 [ -z "$STAGED" ] && { echo '{}'; exit 0; }
 
-STAGED="$STAGED" python3 - "$GRAPH" <<'PY' | hook_gate_json check-graph-fresh
+# 🔴 Список staged — ФАЙЛОМ, не окружением: тот же ARG_MAX, что у EVENT_JSON/HOOK_INPUT
+# (живой замер 26.08 на соседних гейтах). Имя-status обычно мал, но на большом коммите
+# или при подстановке STAGED_OVERRIDE в пробе тот же приём безопаснее.
+STAGED_FILE="$(mktemp)" || { hook_ask "Хук $(basename "$0") не смог создать временный файл и ничего не проверил. Пропускать проверку молча нельзя — подтвердите шаг вручную."; exit 0; }
+trap 'rm -f "$STAGED_FILE"' EXIT
+printf '%s' "$STAGED" > "$STAGED_FILE"
+unset STAGED
+
+STAGED_FILE="$STAGED_FILE" python3 - "$GRAPH" <<'PY' | hook_gate_json check-graph-fresh
 import json, os, sys, time
 
 def log(msg):
@@ -45,9 +70,12 @@ def log(msg):
 # графа» само по себе ничего не доказывает.
 import subprocess
 
+with open(os.environ["STAGED_FILE"], encoding="utf-8", errors="replace") as _sf:
+    _STAGED = _sf.read()
+
 graph_staged = any(
     row.split("\t")[-1] == "memory_bank/mcp-memory.json"
-    for row in os.environ["STAGED"].splitlines() if "\t" in row)
+    for row in _STAGED.splitlines() if "\t" in row)
 if graph_staged:
     try:
         graph_text = subprocess.run(
@@ -83,7 +111,7 @@ def is_entity(base, stem):
 added, deleted, changed = [], [], []
 CODE_EXT = (".py", ".sh", ".sql", ".js", ".mjs", ".service", ".timer", ".ts")
 
-for row in os.environ["STAGED"].splitlines():
+for row in _STAGED.splitlines():
     parts = row.split("\t")
     if len(parts) < 2:
         continue

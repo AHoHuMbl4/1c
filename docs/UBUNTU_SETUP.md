@@ -1,5 +1,12 @@
 # Что ставим на Ubuntu (LXC lxc-claude-1c): разбор braine
 
+> 🔴 **ДОКУМЕНТ — ИСТОРИЯ, НЕ РАСКАТКА.** Слой braine (OWUI/pgvector/DashScope) выведен
+> из контура 26.07. PostgreSQL/pgvector **не часть продукта** (`TARGET.md` п. 4, 16;
+> пакеты удалены 25.08). Egress наружу по контракту 26.08 — временно только DeepSeek
+> для ответов OpenClaw; Alibaba/DashScope в действующем периметре нет. Актуальная
+> раскатка — [`RUNBOOK_DEPLOY.md`](RUNBOOK_DEPLOY.md) и [`ARCHITECTURE.md`](ARCHITECTURE.md).
+> Ниже — разбор исходного стека braine 22.07; по нему **не ставить**.
+
 > Разбор стека braine (мозг горячего контура). Развёрнут на LXC; интеграция с 1С —
 > через OData-канал и ETL (`../ubuntu/1c-etl/`), а не через execute_query, как
 > предполагалось в исходном разборе. Общая картина — [`ARCHITECTURE.md`](ARCHITECTURE.md).

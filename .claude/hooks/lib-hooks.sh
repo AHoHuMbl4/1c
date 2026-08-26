@@ -109,14 +109,14 @@ hook_override_take() {
 # Разделение труда: сам этот набор лежит в `.claude/hooks/` (среда не даёт писать туда
 # даже из оболочки), а беззащитная обёртка `.githooks/pre-commit` сведена к одной строке
 # вызова и сверяется отсюда.
-GATES_REQUIRED="check-docs check-graph-fresh check-active-size check-sql-docs check-diff check-prompt-rules check-golden check-gates prepare-diff"
+GATES_REQUIRED="check-docs check-graph-fresh check-active-size check-sql-docs check-diff check-prompt-rules check-golden check-live-probe check-gold-split check-gates prepare-diff"
 
 # 🔴 ВТОРОЙ ДВИЖОК — KIMI CODE (06.08). Сессии идут под тем же рабочим аккаунтом, и
 # правило, подключённое только в Claude Code, для сессии Kimi не существует. Подключение
 # у Kimi — записи `[[hooks]]` в `~/.kimi-code/config.toml` рабочего аккаунта (файла
 # `settings.json` у него нет). Вердикта `ask` в Kimi нет вовсе — только пропуск и блок
 # (код выхода 2), поэтому проверка «не понижен ли вердикт» там не нужна по устройству.
-KIMI_GATES_REQUIRED="session-start prompt-start prepare-diff check-gates check-sql-docs check-prompt-rules check-diff check-docs check-active-size check-graph-fresh check-golden sniper-kimi count-edits check-write check-deps"
+KIMI_GATES_REQUIRED="session-start prompt-start prepare-diff check-gates check-sql-docs check-prompt-rules check-diff check-docs check-active-size check-graph-fresh check-golden check-live-probe check-gold-split sniper-kimi count-edits check-write check-deps"
 
 # Путь к конфигу Kimi рабочего аккаунта. KIMI_CONFIG_TOML — шов для пробы: песочница
 # подставляет свой stub и не трогает настоящий конфиг.
@@ -233,6 +233,8 @@ EXPECT = {
     "check-active-size": "PreToolUse",
     "check-graph-fresh": "PreToolUse",
     "check-golden": "PreToolUse",
+    "check-live-probe": "PreToolUse",
+    "check-gold-split": "PreToolUse",
     "sniper-kimi": "PreToolUse",
     "count-edits": "PostToolUse",
     "check-write": "PostToolUse",
@@ -290,6 +292,8 @@ EXPECT = {
     "check-active-size": "preToolUse",
     "check-graph-fresh": "preToolUse",
     "check-golden": "preToolUse",
+    "check-live-probe": "preToolUse",
+    "check-gold-split": "preToolUse",
     "count-edits": "postToolUse",
     "check-write": "postToolUse",
     "check-deps": "postToolUse",
@@ -297,7 +301,7 @@ EXPECT = {
 BLOCKING = (
     "check-gates", "check-sql-docs", "check-prompt-rules",
     "check-diff", "check-docs", "check-active-size", "check-graph-fresh",
-    "check-golden",
+    "check-golden", "check-live-probe", "check-gold-split",
 )
 
 try:
@@ -414,15 +418,27 @@ $(hook_override_hint "$1")"
 #   вызов проходил бы БЕЗ ПРОВЕРКИ. Упавшая проверка — не пройденная проверка; то же
 #   правило уже стоит в гейте коммита.
 hook_gate_json() {  # $1 — имя гейта; на stdin — json от python-части
-  local gate="${1:-}" payload rc
-  payload="$(cat)"
+  # 🔴 Полезная нагрузка — ФАЙЛОМ, не PAYLOAD= в окружении: на длинной причине deny
+  # (~МБ) execve python3 → ARG_MAX (тот же барьер, что у EVENT_JSON/HOOK_INPUT, 26.08).
+  local gate="${1:-}" payload_file rc
+  payload_file="$(mktemp)" || {
+    hook_deny "Гейт ${1:-?} не смог создать временный файл для ответа проверки."
+    return 0
+  }
+  cat > "$payload_file"
   if [ -z "$gate" ]; then
+    rm -f "$payload_file"
     hook_deny "Гейт вызван без имени — проверка не выполнена, и люка у безымянного гейта быть не может. Почини вызов hook_gate_json."
     return 0
   fi
-  PAYLOAD="$payload" python3 -c '
+  PAYLOAD_FILE="$payload_file" python3 -c '
 import json, os, sys
-p = (os.environ.get("PAYLOAD") or "").strip()
+path = os.environ.get("PAYLOAD_FILE") or ""
+try:
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        p = fh.read().strip()
+except Exception:
+    p = ""
 if not p:
     sys.exit(2)
 try:
@@ -433,19 +449,21 @@ h = d.get("hookSpecificOutput") or {}
 sys.exit(1 if h.get("permissionDecision") else 0)' 2>/dev/null
   rc=$?
   case "$rc" in
-    0) printf '%s' "$payload"; return 0 ;;
-    2) hook_log "$gate" "СБОЙ: ответ пуст или не разбирается"
+    0) cat "$payload_file"; rm -f "$payload_file"; return 0 ;;
+    2) rm -f "$payload_file"
+       hook_log "$gate" "СБОЙ: ответ пуст или не разбирается"
        hook_deny "Гейт $gate не отработал: его проверка отдала пустой или неразбираемый ответ.
 Пропускать молча нельзя — это fail-open, которым гейты и были бесполезны.
 
 $(hook_override_hint "$gate")"
        return 0 ;;
   esac
-  if hook_override_take "$gate"; then echo '{}'; return 0; fi
+  if hook_override_take "$gate"; then rm -f "$payload_file"; echo '{}'; return 0; fi
   hook_log "$gate" "СТОП"
-  GATE_HINT="$(hook_override_hint "$gate")" PAYLOAD="$payload" python3 - <<'PY'
+  GATE_HINT="$(hook_override_hint "$gate")" PAYLOAD_FILE="$payload_file" python3 - <<'PY'
 import json, os, sys
-d = json.loads(os.environ["PAYLOAD"])
+with open(os.environ["PAYLOAD_FILE"], encoding="utf-8", errors="replace") as fh:
+    d = json.loads(fh.read())
 h = d.get("hookSpecificOutput") or {}
 h["hookEventName"] = "PreToolUse"
 h["permissionDecision"] = "deny"
@@ -453,6 +471,7 @@ h["permissionDecisionReason"] = (h.get("permissionDecisionReason") or "") + "\n\
 d["hookSpecificOutput"] = h
 print(json.dumps(d, ensure_ascii=False))
 PY
+  rm -f "$payload_file"
 }
 
 # Команда из полезной нагрузки хука (stdin — JSON события).

@@ -30,7 +30,14 @@
 # Граф читается напрямую из JSONL-файла (MCP тут не нужен и недоступен хуку).
 set -uo pipefail
 
-INPUT=$(cat)
+# 🔴 ВХОД И СНИМОК — ФАЙЛАМИ, НЕ ОКРУЖЕНИЕМ. Было HOOK_INPUT="$INPUT" … python3:
+# на Write ~1,5 МБ execve python3 → «Argument list too long», код 126 (живой замер 26.08).
+# CUR_SNAP тоже растёт с числом грязных файлов — тот же предел. Пути короткие; тела — в tmp.
+IN_FILE="$(mktemp)" || { echo '{}'; exit 0; }
+CUR_FILE="$(mktemp)" || { rm -f "$IN_FILE"; echo '{}'; exit 0; }
+trap 'rm -f "$IN_FILE" "$CUR_FILE"' EXIT
+cat > "$IN_FILE"
+
 cd "$(git rev-parse --show-toplevel 2>/dev/null || echo "${CLAUDE_PROJECT_DIR:-.}")" || { echo '{}'; exit 0; }
 
 GRAPH="memory_bank/mcp-memory.json"
@@ -43,16 +50,18 @@ mkdir -p "$(dirname "$SNAP")" 2>/dev/null
 # по отдельности, а не одной строкой каталога.
 # Служебное отсеивается ДО `stat`: хук зовётся на каждой команде, и трогать сотню файлов
 # харнесса и выводов приборов на каждый `ls` незачем.
-CUR=$(git status --porcelain -uall 2>/dev/null \
+{
+  git status --porcelain -uall 2>/dev/null \
       | sed -e 's/^...//' -e 's/^"//' -e 's/"$//' \
       | grep -v -e '^\.claude/' -e '^out/' -e '/runs/' \
       | while IFS= read -r f; do
           [ -n "$f" ] && [ -f "$f" ] || continue
           s=$(stat -c '%Y %s' "$f" 2>/dev/null) || continue
           printf '%s\t%s\n' "$f" "$s"
-        done)
+        done
+} > "$CUR_FILE"
 
-HOOK_INPUT="$INPUT" SNAP_FILE="$SNAP" CUR_SNAP="$CUR" python3 - "$GRAPH" <<'PY'
+IN_FILE="$IN_FILE" SNAP_FILE="$SNAP" CUR_FILE="$CUR_FILE" python3 - "$GRAPH" <<'PY'
 import json, os, sys, time
 
 def log(msg):
@@ -63,17 +72,22 @@ def log(msg):
         pass
 
 try:
-    data = json.loads(os.environ["HOOK_INPUT"])
+    with open(os.environ["IN_FILE"], encoding="utf-8", errors="replace") as fh:
+        data = json.load(fh)
 except Exception:
     print("{}"); sys.exit(0)
 
 root = os.getcwd()
 snap_file = os.environ.get("SNAP_FILE") or ".claude/state/deps-snapshot.tsv"
 cur = {}
-for l in (os.environ.get("CUR_SNAP") or "").splitlines():
-    p, _, st = l.rstrip("\n").partition("\t")
-    if p.strip():
-        cur[p] = st
+try:
+    with open(os.environ.get("CUR_FILE") or "/dev/null", encoding="utf-8", errors="replace") as fh:
+        for l in fh:
+            p, _, st = l.rstrip("\n").partition("\t")
+            if p.strip():
+                cur[p] = st
+except Exception:
+    pass
 
 prev, first_run = {}, not os.path.exists(snap_file)
 if not first_run:

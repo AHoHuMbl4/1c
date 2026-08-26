@@ -67,7 +67,8 @@ fi
 # назвала раздел доков в коммите, а гейт со стороны git его не увидел.
 if [ -n "${1:-}" ] && [ -f "${1:-}" ]; then
   export HOOK_MSG_FILE="$1"
-  GATES="check-sql-docs check-diff"
+  # check-gold-split закрывается пометкой «Факт 1С:» — только здесь сообщение видно.
+  GATES="check-sql-docs check-diff check-gold-split"
 else
   GATES="check-docs check-graph-fresh check-active-size check-prompt-rules check-live-probe"
 fi

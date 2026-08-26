@@ -159,6 +159,12 @@ timeout = 20
 [[hooks]]
 event = "PreToolUse"
 matcher = "Bash"
+command = "/srv/1c/.claude/hooks/check-gold-split.sh"
+timeout = 15
+
+[[hooks]]
+event = "PreToolUse"
+matcher = "Bash"
 command = "/srv/1c/.claude/hooks/check-docs.sh"
 timeout = 15
 

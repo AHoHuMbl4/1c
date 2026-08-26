@@ -1,3 +1,32 @@
+## 2026-08-26 — И5 гейт подгонки + раннер И2а okna-live; cursor-wrap переживает CHANGELOG
+
+**[код]** И5 закрыт: гейт `check-gold-split.sh` — коммит, задевающий одновременно
+исполняемый код ответа и файлы приёмочного набора (реестр ролей `docs/GOLD_SETS.md`),
+останавливается; правка эталона — отдельным коммитом со строкой «Факт 1С:» в
+сообщении (второй заход из commit-msg). Проба `work/hooks/test-gold-split.sh`:
+7/7 (код+набор стоп, только код проход, эталон без пометки стоп, ab_scorer+
+ambiguous-приёмка стоп). Установка канона — владельцем `install-gates.sh`.
+
+**[код]** Раннер И2а `work/acceptance/run_okna_live.py` + замок
+`ubuntu/serenedb/test_okna_live_runner.py`: только измеряет, эталон — одним SQL
+к корпусу okna в момент вопроса (класс Д — обязательно корпус, A2 спека), вопросы
+дословно из §B `docs/ACCEPTANCE_OKNA_LIVE.md`, контрольные числа 19.08 в раннере
+не хранятся. Селфтест раннера зелёный (ут-артефакты — след селфтеста, ut выведен
+из приёмки 26.08). Доки: sql/functions/aggregates (sum/count), sql/functions/timestamptz
+(timezone(text, timestamp)), sql/functions/numeric (round).
+
+**[код]** `cursor-wrap.sh` переведён на полезную нагрузку файлом: прежний
+`export CURSOR_WRAP_INPUT="$INPUT"` на Write CHANGELOG.md (~1,5 МБ) упирался в
+ARG_MAX («Argument list too long») и ронял все дочерние процессы — гейт не
+отрабатывал. Образец — check-sql-docs/check-prompt-rules (дифф коммита → DIFF_FILE).
+
+**[замер]** 9 провалов `test-hooks.sh` прошлой сессии — все один корень: песочница
+ставила захардкоженный список гейтов без `check-gold-split`, а `hook_guard_armed`
+требует его (GATES_REQUIRED). Канон `test-hooks.sh.new` уже лечит — список
+берётся из lib-hooks.sh; прогон канона: **125 OK / 0 провалов**. Установленная
+копия `.claude/hooks/test-hooks.sh` устарела — обновится `install-gates.sh`
+(владелец).
+
 ## 2026-08-26 — С1 перенесён целиком на okna; два протухших конфига найдены пробами
 
 **[решение]** Владелец 26.08: okna и klient-1 — самостоятельные системы; никаких

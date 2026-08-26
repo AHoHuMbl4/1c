@@ -67,6 +67,12 @@
         "matcher": "Shell",
         "timeout": 20,
         "failClosed": true
+      },
+      {
+        "command": ".claude/hooks/cursor-wrap.sh check-gold-split",
+        "matcher": "Shell",
+        "timeout": 15,
+        "failClosed": true
       }
     ],
     "postToolUse": [
