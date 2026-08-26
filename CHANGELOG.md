@@ -1,3 +1,35 @@
+## 2026-08-26 — И0 в git; шлюз OpenClaw на okna восстановлен; С1 упёрся в старый выкат
+
+**[код]** И0 закрыт по инструменту: `ubuntu/serenedb/etalon_1c.py` (1174 строки) и
+четыре замка внесены в git — до этого висели вне дерева, то есть повторяли
+прецедент 31.07 (тот же скрипт был утерян невнесённым). Замки: `test_etalon_1c`
+65/0, `test_gold_sets_split` 20/0, `test_acceptance_ut_tsv` 15/0.
+`test_partial_flag_propagation` — **13/5, красный намеренно**: фиксирует пять
+открытых дыр полноты п. 13 (selection_budget только в diag, missing/undated в
+атоме без пометки, uncounted в diag.fork, diag.incomplete.missing без partial,
+asked_figure_missing не ловит undated — дыра S6). Это задача Э4, не регресс.
+
+**[замер]** Шлюз OpenClaw на okna лежал с 11:24 UTC: конфиг `openclaw.json`
+затёрт до одного блока `models` (287 байт против 5588), пропал `gateway.mode` —
+старт блокировался кодом 78/CONFIG. Аудит самого OpenClaw это и назвал:
+`size-drop-vs-last-good:5588->287`, `gateway-mode-missing-vs-last-good`.
+Восстановлено слиянием: полный бэкап 17.08 + новый провайдер `vllm` из затёртого
+(его терять нельзя — он от С1). После рестарта `/health` даёт `{"ok":true,
+"status":"live"}`, провайдеры `deepseek` и `vllm` на месте.
+
+**[замер]** С1 после починки шлюза отработал: словарь okna — **254 алиаса и 687
+величин, пустых 0** (модель `vllm/Qwen3.8-27B` через штатный `openclaw infer
+model run --local`). Развилки при этом падают все до одной:
+`Unknown agent id "main"` — на okna в `/opt/1c-mcp-reports` лежит **старая**
+`branch_alias.sh` (md5 `d4073ec…` против канона `633a638…`), она зовёт
+`openclaw agent --agent main`, тогда как канон давно переведён на
+`alias_infer_gateway.py`. Отсутствует и `/opt/openclaw/ensure_vllm_gateway.sh`.
+Вывод: выкат okna отстал от репозитория — это и есть блокер С1, а не модель.
+
+**[факт]** Старая okna `167.233.249.110` удалена владельцем 23.08; рабочий адрес —
+LXC `10.10.10.12`, снаружи `ssh -p 2202 root@gpu-erw.timpul.pro`. Скрипты в
+`work/acceptance/*.sh`, где зашит старый IP, ходят в пустоту.
+
 ## 2026-08-26 — И5 гейт подгонки + раннер И2а okna-live; cursor-wrap переживает CHANGELOG
 
 **[код]** И5 закрыт: гейт `check-gold-split.sh` — коммит, задевающий одновременно
