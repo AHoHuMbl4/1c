@@ -2060,7 +2060,10 @@ def sales_compare_windows(intent, today, question=""):
     """Два окна для compare-продаж: текущее vs prior (неделя/месяц по форме).
 
     Возвращает (period, period2, form_id). Без лексики — только границы дат.
-    ASK_ENTITY_FORM: period = прошлая полная неделя/месяц → пара (WTD/MTD, prior).
+    Cur = WTD/MTD (с начала зерна по today). Prior = ПОЛНЫЙ предыдущий
+    календарный период (неделя пн–вс / месяц 1..last), не обрезок по дню
+    today: иначе mid-week/mid-month diff ≠ «эта vs прошлая» (gold).
+    ASK_ENTITY_FORM: period = прошлая полная неделя/месяц → та же пара.
     Гейт B: rank top-N + одно окно — пару не строить (оставить точку периода).
     """
     td = _calendar_date(today)
@@ -2073,23 +2076,21 @@ def sales_compare_windows(intent, today, question=""):
     to_d = _calendar_date(p.get("to")) if p.get("to") else None
     ms, _me = _month_range(td)
     ws, _we = _week_range_monday(td)
+    pws, pwe = _prev_week_range(td)
+    if ms.month == 1:
+        prev_ms = ms.replace(year=ms.year - 1, month=12, day=1)
+    else:
+        prev_ms = ms.replace(month=ms.month - 1, day=1)
+    _pms, prev_me = _month_range(prev_ms)
 
     if fr_d and fr_d == ws:
         cur = {"from": _iso_date(ws), "to": _iso_date(td)}
-        prev_ws = ws - datetime.timedelta(days=7)
-        prev_to = prev_ws + (td - ws)
-        prev = {"from": _iso_date(prev_ws), "to": _iso_date(prev_to)}
+        prev = {"from": _iso_date(pws), "to": _iso_date(pwe)}
         return cur, prev, "wtd"
 
     if fr_d and fr_d == ms:
         cur = {"from": _iso_date(ms), "to": _iso_date(td)}
-        if ms.month == 1:
-            prev_ms = ms.replace(year=ms.year - 1, month=12, day=1)
-        else:
-            prev_ms = ms.replace(month=ms.month - 1, day=1)
-        _pms, prev_me = _month_range(prev_ms)
-        prev_to = prev_ms.replace(day=min(td.day, prev_me.day))
-        prev = {"from": _iso_date(prev_ms), "to": _iso_date(prev_to)}
+        prev = {"from": _iso_date(prev_ms), "to": _iso_date(prev_me)}
         return cur, prev, "mtd"
 
     if ASK_ENTITY_FORM and fr_d and to_d:
@@ -2099,20 +2100,13 @@ def sales_compare_windows(intent, today, question=""):
             if p2.get("from") or p2.get("to"):
                 return p, p2, "explicit"
             return p, {}, "explicit"
-        pws, pwe = _prev_week_range(td)
         if fr_d == pws and to_d == pwe:
             cur = {"from": _iso_date(ws), "to": _iso_date(td)}
             prev = {"from": _iso_date(pws), "to": _iso_date(pwe)}
             return cur, prev, "wtd"
-        if ms.month == 1:
-            prev_ms = ms.replace(year=ms.year - 1, month=12, day=1)
-        else:
-            prev_ms = ms.replace(month=ms.month - 1, day=1)
-        _pms, prev_me = _month_range(prev_ms)
         if fr_d == prev_ms and to_d == prev_me:
             cur = {"from": _iso_date(ms), "to": _iso_date(td)}
-            prev_to = prev_ms.replace(day=min(td.day, prev_me.day))
-            prev = {"from": _iso_date(prev_ms), "to": _iso_date(prev_to)}
+            prev = {"from": _iso_date(prev_ms), "to": _iso_date(prev_me)}
             return cur, prev, "mtd"
 
     p2 = dict((intent or {}).get("period2") or {})
@@ -5075,7 +5069,7 @@ def rank_leader_atom(agg, measure, money, src=None, intent=None, diag=None,
         operation="rank", exact_value=val,
         measure_id=measure or (agg or {}).get("measure"),
         measure_label=nm or measure_label_of(src, measure),
-        unit_or_currency=_unit_for_measure(measure, money),
+        unit_or_currency=_unit_for_measure(measure, money, src=src),
         period=per, grain="group", form="rank", axis=axis_lab,
         completeness=cov, excluded=excl, src=src,
         proof_status=PROOF_COMPUTED)
@@ -5126,7 +5120,7 @@ def rank_deterministic_answer(question, agg, src, match, preds, measure, money,
         return None
     if not ((_rank_agg.get("groups") or [{}])[0].get("name") or "").strip():
         return None
-    _unit = _unit_for_measure(measure, money)
+    _unit = _unit_for_measure(measure, money, src=src)
     if _sales_rg:
         _k_txt = _sales_rank_top_n(intent, plan, question)
         _txt = rank_groups_answer_text(
@@ -5339,8 +5333,13 @@ def sales_rank_engaged(intent, plan=None, question="", cands=None):
     Сильная форма — уже существующие детекторы: фраза рейтинга, sales_sum,
     max/min или amount без порога. Голый want=list («как у нас дела?») —
     не включает канон.
+
+    Compare двух окон продаж — не rank: want=list + compare_period давал
+    engaged и уводил меру в sales_rank_resolve_measure ([замер 26.08 okna]).
     """
     if not ASK_SALES_RANK_CANON:
+        return False
+    if sales_compare_intent(intent, question):
         return False
     if not rank_intent_from(intent, plan, question):
         return False
@@ -5626,7 +5625,7 @@ def _sales_product_rank_qty(intent, question):
     return False
 
 
-def sales_rank_product_axis(src, intent, question, axes=None, diag=None):
+def sales_rank_product_axis(src, intent, question, axes=None, diag=None, plan=None):
     """Rank по оси, чей target_src — товарный catalog (данные, не слова вопроса).
 
     Ось узнаём так же, как выбор GROUP BY: stem/alias target_src (`kind_axis_hits`)
@@ -5655,7 +5654,8 @@ def sales_rank_product_axis(src, intent, question, axes=None, diag=None):
         col = ((diag or {}).get("rank_axis_auto") or "").strip()
         if not col:
             try:
-                col, alts = rank_axis_resolve(src, axes, intent, question)
+                col, alts = rank_axis_resolve(
+                    src, axes, intent, question, plan=plan)
             except RuntimeError:
                 col, alts = None, []
             if diag is not None and col:
@@ -5670,6 +5670,55 @@ def sales_rank_product_axis(src, intent, question, axes=None, diag=None):
         if a.get("col") in hit and _is_product_catalog(a.get("target_src") or ""):
             return True
     return False
+
+
+def sales_rank_resolve_measure(names, intent, question, alias_by=None,
+                               src=None, axes=None, plan=None, diag=None):
+    """Единая точка меры rank×sales: canon → qty на product_axis → money на client.
+
+    При sales_rank_engaged живой путь answer() приходит сюда: вызов стоит после
+    раннего rank_measure_hint, поэтому money-fallback не перебивает qty
+    ([замер 25.08 okna]).
+    """
+    names = list(names or [])
+    alias_by = alias_by or {}
+    axes = list(axes or [])
+    if not names:
+        return None, None
+    if not axes and src:
+        try:
+            axes = refcols_of(src)
+        except RuntimeError:
+            axes = []
+    product_axis = sales_rank_product_axis(
+        src, intent, question, axes=axes, diag=diag, plan=plan)
+    if product_axis and diag is not None:
+        diag["sales_rank_product_axis"] = True
+    sm, how = sales_rank_canon_measure(
+        names, intent, question, alias_by,
+        axes=axes, src=src, product_axis=product_axis, diag=diag)
+    if how == "role_ask":
+        return None, "role_ask"
+    # Клиентский rank без названной меры → money; товарная qty — rank_measure_hint
+    # (тот же сигнал, что раньше ставился в answer() до money-fallback).
+    if not sm and not product_axis:
+        _hint = rank_measure_hint(names, intent, question, alias_by)
+        _qty = sales_qty_measure(names, alias_by)
+        if _hint and _qty and _hint == _qty:
+            sm, how = _hint, "sales_rank_hint_canon"
+        else:
+            sm = sales_money_measure(names, alias_by)
+            if sm:
+                how = "sales_rank_money"
+    if not sm:
+        sm = sales_qty_measure(names, alias_by)
+        if sm:
+            how = "sales_qty_canon"
+        elif not product_axis:
+            sm = sales_money_measure(names, alias_by)
+            if sm:
+                how = "sales_rank_money"
+    return sm, how
 
 
 def sales_rank_canon_measure(names, intent, question, alias_by=None,
@@ -5711,9 +5760,11 @@ def sales_force_money_measure(intent, question=""):
 
     [замер 21.08] «что лучше всего продавалось» + sales_money_measure→Всего давало
     чужого лидера (деньги); эталон name — ORDER BY Количество.
-    При ASK_SALES_RANK_CANON денежный force на любом rank_intent выкл. (§2.4).
+    При ASK_SALES_RANK_CANON денежный force на rank×sales выкл. (§2.4).
+    Compare двух окон — sum-путь (деньги), не rank: want=list не отключает force.
     """
-    if ASK_SALES_RANK_CANON and rank_intent_from(intent, question=question):
+    if (ASK_SALES_RANK_CANON and rank_intent_from(intent, question=question)
+            and not sales_compare_intent(intent, question)):
         return False
     if not sales_sum_intent(intent, question):
         return False
@@ -7668,7 +7719,7 @@ def atom_from_agg(agg, operation=None, measure_id=None, measure_label=None,
         operation=op, exact_value=exact, measure_id=measure_id,
         measure_label=measure_label,
         unit_or_currency=(unit_or_currency if unit_or_currency is not None
-                          else _unit_for_measure(measure_id, money)),
+                          else _unit_for_measure(measure_id, money, src=src)),
         period=per, filters=filters,
         grain=grain or (agg or {}).get("grain"),
         axis=axis, form=form or (agg or {}).get("form"),
@@ -9214,15 +9265,44 @@ def ensure_count_named(text, agg, slot_mode=None):
 
 
 
-def _unit_for_measure(measure, money=True):
-    """Единица измерения из данных: env-валюта для денежных мер, пустая для штучных.
+def _measure_dimension(measure, names=None, alias_by=None):
+    """Роль выбранной меры у источника: money / qty / unknown.
 
-    Определяется флагом `money` (уже решён по данным выше — интент + операция),
-    а не словарём RU/EN слов в имени меры: имя «Cantitate»/«Miktar»/«数量»
-    словарь не знает. Не знаем единицу — не пишем ничего (п. 12).
-    ASK_MONEY_UNIT (env) — перекрытие: сначала данные, env — fallback.
+    Спрашивает те же каноны, что выбор меры ответа (`sales_money_measure` /
+    `sales_qty_measure` + алиасы из данных), а не want/compute и не валюту
+    документа. Имя на одном языке не кодируется здесь: роль — совпадение с
+    каноном пула мер источника.
+    """
+    if not measure:
+        return "unknown"
+    pool = list(names) if names else [measure]
+    alias_by = alias_by or {}
+    qty = sales_qty_measure(pool, alias_by)
+    if qty is not None and measure == qty:
+        return "qty"
+    mon = sales_money_measure(pool, alias_by)
+    if mon is not None and measure == mon:
+        return "money"
+    return "unknown"
+
+
+def _unit_for_measure(measure, money=True, src=None, names=None, alias_by=None):
+    """Единица — от выбранной меры (её роль), не от want/compute и не от валюты документа.
+
+    `money` от `answer_money` нужен как «есть numeric поле» (на count единицы поля
+    нет), но недостаточен: sum количества тоже даёт money=True. Валюта (ASK_MONEY_UNIT)
+    — только если роль меры у источника денежная. Qty и неизвестная роль → пусто
+    (п. 12: не выдумывать единицу; п. 10/13: не подменять смысл числа валютой).
     """
     if not money:
+        return ""
+    if names is None and src:
+        got = measures_of(src)
+        names = got or None
+    if alias_by is None and src:
+        got_a = measure_aliases_of(src)
+        alias_by = got_a or None
+    if _measure_dimension(measure, names=names, alias_by=alias_by) != "money":
         return ""
     return MONEY_UNIT
 
@@ -13969,8 +14049,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     _mnames = measures_of(src)
     _malias = measure_aliases_of(src)
     _rank_intent = rank_intent_from(intent, plan, question)
+    _rank_sales_early = sales_rank_engaged(
+        intent, plan, question, list(cands or []) + ([src] if src else []))
     _mhint = (rank_measure_hint(_mnames, intent, question, _malias)
-              if not measure_pick else None)
+              if not measure_pick and not _rank_sales_early else None)
     if plan.get("quantity") and plan["quantity"] in _mnames:
         measure = plan["quantity"]
         diag["measure_by_plan"] = True
@@ -14069,32 +14151,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 _axes_early = refcols_of(src) if src else []
             except RuntimeError:
                 _axes_early = []
-            _product_axis = sales_rank_product_axis(
-                src, intent, question, axes=_axes_early, diag=diag)
-            if _product_axis:
-                diag["sales_rank_product_axis"] = True
-            _sm, _how = sales_rank_canon_measure(
+            _sm, _how = sales_rank_resolve_measure(
                 _names, intent, question, _als,
-                axes=_axes_early, src=src, product_axis=_product_axis,
-                diag=diag)
+                src=src, axes=_axes_early, plan=plan, diag=diag)
             if _how == "role_ask":
                 _sm = None
-            # Клиентский rank без названной меры → money; товарная ось — не
-            # перебивать qty (класс «топ-N товара» без «больше всего»/money-алиаса).
-            if (not _sm and not _product_axis
-                    and not _rank_wants_quantity(question)):
-                _sm = sales_money_measure(_names, _als)
-                if _sm:
-                    _how = "sales_rank_money"
-            if not _sm:
-                _sm = sales_qty_measure(_names, _als)
-                if _sm:
-                    _how = "sales_qty_canon"
-                else:
-                    # Нет qty у источника — деньги, в т.ч. на товарной оси.
-                    _sm = sales_money_measure(_names, _als)
-                    if _sm:
-                        _how = "sales_rank_money"
         elif sales_force_money_measure(intent, question):
             _sm = sales_money_measure(_names, _als)
             _how = "sales_canon"
@@ -14986,7 +15047,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
         completeness=cov, folders=n_folders, src=src)
     if money:
-        text = postprocess_money_answer_text(text, _unit_for_measure(measure))
+        text = postprocess_money_answer_text(
+            text, _unit_for_measure(measure, money, src=src))
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
             "completeness": cov, "measure": say_measure,
             # 🔴 ПОСЧИТАННЫЕ ЧИСЛА — ПОЛЕМ ОТВЕТА, А НЕ ТОЛЬКО ВНУТРИ ТЕКСТА (03.08).
