@@ -1025,3 +1025,6 @@
 {"type":"relation","from":"docs/TICK_PSQL_AUDIT.md","to":"embed_missing.sh","relationType":"решает судьбу веера"}
 {"type":"relation","from":"test-gold-split.sh","to":"check-gold-split.sh","relationType":"проверяет"}
 {"type":"relation","from":"git-gate.sh","to":"check-gold-split.sh","relationType":"зовёт в commit-msg"}
+{"type": "entity", "name": "PIPELINE.md", "entityType": "документ", "observations": ["Схема пайплайна от кода: такт build.sh + путь вопроса serene_ask.py (docs/PIPELINE.md)"]}
+{"type": "relation", "from": "PIPELINE.md", "to": "build.sh", "relationType": "описывает"}
+{"type": "relation", "from": "PIPELINE.md", "to": "serene_ask.py", "relationType": "описывает"}
