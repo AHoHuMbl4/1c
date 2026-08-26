@@ -190,9 +190,11 @@ CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict_stem (
 -- (ловушка §5.2 фактуры). Наполнение — DROP+CREATE файлом после wiki_alias
 -- (`solr_synonyms_build.py`). Индекс корпуса не трогаем — только ts_lexize.
 --
--- Кэш «моста на лету» (PLAN_UPGRADE_NATIVE §7-бис): подтверждённые связки
--- пишутся сюда отдельной таблицей; компилятор UNION-ит их с search_entity_alias
--- и помечает источник в комментарии SQL-файла.
+-- Кэш «моста на лету» (PLAN_UPGRADE_NATIVE §7-бис): слот под подтверждённые
+-- связки, которые компилятор solr_synonyms_build.py читает рядом с
+-- search_entity_alias. 🔴 Писателя в дереве нет (grep 25.08: ни INSERT, ни
+-- MERGE в search_synonym_bridge) — мост на лету ещё не реализован (§7 плана:
+-- отдельная работа). Таблица пустая по построению, пока мост не начнёт писать.
 CREATE TABLE IF NOT EXISTS search_synonym_bridge (
   rule VARCHAR,
   seen_at TIMESTAMP);

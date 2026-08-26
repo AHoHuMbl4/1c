@@ -284,6 +284,22 @@ else
     || fail "отметка corpus_built_ts"
 fi
 
+# Словарь относительных окон → search_meta. Шаг ВНЕ пропуска корпуса: иначе при
+# SKIP_BUILD ключ не обновлялся бы, а ask при недоступном запасном файле молча
+# домысливал бы текущую неделю вместо «прошлой» (п. 13). Файл копируется в
+# CSV_DIR: процесс serened не видит произвольные пути ([замер] wiki_alias /tmp).
+# Fail-closed: нет файла / пустой OBJECT — такт падает.
+echo "== 1-period. словарь относительных форм → search_meta"
+PERIOD_FORMS_SRC="$(pwd)/period_relative_forms.json"
+[ -f "$PERIOD_FORMS_SRC" ] || fail "нет $PERIOD_FORMS_SRC"
+PERIOD_FORMS_EXCH="${CSV_DIR:-/var/lib/serenedb}/period_relative_forms.json"
+cp -f "$PERIOD_FORMS_SRC" "$PERIOD_FORMS_EXCH" \
+  || fail "копия period_relative_forms.json в CSV_DIR"
+chmod a+r "$PERIOD_FORMS_EXCH" 2>/dev/null || true
+psql "$DSN" -q -v period_forms_path="$PERIOD_FORMS_EXCH" \
+  -f period_relative_forms_load.sql \
+  || fail "загрузка period_relative_forms в search_meta"
+
 # 🔴 `fail`, а не «предупреждение». Прежде недосчитанные векторы печатались в журнал и
 # такт заканчивался успехом — это ровно тот тихий отказ, из-за которого 20 значений не
 # получали вектор КАЖДЫЙ такт и никто не знал (`HOW_NOT_TO §2.10`).

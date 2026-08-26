@@ -143,12 +143,12 @@ while :; do
     # вопросах приёмки (партнёры, склады, организации). Верные ответы 164, 17 и 5 из-за
     # этого отвергались проверкой выбора. Разбор — `work/entity-choice/ANSWER_RATE_P21.md`.
     #
-    # Просим теперь ИМЕНА: как называют сам вид записи и как называют каждую его величину,
-    # включая то слово-действие, которым о ней говорят («отгрузка», «продажа»). Запретов в
-    # задании нет намеренно — правило держится не текстом для модели, а формой ответа
-    # (короткие именующие обороты) и прибором `work/entity-choice/alias_rank_bench.py`,
-    # который меряет словарь числом: на каком месте эталонная сущность вопроса.
-    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — the SHORT NAMES a person here uses for this kind of record, including its own title; names of its quantities do not belong here; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+    # 🔴 ОБИХОДНЫЕ СЛОВА, А НЕ ПЕРЕФРАЗИРОВКИ TITLE (25.08). Задание «SHORT NAMES …
+    # including its own title» давало морфологию метаданных («Контрагенты, контрагент»)
+    # и имена реквизитов в aliases; ts_lexize('…','клиент') оставался без связи
+    # (живой замер okna 25.08). Просим слова из вопросов людей + title; имена величин
+    # — только в quantities. Отсев мусора — `wiki_alias_parse.filter_entity_aliases`.
+    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — everyday words a person uses when asking about this kind of record (the words that appear in their question), and also the record title itself; quantity and field names go only under quantities; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
@@ -270,7 +270,7 @@ while :; do
   PAY=$(cat "$TMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
   {
-    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — the SHORT NAMES a person here uses for this kind of record, including its own title; names of its quantities do not belong here; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — everyday words a person uses when asking about this kind of record (the words that appear in their question), and also the record title itself; quantity and field names go only under quantities; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
@@ -398,7 +398,9 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     PAY=$(cat "$TMP/pay")
     case "$PAY" in ''|'[]'|'null') continue;; esac
     {
-      printf '%s' "JSON only, no prose, no code fences. The record types below are ALL CALLED BY THE SAME WORD in this database — a person using that word could mean any of them. For each, in the SAME language as its title: (1) aliases — how a person refers to THIS one, keeping its own title and dropping words that fit the others equally well; (2) bestUsedFor — what only this one answers; (3) notEnoughFor — the other types from this list and what each answers instead. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+      # 🔴 Общие обиходные слова оставляем в aliases: иначе ts_lexize теряет связь
+      # («клиент» → пусто, замер okna 25.08). Различие соседей — в notEnoughFor.
+      printf '%s' "JSON only, no prose, no code fences. The record types below are ALL CALLED BY THE SAME WORD in this database — a person using that word could mean any of them. For each, in the SAME language as its title: (1) aliases — everyday asking-words and the title for THIS type; everyday words that also fit siblings stay in aliases, and the sibling distinction goes in notEnoughFor; (2) bestUsedFor — what only this one answers; (3) notEnoughFor — the other types from this list and what each answers instead. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
       cat "$TMP/pay"
     } > "$TMP/msg"
     chmod 644 "$TMP/msg"

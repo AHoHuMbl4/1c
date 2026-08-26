@@ -2,9 +2,10 @@
 """Ф6.3: компиляция Solr-карты синонимов из таблиц → DROP+CREATE словарь файлом.
 
 Списков слов в коде нет: правила приходят из search_entity_alias (wiki-alias)
-и search_synonym_bridge (кэш моста на лету). Здесь только формат Solr и лимиты
-по фактуре docs/F6_SYNONYMS_FACTS.md §3.2 (~20 000 правил / ~400 КБ inline OK;
-длиннее — честная ошибка, п. 13 TARGET).
+и search_synonym_bridge (слот кэша моста на лету, PLAN §7-бис). Читатель —
+этот модуль; писателя bridge в дереве нет (таблица обычно пуста). Здесь только
+формат Solr и лимиты по фактуре docs/F6_SYNONYMS_FACTS.md §3.2 (~20 000 правил
+/ ~400 КБ inline OK; длиннее — честная ошибка, п. 13 TARGET).
 
 Доки: CREATE TEXT SEARCH DICTIONARY › solr_synonyms
 (https://docs.serenedb.com/sql/statements/create_text_search_dictionary/solr-synonyms).
@@ -169,7 +170,8 @@ def render_ddl(dict_name: str, solr_map: str) -> str:
     body = [
         "-- Ф6.3 solr_synonyms: пересоздание карты",
         "-- источник wiki-alias: search_entity_alias.aliases (двусторонние классы)",
-        "-- источник bridge:     search_synonym_bridge.rule (кэш моста на лету)",
+        "-- источник bridge:     search_synonym_bridge.rule "
+        "(слот моста на лету; писателя в дереве нет — обычно пусто)",
         "-- Доки: https://docs.serenedb.com/sql/statements/create_text_search_dictionary/solr-synonyms",
         "\\set ON_ERROR_STOP on",
         "DROP TEXT SEARCH DICTIONARY IF EXISTS %s;" % name,

@@ -1992,6 +1992,36 @@ def _working_day_doc_preds(period):
     return ["try_cast(doc_date AS DATE) IN (%s)" % union]
 
 
+def entity_form_rank_single_window(intent, question=""):
+    """Гейт B: rank/top-N + одна точка окна (нет period2) — не пара compare.
+
+    Структура intent (amount / rank-текст / top-N>1), не списки сущностей.
+    Голый want=list без top-N — не блокирует K4 (сравнение двух окон).
+    """
+    if not ASK_ENTITY_FORM:
+        return False
+    intent = intent or {}
+    p2 = intent.get("period2") or {}
+    if p2.get("from") or p2.get("to"):
+        return False
+    amt = intent.get("amount") or {}
+    if rank_question_text(question):
+        return True
+    if amt.get("value") is not None:
+        try:
+            n = int(float(amt["value"]))
+            if float(amt["value"]) == float(n) and 1 <= n <= ROWS_TO_MODEL:
+                return True
+        except (TypeError, ValueError):
+            pass
+    try:
+        if _sales_rank_top_n(intent, {}, question) > 1:
+            return True
+    except (TypeError, ValueError):
+        pass
+    return False
+
+
 def sales_compare_intent(intent, question=""):
     """Сравнение двух окон продаж («лучше/больше чем»), не rank по оси.
 
@@ -1999,8 +2029,9 @@ def sales_compare_intent(intent, question=""):
     «лучше» + период → прежний путь уводил в compare (diff двух WTD), grain=row,
     без имени лидера при живых данных GROUP BY ТМЦ. Суперлатив/топ — rank.
 
-    ASK_ENTITY_FORM: голый want=list не блокирует compare (K4); суперлатив —
-    по-прежнему rank. Новых языковых маркеров нет.
+    ASK_ENTITY_FORM: голый want=list не блокирует compare (K4); суперлатив /
+    гейт B (rank top-N + одно окно) — по-прежнему rank. Новых языковых
+    маркеров нет.
     """
     intent = intent or {}
     q = " ".join(str(question or "").lower().split())
@@ -2015,13 +2046,8 @@ def sales_compare_intent(intent, question=""):
     _vs = any(w in q for w in (" чем", "чем ", " vs", "против", "по сравнению",
                                "compared", " versus"))
     if ASK_ENTITY_FORM:
-        # Сильный rank (текст/amount) без «чем» — не compare.
-        # want=list сам по себе — не rank для входа compare.
-        amt = intent.get("amount") or {}
-        strong_rank = (
-            rank_question_text(question)
-            or (not amt.get("op") and amt.get("value") is not None))
-        if strong_rank and not _vs:
+        # Гейт B: rank/top-N + одна точка окна — не compare (K4 двух окон цел).
+        if entity_form_rank_single_window(intent, question) and not _vs:
             return False
     elif rank_intent_from(intent, question=question) and not _vs:
         return False
@@ -2035,6 +2061,7 @@ def sales_compare_windows(intent, today, question=""):
 
     Возвращает (period, period2, form_id). Без лексики — только границы дат.
     ASK_ENTITY_FORM: period = прошлая полная неделя/месяц → пара (WTD/MTD, prior).
+    Гейт B: rank top-N + одно окно — пару не строить (оставить точку периода).
     """
     td = _calendar_date(today)
     if not td:
@@ -2066,6 +2093,12 @@ def sales_compare_windows(intent, today, question=""):
         return cur, prev, "mtd"
 
     if ASK_ENTITY_FORM and fr_d and to_d:
+        # Гейт B: rank/top-N при одной точке — не разворачивать в пару compare.
+        if entity_form_rank_single_window(intent, question):
+            p2 = dict((intent or {}).get("period2") or {})
+            if p2.get("from") or p2.get("to"):
+                return p, p2, "explicit"
+            return p, {}, "explicit"
         pws, pwe = _prev_week_range(td)
         if fr_d == pws and to_d == pwe:
             cur = {"from": _iso_date(ws), "to": _iso_date(td)}
@@ -2123,6 +2156,84 @@ def entity_form_catalogs_for_kind(kind, allow_meaning=True):
     return [s for s in found if str(s).startswith("catalog_")]
 
 
+def entity_form_movements_for_kind(kind, allow_meaning=True):
+    """document_*/accumulationregister_* по stem/label; запасной — meaning.
+
+    Гейт A: если kind указывает на движение — счёт-цель сам документ/регистр,
+    не ось catalog×sales (форма F закрыта).
+    """
+    kind = (kind or "").strip()
+    if not kind:
+        return []
+    out = []
+    try:
+        rs = psql(
+            "SELECT t.src_table FROM %s t "
+            "LEFT JOIN search_entity_alias a ON a.src_table = t.src_table "
+            "WHERE (t.src_table LIKE 'document_%%' "
+            "    OR t.src_table LIKE 'accumulationregister_%%') "
+            "AND list_has_any("
+            "  list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
+            "  list_filter(ts_lexize(%s, concat_ws(' ', t.label, a.aliases, "
+            "                                      a.best_used_for)),"
+            "              x -> length(x) >= 3))"
+            % (TABLES, lit(STEM_DICT), lit(kind), lit(STEM_DICT)))
+        out = [r[0] for r in (rs or []) if r and r[0]]
+    except RuntimeError:
+        out = []
+    if out:
+        return [s for s in out if not (
+            str(s).startswith("accumulationregister_") and sales_noncanon_focus(s))]
+    if not allow_meaning:
+        return []
+    try:
+        found = meaning_candidates([], kind, kind, MEANING_TOP) or []
+    except (RuntimeError, ValueError, TypeError):
+        found = []
+    return [s for s in found
+            if str(s).startswith("document_")
+            or (str(s).startswith("accumulationregister_")
+                and not sales_noncanon_focus(s))]
+
+
+def entity_form_count_target_is_movement(intent, pool):
+    """Гейт A: счёт-цель — движение (kind → document_/accumulationregister_*).
+
+    Структура: intent.kind + классы пула/поиска, не слова вопроса.
+    """
+    if not ASK_ENTITY_FORM:
+        return False
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    kind = (intent.get("kind") or "").strip()
+    if not kind:
+        return False
+    raw = [str(s) for s in (pool or [])]
+    move_pool = [
+        s for s in raw
+        if s.startswith("document_")
+        or (s.startswith("accumulationregister_") and not sales_noncanon_focus(s))]
+    # Явное окно: счёт документов/движений за период — F не подменяет.
+    period = intent.get("period") or {}
+    has_period = bool(period.get("from") or period.get("to"))
+    found = entity_form_movements_for_kind(kind, allow_meaning=has_period)
+    if not found:
+        return False
+    # kind указывает на движение: пересечение с пулом или найденный класс.
+    if move_pool and any(s in set(move_pool) for s in found):
+        return True
+    if any(str(s).startswith("document_") for s in found):
+        return True
+    if move_pool and any(str(s).startswith("document_") for s in move_pool):
+        # в пуле есть document_* и kind резолвится в движение — счёт документов
+        return any(
+            str(s).startswith("document_") or str(s).startswith("accumulationregister_")
+            for s in found)
+    return bool(found)
+
+
 def entity_form_expand_pool(pool, intent=None):
     """Каталоги из kind + sales-держатели осей (search_refcols / основы)."""
     out = list(pool or [])
@@ -2165,6 +2276,7 @@ def entity_form_applicable(intent, pool):
     Явное окно — для complement. Distinct без окна — только если в сыром пуле
     уже есть движение (document_/register), иначе «всего клиентов» остаётся
     счётом справочника.
+    Гейт A: kind → document_/accumulationregister_* (счёт движения) — F закрыта.
     """
     if not ASK_ENTITY_FORM:
         return False
@@ -2173,6 +2285,9 @@ def entity_form_applicable(intent, pool):
     if want not in ("count", ""):
         return False
     raw = list(pool or [])
+    # Гейт A: счёт-цель — само движение, не ось catalog×sales.
+    if entity_form_count_target_is_movement(intent, raw):
+        return False
     has_movement = any(
         (str(s).startswith("accumulationregister_") and not sales_noncanon_focus(s))
         or str(s).startswith("document_")
@@ -5490,7 +5605,11 @@ def _alias_role_in_question(question, measure_name, alias_by):
 
 
 def _sales_product_rank_qty(intent, question):
-    """Товарный рейтинг продаж → Количество (те же фразы, что force_money=False)."""
+    """Товарный рейтинг продаж → Количество (те же фразы, что force_money=False).
+
+    Запасной сигнал без осей; канон qty на rank — `sales_rank_product_axis`
+    (роль оси из target_src + aliases в БД), не расширение списков слов.
+    """
     if _rank_wants_quantity(question):
         return True
     if not sales_sum_intent(intent, question):
@@ -5507,10 +5626,58 @@ def _sales_product_rank_qty(intent, question):
     return False
 
 
-def sales_rank_canon_measure(names, intent, question, alias_by=None):
-    """Мера rank×sales: роль из measure_choice/алиасов, не force_money.
+def sales_rank_product_axis(src, intent, question, axes=None, diag=None):
+    """Rank по оси, чей target_src — товарный catalog (данные, не слова вопроса).
 
-    money — алиас из данных в слове/вопросе; qty — товарный рейтинг; иначе None
+    Ось узнаём так же, как выбор GROUP BY: stem/alias target_src (`kind_axis_hits`)
+    по вопросу и kind; если пусто — уже выбранный `diag.rank_axis_auto` или
+    `rank_axis_resolve` (метки осей из search_tables). Товарность — `_is_product_catalog`
+    по target_src (структура catalog_*, не перечень фраз вопроса).
+    """
+    axes = list(axes or [])
+    if not axes and src:
+        try:
+            axes = refcols_of(src)
+        except RuntimeError:
+            axes = []
+    if not axes:
+        return False
+    hit = set()
+    q = (question or "").strip()
+    kind = ((intent or {}).get("kind") or "").strip()
+    for text in (q, kind):
+        if not text:
+            continue
+        for col in (kind_axis_hits(axes, text) or []):
+            if col:
+                hit.add(col)
+    if not hit:
+        col = ((diag or {}).get("rank_axis_auto") or "").strip()
+        if not col:
+            try:
+                col, alts = rank_axis_resolve(src, axes, intent, question)
+            except RuntimeError:
+                col, alts = None, []
+            if diag is not None and col:
+                diag["rank_axis_auto"] = col
+                if alts:
+                    diag.setdefault("rank_axis_alts", list(alts))
+        if col:
+            hit.add(col)
+    if not hit:
+        return False
+    for a in axes:
+        if a.get("col") in hit and _is_product_catalog(a.get("target_src") or ""):
+            return True
+    return False
+
+
+def sales_rank_canon_measure(names, intent, question, alias_by=None,
+                             axes=None, src=None, product_axis=None, diag=None):
+    """Мера rank×sales: роль из measure_choice/алиасов и роли оси, не force_money.
+
+    money — алиас из данных в слове/вопросе; qty — rank по товарной оси (или
+    запасной `_sales_product_rank_qty`), если qty есть у источника; иначе None
     (ответный путь добирает money для клиентского rank без qty).
     """
     names = list(names or [])
@@ -5529,7 +5696,10 @@ def sales_rank_canon_measure(names, intent, question, alias_by=None):
             (word and _alias_role_in_question(word, m, alias_by))
             or _alias_role_in_question(question, m, alias_by)):
         return m, "sales_money_role"
-    if _sales_product_rank_qty(intent, question):
+    if product_axis is None:
+        product_axis = sales_rank_product_axis(
+            src, intent, question, axes=axes, diag=diag)
+    if product_axis or _sales_product_rank_qty(intent, question):
         q = sales_qty_measure(names, alias_by)
         if q:
             return q, "sales_qty_canon"
@@ -10659,6 +10829,17 @@ def _health_gap():
         return gap
 
 
+def _health_period_relative_forms():
+    """Готовность словаря относительных окон (meta или запасной файл).
+
+    Пустой словарь → loaded=False: иначе «прошлая неделя» молча становится
+    текущей (п. 13). Фразы не в коде — только факт «словарь есть/нет».
+    """
+    forms = period_relative_forms() or {}
+    n = len(forms) if isinstance(forms, dict) else 0
+    return {"loaded": n > 0, "forms": n}
+
+
 COVERAGE_SYS = """You answer an employee's question about how complete the company's data
 is inside this system. You get a census: for each kind of records, how many rows exist in
 the source system and how many reached the search, plus the reason when they differ.
@@ -13875,7 +14056,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         else:
             diag["measure_pick_unresolved"] = measure_pick
     # Канон «продали»: итог «сколько» → деньги; ранг «что продавалось» → Количество.
-    # Rank×sales (ASK_SALES_RANK_CANON): qty|money по роли из алиасов, не force_money.
+    # Rank×sales (ASK_SALES_RANK_CANON): qty|money по роли оси/алиасов, не force_money.
     _rank_sales = sales_rank_engaged(
         intent, plan, question, list(cands or []) + ([src] if src else []))
     if ((sales_sum_intent(intent, question) or _rank_sales) and not measure_pick
@@ -13883,11 +14064,25 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _names = measures_of(src)
         _als = measure_aliases_of(src)
         if _rank_sales:
+            _axes_early = []
+            try:
+                _axes_early = refcols_of(src) if src else []
+            except RuntimeError:
+                _axes_early = []
+            _product_axis = sales_rank_product_axis(
+                src, intent, question, axes=_axes_early, diag=diag)
+            if _product_axis:
+                diag["sales_rank_product_axis"] = True
             _sm, _how = sales_rank_canon_measure(
-                _names, intent, question, _als)
+                _names, intent, question, _als,
+                axes=_axes_early, src=src, product_axis=_product_axis,
+                diag=diag)
             if _how == "role_ask":
                 _sm = None
-            if not _sm and not _rank_wants_quantity(question):
+            # Клиентский rank без названной меры → money; товарная ось — не
+            # перебивать qty (класс «топ-N товара» без «больше всего»/money-алиаса).
+            if (not _sm and not _product_axis
+                    and not _rank_wants_quantity(question)):
                 _sm = sales_money_measure(_names, _als)
                 if _sm:
                     _how = "sales_rank_money"
@@ -13895,6 +14090,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 _sm = sales_qty_measure(_names, _als)
                 if _sm:
                     _how = "sales_qty_canon"
+                else:
+                    # Нет qty у источника — деньги, в т.ч. на товарной оси.
+                    _sm = sales_money_measure(_names, _als)
+                    if _sm:
+                        _how = "sales_rank_money"
         elif sales_force_money_measure(intent, question):
             _sm = sales_money_measure(_names, _als)
             _how = "sales_canon"
@@ -15490,6 +15690,11 @@ class Handler(BaseHTTPRequestHandler):
                                         "coverage_gap": "unknown",
                                         "error": str(e)[:200]})
             gap = _classify_health_gap(gap)
+            # Словарь относительных окон: пустой = нехватка слоя (п. 13), видна в /health.
+            try:
+                prf = _health_period_relative_forms()
+            except Exception as e:                      # noqa: BLE001
+                prf = {"loaded": False, "forms": 0, "error": str(e)[:200]}
             # Ф6.4: при флаге — штатные sdb_metrics рядом с эвристикой; VACUUM не зовём.
             native = native_err = None
             if ASK_HEALTH_NATIVE_FRESHNESS:
@@ -15499,7 +15704,18 @@ class Handler(BaseHTTPRequestHandler):
                     native_err = str(e)[:200]
             if gap and gap.get("kind") == "systemic":
                 body = {"status": "degraded", "corpus_rows": int(n),
-                        "coverage_gap": gap}
+                        "coverage_gap": gap,
+                        "period_relative_forms": prf}
+                if ASK_HEALTH_NATIVE_FRESHNESS:
+                    body["freshness"] = _attach_native_freshness(
+                        {}, native, native_err)
+                return self._send(503, body)
+            if not prf.get("loaded"):
+                body = {"status": "degraded", "corpus_rows": int(n),
+                        "coverage_gap": gap or {"entities": 0,
+                                                "rows_missing": 0,
+                                                "kind": "none"},
+                        "period_relative_forms": prf}
                 if ASK_HEALTH_NATIVE_FRESHNESS:
                     body["freshness"] = _attach_native_freshness(
                         {}, native, native_err)
@@ -15512,11 +15728,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(200, {"status": "serene-ask-ok",
                                         "corpus_rows": int(n),
                                         "coverage_gap": gap,
+                                        "period_relative_forms": prf,
                                         "freshness": freshness})
             body = {"status": "serene-ask-ok", "corpus_rows": int(n),
                     "coverage_gap": gap or {"entities": 0,
                                             "rows_missing": 0,
-                                            "kind": "none"}}
+                                            "kind": "none"},
+                    "period_relative_forms": prf}
             if ASK_HEALTH_NATIVE_FRESHNESS:
                 body["freshness"] = _attach_native_freshness(
                     {}, native, native_err)

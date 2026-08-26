@@ -379,6 +379,72 @@ A.entity_form_expand_pool = _old_exp
 A.entity_form_axis_on_sales = _old_axis
 _restore(_s)
 
+# ── Gate A: счёт document_* — F не отвечает (не catalog×sales) ───────────────
+# want=count + явное окно; kind→document; в пуле document + catalog + sales.
+# Meaning-запас может подсунуть catalog — форма всё равно None.
+_s = _flag(1)
+_old_exp = A.entity_form_expand_pool
+_old_axis = A.entity_form_axis_on_sales
+_old_ck = A.entity_form_catalogs_for_kind
+_old_comp = A.entity_form_compute
+_old_mv = A.entity_form_movements_for_kind
+A.entity_form_expand_pool = lambda p, intent=None: list(p or [])
+A.entity_form_catalogs_for_kind = (
+    lambda k, allow_meaning=True: ["catalog_x"])  # meaning→catalog
+A.entity_form_axis_on_sales = (
+    lambda cat, sales: ((sales[0], "axis_x") if sales else (None, None)))
+A.entity_form_compute = lambda form, meta, match="": A.entity_form_atom_distinct(
+    src=meta.get("sales_src"), axis=meta.get("axis"), value=2059,
+    period=meta.get("period"))
+A.entity_form_movements_for_kind = (
+    lambda k, allow_meaning=True: ["document_a"])
+_pool_doc = [
+    "document_a", "catalog_x", "accumulationregister_y",
+]
+_intent_doc = {
+    "want": "count", "kind": "kind_doc",
+    "period": {"from": "2025-12-01", "to": "2025-12-31"},
+}
+_form_doc, _meta_doc = A.entity_form_pick(_intent_doc, _pool_doc)
+t("document count: no F",
+  _form_doc is None,
+  (_form_doc, (_meta_doc or {}).get("catalog_src")))
+_ans_doc = A.try_entity_form_answer("q", _intent_doc, _pool_doc)
+t("document count: try не атом формы",
+  _ans_doc is None, _ans_doc)
+A.entity_form_expand_pool = _old_exp
+A.entity_form_axis_on_sales = _old_axis
+A.entity_form_catalogs_for_kind = _old_ck
+A.entity_form_compute = _old_comp
+A.entity_form_movements_for_kind = _old_mv
+_restore(_s)
+
+# ── Gate B: rank top-N + одно окно → не compare (K4 двух окон цел) ───────────
+_s = _flag(1)
+_intent_rank = {
+    "want": "list", "kind": "клиент",
+    "period": {"from": "2026-08-17", "to": "2026-08-23"},
+    "amount": {"value": 3},
+}
+_q_rank = "кто из клиентов молодец за прошлую неделю, три лучших"
+t("rank top-N single window: no compare",
+  A.sales_compare_intent(_intent_rank, _q_rank) is False)
+_rp1, _rp2, _rfid = A.sales_compare_windows(
+    _intent_rank, TODAY, _q_rank)
+t("rank top-N single window: окно одно (не пара compare)",
+  _rp1.get("from") == "2026-08-17" and _rp1.get("to") == "2026-08-23"
+  and not (_rp2.get("from") or _rp2.get("to")),
+  (_rfid, _rp1, _rp2))
+t("rank top-N single window: rank остаётся",
+  A.rank_intent_from(_intent_rank, question=_q_rank) is True)
+# K4: два окна по-прежнему compare
+t("K4 two-window: compare цел",
+  A.sales_compare_intent(_intent_list, _q_cmp) is True)
+_kp1, _kp2, _kfid = A.sales_compare_windows(_intent_list, TODAY, _q_cmp)
+t("K4 two-window: пара WTD+prior",
+  _kfid == "wtd" and bool(_kp2.get("from")), (_kfid, _kp1, _kp2))
+_restore(_s)
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)

@@ -1,0 +1,22 @@
+[
+  {"id": "01", "slug": "infra-trace-llm", "start": "_new_rid", "end": "embed_one", "from_ref": 1, "to_ref": 808, "title": "Инфра, TRACE, LLM"},
+  {"id": "02", "slug": "intent", "start": "_json_blocks", "end": "_first_intent_object", "from_ref": 809, "to_ref": 1373, "title": "Intent"},
+  {"id": "03", "slug": "period-windows", "start": "_num_pred", "end": "apply_period_leader", "from_ref": 1374, "to_ref": 1810, "title": "Периоды и окна"},
+  {"id": "04", "slug": "calendar-axis", "start": "_sql_ident", "end": "_working_day_doc_preds", "from_ref": 1811, "to_ref": 1994, "title": "Календарная ось"},
+  {"id": "05", "slug": "entity-form", "start": "entity_form_rank_single_window", "end": "aggregate_compare_sales", "from_ref": 1995, "to_ref": 2596, "title": "Форма сущности"},
+  {"id": "06", "slug": "entity-search", "start": "_predicates", "end": "meaning_candidates", "from_ref": 2597, "to_ref": 3135, "title": "Поиск сущностей"},
+  {"id": "07", "slug": "rrf-vectors", "start": "_corpus_ivf_ready", "end": "_ngrams", "from_ref": 3136, "to_ref": 3729, "title": "RRF и векторы"},
+  {"id": "08", "slug": "measures-totals", "start": "_shares_chars", "end": "totals_of", "from_ref": 3730, "to_ref": 3934, "title": "Меры и итоги"},
+  {"id": "09", "slug": "fork-detector", "start": "_measures_by_src", "end": "_class_label_lookup", "from_ref": 3935, "to_ref": 4754, "title": "Детектор развилки"},
+  {"id": "10", "slug": "rank", "start": "count_question_skips_axis", "end": "prefer_entity_for_rank", "from_ref": 4755, "to_ref": 5239, "title": "Ранг"},
+  {"id": "11", "slug": "sales", "start": "sales_sum_intent", "end": "period_zero_why_question", "from_ref": 5240, "to_ref": 5900, "title": "Продажи"},
+  {"id": "12", "slug": "stock-balance", "start": "grain_dec_from_axis_ticket", "end": "balance_bridge_clarify", "from_ref": 5901, "to_ref": 6161, "title": "Остатки"},
+  {"id": "13", "slug": "fork-outcomes", "start": "stock_balance_is_sales_noise", "end": "fork_outcome_c", "from_ref": 6162, "to_ref": 6616, "title": "Исходы развилки"},
+  {"id": "14", "slug": "clarify-memory", "start": "_alias_parts", "end": "guards_skip_for_choice", "from_ref": 6617, "to_ref": 7368, "title": "Уточнение и память"},
+  {"id": "15", "slug": "answer-atoms", "start": "stop2_active", "end": "fill_atom_pairs", "from_ref": 7369, "to_ref": 7742, "title": "Атомы ответа"},
+  {"id": "16", "slug": "veto-pick-entity", "start": "pair_slots_only", "end": "pick_entity", "from_ref": 7743, "to_ref": 8358, "title": "Вето и выбор сущности"},
+  {"id": "17", "slug": "aggregate-groups", "start": "_vec", "end": "aggregate_groups", "from_ref": 8359, "to_ref": 8880, "title": "Агрегаты и группы"},
+  {"id": "18", "slug": "compose", "start": "merge_period2_groups", "end": "compose", "from_ref": 8881, "to_ref": 9689, "title": "Формулировка"},
+  {"id": "19", "slug": "answer-check", "start": "_readings", "end": "_filter_values", "from_ref": 9690, "to_ref": 10121, "title": "Проверка ответа"},
+  {"id": "20", "slug": "ask-main-http", "start": "_filter_dates", "end": "Handler", "from_ref": 10122, "to_ref": 15777, "title": "ask / HTTP"}
+]

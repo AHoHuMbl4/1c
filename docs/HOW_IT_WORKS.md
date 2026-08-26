@@ -484,7 +484,7 @@ Compose на `slot_mode` sum/rank при `sum=0.0` больше не кладё�
 
 | Слой | Где | Чем наполняется |
 |---|---|---|
-| человеческие слова к сущности | таблица `search_entity_alias` в базе | `wiki_alias.sh` — **штатным OpenClaw** (`openclaw infer model run --local` через `alias_infer_gateway.py`), один раз на сущность, идемпотентно. 🔴 [замер 24.08] `--gateway` → RPC-потолок **120 000 ms** (`GatewayTransportError`); пачка 20 / 5581 B / Qwen3.8-27B: gw 619 с exit 1, loc 1034 с exit 0. Таймаут в конфиге не настраивается (`cli/infer.md` Behavior). Юнит `1c-wiki-alias` |
+| человеческие слова к сущности | таблица `search_entity_alias` в базе | `wiki_alias.sh` — **штатным OpenClaw** (`openclaw infer model run --local` через `alias_infer_gateway.py`), один раз на сущность, идемпотентно. Запрос (25.08): everyday words из вопросов + title; величины только в `quantities`; отсев мусора — `wiki_alias_parse.filter_entity_aliases`. 🔴 [замер 24.08] `--gateway` → RPC-потолок **120 000 ms** (`GatewayTransportError`); пачка 20 / 5581 B / Qwen3.8-27B: gw 619 с exit 1, loc 1034 с exit 0. Таймаут в конфиге не настраивается (`cli/infer.md` Behavior). Юнит `1c-wiki-alias` |
 | человеческие слова к величине | таблица `search_measure_alias` (поле → слова) | тот же `wiki_alias.sh`: в ответе модели — `quantities[{name, aliases}]`, имя копируется из входного списка; выдуманное отбрасывается. Уже описанные сущности добираются отдельным проходом, алиасы записи не перезаписываются. Пустышка — попытка, переспрос через `WIKI_ALIAS_RETRY_H` |
 | страницы вики | хранилище `memory-wiki` | `wiki_build.sql` собирает текст **в базе**, `wiki_publish.sh` пишет файлы и зовёт `openclaw wiki compile` |
 | поиск по вики | `wiki_search` / `wiki_get` | инструменты разрешены боту в `tools.allow` |

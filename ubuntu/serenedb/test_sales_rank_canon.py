@@ -191,6 +191,88 @@ try:
 finally:
     _restore(_sv)
 
+# ── M+: rank×product без названной меры → qty (класс топ-N товара) ───────────
+# [замер 25.08 okna] «дай топ-3 товара за вчера» → Всего (money fallback),
+# эталон — Количество. Срыв: sales_rank_canon_measure→None, затем
+# call-site money из‑за _rank_wants_quantity("топ"≠"top"). Правило: роль оси
+# (product_axis / target_src catalog), не список русских слов.
+_q_top3 = "дай топ-3 товара за вчера"
+_intent_top3 = {"want": "list", "kind": "товар", "amount": {"value": 3}}
+_AX_PROD = [
+    {"col": "ТМЦ", "target_src": "catalog_номенклатура"},
+    {"col": "Контрагент", "target_src": "catalog_контрагенты"},
+]
+_AX_CLIENT = [
+    {"col": "Контрагент", "target_src": "catalog_контрагенты"},
+    {"col": "ТМЦ", "target_src": "catalog_номенклатура"},
+]
+
+_sv = _flag(True)
+try:
+    t("rule: топ-3 товара без product_axis — canon None (ось не дана)",
+      A.sales_rank_canon_measure(
+          _NAMES, _intent_top3, _q_top3, _ALS)[0] is None)
+    _m5, _how5 = A.sales_rank_canon_measure(
+        _NAMES, _intent_top3, _q_top3, _ALS, product_axis=True)
+    t("rule: топ-3 товара + product_axis → Количество",
+      _m5 == "Количество" and _how5 == "sales_qty_canon", (_m5, _how5))
+    # оси из данных: kind_axis_hits → ТМЦ (товарный catalog)
+    _old_hits = A.kind_axis_hits
+    A.kind_axis_hits = lambda axes, text: (
+        ["ТМЦ"] if text and ("товар" in text.lower() or text == "товар") else [])
+    try:
+        t("rule: product_axis по target_src catalog_номенклатура",
+          A.sales_rank_product_axis(
+              "accumulationregister_реализациятмц", _intent_top3, _q_top3,
+              axes=_AX_PROD))
+        _m6, _how6 = A.sales_rank_canon_measure(
+            _NAMES, _intent_top3, _q_top3, _ALS, axes=_AX_PROD,
+            src="accumulationregister_реализациятмц")
+        t("rule: canon через оси данных → Количество",
+          _m6 == "Количество", (_m6, _how6))
+        # клиентская ось: hit Контрагент — не qty
+        A.kind_axis_hits = lambda axes, text: (
+            ["Контрагент"] if text and "клиент" in (text or "").lower() else [])
+        t("rule: client axis — не product",
+          not A.sales_rank_product_axis(
+              "accumulationregister_реализациятмц",
+              {"want": "list", "kind": "клиент"},
+              "какой клиент больше всех купил в этом месяце",
+              axes=_AX_CLIENT))
+        _m7, _how7 = A.sales_rank_canon_measure(
+            _NAMES, {"want": "list", "kind": "клиент"},
+            "какой клиент больше всех купил в этом месяце", _ALS,
+            axes=_AX_CLIENT, src="accumulationregister_реализациятмц",
+            product_axis=False)
+        t("rule: клиент без money-алиаса → None (fallback money снаружи)",
+          _m7 is None, (_m7, _how7))
+    finally:
+        A.kind_axis_hits = _old_hits
+    # money названа — деньги даже на товарной оси
+    _m8, _how8 = A.sales_rank_canon_measure(
+        _NAMES, {"want": "list", "measure": "деньгам"},
+        "дай топ-3 товара по деньгам за вчера", _ALS, product_axis=True)
+    t("rule: товар + money названа → Всего",
+      _m8 == "Всего", (_m8, _how8))
+    # нет qty у источника — None из canon (снаружи возьмут money)
+    _m9, _how9 = A.sales_rank_canon_measure(
+        ["Всего", "СуммаНДС"], _intent_top3, _q_top3, _ALS, product_axis=True)
+    t("rule: product_axis без qty-меры → None",
+      _m9 is None, (_m9, _how9))
+    # call-site: product_axis блокирует money-fallback
+    _pa = True
+    _sm, _how = A.sales_rank_canon_measure(
+        _NAMES, _intent_top3, _q_top3, _ALS, product_axis=_pa)
+    if (not _sm and not _pa
+            and not A._rank_wants_quantity(_q_top3)):
+        _sm = A.sales_money_measure(_NAMES, _ALS)
+    if not _sm:
+        _sm = A.sales_qty_measure(_NAMES, _ALS)
+    t("rule: call-site sim топ-3 товара → Количество не Всего",
+      _sm == "Количество", _sm)
+finally:
+    _restore(_sv)
+
 # ── sum-путь при флаге 0 и 1 без rank не меняется ────────────────────────────
 _q_sum = "сколько продали вчера?"
 _intent_sum = {"want": "sum", "kind": "продажи", "measure": "продали"}
