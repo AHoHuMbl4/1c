@@ -1,3 +1,13 @@
+## 2026-08-27 — Э7: wiki dump снят (б1), тела в wiki_pages
+
+**[код]** Долг такта п. 20 / Э7: из `wiki_publish.sh` убран SELECT→Python→
+`entities/*.md`+purge. Шаг такта только обновляет VIEW `wiki_pages`
+(`wiki_build.sql`); зов из `build.sh` без смены контракта. Штатный COPY TO
+не закрывает раскладку memory-wiki (доки) — поэтому не (а), а (б1).
+Замок `test_wiki_dump_engine` **24/0**; wiki-замки: dump 24/0, alias_parse
+17/0, build_solr 29/0, solr_synonyms 35/0, fork_label_daybasis 13/0.
+Доки: sql/statements/copy#copy--to.
+
 ## 2026-08-27 — С1 пошёл: EnvironmentFile сильнее Environment= (замер systemd)
 
 **[замер]** Корень молчаливых пустых алиасов — третий слой: юнит

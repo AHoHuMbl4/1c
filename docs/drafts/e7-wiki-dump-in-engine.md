@@ -259,3 +259,24 @@ COPY (SELECT page_id, body FROM wiki_pages)
 | Штатный COPY покрывает формат? | **Нет** (доки §2) |
 | Рекомендация | **(б1)** убрать dump, опереться на данные в движке |
 | Разрешённый остаток п. 20? | **Нет** — долг |
+
+---
+
+## Реализовано
+
+Дата: 27.08.2026. Вариант **(б1)** — без COPY TO в такте (доки: COPY пишет
+один файл / Hive, не `entities/<id>.md`).
+
+| Было | Стало |
+|---|---|
+| `wiki_publish.sh:71–109` SELECT `\x1e`/`\x1f` → Python → `$VAULT/entities/*.md` + purge | Снято |
+| `wiki compile` / `memory index` из такта | Не зовутся (entity-vault такт не обновляет) |
+| Тела страниц | По-прежнему VIEW `wiki_pages` (`wiki_build.sql`); шаг такта только `psql -f wiki_build.sql` |
+| Зов `build.sh:438` `./wiki_publish.sh` | Контракт сохранён (soft-fail) |
+| Перефраз сущностей | `search_entity_alias` (wiki_alias) — без смены этого шага |
+
+Замок: `ubuntu/serenedb/test_wiki_dump_engine.py` — **24/0** (мок psql, без БД).
+Доки COPY: https://docs.serenedb.com/sql/statements/copy#copy--to
+
+Не в этом шаге (по проекту «после замера» / «не больше»): правка AGENTS.md,
+TARGET_STATUS / TICK_PSQL_AUDIT / HOW_IT_WORKS / живой замер до/после §6.
