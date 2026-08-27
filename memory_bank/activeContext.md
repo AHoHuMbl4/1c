@@ -1,12 +1,17 @@
 # Active Context
 
-_Обновлено: **2026-08-27** (Т1: TARGET_STATUS = факты дня). Здесь — только живое.
+_Обновлено: **2026-08-27** (И1: AB_AMBIGUOUS / 8/18). Здесь — только живое.
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
 ---
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
+
+🔴 **И1 ambiguous set `[27.08]`**: `AB_AMBIGUOUS=okna` →
+`ab-ambiguous-okna.tsv` (18, clarify/kind). Живой `:8092` md5 **4ec52861**:
+**8/18**, 18,76 с. Замок **19/0**. Отчёт [`I1_AMBIGUOUS_SET.md`](../docs/I1_AMBIGUOUS_SET.md).
+
 
 🔴 **Д5 meta packet `[27.08]`**: inbox **74** delta, `included=false` у всех
 (задумано); файла `$metadata` нет. Сигнал `need_metadata=1` / cv **4**
@@ -30,8 +35,8 @@ _Обновлено: **2026-08-27** (Т1: TARGET_STATUS = факты дня). З
    `ASK_ENTITY_FORM=1` **не** подтверждена (Q2 → догадка).
 3. **К2 compare** — бой `:8091` **0/8**; золото SQL **1 049 991,33** живо
    (`4ac3c38`).
-4. **Ambiguous** — **5/18** (`96b51ab`); после К5 (AB_PROBE **8/8**) **не**
-   перемерено.
+4. **Ambiguous** — штатный набор `AB_AMBIGUOUS=okna`: **8/18** на `:8092`
+   (md5 **4ec52861**); ручной базлайн был **5/18** (`96b51ab`, другой набор).
 
 ## Следующий шаг (порядок)
 

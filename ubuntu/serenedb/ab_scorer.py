@@ -16,6 +16,8 @@
   AB_BASE=ut_test — прежний набор ab-gold.tsv (A/B или live по ASK_URL)
   AB_CALENDAR_AXIS=okna|1 — набор оси календаря ab-calendar-axis-okna.tsv (§7bis §5.2);
     умолчание пусто: набор не подключён. Вместе с AB_CONTOUR/AB_PROBE=okna.
+  AB_AMBIGUOUS=okna|1 — приёмка неоднозначности ab-ambiguous-okna.tsv (И1 / Э3);
+    умолчание пусто. Один флаг включает live-контур okna (DSN/URL как у CONTOUR).
     AB_GOLD_FILE перекрывает любой выбор.
 """
 import json
@@ -38,6 +40,7 @@ CONTOUR = os.environ.get("AB_CONTOUR", "").strip().lower()
 PROBE = os.environ.get("AB_PROBE", "").strip().lower()
 GOLD_MODE = os.environ.get("AB_GOLD_MODE", "").strip().lower()
 CALENDAR_AXIS = os.environ.get("AB_CALENDAR_AXIS", "").strip().lower()
+AMBIGUOUS = os.environ.get("AB_AMBIGUOUS", "").strip().lower()
 BASE = os.environ.get("AB_BASE", "ut_test" if GOLD_MODE == "smoke" else "postgres")
 ENV_FILE = "/etc/1c-serene-ask-%s.env" % BASE
 UNIT = "1c-serene-ask@%s.service" % BASE
@@ -46,18 +49,22 @@ ENV_PG = "/etc/1c-serene-ask-postgres.env"
 ENV_MCP = "/etc/1c-mcp-reports.env"
 ASK_USER = os.environ.get("AB_ASK_USER", "gold-v2")
 CALENDAR_AXIS_ON = frozenset(("1", "okna", "yes", "true"))
+AMBIGUOUS_ON = frozenset(("1", "okna", "yes", "true"))
 
 
 def resolve_gold_file(environ=None, script_dir=None):
-    """Путь к TSV набора. AB_GOLD_FILE > AB_CALENDAR_AXIS > AB_PROBE/AB_CONTOUR > ab-gold.tsv.
+    """Путь к TSV. AB_GOLD_FILE > AB_AMBIGUOUS > AB_CALENDAR_AXIS > AB_PROBE/AB_CONTOUR > ab-gold.tsv.
 
-    AB_CALENDAR_AXIS пуст — набор оси не выбирается.
+    AB_AMBIGUOUS / AB_CALENDAR_AXIS пусты — соответствующие наборы не выбираются.
     """
     env = environ if environ is not None else os.environ
     sd = script_dir if script_dir is not None else _SCRIPT_DIR
     explicit = (env.get("AB_GOLD_FILE") or "").strip()
     if explicit:
         return explicit
+    amb = (env.get("AB_AMBIGUOUS") or "").strip().lower()
+    if amb in AMBIGUOUS_ON:
+        return os.path.join(sd, "ab-ambiguous-okna.tsv")
     cal = (env.get("AB_CALENDAR_AXIS") or "").strip().lower()
     if cal in CALENDAR_AXIS_ON:
         return os.path.join(sd, "ab-calendar-axis-okna.tsv")
@@ -91,7 +98,7 @@ def ensure_pgpassword():
 
 
 GOLD_FILE = resolve_gold_file()
-if PROBE == "okna" or CONTOUR == "okna":
+if PROBE == "okna" or CONTOUR == "okna" or AMBIGUOUS in AMBIGUOUS_ON:
     ensure_pgpassword()
     DSN = os.environ.get("AB_DSN") or env_value(
         "SERENEDB_DSN_RO", ENV_PG) or env_value("SERENEDB_DSN", ENV_PG)
@@ -569,6 +576,19 @@ def mark_path(name):
 
 
 def write_mark(best_sc, hits, n, errs):
+    if AMBIGUOUS in AMBIGUOUS_ON and PROBE != "okna" and CONTOUR != "okna":
+        # приёмка неоднозначности — не пишет .golden-*/.probe-* (не smoke-гейт)
+        if errs:
+            sys.stderr.write(
+                "\n🔴 ambiguous: сбоев %d из %d; отметка не ставится.\n" % (errs, n))
+            return None
+        if hits < n:
+            sys.stderr.write(
+                "\nambiguous: верных %d из %d (отметка gold/probe не ставится).\n"
+                % (hits, n))
+            return None
+        print("ambiguous okna: %d/%d (без отметки gold/probe)" % (hits, n))
+        return best_sc
     if PROBE == "okna":
         if errs or hits < n:
             sys.stderr.write(
@@ -616,7 +636,10 @@ def write_mark(best_sc, hits, n, errs):
 
 def main():
     gold = load_gold(GOLD_FILE)
-    label = ("probe-" + PROBE) if PROBE else (CONTOUR or GOLD_MODE or BASE)
+    if AMBIGUOUS in AMBIGUOUS_ON:
+        label = "ambiguous-" + (AMBIGUOUS if AMBIGUOUS not in ("1", "yes", "true") else "okna")
+    else:
+        label = ("probe-" + PROBE) if PROBE else (CONTOUR or GOLD_MODE or BASE)
     print("контур %s, база %s, сервис %s, %s" % (label, BASE, URL, UNIT))
     if LIVE_CONTOUR:
         print("live: без рестарта юнита")
