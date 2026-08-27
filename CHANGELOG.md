@@ -1,3 +1,13 @@
+## 2026-08-27 — С5: прибор кандидатов алиасов (read-only словарь)
+
+**[код]** `work/pipeline/alias_candidates.py`: журнал `ask_journal`+text → топ
+термов clarify/no_data → кандидаты связей (journal/atoms, существующий
+словарь, label; при ``--apply`` — infer как wiki_alias) → проверка на
+подмножестве ``ab-probe-okna.tsv`` (не полный gold); ``candidates.tsv``;
+``--dry-run`` по умолчанию, write-SQL в psql блокируется.
+**[замер]** замок `test_alias_candidates.py` **22/0** (фикстура журнала 15
+строк, gold 5, dry-run без INSERT).
+
 ## 2026-08-27 — Патч 3 К3: K4-2 страж A+B (clarify→no_data) + канон сильнее стража
 
 **[код]** `serene_ask.py`: место A — unmatched terms (частичный промах тоже
