@@ -21,12 +21,17 @@ Wants=serenedb.service
 
 [Service]
 Type=oneshot
-# Ключи и пароль роли записи; порядок как у остальных юнитов — последний слой перекрывает.
+# Ключи и пароль роли записи. 🔴 [замер okna 27.08] EnvironmentFile СИЛЬНЕЕ Environment=
+# в systemd: общий /etc/1c-mcp-reports.env держит SERENEDB_DSN=user=serene_ro (только
+# чтение) — строка Environment=SERENEDB_DSN=user=postgres НИКОГДА не побеждала, юнит
+# падал «permission denied for table …» на каждом INSERT молча. Роль записи задаётся
+# ТОЛЬКО последним слоем-файлом: побазовый /etc/1c-wiki-alias-%i.env несёт
+# SERENEDB_DSN=host=127.0.0.1 port=7890 user=postgres dbname=<база> (как у pipeline).
 EnvironmentFile=/etc/1c-mcp-reports.env
-# Необязательный слой ЭТОГО прогона: `ALIAS_TABLE` (собрать редакцию в копию),
-# `WIKI_ALIAS_COLLISIONS`, `WIKI_ALIAS_MAX_SEC`, `WIKI_ALIAS_BATCH`. Нет файла — умолчания.
+# Слой ЭТОГО прогона (обязателен для записи): `SERENEDB_DSN` (rw-роль), `ALIAS_TABLE`
+# (собрать редакцию в копию), `WIKI_ALIAS_COLLISIONS`, `WIKI_ALIAS_MAX_SEC`,
+# `WIKI_ALIAS_BATCH`. Нет файла — чтение serene_ro и отказ на записи.
 EnvironmentFile=-/etc/1c-wiki-alias-%i.env
-Environment=SERENEDB_DSN=host=127.0.0.1 port=7890 user=postgres dbname=%i
 # 🔴 БЕЗ БЮДЖЕТА ВРЕМЕНИ ПО УМОЛЧАНИЮ. Внутри такта свежести шаг ограничен 120 с (п. 17),
 # но это отдельный, ручной прогон: он собирает словарь целиком и не обязан укладываться в
 # такт. Ограничение остаётся у systemd — `TimeoutStartSec`, иначе зависший агент держал бы
