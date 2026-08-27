@@ -204,8 +204,16 @@ GET  /v1/package/<base_id>/<package_id>/status
         "received": [...], "missing": [...], "error": null|"…"}
 GET  /v1/agent/config?base_id=…&config_version=…&agent_version=…
      → {"config_version": N, "entities": ["…"], "params": {"page_size": 10000,
-        "tact_seconds": 1200, "chunk_mb": 32}, "recipient_pubkey": "age1…"}
+        "tact_seconds": 1200, "chunk_mb": 32, "need_metadata": 0|1},
+        "recipient_pubkey": "age1…"}
      (304-подобно: config_version без изменений → {"config_version": N} только)
+     **`params.need_metadata` (с 27.08, Д5):** необязательный флаг обратного канала.
+     Ubuntu ставит `1`, когда файла `<PACKET_META_DIR>/<base>/$metadata` нет
+     (`packet_meta_signal request` из `build.sh` до корпуса). Агент ≥1.1.3 шлёт
+     `kind=meta` на ближайшем такте (даже если локальный отпечаток уже совпал —
+     иначе после потери снимка вечный ряд `delta` с `metadata.included=false`).
+     После apply снимка флаг снимается (`ack`). Агент 1.0.x флаг игнорирует —
+     тогда одно действие на Windows: `packet-agent.exe --smoke`.
 POST /v1/agent/progress?base_id=…   body = {"phase": "config|read|send|done|
      not_confirmed|error", "entity": "…", "i": N, "n": N, "rows_entity": N,
      "rows_total": N, "elapsed_sec": N, "kind": "full|delta|meta", "seq": N,

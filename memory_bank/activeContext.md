@@ -8,15 +8,23 @@ _Обновлено: **2026-08-27** (Т1: TARGET_STATUS = факты дня). З
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **Д5 meta packet `[27.08]`**: inbox **74** delta, `included=false` у всех
+(задумано); файла `$metadata` нет. Сигнал `need_metadata=1` / cv **4**
+выставлен; замок в `build.sh` с внятным fail. Живой агент **1.0.2** флаг
+не читает — **одно действие на Windows:** `packet-agent.exe --smoke`
+(или upgrade до **1.1.3**). Таймер пайплайна **остановлен**. Отчёт
+[`D5_META_PACKET.md`](../docs/D5_META_PACKET.md).
+
+
 🔴 **Т1 статус синхронизирован `[27.08]`**: `docs/TARGET_STATUS.md` приведён к
 замерам/коммитам дня. Стадии **не** повышали (итог 🟢2 · 🟡15 · 🔴4).
 Полный scorer **23/25** (`c706625`) после словаря **не** переснимался.
 
 ## Что мешает приёмке (житьё, числа)
 
-1. **Свежесть / Д4** — такт не доходит до конца: `$metadata` нет в packet-meta
-   (сущностей **0**); простой ~**3** суток. Init после `247c2f3` OK
-   (`solr_syn_dict_ok=1`). Отчёт `docs/D4_PIPELINE_BROKEN.md`.
+1. **Свежесть / Д5** — нет `$metadata`; такт fail до корпуса с
+   `need_metadata`. Init OK. Ждёт `--smoke` / агент ≥1.1.3. Отчёт
+   `docs/D5_META_PACKET.md` (Д4 — init/выкат SQL).
 2. **K6** — live **0/2** (эталоны **141**/**1891**); обрыв на сущности.
    Мера `answer_fit` есть (`bb6779f`, place **5→1**), в ask **не** вшита.
    `ASK_ENTITY_FORM=1` **не** подтверждена (Q2 → догадка).
@@ -27,7 +35,8 @@ _Обновлено: **2026-08-27** (Т1: TARGET_STATUS = факты дня). З
 
 ## Следующий шаг (порядок)
 
-1. **Packet `$metadata`** — иначе корпус стареет и п. 17/13 нельзя мерить.
+1. **Windows `--smoke` (или upgrade агента)** → файл `$metadata` →
+   `systemctl start 1c-serene-pipeline@postgres.timer`.
 2. **K6** — вшить `answer_fit` / clarify двух атомов по проекту
    `docs/K6_ENTITY_RANK.md` §5 (**не** слепой `ASK_ENTITY_FORM`).
 3. **К2** — терминальный compare без гейта `ASK_ENTITY_FORM` (`docs/K2_COMPARE_TAIL.md`).

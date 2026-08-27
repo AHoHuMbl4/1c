@@ -619,6 +619,14 @@ def _apply_metadata(base_id: str, manifest: dict, path: str) -> None:
         except OSError:
             pass
         raise
+    # Д5: снять params.need_metadata после успешной записи снимка — иначе агент
+    # слал бы kind=meta каждый такт, пока флаг жив (обратный канал §8).
+    try:
+        from packet_meta_signal import ack_metadata
+        ack_metadata(base_id)
+    except Exception as e:  # noqa: BLE001 — apply снимка важнее снятия флага
+        _log("base=%s: ack need_metadata не удался (%s) — снимок на месте, "
+             "флаг снимет следующий request/ack" % (base_id, e))
 
 
 def _touch_first_data(base_id: str) -> None:

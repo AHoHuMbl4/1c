@@ -28,9 +28,10 @@ namespace PacketAgent
     // Каждое число можно переопределить ключом в agent.ini — имя ключа в скобках.
     internal static class C
     {
-        internal const string Version = "1.1.2";   // щадящий режим для 1С: без COUNT, без
-                                                   // двойного скана, порции + возобновление
-                                                   // по индексу, хвост журнала в пакете (13.08);
+        internal const string Version = "1.1.3";   // need_metadata из /agent/config (Д5):
+                                                   // приёмник без снимка $metadata просит
+                                                   // kind=meta — иначе delta с included=false
+                                                   // навсегда; 1.1.2 — щадящий режим для 1С;
                                                    // 1.1.1 — чанки на диск по ходу обхода;
                                                    // 1.1.0 — отчёт хода такта на приёмник;
                                                    // 1.0.3 — тупик пустого контура + код смоука
@@ -2043,6 +2044,10 @@ namespace PacketAgent
                 int cmb = (int)Receiver.Long(_conf.Params, "chunk_mb", _cfg.ChunkMb);
                 _cfg.ChunkMb = Math.Max(C.ChunkMbMin, Math.Min(C.ChunkMbMax, cmb));
             }
+            // Д5 / контракт §8: приёмник без файла $metadata ставит need_metadata=1.
+            // Иначе после потери снимка агент шлёт только delta с included=false
+            // (отпечаток в state уже совпал) — тупик без человека (okna 27.08).
+            bool needMeta = NeedMetadata(_conf.Params);
             // Ротация pubkey (контракт §3): новое место хранения — config.json.
             if (!string.IsNullOrEmpty(_conf.RecipientPubkey) && _conf.RecipientPubkey != prevPub)
                 Log.Line("приёмник прислал новый recipient pubkey — применён");
@@ -2065,11 +2070,14 @@ namespace PacketAgent
                     _metaBytes = LoadMetaBytes();
                     _meta = Meta.Parse(_metaBytes);
                     // Отпечаток совпал — снимок уже доехал и onboard дал пустой контур:
-                    // это НЕ тупик, а решение сервера. Повторно снимок не шлём.
-                    if (_state.MetadataFingerprint != _meta.Fingerprint)
+                    // это НЕ тупик, а решение сервера. Повторно снимок не шлём —
+                    // КРОМЕ явного need_metadata (Д5: файл на Ubuntu пропал).
+                    if (needMeta || _state.MetadataFingerprint != _meta.Fingerprint)
                     {
-                        Log.Line("контур пуст, а снимок $metadata приёмником не подтверждён "
-                                 + "— отправляю kind=meta: контур соберётся на сервере");
+                        Log.Line(needMeta
+                            ? "контур пуст, приёмник запросил $metadata (need_metadata) — отправляю kind=meta"
+                            : "контур пуст, а снимок $metadata приёмником не подтверждён "
+                              + "— отправляю kind=meta: контур соберётся на сервере");
                         // Иначе отчёт хода такта об этой ветке уходит с пустым kind и
                         // seq=0 (замечено на живом прогоне пробы 12.08).
                         Progress.Kind("meta", _state.Seq + 1);
@@ -2101,7 +2109,23 @@ namespace PacketAgent
             bool metaChanged = _state.MetadataFingerprint != _meta.Fingerprint;
             bool firstRun = _state.Resync || !_state.FullDone;
             Log.Line("такт: сущностей " + entities.Count + (firstRun ? ", ПОЛНАЯ заливка" : "")
-                     + (metaChanged ? ", $metadata изменился" : ""));
+                     + (metaChanged ? ", $metadata изменился" : "")
+                     + (needMeta ? ", приёмник запросил $metadata" : ""));
+            // Д5: снимок нужен серверу СЕЙЧАС — не ждать обхода контура (часы на ERP).
+            // Отдельный kind=meta; дальше обычная дельта без повторной вставки снимка.
+            if (needMeta && !firstRun)
+            {
+                Progress.Kind("meta", _state.Seq + 1);
+                Log.Line("need_metadata — отправляю kind=meta до обхода контура");
+                if (!SendPackage("meta", new List<EntityResult>(),
+                                 new List<KeyValuePair<string, string>>(),
+                                 true, newCv, null, null, false))
+                {
+                    ProcessOutbox();
+                    return false;
+                }
+                needMeta = false;   // снимок уехал; индекс отпечатка обновит ApplyPlan
+            }
             Progress.Kind(firstRun ? "full" : "delta", _state.Seq + 1);
 
             // (2) сбор изменений — порциями (1.1.2, PLAN_FIRST_DUMP_SAFE §2.2).
@@ -2121,7 +2145,7 @@ namespace PacketAgent
             long chunkLimit = (long)_cfg.ChunkMb * 1024 * 1024;
             long batchLimit = (long)_cfg.BatchMb * 1024 * 1024;
             int batchStartTick = Environment.TickCount;
-            bool sendMetaPending = firstRun || (_state.MetadataFingerprint != _meta.Fingerprint);
+            bool sendMetaPending = firstRun || metaChanged || needMeta;
             string tactKind = firstRun ? "full" : "delta";
             foreach (string e in entities)
             {
@@ -2242,6 +2266,17 @@ namespace PacketAgent
             bool sent = SendPackage(kind, results, gone, sendMeta, newCv, skipped, skipFp, firstRun);
             ProcessOutbox();   // после основной работы — довозка логов из outbox
             return sent;
+        }
+
+        // Д5: params.need_metadata из /agent/config (Long≠0 или "true"/"1"/"yes").
+        static bool NeedMetadata(Dictionary<string, object> parms)
+        {
+            if (parms == null || parms.Count == 0) return false;
+            if (Receiver.Long(parms, "need_metadata", 0) != 0) return true;
+            string s = Receiver.Str(parms, "need_metadata");
+            if (s == null) return false;
+            s = s.Trim().ToLowerInvariant();
+            return s == "1" || s == "true" || s == "yes";
         }
 
         // Финальный маркер первой заливки, когда данные уже уехали порциями и

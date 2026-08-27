@@ -1,3 +1,19 @@
+## 2026-08-27 — Д5: обратный канал need_metadata + замок снимка
+
+**[замер]** okna inbox **74** пакета, все `kind=delta`,
+`metadata.included=false` (0 full/meta); файла
+`packet-meta/okna-1/$metadata` нет; apply «metadata записан» с 20.08 =
+**0**. Агент **1.0.2**. `included=false` у delta — по контракту (§5), не
+баг такта.
+
+**[код]** `packet_meta_signal.py` (request/ack); `build.sh` fail до
+корпуса с текстом `need_metadata`; apply → ack; агент **1.1.3** шлёт
+`kind=meta` по флагу. Замок `test_packet_meta_signal.py` **20/0**. На
+okna: сигнал cv **3→4**, `need_metadata=1`, `PACKET_BASE_ID=okna-1`;
+таймер остановлен. Такт до конца **не** дошёл: 1.0.2 флаг игнорирует —
+нужен `--smoke` на Windows. Отчёт `docs/D5_META_PACKET.md`.
+`serene_ask.py` не трогали.
+
 ## 2026-08-27 — K7: ось склада без привязки к конфигурации
 
 **[код]** `warehouse_axis_values`: убраны литерал `МестоХранения` и маска

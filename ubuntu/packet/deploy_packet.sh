@@ -13,7 +13,7 @@ set -euo pipefail
 
 SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DST="${PACKET_DEPLOY_DIR:-/opt/1c-packet}"
-FILES="packet_server.py packet_apply.py packet_config.py packet_crypto.py packet_kit.py"
+FILES="packet_server.py packet_apply.py packet_config.py packet_crypto.py packet_kit.py packet_meta_signal.py"
 # Исполняемые (755): авто-онбординг слота на юните (1c-serene-onboard@.service,
 # 1c-serene-firstbuild@.service).
 EXEC_FILES="onboard_unit.sh firstbuild_unit.sh"

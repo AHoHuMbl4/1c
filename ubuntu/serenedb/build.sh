@@ -184,6 +184,33 @@ if [ -f ./box_tune.sh ]; then
   embed_secrets_base_url_check || fail "base_url секретов openai не совпал с EMBED_HOST"
 fi
 
+# 🔴 Д5: снимок $metadata в packet-режиме — ДО precheck/корпуса. Иначе такт
+# доходит до corpus_build и падает «сущностей 0» без внятного слова; агент при
+# этом шлёт только delta с metadata.included=false (отпечаток у него уже есть).
+# Замок: нет файла → сигнал need_metadata агенту + fail с явной причиной.
+if [ -d "$GATE" ]; then
+  _meta_snap="$GATE/\$metadata"
+  if [ ! -s "$_meta_snap" ]; then
+    _base_meta="${PACKET_BASE_ID:-$(basename "$GATE")}"
+    _sig=""
+    for _cand in \
+      "${PACKET_META_SIGNAL_PY:-}" \
+      /opt/1c-packet/packet_meta_signal.py \
+      "${SERENE_SRC_DIR:-}/../packet/packet_meta_signal.py" \
+      /srv/1c/ubuntu/packet/packet_meta_signal.py
+    do
+      if [ -n "$_cand" ] && [ -f "$_cand" ]; then _sig="$_cand"; break; fi
+    done
+    if [ -n "$_sig" ]; then
+      PACKET_BASES="${PACKET_BASES:-/etc/1c-packet-bases.json}" \
+        python3 "$_sig" request "$_base_meta" || true
+    else
+      echo "WARN: packet_meta_signal.py не найден — need_metadata агенту не выставлен" >&2
+    fi
+    fail "нет снимка \$metadata в $GATE (база $_base_meta) — агенту выставлен need_metadata=1; ждать kind=meta (агент ≥1.1.3) или на Windows: packet-agent.exe --smoke"
+  fi
+fi
+
 # Проверки до такта — после секретов: одна из них дёргает эмбеддер, чтобы убедиться, что
 # он жив, ДО того как слияние обнулит векторы у изменившихся строк.
 psql "$DSN" -q -v embed_model="$EMBED_MODEL" -v embed_dim="$EMBED_DIM" -v embed_secret="$SEC_EMB" \
