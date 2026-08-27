@@ -1,3 +1,8 @@
+## 2026-08-27 — Патч 1: post-gate src=None → 503 TypeError
+
+**[код]** `serene_ask.py`: `_src_tag` безопасен при `src=None`; post-gate sources/tag.
+**[замер]** замок `test_post_gate_none_src.py` **6/0**; K5-замки guess/meta/nodata/axis/sales_rank без регрессии.
+
 ## 2026-08-27 — К2-хвост: замок DEPLOY_GATE на базлайн 21/25
 
 **[код]** Доводка `6a379d8`: `test_check_deploy_gate.py` — «эта неделя лучше

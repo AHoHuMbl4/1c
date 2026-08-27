@@ -452,6 +452,13 @@ def _fmt(v):
     return "%d" % v if v == int(v) else "%.2f" % v
 
 
+def _src_tag(src):
+    """Короткое имя сущности для sources; безопасно при src=None (post-gate)."""
+    if not src:
+        return ""
+    return src.split("_", 1)[1] if "_" in src else src
+
+
 def _fmt_gate_bad(v):
     """Строковое представление элемента отказа гейтa (float → _fmt)."""
     if isinstance(v, float):
@@ -11957,7 +11964,7 @@ def _src_covers_term_stems(src, term_stems):
     try:
         r = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1" % (TABLES, lit(src)))
         lab = (r[0][0] if r and r[0] else "") or src
-        for chunk in (lab, src.split("_", 1)[-1] if "_" in src else src):
+        for chunk in (lab, _src_tag(src) or src):
             kr = psql("SELECT ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(chunk)))
             parts |= {s for s in _stem_set(kr[0][0] if kr else "") if len(s) >= 3}
     except RuntimeError:
@@ -15514,13 +15521,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             return {"partial": cut or None, "kind": "figures",
                     "text": atom_terminal_gate_text(_atom, question, agg=agg),
                     "figures": _figs, "atom": _atom, "atoms": [_atom],
-                    "sources": [src.split("_", 1)[1] if "_" in src else src],
+                    "sources": [_src_tag(src)],
                     "completeness": cov,
                     "diag": _diag_pack(diag, gate_rejected=bad[:6])}
         return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                 "diag": _diag_pack(diag, gate_rejected=bad[:6])}
 
-    tag = src.split("_", 1)[1] if "_" in src else src
+    tag = _src_tag(src)
 
     # СРЕДНЕЕ ЗВЕНО: ответ → УТОЧНЯЮЩИЙ ВОПРОС → отказ (п. 21).
     #
