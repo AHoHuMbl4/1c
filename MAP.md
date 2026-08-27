@@ -224,18 +224,18 @@ OpenClaw (чтение — отдельный трек, здесь его нет
 
 | Каталог | Что там |
 |---|---|
-| `ubuntu/systemd/` | `1c-serene-pipeline.service/.timer` (боевой такт), `1c-serene-index.service` (**боевая** копия, на `build.sh`), `1c-odata-gateway@.service` (шаблон на каждую базу) |
-| `ubuntu/serenedb/systemd/` | `1c-serene-ask.service`, `1c-mcp-reports.service`, `1c-serene-sync.*`, ⚠ **двойник** `1c-serene-index.service/.timer` |
+| `ubuntu/systemd/` | `1c-serene-pipeline.service/.timer` (боевой такт), `1c-serene-index.service` (**единственная** копия, на `build.sh`), `1c-odata-gateway@.service` (шаблон на каждую базу) |
+| `ubuntu/serenedb/systemd/` | `1c-serene-ask.service`, `1c-mcp-reports.service`, `1c-serene-sync.*` (двойник index удалён, Э5) |
 | `ubuntu/openclaw/systemd/` | `1c-mcp-ask@.service` — **шаблон моста на базу; боевые — его инстансы** (`@ut_test` :6016, `@postgres` :6017). ⚠ `1c-mcp-ask.service` (одиночный) — СНЯТ 07.08: у него нет `MCP_PORT`, умолчание :6016 занято боевым инстансом, и рестарт по старому имени ставил его в петлю падений (36 980 рестартов за два дня). На стенде остановлен и disabled; удаление файла из `/etc/systemd/system` — root-шаг владельца. Также `openclaw-gateway-buh.service.d/env.conf` (drop-in второго шлюза), `1c-mcp-braine.service` + `override.conf` |
 | `ubuntu/1c-gateway/systemd/` | `1c-odata-gateway.service` (первая база) |
 | `ubuntu/1c-etl/systemd/`, `ubuntu/1c-config-ui/systemd/`, `ubuntu/monitoring/`, `ubuntu/serenedb/` | ETL, config-ui, монитор бота, юнит движка |
 
-🔴 **Двойник `1c-serene-index` опасен.** В `ubuntu/systemd/` лежит боевая версия
-(`ExecStart=/opt/1c-mcp-reports/build.sh`), в `ubuntu/serenedb/systemd/` — снятая
-(`ExecStart=… serene_search_build.py`), то есть **тот самый питоновский сборщик, который
-снёс корпус и индекс 28.07**. Разворачивать надо только копию из `ubuntu/systemd/`.
-Отдельная дыра: боевого таймера `1c-serene-index.timer` (`OnUnitActiveSec=20min`) в
-репозитории нет вовсе — единственная его версия в git — снятое ночное расписание 03:55.
+🔴 **`1c-serene-index.service` — одна копия.** Канон раскатки —
+`ubuntu/systemd/1c-serene-index.service` (`ExecStart=/opt/1c-mcp-reports/build.sh`).
+Мёртвый двойник в `ubuntu/serenedb/systemd/` удалён (Э5, 27.08): он звал
+выведенный `serene_search_build.py` (снёс корпус 28.07). Контроль —
+`test_systemd_execstart_lock.py`. Снятый таймер index (ночное `OnCalendar 03:55`)
+жил только у двойника и удалён вместе с ним; такт — у `1c-serene-pipeline`.
 
 *Было ошибочно: «Юниты systemd — в `ubuntu/systemd/`» — по этому адресу нет ни одного юнита
 работающих сейчас служб (мост бота, сервис ответов, шлюз первой базы, монитор, движок лежат
@@ -473,9 +473,8 @@ MAP «оба набора 8/8, крупного без внешнего не о�
 29.07 06:41, таймер `enabled`, но `inactive`. Пока конвейер не поднят, данные стареют и
 п. 17 контракта не выполняется. Устройство: синк-дельта → сборка → повтор через
 `OnUnitInactiveSec`; синк тянет из 1С **только изменения** по `DataVersion`, «ночного» такта
-нет. Старые таймеры `sync`/`index` отключены; боевой юнит `index` — на `build.sh` (не на
-снёсший корпус `serene_search_build.py`), но в репозитории рядом лежит его двойник со старым
-`ExecStart` — см. §2.
+нет. Старые таймеры `sync`/`index` отключены; юнит `index` — одна копия в
+`ubuntu/systemd/`, на `build.sh` (не на снёсший корпус `serene_search_build.py`).
 
 **Что дальше:** вторая конфигурация 1С (УТ 11.4.9) **пройдена и стала боевой** — по ней
 идут все ответы бота, без единой правки кода; п. 9 закрыт до остатка «другой язык».

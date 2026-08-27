@@ -44,7 +44,7 @@
 
 ## Расхождения между отчётами уровня 1
 
-- **расхождение: кто пишет боевой `search_corpus`/`search_idx` в текущем такте** — отчёт 22 ставит рядом `serene_search_build.py` как сборщик с MERGE/эмбед; отчёты 23/25 — `build.sh` → `corpus_merge` + `embed_missing`. **Верно текущий такт = `build.sh`**, источник `ubuntu/serenedb/build.sh:4` («вместо serene_search_build.py») и `ubuntu/systemd/1c-serene-index.service:38` (`ExecStart=…/build.sh`). Файл `serene_search_build.py` в дереве есть; репозиторный `ubuntu/serenedb/systemd/1c-serene-index.service:22` всё ещё зовёт его — это второй шаблон юнита, не путь `ubuntu/systemd` из отчёта 25.
+- **расхождение: кто пишет боевой `search_corpus`/`search_idx` в текущем такте** — отчёт 22 ставит рядом `serene_search_build.py` как сборщик с MERGE/эмбед; отчёты 23/25 — `build.sh` → `corpus_merge` + `embed_missing`. **Верно текущий такт = `build.sh`**, источник `ubuntu/serenedb/build.sh:4` («вместо serene_search_build.py») и `ubuntu/systemd/1c-serene-index.service:38` (`ExecStart=…/build.sh`). Файл `serene_search_build.py` в дереве есть; мёртвый двойник юнита в `serenedb/systemd` удалён (Э5).
 - **расхождение: default `EMBED_DIM`** — 22: `1536` в `serene_search_build.py:36`; 25/23: `1024` в `build.sh:45`. **Оба верны для своих файлов**; боевой такт читает default из `build.sh`.
 - **расхождение/пропуск: systemd apply** — 21 относит unit-файлы packet к «не тракту»; по коду apply в витрину будит именно `1c-packet-apply.timer` (`OnUnitActiveSec=2min`). Для сквозного пути расписание берём из unit-файлов, не из «Чего здесь нет» отчёта 21.
 
@@ -52,5 +52,5 @@
 
 - Живые значения `/etc/1c-*.env` и какой контур (packet vs HTTP) включён на конкретной базе — с диска в уровне 1 не снимались (`25`).
 - Фактический `tact_seconds`/`page_size` у агента после GET config — только defaults в коде; содержимое `PACKET_BASES` на хосте не читалось.
-- Запускается ли где-либо ещё `ubuntu/serenedb/systemd/1c-serene-index.service` (со старым `serene_search_build.py`) на живой машине — по репозиторию двух шаблонов недостаточно.
+- Запускается ли где-либо ещё мёртвый шаблон index со старым `serene_search_build.py` на живой машине — **нет в дереве** после Э5; канон один (`ubuntu/systemd` → `build.sh`).
 - Связь ETL-KB с любым потребителем внутри `/srv/1c` поискового слоя — в участках 21–26 вызовов нет; дальнейшие потребители KB вне сырья не проверялись.

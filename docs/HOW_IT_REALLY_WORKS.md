@@ -257,5 +257,5 @@ Scorer не зовёт LLM для оценки (`docs/audit/parts/28-scorer-test
 8. Полный круг арбитра готовых ответов после empty/unique (`answer` после `:13476`) — стык отмечен, внутренности не входили в сырьё S3.
 9. Содержимое промптов `serene_enough.*` и точный JSON для `need_say`/`parse_facts`.
 10. Verify-плагин OpenClaw после ответа инструмента — упомянут в docstring моста, в L1 не разобран.
-11. Запускается ли где-либо шаблон `ubuntu/serenedb/systemd/1c-serene-index.service` со старым `serene_search_build.py` (в дереве два шаблона index; боевой путь L1-25 — `ubuntu/systemd` → `build.sh`).
+11. ~~Запускается ли где-либо шаблон index со старым `serene_search_build.py`~~ — **закрыто Э5**: мёртвый двойник удалён; канон — `ubuntu/systemd` → `build.sh`.
 12. Потребители ETL-KB (`oc_etl.py`) внутри `/srv/1c` поискового слоя — вызовов в участках 21–26 нет.

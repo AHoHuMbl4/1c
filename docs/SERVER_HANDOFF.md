@@ -241,7 +241,7 @@ cp /srv/1c/ubuntu/serenedb/<файл>.py /opt/1c-mcp-reports/
 **Что сделано:** в `1c-serene-index.service` файлы окружения переставлены —
 `-/etc/1c-mcp-reports.env` идёт **первым** (он нужен только ради `DEEPSEEK_API_KEY`),
 роль задаёт `/etc/1c-serene-sync.env` **последним**. Правка есть и в репозитории
-(`ubuntu/serenedb/systemd/1c-serene-index.service`), и в `/etc/systemd/system/`.
+(`ubuntu/systemd/1c-serene-index.service`), и в `/etc/systemd/system/`.
 
 **[проверено]** `1c-serene-index` был в состоянии `failed`. В журнале:
 

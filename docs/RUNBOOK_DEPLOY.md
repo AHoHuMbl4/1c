@@ -43,7 +43,7 @@ Ubuntu LXC (наш, всё loopback):
 | — | `1c-serene-sync.timer` 03:40 | `serene_sync.py` | root | ⚠ **остановлен**: синк стал частью конвейера |
 | — | **`1c-serene-pipeline@postgres.timer`** | `pipeline.sh` | root | ⚠ **dev 17.08:** таймер **inactive** с 07.08, **enabled** — upstream `192.168.56.1:6003` (IIS OData первой базы) **Connection refused**; шлюз :6011 жив, `$metadata` → upstream unreachable. Такт падает на сборке корпуса. **Владельцу:** поднять Windows/IIS/проброс :6003 **или** `systemctl disable --now 1c-serene-pipeline@postgres.timer` — не держать вечный failed. `@ut_test` — отдельный env :6021, тот же upstream мёртв |
 | — | **`1c-serene-pipeline.timer`** (по готовности) | `pipeline.sh` | root | 🟢 **боевой такт**: раскладка кода → синк-дельта → сборка. Понятия «ночной» нет (п. 17). **с 18.08** юнит `Restart=on-failure` (3 мин, 5/час), форма `EMBED_HOST` до синка |
-| — | **`1c-serene-index.timer`** (`OnUnitActiveSec=20min`, `disabled`) | `build.sh` | root | ⚠ **таймер остановлен 28.07.** Сборка переехала в штатные средства движка: `build.sh` (корпус, величины, резолвер, индекс — одним SQL, без питона), и **живой юнит на неё переключён 28.07** (старый `ExecStart` сохранён в `.bak-20260728`). Таймер выключен, потому что такт целиком отдан `1c-serene-pipeline`. Раскатывать юнит из **`ubuntu/systemd/1c-serene-index.service`**; копия в `ubuntu/serenedb/systemd/` синхронизирована с `build.sh` с 26.08.2026 (замок `test_systemd_execstart_lock.py`); см. §10.6 |
+| — | **`1c-serene-index.timer`** (`OnUnitActiveSec=20min`, `disabled`) | `build.sh` | root | ⚠ **таймер остановлен 28.07.** Сборка — штатный `build.sh`; живой юнит переключён 28.07. Таймер выключен: такт у `1c-serene-pipeline`. Раскатывать **`ubuntu/systemd/1c-serene-index.service`** (единственная копия; двойник в serenedb/systemd удалён Э5). Контроль: `test_systemd_execstart_lock.py`; см. §10.6 |
 | `127.0.0.1:6015` | `1c-mcp-reports` | `mcp_reports.py` | root | ⚠ `report_1c` (NL→SQL) — **выведен из контура**, юнит ещё жив |
 | `127.0.0.1:18800` | `openclaw-gateway` (**user**-юнит) | `node …/openclaw` | **undebot** | бот: Telegram + тон; egress — временно DeepSeek (п. 16) + verify-гейт |
 | — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` + `tact_watch.sh` | root | алерт владельцу в Telegram при падении; **с 18.08** ещё: firstbuild/pipeline в `failed` дольше `TACT_FAIL_MAX_MIN` (умолч. 15 мин) |
@@ -681,20 +681,14 @@ systemctl enable --now 1c-serene-ask.service     # отвечающий серв
 ```
 
 🔴 **`1c-serene-sync.timer` и `1c-serene-index.timer` включать НЕЛЬЗЯ.** Синк с 28.07 —
-шаг конвейера, а не отдельный таймер. А юнит `1c-serene-index.service` лежит в репозитории
-**в двух копиях, и они разные**:
+шаг конвейера, а не отдельный таймер. Юнит `1c-serene-index.service` — **одна копия**:
+`ubuntu/systemd/1c-serene-index.service` → `ExecStart=/opt/1c-mcp-reports/build.sh`
+(канон раскатки, побайтно равен установленному). Мёртвый двойник в
+`ubuntu/serenedb/systemd/` удалён (Э5, 27.08).
 
-| Копия | `ExecStart` | Что это |
-|---|---|---|
-| `ubuntu/systemd/1c-serene-index.service` | `/opt/1c-mcp-reports/build.sh` | **канон для раскатки**, побайтно равна установленной |
-| `ubuntu/serenedb/systemd/1c-serene-index.service` | `/opt/1c-mcp-reports/build.sh` | дубликат с пометкой «выведен `serene_search_build.py`»; **не** источник для `cp`, но ExecStart безопасен с 26.08.2026 |
+🔴 **`serene_search_build.py` в юнитах не вызывать** — выведен 28.07, сносит таблицу и индекс (`HOW_NOT_TO §2.9`). Контроль: `python3 ubuntu/serenedb/test_systemd_execstart_lock.py` (живёт `build.sh` в ExecStart канона; мёртвый путь отсутствует).
 
-🔴 **`serene_search_build.py` в юнитах не вызывать** — выведен 28.07, сносит таблицу и индекс (`HOW_NOT_TO §2.9`). Контроль: `python3 ubuntu/serenedb/test_systemd_execstart_lock.py`.
-
-Если проверите `systemctl cat 1c-serene-index.service` и увидите `build.sh` — это не значит,
-что предупреждение протухло: на стенде юнит переключён 28.07, опасна именно вторая копия в
-репозитории. Боевого таймера (`OnBootSec=5min` / `OnUnitActiveSec=20min`) в git нет вовсе —
-единственная его версия в репозитории — снятое ночное расписание `OnCalendar 03:55`.
+Таймер index (снятое ночное `OnCalendar 03:55`) удалён вместе с мёртвым двойником; не включать.
 
 *Было ошибочно: §10.6 без единой оговорки предписывала `cp` обоих юнитов и
 `systemctl enable --now 1c-serene-sync.timer` / `1c-serene-index.timer`. **Чем

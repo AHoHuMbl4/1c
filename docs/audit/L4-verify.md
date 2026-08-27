@@ -71,7 +71,7 @@
 | 62 | Остатки no_data `:6042-6049`; bridge clarify `:6103-6136` | верно | defs |
 | 63 | focus/trusted гасят fork/entity-form | верно | условия `:12571+`, `:12637` |
 | 64 | Юнит pipeline → `pipeline.sh` | верно | `ubuntu/systemd/` |
-| 65 | `1c-serene-index.service` → только `build.sh` (`ubuntu/systemd/`) | верно | `ubuntu/systemd/1c-serene-index.service:38` (в `serenedb/systemd/` — старый `serene_search_build.py`, см. белое пятно 11) |
+| 65 | `1c-serene-index.service` → только `build.sh` (`ubuntu/systemd/`) | верно | `ubuntu/systemd/1c-serene-index.service:38` (мёртвый двойник в `serenedb/systemd` удалён Э5) |
 | 66 | ask@ env порядок mcp-reports→embed→ask→ask-%i | верно | `1c-serene-ask@.service:29-32` |
 | 67 | mcp-ask одиночный `ASK_URL=:8099`, `MCP_PORT=6016` (`:15-17`) | верно | `1c-mcp-ask.service:15-17` |
 | 68 | ask без `ASK_TOKEN` → exit 2 (`:15735+`) | верно | `main` `:15735-15739` |

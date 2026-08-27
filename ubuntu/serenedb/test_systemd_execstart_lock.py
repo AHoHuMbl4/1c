@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Оффлайн-замок: шаблоны systemd не зовут несуществующие и выведенные скрипты."""
+"""Оффлайн-замок: шаблоны systemd не зовут несуществующие и выведенные скрипты.
+
+Э5: мёртвый шаблон в ubuntu/serenedb/systemd/ удалён. Канон —
+ubuntu/systemd/1c-serene-index.service → build.sh; замок падает, если
+ExecStart живого юнита перестал ссылаться на build.sh.
+"""
 from __future__ import annotations
 
 import glob
@@ -28,6 +33,13 @@ WITHDRAWN_BASENAMES: frozenset[str] = frozenset({"serene_search_build.py"})
 INTERPRETER_SUFFIXES = ("/python", "/python3", "/bash", "/sh", "/openclaw")
 
 EXEC_KEYS = ("ExecStart=", "ExecStartPre=", "ExecStartPost=")
+
+# Канон раскатки index: одна копия, только ubuntu/systemd/.
+LIVE_INDEX_UNIT = os.path.join(ROOT, "ubuntu", "systemd", "1c-serene-index.service")
+# Мёртвый двойник удалён (Э5) — путь не должен снова появиться в дереве.
+DEAD_INDEX_UNIT = os.path.join(
+    ROOT, "ubuntu", "serenedb", "systemd", "1c-serene-index.service"
+)
 
 FAILS: list[str] = []
 CHECKS = 0
@@ -88,9 +100,36 @@ def iter_unit_templates() -> list[str]:
     return sorted(set(out))
 
 
+def live_index_execstart_ok() -> tuple[bool, str]:
+    if not os.path.isfile(LIVE_INDEX_UNIT):
+        return False, "missing ubuntu/systemd/1c-serene-index.service"
+    text = open(LIVE_INDEX_UNIT, encoding="utf-8").read()
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("ExecStart="):
+            continue
+        if "build.sh" in stripped:
+            return True, stripped
+        return False, stripped
+    return False, "no ExecStart="
+
+
 def main() -> int:
     templates = iter_unit_templates()
-    check("templates found", len(templates) >= 20, "count=%d" % len(templates))
+    check("templates found", len(templates) >= 18, "count=%d" % len(templates))
+
+    check(
+        "dead serenedb index unit absent",
+        not os.path.exists(DEAD_INDEX_UNIT),
+        DEAD_INDEX_UNIT,
+    )
+
+    ok, detail = live_index_execstart_ok()
+    check(
+        "live ubuntu/systemd/1c-serene-index.service ExecStart → build.sh",
+        ok,
+        detail,
+    )
 
     for unit_path in templates:
         rel_unit = os.path.relpath(unit_path, ROOT)
