@@ -5700,6 +5700,15 @@ def sales_rank_resolve_measure(names, intent, question, alias_by=None,
         axes=axes, src=src, product_axis=product_axis, diag=diag)
     if how == "role_ask":
         return None, "role_ask"
+    # K4-1 / Э3 №8: топ без «деньги|штуки» — уточнение, не money/qty-догадка.
+    _money = sales_money_measure(names, alias_by)
+    _qty = sales_qty_measure(names, alias_by)
+    _word = ((intent or {}).get("measure") or "").strip()
+    _named = bool(_word) or (
+        (_money and _alias_role_in_question(question, _money, alias_by))
+        or (_qty and _alias_role_in_question(question, _qty, alias_by)))
+    if not _named and _money and _qty and _money != _qty:
+        return None, "role_ask"
     # Клиентский rank без названной меры → money; товарная qty — rank_measure_hint
     # (тот же сигнал, что раньше ставился в answer() до money-fallback).
     if not sm and not product_axis:
@@ -6002,6 +6011,8 @@ _BALANCE_MAP = {"at": 0.0, "rows": None}
 _STOCK_MARKERS = (
     "остат", "на складе", "in stock", "on warehouse", "inventory balance",
     "stoc", "depozit", "magazin", "inventar",
+    # K4-1 №12: «лежит» (складах/вместе закрывает subject-clarify, не голый «склад»).
+    "леж",
 )
 
 
@@ -6220,9 +6231,9 @@ def balance_bridge_clarify(question, capable, diag, cut, t0, labels=None):
                 "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
                 % (TABLES, ", ".join(lit(s) for s in missing))):
             if r and r[0]:
-                lab_by[r[0]] = r[1] or r[0]
+                lab_by[r[0]] = (r[1] or "").strip()
     lab_by.update(labels)
-    opts = [{"src": s, "label": lab_by.get(s, s), "hint": "",
+    opts = [{"src": s, "label": human_table_label(s, lab_by.get(s)), "hint": "",
              "distinct_by": "", "found": 0} for s in srcs]
     dis = disambiguate_labels([(o["src"], o["label"]) for o in opts])
     for o in opts:
@@ -8036,6 +8047,54 @@ def same_number(ours, theirs):
         return False
     except (TypeError, ValueError):
         return False
+
+def src_supports_question(src, intent, diag, by=None, question=""):
+    """Есть ли у выбранного src поддержка предмета вопроса (K4-2 страж B).
+
+    Без поддержки measure-clarify по чужому live-src (валюта/НДС) режется в no_data.
+    """
+    diag = diag or {}
+    intent = intent or {}
+    by = by or {}
+    if not src:
+        return False
+    terms = intent.get("terms") or []
+    if terms:
+        # Сюда доходим только если все группы matched (место A уже отказало иначе).
+        return True
+    if diag.get("sales_canon_locked") or diag.get("catalog_count_locked"):
+        return True
+    if diag.get("sales_measure_canon"):
+        return True
+    if question_asks_stock_balance(question):
+        return True
+    meaning = diag.get("by_meaning") or []
+    if src in meaning:
+        return True
+    alias_hit = diag.get("by_alias") or []
+    if src in alias_hit:
+        return True
+    # Буквальный by при непустом match — поддержка; period-fill / vector — нет.
+    if (src in by and not diag.get("by_period_fill")
+            and not diag.get("by_vector")):
+        return True
+    return False
+
+
+def measure_class_alts(names, alias_by=None):
+    """Два класса меры money|qty вместо полного списка nums (K4-3 №7).
+
+    Возвращает (поле_или_None, alts_классов). alts — имена полей-представителей
+    классов, если оба живы и мера не названа; иначе (None, []).
+    """
+    names = list(names or [])
+    alias_by = alias_by or {}
+    money = sales_money_measure(names, alias_by)
+    qty = sales_qty_measure(names, alias_by)
+    if money and qty and money != qty:
+        return None, [money, qty]
+    return None, []
+
 
 def unresolved_quantity(measure, alts, want, compute, names, totals_by=None):
     """Свести поле, когда вопрос про итог/max/min/avg, а величина ещё не выбрана.
@@ -10547,10 +10606,20 @@ def format_clarify_options(question, opts):
     """Все варианты уточнения одним видом строк. Пустых пунктов нет."""
     lines, n = [], 0
     for o in opts or []:
-        if not (o.get("label") or o.get("measure")):
+        oo = o
+        lab = (o.get("label") or "")
+        if lab and label_has_meta_src(lab):
+            oo = dict(o)
+            oo["label"] = human_table_label(o.get("src"), lab)
+        hint = (oo.get("hint") or "")
+        if hint and label_has_meta_src(hint):
+            if oo is o:
+                oo = dict(o)
+            oo["hint"] = ""
+        if not (oo.get("label") or oo.get("measure")):
             continue
         n += 1
-        lines.append(clarify_choice_line(n, question, o))
+        lines.append(clarify_choice_line(n, question, oo))
     return lines
 
 
@@ -11095,6 +11164,47 @@ _KIND_WORD = {
     "enum": "перечисление",
 }
 
+# OData-префиксы src_table: для экрана заменяются хвостом через human_table_label (K4-3).
+_META_SRC_PREFIXES = tuple(k + "_" for k in sorted(_KIND_WORD, key=len, reverse=True))
+
+
+def looks_like_src_table(s):
+    """Строка похожа на служебное имя src_table (тип_хвост)."""
+    sl = (s or "").strip().lower()
+    if "_" not in sl:
+        return False
+    return sl.split("_", 1)[0] in _KIND_WORD
+
+
+def human_table_label(src_table, label=None):
+    """Подпись источника словами человека; пустая/служебная метка → хвост после типа."""
+    lab = (label or "").strip()
+    if lab and not looks_like_src_table(lab):
+        return lab
+    s = str(src_table or "").strip()
+    if not s:
+        return ""
+    parts = s.split("_", 1)
+    if len(parts) == 2 and parts[0].lower() in _KIND_WORD:
+        tail = split_ident(parts[1])
+        return (tail or kind_word(s) or "источник")
+    return split_ident(s) or "источник"
+
+
+def label_has_meta_src(text):
+    """True, если в тексте есть OData-префикс или токен вида тип_хвост."""
+    t = (text or "").strip()
+    if not t:
+        return False
+    low = t.lower()
+    for p in _META_SRC_PREFIXES:
+        if p in low:
+            return True
+    for tok in re.findall(r"[A-Za-zА-Яа-яЁё0-9_]+", t):
+        if looks_like_src_table(tok):
+            return True
+    return False
+
 
 def kind_word(src_table):
     """Вид записи словом человека. Неизвестный тип — пустая строка (молча не гадаем)."""
@@ -11112,7 +11222,7 @@ def label_with_kind(src_table, label):
     в `focus`.
     """
     k = kind_word(src_table)
-    lab = (label or "").strip() or str(src_table)
+    lab = human_table_label(src_table, label)
     return "%s (%s)" % (lab, k) if k else lab
 
 
@@ -11160,7 +11270,7 @@ def disambiguate_labels(pairs, ambiguous=None):
     out = {}
     for src, lab in pairs:
         many = len(seen.get(norm(lab), [])) > 1 or norm(lab) in ambiguous
-        out[src] = label_with_kind(src, lab) if many else ((lab or "").strip() or src)
+        out[src] = label_with_kind(src, lab) if many else human_table_label(src, lab)
     return out
 
 
@@ -11258,10 +11368,11 @@ def mk_opts(srcs, lab_by, marks=None, by=None, match="", preds=None, live=None):
         for src in srcs:
             if cov.get(src):
                 lab_by[src] = cov[src]
-    dis = disambiguate_labels([(s, lab_by.get(s, s)) for s in srcs])
+    dis = disambiguate_labels([(s, lab_by.get(s) or "") for s in srcs])
     hint = opts_hints(srcs)
     found_of = counted if counted is not None else by
-    return [{"src": s, "label": dis.get(s, lab_by.get(s, s)), "hint": hint.get(s, ""),
+    return [{"src": s, "label": dis.get(s) or human_table_label(s, lab_by.get(s)),
+             "hint": hint.get(s, ""),
              "distinct_by": marks.get(s, ""), "found": found_of.get(s, 0)} for s in srcs]
 
 
@@ -11922,6 +12033,147 @@ def period_is_canon_guess(period, today):
     return False
 
 
+def period_assumed_needs_clarify(intent, today=None):
+    """Assumed-окно длиной ≥ ~квартала без года в вопросе → уточнить период (K4-1).
+
+    День/неделя/месяц (короткие относительные) — False: одно условное прочтение.
+    Календарный/скользящий год и кварталоподобное окно — True (п. 12).
+    """
+    if serene_enough is None or not serene_enough.period_assumed(intent):
+        return False
+    p = (intent or {}).get("period") or {}
+    fr, to = p.get("from"), p.get("to")
+    if not fr or not to:
+        return False
+    if not today:
+        today = time.strftime("%Y-%m-%d")
+    if period_is_canon_guess(p, today):
+        return True
+    od_fr, od_to = _day_ord(fr), _day_ord(to)
+    if od_fr is None or od_to is None:
+        return False
+    span = od_to - od_fr
+    # квартал ≈ 89..92; год уже покрыт canon_guess; короче месяца — нет
+    return span >= 85
+
+
+def stock_subject_needs_clarify(question, intent=None):
+    """Остаток без названного товара → subject-clarify (K4-1 №12).
+
+    Узко: склад снят («всех»/all) или маркер «леж*» — иначе прежний stock-path
+    (bridge / склад), чтобы «какие остатки на складах» не уходили в subject.
+    """
+    if not question_asks_stock_balance(question):
+        return False
+    if stock_asks_named_product(question, intent):
+        return False
+    q = " ".join(str(question or "").lower().split())
+    if "леж" in q:
+        return True
+    if any(w in q for w in ("всех", "всеми", "altogether", "all warehouses", "all stocks")):
+        return True
+    return False
+
+
+def warehouse_axis_values(limit=20):
+    """Человеческие имена складов: catalog по alias, ось по search_refcols.
+
+    Каталог — entity_form_catalogs_for_kind (stem склад/warehouse ∩
+    label|aliases|best_used_for). Колонка refs_map — из search_refcols по
+    target_src (score: accumulationregister_* holders, затем max DISTINCT).
+    Запасной путь — search_refmap.name WHERE owner=каталог. Пусто/оффлайн → [].
+    Доки: map_extract_value (Map Functions); SELECT ORDER BY LIMIT.
+    """
+    cats = []
+    for kind in ("склад", "warehouse"):
+        try:
+            found = entity_form_catalogs_for_kind(kind, allow_meaning=True) or []
+        except RuntimeError:
+            found = []
+        for s in found:
+            if s and s not in cats:
+                cats.append(s)
+    if not cats:
+        return []
+    cats_sql = ", ".join(lit(s) for s in cats)
+    out, seen = [], set()
+
+    def _take(rows):
+        for r in rows or []:
+            w = (r[0] if r else None)
+            if w is None:
+                continue
+            s = str(w).strip()
+            if not s or s in seen or looks_like_src_table(s):
+                continue
+            seen.add(s)
+            out.append(s)
+            if len(out) >= int(limit):
+                return True
+        return False
+
+    try:
+        rows = psql(
+            "WITH cats(src) AS (VALUES %s), "
+            "cand AS ("
+            "  SELECT r.col,"
+            "         sum(CASE WHEN r.src_table LIKE 'accumulationregister_%%' "
+            "                  THEN 1 ELSE 0 END) AS on_accum,"
+            "         count(*) AS holders "
+            "  FROM search_refcols r "
+            "  WHERE r.target_src IN (SELECT src FROM cats) "
+            "    AND r.col IS NOT NULL AND r.col <> '' "
+            "  GROUP BY r.col), "
+            "scored AS ("
+            "  SELECT c.col, c.on_accum, c.holders,"
+            "         (SELECT count(DISTINCT map_extract_value(refs_map, c.col)) "
+            "          FROM %s "
+            "          WHERE map_extract_value(refs_map, c.col) IS NOT NULL) AS n_vals "
+            "  FROM cand c), "
+            "best AS ("
+            "  SELECT col FROM scored "
+            "  ORDER BY on_accum DESC, n_vals DESC, holders DESC "
+            "  LIMIT 1) "
+            "SELECT DISTINCT map_extract_value(c.refs_map, b.col) AS w "
+            "FROM %s c, best b "
+            "WHERE map_extract_value(c.refs_map, b.col) IS NOT NULL "
+            "LIMIT %d"
+            % (", ".join("(%s)" % lit(s) for s in cats), CORPUS, CORPUS,
+               int(limit)))
+    except RuntimeError:
+        rows = []
+    if _take(rows):
+        return out
+    if out:
+        return out
+    try:
+        rows = psql(
+            "SELECT DISTINCT name FROM search_refmap "
+            "WHERE owner IN (%s) AND name IS NOT NULL AND trim(name) <> '' "
+            "LIMIT %d" % (cats_sql, int(limit)))
+    except RuntimeError:
+        return out
+    _take(rows)
+    return out
+
+
+def warehouse_clarify(question, diag, cut, t0, warehouses=None):
+    """Уточнение склада-значения словами человека (K4-3 №11). None — не строить."""
+    wh = list(warehouses if warehouses is not None else warehouse_axis_values())
+    if len(wh) <= 1:
+        return None
+    opts = [{"src": "", "label": w, "hint": "", "distinct_by": "warehouse",
+             "found": 0} for w in wh]
+    d = dict(diag or {})
+    d["warehouse_clarify"] = True
+    cyr = any("\u0400" <= c <= "\u04ff" for c in (question or ""))
+    text = ("На каком складе?" if cyr else "Which warehouse?")
+    return {"partial": cut or None, "kind": "clarify", "text": text,
+            "options": opts, "sources": [],
+            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
+                               reason="склад не назван, значений несколько")}
+
+
 def period_slot_for_inherit(period, today):
     """Слот периода для наследования: задан текстом (True) или пуст (False).
 
@@ -12095,6 +12347,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["intent_assumed"] = ", ".join(
             "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
             for a in разбор["assumed"])
+    # K4-1 / п. 12: длинное assumed-окно — уточнение, не число наугад.
+    # Не при period_from_prior и не при доказанном ticket (trusted/resolved period).
+    _period_from_prior = bool((diag.get("prior") or {}).get("period")
+                              or diag.get("period_from_prior"))
+    if (not _period_from_prior
+            and not (trusted or {}).get("period")
+            and period_assumed_needs_clarify(intent, time.strftime("%Y-%m-%d"))):
+        diag["period_assumed_clarify"] = True
+        ask = _need_clarify(
+            question, [{"kind": "period", "word": ""}],
+            "период выведен системой, в вопросе не назван",
+            dict(diag, шаг="assumed-period"))
+        if ask:
+            return ask
 
     # Сравнение A и B — члены одной оси, не AND в одной строке. Схлопываем ДО probe.
     terms_for_axis = [list(g) for g in (intent.get("terms") or [])]
@@ -12126,13 +12392,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if n_groups > 0 and matched_groups < n_groups:
         missing = n_groups - matched_groups
         diag["unmatched_terms"] = missing
-        # Не нашли ни одного значения из вопроса — отвечать не о чем, это честный отказ,
-        # а НЕ агрегат по всей сущности.
-        if matched_groups == 0:
-            return {"partial": cut or None, "kind": "no_data", "sources": [],
-                    "text": NO_DATA_TEXT or refuse_text(question),
-                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                 reason="значения из вопроса не найдены в данных")}
+        # K4-2 / п. 21: любая ненайденная группа-значение — отказ, не чужой src+меры.
+        # Раньше отказ только при matched_groups==0; частичный промах уходил дальше.
+        return {"partial": cut or None, "kind": "no_data", "sources": [],
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                             reason="значения из вопроса не найдены в данных")}
 
     match, k = match_expr(exprs, preds)
     diag["min_should_match"] = k if exprs else 0
@@ -12277,9 +12542,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["by_vector"] = True
     if not by and not extra:
         by = tables_of("", preds)
+        if by:
+            diag["by_period_fill"] = True
+    # K4-3 №11: stock-вопрос с пустым отбором — не резать no_data до stock-path.
     if not by and not extra:
-        return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+        if question_asks_stock_balance(question):
+            diag["stock_bypass_empty_by"] = True
+            # уйдём в stock-path ниже с пустыми cands → balance_bridge / warehouse
+        else:
+            return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
 
     # Кандидаты: те, где поиск ЧТО-ТО нашёл, плюс ближайшие по смыслу названия.
     # Кандидаты — те сущности, где поиск ДЕЙСТВИТЕЛЬНО что-то нашёл. Без отсечки по
@@ -12317,6 +12589,19 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         capable = balance_capable_or_registers()
         cands = filter_stock_balance_sales_noise(cands, question, diag)
         named = stock_asks_named_product(question, intent)
+        # K4-1 №12: остаток без предмета — уточнение товара (не figures по продажам).
+        if (not named and stock_subject_needs_clarify(question, intent)
+                and not measure_pick
+                and not (trusted or {}).get("subject")):
+            q_low = " ".join(str(question or "").lower().split())
+            # «всех складах» / all — склад снят; иначе тоже subject первее bridge.
+            diag["stock_subject_clarify"] = True
+            ask = _need_clarify(
+                question, [{"kind": "subject", "word": "товар"}],
+                "остаток без названного товара",
+                dict(diag, шаг="stock-subject"))
+            if ask:
+                return ask
         if named:
             _goods_cap = balance_registers_with_goods(capable) if capable else frozenset()
             if not capable or not _goods_cap:
@@ -12326,6 +12611,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if not cands:
                 return stock_balance_named_no_data(question, diag, cut, t0)
         else:
+            # K4-3 №11: несколько складов-значений → clarify до bridge/no_data.
+            wh_ask = warehouse_clarify(question, diag, cut, t0)
+            if wh_ask:
+                return wh_ask
             if capable:
                 hit = [c for c in cands if c in capable]
                 if not hit:
@@ -14170,6 +14459,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 src=src, axes=_axes_early, plan=plan, diag=diag)
             if _how == "role_ask":
                 _sm = None
+                _mc, _ma = measure_class_alts(_names, _als)
+                if len(_ma) == 2:
+                    measure, measure_alts = None, _ma
+                    diag["measure_class_clarify"] = True
+                    diag["sales_rank_role_ask"] = True
         elif sales_force_money_measure(intent, question):
             _sm = sales_money_measure(_names, _als)
             _how = "sales_canon"
@@ -14267,7 +14561,23 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
     if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
             and not diag.get("sales_measure_canon")
-            and not _rank_sales):
+            and (not _rank_sales or diag.get("sales_rank_role_ask"))):
+        # K4-2 / страж B: чужой src без поддержки предмета → no_data, не валюта/НДС.
+        if not src_supports_question(src, intent, diag, by=by, question=question):
+            diag["subject_unsupported_before_measure_clarify"] = True
+            return {"partial": cut or None, "kind": "no_data", "sources": [],
+                    "text": NO_DATA_TEXT or refuse_text(question),
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                 reason="subject_unsupported_before_measure_clarify")}
+        # K4-3 №7: при want=sum и двух классах money|qty — сначала класс, не все nums.
+        if ((intent.get("want") or "") == "sum"
+                and not ((intent.get("measure") or "").strip())
+                and not measure_pick):
+            _cls_m, _cls_alts = measure_class_alts(
+                measure_alts, measure_aliases_of(src) if src else {})
+            if len(_cls_alts) == 2:
+                measure_alts = _cls_alts
+                diag["measure_class_clarify"] = True
         diag["measure_ambiguous"] = measure_alts
         # 🔴 ЧИСЛА ПОДХОДЯЩИХ ВЕЛИЧИН СЧИТАЮТСЯ ЗДЕСЬ ЖЕ — ОНИ НУЖНЫ НЕ ЧЕЛОВЕКУ, А ПРОВЕРКЕ
         # НАД НАМИ (05.08). Этот же путь проходит КАНДИДАТ круга арбитра

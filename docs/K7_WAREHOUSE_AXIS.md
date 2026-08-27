@@ -89,3 +89,25 @@ Sql › Statements › SELECT › ORDER BY, LIMIT.
 | `ubuntu/serenedb/test_warehouse_axis_autonomy.py` | да |
 | `docs/K7_WAREHOUSE_AXIS.md` | да |
 | `docs/CODE_MAP_ASK.md`, `docs/audit/code-map.json` | да (перегенерация) |
+
+---
+
+## 6. Проба оркестратора и коммит `serene_ask.py` (27.08)
+
+Кандидат с правками К5 + К7 поднят на okna отдельным процессом
+(`/tmp/serene_ask_k7.py`, md5 `35daa28008373a41b92134e5ab3cdcb0`, порт 8093,
+`PYTHONPATH=/opt/1c-mcp-reports`). Боевой `:8091` и стейджинг `:8092` не трогали —
+на `:8092` в это время шёл замер набора ambiguous.
+
+| набор | результат |
+|---|---|
+| `AB_PROBE=okna` (8 вопросов) | **8/8, средняя 21,09 с** |
+
+Прогон поставил отметку `.claude/.probe-okna-last-run` (0err/8), после чего
+`ubuntu/serenedb/serene_ask.py` ушёл в git вместе с правками К5.
+
+Почему кандидат жил во временном каталоге, а не в `/opt/1c-mcp-reports`: гейт
+`check-golden` не пропускает доставку в рабочие каталоги, пока дерево
+`ubuntu/**` не совпадает с HEAD, а в дереве в тот момент лежали незакоммиченные
+правки соседней задачи (набор ambiguous). Доставка во временный каталог гейтом
+разрешена и ничего не подменяет на боевом контуре.
