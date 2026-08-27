@@ -36,9 +36,17 @@ t("A: одна группа matched (ключ-int из probe)",
   A.matched_group_count({0: "literal"}) == 1)
 
 # ── Страж B: src_supports_question ───────────────────────────────────────────
-t("B1: terms непустые → support",
+t("B1: terms + kind, src не в meaning → нет support (ПАНГЕЯ)",
+  not A.src_supports_question(
+      "accountingregister_плансчетовосновной2014",
+      {"terms": [["ПАНГЕЯ"]], "kind": "заказы"},
+      {"by_meaning": ["catalog_контрагенты"]},
+      by={"accountingregister_плансчетовосновной2014": 8},
+      question="Покажи заказы ПАНГЕЯ", match="П"))
+t("B1b: terms без kind, src в by → support",
   A.src_supports_question(
-      "document_x", {"terms": [["ПАНГЕЯ"]]}, {}, by={}))
+      "document_x", {"terms": [["ПАНГЕЯ"]]}, {},
+      by={"document_x": 3}))
 t("B2: пустые terms + period-fill + чужой src → нет support",
   not A.src_supports_question(
       "informationregister_курсывалют",
@@ -73,6 +81,44 @@ t("B6: by_vector без meaning → нет support",
       {"by_vector": True},
       by={"informationregister_курсывалют": 1},
       question="Кто сейчас президент России?"))
+t("B7: pool_weak без literal → нет support",
+  not A.src_supports_question(
+      "document_установкаценноменклатуры_номенклатура",
+      {"terms": [], "kind": None},
+      {"by_period_fill": True},
+      by={"document_установкаценноменклатуры_номенклатура": 100},
+      question="Кто сейчас президент России?",
+      match=""))
+t("B8: non_accounting «стих»",
+  not A.question_expects_accounting_data(
+      {"kind": "склад"}, "Напиши стих про наш склад", {}))
+t("B9: accounting «сколько»",
+  A.question_expects_accounting_data(
+      {"kind": "анкеты"}, "Сколько анкет заполнено", {}))
+
+
+# Резолвер не отдаёт обрезанных значений: подстрочному плечу гарды нужен
+# ≥3 знака, триграммное коротышей не пересекает — «ПАНГЕЯ»→«П» невозможен.
+t("resolver: однобуквенное значение не делит признак с «ПАНГЕЯ»",
+  not A._shares_chars("ПАНГЕЯ", "П"))
+t("resolver: двухбуквенный кусок не делит",
+  not A._shares_chars("ПАНГЕЯ", "ПА"))
+t("resolver: полное вхождение ≥3 живо (Казань)",
+  A._shares_chars("Казань", "Г. КАЗАНЬ"))
+t("resolver: триграмма жива (Питер/Петербург)",
+  A._shares_chars("Питер", "Санкт-Петербург"))
+t("resolver: код не делит с чужим словом (SanDisk/5920)",
+  not A._shares_chars("SanDisk", "5920"))
+t("B11: president want=list без предмета → не учёт",
+  not A.question_expects_accounting_data(
+      {"want": "list"}, "Кто сейчас президент России", {}))
+t("B12: анкеты + чужой src → нет support",
+  not A.src_supports_question(
+      "accountingregister_плансчетовосновной2014",
+      {"terms": [], "kind": "анкеты"},
+      {"by_period_fill": True},
+      by={"accountingregister_плансчетовосновной2014": 100},
+      question="Сколько анкет заполнено"))
 
 # Контроль: честная неоднозначность меры на поддержанном src — не режется стражем
 t("B-ctrl: support на живом by → clarify мер допустим",
@@ -82,6 +128,25 @@ t("B-ctrl: support на живом by → clarify мер допустим",
       {},
       by={"document_реализациятмц": 6},
       question="Сколько мы закупили товаров?"))
+
+# Канон сильнее стража kind (К4 §4.3): «наторговали» → kind «торги» без опоры
+# в корпусе, но канон продаж ведёт вопрос в реализацию — страж не отказывает
+# раньше канона. Замер: проба okna 27.08 «…в прошедшее воскресенье» → no_data.
+t("канон: наторговали (kind=торги) забран каноном продаж",
+  A.canon_claims_question({"kind": "торги", "want": "sum"},
+                           "сколько наторговали в прошедшее воскресенье?"))
+t("канон: прайс (want=count) забран каноном каталога",
+  A.canon_claims_question({"want": "count"},
+                           "сколько позиций у нас в прайсе?"))
+t("канон: анкеты не забраны — страж kind работает",
+  not A.canon_claims_question({"kind": "анкеты", "want": "count"},
+                               "Сколько анкет заполнено"))
+t("канон: стих не забран",
+  not A.canon_claims_question({"kind": "склад"},
+                               "Напиши стих про наш склад"))
+t("канон: прайс-слово при чужом (прода) не забирает",
+  not A.catalog_count_question({"want": "count"},
+                                "сколько прайсовых позиций продали?"))
 
 # measure_class_alts: money|qty вместо полного nums
 _ma = A.measure_class_alts(

@@ -56,8 +56,11 @@ _intent_list = {
     "want": "list",
 }
 _q_cmp = "эта неделя лучше прошлой или хуже?"
-t("flag0: want=list → compare False",
-  A.sales_compare_intent(_intent_list, _q_cmp) is False)
+# K2 P5 (6a379d8): better/worse + «прошл» — структурный вход compare даже
+# без ASK_ENTITY_FORM (Q6 живьём: WTD-пара −792128.74). Старый кейс
+# «flag0 → False» описывал поведение до P5 и устарел.
+t("flag0: want=list + лучше/прошл → compare True (K2 P5)",
+  A.sales_compare_intent(_intent_list, _q_cmp) is True)
 _restore(_s)
 
 # ── флаг 1: compare не блокируется want=list ─────────────────────────────────

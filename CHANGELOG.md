@@ -1,3 +1,24 @@
+## 2026-08-27 — Патч 3 К3: K4-2 страж A+B (clarify→no_data) + канон сильнее стража
+
+**[код]** `serene_ask.py`: место A — unmatched terms (частичный промах тоже
+отказ); место B — `src_supports_question`/`question_expects_accounting_data`
+перед measure-clarify; `test_k4_clarify_vs_nodata.py` расширен живыми кейсами.
+Патч 3.3: `canon_claims_question` — страж kind уступает канону
+(«наторговали»→kind «торги» без опоры, канон продаж ведёт в реализацию);
+слова канона прайса — одно место (`catalog_count_question`). Патч 3.4
+(по находке снайпера): порог длины убран — слабый резолв «ПАНГЕЯ»→«П»
+закрыт в самой гард `_shares_chars` (подстрочному плечу нужен ≥3 знака,
+тот же пол, что словам литерал-резолвера), `terms_substantively_matched`
+удалён вместе с обоими вызовами.
+**[замер]** замок K4 **27/0**; test_compose **92/0**; test_entity_form **47/0**;
+test_k6_rank_v2 **2/0**; test_code_map **28/0**. Кандидат :8096 (окна): дословные
+§9.1 — **3/4 no_data** (стих/ПАНГЕЯ/президент; анкеты — остаток K6-ранга,
+план счетов 189043 побеждает фио-регистры при живом v2, не подгонял);
+AB_PROBE **8/8 0err** (до 3.3 было 7/8 — воскресенье падало в
+kind_unsupported_in_corpus), средняя 19,49 с, отметка `okna probe live 0err/8`.
+Выкат: `entity_rank_v2.py` добавлен в FILES `deploy-okna-serene-ask.sh`
+(модуль патча 2 не доезжал до okna — кандидат молча жил без ранга v2).
+
 ## 2026-08-27 — Патч 2 К3: K6 entity rank v2 в serene_ask
 
 **[код]** `entity_rank_v2.py` + врезка в `serene_ask.py` после `prefer_entity_for_*`:

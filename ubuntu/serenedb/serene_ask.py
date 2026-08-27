@@ -3889,12 +3889,19 @@ def _ngrams(s, n=3):
 def _shares_chars(term, value):
     """Слово и значение делят хотя бы один буквенный триграмм (или одно — подстрока
     другого). Структурная проверка «это то же слово, пусть и искажённое», без списка
-    синонимов и без числового порога."""
+    синонимов и без числового порога.
+
+    Подстрочное плечо требует ≥3 знаков у КОРОТКОЙ стороны: однобуквенное
+    значение («П») — подстрока почти любого слова и разрешалось в мусор
+    [замер 27.08]: векторный резолвер отдавал «ПАНГЕЯ»→«П», и группа считалась
+    matched. Это тот же пол, что у слов в _resolve_values_literal (len < 3)."""
     t = re.sub(r"[^0-9a-zа-яё]", "", (term or "").lower())
     v = re.sub(r"[^0-9a-zа-яё]", "", (value or "").lower())
     if not t or not v:
         return False
-    if t in v or v in t:
+    if len(t) >= 3 and t in v:
+        return True
+    if len(v) >= 3 and v in t:
         return True
     return bool(_ngrams(term) & _ngrams(value))
 
@@ -6085,16 +6092,28 @@ def _is_product_catalog(src):
     return any(k in s for k in ("номенклатур", "nomencl", "товар", "product", "goods"))
 
 
-def prefer_entity_for_catalog_count(cands, intent, question):
-    """«Позиций в прайсе» — catalog_номенклатура, не цены/установка цен."""
+def catalog_count_question(intent, question):
+    """Лексический признак канона «прайс»: count + слова прайса, без чужих слов.
+
+    Единственное место списка слов канона: его зовут и перестановка
+    кандидатов, и страж kind (К4-2 §4.3 — сработавший канон считается
+    поддержкой вопроса и не отбрасывается стражем).
+    """
     intent = intent or {}
     q = " ".join(str(question or "").lower().split())
     want = (intent.get("want") or "").strip().lower()
     if want not in ("count", ""):
-        return cands
+        return False
     if not any(w in q for w in ("прайс", "price list", "в прайсе", "номенклатур")):
-        return cands
+        return False
     if any(w in q for w in ("прода", "куп", "остат", "склад")):
+        return False
+    return True
+
+
+def prefer_entity_for_catalog_count(cands, intent, question):
+    """«Позиций в прайсе» — catalog_номенклатура, не цены/установка цен."""
+    if not catalog_count_question(intent, question):
         return cands
     cands = list(cands or [])
     cats = [c for c in cands if _is_product_catalog(c)]
@@ -8308,7 +8327,9 @@ def k6_dual_atom_clarify_return(cat, holder, question, diag, cut, t0,
                                reason="k6_dual_atom_clarify")}
 
 
-def src_supports_question(src, intent, diag, by=None, question=""):
+
+
+def src_supports_question(src, intent, diag, by=None, question="", match=None):
     """Есть ли у выбранного src поддержка предмета вопроса (K4-2 страж B).
 
     Без поддержки measure-clarify по чужому live-src (валюта/НДС) режется в no_data.
@@ -8319,9 +8340,27 @@ def src_supports_question(src, intent, diag, by=None, question=""):
     if not src:
         return False
     terms = intent.get("terms") or []
+    kind = (intent.get("kind") or "").strip()
     if terms:
-        # Сюда доходим только если все группы matched (место A уже отказало иначе).
-        return True
+        # Сюда доходим только если все группы matched (место A уже отказал иначе);
+        # обрезанных резолвов («ПАНГЕЯ»→«П») не даёт сама гарда резолвера
+        # (_shares_chars, подстроке нужен ≥3 знака) — отдельного порога не нужно.
+        if diag.get("sales_canon_locked") or diag.get("catalog_count_locked"):
+            return True
+        if diag.get("sales_measure_canon"):
+            return True
+        meaning = diag.get("by_meaning") or []
+        if src in meaning:
+            return True
+        alias_hit = diag.get("by_alias") or []
+        if src in alias_hit:
+            return True
+        if kind:
+            return False
+        if (src in by and not diag.get("by_period_fill")
+                and not diag.get("by_vector")):
+            return True
+        return False
     if diag.get("sales_canon_locked") or diag.get("catalog_count_locked"):
         return True
     if diag.get("sales_measure_canon"):
@@ -8334,9 +8373,109 @@ def src_supports_question(src, intent, diag, by=None, question=""):
     alias_hit = diag.get("by_alias") or []
     if src in alias_hit:
         return True
+    # Буквальный сигнал — непустой match ИЛИ сам src в живом буквальном отборе by
+    # (K4-2: живой by без fill — поддержка; контроль B5/B-ctrl замка).
+    literal_signal = bool(match and str(match).strip()) or bool(by.get(src))
+    pool_weak = bool(diag.get("by_period_fill") or diag.get("by_vector")
+                     or (not literal_signal and not meaning and not alias_hit))
+    if pool_weak:
+        kind = (intent.get("kind") or "").strip()
+        if kind and not kind_has_corpus_support(kind):
+            return False
+        if not question_expects_accounting_data(intent, question, diag):
+            return False
+        return False
     # Буквальный by при непустом match — поддержка; period-fill / vector — нет.
     if (src in by and not diag.get("by_period_fill")
             and not diag.get("by_vector")):
+        return True
+    return False
+
+
+def any_live_src_supports_question(intent, diag, by, question, match, src,
+                                   live_srcs=None):
+    """Поддерживает ли предмет вопроса хотя бы один live-src кандидата (K4-2 B)."""
+    pool = list(live_srcs or [])
+    if src and src not in pool:
+        pool.insert(0, src)
+    if not pool:
+        return src_supports_question(src, intent, diag, by=by,
+                                   question=question, match=match)
+    return any(src_supports_question(s, intent, diag, by=by,
+                                       question=question, match=match)
+                for s in pool)
+
+
+_NON_DATA_MARKERS = (
+    "напиши", "расскаж", "стих", "poem", "шутк", "анекдот", "придумай",
+    "сочини", "опиши красив", "рифм",
+)
+
+
+def question_expects_accounting_data(intent, question, diag=None):
+    """Вопрос про учётные данные, а не off-topic / творческий запрос (K4-2)."""
+    diag = diag or {}
+    intent = intent or {}
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return False
+    if any(m in q for m in _NON_DATA_MARKERS):
+        return False
+    want = (intent.get("want") or "").strip().lower()
+    if want in ("count", "sum", "max", "min", "avg"):
+        return True
+    if want == "list":
+        if (intent.get("kind") or "").strip() or intent.get("terms"):
+            return True
+    elif want:
+        return True
+    if intent.get("terms"):
+        return True
+    if diag.get("sales_canon_locked") or diag.get("sales_measure_canon"):
+        return True
+    if sales_sum_intent(intent, question) or rank_question_text(question):
+        return True
+    if question_asks_stock_balance(question):
+        return True
+    if re.search(r"\b(сколько|покажи|дай|топ|сумм|выруч|продаж|остат|заказ)\b", q):
+        return True
+    return False
+
+
+def canon_claims_question(intent, question=""):
+    """Канон, забравший вопрос, — поддержка (К4-2 §4.3), страж kind уступает.
+
+    «наторговали» разбирается в kind «торги», которого в корпусе нет, но
+    канон продаж сам ведёт вопрос в регистр реализации: отказ «kind без
+    опоры» раньше канона — дефект п. 21 (отказ при наличии данных).
+    Замер: проба okna 27.08, «сколько наторговали в прошедшее воскресенье»
+    падала в no_data (kind_unsupported_in_corpus) при живом каноне.
+    """
+    if sales_sum_intent(intent, question):
+        return True
+    if catalog_count_question(intent, question):
+        return True
+    return False
+
+
+def kind_has_corpus_support(kind):
+    """Есть ли kind в корпусе (alias @@ или stem пересечение с catalog).
+
+    База недоступна (офлайн-замки, DSN не задан) — поддержан: отказ «kind
+    неподдержан» требует ДОКАЗАННОГО отсутствия в корпусе, иначе офлайн-среда
+    превращает каждый вопрос с kind в no_data (п. 21: отказ при наличии
+    данных — дефект).
+    """
+    kind = (kind or "").strip().lower()
+    if not kind:
+        return True
+    try:
+        if psql("SELECT 1 FROM alias_idx WHERE aliases @@ %s LIMIT 1" % lit(kind)):
+            return True
+        if K6R:
+            return bool(K6R.stem_overlap_srcs(
+                psql, lit, kind, "catalog_%", stem_dict=STEM_DICT))
+    except RuntimeError:
         return True
     return False
 
@@ -12620,6 +12759,23 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["intent_assumed"] = ", ".join(
             "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
             for a in разбор["assumed"])
+    # K4-2: kind без опоры в корпусе — no_data до чужого src (№14 анкеты).
+    # §4.3: канон, забравший вопрос, — сам поддержка; страж уступает канону.
+    _kind_chk = (intent.get("kind") or "").strip()
+    if (_kind_chk and not kind_has_corpus_support(_kind_chk)
+            and not canon_claims_question(intent, question)):
+        diag["kind_unsupported"] = _kind_chk
+        return {"partial": cut or None, "kind": "no_data", "sources": [],
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                             reason="kind_unsupported_in_corpus")}
+    # K4-2: off-topic / творческий запрос без учётного want (№17/18).
+    if not question_expects_accounting_data(intent, question, diag):
+        diag["non_accounting_question"] = True
+        return {"partial": cut or None, "kind": "no_data", "sources": [],
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                             reason="non_accounting_question")}
     # K4-1 / п. 12: длинное assumed-окно — уточнение, не число наугад.
     # Не при period_from_prior и не при доказанном ticket (trusted/resolved period).
     _period_from_prior = bool((diag.get("prior") or {}).get("period")
@@ -12667,6 +12823,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["unmatched_terms"] = missing
         # K4-2 / п. 21: любая ненайденная группа-значение — отказ, не чужой src+меры.
         # Раньше отказ только при matched_groups==0; частичный промах уходил дальше.
+        # Обрезанный резолв здесь не выделяется: «ПАНГЕЯ»→«П» не проходит гарду
+        # резолвера (_shares_chars, пол 3) и значит unmatched — тот же отказ.
         return {"partial": cut or None, "kind": "no_data", "sources": [],
                 "text": NO_DATA_TEXT or refuse_text(question),
                 "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
@@ -12863,12 +13021,19 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             return k6_dual_atom_clarify_return(
                 cat, holder, question, diag, cut, t0, by, match, preds,
                 diag.get("marks") or {}, extra)
-        _k6r = K6R.apply_to_candidates(
-            psql, lit, cands, intent, question, today=today,
-            stem_dict=STEM_DICT, corpus=CORPUS, tables=TABLES,
-            sales_sum=sales_sum_intent(intent, question),
-            rank_intent=rank_intent_from(intent, None, question),
-            mk_clarify=_k6_mk_clarify)
+        # K6 v2: при RuntimeError от psql порядок кандидатов прежний (diag answer_fit_v2_down)
+        # (RuntimeError от psql без DSN в офлайн-замках, сбой соединения) —
+        # порядок прежний, отметка в diag. Ранг не роняет ответ.
+        try:
+            _k6r = K6R.apply_to_candidates(
+                psql, lit, cands, intent, question, today=today,
+                stem_dict=STEM_DICT, corpus=CORPUS, tables=TABLES,
+                sales_sum=sales_sum_intent(intent, question),
+                rank_intent=rank_intent_from(intent, None, question),
+                mk_clarify=_k6_mk_clarify)
+        except RuntimeError as _k6_err:
+            _k6r = {}
+            diag["answer_fit_v2_down"] = type(_k6_err).__name__
         if _k6r.get("diag"):
             diag.update(_k6r["diag"])
         if _k6r.get("clarify"):
@@ -14854,7 +15019,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             and not diag.get("sales_measure_canon")
             and (not _rank_sales or diag.get("sales_rank_role_ask"))):
         # K4-2 / страж B: чужой src без поддержки предмета → no_data, не валюта/НДС.
-        if not src_supports_question(src, intent, diag, by=by, question=question):
+        if not src_supports_question(src, intent, diag, by=by, question=question,
+                                     match=match):
             diag["subject_unsupported_before_measure_clarify"] = True
             return {"partial": cut or None, "kind": "no_data", "sources": [],
                     "text": NO_DATA_TEXT or refuse_text(question),
