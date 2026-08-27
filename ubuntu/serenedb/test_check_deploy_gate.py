@@ -29,15 +29,15 @@ def t(name: str, cond: bool, detail: str = "") -> None:
 
 
 # Базлайн-вопросы FAIL из docs/DEPLOY_GATE.md (должны совпасть со снимком).
+# K4 («эта неделя…») на базлайне 21/25 — OK (см. DEPLOY_GATE.md).
 BASE_FAILS = [
     "дай топ-3 товара за вчера",
     "сколько позиций совсем не продаётся в этом месяце?",
-    "эта неделя лучше прошлой или хуже?",
     "в этом месяце продали больше, чем в прошлом?",
     "сколько клиентов реально покупают?",
 ]
 
-# 20 OK-вопросов — любые стабильные строки, не пересекающиеся с FAIL.
+# 21 OK-вопросов — любые стабильные строки, не пересекающиеся с FAIL.
 BASE_OKS = [
     "сколько продали вчера?",
     "сколько продали позавчера?",
@@ -59,6 +59,7 @@ BASE_OKS = [
     "сколько петель осталось на складе?",
     "как у нас дела?",
     "сколько документов реализации за декабрь 2025?",
+    "эта неделя лучше прошлой или хуже?",
 ]
 
 
@@ -109,15 +110,15 @@ def main() -> int:
     import check_deploy_gate as G  # noqa: E402
 
     bl = G.load_baseline(BASELINE_DOC)
-    t("базлайн pass=20", bl["pass"] == 20, bl["pass"])
+    t("базлайн pass=21", bl["pass"] == 21, bl["pass"])
     t("базлайн total=25", bl["total"] == 25, bl["total"])
-    t("базлайн 5 FAIL", len(bl["fail_qs"]) == 5, len(bl["fail_qs"]))
+    t("базлайн 4 FAIL", len(bl["fail_qs"]) == 4, len(bl["fail_qs"]))
     t("базлайн FAIL совпадают", set(BASE_FAILS) == bl["fail_qs"],
       sorted(bl["fail_qs"] ^ set(BASE_FAILS)))
 
     # 1) pass: ровно базлайн
     rows = _baseline_rows()
-    t("синтетика: 20 OK + 5 FAIL = 25", len(rows) == 25, len(rows))
+    t("синтетика: 21 OK + 4 FAIL = 25", len(rows) == 25, len(rows))
     r = run_gate(_jsonl(rows))
     t("pass jsonl → rc 0", r.returncode == 0, "rc=%s err=%s" % (r.returncode, (r.stderr or "")[:160]))
     t("pass jsonl → PASS в stdout", "PASS" in (r.stdout or ""), r.stdout[:120])
@@ -143,7 +144,7 @@ def main() -> int:
     # (короче и pass ниже) — ловится коротким набором / pass
     short_pass = [(q, "OK") for q in BASE_OKS[:15]] + [(q, "FAIL") for q in BASE_FAILS]
     r = run_gate(_jsonl(short_pass))
-    t("pass 15 при total 20 → rc 1", r.returncode == 1, "rc=%s" % r.returncode)
+    t("pass 15 при total 19 → rc 1", r.returncode == 1, "rc=%s" % r.returncode)
 
     # 3) короткий набор (probe-размер)
     probe = [(q, "OK") for q in BASE_OKS[:8]]

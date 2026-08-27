@@ -1,3 +1,10 @@
+## 2026-08-27 — К2-хвост: замок DEPLOY_GATE на базлайн 21/25
+
+**[код]** Доводка `6a379d8`: `test_check_deploy_gate.py` — «эта неделя лучше
+прошлой или хуже?» перенесена BASE_FAILS → BASE_OKS (K4 закрыт, см.
+`docs/DEPLOY_GATE.md` «K4 … OK — закрыт»). Замок **18/0**; FAIL-базлайн
+**5→4**.
+
 ## 2026-08-27 — Э1: замер psql за такт + снят веер embed_missing
 
 **[замер]** Последний OK такт okna (`1c-serene-pipeline@postgres`,
