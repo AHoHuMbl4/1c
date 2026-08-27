@@ -1,3 +1,17 @@
+## 2026-08-27 — К4-2: проект «clarify вместо no_data» (без правки ask)
+
+**[замер]** Класс из ACCEPTANCE_AMBIGUOUS §8 (okna 5/18): 4 случая
+№6/14/17/18 — мусорный measure-clarify (валюта/НДС) там, где контракт
+ждёт `no_data`.
+
+**[код]** Разбор `answer()`: ранний no_data unmatched terms только при
+`matched_groups==0` (~12131); запасной `tables_of("", preds)` (~12278);
+возврат clarify по `measure_alts` (~14304). В момент clarify бот знает
+меры чужого live-src, не отсутствие предмета.
+
+**[решение]** Проект патча A+B и замка — `docs/K4_CLARIFY_VS_NODATA.md`.
+`serene_ask.py` не трогали.
+
 ## 2026-08-27 — Э3: прогон неоднозначных на живом okna
 
 **[замер]** Первый живой прогон `docs/ACCEPTANCE_AMBIGUOUS.md` (18 воп.,

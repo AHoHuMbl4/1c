@@ -9,7 +9,10 @@ StartLimitBurst=5
 
 [Service]
 Type=oneshot
-TimeoutStartSec=3600
+# Как у шаблона 1c-serene-pipeline@: длительность такта растёт с объёмом дельты/
+# корпуса. Фиксированный 3600 резал бы крупную базу посередине (класс дефекта
+# 1c-wiki-alias@ 27.08, п. 13). Type=oneshot: TimeoutStartSec=infinity.
+TimeoutStartSec=infinity
 WorkingDirectory=/opt/1c-mcp-reports
 # Порядок env значим: reports первым (ключи эмбеддера, токен шлюза), sync последним
 # (пишущая роль postgres — CREATE/MERGE в корпус). Разойдётся порядок — сборка упадёт на

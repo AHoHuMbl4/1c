@@ -15,9 +15,11 @@ Wants=serenedb.service
 
 [Service]
 Type=oneshot
-# Замок build.sh (flock) не даёт двум тактам наложиться; таймаут — чтобы зависший
-# провайдер эмбеддинга не держал юнит вечно.
-TimeoutStartSec=3600
+# Замок build.sh (flock) не даёт двум тактам наложиться. Длительность растёт с
+# размером базы (корпус + embed) — фиксированный потолок режет прогон посередине
+# (тот же класс дефекта, что у 1c-wiki-alias@ 27.08: TimeoutStartSec=7200 → timeout
+# на финише, п. 13). Type=oneshot: TimeoutStartSec=infinity.
+TimeoutStartSec=infinity
 WorkingDirectory=/opt/1c-mcp-reports
 # 🔴 ПОРЯДОК ФАЙЛОВ ЗНАЧИМ, И ЕГО НЕЛЬЗЯ МЕНЯТЬ МЕСТАМИ.
 # Обе переменные `SERENEDB_DSN` объявлены в обоих файлах, а systemd оставляет

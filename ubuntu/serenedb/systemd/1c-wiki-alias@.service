@@ -34,12 +34,18 @@ EnvironmentFile=/etc/1c-mcp-reports.env
 EnvironmentFile=-/etc/1c-wiki-alias-%i.env
 # 🔴 БЕЗ БЮДЖЕТА ВРЕМЕНИ ПО УМОЛЧАНИЮ. Внутри такта свежести шаг ограничен 120 с (п. 17),
 # но это отдельный, ручной прогон: он собирает словарь целиком и не обязан укладываться в
-# такт. Ограничение остаётся у systemd — `TimeoutStartSec`, иначе зависший агент держал бы
-# юнит вечно.
+# такт. Бюджет времени — только у скрипта (`WIKI_ALIAS_MAX_SEC`); systemd длительность
+# не режет (см. TimeoutStartSec ниже).
 Environment=WIKI_ALIAS_MAX_SEC=0
 WorkingDirectory=/opt/1c-mcp-reports
 ExecStart=/bin/bash /opt/1c-mcp-reports/wiki_alias.sh 0
-TimeoutStartSec=7200
+# 🔴 [замер okna 27.08] TimeoutStartSec=7200 убил oneshot после 2h wall
+# (`start operation timed out. Terminating.`, Result=timeout, ExecMainStatus=15),
+# хотя словарь уже был дописан (258/258). На базе крупнее убийство пришлось бы
+# на середину → молча наполовину собранный словарь (п. 13 TARGET.md). Длительность
+# растёт с размером чужой базы — фиксированный потолок недопустим.
+# Type=oneshot: TimeoutStartSec=infinity (не путать с умолчанием DefaultTimeoutStartSec).
+TimeoutStartSec=infinity
 
 [Install]
 WantedBy=multi-user.target

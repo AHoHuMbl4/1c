@@ -395,6 +395,19 @@ systemctl start 1c-etl.service                                   # первый 
   не ставить. *Прежняя редакция (до 26.08): «PG enabled, снос в работе» — снимок до purge.*
   Юниты braine (`1c-mcp-braine`, system `open-webui`, …) — история, не продукт.
 
+  🔴 **Долгие oneshot и `TimeoutStartSec`.** Прогоны, чья длительность растёт с
+  размером чужой базы, **не** режутся фиксированным потолком systemd:
+  `1c-wiki-alias@`, `1c-serene-pipeline@` / legacy `1c-serene-pipeline`,
+  `1c-serene-index`, `1c-serene-firstbuild@`, `1c-serene-onboard@` —
+  `TimeoutStartSec=infinity` (у `1c-branch-alias` то же через `=0`).
+  `[замер okna 27.08]` у `1c-wiki-alias@postgres` было `TimeoutStartSec=7200`:
+  после 2h wall systemd убил юнит (`Result=timeout`, ExecMainStatus=15), хотя
+  словарь уже был 258/258; на базе крупнее убийство пришлось бы на середину —
+  молча наполовину собранный словарь (п. 13). Бюджет времени, если нужен, —
+  в env скрипта (`WIKI_ALIAS_MAX_SEC`), не в юните. Раскатка шаблона:
+  `cp ubuntu/serenedb/systemd/1c-wiki-alias@.service /etc/systemd/system/ &&
+  systemctl daemon-reload` (юнит не перезапускать без нужды).
+
   ⚠ `1c-odata-gateway@ut` `enabled` — то есть после ребута он **стартует**, но с пустым
   `ODG_PASS` (см. таблицу второй базы в §0) будет отвечать 401 на все запросы.
 
@@ -571,6 +584,27 @@ ubuntu/serenedb/deploy.sh /opt/1c-mcp-reports     # вместо cp; идемп�
 `/etc/1c-serene-sync.env` задана `SERENE_SRC_DIR=/srv/1c/ubuntu/serenedb`, и `pipeline.sh`
 зовёт `deploy.sh` перед синком. В продукте переменная не задаётся — установщик кладёт
 файлы один раз, и конвейер не зависит от наличия репозитория.
+
+🔴 **Горячий выкат на okna (без полного `deploy.sh`).** На продукте `SERENE_SRC_DIR`
+пуст, поэтому такт/`1c-wiki-alias@` берут код только из `/opt/1c-mcp-reports`. Обновление
+ask и словарных скриптов — `work/acceptance/deploy-okna-serene-ask.sh` (ssh `-p 2202`
+`root@gpu-erw.timpul.pro`, ключ deploy). Состав в `FILES`/`FILES_R` (оба списка
+обязаны совпадать; каталог назначения `/opt/1c-mcp-reports`, `chmod 755`, бэкап
+`.bak-YYYYMMDD-HHMMSS` если файл уже был):
+
+| Файл | Зачем |
+|---|---|
+| `serene_ask.py` | сервис `/ask` |
+| `ask_choice_mem.py` | жёсткий импорт ask (`import ask_choice_mem`) |
+| `partial_visible.py` | жёсткий импорт ask (`import partial_visible`) — Э4/п.13 |
+| `branch_alias.sh` / `branch_alias_parse.py` | развилки из `wiki_alias.sh` |
+| `solr_synonyms_build.py` | шаг Ф6.3: `wiki_alias.sh` / `build.sh` зовут `python3 ./solr_synonyms_build.py compile` |
+| `ubuntu/openclaw/ensure_vllm_gateway.sh` + `patch_vllm_provider.py` | шлюз vLLM → `/opt/openclaw/` |
+
+Без строки в этом списке новый модуль на сервер **не доезжает**: ask падает на
+`ImportError`, юнит `1c-wiki-alias@` — на `can't open file '…/solr_synonyms_build.py'`.
+Полный `ubuntu/serenedb/deploy.sh` (`*.py`) закрывает ту же дыру на стенде с
+`SERENE_SRC_DIR`; на okna его заменяет этот скрипт.
 
 Раскладка вручную (если `deploy.sh` почему-то недоступен):
 ```bash
