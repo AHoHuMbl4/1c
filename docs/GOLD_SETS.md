@@ -20,7 +20,8 @@
 | [`ubuntu/serenedb/ab-gold.tsv`](../ubuntu/serenedb/ab-gold.tsv) | **8** | ut_test / пакетная витрина | умолч. / `AB_BASE=ut_test` → `ab_scorer.py` | **правки** (smoke ut_test) |
 | [`ubuntu/serenedb/golden-questions.txt`](../ubuntu/serenedb/golden-questions.txt) | **8** | первая база (Бухгалтерия 3.0, демо) | `golden.sh` | **правки** (smoke база1) |
 | [`ubuntu/serenedb/ab-calendar-axis-okna.tsv`](../ubuntu/serenedb/ab-calendar-axis-okna.tsv) | **6** | §7bis / `calendar-axis-design` §5.2 | `AB_CALENDAR_AXIS=okna` → `ab_scorer.py` | **правки** (ось фичи) |
-| [`ubuntu/serenedb/ab-acceptance-ambiguous.tsv`](../ubuntu/serenedb/ab-acceptance-ambiguous.tsv) | **18** | Э3 плана; док [`ACCEPTANCE_AMBIGUOUS.md`](ACCEPTANCE_AMBIGUOUS.md) | `AB_GOLD_FILE=…/ab-acceptance-ambiguous.tsv` | приёмка **неоднозначности** (Э3); см. §3 |
+| [`ubuntu/serenedb/ab-ambiguous-okna.tsv`](../ubuntu/serenedb/ab-ambiguous-okna.tsv) | **18** | И1; факты корпуса okna ([`ACCEPTANCE_AMBIGUOUS.md`](ACCEPTANCE_AMBIGUOUS.md) §8) | `AB_AMBIGUOUS=okna` → `ab_scorer.py` | **приёмка неоднозначности (okna)**; [`I1_AMBIGUOUS_SET.md`](I1_AMBIGUOUS_SET.md) |
+| [`ubuntu/serenedb/ab-acceptance-ambiguous.tsv`](../ubuntu/serenedb/ab-acceptance-ambiguous.tsv) | **18** | Э3 плана (ut_test); док [`ACCEPTANCE_AMBIGUOUS.md`](ACCEPTANCE_AMBIGUOUS.md) | `AB_GOLD_FILE=…` | черновик Э3; на okna эталоном не гонять |
 | [`docs/ACCEPTANCE_OKNA_2026-08-18.md`](ACCEPTANCE_OKNA_2026-08-18.md) | **6** (отчёт) | шаг B7, прогон 18.08 | `okna-b7-run.sh` → артефакты в `work/acceptance/runs/` | **архив замера**, не живой набор |
 | [`docs/ACCEPTANCE_AMBIGUOUS.md`](ACCEPTANCE_AMBIGUOUS.md) | — | описание Э3 | — | документ к TSV ambiguous |
 | `work/acceptance/intent_cases.tsv` | 59 | прибор разбора intent | `intent_parse_bench.py` и др. | **не gold** |
@@ -71,7 +72,8 @@
 | **Рабочий (правки okna)** | `ab-gold-okna.tsv` (**25**) | единственный набор скорера okna; правился вместе с кодом (`993ad81`); на нём снято 21/25 |
 | **Рабочий (smoke)** | `ab-probe-okna.tsv`, `ab-gold.tsv`, `golden-questions.txt` | короткие пробы контуров; probe ⊂ gold-okna |
 | **Рабочий (фича)** | `ab-calendar-axis-okna.tsv` | регрессия оси, не оценка продукта целиком |
-| **Приёмка неоднозначности (Э3)** | `ab-acceptance-ambiguous.tsv` | отдельный контракт п. 12/18/21; **не** замена замороженных 58; пересечения с рабочим okna — долг (§4) |
+| **Приёмка неоднозначности (okna)** | `ab-ambiguous-okna.tsv` | контракт п. 12/18/21 на корпусе okna; `AB_AMBIGUOUS=okna`; эталон отдельно от кода (И5) |
+| **Приёмка неоднозначности (Э3 ut)** | `ab-acceptance-ambiguous.tsv` | черновик Э3 под ut_test; на okna эталоном не гонять; пересечения с рабочим okna — долг (§4) |
 | **Архив** | `ACCEPTANCE_OKNA_2026-08-18.md` | снимок B7, не открывать как набор для новых правок |
 
 И4 «свести 25 + 58»: это **две роли одного измерения**, а не один физический файл.
