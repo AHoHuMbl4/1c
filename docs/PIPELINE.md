@@ -138,18 +138,24 @@ flowchart TD
 | packet_apply | `ubuntu/packet/packet_apply.py` · якорь `def apply_package` (~783) | `verified→applied`, merge в витрину | Свежие строки 1С не в поиске |
 | odata_gateway | `ubuntu/1c-gateway/odata_gateway.py` · якорь `LISTEN_HOST` (~46); · якорь `def main()` (~139) | Шлюз только GET → 1С | Ветка B: синк не читает OData |
 | serene_sync | `ubuntu/serenedb/serene_sync.py` · якорь `def main():` (~253); зов: `ubuntu/serenedb/pipeline.sh` · якорь `python serene_sync.py` (~49) | Дельта витрины (`poc_load_entity`); на packet — KEEP_MARKS | Витрина устаревает; корпус копирует старое |
+
+Ветка packet — не «только B»: `pipeline.sh` всегда гоняет синк витрины, а
+`KEEP_MARKS` (`ubuntu/serenedb/pipeline.sh` · якорь `KEEP_MARKS=0` (~42))
+оставляет пометки packet-строк при слиянии — ветки A/B отличаются источником
+дельты, а не наличием синка.
 | pipeline.timer / pipeline.sh | `ubuntu/systemd/1c-serene-pipeline.timer`; `ubuntu/serenedb/pipeline.sh` · якорь `синк витрины` (~33); · якорь `exec ./build.sh` (~57) | Один такт: sync → build | Поисковый слой не пересобирается |
 | build шаг 0 | `ubuntu/serenedb/build.sh` · якорь `== 0. объекты поиска` (~146) → `corpus_init.sql`, `corpus_precheck.sql` | Объекты поиска, отпечаток, секреты, живость эмбеддера | Такт падает fail-closed до сборки |
 | corpus_build | `ubuntu/serenedb/build.sh` · якорь `== 1. корпус` (~255) → `corpus_build.sql` | Текст `doc`, maps, nums из витрины + `$metadata` | Нет нового корпуса |
 | corpus_merge | `ubuntu/serenedb/build.sh` · якорь `corpus_merge.sql` (~279) | Слияние в `search_corpus` + первая публикация индекса | Боевой корпус/индекс не обновлены |
 | 1-period | `ubuntu/serenedb/build.sh` · якорь `== 1-period` (~292) → `period_relative_forms_load.sql` | Относительные окна → `search_meta` | «прошлая неделя» домысливается неверно |
-| classify | `ubuntu/serenedb/build.sh` · якорь `python3 classify_entities.py` (~313) | business/service → `search_entity_class` | GPU считает служебное; такт стоп при недоступной модели |
+| classify | `ubuntu/serenedb/build.sh` · якорь `python3 classify_entities.py` (~313); сам скрипт `ubuntu/serenedb/classify_entities.py` · якорь `/v1/chat/completions` (~114) | business/service → `search_entity_class` (LLM чатом) | GPU считает служебное; такт стоп при недоступной модели |
 | embed меток | `ubuntu/serenedb/build.sh` · якорь `== 3. векторы меток` (~352) → `embed_missing.sh` | `search_tables.label` → `emb` | Смысловой выбор сущности без kNN по меткам |
 | resolver | `ubuntu/serenedb/build.sh` · якорь `== 4. резолвер` (~358) → `resolver_build.sql` | Значения измерений + их векторы | Имена («Питер») не резолвятся в ключи |
 | embed корпуса | `ubuntu/serenedb/build.sh` · якорь `== 5. векторы` (~393) → `embed_missing.sh` | `search_corpus.doc` → `emb` (не-service) | Смысловой отбор по строкам корпуса слепой |
 | search_idx | `ubuntu/serenedb/build.sh` · якорь `VACUUM (REFRESH_INDEX) search_idx` (~420) | Инвертированный индекс BM25 | Буквальный `probe` / BM25 пустой или устаревший |
 | coverage | `ubuntu/serenedb/build.sh` · якорь `coverage_build.sql` (~428) | Перепись полноты 1С→поиск | Вопросы `about=coverage` без цифр; п.13 слепой |
 | wiki_alias | `ubuntu/serenedb/build.sh` · якорь `./wiki_alias.sh` (~437) | Обиходные слова → `search_entity_alias` | `alias_hits` не находит «продажу»=реализация |
+| branch_alias | `ubuntu/serenedb/wiki_alias.sh` · якорь `./branch_alias.sh` (~601) | Подписи веток развилок → `search_fork_label` (шаг такта, Ф6.3) | Развилка без подписи = люк молча, без текста выбора |
 | solr_synonyms | `ubuntu/serenedb/build.sh` · якорь `== 7-solr` (~445) → `solr_synonyms_build.py` | Словарь `ts_lexize` из alias | Синонимы на вопросе не раскрываются |
 | entity_card | `ubuntu/serenedb/build.sh` · якорь `entity_card_build.sql` (~461) | Карточка + emb для отбора | Откат на метку (`near_tables` / `emb_ready`) |
 | postcheck | `ubuntu/serenedb/build.sh` · якорь `corpus_postcheck.sql` (~468) | Сверка с отпечатком | Тихая потеря данных не ловится кодом такта |
@@ -222,12 +228,18 @@ Chat **не считает и не ищет** — только разбор/вы
 | арбитр текстов | `arbitrate` |
 | разметка такта | `classify_entities.py` |
 | словарь алиасов | `wiki_alias.sh` → OpenClaw infer |
+| достаточность фразы | `ubuntu/serenedb/serene_enough.py` · якорь `def need_say` (~260) |
 
 Не chat: `embed_one` / `ai_embed`, HTTP-реранкер, все `aggregate*`.
 
 ---
 
 ## Чего на схеме нет, но влияет
+
+Белое пятно 11 закрыто: мёртвый шаблон юнита разобран (Э5, коммит `4012642`) —
+канон сборки `ubuntu/systemd/1c-serene-index.service`, прямой вызов `build.sh`,
+копия в `ubuntu/serenedb/systemd/` синхронизирована с боевым ExecStart, чтобы
+случайный cp не вернул выведенный `serene_search_build.py`.
 
 На схеме нет процессов vLLM (эмбеддер Qwen3-Embedding, chat 27B / DeepSeek для
 ответов, реранкер Qwen3-Reranker): ask и такт ходят к ним по URL из `/etc/1c-embed.env`

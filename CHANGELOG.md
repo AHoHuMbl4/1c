@@ -1,3 +1,12 @@
+## 2026-08-27 — замок PIPELINE 184/0; выкат okna стал следующим шагом
+
+**[код]** Замок `test_pipeline_doc.py` доведён до **184/0** (было 181/1): единственный
+провал — голое имя `serene_enough.py` в таблице LLM-звеньев, замок требует полный
+путь. Фикс: `ubuntu/serenedb/serene_enough.py` в docs/PIPELINE.md. Документ
+закрывает Ш0 (схема пайплайна от кода): такт build.sh, путь /ask, LLM-звенья
+(classify_entities.py, wiki_alias.sh, branch_alias, serene_enough.py) и
+не-chat звенья отдельно. Числа: 181/1 → 184/0.
+
 ## 2026-08-26 — И0 в git; шлюз OpenClaw на okna восстановлен; С1 упёрся в старый выкат
 
 **[код]** И0 закрыт по инструменту: `ubuntu/serenedb/etalon_1c.py` (1174 строки) и
