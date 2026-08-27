@@ -1,29 +1,52 @@
 {
-  "today": "2026-08-27",
+  "today": "2026-08-28",
   "gold": {
     "v0": {
       "lead": 2,
       "top3": 2,
-      "top8": 7,
+      "top8": 8,
       "miss": 0,
-      "out8": 16
+      "out8": 15
     },
     "v1": {
       "lead": 0,
       "top3": 1,
-      "top8": 6,
+      "top8": 7,
       "miss": 0,
-      "out8": 17
+      "out8": 16
     },
     "v2": {
       "lead": 19,
       "top3": 20,
-      "top8": 21,
+      "top8": 22,
       "miss": 0,
-      "out8": 2
+      "out8": 1
     }
   },
   "gate_lead_ge_12": true,
   "gate_no_top3_regress": true,
-  "gate": true
+  "gate": true,
+  "k6a_class": {
+    "v0": {
+      "lead": 1,
+      "top3": 3,
+      "top8": 3,
+      "miss": 0,
+      "out8": 0
+    },
+    "v1": {
+      "lead": 0,
+      "top3": 0,
+      "top8": 2,
+      "miss": 0,
+      "out8": 1
+    },
+    "v2": {
+      "lead": 2,
+      "top3": 3,
+      "top8": 3,
+      "miss": 0,
+      "out8": 0
+    }
+  }
 }

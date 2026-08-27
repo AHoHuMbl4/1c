@@ -6574,6 +6574,20 @@ def fork_leader_class(picked_src, classes, day_basis_prefer=None):
         return leader, rest2
     return None
 
+def fork_classes_window_only(classes):
+    """Исход B: классы различаются только окном W, src одни и те же."""
+    items = list(classes or [])
+    if len(items) < 2:
+        return False
+    src_sets = {frozenset(it.get("srcs") or []) for it in items}
+    return len(src_sets) == 1 and bool(next(iter(src_sets)))
+
+
+def rank_defer_fork_outcome_b(intent, plan, question, classes):
+    """Rank: исход B по окнам — люк; лидер собирает rank-путь, не сумма периода."""
+    return (rank_intent_from(intent, plan, question)
+            and fork_classes_window_only(classes))
+
 
 def ordered_fork_classes(classes, rows, measure_word="", want=None, rel_by_src=None):
     """Классы в детерминированном порядке: по отпечатку атома (не по размеру/лидеру)."""
@@ -14352,16 +14366,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
             return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
         if _outc == "B":
-            _picked0 = picked[0] if picked else None
-            _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0,
-                                   picked_src=_picked0,
-                                   day_basis_prefer=_day_prefer)
-            if _bres is not None:
-                шаг("исход B", классов=len(_pay.get("classes") or []))
-                return _bres
-            _outc, _pay = "C", {"reason": "uncounted_cell",
-                                "detail": "pair_render_failed"}
-            diag["fork"]["outcome"] = "C"
+            _b_classes = _pay.get("classes") or []
+            if rank_defer_fork_outcome_b(intent, plan, question, _b_classes):
+                diag.setdefault("fork", {})["outcome_b_deferred_rank"] = True
+                шаг("исход B", отложен="rank", классов=len(_b_classes))
+            else:
+                _picked0 = picked[0] if picked else None
+                _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0,
+                                       picked_src=_picked0,
+                                       day_basis_prefer=_day_prefer)
+                if _bres is not None:
+                    шаг("исход B", классов=len(_b_classes))
+                    return _bres
+                _outc, _pay = "C", {"reason": "uncounted_cell",
+                                    "detail": "pair_render_failed"}
+                diag["fork"]["outcome"] = "C"
         if _outc == "C":
             шаг("исход C", причина=_pay.get("reason") or "—")
             return fork_outcome_c(

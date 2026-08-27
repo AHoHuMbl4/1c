@@ -230,6 +230,21 @@ t("decide_grain: много cols без hits → clarify (не silent row)",
   _gd2.get("clarify") == "axis", _gd2)
 
 
+# ── K6b: исход B не подменяет rank-лидера суммой периода ─────────────────────
+t("fork_classes_window_only: одни src",
+  A.fork_classes_window_only([{"srcs": ["a"]}, {"srcs": ["a"]}]))
+t("fork_classes_window_only: разные src",
+  not A.fork_classes_window_only([{"srcs": ["a"]}, {"srcs": ["b"]}]))
+t("rank_defer_fork_outcome_b на «больше всех» + окна",
+  A.rank_defer_fork_outcome_b(
+      {"want": "list", "kind": "клиент"}, {}, q_client,
+      [{"srcs": ["accumulationregister_x"]}, {"srcs": ["accumulationregister_x"]}]))
+t("rank_defer_fork_outcome_b false на sum без rank",
+  not A.rank_defer_fork_outcome_b(
+      {"want": "sum"}, {}, "сколько продали?",
+      [{"srcs": ["a"]}, {"srcs": ["a"]}]))
+
+
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))
 if FAIL:
     print("failed:", ", ".join(FAIL))

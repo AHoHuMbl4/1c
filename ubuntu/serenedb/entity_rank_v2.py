@@ -611,7 +611,7 @@ def apply_to_candidates(psql, lit, cands, intent, question, today=None,
         for s in reordered[:12]
     }
     cat, holder = dual_atom_pair(reordered, feats, intent_fit)
-    if cat and holder and mk_clarify:
+    if cat and holder and mk_clarify and not rank_intent:
         clar = mk_clarify(cat, holder, {"answer_fit_v2_dual": [cat, holder]})
         if clar:
             return {"cands": reordered, "diag": diag_out, "clarify": clar}
