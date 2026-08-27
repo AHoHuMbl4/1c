@@ -23,6 +23,7 @@ clarify (эталоны SQL 141 / 1891). Риск: часть алиасов к�
 Бэкап `.bak-*` только если файл уже был (первый выкат нового модуля). Состав
 зафиксирован в `docs/RUNBOOK_DEPLOY.md` §10.2. `bash -n` OK; сверка импортов
 ask (чтение) = список выката. Сам выкат — оркестратор (гейт check-golden).
+Скрипт выката в git: `work/acceptance/deploy-okna-serene-ask.sh` (список FILES/FILES_R).
 
 ## 2026-08-27 — Д2: TimeoutStartSec=infinity у долгих oneshot словаря
 

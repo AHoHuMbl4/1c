@@ -11,9 +11,19 @@ SRC=/srv/1c/ubuntu/serenedb
 REMOTE=/opt/1c-mcp-reports
 BAK_SUFFIX=".bak-$(date +%Y%m%d-%H%M%S)"
 
-# Что выкатываем: сервис ответа + словарные развилки (старые на okna зовут
-# снятый 'openclaw agent --agent main') + шлюз vLLM для OpenClaw.
-FILES=(serene_ask.py branch_alias.sh branch_alias_parse.py)
+# Что выкатываем: сервис ответа + жёсткие локальные модули ask + словарные
+# скрипты (развилки / Solr-синонимы) + шлюз vLLM для OpenClaw.
+# На okna SERENE_SRC_DIR пуст → pipeline не зовёт deploy.sh; без этого списка
+# новый *.py на /opt/1c-mcp-reports не доезжает (падение на import / can't open file).
+# FILES и FILES_R обязаны совпадать: scp → /tmp → backup+cp в REMOTE, chmod 755.
+FILES=(
+  serene_ask.py
+  ask_choice_mem.py
+  partial_visible.py
+  branch_alias.sh
+  branch_alias_parse.py
+  solr_synonyms_build.py
+)
 
 for f in "${FILES[@]}"; do
   scp -P "$PORT" "${SSH_OPTS[@]}" "$SRC/$f" "$HOST:/tmp/$f.new"
@@ -23,10 +33,15 @@ scp -P "$PORT" "${SSH_OPTS[@]}" ubuntu/openclaw/patch_vllm_provider.py "$HOST:/t
 
 ssh -p "$PORT" "${SSH_OPTS[@]}" "$HOST" REMOTE_DIR="$REMOTE" BAK_SFX="$BAK_SUFFIX" bash -s <<'REMOTE'
 set -e
-FILES_R="serene_ask.py branch_alias.sh branch_alias_parse.py"
+FILES_R="serene_ask.py ask_choice_mem.py partial_visible.py branch_alias.sh branch_alias_parse.py solr_synonyms_build.py"
 for f in $FILES_R; do
-  cp -a "$REMOTE_DIR/$f" "$REMOTE_DIR/$f$BAK_SFX"
-  echo "BEFORE $f \$(md5sum $REMOTE_DIR/$f | cut -d' ' -f1)"
+  # Нового файла ещё нет — бэкап не обязателен (первый выкат модуля).
+  if [ -e "$REMOTE_DIR/$f" ]; then
+    cp -a "$REMOTE_DIR/$f" "$REMOTE_DIR/$f$BAK_SFX"
+    echo "BEFORE $f \$(md5sum $REMOTE_DIR/$f | cut -d' ' -f1)"
+  else
+    echo "BEFORE $f (отсутствовал)"
+  fi
   cp "/tmp/$f.new" "$REMOTE_DIR/$f"
   chmod 755 "$REMOTE_DIR/$f"
   echo "AFTER  $f \$(md5sum $REMOTE_DIR/$f | cut -d' ' -f1)"
