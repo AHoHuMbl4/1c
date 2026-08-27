@@ -8,6 +8,12 @@ _Обновлено: **2026-08-27** (Э4: ensure_partial_visible; S6 ждёт as
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **С2 alias swap `[27.08]`**: `search_entity_alias` ← `alias_okna_c1`
+(257, avg 84). `ts_lexize('клиент')` **без** связи; K6 live **0/2**. Бэкап
+`search_entity_alias_bak_20260827`. Отчёт [`C2_ALIAS_SWAP.md`](../docs/C2_ALIAS_SWAP.md).
+
+
+
 🔴 **Э4 / п.13 `[27.08]`**: `partial_visible.ensure_partial_visible` закрыл
 дыры 1–4 (budget/atom/uncounted/incomplete). Замок
 `test_partial_flag_propagation` **13/5 → 19/1**. Красный S6 —

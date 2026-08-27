@@ -1,3 +1,29 @@
+## 2026-08-27 — С2: подмена search_entity_alias на okna из alias_okna_c1
+
+**[замер]** okna: бэкап `search_entity_alias_bak_20260827` (254) → MERGE из
+`alias_okna_c1` → **257** строк, avg aliases **55→84**. Пересбор
+`search_dict_syn`: **257** правил / 40 361 байт. `alias_idx` до работы был
+**пуст (0)** — пересоздан.
+
+Мера `alias_rank_bench` (23 q okna-gold, tfidf): ДО prod **0/0/22**, c1
+**0/1/21**, ПОСЛЕ **0/1/21**. Токен `клиенты` → `catalog_контрагенты` появился;
+`ts_lexize('search_dict_syn','клиент')` по-прежнему **{клиент}** (в правиле
+plural «клиенты» — блокер singular не снят). K6 live `ab_scorer`: **0/2**
+clarify (эталоны SQL 141 / 1891). Риск: часть алиасов короче старых;
+отчёт `docs/C2_ALIAS_SWAP.md`. `serene_ask.py` не трогали.
+
+## 2026-08-27 — Д1: хвосты выката okna (partial_visible + solr_synonyms_build)
+
+`[код]` Горячий выкат `work/acceptance/deploy-okna-serene-ask.sh` не доставлял
+новые модули на `/opt/1c-mcp-reports`: на продукте `SERENE_SRC_DIR` пуст, такт
+не зовёт `deploy.sh`. В `FILES`/`FILES_R` добавлены жёсткие импорты ask
+(`ask_choice_mem.py`, `partial_visible.py`) и `solr_synonyms_build.py` (зов
+`wiki_alias.sh:615` / шаг 7-solr). Без них: ask падает на `ImportError` после
+проводки Э4; `1c-wiki-alias@postgres` — `can't open file '…/solr_synonyms_build.py'`.
+Бэкап `.bak-*` только если файл уже был (первый выкат нового модуля). Состав
+зафиксирован в `docs/RUNBOOK_DEPLOY.md` §10.2. `bash -n` OK; сверка импортов
+ask (чтение) = список выката. Сам выкат — оркестратор (гейт check-golden).
+
 ## 2026-08-27 — Д2: TimeoutStartSec=infinity у долгих oneshot словаря
 
 **[замер]** Юнит `1c-wiki-alias@postgres` на okna отработал 2h wall и был
