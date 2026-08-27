@@ -1,3 +1,14 @@
+## 2026-08-27 — С4: разбор обрыва K6 (клиенты / не продаётся)
+
+**[замер]** okna live `/ask` `:18091→:8091`: оба контрольных — `clarify`.
+Эталоны SQL подтверждены заново: клиенты 12м **141**, позиции MTD **1891**.
+Q1: `focus=catalog_контрагенты` (модель), `period_leader=none`, clarify меры
+(353 / отсрочка / лимит); эталонный `accumulationregister_реализациятмц`
+был в пуле развилки. Q2: fork **C** `uncounted_cell`; catalog/журнал
+`no_live_cells`; live `книгапродаж` count **2376**. Корень — выбор сущности /
+форма F (`ASK_ENTITY_FORM` на бое выкл.), не предикат после верного src.
+Отчёт `docs/C4_K6_BREAKDOWN.md`. `serene_ask.py` не трогали.
+
 ## 2026-08-27 — С2: подмена search_entity_alias на okna из alias_okna_c1
 
 **[замер]** okna: бэкап `search_entity_alias_bak_20260827` (254) → MERGE из
