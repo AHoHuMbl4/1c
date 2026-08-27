@@ -1,31 +1,3 @@
-## 2026-08-27 — K4-1: проект «догадка вместо уточнения» (Э3 okna)
-
-**[решение]** Разбор 4 провалов из живого прогона `ACCEPTANCE_AMBIGUOUS` §8
-(5/18): №1/2 assumed-период→answer, №8 мера топа→деньги, №12 остатки без
-товара→figures. Места в `serene_ask.py` и проект патча A/B/C —
-`docs/K4_GUESS_VS_CLARIFY.md`. Код `serene_ask.py` не трогали.
-
-**[код]** Замок `ubuntu/serenedb/test_k4_guess_vs_clarify.py` — 6 ok / 0 FAIL /
-4 pending (хелперы патча A/B/C ещё нет). Коммит `e10b005`.
-
-## 2026-08-27 — Д2: TimeoutStartSec=infinity у долгих oneshot словаря
-
-**[замер]** Юнит `1c-wiki-alias@postgres` на okna отработал 2h wall и был
-убит systemd: `start operation timed out. Terminating.`, Result=timeout,
-ExecMainStatus=15, CPU ~3min59s / 2h wall. В каноне стояло **явное**
-`TimeoutStartSec=7200` (не умолчание Type=oneshot). Словарь при этом уже
-был 258/258 — данные уцелели случайно. На базе крупнее убийство пришлось бы
-на середину → молча наполовину собранный словарь (п. 13 TARGET.md).
-
-Канон: `TimeoutStartSec=infinity` в `1c-wiki-alias@.service`; той же
-ловушкой (фиксированный потолок при длительности от размера базы) —
-`1c-serene-index.service` и legacy `1c-serene-pipeline.service` (3600→infinity;
-шаблон `@` уже был infinity). Не трогали: `1c-wiki-alias-measure` (намеренно
-900 с), `1c-branch-alias` (=0 ≡ infinity). На okna: cp + daemon-reload,
-без restart; `systemctl show 1c-wiki-alias@postgres -p TimeoutStartUSec`
-→ infinity (`BEFORE TimeoutStartUSec=2h`, `AFTER=infinity`, юнит не
-перезапускали — ActiveState=failed от прежнего timeout). Доки: RUNBOOK_DEPLOY §9.
-
 ## 2026-08-27 — К4-3: ось уточнения, склад, имена метаданных (только разбор)
 
 **[замер+код]** По прогону okna ambiguous 5/18 (`ACCEPTANCE_AMBIGUOUS` §8,
