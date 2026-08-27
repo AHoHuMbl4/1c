@@ -55,6 +55,7 @@ try:
 except ImportError:                                # noqa: F401 — шаг просто выключен
     serene_enough = None
 import ask_choice_mem as ACM
+import partial_visible as PV
 try:
     import serene_axis
 except ImportError:
@@ -10156,6 +10157,19 @@ def asked_figure_missing(text, agg, want, has_measure, folders=0):
             have = _norm_numbers(text)
         if float(folders) not in have:
             return "отброшено %d — не названо в ответе" % folders
+    # Дыра S6 (Э4, docs/COMPLETENESS_P13.md §11.2): строки без даты выпадали из
+    # проверки, хотя это та же потеря — человек, спросивший «сколько за период»,
+    # не узнавал, что часть строк в период не попала вовсе.
+    undated = (agg or {}).get("undated")
+    if undated:
+        if have is None:
+            have = _norm_numbers(text)
+        try:
+            uf = float(undated)
+        except (TypeError, ValueError):
+            uf = None
+        if uf is not None and uf not in have and round(uf, 2) not in have:
+            return "без даты %s — не названо в ответе" % _fmt(uf)
     if (agg or {}).get("grain") == "group":
         ng = agg.get("n_groups")
         shown = len(agg.get("groups") or [])
@@ -15635,6 +15649,10 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
         out = {"kind": "unavailable", "text": "", "sources": [], "retry": True, "partial": None}
         raise
     finally:
+        # П. 13: обрезанное/непосчитанное видно КЛИЕНТУ, а не только в diag.
+        # Единая пост-обработка (docs/COMPLETENESS_P13.md §11.1, дыры 1-4).
+        if isinstance(out, dict):
+            PV.ensure_partial_visible(out)
         _ask_journal_write(question, out, t0, trusted=trusted, user=user,
                            channel=channel, decision_id=decision_id, rid=rid)
 

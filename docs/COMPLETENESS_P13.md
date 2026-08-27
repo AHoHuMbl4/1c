@@ -447,9 +447,16 @@ silent atom missing/undated, silent `diag.fork.uncounted`, silent
 **Прогон 27.08.2026 (Э4):** `passed: 19` / `failed: 1`. Дыры 1–4 закрыты
 модулем `partial_visible.ensure_partial_visible` (замок зовёт ensure до
 инварианта; pre-ensure контроль молчания бюджета остаётся). Красный один —
-S6 `asked_figure_missing` + undated; патч — §11.2 (ждёт правки
-`serene_ask.py` оркестратором). Проводка ensure в `answer_checked` —
-§11.1.
+S6 `asked_figure_missing` + undated; патч — §11.2.
+
+**Прогон 27.08.2026, после проводки (оркестратор):** `passed: 20` /
+`failed: 0`. Оба патча §11.1 и §11.2 применены к `serene_ask.py`:
+`import partial_visible as PV` (стр. 58), вызов `PV.ensure_partial_visible(out)`
+в `finally` блока `answer_checked` до записи журнала, проверка `agg.undated`
+в `asked_figure_missing` после блока `folders`. Соседние замки после правки:
+`test_fork_outcomes` 29/0, `test_fork_window_readings` 40/0,
+`test_calendar_axis` 36/0, `test_code_map` 28/0 (карта зон перегенерирована
+`code_map.py`: 15931 строка, функций 463).
 
 ---
 
@@ -461,7 +468,7 @@ S6 `asked_figure_missing` + undated; патч — §11.2 (ждёт правки
 | 2 | missing/undated в атоме без пометки | атом несёт `completeness`/`excluded`; текст — только через `render_atom_pair`/`fill_atom_pairs` (S5–S7) | **закрыта кодом** в `ensure_partial_visible`: `coverage_missing` / `undated_excluded` в `partial` + хвост `missing=`/`undated=` при отсутствии цифр. Проводка — §11.1 |
 | 3 | uncounted только в `diag.fork` | `fork_outcome_c` уже пишет ноту; молчание — когда uncounted остался в diag без исхода C (S9) | **закрыта кодом** в `ensure_partial_visible`: `partial.fork_limitation` + нота «часть прочтений не удалось посчитать». Проводка — §11.1 |
 | 4 | `diag.incomplete.missing` без partial | incomplete только в diag | **закрыта кодом** в `ensure_partial_visible` → `coverage_missing` (+ хвост). Проводка — §11.1 |
-| 5 | `asked_figure_missing` не ловит undated (S6) | `serene_ask.py` `asked_figure_missing` (~`:10093`): после `folders` нет проверки `agg.undated` | **ждёт правки `serene_ask.py`** — готовый патч §11.2; замок красный **1** кейс намеренно |
+| 5 | `asked_figure_missing` не ловит undated (S6) | `serene_ask.py` `asked_figure_missing` (~`:10093`): после `folders` нет проверки `agg.undated` | **закрыта 27.08 оркестратором**: патч §11.2 применён, проверка `agg.undated` стоит после блока `folders`; замок 20/0 |
 
 Замок: до **13/5** → после **19/1** (добавлены pre-ensure контроль и journal after/raw).
 
