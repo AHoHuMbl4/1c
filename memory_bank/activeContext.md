@@ -18,9 +18,10 @@ _Обновлено: **2026-08-27** (С5: морфология в пайплай
 
 🔴 **Д4 pipeline broken `[27.08]`**: okna такт failed с **24.08 19:36** —
 **3083×** `:"solr_syn_dict"` без `-v` (init новый, build.sh старый).
-Простой свежести ~3 суток. Починка: `\if` умолчание + fail пустого
-SOLR_SYN_DICT + SQL в горячем выкате + замок `test_psql_init_vars` **9/0**.
-Отчёт [`D4_PIPELINE_BROKEN.md`](../docs/D4_PIPELINE_BROKEN.md).
+Простой свежести ~3 суток. Починка выкатана: init/precheck **OK**
+(`solr_syn_dict_ok=1`). Дальше — **другой** блокер: нет `$metadata` в
+packet-meta (74× delta, `metadata.included=false`). Замок
+`test_psql_init_vars` **9/0**. Отчёт [`D4_PIPELINE_BROKEN.md`](../docs/D4_PIPELINE_BROKEN.md).
 
 
 🔴 **K5 applied `[27.08]`**: три проекта K4 в `serene_ask.py` (имена /

@@ -26,6 +26,10 @@ text / solr_synonyms.
 Горячий выкат: в `deploy-okna-serene-ask.sh` + RUNBOOK §10.2 добавлены
 `build.sh`/`corpus_init.sql`/`corpus_precheck.sql` (дыра: SQL не входил).
 Замок `test_psql_init_vars.py` **9/0**. Отчёт `docs/D4_PIPELINE_BROKEN.md`.
+Живой okna после выката: init/precheck **OK** (`solr_syn_dict_ok=1`); такт
+дальше падает на пустом `$metadata` в packet-meta (все пакеты delta без
+metadata.included) — отдельный блокер, не Д4.
+
 
 ## 2026-08-27 — K5: три проекта K4 в serene_ask (замки; ask ждёт пробу)
 
