@@ -1,3 +1,22 @@
+## 2026-08-27 — Д3: пустой alias_idx после наполнения словаря
+
+**[замер]** okna: inverted eventually consistent — сразу после INSERT
+`count(index)=0` при `count(table)>0`; фон ~3–5 с; явный
+`VACUUM (REFRESH_TABLE)` сразу публикует. Исторически C2: таблица **254**,
+`alias_idx` **0** до DROP+CREATE+REFRESH. Сейчас пары (таблица/индекс):
+`search_entity_alias`/`alias_idx` **257/257**; `search_corpus`/`search_idx`
+**1230156/1206662**; `search_entity_card`/`entity_card_idx` **254/254**;
+`resolver_index`/`resolver_ivf_idx` **69621/69621**; `alias_okna_c1`/
+`alias_okna_c1_idx` **258/258**; `corpus_ivf_idx` num_docs **1230156**.
+Пустых индексов при непустой таблице нет.
+
+**[код]** `wiki_alias.sh`: после записи словаря — `VACUUM (REFRESH_TABLE)
+$ALIAS_TABLE` (отдельным psql). `corpus_postcheck.sql`: error если
+alias_idx пуст при непустом search_entity_alias. Замок
+`inverted_index_guard.py` + `test_inverted_index_guard.py` (**13/0**);
+демо BROKEN 1/0 → FIXED 1/1. Отчёт `docs/D3_EMPTY_INDEX.md`.
+`serene_ask.py` не трогали.
+
 ## 2026-08-27 — С4: разбор обрыва K6 (клиенты / не продаётся)
 
 **[замер]** okna live `/ask` `:18091→:8091`: оба контрольных — `clarify`.

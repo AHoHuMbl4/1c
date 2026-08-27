@@ -1,12 +1,18 @@
 # Active Context
 
-_Обновлено: **2026-08-27** (Э4: ensure_partial_visible; S6 ждёт ask). Здесь — только живое.
+_Обновлено: **2026-08-27** (Д3: пустой alias_idx). Здесь — только живое.
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
 ---
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
+
+🔴 **Д3 empty index `[27.08]`**: причина — `wiki_alias.sh` писал в
+`search_entity_alias` без `VACUUM (REFRESH_TABLE)`; inverted eventually
+consistent (доки Lifecycle / VACUUM REFRESH_*). C2: 254/0 → сейчас
+**257/257**. Починка + замок postcheck + `test_inverted_index_guard.py`
+**13/0**. Отчёт [`D3_EMPTY_INDEX.md`](../docs/D3_EMPTY_INDEX.md).
 
 🔴 **С2 alias swap `[27.08]`**: `search_entity_alias` ← `alias_okna_c1`
 (257, avg 84). `ts_lexize('клиент')` **без** связи; K6 live **0/2**. Бэкап

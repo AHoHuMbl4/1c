@@ -127,6 +127,24 @@ FROM (
   HAVING count(*) FILTER (WHERE c.doc_date IS NOT NULL) = 0
 ) x;
 
+-- 🔴 Д3: alias_idx не должен молчать пустым при живом словаре (п. 13).
+-- Инвертированный индекс eventually consistent: без VACUUM (REFRESH_*) после
+-- наполнения search_entity_alias count(*) FROM alias_idx может быть 0 при
+-- сотнях строк таблицы — ранжирование tfidf просто не видит алиасы.
+-- [замер C2 27.08 okna] 254 / 0 до ручного DROP+CREATE + REFRESH_TABLE.
+-- Пустая таблица + пустой индекс (свежая установка) — не ошибка.
+SELECT CASE
+  WHEN (SELECT count(*) FROM search_entity_alias) > 0
+       AND (SELECT count(*) FROM duckdb_indexes()
+            WHERE index_name = 'alias_idx') = 0
+       THEN error('нет alias_idx при непустом search_entity_alias')
+  WHEN (SELECT count(*) FROM search_entity_alias) > 0
+       AND (SELECT count(*) FROM alias_idx) = 0
+       THEN error(printf(
+         'alias_idx пуст при %d строках search_entity_alias — нужен VACUUM (REFRESH_TABLE)',
+         (SELECT count(*) FROM search_entity_alias)))
+END;
+
 -- Итог — ДЕЛЬТОЙ, а не абсолютом.
 SELECT printf('корпус %d -> %d (%+d), сущностей %d -> %d, без вектора %d; резолвер %d -> %d',
               b_rows, a_rows, a_rows - b_rows, b_src, a_src, a_noemb, b_res, a_res) AS итог

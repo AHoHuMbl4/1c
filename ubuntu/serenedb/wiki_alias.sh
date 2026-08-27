@@ -487,6 +487,17 @@ psql "$DSN" -tA -F' | ' -c "
   UNION ALL SELECT 'пустышек величин (модель не ответила)', count(*) FROM $MEASURE_TABLE
     WHERE coalesce(aliases,'') = ''"
 
+# 🔴 Д3 / п.13: inverted eventually consistent. INSERT/UPDATE в алиасы без
+# публикации оставляют alias_idx пустым (или устаревшим) — снаружи ошибок нет,
+# ранжирование просто молчит. [замер C2 27.08 okna] таблица 254, alias_idx 0;
+# наполнился только после DROP+CREATE + VACUUM (REFRESH_TABLE). Доки SereneDB:
+# Sql › Indexes › Inverted › Lifecycle; VACUUM › Refreshing — REFRESH_*.
+# Тот же приём уже в entity_card_build.sql и build.sh для search_idx.
+# Отдельным вызовом psql (не в одной транзакции с INSERT): REFRESH внутри
+# транзакции с записью — тихий no-op (CHANGELOG / corpus_merge.sql).
+psql "$DSN" -q -c "VACUUM (REFRESH_TABLE) $ALIAS_TABLE;" \
+  || echo "алиасы: VACUUM (REFRESH_TABLE) $ALIAS_TABLE не прошёл" >&2
+
 # ── §7 / §7bis: подписи веток развилок (day-basis + src) ───────────────────────
 # Классы day-basis пишет детектор в search_fork_class с src_set=calendar_days,working_days
 # (id веток, не таблицы данных). Тот же контур, что branch_alias.sh: агент OpenClaw,
