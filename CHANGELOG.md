@@ -1,3 +1,14 @@
+## 2026-08-27 — Э5: удалён мёртвый шаблон 1c-serene-index из serenedb/systemd
+
+**[код]** Удалены `ubuntu/serenedb/systemd/1c-serene-index.service` и
+`.timer` (звонили выведенный `serene_search_build.py` / держали снятое
+ночное расписание). Канон один: `ubuntu/systemd/1c-serene-index.service`
+→ `build.sh`. Замок `test_systemd_execstart_lock.py` дополнен проверками
+«мёртвый путь отсутствует» и «ExecStart канона содержит build.sh»; прогон
+**Числа: OK 51/51**. Документы: `MAP.md`, `RUNBOOK_DEPLOY.md` §0/§10.6,
+`HOW_IT_WORKS.md`, `PLAN_TO_TARGET.md` Э5, аудиты/handoff без ссылок на
+удалённый путь. `ARCHITECTURE.md` / `README.md` второй копии не упоминали.
+
 ## 2026-08-27 — замок PIPELINE 184/0; выкат okna стал следующим шагом
 
 **[код]** Деплой-скрипт okna переписан под новый адрес: LXC `10.10.10.12`, вход
