@@ -2023,51 +2023,183 @@ def entity_form_rank_single_window(intent, question=""):
     return False
 
 
+# Calendar month name forms (date language, not DB metadata). Longer forms first.
+_MONTH_NAME_FORMS = (
+    (1, ("января", "январе", "январь", "январ")),
+    (2, ("февраля", "феврале", "февраль", "феврал")),
+    (3, ("марте", "марта", "март")),
+    (4, ("апреля", "апреле", "апрель", "апрел")),
+    (5, (" мае", " мая", " май", "мае ", "мая ", "май ")),
+    (6, ("июня", "июне", "июнь", "июн")),
+    (7, ("июля", "июле", "июль", "июл")),
+    (8, ("августа", "августе", "август")),
+    (9, ("сентября", "сентябре", "сентябрь", "сентябр")),
+    (10, ("октября", "октябре", "октябрь", "октябр")),
+    (11, ("ноября", "ноябре", "ноябрь", "ноябр")),
+    (12, ("декабря", "декабре", "декабрь", "декабр")),
+)
+
+
+def _months_mentioned(question):
+    """Month numbers in question text, first-hit order."""
+    q = " " + " ".join(str(question or "").lower().split()) + " "
+    hits = []
+    for num, forms in _MONTH_NAME_FORMS:
+        best = -1
+        for form in forms:
+            idx = q.find(form)
+            if idx >= 0 and (best < 0 or idx < best):
+                best = idx
+        if best >= 0:
+            hits.append((best, num))
+    hits.sort()
+    out, seen = [], set()
+    for _, num in hits:
+        if num not in seen:
+            seen.add(num)
+            out.append(num)
+    return out
+
+
+def _yoy_compare_marker(question):
+    """YoY follow-up marker ('a year ago'), not FX rates."""
+    q = " ".join(str(question or "").lower().split())
+    return any(w in q for w in (
+        "год назад", "годом ранее", "годом раньше", "year ago",
+        "прошлый год", "прошлого года", " versus year", "vs year"))
+
+
+def _shift_date_years(d, years):
+    """Window edge +/- N years (same as DATE - INTERVAL N YEAR in SereneDB)."""
+    try:
+        return d.replace(year=d.year + years)
+    except ValueError:
+        return d.replace(year=d.year + years, day=28)
+
+
+def _shift_period_years(period, years=-1):
+    """Same from/to minus (or plus) N years — interval arithmetic on Python dates."""
+    p = period or {}
+    out = {}
+    fr = _calendar_date(p.get("from")) if p.get("from") else None
+    to = _calendar_date(p.get("to")) if p.get("to") else None
+    if fr:
+        out["from"] = _iso_date(_shift_date_years(fr, years))
+    if to:
+        out["to"] = _iso_date(_shift_date_years(to, years))
+    return out
+
+
+def sales_compare_split_month_pair(question, today):
+    """P4: month-pair marker -> two full calendar months, not glued preds."""
+    q = " ".join(str(question or "").lower().split())
+    if not any(w in q for w in (
+            "против", "сравни", "сравнение", " vs", "vs ", "versus",
+            "по сравнению")):
+        return None
+    months = _months_mentioned(q)
+    if len(months) < 2:
+        return None
+    td = _calendar_date(today) or _calendar_date(time.strftime("%Y-%m-%d"))
+    if not td:
+        return None
+    m1, m2 = months[0], months[1]
+
+    def _full(m):
+        y = td.year if m <= td.month else td.year - 1
+        start = datetime.date(y, m, 1)
+        _s, end = _month_range(start)
+        return {"from": _iso_date(start), "to": _iso_date(end)}
+
+    return _full(m1), _full(m2)
+
+
 def sales_compare_intent(intent, question=""):
-    """Сравнение двух окон продаж («лучше/больше чем»), не rank по оси.
+    """Two-window sales compare (better/more than), not axis rank.
 
-    [замер 24.08 okna] «что лучше всего продавалось на этой неделе» содержит
-    «лучше» + период → прежний путь уводил в compare (diff двух WTD), grain=row,
-    без имени лидера при живых данных GROUP BY ТМЦ. Суперлатив/топ — rank.
+    [measure 24.08 okna] 'what sold best this week' has 'better' + period ->
+    old path went to compare (diff of two WTD), grain=row, no leader name
+    when GROUP BY goods has live data. Superlative/top -> rank.
 
-    ASK_ENTITY_FORM: голый want=list не блокирует compare (K4); суперлатив /
-    гейт B (rank top-N + одно окно) — по-прежнему rank. Новых языковых
-    маркеров нет.
+    K2/P2: structural entry — period2 from parse; pair-window markers;
+    more/less + prior*/month without required 'than'; YoY follow-up when
+    dialog window already filled.
     """
     intent = intent or {}
     q = " ".join(str(question or "").lower().split())
+    p1 = intent.get("period") or {}
+    p2 = intent.get("period2") or {}
+    has_p1 = bool(p1.get("from") or p1.get("to"))
+    has_p2 = bool(p2.get("from") or p2.get("to"))
+    yoy = _yoy_compare_marker(q)
+    # YoY with window (incl. from prior): continue compare even without 'sales' words.
     if not sales_sum_intent(intent, question):
-        return False
-    # Суперлатив / top-N: «лучше всего», «больше всех» — ось, не два окна.
+        if not (yoy and has_p1):
+            return False
+    # Superlative / top-N: axis, not two windows.
     if any(w in q for w in (
             "лучше всего", "хуже всего", "лучше всех", "хуже всех",
             "больше всего", "меньше всего", "больше всех", "меньше всех",
             "топ-", "топ ", " top", "лидер", "рейтинг", "leader", "ranking")):
         return False
     _vs = any(w in q for w in (" чем", "чем ", " vs", "против", "по сравнению",
+                               "сравни", "сравнение", "насколько", "на сколько",
                                "compared", " versus"))
+    _pair_mark = any(w in q for w in (
+        "сравни", "сравнение", "против", " vs", "vs ", "versus",
+        "по сравнению", "насколько", "на сколько", "compared"))
+    _two_windows = (
+        has_p2
+        or len(_months_mentioned(q)) >= 2
+        or ("прошл" in q and any(w in q for w in (
+            "эт", "текущ", "этот", "эта ", "это ", "этом", "этой", "эту ",
+            "месяц", "недел", "this ", "current")))
+        or any(w in q for w in (
+            "прошлым месяцем", "прошлый месяц", "прошлого месяца",
+            "прошлой недел", "прошлая недел", "прошлой недели")))
+    # better/worse + prior/week/month is pair compare, not axis rank (K2 Q6).
+    _better_prior = (
+        any(w in q for w in ("больше", "меньше", "лучше", "хуже"))
+        and ("прошл" in q or _months_mentioned(q)
+             or any(w in q for w in ("недел", "месяц", "week", "month"))))
+    # Rank does not override YoY / pair / better-prior before structural checks.
+    _cmp_over_rank = bool(yoy or (_pair_mark and _two_windows) or _better_prior
+                          or (has_p2 and has_p1) or _vs)
     if ASK_ENTITY_FORM:
-        # Гейт B: rank/top-N + одна точка окна — не compare (K4 двух окон цел).
-        if entity_form_rank_single_window(intent, question) and not _vs:
+        if entity_form_rank_single_window(intent, question) and not _cmp_over_rank:
             return False
-    elif rank_intent_from(intent, question=question) and not _vs:
+    elif rank_intent_from(intent, question=question) and not _cmp_over_rank:
         return False
+    if has_p2 and has_p1:
+        return True
+    if yoy:
+        return True
+    if _pair_mark and _two_windows:
+        return True
+    if _better_prior:
+        return True
     return any(w in q for w in (
         "лучше", "хуже", "больше чем", "меньше чем",
         "больше, чем", "меньше, чем"))
 
 
 def sales_compare_windows(intent, today, question=""):
-    """Два окна для compare-продаж: текущее vs prior (неделя/месяц по форме).
+    """Two windows for sales compare: current vs prior (week/month by form).
 
-    Возвращает (period, period2, form_id). Без лексики — только границы дат.
-    Cur = WTD/MTD (с начала зерна по today). Prior = ПОЛНЫЙ предыдущий
-    календарный период (неделя пн–вс / месяц 1..last), не обрезок по дню
-    today: иначе mid-week/mid-month diff ≠ «эта vs прошлая» (gold).
-    ASK_ENTITY_FORM: period = прошлая полная неделя/месяц → та же пара.
-    Гейт B: rank top-N + одно окно — пару не строить (оставить точку периода).
+    Returns (period, period2, form_id). Boundaries only — no lexicon.
+    Cur = WTD/MTD (from grain start to today). Prior = FULL previous
+    calendar period (Mon-Sun week / month 1..last), not clipped to today.day:
+    else mid-week/mid-month diff != 'this vs previous' (gold).
+    P3: form yoy — prior = same bounds - INTERVAL 1 year (full prior, unclipped).
+    P4: two month names + pair marker -> two full calendar months.
+    ASK_ENTITY_FORM: period = previous full week/month -> same pair.
+    Gate B: rank top-N + one window — leave period point, skip pair.
     """
     td = _calendar_date(today)
+    # P4: named month pair — before glue into one preds.
+    _split = sales_compare_split_month_pair(question, today)
+    if _split:
+        return _split[0], _split[1], "explicit"
     if not td:
         p = (intent or {}).get("period") or {}
         p2 = (intent or {}).get("period2") or {}
@@ -2084,6 +2216,16 @@ def sales_compare_windows(intent, today, question=""):
         prev_ms = ms.replace(month=ms.month - 1, day=1)
     _pms, prev_me = _month_range(prev_ms)
 
+    # P3: YoY — cur = question window (or MTD), prior = same bounds - 1 year.
+    # Prior is not clipped to today.day (see full-prior comment above).
+    if _yoy_compare_marker(question):
+        if not (p.get("from") or p.get("to")):
+            p = {"from": _iso_date(ms), "to": _iso_date(td)}
+        prev = _shift_period_years(p, -1)
+        if prev.get("from") or prev.get("to"):
+            return p, prev, "yoy"
+        return p, {}, "yoy"
+
     if fr_d and fr_d == ws:
         cur = {"from": _iso_date(ws), "to": _iso_date(td)}
         prev = {"from": _iso_date(pws), "to": _iso_date(pwe)}
@@ -2094,9 +2236,12 @@ def sales_compare_windows(intent, today, question=""):
         prev = {"from": _iso_date(prev_ms), "to": _iso_date(prev_me)}
         return cur, prev, "mtd"
 
-    if ASK_ENTITY_FORM and fr_d and to_d:
-        # Гейт B: rank/top-N при одной точке — не разворачивать в пару compare.
-        if entity_form_rank_single_window(intent, question):
+    # Prior full week/month as sole period -> cur WTD/MTD vs that prior.
+    # Same expansion without ASK_ENTITY_FORM (K2 Q1/Q3 on battle flag=0).
+    if fr_d and to_d:
+        _gate_b = (ASK_ENTITY_FORM
+                   and entity_form_rank_single_window(intent, question))
+        if _gate_b:
             p2 = dict((intent or {}).get("period2") or {})
             if p2.get("from") or p2.get("to"):
                 return p, p2, "explicit"
@@ -2108,6 +2253,15 @@ def sales_compare_windows(intent, today, question=""):
         if fr_d == prev_ms and to_d == prev_me:
             cur = {"from": _iso_date(ms), "to": _iso_date(td)}
             prev = {"from": _iso_date(prev_ms), "to": _iso_date(prev_me)}
+            return cur, prev, "mtd"
+        # Named prior month alone while today is later: MTD vs that full month.
+        qlow = " ".join(str(question or "").lower().split())
+        _cmp_q = any(w in qlow for w in (
+            "сравни", "против", "насколько", "на сколько", "больше", "меньше",
+            "лучше", "хуже", "чем ", " чем"))
+        if _cmp_q and fr_d.day == 1 and to_d == _month_range(fr_d)[1] and fr_d < ms:
+            cur = {"from": _iso_date(ms), "to": _iso_date(td)}
+            prev = {"from": _iso_date(fr_d), "to": _iso_date(to_d)}
             return cur, prev, "mtd"
 
     p2 = dict((intent or {}).get("period2") or {})
@@ -5249,10 +5403,29 @@ def sales_sum_intent(intent, question=""):
     sale_k = any(w in kind for w in ("продаж", "торг", "выруч", "sale", "revenue"))
     sale_m = any(w in measure for w in (
         "продали", "продал", "продаж", "наторговали", "торги", "sold", "sales"))
+    _period_hint = (
+        any(w in q for w in ("недел", "месяц", "квартал", "week", "month", "прошл"))
+        or bool(_months_mentioned(q)))
+    # Superlative/top-N is axis rank, not two-window compare (same gate as
+    # sales_compare_intent). Bare "больше"+"месяц" without pair marker stays out.
+    _superl = any(w in q for w in (
+        "лучше всего", "хуже всего", "лучше всех", "хуже всех",
+        "больше всего", "меньше всего", "больше всех", "меньше всех",
+        "топ-", "топ ", " top", "лидер", "рейтинг", "leader", "ranking"))
     compare_period = (
-        any(w in q for w in ("лучше", "хуже", "больше чем", "меньше чем",
-                             "больше, чем", "меньше, чем"))
-        and any(w in q for w in ("недел", "месяц", "квартал", "week", "month"))
+        (not _superl)
+        and (
+            any(w in q for w in ("лучше", "хуже", "больше чем", "меньше чем",
+                                 "больше, чем", "меньше, чем"))
+            or any(w in q for w in (
+                "насколько", "на сколько", "сравни", "против", "по сравнению"))
+            or (any(w in q for w in ("больше", "меньше"))
+                and ("прошл" in q or len(_months_mentioned(q)) >= 1)
+                and any(w in q for w in (
+                    "чем", "против", "сравни", "насколько", "на сколько",
+                    "эт", "текущ", "this", "current")))
+        )
+        and _period_hint
         and not any(w in q for w in (
             "сотрудник", "табель", "зарплат", "фота", "отработ", "employee", "payroll"))
     )
@@ -6466,6 +6639,15 @@ def _fork_figures_of(atom):
         excl = atom.get("excluded") or {}
         if isinstance(excl, dict) and excl.get("folders") is not None:
             out["folders"] = excl["folders"]
+    # P1/P5: compare figures carry base/other/diff explicitly.
+    if atom.get("compare_base") is not None:
+        out["compare_base"] = atom["compare_base"]
+    if atom.get("compare_other") is not None:
+        out["compare_other"] = atom["compare_other"]
+    if ((atom.get("form") or "").lower() == "compare"
+            or (atom.get("operation") or "").lower() == "compare"):
+        if atom.get("exact_value") is not None:
+            out["diff"] = atom["exact_value"]
     return out
 
 
@@ -7701,7 +7883,7 @@ def atom_from_agg(agg, operation=None, measure_id=None, measure_label=None,
                   grain=None, axis=None, form=None, completeness=None,
                   freshness=None, excluded=None, proof_status=None,
                   interpretation_id=None, src=None, folders=0,
-                  unit_or_currency=None):
+                  unit_or_currency=None, period2=None, compare_form=None):
     """Собрать атом из уже посчитанного `agg` и меток из данных."""
     op = (operation or "count").lower()
     if op not in _ATOM_OPS:
@@ -7727,7 +7909,7 @@ def atom_from_agg(agg, operation=None, measure_id=None, measure_label=None,
     status = proof_status
     if status is None:
         status = PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED
-    return build_answer_atom(
+    atom = build_answer_atom(
         operation=op, exact_value=exact, measure_id=measure_id,
         measure_label=measure_label,
         unit_or_currency=(unit_or_currency if unit_or_currency is not None
@@ -7738,6 +7920,30 @@ def atom_from_agg(agg, operation=None, measure_id=None, measure_label=None,
         completeness=completeness, freshness=freshness,
         excluded=excl or None, proof_status=status,
         interpretation_id=interpretation_id, src=src)
+    # P5: pair of windows + base/other for compare render (code, not prompt).
+    _form = (form or (agg or {}).get("form") or "").lower()
+    if _form == "compare" or op == "compare":
+        if (agg or {}).get("compare_base") is not None:
+            atom["compare_base"] = agg["compare_base"]
+        if (agg or {}).get("compare_other") is not None:
+            atom["compare_other"] = agg["compare_other"]
+        p2 = period2 if isinstance(period2, dict) else None
+        if p2 and (p2.get("from") or p2.get("to")):
+            atom["period2"] = {"from": p2.get("from") or None,
+                               "to": p2.get("to") or None}
+        if compare_form:
+            atom["compare_form"] = compare_form
+    return atom
+
+
+def _period_window_human(period):
+    """ISO from..to for compare pair line (machine bounds, not model prose)."""
+    p = period if isinstance(period, dict) else {}
+    fr = str(p.get("from") or "").strip()
+    to = str(p.get("to") or "").strip()
+    if fr and to:
+        return "%s..%s" % (fr, to)
+    return fr or to or "?"
 
 
 def render_atom_pair(atom):
@@ -7745,6 +7951,7 @@ def render_atom_pair(atom):
 
     Нет API «подпись отдельно + число отдельно»: смешать label чужого атома с value
     своего нет: такого API нет. Непосчитанный атом пары не даёт (None) — фраза не собирается.
+    P5 compare: «Всего: {diff} · {p1} ({base}) против {p2} ({other})» + mtd/wtd note.
     """
     if not isinstance(atom, dict):
         return None
@@ -7758,7 +7965,21 @@ def render_atom_pair(atom):
         value = _fmt(atom.get("exact_value"))
     unit = atom.get("unit_or_currency") or ""
     parts = []
-    if label:
+    _is_cmp = ((atom.get("form") or "").lower() == "compare"
+               or (atom.get("operation") or "").lower() == "compare")
+    _base, _other = atom.get("compare_base"), atom.get("compare_other")
+    if _is_cmp and _base is not None and _other is not None:
+        _lab = label or "Всего"
+        parts.append("%s: %s · %s (%s) против %s (%s)" % (
+            _lab, value,
+            _period_window_human(atom.get("period")), _fmt(_base),
+            _period_window_human(atom.get("period2")), _fmt(_other)))
+        _cf = (atom.get("compare_form") or "").lower()
+        if _cf == "mtd":
+            parts.append("· текущий период неполный, прошлый — полный месяц")
+        elif _cf == "wtd":
+            parts.append("· текущий период неполный, прошлый — полная неделя")
+    elif label:
         parts.append("%s: %s" % (label, value))
     else:
         parts.append(str(value))
@@ -12267,6 +12488,19 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     period_from_prior = False
     if prior:
         period_from_prior = apply_prior_period(intent, parse_intent(prior, today), today)
+    # P3: bare YoY without sales context -> clarify (not FX / entity search).
+    # Ignore LLM-filled period unless it came from prior dialog (period_from_prior).
+    if _yoy_compare_marker(question):
+        _yp = intent.get("period") or {}
+        _has_win = bool(_yp.get("from") or _yp.get("to"))
+        if (not sales_sum_intent(intent, question)
+                and not (period_from_prior and _has_win)):
+            return {
+                "partial": None, "kind": "clarify",
+                "text": "Сравнить какие продажи?",
+                "options": [], "sources": [],
+                "diag": {"yoy_need_sales_context": True, "шаги": шаги},
+            }
     # Фаза B: лидер окна MTD/WTD в основной preds; полный календарь — конкурент детектора.
     _w_readings = apply_period_leader(
         intent, today, period_from_prior=period_from_prior, question=question)
@@ -14797,26 +15031,28 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                              "named_gis": [], "clarify": None}
                 diag["grain"] = "row"
                 diag["axis_form"] = "compare"
-                if ASK_ENTITY_FORM:
-                    _catom = atom_from_agg(
-                        agg, operation="compare",
-                        measure_id=measure,
-                        measure_label=measure_label_of(src, measure) if src else measure,
-                        money=True, period=_p1, form="compare",
-                        src=src)
-                    _ctext = render_atom_pair(_catom) or _fmt(agg.get("sum"))
-                    if (_ctext or "").strip():
-                        шаг("форма compare", diff=agg.get("sum"), windows=_cmp_form)
-                        return {
-                            "partial": cut or None, "kind": "answer",
-                            "text": _ctext,
-                            "figures": _fork_figures_of(_catom),
-                            "atom": _catom, "atoms": [_catom],
-                            "source_fixed": False, "memory_eligible": False,
-                            "sources": [src.split("_", 1)[-1] if src and "_" in src
-                                        else (src or "")],
-                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2)),
-                        }
+                # P1: successful compare is terminal (no ASK_ENTITY_FORM gate).
+                # P6: if diff != SQL pair — look for second src/measure/prior clip;
+                # prior clip to today.day would break gold (sales_compare_windows).
+                _catom = atom_from_agg(
+                    agg, operation="compare",
+                    measure_id=measure,
+                    measure_label=measure_label_of(src, measure) if src else measure,
+                    money=True, period=_p1, period2=_p2, form="compare",
+                    compare_form=_cmp_form, src=src)
+                _ctext = render_atom_pair(_catom) or _fmt(agg.get("sum"))
+                if (_ctext or "").strip():
+                    шаг("форма compare", diff=agg.get("sum"), windows=_cmp_form)
+                    return {
+                        "partial": cut or None, "kind": "answer",
+                        "text": _ctext,
+                        "figures": _fork_figures_of(_catom),
+                        "atom": _catom, "atoms": [_catom],
+                        "source_fixed": False, "memory_eligible": False,
+                        "sources": [src.split("_", 1)[-1] if src and "_" in src
+                                    else (src or "")],
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2)),
+                    }
 
     if agg is None and grain_dec.get("grain") == "group" and grain_dec.get("col") and serene_axis:
         _col = grain_dec["col"]
@@ -15031,12 +15267,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # (`say_measure`/`n_folders` посчитаны выше — до раннего выхода period_empty.)
     totals_shown = [] if (agg or {}).get("grain") == "group" else (totals if money else [])
     # Rank: имя лидера из GROUP BY кодом (§5 / п.19), до compose.
-    # ASK_ENTITY_FORM: compare уже собрал diff — не перетирать rank (K4).
+    # P1: compare already built diff — rank path skipped while compare locked (flag-independent).
     _cmp_form_locked = bool(
-        ASK_ENTITY_FORM and (
-            diag.get("compare_sales")
-            or (agg or {}).get("form") == "compare"
-            or (grain_dec or {}).get("form") == "compare"))
+        diag.get("compare_sales")
+        or (agg or {}).get("form") == "compare"
+        or (grain_dec or {}).get("form") == "compare")
     if (rank_intent_from(intent, plan, question) and measure and src
             and not _cmp_form_locked):
         _pass_early, _pf = build_answer_passport(

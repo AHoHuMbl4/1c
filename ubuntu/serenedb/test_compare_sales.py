@@ -156,6 +156,137 @@ try:
 finally:
     _ef_restore(_sv)
 
+
+# ── K2 P1–P5 offline locks (27.08) ───────────────────────────────────────────
+TODAY_K2 = "2026-08-27"
+_q_f3 = "в этом месяце продали больше, чем в прошлом?"
+_intent_f3 = {
+    "period": {"from": "2026-08-01", "to": "2026-08-27"},
+    "want": "sum", "kind": "продажи",
+}
+# P2 entry cases
+t("P2: сравни продажи июля и августа",
+  A.sales_compare_intent(
+      {"want": "sum", "kind": "продажи",
+       "period": {"from": "2026-07-01", "to": "2026-08-31"}},
+      "сравни продажи июля и августа"))
+t("P2: против",
+  A.sales_compare_intent(
+      {"want": "sum", "kind": "продажи"},
+      "продажи за август против июля"))
+t("P2: насколько больше",
+  A.sales_compare_intent(
+      {"want": "sum", "kind": "продажи",
+       "period": {"from": "2026-08-01", "to": "2026-08-27"}},
+      "насколько продажи этого месяца больше прошлого"))
+t("P2: год назад marker",
+  A._yoy_compare_marker("а год назад?"))
+t("P2: year-ago with prior period -> intent",
+  A.sales_compare_intent(
+      {"want": "sum", "period": {"from": "2026-08-01", "to": "2026-08-27"}},
+      "а год назад?"))
+
+# P4: two months -> two full calendar windows
+sp = A.sales_compare_split_month_pair(
+    "продажи за август против июля", TODAY_K2)
+t("P4: split returns pair", sp is not None and len(sp) == 2, sp)
+if sp:
+    t("P4: first = full August",
+      sp[0].get("from") == "2026-08-01" and sp[0].get("to") == "2026-08-31", sp[0])
+    t("P4: second = full July",
+      sp[1].get("from") == "2026-07-01" and sp[1].get("to") == "2026-07-31", sp[1])
+w1, w2, wf = A.sales_compare_windows(
+    {"want": "sum", "period": {"from": "2026-07-01", "to": "2026-08-31"}},
+    TODAY_K2, "сравни продажи августа с июлем")
+t("P4: windows from compare_windows",
+  w1.get("from") == "2026-08-01" and w2.get("from") == "2026-07-01", (w1, w2, wf))
+
+# P3: yoy shift
+yp1, yp2, yf = A.sales_compare_windows(
+    {"period": {"from": "2026-08-01", "to": "2026-08-27"}, "want": "sum"},
+    TODAY_K2, "а год назад?")
+t("P3: form yoy", yf == "yoy", yf)
+t("P3: prior = cur - 1 year",
+  yp2.get("from") == "2025-08-01" and yp2.get("to") == "2025-08-27", yp2)
+
+# P1+P5: atom compare form, text has diff + pair, not rank
+GOLD_F3 = 1049991.33
+_cagg_f3 = {
+    "count": 10, "sum": GOLD_F3, "form": "compare", "grain": "row",
+    "compare_base": 3817442.31, "compare_other": 2767450.98, "period2": True,
+}
+_p1_f3 = {"from": "2026-08-01", "to": "2026-08-27"}
+_p2_f3 = {"from": "2026-07-01", "to": "2026-07-31"}
+_atom_f3 = A.atom_from_agg(
+    _cagg_f3, operation="compare", measure_id="Всего",
+    measure_label="Всего", money=True,
+    period=_p1_f3, period2=_p2_f3, form="compare", compare_form="mtd")
+t("P1: form=compare", _atom_f3 and _atom_f3.get("form") == "compare",
+  (_atom_f3 or {}).get("form"))
+t("P1: exact=diff",
+  _atom_f3 and abs(float(_atom_f3.get("exact_value")) - GOLD_F3) < 0.02,
+  (_atom_f3 or {}).get("exact_value"))
+_figs_f3 = A._fork_figures_of(_atom_f3)
+t("P1: figures carry compare_base/other/diff",
+  abs(float(_figs_f3.get("diff", 0)) - GOLD_F3) < 0.02
+  and _figs_f3.get("compare_base") is not None
+  and _figs_f3.get("compare_other") is not None, _figs_f3)
+_pair_f3 = A.render_atom_pair(_atom_f3) or ""
+t("P1: text has diff, no form=rank",
+  "1049991.33" in _pair_f3.replace("\xa0", "").replace(" ", "")
+  or "1\u00a0499\u00a0991.33" in _pair_f3
+  or "1049991" in _pair_f3.replace("\xa0", "").replace(" ", ""),
+  _pair_f3)
+t("P1: no rank in pair", "rank" not in _pair_f3.lower(), _pair_f3)
+t("P5: pair windows in text",
+  "против" in _pair_f3
+  and "2026-08-01" in _pair_f3
+  and "2026-07-01" in _pair_f3, _pair_f3)
+t("P5: mtd incomplete note",
+  "неполный" in _pair_f3 and "полный" in _pair_f3, _pair_f3)
+
+# P1 lock: _cmp_form_locked independent of ASK_ENTITY_FORM (simulate flag off)
+_sv2 = _ef(False)
+try:
+    # Intent + windows for F3 still compare
+    t("P1: intent with flag off",
+      A.sales_compare_intent(_intent_f3, _q_f3))
+    m1, m2, mf = A.sales_compare_windows(_intent_f3, TODAY_K2, _q_f3)
+    t("P1: windows mtd with flag off", mf == "mtd", mf)
+finally:
+    _ef_restore(_sv2)
+
+
+# ── K2 live-fail locks (Q1/Q3/Q6 windows + rank)
+_sv3 = _ef(False)
+try:
+    _i_prev = {"want": "sum", "kind": "продажи",
+               "period": {"from": "2026-07-01", "to": "2026-07-31"}}
+    t("Q1: intent сравни с прошлым месяцем",
+      A.sales_compare_intent(_i_prev, "сравни продажи с прошлым месяцем"))
+    _w1, _w2, _wf = A.sales_compare_windows(
+        _i_prev, TODAY_K2, "сравни продажи с прошлым месяцем")
+    t("Q1: windows mtd vs full July",
+      _wf == "mtd" and _w1.get("from") == "2026-08-01"
+      and _w2.get("from") == "2026-07-01", (_w1, _w2, _wf))
+    t("Q3: intent на сколько больше чем в июле",
+      A.sales_compare_intent(_i_prev, "на сколько больше, чем в июле"))
+    _w1b, _w2b, _wfb = A.sales_compare_windows(
+        _i_prev, TODAY_K2, "на сколько больше, чем в июле")
+    t("Q3: windows mtd vs July",
+      _wfb == "mtd" and _w2b.get("from") == "2026-07-01", (_w1b, _w2b, _wfb))
+    _i_w = {"want": "sum", "kind": "продажи",
+            "period": {"from": "2026-08-24", "to": "2026-08-27"}}
+    t("Q6: intent лучше прошлой (over rank)",
+      A.sales_compare_intent(_i_w, "эта неделя лучше прошлой или хуже?"))
+    _w1c, _w2c, _wfc = A.sales_compare_windows(
+        _i_w, TODAY_K2, "эта неделя лучше прошлой или хуже?")
+    t("Q6: windows wtd",
+      _wfc == "wtd" and _w1c.get("from") == "2026-08-24", (_w1c, _w2c, _wfc))
+finally:
+    _ef_restore(_sv3)
+
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)

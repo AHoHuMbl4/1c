@@ -1,7 +1,7 @@
 # К2 — хвост сравнения периодов (okna, 27.08.2026)
 
 База: **okna**, боевой `/ask` `127.0.0.1:8091` (ssh `gpu-erw:2202`).  
-Код: только чтение `ubuntu/serenedb/serene_ask.py`. Правки ask — **не** в этом заходе.
+Код: только чтение `ubuntu/serenedb/serene_ask.py`. Патчи P1–P5 (+дожим Q1/Q3/Q6) в `serene_ask.py` — результат ниже.
 
 Доки SereneDB (перед SQL):  
 [Arithmetic with Timestamps, Dates and Intervals](https://docs.serenedb.com/sql/data_types/interval#arithmetic-with-timestamps-dates-and-intervals),  
@@ -137,4 +137,28 @@
 
 Закрытие К2 = патчи P1+P2 (+P5 для п.13) в `serene_ask.py` оркестратором, выкат, повтор Q1–Q8: Q5 обязан показать **1 049 991,33** (или актуальный SQL-diff при новых проводках), с двумя окнами словами; Q6 — около **−792 128,74**.
 
-`serene_ask.py` в этом заходе **не менялся**.
+`serene_ask.py` изменён (P1–P5 + дожим окон/rank); см. §Результат.
+
+
+---
+
+## Результат (27.08, кандидат :8094, md5 `709c476d…`)
+
+Живой прогон после P1–P5 и дожима окон (prior-month → MTD; better/worse не режется rank):
+
+| # | Вопрос | kind / form | Число | Окна словами | Вердикт |
+|---|---|---|---:|---|---|
+| Q1 | сравни продажи с прошлым месяцем | answer / compare | **1 049 991,33** | 2026-08-01..27 против 2026-07-01..31 + «неполный/полный месяц» | **да** |
+| Q2 | а год назад? | clarify | — | «Сравнить какие продажи?» (`yoy_need_sales_context`) | **да** (P3) |
+| Q3 | на сколько больше, чем в июле | answer / compare | **1 049 991,33** | пара MTD vs июль | **да** |
+| Q4 | продажи за август против июля | answer / compare | **1 049 991,33** | полные авг vs июль | **да** |
+| Q5 | в этом месяце продали больше, чем в прошлом? | answer / compare | **1 049 991,33** | MTD vs полный июль | **да** |
+| Q6 | эта неделя лучше прошлой или хуже? | answer / compare | **−792 128,74** | WTD vs полная прошлая неделя | **да** |
+| Q7 | сравни продажи августа с июлем | answer / compare | **1 049 991,33** | пара месяцев | **да** |
+| Q8 | насколько продажи этого месяца больше прошлого | answer / compare | **1 049 991,33** | MTD vs июль | **да** |
+
+Итог Q1–Q8: **8/8** (раньше бой `:8091` был **0/8**).  
+Оффлайн `test_compare_sales.py`: **47/0** (было 21, затем 41).  
+`AB_PROBE=okna` на `:38094→8094`: **8/8**, отметка `okna probe live 0err/8`.
+
+Доки SereneDB: [interval arithmetic](https://docs.serenedb.com/sql/data_types/interval#arithmetic-with-timestamps-dates-and-intervals), [date_trunc](https://docs.serenedb.com/sql/functions/date#date_truncpart-date).
