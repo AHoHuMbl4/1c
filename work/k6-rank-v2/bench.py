@@ -34,6 +34,8 @@ GOLD = os.environ.get(
     "SET_FILE", os.path.join(ROOT, "ubuntu/serenedb/ab-gold-okna.tsv"))
 EXTRA = os.environ.get(
     "EXTRA_FILE", os.path.join(HERE, "questions_positions.tsv"))
+CLASS = os.environ.get(
+    "CLASS_FILE", os.path.join(HERE, "gold_k6a_class.tsv"))
 DEPTH = int(os.environ.get("DEPTH", "24"))
 STEM = os.environ.get("ASK_STEM_DICT", "search_dict_stem")
 DUMP_DIR = os.environ.get("DUMP_DIR", os.path.join(HERE, "dumps"))
@@ -203,7 +205,8 @@ def score_set(pairs, fam, today, tag):
             fr, to = period_bounds(intent, today=today)
             intent["period"] = {"from": fr.isoformat(), "to": to.isoformat()}
         feats = features_table(
-            psql, lit, order0, intent, today=today, stem_dict=lit(STEM))
+            psql, lit, order0, intent, today=today, question=q,
+            stem_dict=lit(STEM))
         # v1 only reorders on count (as entity_answer_fit)
         order1 = (reorder_v1(order0, feats) if want_agg == "count"
                   else list(order0))
@@ -298,6 +301,12 @@ def main():
         extra = gold_pairs(EXTRA)
         print("\n--- extra positions ---\n")
         score_set(extra, fam, today, "positions5")
+    k6a = []
+    c_stats = None
+    if os.path.isfile(CLASS):
+        k6a = gold_pairs(CLASS)
+        print("\n--- k6a class (small register vs giant) ---\n")
+        c_stats, _, _ = score_set(k6a, fam, today, "k6a_class")
     # gate summary
     lead_v2 = g_stats["v2"]["lead"]
     ok_gate = lead_v2 >= 12 and len(g_broke) == 0
@@ -310,6 +319,8 @@ def main():
         "gate_no_top3_regress": len(g_broke) == 0,
         "gate": ok_gate,
     }
+    if k6a:
+        summary["k6a_class"] = c_stats
     with open(os.path.join(DUMP_DIR, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False, indent=2)
     return 0 if ok_gate else 1

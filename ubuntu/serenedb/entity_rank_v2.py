@@ -18,6 +18,7 @@ _PREFIX_CATALOG = "catalog"
 _PREFIX_ACCUM = "accumulationregister"
 _PREFIX_DOC = "document"
 _PREFIX_INFO = "informationregister"
+_PREFIX_ACCT = "accountingregister"
 
 
 def _iso(d):
@@ -71,7 +72,78 @@ def is_noncanon_sales(src):
     return ("книга" in s or "ндс" in s or "vat" in s)
 
 
+def _question_overlap_batch(psql, lit, cands, question, stem_dict,
+                            tables="search_tables", corpus="search_corpus",
+                            corp_rows=None):
+    """Доля строк / метаданные: слова вопроса в label/aliases vs сырой n_rows."""
+    out = {}
+    cands = [c for c in (cands or []) if c]
+    question = (question or "").strip()
+    if not cands or not question:
+        return out
+    in_list = ", ".join(lit(c) for c in cands)
+    sd = stem_dict if str(stem_dict).startswith("'") else lit(stem_dict)
+    q_lit = lit(question)
+    corp_rows = corp_rows or {}
+    meta = {}
+    try:
+        for r in psql(
+                "SELECT t.src_table,"
+                "  CASE WHEN list_has_any("
+                "    list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
+                "    list_filter(ts_lexize(%s, concat_ws(' ', t.label,"
+                "      coalesce(a.aliases,''))),"
+                "      x -> length(x) >= 3)) THEN 1 ELSE 0 END "
+                "FROM %s t LEFT JOIN search_entity_alias a "
+                "ON a.src_table = t.src_table "
+                "WHERE t.src_table IN (%s)"
+                % (sd, q_lit, sd, tables, in_list)) or []:
+            if r and r[0]:
+                meta[r[0]] = int(r[1] or 0)
+    except Exception:  # noqa: BLE001
+        meta = {}
+    row_ov = {}
+    meta_hits = [s for s in cands if meta.get(s)]
+    small_meta = [s for s in meta_hits
+                  if int((corp_rows.get(s) or {}).get("n_rows") or 0) <= 1000]
+    if small_meta:
+        sub = ", ".join(lit(c) for c in small_meta)
+        try:
+            for r in psql(
+                    "SELECT src_table,"
+                    " count(*) FILTER (WHERE list_has_any("
+                    "   list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
+                    "   list_filter(ts_lexize(%s, coalesce(doc,'')),"
+                    "     x -> length(x) >= 3)))::BIGINT,"
+                    " count(*)::BIGINT "
+                    "FROM %s WHERE src_table IN (%s) GROUP BY 1"
+                    % (sd, q_lit, sd, corpus, sub)) or []:
+                if r and r[0]:
+                    row_ov[r[0]] = (int(r[1] or 0), int(r[2] or 0))
+        except Exception:  # noqa: BLE001
+            row_ov = {}
+    for src in cands:
+        n_q, n_all = row_ov.get(src, (0, 0))
+        if not n_all:
+            n_all = int((corp_rows.get(src) or {}).get("n_rows") or 0)
+        if meta.get(src) and src not in row_ov:
+            # q_meta без дорогого doc-прохода на гигантах: метаданные уже несут тему
+            ratio = 1000 if n_all else 0
+            n_q = n_all if n_all else 0
+        else:
+            ratio = (n_q * 1000 // max(n_all, 1)) if n_all else 0
+            if meta.get(src) and ratio <= 0:
+                ratio = 1
+        out[src] = {
+            "q_meta_overlap": meta.get(src, 0),
+            "q_row_overlap": n_q,
+            "q_row_ratio": ratio,
+        }
+    return out
+
+
 def features_table(psql, lit, cands, intent, today=None,
+                   question=None,
                    stem_dict="'search_dict_stem'",
                    corpus="search_corpus", tables="search_tables"):
     """Один проход агрегатов по корпусу + class + refcols → dict src→features.
@@ -220,6 +292,13 @@ def features_table(psql, lit, cands, intent, today=None,
             "v1_fit": v1_fit,
             "n_cards_of_axis": n_cards_cat if holds else 0,
         }
+    if question:
+        q_ov = _question_overlap_batch(
+            psql, lit, cands, question, stem_dict,
+            tables=tables, corpus=corpus,
+            corp_rows={s: out.get(s) for s in cands})
+        for src, qf in q_ov.items():
+            out.setdefault(src, {}).update(qf)
     return out
 
 
@@ -283,8 +362,22 @@ def rank_key_v2(src, feat, intent, form, lexical_pos):
         return (service, -live, kind_ok, dated, int(lexical_pos or 10**6))
 
     # card-count (count without period): kind catalog with cards is the live answer;
-    # документ с датами — живой счёт записей (вид объекта), ниже kind-catalog.
-    if feat.get("is_kind_catalog") and feat.get("n_cards", 0) > 0:
+    # K6a: метаданные несут слова вопроса — выше «гиганта» без q_meta (план счетов).
+    q_meta = int(feat.get("q_meta_overlap") or 0)
+    q_ratio = int(feat.get("q_row_ratio") or 0)
+    if q_meta and prefix == _PREFIX_INFO:
+        live = 3
+        kind_ok = 0
+    elif q_meta and feat.get("is_kind_catalog") and feat.get("n_cards", 0) > 0:
+        live = 3
+        kind_ok = 0
+    elif q_meta and prefix == _PREFIX_CATALOG:
+        live = 3
+        kind_ok = 1
+    elif q_meta and prefix == _PREFIX_DOC:
+        live = 3
+        kind_ok = 2
+    elif feat.get("is_kind_catalog") and feat.get("n_cards", 0) > 0:
         live = 2
         kind_ok = 0
     elif prefix == _PREFIX_DOC and feat.get("n_dated", 0) > 0:
@@ -296,15 +389,21 @@ def rank_key_v2(src, feat, intent, form, lexical_pos):
     elif int(feat.get("axis_fit") or 0) >= 2:
         live = 1
         kind_ok = 3
+    elif q_meta and prefix not in (_PREFIX_ACCT,):
+        live = 1
+        kind_ok = 4
     elif feat.get("n_rows", 0) > 0:
         live = 0
-        kind_ok = 4
+        kind_ok = 5 if prefix == _PREFIX_ACCT else 4
     else:
         live = -1
-        kind_ok = 5
-    return (service, -live, kind_ok,
-            -int(feat.get("n_cards") or feat.get("n_dated") or 0),
-            int(lexical_pos or 10**6))
+        kind_ok = 6
+    # popularity: q_row_ratio при q_meta; иначе меньший регистр лучше (не сырой max)
+    if q_meta:
+        pop = (-q_ratio, int(feat.get("n_rows") or 0))
+    else:
+        pop = (int(feat.get("n_rows") or 0),)
+    return (service, -live, kind_ok, pop, int(lexical_pos or 10**6))
 
 
 def reorder_v2(cands, features, intent, form):
@@ -496,7 +595,7 @@ def apply_to_candidates(psql, lit, cands, intent, question, today=None,
         fr, to = period_bounds(intent_fit, today=today)
         intent_fit["period"] = {"from": fr.isoformat(), "to": to.isoformat()}
     feats = features_table(
-        psql, lit, merged, intent_fit, today=today,
+        psql, lit, merged, intent_fit, today=today, question=question,
         stem_dict=lit(stem_dict), corpus=corpus, tables=tables)
     reordered = reorder_v2(merged, feats, intent_fit, form)
     diag_out["answer_fit_v2"] = {
@@ -506,6 +605,8 @@ def apply_to_candidates(psql, lit, cands, intent, question, today=None,
             "n_dated": (feats.get(s) or {}).get("n_dated"),
             "n_cards": (feats.get(s) or {}).get("n_cards"),
             "is_kind_catalog": (feats.get(s) or {}).get("is_kind_catalog"),
+            "q_meta": (feats.get(s) or {}).get("q_meta_overlap"),
+            "q_row_ratio": (feats.get(s) or {}).get("q_row_ratio"),
         }
         for s in reordered[:12]
     }

@@ -53,6 +53,19 @@ _feats = {
 cat, holder = K6.dual_atom_pair(_cands, _feats, {"want": "count", "kind": "клиенты"})
 t("dual_atom: cat+holder", cat == "catalog_a" and holder == "accumulationregister_b")
 
+# K6a offline: q_meta info register above accounting giant without q_meta
+_feat_info = {"prefix": "informationregister", "cls": "business",
+              "n_rows": 17, "n_dated": 17, "n_cards": 17,
+              "q_meta_overlap": 1, "q_row_ratio": 800, "axis_fit": 0}
+_feat_acct = {"prefix": "accountingregister", "cls": "business",
+              "n_rows": 189043, "n_dated": 189043, "n_cards": 189043,
+              "q_meta_overlap": 0, "q_row_ratio": 50, "axis_fit": 0}
+_k_info = K6.rank_key_v2("informationregister_x", _feat_info,
+                         {"want": "count"}, "count", 5)
+_k_acct = K6.rank_key_v2("accountingregister_y", _feat_acct,
+                         {"want": "count"}, "count", 0)
+t("offline: q_meta info < acct giant", _k_info < _k_acct, (_k_info, _k_acct))
+
 dsn = os.environ.get("SERENEDB_DSN_RO") or os.environ.get("SERENEDB_DSN")
 if dsn:
     bench = os.path.join(ROOT, "work/k6-rank-v2/bench.py")

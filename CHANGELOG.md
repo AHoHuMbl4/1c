@@ -1,3 +1,28 @@
+## 2026-08-28 — K6a: q_meta — маленький регистр против гиганта [код]
+
+**[код]** [`entity_rank_v2.py`](../ubuntu/serenedb/entity_rank_v2.py): **q_meta_overlap**
+(stem вопроса ↔ label/aliases, без best_used_for) + **q_row_ratio**; card-count
+ранг поднимает info/catalog с q_meta над гигантами без темы; diag `answer_fit_v2`
+добавил `q_meta`, `q_row_ratio`. Bench okna 17890: gold-23 lead **19/23** top3
+**20/23** top8 **22/23** v1-top3 регресс **0**; k6a_class **2/3** (анкеты place
+3→1); test_k6_rank_v2 **4/0**; K5 sales_rank **51/0**. Набор
+[`work/k6-rank-v2/gold_k6a_class.tsv`](../work/k6-rank-v2/gold_k6a_class.tsv).
+
+## 2026-08-27 — Д4: файлы шага 1-period не доезжали до okna
+
+**[код]** `deploy-okna-serene-ask.sh`: в FILES/FILES_R добавлены
+`period_relative_forms.json` + `period_relative_forms_load.sql`. Такт `build.sh`
+шага «1-period» зовёт `psql -f period_relative_forms_load.sql`, а файла на
+`/opt/1c-mcp-reports` не было — первый живой такт после мета-шага падал бы
+на «загрузка period_relative_forms в search_meta». Файлы доставлены на окно
+вручную (md5 дева = окна: `124cd978…`/`7eef0b2e…`); словарь форм на okna
+работал только через фолбэк-файл рядом со скриптом, строки в `search_meta`
+нет (замер: `SELECT count(*) FROM search_meta` = 1, только balance_registers).
+Загрузку в `search_meta` снимаю отдельным шагом С4 после контурных замеров
+(базу под замером не трогаем). Запись восстановлена: потеряна в гонке
+параллельных сессий — коммит dc72fd8 забрал в CHANGELOG запись соседнего
+С5-агента (git add общего файла при живом соседе захватывает его правку).
+
 ## 2026-08-27 — С5: прибор кандидатов алиасов (read-only словарь)
 
 **[код]** `work/pipeline/alias_candidates.py`: журнал `ask_journal`+text → топ
