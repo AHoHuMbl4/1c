@@ -1,3 +1,16 @@
+## 2026-08-27 — K6-мера v2: live-ранг сущности (прибор, ask не трогали)
+
+**[замер]** Прибор `work/k6-rank-v2/bench.py` на okna `:7890`, today=2026-08-27.
+Gold-23: lead **v0=2 / v1=0 / v2=18**; top3 **3 / 1 / 18**; top8 **4 / 4 / 21**;
+miss 0. Регресс «v1 имел эталон в top-3, v2 выкинула» = **0**. Гейт ≥12
+лидеров — **PASS**. Позиции-5: lead 0/0/0, top8 1/0/4. Контроль «покупают»
+place 51→51→9 (kind=физические). Разбор шума v1 —
+`work/k6-rank-v2/dumps/v1_noise_analysis.md`. Отчёт `docs/K6_ENTITY_RANK.md` §7;
+проект патча §7.5 **не** вшит в `serene_ask.py`.
+
+**[код]** `work/k6-rank-v2/measure_v2.py` (features + reorder_v2), `bench.py`,
+`questions_positions.tsv`. Доки SereneDB: Blend in a business signal.
+
 ## 2026-08-27 — К5+К7 в бою: выкат ask на okna (9793256)
 
 **[код]** Коммит `9793256`: `serene_ask.py` md5 `35daa280` (четыре класса

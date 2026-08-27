@@ -173,3 +173,88 @@ BM25 (или иной scorer) — обычное число, в `ORDER BY` мо�
 | `docs/K6_ENTITY_RANK.md` | этот отчёт |
 
 `serene_ask.py` — не менялся.
+
+---
+
+## 7. Мера v2 (прибор, `serene_ask.py` не трогали)
+
+Дата: **27.08.2026**, okna `:7890`. Код меры/прибора:
+[`work/k6-rank-v2/`](../work/k6-rank-v2/). Доки SereneDB:  
+[Blend in a business signal](https://docs.serenedb.com/cookbook/search/boosting#blend-in-a-business-signal) —
+scorer × бизнес-колонка в `ORDER BY`; popularity без магического порога.
+
+### 7.1. Почему v1 даёт 2→1 / «покупают» 5→1
+
+Разбор: [`work/k6-rank-v2/dumps/v1_noise_analysis.md`](../work/k6-rank-v2/dumps/v1_noise_analysis.md).
+
+| шум | факт |
+|---|---|
+| Alias-дыра | «продали вчера?» → **0** hits в `alias_idx`; эталон вне пула → мера не на чем работать (miss≈15 в приборе K6 §4) |
+| Fit=2 > карточек | держатель с `0<distinct<cards` всегда выше каталога → «всего клиентов» 1→2 |
+| Нет вида объекта | префикс OData / `search_entity_class` в ранге v1 нет (см. PATH_AND_FAILURE) |
+| Нет doc_date в ранге | дата только внутри окна DISTINCT, не как «есть живые ячейки» |
+| Kind кривой | «прайсе» → типы цен / строки документов, не номенклатура |
+
+### 7.2. Что делает v2
+
+Лексикографический ключ (без весов/порогов под okna):
+
+1. не `service` (`search_entity_class`);
+2. **live-ярус** — для sum/name: есть `doc_date`+`nums`; для distinct/complement: `axis_fit` по `search_refcols`; для card-count: kind-catalog с карточками / документ с датами;
+3. **вид объекта** (OData-префикс `catalog`/`accumulationregister`/`document`…);
+4. popularity = `n_dated` (или `n_cards`) как колонка business signal;
+5. позиция alias — последний ключ.
+
+Пул: alias + stem-пересечение label/aliases с вопросом + все live canon
+`accumulationregister_*` (есть дата, nums, ось на catalog; не книга НДС).
+
+### 7.3. Прибор — числа
+
+Набор: gold-23 + 5 «позиций» ([`questions_positions.tsv`](../work/k6-rank-v2/questions_positions.tsv);
+в `ACCEPTANCE_AMBIGUOUS.md` §8 формулировок «сколько позиций…» нет — взяты
+gold / OKNA_LIVE §B5 / ACCEPTANCE_UT).
+
+| набор | | lead | top3 | top8 | out8 | miss |
+|---|---|---:|---:|---:|---:|---:|
+| gold-23 | v0 alias | 2 | 3 | 4 | 19 | 0 |
+| gold-23 | v1 fit | 0 | 1 | 4 | 19 | 0 |
+| gold-23 | **v2** | **18** | **18** | **21** | **2** | **0** |
+| позиций-5 | v0 | 0 | 0 | 1 | 4 | 0 |
+| позиций-5 | v1 | 0 | 0 | 0 | 5 | 0 |
+| позиций-5 | v2 | 0 | 0 | 4 | 1 | 0 |
+
+Гейт задачи: lead ≥12/23 → **18 PASS**; регресс v1-top3 → **0 PASS**.
+
+Контроль K6 (place v0→v1→v2):
+
+| вопрос | place | комментарий |
+|---|---|---|
+| сколько клиентов реально покупают? | 51→51→**9** | вне топ-8: kind=физические, ось не контрагенты |
+| сколько у нас всего клиентов? | 1→4→**4** | v2 не чинит card-count при кривом kind |
+| сколько позиций у нас в прайсе? | 33→33→**7** | в топ-8, не лидер |
+
+Полный лог: [`work/k6-rank-v2/bench.out`](../work/k6-rank-v2/bench.out).
+
+### 7.4. Вывод
+
+v2 **доказала** себя на sum/name gold (популярность live-регистра + вид
+объекта): 18/23 лидеров, top-3 не хуже v1. На count/distinct «клиенты /
+позиции» kind-guess по числу держателей тянет `физическиелица` —
+структурный хвост, не закрыт этой мерой. Позиции-5: лидеров 0, но top-8
+0→4.
+
+### 7.5. Проект патча (текст; в `serene_ask.py` **не** вносить этим коммитом)
+
+1. Вынести `work/k6-rank-v2/measure_v2.py` рядом с `entity_answer_fit.py`
+   (или заменить v1) — `features_table` + `reorder_v2`.
+2. После `prefer_entity_for_*` / до `pick_entity`: расширить пул stem+live
+   registers (как `expand_stem_and_live`), затем `cands = reorder_v2(...)`.
+3. В diag: `answer_fit_v2` = ключ/признаки топ-12.
+4. Два атома (catalog cards vs holder distinct) при равной уместности —
+   clarify (п. 12), не молчаливый fit=2.
+5. Отдельно: kind-guess не ранжировать голым `count(holders)` —
+   иначе физлица бьют контрагентов; нужен overlap aliases@@вопрос среди
+   stem-кандидатов (не делалось в замерённом прогоне).
+6. Замок: `work/k6-rank-v2/bench.py` в приёмке okna; порог lead≥12 на gold
+   и 0 регрессов v1-top3.
+7. Выкат только после staging `:8092`, рядом с числами этого §7.3.

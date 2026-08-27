@@ -1,0 +1,38 @@
+today=2026-08-27 gold=23 depth=24
+
+ 1. 10→10→1  et=accumulationregister_реализациятмц  kind=физические form=sum pool=50 | сколько продали вчера?
+ 2. 10→10→1  et=accumulationregister_реализациятмц  kind=физические form=sum pool=50 | сколько продали позавчера?
+ 3. 10→10→1  et=accumulationregister_реализациятмц  kind=физические form=sum pool=52 | сколько уже продали сегодня?
+ 4. 35→35→1  et=accumulationregister_реализациятмц  kind=физические form=sum pool=69 | сколько продали на этой неделе?
+ 5. 62→62→1  et=accumulationregister_реализациятмц  kind=физические form=sum pool=64 | сколько наторговали на прошлой неделе?
+ 6. 34→34→1  et=accumulationregister_реализациятмц  kind=физические form=sum pool=73 | сколько продали в этом месяце?
+ 7. 34→34→1  et=accumulationregister_реализациятмц  kind=физические form=sum pool=73 | сколько продали в прошлом месяце?
+ 8. 55→55→1  et=accumulationregister_реализациятмц  kind=классификатор form=sum pool=56 | что лучше всего продавалось на этой неделе?
+ 9. 68→68→1  et=accumulationregister_реализациятмц  kind=физические form=sum pool=71 | какой клиент больше всех купил в этом месяце?
+10. 28→28→1  et=accumulationregister_реализациятмц  kind=номенклатура form=sum pool=51 | дай топ-3 товара за вчера
+11. 19→19→1  et=accumulationregister_реализациятмц  kind=контрагенты form=sum pool=33 | кто из клиентов молодец за прошлую неделю, три л
+12. 27→27→1  et=accumulationregister_реализациятмц  kind=договора form=sum pool=47 | дай топ-3 клиента по деньгам за этот месяц
+13. 36→36→7  et=accumulationregister_реализациятмц  kind=физические form=complement pool=79 | сколько позиций совсем не продаётся в этом месяц
+14. 2→2→1  et=accumulationregister_реализациятмц  kind= form=sum pool=11 | эта неделя лучше прошлой или хуже?
+15. 26→26→1  et=accumulationregister_реализациятмц  kind=договора form=sum pool=46 | в этом месяце продали больше, чем в прошлом?
+16. 60→60→1  et=accumulationregister_реализациятмц  kind=физические form=sum pool=63 | сколько наторговали в прошедшее воскресенье?
+17. 5→5→1  et=accumulationregister_реализациятмц  kind=вид form=sum pool=60 | почему в воскресенье продаж ноль, это сбой?
+18. 1→4→4  et=catalog_контрагенты  kind=физические form=count pool=50 | сколько у нас всего клиентов?
+19. 33→33→7  et=catalog_номенклатура  kind=физические form=count pool=70 | сколько позиций у нас в прайсе?
+20. 51→51→9  et=accumulationregister_реализациятмц  kind=физические form=distinct pool=53 | сколько клиентов реально покупают?
+21. 28→28→1  et=accumulationregister_реализациятмц  kind=номенклатура form=sum pool=159 | какого товара больше всего продали за всё время?
+22. 13→13→1  et=accumulationregister_реализациятмц  kind= form=sum pool=28 | кому мы больше всего продали за всё время?
+23. 1→4→15  et=document_реализациятмц  kind=физические form=count pool=99 | сколько документов реализации за декабрь 2025?
+
+=== gold23 n=23 ===
+v0  lead=2  top3=3  top8=4  out8=19  miss=0
+v1  lead=0  top3=1  top8=4  out8=19  miss=0
+v2  lead=18  top3=18  top8=21  out8=2  miss=0
+v1_top3_ok=1  v2_broke_those=0 []
+
+--- extra positions ---
+v0  lead=0  top3=0  top8=1  out8=4  miss=0
+v1  lead=0  top3=0  top8=0  out8=5  miss=0
+v2  lead=0  top3=0  top8=4  out8=1  miss=0
+
+GATE: v2_lead=18/23 broke_v1_top3=0 → PASS

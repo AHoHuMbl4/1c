@@ -1,0 +1,9 @@
+# 5 вопросов «сколько позиций…» для прибора K6-мера v2.
+# ACCEPTANCE_AMBIGUOUS.md §8 таких формулировок не содержит (прогон clarify/kind);
+# набор собран из gold okna + ACCEPTANCE_OKNA_LIVE §B5 + ACCEPTANCE_UT (классика).
+# Формат: вопрос<TAB>эталонный src_table<TAB>форма
+сколько позиций у нас в прайсе?	catalog_номенклатура	count
+сколько позиций совсем не продаётся в этом месяце?	accumulationregister_реализациятмц	complement
+сколько позиций номенклатуры?	catalog_номенклатура	count
+сколько позиций у нас в прайсе всего?	catalog_номенклатура	count
+сколько позиций с ценой в прайсе?	informationregister_ценыноменклатуры	count
