@@ -1,6 +1,6 @@
 # Карта `ubuntu/serenedb/serene_ask.py`
 
-Сгенерировано `ubuntu/serenedb/code_map.py`. Строк файла: **16202**. Функций: **472**. Зон: **20**. Сквозных (≥3 зон-вызывающих): **32**.
+Сгенерировано `ubuntu/serenedb/code_map.py`. Строк файла: **16241**. Функций: **473**. Зон: **20**. Сквозных (≥3 зон-вызывающих): **32**.
 
 Границы зон — по якорям (`start`[/`end`] в `docs/audit/zones.json`), номера строк вычисляются при каждом прогоне.
 
@@ -25,7 +25,7 @@
 - [17 aggregate-groups](ubuntu/serenedb/serene_ask.py:8498) — Агрегаты и группы (якорь `_vec` … `aggregate_groups`; `8498–9001`)
 - [18 compose](ubuntu/serenedb/serene_ask.py:9002) — Формулировка (якорь `merge_period2_groups` … `compose`; `9002–9890`)
 - [19 answer-check](ubuntu/serenedb/serene_ask.py:9891) — Проверка ответа (якорь `_readings` … `_filter_values`; `9891–10292`)
-- [20 ask-main-http](ubuntu/serenedb/serene_ask.py:10293) — ask / HTTP (якорь `_filter_dates` … `Handler`; `10293–16202`)
+- [20 ask-main-http](ubuntu/serenedb/serene_ask.py:10293) — ask / HTTP (якорь `_filter_dates` … `Handler`; `10293–16241`)
 
 ## Таблица зон
 
@@ -35,7 +35,7 @@
 | 02 | intent | `_json_blocks` | 464 | 15 | 4 | 1 | 10 |
 | 03 | period-windows | `_num_pred` | 437 | 21 | 6 | 4 | 5 |
 | 04 | calendar-axis | `_sql_ident` | 184 | 11 | 3 | 2 | 7 |
-| 05 | entity-form | `entity_form_rank_single_window` | 596 | 20 | 2 | 9 | 14 |
+| 05 | entity-form | `entity_form_rank_single_window` | 596 | 20 | 2 | 9 | 13 |
 | 06 | entity-search | `_predicates` | 539 | 16 | 3 | 3 | 4 |
 | 07 | rrf-vectors | `_corpus_ivf_ready` | 594 | 18 | 8 | 4 | 7 |
 | 08 | measures-totals | `_shares_chars` | 244 | 4 | 5 | 3 | 0 |
@@ -50,7 +50,7 @@
 | 17 | aggregate-groups | `_vec` | 504 | 16 | 10 | 3 | 2 |
 | 18 | compose | `merge_period2_groups` | 889 | 23 | 6 | 9 | 2 |
 | 19 | answer-check | `_readings` | 402 | 14 | 3 | 2 | 5 |
-| 20 | ask-main-http | `_filter_dates` | 5910 | 102 | 6 | 19 | 95 |
+| 20 | ask-main-http | `_filter_dates` | 5949 | 103 | 6 | 19 | 96 |
 
 ## 01. infra-trace-llm — Инфра, TRACE, LLM
 
@@ -203,7 +203,7 @@
 - [`try_entity_form_answer`](ubuntu/serenedb/serene_ask.py:2531) `2531–2562` len=32
 - [`aggregate_compare_sales`](ubuntu/serenedb/serene_ask.py:2565) `2565–2589` len=25
 
-Зовут снаружи зоны: `aggregate_compare_sales`, `entity_form_applicable`, `entity_form_collapse_guard`, `sales_compare_intent`, `sales_compare_windows`, `try_entity_form_answer`
+Зовут снаружи зоны: `aggregate_compare_sales`, `entity_form_applicable`, `entity_form_catalogs_for_kind`, `entity_form_collapse_guard`, `sales_compare_intent`, `sales_compare_windows`, `try_entity_form_answer`
 
 ## 06. entity-search — Поиск сущностей
 
@@ -633,9 +633,9 @@
 
 ## 20. ask-main-http — ask / HTTP
 
-Якорь: `_filter_dates`, end `Handler`. Участок: [`ubuntu/serenedb/serene_ask.py:10293`](ubuntu/serenedb/serene_ask.py:10293)–`16202`.
+Якорь: `_filter_dates`, end `Handler`. Участок: [`ubuntu/serenedb/serene_ask.py:10293`](ubuntu/serenedb/serene_ask.py:10293)–`16241`.
 
-Функций: 102. Входящие зоны: 03, 12, 13, 14, 16, 18. Исходящие зоны: 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19.
+Функций: 103. Входящие зоны: 03, 12, 13, 14, 16, 18. Исходящие зоны: 01, 02, 03, 04, 05, 06, 07, 08, 09, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19.
 
 Функции:
 
@@ -698,49 +698,50 @@
 - [`period_is_canon_guess`](ubuntu/serenedb/serene_ask.py:12009) `12009–12033` len=25
 - [`period_assumed_needs_clarify`](ubuntu/serenedb/serene_ask.py:12036) `12036–12057` len=22
 - [`stock_subject_needs_clarify`](ubuntu/serenedb/serene_ask.py:12060) `12060–12075` len=16
-- [`warehouse_axis_values`](ubuntu/serenedb/serene_ask.py:12078) `12078–12118` len=41
-- [`warehouse_clarify`](ubuntu/serenedb/serene_ask.py:12121) `12121–12135` len=15
-- [`period_slot_for_inherit`](ubuntu/serenedb/serene_ask.py:12138) `12138–12149` len=12
-- [`apply_prior_period`](ubuntu/serenedb/serene_ask.py:12152) `12152–12180` len=29
-- [`answer`](ubuntu/serenedb/serene_ask.py:12183) `12183–15346` len=3164
-- [`answer.шаг`](ubuntu/serenedb/serene_ask.py:12219) `12219–12224` len=6 (влож.)
-- [`answer._family`](ubuntu/serenedb/serene_ask.py:13276) `13276–13277` len=2 (влож.)
-- [`answer._alias_verdict`](ubuntu/serenedb/serene_ask.py:13279) `13279–13432` len=154 (влож.)
-- [`answer._alias_verdict._место`](ubuntu/serenedb/serene_ask.py:13390) `13390–13394` len=5 (влож.)
-- [`answer._alias_verdict._probe`](ubuntu/serenedb/serene_ask.py:13396) `13396–13407` len=12 (влож.)
-- [`answer._alias_clarify`](ubuntu/serenedb/serene_ask.py:13434) `13434–13462` len=29 (влож.)
-- [`answer._checked`](ubuntu/serenedb/serene_ask.py:13732) `13732–13748` len=17 (влож.)
-- [`question_facts`](ubuntu/serenedb/serene_ask.py:15369) `15369–15395` len=27
-- [`entity_has_dates`](ubuntu/serenedb/serene_ask.py:15398) `15398–15419` len=22
-- [`_gate_need`](ubuntu/serenedb/serene_ask.py:15422) `15422–15435` len=14
-- [`_need_clarify`](ubuntu/serenedb/serene_ask.py:15438) `15438–15454` len=17
-- [`_journal_keep_n`](ubuntu/serenedb/serene_ask.py:15457) `15457–15471` len=15
-- [`_journal_code_md5`](ubuntu/serenedb/serene_ask.py:15474) `15474–15481` len=8
-- [`_journal_build_ts`](ubuntu/serenedb/serene_ask.py:15484) `15484–15495` len=12
-- [`_journal_alias_ver`](ubuntu/serenedb/serene_ask.py:15498) `15498–15511` len=14
-- [`_journal_sql_int`](ubuntu/serenedb/serene_ask.py:15514) `15514–15520` len=7
-- [`_journal_sql_bool`](ubuntu/serenedb/serene_ask.py:15523) `15523–15526` len=4
-- [`_journal_atoms_slim`](ubuntu/serenedb/serene_ask.py:15529) `15529–15557` len=29
-- [`_journal_clarify_options`](ubuntu/serenedb/serene_ask.py:15560) `15560–15582` len=23
-- [`_journal_doubt`](ubuntu/serenedb/serene_ask.py:15585) `15585–15594` len=10
-- [`_journal_ticket_variant`](ubuntu/serenedb/serene_ask.py:15597) `15597–15610` len=14
-- [`_journal_intent`](ubuntu/serenedb/serene_ask.py:15613) `15613–15615` len=3
-- [`_journal_fork_keys`](ubuntu/serenedb/serene_ask.py:15618) `15618–15626` len=9
-- [`_journal_uncounted_truncated`](ubuntu/serenedb/serene_ask.py:15629) `15629–15648` len=20
-- [`_ask_journal_write`](ubuntu/serenedb/serene_ask.py:15651) `15651–15765` len=115
-- [`_ask_journal_write._insert_row`](ubuntu/serenedb/serene_ask.py:15695) `15695–15744` len=50 (влож.)
-- [`_answer_checked_core`](ubuntu/serenedb/serene_ask.py:15769) `15769–15811` len=43
-- [`_answer_checked_core.plain`](ubuntu/serenedb/serene_ask.py:15773) `15773–15775` len=3 (влож.)
-- [`_try_memory_apply`](ubuntu/serenedb/serene_ask.py:15816) `15816–15841` len=26
-- [`answer_checked`](ubuntu/serenedb/serene_ask.py:15843) `15843–15928` len=86
-- [`_build_ask_scope`](ubuntu/serenedb/serene_ask.py:15933) `15933–15974` len=42
-- [`_persist_ask_scope`](ubuntu/serenedb/serene_ask.py:15977) `15977–15996` len=20
-- [`_ensure_ask_scope_table`](ubuntu/serenedb/serene_ask.py:15999) `15999–16010` len=12
-- [`Handler.log_message`](ubuntu/serenedb/serene_ask.py:16016) `16016–16017` len=2 (влож.)
-- [`Handler._send`](ubuntu/serenedb/serene_ask.py:16019) `16019–16025` len=7 (влож.)
-- [`Handler.do_GET`](ubuntu/serenedb/serene_ask.py:16027) `16027–16093` len=67 (влож.)
-- [`Handler.do_POST`](ubuntu/serenedb/serene_ask.py:16095) `16095–16186` len=92 (влож.)
-- [`main`](ubuntu/serenedb/serene_ask.py:16189) `16189–16198` len=10
+- [`warehouse_axis_values`](ubuntu/serenedb/serene_ask.py:12078) `12078–12157` len=80
+- [`warehouse_axis_values._take`](ubuntu/serenedb/serene_ask.py:12101) `12101–12113` len=13 (влож.)
+- [`warehouse_clarify`](ubuntu/serenedb/serene_ask.py:12160) `12160–12174` len=15
+- [`period_slot_for_inherit`](ubuntu/serenedb/serene_ask.py:12177) `12177–12188` len=12
+- [`apply_prior_period`](ubuntu/serenedb/serene_ask.py:12191) `12191–12219` len=29
+- [`answer`](ubuntu/serenedb/serene_ask.py:12222) `12222–15385` len=3164
+- [`answer.шаг`](ubuntu/serenedb/serene_ask.py:12258) `12258–12263` len=6 (влож.)
+- [`answer._family`](ubuntu/serenedb/serene_ask.py:13315) `13315–13316` len=2 (влож.)
+- [`answer._alias_verdict`](ubuntu/serenedb/serene_ask.py:13318) `13318–13471` len=154 (влож.)
+- [`answer._alias_verdict._место`](ubuntu/serenedb/serene_ask.py:13429) `13429–13433` len=5 (влож.)
+- [`answer._alias_verdict._probe`](ubuntu/serenedb/serene_ask.py:13435) `13435–13446` len=12 (влож.)
+- [`answer._alias_clarify`](ubuntu/serenedb/serene_ask.py:13473) `13473–13501` len=29 (влож.)
+- [`answer._checked`](ubuntu/serenedb/serene_ask.py:13771) `13771–13787` len=17 (влож.)
+- [`question_facts`](ubuntu/serenedb/serene_ask.py:15408) `15408–15434` len=27
+- [`entity_has_dates`](ubuntu/serenedb/serene_ask.py:15437) `15437–15458` len=22
+- [`_gate_need`](ubuntu/serenedb/serene_ask.py:15461) `15461–15474` len=14
+- [`_need_clarify`](ubuntu/serenedb/serene_ask.py:15477) `15477–15493` len=17
+- [`_journal_keep_n`](ubuntu/serenedb/serene_ask.py:15496) `15496–15510` len=15
+- [`_journal_code_md5`](ubuntu/serenedb/serene_ask.py:15513) `15513–15520` len=8
+- [`_journal_build_ts`](ubuntu/serenedb/serene_ask.py:15523) `15523–15534` len=12
+- [`_journal_alias_ver`](ubuntu/serenedb/serene_ask.py:15537) `15537–15550` len=14
+- [`_journal_sql_int`](ubuntu/serenedb/serene_ask.py:15553) `15553–15559` len=7
+- [`_journal_sql_bool`](ubuntu/serenedb/serene_ask.py:15562) `15562–15565` len=4
+- [`_journal_atoms_slim`](ubuntu/serenedb/serene_ask.py:15568) `15568–15596` len=29
+- [`_journal_clarify_options`](ubuntu/serenedb/serene_ask.py:15599) `15599–15621` len=23
+- [`_journal_doubt`](ubuntu/serenedb/serene_ask.py:15624) `15624–15633` len=10
+- [`_journal_ticket_variant`](ubuntu/serenedb/serene_ask.py:15636) `15636–15649` len=14
+- [`_journal_intent`](ubuntu/serenedb/serene_ask.py:15652) `15652–15654` len=3
+- [`_journal_fork_keys`](ubuntu/serenedb/serene_ask.py:15657) `15657–15665` len=9
+- [`_journal_uncounted_truncated`](ubuntu/serenedb/serene_ask.py:15668) `15668–15687` len=20
+- [`_ask_journal_write`](ubuntu/serenedb/serene_ask.py:15690) `15690–15804` len=115
+- [`_ask_journal_write._insert_row`](ubuntu/serenedb/serene_ask.py:15734) `15734–15783` len=50 (влож.)
+- [`_answer_checked_core`](ubuntu/serenedb/serene_ask.py:15808) `15808–15850` len=43
+- [`_answer_checked_core.plain`](ubuntu/serenedb/serene_ask.py:15812) `15812–15814` len=3 (влож.)
+- [`_try_memory_apply`](ubuntu/serenedb/serene_ask.py:15855) `15855–15880` len=26
+- [`answer_checked`](ubuntu/serenedb/serene_ask.py:15882) `15882–15967` len=86
+- [`_build_ask_scope`](ubuntu/serenedb/serene_ask.py:15972) `15972–16013` len=42
+- [`_persist_ask_scope`](ubuntu/serenedb/serene_ask.py:16016) `16016–16035` len=20
+- [`_ensure_ask_scope_table`](ubuntu/serenedb/serene_ask.py:16038) `16038–16049` len=12
+- [`Handler.log_message`](ubuntu/serenedb/serene_ask.py:16055) `16055–16056` len=2 (влож.)
+- [`Handler._send`](ubuntu/serenedb/serene_ask.py:16058) `16058–16064` len=7 (влож.)
+- [`Handler.do_GET`](ubuntu/serenedb/serene_ask.py:16066) `16066–16132` len=67 (влож.)
+- [`Handler.do_POST`](ubuntu/serenedb/serene_ask.py:16134) `16134–16225` len=92 (влож.)
+- [`main`](ubuntu/serenedb/serene_ask.py:16228) `16228–16237` len=10
 
 Зовут снаружи зоны: `_period_day_label`, `clarify_say`, `disambiguate_labels`, `format_clarify_options`, `human_table_label`, `kind_word`, `mk_opts`
 
@@ -834,13 +835,12 @@
 - `calendar_working_day_keys`
 - `prefer_day_basis_leader`
 
-### 05 entity-form (14/20)
+### 05 entity-form (13/20)
 
 - `aggregate_distinct_axis`
 - `entity_form_atom_complement`
 - `entity_form_atom_distinct`
 - `entity_form_axis_on_sales`
-- `entity_form_catalogs_for_kind`
 - `entity_form_compute`
 - `entity_form_count_target_is_movement`
 - `entity_form_expand_pool`
@@ -984,7 +984,7 @@
 - `_threshold_values`
 - `claims_in_text`
 
-### 20 ask-main-http (95/102)
+### 20 ask-main-http (96/103)
 
 - `Handler._send`
 - `Handler.do_GET`
@@ -1079,6 +1079,7 @@
 - `stock_subject_needs_clarify`
 - `try_sales_fork_period_empty_answer`
 - `warehouse_axis_values`
+- `warehouse_axis_values._take`
 - `warehouse_clarify`
 - `without_list_markers`
 
@@ -1188,15 +1189,15 @@
 | `ASK_NOT_FOR` | [11130](ubuntu/serenedb/serene_ask.py:11130) | "1" | `(модуль)` |
 | `ASK_STEM_DICT` | [11133](ubuntu/serenedb/serene_ask.py:11133) | "search_dict_stem" | `(модуль)` |
 | `ASK_AMBIG_TTL` | [11136](ubuntu/serenedb/serene_ask.py:11136) | "300" | `(модуль)` |
-| `ASK_ENOUGH` | [15361](ubuntu/serenedb/serene_ask.py:15361) | "1" | `(модуль)` |
-| `ASK_SLOT_COVER` | [15363](ubuntu/serenedb/serene_ask.py:15363) | "0" | `(модуль)` |
+| `ASK_ENOUGH` | [15400](ubuntu/serenedb/serene_ask.py:15400) | "1" | `(модуль)` |
+| `ASK_SLOT_COVER` | [15402](ubuntu/serenedb/serene_ask.py:15402) | "0" | `(модуль)` |
 | `EMBED_SECRET` | [290](ubuntu/serenedb/serene_ask.py:290) | — | `_embed_secret_name_from_env` |
 | `EMBED_SECRETS` | [290](ubuntu/serenedb/serene_ask.py:290) | — | `_embed_secret_name_from_env` |
 | `EMBED_PATH` | [306](ubuntu/serenedb/serene_ask.py:306) | "/v1/embeddings" | `_reload_embed_native_env` |
 | `ASK_EMBED_NATIVE` | [307](ubuntu/serenedb/serene_ask.py:307) | "0" | `_reload_embed_native_env` |
 | `EMBED_DIM` | [308](ubuntu/serenedb/serene_ask.py:308) | "1024" | `_reload_embed_native_env` |
 | `EMBED_HOST` | [370](ubuntu/serenedb/serene_ask.py:370) | — | `_embed_host_base` |
-| `ASK_JOURNAL_KEEP` | [15460](ubuntu/serenedb/serene_ask.py:15460) | — | `_journal_keep_n` |
+| `ASK_JOURNAL_KEEP` | [15499](ubuntu/serenedb/serene_ask.py:15499) | — | `_journal_keep_n` |
 
 ## Обращения наружу
 
@@ -1306,60 +1307,60 @@
 - [`ubuntu/serenedb/serene_ask.py:11840`](ubuntu/serenedb/serene_ask.py:11840) в `resolve_focus`
 - [`ubuntu/serenedb/serene_ask.py:11880`](ubuntu/serenedb/serene_ask.py:11880) в `resolve_focus`
 - [`ubuntu/serenedb/serene_ask.py:11977`](ubuntu/serenedb/serene_ask.py:11977) в `axis_focus_plan`
-- [`ubuntu/serenedb/serene_ask.py:12084`](ubuntu/serenedb/serene_ask.py:12084) в `warehouse_axis_values`
-- [`ubuntu/serenedb/serene_ask.py:12105`](ubuntu/serenedb/serene_ask.py:12105) в `warehouse_axis_values`
-- [`ubuntu/serenedb/serene_ask.py:12497`](ubuntu/serenedb/serene_ask.py:12497) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12613`](ubuntu/serenedb/serene_ask.py:12613) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13181`](ubuntu/serenedb/serene_ask.py:13181) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13258`](ubuntu/serenedb/serene_ask.py:13258) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13305`](ubuntu/serenedb/serene_ask.py:13305) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14561`](ubuntu/serenedb/serene_ask.py:14561) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14903`](ubuntu/serenedb/serene_ask.py:14903) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14924`](ubuntu/serenedb/serene_ask.py:14924) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12622`](ubuntu/serenedb/serene_ask.py:12622) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14696`](ubuntu/serenedb/serene_ask.py:14696) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12659`](ubuntu/serenedb/serene_ask.py:12659) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12116`](ubuntu/serenedb/serene_ask.py:12116) в `warehouse_axis_values`
+- [`ubuntu/serenedb/serene_ask.py:12150`](ubuntu/serenedb/serene_ask.py:12150) в `warehouse_axis_values`
+- [`ubuntu/serenedb/serene_ask.py:12536`](ubuntu/serenedb/serene_ask.py:12536) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12652`](ubuntu/serenedb/serene_ask.py:12652) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13220`](ubuntu/serenedb/serene_ask.py:13220) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13297`](ubuntu/serenedb/serene_ask.py:13297) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13344`](ubuntu/serenedb/serene_ask.py:13344) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14600`](ubuntu/serenedb/serene_ask.py:14600) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14942`](ubuntu/serenedb/serene_ask.py:14942) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14963`](ubuntu/serenedb/serene_ask.py:14963) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12661`](ubuntu/serenedb/serene_ask.py:12661) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14735`](ubuntu/serenedb/serene_ask.py:14735) в `answer`
 - [`ubuntu/serenedb/serene_ask.py:12698`](ubuntu/serenedb/serene_ask.py:12698) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12863`](ubuntu/serenedb/serene_ask.py:12863) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12892`](ubuntu/serenedb/serene_ask.py:12892) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12914`](ubuntu/serenedb/serene_ask.py:12914) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12933`](ubuntu/serenedb/serene_ask.py:12933) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12957`](ubuntu/serenedb/serene_ask.py:12957) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13110`](ubuntu/serenedb/serene_ask.py:13110) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13244`](ubuntu/serenedb/serene_ask.py:13244) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13443`](ubuntu/serenedb/serene_ask.py:13443) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14116`](ubuntu/serenedb/serene_ask.py:14116) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14296`](ubuntu/serenedb/serene_ask.py:14296) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14718`](ubuntu/serenedb/serene_ask.py:14718) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12643`](ubuntu/serenedb/serene_ask.py:12643) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13355`](ubuntu/serenedb/serene_ask.py:13355) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13979`](ubuntu/serenedb/serene_ask.py:13979) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:12794`](ubuntu/serenedb/serene_ask.py:12794) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13270`](ubuntu/serenedb/serene_ask.py:13270) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13378`](ubuntu/serenedb/serene_ask.py:13378) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14017`](ubuntu/serenedb/serene_ask.py:14017) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14083`](ubuntu/serenedb/serene_ask.py:14083) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:14098`](ubuntu/serenedb/serene_ask.py:14098) в `answer`
-- [`ubuntu/serenedb/serene_ask.py:13305`](ubuntu/serenedb/serene_ask.py:13305) в `answer._alias_verdict`
-- [`ubuntu/serenedb/serene_ask.py:13355`](ubuntu/serenedb/serene_ask.py:13355) в `answer._alias_verdict`
-- [`ubuntu/serenedb/serene_ask.py:13378`](ubuntu/serenedb/serene_ask.py:13378) в `answer._alias_verdict`
-- [`ubuntu/serenedb/serene_ask.py:13443`](ubuntu/serenedb/serene_ask.py:13443) в `answer._alias_clarify`
-- [`ubuntu/serenedb/serene_ask.py:15412`](ubuntu/serenedb/serene_ask.py:15412) в `entity_has_dates`
-- [`ubuntu/serenedb/serene_ask.py:15466`](ubuntu/serenedb/serene_ask.py:15466) в `_journal_keep_n`
-- [`ubuntu/serenedb/serene_ask.py:15490`](ubuntu/serenedb/serene_ask.py:15490) в `_journal_build_ts`
-- [`ubuntu/serenedb/serene_ask.py:15503`](ubuntu/serenedb/serene_ask.py:15503) в `_journal_alias_ver`
-- [`ubuntu/serenedb/serene_ask.py:15737`](ubuntu/serenedb/serene_ask.py:15737) в `_ask_journal_write`
-- [`ubuntu/serenedb/serene_ask.py:15758`](ubuntu/serenedb/serene_ask.py:15758) в `_ask_journal_write`
-- [`ubuntu/serenedb/serene_ask.py:15751`](ubuntu/serenedb/serene_ask.py:15751) в `_ask_journal_write`
-- [`ubuntu/serenedb/serene_ask.py:15753`](ubuntu/serenedb/serene_ask.py:15753) в `_ask_journal_write`
-- [`ubuntu/serenedb/serene_ask.py:15760`](ubuntu/serenedb/serene_ask.py:15760) в `_ask_journal_write`
-- [`ubuntu/serenedb/serene_ask.py:15692`](ubuntu/serenedb/serene_ask.py:15692) в `_ask_journal_write`
-- [`ubuntu/serenedb/serene_ask.py:15741`](ubuntu/serenedb/serene_ask.py:15741) в `_ask_journal_write`
-- [`ubuntu/serenedb/serene_ask.py:15754`](ubuntu/serenedb/serene_ask.py:15754) в `_ask_journal_write`
-- [`ubuntu/serenedb/serene_ask.py:15737`](ubuntu/serenedb/serene_ask.py:15737) в `_ask_journal_write._insert_row`
-- [`ubuntu/serenedb/serene_ask.py:15741`](ubuntu/serenedb/serene_ask.py:15741) в `_ask_journal_write._insert_row`
-- [`ubuntu/serenedb/serene_ask.py:16030`](ubuntu/serenedb/serene_ask.py:16030) в `Handler.do_GET`
-- [`ubuntu/serenedb/serene_ask.py:16157`](ubuntu/serenedb/serene_ask.py:16157) в `Handler.do_POST`
+- [`ubuntu/serenedb/serene_ask.py:12737`](ubuntu/serenedb/serene_ask.py:12737) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12902`](ubuntu/serenedb/serene_ask.py:12902) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12931`](ubuntu/serenedb/serene_ask.py:12931) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12953`](ubuntu/serenedb/serene_ask.py:12953) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12972`](ubuntu/serenedb/serene_ask.py:12972) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12996`](ubuntu/serenedb/serene_ask.py:12996) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13149`](ubuntu/serenedb/serene_ask.py:13149) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13283`](ubuntu/serenedb/serene_ask.py:13283) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13482`](ubuntu/serenedb/serene_ask.py:13482) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14155`](ubuntu/serenedb/serene_ask.py:14155) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14335`](ubuntu/serenedb/serene_ask.py:14335) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14757`](ubuntu/serenedb/serene_ask.py:14757) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12682`](ubuntu/serenedb/serene_ask.py:12682) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13394`](ubuntu/serenedb/serene_ask.py:13394) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14018`](ubuntu/serenedb/serene_ask.py:14018) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12833`](ubuntu/serenedb/serene_ask.py:12833) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13309`](ubuntu/serenedb/serene_ask.py:13309) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13417`](ubuntu/serenedb/serene_ask.py:13417) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14056`](ubuntu/serenedb/serene_ask.py:14056) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14122`](ubuntu/serenedb/serene_ask.py:14122) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:14137`](ubuntu/serenedb/serene_ask.py:14137) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:13344`](ubuntu/serenedb/serene_ask.py:13344) в `answer._alias_verdict`
+- [`ubuntu/serenedb/serene_ask.py:13394`](ubuntu/serenedb/serene_ask.py:13394) в `answer._alias_verdict`
+- [`ubuntu/serenedb/serene_ask.py:13417`](ubuntu/serenedb/serene_ask.py:13417) в `answer._alias_verdict`
+- [`ubuntu/serenedb/serene_ask.py:13482`](ubuntu/serenedb/serene_ask.py:13482) в `answer._alias_clarify`
+- [`ubuntu/serenedb/serene_ask.py:15451`](ubuntu/serenedb/serene_ask.py:15451) в `entity_has_dates`
+- [`ubuntu/serenedb/serene_ask.py:15505`](ubuntu/serenedb/serene_ask.py:15505) в `_journal_keep_n`
+- [`ubuntu/serenedb/serene_ask.py:15529`](ubuntu/serenedb/serene_ask.py:15529) в `_journal_build_ts`
+- [`ubuntu/serenedb/serene_ask.py:15542`](ubuntu/serenedb/serene_ask.py:15542) в `_journal_alias_ver`
+- [`ubuntu/serenedb/serene_ask.py:15776`](ubuntu/serenedb/serene_ask.py:15776) в `_ask_journal_write`
+- [`ubuntu/serenedb/serene_ask.py:15797`](ubuntu/serenedb/serene_ask.py:15797) в `_ask_journal_write`
+- [`ubuntu/serenedb/serene_ask.py:15790`](ubuntu/serenedb/serene_ask.py:15790) в `_ask_journal_write`
+- [`ubuntu/serenedb/serene_ask.py:15792`](ubuntu/serenedb/serene_ask.py:15792) в `_ask_journal_write`
+- [`ubuntu/serenedb/serene_ask.py:15799`](ubuntu/serenedb/serene_ask.py:15799) в `_ask_journal_write`
+- [`ubuntu/serenedb/serene_ask.py:15731`](ubuntu/serenedb/serene_ask.py:15731) в `_ask_journal_write`
+- [`ubuntu/serenedb/serene_ask.py:15780`](ubuntu/serenedb/serene_ask.py:15780) в `_ask_journal_write`
+- [`ubuntu/serenedb/serene_ask.py:15793`](ubuntu/serenedb/serene_ask.py:15793) в `_ask_journal_write`
+- [`ubuntu/serenedb/serene_ask.py:15776`](ubuntu/serenedb/serene_ask.py:15776) в `_ask_journal_write._insert_row`
+- [`ubuntu/serenedb/serene_ask.py:15780`](ubuntu/serenedb/serene_ask.py:15780) в `_ask_journal_write._insert_row`
+- [`ubuntu/serenedb/serene_ask.py:16069`](ubuntu/serenedb/serene_ask.py:16069) в `Handler.do_GET`
+- [`ubuntu/serenedb/serene_ask.py:16196`](ubuntu/serenedb/serene_ask.py:16196) в `Handler.do_POST`
 
 ### ds_chat (10)
 
@@ -1372,7 +1373,7 @@
 - [`ubuntu/serenedb/serene_ask.py:8443`](ubuntu/serenedb/serene_ask.py:8443) в `pick_entity`
 - [`ubuntu/serenedb/serene_ask.py:9864`](ubuntu/serenedb/serene_ask.py:9864) в `compose`
 - [`ubuntu/serenedb/serene_ask.py:11065`](ubuntu/serenedb/serene_ask.py:11065) в `_coverage_answer`
-- [`ubuntu/serenedb/serene_ask.py:15384`](ubuntu/serenedb/serene_ask.py:15384) в `question_facts`
+- [`ubuntu/serenedb/serene_ask.py:15423`](ubuntu/serenedb/serene_ask.py:15423) в `question_facts`
 
 ### embed_one (1)
 
@@ -1384,7 +1385,7 @@
 - [`ubuntu/serenedb/serene_ask.py:4919`](ubuntu/serenedb/serene_ask.py:4919) в `rank_axes_rerank`
 - [`ubuntu/serenedb/serene_ask.py:8303`](ubuntu/serenedb/serene_ask.py:8303) в `pick_measure`
 - [`ubuntu/serenedb/serene_ask.py:8765`](ubuntu/serenedb/serene_ask.py:8765) в `kind_axis_rerank`
-- [`ubuntu/serenedb/serene_ask.py:12869`](ubuntu/serenedb/serene_ask.py:12869) в `answer`
+- [`ubuntu/serenedb/serene_ask.py:12908`](ubuntu/serenedb/serene_ask.py:12908) в `answer`
 
 ### urlopen (4)
 

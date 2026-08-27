@@ -1,3 +1,18 @@
+## 2026-08-27 — K7: ось склада без привязки к конфигурации
+
+**[код]** `warehouse_axis_values`: убраны литерал `МестоХранения` и маска
+`catalog_%мест%хран%`. Каталог — `entity_form_catalogs_for_kind` (склад/
+warehouse ∩ alias); колонка — `search_refcols` по `target_src` (score
+accumulationregister_* + max DISTINCT); значения — `map_extract_value`;
+запасной — `search_refmap` по `owner`. Замок
+`test_warehouse_axis_autonomy.py` **12/0**. `serene_ask.py` в коммит не
+входит (оркестратор). Отчёт `docs/K7_WAREHOUSE_AXIS.md`.
+
+**[замер]** okna до/после: оба пути — **3** склада (Bubuieci / Depozit /
+Vitrina …), set совпал. Соседние замки K5: axis/guess/meta/nodata/rank
+**11/13/12/11/51**, partial **20**, fork **29**, calendar **36**, code_map
+**28**. Доки: Map Functions › map_extract_value; SELECT › ORDER BY LIMIT.
+
 ## 2026-08-27 — K6: ранг сущности без признака «отвечает данными»
 
 **[замер]** okna «сколько клиентов реально покупают?»: clarify по
