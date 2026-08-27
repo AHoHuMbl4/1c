@@ -267,6 +267,7 @@ OpenClaw (чтение — отдельный трек, здесь его нет
 | `ask_choice_memory.sql` + `ask_choice_memory_apply.sh` | **память явного выбора** (шаг 6, shadow): таблица `ask_choice_memory`, GRANT INSERT/SELECT/UPDATE для `serene_ro`; клик не пишет |
 | `ask_choice_memory_collisions.sql` | SQL-отчёт коллизий классов памяти |
 | `ask_choice_mem.py` / `test_ask_choice_memory.py` | ключ класса, remember/forget (только поле memory), shadow в diag; замки 48 |
+| `partial_visible.py` / `test_partial_flag_propagation.py` | **п. 13 / Э4:** `ensure_partial_visible` — LOSS/budget/uncounted из атома и diag → `partial`+хвост `text`. Проводка в `serene_ask.answer_checked` — патч оркестратора (`COMPLETENESS_P13.md` §11). Замок 27.08: **19/1** (S6 undated-гейт) |
 | `work/acceptance/selftest_*.py` | самопроверка из данных (ярус 1 — поверхности без модели; ярус 2 — живой `/ask` + сверка атома SQL). База замка 17 — `docs/SELFTEST_BASELINE.md`; регресс промахов — `selftest-misses-*-tier2.jsonl` |
 
 ### Проверка

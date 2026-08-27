@@ -1,3 +1,16 @@
+## 2026-08-27 — Э4: ensure_partial_visible вне serene_ask (дыры 1–4)
+
+`[код]` п. 13: модуль `ubuntu/serenedb/partial_visible.py` —
+`ensure_partial_visible(out)` поднимает LOSS/budget/uncounted/incomplete
+из атома и `diag` в `partial` и/или хвост `text` (не промтом). Замок
+`test_partial_flag_propagation.py` зовёт ensure на бывших silent-фикстурах;
+pre-ensure контроль молчания бюджета сохранён. `serene_ask.py` не
+трогали (параллель с оркестратором): проводка в `answer_checked.finally`
+и undated в `asked_figure_missing` (S6) — готовые патчи в
+`docs/COMPLETENESS_P13.md` §11.
+
+Числа: замок 13/5 → 19/1 (красный только S6 undated-гейт).
+
 ## 2026-08-27 — Э2 §11: аудит привязок п. 9 (только замер)
 
 **[замер]** Офлайн-вердикты по охоте `docs/TEST_SECOND_BASE.md` §7–§10 + добор в

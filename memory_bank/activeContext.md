@@ -1,12 +1,19 @@
 # Active Context
 
-_Обновлено: **2026-08-26** (27B жив — блокировка снята; п.15 инфраструктура). Здесь — только живое.
+_Обновлено: **2026-08-27** (Э4: ensure_partial_visible; S6 ждёт ask). Здесь — только живое.
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
 ---
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
+
+🔴 **Э4 / п.13 `[27.08]`**: `partial_visible.ensure_partial_visible` закрыл
+дыры 1–4 (budget/atom/uncounted/incomplete). Замок
+`test_partial_flag_propagation` **13/5 → 19/1**. Красный S6 —
+`asked_figure_missing`+undated. `serene_ask.py` не трогали: патчи
+проводки + undated — `docs/COMPLETENESS_P13.md` §11 (оркестратор).
+
 
 🔴 **повтор латентности `[26.08 вечер]`**: после перенастройки GPU
 chat_tiny 0,55→0,29 с; intent×5 19,9→17,4 с; /ask median 17,8→16,6 с.

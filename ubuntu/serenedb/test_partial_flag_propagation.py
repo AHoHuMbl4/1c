@@ -5,8 +5,10 @@
 Падает, когда потеря есть, а в ответе нет ни LOSS-ключей в partial
 (мост PARTIAL), ни цифры/ноты потери в text.
 
-Без сети и базы. serene_ask.py не правится — только читается через импорт.
-См. docs/COMPLETENESS_P13.md §8–§10.
+Без сети и базы. Код полноты — `partial_visible.ensure_partial_visible`;
+`serene_ask.py` читается через импорт (гейт/рендер), проводка ensure —
+патч оркестратора (см. docs/COMPLETENESS_P13.md §11).
+См. docs/COMPLETENESS_P13.md §8–§11.
 """
 from __future__ import annotations
 
@@ -19,6 +21,7 @@ os.environ.setdefault("EMBED_BASE_URL", "-")
 os.environ.setdefault("EMBED_MODEL", "-")
 
 import serene_ask as A  # noqa: E402
+import partial_visible as PV  # noqa: E402
 
 PASS, FAIL = 0, []
 
@@ -273,10 +276,10 @@ t("invariant: budget в diag + цифры в text → ok",
 t("invariant: нет потери → ok",
   invariant_holds({"kind": "answer", "text": "42", "partial": None, "diag": {}}))
 
-# ── фикстуры молчания: инвариант ОБЯЗАН падать (класс дефекта до починки) ────
-# После ensure_partial_visible эти кейсы должны стать ok.
+# ── фикстуры молчания → после ensure_partial_visible инвариант держится ─────
+# До починки (без ensure) эти кейсы падали — класс зафиксирован 26.08 как 13/5.
 
-_silent_budget = {
+_silent_budget_raw = {
     "kind": "answer",
     "text": "итого 1 000 000",
     "partial": None,
@@ -286,11 +289,19 @@ _silent_budget = {
         "partial_shown": 40, "partial_total": 200,
     }},
 }
+t("pre-ensure: selection_budget только в diag — молчание",
+  not invariant_holds(_silent_budget_raw),
+  "контроль: без ensure инвариант ещё ломается")
+_silent_budget = PV.ensure_partial_visible(dict(
+    _silent_budget_raw,
+    diag=dict(_silent_budget_raw["diag"],
+              selection_budget=dict(_silent_budget_raw["diag"]["selection_budget"])),
+))
 t("invariant: selection_budget только в diag → пометка клиенту",
   invariant_holds(_silent_budget),
-  "S1–S3: budget в diag, partial=None, text без цифр отбора")
+  "S1–S3: ensure поднял budget в partial+цифры в text")
 
-_silent_atom = {
+_silent_atom_raw = {
     "kind": "answer",
     "text": "итого 500",
     "partial": None,
@@ -303,26 +314,32 @@ _silent_atom = {
     },
     "diag": {},
 }
+_silent_atom = PV.ensure_partial_visible({
+    **_silent_atom_raw,
+    "atom": dict(_silent_atom_raw["atom"],
+                 completeness=dict(_silent_atom_raw["atom"]["completeness"]),
+                 excluded=dict(_silent_atom_raw["atom"]["excluded"])),
+})
 t("invariant: missing/undated в атоме без text/partial → пометка",
   invariant_holds(_silent_atom),
-  "S5–S7: атом знает потерю, проза молчит")
+  "S5–S7: ensure → LOSS в partial (+ хвост)")
 
-_silent_unc_diag = {
+_silent_unc_diag = PV.ensure_partial_visible({
     "kind": "clarify",
     "text": "уточните вариант",
     "partial": None,
     "diag": {"fork": {"uncounted": [["a"], ["b"]], "atoms_truncated": 3}},
-}
+})
 t("invariant: uncounted только в diag.fork → пометка",
   invariant_holds(_silent_unc_diag),
-  "uncounted в diag без fork_outcome_c-ноты")
+  "ensure: fork_limitation + нота uncounted")
 
-_silent_incomplete = {
+_silent_incomplete = PV.ensure_partial_visible({
     "kind": "answer",
     "text": "сумма 10",
     "partial": None,
     "diag": {"incomplete": {"missing": 881, "in_1c": 1000, "in_search": 119}},
-}
+})
 t("invariant: diag.incomplete.missing без partial/text → пометка",
   invariant_holds(_silent_incomplete))
 
@@ -341,18 +358,22 @@ _j_unc = {
 _u2, _t2 = A._journal_uncounted_truncated(_j_unc)
 t("journal: uncounted_classes из partial", _u2 == 2, (_u2, _t2))
 
-# partial_flag журнала = bool(partial); без ensure бюджет не поднимает флаг
-t("journal-shaped: silent budget → partial_flag был бы false",
-  not bool(_silent_budget.get("partial")))
+# partial_flag журнала = bool(partial); после ensure бюджет поднимает флаг
+t("journal-shaped: after ensure budget → partial_flag true",
+  bool(_silent_budget.get("partial")))
+t("journal-shaped: raw budget without ensure → partial_flag false",
+  not bool(_silent_budget_raw.get("partial")))
 
-# ── гейт не требует undated/missing (дыра S5/S6) — замок фиксирует ───────────
+# ── гейт undated (дыра S6): ждёт патч asked_figure_missing в serene_ask.py ─
+# Спека после патча — как folders: причина не None и число undated в строке.
+# Пока патч не влит — кейс красный намеренно (не ослаблять до «is None»).
 
 _no_undated_gate = A.asked_figure_missing(
     "итого 100",
     {"count": 10, "sum": 100.0, "undated": 54, "grain": "row"},
     "sum", True, folders=0)
-t("asked_figure_missing не ловит undated — открытая дыра S6",
-  _no_undated_gate is not None,
+t("asked_figure_missing требует undated (S6)",
+  _no_undated_gate is not None and "54" in str(_no_undated_gate),
   _no_undated_gate)
 
 # ── итог ─────────────────────────────────────────────────────────────────────
