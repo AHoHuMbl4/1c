@@ -1116,3 +1116,5 @@
 {"type":"relation","from":"packet_apply","to":"packet_meta_signal","relationType":"acks need_metadata after snap write"}
 {"type":"relation","from":"packet_meta_signal","to":"PACKET_CONTRACT","relationType":"implements need_metadata param"}
 {"type":"relation","from":"packet-agent (Windows)","to":"packet-agent need_metadata","relationType":"honors from 1.1.3"}
+{"type":"relation","from":"test_ab_ambiguous_set.py","to":"ab_scorer.py","relationType":"tests"}
+{"type":"relation","from":"test_ab_ambiguous_set.py","to":"ab-ambiguous-okna.tsv","relationType":"проверяет набор"}
