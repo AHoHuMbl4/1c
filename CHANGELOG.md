@@ -1,3 +1,31 @@
+## 2026-08-27 — Д2: TimeoutStartSec=infinity у долгих oneshot словаря
+
+**[замер]** Юнит `1c-wiki-alias@postgres` на okna отработал 2h wall и был
+убит systemd: `start operation timed out. Terminating.`, Result=timeout,
+ExecMainStatus=15, CPU ~3min59s / 2h wall. В каноне стояло **явное**
+`TimeoutStartSec=7200` (не умолчание Type=oneshot). Словарь при этом уже
+был 258/258 — данные уцелели случайно. На базе крупнее убийство пришлось бы
+на середину → молча наполовину собранный словарь (п. 13 TARGET.md).
+
+Канон: `TimeoutStartSec=infinity` в `1c-wiki-alias@.service`; той же
+ловушкой (фиксированный потолок при длительности от размера базы) —
+`1c-serene-index.service` и legacy `1c-serene-pipeline.service` (3600→infinity;
+шаблон `@` уже был infinity). Не трогали: `1c-wiki-alias-measure` (намеренно
+900 с), `1c-branch-alias` (=0 ≡ infinity). На okna: cp + daemon-reload,
+без restart; `systemctl show 1c-wiki-alias@postgres -p TimeoutStartUSec`
+→ infinity (`BEFORE TimeoutStartUSec=2h`, `AFTER=infinity`, юнит не
+перезапускали — ActiveState=failed от прежнего timeout). Доки: RUNBOOK_DEPLOY §9.
+
+## 2026-08-27 — K4-1: проект «догадка вместо уточнения» (Э3 okna)
+
+**[решение]** Разбор 4 провалов из живого прогона `ACCEPTANCE_AMBIGUOUS` §8
+(5/18): №1/2 assumed-период→answer, №8 мера топа→деньги, №12 остатки без
+товара→figures. Места в `serene_ask.py` и проект патча A/B/C —
+`docs/K4_GUESS_VS_CLARIFY.md`. Код `serene_ask.py` не трогали.
+
+**[код]** Замок `ubuntu/serenedb/test_k4_guess_vs_clarify.py` — 6 ok / 0 FAIL /
+4 pending (хелперы патча A/B/C ещё нет). Коммит `e10b005`.
+
 ## 2026-08-27 — К4-3: ось уточнения, склад, имена метаданных (только разбор)
 
 **[замер+код]** По прогону okna ambiguous 5/18 (`ACCEPTANCE_AMBIGUOUS` §8,
@@ -1976,7 +2004,6 @@ md5 ask `286cd4b1`, замки `b5807b22`, atom `c9890dd7`, rank `8158f064`, env
 
 Замки: `python3 ubuntu/serenedb/test_gate.py` **132/0**; `python3 ubuntu/serenedb/test_step4_guards.py` **110/0**.
 
-
 ## 19.08: entity-ambiguity clarify убираем на sum при fork.outcome=empty [код]
 
 [код] `ubuntu/serenedb/serene_ask.py`:
@@ -1990,7 +2017,6 @@ md5 ask `286cd4b1`, замки `b5807b22`, atom `c9890dd7`, rank `8158f064`, env
 - `python3 ubuntu/serenedb/test_entity_ambiguity_ab_sum.py` 15/15
 - `python3 ubuntu/serenedb/test_fork_outcomes.py` 24/24
 - `python3 ubuntu/serenedb/test_terminal_round.py` 24/24
-
 
 ## 19.08: аудит дашбордов и контура — хардкод, языки, гранты [код]
 
@@ -2063,7 +2089,6 @@ md5 ask `e1079ab0`, test `6cfe6b0a`.
 Ожидаемый эффект: живой `panel_from_scope.py --spec ...` больше не падает на `Referenced column "Period" not found in FROM clause` и возвращает `rows: N > 0` для случаев:
 (1) без оси — «сколько продали вчера?»;
 (2) с осью — «какого товара больше всего продали за всё время?».
-
 
 ## 19.08: стык ask_scope — спецификация счёта наружу через SereneDB `[код]`
 
@@ -2419,7 +2444,6 @@ packet (`changed=0`, пробы у агента) делал `DELETE FROM search_
 (176 / 693 688,38; 81 / 49 155,96; 247 / 462 573,08). `/health` `kind=freshness_lag`.
 Таймер возвращён; такт досчитывает векторы.
 
-
 ## 18.08: класс F — снятая сущность не уезжает в ПКО/физлицо `[код]` `[замер]`
 
 Живой дефект okna (8/12 bot-rid): после выбора регистра/документа цепочка
@@ -2746,7 +2770,6 @@ Follow-up настраивается штатным API 0.11: `GET /api/v1/tasks
 `test_mcp_ask.py` **35**, `test_focus_loop.py` **26**. md5
 `configure-branding.py` `eada2986be8392eb124bf81ffaf7d2ff`. Код Tasks/Follow-up
 в скрипте брендинга; живой POST на фронт не делали.
-
 
 ## 18.08: выбор из уточнения без кухни протокола `[код]` `[замер]`
 
@@ -3362,7 +3385,6 @@ found, cooldown, FallbackSummaryError — инфра (стоп, пустышек
 потому что `open(ans)` кидал исключение и bash шёл в `mark_attempt`).
 `test_branch_alias.py` **25/25**. Доки: cli/infer.md.
 
-
 ## 17.08: эндпоинты моделей — на домены владельца `[замер]`
 
 Владелец прикрутил домены: `gpu-27b.timpul.pro` — LLM Qwen3.8-27B (RTX 6000
@@ -3628,7 +3650,6 @@ wall **39 с**, **$0**, `alias-usage.jsonl`; покрытие 7→8 классо
 
 **Не сделано:** wiki measures vLLM; замок coverage/json_ok vs pro на полном branch.
 
-
 ## 17.08: DeepSeek pro на новом коде — честная клетка 2×2 для выбора модели `[замер]`
 
 `[замер]` Один платный прогон 44 ut_test на `:8099` (DeepSeek pro, код
@@ -3721,7 +3742,6 @@ Qwen дают **одинаковую долю ответов 41%**, **0 неве
 ⚠️ На okna тик пишет «синк: частичные ошибки» — `odata_census.py` получает путь
 `/var/lib/serenedb/packet-meta/okna-1/` вместо URL; такт при этом зелёный.
 
-
 ## 17.08: dev — выкат `/opt/1c-mcp-reports` + диагностика pipeline первой базы `[замер]`
 
 `[замер]` Задача из записи 40b6567 (расхождение `/opt` и репозитория; pipeline
@@ -3767,7 +3787,6 @@ AB_MARK_DIR=/srv/1c python3 ab_scorer.py` — live **2/8**, сбоев 0, отм
   1c-serene-pipeline@postgres.timer` (RUNBOOK §0). Зелёный end-to-end
   такт первой базы **не снят** — без живого OData.
 
-
 ## 17.08: замер стоимости агентских словарей (branch/wiki_alias) — pro, thinking off `[замер]`
 
 `[замер]` Прибор `work/entity-choice/alias_agent_bench.py`; артефакты
@@ -3803,7 +3822,6 @@ allowlist агента main.
 **Прогоны ut_test (вне пика, 10:20 UTC):** `systemctl start
 1c-branch-alias` — в ходе; `1c-wiki-alias` measures — после branch.
 До прогона: fork_label 1411 непустых, measure_alias 0.
-
 
 ## 17.08: okna возвращена на проверенный код; правило сериализации выкатов `[замер]` `[решение]`
 
@@ -4004,7 +4022,6 @@ unknown → `choice_error`; сырой focus → clarify, не choice_error.
 md5: serene_ask `c466081e…`, mcp_ask `7098f90b…`, verify-core `dba4b0b1…`,
 index `4c1c1599…`.
 
-
 ## 16.08: самопроверка — ярус2 postgres vector+rerank; okna слепое пятно 0/254 `[замер]`
 
 `[замер]` Дев postgres 10 % через живой `/ask` (config=vector+rerank): 62 вопроса,
@@ -4170,7 +4187,6 @@ seq=15 ушёл за полминуты. Приёмник на okna обновл
 дверях, 401/403 — явное «ключ не годится»; оффлайн-проба с битым ключом —
 неноль (замерено). Разбор — `HOW_NOT_TO §3.78`, граф обновлён.
 
-
 ## 15.08: словарь синонимов базы postgres построен полностью `[замер]`
 
 `[замер]` Прогон установленного `1c-wiki-alias` против дев-базы `postgres`
@@ -4308,7 +4324,6 @@ polkit-правило `50-claudedev-1c-units.rules`, сессия зовёт `sy
 Услуг?» → 19 517 по `catalog_поляформстатистики` при достижимой
 `accumulationregister_реализацияуслуг` — ошибка выбора (шаг 4), а не слепое пятно.
 Ярус 2 (стратифицированные 10 % через /ask) готов к запуску после слияния трека A.
-
 
 ## 15.08: детектор развилки из данных (shadow, always-on) `[код]` `[замер]`
 
@@ -5572,7 +5587,6 @@ klient-1 один в один: **настоящий агент 1.0.2** (собр
 
 ---
 
-
 ## 13.08: домен baulogistic.timpul.pro, лого Baulogistik, вход anton `[замер]`
 
 Фронт okna: Caddy на `baulogistic.timpul.pro` (DNS A → 2.28.49.158), `okna.timpul.pro`
@@ -5580,13 +5594,11 @@ klient-1 один в один: **настоящий агент 1.0.2** (собр
 Админ-вход сменён на `anton@baulogistic.md` (пароль не в git).
 Лого перерисовано без сжатия (letterbox favicon, splash 640×152); CSS `object-fit: contain`.
 
-
 ## 13.08: okna UI — без Workspace и без выбора моделей `[замер]`
 
 `ubuntu/open-webui/static/brand-ui.css` → OWUI `static/custom.css`: скрыты
 `/workspace` и селектор `#model` (модель одна — «Ассистент 1С»). У admin Workspace
 иначе всегда в меню по коду OWUI. setup-okna-front.sh копирует CSS при установке.
-
 
 ## 13.08 (вечер): Cursor больше не зовёт `kimi -p` — параллель, не чужая квота `[замер]` `[код]`
 
@@ -5613,7 +5625,6 @@ Kimi. Это не «тот же снайпер», а зависимость от
 `[замер]` с фронта: health ok; прямой POST transcriptions → 200; через
 `POST /api/v1/audio/transcriptions` OWUI → 200 (текст от модели). В `/api/config`
 `audio.stt.engine=openai`.
-
 
 ## 13.08 (вечер): словарь синонимов не собирался НИ НА ОДНОЙ чистой машине — маска секретов на файле обмена `[замер]` `[код]`
 
@@ -5722,7 +5733,6 @@ Kimi. Это не «тот же снайпер», а зависимость от
 
 ---
 
-
 ## 13.08: обновление агента на месте — upgrade-agent.cmd, одна команда админу `[замер]`
 
 Вопрос владельца: «как правильно обновить klient-1 — можно апгрейд, а не полную
@@ -5747,7 +5757,6 @@ Kimi. Это не «тот же снайпер», а зависимость от
 Python его обошёл).
 
 ---
-
 
 ## 13.08: установщик 1.2.3 + агент 1.1.2 — щадящий режим для 1С и телеметрия `[замер]` `[код]`
 
@@ -16880,5 +16889,4 @@ braine, выведенный из контура. К данным 1С этот �
 
 История до 27.07 — в [`memory_bank/progress.md`](memory_bank/progress.md) и
 [`docs/INSTALL_LOG.md`](docs/INSTALL_LOG.md).
-
 

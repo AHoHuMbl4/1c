@@ -44,7 +44,7 @@ ExecStart=/bin/bash /opt/1c-mcp-reports/wiki_alias.sh 0
 # хотя словарь уже был дописан (258/258). На базе крупнее убийство пришлось бы
 # на середину → молча наполовину собранный словарь (п. 13 TARGET.md). Длительность
 # растёт с размером чужой базы — фиксированный потолок недопустим.
-# Type=oneshot: TimeoutStartSec=infinity (не путать с умолчанием DefaultTimeoutStartSec; 0 тоже = infinity).
+# Type=oneshot: TimeoutStartSec=infinity — канон после okna 27.08 (не путать с умолчанием DefaultTimeoutStartSec; 0 тоже = infinity).
 TimeoutStartSec=infinity
 
 [Install]
