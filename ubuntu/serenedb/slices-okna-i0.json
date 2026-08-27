@@ -1,0 +1,136 @@
+{
+  "slices": [
+    {
+      "id": "kontr",
+      "question": "сколько у нас вообще клиентов сейчас",
+      "period": "stable",
+      "fact": {
+        "sql": "SELECT count(*) FROM catalog_контрагенты WHERE lower(cast(isfolder as varchar))<>'true' AND lower(cast(deletionmark as varchar))<>'true'"
+      },
+      "corpus": {
+        "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_контрагенты' AND NOT coalesce(flags['IsFolder'],false) AND NOT coalesce(flags['DeletionMark'],false)"
+      }
+    },
+    {
+      "id": "nomen",
+      "question": "сколько позиций у нас в прайсе всего",
+      "period": "stable",
+      "fact": {
+        "sql": "SELECT count(*) FROM catalog_номенклатура WHERE lower(cast(isfolder as varchar))<>'true' AND lower(cast(deletionmark as varchar))<>'true'"
+      },
+      "corpus": {
+        "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_номенклатура' AND NOT coalesce(flags['IsFolder'],false) AND NOT coalesce(flags['DeletionMark'],false)"
+      }
+    },
+    {
+      "id": "org",
+      "question": "Сколько организаций?",
+      "period": "stable",
+      "fact": {
+        "sql": "SELECT count(*) FROM catalog_организации WHERE lower(cast(deletionmark as varchar))<>'true'"
+      },
+      "corpus": {
+        "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_организации' AND NOT coalesce(flags['DeletionMark'],false)"
+      }
+    },
+    {
+      "id": "bank",
+      "question": "Сколько банков в справочнике?",
+      "period": "stable",
+      "fact": {
+        "sql": "SELECT count(*) FROM catalog_банки WHERE lower(cast(deletionmark as varchar))<>'true'"
+      },
+      "corpus": {
+        "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_банки' AND NOT coalesce(flags['DeletionMark'],false)"
+      }
+    },
+    {
+      "id": "val",
+      "question": "Сколько валют?",
+      "period": "stable",
+      "fact": {
+        "sql": "SELECT count(*) FROM catalog_валюты WHERE lower(cast(deletionmark as varchar))<>'true'"
+      },
+      "corpus": {
+        "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_валюты' AND NOT coalesce(flags['DeletionMark'],false)"
+      }
+    },
+    {
+      "id": "reg_rows",
+      "question": "Сколько движений в регистре реализации ТМЦ?",
+      "period": "stable",
+      "fact": {
+        "sql": "SELECT count(*) FROM accumulationregister_реализациятмц"
+      },
+      "corpus": {
+        "sql": "SELECT count(*) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц'"
+      }
+    },
+    {
+      "id": "yesterday",
+      "question": "вчера сколько продали",
+      "period": "relative",
+      "fact": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d - INTERVAL 1 day AND CAST(Period AS TIMESTAMP) < today.d"
+      },
+      "corpus": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(nums['Всего']),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= today.d - INTERVAL 1 day AND doc_date < today.d"
+      }
+    },
+    {
+      "id": "day_before",
+      "question": "позавчера сколько было продаж",
+      "period": "relative",
+      "fact": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d - INTERVAL 2 day AND CAST(Period AS TIMESTAMP) < today.d - INTERVAL 1 day"
+      },
+      "corpus": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(nums['Всего']),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= today.d - INTERVAL 2 day AND doc_date < today.d - INTERVAL 1 day"
+      }
+    },
+    {
+      "id": "last_week",
+      "question": "а на прошлой неделе сколько наторговали",
+      "period": "stable",
+      "fact": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('week', today.d) - INTERVAL 7 day AND CAST(Period AS TIMESTAMP) < date_trunc('week', today.d)"
+      },
+      "corpus": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(nums['Всего']),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= date_trunc('week', today.d) - INTERVAL 7 day AND doc_date < date_trunc('week', today.d)"
+      }
+    },
+    {
+      "id": "last_month",
+      "question": "сколько было в прошлом месяце всего",
+      "period": "stable",
+      "fact": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('month', today.d) - INTERVAL 1 month AND CAST(Period AS TIMESTAMP) < date_trunc('month', today.d)"
+      },
+      "corpus": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(nums['Всего']),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= date_trunc('month', today.d) - INTERVAL 1 month AND doc_date < date_trunc('month', today.d)"
+      }
+    },
+    {
+      "id": "today",
+      "question": "сегодня сколько уже наотгружали",
+      "period": "relative",
+      "fact": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day"
+      },
+      "corpus": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(nums['Всего']),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= today.d AND doc_date < today.d + INTERVAL 1 day"
+      }
+    },
+    {
+      "id": "this_week",
+      "question": "сколько сделали за эту неделю",
+      "period": "relative",
+      "fact": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('week', today.d) AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day"
+      },
+      "corpus": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(nums['Всего']),2),0) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= date_trunc('week', today.d) AND doc_date < today.d + INTERVAL 1 day"
+      }
+    }
+  ]
+}

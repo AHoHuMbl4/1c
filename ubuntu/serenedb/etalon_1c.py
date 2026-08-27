@@ -12,7 +12,11 @@
   python3 etalon_1c.py generate --out client-gold.tsv
       [--metadata-xml meta.xml | --from-gateway]
       [--journal-tsv questions.tsv | --from-journal]
+      [--from-search-tables]
   python3 etalon_1c.py classify
+
+Факт 1С в срезе: odata.entity (HTTP-шлюз) и/или fact.sql (витрина packet-режима).
+Оба пути пишут odata_value; эталон в gold — источник 1c.
 
 Env:
   ETL_ODATA_BASE / ETALON_ODATA_BASE — URL шлюза
@@ -49,6 +53,7 @@ ETALON_SOURCE_DECLARED = "declared"
 ETALON_SOURCE_PENDING = "pending"
 ETALON_SOURCE_JOURNAL = "ask_journal"
 ETALON_SOURCE_METADATA = "metadata"
+ETALON_SOURCE_SEARCH_TABLES = "search_tables"
 
 # Словарь относительных окон — тот же файл, что грузит ask / такт (данные, не код).
 _PERIOD_FORMS_PATH = os.path.join(
@@ -372,6 +377,53 @@ def generate_questions_from_metadata(
     return rows
 
 
+def question_from_search_table(src_table: str, label: str = "") -> str:
+    """Вопрос покрытия по строке search_tables (корпус), без догадки по OData."""
+    title = (label or "").strip() or humanize_entity_set(
+        "_".join(p.capitalize() for p in (src_table or "").split("_"))
+    )
+    low = (src_table or "").lower()
+    if low.startswith("catalog_"):
+        return "Сколько позиций в справочнике «%s» (без групп)?" % title
+    if low.startswith("document_"):
+        return "Сколько документов «%s»?" % title
+    if low.startswith("accumulationregister_"):
+        return "Сколько движений в регистре «%s»?" % title
+    if low.startswith("informationregister_"):
+        return "Сколько записей в регистре сведений «%s»?" % title
+    return "Сколько записей в «%s»?" % title
+
+
+def generate_questions_from_search_tables(
+    rows: Iterable[dict],
+    *,
+    prefixes: Optional[Iterable[str]] = None,
+    limit: int = 0,
+) -> list[dict]:
+    """Покрытие сущностей из search_tables (src_table, label)."""
+    allow = {p.lower().rstrip("_") for p in prefixes} if prefixes else {
+        "catalog", "document", "accumulationregister",
+    }
+    out = []
+    for row in rows:
+        src = (row.get("src_table") or row.get("table") or "").strip()
+        if not src:
+            continue
+        prefix = src.split("_", 1)[0].lower()
+        if allow and prefix not in allow:
+            continue
+        out.append({
+            "question": question_from_search_table(src, row.get("label") or ""),
+            "etalon": "",
+            "etalon_source": ETALON_SOURCE_SEARCH_TABLES,
+            "verify_status": STATUS_PENDING,
+            "src_table": src,
+        })
+        if limit and len(out) >= limit:
+            break
+    return out
+
+
 def generate_questions_from_journal(
     questions: Iterable[str],
     *,
@@ -521,6 +573,9 @@ class SliceSpec:
     odata_select: str = ""
     local_filter: Optional[dict] = None
     corpus_sql: str = ""
+    # Факт 1С из витрины (packet-режим): один SQL, без HTTP-шлюза.
+    # В отчёте пишется в odata_value / etalon_source=1c — это выгрузка 1С, не ответ бота.
+    fact_sql: str = ""
     period: str = "stable"
     declared: Any = None
     id: str = ""
@@ -530,6 +585,7 @@ class SliceSpec:
     def from_dict(cls, d: dict) -> "SliceSpec":
         odata = d.get("odata") or {}
         corpus = d.get("corpus") or {}
+        fact = d.get("fact") or {}
         return cls(
             question=d.get("question") or "",
             odata_entity=odata.get("entity") or d.get("odata_entity") or "",
@@ -539,15 +595,19 @@ class SliceSpec:
             odata_select=odata.get("select") or d.get("odata_select") or "",
             local_filter=odata.get("local_filter") or d.get("local_filter"),
             corpus_sql=corpus.get("sql") or d.get("corpus_sql") or "",
+            fact_sql=(
+                fact.get("sql") or d.get("fact_sql") or d.get("vitrine_sql") or ""
+            ),
             period=(d.get("period") or "stable").lower(),
             declared=d.get("declared") if "declared" in d else d.get("etalon"),
             id=str(d.get("id") or ""),
             extra={
                 k: v for k, v in d.items()
                 if k not in (
-                    "question", "odata", "corpus", "period", "declared", "etalon",
-                    "id", "odata_entity", "odata_op", "odata_filter", "odata_field",
-                    "odata_select", "local_filter", "corpus_sql",
+                    "question", "odata", "corpus", "fact", "period", "declared",
+                    "etalon", "id", "odata_entity", "odata_op", "odata_filter",
+                    "odata_field", "odata_select", "local_filter", "corpus_sql",
+                    "fact_sql", "vitrine_sql",
                 )
             },
         )
@@ -860,6 +920,39 @@ class CorpusClient:
         out = self._exec(sql)
         return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
+    def search_tables(
+        self,
+        *,
+        prefixes: Optional[Iterable[str]] = None,
+        limit: int = 0,
+    ) -> list[dict]:
+        """Список сущностей корпуса: search_tables (src_table, label)."""
+        where = ""
+        prefs = [p.lower().rstrip("_") for p in (prefixes or []) if p]
+        if prefs:
+            likes = " OR ".join(
+                "src_table LIKE '%s_%%'" % p.replace("'", "''") for p in prefs
+            )
+            where = " WHERE (%s)" % likes
+        lim = ""
+        if limit and int(limit) > 0:
+            lim = " LIMIT %d" % int(limit)
+        sql = (
+            "SELECT src_table, coalesce(label, '') FROM search_tables"
+            "%s ORDER BY src_table%s"
+        ) % (where, lim)
+        out = []
+        for line in self._exec(sql).splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            if "|" in line:
+                src, lab = line.split("|", 1)
+            else:
+                src, lab = line, ""
+            out.append({"src_table": src.strip(), "label": lab.strip()})
+        return out
+
     def _exec(self, sql: str) -> str:
         if self._run_sql is not None:
             return self._run_sql(sql)
@@ -884,7 +977,11 @@ def verify_slices(
     *,
     just_after_tick: bool = False,
 ) -> list[SliceResult]:
-    """Сверить список срезов: корпус — одним запросом на все corpus_sql."""
+    """Сверить список срезов: корпус — одним запросом на все corpus_sql.
+
+    Факт 1С: OData (odata.entity) и/или fact_sql витрины. fact_sql и corpus_sql
+    считаются одним батчем клиента (п. 20 — без цикла psql по срезам).
+    """
     results: list[SliceResult] = []
     for spec in specs:
         results.append(
@@ -904,21 +1001,31 @@ def verify_slices(
             results[i].error = "%s: %s" % (type(e).__name__, e)
 
     if corpus is not None:
-        indexed = [
+        # Один батч: сначала fact_sql (→ odata_value), затем corpus_sql.
+        fact_idx = [
+            (i, spec.fact_sql)
+            for i, spec in enumerate(specs)
+            if spec.fact_sql and results[i].odata_value is None and not results[i].error
+        ]
+        corp_idx = [
             (i, spec.corpus_sql)
             for i, spec in enumerate(specs)
             if spec.corpus_sql
         ]
-        if indexed:
+        batch_sqls = [sql for _, sql in fact_idx] + [sql for _, sql in corp_idx]
+        if batch_sqls:
             try:
-                values = corpus.scalars([sql for _, sql in indexed])
-                for (i, _), val in zip(indexed, values):
+                values = corpus.scalars(batch_sqls)
+                n_fact = len(fact_idx)
+                for (i, _), val in zip(fact_idx, values[:n_fact]):
+                    results[i].odata_value = val
+                for (i, _), val in zip(corp_idx, values[n_fact:]):
                     if results[i].error:
                         continue
                     results[i].corpus_value = val
             except Exception as e:  # noqa: BLE001
                 err = "%s: %s" % (type(e).__name__, e)
-                for i, _ in indexed:
+                for i, _ in fact_idx + corp_idx:
                     if not results[i].error:
                         results[i].error = err
 
@@ -1023,12 +1130,22 @@ def _count_statuses(results: list[SliceResult]) -> dict:
 
 def cmd_verify(args: argparse.Namespace) -> int:
     cfg = Config.from_env(args)
-    cfg.require_odata()
     just_after = bool(args.just_after_tick)
     specs = load_slices(args.slices)
-    odata = ODataClient(cfg.odata_base, cfg.token, cfg.timeout)
+    need_odata = any(s.odata_entity for s in specs)
+    need_sql = any(s.corpus_sql or s.fact_sql for s in specs)
+    if need_odata:
+        cfg.require_odata()
+    elif not need_sql:
+        raise SystemExit(
+            "в срезах нет ни odata.entity, ни fact.sql / corpus.sql"
+        )
+    odata = (
+        ODataClient(cfg.odata_base, cfg.token, cfg.timeout)
+        if need_odata else None
+    )
     corpus = None
-    if any(s.corpus_sql for s in specs):
+    if need_sql:
         cfg.require_dsn()
         corpus = CorpusClient(cfg.dsn)
     results = verify_slices(
@@ -1057,6 +1174,7 @@ def cmd_generate(args: argparse.Namespace) -> int:
     cfg = Config.from_env(args)
     meta_rows: list[dict] = []
     journal_rows: list[dict] = []
+    table_rows: list[dict] = []
 
     if args.metadata_xml:
         xml = open(args.metadata_xml, encoding="utf-8", errors="replace").read()
@@ -1093,20 +1211,34 @@ def cmd_generate(args: argparse.Namespace) -> int:
             qs, limit=int(args.limit_journal or 0),
         )
 
-    if not meta_rows and not journal_rows:
-        raise SystemExit(
-            "нужен источник: --metadata-xml / --from-gateway "
-            "и/или --journal-tsv / --from-journal"
+    if args.from_search_tables:
+        cfg.require_dsn()
+        corpus = CorpusClient(cfg.dsn)
+        prefs = [
+            p.strip() for p in (args.table_prefixes or "").split(",") if p.strip()
+        ] or None
+        st_rows = corpus.search_tables(
+            prefixes=prefs, limit=int(args.limit_tables or 0),
+        )
+        table_rows = generate_questions_from_search_tables(
+            st_rows, prefixes=prefs, limit=int(args.limit_tables or 0),
         )
 
-    rows = merge_gold_rows(journal_rows, meta_rows)
+    if not meta_rows and not journal_rows and not table_rows:
+        raise SystemExit(
+            "нужен источник: --metadata-xml / --from-gateway "
+            "и/или --journal-tsv / --from-journal "
+            "и/или --from-search-tables"
+        )
+
+    rows = merge_gold_rows(journal_rows, table_rows, meta_rows)
     text = format_client_gold_tsv(rows)
     out = args.out or "client-gold.tsv"
     with open(out, "w", encoding="utf-8") as f:
         f.write(text)
     sys.stderr.write(
-        "client-gold: строк %d (journal %d, metadata %d) → %s\n"
-        % (len(rows), len(journal_rows), len(meta_rows), out)
+        "client-gold: строк %d (journal %d, search_tables %d, metadata %d) → %s\n"
+        % (len(rows), len(journal_rows), len(table_rows), len(meta_rows), out)
     )
     return 0
 
@@ -1152,9 +1284,20 @@ def build_parser() -> argparse.ArgumentParser:
     g.add_argument("--from-gateway", action="store_true", help="$metadata со шлюза")
     g.add_argument("--journal-tsv", default="", help="файл вопросов")
     g.add_argument("--from-journal", action="store_true", help="из ask_journal")
+    g.add_argument(
+        "--from-search-tables",
+        action="store_true",
+        help="покрытие сущностей из search_tables корпуса",
+    )
+    g.add_argument(
+        "--table-prefixes",
+        default="catalog,document,accumulationregister",
+        help="префиксы src_table для --from-search-tables",
+    )
     g.add_argument("--kinds", default="Catalog,Document")
     g.add_argument("--limit-meta", type=int, default=0)
     g.add_argument("--limit-journal", type=int, default=0)
+    g.add_argument("--limit-tables", type=int, default=0)
     g.set_defaults(func=cmd_generate)
 
     c = sub.add_parser("classify", help="примеры классификации")

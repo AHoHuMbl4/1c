@@ -14,19 +14,23 @@
    контекста кода). Статус `freshness_lag` — этикетка лага такта на
    относительных периодах, не провал набора.
 3. Собирает черновик приёмочного набора `client-gold.tsv`: покрытие сущностей
-   из `$metadata`, покрытие формулировок из `ask_journal` / файла вопросов.
+   из `$metadata` и/или `search_tables`, покрытие формулировок из `ask_journal`
+   / файла вопросов.
 
 Источник эталона в `client-gold.tsv` после успешного счёта 1С — `1c`.
 Заявленное значение из старого набора, не совпавшее с 1С, получает статус
 `declared_wrong` (прецедент 31.07: склады 25 → 17 без групп).
+
+Живой прогон okna (packet): [`I0_ETALON_TOOL.md`](I0_ETALON_TOOL.md) — dual-verify
+витрина↔корпус через `fact.sql` (OData на Ubuntu в packet-режиме нет).
 
 ## Запуск
 
 Контур задаётся снаружи (URL шлюза, DSN). В коде имён баз нет.
 
 ```bash
-# сверка срезов
-export ETL_ODATA_BASE=http://127.0.0.1:<порт-шлюза>
+# сверка срезов (OData и/или fact.sql витрины)
+export ETL_ODATA_BASE=http://127.0.0.1:<порт-шлюза>   # если есть odata.entity
 export ODG_GATEWAY_TOKEN=…          # Bearer шлюза
 export SERENEDB_DSN='host=… port=… user=… dbname=…'
 
@@ -46,6 +50,10 @@ python3 ubuntu/serenedb/etalon_1c.py generate \
 
 python3 ubuntu/serenedb/etalon_1c.py generate \
   --from-gateway --from-journal --out client-gold.tsv
+
+# packet / без $metadata: журнал + search_tables
+python3 ubuntu/serenedb/etalon_1c.py generate \
+  --from-journal --from-search-tables --out client-gold.tsv
 ```
 
 Формат среза (`slices.json` — список или `{"slices":[…]}`):
@@ -61,6 +69,9 @@ python3 ubuntu/serenedb/etalon_1c.py generate \
     "op": "count",
     "filter": "IsFolder eq false"
   },
+  "fact": {
+    "sql": "SELECT count(*) FROM catalog_склады WHERE lower(cast(isfolder as varchar))<>'true'"
+  },
   "corpus": {
     "sql": "SELECT count(*) FROM catalog_склады WHERE \"IsFolder\"='false'"
   }
@@ -69,6 +80,8 @@ python3 ubuntu/serenedb/etalon_1c.py generate \
 
 `op`: `count` | `sum` (для `sum` нужно `field`). Если `$filter` на стороне 1С
 не срабатывает — `local_filter` / запасной обход страницами.
+`fact.sql` — факт 1С из витрины (packet); пишется в `odata_value` / `etalon_source=1c`.
+Можно без `odata`, если все срезы на `fact`/`corpus`.
 
 Колонки `client-gold.tsv`: `question`, `etalon`, `etalon_source`, `verify_status`.
 

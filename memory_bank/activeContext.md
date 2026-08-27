@@ -8,6 +8,12 @@ _Обновлено: **2026-08-27** (И1: AB_AMBIGUOUS / 8/18). Здесь — �
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
 
+🔴 **И0 etalon tool `[27.08]`**: `etalon_1c.py` в git; замок **70/0**;
+живой okna **12** срезов (match5 / lag3 / mismatch4); эталон=витрина;
+`client-gold-okna.tsv` **54** вопроса. OData okna — SSH floor, dual =
+витрина↔корпус. Отчёт [`I0_ETALON_TOOL.md`](../docs/I0_ETALON_TOOL.md).
+
+
 🔴 **И1 ambiguous set `[27.08]`**: `AB_AMBIGUOUS=okna` →
 `ab-ambiguous-okna.tsv` (18, clarify/kind). Живой `:8092` md5 **4ec52861**:
 **8/18**, 18,76 с. Замок **19/0**. Отчёт [`I1_AMBIGUOUS_SET.md`](../docs/I1_AMBIGUOUS_SET.md).

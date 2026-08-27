@@ -345,6 +345,42 @@ t(
     ),
 )
 
+# fact_sql (витрина) → odata_value одним батчем с corpus
+_fact_calls = {"n": 0}
+
+
+def _fact_run(sql):
+    _fact_calls["n"] += 1
+    lines = []
+    if "slice_i" in sql and "UNION ALL" in sql:
+        # порядок: fact, then corpus
+        lines.append("0|17")
+        lines.append("1|17")
+    return "\n".join(lines) + "\n"
+
+
+_fact_spec = E.SliceSpec.from_dict({
+    "id": "fact1",
+    "question": "Сколько партнёров?",
+    "period": "stable",
+    "fact": {"sql": "SELECT 17"},
+    "corpus": {"sql": "SELECT 17"},
+})
+_fact_res = E.verify_slices(
+    [_fact_spec], None, E.CorpusClient("x", run_sql=_fact_run),
+)
+t("fact_sql: один батч", _fact_calls["n"] == 1, _fact_calls)
+t("fact_sql: odata_value из витрины", _fact_res[0].odata_value == 17, _fact_res[0].to_dict())
+t("fact_sql: match", _fact_res[0].classification.status == E.STATUS_MATCH)
+
+_st = E.generate_questions_from_search_tables([
+    {"src_table": "catalog_контрагенты", "label": "Контрагенты"},
+    {"src_table": "accumulationregister_реализациятмц", "label": "Реализация ТМЦ"},
+    {"src_table": "informationregister_ценыноменклатуры", "label": "Цены"},
+])
+t("search_tables: catalog+accum по умолчанию", len(_st) == 2, _st)
+t("search_tables: source", _st[0]["etalon_source"] == E.ETALON_SOURCE_SEARCH_TABLES)
+
 print()
 print("PASS %d  FAIL %d" % (PASS, len(FAIL)))
 if FAIL:
