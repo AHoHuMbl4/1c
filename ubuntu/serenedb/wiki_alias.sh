@@ -83,6 +83,11 @@ psql "$DSN" -q -c "GRANT SELECT ON $MEASURE_TABLE TO serene_ro" >/dev/null 2>&1
 EXCH="${CSV_DIR:-/var/lib/serenedb}"
 TMP=$(mktemp -d "$EXCH/wiki-alias-XXXXXX") || { echo "алиасы: нет доступа к $EXCH" >&2; exit 0; }
 chmod 755 "$TMP"; trap 'rm -rf "$TMP"' EXIT
+# 🔴 КАТАЛОГ ПИШЕТ БОТ, А СОЗДАЁТСЯ ОТ ROOT. [okna 27.08] alias_infer_gateway идёт
+# под undebot (RUNAS_BOT), а mktemp рождает каталог root:root 755 — бот не может
+# записать ans/err, каждая пачка падает PermissionError и помечает сущности пустыми.
+# Владелец меняется при запуске от root; запуск от самого бота не трогается.
+[ "$(id -u)" = 0 ] && chown "$BOTUSER" "$TMP" 2>/dev/null || true
 done_total=0
 skipped=0
 

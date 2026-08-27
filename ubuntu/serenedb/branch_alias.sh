@@ -79,6 +79,9 @@ psql "$DSN" -q -c "GRANT SELECT ON $FORK_LABEL_TABLE TO serene_ro" >/dev/null 2>
 EXCH="${CSV_DIR:-/var/lib/serenedb}"
 TMP=$(mktemp -d "$EXCH/branch-alias-XXXXXX") || { echo "развилки: нет доступа к $EXCH" >&2; exit 0; }
 chmod 755 "$TMP"; trap 'rm -rf "$TMP"' EXIT
+# 🔴 КАТАЛОГ ПИШЕТ БОТ, А СОЗДАЁТСЯ ОТ ROOT — тот же дефект, что wiki_alias.sh
+# [okna 27.08]: alias_infer_gateway под undebot не может записать err/ans.
+[ "$(id -u)" = 0 ] && chown "$BOTUSER" "$TMP" 2>/dev/null || true
 done_total=0
 skipped=0
 aborted_infra=0
