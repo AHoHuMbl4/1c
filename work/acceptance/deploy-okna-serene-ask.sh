@@ -12,9 +12,13 @@ REMOTE=/opt/1c-mcp-reports
 BAK_SUFFIX=".bak-$(date +%Y%m%d-%H%M%S)"
 
 # Что выкатываем: сервис ответа + жёсткие локальные модули ask + словарные
-# скрипты (развилки / Solr-синонимы) + шлюз vLLM для OpenClaw.
+# скрипты (развилки / Solr-синонимы) + SQL/такт сборки + шлюз vLLM для OpenClaw.
 # На okna SERENE_SRC_DIR пуст → pipeline не зовёт deploy.sh; без этого списка
 # новый *.py на /opt/1c-mcp-reports не доезжает (падение на import / can't open file).
+# 🔴 Д4 (27.08): corpus_init.sql + build.sh ОБЯЗАНЫ быть здесь же. Иначе SQL-слой
+# уезжает руками/частично (okna 24.08: init с :"solr_syn_dict", build без -v →
+# 3083 падения «развёртывание объектов»). Полный ubuntu/serenedb/deploy.sh на
+# стенде с SERENE_SRC_DIR закрывает то же; на продукте — только этот список.
 # FILES и FILES_R обязаны совпадать: scp → /tmp → backup+cp в REMOTE, chmod 755.
 FILES=(
   serene_ask.py
@@ -23,6 +27,9 @@ FILES=(
   branch_alias.sh
   branch_alias_parse.py
   solr_synonyms_build.py
+  build.sh
+  corpus_init.sql
+  corpus_precheck.sql
 )
 
 for f in "${FILES[@]}"; do
@@ -33,7 +40,7 @@ scp -P "$PORT" "${SSH_OPTS[@]}" ubuntu/openclaw/patch_vllm_provider.py "$HOST:/t
 
 ssh -p "$PORT" "${SSH_OPTS[@]}" "$HOST" REMOTE_DIR="$REMOTE" BAK_SFX="$BAK_SUFFIX" bash -s <<'REMOTE'
 set -e
-FILES_R="serene_ask.py ask_choice_mem.py partial_visible.py branch_alias.sh branch_alias_parse.py solr_synonyms_build.py"
+FILES_R="serene_ask.py ask_choice_mem.py partial_visible.py branch_alias.sh branch_alias_parse.py solr_synonyms_build.py build.sh corpus_init.sql corpus_precheck.sql"
 for f in $FILES_R; do
   # Нового файла ещё нет — бэкап не обязателен (первый выкат модуля).
   if [ -e "$REMOTE_DIR/$f" ]; then

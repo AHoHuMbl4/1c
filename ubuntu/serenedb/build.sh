@@ -144,6 +144,11 @@ fail() { echo "СБОРКА ПРЕРВАНА: $1" >&2; exit 1; }
 ./embed_check.sh || fail "эмбеддер отдаёт не ту модель, которую просим"
 
 echo "== 0. объекты поиска и проверки до такта"
+# 🔴 Д4: имя словаря ОБЯЗАНО уйти в -v. Пустое значение = syntax error на
+# `:"solr_syn_dict"` (okna 24.08–27.08, 3083 падения подряд). Умолчание выше
+# (`search_dict_syn`) и `\if :{?solr_syn_dict}` в corpus_init — второй рубеж;
+# здесь — явный отказ до psql, если env сбросили в пустую строку.
+[ -n "$SOLR_SYN_DICT" ] || fail "не задан SOLR_SYN_DICT / ASK_SOLR_SYNONYMS_DICT"
 psql "$DSN" -q -v dict_locale="$DICT_LOCALE" -v solr_syn_dict="$SOLR_SYN_DICT" \
   -f corpus_init.sql || fail "развёртывание объектов"
 

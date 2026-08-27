@@ -1,3 +1,18 @@
+## 2026-08-27 — С5: морфология словаря в пайплайне (не откатывается тактом)
+
+**[код]** `corpus_init.sql`: `search_dict_alias_stem` + `alias_idx` на нём;
+заготовка `search_dict_syn` = pipeline text(stem)→solr. `solr_synonyms_build.py`:
+стем-ключи через `ts_lexize(search_dict_stem)` (без списков слов), DDL pipeline,
+после `--apply` — recreate `alias_idx` + VACUUM REFRESH. Замок
+`test_morph_dict_pipeline.py` **19/0** (OLD bare FAIL / NEW PASS).
+`serene_ask.py` не трогали. Отчёт `docs/C5_MORPH_IN_PIPELINE.md`.
+
+**[замер]** okna шаг словаря `compile --apply`: 17 правил; `ts_lexize` клиент/
+клиента/клиентов/клиенты → один класс; `alias_idx` **257**. alias_rank 23q:
+эталон-лидер **3** (как С3 0→3), тройка 0, не найден 20. Доки: Cookbook ›
+Stemming and Stopwords; Synonyms; CREATE TEXT SEARCH DICTIONARY › pipeline /
+text / solr_synonyms.
+
 ## 2026-08-27 — Д4: такт свежести okna (solr_syn_dict / выкат SQL)
 
 **[замер]** okna `1c-serene-pipeline@postgres`: с **24.08 19:36** по 27.08

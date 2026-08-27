@@ -599,11 +599,12 @@ ask и словарных скриптов — `work/acceptance/deploy-okna-sere
 | `partial_visible.py` | жёсткий импорт ask (`import partial_visible`) — Э4/п.13 |
 | `branch_alias.sh` / `branch_alias_parse.py` | развилки из `wiki_alias.sh` |
 | `solr_synonyms_build.py` | шаг Ф6.3: `wiki_alias.sh` / `build.sh` зовут `python3 ./solr_synonyms_build.py compile` |
+| `build.sh` / `corpus_init.sql` / `corpus_precheck.sql` | такт свежести (Д4 27.08: без них SQL уезжал отдельно от вызывающего → `:"solr_syn_dict"` без `-v`) |
 | `ubuntu/openclaw/ensure_vllm_gateway.sh` + `patch_vllm_provider.py` | шлюз vLLM → `/opt/openclaw/` |
 
 Без строки в этом списке новый модуль на сервер **не доезжает**: ask падает на
 `ImportError`, юнит `1c-wiki-alias@` — на `can't open file '…/solr_synonyms_build.py'`.
-Полный `ubuntu/serenedb/deploy.sh` (`*.py`) закрывает ту же дыру на стенде с
+Полный `ubuntu/serenedb/deploy.sh` (`*.sh`/`*.sql`/`*.py`) закрывает ту же дыру на стенде с
 `SERENE_SRC_DIR`; на okna его заменяет этот скрипт.
 
 Раскладка вручную (если `deploy.sh` почему-то недоступен):

@@ -182,20 +182,46 @@ CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict (
 CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict_stem (
   template = 'copy_from', from = 'search_dict', stemming = true);
 
--- ── Ф6.3 словарь синонимов (query-side solr_synonyms) ─────────────────────────
--- Доки: CREATE TEXT SEARCH DICTIONARY › solr_synonyms; Cookbook › Synonyms;
--- фактура: docs/F6_SYNONYMS_FACTS.md. Имя — параметр :"solr_syn_dict" (build.sh /
+-- ── Словарь индекса алиасов СО стеммингом + frequency (С3/С5) ─────────────────
+-- Доки: Cookbook › Stemming and Stopwords; CREATE TEXT SEARCH DICTIONARY › text.
+-- search_dict_stem (copy_from) для ts_lexize годится, но на inverted давал
+-- tfidf=0 без явного frequency=true ([замер C3 27.08]). Индекс корпуса
+-- (search_idx) остаётся на search_dict без стемма — коды/артикулы.
+CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict_alias_stem (
+  template = 'text', locale = :'dict_locale', case = 'lower',
+  stemming = true, accent = false,
+  frequency = true, position = true, norm = true);
+
+-- ── Ф6.3 словарь синонимов (query-side: pipeline text→solr_synonyms) ──────────
+-- Доки: Cookbook › Synonyms; CREATE TEXT SEARCH DICTIONARY › pipeline /
+-- solr_synonyms / stem. Имя — параметр :"solr_syn_dict" (build.sh /
 -- ASK_SOLR_SYNONYMS_DICT → умолч. search_dict_syn), не имя базы клиента.
--- Карта SYNONYMS здесь пустая-заготовка: IF NOT EXISTS карту не обновляет
--- (ловушка §5.2 фактуры). Наполнение — DROP+CREATE файлом после wiki_alias
--- (`solr_synonyms_build.py` ← только `search_entity_alias`). Индекс корпуса
--- не трогаем — только ts_lexize. Orphan-слот кэша моста снят (С3,
--- docs/SYNONYM_BRIDGE_DECISION.md): писателя не было, целевой кэш —
--- alias-таблица.
+-- Заготовка: IF NOT EXISTS карту не обновляет (ловушка §5.2 фактуры).
+-- Наполнение — DROP+CREATE файлом после wiki_alias (`solr_synonyms_build.py`:
+-- стем-ключи через ts_lexize(search_dict_stem), step1 stemming=true).
+-- Индекс корпуса не трогаем — только ts_lexize. Orphan-слот кэша моста снят
+-- (С3, docs/SYNONYM_BRIDGE_DECISION.md).
+--
+-- 🔴 УМОЛЧАНИЕ ИМЕНИ (Д4 / 27.08). Без `-v solr_syn_dict=…` psql оставляет
+-- литерал `:"solr_syn_dict"` → syntax error → такт «развёртывание объектов»
+-- падает на каждом выстреле. На okna так стояло с 24.08 19:36 (3083 падения):
+-- выкатили corpus_init с параметром, а build.sh без `-v`. Умолчание здесь
+-- fail-open к тому же имени, что build.sh (`search_dict_syn`); вызывающий
+-- по-прежнему обязан передавать `-v` (замок test_psql_init_vars.py).
+
+\if :{?solr_syn_dict}
+\else
+\set solr_syn_dict search_dict_syn
+\endif
 
 CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS :"solr_syn_dict" (
-  template = 'solr_synonyms',
-  synonyms = '');
+  template = 'pipeline',
+  step1_template = 'text',
+  step1_locale = :'dict_locale',
+  step1_case = 'lower',
+  step1_stemming = true,
+  step2_template = 'solr_synonyms',
+  step2_synonyms = '');
 -- Отдельного GRANT USAGE ON TEXT SEARCH DICTIONARY в SereneDB нет
 -- (доки GRANT › Privileges by object type: TABLE/SEQUENCE/FUNCTION/…; словаря
 -- нет). Как у search_dict_stem: создатель — postgres, ts_lexize под serene_ro
@@ -244,7 +270,7 @@ GRANT SELECT ON search_fork_label TO serene_ro;
 -- уточнение с вариантами «Денежные Средства В Кассах ККМ». У словаря включена частота
 -- (`frequency = true`), и редкое слово весит больше частого — это делает движок.
 CREATE INDEX IF NOT EXISTS alias_idx ON search_entity_alias
-  USING inverted(aliases search_dict, src_table) INCLUDE (src_table);
+  USING inverted(aliases search_dict_alias_stem, src_table) INCLUDE (src_table);
 GRANT SELECT ON alias_idx TO serene_ro;
 GRANT SELECT ON resolver_index TO serene_resolver;
 REVOKE SELECT ON resolver_index FROM serene_ro;

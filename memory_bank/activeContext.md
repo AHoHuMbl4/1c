@@ -1,12 +1,20 @@
 # Active Context
 
-_Обновлено: **2026-08-27** (Д4: такт свежести / solr_syn_dict). Здесь — только живое.
+_Обновлено: **2026-08-27** (С5: морфология в пайплайне). Здесь — только живое.
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
 ---
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
+
+🔴 **С5 morph in pipeline `[27.08]`**: риск С3 закрыт — `corpus_init` +
+`solr_synonyms_build` сами собирают stem pipeline. Живой okna
+`compile --apply`: клиент* → один класс; alias_idx **257**; ранг **3/0/20**
+(С3 было 0→3 лидера). Замок `test_morph_dict_pipeline` **19/0**. Выкат
+скрипта в `/opt/1c-mcp-reports/` — оркестратор (файла там не было).
+Отчёт [`C5_MORPH_IN_PIPELINE.md`](../docs/C5_MORPH_IN_PIPELINE.md).
+
 
 🔴 **Д4 pipeline broken `[27.08]`**: okna такт failed с **24.08 19:36** —
 **3083×** `:"solr_syn_dict"` без `-v` (init новый, build.sh старый).
