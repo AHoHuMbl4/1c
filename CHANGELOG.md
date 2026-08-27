@@ -1,7 +1,22 @@
+## 2026-08-27 — Патч 2 К3: K6 entity rank v2 в serene_ask
+
+**[код]** `entity_rank_v2.py` + врезка в `serene_ask.py` после `prefer_entity_for_*`:
+expand stem+live, `reorder_v2`, diag `answer_fit_v2`, clarify двух атомов.
+**[замер]** bench gold-23 v2 lead **19/23**, v1-top3 регресс **0**;
+K5-замки **13/12/11/11/51**; AB_PROBE **8/8** `0err/8`; живой :8096
+«какой клиент больше всех купил…» → DYNAMIC SELLING GROUP SRL **1 537 150.47**.
+
 ## 2026-08-27 — Патч 1: post-gate src=None → 503 TypeError
 
 **[код]** `serene_ask.py`: `_src_tag` безопасен при `src=None`; post-gate sources/tag.
 **[замер]** замок `test_post_gate_none_src.py` **6/0**; K5-замки guess/meta/nodata/axis/sales_rank без регрессии.
+
+## 2026-08-27 — Патч 1: TypeError post-gate при src=None → 503
+
+**[код]** `serene_ask.py`: `_src_tag()` — безопасный tag/sources после гейта при
+`sущность=None` (`"_" in None`). Замок `test_post_gate_none_src.py` **6/0**.
+**[замер]** След I2 rid `6b5443e4…`: «крепеж осталось» / «сегодня лучше вчера» —
+503 → no_data/clarify (кандидат :8094).
 
 ## 2026-08-27 — К2-хвост: замок DEPLOY_GATE на базлайн 21/25
 

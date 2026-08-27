@@ -1,19 +1,29 @@
 {
   "today": "2026-08-27",
-  "host": "okna gpu-erw:2202 SereneDB :7890",
   "gold": {
-    "v0": {"lead": 2, "top3": 3, "top8": 4, "out8": 19, "miss": 0},
-    "v1": {"lead": 0, "top3": 1, "top8": 4, "out8": 19, "miss": 0},
-    "v2": {"lead": 18, "top3": 18, "top8": 21, "out8": 2, "miss": 0}
-  },
-  "positions5": {
-    "v0": {"lead": 0, "top3": 0, "top8": 1, "out8": 4, "miss": 0},
-    "v1": {"lead": 0, "top3": 0, "top8": 0, "out8": 5, "miss": 0},
-    "v2": {"lead": 0, "top3": 0, "top8": 4, "out8": 1, "miss": 0}
+    "v0": {
+      "lead": 2,
+      "top3": 2,
+      "top8": 7,
+      "miss": 0,
+      "out8": 16
+    },
+    "v1": {
+      "lead": 0,
+      "top3": 1,
+      "top8": 6,
+      "miss": 0,
+      "out8": 17
+    },
+    "v2": {
+      "lead": 19,
+      "top3": 20,
+      "top8": 21,
+      "miss": 0,
+      "out8": 2
+    }
   },
   "gate_lead_ge_12": true,
   "gate_no_top3_regress": true,
-  "gate": true,
-  "v1_top3_ok": 1,
-  "v2_broke_those": []
+  "gate": true
 }

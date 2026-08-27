@@ -60,7 +60,10 @@ try:
     import serene_axis
 except ImportError:
     serene_axis = None
-
+try:
+    import entity_rank_v2 as K6R
+except ImportError:
+    K6R = None
 DSN = os.environ.get("SERENEDB_DSN_RO")
 PGPASSWORD = os.environ.get("PGPASSWORD", "")
 # 🔴 РЕЗОЛВЕР ЧИТАЕТСЯ ОТДЕЛЬНОЙ РОЛЬЮ. `serene_ro`, которой исполняется SQL по данным,
@@ -8276,6 +8279,35 @@ def same_number(ours, theirs):
     except (TypeError, ValueError):
         return False
 
+
+def k6_dual_atom_clarify_return(cat, holder, question, diag, cut, t0,
+                                    by, match, preds, marks, diag_extra=None):
+    """K6: два атома (карточки vs DISTINCT) — clarify до pick_entity, п.12."""
+    srcs = [c for c in (cat, holder) if c]
+    if len(srcs) < 2:
+        return None
+    try:
+        lab_by = {r[0]: r[1] for r in psql(
+            "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+            % (TABLES, ", ".join(lit(c) for c in srcs))) if r and r[0]}
+    except RuntimeError:
+        lab_by = {}
+    opts = mk_opts(srcs, lab_by, marks or {}, by or {},
+                   match=match or "", preds=preds or [])
+    if len(opts) < 2:
+        return None
+    d = dict(diag or {})
+    if diag_extra:
+        d.update(diag_extra)
+    d["k6_dual_atom"] = [cat, holder]
+    return {"partial": cut or None, "kind": "clarify",
+            "text": clarify_say(question, opts, d)
+                    or ", ".join("«%s»" % o["label"] for o in opts),
+            "options": opts, "sources": [o["label"] for o in opts],
+            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
+                               reason="k6_dual_atom_clarify")}
+
+
 def src_supports_question(src, intent, diag, by=None, question=""):
     """Есть ли у выбранного src поддержка предмета вопроса (K4-2 страж B).
 
@@ -12826,6 +12858,24 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     cands = prefer_entity_for_rank(cands, intent, question)
     cands = prefer_entity_for_sales(cands, intent, question)
     cands = prefer_entity_for_catalog_count(cands, intent, question)
+    if K6R:
+        def _k6_mk_clarify(cat, holder, extra):
+            return k6_dual_atom_clarify_return(
+                cat, holder, question, diag, cut, t0, by, match, preds,
+                diag.get("marks") or {}, extra)
+        _k6r = K6R.apply_to_candidates(
+            psql, lit, cands, intent, question, today=today,
+            stem_dict=STEM_DICT, corpus=CORPUS, tables=TABLES,
+            sales_sum=sales_sum_intent(intent, question),
+            rank_intent=rank_intent_from(intent, None, question),
+            mk_clarify=_k6_mk_clarify)
+        if _k6r.get("diag"):
+            diag.update(_k6r["diag"])
+        if _k6r.get("clarify"):
+            шаг("K6 v2", dual_atom=True)
+            return _k6r["clarify"]
+        cands = _k6r.get("cands") or cands
+        шаг("K6 v2", кандидатов=len(cands))
     if question_asks_stock_balance(question):
         capable = balance_capable_or_registers()
         cands = filter_stock_balance_sales_noise(cands, question, diag)

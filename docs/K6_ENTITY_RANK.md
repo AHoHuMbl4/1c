@@ -258,3 +258,20 @@ v2 **доказала** себя на sum/name gold (популярность li
 6. Замок: `work/k6-rank-v2/bench.py` в приёмке okna; порог lead≥12 на gold
    и 0 регрессов v1-top3.
 7. Выкат только после staging `:8092`, рядом с числами этого §7.3.
+
+### 7.6. Применён (27.08, патч 2 К3)
+
+Модуль [`ubuntu/serenedb/entity_rank_v2.py`](../ubuntu/serenedb/entity_rank_v2.py)
+встроен в `serene_ask.py` после `prefer_entity_for_*`: расширение пула
+`expand_holders` + `expand_stem_and_live`, `reorder_v2`, diag `answer_fit_v2`,
+clarify двух атомов (`k6_dual_atom_clarify_return`). Kind — `kind_from_alias_overlap`
+(не `count(holders)`).
+
+| замок | число |
+|---|---|
+| bench gold-23 v2 lead | **19/23** (≥12 PASS) |
+| v1-top3 регресс | **0** |
+| K5 guess/meta/nodata/axis/sales_rank | **13/12/11/11/51** |
+| AB_PROBE okna | **8/8**, `0err/8` |
+| живой :8096 «какой клиент больше всех купил…» | DYNAMIC SELLING GROUP SRL **1 537 150.47** |
+| живой «топ-3 по деньгам…» | тот же лидер в топе |

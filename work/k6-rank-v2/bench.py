@@ -19,12 +19,15 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
+SERENEDB = os.path.join(ROOT, "ubuntu/serenedb")
 sys.path.insert(0, HERE)
-sys.path.insert(0, os.path.join(ROOT, "ubuntu/serenedb"))
+sys.path.insert(0, SERENEDB)
 
-from measure_v2 import (  # noqa: E402
+from entity_rank_v2 import (  # noqa: E402
     features_table, is_noncanon_sales, object_prefix, period_bounds,
-    reorder_v1, reorder_v2,
+    reorder_v1, reorder_v2, kind_from_alias_overlap,
+    expand_holders as k6_expand_holders,
+    expand_stem_and_live as k6_expand_stem_and_live,
 )
 
 GOLD = os.environ.get(
@@ -119,64 +122,6 @@ def gold_pairs(path):
     return out
 
 
-def stem_overlap_srcs(question, prefix_like):
-    """Сущности, чьи label/aliases пересекаются основами с вопросом (один SQL)."""
-    rows = psql(
-        "SELECT t.src_table FROM search_tables t "
-        "LEFT JOIN search_entity_alias a ON a.src_table = t.src_table "
-        "WHERE t.src_table LIKE %s AND list_has_any("
-        "  list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
-        "  list_filter(ts_lexize(%s, concat_ws(' ', t.label, a.aliases, "
-        "                        coalesce(a.best_used_for,''))),"
-        "              x -> length(x) >= 3))"
-        % (lit(prefix_like), lit(STEM), lit(question), lit(STEM)))
-    return [r[0] for r in (rows or []) if r and r[0]]
-
-
-def kind_guess(question):
-    """Kind = лидер среди catalog_* по пересечению основ с вопросом.
-
-    При нескольких — у кого больше держателей-регистров и карточек
-    (business signal / popularity из доков SereneDB), не порог под базу.
-    Известный хвост: catalog_физическиелица/организации могут обогнать
-    контрагентов по числу осей — см. отчёт K6 §Мера v2.
-    """
-    cats = stem_overlap_srcs(question, "catalog_%")
-    if not cats:
-        rows = psql(
-            "SELECT src_table FROM alias_idx "
-            "WHERE aliases @@ %s AND src_table LIKE 'catalog_%%' "
-            "ORDER BY tfidf(alias_idx.tableoid) DESC NULLS LAST, src_table LIMIT 3"
-            % lit(question))
-        cats = [r[0] for r in (rows or []) if r and r[0]]
-    if not cats:
-        return ""
-    in_list = ", ".join(lit(c) for c in cats)
-    ranked = psql(
-        "SELECT t.src_table,"
-        " coalesce(h.n, 0) AS holders, coalesce(c.n, 0) AS cards "
-        "FROM search_tables t "
-        "LEFT JOIN ("
-        "  SELECT target_src, count(DISTINCT src_table) n FROM search_refcols "
-        "  WHERE target_src IN (%s) AND src_table LIKE 'accumulationregister_%%' "
-        "  GROUP BY 1) h ON h.target_src = t.src_table "
-        "LEFT JOIN ("
-        "  SELECT src_table, count(*) FILTER (WHERE NOT coalesce("
-        "    map_extract_value(flags,'IsFolder'), false)) n "
-        "  FROM search_corpus WHERE src_table IN (%s) GROUP BY 1) c "
-        "  ON c.src_table = t.src_table "
-        "WHERE t.src_table IN (%s) "
-        "ORDER BY holders DESC, cards DESC, t.src_table LIMIT 1"
-        % (in_list, in_list, in_list))
-    src = ranked[0][0] if ranked and ranked[0] else cats[0]
-    lab = psql(
-        "SELECT coalesce(nullif(trim(split_part(a.aliases, ',', 1)), ''), t.label) "
-        "FROM search_entity_alias a JOIN search_tables t ON t.src_table = a.src_table "
-        "WHERE a.src_table = %s LIMIT 1" % lit(src))
-    if lab and lab[0] and lab[0][0]:
-        return str(lab[0][0]).strip().split()[0].lower()
-    return src.replace("catalog_", "")
-
 
 def alias_order(question, depth=DEPTH):
     rows = psql(
@@ -188,83 +133,18 @@ def alias_order(question, depth=DEPTH):
     return [r[0] for r in rows if r and r[0]]
 
 
+def kind_guess(question):
+    """Kind = лидер catalog по aliases@@ / stem (K6 §7.5 п.5)."""
+    return kind_from_alias_overlap(psql, lit, question, stem_dict=STEM)
+
+
 def expand_holders(order, kind):
-    out = list(order)
-    seen = set(out)
-    if not kind:
-        return out
-    cats = [r[0] for r in (psql(
-        "SELECT t.src_table FROM search_tables t "
-        "LEFT JOIN search_entity_alias a ON a.src_table = t.src_table "
-        "WHERE t.src_table LIKE 'catalog_%%' AND list_has_any("
-        "  list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
-        "  list_filter(ts_lexize(%s, concat_ws(' ', t.label, a.aliases, "
-        "                                      coalesce(a.best_used_for,''))),"
-        "              x -> length(x) >= 3))"
-        % (lit(STEM), lit(kind), lit(STEM))) or []) if r and r[0]]
-    # v2: always attach kind catalogs (card-count needs them even if alias missed)
-    for cat in cats:
-        if cat not in seen:
-            seen.add(cat)
-            out.append(cat)
-    if not cats:
-        return out
-    for cat in cats:
-        for h in psql(
-                "SELECT src_table FROM search_refcols "
-                "WHERE target_src = %s AND src_table LIKE 'accumulationregister_%%'"
-                % lit(cat)) or []:
-            if h and h[0] and h[0] not in seen:
-                seen.add(h[0])
-                out.append(h[0])
-    return out
+    return k6_expand_holders(order, kind, psql, lit, stem_dict=STEM)
 
 
 def expand_stem_and_live(order, question, form, want_agg):
-    """Структурное расширение пула: stem-пересечение + live-регистры.
-
-    На sum/name и distinct/complement в пул входят live canon registers
-    (предикат структуры, не «топ-N»). Ранг потом снимает лишних по n_dated / оси.
-    """
-    out = list(order)
-    seen = set(out)
-    for src in stem_overlap_srcs(question, "catalog_%"):
-        if src not in seen:
-            seen.add(src)
-            out.append(src)
-    for src in stem_overlap_srcs(question, "accumulationregister_%"):
-        if src not in seen:
-            seen.add(src)
-            out.append(src)
-    for src in stem_overlap_srcs(question, "document_%"):
-        if src not in seen:
-            seen.add(src)
-            out.append(src)
-    for src in stem_overlap_srcs(question, "informationregister_%"):
-        if src not in seen:
-            seen.add(src)
-            out.append(src)
-    sales_shaped = form in ("sum", "name") or want_agg == "sum"
-    movement = form in ("distinct", "complement")
-    if sales_shaped or movement:
-        rows = psql(
-            "SELECT c.src_table "
-            "FROM search_corpus c "
-            "WHERE c.src_table LIKE 'accumulationregister_%%' "
-            "AND c.doc_date IS NOT NULL "
-            "AND c.nums IS NOT NULL AND len(map_keys(c.nums)) > 0 "
-            "AND EXISTS ("
-            "  SELECT 1 FROM search_refcols r "
-            "  WHERE r.src_table = c.src_table "
-            "  AND r.target_src LIKE 'catalog_%%' AND r.col IS NOT NULL)"
-            "GROUP BY c.src_table")
-        for r in rows or []:
-            src = r[0]
-            if not src or src in seen or is_noncanon_sales(src):
-                continue
-            seen.add(src)
-            out.append(src)
-    return out
+    return k6_expand_stem_and_live(order, question, form, want_agg, psql, lit,
+                                   stem_dict=STEM)
 
 
 def place(order, etalon, fam):
