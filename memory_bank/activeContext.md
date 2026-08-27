@@ -1,12 +1,30 @@
 # Active Context
 
-_Обновлено: **2026-08-27** (Д3: пустой alias_idx). Здесь — только живое.
+_Обновлено: **2026-08-27** (Д4: такт свежести / solr_syn_dict). Здесь — только живое.
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
 ---
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
+
+🔴 **Д4 pipeline broken `[27.08]`**: okna такт failed с **24.08 19:36** —
+**3083×** `:"solr_syn_dict"` без `-v` (init новый, build.sh старый).
+Простой свежести ~3 суток. Починка: `\if` умолчание + fail пустого
+SOLR_SYN_DICT + SQL в горячем выкате + замок `test_psql_init_vars` **9/0**.
+Отчёт [`D4_PIPELINE_BROKEN.md`](../docs/D4_PIPELINE_BROKEN.md).
+
+
+🔴 **K5 applied `[27.08]`**: три проекта K4 в `serene_ask.py` (имена /
+no_data / ось+склад / догадка). Замки зелёные (guess **13/0**, meta **12/0**,
+nodata **11/0**, axis **11/0**, rank **51/0**). Файл ask **не** в коммите —
+оркестратор: стейджинг + живая проба okna + отметка probe + коммит ask.
+Отчёт [`K5_APPLIED.md`](../docs/K5_APPLIED.md).
+
+
+🔴 **К2 compare `[27.08]`**: живой okna 0/8. Золото **1049991.33** SQL
+жив. Q5 считает compare, rank перетирает (`ASK_ENTITY_FORM=0`).
+Отчёт [`K2_COMPARE_TAIL.md`](../docs/K2_COMPARE_TAIL.md); патч — оркестратор.
 
 🔴 **Д3 empty index `[27.08]`**: причина — `wiki_alias.sh` писал в
 `search_entity_alias` без `VACUUM (REFRESH_TABLE)`; inverted eventually

@@ -47,7 +47,7 @@ intent_year = {
 }
 intent_qtr = {
     "want": "sum", "kind": "продажи",
-    "period": {"from": "2026-07-01", "to": "2026-08-27"},
+    "period": {"from": "2026-04-01", "to": "2026-06-30"},
     "parse": {"assumed": ["period.from", "period.to"]},
 }
 intent_day = {

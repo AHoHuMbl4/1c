@@ -1,3 +1,31 @@
+## 2026-08-27 — Д4: такт свежести okna (solr_syn_dict / выкат SQL)
+
+**[замер]** okna `1c-serene-pipeline@postgres`: с **24.08 19:36** по 27.08
+**3083** падения подряд `СБОРКА ПРЕРВАНА: развёртывание объектов` —
+`syntax error at or near ":"` на `:"solr_syn_dict"`. Последний OK
+**24.08 05:40:32 UTC** (~3 суток простоя свежести). На сервере init
+24.08 19:34 с параметром, build.sh 21.08 **без** `-v solr_syn_dict`.
+
+**[код]** `corpus_init.sql`: `\if :{?solr_syn_dict}` → умолч. `search_dict_syn`
+(морфологию не трогали). `build.sh`: fail при пустом `SOLR_SYN_DICT`.
+Горячий выкат: в `deploy-okna-serene-ask.sh` + RUNBOOK §10.2 добавлены
+`build.sh`/`corpus_init.sql`/`corpus_precheck.sql` (дыра: SQL не входил).
+Замок `test_psql_init_vars.py` **9/0**. Отчёт `docs/D4_PIPELINE_BROKEN.md`.
+
+## 2026-08-27 — K5: три проекта K4 в serene_ask (замки; ask ждёт пробу)
+
+**[код]** Применены проекты K4-1/2/3 к `serene_ask.py` (файл готов к пробе,
+в коммите нет — гейт probe-okna): human_table_label (без fallback на src);
+no_data при любом unmatched term + страж `src_supports_question` перед
+measure-clarify; `period_assumed_needs_clarify`; money|qty class;
+stock-bypass + `warehouse_clarify`; rank без меры → `role_ask`; маркер `леж`.
+Отчёт `docs/K5_APPLIED.md`.
+
+**[замер]** Замки оффлайн: k4_guess 6/0/4pend → **13/0**; meta_names **12/0**;
+clarify_vs_nodata **11/0**; axis_and_names **11/0**; sales_rank_canon **51/0**;
+stock/partial/fork/calendar/code_map без регресса. Живой ambiguous 5/18 —
+оркестратор после стейджинга.
+
 ## 2026-08-27 — К2: хвост сравнения периодов (разбор, без правки ask)
 
 **[замер]** okna `:8091`, 8 вопросов сравнения: **0/8** к эталону.

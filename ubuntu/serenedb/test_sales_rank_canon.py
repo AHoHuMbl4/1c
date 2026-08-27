@@ -277,20 +277,22 @@ try:
         ["Всего", "СуммаНДС"], _intent_top3, _q_top3, _ALS, product_axis=True)
     t("rule: product_axis без qty-меры → None",
       _m9 is None, (_m9, _how9))
-    # живой путь answer(): sales_rank_resolve_measure (не inline fallback)
+    # живой путь answer(): sales_rank_resolve_measure (не inline fallback).
+    # K4-1 / Э3 №8: без названной меры при живых money+qty → role_ask (clarify),
+    # не тихий qty/money (см. docs/K4_GUESS_VS_CLARIFY.md §3.3).
     _sm_live, _how_live = A.sales_rank_resolve_measure(
         _NAMES, _intent_top3, _q_top3, _ALS,
         src="accumulationregister_реализациятмц", axes=_AX_PROD)
-    t("live: resolve_measure топ-3 товара → Количество",
-      _sm_live == "Количество" and _how_live in ("sales_qty_canon", "sales_rank_hint_canon"),
+    t("live: resolve_measure топ-3 товара → role_ask",
+      _sm_live is None and _how_live == "role_ask",
       (_sm_live, _how_live))
-    # client rank через тот же resolver → money
+    # client rank без меры: те же money+qty → role_ask, не money-догадка
     _sm_cli, _how_cli = A.sales_rank_resolve_measure(
         _NAMES, {"want": "list", "kind": "клиент"},
         "какой клиент больше всех купил в этом месяце", _ALS,
         src="accumulationregister_реализациятмц", axes=_AX_CLIENT)
-    t("live: resolve_measure клиент → Всего",
-      _sm_cli == "Всего" and _how_cli == "sales_rank_money",
+    t("live: resolve_measure клиент без меры → role_ask",
+      _sm_cli is None and _how_cli == "role_ask",
       (_sm_cli, _how_cli))
     # ранний rank_measure_hint не должен обходить resolver на rank×sales
     _eng_top3 = A.sales_rank_engaged(
