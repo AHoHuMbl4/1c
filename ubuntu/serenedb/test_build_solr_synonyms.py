@@ -168,9 +168,11 @@ t("fixture under limits", lim_ok)
 d1 = B.render_ddl("search_dict_syn", m1)
 d2 = B.render_ddl("search_dict_syn", m2)
 t("render_ddl idempotent", d1 == d2)
-t("ddl is DROP+CREATE (recreate)",
+t("ddl is DROP+CREATE pipeline (recreate)",
   "DROP TEXT SEARCH DICTIONARY IF EXISTS search_dict_syn" in d1
-  and "CREATE TEXT SEARCH DICTIONARY search_dict_syn" in d1)
+  and "CREATE TEXT SEARCH DICTIONARY search_dict_syn" in d1
+  and "template = 'pipeline'" in d1
+  and "step1_stemming = true" in d1)
 
 # повторный «прогон шага» write-ddl в один out — содержимое не плодит дублей
 with tempfile.TemporaryDirectory() as td:

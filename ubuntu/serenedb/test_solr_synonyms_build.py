@@ -105,10 +105,12 @@ except B.LimitError:
     pass
 t("map unchanged after failed check", before == huge_map)
 
-# --- DDL форма ---
+# --- DDL форма (С5: pipeline text→solr, не bare solr_synonyms) ---
 ddl = B.render_ddl("search_dict_syn", "a, b\nlaptop => notebook")
 t("ddl has DROP", "DROP TEXT SEARCH DICTIONARY IF EXISTS search_dict_syn" in ddl, ddl[:200])
-t("ddl has CREATE solr_synonyms", "template = 'solr_synonyms'" in ddl, ddl[:300])
+t("ddl has CREATE pipeline", "template = 'pipeline'" in ddl, ddl[:300])
+t("ddl step1 stemming", "step1_stemming = true" in ddl, ddl[:300])
+t("ddl step2 solr_synonyms", "step2_template = 'solr_synonyms'" in ddl, ddl[:300])
 t("ddl marks wiki-alias source", "search_entity_alias" in ddl)
 t("ddl embeds map", "a, b" in ddl and "laptop => notebook" in ddl)
 t("no synonym literals in module defaults beyond format",
@@ -128,8 +130,9 @@ t("no rule_from_bridge_row", "rule_from_bridge_row" not in src
 t("no rule_one_way helper", "rule_one_way" not in src and not hasattr(B, "rule_one_way"))
 t("no --bridge-json CLI", "--bridge-json" not in src)
 sig = inspect.signature(B.compile_rules)
-t("compile_rules takes only alias_rows",
-  list(sig.parameters) == ["alias_rows"], list(sig.parameters))
+t("compile_rules takes alias_rows (+ optional stem_map)",
+  list(sig.parameters)[:1] == ["alias_rows"] and "stem_map" in sig.parameters,
+  list(sig.parameters))
 t("ddl does not mark bridge source", "search_synonym_bridge" not in ddl
   and "bridge" not in ddl.lower())
 
