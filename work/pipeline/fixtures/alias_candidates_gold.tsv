@@ -1,0 +1,6 @@
+# Мини gold-подмножество для офлайн-проверки (не ab-gold-okna)
+сколько петель осталось на складе?	WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT 0	kind
+сколько товара на складе?	SELECT CAST(NULL AS VARCHAR)	clarify
+сколько позиций у нас в прайсе?	SELECT count(*) FROM search_corpus WHERE src_table='catalog_номенклатура' AND NOT coalesce(map_extract_value(flags,'IsFolder'),false)	digits
+сколько из клиентов реально покупают?	WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT count(DISTINCT map_extract_value(refs_map,'Контрагент')) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= today.d - INTERVAL 12 month	digits
+сколько продали вчера?	WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT round(sum(TRY_CAST(map_extract(nums,'Всего')[1] AS DECIMAL(38,10))),2) FROM search_corpus, today WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= today.d - INTERVAL 1 day AND doc_date < today.d	digits
