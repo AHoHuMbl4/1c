@@ -12,8 +12,8 @@
      mode=skip убирает — слово владельца сильнее остальных), платформенные тени
      OData (`*_RecordType`/`*_RowType`) и search_entity_class (cls='service'),
      с приоритетом force > shadow > class — форма serene_sync._service_skip;
-  2. only_binary — разбор снимка $metadata (файл
-     <PACKET_META_DIR>/<base_id>/$metadata от packet_apply), не запрос к данным;
+  2. only_binary — снимок $metadata (<PACKET_META_DIR>/<base_id>/$metadata от
+     packet_apply) читает движок одним SQL (read_text + regexp, как corpus_build);
      файла нет — признак не применяется; тени режутся и без снимка (суффикс
      платформы — тот же, что corpus_build.sql);
   3. итог — в запись базы в PACKET_BASES (config.entities); config_version растёт
@@ -50,8 +50,8 @@ import tempfile
 DSN = os.environ.get("SERENEDB_DSN", "host=127.0.0.1 port=7890 user=postgres dbname=postgres")
 PACKET_BASES = os.environ.get("PACKET_BASES", "/etc/1c-packet-bases.json")
 # Каталог снимков $metadata (та же настройка, что у packet_apply): снимок едет
-# файлом <PACKET_META_DIR>/<base_id>/$metadata — боевой corpus_build.sql читает
-# его read_text'ом без правок (решение владельца 06.08).
+# файлом <PACKET_META_DIR>/<base_id>/$metadata. Читает движок через read_text
+# (Э6 / п. 20; тот же приём, что corpus_build.sql) — не open процесса клиента.
 PACKET_META_DIR = os.environ.get("PACKET_META_DIR", "/var/lib/serenedb/packet-meta")
 
 # Параметры такта агента для начального конфига (форма ответа /agent/config —
@@ -127,11 +127,80 @@ def _exec(dsn: str, sql: str) -> None:
         raise RuntimeError(p.stderr.strip()[:200])
 
 
-# --- признак only_binary по снимку $metadata -------------------------------------
+# --- признак only_binary по снимку $metadata (движок: read_text + regexp) ---------
+#
+# Доки: cookbook/file_formats/read_file#read_text; sql/functions/regular_expressions.
+# CSDL XML — не JSON: read_json/parse_json к снимку неприменимы (Э6-черновик §2.2);
+# разбор — regexp, как corpus_build.sql:32-41. Якорь /* metadata */ — для оффлайн-FakeDB.
+
+
+def _meta_snap_path(base_id: str) -> str:
+    return os.path.join(PACKET_META_DIR, base_id, "$metadata")
+
+
+def _metadata_sql(path: str) -> str:
+    """Один SELECT: props (EntityType/Property) + EntitySet из файла через read_text.
+
+    Форма строк: kind='prop' → (prop, entity, prop_name, edm, '');
+    kind='set'  → (set, '', '', '', entity_set). Путь — литерал (_lit), не -v:
+    тот же канал, что _contour_sql / _rows."""
+    # Доки: cookbook/file_formats/read_file#read_text;
+    # sql/functions/regular_expressions#using-regexp_extract
+    p = _lit(path)
+    return (
+        "/* metadata */ WITH src AS (SELECT content FROM read_text(%s)), "
+        "ents AS ("
+        "  SELECT regexp_extract(b, 'Name=\"([^\"]+)\"', 1) AS entity, b AS body "
+        "  FROM (SELECT unnest(regexp_extract_all(content, "
+        "        '(?s)<EntityType\\s.*?</EntityType>')) AS b FROM src)"
+        "), "
+        "props AS ("
+        "  SELECT entity, x.prop AS prop, x.edm AS edm FROM ("
+        "    SELECT entity, regexp_extract(s, "
+        "      '<Property\\s+Name=\"([^\"]+)\"\\s+Type=\"([^\"]+)\"', "
+        "      ['prop', 'edm']) AS x "
+        "    FROM (SELECT entity, unnest(regexp_extract_all(body, "
+        "      '<Property\\s+Name=\"([^\"]+)\"\\s+Type=\"([^\"]+)\"')) AS s "
+        "          FROM ents)"
+        "  )"
+        "), "
+        "sets AS ("
+        "  SELECT unnest(regexp_extract_all(content, "
+        "    '<EntitySet\\s+Name=\"([^\"]+)\"', 1)) AS entity_set FROM src"
+        ") "
+        "SELECT 'prop' AS kind, entity, prop, edm, '' AS entity_set FROM props "
+        "WHERE entity IS NOT NULL AND entity <> '' "
+        "UNION ALL "
+        "SELECT 'set', '', '', '', entity_set FROM sets "
+        "WHERE entity_set IS NOT NULL AND entity_set <> '';"
+    ) % p
+
+
+def _meta_from_rows(rows: list[tuple]) -> tuple[dict, list[str]]:
+    """Собрать props и EntitySet из ответа /* metadata */ (бит-в-бит с прежним regex)."""
+    props: dict = {}
+    sets: list[str] = []
+    for r in rows:
+        if not r:
+            continue
+        kind = r[0]
+        if kind == "prop" and len(r) >= 4:
+            entity, prop, edm = r[1], r[2], r[3]
+            if entity:
+                props.setdefault(entity, []).append((prop, edm))
+        elif kind == "set" and len(r) >= 5 and r[4]:
+            sets.append(r[4])
+    return props, sorted(set(sets))
+
+
+def _load_metadata(dsn: str, path: str) -> tuple[dict, list[str]]:
+    """Снимок $metadata силами движка: read_text → regexp → строки props/sets."""
+    return _meta_from_rows(_rows(dsn, _metadata_sql(path)))
 
 
 def _props_by_type(xml: str) -> dict:
-    """Поля сущностей из $metadata — тот же разбор, что poc_load_entity._load_metadata."""
+    """Поля сущностей из XML-строки — тот же разбор, что poc_load_entity._load_metadata.
+    Оффлайн-замки и сверка с SQL; боевой путь — _load_metadata / read_text."""
     props = {}
     for m in re.finditer(r'<EntityType\s+Name="([^"]+)"(.*?)</EntityType>', xml, re.S):
         props[m.group(1)] = re.findall(
@@ -140,9 +209,7 @@ def _props_by_type(xml: str) -> dict:
 
 
 def _entity_sets(xml: str) -> list[str]:
-    """Имена наборов сущностей (EntitySet) из снимка $metadata — для бутстрепа
-    контура на чистом юните (вариант А, решение владельца 10.08): перепись пуста
-    до первых данных, а данные идут только по контуру — круг разрывается снимком."""
+    """Имена EntitySet из XML-строки (оффлайн-сверка). Боевой путь — _load_metadata."""
     return sorted(set(re.findall(r'<EntitySet\s+Name="([^"]+)"', xml)))
 
 
@@ -184,9 +251,10 @@ def _is_odata_shadow(entity_set: str, props: dict | None = None) -> bool:
 #
 # П. 20 TARGET: отбор (перепись ∩/∖ признаки с приоритетом force > shadow > class)
 # делает движок одним запросом — три запроса со склейкой в Python были сочтены
-# снайпером собственной обработкой данных вне базы. В Python остаётся ровно то,
-# чего у движка нет: разбор снимка $metadata (only_binary) и страховка теней на
-# бутстреп-пути (все EntitySet с keep).
+# снайпером собственной обработкой данных вне базы. Снимок $metadata для
+# only_binary / бутстреп-EntitySet — тоже движок (read_text + regexp, Э6).
+# В Python остаётся вердикт only_binary над готовыми props и страховка теней
+# на бутстреп-пути (все EntitySet с keep).
 # [замер-основание 06.08, живая ut_test, сборка 26.07.3] форма запроса ниже даёт
 # то же, что прежняя Python-склейка: keep=784, service=805 — число в число.
 
@@ -271,24 +339,23 @@ def _skipped_sql(skip: dict) -> str:
 
 
 def _read_sources(dsn: str, base_id: str):
-    """Вердикты контура из витрины и снимок $metadata из файла. Ровно два
-    обращения к витрине: существование таблиц признаков (/* tables */) и контур
-    одним запросом (/* contour */). Контур читается строго — его падение
-    означает, что переписи нет или она нечитаема, и заход отменяется; снимка
-    может не быть (файл ещё не приезжал) — тогда признак only_binary не
-    применяется (та же осторожность в одну сторону, что у serene_sync:
-    неразмеченное грузится)."""
+    """Вердикты контура из витрины и снимок $metadata через движок.
+
+    Обращения: /* tables */, /* contour */, и при наличии файла — /* metadata */
+    (read_text). Контур читается строго — его падение означает, что переписи нет
+    или она нечитаема, и заход отменяется; снимка может не быть (файл ещё не
+    приезжал) — тогда признак only_binary не применяется (та же осторожность в
+    одну сторону, что у serene_sync: неразмеченное грузится)."""
     have = {r[0] for r in _rows(dsn, _TABLES_SQL) if r}
     rows = [(r[0], r[1]) for r in _rows(
         dsn, _contour_sql("search_entity_class" in have, "search_entity_force" in have))
         if len(r) > 1]
-    snap = os.path.join(PACKET_META_DIR, base_id, "$metadata")
-    try:
-        with open(snap, encoding="utf-8") as f:
-            props = _props_by_type(f.read())
-    except OSError:
-        props = None
-    return rows, props
+    snap = _meta_snap_path(base_id)
+    # Наличие файла — не разбор данных: содержимое читает только движок (read_text).
+    if not os.path.isfile(snap):
+        return rows, None, None
+    props, sets = _load_metadata(dsn, snap)
+    return rows, props, sets
 
 
 # --- файл баз -----------------------------------------------------------------------
@@ -342,7 +409,7 @@ def run(base_id: str, dsn: str, bases_path: str, dry_run: bool = False) -> int:
              "некуда (токен и identity заводит комплект)")
         return 2
     try:
-        rows, props = _read_sources(dsn, base_id)
+        rows, props, meta_sets = _read_sources(dsn, base_id)
     except RuntimeError as e:
         _log(f"FATAL: контур-запрос не прошёл (переписи нет или она нечитаема): {e}; "
              "конфиг не тронут")
@@ -353,13 +420,8 @@ def run(base_id: str, dsn: str, bases_path: str, dry_run: bool = False) -> int:
         # Разрыв: первый контур — все наборы сущностей снимка $metadata
         # (минус only_binary в compute_contour); перепись наполнится из первых
         # пакетов, и дальнейшие заходы работают по ней, как прежде.
-        snap = os.path.join(PACKET_META_DIR, base_id, "$metadata")
-        try:
-            with open(snap, encoding="utf-8") as f:
-                xml = f.read()
-        except OSError:
-            xml = None
-        sets = _entity_sets(xml) if xml else []
+        # EntitySet уже из того же /* metadata */ (read_text), без повторного I/O.
+        sets = meta_sets or []
         if not sets:
             _log("FATAL: перепись base_profile пуста и снимка $metadata нет (или в нём "
                  "нет ни одного EntitySet) — контур считать не из чего; конфиг не тронут")

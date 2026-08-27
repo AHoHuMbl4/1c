@@ -261,3 +261,25 @@ FROM read_text(:'meta_path');
 | Рекомендация? | **(а)** перенести разбор в SQL; **(б)** только если владелец сознательно возвращает OData на packet-такт |
 
 Конец черновика Э6.
+
+---
+
+## 8. Реализовано (27.08)
+
+**Вариант (а)** в `ubuntu/packet/packet_config.py` (без правок `build.sh`).
+
+| Что | Как |
+|---|---|
+| Убрано | `open(snap)` в `_read_sources` и второй `open` в бутстрепе `run` |
+| Добавлено | `_metadata_sql(path)` → один SELECT с якорем `/* metadata */`: `read_text(path)` + `regexp_extract_all` EntityType/Property/EntitySet (форма как `corpus_build.sql:32-41`); `_load_metadata` / `_meta_from_rows` собирают `props` и список EntitySet |
+| Канал | тот же `_rows(dsn, sql)` / `psql -tA --csv` / `SERENEDB_DSN` — без новых env |
+| Python | `_only_binary` / `compute_contour` / запись `/etc/1c-packet-bases.json` — без смены контракта; бутстреп берёт EntitySet из того же ответа metadata |
+| Почему не `parse_json`/`read_json` | снимок — OData CSDL XML; штатная загрузка JSON к нему неприменима (§2.2). Эквивалент п. 20 — `read_text` + regexp |
+
+**Доказано оффлайн:**
+
+- `ubuntu/packet/test_packet_metadata_readtext.py` — **11/0** (нет `open(…$metadata…)`; есть `read_text`; регрессия `open(snap)` ловится; мок `_rows` даёт props/sets бит-в-бит с прежним regex).
+- `ubuntu/packet/test_packet_config.py` — **50/0** (FakeDB эмулирует `/* metadata */`; бутстреп/only_binary/тени).
+- Прочие `ubuntu/packet/test_*.py` — все `rc=0` (числа в CHANGELOG).
+
+Живой замер entities/skip на packet-базе (§6) — за оркестратором/выкатом; код и оффлайн-замки закрывают долг чтения вне движка.

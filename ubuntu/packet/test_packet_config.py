@@ -12,8 +12,8 @@
 26.07.3): контур-запрос дал то же, что Python-склейка, keep=784, service=805 число
 в число. Здесь проверяется ФОРМА запроса (порядок веток в тексте, условные JOIN'ы,
 safe_col-выражение, ровно один contour-запрос на заход) и Python-часть — признак
-only_binary по снимку $metadata: это разбор XML, а не запрос к данным, ему место
-вне движка.
+only_binary по снимку $metadata: движок читает файл read_text + regexp
+(/* metadata */); оффлайн FakeDB эмулирует ответ тем же regex, что и раньше.
 
 Чего проба не проверяет: сам SQL против живого движка (приёмы psql --csv, GRANT
 настоящей роли) — это свойства живой витрины, здесь их нет.
@@ -27,6 +27,7 @@ from __future__ import annotations
 import http.client
 import json
 import os
+import re
 import sys
 import tempfile
 import threading
@@ -94,9 +95,10 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 class FakeDB:
-    """Заготовки ответов по якорям запросов (/* tables */, /* contour */).
-    contour=None — переписи нет: запрос падает, как настоящий psql на
-    несуществующей base_profile."""
+    """Заготовки ответов по якорям запросов (/* tables */, /* contour */,
+    /* metadata */). contour=None — переписи нет: запрос падает, как настоящий
+    psql на несуществующей base_profile. /* metadata */ эмулирует read_text:
+    читает путь из SQL и отдаёт props/sets тем же regex, что Python-сверка."""
 
     def __init__(self, exist=("class", "force"), contour=()):
         self.exist = set(exist)
@@ -117,6 +119,25 @@ class FakeDB:
             if self.contour is None:
                 raise RuntimeError("relation does not exist: base_profile")
             return list(self.contour)
+        if "/* metadata */" in sql:
+            m = re.search(r"read_text\('((?:[^']|'')*)'\)", sql)
+            if not m:
+                raise RuntimeError("metadata sql without read_text path")
+            path = m.group(1).replace("''", "'")
+            try:
+                with open(path, encoding="utf-8") as f:
+                    xml = f.read()
+            except OSError as e:
+                raise RuntimeError(f"read_text failed: {e}")
+            props = PC._props_by_type(xml)
+            sets = PC._entity_sets(xml)
+            out = []
+            for ent, pairs in props.items():
+                for prop, edm in pairs:
+                    out.append(("prop", ent, prop, edm, ""))
+            for es in sets:
+                out.append(("set", "", "", "", es))
+            return out
         raise RuntimeError(f"unexpected sql: {sql[:80]}")
 
     def exec(self, dsn: str, sql: str):
@@ -305,21 +326,23 @@ def main() -> int:
     real_rows = PC._rows
     PC._rows = db_src.rows
     try:
-        _rows2, props2 = PC._read_sources("fake-dsn", "ut")
+        _rows2, props2, _sets2 = PC._read_sources("fake-dsn", "ut")
     finally:
         PC._rows = real_rows
         PC.PACKET_META_DIR = real_dir
     check("а2: _read_sources без файла — props None, признак не применяется",
           props2 is None)
 
-    # -- (а3) на заход ровно два чтения витрины: tables + contour, контур — один
+    # -- (а3) на заход: tables + contour (+ metadata при наличии снимка)
     write_meta(META_XML)
     db = full_db()
     run_config(db)
-    check("а3: два чтения витрины на заход, contour-запрос ровно один",
-          len(db.queries) == 2
+    check("а3: tables+contour+metadata (read_text); contour ровно один",
+          len(db.queries) == 3
           and sum("/* contour */" in q for q in db.queries) == 1
-          and sum("/* tables */" in q for q in db.queries) == 1,
+          and sum("/* tables */" in q for q in db.queries) == 1
+          and sum("/* metadata */" in q for q in db.queries) == 1
+          and any("read_text(" in q for q in db.queries),
           repr(db.queries)[:200])
 
     # -- (б) config_version растёт только при изменении; (в) чужие записи целы

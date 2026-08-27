@@ -1,3 +1,15 @@
+## 2026-08-27 — Э6: $metadata в packet_config через read_text
+
+**[код]** Долг такта п. 20 / Э6: `packet_config.py` больше не читает снимок
+`$metadata` через `open` — один SQL `/* metadata */` через существующий
+`_rows`/`psql`: `read_text(path)` + `regexp_extract_all` (EntityType/Property/
+EntitySet), как `corpus_build.sql:32-41`. `_only_binary` и выход в
+`PACKET_BASES` / `search_entity_skipped` без смены контракта; `build.sh` не
+тронут. `parse_json`/`read_json` к CSDL XML неприменимы (доки + черновик Э6 §2.2).
+Замки: `test_packet_metadata_readtext` **11/0**, `test_packet_config` **50/0**;
+остальные `ubuntu/packet/test_*.py` — все rc=0 (delta 5/0, apply 22/0, crypto 14/0,
+kit 33/0, log 22/0, server 55/0; сумма оффлайн **212/0**). Доки: cookbook/file_formats/read_file#read_text.
+
 ## 2026-08-27 — Э5: удалён мёртвый шаблон 1c-serene-index из serenedb/systemd
 
 **[код]** Удалены `ubuntu/serenedb/systemd/1c-serene-index.service` и
