@@ -391,6 +391,8 @@
 {"type":"entity","name":"test_partial_flag_propagation.py","entityType":"замок-обвинитель (п. 13)","observations":["Замок полноты п. 13: проверяет, что обрезка/неполнота видна КЛИЕНТУ, а не только в diag. Прогон 26.08: 13 passed / 5 failed — красный НАМЕРЕННО: фиксирует 5 ОТКРЫТЫХ дыр (Э4 в PLAN_TO_TARGET), не регресс","Открытые дыры на 26.08: selection_budget только в diag без пометки клиенту; missing/undated в атоме без text/partial; uncounted только в diag.fork; diag.incomplete.missing без partial/text; asked_figure_missing не ловит undated (дыра S6). Источник: ubuntu/serenedb/test_partial_flag_propagation.py"]}
 {"type":"entity","name":"test_gold_sets_split.py","entityType":"замок (разделение наборов)","observations":["Замок реестра ролей наборов (docs/GOLD_SETS.md): проверяет, что наборы роли «для приёмки» не смешаны с наборами для правок и что пересечения объявлены явно (probe ∩ gold-okna = 7 — подмножество). Прогон 26.08: 20/0. Пара к гейту check-gold-split (И5). Источник: ubuntu/serenedb/test_gold_sets_split.py"]}
 {"type":"entity","name":"test_acceptance_ut_tsv.py","entityType":"замок (приёмочный формат)","observations":["Замок формата приёмочных TSV: load_gold читает digits/kind/clarify, поля не разъезжаются с потребителем. Прогон 26.08: 15/0. Имя историческое (ut), сам набор ACCEPTANCE_UT выведен из работы решением владельца 26.08 — замок проверяет ФОРМАТ чтения, не содержание набора. Источник: ubuntu/serenedb/test_acceptance_ut_tsv.py"]}
+{"type":"entity","name":"test_pipeline_doc.py","entityType":"оффлайн-замок","observations":["Замок docs/PIPELINE.md (Ш0): каждая ссылка «путь · якорь (~N)» резолвится в дереве, смысловые маркеры починок сверяются со схемой. Без сети и БД. 26.08 в git, 184/0 (ubuntu/serenedb/test_pipeline_doc.py:1-124)"]}
+{"type":"entity","name":"test_target_status_totals.py","entityType":"оффлайн-замок","observations":["Замок docs/TARGET_STATUS.md (И1): сводка «Итог» (счётчики и списки) = пересчёт таблицы 21 пункта. Без сети/ssh/psql. 26.08 в git, 20/0 (ubuntu/serenedb/test_target_status_totals.py:1+)"]}
 {"type":"relation","from":"pipeline.sh","to":"deploy.sh","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"serene_sync.py","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"build.sh","relationType":"вызывает"}
@@ -1032,3 +1034,5 @@
 {"type":"relation","from":"git-gate.sh","to":"check-gold-split.sh","relationType":"зовёт в commit-msg"}
 {"type":"relation","from":"PIPELINE.md","to":"build.sh","relationType":"описывает"}
 {"type":"relation","from":"PIPELINE.md","to":"serene_ask.py","relationType":"описывает"}
+{"type":"relation","from":"test_pipeline_doc.py","to":"PIPELINE.md","relationType":"проверяет"}
+{"type":"relation","from":"test_target_status_totals.py","to":"docs/TARGET_STATUS.md","relationType":"проверяет"}

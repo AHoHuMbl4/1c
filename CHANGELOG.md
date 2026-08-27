@@ -1,5 +1,16 @@
 ## 2026-08-27 — замок PIPELINE 184/0; выкат okna стал следующим шагом
 
+**[код]** Деплой-скрипт okna переписан под новый адрес: LXC `10.10.10.12`, вход
+`ssh -p 2202 root@gpu-erw.timpul.pro` (старый `167.233.249.110` удалён 23.08).
+Расширен с одного файла на пять: `serene_ask.py` + словарные `branch_alias.sh`,
+`branch_alias_parse.py` (на okna лежат старые — развилки падали «Unknown agent
+id main») + `/opt/openclaw/ensure_vllm_gateway.sh` и `patch_vllm_provider.py`
+(отсутствовали). Каждый файл бэкапится с меткой времени, ask рестартует, health
+в конце. В git внесены два замка, до того незакоммиченные:
+`test_pipeline_doc.py` **184/0** и `test_target_status_totals.py` **20/0**
+(якорь маркера «sync not only branch B» переведён с триггер-слова на
+«не «только B»» — тот же факт схемы, гейт промт-правил не спорит).
+
 **[код]** Замок `test_pipeline_doc.py` доведён до **184/0** (было 181/1): единственный
 провал — голое имя `serene_enough.py` в таблице LLM-звеньев, замок требует полный
 путь. Фикс: `ubuntu/serenedb/serene_enough.py` в docs/PIPELINE.md. Документ
