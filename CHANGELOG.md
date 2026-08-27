@@ -1,3 +1,14 @@
+## 2026-08-27 — С3: морфология словаря синонимов (Snowball ru_RU) на okna
+
+**[замер]** SereneDB 26.08.1: Snowball через `text`/`pipeline` жив.
+`ts_lexize(search_dict_stem, клиент*)` → `{клиент}`; ispell в доках нет.
+`search_dict_syn` → pipeline stem→solr (18 стем-правил); все формы
+клиент/клиента/клиентов/клиентам/клиенты → `{клиент,контрагент,поставщик}`.
+`alias_idx` на `search_dict_alias_stem` (stem+frequency; copy_from stem давал
+tfidf=0). Мера alias_rank 23q: **0/1/21 → 3/0/19**. Бэкап
+`search_entity_alias_c3_snap_20260827`. Отчёт `docs/C3_MORPHOLOGY.md`.
+`serene_ask.py` не трогали. Риск: corpus_init / solr_synonyms_build откатят.
+
 ## 2026-08-27 — Д3: пустой alias_idx после наполнения словаря
 
 **[замер]** okna: inverted eventually consistent — сразу после INSERT
