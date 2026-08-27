@@ -1,7 +1,6 @@
 question	etalon	etalon_source	verify_status
 сравни с прошлым разом		ask_journal	pending
 покажи по механизмам		ask_journal	pending
-как у нас дела		ask_journal	pending
 сколько крепежа осталось на сегодня		ask_journal	pending
 профиль весь распродали или что-то ещё лежит		ask_journal	pending
 ручки есть в наличии, сколько штук?		ask_journal	pending
@@ -14,14 +13,9 @@ question	etalon	etalon_source	verify_status
 мы просели или выросли		ask_journal	pending
 сегодня лучше вчерашнего или нет		ask_journal	pending
 в этом месяце больше продали чем в прошлом?		ask_journal	pending
-эта неделя лучше прошлой или хуже		ask_journal	pending
 что у нас совсем не продаётся в этом месяце		ask_journal	pending
 какая фурнитура сейчас лучше всего идёт		ask_journal	pending
 дай топ-3 по деньгам за месяц среди покупателей		ask_journal	pending
-кто из клиентов молодец за прошлую неделю, три лучших		ask_journal	pending
-дай топ-3 товара за вчера		ask_journal	pending
-какой клиент больше всех купил в этом месяце		ask_journal	pending
-что лучше всего продавалось на этой неделе		ask_journal	pending
 сколько было в прошлом месяце всего	2767450.98	1c	match
 сколько за этот месяц уже вышло		ask_journal	pending
 а на прошлой неделе сколько наторговали	1262950.40	1c	match

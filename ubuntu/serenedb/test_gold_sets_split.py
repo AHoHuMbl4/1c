@@ -29,6 +29,9 @@ WORKING = [
     ("ab-calendar-axis-okna.tsv", 6),
 ]
 
+# Приёмочная полка okna (И4): эталоны из 1С (И0), в правках не участвовала.
+CLIENT_GOLD = ("client-gold-okna.tsv", 48)
+
 PASS = 0
 FAIL: list[str] = []
 
@@ -154,6 +157,38 @@ def test_probe_subset_of_gold_okna_mostly() -> None:
     t("probe ∩ gold-okna = 7 (подмножество)", inter == 7, inter)
 
 
+def test_client_gold_shelf() -> None:
+    """Приёмочная полка okna (И4): счёт и чистота от рабочих наборов."""
+    path = os.path.join(ROOT, CLIENT_GOLD[0])
+    t("приёмка okna: файл client-gold-okna.tsv", os.path.isfile(path), path)
+    qs = load_tsv_questions(path)
+    if qs and qs[0].startswith("question"):  # заголовок TSV от генератора И0
+        qs = qs[1:]
+    t(
+        "приёмка okna: %d вопросов" % CLIENT_GOLD[1],
+        len(qs) == CLIENT_GOLD[1],
+        len(qs),
+    )
+    norms = [norm_q(q) for q in qs]
+    dup = [n for n in set(norms) if norms.count(n) > 1]
+    t("приёмка okna: без внутренних дублей", not dup, dup[:5])
+    leaks: list[str] = []
+    for name, _n in WORKING:
+        wpath = os.path.join(ROOT, name)
+        if name.endswith(".txt"):
+            wqs = load_txt_questions(wpath)
+        else:
+            wqs = load_tsv_questions(wpath)
+        for q in qs:
+            if norm_q(q) in {norm_q(w) for w in wqs}:
+                leaks.append("%s ← %r" % (name, q))
+    t(
+        "приёмка okna ∩ рабочие = ∅",
+        not leaks,
+        "; ".join(leaks[:8]) if leaks else "",
+    )
+
+
 def main() -> int:
     test_files_exist()
     test_doc_declares_roles()
@@ -161,6 +196,7 @@ def main() -> int:
     test_working_counts()
     test_no_acceptance_in_working()
     test_probe_subset_of_gold_okna_mostly()
+    test_client_gold_shelf()
     print()
     print("PASS %d  FAIL %d" % (PASS, len(FAIL)))
     if FAIL:

@@ -26,6 +26,7 @@
 | [`docs/ACCEPTANCE_AMBIGUOUS.md`](ACCEPTANCE_AMBIGUOUS.md) | — | описание Э3 | — | документ к TSV ambiguous |
 | `work/acceptance/intent_cases.tsv` | 59 | прибор разбора intent | `intent_parse_bench.py` и др. | **не gold** |
 | `work/acceptance/zero_measure_cases.tsv` | 5 | прибор нулевой величины | bench нулевой меры | **не gold** |
+| [`ubuntu/serenedb/client-gold-okna.tsv`](../ubuntu/serenedb/client-gold-okna.tsv) | **48** | И0 (27.08, `786aae1`): генератор из `ask_journal` + `search_tables`, эталоны dual-verify витрина↔корпус; при внесении в реестр (И4) исключены 6 формулировок-дублей рабочих наборов | `etalon_1c.py` (`docs/I0_ETALON_TOOL.md`); прогон оркестратором | **приёмка (okna, эталоны 1С)**; статусы сверки на 27.08: match 5 / freshness_lag 3 / mismatch 4 / pending 36. `work/acceptance/client-gold-okna.tsv` — артефакт прогона, не канон |
 | `work/acceptance/runs/**` | — | следы прогонов | — | **артефакты**, не наборы |
 
 **Итого живых gold/приёмочных источников вопросов: 7** (пять `ab-*.tsv` + `golden-questions.txt` + `ACCEPTANCE_UT.md`), плюс один архивный отчёт и два прибора в `work/acceptance/`.
@@ -69,6 +70,7 @@
 | Роль | Набор | Почему |
 |---|---|---|
 | **Приёмочный (заморожен)** | `docs/ACCEPTANCE_UT.md` (**58**) | не правился с 18.08; не входил в цикл «починили → перемерили 21/25»; И2/И3 плана |
+| **Приёмочный (okna, эталоны 1С)** | `ubuntu/serenedb/client-gold-okna.tsv` (**48**) | И0: эталоны сверены независимо (витрина↔корпус), в правках не участвовал; 6 формулировок-дублей рабочих наборов исключены при внесении в реестр (И4); замок `test_gold_sets_split.py` держит пересечение с рабочими = 0 |
 | **Рабочий (правки okna)** | `ab-gold-okna.tsv` (**25**) | единственный набор скорера okna; правился вместе с кодом (`993ad81`); на нём снято 21/25 |
 | **Рабочий (smoke)** | `ab-probe-okna.tsv`, `ab-gold.tsv`, `golden-questions.txt` | короткие пробы контуров; probe ⊂ gold-okna |
 | **Рабочий (фича)** | `ab-calendar-axis-okna.tsv` | регрессия оси, не оценка продукта целиком |
@@ -94,6 +96,7 @@
 | ambiguous ∩ ACCEPTANCE_UT | **5** | 0 | **намеренно** (док Э3): №27/28/44-класс и др. |
 | ACCEPTANCE_UT ∩ любой рабочий `ab-*` / golden | **0** | 0 | заморозка чиста относительно рабочих |
 | gold ∩ golden-questions | **0** | — | разные базы |
+| client-gold ∩ рабочие | **0** (до чистки **6**) | 0 | И4 27.08: формулировки, участвовавшие в отладке («как у нас дела», «дай топ-3 товара за вчера» и др.), исключены из приёмки; держится замком |
 
 **Итого пар с точным пересечением: 4** (7+1+1+5 вхождений вопросов).
 
