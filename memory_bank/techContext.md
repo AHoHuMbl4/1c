@@ -84,15 +84,15 @@ sdb_scored_terms_limit = 1024 (молча усекает ранжировани�
 | Класс | Решение | Почему |
 |---|---|---|
 | Чистый SQL такта (`corpus_*`, merge, resolver, coverage, VACUUM, postcheck, secrets, period→`read_json`) | **(а)** уже внутри движка | Один `-f`/`-c`; данные не обрабатываются снаружи |
-| `embed_missing.sh` ×3 + card embed | **(а)** убрать веер `psql` | Счёт — штатный `ai_embed` (Sql › Functions › AI Functions; п. 20 строка 26.08). Веер/`while` — запрет «psql в цикле». Блокеры: `Vector::SetSize` на FLOAT[1024] ≳16–32 строк (замер 26.07.3, HOWTO); `SIGSEGV` при параллельном UPDATE в одну таблицу. Потолок in-flight ≈ `threads` — **замер** (HOWTO / ловушка 51), не цитата Querying Remote Files про remote files. `SET threads` — Sql › SET / RESET. Критерий закрытия — в аудите |
-| `solr_synonyms_build.py` compile | **(а)** SQL-скрипт | Штатно: `string_agg` + `CREATE … solr_synonyms`. **Было неверно:** «один `string_agg` = `compile_rules`» — в Python ещё escape/dedupe/skip 1-term/sort/limits; закрытие **(а)** только когда это воспроизведено в SQL |
+| `embed_missing.sh` ×3 + card embed | **(а) сделано 27.08** | Веер внешних `psql` снят: одна сессия `part_0`+`\gexec`; `EMBED_ROUNDS` умолч. 1; argv WORKERS игнорируется. Параллель — `SET threads` (Sql › SET / Pragmas › threads). [замер 27.08 okna 26.08.1] ai_embed×256 без Vector::SetSize. Замок `test_embed_missing_single_session` **11/0**. Разовая сборка с ATTACH — по-прежнему `embed_bulk.sh` |
+| `solr_synonyms_build.py` compile | **(а)** SQL-скрипт (долг кода) | Штатно: `string_agg` + `CREATE … solr_synonyms`. **Было неверно:** «один `string_agg` = `compile_rules`» — в Python ещё escape/dedupe/skip 1-term/sort/limits; закрытие **(а)** только когда это воспроизведено в SQL |
 | wiki `wiki_build.sql` | **(а)** уже внутри | Сборка тел в движке |
-| wiki dump → `{page_id}.md` + purge | **долг** | **Было неверно:** «**(а)** `COPY … TO`». COPY/PARTITION_BY (Hive/`data_N`) ≠ vault `.md` + удаление устаревших; в перечень п. 20 не входит |
+| wiki dump → `{page_id}.md` + purge | **(а)/(б1) закрыт Э7** `5633514` | Файловый dump снят; шаг такта только VIEW `wiki_pages`. COPY TO ≠ vault OpenClaw |
 | classify / wiki_alias / branch_alias (смысл) | **(б)** вызов языковой модели | Перечень п. 20; SQL-обвязка — единицы запусков; file-roundtrip alias → TEMP/`MERGE`+`read_json` **(а)** |
 | packet контур витрины | **(а)** одним SQL | Данные контура — внутри движка |
-| packet разбор файла `$metadata` | **долг** | В такте читается локальный XML-снимок, не OData. **Было неверно:** **(б)** «поход в 1С». В исчерпывающий перечень п. 20 не садится; закрытие — `read_text`+SQL (как `corpus_build`) или долг висит |
+| packet разбор файла `$metadata` | **(а) закрыт Э6** `e1056c7` | `read_text` + regexp в одном SQL (`packet_config`), как `corpus_build` |
 
-Норма контракта после закрытия **(а)**-хвоста и долгов: единицы процессов `psql` за такт, ноль строк корпуса наружу (кроме входа в LLM по **(б)**).
+Норма контракта после Э1/Э6/Э7: единицы процессов `psql` за такт на SQL-шагах, ноль строк корпуса наружу (кроме входа в LLM по **(б)**). Живой last-OK okna (24.08): **≈49** psql, **254** стр wiki наружу (до Э7).
 
 **Реранкер вместо эмбеддинга метки.** Сопоставление слова человека с названием сущности
 эмбеддингом **не решается**: у «продажи» ближайшая метка — «Склады» (0,521), нужный

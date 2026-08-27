@@ -1,3 +1,20 @@
+## 2026-08-27 — Э1: замер psql за такт + снят веер embed_missing
+
+**[замер]** Последний OK такт okna (`1c-serene-pipeline@postgres`,
+**24.08 05:37:55–05:40:32 UTC**, 157 с): SKIP_BUILD, embed n=0×3, wiki
+dump **254** стр / **≈314 130** байт body; реконструкция **≈49** процессов
+`psql` (journal unique PID ≥**19**). Боевой корпус не пересобирали.
+**[замер]** на SereneDB **26.08.1**: `UPDATE … ai_embed::FLOAT[1024]` на
+8…256 строк в боковой таблице — без `Vector::SetSize`.
+
+**[код]** `embed_missing.sh`: веер внешних `psql`/раундов убран — одна
+сессия `part_0`+`\gexec`, `EMBED_ROUNDS` умолч. 1, argv WORKERS
+игнорируется (параллель = `SET threads`). Замок
+`test_embed_missing_single_session` **11/0**; tick_guard **15/0**.
+Аудит и решения — `docs/TICK_PSQL_AUDIT.md`; прибор
+`work/pipeline/count_psql_per_tick.sh`. Э6/Э7 уже в git (`e1056c7`,
+`5633514`). Доки: sql/functions/ai#ai_embed; configuration/pragmas#threads.
+
 ## 2026-08-27 — И4: client-gold-okna в реестр приёмки (GOLD_SETS)
 
 **[решение]** Приёмочная полка okna из И0 внесена в `docs/GOLD_SETS.md`
@@ -10,6 +27,12 @@
 
 **[замер]** `client-gold-okna.tsv` **54→48**; статусы сверки: match **5** /
 freshness_lag **3** / mismatch **4** / pending **36**.
+
+## 27.08.2026 — К2 compare хвост (P1–P5) на ask
+
+[код] `serene_ask.py`: compare терминален без `ASK_ENTITY_FORM` (P1); вход сравни/против/насколько/YoY (P2–P3); split двух месяцев (P4); render пары окон + mtd/wtd-оговорка (P5); дожим Q1/Q3 (prior-month → MTD) и Q6 (лучше/хуже не режется rank).
+[замер] замки `test_compare_sales.py` **47/0**; живой `:8094` Q1–Q8 **8/8** (Q5/Q1/Q3/Q4/Q7/Q8 = **1049991.33**, Q6 = **−792128.74**, Q2 clarify); `AB_PROBE=okna` **8/8** `okna probe live 0err/8`.
+[решение] не вшивать `ASK_ENTITY_FORM=1` слепо — терминальность compare кодом.
 
 ## 2026-08-27 — И0: etalon_1c в git, живой okna 12 срезов
 
