@@ -1,12 +1,18 @@
 # Active Context
 
-_Обновлено: **2026-08-27** (С5: морфология в пайплайне). Здесь — только живое.
+_Обновлено: **2026-08-27** (K6: ранг сущности / answer_fit). Здесь — только живое.
 История по дням — в [`progress.md`](progress.md); стадии по контракту — в
 [`docs/TARGET_STATUS.md`](../docs/TARGET_STATUS.md)._
 
 ---
 
 # ⏭ С ЧЕГО НАЧАТЬ СЛЕДУЮЩУЮ СЕССИЮ
+
+🔴 **K6 entity rank `[27.08]`**: ранг count **без** «отвечает данными»
+(лексика). Q «покупают» → справочник; эталон 141 на регистре. Мера
+`answer_fit` + прибор: place **5→1**; набор 23: 2/2/15 → 1/2/15.
+`serene_ask` не трогали. Отчёт [`K6_ENTITY_RANK.md`](../docs/K6_ENTITY_RANK.md).
+
 
 🔴 **С5 morph in pipeline `[27.08]`**: риск С3 закрыт — `corpus_init` +
 `solr_synonyms_build` сами собирают stem pipeline. Живой okna

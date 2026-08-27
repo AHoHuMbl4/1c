@@ -1,3 +1,17 @@
+## 2026-08-27 — K6: ранг сущности без признака «отвечает данными»
+
+**[замер]** okna «сколько клиентов реально покупают?»: clarify по
+`catalog_контрагенты` (отсрочка/лимит/353) при эталоне **141** DISTINCT на
+`accumulationregister_реализациятмц`. В пуле fork регистр уже был; выбрал
+модель справочник. `alias_top` = контрагенты. Карточки 353, buyers 141;
+у каталога `doc_date` все NULL, nums = ТОК_* (= варианты clarify).
+
+**[код]** Разбор + мера `entity_answer_fit.py` (live DISTINCT оси vs карточки,
+без списка слов) + прибор `k6_entity_rank_bench.py`. `serene_ask.py` не
+трогали (К5). Прибор 23 gold: до **2/2/15** лидер/тройка/miss → после
+**1/2/15**; Q «покупают» place **5→1**. Отчёт `docs/K6_ENTITY_RANK.md`.
+Доки: Ranking (Top-K); Relevance Tuning — Blend in a business signal.
+
 ## 2026-08-27 — С5: морфология словаря в пайплайне (не откатывается тактом)
 
 **[код]** `corpus_init.sql`: `search_dict_alias_stem` + `alias_idx` на нём;
