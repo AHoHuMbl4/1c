@@ -127,3 +127,16 @@ if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))
     sys.exit(1)
 print("ИТОГ: ok — все %d проверок прошли" % PASS)
+
+# ── обрезанный ответ (лимит токенов вызова; живой случай окна 28.08) ────────
+TEXT_TRUNC = """{
+  "items": [
+    {"entity":"catalog_пробный","aliases":["Пробный","проба"],
+     "quantities":[],"bestUsedFor":["t"],"notEnoughFor":["n"]},
+    {"entity":"catalog_второй","aliases":["Второй","вт","обре
+"""
+ents_t, _ = P.parse_items(TEXT_TRUNC, {"items": []})
+t("🔴 обрезанный JSON: целые элементы спасаются, а не теряются пачкой",
+  len(ents_t) == 1 and ents_t[0]["src_table"] == "catalog_пробный", ents_t)
+t("salvage: пустой/без items — пусто, не исключение",
+  P._salvage_items("{}") == [] and P._salvage_items("xx") == [])

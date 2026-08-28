@@ -109,6 +109,56 @@ def filter_entity_aliases(aliases, quantity_names=None, quantity_aliases=None):
     return out
 
 
+def _salvage_items(raw_json):
+    """Целые элементы items из обрезанного JSON (срез по лимиту токенов).
+
+    Идём по массиву items сканером сбалансированных скобок и отдаём только
+    завершённые объекты; неполный хвост отбрасывается — он переспросится.
+    """
+    start = raw_json.find('"items"')
+    if start < 0:
+        return []
+    arr = raw_json.find("[", start)
+    if arr < 0:
+        return []
+    out = []
+    i = arr + 1
+    depth = 0
+    obj_start = -1
+    in_str = False
+    esc = False
+    while i < len(raw_json):
+        c = raw_json[i]
+        if in_str:
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            if depth == 0:
+                obj_start = i
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                try:
+                    obj = json.loads(raw_json[obj_start:i + 1])
+                    if isinstance(obj, dict):
+                        out.append(obj)
+                except ValueError:
+                    pass
+        elif c == "]" and depth == 0:
+            break
+        i += 1
+    return out
+
+
 def parse_items(text, pay):
     """(entity_rows, measure_rows). Величины — только с каноническим именем и непустым алиасом."""
     allowed = allowed_quantities(pay)
@@ -119,7 +169,11 @@ def parse_items(text, pay):
     try:
         items = json.loads(m.group(0)).get("items") or []
     except ValueError:
-        return entity_rows, measure_rows
+        # [замер окно 28.08] длинные пачки обрезаются лимитом токенов
+        # вызова: JSON рвётся на середине items. Целые элементы до среза
+        # обязаны спасаться, а не теряться пачкой (п. 13); остаток
+        # переспросится идемпотентно на следующем круге.
+        items = _salvage_items(m.group(0))
     for it in items:
         if not isinstance(it, dict):
             continue
