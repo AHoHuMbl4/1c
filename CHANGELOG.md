@@ -1,3 +1,63 @@
+## 2026-08-28 — К8: скилл ask-decomposer — составной вопрос → атомы /ask [код]
+
+**[код]** Новый скилл OpenClaw `ubuntu/openclaw/skills/ask-decomposer/`
+(SKILL.md + decomposer.py): составной вопрос модель раскладывает на атомы,
+каждый атом — вызов `ask_1c`; сводка compare/top-N — детерминированно кодом
+(разность, вердикт больше/меньше/равно), модель не считает (п. 19 TARGET).
+Простые вопросы — один вызов без декомпозиции. Контракт A/B/C и люк не
+тронуты. Формат скилла — по установленным докам OpenClaw
+(creating-skills.md:95–121). В живой контур не установлен.
+
+**[замер]** Замок `test_decomposer.py` **29/0**. Живой прогон на кандидате
+`:38096`: «в этом месяце продали больше, чем в прошлом?» → атомы
+3 817 442,31 (mtd) vs 2 767 450,98 (prev), разность **1 049 991,33**,
+вердикт «да, больше» — сошлось с эталоном `docs/DECOMPOSITION_PROBE.md`
+(F3). Это закрывает класс К2/compare на уровне слоя над /ask.
+
+(В этом же коммите в CHANGELOG входит секция К9-ф2 — её код идёт следующим
+коммитом после снятия находки снайпера; прозрачность порядка.)
+
+## 2026-08-28 — К9 фаза 3: event-путь кодом + снятие LIKE снайпера [код]
+
+**[код]** `entity_rank_v2`: `_meas_profile_from_dict` — профиль qty/money из
+`search_measure_alias` + `measure_choice` (не LIKE по `map_keys(nums)`);
+fallback `n_ref_axes`; `event_movement_pool` / `event_rank_pick` /
+`axis_struct_tier`; `answer_fit_v2_full` в diag. `serene_ask`:
+`try_event_code_entity_pick` — лидер event-ранга до `pick_entity`;
+`event_filter_pool` на детектор развилки, arb_pool и соперников; TRACE
+`выбрал=код` при `event_code_lock`.
+
+**[замер]** Офлайн: test_k6_rank_v2 **8/0**, test_action_class **18/0**,
+test_sales_rank_canon **51/0**, test_rank_leader_path **30/0**,
+test_entity_form **47/0**, test_compose **92/0**. bench v2_lead — не снят
+(локальный пароль ≠ окно; ssh к gpu заблокирован средой) — гоняет оркестратор.
+
+## 2026-08-28 — К9 фаза 2 шаги 1–2: axis_struct + count_defer_measure [код]
+
+**[код]** `entity_rank_v2`: `_axis_register_struct_tier` + ключ `axis_struct` в
+`rank_key_v2` (movement); `features_table` — `has_qty_measure`/`has_money_measure`
+из `map_keys(nums)` (профиль мер, не имена src). `serene_ask`:
+`count_defer_measure_clarify` — count+живая ось снимает measure clarify до
+`aggregate_distinct_axis`. Новые списков слов нет.
+
+**[замер]** Офлайн: test_k6_rank_v2 **4/0** (+axis+qty), test_action_class **16/0**
+(+3 defer), test_sales_rank_canon **51/0**. Эмуляция ключей: ф1 касса
+`(0,0,-2,0,0,2)` vs реализация `(0,0,-2,0,0,8)` — касса лидер; ф2 реализация
+`(0,0,-2,0,0,0,8)` vs касса `(0,0,-2,1,0,0,2)`. Живьём (кандидат `:8096`,
+доводка оркестратором — DSN восстановлен паролем окна): bench v2_lead
+**20/23** PASS (было 19/23, +1), v1-регресс **0**; AB_PROBE **8/8** 0err,
+средняя **8,48 с** — «лучший».
+
+**[замер] Живая цель ф2 НЕ достигнута** (пробы `:8096`): «сколько клиентов
+реально покупают» → clarify мер на `accumulationregister_книгапокупок`;
+«сколько покупателей было за этот месяц» → figures «assumed: 353» (не та ось).
+Диагноз по TRACE: выбор уходит в **детектор развилки → модель**
+(«сущность выбрана … выбрал=модель») и **круг арбитра** — ранг с верным
+`axis_struct` на этом пути не применяется; лексика «покупают»→«Книга
+Покупок» тянет модель в неосевую ветку. Доводка — К9-ф3: при
+action_class=event лидер берётся кодом из ранга event-яруса, ветки
+struct=2 (касса/книга НДС) в пул модели не попадают.
+
 ## 2026-08-28 — К9: action_class из разбора → вид объекта → DISTINCT ось [код]
 
 **[код]** `parse_intent`: поля `action_class` (event/object/none) и `action_axis`
