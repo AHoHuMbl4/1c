@@ -1,10 +1,14 @@
-# Пайплайн: схема от кода (Ш0)
+# Пайплайн: схема от кода
 
-Источник — код, не память: `ubuntu/serenedb/build.sh`, `ubuntu/serenedb/pipeline.sh`,
-`ubuntu/serenedb/serene_ask.py` (след `шаг("…")` в `answer`), packet/gateway/мост.
-Ожидание плана: [`PLAN_TO_TARGET.md`](PLAN_TO_TARGET.md) § Этап 0.
+Источник — код HEAD: `ubuntu/serenedb/build.sh`, `ubuntu/serenedb/pipeline.sh`,
+`ubuntu/serenedb/serene_ask.py`, `ubuntu/serenedb/entity_rank_v2.py`, мост
+`ubuntu/openclaw/mcp_ask.py`. Исходы A/B/C — [`PLAN_ANSWER_CONTRACT.md`](PLAN_ANSWER_CONTRACT.md) §2.
 
-Условные обозначения: сплошная стрелка — данные; пунктир — управление (таймер, HTTP-вызов).
+Условные обозначения: сплошная стрелка — данные; пунктир — управление (таймер, HTTP).
+
+**След в журнале:** при `ASK_TRACE=1` (умолчание) каждый шаг `answer()` пишет в stderr
+`TRACE <rid> service <имя_шага> <мс> <статус>` (`_trace_write`). Параллельно накапливается
+`diag.шаги` — тот же порядок, уходит клиенту в JSON ответа.
 
 ---
 
@@ -14,54 +18,39 @@
 flowchart TD
   subgraph TACT["ТАКТ — сборка поискового слоя"]
     direction TB
-    C1["1С OData<br/>windows/odata-setup"]
-    PA["packet-agent<br/>PacketAgent.cs"]
+    C1["1С OData"]
+    PA["packet-agent"]
     PS["packet_server.py"]
-    APP["packet_apply.py<br/>apply_package"]
+    APP["packet_apply.py"]
     GW["odata_gateway.py"]
-    SYNC["serene_sync.py<br/>main"]
-    VIT["витрина SereneDB<br/>таблицы EntitySet"]
+    SYNC["serene_sync.py"]
+    VIT["витрина SereneDB"]
     TMR["1c-serene-pipeline.timer"]
     PL["pipeline.sh"]
-    B0["build.sh шаг 0<br/>corpus_init.sql + corpus_precheck.sql"]
-    B1["build.sh шаг 1<br/>corpus_build.sql"]
-    B2["build.sh шаг 2<br/>corpus_merge.sql → search_corpus"]
-    B1p["build.sh 1-period<br/>period_relative_forms_load.sql"]
-    B2b["build.sh 2-бис<br/>classify_entities.py"]
-    B3["build.sh шаг 3<br/>embed_missing.sh search_tables"]
-    B4["build.sh шаг 4<br/>resolver_build.sql + embed"]
-    B5["build.sh шаг 5<br/>embed_missing.sh search_corpus"]
-    B6["build.sh шаг 6<br/>VACUUM REFRESH_INDEX search_idx"]
-    B7["build.sh шаг 7<br/>coverage_build.sql"]
-    B7a["wiki_alias.sh<br/>+ wiki_publish.sh"]
-    B7s["build.sh 7-solr<br/>solr_synonyms_build.py"]
-    B7c["build.sh 7-бис<br/>entity_card_build.sql"]
-    B8["build.sh шаг 8<br/>corpus_postcheck.sql"]
+    B0["build 0: corpus_init"]
+    B1["build 1: corpus_build"]
+    B2["build 2: corpus_merge → search_corpus"]
+    B1p["build 1-period: period_relative_forms → search_meta"]
+    B2b["build 2-бис: classify_entities"]
+    B3["build 3: embed меток"]
+    B4["build 4: resolver + IVF"]
+    B5["build 5: embed корпуса"]
+    B6["build 6: VACUUM REFRESH_INDEX search_idx"]
+    B7["build 7: coverage"]
+    B7a["wiki_alias + branch_alias"]
+    B7s["build 7-solr: search_dict_syn"]
+    B7c["build 7-бис: entity_card"]
+    B8["build 8: postcheck"]
 
-    C1 -->|OData страницы| PA
-    C1 -->|OData GET| GW
-    PA -->|чанки .zst + manifest| PS
-    PS -->|verified| APP
-    APP -->|строки EntitySet| VIT
-    GW -->|JSON/XML| SYNC
-    SYNC -->|poc_load_entity| VIT
-    TMR -.->|OnUnitInactiveSec| PL
+    C1 --> PA
+    C1 --> GW
+    PA --> PS --> APP --> VIT
+    GW --> SYNC --> VIT
+    TMR -.-> PL
     PL -.-> SYNC
-    PL -.->|exec| B0
-    VIT --> B1
-    B0 --> B1
-    B1 --> B2
-    B2 --> B1p
-    B1p --> B2b
-    B2b --> B3
-    B3 --> B4
-    B4 --> B5
-    B5 --> B6
-    B6 --> B7
-    B7 --> B7a
-    B7a --> B7s
-    B7s --> B7c
-    B7c --> B8
+    PL -.-> B0
+    VIT --> B1 --> B2 --> B1p --> B2b --> B3 --> B4 --> B5 --> B6
+    B6 --> B7 --> B7a --> B7s --> B7c --> B8
   end
 
   subgraph ASK["ВОПРОС — путь /ask"]
@@ -69,150 +58,203 @@ flowchart TD
     H["человек"]
     OC["OpenClaw-бот"]
     MCP["mcp_ask.py ask_1c"]
-    HND["Handler.do_POST<br/>serene_ask.py"]
+    HND["Handler.do_POST"]
     ACH["answer_checked"]
     ANS["answer"]
-    INT["parse_intent"]
-    PRB["probe → tables_of<br/>отбор: буквально"]
-    MEAN["meaning_candidates<br/>alias_hits / near_tables<br/>отбор: смысл"]
-    CAND["кандидаты cands"]
+    INT["parse_intent + period_leader"]
+    PRB["probe → tables_of"]
+    MEAN["meaning_candidates<br/>alias / card / RRF / SQL-RRF"]
+    K6["entity_rank_v2.apply_to_candidates"]
+    RER["сито emb + rerank"]
     FORK["fork_detector_scan"]
-    ARB["arb_pool / answers_diverge<br/>арбитр семей"]
+    OUTABC["resolve_fork_outcome A/B/C"]
     PENT["pick_entity"]
     PMEAS["pick_measure"]
-    AGG["aggregate / aggregate_groups"]
-    CMP["compose"]
-    FILL["_fill_figures"]
+    AGG["aggregate"]
+    CMP["compose → _fill_figures"]
     GT["gate"]
-    OUTA["kind=answer"]
-    OUTC["kind=clarify<br/>seal_clarify"]
-    OUTF["kind=figures"]
-    OUTN["kind=no_data"]
+    STALE["stale_note"]
+    OUT["kind: answer / figures / clarify / no_data / unavailable"]
 
-    H -->|текст| OC
-    OC -.->|tool call| MCP
-    MCP -->|POST /ask JSON| HND
-    HND --> ACH
-    ACH --> ANS
-    ANS --> INT
-    INT --> PRB
+    H --> OC -.-> MCP --> HND --> ACH --> ANS
+    ANS --> INT --> PRB
     INT --> MEAN
-    PRB --> CAND
-    MEAN --> CAND
-    CAND --> FORK
-    FORK --> ARB
-    ARB --> PENT
-    PENT --> PMEAS
-    PMEAS --> AGG
-    AGG --> CMP
-    CMP --> FILL
-    FILL --> GT
-    GT -->|ok| OUTA
-    GT -->|проза отвергнута| OUTF
-    ARB -->|сомнение| OUTC
-    PRB -->|нет совпадений| OUTN
-    OUTA --> MCP
-    OUTC --> MCP
-    OUTF --> MCP
-    OUTN --> MCP
-    MCP --> OC
-    OC --> H
+    PRB --> K6
+    MEAN --> K6
+    K6 --> RER --> FORK
+    FORK --> OUTABC
+    OUTABC -->|не перехватил| PENT
+    FORK --> PENT
+    PENT --> PMEAS --> AGG --> CMP --> GT --> STALE --> OUT
+    OUTABC -->|A/B/C/unique| OUT
+    OUT --> MCP --> OC --> H
   end
 
   B6 -.->|search_idx| PRB
-  B3 -.->|emb меток| MEAN
+  B7s -.->|ts_lexize| MEAN
+  B1p -.->|period_relative_forms| INT
   B7a -.->|search_entity_alias| MEAN
-  B7c -.->|карточки| MEAN
-  B5 -.->|emb корпуса| MEAN
+  B7c -.->|entity_card_idx| RER
 ```
 
 ---
 
-## Таблица узлов
+## Флаги env (боевой okna `:8091`, август 2026)
 
-| Имя | Скрипт / функция | Что делает | Если узел молчит |
+Ритуал включения и снимки — [`F6_ROLLOUT_CHECKLIST.md`](F6_ROLLOUT_CHECKLIST.md).
+
+| Флаг | Механизм | Дефолт | Бой okna |
 |---|---|---|---|
-| 1С OData | `windows/odata-setup/src/Program.cs` · якорь `static int Main` (~52) | Отдаёт EntitySet / `$metadata` на чтение | Нет сырья → витрина и корпус пустеют |
-| packet-agent | `windows/packet-agent/src/PacketAgent.cs` · якорь `while (true)` (~1131) | Такт: дельта → чанки → HTTPS | Ветка A: витрина не обновляется |
-| packet_server | `ubuntu/packet/packet_server.py` · якорь `PACKET_LISTEN` (~20) | Приём, verify age+sha256 | Пакеты не доходят до apply |
-| packet_apply | `ubuntu/packet/packet_apply.py` · якорь `def apply_package` (~783) | `verified→applied`, merge в витрину | Свежие строки 1С не в поиске |
-| odata_gateway | `ubuntu/1c-gateway/odata_gateway.py` · якорь `LISTEN_HOST` (~46); · якорь `def main()` (~139) | Шлюз только GET → 1С | Ветка B: синк не читает OData |
-| serene_sync | `ubuntu/serenedb/serene_sync.py` · якорь `def main():` (~253); зов: `ubuntu/serenedb/pipeline.sh` · якорь `python serene_sync.py` (~49) | Дельта витрины (`poc_load_entity`); на packet — KEEP_MARKS | Витрина устаревает; корпус копирует старое |
+| `ASK_SQL_RRF` | пятая ветвь ANN корпуса в `meaning_candidates` → `_fused_sql_rrf` | `0` | `1` |
+| `ASK_HEALTH_NATIVE_FRESHNESS` | `/health`: `sdb_metrics` inverted (`index_buffered_docs`, `refresh_*`) | `0` | `1` |
+| `ASK_HEALTH_SEARCH_IDX` | имя индекса для native freshness | `search_idx` | `search_idx` |
+| `ASK_RESOLVER_IVF` | резолвер имён: IVF `<#>` при готовом индексе, иначе exact | `0` | `1` |
+| `ASK_RESOLVER_IVF_IDX` | имя IVF резолвера | `resolver_ivf_idx` | `resolver_ivf_idx` |
+| `ASK_SOLR_SYNONYMS` | `ts_lexize` по словарю синонимов в `same_concept_groups` и query-side | `0` | `1` |
+| `ASK_SOLR_SYNONYMS_DICT` | имя словаря `ts_lexize` | `""` | `search_dict_syn` |
+| `ASK_ATOM_TERMINAL` | исход `unique` с `proof_status=computed` → `kind=answer` без compose | `0` | `1` |
+| `ASK_ENTITY_FORM` | форма F (`distinct_axis` / complement) до и после выбора сущности | `0` | `1` |
+| `ASK_SALES_RANK_CANON` | канон ранга продаж + `period_form_from_question` / `prev_week` | `0` | `1` |
+| `ASK_CALENDAR_AXIS` | ось календарь/рабочие дни (`calendar_axis_open`) | `0` | no-op (пустая `search_meta`) |
+| `ASK_FORK_DETECT` | ранний `fork_detector_scan` по голове кандидатов | `1` | `1` |
+| `ASK_FORK_OUTCOMES` | `resolve_fork_outcome` → A/B/C вместо только clarify-арбитра | `1` | `1` |
+| `ASK_TRACE` | stderr `TRACE …` + `diag.шаги` | `1` | `1` |
+| `ASK_ORDER_BY_MEANING` | сито по `emb <=>` карточки/метки перед реранкером | `1` | `1` |
+| `ASK_RERANK_TOP` | бюджет названий в HTTP-реранкер | `60` | `60` |
+| `ASK_STEM_DICT` | стемминг `ts_lexize` | `search_dict_stem` | `search_dict_stem` |
+| `ASK_STALE_WARN_SEC` | порог приписки свежести в текст ответа | `3600` | `3600` |
+| `ASK_JOURNAL` | запись в `ask_journal` из `answer_checked` | `1` | `1` |
 
-Ветка packet — не «только B»: `pipeline.sh` всегда гоняет синк витрины, а
-`KEEP_MARKS` (`ubuntu/serenedb/pipeline.sh` · якорь `KEEP_MARKS=0` (~42))
-оставляет пометки packet-строк при слиянии — ветки A/B отличаются источником
-дельты, а не наличием синка.
-| pipeline.timer / pipeline.sh | `ubuntu/systemd/1c-serene-pipeline.timer`; `ubuntu/serenedb/pipeline.sh` · якорь `синк витрины` (~33); · якорь `exec ./build.sh` (~57) | Один такт: sync → build | Поисковый слой не пересобирается |
-| build шаг 0 | `ubuntu/serenedb/build.sh` · якорь `== 0. объекты поиска` (~146) → `corpus_init.sql`, `corpus_precheck.sql` | Объекты поиска, отпечаток, секреты, живость эмбеддера | Такт падает fail-closed до сборки |
-| corpus_build | `ubuntu/serenedb/build.sh` · якорь `== 1. корпус` (~255) → `corpus_build.sql` | Текст `doc`, maps, nums из витрины + `$metadata` | Нет нового корпуса |
-| corpus_merge | `ubuntu/serenedb/build.sh` · якорь `corpus_merge.sql` (~279) | Слияние в `search_corpus` + первая публикация индекса | Боевой корпус/индекс не обновлены |
-| 1-period | `ubuntu/serenedb/build.sh` · якорь `== 1-period` (~292) → `period_relative_forms_load.sql` | Относительные окна → `search_meta` | «прошлая неделя» домысливается неверно |
-| classify | `ubuntu/serenedb/build.sh` · якорь `python3 classify_entities.py` (~313); сам скрипт `ubuntu/serenedb/classify_entities.py` · якорь `/v1/chat/completions` (~114) | business/service → `search_entity_class` (LLM чатом) | GPU считает служебное; такт стоп при недоступной модели |
-| embed меток | `ubuntu/serenedb/build.sh` · якорь `== 3. векторы меток` (~352) → `embed_missing.sh` | `search_tables.label` → `emb` | Смысловой выбор сущности без kNN по меткам |
-| resolver | `ubuntu/serenedb/build.sh` · якорь `== 4. резолвер` (~358) → `resolver_build.sql` | Значения измерений + их векторы | Имена («Питер») не резолвятся в ключи |
-| embed корпуса | `ubuntu/serenedb/build.sh` · якорь `== 5. векторы` (~393) → `embed_missing.sh` | `search_corpus.doc` → `emb` (не-service) | Смысловой отбор по строкам корпуса слепой |
-| search_idx | `ubuntu/serenedb/build.sh` · якорь `VACUUM (REFRESH_INDEX) search_idx` (~420) | Инвертированный индекс BM25 | Буквальный `probe` / BM25 пустой или устаревший |
-| coverage | `ubuntu/serenedb/build.sh` · якорь `coverage_build.sql` (~428) | Перепись полноты 1С→поиск | Вопросы `about=coverage` без цифр; п.13 слепой |
-| wiki_alias | `ubuntu/serenedb/build.sh` · якорь `./wiki_alias.sh` (~437) | Обиходные слова → `search_entity_alias` | `alias_hits` не находит «продажу»=реализация |
-| branch_alias | `ubuntu/serenedb/wiki_alias.sh` · якорь `./branch_alias.sh` (~601) | Подписи веток развилок → `search_fork_label` (шаг такта, Ф6.3) | Развилка без подписи = люк молча, без текста выбора |
-| solr_synonyms | `ubuntu/serenedb/build.sh` · якорь `== 7-solr` (~445) → `solr_synonyms_build.py` | Словарь `ts_lexize` из alias | Синонимы на вопросе не раскрываются |
-| entity_card | `ubuntu/serenedb/build.sh` · якорь `entity_card_build.sql` (~461) | Карточка + emb для отбора | Откат на метку (`near_tables` / `emb_ready`) |
-| postcheck | `ubuntu/serenedb/build.sh` · якорь `corpus_postcheck.sql` (~468) | Сверка с отпечатком | Тихая потеря данных не ловится кодом такта |
-| mcp ask_1c | `ubuntu/openclaw/mcp_ask.py` · якорь `def ask_1c` (~485); · якорь `ASK_URL + "/ask"` (~113); · якорь `ASK_URL` (~46) → default `:8099` | Мост бот → POST `/ask` | Бот без фактов из базы |
-| Handler | `ubuntu/serenedb/serene_ask.py` · якорь `class Handler` (~15724); · якорь `ASK_LISTEN_PORT` (~73) → default `:8091` | HTTP `POST /ask` | Сервис не принимает вопросы |
-| answer_checked | `ubuntu/serenedb/serene_ask.py` · якорь `def answer_checked` (~15558) | Вход ответа + enough до/после | Нет оркестрации ответа |
-| answer | `ubuntu/serenedb/serene_ask.py` · якорь `def answer(` (~11956) | Разбор→отбор→счёт→гейт; след `шаг("…")` | Нет пути вопроса |
-| parse_intent | `ubuntu/serenedb/serene_ask.py` · якорь `def parse_intent` (~1289) | Вопрос → JSON intent (LLM) | Нет периода/термов/меры |
-| probe / tables_of | `ubuntu/serenedb/serene_ask.py` · якорь `def probe` (~2640); · якорь `def tables_of` (~2935) | Буквальный отбор по `search_idx` | Нет кандидатов по словам строки |
-| meaning_candidates | `ubuntu/serenedb/serene_ask.py` · якорь `def meaning_candidates` (~3087); · якорь `def alias_hits` (~2991); · якорь `def near_tables` (~3294) | Синонимы + kNN + RRF | «продажа» не находит реализацию |
-| embed_one | `ubuntu/serenedb/serene_ask.py` · якорь `def embed_one` (~744) | Вектор вопроса (HTTP или `ai_embed`) | Смысловой путь без вектора вопроса |
-| fork_detector | `ubuntu/serenedb/serene_ask.py` · якорь `def fork_detector_scan` (~4255) | Классы развилок окон/источников | Пропуск неоднозначности → неверный ответ |
-| арбитр семей | `ubuntu/serenedb/serene_ask.py` · якорь `def answers_diverge` (~6921); · якорь `круг арбитра` (~13404) | Счёт соперников, сравнение чисел | Выбор сущности без сверки альтернатив |
-| pick_entity | `ubuntu/serenedb/serene_ask.py` · якорь `def pick_entity` (~8261) | Модель выбирает метку сущности | Неверный / случайный источник |
-| pick_measure | `ubuntu/serenedb/serene_ask.py` · якорь `def pick_measure` (~8213) | Величина по слову вопроса | Считается не та колонка |
-| aggregate | `ubuntu/serenedb/serene_ask.py` · якорь `def aggregate(` (~8465) | Итог SQL в базе | Нет числа для ответа |
-| compose / fill | `ubuntu/serenedb/serene_ask.py` · якорь `def compose` (~9583); · якорь `def _fill_figures` (~9100) | Проза со слотами → подстановка чисел | Пустой или рукописный текст |
-| gate | `ubuntu/serenedb/serene_ask.py` · якорь `def gate(` (~10284) | Числа в тексте = из базы | Выдуманные цифры уходят человеку |
-| seal_clarify | `ubuntu/serenedb/serene_ask.py` · якорь `def seal_clarify` (~7133) | `decision_id` на options | Уточнение без билета, цикл ломается |
-
-Взаимоисключение витрины A/B: `ETL_ODATA_BASE` как каталог → packet + KEEP_MARKS;
-как URL → HTTP через шлюз. Детект: `ubuntu/serenedb/pipeline.sh` · якорь `if [ -d "${ETL_ODATA_BASE:-}" ]` (~43).
+Сопутствующие (не Ф6, но на пути): `ASK_EMBED_NATIVE`, `ASK_ALIAS_VETO`, `ASK_SKIP_SERVICE_RIVALS`,
+`ASK_MEMORY_APPLY`, `DEEPSEEK_*`, `RERANK_*`, `EMBED_*` — см. шапку `serene_ask.py`.
 
 ---
 
-## Развилки
+## Путь `/ask` по шагам
 
-### Исход ответа: clarify / figures / answer / no_data
+Точка входа HTTP: `Handler.do_POST` → `answer_checked` → `answer` (внутри —
+`_answer_checked_core` после билетов/памяти). Ниже — порядок в `answer()`; ранние
+`return` (coverage, stock, `no_data`, clarify) обрезают хвост.
 
-| Исход `kind` | Когда | Код |
+| № | Шаг | Что делает | Флаги / данные | TRACE (`service`) |
+|---|---|---|---|---|
+| 0 | HTTP + оболочка | auth, `decision_id`, `prior`, `seal_clarify`, журнал | `ASK_JOURNAL` | — |
+| 1 | **Разбор** | `parse_intent` → kind/want/period/terms; YoY-guard | LLM | `разбор вопроса` |
+| 1б | **Окна периода** | `apply_period_leader` + `period_readings`; фразы из `period_relative_forms` (`search_meta` или `period_relative_forms.json`) | `ASK_SALES_RANK_CANON`, `ASK_CALENDAR_AXIS` | (в `diag.period_leader`) |
+| 2 | Ранние отказы | coverage, stock-named, `kind_unsupported`, assumed-period clarify | — | — |
+| 3 | **Буквальный отбор** | `probe` → `match_expr` → `tables_of`; `partial_tables` в хвост | `search_idx`, `ASK_RESOLVER_IVF` в резолвере термов | `отбор: буквально` |
+| 4 | **Смысл и синонимы** | `meaning_candidates`: `alias_hits` + kNN карточки/метки + SQL-RRF по корпусу | `ASK_SQL_RRF`, `ASK_SOLR_SYNONYMS`+`_DICT`, `ASK_STEM_DICT` | `отбор: смысл и синонимы` |
+| 5 | Сборка `cands` | `by` + `extra`; `prefer_entity_for_rank/sales/catalog_count` | `ASK_SALES_RANK_CANON` | `кандидаты собраны` |
+| 6 | **K6 v2** | `entity_rank_v2.apply_to_candidates`: expand holders, `features_table`, `q_meta_overlap`, `reorder_v2`; опционально dual-atom clarify | всегда при импорте модуля | `K6 v2` |
+| 7 | Отсевы | `not_enough_for`; при `want=sum` — `with_value` / денежные | `search_entity_alias` | `отсев «не отвечает»` |
+| 8 | **Порядок** | сито `emb <=>` (вопрос + kind) → `rerank` → parent-before-child | `ASK_ORDER_BY_MEANING`, `ASK_RERANK_TOP`; `meaning_down` → сбой эмбеддера | (в `diag.order_by`) |
+| 9 | **Детектор развилки** | `fork_detector_scan` по голове пула; `diag.fork` | `ASK_FORK_DETECT` | `детектор развилки` |
+| 10 | **Форма F (ранняя)** | `try_entity_form_answer(when=pre_entity)` | `ASK_ENTITY_FORM` | `форма сущности` |
+| 11 | Канон продаж/прайса | `sales_canon_src`, `catalog_count_src` → lock пула | `ASK_SALES_RANK_CANON` | `канон продаж`, `канон прайса` |
+| 12 | **Сущность** | `resolve_focus` / `pick_entity`; `align_picked_to_terms` | LLM в `pick_entity` | `сущность выбрана`, `круг арбитра`, `стоп2 соперники` |
+| 13 | **Исходы A/B/C** | повторный scan по `arb_pool` → `resolve_fork_outcome` | `ASK_FORK_OUTCOMES`, `ASK_ATOM_TERMINAL` | `детектор исходов`, `исход A`, `исход B`, `исход C`, `исход unique→ответ` |
+| 14 | Круг арбитра | под-вызовы `answer(focus=…)`; `answers_diverge` → clarify; иначе `arbitrate` (LLM) | `ASK_FORK_OUTCOMES=0` — старый путь | `круг арбитра` |
+| 15 | **Форма F (поздняя)** | `try_entity_form_answer` после arb_pool | `ASK_ENTITY_FORM` | `форма сущности` |
+| 16 | **Величина** | `pick_measure` / lock по билету | LLM | `величина выбрана` |
+| 17 | **Счёт** | `aggregate` / `aggregate_groups` / rank-SQL | SQL в SereneDB | `посчитано базой`, `форма compare` |
+| 18 | **Текст** | `compose` → `_fill_figures` → `build_answer_passport` | LLM в `compose` | — |
+| 19 | **Гейт** | `gate` + одна retry-compose; иначе `kind=figures` или `period_empty` | — | `гейт исходящего` |
+| 20 | **Свежесть** | `search_quality.build_ts` → `diag.data_age_sec`; `stale_note` в текст | `ASK_STALE_WARN_SEC`, `ASK_STALE_TEXT` | — |
+
+`/health` (GET): полнота корпуса, `period_relative_forms`, при `ASK_HEALTH_NATIVE_FRESHNESS` —
+блок `freshness` с native-метриками индекса; лаг витрины → `coverage_gap.kind=freshness_lag`.
+
+---
+
+## Исходы ответа
+
+### `kind` HTTP-ответа
+
+| `kind` | Когда | Код |
 |---|---|---|
-| `clarify` | сомнение сущность/мера/ось/fork; enough до поиска; bridge остатков | `ubuntu/serenedb/serene_ask.py` · якорь `def seal_clarify` (~7133); · якорь `def clarify_text` (~3448) |
-| `figures` | `gate` отверг прозу, числа из базы верны | `ubuntu/serenedb/serene_ask.py` · якорь `def gate(` (~10284); исход после fill |
-| `answer` | gate ok, текст + подставленные числа | `compose` → `_fill_figures` → `gate` |
-| `no_data` | нет совпадений термов; именованный остаток без источника | `ubuntu/serenedb/serene_ask.py` · якорь `значения из вопроса не найдены` (~12118); · якорь `stock_balance_named_no_data` (~12071) |
+| `answer` | гейт ok; текст + `figures`/`atom` | `compose` → `gate` |
+| `figures` | гейт отверг прозу, числа из базы верны | после `gate` |
+| `clarify` | неоднозначность сущность/мера/ось/fork; enough; билет | `seal_clarify`, `fork_outcome_c`, арбитр |
+| `no_data` | нет кандидатов / термы не найдены / gate empty | ранние ветки, `gate` |
+| `unavailable` | сбой контура, исключение handler | `do_POST` except |
 
-Мост `mcp_ask` дополнительно: `pending.refuse` / `short_circuit` до POST
-(`ubuntu/openclaw/mcp_ask.py` · якорь `apply_pending_before_ask` (~519)).
+Мост `mcp_ask`: `pending.refuse` / `short_circuit` до POST; текстовый выбор clarify →
+`decision_id` (`mcp_ask_pending.py`).
 
-### Вектор vs буквальный отбор
+### Модель A/B/C ([`PLAN_ANSWER_CONTRACT.md`](PLAN_ANSWER_CONTRACT.md) §2)
 
-В `answer` после `parse_intent` обе поверхности **складываются**, не заменяют друг друга
-(комментарий «ТРИ ПОВЕРХНОСТИ», ~12139):
+Детектор: `fork_detector_scan` + `fork_classes` по полному `AnswerAtom`. Рендер:
+`fork_outcome_a` / `fork_outcome_b` / `fork_outcome_c` / `fork_outcome_unique`.
 
-1. **Буквально** — `probe` → `tables_of` по `search_idx` (след `шаг("отбор: буквально")`).
-2. **Смысл и синонимы** — `meaning_candidates` = `alias_hits` + `near_tables` (+ RRF);
-   след `шаг("отбор: смысл и синонимы")`.
-3. Частичные совпадения — хвост кандидатов (`partial_tables`), не шлюз.
+| Исход | Условие в коде | Человеку |
+|---|---|---|
+| **единственность** | `resolve_fork_outcome` → `unique`; один класс, один атом | `kind=answer`, паспорт набора |
+| **A** | `_outc == "A"` | ответ источник-нейтрально (`fork_outcome_a`) |
+| **B** | `_outc == "B"`; все ветки с подписью (`search_fork_label`) | лидер `picked[0]` + `options` остальных (`fork_outcome_b`); при rank — `rank_defer_fork_outcome_b` |
+| **C** | `_outc == "C"`; непосчитанная / неподписанная ветка | clarify или «есть другое прочтение» + число лидера (`fork_outcome_c`) |
+| **no_data** | пустое пространство | `NO_DATA_TEXT` |
+| **unavailable** | `fork` scan error / сбой сервиса | явное сообщение, `retry` |
 
-Буквальный мусор больше не закрывает смысловой путь.
+`ASK_ATOM_TERMINAL=1`: при `unique` и `proof_status=computed` — терминальный ответ без
+повторного compose (`try_atom_terminal_answer` / `fork_outcome_unique`).
 
-### Арбитр семей
+Канон продаж ([`PLAN_ANSWER_CONTRACT.md`](PLAN_ANSWER_CONTRACT.md) §6bis): регистр
+`written_by`, не документ; `sales_canon_force_pool` схлопывает `arb_pool` после lock.
 
-При нескольких кандидатах разных семей (`_family` в `answer`): пул `arb_pool`,
-повторный счёт с `no_arbiter=True`, сравнение `answers_diverge` / `arbiter_figures`.
-Совпали числа — один ответ; разошлись — `clarify` с options; fork-исходы A/B/C —
-`resolve_fork_outcome` (~6391), `fork_detector_scan` (~4255).
+---
+
+## K6 v2 (`entity_rank_v2.py`)
+
+Вызывается из `answer()` сразу после `prefer_entity_*`, до реранкера.
+
+1. Восстановление `kind` из пересечения алиасов (`kind_from_alias_overlap`).
+2. `infer_rank_form` → sum / distinct / complement / count.
+3. `expand_holders` + `expand_stem_and_live` — пул регистров и каталогов.
+4. `features_table` — `axis_fit`, `n_dated`, `n_cards`, **`q_meta_overlap`** (stem вопроса ↔
+   label/aliases), `q_row_ratio`.
+5. `reorder_v2` / `rank_key_v2` — лексикографический ключ без порогов.
+6. `dual_atom_pair` → опциональный clarify двух атомов (не при `rank_intent`).
+
+Диагностика: `diag.answer_fit_v2` (топ-12 src с признаками). Сбой SQL → `answer_fit_v2_down`,
+порядок без K6.
+
+---
+
+## Отбор: три поверхности + RRF
+
+После `parse_intent` поверхности **складываются** (комментарий «ТРИ ПОВЕРХНОСТИ» в `answer`):
+
+1. **Буквально** — `probe` → `tables_of` по `search_idx` (`@@`, scorer `ASK_SCORER`).
+2. **Синонимы сущности** — `alias_hits` по `alias_idx`; при `ASK_SOLR_SYNONYMS` стемм +
+   `ts_lexize(ASK_SOLR_SYNONYMS_DICT, …)` в `same_concept_groups`.
+3. **Смысл названия** — kNN по `search_entity_card` (или `search_tables`) + SQL-RRF
+   (`ASK_SQL_RRF` + готовый `corpus_ivf_idx`).
+
+Частичные совпадения — хвост `partial_tables`, не шлюз. Резолвер значений термов: exact или
+IVF (`ASK_RESOLVER_IVF`).
+
+---
+
+## Такт сборки (кратко)
+
+| Шаг | Скрипт | Продукт |
+|---|---|---|
+| sync | `pipeline.sh` → `serene_sync.py` / packet | витрина EntitySet |
+| 0 | `corpus_init.sql` | объекты поиска, словари |
+| 1 | `corpus_build.sql` | черновой корпус |
+| 2 | `corpus_merge.sql` | `search_corpus`, `search_idx` |
+| 1-period | `period_relative_forms_load.sql` | `search_meta.period_relative_forms` |
+| 2-бис | `classify_entities.py` | `search_entity_class` |
+| 3–5 | `embed_missing.sh` | векторы меток, резолвер, корпус |
+| 6 | `VACUUM (REFRESH_INDEX)` | обновление `search_idx` |
+| 7 | `coverage_build.sql` | `search_coverage` |
+| 7 | `wiki_alias.sh`, `branch_alias.sh` | `search_entity_alias`, `search_fork_label` |
+| 7-solr | `solr_synonyms_build.py` | `search_dict_syn` |
+| 7-бис | `entity_card_build.sql` | `search_entity_card` |
+| 8 | `corpus_postcheck.sql` | сверка отпечатка |
+
+Ветка витрины: каталог `ETL_ODATA_BASE` → packet + `KEEP_MARKS`; URL → HTTP через
+`odata_gateway.py` (`pipeline.sh`).
 
 ---
 
@@ -225,32 +267,21 @@ Chat **не считает и не ищет** — только разбор/вы
 | разбор вопроса | `parse_intent` / `_one_intent` |
 | выбор сущности | `pick_entity` |
 | проза / уточнение | `compose`, `clarify_text`, `refuse_text` |
-| арбитр текстов | `arbitrate` |
+| арбитр текстов (хвост) | `arbitrate` — только если числа сошлись, а тексты разошлись |
 | разметка такта | `classify_entities.py` |
 | словарь алиасов | `wiki_alias.sh` → OpenClaw infer |
-| достаточность фразы | `ubuntu/serenedb/serene_enough.py` · якорь `def need_say` (~260) |
+| достаточность фразы | `serene_enough.py` → `need_say` |
 
-Не chat: `embed_one` / `ai_embed`, HTTP-реранкер, все `aggregate*`.
-
----
-
-## Чего на схеме нет, но влияет
-
-Белое пятно 11 закрыто: мёртвый шаблон юнита разобран (Э5, коммит `4012642`) —
-канон сборки `ubuntu/systemd/1c-serene-index.service`, прямой вызов `build.sh`,
-копия в `ubuntu/serenedb/systemd/` синхронизирована с боевым ExecStart, чтобы
-случайный cp не вернул выведенный `serene_search_build.py`.
-
-На схеме нет процессов vLLM (эмбеддер Qwen3-Embedding, chat 27B / DeepSeek для
-ответов, реранкер Qwen3-Reranker): ask и такт ходят к ним по URL из `/etc/1c-embed.env`
-и env сервиса, но узлов «модель» в коде пайплайна нет — есть только вызовы
-(`embed_one`, `ds_chat`, `classify_entities`, `wiki_alias`). Нет и живого шлюза 1С
-как отдельного шага вопроса: OData нужен такту (sync/apply/`$metadata`), а `/ask`
-читает уже собранный корпус и индекс в SereneDB. Конфиг OpenClaw (тон бота, Telegram,
-перефраз до `ask_1c`) лежит вне `mcp_ask`/`serene_ask` и на схему пути фактов не
-рисуется.
+Не chat: `embed_one` / `ai_embed`, HTTP-реранкер, `fork_detector_scan`, `aggregate*`,
+`entity_rank_v2`, `gate`.
 
 ---
 
-Формат ссылок `путь · якорь (~N)` — якорь обязан быть в файле; `~N` справочный.
-Оффлайн-замок черновика: `ubuntu/serenedb/test_pipeline_doc.py` (если лежит рядом).
+## Чего на схеме нет
+
+Процессы vLLM (эмбеддер, chat 27B, реранкер): вызовы по URL из env, узлов «модель» в
+коде нет. OpenClaw (тон, Telegram, перефраз до `ask_1c`) — вне `mcp_ask`/`serene_ask`.
+OData на пути вопроса не участвует: `/ask` читает собранный корпус и индекс.
+
+Формат ссылок `путь · якорь (~N)` — якорь для навигации в исходнике. Оффлайн-замок
+черновика: `ubuntu/serenedb/test_pipeline_doc.py` (если есть в дереве).
