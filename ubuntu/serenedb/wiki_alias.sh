@@ -60,6 +60,15 @@ ALIAS_TABLE="${ALIAS_TABLE:-search_entity_alias}"
 # Словарь величин — отдельная таблица: связь поле → слова. Имя настраивается той же
 # ручкой, что и у сущностей, чтобы прогон рядом не трогал боевой словарь.
 MEASURE_TABLE="${MEASURE_TABLE:-search_measure_alias}"
+# Периодическое доучивание (С5-пайплайн): 0 = выкл (боевые базы не меняются молча).
+REASK_EVERY="${WIKI_ALIAS_REASK_EVERY:-0}"
+case "$REASK_EVERY" in ''|*[!0-9]*) REASK_EVERY=0;; esac
+REASK_STALE_DAYS="${WIKI_ALIAS_REASK_STALE_DAYS:-30}"
+case "$REASK_STALE_DAYS" in ''|*[!0-9]*) REASK_STALE_DAYS=30;; esac
+WIKI_ALIAS_TICK="${WIKI_ALIAS_TICK:-0}"
+case "$WIKI_ALIAS_TICK" in ''|*[!0-9]*) WIKI_ALIAS_TICK=0;; esac
+REASK_CAP="${WIKI_ALIAS_REASK_CAP:-$BATCH}"
+case "$REASK_CAP" in ''|*[!0-9]*) REASK_CAP="$BATCH";; esac
 CAP="${1:-0}"
 # Модель/thinking — infer model run через alias_infer_gateway.py.
 # 🔴 Транспорт: умолчание --local (cli/infer.md). [замер 24.08] --gateway =
@@ -85,6 +94,11 @@ psql_wa_tA() {
     -v retry_h="$RETRY_H" \
     "$@"
 }
+DB_TAG=$(psql "$DSN" -tAc 'SELECT current_database()' 2>/dev/null | tr -cd 'A-Za-z0-9_')
+[ -n "$DB_TAG" ] || DB_TAG="db"
+REASK_TABLE="${WIKI_ALIAS_REASK_TABLE:-alias_${DB_TAG}_reask}"
+CONFIRM_TABLE="${WIKI_ALIAS_CONFIRM_TABLE:-alias_${DB_TAG}_reask_confirm}"
+JOURNAL_TABLE="${WIKI_ALIAS_JOURNAL_TABLE:-alias_${DB_TAG}_reask_journal}"
 
 bash "$(cd "$(dirname "$0")/.." && pwd)/openclaw/ensure_vllm_gateway.sh" || echo "алиасы: ensure_vllm — предупреждение" >&2
 
@@ -335,6 +349,83 @@ PY2
 fi
 
 [ "$skipped" -gt 0 ] && echo "алиасы: пачек пропущено из-за отказа модели: $skipped" >&2
+
+# ── С5: периодическое доучивание (боковая таблица → сверка → MERGE подтверждённых) ─
+# WIKI_ALIAS_REASK_EVERY=0 по умолчанию: живые базы не трогаются без явного env.
+if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
+   && [ $(( WIKI_ALIAS_TICK % REASK_EVERY )) -eq 0 ]; then
+  echo "reask: такт $WIKI_ALIAS_TICK, период $REASK_EVERY, таблица $REASK_TABLE" >&2
+  psql "$DSN" -q -v ON_ERROR_STOP=1 \
+    -v reask_table="$REASK_TABLE" \
+    -v confirm_table="$CONFIRM_TABLE" \
+    -v journal_table="$JOURNAL_TABLE" \
+    -f "$HERE/wiki_alias_reask_init.sql" >/dev/null 2>&1
+  POOL_JSON="$TMP/reask_pool.json"
+  python3 "$(cd "$HERE/../.." && pwd)/work/pipeline/alias_reask_pool.py" \
+    --out "$POOL_JSON" --dsn "$DSN" --alias-table "$ALIAS_TABLE" \
+    --stale-days "$REASK_STALE_DAYS" \
+    || echo "reask: пул кандидатов не собран — шаг пропущен" >&2
+  if [ -s "$POOL_JSON" ]; then
+    chmod 644 "$POOL_JSON" 2>/dev/null
+    REASK_DONE=0
+    while [ "$REASK_DONE" -lt "$REASK_CAP" ]; do
+      over_budget && { echo "reask: бюджет $BUDGET с исчерпан" >&2; break; }
+      psql "$DSN" -tA -v ON_ERROR_STOP=1 \
+        -v alias_table="$ALIAS_TABLE" \
+        -v batch="$BATCH" \
+        -v reask_stale_days="$REASK_STALE_DAYS" \
+        -v pool_path="$POOL_JSON" \
+        -f "$HERE/wiki_alias_reask_select_entity_batch.sql" > "$TMP/reask_pay" 2>/dev/null
+      chmod 644 "$TMP/reask_pay" 2>/dev/null
+      PAY=$(cat "$TMP/reask_pay")
+      case "$PAY" in ''|'[]'|'null') break;; esac
+      {
+        printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — everyday words a person uses when asking about this kind of record (the words that appear in their question), and also the record title itself; quantity and field names go only under quantities; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+        cat "$TMP/reask_pay"
+      } > "$TMP/reask_msg"
+      chmod 644 "$TMP/reask_msg"
+      "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/reask_msg" \
+        --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
+        --ans "$TMP/reask_ans" --err "$TMP/reask_err" || {
+          echo "reask: пачка пропущена ($(head -c 100 "$TMP/reask_err" | tr -d '\n'))" >&2
+          continue
+        }
+      python3 ./wiki_alias_parse.py "$TMP/reask_ans" "$TMP/reask_pay" \
+        "$TMP/reask_rows.json" "$TMP/reask_meas.json"
+      chmod 644 "$TMP/reask_rows.json" "$TMP/reask_meas.json" 2>/dev/null
+      # Боковая таблица: полный ответ модели (не основной словарь).
+      psql "$DSN" -q -v ON_ERROR_STOP=1 \
+        -v alias_table="$REASK_TABLE" \
+        -v measure_table="$MEASURE_TABLE" \
+        -v rows_path="$TMP/reask_rows.json" \
+        -v measures_path="$TMP/reask_meas.json" \
+        -f "$HERE/wiki_alias_merge_entity.sql" 2>&1 | grep -i error || true
+      # Сверка: только подтверждённые связи дописываются в основной словарь.
+      python3 "$(cd "$HERE/../.." && pwd)/work/pipeline/alias_reask_confirm.py" \
+        --rows-path "$TMP/reask_rows.json" \
+        --confirmed-out "$TMP/reask_confirmed.json" \
+        --journal-out "$TMP/reask_rejected.json" \
+        --dsn "$DSN" --alias-table "$ALIAS_TABLE" \
+        --confirm-table "$CONFIRM_TABLE" --apply \
+        || echo "reask: сверка не прошла" >&2
+      if [ -s "$TMP/reask_confirmed.json" ]; then
+        psql "$DSN" -q -v ON_ERROR_STOP=1 \
+          -v alias_table="$ALIAS_TABLE" \
+          -v rows_path="$TMP/reask_confirmed.json" \
+          -f "$HERE/wiki_alias_reask_merge_confirmed.sql" 2>&1 | grep -i error || true
+      fi
+      if [ -s "$TMP/reask_rejected.json" ]; then
+        psql "$DSN" -q -v ON_ERROR_STOP=1 \
+          -v journal_table="$JOURNAL_TABLE" \
+          -v journal_path="$TMP/reask_rejected.json" \
+          -f "$HERE/wiki_alias_reask_journal.sql" 2>&1 | grep -i error || true
+      fi
+      REASK_DONE=$((REASK_DONE + BATCH))
+    done
+    echo "reask: обработано пачек до $REASK_DONE сущностей" >&2
+  fi
+fi
+
 # Итог «алиасов в базе» — wiki_alias_publish.sql (stats + REFRESH, не в tx с INSERT).
 # Внутри publish: VACUUM (REFRESH_TABLE) $ALIAS_TABLE.
 psql_wa -f "$HERE/wiki_alias_publish.sql" \

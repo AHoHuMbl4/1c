@@ -467,6 +467,14 @@ psql "$DSN" -q -f coverage_build.sql || fail "перепись полноты"
 # Человеческие слова к сущности — один раз на сущность, штатным агентом OpenClaw. Идемпотентно:
 # спрашиваются только те, которых ещё нет в `search_entity_alias`. Ограничение за прогон, чтобы
 # первый такт крупной базы не превратился в один большой вызов модели.
+# Счётчик тактов для периодического reask (С5): WIKI_ALIAS_REASK_EVERY=0 по умолчанию — выкл.
+WIKI_ALIAS_TICK=$(psql "$DSN" -tAc \
+  "SELECT coalesce((SELECT v FROM search_quality WHERE k='wiki_alias_tick'),0)+1" 2>/dev/null \
+  | tr -cd '0-9')
+[ -n "$WIKI_ALIAS_TICK" ] || WIKI_ALIAS_TICK=1
+psql "$DSN" -q -c "DELETE FROM search_quality WHERE k='wiki_alias_tick';
+  INSERT INTO search_quality VALUES ('wiki_alias_tick', $WIKI_ALIAS_TICK);" >/dev/null 2>&1 || true
+export WIKI_ALIAS_TICK
 ./wiki_alias.sh "${WIKI_ALIAS_PER_TACT:-100}" || echo "алиасы: шаг не прошёл, такт продолжается" >&2
 ./wiki_publish.sh || echo "вики: шаг не прошёл, такт продолжается" >&2
 

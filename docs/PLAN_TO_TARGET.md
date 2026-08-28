@@ -228,6 +228,11 @@ root-owned). `GOLD_SETS.md` обновляется **после** установ
 через тот же пересбор и сверку, что С1.
 **[код 27.08]** прибор `work/pipeline/alias_candidates.py` + замок
 `test_alias_candidates.py` **22/0** в git; живой прогон — после С1/С2.
+**[код 28.08 С5-пайплайн]** cold start (непокрытые первыми, расчёт тактов
+`ceil(E/CAP)` — `docs/C5_ALIAS_PIPELINE.md`); периодический reask
+`WIKI_ALIAS_REASK_EVERY=0` по умолчанию → боковая `alias_<db>_reask` +
+`alias_reask_confirm.py` (≥2 подтверждения или gold pass) → MERGE в основной
+словарь; замок `test_wiki_alias_psql.py` **72/0**.
 Доказательство: `candidates.tsv` с результатом проверки по каждому.
 Зависит от: С1, С2. Параллельно: с К, В, Э.
 

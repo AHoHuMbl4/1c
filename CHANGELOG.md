@@ -1,3 +1,18 @@
+## 2026-08-28 — С5-пайплайн: cold start + периодический reask словаря [код]
+
+**[код]** Пайплайн словаря на любой базе: cold start уже держится
+`wiki_alias_select_entity_batch.sql` (непокрытые первыми); расчёт тактов
+`ceil(E/CAP)` — `docs/C5_ALIAS_PIPELINE.md` (okna 351→4 такта, ut_test
+1502→16 при CAP=100). Периодическое доучивание: `WIKI_ALIAS_REASK_EVERY=0`
+по умолчанию (боевые базы не меняются); при включении — боковая
+`alias_<db>_reask`, прибор журнала (`alias_reask_pool.py`), сверка
+`alias_reask_confirm.py` (≥2 подтверждения или gold pass), MERGE только
+подтверждённых; отклонённые — `alias_<db>_reask_journal`. Счётчик такта
+`wiki_alias_tick` в `build.sh`.
+
+**[замер]** Замки: `test_wiki_alias_psql.py` (cold/reask/confirm/bash -n);
+`test_alias_candidates.py` 22/0 без изменений.
+
 ## 2026-08-28 — К9 фаза 9: kind-каталог → осевые движения в пул [код]
 
 **[код]** `serene_ask`: `event_kind_catalog_expand_pool` (~2444) — event+count:
