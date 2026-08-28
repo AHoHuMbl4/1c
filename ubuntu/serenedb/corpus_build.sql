@@ -387,6 +387,396 @@ SELECT 'ось дат графика' AS шаг,
        (SELECT count(*) FROM tmp3_cal_workkeys
          WHERE coalesce(kind_key, '') <> '') AS working_keys;
 
+-- ============ 1-quint. ОСЬ ВАЛЮТ ($metadata + join витрины, без имён конфигурации) ============
+-- Справочник валют: catalog_* с Code+Description; регистр курсов: informationregister
+-- с Period + Guid*_Key + numeric; константа БУ → Ref в каталоге; факты document_* /
+-- accumulationregister_* с currency-ref + numeric amount + date. Пустая карта = ось
+-- выключена (как balance_registers / calendar). Карты колонок — search_currency_map,
+-- search_currency_rate_map; списки сущностей — search_meta currency_*.
+-- Доки: sql/functions/utility#queryquery_string; cookbook/sql_features/query_and_query_table_functions;
+-- sql/functions/text#format-syntax (%I/%L); sql/functions/aggregates#string_aggarg-sep.
+
+CREATE OR REPLACE TABLE tmp3_cur_cat AS
+SELECT e.entity AS src_table
+FROM tmp3_ent e
+WHERE e.entity LIKE 'catalog_%'
+  AND e.entity NOT LIKE '%\_recordtype' ESCAPE '\'
+  AND e.entity NOT LIKE '%\_rowtype' ESCAPE '\'
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity AND lower(p.prop) = 'ref_key')
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity AND lower(p.prop) = 'code')
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity AND lower(p.prop) = 'description');
+
+CREATE OR REPLACE TABLE tmp3_cur_rate_reg AS
+SELECT e.entity AS src_table
+FROM tmp3_ent e
+WHERE e.entity LIKE 'informationregister_%'
+  AND e.entity NOT LIKE '%\_recordtype' ESCAPE '\'
+  AND e.entity NOT LIKE '%\_rowtype' ESCAPE '\'
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity AND lower(p.prop) = 'period'
+                AND p.edm IN ('Edm.DateTime', 'Edm.Date'))
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity
+                AND p.edm = 'Edm.Guid'
+                AND p.prop LIKE '%\_Key' ESCAPE '\')
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity
+                AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                              'Edm.Int64', 'Edm.Byte')
+                AND p.prop NOT IN ('LineNumber', 'SurrogateKey'))
+  AND EXISTS (SELECT 1 FROM tmp3_cur_cat);
+
+CREATE OR REPLACE TABLE tmp3_cur_rate_map AS
+SELECT r.src_table,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = r.src_table AND lower(p.prop) = 'period'
+         ORDER BY p.prop LIMIT 1) AS period_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = r.src_table
+           AND p.edm = 'Edm.Guid' AND p.prop LIKE '%\_Key' ESCAPE '\'
+         ORDER BY p.prop LIMIT 1) AS curr_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = r.src_table
+           AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                         'Edm.Int64', 'Edm.Byte')
+           AND p.prop NOT IN ('LineNumber', 'SurrogateKey')
+         ORDER BY p.prop LIMIT 1) AS rate_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = r.src_table
+           AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                         'Edm.Int64', 'Edm.Byte')
+           AND p.prop NOT IN ('LineNumber', 'SurrogateKey')
+           AND p.prop <> coalesce(
+             (SELECT p2.prop FROM tmp3_prop p2
+               WHERE p2.entity = r.src_table
+                 AND p2.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                                'Edm.Int64', 'Edm.Byte')
+                 AND p2.prop NOT IN ('LineNumber', 'SurrogateKey')
+               ORDER BY p2.prop LIMIT 1), '')
+         ORDER BY p.prop LIMIT 1) AS denom_col
+FROM tmp3_cur_rate_reg r;
+
+CREATE OR REPLACE TABLE tmp3_cur_fact AS
+SELECT e.entity AS src_table
+FROM tmp3_ent e
+WHERE (
+        e.entity LIKE 'document_%'
+     OR (e.entity LIKE 'accumulationregister_%'
+         AND e.entity NOT LIKE '%\_recordtype' ESCAPE '\'
+         AND e.entity NOT LIKE '%\_rowtype' ESCAPE '\')
+      )
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity
+                AND p.edm = 'Edm.Guid'
+                AND p.prop LIKE '%\_Key' ESCAPE '\')
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity
+                AND p.edm IN ('Edm.DateTime', 'Edm.Date'))
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity
+                AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                              'Edm.Int64', 'Edm.Byte')
+                AND p.prop NOT IN ('LineNumber', 'SurrogateKey'))
+  AND EXISTS (SELECT 1 FROM tmp3_cur_cat);
+
+CREATE OR REPLACE TABLE tmp3_cur_fact_map AS
+SELECT f.src_table,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = f.src_table
+           AND p.edm = 'Edm.Guid' AND p.prop LIKE '%\_Key' ESCAPE '\'
+         ORDER BY p.prop LIMIT 1) AS curr_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = f.src_table
+           AND p.edm IN ('Edm.DateTime', 'Edm.Date')
+         ORDER BY CASE WHEN lower(p.prop) = 'date' THEN 0
+                       WHEN lower(p.prop) <> 'period' THEN 1
+                       ELSE 2 END,
+                  p.prop LIMIT 1) AS date_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = f.src_table
+           AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                         'Edm.Int64', 'Edm.Byte')
+           AND p.prop NOT IN ('LineNumber', 'SurrogateKey')
+         ORDER BY p.prop LIMIT 1) AS amount_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = f.src_table
+           AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                         'Edm.Int64', 'Edm.Byte')
+           AND p.prop NOT IN ('LineNumber', 'SurrogateKey')
+           AND p.prop <> coalesce(
+             (SELECT p2.prop FROM tmp3_prop p2
+               WHERE p2.entity = f.src_table
+                 AND p2.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                                'Edm.Int64', 'Edm.Byte')
+                 AND p2.prop NOT IN ('LineNumber', 'SurrogateKey')
+               ORDER BY p2.prop LIMIT 1), '')
+         ORDER BY p.prop LIMIT 1) AS rate_col,
+       CASE WHEN EXISTS (SELECT 1 FROM tmp3_key k
+                         WHERE k.entity = f.src_table AND k.key_cols = ['Ref_Key'])
+            THEN 'header' ELSE 'line' END AS grain,
+       coalesce((SELECT k.key_cols[1] FROM tmp3_key k
+                  WHERE k.entity = f.src_table AND len(k.key_cols) > 0
+                  ORDER BY k.entity LIMIT 1), 'Ref_Key') AS grain_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = f.src_table AND lower(p.prop) = 'posted'
+         ORDER BY p.prop LIMIT 1) AS posted_col,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = f.src_table AND lower(p.prop) = 'deletionmark'
+         ORDER BY p.prop LIMIT 1) AS deleted_col
+FROM tmp3_cur_fact f;
+
+CREATE OR REPLACE TABLE tmp3_cur_live AS
+SELECT m.src_table, m.curr_col, m.amount_col, m.date_col, m.grain, m.grain_col,
+       m.rate_col, m.posted_col, m.deleted_col,
+       (SELECT t.table_name FROM duckdb_tables() t
+         WHERE t.database_name = current_database()
+           AND lower(t.table_name) = m.src_table
+         LIMIT 1) AS src_real,
+       c.src_table AS cat_entity,
+       (SELECT t.table_name FROM duckdb_tables() t
+         WHERE t.database_name = current_database()
+           AND lower(t.table_name) = c.src_table
+         LIMIT 1) AS cat_real
+FROM tmp3_cur_fact_map m
+CROSS JOIN tmp3_cur_cat c;
+
+CREATE OR REPLACE TABLE tmp3_cur_keyhits (
+  src_table VARCHAR, cat_entity VARCHAR, key_col VARCHAR, hits BIGINT);
+
+\set ON_ERROR_STOP off
+SELECT format(
+  'INSERT INTO tmp3_cur_keyhits SELECT %L, %L, %L, count(*)::BIGINT '
+  'FROM query_table(%L) fact '
+  'INNER JOIN query_table(%L) cat ON fact.%I = cat.%I '
+  'WHERE fact.%I IS NOT NULL',
+  l.src_table, l.cat_entity, p.prop, l.src_real, l.cat_real,
+  p.prop, 'Ref_Key', p.prop)
+FROM tmp3_cur_live l
+JOIN tmp3_prop p ON p.entity = l.src_table
+                AND p.edm = 'Edm.Guid'
+                AND p.prop LIKE '%\_Key' ESCAPE '\'
+WHERE l.src_real IS NOT NULL AND l.cat_real IS NOT NULL
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_cur_amthits (
+  src_table VARCHAR, curr_col VARCHAR, amount_col VARCHAR, hits BIGINT);
+
+\set ON_ERROR_STOP off
+SELECT format(
+  'INSERT INTO tmp3_cur_amthits SELECT %L, %L, %L, '
+  'count(*) FILTER (WHERE fact.%I IS NOT NULL '
+  '  AND try_cast(fact.%I AS DOUBLE) IS NOT NULL)::BIGINT '
+  'FROM query_table(%L) fact',
+  r.src_table, r.curr_col, p.prop, r.curr_col, p.prop, r.src_real)
+FROM (
+  SELECT src_table, src_real, curr_col
+  FROM (
+    SELECT src_table, src_real, key_col AS curr_col,
+           row_number() OVER (
+             PARTITION BY src_table ORDER BY hits DESC, cat_entity, key_col) AS rn
+    FROM tmp3_cur_keyhits WHERE hits > 0
+  ) z WHERE rn = 1
+) r
+JOIN tmp3_prop p ON p.entity = r.src_table
+                AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
+                              'Edm.Int64', 'Edm.Byte')
+                AND p.prop NOT IN ('LineNumber', 'SurrogateKey')
+WHERE r.src_real IS NOT NULL AND coalesce(r.curr_col, '') <> ''
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_cur_resolved AS
+WITH kc AS (
+  SELECT src_table, key_col AS curr_col
+  FROM (
+    SELECT src_table, key_col,
+           row_number() OVER (
+             PARTITION BY src_table ORDER BY hits DESC, cat_entity, key_col) AS rn
+    FROM tmp3_cur_keyhits WHERE hits > 0
+  ) z WHERE rn = 1
+),
+ac AS (
+  SELECT src_table, amount_col,
+         row_number() OVER (
+           PARTITION BY src_table ORDER BY hits DESC, amount_col) AS rn
+  FROM tmp3_cur_amthits WHERE hits > 0
+)
+SELECT m.src_table,
+       coalesce(kc.curr_col, m.curr_col) AS curr_col,
+       coalesce(ac.amount_col, m.amount_col) AS amount_col,
+       m.date_col,
+       m.grain,
+       m.grain_col,
+       m.rate_col,
+       m.posted_col,
+       m.deleted_col,
+       l.src_real
+FROM tmp3_cur_fact_map m
+LEFT JOIN kc ON kc.src_table = m.src_table
+LEFT JOIN ac ON ac.src_table = m.src_table AND ac.rn = 1
+LEFT JOIN LATERAL (
+  SELECT src_real FROM tmp3_cur_live x
+  WHERE x.src_table = m.src_table LIMIT 1
+) l ON true
+WHERE coalesce(m.src_table, '') <> ''
+  AND coalesce(coalesce(kc.curr_col, m.curr_col), '') <> ''
+  AND coalesce(coalesce(ac.amount_col, m.amount_col), '') <> ''
+  AND coalesce(m.date_col, '') <> '';
+
+DELETE FROM search_currency_map;
+INSERT INTO search_currency_map
+SELECT r.src_table, r.curr_col, r.amount_col, r.date_col, r.grain, r.grain_col,
+       coalesce(r.rate_col, ''), coalesce(r.posted_col, ''), coalesce(r.deleted_col, ''),
+       now()
+FROM tmp3_cur_resolved r;
+
+CREATE OR REPLACE TABLE tmp3_cur_rate_live AS
+SELECT m.src_table, m.period_col, m.curr_col, m.rate_col, m.denom_col,
+       (SELECT t.table_name FROM duckdb_tables() t
+         WHERE t.database_name = current_database()
+           AND lower(t.table_name) = m.src_table
+         LIMIT 1) AS src_real,
+       c.src_table AS cat_entity,
+       (SELECT t.table_name FROM duckdb_tables() t
+         WHERE t.database_name = current_database()
+           AND lower(t.table_name) = c.src_table
+         LIMIT 1) AS cat_real
+FROM tmp3_cur_rate_map m
+CROSS JOIN tmp3_cur_cat c;
+
+CREATE OR REPLACE TABLE tmp3_cur_rate_keyhits (
+  src_table VARCHAR, cat_entity VARCHAR, key_col VARCHAR, hits BIGINT);
+
+\set ON_ERROR_STOP off
+SELECT format(
+  'INSERT INTO tmp3_cur_rate_keyhits SELECT %L, %L, %L, count(*)::BIGINT '
+  'FROM query_table(%L) reg '
+  'INNER JOIN query_table(%L) cat ON reg.%I = cat.%I '
+  'WHERE reg.%I IS NOT NULL',
+  l.src_table, l.cat_entity, p.prop, l.src_real, l.cat_real,
+  p.prop, 'Ref_Key', p.prop)
+FROM tmp3_cur_rate_live l
+JOIN tmp3_prop p ON p.entity = l.src_table
+                AND p.edm = 'Edm.Guid'
+                AND p.prop LIKE '%\_Key' ESCAPE '\'
+WHERE l.src_real IS NOT NULL AND l.cat_real IS NOT NULL
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_cur_rate_resolved AS
+WITH kc AS (
+  SELECT src_table, key_col AS curr_col
+  FROM (
+    SELECT src_table, key_col,
+           row_number() OVER (
+             PARTITION BY src_table ORDER BY hits DESC, cat_entity, key_col) AS rn
+    FROM tmp3_cur_rate_keyhits WHERE hits > 0
+  ) z WHERE rn = 1
+)
+SELECT m.src_table AS reg_table,
+       m.period_col,
+       coalesce(kc.curr_col, m.curr_col) AS curr_col,
+       m.rate_col,
+       coalesce(m.denom_col, '') AS denom_col
+FROM tmp3_cur_rate_map m
+LEFT JOIN kc ON kc.src_table = m.src_table
+WHERE coalesce(m.src_table, '') <> ''
+  AND coalesce(m.period_col, '') <> ''
+  AND coalesce(coalesce(kc.curr_col, m.curr_col), '') <> ''
+  AND coalesce(m.rate_col, '') <> '';
+
+DELETE FROM search_currency_rate_map;
+INSERT INTO search_currency_rate_map
+SELECT reg_table, period_col, curr_col, rate_col, denom_col, now()
+FROM tmp3_cur_rate_resolved;
+
+CREATE OR REPLACE TABLE tmp3_cur_const AS
+SELECT e.entity AS src_table,
+       (SELECT p.prop FROM tmp3_prop p
+         WHERE p.entity = e.entity AND p.edm = 'Edm.Guid'
+         ORDER BY p.prop LIMIT 1) AS val_col
+FROM tmp3_ent e
+WHERE e.entity LIKE 'constant_%'
+  AND EXISTS (SELECT 1 FROM tmp3_prop p
+              WHERE p.entity = e.entity AND p.edm = 'Edm.Guid')
+  AND EXISTS (SELECT 1 FROM tmp3_cur_cat);
+
+CREATE OR REPLACE TABLE tmp3_cur_const_live AS
+SELECT c.src_table, c.val_col,
+       (SELECT t.table_name FROM duckdb_tables() t
+         WHERE t.database_name = current_database()
+           AND lower(t.table_name) = c.src_table
+         LIMIT 1) AS src_real
+FROM tmp3_cur_const c;
+
+CREATE OR REPLACE TABLE tmp3_cur_acct (acct_key VARCHAR);
+
+\set ON_ERROR_STOP off
+SELECT format(
+  'INSERT INTO tmp3_cur_acct SELECT %I::VARCHAR FROM query_table(%L) LIMIT 1',
+  l.val_col, l.src_real)
+FROM tmp3_cur_const_live l
+WHERE l.src_real IS NOT NULL AND coalesce(l.val_col, '') <> ''
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_cur_workkeys (curr_key VARCHAR);
+
+\set ON_ERROR_STOP off
+SELECT format(
+  'INSERT INTO tmp3_cur_workkeys SELECT DISTINCT %I::VARCHAR '
+  'FROM query_table(%L) WHERE %I IS NOT NULL',
+  r.curr_col, r.src_real, r.curr_col)
+FROM tmp3_cur_resolved r
+WHERE r.src_real IS NOT NULL AND coalesce(r.curr_col, '') <> ''
+\gexec
+\set ON_ERROR_STOP on
+
+DELETE FROM search_meta
+ WHERE k IN ('currency_catalogs', 'currency_rate_registers',
+             'accounting_currency_constant', 'currency_working_keys');
+
+INSERT INTO search_meta
+SELECT 'currency_catalogs',
+       coalesce(string_agg(src_table, ',' ORDER BY src_table), '')
+FROM tmp3_cur_cat;
+
+INSERT INTO search_meta
+SELECT 'currency_rate_registers',
+       coalesce(string_agg(src_table, ',' ORDER BY src_table), '')
+FROM tmp3_cur_rate_reg;
+
+INSERT INTO search_meta
+SELECT 'accounting_currency_constant',
+       coalesce((SELECT acct_key FROM tmp3_cur_acct
+                  WHERE acct_key IN (
+                    SELECT DISTINCT curr_key FROM tmp3_cur_workkeys
+                    WHERE coalesce(curr_key, '') <> '')
+                  ORDER BY acct_key LIMIT 1),
+                (SELECT acct_key FROM tmp3_cur_acct
+                  WHERE coalesce(acct_key, '') <> ''
+                  ORDER BY acct_key LIMIT 1),
+                '');
+
+INSERT INTO search_meta
+SELECT 'currency_working_keys',
+       coalesce(string_agg(DISTINCT curr_key, ',' ORDER BY curr_key), '')
+FROM tmp3_cur_workkeys
+WHERE coalesce(curr_key, '') <> '';
+
+SELECT 'currency_axis' AS step,
+       (SELECT v FROM search_meta WHERE k = 'currency_catalogs') AS catalogs,
+       (SELECT v FROM search_meta WHERE k = 'currency_rate_registers') AS rate_regs,
+       (SELECT v FROM search_meta WHERE k = 'accounting_currency_constant') AS acct_key,
+       (SELECT count(*) FROM search_currency_map) AS amount_map_n,
+       (SELECT count(*) FROM search_currency_rate_map) AS rate_map_n,
+       (SELECT count(*) FROM tmp3_cur_workkeys
+         WHERE coalesce(curr_key, '') <> '') AS working_keys;
+
 SELECT 'метаданные' AS шаг, (SELECT count(*) FROM tmp3_ent) AS сущностей,
        (SELECT count(*) FROM tmp3_prop) AS свойств,
        (SELECT count(*) FROM tmp3_key WHERE len(key_cols) > 0) AS с_ключом;

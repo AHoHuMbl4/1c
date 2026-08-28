@@ -1,8 +1,10 @@
 # Ось развилки «валюта документа vs валюта учёта» (okna, §7bis)
 
-**Статус:** шаг 2 ask-кода выполнен 28.08 (зона `z04b_currency_axis`, флаг
-`ASK_CURRENCY_AXIS` умолч. 0). Шаг 1 корпуса (`search_currency_map`) — вне этого
-захода; ось на стейджинге открывается только при непустой карте meta.  
+**Статус:** шаг 1 корпуса выполнен 28.08 (`corpus_build.sql` §1-quint,
+`search_currency_map` / `search_currency_rate_map`, `search_meta` currency_*,
+оффлайн-замок `test_currency_meta_build.py` **40/0**). Шаг 2 ask-кода выполнен
+28.08 (зона `z04b_currency_axis`, флаг `ASK_CURRENCY_AXIS` умолч. 0). Живая
+приёмка okna (§1.3: n_fx=40, Δ≈375437) — после пересборки корпуса на окне.  
 **Дата:** 2026-08-27 (сводка замера C1 25.08)  
 **Опора:** замер C1 / перепроверка okna `:17890`
 ([`.claude/state/prompt-currency-impl.md`](../.claude/state/prompt-currency-impl.md),
@@ -171,7 +173,7 @@ SQL §1.3 на полном срезе реализации даёт `n_fx = 40`
 | Как сопоставить «человек сказал евро» с Ref валюты без списка слов | словарь / wiki-alias / `search_fork_label` по **данным** `Catalog_Валюты` (Code/Description); холодный старт без словаря = always-on по разному счёту + C |
 | Зерно header vs line для всех 36 EntitySet | замер зерна — на реализации; универсальное правило `grain` пишется картой из `$metadata`, не проверено на каждом из 36 |
 | Курсы ЦБ vs банковские EUR в `Catalog_Валюты` (6 строк: MDL/USD/EUR + банковские) | какая строка «евро» для вопроса — **не решено замером**; развилка внутри каталога = данные + словарь §7, не хардкод |
-| `currency_*` уже в `corpus_build.sql` | **нет** (только calendar / balance) — блок ещё писать |
+| `currency_*` уже в `corpus_build.sql` | **да** (§1-quint 28.08): `search_currency_map`, `search_currency_rate_map`, `search_meta` currency_*; живая okna — после пересборки |
 | Связь C1 с ответом регистра (сейчас лидер продаж — register) | ось amount-basis внутри document; канон register vs document — C3 / sales_canon, не этот проект |
 
 ---
@@ -352,6 +354,16 @@ E×M×W). Тот же класс механики, что MTD vs месяц / ca
   `balance_registers`). Новый загрузчик / Python-обход — запрещены.
 - **Приёмка:** на okna ключи currency_* непусты; SQL §1.3 → `n_fx > 0` и
   `doc_amount ≠ accounting_amount` (порядок Δ **375 437** на полном срезе).
+
+**[исполнено 28.08]** `corpus_build.sql` §1-quint + `corpus_init.sql` DDL/GRANT/
+precheck: `search_currency_map` (src, curr/amount/date cols, grain, rate,
+posted/deleted), `search_currency_rate_map` (reg, period, curr, rate, denom),
+`search_meta` — `currency_catalogs`, `currency_rate_registers`,
+`accounting_currency_constant` (Ref из constant_* + витрины),
+`currency_working_keys`. Роли колонок: metadata `$metadata` → `tmp3_prop`,
+уточнение join `query_table`↔catalog Ref_Key; grain=`header` при
+`tmp3_key.key_cols=['Ref_Key']`. Оффлайн `test_currency_meta_build.py` **40/0**.
+Живая okna — после такта сборки (не снято 28.08).
 
 ### Шаг 2 — ask-код за `ASK_CURRENCY_AXIS` (умолч. 0)
 

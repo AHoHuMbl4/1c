@@ -92,6 +92,33 @@ CREATE TABLE IF NOT EXISTS search_calendar_map (
 GRANT SELECT ON search_calendar_map TO serene_ro;
 GRANT SELECT ON search_calendar_map TO serene_resolver;
 
+-- Карта оси валют: prop-имена из $metadata (currency-ref / amount / date / grain).
+-- Наполняется corpus_build.sql §1-quint; пустая — норма (оси в базе нет).
+CREATE TABLE IF NOT EXISTS search_currency_map (
+  src_table VARCHAR,
+  curr_col VARCHAR,
+  amount_col VARCHAR,
+  date_col VARCHAR,
+  grain VARCHAR,
+  grain_col VARCHAR,
+  rate_col VARCHAR,
+  posted_col VARCHAR,
+  deleted_col VARCHAR,
+  seen_at TIMESTAMP);
+GRANT SELECT ON search_currency_map TO serene_ro;
+GRANT SELECT ON search_currency_map TO serene_resolver;
+
+-- Карта join регистра курсов: Period + currency-ref + numeric rate (+ опц. denom).
+CREATE TABLE IF NOT EXISTS search_currency_rate_map (
+  reg_table VARCHAR,
+  period_col VARCHAR,
+  curr_col VARCHAR,
+  rate_col VARCHAR,
+  denom_col VARCHAR,
+  seen_at TIMESTAMP);
+GRANT SELECT ON search_currency_rate_map TO serene_ro;
+GRANT SELECT ON search_currency_rate_map TO serene_resolver;
+
 CREATE TABLE IF NOT EXISTS search_quality (k VARCHAR, v BIGINT, note VARCHAR);
 CREATE TABLE IF NOT EXISTS build_state (ts TIMESTAMP, k VARCHAR, v BIGINT);
 -- Разметка «о таком спрашивают / это служебное». Заводится ЗДЕСЬ, а не только в
@@ -296,11 +323,36 @@ SELECT CASE
        THEN error('search_meta calendar_*: v IS NULL (ожидается VARCHAR, пусто при отсутствии)')
 END;
 
+-- Precheck оси валют: ключи currency_* либо все четыре (после build), либо
+-- ни одного (до первого такта). Частичный набор — дефект сборки.
+SELECT CASE
+  WHEN (SELECT count(*) FROM information_schema.role_table_grants
+        WHERE privilege_type = 'SELECT' AND grantee = 'serene_ro'
+          AND table_name = 'search_currency_map') = 0
+       THEN error('serene_ro без SELECT на search_currency_map')
+  WHEN (SELECT count(*) FROM information_schema.role_table_grants
+        WHERE privilege_type = 'SELECT' AND grantee = 'serene_ro'
+          AND table_name = 'search_currency_rate_map') = 0
+       THEN error('serene_ro без SELECT на search_currency_rate_map')
+  WHEN (SELECT count(*) FROM search_meta
+        WHERE k IN ('currency_catalogs', 'currency_rate_registers',
+                    'accounting_currency_constant', 'currency_working_keys'))
+       NOT IN (0, 4)
+       THEN error('search_meta currency_*: частичный набор (нужно 0 или 4 ключа)')
+  WHEN EXISTS (
+         SELECT 1 FROM search_meta
+         WHERE k IN ('currency_catalogs', 'currency_rate_registers',
+                     'accounting_currency_constant', 'currency_working_keys')
+           AND v IS NULL)
+       THEN error('search_meta currency_*: v IS NULL (ожидается VARCHAR, пусто при отсутствии)')
+END;
+
 SELECT 'объекты поиска на месте' AS шаг,
        (SELECT count(*) FROM duckdb_tables()
         WHERE database_name = current_database()
           AND table_name IN ('search_corpus','resolver_index','search_tables',
                              'search_sources','search_meta','search_balance_map','search_calendar_map',
+                             'search_currency_map','search_currency_rate_map',
                              'build_state','search_refcols','search_fork_class',
                              'search_fork_label')) AS таблиц,
        (SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'search_idx') AS индексов,
