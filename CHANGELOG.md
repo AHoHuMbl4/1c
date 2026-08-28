@@ -1,3 +1,16 @@
+## 2026-08-28 — К9 фаза 5: event-дуэль → исходы A/B/C + подпись оси [код]
+
+**[код]** `serene_ask`: `event_duel_applies` + `try_event_code_entity_pick`
+(~2671) — ничья двух осевых движений → пул в fork, не clarify;
+`_event_distinct_fork_rows` в `fork_detector_scan` (~4610) — COUNT(DISTINCT)
+для fork A/B/C; снят `_fork_defer_distinct` (исходы A/B снова терминальны);
+`_fork_atom_of` distinct_axis (~5028); `render_atom_pair` + паспорт
+(`_passport_axis_col`, `build_answer_passport` grain=axis) — «N · Контрагенты».
+
+**[замер]** Замки: test_action_class **27/0** (+4 A/B/C/axis, было 23/0);
+sales_rank 51/0, leader_path 30/0, entity_form 47/0, k6_rank_v2 10/0,
+compose 92/0. bench/живые пробы — оркестратор.
+
 ## 2026-08-28 — К8: скилл ask-decomposer — составной вопрос → атомы /ask [код]
 
 **[код]** Новый скилл OpenClaw `ubuntu/openclaw/skills/ask-decomposer/`

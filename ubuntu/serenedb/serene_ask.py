@@ -2584,25 +2584,52 @@ def count_defer_measure_clarify(intent, src, axes=None):
     return bool(live_axis_col_for_count(intent, src, axes))
 
 
-def count_defer_fork_outcomes(intent, src, axes=None):
-    """K9-f4: event+count+axis -> DISTINCT via answer(), not fork row figures."""
+def event_duel_applies(intent, pool):
+    """K9-ф5: event+count+>=2 осевых движений -> fork A/B/C, не clarify сущности."""
+    if not event_path_active(intent) or len(pool or []) < 2:
+        return False
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    n_axis = 0
+    for src in pool:
+        try:
+            ax = refcols_of(src)
+        except RuntimeError:
+            ax = []
+        if live_axis_col_for_count(intent, src, ax):
+            n_axis += 1
+    return n_axis >= 2
+
+
+def _event_distinct_fork_rows(intent, match, preds, rows, rel_by_src):
+    """K9-ф5: event+count+ось -> COUNT(DISTINCT) в fork_scan для исходов A/B/C."""
     if not event_path_active(intent):
-        return False
-    return count_defer_measure_clarify(intent, src, axes)
-
-
-def _fork_defer_distinct(intent, picked_src, diag):
-    if not (picked_src or "").strip():
-        return False
-    _ax = []
-    try:
-        _ax = refcols_of(picked_src)
-    except RuntimeError:
-        _ax = []
-    if count_defer_fork_outcomes(intent, picked_src, _ax):
-        diag["fork_outcome_deferred_distinct"] = True
-        return True
-    return False
+        return rows
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return rows
+    out = dict(rows or {})
+    for src in list(rel_by_src or {}):
+        if src not in out:
+            continue
+        try:
+            axes = refcols_of(src)
+        except RuntimeError:
+            axes = []
+        col = live_axis_col_for_count(intent, src, axes)
+        if not col:
+            continue
+        agg = aggregate_distinct_axis(src, match, preds, col)
+        if not agg or agg.get("count") is None:
+            continue
+        ax_lab = _passport_axis_label(col, axes)
+        d = dict(out[src])
+        d["count"] = agg["count"]
+        d["distinct_axis"] = col
+        d["distinct_axis_label"] = ax_lab
+        out[src] = d
+    return out
 
 
 def event_path_active(intent):
@@ -2642,6 +2669,17 @@ def try_event_code_entity_pick(question, intent, cands, diag, cut, t0, by, match
                 "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
                                    reason="event_no_axis_movement")}
     if tied:
+        if event_duel_applies(intent, tied):
+            form = K6R.infer_rank_form(intent, question) if K6R else "distinct"
+            pos = {s: i for i, s in enumerate(cands or [])}
+            ordered = sorted(
+                tied,
+                key=lambda s: K6R.rank_key_v2(
+                    s, feats.get(s), intent, form, pos.get(s, 10**6))
+                if K6R else s)
+            diag["event_duel_pool"] = list(ordered)
+            diag["event_code_lock"] = ordered[0]
+            return {"picked": ordered, "marks": marks or {}, "plan": {}}
         try:
             lab_by = {r[0]: r[1] for r in psql(
                 "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
@@ -4587,6 +4625,7 @@ def fork_detector_scan(match, preds, intent, today, rel_by_src,
                 rows.update(fork_scan(match, [], cat_rel))
         else:
             rows = fork_scan(match, use_preds, rel_by_src)
+        rows = _event_distinct_fork_rows(intent, match, use_preds, rows, rel_by_src)
         pmeta = {}
         if pr.get("from") or pr.get("to"):
             for s in rows:
@@ -4595,9 +4634,11 @@ def fork_detector_scan(match, preds, intent, today, rel_by_src,
                            period_meta=pmeta)
         return rows, cls, readings, []
     cells, merged, pby = fork_scan_readings(match, readings, rel_by_src)
-    cls = fork_classes_windowed(merged, pby, measure_word, want=want,
-                                  rel_by_src=rel_by_src)
     rows = {s: merged[(s, w)] for (s, w) in merged}
+    rows = _event_distinct_fork_rows(intent, match, preds, rows, rel_by_src)
+    merged_dist = {(s, w): rows[s] for (s, w) in merged if s in rows}
+    cls = fork_classes_windowed(merged_dist, pby, measure_word, want=want,
+                                  rel_by_src=rel_by_src)
     return rows, cls, readings, cells
 
 
@@ -4984,6 +5025,19 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
             operation="sum", exact_value=None, measure_id=None, measure_label=None,
             excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
             proof_status=PROOF_NA)
+    if w == "count" and d0.get("distinct_axis"):
+        exact = d0.get("count")
+        ax_lab = (d0.get("distinct_axis_label") or "").strip()
+        if not ax_lab:
+            ax_lab = d0.get("distinct_axis")
+        return build_answer_atom(
+            operation="count", exact_value=exact, measure_id=None,
+            measure_label=None, axis=ax_lab, form="distinct_axis",
+            grain="axis",
+            excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
+            proof_status=(PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED),
+            period=period,
+            interpretation_id=(period or {}).get("interpretation_id"))
     if w == "count":
         exact = d0.get("count")
         op, mid, lab = "count", None, measure_label_of(src0, None) if src0 else None
@@ -8159,6 +8213,12 @@ def render_atom_pair(atom):
             parts.append("· текущий период неполный, прошлый — полный месяц")
         elif _cf == "wtd":
             parts.append("· текущий период неполный, прошлый — полная неделя")
+    elif (atom.get("form") or "").lower() == "distinct_axis":
+        ax = (atom.get("axis") or "").strip()
+        if ax:
+            parts.append("%s · %s" % (value, ax))
+        else:
+            parts.append(str(value))
     elif label:
         parts.append("%s: %s" % (label, value))
     else:
@@ -9979,10 +10039,9 @@ def build_answer_passport(period=None, period_dropped=False, origin="",
         _add(meas, meas)
         fields["measure"] = meas
 
-    if (grain or "row") == "group":
-        ax = (axis_label or "").strip()
-        if ax:
-            _add(ax, ax)
+    ax = (axis_label or "").strip()
+    if ax and (grain or "row") in ("group", "axis"):
+        _add(ax, ax)
 
     if form in ("rank", "compare"):
         _add(form, form)
@@ -10040,6 +10099,12 @@ def _passport_axis_label(col, axes):
     if not target:
         return ""
     return _table_label(target)
+
+
+def _passport_axis_col(agg, grain_dec=None):
+    """Колонка оси: distinct agg.axis или group col."""
+    return ((agg or {}).get("axis") or (agg or {}).get("col")
+            or (grain_dec or {}).get("col"))
 
 
 def _passport_origin(intent, diag):
@@ -12217,7 +12282,7 @@ def build_period_empty_answer(question, agg, intent, measure, src, match, preds,
         measure=measure or "",
         grain=_grain,
         axis_label=_passport_axis_label(
-            (agg or {}).get("col") or grain_dec.get("col"), axes) or "",
+            _passport_axis_col(agg, grain_dec), axes) or "",
         form=_form,
         text=text)
     text = ensure_answer_passport(text, _pass_frag)
@@ -12239,7 +12304,7 @@ def build_period_empty_answer(question, agg, intent, measure, src, match, preds,
         period_origin=_passport_origin(intent, diag),
         grain=_grain, form=_form,
         axis=_passport_axis_label(
-            (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
+            _passport_axis_col(agg, grain_dec), axes) or None,
         completeness=cov, folders=n_folders, src=src)
     tag = src.split("_", 1)[1] if src and "_" in src else (src or "")
     diag = dict(diag or {})
@@ -14509,9 +14574,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _picked0 = picked[0] if picked else None
         if ASK_ATOM_TERMINAL and _outc == "unique":
             _uatom = ((_pay.get("class") or {}).get("atom") or {})
-            if _fork_defer_distinct(intent, _picked0, diag):
-                шаг("исход unique", отложен="distinct")
-            elif (_uatom.get("proof_status") == PROOF_COMPUTED
+            if (_uatom.get("proof_status") == PROOF_COMPUTED
                     and _uatom.get("exact_value") is not None):
                 _ures = fork_outcome_unique(
                     question, _pay.get("class"), diag, cut=cut, t0=t0)
@@ -14520,20 +14583,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         value=_uatom.get("exact_value"))
                     return _ures
         if _outc == "A":
-            if _fork_defer_distinct(intent, _picked0, diag):
-                шаг("исход A", отложен="distinct",
-                    srcs=len((_pay.get("class") or {}).get("srcs") or []))
-            else:
-                шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
-                return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
+            шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
+            return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
         if _outc == "B":
             _b_classes = _pay.get("classes") or []
             if rank_defer_fork_outcome_b(intent, plan, question, _b_classes):
                 diag.setdefault("fork", {})["outcome_b_deferred_rank"] = True
                 шаг("исход B", отложен="rank", классов=len(_b_classes))
-            elif _fork_defer_distinct(intent, _picked0, diag):
-                diag.setdefault("fork", {})["outcome_b_deferred_distinct"] = True
-                шаг("исход B", отложен="distinct", классов=len(_b_classes))
             else:
                 _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0,
                                        picked_src=_picked0,
@@ -15732,7 +15788,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             measure=measure or "",
             grain=(agg or {}).get("grain") or grain_dec.get("grain") or "row",
             axis_label=_passport_axis_label(
-                (agg or {}).get("col") or grain_dec.get("col"), axes),
+                _passport_axis_col(agg, grain_dec), axes),
             form=(agg or {}).get("form") or grain_dec.get("form") or "number",
             text="")
         _det = rank_deterministic_answer(
@@ -15819,7 +15875,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         measure=measure or "",
         grain=(agg or {}).get("grain") or grain_dec.get("grain") or "row",
         axis_label=_passport_axis_label(
-            (agg or {}).get("col") or grain_dec.get("col"), axes),
+            _passport_axis_col(agg, grain_dec), axes),
         form=(agg or {}).get("form") or grain_dec.get("form") or "number",
         text=text)
     text_core = text
@@ -15884,7 +15940,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             measure=measure or "",
             grain=(agg or {}).get("grain") or grain_dec.get("grain") or "row",
             axis_label=_passport_axis_label(
-                (agg or {}).get("col") or grain_dec.get("col"), axes),
+                _passport_axis_col(agg, grain_dec), axes),
             form=(agg or {}).get("form") or grain_dec.get("form") or "number",
             text=text2)
         text_core = text2
@@ -15959,7 +16015,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 period_origin=_passport_origin(intent, diag),
                 grain=_grain, form=_form,
                 axis=_passport_axis_label(
-                    (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
+                    _passport_axis_col(agg, grain_dec), axes) or None,
                 completeness=cov, folders=n_folders, src=src)
             return {"partial": cut or None, "kind": "figures",
                     "text": atom_terminal_gate_text(_atom, question, agg=agg),
@@ -16053,7 +16109,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         period_origin=_passport_origin(intent, diag),
         grain=_grain, form=_form,
         axis=_passport_axis_label(
-            (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
+            _passport_axis_col(agg, grain_dec), axes) or None,
         completeness=cov, folders=n_folders, src=src)
     if money:
         text = postprocess_money_answer_text(

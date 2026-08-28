@@ -175,19 +175,19 @@ finally:
     A.pick_entity = _old_pe
     A.K6R = _old_k6r
 
-# --- K9-ф4: distinct на event-пути ---
+# --- K9-ф4/ф5: event distinct + fork A/B/C ---
 _old_lac = A.live_axis_col_for_count
 A.live_axis_col_for_count = lambda intent, src, axes=None: "Контрагент"
 try:
-    t("count_defer_fork_outcomes event+axis",
-      A.count_defer_fork_outcomes(
+    t("event_duel_applies two axis movements",
+      A.event_duel_applies(
           {"want": "count", "action_class": "event", "kind": "клиенты",
            "action_axis": "клиенты"},
-          "accumulationregister_x", []))
-    t("count_defer_fork_outcomes sum -> False",
-      not A.count_defer_fork_outcomes(
-          {"want": "sum", "action_class": "event", "kind": "торги"},
-          "accumulationregister_x", []))
+          ["accumulationregister_a", "accumulationregister_b"]))
+    t("event_duel_applies sum -> False",
+      not A.event_duel_applies(
+          {"want": "sum", "action_class": "event"},
+          ["accumulationregister_a", "accumulationregister_b"]))
 finally:
     A.live_axis_col_for_count = _old_lac
 
@@ -211,11 +211,53 @@ try:
 finally:
     A.K6R = _old_k6r
 
+# fork A/B/C на distinct-атомах (офлайн)
+_intent_ev = {"want": "count", "action_class": "event", "kind": "клиенты",
+              "action_axis": "клиенты"}
+
+def _row_dist(n):
+    return {"count": n, "folders": 0, "sums": {},
+            "distinct_axis": "Контрагент", "distinct_axis_label": "Контрагенты"}
+
+def _fc_dist(rows):
+    rel = {s: [] for s in rows}
+    return A.fork_classes(rows, "", want="count", rel_by_src=rel)
+
+_rows_eq = {"src_a": _row_dist(141), "src_b": _row_dist(141)}
+_cls_eq = _fc_dist(_rows_eq)
+out_a, pay_a = A.resolve_fork_outcome(_cls_eq, _rows_eq, want="count")
+_ares = A.fork_outcome_a("q", pay_a["class"], {})
+t("event duel equal -> A", out_a == "A" and _ares.get("kind") == "answer"
+  and not (_ares.get("options") or []))
+
+_rows_diff = {"src_a": _row_dist(141), "src_b": _row_dist(76)}
+_cls_diff = _fc_dist(_rows_diff)
+_old_fl = A.fork_labels_of
+A.fork_labels_of = lambda fk, srcs: {s: "Движение %s" % s for s in srcs}
+out_b, pay_b = A.resolve_fork_outcome(_cls_diff, _rows_diff, want="count")
+_bres = A.fork_outcome_b("q", pay_b, {}, picked_src="src_a")
+t("event duel diff+labels -> B", out_b == "B" and _bres and _bres.get("options")
+  and len(_bres.get("options") or []) >= 1)
+A.fork_labels_of = lambda fk, srcs: {}
+out_c, pay_c = A.resolve_fork_outcome(_cls_diff, _rows_diff, want="count")
+_cres = A.fork_outcome_c("q", pay_c, _cls_diff, _rows_diff, {}, picked_src="src_a")
+t("event duel diff no labels -> C",
+  out_c == "C" and pay_c.get("reason") == "unsigned_class"
+  and A.FORK_OTHER_READING in (_cres.get("text") or ""))
+A.fork_labels_of = _old_fl
+
+_atom_a = A._fork_atom_of(_row_dist(141), ["src_a"], want="count")
+t("distinct render carries axis",
+  "Контрагенты" in (A.render_atom_pair(_atom_a) or "")
+  and "141" in (A.render_atom_pair(_atom_a) or ""))
+
 _old_kah3 = A.kind_axis_hits
 _old_ada3 = A.aggregate_distinct_axis
 _old_ro3 = A.refcols_of
+_old_tl = A._table_label
 A.kind_axis_hits = lambda axes, word: ["Контрагент"] if word else []
 A.refcols_of = lambda src: [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]
+A._table_label = lambda src: "Контрагенты"
 A.aggregate_distinct_axis = lambda src, match, preds, col: {
     "count": 141, "sum": None, "src": src, "form": "distinct_axis",
     "axis": col, "grain": "axis"}
@@ -225,17 +267,17 @@ try:
         "Контрагент")
     t("distinct agg has axis field", _agg.get("axis") == "Контрагент"
       and _agg.get("form") == "distinct_axis")
-    _dd = {}
-    t("fork_defer_distinct sets diag",
-      A._fork_defer_distinct(
-          {"want": "count", "action_class": "event", "kind": "клиенты",
-           "action_axis": "клиенты"},
-          "accumulationregister_реализациятмц", _dd)
-      and _dd.get("fork_outcome_deferred_distinct"))
+    _rows = {"accumulationregister_x": {"count": 99, "folders": 0, "sums": {}}}
+    _enr = A._event_distinct_fork_rows(
+        _intent_ev, "", [], _rows, {"accumulationregister_x": []})
+    t("event distinct fork rows",
+      _enr["accumulationregister_x"].get("distinct_axis") == "Контрагент"
+      and _enr["accumulationregister_x"].get("count") == 141)
 finally:
     A.kind_axis_hits = _old_kah3
     A.aggregate_distinct_axis = _old_ada3
     A.refcols_of = _old_ro3
+    A._table_label = _old_tl
 
 print("---")
 print("PASS", PASS, "FAIL", len(FAIL))
