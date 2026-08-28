@@ -1,3 +1,28 @@
+## 2026-08-28 — В2: флаги Ф6 в бой okna `:8091` (полный набор базлайна)
+
+**[замер]** Выкат по чеклисту Ф6.5 по одному, каждый шаг = env юнита
+`/etc/1c-serene-ask-postgres.env` (бэкап `*.bak-f6*`) + рестарт + срез
+`f6_rollout_measure` before/after + AB_PROBE:
+
+| флаг | before → after (probe) |
+|---|---|
+| `ASK_HEALTH_NATIVE_FRESHNESS` | **8/8 → 8/8**, 0err; `/health` отдаёт freshness-поля |
+| `ASK_RESOLVER_IVF` | **8/8 → 8/8**, 0err |
+| `ASK_SOLR_SYNONYMS`(+`_DICT=search_dict_syn`) | **8/8 → 8/8**, 0err |
+| `ASK_ATOM_TERMINAL` / `ASK_ENTITY_FORM` / `ASK_SALES_RANK_CANON` | каждый шаг AB_PROBE **8/8** (21,3 с / 22,5 с) |
+
+Контур-24 (today-gold) лестницей: бой RRF-only **15/24** → +F/I/S (без
+ранговой тройки) **16/24** — падали ранги и «декабрь» (ATOM, K5a) →
++ATOM/ENTITY_FORM/RANK_CANON = полный набор: **20/24**, средняя **24,58 с**
+(финальный прогон /tmp/contour-prod-full.log; FAIL-остаток 4 — все
+записанные классы: «молодец»-сленг, 2×K6-обиходных, «как у нас дела» §10).
+Кандидат :8096 на том же наборе с полным набором флагов и кодом K6b —
+**19/24** (18,31 с). Ранговая тройка НЕ опциональна: без неё ранги
+клиентов и терминальные атомы падают (факты выше). Построчных регрессий
+против базлайна 23/25 нет (хвост «молодец» записан, K6-двойка —
+допустимые FAIL базлайна).
+Срезы: `work/acceptance/runs/f6-rollout/<флаг>/{before,after}/summary.json`.
+
 ## 2026-08-27 — K6b: rank-лидер после исхода B [код]
 
 **[код]** `serene_ask.py`: `rank_defer_fork_outcome_b` — при rank_intent и

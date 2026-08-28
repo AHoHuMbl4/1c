@@ -89,6 +89,7 @@ F6_FLAG=ASK_HEALTH_NATIVE_FRESHNESS F6_PHASE=compare \
 
 ## §3. Шаг 1 — `ASK_HEALTH_NATIVE_FRESHNESS` (первый к включению в бой)
 
+> ✅ **В бою 28.08** (оркестратор): before/after probe **8/8→8/8 0err**; `/health` отдаёт freshness-поля; снимки `work/acceptance/runs/f6-rollout/ASK_HEALTH_NATIVE_FRESHNESS/`.
 | | |
 |---|---|
 | Что включаем | `ASK_HEALTH_NATIVE_FRESHNESS=1` (+ при нужде `ASK_HEALTH_SEARCH_IDX`, умолч. `search_idx`) |
@@ -105,6 +106,7 @@ F6_FLAG=ASK_HEALTH_NATIVE_FRESHNESS F6_PHASE=compare \
 
 ## §4. Шаг 2 — `ASK_RESOLVER_IVF`
 
+> ✅ **В бою 28.08**: before/after **8/8→8/8 0err** (снимки в runs/f6-rollout/ASK_RESOLVER_IVF/).
 | | |
 |---|---|
 | Что включаем | `ASK_RESOLVER_IVF=1` (`ASK_RESOLVER_IVF_IDX` / `resolver_ivf_idx`) |
@@ -120,6 +122,7 @@ F6_FLAG=ASK_HEALTH_NATIVE_FRESHNESS F6_PHASE=compare \
 
 ## §5. Шаг 3 — `ASK_SOLR_SYNONYMS`
 
+> ✅ **В бою 28.08** (+`_DICT=search_dict_syn`): before/after **8/8→8/8 0err** (runs/f6-rollout/ASK_SOLR_SYNONYMS/).
 | | |
 |---|---|
 | Что включаем | `ASK_SOLR_SYNONYMS=1` и имя `ASK_SOLR_SYNONYMS_DICT` (на okna словарь **`search_dict_syn`**: **221** правило / **23 305** байт из 254 алиасов — уже в базе) |
@@ -133,6 +136,12 @@ F6_FLAG=ASK_HEALTH_NATIVE_FRESHNESS F6_PHASE=compare \
 Фактура: `docs/F6_SYNONYMS_FACTS.md`.
 
 ---
+
+> ✅ **Ранговая тройка в бою 28.08** (вне исходного списка §0, решение оркестратора —
+> привести бой к полному набору стейджинг-базлайна): `ASK_ATOM_TERMINAL`,
+> `ASK_ENTITY_FORM`, `ASK_SALES_RANK_CANON` — каждый шаг AB_PROBE **8/8**;
+> без них контур-24 падает до **16/24** (ранги клиентов, терминальные атомы),
+> с полным набором — **20/24** (CHANGELOG 28.08 «В2»).
 
 ## §6. `ASK_CALENDAR_AXIS` — не шаг боя okna
 
