@@ -597,5 +597,34 @@ clarify с кнопками окна, не терминальный ответ �
 | «больше всех купил» | лидер rank + `выбрал=код` |
 | «наторговали в прошедшее воскресенье?» | answer (без регресса) |
 
+
+### 7.19. K9 фаза 8: явный период event+count + mtd-подпись terminal (28.08)
+
+| механизм | где | что |
+|---|---|---|
+| явный период | `event_count_has_explicit_period` (~2635) | event+count + from/to в intent → `period_assumed_needs_clarify` False (не дублировать ф7-clarify) |
+| mtd-подпись terminal | terminal distinct (~15972) | event+count: принудительный `aggregate_distinct_axis`, ось из `count_distinct_axis`, `render_atom_pair` |
+
+**Замки офлайн (сессия 28.08 ф8):**
+
+| замок | до | после |
+|---|---|---|
+| test_action_class | 39/0 | **43/0** (+explicit period, terminal mtd pair) |
+| test_sales_rank_canon | 51/0 | **51/0** |
+| test_rank_leader_path | 30/0 | **30/0** |
+| test_entity_form | 47/0 | **47/0** |
+| test_k6_rank_v2 offline | 10/0 | **10/0** |
+| test_compose | 92/0 | **92/0** |
+
+**Таблица ожиданий (:8096):**
+
+| вопрос | ожидание ф8 |
+|---|---|
+| «сколько клиентов реально покупают» | **clarify периода** (ф7, без изменений) |
+| «…реально покупали за последний год» | **141 · Контрагенты**, без второго переспроса |
+| «сколько покупателей было за этот месяц» | **76 · Контрагенты** (не «assumed: 76») |
+| «сколько у нас всего клиентов» | clarify object (п. 12), без изменений |
+
+
 **Без новых списков слов:** только `interpretation_id` окон (`full_month`, `full_quarter`, `rolling_12m`, `none`) и `render_window_label` — §3.96.
 

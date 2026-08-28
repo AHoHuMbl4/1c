@@ -11,6 +11,16 @@
 (177 всё время vs 141 за 12 мес gold) — переспрашивать период;
 реализация — К9-ф7.
 
+## 2026-08-28 — К9 фаза 8: явный период event+count + mtd-подпись terminal [код]
+
+**[код]** `serene_ask`: `event_count_has_explicit_period` (~2635) — event+count с окном
+в разборе не уходит во второй `period_assumed_clarify` («последний год»); terminal
+(~15972) для event+count принудительно `aggregate_distinct_axis` + подпись оси
+(`render_atom_pair` «76 · Контрагенты», не compose «assumed: 76»).
+
+**[замер]** Замки: test_action_class **43/0** (+4 ф8, было 39/0); sales_rank 51/0,
+leader_path 30/0, entity_form 47/0, k6_rank_v2 10/0, compose 92/0.
+
 ## 2026-08-28 — К9 фаза 7: переспрос периода event+count + подпись mtd [решение][код]
 
 **[решение]** Событийный count DISTINCT по живой оси **без явного периода** —

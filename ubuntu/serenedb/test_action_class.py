@@ -385,6 +385,64 @@ finally:
     A.refcols_of = _old_ro
     A._table_label = _old_tl
     A.aggregate_distinct_axis = _old_ada
+
+# --- K9-ф8: явный период event+count → нет assumed-clarify; terminal mtd label ---
+_intent_ev_year = {"want": "count", "action_class": "event", "kind": "клиенты",
+                   "action_axis": "клиенты",
+                   "period": {"from": "2025-08-28", "to": "2026-08-28",
+                              "interpretation_id": "rolling_12m"},
+                   "parse": {"assumed": ["period.from", "period.to"]}}
+_intent_sum_year = {"want": "sum", "kind": "продажи",
+                    "period": {"from": "2025-08-28", "to": "2026-08-28"},
+                    "parse": {"assumed": ["period.from", "period.to"]}}
+t("event_count_has_explicit_period: rolling year в разборе",
+  A.event_count_has_explicit_period(_intent_ev_year, {}))
+t("period_assumed_needs_clarify: event+year → False",
+  not A.period_assumed_needs_clarify(_intent_ev_year, today="2026-08-28"))
+t("period_assumed_needs_clarify: sum+year assumed → True",
+  A.period_assumed_needs_clarify(_intent_sum_year, today="2026-08-28"))
+
+_old_ada8 = A.aggregate_distinct_axis
+_old_lac8 = A.live_axis_col_for_count
+_old_pal8 = A._passport_axis_label
+_old_ro8 = A.refcols_of
+A.live_axis_col_for_count = lambda intent, src, axes=None: "Контрагент"
+A.refcols_of = lambda src: [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]
+A._passport_axis_label = lambda col, axes: "Контрагенты"
+A.aggregate_distinct_axis = lambda src, match, preds, col: {
+    "count": 76, "form": "distinct_axis", "axis": col, "grain": "axis"}
+try:
+    _intent_mtd_ev = {"want": "count", "action_class": "event", "kind": "клиенты",
+                      "action_axis": "клиенты",
+                      "period": {"from": "2026-08-01", "to": "2026-08-28",
+                                 "interpretation_id": "mtd"}}
+    _agg_row = {"count": 76, "sum": None, "src": "accumulationregister_x",
+                "grain": "row"}
+    _diag8 = {}
+    _dac8 = A.live_axis_col_for_count(_intent_mtd_ev, "accumulationregister_x", [])
+    if _dac8:
+        _diag8["count_distinct_axis"] = _dac8
+    _agg8 = _agg_row
+    if _dac8 and (_agg8 or {}).get("form") != "distinct_axis":
+        _dagg8 = A.aggregate_distinct_axis("x", "", [], _dac8)
+        if _dagg8:
+            _agg8 = _dagg8
+    _ax_col8 = (_agg8 or {}).get("axis") or _diag8.get("count_distinct_axis")
+    _ax_lab8 = A._passport_axis_label(_ax_col8, []) or (_ax_col8 or "")
+    _atom8 = A.build_answer_atom(
+        operation="count", exact_value=_agg8.get("count"), measure_id=None,
+        measure_label=None, axis=_ax_lab8 or None, form="distinct_axis",
+        proof_status=A.PROOF_COMPUTED, grain="axis")
+    _pair8 = A.render_atom_pair(_atom8) or ""
+    t("event mtd distinct terminal pair",
+      "76" in _pair8 and "Контрагенты" in _pair8 and "assumed" not in _pair8,
+      _pair8)
+finally:
+    A.aggregate_distinct_axis = _old_ada8
+    A.live_axis_col_for_count = _old_lac8
+    A._passport_axis_label = _old_pal8
+    A.refcols_of = _old_ro8
+
 print("---")
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:

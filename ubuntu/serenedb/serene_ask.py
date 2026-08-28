@@ -2632,6 +2632,19 @@ def count_defer_measure_clarify(intent, src, axes=None):
     return bool(live_axis_col_for_count(intent, src, axes))
 
 
+def event_count_has_explicit_period(intent, diag=None):
+    """K9-ф8: event+count, окно from/to уже в intent — без assumed-clarify."""
+    if not event_path_active(intent):
+        return False
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    if (diag or {}).get("period_assumed_dropped"):
+        return False
+    p = (intent or {}).get("period") or {}
+    return bool(p.get("from") or p.get("to"))
+
+
 def event_count_period_unspecified(intent, diag=None):
     """K9-ф7: период не назван — пустой intent.period или drop_assumed."""
     if (diag or {}).get("period_assumed_dropped"):
@@ -12842,7 +12855,10 @@ def period_assumed_needs_clarify(intent, today=None):
 
     День/неделя/месяц (короткие относительные) — False: одно условное прочтение.
     Календарный/скользящий год и кварталоподобное окно — True (п. 12).
+    K9-ф8: event+count с окном в intent — False (см. event_count_has_explicit_period).
     """
+    if event_count_has_explicit_period(intent):
+        return False
     if serene_enough is None or not serene_enough.period_assumed(intent):
         return False
     p = (intent or {}).get("period") or {}
@@ -15956,10 +15972,23 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         return build_period_empty_answer(
             question, agg, intent, measure, src, match, preds, money, slot_mode,
             cov, cut, diag, grain_dec, axes, n_folders, rows, t0, say_measure)
-    # K9-ф6/ф7: mtd/event DISTINCT — пара «N · ось» кодом (как fork A), не compose+passport.
+    # K9-ф6/ф7/ф8: mtd/event DISTINCT — пара «N · ось» кодом (как fork A), не compose.
+    _want_count = (intent.get("want") or "").strip().lower() in ("count", "")
+    if _want_count and event_path_active(intent) and src:
+        _dac_t = diag.get("count_distinct_axis")
+        if not _dac_t:
+            _dac_t = live_axis_col_for_count(intent, src, axes)
+            if _dac_t:
+                diag["count_distinct_axis"] = _dac_t
+        if _dac_t and (agg or {}).get("form") != "distinct_axis":
+            _dagg = aggregate_distinct_axis(src, match, preds, _dac_t)
+            if _dagg:
+                agg = _dagg
+                n_folders = (agg or {}).get("folders") or 0
     if (((agg or {}).get("form") == "distinct_axis" or diag.get("count_distinct_axis"))
-            and (intent.get("want") or "").strip().lower() in ("count", "")):
-        _ax_lab = _passport_axis_label((agg or {}).get("axis"), axes)
+            and _want_count):
+        _ax_col = (agg or {}).get("axis") or diag.get("count_distinct_axis")
+        _ax_lab = _passport_axis_label(_ax_col, axes) or (_ax_col or "")
         _dist_atom = atom_from_agg(
             agg, operation="count",
             money=False,
