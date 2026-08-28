@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Ф6.3 / С5: компиляция Solr-карты синонимов из таблиц → DROP+CREATE словарь файлом.
+"""Ф6.3 / С5: компиляция Solr-карты — оффлайн-эталон и тесты.
+
+Тактовый путь (build.sh, после wiki_alias): psql -f solr_synonyms_compile.sql
+(Э1б, п. 20 — без Python-посредника). Этот модуль остаётся для замков и write-ddl.
 
 Списков слов в коде нет: правила приходят из search_entity_alias (wiki-alias).
 Ключи карты — стемы одиночных слов через штатный ts_lexize(search_dict_stem)

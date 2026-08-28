@@ -44,7 +44,7 @@ DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 export SERENEDB_DSN="$DSN"
 cd "$(dirname "$0")" || exit 1
 
-DB=$(psql "$DSN" -tAc 'SELECT current_database()' 2>/dev/null | tr -cd 'A-Za-z0-9_')
+DB="${EMBED_DBNAME:-$(psql "$DSN" -tAc 'SELECT current_database()' 2>/dev/null | tr -cd 'A-Za-z0-9_')}"
 [ -n "$DB" ] || { echo "движок не отвечает, имя базы не получено" >&2; exit 1; }
 
 IFS=',' read -r -a KEYS <<< "${EMBED_API_KEYS:-${EMBED_API_KEY:-${ALIBABA_API_KEYS:-${ALIBABA_API_KEY:-}}}}"

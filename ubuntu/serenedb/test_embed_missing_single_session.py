@@ -2,7 +2,7 @@
 """Оффлайн-замок Э1: embed_missing без веера внешних psql.
 
 (а) нет `for w in $(seq` / фоновых `psql … &`;
-(б) одна staging `${TAG}_part_0` + \\gexec;
+(б) одна сессия psql -f embed_missing.sql на раунд; ai_embed-пачки — один \\gexec в SQL;
 (в) EMBED_ROUNDS умолчание 1;
 (г) bash -n; синтетическая порча веера краснеет.
 """
@@ -15,6 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 SCRIPT = ROOT / "embed_missing.sh"
+SQL = ROOT / "embed_missing.sql"
 PASS, FAIL = 0, []
 
 
@@ -30,6 +31,7 @@ def t(name: str, cond: bool, detail: str = "") -> None:
 
 def main() -> int:
     body = SCRIPT.read_text(encoding="utf-8")
+    sql = SQL.read_text(encoding="utf-8")
     code = re.sub(r"#.*", "", body)
 
     t("+x", bool(SCRIPT.stat().st_mode & 0o111))
@@ -40,11 +42,16 @@ def main() -> int:
     t("нет фоновых psql &",
       not re.search(r"psql[^\n]*\s+&", code)
       and "pids+=($!)" not in code)
-    t("есть part_0", "${TAG}_part_0" in body)
-    t("один \\gexec", code.count("\\gexec") == 1 or body.count("\\gexec") == 1)
+    t("shell зовёт embed_missing.sql", "embed_missing.sql" in body and "-f" in body)
+    t("есть part_0", "part_0" in sql or "tag_part0" in sql)
+    t("один ai_embed \\gexec в SQL",
+      len(re.findall(r"ai_embed\(txt", sql)) >= 1
+      and sql.count("\\gexec") >= 1)
     t("EMBED_ROUNDS умолчание 1", "EMBED_ROUNDS:-1" in body)
     t("воркеры игнорируются (Э1)", "игнорируются" in body and "Э1" in body)
-    t("SET threads в сессии досчёта", "SET threads" in body)
+    t("SET threads в SQL-сессии", "thr_sql" in body or "SET threads" in sql)
+    t("EMBED_DBNAME без лишнего current_database",
+      "EMBED_DBNAME" in body)
 
     old_fan = 'for w in $(seq 0 $((N - 1))); do\n  psql "$DSN" ... &\ndone\n'
     t("regress: веер seq краснеет", "for w in $(seq" in old_fan)

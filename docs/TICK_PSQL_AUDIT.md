@@ -54,18 +54,18 @@
 | **embed_check** | `build.sh:144` | 0 | — | curl к эмбеддеру (не psql) |
 | **2-бис classify** | `classify_entities.py:143-207` | 4–20 | CSV: метаданные сущностей (имена, колонки, count) | **да** → LLM; запись `INSERT` одним SQL |
 | **2-тер packet** | `packet_config.py:281-417` | 2–3 | CSV контур; `$metadata` из **файла** на диске | **да** → Python; конфиг в JSON-файл (не psql) |
-| **3 embed labels** | `embed_missing.sh` | **Δ 7–179** | при работе: stderr длин; count | **нет** (`ai_embed` внутри) |
+| **3 embed labels** | `embed_missing.sh` + `embed_missing.sql` **[Э1б]** | **1 guard + 1 `-f`** (было Δ 7–179) | при работе: stderr длин; count | **нет** (`ai_embed` внутри) |
 | **4 resolver build** | `build.sh:359` | 1 | внутри SQL | нет |
-| **4 embed resolver** | `embed_missing.sh` | **Δ 7–179** | то же | нет |
-| **5 embed corpus** | `embed_missing.sh` | **Δ 7–179** | то же | нет |
+| **4 embed resolver** | `embed_missing.sh` + `embed_missing.sql` **[Э1б]** | **1 guard + 1 `-f`** | то же | нет |
+| **5 embed corpus** | `embed_missing.sh` + `embed_missing.sql` **[Э1б]** | **1 guard + 1 `-f`** | то же | нет |
 | **6 VACUUM index** | `build.sh:420` | 1 | служебный | нет |
 | **7 coverage** | `build.sh:428` | 1 | агрегаты переписи | нет |
-| **7 wiki_alias** | `wiki_alias.sh` | **Δ ≈ 16–260+** | JSON пачек в `$CSV_DIR`; collision до 40× | **да** → LLM + Python parse |
+| **7 wiki_alias** | `wiki_alias.sh` + 15 `wiki_alias_*.sql` **[Э1а]** | **3 fixed + ~2–3/пачка + 2/круг** (было Δ ≈ 16–260+) | JSON — только транспорт к LLM | **да** → LLM; parse Python; запись `read_json`+`MERGE` |
 | **7 wiki_publish** | `wiki_publish.sh:51,69,74` | 3 | **все `page_id, body` вики** в файл | **да** → Python → `.md` на диск (не обратно в БД) |
-| **7-solr (build)** | `solr_synonyms_build.py` compile | 1–2 | JSON alias; DDL-файл | **да** → Python compile → `psql -f` |
-| **7-solr (wiki_alias)** | `wiki_alias.sh:610-613` | 0–3 | дубль шага выше, если alias уже вызвал compile | **да** (тот же) |
+| **7-solr (build)** | `solr_synonyms_compile.sql` **[Э1б]** | **1** (было 1–2 + Python) | данные alias не выходят в Python | нет |
+| **7-solr (wiki_alias)** | `wiki_alias.sh:610-613` | 0–3 | дубль шага выше, если alias уже вызвал compile | **да** (Python-дубль остаётся — Э1а не трогал) |
 | **7-бис card SQL** | `build.sh:461` | 1 | внутри SQL | нет |
-| **7-бис card embed** | `embed_all.sh:47-228` | 5–8 + **Δ embed** | stats counts | нет (embed через `ai_embed`) |
+| **7-бис card embed** | `embed_all.sh` **[Э1б]** | **1 embed_missing + 2** (mark+VACUUM; было 5–8 + Δ) | секреты такта переиспользуются | нет (embed через `ai_embed`) |
 | **7-бис branch** | `branch_alias.sh` (из wiki_alias:600) | **Δ ≈ 5–30+** | JSON пачек | **да** → LLM + Python |
 | **8 postcheck** | `build.sh:468` | 1 | проверки | нет |
 | **cleanup secrets** | `build.sh:135` | 1 | DDL | нет |
@@ -87,16 +87,27 @@
 
 ### Детализация `wiki_alias.sh` (бюджет `WIKI_ALIAS_MAX_SEC`, CAP=`WIKI_ALIAS_PER_TACT`)
 
-| Подшаг | psql за итерацию | Макс. итераций | Примечание |
+**[Э1а 28.08]** Оркестрация переведена в 15 `.sql` (`wiki_alias_*.sql` —
+SELECT пачек через `struct_pack`+векторную близость, запись после LLM через
+`read_json`+`MERGE INTO`, collision round, publish+`REFRESH`, day-fork).
+Замок `work/pipeline/test_wiki_alias_psql.py` **44/44**. Проверить на живой
+26.07.3 при выкате: psql-переменные в CREATE/MERGE, `INSERT…RETURNING` в
+collision round.
+
+| Подшаг | psql за итерацию (было → Э1а) | Макс. итераций | Примечание |
 |---|---:|---:|---|
-| DDL/GRANT | 3 | 1 | |
-| проход сущностей | 3 (+2 при сбое) | ⌈CAP/BATCH⌉, BATCH=20 | JSON → файл |
-| добор величин | 3 (+1 при сбое) | ⌈CAP/BATCH⌉ | |
-| разведение столкновений | 4 | 40 | JSON → файл |
-| day-basis fork | 4 (+mark) | по классам | |
-| `branch_alias.sh` | 4–6 | ⌈CAP/BATCH⌉ | |
-| итоговая статистика | 1 | 1 | |
-| solr compile | 2–3 | 1 | см. кандидаты |
+| DDL/GRANT | 3 → **1** (`wiki_alias_init.sql`) | 1 | |
+| проход сущностей | 3 (+2 при сбое) → **1–2** | ⌈CAP/BATCH⌉, BATCH=20 | SELECT в `.sql`; LLM снаружи |
+| добор величин | 3 (+1 при сбое) → **1–2** | ⌈CAP/BATCH⌉ | |
+| разведение столкновений | 4 → **2** | 40 | `collision_round` + `collision_merge` |
+| day-basis fork | 4 (+mark) → **3** | по классам | |
+| `branch_alias.sh` | 4–6 | ⌈CAP/BATCH⌉ | не входил в Э1а |
+| итоговая статистика + REFRESH | 2 → **1** (`wiki_alias_publish.sql`) | 1 | |
+| solr compile | 2–3 | 1 | см. кандидаты (Э1б) |
+
+Статика Э1а: холостой такт wiki **9–10 → 3** psql; типичный CAP=100
+**≈175–195 → ≈95–115**; блок collision при R=40 **−79** процессов.
+Факт после выката — колонка «факт» из `count_psql_per_tick.sh`.
 
 ---
 

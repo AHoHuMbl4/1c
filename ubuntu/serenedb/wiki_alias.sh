@@ -68,14 +68,29 @@ CAP="${1:-0}"
 WIKI_ALIAS_MODEL="${WIKI_ALIAS_MODEL:-vllm/Qwen3.8-27B}"
 WIKI_ALIAS_THINKING="${WIKI_ALIAS_THINKING:-off}"
 cd "$(dirname "$0")" || exit 1
+HERE="$(pwd)"
+
+# Общие psql-параметры: таблицы и retry — один -f вместо веера -c (п. 20, Э1а).
+psql_wa() {
+  psql "$DSN" -q -v ON_ERROR_STOP=1 \
+    -v alias_table="$ALIAS_TABLE" \
+    -v measure_table="$MEASURE_TABLE" \
+    -v retry_h="$RETRY_H" \
+    "$@"
+}
+psql_wa_tA() {
+  psql "$DSN" -tA -v ON_ERROR_STOP=1 \
+    -v alias_table="$ALIAS_TABLE" \
+    -v measure_table="$MEASURE_TABLE" \
+    -v retry_h="$RETRY_H" \
+    "$@"
+}
 
 bash "$(cd "$(dirname "$0")/.." && pwd)/openclaw/ensure_vllm_gateway.sh" || echo "алиасы: ensure_vllm — предупреждение" >&2
 
 command -v openclaw >/dev/null 2>&1 || { echo "алиасы: openclaw не установлен — шаг пропущен"; exit 0; }
-psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $ALIAS_TABLE (src_table VARCHAR, aliases VARCHAR, best_used_for VARCHAR, not_enough_for VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
-psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $MEASURE_TABLE (src_table VARCHAR, measure VARCHAR, aliases VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
-# Без GRANT сервис молча считает «словаря нет» (RuntimeError → пустой alias_by).
-psql "$DSN" -q -c "GRANT SELECT ON $MEASURE_TABLE TO serene_ro" >/dev/null 2>&1
+# DDL alias/measure/probe — один процесс psql (wiki_alias_init.sql).
+psql_wa -f "$HERE/wiki_alias_init.sql" >/dev/null 2>&1
 
 # 🔴 ОБМЕН ФАЙЛАМИ — ТОЛЬКО ЧЕРЕЗ КАТАЛОГ, ЧИТАЕМЫЙ ДВИЖКОМ. [замер 30.07] `read_json` из
 # `/tmp/...` даёт «No files found»: процесс `serened` этот путь не видит. Тот же каталог, что у
@@ -112,25 +127,8 @@ while :; do
   # вектором названия, что уже лежит в `search_tables.emb`. Ни списка тем, ни слов о
   # конкретной базе: соседей определяет сама база. Тогда модель видит их рядом и может
   # сказать, чем они отличаются ДРУГ ОТ ДРУГА.
-  psql "$DSN" -tA -c "
-    WITH seed AS (
-      SELECT f.src_table, t.emb FROM wiki_entity_facts f
-      JOIN search_tables t ON t.src_table = f.src_table
-      WHERE f.cls <> 'service'
-        AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE a WHERE a.src_table = f.src_table
-                        AND (coalesce(a.aliases,'') <> ''
-                             OR a.seen_at > now() - INTERVAL $RETRY_H HOUR))
-      ORDER BY f.src_table LIMIT 1)
-    SELECT to_json(list(struct_pack(entity := src_table, title := label,
-                                    quantities := coalesce(measures,''))))
-    FROM (SELECT f.*, t.emb <=> (SELECT emb FROM seed) AS d
-            FROM wiki_entity_facts f
-            JOIN search_tables t ON t.src_table = f.src_table
-           WHERE f.cls <> 'service'
-             AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE a WHERE a.src_table = f.src_table
-                        AND (coalesce(a.aliases,'') <> ''
-                             OR a.seen_at > now() - INTERVAL $RETRY_H HOUR))
-           ORDER BY d, f.src_table LIMIT $BATCH)" > "$TMP/pay" 2>/dev/null
+  psql_wa_tA -v batch="$BATCH" \
+    -f "$HERE/wiki_alias_select_entity_batch.sql" > "$TMP/pay" 2>/dev/null
   chmod 644 "$TMP/pay" 2>/dev/null
   PAY=$(cat "$TMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
@@ -167,21 +165,7 @@ while :; do
       # ходил по кругу. Сколько пропущено — печатается в конце, молчания тут быть не должно.
       skipped=$((skipped + 1))
       echo "алиасы: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
-      psql "$DSN" -q -c "INSERT INTO $ALIAS_TABLE
-        SELECT entity, '', '', '', now() FROM read_json('$TMP/pay',
-          columns := {entity:'VARCHAR', title:'VARCHAR', quantities:'VARCHAR'})
-        WHERE entity NOT IN (SELECT src_table FROM $ALIAS_TABLE)" >/dev/null 2>&1
-      # Пустышка величины — та же семантика: попытка, не ответ. Без неё осечка
-      # пачки на доборе величин крутилась бы вечно; с непустым ответом её снимает
-      # DELETE перед INSERT ниже.
-      psql "$DSN" -q -c "INSERT INTO $MEASURE_TABLE
-        SELECT entity, trim(q), '', now()
-        FROM read_json('$TMP/pay',
-          columns := {entity:'VARCHAR', title:'VARCHAR', quantities:'VARCHAR'}),
-             unnest(str_split(quantities, ',')) AS x(q)
-        WHERE trim(q) <> ''
-          AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE a
-                          WHERE a.src_table = entity AND a.measure = trim(q))" >/dev/null 2>&1
+      psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
       continue
     }
 
@@ -201,31 +185,10 @@ while :; do
   # оставшаяся от прежней осечки, сначала снимается: иначе ответ модели молча падал бы
   # мимо словаря (`NOT IN` считает такую строку уже отвеченной), и переспрос был бы
   # бесполезен — деньги за модель тратились бы вечно.
-  psql "$DSN" -q -c "
-    DELETE FROM $ALIAS_TABLE WHERE coalesce(aliases,'') = '' AND src_table IN
-      (SELECT src_table FROM read_json('$TMP/rows.json',
-         columns := {src_table:'VARCHAR', aliases:'VARCHAR',
-                     best_used_for:'VARCHAR', not_enough_for:'VARCHAR'})
-       WHERE coalesce(aliases,'') <> '');
-    INSERT INTO $ALIAS_TABLE
-    SELECT src_table, aliases, best_used_for, not_enough_for, now()
-    FROM read_json('$TMP/rows.json', columns := {src_table:'VARCHAR', aliases:'VARCHAR',
-                                                best_used_for:'VARCHAR', not_enough_for:'VARCHAR'})
-    WHERE src_table NOT IN (SELECT src_table FROM $ALIAS_TABLE);
-    DELETE FROM $MEASURE_TABLE WHERE coalesce(aliases,'') = '' AND src_table IN
-      (SELECT DISTINCT src_table FROM read_json('$TMP/measures.json',
-         columns := {src_table:'VARCHAR', measure:'VARCHAR', aliases:'VARCHAR'})
-       WHERE coalesce(aliases,'') <> '');
-    INSERT INTO $MEASURE_TABLE
-    SELECT src_table, measure, aliases, now()
-    FROM read_json('$TMP/measures.json',
-         columns := {src_table:'VARCHAR', measure:'VARCHAR', aliases:'VARCHAR'}) n
-    WHERE coalesce(n.aliases,'') <> ''
-      AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE a
-                      WHERE a.src_table = n.src_table AND a.measure = n.measure
-                        AND coalesce(a.aliases,'') <> '')" 2>&1 | grep -i error
+  psql_wa -v rows_path="$TMP/rows.json" -v measures_path="$TMP/measures.json" \
+    -f "$HERE/wiki_alias_merge_entity.sql" 2>&1 | grep -i error
 
-  have=$(psql "$DSN" -tAc "SELECT count(*) FROM $ALIAS_TABLE" 2>/dev/null)
+  have=$(psql_wa_tA -c "SELECT count(*) FROM $ALIAS_TABLE" 2>/dev/null)
   echo "алиасы: всего в базе $have"
   done_total=$((done_total + BATCH))
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
@@ -240,37 +203,8 @@ done
 while :; do
   over_budget && { echo "величины: бюджет $BUDGET с исчерпан — добор возьмёт следующий такт"; break; }
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
-  psql "$DSN" -tA -c "
-    WITH seed AS (
-      SELECT f.src_table, t.emb FROM wiki_entity_facts f
-      JOIN search_tables t ON t.src_table = f.src_table
-      WHERE f.cls <> 'service'
-        AND coalesce(f.measures,'') <> ''
-        AND EXISTS (SELECT 1 FROM $ALIAS_TABLE a
-                    WHERE a.src_table = f.src_table AND coalesce(a.aliases,'') <> '')
-        AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE m
-                        WHERE m.src_table = f.src_table AND coalesce(m.aliases,'') <> '')
-        AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE m
-                        WHERE m.src_table = f.src_table
-                          AND coalesce(m.aliases,'') = ''
-                          AND m.seen_at > now() - INTERVAL $RETRY_H HOUR)
-      ORDER BY f.src_table LIMIT 1)
-    SELECT to_json(list(struct_pack(entity := src_table, title := label,
-                                    quantities := coalesce(measures,''))))
-    FROM (SELECT f.*, t.emb <=> (SELECT emb FROM seed) AS d
-            FROM wiki_entity_facts f
-            JOIN search_tables t ON t.src_table = f.src_table
-           WHERE f.cls <> 'service'
-             AND coalesce(f.measures,'') <> ''
-             AND EXISTS (SELECT 1 FROM $ALIAS_TABLE a
-                         WHERE a.src_table = f.src_table AND coalesce(a.aliases,'') <> '')
-             AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE m
-                             WHERE m.src_table = f.src_table AND coalesce(m.aliases,'') <> '')
-             AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE m
-                             WHERE m.src_table = f.src_table
-                               AND coalesce(m.aliases,'') = ''
-                               AND m.seen_at > now() - INTERVAL $RETRY_H HOUR)
-           ORDER BY d, f.src_table LIMIT $BATCH)" > "$TMP/pay" 2>/dev/null
+  psql_wa_tA -v batch="$BATCH" \
+    -f "$HERE/wiki_alias_select_measure_batch.sql" > "$TMP/pay" 2>/dev/null
   chmod 644 "$TMP/pay" 2>/dev/null
   PAY=$(cat "$TMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
@@ -284,14 +218,7 @@ while :; do
     --ans "$TMP/ans" --err "$TMP/err" || {
       skipped=$((skipped + 1))
       echo "величины: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
-      psql "$DSN" -q -c "INSERT INTO $MEASURE_TABLE
-        SELECT entity, trim(q), '', now()
-        FROM read_json('$TMP/pay',
-          columns := {entity:'VARCHAR', title:'VARCHAR', quantities:'VARCHAR'}),
-             unnest(str_split(quantities, ',')) AS x(q)
-        WHERE trim(q) <> ''
-          AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE a
-                          WHERE a.src_table = entity AND a.measure = trim(q))" >/dev/null 2>&1
+      psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_measure_skip.sql" >/dev/null 2>&1
       continue
     }
   python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json"
@@ -299,20 +226,9 @@ while :; do
   chmod 644 "$TMP/rows.json" "$TMP/measures.json" 2>/dev/null
   # Только величины. rows.json с алиасами сущности здесь намеренно не пишется в
   # ALIAS_TABLE: добор не имеет права перезаписать уже собранные описания записей.
-  psql "$DSN" -q -c "
-    DELETE FROM $MEASURE_TABLE WHERE coalesce(aliases,'') = '' AND src_table IN
-      (SELECT DISTINCT src_table FROM read_json('$TMP/measures.json',
-         columns := {src_table:'VARCHAR', measure:'VARCHAR', aliases:'VARCHAR'})
-       WHERE coalesce(aliases,'') <> '');
-    INSERT INTO $MEASURE_TABLE
-    SELECT src_table, measure, aliases, now()
-    FROM read_json('$TMP/measures.json',
-         columns := {src_table:'VARCHAR', measure:'VARCHAR', aliases:'VARCHAR'}) n
-    WHERE coalesce(n.aliases,'') <> ''
-      AND NOT EXISTS (SELECT 1 FROM $MEASURE_TABLE a
-                      WHERE a.src_table = n.src_table AND a.measure = n.measure
-                        AND coalesce(a.aliases,'') <> '')" 2>&1 | grep -i error
-  have_m=$(psql "$DSN" -tAc "SELECT count(*) FROM $MEASURE_TABLE WHERE coalesce(aliases,'') <> ''" 2>/dev/null)
+  psql_wa -v measures_path="$TMP/measures.json" \
+    -f "$HERE/wiki_alias_merge_measures.sql" 2>&1 | grep -i error
+  have_m=$(psql_wa_tA -c "SELECT count(*) FROM $MEASURE_TABLE WHERE coalesce(aliases,'') <> ''" 2>/dev/null)
   echo "величины: непустых в базе $have_m"
   done_total=$((done_total + BATCH))
 done
@@ -343,64 +259,24 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
   # Ключ отметки — слово И ОТПЕЧАТОК НАБОРА сущностей, которые им называются. Появилась
   # новая сущность с тем же словом — отпечаток другой, вопрос задаётся заново. То есть это
   # не «спросили один раз и забыли», а «спросили про ЭТО столкновение».
-  psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS search_alias_probe (alias VARCHAR, entities_fp VARCHAR, asked_at TIMESTAMP)" >/dev/null 2>&1
+  # search_alias_probe создаётся в wiki_alias_init.sql (CREATE IF NOT EXISTS).
   rounds=0 asked=0 stopped=""
   # Предел кругов остаётся вторым ограничителем — на случай `WIKI_ALIAS_MAX_SEC=0`.
   while [ "$rounds" -lt "${WIKI_ALIAS_COLLISION_ROUNDS:-40}" ]; do
     over_budget && { stopped=" (бюджет $BUDGET с исчерпан)"; break; }
     rounds=$((rounds + 1))
-    # Слово выбирается ОТДЕЛЬНЫМ запросом: его отпечаток нужен, чтобы отметить попытку.
-    # `md5(string_agg(...))` — штатные функции движка (доки: Sql › Functions › Utility
-    # Functions; Sql › Functions › Aggregate Functions).
-    PICK=$(psql "$DSN" -tA -F$'\t' -c "
-      WITH al AS (SELECT src_table, trim(lower(x.a)) AS alias
-                    FROM $ALIAS_TABLE, unnest(str_split(aliases, ',')) AS x(a)
-                   WHERE trim(x.a) <> ''),
-           dup AS (SELECT alias FROM al GROUP BY 1 HAVING count(DISTINCT src_table) > 1),
-           -- Обычно берём САМОЕ спорное слово: у него больше всего сущностей.
-           -- 🔴 Но можно назвать слово прямо, переменной WIKI_ALIAS_WORD, — быстрый путь,
-           -- когда
-           -- прогон приёмки уже показал, ГДЕ система спуталась: разводим ровно тех, кто
-           -- ошибся, а не ждём, пока очередь дойдёт. Цель владельца 30.07 — «сто процентов
-           -- верных ответов, даже если для этого надо 2-3 раза переспросить»; значит
-           -- чинить надо по факту ошибки, а не подряд. Названное слово память не блокирует:
-           -- владелец спрашивает повторно осознанно.
-           cand AS (SELECT a.alias,
-                           md5(string_agg(DISTINCT a.src_table, ',' ORDER BY a.src_table)) AS fp,
-                           count(DISTINCT a.src_table) AS n
-                      FROM al a JOIN dup d ON d.alias = a.alias
-                     WHERE ('$TARGET_WORD' = '' OR a.alias = lower('$TARGET_WORD'))
-                       AND NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE s
-                                        WHERE s.src_table = a.src_table
-                                          AND s.not_enough_for ILIKE '%' || a.alias || '%')
-                     GROUP BY 1)
-      SELECT c.alias, c.fp FROM cand c
-       WHERE '$TARGET_WORD' <> ''
-          OR NOT EXISTS (SELECT 1 FROM search_alias_probe p
-                          WHERE p.alias = c.alias AND p.entities_fp = c.fp)
-       ORDER BY c.n DESC, c.alias LIMIT 1" 2>/dev/null)
-    [ -z "$PICK" ] && break
-    WORD=${PICK%%$'\t'*}; FP=${PICK##*$'\t'}
-    # Одинарные кавычки удваиваются: слово приходит из данных, а не от нас.
-    WORD_SQL=${WORD//\'/\'\'}
-    psql "$DSN" -q -c "INSERT INTO search_alias_probe VALUES ('$WORD_SQL', '$FP', now())" >/dev/null 2>&1
+    # Выбор слова + отметка probe + JSON пачки — один psql (wiki_alias_collision_round.sql).
+    # `md5(string_agg(...))` — штатные функции движка (Aggregate; Utility md5).
+    ROUND=$(psql_wa_tA -v batch="$BATCH" -v target_word="$TARGET_WORD" \
+      -f "$HERE/wiki_alias_collision_round.sql" 2>/dev/null) || ROUND=""
+    [ -z "$ROUND" ] && break
+    WORD=${ROUND%%$'\t'*}
+    rest=${ROUND#*$'\t'}
+    FP=${rest%%$'\t'*}
+    PAY=${rest#*$'\t'}
     asked=$((asked + 1))
-    psql "$DSN" -tA -c "
-      WITH al AS (SELECT src_table, trim(lower(x.a)) AS alias
-                    FROM $ALIAS_TABLE, unnest(str_split(aliases, ',')) AS x(a)
-                   WHERE trim(x.a) <> '')
-      SELECT to_json(list(struct_pack(entity := f.src_table, title := f.label,
-                                      quantities := coalesce(f.measures,''))))
-      FROM (SELECT f.* FROM wiki_entity_facts f
-             WHERE f.src_table IN (SELECT src_table FROM al WHERE alias = '$WORD_SQL')
-             -- 🔴 ПРЕДЕЛ ОБЯЗАТЕЛЕН: число сущностей на одно спорное слово растёт с размером
-             -- базы (у нас со словом «НДС» их 18), а весь список уходит в модель — это п. 19,
-             -- объём в модель не должен зависеть от размера базы. Не влезшие в пачку
-             -- разведутся следующим кругом: слово останется спорным, пока их не разведут.
-             ORDER BY f.src_table LIMIT $BATCH) f" \
-      > "$TMP/pay" 2>/dev/null
+    printf '%s' "$PAY" > "$TMP/pay"
     chmod 644 "$TMP/pay" 2>/dev/null
-    PAY=$(cat "$TMP/pay")
     case "$PAY" in ''|'[]'|'null') continue;; esac
     {
       # 🔴 Общие обиходные слова оставляем в aliases: иначе ts_lexize теряет связь
@@ -449,53 +325,19 @@ open(sys.argv[2], 'w', encoding='utf-8').write(json.dumps(rows, ensure_ascii=Fal
 print("разведено сущностей: %d" % len(rows))
 PY2
     chmod 644 "$TMP/rows.json" 2>/dev/null   # тот же случай, что в первом проходе
-    psql "$DSN" -q -c "
-      UPDATE $ALIAS_TABLE a SET aliases = n.aliases, best_used_for = n.best_used_for,
-             not_enough_for = n.not_enough_for, seen_at = now()
-      FROM read_json('$TMP/rows.json', columns := {src_table:'VARCHAR', aliases:'VARCHAR',
-             best_used_for:'VARCHAR', not_enough_for:'VARCHAR'}) n
-      WHERE a.src_table = n.src_table" >/dev/null 2>&1
+    psql_wa -v rows_path="$TMP/rows.json" -f "$HERE/wiki_alias_collision_merge.sql" >/dev/null 2>&1
   done
   # Молчания тут быть не должно: видно и сколько спросили, и сколько ОСТАЛОСЬ на следующий
   # такт (упёрлись в предел кругов), и сколько столкновений модель разобрать не смогла —
   # они лежат в `search_alias_probe` и сами собой больше не переспрашиваются.
-  left=$(psql "$DSN" -tAc "
-    WITH al AS (SELECT src_table, trim(lower(x.a)) AS alias
-                  FROM $ALIAS_TABLE, unnest(str_split(aliases, ',')) AS x(a)
-                 WHERE trim(x.a) <> ''),
-         dup AS (SELECT alias FROM al GROUP BY 1 HAVING count(DISTINCT src_table) > 1),
-         cand AS (SELECT a.alias,
-                         md5(string_agg(DISTINCT a.src_table, ',' ORDER BY a.src_table)) AS fp
-                    FROM al a JOIN dup d ON d.alias = a.alias
-                   WHERE NOT EXISTS (SELECT 1 FROM $ALIAS_TABLE s
-                                      WHERE s.src_table = a.src_table
-                                        AND s.not_enough_for ILIKE '%' || a.alias || '%')
-                   GROUP BY 1)
-    SELECT count(*) FROM cand c
-     WHERE NOT EXISTS (SELECT 1 FROM search_alias_probe p
-                        WHERE p.alias = c.alias AND p.entities_fp = c.fp)" 2>/dev/null)
+  left=$(psql_wa_tA -f "$HERE/wiki_alias_collision_left.sql" 2>/dev/null)
   echo "разведение столкновений: кругов $rounds$stopped, спрошено слов $asked, осталось неспрошенных ${left:-?}"
 fi
 
 [ "$skipped" -gt 0 ] && echo "алиасы: пачек пропущено из-за отказа модели: $skipped" >&2
-psql "$DSN" -tA -F' | ' -c "
-  SELECT 'алиасов в базе', count(*) FROM $ALIAS_TABLE
-  UNION ALL SELECT 'из них ПУСТЫХ (модель не ответила)', count(*) FROM $ALIAS_TABLE
-    WHERE coalesce(aliases,'') = ''
-  UNION ALL SELECT 'величин в словаре', count(*) FROM $MEASURE_TABLE
-    WHERE coalesce(aliases,'') <> ''
-  UNION ALL SELECT 'пустышек величин (модель не ответила)', count(*) FROM $MEASURE_TABLE
-    WHERE coalesce(aliases,'') = ''"
-
-# 🔴 Д3 / п.13: inverted eventually consistent. INSERT/UPDATE в алиасы без
-# публикации оставляют alias_idx пустым (или устаревшим) — снаружи ошибок нет,
-# ранжирование просто молчит. [замер C2 27.08 okna] таблица 254, alias_idx 0;
-# наполнился только после DROP+CREATE + VACUUM (REFRESH_TABLE). Доки SereneDB:
-# Sql › Indexes › Inverted › Lifecycle; VACUUM › Refreshing — REFRESH_*.
-# Тот же приём уже в entity_card_build.sql и build.sh для search_idx.
-# Отдельным вызовом psql (не в одной транзакции с INSERT): REFRESH внутри
-# транзакции с записью — тихий no-op (CHANGELOG / corpus_merge.sql).
-psql "$DSN" -q -c "VACUUM (REFRESH_TABLE) $ALIAS_TABLE;" \
+# Итог «алиасов в базе» — wiki_alias_publish.sql (stats + REFRESH, не в tx с INSERT).
+# Внутри publish: VACUUM (REFRESH_TABLE) $ALIAS_TABLE.
+psql_wa -f "$HERE/wiki_alias_publish.sql" \
   || echo "алиасы: VACUUM (REFRESH_TABLE) $ALIAS_TABLE не прошёл" >&2
 
 # ── §7 / §7bis: подписи веток развилок (day-basis + src) ───────────────────────
@@ -513,72 +355,29 @@ fork_over_budget() {
   [ "$DAY_BASIS_FORK_MAX_SEC" != "0" ] \
     && [ $(( $(date +%s) - t_fork_start )) -ge "$DAY_BASIS_FORK_MAX_SEC" ]
 }
-psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $FORK_CLASS_TABLE (fork_key VARCHAR UNIQUE, src_set VARCHAR, measure_ctx VARCHAR, seen_at TIMESTAMP, seen_count INTEGER)" >/dev/null 2>&1
-psql "$DSN" -q -c "CREATE TABLE IF NOT EXISTS $FORK_LABEL_TABLE (fork_key VARCHAR, src VARCHAR, label VARCHAR, seen_at TIMESTAMP)" >/dev/null 2>&1
-psql "$DSN" -q -c "GRANT SELECT, INSERT, UPDATE ON $FORK_CLASS_TABLE TO serene_ro" >/dev/null 2>&1
-psql "$DSN" -q -c "GRANT SELECT ON $FORK_LABEL_TABLE TO serene_ro" >/dev/null 2>&1
-DAY_BASIS_NEED_SQL="
-  WITH need AS (
-    SELECT c.fork_key, c.src_set, c.measure_ctx
-    FROM $FORK_CLASS_TABLE c
-    WHERE c.src_set <> ''
-      AND NOT EXISTS (
-        SELECT 1 FROM unnest(str_split(c.src_set, ',')) AS x(s)
-        WHERE trim(x.s, '{} ') NOT IN ($DAY_BASIS_IDS))
-      AND EXISTS (
-        SELECT 1 FROM unnest(str_split(c.src_set, ',')) AS x(s)
-        WHERE trim(x.s, '{} ') IN ($DAY_BASIS_IDS))
-      AND EXISTS (
-        SELECT 1 FROM unnest(str_split(c.src_set, ',')) AS x(s)
-        WHERE NOT EXISTS (
-          SELECT 1 FROM $FORK_LABEL_TABLE l
-          WHERE l.fork_key = c.fork_key AND l.src = trim(x.s, '{} ')
-            AND (coalesce(l.label, '') <> ''
-                 OR l.seen_at > now() - INTERVAL $DAY_BASIS_FORK_RETRY_H HOUR)))
-    ORDER BY c.fork_key
-    LIMIT $DAY_BASIS_FORK_BATCH),
-  raw_srcs AS (
-    SELECT n.fork_key, n.measure_ctx, trim(x.s, '{} ') AS src
-    FROM need n, unnest(str_split(n.src_set, ',')) AS x(s)
-    WHERE NOT EXISTS (
-      SELECT 1 FROM $FORK_LABEL_TABLE l
-      WHERE l.fork_key = n.fork_key AND l.src = trim(x.s, '{} ')
-        AND (coalesce(l.label, '') <> ''
-             OR l.seen_at > now() - INTERVAL $DAY_BASIS_FORK_RETRY_H HOUR))),
-  srcs AS (SELECT fork_key, measure_ctx, src FROM raw_srcs)"
+psql_wa -v fork_class_table="$FORK_CLASS_TABLE" -v fork_label_table="$FORK_LABEL_TABLE" \
+  -f "$HERE/wiki_alias_fork_init.sql" >/dev/null 2>&1
 mark_day_fork_attempt() {
-  psql "$DSN" -q -c "
-    MERGE INTO $FORK_LABEL_TABLE t
-    USING (SELECT fork_key, src, '' AS label, now() AS seen_at
-           FROM read_json('$TMP/dayforkflat', columns := {fork_key:'VARCHAR', src:'VARCHAR'})) p
-    ON (t.fork_key = p.fork_key AND t.src = p.src)
-    WHEN MATCHED AND coalesce(t.label, '') = '' THEN UPDATE SET seen_at = p.seen_at
-    WHEN NOT MATCHED THEN INSERT" >/dev/null 2>&1
+  psql_wa -v fork_label_table="$FORK_LABEL_TABLE" -v flat_path="$TMP/dayforkflat" \
+    -f "$HERE/wiki_alias_dayfork_mark.sql" >/dev/null 2>&1
 }
 day_fork_done=0
 while :; do
   fork_over_budget && break
-  psql "$DSN" -tA -c "$DAY_BASIS_NEED_SQL
-    SELECT to_json(list(struct_pack(fork_key := fork_key, measure := measure,
-                                    sources := items)))
-    FROM (SELECT s.fork_key, max(s.measure_ctx) AS measure,
-                 list(struct_pack(src := s.src, title := s.src,
-                                  branchKind := 'day_basis_window',
-                                  scope := CASE s.src
-                                    WHEN 'calendar_days' THEN 'all calendar dates in the period window'
-                                    WHEN 'working_days' THEN 'only dates marked working in the calendar register'
-                                    ELSE '' END)
-                      ORDER BY s.src) AS items
-          FROM srcs s
-          GROUP BY s.fork_key
-          ORDER BY s.fork_key) z" > "$TMP/dayforkpay" 2>/dev/null
-  chmod 644 "$TMP/dayforkpay" 2>/dev/null
-  DF_PAY=$(cat "$TMP/dayforkpay")
+  BUNDLE=$(psql_wa_tA \
+    -v fork_class_table="$FORK_CLASS_TABLE" \
+    -v fork_label_table="$FORK_LABEL_TABLE" \
+    -v fork_batch="$DAY_BASIS_FORK_BATCH" \
+    -v fork_retry_h="$DAY_BASIS_FORK_RETRY_H" \
+    -v day_basis_ids="$DAY_BASIS_IDS" \
+    -f "$HERE/wiki_alias_dayfork_batch.sql" 2>/dev/null) || BUNDLE=""
+  [ -z "$BUNDLE" ] && break
+  DF_PAY=${BUNDLE%%$'\t'*}
+  DF_FLAT=${BUNDLE#*$'\t'}
+  printf '%s' "$DF_PAY" > "$TMP/dayforkpay"
+  printf '%s' "$DF_FLAT" > "$TMP/dayforkflat"
+  chmod 644 "$TMP/dayforkpay" "$TMP/dayforkflat" 2>/dev/null
   case "$DF_PAY" in ''|'[]'|'null') break;; esac
-  psql "$DSN" -tA -c "$DAY_BASIS_NEED_SQL
-    SELECT to_json(list(struct_pack(fork_key := fork_key, src := src))) FROM srcs" \
-    > "$TMP/dayforkflat" 2>/dev/null
-  chmod 644 "$TMP/dayforkflat" 2>/dev/null
   {
     printf '%s' "JSON only, no prose, no code fences. Below are FORK CLASSES with day-basis branches of one database. Each class is one period window and one measure context; branches are machine ids calendar_days (all calendar dates in the window) and working_days (only working dates per the calendar register in data). For EVERY branch id of EVERY class write a short label that tells a person HOW the number was counted for that branch — not repeating the id. Use the SAME language as the measure field. Keys in labels are the branch ids exactly (the src field). Schema: {\"forks\":[{\"fork_key\":\"<copy exactly>\",\"labels\":{\"<branch id exactly>\":\"<label>\"}}]}. Input: "
     cat "$TMP/dayforkpay"
@@ -601,14 +400,8 @@ while :; do
   fi
   python3 ./branch_alias_parse.py "$TMP/dayforkans" "$TMP/dayforkpay" "$TMP/dayforkrows.json" >/dev/null 2>&1 || true
   chmod 644 "$TMP/dayforkrows.json" 2>/dev/null
-  psql "$DSN" -q -c "
-    MERGE INTO $FORK_LABEL_TABLE t
-    USING (SELECT fork_key, src, label, now() AS seen_at
-           FROM read_json('$TMP/dayforkrows.json',
-             columns := {fork_key:'VARCHAR', src:'VARCHAR', label:'VARCHAR'})) n
-    ON (t.fork_key = n.fork_key AND t.src = n.src)
-    WHEN MATCHED THEN UPDATE SET label = n.label, seen_at = n.seen_at
-    WHEN NOT MATCHED THEN INSERT" 2>&1 | { grep -i error || true; }
+  psql_wa -v fork_label_table="$FORK_LABEL_TABLE" -v rows_path="$TMP/dayforkrows.json" \
+    -f "$HERE/wiki_alias_dayfork_merge.sql" 2>&1 | { grep -i error || true; }
   mark_day_fork_attempt
   day_fork_done=$((day_fork_done + 1))
 done

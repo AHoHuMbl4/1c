@@ -129,6 +129,7 @@ SEC_EMB_LIST="${SEC_EMB_LIST# }"
 # Первый секрет — для проверок до такта: она дёргает эмбеддер одним запросом.
 SEC_EMB="${SEC_EMB_LIST%% *}"
 export EMBED_SECRETS="$SEC_EMB_LIST"
+export EMBED_DBNAME="$LOCK_TAG"
 cleanup() {
   local _drops="DROP SECRET IF EXISTS $SEC_ODG;"
   for _s in $SEC_EMB_LIST; do _drops="$_drops DROP SECRET IF EXISTS $_s;"; done
@@ -475,11 +476,11 @@ psql "$DSN" -q -f coverage_build.sql || fail "перепись полноты"
 # не меняет — F6_SYNONYMS_FACTS §5.2); пустые источники — словарь не трогаем (код 0).
 # Имя — тот же SOLR_SYN_DICT / ASK_SOLR_SYNONYMS_DICT, что уходит в corpus_init.
 echo "== 7-solr. словарь синонимов (solr_synonyms ← alias)"
-SOLR_OUT="${CSV_DIR:-/var/lib/serenedb}/solr_synonyms_${SOLR_SYN_DICT}.sql"
-python3 ./solr_synonyms_build.py compile \
-  --dsn "$DSN" --dict "$SOLR_SYN_DICT" \
-  --alias-table "${ALIAS_TABLE:-search_entity_alias}" \
-  --out "$SOLR_OUT" --apply \
+psql "$DSN" -q \
+  -v dict_locale="$DICT_LOCALE" \
+  -v solr_syn_dict="$SOLR_SYN_DICT" \
+  -v alias_table="${ALIAS_TABLE:-search_entity_alias}" \
+  -f solr_synonyms_compile.sql \
   || fail "компиляция словаря solr_synonyms ($SOLR_SYN_DICT)"
 
 # 🔴 Карточка сущности — поверхность отбора кандидатов. Идёт ПОСЛЕ алиасов не случайно:
@@ -493,8 +494,17 @@ echo "== 7-бис. карточка сущности и её вектор"
 psql "$DSN" -q -f entity_card_build.sql || echo "карточка: шаг не прошёл, такт продолжается" >&2
 # Вектор считается только НОВЫМ и ИЗМЕНИВШИМСЯ: `MERGE` в сборке сбрасывает `emb` там, где
 # изменился текст карточки, и сохраняет там, где нет. В установившемся режиме это ноль строк.
-EMBED_TARGETS=card ./embed_all.sh "$WORKERS" >/dev/null 2>&1 \
+# Э1б: секреты такта уже подняты — не дублируем embed_all.sh.
+ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
+                        WHERE e.src_table = search_entity_card.src_table AND e.cls = 'service')" \
+  ./embed_missing.sh search_entity_card "substr(card,1,$EMBED_MAXLEN)" "$WORKERS" "src_table" \
+  >/dev/null 2>&1 \
   || echo "векторы карточек: шаг не прошёл, такт продолжается" >&2
+psql "$DSN" -q -c "DELETE FROM search_quality WHERE k = 'emb_model_search_entity_card';
+     INSERT INTO search_quality SELECT 'emb_model_search_entity_card', epoch(now())::BIGINT,
+            '$(printf '%s' "$EMBED_MODEL" | sed "s/'/''/g")';" \
+  >/dev/null 2>&1 || true
+psql "$DSN" -q -c "VACUUM (REFRESH_INDEX) search_entity_card;" >/dev/null 2>&1 || true
 
 echo "== 8. проверки после такта"
 psql "$DSN" -tA -F' | ' -v build_sql_hash="$SQL_HASH" -v embed_maxlen="$EMBED_MAXLEN" -f corpus_postcheck.sql || fail "проверки после такта"

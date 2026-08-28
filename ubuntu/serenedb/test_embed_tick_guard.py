@@ -108,8 +108,9 @@ echo 0
     all_sh = (ROOT / "embed_all.sh").read_text(encoding="utf-8")
     t("embed_missing зовёт guard",
       "embed_tick_guard" in miss and "embed_tick_guard_check" in miss)
-    t("embed_missing guard до left()/счёта",
-      miss.find("embed_tick_guard_check") < miss.find("n=$(left)"))
+    t("embed_missing guard до досчёта",
+      miss.find('embed_tick_guard_check "$TBL"')
+      < miss.find("result=$(run_sql_round)"))
     t("embed_all зовёт guard на corpus",
       "embed_tick_guard_check" in all_sh)
     t("embed_all exit 2 на большом остатке",

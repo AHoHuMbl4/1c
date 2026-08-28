@@ -125,6 +125,12 @@ t("corpus_init solr placeholder is pipeline",
   "step1_stemming = true" in init
   and "step2_template = 'solr_synonyms'" in init)
 
+compile_sql = open(os.path.join(ROOT, "solr_synonyms_compile.sql"), encoding="utf-8").read()
+t("compile.sql runtime is pipeline stem path",
+  "step1_stemming = true" in compile_sql
+  and "ts_lexize" in compile_sql
+  and "search_dict_alias_stem" in compile_sql)
+
 # --- (г) ensure DDL для alias_idx ---
 idx_ddl = B.render_alias_stem_index_ddl("ru_RU.UTF-8")
 t("alias stem index DDL drops+creates alias_idx",

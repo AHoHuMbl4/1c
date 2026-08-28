@@ -46,7 +46,7 @@ def check(name: str, cond: bool, detail: str = "") -> None:
 
 
 def new_sql(tbl: str, rows_where: str) -> str:
-    """Та же форма, что left() в embed_missing.sh при непустом ROWS_WHERE."""
+    """Та же форма, что embed_missing.sql при непустом ROWS_WHERE."""
     return (
         f"SELECT count(*) FROM (SELECT src_table FROM {tbl} WHERE emb IS NULL) {tbl} "
         f"WHERE true {rows_where}"
@@ -128,7 +128,7 @@ def main() -> int:
     check("ut_test left() < 60s", dt < 60.0, f"dt={dt:.2f}s")
 
     print("== 4. извлечённые колонки для resolver (table_name) ==")
-    # Как в embed_missing.sh: grep $TBL.col из ROWS_WHERE
+    # Как в embed_missing.sh / embed_missing.sql: grep $TBL.col из ROWS_WHERE
     import re
 
     tbl = "resolver_index"
