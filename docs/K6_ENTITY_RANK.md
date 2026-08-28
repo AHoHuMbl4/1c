@@ -628,3 +628,39 @@ clarify с кнопками окна, не терминальный ответ �
 
 **Без новых списков слов:** только `interpretation_id` окон (`full_month`, `full_quarter`, `rolling_12m`, `none`) и `render_window_label` — §3.96.
 
+### 7.20. K9 фаза 9: kind-каталог тянет осевой регистр в пул (28.08)
+
+| механизм | где | что |
+|---|---|---|
+| расширение пула | `event_kind_catalog_expand_pool` (~2444) | event+count: kind/action_axis → `entity_form_catalogs_for_kind` (stem/alias `search_entity_alias`, запасной — `meaning_candidates` при явном period) → `holders_of_target` по refcol; document_/accumulationregister_ без kind→catalog — пул прежний |
+| точка вызова | `answer` (~13479) | до `prefer_entity_*` и K6 v2; diag `event_kind_pool_expand` |
+| K6 v2 | `expand_holders` (~702), `apply_to_candidates` (~801) | `catalogs_for_kind` из ask (тот же `entity_form_catalogs_for_kind`); event — слово оси `action_axis` |
+
+**Словарь (статически, okna C2):** `entity_form_catalogs_for_kind` читает
+`search_entity_alias.aliases` + `best_used_for` через `ts_lexize`; `search_dict_syn`
+в этом пути **не** участвует (только `same_concept_groups` при
+`ASK_SOLR_SYNONYMS=1`). У `catalog_контрагенты` есть «клиенты», **нет**
+«покупатели» — при mtd `allow_meaning=True` спасает `meaning_candidates`;
+без связи — задел **С5** (wiki-alias), не слова в коде.
+
+**Замки офлайн (сессия 28.08 ф9):**
+
+| замок | до (ф8) | после (ф9) |
+|---|---|---|
+| test_action_class | 43/0 | **48/0** (+kind pool, axis pair) |
+| test_sales_rank_canon | 51/0 | **51/0** |
+| test_rank_leader_path | 30/0 | **30/0** |
+| test_entity_form | 47/0 | **47/0** |
+| test_k6_rank_v2 offline | 10/0 | **10/0** |
+| test_compose | 92/0 | **92/0** |
+
+**Таблица ожиданий (:8096):**
+
+| вопрос | ожидание ф9 |
+|---|---|
+| «сколько покупателей было за этот месяц» | **43 · Контрагенты** (реализация MTD DISTINCT, не 76 кассовых ордеров) |
+| «сколько клиентов реально покупают» | clarify периода (ф7) → 141 · Контрагенты |
+| «…реально покупали за последний год» | **141 · Контрагенты**, без переспроса (ф8) |
+| «сколько у нас всего клиентов» | clarify object (п. 12) |
+| топ-3 / лидер / воскресенье / AB 8/8 / bench 20/23 | без регресса |
+

@@ -1,3 +1,15 @@
+## 2026-08-28 — К9 фаза 9: kind-каталог → осевые движения в пул [код]
+
+**[код]** `serene_ask`: `event_kind_catalog_expand_pool` (~2444) — event+count:
+kind/action_axis → `entity_form_catalogs_for_kind` (тот же путь, что ф6
+`_pick_kind_axis_col`) → `holders_of_target` добавляет document_/register_
+в пул до выбора; вызов ~13479, diag `event_kind_pool_expand`.
+`entity_rank_v2.expand_holders` — опциональный `catalogs_for_kind` из ask;
+`apply_to_candidates` — action_axis на event-ярусе.
+
+**[замер]** Замки: test_action_class **48/0** (+5 ф9, было 43/0); sales_rank 51/0,
+leader_path 30/0, entity_form 47/0, k6_rank_v2 10/0, compose 92/0.
+
 ## 2026-08-28 — Периметр: только окно, без туннелей; период — переспрос [решение]
 
 **[решение] Владелец:** живая работа — ТОЛЬКО на окне (gpu-erw), всё

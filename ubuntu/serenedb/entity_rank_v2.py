@@ -700,13 +700,16 @@ def kind_from_alias_overlap(psql, lit, question, stem_dict="search_dict_stem"):
 
 
 def expand_holders(order, kind, psql, lit, stem_dict="search_dict_stem",
-                   tables="search_tables"):
+                   tables="search_tables", catalogs_for_kind=None):
     out = list(order)
     seen = set(out)
     if not kind:
         return out
-    cats = stem_overlap_srcs(psql, lit, kind, "catalog_%", stem_dict=stem_dict,
-                             tables=tables)
+    if catalogs_for_kind:
+        cats = list(catalogs_for_kind(kind) or [])
+    else:
+        cats = stem_overlap_srcs(psql, lit, kind, "catalog_%", stem_dict=stem_dict,
+                                 tables=tables)
     for cat in cats:
         if cat not in seen:
             seen.add(cat)
@@ -801,7 +804,8 @@ def dual_atom_pair(cands, features, intent):
 def apply_to_candidates(psql, lit, cands, intent, question, today=None,
                         stem_dict="search_dict_stem", corpus="search_corpus",
                         tables="search_tables", sales_sum=False,
-                        rank_intent=False, mk_clarify=None):
+                        rank_intent=False, mk_clarify=None,
+                        catalogs_for_kind=None):
     """K6 v2: расширить пул, reorder_v2, diag; опционально clarify двух атомов.
 
     mk_clarify(cat, holder, diag_extra) -> dict ответа или None.
@@ -818,8 +822,12 @@ def apply_to_candidates(psql, lit, cands, intent, question, today=None,
     form = infer_rank_form(intent, question, sales_sum=sales_sum,
                            rank_intent=rank_intent)
     want_agg = "sum" if form in ("sum", "name") else "count"
-    pool = expand_holders(cands, kind, psql, lit, stem_dict=stem_dict,
-                          tables=tables)
+    expand_kind = kind
+    if (intent or {}).get("action_class", "").strip().lower() == "event":
+        expand_kind = ((intent or {}).get("action_axis") or "").strip() or kind
+    pool = expand_holders(cands, expand_kind, psql, lit, stem_dict=stem_dict,
+                          tables=tables,
+                          catalogs_for_kind=catalogs_for_kind)
     pool = expand_stem_and_live(pool, question, form, want_agg, psql, lit,
                                 stem_dict=stem_dict, tables=tables,
                                 corpus=corpus)

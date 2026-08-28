@@ -443,6 +443,62 @@ finally:
     A._passport_axis_label = _old_pal8
     A.refcols_of = _old_ro8
 
+# --- K9-ф9: kind-каталог → осевое движение в пул ---
+_pool_lex = ["document_возвраттмцотпокупателя", "accumulationregister_кассовыеордера"]
+_intent_buy_mtd = {"want": "count", "action_class": "event", "kind": "покупатели",
+                   "action_axis": "покупатели",
+                   "period": {"from": "2026-08-01", "to": "2026-08-28"}}
+_intent_nokind = {"want": "count", "action_class": "event", "kind": "",
+                  "period": {"from": "2026-08-01", "to": "2026-08-28"}}
+_old_efc9 = A.entity_form_catalogs_for_kind
+_old_hot9 = A.holders_of_target
+A.entity_form_catalogs_for_kind = lambda kind, allow_meaning=True: (
+    ["catalog_контрагенты"] if kind == "покупатели" else [])
+A.holders_of_target = lambda target: (
+    [{"src": "accumulationregister_реализациятмц", "col": "Контрагент"}]
+    if target == "catalog_контрагенты" else [])
+try:
+    _exp9 = A.event_kind_catalog_expand_pool(_pool_lex, _intent_buy_mtd)
+    t("kind pool expand: adds sales register without lexical hit",
+      "accumulationregister_реализациятмц" in _exp9
+      and "catalog_контрагенты" in _exp9, _exp9)
+    _exp9b = A.event_kind_catalog_expand_pool(_pool_lex, _intent_nokind)
+    t("kind pool expand: no kind -> pool unchanged",
+      _exp9b == _pool_lex, _exp9b)
+    _exp9c = A.event_kind_catalog_expand_pool(
+        _pool_lex,
+        {"want": "count", "action_class": "object", "kind": "покупатели"})
+    t("kind pool expand: object -> pool unchanged",
+      _exp9c == _pool_lex, _exp9c)
+finally:
+    A.entity_form_catalogs_for_kind = _old_efc9
+    A.holders_of_target = _old_hot9
+
+_old_efc9b = A.entity_form_catalogs_for_kind
+A.entity_form_catalogs_for_kind = lambda kind, allow_meaning=True: []
+try:
+    _exp9d = A.event_kind_catalog_expand_pool(_pool_lex, _intent_buy_mtd)
+    t("kind pool expand: no catalog link -> pool unchanged",
+      _exp9d == _pool_lex, _exp9d)
+finally:
+    A.entity_form_catalogs_for_kind = _old_efc9b
+
+# distinct-ответ: подпись оси на mtd-пути (контроль ф9)
+_axes9 = [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]
+_old_tl9 = A._table_label
+A._table_label = lambda src: "Контрагенты" if "контрагент" in src else src
+try:
+    _atom9 = A.atom_from_agg(
+        {"count": 43, "form": "distinct_axis", "axis": "Контрагент", "grain": "axis"},
+        operation="count", grain="axis", form="distinct_axis",
+        axis=A._passport_axis_label("Контрагент", _axes9))
+    _pair9 = A.render_atom_pair(_atom9) or ""
+    t("distinct mtd pair axis label (43 buyers)",
+      "43" in _pair9 and "Контрагенты" in _pair9 and "assumed" not in _pair9,
+      _pair9)
+finally:
+    A._table_label = _old_tl9
+
 print("---")
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:

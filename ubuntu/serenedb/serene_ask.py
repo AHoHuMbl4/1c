@@ -2441,6 +2441,49 @@ def entity_form_expand_pool(pool, intent=None):
     return out
 
 
+def event_kind_catalog_expand_pool(pool, intent=None):
+    """K9-ф9: event+count — kind-каталог → осевые движения в пул до выбора.
+
+    Тот же путь, что `_pick_kind_axis_col` / ф6: `entity_form_catalogs_for_kind`
+    (stem/alias из `search_entity_alias`, запасной — meaning_candidates) →
+    `holders_of_target` по refcol. Без kind→catalog — пул не меняем.
+    """
+    pool = list(pool or [])
+    if not event_path_active(intent):
+        return pool
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return pool
+    axis_word = (intent.get("action_axis") or "").strip()
+    if not axis_word:
+        axis_word = (intent.get("kind") or "").strip()
+    if not axis_word:
+        return pool
+    period = (intent or {}).get("period") or {}
+    has_period = bool(period.get("from") or period.get("to"))
+    cats = entity_form_catalogs_for_kind(axis_word, allow_meaning=has_period)
+    if not cats:
+        return pool
+    out = list(pool)
+    seen = set(out)
+    for cat in cats:
+        if cat not in seen:
+            seen.add(cat)
+            out.append(cat)
+        for h in holders_of_target(cat) or []:
+            hs = (h.get("src") or "").strip()
+            if not hs or hs in seen:
+                continue
+            pre = hs.split("_", 1)[0].lower()
+            if pre not in ("document", "accumulationregister"):
+                continue
+            if pre == "accumulationregister" and sales_noncanon_focus(hs):
+                continue
+            seen.add(hs)
+            out.append(hs)
+    return out
+
+
 def entity_form_rolling_year(today):
     """Окно «год назад → today» для distinct без явного period (форма границ)."""
     td = _calendar_date(today) or _calendar_date(time.strftime("%Y-%m-%d"))
@@ -13435,6 +13478,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # а выдуманный счёт был бы враньём в том самом поле, которым модель различает
     # кандидатов. Порядок ниже всё равно пересобирается по смыслу и реранкером.
     cands = list(by) + [t for t in extra if t not in by]
+    if event_path_active(intent):
+        _cands_pre_kind = len(cands)
+        cands = event_kind_catalog_expand_pool(cands, intent)
+        if len(cands) > _cands_pre_kind:
+            diag["event_kind_pool_expand"] = cands[_cands_pre_kind:]
     cands = prefer_entity_for_rank(cands, intent, question)
     cands = prefer_entity_for_sales(cands, intent, question)
     cands = prefer_entity_for_catalog_count(cands, intent, question)
@@ -13443,6 +13491,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             return k6_dual_atom_clarify_return(
                 cat, holder, question, diag, cut, t0, by, match, preds,
                 diag.get("marks") or {}, extra)
+        _period0 = (intent or {}).get("period") or {}
+        _has_period0 = bool(_period0.get("from") or _period0.get("to"))
+
+        def _catalogs_for_kind(axis_word):
+            w = (axis_word or "").strip()
+            if not w:
+                return []
+            return entity_form_catalogs_for_kind(w, allow_meaning=_has_period0)
+
         # K6 v2: при RuntimeError от psql порядок кандидатов прежний (diag answer_fit_v2_down)
         # (RuntimeError от psql без DSN в офлайн-замках, сбой соединения) —
         # порядок прежний, отметка в diag. Ранг не роняет ответ.
@@ -13452,7 +13509,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 stem_dict=STEM_DICT, corpus=CORPUS, tables=TABLES,
                 sales_sum=sales_sum_intent(intent, question),
                 rank_intent=rank_intent_from(intent, None, question),
-                mk_clarify=_k6_mk_clarify)
+                mk_clarify=_k6_mk_clarify,
+                catalogs_for_kind=(
+                    _catalogs_for_kind if event_path_active(intent) else None))
         except RuntimeError as _k6_err:
             _k6r = {}
             diag["answer_fit_v2_down"] = type(_k6_err).__name__
