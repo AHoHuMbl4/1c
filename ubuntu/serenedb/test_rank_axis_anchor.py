@@ -106,7 +106,7 @@ hint_sale = A.rank_measure_hint(
 t("rank measure «продали» → Количество", hint_sale == "Количество", hint_sale)
 
 # --- hotfix: count_kind не на rank ---
-src = open(A.__file__, encoding="utf-8").read()
+src = A.ask_source()
 t("compose: count_kind закрыт на rank",
   'if kw and slot_mode != "rank":' in src)
 
@@ -257,8 +257,7 @@ t("postprocess_money: None unit — identity",
 # grep-замок: литерала «руб.»/«рубл» (валюта) в serene_ask.py нет
 # путь через A.__file__: замок гоняется и из корня репо, не только из cwd serenedb.
 import ast as _ast
-with open(A.__file__, encoding="utf-8") as _f:
-    _tree = _ast.parse(_f.read())
+_tree = _ast.parse(A.ask_source())
 _rub_pat = re.compile(r"руб[.лей]|рубл", re.IGNORECASE)
 _has_rub = False
 for _node in _ast.walk(_tree):

@@ -316,7 +316,9 @@ t("init: search_meta GRANT unchanged",
   "GRANT SELECT ON search_meta TO serene_ro" in init_sql)
 
 # ask читает search_meta тем же путём — ключи заведены под balance_registers-стиль
-ask = open(os.path.join(ROOT, "serene_ask.py"), encoding="utf-8").read()
+import serene_ask as _A  # noqa: E402
+
+ask = _A.ask_source()
 t("ask unchanged contract: balance_registers reads search_meta",
   "SELECT v FROM search_meta WHERE k = 'balance_registers'" in ask)
 

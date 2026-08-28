@@ -288,6 +288,254 @@ def zone_of(lineno: int, zones: list[dict]) -> dict | None:
     return None
 
 
+DEFAULT_ASK_PACKAGE = Path(__file__).resolve().parent / "ask"
+
+
+def zone_module_path(zone: dict, ask_dir: Path | None = None) -> Path:
+    base = ask_dir or DEFAULT_ASK_PACKAGE
+    slug = str(zone["slug"]).replace("-", "_")
+    return base / f"z{zone['id']}_{slug}.py"
+
+
+def analyze_package(zone_defs: list[dict], ask_dir: Path | None = None) -> dict:
+    """Карта пакета ask/ после K10: одна зона = один файл."""
+    base = ask_dir or DEFAULT_ASK_PACKAGE
+    zone_reports: list[dict] = []
+    functions_out: list[dict] = []
+    calls: list[dict] = []
+    external_calls: list[dict] = []
+    env_reads: list[dict] = []
+    coverage_problems: list[str] = []
+    total_lines = 0
+    module_names: set[str] = set()
+    by_name: dict[str, list[dict]] = defaultdict(list)
+    zone_by_id: dict[str, dict] = {}
+
+    for zdef in zone_defs:
+        path = zone_module_path(zdef, base)
+        if not path.is_file():
+            coverage_problems.append(f"нет файла зоны {zdef['id']}: {path}")
+            continue
+        text = path.read_text(encoding="utf-8")
+        lines = text.splitlines()
+        n_lines = len(lines)
+        total_lines += n_lines
+        try:
+            rel = str(path.resolve().relative_to(ROOT))
+        except ValueError:
+            rel = str(path)
+        try:
+            tree = ast.parse(text, filename=str(path))
+        except SyntaxError as e:
+            coverage_problems.append(f"синтаксис {rel}: {e}")
+            continue
+        symbols = module_toplevel_symbols(tree)
+        try:
+            start_hit = resolve_anchor(zdef["start"], symbols, zdef["id"], "start")
+            if zdef.get("end"):
+                resolve_anchor(zdef["end"], symbols, zdef["id"], "end")
+        except AnchorError as e:
+            coverage_problems.append(str(e))
+            continue
+        fr, to = 1, n_lines
+        z = {
+            "id": zdef["id"],
+            "slug": zdef["slug"],
+            "title": zdef["title"],
+            "start": zdef["start"],
+            "from": fr,
+            "to": to,
+            "file": rel,
+        }
+        if zdef.get("end"):
+            z["end"] = zdef["end"]
+        zone_by_id[z["id"]] = z
+
+        collector = _FuncCollector()
+        collector.visit(tree)
+        for f in collector.funcs:
+            if not f["nested"]:
+                module_names.add(f["name"])
+            entry = dict(f)
+            entry["zone_id"] = z["id"]
+            entry["file"] = rel
+            by_name[f["name"]].append(entry)
+
+        for stmt in tree.body:
+            if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            # env at module level — reuse scan from analyze via inline
+            for sub in ast.walk(stmt):
+                if isinstance(sub, ast.Call):
+                    if _is_environ_get(sub.func) or _is_os_getenv(sub.func):
+                        if sub.args:
+                            try:
+                                key = ast.literal_eval(sub.args[0])
+                            except Exception:
+                                key = None
+                            if isinstance(key, str):
+                                default = _literal_default(
+                                    sub.args[1] if len(sub.args) > 1 else None
+                                )
+                                env_reads.append(
+                                    {
+                                        "name": key,
+                                        "lineno": sub.lineno,
+                                        "default": default,
+                                        "in_function": None,
+                                        "file": rel,
+                                    }
+                                )
+
+    # second pass: function bodies + calls
+    for zdef in zone_defs:
+        zid = zdef["id"]
+        z = zone_by_id.get(zid)
+        if not z:
+            continue
+        path = zone_module_path(zdef, base)
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        collector = _FuncCollector()
+        collector.visit(tree)
+        for f in collector.funcs:
+            functions_out.append(
+                {
+                    "name": f["name"],
+                    "qualname": f["qualname"],
+                    "lineno": f["lineno"],
+                    "end_lineno": f["end_lineno"],
+                    "length": f["length"],
+                    "nested": f["nested"],
+                    "zone_id": zid,
+                    "file": z["file"],
+                }
+            )
+            node = f["node"]
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Call):
+                    cname = _call_name(sub.func)
+                    if cname in EXTERNAL_KINDS:
+                        external_calls.append(
+                            {
+                                "kind": cname,
+                                "lineno": sub.lineno,
+                                "in_function": f["qualname"],
+                                "file": z["file"],
+                            }
+                        )
+                    if cname and cname in module_names:
+                        calls.append(
+                            {
+                                "caller": f["qualname"],
+                                "caller_zone": zid,
+                                "callee": cname,
+                                "lineno": sub.lineno,
+                                "file": z["file"],
+                            }
+                        )
+
+    # zone reports (same shape as analyze)
+    zone_funcs: dict[str, list[str]] = defaultdict(list)
+    fn_zone: dict[str, str] = {}
+    for f in functions_out:
+        if not f["nested"]:
+            zone_funcs[f["zone_id"]].append(f["qualname"])
+            fn_zone[f["qualname"]] = f["zone_id"]
+
+    outgoing: dict[str, set[str]] = defaultdict(set)
+    incoming: dict[str, set[str]] = defaultdict(set)
+    callers_zones: dict[str, set[str]] = defaultdict(set)
+    called_from_outside: dict[str, set[str]] = defaultdict(set)
+    seen_edge: set[tuple] = set()
+    for c in calls:
+        cz, tz = c["caller_zone"], None
+        for f in functions_out:
+            if f["qualname"] == c["callee"] or f["name"] == c["callee"]:
+                tz = f["zone_id"]
+                break
+        if tz is None:
+            continue
+        if cz == tz:
+            continue
+        edge = (c["caller"], c["callee"], cz, tz)
+        if edge in seen_edge:
+            continue
+        seen_edge.add(edge)
+        outgoing[cz].add(tz)
+        incoming[tz].add(cz)
+        callers_zones[c["callee"]].add(cz)
+        called_from_outside[tz].add(c["callee"])
+
+    cross_cutting = sorted(
+        [
+            {
+                "qualname": q,
+                "name": q.split(".")[-1],
+                "lineno": next(
+                    (f["lineno"] for f in functions_out if f["qualname"] == q), None
+                ),
+                "zone_id": fn_zone.get(q),
+                "from_zones": sorted(zs),
+                "from_zones_count": len(zs),
+            }
+            for q, zs in callers_zones.items()
+            if len(zs) >= 3
+        ],
+        key=lambda x: (-x["from_zones_count"], x["lineno"] or 0),
+    )
+
+    fully_internal_zones = []
+    for zdef in zone_defs:
+        zid = zdef["id"]
+        z = zone_by_id.get(zid)
+        if not z:
+            continue
+        funcs = zone_funcs[zid]
+        ext_called = sorted(called_from_outside[zid])
+        internal = sorted(set(funcs) - called_from_outside[zid])
+        if funcs and not ext_called:
+            fully_internal_zones.append(zid)
+        zone_reports.append(
+            {
+                "id": zid,
+                "slug": z["slug"],
+                "title": z["title"],
+                "start": z["start"],
+                "from": z["from"],
+                "to": z["to"],
+                "lines": z["to"] - z["from"] + 1,
+                "file": z["file"],
+                "functions": funcs,
+                "function_count": len(funcs),
+                "incoming_zones": sorted(incoming[zid]),
+                "outgoing_zones": sorted(outgoing[zid]),
+                "incoming_count": len(incoming[zid]),
+                "outgoing_count": len(outgoing[zid]),
+                "internal_functions": internal,
+                "internal_count": len(internal),
+                "externally_called": ext_called,
+                **({"end": z["end"]} if z.get("end") else {}),
+            }
+        )
+
+    return {
+        "source": "ubuntu/serenedb/ask/",
+        "source_lines": total_lines,
+        "package": True,
+        "zones_file": str(DEFAULT_ZONES.relative_to(ROOT)),
+        "coverage_ok": not coverage_problems,
+        "coverage_problems": coverage_problems,
+        "function_count": len(functions_out),
+        "functions": functions_out,
+        "calls": calls,
+        "env_reads": env_reads,
+        "external_calls": external_calls,
+        "zones": zone_reports,
+        "cross_cutting": cross_cutting,
+        "fully_internal_zones": fully_internal_zones,
+    }
+
+
 def analyze(source: Path, zone_defs: list[dict]) -> dict:
     text = source.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -560,8 +808,9 @@ def render_markdown(data: dict) -> str:
     lines.append("")
     for z in data["zones"]:
         end_s = f" … `{z['end']}`" if z.get("end") else ""
+        loc = z.get("file") or src
         lines.append(
-            f"- [{z['id']} {z['slug']}]({src}:{z['from']}) — {z['title']} "
+            f"- [{z['id']} {z['slug']}]({loc}:{z['from']}) — {z['title']} "
             f"(якорь `{z['start']}`{end_s}; `{z['from']}–{z['to']}`)"
         )
     lines.append("")
@@ -584,9 +833,10 @@ def render_markdown(data: dict) -> str:
         lines.append(f"## {z['id']}. {z['slug']} — {z['title']}")
         lines.append("")
         end_note = f", end `{z['end']}`" if z.get("end") else ""
+        loc = z.get("file") or src
         lines.append(
             f"Якорь: `{z['start']}`{end_note}. "
-            f"Участок: [`{src}:{z['from']}`]({src}:{z['from']})–`{z['to']}`."
+            f"Участок: [`{loc}:{z['from']}`]({loc}:{z['from']})–`{z['to']}`."
         )
         lines.append("")
         lines.append(
@@ -728,6 +978,48 @@ def main(argv: list[str] | None = None) -> int:
     args = p.parse_args(argv)
 
     source = Path(args.source)
+    zone_defs = load_zones(Path(args.zones))
+    use_package = (
+        DEFAULT_ASK_PACKAGE.is_dir()
+        and (source.name == "serene_ask.py" or str(source).endswith("/ask"))
+    )
+    if use_package:
+        data = analyze_package(zone_defs)
+        problems = data["coverage_problems"]
+        n_lines = data["source_lines"]
+        if problems:
+            print("Покрытие зон НЕ сходится:", file=sys.stderr)
+            for pr in problems:
+                print(f"  - {pr}", file=sys.stderr)
+            if args.check_only:
+                return 1
+        else:
+            print(
+                f"Покрытие пакета ask/ ок: {len(data['zones'])} зон, "
+                f"строк {n_lines}, без дыр"
+            )
+            if args.check_only:
+                return 0
+        if data.get("anchor_error"):
+            print(f"Якорь зоны: {data['anchor_error']}", file=sys.stderr)
+            return 1
+        json_path = Path(args.json_out)
+        md_path = Path(args.md_out)
+        json_path.parent.mkdir(parents=True, exist_ok=True)
+        md_path.parent.mkdir(parents=True, exist_ok=True)
+        json_path.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        md_path.write_text(render_markdown(data), encoding="utf-8")
+        print(f"JSON: {json_path}")
+        print(f"MD:   {md_path}")
+        print(
+            f"функций={data['function_count']} сквозных={len(data['cross_cutting'])} "
+            f"полностью внутренних зон={len(data['fully_internal_zones'])}"
+        )
+        return 1 if problems else 0
+
     if not source.is_file():
         print(f"нет файла: {source}", file=sys.stderr)
         return 2

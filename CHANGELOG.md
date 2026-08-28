@@ -45,14 +45,18 @@ cold start, второй круг, reask) теперь явно просит с�
 Зоны НЕ импортируют друг друга: `_bootstrap.load_all` AST-вырезает тело
 зоны и исполняет в едином namespace с сохранением номеров строк исходника
 (`inspect.getsource` работает). Генератор — `k10_split_zones.py`,
-замороженный монолит — `serene_ask.py.bak-k10`. `deploy.sh` раскладывает
+резерв монолита — git-история (верификатор берёт базу из `git log`,
+копия .bak в дереве убрана по находке снайпера: дубль устаревает и
+может уехать выкатом). `deploy.sh` раскладывает
 `ask/*.py` в `$DST/ask/` той же атомарной подменой. Карта:
 `code_map.py` в режиме package, `docs/CODE_MAP_ASK.md` + `MAP.md`
 перегенерированы.
 
-**[замер]** Приёмка оркестратором: ast-сверка тел функций с бэкапом —
-**509 backup, 479 сверено, mismatch 0** (missing 23 — вложенные функции,
-как в монолите); замки `test_action_class` 48/0, `test_sales_rank_canon`
+**[замер]** Приёмка оркестратором: ast-сверка тел функций с монолитом
+из git-истории — **509 функций, 479 сверено, mismatch 3 = зафиксированные
+правки дня** (z02 `_normalize_intent`, z12 `_stock_scaffold_stems`/
+`stock_asks_named_product`, коммит a85fa34), missing 23 — вложенные
+функции, как в монолите; замки `test_action_class` 48/0, `test_sales_rank_canon`
 51/0, `test_rank_leader_path` 30/0, `test_compose` 92/0, `test_code_map`
 24/0 (package), `test_wiki_alias_psql` 72/72; `python3 -c "import
 serene_ask"` OK. Нарезка — курсор-агент, приёмка и коммит — оркестратор.

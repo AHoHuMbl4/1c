@@ -132,7 +132,7 @@ try:
 except TypeError as e:
     t("rows_seen: хвост-float не TypeError", False, e)
 
-src = open(A.__file__, encoding="utf-8").read()
+src = A.ask_source()
 t("пустое окно не зовёт drop_period_preds",
   "intent, preds = drop_period_preds" not in src)
 t("флаг period_window_empty", "period_window_empty" in src)

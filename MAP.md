@@ -242,9 +242,38 @@ OpenClaw (чтение — отдельный трек, здесь его нет
 в других каталогах). **Чем опровергнуто:** `find ubuntu -name '*.service' -o -name '*.timer'`
 → 20 файлов в восьми каталогах, все `git ls-files` TRACKED.*
 
-### Ответы — `ubuntu/serenedb/serene_ask.py`
+### Ответы — `ubuntu/serenedb/serene_ask.py` + пакет `ubuntu/serenedb/ask/`
 
-Единственный большой файл своего кода в контуре ответа. Что важно: поиск штатными
+**K10 (28.08):** монолит (~17k строк) нарезан по 20 зонам аудита в каталог `ask/z*.py`.
+Точка входа **`serene_ask.py`** (~45 строк): docstring, `load_all(globals())` через
+`ask/_bootstrap.py` (AST-exec зон в один namespace), публичный контракт (`answer_checked`,
+`/health`, `main`) прежний. Зоны не импортируют друг друга; общий namespace собирает
+`_bootstrap`. Карта: `docs/CODE_MAP_ASK.md` (файл:строки), замок `test_code_map.py`.
+
+| Файл зоны | Зона | ~строк |
+|---|---|---:|
+| `ask/z01_infra_trace_llm.py` | 01 infra | 871 |
+| `ask/z02_intent.py` | 02 intent | 476 |
+| `ask/z03_period_windows.py` | 03 period | 457 |
+| `ask/z04_calendar_axis.py` | 04 calendar | 192 |
+| `ask/z05_entity_form.py` | 05 entity-form | 1145 |
+| `ask/z06_entity_search.py` | 06 search | 547 |
+| `ask/z07_rrf_vectors.py` | 07 rrf | 602 |
+| `ask/z08_measures_totals.py` | 08 measures | 259 |
+| `ask/z09_fork_detector.py` | 09 fork-det | 805 |
+| `ask/z10_rank.py` | 10 rank | 493 |
+| `ask/z11_sales.py` | 11 sales | 766 |
+| `ask/z12_stock_balance.py` | 12 stock | 303 |
+| `ask/z13_fork_outcomes.py` | 13 fork-out | 509 |
+| `ask/z14_clarify_memory.py` | 14 clarify | 715 |
+| `ask/z15_answer_atoms.py` | 15 atoms | 435 |
+| `ask/z16_veto_pick_entity.py` | 16 veto/pick | 839 |
+| `ask/z17_aggregate_groups.py` | 17 aggregate | 512 |
+| `ask/z18_compose.py` | 18 compose | 902 |
+| `ask/z19_answer_check.py` | 19 check | 410 |
+| `ask/z20_ask_main_http.py` | 20 ask/http | 6173 |
+
+Единственный большой модуль своего кода в контуре ответа (логически). Что важно: поиск штатными
 функциями (`ts_*`, `bm25`, `<=>`), выбор сущности **реранкером**, величину — **по вопросу**
 (базовая предпочтительнее уточнённой), **калькулятор** (числа ставит код, не модель),
 **резолвер** (слово → значение через отдельную роль), связка **уточнение → выбор `focus`
@@ -259,7 +288,7 @@ OpenClaw (чтение — отдельный трек, здесь его нет
 
 | Файл | Что делает |
 |---|---|
-| `code_map.py` + `docs/audit/zones.json` | **машинная карта** `serene_ask.py` по 20 зонам аудита (без нарезки модуля): зоны по якорям `start`[/`end`] (имена функций), строки — из AST; функции, граф вызовов, env, psql/ds_chat/embed_one/rerank/urlopen → `docs/audit/code-map.json` + `docs/CODE_MAP_ASK.md`. Замок `test_code_map.py` |
+| `code_map.py` + `docs/audit/zones.json` | **машинная карта** пакета `ask/` (20 файлов = 20 зон): якоря `start`[/`end`], функции, граф вызовов → `docs/audit/code-map.json` + `docs/CODE_MAP_ASK.md`. Замок `test_code_map.py` |
 | `serene_enough.py` | **шаг «достаточен ли вопрос»**: вопрос указывает на ОДИН неназванный предмет из класса («сколько штук **товара** мы продали») — спрашиваем, что за товар и за какой период, словами человека. Вердикт собирает КОД: языковой факт от модели (`FACTS_SYS` только ОПИСЫВАЕТ вопрос) плюс число из базы «итог сложен больше чем из одной записи». Признак «поле разбора пусто» негоден сам по себе: «сколько у нас контрагентов» тоже без предмета и периода, и это полный вопрос. Выключатель `ASK_ENOUGH=0` |
 | `test_enough.py` | оффлайн-проба шага: **75 случаев** без базы, сети и вызовов модели, включая связку с сервисом (молчит при `focus`/`measure`, не трогает отказ и чужое уточнение, не роняет сервис без файла) |
 | `ask_journal.sql` + `ask_journal_apply.sh` | **журнал исходов** (шаг 5): таблица `ask_journal`, GRANT INSERT/DELETE/`SELECT(id)` для `serene_ro`; `corpus_init.sql` не трогает |

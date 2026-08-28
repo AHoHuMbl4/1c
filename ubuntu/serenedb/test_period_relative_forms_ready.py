@@ -162,7 +162,9 @@ finally:
     reset()
 
 # путь строится от __file__, не от cwd
-src = open(os.path.join(ROOT, "serene_ask.py"), encoding="utf-8").read()
+import serene_ask as _A  # noqa: E402
+
+src = _A.ask_source()
 # узкий фрагмент функции period_relative_forms
 i = src.find("def period_relative_forms(")
 j = src.find("\ndef period_form_from_question(", i)

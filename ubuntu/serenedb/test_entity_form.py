@@ -272,7 +272,7 @@ t("compare pair без · rank", pair and "· rank" not in pair and "rank" not i
 _restore(_s)
 
 # ── нет новых DATA-литералов okna / «книгапродаж» / «не продаётся» в diff ─────
-_src = open(A.__file__, encoding="utf-8").read()
+_src = A.ask_source()
 # эвристика: функции entity_form* не содержат кириллических NL-триггеров
 tree = ast.parse(_src)
 banned = ("не продаётся", "реально", "книгапродаж", "номенклатура",

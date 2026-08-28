@@ -34,4 +34,18 @@ for f in "$SRC"/*.sh "$SRC"/*.sql "$SRC"/*.py "$SRC"/*.tsv; do
   fi
 done
 
+if [ -d "$SRC/ask" ]; then
+  mkdir -p "$DST/ask"
+  for f in "$SRC/ask"/*.py; do
+    [ -e "$f" ] || continue
+    b="ask/$(basename "$f")"
+    if ! cmp -s "$f" "$DST/$b"; then
+      install -m 644 "$f" "$DST/.$b.new"
+      mv -f "$DST/.$b.new" "$DST/$b"
+      echo "  обновлён: $b"
+      changed=$((changed + 1))
+    fi
+  done
+fi
+
 echo "{\"развёрнуто_в\":\"$DST\",\"обновлено_файлов\":$changed}"

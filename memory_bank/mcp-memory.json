@@ -458,6 +458,29 @@
 {"type":"entity","name":"k10_verify_ast.py","entityType":"инструмент приёмки","observations":["сверка ast.dump тел функций пакета ask/ с бэкапом serene_ask.py.bak-k10 (992K, замороженный монолит до нарезки); mismatch 0 — критерий «тела не менялись» (ubuntu/serenedb/k10_verify_ast.py)"]}
 {"type":"entity","name":"ask/z02_intent.py","entityType":"зона пакета ask (K10)","observations":["Зона разбора вопроса: normalize/термины/род-величина (было в монолите, вырезано K10 без правок тел)","28.08 [код] _base_knows_kind_or_measure: слово вынимается из terms только когда база знает его родом (каталоги/движения по стемам) или величиной (search_measure_alias), офлайн — прежнее поведение. Повод: парсер назвал родом «петли» → предмет исчез из терминов → лишний clarify склада [замер AB_PROBE 7/8→8/8]"]}
 {"type":"entity","name":"ask/z12_stock_balance.py","entityType":"зона пакета ask (K10)","observations":["Зона остатков: баланс-источники, именованность товара, warehouse/bridge clarify (было в монолите, вырезано K10 без правок тел)","28.08 [код] _stock_scaffold_stems и stock_asks_named_product: в скаффолд «темы остатков» и в исключение kind∈term идёт только известный базе род (_base_knows_kind_or_measure). Повод: неизвестный род «петли» съедал именованность → clarify вместо no_data [замер AB_PROBE 7/8→8/8]"]}
+{"type":"entity","name":"ask/z01_infra_trace_llm.py","entityType":"зона пакета ask (K10)","observations":["Инфраструктура, трассировка, вызовы LLM. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z03_period_windows.py","entityType":"зона пакета ask (K10)","observations":["Окна периодов. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z04_calendar_axis.py","entityType":"зона пакета ask (K10)","observations":["Календарная ось. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z05_entity_form.py","entityType":"зона пакета ask (K10)","observations":["Формы сущностей: каталоги/движения по kind (entity_form_catalogs_for_kind и др.). Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z06_entity_search.py","entityType":"зона пакета ask (K10)","observations":["Буквальный/смысловой отбор кандидатов. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z07_rrf_vectors.py","entityType":"зона пакета ask (K10)","observations":["RRF, векторы, ранжирование кандидатов. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z08_measures_totals.py","entityType":"зона пакета ask (K10)","observations":["Величины и итоги. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z09_fork_detector.py","entityType":"зона пакета ask (K10)","observations":["Детектор развилок. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z10_rank.py","entityType":"зона пакета ask (K10)","observations":["Ранк/лидер. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z11_sales.py","entityType":"зона пакета ask (K10)","observations":["Продажи, канон. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z13_fork_outcomes.py","entityType":"зона пакета ask (K10)","observations":["Исходы развилок A/B/C. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z14_clarify_memory.py","entityType":"зона пакета ask (K10)","observations":["Уточнения и память решений (decision_id). Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z15_answer_atoms.py","entityType":"зона пакета ask (K10)","observations":["Атомы ответа. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z16_veto_pick_entity.py","entityType":"зона пакета ask (K10)","observations":["Вето и выбор сущности. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z17_aggregate_groups.py","entityType":"зона пакета ask (K10)","observations":["Агрегаты и группы. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z18_compose.py","entityType":"зона пакета ask (K10)","observations":["Сборка ответа. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z19_answer_check.py","entityType":"зона пакета ask (K10)","observations":["Проверка ответа. Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/z20_ask_main_http.py","entityType":"зона пакета ask (K10)","observations":["Главный цикл /ask, HTTP (6175 строк — крупнейшая зона). Вырезано из монолита K10 без правок тел (AST mismatch 0)"]}
+{"type":"entity","name":"ask/_imports.py","entityType":"инфра пакета ask (K10)","observations":["Общие import/try-import пакета (ACM, PV, K6R и др.)"]}
+{"type":"entity","name":"ask/_bootstrap.py","entityType":"инфра пакета ask (K10)","observations":["load_all: AST-вырезает тело зоны и exec в serene_ask.__dict__ с сохранением номеров строк для inspect.getsource"]}
+{"type":"entity","name":"ask/_wire.py","entityType":"инфра пакета ask (K10)","observations":["Cross-zone связи: register_zone/apply_bindings"]}
+{"type":"entity","name":"ask/_ctx.py","entityType":"инфра пакета ask (K10)","observations":["Контекст пакета (общие переменные зон)"]}
+{"type":"entity","name":"ask/__init__.py","entityType":"инфра пакета ask (K10)","observations":["Вход пакета ask (K10)"]}
 {"type":"relation","from":"pipeline.sh","to":"deploy.sh","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"serene_sync.py","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"build.sh","relationType":"вызывает"}
@@ -1185,3 +1208,25 @@
 {"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z12_stock_balance.py","relationType":"содержит зону"}
 {"type":"relation","from":"ask/z02_intent.py","to":"ask/z12_stock_balance.py","relationType":"даёт known-check скаффолду остатков"}
 {"type":"relation","from":"test_action_class.py","to":"ask/z02_intent.py","relationType":"тестирует разбор"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z01_infra_trace_llm.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z03_period_windows.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z04_calendar_axis.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z05_entity_form.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z06_entity_search.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z07_rrf_vectors.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z08_measures_totals.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z09_fork_detector.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z10_rank.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z11_sales.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z13_fork_outcomes.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z14_clarify_memory.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z15_answer_atoms.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z16_veto_pick_entity.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z17_aggregate_groups.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z18_compose.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z19_answer_check.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/ (пакет зон K10)","to":"ask/z20_ask_main_http.py","relationType":"содержит зону"}
+{"type":"relation","from":"ask/_bootstrap.py","to":"ask/ (пакет зон K10)","relationType":"исполняет тела зон в едином namespace"}
+{"type":"relation","from":"ask/_imports.py","to":"ask/ (пакет зон K10)","relationType":"даёт общие импорты зонам"}
+{"type":"relation","from":"ask/_wire.py","to":"ask/ (пакет зон K10)","relationType":"регистрирует зоны и биндинги"}
+{"type":"relation","from":"serene_ask.py","to":"ask/__init__.py","relationType":"вход пакета (48 строк)"}

@@ -154,7 +154,7 @@ finally:
 
 
 # ── SQL-контракт aggregate_groups (структура) ────────────────────────────────
-src_ag = open(A.__file__, encoding="utf-8").read()
+src_ag = A.ask_source()
 t("aggregate_groups: GROUP BY в SQL",
   "GROUP BY g" in src_ag and "ORDER BY" in src_ag and "LIMIT %(k)d" in src_ag)
 t("aggregate_groups: refs_map ось",

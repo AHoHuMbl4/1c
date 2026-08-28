@@ -219,7 +219,7 @@ t("attach: merge stays", fr.get("merge_pending_sec") == 10, fr)
 t("attach: buffered separate", fr.get("index_buffered_docs") == 99, fr)
 
 # --- исходник: /health не вызывает VACUUM (комментарий «не зовём» — ок) ---
-src = open(A.__file__, encoding="utf-8").read()
+src = A.ask_source()
 health_idx = src.find('if self.path.rstrip("/") == "/health"')
 health_end = src.find("def do_POST", health_idx)
 health_src = src[health_idx:health_end]
