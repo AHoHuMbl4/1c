@@ -2544,6 +2544,41 @@ def entity_form_atom_complement(catalog_src="", sales_src="", axis="",
 
 
 
+def _pick_kind_axis_col(ax, axis_word, intent):
+    """K9-ф6: kind/action_axis → catalog target_src → col refcols.
+
+    Порядок как entity_form_axis_on_sales / rank_axis_resolve (kind-only):
+    каталоги по stem/alias (`entity_form_catalogs_for_kind`), refcol с
+    target_src ∈ kind_cats; при нескольких — `kind_axis_rerank`; иначе
+    `kind_axis_hits` + rerank; нет соответствия — None.
+    """
+    axis_word = (axis_word or "").strip()
+    ax = [a for a in (ax or []) if a.get("col")]
+    if not axis_word or not ax:
+        return None
+    period = ((intent or {}).get("period") or {})
+    has_period = bool(period.get("from") or period.get("to"))
+    kind_cats = set(entity_form_catalogs_for_kind(
+        axis_word, allow_meaning=has_period))
+    if kind_cats:
+        matched = [a for a in ax if (a.get("target_src") or "") in kind_cats]
+        if matched:
+            if len(matched) == 1:
+                return matched[0]["col"]
+            reranked = kind_axis_rerank(matched, axis_word)
+            if reranked:
+                return reranked[0]
+            return matched[0]["col"]
+    hits = kind_axis_hits(ax, axis_word)
+    if not hits:
+        return None
+    if len(hits) == 1:
+        return hits[0]
+    sub = [a for a in ax if a.get("col") in hits]
+    reranked = kind_axis_rerank(sub, axis_word) if sub else []
+    return reranked[0] if reranked else hits[0]
+
+
 def live_axis_col_for_count(intent, src, axes=None):
     """want=count + живая ось search_refcols на движении → COUNT(DISTINCT ось).
 
@@ -2569,8 +2604,7 @@ def live_axis_col_for_count(intent, src, axes=None):
     if not axis_word:
         return None
     ax = axes if axes is not None else refcols_of(src)
-    hits = kind_axis_hits(ax, axis_word)
-    return hits[0] if hits else None
+    return _pick_kind_axis_col(ax, axis_word, intent)
 
 
 def count_defer_measure_clarify(intent, src, axes=None):
@@ -15750,6 +15784,44 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         return build_period_empty_answer(
             question, agg, intent, measure, src, match, preds, money, slot_mode,
             cov, cut, diag, grain_dec, axes, n_folders, rows, t0, say_measure)
+    # K9-ф6: mtd/event DISTINCT — пара «N · ось» кодом (как fork A), не compose+passport.
+    if ((agg or {}).get("form") == "distinct_axis"
+            and (intent.get("want") or "").strip().lower() in ("count", "")):
+        _ax_lab = _passport_axis_label((agg or {}).get("axis"), axes)
+        _dist_atom = atom_from_agg(
+            agg, operation="count",
+            money=False,
+            period=(None if diag.get("period_assumed_dropped")
+                    else (intent or {}).get("period")),
+            period_origin=_passport_origin(intent, diag),
+            grain="axis", form="distinct_axis",
+            axis=_ax_lab or None,
+            completeness=cov, folders=n_folders, src=src)
+        _dist_text = render_atom_pair(_dist_atom)
+        if (_dist_text or "").strip():
+            _df = compose_slot_values(agg, measure=measure, folders=n_folders,
+                                        money=money, slot_mode=slot_mode)
+            _pass_d, _pf_d = build_answer_passport(
+                period=(intent or {}).get("period"),
+                period_dropped=bool(diag.get("period_assumed_dropped")),
+                origin=_passport_origin(intent, diag),
+                src_label=_table_label(src),
+                src_kind=kind_word(src) if src else "",
+                measure=measure or "",
+                grain="axis",
+                axis_label=_ax_lab,
+                form="distinct_axis",
+                text=_dist_text)
+            _df.update(_pf_d or {})
+            tag_d = _src_tag(src)
+            шаг("distinct_axis terminal", text=_dist_text[:60])
+            return {"partial": cut or None, "kind": "answer", "text": _dist_text,
+                    "sources": [tag_d], "completeness": cov,
+                    "measure": say_measure,
+                    "figures": _df, "atom": _dist_atom, "atoms": [_dist_atom],
+                    "diag": _diag_pack(diag, rows=len(rows or []),
+                                       sec=round(time.time() - t0, 2),
+                                       distinct_axis_terminal=True)}
     # Стоп 1: чужие итоги величин не расширяют белый список при монополии формы.
     _tot_extra = []
     if money and slot_mode == "list":

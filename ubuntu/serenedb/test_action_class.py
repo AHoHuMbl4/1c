@@ -279,6 +279,47 @@ finally:
     A.refcols_of = _old_ro3
     A._table_label = _old_tl
 
+
+# --- K9-ф6: kind→catalog axis (две ref-оси) ---
+_axes_dual = [
+    {"col": "Договор", "target_src": "catalog_договоры"},
+    {"col": "Контрагент", "target_src": "catalog_контрагенты"},
+]
+_intent_k = {"want": "count", "action_class": "event", "kind": "клиенты",
+             "action_axis": "клиенты",
+             "period": {"from": "2026-08-01", "to": "2026-08-28"}}
+_old_efc = A.entity_form_catalogs_for_kind
+_old_kar = A.kind_axis_rerank
+A.entity_form_catalogs_for_kind = lambda kind, allow_meaning=True: (
+    ["catalog_контрагенты"] if kind == "клиенты" else [])
+A.kind_axis_rerank = lambda axes, word: [a["col"] for a in axes if a.get("col")]
+try:
+    col_dual = A.live_axis_col_for_count(
+        _intent_k, "accumulationregister_реализациятмц", _axes_dual)
+    t("kind duel axis picks counterparty col",
+      col_dual == "Контрагент", col_dual)
+    t("kind duel skips contract col",
+      col_dual != "Договор", col_dual)
+finally:
+    A.entity_form_catalogs_for_kind = _old_efc
+    A.kind_axis_rerank = _old_kar
+
+# --- K9-ф6: mtd-distinct render ---
+_agg_mtd = {"count": 76, "sum": None, "src": "accumulationregister_x",
+            "form": "distinct_axis", "axis": "Контрагент", "grain": "axis"}
+_axes_mtd = [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]
+_old_tl6 = A._table_label
+A._table_label = lambda src: "Контрагенты" if "контрагент" in src else src
+try:
+    _atom_mtd = A.atom_from_agg(
+        _agg_mtd, operation="count", grain="axis", form="distinct_axis",
+        axis=A._passport_axis_label("Контрагент", _axes_mtd))
+    _pair_mtd = A.render_atom_pair(_atom_mtd) or ""
+    t("mtd distinct pair carries axis label",
+      "76" in _pair_mtd and "Контрагенты" in _pair_mtd, _pair_mtd)
+finally:
+    A._table_label = _old_tl6
+
 print("---")
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:

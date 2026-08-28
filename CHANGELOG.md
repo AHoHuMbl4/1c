@@ -1,3 +1,15 @@
+## 2026-08-28 — К9 фаза 6: kind→ось на дуэли + подпись mtd-distinct [код]
+
+**[код]** `serene_ask`: `_pick_kind_axis_col` (~2547) — kind/action_axis →
+`entity_form_catalogs_for_kind` + target_src refcols + `kind_axis_rerank`;
+`live_axis_col_for_count` переиспользует (не hits[0] без kind); терминал
+distinct_axis (~15787) — mtd/event COUNT DISTINCT → `render_atom_pair`
+«N · метка оси», как fork A.
+
+**[замер]** Замки: test_action_class **30/0** (+3 kind-duel/mtd, было 27/0);
+sales_rank 51/0, leader_path 30/0, entity_form 47/0, k6_rank_v2 10/0,
+compose 92/0. bench — не снят (7890 timeout, ssh gpu-erw deny).
+
 ## 2026-08-28 — К9 фаза 5: event-дуэль → исходы A/B/C + подпись оси [код]
 
 **[код]** `serene_ask`: `event_duel_applies` + `try_event_code_entity_pick`

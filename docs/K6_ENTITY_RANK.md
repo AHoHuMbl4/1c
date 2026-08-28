@@ -530,4 +530,33 @@ Bench-набор класса: [`work/k6-rank-v2/gold_k6a_class.tsv`](../work/k6
 | «сколько у нас всего клиентов» | clarify (object, п. 12) |
 | «топ-3 за вчера» | количество (rank) |
 | «больше всех купил» | лидер rank + `выбрал=код` |
+### 7.17. K9 фаза 6: kind→ось на дуэли + подпись mtd-distinct (28.08)
+
+| механизм | где | что |
+|---|---|---|
+| kind→col | `_pick_kind_axis_col`, `live_axis_col_for_count` (~2547, ~2582) | kind/action_axis → каталоги (`entity_form_catalogs_for_kind`) → refcol с target_src ∈ kind_cats; несколько — `kind_axis_rerank`; иначе `kind_axis_hits`+rerank; нет — None |
+| mtd-distinct | `answer` distinct_axis terminal (~15787) | agg.form=distinct_axis + want=count → `render_atom_pair` «N · ось», не compose+passport «assumed: N» |
+
+**Замки офлайн (сессия 28.08 ф6):**
+
+| замок | до | после |
+|---|---|---|
+| test_action_class | 27/0 | **30/0** (+kind-duel axis, mtd render) |
+| test_sales_rank_canon | 51/0 | **51/0** |
+| test_rank_leader_path | 30/0 | **30/0** |
+| test_entity_form | 47/0 | **47/0** |
+| test_k6_rank_v2 offline | 10/0 | **10/0** |
+| test_compose | 92/0 | **92/0** |
+| bench v2_lead / v1-регресс | 20/23, 0 | **не снят** (7890 timeout) |
+
+**Таблица ожиданий (:8096):**
+
+| вопрос | ожидание ф6 |
+|---|---|
+| «сколько клиентов реально покупают» | **141 · Контрагенты** (ось по kind, не «1 · Договоры») |
+| «сколько покупателей было за этот месяц» | **76 · Контрагенты** (не «assumed: 76») |
+| «наторговали в прошедшее воскресенье?» | answer (без регресса) |
+| «сколько у нас всего клиентов» | clarify (object, п. 12) |
+| «топ-3 за вчера» | количество (rank) |
+| «больше всех купил» | лидер rank + `выбрал=код` |
 
