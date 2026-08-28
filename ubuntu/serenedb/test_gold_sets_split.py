@@ -3,6 +3,7 @@
 """Офлайн-замок И4: приёмочный набор не пересекается с рабочими.
 
 Приёмочный (заморожен): docs/ACCEPTANCE_UT.md (58).
+Приёмочные полки okna: client-gold-okna (48), ab-ambiguous-okna (18).
 Рабочие: ab-gold-okna / probe / ab-gold / golden-questions / calendar-axis.
 
 Падает, если вопрос из приёмки появился в рабочем наборе (нормализованный текст).
@@ -14,6 +15,7 @@ from __future__ import annotations
 import os
 import re
 import sys
+import unittest
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(ROOT, "..", ".."))
@@ -31,6 +33,9 @@ WORKING = [
 
 # Приёмочная полка okna (И4): эталоны из 1С (И0), в правках не участвовала.
 CLIENT_GOLD = ("client-gold-okna.tsv", 48)
+
+# Приёмка неоднозначности (И1): отдельная полка, не WORKING.
+AMBIGUOUS_GOLD = ("ab-ambiguous-okna.tsv", 18)
 
 PASS = 0
 FAIL: list[str] = []
@@ -106,6 +111,14 @@ def test_doc_declares_roles() -> None:
     t(
         "GOLD_SETS: правило пересечения",
         "test_gold_sets_split.py" in text,
+    )
+    t(
+        "GOLD_SETS: приёмка неоднозначности = ab-ambiguous-okna",
+        "ab-ambiguous-okna.tsv" in text and "неоднозначност" in text.lower(),
+    )
+    t(
+        "GOLD_SETS: контур-24 вне приёмки",
+        "контур-24" in text.lower() or "ab-gold-24" in text,
     )
 
 
@@ -189,6 +202,27 @@ def test_client_gold_shelf() -> None:
     )
 
 
+def test_ambiguous_shelf() -> None:
+    """Приёмка неоднозначности (И1): счёт, реестр, не в WORKING."""
+    path = os.path.join(ROOT, AMBIGUOUS_GOLD[0])
+    t("приёмка ambiguous: файл %s" % AMBIGUOUS_GOLD[0], os.path.isfile(path), path)
+    qs = load_tsv_questions(path)
+    t(
+        "приёмка ambiguous: %d вопросов" % AMBIGUOUS_GOLD[1],
+        len(qs) == AMBIGUOUS_GOLD[1],
+        len(qs),
+    )
+    working_names = {name for name, _n in WORKING}
+    t(
+        "ambiguous не в списке WORKING",
+        AMBIGUOUS_GOLD[0] not in working_names,
+        sorted(working_names),
+    )
+    norms = [norm_q(q) for q in qs]
+    dup = [n for n in set(norms) if norms.count(n) > 1]
+    t("приёмка ambiguous: без внутренних дублей", not dup, dup[:5])
+
+
 def main() -> int:
     test_files_exist()
     test_doc_declares_roles()
@@ -197,12 +231,23 @@ def main() -> int:
     test_no_acceptance_in_working()
     test_probe_subset_of_gold_okna_mostly()
     test_client_gold_shelf()
+    test_ambiguous_shelf()
     print()
     print("PASS %d  FAIL %d" % (PASS, len(FAIL)))
     if FAIL:
         print("провалы:", ", ".join(FAIL))
         return 1
     return 0
+
+
+class TestGoldSetsSplit(unittest.TestCase):
+    """Обёртка для python3 -m unittest test_gold_sets_split."""
+
+    def test_lock_suite(self) -> None:
+        global PASS, FAIL
+        PASS, FAIL = 0, []
+        rc = main()
+        self.assertEqual(rc, 0, "провалы: " + ", ".join(FAIL))
 
 
 if __name__ == "__main__":
