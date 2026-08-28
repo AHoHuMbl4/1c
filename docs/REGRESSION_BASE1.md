@@ -3,6 +3,14 @@
 ≥25) и `ubuntu/serenedb/check_deploy_gate.py` против базлайна
 [`docs/DEPLOY_GATE.md`](DEPLOY_GATE.md) (сейчас **20/25**, без новых FAIL).
 
+**[замер 28.08]** amount-basis (`ASK_CURRENCY_AXIS=1`, зона `z04b_currency_axis`,
+стейджинг `/tmp/stg-k3/` `:8092`, бой `:8091` не трогали): оффлайн
+`test_currency_axis.py` **18/0**, fork/calendar/rank/sales **зелёные** при флаге 0.
+Δ doc vs acct эталон **375 437,03** (40 FX-шапок августа 2026). Стейджинг до:
+«сколько продали в евро» → figures **3 817 442,31** без unit (MDL регистра). После:
+clarify с подписями веток или B/C при непустой `search_currency_map` (карта meta
+на okna — шаг 1 корпуса, см. `work/currency-axis-design.md`).
+
 **[замер 25.08]** `ASK_ENTITY_FORM=1` на стейджинге `:8092` (кандидат `/tmp/serene_ask_ef.py`,
 md5 **52e275e5**): гейт `entity_form_pre_entity_ok` — форма не отвечает до выбора
 сущности, если `classes>1` (не молчаливый лидер на развилке). AB_PROBE **8/8**,

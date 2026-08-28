@@ -13,6 +13,7 @@ _ZONE_FILES = [
     "z02_intent.py",
     "z03_period_windows.py",
     "z04_calendar_axis.py",
+    "z04b_currency_axis.py",
     "z05_entity_form.py",
     "z06_entity_search.py",
     "z07_rrf_vectors.py",

@@ -76,7 +76,8 @@ def _class_day_basis(it):
             or (it or {}).get("day_basis") or "").strip()
 
 
-def fork_leader_class(picked_src, classes, day_basis_prefer=None):
+def fork_leader_class(picked_src, classes, day_basis_prefer=None,
+                      amount_basis_prefer=None):
     """Класс лидера люка: эквивалентность, содержащая picked[0] конвейера.
 
     Не новая лестница — повторное использование победителя шага 4 до детектора.
@@ -85,6 +86,7 @@ def fork_leader_class(picked_src, classes, day_basis_prefer=None):
 
     Ось W: один src в нескольких классах (mtd vs full_month) — лидер = mtd/wtd
     (фаза B). Ось day-basis (§2.4): среди оставшихся — calendar_days (или ticket).
+    Ось amount-basis: doc_amount (status quo) или ticket.
     Без формы окна и без day_basis неоднозначность остаётся None, как раньше.
     """
     src = str(picked_src or "").strip()
@@ -110,15 +112,22 @@ def fork_leader_class(picked_src, classes, day_basis_prefer=None):
         db_pref = [it for it in pool if _class_day_basis(it) == prefer_db]
         if db_pref:
             pool = db_pref
+    prefer_ab = (amount_basis_prefer if amount_basis_prefer in _AMOUNT_BASIS_IDS
+                 else _AMOUNT_BASIS_LEADER_DEFAULT)
+    has_ab = any(_class_amount_basis(it) for it in pool)
+    if has_ab:
+        ab_pref = [it for it in pool if _class_amount_basis(it) == prefer_ab]
+        if ab_pref:
+            pool = ab_pref
     if len(pool) == 1:
         leader = pool[0]
         rest2 = [it for it in matching if it is not leader] + rest
         return leader, rest2
-    if preferred and not has_db:
+    if preferred and not has_db and not has_ab:
         leader = preferred[0]
         rest2 = [it for it in matching if it is not leader] + rest
         return leader, rest2
-    if has_db and pool:
+    if (has_db or has_ab) and pool:
         leader = pool[0]
         rest2 = [it for it in matching if it is not leader] + rest
         return leader, rest2
@@ -363,12 +372,13 @@ def atom_terminal_gate_text(atom, question, agg=None):
 
 
 def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None,
-                   day_basis_prefer=None):
+                   day_basis_prefer=None, amount_basis_prefer=None):
     """Исход B: ответ лидера (picked[0]→класс) + люк с остальными ветками."""
     classes = list((payload or {}).get("classes") or [])
     total = len(classes)
     split = fork_leader_class(picked_src, classes,
-                              day_basis_prefer=day_basis_prefer)
+                              day_basis_prefer=day_basis_prefer,
+                              amount_basis_prefer=amount_basis_prefer)
     if split is None:
         return None
     leader_it, rest = split
@@ -391,11 +401,14 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None,
         rep = sorted(srcs)[0] if srcs else ""
         row = it.get("row") or {}
         db = _class_day_basis(it)
-        opt = {"src": (db or rep), "label": lab or rep,
+        ab = _class_amount_basis(it)
+        opt = {"src": (ab or db or rep), "label": lab or rep,
                "found": int(row.get("count") or 0),
                "distinct_by": lab or ""}
         if db:
             opt["day_basis"] = db
+        if ab:
+            opt["amount_basis"] = ab
         opts.append(opt)
     partial = dict(cut or {})
     d = _diag_pack(diag, fork_outcome="B",
@@ -416,7 +429,8 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None,
 
 def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
                    lab_by=None, marks=None, by=None, match="", preds=None,
-                   picked_src=None, day_basis_prefer=None):
+                   picked_src=None, day_basis_prefer=None,
+                   amount_basis_prefer=None):
     """Исход C: непосчитанное/неподписанное видно клиенту (п. 13).
 
     Контракт 23.08 (unsigned): число лидера + FORK_OTHER_READING, без имён веток.
@@ -426,7 +440,8 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
         applicable = _fork_applicable_classes(
             ordered_fork_classes(classes, rows))
         split = fork_leader_class(picked_src, applicable,
-                                  day_basis_prefer=day_basis_prefer)
+                                  day_basis_prefer=day_basis_prefer,
+                                  amount_basis_prefer=amount_basis_prefer)
         if split is None:
             d = _diag_pack(diag, fork_outcome="C", fork_c_reason="leader_missing")
             if t0 is not None:

@@ -2004,7 +2004,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     _w_readings = apply_period_leader(
         intent, today, period_from_prior=period_from_prior, question=question)
     _day_prefer = calendar_day_basis_prefer(intent, trusted=trusted)
+    _curr_prefer = currency_amount_basis_prefer(intent, trusted=trusted)
     _ask_readings = expand_readings_calendar_axis(_w_readings, prefer=_day_prefer)
+    _ask_readings = expand_readings_currency_axis(
+        _ask_readings, prefer=_curr_prefer, intent=intent, trusted=trusted)
     # Ticket/словарь сдвинул day-basis на working — основной preds тоже фильтрует.
     if (_day_prefer == _DAY_BASIS_WORKING and calendar_axis_open()
             and isinstance(intent.get("period"), dict)
@@ -2032,6 +2035,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if _ask_readings and len(_ask_readings) != len(_w_readings):
         diag["calendar_readings"] = len(_ask_readings)
         diag["day_basis_leader"] = _day_prefer
+    if ASK_CURRENCY_AXIS and currency_axis_open():
+        diag["amount_basis_leader"] = _curr_prefer
     шаг("разбор вопроса", тип=intent.get("kind"), понятий=len(intent.get("terms") or []),
         величина=(intent.get("measure") or "—"), считать=(intent.get("want") or "—"),
         потеряно=(",".join(разбор.get("lost") or []) or "—"))
@@ -2837,7 +2842,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 match, preds, intent, today, _rel,
                 period_from_prior=period_from_prior,
                 measure_word=_mword, want=_fwant or None,
-                day_basis_prefer=_day_prefer, trusted=trusted)
+                day_basis_prefer=_day_prefer,
+                amount_basis_prefer=_curr_prefer, trusted=trusted)
             _meta = getattr(fork_classes, "_meta_by_fp", {}) or {}
             _atoms = []
             for fp, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
@@ -3647,7 +3653,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 match, preds, intent, today, _rel,
                 period_from_prior=period_from_prior,
                 measure_word=_mword, want=_fwant or None,
-                day_basis_prefer=_day_prefer, trusted=trusted)
+                day_basis_prefer=_day_prefer,
+                amount_basis_prefer=_curr_prefer, trusted=trusted)
             if len(_cls) > 1:
                 _fork_log(_cls, _mword or (intent.get("want") or ""))
             _prev = dict(diag.get("fork") or {})
@@ -3725,7 +3732,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             else:
                 _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0,
                                        picked_src=_picked0,
-                                       day_basis_prefer=_day_prefer)
+                                       day_basis_prefer=_day_prefer,
+                                       amount_basis_prefer=_curr_prefer)
                 if _bres is not None:
                     шаг("исход B", классов=len(_b_classes))
                     return _bres
@@ -3738,7 +3746,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 question, _pay, _cls, _rows, diag, cut=cut, t0=t0,
                 marks=marks, by=by, match=match, preds=preds,
                 picked_src=(picked[0] if picked else None),
-                day_basis_prefer=_day_prefer)
+                day_basis_prefer=_day_prefer,
+                amount_basis_prefer=_curr_prefer)
         if _outc == "unavailable":
             return {"partial": cut or None, "kind": "unavailable",
                     "text": "Не удалось проверить все прочтения вопроса. "
@@ -5299,9 +5308,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         axis=_passport_axis_label(
             _passport_axis_col(agg, grain_dec), axes) or None,
         completeness=cov, folders=n_folders, src=src)
+    if ASK_CURRENCY_AXIS:
+        _cur_cl = currency_mismatch_blocks_answer(intent, question, src, trusted=trusted)
+        if _cur_cl:
+            _cur_cl["partial"] = cut or None
+            _cur_cl["sources"] = [tag]
+            _cur_cl["diag"] = _diag_pack(diag, sec=round(time.time() - t0, 2))
+            return _cur_cl
+    _money_unit = _unit_for_measure(measure, money, src=src)
+    if ASK_CURRENCY_AXIS and money:
+        _cu = currency_unit_for_reading((intent or {}).get("period"), src=src)
+        if _cu:
+            _money_unit = _cu
     if money:
         text = postprocess_money_answer_text(
-            text, _unit_for_measure(measure, money, src=src))
+            text, _money_unit)
     return {"partial": cut or None, "kind": "answer", "text": text, "sources": [tag],
             "completeness": cov, "measure": say_measure,
             # 🔴 ПОСЧИТАННЫЕ ЧИСЛА — ПОЛЕМ ОТВЕТА, А НЕ ТОЛЬКО ВНУТРИ ТЕКСТА (03.08).

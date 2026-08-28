@@ -235,6 +235,8 @@ def fork_scan_readings(match, readings, rel_by_src):
             pr["interpretation_id"] = rd["interpretation_id"]
         if rd.get("day_basis"):
             pr["day_basis"] = rd["day_basis"]
+        if rd.get("amount_basis"):
+            pr["amount_basis"] = rd["amount_basis"]
         preds_w = (period_preds(pr) if (pr.get("from") or pr.get("to")) else [])
         if ASK_ENTITY_FORM and preds_w:
             cat_rel = {s: m for s, m in rel_by_src.items()
@@ -247,6 +249,8 @@ def fork_scan_readings(match, readings, rel_by_src):
                 scan.update(fork_scan(match, [], cat_rel))
         else:
             scan = fork_scan(match, preds_w, rel_by_src)
+        if ASK_CURRENCY_AXIS and pr.get("amount_basis"):
+            scan = currency_patch_fork_scan(scan, preds_w, rel_by_src, pr)
         wfp = rd.get("window_fp") or window_fp_of(pr, rd.get("origin"))
         for src in rel_by_src:
             if src in scan:
@@ -289,19 +293,30 @@ def fork_classes_windowed(merged_rows, period_by_src, measure_word="", want=None
                     and cur.get("day_basis") != _DAY_BASIS_CALENDAR):
                 meta_by_fp[fp] = {"row": d, "period": period, "window_fp": wfp,
                                   "atom": built}
+            elif ((period or {}).get("amount_basis") == _AMOUNT_BASIS_DOC
+                  and cur.get("amount_basis") != _AMOUNT_BASIS_DOC):
+                meta_by_fp[fp] = {"row": d, "period": period, "window_fp": wfp,
+                                  "atom": built}
     fork_classes._meta_by_fp = meta_by_fp
     return by_atom
 
 
 def fork_detector_scan(match, preds, intent, today, rel_by_src,
                          period_from_prior=False, measure_word="", want=None,
-                         day_basis_prefer=None, trusted=None):
+                         day_basis_prefer=None, amount_basis_prefer=None,
+                         trusted=None):
     """Один или несколько readings → rows + classes + cells для diag."""
     readings = period_readings(intent, today, period_from_prior=period_from_prior)
     prefer = day_basis_prefer
     if prefer is None:
         prefer = calendar_day_basis_prefer(intent, trusted=trusted)
     readings = expand_readings_calendar_axis(readings, prefer=prefer)
+    curr_prefer = amount_basis_prefer
+    if curr_prefer is None:
+        curr_prefer = currency_amount_basis_prefer(intent, trusted=trusted)
+    readings = expand_readings_currency_axis(
+        readings, prefer=curr_prefer, rel_by_src=rel_by_src, preds=preds,
+        intent=intent, trusted=trusted)
     if len(readings) <= 1:
         rd = readings[0] if readings else {"period": {}}
         pr = rd.get("period") or {}
@@ -429,9 +444,10 @@ def fork_key_of(src_set, measure_ctx, window_fp=""):
 
 
 def _window_fp_base(period, origin=None):
-    """Отпечаток окна без координаты day_basis — ключ §7bis-веток в словаре."""
+    """Отпечаток окна без day_basis / amount_basis — ключ веток в словаре."""
     p = dict(period or {})
     p.pop("day_basis", None)
+    p.pop("amount_basis", None)
     return window_fp_of(p, origin if origin is not None else p.get("origin"))
 
 
@@ -441,11 +457,53 @@ def _fork_key_for_period(srcs, measure_ctx, period):
     db = (pr.get("day_basis") or "").strip()
     if db in _DAY_BASIS_IDS:
         wfp = _window_fp_base(pr, pr.get("origin"))
+    ab = (pr.get("amount_basis") or "").strip()
+    if ab in _AMOUNT_BASIS_IDS:
+        wfp = _window_fp_base(pr, pr.get("origin"))
     elif pr.get("from") or pr.get("to") or pr.get("origin"):
         wfp = window_fp_of(pr, pr.get("origin"))
     else:
         wfp = ""
     return fork_key_of(sorted(s for s in (srcs or []) if s), measure_ctx, window_fp=wfp)
+
+
+def _fork_amount_basis_groups(classes, meta_by_fp):
+    """(data_srcs, base_wfp) → множество id веток amount-basis."""
+    groups = {}
+    fp_to_gkey = {}
+    for fp, srcs in (classes or {}).items():
+        meta = (meta_by_fp or {}).get(fp) or {}
+        period = meta.get("period") or {}
+        ab = (period.get("amount_basis") or "").strip()
+        if ab not in _AMOUNT_BASIS_IDS:
+            continue
+        base_wfp = _window_fp_base(period, period.get("origin"))
+        ds = tuple(sorted(s for s in (srcs or []) if s))
+        if not ds:
+            continue
+        gkey = (ds, base_wfp)
+        groups.setdefault(gkey, set()).add(ab)
+        fp_to_gkey[fp] = gkey
+    return groups, fp_to_gkey
+
+
+def _fork_log_amount_basis(classes, measure_ctx, meta_by_fp):
+    groups, _ = _fork_amount_basis_groups(classes, meta_by_fp)
+    for (data_srcs, base_wfp), abs_ in groups.items():
+        if len(abs_) < 2:
+            continue
+        branch_set = sorted(abs_)
+        fork_key = fork_key_of(list(data_srcs), measure_ctx, window_fp=base_wfp)
+        try:
+            psql("INSERT INTO search_fork_class (fork_key, src_set, measure_ctx, seen_at, "
+                 "seen_count) VALUES (%s, %s, %s, now(), 1) "
+                 "ON CONFLICT (fork_key) DO UPDATE "
+                 "SET seen_at = now(), seen_count = search_fork_class.seen_count + 1, "
+                 "src_set = EXCLUDED.src_set, measure_ctx = EXCLUDED.measure_ctx"
+                 % (lit(fork_key), lit("{%s}" % ",".join(branch_set)),
+                    lit(measure_ctx or "")))
+        except RuntimeError:
+            pass
 
 
 def _fork_day_basis_groups(classes, meta_by_fp):
@@ -504,11 +562,15 @@ def _fork_log(classes, measure_ctx):
         return
     meta_by_fp = getattr(fork_classes, "_meta_by_fp", {}) or {}
     groups, fp_to_gkey = _fork_day_basis_groups(classes, meta_by_fp)
+    ab_groups, ab_fp_to_gkey = _fork_amount_basis_groups(classes, meta_by_fp)
     day_variant_fps = {fp for fp, gk in fp_to_gkey.items()
                        if len(groups.get(gk, ())) >= 2}
+    ab_variant_fps = {fp for fp, gk in ab_fp_to_gkey.items()
+                      if len(ab_groups.get(gk, ())) >= 2}
     _fork_log_day_basis(classes, measure_ctx, meta_by_fp)
+    _fork_log_amount_basis(classes, measure_ctx, meta_by_fp)
     for fp, srcs in classes.items():
-        if fp in day_variant_fps:
+        if fp in day_variant_fps or fp in ab_variant_fps:
             continue
         src_set = sorted(s for s in (srcs or []) if s)
         if len(src_set) < 1:
@@ -787,6 +849,15 @@ def _class_label_lookup(srcs, measure_ctx, atom=None, today=None):
         cov, fk = fork_labels_covering([db])
         if cov.get(db):
             return cov[db], fk or fk_cls
+        return None, fk_cls
+    ab = ((period or {}).get("amount_basis") or "").strip()
+    if ab in _AMOUNT_BASIS_IDS:
+        labs = fork_labels_of(fk_cls, [ab])
+        if labs.get(ab):
+            return labs[ab], fk_cls
+        cov, fk = fork_labels_covering([ab])
+        if cov.get(ab):
+            return cov[ab], fk or fk_cls
         return None, fk_cls
     wlab = render_window_label(period, today=today) if period else None
     if wlab:

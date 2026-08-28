@@ -57,6 +57,7 @@ _WINDOW_FORM_IDS = frozenset({
 })
 # §7bis: day-basis окна. Env умолч. 0 — бой не включён.
 ASK_CALENDAR_AXIS = os.environ.get("ASK_CALENDAR_AXIS", "0") == "1"
+ASK_CURRENCY_AXIS = os.environ.get("ASK_CURRENCY_AXIS", "0") == "1"
 # Rank×sales канон (E/M/W): умолч. 0 — бой не включён (work/rank-path-fix-design.md).
 ASK_SALES_RANK_CANON = os.environ.get("ASK_SALES_RANK_CANON", "0") == "1"
 # Computed-атом терминален (K5): умолч. 0 — бой не включён (work/silent-refusal-form-design.md).
@@ -171,16 +172,22 @@ def _period_origin(intent, period_from_prior=False):
 
 
 def window_fp_of(period, origin=None):
-    """Машинный отпечаток окна: from|to|origin[+|day_basis].
+    """Машинный отпечаток окна: from|to|origin[+|day_basis][+|amount_basis].
 
-    day_basis пуст — тот же fp, что до §7bis (совместимость W / drop_assumed).
+    day_basis / amount_basis пуст — тот же fp, что до осей (совместимость W).
     """
     p = period or {}
     o = origin if origin is not None else (p.get("origin") or _ORIGIN_NONE)
     base = "%s|%s|%s" % (p.get("from") or "", p.get("to") or "", o)
     db = (p.get("day_basis") or "").strip()
+    ab = (p.get("amount_basis") or "").strip()
+    suffix = []
     if db:
-        return base + "|" + db
+        suffix.append(db)
+    if ab:
+        suffix.append(ab)
+    if suffix:
+        return base + "|" + "|".join(suffix)
     return base
 
 
@@ -211,7 +218,8 @@ def _period_form_id(period, today):
     return "explicit"
 
 
-def _window_reading(period, origin, form_id=None, today=None, day_basis=None):
+def _window_reading(period, origin, form_id=None, today=None, day_basis=None,
+                    amount_basis=None):
     p = dict(period or {})
     o = origin or _ORIGIN_NONE
     if o:
@@ -225,6 +233,12 @@ def _window_reading(period, origin, form_id=None, today=None, day_basis=None):
         p["day_basis"] = db
     else:
         p.pop("day_basis", None)
+    ab = (amount_basis if amount_basis is not None else p.get("amount_basis")) or ""
+    ab = str(ab).strip()
+    if ab:
+        p["amount_basis"] = ab
+    else:
+        p.pop("amount_basis", None)
     out = {
         "period": p,
         "origin": o,
@@ -233,6 +247,8 @@ def _window_reading(period, origin, form_id=None, today=None, day_basis=None):
     }
     if db:
         out["day_basis"] = db
+    if ab:
+        out["amount_basis"] = ab
     return out
 
 

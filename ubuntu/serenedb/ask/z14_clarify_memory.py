@@ -400,6 +400,9 @@ def issue_decision(question, option, ambiguity, options_ver, user=None, parse=No
         "day_basis": ((option or {}).get("day_basis")
                       if (option or {}).get("day_basis") in _DAY_BASIS_IDS
                       else None),
+        "amount_basis": ((option or {}).get("amount_basis")
+                         if (option or {}).get("amount_basis") in _AMOUNT_BASIS_IDS
+                         else None),
         "period": ((option or {}).get("period")
                    if ambiguity == "period" else None),
         "label": (option or {}).get("label"),
