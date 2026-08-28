@@ -32,7 +32,7 @@ SELECT to_json(list(struct_pack(entity := src_table, title := label,
 FROM (SELECT f.*, t.emb <=> (SELECT emb FROM seed) AS d,
              coalesce((SELECT string_agg(lbl, ', ') FROM (
                        SELECT DISTINCT t2.label AS lbl,
-                              t2.src_table LIKE 'accumulationregister_%%' AS is_reg
+                              t2.src_table LIKE 'accumulationregister_%' AS is_reg
                        FROM search_refcols r
                        JOIN search_tables t2 ON t2.src_table = r.src_table
                        WHERE r.target_src = f.src_table

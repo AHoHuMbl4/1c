@@ -11,10 +11,10 @@ WITH seed AS (
 SELECT to_json(list(struct_pack(entity := src_table, title := label,
                                 quantities := coalesce(measures,''),
                                 flows := flows)))
-FROM (SELECT f.*, t.emb,
+FROM (SELECT f.*, t.emb <=> (SELECT emb FROM seed) AS d,
              coalesce((SELECT string_agg(lbl, ', ') FROM (
                        SELECT DISTINCT t2.label AS lbl,
-                              t2.src_table LIKE 'accumulationregister_%%' AS is_reg
+                              t2.src_table LIKE 'accumulationregister_%' AS is_reg
                        FROM search_refcols r
                        JOIN search_tables t2 ON t2.src_table = r.src_table
                        WHERE r.target_src = f.src_table
@@ -25,4 +25,4 @@ FROM (SELECT f.*, t.emb,
          AND NOT EXISTS (SELECT 1 FROM :alias_table a WHERE a.src_table = f.src_table
                     AND (coalesce(a.aliases,'') <> ''
                          OR a.seen_at > now() - INTERVAL :retry_h HOUR))
-       ORDER BY f.emb <=> (SELECT emb FROM seed), f.src_table LIMIT :batch);
+       ORDER BY d, f.src_table LIMIT :batch);
