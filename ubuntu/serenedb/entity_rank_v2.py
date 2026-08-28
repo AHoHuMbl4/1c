@@ -302,6 +302,26 @@ def features_table(psql, lit, cands, intent, today=None,
     return out
 
 
+
+
+def _event_object_tier(src, action_class):
+    """K9: при action_class=event движение раньше картотеки (OData-префикс)."""
+    if (action_class or "").strip().lower() != "event":
+        return 0
+    prefix = object_prefix(src)
+    if prefix in (_PREFIX_DOC, _PREFIX_ACCUM):
+        return 0
+    if prefix == _PREFIX_CATALOG:
+        return 2
+    return 1
+
+
+def _dual_atom_clarify(intent):
+    """П.12: переспрос двух атомов при none/object, не при event."""
+    ac = (intent or {}).get("action_class") or "none"
+    return str(ac).strip().lower() in ("none", "object", "")
+
+
 def rank_key_v2(src, feat, intent, form, lexical_pos):
     """Лексикографический ключ: меньше = лучше. Без весов/порогов.
 
@@ -318,6 +338,8 @@ def rank_key_v2(src, feat, intent, form, lexical_pos):
     want = (intent.get("want") or "").strip().lower()
     prefix = feat.get("prefix") or object_prefix(src)
     service = 0 if feat.get("cls") != "service" else 1
+    ac = (intent.get("action_class") or "none").strip().lower()
+    event_tier = _event_object_tier(src, ac)
     has_period = bool(((intent.get("period") or {}).get("from")
                        or (intent.get("period") or {}).get("to")))
     # movement-shaped count: distinct form OR explicit period
@@ -344,7 +366,7 @@ def rank_key_v2(src, feat, intent, form, lexical_pos):
             kind_ok = 3
         # popularity = число живых датированных ячеек (док SereneDB business signal),
         # не порог: больший поток раньше при равном live/kind
-        return (service, -live, kind_ok,
+        return (event_tier, service, -live, kind_ok,
                 -int(feat.get("n_dated") or 0),
                 int(lexical_pos or 10**6))
 
@@ -359,7 +381,7 @@ def rank_key_v2(src, feat, intent, form, lexical_pos):
         else:
             kind_ok = 3
         dated = 0 if feat.get("n_dated", 0) > 0 else 1
-        return (service, -live, kind_ok, dated, int(lexical_pos or 10**6))
+        return (event_tier, service, -live, kind_ok, dated, int(lexical_pos or 10**6))
 
     # card-count (count without period): kind catalog with cards is the live answer;
     # K6a: метаданные несут слова вопроса — выше «гиганта» без q_meta (план счетов).
@@ -403,7 +425,7 @@ def rank_key_v2(src, feat, intent, form, lexical_pos):
         pop = (-q_ratio, int(feat.get("n_rows") or 0))
     else:
         pop = (int(feat.get("n_rows") or 0),)
-    return (service, -live, kind_ok, pop, int(lexical_pos or 10**6))
+    return (event_tier, service, -live, kind_ok, pop, int(lexical_pos or 10**6))
 
 
 def reorder_v2(cands, features, intent, form):
@@ -526,6 +548,9 @@ def expand_stem_and_live(order, question, form, want_agg, psql, lit,
 def infer_rank_form(intent, question, sales_sum=False, rank_intent=False):
     intent = intent or {}
     want = (intent.get("want") or "").strip().lower()
+    ac = (intent.get("action_class") or "").strip().lower()
+    if ac == "event" and want in ("count", ""):
+        return "distinct"
     if sales_sum or want == "sum" or rank_intent:
         return "sum" if want == "sum" or sales_sum else "name"
     period = intent.get("period") or {}
@@ -611,7 +636,7 @@ def apply_to_candidates(psql, lit, cands, intent, question, today=None,
         for s in reordered[:12]
     }
     cat, holder = dual_atom_pair(reordered, feats, intent_fit)
-    if cat and holder and mk_clarify and not rank_intent:
+    if cat and holder and mk_clarify and not rank_intent and _dual_atom_clarify(intent_fit):
         clar = mk_clarify(cat, holder, {"answer_fit_v2_dual": [cat, holder]})
         if clar:
             return {"cands": reordered, "diag": diag_out, "clarify": clar}

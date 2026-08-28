@@ -139,7 +139,7 @@ flowchart TD
 | № | Шаг | Что делает | Флаги / данные | TRACE (`service`) |
 |---|---|---|---|---|
 | 0 | HTTP + оболочка | auth, `decision_id`, `prior`, `seal_clarify`, журнал | `ASK_JOURNAL` | — |
-| 1 | **Разбор** | `parse_intent` → kind/want/period/terms; YoY-guard | LLM | `разбор вопроса` |
+| 1 | **Разбор** | `parse_intent` → kind/want/period/terms/**action_class/action_axis**; YoY-guard | LLM | `разбор вопроса` |
 | 1б | **Окна периода** | `apply_period_leader` + `period_readings`; фразы из `period_relative_forms` (`search_meta` или `period_relative_forms.json`) | `ASK_SALES_RANK_CANON`, `ASK_CALENDAR_AXIS` | (в `diag.period_leader`) |
 | 2 | Ранние отказы | coverage, stock-named, `kind_unsupported`, assumed-period clarify | — | — |
 | 3 | **Буквальный отбор** | `probe` → `match_expr` → `tables_of`; `partial_tables` в хвост | `search_idx`, `ASK_RESOLVER_IVF` в резолвере термов | `отбор: буквально` |
@@ -264,7 +264,7 @@ Chat **не считает и не ищет** — только разбор/вы
 
 | Шаг | Функция |
 |---|---|
-| разбор вопроса | `parse_intent` / `_one_intent` |
+| разбор вопроса | `parse_intent` / `_one_intent` (+ `action_class`, `action_axis`) |
 | выбор сущности | `pick_entity` |
 | проза / уточнение | `compose`, `clarify_text`, `refuse_text` |
 | арбитр текстов (хвост) | `arbitrate` — только если числа сошлись, а тексты разошлись |

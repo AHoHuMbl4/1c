@@ -3,14 +3,14 @@
   "gold": {
     "v0": {
       "lead": 2,
-      "top3": 3,
+      "top3": 2,
       "top8": 8,
       "miss": 0,
       "out8": 15
     },
     "v1": {
       "lead": 0,
-      "top3": 2,
+      "top3": 1,
       "top8": 7,
       "miss": 0,
       "out8": 16

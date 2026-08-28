@@ -376,3 +376,30 @@ Bench-набор класса: [`work/k6-rank-v2/gold_k6a_class.tsv`](../work/k6
 | test_compose | **ok** (прогон) |
 | bench v2_lead / v1-top3 | не снят (37890 auth fail / 7890 timeout в сессии) |
 | AB_PROBE okna 18093 | не снят (ask timeout 90s/600s) |
+
+### 7.12. K9: action_class из разбора → вид объекта → DISTINCT ось (28.08)
+
+Три механизма без списков слов (HOW_NOT_TO §3.96, PLAN_TO_TARGET К9):
+
+| механизм | где | что |
+|---|---|---|
+| разбор | `INTENT_SYS`, `_normalize_intent`, `_INTENT_FIELDS` | поля `action_class` (event/object/none), `action_axis`; отсутствие → none/"" |
+| ранг | `entity_rank_v2._event_object_tier`, `rank_key_v2`, `infer_rank_form`, `_dual_atom_clarify` | event: document/accumulationregister раньше catalog; event+count → form distinct; none/object → dual_atom clarify |
+| счёт | `live_axis_col_for_count`, ветка `aggregate` в `answer` | want=count + движение + ось search_refcols → `aggregate_distinct_axis` |
+
+Замки офлайн (сессия 28.08):
+
+| замок | число |
+|---|---|
+| test_action_class | **13/0** (новый) |
+| test_sales_rank_canon | **51/0** |
+| test_rank_leader_path | **30/0** |
+| test_k6_rank_v2 offline | **3/0** |
+| test_entity_form | **47/0** |
+| test_compose | **92/0** |
+| test_k4_* | **63/0** суммарно |
+
+Живой bench (`37890`) и AB_PROBE (`18093`) в этой сессии **не сняты**:
+37890 — password auth fail (туннель); 7890 — зависшие psql (bench >13 мин).
+Коммит отложен до живого прогона.
+

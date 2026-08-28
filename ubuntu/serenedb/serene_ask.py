@@ -838,7 +838,14 @@ Reply with JSON only.
   "about":  "\\"data\\" when the question asks about the company's records themselves —
              how many, how much, which ones. \\"coverage\\" when it asks about the SYSTEM's
              knowledge instead: what data is missing, what failed to load, what is closed
-             by permissions, how complete or fresh the data is. Default to \\"data\\""
+             by permissions, how complete or fresh the data is. Default to \\"data\\"",
+  "action_class": "\\"event\\" when the question is about actions, transactions or
+             movements that happen over time (buying, selling, shipping, paying,
+             hiring, producing, writing off) — even without an explicit verb, if the
+             question asks WHO or WHAT participated in such activity. \\"object\\" when
+             it asks about a static set of records (how many items/parties exist,
+             are listed, are in a catalog). \\"none\\" when neither applies",
+  "action_axis": "short noun naming who or what acts in the question, in its language, or null"
 }
 
 Rules:
@@ -892,7 +899,9 @@ _ABOUT_OK = ("data", "coverage")
 # нулевые документы получал счёт ВСЕХ документов реализации: неверный ответ, ничем не
 # отличимый от верного (п. 3, п. 10).
 _AMOUNT_OPS = ("=", ">", "<", ">=", "<=", "between")
-_INTENT_FIELDS = ("terms", "kind", "measure", "want", "period", "period2", "amount", "about")
+_ACTION_CLASS_OK = ("event", "object", "none")
+_INTENT_FIELDS = ("terms", "kind", "measure", "want", "period", "period2", "amount",
+                  "about", "action_class", "action_axis")
 # Сколько прогонов разбора допустимо на один вопрос и какой отрыв лидера считается
 # согласием. 1 прогон — прежнее поведение. Это бюджет ТОЧНОСТИ входа, а не подстройка
 # под базу: от данных и от языка он не зависит.
@@ -1220,6 +1229,10 @@ def _normalize_intent(d, question=""):
         period2 = {}
     out["period2"] = period2
 
+    ac = (_intent_text(d.get("action_class")) or "").lower()
+    out["action_class"] = ac if ac in _ACTION_CLASS_OK else "none"
+    out["action_axis"] = _intent_text(d.get("action_axis")) or ""
+
     # 🔴 УСЛОВИЕ, КОТОРОГО В ВОПРОСЕ НЕ БЫЛО, — ДОГАДКА, И ОНА ВИДНА (п. 12).
     # [замер 04.08] «Сколько мы продали за год?» разбирается в период
     # 2025-08-04…2026-08-04 — год НАЗАД ОТ СЕГОДНЯ. В вопросе такого года нет, данные
@@ -1375,7 +1388,7 @@ def _first_intent_object(raw):
         if not isinstance(d, dict):
             continue
         score = sum(1 for k in ("terms", "kind", "want", "measure", "period",
-                                "amount", "about") if k in d)
+                                "amount", "about", "action_class", "action_axis") if k in d)
         if score > best_score:
             best, best_score = d, score
     return best
@@ -2527,6 +2540,37 @@ def entity_form_atom_complement(catalog_src="", sales_src="", axis="",
         excluded=({"catalog": catalog_src, "sales": sales_src,
                    "catalog_n": catalog_n, "distinct_n": distinct_n}
                   if (catalog_src or sales_src) else None))
+
+
+
+
+def live_axis_col_for_count(intent, src, axes=None):
+    """want=count + живая ось search_refcols на движении → COUNT(DISTINCT ось).
+
+    Структурно: document_/accumulationregister_ + refcol на kind/action_axis.
+    action_class=object — счёт карточек/строк, без DISTINCT. Без списков слов.
+    """
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return None
+    ac = (intent.get("action_class") or "none").strip().lower()
+    if ac == "object":
+        return None
+    src = (src or "").strip()
+    if not src:
+        return None
+    pre = src.split("_", 1)[0].lower()
+    if pre not in ("document", "accumulationregister"):
+        return None
+    axis_word = (intent.get("action_axis") or "").strip()
+    if not axis_word:
+        axis_word = (intent.get("kind") or "").strip()
+    if not axis_word:
+        return None
+    ax = axes if axes is not None else refcols_of(src)
+    hits = kind_axis_hits(ax, axis_word)
+    return hits[0] if hits else None
 
 
 def aggregate_distinct_axis(src_table, match, preds, axis_col):
@@ -14710,6 +14754,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 if ask:
                     return ask
     src = picked[0] if picked else None
+    # К9: событийный вопрос — сущность-ответ это ДВИЖЕНИЕ (вид объекта — первый
+    # ключ ранга v2, OData-префикс из метаданных). Если модель выбрала картотеку,
+    # а ранг при action_class=event даёт лидера-движение с осью — берём лидер:
+    # «клиенты покупают» = регистр покупок, справочник карточек — не ответ (п. 21).
+    if (not focus and (intent.get("action_class") or "").lower() == "event"
+            and not diag.get("sales_canon_locked")
+            and not diag.get("catalog_count_locked")):
+        _ev_src = next((s for s in (diag.get("answer_fit_v2") or {})
+                        if str(s).startswith(("document_", "accumulationregister_"))),
+                       None)
+        if _ev_src and src != _ev_src:
+            src = _ev_src
+            picked = [_ev_src] + [c for c in (picked or []) if c != _ev_src]
+            diag["event_axis_lock"] = _ev_src
     # 🔴 ЧАСТИЧНО СОВПАВШЕЙ СУЩНОСТИ — ЕЁ СОБСТВЕННОЕ УСЛОВИЕ, И РАНЬШЕ ВСЕХ ПРОВЕРОК.
     # `match` собран под общий порог: столько понятий у этой сущности не нашлось, значит по
     # нему у неё ноль строк. Не подменив условие здесь, мы бы своей же проверкой ниже
@@ -15103,7 +15161,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if serene_axis and src:
         try:
             axes = refcols_of(src)
-            _kh = kind_axis_hits(axes, intent.get("kind"))
+            _axis_word = (intent.get("action_axis") or "").strip() or intent.get("kind")
+            _kh = kind_axis_hits(axes, _axis_word)
             _was = diag.get("focus_was_axis") or {}
             if _was.get("стало") == src and _was.get("ось"):
                 _acol = _was["ось"]
@@ -15348,7 +15407,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     elif agg is None and serene_axis and serene_axis.no_axis_member(grain_dec):
         rows = []
-        agg = aggregate(src, match, preds, measure)
+        _dac = live_axis_col_for_count(intent, src, axes)
+        if _dac:
+            agg = aggregate_distinct_axis(src, match, preds, _dac)
+            if agg:
+                diag["count_distinct_axis"] = _dac
+        if agg is None:
+            agg = aggregate(src, match, preds, measure)
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
             if not _zero_period_not_missing(intent, diag, question, act, src):
@@ -15370,7 +15435,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
                         "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-        agg = aggregate(src, match, preds, measure)
+        _dac = live_axis_col_for_count(intent, src, axes)
+        if _dac:
+            agg = aggregate_distinct_axis(src, match, preds, _dac)
+            if agg:
+                diag["count_distinct_axis"] = _dac
+        if agg is None:
+            agg = aggregate(src, match, preds, measure)
         if not agg:
             act = empty_after_period_action(intent)
             if act in ("empty_period", "drop_assumed"):
