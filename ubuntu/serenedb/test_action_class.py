@@ -320,6 +320,71 @@ try:
 finally:
     A._table_label = _old_tl6
 
+
+
+# --- K9-ф7: event+count без периода → clarify; явный период → нет ---
+_intent_ev_nop = {"want": "count", "action_class": "event", "kind": "клиенты",
+                  "action_axis": "клиенты", "period": {}}
+_intent_ev_mtd = {"want": "count", "action_class": "event", "kind": "клиенты",
+                  "action_axis": "клиенты",
+                  "period": {"from": "2026-08-01", "to": "2026-08-28",
+                             "interpretation_id": "mtd"}}
+t("event_count_period_unspecified: пустой period",
+  A.event_count_period_unspecified(_intent_ev_nop, {}))
+t("event_count_period_unspecified: mtd задан",
+  not A.event_count_period_unspecified(_intent_ev_mtd, {}))
+t("event_count_period_unspecified: drop_assumed",
+  A.event_count_period_unspecified(_intent_ev_mtd,
+                                 {"period_assumed_dropped": True}))
+
+_old_lac7 = A.live_axis_col_for_count
+A.live_axis_col_for_count = lambda intent, src, axes=None: "Контрагент"
+try:
+    t("event_count_period_clarify_applies: event+axis+нет period",
+      A.event_count_period_clarify_applies(
+          _intent_ev_nop, {}, src="accumulationregister_x", axes=[]))
+    t("event_count_period_clarify_applies: mtd → False",
+      not A.event_count_period_clarify_applies(
+          _intent_ev_mtd, {}, src="accumulationregister_x", axes=[]))
+    _opts = A.event_count_period_option_readings(today="2026-08-28")
+    t("period options: >=4 readings",
+      len(_opts) >= 4 and any(r.get("interpretation_id") == "rolling_12m"
+                              for r in _opts))
+    _ids = {r.get("interpretation_id") for r in _opts}
+    t("period options: month/quarter/year/none",
+      {"full_month", "full_quarter", "rolling_12m", "none"} <= _ids)
+    _cl = A.event_count_period_clarify(
+        "сколько покупают", _intent_ev_nop, {}, None, 0.0, today="2026-08-28")
+    t("period clarify: kind+options",
+      _cl and _cl.get("kind") == "clarify"
+      and len(_cl.get("options") or []) >= 4
+      and all(isinstance(o.get("period"), dict) for o in _cl["options"]))
+finally:
+    A.live_axis_col_for_count = _old_lac7
+
+# mtd entity_form axis label (ф7)
+_old_efc = A.entity_form_compute
+_old_ro = A.refcols_of
+_old_tl = A._table_label
+_old_ada = A.aggregate_distinct_axis
+A.refcols_of = lambda src: [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]
+A._table_label = lambda src: "Контрагенты"
+A.aggregate_distinct_axis = lambda src, match, preds, col: {
+    "count": 76, "form": "distinct_axis", "axis": col}
+try:
+    _atom_ef = A.entity_form_compute(
+        "distinct_axis",
+        {"sales_src": "accumulationregister_x", "axis": "Контрагент",
+         "period": {"from": "2026-08-01", "to": "2026-08-28"}},
+        match="")
+    _pair_ef = A.render_atom_pair(_atom_ef) or ""
+    t("entity_form mtd distinct axis label",
+      "76" in _pair_ef and "Контрагенты" in _pair_ef, _pair_ef)
+finally:
+    A.entity_form_compute = _old_efc
+    A.refcols_of = _old_ro
+    A._table_label = _old_tl
+    A.aggregate_distinct_axis = _old_ada
 print("---")
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:

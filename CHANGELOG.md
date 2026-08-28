@@ -11,6 +11,24 @@
 (177 всё время vs 141 за 12 мес gold) — переспрашивать период;
 реализация — К9-ф7.
 
+## 2026-08-28 — К9 фаза 7: переспрос периода event+count + подпись mtd [решение][код]
+
+**[решение]** Событийный count DISTINCT по живой оси **без явного периода** —
+не угадывать окно (не «177 за всё время» вместо gold «141 за 12 мес»): clarify
+с кнопками-периодами из штатного слоя (`_window_reading`, `render_window_label`,
+`entity_form_rolling_year`).
+
+**[код]** `serene_ask`: `event_count_period_*` (~2635) — гейт
+event+count+ось+period пуст/drop_assumed; опции full_month / full_quarter /
+rolling_12m / none; `apply_proven_period` (~2741) + ticket `ambiguity=period`;
+три точки clarify (~13949, ~14648, ~15482); `entity_form_applicable` не
+подставляет rolling_12m на event без period (~2487); mtd-distinct подпись оси
+в `entity_form_compute` (~3036) + terminal `count_distinct_axis` (~15960).
+
+**[замер]** Замки: test_action_class **39/0** (+9 ф7, было 30/0);
+sales_rank 51/0, leader_path 30/0, entity_form 47/0, k6_rank_v2 10/0,
+compose 92/0. bench — не снят (7890 >8 мин timeout; ssh gpu-erw deny).
+
 ## 2026-08-28 — К9 фаза 6: kind→ось на дуэли + подпись mtd-distinct [код]
 
 **[код]** `serene_ask`: `_pick_kind_axis_col` (~2547) — kind/action_axis →

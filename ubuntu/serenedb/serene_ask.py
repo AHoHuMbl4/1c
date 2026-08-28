@@ -1441,8 +1441,8 @@ _ORIGIN_PRIOR = "prior"
 _ORIGIN_EXPLICIT = "explicit"
 _ORIGIN_NONE = "none"
 _WINDOW_FORM_IDS = frozenset({
-    "none", "explicit", "mtd", "full_month", "wtd", "full_week",
-    "prev_week", "drop_assumed", "prior",
+    "none", "explicit", "mtd", "full_month", "full_quarter", "rolling_12m",
+    "wtd", "full_week", "prev_week", "drop_assumed", "prior",
 })
 # §7bis: day-basis окна. Env умолч. 0 — бой не включён.
 ASK_CALENDAR_AXIS = os.environ.get("ASK_CALENDAR_AXIS", "0") == "1"
@@ -1478,6 +1478,18 @@ def _month_range(d):
         end = start.replace(day=31)
     else:
         end = (start.replace(month=start.month + 1) - datetime.timedelta(days=1))
+    return start, end
+
+
+def _quarter_range(d):
+    """Календарный квартал, содержащий d (структурно, без лексики)."""
+    q = (d.month - 1) // 3
+    start = datetime.date(d.year, q * 3 + 1, 1)
+    if q == 3:
+        end = datetime.date(d.year, 12, 31)
+    else:
+        end = (datetime.date(d.year, (q + 1) * 3 + 1, 1)
+               - datetime.timedelta(days=1))
     return start, end
 
 
@@ -2472,6 +2484,8 @@ def entity_form_applicable(intent, pool):
     if not (has_cat and has_sales):
         return False
     period = intent.get("period") or {}
+    if event_path_active(intent) and not (period.get("from") or period.get("to")):
+        return False
     if period.get("from") or period.get("to"):
         return True
     return bool(has_movement)
@@ -2618,7 +2632,135 @@ def count_defer_measure_clarify(intent, src, axes=None):
     return bool(live_axis_col_for_count(intent, src, axes))
 
 
+def event_count_period_unspecified(intent, diag=None):
+    """K9-ф7: период не назван — пустой intent.period или drop_assumed."""
+    if (diag or {}).get("period_assumed_dropped"):
+        return True
+    p = (intent or {}).get("period") or {}
+    return not (p.get("from") or p.get("to"))
+
+
+def event_count_has_live_axis(intent, src=None, axes=None, pool=None):
+    """event+count: есть живая ось DISTINCT на движении (src или пул)."""
+    intent = intent or {}
+    if not event_path_active(intent):
+        return False
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    if src:
+        ax = axes if axes is not None else refcols_of(src)
+        return bool(live_axis_col_for_count(intent, src, ax))
+    for s in pool or []:
+        pre = str(s).split("_", 1)[0].lower()
+        if pre not in ("document", "accumulationregister"):
+            continue
+        try:
+            ax = refcols_of(s)
+        except RuntimeError:
+            ax = []
+        if live_axis_col_for_count(intent, s, ax):
+            return True
+    return False
+
+
+def event_count_period_clarify_applies(intent, diag=None, src=None, axes=None,
+                                       pool=None, trusted=None, resolved=None):
+    """K9-ф7: event+count+ось+нет периода → переспрос (не угадывать окно)."""
+    if not event_count_has_live_axis(intent, src=src, axes=axes, pool=pool):
+        return False
+    if not event_count_period_unspecified(intent, diag):
+        return False
+    for prov in (trusted, resolved):
+        if isinstance(prov, dict) and prov.get("period") is not None:
+            return False
+    return True
+
+
+def event_count_period_option_readings(today=None):
+    """Варианты окна для event-count: месяц/квартал/год/всё — форма дат, не слова."""
+    if not today:
+        today = time.strftime("%Y-%m-%d")
+    td = _calendar_date(today)
+    if not td:
+        return [_window_reading({}, _ORIGIN_NONE, "none", today)]
+    out = []
+    ms, me = _month_range(td)
+    out.append(_window_reading(
+        {"from": _iso_date(ms), "to": _iso_date(me)},
+        _ORIGIN_EXPLICIT, "full_month", today))
+    qs, qe = _quarter_range(td)
+    out.append(_window_reading(
+        {"from": _iso_date(qs), "to": _iso_date(qe)},
+        _ORIGIN_EXPLICIT, "full_quarter", today))
+    ry = entity_form_rolling_year(today)
+    if ry.get("from") or ry.get("to"):
+        out.append(_window_reading(dict(ry), _ORIGIN_EXPLICIT, "rolling_12m", today))
+    out.append(_window_reading({}, _ORIGIN_NONE, "none", today))
+    return out
+
+
+def event_count_period_clarify(question, intent, diag, cut, t0, today=None):
+    """Clarify с кнопками-периодами (render_window_label + period в option)."""
+    readings = event_count_period_option_readings(today)
+    opts = []
+    for rd in readings:
+        pr = dict(rd.get("period") or {})
+        if rd.get("origin"):
+            pr["origin"] = rd["origin"]
+        if rd.get("interpretation_id"):
+            pr["interpretation_id"] = rd["interpretation_id"]
+        lab = render_window_label(pr, origin=rd.get("origin"), today=today)
+        if not lab:
+            lab = str(rd.get("interpretation_id") or "none")
+        opts.append({"src": "", "label": lab, "hint": "",
+                     "distinct_by": "period", "period": pr,
+                     "window_fp": rd.get("window_fp") or ""})
+    cyr = any("\u0400" <= c <= "\u04ff" for c in (question or ""))
+    text = ("За какой период считать?" if cyr else "Which period?")
+    d = dict(diag or {})
+    d["event_count_period_clarify"] = True
+    return {"partial": cut or None, "kind": "clarify", "text": text,
+            "options": opts, "sources": [],
+            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
+                               reason="event count: период не назван")}
+
+
+def try_event_count_period_clarify(question, intent, diag, cut, t0, today=None,
+                                   src=None, axes=None, pool=None,
+                                   trusted=None, resolved=None):
+    """None — не clarify; иначе ответ clarify с period-options."""
+    if not event_count_period_clarify_applies(
+            intent, diag, src=src, axes=axes, pool=pool,
+            trusted=trusted, resolved=resolved):
+        return None
+    return event_count_period_clarify(
+        question, intent, diag, cut, t0, today=today)
+
+
+def apply_proven_period(intent, trusted=None, resolved=None):
+    """Билет/resolved с period → intent.period (существующий путь preds)."""
+    intent = intent if isinstance(intent, dict) else {}
+    for prov in (trusted, resolved):
+        if not isinstance(prov, dict) or prov.get("period") is None:
+            continue
+        pr = dict(prov.get("period") or {})
+        if pr.get("from") or pr.get("to"):
+            intent["period"] = pr
+        elif (pr.get("interpretation_id") or "") == "none":
+            intent["period"] = {}
+        else:
+            continue
+        parse = dict(intent.get("parse") or {})
+        parse["assumed"] = [a for a in (parse.get("assumed") or [])
+                            if not str(a).startswith("period.")]
+        intent["parse"] = parse
+        return True
+    return False
+
+
 def event_duel_applies(intent, pool):
+
     """K9-ф5: event+count+>=2 осевых движений -> fork A/B/C, не clarify сущности."""
     if not event_path_active(intent) or len(pool or []) < 2:
         return False
@@ -2887,8 +3029,13 @@ def entity_form_compute(form, meta, match=""):
         agg = aggregate_distinct_axis(sales, match, preds, axis)
         if not agg:
             return None
+        try:
+            _ax_cols = refcols_of(sales)
+        except RuntimeError:
+            _ax_cols = []
+        _ax_lab = _passport_axis_label(axis, _ax_cols) or axis
         return entity_form_atom_distinct(
-            src=sales, axis=axis, value=agg.get("count"), period=period)
+            src=sales, axis=_ax_lab, value=agg.get("count"), period=period)
     if form == "complement":
         cat_agg = aggregate(cat, "", [], None)  # каталог без date-pred
         dist = aggregate_distinct_axis(sales, match, preds, axis)
@@ -7485,10 +7632,12 @@ def options_version(opts):
 
 
 def ambiguity_of_options(opts):
-    """Предмет clarify: сущность / величина / ось."""
+    """Предмет clarify: сущность / величина / ось / период."""
     opts = [o for o in (opts or []) if isinstance(o, dict)]
     if not opts:
         return "entity"
+    if any(isinstance(o.get("period"), dict) for o in opts):
+        return "period"
     if any("measure" in o for o in opts):
         return "measure"
     if all("found" not in o for o in opts) and any(o.get("distinct_by") for o in opts):
@@ -7548,6 +7697,8 @@ def accumulate_resolution(question, user, ticket):
             acc["measure"] = ticket.get("measure")
         if amb == "axis" and ticket.get("axis"):
             acc["axis"] = ticket.get("axis")
+        if amb == "period" and ticket.get("period") is not None:
+            acc["period"] = dict(ticket.get("period") or {})
         acc["expires_at"] = float(ticket.get("expires_at") or 0) or (
             time.time() + max(60, DECISION_TTL_SEC))
         _RESOLVED_CHOICES[key] = acc
@@ -7572,6 +7723,8 @@ def issue_decision(question, option, ambiguity, options_ver, user=None, parse=No
         "day_basis": ((option or {}).get("day_basis")
                       if (option or {}).get("day_basis") in _DAY_BASIS_IDS
                       else None),
+        "period": ((option or {}).get("period")
+                   if ambiguity == "period" else None),
         "label": (option or {}).get("label"),
         "db": db_fingerprint(),
         "user": (str(user).strip() if user else None) or None,
@@ -7810,9 +7963,11 @@ def choice_levels_proven(trusted=None, resolved=None):
             levels.add("measure")
         if resolved.get("axis"):
             levels.add("axis")
+        if resolved.get("period") is not None:
+            levels.add("period")
     if isinstance(trusted, dict):
         amb = trusted.get("ambiguity")
-        if amb in ("entity", "measure", "axis"):
+        if amb in ("entity", "measure", "axis", "period"):
             levels.add(amb)
     return levels
 
@@ -12913,6 +13068,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
 
     today = time.strftime("%Y-%m-%d")
     intent = parse_intent(question, today)
+    apply_proven_period(intent, trusted=trusted, resolved=resolved)
     period_from_prior = False
     if prior:
         period_from_prior = apply_prior_period(intent, parse_intent(prior, today), today)
@@ -13790,6 +13946,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # ASK_ENTITY_FORM: форма F до выбора сущности моделью (K6).
     # pre_entity + classes>1 = молчаливый лидер — гейт в try_entity_form_answer.
     # Пул F — все catalog_/register_/document_ из cands (без head-среза круга).
+    _ecp0 = try_event_count_period_clarify(
+        question, intent, diag, cut, t0, today=today, pool=list(cands or []),
+        trusted=trusted, resolved=resolved)
+    if _ecp0 is not None:
+        return _ecp0
     if ASK_ENTITY_FORM and not no_arbiter and not trusted and not focus:
         _ef_pool0 = list(dict.fromkeys(
             list((_fork_early.get("pool") or []))
@@ -14484,6 +14645,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             + [c for c in (cands or [])
                if str(c).startswith("accumulationregister_")
                or str(c).startswith("document_")]))
+        _ecp1 = try_event_count_period_clarify(
+            question, intent, diag, cut, t0, today=today,
+            src=(arb_pool[0] if arb_pool else None), pool=_ef_pool,
+            trusted=trusted, resolved=resolved)
+        if _ecp1 is not None:
+            return _ecp1
         _ef = try_entity_form_answer(
             question, intent, _ef_pool, match=match, diag=diag, cut=cut, t0=t0,
             today=today)
@@ -15306,15 +15473,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["measure"] = None
     # Несколько величин подходят одинаково — спрашиваем, какую считать. Механизм тот же,
     # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
+    _ax_cd = []
+    if src:
+        try:
+            _ax_cd = refcols_of(src)
+        except RuntimeError:
+            _ax_cd = []
+    _ecp2 = try_event_count_period_clarify(
+        question, intent, diag, cut, t0, today=today, src=src, axes=_ax_cd,
+        trusted=trusted, resolved=resolved)
+    if _ecp2 is not None:
+        return _ecp2
     if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
             and not diag.get("sales_measure_canon")
             and (not _rank_sales or diag.get("sales_rank_role_ask"))):
-        _ax_cd = []
-        if src:
-            try:
-                _ax_cd = refcols_of(src)
-            except RuntimeError:
-                _ax_cd = []
         if count_defer_measure_clarify(intent, src, _ax_cd):
             diag["count_axis_defer_measure"] = True
             measure_alts = []
@@ -15784,8 +15956,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         return build_period_empty_answer(
             question, agg, intent, measure, src, match, preds, money, slot_mode,
             cov, cut, diag, grain_dec, axes, n_folders, rows, t0, say_measure)
-    # K9-ф6: mtd/event DISTINCT — пара «N · ось» кодом (как fork A), не compose+passport.
-    if ((agg or {}).get("form") == "distinct_axis"
+    # K9-ф6/ф7: mtd/event DISTINCT — пара «N · ось» кодом (как fork A), не compose+passport.
+    if (((agg or {}).get("form") == "distinct_axis" or diag.get("count_distinct_axis"))
             and (intent.get("want") or "").strip().lower() in ("count", "")):
         _ax_lab = _passport_axis_label((agg or {}).get("axis"), axes)
         _dist_atom = atom_from_agg(
@@ -16742,6 +16914,9 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
                 measure_pick = ticket.get("measure") or None
             if ticket.get("ambiguity") == "axis" and ticket.get("axis"):
                 focus = ticket.get("src") or focus
+            if ticket.get("ambiguity") == "period" and ticket.get("period") is not None:
+                resolved = dict(resolved or {})
+                resolved["period"] = dict(ticket.get("period") or {})
             trusted = ticket
             accumulate_resolution(question, user, ticket)
             resolved = peek_resolved(question, user)

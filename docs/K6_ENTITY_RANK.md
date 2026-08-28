@@ -560,3 +560,42 @@ Bench-набор класса: [`work/k6-rank-v2/gold_k6a_class.tsv`](../work/k6
 | «топ-3 за вчера» | количество (rank) |
 | «больше всех купил» | лидер rank + `выбрал=код` |
 
+### 7.18. K9 фаза 7: переспрос периода event+count + mtd-подпись (28.08)
+
+**[решение владельца]** «сколько клиентов реально покупают» без периода —
+clarify с кнопками окна, не терминальный ответ «за всё время».
+
+| механизм | где | что |
+|---|---|---|
+| гейт периода | `event_count_period_clarify_applies` (~2667) | action_class=event, want=count, живая ось (`live_axis_col_for_count`), period пуст или `period_assumed_dropped`, билет без proven period |
+| опции окна | `event_count_period_option_readings` (~2680) | `_month_range`, `_quarter_range`, `entity_form_rolling_year`, `_ORIGIN_NONE` — подписи через `render_window_label`, не списки слов |
+| clarify | `event_count_period_clarify` (~2703), вызовы ~13949 / ~14648 / ~15482 | pre_entity (пул cands), post-pick, перед count/measure defer |
+| билет | `apply_proven_period` (~2741), `answer_checked` period (~16917) | выбор кнопки → `resolved.period` → `intent.period` → `apply_period_leader` |
+| блок угадывания | `entity_form_applicable` (~2487) | event без from/to → F закрыта (не rolling_12m по умолчанию) |
+| mtd-подпись | `entity_form_compute` distinct (~3036), terminal (~15960) | `_passport_axis_label` → `render_atom_pair` «76 · Контрагенты», не compose «assumed: 76» |
+
+**Замки офлайн (сессия 28.08 ф7):**
+
+| замок | до | после |
+|---|---|---|
+| test_action_class | 30/0 | **39/0** (+period clarify, mtd entity_form label) |
+| test_sales_rank_canon | 51/0 | **51/0** |
+| test_rank_leader_path | 30/0 | **30/0** |
+| test_entity_form | 47/0 | **47/0** |
+| test_k6_rank_v2 offline | 10/0 | **10/0** |
+| test_compose | 92/0 | **92/0** |
+| bench v2_lead / v1-регресс | 20/23, 0 | **не снят** (7890 timeout) |
+
+**Таблица ожиданий (:8096):**
+
+| вопрос | ожидание ф7 |
+|---|---|
+| «сколько клиентов реально покупают» | **clarify периода** → «12 мес» → **141 · Контрагенты** |
+| «сколько покупателей было за этот месяц» | **76 · Контрагенты** (без переспроса, без «assumed:») |
+| «сколько у нас всего клиентов» | clarify object (п. 12), без изменений |
+| «топ-3 за вчера» | количество (rank) |
+| «больше всех купил» | лидер rank + `выбрал=код` |
+| «наторговали в прошедшее воскресенье?» | answer (без регресса) |
+
+**Без новых списков слов:** только `interpretation_id` окон (`full_month`, `full_quarter`, `rolling_12m`, `none`) и `render_window_label` — §3.96.
+
