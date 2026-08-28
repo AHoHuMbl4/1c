@@ -399,7 +399,103 @@ Bench-набор класса: [`work/k6-rank-v2/gold_k6a_class.tsv`](../work/k6
 | test_compose | **92/0** |
 | test_k4_* | **63/0** суммарно |
 
-Живой bench (`37890`) и AB_PROBE (`18093`) в этой сессии **не сняты**:
+Живой bench (`37890`) и AB_PROBE (`18093`) в сессии ф1 **не сняты**:
 37890 — password auth fail (туннель); 7890 — зависшие psql (bench >13 мин).
-Коммит отложен до живого прогона.
+
+### 7.13. K9 фаза 2 шаги 1–2: axis_struct + count_defer_measure (28.08)
+
+| механизм | где | что |
+|---|---|---|
+| axis_struct | `entity_rank_v2._axis_register_struct_tier`, `rank_key_v2` (movement), `features_table` (`has_qty_measure`/`has_money_measure` из `map_keys(nums)`) | осевой регистр с qty-мерой выше money-only при равном axis_fit; книга НДС — `is_noncanon_sales` (существующий) |
+| count defer | `serene_ask.count_defer_measure_clarify` (~2576), вставка перед measure clarify (~15105) | count+живая ось → снять `measure_alts`, дальше `aggregate_distinct_axis` |
+
+**Замер шага 1 (офлайн, эмуляция фич okna):**
+
+| кандидат | rank_key_v2 ф1 (без axis_struct) | rank_key_v2 ф2 | axis_struct |
+|---|---|---|---|
+| кассовыеордера (pos 2, axis_fit=2, money) | `(0,0,-2,0,0,2)` | `(0,0,-2,1,0,0,2)` | 1 |
+| реализациятмц (pos 8, axis_fit=2, qty+money) | `(0,0,-2,0,0,8)` | `(0,0,-2,0,0,0,8)` | 0 |
+
+Ф1: касса лидирует по `lexical_pos` (2 < 8) при равном kind_ok. Ф2: реализация
+выше кассы (axis_struct 0 < 1), несмотря на худшую лексику.
+
+**Замки офлайн (сессия 28.08 ф2):**
+
+| замок | до | после |
+|---|---|---|
+| test_k6_rank_v2 offline | 3/0 | **4/0** (+axis+qty) |
+| test_action_class | 13/0 | **16/0** (+3 count_defer) |
+| test_sales_rank_canon | 51/0 | **51/0** |
+| test_rank_leader_path | 30/0 | (не перегонялся — 7890 завис) |
+| test_entity_form | 47/0 | (не перегонялся) |
+| test_compose | 92/0 | (не перегонялся) |
+| bench v2_lead / v1-регресс | 19/23, 0 | **не снят** (7890 timeout, 37890 auth) |
+| AB_PROBE okna :18093 | — | **не снят** (ask → пустой ответ, psql 7890 >110 с) |
+
+Коммит отложен до живого bench+AB_PROBE (гейт `check-live-probe`).
+
+### 7.14. K9 фаза 3: event-путь — код, не модель (28.08)
+
+| механизм | где | что |
+|---|---|---|
+| профиль мер | `entity_rank_v2._meas_profile_from_dict` | `search_measure_alias` + `measure_choice` (hint «количество»/«сумма»); fallback `n_ref_axes` из `search_refcols`; **LIKE по map_keys(nums) снят** (снайпер §3.96) |
+| axis_struct | `_axis_register_struct_tier`, `axis_struct_tier` | struct=2: нет оси / `is_noncanon_sales`; 0–1 — словарь или ширина осей |
+| event-пул | `event_movement_pool`, `event_rank_pick` | только document_/accumulationregister_ с axis_struct≤1; книга НДС/касса (struct=2) вне пула |
+| выбор сущности | `serene_ask.try_event_code_entity_pick` (~2598) | до `pick_entity`: один лидер → `event_code_lock`; ничья → clarify; пусто → no_data |
+| развилка/арбитр | `event_filter_pool` на `_fork_pool` (~13620), `arb_pool` (~14233), rivals `order` | struct=2 не попадают в пул модели при event |
+| TRACE | `шаг("сущность выбрана")` | `выбрал=код` при `event_code_lock` |
+
+**Замки офлайн (сессия 28.08 ф3):**
+
+| замок | до | после |
+|---|---|---|
+| test_k6_rank_v2 offline | 4/0 | **8/0** (+pool/rank/no-LIKE) |
+| test_action_class | 16/0 | **18/0** (+2 event_code_pick) |
+| test_sales_rank_canon | 51/0 | **51/0** |
+| test_rank_leader_path | 30/0 | **30/0** |
+| test_entity_form | 47/0 | **47/0** |
+| test_compose | 92/0 | **92/0** |
+| bench v2_lead / v1-регресс | 20/23, 0 | **не снят** (37890: локальный `/etc` ≠ пароль окна; ssh к gpu заблокирован средой) |
+
+**Таблица ожиданий живых проб (кандидат :8096, оркестратор):**
+
+| вопрос | ожидание ф3 |
+|---|---|
+| «сколько клиентов реально покупают» | DISTINCT контрагентов реализации (~141), не clarify мер на книге НДС |
+| «сколько покупателей было за этот месяц» | число по оси покупателей (DISTINCT), не assumed 353 поставщиков |
+| «сколько у нас всего клиентов» | без изменений (action_class=object, dual_atom/картотека) |
+| «топ-3 товара за вчера» | количество (rank/sales путь) |
+| «больше всех купил» | лидер rank (без регрессии) |
+
+### 7.15. K9 фаза 4: distinct-атом на event-пути (28.08)
+
+| механизм | где | что |
+|---|---|---|
+| defer fork | `count_defer_fork_outcomes`, `_fork_defer_distinct` (~2587), исходы A/B/unique (~14498) | event+count+живая ось → не fork figures по строкам; дальше `aggregate_distinct_axis` |
+| пустой event-пул | `try_event_code_entity_pick` (~2630), `event_movement_any` | движения в cands есть, осевой пул пуст → fallback к pick_entity, не no_data |
+| struct distinct | `_event_axis_struct_tier`, `event_movement_pool` | distinct+event: struct по `n_ref_axes`, не только `holds_kind_axis` |
+| ось в атоме | `atom_from_agg` (~15768) | `agg.axis` для подписи оси из словаря |
+
+**Замки офлайн (сессия 28.08 ф4):**
+
+| замок | до | после |
+|---|---|---|
+| test_k6_rank_v2 offline | 8/0 | **10/0** (+n_ref_axes pool, movement_any) |
+| test_action_class | 18/0 | **23/0** (+fork defer, empty pool, distinct) |
+| test_sales_rank_canon | 51/0 | **51/0** |
+| test_rank_leader_path | 30/0 | **30/0** |
+| test_entity_form | 47/0 | **47/0** |
+| test_compose | 92/0 | **92/0** |
+| bench v2_lead / v1-регресс | 20/23, 0 | **не снят** (37890: локальный `/etc` ≠ пароль окна) |
+
+**Таблица ожиданий живых проб (кандидат :8096, оркестратор):**
+
+| вопрос | ожидание ф4 |
+|---|---|
+| «сколько клиентов реально покупают» | **141** DISTINCT контрагентов реализации, не 77901 строк |
+| «сколько покупателей было за этот месяц» | DISTINCT по оси покупателей за период |
+| «сколько наторговали в прошедшее воскресенье?» | answer (как ф1), не no_data при живых движениях |
+| «сколько у нас всего клиентов» | без изменений (object, dual_atom) |
+| «топ-3 товара за вчера» | количество (rank) |
+| «больше всех купил» | лидер rank + `выбрал=код` |
 

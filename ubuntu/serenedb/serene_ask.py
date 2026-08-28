@@ -2573,6 +2573,99 @@ def live_axis_col_for_count(intent, src, axes=None):
     return hits[0] if hits else None
 
 
+def count_defer_measure_clarify(intent, src, axes=None):
+    """K9-ф2: count+живая ось → DISTINCT, не развилка мер (образец rank_defer K6b)."""
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    if not (src or "").strip():
+        return False
+    return bool(live_axis_col_for_count(intent, src, axes))
+
+
+def count_defer_fork_outcomes(intent, src, axes=None):
+    """K9-f4: event+count+axis -> DISTINCT via answer(), not fork row figures."""
+    if not event_path_active(intent):
+        return False
+    return count_defer_measure_clarify(intent, src, axes)
+
+
+def _fork_defer_distinct(intent, picked_src, diag):
+    if not (picked_src or "").strip():
+        return False
+    _ax = []
+    try:
+        _ax = refcols_of(picked_src)
+    except RuntimeError:
+        _ax = []
+    if count_defer_fork_outcomes(intent, picked_src, _ax):
+        diag["fork_outcome_deferred_distinct"] = True
+        return True
+    return False
+
+
+def event_path_active(intent):
+    return (intent or {}).get("action_class", "").strip().lower() == "event"
+
+
+def event_movement_feats(diag):
+    return (diag or {}).get("answer_fit_v2_full") or {}
+
+
+def event_filter_pool(cands, intent, diag):
+    if not event_path_active(intent) or not K6R:
+        return list(cands or [])
+    return K6R.event_movement_pool(cands, event_movement_feats(diag), intent)
+
+
+def try_event_code_entity_pick(question, intent, cands, diag, cut, t0, by, match, preds,
+                               marks):
+    if not event_path_active(intent) or not K6R:
+        return None
+    feats = event_movement_feats(diag)
+    if not feats:
+        return None
+    leader, tied = K6R.event_rank_pick(cands, feats, intent, question)
+    if leader:
+        diag["event_code_lock"] = leader
+        return {"picked": [leader], "marks": marks or {}, "plan": {}}
+    pool = K6R.event_movement_pool(cands, feats, intent)
+    if not pool:
+        diag["event_code_empty_pool"] = True
+        if K6R.event_movement_any(cands):
+            return None
+        return {"kind": "no_data",
+                "partial": cut or None,
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "sources": [],
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                   reason="event_no_axis_movement")}
+    if tied:
+        try:
+            lab_by = {r[0]: r[1] for r in psql(
+                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(c) for c in tied))) if r and r[0]}
+        except RuntimeError:
+            lab_by = {}
+        opts = mk_opts([t for t in tied if t in lab_by], lab_by, marks or {}, by,
+                       match=match, preds=preds)
+        if len(opts) >= 2:
+            diag["event_code_tie"] = tied
+            return {"partial": cut or None, "kind": "clarify",
+                    "text": clarify_say(question, opts, diag)
+                            or ", ".join("«%s»" % o["label"] for o in opts),
+                    "options": opts, "sources": [o["label"] for o in opts],
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+    diag["event_code_ambiguous"] = tied or pool[:4]
+    return {"kind": "no_data",
+            "partial": cut or None,
+            "text": NO_DATA_TEXT or refuse_text(question),
+            "sources": [],
+            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                               reason="event_rank_tie")}
+
+
 def aggregate_distinct_axis(src_table, match, preds, axis_col):
     """COUNT DISTINCT refs_map[axis] в движке.
 
@@ -13547,6 +13640,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     list(cands[:max(ARBITER_MAX * 4, 16)]), intent, question),
                 intent, question),
             intent, question)
+        _fork_pool = event_filter_pool(_fork_pool, intent, diag)
         try:
             _mbs = _measures_by_src(_fork_pool)
             _als = _aliases_by_src(_fork_pool)
@@ -13713,12 +13807,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # корпус и упали («TSQUERY outside @@ match»).
             match = code_filter
     else:
-        try:
-            picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
-                                              counts_for_model, match, diag)
-        except RuntimeError:
-            picked, marks, plan = [], {}, {}
-            diag["degraded"] = "выбор сущности сделан без модели"
+        _ev = try_event_code_entity_pick(
+            question, intent, cands, diag, cut, t0, by, match, preds, {})
+        if _ev and _ev.get("kind") in ("no_data", "clarify"):
+            return _ev
+        if _ev and _ev.get("picked"):
+            picked, marks, plan = _ev["picked"], _ev.get("marks") or {}, _ev.get("plan") or {}
+            diag["event_code_pick"] = True
+        else:
+            try:
+                picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
+                                                  counts_for_model, match, diag)
+            except RuntimeError:
+                picked, marks, plan = [], {}, {}
+                diag["degraded"] = "выбор сущности сделан без модели"
 
         # КОД С ИЕРАРХИЕЙ — НЕОДНОЗНАЧНОСТЬ, КОТОРУЮ РЕШАЕТ ЧЕЛОВЕК. «62» — это и номер
         # формы статистики, и счёт: буквальный поиск ведёт к форме, а иерархический
@@ -14152,6 +14254,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         doubt = (len(picked) > 1 or bool(diag.get("signals_disagree"))
                  or bool(diag.get("writer_pair")) or bool(diag.get("meaning_down")))
     arb_pool = list(picked)
+    if event_path_active(intent):
+        arb_pool = event_filter_pool(arb_pool, intent, diag)
+        if len(arb_pool) == 1:
+            picked = list(arb_pool)
+            doubt = False
     # Документ-регистратор идёт в круг ПЕРВЫМ соперником: он и есть второе прочтение,
     # а не «следующий по порядку отбора». При каноне продаж документ — люк, не соперник.
     if (diag.get("writer_pair") and picked and not focus and not no_arbiter
@@ -14184,6 +14291,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # и арбитр выбирает из шума. Признак остаётся в `diag` как наблюдение, но решения не
         # принимает: сигнал, который не улучшил замер, не имеет права менять поведение.
         order = list(cands) + ([top_by_question] if top_by_question else [])
+        if event_path_active(intent):
+            _ev_set = set(event_filter_pool(cands, intent, diag))
+            order = [c for c in order if c in _ev_set]
         for c in order:
             if len(arb_pool) >= ARBITER_MAX:
                 break
@@ -14396,9 +14506,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 шаг("канон продаж: fork excluded → period_empty",
                     src=diag.get("sales_fork_period_empty"))
                 return _sfpe
+        _picked0 = picked[0] if picked else None
         if ASK_ATOM_TERMINAL and _outc == "unique":
             _uatom = ((_pay.get("class") or {}).get("atom") or {})
-            if (_uatom.get("proof_status") == PROOF_COMPUTED
+            if _fork_defer_distinct(intent, _picked0, diag):
+                шаг("исход unique", отложен="distinct")
+            elif (_uatom.get("proof_status") == PROOF_COMPUTED
                     and _uatom.get("exact_value") is not None):
                 _ures = fork_outcome_unique(
                     question, _pay.get("class"), diag, cut=cut, t0=t0)
@@ -14407,15 +14520,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         value=_uatom.get("exact_value"))
                     return _ures
         if _outc == "A":
-            шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
-            return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
+            if _fork_defer_distinct(intent, _picked0, diag):
+                шаг("исход A", отложен="distinct",
+                    srcs=len((_pay.get("class") or {}).get("srcs") or []))
+            else:
+                шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
+                return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
         if _outc == "B":
             _b_classes = _pay.get("classes") or []
             if rank_defer_fork_outcome_b(intent, plan, question, _b_classes):
                 diag.setdefault("fork", {})["outcome_b_deferred_rank"] = True
                 шаг("исход B", отложен="rank", классов=len(_b_classes))
+            elif _fork_defer_distinct(intent, _picked0, diag):
+                diag.setdefault("fork", {})["outcome_b_deferred_distinct"] = True
+                шаг("исход B", отложен="distinct", классов=len(_b_classes))
             else:
-                _picked0 = picked[0] if picked else None
                 _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0,
                                        picked_src=_picked0,
                                        day_basis_prefer=_day_prefer)
@@ -14758,12 +14877,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # ключ ранга v2, OData-префикс из метаданных). Если модель выбрала картотеку,
     # а ранг при action_class=event даёт лидера-движение с осью — берём лидер:
     # «клиенты покупают» = регистр покупок, справочник карточек — не ответ (п. 21).
-    if (not focus and (intent.get("action_class") or "").lower() == "event"
+    if (not focus and event_path_active(intent)
             and not diag.get("sales_canon_locked")
-            and not diag.get("catalog_count_locked")):
-        _ev_src = next((s for s in (diag.get("answer_fit_v2") or {})
-                        if str(s).startswith(("document_", "accumulationregister_"))),
-                       None)
+            and not diag.get("catalog_count_locked")
+            and not diag.get("event_code_lock")):
+        _fe = event_movement_feats(diag)
+        if K6R and _fe:
+            _ev_src, _ = K6R.event_rank_pick(cands, _fe, intent, question)
+        else:
+            _ev_src = next((s for s in (diag.get("answer_fit_v2") or {})
+                            if str(s).startswith(("document_", "accumulationregister_"))),
+                           None)
         if _ev_src and src != _ev_src:
             src = _ev_src
             picked = [_ev_src] + [c for c in (picked or []) if c != _ev_src]
@@ -14831,7 +14955,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if _canon_src and src == _canon_src:
             diag["sales_canon_locked"] = _canon_src
     шаг("сущность выбрана", сущность=(src or "—"), совпадений=by.get(src, 0),
-        выбрал=("человек" if focus else "модель"),
+        выбрал=("человек" if focus else ("код" if diag.get("event_code_lock") else "модель")),
         сомнение=bool(diag.get("signals_disagree")))
 
     # НЕПОЛНОТА ИМЕННО ЭТОЙ СУЩНОСТИ (п. 13): «если из-за потери возможен неверный ответ,
@@ -15092,6 +15216,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["measure"] = None
     # Несколько величин подходят одинаково — спрашиваем, какую считать. Механизм тот же,
     # что для сущности: кнопки из ДАННЫХ плюс «свой вариант» (решение владельца 28.07).
+    if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
+            and not diag.get("sales_measure_canon")
+            and (not _rank_sales or diag.get("sales_rank_role_ask"))):
+        _ax_cd = []
+        if src:
+            try:
+                _ax_cd = refcols_of(src)
+            except RuntimeError:
+                _ax_cd = []
+        if count_defer_measure_clarify(intent, src, _ax_cd):
+            diag["count_axis_defer_measure"] = True
+            measure_alts = []
     if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
             and not diag.get("sales_measure_canon")
             and (not _rank_sales or diag.get("sales_rank_role_ask"))):
@@ -15645,7 +15781,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         period_origin=_passport_origin(intent, diag),
         grain=_grain, form=_form,
         axis=_passport_axis_label(
-            (agg or {}).get("col") or grain_dec.get("col"), axes) or None,
+            (agg or {}).get("axis") or (agg or {}).get("col")
+            or grain_dec.get("col"), axes) or None,
         completeness=cov, folders=n_folders, src=src)]
     raw = compose(question, rows, agg, totals=totals_shown, coverage=cov,
                   measure_used=say_measure, folders=n_folders, money=money, src=src,

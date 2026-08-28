@@ -72,6 +72,212 @@ def is_noncanon_sales(src):
     return ("книга" in s or "ндс" in s or "vat" in s)
 
 
+def _alias_parts(raw):
+    if not raw:
+        return []
+    return [p.strip() for p in str(raw).split(",") if p.strip()]
+
+
+def _measure_choice(names, word, alias_by=None):
+    """Минимум `serene_ask.measure_choice` — офлайн и без циклического импорта."""
+    wl = (word or "").strip().lower()
+    names = list(names or [])
+    if not names or not wl:
+        return None, [], "none"
+    if len(names) == 1:
+        return names[0], [], "single"
+    exact = [n for n in names if n.lower() == wl]
+    if exact:
+        return exact[0], [], "exact"
+    alias_by = alias_by or {}
+    if alias_by:
+        covered = [n for n in names
+                   if any(wl in a.lower() for a in _alias_parts(alias_by.get(n)))]
+        if len(covered) == 1:
+            return covered[0], [], "alias"
+        if len(covered) > 1:
+            base_of = [n for n in covered
+                       if sum(1 for m in covered if m != n and m.startswith(n))
+                       >= len(covered) - 1]
+            if len(base_of) == 1 and base_of[0].lower() != wl:
+                return base_of[0], [], "base"
+            return None, covered, "ask"
+    same = sorted(n for n in names if wl in n.lower())
+    if len(same) > 1:
+        base_of = [n for n in same
+                   if sum(1 for m in same if m != n and m.startswith(n)) >= len(same) - 1]
+        if len(base_of) == 1 and base_of[0].lower() != wl:
+            return base_of[0], [], "base"
+        return None, same + [n for n in names if n not in same], "ask"
+    if len(same) == 1:
+        return same[0], [], "substring"
+    return None, [], "rerank"
+
+
+def _money_headline_measures(names):
+    """Структурные headline-меры (*Документа, Всего) — как `_fork_sum_headline_pool`."""
+    out = []
+    for n in names or []:
+        if n and str(n).lower().endswith("документа") and n not in out:
+            out.append(n)
+    for n in names or []:
+        if (n or "").strip().lower() == "всего" and n not in out:
+            out.append(n)
+            break
+    return out
+
+
+def _meas_profile_from_dict(psql, lit, cands, corpus, in_list):
+    """Профиль qty/money из search_measure_alias + measure_choice, не LIKE по keys."""
+    keys = {}
+    for r in psql(
+            "SELECT DISTINCT src_table, unnest(map_keys(nums)) AS k "
+            "FROM %s WHERE src_table IN (%s) AND nums IS NOT NULL"
+            % (corpus, in_list)) or []:
+        if r and r[0] and r[1]:
+            keys.setdefault(r[0], []).append(r[1])
+    alias_by_src = {}
+    try:
+        for r in psql(
+                "SELECT src_table, measure, aliases FROM search_measure_alias "
+                "WHERE src_table IN (%s)" % in_list) or []:
+            if not r or not r[0] or not r[1]:
+                continue
+            alias_by_src.setdefault(r[0], {})[r[1]] = r[2]
+    except Exception:  # noqa: BLE001
+        alias_by_src = {}
+    ref_axes = {}
+    try:
+        for r in psql(
+                "SELECT src_table, count(DISTINCT col)::BIGINT "
+                "FROM search_refcols "
+                "WHERE src_table IN (%s) AND col IS NOT NULL AND col <> '' "
+                "AND target_src LIKE 'catalog_%%' GROUP BY 1" % in_list) or []:
+            if r and r[0]:
+                ref_axes[r[0]] = int(r[1] or 0)
+    except Exception:  # noqa: BLE001
+        ref_axes = {}
+    out = {}
+    for src in cands:
+        # имён мер мало (метаданные) — set() страхует от дублей строк корпуса
+        names = sorted(set(keys.get(src, [])))
+        ab = alias_by_src.get(src, {})
+        has_qty = has_money = 0
+        if names:
+            got, _, how = _measure_choice(names, "количество", ab)
+            if got and how in ("exact", "substring", "alias", "base", "single"):
+                has_qty = 1
+            if _money_headline_measures(names):
+                has_money = 1
+            else:
+                got2, _, how2 = _measure_choice(names, "сумма", ab)
+                if got2 and how2 in ("exact", "substring", "alias", "base", "single"):
+                    has_money = 1
+        out[src] = {
+            "has_qty_measure": has_qty,
+            "has_money_measure": has_money,
+            "n_ref_axes": ref_axes.get(src, 0),
+        }
+    return out
+
+
+def axis_struct_tier(src, feat):
+    """Публичный ярус axis_struct (0=лучший … 2=вне event-пула)."""
+    return _axis_register_struct_tier(src, feat)
+
+
+def _axis_register_struct_tier(src, feat):
+    """K9-ф2/ф3: осевой регистр с qty-мерой выше money-only; struct=2 вне event-пула.
+
+    Профиль мер — search_measure_alias + measure_choice (не LIKE по map_keys).
+    Без словаря — n_ref_axes (ширина осей search_refcols): торговый регистр шире кассы.
+    Книга НДС/VAT — is_noncanon_sales.
+    """
+    feat = feat or {}
+    if not feat.get("holds_kind_axis") or not int(feat.get("n_with_nums") or 0):
+        return 2
+    if is_noncanon_sales(src):
+        return 2
+    if int(feat.get("has_qty_measure") or 0):
+        return 0
+    if int(feat.get("has_money_measure") or 0):
+        return 1
+    # без профиля мер (словарь базы пуст/чужой язык) — только факт наличия
+    # осей-каталогов, НЕ градация по их числу: отсечки «≥N осей» — калибровка
+    # под конкретную базу (снайпер 28.08), в чужой кассе осей тоже ≥3.
+    return 0 if int(feat.get("n_ref_axes") or 0) >= 1 else 1
+
+
+def _event_axis_struct_tier(src, feat, intent):
+    """K9-ф4: distinct+event — struct по n_ref_axes, не только holds_kind_axis."""
+    form = infer_rank_form(intent, "")
+    ac = (intent or {}).get("action_class") or "none"
+    if str(ac).strip().lower() == "event" and form == "distinct":
+        feat = feat or {}
+        if is_noncanon_sales(src):
+            return 2
+        if not int(feat.get("n_with_nums") or 0):
+            return 2
+        n_axes = int(feat.get("n_ref_axes") or 0)
+        if n_axes >= 1:
+            if int(feat.get("has_qty_measure") or 0):
+                return 0
+            if int(feat.get("has_money_measure") or 0):
+                return 1
+            return 1
+        if not feat.get("holds_kind_axis"):
+            return 2
+    return _axis_register_struct_tier(src, feat)
+
+
+def event_movement_any(cands):
+    """Есть ли document_/accumulationregister_ в пуле (до event-фильтра struct)."""
+    for s in (cands or []):
+        if object_prefix(s) in (_PREFIX_DOC, _PREFIX_ACCUM):
+            return True
+    return False
+
+
+def event_movement_pool(cands, features, intent):
+    """K9-ф3: движения event-яруса с axis_struct 0–1 (касса/книга НДС — struct=2)."""
+    ac = (intent or {}).get("action_class") or "none"
+    if str(ac).strip().lower() != "event":
+        return list(cands or [])
+    form = infer_rank_form(intent, "")
+    pool = []
+    for s in (cands or []):
+        f = (features or {}).get(s) or {}
+        if _event_object_tier(s, ac) != 0:
+            continue
+        if _event_axis_struct_tier(s, f, intent) > 1:
+            continue
+        pre = f.get("prefix") or object_prefix(s)
+        if form in ("distinct", "complement"):
+            if pre == _PREFIX_ACCUM and not f.get("holds_kind_axis"):
+                if not int(f.get("n_ref_axes") or 0):
+                    continue
+        pool.append(s)
+    return pool
+
+
+def event_rank_pick(cands, features, intent, question=""):
+    """K9-ф3: один лидер ранга → (src, None); ничья → (None, tied); пусто → (None, [])."""
+    del question  # form из intent
+    feats = features or {}
+    pool = event_movement_pool(cands, feats, intent)
+    if not pool:
+        return None, []
+    form = infer_rank_form(intent, "")
+    pos = {s: i for i, s in enumerate(cands or [])}
+    keys = {s: rank_key_v2(s, feats.get(s), intent, form, pos.get(s, 10**6))
+            for s in pool}
+    best = min(keys.values())
+    leaders = [s for s in pool if keys[s] == best]
+    if len(leaders) == 1:
+        return leaders[0], []
+    return None, leaders
+
+
 def _question_overlap_batch(psql, lit, cands, question, stem_dict,
                             tables="search_tables", corpus="search_corpus",
                             corp_rows=None):
@@ -258,6 +464,8 @@ def features_table(psql, lit, cands, intent, today=None,
         except Exception:  # noqa: BLE001
             axis_n = {}
 
+    meas_prof = _meas_profile_from_dict(psql, lit, cands, corpus, in_list)
+
     out = {}
     for src in cands:
         c = corp.get(src, {})
@@ -279,6 +487,7 @@ def features_table(psql, lit, cands, intent, today=None,
             v1_fit = 1
         if axis_fit > v1_fit:
             v1_fit = axis_fit
+        mp = meas_prof.get(src, {})
         out[src] = {
             "prefix": object_prefix(src),
             "cls": cls.get(src, ""),
@@ -291,6 +500,9 @@ def features_table(psql, lit, cands, intent, today=None,
             "axis_fit": axis_fit,
             "v1_fit": v1_fit,
             "n_cards_of_axis": n_cards_cat if holds else 0,
+            "has_qty_measure": mp.get("has_qty_measure", 0),
+            "has_money_measure": mp.get("has_money_measure", 0),
+            "n_ref_axes": mp.get("n_ref_axes", 0),
         }
     if question:
         q_ov = _question_overlap_batch(
@@ -372,6 +584,7 @@ def rank_key_v2(src, feat, intent, form, lexical_pos):
 
     if movement:
         live = int(feat.get("axis_fit") or 0)
+        axis_struct = _axis_register_struct_tier(src, feat)
         if prefix == _PREFIX_ACCUM and feat.get("holds_kind_axis"):
             kind_ok = 0
         elif prefix == _PREFIX_ACCUM:
@@ -381,7 +594,8 @@ def rank_key_v2(src, feat, intent, form, lexical_pos):
         else:
             kind_ok = 3
         dated = 0 if feat.get("n_dated", 0) > 0 else 1
-        return (event_tier, service, -live, kind_ok, dated, int(lexical_pos or 10**6))
+        return (event_tier, service, -live, axis_struct, kind_ok, dated,
+                int(lexical_pos or 10**6))
 
     # card-count (count without period): kind catalog with cards is the live answer;
     # K6a: метаданные несут слова вопроса — выше «гиганта» без q_meta (план счетов).
@@ -627,6 +841,7 @@ def apply_to_candidates(psql, lit, cands, intent, question, today=None,
         s: {
             "prefix": (feats.get(s) or {}).get("prefix"),
             "axis_fit": (feats.get(s) or {}).get("axis_fit"),
+            "axis_struct": axis_struct_tier(s, feats.get(s)),
             "n_dated": (feats.get(s) or {}).get("n_dated"),
             "n_cards": (feats.get(s) or {}).get("n_cards"),
             "is_kind_catalog": (feats.get(s) or {}).get("is_kind_catalog"),
@@ -635,6 +850,7 @@ def apply_to_candidates(psql, lit, cands, intent, question, today=None,
         }
         for s in reordered[:12]
     }
+    diag_out["answer_fit_v2_full"] = {s: feats.get(s) for s in reordered[:24]}
     cat, holder = dual_atom_pair(reordered, feats, intent_fit)
     if cat and holder and mk_clarify and not rank_intent and _dual_atom_clarify(intent_fit):
         clar = mk_clarify(cat, holder, {"answer_fit_v2_dual": [cat, holder]})

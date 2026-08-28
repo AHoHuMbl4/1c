@@ -114,6 +114,129 @@ finally:
     A.refcols_of = _old_ra
     A.aggregate_distinct_axis = _old_ada
 
+# --- K9-ф2: count+ось → defer clarify мер ---
+_old_kah2 = A.kind_axis_hits
+A.kind_axis_hits = lambda axes, word: (
+    ["Контрагент"] if word and axes else [])
+try:
+    t("count_defer_measure_clarify event+axis",
+      A.count_defer_measure_clarify(
+          {"want": "count", "action_class": "event", "kind": "клиенты",
+           "action_axis": "клиенты"},
+          "accumulationregister_x",
+          [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]))
+    t("count_defer no axis → False",
+      not A.count_defer_measure_clarify(
+          {"want": "count", "action_class": "event", "kind": "клиенты"},
+          "accumulationregister_x", []))
+    t("count_defer sum want → False",
+      not A.count_defer_measure_clarify(
+          {"want": "sum", "action_class": "event", "kind": "клиенты"},
+          "accumulationregister_x",
+          [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]))
+finally:
+    A.kind_axis_hits = _old_kah2
+
+# --- K9-ф3: event code pick (офлайн, без psql) ---
+_old_k6r = A.K6R
+_feats_f3 = {
+    "accumulationregister_sales": {
+        "prefix": "accumulationregister", "holds_kind_axis": True,
+        "n_with_nums": 10, "axis_fit": 2, "has_qty_measure": 1,
+        "has_money_measure": 1, "n_ref_axes": 4},
+    "accumulationregister_книгапокупок": {
+        "prefix": "accumulationregister", "holds_kind_axis": True,
+        "n_with_nums": 10, "axis_fit": 2, "has_qty_measure": 0,
+        "has_money_measure": 1, "n_ref_axes": 1},
+}
+class _K6Stub:
+    @staticmethod
+    def event_rank_pick(cands, feats, intent, question=""):
+        return _old_k6r.event_rank_pick(cands, feats, intent, question)
+    @staticmethod
+    def event_movement_pool(cands, feats, intent):
+        return _old_k6r.event_movement_pool(cands, feats, intent)
+A.K6R = _K6Stub
+_old_pe = A.pick_entity
+A.pick_entity = lambda *a, **k: (_ for _ in ()).throw(AssertionError("model called"))
+try:
+    _intent = {"want": "count", "action_class": "event", "kind": "клиенты",
+               "action_axis": "клиенты"}
+    _diag = {"answer_fit_v2_full": _feats_f3}
+    _out = A.try_event_code_entity_pick(
+        "сколько покупают", _intent,
+        ["accumulationregister_книгапокупок", "accumulationregister_sales"],
+        _diag, {}, 0.0, {}, "", [], {})
+    t("event_code_pick: leader without model",
+      _out and _out.get("picked") == ["accumulationregister_sales"])
+    t("event_code_pick: diag lock",
+      _diag.get("event_code_lock") == "accumulationregister_sales")
+finally:
+    A.pick_entity = _old_pe
+    A.K6R = _old_k6r
+
+# --- K9-ф4: distinct на event-пути ---
+_old_lac = A.live_axis_col_for_count
+A.live_axis_col_for_count = lambda intent, src, axes=None: "Контрагент"
+try:
+    t("count_defer_fork_outcomes event+axis",
+      A.count_defer_fork_outcomes(
+          {"want": "count", "action_class": "event", "kind": "клиенты",
+           "action_axis": "клиенты"},
+          "accumulationregister_x", []))
+    t("count_defer_fork_outcomes sum -> False",
+      not A.count_defer_fork_outcomes(
+          {"want": "sum", "action_class": "event", "kind": "торги"},
+          "accumulationregister_x", []))
+finally:
+    A.live_axis_col_for_count = _old_lac
+
+class _K6Stub2:
+    @staticmethod
+    def event_movement_pool(cands, feats, intent):
+        return []
+    @staticmethod
+    def event_rank_pick(cands, feats, intent, question=""):
+        return None, []
+    @staticmethod
+    def event_movement_any(cands):
+        return K6.event_movement_any(cands)
+A.K6R = _K6Stub2
+try:
+    _out2 = A.try_event_code_entity_pick(
+        "сколько наторговали", {"want": "sum", "action_class": "event"},
+        ["accumulationregister_sales"], {"answer_fit_v2_full": {}}, {}, 0.0,
+        {}, "", [], {})
+    t("event_code_pick: empty pool + movement -> None", _out2 is None)
+finally:
+    A.K6R = _old_k6r
+
+_old_kah3 = A.kind_axis_hits
+_old_ada3 = A.aggregate_distinct_axis
+_old_ro3 = A.refcols_of
+A.kind_axis_hits = lambda axes, word: ["Контрагент"] if word else []
+A.refcols_of = lambda src: [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]
+A.aggregate_distinct_axis = lambda src, match, preds, col: {
+    "count": 141, "sum": None, "src": src, "form": "distinct_axis",
+    "axis": col, "grain": "axis"}
+try:
+    _agg = A.aggregate_distinct_axis(
+        "accumulationregister_реализациятмц", "", ["doc_date >= '2026-08-01'"],
+        "Контрагент")
+    t("distinct agg has axis field", _agg.get("axis") == "Контрагент"
+      and _agg.get("form") == "distinct_axis")
+    _dd = {}
+    t("fork_defer_distinct sets diag",
+      A._fork_defer_distinct(
+          {"want": "count", "action_class": "event", "kind": "клиенты",
+           "action_axis": "клиенты"},
+          "accumulationregister_реализациятмц", _dd)
+      and _dd.get("fork_outcome_deferred_distinct"))
+finally:
+    A.kind_axis_hits = _old_kah3
+    A.aggregate_distinct_axis = _old_ada3
+    A.refcols_of = _old_ro3
+
 print("---")
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:

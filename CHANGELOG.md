@@ -42,6 +42,25 @@ solr_build **37/0**, systemd lock **51/51**. Прогоны оркестрато
 `count_psql_per_tick.sh` (колонка «факт»). Доки: read_json; MERGE INTO;
 VACUUM REFRESH_*; ai_embed; struct_pack; solr_synonyms.
 
+## 2026-08-28 — К9 фаза 4: distinct на event-пути, снятие регресса no_data [код]
+
+**[код]** `serene_ask`: `count_defer_fork_outcomes` / `_fork_defer_
+distinct` — count+живая ось собирает DISTINCT-атом до исхода B fork
+(строки регистра не выдают себя за «сколько клиентов»); пустой
+event-пул при живых движениях → fallback прежнего пути, не no_data
+(п. 21); подпись оси в distinct-ответе. `entity_rank_v2`:
+`_event_axis_struct_tier` ослаблен (`n_ref_axes≥1` без holds_kind_axis
+не ломает пул), `event_movement_any`.
+
+**[замер]** Замки: test_action_class **23/0** (+5), test_k6_rank_v2
+**10/0** (+2), sales_rank 51/0, leader_path 30/0, entity_form 47/0,
+compose 92/0. bench v2_lead **20/23** PASS, регресс 0 (оркестратор,
+пароль окна). AB_PROBE `:8096` **8/8 0err** — регресс «наторговали в
+воскресенье» снят (answer 8,2 с). Пробы: «покупателей за месяц» →
+distinct-число 76 ✓ (подпись оси — ф5); «реально покупают» → clarify
+двух ОСЕВЫХ движений (не справочника — К6-двойка сузилась до исхода
+A/B, доводка ф5); ранги/«всего клиентов» — без изменений ✓.
+
 ## 2026-08-28 — К9 фаза 3: event-путь кодом + снятие LIKE снайпера [код]
 
 **[код]** `entity_rank_v2`: `_meas_profile_from_dict` — профиль qty/money из

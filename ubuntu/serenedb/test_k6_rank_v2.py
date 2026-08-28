@@ -66,6 +66,61 @@ _k_acct = K6.rank_key_v2("accountingregister_y", _feat_acct,
                          {"want": "count"}, "count", 0)
 t("offline: q_meta info < acct giant", _k_info < _k_acct, (_k_info, _k_acct))
 
+# K9-ф2: осевой регистр с qty-мерой выше money-only при равной лексике/axis_fit
+_feat_axis_qty = {"prefix": "accumulationregister", "cls": "business",
+                  "n_dated": 100, "n_with_nums": 50, "axis_fit": 2,
+                  "holds_kind_axis": True, "has_qty_measure": 1,
+                  "has_money_measure": 1}
+_feat_axis_cash = {"prefix": "accumulationregister", "cls": "business",
+                   "n_dated": 100, "n_with_nums": 50, "axis_fit": 2,
+                   "holds_kind_axis": True, "has_qty_measure": 0,
+                   "has_money_measure": 1}
+_intent_ev = {"want": "count", "action_class": "event", "kind": "клиенты"}
+_k_qty = K6.rank_key_v2("accumulationregister_sales", _feat_axis_qty,
+                        _intent_ev, "distinct", 5)
+_k_cash = K6.rank_key_v2("accumulationregister_cash", _feat_axis_cash,
+                         _intent_ev, "distinct", 0)
+t("offline: axis+qty register < axis+cash key", _k_qty < _k_cash, (_k_qty, _k_cash))
+
+# K9-ф3: event-путь — тесты axis_struct без LIKE, code pick, pool filter
+_feat_nds = {"prefix": "accumulationregister", "cls": "business",
+             "n_dated": 100, "n_with_nums": 50, "axis_fit": 2,
+             "holds_kind_axis": True, "has_qty_measure": 0,
+             "has_money_measure": 0, "n_ref_axes": 1}
+t("offline: axis_struct noncanon sales = 2",
+  K6.axis_struct_tier("accumulationregister_книгапокупок", _feat_nds) == 2)
+
+_cands_ev = ["accumulationregister_книгапокупок", "accumulationregister_реализациятмц"]
+_feats_ev = {
+    "accumulationregister_книгапокупок": dict(_feat_nds),
+    "accumulationregister_реализациятмц": _feat_axis_qty,
+}
+_pool = K6.event_movement_pool(_cands_ev, _feats_ev, _intent_ev)
+t("offline: event pool drops struct=2 NDS book",
+  "accumulationregister_книгапокупок" not in _pool
+  and "accumulationregister_реализациятмц" in _pool, _pool)
+_leader, _tied = K6.event_rank_pick(_cands_ev, _feats_ev, _intent_ev)
+t("offline: event_rank_pick single leader",
+  _leader == "accumulationregister_реализациятмц" and not _tied)
+
+_feat_refs = {"prefix": "accumulationregister", "cls": "business",
+              "n_dated": 100, "n_with_nums": 50, "axis_fit": 1,
+              "holds_kind_axis": False, "has_qty_measure": 1,
+              "has_money_measure": 1, "n_ref_axes": 4}
+_pool_refs = K6.event_movement_pool(
+    ["accumulationregister_x"], {"accumulationregister_x": _feat_refs}, _intent_ev)
+t("offline: event pool distinct via n_ref_axes",
+  _pool_refs == ["accumulationregister_x"], _pool_refs)
+t("offline: event_movement_any",
+  K6.event_movement_any(["catalog_a", "accumulationregister_b"]))
+
+# measure_choice path (no SQL LIKE on keys)
+_names = ["Количество", "Всего"]
+_ab = {"Количество": "количество, штук"}
+got, _, how = K6._measure_choice(_names, "количество", _ab)
+t("offline: meas profile via alias dict",
+  got == "Количество" and how in ("alias", "substring", "exact"))
+
 dsn = os.environ.get("SERENEDB_DSN_RO") or os.environ.get("SERENEDB_DSN")
 if dsn:
     bench = os.path.join(ROOT, "work/k6-rank-v2/bench.py")
