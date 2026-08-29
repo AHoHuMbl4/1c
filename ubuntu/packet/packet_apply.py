@@ -486,22 +486,42 @@ def _check_contour_arrived(base_id: str) -> None:
             " …" if len(gap) > 10 else ""))
 
 
+def _ci_col(mart_cols: list[str], logical: str) -> str | None:
+    """Колонка витрины по логическому имени (Ref_Key/ref_key — одно и то же)."""
+    want = logical.lower()
+    for c in mart_cols:
+        if c.lower() == want:
+            return c
+    return None
+
+
 def _check_mix_versions(table: str) -> None:
     # Инвариант К3 (контракт §9): одна версия на Ref_Key, запрос как у
     # poc_load_entity.load_entity_delta. Нарушение — карантин, дельту не льём.
-    n = _psql_scalar('SELECT count(*) FROM (SELECT "Ref_Key" FROM "%s" '
-                     'GROUP BY 1 HAVING count(DISTINCT "DataVersion")>1)' % table)
+    mart_cols = _psql_col(
+        'SELECT column_name FROM duckdb_columns() WHERE table_name=%s '
+        "AND database_name = current_database() "
+        'ORDER BY column_index' % _lit(table))
+    ref = _ci_col(mart_cols, "Ref_Key")
+    dv = _ci_col(mart_cols, "DataVersion")
+    if not ref or not dv:
+        return
+    n = _psql_scalar('SELECT count(*) FROM (SELECT "%s" FROM "%s" '
+                     'GROUP BY 1 HAVING count(DISTINCT "%s")>1)' % (ref, table, dv))
     if n and int(n) > 0:
         raise Quarantine("mix_versions")
 
 
 def _delta_delete_clause(table: str, mart_cols: list) -> str:
     """DELETE дельты: Ref_Key если есть, иначе Recorder+LineNumber регистра."""
-    nat = [c for c in ("Recorder", "LineNumber", "Recorder_Type") if c in mart_cols]
-    if "Ref_Key" in mart_cols:
-        return ('DELETE FROM "%s" WHERE "Ref_Key" IN '
-                '(SELECT "Ref_Key" FROM "d_%s");\n' % (table, table))
-    if "Recorder" in nat and "LineNumber" in nat:
+    ref = _ci_col(mart_cols, "Ref_Key")
+    if ref:
+        return ('DELETE FROM "%s" WHERE "%s" IN '
+                '(SELECT "%s" FROM "d_%s");\n' % (table, ref, ref, table))
+    nat = [c for c in (_ci_col(mart_cols, n) for n in
+                       ("Recorder", "LineNumber", "Recorder_Type")) if c]
+    rec, ln = _ci_col(mart_cols, "Recorder"), _ci_col(mart_cols, "LineNumber")
+    if rec and ln:
         eqs = " AND ".join(
             '"%s"."%s" IS NOT DISTINCT FROM "d_%s"."%s"' % (table, c, table, c)
             for c in nat)
@@ -523,14 +543,18 @@ def _delta_sql(table: str, src: str, header: list[str]) -> str:
         'ORDER BY column_index' % _lit(table))]
     if not mart_cols:
         raise Quarantine("delta_without_table")
-    extra = [c for c in header if c not in mart_cols]
+    mart_lower = {c.lower() for c in mart_cols}
+    header_by_lower = {h.lower(): h for h in header}
+    extra = [c for c in header if c.lower() not in mart_lower]
     if extra:
         # Поле появилось в 1С, а полная перезаливка сущности ещё не была: значения
         # этих колонок до ближайшей full_entity не попадают (поведение эталона то же) —
         # но молчать о несовпадении схем нельзя (п. 13).
         _log("delta %s: колонки чанка вне витрины (ждут full_entity): %s"
              % (table, ",".join(extra)))
-    sel = ", ".join('"%s"' % c if c in header else "''" for c in mart_cols)
+    sel = ", ".join(
+        ('"%s"' % header_by_lower[c.lower()]) if c.lower() in header_by_lower else "''"
+        for c in mart_cols)
     cols = ", ".join('"%s"' % c for c in mart_cols)
     # 🔴 ЧАНК ДЕЛЬТЫ ДЕДУПЛИЦИРУЕТСЯ ПО ПОЛНОЙ СТРОКЕ (DISTINCT), как и полная
     # загрузка с 14.08 — НЕ по Ref_Key. Агент шлёт дельту документа развёрнутой:
@@ -546,8 +570,9 @@ def _delta_sql(table: str, src: str, header: list[str]) -> str:
     # Регистр без Ref_Key: естественный ключ строки — Recorder+LineNumber
     # (+ Recorder_Type, если колонка есть). DELETE по отсутствующему Ref_Key
     # на 26.07.3 падает; full_entity этот путь не берёт, дельта регистра — да.
-    if "Ref_Key" not in mart_cols:
-        nat = [c for c in ("Recorder", "LineNumber", "Recorder_Type") if c in mart_cols]
+    if not _ci_col(mart_cols, "Ref_Key"):
+        nat = [c for c in (_ci_col(mart_cols, n) for n in
+                           ("Recorder", "LineNumber", "Recorder_Type")) if c]
         _log("delta %s: нет Ref_Key, слияние по %s" % (table, nat))
     delete_sql = _delta_delete_clause(table, mart_cols)
     return ('CREATE OR REPLACE TEMP TABLE "d_%s" AS '

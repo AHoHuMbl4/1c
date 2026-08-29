@@ -1,3 +1,13 @@
+## 2026-08-29 — coverage: перепись объектов только при физической Ref_Key + packet _ci_col [код] [замер]
+
+**[замер okna до]** такт STOP `coverage_build.sql:51` — `Referenced column "Ref_Key"
+not found`, candidate `Документ`: metadata `key_cols=['Ref_Key']`, в витрине колонки
+нет. **[код]** `coverage_build.sql`: INSERT `cov_mart_obj` через `duckdb_columns()`
+(case-insensitive ref_key), ветка `перепись объектов: нет колонки ключа`;
+`packet_apply.py`: `_ci_col` для Ref_Key/DataVersion/Recorder (регистронезависимо).
+**[замер замки]** `test_delta_register_key` **6/0**, `test_coverage_key_col` **8/0**.
+Доки: sql/functions/duckdb_table_functions#duckdb_columns. Числа: замки 14/0.
+
 ## 2026-08-29 — K9 ось места + live canon: stock-scoped kind, cost-register rank [код] [замер]
 
 **[замер :8092 до]** контрагенты → clarify меры книгапокупок (`stock_canon_locked`);

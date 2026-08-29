@@ -23,6 +23,10 @@ s = A._delta_delete_clause("document_x", ["Ref_Key", "DataVersion", "LineNumber"
 t("документ: DELETE по Ref_Key",
   'WHERE "Ref_Key" IN' in s and "Recorder" not in s, s)
 
+s = A._delta_delete_clause("document_x", ["ref_key", "dataversion", "linenumber"])
+t("документ lower: DELETE по ref_key",
+  'WHERE "ref_key" IN' in s and "Recorder" not in s, s)
+
 s = A._delta_delete_clause(
     "accumulationregister_x",
     ["Recorder", "Recorder_Type", "Period", "LineNumber", "Всего"])

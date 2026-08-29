@@ -23,11 +23,14 @@ CREATE OR REPLACE TABLE cov_mart (tbl VARCHAR, n_rows BIGINT);
 -- в витрине в несколько строк, а в корпусе объект — одна строка. Без числа объектов
 -- сравнение «корпус меньше витрины» ложно срабатывало бы навсегда, и его пришлось бы
 -- отключить — то есть перестать замечать настоящую недостачу (п. 13).
--- Кому считать, решает ОБЪЯВЛЕННЫЙ КЛЮЧ из `tmp3_key`, а не список имён.
+-- Кому считать объектами, решает ОБЪЯВЛЕННЫЙ КЛЮЧ из `tmp3_key`, но перепись
+-- объектов идёт только если ФИЗИЧЕСКАЯ колонка ключа есть в витрине — иначе
+-- рассинхрон метаданных и таблицы (Ref_Key в $metadata, «Документ» в витрине)
+-- роняет такт или даёт ложный n_obj. Имя берётся из `duckdb_columns()` (case-
+-- insensitive: Ref_Key/ref_key), не из списка имён конфигурации.
+-- Доки: sql/functions/duckdb_table_functions#duckdb_columns
 CREATE OR REPLACE TABLE cov_mart_obj (tbl VARCHAR, n_obj BIGINT);
 PREPARE p_cov AS INSERT INTO cov_mart SELECT $1::VARCHAR, count(*) FROM query_table($1);
-PREPARE p_cov_obj AS INSERT INTO cov_mart_obj
-       SELECT $1::VARCHAR, count(DISTINCT "Ref_Key") FROM query_table($1);
 SELECT 'EXECUTE p_cov(' || quote_literal(table_name) || ');'
 FROM duckdb_tables()
 -- 🔴 ИМЯ БАЗЫ НЕ ЗАШИТО. Прежде здесь стояло `database_name = 'postgres'` — имя нашей
@@ -38,12 +41,22 @@ WHERE database_name = current_database()
   AND EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(table_name))
 \gexec
 
-SELECT 'EXECUTE p_cov_obj(' || quote_literal(table_name) || ');'
+SELECT 'INSERT INTO cov_mart_obj SELECT '
+       || quote_literal(table_name) || ', count(DISTINCT "'
+       || (SELECT dc.column_name FROM duckdb_columns() dc
+           WHERE dc.database_name = current_database()
+             AND dc.table_name = duckdb_tables.table_name
+             AND lower(dc.column_name) = 'ref_key'
+           LIMIT 1) || '") FROM query_table(' || quote_literal(table_name) || ');'
 FROM duckdb_tables()
 WHERE database_name = current_database()
   AND EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(table_name))
   AND EXISTS (SELECT 1 FROM tmp3_key k
               WHERE k.entity = lower(table_name) AND k.key_cols = ['Ref_Key'])
+  AND EXISTS (SELECT 1 FROM duckdb_columns() dc
+              WHERE dc.database_name = current_database()
+                AND dc.table_name = duckdb_tables.table_name
+                AND lower(dc.column_name) = 'ref_key')
 \gexec
 
 -- ============ 2. ЦЕПОЧКА ПО КАЖДОЙ СУЩНОСТИ ============
@@ -69,7 +82,13 @@ WITH ent AS (
  mart AS (SELECT lower(m.tbl) AS ent, m.n_rows,
                  -- «Сколько объектов витрина описывает». У неразворачиваемых сущностей
                  -- объект и есть строка, поэтому по умолчанию — число строк.
-                 coalesce(o.n_obj, m.n_rows) AS n_obj
+                 coalesce(o.n_obj, m.n_rows) AS n_obj,
+                 CASE WHEN NOT EXISTS (SELECT 1 FROM tmp3_key k
+                                       WHERE k.entity = lower(m.tbl)
+                                         AND k.key_cols = ['Ref_Key'])
+                      THEN true
+                      WHEN o.n_obj IS NOT NULL THEN true
+                      ELSE false END AS obj_recount_ok
           FROM cov_mart m LEFT JOIN cov_mart_obj o ON o.tbl = m.tbl),
  corp AS (SELECT src_table AS ent, count(*) AS n,
                  count(*) FILTER (WHERE emb IS NOT NULL) AS n_emb
@@ -93,6 +112,11 @@ SELECT ent AS entity,
          WHEN coalesce(e.in_1c, 0) = 0           THEN 'в 1С нет строк'
          WHEN m.n_rows IS NULL                   THEN 'не загрузилось из 1С'
          WHEN m.n_rows = 0                       THEN 'выгрузка пуста'
+         -- 🔴 МЕТАДАННЫЕ И ВИТРИНА РАЗОШЛИСЬ. В $metadata ключ Ref_Key, а физической
+         -- колонки в таблице нет — перепись объектов не выполнялась; подставлять
+         -- число строк было бы ложью (п. 13). [замер 29.08 okna] document_* с «Документ».
+         WHEN m.n_rows > 0 AND NOT m.obj_recount_ok
+                                                 THEN 'перепись объектов: нет колонки ключа'
          WHEN coalesce(c.n, 0) = 0               THEN 'не собралось в корпус'
          -- 🔴 КОРПУС МЕНЬШЕ ВИТРИНЫ БЫВАЕТ ЗАКОННО, НО ПРОВЕРКА НЕ ОТКЛЮЧАЕТСЯ. У
          -- ссылочного объекта табличная часть развёрнута в витрине в несколько строк, а в
