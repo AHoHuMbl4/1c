@@ -130,6 +130,21 @@ _cl_opts = A._fork_clarify_opts(_ord_cl, {}, {}, {}, "", [], {},
 t("clarify opts: подпись оси меры (сумм)",
   any("сумм" in (o.get("label") or "").lower() for o in _cl_opts))
 
+# complement atom (offline, K6)
+_atom_c = A._fork_atom_of(
+    {"count": 500, "folders": 2, "sums": {}, "form": "complement",
+     "complement_axis_label": "Product"},
+    ["catalog_x"], want="count")
+t("complement fork atom computed",
+  _atom_c.get("form") == "complement"
+  and _atom_c.get("exact_value") == 500
+  and _atom_c.get("proof_status") == A.PROOF_COMPUTED)
+t("complement suppresses movement distinct misread",
+  A._fork_atom_of(
+      {"count": 10, "folders": 0, "sums": {},
+       "_complement_positive_suppressed": True},
+      ["accumulationregister_x"], want="count").get("proof_status") == A.PROOF_NA)
+
 
 try:
     check_pair("document_приобретениетоваровуслуг", "сумма")

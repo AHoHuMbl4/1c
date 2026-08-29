@@ -175,8 +175,30 @@ def _fork_applicable_classes(ordered):
             if (it.get("atom") or {}).get("proof_status") != PROOF_NA]
 
 
+def _fork_complement_outcome_block(intent, question, applicable):
+    """Отрицание без complement-атома: позитивное число — не ответ (п.12/13)."""
+    if not intent_fact_complement(intent, question):
+        return None
+    comp = [it for it in (applicable or [])
+            if ((it.get("atom") or {}).get("form") or "").lower() == "complement"
+            and (it.get("atom") or {}).get("proof_status") == PROOF_COMPUTED
+            and (it.get("atom") or {}).get("exact_value") is not None]
+    if comp:
+        return None
+    wrong = [it for it in (applicable or [])
+             if (it.get("atom") or {}).get("proof_status") == PROOF_COMPUTED
+             and (it.get("atom") or {}).get("exact_value") is not None]
+    if not wrong:
+        return None
+    return "C", {
+        "reason": "complement_unresolved",
+        "classes": len(applicable or []),
+        "positive_misread": [it.get("srcs") for it in wrong],
+    }
+
+
 def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=None,
-                         rel_by_src=None, today=None):
+                         rel_by_src=None, today=None, intent=None, question=""):
     """Исход A/B/C/unique/empty/unavailable по классам (план §2). Чистая логика.
 
     A — один класс, src несколько, все ячейки посчитаны.
@@ -202,6 +224,9 @@ def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=No
                      "classes": len(applicable),
                      "na_classes": len(ordered) - len(applicable),
                      "uncounted": [it["srcs"] for it in uncounted]}
+    _comp = _fork_complement_outcome_block(intent, question, applicable)
+    if _comp:
+        return _comp
     if len(applicable) == 1:
         it = applicable[0]
         if len(it["srcs"]) == 1:
@@ -674,6 +699,9 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
         text = (text + ("\n" if text else "") + note).strip()
     elif c_why == "unsigned_class":
         note = "есть ветка без проверенной подписи"
+        text = (text + ("\n" if text else "") + note).strip()
+    elif c_why == "complement_unresolved":
+        note = "есть прочтение без формы дополнения"
         text = (text + ("\n" if text else "") + note).strip()
     return {"partial": partial or None, "kind": "clarify", "text": text or "?",
             "options": opts, "sources": [o["label"] for o in opts],

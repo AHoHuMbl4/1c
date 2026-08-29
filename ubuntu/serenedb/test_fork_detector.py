@@ -232,6 +232,83 @@ _ord_ax = [
 t("fork detector: sum|count classes → measure axis",
   A._fork_clarify_axis_kind(_ord_ax, "Сколько мы закупили товаров?") == "measure")
 
+# ── complement / отрицание (K6, C4) ───────────────────────────────────────────
+_q_pos = "сколько позиций продавалось в этом месяце"
+_q_neg = "сколько позиций совсем не продаётся в этом месяце"
+_int_pos = {"want": "count", "action_class": "event", "kind": "positions",
+            "period": {"from": "2026-08-01", "to": "2026-08-28"}}
+_int_neg = dict(_int_pos)
+t("complement: negation detected structurally",
+  A.intent_fact_complement(_int_neg, _q_neg) is True)
+t("complement: positive event not complement",
+  A.intent_fact_complement(_int_pos, _q_pos) is False)
+
+_row_dist_wrong = {"count": 43, "folders": 0, "sums": {},
+                   "distinct_axis": "Counterparty",
+                   "distinct_axis_label": "Counterparties"}
+_rows_neg = {
+    "accumulationregister_sales": _row_dist_wrong,
+    "catalog_product": {"count": 2000, "folders": 0, "sums": {}},
+}
+_rel_neg = {"accumulationregister_sales": [], "catalog_product": []}
+_enr_neg = A._fork_enrich_event_rows(
+    _int_neg, "", ["doc_date >= '2026-08-01'"], _rows_neg, _rel_neg, question=_q_neg)
+t("complement enrich: no distinct_axis on movement",
+  "distinct_axis" not in (_enr_neg.get("accumulationregister_sales") or {}))
+t("complement enrich: movement suppressed",
+  (_enr_neg.get("accumulationregister_sales") or {}).get(
+      "_complement_positive_suppressed") is True)
+
+_old_flag = A.ASK_ENTITY_FORM
+_old_efc = A.entity_form_compute
+_old_efs = A.entity_form_structs
+_old_appl = A.entity_form_applicable
+_old_exp = A.entity_form_expand_pool
+A.ASK_ENTITY_FORM = True
+A.entity_form_expand_pool = lambda p, intent=None: list(p or [])
+A.entity_form_applicable = lambda intent, pool: True
+A.entity_form_structs = lambda intent, pool, today=None: [(
+    "complement", {
+        "catalog_src": "catalog_product",
+        "sales_src": "accumulationregister_sales",
+        "axis": "Product",
+        "period": _int_neg["period"],
+    })]
+A.entity_form_compute = lambda form, meta, match="": A.entity_form_atom_complement(
+    catalog_src=meta["catalog_src"], sales_src=meta["sales_src"],
+    axis=meta["axis"], catalog_n=2000, distinct_n=109, period=meta.get("period"))
+try:
+    _enr_comp = A._fork_enrich_event_rows(
+        _int_neg, "", ["doc_date >= '2026-08-01'"], _rows_neg, _rel_neg,
+        question=_q_neg)
+    t("complement enrich: catalog row form=complement",
+      (_enr_comp.get("catalog_product") or {}).get("form") == "complement"
+      and (_enr_comp.get("catalog_product") or {}).get("count") == 1891.0)
+    _cls_comp = A.fork_classes(_enr_comp, "", want="count", rel_by_src=_rel_neg)
+    _out_comp, _pay_comp = A.resolve_fork_outcome(
+        _cls_comp, _enr_comp, want="count", rel_by_src=_rel_neg,
+        intent=_int_neg, question=_q_neg)
+    t("complement resolve: unique/A not misread B",
+      _out_comp in ("unique", "A")
+      and ((_pay_comp.get("class") or {}).get("atom") or {}).get("form")
+          == "complement")
+finally:
+    A.ASK_ENTITY_FORM = _old_flag
+    A.entity_form_compute = _old_efc
+    A.entity_form_structs = _old_efs
+    A.entity_form_applicable = _old_appl
+    A.entity_form_expand_pool = _old_exp
+
+_cls_mis = A.fork_classes(
+    {"accumulationregister_x": _row_dist_wrong}, want="count",
+    rel_by_src={"accumulationregister_x": []})
+_out_mis, _pay_mis = A.resolve_fork_outcome(
+    _cls_mis, {"accumulationregister_x": _row_dist_wrong},
+    want="count", rel_by_src={"accumulationregister_x": []},
+    intent=_int_neg, question=_q_neg)
+t("complement guard: distinct-only → C not unique",
+  _out_mis == "C" and _pay_mis.get("reason") == "complement_unresolved")
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL))

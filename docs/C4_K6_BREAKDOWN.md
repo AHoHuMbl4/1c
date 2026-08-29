@@ -297,3 +297,32 @@ SELECT
 4. Починка судьбы: **включить и дожать `ASK_ENTITY_FORM`** (уже написанный
    `distinct_axis`/`complement`), при необходимости — expand_pool / гейт
    pre_entity; словарь С2/С3 — смежный блокер ранга, не замена формы F.
+
+---
+
+## 7. Класс complement (отрицание) — код fork, 29.08.2026
+
+**Живой дефект (до правки):** «сколько позиций совсем не продаётся в этом месяце?»
+на `:8091`/`:8092` → **43 · Контрагенты** (исход B, `distinct_axis` по движению).
+Эталон **1891** (anti-join каталог−продажи) или clarify C.
+
+**Корень:** `_event_distinct_fork_rows` в пути детектора подменял complement
+позитивным `COUNT(DISTINCT ось)` на регистре движения; отрицание из вопроса
+не доходило до исхода; ось kind «позиций» могла схлопнуться с чужой ref-осью.
+
+**Починка (зона fork, `[код]`):**
+
+| место | что |
+|---|---|
+| `z09_fork_detector.py` | `intent_fact_complement` — отрицание по структурным частицам (`не`/`нет`/`без`/`not`…), не словарь базы; `_fork_enrich_event_rows` → complement или distinct; `_complement_fork_rows` через `entity_form_compute(complement)` при `ASK_ENTITY_FORM`; подавление `distinct_axis` на движении |
+| `z13_fork_outcomes.py` | `_fork_complement_outcome_block`: без complement-атома позитивное число → исход **C** (`complement_unresolved`), не A/B |
+
+**Исход на complement-вопросах после правки:**
+
+- при `ASK_ENTITY_FORM=1` и структуре catalog+sales+period — **answer/unique** с атомом `form=complement` (anti-join в движке);
+- иначе — **clarify C** (`complement_unresolved`), не позитивное distinct.
+
+**Замки оффлайн:** `test_fork_detector.py` **51**, `test_fork_outcomes.py` **37**,
+новые кейсы complement в `test_fork_atom_aggregate.py`; смежные `test_k4_clarify_vs_nodata.py` **27**, `test_intent.py` **150**.
+
+**Живая приёмка okna (1891 на :8092 с `ASK_ENTITY_FORM=1`) — следующий шаг оркестратора** (пересборка корпуса + стейджинг, см. activeContext §K3).

@@ -6,6 +6,96 @@ from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
 
+# Отрицание при глаголе факта — структурные частицы, не словарь базы (K6/C4).
+_FACT_NEG_CYR = re.compile(
+    r"(?:^|[\s,.;:!?«\"(\[])(?:не|нет|без|ни)\s+\S", re.UNICODE)
+_FACT_NEG_LAT = re.compile(
+    r"(?:^|\s)(?:not|no|without)\s+\S", re.IGNORECASE)
+
+
+def _question_has_fact_negation(question):
+    """Отрицание у глагола факта в тексте вопроса — морфемы, не фразы базы."""
+    q = (question or "").strip()
+    if not q:
+        return False
+    if _FACT_NEG_CYR.search(q):
+        return True
+    return bool(_FACT_NEG_LAT.search(q))
+
+
+def intent_fact_complement(intent, question=""):
+    """Count-вопрос с отрицанием факта → форма complement, не distinct_axis."""
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    ac = (intent.get("action_class") or "none").strip().lower()
+    if ac == "object":
+        return False
+    return _question_has_fact_negation(question)
+
+
+def _strip_distinct_on_movement(rows):
+    """Pозитивное DISTINCT на движении при complement-вопросе — не атом ответа."""
+    out = {}
+    for src, d in (rows or {}).items():
+        rd = dict(d or {})
+        pre = str(src).split("_", 1)[0].lower()
+        if pre in ("document", "accumulationregister"):
+            rd.pop("distinct_axis", None)
+            rd.pop("distinct_axis_label", None)
+            rd["_complement_positive_suppressed"] = True
+        out[src] = rd
+    return out
+
+
+def _complement_fork_rows(intent, match, preds, rows, rel_by_src,
+                          question="", today=None):
+    """|catalog| − DISTINCT(sales); без подмены complement → distinct_axis."""
+    out = _strip_distinct_on_movement(rows)
+    if not intent_fact_complement(intent, question):
+        return out
+    pool = list((rel_by_src or {}).keys())
+    if not pool:
+        return out
+    if ASK_ENTITY_FORM:
+        pool = entity_form_expand_pool(pool, intent)
+        if not entity_form_applicable(intent, pool):
+            return out
+        meta = None
+        for form, m in entity_form_structs(intent, pool, today=today):
+            if form == "complement":
+                meta = m
+                break
+        if not meta:
+            return out
+        atom = entity_form_compute("complement", meta, match=match)
+        if not atom or atom.get("exact_value") is None:
+            return out
+        cat = meta.get("catalog_src") or ""
+        if not cat:
+            return out
+        ax_lab = (atom.get("axis") or meta.get("axis") or "").strip()
+        base = dict(out.get(cat) or {"count": 0, "folders": 0, "sums": {}})
+        base["count"] = atom.get("exact_value")
+        base["form"] = "complement"
+        base["complement_axis"] = meta.get("axis")
+        base["complement_axis_label"] = ax_lab
+        base.pop("_complement_positive_suppressed", None)
+        out[cat] = base
+    return out
+
+
+def _fork_enrich_event_rows(intent, match, preds, rows, rel_by_src,
+                            question="", today=None):
+    """event+count: complement (отрицание) или distinct_axis (позитив)."""
+    if intent_fact_complement(intent, question):
+        return _complement_fork_rows(
+            intent, match, preds, rows, rel_by_src,
+            question=question, today=today)
+    return _event_distinct_fork_rows(intent, match, preds, rows, rel_by_src)
+
+
 def _measures_by_src(cands):
     """{сущность: [величины]} для всего круга — одним запросом, как `measures_of`.
 
@@ -304,7 +394,7 @@ def fork_classes_windowed(merged_rows, period_by_src, measure_word="", want=None
 def fork_detector_scan(match, preds, intent, today, rel_by_src,
                          period_from_prior=False, measure_word="", want=None,
                          day_basis_prefer=None, amount_basis_prefer=None,
-                         trusted=None):
+                         trusted=None, question=""):
     """Один или несколько readings → rows + classes + cells для diag."""
     readings = period_readings(intent, today, period_from_prior=period_from_prior)
     prefer = day_basis_prefer
@@ -334,7 +424,9 @@ def fork_detector_scan(match, preds, intent, today, rel_by_src,
                 rows.update(fork_scan(match, [], cat_rel))
         else:
             rows = fork_scan(match, use_preds, rel_by_src)
-        rows = _event_distinct_fork_rows(intent, match, use_preds, rows, rel_by_src)
+        rows = _fork_enrich_event_rows(
+            intent, match, use_preds, rows, rel_by_src,
+            question=question, today=today)
         pmeta = {}
         if pr.get("from") or pr.get("to"):
             for s in rows:
@@ -344,7 +436,9 @@ def fork_detector_scan(match, preds, intent, today, rel_by_src,
         return rows, cls, readings, []
     cells, merged, pby = fork_scan_readings(match, readings, rel_by_src)
     rows = {s: merged[(s, w)] for (s, w) in merged}
-    rows = _event_distinct_fork_rows(intent, match, preds, rows, rel_by_src)
+    rows = _fork_enrich_event_rows(
+        intent, match, preds, rows, rel_by_src,
+        question=question, today=today)
     merged_dist = {(s, w): rows[s] for (s, w) in merged if s in rows}
     cls = fork_classes_windowed(merged_dist, pby, measure_word, want=want,
                                   rel_by_src=rel_by_src)
@@ -781,6 +875,23 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
             operation="sum", exact_value=None, measure_id=None, measure_label=None,
             excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
             proof_status=PROOF_NA)
+    if d0.get("_complement_positive_suppressed"):
+        return build_answer_atom(
+            operation="count", exact_value=None, measure_id=None, measure_label=None,
+            excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
+            proof_status=PROOF_NA)
+    if w == "count" and (d0.get("form") or "").lower() == "complement":
+        exact = d0.get("count")
+        ax_lab = ((d0.get("complement_axis_label") or d0.get("complement_axis")
+                   or "").strip())
+        return build_answer_atom(
+            operation="count", exact_value=exact, measure_id=None,
+            measure_label=None, axis=ax_lab or None, form="complement",
+            grain="axis",
+            excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
+            proof_status=(PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED),
+            period=period,
+            interpretation_id=(period or {}).get("interpretation_id"))
     if w == "count" and d0.get("distinct_axis"):
         exact = d0.get("count")
         ax_lab = (d0.get("distinct_axis_label") or "").strip()

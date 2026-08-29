@@ -308,6 +308,27 @@ _popts = A._fork_clarify_opts(_ord_place,
 t("clarify place: needle склад",
   all("склад" in (o.get("label") or "").lower() for o in _popts))
 
+# ── complement guard (K6/C4) ──────────────────────────────────────────────────
+_row_dist = {"count": 43, "folders": 0, "sums": {},
+             "distinct_axis": "AxisX", "distinct_axis_label": "Wrong axis"}
+_int_neg = {"want": "count", "action_class": "event", "kind": "items",
+            "period": {"from": "2026-08-01", "to": "2026-08-28"}}
+_q_neg = "how many items were not sold this month"
+_cls_dist = A.fork_classes(
+    {"reg_a": _row_dist}, want="count", rel_by_src={"reg_a": []})
+out_c_comp, pay_c_comp = A.resolve_fork_outcome(
+    _cls_dist, {"reg_a": _row_dist}, want="count", rel_by_src={"reg_a": []},
+    intent=_int_neg, question=_q_neg)
+t("complement guard blocks positive distinct",
+  out_c_comp == "C" and pay_c_comp.get("reason") == "complement_unresolved")
+
+_atom_comp = A._fork_atom_of(
+    {"count": 1891, "folders": 0, "sums": {}, "form": "complement",
+     "complement_axis_label": "Items"},
+    ["catalog_a"], want="count")
+t("complement atom form preserved",
+  _atom_comp.get("form") == "complement"
+  and _atom_comp.get("exact_value") == 1891)
 
 print()
 if FAIL:
