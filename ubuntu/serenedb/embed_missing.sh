@@ -110,10 +110,13 @@ run_sql_round() {
   }
   rc=$?
   restore_threads
-  n_err=$(grep -cE '^(ERROR|FATAL|ОШИБКА)' "$errf" 2>/dev/null || true)
+  # psql в режиме -f печатает ошибки с префиксом «psql:<файл>:<строка>: ERROR:» —
+  # без необязательной группы префикса счётчик не видел ни одного отказа
+  # [замер 29.08: HTTP 500 эмбеддера прошёл раунд молча, «не сдвинулось» без причины]
+  n_err=$(grep -cE '^(psql:.*:[0-9]+: )?(ERROR|FATAL|ОШИБКА)' "$errf" 2>/dev/null || true)
   n_429=$(grep -c 'HTTP 429' "$errf" 2>/dev/null || true)
   if [ "${n_err:-0}" -gt 0 ] || [ "$rc" -ne 0 ]; then
-    first_err=$(grep -m1 -E '^(ERROR|FATAL|ОШИБКА)' "$errf" || true)
+    first_err=$(grep -m1 -E '^(psql:.*:[0-9]+: )?(ERROR|FATAL|ОШИБКА)' "$errf" || true)
     echo "досчёт: отказов пачек $n_err (из них по перегрузке $n_429). Первая: ${first_err:0:160}" >&2
     bad=1
   fi
