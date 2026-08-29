@@ -54,14 +54,14 @@ WITH raw AS (
        SELECT r.aliases,
               trim(t.term) AS term
          FROM raw r,
-              unnest(regexp_split_to_array(r.aliases, '(?<!\\),')) AS t(term)
+              unnest(regexp_split_to_array(replace(r.aliases, '\\,', chr(1)), ',')) AS t(term)
         WHERE trim(t.term) <> ''
      ),
      unesc AS (
        SELECT aliases,
-              trim(replace(replace(term, '\\,', ','), '\\\\', '\\')) AS term
+              trim(replace(replace(term, chr(1), ','), '\\\\', '\\')) AS term
          FROM split
-        WHERE trim(replace(replace(term, '\\,', ','), '\\\\', '\\')) <> ''
+        WHERE trim(replace(replace(term, chr(1), ','), '\\\\', '\\')) <> ''
      ),
      single AS (
        SELECT aliases, term
@@ -109,17 +109,20 @@ SELECT n_rules, n_bytes, coalesce(solr_map, '') AS solr_map
   FROM _solr_map;
 \gset map_
 
-\if :map_n_rules
+\if :{?map_n_rules}
 \else
 \set map_n_rules 0
 \endif
-\if :map_n_bytes
+\if :{?map_n_bytes}
 \else
 \set map_n_bytes 0
 \endif
 
-\if :map_n_rules
--- лимиты (п. 13: ошибка, не обрезка)
+SELECT (:map_n_rules > 0) AS has_rules;
+\gset mr_
+
+\if :mr_has_rules
+
 SELECT CASE
          WHEN :map_n_rules > :max_rules THEN
            error('solr synonyms: ' || :map_n_rules || ' правил > лимита '

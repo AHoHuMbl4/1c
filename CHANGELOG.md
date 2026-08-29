@@ -18350,3 +18350,33 @@ braine, выведенный из контура. К данным 1С этот �
 История до 27.07 — в [`memory_bank/progress.md`](memory_bank/progress.md) и
 [`docs/INSTALL_LOG.md`](docs/INSTALL_LOG.md).
 
+## 2026-08-29 — solr lookbehind и resolver-монстры: движковые правки руками оркестратора [код] [замер]
+
+**[замер]** такт падал: solr `(?<!\\),` — RE2 не поддерживает lookbehind (движок
+26.08.1, доки sql/functions/regular_expressions); resolver_build коммит падал
+checkpoint'ом `dict_fsst: segment 276688 > block 262136` — **320 монстров
+value до 155 839 символов**: JSON-словари составных ключей утекли в value при
+смене формы row_key. **[код]** (оркестратор по слову владельца): solr — сплит
+через маркер chr(1) вместо lookbehind (живая проба: 'a\\,b,c,d\\,e' → a,b / c / d,e);
+resolver_build — фильтр `NOT regexp_matches(val,'^\\{')` + substr(val,1,20000)
+на insert; живой DELETE 320 монстров; wal_autocheckpoint 16MiB→512MB (глобально,
+auto-чекпойнт внутри больших коммитов порождал висяк .wal.checkpoint и
+инвалидацию до reattach; рестарты движка в сессии — 3×). У klient-1 тот же
+движок/conf — не воспроизводится только меньшим объёмом. Замки: solr 37/0,
+resolver_terms 4/0, resolver_ivf 18/0. Доки: sql/functions/regular_expressions,
+sql/statements/export_and_import_database. Хвост О5: само-восстановление без рук.
+
+## 2026-08-29 — embed_missing \if с числом и TEMPORARY-секреты: почему «0 строк» [код] [замер]
+
+**[замер, эхо-прогон]** embed_missing.sql:37 `\if :left_n_left` — psql `\if`
+принимает только boolean; n_left=1 645 731 → «unrecognized value» → ветка
+«n=0: выход»: досчёт видел очередь, но мгновенно выходил. То же в solr (:112/
+:116/:121 — паттерн «определена?» перепутан с числом; на klient-1 не всплывало:
+большие досчёты шли embed_bulk, не тактом). **[код]** embed_missing: n_left +
+has_left (SQL-boolean); solr: `:{?name}` defined-check + has_rules через SQL.
+**[замер]** вторая причина «0 строк»: секреты эмбедера — TEMPORARY (build.sh),
+живут до рестарта движка (живая проба: секрет сессии A виден из B); 4 рестарта
+serenedb за день их снесли, ai_embed молчал; воссоздан из /etc/1c-embed.env
+(кавычки из env не должны попадать в base_url — живая ошибка «URL bad format»).
+Проба ai_embed: вектор 1024dim ✓. Хвост О5: секреты должны жить в конфиге
+движка, не TEMPORARY. Доки: ai_embed; psql \if.

@@ -20,11 +20,11 @@ SELECT 'UPDATE ' || :'tbl' || ' t SET emb = p.emb FROM ' || table_name ||
 
 -- ── 2. Остаток без вектора (лёгкая проекция при фильтре) ────────────────────
 \if :use_rows_filter
-SELECT count(*)::bigint AS n_left
+SELECT count(*)::bigint AS n_left, (count(*) > 0) AS has_left
   FROM (SELECT :light_cols FROM :"tbl" WHERE emb IS NULL) :"tbl"
  WHERE true :rows_where;
 \else
-SELECT count(*)::bigint AS n_left FROM :"tbl" WHERE emb IS NULL;
+SELECT count(*)::bigint AS n_left, (count(*) > 0) AS has_left FROM :"tbl" WHERE emb IS NULL;
 \endif
 \gset left_
 
@@ -34,7 +34,7 @@ SELECT count(*)::bigint AS n_left FROM :"tbl" WHERE emb IS NULL;
 \quit 1
 \endif
 
-\if :left_n_left
+\if :left_has_left
 \else
 -- n=0: уборка и выход
 SELECT 'DROP TABLE IF EXISTS ' || table_name || ';'
