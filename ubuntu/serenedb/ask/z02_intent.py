@@ -670,11 +670,12 @@ def parse_intent(question, today):
         out["terms"] = groups
         out["parse"]["fixed"] = list(out["parse"].get("fixed") or []) + [
             "same concept groups:%d" % сведено]
+    out = _enrich_conversational_business(out, question)
     if INTENT_MEMO > 0:
         if len(_INTENT_MEMO) >= INTENT_MEMO:
             _INTENT_MEMO.clear()
         _INTENT_MEMO[memo_key] = json.dumps(out, ensure_ascii=False)
-    return _enrich_conversational_business(out, question)
+    return out
 
 
 def _first_intent_object(raw):

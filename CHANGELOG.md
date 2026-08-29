@@ -1,3 +1,12 @@
+## 2026-08-29 — z02: детерминированность повтора разбора (_INTENT_MEMO) [код]
+
+**[код]** `parse_intent`: память разобранных вопросов (`_INTENT_MEMO`) писала сырой
+разбор до `_enrich_conversational_business` — первый прогон «Как у нас дела?» →
+clarify, повтор из кэша без `conversational_topics`/`want=count` → no_data
+(non_accounting_question). Кэш перенесён после всех обогащений. **Замки:** intent
+**162/0**, fork_outcomes **44/0**, ask_choice_memory **42/0**. Числа: 162+44+42.
+Доки: parse_intent docstring §INTENT_MEMO.
+
 ## 2026-08-29 — z13/z20: ось места clarify + проводка calendar block [код]
 
 **[код]** z20: `calendar_axis_unavailable_block` вызывается в `answer()` сразу после

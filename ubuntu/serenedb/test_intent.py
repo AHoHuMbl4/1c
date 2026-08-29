@@ -515,6 +515,38 @@ t("разговорный «как дела» 3 samples — conversational:count
       _LLM_HALLUC, _LLM_HALLUC, _LLM_HALLUC,
       question="Как у нас дела?", samples=3)["parse"]["fixed"]))
 
+
+def memo_conversational_twice():
+    """Два последовательных parse_intent с памятью — тот же обогащённый разбор."""
+
+    def fake(messages, **_):
+        return '{"want": "list", "terms": []}'
+
+    real = (A.ds_chat, A.INTENT_SAMPLES, A.INTENT_MEMO, A.INTENT_LEAD)
+    A.ds_chat, A.INTENT_SAMPLES, A.INTENT_MEMO, A.INTENT_LEAD = fake, 1, 512, 2
+    A._INTENT_MEMO.clear()
+    try:
+        q = "Как у нас дела?"
+        d1 = A.parse_intent(q, "2026-08-04")
+        d2 = A.parse_intent(q, "2026-08-04")
+        return d1, d2
+    finally:
+        A.ds_chat, A.INTENT_SAMPLES, A.INTENT_MEMO, A.INTENT_LEAD = real
+        A._INTENT_MEMO.clear()
+
+
+_mc1, _mc2 = with_business_topics(memo_conversational_twice)
+t("память разбора: первый прогон обогащает want=count",
+  _mc1["want"] == "count")
+t("память разбора: повтор тот же want=count, не list",
+  _mc2["want"] == "count")
+t("память разбора: повтор сохраняет conversational_topics",
+  bool(_mc2["parse"].get("conversational_topics")))
+t("память разбора: повтор сохраняет conversational:count",
+  "conversational:count" in (_mc2["parse"].get("fixed") or []))
+t("память разбора: первый и повтор идентичны",
+  json.dumps(_mc1, sort_keys=True) == json.dumps(_mc2, sort_keys=True))
+
 # --------------------------------------------------------- выход шага 1 годен для шагов 2-5
 # Свойство целиком: что бы ни прислала модель, потребители разбора работают без падения.
 RAW_CASES = [
