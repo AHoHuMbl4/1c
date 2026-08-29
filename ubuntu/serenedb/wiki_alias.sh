@@ -519,9 +519,16 @@ fi
 # ── Ф6.3: Solr-словарь синонимов из таблиц (не списки в коде) ─────────────────
 # SELECT → карта → DROP+CREATE файлом (argv ломается на длинной карте, фактура §5.3).
 # Пустые источники — словарь не трогаем. Лимит сверх фактуры — честная ошибка.
+# 🔴 ИСТОЧНИК — ВСЕГДА БОЕВАЯ ТАБЛИЦА, ДАЖЕ В ПОБОЧНОМ ПРОГОНЕ. [замер 29.08]
+# Прогон юнита с ALIAS_TABLE=alias_okna_c5 (28.08 20:58) пересобрал ЖИВОЙ
+# search_dict_syn правилами побочной таблицы — ранжирование в бою деградировало
+# («сколько клиентов реально покупали…» → 2 · Валюты вместо 141 · Контрагенты).
+# Побочная таблица — черновик генератора; живой словарь имеет право меняться
+# только вслед за боевой (MERGE «только пустые строки» → пересборка из боевой).
 SOLR_SYN_DICT="${ASK_SOLR_SYNONYMS_DICT:-${SOLR_SYN_DICT:-search_dict_syn}}"
+SOLR_SYN_SRC_TABLE="${SOLR_SYN_SRC_TABLE:-search_entity_alias}"
 SOLR_OUT="${CSV_DIR:-/var/lib/serenedb}/solr_synonyms_${SOLR_SYN_DICT}.sql"
 python3 ./solr_synonyms_build.py compile \
-  --dsn "$DSN" --dict "$SOLR_SYN_DICT" --alias-table "$ALIAS_TABLE" \
+  --dsn "$DSN" --dict "$SOLR_SYN_DICT" --alias-table "$SOLR_SYN_SRC_TABLE" \
   --out "$SOLR_OUT" --apply \
   || echo "solr synonyms: шаг не прошёл, такт/юнит продолжается" >&2
