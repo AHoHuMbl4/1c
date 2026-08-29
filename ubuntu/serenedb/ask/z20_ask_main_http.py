@@ -2977,12 +2977,22 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 marks, plan = {}, {}
                 diag.update(_ct.get("diag") or {})
             else:
-                try:
-                    picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
-                                                      counts_for_model, match, diag)
-                except RuntimeError:
-                    picked, marks, plan = [], {}, {}
-                    diag["degraded"] = "выбор сущности сделан без модели"
+                _wiki = try_wiki_hybrid_entity_pick(
+                    question, intent, diag, cut, t0,
+                    by=by, match=match, preds=preds)
+                if _wiki and _wiki.get("kind") in ("no_data", "clarify"):
+                    return _wiki
+                if _wiki and _wiki.get("picked"):
+                    picked = _wiki["picked"]
+                    marks, plan = _wiki.get("marks") or {}, _wiki.get("plan") or {}
+                    diag["wiki_hybrid_pick"] = True
+                else:
+                    try:
+                        picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
+                                                          counts_for_model, match, diag)
+                    except RuntimeError:
+                        picked, marks, plan = [], {}, {}
+                        diag["degraded"] = "выбор сущности сделан без модели"
 
         # КОД С ИЕРАРХИЕЙ — НЕОДНОЗНАЧНОСТЬ, КОТОРУЮ РЕШАЕТ ЧЕЛОВЕК. «62» — это и номер
         # формы статистики, и счёт: буквальный поиск ведёт к форме, а иерархический

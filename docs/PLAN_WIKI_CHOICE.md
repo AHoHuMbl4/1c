@@ -98,6 +98,34 @@ rank-товар — честный провал: карточки line-items п�
 
 Оффлайн-замок: `python3 ubuntu/serenedb/test_wiki_card_build.py` — **18/0**.
 
+### Б3 сделано (29.08, okna живьём + замки)
+
+Файлы: `wiki_card_hybrid.sql`, `ask/z21_wiki_choice.py` (зона 21),
+точка в `z20` → `try_wiki_hybrid_entity_pick` при `ASK_WIKI_CHOICE=1`.
+Замок: `python3 ubuntu/serenedb/test_wiki_card_hybrid.py` — **33/0**;
+K9 после интеграции: stock_balance **25/0**, action_class **48/0**, intent **162/0**.
+
+| Механизм | Где |
+|---|---|
+| kNN top-15 ∪ struct (catalog/register/move по stem оси) | SQL |
+| tabpart off при aggregate/rank (`parent` + `want_agg`) | SQL |
+| `action_class` event/object | SQL |
+| модель `{choice, separable}`; `0` → none | z21 + код |
+| kNN gap + `separable:false` → clarify | z21 |
+| валидация лидера refcols (K9) | z21 |
+
+**Приёмка гибрид-пула (top-5, эталон SQL okna):**
+
+| Вопрос | Эталон | rk |
+|---|---|---|
+| сколько на складе позиций всего | `catalog_номенклатура` | **2** |
+| сколько клиентов реально покупали… | catalog / движение | **>5** (event: регистры) |
+| сколько продали за месяц | `accumulationregister_реализациятмц` | **1** |
+| какой самый продаваемый товар | `accumulationregister_реализациятмц` | **1** |
+| сколько контрагентов | `catalog_контрагенты` | **1** |
+
+Контрольные **4/5** top-2. Off-topic: пул kNN есть → модель `choice:0` → **none**.
+
 ## §3. Порядок
 
 А сейчас (ф2 работает) → Б параллельно (не пересекается: свои файлы + зоны

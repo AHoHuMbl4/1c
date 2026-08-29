@@ -29,6 +29,7 @@ _ZONE_FILES = [
     "z17_aggregate_groups.py",
     "z18_compose.py",
     "z19_answer_check.py",
+    "z21_wiki_choice.py",
     "z20_ask_main_http.py",
 ]
 
