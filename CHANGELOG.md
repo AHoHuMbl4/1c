@@ -1,3 +1,14 @@
+## 2026-08-29 — C4: проводка intent/question в resolve_fork_outcome [код]
+
+**[код]** Гвард complement в z13 (`_fork_complement_outcome_block`) уже был, но
+z20 не передавал `intent` и `question` в `resolve_fork_outcome` и
+`fork_detector_scan` — на живом «сколько позиций совсем не продаётся» исход B
+с 43 · Контрагенты (event_code_lock + writer_pair). Проводка: `question=question`
+в оба `fork_detector_scan`, `intent=intent, question=question` в
+`resolve_fork_outcome`. Замок replay живого diag в test_fork_outcomes.
+**Доказано:** test_fork_detector 52/0, fork_outcomes 39/0, intent 157/0,
+k4_clarify 27/0 — **281/0**.
+
 ## 2026-08-29 — №16 «как дела»: LLM-галлюцинация не гасит переспрос [код]
 
 **[код]** Живой «Как у нас дела?» при работающем LLM уходил в

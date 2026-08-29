@@ -322,6 +322,31 @@ out_c_comp, pay_c_comp = A.resolve_fork_outcome(
 t("complement guard blocks positive distinct",
   out_c_comp == "C" and pay_c_comp.get("reason") == "complement_unresolved")
 
+# [замер 29.08, живой okna] event_code_lock + writer_pair, complement-формы NA,
+# отрицание в вопросе — без intent/question в resolve_fork_outcome ушло в B/figures.
+_q_live = "сколько позиций совсем не продаётся в этом месяце?"
+_int_live = {"want": "count", "action_class": "event", "kind": "позиции",
+             "period": {"from": "2026-08-01", "to": "2026-08-29"}}
+_row_reg = {"count": 43, "folders": 0, "sums": {},
+            "distinct_axis": "AxisX", "distinct_axis_label": "Axis label"}
+_row_doc = {"count": 49, "folders": 0, "sums": {},
+            "distinct_axis": "AxisX", "distinct_axis_label": "Axis label"}
+_rows_live = {"accumulationregister_x": _row_reg, "document_y": _row_doc}
+_rel_live = {"accumulationregister_x": [], "document_y": []}
+_cls_live = A.fork_classes(_rows_live, want="count", rel_by_src=_rel_live)
+_old_fl = A.fork_labels_of
+A.fork_labels_of = lambda fk, srcs, *a, **k: {s: "Period label" for s in srcs}
+out_live, pay_live = A.resolve_fork_outcome(
+    _cls_live, _rows_live, want="count", rel_by_src=_rel_live,
+    intent=_int_live, question=_q_live)
+t("live diag: negation+event lock path → C not B",
+  out_live == "C" and pay_live.get("reason") == "complement_unresolved")
+out_live_na, _ = A.resolve_fork_outcome(
+    _cls_live, _rows_live, want="count", rel_by_src=_rel_live)
+t("live diag: without intent/question guard absent → B",
+  out_live_na == "B")
+A.fork_labels_of = _old_fl
+
 _atom_comp = A._fork_atom_of(
     {"count": 1891, "folders": 0, "sums": {}, "form": "complement",
      "complement_axis_label": "Items"},

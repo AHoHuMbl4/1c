@@ -2845,7 +2845,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 period_from_prior=period_from_prior,
                 measure_word=_mword, want=_fwant or None,
                 day_basis_prefer=_day_prefer,
-                amount_basis_prefer=_curr_prefer, trusted=trusted)
+                amount_basis_prefer=_curr_prefer, trusted=trusted,
+                question=question)
             _meta = getattr(fork_classes, "_meta_by_fp", {}) or {}
             _atoms = []
             for fp, ss in sorted(_cls.items(), key=lambda kv: -len(kv[1])):
@@ -3663,7 +3664,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 period_from_prior=period_from_prior,
                 measure_word=_mword, want=_fwant or None,
                 day_basis_prefer=_day_prefer,
-                amount_basis_prefer=_curr_prefer, trusted=trusted)
+                amount_basis_prefer=_curr_prefer, trusted=trusted,
+                question=question)
             if len(_cls) > 1:
                 _fork_log(_cls, _mword or (intent.get("want") or ""))
             _prev = dict(diag.get("fork") or {})
@@ -3704,7 +3706,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _outc, _pay = resolve_fork_outcome(
             _cls, _rows, measure_ctx=(_mword or _fwant or ""),
             scan_error=_scan_err, want=_fwant or None, rel_by_src=_rel,
-            today=today)
+            today=today, intent=intent, question=question)
         diag.setdefault("fork", {})["outcome"] = _outc
         if isinstance(_pay, dict):
             if _pay.get("reason"):
