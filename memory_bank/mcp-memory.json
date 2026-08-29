@@ -513,6 +513,7 @@
 {"type":"entity","name":"ask/z22_health_tick.py","entityType":"код сервиса (ответы)","observations":["Зона ask: _measure_tick_status читает search_quality k=tick_status для GET /health поля tick. Источник: ubuntu/serenedb/ask/z22_health_tick.py"]}
 {"type":"entity","name":"test_health_tick_status.py","entityType":"офлайн-замок","observations":["Замок /health tick_status без БД: parse note, measure, Handler.do_GET. Источник: ubuntu/serenedb/test_health_tick_status.py"]}
 {"type":"entity","name":"test_pipeline_tick_status.py","entityType":"офлайн-замок","observations":["Замок tick_status.sh: схема одной строки, mock psql ok/fail. Источник: ubuntu/serenedb/test_pipeline_tick_status.py"]}
+{"type":"entity","name":"test_no_domain_wordlists.py","entityType":"оффлайн-замок","observations":["29.08: замок п.0 TARGET — в файлах маршрутизации K9 нет списков слов домена (прогон: ok, 5 файлов); лежал незакоммиченным с K9-эпохи, закоммичен вечером 29.08. Источник: ubuntu/serenedb/test_no_domain_wordlists.py"]}
 {"type":"relation","from":"pipeline.sh","to":"deploy.sh","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"serene_sync.py","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"build.sh","relationType":"вызывает"}
