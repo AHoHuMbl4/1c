@@ -27,7 +27,7 @@ export PGPASSWORD=…   # из /etc/1c-mcp-reports.env на okna
 
 python3 work/gold/test_client_gold.py
 
-python3 work/gold/client_gold.py build \
+python3 work/gold/client_gold.py --dsn "$SERENEDB_DSN" build \
   --slices work/gold/slices-okna-packet.json \
   --from-journal --limit-journal 40 \
   --limit-templates 30 \
@@ -37,11 +37,16 @@ python3 work/gold/client_gold.py build \
 
 На prod okna (read-only): [`run_okna.sh`](run_okna.sh).
 
-## Оговорка OData
+## Оговорка OData / пакеты
 
 На контуре okna OData-шлюза нет; эталон 1С = **живые пакеты** (след в
-`base_profile` + таблицы витрины после apply). Когда шлюз появится — те же
-срезы можно дополнить `odata.entity` в `etalon_1c.py verify`.
+`base_profile` + прямой SQL по таблицам витрины после apply; для периодов —
+тот же регистр, не `search_corpus`). Лаг свежести — `build_state.ts`.
+Когда шлюз появится — те же срезы можно дополнить `odata.entity` в
+`etalon_1c.py verify`.
+
+Журнал `ask_journal_text` **не включает** формулировки из рабочих наборов
+(`ab-gold-okna`, `ab-calendar-axis-okna`, …) — см. `load_working_gold_questions`.
 
 ## Замок
 

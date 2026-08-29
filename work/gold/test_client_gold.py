@@ -82,6 +82,7 @@ t("determinism: same tsv", tsv1 == tsv2)
 # --- независимость от ab-gold-okna ---
 ab_path = os.path.join(ROOT, "ubuntu", "serenedb", "ab-gold-okna.tsv")
 ab_qs = CG.load_ab_gold_questions(ab_path)
+working_qs = CG.load_working_gold_questions(ROOT)
 merged = CG.merge_rows(
     CG.generate_journal_rows(["уникальный вопрос для замка И0?"]),
     gen1,
@@ -91,6 +92,14 @@ overlap = [
     if CG.normalize_question(r["question"]) in ab_qs
 ]
 t("independence: no ab-gold overlap", len(overlap) == 0, overlap[:3])
+filtered = CG.exclude_working_questions(
+    CG.generate_journal_rows(["Продажи в праздники", "уникальный вопрос для замка И0?"]),
+    working_qs,
+)
+t(
+    "independence: working sets filtered from journal",
+    len(filtered) == 1 and "праздники" not in filtered[0]["question"].lower(),
+)
 
 # --- packet ↔ vitrine ---
 specs = [

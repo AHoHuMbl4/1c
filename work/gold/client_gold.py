@@ -506,6 +506,43 @@ def load_ab_gold_questions(path: str) -> set[str]:
     return qs
 
 
+def load_working_gold_questions(repo_root: str) -> set[str]:
+    """Все формулировки из рабочих наборов (GOLD_SETS §3 WORKING)."""
+    working_files = (
+        "ubuntu/serenedb/ab-gold-okna.tsv",
+        "ubuntu/serenedb/ab-probe-okna.tsv",
+        "ubuntu/serenedb/ab-gold.tsv",
+        "ubuntu/serenedb/golden-questions.txt",
+        "ubuntu/serenedb/ab-calendar-axis-okna.tsv",
+    )
+    qs: set[str] = set()
+    for rel in working_files:
+        path = os.path.join(repo_root, rel)
+        if not os.path.isfile(path):
+            continue
+        if rel.endswith(".txt"):
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#"):
+                        qs.add(normalize_question(line))
+        else:
+            qs |= load_ab_gold_questions(path)
+    return qs
+
+
+def exclude_working_questions(rows: list[dict], working: set[str]) -> list[dict]:
+    if not working:
+        return rows
+    out = []
+    for row in rows:
+        q = normalize_question(row.get("question") or "")
+        if q and q in working:
+            continue
+        out.append(row)
+    return out
+
+
 def verify_template_rows(
     rows: list[dict],
     client: E.CorpusClient,
@@ -646,6 +683,11 @@ def cmd_build(args: argparse.Namespace) -> int:
     )
     if args.limit_templates and int(args.limit_templates) > 0:
         template_rows = template_rows[: int(args.limit_templates)]
+
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+    working_qs = load_working_gold_questions(repo_root)
+    journal_rows = exclude_working_questions(journal_rows, working_qs)
+    template_rows = exclude_working_questions(template_rows, working_qs)
 
     merged = merge_rows(journal_rows, template_rows)
     merged = exclude_working_questions(merged, load_working_gold_questions())

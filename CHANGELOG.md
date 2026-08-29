@@ -1,3 +1,16 @@
+## 2026-08-29 — И0 client-gold: packet↔vitrine, живой okna 67 вопросов [замер]
+
+**[код]** `work/gold/client_gold.py`: генератор приёмочного `client-gold-okna.tsv`
+— сущности из `information_schema.tables`, формулировки шаблоны + `ask_journal_text`
+(исключая рабочие наборы GOLD_SETS §3). Эталон: `base_profile` ↔ SQL витрины;
+лаг `build_state.ts`; лог расхождений. Замок `test_client_gold.py` **17/0**.
+Оговорка: okna без OData — эталон из **пакетов**, не шлюза.
+**[замер okna :7890]** **67** вопросов (journal+template, 246 таблиц витрины);
+packet↔vitrine **match 22** / pending **21** / needs_independent_read **23** /
+declared_wrong **1**; лаг **163720** с; разбор **24** строки →
+`work/acceptance/runs/client-gold-discrepancies-2026-08-29.tsv`. Числа: 67/22/24.
+Доки: work/gold/README.md, PLAN_TO_TARGET §И0.
+
 ## 2026-08-29 — metadata-okna: infer_key composite, живой артефакт 819 [код] [замер]
 
 **[код]** `gen_metadata_vitrine.infer_key`: `composite` вычисляется из props
