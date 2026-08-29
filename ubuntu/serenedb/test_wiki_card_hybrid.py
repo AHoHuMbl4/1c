@@ -119,6 +119,8 @@ def main() -> int:
 
     t("knn CTE with LIMIT param", "LIMIT :knn_limit" in hybrid)
     t("struct_catalog layer", "struct_catalog" in hybrid)
+    t("struct_catalog_event layer", "struct_catalog_event" in hybrid)
+    t("event catalog when want_agg", ":want_agg = 1 AND p.src_table LIKE 'catalog_%'" in hybrid)
     t("struct_register layer", "struct_register" in hybrid)
     t("pool UNION dedupe", "DISTINCT ON (src_table)" in hybrid)
     t("pick LIMIT param", "LIMIT :pick_limit" in hybrid)
@@ -168,6 +170,16 @@ def main() -> int:
     z21["ds_chat"] = lambda *a, **k: '{"choice": 0, "separable": true}'
     pick0 = z21["wiki_pick_from_cards"]("q", {}, cards, {})
     t("model choice 0 none", pick0.get("outcome") == "none")
+
+    z21["question_expects_accounting_data"] = lambda *a, **k: True
+    z21["psql"] = lambda q: [("catalog_a", "A", "", "", "", 1, 0.1, "", "catalog")]
+    z21["wiki_hybrid_pool"] = lambda q, intent=None: [
+        {"src_table": "catalog_a", "name": "A", "description": "", "axes": "",
+         "measures": "", "distance": 0.1, "platform_kind": "справочник", "parent": ""}]
+    z21["ds_chat"] = lambda *a, **k: '{"choice": 0, "separable": true}'
+    fb = z21["try_wiki_hybrid_entity_pick"]("q", {}, {}, None, 0)
+    t("wiki none returns fallback None", fb is None)
+    t("wiki none diag", (fb is None))
 
     z21["wiki_validate_leader_axes"] = lambda *a, **k: True
     cards_pick = [

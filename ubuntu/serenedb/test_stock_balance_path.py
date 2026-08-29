@@ -146,6 +146,53 @@ finally:
     A.entity_form_catalogs_for_kind = _old_cats0
     A.psql = _old_psql0
 
+# --- net distinct: пара приход/расход одной товарной оси ---
+REG_IMP = "accumulationregister_импорттмц"
+REG_SALE = "accumulationregister_реализациятмц"
+REG_COST = "accumulationregister_допзатратыимпорттмц"
+
+
+def _net_pair_psql(q):
+    ql = q.lower()
+    if "search_refcols" in ql and "target_src" in ql:
+        return [
+            (REG_IMP, "catalog_номенклатура"),
+            (REG_SALE, "catalog_номенклатура"),
+            (REG_COST, "catalog_номенклатура"),
+            (REG_COST, "catalog_таможенныевыплаты"),
+        ]
+    if "search_refcols" in ql:
+        return [(REG_IMP,), (REG_SALE,), (REG_COST,)]
+    if "with receipt as" in ql:
+        return [(1306,)]
+    if "group by" in ql:
+        return [(REG_IMP, 13178), (REG_SALE, 50000), (REG_COST, 65856)]
+    return []
+
+
+A.psql = _net_pair_psql
+A._BALANCE_REGS.update({"at": time.time(), "set": {REG_IMP, REG_SALE, REG_COST}})
+A._is_product_catalog = lambda s: "номенклатур" in str(s or "").lower()
+A.entity_form_catalogs_for_kind = _cats_for_live
+A.refcols_of = lambda src: [
+    {"col": "ТМЦ", "target_src": "catalog_номенклатура"}]
+A.measures_of = lambda src: ["Количество"]
+A.measure_aliases_of = lambda src: {}
+A.measure_choice = lambda names, word, alias_by=None: (
+    ("Количество", [], "exact") if names else (None, [], ""))
+try:
+    pair = A.stock_net_register_pair(INTENT_LIVE, Q_LIVE)
+    t("net pair: receipt import",
+      pair and pair[0] == REG_IMP, pair)
+    t("net pair: expense sales",
+      pair and pair[1] == REG_SALE, pair)
+    agg = A.aggregate_stock_net_distinct(INTENT_LIVE, Q_LIVE, "", [], {})
+    t("net distinct aggregate",
+      agg and agg.get("count") == 1306 and agg.get("form") == "distinct_axis", agg)
+finally:
+    A.entity_form_catalogs_for_kind = _old_cats0
+    A.psql = _old_psql0
+
 # --- контрагенты: kind не stock-scoped → stock-path молчит ---
 INTENT_CTR = {"want": "count", "kind": "контрагенты", "action_class": "object",
               "terms": [], "action_axis": ""}

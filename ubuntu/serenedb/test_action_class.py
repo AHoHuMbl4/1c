@@ -125,8 +125,8 @@ try:
            "action_axis": "клиенты"},
           "accumulationregister_x",
           [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]))
-    t("count_defer no axis → False",
-      not A.count_defer_measure_clarify(
+    t("count_defer no axis → True (O3 default count)",
+      A.count_defer_measure_clarify(
           {"want": "count", "action_class": "event", "kind": "клиенты"},
           "accumulationregister_x", []))
     t("count_defer sum want → False",

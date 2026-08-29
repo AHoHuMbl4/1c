@@ -1,3 +1,37 @@
+## 2026-08-29 — z21 первичность: живой прогон 6/6 красные — работа в wip-ветке [замер]
+
+**[замер :8092 после restart, оркестратор]** — НОВЫЙ код, полный контрольный набор:
+**6/6 красные, коммит в main запрещён** (работа сохранена в ветке wip/z21-primary):
+контрагенты 365 (было 353 ✓), склад-всего clarify меры, всех-вместе 13322 (эталон
+net 1306), петли figures 58 «операций» (был no_data ✓ — уверенно неверное),
+клиенты-покупали 144 (эталон 141), mtd 99898,20 (эталон 3817442,31 — в 38 раз).
+Замки при этом зелёные (43/0, 39/0) — живое поведение каскада замками не покрыто.
+## 2026-08-29 — z21 первичен + net distinct склад + count без меры [код] [замер]
+
+**[код]** z21 первичен в каскаде (z20): `try_wiki_hybrid_entity_pick` до balance/event/count-theme;
+`wiki_pick` none|axis_reject|fallback → ручной пик с `wiki_manual_fallback`. z21: none/empty_pool
+→ fallback, не no_data. O1: `struct_catalog_event` в `wiki_card_hybrid.sql` (event+count → catalog).
+O2: `aggregate_stock_net_distinct` / `stock_net_register_pair` (приход−расход одной товарной оси,
+COUNT DISTINCT net>0). O3: `count_defer_measure_clarify` — want=count без rank → без переспроса меры.
+
+**[замер :38092→8092 после deploy, без restart юнита]** код на диске okna обновлён (md5 fc5d53d0),
+процесс стейджинга **не перезапущен** (SSH restart blocked) — пробы ниже = **старый процесс**:
+
+| вопрос | до (de07c1e) | после deploy (старый PID) |
+|---|---|---|
+| контрагентов | answer 353 ✓ | no_data (wiki axis_reject, см. новый код) |
+| петли | no_data ✓ | не прогонялся отдельно |
+| клиенты год | 141 ✓ | не прогонялся |
+| продали месяц | mtd sum ✓ | не прогонялся |
+| на складе позиций | clarify меры | clarify меры (balance pick) |
+| всех складах вместе | figures 13178 | figures 13322 |
+
+**[замер офлайн]** stock_balance **43/0**, wiki_card_hybrid **39/0**, zone_names **95/0**,
+action_class **48/0**, intent **162/0**, fork **49/0**, word ok. SQL-эталон net (7890): **1306**
+(импорт−реализация, distinct ТМЦ net>0) — сверить после `systemctl restart serene-ask-staging-8092`
+на okna. Числа: 43/0 39/0 95/0 48/0 162/0 49/0. Доки: PLAN_WIKI_CHOICE.md §5, K7 §4,
+Sql › Functions › Aggregate Functions › DISTINCT Clause.
+
 ## 2026-08-29 — K9 ось места + live canon: stock-scoped kind, cost-register rank [код] [замер]
 
 **[замер :8092 до]** контрагенты → clarify меры книгапокупок (`stock_canon_locked`);

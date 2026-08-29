@@ -643,14 +643,22 @@ def live_axis_col_for_count(intent, src, axes=None):
 
 
 def count_defer_measure_clarify(intent, src, axes=None):
-    """K9-ф2: count+живая ось → DISTINCT, не развилка мер (образец rank_defer K6b)."""
+    """K9-ф2: want=count → мера по умолчанию count, не развилка полей (п. 21).
+
+    Переспрос меры только при want=sum и реальной развилке денежных величин.
+    Rank с явной осью DISTINCT — прежний defer по live_axis_col_for_count.
+    """
     intent = intent or {}
     want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
+    if want == "sum":
         return False
-    if not (src or "").strip():
-        return False
-    return bool(live_axis_col_for_count(intent, src, axes))
+    if want in ("count", ""):
+        if rank_intent_from(intent):
+            if not (src or "").strip():
+                return False
+            return bool(live_axis_col_for_count(intent, src, axes))
+        return True
+    return False
 
 
 def event_count_has_explicit_period(intent, diag=None):

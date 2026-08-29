@@ -832,6 +832,147 @@ def _sort_stock_pool(pool, capable=None):
     return pool
 
 
+def _stock_product_axis_col(src):
+    """Колонка refs_map на product-catalog для регистра."""
+    src = (src or "").strip()
+    if not src:
+        return None
+    try:
+        ax = refcols_of(src) or []
+    except RuntimeError:
+        return None
+    for a in ax:
+        if _is_product_catalog_target(a.get("target_src") or ""):
+            col = (a.get("col") or "").strip()
+            if col:
+                return col
+    return None
+
+
+def _stock_qty_measure_name(src):
+    """Количественная мера регистра — measure_choice, не имя поля."""
+    src = (src or "").strip()
+    if not src:
+        return None
+    try:
+        names = list(measures_of(src) or [])
+    except RuntimeError:
+        return None
+    if not names:
+        return None
+    try:
+        alias_by = measure_aliases_of(src) or {}
+    except RuntimeError:
+        alias_by = {}
+    got, _, how = measure_choice(names, "колич", alias_by=alias_by)
+    if got and how in ("exact", "substring", "alias", "base", "single"):
+        return got
+    return names[0] if names else None
+
+
+def stock_net_register_pair(intent, question=""):
+    """Пара приход/расход одной товарной оси — по метаданным refcols и роли."""
+    intent = intent or {}
+    try:
+        capable = balance_capable_or_registers()
+    except RuntimeError:
+        return None
+    broad = registers_for_kind_axes(intent, None, question)
+    if not broad:
+        return None
+    pool = list(_stock_registers_with_product_axis(broad))
+    if len(pool) < 2:
+        return None
+    pt_map = _stock_product_targets_by_src(pool)
+    cc = _stock_corpus_counts(pool)
+    by_pt = {}
+    for src in pool:
+        pt = pt_map.get(src)
+        if pt:
+            by_pt.setdefault(pt, []).append(src)
+    for _pt, siblings in by_pt.items():
+        if len(siblings) < 2:
+            continue
+        active = [s for s in siblings if not stock_balance_is_reversal_noise(s)]
+        if len(active) < 2:
+            continue
+        sorted_s = _sort_stock_pool(list(active), capable)
+        receipt = None
+        expense = None
+        for s in sorted_s:
+            if not stock_balance_is_sales_noise(s):
+                receipt = s
+                break
+        for s in sorted_s:
+            if stock_balance_is_sales_noise(s):
+                expense = s
+                break
+        if not receipt:
+            receipt = sorted_s[0]
+        if not expense:
+            others = [s for s in sorted_s if s != receipt]
+            if others:
+                expense = max(others, key=lambda s: cc.get(s, 0))
+        if not receipt or not expense or receipt == expense:
+            continue
+        prod_col = _stock_product_axis_col(receipt) or _stock_product_axis_col(expense)
+        qty = _stock_qty_measure_name(receipt) or _stock_qty_measure_name(expense)
+        if prod_col and qty:
+            return receipt, expense, prod_col, qty
+    return None
+
+
+def aggregate_stock_net_distinct(intent, question, match, preds, diag=None):
+    """COUNT(DISTINCT product) WHERE net qty > 0: приход − расход по паре регистров.
+
+    Доки: Sql › Functions › Aggregate Functions › DISTINCT Clause in Aggregate
+    Functions; try_cast — Sql › Functions › Conversion Functions.
+    """
+    pair = stock_net_register_pair(intent, question)
+    if not pair:
+        return None
+    receipt, expense, prod_col, qty_measure = pair
+    diag = dict(diag or {})
+    diag["stock_net_pair"] = {
+        "receipt": receipt, "expense": expense,
+        "axis": prod_col, "measure": qty_measure}
+
+    def _side_where(src_table):
+        parts = [w for w in (
+            [match] + list(preds or [])
+            + ["src_table = %s" % lit(src_table),
+               "map_extract_value(refs_map, %s) IS NOT NULL" % lit(prod_col),
+               "map_extract(nums, %s)[1] IS NOT NULL" % lit(qty_measure)]) if w]
+        return " AND ".join(parts)
+
+    qty_expr = "try_cast(map_extract(nums, %s)[1] AS DOUBLE)" % lit(qty_measure)
+    prod_expr = "map_extract_value(refs_map, %s)" % lit(prod_col)
+    sql = (
+        "WITH receipt AS ("
+        "  SELECT %s AS prod, sum(%s) AS qty FROM %s WHERE %s GROUP BY 1"
+        "), expense AS ("
+        "  SELECT %s AS prod, sum(%s) AS qty FROM %s WHERE %s GROUP BY 1"
+        "), net AS ("
+        "  SELECT coalesce(r.prod, e.prod) AS prod,"
+        "         coalesce(r.qty, 0) - coalesce(e.qty, 0) AS net_qty"
+        "    FROM receipt r FULL OUTER JOIN expense e ON r.prod = e.prod"
+        ") SELECT count(DISTINCT prod) FROM net WHERE net_qty > 0"
+    ) % (prod_expr, qty_expr, CORPUS, _side_where(receipt),
+         prod_expr, qty_expr, CORPUS, _side_where(expense))
+    try:
+        rows = psql(sql)
+    except RuntimeError:
+        return None
+    if not rows or not rows[0] or rows[0][0] in ("", None):
+        return None
+    try:
+        n = int(float(rows[0][0]))
+    except (TypeError, ValueError):
+        return None
+    return {"count": n, "sum": None, "src": receipt, "form": "distinct_axis",
+            "axis": prod_col, "grain": "axis", "net_expense_src": expense}
+
+
 def stock_canon_src(cands, question, intent=None, plan=None):
     if not stock_question_engaged(question, intent, plan):
         return None

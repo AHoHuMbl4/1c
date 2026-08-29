@@ -260,41 +260,27 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
     diag["wiki_pool_n"] = len(cards)
     diag["wiki_pool"] = [c["src_table"] for c in cards]
     if not cards:
-        if question_expects_accounting_data(intent, question, diag):
-            diag["wiki_empty_pool"] = True
-            return {"kind": "no_data",
-                    "partial": cut or None,
-                    "text": NO_DATA_TEXT or refuse_text(question),
-                    "sources": [],
-                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                       reason="wiki_empty_pool")}
-        diag["wiki_none"] = "empty_pool"
-        return {"kind": "no_data",
-                "partial": cut or None,
-                "text": refuse_text(question) or NO_DATA_TEXT,
-                "sources": [],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                   reason="wiki_none_empty")}
-    pick = wiki_pick_from_cards(question, intent, cards, diag=diag)
-    diag.update(pick.get("diag") or {})
-    if pick.get("outcome") == "degraded":
-        return None
-    if pick.get("outcome") == "none":
         if not question_expects_accounting_data(intent, question, diag):
-            diag["wiki_none"] = pick.get("reason") or "model_none"
+            diag["wiki_none"] = "empty_pool"
             return {"kind": "no_data",
                     "partial": cut or None,
                     "text": refuse_text(question) or NO_DATA_TEXT,
                     "sources": [],
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                       reason="wiki_none")}
+                                       reason="wiki_none_empty")}
+        diag["wiki_pick"] = "none"
         diag["wiki_empty_pool"] = True
-        return {"kind": "no_data",
-                "partial": cut or None,
-                "text": NO_DATA_TEXT or refuse_text(question),
-                "sources": [],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                   reason="wiki_none")}
+        return None
+    pick = wiki_pick_from_cards(question, intent, cards, diag=diag)
+    diag.update(pick.get("diag") or {})
+    if pick.get("outcome") == "degraded":
+        diag["wiki_pick"] = "fallback"
+        return None
+    if pick.get("outcome") == "none":
+        if not diag.get("wiki_pick"):
+            diag["wiki_pick"] = "none"
+        diag["wiki_none"] = pick.get("reason") or "model_none"
+        return None
     if pick.get("outcome") == "clarify":
         tied = [c["src_table"] for c in (pick.get("candidates") or [])]
         try:
