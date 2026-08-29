@@ -1,3 +1,15 @@
+## 2026-08-29 — open-webui: дефолт бэкенда и обязательный brand-ui.css [код]
+
+**[код]** `configure-branding.py`: дефолт `OPENAI_API_BASE_URL` с мёртвого
+`10.3.0.4:18801` на `10.3.1.11:18801` (vSwitch gpu-1c → okna). `setup-okna-front.sh`:
+проверка обязательных файлов до установки (`brand-ui.css`, `configure-branding.py`,
+unit, Caddyfile) — отсутствие = `die`; копирование css без молчаливого `if [ -f ]`;
+`configure-branding.py` без `|| echo` при ошибке. Дефолт `BACKEND_IP` синхронизирован.
+Числа: `brand-ui.css` в репо **863** байт; на прод-фронте baulogistic до правки
+`custom.css` в пакете OWUI был **пуст** (Open WebUI создал сам при первом старте
+13.08, установка пропустила css из-за `if [ -f ]`). Доки: ubuntu/open-webui/README.md
+§«Приёмка» / брендинг.
+
 ## 2026-08-29 — K7: список складов без stock-маркера — итог+люк, не no_data [код]
 
 **[код]** z12: класс `_WAREHOUSE_AXIS_MARKERS` (склад/warehouse/…); `stock_skips_warehouse_clarify`

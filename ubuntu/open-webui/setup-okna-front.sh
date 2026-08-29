@@ -1,13 +1,13 @@
 #!/bin/bash
 # Open WebUI + Caddy на openclaw-okna (2.28.49.158 / 10.3.0.2).
-# Домен: baulogistic.timpul.pro → этот хост. Бэкенд OpenClaw web — 10.3.0.4:18801.
+# Домен: baulogistic.timpul.pro → этот хост. Бэкенд OpenClaw web — 10.3.1.11:18801 (vSwitch gpu-1c → okna).
 #
 # Запуск ОТ ROOT на фронте:
 #   GATEWAY_TOKEN=<из бэкенда> bash /opt/1c-open-webui/setup-okna-front.sh
 set -euo pipefail
 
 DOMAIN="${DOMAIN:-baulogistic.timpul.pro}"
-BACKEND_IP="${BACKEND_IP:-10.3.0.4}"
+BACKEND_IP="${BACKEND_IP:-10.3.1.11}"
 GATEWAY_PORT="${GATEWAY_PORT:-18801}"
 WEBUSER="${WEBUI_USER:-webui}"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -18,6 +18,20 @@ OWUI_VER="${OPEN_WEBUI_VERSION:-0.11.0}"
 
 die() { echo "setup-okna-front: $*" >&2; exit 1; }
 [ -n "${GATEWAY_TOKEN:-}" ] || die "задайте GATEWAY_TOKEN (вывод setup-okna-backend-web.sh на бэкенде)"
+
+REQUIRED=(
+  "$SCRIPT_DIR/static/brand-ui.css"
+  "$SCRIPT_DIR/configure-branding.py"
+  "$SCRIPT_DIR/systemd/open-webui.service"
+  "$SCRIPT_DIR/Caddyfile.okna"
+)
+missing=()
+for f in "${REQUIRED[@]}"; do
+  [ -f "$f" ] || missing+=("$f")
+done
+if ((${#missing[@]} > 0)); then
+  die "отсутствуют обязательные файлы установки: ${missing[*]}"
+fi
 
 if ! id "$WEBUSER" >/dev/null 2>&1; then
   useradd -m -s /bin/bash "$WEBUSER"
@@ -106,15 +120,13 @@ if [ -f "$STT_ENV" ]; then
 fi
 
 # Скрыть Workspace и селектор моделей в UI (замер 13.08)
-if [ -f "$SCRIPT_DIR/static/brand-ui.css" ]; then
-  runuser -u "$WEBUSER" -- "$VENV/bin/python" - "$SCRIPT_DIR/static/brand-ui.css" <<'PY'
+runuser -u "$WEBUSER" -- "$VENV/bin/python" - "$SCRIPT_DIR/static/brand-ui.css" <<'PY'
 import open_webui, pathlib, shutil, sys
 src = pathlib.Path(sys.argv[1])
 dst = pathlib.Path(open_webui.__file__).resolve().parent / "static" / ("custom" + ".css")
 shutil.copyfile(src, dst)
 print(dst)
 PY
-fi
 
 install -d -m 755 -o "$WEBUSER" -g "$WEBUSER" "/home/$WEBUSER/.config/systemd/user"
 install -m 644 -o "$WEBUSER" -g "$WEBUSER" \
@@ -148,21 +160,18 @@ if curl -sf -H "Authorization: Bearer ${GATEWAY_TOKEN}" \
     "http://${BACKEND_IP}:${GATEWAY_PORT}/v1/models" | grep -q openclaw; then
   echo "✅ бэкенд /v1/models доступен с фронта"
 else
-  echo "⚠ бэкенд /v1/models не ответил — ufw на 10.3.0.4 и bind=lan web-гейтвея"
+  echo "⚠ бэкенд /v1/models не ответил — ufw на ${BACKEND_IP} и bind=lan web-гейтвея"
 fi
 
-if [ -f "$SCRIPT_DIR/configure-branding.py" ]; then
-  sleep 10
-  ADMIN_PASS="${ADMIN_PASS:-$(openssl rand -base64 18)}"
-  OWUI_URL=http://127.0.0.1:8080 \
-    ADMIN_EMAIL="${ADMIN_EMAIL:-admin@okna.local}" \
-    ADMIN_PASS="$ADMIN_PASS" \
-    OPENAI_API_KEY="$GATEWAY_TOKEN" \
-    OPENAI_API_BASE_URL="http://${BACKEND_IP}:${GATEWAY_PORT}/v1" \
-    "$VENV/bin/python" "$SCRIPT_DIR/configure-branding.py" || \
-    echo "⚠ configure-branding — донастроить вручную (см. OPENCLAW_BOT.md «Брендинг»)"
-  echo "Админ: ${ADMIN_EMAIL:-admin@okna.local} пароль: $ADMIN_PASS"
-fi
+sleep 10
+ADMIN_PASS="${ADMIN_PASS:-$(openssl rand -base64 18)}"
+OWUI_URL=http://127.0.0.1:8080 \
+  ADMIN_EMAIL="${ADMIN_EMAIL:-admin@okna.local}" \
+  ADMIN_PASS="$ADMIN_PASS" \
+  OPENAI_API_KEY="$GATEWAY_TOKEN" \
+  OPENAI_API_BASE_URL="http://${BACKEND_IP}:${GATEWAY_PORT}/v1" \
+  "$VENV/bin/python" "$SCRIPT_DIR/configure-branding.py"
+echo "Админ: ${ADMIN_EMAIL:-admin@okna.local} пароль: $ADMIN_PASS"
 
 if command -v ufw >/dev/null 2>&1; then
   # 🔴 СНАЧАЛА 22 — иначе enable отрежет SSH (живой случай 13.08 на openclaw-okna)

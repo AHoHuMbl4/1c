@@ -21,7 +21,8 @@ EMAIL = os.environ.get("ADMIN_EMAIL", "admin@okna.local")
 PASSWORD = os.environ.get("ADMIN_PASS") or ""
 MODEL_ID = "openclaw/default"
 DISPLAY = "Ассистент 1С"
-OPENAI_URL = os.environ.get("OPENAI_API_BASE_URL", "http://10.3.0.4:18801/v1")
+# 🔴 Дефолт — vSwitch gpu-1c (LXD proxy → okna). 10.3.0.4 — мёртвый старый бэкенд.
+OPENAI_URL = os.environ.get("OPENAI_API_BASE_URL", "http://10.3.1.11:18801/v1")
 OPENAI_KEY = os.environ.get("OPENAI_API_KEY") or os.environ.get("GATEWAY_TOKEN") or ""
 
 # Open WebUI 0.11: Admin → Settings → Tasks → Follow-up.

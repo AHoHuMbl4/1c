@@ -121,6 +121,10 @@ SERENE_RO_PW=<PGPASSWORD из /etc/1c-mcp-reports.env бэкенда> \
   `POST /api/v1/models/create` override, suggestions с `title: list[str]`).
   В env: `ENABLE_VERSION_UPDATE_CHECK=false` — без changelog-окна Open WebUI.
 - UI: `static/brand-ui.css` скрывает Workspace и селектор моделей (`#model`).
+  Open WebUI при первом старте создаёт `static/custom.css` **пустым**; установка
+  обязана скопировать туда содержимое `brand-ui.css`. Молчаливый пропуск css
+  (если файла нет в каталоге скрипта) — дефект: фронт «работает», но Workspace
+  и селектор моделей остаются видимыми.
 - Вопрос по данным → уточнение → число
 - Голос (STT): Whisper Large-v3 на GPU владельца (`AUDIO_STT_ENGINE=openai`,
   `AUDIO_STT_OPENAI_API_BASE_URL` → `/v1`, модель `whisper-large-v3`; язык не фиксируем — выбор в UI / авто Whisper).
