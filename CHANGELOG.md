@@ -1,3 +1,15 @@
+## 2026-08-29 — транспорт f7f10236: seq195 partial apply + re-apply 171 [замер] [код]
+
+**[замер okna]** document f7f10236: posted, 19 строк ТЧ; движений в трёх регистрах **0**
+после seq176; в корпусе 24.08 движения **были** (23/23/29 unmatched merge). **[разбор]**
+seq154–176 applied — движения **в чанках** (19/21); потеря на **seq195** 28.08:
+`full_entity` регистров без Recorder=f7 + карантин `delta_without_key` на document delta
+(`Ref_Key` чанк vs `ref_key` витрина); partial apply без rollback. **[код]** `_ci_col`
+(30cf7d7); re-apply **000171-9ca09876** на okna. **[замер после]** витрина f7:
+**19/19/19/21**; corpus **1 642 476**; merge f7 без STOP; такт красный на solr/embed.
+**000195** в карантине — не apply (f7=0 в регистрах). Винда seq195: document delta есть,
+движений нет — рассинхрон выгрузки, не «никогда не выгружалось».
+
 ## 2026-08-29 — coverage: перепись объектов только при физической Ref_Key + packet _ci_col [код] [замер]
 
 **[замер okna до]** такт STOP `coverage_build.sql:51` — `Referenced column "Ref_Key"

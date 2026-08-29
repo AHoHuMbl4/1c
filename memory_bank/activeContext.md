@@ -5,18 +5,22 @@
 Оркестрация: ВСЕ правки кода — только cursor-агентами через обёртку (слово
 владельца 29.08 после моего нарушения); за оркестратором — живые пробы/выкладки.**
 
-## Состояние (29.08 вечер, coverage STOP починен в коде)
+## Состояние (29.08 вечер, транспорт f7f10236)
 
-- **coverage_build**: падение `Ref_Key not found` при переписи объектов — правка:
-  физическая колонка через `duckdb_columns()`; иначе причина «нет колонки ключа».
-- **packet_apply**: `_ci_col` (регистронезависимый Ref_Key) — в дереве, замок 6/0.
-- **okna такт**: ждёт выкат + `systemctl start 1c-serene-pipeline@postgres` на окне.
-- **corpus_merge STOP** (f7f10236): без изменений — после зелёной переписи.
+- **Дефект транспорта f7f10236 — разобран, сервер закрыт:**
+  - Потеря на **seq195** (`000195-dc66c520`): partial apply — `full_entity` регистров
+    без Recorder=f7 перезаписал витрину; document delta → `delta_without_key`
+    (Ref_Key/ref_key); карантин не откатывает DROP/CREATE.
+  - seq154–176 applied — движения **в чанках**; винда выгружала.
+  - **Починка:** `_ci_col` (git 30cf7d7), выкат okna; re-apply **000171-9ca09876** →
+    витрина f7 **19/19/19/21**. **000195** в карантине — не apply (f7=0 в регистрах).
+- **okna такт:** merge f7 без STOP; **красный** solr_synonyms_compile + embed
+  (1 642 476 corpus, emb NULL 1 584 759) — отдельно от транспорта.
+- **coverage_build**: `_ci_col`/duckdb_columns — в коде (30cf7d7).
 
 ## Следующий шаг (по приоритету)
 
-1. **Выкат на okna** `coverage_build.sql` + `packet_apply.py`, прогон такта до шага
-   после переписи полноты; доложить если merge/embed STOP.
+1. **Зелёный такт okna:** solr + embed; карантин 195 — ждать seq196+ с движениями f7.
 2. **K8**: скилл `ubuntu/openclaw/skills/ask-decomposer/` → контур бота
    (/home/undebot/.openclaw, правит root на окне) → приёмка compare 8/8.
    Compare = AB_CALENDAR_AXIS: помни, рабочие-дни-строки corpus-блокированы
