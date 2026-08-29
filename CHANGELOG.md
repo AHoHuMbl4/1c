@@ -1,3 +1,14 @@
+## 2026-08-29 — K9 склад-агрегат: count+ось места без терма → distinct, не subject-clarify [код]
+
+**[замер :8092]** «сколько на складе позиций всего» / «сколько позиций на всех
+складах вместе» → clarify «Какой именно товар?» (stock-subject); эталон SQL
+count(distinct товар) net>0 ≈1283. **[код]** `stock_count_aggregate_without_subject`
+в z12: want=count, action_axis≠kind, обе оси живые в метаданных, terms/measure
+вне скаффолда нет → не `stock_subject_clarify`; «петли» (терм есть) — прежний
+named/no_data путь. `stock_subject_needs_clarify` перенесён в z12. Замок
+test_stock_balance_path **30/0** (+4 кейса). Числа: 30/0 48/0 162/0 49/0 word ok.
+Доки: CHANGELOG.
+
 ## 2026-08-29 — ASK_ROOT: путь к SQL/JSON из пакета, не __file__ зоны [код]
 
 **[замер :8092]** 503 FileNotFoundError при живом файле: зоны исполняются

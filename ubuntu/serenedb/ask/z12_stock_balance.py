@@ -306,6 +306,53 @@ def stock_skips_warehouse_clarify(question, intent=None, plan=None):
     return False
 
 
+def stock_count_aggregate_without_subject(intent, plan=None, question=""):
+    """Count + ось места + kind-каталог без именованного предмета → distinct-агрегат.
+
+    Структурно: want=count, action_axis≠kind, обе оси живые в метаданных,
+    terms/measure вне скаффолда нет — не subject-clarify (K9).
+    """
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    if not balance_path_engaged(intent, plan, question):
+        return False
+    if stock_asks_named_product(question, intent):
+        return False
+    if not aggregate_count_intent(intent, plan, question):
+        return False
+    if not secondary_axis_known(intent):
+        return False
+    if not question_mentions_warehouse_axis(question, intent, plan):
+        return False
+    kind = _intent_text(intent.get("kind"))
+    if not kind:
+        return False
+    period = intent.get("period") or {}
+    has_period = bool(period.get("from") or period.get("to"))
+    try:
+        if not entity_form_catalogs_for_kind(kind, allow_meaning=has_period):
+            return False
+    except RuntimeError:
+        return False
+    return True
+
+
+def stock_subject_needs_clarify(question, intent=None):
+    if not balance_path_engaged(intent, None, question):
+        return False
+    if stock_asks_named_product(question, intent):
+        return False
+    if stock_count_aggregate_without_subject(intent, None, question):
+        return False
+    if aggregate_count_intent(intent, None, question):
+        return True
+    if not secondary_axis_known(intent) and not (intent or {}).get("terms"):
+        return True
+    return False
+
+
 def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
     """Билет оси: grain=group сохраняется; form=rank при рейтинговом вопросе."""
     rankish = rank_intent_from(intent, plan, question) or (

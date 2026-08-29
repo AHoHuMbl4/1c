@@ -59,6 +59,22 @@ t("петли: named via terms",
 t("named no_data helper",
   A.stock_balance_named_no_data("сколько петель?", {}, None, __import__("time").time()).get("kind") == "no_data")
 
+# --- K9: count+ось места без терма → агрегат, не subject-clarify ---
+t("count agg: без терма → aggregate path",
+  A.stock_count_aggregate_without_subject(
+      INTENT_STOCK, None, "q"))
+t("count agg: не subject clarify",
+  not A.stock_subject_needs_clarify(
+      "q", INTENT_STOCK))
+t("count agg: терм measure → прежний named path",
+  A.stock_asks_named_product(
+      "q", dict(INTENT_STOCK, measure="петли"))
+  and not A.stock_count_aggregate_without_subject(
+      dict(INTENT_STOCK, measure="петли"), None, "q"))
+t("count agg: терм → subject clarify off (named)",
+  not A.stock_subject_needs_clarify(
+      "q", dict(INTENT_STOCK, measure="петли")))
+
 # --- balance_registers: RuntimeError не глотать ---
 _real_psql = A.psql
 

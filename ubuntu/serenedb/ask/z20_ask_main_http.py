@@ -1776,17 +1776,6 @@ def period_assumed_needs_clarify(intent, today=None):
     return span >= 85
 
 
-def stock_subject_needs_clarify(question, intent=None):
-    if not balance_path_engaged(intent, None, question):
-        return False
-    if stock_asks_named_product(question, intent):
-        return False
-    if aggregate_count_intent(intent, None, question):
-        return True
-    if not secondary_axis_known(intent) and not (intent or {}).get("terms"):
-        return True
-    return False
-
 def warehouse_clarify(question, diag, cut, t0, warehouses=None, intent=None):
     """Уточнение склада-значения словами человека (K4-3 №11). None — не строить."""
     wh = list(warehouses if warehouses is not None else warehouse_axis_values(intent=intent))
