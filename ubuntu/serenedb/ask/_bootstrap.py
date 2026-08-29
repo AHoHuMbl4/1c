@@ -30,6 +30,7 @@ _ZONE_FILES = [
     "z18_compose.py",
     "z19_answer_check.py",
     "z21_wiki_choice.py",
+    "z22_health_tick.py",
     "z20_ask_main_http.py",
 ]
 

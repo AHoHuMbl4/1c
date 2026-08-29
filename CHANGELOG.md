@@ -1,3 +1,17 @@
+## 2026-08-29 — О5: tick_status в /health — такт пишет, сервис отвечает [код] [замер]
+
+**[код]** `tick_status.sh`: одна строка `search_quality` (`k=tick_status`, `v`=epoch
+последнего ok, `note`=``fail=<ts>|reason=<step>:<cat>``). `build.sh` — `tick_status_ok`
+после postcheck, `fail()` → `tick_status_fail`; `pipeline.sh` — preflight fail, без
+`exec` build. `/health` — поле `tick` (`last_ok_age_sec`, `had_recent_fail`,
+`fail_reason`, `summary` «свежесть+N мин»), зона `ask/z22_health_tick.py`.
+Замки: `test_health_tick_status.py` **14/0**, `test_pipeline_tick_status.py` **10/0**.
+**[замер okna :8092]** после выката + `tick_status_ok` без полного такта:
+`GET /health` **200**, `tick.known=true`, `last_ok_age_sec=415`, `had_recent_fail=false`,
+`summary="свежесть+6 мин"`, `corpus_rows=1663140`; `:8091` не рестартовали.
+**Числа:** 14/0+10/0 замки; :8092 tick age 415 с, summary «свежесть+6 мин».
+**Доки:** PLAN_WIKI_CHOICE §7 строка 6 ✅, SQL › Statements › INSERT.
+
 ## 2026-08-29 — О5: персистентные секреты эмбеддера — юнит после serenedb [код]
 
 **[код]** `embed_secrets_install.sh` + `embed_secrets_install.sql`: `CREATE OR REPLACE

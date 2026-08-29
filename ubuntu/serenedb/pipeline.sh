@@ -12,13 +12,19 @@
 # Оба шага работают только внутри движка и 1С; наружу уходит лишь вызов модели (п. 20).
 set -u
 cd /opt/1c-mcp-reports || exit 1
+# shellcheck disable=SC1091
+. ./tick_status.sh
 
 # 🔴 ФОРМА EMBED_HOST ДО СИНКА. Синк на большой базе идёт часами; голый хост
 # (замер 17.08, код 000) не должен сжигать это время. Живая дверь — в build.sh.
 if [ -x ./box_tune.sh ]; then
   # shellcheck disable=SC1091
   . ./box_tune.sh
-  embed_hosts_form_check || { echo "конвейер остановлен: EMBED_HOST без схемы+порта" >&2; exit 1; }
+  embed_hosts_form_check || {
+    echo "конвейер остановлен: EMBED_HOST без схемы+порта" >&2
+    tick_status_fail "pipeline" "preflight"
+    exit 1
+  }
 fi
 
 # Раскладка кода из репозитория — ТОЛЬКО на стенде разработки, где переменная задана.
@@ -54,4 +60,5 @@ if [ "$KEEP_MARKS" = 1 ]; then
 fi
 
 echo "== сборка поискового слоя"
-exec ./build.sh
+./build.sh
+exit $?

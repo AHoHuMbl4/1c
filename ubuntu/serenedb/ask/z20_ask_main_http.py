@@ -6094,10 +6094,15 @@ class Handler(BaseHTTPRequestHandler):
                     native = _measure_native_index_freshness()
                 except Exception as e:                      # noqa: BLE001
                     native_err = str(e)[:200]
+            try:
+                tick = _measure_tick_status()
+            except Exception as e:                      # noqa: BLE001
+                tick = {"known": False, "error": str(e)[:200]}
             if gap and gap.get("kind") == "systemic":
                 body = {"status": "degraded", "corpus_rows": int(n),
                         "coverage_gap": gap,
-                        "period_relative_forms": prf}
+                        "period_relative_forms": prf,
+                        "tick": tick}
                 if ASK_HEALTH_NATIVE_FRESHNESS:
                     body["freshness"] = _attach_native_freshness(
                         {}, native, native_err)
@@ -6107,7 +6112,8 @@ class Handler(BaseHTTPRequestHandler):
                         "coverage_gap": gap or {"entities": 0,
                                                 "rows_missing": 0,
                                                 "kind": "none"},
-                        "period_relative_forms": prf}
+                        "period_relative_forms": prf,
+                        "tick": tick}
                 if ASK_HEALTH_NATIVE_FRESHNESS:
                     body["freshness"] = _attach_native_freshness(
                         {}, native, native_err)
@@ -6121,12 +6127,14 @@ class Handler(BaseHTTPRequestHandler):
                                         "corpus_rows": int(n),
                                         "coverage_gap": gap,
                                         "period_relative_forms": prf,
-                                        "freshness": freshness})
+                                        "freshness": freshness,
+                                        "tick": tick})
             body = {"status": "serene-ask-ok", "corpus_rows": int(n),
                     "coverage_gap": gap or {"entities": 0,
                                             "rows_missing": 0,
                                             "kind": "none"},
-                    "period_relative_forms": prf}
+                    "period_relative_forms": prf,
+                    "tick": tick}
             if ASK_HEALTH_NATIVE_FRESHNESS:
                 body["freshness"] = _attach_native_freshness(
                     {}, native, native_err)

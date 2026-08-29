@@ -26,6 +26,8 @@
 # решается по вопросу в момент ответа.
 set -u
 cd "$(dirname "$0")" || exit 1
+# shellcheck disable=SC1091
+. "$(dirname "$0")/tick_status.sh"
 
 DSN="${SERENEDB_DSN:-host=127.0.0.1 port=7890 user=postgres dbname=postgres}"
 export SERENEDB_DSN="$DSN"
@@ -137,13 +139,19 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-fail() { echo "СБОРКА ПРЕРВАНА: $1" >&2; exit 1; }
+fail() {
+  echo "СБОРКА ПРЕРВАНА: $1" >&2
+  tick_status_fail "${TICK_STEP:-build}" "${TICK_CAT:-stop}"
+  exit 1
+}
 
 # 🔴 ДО ПЕРВОГО ВЕКТОРА: та ли модель. Эндпоинт при неизвестном имени модели молча
 # подставляет свою ([замер 02.08]), а векторы разных моделей несравнимы и сравниваются
 # без единой ошибки — разбор в `embed_check.sh` и `HOW_NOT_TO §1.39`.
+TICK_STEP=embed_check
 ./embed_check.sh || fail "эмбеддер отдаёт не ту модель, которую просим"
 
+TICK_STEP=corpus_init
 echo "== 0. объекты поиска и проверки до такта"
 # 🔴 Д4: имя словаря ОБЯЗАНО уйти в -v. Пустое значение = syntax error на
 # `:"solr_syn_dict"` (okna 24.08–27.08, 3083 падения подряд). Умолчание выше
@@ -285,9 +293,11 @@ else
   # следующий такт пропустил бы пересборку несобранного.
   BUILD_READ_TS=$(date +%s)
 
+  TICK_STEP=corpus_build
   echo "== 1. корпус: движок читает \$metadata из $GATE и собирает текст"
   psql "$DSN" -q -v gate="$GATE" -f corpus_build.sql || fail "сборка корпуса"
 
+  TICK_STEP=corpus_merge
   echo "== 2. слияние в боевой корпус и публикация индекса"
   MERGE_CHUNK_ROWS="${MERGE_CHUNK_ROWS:-1000000}"
   if [ -f ./box_tune.sh ]; then
@@ -514,7 +524,9 @@ psql "$DSN" -q -c "DELETE FROM search_quality WHERE k = 'emb_model_search_entity
   >/dev/null 2>&1 || true
 psql "$DSN" -q -c "VACUUM (REFRESH_INDEX) search_entity_card;" >/dev/null 2>&1 || true
 
+TICK_STEP=corpus_postcheck
 echo "== 8. проверки после такта"
 psql "$DSN" -tA -F' | ' -v build_sql_hash="$SQL_HASH" -v embed_maxlen="$EMBED_MAXLEN" -f corpus_postcheck.sql || fail "проверки после такта"
 
+tick_status_ok
 echo "== такт занял $(( $(date +%s) - t0 )) с"
