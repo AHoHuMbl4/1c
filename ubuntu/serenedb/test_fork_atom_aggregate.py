@@ -115,6 +115,21 @@ t("регистр: лексическая Сумма мертва, живая м
   "status=%s val=%s rel=%s" % (_atom_na.get("proof_status"),
                                _atom_na.get("exact_value"), _rel_out))
 
+# clarify axis labels (offline, Э3)
+_ord_cl = [
+    {"srcs": ["x"], "atom": A.build_answer_atom(
+        operation="sum", exact_value=1.0, measure_id="S",
+        proof_status=A.PROOF_COMPUTED),
+     "row": {"count": 1, "folders": 0, "sums": {"S": 1.0}}},
+    {"srcs": ["x"], "atom": A.build_answer_atom(
+        operation="count", exact_value=2, proof_status=A.PROOF_COMPUTED),
+     "row": {"count": 2, "folders": 0, "sums": {}}},
+]
+_cl_opts = A._fork_clarify_opts(_ord_cl, {}, {}, {}, "", [], {},
+                                "measure", "Сколько закупили товаров?")
+t("clarify opts: подпись оси меры (сумм)",
+  any("сумм" in (o.get("label") or "").lower() for o in _cl_opts))
+
 
 try:
     check_pair("document_приобретениетоваровуслуг", "сумма")

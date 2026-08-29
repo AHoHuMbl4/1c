@@ -219,6 +219,19 @@ t("excluded: pool src без row → no_live_cells",
 t("excluded: все живые → []",
   A._fork_pool_excluded(["a", "b"], {"a": row(1), "b": row(2)}) == [])
 
+# clarify: ось из классов fork (Э3 measure)
+_ord_ax = [
+    {"srcs": ["a"], "atom": A.build_answer_atom(
+        operation="sum", exact_value=100.0, measure_id="Сумма",
+        proof_status=A.PROOF_COMPUTED),
+     "row": row(10, Сумма=100.0)},
+    {"srcs": ["a"], "atom": A.build_answer_atom(
+        operation="count", exact_value=10, proof_status=A.PROOF_COMPUTED),
+     "row": row(10, Сумма=100.0)},
+]
+t("fork detector: sum|count classes → measure axis",
+  A._fork_clarify_axis_kind(_ord_ax, "Сколько мы закупили товаров?") == "measure")
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL))

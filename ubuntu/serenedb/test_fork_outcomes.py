@@ -272,6 +272,43 @@ t("2 класса атомов из 31 src → B с 2 парами, не 31",
 A.fork_labels_covering = real_cov
 
 
+# ── clarify: человеческая подпись оси (Э3 №7/№10) ─────────────────────────────
+_ord_measure = [
+    {"srcs": ["doc_a"], "atom": A.build_answer_atom(
+        operation="sum", exact_value=100.0, measure_id="Сумма",
+        proof_status=A.PROOF_COMPUTED),
+     "row": row(10, Сумма=100.0)},
+    {"srcs": ["doc_a"], "atom": A.build_answer_atom(
+        operation="count", exact_value=10, proof_status=A.PROOF_COMPUTED),
+     "row": row(10, Сумма=100.0)},
+]
+t("clarify axis: sum|count → measure",
+  A._fork_clarify_axis_kind(_ord_measure, "Сколько мы закупили товаров?") == "measure")
+_mopts = A._fork_clarify_opts(_ord_measure, {}, {}, {}, "", [], {},
+                              "measure", "Сколько мы закупили товаров?")
+t("clarify measure: 2 варианта по классам", len(_mopts) == 2)
+t("clarify measure: needle сумм",
+  any("сумм" in (o.get("label") or "").lower() for o in _mopts))
+t("clarify measure: needle колич",
+  any("колич" in (o.get("label") or "").lower() for o in _mopts))
+
+_ord_place = [
+    {"srcs": ["reg_a"], "atom": A.build_answer_atom(
+        operation="count", exact_value=5, proof_status=A.PROOF_COMPUTED),
+     "row": row(5)},
+    {"srcs": ["reg_b"], "atom": A.build_answer_atom(
+        operation="count", exact_value=3, proof_status=A.PROOF_COMPUTED),
+     "row": row(3)},
+]
+t("clarify axis: stock question → place",
+  A._fork_clarify_axis_kind(_ord_place, "Сколько товара на складе?") == "place")
+_popts = A._fork_clarify_opts(_ord_place,
+                              {"reg_a": "R1", "reg_b": "R2"}, {}, {}, "", [], {},
+                              "place", "Сколько товара на складе?")
+t("clarify place: needle склад",
+  all("склад" in (o.get("label") or "").lower() for o in _popts))
+
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)

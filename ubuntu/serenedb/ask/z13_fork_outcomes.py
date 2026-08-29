@@ -427,6 +427,161 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None,
             "sources": [o["label"] for o in opts], "diag": d}
 
 
+def _fork_question_cyrillic(question):
+    return any("\u0400" <= c <= "\u04ff" for c in (question or ""))
+
+
+def _fork_applicable_ordered(ordered):
+    return [it for it in (ordered or [])
+            if (it.get("atom") or {}).get("proof_status") != PROOF_NA]
+
+
+def _fork_clarify_axis_kind(ordered, question, want=None):
+    """Тип человеческой оси clarify: measure / place / period или None.
+
+    Из структуры классов развилки и формы вопроса — не из имён таблиц базы.
+    """
+    items = _fork_applicable_ordered(ordered)
+    if len(items) < 2:
+        return None
+    ops, dims, abs_, dbs, win_period = set(), set(), set(), set(), set()
+    for it in items:
+        atom = it.get("atom") or {}
+        op = (atom.get("operation") or "count").lower()
+        ops.add(op)
+        row = it.get("row") or {}
+        mid = atom.get("measure_id")
+        names = list((row.get("sums") or {}).keys())
+        if mid and mid not in names:
+            names.append(mid)
+        if op == "count":
+            dims.add("qty")
+        elif op == "sum":
+            dims.add(_measure_dimension(mid, names=names or None))
+        ab = _class_amount_basis(it)
+        if ab in _AMOUNT_BASIS_IDS:
+            abs_.add(ab)
+        db = _class_day_basis(it)
+        if db in _DAY_BASIS_IDS:
+            dbs.add(db)
+        p = it.get("period") or atom.get("period") or {}
+        if p.get("from") or p.get("to") or p.get("interpretation_id"):
+            win_period.add((p.get("interpretation_id") or "",
+                            p.get("from") or "", p.get("to") or ""))
+    if len(ops) > 1:
+        return "measure"
+    if len(dims) > 1 and not (dims <= {"unknown"}):
+        return "measure"
+    if len(abs_) > 1:
+        return "measure"
+    if len(dbs) > 1:
+        return "period"
+    if question_asks_stock_balance(question):
+        return "place"
+    if len(win_period) > 1:
+        return "period"
+    _ = want
+    return None
+
+
+def _fork_human_measure_label(atom, question="", row=None, class_item=None):
+    """Подпись оси меры: сумма/количество — из operation и роли поля."""
+    cyr = _fork_question_cyrillic(question)
+    it = class_item or {}
+    ab = _class_amount_basis(it)
+    if ab in _AMOUNT_BASIS_IDS:
+        lab = (it.get("label") or "").strip()
+        if lab:
+            return lab
+        if ab == _AMOUNT_BASIS_DOC:
+            return "сумма документа" if cyr else "document amount"
+        return "учётная сумма" if cyr else "accounting amount"
+    atom = atom or {}
+    op = (atom.get("operation") or "count").lower()
+    if op == "count":
+        return "количество" if cyr else "quantity"
+    if op != "sum":
+        return ""
+    mid = atom.get("measure_id")
+    names = list((row or {}).get("sums") or {})
+    if mid and mid not in names:
+        names.append(mid)
+    dim = _measure_dimension(mid, names=names or None)
+    if dim == "qty":
+        return "количество" if cyr else "quantity"
+    unit = (MONEY_UNIT or "").strip()
+    if unit:
+        return ("сумма (%s)" % unit) if cyr else ("amount (%s)" % unit)
+    return "сумма" if cyr else "amount"
+
+
+def _fork_human_place_label(question=""):
+    return "склад" if _fork_question_cyrillic(question) else "warehouse"
+
+
+def _fork_axis_option_label(axis_kind, it, base_lab, question, today=None):
+    """Человеческая подпись варианта: ось + ветка (если есть)."""
+    atom = it.get("atom") or {}
+    row = it.get("row") or {}
+    if axis_kind == "measure":
+        axis_lab = _fork_human_measure_label(atom, question, row, class_item=it)
+    elif axis_kind == "place":
+        axis_lab = _fork_human_place_label(question)
+    elif axis_kind == "period":
+        db = _class_day_basis(it)
+        if db in _DAY_BASIS_IDS and (it.get("label") or "").strip():
+            axis_lab = (it.get("label") or "").strip()
+        else:
+            p = it.get("period") or atom.get("period") or {}
+            axis_lab = render_window_label(p, today=today) if p else ""
+    else:
+        axis_lab = ""
+    base = (base_lab or "").strip()
+    if axis_lab and base and base.lower() not in axis_lab.lower():
+        return "%s — %s" % (axis_lab, base)
+    return axis_lab or base
+
+
+def _fork_clarify_opts(ordered, lab_by, marks, by, match, preds, live,
+                       axis_kind, question, today=None):
+    """Варианты clarify: по классам развилки, с подписью человеческой оси."""
+    applicable = _fork_applicable_ordered(ordered)
+    if axis_kind and len(applicable) >= 2:
+        marks = marks or {}
+        by = by or {}
+        live = live or {}
+        hints = opts_hints([s for it in applicable for s in (it.get("srcs") or [])])
+        opts = []
+        for it in applicable:
+            srcs = list(it.get("srcs") or [])
+            rep = sorted(srcs)[0] if srcs else ""
+            db = _class_day_basis(it)
+            ab = _class_amount_basis(it)
+            base = (it.get("label") or "").strip()
+            if not base and rep:
+                base = human_table_label(rep, (lab_by or {}).get(rep))
+            lab = _fork_axis_option_label(axis_kind, it, base, question, today=today)
+            if not lab:
+                lab = base or rep
+            opt = {"src": ab or db or rep,
+                   "label": lab,
+                   "hint": hints.get(rep, "") if rep else "",
+                   "distinct_by": marks.get(rep, "") if rep else "",
+                   "found": live.get(rep, by.get(rep, 0)) if rep else 0}
+            if db:
+                opt["day_basis"] = db
+            if ab:
+                opt["amount_basis"] = ab
+            opts.append(opt)
+        return opts
+    srcs = []
+    for it in ordered or []:
+        srcs.extend(it.get("srcs") or [])
+    srcs = list(dict.fromkeys(srcs))
+    return mk_opts(srcs, lab_by or {}, marks or {}, by or {}, match=match,
+                   preds=preds, live=live)
+
+
 def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
                    lab_by=None, marks=None, by=None, match="", preds=None,
                    picked_src=None, day_basis_prefer=None,
@@ -496,8 +651,9 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
         if lab:
             lab_by[s] = lab
     live = {s: ((rows or {}).get(s) or {}).get("count", 0) for s in srcs}
-    opts = mk_opts(srcs, lab_by, marks or {}, by or {}, match=match, preds=preds,
-                   live=live)
+    axis_kind = _fork_clarify_axis_kind(ordered, question)
+    opts = _fork_clarify_opts(ordered, lab_by, marks, by, match, preds, live,
+                              axis_kind, question)
     partial = dict(cut or {})
     lim = {"reason": c_why}
     if payload.get("unsigned"):
@@ -506,6 +662,8 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
         lim["uncounted_classes"] = len(payload["uncounted"])
     partial["fork_limitation"] = lim
     d = _diag_pack(diag, fork_outcome="C", fork_c_reason=c_why)
+    if axis_kind:
+        d["fork_clarify_axis"] = axis_kind
     if t0 is not None:
         d["sec"] = round(time.time() - t0, 2)
     text = clarify_say(question, opts, d) if opts else ""

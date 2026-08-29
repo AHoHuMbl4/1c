@@ -1,3 +1,13 @@
+## 2026-08-29 — fork clarify: подпись человеческой оси в options исхода C [код]
+
+**[код]** Э3 «подстрока clarify не найдена»: `fork_outcome_c` строил options
+по dedupe src без оси — терялись sum|count на одном src, не было «сумма»/
+«склад». `_fork_clarify_axis_kind` + `_fork_clarify_opts`: вариант = класс
+развилки, подпись из operation/роли меры/остатков/окна, не из имён таблиц.
+**Доказано:** test_fork_outcomes 35/0, test_fork_detector 44/0,
+test_k4_clarify_vs_nodata 27/0, test_k4_guess_vs_clarify 13/0,
+test_fork_atom_aggregate (offline clarify).
+
 ## 2026-08-29 — K6c: count vs гигант — themed count + code-pick q_meta [код]
 
 **[код]** Класс §7.7 K6_ENTITY_RANK: на count-вопросах literal BM25
