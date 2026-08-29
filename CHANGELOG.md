@@ -48,9 +48,12 @@ __file__ пакета); z21 SQL гибрида, z03/z04 JSON-fallback, z20 journ
 продолжается; документ **жив** при нуле движений → STOP «дефект транспорта» с
 recorder. Анти-соединение перепроведения: хвост ключа после Recorder = Period|оси
 в tmp3, только если `Period` в `tmp3_key`. Замок **37/0** (было 27/0).
-**[замер okna 29.08]** deploy; merge STOP ожидаемо на `f7f10236` (док 19 строк,
-движений 0 — транспорт); `de0ef63e`/`f4e8e0fa` — deleted_delta кандидаты.
-Числа: 37/0. Доки: cookbook/sql_features/query_and_query_table_functions.
+**[замер okna 29.08]** deploy md5 `3b905212…`; merge guard exit **3** — STOP
+«дефект транспорта»: `f7f10236` в трёх регистрах (19+19+21 строк); `de0ef63e`/
+`f4e8e0fa` — deleted_delta кандидаты, но сущности заблокированы тем же STOP.
+`entity_deleted_delta` **0** (ожидаемо). Корпус **1 230 156**, tmp3 **1 561 704**,
+emb NULL **23 494**. Pipeline не запускался.
+Числа: 37/0/1230156/1561704/23494/f7f10236x3. Доки: cookbook/sql_features/query_and_query_table_functions.
 
 ## 2026-08-29 — corpus_merge: ветка entity_key_collapse (частичный уход + рост) [код]
 
