@@ -96,6 +96,26 @@ t("edm: _Key", G.map_edm_type("Организация_Key", "VARCHAR") == "Edm.G
 t("edm: boolean", G.map_edm_type("deletionmark", "BOOLEAN") == "Edm.Boolean")
 t("edm: LineNumber", G.map_edm_type("linenumber", "VARCHAR") == "Edm.Int64")
 
+# --- composite fallback infer_key (register shadow без recorder в витрине) ---
+bare_shadow_cols = [("period", "VARCHAR"), ("Сумма", "VARCHAR"), ("Организация_Key", "VARCHAR")]
+bare_key = G.infer_key("AccumulationRegister_Продажи_RecordType", bare_shadow_cols)
+t("infer_key: shadow bare vitrine no NameError",
+  bare_key == ["Recorder_Key", "LineNumber"], bare_key)
+type_shadow_cols = [("period", "VARCHAR"), ("Сумма", "VARCHAR"), ("foo_type", "VARCHAR")]
+type_key = G.infer_key("AccumulationRegister_Продажи_RecordType", type_shadow_cols)
+t("infer_key: composite shadow via _type column",
+  type_key == ["Recorder", "Recorder_Type", "LineNumber"], type_key)
+recorder_key_cols = [("recorder_key", "VARCHAR"), ("linenumber", "VARCHAR")]
+recorder_key = G.infer_key("AccumulationRegister_Продажи_RecordType", recorder_key_cols)
+t("infer_key: recorder_key shadow",
+  recorder_key == ["Recorder_Key", "LineNumber"], recorder_key)
+k_comp, p_comp, o_comp = G.build_entity_props(
+    "AccumulationRegister_Продажи_RecordType", type_shadow_cols,
+)
+t("infer_key: composite build_entity_props",
+  k_comp == ["Recorder", "Recorder_Type", "LineNumber"] and len(p_comp) >= 4,
+  (k_comp, len(p_comp)))
+
 # --- (c) полнота: витрина ⊂ снимок (оффлайн мок) ---
 vitrine = {
     "catalog_валюты": [("ref_key", "VARCHAR"), ("code", "VARCHAR"), ("description", "VARCHAR")],

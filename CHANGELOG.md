@@ -1,4 +1,12 @@
-## 2026-08-29 — gen_metadata_vitrine: psql/safe_col, замок артефакта [код]
+## 2026-08-29 — metadata-okna: infer_key composite, живой артефакт 819 [код] [замер]
+
+**[код]** `gen_metadata_vitrine.infer_key`: `composite` вычисляется из props
+(фикс `NameError` на register shadow без recorder в витрине). Замок: кейсы
+composite/_type и bare shadow. **[замер окно :7890]** `run-metadata-okna.sh`:
+ENTITY **819**, PROPERTY **7633**, KEYED **819**, MISSING **0** →
+`metadata-okna.xml` (890 KB, arrived props ratio ≥50%). Числа: замок **29/0**.
+Доки: `duckdb_columns`.
+
 
 **[код]** `gen_metadata_vitrine.py`: `safe_col()` для имён таблиц (как
 `packet_apply`); psql без `PGHOST`/`PGPORT` из окружения + `connect_timeout=15`;

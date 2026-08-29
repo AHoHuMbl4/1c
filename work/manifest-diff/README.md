@@ -20,9 +20,11 @@
   список сущностей OData); без COM/Windows. Замок: `test_gen_metadata_vitrine.py`.
 - `run-metadata-okna.sh` — прогон для okna на машине с витриной `127.0.0.1:7890`.
 - `metadata-okna.xml` — артефакт контура okna (819 сущностей из
-  `docs/completeness-okna/contour.txt`). **Перегенерировать на живой витрине
+  `docs/completeness-okna/contour.txt`, **7633** свойств в генераторе / 819
+  EntitySet). **Перегенерировать на живой витрине
   окна** (`bash work/manifest-diff/run-metadata-okna.sh`); установка в
   `/var/lib/serenedb/packet-meta/okna-1/` — оркестратор, не этот скрипт.
+- `remote-gen-okna-once.sh` — scp фикса + прогон на `gpu-erw` `/tmp/genrepo`.
 
 ## Парсер такта (corpus_build.sql §1)
 

@@ -291,6 +291,9 @@ def infer_key(entity: str, props: List[Tuple[str, str]]) -> List[str]:
     if "surrogatekey" in names:
         return [names["surrogatekey"]]
     if is_register_record_shadow(entity):
+        composite = any(c.lower() == "recorder" for c, _ in props) or any(
+            c.lower().endswith("_type") for c, _ in props
+        )
         if composite:
             return ["Recorder", "Recorder_Type", "LineNumber"]
         return ["Recorder_Key", "LineNumber"]
