@@ -131,7 +131,7 @@ fi
 
 impossible=0; bad=0
 ROUNDS=${EMBED_ROUNDS:-1}
-PAUSE=${EMBED_RETRY_PAUSE:-20}
+PAUSE=${EMBED_RETRY_PAUSE:-0}
 round=0
 n=""
 after=""
