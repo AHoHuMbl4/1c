@@ -62,6 +62,11 @@ _STOCK_MARKERS = (
     "леж",
 )
 
+# Класс оси места хранения в вопросе (ru+en), не имя реквизита базы.
+_WAREHOUSE_AXIS_MARKERS = (
+    "склад", "warehouse", "storage", "depot", "depozit", "magazin",
+)
+
 # Класс маркеров итога без разреза (ru+en), не список фраз конкретного диалога.
 _AGGREGATE_TOTAL_MARKERS = (
     "всего", "итого", "итог ", " overall", " in total", " total ",
@@ -80,6 +85,14 @@ _RANK_NOT_AGGREGATE = (
     "больше всех", "меньше всех", "лучше всех", "хуже всех",
     "most ", " least ", "best selling", "top seller",
 )
+
+
+def question_mentions_warehouse_axis(question):
+    """Вопрос про ось места хранения — класс слов, не список складов базы."""
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return False
+    return any(m in q for m in _WAREHOUSE_AXIS_MARKERS)
 
 
 def question_has_aggregate_total_marker(question, intent=None, plan=None):
@@ -115,20 +128,66 @@ def warehouse_axis_is_live():
 
 def stock_skips_warehouse_clarify(question, intent=None, plan=None):
     """Не уточнять склад: итог без разреза, явный разрез, или все склады названы."""
-    if not question_asks_stock_balance(question):
+    stockish = question_asks_stock_balance(question)
+    wh_axis = question_mentions_warehouse_axis(question)
+    if not stockish and not wh_axis:
         return False
     if question_has_aggregate_total_marker(question, intent, plan):
         return True
     if question_wants_per_axis_breakdown(question, intent, plan):
         return True
-    q = " ".join(str(question or "").lower().split())
-    if any(w in q for w in ("всех", "всеми", "all warehouses", "all stocks")):
-        return True
+    if stockish:
+        q = " ".join(str(question or "").lower().split())
+        if any(w in q for w in ("всех", "всеми", "all warehouses", "all stocks")):
+            return True
     return False
 
 
+def _resolve_breakdown_balance_src(src, cands=None):
+    """Balance-регистр с товарной осью для итога+люка; каталог складов не годится."""
+    try:
+        cap = balance_capable_or_registers()
+        goods = balance_registers_with_goods(cap) if cap else frozenset()
+    except RuntimeError:
+        return src or None
+    if src and src in goods:
+        return src
+    for c in (cands or []):
+        if c in goods:
+            return c
+    if goods:
+        return sorted(goods)[0]
+    if src and src in cap:
+        return src
+    if cap:
+        return sorted(cap)[0]
+    return src or None
+
+
+def _breakdown_fallback_measure(src, measure, intent=None):
+    """Мера count/sum для fallback — из intent или количественного поля регистра."""
+    if measure:
+        return measure
+    want = ((intent or {}).get("want") or "").strip().lower()
+    if want == "sum":
+        return measure
+    if not src:
+        return measure
+    try:
+        names = list(measures_of(src) or [])
+    except RuntimeError:
+        return measure
+    if not names:
+        return measure
+    got, _, how = measure_choice(names, "колич", alias_by={})
+    if got and how in ("exact", "substring", "alias", "base", "single"):
+        return got
+    return measure
+
+
 def stock_breakdown_leader_fallback(question, src, match, preds, measure, diag,
-                                    cut, t0, intent=None, plan=None, agg=None):
+                                    cut, t0, intent=None, plan=None, agg=None,
+                                    cands=None):
     """Исход B при живой оси и запросе разреза, если GROUP BY ещё недоступен (K7, не K8).
 
     Считаемый лидер-итог + люк из значений оси склада; пустой отказ не отдаём.
@@ -144,6 +203,8 @@ def stock_breakdown_leader_fallback(question, src, match, preds, measure, diag,
         return None
     if len(wh) < 2:
         return None
+    src = _resolve_breakdown_balance_src(src, cands)
+    measure = _breakdown_fallback_measure(src, measure, intent)
     if agg is None and src:
         try:
             agg = aggregate(src, match, preds, measure)

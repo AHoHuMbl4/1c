@@ -612,7 +612,7 @@ def _fork_clarify_axis_kind(ordered, question, want=None):
         return "measure"
     if len(dbs) > 1:
         return "period"
-    if question_asks_stock_balance(question):
+    if question_asks_stock_balance(question) or question_mentions_warehouse_axis(question):
         return "place"
     if len(win_period) > 1:
         return "period"

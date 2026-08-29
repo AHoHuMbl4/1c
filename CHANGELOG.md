@@ -1,3 +1,16 @@
+## 2026-08-29 — K7: список складов без stock-маркера — итог+люк, не no_data [код]
+
+**[код]** z12: класс `_WAREHOUSE_AXIS_MARKERS` (склад/warehouse/…); `stock_skips_warehouse_clarify`
+работает и для list+«пo каждому» без «остат*»; fallback резолвит balance-src из
+`cands` (каталог → регистр с ТМЦ), меру количества — через `measure_choice`.
+z20:9322 stock-path расширен на warehouse+breakdown; fallback перед no_data на
+трёх ветках aggregate (4747+). z13: place-clarify при warehouse-axis вопросе.
+Корень дефекта №2 (29.08): Q_LIST не попадал в stock-path → no_data при живой оси.
+Числа: test_warehouse_aggregate_breakdown **20/0**; fork_outcomes 49/0;
+fork_detector 52/0; calendar_axis 42/0; intent 162/0; k4_clarify 27/0;
+fork_window 44/0; fork_label_daybasis 13/0; warehouse_axis 12/0;
+stock_balance_path 27/0. Доки: K7_WAREHOUSE_AXIS.md §4.
+
 ## 2026-08-29 — K7: агрегат «всего» и разрез «пo каждому» на оси склада [код]
 
 **[код]** z12: класс маркеров итога (`всего`/`total`/…) снимает `warehouse_clarify`

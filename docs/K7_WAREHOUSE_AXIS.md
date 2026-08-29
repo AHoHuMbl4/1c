@@ -65,7 +65,7 @@ Sql › Statements › SELECT › ORDER BY, LIMIT.
 | замок | результат |
 |---|---|
 | `test_warehouse_axis_autonomy.py` (новый) | **12/0** |
-| `test_warehouse_aggregate_breakdown.py` (29.08) | **17/0** |
+| `test_warehouse_aggregate_breakdown.py` (29.08) | **20/0** |
 | `test_k4_axis_and_names.py` | **11/0** |
 | `test_k4_guess_vs_clarify.py` | **13/0** |
 | `test_k4_meta_names.py` | **12/0** |

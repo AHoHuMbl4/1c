@@ -51,6 +51,11 @@ t("«пo каждому»: skip warehouse clarify",
 t("list+пo каждому: breakdown без stock-маркера",
   A.question_wants_per_axis_breakdown(
       Q_LIST, intent={"want": "list", "kind": "склад"}))
+t("list: warehouse axis class",
+  A.question_mentions_warehouse_axis(Q_LIST))
+t("list+пo каждому: skip warehouse clarify",
+  A.stock_skips_warehouse_clarify(
+      Q_LIST, intent={"want": "list", "kind": "склад"}))
 
 # ── warehouse_clarify: gated ─────────────────────────────────────────────────
 _old_wh = A.warehouse_axis_values
@@ -81,6 +86,12 @@ try:
     t("plain stock: fallback None",
       A.stock_breakdown_leader_fallback(
           Q_PLAIN, "x", "", [], None, {}, None, time.time()) is None)
+    fb_list = A.stock_breakdown_leader_fallback(
+        Q_LIST, "catalog_wh", "", [], None, {}, None, time.time(),
+        intent={"want": "list", "kind": "склад"},
+        cands=["accumulationregister_goods"])
+    t("list: fallback from catalog to balance src",
+      fb_list and fb_list.get("kind") == "figures", fb_list)
     A.warehouse_axis_values = lambda limit=20: ["only"]
     t("single warehouse: fallback None",
       A.stock_breakdown_leader_fallback(

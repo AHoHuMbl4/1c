@@ -2392,7 +2392,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         counts_for_model = entity_pick_counts_for_model(
             by, diag, intent, question)
         шаг("K6 v2", кандидатов=len(cands))
-    if question_asks_stock_balance(question):
+    if (question_asks_stock_balance(question)
+            or (question_mentions_warehouse_axis(question)
+                and question_wants_per_axis_breakdown(question, intent))):
         capable = balance_capable_or_registers()
         cands = filter_stock_balance_sales_noise(cands, question, diag)
         named = stock_asks_named_product(question, intent)
@@ -4746,7 +4748,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if not _zero_period_not_missing(intent, diag, question, act, src):
                 _sfb = stock_breakdown_leader_fallback(
                     question, src, match, preds, measure, diag, cut, t0,
-                    intent=intent, plan=plan, agg=None)
+                    intent=intent, plan=plan, agg=None, cands=cands)
                 if _sfb:
                     return _sfb
                 return {"partial": cut or None, "kind": "no_data",
@@ -4771,7 +4773,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     intent, diag, question, empty_after_period_action(intent), src)):
             _sfb2 = stock_breakdown_leader_fallback(
                 question, src, match, preds, measure, diag, cut, t0,
-                intent=intent, plan=plan, agg=agg)
+                intent=intent, plan=plan, agg=agg, cands=cands)
             if _sfb2:
                 return _sfb2
             return {"partial": cut or None, "kind": "no_data",
@@ -4789,6 +4791,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
             if not _zero_period_not_missing(intent, diag, question, act, src):
+                _sfb3 = stock_breakdown_leader_fallback(
+                    question, src, match, preds, measure, diag, cut, t0,
+                    intent=intent, plan=plan, agg=agg, cands=cands)
+                if _sfb3:
+                    return _sfb3
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -4803,6 +4810,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # потеря была полной, и «данных нет» срабатывало про существование.
             act = empty_after_period_action(intent)
             if not _zero_period_not_missing(intent, diag, question, act, src):
+                _sfb4 = stock_breakdown_leader_fallback(
+                    question, src, match, preds, measure, diag, cut, t0,
+                    intent=intent, plan=plan, agg=None, cands=cands)
+                if _sfb4:
+                    return _sfb4
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -4820,6 +4832,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 agg = {"count": 0, "sum": 0.0, "src": src, "measure": measure,
                        "folders": 0, "out_of_range": 0, "count_amount": 0}
             else:
+                _sfb5 = stock_breakdown_leader_fallback(
+                    question, src, match, preds, measure, diag, cut, t0,
+                    intent=intent, plan=plan, agg=agg, cands=cands)
+                if _sfb5:
+                    return _sfb5
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
