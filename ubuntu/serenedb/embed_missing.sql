@@ -99,19 +99,21 @@ SELECT count(*)::bigint AS n_impossible
 \endif
 \gset imp_
 
--- ── 6. Одна сессия: staging + ai_embed по chunk ─────────────────────────────
+-- ── 6. Одна сессия: МАССОВЫЙ ai_embed одним оператором на раунд (26.08.1) ──
+-- [замер 29.08] дефект 26.07.3 (Vector::SetSize при >16–32 строк) на 26.08.1
+-- не воспроизводится: 64/512 строк одним оператором живьём. Решение владельца:
+-- только массовый нативный вызов; порция раунда = :chunks_round чанков.
 \set ON_ERROR_STOP off
 :thr_sql
 CREATE OR REPLACE TABLE :"tag_part0" AS SELECT * FROM :"tag_todo" WHERE false;
 ALTER TABLE :"tag_part0" DROP COLUMN txt;
 ALTER TABLE :"tag_part0" DROP COLUMN chunk;
 ALTER TABLE :"tag_part0" ADD COLUMN emb FLOAT[:dim];
-SELECT 'INSERT INTO ' || :'tag_part0' || ' SELECT * EXCLUDE (txt, chunk), ai_embed(txt, '''
-       || replace(:'model', '''', '''''') || ''', '''
-       || replace(:'sec0', '''', '''''') || ''')::FLOAT[' || :'dim' || ']
-        FROM ' || :'tag_todo' || ' WHERE chunk = ' || chunk || ';'
-  FROM (SELECT DISTINCT chunk FROM :"tag_todo" ORDER BY 1);
-\gexec
+INSERT INTO :"tag_part0"
+SELECT * EXCLUDE (txt, chunk),
+       ai_embed(txt, :'model', :'sec0')::FLOAT[:dim]
+  FROM :"tag_todo"
+ WHERE chunk <= :chunks_round;
 \set ON_ERROR_STOP on
 
 SELECT count(*)::bigint AS session_rows FROM :"tag_part0";

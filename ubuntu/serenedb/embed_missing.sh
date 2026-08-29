@@ -32,6 +32,9 @@ TAG_PART0="${TAG}_part_0"
 ROWS_PER_BATCH=${EMBED_BATCH_ROWS:-16}
 BUDGET=${EMBED_BATCH_CHARS:-12000}
 MAXLEN=${EMBED_MAXLEN:-20000}
+# Массовый нативный раунд (26.08.1): один оператор ai_embed на :chunks_round
+# чанков (строк/оператор = chunks_round × ROWS_PER_BATCH).
+CHUNKS_ROUND=${EMBED_CHUNKS_PER_ROUND:-400}
 
 if [ -n "$KEY" ]; then
   KCOLS="$KEY"
@@ -86,6 +89,7 @@ run_sql_round() {
     -v "on_clause=$ON" \
     -v "ord=$ORD" \
     -v "rows_per_batch=$ROWS_PER_BATCH" \
+    -v "chunks_round=$CHUNKS_ROUND" \
     -v "budget=$BUDGET" \
     -v "maxlen=$MAXLEN" \
     -v "model=$MODEL" \
