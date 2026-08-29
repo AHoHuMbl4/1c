@@ -1,25 +1,3 @@
 id	question	packet	vitrine	status	reason
-accumulationregister_допзатратыимпорттмц	Сколько движений в регистре «допзатратыимпорттмц»?		67186	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_допзатратыимпорттмц	Сколько записей в «допзатратыимпорттмц»?		67186	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_импорттмц	Сколько движений в регистре «импорттмц»?		13322	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_импорттмц	Сколько записей в «импорттмц»?		13322	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_кассовыеордера	Сколько движений в регистре «кассовыеордера»?		3588	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_кассовыеордера	Сколько записей в «кассовыеордера»?		3588	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_книгапокупок	Сколько движений в регистре «книгапокупок»?		2383	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_книгапокупок	Сколько записей в «книгапокупок»?		2383	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_книгапродаж	Сколько движений в регистре «книгапродаж»?		75960	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_книгапродаж	Сколько записей в «книгапродаж»?		75960	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_налогипопериодудействия	Сколько движений в регистре «налогипопериодудействия»?		33	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_налогипопериодудействия	Сколько записей в «налогипопериодудействия»?		33	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_номерабсо	Сколько движений в регистре «номерабсо»?		376	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_номерабсо	Сколько записей в «номерабсо»?		376	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_отработанноевремя	Сколько движений в регистре «отработанноевремя»?		85	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_отработанноевремя	Сколько записей в «отработанноевремя»?		85	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_расчетныеначисления	Сколько движений в регистре «расчетныеначисления»?		2	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_расчетныеначисления	Сколько записей в «расчетныеначисления»?		2	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_реализациятмц	Сколько движений в регистре «реализациятмц»?		78422	needs_independent_read	расхождение 1С↔корпус по существу
-accumulationregister_реализациятмц	Сколько записей в «реализациятмц»?		78422	needs_independent_read	расхождение 1С↔корпус по существу
-clients	сколько у нас вообще клиентов сейчас	366	362	needs_independent_read	расхождение 1С↔корпус по существу
-sku	сколько позиций у нас в прайсе всего	2402	2389	needs_independent_read	расхождение 1С↔корпус по существу
-reg_rows	Сколько движений в регистре реализации ТМЦ?	78176	78422	needs_independent_read	расхождение 1С↔корпус по существу
-no_stock	сколько у нас петель осталось на складе	no_data	no_data	declared_wrong	заявленный эталон расходится с фактом 1С
+clients	сколько у нас вообще клиентов сейчас	367	363	mismatch	base_profile 367 vs count catalog_контрагенты leaf 363
+sku	сколько позиций у нас в прайсе всего	2402	2389	mismatch	base_profile 2402 vs count catalog_номенклатура leaf 2389

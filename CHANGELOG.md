@@ -1,3 +1,13 @@
+## 2026-08-29 — ЧП1 client-gold okna: 67/67 эталонов сверены с 1С [замер] [решение]
+
+**[замер okna 29.08 вечер]** SSH gpu-erw.timpul.pro:7890, freshness_lag **3794** с.
+**[Числа]** client-gold-okna **67/67** с заполненным etalon: match **65**, mismatch **2**,
+pending **0**, needs_independent_read **0**. Mismatch: контрагенты **363** (vitrine) vs
+base_profile **367**; номенклатура **2389** vs **2402**. Склад-перечень: **3** места
+(`catalog_местахранения`: Bubuieci, Depozit, Vitrina). Остатки/**21** journal-вопросов:
+**no_data** (§B6 ACCEPTANCE_OKNA_LIVE — регистров остатков нет). Петли: **no_data**
+(1 позиция в каталоге, остаток не ведётся). **Доки:** docs/GOLD_SETS.md §1.
+
 ## 2026-08-29 — транспорт f7f10236: seq195 partial apply + re-apply 171 [замер] [код]
 
 **[замер okna]** document f7f10236: posted, 19 строк ТЧ; движений в трёх регистрах **0**

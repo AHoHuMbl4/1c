@@ -64,6 +64,7 @@ WITH cells AS (SELECT * FROM (SELECT COLUMNS(*)::VARCHAR FROM query_table($1)) s
              AND c.col NOT LIKE '%\_Base64Data')    -- вложение, а не значение
 SELECT $1::VARCHAR, col, val FROM d
 WHERE NOT regexp_matches(val, '^(https?://|/)')
+  AND NOT regexp_matches(val, '^\\{')
   AND NOT regexp_full_match(val,
         '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}');
 
@@ -111,7 +112,8 @@ USING (SELECT tbl, col, val FROM res_val) s
       AND EXISTS (SELECT 1 FROM res_seen z WHERE z.tbl = t.table_name AND z.n_rows > 0)
       THEN DELETE
  WHEN NOT MATCHED THEN
-      INSERT (table_name, column_name, value, emb) VALUES (s.tbl, s.col, s.val, NULL);
+      INSERT (table_name, column_name, value, emb)
+      VALUES (s.tbl, s.col, substr(s.val, 1, 20000), NULL);
 
 -- 🔴 SERVICE НЕ В РЕЗОЛВЕРЕ (возврат 2 / 21.08, DATA_SCOPE §9.4). Бизнес-вопросов к
 -- служебным сущностям нет: ни значения, ни их векторы. Даже если таблица не попала в

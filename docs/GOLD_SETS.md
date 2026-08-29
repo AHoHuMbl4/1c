@@ -22,7 +22,7 @@
 | `/tmp/f61_boy/ab-gold-24.tsv` (контур-24, **вне git**) | **контроль свежести окна** | **24** | живой SQL v2; пересобирается под «сегодня» | нет (временный) |
 | [`docs/ACCEPTANCE_UT.md`](ACCEPTANCE_UT.md) | **приёмка** (ut_test, заморожен; **выведен** из okna-замеров 26.08) | **58** | сверены с SQL ut_test (29.07); с 18.08 не правился | `test_gold_sets_split` |
 | [`ubuntu/serenedb/ab-acceptance-ut.tsv`](../ubuntu/serenedb/ab-acceptance-ut.tsv) | **приёмка** (зеркало UT, ut_test) | **58** | дословно из `ACCEPTANCE_UT.md`; не в git на 28.08 | `test_acceptance_ut_tsv` |
-| [`ubuntu/serenedb/client-gold-okna.tsv`](../ubuntu/serenedb/client-gold-okna.tsv) | **приёмка** (okna, эталоны 1С) | **67** | И0 `work/gold/client_gold.py` packet↔vitrine; **29.08** live match **22** / needs_read **23** / pending **21** | `test_gold_sets_split` + `test_client_gold` |
+| [`ubuntu/serenedb/client-gold-okna.tsv`](../ubuntu/serenedb/client-gold-okna.tsv) | **приёмка** (okna, эталоны 1С) | **67** | И0 `work/gold/client_gold.py` packet↔vitrine; **29.08 вечер** ЧП1: **67/67** эталонов заполнены, match **65** / mismatch **2** / pending **0** / needs_read **0** | `test_gold_sets_split` + `test_client_gold` |
 | [`ubuntu/serenedb/ab-ambiguous-okna.tsv`](../ubuntu/serenedb/ab-ambiguous-okna.tsv) | **приёмка неоднозначности** (okna) | **18** | контракт clarify/kind; [`I1_AMBIGUOUS_SET.md`](I1_AMBIGUOUS_SET.md) | `test_gold_sets_split` + `test_ab_ambiguous_set` |
 | [`docs/ACCEPTANCE_OKNA_LIVE.md`](ACCEPTANCE_OKNA_LIVE.md) | **приёмка** (okna, live-спека) | **~25 правил** | эталон = правила §A/§B при прогоне | оркестратор (не TSV) |
 | [`ubuntu/serenedb/ab-acceptance-ambiguous.tsv`](../ubuntu/serenedb/ab-acceptance-ambiguous.tsv) | **черновик Э3** (ut_test) | **18** | копия ambiguous под ut; **не гонять на okna** | нет (не в git) |
@@ -57,7 +57,7 @@
 | `ab-acceptance-ambiguous.tsv` помечен «черновик, не в git» | дубль Э3 под ut; не эталон okna |
 | `ACCEPTANCE_UT.md` в таблице — «выведен для okna-замеров» | решение владельца 26.08; роль заморозки сохранена для гейта И5 |
 | Замок: полка `ab-ambiguous-okna` (18, не в WORKING) | роль «приёмка неоднозначности» не покрывалась |
-| Статусы `client-gold-okna` обновлены по TSV 28.08 | pending 36, match 5, … |
+| Статусы `client-gold-okna` обновлены по TSV 29.08 (ЧП1) | match 65, mismatch 2, pending 0, needs_read 0 |
 | И4 закрыт в `TARGET_STATUS.md` | инфраструктура измерения, не стадия TARGET |
 
 Не менялось: содержимое TSV, `ab_scorer.py`, `serene_ask.py`; пересечение
