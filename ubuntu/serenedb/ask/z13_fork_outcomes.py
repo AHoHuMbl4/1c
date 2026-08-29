@@ -572,7 +572,7 @@ def _fork_applicable_ordered(ordered):
             if (it.get("atom") or {}).get("proof_status") != PROOF_NA]
 
 
-def _fork_clarify_axis_kind(ordered, question, want=None):
+def _fork_clarify_axis_kind(ordered, question, want=None, intent=None, plan=None):
     """Тип человеческой оси clarify: measure / place / period или None.
 
     Из структуры классов развилки и формы вопроса — не из имён таблиц базы.
@@ -612,7 +612,8 @@ def _fork_clarify_axis_kind(ordered, question, want=None):
         return "measure"
     if len(dbs) > 1:
         return "period"
-    if stock_question_engaged(question) or question_mentions_warehouse_axis(question):
+    if stock_question_engaged(question, intent, plan) or question_mentions_warehouse_axis(
+            question, intent, plan):
         return "place"
     if len(win_period) > 1:
         return "period"
@@ -848,7 +849,7 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
         if lab:
             lab_by[s] = lab
     live = {s: ((rows or {}).get(s) or {}).get("count", 0) for s in srcs}
-    axis_kind = _fork_clarify_axis_kind(ordered, question)
+    axis_kind = _fork_clarify_axis_kind(ordered, question, intent=intent)
     if (axis_kind == "place"
             and stock_skips_warehouse_clarify(question, intent)):
         split = fork_leader_class(

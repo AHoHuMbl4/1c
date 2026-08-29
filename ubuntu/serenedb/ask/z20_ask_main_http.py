@@ -1777,26 +1777,19 @@ def period_assumed_needs_clarify(intent, today=None):
 
 
 def stock_subject_needs_clarify(question, intent=None):
-    """Остаток без названного товара → subject-clarify (K4-1 №12).
-
-    Узко: склад снят («всех»/all) или маркер «леж*» — иначе прежний stock-path
-    (bridge / склад), чтобы «какие остатки на складах» не уходили в subject.
-    """
-    if not question_asks_stock_balance(question):
+    if not balance_path_engaged(intent, None, question):
         return False
     if stock_asks_named_product(question, intent):
         return False
-    q = " ".join(str(question or "").lower().split())
-    if "леж" in q:
+    if aggregate_count_intent(intent, None, question):
         return True
-    if any(w in q for w in ("всех", "всеми", "altogether", "all warehouses", "all stocks")):
+    if not secondary_axis_known(intent) and not (intent or {}).get("terms"):
         return True
     return False
 
-
 def warehouse_clarify(question, diag, cut, t0, warehouses=None, intent=None):
     """Уточнение склада-значения словами человека (K4-3 №11). None — не строить."""
-    wh = list(warehouses if warehouses is not None else warehouse_axis_values())
+    wh = list(warehouses if warehouses is not None else warehouse_axis_values(intent=intent))
     if len(wh) <= 1:
         return None
     opts = [{"src": "", "label": w, "hint": "", "distinct_by": "warehouse",
@@ -4084,7 +4077,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             src = _ev_src
             picked = [_ev_src] + [c for c in (picked or []) if c != _ev_src]
             diag["event_axis_lock"] = _ev_src
-    if (not focus and stock_question_engaged(question, intent)
+    if (not focus and balance_path_engaged(intent, None, question)
             and not diag.get("event_code_lock")
             and not diag.get("balance_code_lock")
             and not diag.get("sales_canon_locked")
@@ -4444,11 +4437,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 measure = _mq
                 diag["stock_measure_canon"] = _mq
         measure_alts = []
-    if (stock_question_engaged(question, intent)
-            and question_has_aggregate_total_marker(question, intent, plan)
-            and not diag.get("sales_measure_canon")):
-        measure_alts = []
-        diag["stock_skip_measure_clarify"] = True
     if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
             and not diag.get("sales_measure_canon")
             and (not _rank_sales or diag.get("sales_rank_role_ask"))):

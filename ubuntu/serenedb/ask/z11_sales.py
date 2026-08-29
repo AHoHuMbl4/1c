@@ -6,6 +6,18 @@ from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
 
+
+def sales_kind_in_intent(intent):
+    """Kind/measure из разбора несёт sales-семантику — не остатковый state-path."""
+    intent = intent or {}
+    kind = (intent.get("kind") or "").strip().lower()
+    measure = (intent.get("measure") or "").strip().lower()
+    if any(w in kind for w in ("продаж", "торг", "выруч", "sale", "revenue")):
+        return True
+    return any(w in measure for w in (
+        "продали", "продал", "продаж", "наторговали", "торги", "sold", "sales"))
+
+
 def sales_sum_intent(intent, question=""):
     """Вопрос про сумму/оборот продаж («продали», «наторговали») — не остаток/прайс."""
     intent = intent or {}
@@ -13,7 +25,7 @@ def sales_sum_intent(intent, question=""):
     want = (intent.get("want") or "").strip().lower()
     kind = (intent.get("kind") or "").strip().lower()
     measure = (intent.get("measure") or "").strip().lower()
-    if stock_question_engaged(question, intent):
+    if balance_routing_core(intent, None, question):
         return False
     if any(w in q for w in ("прайс", "price list", "в прайсе")):
         return False

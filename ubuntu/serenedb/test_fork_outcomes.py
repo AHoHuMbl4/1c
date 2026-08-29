@@ -300,8 +300,11 @@ _ord_place = [
         operation="count", exact_value=3, proof_status=A.PROOF_COMPUTED),
      "row": row(3)},
 ]
+_stock_intent = {"want": "count", "kind": "номенклатура", "action_class": "object",
+                 "action_axis": "склад"}
 t("clarify axis: stock question → place",
-  A._fork_clarify_axis_kind(_ord_place, "Сколько товара на складе?") == "place")
+  A._fork_clarify_axis_kind(_ord_place, "Сколько товара на складе?",
+                            intent=_stock_intent) == "place")
 _old_wh = A.warehouse_axis_values
 A.warehouse_axis_values = lambda limit=20: ["Склад A", "Склад B"]
 _popts_wh = A._fork_clarify_opts(_ord_place,

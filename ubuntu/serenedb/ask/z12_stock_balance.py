@@ -1,10 +1,310 @@
-"""Zone 12: Остатки (stock-balance)."""
+"""Zone 12: Остатки (stock-balance). K9-ф3: маршрутизация по осям метаданных."""
 from __future__ import annotations
 
 from ask._imports import *
 from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
+
+_BALANCE_REGS = {"at": 0.0, "set": None}
+_BALANCE_MAP = {"at": 0.0, "rows": None}
+
+
+def intent_axis_words(intent):
+    """Оси из разбора: action_axis и kind, без текста вопроса."""
+    intent = intent or {}
+    words, seen = [], set()
+    for key in ("action_axis", "kind"):
+        w = _intent_text(intent.get(key))
+        if not w:
+            continue
+        wl = w.lower()
+        if wl in seen:
+            continue
+        seen.add(wl)
+        words.append(w)
+    return words
+
+
+def state_path_active(intent):
+    """Путь состояния/остатка: action_class=object."""
+    return (intent or {}).get("action_class", "").strip().lower() == "object"
+
+
+def aggregate_count_intent(intent, plan=None, question=""):
+    """Итог count/sum без разреза по оси (не rank, не breakdown)."""
+    intent = intent or {}
+    plan = plan or {}
+    if rank_intent_from(intent, plan, question):
+        return False
+    if question_wants_breakdown(intent, plan):
+        return False
+    want = (intent.get("want") or "").strip().lower()
+    amt = intent.get("amount") or {}
+    if want in ("count", ""):
+        if not amt.get("op") and amt.get("value") is None:
+            return True
+    if want == "sum":
+        return True
+    return False
+
+
+def secondary_axis_known(intent):
+    """Вторичная ось (action_axis) задана и не совпадает с kind."""
+    intent = intent or {}
+    ax = _intent_text(intent.get("action_axis"))
+    kind = _intent_text(intent.get("kind"))
+    if not ax:
+        return False
+    if not kind:
+        return True
+    return ax.lower() != kind.lower()
+
+
+def balance_axis_registers_confirmed(intent):
+    """Остатковый маршрут подтверждается ref-осями в метаданных, не action_class."""
+    broad = registers_for_kind_axes(intent, None)
+    clean = frozenset(s for s in broad if not register_is_balance_noise(s))
+    if not clean:
+        return False
+    capable = balance_capable_or_registers()
+    if capable:
+        return bool(clean & capable)
+    return bool(clean)
+
+
+def balance_routing_core(intent, plan=None, question=""):
+    """Остатковый маршрут: object-path или breakdown/list с осями из intent."""
+    intent = intent or {}
+    plan = plan or {}
+    if event_path_active(intent):
+        return False
+    if sales_kind_in_intent(intent):
+        return False
+    if rank_intent_from(intent, plan, question):
+        if not question_wants_breakdown(intent, plan):
+            return False
+    if state_path_active(intent):
+        return balance_axis_registers_confirmed(intent)
+    if question_wants_breakdown(intent, plan) and intent_axis_words(intent):
+        return True
+    return False
+
+
+def _stock_intent_signal(intent, plan=None, question=""):
+    """Сигнал остатка из разбора модели — без подтверждения метаданными."""
+    intent = intent or {}
+    if event_path_active(intent) or sales_kind_in_intent(intent):
+        return False
+    if state_path_active(intent) and intent_axis_words(intent):
+        return True
+    if question_wants_breakdown(intent, plan) and intent_axis_words(intent):
+        return True
+    return False
+
+
+def balance_path_engaged(intent, plan=None, question=""):
+    """Balance-path: routing по intent; sales-sum исключается."""
+    if sales_sum_intent(intent or {}, question):
+        return False
+    return balance_routing_core(intent, plan, question)
+
+
+def question_asks_stock_balance(question, intent=None, plan=None):
+    """Вопрос про остаток — триггер balance-path (intent, не слова вопроса)."""
+    return balance_path_engaged(intent, plan, question)
+
+
+def question_mentions_warehouse_axis(question, intent=None, plan=None):
+    """Ось места хранения из action_axis → каталоги метаданных."""
+    intent = intent or {}
+    ax = _intent_text(intent.get("action_axis"))
+    if not ax:
+        return False
+    period = intent.get("period") or {}
+    has_period = bool(period.get("from") or period.get("to"))
+    try:
+        cats = entity_form_catalogs_for_kind(ax, allow_meaning=has_period) or []
+    except RuntimeError:
+        cats = []
+    return bool(cats)
+
+
+def question_has_aggregate_total_marker(question, intent=None, plan=None):
+    """Итог без разреза по оси — из intent, не маркеры вопроса."""
+    if not balance_routing_core(intent, plan, question):
+        return False
+    return aggregate_count_intent(intent, plan, question)
+
+
+def question_wants_per_axis_breakdown(question, intent=None, plan=None):
+    """Явный разрез по оси — want=list / max|min / порог без op."""
+    return question_wants_breakdown(intent, plan)
+
+
+def stock_question_engaged(question, intent=None, plan=None):
+    """Stock-path: balance или ось склада с итогом / разрезом."""
+    if balance_routing_core(intent, plan, question):
+        return True
+    if _stock_intent_signal(intent, plan, question):
+        return True
+    if not question_mentions_warehouse_axis(question, intent, plan):
+        return False
+    return (question_has_aggregate_total_marker(question, intent, plan)
+            or question_wants_per_axis_breakdown(question, intent, plan))
+
+
+def registers_for_kind_axes(intent, regs=None):
+    """accumulationregister_* с refcol на каталоги kind/action_axis."""
+    intent = intent or {}
+    period = intent.get("period") or {}
+    has_period = bool(period.get("from") or period.get("to"))
+    cats = set()
+    for w in intent_axis_words(intent):
+        try:
+            for c in entity_form_catalogs_for_kind(w, allow_meaning=has_period) or []:
+                if c:
+                    cats.add(c)
+        except RuntimeError:
+            pass
+    if not cats:
+        return frozenset()
+    scope = list(regs) if regs is not None else None
+    where_scope = ""
+    if scope:
+        where_scope = " AND r.src_table IN (%s)" % ", ".join(lit(r) for r in scope)
+    cats_sql = ", ".join(lit(c) for c in sorted(cats))
+    try:
+        rows = psql(
+            "SELECT DISTINCT r.src_table FROM search_refcols r "
+            "WHERE r.src_table LIKE 'accumulationregister_%%' "
+            "  AND r.col IS NOT NULL AND r.col <> '' "
+            "  AND r.target_src IN (%s) %s "
+            "  AND EXISTS ("
+            "    SELECT 1 FROM %s c "
+            "    WHERE c.src_table = r.src_table "
+            "      AND c.nums IS NOT NULL AND len(map_keys(c.nums)) > 0"
+            "  )" % (cats_sql, where_scope, CORPUS))
+    except RuntimeError:
+        return frozenset()
+    return frozenset(r[0] for r in (rows or []) if r and r[0])
+
+
+def axis_catalog_values(axis_word, limit=20, intent=None):
+    """Значения оси: каталог по stem + refcol + map_extract_value(refs_map)."""
+    axis_word = (axis_word or "").strip()
+    if not axis_word:
+        return []
+    intent = intent or {}
+    period = intent.get("period") or {}
+    has_period = bool(period.get("from") or period.get("to"))
+    cats = []
+    try:
+        found = entity_form_catalogs_for_kind(axis_word, allow_meaning=has_period) or []
+    except RuntimeError:
+        found = []
+    for s in found:
+        if s and s not in cats:
+            cats.append(s)
+    if not cats:
+        return []
+    out, seen = [], set()
+
+    def _take(rows):
+        for r in rows or []:
+            w = (r[0] if r else None)
+            if w is None:
+                continue
+            s = str(w).strip()
+            if not s or s in seen or looks_like_src_table(s):
+                continue
+            seen.add(s)
+            out.append(s)
+            if len(out) >= int(limit):
+                return True
+        return False
+
+    try:
+        rows = psql(
+            "WITH cats(src) AS (VALUES %s), "
+            "cand AS ("
+            "  SELECT r.col,"
+            "         sum(CASE WHEN r.src_table LIKE 'accumulationregister_%%' "
+            "                  THEN 1 ELSE 0 END) AS on_accum,"
+            "         count(*) AS holders "
+            "  FROM search_refcols r "
+            "  WHERE r.target_src IN (SELECT src FROM cats) "
+            "    AND r.col IS NOT NULL AND r.col <> '' "
+            "  GROUP BY r.col), "
+            "scored AS ("
+            "  SELECT c.col, c.on_accum, c.holders,"
+            "         (SELECT count(DISTINCT map_extract_value(refs_map, c.col)) "
+            "          FROM %s "
+            "          WHERE map_extract_value(refs_map, c.col) IS NOT NULL) AS n_vals "
+            "  FROM cand c), "
+            "best AS ("
+            "  SELECT col FROM scored "
+            "  ORDER BY on_accum DESC, n_vals DESC, holders DESC "
+            "  LIMIT 1) "
+            "SELECT DISTINCT map_extract_value(c.refs_map, b.col) AS w "
+            "FROM %s c, best b "
+            "WHERE map_extract_value(c.refs_map, b.col) IS NOT NULL "
+            "LIMIT %d"
+            % (", ".join("(%s)" % lit(s) for s in cats), CORPUS, CORPUS,
+               int(limit)))
+    except RuntimeError:
+        rows = []
+    if _take(rows):
+        return out
+    if out:
+        return out
+    cats_sql = ", ".join(lit(s) for s in cats)
+    try:
+        rows = psql(
+            "SELECT DISTINCT name FROM search_refmap "
+            "WHERE owner IN (%s) AND name IS NOT NULL AND trim(name) <> '' "
+            "LIMIT %d" % (cats_sql, int(limit)))
+    except RuntimeError:
+        return out
+    _take(rows)
+    return out
+
+
+def warehouse_axis_values(limit=20, intent=None):
+    """Имена складов: axis_catalog_values по action_axis/kind из intent."""
+    intent = intent or {}
+    for w in intent_axis_words(intent):
+        vals = axis_catalog_values(w, limit=limit, intent=intent)
+        if vals:
+            return vals
+    ax = _intent_text(intent.get("action_axis"))
+    if ax:
+        return axis_catalog_values(ax, limit=limit, intent=intent)
+    return []
+
+
+def warehouse_axis_is_live(intent=None):
+    """Живая ось места хранения: ≥2 значений из метаданных."""
+    try:
+        wh = warehouse_axis_values(intent=intent)
+    except RuntimeError:
+        return False
+    return len(wh or []) >= 2
+
+
+def stock_skips_warehouse_clarify(question, intent=None, plan=None):
+    """Не уточнять склад: итог, разрез, или ось+итог по всем."""
+    if not stock_question_engaged(question, intent, plan):
+        if not question_mentions_warehouse_axis(question, intent, plan):
+            return False
+    if question_has_aggregate_total_marker(question, intent, plan):
+        return True
+    if question_wants_per_axis_breakdown(question, intent, plan):
+        return True
+    if aggregate_count_intent(intent, plan, question) and secondary_axis_known(intent):
+        return True
+    return False
+
 
 def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
     """Билет оси: grain=group сохраняется; form=rank при рейтинговом вопросе."""
@@ -15,15 +315,23 @@ def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
             "named_gis": [], "clarify": None}
 
 
-def _rank_wants_quantity(question):
-    q = (question or "").lower()
-    return (any(w in q for w in ("товар", "номенклатур", "product", "item", "goods"))
-            and any(w in q for w in ("больше всего", "сколько", "top", "most",
-                                     "maximum", "лидер", "leader")))
+def _rank_wants_quantity(question, intent=None):
+    """Рейтинг количества — из intent/rank_intent_from, не слова вопроса."""
+    intent = intent or {}
+    if not rank_intent_from(intent, question=question):
+        return False
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", "list", ""):
+        return False
+    for w in intent_axis_words(intent):
+        if w and _base_knows_kind_or_measure(w):
+            return True
+    kind = intent.get("kind") or ""
+    return bool(kind and _base_knows_kind_or_measure(kind))
 
 
 def rank_measure_hint(names, intent, question, alias_by=None):
-    """Рейтинг без явной меры: количество товара, не себестоимость/сумма."""
+    """Рейтинг без явной меры: количество из intent, не из текста вопроса."""
     names = list(names or [])
     if not names:
         return None
@@ -31,230 +339,12 @@ def rank_measure_hint(names, intent, question, alias_by=None):
         return None
     if not rank_intent_from(intent, question=question):
         return None
-    q = (question or "").lower()
-    kind = ((intent or {}).get("kind") or "").lower()
-    hints = []
-    if any(w in q for w in ("сколько", "больше всего", "top", "most", "maximum",
-                            "лидер", "leader")):
-        hints.append("количество")
-    if any(w in kind for w in ("товар", "номенклатур", "product", "item", "goods")):
-        hints.append("количество")
-    if any(w in q for w in ("товар", "номенклатур", "product", "item", "goods")):
-        hints.append("количество")
-    seen = set()
-    for hint in hints:
-        if hint in seen:
-            continue
-        seen.add(hint)
-        got, _alts, how = measure_choice(names, hint, alias_by=alias_by or {})
-        if got and how in ("exact", "substring", "alias", "base", "single"):
-            return got
-    return None
-
-
-_BALANCE_REGS = {"at": 0.0, "set": None}
-_BALANCE_MAP = {"at": 0.0, "rows": None}
-
-_STOCK_MARKERS = (
-    "остат", "на складе", "in stock", "on warehouse", "inventory balance",
-    "stoc", "depozit", "magazin", "inventar",
-    # K4-1 №12: «лежит» (складах/вместе закрывает subject-clarify, не голый «склад»).
-    "леж",
-)
-
-# Класс оси места хранения в вопросе (ru+en), не имя реквизита базы.
-_WAREHOUSE_AXIS_MARKERS = (
-    "склад", "warehouse", "storage", "depot", "depozit", "magazin",
-)
-
-# Класс маркеров итога без разреза (ru+en), не список фраз конкретного диалога.
-_AGGREGATE_TOTAL_MARKERS = (
-    "всего", "итого", "итог ", " overall", " in total", " total ",
-    "grand total", "на всех", " together", " altogether",
-)
-
-# «вместе» — итог только при оси места хранения (не «работаем вместе»).
-_AGGREGATE_TOGETHER_MARKERS = ("вместе", " together")
-
-# Класс явного разреза «пo каждому …» (ru+en), не привязка к оси склада.
-_PER_AXIS_BREAKDOWN_MARKERS = (
-    "по кажд", " each ", " per ", "отдельно", " separately",
-    "разбив", " breakdown", " split by", "разрез",
-)
-
-# Рейтинговые «… всего» — не маркер суммарного итога (ловушка подстроки «всего»).
-_RANK_NOT_AGGREGATE = (
-    "больше всего", "меньше всего", "лучше всего", "хуже всего",
-    "больше всех", "меньше всех", "лучше всех", "хуже всех",
-    "most ", " least ", "best selling", "top seller",
-)
-
-
-def question_mentions_warehouse_axis(question):
-    """Вопрос про ось места хранения — класс слов, не список складов базы."""
-    q = " ".join(str(question or "").lower().split())
-    if not q:
-        return False
-    return any(m in q for m in _WAREHOUSE_AXIS_MARKERS)
-
-
-def question_has_aggregate_total_marker(question, intent=None, plan=None):
-    """Итог «всего»/total — развилка по измерению (склад и др.) не задаётся."""
-    if rank_intent_from(intent or {}, plan or {}, question):
-        return False
-    q = " ".join(str(question or "").lower().split())
-    if not q:
-        return False
-    if any(m in q for m in _RANK_NOT_AGGREGATE):
-        return False
-    if any(m in q for m in _AGGREGATE_TOTAL_MARKERS):
-        return True
-    if question_mentions_warehouse_axis(question):
-        return any(m in q for m in _AGGREGATE_TOGETHER_MARKERS)
-    return False
-
-
-def stock_question_engaged(question, intent=None, plan=None):
-    """Stock-path: остатки или ось склада с суммарным итогом / явным разрезом."""
-    if question_asks_stock_balance(question):
-        return True
-    if not question_mentions_warehouse_axis(question):
-        return False
-    return (question_has_aggregate_total_marker(question, intent, plan)
-            or question_wants_per_axis_breakdown(question, intent, plan))
-
-
-def question_wants_per_axis_breakdown(question, intent=None, plan=None):
-    """Явный разрез по оси (список/пo каждому), не суммарный итог."""
-    if question_wants_breakdown(intent, plan):
-        return True
-    q = " ".join(str(question or "").lower().split())
-    if not q:
-        return False
-    return any(m in q for m in _PER_AXIS_BREAKDOWN_MARKERS)
-
-
-def warehouse_axis_is_live():
-    """Живая ось места хранения: несколько значений из базы (K7)."""
-    try:
-        wh = warehouse_axis_values()
-    except RuntimeError:
-        return False
-    return len(wh or []) >= 2
-
-
-def stock_skips_warehouse_clarify(question, intent=None, plan=None):
-    """Не уточнять склад: итог без разреза, явный разрез, или все склады названы."""
-    stockish = question_asks_stock_balance(question)
-    wh_axis = question_mentions_warehouse_axis(question)
-    if not stockish and not wh_axis:
-        return False
-    if question_has_aggregate_total_marker(question, intent, plan):
-        return True
-    if question_wants_per_axis_breakdown(question, intent, plan):
-        return True
-    q = " ".join(str(question or "").lower().split())
-    if q and any(w in q for w in ("всех", "всеми", "all warehouses", "all stocks")):
-        return True
-    return False
-
-
-def _resolve_breakdown_balance_src(src, cands=None):
-    """Balance-регистр с товарной осью для итога+люка; каталог складов не годится."""
-    try:
-        cap = balance_capable_or_registers()
-        goods = stock_goods_pool(cap)
-    except RuntimeError:
-        return src or None
-    goods = {c for c in (goods or []) if not stock_balance_is_sales_noise(c)}
-    if src and src in goods:
-        return src
-    for c in (cands or []):
-        if c in goods:
-            return c
-    if goods:
-        return sorted(goods, key=lambda s: _stock_register_rank_key(s, cap))[0]
-    if src and src in cap:
-        return src
-    if cap:
-        return sorted(cap)[0]
-    return src or None
-
-
-def _breakdown_fallback_measure(src, measure, intent=None):
-    """Мера count/sum для fallback — из intent или количественного поля регистра."""
-    if measure:
-        return measure
-    want = ((intent or {}).get("want") or "").strip().lower()
-    if want == "sum":
-        return measure
-    if not src:
-        return measure
-    try:
-        names = list(measures_of(src) or [])
-    except RuntimeError:
-        return measure
-    if not names:
-        return measure
-    got, _, how = measure_choice(names, "колич", alias_by={})
+    if not _rank_wants_quantity(question, intent):
+        return None
+    got, _, how = measure_choice(names, "колич", alias_by=alias_by or {})
     if got and how in ("exact", "substring", "alias", "base", "single"):
         return got
-    return measure
-
-
-def stock_breakdown_leader_fallback(question, src, match, preds, measure, diag,
-                                    cut, t0, intent=None, plan=None, agg=None,
-                                    cands=None):
-    """Исход B при живой оси и запросе разреза, если GROUP BY ещё недоступен (K7, не K8).
-
-    Считаемый лидер-итог + люк из значений оси склада; пустой отказ не отдаём.
-    """
-    if not question_wants_per_axis_breakdown(question, intent, plan):
-        return None
-    if not warehouse_axis_is_live():
-        return None
-    wh = []
-    try:
-        wh = list(warehouse_axis_values() or [])
-    except RuntimeError:
-        return None
-    if len(wh) < 2:
-        return None
-    src = _resolve_breakdown_balance_src(src, cands)
-    measure = _breakdown_fallback_measure(src, measure, intent)
-    if agg is None and src:
-        try:
-            agg = aggregate(src, match, preds, measure)
-        except RuntimeError:
-            agg = None
-    if not agg or agg.get("count") is None:
-        return None
-    want = ((intent or {}).get("want") or "").strip().lower()
-    op = "count" if want in ("count", "list", "") else "sum"
-    val = agg.get("count") if op == "count" else agg.get("sum")
-    if val is None:
-        return None
-    atom = atom_from_agg(
-        agg, operation=op,
-        measure_id=(measure or None),
-        measure_label=measure_label_of(src, measure) if src else measure,
-        money=(op == "sum"), src=src or None)
-    text = render_atom_pair(atom)
-    if not (text or "").strip():
-        return None
-    opts = [{"src": "", "label": w, "hint": "", "distinct_by": "warehouse",
-             "found": 0} for w in wh]
-    d = dict(diag or {})
-    d["stock_breakdown_fallback"] = "leader_plus_axis_loophole"
-    d["warehouse_axis_values"] = len(wh)
-    return {"partial": cut or None, "kind": "figures", "text": text,
-            "figures": _fork_figures_of(atom),
-            "atom": atom, "atoms": [atom],
-            "options": opts,
-            "source_fixed": False, "memory_eligible": False,
-            "sources": [src] if src else [],
-            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
-                               reason="разрез по оси: итог+люк")}
+    return None
 
 
 def balance_registers():
@@ -312,69 +402,9 @@ def balance_capable_or_registers():
     return balance_registers()
 
 
-def question_asks_stock_balance(question):
-    """Вопрос про остаток на складе — триггер универсального пути остатков."""
-    q = " ".join(str(question or "").lower().split())
-    if not q:
-        return False
-    return any(m in q for m in _STOCK_MARKERS)
-
-
-def _product_catalog_target_sql(col="target_src"):
-    """SQL-фильтр target_src товарного catalog — класс имён."""
-    c = str(col or "target_src")
-    return (
-        "(%(c)s LIKE 'catalog_%%' "
-        "AND %(c)s NOT LIKE '%%вид%%' AND %(c)s NOT LIKE '%%тип%%' "
-        "AND %(c)s NOT LIKE '%%групп%%' AND %(c)s NOT LIKE '%%type%%' "
-        "AND %(c)s NOT LIKE '%%kind%%' AND %(c)s NOT LIKE '%%group%%' "
-        "AND (%(c)s LIKE '%%номенклатур%%' OR %(c)s LIKE '%%nomencl%%' "
-        "     OR %(c)s LIKE '%%товар%%' OR %(c)s LIKE '%%product%%' "
-        "     OR %(c)s LIKE '%%goods%%'))" % {"c": c})
-
-
-def _filter_product_catalog_targets(targets):
-    out = set()
-    for t in targets or []:
-        ts = str(t or "").strip()
-        if not ts:
-            continue
-        try:
-            if _is_product_catalog(ts):  # noqa: F821
-                out.add(ts)
-        except NameError:
-            sl = ts.lower()
-            if (sl.startswith("catalog_")
-                    and not any(x in sl for x in ("вид", "тип", "групп", "type", "kind", "group"))
-                    and any(k in sl for k in ("номенклатур", "nomencl", "товар", "product", "goods"))):
-                out.add(ts)
-    return out
-
-
-def registers_with_product_goods_axis(regs=None):
-    scope = list(regs) if regs is not None else None
-    prod_sql = _product_catalog_target_sql("r.target_src")
-    where_scope = ""
-    if scope:
-        where_scope = " AND r.src_table IN (%s)" % ", ".join(lit(r) for r in scope)
-    try:
-        rows = psql(
-            "SELECT DISTINCT r.src_table, r.target_src FROM search_refcols r "
-            "WHERE r.src_table LIKE 'accumulationregister_%%' "
-            "  AND r.col IS NOT NULL AND r.col <> '' "
-            "  AND %s %s "
-            "  AND EXISTS ("
-            "    SELECT 1 FROM %s c "
-            "    WHERE c.src_table = r.src_table "
-            "      AND c.nums IS NOT NULL AND len(map_keys(c.nums)) > 0"
-            "  )" % (prod_sql, where_scope, CORPUS))
-    except RuntimeError:
-        return frozenset()
-    by_src = {}
-    for r in rows or []:
-        if r and r[0]:
-            by_src.setdefault(r[0], set()).add((r[1] if len(r) > 1 else "") or "")
-    return frozenset(s for s, tgts in by_src.items() if _filter_product_catalog_targets(tgts))
+def register_is_balance_noise(src):
+    """Структурный отсев: продажи/сторно — не остатковый регистр."""
+    return stock_balance_is_sales_noise(src) or stock_balance_is_reversal_noise(src)
 
 
 def stock_balance_is_reversal_noise(src):
@@ -384,14 +414,15 @@ def stock_balance_is_reversal_noise(src):
         "коррект", "adjust", "исправ"))
 
 
-def stock_goods_pool(capable=None):
+def stock_goods_pool(capable=None, intent=None):
+    """Пул товарных balance-регистров по осям intent (search_refcols)."""
     capable = capable if capable is not None else balance_capable_or_registers()
-    broad = registers_with_product_goods_axis(None)
+    if not intent:
+        return frozenset()
+    broad = registers_for_kind_axes(intent, None)
     if not broad:
         return frozenset()
-    clean = {s for s in broad
-             if not stock_balance_is_sales_noise(s)
-             and not stock_balance_is_reversal_noise(s)}
+    clean = {s for s in broad if not register_is_balance_noise(s)}
     if not clean:
         return frozenset()
     if capable:
@@ -401,10 +432,10 @@ def stock_goods_pool(capable=None):
     return frozenset(clean)
 
 
-def filter_stock_goods_registers(cands, question, diag=None):
-    if not stock_question_engaged(question):
+def filter_stock_goods_registers(cands, question, diag=None, intent=None, plan=None):
+    if not stock_question_engaged(question, intent, plan):
         return cands
-    pool = stock_goods_pool()
+    pool = stock_goods_pool(None, intent)
     if not pool:
         return cands
     out, dropped = [], []
@@ -437,8 +468,6 @@ def _stock_register_rank_key(src, capable=None, corpus_counts=None):
     return (
         1 if stock_balance_is_sales_noise(s) else 0,
         1 if stock_balance_is_reversal_noise(s) else 0,
-        1 if any(x in s for x in (
-            "допзатрат", "дополн", "extra", "additional", "overhead", "alloc")) else 0,
         0 if capable and src in capable else 1,
         0 if s.startswith("accumulationregister_") else 1,
         -int(cc.get(src) or 0),
@@ -456,9 +485,8 @@ def stock_canon_src(cands, question, intent=None, plan=None):
     if not stock_question_engaged(question, intent, plan):
         return None
     capable = balance_capable_or_registers()
-    pool = [c for c in stock_goods_pool(capable)
-            if not stock_balance_is_sales_noise(c)
-            and not stock_balance_is_reversal_noise(c)]
+    pool = [c for c in stock_goods_pool(capable, intent)
+            if not register_is_balance_noise(c)]
     if not pool:
         return None
     pool = _sort_stock_pool(pool, capable)
@@ -467,14 +495,15 @@ def stock_canon_src(cands, question, intent=None, plan=None):
         return _sort_stock_pool(in_cands, capable)[0]
     return pool[0]
 
+
 def prefer_entity_for_stock(cands, question, intent=None, plan=None):
     """Stock-path: balance-регистр в голове, каталоги/документы вне пула."""
     canon = stock_canon_src(cands, question, intent, plan)
     if not canon:
         return cands
     capable = balance_capable_or_registers()
-    pool = {c for c in stock_goods_pool(capable)
-            if not stock_balance_is_sales_noise(c)}
+    pool = {c for c in stock_goods_pool(capable, intent)
+            if not register_is_balance_noise(c)}
     pool.add(canon)
     out, seen = [], set()
     for c in [canon] + [x for x in (cands or []) if x in pool and x != canon]:
@@ -482,6 +511,56 @@ def prefer_entity_for_stock(cands, question, intent=None, plan=None):
             seen.add(c)
             out.append(c)
     return out or [canon]
+
+
+def try_balance_code_entity_pick(question, intent, cands, diag, cut, t0, marks,
+                                 plan=None):
+    """K9-ф3: balance-path — лидер из registers_for_kind_axes до модели."""
+    intent = intent or {}
+    if not balance_path_engaged(intent, plan, question):
+        return None
+    capable = balance_capable_or_registers()
+    scoped = [c for c in (cands or []) if c]
+    pool = [c for c in registers_for_kind_axes(intent, scoped)
+            if c in capable and not register_is_balance_noise(c)]
+    if not pool:
+        pool = [c for c in stock_goods_pool(capable, intent) if c in scoped]
+    if not pool:
+        diag["balance_code_empty_pool"] = True
+        return {"kind": "no_data",
+                "partial": cut or None,
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "sources": [],
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                   reason="balance_no_axis_register")}
+    pool = _sort_stock_pool(pool, capable)
+    leader = pool[0]
+    if len(pool) == 1:
+        diag["balance_code_lock"] = leader
+        return {"picked": [leader], "marks": marks or {}, "plan": plan or {}}
+    keys = {s: _stock_register_rank_key(s, capable) for s in pool}
+    best = min(keys.values())
+    leaders = [s for s in pool if keys[s] == best]
+    if len(leaders) == 1:
+        diag["balance_code_lock"] = leaders[0]
+        return {"picked": leaders, "marks": marks or {}, "plan": plan or {}}
+    try:
+        lab_by = {r[0]: r[1] for r in psql(
+            "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+            % (TABLES, ", ".join(lit(c) for c in leaders))) if r and r[0]}
+    except RuntimeError:
+        lab_by = {}
+    opts = mk_opts([t for t in leaders if t in lab_by], lab_by, marks or {}, {},
+                   match="", preds="")
+    if len(opts) >= 2:
+        diag["balance_code_tie"] = leaders
+        return {"partial": cut or None, "kind": "clarify",
+                "text": clarify_say(question, opts, diag)
+                        or ", ".join("«%s»" % o["label"] for o in opts),
+                "options": opts, "sources": [o["label"] for o in opts],
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+    diag["balance_code_lock"] = leader
+    return {"picked": [leader], "marks": marks or {}, "plan": plan or {}}
 
 
 def _stems_of_text(s):
@@ -503,23 +582,13 @@ def _stems_of_text(s):
 
 
 def _stock_scaffold_stems(intent, question):
-    """Основы «темы» остатков: kind + маркеры вопроса; measure — отдельно (именованность).
-
-    🔴 В СКАФФОЛД ИДЁТ ТОЛЬКО РОД, ИЗВЕСТНЫЙ БАЗЕ (28.08). [замер AB_PROBE okna]
-    парсер назвал родом «петли» — такого рода в базе нет, но стемы kind попадали
-    в скаффолд «темы», и предмет вопроса сам себе становился темой: именованный
-    товар не опознавался, «сколько петель осталось на складе» шло в уточнение
-    склада вместо честного «нет данных». Неизвестное слово — догадка о предмете
-    (п. 12), темой его делает только словарь базы.
-    """
+    """Основы темы остатков: kind + action_axis (без маркеров вопроса)."""
     parts = []
-    v = (intent or {}).get("kind") or ""
-    if v and _base_knows_kind_or_measure(v):
-        parts.append(str(v))
-    q = " ".join(str(question or "").lower().split())
-    for m in _STOCK_MARKERS:
-        if m in q:
-            parts.append(m)
+    intent = intent or {}
+    for key in ("kind", "action_axis"):
+        v = intent.get(key) or ""
+        if v and _base_knows_kind_or_measure(v):
+            parts.append(str(v))
     out = set()
     for part in parts:
         out |= _stems_of_text(part)
@@ -527,8 +596,8 @@ def _stock_scaffold_stems(intent, question):
 
 
 def stock_asks_named_product(question, intent=None):
-    """Именованный товар — terms разбора и measure (live: «петли» часто в measure)."""
-    if not question_asks_stock_balance(question):
+    """Именованный товар — terms/measure вне скаффолда kind+action_axis."""
+    if not balance_path_engaged(intent, None, question):
         return False
     intent = intent or {}
     scaffold = _stock_scaffold_stems(intent, question)
@@ -564,6 +633,104 @@ def stock_balance_named_no_data(question, diag, cut, t0):
             "sources": [],
             "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
                                reason="именованный товар не в баланс-источниках")}
+
+
+def _resolve_breakdown_balance_src(src, cands=None, intent=None):
+    """Balance-регистр с товарной осью для итога+люка."""
+    try:
+        cap = balance_capable_or_registers()
+        goods = stock_goods_pool(cap, intent)
+    except RuntimeError:
+        return src or None
+    goods = {c for c in (goods or []) if not register_is_balance_noise(c)}
+    if src and src in goods:
+        return src
+    for c in (cands or []):
+        if c in goods:
+            return c
+    if goods:
+        return sorted(goods, key=lambda s: _stock_register_rank_key(s, cap))[0]
+    if src and src in cap:
+        return src
+    if cap:
+        return sorted(cap)[0]
+    return src or None
+
+
+def _breakdown_fallback_measure(src, measure, intent=None):
+    """Мера count/sum для fallback — из intent или количественного поля регистра."""
+    if measure:
+        return measure
+    want = ((intent or {}).get("want") or "").strip().lower()
+    if want == "sum":
+        return measure
+    if not src:
+        return measure
+    try:
+        names = list(measures_of(src) or [])
+    except RuntimeError:
+        return measure
+    if not names:
+        return measure
+    got, _, how = measure_choice(names, "колич", alias_by={})
+    if got and how in ("exact", "substring", "alias", "base", "single"):
+        return got
+    return measure
+
+
+def stock_breakdown_leader_fallback(question, src, match, preds, measure, diag,
+                                    cut, t0, intent=None, plan=None, agg=None,
+                                    cands=None):
+    """Исход B: лидер-итог + люк значений оси из метаданных."""
+    if not question_wants_per_axis_breakdown(question, intent, plan):
+        return None
+    if not warehouse_axis_is_live(intent):
+        return None
+    intent = intent or {}
+    axis_word = (_intent_text(intent.get("action_axis"))
+                 or _intent_text(intent.get("kind")) or "")
+    wh = []
+    try:
+        wh = list(axis_catalog_values(axis_word, intent=intent) or [])
+    except RuntimeError:
+        return None
+    if len(wh) < 2:
+        return None
+    src = _resolve_breakdown_balance_src(src, cands, intent)
+    measure = _breakdown_fallback_measure(src, measure, intent)
+    if agg is None and src:
+        try:
+            agg = aggregate(src, match, preds, measure)
+        except RuntimeError:
+            agg = None
+    if not agg or agg.get("count") is None:
+        return None
+    want = ((intent or {}).get("want") or "").strip().lower()
+    op = "count" if want in ("count", "list", "") else "sum"
+    val = agg.get("count") if op == "count" else agg.get("sum")
+    if val is None:
+        return None
+    atom = atom_from_agg(
+        agg, operation=op,
+        measure_id=(measure or None),
+        measure_label=measure_label_of(src, measure) if src else measure,
+        money=(op == "sum"), src=src or None)
+    text = render_atom_pair(atom)
+    if not (text or "").strip():
+        return None
+    opts = [{"src": "", "label": w, "hint": "", "distinct_by": "warehouse",
+             "found": 0} for w in wh]
+    d = dict(diag or {})
+    d["stock_breakdown_fallback"] = "leader_plus_axis_loophole"
+    d["warehouse_axis_values"] = len(wh)
+    return {"partial": cut or None, "kind": "figures", "text": text,
+            "figures": _fork_figures_of(atom),
+            "atom": atom, "atoms": [atom],
+            "options": opts,
+            "source_fixed": False, "memory_eligible": False,
+            "sources": [src] if src else [],
+            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
+                               reason="разрез по оси: итог+люк")}
 
 
 def _balance_map_by_src():
@@ -652,87 +819,5 @@ def balance_bridge_clarify(question, capable, diag, cut, t0, labels=None):
             "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
                                reason="мост не принёс баланс-источник")}
 
-
-
-def warehouse_axis_values(limit=20):
-    """Человеческие имена складов: catalog по alias, ось по search_refcols.
-
-    Каталог — entity_form_catalogs_for_kind (stem склад/warehouse ∩
-    label|aliases|best_used_for). Колонка refs_map — из search_refcols по
-    target_src (score: accumulationregister_* holders, затем max DISTINCT).
-    Запасной путь — search_refmap.name WHERE owner=каталог. Пусто/оффлайн → [].
-    Доки: map_extract_value (Map Functions); SELECT ORDER BY LIMIT.
-    """
-    cats = []
-    for kind in ("склад", "warehouse"):
-        try:
-            found = entity_form_catalogs_for_kind(kind, allow_meaning=True) or []
-        except RuntimeError:
-            found = []
-        for s in found:
-            if s and s not in cats:
-                cats.append(s)
-    if not cats:
-        return []
-    cats_sql = ", ".join(lit(s) for s in cats)
-    out, seen = [], set()
-
-    def _take(rows):
-        for r in rows or []:
-            w = (r[0] if r else None)
-            if w is None:
-                continue
-            s = str(w).strip()
-            if not s or s in seen or looks_like_src_table(s):
-                continue
-            seen.add(s)
-            out.append(s)
-            if len(out) >= int(limit):
-                return True
-        return False
-
-    try:
-        rows = psql(
-            "WITH cats(src) AS (VALUES %s), "
-            "cand AS ("
-            "  SELECT r.col,"
-            "         sum(CASE WHEN r.src_table LIKE 'accumulationregister_%%' "
-            "                  THEN 1 ELSE 0 END) AS on_accum,"
-            "         count(*) AS holders "
-            "  FROM search_refcols r "
-            "  WHERE r.target_src IN (SELECT src FROM cats) "
-            "    AND r.col IS NOT NULL AND r.col <> '' "
-            "  GROUP BY r.col), "
-            "scored AS ("
-            "  SELECT c.col, c.on_accum, c.holders,"
-            "         (SELECT count(DISTINCT map_extract_value(refs_map, c.col)) "
-            "          FROM %s "
-            "          WHERE map_extract_value(refs_map, c.col) IS NOT NULL) AS n_vals "
-            "  FROM cand c), "
-            "best AS ("
-            "  SELECT col FROM scored "
-            "  ORDER BY on_accum DESC, n_vals DESC, holders DESC "
-            "  LIMIT 1) "
-            "SELECT DISTINCT map_extract_value(c.refs_map, b.col) AS w "
-            "FROM %s c, best b "
-            "WHERE map_extract_value(c.refs_map, b.col) IS NOT NULL "
-            "LIMIT %d"
-            % (", ".join("(%s)" % lit(s) for s in cats), CORPUS, CORPUS,
-               int(limit)))
-    except RuntimeError:
-        rows = []
-    if _take(rows):
-        return out
-    if out:
-        return out
-    try:
-        rows = psql(
-            "SELECT DISTINCT name FROM search_refmap "
-            "WHERE owner IN (%s) AND name IS NOT NULL AND trim(name) <> '' "
-            "LIMIT %d" % (cats_sql, int(limit)))
-    except RuntimeError:
-        return out
-    _take(rows)
-    return out
 
 register_zone('ask.z12_stock_balance', globals())
