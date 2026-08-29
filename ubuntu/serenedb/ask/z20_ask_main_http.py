@@ -2074,10 +2074,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # потому что ранние ветки возврата (нет совпадений) отвечают раньше выбора сущности.
     cut = {}
     # Именованный остаток без balance-источника — до отбора/модели/форка ([замер 22.08 okna]).
-    if question_asks_stock_balance(question) and stock_asks_named_product(question, intent):
-        _cap_early = balance_capable_or_registers()
-        _goods_early = balance_registers_with_goods(_cap_early) if _cap_early else frozenset()
-        if not _cap_early or not _goods_early:
+    if (stock_question_engaged(question, intent)
+            and stock_asks_named_product(question, intent)):
+        _goods_early = stock_goods_pool()
+        if not _goods_early:
             diag["stock_named_early"] = True
             return stock_balance_named_no_data(question, diag, cut, t0)
     # Условие вопроса, снятое на разборе (период не датой, порог не числом, понятие сверх
@@ -2310,7 +2310,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["by_period_fill"] = True
     # K4-3 №11: stock-вопрос с пустым отбором — не резать no_data до stock-path.
     if not by and not extra:
-        if question_asks_stock_balance(question):
+        if stock_question_engaged(question, intent):
             diag["stock_bypass_empty_by"] = True
             # уйдём в stock-path ниже с пустыми cands → balance_bridge / warehouse
         else:
@@ -2354,6 +2354,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     cands = prefer_entity_for_rank(cands, intent, question)
     cands = prefer_entity_for_sales(cands, intent, question)
     cands = prefer_entity_for_catalog_count(cands, intent, question)
+    cands = prefer_entity_for_stock(cands, question, intent)
     if K6R:
         def _k6_mk_clarify(cat, holder, extra):
             return k6_dual_atom_clarify_return(
@@ -2395,6 +2396,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if stock_question_engaged(question, intent):
         capable = balance_capable_or_registers()
         cands = filter_stock_balance_sales_noise(cands, question, diag)
+        _stock_canon = stock_canon_src(cands, question, intent)
+        if _stock_canon:
+            diag["stock_canon_locked"] = _stock_canon
+            cands = prefer_entity_for_stock(cands, question, intent)
         named = stock_asks_named_product(question, intent)
         # K4-1 №12: остаток без предмета — уточнение товара (не figures по продажам).
         if (not named and stock_subject_needs_clarify(question, intent)
@@ -2410,8 +2415,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if ask:
                 return ask
         if named:
-            _goods_cap = balance_registers_with_goods(capable) if capable else frozenset()
-            if not capable or not _goods_cap:
+            _goods_cap = stock_goods_pool(capable)
+            if not _goods_cap:
                 return stock_balance_named_no_data(question, diag, cut, t0)
             cands = [c for c in cands if c in _goods_cap or c in capable]
             cands = filter_balance_structural(cands, diag)
@@ -2820,10 +2825,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # неоднозначности (исходы A/B/C, план §2): круг под-вызовов арбитра не собирается.
     # ASK_FORK_OUTCOMES=0 — волна-1: только `diag.fork` + старые исходы. В под-вызовах
     # (`no_arbiter`) и после доказанного билета (`trusted`) исходы не перехватывают.
-    if question_asks_stock_balance(question) and stock_asks_named_product(question, intent):
-        _cap_pf = balance_capable_or_registers()
-        _goods_pf = balance_registers_with_goods(_cap_pf) if _cap_pf else frozenset()
-        if not _cap_pf or not _goods_pf:
+    if (stock_question_engaged(question, intent)
+            and stock_asks_named_product(question, intent)):
+        _goods_pf = stock_goods_pool()
+        if not _goods_pf:
             diag["stock_named_pre_fork"] = True
             return stock_balance_named_no_data(question, diag, cut, t0)
     if FORK_DETECT and not no_arbiter and len(cands) > 1:
@@ -2836,12 +2841,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # арбитра ×4), не вся база: иначе сотни несвязанных src с живым счётом
         # дают C с сотнями вариантов и секунды на SQL. Полный перечень cands —
         # по-прежнему источник отбора; детектор судит неоднозначность в голове.
-        _fork_pool = prefer_entity_for_catalog_count(
+        _fork_pool = prefer_entity_for_stock(
+            prefer_entity_for_catalog_count(
             prefer_entity_for_sales(
                 prefer_entity_for_rank(
                     list(cands[:max(ARBITER_MAX * 4, 16)]), intent, question),
                 intent, question),
-            intent, question)
+            intent, question),
+            question, intent)
         _fork_pool = event_filter_pool(_fork_pool, intent, diag)
         try:
             _mbs = _measures_by_src(_fork_pool)
@@ -3443,10 +3450,25 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["period_zero_why"] = True
         if (intent.get("want") or "") == "list":
             intent["want"] = "sum"
+    # Stock-path: balance-регистр, не каталог/табчасть (K7, [замер 29.08 okna]).
+    if (not focus and not no_arbiter
+            and not entity_choice_locked(trusted, resolved)
+            and not diag.get("sales_canon_locked")
+            and stock_question_engaged(question, intent)):
+        _stock = stock_canon_src(cands, question, intent) or diag.get("stock_canon_locked")
+        if _stock:
+            _prev = list(picked or [])
+            if not _prev or _prev[0] != _stock:
+                diag["stock_canon_override"] = {"было": _prev, "стало": _stock}
+                шаг("канон остатков", было=(_prev[0] if _prev else "—"),
+                    стало=_stock)
+            picked = [_stock]
+            diag["stock_canon_locked"] = _stock
     # «прайс» = справочник товаров; документ установки цен — шум ([замер 21.08] 321757).
     if (not focus and not no_arbiter and picked
             and not entity_choice_locked(trusted, resolved)
-            and not diag.get("sales_canon_locked")):
+            and not diag.get("sales_canon_locked")
+            and not diag.get("stock_canon_locked")):
         _cat = catalog_count_src(cands, intent, question)
         if _cat:
             if picked[0] != _cat:
@@ -3457,7 +3479,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     writer_pair = writer.get(picked[0]) if picked else None
     if (writer_pair and picked and writer_pair not in picked
             and not diag.get("sales_canon_locked")
-            and not diag.get("catalog_count_locked")):
+            and not diag.get("catalog_count_locked")
+            and not diag.get("stock_canon_locked")):
         diag["writer_pair"] = writer_pair
     #   4. 🔴 (05.08) смысловой путь ОТКАЗАЛ (`meaning_down`). Тогда порядок кандидатов
     #      задаётся числом совпадений, то есть размером сущности, и уверенности в выборе у
@@ -3480,6 +3503,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if (diag.get("writer_pair") and picked and not focus and not no_arbiter
             and not diag.get("sales_canon_locked")
             and not diag.get("catalog_count_locked")
+            and not diag.get("stock_canon_locked")
             and len(arb_pool) < ARBITER_MAX):
         arb_pool.append(diag["writer_pair"])
     if (sales_sum_intent(intent, question)
@@ -3487,9 +3511,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         arb_pool = prefer_entity_for_sales(
             arb_pool, intent, question, plan=plan)
     arb_pool = prefer_entity_for_catalog_count(arb_pool, intent, question)
+    arb_pool = prefer_entity_for_stock(arb_pool, question, intent)
     # Lock канона: один источник → period_empty / ответ, не clarify соперников.
     picked, arb_pool, doubt = sales_canon_force_pool(
-        diag.get("sales_canon_locked") or diag.get("catalog_count_locked"),
+        diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked"),
         picked, arb_pool, doubt)
     if doubt and picked and not focus and not no_arbiter and len(arb_pool) < ARBITER_MAX:
         fam = {_family(x) for x in arb_pool}
@@ -3586,7 +3611,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 соперники=",".join(_added) or "—")
     # Повторный singleton: стоп2/doubt могли добавить соперников после первого force.
     picked, arb_pool, doubt = sales_canon_force_pool(
-        diag.get("sales_canon_locked") or diag.get("catalog_count_locked"),
+        diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked"),
         picked, arb_pool, doubt)
     # В diag для журнала (ask_journal.doubt) — после финального force.
     diag["doubt"] = bool(doubt)
@@ -3621,7 +3646,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         всегда переспрашивать, а не выбирать за человека.
         """
         if (not REQUIRE_SUPPORT or guards_skip_for_choice(focus, measure_pick, trusted)
-                or diag.get("sales_canon_locked") or diag.get("catalog_count_locked")):
+                or diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked")):
             return out
         w = (out.get("diag") or {}).get("focus")
         if not w or out.get("kind") not in ("answer", "figures"):
@@ -5305,7 +5330,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             ask_back = ""
     # Канон уже ответил числом — встречный вопрос модели («какой месяц?») превращает
     # kind=answer в clarify без options ([замер 21.08] июль 2.7M + ask_back → scorer FAIL).
-    if ask_back and (diag.get("sales_canon_locked") or diag.get("catalog_count_locked")):
+    if ask_back and (diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked")):
         diag["ask_back_dropped"] = "canon_locked"
         ask_back = ""
     if ask_back:

@@ -1,3 +1,21 @@
+## 2026-08-29 — K7: stock_canon — warehouse-вопрос в balance-регистр, не каталог [код]
+
+**[код]** z12: `stock_goods_pool` (fallback `search_refcols` при пустом
+`balance_registers_with_goods`), `stock_canon_src`, `prefer_entity_for_stock`.
+z20: lock `stock_canon_locked` по образцу sales/catalog; ранний путь и fork-pool
+через `stock_question_engaged` + `stock_goods_pool`. z13: sales-noise filter на
+`stock_question_engaged`. Корень: «сколько на складе позиций всего» при
+intent=позиции уходил в `catalog_номенклатура` (2384) или табчасти документов;
+`импорттмц` в корпусе, но не в `balance_registers` metadata. Числа:
+warehouse_aggregate **26/0**; fork_outcomes 49/0; fork_detector 52/0;
+calendar_axis 42/0; intent 162/0; k4_clarify 27/0; fork_window_readings 44/0;
+fork_label_daybasis 13/0; warehouse_axis 12/0; stock_balance_path 27/0.
+Эталон okna (живой SQL): net позиций с остатком>0 **1283** (импорт−расход по
+ТМЦ); каталог leaf **2384**; «2384 позиции» — подмена предмета (справочник ≠
+остаток). Разрез по складам: ось только в расходе; приход без места — полный
+остаток по складам в витрине не считается; итог без разреза и исход B+люк — да.
+Доки: K7_WAREHOUSE_AXIS.md §4. PLAN_ANSWER_CONTRACT исход B.
+
 ## 2026-08-29 — open-webui: дефолт бэкенда и обязательный brand-ui.css [код]
 
 **[код]** `configure-branding.py`: дефолт `OPENAI_API_BASE_URL` с мёртвого

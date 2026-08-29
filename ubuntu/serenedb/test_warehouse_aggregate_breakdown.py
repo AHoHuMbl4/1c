@@ -107,7 +107,37 @@ finally:
     A.aggregate = _real_agg
     A.warehouse_axis_values = _old_wh
 
-# ── fork place clarify bypass ────────────────────────────────────────────────
+# --- stock canon: balance-регистр, не каталог ---
+Q_STOCK = "сколько на складе позиций всего?"
+_cands = ["catalog_номенклатура", "document_поступлениетмц_номенклатура",
+          "accumulationregister_импорттмц", "accumulationregister_реализациятмц"]
+A._BALANCE_REGS.update({"at": 0.0, "set": set()})
+A._BALANCE_MAP.update({"at": time.time(), "rows": []})
+_old_psql = A.psql
+def _mock_goods_psql(q):
+    ql = q.lower()
+    if "search_refcols" in ql and "catalog_" in ql:
+        return [("accumulationregister_импорттмц",)]
+    if "distinct c.src_table" in ql:
+        return [("accumulationregister_импорттмц",),
+                ("accumulationregister_реализациятмц",)]
+    if "search_meta" in ql and "balance_registers" in ql:
+        return [("",)]
+    return []
+A.psql = _mock_goods_psql
+try:
+    canon = A.stock_canon_src(_cands, Q_STOCK)
+    t("stock_canon: accumulation not catalog",
+      canon == "accumulationregister_импорттмц", canon)
+    pref = A.prefer_entity_for_stock(_cands, Q_STOCK)
+    t("prefer_stock: catalog dropped",
+      pref and pref[0] == "accumulationregister_импорттмц"
+      and "catalog_номенклатура" not in pref, pref)
+    t("prefer_stock: sales noise dropped",
+      "accumulationregister_реализациятмц" not in pref, pref)
+finally:
+    A.psql = _old_psql
+
 _ord = [
     {"srcs": ["reg_a"], "atom": A.build_answer_atom(
         operation="count", exact_value=7, proof_status=A.PROOF_COMPUTED),

@@ -288,7 +288,7 @@ def src_supports_question(src, intent, diag, by=None, question="", match=None):
         # Сюда доходим только если все группы matched (место A уже отказал иначе);
         # обрезанных резолвов («ПАНГЕЯ»→«П») не даёт сама гарда резолвера
         # (_shares_chars, подстроке нужен ≥3 знака) — отдельного порога не нужно.
-        if diag.get("sales_canon_locked") or diag.get("catalog_count_locked"):
+        if diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked"):
             return True
         if diag.get("sales_measure_canon"):
             return True
@@ -304,7 +304,7 @@ def src_supports_question(src, intent, diag, by=None, question="", match=None):
                 and not diag.get("by_vector")):
             return True
         return False
-    if diag.get("sales_canon_locked") or diag.get("catalog_count_locked"):
+    if diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked"):
         return True
     if diag.get("sales_measure_canon"):
         return True

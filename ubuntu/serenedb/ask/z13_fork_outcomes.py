@@ -20,7 +20,7 @@ def stock_balance_is_sales_noise(src):
 
 def filter_stock_balance_sales_noise(cands, question, diag=None):
     """Негативный отсев: продажи/акт сверки не отвечают на остатки."""
-    if not question_asks_stock_balance(question):
+    if not stock_question_engaged(question):
         return cands
     out = [c for c in (cands or []) if not stock_balance_is_sales_noise(c)]
     if diag is not None and len(out) < len(cands or []):

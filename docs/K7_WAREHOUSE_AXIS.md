@@ -65,7 +65,7 @@ Sql › Statements › SELECT › ORDER BY, LIMIT.
 | замок | результат |
 |---|---|
 | `test_warehouse_axis_autonomy.py` (новый) | **12/0** |
-| `test_warehouse_aggregate_breakdown.py` (29.08) | **23/0** |
+| `test_warehouse_aggregate_breakdown.py` (29.08) | **26/0** |
 | `test_k4_axis_and_names.py` | **11/0** |
 | `test_k4_guess_vs_clarify.py` | **13/0** |
 | `test_k4_meta_names.py` | **12/0** |
@@ -83,6 +83,13 @@ Sql › Statements › SELECT › ORDER BY, LIMIT.
 **29.08 (доп.):** класс агрегата (`всего`, `на всех`, `вместе`+ось склада) →
 `stock_skips_warehouse_clarify`; `stock_question_engaged` — stock-path без
 маркера «остат*» (Q «на всех складах вместе» не уходит в count каталога).
+
+**29.08 (stock_canon):** `stock_goods_pool` — fallback по `search_refcols`→каталог
+номенклатуры, когда движение с товарной осью есть в корпусе, но не в
+`balance_registers` $metadata (okna: `импорттмц`). `stock_canon_src` +
+`prefer_entity_for_stock` + `stock_canon_locked` в z20 — balance-регистр, не
+каталог/табчасть документа. Числа: warehouse_aggregate **26/0**; остальные
+замки без регрессии (fork 49, intent 162, k4 27, calendar 42, …).
 
 ---
 

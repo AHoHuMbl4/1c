@@ -12,6 +12,65 @@
 
 ---
 
+## §0 Контур развёртывания (живой замер 29.08)
+
+Где физически живёт каждый узел после переезда 22.08. Сеть и доступы —
+[`ubuntu/open-webui/README.md`](../ubuntu/open-webui/README.md) §«Сеть»;
+разбор инцидентов переезда — [`INSTALL_LOG.md`](INSTALL_LOG.md) §29.08.
+
+```mermaid
+flowchart LR
+  subgraph WIN["винда клиента (okna-1, за роутером)"]
+    C1["1С + packet-agent"]
+  end
+  subgraph HOST["хост gpu-1c = gpu-erw.timpul.pro (178.63.211.188)"]
+    direction TB
+    VS["vSwitch eno1.4003 = 10.3.1.11 (mtu 1400)"]
+    PX["LXD proxy nat=true:<br/>6090/18090/18801 → okna, 2202→okna:22"]
+    subgraph OKNA["контейнер okna (10.10.10.12) — ВЕСЬ прод"]
+      PS["packet_server :6090"]
+      APP["packet-apply + pipeline.sh (такт)"]
+      SDB[("SereneDB :7890<br/>витрина + корпус + индексы")]
+      ASK["serene_ask :8091 (loopback)"]
+      OCGW["OpenClaw web-шлюз :18801<br/>агент main (DeepSeek) + verify-плагин<br/>+ сервисный агент dict (vLLM 27B)"]
+      TG["OpenClaw телеграм :18800<br/>🔴 стоп+disable 29.08"]
+    end
+  end
+  subgraph FRONT["фронт openclaw-okna (2.28.49.158 / 10.3.0.2)"]
+    CAD["Caddy + Open WebUI :8080 loopback<br/>baulogistic.timpul.pro"]
+    DASH["Grafana /dash/ 🔴 relay 10.3.0.4:7890 мёртв"]
+  end
+  U["человек в браузере"]
+
+  C1 -- "пакеты age (push)" --> VS -- proxy --> PS --> APP --> SDB
+  U -- https --> CAD -- "http://10.3.1.11:18801/v1" --> VS -- proxy --> OCGW
+  OCGW -- "MCP ask_1c (loopback)" --> ASK --> SDB
+  OCGW -. "memorySearch: эмбед gpu-erw:8000/v1 (Qwen3-Embedding-4B)" .-> EMB["эмбеддер на хосте :8000"]
+  DASH -.🔴.-> SDB
+```
+
+Узлы и что их запускает:
+
+| Узел | Юнит | Примечание |
+|---|---|---|
+| packet_server | `1c-packet-server` (system) | приём пакетов, `:6090`, age-токены в `/etc/1c-packet-bases.json` |
+| такт | `1c-serene-pipeline@postgres` (+timer) | 🔴 **failed с 27.08**: мета-гейт требует снимок `$metadata` (`packet-meta/okna-1`), которого у контура никогда не было; последний успешный такт **24.08 05:40** (build_state). Пакеты при этом доходят (последний 28.08; `000195` в карантине `delta_without_key`) — свежесть копится в inbox неприменённой |
+| SereneDB | системный юнит serenedb | витрина+корпус в базе `postgres`, порт 7890 только loopback контейнера |
+| serene_ask | `1c-serene-ask@postgres` | `:8091` loopback; env `/etc/1c-serene-ask-postgres.env`; модель Qwen3.8-27B |
+| OpenClaw web-шлюз | `openclaw-gateway-web` (user undebot) | `--bind lan`, `gateway.http.endpoints.chatCompletions.enabled=true`; дефолтный агент — явный `{"id":"main","default":true}`; токен = ключ морды |
+| OpenClaw телеграм | `openclaw-gateway` (user undebot) | 🔴 остановлен и disable 29.08 (решение владельца; возврат `systemctl --user enable --now`) |
+| Open WebUI | `open-webui` (user webui, фронт) | URL бэкенда в env **и в webui.db** (`openai.api_base_urls` — база перекрывает env!); брендинг: `custom.css` в статике пакета + follow-up шаблон в базе |
+
+Модели: ответы агента — DeepSeek API (`deepseek-v4-pro`, ключ в auth-store main-агента);
+разбор/синонимы — vLLM Qwen3.8-27B (`gpu-27b.timpul.pro:8000`); память OpenClaw —
+эмбеддер `gpu-erw.timpul.pro:8000/v1` (Qwen3-Embedding-**4B**); ask-пайплайн — тот же 27B.
+
+Пути OData (`odata_gateway → serene_sync`) — **история для okna**: контур пакетный,
+прямой связи Ubuntu↔1С нет (винда за роутером, инициатива всегда от агента).
+
+---
+
+
 ## Схема
 
 ```mermaid

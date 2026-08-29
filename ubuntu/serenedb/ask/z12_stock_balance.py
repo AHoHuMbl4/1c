@@ -163,16 +163,17 @@ def _resolve_breakdown_balance_src(src, cands=None):
     """Balance-регистр с товарной осью для итога+люка; каталог складов не годится."""
     try:
         cap = balance_capable_or_registers()
-        goods = balance_registers_with_goods(cap) if cap else frozenset()
+        goods = stock_goods_pool(cap)
     except RuntimeError:
         return src or None
+    goods = {c for c in (goods or []) if not stock_balance_is_sales_noise(c)}
     if src and src in goods:
         return src
     for c in (cands or []):
         if c in goods:
             return c
     if goods:
-        return sorted(goods)[0]
+        return sorted(goods, key=lambda s: _stock_register_rank_key(s, cap))[0]
     if src and src in cap:
         return src
     if cap:
@@ -333,6 +334,79 @@ def balance_registers_with_goods(regs=None):
         "AND map_extract_value(refs_map, 'ТМЦ') IS NOT NULL"
         % (CORPUS, ", ".join(lit(r) for r in regs)))
     return frozenset(r[0] for r in (rows or []) if r and r[0])
+
+
+def stock_goods_pool(capable=None):
+    """Регистры движения с товарной осью: balance_map + fallback по search_refcols.
+
+    На okna `импорттмц` есть в корпусе, но не в balance_registers $metadata —
+    без fallback stock-path пустой и вопрос уходит в каталог/документ.
+    """
+    capable = capable if capable is not None else balance_capable_or_registers()
+    goods = balance_registers_with_goods(capable) if capable else frozenset()
+    if goods:
+        return goods
+    try:
+        rows = psql(
+            "SELECT DISTINCT c.src_table FROM %s c "
+            "WHERE c.src_table LIKE 'accumulationregister_%%' "
+            "  AND c.nums IS NOT NULL AND len(map_keys(c.nums)) > 0 "
+            "  AND EXISTS ("
+            "    SELECT 1 FROM search_refcols r "
+            "    WHERE r.src_table = c.src_table "
+            "      AND r.target_src LIKE 'catalog_%%' "
+            "      AND (r.target_src LIKE '%%номенклатур%%' "
+            "           OR r.target_src LIKE '%%nomencl%%' "
+            "           OR r.target_src LIKE '%%товар%%' "
+            "           OR r.target_src LIKE '%%product%%')) "
+            "GROUP BY 1 HAVING count(*) > 0" % CORPUS)
+    except RuntimeError:
+        return frozenset()
+    return frozenset(r[0] for r in (rows or []) if r and r[0])
+
+
+def _stock_register_rank_key(src, capable=None):
+    """Порядок выбора balance-источника без имён конкретной базы."""
+    s = str(src or "").lower()
+    return (
+        1 if stock_balance_is_sales_noise(s) else 0,
+        0 if capable and src in capable else 1,
+        0 if s.startswith("accumulationregister_") else 1,
+        s)
+
+
+def stock_canon_src(cands, question, intent=None, plan=None):
+    """Src канона остатков: accumulation с товарной осью, не каталог/табчасть."""
+    if not stock_question_engaged(question, intent, plan):
+        return None
+    capable = balance_capable_or_registers()
+    pool = [c for c in stock_goods_pool(capable)
+            if not stock_balance_is_sales_noise(c)]
+    if not pool:
+        return None
+    pool.sort(key=lambda s: _stock_register_rank_key(s, capable))
+    in_cands = [c for c in (cands or []) if c in pool]
+    if in_cands:
+        in_cands.sort(key=lambda s: _stock_register_rank_key(s, capable))
+        return in_cands[0]
+    return pool[0]
+
+
+def prefer_entity_for_stock(cands, question, intent=None, plan=None):
+    """Stock-path: balance-регистр в голове, каталоги/документы вне пула."""
+    canon = stock_canon_src(cands, question, intent, plan)
+    if not canon:
+        return cands
+    capable = balance_capable_or_registers()
+    pool = {c for c in stock_goods_pool(capable)
+            if not stock_balance_is_sales_noise(c)}
+    pool.add(canon)
+    out, seen = [], set()
+    for c in [canon] + [x for x in (cands or []) if x in pool and x != canon]:
+        if c and c not in seen:
+            seen.add(c)
+            out.append(c)
+    return out or [canon]
 
 
 def _stems_of_text(s):
