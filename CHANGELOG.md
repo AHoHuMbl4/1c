@@ -40,6 +40,15 @@ __file__ пакета); z21 SQL гибрида, z03/z04 JSON-fallback, z20 journ
 через ASK_ROOT. Замок zone_names **95/0**: запрет `__file__` в телах зон +
 существование wiki_card_hybrid.sql от ASK_ROOT. Доки: CHANGELOG.
 
+## 2026-08-29 — corpus_merge: ветка entity_key_collapse (частичный уход + рост) [код]
+
+**[код]** `corpus_merge.sql`: третья ветка сторожа — частичный уход (0<уйдёт<было)
+при `стало>было` и живых Recorder уходящих строк в витрине (`query_table` +
+`split_part(row_key,'|',1)`) → `entity_key_collapse:<src_table>` в `search_quality`,
+не STOP; мёртвый Recorder или `стало<=было` — STOP как прежде. Замок
+`test_corpus_merge_key_form.py` **27/0** (было 17/0). Доки:
+cookbook/sql_features/query_and_query_table_functions.
+
 ## 2026-08-29 — deploy-ask возит wiki_card SQL (FileNotFoundError на окне) [код]
 
 **[замер окно]** z21 на :8092 падал 503 FileNotFoundError: выкат ask возил

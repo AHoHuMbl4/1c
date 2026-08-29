@@ -93,7 +93,9 @@ FROM (SELECT src_table, row_key FROM tmp3_corpus GROUP BY 1, 2 HAVING count(*) >
 -- (guid → 40-hex хеш; регистр: guid|StandardODATA → Period|измерения) — анти-
 -- соединения выше ключи не сопоставляют. У сущности уходит 100 % её старых ключей,
 -- новая сборка непуста и не меньше — пересбор, не потеря. Частичный уход (<100 %)
--- или новая сборка меньше старой — другой диагноз, STOP. Доки: MERGE INTO.
+-- при росте сборки и живых Recorder в витрине — схлопывание гранулярности ключа
+-- (два движения с одним составом измерений → один объект), не потеря. Иначе STOP.
+-- Доки: MERGE INTO; cookbook/sql_features/query_and_query_table_functions.
 CREATE OR REPLACE TABLE tmp3_merge_unmatched AS
 SELECT c.src_table, c.row_key
 FROM search_corpus c
@@ -143,12 +145,62 @@ SELECT CASE WHEN count(*) > 0
 FROM tmp3_merge_ent_guard
 WHERE было > 0 AND стало < было;
 
+-- Частичный уход при росте сборки: проверяем, жив ли split_part(row_key,'|',1)
+-- в колонке Recorder витрины (имя платформы 1С, не домен). Все живы — коллапс
+-- ключа, запись в search_quality; мёртвый Recorder или нет колонки — STOP ниже.
+CREATE OR REPLACE TABLE tmp3_merge_collapse_cand AS
+SELECT src_table, было, стало, уйдёт
+FROM tmp3_merge_ent_guard
+WHERE уйдёт > 0 AND уйдёт < было AND стало > было;
+
+CREATE OR REPLACE TABLE tmp3_merge_collapse_rec AS
+SELECT u.src_table, u.row_key, split_part(u.row_key, '|', 1) AS rec
+FROM tmp3_merge_unmatched u
+WHERE u.src_table IN (SELECT src_table FROM tmp3_merge_collapse_cand)
+  AND split_part(u.row_key, '|', 1) <> '';
+
+CREATE OR REPLACE TABLE tmp3_merge_collapse_regs AS
+SELECT DISTINCT c.src_table
+FROM tmp3_merge_collapse_cand c
+WHERE EXISTS (SELECT 1 FROM duckdb_columns() dc
+              WHERE dc.database_name = current_database()
+                AND dc.table_name = c.src_table
+                AND dc.column_name = 'Recorder');
+
+CREATE OR REPLACE TABLE tmp3_merge_collapse_dead (src_table VARCHAR, dead BIGINT);
+
+PREPARE p_collapse_dead AS
+INSERT INTO tmp3_merge_collapse_dead
+SELECT $1::VARCHAR, count(*)
+FROM (SELECT DISTINCT rec FROM tmp3_merge_collapse_rec WHERE src_table = $1) r
+WHERE NOT EXISTS (SELECT 1 FROM query_table($1) q WHERE q."Recorder" = r.rec);
+
+\set ON_ERROR_STOP off
+SELECT 'EXECUTE p_collapse_dead(' || quote_literal(src_table) || ');'
+FROM tmp3_merge_collapse_regs
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_merge_key_collapse AS
+SELECT c.src_table, c.было, c.стало, c.уйдёт
+FROM tmp3_merge_collapse_cand c
+INNER JOIN tmp3_merge_collapse_regs r USING (src_table)
+INNER JOIN tmp3_merge_collapse_dead d ON d.src_table = c.src_table AND d.dead = 0
+WHERE (SELECT count(DISTINCT rec) FROM tmp3_merge_collapse_rec WHERE src_table = c.src_table) > 0;
+
+DELETE FROM search_quality WHERE k LIKE 'entity_key_collapse:%';
+INSERT INTO search_quality
+SELECT 'entity_key_collapse:' || src_table, уйдёт,
+       'было ' || было || ' → стало ' || стало
+FROM tmp3_merge_key_collapse;
+
 SELECT CASE WHEN count(*) > 0
        THEN error('corpus_merge: частичная потеря объектов у сущностей: '
                   || string_agg(src_table || ' (' || уйдёт || ' из ' || было || ')',
                                 ', ')) END
-FROM tmp3_merge_ent_guard
-WHERE уйдёт > 0 AND уйдёт < было;
+FROM tmp3_merge_ent_guard g
+WHERE g.уйдёт > 0 AND g.уйдёт < g.было
+  AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse k WHERE k.src_table = g.src_table);
 
 CREATE OR REPLACE TABLE tmp3_merge_key_form AS
 SELECT src_table, было, стало, уйдёт
@@ -167,6 +219,8 @@ SELECT CASE WHEN (SELECT count(*) FROM search_corpus) > 0
                   || (SELECT count(*) FROM search_corpus) || ' — остановлено') END
 FROM (SELECT count(*) AS уйдёт FROM tmp3_merge_unmatched u
       WHERE NOT EXISTS (SELECT 1 FROM tmp3_merge_key_form k
+                        WHERE k.src_table = u.src_table)
+        AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse k
                         WHERE k.src_table = u.src_table));
 
 -- Сужение величин — не ошибка, но и не пустяк: строка теряет числа, оставаясь на месте,
