@@ -1,4 +1,30 @@
-## 2026-08-29 — K7: stock_canon — warehouse-вопрос в balance-регистр, не каталог [код]
+## 2026-08-29 — синтетический $metadata okna из витрины (без Windows) [код]
+
+**[код]** `work/manifest-diff/gen_metadata_vitrine.py`: универсальный генератор
+OData `$metadata` из `duckdb_columns()` витрины + список сущностей (файл контура
+или `packet-bases.json`). Форма XML — как `manifest-gen.ps1` / `corpus_build.sql`
+§1 (EntityType, ключи, Edm-типы по префиксам платформы и именам колонок).
+`metadata-okna.xml` — прогон контура okna; установка в
+`/var/lib/serenedb/packet-meta/` — оркестратор. Числа: **819** сущностей,
+**1027** свойств в синтете; парсер такта (regex corpus_build) — **819** EntityType,
+**819** с ключом; замок `test_gen_metadata_vitrine.py` — **20/0**.
+
+## 2026-08-29 — И0: work/gold client_gold packet↔vitrine [замер]
+
+**[код]** `work/gold/client_gold.py` — генератор `client-gold.tsv` без
+`search_corpus`: покрытие из `information_schema.tables`, формулировки
+шаблоны×сущности + `ask_journal_text`, эталон packet (`base_profile`/сырой
+регистр) ↔ vitrine (контроль). Колонки: question, etalon, etalon_source,
+freshness_lag_sec, verify_status; расхождения — отдельный TSV. Срезы
+`work/gold/slices-okna-packet.json` (16 шт., ACCEPTANCE §B + счётчики).
+Замок `work/gold/test_client_gold.py` **16/0** (детерминизм, ∩ ab-gold=0).
+**[замер okna 29.08]** SSH gpu-erw: vitrine **246** таблиц (104/13/129),
+journal **3870**, freshness_lag **267751** с; build **57** вопросов (journal 37 +
+template 20); verify 16 срезов — match **10** / mismatch **4** / pending **2**
+(каталоги: base_profile rows ≠ leaf count; суммы регистра — packet=vitrine);
+discrepancy log **4** строки. OData на okna нет — эталон из пакетов, не шлюза.
+Доки: work/gold/README.md, PLAN_TO_TARGET §И0.
+
 
 **[код]** z12: `stock_goods_pool` (fallback `search_refcols` при пустом
 `balance_registers_with_goods`), `stock_canon_src`, `prefer_entity_for_stock`.

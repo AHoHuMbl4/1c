@@ -16,6 +16,12 @@
   исключениями = MATCH 2836/2836 сущностей).
 - `diff-iter*.txt`, `gen-log.txt` — промежуточные итерации калибровки (в git не
   лежат, рабочие файлы).
+- `gen_metadata_vitrine.py` — генератор из витрины SereneDB (`duckdb_columns` +
+  список сущностей OData); без COM/Windows. Замок: `test_gen_metadata_vitrine.py`.
+- `run-metadata-okna.sh` — прогон для okna на машине с витриной `127.0.0.1:7890`.
+- `metadata-okna.xml` — артефакт контура okna (819 сущностей из
+  `docs/completeness-okna/contour.txt`). Перед выкладкой в packet-meta —
+  перегенерировать на живой витрине окна.
 
 ## Как повторить калибровку на другой базе
 
@@ -24,6 +30,8 @@
 2. Сгенерировать синтетический: прогон установщика (мягкий шаг после шага 12)
    или `manifest-gen.ps1` напрямую с env `OC1C_PROGID`/`OC1C_CONNSTR`/
    `OC1C_MANIFEST_OUT` → `gen-metadata-<база>.xml`.
+   **Без Windows:** `python3 work/manifest-diff/gen_metadata_vitrine.py --dsn …
+   --entities-file contour.txt --out metadata-<база>.xml` (витрина SereneDB).
 3. `python3 diff_metadata.py live.xml gen.xml` — расхождения либо в
    исключения с причиной, либо в правку генератора.
 
