@@ -1,3 +1,25 @@
+## 2026-08-29 — О5: персистентные секреты эмбеддера — юнит после serenedb [код]
+
+**[код]** `embed_secrets_install.sh` + `embed_secrets_install.sql`: `CREATE OR REPLACE
+SECRET` по `EMBED_HOSTS` (динамическое число хостов) + `qwen` (= первый хост);
+имена `emb_<база>_N` от `current_database()`; ключи через `psql -v`, не в командной
+строке. Юнит `ubuntu/systemd/1c-serene-embed-secrets.service` (oneshot,
+`EnvironmentFile=/etc/1c-embed.env`); drop-in `serenedb.service.d/embed-secrets.conf`
+→ `ExecStartPost` стартует юнит после каждого подъёма движка. Выкат:
+`work/acceptance/deploy-embed-secrets-okna.sh`. Замок: `test_embed_secrets_install.py`
+**22/0**. **Числа:** 22/0 замок; okna живьём: duckdb_secrets **3→3** (emb_postgres_0/1,
+qwen), двойной `systemctl start` без роста. **Доки:** PLAN_WIKI_CHOICE §7 строка 2 ✅,
+Sql › Statements › CREATE SECRET.
+
+## 2026-08-29 — И2-раннер: client-gold × engine/web, вердикты по контракту [код]
+
+**[код]** `work/gold/i2_runner.py`: прогон `client-gold-okna.tsv` двумя путями
+(engine `/ask`, web `chatCompletions`), механические вердикты
+(`match` / `honest_no` / `confident_wrong` / `unresolved`), отчёт
+`work/gold/runs/i2-*/`. Замок `test_client_gold.py` **29/0** (И0+И2 синтетика).
+Живой И2 не запускался — очередь векторов. Доки: work/gold/README.md §И2.
+Числа: 27/0.
+
 ## 2026-08-29 — ЧП1 client-gold okna: 67/67 эталонов сверены с 1С [замер] [решение]
 
 **[замер okna 29.08 вечер]** SSH gpu-erw.timpul.pro:7890, freshness_lag **3794** с.
