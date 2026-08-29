@@ -540,18 +540,63 @@ def _fork_human_measure_label(atom, question="", row=None, class_item=None):
     return "сумма" if cyr else "amount"
 
 
-def _fork_human_place_label(question=""):
-    return "склад" if _fork_question_cyrillic(question) else "warehouse"
+def _fork_place_axis_label_from_items(class_item=None, ordered=None):
+    """Подпись оси места из fork/corpus: atom.axis, distinct_axis_label, catalog refcol."""
+    seen, items = set(), []
+    for it in ([class_item] if class_item else []) + list(ordered or []):
+        if not it or id(it) in seen:
+            continue
+        seen.add(id(it))
+        items.append(it)
+    for it in items:
+        atom = (it or {}).get("atom") or {}
+        row = (it or {}).get("row") or {}
+        ax = (atom.get("axis") or row.get("distinct_axis_label") or "").strip()
+        if ax and not looks_like_src_table(ax):
+            return ax
+        col = (row.get("distinct_axis") or "").strip()
+        srcs = sorted((it or {}).get("srcs") or [])
+        for rep in srcs:
+            try:
+                axes = refcols_of(rep) or []
+            except RuntimeError:
+                axes = []
+            if col:
+                pl = _passport_axis_label(col, axes)
+                if pl:
+                    return pl
+            cap = frozenset()
+            try:
+                cap = balance_capable_sources()
+            except RuntimeError:
+                pass
+            if cap and rep in cap:
+                for a in axes:
+                    tgt = (a.get("target_src") or "").strip()
+                    if tgt.startswith("catalog_"):
+                        tl = _table_label(tgt)
+                        if tl:
+                            return tl
+    return ""
 
 
-def _fork_axis_option_label(axis_kind, it, base_lab, question, today=None):
+def _fork_human_place_label(question="", class_item=None, ordered=None):
+    lab = _fork_place_axis_label_from_items(class_item, ordered)
+    if lab:
+        return lab
+    return ("место хранения" if _fork_question_cyrillic(question)
+            else "storage location")
+
+
+def _fork_axis_option_label(axis_kind, it, base_lab, question, today=None,
+                            ordered=None):
     """Человеческая подпись варианта: ось + ветка (если есть)."""
     atom = it.get("atom") or {}
     row = it.get("row") or {}
     if axis_kind == "measure":
         axis_lab = _fork_human_measure_label(atom, question, row, class_item=it)
     elif axis_kind == "place":
-        axis_lab = _fork_human_place_label(question)
+        axis_lab = _fork_human_place_label(question, class_item=it, ordered=ordered)
     elif axis_kind == "period":
         db = _class_day_basis(it)
         if db in _DAY_BASIS_IDS and (it.get("label") or "").strip():
@@ -571,6 +616,12 @@ def _fork_clarify_opts(ordered, lab_by, marks, by, match, preds, live,
                        axis_kind, question, today=None):
     """Варианты clarify: по классам развилки, с подписью человеческой оси."""
     applicable = _fork_applicable_ordered(ordered)
+    if axis_kind == "place":
+        wh = warehouse_axis_values()
+        if len(wh) < 2:
+            return []
+        return [{"src": "", "label": w, "hint": "", "distinct_by": "warehouse",
+                 "found": 0} for w in wh]
     if axis_kind and len(applicable) >= 2:
         marks = marks or {}
         by = by or {}
@@ -585,7 +636,8 @@ def _fork_clarify_opts(ordered, lab_by, marks, by, match, preds, live,
             base = (it.get("label") or "").strip()
             if not base and rep:
                 base = human_table_label(rep, (lab_by or {}).get(rep))
-            lab = _fork_axis_option_label(axis_kind, it, base, question, today=today)
+            lab = _fork_axis_option_label(
+                axis_kind, it, base, question, today=today, ordered=ordered)
             if not lab:
                 lab = base or rep
             opt = {"src": ab or db or rep,

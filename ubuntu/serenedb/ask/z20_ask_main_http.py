@@ -2041,6 +2041,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         величина=(intent.get("measure") or "—"), считать=(intent.get("want") or "—"),
         потеряно=(",".join(разбор.get("lost") or []) or "—"))
 
+    _cal_blk = calendar_axis_unavailable_block(
+        question, intent=intent, trusted=trusted, diag=diag, cut=None, t0=t0)
+    if _cal_blk:
+        шаг("calendar_axis_unavailable",
+            need=(diag or {}).get("calendar_axis_unavailable"))
+        return _cal_blk
+
     # ВОПРОС О САМИХ ДАННЫХ ИЛИ О ТОМ, ЧТО СИСТЕМА О НИХ ЗНАЕТ (п. 13).
     #
     # «То, что недоступно — закрыто правами, не загрузилось, не попало в индекс — видно

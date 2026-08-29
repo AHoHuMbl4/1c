@@ -302,11 +302,35 @@ _ord_place = [
 ]
 t("clarify axis: stock question → place",
   A._fork_clarify_axis_kind(_ord_place, "Сколько товара на складе?") == "place")
-_popts = A._fork_clarify_opts(_ord_place,
-                              {"reg_a": "R1", "reg_b": "R2"}, {}, {}, "", [], {},
-                              "place", "Сколько товара на складе?")
-t("clarify place: needle склад",
-  all("склад" in (o.get("label") or "").lower() for o in _popts))
+_old_wh = A.warehouse_axis_values
+A.warehouse_axis_values = lambda limit=20: ["Склад A", "Склад B"]
+_popts_wh = A._fork_clarify_opts(_ord_place,
+                                 {"reg_a": "Товар X", "reg_b": "Товар Y"},
+                                 {}, {}, "", [], {}, "place",
+                                 "Сколько товара на складе?")
+t("clarify place: options = warehouse values",
+  len(_popts_wh) == 2
+  and {o["label"] for o in _popts_wh} == {"Склад A", "Склад B"})
+t("clarify place: not nomenclature in options",
+  not any("Товар" in (o.get("label") or "") for o in _popts_wh))
+A.warehouse_axis_values = lambda limit=20: ["Only"]
+t("clarify place: single warehouse → empty options",
+  A._fork_clarify_opts(_ord_place, {}, {}, {}, "", [], {},
+                       "place", "q") == [])
+A.warehouse_axis_values = _old_wh
+_item_place = {"srcs": ["reg_a"], "atom": A.build_answer_atom(
+    operation="count", exact_value=5, proof_status=A.PROOF_COMPUTED),
+    "row": {"count": 5, "distinct_axis_label": "Филиалы"}}
+t("place label from distinct_axis_label",
+  A._fork_human_place_label("q", class_item=_item_place) == "Филиалы")
+t("place label fallback neutral ru",
+  A._fork_human_place_label("сколько?", class_item={"row": {}, "atom": {}})
+  == "место хранения")
+A.warehouse_axis_values = lambda limit=20: []
+t("clarify place: empty warehouse list → no options",
+  A._fork_clarify_opts(_ord_place, {}, {}, {}, "", [], {},
+                       "place", "q") == [])
+A.warehouse_axis_values = _old_wh
 
 # ── complement guard (K6/C4) ──────────────────────────────────────────────────
 _row_dist = {"count": 43, "folders": 0, "sums": {},

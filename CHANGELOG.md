@@ -1,3 +1,14 @@
+## 2026-08-29 — z13/z20: ось места clarify + проводка calendar block [код]
+
+**[код]** z20: `calendar_axis_unavailable_block` вызывается в `answer()` сразу после
+разбора и `day_basis_leader` — до coverage/развилок; рабочие дни/праздники при
+пустой карте → `no_data`, не ответ без фильтра. z13: подпись оси места из
+`distinct_axis_label` / `_passport_axis_label` / catalog refcol (нейтральный
+fallback «место хранения»); clarify `axis_kind=place` → `options` из
+`warehouse_axis_values()`, не ярлыки классов развилки. **Замки:** fork_outcomes
+**44/0**, fork_detector **52/0**, calendar_axis **42/0**, intent **157/0**,
+k4_clarify **27/0**. Доки: calendar-axis-design §5.2.
+
 ## 2026-08-29 — К2: окна недели/«с N по M» и поведение без карты календаря [код]
 
 **[код]** Живой замер compare 0/8 разложен на ask-часть (починена) и corpus-часть

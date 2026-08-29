@@ -345,6 +345,14 @@ t("calendar_days preds: пусто",
 restore_flag(saved)
 restore_meta(_real_meta)
 
+try:
+    _ans_src = inspect.getsource(A.answer)
+except OSError:
+    _ans_src = ""
+t("z20: calendar block wired in answer",
+  "calendar_axis_unavailable_block(" in _ans_src
+  and "return _cal_blk" in _ans_src)
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)
