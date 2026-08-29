@@ -87,10 +87,30 @@ def load_z21():
 def main() -> int:
     hybrid = HYBRID.read_text(encoding="utf-8")
     combined = strip_sql_comments(hybrid)
-    z21 = load_z21()
 
     t("wiki_card_hybrid.sql exists", HYBRID.is_file())
     t("z21_wiki_choice.py exists", Z21.is_file())
+
+    import os as _os
+    _saved = {k: _os.environ.pop(k, None) for k in ("ASK_WIKI_CHOICE",)}
+    try:
+        _os.environ.setdefault("ASK_TOKEN", "test")
+        _os.environ.setdefault("EMBED_BASE_URL", "-")
+        _os.environ.setdefault("EMBED_MODEL", "-")
+        if str(ROOT) not in sys.path:
+            sys.path.insert(0, str(ROOT))
+        import serene_ask as _sa
+        t("bootstrap ASK_WIKI_CHOICE defined", hasattr(_sa, "ASK_WIKI_CHOICE"))
+        t("bootstrap try_wiki branch off no NameError",
+          _sa.try_wiki_hybrid_entity_pick("сколько петель", {}, {}, None, 0) is None)
+    finally:
+        for k, v in _saved.items():
+            if v is None:
+                _os.environ.pop(k, None)
+            else:
+                _os.environ[k] = v
+
+    z21 = load_z21()
 
     t("knn CTE with LIMIT param", "LIMIT :knn_limit" in hybrid)
     t("struct_catalog layer", "struct_catalog" in hybrid)

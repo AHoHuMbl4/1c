@@ -1,3 +1,14 @@
+## 2026-08-29 — _bootstrap зон: ASK_/WIKI_-присвоения вне тела зоны — NameError флага [код]
+
+**[замер :8092]** «петли» → 503 NameError 'ASK_WIKI_CHOICE' (z21:15 определён,
+z21:259 не видит): эвристика `_body_start_line` не считала присвоения
+`ASK_*`/`WIKI_*` «содержательными» — тело зоны начиналось со стр. 21, флаги
+15–19 не исполнялись, функции ниже — попадали в namespace. В z03 флаги живут
+после первого def, потому не проявлялось. **[код]** два префикса в
+`ask/_bootstrap.py` `_body_start_line`. Числа: wiki_card_hybrid **35/0**
+(+2 кейса), stock_balance **26/0**, word ok, action_class **48/0**, intent
+**162/0**. Доки: ubuntu/serenedb/ask/_bootstrap.py, CHANGELOG.
+
 ## 2026-08-29 — z20 ранний stock-путь: UnboundLocalError plan — фикс живой пробой [код] [замер]
 
 **[замер :8092, оркестратор]** склад-класс падал 503 «UnboundLocalError:

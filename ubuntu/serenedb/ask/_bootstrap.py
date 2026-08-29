@@ -55,6 +55,8 @@ def _body_start_line(lines: list[str]) -> int:
             or s.startswith("#")
             or s.startswith("INTENT_")
             or s.startswith("SCORER")
+            or s.startswith("ASK_")
+            or s.startswith("WIKI_")
         ):
             return i + 1  # 1-based
     raise RuntimeError("zone body start not found")
