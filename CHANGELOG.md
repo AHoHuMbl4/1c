@@ -1,3 +1,18 @@
+## 2026-08-29 — K7: агрегат «всего» и разрез «пo каждому» на оси склада [код]
+
+**[код]** z12: класс маркеров итога (`всего`/`total`/…) снимает `warehouse_clarify`
+на stock-path; класс «пo каждому»/list — тоже. z20:9322 гейт перед clarify;
+перед no_data при GROUP BY — `stock_breakdown_leader_fallback` (итог+люк из
+`warehouse_axis_values`, не пустой отказ). z13: fork place-clarify при том же
+флаге → figures лидера + люк складов. Корень дефекта 29.08 (okna :8091,
+rid 6360f2f8): z20:2422 вызывал clarify без проверки «всего».
+Числа: test_warehouse_aggregate_breakdown 17/0; fork_outcomes 49/0;
+fork_detector 52/0; calendar_axis 42/0; intent 162/0; k4_clarify 27/0;
+fork_window 44/0; fork_label_daybasis 13/0; warehouse_axis 12/0;
+stock_balance_path 27/0. Эталон «сколько на складе позиций всего»:
+COUNT DISTINCT ТМЦ на `accumulationregister_реализациятмц` (живой SQL okna).
+Доки: K7_WAREHOUSE_AXIS.md §4, PLAN_ANSWER_CONTRACT исход B.
+
 ## 2026-08-29 — веб-чат baulogistic: четыре слоя починки после переезда [замер]
 
 **[замер]** Чат не работал с переезда 22.08: (1) web-профиль без

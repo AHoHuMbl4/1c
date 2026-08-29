@@ -2419,9 +2419,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 return stock_balance_named_no_data(question, diag, cut, t0)
         else:
             # K4-3 №11: несколько складов-значений → clarify до bridge/no_data.
-            wh_ask = warehouse_clarify(question, diag, cut, t0)
-            if wh_ask:
-                return wh_ask
+            # K7/K8: «всего» и «пo каждому» снимают складскую развилку (29.08).
+            if not stock_skips_warehouse_clarify(question, intent):
+                wh_ask = warehouse_clarify(question, diag, cut, t0)
+                if wh_ask:
+                    return wh_ask
             if capable:
                 hit = [c for c in cands if c in capable]
                 if not hit:
@@ -4742,6 +4744,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
             if not _zero_period_not_missing(intent, diag, question, act, src):
+                _sfb = stock_breakdown_leader_fallback(
+                    question, src, match, preds, measure, diag, cut, t0,
+                    intent=intent, plan=plan, agg=None)
+                if _sfb:
+                    return _sfb
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -4762,6 +4769,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if (not rows and not (agg or {}).get("count")
                 and not _zero_period_not_missing(
                     intent, diag, question, empty_after_period_action(intent), src)):
+            _sfb2 = stock_breakdown_leader_fallback(
+                question, src, match, preds, measure, diag, cut, t0,
+                intent=intent, plan=plan, agg=agg)
+            if _sfb2:
+                return _sfb2
             return {"partial": cut or None, "kind": "no_data",
                     "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}

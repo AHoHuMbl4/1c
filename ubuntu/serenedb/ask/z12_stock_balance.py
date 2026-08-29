@@ -62,6 +62,122 @@ _STOCK_MARKERS = (
     "леж",
 )
 
+# Класс маркеров итога без разреза (ru+en), не список фраз конкретного диалога.
+_AGGREGATE_TOTAL_MARKERS = (
+    "всего", "итого", "итог ", " overall", " in total", " total ",
+    "grand total",
+)
+
+# Класс явного разреза «пo каждому …» (ru+en), не привязка к оси склада.
+_PER_AXIS_BREAKDOWN_MARKERS = (
+    "по кажд", " each ", " per ", "отдельно", " separately",
+    "разбив", " breakdown", " split by", "разрез",
+)
+
+# Рейтинговые «… всего» — не маркер суммарного итога (ловушка подстроки «всего»).
+_RANK_NOT_AGGREGATE = (
+    "больше всего", "меньше всего", "лучше всего", "хуже всего",
+    "больше всех", "меньше всех", "лучше всех", "хуже всех",
+    "most ", " least ", "best selling", "top seller",
+)
+
+
+def question_has_aggregate_total_marker(question, intent=None, plan=None):
+    """Итог «всего»/total — развилка по измерению (склад и др.) не задаётся."""
+    if rank_intent_from(intent or {}, plan or {}, question):
+        return False
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return False
+    if any(m in q for m in _RANK_NOT_AGGREGATE):
+        return False
+    return any(m in q for m in _AGGREGATE_TOTAL_MARKERS)
+
+
+def question_wants_per_axis_breakdown(question, intent=None, plan=None):
+    """Явный разрез по оси (список/пo каждому), не суммарный итог."""
+    if question_wants_breakdown(intent, plan):
+        return True
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return False
+    return any(m in q for m in _PER_AXIS_BREAKDOWN_MARKERS)
+
+
+def warehouse_axis_is_live():
+    """Живая ось места хранения: несколько значений из базы (K7)."""
+    try:
+        wh = warehouse_axis_values()
+    except RuntimeError:
+        return False
+    return len(wh or []) >= 2
+
+
+def stock_skips_warehouse_clarify(question, intent=None, plan=None):
+    """Не уточнять склад: итог без разреза, явный разрез, или все склады названы."""
+    if not question_asks_stock_balance(question):
+        return False
+    if question_has_aggregate_total_marker(question, intent, plan):
+        return True
+    if question_wants_per_axis_breakdown(question, intent, plan):
+        return True
+    q = " ".join(str(question or "").lower().split())
+    if any(w in q for w in ("всех", "всеми", "all warehouses", "all stocks")):
+        return True
+    return False
+
+
+def stock_breakdown_leader_fallback(question, src, match, preds, measure, diag,
+                                    cut, t0, intent=None, plan=None, agg=None):
+    """Исход B при живой оси и запросе разреза, если GROUP BY ещё недоступен (K7, не K8).
+
+    Считаемый лидер-итог + люк из значений оси склада; пустой отказ не отдаём.
+    """
+    if not question_wants_per_axis_breakdown(question, intent, plan):
+        return None
+    if not warehouse_axis_is_live():
+        return None
+    wh = []
+    try:
+        wh = list(warehouse_axis_values() or [])
+    except RuntimeError:
+        return None
+    if len(wh) < 2:
+        return None
+    if agg is None and src:
+        try:
+            agg = aggregate(src, match, preds, measure)
+        except RuntimeError:
+            agg = None
+    if not agg or agg.get("count") is None:
+        return None
+    want = ((intent or {}).get("want") or "").strip().lower()
+    op = "count" if want in ("count", "list", "") else "sum"
+    val = agg.get("count") if op == "count" else agg.get("sum")
+    if val is None:
+        return None
+    atom = atom_from_agg(
+        agg, operation=op,
+        measure_id=(measure or None),
+        measure_label=measure_label_of(src, measure) if src else measure,
+        money=(op == "sum"), src=src or None)
+    text = render_atom_pair(atom)
+    if not (text or "").strip():
+        return None
+    opts = [{"src": "", "label": w, "hint": "", "distinct_by": "warehouse",
+             "found": 0} for w in wh]
+    d = dict(diag or {})
+    d["stock_breakdown_fallback"] = "leader_plus_axis_loophole"
+    d["warehouse_axis_values"] = len(wh)
+    return {"partial": cut or None, "kind": "figures", "text": text,
+            "figures": _fork_figures_of(atom),
+            "atom": atom, "atoms": [atom],
+            "options": opts,
+            "source_fixed": False, "memory_eligible": False,
+            "sources": [src] if src else [],
+            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
+                               reason="разрез по оси: итог+люк")}
+
 
 def balance_registers():
     """Регистры остатков из search_meta (RecordType в $metadata при сборке).

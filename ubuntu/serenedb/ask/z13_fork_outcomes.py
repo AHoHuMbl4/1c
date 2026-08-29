@@ -849,6 +849,40 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
             lab_by[s] = lab
     live = {s: ((rows or {}).get(s) or {}).get("count", 0) for s in srcs}
     axis_kind = _fork_clarify_axis_kind(ordered, question)
+    if (axis_kind == "place"
+            and stock_skips_warehouse_clarify(question, intent)):
+        split = fork_leader_class(
+            picked_src, ordered,
+            day_basis_prefer=day_basis_prefer,
+            amount_basis_prefer=amount_basis_prefer)
+        if split is not None:
+            leader_it, rest = split
+            leader_atom = dict(leader_it.get("atom") or {})
+            leader_atom.pop("src", None)
+            pair = render_atom_pair(leader_atom)
+            if pair:
+                wh = []
+                try:
+                    wh = list(warehouse_axis_values() or [])
+                except RuntimeError:
+                    wh = []
+                opts = [{"src": "", "label": w, "hint": "",
+                         "distinct_by": "warehouse", "found": 0}
+                        for w in wh if w]
+                partial = dict(cut or {})
+                lim = {"reason": c_why}
+                if payload.get("unsigned"):
+                    lim["unsigned_classes"] = len(payload["unsigned"])
+                partial["fork_limitation"] = lim
+                d = _diag_pack(diag, fork_outcome="C",
+                               fork_c_reason="place_breakdown_leader")
+                if t0 is not None:
+                    d["sec"] = round(time.time() - t0, 2)
+                return {"partial": partial or None, "kind": "figures",
+                        "text": pair, "atom": leader_atom,
+                        "atoms": [leader_atom], "options": opts,
+                        "source_fixed": False, "memory_eligible": False,
+                        "sources": [], "diag": d}
     opts = _fork_clarify_opts(ordered, lab_by, marks, by, match, preds, live,
                               axis_kind, question, today=today,
                               measure_ctx=measure_ctx)
