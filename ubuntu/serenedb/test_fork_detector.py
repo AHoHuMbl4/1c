@@ -242,6 +242,12 @@ t("complement: negation detected structurally",
   A.intent_fact_complement(_int_neg, _q_neg) is True)
 t("complement: positive event not complement",
   A.intent_fact_complement(_int_pos, _q_pos) is False)
+# [замер 29.08, живой okna] «сколько позиций совсем не продаётся» разбирается
+# как object (предмет), а не event: object-класс не должен снимать отрицание,
+# иначе позитивное чтение молча подменяет вопрос (43 · Контрагенты).
+_int_neg_obj = dict(_int_neg, action_class="object")
+t("complement: object-class with negation still complement",
+  A.intent_fact_complement(_int_neg_obj, _q_neg) is True)
 
 _row_dist_wrong = {"count": 43, "folders": 0, "sums": {},
                    "distinct_axis": "Counterparty",

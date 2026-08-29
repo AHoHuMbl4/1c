@@ -29,9 +29,10 @@ def intent_fact_complement(intent, question=""):
     want = (intent.get("want") or "").strip().lower()
     if want not in ("count", ""):
         return False
-    ac = (intent.get("action_class") or "none").strip().lower()
-    if ac == "object":
-        return False
+    # object-класс НЕ снимает отрицание [замер 29.08, живой okna]: «сколько
+    # позиций совсем не продаётся» разбирается как object (предмет «позиции»),
+    # а отрицание факта стоит при глаголе — без этой проверки позитивное
+    # чтение молча подменяло вопрос (43 · Контрагенты вместо complement/clarify).
     return _question_has_fact_negation(question)
 
 
