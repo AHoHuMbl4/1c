@@ -1,13 +1,37 @@
 # Веб-фронт okna (Open WebUI + Caddy)
 
 Домен **`baulogistic.timpul.pro`** → `openclaw-okna` (`2.28.49.158` / `10.3.0.2`).  
-Бэкенд OpenClaw web-профиль → okna-юнит (`167.233.249.110` / `10.3.0.4` / `:18801`).
+Бэкенд — контейнер **okna** на хосте gpu-1c, снаружи через vSwitch-адрес хоста
+**10.3.1.11:18801** (LXD proxy). Схема сети — §«Сеть» ниже.
 
 ```
-браузер → https://baulogistic.timpul.pro  (Caddy → Open WebUI :8080 loopback)
-        → http://10.3.0.4:18801/v1  (OpenClaw web, bind=lan, ufw только с 10.3.0.2)
+браузер → https://baulogistic.timpul.pro  (Caddy → Open WebUI :8080 loopback, хост 10.3.0.2)
+        → http://10.3.1.11:18801/v1  (vSwitch → LXD proxy nat=true на хосте gpu-1c)
+        → контейнер okna 10.10.10.12:18801  (OpenClaw web, undebot, --bind lan)
         → 1c-mcp-ask@postgres → 1c-serene-ask@postgres
 ```
+
+## Сеть (зафиксировано 29.08, всё измерено живьём)
+
+| Что | Адрес |
+|---|---|
+| Хост **gpu-1c** (= `gpu-erw.timpul.pro`) | публичный `178.63.211.188`; vSwitch `eno1.4003` = **10.3.1.11/24** (mtu 1400, маршрут `10.3.0.0/16 via 10.3.1.1`); LXD-мост `lxdbr0` = 10.10.10.1/24 |
+| Контейнер **okna** (прод: serenedb, ask, openclaw) | 10.10.10.12 (eth0, DHCP от lxdbr0); ssh снаружи `178.63.211.188:2202` |
+| Контейнер klient1 | 10.10.10.11, ssh `:2201` |
+| Фронт **openclaw-okna** | 2.28.49.158 / **10.3.0.2**, маршрут `10.3.0.0/16 via 10.3.0.1` |
+| pro-router | 2.28.54.129 / 10.3.0.3 |
+
+vSwitch Hetzner (внутренняя сеть) маршрутизирует **10.3.0.0/24 ↔ 10.3.1.0/24** —
+фронт и хост gpu-1c видят друг друга напрямую (замер 29.08: `10.3.1.11:18801` с
+фронта → 200).
+
+LXD proxy на хосте (`nat=true`): `10.3.1.11:6090 → okna:6090`,
+`10.3.1.11:18090 → okna:18090`, **`10.3.1.11:18801 → okna:18801`** (добавлен
+29.08), публичный `178.63.211.188:2202 → okna:22`.
+
+🔴 **10.3.0.4 / 167.233.249.110 — старый бэкенд до переезда 22.08, НЕ существует.**
+Любая ссылка на него = поломка. Внутри okna: ask `:8091` loopback, телеграм-шлюз
+`:18800` loopback (не трогать), web-шлюз `:18801` `--bind lan`.
 
 На прод-юните dbname всегда `postgres` (слот `okna-1` — одна СУБД).
 
@@ -20,7 +44,7 @@
 
 ## Установка (два шага)
 
-### 1. Бэкенд (10.3.0.4)
+### 1. Бэкенд (контейнер okna на gpu-1c, снаружи 10.3.1.11)
 
 ```bash
 bash /opt/1c-open-webui/setup-okna-backend-web.sh
@@ -57,13 +81,16 @@ Ubuntu 24.04 (Python 3.12) — обычный venv; Ubuntu 26.04 (3.14) — Pyth
                           │ ставит cookie gf_jwt (RS256 JWT, 12 ч), 302
         → Caddy handle /dash/* → Grafana (:3001, loopback)
                           │ header_up X-JWT-Assertion = cookie gf_jwt → вход без формы
-Grafana → SereneDB бэкенда через 1c-serene-lan-relay (10.3.0.4:7890, ufw только 10.3.0.2)
+Grafana → SereneDB бэкенда через 1c-serene-lan-relay — 🔴 мёртв после переезда
+22.08: relay слушал 10.3.0.4:7890, адреса нет, юнит на okna не поднимался. Не
+чинено (владелец не просил); когда понадобится — тот же способ, что и 18801:
+LXD proxy `10.3.1.11:7890 → okna:7890` + правка datasource Grafana.
 ```
 
 Установка:
 
 ```bash
-# бэкенд (10.3.0.4) — релей SereneDB на LAN (systemd-socket-proxyd, движок не трогаем):
+# бэкенд (контейнер okna) — релей SereneDB на LAN (systemd-socket-proxyd, движок не трогаем):
 bash /opt/1c-open-webui/setup-okna-backend-serene-lan.sh
 # фронт (10.3.0.2):
 SERENE_RO_PW=<PGPASSWORD из /etc/1c-mcp-reports.env бэкенда> \
@@ -150,10 +177,11 @@ signin → Bearer. Скрипт ставит шаблон «скопироват
 
 | Хост | Юнит | Пользователь |
 |---|---|---|
-| 10.3.0.4 | `openclaw-gateway-web.service` (user) | `undebot` |
-| 10.3.0.4 | `1c-serene-ask@postgres`, `1c-mcp-ask@postgres` | system |
-| 10.3.0.4 | `1c-serene-lan-relay.socket/.service` (SereneDB → LAN для Grafana) | system |
-| 10.3.0.2 | `open-webui.service` (user) | `webui` |
+| okna (контейнер, 10.10.10.12) | `openclaw-gateway-web.service` (user) | `undebot` |
+| okna (контейнер, 10.10.10.12) | `1c-serene-ask@postgres`, `1c-mcp-ask@postgres` | system |
+| okna (контейнер, 10.10.10.12) | `1c-serene-lan-relay.socket/.service` (SereneDB → LAN для Grafana; 🔴 не поднят после переезда) | system |
+| gpu-1c (хост) | LXD proxy `10.3.1.11:18801 → okna:18801` | root |
+| 10.3.0.2 (фронт) | `open-webui.service` (user) | `webui` |
 | 10.3.0.2 | `caddy.service` | system |
 | 10.3.0.2 | `1c-grafana.service` (:3001, подпуть /dash/) | `grafana` |
 | 10.3.0.2 | `1c-dash-enter.service` (:3002, сквозной вход) | `dashenter` |
