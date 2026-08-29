@@ -46,7 +46,13 @@ __file__ пакета); z21 SQL гибрида, z03/z04 JSON-fallback, z20 journ
 при `стало>было` и живых Recorder уходящих строк в витрине (`query_table` +
 `split_part(row_key,'|',1)`) → `entity_key_collapse:<src_table>` в `search_quality`,
 не STOP; мёртвый Recorder или `стало<=было` — STOP как прежде. Замок
-`test_corpus_merge_key_form.py` **27/0** (было 17/0). Доки:
+`test_corpus_merge_key_form.py` **27/0** (было 17/0).
+**[замер okna 29.08 14:14]** deploy md5 `6fe415a68c3a…`; cand **3** сущности
+(`книгапродаж` 23/75436, `реализациятмц` 23/77901, `плансчетовосновной2014`
+29/189043); `tmp3_merge_collapse_dead` **dead=3** у каждой (Recorder unmatched
+**нет** в `query_table` регистра); `entity_key_collapse` **0** — STOP :203
+корректен (orphan, не коллапс ключа). Корпус **1 230 156**, tmp3 **1 561 704**.
+Числа: 27/0/1230156/0/3orphan. Доки:
 cookbook/sql_features/query_and_query_table_functions.
 
 ## 2026-08-29 — deploy-ask возит wiki_card SQL (FileNotFoundError на окне) [код]
