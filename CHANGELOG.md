@@ -1,3 +1,11 @@
+## 2026-08-29 — deploy-ask возит wiki_card SQL (FileNotFoundError на окне) [код]
+
+**[замер окно]** z21 на :8092 падал 503 FileNotFoundError: выкат ask возил
+только `serene_ask.py`+`ask/*.py`, а `wiki_card_{hybrid,knn,build}.sql` не
+доехали (агент Б3 прогонял SQL напрямую из репо). **[код]** `work/deploy-ask.sh`
+md5/копирование расширены на `wiki_card*.sql`. Числа: 3 SQL доехали, health
+ok. Доки: INSTALL_LOG, work/deploy-ask.sh.
+
 ## 2026-08-29 — зоны ask: общие имена только через _imports + замок резолвинга [код]
 
 **[код]** `Path` в `ask/_imports.py`; z21 очищен от собственных импортов выше
