@@ -1794,89 +1794,7 @@ def stock_subject_needs_clarify(question, intent=None):
     return False
 
 
-def warehouse_axis_values(limit=20):
-    """Человеческие имена складов: catalog по alias, ось по search_refcols.
-
-    Каталог — entity_form_catalogs_for_kind (stem склад/warehouse ∩
-    label|aliases|best_used_for). Колонка refs_map — из search_refcols по
-    target_src (score: accumulationregister_* holders, затем max DISTINCT).
-    Запасной путь — search_refmap.name WHERE owner=каталог. Пусто/оффлайн → [].
-    Доки: map_extract_value (Map Functions); SELECT ORDER BY LIMIT.
-    """
-    cats = []
-    for kind in ("склад", "warehouse"):
-        try:
-            found = entity_form_catalogs_for_kind(kind, allow_meaning=True) or []
-        except RuntimeError:
-            found = []
-        for s in found:
-            if s and s not in cats:
-                cats.append(s)
-    if not cats:
-        return []
-    cats_sql = ", ".join(lit(s) for s in cats)
-    out, seen = [], set()
-
-    def _take(rows):
-        for r in rows or []:
-            w = (r[0] if r else None)
-            if w is None:
-                continue
-            s = str(w).strip()
-            if not s or s in seen or looks_like_src_table(s):
-                continue
-            seen.add(s)
-            out.append(s)
-            if len(out) >= int(limit):
-                return True
-        return False
-
-    try:
-        rows = psql(
-            "WITH cats(src) AS (VALUES %s), "
-            "cand AS ("
-            "  SELECT r.col,"
-            "         sum(CASE WHEN r.src_table LIKE 'accumulationregister_%%' "
-            "                  THEN 1 ELSE 0 END) AS on_accum,"
-            "         count(*) AS holders "
-            "  FROM search_refcols r "
-            "  WHERE r.target_src IN (SELECT src FROM cats) "
-            "    AND r.col IS NOT NULL AND r.col <> '' "
-            "  GROUP BY r.col), "
-            "scored AS ("
-            "  SELECT c.col, c.on_accum, c.holders,"
-            "         (SELECT count(DISTINCT map_extract_value(refs_map, c.col)) "
-            "          FROM %s "
-            "          WHERE map_extract_value(refs_map, c.col) IS NOT NULL) AS n_vals "
-            "  FROM cand c), "
-            "best AS ("
-            "  SELECT col FROM scored "
-            "  ORDER BY on_accum DESC, n_vals DESC, holders DESC "
-            "  LIMIT 1) "
-            "SELECT DISTINCT map_extract_value(c.refs_map, b.col) AS w "
-            "FROM %s c, best b "
-            "WHERE map_extract_value(c.refs_map, b.col) IS NOT NULL "
-            "LIMIT %d"
-            % (", ".join("(%s)" % lit(s) for s in cats), CORPUS, CORPUS,
-               int(limit)))
-    except RuntimeError:
-        rows = []
-    if _take(rows):
-        return out
-    if out:
-        return out
-    try:
-        rows = psql(
-            "SELECT DISTINCT name FROM search_refmap "
-            "WHERE owner IN (%s) AND name IS NOT NULL AND trim(name) <> '' "
-            "LIMIT %d" % (cats_sql, int(limit)))
-    except RuntimeError:
-        return out
-    _take(rows)
-    return out
-
-
-def warehouse_clarify(question, diag, cut, t0, warehouses=None):
+def warehouse_clarify(question, diag, cut, t0, warehouses=None, intent=None):
     """Уточнение склада-значения словами человека (K4-3 №11). None — не строить."""
     wh = list(warehouses if warehouses is not None else warehouse_axis_values())
     if len(wh) <= 1:
@@ -2354,7 +2272,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     cands = prefer_entity_for_rank(cands, intent, question)
     cands = prefer_entity_for_sales(cands, intent, question)
     cands = prefer_entity_for_catalog_count(cands, intent, question)
-    cands = prefer_entity_for_stock(cands, question, intent)
+    if stock_question_engaged(question, intent):
+        capable = balance_capable_or_registers()
+        cands = filter_stock_balance_sales_noise(cands, question, diag)
+        cands = filter_stock_goods_registers(cands, question, diag, intent=intent, plan=plan)
+        _stock_pre = stock_canon_src(cands, question, intent)
+        if _stock_pre:
+            diag["stock_canon_locked"] = _stock_pre
+            cands = prefer_entity_for_stock(cands, question, intent)
+    else:
+        cands = prefer_entity_for_stock(cands, question, intent)
     if K6R:
         def _k6_mk_clarify(cat, holder, extra):
             return k6_dual_atom_clarify_return(
@@ -2396,7 +2323,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if stock_question_engaged(question, intent):
         capable = balance_capable_or_registers()
         cands = filter_stock_balance_sales_noise(cands, question, diag)
-        _stock_canon = stock_canon_src(cands, question, intent)
+        cands = filter_stock_goods_registers(cands, question, diag, intent=intent, plan=plan)
+        _stock_canon = stock_canon_src(cands, question, intent) or diag.get("stock_canon_locked")
         if _stock_canon:
             diag["stock_canon_locked"] = _stock_canon
             cands = prefer_entity_for_stock(cands, question, intent)
@@ -2429,7 +2357,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 wh_ask = warehouse_clarify(question, diag, cut, t0)
                 if wh_ask:
                     return wh_ask
-            if capable:
+            _stock_locked = diag.get("stock_canon_locked")
+            if _stock_locked and _stock_locked not in cands:
+                cands = [_stock_locked] + list(cands)
+            if capable and not _stock_locked:
                 hit = [c for c in cands if c in capable]
                 if not hit:
                     bridge = balance_bridge_clarify(
@@ -2437,7 +2368,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     if bridge:
                         return bridge
             cands = filter_balance_structural(cands, diag)
-            if not cands and capable:
+            if not cands and _stock_locked:
+                cands = [_stock_locked]
+            elif not cands and capable:
                 bridge = balance_bridge_clarify(
                     question, capable, diag, cut, t0)
                 if bridge:
@@ -2834,8 +2767,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     _skip_stock_fork = (
         diag.get("stock_canon_locked")
         and stock_question_engaged(question, intent)
-        and (question_has_aggregate_total_marker(question, intent, plan)
-             or question_wants_per_axis_breakdown(question, intent, plan)))
+        and (question_has_aggregate_total_marker(question, intent)
+             or question_wants_per_axis_breakdown(question, intent)))
     if FORK_DETECT and not no_arbiter and len(cands) > 1 and not _skip_stock_fork:
         _t_fork = time.time()
         _scan_err = None
@@ -3028,7 +2961,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # корпус и упали («TSQUERY outside @@ match»).
             match = code_filter
     else:
-        _ev = try_event_code_entity_pick(
+        _bal = try_balance_code_entity_pick(
+            question, intent, cands, diag, cut, t0, {}, plan=plan)
+        if _bal and _bal.get("kind") in ("no_data", "clarify"):
+            return _bal
+        if _bal and _bal.get("picked"):
+            picked, marks, plan = _bal["picked"], _bal.get("marks") or {}, _bal.get("plan") or {}
+            diag["balance_code_pick"] = True
+        else:
+            _ev = try_event_code_entity_pick(
             question, intent, cands, diag, cut, t0, by, match, preds, {})
         if _ev and _ev.get("kind") in ("no_data", "clarify"):
             return _ev
@@ -4143,6 +4084,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             src = _ev_src
             picked = [_ev_src] + [c for c in (picked or []) if c != _ev_src]
             diag["event_axis_lock"] = _ev_src
+    if (not focus and stock_question_engaged(question, intent)
+            and not diag.get("event_code_lock")
+            and not diag.get("balance_code_lock")
+            and not diag.get("sales_canon_locked")
+            and not diag.get("catalog_count_locked")):
+        _bal_src = stock_canon_src(cands, question, intent, plan) or diag.get("balance_code_lock")
+        if _bal_src and src != _bal_src:
+            src = _bal_src
+            picked = [_bal_src] + [c for c in (picked or []) if c != _bal_src]
+            diag["balance_axis_lock"] = _bal_src
     # 🔴 ЧАСТИЧНО СОВПАВШЕЙ СУЩНОСТИ — ЕЁ СОБСТВЕННОЕ УСЛОВИЕ, И РАНЬШЕ ВСЕХ ПРОВЕРОК.
     # `match` собран под общий порог: столько понятий у этой сущности не нашлось, значит по
     # нему у неё ноль строк. Не подменив условие здесь, мы бы своей же проверкой ниже
@@ -4478,6 +4429,26 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         trusted=trusted, resolved=resolved)
     if _ecp2 is not None:
         return _ecp2
+    if (diag.get("stock_canon_locked") and stock_question_engaged(question, intent)):
+        if question_wants_per_axis_breakdown(question, intent, plan):
+            _sfb_m = stock_breakdown_leader_fallback(
+                question, src, match, preds, measure, diag, cut, t0,
+                intent=intent, plan=plan, cands=cands)
+            if _sfb_m:
+                return _sfb_m
+        if measure_alts and not measure:
+            _mq, _, _mh = measure_choice(
+                measure_alts, "колич",
+                alias_by=measure_aliases_of(src) if src else {})
+            if _mq and _mh in ("exact", "substring", "alias", "base", "single"):
+                measure = _mq
+                diag["stock_measure_canon"] = _mq
+        measure_alts = []
+    if (stock_question_engaged(question, intent)
+            and question_has_aggregate_total_marker(question, intent, plan)
+            and not diag.get("sales_measure_canon")):
+        measure_alts = []
+        diag["stock_skip_measure_clarify"] = True
     if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
             and not diag.get("sales_measure_canon")
             and (not _rank_sales or diag.get("sales_rank_role_ask"))):
@@ -4848,6 +4819,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         "sources": [],
                         "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
         _dac = live_axis_col_for_count(intent, src, axes)
+        if (not _dac and diag.get("stock_canon_locked")
+                and stock_question_engaged(question, intent)
+                and (intent.get("want") or "") in ("count", "")):
+            for a in (axes or []):
+                if _is_product_catalog((a.get("target_src") or "")):
+                    _dac = (a.get("col") or "").strip() or None
+                    if _dac:
+                        diag["stock_product_axis"] = _dac
+                        break
         if _dac:
             agg = aggregate_distinct_axis(src, match, preds, _dac)
             if agg:

@@ -18,9 +18,9 @@ def stock_balance_is_sales_noise(src):
     return False
 
 
-def filter_stock_balance_sales_noise(cands, question, diag=None):
+def filter_stock_balance_sales_noise(cands, question, diag=None, intent=None, plan=None):
     """Негативный отсев: продажи/акт сверки не отвечают на остатки."""
-    if not stock_question_engaged(question):
+    if not stock_question_engaged(question, intent, plan):
         return cands
     out = [c for c in (cands or []) if not stock_balance_is_sales_noise(c)]
     if diag is not None and len(out) < len(cands or []):
@@ -612,7 +612,7 @@ def _fork_clarify_axis_kind(ordered, question, want=None):
         return "measure"
     if len(dbs) > 1:
         return "period"
-    if question_asks_stock_balance(question) or question_mentions_warehouse_axis(question):
+    if stock_question_engaged(question) or question_mentions_warehouse_axis(question):
         return "place"
     if len(win_period) > 1:
         return "period"

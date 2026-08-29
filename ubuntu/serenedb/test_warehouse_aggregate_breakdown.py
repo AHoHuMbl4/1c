@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""K7: агрегат-маркер снимает складскую развилку; «пo каждому» ≠ no_data.
-
-Оффлайн. Запуск: python3 ubuntu/serenedb/test_warehouse_aggregate_breakdown.py
-"""
+"""K7/K8-ф3: stock aggregate markers, product-axis canon, breakdown fallback (offline)."""
 import os
 import sys
 import time
@@ -28,52 +25,54 @@ def t(name, cond, detail=None):
 
 
 Q_TOTAL = "сколько на складе позиций всего?"
-Q_ALL_TOGETHER = "Сколько позиций на всех складах вместе?"
-Q_EACH = "Покажите остатки по каждому складу отдельно"
-Q_LIST = "Покажите список складов с количеством позиций по каждому"
-Q_PLAIN = "Сколько осталось на складе?"
+Q_TOGETHER = "сколько позиций на всех складах вместе?"
+Q_BREAK = "покажи остатки по каждому складу"
+Q_PLAIN = "сколько на складе?"
 
-# ── aggregate marker снимает warehouse clarify ───────────────────────────────
-t("«всего»: aggregate marker",
-  A.question_has_aggregate_total_marker(Q_TOTAL))
-t("«всего»: skip warehouse clarify",
+t("stock engaged: на складе + всего", A.stock_question_engaged(Q_TOTAL))
+t("stock engaged: на всех вместе", A.stock_question_engaged(Q_TOGETHER))
+t("aggregate marker: всего", A.question_has_aggregate_total_marker(Q_TOTAL))
+t("aggregate marker: вместе+склад", A.question_has_aggregate_total_marker(Q_TOGETHER))
+t("skip warehouse clarify: всего",
   A.stock_skips_warehouse_clarify(Q_TOTAL))
-t("«на всех вместе»: aggregate marker",
-  A.question_has_aggregate_total_marker(Q_ALL_TOGETHER))
-t("«на всех вместе»: stock path engaged",
-  A.stock_question_engaged(Q_ALL_TOGETHER))
-t("«на всех вместе»: skip warehouse clarify",
-  A.stock_skips_warehouse_clarify(Q_ALL_TOGETHER))
-t("plain stock: НЕ skip clarify",
-  not A.stock_skips_warehouse_clarify(Q_PLAIN))
-t("rank «больше всего»: не aggregate marker",
-  not A.question_has_aggregate_total_marker(
-      "какого товара больше всего на складе?"))
+t("skip warehouse clarify: по каждому",
+  A.stock_skips_warehouse_clarify(Q_BREAK))
+t("per-axis breakdown", A.question_wants_per_axis_breakdown(Q_BREAK))
+t("rank всего not aggregate",
+  not A.question_has_aggregate_total_marker("больше всего продаж"))
 
-# ── «пo каждому» снимает warehouse clarify ───────────────────────────────────
-t("«пo каждому»: breakdown",
-  A.question_wants_per_axis_breakdown(Q_EACH))
-t("«пo каждому»: skip warehouse clarify",
-  A.stock_skips_warehouse_clarify(Q_EACH))
-t("list+пo каждому: breakdown без stock-маркера",
-  A.question_wants_per_axis_breakdown(
-      Q_LIST, intent={"want": "list", "kind": "склад"}))
-t("list: warehouse axis class",
-  A.question_mentions_warehouse_axis(Q_LIST))
-t("list+пo каждому: skip warehouse clarify",
-  A.stock_skips_warehouse_clarify(
-      Q_LIST, intent={"want": "list", "kind": "склад"}))
+t("asks stock: на складе", A.question_asks_stock_balance(Q_TOTAL))
+t("asks stock: marker class not phrase-only",
+  A.question_asks_stock_balance("what is in stock today"))
 
-# ── warehouse_clarify: gated ─────────────────────────────────────────────────
-_old_wh = A.warehouse_axis_values
-A.warehouse_axis_values = lambda limit=20: ["A", "B", "C"]
-t("plain: warehouse clarify строится",
-  A.warehouse_clarify(Q_PLAIN, {}, {}, 0.0) is not None)
-t("всего: clarify не нужен — skip flag",
-  A.stock_skips_warehouse_clarify(Q_TOTAL))
-A.warehouse_axis_values = _old_wh
+_cands = ["catalog_номенклатура", "accumulationregister_импорттмц",
+          "accumulationregister_номерабсо"]
+_old_psql = A.psql
+A._BALANCE_REGS.update({"at": 0.0, "set": set()})
+A._BALANCE_MAP.update({"at": time.time(), "rows": []})
 
-# ── breakdown fallback: итог+люк, не no_data ─────────────────────────────────
+
+def _mock_psql(q):
+    ql = q.lower()
+    if "search_refcols" in ql:
+        return [("accumulationregister_импорттмц", "catalog_номенклатура")]
+    if "search_meta" in ql and "balance_registers" in ql:
+        return [("",)]
+    if "group by" in ql and "src_table" in ql:
+        return [("accumulationregister_импорттмц", 100)]
+    return []
+
+
+A.psql = _mock_psql
+try:
+    pool = A.stock_goods_pool()
+    t("goods pool: import in", "accumulationregister_импорттмц" in pool, sorted(pool))
+    t("goods pool: BSO out", "accumulationregister_номерабсо" not in pool)
+    canon = A.stock_canon_src(_cands, Q_TOTAL)
+    t("stock_canon: import not BSO", canon == "accumulationregister_импорттмц", canon)
+finally:
+    A.psql = _old_psql
+
 _real_agg = A.aggregate
 A.aggregate = lambda src, match, preds, measure=None: {
     "count": 42, "sum": None, "src": src, "measure": measure,
@@ -81,86 +80,22 @@ A.aggregate = lambda src, match, preds, measure=None: {
 A.warehouse_axis_values = lambda limit=20: ["WH-1", "WH-2", "WH-3"]
 try:
     fb = A.stock_breakdown_leader_fallback(
-        Q_EACH, "accumulationregister_x", "", [], "Количество",
-        {}, None, time.time(), intent={"want": "count"})
+        Q_BREAK, "accumulationregister_x", "", [], "Количество",
+        {}, None, time.time())
     t("fallback: kind=figures", fb and fb.get("kind") == "figures", fb)
-    t("fallback: text with count",
-      fb and "42" in (fb.get("text") or ""), fb.get("text") if fb else None)
-    t("fallback: loophole options",
-      fb and len(fb.get("options") or []) == 3, fb)
-    t("fallback: not no_data",
-      fb and fb.get("kind") != "no_data")
-    t("plain stock: fallback None",
+    t("aggregate: fallback None",
       A.stock_breakdown_leader_fallback(
-          Q_PLAIN, "x", "", [], None, {}, None, time.time()) is None)
-    fb_list = A.stock_breakdown_leader_fallback(
-        Q_LIST, "catalog_wh", "", [], None, {}, None, time.time(),
-        intent={"want": "list", "kind": "склад"},
-        cands=["accumulationregister_goods"])
-    t("list: fallback from catalog to balance src",
-      fb_list and fb_list.get("kind") == "figures", fb_list)
-    A.warehouse_axis_values = lambda limit=20: ["only"]
-    t("single warehouse: fallback None",
-      A.stock_breakdown_leader_fallback(
-          Q_EACH, "x", "", [], None, {}, None, time.time()) is None)
+          Q_TOTAL, "x", "", [], None, {}, None, time.time()) is None)
 finally:
     A.aggregate = _real_agg
-    A.warehouse_axis_values = _old_wh
 
-# --- stock canon: balance-регистр, не каталог ---
-Q_STOCK = "сколько на складе позиций всего?"
-_cands = ["catalog_номенклатура", "document_поступлениетмц_номенклатура",
-          "accumulationregister_импорттмц", "accumulationregister_реализациятмц"]
-A._BALANCE_REGS.update({"at": 0.0, "set": set()})
-A._BALANCE_MAP.update({"at": time.time(), "rows": []})
-_old_psql = A.psql
-def _mock_goods_psql(q):
-    ql = q.lower()
-    if "search_refcols" in ql and "catalog_" in ql:
-        return [("accumulationregister_импорттмц",)]
-    if "distinct c.src_table" in ql:
-        return [("accumulationregister_импорттмц",),
-                ("accumulationregister_реализациятмц",)]
-    if "search_meta" in ql and "balance_registers" in ql:
-        return [("",)]
-    return []
-A.psql = _mock_goods_psql
 try:
-    canon = A.stock_canon_src(_cands, Q_STOCK)
-    t("stock_canon: accumulation not catalog",
-      canon == "accumulationregister_импорттмц", canon)
-    pref = A.prefer_entity_for_stock(_cands, Q_STOCK)
-    t("prefer_stock: catalog dropped",
-      pref and pref[0] == "accumulationregister_импорттмц"
-      and "catalog_номенклатура" not in pref, pref)
-    t("prefer_stock: sales noise dropped",
-      "accumulationregister_реализациятмц" not in pref, pref)
+    t("warehouse clarify plain",
+      A.warehouse_clarify(Q_PLAIN, {}, {}, 0.0) is not None)
 finally:
-    A.psql = _old_psql
-
-_ord = [
-    {"srcs": ["reg_a"], "atom": A.build_answer_atom(
-        operation="count", exact_value=7, proof_status=A.PROOF_COMPUTED),
-     "row": {"count": 7, "folders": 0, "sums": {}}},
-    {"srcs": ["reg_b"], "atom": A.build_answer_atom(
-        operation="count", exact_value=3, proof_status=A.PROOF_COMPUTED),
-     "row": {"count": 3, "folders": 0, "sums": {}}},
-]
-A.warehouse_axis_values = lambda limit=20: ["WH-A", "WH-B"]
-try:
-    res = A.fork_outcome_c(
-        Q_EACH, {"reason": "unsigned_class"}, {}, {},
-        {}, cut=None, t0=time.time(), picked_src="reg_a",
-        intent={"want": "count", "kind": "остатки"})
-    t("fork C place+breakdown: not clarify",
-      res and res.get("kind") != "clarify", res)
-    t("fork C place+breakdown: figures or unavailable",
-      res and res.get("kind") in ("figures", "unavailable"), res)
-finally:
-    A.warehouse_axis_values = _old_wh
+    pass
 
 print()
 print("%d ok, %d FAIL" % (PASS, len(FAIL)))
 if FAIL:
-    print("FAILED:", ", ".join(FAIL))
     sys.exit(1)

@@ -13,7 +13,7 @@ def sales_sum_intent(intent, question=""):
     want = (intent.get("want") or "").strip().lower()
     kind = (intent.get("kind") or "").strip().lower()
     measure = (intent.get("measure") or "").strip().lower()
-    if question_asks_stock_balance(question):
+    if stock_question_engaged(question, intent):
         return False
     if any(w in q for w in ("прайс", "price list", "в прайсе")):
         return False

@@ -1,3 +1,18 @@
+## 2026-08-29 — K7 раунд 4: stock-path по маркерам вопроса + product-axis canon [код]
+
+**[код]** z12: восстановлены классы маркеров (`_STOCK_MARKERS`, `_AGGREGATE_*`,
+`_PER_AXIS_*`); `stock_question_engaged` — «на складе»/«всего»/«вместе» независимо
+от intent flip; `registers_with_product_goods_axis` — товарный регистр по
+ref→product catalog (`search_refcols`), не qty-колонка (отсев BSO). z20:
+`stock_skip_measure_clarify` при агрегате; K7 `warehouse_axis_values` в z12;
+`stock_subject_needs_clarify` узкий (d238927). z11/z13: `stock_question_engaged`
+вместо удалённого `balance_routing_core`. Корень прода e039b77: номерабсо (376) и
+каталог (2384) вместо net остатков. Числа: warehouse_aggregate **16/0**;
+warehouse_axis **12/0**; fork_outcomes **49/0**; fork_detector **52/0**;
+calendar_axis **42/0**; intent **162/0**; k4_clarify **27/0**. Живая :8092 —
+оркестратор (SSH runtime floor в сессии). Эталон SQL okna: net distinct ТМЦ>0
+**1283**. Доки: K7_WAREHOUSE_AXIS.md §4. PLAN_ANSWER_CONTRACT исход B.
+
 ## 2026-08-29 — corpus_merge стоп 233k: диагноз — 100% смена формы ключей, не потеря [замер]
 
 **[замер okna :7890, оркестратор]** разбор сторожа `corpus_merge` (233 358 из

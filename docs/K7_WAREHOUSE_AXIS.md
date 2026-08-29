@@ -84,12 +84,15 @@ Sql › Statements › SELECT › ORDER BY, LIMIT.
 `stock_skips_warehouse_clarify`; `stock_question_engaged` — stock-path без
 маркера «остат*» (Q «на всех складах вместе» не уходит в count каталога).
 
-**29.08 (stock_canon):** `stock_goods_pool` — fallback по `search_refcols`→каталог
-номенклатуры, когда движение с товарной осью есть в корпусе, но не в
-`balance_registers` $metadata (okna: `импорттмц`). `stock_canon_src` +
-`prefer_entity_for_stock` + `stock_canon_locked` в z20 — balance-регистр, не
-каталог/табчасть документа. Числа: warehouse_aggregate **26/0**; остальные
-замки без регрессии (fork 49, intent 162, k4 27, calendar 42, …).
+**29.08 (раунд 4, product-axis):** `registers_with_product_goods_axis` — товарный
+регистр = ref→product catalog через `search_refcols` (класс имён catalog, не
+колонка qty); BSO/номерабсо отсеиваются без литерала `ТМЦ`. Маркеры вопроса
+(`_STOCK_MARKERS`, `_AGGREGATE_*`) восстановлены — stock-path не зависит от
+intent flip «остатки»↔«позиции»; `stock_skip_measure_clarify` при агрегате.
+Числа: warehouse_aggregate **16/0**; warehouse_axis **12/0**; fork_outcomes
+**49/0**; fork_detector **52/0**; calendar_axis **42/0**; intent **162/0**;
+k4_clarify **27/0**. Живая проба :8092 — оркестратор (SSH runtime floor).
+Эталон okna SQL: net distinct ТМЦ>0 **1283** (импорт−расход).
 
 ---
 

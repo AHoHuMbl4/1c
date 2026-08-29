@@ -320,77 +320,152 @@ def question_asks_stock_balance(question):
     return any(m in q for m in _STOCK_MARKERS)
 
 
-def balance_registers_with_goods(regs=None):
-    """Остаточные регистры, у которых в корпусе есть ось ТМЦ (склады/товары).
+def _product_catalog_target_sql(col="target_src"):
+    """SQL-фильтр target_src товарного catalog — класс имён."""
+    c = str(col or "target_src")
+    return (
+        "(%(c)s LIKE 'catalog_%%' "
+        "AND %(c)s NOT LIKE '%%вид%%' AND %(c)s NOT LIKE '%%тип%%' "
+        "AND %(c)s NOT LIKE '%%групп%%' AND %(c)s NOT LIKE '%%type%%' "
+        "AND %(c)s NOT LIKE '%%kind%%' AND %(c)s NOT LIKE '%%group%%' "
+        "AND (%(c)s LIKE '%%номенклатур%%' OR %(c)s LIKE '%%nomencl%%' "
+        "     OR %(c)s LIKE '%%товар%%' OR %(c)s LIKE '%%product%%' "
+        "     OR %(c)s LIKE '%%goods%%'))" % {"c": c})
 
-    `balance_registers` из $metadata включает RecordType-регистры без товарной оси
-    (зарплата, ОС, номера БСО) — их наличие не значит «есть остатки на складе».
-    """
-    regs = regs if regs is not None else balance_registers()
-    if not regs:
+
+def _filter_product_catalog_targets(targets):
+    out = set()
+    for t in targets or []:
+        ts = str(t or "").strip()
+        if not ts:
+            continue
+        try:
+            if _is_product_catalog(ts):  # noqa: F821
+                out.add(ts)
+        except NameError:
+            sl = ts.lower()
+            if (sl.startswith("catalog_")
+                    and not any(x in sl for x in ("вид", "тип", "групп", "type", "kind", "group"))
+                    and any(k in sl for k in ("номенклатур", "nomencl", "товар", "product", "goods"))):
+                out.add(ts)
+    return out
+
+
+def registers_with_product_goods_axis(regs=None):
+    scope = list(regs) if regs is not None else None
+    prod_sql = _product_catalog_target_sql("r.target_src")
+    where_scope = ""
+    if scope:
+        where_scope = " AND r.src_table IN (%s)" % ", ".join(lit(r) for r in scope)
+    try:
+        rows = psql(
+            "SELECT DISTINCT r.src_table, r.target_src FROM search_refcols r "
+            "WHERE r.src_table LIKE 'accumulationregister_%%' "
+            "  AND r.col IS NOT NULL AND r.col <> '' "
+            "  AND %s %s "
+            "  AND EXISTS ("
+            "    SELECT 1 FROM %s c "
+            "    WHERE c.src_table = r.src_table "
+            "      AND c.nums IS NOT NULL AND len(map_keys(c.nums)) > 0"
+            "  )" % (prod_sql, where_scope, CORPUS))
+    except RuntimeError:
         return frozenset()
-    rows = psql(
-        "SELECT DISTINCT src_table FROM %s WHERE src_table IN (%s) "
-        "AND map_extract_value(refs_map, 'ТМЦ') IS NOT NULL"
-        % (CORPUS, ", ".join(lit(r) for r in regs)))
-    return frozenset(r[0] for r in (rows or []) if r and r[0])
+    by_src = {}
+    for r in rows or []:
+        if r and r[0]:
+            by_src.setdefault(r[0], set()).add((r[1] if len(r) > 1 else "") or "")
+    return frozenset(s for s, tgts in by_src.items() if _filter_product_catalog_targets(tgts))
+
+
+def stock_balance_is_reversal_noise(src):
+    s = (src or "").lower()
+    return any(x in s for x in (
+        "сторн", "storno", "reverse", "reversal", "cancel",
+        "коррект", "adjust", "исправ"))
 
 
 def stock_goods_pool(capable=None):
-    """Регистры движения с товарной осью: balance_map + fallback по search_refcols.
-
-    На okna `импорттмц` есть в корпусе, но не в balance_registers $metadata —
-    без fallback stock-path пустой и вопрос уходит в каталог/документ.
-    """
     capable = capable if capable is not None else balance_capable_or_registers()
-    goods = balance_registers_with_goods(capable) if capable else frozenset()
-    if goods:
-        return goods
+    broad = registers_with_product_goods_axis(None)
+    if not broad:
+        return frozenset()
+    clean = {s for s in broad
+             if not stock_balance_is_sales_noise(s)
+             and not stock_balance_is_reversal_noise(s)}
+    if not clean:
+        return frozenset()
+    if capable:
+        in_cap = {s for s in clean if s in capable}
+        if in_cap:
+            return frozenset(in_cap)
+    return frozenset(clean)
+
+
+def filter_stock_goods_registers(cands, question, diag=None):
+    if not stock_question_engaged(question):
+        return cands
+    pool = stock_goods_pool()
+    if not pool:
+        return cands
+    out, dropped = [], []
+    for c in list(cands or []):
+        if c and c.startswith("accumulationregister_") and c not in pool:
+            dropped.append(c)
+        else:
+            out.append(c)
+    if diag is not None and dropped:
+        diag["stock_non_goods_drop"] = sorted(set(dropped))
+    return out or list(pool)
+
+
+def _stock_corpus_counts(pool):
+    pool = list(pool or [])
+    if not pool:
+        return {}
     try:
         rows = psql(
-            "SELECT DISTINCT c.src_table FROM %s c "
-            "WHERE c.src_table LIKE 'accumulationregister_%%' "
-            "  AND c.nums IS NOT NULL AND len(map_keys(c.nums)) > 0 "
-            "  AND EXISTS ("
-            "    SELECT 1 FROM search_refcols r "
-            "    WHERE r.src_table = c.src_table "
-            "      AND r.target_src LIKE 'catalog_%%' "
-            "      AND (r.target_src LIKE '%%номенклатур%%' "
-            "           OR r.target_src LIKE '%%nomencl%%' "
-            "           OR r.target_src LIKE '%%товар%%' "
-            "           OR r.target_src LIKE '%%product%%')) "
-            "GROUP BY 1 HAVING count(*) > 0" % CORPUS)
+            "SELECT src_table, count(*) FROM %s WHERE src_table IN (%s) GROUP BY 1"
+            % (CORPUS, ", ".join(lit(s) for s in pool)))
     except RuntimeError:
-        return frozenset()
-    return frozenset(r[0] for r in (rows or []) if r and r[0])
+        return {}
+    return {r[0]: int(r[1]) for r in (rows or []) if r and r[0]}
 
 
-def _stock_register_rank_key(src, capable=None):
-    """Порядок выбора balance-источника без имён конкретной базы."""
+def _stock_register_rank_key(src, capable=None, corpus_counts=None):
     s = str(src or "").lower()
+    cc = corpus_counts or {}
     return (
         1 if stock_balance_is_sales_noise(s) else 0,
+        1 if stock_balance_is_reversal_noise(s) else 0,
+        1 if any(x in s for x in (
+            "допзатрат", "дополн", "extra", "additional", "overhead", "alloc")) else 0,
         0 if capable and src in capable else 1,
         0 if s.startswith("accumulationregister_") else 1,
+        -int(cc.get(src) or 0),
         s)
 
 
+def _sort_stock_pool(pool, capable=None):
+    pool = list(pool or [])
+    counts = _stock_corpus_counts(pool)
+    pool.sort(key=lambda s: _stock_register_rank_key(s, capable, counts))
+    return pool
+
+
 def stock_canon_src(cands, question, intent=None, plan=None):
-    """Src канона остатков: accumulation с товарной осью, не каталог/табчасть."""
     if not stock_question_engaged(question, intent, plan):
         return None
     capable = balance_capable_or_registers()
     pool = [c for c in stock_goods_pool(capable)
-            if not stock_balance_is_sales_noise(c)]
+            if not stock_balance_is_sales_noise(c)
+            and not stock_balance_is_reversal_noise(c)]
     if not pool:
         return None
-    pool.sort(key=lambda s: _stock_register_rank_key(s, capable))
+    pool = _sort_stock_pool(pool, capable)
     in_cands = [c for c in (cands or []) if c in pool]
     if in_cands:
-        in_cands.sort(key=lambda s: _stock_register_rank_key(s, capable))
-        return in_cands[0]
+        return _sort_stock_pool(in_cands, capable)[0]
     return pool[0]
-
 
 def prefer_entity_for_stock(cands, question, intent=None, plan=None):
     """Stock-path: balance-регистр в голове, каталоги/документы вне пула."""
@@ -578,5 +653,86 @@ def balance_bridge_clarify(question, capable, diag, cut, t0, labels=None):
                                reason="мост не принёс баланс-источник")}
 
 
+
+def warehouse_axis_values(limit=20):
+    """Человеческие имена складов: catalog по alias, ось по search_refcols.
+
+    Каталог — entity_form_catalogs_for_kind (stem склад/warehouse ∩
+    label|aliases|best_used_for). Колонка refs_map — из search_refcols по
+    target_src (score: accumulationregister_* holders, затем max DISTINCT).
+    Запасной путь — search_refmap.name WHERE owner=каталог. Пусто/оффлайн → [].
+    Доки: map_extract_value (Map Functions); SELECT ORDER BY LIMIT.
+    """
+    cats = []
+    for kind in ("склад", "warehouse"):
+        try:
+            found = entity_form_catalogs_for_kind(kind, allow_meaning=True) or []
+        except RuntimeError:
+            found = []
+        for s in found:
+            if s and s not in cats:
+                cats.append(s)
+    if not cats:
+        return []
+    cats_sql = ", ".join(lit(s) for s in cats)
+    out, seen = [], set()
+
+    def _take(rows):
+        for r in rows or []:
+            w = (r[0] if r else None)
+            if w is None:
+                continue
+            s = str(w).strip()
+            if not s or s in seen or looks_like_src_table(s):
+                continue
+            seen.add(s)
+            out.append(s)
+            if len(out) >= int(limit):
+                return True
+        return False
+
+    try:
+        rows = psql(
+            "WITH cats(src) AS (VALUES %s), "
+            "cand AS ("
+            "  SELECT r.col,"
+            "         sum(CASE WHEN r.src_table LIKE 'accumulationregister_%%' "
+            "                  THEN 1 ELSE 0 END) AS on_accum,"
+            "         count(*) AS holders "
+            "  FROM search_refcols r "
+            "  WHERE r.target_src IN (SELECT src FROM cats) "
+            "    AND r.col IS NOT NULL AND r.col <> '' "
+            "  GROUP BY r.col), "
+            "scored AS ("
+            "  SELECT c.col, c.on_accum, c.holders,"
+            "         (SELECT count(DISTINCT map_extract_value(refs_map, c.col)) "
+            "          FROM %s "
+            "          WHERE map_extract_value(refs_map, c.col) IS NOT NULL) AS n_vals "
+            "  FROM cand c), "
+            "best AS ("
+            "  SELECT col FROM scored "
+            "  ORDER BY on_accum DESC, n_vals DESC, holders DESC "
+            "  LIMIT 1) "
+            "SELECT DISTINCT map_extract_value(c.refs_map, b.col) AS w "
+            "FROM %s c, best b "
+            "WHERE map_extract_value(c.refs_map, b.col) IS NOT NULL "
+            "LIMIT %d"
+            % (", ".join("(%s)" % lit(s) for s in cats), CORPUS, CORPUS,
+               int(limit)))
+    except RuntimeError:
+        rows = []
+    if _take(rows):
+        return out
+    if out:
+        return out
+    try:
+        rows = psql(
+            "SELECT DISTINCT name FROM search_refmap "
+            "WHERE owner IN (%s) AND name IS NOT NULL AND trim(name) <> '' "
+            "LIMIT %d" % (cats_sql, int(limit)))
+    except RuntimeError:
+        return out
+    _take(rows)
+    return out
 
 register_zone('ask.z12_stock_balance', globals())

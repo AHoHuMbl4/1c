@@ -385,7 +385,7 @@ def question_expects_accounting_data(intent, question, diag=None):
         return True
     if sales_sum_intent(intent, question) or rank_question_text(question):
         return True
-    if question_asks_stock_balance(question):
+    if stock_question_engaged(question, intent):
         return True
     if re.search(r"\b(сколько|покажи|дай|топ|сумм|выруч|продаж|остат|заказ)\b", q):
         return True
