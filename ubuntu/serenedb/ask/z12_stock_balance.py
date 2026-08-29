@@ -10,8 +10,73 @@ _BALANCE_REGS = {"at": 0.0, "set": None}
 _BALANCE_MAP = {"at": 0.0, "rows": None}
 
 
-def intent_axis_words(intent):
-    """Оси из разбора: action_axis и kind, без текста вопроса."""
+def _intent_period_has_meaning(intent):
+    period = (intent or {}).get("period") or {}
+    return bool(period.get("from") or period.get("to"))
+
+
+def _catalogs_for_axis_word(word, intent=None, allow_meaning=None):
+    word = _intent_text(word)
+    if not word:
+        return []
+    if allow_meaning is None:
+        allow_meaning = _intent_period_has_meaning(intent)
+    try:
+        return entity_form_catalogs_for_kind(word, allow_meaning=allow_meaning) or []
+    except RuntimeError:
+        return []
+
+
+def _question_dictionary_axis_candidates(question, intent=None):
+    """Слова вопроса и terms для резолва оси через словарь базы (не kind/measure)."""
+    intent = intent or {}
+    skip = set()
+    for key in ("kind", "measure", "action_axis"):
+        w = _intent_text(intent.get(key))
+        if w:
+            skip.add(w.lower())
+    out, seen = [], set()
+
+    def _push(raw):
+        w = _intent_text(raw)
+        if not w:
+            return
+        wl = w.lower()
+        if wl in skip or wl in seen or len(wl) < 3:
+            return
+        seen.add(wl)
+        out.append(w)
+
+    for group in intent.get("terms") or []:
+        alts = group if isinstance(group, (list, tuple)) else [group]
+        for alt in alts:
+            _push(alt)
+    for m in re.finditer(r"[\w\u0400-\u04ff]+", str(question or ""), re.UNICODE):
+        _push(m.group(0))
+    return out
+
+
+def resolved_warehouse_axis_word(question, intent=None):
+    """Ось места: action_axis из разбора или терм вопроса → каталог словаря базы."""
+    intent = intent or {}
+    has_period = _intent_period_has_meaning(intent)
+    ax = _intent_text(intent.get("action_axis"))
+    if ax and _catalogs_for_axis_word(ax, intent, has_period):
+        return ax
+    kind = _intent_text(intent.get("kind"))
+    kind_cats = set(_catalogs_for_axis_word(kind, intent, has_period)) if kind else set()
+    for w in _question_dictionary_axis_candidates(question, intent):
+        cats = _catalogs_for_axis_word(w, intent, has_period)
+        if not cats:
+            continue
+        if kind_cats and set(cats) <= kind_cats:
+            continue
+        return w
+    return ""
+
+
+def intent_axis_words(intent, question=""):
+    """Оси из разбора + ось места из словаря по термам вопроса."""
     intent = intent or {}
     words, seen = [], set()
     for key in ("action_axis", "kind"):
@@ -23,6 +88,11 @@ def intent_axis_words(intent):
             continue
         seen.add(wl)
         words.append(w)
+    rw = resolved_warehouse_axis_word(question, intent)
+    if rw:
+        wl = rw.lower()
+        if wl not in seen:
+            words.append(rw)
     return words
 
 
@@ -49,10 +119,11 @@ def aggregate_count_intent(intent, plan=None, question=""):
     return False
 
 
-def secondary_axis_known(intent):
-    """Вторичная ось (action_axis) задана и не совпадает с kind."""
+def secondary_axis_known(intent, question=""):
+    """Вторичная ось (action_axis или словарь по термам) ≠ kind."""
     intent = intent or {}
-    ax = _intent_text(intent.get("action_axis"))
+    ax = _intent_text(intent.get("action_axis")) or resolved_warehouse_axis_word(
+        question, intent)
     kind = _intent_text(intent.get("kind"))
     if not ax:
         return False
@@ -61,9 +132,9 @@ def secondary_axis_known(intent):
     return ax.lower() != kind.lower()
 
 
-def balance_axis_registers_confirmed(intent):
+def balance_axis_registers_confirmed(intent, question=""):
     """Остатковый маршрут подтверждается ref-осями в метаданных, не action_class."""
-    broad = registers_for_kind_axes(intent, None)
+    broad = registers_for_kind_axes(intent, None, question)
     clean = frozenset(s for s in broad if not register_is_balance_noise(s))
     if not clean:
         return False
@@ -85,8 +156,8 @@ def balance_routing_core(intent, plan=None, question=""):
         if not question_wants_breakdown(intent, plan):
             return False
     if state_path_active(intent):
-        return balance_axis_registers_confirmed(intent)
-    if question_wants_breakdown(intent, plan) and intent_axis_words(intent):
+        return balance_axis_registers_confirmed(intent, question)
+    if question_wants_breakdown(intent, plan) and intent_axis_words(intent, question):
         return True
     return False
 
@@ -96,9 +167,9 @@ def _stock_intent_signal(intent, plan=None, question=""):
     intent = intent or {}
     if event_path_active(intent) or sales_kind_in_intent(intent):
         return False
-    if state_path_active(intent) and intent_axis_words(intent):
+    if state_path_active(intent) and intent_axis_words(intent, question):
         return True
-    if question_wants_breakdown(intent, plan) and intent_axis_words(intent):
+    if question_wants_breakdown(intent, plan) and intent_axis_words(intent, question):
         return True
     return False
 
@@ -116,18 +187,12 @@ def question_asks_stock_balance(question, intent=None, plan=None):
 
 
 def question_mentions_warehouse_axis(question, intent=None, plan=None):
-    """Ось места хранения из action_axis → каталоги метаданных."""
+    """Ось места: action_axis или терм вопроса → каталоги метаданных."""
     intent = intent or {}
-    ax = _intent_text(intent.get("action_axis"))
+    ax = resolved_warehouse_axis_word(question, intent)
     if not ax:
         return False
-    period = intent.get("period") or {}
-    has_period = bool(period.get("from") or period.get("to"))
-    try:
-        cats = entity_form_catalogs_for_kind(ax, allow_meaning=has_period) or []
-    except RuntimeError:
-        cats = []
-    return bool(cats)
+    return bool(_catalogs_for_axis_word(ax, intent))
 
 
 def question_has_aggregate_total_marker(question, intent=None, plan=None):
@@ -154,19 +219,15 @@ def stock_question_engaged(question, intent=None, plan=None):
             or question_wants_per_axis_breakdown(question, intent, plan))
 
 
-def registers_for_kind_axes(intent, regs=None):
-    """accumulationregister_* с refcol на каталоги kind/action_axis."""
+def registers_for_kind_axes(intent, regs=None, question=""):
+    """accumulationregister_* с refcol на каталоги kind/action_axis/словарь."""
     intent = intent or {}
-    period = intent.get("period") or {}
-    has_period = bool(period.get("from") or period.get("to"))
+    has_period = _intent_period_has_meaning(intent)
     cats = set()
-    for w in intent_axis_words(intent):
-        try:
-            for c in entity_form_catalogs_for_kind(w, allow_meaning=has_period) or []:
-                if c:
-                    cats.add(c)
-        except RuntimeError:
-            pass
+    for w in intent_axis_words(intent, question):
+        for c in _catalogs_for_axis_word(w, intent, has_period):
+            if c:
+                cats.add(c)
     if not cats:
         return frozenset()
     scope = list(regs) if regs is not None else None
@@ -270,23 +331,23 @@ def axis_catalog_values(axis_word, limit=20, intent=None):
     return out
 
 
-def warehouse_axis_values(limit=20, intent=None):
-    """Имена складов: axis_catalog_values по action_axis/kind из intent."""
+def warehouse_axis_values(limit=20, intent=None, question=""):
+    """Имена складов: axis_catalog_values по action_axis/kind/словарю."""
     intent = intent or {}
-    for w in intent_axis_words(intent):
+    for w in intent_axis_words(intent, question):
         vals = axis_catalog_values(w, limit=limit, intent=intent)
         if vals:
             return vals
-    ax = _intent_text(intent.get("action_axis"))
+    ax = resolved_warehouse_axis_word(question, intent)
     if ax:
         return axis_catalog_values(ax, limit=limit, intent=intent)
     return []
 
 
-def warehouse_axis_is_live(intent=None):
+def warehouse_axis_is_live(intent=None, question=""):
     """Живая ось места хранения: ≥2 значений из метаданных."""
     try:
-        wh = warehouse_axis_values(intent=intent)
+        wh = warehouse_axis_values(intent=intent, question=question)
     except RuntimeError:
         return False
     return len(wh or []) >= 2
@@ -301,7 +362,8 @@ def stock_skips_warehouse_clarify(question, intent=None, plan=None):
         return True
     if question_wants_per_axis_breakdown(question, intent, plan):
         return True
-    if aggregate_count_intent(intent, plan, question) and secondary_axis_known(intent):
+    if aggregate_count_intent(intent, plan, question) and secondary_axis_known(
+            intent, question):
         return True
     return False
 
@@ -322,7 +384,7 @@ def stock_count_aggregate_without_subject(intent, plan=None, question=""):
         return False
     if not aggregate_count_intent(intent, plan, question):
         return False
-    if not secondary_axis_known(intent):
+    if not secondary_axis_known(intent, question):
         return False
     if not question_mentions_warehouse_axis(question, intent, plan):
         return False
@@ -348,7 +410,7 @@ def stock_subject_needs_clarify(question, intent=None):
         return False
     if aggregate_count_intent(intent, None, question):
         return True
-    if not secondary_axis_known(intent) and not (intent or {}).get("terms"):
+    if not secondary_axis_known(intent, question) and not (intent or {}).get("terms"):
         return True
     return False
 
@@ -461,15 +523,82 @@ def stock_balance_is_reversal_noise(src):
         "коррект", "adjust", "исправ"))
 
 
-def stock_goods_pool(capable=None, intent=None):
-    """Пул товарных balance-регистров по осям intent (search_refcols)."""
+def _is_product_catalog_target(target):
+    fn = globals().get("_is_product_catalog")
+    if callable(fn):
+        return bool(fn(target))
+    return False
+
+
+def _stock_registers_with_product_axis(regs):
+    """accumulationregister_* с refcol на товарный catalog (ось ТМЦ)."""
+    pool = list(regs or [])
+    if not pool:
+        return frozenset()
+    try:
+        rows = psql(
+            "SELECT DISTINCT r.src_table, r.target_src FROM search_refcols r "
+            "WHERE r.src_table IN (%s) AND r.col IS NOT NULL AND r.col <> ''"
+            % ", ".join(lit(s) for s in pool))
+    except RuntimeError:
+        return frozenset()
+    by_src = {}
+    for r in rows or []:
+        if not r or not r[0]:
+            continue
+        by_src.setdefault(r[0], set()).add((r[1] if len(r) > 1 else "") or "")
+    return frozenset(
+        src for src, tgts in by_src.items()
+        if any(_is_product_catalog_target(t) for t in tgts if t))
+
+
+def _stock_product_targets_by_src(pool):
+    pool = list(pool or [])
+    if not pool:
+        return {}
+    try:
+        rows = psql(
+            "SELECT DISTINCT r.src_table, r.target_src FROM search_refcols r "
+            "WHERE r.src_table IN (%s) AND r.col IS NOT NULL AND r.col <> ''"
+            % ", ".join(lit(s) for s in pool))
+    except RuntimeError:
+        return {}
+    out = {}
+    for r in rows or []:
+        if not r or not r[0]:
+            continue
+        t = (r[1] if len(r) > 1 else "") or ""
+        if _is_product_catalog_target(t):
+            out.setdefault(r[0], set()).add(t)
+    return {k: frozenset(v) for k, v in out.items()}
+
+
+def _stock_expense_side_penalty(src, pool, corpus_counts, product_targets_by_src):
+    """Та же товарная ось, меньше строк — расходная сторона пары, не canon."""
+    pt = (product_targets_by_src or {}).get(src) or frozenset()
+    if not pt:
+        return 0
+    my_n = int((corpus_counts or {}).get(src) or 0)
+    sibs = [s for s in (pool or []) if s != src
+            and ((product_targets_by_src or {}).get(s) or frozenset()) == pt]
+    if not sibs:
+        return 0
+    max_n = max([my_n] + [int((corpus_counts or {}).get(s) or 0) for s in sibs])
+    return 1 if my_n < max_n else 0
+
+
+def stock_goods_pool(capable=None, intent=None, question=""):
+    """Пул товарных balance-регистров: оси intent + ref на catalog ТМЦ."""
     capable = capable if capable is not None else balance_capable_or_registers()
     if not intent:
         return frozenset()
-    broad = registers_for_kind_axes(intent, None)
+    broad = registers_for_kind_axes(intent, None, question)
     if not broad:
         return frozenset()
     clean = {s for s in broad if not register_is_balance_noise(s)}
+    product_axis = _stock_registers_with_product_axis(clean)
+    if product_axis:
+        clean = {s for s in clean if s in product_axis}
     if not clean:
         return frozenset()
     if capable:
@@ -509,12 +638,14 @@ def _stock_corpus_counts(pool):
     return {r[0]: int(r[1]) for r in (rows or []) if r and r[0]}
 
 
-def _stock_register_rank_key(src, capable=None, corpus_counts=None):
+def _stock_register_rank_key(src, capable=None, corpus_counts=None,
+                               product_targets_by_src=None, pool=None):
     s = str(src or "").lower()
     cc = corpus_counts or {}
     return (
         1 if stock_balance_is_sales_noise(s) else 0,
         1 if stock_balance_is_reversal_noise(s) else 0,
+        _stock_expense_side_penalty(src, pool, cc, product_targets_by_src),
         0 if capable and src in capable else 1,
         0 if s.startswith("accumulationregister_") else 1,
         -int(cc.get(src) or 0),
@@ -524,7 +655,9 @@ def _stock_register_rank_key(src, capable=None, corpus_counts=None):
 def _sort_stock_pool(pool, capable=None):
     pool = list(pool or [])
     counts = _stock_corpus_counts(pool)
-    pool.sort(key=lambda s: _stock_register_rank_key(s, capable, counts))
+    pt_map = _stock_product_targets_by_src(pool)
+    pool.sort(key=lambda s: _stock_register_rank_key(
+        s, capable, counts, pt_map, pool))
     return pool
 
 
@@ -568,10 +701,10 @@ def try_balance_code_entity_pick(question, intent, cands, diag, cut, t0, marks,
         return None
     capable = balance_capable_or_registers()
     scoped = [c for c in (cands or []) if c]
-    pool = [c for c in registers_for_kind_axes(intent, scoped)
+    pool = [c for c in registers_for_kind_axes(intent, scoped, question)
             if c in capable and not register_is_balance_noise(c)]
     if not pool:
-        pool = [c for c in stock_goods_pool(capable, intent) if c in scoped]
+        pool = [c for c in stock_goods_pool(capable, intent, question) if c in scoped]
     if not pool:
         diag["balance_code_empty_pool"] = True
         return {"kind": "no_data",
@@ -731,10 +864,11 @@ def stock_breakdown_leader_fallback(question, src, match, preds, measure, diag,
     """Исход B: лидер-итог + люк значений оси из метаданных."""
     if not question_wants_per_axis_breakdown(question, intent, plan):
         return None
-    if not warehouse_axis_is_live(intent):
+    if not warehouse_axis_is_live(intent, question):
         return None
     intent = intent or {}
-    axis_word = (_intent_text(intent.get("action_axis"))
+    axis_word = (resolved_warehouse_axis_word(question, intent)
+                 or _intent_text(intent.get("action_axis"))
                  or _intent_text(intent.get("kind")) or "")
     wh = []
     try:

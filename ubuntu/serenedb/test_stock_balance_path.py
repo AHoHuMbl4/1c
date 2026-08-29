@@ -75,6 +75,69 @@ t("count agg: терм → subject clarify off (named)",
   not A.stock_subject_needs_clarify(
       "q", dict(INTENT_STOCK, measure="петли")))
 
+# --- K9: живой intent без action_axis — ось «склад» из словаря по тексту вопроса ---
+INTENT_LIVE = {"want": "count", "kind": "позиции", "action_class": "object",
+               "terms": [], "action_axis": ""}
+Q_LIVE = "сколько на складе позиций всего"
+
+
+def _cats_for_live(w, **kw):
+    wl = (w or "").strip().lower()
+    if wl.startswith("склад"):
+        return ["catalog_склады"]
+    if wl in ("позиции", "номенклатура"):
+        return ["catalog_номенклатура"]
+    return []
+
+
+A.entity_form_catalogs_for_kind = _cats_for_live
+t("live intent: dict axis from question",
+  A.resolved_warehouse_axis_word(Q_LIVE, INTENT_LIVE).startswith("склад"))
+t("live intent: warehouse axis mentioned",
+  A.question_mentions_warehouse_axis(Q_LIVE, INTENT_LIVE))
+t("live intent: secondary axis known",
+  A.secondary_axis_known(INTENT_LIVE, Q_LIVE))
+t("live intent: count aggregate path",
+  A.stock_count_aggregate_without_subject(INTENT_LIVE, None, Q_LIVE))
+t("live intent: not subject clarify",
+  not A.stock_subject_needs_clarify(Q_LIVE, INTENT_LIVE))
+
+A._is_product_catalog = lambda s: "номенклатур" in str(s or "").lower()
+
+
+def _canon_live_psql(q):
+    ql = q.lower()
+    if "search_refcols" in ql and "target_src" in ql:
+        return [
+            ("accumulationregister_допзатратыимпорттмц", "catalog_номенклатура"),
+            ("accumulationregister_импорттмц", "catalog_номенклатура"),
+        ]
+    if "search_refcols" in ql:
+        return [
+            ("accumulationregister_импорттмц",),
+            ("accumulationregister_допзатратыимпорттмц",),
+        ]
+    if "group by" in ql:
+        return [
+            ("accumulationregister_импорттмц", 65000),
+            ("accumulationregister_допзатратыимпорттмц", 1000),
+        ]
+    return []
+
+
+A.psql = _canon_live_psql
+A._BALANCE_REGS.update({"at": time.time(), "set": {
+    "accumulationregister_импорттмц", "accumulationregister_допзатратыимпорттмц"}})
+try:
+    _canon_live = A.stock_canon_src(
+        ["accumulationregister_допзатратыимпорттмц", "accumulationregister_импорттмц"],
+        Q_LIVE, INTENT_LIVE)
+    t("live intent: canon import not overhead",
+      _canon_live == "accumulationregister_импорттмц", _canon_live)
+finally:
+    A.entity_form_catalogs_for_kind = _old_cats0
+    A.psql = _old_psql0
+
 # --- balance_registers: RuntimeError не глотать ---
 _real_psql = A.psql
 

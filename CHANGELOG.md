@@ -1,3 +1,17 @@
+## 2026-08-29 — K9 склад-агрегат: ось места из словаря по термам вопроса [код]
+
+**[замер :8092]** живой intent «сколько на складе позиций всего»: `action_axis=None`,
+`kind=позиции`, `terms=[]` → clarify stock-subject; diag `stock_canon_locked=
+допзатратыимпорттмц` (затратный регистр вместо приходного). **[код]** z12:
+`resolved_warehouse_axis_word` — action_axis из разбора, иначе термы вопроса/terms
+→ `entity_form_catalogs_for_kind` (словарь базы, без слов в коде);
+`secondary_axis_known`/`question_mentions_warehouse_axis`/`intent_axis_words` на
+этом пути. `stock_goods_pool`: ref на product catalog + canon-rank: при той же
+товарной оси меньший corpus → расходная сторона, не canon (импорт>допзатраты).
+Замок test_stock_balance_path **36/0** (+6: живой intent без action_axis, canon).
+Числа: 36/0 5/0 48/0 162/0 49/0 word ok. Доки: K7_WAREHOUSE_AXIS.md §2,
+entity_form_catalogs_for_kind.
+
 ## 2026-08-29 — K9 склад-агрегат: count+ось места без терма → distinct, не subject-clarify [код]
 
 **[замер :8092]** «сколько на складе позиций всего» / «сколько позиций на всех
