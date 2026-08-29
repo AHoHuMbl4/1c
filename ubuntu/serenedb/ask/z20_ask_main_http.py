@@ -2382,6 +2382,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             шаг("K6 v2", dual_atom=True)
             return _k6r["clarify"]
         cands = _k6r.get("cands") or cands
+        counts_for_model = entity_pick_counts_for_model(
+            by, diag, intent, question)
         шаг("K6 v2", кандидатов=len(cands))
     if question_asks_stock_balance(question):
         capable = balance_capable_or_registers()
@@ -3012,12 +3014,19 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             picked, marks, plan = _ev["picked"], _ev.get("marks") or {}, _ev.get("plan") or {}
             diag["event_code_pick"] = True
         else:
-            try:
-                picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
-                                                  counts_for_model, match, diag)
-            except RuntimeError:
-                picked, marks, plan = [], {}, {}
-                diag["degraded"] = "выбор сущности сделан без модели"
+            _ct = try_count_theme_code_pick(
+                question, intent, cands, diag, cut, t0)
+            if _ct and _ct.get("picked"):
+                picked = _ct["picked"]
+                marks, plan = {}, {}
+                diag.update(_ct.get("diag") or {})
+            else:
+                try:
+                    picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
+                                                      counts_for_model, match, diag)
+                except RuntimeError:
+                    picked, marks, plan = [], {}, {}
+                    diag["degraded"] = "выбор сущности сделан без модели"
 
         # КОД С ИЕРАРХИЕЙ — НЕОДНОЗНАЧНОСТЬ, КОТОРУЮ РЕШАЕТ ЧЕЛОВЕК. «62» — это и номер
         # формы статистики, и счёт: буквальный поиск ведёт к форме, а иерархический

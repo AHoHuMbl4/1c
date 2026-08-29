@@ -759,7 +759,7 @@ def pick_entity(question, kind, cands, counts=None, match="", diag=None):
     for i, (t, nm) in enumerate(names):
         row = "%d. %s%s%s%s%s" % (
             i + 1, nm,
-            "" if t not in counts else " — %d matching records" % counts[t],
+            entity_matching_records_suffix(t, counts.get(t), diag) if counts else "",
             "" if not parent_by.get(t) else
             " [line items of «%s»]" % label_by.get(parent_by[t], parent_by[t]),
             "" if t not in meas else "\n     quantities recorded here: %s" % meas[t],

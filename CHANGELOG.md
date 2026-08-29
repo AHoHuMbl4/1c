@@ -1,3 +1,11 @@
+## 2026-08-29 — K6c проводка: themed counts в pick_entity, code-pick в answer [код]
+
+**[код]** Проводка K6c в ответный путь (без неё 632aa48 в бою не работает):
+z16 `pick_entity` берёт suffix из `entity_matching_records_suffix` (themed
+count, не сырой BM25), z20 `answer` строит `counts_for_model` и до вызова
+модели пробует `try_count_theme_code_pick`. **Доказано:** замки на дереве
+с проводкой 257/0 (k6 14, rank_leader 31, fork 35, intent 150, k4 27).
+
 ## 2026-08-29 — fork clarify: подпись человеческой оси в options исхода C [код]
 
 **[код]** Э3 «подстрока clarify не найдена»: `fork_outcome_c` строил options
