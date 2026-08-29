@@ -1,3 +1,17 @@
+## 2026-08-29 — К2: окна недели/«с N по M» и поведение без карты календаря [код]
+
+**[код]** Живой замер compare 0/8 разложен на ask-часть (починена) и corpus-часть
+(заблокирована `$metadata`, отложено владельцем). z03: `repair_period_from_question`
++ `apply_period_leader` — окно `wtd` из словаря `period_relative_forms` подставляется
+явно (люк `full_week` не раскрывается при явном preset); `month_day_range_from_question`
+— структурный разбор «с N по M» → `[month_start, month_start+(M-1)]`, шум N/M уходит
+из terms/amount. z04: `calendar_day_basis_phrases` (СЛОВАРЬ ИЗ search_meta, не
+литералы) + `calendar_axis_unavailable_block` → no_data при вопросе про рабочие
+дни/праздники и пустой карте оси. **Замки:** period_bounds **9/0**, period_empty
+**30/0**, calendar_axis **41/0**, fork_window_readings **44/0**, ab_calendar_axis_set
+**24/0**, intent **157/0** (совместно с `ef87e4d`). Проводка блока в z20 — следующим
+заходом (зона была занята параллельным агентом).
+
 ## 2026-08-29 — C4: проводка intent/question в resolve_fork_outcome [код]
 
 **[код]** Гвард complement в z13 (`_fork_complement_outcome_block`) уже был, но

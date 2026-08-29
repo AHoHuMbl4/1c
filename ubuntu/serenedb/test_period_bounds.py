@@ -37,6 +37,32 @@ t("period_preds: from/to",
   preds == ["doc_date >= '%s'" % DAY,
             "doc_date < ('%s'::date + INTERVAL 1 day)" % DAY], preds)
 
+# K2: «с 1 по 15» — явный диапазон дней месяца, не amount/terms.
+mdr = A.month_day_range_from_question("Сколько отгрузили с 1 по 15", "2026-08-29")
+t("month_day_range: с 1 по 15",
+  mdr and mdr.get("from") == "2026-08-01" and mdr.get("to") == "2026-08-15", mdr)
+preds_m = A.period_preds({"from": mdr["from"], "to": mdr["to"]})
+t("month_day_range: preds полусоткрытые",
+  preds_m == ["doc_date >= '2026-08-01'",
+              "doc_date < ('2026-08-15'::date + INTERVAL 1 day)"], preds_m)
+intent_m = {
+    "period": {},
+    "terms": [["1"], ["15"], ["2"]],
+    "amount": {"op": "=", "value": 1},
+    "parse": {"assumed": ["period.from", "period.to"]},
+}
+A.repair_period_from_question(intent_m, "Сколько отгрузили с 1 по 15", "2026-08-29")
+t("repair: period from/to",
+  intent_m.get("period", {}).get("from") == "2026-08-01"
+  and intent_m.get("period", {}).get("to") == "2026-08-15",
+  intent_m.get("period"))
+t("repair: terms без 1/15",
+  intent_m.get("terms") == [["2"]], intent_m.get("terms"))
+t("repair: amount сброшен", intent_m.get("amount") == {}, intent_m.get("amount"))
+t("repair: assumed снят",
+  "assumed" not in (intent_m.get("parse") or {}),
+  intent_m.get("parse"))
+
 # Живой SereneDB: строка 15:53 того же дня — внутри «вчера», полночь N+1 — нет.
 if os.environ.get("SERENEDB_DSN_RO"):
     import subprocess

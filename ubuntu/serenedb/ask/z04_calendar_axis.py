@@ -75,6 +75,96 @@ def calendar_map_rows():
     return clean
 
 
+_DAY_BASIS_HOLIDAY = "holiday"
+_DAY_BASIS_NEED_MAP = frozenset({_DAY_BASIS_WORKING, _DAY_BASIS_HOLIDAY})
+_CALENDAR_DAY_BASIS_PHRASES = {"at": 0.0, "map": None}
+
+
+def calendar_axis_map_ready():
+    """Карта календаря в meta непуста (независимо от ASK_CALENDAR_AXIS)."""
+    return bool(calendar_registers() and calendar_working_day_keys()
+                and calendar_map_rows())
+
+
+def calendar_day_basis_phrases():
+    """Словарь phrase → day_basis id (search_meta, не литералы ask)."""
+    now = time.time()
+    if (_CALENDAR_DAY_BASIS_PHRASES["map"] is not None
+            and now - _CALENDAR_DAY_BASIS_PHRASES["at"] < 300):
+        return _CALENDAR_DAY_BASIS_PHRASES["map"]
+    got = {}
+    try:
+        r = psql(
+            "SELECT v FROM search_meta WHERE k = 'calendar_day_basis_phrases' LIMIT 1")
+        raw = (r[0][0] or "") if r and r[0] else ""
+        if raw:
+            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            if isinstance(parsed, dict):
+                got = {str(k): [str(x) for x in (v or [])]
+                       for k, v in parsed.items()}
+    except (RuntimeError, ValueError, TypeError):
+        got = {}
+    _CALENDAR_DAY_BASIS_PHRASES.update({"at": now, "map": got})
+    return got
+
+
+def day_basis_from_question(question):
+    """day_basis из словаря meta по фразам вопроса. Иначе None."""
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return None
+    for basis_id, phrases in (calendar_day_basis_phrases() or {}).items():
+        bid = str(basis_id).strip()
+        if bid not in _DAY_BASIS_NEED_MAP:
+            continue
+        for ph in phrases or []:
+            p = " ".join(str(ph).lower().split())
+            if p and p in q:
+                return bid
+    return None
+
+
+def calendar_day_basis_needed(question, intent=None, trusted=None):
+    """Вопрос/ticket требует карту графика (day_basis id из search_meta)."""
+    if isinstance(trusted, dict):
+        db = (trusted.get("day_basis") or "").strip()
+        if db in _DAY_BASIS_NEED_MAP:
+            return db
+    need = day_basis_from_question(question)
+    if need:
+        return need
+    intent = intent or {}
+    db = str(intent.get("day_basis") or "").strip()
+    if db in _DAY_BASIS_NEED_MAP:
+        return db
+    pr = intent.get("period") or {}
+    db = str(pr.get("day_basis") or "").strip()
+    if db in _DAY_BASIS_NEED_MAP:
+        return db
+    return None
+
+
+def calendar_axis_unavailable_block(question, intent=None, trusted=None,
+                                  diag=None, cut=None, t0=None):
+    """day_basis из meta при пустой карте — no_data, не подмена числом (§5.2)."""
+    need = calendar_day_basis_needed(question, intent=intent, trusted=trusted)
+    if not need:
+        return None
+    if ASK_CALENDAR_AXIS and calendar_axis_map_ready():
+        return None
+    out_diag = dict(diag or {})
+    out_diag["calendar_axis_unavailable"] = need
+    sec = round(time.time() - t0, 2) if t0 else None
+    packed = _diag_pack(out_diag, sec=sec, reason="calendar_axis_unavailable")
+    return {
+        "partial": cut or None,
+        "kind": "no_data",
+        "sources": [],
+        "text": NO_DATA_TEXT or refuse_text(question),
+        "diag": packed,
+    }
+
+
 def calendar_axis_open():
     """Ось открыта: флаг + непустые registers/keys + карта (как balance_registers)."""
     if not ASK_CALENDAR_AXIS:
@@ -83,8 +173,8 @@ def calendar_axis_open():
                 and calendar_map_rows())
 
 
-def calendar_day_basis_prefer(intent=None, trusted=None):
-    """Лидер day-basis: ticket/intent, иначе calendar_days (§2.4). Без phrase-list."""
+def calendar_day_basis_prefer(intent=None, trusted=None, question=None):
+    """Лидер day-basis: ticket/intent, словарь meta, иначе calendar_days (§2.4)."""
     if isinstance(trusted, dict):
         db = (trusted.get("day_basis") or "").strip()
         if db in _DAY_BASIS_IDS:
@@ -101,6 +191,9 @@ def calendar_day_basis_prefer(intent=None, trusted=None):
     db = str(pr.get("day_basis") or "").strip()
     if db in _DAY_BASIS_IDS:
         return db
+    need = day_basis_from_question(question or "")
+    if need == _DAY_BASIS_WORKING:
+        return _DAY_BASIS_WORKING
     return _DAY_BASIS_LEADER_DEFAULT
 
 

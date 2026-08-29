@@ -285,6 +285,38 @@ t("фаза B: fork_leader W → mtd",
   split_w and A._class_window_form(split_w[0]) == "mtd" and len(split_w[1]) == 1)
 
 
+# ── K2: календарная неделя / «с 1 по 15» без карты календаря ─────────────────
+_real_forms = A.period_relative_forms
+
+
+def _forms_wtd():
+    return {"wtd": ["календарную неделю", "календарная неделя"]}
+
+
+A.period_relative_forms = _forms_wtd
+intent_cal_wk = {"period": {}, "parse": {"assumed": ["period.from"]}}
+rb_wk = A.apply_period_leader(
+    intent_cal_wk, today="2026-08-29", question="Продажи за календарную неделю")
+t("календарная неделя: intent wtd",
+  intent_cal_wk.get("period", {}).get("interpretation_id") == "wtd"
+  and intent_cal_wk.get("period", {}).get("from") == "2026-08-24"
+  and intent_cal_wk.get("period", {}).get("to") == "2026-08-29",
+  intent_cal_wk.get("period"))
+t("календарная неделя: 1 reading wtd",
+  len(rb_wk) == 1 and rb_wk[0].get("interpretation_id") == "wtd", rb_wk)
+
+A.period_relative_forms = _real_forms
+intent_rng = {"period": {}, "terms": [["1"], ["15"]]}
+rb_rng = A.apply_period_leader(
+    intent_rng, today="2026-08-29", question="Сколько отгрузили с 1 по 15")
+t("с 1 по 15: explicit окно",
+  intent_rng.get("period", {}).get("from") == "2026-08-01"
+  and intent_rng.get("period", {}).get("to") == "2026-08-15",
+  intent_rng.get("period"))
+t("с 1 по 15: одно reading",
+  len(rb_rng) == 1 and rb_rng[0].get("interpretation_id") == "explicit", rb_rng)
+
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)

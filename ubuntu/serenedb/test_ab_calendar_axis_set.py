@@ -91,6 +91,23 @@ def test_param_default_off():
       os.path.basename(path_both) == "ab-calendar-axis-okna.tsv", path_both)
 
 
+def test_k2_offline_hooks():
+    """K2: офлайн-хуки period repair и calendar block (без базы)."""
+    import serene_ask as A  # noqa: E402
+
+    mdr = A.month_day_range_from_question("Сколько отгрузили с 1 по 15", "2026-08-29")
+    t("K2: month_day_range",
+      mdr and mdr.get("from") == "2026-08-01" and mdr.get("to") == "2026-08-15", mdr)
+    A.calendar_day_basis_phrases = lambda: {
+        "working_days": ["рабочие дни"], "holiday": ["праздники"]}
+    A.calendar_registers = lambda: frozenset()
+    A.calendar_working_day_keys = lambda: frozenset()
+    A.calendar_map_rows = lambda: []
+    blk = A.calendar_axis_unavailable_block("Продажи в праздники")
+    t("K2: праздники no_data",
+      blk and blk.get("kind") == "no_data", blk)
+
+
 def _load_via_exit(path):
     """load_gold при пустом/битом зовёт sys.exit(1); ловим код и stderr."""
     code = (
@@ -134,6 +151,7 @@ def main():
     test_load_axis_set()
     test_param_default_off()
     test_empty_broken_errors()
+    test_k2_offline_hooks()
     print("\nИТОГ:", "ok — все %d проверок прошли" % PASS if not FAIL
           else "FAIL — %d из %d: %s" % (len(FAIL), PASS + len(FAIL), ", ".join(FAIL)))
     sys.exit(1 if FAIL else 0)

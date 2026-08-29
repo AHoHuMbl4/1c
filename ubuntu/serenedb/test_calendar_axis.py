@@ -273,13 +273,49 @@ A.fork_labels_covering = _real_cov
 restore_flag(saved)
 restore_meta(_real_meta)
 
-# ── grep: нет триггер-литералов в calendar-хелперах ──────────────────────────
+# ── K2: ось выключена (пустая карта) — рабочие/праздники → no_data ───────────
+_real_phrases = A.calendar_day_basis_phrases
+
+
+def _phrases_work_hol():
+    return {
+        "working_days": ["рабочие дни этой недели", "будни"],
+        "holiday": ["праздники", "в праздники"],
+    }
+
+
+A.calendar_day_basis_phrases = _phrases_work_hol
+mock_meta(regs="", keys="", rows=[])
+t("map_ready: пустая карта", A.calendar_axis_map_ready() is False)
+blk_w = A.calendar_axis_unavailable_block(
+    "Сколько продаж за рабочие дни этой недели?", intent={}, trusted=None)
+t("рабочие дни: no_data без карты",
+  blk_w and blk_w.get("kind") == "no_data"
+  and (blk_w.get("diag") or {}).get("reason") == "calendar_axis_unavailable",
+  blk_w)
+blk_h = A.calendar_axis_unavailable_block("Продажи в праздники")
+t("праздники: no_data без карты",
+  blk_h and blk_h.get("kind") == "no_data", blk_h)
+t("календарная неделя: block None",
+  A.calendar_axis_unavailable_block("Продажи за календарную неделю") is None)
+mock_meta()
+saved_on = with_flag(True)
+t("рабочие дни: карта есть → не block",
+  A.calendar_axis_unavailable_block(
+      "Сколько продаж за рабочие дни этой недели?") is None)
+restore_flag(saved_on)
+A.calendar_day_basis_phrases = _real_phrases
+restore_meta(_real_meta)
+
 TRIG = re.compile(r"рабоч|будн|праздн|календарн", re.I)
 funcs = [
     A.calendar_axis_readings, A.calendar_axis_open, A.expand_readings_calendar_axis,
     A.calendar_day_basis_prefer, A.prefer_day_basis_leader, A._working_day_doc_preds,
     A._day_basis_reading, A.calendar_registers, A.calendar_working_day_keys,
     A.calendar_map_rows, A._class_day_basis,
+    A.calendar_axis_map_ready, A.calendar_day_basis_phrases,
+    A.day_basis_from_question, A.calendar_day_basis_needed,
+    A.calendar_axis_unavailable_block,
 ]
 bad = []
 for fn in funcs:

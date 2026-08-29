@@ -282,6 +282,12 @@ def period_readings(intent, today=None, period_from_prior=False):
     if not fr_d or not to_d:
         return [_window_reading(p, origin, "explicit", today)]
 
+    preset_fid = (p.get("interpretation_id") or "").strip()
+    if (preset_fid in _WINDOW_FORM_IDS
+            and preset_fid not in ("none", "drop_assumed", "explicit", "prior")
+            and origin == _ORIGIN_EXPLICIT):
+        return [_window_reading(p, origin, preset_fid, today)]
+
     ms, me = _month_range(td)
     ws, we = _week_range_monday(td)
     # origin=assumed + ровно 7 дней, конец сегодня/вчера, ≠ текущая календарная
@@ -432,6 +438,147 @@ def period_form_from_question(question):
     return None
 
 
+# Структурный разбор «с N по M» — границы дней текущего месяца, не словарь базы.
+_MONTH_DAY_RANGE_RE = re.compile(
+    r"(?:^|[^\d])(\d{1,2})\s+по\s+(\d{1,2})(?:\D|$)", re.UNICODE)
+
+
+def month_day_range_from_question(question, today=None):
+    """Явный диапазон дней месяца [month_start+(d1-1), month_start+d2).
+
+    Полусоткрытый верх в period_preds: to = month_start + (d2-1) день включительно
+  при d2 как в эталоне «с 1 по 15» → doc_date < month_start + 15d.
+    """
+    if not today:
+        today = time.strftime("%Y-%m-%d")
+    td = _calendar_date(today)
+    if not td:
+        return None
+    m = _MONTH_DAY_RANGE_RE.search(str(question or ""))
+    if not m:
+        return None
+    try:
+        d1, d2 = int(m.group(1)), int(m.group(2))
+    except (TypeError, ValueError):
+        return None
+    if not (1 <= d1 <= 31 and 1 <= d2 <= 31 and d1 <= d2):
+        return None
+    ms, _me = _month_range(td)
+    fr = ms + datetime.timedelta(days=d1 - 1)
+    to = ms + datetime.timedelta(days=d2 - 1)
+    return {
+        "from": _iso_date(fr), "to": _iso_date(to),
+        "interpretation_id": "explicit", "origin": _ORIGIN_EXPLICIT,
+        "d1": d1, "d2": d2,
+    }
+
+
+def _apply_period_form_window(intent, form_id, td, origin=None):
+    """Окно по form_id словаря period_relative_forms (данные, не лексика ask)."""
+    if form_id not in _WINDOW_FORM_IDS or form_id in ("none", "drop_assumed",
+                                                       "explicit", "prior"):
+        return False
+    o = origin or _ORIGIN_EXPLICIT
+    ws, we = _week_range_monday(td)
+    ms, me = _month_range(td)
+    if form_id == "wtd":
+        pr = {"from": _iso_date(ws), "to": _iso_date(td),
+              "interpretation_id": "wtd", "origin": o}
+    elif form_id == "full_week":
+        pr = {"from": _iso_date(ws), "to": _iso_date(we),
+              "interpretation_id": "full_week", "origin": o}
+    elif form_id == "mtd":
+        pr = {"from": _iso_date(ms), "to": _iso_date(td),
+              "interpretation_id": "mtd", "origin": o}
+    elif form_id == "full_month":
+        pr = {"from": _iso_date(ms), "to": _iso_date(me),
+              "interpretation_id": "full_month", "origin": o}
+    elif form_id == "prev_week":
+        pws, pwe = _prev_week_range(td)
+        pr = {"from": _iso_date(pws), "to": _iso_date(pwe),
+              "interpretation_id": "prev_week", "origin": o}
+    elif form_id == "full_quarter":
+        qs, qe = _quarter_range(td)
+        pr = {"from": _iso_date(qs), "to": _iso_date(qe),
+              "interpretation_id": "full_quarter", "origin": o}
+    elif form_id == "rolling_12m":
+        fr = td - datetime.timedelta(days=365)
+        pr = {"from": _iso_date(fr), "to": _iso_date(td),
+              "interpretation_id": "rolling_12m", "origin": o}
+    else:
+        return False
+    intent["period"] = pr
+    return True
+
+
+def _strip_period_assumed(intent):
+    """Явное окно из разбора периода — не assumed."""
+    parse = intent.get("parse")
+    if not isinstance(parse, dict):
+        return
+    assumed = [a for a in (parse.get("assumed") or [])
+               if not str(a).startswith("period.")]
+    if assumed:
+        parse["assumed"] = assumed
+    else:
+        parse.pop("assumed", None)
+
+
+def _clear_month_day_parse_noise(intent, mdr):
+    """Числа границ периода не должны уходить в terms/amount."""
+    if not mdr:
+        return
+    d1, d2 = mdr.get("d1"), mdr.get("d2")
+    if d1 is None or d2 is None:
+        return
+    nums = {str(d1), str(d2)}
+    terms = intent.get("terms") or []
+    cleaned = []
+    for g in terms:
+        alts = [a for a in g if str(a).strip() not in nums]
+        if alts:
+            cleaned.append(alts)
+    if cleaned != terms:
+        intent["terms"] = cleaned
+    a = intent.get("amount") or {}
+    try:
+        v = a.get("value")
+        if v is not None and str(int(v)) in nums:
+            intent["amount"] = {}
+    except (TypeError, ValueError):
+        pass
+
+
+def repair_period_from_question(intent, question, today=None, period_from_prior=False):
+    """Подставить явное окно: словарь period_relative_forms или «с N по M».
+
+    Не требует карты календаря (date_trunc week / границы месяца). Приоритет:
+    структурный month-day, затем словарь. period_from_prior не перетираем.
+    """
+    intent = intent if isinstance(intent, dict) else {}
+    if period_from_prior:
+        return False
+    if not today:
+        today = time.strftime("%Y-%m-%d")
+    td = _calendar_date(today)
+    if not td:
+        return False
+    changed = False
+    mdr = month_day_range_from_question(question, today)
+    if mdr:
+        intent["period"] = {k: v for k, v in mdr.items()
+                            if k not in ("d1", "d2")}
+        _clear_month_day_parse_noise(intent, mdr)
+        changed = True
+    if not changed:
+        form_id = period_form_from_question(question)
+        if form_id and _apply_period_form_window(intent, form_id, td):
+            changed = True
+    if changed:
+        _strip_period_assumed(intent)
+    return changed
+
+
 def apply_period_leader(intent, today=None, period_from_prior=False, question=""):
     """Подключить period_readings к основному ответу (фаза B, план §2/§3).
 
@@ -439,23 +586,17 @@ def apply_period_leader(intent, today=None, period_from_prior=False, question=""
     прочтением для детектора. Возвращает список readings (для diag / исходов).
     """
     intent = intent if isinstance(intent, dict) else {}
+    repair_period_from_question(
+        intent, question, today, period_from_prior=period_from_prior)
     prefer_form = None
-    # Словарь relative period (prev_week) — для sum и rank; без конкурирующего
-    # wtd при лидере prev (иначе figures B показывает чужое окно).
-    if ASK_SALES_RANK_CANON:
+    pr0 = intent.get("period") or {}
+    if (pr0.get("interpretation_id") or "") in _WINDOW_FORM_IDS:
+        prefer_form = pr0.get("interpretation_id")
+    # Словарь relative period — для sum и rank; без конкурирующего wtd при лидере prev.
+    if ASK_SALES_RANK_CANON and not prefer_form:
         prefer_form = period_form_from_question(question)
-        pr0 = intent.get("period") or {}
         if (pr0.get("interpretation_id") or "") == "prev_week":
             prefer_form = "prev_week"
-        if prefer_form == "prev_week":
-            td = _calendar_date(today) or _calendar_date(time.strftime("%Y-%m-%d"))
-            if td:
-                pws, pwe = _prev_week_range(td)
-                origin = _period_origin(intent, period_from_prior)
-                intent["period"] = {
-                    "from": _iso_date(pws), "to": _iso_date(pwe),
-                    "interpretation_id": "prev_week", "origin": origin,
-                }
     readings = period_readings(intent, today, period_from_prior=period_from_prior)
     leader = prefer_window_leader(readings, prefer_form=prefer_form)
     if leader is None:
