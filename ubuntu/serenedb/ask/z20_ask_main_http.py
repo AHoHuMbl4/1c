@@ -2831,7 +2831,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if not _goods_pf:
             diag["stock_named_pre_fork"] = True
             return stock_balance_named_no_data(question, diag, cut, t0)
-    if FORK_DETECT and not no_arbiter and len(cands) > 1:
+    _skip_stock_fork = (
+        diag.get("stock_canon_locked")
+        and stock_question_engaged(question, intent)
+        and (question_has_aggregate_total_marker(question, intent, plan)
+             or question_wants_per_axis_breakdown(question, intent, plan)))
+    if FORK_DETECT and not no_arbiter and len(cands) > 1 and not _skip_stock_fork:
         _t_fork = time.time()
         _scan_err = None
         _rows, _cls = {}, {}

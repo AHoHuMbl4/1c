@@ -10,6 +10,19 @@
 okna; раунд 4 остановлен, механизм заменяется К9 (смысл разбора ↔ оси
 метаданных). Доки: PLAN_TO_TARGET §0, HOW_NOT_TO §3.101.
 
+## 2026-08-29 — K7 stock-path: товарная ось ref→catalog, не qty [код]
+
+**[код]** z12: `registers_with_product_goods_axis` (`search_refcols` + класс
+`_is_product_catalog`), `filter_stock_goods_registers`, broad-пул без вытеснения
+capable-only стorno, `stock_balance_is_reversal_noise`, ранжирование по корпусу;
+z20: lock до K6, skip balance-bridge/fork/measure-clarify на stock-path.
+**[замер okna :8092]** SQL net distinct ТМЦ>0=**1306**; «на всех вместе» → figures,
+`stock_canon=импорттмц` (не каталог/БСО), **13178** на одном регистре (≠ net — K8);
+«пo каждому складу» — figures без разреза (ось места только в расходе). Числа:
+warehouse_aggregate **29/0**, fork **49**, intent **162**, k4 **27**, calendar **42**,
+stock_balance **27**, warehouse_axis **12**. Доки: K7_WAREHOUSE_AXIS.md §4,
+PLAN_ANSWER_CONTRACT исход B.
+
 ## 2026-08-29 — И0 client-gold: packet↔vitrine, живой okna 67 вопросов [замер]
 
 **[код]** `work/gold/client_gold.py`: генератор приёмочного `client-gold-okna.tsv`
