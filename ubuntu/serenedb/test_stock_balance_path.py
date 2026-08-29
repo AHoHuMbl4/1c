@@ -30,7 +30,12 @@ _old_knows = A._base_knows_kind_or_measure
 _old_psql0 = A.psql
 _old_cats0 = A.entity_form_catalogs_for_kind
 A._base_knows_kind_or_measure = lambda w: True
-A.entity_form_catalogs_for_kind = lambda w, **kw: ["catalog_номенклатура"]
+def _default_entity_cats(w, **kw):
+    wl = (w or "").strip().lower()
+    if wl.startswith("склад"):
+        return ["catalog_склады"]
+    return ["catalog_номенклатура"]
+A.entity_form_catalogs_for_kind = _default_entity_cats
 A.psql = lambda q: [("accumulationregister_x",)] if "search_refcols" in q.lower() else []
 
 # --- balance-path по intent, не словам вопроса ---
@@ -110,7 +115,10 @@ def _canon_live_psql(q):
     if "search_refcols" in ql and "target_src" in ql:
         return [
             ("accumulationregister_допзатратыимпорттмц", "catalog_номенклатура"),
+            ("accumulationregister_допзатратыимпорттмц", "catalog_таможенныевыплаты"),
+            ("accumulationregister_допзатратыимпорттмц", "catalog_группытмцдляиморта"),
             ("accumulationregister_импорттмц", "catalog_номенклатура"),
+            ("accumulationregister_импорттмц", "catalog_организации"),
         ]
     if "search_refcols" in ql:
         return [
@@ -119,8 +127,8 @@ def _canon_live_psql(q):
         ]
     if "group by" in ql:
         return [
-            ("accumulationregister_импорттмц", 65000),
-            ("accumulationregister_допзатратыимпорттмц", 1000),
+            ("accumulationregister_импорттмц", 13178),
+            ("accumulationregister_допзатратыимпорттмц", 65856),
         ]
     return []
 
@@ -137,6 +145,26 @@ try:
 finally:
     A.entity_form_catalogs_for_kind = _old_cats0
     A.psql = _old_psql0
+
+# --- контрагенты: kind не stock-scoped → stock-path молчит ---
+INTENT_CTR = {"want": "count", "kind": "контрагенты", "action_class": "object",
+              "terms": [], "action_axis": ""}
+Q_CTR = "сколько контрагентов всего"
+
+
+def _cats_ctr(w, **kw):
+    wl = (w or "").strip().lower()
+    if "контраг" in wl:
+        return ["catalog_контрагенты"]
+    return _cats_for_live(w, **kw)
+
+
+A.entity_form_catalogs_for_kind = _cats_ctr
+t("contractors: kind not stock scoped",
+  not A._kind_is_stock_scoped(INTENT_CTR, Q_CTR))
+t("contractors: stock path off",
+  not A.stock_question_engaged(Q_CTR, INTENT_CTR))
+A.entity_form_catalogs_for_kind = _cats_for_live
 
 # --- balance_registers: RuntimeError не глотать ---
 _real_psql = A.psql
@@ -307,6 +335,102 @@ finally:
         setattr(A, _k, _v)
 t("early stock path: plan not UnboundLocalError",
   _plan_err is None or "plan" not in str(_plan_err), _plan_err)
+
+
+# --- balance picked: event-пик не читается (UnboundLocalError _ev) ---
+_bal_ev_saved = dict(_early_saved)
+for _nm in (
+        "try_balance_code_entity_pick", "try_event_code_entity_pick",
+        "kind_has_corpus_support", "question_expects_accounting_data",
+        "canon_claims_question", "period_assumed_needs_clarify", "_need_clarify",
+        "term_ref_owners", "counts_for_model", "align_picked_to_terms",
+        "entity_choice_locked", "sales_refuse_sticky_focus", "hold_settled_entity",
+        "holders_of_target", "resolve_focus", "axis_focus_plan",
+        "prefer_entity_for_stock", "prefer_entity_for_catalog_count",
+        "prefer_entity_for_sales", "prefer_entity_for_rank", "event_filter_pool",
+        "stock_canon_src", "try_entity_form_answer", "try_event_count_period_clarify",
+        "stock_question_engaged", "stock_goods_pool", "stock_balance_named_no_data",
+        "rerank", "embed_model_live", "FORK_DETECT", "ASK_ENTITY_FORM",
+        "ORDER_BY_MEANING"):
+    if hasattr(A, _nm):
+        _bal_ev_saved[_nm] = getattr(A, _nm)
+_event_pick_called = []
+_bal_pick_called = []
+
+
+def _bal_picked_mock(*a, **k):
+    _bal_pick_called.append(1)
+    return {"picked": ["accumulationregister_wh"], "marks": {}, "plan": {}}
+
+
+def _ev_must_not_run(*a, **k):
+    _event_pick_called.append(1)
+    raise AssertionError("event pick when balance already picked")
+
+
+A.try_balance_code_entity_pick = _bal_picked_mock
+A.try_event_code_entity_pick = _ev_must_not_run
+A.parse_intent = lambda q, today: dict(_INTENT_EARLY)
+A.probe = lambda terms: ([], {})
+A.match_expr = lambda exprs, preds: ("", 0)
+A.tables_of = lambda match, preds: {
+    "accumulationregister_wh": 1, "accumulationregister_x": 1}
+A.partial_tables = lambda exprs, preds, k: ({}, "")
+A.meaning_candidates = lambda *a, **k: []
+A.children_by_parent = lambda by, match, preds: ({}, {})
+A.emb_ready = lambda table: False
+A.K6R = None
+A.pick_entity = lambda *a, **k: (_ for _ in ()).throw(AssertionError("model called"))
+A.warehouse_clarify = lambda *a, **k: None
+A.stock_question_engaged = lambda *a, **k: False
+A.prefer_entity_for_stock = lambda c, *a, **k: c
+A.prefer_entity_for_catalog_count = lambda c, *a, **k: c
+A.prefer_entity_for_sales = lambda c, *a, **k: c
+A.prefer_entity_for_rank = lambda c, *a, **k: c
+A.event_filter_pool = lambda c, *a, **k: c
+A.stock_canon_src = lambda *a, **k: None
+A.try_entity_form_answer = lambda *a, **k: None
+A.try_event_count_period_clarify = lambda *a, **k: None
+A.rerank = lambda q, labs: list(range(len(labs)))
+A.embed_model_live = lambda: False
+A.stock_goods_pool = lambda *a, **k: ["accumulationregister_wh"]
+A.stock_balance_named_no_data = lambda *a, **k: {"kind": "no_data", "text": "named"}
+A.kind_has_corpus_support = lambda k: True
+A.question_expects_accounting_data = lambda i, q, d: True
+A.canon_claims_question = lambda i, q: False
+A.period_assumed_needs_clarify = lambda i, t: False
+A._need_clarify = lambda *a, **k: None
+A.term_ref_owners = lambda t: {}
+A.counts_for_model = lambda *a, **k: {}
+A.align_picked_to_terms = lambda picked, *a, **k: picked
+A.entity_choice_locked = lambda *a, **k: False
+A.sales_refuse_sticky_focus = lambda f, *a, **k: (f, {}, {}, None)
+A.hold_settled_entity = lambda f, *a, **k: f
+A.holders_of_target = lambda t: []
+A.resolve_focus = lambda f, d: f
+A.axis_focus_plan = lambda *a, **k: None
+if hasattr(A, "FORK_DETECT"):
+    A.FORK_DETECT = False
+if hasattr(A, "ASK_ENTITY_FORM"):
+    A.ASK_ENTITY_FORM = False
+if hasattr(A, "ORDER_BY_MEANING"):
+    A.ORDER_BY_MEANING = False
+A.psql = lambda q: []
+_bal_ev_err = None
+try:
+    A.answer("сколько на складе?", focus=None, no_arbiter=True)
+except UnboundLocalError as exc:
+    _bal_ev_err = exc
+except AssertionError:
+    pass
+finally:
+    for _k, _v in _bal_ev_saved.items():
+        setattr(A, _k, _v)
+t("balance picked: no UnboundLocalError _ev",
+  _bal_ev_err is None or "_ev" not in str(_bal_ev_err), _bal_ev_err)
+t("balance picked: event pick not invoked",
+  _bal_pick_called and not _event_pick_called,
+  (_bal_pick_called, _event_pick_called))
 
 
 # --- early named: capable без goods pool → пустой pool ---

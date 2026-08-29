@@ -707,13 +707,34 @@ def _is_product_catalog(src):
     return any(k in s for k in ("номенклатур", "nomencl", "товар", "product", "goods"))
 
 
-def catalog_count_question(intent, question):
-    """Лексический признак канона «прайс»: count + слова прайса, без чужих слов.
+def catalog_kind_total_question(intent, question):
+    """count + kind→справочник (не product) + без периода + не stock-path."""
+    fn = globals().get("stock_question_engaged")
+    if callable(fn) and fn(question, intent):
+        return False
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    period = intent.get("period") or {}
+    if period.get("from") or period.get("to"):
+        return False
+    kind = (intent.get("kind") or "").strip()
+    if not kind:
+        return False
+    try:
+        cats = entity_form_catalogs_for_kind(kind, allow_meaning=False) or []
+    except RuntimeError:
+        return False
+    if not cats or any(_is_product_catalog(c) for c in cats):
+        return False
+    return True
 
-    Единственное место списка слов канона: его зовут и перестановка
-    кандидатов, и страж kind (К4-2 §4.3 — сработавший канон считается
-    поддержкой вопроса и не отбрасывается стражем).
-    """
+
+def catalog_count_question(intent, question):
+    """Канон count по справочнику: прайс (лексика) или kind→catalog без stock-path."""
+    if catalog_kind_total_question(intent, question):
+        return True
     intent = intent or {}
     q = " ".join(str(question or "").lower().split())
     want = (intent.get("want") or "").strip().lower()
@@ -727,10 +748,22 @@ def catalog_count_question(intent, question):
 
 
 def prefer_entity_for_catalog_count(cands, intent, question):
-    """«Позиций в прайсе» — catalog_номенклатура, не цены/установка цен."""
+    """Справочник в голове: прайс (product) или kind→catalog (контрагенты и т.п.)."""
     if not catalog_count_question(intent, question):
         return cands
     cands = list(cands or [])
+    if catalog_kind_total_question(intent, question):
+        kind = (intent.get("kind") or "").strip()
+        try:
+            cats = entity_form_catalogs_for_kind(kind, allow_meaning=False) or []
+        except RuntimeError:
+            cats = []
+        cats = [c for c in cats if c and str(c).startswith("catalog_")]
+        if cats:
+            head = cats[0]
+            rest = [c for c in cands if c != head]
+            return [head] + rest
+        return cands
     cats = [c for c in cands if _is_product_catalog(c)]
     if not cats:
         try:
@@ -753,11 +786,13 @@ def prefer_entity_for_catalog_count(cands, intent, question):
 
 
 def catalog_count_src(cands, intent, question):
-    """Src канона «прайс» = справочник товаров — или None."""
+    """Src канона count по справочнику — catalog_* в голове пула."""
     preferred = prefer_entity_for_catalog_count(list(cands or []), intent, question)
     if not preferred:
         return None
     top = preferred[0]
+    if str(top or "").startswith("catalog_"):
+        return top
     if not _is_product_catalog(top):
         return None
     return top

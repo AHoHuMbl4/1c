@@ -84,6 +84,14 @@ Sql › Statements › SELECT › ORDER BY, LIMIT.
 `stock_skips_warehouse_clarify`; `stock_question_engaged` — stock-path без
 маркера «остат*» (Q «на всех складах вместе» не уходит в count каталога).
 
+**29.08 (раунд 5, place-axis + live canon):** `_kind_is_stock_scoped` — stock-path
+только для product-kind или ref-оси места на stock-register; контрагенты →
+`catalog_kind_total_question` / `catalog_count_locked`. Canon: `_stock_cost_side_penalty`
+(non-product refs) + `_stock_corpus_receipt_side_penalty`; `_sort_stock_pool(snap=…)`.
+Живая проба :8092: контрагенты **353** answer; canon **импорттмц**; склад p3
+**figures 13178** (≠ SQL net **1306** — дефект формулы агрегата, не canon).
+Числа: stock_balance **40/0**; warehouse_axis **12/0**; fork **49/0**; intent **162/0**.
+
 **29.08 (раунд 4, product-axis):** `registers_with_product_goods_axis` — товарный
 регистр = ref→product catalog через `search_refcols` (класс имён catalog, не
 колонка qty); BSO/номерабсо отсеиваются без литерала `ТМЦ`. Маркеры вопроса

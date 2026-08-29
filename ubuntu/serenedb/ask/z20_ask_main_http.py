@@ -4434,6 +4434,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 measure = _mq
                 diag["stock_measure_canon"] = _mq
         measure_alts = []
+    if (stock_question_engaged(question, intent)
+            and question_has_aggregate_total_marker(question, intent, plan)
+            and not diag.get("sales_measure_canon")):
+        measure_alts = []
+        diag["stock_skip_measure_clarify"] = True
     if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
             and not diag.get("sales_measure_canon")
             and (not _rank_sales or diag.get("sales_rank_role_ask"))):

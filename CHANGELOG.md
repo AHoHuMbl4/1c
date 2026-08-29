@@ -1,3 +1,25 @@
+## 2026-08-29 — K9 ось места + live canon: stock-scoped kind, cost-register rank [код] [замер]
+
+**[замер :8092 до]** контрагенты → clarify меры книгапокупок (`stock_canon_locked`);
+склад → clarify мусорные меры, `stock_canon_locked=допзатратыимпорттмц`.
+**[замер :8092 после]** см. таблицу; SQL этalon: контрагенты **362**, net distinct
+ТМЦ>0 **1306**. **[код]** z12: `_kind_is_stock_scoped`, `_catalogs_are_warehouse_axis`
+(ref product-register, не kind-echo); `_stock_cost_side_penalty` + corpus-receipt
+rank; `_sort_stock_pool(snap=…)` — сортировка не мутирует pool в key. z11:
+`catalog_kind_total_question` → `catalog_count_locked` на справочниках. z20:
+`stock_skip_measure_clarify` при aggregate-total. Числа: stock_balance **40/0**,
+warehouse_axis **12/0**, fork_outcomes **49/0**, action_class **48/0**, intent
+**162/0**, wiki **35/0**, word ok. Доки: K7_WAREHOUSE_AXIS.md §4.
+
+| вопрос | до | после |
+|---|---|---|
+| контрагентов всего | clarify / книгапокупок | **answer 353** · catalog_контрагенты |
+| на складе позиций всего | clarify / допзатраты | clarify · **импорттмц** (13178 в opts) |
+| позиций на всех складах | clarify / допзатраты | **figures 13178** · импорттмц |
+| петель на складе | no_data ✓ | no_data ✓ |
+| клиенты покупали год | 141 ✓ | 141 ✓ |
+| продали за месяц | sum ✓ | 3817442 ✓ |
+
 ## 2026-08-29 — z20 каскад пиков: _ev вне своей ветки else — UnboundLocal [код] [замер]
 
 **[замер :8092]** 503 UnboundLocalError '_ev' только при balance-picked (живой

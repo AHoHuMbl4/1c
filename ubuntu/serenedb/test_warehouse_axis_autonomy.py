@@ -30,26 +30,28 @@ def t(name, cond, detail=None):
 
 
 src = inspect.getsource(A.warehouse_axis_values)
+src_axis = inspect.getsource(A.axis_catalog_values)
+src_combined = src + src_axis
 
 # ── запрет привязки к конфигурации ──────────────────────────────────────────
 t("нет литерала МестоХранения",
-  "МестоХранения" not in src and "местохранения" not in src.lower())
+  "МестоХранения" not in src_combined and "местохранения" not in src_combined.lower())
 t("нет маски catalog_%мест%хран%",
-  not re.search(r"мест[%_].*хран|хран[%_].*мест", src, re.I)
-  and "мест%%хран" not in src
-  and "мест%хран" not in src)
+  not re.search(r"мест[%_].*хран|хран[%_].*мест", src_combined, re.I)
+  and "мест%%хран" not in src_combined
+  and "мест%хран" not in src_combined)
 t("нет attrs Description как запасного пути",
-  "Description" not in src)
+  "Description" not in src_combined)
 
 # ── штатный путь проекта ────────────────────────────────────────────────────
 t("каталог через entity_form_catalogs_for_kind",
-  "entity_form_catalogs_for_kind" in src)
+  "entity_form_catalogs_for_kind" in src_combined)
 t("ось через search_refcols / target_src",
-  "search_refcols" in src and "target_src" in src)
+  "search_refcols" in src_combined and "target_src" in src_combined)
 t("значения через map_extract_value(refs_map, …)",
-  "map_extract_value" in src and "refs_map" in src)
+  "map_extract_value" in src_combined and "refs_map" in src_combined)
 t("запасной search_refmap по owner",
-  "search_refmap" in src and "owner" in src)
+  "search_refmap" in src_combined and "owner" in src_combined)
 
 # ── поведение clarify (мок, без БД) ──────────────────────────────────────────
 wh = ["Vitrina / 1", "Bubuieci / 2", "Depozit / 3"]
@@ -86,8 +88,12 @@ def _mock_psql(q):
 
 
 A.psql = _mock_psql
+_old_cats_wh = A.entity_form_catalogs_for_kind
+A.entity_form_catalogs_for_kind = lambda w, **kw: ["catalog_wh_demo"]
 try:
-    got = A.warehouse_axis_values(limit=20)
+    got = A.warehouse_axis_values(
+        limit=20, intent={"kind": "номенклатура", "action_axis": "склад"},
+        question="на складе")
     t("мок: два имени с оси refs_map",
       got == ["Alpha WH", "Beta WH"], got)
     t("мок: SQL не содержит МестоХранения",
@@ -95,6 +101,7 @@ try:
       [c[:80] for c in calls[:3]])
 finally:
     A.psql = _real
+    A.entity_form_catalogs_for_kind = _old_cats_wh
 
 
 print()

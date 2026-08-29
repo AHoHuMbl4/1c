@@ -8,6 +8,8 @@ apply_bindings(globals())
 
 _BALANCE_REGS = {"at": 0.0, "set": None}
 _BALANCE_MAP = {"at": 0.0, "rows": None}
+_STOCK_PLACE_AXIS = {"at": 0.0, "set": None}
+_STOCK_PLACE_REF = {"at": 0.0, "set": None}
 
 
 def _intent_period_has_meaning(intent):
@@ -25,6 +27,133 @@ def _catalogs_for_axis_word(word, intent=None, allow_meaning=None):
         return entity_form_catalogs_for_kind(word, allow_meaning=allow_meaning) or []
     except RuntimeError:
         return []
+
+
+def _non_product_ref_targets(targets):
+    """Ref-targets кроме product-catalog и document_* (структурный признак затрат)."""
+    return sum(
+        1 for t in (targets or ())
+        if t and not _is_product_catalog_target(t)
+        and not str(t).startswith("document_"))
+
+
+def _stock_eligible_product_registers():
+    """Product-axis balance-регистры без sales/reversal noise."""
+    try:
+        capable = balance_capable_or_registers()
+    except RuntimeError:
+        return frozenset()
+    product = _stock_registers_with_product_axis(capable)
+    return frozenset(s for s in product if not register_is_balance_noise(s))
+
+
+def _stock_place_axis_catalogs():
+    """Каталоги-оси места: ref на stock-eligible register с product-ref."""
+    now = time.time()
+    if (_STOCK_PLACE_AXIS["set"] is not None
+            and now - _STOCK_PLACE_AXIS["at"] < 300):
+        return _STOCK_PLACE_AXIS["set"]
+    regs = list(_stock_eligible_product_registers())
+    if not regs:
+        _STOCK_PLACE_AXIS.update({"at": now, "set": frozenset()})
+        return frozenset()
+    try:
+        rows = psql(
+            "SELECT DISTINCT r1.target_src FROM search_refcols r1 "
+            "WHERE r1.src_table IN (%s) "
+            "  AND r1.col IS NOT NULL AND r1.col <> '' "
+            "  AND EXISTS ("
+            "    SELECT 1 FROM search_refcols r2 "
+            "    WHERE r2.src_table = r1.src_table "
+            "      AND r2.target_src LIKE 'catalog_%%' "
+            "      AND r2.target_src <> r1.target_src"
+            "  )" % ", ".join(lit(s) for s in regs))
+    except RuntimeError:
+        rows = []
+    got = frozenset(
+        r[0] for r in (rows or []) if r and r[0]
+        and not _is_product_catalog_target(r[0]))
+    _STOCK_PLACE_AXIS.update({"at": now, "set": got})
+    return got
+
+
+def _catalog_on_stock_eligible_register(cat):
+    """Каталог — ref-ось на stock-eligible register с product-ref."""
+    cat = (cat or "").strip()
+    if not cat or _is_product_catalog_target(cat):
+        return False
+    now = time.time()
+    refs = _STOCK_PLACE_REF.get("set")
+    if refs is None or now - _STOCK_PLACE_REF["at"] >= 300:
+        refs = set()
+        _STOCK_PLACE_REF.update({"at": now, "set": refs})
+    if cat in refs:
+        return True
+    regs = list(_stock_eligible_product_registers())
+    if not regs:
+        return False
+    try:
+        hit = psql(
+            "SELECT 1 FROM search_refcols r "
+            "WHERE r.target_src = %s AND r.src_table IN (%s) "
+            "  AND r.col IS NOT NULL AND r.col <> '' LIMIT 1"
+            % (lit(cat), ", ".join(lit(s) for s in regs)))
+    except RuntimeError:
+        return False
+    ok = bool(hit)
+    if ok:
+        refs.add(cat)
+    return ok
+
+
+def _kind_is_stock_scoped(intent, question=""):
+    """Kind относится к остаткам: product-catalog или ось места на stock-register."""
+    intent = intent or {}
+    kind = _intent_text(intent.get("kind"))
+    if not kind:
+        return False
+    has_period = _intent_period_has_meaning(intent)
+    cats = _catalogs_for_axis_word(kind, intent, has_period)
+    if any(_is_product_catalog_target(c) for c in cats):
+        return True
+    place = _stock_place_axis_catalogs()
+    if place and any(c in place for c in cats):
+        return True
+    return any(_catalog_on_stock_eligible_register(c) for c in cats)
+
+
+def _catalogs_are_warehouse_axis(cats, intent=None, kind_cats=None):
+    """Каталог — ось места (ref на product-register), не эхо kind и не product."""
+    intent = intent or {}
+    cats = [c for c in (cats or []) if c and not _is_product_catalog_target(c)]
+    if not cats:
+        return False
+    kind_cats = kind_cats if kind_cats is not None else set()
+    if kind_cats and set(cats) <= kind_cats:
+        return False
+    place = _stock_place_axis_catalogs()
+    if place and any(c in place for c in cats):
+        return True
+    if any(_catalog_on_stock_eligible_register(c) for c in cats):
+        return True
+    if _kind_is_stock_scoped(intent):
+        return True
+    return False
+
+
+def _catalogs_for_warehouse_axis_word(word, intent=None, allow_meaning=None):
+    cats = _catalogs_for_axis_word(word, intent, allow_meaning)
+    if not cats:
+        return []
+    intent = intent or {}
+    kind = _intent_text(intent.get("kind"))
+    has_period = (allow_meaning if allow_meaning is not None
+                  else _intent_period_has_meaning(intent))
+    kind_cats = (set(_catalogs_for_axis_word(kind, intent, has_period))
+                 if kind else set())
+    if _catalogs_are_warehouse_axis(cats, intent, kind_cats):
+        return cats
+    return []
 
 
 def _question_dictionary_axis_candidates(question, intent=None):
@@ -57,21 +186,15 @@ def _question_dictionary_axis_candidates(question, intent=None):
 
 
 def resolved_warehouse_axis_word(question, intent=None):
-    """Ось места: action_axis из разбора или терм вопроса → каталог словаря базы."""
+    """Ось места: ref-ось product-register, не любой резолв kind→catalog."""
     intent = intent or {}
     has_period = _intent_period_has_meaning(intent)
     ax = _intent_text(intent.get("action_axis"))
-    if ax and _catalogs_for_axis_word(ax, intent, has_period):
+    if ax and _catalogs_for_warehouse_axis_word(ax, intent, has_period):
         return ax
-    kind = _intent_text(intent.get("kind"))
-    kind_cats = set(_catalogs_for_axis_word(kind, intent, has_period)) if kind else set()
     for w in _question_dictionary_axis_candidates(question, intent):
-        cats = _catalogs_for_axis_word(w, intent, has_period)
-        if not cats:
-            continue
-        if kind_cats and set(cats) <= kind_cats:
-            continue
-        return w
+        if _catalogs_for_warehouse_axis_word(w, intent, has_period):
+            return w
     return ""
 
 
@@ -187,12 +310,12 @@ def question_asks_stock_balance(question, intent=None, plan=None):
 
 
 def question_mentions_warehouse_axis(question, intent=None, plan=None):
-    """Ось места: action_axis или терм вопроса → каталоги метаданных."""
+    """Ось места: ref-ось product-register, не catalog kind-echo."""
     intent = intent or {}
     ax = resolved_warehouse_axis_word(question, intent)
     if not ax:
         return False
-    return bool(_catalogs_for_axis_word(ax, intent))
+    return bool(_catalogs_for_warehouse_axis_word(ax, intent))
 
 
 def question_has_aggregate_total_marker(question, intent=None, plan=None):
@@ -208,12 +331,18 @@ def question_wants_per_axis_breakdown(question, intent=None, plan=None):
 
 
 def stock_question_engaged(question, intent=None, plan=None):
-    """Stock-path: balance или ось склада с итогом / разрезом."""
+    """Stock-path: product/stock kind или ref-ось места, не справочник kind."""
+    intent = intent or {}
+    plan = plan or {}
+    stock_kind = _kind_is_stock_scoped(intent, question)
+    wh = question_mentions_warehouse_axis(question, intent, plan)
+    if not stock_kind and not wh:
+        return False
     if balance_routing_core(intent, plan, question):
-        return True
+        return stock_kind or wh
     if _stock_intent_signal(intent, plan, question):
-        return True
-    if not question_mentions_warehouse_axis(question, intent, plan):
+        return stock_kind or wh
+    if not wh:
         return False
     return (question_has_aggregate_total_marker(question, intent, plan)
             or question_wants_per_axis_breakdown(question, intent, plan))
@@ -573,8 +702,42 @@ def _stock_product_targets_by_src(pool):
     return {k: frozenset(v) for k, v in out.items()}
 
 
-def _stock_expense_side_penalty(src, pool, corpus_counts, product_targets_by_src):
-    """Та же товарная ось, меньше строк — расходная сторона пары, не canon."""
+def _stock_refs_by_src(pool):
+    pool = list(pool or [])
+    if not pool:
+        return {}
+    try:
+        rows = psql(
+            "SELECT DISTINCT r.src_table, r.target_src FROM search_refcols r "
+            "WHERE r.src_table IN (%s) AND r.col IS NOT NULL AND r.col <> ''"
+            % ", ".join(lit(s) for s in pool))
+    except RuntimeError:
+        return {}
+    out = {}
+    for r in rows or []:
+        if not r or not r[0]:
+            continue
+        out.setdefault(r[0], set()).add((r[1] if len(r) > 1 else "") or "")
+    return out
+
+
+def _stock_cost_side_penalty(src, pool, product_targets_by_src, refs_by_src):
+    """Больше non-product ref при той же товарной оси — затратная сторона."""
+    pt = (product_targets_by_src or {}).get(src) or frozenset()
+    if not pt:
+        return 0
+    my_n = _non_product_ref_targets((refs_by_src or {}).get(src))
+    sibs = [s for s in (pool or []) if s != src
+            and ((product_targets_by_src or {}).get(s) or frozenset()) == pt]
+    if not sibs:
+        return 0
+    min_n = min([my_n] + [_non_product_ref_targets((refs_by_src or {}).get(s))
+                            for s in sibs])
+    return 1 if my_n > min_n else 0
+
+
+def _stock_corpus_receipt_side_penalty(src, pool, corpus_counts, product_targets_by_src):
+    """При той же товарной оси меньше строк корпуса — приход, не затраты (okna live)."""
     pt = (product_targets_by_src or {}).get(src) or frozenset()
     if not pt:
         return 0
@@ -583,8 +746,13 @@ def _stock_expense_side_penalty(src, pool, corpus_counts, product_targets_by_src
             and ((product_targets_by_src or {}).get(s) or frozenset()) == pt]
     if not sibs:
         return 0
-    max_n = max([my_n] + [int((corpus_counts or {}).get(s) or 0) for s in sibs])
-    return 1 if my_n < max_n else 0
+    min_n = min([my_n] + [int((corpus_counts or {}).get(s) or 0) for s in sibs])
+    return 0 if my_n == min_n else 1
+
+
+def _stock_expense_side_penalty(src, pool, corpus_counts, product_targets_by_src):
+    """Corpus-count не различает приход/затраты на okna — см. _stock_cost_side_penalty."""
+    return 0
 
 
 def stock_goods_pool(capable=None, intent=None, question=""):
@@ -639,25 +807,28 @@ def _stock_corpus_counts(pool):
 
 
 def _stock_register_rank_key(src, capable=None, corpus_counts=None,
-                               product_targets_by_src=None, pool=None):
+                               product_targets_by_src=None, pool=None,
+                               refs_by_src=None):
     s = str(src or "").lower()
     cc = corpus_counts or {}
     return (
         1 if stock_balance_is_sales_noise(s) else 0,
         1 if stock_balance_is_reversal_noise(s) else 0,
-        _stock_expense_side_penalty(src, pool, cc, product_targets_by_src),
+        _stock_cost_side_penalty(src, pool, product_targets_by_src, refs_by_src),
+        _stock_corpus_receipt_side_penalty(src, pool, cc, product_targets_by_src),
         0 if capable and src in capable else 1,
         0 if s.startswith("accumulationregister_") else 1,
-        -int(cc.get(src) or 0),
         s)
 
 
 def _sort_stock_pool(pool, capable=None):
     pool = list(pool or [])
+    snap = list(pool)
     counts = _stock_corpus_counts(pool)
     pt_map = _stock_product_targets_by_src(pool)
+    refs_map = _stock_refs_by_src(pool)
     pool.sort(key=lambda s: _stock_register_rank_key(
-        s, capable, counts, pt_map, pool))
+        s, capable, counts, pt_map, snap, refs_map))
     return pool
 
 

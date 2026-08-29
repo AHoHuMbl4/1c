@@ -302,9 +302,14 @@ _ord_place = [
 ]
 _stock_intent = {"want": "count", "kind": "номенклатура", "action_class": "object",
                  "action_axis": "склад"}
+_old_cats_fork = A.entity_form_catalogs_for_kind
+A.entity_form_catalogs_for_kind = lambda w, **kw: (
+    ["catalog_склады"] if str(w or "").lower().startswith("склад")
+    else ["catalog_номенклатура"])
 t("clarify axis: stock question → place",
   A._fork_clarify_axis_kind(_ord_place, "Сколько товара на складе?",
                             intent=_stock_intent) == "place")
+A.entity_form_catalogs_for_kind = _old_cats_fork
 _old_wh = A.warehouse_axis_values
 A.warehouse_axis_values = lambda limit=20: ["Склад A", "Склад B"]
 _popts_wh = A._fork_clarify_opts(_ord_place,
