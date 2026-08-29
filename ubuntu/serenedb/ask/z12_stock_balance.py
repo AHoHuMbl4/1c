@@ -70,8 +70,11 @@ _WAREHOUSE_AXIS_MARKERS = (
 # Класс маркеров итога без разреза (ru+en), не список фраз конкретного диалога.
 _AGGREGATE_TOTAL_MARKERS = (
     "всего", "итого", "итог ", " overall", " in total", " total ",
-    "grand total",
+    "grand total", "на всех", " together", " altogether",
 )
+
+# «вместе» — итог только при оси места хранения (не «работаем вместе»).
+_AGGREGATE_TOGETHER_MARKERS = ("вместе", " together")
 
 # Класс явного разреза «пo каждому …» (ru+en), не привязка к оси склада.
 _PER_AXIS_BREAKDOWN_MARKERS = (
@@ -104,7 +107,21 @@ def question_has_aggregate_total_marker(question, intent=None, plan=None):
         return False
     if any(m in q for m in _RANK_NOT_AGGREGATE):
         return False
-    return any(m in q for m in _AGGREGATE_TOTAL_MARKERS)
+    if any(m in q for m in _AGGREGATE_TOTAL_MARKERS):
+        return True
+    if question_mentions_warehouse_axis(question):
+        return any(m in q for m in _AGGREGATE_TOGETHER_MARKERS)
+    return False
+
+
+def stock_question_engaged(question, intent=None, plan=None):
+    """Stock-path: остатки или ось склада с суммарным итогом / явным разрезом."""
+    if question_asks_stock_balance(question):
+        return True
+    if not question_mentions_warehouse_axis(question):
+        return False
+    return (question_has_aggregate_total_marker(question, intent, plan)
+            or question_wants_per_axis_breakdown(question, intent, plan))
 
 
 def question_wants_per_axis_breakdown(question, intent=None, plan=None):
@@ -136,10 +153,9 @@ def stock_skips_warehouse_clarify(question, intent=None, plan=None):
         return True
     if question_wants_per_axis_breakdown(question, intent, plan):
         return True
-    if stockish:
-        q = " ".join(str(question or "").lower().split())
-        if any(w in q for w in ("всех", "всеми", "all warehouses", "all stocks")):
-            return True
+    q = " ".join(str(question or "").lower().split())
+    if q and any(w in q for w in ("всех", "всеми", "all warehouses", "all stocks")):
+        return True
     return False
 
 

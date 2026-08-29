@@ -2392,9 +2392,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         counts_for_model = entity_pick_counts_for_model(
             by, diag, intent, question)
         шаг("K6 v2", кандидатов=len(cands))
-    if (question_asks_stock_balance(question)
-            or (question_mentions_warehouse_axis(question)
-                and question_wants_per_axis_breakdown(question, intent))):
+    if stock_question_engaged(question, intent):
         capable = balance_capable_or_registers()
         cands = filter_stock_balance_sales_noise(cands, question, diag)
         named = stock_asks_named_product(question, intent)

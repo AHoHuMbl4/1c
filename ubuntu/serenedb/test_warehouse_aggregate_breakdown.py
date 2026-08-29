@@ -28,6 +28,7 @@ def t(name, cond, detail=None):
 
 
 Q_TOTAL = "сколько на складе позиций всего?"
+Q_ALL_TOGETHER = "Сколько позиций на всех складах вместе?"
 Q_EACH = "Покажите остатки по каждому складу отдельно"
 Q_LIST = "Покажите список складов с количеством позиций по каждому"
 Q_PLAIN = "Сколько осталось на складе?"
@@ -37,6 +38,12 @@ t("«всего»: aggregate marker",
   A.question_has_aggregate_total_marker(Q_TOTAL))
 t("«всего»: skip warehouse clarify",
   A.stock_skips_warehouse_clarify(Q_TOTAL))
+t("«на всех вместе»: aggregate marker",
+  A.question_has_aggregate_total_marker(Q_ALL_TOGETHER))
+t("«на всех вместе»: stock path engaged",
+  A.stock_question_engaged(Q_ALL_TOGETHER))
+t("«на всех вместе»: skip warehouse clarify",
+  A.stock_skips_warehouse_clarify(Q_ALL_TOGETHER))
 t("plain stock: НЕ skip clarify",
   not A.stock_skips_warehouse_clarify(Q_PLAIN))
 t("rank «больше всего»: не aggregate marker",

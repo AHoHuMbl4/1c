@@ -65,7 +65,7 @@ Sql › Statements › SELECT › ORDER BY, LIMIT.
 | замок | результат |
 |---|---|
 | `test_warehouse_axis_autonomy.py` (новый) | **12/0** |
-| `test_warehouse_aggregate_breakdown.py` (29.08) | **20/0** |
+| `test_warehouse_aggregate_breakdown.py` (29.08) | **23/0** |
 | `test_k4_axis_and_names.py` | **11/0** |
 | `test_k4_guess_vs_clarify.py` | **13/0** |
 | `test_k4_meta_names.py` | **12/0** |
@@ -79,6 +79,10 @@ Sql › Statements › SELECT › ORDER BY, LIMIT.
 Замок падает, если в `warehouse_axis_values` снова появится литерал
 реквизита / маска таблицы / `Description`, или пропадёт путь через
 `entity_form_catalogs_for_kind` + `search_refcols` + `search_refmap`.
+
+**29.08 (доп.):** класс агрегата (`всего`, `на всех`, `вместе`+ось склада) →
+`stock_skips_warehouse_clarify`; `stock_question_engaged` — stock-path без
+маркера «остат*» (Q «на всех складах вместе» не уходит в count каталога).
 
 ---
 

@@ -10,6 +10,20 @@ unit, Caddyfile) — отсутствие = `die`; копирование css б
 13.08, установка пропустила css из-за `if [ -f ]`). Доки: ubuntu/open-webui/README.md
 §«Приёмка» / брендинг.
 
+## 2026-08-29 — K7: «на всех … вместе» — stock-path без «остат*», не каталог [код]
+
+**[код]** z12: класс агрегата расширен (`на всех`, `вместе` при оси склада,
+`together`/`altogether`); `stock_question_engaged` — вход в stock-path для
+warehouse+итог/разрез без маркера остатков; `stock_skips_warehouse_clarify`:
+«всех» снимает развилку и без «остат*». z20:9322 — `stock_question_engaged`.
+Корень: «Сколько позиций на всех складах вместе?» шло в count каталога
+номенклатуры (2384≈2389), не в остатки. Числа: warehouse_aggregate **23/0**;
+fork_outcomes 49/0; fork_detector 52/0; calendar_axis 42/0; intent 162/0;
+k4_clarify 27/0; fork_window 44/0; fork_label_daybasis 13/0;
+warehouse_axis 12/0; stock_balance_path 27/0. Эталон остатков okna:
+**1306** позиций с net>0 (импорт−расход по ТМЦ), не 2389 номенклатуры.
+Доки: K7_WAREHOUSE_AXIS.md §4.
+
 ## 2026-08-29 — K7: список складов без stock-маркера — итог+люк, не no_data [код]
 
 **[код]** z12: класс `_WAREHOUSE_AXIS_MARKERS` (склад/warehouse/…); `stock_skips_warehouse_clarify`
