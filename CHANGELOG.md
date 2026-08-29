@@ -18422,3 +18422,17 @@ EMBED_CHUNKS_PER_ROUND чанков, умолчание 400); embed_missing.sh �
 секреты этапом, tick_status в /health. Замеры для спеки: SET GLOBAL слетает
 при рестарте; TEMPORARY-секреты умирают; такт Restart=no. Доки: PLAN_WIKI_CHOICE
 §6-7, activeContext.
+
+## 2026-08-29 — О5 первые механизмы на окне (п.0): Restart такта, wal при старте, секреты [код]
+
+**[код, окно gpu-erw]** (1) юнит такта `1c-serene-pipeline@.service`:
+`Restart=on-failure` + `RestartSec=300` (был no — упавший такт лежал молча
+до следующего пакета); (2) `serenedb.service`: `ExecStartPost` → `SET GLOBAL
+wal_autocheckpoint=512MB` при каждом старте движка (CLI-флага НЕТ — живая
+проверка `--help`: Unknown flag; SET слетает при рестарте — замер); в
+serened.conf строка НЕ вносилась (уронила бы старт); (3) персистентные
+секреты: emb_postgres_0/1 + qwen = **3** в базе (переживают рестарт;
+TEMPORARY умирают — замер). Бэкапы юнитов: /tmp/pipeline-unit.bak,
+/tmp/serenedb-unit.bak; скрипт секретов /tmp/mk2sec.sh. Остаток О5: этап
+секретов при установке, tick_status в /health. Числа: 3 секрета,
+Restart=on-failure/300с. Доки: PLAN_WIKI_CHOICE §7.
