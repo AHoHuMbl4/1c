@@ -405,6 +405,58 @@ t("смена даты память обновляет", memo_calls(d2="2026-08-
 _m3, _m4, _ = memo_calls()
 t("из памяти отдаётся копия, а не общий объект", _m1 is not _m2)
 
+# --------------------------------------------------------- разговорный вопрос о делах (K4 §3.6 №16)
+def with_business_topics(fn):
+    """Псевдо-база: business-алиасы с темой продаж."""
+    def fake_psql(sql):
+        if "search_entity_class" in sql or "search_entity_alias" in sql:
+            return [["продажи, реализация", "продажи товаров"],
+                    ["закупки", "закупка материалов"]]
+        return []
+
+    real = A.psql
+    A.psql = fake_psql
+    try:
+        return fn()
+    finally:
+        A.psql = real
+
+
+t("разговорный «как дела» без тем базы — want=list",
+  ok_parse('{"want": "list", "terms": []}',
+           question="Как у нас дела?")["want"] == "list")
+t("разговорный «как дела» с темами базы → want=count для переспроса",
+  with_business_topics(lambda: ok_parse(
+      '{"want": "list", "terms": []}',
+      question="Как у нас дела?")["want"] == "count"))
+t("разговорный «как дела» — темы базы в parse",
+  with_business_topics(lambda: "продажи"
+      in (ok_parse('{"want": "list"}', question="Как у нас дела?")
+          ["parse"].get("conversational_topics") or [])))
+t("разговорный «как дела» — метка обогащения",
+  "conversational:count" in with_business_topics(lambda: ok_parse(
+      '{"want": "list"}', question="Как у нас дела?")["parse"]["fixed"]))
+t("президент — не разговорный mood",
+  not A.conversational_business_vague(
+      {"want": "list", "terms": []}, "Кто сейчас президент России?"))
+t("президент — разбор не обогащается",
+  ok_parse('{"want": "list", "terms": []}',
+           question="Кто сейчас президент России?")["want"] == "list")
+t("стих — не разговорный mood",
+  not A.conversational_business_vague(
+      {"want": "list", "kind": "склад"},
+      "Напиши стих про наш склад"))
+t("стих — не ждёт учётных данных (K4 B8)",
+  not A.question_expects_accounting_data(
+      {"kind": "склад"}, "Напиши стих про наш склад", {}))
+t("президент — не ждёт учётных данных (K4 B11)",
+  not A.question_expects_accounting_data(
+      {"want": "list"}, "Кто сейчас президент России", {}))
+t("«как дела» после обогащения — учётный вопрос",
+  with_business_topics(lambda: A.question_expects_accounting_data(
+      ok_parse('{"want": "list"}', question="Как у нас дела?"),
+      "Как у нас дела?", {})))
+
 # --------------------------------------------------------- выход шага 1 годен для шагов 2-5
 # Свойство целиком: что бы ни прислала модель, потребители разбора работают без падения.
 RAW_CASES = [

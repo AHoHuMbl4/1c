@@ -205,6 +205,158 @@ def _stem_set(v):
     return {p.strip().strip('"') for p in s.split(",") if p.strip()}
 
 
+_NON_DATA_MARKERS = (
+    "напиши", "расскаж", "стих", "poem", "шутк", "анекдот", "придумай",
+    "сочини", "опиши красив", "рифм",
+)
+
+# Разговорный «как …» (how), не «кто/что …» (who/what) — грамматический класс,
+# не список предметных слов.
+_CONVERSATIONAL_HOW = re.compile(
+    r"(?:^|[\s,.;:!?«\"(])как(?:[\s,.;:!?»\")]|$)", re.I | re.U)
+
+
+def _creative_non_data_question(question):
+    q = " ".join(str(question or "").lower().split())
+    return bool(q) and any(m in q for m in _NON_DATA_MARKERS)
+
+
+def _intent_coordinates_empty(intent):
+    """Нет значений, величины и числового порога — только форма вопроса."""
+    if not isinstance(intent, dict):
+        return False
+    if intent.get("terms"):
+        return False
+    if _intent_text(intent.get("measure")):
+        return False
+    amt = intent.get("amount") or {}
+    if amt.get("op") and amt.get("value") is not None:
+        return False
+    if not amt.get("op") and amt.get("value") is not None:
+        return False
+    return True
+
+
+def _base_business_topic_words(limit=5):
+    """Живые учётные темы ЭТОЙ базы — ярлыки business-сущностей слоя поиска.
+
+    Источник: `search_entity_alias` × `search_entity_class.cls=business`, не
+    зашитый перечень «продажи/остатки». Без базы (офлайн) — пусто: переспрос
+  не поднимаем без доказанных тем (п. 12).
+    """
+    lim = max(1, min(int(limit or 5), 12))
+    topics, seen = [], set()
+    try:
+        rows = psql(
+            "SELECT DISTINCT ON (a.src_table) a.aliases, a.best_used_for "
+            "FROM search_entity_alias a "
+            "INNER JOIN %s c ON c.src_table = a.src_table AND c.cls = 'business' "
+            "WHERE coalesce(a.aliases, '') <> '' "
+            "   OR coalesce(a.best_used_for, '') <> '' "
+            "ORDER BY a.src_table LIMIT %d"
+            % (CLASS_TABLE, lim * 4))
+    except RuntimeError:
+        return []
+    for row in rows or []:
+        for raw in (row[1], row[0]) if len(row) > 1 else (row[0],):
+            for part in re.split(r"[,;|/]", str(raw or "")):
+                w = part.strip()
+                key = w.lower()
+                if len(w) < 3 or key in seen:
+                    continue
+                seen.add(key)
+                topics.append(w)
+                if len(topics) >= lim:
+                    return topics
+    return topics
+
+
+def conversational_business_vague(intent, question):
+    """Разговорный вопрос о делах компании без координат учёта.
+
+    Отличается от внешнего факта («кто президент») классом вопроса how, не who,
+    и от творческого запроса маркерами содержания. Именованный род записей,
+    которого база не знает, — не «как дела», а чужая тема (no_data).
+    """
+    if _creative_non_data_question(question):
+        return False
+    if not isinstance(intent, dict):
+        return False
+    if (intent.get("about") or "data") != "data":
+        return False
+    want = (intent.get("want") or "list").strip().lower()
+    if want not in ("list", ""):
+        return False
+    if not _intent_coordinates_empty(intent):
+        return False
+    if _intent_text(intent.get("kind")):
+        return False
+    ac = (intent.get("action_class") or "none").strip().lower()
+    if ac in ("event", "object"):
+        return False
+    if _intent_text(intent.get("action_axis")):
+        return False
+    q = " ".join(str(question or "").split())
+    return bool(_CONVERSATIONAL_HOW.search(q))
+
+
+def _enrich_conversational_business(intent, question):
+    """Разговорный вопрос с темами базы → координата для переспроса, не no_data.
+
+    want=count без kind/terms — штатный путь `serene_enough.verdict_before`
+    (уточнение темы/периода), а `question_expects_accounting_data` пропускает
+    вопрос дальше non_accounting_question.
+    """
+    if not conversational_business_vague(intent, question):
+        return intent
+    topics = _base_business_topic_words(3)
+    if not topics:
+        return intent
+    out = dict(intent)
+    parse = dict(out.get("parse") or {})
+    parse["conversational_topics"] = topics
+    parse["fixed"] = list(parse.get("fixed") or []) + ["conversational:count"]
+    out["parse"] = parse
+    out["want"] = "count"
+    return out
+
+
+def question_expects_accounting_data(intent, question, diag=None):
+    """Вопрос про учётные данные, а не off-topic / творческий запрос (K4-2).
+
+    Разговорный «как дела» с живыми business-темами базы — учётный (переспрос),
+    внешний факт без темы в базе и творческий запрос — нет.
+    """
+    diag = diag or {}
+    intent = intent or {}
+    q = " ".join(str(question or "").lower().split())
+    if not q:
+        return False
+    if _creative_non_data_question(question):
+        return False
+    want = (intent.get("want") or "").strip().lower()
+    if want in ("count", "sum", "max", "min", "avg"):
+        return True
+    if want == "list":
+        if (intent.get("kind") or "").strip() or intent.get("terms"):
+            return True
+    elif want:
+        return True
+    if intent.get("terms"):
+        return True
+    if diag.get("sales_canon_locked") or diag.get("sales_measure_canon"):
+        return True
+    if sales_sum_intent(intent, question) or rank_question_text(question):
+        return True
+    if question_asks_stock_balance(question):
+        return True
+    if re.search(r"\b(сколько|покажи|дай|топ|сумм|выруч|продаж|остат|заказ)\b", q):
+        return True
+    if conversational_business_vague(intent, question) and _base_business_topic_words(1):
+        return True
+    return False
+
+
 def _base_knows_kind_or_measure(word):
     """Знает ли ЭТА база слово родом записей или именем величины.
 
@@ -485,7 +637,7 @@ def parse_intent(question, today):
         if len(_INTENT_MEMO) >= INTENT_MEMO:
             _INTENT_MEMO.clear()
         _INTENT_MEMO[memo_key] = json.dumps(out, ensure_ascii=False)
-    return out
+    return _enrich_conversational_business(out, question)
 
 
 def _first_intent_object(raw):

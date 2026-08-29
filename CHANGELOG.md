@@ -1,3 +1,13 @@
+## 2026-08-29 — K4 №16: «Как у нас дела?» — переспрос вместо non_accounting [код]
+
+**[код]** Разговорный how-вопрос без координат учёта при живых business-темах
+базы (`search_entity_alias` × `search_entity_class`) обогащает разбор:
+`want=count` + `parse.conversational_topics` → проходит
+`question_expects_accounting_data` и `serene_enough.verdict_before`
+(уточнение темы), а не `non_accounting_question`. Внешний who-вопрос и
+творческий запрос без тем — прежний no_data. **Доказано:** `test_intent.py`
+150/0, `test_k4_clarify_vs_nodata.py` 27/0.
+
 ## 2026-08-28 — «Покупатели» дошли до боя: 43 · Контрагенты по эталону [замер]
 
 **[замер]** Цепочка роли-слов замкнулась живым ответом. Четвёртый прогон

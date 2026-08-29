@@ -330,6 +330,12 @@ python3 ab_scorer.py
   стал no_data (`non_accounting_question`). Для человека no_data честнее
   мусорного clarify, но набор ждёт уточнения «про продажи?» — остаётся
   в провалах до решения по «у нас/дела»-классу.
+- **[код 29.08]** `ask/z02_intent.py`: разговорный how-вопрос без координат
+  при живых business-темах базы (`search_entity_alias` ×
+  `search_entity_class`) обогащает разбор (`want=count`,
+  `parse.conversational_topics`) → переспрос через `serene_enough`, не
+  `non_accounting_question`. Замки: `test_intent.py` 150/0,
+  `test_k4_clarify_vs_nodata.py` 27/0. Живой прогон okna — после выката.
 - Регрессий против §9 нет: №4/№5/№7/№8/№12 падали так же и до патча 3.
 
 ### 10.3. Вывод
