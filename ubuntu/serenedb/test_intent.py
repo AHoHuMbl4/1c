@@ -422,6 +422,32 @@ def with_business_topics(fn):
         A.psql = real
 
 
+_BASE_KNOWN_KINDS = frozenset({
+    "продажи", "реализация", "закупки", "закупка", "клиенты", "склад",
+})
+
+
+def with_base_knows(fn):
+    """Словарь базы знает только учётные темы, не галлюцинации модели."""
+
+    def fake_knows(word):
+        w = (word or "").strip().lower()
+        if not w:
+            return True
+        return w in _BASE_KNOWN_KINDS
+
+    real = A._base_knows_kind_or_measure
+    A._base_knows_kind_or_measure = fake_knows
+    try:
+        return fn()
+    finally:
+        A._base_knows_kind_or_measure = real
+
+
+def with_business_topics_and_base(fn):
+    return with_business_topics(lambda: with_base_knows(fn))
+
+
 t("разговорный «как дела» без тем базы — want=list",
   ok_parse('{"want": "list", "terms": []}',
            question="Как у нас дела?")["want"] == "list")
@@ -456,6 +482,38 @@ t("«как дела» после обогащения — учётный воп
   with_business_topics(lambda: A.question_expects_accounting_data(
       ok_parse('{"want": "list"}', question="Как у нас дела?"),
       "Как у нас дела?", {})))
+
+_LLM_HALLUC = ('{"want": "list", "kind": "дела", "action_class": "event",'
+               '"action_axis": "компания", "terms": []}')
+t("разговорный «как дела» — незнакомый kind модели не гасит vague",
+  with_base_knows(lambda: A.conversational_business_vague(
+      {"want": "list", "terms": [], "kind": "дела"},
+      "Как у нас дела?")))
+t("разговорный «как дела» — action_class event без опоры в базе не гасит vague",
+  with_base_knows(lambda: A.conversational_business_vague(
+      {"want": "list", "terms": [], "action_class": "event",
+       "action_axis": "компания", "kind": "дела"},
+      "Как у нас дела?")))
+t("разговорный «как дела» — about=coverage модели не гасит vague",
+  with_base_knows(lambda: A.conversational_business_vague(
+      {"want": "list", "terms": [], "about": "coverage", "kind": "дела"},
+      "Как у нас дела?")))
+t("разговорный «как дела» — want=count модели без опоры не гасит vague",
+  with_base_knows(lambda: A.conversational_business_vague(
+      {"want": "count", "terms": [], "kind": "дела"},
+      "Как у нас дела?")))
+t("как дела с продажами — известный kind гасит vague",
+  with_base_knows(lambda: not A.conversational_business_vague(
+      {"want": "list", "terms": [], "kind": "продажи"},
+      "Как у нас дела с продажами?")))
+t("разговорный «как дела» 3 samples с галлюцинацией модели → want=count",
+  with_business_topics_and_base(lambda: ok_parse(
+      _LLM_HALLUC, _LLM_HALLUC, _LLM_HALLUC,
+      question="Как у нас дела?", samples=3)["want"] == "count"))
+t("разговорный «как дела» 3 samples — conversational:count в parse",
+  "conversational:count" in with_business_topics_and_base(lambda: ok_parse(
+      _LLM_HALLUC, _LLM_HALLUC, _LLM_HALLUC,
+      question="Как у нас дела?", samples=3)["parse"]["fixed"]))
 
 # --------------------------------------------------------- выход шага 1 годен для шагов 2-5
 # Свойство целиком: что бы ни прислала модель, потребители разбора работают без падения.

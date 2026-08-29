@@ -221,13 +221,40 @@ def _creative_non_data_question(question):
     return bool(q) and any(m in q for m in _NON_DATA_MARKERS)
 
 
+def _accounting_word_known_to_base(word):
+    """Слово — род или величина, которые ЭТА база знает (не метка модели)."""
+    w = (word or "").strip()
+    if not w:
+        return False
+    return _base_knows_kind_or_measure(w)
+
+
+def _intent_has_known_accounting_anchor(intent):
+    """Учётная опора в интенте: значения, род или ось, известные словарю базы."""
+    if not isinstance(intent, dict):
+        return False
+    if intent.get("terms"):
+        return True
+    kind = _intent_text(intent.get("kind"))
+    if kind and _accounting_word_known_to_base(kind):
+        return True
+    axis = _intent_text(intent.get("action_axis"))
+    if axis and _accounting_word_known_to_base(axis):
+        return True
+    measure = _intent_text(intent.get("measure"))
+    if measure and _accounting_word_known_to_base(measure):
+        return True
+    return False
+
+
 def _intent_coordinates_empty(intent):
     """Нет значений, величины и числового порога — только форма вопроса."""
     if not isinstance(intent, dict):
         return False
     if intent.get("terms"):
         return False
-    if _intent_text(intent.get("measure")):
+    measure = _intent_text(intent.get("measure"))
+    if measure and _accounting_word_known_to_base(measure):
         return False
     amt = intent.get("amount") or {}
     if amt.get("op") and amt.get("value") is not None:
@@ -282,22 +309,32 @@ def conversational_business_vague(intent, question):
         return False
     if not isinstance(intent, dict):
         return False
-    if (intent.get("about") or "data") != "data":
-        return False
+    q = " ".join(str(question or "").split())
+    conv_how = bool(_CONVERSATIONAL_HOW.search(q))
+    about = (intent.get("about") or "data").strip().lower()
+    if about != "data":
+        # coverage от модели на разговорном «как …» без координат — догадка (п. 12).
+        if not (conv_how
+                and _intent_coordinates_empty(intent)
+                and not _intent_has_known_accounting_anchor(intent)):
+            return False
     want = (intent.get("want") or "list").strip().lower()
     if want not in ("list", ""):
-        return False
+        # want модели без учётных координат не гасит разговорный переспрос.
+        if _intent_has_known_accounting_anchor(intent) or not _intent_coordinates_empty(intent):
+            return False
     if not _intent_coordinates_empty(intent):
         return False
-    if _intent_text(intent.get("kind")):
+    kind = _intent_text(intent.get("kind"))
+    if kind and _accounting_word_known_to_base(kind):
         return False
     ac = (intent.get("action_class") or "none").strip().lower()
-    if ac in ("event", "object"):
+    if ac in ("event", "object") and _intent_has_known_accounting_anchor(intent):
         return False
-    if _intent_text(intent.get("action_axis")):
+    axis = _intent_text(intent.get("action_axis"))
+    if axis and _accounting_word_known_to_base(axis):
         return False
-    q = " ".join(str(question or "").split())
-    return bool(_CONVERSATIONAL_HOW.search(q))
+    return conv_how
 
 
 def _enrich_conversational_business(intent, question):
