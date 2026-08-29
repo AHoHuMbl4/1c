@@ -10,6 +10,10 @@ import json
 import os
 from pathlib import Path
 import re
+
+# Каталог пакета ask (serene_ask.py, *.sql, *.json). Зоны исполняются exec в namespace
+# serene_ask, где __file__ — не путь зоны; ресурсы только через ASK_ROOT.
+ASK_ROOT = Path(__file__).resolve().parent.parent
 import secrets
 import subprocess
 import sys

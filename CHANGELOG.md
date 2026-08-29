@@ -1,3 +1,12 @@
+## 2026-08-29 — ASK_ROOT: путь к SQL/JSON из пакета, не __file__ зоны [код]
+
+**[замер :8092]** 503 FileNotFoundError при живом файле: зоны исполняются
+exec в namespace serene_ask.py → `__file__` чужой, `Path(__file__).parent.parent`
+давал /opt вместо /opt/1c-mcp-reports. **[код]** `ASK_ROOT` в _imports (настоящий
+__file__ пакета); z21 SQL гибрида, z03/z04 JSON-fallback, z20 journal_code_md5 —
+через ASK_ROOT. Замок zone_names **95/0**: запрет `__file__` в телах зон +
+существование wiki_card_hybrid.sql от ASK_ROOT. Доки: CHANGELOG.
+
 ## 2026-08-29 — deploy-ask возит wiki_card SQL (FileNotFoundError на окне) [код]
 
 **[замер окно]** z21 на :8092 падал 503 FileNotFoundError: выкат ask возил

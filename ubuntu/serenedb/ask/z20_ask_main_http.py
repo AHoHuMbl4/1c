@@ -5519,7 +5519,7 @@ def _journal_code_md5():
     global _JOURNAL_CODE_MD5
     if _JOURNAL_CODE_MD5 is None:
         h = hashlib.md5()
-        with open(os.path.abspath(__file__), "rb") as fh:
+        with open(ASK_ROOT / "serene_ask.py", "rb") as fh:
             h.update(fh.read())
         _JOURNAL_CODE_MD5 = h.hexdigest()
     return _JOURNAL_CODE_MD5

@@ -106,8 +106,7 @@ def calendar_day_basis_phrases():
         got = {}
     if not got:
         try:
-            p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                             "calendar_day_basis_phrases.json")
+            p = str(ASK_ROOT / "calendar_day_basis_phrases.json")
             with open(p, encoding="utf-8") as f:
                 parsed = json.load(f)
             if isinstance(parsed, dict):

@@ -145,6 +145,35 @@ def _exec_zone_stmts(path: Path, stmts: list[ast.stmt], ns: dict) -> None:
     exec(code, ns)  # noqa: S102
 
 
+def _collect_file_refs(stmts: list[ast.stmt]) -> list[int]:
+    """Строки тел зон, где читают __file__ (exec-namespace = serene_ask, не зона)."""
+    hits: list[int] = []
+
+    class V(ast.NodeVisitor):
+        def visit_Name(self, node: ast.Name) -> None:
+            if node.id == "__file__" and isinstance(node.ctx, ast.Load):
+                hits.append(node.lineno)
+            self.generic_visit(node)
+
+    for node in stmts:
+        V().visit(node)
+    return hits
+
+
+def _self_check_file_ref_red_case() -> None:
+    src = "p = Path(__file__).resolve()\n"
+    tree = ast.parse(src)
+    hits = _collect_file_refs(tree.body)
+    t("self-check red: __file__ in zone body", bool(hits), repr(hits))
+
+
+def _self_check_file_ref_green_case() -> None:
+    src = "p = ASK_ROOT / 'wiki_card_hybrid.sql'\n"
+    tree = ast.parse(src)
+    hits = _collect_file_refs(tree.body)
+    t("self-check green: ASK_ROOT path (no __file__)", not hits, repr(hits))
+
+
 def _self_check_red_case() -> None:
     """Синтетический header с локальным import — красный кейс для детектора."""
     header = textwrap.dedent(
@@ -182,6 +211,23 @@ def main() -> int:
 
     t("zones with own header imports (expect 0)", zones_with_header_imports == 0)
 
+    import ask._imports as imp
+
+    t(
+        "ASK_ROOT/wiki_card_hybrid.sql exists",
+        (imp.ASK_ROOT / "wiki_card_hybrid.sql").is_file(),
+        str(imp.ASK_ROOT / "wiki_card_hybrid.sql"),
+    )
+
+    for path in zone_files:
+        stmts, _, _ = _zone_body_slice(path)
+        file_hits = _collect_file_refs(stmts)
+        t(
+            f"no __file__ in body {path.name}",
+            not file_hits,
+            ", ".join(f"L{n}" for n in file_hits),
+        )
+
     imp_ns = _imports_namespace()
     zone_defined = _all_zone_defined_names(zone_files)
     avail = set(imp_ns) | set(dir(__builtins__)) | zone_defined | {"__file__", "__name__"}
@@ -213,6 +259,8 @@ def main() -> int:
     except NameError as exc:
         t("load_all completes", False, str(exc))
 
+    _self_check_file_ref_red_case()
+    _self_check_file_ref_green_case()
     _self_check_red_case()
 
     print(f"\n{PASS} passed, {len(FAIL)} failed")

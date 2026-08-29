@@ -18,9 +18,7 @@ _HYBRID_SQL = None
 def _wiki_hybrid_sql():
     global _HYBRID_SQL
     if _HYBRID_SQL is None:
-        _HYBRID_SQL = (
-            Path(__file__).resolve().parent.parent / "wiki_card_hybrid.sql"
-        ).read_text(encoding="utf-8")
+        _HYBRID_SQL = (ASK_ROOT / "wiki_card_hybrid.sql").read_text(encoding="utf-8")
     return _HYBRID_SQL
 
 WIKI_PICK_SYS = """Map the user's question to one numbered entity card, or 0.
