@@ -26,7 +26,8 @@ Ubuntu LXC (наш, всё loopback):
   OData-шлюз :6011 (только GET) ──► serene_sync ──► витрина SereneDB :7890
                                        └─► build.sh ──► корпус + инвертированный индекс
   OpenClaw-бот :18800 (юзер undebot) ── serene_ask :8091 ──► индекс SereneDB (отбор) + база (счёт)
-     Telegram ◄─── тон; наружу временно DeepSeek (п. 16)
+     🔴 Telegram-профиль :18800 остановлен+disable 29.08 (решение владельца;
+     фронт — веб baulogistic через :18801, см. ubuntu/open-webui/README.md)
      → verify-плагин (ГЕЙТ КОДОМ: числа сверяет, внутреннее режет) → ответ клиенту
 ```
 
@@ -45,7 +46,7 @@ Ubuntu LXC (наш, всё loopback):
 | — | **`1c-serene-pipeline.timer`** (по готовности) | `pipeline.sh` | root | 🟢 **боевой такт**: раскладка кода → синк-дельта → сборка. Понятия «ночной» нет (п. 17). **с 18.08** юнит `Restart=on-failure` (3 мин, 5/час), форма `EMBED_HOST` до синка |
 | — | **`1c-serene-index.timer`** (`OnUnitActiveSec=20min`, `disabled`) | `build.sh` | root | ⚠ **таймер остановлен 28.07.** Сборка — штатный `build.sh`; живой юнит переключён 28.07. Таймер выключен: такт у `1c-serene-pipeline`. Раскатывать **`ubuntu/systemd/1c-serene-index.service`** (единственная копия; двойник в serenedb/systemd удалён Э5). Контроль: `test_systemd_execstart_lock.py`; см. §10.6 |
 | `127.0.0.1:6015` | `1c-mcp-reports` | `mcp_reports.py` | root | ⚠ `report_1c` (NL→SQL) — **выведен из контура**, юнит ещё жив |
-| `127.0.0.1:18800` | `openclaw-gateway` (**user**-юнит) | `node …/openclaw` | **undebot** | бот: Telegram + тон; egress — временно DeepSeek (п. 16) + verify-гейт |
+| `127.0.0.1:18800` | `openclaw-gateway` (**user**-юнит) | `node …/openclaw` | **undebot** | 🔴 **okna-прод: остановлен и disable 29.08** — телеграм выведен из контура решением владельца (возврат: `systemctl --user enable --now openclaw-gateway`); рабочий фронт — веб :18801 |
 | — | `1c-bot-monitor.timer` (каждые 3 мин) | `bot_health_check.sh` + `tact_watch.sh` | root | алерт владельцу в Telegram при падении; **с 18.08** ещё: firstbuild/pipeline в `failed` дольше `TACT_FAIL_MAX_MIN` (умолч. 15 мин) |
 | — | `nightly-eval.timer` | `nightly-eval.sh` | root | ⛔ **погашен 29.07**: гонял евал выведенного слоя braine и слал алерт владельцу **с боевого токена бота**. Поднимать не надо |
 

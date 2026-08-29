@@ -32,13 +32,26 @@
 
 ## Механика дня (проверено живьём)
 
+- **Контур бота 29.08 (всё проверено живьём, разбор — INSTALL_LOG §29.08)**:
+  рабочий фронт — **веб** baulogistic → `http://10.3.1.11:18801/v1` (LXD proxy
+  на хосте → web-шлюз okna). **Телеграм :18800 остановлен+disable (решение
+  владельца)**, возврат `systemctl --user enable --now openclaw-gateway`.
+  Web-шлюз: `--bind lan` + `gateway.http.endpoints.chatCompletions.enabled=true`
+  (❗ НЕ `gateway.http.enabled` — 78/CONFIG); дефолтный агент — явный
+  `{"id":"main","default":true}` в `agents.list`; auth main — per-agent sqlite
+  (копируется из основного профиля); токен = ключ морды. Память OpenClaw —
+  наш эмбеддер по домену `http://gpu-erw.timpul.pro:8000/v1`
+  (Qwen3-Embedding-**4B**, ключ `/etc/1c-embed.env`). verify-плагин ставится
+  `npm pack` → `openclaw plugins install npm-pack:<tgz> --force` в каждый
+  профиль (29.08 отсутствовал у обоих с 23.08 — переустановлен).
+  Тяжёлые вопросы веб-чата — до ~3 мин (С4-класс, отчёт
+  `docs/drafts/s4-latency-2026-08-29.md`).
 - **Сеть окно/фронт (зафиксировано 29.08, полная схема —
   `ubuntu/open-webui/README.md` §«Сеть»)**: прод = контейнер **okna 10.10.10.12**
   на хосте gpu-1c (`gpu-erw.timpul.pro`, vSwitch-нога **10.3.1.11**, ssh снаружи
-  `178.63.211.188:2202`); фронт baulogistic = 2.28.49.158 / 10.3.0.2; web-морда
-  ходит на `http://10.3.1.11:18801/v1` (LXD proxy → okna:18801). 🔴 10.3.0.4 и
-  167.233.249.110 — мёртвые адреса старого бэкенда, в доках до 29.08 могли
-  остаться. Внутри okna: ask :8091 и телеграм :18800 — loopback, не трогать.
+  `178.63.211.188:2202`); фронт baulogistic = 2.28.49.158 / 10.3.0.2. 🔴 10.3.0.4
+  и 167.233.249.110 — мёртвые адреса старого бэкенда. Внутри okna: ask :8091
+  loopback, не трогать.
 - Стейджинг: systemd-run + EnvironmentFile-цепочка, ПОРТ — отдельным
   оверрайд-файлом ПОСЛЕДНИМ (EnvironmentFile перекрывает Environment=).
 - Гейты коммита: add и commit РАЗНЫЕ вызовы Bash; граф — observation → sleep 3

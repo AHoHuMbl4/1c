@@ -1,3 +1,27 @@
+## 2026-08-29 — веб-чат baulogistic: четыре слоя починки после переезда [замер]
+
+**[замер]** Чат не работал с переезда 22.08: (1) web-профиль без
+`gateway.http.endpoints.chatCompletions.enabled` → 404; (2) токен профиля
+не совпадал с ключом морды → 401; (3) дефолтным агентом стал сервисный
+`dict` (добавлен 27.08) с `supportsTools:false` → «No callable tools»;
+(4) auth-store main-агента не перенёсся → «No API key for deepseek».
+Починено по разведке агента (`.claude/state/recon-openai-compat.md`, доки
+сборки 2026.7.1-2). Verify-гейт `braine-verify` отсутствовал у обоих ботов
+с 23.08 — переустановлен штатно в оба профиля. Память OpenClaw переведена
+на наш эмбеддер по домену `gpu-erw.timpul.pro:8000/v1` (Qwen3-Embedding-4B).
+Числа: «скажи ок» 3 с; «сколько покупателей за месяц» — ответ с данными
+2 мин 48 с; оба шлюза «3 plugins»; ретраев эмбеда нет. Доки: INSTALL_LOG
+§29.08(2), ARCHITECTURE, RUNBOOK_DEPLOY, README open-webui, activeContext.
+
+## 2026-08-29 — телеграм-бот выведен из контура [решение]
+
+**[решение] владельца 29.08: телеграм больше не нужен.** `openclaw-gateway`
+(:18800, undebot) на okna остановлен и `disable`; state не удалён, возврат —
+`systemctl --user enable --now openclaw-gateway`. Рабочий фронт — веб
+(baulogistic → 10.3.1.11:18801). Генератор синонимов (dict) живёт на
+web-шлюзе, решения не затронут. Доки: ARCHITECTURE, RUNBOOK_DEPLOY,
+INSTALL_LOG §29.08(2).
+
 ## 2026-08-29 — К2: partial B при недосчитанной day-basis ветке [код]
 
 **[код]** z13 `resolve_fork_outcome`: если недосчитанные классы — только ветки

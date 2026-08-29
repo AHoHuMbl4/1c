@@ -30,8 +30,15 @@ LXD proxy на хосте (`nat=true`): `10.3.1.11:6090 → okna:6090`,
 29.08), публичный `178.63.211.188:2202 → okna:22`.
 
 🔴 **10.3.0.4 / 167.233.249.110 — старый бэкенд до переезда 22.08, НЕ существует.**
-Любая ссылка на него = поломка. Внутри okna: ask `:8091` loopback, телеграм-шлюз
-`:18800` loopback (не трогать), web-шлюз `:18801` `--bind lan`.
+Любая ссылка на него = поломка. Внутри okna: ask `:8091` loopback; web-шлюз
+`:18801` `--bind lan` + `gateway.http.endpoints.chatCompletions.enabled=true`
+(❗ не `gateway.http.enabled` — невалидный путь, шлюз падает 78/CONFIG);
+телеграм-шлюз `:18800` **остановлен и disable 29.08** (решение владельца,
+возврат `systemctl --user enable --now openclaw-gateway`).
+Дефолтный агент web-профиля — явный `{"id":"main","default":true}` в
+`agents.list` (иначе дефолт = первый элемент списка, им стал сервисный dict).
+Плагин verify: `npm pack` в `ubuntu/openclaw/verify-plugin/` → `openclaw
+plugins install npm-pack:<tgz> --force` в каждый профиль (+`--profile web`).
 
 На прод-юните dbname всегда `postgres` (слот `okna-1` — одна СУБД).
 
