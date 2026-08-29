@@ -1,0 +1,202 @@
+[
+  {
+    "id": "Q1",
+    "question": "сравни продажи с прошлым месяцем",
+    "plan": {
+      "composite": true,
+      "synthesis": "compare",
+      "atoms": [
+        {
+          "id": "cur",
+          "question": "сколько продали в этом месяце?",
+          "label": "этот месяц"
+        },
+        {
+          "id": "prev",
+          "question": "сколько продали в прошлом месяце?",
+          "label": "прошлый месяц"
+        }
+      ],
+      "compare": {
+        "left_id": "cur",
+        "right_id": "prev",
+        "relation": "more_than"
+      }
+    }
+  },
+  {
+    "id": "Q2",
+    "question": "а год назад?",
+    "plan": {
+      "composite": true,
+      "synthesis": "compare",
+      "atoms": [
+        {
+          "id": "cur",
+          "question": "сколько продали в этом месяце?",
+          "label": "этот месяц"
+        },
+        {
+          "id": "yoy",
+          "question": "сколько продали в том же месяце год назад?",
+          "label": "год назад"
+        }
+      ],
+      "compare": {
+        "left_id": "cur",
+        "right_id": "yoy",
+        "relation": "more_than"
+      }
+    }
+  },
+  {
+    "id": "Q3",
+    "question": "на сколько больше, чем в июле",
+    "plan": {
+      "composite": true,
+      "synthesis": "compare",
+      "atoms": [
+        {
+          "id": "cur",
+          "question": "сколько продали в текущем месяце?",
+          "label": "текущий месяц"
+        },
+        {
+          "id": "jul",
+          "question": "сколько продали в июле?",
+          "label": "июль"
+        }
+      ],
+      "compare": {
+        "left_id": "cur",
+        "right_id": "jul",
+        "relation": "more_than"
+      }
+    }
+  },
+  {
+    "id": "Q4",
+    "question": "продажи за август против июля",
+    "plan": {
+      "composite": true,
+      "synthesis": "compare",
+      "atoms": [
+        {
+          "id": "aug",
+          "question": "сколько продали за август?",
+          "label": "август"
+        },
+        {
+          "id": "jul",
+          "question": "сколько продали за июль?",
+          "label": "июль"
+        }
+      ],
+      "compare": {
+        "left_id": "aug",
+        "right_id": "jul",
+        "relation": "more_than"
+      }
+    }
+  },
+  {
+    "id": "Q5",
+    "question": "в этом месяце продали больше, чем в прошлом?",
+    "plan": {
+      "composite": true,
+      "synthesis": "compare",
+      "atoms": [
+        {
+          "id": "mtd",
+          "question": "сколько продали в этом месяце?",
+          "label": "этот месяц"
+        },
+        {
+          "id": "prev",
+          "question": "сколько продали в прошлом месяце?",
+          "label": "прошлый месяц"
+        }
+      ],
+      "compare": {
+        "left_id": "mtd",
+        "right_id": "prev",
+        "relation": "more_than"
+      }
+    }
+  },
+  {
+    "id": "Q6",
+    "question": "эта неделя лучше прошлой или хуже?",
+    "plan": {
+      "composite": true,
+      "synthesis": "compare",
+      "atoms": [
+        {
+          "id": "wtd",
+          "question": "сколько продали на этой неделе?",
+          "label": "эта неделя"
+        },
+        {
+          "id": "pw",
+          "question": "сколько продали на прошлой неделе?",
+          "label": "прошлая неделя"
+        }
+      ],
+      "compare": {
+        "left_id": "wtd",
+        "right_id": "pw",
+        "relation": "more_than"
+      }
+    }
+  },
+  {
+    "id": "Q7",
+    "question": "сравни продажи августа с июлем",
+    "plan": {
+      "composite": true,
+      "synthesis": "compare",
+      "atoms": [
+        {
+          "id": "aug",
+          "question": "сколько продали за август?",
+          "label": "август"
+        },
+        {
+          "id": "jul",
+          "question": "сколько продали за июль?",
+          "label": "июль"
+        }
+      ],
+      "compare": {
+        "left_id": "aug",
+        "right_id": "jul",
+        "relation": "more_than"
+      }
+    }
+  },
+  {
+    "id": "Q8",
+    "question": "насколько продажи этого месяца больше прошлого",
+    "plan": {
+      "composite": true,
+      "synthesis": "compare",
+      "atoms": [
+        {
+          "id": "mtd",
+          "question": "сколько продали в этом месяце?",
+          "label": "этот месяц"
+        },
+        {
+          "id": "prev",
+          "question": "сколько продали в прошлом месяце?",
+          "label": "прошлый месяц"
+        }
+      ],
+      "compare": {
+        "left_id": "mtd",
+        "right_id": "prev",
+        "relation": "more_than"
+      }
+    }
+  }
+]
