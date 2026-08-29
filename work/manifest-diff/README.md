@@ -20,8 +20,27 @@
   список сущностей OData); без COM/Windows. Замок: `test_gen_metadata_vitrine.py`.
 - `run-metadata-okna.sh` — прогон для okna на машине с витриной `127.0.0.1:7890`.
 - `metadata-okna.xml` — артефакт контура okna (819 сущностей из
-  `docs/completeness-okna/contour.txt`). Перед выкладкой в packet-meta —
-  перегенерировать на живой витрине окна.
+  `docs/completeness-okna/contour.txt`). **Перегенерировать на живой витрине
+  окна** (`bash work/manifest-diff/run-metadata-okna.sh`); установка в
+  `/var/lib/serenedb/packet-meta/okna-1/` — оркестратор, не этот скрипт.
+
+## Парсер такта (corpus_build.sql §1)
+
+Движок читает `$metadata` через `read_text(gate/'$metadata')` и разбирает regex:
+
+| Шаг | Что извлекает |
+|---|---|
+| `tmp3_ent` | `<EntityType …>…</EntityType>` → `entity` (lower), `body` |
+| `tmp3_prop` | `<Property Name="…" Type="…"` → prop, edm |
+| `tmp3_key` | `<Key><PropertyRef Name="…"/>` → key_cols; для Recorder+LineNumber в витрине — дополняет ключ |
+| §1-бис | `accumulationregister_%_recordtype` + prop `RecordType` → `balance_registers` |
+| §1-тер | формы balance_map: RecordType-тени, accounting (AccountDr/Cr), warehouse (Edm numeric + Period) |
+| §1-кватер | informationregister + DateTime≠Period + Guid*_Key + numeric + chartofcharacteristictypes |
+| §1-quint | catalog (ref_key/code/description), курсы IR, document/accumulation facts с currency-ref |
+
+Генератор `gen_metadata_vitrine.py` выдаёт ту же форму: EntityType/EntitySet,
+ключи по платформенным именам (`Ref_Key`, `Recorder`/`Recorder_Type`,
+`LineNumber`, `RecordType`), Edm-типы по `duckdb_columns()` и имени колонки.
 
 ## Как повторить калибровку на другой базе
 

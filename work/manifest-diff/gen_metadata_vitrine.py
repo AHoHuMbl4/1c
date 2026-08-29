@@ -90,19 +90,45 @@ def _lit(v: str) -> str:
     return "'" + str(v).replace("'", "''") + "'"
 
 
+def safe_col(name: str) -> str:
+    """Имя таблицы/колонки витрины — как packet_apply.safe_col / poc_load_entity."""
+    out = []
+    for ch in str(name):
+        out.append(ch if (ch.isalnum() or ch == "_") else "_")
+    s = "".join(out).strip("_")
+    if not s or s[0].isdigit():
+        s = "c_" + s
+    return s
+
+
+def _load_pg_env(env: dict) -> None:
+    if env.get("PGPASSWORD"):
+        return
+    for p in ("/etc/1c-mcp-reports.env", "/etc/1c-serene-ask-postgres.env"):
+        if not os.path.isfile(p):
+            continue
+        for line in open(p, encoding="utf-8"):
+            line = line.strip()
+            if line.startswith("PGPASSWORD="):
+                env["PGPASSWORD"] = line.split("=", 1)[1].strip()
+            elif line.startswith("SERENEDB_DSN=") and not env.get("_DSN_FROM_FILE"):
+                env["_DSN_FROM_FILE"] = line.split("=", 1)[1].strip()
+
+
+def _psql_cmd(dsn: str, env: dict) -> List[str]:
+    """psql argv: conninfo без PGHOST/PGPORT из окружения (иначе порт 5432)."""
+    for k in ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE", "PGPASSFILE"):
+        env.pop(k, None)
+    if "connect_timeout" not in dsn:
+        dsn = dsn.rstrip() + " connect_timeout=15"
+    return ["psql", dsn, "-v", "ON_ERROR_STOP=1"]
+
+
 def psql_rows(dsn: str, sql: str, field_sep: str = "\t") -> List[str]:
     env = os.environ.copy()
-    pw = env.get("PGPASSWORD", "")
-    if not pw:
-        for p in ("/etc/1c-mcp-reports.env", "/etc/1c-serene-ask-postgres.env"):
-            if not os.path.isfile(p):
-                continue
-            for line in open(p, encoding="utf-8"):
-                if line.startswith("PGPASSWORD="):
-                    env["PGPASSWORD"] = line.split("=", 1)[1].strip()
-                    break
-    cmd = ["psql", dsn, "-v", "ON_ERROR_STOP=1", "-tA", "-F", field_sep, "-c", sql]
-    r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    _load_pg_env(env)
+    cmd = _psql_cmd(dsn, env) + ["-tA", "-F", field_sep, "-c", sql]
+    r = subprocess.run(cmd, capture_output=True, text=True, env=env, timeout=120)
     if r.returncode != 0:
         raise RuntimeError("psql: " + (r.stderr or r.stdout or "failed").strip())
     return [ln for ln in r.stdout.splitlines() if ln.strip()]
@@ -159,15 +185,15 @@ def is_information_register(name: str) -> bool:
 
 
 def vitrine_table_for_entity(entity: str, tables: set[str]) -> Optional[str]:
-    low = entity.lower()
+    low = safe_col(entity).lower()
     if low in tables:
         return low
     if low.endswith("_recordtype"):
-        parent = low[:-len("_recordtype")]
+        parent = low[: -len("_recordtype")]
         if parent in tables:
             return parent
     if low.endswith("_rowtype"):
-        parent = low[:-len("_rowtype")]
+        parent = low[: -len("_rowtype")]
         if parent in tables:
             return parent
     return None
@@ -264,6 +290,10 @@ def infer_key(entity: str, props: List[Tuple[str, str]]) -> List[str]:
         return [names["recorder_key"]]
     if "surrogatekey" in names:
         return [names["surrogatekey"]]
+    if is_register_record_shadow(entity):
+        if composite:
+            return ["Recorder", "Recorder_Type", "LineNumber"]
+        return ["Recorder_Key", "LineNumber"]
     if "ref_key" in cols:
         return [odata_prop_name(cols["ref_key"])]
     return ["Ref_Key"]
@@ -347,6 +377,13 @@ def build_entity_props(
         pn = odata_prop_name(col)
         edm = map_edm_type(col, st)
         props_out.append((pn, edm, "true"))
+
+    if not props_out and not is_register_wrapper(entity):
+        props_out = [
+            ("Ref_Key", "Edm.Guid", "false"),
+            ("DataVersion", "Edm.String", "true"),
+            ("DeletionMark", "Edm.Boolean", "true"),
+        ]
 
     key = infer_key(entity, columns)
     key_low = {k.lower() for k in key}

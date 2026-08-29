@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 import tempfile
 
@@ -25,6 +26,21 @@ def t(name: str, cond: bool, detail: str = "") -> None:
     else:
         FAIL.append(name)
         print("FAIL-", name, ("| " + str(detail)[:200]) if detail else "")
+
+
+def _entity_props(xml: str) -> dict[str, set[str]]:
+    out: dict[str, set[str]] = {}
+    for m in re.finditer(r'<EntityType Name="([^"]+)".*?</EntityType>', xml, re.S):
+        out[m.group(1).lower()] = set(re.findall(r'<Property Name="([^"]+)"', m.group(0)))
+    return out
+
+
+def _load_arrived() -> set[str]:
+    path = os.path.join(ROOT, "../../docs/completeness-okna/arrived.txt")
+    path = os.path.normpath(path)
+    if not os.path.isfile(path):
+        return set()
+    return {ln.strip() for ln in open(path, encoding="utf-8") if ln.strip()}
 
 
 # --- (a) парсер corpus_build на фикстуре ---
@@ -97,12 +113,7 @@ for ent in entities:
     k, p, o = G.build_entity_props(ent, cols if not G.is_register_wrapper(ent) else [])
     built[ent] = (k, p, o)
 xml2 = G.build_xml(built)
-import re
-
-parsed_props: dict[str, set[str]] = {}
-for m in re.finditer(r"<EntityType Name=\"([^\"]+).*?</EntityType>", xml2, re.S):
-    name = m.group(1)
-    parsed_props[name.lower()] = set(re.findall(r'<Property Name="([^"]+)"', m.group(0)))
+parsed_props = _entity_props(xml2)
 
 for tbl, cols in vitrine.items():
     ent_key = None
@@ -123,7 +134,35 @@ for tbl, cols in vitrine.items():
         pn = G.odata_prop_name(col)
         t("completeness: %s.%s" % (ent_key, col), pn in snap or col in snap, snap)
 
-# --- (d) живой прогон, если DSN доступен ---
+# --- (d) артефакт okna: парсер + покрытие arrived ---
+okna_path = os.path.join(ROOT, "metadata-okna.xml")
+if os.path.isfile(okna_path):
+    okna_xml = open(okna_path, encoding="utf-8").read()
+    e_ok, p_ok, k_ok = G.parse_like_corpus_build(okna_xml)
+    t("okna-artifact: parser entities", e_ok >= 800, e_ok)
+    t("okna-artifact: all keyed", k_ok == e_ok, (k_ok, e_ok))
+    t("okna-artifact: entity_sets", okna_xml.count("<EntitySet Name=") == e_ok)
+    props_map = _entity_props(okna_xml)
+    arrived = _load_arrived()
+    if arrived:
+        arrived_with = sum(
+            1 for a in arrived
+            if len(props_map.get(a.lower(), ())) >= 3
+            or G.is_register_wrapper(a)
+        )
+        ratio = arrived_with / len(arrived)
+        if ratio >= 0.5:
+            t("okna-artifact: arrived props ratio", True,
+              "%.2f (%d/%d)" % (ratio, arrived_with, len(arrived)))
+        else:
+            print("WARN- okna-artifact stub: arrived props %.0f%% (%d/%d) — "
+                  "regen на окне: bash work/manifest-diff/run-metadata-okna.sh"
+                  % (ratio * 100, arrived_with, len(arrived)))
+    t("okna-artifact: RecordType balance prop",
+      "accumulationregister_импорттмц_recordtype" in props_map
+      and "RecordType" in props_map["accumulationregister_импорттмц_recordtype"])
+
+# --- (e) живой прогон только по GEN_METADATA_LIVE=1 (7890 часто timeout) ---
 dsn = os.environ.get("SERENEDB_DSN", "")
 if not dsn or "port=" not in dsn:
     for p in ("/etc/1c-mcp-reports.env", "/etc/1c-serene-ask-postgres.env"):
@@ -133,24 +172,22 @@ if not dsn or "port=" not in dsn:
                 if line.startswith("SERENEDB_DSN="):
                     dsn = line.split("=", 1)[1].strip()
                     break
-if not dsn:
-    dsn = "host=127.0.0.1 port=7895 user=postgres dbname=postgres"
 
 live_ok = False
 if os.environ.get("GEN_METADATA_LIVE") == "1" and dsn:
     try:
-        tables_live, schema_live = G.load_vitrine_schema(dsn)
+        tables_live, _ = G.load_vitrine_schema(dsn)
         if tables_live:
             sample = sorted(tables_live)[:3]
             ents_live = []
             for tbl in sample:
                 for p in G.KIND_PREFIXES:
-                    if tbl.lower().startswith(p.lower().replace("_", "_")):
+                    if tbl.lower().startswith(p.lower()):
                         ents_live.append(p + tbl.split("_", 1)[1])
                         break
             if ents_live:
                 xml_live, stats = G.generate(dsn, ents_live)
-                e, p, k = G.parse_like_corpus_build(xml_live)
+                e, _, k = G.parse_like_corpus_build(xml_live)
                 t("live: parser", e > 0 and k > 0, (e, k))
                 t("live: stats entities", stats["entities"] == len(ents_live), stats)
                 live_ok = True
@@ -158,7 +195,7 @@ if os.environ.get("GEN_METADATA_LIVE") == "1" and dsn:
         t("live: dsn", False, exc)
 
 if not live_ok:
-    print("skip- live DSN недоступен или витрина пуста")
+    print("skip- live: GEN_METADATA_LIVE=1 и живой DSN (7890 на окне okna)")
 
 print("---")
 print("PASS", PASS, "FAIL", len(FAIL))

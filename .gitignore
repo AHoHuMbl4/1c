@@ -65,6 +65,7 @@ work/packet/golden/fixtures/metadata.xml
 # Этап 3 установщика v2: полные копии $metadata (live ~11МБ / synthetic ~5МБ) и дампы tox —
 # рабочие артефакты калибровки, в git нельзя (в git лежат только diff/отчёт/генератор)
 work/manifest-diff/*.xml
+!work/manifest-diff/metadata-okna.xml
 work/manifest-diff/tox/
 
 # Отметка живой пробы okna до коммита serene_ask — локальная

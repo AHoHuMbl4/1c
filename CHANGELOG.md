@@ -1,3 +1,14 @@
+## 2026-08-29 — gen_metadata_vitrine: psql/safe_col, замок артефакта [код]
+
+**[код]** `gen_metadata_vitrine.py`: `safe_col()` для имён таблиц (как
+`packet_apply`); psql без `PGHOST`/`PGPORT` из окружения + `connect_timeout=15`;
+ключ `_RecordType` по умолчанию `Recorder_Key`+`LineNumber`; платформенный
+минимум свойств при пустой витрине. `test_gen_metadata_vitrine.py`: проверка
+`metadata-okna.xml` (парсер 819/819), WARN если arrived-покрытие <50% (stub —
+regen на окне). README §парсер такта. `.gitignore`: whitelist
+`metadata-okna.xml`. Числа: замок **24/0** офлайн; stub arrived **12%** — нужен
+`run-metadata-okna.sh` на живой `:7890`.
+
 ## 2026-08-29 — синтетический $metadata okna из витрины (без Windows) [код]
 
 **[код]** `work/manifest-diff/gen_metadata_vitrine.py`: универсальный генератор
@@ -18,11 +29,13 @@ OData `$metadata` из `duckdb_columns()` витрины + список сущн
 freshness_lag_sec, verify_status; расхождения — отдельный TSV. Срезы
 `work/gold/slices-okna-packet.json` (16 шт., ACCEPTANCE §B + счётчики).
 Замок `work/gold/test_client_gold.py` **16/0** (детерминизм, ∩ ab-gold=0).
-**[замер okna 29.08]** SSH gpu-erw: vitrine **246** таблиц (104/13/129),
-journal **3870**, freshness_lag **267751** с; build **57** вопросов (journal 37 +
-template 20); verify 16 срезов — match **10** / mismatch **4** / pending **2**
-(каталоги: base_profile rows ≠ leaf count; суммы регистра — packet=vitrine);
-discrepancy log **4** строки. OData на okna нет — эталон из пакетов, не шлюза.
+**[замер okna 29.08]** SSH gpu-erw, DSN postgres из `/etc/1c-packet.env`:
+vitrine **246** таблиц (104 catalog / 13 accum / 129 document), journal **3870**,
+freshness_lag **163038** с; build **82** вопроса (journal **36** + template **30**,
+эталон в **46**); verify 16 срезов + шаблоны — match **22** /
+needs_independent_read **23** (base_profile rows ≠ leaf count на регистрах и
+каталогах) / pending **36** / declared_wrong **1** (no_stock); discrepancy log
+**24** строки. OData на okna нет — эталон из пакетов, не шлюза.
 Доки: work/gold/README.md, PLAN_TO_TARGET §И0.
 
 
