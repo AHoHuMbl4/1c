@@ -1,49 +1,68 @@
-question	etalon	etalon_source	verify_status
-сравни с прошлым разом		ask_journal	pending
-покажи по механизмам		ask_journal	pending
-сколько крепежа осталось на сегодня		ask_journal	pending
-профиль весь распродали или что-то ещё лежит		ask_journal	pending
-ручки есть в наличии, сколько штук?		ask_journal	pending
-сколько у нас петель осталось на складе		ask_journal	pending
-сколько из клиентов реально покупают		ask_journal	pending
-сколько позиций у нас в прайсе всего	2389	1c	mismatch
-сколько у нас вообще клиентов сейчас	362	1c	mismatch
-почему в воскресенье продаж ноль, сбой какой-то?		ask_journal	pending
-а сколько наторговали в воскресенье		ask_journal	pending
-мы просели или выросли		ask_journal	pending
-сегодня лучше вчерашнего или нет		ask_journal	pending
-в этом месяце больше продали чем в прошлом?		ask_journal	pending
-что у нас совсем не продаётся в этом месяце		ask_journal	pending
-какая фурнитура сейчас лучше всего идёт		ask_journal	pending
-дай топ-3 по деньгам за месяц среди покупателей		ask_journal	pending
-сколько было в прошлом месяце всего	2767450.98	1c	match
-сколько за этот месяц уже вышло		ask_journal	pending
-а на прошлой неделе сколько наторговали	1262950.40	1c	match
-сколько сделали за эту неделю	336383.00	1c	freshness_lag
-сегодня сколько уже наотгружали	0.00	1c	match
-позавчера сколько было продаж	171018.11	1c	freshness_lag
-вчера сколько продали	147281.15	1c	freshness_lag
-Сколько движений в регистре «Доп Затраты Импорт ТМЦ»?		search_tables	pending
-Сколько движений в регистре «Импорт ТМЦ»?		search_tables	pending
-Сколько движений в регистре «Кассовые Ордера»?		search_tables	pending
-Сколько движений в регистре «Книга Покупок»?		search_tables	pending
-Сколько движений в регистре «Книга Продаж»?		search_tables	pending
-Сколько движений в регистре «Налоги По Периоду Действия»?		search_tables	pending
-Сколько движений в регистре «Номера БСО»?		search_tables	pending
-Сколько движений в регистре «Отработанное Время»?		search_tables	pending
-Сколько движений в регистре «Расчетные Начисления»?		search_tables	pending
-Сколько движений в регистре «Реализация ТМЦ»?		search_tables	pending
-Сколько движений в регистре «Стоимостной Базис ОСв НУПообъектно»?		search_tables	pending
-Сколько движений в регистре «Сторнирование Розницы»?		search_tables	pending
-Сколько движений в регистре «Учтенное Отработанное Время»?		search_tables	pending
-Сколько позиций в справочнике «Базы Таможенных Выплат» (без групп)?		search_tables	pending
-Сколько позиций в справочнике «Базы Таможенных Выплат_Выплаты» (без групп)?		search_tables	pending
-Сколько позиций в справочнике «Банки» (без групп)?		search_tables	pending
-Сколько позиций в справочнике «Бланки Строгой Отчетности» (без групп)?		search_tables	pending
-Сколько позиций в справочнике «Валюты» (без групп)?		search_tables	pending
-Сколько позиций в справочнике «Варианты Пересчета» (без групп)?		search_tables	pending
-Сколько позиций в справочнике «Варианты Расчета Налогов» (без групп)?		search_tables	pending
-Сколько организаций?	1	1c	match
-Сколько банков в справочнике?	293	1c	match
-Сколько валют?	8	1c	mismatch
-Сколько движений в регистре реализации ТМЦ?	78176	1c	mismatch
+question	etalon	etalon_source	freshness_lag_sec	verify_status
+Покажите остатки по всем трём складам сразу		ask_journal		pending
+Покажите остатки по каждому складу отдельно		ask_journal		pending
+Покажите список складов с количеством позиций по каждому		ask_journal		pending
+сколько на складе позиций всего ?		ask_journal		pending
+Сколько позиций на всех складах вместе?		ask_journal		pending
+а на прошлой неделе сколько наторговали	1262950.40	packet+vitrine	163038	match
+а сколько наторговали в воскресенье	0.00	packet+vitrine	163038	match
+вчера сколько продали	536315.06	packet+vitrine	163038	match
+какие есть склады		ask_journal		pending
+какие позиции имеют нулевой остаток на складе?		ask_journal		pending
+количество уникальных позиций номенклатуры на остатках по складам с разбивкой по складам		ask_journal		pending
+Места Хранения: перечислить склады		ask_journal		pending
+остатки номенклатуры по всем складам, количество позиций на каждый склад отдельно		ask_journal		pending
+остатки по каждому складу отдельно		ask_journal		pending
+остатки по складам: сколько позиций номенклатуры на каждом складе		ask_journal		pending
+остатки товаров по складам: сколько позиций на каждом складе?		ask_journal		pending
+по каким складам числятся остатки товаров и сколько позиций на каждом складе?		ask_journal		pending
+позавчера сколько было продаж	0.00	packet+vitrine	163038	match
+позиции номенклатуры с нулевым остатком		ask_journal		pending
+покажи остатки по каждому складу		ask_journal		pending
+Покажите позиции с нулевым остатком		ask_journal		pending
+сегодня сколько уже наотгружали	0.00	packet+vitrine	163038	match
+Сколько банков в справочнике?	293	packet+vitrine	163038	match
+сколько было в прошлом месяце всего	2767450.98	packet+vitrine	163038	match
+Сколько валют?	8	packet+vitrine	163038	match
+сколько всего позиций номенклатуры числится на всех складах компании?		ask_journal		pending
+сколько всего складов и какие у них названия		ask_journal		pending
+Сколько движений в регистре «допзатратыимпорттмц»?	67186	vitrine	163038	needs_independent_read
+Сколько движений в регистре «допзатратыимпорттмц» за последние 30 дней?	2959	packet+vitrine	163038	match
+Сколько движений в регистре «импорттмц»?	13322	vitrine	163038	needs_independent_read
+Сколько движений в регистре «импорттмц» за последние 30 дней?	593	packet+vitrine	163038	match
+Сколько движений в регистре «кассовыеордера»?	3588	vitrine	163038	needs_independent_read
+Сколько движений в регистре «кассовыеордера» за последние 30 дней?	152	packet+vitrine	163038	match
+Сколько движений в регистре «книгапокупок»?	2383	vitrine	163038	needs_independent_read
+Сколько движений в регистре «книгапокупок» за последние 30 дней?	126	packet+vitrine	163038	match
+Сколько движений в регистре «книгапродаж»?	75960	vitrine	163038	needs_independent_read
+Сколько движений в регистре «книгапродаж» за последние 30 дней?	3013	packet+vitrine	163038	match
+Сколько движений в регистре «налогипопериодудействия»?	33	vitrine	163038	needs_independent_read
+Сколько движений в регистре «налогипопериодудействия» за последние 30 дней?	0	packet+vitrine	163038	match
+Сколько движений в регистре «номерабсо»?	376	vitrine	163038	needs_independent_read
+Сколько движений в регистре «номерабсо» за последние 30 дней?	1	packet+vitrine	163038	match
+Сколько движений в регистре «отработанноевремя»?	85	vitrine	163038	needs_independent_read
+Сколько движений в регистре «отработанноевремя» за последние 30 дней?	0	packet+vitrine	163038	match
+Сколько движений в регистре «расчетныеначисления»?	2	vitrine	163038	needs_independent_read
+Сколько движений в регистре «расчетныеначисления» за последние 30 дней?	0	packet+vitrine	163038	match
+Сколько движений в регистре «реализациятмц»?	78422	vitrine	163038	needs_independent_read
+Сколько движений в регистре «реализациятмц» за последние 30 дней?	2992	packet+vitrine	163038	match
+Сколько движений в регистре реализации ТМЦ?	78422	vitrine	163038	needs_independent_read
+сколько за этот месяц уже вышло	4218825.39	packet+vitrine	163038	match
+Сколько записей в «допзатратыимпорттмц»?	67186	vitrine	163038	needs_independent_read
+Сколько записей в «импорттмц»?	13322	vitrine	163038	needs_independent_read
+Сколько записей в «кассовыеордера»?	3588	vitrine	163038	needs_independent_read
+Сколько записей в «книгапокупок»?	2383	vitrine	163038	needs_independent_read
+Сколько записей в «книгапродаж»?	75960	vitrine	163038	needs_independent_read
+Сколько записей в «налогипопериодудействия»?	33	vitrine	163038	needs_independent_read
+Сколько записей в «номерабсо»?	376	vitrine	163038	needs_independent_read
+Сколько записей в «отработанноевремя»?	85	vitrine	163038	needs_independent_read
+Сколько записей в «расчетныеначисления»?	2	vitrine	163038	needs_independent_read
+Сколько записей в «реализациятмц»?	78422	vitrine	163038	needs_independent_read
+сколько из клиентов реально покупают	145	packet+vitrine	163038	match
+Сколько организаций?	1	packet+vitrine	163038	match
+сколько позиций на каждом складе отдельно?		ask_journal		pending
+сколько позиций у нас в прайсе всего	2389	vitrine	163038	needs_independent_read
+сколько покупателей было за этот месяц		ask_journal		pending
+сколько сделали за эту неделю	872654.93	packet+vitrine	163038	match
+сколько у нас вообще клиентов сейчас	362	vitrine	163038	needs_independent_read
+сколько у нас петель осталось на складе	no_data	vitrine	163038	declared_wrong

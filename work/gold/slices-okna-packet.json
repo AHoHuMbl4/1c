@@ -1,0 +1,194 @@
+{
+  "note": "ACCEPTANCE_OKNA_LIVE §B + стабильные счётчики. packet=base_profile (след apply); vitrine=сырые таблицы catalog_*/accumulationregister_* (не search_corpus). today=Europe/Chisinau.",
+  "slices": [
+    {
+      "id": "yesterday",
+      "question": "вчера сколько продали",
+      "period": "relative",
+      "class": "С",
+      "packet": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d - INTERVAL 1 day AND CAST(Period AS TIMESTAMP) < today.d"
+      },
+      "vitrine": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d - INTERVAL 1 day AND CAST(Period AS TIMESTAMP) < today.d"
+      }
+    },
+    {
+      "id": "day_before",
+      "question": "позавчера сколько было продаж",
+      "period": "relative",
+      "class": "С",
+      "packet": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d - INTERVAL 2 day AND CAST(Period AS TIMESTAMP) < today.d - INTERVAL 1 day"
+      },
+      "vitrine": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d - INTERVAL 2 day AND CAST(Period AS TIMESTAMP) < today.d - INTERVAL 1 day"
+      }
+    },
+    {
+      "id": "today",
+      "question": "сегодня сколько уже наотгружали",
+      "period": "relative",
+      "class": "Д",
+      "packet": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day"
+      },
+      "vitrine": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day"
+      }
+    },
+    {
+      "id": "this_week",
+      "question": "сколько сделали за эту неделю",
+      "period": "relative",
+      "class": "Д",
+      "packet": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('week', today.d) AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day"
+      },
+      "vitrine": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('week', today.d) AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day"
+      }
+    },
+    {
+      "id": "prev_week",
+      "question": "а на прошлой неделе сколько наторговали",
+      "period": "stable",
+      "class": "С",
+      "packet": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('week', today.d) - INTERVAL 7 day AND CAST(Period AS TIMESTAMP) < date_trunc('week', today.d)"
+      },
+      "vitrine": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('week', today.d) - INTERVAL 7 day AND CAST(Period AS TIMESTAMP) < date_trunc('week', today.d)"
+      }
+    },
+    {
+      "id": "this_month",
+      "question": "сколько за этот месяц уже вышло",
+      "period": "relative",
+      "class": "Д",
+      "packet": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('month', today.d) AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day"
+      },
+      "vitrine": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('month', today.d) AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day"
+      }
+    },
+    {
+      "id": "prev_month",
+      "question": "сколько было в прошлом месяце всего",
+      "period": "stable",
+      "class": "С",
+      "packet": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('month', today.d) - INTERVAL 1 month AND CAST(Period AS TIMESTAMP) < date_trunc('month', today.d)"
+      },
+      "vitrine": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('month', today.d) - INTERVAL 1 month AND CAST(Period AS TIMESTAMP) < date_trunc('month', today.d)"
+      }
+    },
+    {
+      "id": "sunday",
+      "question": "а сколько наторговали в воскресенье",
+      "period": "stable",
+      "class": "С",
+      "packet": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('week', today.d) - INTERVAL 1 day AND CAST(Period AS TIMESTAMP) < date_trunc('week', today.d)"
+      },
+      "vitrine": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT coalesce(round(sum(TRY_CAST(Всего AS DECIMAL(38,10))),2),0) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= date_trunc('week', today.d) - INTERVAL 1 day AND CAST(Period AS TIMESTAMP) < date_trunc('week', today.d)"
+      }
+    },
+    {
+      "id": "clients",
+      "question": "сколько у нас вообще клиентов сейчас",
+      "period": "stable",
+      "class": "С",
+      "packet": {
+        "sql": "SELECT coalesce(max(rows),0) FROM base_profile WHERE entity='Catalog_Контрагенты'"
+      },
+      "vitrine": {
+        "sql": "SELECT count(*) FROM catalog_контрагенты WHERE lower(cast(isfolder as varchar)) NOT IN ('true','t','1') AND lower(cast(deletionmark as varchar)) NOT IN ('true','t','1')"
+      }
+    },
+    {
+      "id": "sku",
+      "question": "сколько позиций у нас в прайсе всего",
+      "period": "stable",
+      "class": "С",
+      "packet": {
+        "sql": "SELECT coalesce(max(rows),0) FROM base_profile WHERE entity='Catalog_Номенклатура'"
+      },
+      "vitrine": {
+        "sql": "SELECT count(*) FROM catalog_номенклатура WHERE lower(cast(isfolder as varchar)) NOT IN ('true','t','1') AND lower(cast(deletionmark as varchar)) NOT IN ('true','t','1')"
+      }
+    },
+    {
+      "id": "buyers_12m",
+      "question": "сколько из клиентов реально покупают",
+      "period": "stable",
+      "class": "С",
+      "packet": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT count(DISTINCT Контрагент_Key) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d - INTERVAL 12 month AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day AND TRY_CAST(Всего AS DECIMAL(38,10)) >= 0 AND Recorder_Type NOT LIKE '%Возврат%'"
+      },
+      "vitrine": {
+        "sql": "WITH today AS (SELECT timezone('Europe/Chisinau', now())::date AS d) SELECT count(DISTINCT Контрагент_Key) FROM accumulationregister_реализациятмц, today WHERE CAST(Period AS TIMESTAMP) >= today.d - INTERVAL 12 month AND CAST(Period AS TIMESTAMP) < today.d + INTERVAL 1 day AND TRY_CAST(Всего AS DECIMAL(38,10)) >= 0 AND Recorder_Type NOT LIKE '%Возврат%'"
+      }
+    },
+    {
+      "id": "org",
+      "question": "Сколько организаций?",
+      "period": "stable",
+      "packet": {
+        "sql": "SELECT coalesce(max(rows),0) FROM base_profile WHERE entity='Catalog_Организации'"
+      },
+      "vitrine": {
+        "sql": "SELECT count(*) FROM catalog_организации WHERE lower(cast(deletionmark as varchar)) NOT IN ('true','t','1')"
+      }
+    },
+    {
+      "id": "bank",
+      "question": "Сколько банков в справочнике?",
+      "period": "stable",
+      "packet": {
+        "sql": "SELECT coalesce(max(rows),0) FROM base_profile WHERE entity='Catalog_Банки'"
+      },
+      "vitrine": {
+        "sql": "SELECT count(*) FROM catalog_банки WHERE lower(cast(deletionmark as varchar)) NOT IN ('true','t','1')"
+      }
+    },
+    {
+      "id": "val",
+      "question": "Сколько валют?",
+      "period": "stable",
+      "packet": {
+        "sql": "SELECT coalesce(max(rows),0) FROM base_profile WHERE entity='Catalog_Валюты'"
+      },
+      "vitrine": {
+        "sql": "SELECT count(*) FROM catalog_валюты WHERE lower(cast(deletionmark as varchar)) NOT IN ('true','t','1')"
+      }
+    },
+    {
+      "id": "reg_rows",
+      "question": "Сколько движений в регистре реализации ТМЦ?",
+      "period": "stable",
+      "packet": {
+        "sql": "SELECT coalesce(max(rows),0) FROM base_profile WHERE entity='AccumulationRegister_РеализацияТМЦ'"
+      },
+      "vitrine": {
+        "sql": "SELECT count(*) FROM accumulationregister_реализациятмц"
+      }
+    },
+    {
+      "id": "no_stock",
+      "question": "сколько у нас петель осталось на складе",
+      "period": "stable",
+      "class": "С",
+      "declared": "no_data",
+      "packet": {
+        "sql": "SELECT 'no_data'"
+      },
+      "vitrine": {
+        "sql": "SELECT 'no_data'"
+      }
+    }
+  ]
+}

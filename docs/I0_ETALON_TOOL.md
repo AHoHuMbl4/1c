@@ -1,7 +1,9 @@
 # И0 — утилита эталонов: живой прогон okna (27.08.2026)
 
 Задача [`PLAN_TO_TARGET.md`](PLAN_TO_TARGET.md) §Поток И / И0.
-Инструмент: `ubuntu/serenedb/etalon_1c.py` (+ замок `test_etalon_1c.py`).
+Инструмент: [`work/gold/client_gold.py`](../work/gold/client_gold.py) (build:
+packet↔vitrine) + базовая классификация [`ubuntu/serenedb/etalon_1c.py`](../ubuntu/serenedb/etalon_1c.py).
+Замки: `work/gold/test_client_gold.py` (**16/0**), `ubuntu/serenedb/test_etalon_1c.py` (**70/0**).
 Набор: `ubuntu/serenedb/client-gold-okna.tsv`.
 
 ## Что сделано

@@ -3,7 +3,7 @@
 """Офлайн-замок И4: приёмочный набор не пересекается с рабочими.
 
 Приёмочный (заморожен): docs/ACCEPTANCE_UT.md (58).
-Приёмочные полки okna: client-gold-okna (48), ab-ambiguous-okna (18).
+Приёмочные полки okna: client-gold-okna (67), ab-ambiguous-okna (18).
 Рабочие: ab-gold-okna / probe / ab-gold / golden-questions / calendar-axis.
 
 Падает, если вопрос из приёмки появился в рабочем наборе (нормализованный текст).
@@ -32,7 +32,7 @@ WORKING = [
 ]
 
 # Приёмочная полка okna (И4): эталоны из 1С (И0), в правках не участвовала.
-CLIENT_GOLD = ("client-gold-okna.tsv", 48)
+CLIENT_GOLD = ("client-gold-okna.tsv", 67)
 
 # Приёмка неоднозначности (И1): отдельная полка, не WORKING.
 AMBIGUOUS_GOLD = ("ab-ambiguous-okna.tsv", 18)

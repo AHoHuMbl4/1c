@@ -9,6 +9,17 @@ regen на окне). README §парсер такта. `.gitignore`: whitelist
 `metadata-okna.xml`. Числа: замок **24/0** офлайн; stub arrived **12%** — нужен
 `run-metadata-okna.sh` на живой `:7890`.
 
+## 2026-08-29 — K7 stock_goods_pool: товарная ось ref→catalog, не qty [код]
+
+**[код]** z12: `registers_with_product_goods_axis` через `search_refcols` и класс
+product-catalog (как `_is_product_catalog`), убран литерал `ТМЦ`;
+`filter_stock_goods_registers` отсекает accumulation без товарной оси (БСО);
+`stock_balance_is_reversal_noise` + ранжирование по строкам корпуса;
+z20: `stock_canon_locked` и фильтр goods до K6. **[замер okna :8092]** живые пробы
+склад-класса — см. коммит. Числа: warehouse_aggregate **29/0**, fork 49, intent 162,
+k4 27, calendar 42, stock_balance 27, warehouse_axis 12. Доки: K7_WAREHOUSE_AXIS.md §4,
+PLAN_ANSWER_CONTRACT исход B.
+
 ## 2026-08-29 — синтетический $metadata okna из витрины (без Windows) [код]
 
 **[код]** `work/manifest-diff/gen_metadata_vitrine.py`: универсальный генератор
@@ -31,11 +42,10 @@ freshness_lag_sec, verify_status; расхождения — отдельный 
 Замок `work/gold/test_client_gold.py` **16/0** (детерминизм, ∩ ab-gold=0).
 **[замер okna 29.08]** SSH gpu-erw, DSN postgres из `/etc/1c-packet.env`:
 vitrine **246** таблиц (104 catalog / 13 accum / 129 document), journal **3870**,
-freshness_lag **163038** с; build **82** вопроса (journal **36** + template **30**,
-эталон в **46**); verify 16 срезов + шаблоны — match **22** /
-needs_independent_read **23** (base_profile rows ≠ leaf count на регистрах и
-каталогах) / pending **36** / declared_wrong **1** (no_stock); discrepancy log
-**24** строки. OData на okna нет — эталон из пакетов, не шлюза.
+freshness_lag **163038** с; build **67** вопрос (journal после фильтра + template **30**,
+эталон в **46**; из live 82 убраны мусор журнала, дубли и 5 пересечений с
+рабочими наборами); verify — match **22** / needs_independent_read **23** /
+pending **23** / declared_wrong **1**; discrepancy log **24** строки. OData на okna нет — эталон из пакетов, не шлюза.
 Доки: work/gold/README.md, PLAN_TO_TARGET §И0.
 
 
