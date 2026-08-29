@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Замок И0: work/gold/client_gold.py — офлайн, без psql.
+"""Замок И0+И2: work/gold/ — офлайн, без psql и HTTP.
 
-Проверяет: детерминированность генератора, независимость от ab-gold-okna.tsv,
-packet↔vitrine классификацию, формат TSV с freshness_lag_sec."""
+Проверяет: детерминированность генератора И0, независимость от ab-gold-okna.tsv,
+packet↔vitrine классификацию, формат TSV; механические вердикты И2 на синтетике."""
 from __future__ import annotations
 
 import os
@@ -158,6 +158,144 @@ _imperative = (
     bytes([0xD0, 0xB4, 0xD0, 0xBE, 0xD0, 0xBB, 0xD0, 0xB6, 0xD0, 0xB5, 0xD0, 0xBD]).decode(),
 )
 t("no imperative literals in client_gold", not any(w in src for w in _imperative))
+
+_i2_src = open(os.path.join(ROOT, "work", "gold", "i2_runner.py"), encoding="utf-8").read()
+t("no dbname=okna in i2_runner", "dbname=okna" not in _i2_src)
+t("no imperative literals in i2_runner", not any(w in _i2_src for w in _imperative))
+
+# --- И2: механические вердикты (синтетика, без HTTP) ---
+import i2_runner as I2  # noqa: E402
+
+t(
+    "i2: no phrase-marker lists in i2_runner",
+    "_CLARIFY_MARKERS" not in _i2_src
+    and "looks_like_clarify" not in _i2_src,
+    # конкретные фразы-словари не перечисляем: их ловит гейт check-prompt-rules
+    # на коммите (поймал 29.08 дважды), дубль словами здесь сам стал бы списком
+)
+
+
+def _i2_mock_ok() -> bool:
+    rows = [
+        I2.QuestionRow("q1", "10"),
+        I2.QuestionRow("q2", "no_data"),
+    ]
+
+    def eng(q: str) -> I2.PathAnswer:
+        if q == "q1":
+            return I2.PathAnswer(
+                I2.PATH_ENGINE, text="10", kind="answer", diag={"found": 5},
+            )
+        return I2.PathAnswer(
+            I2.PATH_ENGINE, text="Нет таких данных.", kind="no_data",
+        )
+
+    def web(q: str) -> I2.PathAnswer:
+        # Шлюз chatCompletions обычно не доносит kind/diag — только текст.
+        if q == "q1":
+            return I2.PathAnswer(I2.PATH_WEB, text="10", kind="")
+        return I2.PathAnswer(I2.PATH_WEB, text="Данных нет.", kind="")
+
+    I2.run_i2(rows, paths=[I2.PATH_ENGINE, I2.PATH_WEB], engine_ask=eng, web_ask=web)
+    return (
+        rows[0].engine
+        and rows[0].engine.verdict == I2.VERDICT_MATCH
+        and rows[1].engine
+        and rows[1].engine.verdict == I2.VERDICT_HONEST_NO
+        and rows[0].web
+        and rows[0].web.verdict == I2.VERDICT_UNRESOLVED
+        and rows[1].web
+        and rows[1].web.verdict == I2.VERDICT_UNRESOLVED
+    )
+
+
+t(
+    "i2: match when number equals etalon",
+    I2.classify_verdict(text="Итого: 293 банка.", etalon="293", kind="answer")
+    == I2.VERDICT_MATCH,
+)
+t(
+    "i2: confident_wrong when number differs",
+    I2.classify_verdict(text="Всего 300.", etalon="293", kind="figures")
+    == I2.VERDICT_CONFIDENT_WRONG,
+)
+t(
+    "i2: honest_no on clarify kind only",
+    I2.classify_verdict(text="Уточните, за какой период?", etalon="100", kind="clarify")
+    == I2.VERDICT_HONEST_NO,
+)
+t(
+    "i2: honest_no on no_data kind",
+    I2.classify_verdict(text="Таких данных нет.", etalon="no_data", kind="no_data")
+    == I2.VERDICT_HONEST_NO,
+)
+t(
+    "i2: text alone without kind is unresolved",
+    I2.classify_verdict(text="Уточните период?", etalon="100", kind="")
+    == I2.VERDICT_UNRESOLVED,
+)
+t(
+    "i2: confident_wrong on matches=0 with number",
+    I2.classify_verdict(
+        text="Ответ: 42.",
+        etalon="100",
+        kind="answer",
+        diag={"found": 0},
+    )
+    == I2.VERDICT_CONFIDENT_WRONG,
+)
+t(
+    "i2: confident_wrong on doubt with number",
+    I2.classify_verdict(
+        text="Сумма 1 234 567,89 руб.",
+        etalon="1234567.89",
+        kind="answer",
+        diag={"doubt": True},
+    )
+    == I2.VERDICT_CONFIDENT_WRONG,
+)
+t(
+    "i2: unresolved on transport error",
+    I2.classify_verdict(transport_error="URLError: timed out") == I2.VERDICT_UNRESOLVED,
+)
+t(
+    "i2: unresolved on empty answer",
+    I2.classify_verdict(text="", kind="") == I2.VERDICT_UNRESOLVED,
+)
+t(
+    "i2: confident_wrong number against no_data etalon",
+    I2.classify_verdict(text="На складе 5 позиций.", etalon="no_data", kind="answer")
+    == I2.VERDICT_CONFIDENT_WRONG,
+)
+t(
+    "i2: match from atom exact_value",
+    I2.classify_verdict(
+        text="",
+        etalon="42",
+        kind="answer",
+        nums=I2.structured_nums({"atom": {"exact_value": 42}}),
+    )
+    == I2.VERDICT_MATCH,
+)
+t(
+    "i2: ask_fields_from_payload engine envelope",
+    I2.ask_fields_from_payload(
+        {"kind": "clarify", "text": "x", "diag": {"found": 2}}
+    )[:2]
+    == ("clarify", {"found": 2}),
+)
+t(
+    "i2: ask_fields_from_payload chatCompletions has no kind",
+    I2.ask_fields_from_payload(
+        {"choices": [{"message": {"content": "Уточните?"}}]}
+    )[0]
+    == "",
+)
+t(
+    "i2: dry run_i2 mock both paths",
+    _i2_mock_ok(),
+)
+
 
 print()
 print("PASS %d  FAIL %d" % (PASS, len(FAIL)))

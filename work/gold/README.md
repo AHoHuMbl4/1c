@@ -51,4 +51,45 @@ python3 work/gold/client_gold.py --dsn "$SERENEDB_DSN" build \
 ## Замок
 
 `python3 work/gold/test_client_gold.py` — офлайн: детерминированность,
-пересечение с `ab-gold-okna.tsv` = 0, packet↔vitrine, формат TSV.
+пересечение с `ab-gold-okna.tsv` = 0, packet↔vitrine, формат TSV,
+механические вердикты И2 (синтетика, без HTTP).
+
+## И2 — прогон client-gold двумя путями
+
+Раннер: [`i2_runner.py`](i2_runner.py). Набор по умолчанию —
+`ubuntu/serenedb/client-gold-okna.tsv` (67 вопросов, эталоны сверены с 1С).
+
+Критерий владельца: **уверенно неверных = 0 из N** + доля `honest_no`.
+Не «сколько верных».
+
+| Путь | URL (умолч.) | Авторизация |
+|---|---|---|
+| **engine** | `http://127.0.0.1:8091/ask` | `ASK_TOKEN` |
+| **web** | `http://127.0.0.1:18801/v1/chat/completions` | `WEB_TOKEN` (ключ морды) |
+
+Веб-путь — полный контур: chatCompletions → агент → `ask_1c` → `/ask`
+(см. [`docs/PIPELINE.md`](../docs/PIPELINE.md) §0, [`docs/HOW_IT_WORKS.md`](../docs/HOW_IT_WORKS.md)).
+
+```bash
+cd /srv/1c
+python3 work/gold/test_client_gold.py   # замок И0+И2 офлайн
+
+# живой прогон (после пересъёма эталонов и готовности векторов):
+export ASK_TOKEN=… WEB_TOKEN=…
+python3 work/gold/i2_runner.py run \
+  --tsv ubuntu/serenedb/client-gold-okna.tsv \
+  --path engine --path web \
+  --out work/gold/runs/i2-manual
+
+# только движок или только веб:
+python3 work/gold/i2_runner.py run --path engine
+python3 work/gold/i2_runner.py run --path web
+```
+
+Env: `I2_IN`, `I2_OUT`, `I2_ASK_URL`, `I2_WEB_URL`, `I2_ENGINE_TIMEOUT` (120),
+`I2_WEB_TIMEOUT` (200), `I2_RETRIES` (3). Отчёты пишутся в `work/gold/runs/`
+(в git не попадают).
+
+Классы вердикта (механические): `match`, `honest_no`, `confident_wrong`,
+`unresolved`. Сводка: «уверенно неверных = X из N» по каждому пути,
+доля `honest_no`, построчная разница engine vs web в `i2-report.md`.
