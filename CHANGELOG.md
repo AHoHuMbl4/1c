@@ -34,8 +34,12 @@ Period|измерения; документы: guid → 40-hex хеш); 4 ант
 новая сборка непуста и не меньше → `entity_key_form_changed:<src_table>` в
 `search_quality`, исключение из порога 10 %; частичный уход или shrink → STOP.
 Без списков таблиц. Замок `test_corpus_merge_key_form.py` **17/0**.
-**[замер okna]** deploy+такт — после выката на `/opt/1c-mcp-reports` (см. отчёт
-сессии). Числа: 17/0. Доки: sql/statements/merge_into.
+**[замер okna 29.08]** deploy md5 `5e1fc830…` 401 строк; merge **STOP :151**
+«частичная потеря»: `accumulationregister_книгапродаж` 23/75436,
+`accountingregister_плансчетовосновной2014` 29/189043,
+`accumulationregister_реализациятмц` 23/77901 — **не** key_form (уйдёт≪было).
+`entity_key_form_changed` **0**; корпус **1 230 156** без изменений.
+Числа: 17/0/1230156/0. Доки: sql/statements/merge_into.
 
 ## 2026-08-29 — corpus_build: format || и календарный pick; сборка okna зелёная [код] [замер]
 
