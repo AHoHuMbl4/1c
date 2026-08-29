@@ -1,3 +1,14 @@
+## 2026-08-29 — z20 ранний stock-путь: UnboundLocalError plan — фикс живой пробой [код] [замер]
+
+**[замер :8092, оркестратор]** склад-класс падал 503 «UnboundLocalError:
+'plan'» сразу после отбора (TRACE до «K6 v2»); упавшие: склад ×2, петли,
+контрагенты; прошедшие: клиенты (141 ✓), продали-месяц (число ✓). Замки путь
+не покрывали. **[код]** `plan = {}` до раннего stock-пути (z20:~2272, дубль
+ниже удалён; для раннего пути семантически верен — план разбора ещё не собран);
+`test_warehouse_aggregate_breakdown` переписан из K7-маркерного в К9-структурный.
+Числа: stock_balance **26/0** (+кейс UnboundLocal), word ok, action_class
+48/0, warehouse-breakdown зелёный. Доки: PLAN_TO_TARGET К9.
+
 ## 2026-08-29 — Б1–Б2 wiki_card: паспорт-карточки + kNN на okna [код] [замер]
 
 **[код]** `wiki_card_build.sql` / `wiki_card_knn.sql` / `test_wiki_card_build.py`:

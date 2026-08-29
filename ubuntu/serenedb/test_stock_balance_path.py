@@ -24,29 +24,38 @@ def t(name, cond, detail=None):
         print("FAIL-", name, detail if detail is not None else "")
 
 
-# --- маркеры двуязычные ---
-t("RU stock: остатки на складах",
-  A.question_asks_stock_balance("Какие остатки товаров на складах?"))
-t("RO stock: stoc depozit",
-  A.question_asks_stock_balance("Care este stocul in depozit?"))
-t("movement not stock",
-  not A.question_asks_stock_balance("сколько продали в июле?"))
+INTENT_STOCK = {"want": "count", "kind": "номенклатура", "action_class": "object",
+                "action_axis": "склад"}
+_old_knows = A._base_knows_kind_or_measure
+_old_psql0 = A.psql
+_old_cats0 = A.entity_form_catalogs_for_kind
+A._base_knows_kind_or_measure = lambda w: True
+A.entity_form_catalogs_for_kind = lambda w, **kw: ["catalog_номенклатура"]
+A.psql = lambda q: [("accumulationregister_x",)] if "search_refcols" in q.lower() else []
 
-# --- «какие» не именованный товар ---
-t("какие: not named product",
-  not A.stock_asks_named_product("Какие остатки товаров на складах?"))
-t("какой: not named",
-  not A.stock_asks_named_product("какой товар больше на складе?"))
-t("петли: named via measure only",
+# --- balance-path по intent, не словам вопроса ---
+t("balance path: intent engaged",
+  A.balance_path_engaged(INTENT_STOCK, None, "q"))
+t("movement not balance path",
+  not A.balance_path_engaged({"want": "count", "action_class": "event",
+                              "kind": "номенклатура"}, None, "q"))
+t("sales sum blocks balance engaged",
+  A.sales_sum_intent({"want": "sum", "kind": "продажи"}, "сколько продали")
+  and not A.balance_path_engaged(
+      {"want": "sum", "kind": "продажи", "action_class": "object"},
+      None, "сколько продали"))
+
+# --- именованный товар через terms/measure ---
+t("generic list: not named product",
+  not A.stock_asks_named_product("q", INTENT_STOCK))
+t("петли: named via measure",
   A.stock_asks_named_product(
-      "сколько петель осталось на складе?",
-      intent={"measure": "петли", "want": "sum", "kind": "склад"}))
-t("петли: named product",
+      "q", {"measure": "петли", "want": "sum", "kind": "номенклатура",
+            "action_class": "object", "action_axis": "склад"}))
+t("петли: named via terms",
   A.stock_asks_named_product(
-      "сколько петель осталось на складе?",
-      intent={"terms": [["петли"]], "want": "sum"}))
-t("care RO: not named",
-  not A.stock_asks_named_product("Care marfuri sunt in stoc?"))
+      "q", {"terms": [["петли"]], "want": "sum", "kind": "номенклатура",
+            "action_class": "object", "action_axis": "склад"}))
 t("named no_data helper",
   A.stock_balance_named_no_data("сколько петель?", {}, None, __import__("time").time()).get("kind") == "no_data")
 
@@ -142,7 +151,7 @@ t("sales noise: accounting ok",
   not A.stock_balance_is_sales_noise("accountingregister_плансчетовосновной2014"))
 got_n = A.filter_stock_balance_sales_noise(
     ["accumulationregister_книгапродаж", "accountingregister_x"],
-    "остатки на складе")
+    "q", intent=INTENT_STOCK)
 t("noise filter drops sales book",
   "accumulationregister_книгапродаж" not in got_n, got_n)
 
@@ -176,20 +185,68 @@ t("corpus_init: GRANT search_balance_map serene_ro",
   "GRANT SELECT ON search_balance_map TO serene_ro" in ci)
 
 
-# --- early named: capable без goods → no_data до fork ---
+# --- early stock path: plan до filter_stock_goods_registers (UnboundLocalError) ---
+_INTENT_EARLY = dict(INTENT_STOCK, terms=[], parse={}, period={}, about="data")
+_early_saved = {
+    "parse_intent": A.parse_intent,
+    "probe": A.probe,
+    "match_expr": A.match_expr,
+    "tables_of": A.tables_of,
+    "partial_tables": A.partial_tables,
+    "meaning_candidates": A.meaning_candidates,
+    "children_by_parent": A.children_by_parent,
+    "emb_ready": A.emb_ready,
+    "K6R": A.K6R,
+    "pick_entity": A.pick_entity,
+    "warehouse_clarify": A.warehouse_clarify,
+    "psql": A.psql,
+}
+A.parse_intent = lambda q, today: dict(_INTENT_EARLY)
+A.probe = lambda terms: ([], {})
+A.match_expr = lambda exprs, preds: ("", 0)
+A.tables_of = lambda match, preds: {}
+A.partial_tables = lambda exprs, preds, k: ({}, "")
+A.meaning_candidates = lambda *a, **k: []
+A.children_by_parent = lambda by, match, preds: ({}, {})
+A.emb_ready = lambda table: False
+A.K6R = None
+A.pick_entity = lambda *a, **k: ([], {}, {})
+A.warehouse_clarify = lambda *a, **k: {
+    "kind": "clarify", "text": "склад?", "options": [], "sources": [], "diag": {}}
+A._BALANCE_REGS.update({"at": time.time(), "set": {"accumulationregister_wh"}})
+A._BALANCE_MAP.update({"at": time.time(), "rows": [
+    ("accumulationregister_wh", "accumulation_warehouse", True, False, True, False),
+]})
+A.psql = lambda q: []
+_plan_err = None
+try:
+    A.answer("сколько на складе позиций всего", no_arbiter=True)
+except UnboundLocalError as exc:
+    _plan_err = exc
+finally:
+    for _k, _v in _early_saved.items():
+        setattr(A, _k, _v)
+t("early stock path: plan not UnboundLocalError",
+  _plan_err is None or "plan" not in str(_plan_err), _plan_err)
+
+
+# --- early named: capable без goods pool → пустой pool ---
 _real = A.psql
 A._BALANCE_MAP.update({"at": time.time(), "rows": [
     ("accountingregister_x", "accounting", False, True, True, True),
 ]})
-A.psql = lambda q: [] if "map_extract_value" in q else _real(q)
+A.psql = lambda q: [] if "search_refcols" in q.lower() else _real(q)
 try:
     A._BALANCE_REGS.update({"at": 0.0, "set": {"accountingregister_x"}})
     cap = A.balance_capable_or_registers()
-    goods = A.balance_registers_with_goods(cap)
-    t("named early: capable but no goods",
+    goods = A.stock_goods_pool(cap, intent=INTENT_STOCK)
+    t("named early: capable but no goods pool",
       bool(cap) and not goods, (cap, goods))
 finally:
     A.psql = _real
+    A._base_knows_kind_or_measure = _old_knows
+    A.entity_form_catalogs_for_kind = _old_cats0
+    A.psql = _old_psql0
 
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))
 if FAIL:

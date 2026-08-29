@@ -2265,6 +2265,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     cands = prefer_entity_for_rank(cands, intent, question)
     cands = prefer_entity_for_sales(cands, intent, question)
     cands = prefer_entity_for_catalog_count(cands, intent, question)
+    plan = {}
     if stock_question_engaged(question, intent):
         capable = balance_capable_or_registers()
         cands = filter_stock_balance_sales_noise(cands, question, diag)
@@ -2867,9 +2868,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             шаг("канон продаж: fork excluded → period_empty (до выбора)",
                 src=diag.get("sales_fork_period_empty"))
             return _sfpe0
-    # Параметры подсчёта, названные моделью: сущность, величина, что считать. Объявляются
-    # ДО ветвления, чтобы ни один путь не оставил их неопределёнными.
-    plan = {}
     # sales_sum: sticky focus/память на документ ≠ канон — снять до focus_forced
     # ([замер 21.08] возврат 11: июль 0 на передаче ТМЦ при 2.7M на регистре).
     focus, trusted, resolved, _sales_clr = sales_refuse_sticky_focus(
