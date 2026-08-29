@@ -74,6 +74,10 @@ work/manifest-diff/tox/
 
 # Ф1: песочница SereneDB 26.08.1 — данные 11 ГБ, бинарь, tarball, результаты замеров
 work/sandbox-26081/data/
+
+# Прогоны И2 (отчёты client-gold × engine/web) — локальные артефакты
+work/gold/runs/
+
 work/sandbox-26081/serened
 work/sandbox-26081/serenedb-*.tar.gz
 work/sandbox-26081/results/

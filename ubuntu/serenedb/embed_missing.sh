@@ -24,7 +24,10 @@ if [ -z "$DBNAME" ]; then
   DBNAME=$(psql "$DSN" -tAc 'SELECT current_database()' 2>/dev/null | tr -cd 'A-Za-z0-9_')
 fi
 [ -n "$DBNAME" ] || { echo "движок не отвечает, имя базы не получено" >&2; exit 1; }
-TAG="emb_${DBNAME}_${TBL}"
+# EMBED_TAG: суффикс тега вместо «база_таблица». Второй параллельный досчёт
+# (другой секрет → другой GPU-сервер) обязан иметь свой тег, чтобы todo/part
+# -таблицы и уборка двух сеансов не пересекались.
+TAG="emb_${EMBED_TAG:-${DBNAME}_${TBL}}"
 TAG_OLD="emb_${TBL}"
 TAG_TODO="${TAG}_todo"
 TAG_PART0="${TAG}_part_0"
