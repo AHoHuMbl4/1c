@@ -379,6 +379,77 @@ t("complement atom form preserved",
   _atom_comp.get("form") == "complement"
   and _atom_comp.get("exact_value") == 1891)
 
+# ── K2: partial B при недосчитанной day-basis ветке (карта оси пуста) ───────
+_real_map_ready = A.calendar_axis_map_ready
+A.calendar_axis_map_ready = lambda: False
+_p_cal = {"from": "2026-08-01", "to": "2026-08-15",
+          "interpretation_id": "explicit", "day_basis": "calendar_days"}
+_p_work = dict(_p_cal, day_basis="working_days")
+_item_cal = {
+    "srcs": ["reg_x"],
+    "atom": A.build_answer_atom(
+        operation="sum", exact_value=100.0, measure_id="Сумма",
+        proof_status=A.PROOF_COMPUTED, period=_p_cal),
+    "period": _p_cal,
+    "row": row(10, Сумма=100.0),
+    "fingerprint": ("cal",),
+}
+_item_work = {
+    "srcs": ["reg_x"],
+    "atom": A.build_answer_atom(
+        operation="sum", exact_value=None, measure_id="Сумма",
+        proof_status=A.PROOF_UNCOUNTED, period=_p_work),
+    "period": _p_work,
+    "row": row(0),
+    "fingerprint": ("work",),
+}
+_real_of = A.ordered_fork_classes
+
+
+def _ord_partial(_c, _r, measure_word="", want=None, rel_by_src=None):
+    return [_item_cal, _item_work]
+
+
+A.ordered_fork_classes = _ord_partial
+A.fork_labels_of = lambda fk, srcs: (
+    {"calendar_days": "lbl-cal", "working_days": "lbl-work"}
+    if "calendar_days" in (srcs or []) or "working_days" in (srcs or []) else {})
+A.fork_labels_covering = lambda srcs: (
+    ({"calendar_days": "lbl-cal", "working_days": "lbl-work"}, "fk-db")
+    if set(srcs or []) & {"calendar_days", "working_days"} else ({}, None))
+out_pb, pay_pb = A.resolve_fork_outcome(
+    {"x": {"reg_x"}}, {"reg_x": row(10, Сумма=100.0)},
+    measure_ctx="summa", want="sum", rel_by_src={"reg_x": ["Сумма"]},
+    today="2026-08-29")
+t("partial B: axis missing → B not C",
+  out_pb == "B" and pay_pb.get("partial_axis"))
+bres_pb = A.fork_outcome_b("q", pay_pb, {}, picked_src="reg_x", today="2026-08-29")
+t("partial B: leader number in text",
+  bres_pb and bres_pb.get("kind") == "figures"
+  and "100" in (bres_pb.get("text") or ""))
+t("partial B: люк working label",
+  bres_pb and any(
+      (o.get("label") or "") == "lbl-work"
+      for o in (bres_pb.get("options") or [])))
+A.ordered_fork_classes = _real_of
+A.calendar_axis_map_ready = _real_map_ready
+
+# clarify day-basis: подписи из §7 в options
+_ord_db = [_item_cal, {
+    "srcs": ["reg_x"],
+    "atom": A.build_answer_atom(
+        operation="sum", exact_value=80.0, measure_id="Сумма",
+        proof_status=A.PROOF_COMPUTED, period=_p_work),
+    "period": _p_work,
+    "row": row(8, Сумма=80.0),
+}]
+_copts = A._fork_clarify_opts(
+    _ord_db, {}, {}, {}, "", [], {}, "period", "Сколько отгрузили с 1 по 15",
+    measure_ctx="summa")
+t("clarify day-basis: 2 options", len(_copts) == 2)
+t("clarify day-basis: needle lbl-work",
+  any("lbl-work" in (o.get("label") or "") for o in _copts))
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)

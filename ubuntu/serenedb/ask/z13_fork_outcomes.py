@@ -175,6 +175,92 @@ def _fork_applicable_classes(ordered):
             if (it.get("atom") or {}).get("proof_status") != PROOF_NA]
 
 
+def _fork_class_is_uncounted(it):
+    """Ячейка класса не посчитана (не NA — та вне applicable)."""
+    atom = (it or {}).get("atom") or {}
+    return ((atom.get("proof_status") != PROOF_COMPUTED)
+            or atom.get("exact_value") is None)
+
+
+def _fork_class_axis_unavailable(it):
+    """Ветка требует карту оси, которой нет — не выбор человека (K2 / §7bis)."""
+    if not _fork_class_is_uncounted(it):
+        return False
+    p = (it.get("period") or {}) or ((it.get("atom") or {}).get("period") or {})
+    db = (p.get("day_basis") or "").strip()
+    if db in _DAY_BASIS_NEED_MAP:
+        return not calendar_axis_map_ready()
+    ab = _class_amount_basis(it)
+    if ab in _AMOUNT_BASIS_IDS:
+        try:
+            return not currency_axis_open()
+        except RuntimeError:
+            return True
+    return False
+
+
+def _fork_window_label_fallback(it, today=None):
+    """Подпись W-ветки из period, если словарь §7 ещё пуст."""
+    p = (it.get("period") or {}) or ((it.get("atom") or {}).get("period") or {})
+    return render_window_label(p, today=today) if p else None
+
+
+def _fork_day_basis_branch_label(it, measure_ctx="", today=None):
+    """Человеческая подпись day-basis ветки: §7 → covering → W-label."""
+    lab = (it.get("label") or "").strip()
+    if lab:
+        return lab
+    srcs = sorted(s for s in (it.get("srcs") or []) if s)
+    period = (it.get("period") or {}) or ((it.get("atom") or {}).get("period") or {})
+    db = (period.get("day_basis") or "").strip()
+    if db in _DAY_BASIS_IDS:
+        fk = _fork_key_for_period(srcs, measure_ctx, period)
+        lab = (fork_labels_of(fk, [db]).get(db) or "").strip()
+        if not lab:
+            cov, _fk = fork_labels_covering([db])
+            lab = (cov.get(db) or "").strip()
+    if not lab:
+        lab = (_fork_window_label_fallback(it, today=today) or "").strip()
+    return lab or None
+
+
+def _fork_resolve_partial_b(counted, uncounted, measure_ctx, today=None,
+                            na_classes=0):
+    """Исход B при недосчитанных ветках оси без карты: лидер + люк (K2).
+
+    Молчание недостающей ветки ≠ clarify: число посчитанного лидера уходит
+    сразу, второе прочтение — в options (подпись из §7 / W-label).
+    """
+    if not counted or not uncounted:
+        return None
+    if not all(_fork_class_axis_unavailable(it) for it in uncounted):
+        return None
+    missing, fk_seen = [], None
+    for it in counted:
+        lab = _fork_day_basis_branch_label(it, measure_ctx, today=today)
+        if lab:
+            it["label"] = lab
+        else:
+            missing.append(it.get("srcs"))
+        fk = None
+        if it.get("srcs"):
+            fk = _fork_key_for_period(
+                it["srcs"], measure_ctx,
+                (it.get("period") or {}) or ((it.get("atom") or {}).get("period") or {}))
+        if fk and not fk_seen:
+            fk_seen = fk
+    counted = _dedupe_fork_classes(counted)
+    if missing or not counted:
+        return None
+    return "B", {
+        "fork_key": fk_seen,
+        "classes": counted,
+        "axis_unavailable": list(uncounted),
+        "na_classes": na_classes,
+        "partial_axis": True,
+    }
+
+
 def _fork_complement_outcome_block(intent, question, applicable):
     """Отрицание без complement-атома: позитивное число — не ответ (п.12/13)."""
     if not intent_fact_complement(intent, question):
@@ -203,6 +289,8 @@ def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=No
 
     A — один класс, src несколько, все ячейки посчитаны.
     B — классов несколько, все посчитаны и у каждого класса есть подпись (представитель).
+    B (partial_axis) — лидер посчитан, недосчитанные ветки только из-за пустой карты
+    day-basis/amount-basis: число лидера + люк, не clarify (K2).
     C — иначе (непосчитанное / неподписанное); unique — один класс и один src.
     Статус NA (величина вопроса к источнику не относится) не блокирует A/B.
     """
@@ -216,10 +304,14 @@ def resolve_fork_outcome(classes, rows, measure_ctx="", scan_error=None, want=No
     if not applicable:
         return "empty", {"reason": "no_applicable_cells",
                          "na_classes": len(ordered)}
-    uncounted = [it for it in applicable
-                 if (it["atom"] or {}).get("proof_status") != PROOF_COMPUTED
-                 or (it["atom"] or {}).get("exact_value") is None]
+    uncounted = [it for it in applicable if _fork_class_is_uncounted(it)]
     if uncounted:
+        counted = [it for it in applicable if it not in uncounted]
+        _partial = _fork_resolve_partial_b(
+            counted, uncounted, measure_ctx, today=today,
+            na_classes=len(ordered) - len(applicable))
+        if _partial:
+            return _partial
         return "C", {"reason": "uncounted_cell",
                      "classes": len(applicable),
                      "na_classes": len(ordered) - len(applicable),
@@ -397,8 +489,10 @@ def atom_terminal_gate_text(atom, question, agg=None):
 
 
 def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None,
-                   day_basis_prefer=None, amount_basis_prefer=None):
+                   day_basis_prefer=None, amount_basis_prefer=None, today=None):
     """Исход B: ответ лидера (picked[0]→класс) + люк с остальными ветками."""
+    if not today:
+        today = time.strftime("%Y-%m-%d")
     classes = list((payload or {}).get("classes") or [])
     total = len(classes)
     split = fork_leader_class(picked_src, classes,
@@ -430,6 +524,23 @@ def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None,
         opt = {"src": (ab or db or rep), "label": lab or rep,
                "found": int(row.get("count") or 0),
                "distinct_by": lab or ""}
+        if db:
+            opt["day_basis"] = db
+        if ab:
+            opt["amount_basis"] = ab
+        opts.append(opt)
+    for it in (payload or {}).get("axis_unavailable") or []:
+        lab = _fork_day_basis_branch_label(it, measure_ctx="", today=today)
+        if not lab:
+            ab = _class_amount_basis(it)
+            lab = (ab or _class_day_basis(it) or "").strip()
+        if not lab:
+            continue
+        p = (it.get("period") or {}) or ((it.get("atom") or {}).get("period") or {})
+        db = (p.get("day_basis") or "").strip()
+        ab = (p.get("amount_basis") or "").strip()
+        opt = {"src": ab or db or lab, "label": lab,
+               "found": 0, "distinct_by": lab, "axis_unavailable": True}
         if db:
             opt["day_basis"] = db
         if ab:
@@ -589,7 +700,7 @@ def _fork_human_place_label(question="", class_item=None, ordered=None):
 
 
 def _fork_axis_option_label(axis_kind, it, base_lab, question, today=None,
-                            ordered=None):
+                            ordered=None, measure_ctx=""):
     """Человеческая подпись варианта: ось + ветка (если есть)."""
     atom = it.get("atom") or {}
     row = it.get("row") or {}
@@ -599,8 +710,9 @@ def _fork_axis_option_label(axis_kind, it, base_lab, question, today=None,
         axis_lab = _fork_human_place_label(question, class_item=it, ordered=ordered)
     elif axis_kind == "period":
         db = _class_day_basis(it)
-        if db in _DAY_BASIS_IDS and (it.get("label") or "").strip():
-            axis_lab = (it.get("label") or "").strip()
+        if db in _DAY_BASIS_IDS:
+            axis_lab = _fork_day_basis_branch_label(
+                it, measure_ctx=measure_ctx, today=today) or ""
         else:
             p = it.get("period") or atom.get("period") or {}
             axis_lab = render_window_label(p, today=today) if p else ""
@@ -613,7 +725,7 @@ def _fork_axis_option_label(axis_kind, it, base_lab, question, today=None,
 
 
 def _fork_clarify_opts(ordered, lab_by, marks, by, match, preds, live,
-                       axis_kind, question, today=None):
+                       axis_kind, question, today=None, measure_ctx=""):
     """Варианты clarify: по классам развилки, с подписью человеческой оси."""
     applicable = _fork_applicable_ordered(ordered)
     if axis_kind == "place":
@@ -637,7 +749,8 @@ def _fork_clarify_opts(ordered, lab_by, marks, by, match, preds, live,
             if not base and rep:
                 base = human_table_label(rep, (lab_by or {}).get(rep))
             lab = _fork_axis_option_label(
-                axis_kind, it, base, question, today=today, ordered=ordered)
+                axis_kind, it, base, question, today=today, ordered=ordered,
+                measure_ctx=measure_ctx)
             if not lab:
                 lab = base or rep
             opt = {"src": ab or db or rep,
@@ -662,11 +775,18 @@ def _fork_clarify_opts(ordered, lab_by, marks, by, match, preds, live,
 def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
                    lab_by=None, marks=None, by=None, match="", preds=None,
                    picked_src=None, day_basis_prefer=None,
-                   amount_basis_prefer=None):
+                   amount_basis_prefer=None, intent=None, trusted=None,
+                   measure_ctx="", today=None):
     """Исход C: непосчитанное/неподписанное видно клиенту (п. 13).
 
     Контракт 23.08 (unsigned): число лидера + FORK_OTHER_READING, без имён веток.
     """
+    if not today:
+        today = time.strftime("%Y-%m-%d")
+    _cal_blk = calendar_axis_unavailable_block(
+        question, intent=intent, trusted=trusted, diag=diag, cut=cut, t0=t0)
+    if _cal_blk:
+        return _cal_blk
     c_why = (payload or {}).get("reason") or "fork"
     if c_why == "unsigned_class" and picked_src:
         applicable = _fork_applicable_classes(
@@ -730,7 +850,8 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
     live = {s: ((rows or {}).get(s) or {}).get("count", 0) for s in srcs}
     axis_kind = _fork_clarify_axis_kind(ordered, question)
     opts = _fork_clarify_opts(ordered, lab_by, marks, by, match, preds, live,
-                              axis_kind, question)
+                              axis_kind, question, today=today,
+                              measure_ctx=measure_ctx)
     partial = dict(cut or {})
     lim = {"reason": c_why}
     if payload.get("unsigned"):

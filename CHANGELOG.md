@@ -1,3 +1,16 @@
+## 2026-08-29 — К2: partial B при недосчитанной day-basis ветке [код]
+
+**[код]** z13 `resolve_fork_outcome`: если недосчитанные классы — только ветки
+`working_days`/`holiday`/amount-basis при пустой карте оси (`calendar_axis_map_ready`
+/ `currency_axis_open`), исход **B** (лидер + люк), не clarify/C. Люк для
+недоступной ветки — подпись из §7 / W-label. Clarify day-basis: `_fork_day_basis_branch_label`
+в options (needle «lbl-work»). z04: fallback `calendar_day_basis_phrases.json`
+как у `period_relative_forms`. z20: `intent`/`trusted`/`measure_ctx`/`today` в
+`fork_outcome_c`; повторный `calendar_axis_unavailable_block` перед clarify.
+**Замки:** fork_outcomes **49/0** (+5 partial B/clarify), fork_detector **52/0**,
+calendar_axis **42/0**, intent **162/0**, k4_clarify **27/0**, fork_window **44/0**,
+fork_label_daybasis **13/0**. Числа: 49+52+42+162+27+44+13. Доки: PLAN_ANSWER_CONTRACT §2 B/C.
+
 ## 2026-08-29 — веб-фронт «Server Connection Error»: хоп фронт → okna по vSwitch [замер]
 
 **[замер]** Чат baulogistic лежал: морда жива (200, /health ok), но

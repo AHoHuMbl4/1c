@@ -104,6 +104,17 @@ def calendar_day_basis_phrases():
                        for k, v in parsed.items()}
     except (RuntimeError, ValueError, TypeError):
         got = {}
+    if not got:
+        try:
+            p = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                             "calendar_day_basis_phrases.json")
+            with open(p, encoding="utf-8") as f:
+                parsed = json.load(f)
+            if isinstance(parsed, dict):
+                got = {str(k): [str(x) for x in (v or [])]
+                       for k, v in parsed.items()}
+        except (OSError, ValueError, TypeError):
+            got = {}
     _CALENDAR_DAY_BASIS_PHRASES.update({"at": now, "map": got})
     return got
 

@@ -3751,7 +3751,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0,
                                        picked_src=_picked0,
                                        day_basis_prefer=_day_prefer,
-                                       amount_basis_prefer=_curr_prefer)
+                                       amount_basis_prefer=_curr_prefer,
+                                       today=today)
                 if _bres is not None:
                     шаг("исход B", классов=len(_b_classes))
                     return _bres
@@ -3765,7 +3766,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 marks=marks, by=by, match=match, preds=preds,
                 picked_src=(picked[0] if picked else None),
                 day_basis_prefer=_day_prefer,
-                amount_basis_prefer=_curr_prefer)
+                amount_basis_prefer=_curr_prefer,
+                intent=intent, trusted=trusted,
+                measure_ctx=(_mword or _fwant or ""),
+                today=today)
         if _outc == "unavailable":
             return {"partial": cut or None, "kind": "unavailable",
                     "text": "Не удалось проверить все прочтения вопроса. "
