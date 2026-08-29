@@ -361,6 +361,10 @@ t("sql: search_currency_rate_map", "DELETE FROM search_currency_rate_map" in blo
 t("sql: structural catalog_", "catalog_%" in block or "catalog_" in block)
 t("sql: uses query_table / format for vitrine join",
   "query_table" in block and "format(" in block)
+t("sql: format template uses || (no implicit literal concat)",
+  "|| 'FROM query_table" in block and "|| 'INNER JOIN query_table" in block)
+t("sql: amthits src_real from tmp3_cur_live join",
+  "tmp3_cur_live WHERE src_real IS NOT NULL" in block)
 t("sql: platform Posted/DeletionMark",
   "posted" in code_only.lower() and "deletionmark" in code_only.lower())
 

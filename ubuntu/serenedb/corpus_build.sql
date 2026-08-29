@@ -263,9 +263,9 @@ CREATE OR REPLACE TABLE tmp3_cal_keyhits (
 \set ON_ERROR_STOP off
 SELECT format(
   'INSERT INTO tmp3_cal_keyhits SELECT %L, %L, %L, count(*)::BIGINT '
-  'FROM query_table(%L) reg '
-  'INNER JOIN query_table(%L) kind ON reg.%I = kind.%I '
-  'WHERE reg.%I IS NOT NULL',
+  || 'FROM query_table(%L) reg '
+  || 'INNER JOIN query_table(%L) kind ON reg.%I = kind.%I '
+  || 'WHERE reg.%I IS NOT NULL',
   l.src_table, l.chart_entity, p.prop, l.src_real, l.chart_real,
   p.prop, 'Ref_Key', p.prop)
 FROM tmp3_cal_live l
@@ -284,9 +284,9 @@ CREATE OR REPLACE TABLE tmp3_cal_besthour (
 \set ON_ERROR_STOP off
 SELECT format(
   'INSERT INTO tmp3_cal_besthour SELECT %L, %L, '
-  'count(*) FILTER (WHERE try_cast(reg.%I AS DOUBLE) > 0)::BIGINT, '
-  'count(*) FILTER (WHERE coalesce(try_cast(reg.%I AS DOUBLE), 0) <= 0)::BIGINT '
-  'FROM query_table(%L) reg',
+  || 'count(*) FILTER (WHERE try_cast(reg.%I AS DOUBLE) > 0)::BIGINT, '
+  || 'count(*) FILTER (WHERE coalesce(try_cast(reg.%I AS DOUBLE), 0) <= 0)::BIGINT '
+  || 'FROM query_table(%L) reg',
   l.src_table, p.prop, p.prop, p.prop, l.src_real)
 FROM (SELECT DISTINCT src_table, src_real FROM tmp3_cal_live
       WHERE src_real IS NOT NULL) l
@@ -295,6 +295,25 @@ JOIN tmp3_prop p ON p.entity = l.src_table
                               'Edm.Int64', 'Edm.Byte')
 \gexec
 \set ON_ERROR_STOP on
+
+-- Имена витрины без LATERAL ON true: движок 26.07.3 падает на OR с внешним kh
+-- в lateral-предикате (GetComparisonType). Приоритет chart_entity из keyhits — CASE.
+CREATE OR REPLACE TABLE tmp3_cal_live_pick AS
+WITH kb AS (
+  SELECT src_table, chart_entity,
+         row_number() OVER (
+           PARTITION BY src_table
+           ORDER BY hits DESC, chart_entity, key_col) AS rn
+  FROM tmp3_cal_keyhits WHERE hits > 0
+)
+SELECT l.src_table, l.src_real, l.chart_real, l.chart_entity,
+       row_number() OVER (
+         PARTITION BY l.src_table
+         ORDER BY CASE WHEN kb.chart_entity IS NOT NULL
+                        AND l.chart_entity = kb.chart_entity THEN 0 ELSE 1 END,
+                  l.chart_entity) AS rn
+FROM tmp3_cal_live l
+LEFT JOIN kb ON kb.src_table = l.src_table AND kb.rn = 1;
 
 CREATE OR REPLACE TABLE tmp3_cal_resolved AS
 WITH kh AS (
@@ -315,18 +334,13 @@ SELECT m.src_table,
        m.date_col,
        coalesce(kh.key_col, m.day_key_col) AS day_key_col,
        coalesce(hh.hours_col, m.hours_col) AS hours_col,
-       l.src_real,
-       l.chart_real,
-       coalesce(kh.chart_entity, l.chart_entity) AS chart_entity
+       lp.src_real,
+       lp.chart_real,
+       coalesce(kh.chart_entity, lp.chart_entity) AS chart_entity
 FROM tmp3_cal_map m
 LEFT JOIN kh ON kh.src_table = m.src_table AND kh.rn = 1
 LEFT JOIN hh ON hh.src_table = m.src_table AND hh.rn = 1
-LEFT JOIN LATERAL (
-  SELECT src_real, chart_real, chart_entity FROM tmp3_cal_live x
-  WHERE x.src_table = m.src_table
-    AND (kh.chart_entity IS NULL OR x.chart_entity = kh.chart_entity)
-  ORDER BY x.chart_entity LIMIT 1
-) l ON true;
+LEFT JOIN tmp3_cal_live_pick lp ON lp.src_table = m.src_table AND lp.rn = 1;
 
 -- Уточнённая карта колонок (если join витрины прошёл).
 DELETE FROM search_calendar_map;
@@ -344,12 +358,12 @@ CREATE OR REPLACE TABLE tmp3_cal_workkeys (kind_key VARCHAR);
 \set ON_ERROR_STOP off
 SELECT format(
   'INSERT INTO tmp3_cal_workkeys '
-  'SELECT DISTINCT reg.%I::VARCHAR '
-  'FROM query_table(%L) reg '
-  'INNER JOIN query_table(%L) kind ON reg.%I = kind.%I '
-  'WHERE try_cast(reg.%I AS DOUBLE) > 0 '
-  '  AND coalesce(kind.%I::VARCHAR, '''') <> '''' '
-  '  AND reg.%I IS NOT NULL',
+  || 'SELECT DISTINCT reg.%I::VARCHAR '
+  || 'FROM query_table(%L) reg '
+  || 'INNER JOIN query_table(%L) kind ON reg.%I = kind.%I '
+  || 'WHERE try_cast(reg.%I AS DOUBLE) > 0 '
+  || '  AND coalesce(kind.%I::VARCHAR, '''') <> '''' '
+  || '  AND reg.%I IS NOT NULL',
   r.day_key_col, r.src_real, r.chart_real, r.day_key_col, 'Ref_Key',
   r.hours_col, 'Description', r.day_key_col)
 FROM tmp3_cal_resolved r
@@ -549,9 +563,9 @@ CREATE OR REPLACE TABLE tmp3_cur_keyhits (
 \set ON_ERROR_STOP off
 SELECT format(
   'INSERT INTO tmp3_cur_keyhits SELECT %L, %L, %L, count(*)::BIGINT '
-  'FROM query_table(%L) fact '
-  'INNER JOIN query_table(%L) cat ON fact.%I = cat.%I '
-  'WHERE fact.%I IS NOT NULL',
+  || 'FROM query_table(%L) fact '
+  || 'INNER JOIN query_table(%L) cat ON fact.%I = cat.%I '
+  || 'WHERE fact.%I IS NOT NULL',
   l.src_table, l.cat_entity, p.prop, l.src_real, l.cat_real,
   p.prop, 'Ref_Key', p.prop)
 FROM tmp3_cur_live l
@@ -568,18 +582,23 @@ CREATE OR REPLACE TABLE tmp3_cur_amthits (
 \set ON_ERROR_STOP off
 SELECT format(
   'INSERT INTO tmp3_cur_amthits SELECT %L, %L, %L, '
-  'count(*) FILTER (WHERE fact.%I IS NOT NULL '
-  '  AND try_cast(fact.%I AS DOUBLE) IS NOT NULL)::BIGINT '
-  'FROM query_table(%L) fact',
+  || 'count(*) FILTER (WHERE fact.%I IS NOT NULL '
+  || '  AND try_cast(fact.%I AS DOUBLE) IS NOT NULL)::BIGINT '
+  || 'FROM query_table(%L) fact',
   r.src_table, r.curr_col, p.prop, r.curr_col, p.prop, r.src_real)
 FROM (
-  SELECT src_table, src_real, curr_col
+  SELECT kh.src_table, lv.src_real, kh.key_col AS curr_col
   FROM (
-    SELECT src_table, src_real, key_col AS curr_col,
+    SELECT src_table, key_col,
            row_number() OVER (
              PARTITION BY src_table ORDER BY hits DESC, cat_entity, key_col) AS rn
     FROM tmp3_cur_keyhits WHERE hits > 0
-  ) z WHERE rn = 1
+  ) kh
+  JOIN (
+    SELECT DISTINCT src_table, src_real
+    FROM tmp3_cur_live WHERE src_real IS NOT NULL
+  ) lv ON lv.src_table = kh.src_table
+  WHERE kh.rn = 1
 ) r
 JOIN tmp3_prop p ON p.entity = r.src_table
                 AND p.edm IN ('Edm.Double', 'Edm.Decimal', 'Edm.Int16', 'Edm.Int32',
@@ -654,9 +673,9 @@ CREATE OR REPLACE TABLE tmp3_cur_rate_keyhits (
 \set ON_ERROR_STOP off
 SELECT format(
   'INSERT INTO tmp3_cur_rate_keyhits SELECT %L, %L, %L, count(*)::BIGINT '
-  'FROM query_table(%L) reg '
-  'INNER JOIN query_table(%L) cat ON reg.%I = cat.%I '
-  'WHERE reg.%I IS NOT NULL',
+  || 'FROM query_table(%L) reg '
+  || 'INNER JOIN query_table(%L) cat ON reg.%I = cat.%I '
+  || 'WHERE reg.%I IS NOT NULL',
   l.src_table, l.cat_entity, p.prop, l.src_real, l.cat_real,
   p.prop, 'Ref_Key', p.prop)
 FROM tmp3_cur_rate_live l
@@ -729,7 +748,7 @@ CREATE OR REPLACE TABLE tmp3_cur_workkeys (curr_key VARCHAR);
 \set ON_ERROR_STOP off
 SELECT format(
   'INSERT INTO tmp3_cur_workkeys SELECT DISTINCT %I::VARCHAR '
-  'FROM query_table(%L) WHERE %I IS NOT NULL',
+  || 'FROM query_table(%L) WHERE %I IS NOT NULL',
   r.curr_col, r.src_real, r.curr_col)
 FROM tmp3_cur_resolved r
 WHERE r.src_real IS NOT NULL AND coalesce(r.curr_col, '') <> ''

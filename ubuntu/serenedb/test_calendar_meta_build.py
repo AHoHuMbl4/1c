@@ -32,7 +32,9 @@ def extract_calendar_block(sql: str) -> str:
     start = sql.find("1-кватер. ОСЬ ДАТ ГРАФИКА")
     if start < 0:
         return ""
-    end = sql.find("SELECT 'метаданные' AS шаг", start)
+    end = sql.find("1-quint.", start)
+    if end < 0:
+        end = sql.find("SELECT 'метаданные' AS шаг", start)
     if end < 0:
         end = len(sql)
     return sql[start:end]
@@ -299,6 +301,10 @@ t("sql: structural chartofcharacteristictypes_",
   "chartofcharacteristictypes_%" in block or "chartofcharacteristictypes_" in block)
 t("sql: uses query_table / format for vitrine join",
   "query_table" in block and "format(" in block)
+t("sql: format template uses || (no implicit literal concat)",
+  "|| 'FROM query_table" in block and "|| 'INNER JOIN query_table" in block)
+t("sql: tmp3_cal_live_pick replaces lateral resolved join",
+  "tmp3_cal_live_pick" in block and "LEFT JOIN LATERAL" not in block)
 t("sql: hours > 0 from data", "try_cast" in block and "> 0" in block)
 t("sql: Description from data (platform field)",
   "'Description'" in block or "%I" in block)
