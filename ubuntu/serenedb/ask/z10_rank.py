@@ -491,5 +491,124 @@ def prefer_entity_for_rank(cands, intent, question, plan=None):
     return out
 
 
+def count_theme_code_pick_applies(cands, diag, intent, question):
+    """K6c: count о предмете — код выбирает q_meta-лидера, не модель vs гигант."""
+    cands = list(cands or [])
+    if len(cands) < 2:
+        return False
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    if rank_intent_from(intent, question=question):
+        return False
+    if event_path_active(intent):
+        return False
+    feats = (diag or {}).get("answer_fit_v2_full") or {}
+    if not feats:
+        return False
+    leader = cands[0]
+    lf = feats.get(leader) or {}
+    if not int(lf.get("q_meta_overlap") or 0):
+        return False
+    lp = lf.get("prefix") or str(leader or "").split("_", 1)[0].lower()
+    if lp not in ("informationregister", "catalog") and not lf.get("is_kind_catalog"):
+        if lp != "document":
+            return False
+    # В пуле есть «гигант» без темы с большим literal-счётчиком — класс §7.7.
+    giant = False
+    for s in cands[1:min(len(cands), 12)]:
+        f = feats.get(s) or {}
+        if int(f.get("q_meta_overlap") or 0):
+            continue
+        if int(f.get("n_rows") or 0) >= 1000 or int(f.get("n_dated") or 0) >= 1000:
+            giant = True
+            break
+        sp = f.get("prefix") or str(s or "").split("_", 1)[0].lower()
+        if sp == "accountingregister":
+            giant = True
+            break
+    return giant
+
+
+def try_count_theme_code_pick(question, intent, cands, diag, cut, t0):
+    """Обход pick_entity: один q_meta-лидер при ловушке гиганта."""
+    if not count_theme_code_pick_applies(cands, diag, intent, question):
+        return None
+    leader = cands[0]
+    d = dict(diag or {})
+    d["count_theme_code_pick"] = leader
+    return {"picked": [leader], "marks": {}, "plan": {},
+            "diag": d, "partial": cut}
+
+
+def rank_period_unspecified(intent, diag=None):
+    """Rank/top-N: период не задан явно и не снят drop_assumed."""
+    intent = intent or {}
+    p = intent.get("period") or {}
+    if p.get("from") or p.get("to"):
+        if (diag or {}).get("period_assumed_dropped"):
+            return True
+        assumed = ((intent.get("parse") or {}).get("assumed") or [])
+        if any(str(a).startswith("period.") for a in assumed):
+            return False
+        return False
+    return True
+
+
+def rank_period_clarify_applies(intent, diag, question, trusted=None, resolved=None):
+    """Rank без периода при ≥2 честных окнах — clarify (п.12), не all-time по умолчанию.
+
+    Одно чтение (all-time или одно assumed-окно) — False: §9.2 «топ-5 по продажам».
+    """
+    if not rank_intent_from(intent, question=question):
+        return False
+    if sales_compare_intent(intent, question):
+        return False
+    if not rank_period_unspecified(intent, diag):
+        return False
+    for prov in (trusted, resolved):
+        if isinstance(prov, dict) and prov.get("period") is not None:
+            return False
+    q = " ".join(str(question or "").lower().split())
+    # Явное окно в тексте — не переспрос (relative forms / даты).
+    if any(w in q for w in (
+            "вчера", "сегодня", "завтра", "недел", "месяц", "квартал",
+            "год", "year", "week", "month", "quarter", "yesterday", "today")):
+        return False
+    if period_form_from_question(question):
+        return False
+    # Без маркера времени rank = all-time — одно прочтение, не clarify.
+    return False
+
+
+def try_rank_period_clarify(question, intent, diag, cut, t0, today=None):
+    """Clarify периода для rank — только если rank_period_clarify_applies."""
+    if not rank_period_clarify_applies(intent, diag, question):
+        return None
+    readings = event_count_period_option_readings(today)
+    opts = []
+    for rd in readings:
+        pr = dict(rd.get("period") or {})
+        if rd.get("origin"):
+            pr["origin"] = rd["origin"]
+        if rd.get("interpretation_id"):
+            pr["interpretation_id"] = rd["interpretation_id"]
+        lab = render_window_label(pr, origin=rd.get("origin"), today=today)
+        if not lab:
+            lab = str(rd.get("interpretation_id") or "none")
+        opts.append({"src": "", "label": lab, "hint": "",
+                     "distinct_by": "period", "period": pr,
+                     "window_fp": rd.get("window_fp") or ""})
+    cyr = any("\u0400" <= c <= "\u04ff" for c in (question or ""))
+    text = ("За какой период считать рейтинг?" if cyr
+            else "Which period for the ranking?")
+    d = dict(diag or {})
+    d["rank_period_clarify"] = True
+    return {"partial": cut or None, "kind": "clarify", "text": text,
+            "options": opts, "sources": [],
+            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
+                               gate_ok=True)}
+
 
 register_zone('ask.z10_rank', globals())

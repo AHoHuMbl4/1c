@@ -66,6 +66,31 @@ _k_acct = K6.rank_key_v2("accountingregister_y", _feat_acct,
                          {"want": "count"}, "count", 0)
 t("offline: q_meta info < acct giant", _k_info < _k_acct, (_k_info, _k_acct))
 
+# K6c offline: pick hint + code-pick (z06/z10)
+import serene_ask as SA  # noqa: E402
+
+_diag_k6c = {"answer_fit_v2_full": {
+    "informationregister_fio": {"q_meta_overlap": 1, "q_row_overlap": 12,
+                                "n_rows": 17, "q_row_ratio": 800, "prefix": "informationregister"},
+    "accountingregister_plan": {"q_meta_overlap": 0, "n_rows": 189043,
+                                "prefix": "accountingregister"},
+}}
+t("K6c: suffix themed not literal",
+  SA.entity_matching_records_suffix("informationregister_fio", 500, _diag_k6c)
+  == " — 12 matching records")
+t("K6c: pick counts themed",
+  SA.entity_pick_counts_for_model(
+      {"informationregister_fio": 500, "accountingregister_plan": 189043},
+      _diag_k6c, {"want": "count"}, "сколько анкет")["informationregister_fio"] == 12)
+t("K6c: code pick applies",
+  SA.count_theme_code_pick_applies(
+      ["informationregister_fio", "accountingregister_plan"], _diag_k6c,
+      {"want": "count", "kind": "анкеты"}, "сколько анкет заполнено"))
+t("K6c: rank period clarify off for all-time top",
+  not SA.rank_period_clarify_applies(
+      {"want": "list", "amount": {"value": 5}, "period": {}},
+      {}, "топ-5 товаров по продажам"))
+
 # K9-ф2: осевой регистр с qty-мерой выше money-only при равной лексике/axis_fit
 _feat_axis_qty = {"prefix": "accumulationregister", "cls": "business",
                   "n_dated": 100, "n_with_nums": 50, "axis_fit": 2,

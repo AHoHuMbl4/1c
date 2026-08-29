@@ -276,7 +276,7 @@ clarify двух атомов (`k6_dual_atom_clarify_return`). Kind — `kind_fr
 | живой :8096 «какой клиент больше всех купил…» | DYNAMIC SELLING GROUP SRL **1 537 150.47** |
 | живой «топ-3 по деньгам…» | тот же лидер в топе |
 
-### 7.7. Остаток: count-вопрос с чужим гигантом (замер 27.08, патч 3 К3)
+### 7.7. ~~Остаток~~ count-вопрос с чужим гигантом — закрыт K6c (29.08)
 
 «Сколько анкет заполнено?» на живой okna: ранг v2 работает (шаг «K6 v2,
 кандидатов=99» в трассе), но модель выбирает `accountingregister_плансчетовосновной2014`
@@ -291,6 +291,27 @@ v2 недостаточно, чтобы поднять фио-регистры �
   сущности, несущих слова вопроса» против «сырой count» в подсказке модели.
 - K4-страж тут прав: kind «анкеты» имеет опору в корпусе, no_data нельзя
   (данные об анкетах есть — см. K4_CLARIFY_VS_NODATA §7, строка «анкеты»).
+
+### 7.7a. K6c: q_meta в подсказке модели + code-pick (29.08)
+
+Класс §7.7 закрыт двумя механизмами (код, не промт):
+
+| механизм | где | что |
+|---|---|---|
+| themed count | `entity_pick_counts_for_model`, `entity_matching_records_suffix` (z06) | после K6 v2 literal `by` заменяется на q_row_overlap / themed n_rows для q_meta; pick_entity показывает тематическую долю, не 189043 |
+| code-pick | `count_theme_code_pick_applies`, `try_count_theme_code_pick` (z10) | count + q_meta-лидер + гигант без q_meta в топ-12 → `picked=[leader]`, модель не зовётся |
+| rank period | `rank_period_clarify_applies` (z10) | дефект 2: all-time top без маркера времени — одно чтение, clarify False (§9.2) |
+
+Проводка: z16 `pick_entity` → `entity_matching_records_suffix`; z20 после K6 —
+`entity_pick_counts_for_model`, перед `pick_entity` — `try_count_theme_code_pick`.
+
+| замок | до → после |
+|---|---|
+| test_k6_rank_v2 offline | 10/0 → **14/0** (+K6c suffix/pick/rank-period) |
+| test_rank_leader_path | 30/0 → **31/0** (+rank_period clarify off) |
+| test_sales_rank_canon | **51/0** (без регресса) |
+| test_rank_axis_anchor | **67/0** (без регресса) |
+| bench v2_lead / v1-регресс | **18/23**, broke_v1_top3=0 (база 27.08; K6c не меняет reorder_v2) |
 
 ### 7.8. K6a: q_meta против гиганта (27.08)
 

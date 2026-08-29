@@ -545,5 +545,60 @@ def meaning_candidates(exprs, kind_text, question, limit, exclude=(), diag=None)
     return [t for t in out if t not in exclude]
 
 
+def entity_pick_counts_for_model(by, diag, intent=None, question=""):
+    """K6c: подсказка модели — тематическая доля строк, не сырой literal count.
+
+    Literal «matching records» от BM25 отдаёт гиганту-служебнику сотни тысяч
+    совпадений по общим словам; q_meta/q_row из answer_fit_v2 — доля строк с темой
+    вопроса (label/aliases/doc), см. K6_ENTITY_RANK §7.7–7.8.
+    """
+    by = dict(by or {})
+    feats = (diag or {}).get("answer_fit_v2_full") or {}
+    if not by or not feats:
+        return by
+    want = ((intent or {}).get("want") or "").strip().lower()
+    if want not in ("count", "") and not rank_intent_from(intent, question=question):
+        return by
+    out = dict(by)
+    for src, raw in by.items():
+        f = feats.get(src) or {}
+        if not int(f.get("q_meta_overlap") or 0):
+            continue
+        n_ov = int(f.get("q_row_overlap") or 0)
+        if n_ov > 0:
+            out[src] = n_ov
+            continue
+        n_rows = int(f.get("n_rows") or 0)
+        ratio = int(f.get("q_row_ratio") or 0)
+        if ratio > 0 and n_rows > 0:
+            out[src] = max(1, n_rows * ratio // 1000)
+        elif n_rows > 0:
+            out[src] = n_rows
+    return out
+
+
+def entity_matching_records_suffix(src, raw_count, diag=None):
+    """Строка « — N matching records» для pick_entity: q_meta → тема, иначе literal."""
+    if raw_count is None:
+        return ""
+    f = ((diag or {}).get("answer_fit_v2_full") or {}).get(src) or {}
+    if int(f.get("q_meta_overlap") or 0):
+        n_ov = int(f.get("q_row_overlap") or 0)
+        if n_ov > 0:
+            return " — %d matching records" % n_ov
+        n_rows = int(f.get("n_rows") or 0)
+        ratio = int(f.get("q_row_ratio") or 0)
+        if ratio > 0 and n_rows > 0:
+            return " — %d matching records" % max(1, n_rows * ratio // 1000)
+        if n_rows > 0:
+            return " — %d matching records" % n_rows
+    try:
+        n = int(raw_count)
+    except (TypeError, ValueError):
+        return ""
+    if n <= 0:
+        return ""
+    return " — %d matching records" % n
+
 
 register_zone('ask.z06_entity_search', globals())

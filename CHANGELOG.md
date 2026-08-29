@@ -1,3 +1,15 @@
+## 2026-08-29 — K6c: count vs гигант — themed count + code-pick q_meta [код]
+
+**[код]** Класс §7.7 K6_ENTITY_RANK: на count-вопросах literal BM25
+«matching records» отдавал модели служебный гигант (189043) вместо
+тематического регистра. `entity_pick_counts_for_model` /
+`entity_matching_records_suffix` (z06) подменяют счётчик на
+q_row_overlap; `try_count_theme_code_pick` (z10) обходит модель при
+q_meta-лидере и гиганте без темы. Rank без периода: all-time top —
+одно чтение, clarify False (§9.2). **Доказано:** test_k6_rank_v2 14/0,
+test_rank_leader_path 31/0, test_rank_axis_anchor 67/0,
+test_sales_rank_canon 51/0; bench v2_lead 18/23 (база 27.08, DSN нет).
+
 ## 2026-08-29 — K4 №16: «Как у нас дела?» — переспрос вместо non_accounting [код]
 
 **[код]** Разговорный how-вопрос без координат учёта при живых business-темах

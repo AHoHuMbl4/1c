@@ -244,6 +244,12 @@ t("rank_defer_fork_outcome_b false на sum без rank",
       {"want": "sum"}, {}, "сколько продали?",
       [{"srcs": ["a"]}, {"srcs": ["a"]}]))
 
+# K6c: rank без периода — all-time одно чтение, не clarify (§9.2)
+t("rank_period_clarify: топ-5 без даты → False",
+  not A.rank_period_clarify_applies(
+      {"want": "list", "amount": {"value": 5}, "period": {}},
+      {}, "топ-5 товаров по продажам"))
+
 
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))
 if FAIL:
