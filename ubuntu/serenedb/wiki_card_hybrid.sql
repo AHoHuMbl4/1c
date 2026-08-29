@@ -76,6 +76,23 @@ struct_move AS (
                      concat_ws(' ', t.label, a.aliases, a.best_used_for)),
                      x -> length(x) >= 3))
 ),
+struct_catalog_event AS (
+  SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
+         c.emb <=> (SELECT qv FROM q) AS distance,
+         2 AS src_layer
+    FROM search_wiki_entity_card c
+    JOIN search_tables t ON t.src_table = c.src_table
+    LEFT JOIN search_entity_alias a ON a.src_table = c.src_table
+   WHERE :'action_class' = 'event'
+     AND :want_agg = 1
+     AND c.src_table LIKE 'catalog_%'
+     AND :'action_axis' <> ''
+     AND list_has_any(
+           (SELECT stems FROM axis_words),
+           list_filter(ts_lexize(:'stem_dict',
+                     concat_ws(' ', t.label, a.aliases, a.best_used_for)),
+                     x -> length(x) >= 3))
+),
 pool AS (
   SELECT DISTINCT ON (src_table) src_table, name, description, axes, measures,
          covered, distance, src_layer
@@ -84,6 +101,7 @@ pool AS (
       UNION ALL SELECT * FROM struct_catalog
       UNION ALL SELECT * FROM struct_register
       UNION ALL SELECT * FROM struct_move
+      UNION ALL SELECT * FROM struct_catalog_event
     ) u
    ORDER BY src_table, src_layer DESC, distance
 ),
@@ -117,7 +135,8 @@ filtered AS (
            :'action_class' NOT IN ('event', 'object')
         OR (:'action_class' = 'event'
             AND (p.src_table LIKE 'accumulationregister_%'
-                 OR p.src_table LIKE 'document_%'))
+                 OR p.src_table LIKE 'document_%'
+                 OR (:want_agg = 1 AND p.src_table LIKE 'catalog_%')))
         OR (:'action_class' = 'object'
             AND (p.src_table LIKE 'catalog_%'
                  OR p.src_table LIKE 'accumulationregister_%'))
