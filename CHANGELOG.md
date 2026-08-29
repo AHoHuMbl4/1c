@@ -40,6 +40,18 @@ __file__ пакета); z21 SQL гибрида, z03/z04 JSON-fallback, z20 journ
 через ASK_ROOT. Замок zone_names **95/0**: запрет `__file__` в телах зон +
 существование wiki_card_hybrid.sql от ASK_ROOT. Доки: CHANGELOG.
 
+## 2026-08-29 — corpus_merge: ветка entity_deleted_delta (orphan / удаление в 1С) [код]
+
+**[код]** `corpus_merge.sql`: четвёртая ветка — частичный уход, мёртвый Recorder
+в регистре, документ-регистратор **нет** в витрине (`Recorder_Type` → `document_*`,
+`Ref_Key`) → `entity_deleted_delta:<src_table>` в `search_quality`, merge
+продолжается; документ **жив** при нуле движений → STOP «дефект транспорта» с
+recorder. Анти-соединение перепроведения: хвост ключа после Recorder = Period|оси
+в tmp3, только если `Period` в `tmp3_key`. Замок **37/0** (было 27/0).
+**[замер okna 29.08]** deploy; merge STOP ожидаемо на `f7f10236` (док 19 строк,
+движений 0 — транспорт); `de0ef63e`/`f4e8e0fa` — deleted_delta кандидаты.
+Числа: 37/0. Доки: cookbook/sql_features/query_and_query_table_functions.
+
 ## 2026-08-29 — corpus_merge: ветка entity_key_collapse (частичный уход + рост) [код]
 
 **[код]** `corpus_merge.sql`: третья ветка сторожа — частичный уход (0<уйдёт<было)

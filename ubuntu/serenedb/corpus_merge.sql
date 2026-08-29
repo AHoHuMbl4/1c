@@ -94,7 +94,11 @@ FROM (SELECT src_table, row_key FROM tmp3_corpus GROUP BY 1, 2 HAVING count(*) >
 -- соединения выше ключи не сопоставляют. У сущности уходит 100 % её старых ключей,
 -- новая сборка непуста и не меньше — пересбор, не потеря. Частичный уход (<100 %)
 -- при росте сборки и живых Recorder в витрине — схлопывание гранулярности ключа
--- (два движения с одним составом измерений → один объект), не потеря. Иначе STOP.
+-- (два движения с одним составом измерений → один объект), не потеря. Мёртвый
+-- Recorder и документ-регистратор удалён из 1С — легитимная дельта (п. 17),
+-- `entity_deleted_delta`. Мёртвый Recorder, документ жив — дефект транспорта,
+-- STOP. Перепроведение под другим Recorder при том же Period|оси — анти-соединение
+-- ниже (только если Period в объявленном ключе). Иначе STOP.
 -- Доки: MERGE INTO; cookbook/sql_features/query_and_query_table_functions.
 CREATE OR REPLACE TABLE tmp3_merge_unmatched AS
 SELECT c.src_table, c.row_key
@@ -120,7 +124,19 @@ WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
                   WHERE t.src_table = c.src_table
                     AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '#', 1)
                     AND position('#' in c.row_key) > 0
-                    AND split_part(c.row_key, '#', 1) <> '');
+                    AND split_part(c.row_key, '#', 1) <> '')
+  -- Перепроведение: тот же хвост ключа после Recorder (Period|измерения), другой
+  -- Recorder уже в tmp3 — не orphan. Только если Period в объявленном ключе:
+  -- для {Recorder,Recorder_Type,LineNumber} хвост = LineNumber, совпадение ложное.
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table
+                    AND substr(t.row_key, length(split_part(t.row_key, '|', 1)) + 2)
+                      = substr(c.row_key, length(split_part(c.row_key, '|', 1)) + 2)
+                    AND split_part(t.row_key, '|', 1) <> split_part(c.row_key, '|', 1)
+                    AND split_part(c.row_key, '|', 1) <> ''
+                    AND EXISTS (SELECT 1 FROM tmp3_key k
+                                WHERE k.entity = lower(c.src_table)
+                                  AND list_contains(k.key_cols, 'Period')));
 
 CREATE OR REPLACE TABLE tmp3_merge_ent_guard AS
 SELECT e.src_table,
@@ -194,13 +210,93 @@ SELECT 'entity_key_collapse:' || src_table, уйдёт,
        'было ' || было || ' → стало ' || стало
 FROM tmp3_merge_key_collapse;
 
+-- Частичный уход, мёртвый Recorder в регистре: документ-регистратор удалён из 1С —
+-- дельта, строки уходят из корпуса. Документ жив в витрине — дефект транспорта.
+CREATE OR REPLACE TABLE tmp3_merge_delta_rec AS
+SELECT u.src_table, u.row_key, split_part(u.row_key, '|', 1) AS rec,
+       CASE WHEN split_part(u.row_key, '|', 2) <> ''
+            THEN lower(regexp_replace(split_part(u.row_key, '|', 2), '^.*\.', ''))
+            ELSE (SELECT st.written_by FROM search_tables st
+                  WHERE st.src_table = u.src_table) END AS doc_tbl
+FROM tmp3_merge_unmatched u
+WHERE u.src_table IN (SELECT src_table FROM tmp3_merge_collapse_cand)
+  AND split_part(u.row_key, '|', 1) <> '';
+
+CREATE OR REPLACE TABLE tmp3_merge_rec_dead (src_table VARCHAR, rec VARCHAR);
+
+PREPARE p_rec_dead AS
+INSERT INTO tmp3_merge_rec_dead
+SELECT $1::VARCHAR, r.rec
+FROM (SELECT DISTINCT rec FROM tmp3_merge_collapse_rec WHERE src_table = $1) r
+WHERE NOT EXISTS (SELECT 1 FROM query_table($1) q WHERE q."Recorder" = r.rec);
+
+\set ON_ERROR_STOP off
+SELECT 'EXECUTE p_rec_dead(' || quote_literal(src_table) || ');'
+FROM tmp3_merge_collapse_regs
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_merge_doc_alive (doc_tbl VARCHAR, rec VARCHAR, alive BIGINT);
+
+PREPARE p_doc_alive AS
+INSERT INTO tmp3_merge_doc_alive
+SELECT $1::VARCHAR, d."Ref_Key", count(*)
+FROM query_table($1) d
+WHERE d."Ref_Key" IN (SELECT r.rec FROM tmp3_merge_delta_rec r WHERE r.doc_tbl = $1)
+GROUP BY d."Ref_Key";
+
+\set ON_ERROR_STOP off
+SELECT 'EXECUTE p_doc_alive(' || quote_literal(doc_tbl) || ');'
+FROM (SELECT DISTINCT doc_tbl FROM tmp3_merge_delta_rec
+      WHERE doc_tbl IS NOT NULL AND doc_tbl <> '') x
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_merge_orphan_rec AS
+SELECT d.src_table, d.row_key, d.rec, d.doc_tbl
+FROM tmp3_merge_delta_rec d
+INNER JOIN tmp3_merge_rec_dead x USING (src_table, rec);
+
+CREATE OR REPLACE TABLE tmp3_merge_deleted_delta_rows AS
+SELECT o.src_table, o.row_key
+FROM tmp3_merge_orphan_rec o
+WHERE o.doc_tbl IS NOT NULL AND o.doc_tbl <> ''
+  AND NOT EXISTS (SELECT 1 FROM tmp3_merge_doc_alive a
+                  WHERE a.doc_tbl = o.doc_tbl AND a.rec = o.rec AND a.alive > 0);
+
+CREATE OR REPLACE TABLE tmp3_merge_transport_defect AS
+SELECT o.src_table, o.rec, o.doc_tbl, count(*)::BIGINT AS n
+FROM tmp3_merge_orphan_rec o
+INNER JOIN tmp3_merge_doc_alive a ON a.doc_tbl = o.doc_tbl AND a.rec = o.rec AND a.alive > 0
+GROUP BY 1, 2, 3;
+
+CREATE OR REPLACE TABLE tmp3_merge_key_deleted_delta AS
+SELECT c.src_table, c.было, c.стало, count(d.row_key)::BIGINT AS уйдёт
+FROM tmp3_merge_collapse_cand c
+INNER JOIN tmp3_merge_deleted_delta_rows d ON d.src_table = c.src_table
+WHERE NOT EXISTS (SELECT 1 FROM tmp3_merge_transport_defect t WHERE t.src_table = c.src_table)
+GROUP BY 1, 2, 3;
+
+DELETE FROM search_quality WHERE k LIKE 'entity_deleted_delta:%';
+INSERT INTO search_quality
+SELECT 'entity_deleted_delta:' || src_table, уйдёт,
+       'было ' || было || ' → стало ' || стало
+FROM tmp3_merge_key_deleted_delta;
+
+SELECT CASE WHEN count(*) > 0
+       THEN error('corpus_merge: документ жив, движений в регистре нет (дефект транспорта): '
+                  || string_agg(src_table || ' recorder=' || rec || ' (' || n || ')',
+                                ', ' ORDER BY src_table, rec)) END
+FROM tmp3_merge_transport_defect;
+
 SELECT CASE WHEN count(*) > 0
        THEN error('corpus_merge: частичная потеря объектов у сущностей: '
                   || string_agg(src_table || ' (' || уйдёт || ' из ' || было || ')',
                                 ', ')) END
 FROM tmp3_merge_ent_guard g
 WHERE g.уйдёт > 0 AND g.уйдёт < g.было
-  AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse k WHERE k.src_table = g.src_table);
+  AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse k WHERE k.src_table = g.src_table)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_deleted_delta k WHERE k.src_table = g.src_table);
 
 CREATE OR REPLACE TABLE tmp3_merge_key_form AS
 SELECT src_table, было, стало, уйдёт
@@ -221,6 +317,8 @@ FROM (SELECT count(*) AS уйдёт FROM tmp3_merge_unmatched u
       WHERE NOT EXISTS (SELECT 1 FROM tmp3_merge_key_form k
                         WHERE k.src_table = u.src_table)
         AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse k
+                        WHERE k.src_table = u.src_table)
+        AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_deleted_delta k
                         WHERE k.src_table = u.src_table));
 
 -- Сужение величин — не ошибка, но и не пустяк: строка теряет числа, оставаясь на месте,
