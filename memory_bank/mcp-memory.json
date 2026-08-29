@@ -496,6 +496,9 @@
 {"type":"entity","name":"client_gold.py","entityType":"прибор (генератор client-gold)","observations":["work/gold/client_gold.py: генератор client-gold.tsv для И0 — покрытие сущностей из information_schema.tables (catalog_*, accumulationregister_*, document*), формулировки шаблоны×сущности + ask_journal_text; эталон packet (base_profile/сырой регистр) ↔ vitrine без search_corpus. Источник: work/gold/README.md","29.08 okna: OData нет — эталон из пакетов (base_profile), не шлюза; DSN journal postgres из /etc/1c-packet.env; живой прогон 71 вопрос, match22/needs_independent_read23/pending26/declared_wrong1, discrepancy 24 строки","Замок work/gold/test_client_gold.py 16/0: детерминизм, пересечение с ab-gold=0, валидность срезов slices-okna-packet.json","29.08: _normalize_journal_question снимает префикс User:; фильтр ответов бота Уточните/Что могу подтвердить","29.08 финал: load_working_gold_questions исключает формулировки из WORKING; лаг build_state.ts; register_period шаблон при колонке Period (DESCRIBE); живой okna 67 вопросов match22/pending21/needs_read23; test_client_gold 17/0"]}
 {"type":"entity","name":"client-gold-okna.tsv","entityType":"файл данных (золотой набор)","observations":["71 вопрос приёмочного набора okna (роль client-gold в docs/GOLD_SETS.md); колонки question/etalon/etalon_source/freshness_lag_sec/verify_status; генератор work/gold/client_gold.py build","29.08: после фильтра журнала и исключения пересечений с рабочими наборами; эталон packet+vitrine где есть SQL, иначе pending из journal","68 вопросов после дедупа и фильтра ответов бота из journal (29.08 финал)","67 вопросов 29.08: 5 колонок incl freshness_lag_sec; packet+vitrine match 22; источник пакеты не OData"]}
 {"type":"entity","name":"test_corpus_merge_key_form.py","entityType":"оффлайн-замок","observations":["29.08: 17 проверок сторожа смены формы ключа vs потеря. Источник: test_corpus_merge_key_form.py"]}
+{"type":"entity","name":"wiki_card_build.sql","entityType":"component","observations":["ubuntu/serenedb/wiki_card_build.sql — MERGE в search_wiki_entity_card из wiki_pages+search_refcols+search_measure_alias; IVF cosine wiki_entity_card_emb_idx; не в build.sh (29.08)"]}
+{"type":"entity","name":"wiki_card_knn.sql","entityType":"component","observations":["ubuntu/serenedb/wiki_card_knn.sql — kNN top-5 по search_wiki_entity_card через ai_embed и <=> (29.08)"]}
+{"type":"entity","name":"test_wiki_card_build.py","entityType":"component","observations":["ubuntu/serenedb/test_wiki_card_build.py — офлайн-замок Б1–Б2: wiki_pages/refcols/measure_alias, MERGE, ivf cosine kNN, hardcode scan (29.08)"]}
 {"type":"relation","from":"pipeline.sh","to":"deploy.sh","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"serene_sync.py","relationType":"вызывает"}
 {"type":"relation","from":"pipeline.sh","to":"build.sh","relationType":"вызывает"}
@@ -1271,3 +1274,9 @@
 {"type":"relation","from":"test_gold_sets_split.py","to":"client-gold-okna.tsv","relationType":"validates_registry_for"}
 {"type":"relation","from":"client_gold.py","to":"test_gold_sets_split.py","relationType":"feeds_gold_set_for"}
 {"type":"relation","from":"test_corpus_merge_key_form.py","to":"corpus_merge.sql","relationType":"проверяет сторож"}
+{"type":"relation","from":"wiki_card_build.sql","to":"search_refcols","relationType":"reads"}
+{"type":"relation","from":"wiki_card_build.sql","to":"search_measure_alias","relationType":"reads"}
+{"type":"relation","from":"wiki_card_build.sql","to":"search_wiki_entity_card","relationType":"creates"}
+{"type":"relation","from":"wiki_card_knn.sql","to":"search_wiki_entity_card","relationType":"queries"}
+{"type":"relation","from":"test_wiki_card_build.py","to":"wiki_card_build.sql","relationType":"validates"}
+{"type":"relation","from":"test_wiki_card_build.py","to":"wiki_card_knn.sql","relationType":"validates"}

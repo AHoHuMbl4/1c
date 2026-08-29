@@ -58,6 +58,46 @@
 Приёмка фронтa Б: склад-класс обе формулировки → живой эталон; клиентский
 gold-набор (67); вторая база klient-1; замки на каждый шаг.
 
+### Б1–Б2 сделано (29.08, okna живьём)
+
+Файлы: `ubuntu/serenedb/wiki_card_build.sql`, `wiki_card_knn.sql`,
+`test_wiki_card_build.py`. Таблица `search_wiki_entity_card` — отдельно от
+лексической `search_entity_card` (такт); в `build.sh` **не** встроено.
+
+| Число | okna 29.08 |
+|---|---|
+| Сущностей витрины (`search_tables`) | 351 |
+| Карточек после MERGE | 351 |
+| `covered=1` (есть `wiki_pages`) | 254 |
+| `covered=0` (структура без wiki) | 97 |
+| С вектором `emb` (Qwen3-Embedding-4B, dim 1024) | 351 |
+| IVF-индекс | `wiki_entity_card_emb_idx`, metric=cosine |
+
+Сборка: имя + `wiki_pages.body` + оси `search_refcols` + меры
+`search_measure_alias` → `card_text` → `ai_embed` (досчёт —
+`embed_missing.sh search_wiki_entity_card "substr(card_text,1,20000)" 1 src_table`
+после `wiki_card_build.sql`; на okna psql `\if :left_n_left` в embed_missing
+требует правки — досчитано пачками UPDATE LIMIT 16).
+
+kNN: `wiki_card_knn.sql` — вопрос → `ai_embed` → `emb <=>` → LIMIT 5.
+
+**Контрольные вопросы (top-5, cosine distance):**
+
+| Вопрос | Верная сущность (ожидание) | Место в top-5 |
+|---|---|---|
+| сколько на складе позиций всего | регистр остатков / складская операция | **>5** — top line-items «номенклатура», не balance |
+| сколько клиентов реально покупали за последний год | `catalog_контрагенты` | **2** (rank 1 — табель, шум wiki-текста) |
+| сколько продали за месяц | `accumulationregister_реализациятмц` / документ реализации | **2** / **4** |
+| какой самый продаваемый товар | регистр/номенклатура продаж | **2** (`accumulationregister_реализациятмц`) |
+| сколько контрагентов | `catalog_контрагенты` | **1** |
+
+Итог приёмки Б2: **2/5** в top-2 (контрагенты ×2, продажи ×2); склад и
+rank-товар — честный провал: карточки line-items перетягивают на «номенклатура»,
+регистр остатков в карточках не выделен; артефакт `document_табель_…` в top-1
+на нерелевантных вопросах. Следующий шаг Б3 — выбор модели с исходом «ни один».
+
+Оффлайн-замок: `python3 ubuntu/serenedb/test_wiki_card_build.py` — **18/0**.
+
 ## §3. Порядок
 
 А сейчас (ф2 работает) → Б параллельно (не пересекается: свои файлы + зоны

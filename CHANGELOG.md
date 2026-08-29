@@ -1,4 +1,12 @@
-## 2026-08-29 — K7 раунд 4: stock-path по маркерам вопроса + product-axis canon [код] — 🔴 ОТКЛОНЕНО владельцем
+## 2026-08-29 — Б1–Б2 wiki_card: паспорт-карточки + kNN на okna [код] [замер]
+
+**[код]** `wiki_card_build.sql` / `wiki_card_knn.sql` / `test_wiki_card_build.py`:
+таблица `search_wiki_entity_card` (MERGE, covered, card_text, emb FLOAT[1024],
+IVF cosine `wiki_entity_card_emb_idx`); источники — `wiki_pages`, `search_refcols`,
+`search_measure_alias`. Не в такте. **[замер]** okna: **351** карточек,
+**254** covered wiki, **351** с вектором; kNN top-5 — контрагенты **rank 1**,
+продажи **rank 2**, склад **>5** (line-items номенклатура). Замок **18/0**.
+Числа: 351/254/351 emb. Доки: ai_embed; Vector Search kNN; PLAN_WIKI_CHOICE §Б1–Б2.
 
 > 🔴 **Запись отклонена решением владельца 29.08** («прод на скрытой базе,
 > предметные слова — дефект»): `_STOCK_MARKERS`/«всего»/«вместе» в коде —
