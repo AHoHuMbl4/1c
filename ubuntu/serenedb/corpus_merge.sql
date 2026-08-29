@@ -88,36 +88,86 @@ FROM (SELECT src_table, row_key FROM tmp3_corpus GROUP BY 1, 2 HAVING count(*) >
 -- Составной ключ склеен через `|`, и в данных 1С `#` встречается — поэтому
 -- режем только ХВОСТ после последнего осмысленного совпадения со стейджем,
 -- а не «всё до первого `#`» вслепую.
+--
+-- [замер 29.08 okna] после нового $metadata форма row_key сменилась целиком
+-- (guid → 40-hex хеш; регистр: guid|StandardODATA → Period|измерения) — анти-
+-- соединения выше ключи не сопоставляют. У сущности уходит 100 % её старых ключей,
+-- новая сборка непуста и не меньше — пересбор, не потеря. Частичный уход (<100 %)
+-- или новая сборка меньше старой — другой диагноз, STOP. Доки: MERGE INTO.
+CREATE OR REPLACE TABLE tmp3_merge_unmatched AS
+SELECT c.src_table, c.row_key
+FROM search_corpus c
+WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
+  -- РАЗДЕЛЬНЫЕ анти-соединения, а не одно `IN (ключ, обрезанный ключ)`:
+  -- список внутри `IN` лишает движок равенства, и он уходит в перебор. [замер 30.07]
+  -- одним `IN` запрос не уложился в две минуты на 623 565 строках; двумя — 0,2 с.
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table AND t.row_key = c.row_key)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table
+                    AND t.row_key = regexp_replace(c.row_key, '#[0-9a-f]{40}$', ''))
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table
+                    AND t.row_key = split_part(c.row_key, '#', 1)
+                    AND position('#' in c.row_key) > 0)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table
+                    AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '|', 1)
+                    AND split_part(c.row_key, '|', 1) <> '')
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table
+                    AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '#', 1)
+                    AND position('#' in c.row_key) > 0
+                    AND split_part(c.row_key, '#', 1) <> '');
+
+CREATE OR REPLACE TABLE tmp3_merge_ent_guard AS
+SELECT e.src_table,
+       coalesce(o.было, 0::BIGINT) AS было,
+       coalesce(u.уйдёт, 0::BIGINT) AS уйдёт,
+       e.стало
+FROM (SELECT src_table, count(*)::BIGINT AS стало FROM tmp3_corpus GROUP BY 1) e
+LEFT JOIN (
+  SELECT src_table, count(*)::BIGINT AS было
+  FROM search_corpus
+  WHERE src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
+  GROUP BY 1
+) o USING (src_table)
+LEFT JOIN (
+  SELECT src_table, count(*)::BIGINT AS уйдёт FROM tmp3_merge_unmatched GROUP BY 1
+) u USING (src_table);
+
+SELECT CASE WHEN count(*) > 0
+       THEN error('corpus_merge: новая сборка меньше старой у сущностей: '
+                  || string_agg(src_table || ' (' || стало || ' против ' || было || ')',
+                                ', ')) END
+FROM tmp3_merge_ent_guard
+WHERE было > 0 AND стало < было;
+
+SELECT CASE WHEN count(*) > 0
+       THEN error('corpus_merge: частичная потеря объектов у сущностей: '
+                  || string_agg(src_table || ' (' || уйдёт || ' из ' || было || ')',
+                                ', ')) END
+FROM tmp3_merge_ent_guard
+WHERE уйдёт > 0 AND уйдёт < было;
+
+CREATE OR REPLACE TABLE tmp3_merge_key_form AS
+SELECT src_table, было, стало, уйдёт
+FROM tmp3_merge_ent_guard
+WHERE было > 0 AND уйдёт = было AND стало > 0 AND стало >= было;
+
+DELETE FROM search_quality WHERE k LIKE 'entity_key_form_changed:%';
+INSERT INTO search_quality
+SELECT 'entity_key_form_changed:' || src_table, стало,
+       'было ' || было || ' → стало ' || стало
+FROM tmp3_merge_key_form;
+
 SELECT CASE WHEN (SELECT count(*) FROM search_corpus) > 0
              AND уйдёт::DOUBLE / (SELECT count(*) FROM search_corpus) > 0.1
        THEN error('corpus_merge: удаление снесло бы ' || уйдёт || ' объектов из '
                   || (SELECT count(*) FROM search_corpus) || ' — остановлено') END
-FROM (SELECT count(*) AS уйдёт FROM search_corpus c
-      WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
-        -- РАЗДЕЛЬНЫЕ анти-соединения, а не одно `IN (ключ, обрезанный ключ)`:
-        -- список внутри `IN` лишает движок равенства, и он уходит в перебор. [замер 30.07]
-        -- одним `IN` запрос не уложился в две минуты на 623 565 строках; двумя — 0,2 с.
-        AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
-                        WHERE t.src_table = c.src_table AND t.row_key = c.row_key)
-        AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
-                        WHERE t.src_table = c.src_table
-                          AND t.row_key = regexp_replace(c.row_key, '#[0-9a-f]{40}$', ''))
-        -- Тот же объект под ключом `guid#<row_number>` (fold-догон шапки).
-        AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
-                        WHERE t.src_table = c.src_table
-                          AND t.row_key = split_part(c.row_key, '#', 1)
-                          AND position('#' in c.row_key) > 0)
-        -- Смена формы ключа (в ключ регистра дописали LineNumber) — не потеря
-        -- объекта: GUID регистратора/ссылки — первый кусок ключа, склеенного `|`.
-        AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
-                        WHERE t.src_table = c.src_table
-                          AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '|', 1)
-                          AND split_part(c.row_key, '|', 1) <> '')
-        AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
-                        WHERE t.src_table = c.src_table
-                          AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '#', 1)
-                          AND position('#' in c.row_key) > 0
-                          AND split_part(c.row_key, '#', 1) <> ''));
+FROM (SELECT count(*) AS уйдёт FROM tmp3_merge_unmatched u
+      WHERE NOT EXISTS (SELECT 1 FROM tmp3_merge_key_form k
+                        WHERE k.src_table = u.src_table));
 
 -- Сужение величин — не ошибка, но и не пустяк: строка теряет числа, оставаясь на месте,
 -- и по журналу это неотличимо от «их там и не было». Считаем ДО записи, пока прежнее

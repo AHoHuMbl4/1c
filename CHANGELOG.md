@@ -13,6 +13,15 @@ Period|измерения; документы: guid → 40-hex хеш); 4 ант
 формы ключа, запись в search_quality» передано агенту ф2 (prompt-corpus-merge).
 Числа: 233358/1230156 100proc 5 таблиц 1561704. Доки: PLAN_TO_TARGET §0.
 
+## 2026-08-29 — corpus_merge: сторож смены формы ключа сущности [код]
+
+**[код]** `corpus_merge.sql`: per-entity правило — 100 % старых ключей уходит,
+новая сборка непуста и не меньше → `entity_key_form_changed:<src_table>` в
+`search_quality`, исключение из порога 10 %; частичный уход или shrink → STOP.
+Без списков таблиц. Замок `test_corpus_merge_key_form.py` **17/0**.
+**[замер okna]** deploy+такт — после выката на `/opt/1c-mcp-reports` (см. отчёт
+сессии). Числа: 17/0. Доки: sql/statements/merge_into.
+
 ## 2026-08-29 — corpus_build: format || и календарный pick; сборка okna зелёная [код] [замер]
 
 **[код]** `corpus_build.sql`: шаблоны `format()` для `\\gexec` — конкатенация
