@@ -43,11 +43,16 @@ def strip_sql_comments(text: str) -> str:
 
 def load_z21():
     import types
+
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    import ask._imports as real_imp
+
     fake = types.ModuleType("ask._wire")
     fake.register_zone = lambda *a, **k: None
     fake.apply_bindings = lambda g: None
     sys.modules["ask._wire"] = fake
-    sys.modules["ask._imports"] = types.ModuleType("ask._imports")
+    sys.modules["ask._imports"] = real_imp
     src = Z21.read_text(encoding="utf-8")
     ns = {
         "__name__": "z21_wiki_choice",
@@ -76,10 +81,10 @@ def load_z21():
         "register_zone": lambda *a, **k: None,
         "apply_bindings": lambda g: None,
     }
-    import os
-    from pathlib import Path
-    ns["os"] = os
-    ns["Path"] = Path
+    for k, v in vars(real_imp).items():
+        if k.startswith("_") and k not in ("__builtins__",):
+            continue
+        ns.setdefault(k, v)
     exec(compile(src, str(Z21), "exec"), ns)
     return ns
 

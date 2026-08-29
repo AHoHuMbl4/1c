@@ -1,3 +1,14 @@
+## 2026-08-29 — зоны ask: общие имена только через _imports + замок резолвинга [код]
+
+**[код]** `Path` в `ask/_imports.py`; z21 очищен от собственных импортов выше
+тела (все зоны живут только на _imports). **[замер :8092]** класс дыры:
+шапка зоны не исполняется в общем namespace — NameError в рантайме
+(ASK_WIKI_CHOICE 12:52, Path 12:59 — 503 на «петлях»). Замок
+`test_zone_names_resolvable.py` **70/0**: статика (запрет import выше тела),
+symtable (global-refs резолвятся), exec всех 22 зон как _bootstrap, self-check
+на красном кейсе. Числа: 70/0 35/0 26/0 48/0 162/0 49/0 word ok. Доки:
+CHANGELOG, ubuntu/serenedb/ask/_imports.py.
+
 ## 2026-08-29 — _bootstrap зон: ASK_/WIKI_-присвоения вне тела зоны — NameError флага [код]
 
 **[замер :8092]** «петли» → 503 NameError 'ASK_WIKI_CHOICE' (z21:15 определён,

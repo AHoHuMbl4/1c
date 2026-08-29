@@ -1,12 +1,6 @@
 """Zone 21: Wiki hybrid entity choice (PLAN_WIKI_CHOICE §Б3)."""
 from __future__ import annotations
 
-import json
-import re
-import sys
-import time
-from pathlib import Path
-
 from ask._imports import *
 from ask._wire import register_zone, apply_bindings
 
