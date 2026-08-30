@@ -2941,39 +2941,59 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # корпус и упали («TSQUERY outside @@ match»).
             match = code_filter
     else:
-        _bal = try_balance_code_entity_pick(
-            question, intent, cands, diag, cut, t0, {}, plan=plan)
-        if _bal and _bal.get("kind") in ("no_data", "clarify"):
-            return _bal
-        if _bal and _bal.get("picked"):
-            picked, marks, plan = _bal["picked"], _bal.get("marks") or {}, _bal.get("plan") or {}
-            diag["balance_code_pick"] = True
-        else:
-            _ev = try_event_code_entity_pick(
-                question, intent, cands, diag, cut, t0, by, match, preds, {})
-            if _ev and _ev.get("kind") in ("no_data", "clarify"):
-                return _ev
-            if _ev and _ev.get("picked"):
-                picked, marks, plan = _ev["picked"], _ev.get("marks") or {}, _ev.get("plan") or {}
-                diag["event_code_pick"] = True
+        picked, marks, plan = [], {}, {}
+        _wiki = None
+        if ASK_WIKI_CHOICE:
+            _wiki = try_wiki_hybrid_entity_pick(
+                question, intent, diag, cut, t0,
+                by=by, match=match, preds=preds)
+            if _wiki and _wiki.get("kind") in ("no_data", "clarify"):
+                return _wiki
+            if _wiki and _wiki.get("picked"):
+                picked, marks, plan = (
+                    _wiki["picked"], _wiki.get("marks") or {}, _wiki.get("plan") or {})
+                diag["wiki_hybrid_pick"] = True
+            elif _wiki is None and not diag.get("wiki_pick"):
+                diag["wiki_pick"] = "fallback"
+        if not picked:
+            _bal = try_balance_code_entity_pick(
+                question, intent, cands, diag, cut, t0, {}, plan=plan)
+            if _bal and _bal.get("kind") in ("no_data", "clarify"):
+                return _bal
+            if _bal and _bal.get("picked"):
+                picked, marks, plan = _bal["picked"], _bal.get("marks") or {}, _bal.get("plan") or {}
+                diag["balance_code_pick"] = True
+                if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
+                    diag["wiki_manual_fallback"] = "balance"
             else:
-                _ct = try_count_theme_code_pick(
-                    question, intent, cands, diag, cut, t0)
-                if _ct and _ct.get("picked"):
-                    picked = _ct["picked"]
-                    marks, plan = {}, {}
-                    diag.update(_ct.get("diag") or {})
+                _ev = try_event_code_entity_pick(
+                    question, intent, cands, diag, cut, t0, by, match, preds, {})
+                if _ev and _ev.get("kind") in ("no_data", "clarify"):
+                    return _ev
+                if _ev and _ev.get("picked"):
+                    picked, marks, plan = _ev["picked"], _ev.get("marks") or {}, _ev.get("plan") or {}
+                    diag["event_code_pick"] = True
+                    if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
+                        diag["wiki_manual_fallback"] = "event"
                 else:
-                    _wiki = try_wiki_hybrid_entity_pick(
-                        question, intent, diag, cut, t0,
-                        by=by, match=match, preds=preds)
-                    if _wiki and _wiki.get("kind") in ("no_data", "clarify"):
-                        return _wiki
-                    if _wiki and _wiki.get("picked"):
-                        picked = _wiki["picked"]
-                        marks, plan = _wiki.get("marks") or {}, _wiki.get("plan") or {}
-                        diag["wiki_hybrid_pick"] = True
-                    else:
+                    _ct = try_count_theme_code_pick(
+                        question, intent, cands, diag, cut, t0)
+                    if _ct and _ct.get("picked"):
+                        picked = _ct["picked"]
+                        marks, plan = {}, {}
+                        diag.update(_ct.get("diag") or {})
+                        if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
+                            diag["wiki_manual_fallback"] = "count_theme"
+                    elif not picked:
+                        if (ASK_WIKI_CHOICE and diag.get("wiki_pick") in ("none", "fallback")
+                                and question_expects_accounting_data(intent, question, diag)
+                                and diag.get("wiki_empty_pool")):
+                            return {"kind": "no_data",
+                                    "partial": cut or None,
+                                    "text": NO_DATA_TEXT or refuse_text(question),
+                                    "sources": [],
+                                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                                       reason="wiki_empty_pool")}
                         try:
                             picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
                                                               counts_for_model, match, diag)
@@ -4808,6 +4828,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
                         "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+        if (agg is None
+                and stock_count_aggregate_without_subject(intent, plan, question)):
+            _net_agg = aggregate_stock_net_distinct(
+                intent, question, match, preds, diag)
+            if _net_agg:
+                agg = _net_agg
+                diag["stock_net_distinct"] = True
+                diag["count_distinct_axis"] = _net_agg.get("axis")
         _dac = live_axis_col_for_count(intent, src, axes)
         if (not _dac and diag.get("stock_canon_locked")
                 and stock_question_engaged(question, intent)
@@ -4818,7 +4846,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     if _dac:
                         diag["stock_product_axis"] = _dac
                         break
-        if _dac:
+        if _dac and agg is None:
             agg = aggregate_distinct_axis(src, match, preds, _dac)
             if agg:
                 diag["count_distinct_axis"] = _dac
