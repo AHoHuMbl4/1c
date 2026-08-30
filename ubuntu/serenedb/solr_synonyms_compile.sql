@@ -133,11 +133,17 @@ SELECT CASE
          ELSE 1
        END;
 
--- alias_idx на search_dict_alias_stem (С5)
-CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict_alias_stem (
-  template = 'text', locale = (SELECT loc FROM _solr_locale), case = 'lower',
-  stemming = true, accent = false,
-  frequency = true, position = true, norm = true);
+-- alias_idx на search_dict_alias_stem (С5). Опции словаря принимают только
+-- литералы (доки: CREATE TEXT SEARCH DICTIONARY — locale = 'en_US.UTF-8'),
+-- поэтому locale подставляется строкой через quote_literal, как в solr_syn_dict ниже.
+SELECT 'CREATE TEXT SEARCH DICTIONARY IF NOT EXISTS search_dict_alias_stem ('
+       || ' template = ''text'','
+       || ' locale = ' || quote_literal((SELECT loc FROM _solr_locale)) || ','
+       || ' case = ''lower'', stemming = true, accent = false,'
+       || ' frequency = true, position = true, norm = true);'
+  FROM _solr_locale
+ WHERE coalesce(loc, '') <> '';
+\gexec
 DROP INDEX IF EXISTS alias_idx;
 CREATE INDEX alias_idx ON :"alias_table"
   USING inverted(aliases search_dict_alias_stem, src_table) INCLUDE (src_table);
