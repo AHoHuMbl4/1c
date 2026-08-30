@@ -302,13 +302,17 @@ while : ; do
 
   # Список работы один раз на круг. Длина круга ≈ N × POOL (§3.3–3.4).
   # chunk режется по строкам И символам (как embed_missing).
+  # ПОЛОСЫ ПО ДЛИНЕ (инструкция владельца 30.08, §4 HOWTO-замер): пачка считается
+  # по самой длинной строке в ней (8 коротких = 0.72 с; 7 коротких + 1 длинная =
+  # 17.6 с) — пул обязан группировать близкие длины, порядок ключей внутри полосы
+  # только детерминирует перестановку.
   ROUND_CAP=$((N * POOL))
   psql "$DSN" -q -v ON_ERROR_STOP=1 -c "
 CREATE OR REPLACE TABLE ${TAG}_todo AS
   WITH s AS (SELECT $KCOLS, $SRC AS txt FROM $TBL WHERE emb IS NULL $ROWS_WHERE),
        ok AS (SELECT * FROM s WHERE txt IS NOT NULL AND length(txt) BETWEEN 1 AND $MAXLEN),
-       w AS (SELECT *, row_number() OVER (ORDER BY $ORD) - 1 AS rn,
-                    sum(length(txt)) OVER (ORDER BY $ORD ROWS BETWEEN UNBOUNDED PRECEDING
+       w AS (SELECT *, row_number() OVER (ORDER BY length(txt), $ORD) - 1 AS rn,
+                    sum(length(txt)) OVER (ORDER BY length(txt), $ORD ROWS BETWEEN UNBOUNDED PRECEDING
                                                               AND 1 PRECEDING) AS cum
              FROM ok),
        capped AS (SELECT * FROM w WHERE rn < $ROUND_CAP)
