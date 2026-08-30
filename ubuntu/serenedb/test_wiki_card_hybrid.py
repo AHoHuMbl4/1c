@@ -129,6 +129,13 @@ def main() -> int:
     t("tabpart parent filter", "m.parent <> ''" in hybrid)
     t("want_agg param", ":want_agg" in hybrid)
     t("axis stem via refcols", "search_refcols" in hybrid and "ts_lexize" in hybrid)
+    # Живой дефект 30.08: row_number AS rk съедал src_table → wiki_pool=['1','2']
+    sel = hybrid[hybrid.rfind("SELECT"):]
+    t("hybrid SELECT no leading rk", "AS rk" not in sel.split("FROM")[0])
+    t("hybrid SELECT has f.name", "f.name" in sel.split("FROM")[0]
+      or "\n       f.name," in hybrid)
+    t("hybrid SELECT starts with src_table",
+      "SELECT f.src_table" in hybrid or "SELECT\n       f.src_table" in hybrid)
     t("object balance register path", "accumulationregister_%" in hybrid
       and "axis_ok" in hybrid)
     t("returns platform_prefix", "platform_prefix" in hybrid)
@@ -193,11 +200,121 @@ def main() -> int:
     t("model choice 1 leader", pick1.get("outcome") == "leader"
       and pick1.get("leader") == "catalog_a")
 
+    def _val_ok(leader, intent=None):
+        if not leader or str(leader).isdigit():
+            return False
+        head = str(leader).split("_", 1)[0].lower()
+        return head in (
+            "catalog", "document", "accumulationregister",
+            "informationregister", "documentjournal", "constant")
+    t("validate register form ok", _val_ok("accumulationregister_x"))
+    t("validate digit reject", not _val_ok("1"))
+    t("validate catalog form ok", _val_ok("catalog_a"))
+
+    z21["wiki_validate_leader_axes"] = lambda *a, **k: True
     z21["ds_chat"] = lambda *a, **k: '{"choice": 1, "separable": false}'
     pick_cl = z21["wiki_pick_from_cards"]("q", {}, cards, {})
     t("inseparable clarify", pick_cl.get("outcome") == "clarify")
 
+    # stock override: wiki clarify → stock_canon
+    z21["ASK_WIKI_CHOICE"] = True
+    z21["stock_question_engaged"] = lambda *a, **k: True
+    z21["stock_canon_src"] = lambda *a, **k: "accumulationregister_stock"
+    z21["try_wiki_hybrid_entity_pick"] = lambda *a, **k: {
+        "kind": "clarify", "text": "?", "options": []}
+    diag_so = {"stock_canon_locked": "accumulationregister_stock"}
+    out_so = z21["wiki_primary_entity_cascade"](
+        "q", {"want": "count"}, [], diag_so, None, 0, {}, "", [], {})
+    t("stock override on wiki clarify",
+      out_so.get("picked") == ["accumulationregister_stock"]
+      and diag_so.get("wiki_pick") == "stock_override")
+    t("stock override locks stock_canon",
+      diag_so.get("stock_canon_locked") == "accumulationregister_stock")
+    t("wiki_stock_canon_takeover helper",
+      z21["wiki_stock_canon_takeover"](
+          "q", {}, {"stock_canon_locked": "accumulationregister_stock"}, [])
+      == "accumulationregister_stock")
+
+    # wiki leader catalog + stock engaged → override register, not hybrid_pick
+    z21["ASK_WIKI_CHOICE"] = True
+    z21["stock_question_engaged"] = lambda *a, **k: True
+    z21["stock_canon_src"] = lambda *a, **k: "accumulationregister_stock"
+    z21["try_wiki_hybrid_entity_pick"] = lambda *a, **k: {
+        "picked": ["catalog_goods"], "marks": {}, "plan": {}}
+    diag_cat = {}
+    out_cat = z21["wiki_primary_entity_cascade"](
+        "q", {"want": "count"}, [], diag_cat, None, 0, {}, "", [], {})
+    t("wiki catalog on stock → override register",
+      out_cat.get("picked") == ["accumulationregister_stock"]
+      and diag_cat.get("wiki_pick") == "stock_override"
+      and diag_cat.get("stock_canon_locked") == "accumulationregister_stock"
+      and not diag_cat.get("wiki_hybrid_pick"))
+
     t("ASK_WIKI_CHOICE flag exists", "ASK_WIKI_CHOICE" in z21)
+    t("wiki_primary_entity_cascade exists",
+      "wiki_primary_entity_cascade" in z21)
+    t("cascade has wiki_skip_manual guard",
+      "_wiki_skip_manual" in Z21.read_text(encoding="utf-8"))
+
+    boot = (ROOT / "ask" / "_bootstrap.py").read_text(encoding="utf-8")
+    t("bootstrap z20 wiki patch", "_patch_z20_wiki_primary" in boot)
+    z20_raw = (ROOT / "ask" / "z20_ask_main_http.py").read_text(encoding="utf-8")
+    import ask._bootstrap as _boot
+    z20_patched = _boot._patch_z20_wiki_primary(z20_raw)
+    t("bootstrap patch injects cascade call",
+      "wiki_primary_entity_cascade(" in z20_patched)
+    t("bootstrap patch allows stock_override past hybrid gate",
+      'wiki_pick") == "stock_override"' in z20_patched
+      or "stock_override" in z20_patched)
+    t("bootstrap patch blocks catalog override on hybrid",
+      'not diag.get("wiki_hybrid_pick")' in z20_patched)
+    t("bootstrap net-distinct in no_axis_member",
+      "stock_net_distinct" in z20_patched
+      and "no_axis_member" in z20_patched)
+    t("bootstrap ecp0 then entity_form_gate_open",
+      "entity_form_gate_open(intent, diag)" in z20_patched
+      and z20_patched.find("_ecp0 = try_event_count_period_clarify")
+      < z20_patched.find("entity_form_gate_open(intent, diag)"))
+    t("old z20 disk lacks cascade call (patch required)",
+      "wiki_primary_entity_cascade(" not in z20_raw)
+
+    z21["ASK_WIKI_CHOICE"] = True
+    z21["stock_question_engaged"] = lambda *a, **k: False
+    z21["stock_canon_src"] = lambda *a, **k: None
+    _bal_calls = []
+    z21["try_balance_code_entity_pick"] = lambda *a, **k: (
+        _bal_calls.append(1) or {"picked": ["manual_balance"]})
+    z21["try_event_code_entity_pick"] = lambda *a, **k: None
+    z21["try_count_theme_code_pick"] = lambda *a, **k: None
+    z21["pick_entity"] = lambda *a, **k: ([], {}, {})
+
+    def _wiki_none_with_pool(q, intent, diag, cut, t0, **kw):
+        diag["wiki_attempted"] = True
+        diag["wiki_pool_n"] = 2
+        diag["wiki_pick"] = "none"
+        return None
+
+    z21["try_wiki_hybrid_entity_pick"] = _wiki_none_with_pool
+    diag_c = {}
+    out = z21["wiki_primary_entity_cascade"](
+        "q", {"want": "count"}, [], diag_c, None, 0, {}, "", [], {})
+    t("wiki none+pool skips balance manual",
+      not _bal_calls and out.get("kind") == "no_data")
+    t("wiki none+pool diag attempted",
+      diag_c.get("wiki_attempted") and diag_c.get("wiki_pick") == "none")
+
+    _bal_calls.clear()
+
+    def _wiki_degraded(q, intent, diag, cut, t0, **kw):
+        diag["wiki_pick"] = "fallback"
+        return None
+
+    z21["try_wiki_hybrid_entity_pick"] = _wiki_degraded
+    diag_c2 = {}
+    out2 = z21["wiki_primary_entity_cascade"](
+        "q", {"want": "count"}, [], diag_c2, None, 0, {}, "", [], {})
+    t("wiki fallback allows balance manual",
+      _bal_calls and out2.get("picked") == ["manual_balance"])
 
     r = subprocess.run([sys.executable, "-m", "py_compile", str(Z21)],
                        capture_output=True, text=True)

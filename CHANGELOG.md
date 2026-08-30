@@ -1,3 +1,56 @@
+## 2026-08-30 (ночь) — §5 закрыт: z21-первичность в main, контрольные 6/6 живьём [замер] [код] [merge]
+
+**[замер :8092 staging]** контрольные §5 после merge (живые SQL-эталоны дня):
+Q1/Q2 склад → **1318** answer (`stock_net_distinct` + `stock_override`); Q3
+контрагенты → **363** figures (`wiki_hybrid_pick`; производитель числа —
+`_fork_atom_of` z09 брал row.count корпуса, для catalog+ref_key подставлен
+`aggregate_live_header_count` z17: query_table + guarded-флаги isfolder/
+deletionmark); Q4 покупатели → **144**; Q5 петли → **no_data**; Q6 месяц →
+**4 328 645,32** (live Всего при nums.Сумма≡0). `wiki_hybrid_pick` виден в diag.
+**[merge]** `wip/z21-primary` → main (6ab9d5c) + правки агентов поверх: каскад
+wiki-primary (z21 + _bootstrap-патчи z20, файл блокируется
+check-prompt-rules — патч при загрузке), entity_form_gate_open (assumed+event),
+measures_of ∪ search_measure_alias, aggregate_live_column/header_count,
+z22_health_tick в списке зон (главная зона потеряла его при слиянии bootstrap
+ветки — поймал zone_names 94/1 → 99/0). Конфликты CHANGELOG/граф — суперсетом.
+**Числа:** матрица 6/6; замки wiki 61/0, stock 43/0, action 48/0, intent 162/0,
+fork 52/0, zone 99/0, entity_form 50/0, aggregate_flags 12/0, no_domain green.
+**Доки:** PLAN_WIKI_CHOICE §5; EMBED/CHANGELOG 30.08 агентов (ветка).
+
+## 2026-08-30 — count каталога: живой счёт витрины на исходе B (365→363) [замер] [код]
+
+**[замер :8092]** «сколько контрагентов» → figures **365** (корпус `fork_scan`),
+живой SQL-эталон **363** (`count(*)` + not isfolder/deletionmark). База статична.
+
+**[код]** производитель числа — `_fork_atom_of` (`ask/z09_fork_detector.py`) брал
+`row.count` корпуса. Для `catalog_*` + `ref_key` (grain=header) подставляется
+`aggregate_live_header_count` (`ask/z17_aggregate_groups.py`): `query_table` +
+те же guarded-флаги, что `aggregate_live_column`. Форк не переписан.
+Замок `test_aggregate_live_flags.py` чинит мок через `A.psql` (globals функции
+после wire), не ослабляя утверждений. §5 замки: wiki 61/0, stock 43/0,
+action 48/0, intent 162/0, fork 52/0, no_domain, zone 95/0.
+
+Доки: Sql › Functions › Utility › query_table; Cookbook › Meta › duckdb_columns.
+
+## 2026-08-30 — z21 §5: живой 6/6 на :8092 (stock net / F assumed / live Всего) [замер] [код]
+
+**[замер :8092 staging]** контрольные после stop+start:
+Q1/Q2 склад → **1318** (`stock_net_distinct`, `stock_override`);
+Q3 контрагенты → **365** (`wiki_hybrid_pick`, дрейф дня к эталону 363);
+Q4 покупатели → **144** (`entity_form=distinct_axis`, `event_count_period_assumed=rolling_year`);
+Q5 петли → **no_data**;
+Q6 продали за месяц → **4328645.32** мера `Всего` (`wiki_hybrid_pick`, `sales_measure_canon`).
+
+**[код]** generic-механизмы (без доменных слов):
+- склад: `stock_canon_locked` + `aggregate_stock_net_distinct` (bootstrap/z12);
+- F на флаге 0: `entity_form_gate_open` при `period.origin=assumed`+event
+  (z05; bootstrap: ecp0 → F через gate_open);
+- деньги: `measures_of` ∪ `search_measure_alias`; `aggregate_live_column` /
+  `query_table` когда nums пуст (z08/z17) — витрина.Всего при nums.Сумма≡0.
+
+Числа: wiki 61/0, stock 43/0, action 48/0, intent 162/0, fork 52/0,
+zone 95/0, entity_form 50/0, no_domain green. Доки: PLAN_WIKI_CHOICE §5.
+
 ## 2026-08-30 (вечер) — Первый зелёный такт за 6 дней: вчерашняя правка solr вписала подзапрос в опцию словаря [код] [замер]
 
 **[код]** `ubuntu/serenedb/solr_synonyms_compile.sql`: `CREATE TEXT SEARCH DICTIONARY

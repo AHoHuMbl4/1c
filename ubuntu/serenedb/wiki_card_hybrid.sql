@@ -142,8 +142,11 @@ filtered AS (
                  OR p.src_table LIKE 'accumulationregister_%'))
          )
 )
-SELECT row_number() OVER (ORDER BY f.src_layer DESC, f.distance, f.src_table) AS rk,
-       f.src_table,
+-- Колонки = wiki_hybrid_pool: src_table, name, description, axes, measures,
+-- covered, distance, parent, platform_prefix. rk в SELECT ломал src_table→«1».
+-- Доки: Sql › Functions › Vector Functions › knn; AI Functions › ai_embed.
+SELECT f.src_table,
+       f.name,
        substr(f.description, 1, 120) AS description_head,
        f.axes,
        f.measures,

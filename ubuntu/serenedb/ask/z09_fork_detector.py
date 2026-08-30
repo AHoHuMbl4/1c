@@ -906,6 +906,7 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
             proof_status=(PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED),
             period=period,
             interpretation_id=(period or {}).get("interpretation_id"))
+    grain = None
     if w == "count":
         exact = d0.get("count")
         op, mid, lab = "count", None, measure_label_of(src0, None) if src0 else None
@@ -927,11 +928,18 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
         else:
             exact, op = sums[mid], "sum"
             lab = measure_label_of(src0, mid) if src0 else (split_ident(mid) or mid)
+    # Count каталога (header/Ref_Key): живой счёт витрины с isfolder/deletionmark,
+    # не корпусный count(*) детектора ([замер :8092] 365 → 363).
+    if op == "count" and src0:
+        live_n = aggregate_live_header_count(src0)
+        if live_n is not None:
+            exact = live_n
+            grain = "header"
     status = PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED
     return build_answer_atom(
         operation=op, exact_value=exact, measure_id=mid, measure_label=lab,
         excluded=({"folders": d0["folders"]} if d0.get("folders") else None),
-        proof_status=status, period=period,
+        proof_status=status, period=period, grain=grain,
         interpretation_id=(period or {}).get("interpretation_id"))
 
 

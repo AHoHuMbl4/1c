@@ -475,6 +475,29 @@ def entity_form_rolling_year(today):
             "origin": _ORIGIN_ASSUMED, "interpretation_id": "rolling_12m"}
 
 
+def entity_form_gate_open(intent=None, diag=None):
+    """True: ASK_ENTITY_FORM=1 или event+count с period.origin=assumed.
+
+    try_event_count_period_clarify на флаге 0 уже пишет rolling_year
+    (origin=assumed); без этого гейта F не вызывается и путь уходит в
+    event_code_pick ([замер :8092] покупатели → distinct 144 через F).
+    """
+    if ASK_ENTITY_FORM:
+        return True
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    if not event_path_active(intent):
+        return False
+    period = intent.get("period") or {}
+    if period.get("origin") == "assumed":
+        return True
+    if (diag or {}).get("event_count_period_assumed"):
+        return True
+    return False
+
+
 def entity_form_applicable(intent, pool):
     """F открыта: want=count + catalog + sales.
 
@@ -483,7 +506,7 @@ def entity_form_applicable(intent, pool):
     счётом справочника.
     Гейт A: kind → document_/accumulationregister_* (счёт движения) — F закрыта.
     """
-    if not ASK_ENTITY_FORM:
+    if not entity_form_gate_open(intent):
         return False
     intent = intent or {}
     want = (intent.get("want") or "").strip().lower()
@@ -505,10 +528,14 @@ def entity_form_applicable(intent, pool):
     if not (has_cat and has_sales):
         return False
     period = intent.get("period") or {}
-    if event_path_active(intent) and not (period.get("from") or period.get("to")):
-        return False
+    # Event+count без окна: F всё ещё применима для non-product catalog —
+    # entity_form_structs подставит rolling year (distinct_axis). Ранний
+    # event_count_period_clarify иначе режет до F/wiki ([замер :8092] Q4).
+    # Product-catalog без окна structs сам отсекает — ложного complement нет.
     if period.get("from") or period.get("to"):
         return True
+    if event_path_active(intent):
+        return bool(has_cat and has_sales)
     return bool(has_movement)
 
 
@@ -771,11 +798,52 @@ def event_count_period_clarify(question, intent, diag, cut, t0, today=None):
 def try_event_count_period_clarify(question, intent, diag, cut, t0, today=None,
                                    src=None, axes=None, pool=None,
                                    trusted=None, resolved=None):
-    """None — не clarify; иначе ответ clarify с period-options."""
+    """None — не clarify; иначе ответ clarify с period-options.
+
+    Если kind→catalog с держателем-движением — подставляем rolling year
+    (assumed) и НЕ clarify. Не зависит от ASK_ENTITY_FORM: иначе при флаге=0
+    _ecp0 режет до wiki ([замер :8092] «реально покупают»).
+    """
     if not event_count_period_clarify_applies(
             intent, diag, src=src, axes=axes, pool=pool,
             trusted=trusted, resolved=resolved):
         return None
+    intent = intent if intent is not None else {}
+    ry = entity_form_rolling_year(today)
+    if ry.get("from") or ry.get("to"):
+        kind = (intent.get("kind") or "").strip()
+        axis = (intent.get("action_axis") or "").strip() or kind
+        cats = []
+        if kind or axis:
+            try:
+                cats = list(entity_form_catalogs_for_kind(kind or axis) or [])
+            except RuntimeError:
+                cats = []
+        has_holder = False
+        for cat in cats:
+            try:
+                holders = holders_of_target(cat) or []
+            except RuntimeError:
+                holders = []
+            for h in holders:
+                hs = (h.get("src") or "").strip()
+                if hs.startswith("accumulationregister_") and not sales_noncanon_focus(hs):
+                    has_holder = True
+                    break
+            if has_holder:
+                break
+        if not has_holder:
+            for s in list(pool or []) + ([src] if src else []):
+                if (str(s).startswith("accumulationregister_")
+                        and not sales_noncanon_focus(str(s))):
+                    has_holder = True
+                    break
+        if has_holder:
+            intent["period"] = dict(ry)
+            intent["period"]["origin"] = "assumed"
+            if diag is not None:
+                diag["event_count_period_assumed"] = "rolling_year"
+            return None
     return event_count_period_clarify(
         question, intent, diag, cut, t0, today=today)
 
@@ -1094,7 +1162,7 @@ def try_entity_form_answer(question, intent, pool, match="", diag=None,
                           cut=None, t0=None, today=None, when=None,
                           early_classes=0):
     """Ответ формой F или None. На when=pre_entity зовёт entity_form_pre_entity_ok."""
-    if not ASK_ENTITY_FORM:
+    if not entity_form_gate_open(intent, diag):
         return None
     pool = entity_form_expand_pool(pool, intent)
     structs = entity_form_structs(intent, pool, today=today)

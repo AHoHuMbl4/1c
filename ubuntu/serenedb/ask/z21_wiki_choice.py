@@ -123,17 +123,22 @@ def wiki_hybrid_pool(question, intent=None):
     for r in rows or []:
         if not r or not r[0]:
             continue
-        parent = (r[8] if len(r) > 8 else "") or ""
+        src = str(r[0])
+        # Защита: если SQL вернул rk первым — src_table уедет в цифру («1»).
+        if src.isdigit() and len(r) > 1 and r[1]:
+            r = r[1:]
+            src = str(r[0])
+        parent = (r[7] if len(r) > 7 else "") or ""
         out.append({
-            "src_table": r[0],
-            "name": r[1] or "",
+            "src_table": src,
+            "name": (r[1] if len(r) > 1 else "") or "",
             "description": (r[2] if len(r) > 2 else "") or "",
             "axes": (r[3] if len(r) > 3 else "") or "",
             "measures": (r[4] if len(r) > 4 else "") or "",
             "covered": int(r[5] or 0) if len(r) > 5 else 0,
             "distance": float(r[6]) if len(r) > 6 and r[6] is not None else 1.0,
             "parent": parent,
-            "platform_kind": wiki_platform_kind(r[0], parent),
+            "platform_kind": wiki_platform_kind(src, parent),
         })
     return out
 
@@ -163,33 +168,18 @@ def wiki_knn_separable(cards):
 
 
 def wiki_validate_leader_axes(leader, intent):
-    """K9: refcols несут оси kind/action_axis из intent."""
-    if not leader:
+    """Форма src: ось уже сужена SQL (axis_ok / struct src_layer=2).
+
+    Повторный registers_for_kind_axes+refcols отвергал лидера из пула
+    (struct проходит axis_ok без EXISTS, Python — нет) → axis_reject на
+    верном accumulationregister. Доки: list_has_any / ts_lexize в hybrid SQL.
+    """
+    if not leader or str(leader).isdigit():
         return False
-    intent = intent or {}
-    words = intent_axis_words(intent) if "intent_axis_words" in globals() else []
-    if not words:
-        return True
-    try:
-        if leader.startswith("accumulationregister_"):
-            regs = registers_for_kind_axes(intent, [leader])
-            if leader in regs:
-                return True
-        if leader.startswith("catalog_"):
-            for w in words:
-                if leader in (entity_form_catalogs_for_kind(w, allow_meaning=False) or []):
-                    return True
-        rows = psql(
-            "SELECT 1 FROM search_refcols r WHERE r.src_table = %s "
-            "AND list_has_any("
-            "  list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
-            "  list_filter(ts_lexize(%s, concat_ws(' ', r.col, r.target_src)),"
-            "              x -> length(x) >= 3)) LIMIT 1"
-            % (lit(leader), lit(STEM_DICT), lit(" ".join(words)),
-               lit(STEM_DICT)))
-        return bool(rows)
-    except RuntimeError:
-        return True
+    head = str(leader).split("_", 1)[0].lower()
+    return head in (
+        "catalog", "document", "accumulationregister",
+        "informationregister", "documentjournal", "constant")
 
 
 def wiki_pick_from_cards(question, intent, cards, diag=None):
@@ -233,6 +223,11 @@ def wiki_pick_from_cards(question, intent, cards, diag=None):
         diag["wiki_pick"] = "bad_index"
         return {"outcome": "none", "reason": "bad_index", "diag": diag}
     leader = cards[choice - 1]["src_table"]
+    if (not leader or str(leader).isdigit()
+            or "_" not in str(leader)):
+        diag["wiki_pick"] = "bad_index"
+        diag["wiki_leader_rejected"] = leader
+        return {"outcome": "none", "reason": "bad_src", "diag": diag}
     if not wiki_validate_leader_axes(leader, intent):
         diag["wiki_pick"] = "axis_reject"
         diag["wiki_leader_rejected"] = leader
@@ -245,12 +240,140 @@ def wiki_pick_from_cards(question, intent, cards, diag=None):
     return {"outcome": "leader", "leader": leader, "diag": diag}
 
 
+def wiki_stock_canon_takeover(question, intent, diag, cands, plan=None):
+    """Wiki catalog-tie/none не перекрывает stock_canon (остаток — регистр)."""
+    intent = intent or {}
+    plan = plan or {}
+    if "stock_question_engaged" not in globals():
+        return None
+    if not stock_question_engaged(question, intent, plan):
+        return None
+    canon = (diag or {}).get("stock_canon_locked")
+    if not canon and "stock_canon_src" in globals():
+        try:
+            canon = stock_canon_src(cands, question, intent, plan)
+        except RuntimeError:
+            canon = None
+    return canon or None
+
+
+def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
+                                by, match, preds, counts_for_model, plan=None):
+    """Wiki-first entity pick; manual balance/event/count_theme only on fallback."""
+    picked, marks, plan = [], {}, plan or {}
+    _wiki_skip_manual = False
+    if ASK_WIKI_CHOICE:
+        _wiki = try_wiki_hybrid_entity_pick(
+            question, intent, diag, cut, t0,
+            by=by, match=match, preds=preds)
+        if _wiki and _wiki.get("kind") in ("no_data", "clarify"):
+            _sc = wiki_stock_canon_takeover(question, intent, diag, cands, plan)
+            if _sc:
+                picked = [_sc]
+                diag["wiki_stock_override"] = _sc
+                diag["wiki_pick"] = "stock_override"
+                diag["stock_canon_locked"] = _sc
+            else:
+                return _wiki
+        if _wiki and _wiki.get("picked") and not picked:
+            picked = _wiki["picked"]
+            marks = _wiki.get("marks") or {}
+            plan = _wiki.get("plan") or {}
+            # Wiki catalog на stock-вопрос — не канон остатка; takeover регистра.
+            _sc = wiki_stock_canon_takeover(question, intent, diag, cands, plan)
+            if _sc and str(picked[0]).startswith("catalog_"):
+                picked = [_sc]
+                diag["wiki_stock_override"] = _sc
+                diag["wiki_pick"] = "stock_override"
+                diag["stock_canon_locked"] = _sc
+            else:
+                diag["wiki_hybrid_pick"] = True
+        elif _wiki is None and not diag.get("wiki_pick"):
+            diag["wiki_pick"] = "fallback"
+        if (not picked and diag.get("wiki_empty_pool")
+                and question_expects_accounting_data(intent, question, diag)):
+            _sc = wiki_stock_canon_takeover(question, intent, diag, cands, plan)
+            if _sc:
+                picked = [_sc]
+                diag["wiki_stock_override"] = _sc
+                diag["wiki_pick"] = "stock_override"
+                diag["stock_canon_locked"] = _sc
+            else:
+                return {"kind": "no_data",
+                        "partial": cut or None,
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "sources": [],
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                           reason="wiki_empty_pool")}
+        if (not picked and diag.get("wiki_pool_n", 0) > 0
+                and diag.get("wiki_pick") in ("none", "axis_reject", "bad_index")):
+            _sc = wiki_stock_canon_takeover(question, intent, diag, cands, plan)
+            if _sc:
+                picked = [_sc]
+                diag["wiki_stock_override"] = _sc
+                diag["wiki_pick"] = "stock_override"
+                diag["stock_canon_locked"] = _sc
+            else:
+                _wiki_skip_manual = True
+                if (question_expects_accounting_data(intent, question, diag)
+                        and diag.get("wiki_pick") == "none"):
+                    return {"kind": "no_data",
+                            "partial": cut or None,
+                            "text": NO_DATA_TEXT or refuse_text(question),
+                            "sources": [],
+                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                               reason="wiki_none")}
+    if not picked and not _wiki_skip_manual:
+        _bal = try_balance_code_entity_pick(
+            question, intent, cands, diag, cut, t0, {}, plan=plan)
+        if _bal and _bal.get("kind") in ("no_data", "clarify"):
+            return _bal
+        if _bal and _bal.get("picked"):
+            picked = _bal["picked"]
+            marks = _bal.get("marks") or {}
+            plan = _bal.get("plan") or {}
+            diag["balance_code_pick"] = True
+            if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
+                diag["wiki_manual_fallback"] = "balance"
+        else:
+            _ev = try_event_code_entity_pick(
+                question, intent, cands, diag, cut, t0, by, match, preds, {})
+            if _ev and _ev.get("kind") in ("no_data", "clarify"):
+                return _ev
+            if _ev and _ev.get("picked"):
+                picked = _ev["picked"]
+                marks = _ev.get("marks") or {}
+                plan = _ev.get("plan") or {}
+                diag["event_code_pick"] = True
+                if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
+                    diag["wiki_manual_fallback"] = "event"
+            else:
+                _ct = try_count_theme_code_pick(
+                    question, intent, cands, diag, cut, t0)
+                if _ct and _ct.get("picked"):
+                    picked = _ct["picked"]
+                    marks, plan = {}, {}
+                    diag.update(_ct.get("diag") or {})
+                    if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
+                        diag["wiki_manual_fallback"] = "count_theme"
+    if not picked and not _wiki_skip_manual:
+        try:
+            picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
+                                              counts_for_model, match, diag)
+        except RuntimeError:
+            picked, marks, plan = [], {}, {}
+            diag["degraded"] = "выбор сущности сделан без модели"
+    return {"picked": picked, "marks": marks, "plan": plan}
+
+
 def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
                                 by=None, match="", preds=None):
     """Единая точка интеграции для z20."""
     if not ASK_WIKI_CHOICE:
         return None
-    diag = dict(diag or {})
+    if diag is None:
+        diag = {}
+    diag["wiki_attempted"] = True
     try:
         if not psql("SELECT 1 FROM search_wiki_entity_card LIMIT 1"):
             return None
@@ -275,6 +398,13 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
     diag.update(pick.get("diag") or {})
     if pick.get("outcome") == "degraded":
         diag["wiki_pick"] = "fallback"
+        return None
+    # event_count_period_assumed + clarify/none → fallback: event_code_pick
+    # считает distinct по оси (без wiki-clarify чужих карточек).
+    if (diag.get("event_count_period_assumed")
+            and pick.get("outcome") in ("clarify", "none")):
+        diag["wiki_pick"] = "fallback"
+        diag["wiki_period_assumed_fallback"] = pick.get("outcome")
         return None
     if pick.get("outcome") == "none":
         if not diag.get("wiki_pick"):

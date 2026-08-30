@@ -35,6 +35,10 @@ t("sales intent не прайс", not A.sales_sum_intent({"want": "count"},
                                                   "сколько позиций у нас в прайсе?"))
 t("sales intent не склад", not A.sales_sum_intent({"want": "sum"},
                                                  "сколько товара на складе?"))
+t("sales intent продали сильнее balance_routing",
+  A.sales_sum_intent(
+      {"want": "sum", "action_class": "object", "kind": "товар"},
+      "сколько продали за месяц?"))
 
 # --- score ---
 t("score: реализациятмц > книгапродаж",

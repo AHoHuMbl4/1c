@@ -259,6 +259,16 @@ t("flag0: try_entity_form_answer None",
       "сколько клиентов покупают?",
       {"want": "count", "period": {"from": "2025-08-25", "to": "2026-08-25"}},
       ["catalog_x", "accumulationregister_y"]) is None)
+t("flag0: assumed+event → gate_open",
+  A.entity_form_gate_open(
+      {"want": "count", "action_class": "event",
+       "period": {"from": "2025-08-25", "to": "2026-08-25", "origin": "assumed"}})
+  is True)
+t("flag0: assumed без event → gate закрыт",
+  A.entity_form_gate_open(
+      {"want": "count",
+       "period": {"from": "2025-08-25", "to": "2026-08-25", "origin": "assumed"}})
+  is False)
 _restore(_s)
 
 # ── compare atom пара, не «· rank» ───────────────────────────────────────────
@@ -309,6 +319,10 @@ t("applicable: нет period + movement в пуле → True",
 t("applicable: period + catalog + sales → True",
   A.entity_form_applicable(
       {"want": "count", "period": {"from": "2026-08-01", "to": "2026-08-25"}},
+      ["catalog_x", "accumulationregister_y"]) is True)
+t("applicable: event+count без окна + catalog+sales → True (rolling year)",
+  A.entity_form_applicable(
+      {"want": "count", "action_class": "event", "kind": "клиенты"},
       ["catalog_x", "accumulationregister_y"]) is True)
 t("applicable: want=sum → False",
   A.entity_form_applicable(

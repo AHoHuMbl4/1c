@@ -25,8 +25,6 @@ def sales_sum_intent(intent, question=""):
     want = (intent.get("want") or "").strip().lower()
     kind = (intent.get("kind") or "").strip().lower()
     measure = (intent.get("measure") or "").strip().lower()
-    if balance_routing_core(intent, None, question):
-        return False
     if any(w in q for w in ("прайс", "price list", "в прайсе")):
         return False
     sale_q = any(w in q for w in (
@@ -61,7 +59,12 @@ def sales_sum_intent(intent, question=""):
         and not any(w in q for w in (
             "сотрудник", "табель", "зарплат", "фота", "отработ", "employee", "payroll"))
     )
-    if not (sale_q or sale_k or sale_m or compare_period):
+    sale_signal = sale_q or sale_k or sale_m
+    if not (sale_signal or compare_period):
+        return False
+    # Sale в вопросе/kind/measure сильнее balance_routing_core: иначе «продали»
+    # + object-ось → qty вместо денег ([замер :8092] 99898 vs money).
+    if (not sale_signal) and balance_routing_core(intent, None, question):
         return False
     if want in ("sum", "count", "list", ""):
         return True
@@ -370,6 +373,14 @@ def sales_money_measure(names, alias_by=None):
             if "колич" in blob or "себестоим" in blob or "quantity" in blob:
                 continue
             return n
+    # Fallback: measure_choice по денежному слову (когда имя поля не «Всего»).
+    for word in ("всего", "сумм", "total", "amount"):
+        got, _, how = measure_choice(names, word, alias_by=alias_by)
+        if got and how in ("exact", "substring", "alias", "base", "single"):
+            blob = " ".join([str(got)] + list(alias_by.get(got) or [])).lower()
+            if "колич" in blob or "себестоим" in blob:
+                continue
+            return got
     return None
 
 

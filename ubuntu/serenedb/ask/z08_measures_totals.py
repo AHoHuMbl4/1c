@@ -147,17 +147,34 @@ MEANING_TOP = int(os.environ.get('ASK_MEANING_TOP', '0')) or \
 def measures_of(src_table):
     """Какие величины есть у сущности — ИЗ ДАННЫХ, а не из кода.
 
-    Имена величин — это имена числовых колонок 1С, попавшие в строку корпуса. Список
-    короткий (величины ОДНОЙ сущности), поэтому его можно показать модели, не нарушая
-    п. 19: он не растёт с размером базы.
+    Имена величин — ключи nums корпуса ∪ search_measure_alias (мера могла уйти
+    из nums при сборке, но остаться в витрине и алиасах: [замер :8092]
+    «продали за месяц» — nums.Сумма=0, витрина.Всего=MTD-эталон).
+    Список короткий (величины ОДНОЙ сущности), п. 19 соблюдён.
+    Доки: Sql › Functions › Map Functions › map_keys; search_measure_alias.
     """
+    seen, out = set(), []
     try:
-        return [r[0] for r in psql(
-            "SELECT DISTINCT u.k FROM %s, unnest(map_keys(nums)) AS u(k) "
-            "WHERE src_table = %s AND nums IS NOT NULL ORDER BY 1"
-            % (CORPUS, lit(src_table))) if r and r[0]]
+        for r in psql(
+                "SELECT DISTINCT u.k FROM %s, unnest(map_keys(nums)) AS u(k) "
+                "WHERE src_table = %s AND nums IS NOT NULL ORDER BY 1"
+                % (CORPUS, lit(src_table))) or []:
+            if r and r[0] and r[0] not in seen:
+                seen.add(r[0])
+                out.append(r[0])
     except RuntimeError:
-        return []
+        pass
+    try:
+        for r in psql(
+                "SELECT measure FROM search_measure_alias "
+                "WHERE src_table = %s AND coalesce(measure,'') <> '' "
+                "ORDER BY 1" % lit(src_table)) or []:
+            if r and r[0] and r[0] not in seen:
+                seen.add(r[0])
+                out.append(r[0])
+    except RuntimeError:
+        pass
+    return out
 
 
 def measure_aliases_of(src_table):

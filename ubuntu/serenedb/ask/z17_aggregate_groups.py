@@ -33,6 +33,173 @@ def _numN(x):
         return None
 
 
+def _sql_ident_col(name):
+    return '"' + str(name).replace('"', '""') + '"'
+
+
+def _live_measure_date_col(src_table):
+    """Колонка даты витрины: Period (регистр) / Date / DateTime — имена платформы."""
+    if not src_table:
+        return None
+    try:
+        rows = psql(
+            "SELECT column_name FROM duckdb_columns() "
+            "WHERE table_name = %s AND lower(column_name) IN "
+            "('period', 'date', 'datetime') "
+            "ORDER BY CASE lower(column_name) "
+            "WHEN 'period' THEN 0 WHEN 'date' THEN 1 ELSE 2 END"
+            % lit(src_table))
+    except RuntimeError:
+        return None
+    if rows and rows[0] and rows[0][0]:
+        return rows[0][0]
+    return None
+
+
+def _live_column_exists(src_table, col):
+    if not src_table or not col:
+        return False
+    try:
+        r = psql(
+            "SELECT 1 FROM duckdb_columns() "
+            "WHERE table_name = %s AND column_name = %s LIMIT 1"
+            % (lit(src_table), lit(col)))
+    except RuntimeError:
+        return False
+    return bool(r and r[0])
+
+
+def _live_std_excl_preds(src_table):
+    """Предикаты isfolder/deletionmark — только при наличии колонки (duckdb_columns).
+
+    Доки: Cookbook › Meta › duckdb_columns. Регистры колонок не имеют — список пуст.
+    """
+    out = []
+    for flag in ("isfolder", "deletionmark"):
+        if _live_column_exists(src_table, flag):
+            out.append(
+                "lower(cast(%s AS VARCHAR)) NOT IN ('true','t','1')"
+                % _sql_ident_col(flag))
+    return out
+
+
+def _live_ref_key_col(src_table):
+    """Фактическое имя колонки Ref_Key (регистр из duckdb_columns)."""
+    if not src_table:
+        return None
+    try:
+        r = psql(
+            "SELECT column_name FROM duckdb_columns() "
+            "WHERE table_name = %s AND lower(column_name) = 'ref_key' "
+            "LIMIT 1" % lit(src_table))
+    except RuntimeError:
+        return None
+    if r and r[0] and r[0][0]:
+        return r[0][0]
+    return None
+
+
+def aggregate_live_header_count(src_table):
+    """Живой счёт строк каталога (grain=header при наличии Ref_Key) с исключениями 1С.
+
+    Условие применимости — класс catalog + колонка ref_key (header). Счёт —
+    count(*) витрины с isfolder/deletionmark (guarded), не корпусные counts
+    детектора и не DISTINCT: [замер :8092] корпус 365, DISTINCT+excl 352,
+    count(*)+excl 363 = SQL-эталон. Доки: Sql › Functions › Utility › query_table;
+    Cookbook › Meta › duckdb_columns.
+    """
+    if not src_table:
+        return None
+    pre = str(src_table).split("_", 1)[0].lower()
+    if pre != "catalog":
+        return None
+    if not _live_ref_key_col(src_table):
+        return None
+    folder_pred = _live_std_excl_preds(src_table)
+    wsql = (" WHERE " + " AND ".join(folder_pred)) if folder_pred else ""
+    try:
+        r = psql(
+            "SELECT count(*) FROM query_table(%s)%s"
+            % (lit(src_table), wsql))
+    except RuntimeError:
+        return None
+    if not r or not r[0] or r[0][0] is None or r[0][0] == "":
+        return None
+    try:
+        return int(_num(r[0][0]))
+    except (TypeError, ValueError):
+        return None
+
+
+def aggregate_live_column(src_table, preds, measure):
+    """Итог по колонке витрины через query_table, когда nums корпуса пуст.
+
+    Доки: Sql › Functions › Utility › query_table; Cookbook › Meta › duckdb_columns.
+    Preds корпуса (doc_date) переписываются на try_cast(date_col).
+    """
+    if not src_table or not measure:
+        return None
+    if not _live_column_exists(src_table, measure):
+        return None
+    date_col = _live_measure_date_col(src_table)
+    where = []
+    for p in preds or []:
+        ps = str(p)
+        if "doc_date" in ps and date_col:
+            where.append(ps.replace(
+                "doc_date",
+                "try_cast(%s AS TIMESTAMP)" % _sql_ident_col(date_col)))
+        elif "doc_date" in ps:
+            continue
+        elif "src_table" in ps:
+            continue
+        else:
+            # tsquery/match на витрине не работает — пропускаем
+            if "@@" in ps or "ts_" in ps:
+                continue
+            where.append(ps)
+    # Стандартные реквизиты 1С: группы и помеченные на удаление — не объекты
+    # счёта. Колонки есть не во всех таблицах (регистры их не имеют), поэтому
+    # каждый флаг добавляется только при наличии колонки (duckdb_columns).
+    # Замер okna 30.08: count контрагентов 365 → 363 = живому SQL-эталону.
+    folder_pred = _live_std_excl_preds(src_table)
+    where.extend(folder_pred)
+    m = "try_cast(%s AS DECIMAL(38,10))" % _sql_ident_col(measure)
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
+    try:
+        r = psql(
+            "SELECT count(*), sum(%(m)s), min(%(m)s), max(%(m)s), "
+            "       CASE WHEN count(%(m)s) > 0 "
+            "            THEN sum(%(m)s) / count(%(m)s) END, "
+            "       count(%(m)s) "
+            "FROM query_table(%(src)s)%(w)s"
+            % {"m": m, "src": lit(src_table), "w": wsql})
+    except RuntimeError:
+        return None
+    if not r or not r[0]:
+        return None
+    n_amount = int(r[0][5] or 0)
+    if n_amount <= 0:
+        return None
+    return {
+        "count": int(r[0][0] or 0),
+        "sum": _numN(r[0][1]),
+        "min": _numN(r[0][2]),
+        "max": _numN(r[0][3]),
+        "avg": None if _numN(r[0][4]) is None else round(_numN(r[0][4]), 2),
+        "date_min": "",
+        "date_max": "",
+        "count_amount": n_amount,
+        "src": src_table,
+        "measure": measure,
+        "out_of_range": 0,
+        "folders": len(folder_pred),
+        "scope": {"src": "query_table", "where": " AND ".join(where),
+                  "folder_pred": " AND ".join(folder_pred),
+                  "via": "live_column"},
+    }
+
+
 def aggregate(src_table, match, preds, measure=None):
     """Итог считается В БАЗЕ по ВСЕМУ подходящему множеству, без LIMIT.
 
@@ -122,12 +289,13 @@ def aggregate(src_table, match, preds, measure=None):
              "FROM %(src)s WHERE %(w)s"
              % {"m": m, "d": d, "src": src, "w": " AND ".join(where), "nf": folder_pred})
     if not r or not r[0] or r[0][0] == "":
-        return None
+        live0 = aggregate_live_column(src_table, preds, measure) if measure else None
+        return live0
     row = r[0] + [""] * (10 - len(r[0]))
     # count_amount отдельно от count: avg/sum посчитаны по строкам с суммой, и модель
     # обязана знать, по скольким. Иначе среднее по 31 строке уходит как среднее по 1344.
     n_amount = int(row[7] or 0)
-    return {"count": int(row[0]), "sum": _numN(row[1]), "min": _numN(row[2]),
+    out = {"count": int(row[0]), "sum": _numN(row[1]), "min": _numN(row[2]),
             "max": _numN(row[3]),
             "avg": None if _numN(row[4]) is None else round(_numN(row[4]), 2),
             "date_min": row[5], "date_max": row[6],
@@ -149,6 +317,13 @@ def aggregate(src_table, match, preds, measure=None):
             # где не ноль — ответ обязан это назвать, иначе получится молчаливая подмена
             # множества (п. 13).
             "folders": int(row[8] or 0)}
+    # Мера есть в алиасах/витрине, в nums — NULL: fallback query_table
+    # ([замер :8092] Всего на витрине, nums только Сумма=0).
+    if measure and n_amount <= 0:
+        live = aggregate_live_column(src_table, preds, measure)
+        if live:
+            return live
+    return out
 
 
 
