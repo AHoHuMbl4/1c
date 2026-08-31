@@ -1,3 +1,15 @@
+## 2026-08-31 — Перенос векторов вынесен из MERGE в пакетные UPDATE (дефект 26.07.3)
+
+**[замер]** MERGE-INSERT тысяч строк с `FLOAT[1024]` роняет сборку: «Cannot cast
+list … to array with length 1024» (класс Vector::SetSize, HOWTO §2 — >16–32
+строк с массивом за оператор). UPDATE с массивами пакетом жив (замер: 200 строк
+— ок).
+**[код]** `corpus_merge.sql`: INSERT всегда `emb=NULL`; перенос карты — после
+слиния пакетными UPDATE по 1000 строк (`tmp3_merge_emb_xfer_n`, генерация
+\gexec). Замок emb_transfer переписан под новый контракт: 28/0.
+**Числа:** карта переноса 92 525 векторов (живой замер); key_form 61/0.
+**Доки:** docs/EMBED_BULK_HOWTO.md §2; corpus_merge.sql.
+
 ## 2026-08-31 — Точечная правка: edited_delta берёт refs джойном к корпусу
 
 **[код]** `tmp3_merge_unmatched` не несёт колонки `refs` (живой стоп такта:

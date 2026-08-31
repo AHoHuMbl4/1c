@@ -212,10 +212,14 @@ t("SQL: pair by refs",
 t("SQL: unique refs HAVING", "HAVING count(*) = 1" in txt)
 t("SQL: unique refs QUALIFY",
   "QUALIFY count(*) OVER (PARTITION BY src_table, refs) = 1" in txt)
-t("SQL: MERGE joins emb_xfer", "LEFT JOIN tmp3_merge_emb_xfer x" in txt)
-t("SQL: INSERT uses s.emb", "s.refs_map, s.emb)" in txt)
-t("SQL: no blind NULL insert on xfer path",
-  "s.refs_map, NULL);" not in txt)
+t("SQL: MERGE не несёт массивы (сборка 26.07.3)",
+  "SELECT s.* FROM tmp3_corpus s WHERE s.src_table IN (" in txt
+  and "LEFT JOIN tmp3_merge_emb_xfer x" not in txt)
+t("SQL: INSERT с NULL, перенос — после",
+  "s.refs_map, NULL);" in txt)
+t("SQL: пакетный UPDATE-перенос 1000",
+  "tmp3_merge_emb_xfer_n" in txt and "x.n >= ' || (b * 1000)" in txt
+  and "search_corpus.emb IS NULL" in txt)
 t("SQL: search_quality entity_emb_xfer", "entity_emb_xfer:" in txt)
 t("SQL: only rewrite_wave tables",
   "IN (SELECT src_table FROM tmp3_merge_rewrite_wave)" in txt

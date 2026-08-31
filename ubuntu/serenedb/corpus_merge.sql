@@ -553,12 +553,12 @@ FROM tmp3_merge_jobs;
 
 SELECT stmt FROM (
   SELECT job_id, 1 AS ord,
-         'MERGE INTO search_corpus AS t USING (SELECT s.*, x.emb AS emb FROM tmp3_corpus s LEFT JOIN tmp3_merge_emb_xfer x ON x.src_table = s.src_table AND x.row_key = s.row_key WHERE s.src_table IN ('
+         'MERGE INTO search_corpus AS t USING (SELECT s.* FROM tmp3_corpus s WHERE s.src_table IN ('
          || ins
          || ')'
          || CASE WHEN n_parts = 1 THEN ''
             ELSE ' AND (hash(s.row_key) % ' || n_parts || ') = ' || part END
-         || ') AS s ON t.src_table = s.src_table AND t.row_key = s.row_key WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash THEN UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash, nums = s.nums, flags = s.flags, doc_date = s.doc_date, refs_map = s.refs_map, emb = NULL WHEN NOT MATCHED THEN INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, refs_map, emb) VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, s.refs_map, s.emb);' AS stmt
+         || ') AS s ON t.src_table = s.src_table AND t.row_key = s.row_key WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash THEN UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash, nums = s.nums, flags = s.flags, doc_date = s.doc_date, refs_map = s.refs_map, emb = NULL WHEN NOT MATCHED THEN INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, refs_map, emb) VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, s.refs_map, NULL);' AS stmt
   FROM (
     SELECT job_id,
            string_agg(quote_literal(src_table), ', ') AS ins,
@@ -602,6 +602,23 @@ WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
 -- Убираем по контракту: строка, чьего источника больше нет в перечне, в корпусе не нужна.
 DELETE FROM search_corpus c
 WHERE NOT EXISTS (SELECT 1 FROM search_sources s WHERE s.src_table = c.src_table);
+
+-- ============ 1-гис. ПЕРЕНОС ВЕКТОРОВ ПО КАРТЕ (О4) ============
+-- Новые строки вошли с emb=NULL (массив FLOAT[1024] пачкой через MERGE-INSERT
+-- роняет сборку 26.07.3 — Vector::SetSize; живой стоп 31.08). Перенос —
+-- отдельными UPDATE-пакетами: массивы пакетом 1000 строк движок несёт
+-- (замер: UPDATE 200 строк с emb — ок). Пакеты нумеруем один раз.
+CREATE OR REPLACE TABLE tmp3_merge_emb_xfer_n AS
+SELECT row_number() OVER (ORDER BY src_table, row_key) AS n, *
+FROM tmp3_merge_emb_xfer;
+
+SELECT 'UPDATE search_corpus SET emb = x.emb FROM tmp3_merge_emb_xfer_n x '
+       || 'WHERE search_corpus.src_table = x.src_table AND search_corpus.row_key = x.row_key '
+       || 'AND search_corpus.emb IS NULL AND x.n >= ' || (b * 1000)
+       || ' AND x.n < ' || ((b + 1) * 1000) || ';'
+FROM (SELECT i AS b FROM range(0, (SELECT ceil(count(*) / 1000.0)::BIGINT
+                                   FROM tmp3_merge_emb_xfer_n)) t(i)) z
+\gexec
 
 SELECT checkpoint();
 
