@@ -147,8 +147,9 @@ WHERE было > 0 AND стало > 0 AND стало >= было
 CREATE OR REPLACE TABLE tmp3_merge_edited_delta AS
 SELECT u.src_table, count(*)::BIGINT AS правок
 FROM tmp3_merge_unmatched u
+JOIN search_corpus c ON c.src_table = u.src_table AND c.row_key = u.row_key
 WHERE EXISTS (SELECT 1 FROM tmp3_corpus t
-              WHERE t.src_table = u.src_table AND t.refs = u.refs)
+              WHERE t.src_table = u.src_table AND t.refs = c.refs)
 GROUP BY 1;
 
 CREATE OR REPLACE TABLE tmp3_merge_unmatched AS
