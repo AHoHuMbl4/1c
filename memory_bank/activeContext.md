@@ -59,7 +59,7 @@
 - **резолвер** resolver_index: 2 100 349 строк, живых 283 088, NULL **1 817 261**
   — из них потеря REPLACE ~394 тыс., остальные ~1,42 млн **никогда не считались**:
   такт отщипывал по ~5,6 тыс. за прогон (журнал 30.08: session_rows 5568/5616).
-Корпус ≈ 4 ч одной карты; резолвер (короткие строки) — решение владелицы:
+Корпус ≈ 4 ч одной карты; резолвер (короткие строки) — решение владельца:
 считать целиком / отложить (текстовый поиск слов и так работает).
 Суммарно сожжено моими ошибками за период ≈ 10,1 млн эмбеддингов ≈ 28–31 GPU-час.
 
@@ -137,36 +137,30 @@
 7. И2 67×2: work/gold/i2_runner.py run --tsv ubuntu/serenedb/client-gold-okna.tsv
    --path engine --path web --reshoot-rules work/gold/reshoot-rules-okna.json,
    env I2_WEB_MODEL=openclaw, ASK_TOKEN /etc/1c-serene-ask.env, WEB_TOKEN
-   ~/.openclaw-web/openclaw.json (gateway.auth.token).
+   /home/undebot/.openclaw-web/openclaw.json (gateway.auth.token).
+   После И2 → К8 → автоприёмка; вопрос владельцу утром: склад 1318 vs no_data.
 8. УТРОМ: один отчёт владельцу: векторы (корпус/резолвер, числа), бэкапы md5,
    27B жив, такт зелёный, вики-цикл живой/нет, И2 «уверенно неверных X из 67».
 9. Хвосты (если ночь тихая): О6 срез 2, §6 бенч, веб-вердикты.
    НЕ делать: новые схемы векторизации, нативные пробы (HOW_NOT_TO §3.103),
    два bulk одновременно, трогать .11, обещать сроки без деления остатка
    на замеренный потолок (77k симв/с на 2 карты).
-1. После завершения bulk корпуса: контроль переноса (count(emb) в корпусе),
-   СВЕЖИЙ бэкап store.db с md5 + снимок счётчиков (файл VECTOR_SNAPSHOT-*),
-   затем bulk резолвера 1 817 261 NULL (аргументы: resolver_index,
-   'substr(value,1,20000)', 'table_name,column_name,value').
-2. Снять MERGE_VECTOR_LOSS_TOLERANCE=0 из /etc/1c-serene-pipeline-postgres.env
-   (проба уже не нужна, штатный порог 0,5% в build.sh).
-3. ЖИВАЯ ПРОБА ГЕЙТА: запуск такта → контроль: потеря 0 (content_hash стыкует),
-   corpus count/emb не падают, vector_loss_gate в search_quality ≈ 0.
-   Не проходит — такт не пускать, чинить. Такт — ТОЛЬКО после полного bulk
-   (порядок работ: векторизация и такт не одновременно).
-4. Живая проверка ВИКИ-ЦИКЛА на вопросах владельца (см. ИДЕЯ) — глазами, diag:
-   wiki_hybrid_pick → verify → options → верный источник.
-5. Полный И2 67×2 живыми эталонами (work/gold/i2_runner.py --reshoot-rules,
-   I2_WEB_MODEL=openclaw, WEB_TOKEN из ~/.openclaw-web/openclaw.json gateway.auth).
-6. К8 → автоприёмка. Вопрос владельцу: склад 1318 vs no_data.
-7. Хвосты: О6 срез 2 (z10×13 z11×23 + 5 падений), §6 бенч, веб-вердикты, О4-миграция.
-
-### КЛЮЧЕВЫЕ ФАКТЫ ОКНА (ssh -i ~/.ssh/id_ed25519_deploy -p 2202 root@gpu-erw.timpul.pro)
-- База: psql "host=127.0.0.1 port=7890 user=postgres dbname=postgres", SQL stdin-файлом.
-- Эмбеддер ОДНА карта: 10.3.1.11:8000 (qwen, ключ uAI_1IqA…); .12:8000 = 27B.
-  /etc/1c-embed.env вычищен (мёртвый .12:8002 убран), секреты self-heal стоят.
-- ask: :8091 прод / :8092 стейджинг, оба на слитом коде с wiki-ступенями;
-  ASK_TOKEN из /etc/1c-serene-ask.env. Веб-гейт :18801 (openclaw --profile web).
-- Юнит такта ОСТАНОВЛЕН. Такт-SQL на окне ЧАСТИЧНО старый → выкатить (п.1).
-- Деньги/цифры очереди: см. «ЧТО СЛУЧИЛОСЬ» выше; снимок 09:41 UTC.
-- Git: HEAD f4ce011 = origin/main (все замки зелёные). CHANGELOG 31.08 полный.
+### КЛЮЧЕВЫЕ ФАКТЫ ОКНА (ssh -i ~/.ssh/id_ed25519_deploy -p 2202 root@gpu-erw.timpul.pro = okna)
+- База: psql "host=127.0.0.1 port=7890 user=postgres dbname=postgres",
+  многооператорный SQL — ТОЛЬКО stdin-файлом (не -c: DETACH «outstanding work»).
+- Эмбеддер: ДВЕ двери в EMBED_HOSTS env (владелец прописал): .11:8000 +
+  .12:8002 (временный, снести после резолвера). 27B .12:8000 ВЫКЛЮЧЕН (п.4).
+- ask: :8091 прод / :8092 стейджинг, код с wiki-ступенями слит; ASK_TOKEN из
+  /etc/1c-serene-ask.env. Веб-гейт :18801; WEB_TOKEN =
+  /home/undebot/.openclaw-web/openclaw.json → gateway.auth.token (cd830443…).
+- Такт: юнит стоит, Restart=no (drop-in), таймер disable; такт-SQL выкачен
+  (deploy-sql 31.08, гейт+content_hash+идемпотентный MERGE на окне).
+- Резолвер такта: НЕ векторизует service (ROWS_WHERE в build.sh); bulk
+  резолвера идёт без ROWS_WHERE (сборка уже отфильтровала).
+- Git: HEAD 71b9af8 = origin/main. Лог прогона /tmp/bulk_corpus_20260831.log.
+- GPU-хосты владельца: ssh root@178.63.211.188 и root@49.13.97.101 тем же
+  ключом deploy (порт 22); GPU_SERVERS.md §8 — чеклист возврата 27B.
+- Ритуалы: git add и commit РАЗНЫМИ вызовами; после MCP-графа sleep 4 и
+  проверять git show :memory_bank/mcp-memory.json; коммит пат-спеком;
+  сообщение одной строкой с «Числа:» и «Доки:»; pkill НИКОГДА в одной
+  строке с запуском (самопопадание по литералу).
