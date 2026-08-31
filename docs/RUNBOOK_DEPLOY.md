@@ -713,6 +713,7 @@ cp ubuntu/systemd/1c-serene-pipeline.{service,timer}       /etc/systemd/system/
 cp ubuntu/systemd/1c-serene-embed-secrets.service          /etc/systemd/system/
 install -d /etc/systemd/system/serenedb.service.d
 cp ubuntu/systemd/serenedb.service.d/embed-secrets.conf    /etc/systemd/system/serenedb.service.d/
+cp ubuntu/systemd/serenedb.service.d/wal-autocheckpoint.conf /etc/systemd/system/serenedb.service.d/
 cp ubuntu/serenedb/systemd/1c-serene-ask.service           /etc/systemd/system/
 install -m 755 ubuntu/serenedb/embed_secrets_install.{sh,sql} /opt/1c-mcp-reports/
 systemctl daemon-reload

@@ -132,7 +132,12 @@ def _base_state(base_id: str) -> dict:
     return st
 
 
-def _set_pkg_state(base_id: str, pkg_id: str, state: str, error, seq=None) -> None:
+# Повтор карантина: только если поток ушёл дальше (applied seq больше), макс. N раз.
+QUARANTINE_RETRY_MAX = int(os.environ.get("PACKET_QUARANTINE_RETRY_MAX", "3"))
+
+
+def _set_pkg_state(base_id: str, pkg_id: str, state: str, error, seq=None,
+                   attempts=None) -> None:
     # Дубль записи packet_server._set_pkg_state: apply — самостоятельный процесс,
     # форма state.json общая по контракту хранения (шапка packet_server.py).
     pkg_dir = _pkg_dir(base_id, pkg_id)
@@ -143,18 +148,87 @@ def _set_pkg_state(base_id: str, pkg_id: str, state: str, error, seq=None) -> No
     st["error"] = error
     if seq is not None:
         st["seq"] = seq
+    if attempts is not None:
+        st["attempts"] = int(attempts)
     st["updated_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     _write_json_atomic(os.path.join(pkg_dir, "state.json"), st)
     bs = _base_state(base_id)
-    bs["packages"][pkg_id] = {"state": state, "error": error}
+    entry = {"state": state, "error": error}
+    if "attempts" in st:
+        entry["attempts"] = st["attempts"]
+    bs["packages"][pkg_id] = entry
     _write_json_atomic(os.path.join(_base_dir(base_id), "state.json"), bs)
 
 
 def _mark_applied(base_id: str, pkg_id: str, seq: int) -> None:
-    _set_pkg_state(base_id, pkg_id, "applied", None, seq=seq)
+    _set_pkg_state(base_id, pkg_id, "applied", None, seq=seq, attempts=0)
     bs = _base_state(base_id)
     bs["last_applied_seq"] = max(int(bs.get("last_applied_seq", 0)), seq)
     _write_json_atomic(os.path.join(_base_dir(base_id), "state.json"), bs)
+
+
+def _pkg_seq(st: dict, manifest: dict | None) -> int | None:
+    if isinstance(manifest, dict) and isinstance(manifest.get("seq"), int):
+        return manifest["seq"]
+    seq = st.get("seq")
+    return seq if isinstance(seq, int) else None
+
+
+def _retry_quarantined_after_progress(only_base: str | None) -> int:
+    """Карантин → verified, если есть applied с большим seq; attempts ≥ max — стоп.
+
+    Возвращает число пакетов, возвращённых в verified. Без имён баз/сущностей.
+    """
+    inbox = os.path.join(PACKET_ROOT, "inbox")
+    promoted = 0
+    if not os.path.isdir(inbox):
+        return 0
+    for base_id in sorted(os.listdir(inbox)):
+        if only_base and base_id != only_base:
+            continue
+        bdir = _base_dir(base_id)
+        if not os.path.isdir(bdir):
+            continue
+        last_applied = int(_base_state(base_id).get("last_applied_seq", 0) or 0)
+        for pkg_id in sorted(os.listdir(bdir)):
+            pdir = os.path.join(bdir, pkg_id)
+            if not os.path.isdir(pdir):
+                continue
+            st = _read_json(os.path.join(pdir, "state.json"), {})
+            if not isinstance(st, dict) or st.get("state") != "quarantined":
+                continue
+            m = _read_json(os.path.join(pdir, "manifest.json"), None)
+            seq = _pkg_seq(st, m if isinstance(m, dict) else None)
+            if seq is None:
+                continue
+            try:
+                attempts = int(st.get("attempts") or 0)
+            except (TypeError, ValueError):
+                attempts = 0
+            err = st.get("error")
+            exhausted = (
+                err == "attempts_exhausted"
+                or (isinstance(err, str) and err.startswith("attempts_exhausted"))
+            )
+            if attempts >= QUARANTINE_RETRY_MAX:
+                if not exhausted:
+                    prior = err if isinstance(err, str) and err else None
+                    mark = ("attempts_exhausted: %s" % prior) if prior else "attempts_exhausted"
+                    _set_pkg_state(base_id, pkg_id, "quarantined", mark,
+                                   seq=seq, attempts=attempts)
+                    _log("QUARANTINE base=%s pkg=%s seq=%d attempts_exhausted attempts=%d"
+                         % (base_id, pkg_id, seq, attempts))
+                continue
+            if last_applied <= seq:
+                continue
+            new_attempts = attempts + 1
+            _set_pkg_state(base_id, pkg_id, "verified", None,
+                           seq=seq, attempts=new_attempts)
+            _log("RETRY base=%s pkg=%s seq=%d quarantined→verified attempts=%d "
+                 "(after applied seq=%d)"
+                 % (base_id, pkg_id, seq, new_attempts, last_applied))
+            promoted += 1
+    return promoted
 
 
 def safe_col(name) -> str:
@@ -963,6 +1037,11 @@ def main() -> int:
     except (OSError, ValueError) as e:
         sys.stderr.write("FATAL: файл баз %s не читается: %s\n" % (PACKET_BASES, e))
         return 2
+
+    if not args.dry_run:
+        n_retry = _retry_quarantined_after_progress(args.base)
+        if n_retry:
+            _log("карантин: возвращено в verified после прогресса потока: %d" % n_retry)
 
     todo = _iter_verified(args.base)
     if not todo:

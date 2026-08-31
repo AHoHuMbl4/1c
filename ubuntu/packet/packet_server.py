@@ -354,6 +354,35 @@ class Server(ThreadingHTTPServer):
         super().handle_error(request, client_address)
 
 
+def _health_payload() -> dict:
+    """Сводка /health: ok + число карантинов с attempts_exhausted (без имён баз)."""
+    exhausted = 0
+    quarantined = 0
+    inbox = os.path.join(PACKET_ROOT, "inbox")
+    if os.path.isdir(inbox):
+        for base_id in os.listdir(inbox):
+            bdir = os.path.join(inbox, base_id)
+            if not os.path.isdir(bdir):
+                continue
+            for pkg_id in os.listdir(bdir):
+                pdir = os.path.join(bdir, pkg_id)
+                if not os.path.isdir(pdir):
+                    continue
+                st = _read_json(os.path.join(pdir, "state.json"), {})
+                if not isinstance(st, dict) or st.get("state") != "quarantined":
+                    continue
+                quarantined += 1
+                err = st.get("error")
+                if err == "attempts_exhausted" or (
+                        isinstance(err, str) and err.startswith("attempts_exhausted")):
+                    exhausted += 1
+    return {
+        "status": "packet-server-ok",
+        "quarantined": quarantined,
+        "attempts_exhausted": exhausted,
+    }
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -599,7 +628,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         segs = self._segments()
         if segs == ["health"]:
-            return self._json(200, {"status": "packet-server-ok"})
+            return self._json(200, _health_payload())
         if segs[:2] == ["v1", "package"] and len(segs) == 5 and segs[4] == "status":
             base_id, pkg_id = segs[2], segs[3]
             if not (_valid_id(base_id) and _valid_id(pkg_id)):
@@ -636,8 +665,11 @@ class Handler(BaseHTTPRequestHandler):
         # проверка по нему не гоняется.
         if st["state"] == "receiving" and isinstance(manifest, dict) and not missing:
             st = _verify_package(self, base_id, pkg_id, manifest)
-        return self._json(200, {"state": st["state"], "received": received,
-                                "missing": missing, "error": st.get("error")})
+        body = {"state": st["state"], "received": received,
+                "missing": missing, "error": st.get("error")}
+        if "attempts" in st:
+            body["attempts"] = st["attempts"]
+        return self._json(200, body)
 
     def _get_config(self, base_id: str, qs: dict):
         cfg = BASES[base_id].get("config") or {}

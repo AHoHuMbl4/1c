@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Персистентные секреты эмбеддера после старта SereneDB (О5, PLAN_WIKI_CHOICE §7).
-# Идемпотентно: CREATE OR REPLACE SECRET по EMBED_HOSTS + qwen (= первый хост).
-# Запуск: systemd 1c-serene-embed-secrets.service или вручную под root после serenedb.
+# Self-heal: DROP всех emb_<DB>_* и qwen, затем CREATE OR REPLACE по EMBED_HOSTS + qwen.
+# Запуск: systemd 1c-serene-embed-secrets.service / ExecStartPost serenedb / вручную под root.
 set -euo pipefail
 cd "$(dirname "$0")" || exit 1
 
@@ -46,6 +46,27 @@ done
 SQL="$(dirname "$0")/embed_secrets_install.sql"
 [ -f "$SQL" ] || fail "нет $SQL"
 
+# Self-heal: осиротевшие emb_<DB>_* / qwen (старый EMBED_HOSTS) ломают count-check.
+# Доки: sql/statements/create_secret#syntax-for-drop-secret;
+# configuration/secrets_manager#deleting-secrets.
+_drop_existing_openai_secrets() {
+  local names name
+  names="$(psql "$DSN" -tAc \
+    "SELECT name FROM duckdb_secrets()
+     WHERE type = 'openai'
+       AND (name LIKE 'emb_${DB}_%' OR name = 'qwen')" 2>/dev/null || true)"
+  while IFS= read -r name; do
+    name="$(printf '%s' "$name" | tr -d '[:space:]')"
+    [ -z "$name" ] && continue
+    case "$name" in
+      *[!A-Za-z0-9_]*) fail "неожиданное имя секрета: ${name}" ;;
+    esac
+    psql "$DSN" -q -v ON_ERROR_STOP=1 \
+      -c "DROP SECRET IF EXISTS ${name};" >/dev/null 2>&1 \
+      || fail "не удалось удалить секрет ${name}"
+  done <<< "$names"
+}
+
 apply_secret() {
   local name="$1" host="$2" key="$3"
   psql "$DSN" -q -v ON_ERROR_STOP=1 \
@@ -55,6 +76,8 @@ apply_secret() {
     -v "embed_path=${EMBED_PATH}" \
     -f "$SQL" >/dev/null 2>&1 || fail "секрет ${name} не создан"
 }
+
+_drop_existing_openai_secrets
 
 first_host="" first_key=""
 for i in "${!PAIRS[@]}"; do

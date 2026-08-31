@@ -1,4 +1,25 @@
-## 2026-08-31 — О4: перенос emb при rewrite-волне без пересчёта
+## 2026-08-31 — п.0: четыре ручные операции дня → механизмы
+
+**[код]** Закрыты ручные шаги живого инцидента механизмами в репо (выкат на
+окно — оркестратор):
+1. `embed_secrets_install.sh` — self-heal: перед CREATE `DROP SECRET IF EXISTS`
+   всех `emb_<DB>_*` и `qwen`, затем набор строго по `EMBED_HOSTS` (осиротевшие
+   больше не ломают count-check).
+2. `packet_apply` — автоповтор карантина: при applied seq больше →
+   quarantined→verified + `attempts` (макс. `PACKET_QUARANTINE_RETRY_MAX=3`),
+   иначе `attempts_exhausted` в state/журнале; `/health` считает exhausted.
+3. `work/deploy-sql.sh` (+ `deploy-common.sh`; deploy-ask на общий lib) —
+   md5-сверка и atomic-доставка SQL такта из build.sh/wiki_publish.
+4. Канон drop-in serenedb: `wal-autocheckpoint.conf` —
+   `SET GLOBAL wal_autocheckpoint = 512MB` без двойных кавычек;
+   `embed-secrets.conf` — прямой вызов установщика вместо systemctl (polkit).
+**Числа:** замки offline: embed_secrets 30/30; packet_apply_retry 14/0;
+deploy-sql 17/17; `bash -n` + `--offline-dry` (13 SQL).
+**Доки:** sql/statements/create_secret; configuration/secrets_manager;
+configuration/overview (wal_autocheckpoint VARCHAR); RUNBOOK_DEPLOY §10.6.
+⚠️ Живая сверка формы `SET GLOBAL wal_autocheckpoint = 512MB` на сборке
+26.07.3 — за оркестратором.
+
 
 **[код]** `corpus_merge.sql` §1-бис: перед MERGE для таблиц `tmp3_merge_rewrite_wave`
 пары стелаж↔корпус по уникальным `refs`; doc → карта «колонка: значение»

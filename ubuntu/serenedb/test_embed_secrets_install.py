@@ -56,13 +56,35 @@ def main() -> int:
     t("no hardcoded host count", "EMBED_HOSTS" in body and "PAIRS[@]" in body)
     t("count check duckdb_secrets", "duckdb_secrets()" in body)
 
+    # Self-heal: осиротевшие emb_* / qwen сбрасываются до CREATE по EMBED_HOSTS.
+    t("self-heal DROP SECRET IF EXISTS", "DROP SECRET IF EXISTS" in body)
+    t("self-heal lists emb_+qwen", "emb_${DB}_%" in body and "name = 'qwen'" in body)
+    t("self-heal before apply",
+      body.find("_drop_existing_openai_secrets") < body.find('apply_secret "qwen"'))
+    t("self-heal no host literals",
+      "10.3." not in body and "gpu-" not in body and "http://" not in code)
+
     t("unit After serenedb", "After=" in unit and "serenedb.service" in unit)
     t("unit EnvironmentFile embed", "EnvironmentFile=/etc/1c-embed.env" in unit)
     t("unit oneshot", "Type=oneshot" in unit)
     t("unit ExecStart script", "embed_secrets_install.sh" in unit)
 
     t("drop-in ExecStartPost", "ExecStartPost=" in dropin)
-    t("drop-in starts embed unit", "1c-serene-embed-secrets.service" in dropin)
+    t("drop-in calls install directly",
+      "embed_secrets_install.sh" in dropin
+      and "systemctl start" not in dropin
+      and "1c-serene-embed-secrets" not in dropin)
+    t("drop-in EnvironmentFile embed", "EnvironmentFile=" in dropin and "1c-embed.env" in dropin)
+
+    wal = (ROOT.parent / "systemd" / "serenedb.service.d" / "wal-autocheckpoint.conf")
+    t("wal drop-in exists", wal.is_file())
+    if wal.is_file():
+        wal_body = wal.read_text(encoding="utf-8")
+        t("wal SET GLOBAL без двойных кавычек",
+          "wal_autocheckpoint" in wal_body
+          and 'wal_autocheckpoint="' not in wal_body
+          and "wal_autocheckpoint = \"" not in wal_body)
+        t("wal значение 512MB", "512MB" in wal_body)
 
     t("regress: not TEMPORARY in shell secrets", "TEMPORARY SECRET" not in body)
 
