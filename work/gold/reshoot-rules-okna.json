@@ -1,7 +1,7 @@
 {
   "rules": {
     "sales_sum": {
-      "sql": "SELECT round(sum(nums['Всего']),2) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= '{from}' AND doc_date < '{to}'",
+      "sql": "SELECT round(sum(nums['Сумма']),2) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= '{from}' AND doc_date < '{to}'",
       "no_data": false
     },
     "clients_now": {
@@ -13,11 +13,11 @@
       "no_data": false
     },
     "buyers_12m": {
-      "sql": "SELECT count(DISTINCT refs_map['Контрагент']) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND nums['Всего'] >= 0 AND doc_date >= '{from}' AND doc_date < '{to}'",
+      "sql": "SELECT count(DISTINCT refs_map['Контрагент']) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND nums['Сумма'] >= 0 AND doc_date >= '{from}' AND doc_date < '{to}'",
       "no_data": false
     },
     "month_buyers": {
-      "sql": "SELECT count(DISTINCT refs_map['Контрагент']) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND nums['Всего'] >= 0 AND doc_date >= '{from}' AND doc_date < '{to}'",
+      "sql": "SELECT count(DISTINCT refs_map['Контрагент']) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND nums['Сумма'] >= 0 AND doc_date >= '{from}' AND doc_date < '{to}'",
       "no_data": false
     },
     "org_count": {
