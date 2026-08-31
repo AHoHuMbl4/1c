@@ -255,6 +255,10 @@ def main() -> int:
       "wiki_primary_entity_cascade" in z21)
     t("cascade has wiki_skip_manual guard",
       "_wiki_skip_manual" in Z21.read_text(encoding="utf-8"))
+    t("wiki verify step present",
+      "wiki_verify_candidates" in Z21.read_text(encoding="utf-8"))
+    t("wiki_passport.sql exists",
+      (ROOT / "wiki_passport.sql").is_file())
 
     boot = (ROOT / "ask" / "_bootstrap.py").read_text(encoding="utf-8")
     t("bootstrap z20 wiki patch", "_patch_z20_wiki_primary" in boot)

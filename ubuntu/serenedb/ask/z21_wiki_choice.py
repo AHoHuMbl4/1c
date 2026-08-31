@@ -9,10 +9,13 @@ apply_bindings(globals())
 ASK_WIKI_CHOICE = os.environ.get("ASK_WIKI_CHOICE", "0") == "1"
 WIKI_KNN_N = int(os.environ.get("WIKI_KNN_N", "15"))
 WIKI_PICK_N = int(os.environ.get("WIKI_PICK_N", "5"))
+WIKI_PASSPORT_N = int(os.environ.get("WIKI_PASSPORT_N", "5"))
+WIKI_PASSPORT_BODY_MAX = int(os.environ.get("WIKI_PASSPORT_BODY_MAX", "1500"))
 WIKI_SEP_GAP = float(os.environ.get("WIKI_SEP_GAP", "0.04"))
 WIKI_EMBED_MAXLEN = int(os.environ.get("WIKI_EMBED_MAXLEN", "20000"))
 
 _HYBRID_SQL = None
+_PASSPORT_SQL = None
 
 
 def _wiki_hybrid_sql():
@@ -21,10 +24,26 @@ def _wiki_hybrid_sql():
         _HYBRID_SQL = (ASK_ROOT / "wiki_card_hybrid.sql").read_text(encoding="utf-8")
     return _HYBRID_SQL
 
+
+def _wiki_passport_sql():
+    global _PASSPORT_SQL
+    if _PASSPORT_SQL is None:
+        _PASSPORT_SQL = (ASK_ROOT / "wiki_passport.sql").read_text(encoding="utf-8")
+    return _PASSPORT_SQL
+
+
 WIKI_PICK_SYS = """Map the user's question to one numbered entity card, or 0.
 Each card shows: name, description, platform kind, axes, measures (same fields for all).
 Reply with one JSON object only:
   {"choice": <1-based card index or 0>, "separable": <true|false>}"""
+
+WIKI_VERIFY_SYS = """Assess each numbered entity passport against the user question.
+Each passport shows: name, wiki excerpt, platform kind, axes, measures,
+traits present only in this passport vs pool neighbors.
+Reply with one JSON object only:
+  {"verdicts": [{"index": <1-based passport index>, "fit": <"yes"|"no"|"unsure">,
+                 "why": <one line>}]}
+Include one verdict per passport shown."""
 
 
 def wiki_aggregate_want(intent, question=""):
@@ -155,6 +174,256 @@ def wiki_format_card_lines(cards):
                c.get("axes") or "—",
                c.get("measures") or "—"))
     return "\n\n".join(lines)
+
+
+def _wiki_substitute_passport_sql(template, src_tables):
+    tables = [s for s in (src_tables or [])[:WIKI_PASSPORT_N] if s]
+    if not tables:
+        return ""
+    lst = ", ".join("'%s'" % str(s).replace("'", "''") for s in tables)
+    out = template
+    if out.strip().startswith("\\set"):
+        out = "\n".join(
+            ln for ln in out.splitlines()
+            if not ln.strip().startswith("\\set"))
+    out = out.replace(":src_list", lst)
+    out = out.replace(":body_max", str(WIKI_PASSPORT_BODY_MAX))
+    return out
+
+
+def _wiki_parse_axes_set(axes_str):
+    out = set()
+    for part in (axes_str or "").split(","):
+        part = part.strip()
+        if "->" in part:
+            out.add(part.split("->", 1)[0].strip().lower())
+        elif part:
+            out.add(part.lower())
+    return out
+
+
+def _wiki_parse_measures_set(measures_str):
+    out = set()
+    for part in (measures_str or "").split(";"):
+        part = part.strip()
+        if ":" in part:
+            out.add(part.split(":", 1)[0].strip().lower())
+        elif part:
+            out.add(part.lower())
+    return out
+
+
+def wiki_passport_distinct(card, pool):
+    """Поля осей/мер, которых нет у других кандидатов пула."""
+    my_ax = _wiki_parse_axes_set(card.get("axes"))
+    my_ms = _wiki_parse_measures_set(card.get("measures"))
+    o_ax, o_ms = set(), set()
+    for c in pool or []:
+        if c.get("src_table") == card.get("src_table"):
+            continue
+        o_ax |= _wiki_parse_axes_set(c.get("axes"))
+        o_ms |= _wiki_parse_measures_set(c.get("measures"))
+    parts = []
+    d_ax = sorted(my_ax - o_ax)
+    d_ms = sorted(my_ms - o_ms)
+    if d_ax:
+        parts.append("axes: " + ", ".join(d_ax))
+    if d_ms:
+        parts.append("measures: " + ", ".join(d_ms))
+    return "; ".join(parts) if parts else "—"
+
+
+def wiki_passport_enrich(cards):
+    """Расширенный паспорт top-N: wiki body + отличия от соседей пула."""
+    cards = list(cards or [])
+    if not cards:
+        return []
+    top = cards[:WIKI_PASSPORT_N]
+    rest = cards[WIKI_PASSPORT_N:]
+    by_src = {}
+    qsql = _wiki_substitute_passport_sql(
+        _wiki_passport_sql(), [c.get("src_table") for c in top])
+    if qsql:
+        try:
+            for r in psql(qsql) or []:
+                if not r or not r[0]:
+                    continue
+                by_src[str(r[0])] = {
+                    "wiki_body": (r[2] if len(r) > 2 else "") or "",
+                    "parent": (r[5] if len(r) > 5 else "") or "",
+                }
+        except RuntimeError:
+            pass
+    out = []
+    for c in top:
+        row = dict(c)
+        extra = by_src.get(row.get("src_table") or "", {})
+        if extra.get("wiki_body"):
+            row["wiki_body"] = extra["wiki_body"]
+        elif row.get("description"):
+            row["wiki_body"] = row["description"]
+        else:
+            row["wiki_body"] = ""
+        if extra.get("parent") is not None:
+            row["parent"] = extra["parent"]
+        row["platform_kind"] = wiki_platform_kind(
+            row.get("src_table"), row.get("parent") or "")
+        row["distinct"] = wiki_passport_distinct(row, top)
+        out.append(row)
+    for c in rest:
+        out.append(dict(c))
+    return out
+
+
+def wiki_format_passport_lines(passports, short_tail=None):
+    """Макет паспортов для модели: полные top-N, хвост — только имена."""
+    lines = []
+    for i, p in enumerate(passports or []):
+        if i >= WIKI_PASSPORT_N:
+            break
+        body = (p.get("wiki_body") or p.get("description") or "—")[:WIKI_PASSPORT_BODY_MAX]
+        lines.append(
+            "%d. passport\n   name: %s\n   wiki: %s\n   platform: %s\n   axes: %s\n"
+            "   measures: %s\n   distinct: %s"
+            % (i + 1,
+               p.get("name") or "—",
+               body or "—",
+               p.get("platform_kind") or "—",
+               p.get("axes") or "—",
+               p.get("measures") or "—",
+               p.get("distinct") or "—"))
+    tail = short_tail or []
+    if tail:
+        names = ", ".join(
+            (c.get("name") or c.get("src_table") or "?") for c in tail)
+        lines.append("Other pool names only: %s" % names)
+    return "\n\n".join(lines)
+
+
+def wiki_parse_verify_response(raw, n_passports):
+    """Структурный разбор {verdicts:[{index, fit, why}]}."""
+    verdicts = []
+    txt = (raw or "").strip()
+    if not txt or n_passports <= 0:
+        return verdicts
+    try:
+        j = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
+    except (ValueError, KeyError, TypeError):
+        return verdicts
+    if not isinstance(j, dict):
+        return verdicts
+    rows = j.get("verdicts")
+    if not isinstance(rows, list):
+        return verdicts
+    fit_map = {
+        "yes": "yes", "no": "no", "unsure": "unsure",
+        "подходит": "yes", "не_подходит": "no", "не подходит": "no",
+        "сомневаюсь": "unsure",
+    }
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        idx = row.get("index")
+        if idx is None or not str(idx).strip().isdigit():
+            continue
+        i = int(idx)
+        if i < 1 or i > n_passports:
+            continue
+        fit_raw = str(row.get("fit") or "").strip().lower()
+        fit = fit_map.get(fit_raw, fit_raw if fit_raw in ("yes", "no", "unsure") else "")
+        if fit not in ("yes", "no", "unsure"):
+            continue
+        why = str(row.get("why") or "").strip()[:200]
+        verdicts.append({"index": i, "fit": fit, "why": why})
+    return verdicts
+
+
+def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
+    """Исход верификации: leader / clarify / none (код, без «лучший из плохих»)."""
+    diag = dict(diag or {})
+    passports = list(passports or [])[:WIKI_PASSPORT_N]
+    if not passports:
+        return {"outcome": "none", "reason": "empty_passports", "diag": diag}
+    by_idx = {v["index"]: v for v in (verdicts or [])}
+    yes_i, unsure_i, no_i = [], [], []
+    for i in range(1, len(passports) + 1):
+        v = by_idx.get(i)
+        if not v:
+            continue
+        if v["fit"] == "yes":
+            yes_i.append(i)
+        elif v["fit"] == "unsure":
+            unsure_i.append(i)
+        else:
+            no_i.append(i)
+    diag["wiki_verify_yes"] = len(yes_i)
+    diag["wiki_verify_unsure"] = len(unsure_i)
+    diag["wiki_verify_no"] = len(no_i)
+    if len(yes_i) == 1 and not unsure_i:
+        leader = passports[yes_i[0] - 1].get("src_table")
+        if not wiki_validate_leader_axes(leader, intent):
+            diag["wiki_verify"] = "axis_reject"
+            return {"outcome": "none", "reason": "axis_reject", "diag": diag}
+        diag["wiki_verify"] = leader
+        return {"outcome": "leader", "leader": leader, "diag": diag}
+    if len(yes_i) == 0 and not unsure_i:
+        diag["wiki_verify"] = "none"
+        return {"outcome": "none", "reason": "verify_none", "diag": diag}
+    tie_idx = sorted(set(yes_i + unsure_i))
+    if not tie_idx:
+        diag["wiki_verify"] = "none"
+        return {"outcome": "none", "reason": "verify_none", "diag": diag}
+    diag["wiki_verify"] = "clarify"
+    diag["wiki_verify_tie"] = [
+        passports[i - 1].get("src_table") for i in tie_idx
+        if 0 < i <= len(passports)]
+    return {
+        "outcome": "clarify",
+        "candidates": [passports[i - 1] for i in tie_idx
+                       if 0 < i <= len(passports)],
+        "diag": diag,
+    }
+
+
+def wiki_verify_candidates(question, intent, cards, diag=None):
+    """Один вызов модели: вопрос + ≤5 паспортов → verdicts."""
+    diag = dict(diag or {})
+    cards = list(cards or [])
+    if not cards:
+        return {"outcome": "none", "reason": "empty_pool", "diag": diag}
+    if len(cards) == 1:
+        leader = cards[0].get("src_table")
+        if wiki_validate_leader_axes(leader, intent):
+            diag["wiki_verify"] = "struct_single"
+            diag["wiki_verify_skipped"] = True
+            return {"outcome": "leader", "leader": leader, "diag": diag,
+                    "verdicts": [{"index": 1, "fit": "yes", "why": "struct_single"}]}
+        diag["wiki_verify"] = "axis_reject"
+        return {"outcome": "none", "reason": "axis_reject", "diag": diag,
+                "verdicts": []}
+    enriched = wiki_passport_enrich(cards)
+    full = enriched[:WIKI_PASSPORT_N]
+    short = enriched[WIKI_PASSPORT_N:]
+    listing = wiki_format_passport_lines(full, short_tail=short)
+    ask_text = question or ""
+    kind = _intent_text((intent or {}).get("kind"))
+    if kind:
+        ask_text = "%s (%s)" % (ask_text, kind)
+    try:
+        raw = ds_chat(
+            [{"role": "system", "content": WIKI_VERIFY_SYS},
+             {"role": "user", "content": "%s\n\nPassports:\n%s"
+              % (ask_text, listing)}],
+            max_tokens=400)
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write("ask DEGRADED: wiki verify без модели (%s)\n" % str(e)[:80])
+        return {"outcome": "degraded", "diag": diag}
+    verdicts = wiki_parse_verify_response(raw, len(full))
+    diag["wiki_verify_n"] = len(full)
+    resolved = wiki_outcome_from_verify(verdicts, full, intent, diag=diag)
+    resolved["verdicts"] = verdicts
+    resolved["diag"] = dict(resolved.get("diag") or diag)
+    return resolved
 
 
 def wiki_knn_separable(cards):
@@ -409,8 +678,29 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
         diag["wiki_pick"] = "none"
         diag["wiki_empty_pool"] = True
         return None
-    pick = wiki_pick_from_cards(question, intent, cards, diag=diag)
-    diag.update(pick.get("diag") or {})
+    if len(cards) == 1:
+        verify = wiki_verify_candidates(question, intent, cards, diag=diag)
+        diag.update(verify.get("diag") or {})
+        pick = verify
+    else:
+        pick = wiki_pick_from_cards(question, intent, cards, diag=diag)
+        diag.update(pick.get("diag") or {})
+        if pick.get("outcome") == "degraded":
+            diag["wiki_pick"] = "fallback"
+            return None
+        verify = wiki_verify_candidates(question, intent, cards, diag=diag)
+        diag.update(verify.get("diag") or {})
+        if verify.get("outcome") == "degraded":
+            pass
+        elif verify.get("outcome") in ("leader", "clarify", "none"):
+            pick = verify
+            if verify.get("outcome") == "leader":
+                diag["wiki_pick"] = verify.get("leader") or diag.get("wiki_pick")
+            elif verify.get("outcome") == "none":
+                diag["wiki_pick"] = "none"
+                diag["wiki_none"] = verify.get("reason") or "verify_none"
+            elif verify.get("outcome") == "clarify":
+                diag["wiki_pick"] = "clarify"
     if pick.get("outcome") == "degraded":
         diag["wiki_pick"] = "fallback"
         return None
