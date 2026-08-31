@@ -360,8 +360,35 @@ def clarify_say(question, opts, diag=None):
     sys.stderr.write("ask CLARIFY GATE: числа вне вариантов: %s\n" % bad[:4])
     if isinstance(diag, dict):
         diag["clarify_gate_rejected"] = bad[:4]
-    stripped = [dict(o, hint="") for o in (opts or [])]
+    stripped = [dict(o, hint="", found=0) for o in (opts or [])]
     return "\n".join(format_clarify_options(question, stripped))
+
+
+def clarify_opts_response(question, opts, diag, cut, t0, *, reason="", gate_ok=False,
+                          partial=None, sources=None, extra_diag=None):
+    clean = []
+    for o in opts or []:
+        if not o:
+            continue
+        co = dict(o)
+        co["found"] = 0
+        if co.get("label") or co.get("measure"):
+            clean.append(co)
+    if len(clean) < 2:
+        return None
+    d = dict(diag or {})
+    if extra_diag:
+        d.update(extra_diag)
+    text = clarify_say(question, clean, d)
+    if not text:
+        text = ", ".join("«%s»" % (o.get("label") or o.get("measure") or "")
+                         for o in clean)
+    srcs = sources if sources is not None else [o.get("label") or "" for o in clean]
+    return {"partial": partial if partial is not None else (cut or None),
+            "kind": "clarify", "text": text, "options": clean,
+            "sources": srcs,
+            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
+                               gate_ok=gate_ok, reason=reason or None)}
 
 
 # 🔴 ВИТРИНА ИЗМЕРЯЕТСЯ ЖИВЬЁМ, А НЕ ПО ПЕРЕПИСИ (15.08, аудит §3). Перепись
@@ -1749,13 +1776,17 @@ def period_is_canon_guess(period, today):
     return False
 
 
-def period_assumed_needs_clarify(intent, today=None):
+def period_assumed_needs_clarify(intent, today=None, question=""):
     """Assumed-окно длиной ≥ ~квартала без года в вопросе → уточнить период (K4-1).
 
     День/неделя/месяц (короткие относительные) — False: одно условное прочтение.
     Календарный/скользящий год и кварталоподобное окно — True (п. 12).
     K9-ф8: event+count с окном в intent — False (см. event_count_has_explicit_period).
     """
+    if sales_sum_intent(intent, question):
+        return False
+    if canon_claims_question(intent, question):
+        return False
     if event_count_has_explicit_period(intent):
         return False
     if serene_enough is None or not serene_enough.period_assumed(intent):
@@ -2015,14 +2046,28 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                               or diag.get("period_from_prior"))
     if (not _period_from_prior
             and not (trusted or {}).get("period")
-            and period_assumed_needs_clarify(intent, time.strftime("%Y-%m-%d"))):
+            and period_assumed_needs_clarify(intent, time.strftime("%Y-%m-%d"),
+                                            question=question)):
         diag["period_assumed_clarify"] = True
-        ask = _need_clarify(
-            question, [{"kind": "period", "word": ""}],
-            "период выведен системой, в вопросе не назван",
-            dict(diag, шаг="assumed-period"))
-        if ask:
-            return ask
+        _prd_today = time.strftime("%Y-%m-%d")
+        _p_opts = []
+        for rd in event_count_period_option_readings(_prd_today):
+            pr = dict(rd.get("period") or {})
+            if rd.get("origin"):
+                pr["origin"] = rd.get("origin")
+            if rd.get("interpretation_id"):
+                pr["interpretation_id"] = rd.get("interpretation_id")
+            lab = render_window_label(pr, origin=rd.get("origin"), today=_prd_today)
+            if not lab:
+                lab = str(rd.get("interpretation_id") or "none")
+            _p_opts.append({"src": "", "label": lab, "hint": "",
+                            "distinct_by": "period", "period": pr,
+                            "window_fp": rd.get("window_fp") or ""})
+        _pask = clarify_opts_response(
+            question, _p_opts, dict(diag, шаг="assumed-period"), cut, t0,
+            reason="assumed-period")
+        if _pask:
+            return _pask
 
     # Сравнение A и B — члены одной оси, не AND в одной строке. Схлопываем ДО probe.
     terms_for_axis = [list(g) for g in (intent.get("terms") or [])]
@@ -2823,6 +2868,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # ASK_ENTITY_FORM: форма F до выбора сущности моделью (K6).
     # pre_entity + classes>1 = молчаливый лидер — гейт в try_entity_form_answer.
     # Пул F — все catalog_/register_/document_ из cands (без head-среза круга).
+    if (not no_arbiter and not focus
+            and not entity_choice_locked(trusted, resolved)
+            and not diag.get("sales_canon_locked")
+            and sales_canon_intent(intent, question, cands)):
+        _sc_pre_ecp = sales_canon_src(cands, intent, question, plan={})
+        if _sc_pre_ecp:
+            diag["sales_canon_locked"] = _sc_pre_ecp
+            шаг("канон продаж (до period-clarify)", стало=_sc_pre_ecp)
     _ecp0 = try_event_count_period_clarify(
         question, intent, diag, cut, t0, today=today, pool=list(cands or []),
         trusted=trusted, resolved=resolved)
@@ -2880,6 +2933,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         шаг("сущность снята — осталась", было=(focus or "—"), осталось=_held)
         diag["entity_held"] = {"было": focus, "осталось": _held}
         focus = _held
+    if (not focus and not no_arbiter
+            and not entity_choice_locked(trusted, resolved)):
+        if not diag.get("sales_canon_locked"):
+            _sc_pre = sales_canon_src(cands, intent, question, plan={})
+            if _sc_pre:
+                diag["sales_canon_locked"] = _sc_pre
+                шаг("канон продаж (ранний)", стало=_sc_pre)
+        if (not diag.get("sales_canon_locked")
+                and not diag.get("stock_canon_locked")
+                and not diag.get("catalog_count_locked")
+                and not diag.get("register_count_locked")):
+            _rc_pre = register_count_src(cands, intent, question)
+            if _rc_pre:
+                diag["register_count_locked"] = _rc_pre
+                шаг("канон регистра (ранний)", стало=_rc_pre)
     axis_plan = None
     if focus:
         axis_plan = axis_focus_plan(
@@ -2942,12 +3010,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             match = code_filter
     else:
         picked, marks, plan = [], {}, {}
+        if diag.get("register_count_locked"):
+            picked = [diag["register_count_locked"]]
+        elif diag.get("sales_canon_locked"):
+            picked = [diag["sales_canon_locked"]]
         _wiki = None
         if ASK_WIKI_CHOICE:
             _wiki = try_wiki_hybrid_entity_pick(
                 question, intent, diag, cut, t0,
                 by=by, match=match, preds=preds)
-            if _wiki and _wiki.get("kind") in ("no_data", "clarify"):
+            if (_wiki and _wiki.get("kind") in ("no_data", "clarify")
+                    and not diag.get("sales_canon_locked")):
                 return _wiki
             if _wiki and _wiki.get("picked"):
                 picked, marks, plan = (
@@ -3406,10 +3479,27 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["period_zero_why"] = True
         if (intent.get("want") or "") == "list":
             intent["want"] = "sum"
+    if (not focus and not no_arbiter
+            and not entity_choice_locked(trusted, resolved)
+            and not diag.get("sales_canon_locked")
+            and not diag.get("stock_canon_locked")
+            and not diag.get("catalog_count_locked")):
+        _reg = register_count_src(cands, intent, question)
+        if _reg:
+            _prev = list(picked or [])
+            if not _prev or _prev[0] != _reg:
+                diag["register_count_override"] = {"было": _prev, "стало": _reg}
+                шаг("канон регистра", было=(_prev[0] if _prev else "—"),
+                    стало=_reg)
+            picked = [_reg]
+            diag["register_count_locked"] = _reg
     # Stock-path: balance-регистр, не каталог/табчасть (K7, [замер 29.08 okna]).
     if (not focus and not no_arbiter
             and not entity_choice_locked(trusted, resolved)
             and not diag.get("sales_canon_locked")
+            and not diag.get("register_count_locked")
+            and not catalog_count_question(intent, question)
+            and not catalog_kind_total_question(intent, question)
             and stock_question_engaged(question, intent)):
         _stock = stock_canon_src(cands, question, intent) or diag.get("stock_canon_locked")
         if _stock:
@@ -3424,7 +3514,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if (not focus and not no_arbiter and picked
             and not entity_choice_locked(trusted, resolved)
             and not diag.get("sales_canon_locked")
-            and not diag.get("stock_canon_locked")):
+            and not diag.get("stock_canon_locked")
+            and not diag.get("register_count_locked")):
         _cat = catalog_count_src(cands, intent, question)
         if _cat:
             if picked[0] != _cat:
@@ -3470,7 +3561,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     arb_pool = prefer_entity_for_stock(arb_pool, question, intent)
     # Lock канона: один источник → period_empty / ответ, не clarify соперников.
     picked, arb_pool, doubt = sales_canon_force_pool(
-        diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked"),
+        diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked"),
         picked, arb_pool, doubt)
     if doubt and picked and not focus and not no_arbiter and len(arb_pool) < ARBITER_MAX:
         fam = {_family(x) for x in arb_pool}
@@ -3567,7 +3658,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 соперники=",".join(_added) or "—")
     # Повторный singleton: стоп2/doubt могли добавить соперников после первого force.
     picked, arb_pool, doubt = sales_canon_force_pool(
-        diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked"),
+        diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked"),
         picked, arb_pool, doubt)
     # В diag для журнала (ask_journal.doubt) — после финального force.
     diag["doubt"] = bool(doubt)
@@ -3602,7 +3693,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         всегда переспрашивать, а не выбирать за человека.
         """
         if (not REQUIRE_SUPPORT or guards_skip_for_choice(focus, measure_pick, trusted)
-                or diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked")):
+                or diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked")):
             return out
         w = (out.get("diag") or {}).get("focus")
         if not w or out.get("kind") not in ("answer", "figures"):
@@ -5333,12 +5424,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             ask_back = ""
     # Канон уже ответил числом — встречный вопрос модели («какой месяц?») превращает
     # kind=answer в clarify без options ([замер 21.08] июль 2.7M + ask_back → scorer FAIL).
-    if ask_back and (diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked")):
+    if ask_back and (diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked")):
         diag["ask_back_dropped"] = "canon_locked"
         ask_back = ""
     if ask_back:
+        diag["ask_back_dropped"] = "bare_clarify_forbidden"
+        ask_back = ""
+    if ask_back:
         diag["asked_back"] = True
-        # kind=clarify — паспорт счёта не клеить (счёта для человека как ответа не было).
         return {"partial": cut or None, "kind": "clarify",
                 "text": ((text_core or text).strip() + "\n\n" + ask_back).strip(),
                 "question": ask_back, "options": [],

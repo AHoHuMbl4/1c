@@ -40,6 +40,16 @@ t("sales intent продали сильнее balance_routing",
       {"want": "sum", "action_class": "object", "kind": "товар"},
       "сколько продали за месяц?"))
 
+_CANDS_SALES = ["accumulationregister_реализациятмц", "catalog_x"]
+_INT_MONTH = {"want": "count", "kind": "товар",
+              "period": {"from": "2026-08-01", "to": "2026-08-31"}}
+t("sales_canon_intent: period+lift без «продали»",
+  A.sales_canon_intent(_INT_MONTH,
+                       "сколько было в прошлом месяце всего", _CANDS_SALES))
+t("sales_canon_intent: не org count",
+  not A.sales_canon_intent({"want": "count", "kind": "организации"},
+                           "сколько организаций?", _CANDS_SALES))
+
 # --- score ---
 t("score: реализациятмц > книгапродаж",
   A._sales_register_score("accumulationregister_реализациятмц",

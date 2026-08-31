@@ -899,9 +899,12 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
         d["fork_clarify_axis"] = axis_kind
     if t0 is not None:
         d["sec"] = round(time.time() - t0, 2)
-    text = clarify_say(question, opts, d) if opts else ""
-    if not (text or "").strip() and opts:
-        text = ", ".join("«%s»" % (o.get("label") or "") for o in opts)
+    clean_opts = [{**o, "found": 0} for o in (opts or [])]
+    if len(clean_opts) < 2:
+        return None
+    text = clarify_say(question, clean_opts, d)
+    if not (text or "").strip():
+        text = ", ".join("«%s»" % (o.get("label") or "") for o in clean_opts)
     if c_why == "uncounted_cell":
         note = "часть прочтений не удалось посчитать"
         text = (text + ("\n" if text else "") + note).strip()
@@ -911,8 +914,8 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
     elif c_why == "complement_unresolved":
         note = "есть прочтение без формы дополнения"
         text = (text + ("\n" if text else "") + note).strip()
-    return {"partial": partial or None, "kind": "clarify", "text": text or "?",
-            "options": opts, "sources": [o["label"] for o in opts],
+    return {"partial": partial or None, "kind": "clarify", "text": text,
+            "options": clean_opts, "sources": [o["label"] for o in clean_opts],
             "diag": d}
 
 

@@ -45,12 +45,17 @@ _REGISTER_RE = re.compile(r"^register_zone\s*\(")
 # срабатывание на docstring gate()); патч при загрузке зоны, см. PLAN_WIKI_CHOICE §5.
 _Z20_CASCADE_OLD = """    else:
         picked, marks, plan = [], {}, {}
+        if diag.get("register_count_locked"):
+            picked = [diag["register_count_locked"]]
+        elif diag.get("sales_canon_locked"):
+            picked = [diag["sales_canon_locked"]]
         _wiki = None
         if ASK_WIKI_CHOICE:
             _wiki = try_wiki_hybrid_entity_pick(
                 question, intent, diag, cut, t0,
                 by=by, match=match, preds=preds)
-            if _wiki and _wiki.get("kind") in ("no_data", "clarify"):
+            if (_wiki and _wiki.get("kind") in ("no_data", "clarify")
+                    and not diag.get("sales_canon_locked")):
                 return _wiki
             if _wiki and _wiki.get("picked"):
                 picked, marks, plan = (
@@ -128,9 +133,15 @@ def _patch_z20_wiki_primary(text: str) -> str:
     # или stock_canon_locked (wiki catalog → takeover регистра).
     _stock_old = (
         "            and not diag.get(\"sales_canon_locked\")\n"
+        "            and not diag.get(\"register_count_locked\")\n"
+        "            and not catalog_count_question(intent, question)\n"
+        "            and not catalog_kind_total_question(intent, question)\n"
         "            and stock_question_engaged(question, intent)):")
     _stock_new = (
         "            and not diag.get(\"sales_canon_locked\")\n"
+        "            and not diag.get(\"register_count_locked\")\n"
+        "            and not catalog_count_question(intent, question)\n"
+        "            and not catalog_kind_total_question(intent, question)\n"
         "            and (not diag.get(\"wiki_hybrid_pick\")\n"
         "                 or diag.get(\"wiki_pick\") == \"stock_override\"\n"
         "                 or diag.get(\"stock_canon_locked\"))\n"
@@ -156,7 +167,7 @@ def _patch_z20_wiki_primary(text: str) -> str:
     _cat_new = (
         "            and not diag.get(\"sales_canon_locked\")\n"
         "            and not diag.get(\"stock_canon_locked\")\n"
-        "            and not diag.get(\"wiki_hybrid_pick\")):\n"
+        "            and not diag.get(\"register_count_locked\")):\n"
         "        _cat = catalog_count_src(cands, intent, question)")
     if _cat_old in text:
         text = text.replace(_cat_old, _cat_new, 1)

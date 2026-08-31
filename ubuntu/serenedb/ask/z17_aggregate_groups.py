@@ -99,6 +99,34 @@ def _live_ref_key_col(src_table):
     return None
 
 
+def aggregate_live_row_count(src_table):
+    """Живой count(*) строк витрины движения (регистр/документ).
+
+    Доки: Sql › Functions › Utility › query_table.
+    """
+    if not src_table:
+        return None
+    pre = str(src_table).split("_", 1)[0].lower()
+    if pre not in (
+            "accumulationregister", "informationregister",
+            "accountingregister", "document"):
+        return None
+    folder_pred = _live_std_excl_preds(src_table)
+    wsql = (" WHERE " + " AND ".join(folder_pred)) if folder_pred else ""
+    try:
+        r = psql(
+            "SELECT count(*) FROM query_table(%s)%s"
+            % (lit(src_table), wsql))
+    except RuntimeError:
+        return None
+    if not r or not r[0] or r[0][0] is None or r[0][0] == "":
+        return None
+    try:
+        return int(_num(r[0][0]))
+    except (TypeError, ValueError):
+        return None
+
+
 def aggregate_live_header_count(src_table):
     """Живой счёт строк каталога (grain=header при наличии Ref_Key) с исключениями 1С.
 

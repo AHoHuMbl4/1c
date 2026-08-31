@@ -119,7 +119,7 @@ def _kind_is_stock_scoped(intent, question=""):
     place = _stock_place_axis_catalogs()
     if place and any(c in place for c in cats):
         return True
-    return any(_catalog_on_stock_eligible_register(c) for c in cats)
+    return False
 
 
 def _catalogs_are_warehouse_axis(cats, intent=None, kind_cats=None):
@@ -334,6 +334,14 @@ def stock_question_engaged(question, intent=None, plan=None):
     """Stock-path: product/stock kind или ref-ось места, не справочник kind."""
     intent = intent or {}
     plan = plan or {}
+    _ccq = globals().get("catalog_count_question")
+    if callable(_ccq) and _ccq(intent, question):
+        return False
+    _ckt = globals().get("catalog_kind_total_question")
+    if callable(_ckt) and _ckt(intent, question):
+        return False
+    if (intent or {}).get("register_count_locked"):
+        return False
     stock_kind = _kind_is_stock_scoped(intent, question)
     wh = question_mentions_warehouse_axis(question, intent, plan)
     if not stock_kind and not wh:

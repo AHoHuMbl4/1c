@@ -809,9 +809,18 @@ FROM tmp3_key
 WHERE list_contains(key_cols, 'Recorder') AND list_contains(key_cols, 'LineNumber');
 
 -- ============ 2. КЛАССИФИКАЦИЯ КОЛОНОК ============
+-- 🔴 ЧИСЛО ИЗ ЯЧЕЙКИ ВИТРИНЫ. OData и загрузчик часто отдают величины текстом:
+-- «171 018,11», «480104,42». Прямой `try_cast(... AS DOUBLE)` даёт NULL на запятой
+-- ([замер 31.08] nums потерял все денежные ресурсы accumulation-регистров при живых
+-- `TRY_CAST(... AS DECIMAL)` в витрине). Нормализация — пробелы/nbsp и запятая-дробь,
+-- без слов конкретной базы; тот же приём, что etalon_1c.numbers_equal.
+CREATE OR REPLACE MACRO corpus_cell_num(val) AS
+  try_cast(replace(replace(replace(trim(CAST(val AS VARCHAR)), chr(160), ''), ' ', ''), ',', '.')
+           AS DOUBLE);
+
 -- ТАБЛИЦА, а не VIEW: коррелированный подзапрос к представлению с оконной функцией
 -- роняет планировщик (LogicalProjection::GetExpression - table index mismatch).
-CREATE OR REPLACE TABLE tmp3_cls AS
+CREATE OR REPLACE TABLE tmp3_cls0 AS
 SELECT c.table_name AS tbl, c.column_index AS ord, c.column_name AS col, c.data_type, p.edm,
        CASE WHEN p.edm='Edm.Guid' THEN 'ref' WHEN p.edm='Edm.String' THEN 'text'
             WHEN p.edm='Edm.Boolean' THEN 'flag' WHEN p.edm='Edm.DateTime' THEN 'date'
@@ -859,10 +868,16 @@ LEFT JOIN tmp3_prop p ON p.prop = c.column_name
 WHERE c.database_name=current_database()
 -- Колонка бывает объявлена И у обёртки, И у вложенного типа — тогда соединение даёт ДВЕ
 -- строки на одну колонку, и `map_from_entries` падает с «Map keys must be unique».
--- Оставляем одно объявление, приоритет — собственному: вложенный тип уточняет, а не
--- переопределяет.
+-- При конфликте типов: числовой Edm важнее Edm.String ([замер 31.08] обёртка регистра
+-- объявляла денежный ресурс String, recordtype — Decimal; победа обёртки → kind=text,
+-- nums без сумм). При равном Edm — приоритет собственному объявлению сущности.
 QUALIFY row_number() OVER (PARTITION BY c.table_name, c.column_name
-                           ORDER BY (p.entity = lower(c.table_name)) DESC NULLS LAST) = 1;
+                           ORDER BY CASE WHEN p.edm IN ('Edm.Double','Edm.Decimal','Edm.Int16',
+                                                          'Edm.Int32','Edm.Int64','Edm.Byte') THEN 0
+                                         WHEN p.edm = 'Edm.String' THEN 1
+                                         ELSE 2 END,
+                                    (p.entity = lower(c.table_name)) DESC NULLS LAST,
+                                    coalesce(p.entity, '')) = 1;
 
 -- 🔴 ИСТОЧНИКИ БЕРУТСЯ ИЗ ОТДЕЛЬНОЙ ТАБЛИЦЫ, А НЕ ИЗ КОРПУСА.
 -- Прежде здесь стояло `SELECT DISTINCT src_table FROM search_corpus`, и это была петля:
@@ -913,6 +928,48 @@ SELECT s.src_table AS tbl FROM search_sources s
 -- падал: «Table catalog_внешниекомпоненты does not exist». Найдено на второй базе.
 WHERE EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table
               AND t.database_name = current_database());
+
+-- 🔴 ТЕКСТ, КОТОРЫЙ НА САМОМ ДЕЛЕ ЧИСЛО. Бывает только Edm.String без recordtype
+-- (или сэмпл в пустых первых строках). Смотрим до 200 непустых значений; ≥80%
+-- парсятся `corpus_cell_num` — kind поднимается до num. Ключевые колонки и имена
+-- платформы не трогаем — те же исключения, что у is_measure.
+CREATE OR REPLACE TABLE tmp3_cls_numhint (tbl VARCHAR, col VARCHAR, num_ratio DOUBLE);
+PREPARE p_cls_numhint AS
+INSERT INTO tmp3_cls_numhint
+-- LIMIT на строках таблицы, а не на непустых значениях колонки, занижает ratio:
+-- у регистров в первых строках ресурс часто пуст, а дальше заполнен — [замер 31.08].
+WITH cells AS (
+  SELECT val
+  FROM (SELECT * FROM query_table($1)) src
+  UNPIVOT (val FOR c IN (COLUMNS(*)))
+  WHERE c = $2 AND coalesce(val, '') <> ''
+  LIMIT 200
+)
+SELECT $1::VARCHAR, $2::VARCHAR,
+       count(*) FILTER (WHERE corpus_cell_num(val) IS NOT NULL)::DOUBLE
+           / greatest(count(*), 1)
+FROM cells;
+
+\set ON_ERROR_STOP off
+SELECT 'EXECUTE p_cls_numhint(' || quote_literal(c.tbl) || ', ' || quote_literal(c.col) || ');'
+FROM tmp3_cls0 c
+JOIN tmp3_src s ON s.tbl = c.tbl
+JOIN tmp3_key k ON k.entity = lower(c.tbl)
+WHERE c.kind = 'text'
+  AND NOT c.is_companion AND c.col <> 'DataVersion'
+  AND c.col NOT IN ('LineNumber', 'SurrogateKey')
+  AND NOT list_contains(coalesce(k.key_cols, []), c.col)
+\gexec
+\set ON_ERROR_STOP on
+
+CREATE OR REPLACE TABLE tmp3_cls AS
+SELECT c.tbl, c.ord, c.col, c.data_type, c.edm,
+       CASE WHEN c.kind = 'text' AND coalesce(h.num_ratio, 0) >= 0.8 THEN 'num'
+            ELSE c.kind END AS kind,
+       c.is_companion, c.own_ref, c.own_prop, c.decl_entity
+FROM tmp3_cls0 c
+LEFT JOIN tmp3_cls_numhint h ON h.tbl = c.tbl AND h.col = c.col;
+DROP TABLE tmp3_cls0;
 
 SELECT CASE WHEN count(*) > 0
        THEN error('источники исчезли из витрины (идёт синк?): ' || string_agg(src_table, ', ')) END
@@ -1539,10 +1596,10 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
           WHEN is_guid AND refname IS NOT NULL THEN replace(col,'_Key','') || ': ' || refname
           WHEN is_guid THEN NULL
-          WHEN is_num AND try_cast(val AS DOUBLE) IS NOT NULL THEN col || ': ' ||
-               CASE WHEN try_cast(val AS DOUBLE) = floor(try_cast(val AS DOUBLE))
+          WHEN is_num AND corpus_cell_num(val) IS NOT NULL THEN col || ': ' ||
+               CASE WHEN corpus_cell_num(val) = floor(corpus_cell_num(val))
                     THEN printf('%d', try_cast(val AS BIGINT))
-                    ELSE printf('%.2f', try_cast(val AS DOUBLE)) END
+                    ELSE printf('%.2f', corpus_cell_num(val)) END
           -- Незаполненная дата приезжает из 1С как `0001-01-01` — это НЕ дата, а пустое
           -- место, и в тексте ему делать нечего.
           WHEN is_date THEN nullif(col || ': ' || substr(val,1,10), col || ': 0001-01-01')
@@ -1606,8 +1663,8 @@ FROM (
          -- `ORDER BY` порядок определяется ходом агрегации и при параллельном исполнении
          -- не гарантирован — тогда `nums` переписывались бы каждый такт у всех строк,
          -- а число «сколько изменилось» переставало бы что-либо значить.
-         map_from_entries(list({'key': col, 'value': try_cast(val AS DOUBLE)} ORDER BY col)
-                          FILTER (is_measure AND try_cast(val AS DOUBLE) IS NOT NULL)) AS nums,
+         map_from_entries(list({'key': col, 'value': corpus_cell_num(val)} ORDER BY col)
+                          FILTER (is_measure AND corpus_cell_num(val) IS NOT NULL)) AS nums,
          -- Карта булевых реквизитов. `try_cast(... AS BOOLEAN)` — штатное приведение,
          -- круг замкнут на всех формах, которые отдаёт OData: 'true'/'True'/'1'/'t' -> t,
          -- мусор и пустая строка -> NULL, то есть в карту не попадают.
@@ -1783,10 +1840,10 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
      CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
           WHEN is_guid AND refname IS NOT NULL THEN replace(col,'_Key','') || ': ' || refname
           WHEN is_guid THEN NULL
-          WHEN is_num AND try_cast(val AS DOUBLE) IS NOT NULL THEN col || ': ' ||
-               CASE WHEN try_cast(val AS DOUBLE) = floor(try_cast(val AS DOUBLE))
+          WHEN is_num AND corpus_cell_num(val) IS NOT NULL THEN col || ': ' ||
+               CASE WHEN corpus_cell_num(val) = floor(corpus_cell_num(val))
                     THEN printf('%d', try_cast(val AS BIGINT))
-                    ELSE printf('%.2f', try_cast(val AS DOUBLE)) END
+                    ELSE printf('%.2f', corpus_cell_num(val)) END
           -- Незаполненная дата приезжает из 1С как `0001-01-01` — это НЕ дата, а пустое
           -- место, и в тексте ему делать нечего.
           WHEN is_date THEN nullif(col || ': ' || substr(val,1,10), col || ': 0001-01-01')
@@ -1815,8 +1872,8 @@ FROM (
          regexp_replace($1,'^[^_]*_','') || coalesce(' | ' || string_agg(piece,' | ' ORDER BY prio, ord)
                                                      FILTER (piece IS NOT NULL), '') AS doc,
          coalesce(string_agg(piece,' | ' ORDER BY ord) FILTER (is_guid AND refname IS NOT NULL), '') AS refs,
-         map_from_entries(list({'key': col, 'value': try_cast(val AS DOUBLE)} ORDER BY col)
-                          FILTER (is_measure AND try_cast(val AS DOUBLE) IS NOT NULL)) AS nums,
+         map_from_entries(list({'key': col, 'value': corpus_cell_num(val)} ORDER BY col)
+                          FILTER (is_measure AND corpus_cell_num(val) IS NOT NULL)) AS nums,
          coalesce(map_from_entries(list({'key': col, 'value': try_cast(val AS BOOLEAN)} ORDER BY col)
                           FILTER (is_flag AND try_cast(val AS BOOLEAN) IS NOT NULL)),
                   MAP{}::MAP(VARCHAR, BOOLEAN)) AS flags,

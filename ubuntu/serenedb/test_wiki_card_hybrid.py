@@ -266,8 +266,9 @@ def main() -> int:
     t("bootstrap patch allows stock_override past hybrid gate",
       'wiki_pick") == "stock_override"' in z20_patched
       or "stock_override" in z20_patched)
-    t("bootstrap patch blocks catalog override on hybrid",
-      'not diag.get("wiki_hybrid_pick")' in z20_patched)
+    t("bootstrap patch catalog override except count canon",
+      "catalog_count_question(intent, question)" in z20_patched
+      and "catalog_kind_total_question(intent, question)" in z20_patched)
     t("bootstrap net-distinct in no_axis_member",
       "stock_net_distinct" in z20_patched
       and "no_axis_member" in z20_patched)

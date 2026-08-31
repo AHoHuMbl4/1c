@@ -504,6 +504,24 @@ def count_theme_code_pick_applies(cands, diag, intent, question):
         return False
     if event_path_active(intent):
         return False
+    _ect = globals().get("entity_form_count_target_is_movement")
+    if callable(_ect) and _ect(intent, cands):
+        return False
+    _rcs = globals().get("register_count_src")
+    if callable(_rcs) and _rcs(cands, intent, question):
+        return False
+    kind = (intent.get("kind") or "").strip()
+    if kind:
+        period = intent.get("period") or {}
+        has_period = bool(period.get("from") or period.get("to"))
+        try:
+            found = entity_form_movements_for_kind(kind, allow_meaning=has_period) or []
+        except RuntimeError:
+            found = []
+        if any(str(s).startswith((
+                "accumulationregister_", "informationregister_", "accountingregister_"))
+               for s in found):
+            return False
     feats = (diag or {}).get("answer_fit_v2_full") or {}
     if not feats:
         return False

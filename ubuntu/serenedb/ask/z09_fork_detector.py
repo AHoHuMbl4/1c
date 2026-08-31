@@ -937,13 +937,24 @@ def _fork_atom_of(row, srcs, measure_word="", alias_by=None, want=None,
         else:
             exact, op = sums[mid], "sum"
             lab = measure_label_of(src0, mid) if src0 else (split_ident(mid) or mid)
-    # Count каталога (header/Ref_Key): живой счёт витрины с isfolder/deletionmark,
-    # не корпусный count(*) детектора ([замер :8092] 365 → 363).
+    # Живой count(*) витрины: регистр/документ — строки; catalog+Ref_Key — header.
+    # Не корпусный count детектора ([замер :8092] 365→363; И2 31.08 34102 на
+    # чужом catalog-header при count регистра).
     if op == "count" and src0:
-        live_n = aggregate_live_header_count(src0)
+        pre = str(src0).split("_", 1)[0].lower()
+        live_n, grain_live = None, None
+        if pre in ("accumulationregister", "informationregister", "accountingregister"):
+            live_n = aggregate_live_row_count(src0)
+            grain_live = "row"
+        elif pre == "document":
+            live_n = aggregate_live_row_count(src0)
+            grain_live = "header"
+        elif pre == "catalog":
+            live_n = aggregate_live_header_count(src0)
+            grain_live = "header"
         if live_n is not None:
             exact = live_n
-            grain = "header"
+            grain = grain_live
     status = PROOF_COMPUTED if exact is not None else PROOF_UNCOUNTED
     return build_answer_atom(
         operation=op, exact_value=exact, measure_id=mid, measure_label=lab,

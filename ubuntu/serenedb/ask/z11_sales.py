@@ -339,10 +339,39 @@ def prefer_entity_for_sales(cands, intent, question, plan=None, allow_cold=None)
     return out or cands
 
 
+def sales_canon_intent(intent, question="", cands=None):
+    """Канон продаж: явная sale-лексика или период+lift без catalog/stock/register."""
+    if sales_sum_intent(intent, question):
+        return True
+    intent = intent or {}
+    if not sales_lift_possible(list(cands or [])):
+        return False
+    period = intent.get("period") or {}
+    if not (period.get("from") or period.get("to")):
+        return False
+    if catalog_count_question(intent, question):
+        return False
+    if catalog_kind_total_question(intent, question):
+        return False
+    _ect = globals().get("entity_form_count_target_is_movement")
+    if callable(_ect) and _ect(intent, list(cands or [])):
+        return False
+    _rcs = globals().get("register_count_src")
+    if callable(_rcs) and _rcs(list(cands or []), intent, question):
+        return False
+    _sq = globals().get("stock_question_engaged")
+    if callable(_sq) and _sq(question, intent):
+        return False
+    if rank_intent_from(intent, question=question):
+        return False
+    want = (intent.get("want") or "").strip().lower()
+    return want in ("sum", "count", "")
+
+
 def sales_canon_src(cands, intent, question, plan=None):
     """Src канона продаж после prefer — или None."""
     rank_gate = sales_rank_engaged(intent, plan, question, cands)
-    if not sales_sum_intent(intent, question) and not rank_gate:
+    if not sales_canon_intent(intent, question, cands) and not rank_gate:
         return None
     preferred = prefer_entity_for_sales(
         list(cands or []), intent, question, plan=plan)
@@ -720,10 +749,13 @@ def _is_product_catalog(src):
 
 def catalog_kind_total_question(intent, question):
     """count + kind→справочник (не product) + без периода + не stock-path."""
-    fn = globals().get("stock_question_engaged")
-    if callable(fn) and fn(question, intent):
-        return False
     intent = intent or {}
+    _wh = globals().get("question_mentions_warehouse_axis")
+    if callable(_wh) and _wh(question, intent):
+        return False
+    _br = globals().get("balance_routing_core")
+    if callable(_br) and _br(intent, {}, question):
+        return False
     want = (intent.get("want") or "").strip().lower()
     if want not in ("count", ""):
         return False

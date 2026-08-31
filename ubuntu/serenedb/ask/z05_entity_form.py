@@ -364,6 +364,45 @@ def entity_form_movements_for_kind(kind, allow_meaning=True):
                 and not sales_noncanon_focus(s))]
 
 
+def register_count_src(cands, intent, question):
+    """Count строк именованного регистра: kind → movement ∩ pool.
+
+    Структурно: entity_form_movements_for_kind + префикс register_*.
+    Документ в пуле не перекрывает регистр с тем же kind-stem.
+    """
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return None
+    kind = (intent.get("kind") or "").strip()
+    if not kind:
+        return None
+    if not entity_form_count_target_is_movement(intent, list(cands or [])):
+        return None
+    period = intent.get("period") or {}
+    has_period = bool(period.get("from") or period.get("to"))
+    found = entity_form_movements_for_kind(kind, allow_meaning=has_period)
+    if not found:
+        return None
+    pool = set(cands or [])
+    regs = [
+        s for s in found
+        if str(s).startswith((
+            "accumulationregister_", "informationregister_", "accountingregister_"))]
+    if pool:
+        in_pool = [s for s in regs if s in pool]
+        if in_pool:
+            regs = in_pool
+    if not regs:
+        return None
+    for pref in ("accumulationregister_", "informationregister_",
+                 "accountingregister_"):
+        hit = [s for s in regs if str(s).startswith(pref)]
+        if hit:
+            return sorted(hit)[0]
+    return sorted(regs)[0]
+
+
 def entity_form_count_target_is_movement(intent, pool):
     """Гейт A: счёт-цель — движение (kind → document_/accumulationregister_*).
 
@@ -813,6 +852,11 @@ def try_event_count_period_clarify(question, intent, diag, cut, t0, today=None,
     if not event_count_period_clarify_applies(
             intent, diag, src=src, axes=axes, pool=pool,
             trusted=trusted, resolved=resolved):
+        return None
+    _sci = globals().get("sales_canon_intent")
+    if callable(_sci) and _sci(intent, question, list(pool or [])):
+        return None
+    if (diag or {}).get("sales_canon_locked"):
         return None
     intent = intent if intent is not None else {}
     ry = entity_form_rolling_year(today)

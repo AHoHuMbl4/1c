@@ -244,6 +244,14 @@ def wiki_stock_canon_takeover(question, intent, diag, cands, plan=None):
     """Wiki catalog-tie/none не перекрывает stock_canon (остаток — регистр)."""
     intent = intent or {}
     plan = plan or {}
+    if (diag or {}).get("register_count_locked"):
+        return None
+    _ccq = globals().get("catalog_count_question")
+    if callable(_ccq) and _ccq(intent, question):
+        return None
+    _ckt = globals().get("catalog_kind_total_question")
+    if callable(_ckt) and _ckt(intent, question):
+        return None
     if "stock_question_engaged" not in globals():
         return None
     if not stock_question_engaged(question, intent, plan):
@@ -261,12 +269,19 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
                                 by, match, preds, counts_for_model, plan=None):
     """Wiki-first entity pick; manual balance/event/count_theme only on fallback."""
     picked, marks, plan = [], {}, plan or {}
+    if diag.get("register_count_locked"):
+        return {"picked": [diag["register_count_locked"]], "marks": {},
+                "plan": plan}
+    if diag.get("sales_canon_locked"):
+        return {"picked": [diag["sales_canon_locked"]], "marks": {},
+                "plan": plan}
     _wiki_skip_manual = False
     if ASK_WIKI_CHOICE:
         _wiki = try_wiki_hybrid_entity_pick(
             question, intent, diag, cut, t0,
             by=by, match=match, preds=preds)
-        if _wiki and _wiki.get("kind") in ("no_data", "clarify"):
+        if (_wiki and _wiki.get("kind") in ("no_data", "clarify")
+                and not diag.get("sales_canon_locked")):
             _sc = wiki_stock_canon_takeover(question, intent, diag, cands, plan)
             if _sc:
                 picked = [_sc]

@@ -462,6 +462,23 @@ t("K4 two-window: пара WTD+prior",
   _kfid == "wtd" and bool(_kp2.get("from")), (_kfid, _kp1, _kp2))
 _restore(_s)
 
+# ── register_count_src: kind→register, не count_theme/catalog header ─────────
+_old_mv2 = A.entity_form_movements_for_kind
+_old_ect = A.entity_form_count_target_is_movement
+A.entity_form_movements_for_kind = lambda k, allow_meaning=True: [
+    "accumulationregister_импорттмц", "document_передача"]
+A.entity_form_count_target_is_movement = lambda i, p: True
+_regs = ["catalog_x", "accumulationregister_импорттмц", "document_передача"]
+_int_reg = {"want": "count", "kind": "импорттмц"}
+t("register_count_src picks register",
+  A.register_count_src(_regs, _int_reg, "q") == "accumulationregister_импорттмц")
+t("register_count without pool",
+  A.register_count_src(["catalog_x"], _int_reg, "q") == "accumulationregister_импорттмц")
+t("count_theme off for register count",
+  not A.count_theme_code_pick_applies(_regs, {}, _int_reg, "q"))
+A.entity_form_movements_for_kind = _old_mv2
+A.entity_form_count_target_is_movement = _old_ect
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)

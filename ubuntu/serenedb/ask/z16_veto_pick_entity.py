@@ -396,6 +396,9 @@ def canon_claims_question(intent, question=""):
     """
     if sales_sum_intent(intent, question):
         return True
+    _sci = globals().get("sales_canon_intent")
+    if callable(_sci) and _sci(intent, question):
+        return True
     if catalog_count_question(intent, question):
         return True
     return False

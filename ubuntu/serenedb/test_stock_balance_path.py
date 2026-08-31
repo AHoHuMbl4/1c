@@ -213,6 +213,31 @@ t("contractors: stock path off",
   not A.stock_question_engaged(Q_CTR, INTENT_CTR))
 A.entity_form_catalogs_for_kind = _cats_for_live
 
+INTENT_ORG = {"want": "count", "kind": "организации", "action_class": "object",
+              "terms": [], "action_axis": ""}
+Q_ORG = "сколько организаций?"
+
+
+def _cats_org(w, **kw):
+    wl = (w or "").strip().lower()
+    if "орган" in wl:
+        return ["catalog_организации"]
+    return _cats_for_live(w, **kw)
+
+
+A.entity_form_catalogs_for_kind = _cats_org
+t("org: catalog_kind_total",
+  A.catalog_kind_total_question(INTENT_ORG, Q_ORG))
+t("org: stock path off",
+  not A.stock_question_engaged(Q_ORG, INTENT_ORG))
+Q_PRICE = "сколько позиций у нас в прайсе?"
+INTENT_PRICE = {"want": "count", "kind": "номенклатура"}
+t("price: catalog_count",
+  A.catalog_count_question(INTENT_PRICE, Q_PRICE))
+t("price: stock path off",
+  not A.stock_question_engaged(Q_PRICE, INTENT_PRICE))
+A.entity_form_catalogs_for_kind = _cats_for_live
+
 # --- balance_registers: RuntimeError не глотать ---
 _real_psql = A.psql
 
@@ -445,7 +470,7 @@ A.stock_balance_named_no_data = lambda *a, **k: {"kind": "no_data", "text": "nam
 A.kind_has_corpus_support = lambda k: True
 A.question_expects_accounting_data = lambda i, q, d: True
 A.canon_claims_question = lambda i, q: False
-A.period_assumed_needs_clarify = lambda i, t: False
+A.period_assumed_needs_clarify = lambda i, t, question="": False
 A._need_clarify = lambda *a, **k: None
 A.term_ref_owners = lambda t: {}
 A.counts_for_model = lambda *a, **k: {}

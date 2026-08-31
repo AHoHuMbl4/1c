@@ -108,6 +108,13 @@ try:
     AGG_SQL.clear()
     n2 = A.aggregate_live_header_count("accumulationregister_x")
     t("header-count регистр → None", n2 is None, n2)
+
+    AGG_SQL.clear()
+    A.psql = _psql_noflags
+    nr = A.aggregate_live_row_count("accumulationregister_x")
+    t("row-count регистр = 100", nr == 100, nr)
+    t("row-count catalog → None",
+      A.aggregate_live_row_count("catalog_x") is None)
 finally:
     A.psql = _old_psql
 
