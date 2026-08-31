@@ -189,14 +189,16 @@ serenedb Restart=always, такт Restart=no (упал — лежит до па�
 
 | # | Ручная операция дня | Механизм (код/юнит/гейт, не промт) | Статус |
 |---|---|---|---|
-| 1 | 4× рестарт serenedb при checkpoint-инвалидации | wal_autocheckpoint 512MB **в конфиге движка** (не SET); при повторе — юнит-хельпер: детект «Checkpoint failed…invalidated» в журнале → systemctl restart serenedb (Restart=always уже есть для крэшей, не для инвалидации) | конфиг: сделать; хельпер: О5 |
-| 2 | Воссоздание секретов эмбедера после рестартов | персистентные `CREATE SECRET` при установке (этап инсталлятора/юнита после старта serenedb); TEMPORARY в такте оставить как есть (на своей сессии) | ✅ `1c-serene-embed-secrets.service` + `embed_secrets_install.sh`; drop-in `serenedb.service.d/embed-secrets.conf`; замок `test_embed_secrets_install.py` |
+| 1 | 4× рестарт serenedb при checkpoint-инвалидации | wal_autocheckpoint 512MB **в конфиге движка** (не SET); при повторе — юнит-хельпер: детект «Checkpoint failed…invalidated» в журнале → systemctl restart serenedb (Restart=always уже есть для крэшей, не для инвалидации) | ✅ [замер 31.08] `ExecStartPost` юнита serenedb ставит `SET GLOBAL wal_autocheckpoint` при каждом старте — переживает рестарты; хельпер инвалидации — не понадобился, остаётся резервом О5 |
+| 2 | Воссоздание секретов эмбедера после рестартов | персистентные `CREATE SECRET` при установке (этап инсталлятора/юнита после старта serenedb); TEMPORARY в такте оставить как есть (на своей сессии) | ✅ `1c-serene-embed-secrets.service` + `embed_secrets_install.sh`; drop-in `serenedb.service.d/embed-secrets.conf`; замок `test_embed_secrets_install.py`; [замер 31.08] юнит active+enabled, serenedb стартует его ExecStartPost |
 | 3 | Вычистка 320 монстров value | уже код: resolver_build фильтр `^\{` + substr 20000 (eaba392) | ✅ закрыто |
 | 4 | Пуск досчёта руками (bulk/native) | такт сам зовёт embed_missing (нативный массовый — eaba392); при установке большой базы — первичная векторизация инсталлятором (EMBED_ALLOW_LARGE_TICK/porог 100k в tick-guard — при установке обходить, в бою держать) | такт ✅; установочный этап: п.14 |
-| 5 | Перезапуск упавшего такта руками | `Restart=on-failure` + `RestartSec=300` на 1c-serene-pipeline@.service (сейчас no — упавший такт лежит до следующего пакета; свежесть умирает молча) | сделать (владелец/юнит) |
+| 5 | Перезапуск упавшего такта руками | `Restart=on-failure` + `RestartSec=300` на 1c-serene-pipeline@.service (сейчас no — упавший такт лежит до следующего пакета; свежесть умирает молча) | ✅ [замер 31.08] юнит: `Restart=on-failure`, `RestartSec=300` (systemctl cat) |
 | 6 | Диагностика SSH-заходами | штатный /health уже несёт freshness/gap; добавить: такт пишет `tick_status` (last_ok/last_fail/причина) в search_quality → /health показывает «свежесть+N мин, причина» клиенту и владельцу | ✅ [код 29.08] |
 | 7 | deploy-ask/стейджинг руками | контур разработки — легитимно; на проде не существует (инсталлятор п.14) | вне О5 |
 | 8 | apply/карантин разбор | код ф5 в git (669581a, reapply 171) | ✅ |
 
 Порядок О5: (5) Restart=on-failure такта → (1) wal в конфиг + хельпер → (2)
 этап секретов → (6) tick_status в /health. Всё — код/юниты, без промтов.
+Статус 31.08: все четыре механизма стоят живьём (замер systemctl cat обоих
+юнитов + активный secrets-юнит); порядок закрытия подтверждён ретроспективно.

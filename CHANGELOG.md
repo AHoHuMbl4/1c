@@ -1,3 +1,13 @@
+## 2026-08-31 — О5-статусы в плане приведены к живым фактам
+
+**[замер окно]** `docs/PLAN_WIKI_CHOICE.md` §7: строки 1 и 5 закрыты по живой
+проверке юнитов (systemctl cat): такт `Restart=on-failure`/300с; serenedb
+`ExecStartPost` ставит `SET GLOBAL wal_autocheckpoint` при каждом старте;
+secrets-юнит active+enabled и стартует от движка. Документ перестал занижать
+сделанное.
+**Числа:** 4/4 механизма О5 стоят; §7 таблица синхронна с боем.
+**Доки:** PLAN_WIKI_CHOICE §7.
+
 ## 2026-08-31 — И2: точечная правка блокера web-модели
 
 **[код]** `work/gold/i2_runner.py`: model для chatCompletions читается из env
