@@ -7,8 +7,8 @@ SRC=/srv/1c/ubuntu/serenedb
 DST=/opt/1c-mcp-reports
 
 cd "$SRC"
-md5sum serene_ask.py ask/*.py wiki_card*.sql 2>/dev/null | sort -k2 > /tmp/ask-md5-local.txt
-$SSH "cd $DST && md5sum serene_ask.py ask/*.py wiki_card*.sql 2>/dev/null | sort -k2 > /tmp/ask-md5-remote.txt || true"
+md5sum serene_ask.py ask/*.py wiki_card*.sql wiki_passport.sql 2>/dev/null | sort -k2 > /tmp/ask-md5-local.txt
+$SSH "cd $DST && md5sum serene_ask.py ask/*.py wiki_card*.sql wiki_passport.sql 2>/dev/null | sort -k2 > /tmp/ask-md5-remote.txt || true"
 $SCP -q /tmp/ask-md5-local.txt root@gpu-erw.timpul.pro:/tmp/ask-md5-new.txt
 
 CHANGED=$($SSH "join -j2 /tmp/ask-md5-remote.txt /tmp/ask-md5-new.txt 2>/dev/null | awk '\$2!=\$3{print \$1}' ; comm -13 <(awk '{print \$2}' /tmp/ask-md5-remote.txt|sort) <(awk '{print \$2}' /tmp/ask-md5-new.txt|sort)")
