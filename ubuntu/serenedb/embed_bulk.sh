@@ -164,7 +164,11 @@ ATTACH OR REPLACE '${wdb}' AS ${alias} (ROW_GROUP_SIZE ${RGS});
 SELECT count(*) FROM ${alias}.${TAG}_part;
 DETACH ${alias};
 " 2>/dev/null | tr -d '[:space:]')
-    [ -n "$n" ] && sum=$((sum + n))
+    # [31.08] psql -tAc с ATTACH/DETACH в одном батче при сбое DETACH ("outstanding
+    # work", замер: HOW_NOT_TO многооператорный -c) кладёт в n мусор вида «ATTACH1721»,
+    # и set -u ронял ЗАПУСК bulk на арифметике. Счётчик — прибор: мусор игнорируем,
+    # живой прирост остаётся у embed_progress.sh.
+    case "$n" in ''|*[!0-9]*) ;; *) sum=$((sum + n)) ;; esac
   done
   printf '%s\n' "$sum"
 }
