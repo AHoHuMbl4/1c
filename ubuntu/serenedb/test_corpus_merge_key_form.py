@@ -2,7 +2,8 @@
 """Оффлайн: сторож corpus_merge — смена формы ключа vs коллапс vs удалённая дельта (п.13).
 
 100 % старых ключей сущности + непустая новая сборка не меньше → пропуск с записью;
-частичный уход при росте + живые Recorder в витрине → коллапс, пропуск с записью;
+rewrite wave (≥90 % без exact-match, объём стейджа ≈ live) → пропуск без построчного
+unmatched; частичный уход при росте + живые Recorder в витрине → коллапс, пропуск;
 частичный уход + мёртвый Recorder + документ удалён → deleted_delta, пропуск;
 частичный уход + мёртвый Recorder + документ жив → STOP (дефект транспорта);
 частичный уход иначе или новая меньше старой → STOP.
@@ -24,7 +25,7 @@ def t(name, cond, detail=""):
         print("ok  -", name)
     else:
         FAIL.append(name)
-        print("FAIL-", name, ("| " + str(detail)[:200]) if detail else "")
+        print("FAIL-", name, ("| " + str(detail))[:200] if detail else "")
 
 
 def classify_entity(было, уйдёт, стало, *, recorder_alive=None, doc_alive=None):
@@ -42,6 +43,15 @@ def classify_entity(было, уйдёт, стало, *, recorder_alive=None, do
     if было > 0 and уйдёт == было and стало > 0 and стало >= было:
         return "key_form_ok"
     return "ok"
+
+
+def is_rewrite_wave(было, стало, matched_exact, *, pct_unmatched=0.9, vol_tol=0.05):
+    """Логика tmp3_merge_rewrite_wave (per-table, без имён таблиц)."""
+    if было <= 0 or стало <= 0 or стало < было:
+        return False
+    unmatched_ratio = (было - matched_exact) / было
+    vol_ratio = abs(стало - было) / было
+    return unmatched_ratio >= pct_unmatched and vol_ratio <= vol_tol
 
 
 def guard_count(unmatched_by_ent, exempt_ents):
@@ -68,8 +78,26 @@ t("shrink раньше key_form", classify_entity(100, 100, 50) == "shrink_stop"
 t("ok: часть совпала", classify_entity(100, 0, 100) == "ok")
 t("ok: новая сущность", classify_entity(0, 0, 50) == "ok")
 
+# --- rewrite wave (okna 31.08: full_entity sha-перезапись) ---
+t("rewrite: uценка 321757 live, 15 exact, 321793 stage",
+  is_rewrite_wave(321757, 321793, 15))
+t("rewrite: реализация 74738 live, 488 exact, 74738 stage",
+  is_rewrite_wave(74738, 74738, 488))
+t("rewrite → key_form через ent_guard уйдёт=было",
+  classify_entity(321757, 321757, 321793) == "key_form_ok")
+t("rewrite: 89% unmatched — ниже порога",
+  not is_rewrite_wave(100000, 100000, 11001))
+t("rewrite: shrink — не волна",
+  not is_rewrite_wave(100000, 90000, 5000))
+t("rewrite: объём +10% — не волна",
+  not is_rewrite_wave(100000, 110001, 5000))
+t("rewrite: partial 50% — не волна (collapse/STOP отдельно)",
+  not is_rewrite_wave(75436, 76000, 37718))
+
 t("guard: key_form снимает с порога",
   guard_count({"a": 100, "b": 10}, {"a"}) == 10)
+t("guard: rewrite_wave снимает с порога",
+  guard_count({"a": 321757, "b": 10}, {"a"}) == 10)
 t("guard: collapse тоже снимает",
   guard_count({"a": 23, "b": 10}, {"a"}) == 10)
 t("guard: deleted_delta снимает",
@@ -79,6 +107,16 @@ t("guard: без exempt весь объём",
 
 # --- grep SQL ---
 txt = open(MERGE, encoding="utf-8").read()
+t("SQL: tmp3_merge_ent_counts", "CREATE OR REPLACE TABLE tmp3_merge_ent_counts AS" in txt)
+t("SQL: tmp3_merge_rewrite_wave", "CREATE OR REPLACE TABLE tmp3_merge_rewrite_wave AS" in txt)
+t("SQL: unmatched skips rewrite_wave",
+  "NOT IN (SELECT src_table FROM tmp3_merge_rewrite_wave)" in txt)
+t("SQL: ent_guard rewrite уйдёт=было",
+  "WHEN w.src_table IS NOT NULL THEN w.было" in txt)
+t("SQL: matched_exact INNER JOIN",
+  "INNER JOIN tmp3_corpus t" in txt and "matched_exact" in txt)
+t("SQL: rewrite порог 0.9", ">= 0.9" in txt)
+t("SQL: rewrite объём 0.05", "<= 0.05" in txt)
 t("SQL: tmp3_merge_unmatched", "CREATE OR REPLACE TABLE tmp3_merge_unmatched AS" in txt)
 t("SQL: tmp3_merge_ent_guard", "CREATE OR REPLACE TABLE tmp3_merge_ent_guard AS" in txt)
 t("SQL: tmp3_merge_key_form", "CREATE OR REPLACE TABLE tmp3_merge_key_form AS" in txt)
@@ -86,6 +124,8 @@ t("SQL: tmp3_merge_key_collapse", "CREATE OR REPLACE TABLE tmp3_merge_key_collap
 t("SQL: tmp3_merge_key_deleted_delta", "CREATE OR REPLACE TABLE tmp3_merge_key_deleted_delta AS" in txt)
 t("SQL: p_collapse_dead", "PREPARE p_collapse_dead AS" in txt)
 t("SQL: p_doc_alive", "PREPARE p_doc_alive AS" in txt)
+t("SQL: p_doc_alive deletionmark",
+  'lower(try_cast(d."deletionmark" AS VARCHAR)) IS DISTINCT FROM \'true\'' in txt)
 t("SQL: transport_defect STOP", "дефект транспорта" in txt)
 t("SQL: query_table Recorder", 'query_table($1) q WHERE q."Recorder"' in txt)
 t("SQL: Period repost anti-join", "list_contains(k.key_cols, 'Period')" in txt)
@@ -93,12 +133,16 @@ t("SQL: частичная потеря STOP", "частичная потеря 
 t("SQL: shrink STOP", "новая сборка меньше старой" in txt)
 t("SQL: search_quality entity_key_form_changed",
   "entity_key_form_changed:" in txt)
+t("SQL: search_quality entity_rewrite_wave",
+  "entity_rewrite_wave:" in txt)
 t("SQL: search_quality entity_key_collapse",
   "entity_key_collapse:" in txt)
 t("SQL: search_quality entity_deleted_delta",
   "entity_deleted_delta:" in txt)
 t("SQL: порог исключает key_form",
   "NOT EXISTS (SELECT 1 FROM tmp3_merge_key_form" in txt)
+t("SQL: порог исключает rewrite_wave",
+  "NOT EXISTS (SELECT 1 FROM tmp3_merge_rewrite_wave" in txt)
 t("SQL: порог исключает key_collapse",
   "NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse" in txt)
 t("SQL: порог исключает deleted_delta",

@@ -91,7 +91,7 @@ FROM (SELECT src_table, row_key FROM tmp3_corpus GROUP BY 1, 2 HAVING count(*) >
 --
 -- [замер 29.08 okna] после нового $metadata форма row_key сменилась целиком
 -- (guid → 40-hex хеш; регистр: guid|StandardODATA → Period|измерения) — анти-
--- соединения выше ключи не сопоставляют. У сущности уходит 100 % её старых ключей,
+-- соединения ниже ключи не сопоставляют. У сущности уходит 100 % её старых ключей,
 -- новая сборка непуста и не меньше — пересбор, не потеря. Частичный уход (<100 %)
 -- при росте сборки и живых Recorder в витрине — схлопывание гранулярности ключа
 -- (два движения с одним составом измерений → один объект), не потеря. Мёртвый
@@ -99,11 +99,48 @@ FROM (SELECT src_table, row_key FROM tmp3_corpus GROUP BY 1, 2 HAVING count(*) >
 -- `entity_deleted_delta`. Мёртвый Recorder, документ жив — дефект транспорта,
 -- STOP. Перепроведение под другим Recorder при том же Period|оси — анти-соединение
 -- ниже (только если Period в объявленном ключе). Иначе STOP.
+--
+-- [замер 31.08 okna] full_entity переapply 19 пакетов переписал витрину целиком:
+-- row_key = sha1(doc||refs), текст строки сменился → sha другой → у ~400 тыс.
+-- живых строк все 6 анти-соединений не матчят (split_part от целого sha = весь
+-- sha). Построение tmp3_merge_unmatched = перебор 1,43 млн × 400 тыс. → OOM.
+-- Класс «rewrite wave»: per-table, без списков — ≥90 % живых без exact-match,
+-- объём стейджа ≈ живому (|Δ|/live ≤ 5 %), сборка не меньше. Для них unmatched
+-- построчно не считается (уйдёт := было); MERGE+DELETE ниже заменяют таблицу.
+-- emb=NULL у новых ключей — штатно, очередь досчитает bulk (EMBED_BULK §5/§9).
 -- Доки: MERGE INTO; cookbook/sql_features/query_and_query_table_functions.
+CREATE OR REPLACE TABLE tmp3_merge_ent_counts AS
+SELECT e.src_table,
+       coalesce(o.было, 0::BIGINT) AS было,
+       e.стало,
+       coalesce(m.matched_exact, 0::BIGINT) AS matched_exact
+FROM (SELECT src_table, count(*)::BIGINT AS стало FROM tmp3_corpus GROUP BY 1) e
+LEFT JOIN (
+  SELECT src_table, count(*)::BIGINT AS было
+  FROM search_corpus
+  WHERE src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
+  GROUP BY 1
+) o USING (src_table)
+LEFT JOIN (
+  SELECT c.src_table, count(*)::BIGINT AS matched_exact
+  FROM search_corpus c
+  INNER JOIN tmp3_corpus t
+          ON t.src_table = c.src_table AND t.row_key = c.row_key
+  GROUP BY 1
+) m USING (src_table);
+
+CREATE OR REPLACE TABLE tmp3_merge_rewrite_wave AS
+SELECT src_table, было, стало
+FROM tmp3_merge_ent_counts
+WHERE было > 0 AND стало > 0 AND стало >= было
+  AND (было - matched_exact)::DOUBLE / было >= 0.9
+  AND abs(стало - было)::DOUBLE / было <= 0.05;
+
 CREATE OR REPLACE TABLE tmp3_merge_unmatched AS
 SELECT c.src_table, c.row_key
 FROM search_corpus c
 WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
+  AND c.src_table NOT IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
   -- РАЗДЕЛЬНЫЕ анти-соединения, а не одно `IN (ключ, обрезанный ключ)`:
   -- список внутри `IN` лишает движок равенства, и он уходит в перебор. [замер 30.07]
   -- одним `IN` запрос не уложился в две минуты на 623 565 строках; двумя — 0,2 с.
@@ -141,7 +178,8 @@ WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
 CREATE OR REPLACE TABLE tmp3_merge_ent_guard AS
 SELECT e.src_table,
        coalesce(o.было, 0::BIGINT) AS было,
-       coalesce(u.уйдёт, 0::BIGINT) AS уйдёт,
+       CASE WHEN w.src_table IS NOT NULL THEN w.было
+            ELSE coalesce(u.уйдёт, 0::BIGINT) END AS уйдёт,
        e.стало
 FROM (SELECT src_table, count(*)::BIGINT AS стало FROM tmp3_corpus GROUP BY 1) e
 LEFT JOIN (
@@ -152,7 +190,8 @@ LEFT JOIN (
 ) o USING (src_table)
 LEFT JOIN (
   SELECT src_table, count(*)::BIGINT AS уйдёт FROM tmp3_merge_unmatched GROUP BY 1
-) u USING (src_table);
+) u USING (src_table)
+LEFT JOIN tmp3_merge_rewrite_wave w USING (src_table);
 
 SELECT CASE WHEN count(*) > 0
        THEN error('corpus_merge: новая сборка меньше старой у сущностей: '
@@ -240,10 +279,14 @@ CREATE OR REPLACE TABLE tmp3_merge_doc_alive (doc_tbl VARCHAR, rec VARCHAR, aliv
 
 PREPARE p_doc_alive AS
 INSERT INTO tmp3_merge_doc_alive
-SELECT $1::VARCHAR, d."Ref_Key", count(*)
+SELECT $1::VARCHAR, d."ref_key", count(*)
 FROM query_table($1) d
-WHERE d."Ref_Key" IN (SELECT r.rec FROM tmp3_merge_delta_rec r WHERE r.doc_tbl = $1)
-GROUP BY d."Ref_Key";
+WHERE d."ref_key" IN (SELECT r.rec FROM tmp3_merge_delta_rec r WHERE r.doc_tbl = $1)
+  -- «Жив» = присутствует и НЕ помечен на удаление: annulled/deleted документы
+  -- движений в регистрах не пишут, их отсутствие — не дефект транспорта.
+  -- deletionmark — платформенное поле, есть у всех документных таблиц витрины.
+  AND lower(try_cast(d."deletionmark" AS VARCHAR)) IS DISTINCT FROM 'true'
+GROUP BY d."ref_key";
 
 \set ON_ERROR_STOP off
 SELECT 'EXECUTE p_doc_alive(' || quote_literal(doc_tbl) || ');'
@@ -309,12 +352,22 @@ SELECT 'entity_key_form_changed:' || src_table, стало,
        'было ' || было || ' → стало ' || стало
 FROM tmp3_merge_key_form;
 
+DELETE FROM search_quality WHERE k LIKE 'entity_rewrite_wave:%';
+INSERT INTO search_quality
+SELECT 'entity_rewrite_wave:' || src_table, стало,
+       'было ' || было || ' → стало ' || стало || ' (exact-match '
+       || (SELECT matched_exact FROM tmp3_merge_ent_counts c WHERE c.src_table = w.src_table)
+       || '/' || w.было || ')'
+FROM tmp3_merge_rewrite_wave w;
+
 SELECT CASE WHEN (SELECT count(*) FROM search_corpus) > 0
              AND уйдёт::DOUBLE / (SELECT count(*) FROM search_corpus) > 0.1
        THEN error('corpus_merge: удаление снесло бы ' || уйдёт || ' объектов из '
                   || (SELECT count(*) FROM search_corpus) || ' — остановлено') END
 FROM (SELECT count(*) AS уйдёт FROM tmp3_merge_unmatched u
       WHERE NOT EXISTS (SELECT 1 FROM tmp3_merge_key_form k
+                        WHERE k.src_table = u.src_table)
+        AND NOT EXISTS (SELECT 1 FROM tmp3_merge_rewrite_wave k
                         WHERE k.src_table = u.src_table)
         AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse k
                         WHERE k.src_table = u.src_table)
