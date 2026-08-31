@@ -15,7 +15,7 @@
 CREATE TABLE IF NOT EXISTS search_corpus (
   src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
   nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP,
-  refs_map MAP(VARCHAR, VARCHAR), emb FLOAT[1024]);
+  refs_map MAP(VARCHAR, VARCHAR), emb FLOAT[1024], content_hash VARCHAR);
 
 -- 🔴 ДОБОР КОЛОНКИ ДЛЯ БАЗ, СОБРАННЫХ ПРЕЖНИМ КОДОМ. `CREATE TABLE IF NOT EXISTS` у
 -- существующей таблицы не делает НИЧЕГО — новая колонка из объявления выше в такую базу
@@ -29,6 +29,49 @@ ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS flags MAP(VARCHAR, BOOLEAN);
 -- Карта ссылок строки — как `nums`: колонка → имя (или GUID, если имени нет).
 -- GROUP BY оси, не разбор текста `refs`. Вектор не задет: колонка не входит в doc_hash.
 ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS refs_map MAP(VARCHAR, VARCHAR);
+-- Хэш стабильного бизнес-контента (рядом с doc_hash; row_key не трогаем).
+-- Смена формы без смены значений → тот же content_hash → MERGE не сбрасывает emb.
+ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS content_hash VARCHAR;
+
+-- Карта колонок doc («колонка: значение») и content_hash. Живут в init, чтобы
+-- сборка и слияние звали одну и ту же формулу. Доки: sql/functions/map#map_from_entries;
+-- map_keys; map_extract_value; sql/functions/list#list_filter; list_sort; array_to_string;
+-- sql/functions/utility#sha1; sql/statements/create_macro.
+CREATE OR REPLACE MACRO corpus_doc_bmap(doc) AS (
+  CASE WHEN len(list_filter(string_split(coalesce(doc, ''), ' | '),
+                            p -> position(': ' IN p) > 0)) = 0
+       THEN MAP{}::MAP(VARCHAR, VARCHAR)
+       ELSE map_from_entries(
+              list_transform(
+                list_filter(string_split(doc, ' | '),
+                            p -> position(': ' IN p) > 0),
+                p -> {'key': split_part(p, ': ', 1),
+                      'value': substr(p, length(split_part(p, ': ', 1)) + 3)}
+              )
+            )
+  END
+);
+
+CREATE OR REPLACE MACRO corpus_content_hash(doc) AS (
+  sha1(coalesce(
+    array_to_string(
+      list_sort(
+        list_transform(
+          list_filter(
+            map_keys(corpus_doc_bmap(doc)),
+            k -> k <> 'DataVersion'
+                 AND k <> '__metadata'
+                 AND position('navigationLinkUrl' IN k) = 0
+                 AND coalesce(map_extract_value(corpus_doc_bmap(doc), k), '') <> ''
+          ),
+          k -> k || chr(1) || map_extract_value(corpus_doc_bmap(doc), k)
+        )
+      ),
+      chr(0)
+    ),
+    ''
+  ))
+);
 
 -- Справочник осей группы: какая колонка refs_map на какой каталог ссылается.
 -- Берётся из kind='ref' и search_refmap.owner. Пустая цель в таблицу не кладётся.

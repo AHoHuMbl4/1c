@@ -317,7 +317,22 @@ else
     _cr="$(printf '%s\n' "$_disk_plan" | awk -F= '$1=="merge_chunk_rows"{print $2}')"
     case "$_cr" in ''|*[!0-9]*) ;; *) MERGE_CHUNK_ROWS="$_cr" ;; esac
   fi
-  psql "$DSN" -q -c "CREATE OR REPLACE TABLE tmp3_merge_cfg AS SELECT ${MERGE_CHUNK_ROWS}::BIGINT AS chunk_rows;" \
+  # Порог потери векторов вне карты переноса — ДОЛЯ от emb IS NOT NULL
+  # (п.0: любая база). Обход — только явный MERGE_VECTOR_LOSS_BYPASS=1
+  # (ставит человек; гейт пишет vector_loss_bypass в search_quality).
+  MERGE_VECTOR_LOSS_TOLERANCE="${MERGE_VECTOR_LOSS_TOLERANCE:-0.005}"
+  case "$MERGE_VECTOR_LOSS_TOLERANCE" in
+    ''|*[!0-9.]*|*.*.*) MERGE_VECTOR_LOSS_TOLERANCE=0.005 ;;
+  esac
+  MERGE_VECTOR_LOSS_BYPASS="${MERGE_VECTOR_LOSS_BYPASS:-0}"
+  case "$MERGE_VECTOR_LOSS_BYPASS" in
+    1|true|TRUE|yes|YES) _vloss_bypass=true ;;
+    *) _vloss_bypass=false ;;
+  esac
+  psql "$DSN" -q -c "CREATE OR REPLACE TABLE tmp3_merge_cfg AS
+    SELECT ${MERGE_CHUNK_ROWS}::BIGINT AS chunk_rows,
+           ${MERGE_VECTOR_LOSS_TOLERANCE}::DOUBLE AS vector_loss_tol,
+           ${_vloss_bypass}::BOOLEAN AS vector_loss_bypass;" \
     || fail "конфиг пачек слияния"
   psql "$DSN" -q -f corpus_merge.sql || fail "слияние корпуса"
 

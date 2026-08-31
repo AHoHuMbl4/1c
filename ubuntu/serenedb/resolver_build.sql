@@ -9,8 +9,10 @@
 -- Чем отличается от прежней питоновской сборки (`build_resolver_index.py`):
 --   * прежняя делала `DELETE FROM resolver_index` и считала ВСЕ векторы заново каждый
 --     синк. [замер 27.07] 7 часов 34 минуты при 10 минутах процессорного времени;
---   * здесь значения сводятся `MERGE`-ом, а вектор считается ТОЛЬКО новым (`emb IS NULL`).
---     Повторный прогон на неизменных данных не тратит ни одного вызова к облаку;
+--   * здесь значения сводятся `MERGE`-ом по ключу (table, column, clip≤20000); совпавшие
+--     строки НЕ трогаются — emb живёт. Новый/изменившийся контент — emb=NULL.
+--     Повторный прогон на неизменных данных — no-op (0 сбросов emb);
+--   * смена формы ключа (полное value → clip) — карта `res_emb_xfer` + UPDATE ≤1000;
 --   * прежняя тянула в облако мусор: [замер] 43 680 значений из колонок `*_Base64Data`
 --     (таких колонок у сущностей корпуса 20), плюс значения наших служебных таблиц;
 --   * прежняя плодила дубли: [замер] 34 230 из 119 271.
@@ -102,18 +104,72 @@ DELETE FROM resolver_index r
 WHERE (SELECT count(*) FROM tmp3_ent) > 0
   AND NOT EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(r.table_name));
 
--- Один `MERGE` вместо трёх операторов: удаляет ушедшее ТОЛЬКО у сущностей, которые в
--- этот раз реально прочитаны, вставляет новое без вектора, а совпавшие строки НЕ трогает —
--- их векторы уцелевают. [замер] `NOT MATCHED BY SOURCE` в сборке 26.07.3 работает.
+-- 🔴 КЛЮЧ СТРОКИ = обрезанное значение. Прежний MERGE сравнивал полный `val`, а вставлял
+-- `substr(val,1,20000)`: после первого такта хранимое ≠ источнику → NOT MATCHED BY SOURCE
+-- DELETE + INSERT с emb=NULL на КАЖДОМ прогоне (эффект REPLACE, векторы сгорают).
+-- USING и ON обязаны говорить на одном языке с INSERT. Доки: MERGE INTO.
+CREATE OR REPLACE TABLE res_clip AS
+SELECT tbl, col, substr(val, 1, 20000) AS val FROM res_val;
+
+-- ============ 3-бис. ПЕРЕНОС ВЕКТОРОВ ПРИ СМЕНЕ ФОРМЫ КЛЮЧА ============
+-- Было value длиннее 20000, стало clip — MERGE не стыкует строки (value ≠ clip), без
+-- карты emb умер бы. Пары: уникальный (tbl,col,clip) с обеих сторон; старое value
+-- отличается от clip (иначе это обычный MATCH, перенос не нужен). Массивы в
+-- MERGE-INSERT на 26.07.3 роняют движок — перенос отдельными UPDATE ≤1000
+-- (образец corpus_merge tmp3_merge_emb_xfer). Доки: sql/statements/update#update-from-other-table.
+CREATE OR REPLACE TABLE res_emb_old AS
+SELECT table_name AS tbl, column_name AS col,
+       substr(value, 1, 20000) AS clip,
+       any_value(emb) AS emb
+FROM resolver_index
+WHERE emb IS NOT NULL
+  AND value IS DISTINCT FROM substr(value, 1, 20000)
+GROUP BY 1, 2, 3
+HAVING count(*) = 1;
+
+CREATE OR REPLACE TABLE res_emb_new AS
+SELECT tbl, col, val FROM res_clip
+QUALIFY count(*) OVER (PARTITION BY tbl, col, val) = 1;
+
+CREATE OR REPLACE TABLE res_emb_xfer AS
+SELECT n.tbl, n.col, n.val, o.emb
+FROM res_emb_new n
+INNER JOIN res_emb_old o ON o.tbl = n.tbl AND o.col = n.col AND o.clip = n.val;
+
+DELETE FROM search_quality WHERE k LIKE 'resolver_emb_xfer%';
+INSERT INTO search_quality
+SELECT 'resolver_emb_xfer', count(*)::BIGINT,
+       'векторов резолвера перенесено без пересчёта (clip-форма ключа)'
+FROM res_emb_xfer;
+
+-- Совпавшие по (table, column, clip) НЕ трогаются — emb живёт. Ушедшее удаляется
+-- только у сущностей, реально прочитанных в этом такте. Новое — с emb=NULL.
+-- [замер] `NOT MATCHED BY SOURCE` в сборке 26.07.3 работает.
 MERGE INTO resolver_index t
-USING (SELECT tbl, col, val FROM res_val) s
+USING res_clip s
    ON t.table_name = s.tbl AND t.column_name = s.col AND t.value = s.val
  WHEN NOT MATCHED BY SOURCE
       AND EXISTS (SELECT 1 FROM res_seen z WHERE z.tbl = t.table_name AND z.n_rows > 0)
       THEN DELETE
  WHEN NOT MATCHED THEN
       INSERT (table_name, column_name, value, emb)
-      VALUES (s.tbl, s.col, substr(s.val, 1, 20000), NULL);
+      VALUES (s.tbl, s.col, s.val, NULL);
+
+-- Перенос emb по карте формы — пакетами ≤1000 (массив FLOAT[1024] пачкой в INSERT
+-- роняет 26.07.3 — Vector::SetSize; живой стоп 31.08 на корпусе).
+CREATE OR REPLACE TABLE res_emb_xfer_n AS
+SELECT row_number() OVER (ORDER BY tbl, col, val) AS n, *
+FROM res_emb_xfer;
+
+SELECT 'UPDATE resolver_index SET emb = x.emb FROM res_emb_xfer_n x '
+       || 'WHERE resolver_index.table_name = x.tbl '
+       || 'AND resolver_index.column_name = x.col '
+       || 'AND resolver_index.value = x.val '
+       || 'AND resolver_index.emb IS NULL AND x.n >= ' || (b * 1000)
+       || ' AND x.n < ' || ((b + 1) * 1000) || ';'
+FROM (SELECT i AS b FROM range(0, (SELECT ceil(count(*) / 1000.0)::BIGINT
+                                   FROM res_emb_xfer_n)) t(i)) z
+\gexec
 
 -- 🔴 SERVICE НЕ В РЕЗОЛВЕРЕ (возврат 2 / 21.08, DATA_SCOPE §9.4). Бизнес-вопросов к
 -- служебным сущностям нет: ни значения, ни их векторы. Даже если таблица не попала в
@@ -126,16 +182,15 @@ WHERE EXISTS (
 
 -- ============ 4. ОТЧЁТ — В БАЗУ, А НЕ В ЖУРНАЛ ============
 -- П. 13: потеря обязана быть видна запросом, а не только тому, кто смотрел в консоль.
--- `resolver_too_long` — значения, которые вектор не получат никогда, если досчёт не
--- обрежет вход: у эмбеддера предел 33 000 символов, а в базе лежат значения по 560 282.
-DELETE FROM search_quality WHERE k LIKE 'resolver_%';
+-- `resolver_clipped` — значения, чей источник был длиннее ключа (обрезаны при MERGE).
+DELETE FROM search_quality WHERE k LIKE 'resolver_%' AND k NOT LIKE 'resolver_emb_xfer%';
 INSERT INTO search_quality
             SELECT 'resolver_values',   count(*),                            'значений в резолвере'
             FROM resolver_index
 UNION ALL   SELECT 'resolver_no_emb',   count(*) FILTER (WHERE emb IS NULL), 'ждут вектора'
             FROM resolver_index
-UNION ALL   SELECT 'resolver_clipped', count(*) FILTER (WHERE length(value) > 20000),
-                   'вектор посчитан по обрезанному началу значения, а не по всему'
+UNION ALL   SELECT 'resolver_clipped', count(*) FILTER (WHERE length(value) = 20000),
+                   'ключ = обрезанные 20000 символов источника'
             FROM resolver_index;
 
 SELECT k, v, note FROM search_quality WHERE k LIKE 'resolver_%' ORDER BY k;

@@ -1444,7 +1444,10 @@ INSERT INTO search_quality SELECT 'pdoc_resume', (SELECT on_::INT FROM tmp3_resu
 CREATE TABLE IF NOT EXISTS tmp3_corpus
   (src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
    nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP,
-   refs_map MAP(VARCHAR, VARCHAR), refs_own MAP(VARCHAR, VARCHAR));
+   refs_map MAP(VARCHAR, VARCHAR), refs_own MAP(VARCHAR, VARCHAR),
+   content_hash VARCHAR);
+-- Добор для стейджа, собранного прежним кодом (IF NOT EXISTS не меняет схему).
+ALTER TABLE tmp3_corpus ADD COLUMN IF NOT EXISTS content_hash VARCHAR;
 DELETE FROM tmp3_corpus WHERE NOT (SELECT on_ FROM tmp3_resume_pdoc);
 
 DELETE FROM tmp3_pdoc_stage s
@@ -1624,9 +1627,9 @@ SELECT src_table,
                                                       ORDER BY doc, refs, refs_map::VARCHAR,
                                                                nums::VARCHAR, flags::VARCHAR, dt)
             ELSE row_key END AS row_key,
-       doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own
+       doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash
 FROM (
-SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own FROM (
+SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash FROM (
 SELECT src_table,
        -- 🔴 ОБЪЯВЛЕННЫЙ КЛЮЧ НЕ ВСЕГДА РАЗЛИЧАЕТ СТРОКИ. У регистров 1С отдаёт данные
        -- обёрткой (одна запись на регистратор, движения внутри списком), и объявленный
@@ -1642,7 +1645,8 @@ SELECT src_table,
        CASE WHEN NOT (SELECT on_ FROM fold)
              AND count(*) OVER (PARTITION BY src_table, rk) > 1
             THEN rk || '#' || sha1(doc) ELSE rk END AS row_key,
-       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, flags, dt, refs_map, refs_own
+       doc, refs, sha1(doc || chr(0) || refs) AS doc_hash, nums, flags, dt, refs_map, refs_own,
+       corpus_content_hash(doc) AS content_hash
 FROM (
 SELECT src_table,
        -- Без объявленного ключа и без Ref_Key ключом становится отпечаток текста —
@@ -1911,7 +1915,8 @@ mid AS (
                AND count(*) OVER (PARTITION BY src_table, rk) > 1
               THEN rk || '#' || sha1(doc) ELSE rk END AS row_key,
          doc, refs, sha1(doc || chr(0) || refs) AS doc_hash,
-         nums, flags, dt, refs_map, refs_own
+         nums, flags, dt, refs_map, refs_own,
+         corpus_content_hash(doc) AS content_hash
   FROM dedup
 ),
 fin AS (
@@ -1921,10 +1926,10 @@ fin AS (
                                                         ORDER BY doc, refs, refs_map::VARCHAR,
                                                                  nums::VARCHAR, flags::VARCHAR, dt)
               ELSE row_key END AS row_key,
-         doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own
+         doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash
   FROM mid
 )
-SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own
+SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash
 FROM fin
 QUALIFY NOT (SELECT on_ FROM fold)
      OR row_number() OVER (PARTITION BY src_table, row_key ORDER BY doc, refs, doc_hash) = 1;
@@ -1969,14 +1974,14 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
 -- Ключи вида rk#N полного пути сюда не попадают: plain зовётся только для сущностей,
 -- которые полная сборка не собрала.
 -- Порядок колонок позиционный: src_table, row_key, doc, refs, doc_hash, nums, flags,
--- doc_date, refs_map, refs_own. У упрощённого пути ни величин, ни булевых реквизитов, ни дат,
--- ни карты ссылок нет — и это честный NULL «не разбирали», а не пустая карта.
+-- doc_date, refs_map, refs_own, content_hash. У упрощённого пути ни величин, ни булевых
+-- реквизитов, ни дат, ни карты ссылок нет — и это честный NULL «не разбирали», а не пустая карта.
 SELECT src_table,
        CASE WHEN count(*) OVER (PARTITION BY src_table, row_key) > 1
             THEN row_key || '#' || row_number() OVER (PARTITION BY src_table, row_key
                                                       ORDER BY doc, doc_hash)
             ELSE row_key END,
-       doc, '', doc_hash, NULL, NULL, NULL, NULL, NULL
+       doc, '', doc_hash, NULL, NULL, NULL, NULL, NULL, corpus_content_hash(doc)
 FROM base;
 
 -- Первый заход: полная сборка. Ошибка ОДНОЙ сущности здесь не останавливает файл —

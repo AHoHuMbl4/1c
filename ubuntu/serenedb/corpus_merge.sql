@@ -107,11 +107,14 @@ FROM (SELECT src_table, row_key FROM tmp3_corpus GROUP BY 1, 2 HAVING count(*) >
 -- Класс «rewrite wave»: per-table, без списков — ≥90 % живых без exact-match,
 -- объём стейджа ≈ живому (|Δ|/live ≤ 5 %), сборка не меньше. Для них unmatched
 -- построчно не считается (уйдёт := было); MERGE+DELETE ниже заменяют таблицу.
--- Вектор принадлежит бизнес-контенту, не row_key (О4): перед вставкой новые
--- строки стыкуются со старыми по refs; emb переносится, если общие колонки
--- doc-текста совпали (новые колонки формы игнорируются). Иначе emb=NULL —
--- очередь bulk (EMBED_BULK §5/§9) досчитает только реально изменившиеся.
--- Доки: MERGE INTO; sql/functions/map; sql/functions/text#string_split;
+-- Вектор принадлежит бизнес-контенту, не row_key (О4): стыковка переноса —
+-- по уникальному content_hash (канон колонок doc без платформенного шума).
+-- Смена формы при тех же значениях → тот же content_hash → либо MERGE не
+-- трогает emb (тот же row_key), либо карта xfer возвращает emb после волны.
+-- Реальное изменение значений → другой content_hash → emb=NULL, bulk досчитает.
+-- Гейт вектор-бюджета (1-тер) стопит ДО записи, если потеря вне карты > доли
+-- MERGE_VECTOR_LOSS_TOLERANCE (умолчание 0.5%). Доки: MERGE INTO;
+-- sql/functions/map; sql/functions/text#string_split; sql/functions/utility#error;
 -- sql/statements/create_macro; cookbook/sql_features/query_and_query_table_functions.
 CREATE OR REPLACE TABLE tmp3_merge_ent_counts AS
 SELECT e.src_table,
@@ -431,18 +434,23 @@ ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS nums MAP(VARCHAR, DOUBLE);
 ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS flags MAP(VARCHAR, BOOLEAN);
 -- Карта ссылок строки. Вектор не сбрасывается: колонка не входит в doc_hash.
 ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS refs_map MAP(VARCHAR, VARCHAR);
+-- Стабильный бизнес-хэш рядом с doc_hash (row_key не трогаем).
+ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS content_hash VARCHAR;
 
 -- Время последнего переноса сущности в поисковый слой. Пишется ниже по фактически
 -- перенесённым (`tmp3_build`); такт-пропуск колонку не трогает.
 ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS last_built_at TIMESTAMP;
 
--- ============ 1-бис. ПЕРЕНОС ВЕКТОРОВ ПРИ REWRITE-ВОЛНЕ (О4) ============
+-- ============ 1-бис. ПЕРЕНОС ВЕКТОРОВ ПРИ REWRITE-ВОЛНЕ (О4) + content_hash ============
 -- Текст doc = «сущность | колонка: значение | …» (строит corpus_build). Карта
--- бизнес-полей — пары с «: »; префикс без двоеточия отбрасывается. Стыковка
--- пар — по refs (стабильна при смене формы, ломается при смене значений ссылок).
--- Дубли refs с обеих сторон → пара не ищется (безопаснее, чем чужой emb).
+-- бизнес-полей — пары с «: »; префикс без двоеточия отбрасывается. content_hash —
+-- sha1 канона (сортированные пары без платформенного шума и пустых). Стыковка
+-- пар переноса — по уникальному content_hash в пределах сущности (миграция
+-- вектор-нейтральна: форма сменилась → doc_hash другой, content_hash тот же →
+-- emb переезжает). Дубли content_hash с обеих сторон → пара не ищется.
 -- Доки: sql/functions/map#map_from_entries; list_intersect; map_extract_value;
--- sql/functions/text#string_split; sql/statements/create_macro.
+-- sql/functions/text#string_split; sql/functions/list#array_to_string; list_sort;
+-- sql/functions/utility#sha1; sql/statements/create_macro.
 CREATE OR REPLACE MACRO corpus_doc_bmap(doc) AS (
   CASE WHEN len(list_filter(string_split(coalesce(doc, ''), ' | '),
                             p -> position(': ' IN p) > 0)) = 0
@@ -458,6 +466,27 @@ CREATE OR REPLACE MACRO corpus_doc_bmap(doc) AS (
   END
 );
 
+CREATE OR REPLACE MACRO corpus_content_hash(doc) AS (
+  sha1(coalesce(
+    array_to_string(
+      list_sort(
+        list_transform(
+          list_filter(
+            map_keys(corpus_doc_bmap(doc)),
+            k -> k <> 'DataVersion'
+                 AND k <> '__metadata'
+                 AND position('navigationLinkUrl' IN k) = 0
+                 AND coalesce(map_extract_value(corpus_doc_bmap(doc), k), '') <> ''
+          ),
+          k -> k || chr(1) || map_extract_value(corpus_doc_bmap(doc), k)
+        )
+      ),
+      chr(0)
+    ),
+    ''
+  ))
+);
+
 CREATE OR REPLACE MACRO corpus_bmap_common_eq(a, b) AS (
   len(list_intersect(map_keys(a), map_keys(b))) > 0
   AND len(list_filter(
@@ -466,16 +495,44 @@ CREATE OR REPLACE MACRO corpus_bmap_common_eq(a, b) AS (
       )) = 0
 );
 
+-- Стыковка переноса: (A) уникальный content_hash — миграция и тождество
+-- канона; (B) уникальные refs + corpus_bmap_common_eq — волна при смене формы
+-- с новыми заполненными колонками (хэш другой, пересечение значений то же).
+-- content_hash на лету, если колонка ещё NULL. UPDATE search_corpus — только
+-- ПОСЛЕ гейта (ниже), иначе стоп оставил бы следы записи.
 CREATE OR REPLACE TABLE tmp3_merge_emb_old AS
-SELECT src_table, refs, any_value(emb) AS emb, any_value(corpus_doc_bmap(doc)) AS bmap
-FROM search_corpus
-WHERE src_table IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
-  AND refs IS NOT NULL AND refs <> ''
-  AND emb IS NOT NULL
-GROUP BY src_table, refs
+SELECT src_table, ch AS content_hash, any_value(emb) AS emb
+FROM (
+  SELECT src_table, emb,
+         coalesce(nullif(content_hash, ''), corpus_content_hash(doc)) AS ch
+  FROM search_corpus
+  WHERE src_table IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
+    AND emb IS NOT NULL
+) _
+WHERE ch IS NOT NULL AND ch <> ''
+GROUP BY src_table, ch
 HAVING count(*) = 1;
 
 CREATE OR REPLACE TABLE tmp3_merge_emb_new AS
+SELECT src_table, row_key, ch AS content_hash
+FROM (
+  SELECT src_table, row_key,
+         coalesce(nullif(content_hash, ''), corpus_content_hash(doc)) AS ch
+  FROM tmp3_corpus
+  WHERE src_table IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
+) _
+WHERE ch IS NOT NULL AND ch <> ''
+QUALIFY count(*) OVER (PARTITION BY src_table, ch) = 1;
+
+CREATE OR REPLACE TABLE tmp3_merge_emb_old_refs AS
+SELECT src_table, refs, any_value(emb) AS emb, any_value(corpus_doc_bmap(doc)) AS bmap
+FROM search_corpus
+WHERE src_table IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
+  AND emb IS NOT NULL AND refs IS NOT NULL AND refs <> ''
+GROUP BY src_table, refs
+HAVING count(*) = 1;
+
+CREATE OR REPLACE TABLE tmp3_merge_emb_new_refs AS
 SELECT src_table, row_key, refs, corpus_doc_bmap(doc) AS bmap
 FROM tmp3_corpus
 WHERE src_table IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
@@ -483,17 +540,184 @@ WHERE src_table IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
 QUALIFY count(*) OVER (PARTITION BY src_table, refs) = 1;
 
 CREATE OR REPLACE TABLE tmp3_merge_emb_xfer AS
-SELECT n.src_table, n.row_key, o.emb
-FROM tmp3_merge_emb_new n
-INNER JOIN tmp3_merge_emb_old o USING (src_table, refs)
-WHERE corpus_bmap_common_eq(n.bmap, o.bmap);
+SELECT src_table, row_key, emb FROM (
+  SELECT n.src_table, n.row_key, o.emb, 1 AS prio
+  FROM tmp3_merge_emb_new n
+  INNER JOIN tmp3_merge_emb_old o USING (src_table, content_hash)
+  UNION ALL
+  SELECT n.src_table, n.row_key, o.emb, 2 AS prio
+  FROM tmp3_merge_emb_new_refs n
+  INNER JOIN tmp3_merge_emb_old_refs o USING (src_table, refs)
+  WHERE corpus_bmap_common_eq(n.bmap, o.bmap)
+) _
+QUALIFY row_number() OVER (PARTITION BY src_table, row_key ORDER BY prio) = 1;
 
 DELETE FROM search_quality WHERE k LIKE 'entity_emb_xfer:%';
 INSERT INTO search_quality
 SELECT 'entity_emb_xfer:' || src_table, count(*)::BIGINT,
-       'векторов перенесено без пересчёта (общие колонки doc совпали)'
+       'векторов перенесено без пересчёта (content_hash или refs+common_eq)'
 FROM tmp3_merge_emb_xfer
 GROUP BY 1;
+
+-- ============ 1-тер. ГЕЙТ ВЕКТОР-БЮДЖЕТА — СТОП ДО ЗАПИСИ В search_corpus ============
+-- Считаем, сколько векторов эта транзакция оставит без emb (DELETE исчезнувших ключей
+-- + MATCHED со сменой content_hash), минус спасённые картой tmp3_merge_emb_xfer.
+-- Порог — ДОЛЯ от векторов всей базы (MERGE_VECTOR_LOSS_TOLERANCE, умолчание 0.5%).
+-- Явный обход — только MERGE_VECTOR_LOSS_BYPASS=1 с записью в search_quality.
+-- Доки: sql/functions/utility#error; sql/statements/insert.
+CREATE TABLE IF NOT EXISTS tmp3_merge_cfg (
+  chunk_rows BIGINT,
+  vector_loss_tol DOUBLE,
+  vector_loss_bypass BOOLEAN
+);
+ALTER TABLE tmp3_merge_cfg ADD COLUMN IF NOT EXISTS vector_loss_tol DOUBLE;
+ALTER TABLE tmp3_merge_cfg ADD COLUMN IF NOT EXISTS vector_loss_bypass BOOLEAN;
+INSERT INTO tmp3_merge_cfg (chunk_rows, vector_loss_tol, vector_loss_bypass)
+SELECT 1000000, 0.005, false
+WHERE (SELECT count(*) FROM tmp3_merge_cfg) = 0;
+UPDATE tmp3_merge_cfg SET vector_loss_tol = coalesce(vector_loss_tol, 0.005),
+                     vector_loss_bypass = coalesce(vector_loss_bypass, false);
+
+CREATE OR REPLACE TABLE tmp3_merge_vec_budget AS
+WITH rebuilt AS (
+  SELECT DISTINCT src_table FROM tmp3_corpus
+),
+old_full AS (
+  SELECT src_table, row_key, emb, doc,
+         coalesce(nullif(content_hash, ''), corpus_content_hash(doc)) AS ch,
+         corpus_doc_bmap(doc) AS bmap
+  FROM search_corpus
+  WHERE src_table IN (SELECT src_table FROM rebuilt)
+),
+new_full AS (
+  SELECT src_table, row_key, doc,
+         coalesce(nullif(content_hash, ''), corpus_content_hash(doc)) AS ch,
+         corpus_doc_bmap(doc) AS bmap
+  FROM tmp3_corpus
+),
+was AS (
+  SELECT src_table, count(*) FILTER (WHERE emb IS NOT NULL)::BIGINT AS векторов_было
+  FROM old_full
+  GROUP BY 1
+),
+surviving AS (
+  -- content_hash равен ИЛИ форма расширилась при тех же общих значениях
+  SELECT o.src_table, count(*)::BIGINT AS векторов_живёт
+  FROM old_full o
+  INNER JOIN new_full n
+          ON n.src_table = o.src_table AND n.row_key = o.row_key
+         AND (n.ch IS NOT DISTINCT FROM o.ch
+              OR corpus_bmap_common_eq(o.bmap, n.bmap))
+  WHERE o.emb IS NOT NULL
+  GROUP BY 1
+),
+xfer AS (
+  SELECT src_table, count(*)::BIGINT AS векторов_спасено_картой
+  FROM tmp3_merge_emb_xfer
+  GROUP BY 1
+),
+die_hash AS (
+  SELECT o.src_table, count(*)::BIGINT AS hash_kill
+  FROM old_full o
+  INNER JOIN new_full n
+          ON n.src_table = o.src_table AND n.row_key = o.row_key
+         AND n.ch IS DISTINCT FROM o.ch
+         AND NOT corpus_bmap_common_eq(o.bmap, n.bmap)
+  WHERE o.emb IS NOT NULL
+  GROUP BY 1
+),
+die_unmatched AS (
+  SELECT o.src_table, count(*)::BIGINT AS unmatched_kill
+  FROM old_full o
+  WHERE o.emb IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM new_full n
+                    WHERE n.src_table = o.src_table AND n.row_key = o.row_key)
+  GROUP BY 1
+)
+SELECT coalesce(w.src_table, s.src_table, x.src_table, h.src_table, u.src_table) AS src_table,
+       coalesce(w.векторов_было, 0::BIGINT) AS векторов_было,
+       coalesce(x.векторов_спасено_картой, 0::BIGINT) AS векторов_спасено_картой,
+       coalesce(s.векторов_живёт, 0::BIGINT) AS векторов_живёт,
+       coalesce(h.hash_kill, 0::BIGINT) AS hash_kill,
+       coalesce(u.unmatched_kill, 0::BIGINT) AS unmatched_kill,
+       greatest(
+         coalesce(w.векторов_было, 0::BIGINT)
+           - coalesce(s.векторов_живёт, 0::BIGINT)
+           - coalesce(x.векторов_спасено_картой, 0::BIGINT),
+         0::BIGINT
+       ) AS векторов_умрёт,
+       CASE
+         WHEN coalesce(u.unmatched_kill, 0) > 0
+              AND EXISTS (SELECT 1 FROM tmp3_merge_rewrite_wave rw
+                          WHERE rw.src_table = coalesce(w.src_table, u.src_table))
+              AND coalesce(x.векторов_спасено_картой, 0) = 0
+           THEN 'rewrite_wave без карты'
+         WHEN coalesce(u.unmatched_kill, 0) > 0
+              AND EXISTS (SELECT 1 FROM tmp3_merge_rewrite_wave rw
+                          WHERE rw.src_table = coalesce(w.src_table, u.src_table))
+           THEN 'rewrite_wave: unmatched минус карта'
+         WHEN coalesce(u.unmatched_kill, 0) > 0
+           THEN 'unmatched'
+         WHEN coalesce(h.hash_kill, 0) > 0
+           THEN 'content_hash/значение-изменение вне карты'
+         ELSE 'ok'
+       END AS причина
+FROM was w
+FULL OUTER JOIN surviving s USING (src_table)
+FULL OUTER JOIN xfer x USING (src_table)
+FULL OUTER JOIN die_hash h USING (src_table)
+FULL OUTER JOIN die_unmatched u USING (src_table);
+
+DELETE FROM search_quality WHERE k IN ('vector_loss_gate', 'vector_loss_bypass');
+INSERT INTO search_quality
+SELECT 'vector_loss_gate',
+       (SELECT coalesce(sum(векторов_умрёт), 0) FROM tmp3_merge_vec_budget)::DOUBLE,
+       'потеря векторов вне карты / всего='
+         || (SELECT count(*) FILTER (WHERE emb IS NOT NULL) FROM search_corpus)
+         || ' tol='
+         || (SELECT vector_loss_tol FROM tmp3_merge_cfg LIMIT 1);
+
+SELECT CASE
+  WHEN (SELECT vector_loss_bypass FROM tmp3_merge_cfg LIMIT 1)
+  THEN NULL
+  WHEN (SELECT count(*) FILTER (WHERE emb IS NOT NULL) FROM search_corpus) = 0
+  THEN NULL
+  WHEN (SELECT coalesce(sum(векторов_умрёт), 0) FROM tmp3_merge_vec_budget)::DOUBLE
+         / (SELECT count(*) FILTER (WHERE emb IS NOT NULL) FROM search_corpus)
+       > (SELECT vector_loss_tol FROM tmp3_merge_cfg LIMIT 1)
+  THEN error(
+    'corpus_merge: вектор-бюджет — потеря '
+    || (SELECT coalesce(sum(векторов_умрёт), 0) FROM tmp3_merge_vec_budget)
+    || ' из '
+    || (SELECT count(*) FILTER (WHERE emb IS NOT NULL) FROM search_corpus)
+    || ' (>'
+    || round(100.0 * (SELECT vector_loss_tol FROM tmp3_merge_cfg LIMIT 1), 3)
+    || '%): '
+    || (SELECT string_agg(
+                  src_table || ' умерёт=' || векторов_умрёт
+                    || ' было=' || векторов_было
+                    || ' карта=' || векторов_спасено_картой
+                    || ' [' || причина || ']',
+                  '; '
+                )
+        FROM tmp3_merge_vec_budget
+        WHERE векторов_умрёт > 0)
+  )
+END;
+
+INSERT INTO search_quality
+SELECT 'vector_loss_bypass', 1,
+       'обход гейта вектор-бюджета (MERGE_VECTOR_LOSS_BYPASS), потеря='
+         || (SELECT coalesce(sum(векторов_умрёт), 0) FROM tmp3_merge_vec_budget)
+WHERE (SELECT vector_loss_bypass FROM tmp3_merge_cfg LIMIT 1);
+
+-- Гейт пройден (или пустой корпус) — теперь можно писать. Миграция content_hash:
+-- заполняем NULL без сброса emb, иначе MERGE увидит NULL≠hash и убьёт векторы.
+ALTER TABLE tmp3_corpus ADD COLUMN IF NOT EXISTS content_hash VARCHAR;
+UPDATE tmp3_corpus SET content_hash = corpus_content_hash(doc)
+WHERE content_hash IS NULL AND doc IS NOT NULL;
+UPDATE search_corpus SET content_hash = corpus_content_hash(doc)
+WHERE content_hash IS NULL AND doc IS NOT NULL;
 
 -- ============ 2. ЗАПИСЬ — ПАЧКАМИ, КАЖДАЯ СО СВОИМ COMMIT ============
 -- [замер 18.08 klient-1] одна транзакция MERGE+UPDATE+DELETE на 15 148 327 строк
@@ -508,9 +732,7 @@ GROUP BY 1;
 -- и за 3 мин налил /var/lib/serenedb/.tmp на 21 ГиБ (90 % диска). Фильтр —
 -- src_table IN (литералы пачки): движок отсекает до скана. Доки: MERGE INTO;
 -- sql/functions/utility#hash; Configuration › Pragmas › Temp Directory.
-CREATE TABLE IF NOT EXISTS tmp3_merge_cfg (chunk_rows BIGINT);
-INSERT INTO tmp3_merge_cfg (chunk_rows)
-SELECT 1000000 WHERE (SELECT count(*) FROM tmp3_merge_cfg) = 0;
+-- Гейт вектор-бюджета выше обязан стоять ДО первого MERGE/DELETE в search_corpus.
 SELECT CASE WHEN (SELECT min(chunk_rows) FROM tmp3_merge_cfg) < 10000
        THEN error('corpus_merge: chunk_rows < 10000') END;
 
@@ -558,7 +780,7 @@ SELECT stmt FROM (
          || ')'
          || CASE WHEN n_parts = 1 THEN ''
             ELSE ' AND (hash(s.row_key) % ' || n_parts || ') = ' || part END
-         || ') AS s ON t.src_table = s.src_table AND t.row_key = s.row_key WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash THEN UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash, nums = s.nums, flags = s.flags, doc_date = s.doc_date, refs_map = s.refs_map, emb = NULL WHEN NOT MATCHED THEN INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, refs_map, emb) VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, s.refs_map, NULL);' AS stmt
+         || ') AS s ON t.src_table = s.src_table AND t.row_key = s.row_key WHEN MATCHED AND t.content_hash IS DISTINCT FROM s.content_hash THEN UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash, content_hash = s.content_hash, nums = s.nums, flags = s.flags, doc_date = s.doc_date, refs_map = s.refs_map, emb = CASE WHEN corpus_bmap_common_eq(corpus_doc_bmap(t.doc), corpus_doc_bmap(s.doc)) THEN t.emb ELSE NULL END WHEN NOT MATCHED THEN INSERT (src_table, row_key, doc, refs, doc_hash, content_hash, nums, flags, doc_date, refs_map, emb) VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.content_hash, s.nums, s.flags, s.doc_date, s.refs_map, NULL);' AS stmt
   FROM (
     SELECT job_id,
            string_agg(quote_literal(src_table), ', ') AS ins,

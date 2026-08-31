@@ -1,4 +1,47 @@
+## 2026-08-31 — Гейт вектор-бюджета (стоп ДО записи) + content_hash
+
+**[код]** Три живых потери векторов (5,4 млн / 1,58 млн / 396 тыс.+резолвер)
+из-за смены `doc_hash` при смене формы или rewrite-волны. В такте корпуса:
+- `content_hash` рядом с `doc_hash` (row_key не трогаем): канон
+  `corpus_content_hash(doc)` = sha1 сортированных пар колонок без шума
+  (DataVersion/__metadata/navigationLinkUrl) и пустых; сборка пишет сразу,
+  слияние сравнивает MATCHED по `content_hash`.
+- Форма с новыми заполненными колонками: `content_hash` другой, но
+  `corpus_bmap_common_eq` сохраняет `emb` (MERGE) и стыкует карту xfer
+  (refs+common_eq) рядом с парами по уникальному `content_hash`.
+- Гейт `tmp3_merge_vec_budget` **до** первого MERGE/DELETE/UPDATE-переноса
+  в `search_corpus`: потеря вне карты > доля `MERGE_VECTOR_LOSS_TOLERANCE`
+  (умолчание 0.5%) → `error(...)` с причиной по таблице; обход только
+  `MERGE_VECTOR_LOSS_BYPASS=1` (+ метрика `vector_loss_bypass`).
+  `build.sh` кладёт порог/обход в `tmp3_merge_cfg`.
+**[замер]** офлайн: `test_vector_budget_gate.py` 44/0;
+`test_corpus_merge_emb_transfer.py` 29/0; `test_corpus_merge_key_form.py` 61/0;
+`test_corpus_build_measures.py` 31/0; `test_box_tune.py` 86/86.
+**Числа:** ожидание живой пробы — при волне без карты такт стоп до записи
+(`search_corpus` count/emb не меняются); после выката миграция: метрика
+`vector_loss_gate` ≈0 при форме, `entity_emb_xfer` >0 только на rewrite.
+**Доки:** sql/functions/utility#error; sql/functions/map#map_from_entries;
+sql/functions/utility#sha1; sql/statements/create_macro; MERGE INTO.
+
+## 2026-08-31 — Резолвер/карточки: MERGE с сохранением emb (не REPLACE)
+
+**[код]** Корень потери 1,8 млн векторов резолвера: `MERGE` сравнивал полный
+`val`, а вставлял `substr(val,1,20000)` — после первого такта ключ не стыковался
+→ DELETE+INSERT с `emb=NULL` каждый прогон (эффект REPLACE).
+`resolver_build.sql`: ключ = clip в USING/ON/INSERT; карта `res_emb_xfer` +
+пакетный UPDATE ≤1000 при смене формы full→clip.
+`entity_card_build.sql`: `quantities` вне `card` (агрегат корпуса меняется тактом);
+`wiki_card_build.sql`: axes/measures вне `card_text`. Карты xfer формы + MERGE
+идемпотентен. `search_tables` / корпус — не трогались (параллельный агент).
+**[замер]** офлайн: `test_resolver_merge_emb.py` 25/0;
+`test_entity_wiki_card_merge_emb.py` 25/0; `test_wiki_card_build.py` 20/0;
+`test_classify_fail_closed.py` 11/0.
+**Числа:** ожидание живой пробы — после такта `resolver_no_emb` не растёт на
+неизменных значениях; `resolver_emb_xfer` ≥0 только на clip-миграции.
+**Доки:** MERGE INTO; sql/statements/update#update-from-other-table.
+
 ## 2026-08-31 — Перенос векторов вынесен из MERGE в пакетные UPDATE (дефект 26.07.3)
+
 
 **[замер]** MERGE-INSERT тысяч строк с `FLOAT[1024]` роняет сборку: «Cannot cast
 list … to array with length 1024» (класс Vector::SetSize, HOWTO §2 — >16–32

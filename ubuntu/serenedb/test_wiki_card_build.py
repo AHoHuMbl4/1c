@@ -59,7 +59,13 @@ def main() -> int:
     t("MERGE into card table", "MERGE INTO search_wiki_entity_card" in build)
     t("covered flag", re.search(r"\bcovered\b", build) is not None)
     t("card_text for embed", "card_text" in build)
+    t("card_text stable only (no axes/measures in concat)",
+      re.search(
+          r"concat_ws\(' \| ', t\.label, nullif\(w\.body, ''\)\) AS card_text",
+          build,
+      ) is not None)
     t("emb reset before MERGE", "SET emb = NULL" in build)
+    t("emb xfer on form change", "tmp_wiki_card_emb_xfer" in build)
     t("ivf cosine index", "emb ivf (metric = 'cosine')" in build)
     t("no hnsw", "hnsw" not in build.lower())
 

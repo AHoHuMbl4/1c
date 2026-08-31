@@ -3,8 +3,9 @@
 -- Доки: ai_embed — Sql › Functions › AI Functions;
 --       vector ivf kNN — Sql › Indexes › Inverted › Vector Search.
 --
--- Сборка ВНУТРИ движка (п. 20): имя + wiki_pages + оси search_refcols +
--- меры search_measure_alias → card_text → ai_embed. MERGE идемпотентен.
+-- Сборка ВНУТРИ движка (п. 20): имя + wiki_pages → card_text (стабильный текст под
+-- вектор); оси search_refcols + меры search_measure_alias — отдельные колонки, в
+-- хэш вектора не входят. MERGE идемпотентен: повторный прогон не сбрасывает emb.
 -- Не в такте: отдельный прогон; досчёт emb — embed_missing.sh после этого файла.
 
 CREATE TABLE IF NOT EXISTS search_wiki_entity_card (
@@ -32,16 +33,16 @@ SELECT m.src_table,
  WHERE coalesce(m.aliases, '') <> ''
  GROUP BY m.src_table;
 
+-- card_text под вектор = стабильная часть (name | description). axes/measures —
+-- агрегаты (refcols + measure_alias): пересборка словаря/осей каждый такт не должна
+-- жечь emb. Колонки живут отдельно, в индекс IVF входят через INCLUDE / лексику.
 CREATE OR REPLACE TABLE tmp_wiki_card AS
 SELECT t.src_table,
        t.label AS name,
        coalesce(w.body, '') AS description,
        coalesce(ax.axes, '') AS axes,
        coalesce(ms.measures, '') AS measures,
-       concat_ws(' | ', t.label,
-                 nullif(w.body, ''),
-                 nullif(ax.axes, ''),
-                 nullif(ms.measures, '')) AS card_text,
+       concat_ws(' | ', t.label, nullif(w.body, '')) AS card_text,
        CASE WHEN w.page_id IS NOT NULL THEN 1 ELSE 0 END AS covered,
        NULL::FLOAT[1024] AS emb
   FROM search_tables t
@@ -49,10 +50,26 @@ SELECT t.src_table,
   LEFT JOIN tmp_wiki_card_axes ax ON ax.src_table = t.src_table
   LEFT JOIN tmp_wiki_card_measures ms ON ms.src_table = t.src_table;
 
+-- Карта переноса при смене формы: старый card_text держал axes|measures.
+CREATE OR REPLACE TABLE tmp_wiki_card_emb_xfer AS
+SELECT s.src_table, t.emb
+FROM tmp_wiki_card s
+JOIN search_wiki_entity_card t ON t.src_table = s.src_table
+WHERE t.emb IS NOT NULL
+  AND t.card_text IS DISTINCT FROM s.card_text
+  AND (
+    t.card_text = concat_ws(' | ', s.card_text, nullif(t.axes, ''), nullif(t.measures, ''))
+    OR t.card_text = concat_ws(' | ', s.card_text, nullif(s.axes, ''), nullif(s.measures, ''))
+    OR s.card_text = concat_ws(' | ', t.name, nullif(t.description, ''))
+  );
+
 -- Сброс emb только при изменении текста под вектор (CASE над FLOAT[1024] нельзя).
 UPDATE search_wiki_entity_card AS t SET emb = NULL
   FROM tmp_wiki_card AS s
- WHERE t.src_table = s.src_table AND t.card_text IS DISTINCT FROM s.card_text;
+ WHERE t.src_table = s.src_table AND t.card_text IS DISTINCT FROM s.card_text
+   AND NOT EXISTS (
+     SELECT 1 FROM tmp_wiki_card_emb_xfer x WHERE x.src_table = t.src_table
+   );
 
 MERGE INTO search_wiki_entity_card AS t
 USING tmp_wiki_card AS s
@@ -70,12 +87,26 @@ WHEN NOT MATCHED THEN
      VALUES (s.src_table, s.name, s.description, s.axes, s.measures,
              s.card_text, s.covered, NULL);
 
+CREATE OR REPLACE TABLE tmp_wiki_card_emb_xfer_n AS
+SELECT row_number() OVER (ORDER BY src_table) AS n, *
+FROM tmp_wiki_card_emb_xfer;
+
+SELECT 'UPDATE search_wiki_entity_card SET emb = x.emb FROM tmp_wiki_card_emb_xfer_n x '
+       || 'WHERE search_wiki_entity_card.src_table = x.src_table '
+       || 'AND search_wiki_entity_card.emb IS NULL AND x.n >= ' || (b * 1000)
+       || ' AND x.n < ' || ((b + 1) * 1000) || ';'
+FROM (SELECT i AS b FROM range(0, (SELECT ceil(count(*) / 1000.0)::BIGINT
+                                   FROM tmp_wiki_card_emb_xfer_n)) t(i)) z
+\gexec
+
 DELETE FROM search_wiki_entity_card
  WHERE src_table NOT IN (SELECT src_table FROM tmp_wiki_card);
 
 DROP TABLE IF EXISTS tmp_wiki_card_axes;
 DROP TABLE IF EXISTS tmp_wiki_card_measures;
 DROP TABLE IF EXISTS tmp_wiki_card;
+DROP TABLE IF EXISTS tmp_wiki_card_emb_xfer;
+DROP TABLE IF EXISTS tmp_wiki_card_emb_xfer_n;
 
 SELECT 'wiki_card' AS шаг,
        count(*) AS карточек,

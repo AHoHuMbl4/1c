@@ -83,13 +83,13 @@ SELECT t.src_table,
        coalesce(a.best_used_for, '')                AS about,
        coalesce(q.quantities, '')                   AS quantities,
        coalesce(r.attrs, '')                        AS attrs,
-       -- Текст под вектор: то же, что и раньше, БЕЗ имён реквизитов. Их место —
-       -- лексический поиск: список вида «Ref_Key, DataVersion, БизнесРегион_Key…» на
-       -- 250 знаков размывал бы смысловой вектор, а пересчёт всех 1 502 векторов стоил
-       -- бы такта и денег эмбеддера. Поэтому поле индексируется, но в `card` не входит:
-       -- `MERGE` ниже сбрасывает `emb` только при изменении самого `card`.
+       -- Текст под вектор: ТОЛЬКО стабильная часть (label | aliases | about).
+       -- `quantities` — агрегат по корпусу: набор ключей nums растёт с данными каждый
+       -- такт → прежний card с quantities сбрасывал emb у «неизменившихся» сущностей.
+       -- `attrs` — каталог колонок; тоже вне вектора (лексический индекс). Обоснование
+       -- то же, что у attrs 04.08: смысл карточки — имя и описание, не инвентарь полей.
        concat_ws(' | ', t.label, coalesce(a.aliases, ''),
-                 coalesce(a.best_used_for, ''), coalesce(q.quantities, '')) AS card,
+                 coalesce(a.best_used_for, '')) AS card,
        NULL::FLOAT[1024]                            AS emb
 FROM search_tables t
 LEFT JOIN search_entity_alias a ON a.src_table = t.src_table
@@ -100,26 +100,42 @@ WHERE NOT EXISTS (
   WHERE e.src_table = t.src_table AND e.cls = 'service'
 );
 
--- Изменившимся карточкам вектор сбрасывается, неизменившиеся его сохраняют. Сравнение по
--- самому тексту карточки: отдельного отпечатка тут не нужно — строк полторы тысячи, а не
--- полмиллиона, и лишнее поле было бы вторым местом правды.
--- 🔴 ВЕКТОР СБРАСЫВАЕТСЯ ТОЛЬКО ПРИ ИЗМЕНЕНИИ ТЕКСТА ПОД ВЕКТОР, а не любого поля.
--- Имена реквизитов в `card` не входят (см. выше), поэтому их появление и изменение
--- пересчёта векторов не вызывает: `[замер 04.08]` иначе это 1 502 вектора на пустом
--- месте — 45 с такта и деньги эмбеддера при том, что смысл карточки не поменялся.
--- 🔴 СБРОС — ОТДЕЛЬНЫМ UPDATE ДО MERGE, а не `CASE` внутри него: `CASE` над
--- FLOAT[1024] движок не вычисляет («Unimplemented type for case expression:
--- FLOAT[1024]» — okna 16.08, после пересборки корпуса, когда ветка MATCHED с
--- изменением текста сработала впервые при живых векторах). До MERGE сравнение
--- `t.card IS DISTINCT FROM s.card` ещё осмысленно: старый текст на месте.
+-- Карта переноса при смене формы card (старый card = stable | quantities → новый stable).
+-- Без неё однократная смена формы обнулила бы emb у всех. Доки: MERGE INTO;
+-- sql/statements/update#update-from-other-table.
+CREATE OR REPLACE TABLE tmp_entity_card_emb_xfer AS
+SELECT s.src_table, t.emb
+FROM tmp_entity_card s
+JOIN search_entity_card t ON t.src_table = s.src_table
+WHERE t.emb IS NOT NULL
+  AND t.card IS DISTINCT FROM s.card
+  AND (
+    t.card = concat_ws(' | ', s.card, coalesce(t.quantities, ''))
+    OR t.card = concat_ws(' | ', s.card, coalesce(s.quantities, ''))
+    OR s.card = concat_ws(' | ', t.label, coalesce(t.aliases, ''), coalesce(t.about, ''))
+  );
+
+-- Изменившимся карточкам вектор сбрасывается, неизменившиеся его сохраняют.
+-- Форма-only (в карте xfer) emb не трогает — перенос ниже.
+-- 🔴 СБРОС — ОТДЕЛЬНЫМ UPDATE ДО MERGE: `CASE` над FLOAT[1024] движок не вычисляет
+-- («Unimplemented type for case expression: FLOAT[1024]» — okna 16.08).
 UPDATE search_entity_card AS t SET emb = NULL
 FROM tmp_entity_card AS s
-WHERE t.src_table = s.src_table AND t.card IS DISTINCT FROM s.card;
+WHERE t.src_table = s.src_table AND t.card IS DISTINCT FROM s.card
+  AND NOT EXISTS (
+    SELECT 1 FROM tmp_entity_card_emb_xfer x WHERE x.src_table = t.src_table
+  );
 
 MERGE INTO search_entity_card AS t
 USING tmp_entity_card AS s
 ON t.src_table = s.src_table
-WHEN MATCHED AND (t.card IS DISTINCT FROM s.card OR t.attrs IS DISTINCT FROM s.attrs) THEN
+WHEN MATCHED AND (t.card IS DISTINCT FROM s.card
+               OR t.attrs IS DISTINCT FROM s.attrs
+               OR t.quantities IS DISTINCT FROM s.quantities
+               OR t.label IS DISTINCT FROM s.label
+               OR t.parent IS DISTINCT FROM s.parent
+               OR t.aliases IS DISTINCT FROM s.aliases
+               OR t.about IS DISTINCT FROM s.about) THEN
      UPDATE SET label = s.label, parent = s.parent, aliases = s.aliases,
                 about = s.about, quantities = s.quantities, attrs = s.attrs,
                 card = s.card
@@ -128,11 +144,26 @@ WHEN NOT MATCHED THEN
      VALUES (s.src_table, s.label, s.parent, s.aliases, s.about, s.quantities,
              s.attrs, s.card, NULL);
 
+-- Перенос emb при смене формы card (≤1000; таблица ~1.5k — один пакет обычно).
+CREATE OR REPLACE TABLE tmp_entity_card_emb_xfer_n AS
+SELECT row_number() OVER (ORDER BY src_table) AS n, *
+FROM tmp_entity_card_emb_xfer;
+
+SELECT 'UPDATE search_entity_card SET emb = x.emb FROM tmp_entity_card_emb_xfer_n x '
+       || 'WHERE search_entity_card.src_table = x.src_table '
+       || 'AND search_entity_card.emb IS NULL AND x.n >= ' || (b * 1000)
+       || ' AND x.n < ' || ((b + 1) * 1000) || ';'
+FROM (SELECT i AS b FROM range(0, (SELECT ceil(count(*) / 1000.0)::BIGINT
+                                   FROM tmp_entity_card_emb_xfer_n)) t(i)) z
+\gexec
+
 -- Сущность исчезла из витрины — её карточка не должна оставаться в отборе кандидатов.
 DELETE FROM search_entity_card
 WHERE src_table NOT IN (SELECT src_table FROM tmp_entity_card);
 
 DROP TABLE IF EXISTS tmp_entity_card;
+DROP TABLE IF EXISTS tmp_entity_card_emb_xfer;
+DROP TABLE IF EXISTS tmp_entity_card_emb_xfer_n;
 
 -- Индекс по карточке. Словарь — общий `search_dict` (`stemming = false`), тот же, что у
 -- корпуса и алиасов: словарь со стеммингом отклонён и по п. 9, и замером (см. шапку).
