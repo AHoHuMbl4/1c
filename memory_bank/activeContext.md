@@ -65,17 +65,51 @@ clarify ≥2 options — Б3-у; wiki_passport.sql + wiki_verify_candidates —
 «сколько организаций», «сколько за месяц», склад) глазами в diag:
 wiki_hybrid_pick → verify → options → верный источник.
 
-### ПОРЯДОК ДЕЙСТВИЙ (строго) — обновлено 31.08 ~11:30 UTC
-0. ✅ СДЕЛАНО: Restart=no (drop-in) + таймер такта погашен; защита выкачена
-   deploy-sql.sh; bulk корпуса ЗАПУЩЕН 11:18 UTC (PID 2734565, ~150 строк/с,
-   ETA ~2,5 ч; дозор-фоновик известит о завершении). Владелица разрешила ВСЁ,
-   включая резолвер 1,8 млн. Её условие: векторы больше не терять НИКОГДА.
-   Утро 31.08 вскрыло: (а) сервис эмбеддера после ночного релиза деградировал
-   (500 на русских словах/is_query) — владелица починила ~11:10; (б) чанковые
-   «отказы» были аттач-войной двух bulk-процессов за одни wN.db (Unique file
-   handle conflict) — запускать ТОЛЬКО ОДИН процесс bulk; (в) счётчик прогресса
-   bulk ронял запуск (guard 18377a2) и показывает 0 при живой работе — скорость
-   мерить приростом w*.db (4 КБ/вектор), как в HOWTO §6.
+### ПОРЯДОК ДЕЙСТВИЙ (строго) — НОЧЬ 31.08→01.09, владелец: «проснусь — всё готово»
+0. ✅ СДЕЛАНО (31.08 день): Restart=no + таймер погашен; защита выкачена; векторы
+   не теряются (bulk только заполняет NULL); уроки дня: один процесс bulk
+   (аттач-война), PROGRESS_SEC=600 (не 86400 — петля), скорость мерить
+   переносами кругов, НЕ теориями про «очереди». Владелец парень; доступ
+   ssh root@178.63.211.188 / 49.13.97.101 ключом ~/.ssh/id_ed25519_deploy
+   (проверено живьём). Документ GPU_SERVERS.md (владельца) — чеклист §8.
+1. ✅ ИДЁТ: bulk корпуса 2 карты (17:07 UTC, 6 потоков, EMBED_HOSTS обе,
+   PROGRESS_SEC=600). 973 734/1 665 427 на 19:06; корпус ~23:30 UTC.
+   Дозор-фоновик будит меня при завершении. НЕ трогать процесс руками.
+2. Корпус готов → контроль count(emb) ≈ 1 657 663 (минус service ~7 703) →
+   СВЕЖИЙ бэкап: ssh окно 'cp /var/lib/serenedb/engine_duckdb/store.db
+   /var/lib/serenedb/engine_duckdb/store.db.bak-$(date -u +%Y%m%d-%H%M%S) &&
+   md5sum + psql снимок > /var/lib/serenedb/VECTOR_SNAPSHOT-*.txt'.
+3. Резолвер: ТОТ ЖЕ канон §9, аргументы из build.sh:
+   EMBED_HOSTS обе карты, THREADS=6, PROGRESS_SEC=600, WORK_DIR,
+   ./embed_bulk.sh resolver_index 'substr(value,1,20000)'
+   'table_name,column_name,value' (ROWS_WHERE не нужен — service уже
+   отфильтрован в сборке резолвера). ~1,8 млн коротких строк ≈ 1-2 ч.
+4. Резолвер готов → бэкап снова (п.2) → вернуть 27B на .12 (49.13.97.101):
+   ОТДЕЛЬНЫМИ командами: pkill -f embed_server.py, затем
+   start_llm.sh (оба скрипта лежат НА GPU-ХОСТЕ .12 в /home/ubuntu/{llm,qwen}_services,
+   это инфраструктура владельца вне репо — см. GPU_SERVERS.md §3.4/§8), затем
+   curl -sf -H "Authorization: Bearer uAI_…"
+   http://49.13.97.101:8000/v1/models. Эмбеддер на .11 НЕ ТРОГАТЬ (вопросы
+   бота). pyannote не поднимать.
+5. Снять MERGE_VECTOR_LOSS_TOLERANCE=0 из /etc/1c-serene-pipeline-postgres.env
+   (вернуть из .bak-probe без строки пробы). Запустить такт
+   systemctl start 1c-serene-pipeline@postgres (Restart=no уже стоит).
+   Контроль: search_quality vector_loss_gate ≈ 0, corpus count/emb не упал,
+   резолвер не потерял векторы. Падение такта — journalctl, не паника.
+6. Вики-цикл на вопросах владельца через :8091 (ASK_TOKEN из
+   /etc/1c-serene-ask.env): «сколько движений в регистре реализациятмц»,
+   «сколько организаций», «сколько продали за месяц», склад — в diag:
+   wiki_hybrid_pick → verify → options → верный источник.
+7. И2 67×2: work/gold/i2_runner.py run --tsv ubuntu/serenedb/client-gold-okna.tsv
+   --path engine --path web --reshoot-rules work/gold/reshoot-rules-okna.json,
+   env I2_WEB_MODEL=openclaw, ASK_TOKEN /etc/1c-serene-ask.env, WEB_TOKEN
+   ~/.openclaw-web/openclaw.json (gateway.auth.token).
+8. УТРОМ: один отчёт владельцу: векторы (корпус/резолвер, числа), бэкапы md5,
+   27B жив, такт зелёный, вики-цикл живой/нет, И2 «уверенно неверных X из 67».
+9. Хвосты (если ночь тихая): О6 срез 2, §6 бенч, веб-вердикты.
+   НЕ делать: новые схемы векторизации, нативные пробы (HOW_NOT_TO §3.103),
+   два bulk одновременно, трогать .11, обещать сроки без деления остатка
+   на замеренный потолок (77k симв/с на 2 карты).
 1. После завершения bulk корпуса: контроль переноса (count(emb) в корпусе),
    СВЕЖИЙ бэкап store.db с md5 + снимок счётчиков (файл VECTOR_SNAPSHOT-*),
    затем bulk резолвера 1 817 261 NULL (аргументы: resolver_index,
