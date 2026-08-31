@@ -6,6 +6,12 @@ from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
 
+# Суперлатив сравнения (больше/меньше/лучше/хуже + всего/всех) — rank, не compare.
+_RANK_SUPERLATIVE = re.compile(
+    r"(?:^|[\s,.;:!?«\"(\[])(?:больше|меньше|лучше|хуже)\s+(?:всего|всех)\b",
+    re.UNICODE | re.IGNORECASE)
+
+
 def entity_form_rank_single_window(intent, question=""):
     """Гейт B: rank/top-N + одна точка окна (нет period2) — не пара compare.
 
@@ -150,10 +156,10 @@ def sales_compare_intent(intent, question=""):
         if not (yoy and has_p1):
             return False
     # Superlative / top-N: axis, not two windows.
-    if any(w in q for w in (
-            "лучше всего", "хуже всего", "лучше всех", "хуже всех",
-            "больше всего", "меньше всего", "больше всех", "меньше всех",
-            "топ-", "топ ", " top", "лидер", "рейтинг", "leader", "ranking")):
+    if (_RANK_SUPERLATIVE.search(" " + q + " ")
+            or rank_question_text(question)
+            or any(w in q for w in (
+                "топ-", "топ ", " top", "лидер", "рейтинг", "leader", "ranking"))):
         return False
     _vs = any(w in q for w in (" чем", "чем ", " vs", "против", "по сравнению",
                                "сравни", "сравнение", "насколько", "на сколько",

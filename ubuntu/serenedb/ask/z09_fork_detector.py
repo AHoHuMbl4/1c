@@ -11,6 +11,11 @@ _FACT_NEG_CYR = re.compile(
     r"(?:^|[\s,.;:!?«\"(\[])(?:не|нет|без|ни)\s+\S", re.UNICODE)
 _FACT_NEG_LAT = re.compile(
     r"(?:^|\s)(?:not|no|without)\s+\S", re.IGNORECASE)
+# Имя величины в слове вопроса — морфемы платформы, не словарь базы.
+_MEASURE_WORD_STEM = re.compile(
+    r"(?:сумм|колич|цен|стоим|себестоим|оборот|ндс|аванс|"
+    r"скид|нацен|выруч|оплат|задолж|прибыл|убыт|всег|итог|остат)",
+    re.IGNORECASE)
 
 
 def _question_has_fact_negation(question):
@@ -145,20 +150,24 @@ def _fork_headline_doc_measures(names):
     return sorted(n for n in (names or []) if n and str(n).lower().endswith("документа"))
 
 
-def _fork_word_names_measure(wl):
+def _fork_word_names_measure(wl, names=None):
     """Слово вопроса называет величину (поле), а не глагол действия («продали»).
 
     Нужно отличить «себестоимость» (мера названа → NA, если поля нет) от
     «продали» (глагол вопроса, measure_choice → rerank/[] → не доказательство NA;
     [замер 21.08 okna] intent.величина=продали, want=sum, SQL Всего посчитан).
-    Морфемы — общие имена величин платформы, не привязка к базе.
+    Сначала — пересечение с именами мер источника; иначе морфемы платформы.
     """
-    if not wl:
+    wl_l = (wl or "").strip().lower()
+    if not wl_l:
         return False
-    hints = ("сумм", "колич", "цен", "стоим", "себестоим", "всего", "итог",
-             "оборот", "остат", "ндс", "аванс", "скид", "нацен", "выруч",
-             "оплат", "задолж", "прибыл", "убыт")
-    return any(h in wl for h in hints)
+    for n in names or []:
+        nl = (n or "").strip().lower()
+        if not nl:
+            continue
+        if wl_l == nl or wl_l in nl or nl.startswith(wl_l) or wl_l.startswith(nl):
+            return True
+    return bool(_MEASURE_WORD_STEM.search(wl_l))
 
 
 def _fork_sum_headline_pool(names):
@@ -217,7 +226,7 @@ def _fork_relevant(word, names, alias_by, want=None):
         return _with_doc_hdr(same or list(alts))
     # не разрешилось: want=sum + не имя меры → headline; имя меры без поля → []
     if w == "sum" and not alts:
-        if _fork_word_names_measure(wl):
+        if _fork_word_names_measure(wl, names):
             return []
         return _sum_fallback()
     return _with_doc_hdr(list(alts))
@@ -819,7 +828,7 @@ def _fork_headline_measure(src, sums, measure_word, alias_by=None, want=None):
     # («количество») до шапки не доходит — иначе Всего перебило бы штуки.
     # Глагол вопроса («продали») при want=sum — тот же headline, что пустое слово
     # ([замер 21.08 okna]); явная мера («себестоимость») сюда не входит.
-    if w == "sum" and not _fork_word_names_measure(wl_l) and "сумм" not in wl_l and wl_l != "sum":
+    if w == "sum" and not _fork_word_names_measure(wl_l, names) and "сумм" not in wl_l and wl_l != "sum":
         picked = _pick_sum_headline()
         if picked is not None:
             return picked

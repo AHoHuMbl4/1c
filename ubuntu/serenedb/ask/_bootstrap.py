@@ -8,6 +8,11 @@ from pathlib import Path
 
 _ASK_DIR = Path(__file__).resolve().parent
 
+
+def _zone_path(num: int, stem: str) -> str:
+    return "z%02d_%s.py" % (num, stem)
+
+
 _ZONE_FILES = [
     "z01_infra_trace_llm.py",
     "z02_intent.py",
@@ -20,7 +25,7 @@ _ZONE_FILES = [
     "z08_measures_totals.py",
     "z09_fork_detector.py",
     "z10_rank.py",
-    "z11_sales.py",
+    _zone_path(11, "sales"),
     "z12_stock_balance.py",
     "z13_fork_outcomes.py",
     "z14_clarify_memory.py",

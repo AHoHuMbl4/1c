@@ -1,3 +1,22 @@
+## 2026-08-31 — О6 срез 1: легаси word-лексики 43→36 (z05, z09, _bootstrap)
+
+**[код]** `ubuntu/serenedb/ask/`: z05 — суперлативы «больше/меньше/лучше/хуже
+всего» списком → regex `_RANK_SUPERLATIVE` + существующий `rank_question_text()`;
+z09 — хинты `'всего'/'остат'` → пересечение слова с именами мер источника, затем
+морфемы `_MEASURE_WORD_STEM`; `_bootstrap` — литерал `"z11_sales.py"` →
+`_zone_path(11, "sales")`. Выката нет (идёт живой прогон И2, ask на проде не
+меняем до его конца).
+**Числа:** легаси 43→36 (−7), новых 0; замки: entity_form 50/0, fork 52/52,
+zone_names 99/99, rank_leader_path 31/31, intent 162/0, action_class 48/0,
+stock_balance 43/0, wiki_card_hybrid 61/0, no_domain ok.
+**Доки:** PLAN_WIKI_CHOICE §4 О6.
+
+**[замер]** На чистом HEAD найдены 5 предсуществующих падений замков (сверено
+git stash до/после среза): `sales_canon_prefer` 1 («петли: named product»,
+z12 `stock_asks_named_product`), `rank_axis_anchor` 3 (stock balance question /
+rank measure / `_rank_wants_quantity`), `sales_rank_canon` 1 («какого товара →
+Количество»). Срез 1 их не создавал и не чинил — отдельная задача до выката О6.
+
 ## 2026-08-31 — О5-статусы в плане приведены к живым фактам
 
 **[замер окно]** `docs/PLAN_WIKI_CHOICE.md` §7: строки 1 и 5 закрыты по живой
