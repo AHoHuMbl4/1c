@@ -107,8 +107,12 @@ FROM (SELECT src_table, row_key FROM tmp3_corpus GROUP BY 1, 2 HAVING count(*) >
 -- Класс «rewrite wave»: per-table, без списков — ≥90 % живых без exact-match,
 -- объём стейджа ≈ живому (|Δ|/live ≤ 5 %), сборка не меньше. Для них unmatched
 -- построчно не считается (уйдёт := было); MERGE+DELETE ниже заменяют таблицу.
--- emb=NULL у новых ключей — штатно, очередь досчитает bulk (EMBED_BULK §5/§9).
--- Доки: MERGE INTO; cookbook/sql_features/query_and_query_table_functions.
+-- Вектор принадлежит бизнес-контенту, не row_key (О4): перед вставкой новые
+-- строки стыкуются со старыми по refs; emb переносится, если общие колонки
+-- doc-текста совпали (новые колонки формы игнорируются). Иначе emb=NULL —
+-- очередь bulk (EMBED_BULK §5/§9) досчитает только реально изменившиеся.
+-- Доки: MERGE INTO; sql/functions/map; sql/functions/text#string_split;
+-- sql/statements/create_macro; cookbook/sql_features/query_and_query_table_functions.
 CREATE OR REPLACE TABLE tmp3_merge_ent_counts AS
 SELECT e.src_table,
        coalesce(o.было, 0::BIGINT) AS было,
@@ -399,6 +403,65 @@ ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS refs_map MAP(VARCHAR, VARCHAR
 -- перенесённым (`tmp3_build`); такт-пропуск колонку не трогает.
 ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS last_built_at TIMESTAMP;
 
+-- ============ 1-бис. ПЕРЕНОС ВЕКТОРОВ ПРИ REWRITE-ВОЛНЕ (О4) ============
+-- Текст doc = «сущность | колонка: значение | …» (строит corpus_build). Карта
+-- бизнес-полей — пары с «: »; префикс без двоеточия отбрасывается. Стыковка
+-- пар — по refs (стабильна при смене формы, ломается при смене значений ссылок).
+-- Дубли refs с обеих сторон → пара не ищется (безопаснее, чем чужой emb).
+-- Доки: sql/functions/map#map_from_entries; list_intersect; map_extract_value;
+-- sql/functions/text#string_split; sql/statements/create_macro.
+CREATE OR REPLACE MACRO corpus_doc_bmap(doc) AS (
+  CASE WHEN len(list_filter(string_split(coalesce(doc, ''), ' | '),
+                            p -> position(': ' IN p) > 0)) = 0
+       THEN MAP{}::MAP(VARCHAR, VARCHAR)
+       ELSE map_from_entries(
+              list_transform(
+                list_filter(string_split(doc, ' | '),
+                            p -> position(': ' IN p) > 0),
+                p -> {'key': split_part(p, ': ', 1),
+                      'value': substr(p, length(split_part(p, ': ', 1)) + 3)}
+              )
+            )
+  END
+);
+
+CREATE OR REPLACE MACRO corpus_bmap_common_eq(a, b) AS (
+  len(list_intersect(map_keys(a), map_keys(b))) > 0
+  AND len(list_filter(
+        list_intersect(map_keys(a), map_keys(b)),
+        k -> map_extract_value(a, k) IS DISTINCT FROM map_extract_value(b, k)
+      )) = 0
+);
+
+CREATE OR REPLACE TABLE tmp3_merge_emb_old AS
+SELECT src_table, refs, any_value(emb) AS emb, any_value(corpus_doc_bmap(doc)) AS bmap
+FROM search_corpus
+WHERE src_table IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
+  AND refs IS NOT NULL AND refs <> ''
+  AND emb IS NOT NULL
+GROUP BY src_table, refs
+HAVING count(*) = 1;
+
+CREATE OR REPLACE TABLE tmp3_merge_emb_new AS
+SELECT src_table, row_key, refs, corpus_doc_bmap(doc) AS bmap
+FROM tmp3_corpus
+WHERE src_table IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
+  AND refs IS NOT NULL AND refs <> ''
+QUALIFY count(*) OVER (PARTITION BY src_table, refs) = 1;
+
+CREATE OR REPLACE TABLE tmp3_merge_emb_xfer AS
+SELECT n.src_table, n.row_key, o.emb
+FROM tmp3_merge_emb_new n
+INNER JOIN tmp3_merge_emb_old o USING (src_table, refs)
+WHERE corpus_bmap_common_eq(n.bmap, o.bmap);
+
+DELETE FROM search_quality WHERE k LIKE 'entity_emb_xfer:%';
+INSERT INTO search_quality
+SELECT 'entity_emb_xfer:' || src_table, count(*)::BIGINT,
+       'векторов перенесено без пересчёта (общие колонки doc совпали)'
+FROM tmp3_merge_emb_xfer
+GROUP BY 1;
+
 -- ============ 2. ЗАПИСЬ — ПАЧКАМИ, КАЖДАЯ СО СВОИМ COMMIT ============
 -- [замер 18.08 klient-1] одна транзакция MERGE+UPDATE+DELETE на 15 148 327 строк
 -- писала WAL 1 ч 08 мин и умерла на COMMIT: store.db.wal — No space left on device.
@@ -457,12 +520,12 @@ FROM tmp3_merge_jobs;
 
 SELECT stmt FROM (
   SELECT job_id, 1 AS ord,
-         'MERGE INTO search_corpus AS t USING (SELECT s.* FROM tmp3_corpus s WHERE s.src_table IN ('
+         'MERGE INTO search_corpus AS t USING (SELECT s.*, x.emb AS emb FROM tmp3_corpus s LEFT JOIN tmp3_merge_emb_xfer x ON x.src_table = s.src_table AND x.row_key = s.row_key WHERE s.src_table IN ('
          || ins
          || ')'
          || CASE WHEN n_parts = 1 THEN ''
             ELSE ' AND (hash(s.row_key) % ' || n_parts || ') = ' || part END
-         || ') AS s ON t.src_table = s.src_table AND t.row_key = s.row_key WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash THEN UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash, nums = s.nums, flags = s.flags, doc_date = s.doc_date, refs_map = s.refs_map, emb = NULL WHEN NOT MATCHED THEN INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, refs_map, emb) VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, s.refs_map, NULL);' AS stmt
+         || ') AS s ON t.src_table = s.src_table AND t.row_key = s.row_key WHEN MATCHED AND t.doc_hash IS DISTINCT FROM s.doc_hash THEN UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash, nums = s.nums, flags = s.flags, doc_date = s.doc_date, refs_map = s.refs_map, emb = NULL WHEN NOT MATCHED THEN INSERT (src_table, row_key, doc, refs, doc_hash, nums, flags, doc_date, refs_map, emb) VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.nums, s.flags, s.doc_date, s.refs_map, s.emb);' AS stmt
   FROM (
     SELECT job_id,
            string_agg(quote_literal(src_table), ', ') AS ins,
