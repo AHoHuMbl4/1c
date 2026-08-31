@@ -1,0 +1,47 @@
+{
+ "_bootstrap.py": {
+  "literal 'z11_sales.py'": 1
+ },
+ "z05_entity_form.py": {
+  "any-in-q 'больше всего'": 1,
+  "any-in-q 'лучше всего'": 1,
+  "any-in-q 'меньше всего'": 1,
+  "any-in-q 'хуже всего'": 1
+ },
+ "z09_fork_detector.py": {
+  "literal 'всего'": 1,
+  "literal 'остат'": 1
+ },
+ "z10_rank.py": {
+  "any-in-q 'goods'": 1,
+  "any-in-q 'product'": 1,
+  "any-in-q 'sales'": 1,
+  "any-in-q 'всего'": 1,
+  "any-in-q 'итого'": 1,
+  "any-in-q 'номенклатур'": 1,
+  "any-in-q 'продаж'": 1,
+  "any-in-q 'товар'": 1,
+  "literal 'больше всего'": 1,
+  "literal 'какая номенклатур'": 1,
+  "literal 'какого товар'": 1,
+  "literal 'какой товар'": 1,
+  "literal 'лучше всего'": 1
+ },
+ "z11_sales.py": {
+  "any-in-q 'revenue'": 1,
+  "any-in-q 'sales'": 3,
+  "any-in-q 'больше всего'": 1,
+  "any-in-q 'лидер продаж'": 2,
+  "any-in-q 'лучше всего'": 3,
+  "any-in-q 'меньше всего'": 1,
+  "any-in-q 'нет продаж'": 1,
+  "any-in-q 'номенклатур'": 1,
+  "any-in-q 'остат'": 1,
+  "any-in-q 'продаж нет'": 1,
+  "any-in-q 'продаж'": 1,
+  "any-in-q 'склад'": 1,
+  "any-in-q 'топ продаж'": 2,
+  "any-in-q 'хуже всего'": 3,
+  "literal 'sales_rank_hint_canon'": 1
+ }
+}
