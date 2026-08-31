@@ -581,11 +581,11 @@ def ask_web(
     token: str,
     timeout: int,
     retries: int,
-    model: str = "main",
+    model: str = "",
 ) -> PathAnswer:
     t0 = time.time()
     body = {
-        "model": model,
+        "model": model or os.environ.get("I2_WEB_MODEL", "main"),
         "messages": [{"role": "user", "content": question}],
     }
     data, err = _http_post_json(url, token, body, timeout=timeout, retries=retries)

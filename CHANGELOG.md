@@ -1,3 +1,13 @@
+## 2026-08-31 — И2: точечная правка блокера web-модели
+
+**[код]** `work/gold/i2_runner.py`: model для chatCompletions читается из env
+`I2_WEB_MODEL` (умолчание прежнее `main`). Причина живьём: гейтвей OpenClaw
+`--profile web` (:18801) отклоняет `main` — «Use `openclaw` or
+`openclaw/<agentId>`»; прогона И2 веб-путём без этого нет.
+**Числа:** smoke `model=openclaw` → «3 склада» (= эталон stores_count), 401 без
+токена профиля web, замок test_client_gold.py PASS 57/0.
+**Доки:** work/gold/README.md §И2.
+
 ## 2026-08-31 — И2: живая пересъёмка эталонов в раннере + диагноз coverage-хвоста
 
 **[код]** `work/gold/i2_runner.py`: `--reshoot-rules` + `I2_RESHOOT_DSN` — эталон
