@@ -1,0 +1,553 @@
+{
+  "rules": {
+    "sales_sum": {
+      "sql": "SELECT round(sum(nums['Всего']),2) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND doc_date >= '{from}' AND doc_date < '{to}'",
+      "no_data": false
+    },
+    "clients_now": {
+      "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_контрагенты' AND NOT coalesce(flags['IsFolder'],false) AND NOT coalesce(flags['DeletionMark'],false)",
+      "no_data": false
+    },
+    "sku_count": {
+      "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_номенклатура' AND NOT coalesce(flags['IsFolder'],false) AND NOT coalesce(flags['DeletionMark'],false)",
+      "no_data": false
+    },
+    "buyers_12m": {
+      "sql": "SELECT count(DISTINCT refs_map['Контрагент']) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND nums['Всего'] >= 0 AND doc_date >= '{from}' AND doc_date < '{to}'",
+      "no_data": false
+    },
+    "month_buyers": {
+      "sql": "SELECT count(DISTINCT refs_map['Контрагент']) FROM search_corpus WHERE src_table='accumulationregister_реализациятмц' AND nums['Всего'] >= 0 AND doc_date >= '{from}' AND doc_date < '{to}'",
+      "no_data": false
+    },
+    "org_count": {
+      "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_организации'",
+      "no_data": false
+    },
+    "bank_count": {
+      "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_банки'",
+      "no_data": false
+    },
+    "val_count": {
+      "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_валюты'",
+      "no_data": false
+    },
+    "stores_count": {
+      "sql": "SELECT count(*) FROM search_corpus WHERE src_table='catalog_местахранения'",
+      "no_data": false
+    },
+    "reg_rows": {
+      "sql": "SELECT count(*) FROM search_corpus WHERE src_table='{table}'",
+      "no_data": false
+    },
+    "reg_rows_30d": {
+      "sql": "SELECT count(*) FROM search_corpus WHERE src_table='{table}' AND doc_date >= '{from}' AND doc_date < '{to}'",
+      "no_data": false
+    },
+    "no_stock": {
+      "no_data": true
+    }
+  },
+  "bindings": {
+    "а на прошлой неделе сколько наторговали": {
+      "rule": "sales_sum",
+      "bounds": [
+        "week_start-7",
+        "week_start"
+      ]
+    },
+    "а сколько наторговали в воскресенье": {
+      "rule": "sales_sum",
+      "bounds": [
+        "last_sunday",
+        "last_sunday+1"
+      ]
+    },
+    "вчера сколько продали": {
+      "rule": "sales_sum",
+      "bounds": [
+        "today-1",
+        "today"
+      ]
+    },
+    "какие есть склады": {
+      "rule": "stores_count",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "какие позиции имеют нулевой остаток на складе": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "количество уникальных позиций номенклатуры на остатках по складам с разбивкой по складам": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "места хранения: перечислить склады": {
+      "rule": "stores_count",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "остатки номенклатуры по всем складам, количество позиций на каждый склад отдельно": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "остатки по каждому складу отдельно": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "остатки по складам: сколько позиций номенклатуры на каждом складе": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "остатки товаров по складам: сколько позиций на каждом складе": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "по каким складам числятся остатки товаров и сколько позиций на каждом складе": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "позавчера сколько было продаж": {
+      "rule": "sales_sum",
+      "bounds": [
+        "today-2",
+        "today-1"
+      ]
+    },
+    "позиции номенклатуры с нулевым остатком": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "покажи остатки по каждому складу": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "покажите остатки по всем трем складам сразу": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "покажите остатки по каждому складу отдельно": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "покажите позиции с нулевым остатком": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сегодня сколько уже наотгружали": {
+      "rule": "sales_sum",
+      "bounds": [
+        "today",
+        "today+1"
+      ]
+    },
+    "сколько банков в справочнике": {
+      "rule": "bank_count",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько было в прошлом месяце всего": {
+      "rule": "sales_sum",
+      "bounds": [
+        "month_start-1m",
+        "month_start"
+      ]
+    },
+    "сколько валют": {
+      "rule": "val_count",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько всего позиций номенклатуры числится на всех складах компании": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько всего складов и какие у них названия": {
+      "rule": "stores_count",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько движений в регистре «допзатратыимпорттмц": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_допзатратыимпорттмц"
+    },
+    "сколько движений в регистре «допзатратыимпорттмц» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_допзатратыимпорттмц"
+    },
+    "сколько движений в регистре «импорттмц": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_импорттмц"
+    },
+    "сколько движений в регистре «импорттмц» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_импорттмц"
+    },
+    "сколько движений в регистре «кассовыеордера": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_кассовыеордера"
+    },
+    "сколько движений в регистре «кассовыеордера» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_кассовыеордера"
+    },
+    "сколько движений в регистре «книгапокупок": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_книгапокупок"
+    },
+    "сколько движений в регистре «книгапокупок» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_книгапокупок"
+    },
+    "сколько движений в регистре «книгапродаж": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_книгапродаж"
+    },
+    "сколько движений в регистре «книгапродаж» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_книгапродаж"
+    },
+    "сколько движений в регистре «налогипопериодудействия": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_налогипопериодудействия"
+    },
+    "сколько движений в регистре «налогипопериодудействия» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_налогипопериодудействия"
+    },
+    "сколько движений в регистре «номерабсо": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_номерабсо"
+    },
+    "сколько движений в регистре «номерабсо» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_номерабсо"
+    },
+    "сколько движений в регистре «отработанноевремя": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_отработанноевремя"
+    },
+    "сколько движений в регистре «отработанноевремя» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_отработанноевремя"
+    },
+    "сколько движений в регистре «расчетныеначисления": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_расчетныеначисления"
+    },
+    "сколько движений в регистре «расчетныеначисления» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_расчетныеначисления"
+    },
+    "сколько движений в регистре «реализациятмц": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_реализациятмц"
+    },
+    "сколько движений в регистре «реализациятмц» за последние 30 дней": {
+      "rule": "reg_rows_30d",
+      "bounds": [
+        "today-30",
+        "today+1"
+      ],
+      "table": "accumulationregister_реализациятмц"
+    },
+    "сколько движений в регистре реализации тмц": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_реализациятмц"
+    },
+    "сколько за этот месяц уже вышло": {
+      "rule": "sales_sum",
+      "bounds": [
+        "month_start",
+        "today+1"
+      ]
+    },
+    "сколько записей в «допзатратыимпорттмц": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_допзатратыимпорттмц"
+    },
+    "сколько записей в «импорттмц": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_импорттмц"
+    },
+    "сколько записей в «кассовыеордера": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_кассовыеордера"
+    },
+    "сколько записей в «книгапокупок": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_книгапокупок"
+    },
+    "сколько записей в «книгапродаж": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_книгапродаж"
+    },
+    "сколько записей в «налогипопериодудействия": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_налогипопериодудействия"
+    },
+    "сколько записей в «номерабсо": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_номерабсо"
+    },
+    "сколько записей в «отработанноевремя": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_отработанноевремя"
+    },
+    "сколько записей в «расчетныеначисления": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_расчетныеначисления"
+    },
+    "сколько записей в «реализациятмц": {
+      "rule": "reg_rows",
+      "bounds": [
+        null,
+        null
+      ],
+      "table": "accumulationregister_реализациятмц"
+    },
+    "сколько из клиентов реально покупают": {
+      "rule": "buyers_12m",
+      "bounds": [
+        "today-365",
+        "today+1"
+      ]
+    },
+    "сколько на складе позиций всего": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько организаций": {
+      "rule": "org_count",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько позиций на всех складах вместе": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько позиций на каждом складе отдельно": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько позиций у нас в прайсе всего": {
+      "rule": "sku_count",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько покупателей было за этот месяц": {
+      "rule": "month_buyers",
+      "bounds": [
+        "month_start",
+        "today+1"
+      ]
+    },
+    "сколько сделали за эту неделю": {
+      "rule": "sales_sum",
+      "bounds": [
+        "week_start",
+        "today+1"
+      ]
+    },
+    "сколько у нас вообще клиентов сейчас": {
+      "rule": "clients_now",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "сколько у нас петель осталось на складе": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    },
+    "покажите список складов с количеством позиций по каждому": {
+      "rule": "no_stock",
+      "bounds": [
+        null,
+        null
+      ]
+    }
+  }
+}

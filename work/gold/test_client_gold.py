@@ -297,6 +297,197 @@ t(
 )
 
 
+# --- И2 reshoot: офлайн классификация / границы / SQL (без сети и БД) ---
+from datetime import date  # noqa: E402
+
+_RULES_PATH = os.path.join(ROOT, "work", "gold", "reshoot-rules-okna.json")
+_OKNA_TSV = os.path.join(ROOT, "ubuntu", "serenedb", "client-gold-okna.tsv")
+
+# Явный список вопросов без биндинга (сегодня пуст — полнота правил).
+_UNCLASSIFIED_OKNA: list[str] = []
+
+_rules_doc = I2.load_reshoot_rules(_RULES_PATH)
+_okna_rows = CG.parse_client_gold_tsv(open(_OKNA_TSV, encoding="utf-8").read())
+t("reshoot: json loads", isinstance(_rules_doc.get("rules"), dict))
+t("reshoot: 67 okna questions", len(_okna_rows) == 67, len(_okna_rows))
+
+_unclassified = []
+for _r in _okna_rows:
+    _nq = CG.normalize_question(_r["question"])
+    if _nq not in _rules_doc["bindings"]:
+        if _r["question"] not in _UNCLASSIFIED_OKNA:
+            _unclassified.append(_r["question"])
+t(
+    "reshoot: all 67 bound or listed unclassified",
+    len(_unclassified) == 0 and len(_UNCLASSIFIED_OKNA) == 0,
+    _unclassified[:5],
+)
+t(
+    "reshoot: binding keys == normalize_question",
+    all(
+        CG.normalize_question(r["question"]) in _rules_doc["bindings"]
+        for r in _okna_rows
+    ),
+)
+
+# Границы на фиксированных датах (Chisinau-календарь).
+_d_mon = date(2026, 8, 31)  # понедельник
+t("bound: today-1 Mon→Sun", I2.eval_bound_expr("today-1", _d_mon) == date(2026, 8, 30))
+t(
+    "bound: last_sunday Mon",
+    I2.eval_bound_expr("last_sunday", _d_mon) == date(2026, 8, 30),
+)
+t(
+    "bound: week_start Mon",
+    I2.eval_bound_expr("week_start", _d_mon) == date(2026, 8, 31),
+)
+t(
+    "bound: month_start",
+    I2.eval_bound_expr("month_start", _d_mon) == date(2026, 8, 1),
+)
+t(
+    "bound: month_start-1m",
+    I2.eval_bound_expr("month_start-1m", _d_mon) == date(2026, 7, 1),
+)
+t(
+    "bound: week_start-7",
+    I2.eval_bound_expr("week_start-7", _d_mon) == date(2026, 8, 24),
+)
+t(
+    "bound: today-30",
+    I2.eval_bound_expr("today-30", _d_mon) == date(2026, 8, 1),
+)
+_d_tue = date(2026, 9, 1)  # вторник
+t(
+    "bound: last_sunday Tue",
+    I2.eval_bound_expr("last_sunday", _d_tue) == date(2026, 8, 30),
+)
+t(
+    "bound: today-1 Tue→Mon",
+    I2.eval_bound_expr("today-1", _d_tue) == date(2026, 8, 31),
+)
+
+# SQL-плейсхолдеры: после подстановки {from}/{to}/{table} нет.
+_ph_ok = True
+_ph_detail = ""
+for _nq, _b in _rules_doc["bindings"].items():
+    _rule = _rules_doc["rules"].get(_b["rule"]) or {}
+    if _rule.get("no_data"):
+        continue
+    _sql = _rule.get("sql") or ""
+    _bounds = _b.get("bounds") or [None, None]
+    _from = I2.eval_bound_expr(_bounds[0], _d_mon) if _bounds[0] else None
+    _to = I2.eval_bound_expr(_bounds[1], _d_mon) if _bounds[1] else None
+    _filled = I2.fill_rule_sql(
+        _sql, from_d=_from, to_d=_to, table=_b.get("table"),
+    )
+    if "{from}" in _filled or "{to}" in _filled or "{table}" in _filled:
+        _ph_ok = False
+        _ph_detail = _nq
+        break
+    # где в шаблоне ждали даты — они на месте
+    if "{from}" in _sql and _from is not None:
+        if _from.isoformat() not in _filled:
+            _ph_ok = False
+            _ph_detail = "from missing: " + _nq
+            break
+    if "{to}" in _sql and _to is not None:
+        if _to.isoformat() not in _filled:
+            _ph_ok = False
+            _ph_detail = "to missing: " + _nq
+            break
+t("reshoot: sql placeholders filled", _ph_ok, _ph_detail)
+
+# Живая пересъёмка на мок-клиенте (без сети).
+_reshoot_calls: list[str] = []
+
+
+def _reshoot_fake_sql(sql: str) -> str:
+    _reshoot_calls.append(sql)
+    # CorpusClient.scalar → batch с slice_i|value (один скаляр — без UNION ALL).
+    if "slice_i" in sql:
+        if "build_state" in sql:
+            return "0|42\n"
+        if "round(sum" in sql:
+            return "0|1234.5\n"
+        if "count(DISTINCT" in sql:
+            return "0|17\n"
+        return "0|9\n"
+    if "build_state" in sql:
+        return "42\n"
+    return "0\n"
+
+
+_reshoot_client = E.CorpusClient("x", run_sql=_reshoot_fake_sql)
+_sample = [
+    I2.QuestionRow("вчера сколько продали", "0"),
+    I2.QuestionRow("сколько у нас петель осталось на складе", "999"),
+    I2.QuestionRow("вопрос без биндинга xyz", "5"),
+]
+_stats = I2.apply_reshoot(
+    _sample, _rules_doc, _reshoot_client, today=_d_mon,
+)
+t("reshoot: live money etalon", _sample[0].etalon == "1234.50", _sample[0].etalon)
+t("reshoot: no_stock → no_data", _sample[1].etalon == "no_data")
+t(
+    "reshoot: unbound keeps tsv",
+    _sample[2].etalon == "5" and _sample[2].etalon_origin == I2.ETALON_ORIGIN_TSV,
+)
+t(
+    "reshoot: stats live/tsv",
+    _stats.live == 2 and _stats.tsv == 1 and _stats.reshoot_error == 0,
+    _stats.as_dict(),
+)
+t("reshoot: freshness from build_state", _stats.freshness_lag_sec == 42)
+t(
+    "reshoot: report mentions live/tsv",
+    "эталоны: live 2 / tsv 1" in I2.format_report(_sample, {}, reshoot=_stats),
+)
+
+# Ошибка SQL → origin reshoot_error, вердикт unresolved после прогона.
+def _boom_sql(sql: str) -> str:
+    if "build_state" in sql:
+        if "slice_i" in sql:
+            return "0|1\n"
+        return "1\n"
+    raise RuntimeError("table missing")
+
+
+_boom_row = [I2.QuestionRow("вчера сколько продали", "0")]
+I2.apply_reshoot(
+    _boom_row, _rules_doc, E.CorpusClient("x", run_sql=_boom_sql), today=_d_mon,
+)
+t(
+    "reshoot: sql error origin",
+    _boom_row[0].etalon_origin == I2.ETALON_ORIGIN_ERROR,
+    _boom_row[0].reshoot_error,
+)
+
+
+def _eng_ok(q: str) -> I2.PathAnswer:
+    return I2.PathAnswer(I2.PATH_ENGINE, text="1", kind="answer", diag={"found": 1})
+
+
+I2.run_i2(
+    _boom_row,
+    paths=[I2.PATH_ENGINE],
+    engine_ask=_eng_ok,
+    reshoot_stats=I2.ReshootStats(reshoot_error=1),
+)
+t(
+    "reshoot: error → unresolved verdict",
+    _boom_row[0].engine is not None
+    and _boom_row[0].engine.verdict == I2.VERDICT_UNRESOLVED
+    and "reshoot_error" in (_boom_row[0].engine.transport_error or ""),
+)
+
+# Без правил — поведение как раньше (мок).
+t(
+    "reshoot: without rules mock still ok",
+    _i2_mock_ok(),
+)
+
+
 print()
 print("PASS %d  FAIL %d" % (PASS, len(FAIL)))
 if FAIL:

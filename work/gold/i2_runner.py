@@ -13,6 +13,9 @@
 Вердикт читает поля решения ask (kind, diag.found, diag.doubt, atom/figures),
 не словари фраз в тексте.
 
+Опционально --reshoot-rules + I2_RESHOOT_DSN: эталон «Д»-вопросов пересчитывается
+по корпусу тем же SQL в момент прогона (Europe/Chisinau). Без правил — эталоны из TSV.
+
 Env:
   I2_IN              — TSV-набор (умолч. ubuntu/serenedb/client-gold-okna.tsv)
   I2_OUT             — каталог отчёта (умолч. work/gold/runs/i2-<tag>)
@@ -24,6 +27,7 @@ Env:
   I2_ENGINE_TIMEOUT  — сек на вопрос engine (умолч. 120)
   I2_WEB_TIMEOUT     — сек на вопрос web (умолч. 200)
   I2_RETRIES         — ретраи транспорта (умолч. 3)
+  I2_RESHOOT_DSN     — DSN корпуса для живой пересъёмки эталонов
 """
 from __future__ import annotations
 
@@ -36,16 +40,32 @@ import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Callable, Optional
+from zoneinfo import ZoneInfo
 
 _REPO = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _SERENEDB = os.path.join(_REPO, "ubuntu", "serenedb")
+_GOLD_DIR = os.path.dirname(os.path.abspath(__file__))
 if _SERENEDB not in sys.path:
     sys.path.insert(0, _SERENEDB)
+if _GOLD_DIR not in sys.path:
+    sys.path.insert(0, _GOLD_DIR)
 
 import etalon_1c as E  # noqa: E402
 
-from client_gold import parse_client_gold_tsv  # noqa: E402
+from client_gold import (  # noqa: E402
+    fetch_freshness_lag_sec,
+    normalize_question,
+    parse_client_gold_tsv,
+)
+
+CHISINAU = ZoneInfo("Europe/Chisinau")
+ETALON_ORIGIN_TSV = "tsv"
+ETALON_ORIGIN_LIVE = "live"
+ETALON_ORIGIN_ERROR = "reshoot_error"
+_MONEY_RULES = frozenset({"sales_sum"})
 
 PATH_ENGINE = "engine"
 PATH_WEB = "web"
@@ -262,6 +282,235 @@ class QuestionRow:
     etalon: str
     engine: Optional[PathAnswer] = None
     web: Optional[PathAnswer] = None
+    etalon_origin: str = ETALON_ORIGIN_TSV
+    reshoot_error: str = ""
+
+
+def chisinau_today(now: Optional[datetime] = None) -> date:
+    """«Сегодня» сервиса: Europe/Chisinau, не CURRENT_DATE базы (UTC)."""
+    if now is None:
+        now = datetime.now(CHISINAU)
+    elif now.tzinfo is None:
+        now = now.replace(tzinfo=CHISINAU)
+    else:
+        now = now.astimezone(CHISINAU)
+    return now.date()
+
+
+def week_start(d: date) -> date:
+    """Понедельник календарной недели (как date_trunc('week', …))."""
+    return d - timedelta(days=d.weekday())
+
+
+def last_sunday(d: date) -> date:
+    """Последнее прошедшее воскресенье: today - (isodow % 7)."""
+    return d - timedelta(days=(d.isoweekday() % 7))
+
+
+def month_start(d: date) -> date:
+    return d.replace(day=1)
+
+
+def month_start_prev(d: date) -> date:
+    ms = month_start(d)
+    return (ms - timedelta(days=1)).replace(day=1)
+
+
+def eval_bound_expr(expr: Optional[str], d: date) -> Optional[date]:
+    """Выражение границы из правил → дата относительно Chisinau-сегодня d."""
+    if expr is None or expr == "":
+        return None
+    e = str(expr).strip()
+    if e == "today":
+        return d
+    if e == "today-1":
+        return d - timedelta(days=1)
+    if e == "today-2":
+        return d - timedelta(days=2)
+    if e == "today+1":
+        return d + timedelta(days=1)
+    if e == "today-30":
+        return d - timedelta(days=30)
+    if e == "today-365":
+        return d - timedelta(days=365)
+    if e == "week_start":
+        return week_start(d)
+    if e == "week_start-7":
+        return week_start(d) - timedelta(days=7)
+    if e == "month_start":
+        return month_start(d)
+    if e == "month_start-1m":
+        return month_start_prev(d)
+    if e == "last_sunday":
+        return last_sunday(d)
+    if e == "last_sunday+1":
+        return last_sunday(d) + timedelta(days=1)
+    raise ValueError("unknown bound expr: %r" % (expr,))
+
+
+def load_reshoot_rules(path: str) -> dict:
+    with open(path, encoding="utf-8") as fh:
+        raw = json.load(fh)
+    if not isinstance(raw, dict) or "rules" not in raw or "bindings" not in raw:
+        raise ValueError("reshoot-rules: нужен объект {rules, bindings}")
+    return raw
+
+
+def fill_rule_sql(
+    sql: str,
+    *,
+    from_d: Optional[date] = None,
+    to_d: Optional[date] = None,
+    table: Optional[str] = None,
+) -> str:
+    """Подстановка {from}/{to}/{table} в SQL правила."""
+    out = sql
+    if table is not None:
+        out = out.replace("{table}", table)
+    if from_d is not None:
+        out = out.replace("{from}", from_d.isoformat())
+    if to_d is not None:
+        out = out.replace("{to}", to_d.isoformat())
+    return out
+
+
+def format_reshoot_etalon(value: Any, *, money: bool) -> str:
+    """Формат эталона как в TSV: money → 2 знака, счёт → целое."""
+    if value is None or str(value).strip() == "":
+        return "0.00" if money else "0"
+    if money:
+        try:
+            d = E.to_decimal(value)
+        except ValueError:
+            d = Decimal("0")
+        q = d.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return format(q, "f")
+    try:
+        d = E.to_decimal(value)
+        return str(int(d))
+    except (ValueError, OverflowError):
+        return str(value).strip()
+
+
+@dataclass
+class ReshootStats:
+    live: int = 0
+    tsv: int = 0
+    reshoot_error: int = 0
+    freshness_lag_sec: Optional[int] = None
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "live": self.live,
+            "tsv": self.tsv,
+            "reshoot_error": self.reshoot_error,
+            "freshness_lag_sec": self.freshness_lag_sec,
+        }
+
+
+def reshoot_row_etalon(
+    row: QuestionRow,
+    rules_doc: dict,
+    client: E.CorpusClient,
+    *,
+    today: Optional[date] = None,
+) -> str:
+    """Переснять эталон одной строки. Возвращает origin: live|tsv|reshoot_error."""
+    bindings = rules_doc.get("bindings") or {}
+    rules = rules_doc.get("rules") or {}
+    key = normalize_question(row.question)
+    binding = bindings.get(key)
+    if not binding:
+        row.etalon_origin = ETALON_ORIGIN_TSV
+        row.reshoot_error = ""
+        return ETALON_ORIGIN_TSV
+
+    rule_id = binding.get("rule") or ""
+    rule = rules.get(rule_id) or {}
+    if rule.get("no_data"):
+        row.etalon = "no_data"
+        row.etalon_origin = ETALON_ORIGIN_LIVE
+        row.reshoot_error = ""
+        return ETALON_ORIGIN_LIVE
+
+    sql_tpl = rule.get("sql") or ""
+    if not sql_tpl:
+        row.etalon_origin = ETALON_ORIGIN_ERROR
+        row.reshoot_error = "empty sql for rule %s" % rule_id
+        return ETALON_ORIGIN_ERROR
+
+    d = today or chisinau_today()
+    bounds = binding.get("bounds") or [None, None]
+    if len(bounds) < 2:
+        bounds = list(bounds) + [None] * (2 - len(bounds))
+    try:
+        from_d = eval_bound_expr(bounds[0], d)
+        to_d = eval_bound_expr(bounds[1], d)
+    except ValueError as exc:
+        row.etalon_origin = ETALON_ORIGIN_ERROR
+        row.reshoot_error = str(exc)
+        return ETALON_ORIGIN_ERROR
+
+    table = binding.get("table")
+    sql = fill_rule_sql(sql_tpl, from_d=from_d, to_d=to_d, table=table)
+    if "{from}" in sql or "{to}" in sql or "{table}" in sql:
+        row.etalon_origin = ETALON_ORIGIN_ERROR
+        row.reshoot_error = "unfilled placeholder in sql"
+        return ETALON_ORIGIN_ERROR
+
+    try:
+        raw = client.scalar(sql)
+    except Exception as exc:  # noqa: BLE001 — прибор фиксирует любую ошибку SQL
+        row.etalon_origin = ETALON_ORIGIN_ERROR
+        row.reshoot_error = "%s: %s" % (type(exc).__name__, exc)
+        return ETALON_ORIGIN_ERROR
+
+    money = rule_id in _MONEY_RULES
+    row.etalon = format_reshoot_etalon(raw, money=money)
+    row.etalon_origin = ETALON_ORIGIN_LIVE
+    row.reshoot_error = ""
+    return ETALON_ORIGIN_LIVE
+
+
+def apply_reshoot(
+    rows: list[QuestionRow],
+    rules_doc: dict,
+    client: E.CorpusClient,
+    *,
+    today: Optional[date] = None,
+) -> ReshootStats:
+    """Один раз на вопрос до HTTP: живой эталон для обоих путей."""
+    stats = ReshootStats()
+    try:
+        lag = fetch_freshness_lag_sec(client)
+        stats.freshness_lag_sec = lag
+    except Exception:  # noqa: BLE001
+        stats.freshness_lag_sec = None
+
+    d = today or chisinau_today()
+    for row in rows:
+        origin = reshoot_row_etalon(row, rules_doc, client, today=d)
+        if origin == ETALON_ORIGIN_LIVE:
+            stats.live += 1
+        elif origin == ETALON_ORIGIN_ERROR:
+            stats.reshoot_error += 1
+        else:
+            stats.tsv += 1
+    return stats
+
+
+def force_reshoot_error_verdicts(rows: list[QuestionRow]) -> None:
+    """Строки с ошибкой пересъёмки → unresolved (оба пути), прогон не рвётся."""
+    for row in rows:
+        if row.etalon_origin != ETALON_ORIGIN_ERROR:
+            continue
+        reason = "reshoot_error: %s" % (row.reshoot_error or "unknown")
+        for ans in (row.engine, row.web):
+            if ans is None:
+                continue
+            ans.verdict = VERDICT_UNRESOLVED
+            if not ans.transport_error:
+                ans.transport_error = reason
 
 
 def _http_post_json(
@@ -410,10 +659,24 @@ def summarize(rows: list[QuestionRow], path: str) -> dict[str, Any]:
     }
 
 
-def format_report(rows: list[QuestionRow], summaries: dict[str, dict]) -> str:
+def format_report(
+    rows: list[QuestionRow],
+    summaries: dict[str, dict],
+    *,
+    reshoot: Optional[ReshootStats] = None,
+) -> str:
     lines: list[str] = []
     lines.append("# И2 client-gold: два пути")
     lines.append("")
+    if reshoot is not None:
+        lag = reshoot.freshness_lag_sec
+        lag_s = str(lag) if lag is not None else "?"
+        lines.append("## эталоны")
+        lines.append(
+            "эталоны: live %d / tsv %d; reshoot_error %d; freshness_lag_sec=%s"
+            % (reshoot.live, reshoot.tsv, reshoot.reshoot_error, lag_s)
+        )
+        lines.append("")
     for key in (PATH_ENGINE, PATH_WEB):
         s = summaries.get(key)
         if not s:
@@ -435,7 +698,7 @@ def format_report(rows: list[QuestionRow], summaries: dict[str, dict]) -> str:
 
     lines.append("## построчная разница путей")
     lines.append(
-        "question\tetalon\tverdict_engine\tverdict_web\t"
+        "question\tetalon\tetalon_origin\tverdict_engine\tverdict_web\t"
         "nums_engine\tnums_web\tlatency_engine_s\tlatency_web_s"
     )
     for row in rows:
@@ -452,6 +715,7 @@ def format_report(rows: list[QuestionRow], summaries: dict[str, dict]) -> str:
                 [
                     row.question.replace("\t", " ").replace("\n", " "),
                     str(row.etalon or ""),
+                    row.etalon_origin or ETALON_ORIGIN_TSV,
                     (e.verdict if e else "—"),
                     (w.verdict if w else "—"),
                     ne or "—",
@@ -494,8 +758,12 @@ def run_i2(
     engine_ask: Optional[Callable[[str], PathAnswer]] = None,
     web_ask: Optional[Callable[[str], PathAnswer]] = None,
     out_dir: Optional[str] = None,
+    reshoot_stats: Optional[ReshootStats] = None,
 ) -> tuple[list[QuestionRow], dict[str, dict], str]:
-    """Прогон набора. ask_* — подмена для тестов."""
+    """Прогон набора. ask_* — подмена для тестов.
+
+    reshoot_stats — уже посчитанные живые эталоны (один раз на вопрос до HTTP).
+    """
     summaries: dict[str, dict] = {}
     if PATH_ENGINE in paths:
         fn = engine_ask or (lambda q: PathAnswer(path=PATH_ENGINE, transport_error="no engine mock"))
@@ -506,7 +774,22 @@ def run_i2(
         run_path(rows, PATH_WEB, fn)
         summaries[PATH_WEB] = summarize(rows, PATH_WEB)
 
-    report = format_report(rows, summaries)
+    force_reshoot_error_verdicts(rows)
+    # пересчёт counts после принудительного unresolved на reshoot_error
+    for p in list(summaries):
+        summaries[p] = summarize(rows, p)
+
+    if reshoot_stats is not None:
+        summaries["etalons"] = {
+            "live": reshoot_stats.live,
+            "tsv": reshoot_stats.tsv,
+            "reshoot_error": reshoot_stats.reshoot_error,
+            "freshness_lag_sec": reshoot_stats.freshness_lag_sec,
+            "summary": "эталоны: live %d / tsv %d"
+            % (reshoot_stats.live, reshoot_stats.tsv),
+        }
+
+    report = format_report(rows, summaries, reshoot=reshoot_stats)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
         with open(os.path.join(out_dir, "i2-report.md"), "w", encoding="utf-8") as fh:
@@ -519,6 +802,8 @@ def run_i2(
                 rec = {
                     "question": row.question,
                     "etalon": row.etalon,
+                    "etalon_origin": row.etalon_origin,
+                    "reshoot_error": row.reshoot_error,
                     "engine": None,
                     "web": None,
                 }
@@ -557,6 +842,23 @@ def cmd_run(args: argparse.Namespace) -> int:
     if not rows:
         print("пустой набор: %s" % tsv, file=sys.stderr)
         return 2
+
+    rules_path = (args.reshoot_rules or "").strip()
+    reshoot_dsn = (
+        os.environ.get("I2_RESHOOT_DSN")
+        or os.environ.get("SERENEDB_DSN")
+        or ""
+    ).strip()
+    reshoot_stats: Optional[ReshootStats] = None
+    rules_doc: Optional[dict] = None
+    if rules_path:
+        rules_doc = load_reshoot_rules(rules_path)
+        if not reshoot_dsn and not args.dry:
+            print(
+                "нужен I2_RESHOOT_DSN (или SERENEDB_DSN) при --reshoot-rules",
+                file=sys.stderr,
+            )
+            return 2
 
     engine_url = (
         args.engine_url
@@ -602,8 +904,29 @@ def cmd_run(args: argparse.Namespace) -> int:
         )
 
     if args.dry:
-        print("dry-run: %d вопросов, paths=%s → %s" % (len(rows), paths, out_dir))
+        extra = ""
+        if rules_path:
+            extra = "; reshoot-rules=%s dsn=%s" % (
+                rules_path,
+                "set" if reshoot_dsn else "unset",
+            )
+        print(
+            "dry-run: %d вопросов, paths=%s → %s%s"
+            % (len(rows), paths, out_dir, extra)
+        )
         return 0
+
+    if rules_doc is not None:
+        client = E.CorpusClient(reshoot_dsn)
+        reshoot_stats = apply_reshoot(rows, rules_doc, client)
+        sys.stderr.write(
+            "эталоны: live %d / tsv %d (reshoot_error %d)\n"
+            % (
+                reshoot_stats.live,
+                reshoot_stats.tsv,
+                reshoot_stats.reshoot_error,
+            )
+        )
 
     _, summaries, report = run_i2(
         rows,
@@ -611,10 +934,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         engine_ask=engine_ask,
         web_ask=web_ask,
         out_dir=out_dir,
+        reshoot_stats=reshoot_stats,
     )
     print(report)
     sys.stderr.write("отчёт: %s\n" % out_dir)
     for p, s in summaries.items():
+        if p == "etalons":
+            sys.stderr.write("%s\n" % s.get("summary", s))
+            continue
         sys.stderr.write(
             "%s: уверенно неверных = %d из %d\n"
             % (p, s["confident_wrong"], s["total"])
@@ -647,6 +974,11 @@ def build_parser() -> argparse.ArgumentParser:
     r.add_argument("--engine-timeout", type=int, default=0)
     r.add_argument("--web-timeout", type=int, default=0)
     r.add_argument("--retries", type=int, default=0)
+    r.add_argument(
+        "--reshoot-rules",
+        default="",
+        help="JSON правил живой пересъёмки эталонов (корпус); без него — TSV",
+    )
     r.add_argument(
         "--dry",
         action="store_true",
