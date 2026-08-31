@@ -140,6 +140,17 @@ WHERE было > 0 AND стало > 0 AND стало >= было
   AND (было - matched_exact)::DOUBLE / было >= 0.9
   AND abs(стало - было)::DOUBLE / было <= 0.05;
 
+-- Правка строки при перепроведении: тот же refs (та же строка данных), новый
+-- контент → новый sha-ключ. Это изменение из 1С, а не потеря: пара по refs
+-- доказывает, что строка жива в новой сборке. Такие строки уходят из
+-- «уйдёт» частичной потери.
+CREATE OR REPLACE TABLE tmp3_merge_edited_delta AS
+SELECT u.src_table, count(*)::BIGINT AS правок
+FROM tmp3_merge_unmatched u
+WHERE EXISTS (SELECT 1 FROM tmp3_corpus t
+              WHERE t.src_table = u.src_table AND t.refs = u.refs)
+GROUP BY 1;
+
 CREATE OR REPLACE TABLE tmp3_merge_unmatched AS
 SELECT c.src_table, c.row_key
 FROM search_corpus c
@@ -183,7 +194,8 @@ CREATE OR REPLACE TABLE tmp3_merge_ent_guard AS
 SELECT e.src_table,
        coalesce(o.было, 0::BIGINT) AS было,
        CASE WHEN w.src_table IS NOT NULL THEN w.было
-            ELSE coalesce(u.уйдёт, 0::BIGINT) END AS уйдёт,
+            ELSE greatest(coalesce(u.уйдёт, 0::BIGINT) - coalesce(ed.правок, 0::BIGINT), 0::BIGINT)
+       END AS уйдёт,
        e.стало
 FROM (SELECT src_table, count(*)::BIGINT AS стало FROM tmp3_corpus GROUP BY 1) e
 LEFT JOIN (
@@ -195,6 +207,7 @@ LEFT JOIN (
 LEFT JOIN (
   SELECT src_table, count(*)::BIGINT AS уйдёт FROM tmp3_merge_unmatched GROUP BY 1
 ) u USING (src_table)
+LEFT JOIN tmp3_merge_edited_delta ed USING (src_table)
 LEFT JOIN tmp3_merge_rewrite_wave w USING (src_table);
 
 SELECT CASE WHEN count(*) > 0
@@ -336,14 +349,33 @@ SELECT CASE WHEN count(*) > 0
                                 ', ' ORDER BY src_table, rec)) END
 FROM tmp3_merge_transport_defect;
 
+-- Допуск на легитимные удаления 1С при перепроведении (без пары по refs:
+-- строка и в витрине исчезла). Порог — доля от «было», не абсолютное число:
+-- защита от потери стелажа остаётся (массовая пропажа > 0.1% — STOP),
+-- единичные удаления строк (замер 31.08: 10 из 76 214 = 0.013%) — дельта.
 SELECT CASE WHEN count(*) > 0
        THEN error('corpus_merge: частичная потеря объектов у сущностей: '
                   || string_agg(src_table || ' (' || уйдёт || ' из ' || было || ')',
                                 ', ')) END
 FROM tmp3_merge_ent_guard g
 WHERE g.уйдёт > 0 AND g.уйдёт < g.было
+  AND g.уйдёт::DOUBLE > g.было * 0.001
   AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse k WHERE k.src_table = g.src_table)
   AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_deleted_delta k WHERE k.src_table = g.src_table);
+
+DELETE FROM search_quality WHERE k LIKE 'entity_source_delta:%' OR k LIKE 'entity_edited_delta:%';
+INSERT INTO search_quality
+SELECT 'entity_edited_delta:' || src_table, правок,
+       'строк правлено при перепроведении (пара по refs, контент изменён)'
+FROM tmp3_merge_edited_delta;
+
+INSERT INTO search_quality
+SELECT 'entity_source_delta:' || g.src_table, g.уйдёт,
+       'легитимные удаления 1С (нет пары по refs; доля ' ||
+       round(g.уйдёт::DOUBLE / greatest(g.было,1) * 100, 3) || '% <= 0.1%)'
+FROM tmp3_merge_ent_guard g
+WHERE g.уйдёт > 0 AND g.уйдёт < g.было
+  AND g.уйдёт::DOUBLE <= g.было * 0.001;
 
 CREATE OR REPLACE TABLE tmp3_merge_key_form AS
 SELECT src_table, было, стало, уйдёт

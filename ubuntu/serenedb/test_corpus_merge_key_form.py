@@ -39,6 +39,10 @@ def classify_entity(было, уйдёт, стало, *, recorder_alive=None, do
             return "deleted_delta_ok"
         if стало > было and recorder_alive is False and doc_alive is True:
             return "transport_stop"
+        # Легитимные удаления 1С при перепроведении: без пары по refs, но доля
+        # мала — порог 0.1% как в SQL (g.уйдёт > g.было * 0.001 → STOP).
+        if уйдёт <= было * 0.001:
+            return "source_delta_ok"
         return "partial_stop"
     if было > 0 and уйдёт == было and стало > 0 and стало >= было:
         return "key_form_ok"
@@ -154,6 +158,20 @@ t("SQL: partial исключает deleted_delta",
 t("SQL: нет списка таблиц",
   "informationregister_ценыноменклатуры" not in txt
   and "document_реализациятмц" not in txt)
+
+# --- допуск легитимных дельт 1С (правки по refs + удаления <= 0.1%) ---
+t("SQL: edited_delta таблица есть",
+  "tmp3_merge_edited_delta" in txt)
+t("SQL: уйдёт вычитает правки",
+  "coalesce(u.уйдёт, 0::BIGINT) - coalesce(ed.правок, 0::BIGINT)" in txt)
+t("SQL: порог 0.1% в partial-stop",
+  "g.уйдёт::DOUBLE > g.было * 0.001" in txt)
+t("SQL: метрика source_delta пишется",
+  "entity_source_delta:" in txt and "entity_edited_delta:" in txt)
+t("classify: правка 10 из 76214 — дельта, не стоп",
+  classify_entity(76214, 10, 76386) == "source_delta_ok")
+t("classify: потеря 200 из 76214 — стоп",
+  classify_entity(76214, 200, 76386) == "partial_stop")
 
 print("PASS %d FAIL %d" % (PASS, len(FAIL)))
 sys.exit(1 if FAIL else 0)
