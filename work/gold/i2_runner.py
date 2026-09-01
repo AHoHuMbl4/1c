@@ -629,14 +629,29 @@ def run_path(
     rows: list[QuestionRow],
     path: str,
     ask_fn: Callable[[str], PathAnswer],
+    workers: int = 1,
 ) -> None:
-    for row in rows:
+    """Прогон одного пути. workers>1 — пул потоков: каждый вопрос пишет только
+    свой row (row.engine/row.web), общих мутаций нет; ответ порядка не требует
+    (summarize идёт после join). [01.09] последовательный прогон 67×2 занимал
+    часы; параллель 6 держится и движком (ThreadingHTTPServer), и vLLM
+    (max-num-seqs 8)."""
+    def _one(row: QuestionRow) -> None:
         ans = ask_fn(row.question)
         ans = _apply_verdict(row, ans)
         if path == PATH_ENGINE:
             row.engine = ans
         else:
             row.web = ans
+
+    if workers <= 1:
+        for row in rows:
+            _one(row)
+        return
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        list(pool.map(_one, rows))
 
 
 def summarize(rows: list[QuestionRow], path: str) -> dict[str, Any]:
@@ -759,19 +774,21 @@ def run_i2(
     web_ask: Optional[Callable[[str], PathAnswer]] = None,
     out_dir: Optional[str] = None,
     reshoot_stats: Optional[ReshootStats] = None,
+    workers: int = 1,
 ) -> tuple[list[QuestionRow], dict[str, dict], str]:
     """Прогон набора. ask_* — подмена для тестов.
 
     reshoot_stats — уже посчитанные живые эталоны (один раз на вопрос до HTTP).
+    workers>1 — вопросы пути идут параллельно (пул потоков, см. run_path).
     """
     summaries: dict[str, dict] = {}
     if PATH_ENGINE in paths:
         fn = engine_ask or (lambda q: PathAnswer(path=PATH_ENGINE, transport_error="no engine mock"))
-        run_path(rows, PATH_ENGINE, fn)
+        run_path(rows, PATH_ENGINE, fn, workers=workers)
         summaries[PATH_ENGINE] = summarize(rows, PATH_ENGINE)
     if PATH_WEB in paths:
         fn = web_ask or (lambda q: PathAnswer(path=PATH_WEB, transport_error="no web mock"))
-        run_path(rows, PATH_WEB, fn)
+        run_path(rows, PATH_WEB, fn, workers=workers)
         summaries[PATH_WEB] = summarize(rows, PATH_WEB)
 
     force_reshoot_error_verdicts(rows)
@@ -885,6 +902,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         args.web_timeout or os.environ.get("I2_WEB_TIMEOUT") or 200
     )
     retries = int(args.retries or os.environ.get("I2_RETRIES") or 3)
+    workers = int(
+        getattr(args, "workers", 0) or os.environ.get("I2_WORKERS") or 1
+    )
 
     engine_ask = None
     web_ask = None
@@ -935,6 +955,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         web_ask=web_ask,
         out_dir=out_dir,
         reshoot_stats=reshoot_stats,
+        workers=workers,
     )
     print(report)
     sys.stderr.write("отчёт: %s\n" % out_dir)
@@ -983,6 +1004,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--dry",
         action="store_true",
         help="только проверка env/набора, без HTTP",
+    )
+    r.add_argument(
+        "--workers",
+        type=int,
+        default=0,
+        help="параллельных вопросов на путь (умолч. 1; env I2_WORKERS)",
     )
     r.set_defaults(func=cmd_run)
     return p
