@@ -161,6 +161,14 @@ def main() -> int:
     t("wiki_action_class none default",
       z21["wiki_action_class"]({"action_class": "bogus"}) == "none")
 
+    # [01.09, ночь] лидер обязан нести названную меру, когда база её знает.
+    z21_src = Z21.read_text(encoding="utf-8")
+    t("measure carrier check wired",
+      "wiki_measure_not_carried" in z21_src
+      and "def wiki_measure_carried" in z21_src)
+    t("measure check uses base data",
+      "search_measure_alias" in z21_src)
+
     cards = [
         {"src_table": "catalog_a", "name": "A", "description": "", "axes": "",
          "measures": "", "distance": 0.1, "platform_kind": "справочник"},

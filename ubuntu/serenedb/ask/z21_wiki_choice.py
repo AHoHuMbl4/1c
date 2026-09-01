@@ -747,8 +747,47 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
                                        reason="wiki_separability")}
     leader = pick.get("leader")
     if leader:
+        # [01.09, ночь] Спрошенная величина — структурный факт, не промт.
+        # Если база ЗНАЕТ названную меру (есть носители в search_measure_alias),
+        # ответить на неё может только носитель: верификация-модель это
+        # пропускала (замер L11: «остатки по складу» → catalog_местахранения,
+        # носители «остатка» в базе — другие сущности; ответ «3 склада» при
+        # эталоне no_data). Если носителей в базе нет вовсе, мера — понятие из
+        # вопроса («торговля»), а не имя поля: доказать отсутствие нельзя,
+        # ответ не роняется (п. 21). Проверка кодом, судья — те же данные.
+        _measure = _intent_text((intent or {}).get("measure"))
+        if _measure and not wiki_measure_carried(leader, _measure):
+            diag["wiki_measure_not_carried"] = leader
+            diag["wiki_none"] = "measure_not_carried"
+            return None
         return {"picked": [leader], "marks": {}, "plan": {}}
     return None
+
+
+def wiki_measure_carried(src_table, measure):
+    """Лидер — носитель названной меры, или носителей в базе нет вовсе.
+
+    Один запрос к search_measure_alias (те же данные и тот же стем-приём,
+    что у struct_measure в пуле). Носителей нет — мера считается понятием
+    вопроса: True. Ошибка чтения — True: отказ требует доказанного
+    отсутствия (п. 21). Доки: ts_lexize / list_has_any (как в hybrid SQL).
+    """
+    try:
+        rows = psql(
+            "SELECT count(*),"
+            "       count(*) FILTER (WHERE src_table = %s)"
+            "  FROM search_measure_alias"
+            " WHERE list_has_any("
+            "   list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
+            "   list_filter(ts_lexize(%s,"
+            "       concat_ws(' ', measure, aliases)), x -> length(x) >= 3))"
+            % (lit(src_table), lit(STEM_DICT), lit(measure), lit(STEM_DICT)))
+    except RuntimeError:
+        return True
+    if not rows:
+        return True
+    any_n, leader_n = int(rows[0][0] or 0), int(rows[0][1] or 0)
+    return any_n == 0 or leader_n > 0
 
 
 register_zone("ask.z21_wiki_choice", globals())
