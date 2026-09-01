@@ -2886,28 +2886,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             шаг("форма сущности", form=((_ef0.get("diag") or {}).get("entity_form")),
                 when="pre_entity")
             return _ef0
-    # «почему ноль / сбой» + канон excluded no_live_cells → period_empty ДО выбора
-    # сущности/меры ([замер 22.08 okna]: курсы валют live, регистр пуст → clarify).
-    if (not no_arbiter and not focus
-            and not entity_choice_locked(trusted, resolved)
-            and (period_zero_why_question(question)
-                 or diag.get("about_coverage_refused") == "period_zero_why")
-            and sales_sum_intent(intent, question)
-            and (diag.get("fork") or {}).get("excluded")):
-        _sfpe0 = try_sales_fork_period_empty_answer(
-            question, intent, diag, cut, t0, cands, diag.get("fork"))
-        if _sfpe0 is not None:
-            шаг("канон продаж: fork excluded → period_empty (до выбора)",
-                src=diag.get("sales_fork_period_empty"))
-            return _sfpe0
-    # sales_sum: sticky focus/память на документ ≠ канон — снять до focus_forced
-    # ([замер 21.08] возврат 11: июль 0 на передаче ТМЦ при 2.7M на регистре).
-    focus, trusted, resolved, _sales_clr = sales_refuse_sticky_focus(
-        focus, trusted, resolved, intent, question, cands)
-    if _sales_clr:
-        diag["sales_canon_refused_focus"] = _sales_clr
-        шаг("канон продаж: снят sticky focus", было=_sales_clr["было"],
-            стало=_sales_clr["стало"])
+    # [01.09 «физически один путь»] ранний «0.00 по канону ДО выбора» убран
+    # (поздняя ветка fork-исходов отвечает по выбранной вики-сущности).
     # ВЫБОР ЧЕЛОВЕКА ПОСЛЕ УТОЧНЕНИЯ важнее догадки: если задан `focus` и такая сущность
     # реально под условиями что-то содержит — берём её и не спрашиваем модель.
     if focus:
