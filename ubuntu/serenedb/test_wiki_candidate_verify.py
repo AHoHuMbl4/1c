@@ -3,7 +3,7 @@
 
 Без сети и живой базы. Мок ds_chat. Проверяет: паспорт (wiki/оси/меры/отличия),
 исходы verify (один yes → leader; два+ yes/unsure → clarify; ноль yes → none),
-лимит ≤5 паспортов, отсутствие слов домена.
+лимит ≤8 паспортов, отсутствие слов домена.
 """
 from __future__ import annotations
 
@@ -23,9 +23,12 @@ FORBIDDEN_ENTITY = re.compile(
     r"(?i)(accumulationregister_|catalog_)(?:остат|номенклат|контрагент|реализац|"
     r"склад|продаж|клиент|товар|warehouse|nomenclature|counterpart)",
 )
+# Границы [a-z0-9_]: слово домена внутри snake_case-идентификатора (ссылка на
+# общий резолвер оси) — не доменный литерал; ловим термины-тексты, не имена.
 DOMAIN_LITERAL = re.compile(
-    r"(?i)['\"][^'\"]{0,200}(?:остат|склад|warehouse|позиц|номенклат|товар|"
-    r"контрагент|клиент|продаж|sale|revenue)[^'\"]{0,200}['\"]",
+    r"(?i)['\"][^'\"]{0,200}(?<![a-zа-яё0-9_])(?:остат|склад|warehouse|позиц|"
+    r"номенклат|товар|контрагент|клиент|продаж|sale|revenue)(?![a-zа-яё0-9_])"
+    r"[^'\"]{0,200}['\"]",
 )
 
 
@@ -133,7 +136,10 @@ def main() -> int:
     t("wiki_verify_candidates exists", callable(z21.get("wiki_verify_candidates")))
     t("wiki_passport_enrich exists", callable(z21.get("wiki_passport_enrich")))
     t("wiki_outcome_from_verify exists", callable(z21.get("wiki_outcome_from_verify")))
-    t("WIKI_PASSPORT_N default 5", z21["WIKI_PASSPORT_N"] == 5)
+    # [01.09, ночь] 8 = WIKI_PICK_N: каждая карточка выбора верифицируема
+    # (при 5 верная карточка №6 пула уходила в no_data при живом эталоне).
+    t("WIKI_PASSPORT_N default 8 == WIKI_PICK_N",
+      z21["WIKI_PASSPORT_N"] == 8 and z21["WIKI_PASSPORT_N"] == z21["WIKI_PICK_N"])
 
     cards = _cards(2)
     d0 = z21["wiki_passport_distinct"](cards[0], cards)
@@ -159,10 +165,14 @@ def main() -> int:
          "axes": "", "measures": "", "distance": 0.5, "platform_kind": "справочник"},
         {"src_table": "catalog_f", "name": "Zeta", "description": "",
          "axes": "", "measures": "", "distance": 0.6, "platform_kind": "справочник"},
+    ] + [
+        {"src_table": "catalog_%d" % i, "name": "N%d" % i, "description": "",
+         "axes": "", "measures": "", "distance": 0.7, "platform_kind": "справочник"}
+        for i in range(7, 11)
     ]
-    fmt6 = z21["wiki_format_passport_lines"](many[:5], short_tail=many[5:])
-    t("passport cap 5 full + tail names", fmt6.count("passport\n") == 5)
-    t("short tail names only", "Other pool names only:" in fmt6)
+    fmt9 = z21["wiki_format_passport_lines"](many[:9], short_tail=many[9:])
+    t("passport cap 8 full + tail names", fmt9.count("passport\n") == 8)
+    t("short tail names only", "Other pool names only:" in fmt9)
 
     v_one = z21["wiki_parse_verify_response"](
         json.dumps({"verdicts": [

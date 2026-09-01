@@ -1,12 +1,28 @@
 \set ON_ERROR_STOP on
 -- Б3: гибридный пул — kNN top-N ∪ структурные носители оси, затем сужение.
 -- Доки: Vector Search › k-nearest-neighbor (kNN); ai_embed — Sql › Functions › AI Functions.
--- Параметры: question, embed_model, embed_secret, embed_dim, embed_maxlen,
---   knn_limit, action_class, action_axis, want_agg, stem_dict, pick_limit.
+-- Параметры: question, question_raw, embed_model, embed_secret, embed_dim,
+--   embed_maxlen, knn_limit, action_class, action_axis, want_agg, stem_dict,
+--   pick_limit.
 
 WITH q AS (
   SELECT ai_embed(substr(:'question', 1, :embed_maxlen),
                   :'embed_model', :'embed_secret')::FLOAT[:embed_dim] AS qv
+),
+-- [01.09, ночь] ДВЕ ФОРМЫ — ОДИН ПУЛ. :question = поисковая форма разбора
+-- (без периода/чисел; гасит утягивание kNN к карточкам периода), но на
+-- склеенных именах регистров модель сворачивает вопрос в голый токен
+-- («Сколько записей в «книгапродаж»?» → search_form «книгапродаж»), и kNN по
+-- нему промахивается: замер L8, пул = года/праздники/нумераторы, верная
+-- карточка accumulationregister_книгапродаж потеряна (регрессия 17→10 match
+-- против L7). По сырому вопросу та же карточка — №2 (d=0.415): слова
+-- «сколько записей в» — контекст, который помогает вектору. Поэтому обе
+-- формы — входы пула (объединение, не замена); когда формы равны, ветвь
+-- пуста (embed не зовётся: q2 без строк).
+q2 AS (
+  SELECT ai_embed(substr(:'question_raw', 1, :embed_maxlen),
+                  :'embed_model', :'embed_secret')::FLOAT[:embed_dim] AS qv
+   WHERE :'question_raw' <> :'question'
 ),
 knn AS (
   SELECT c.src_table,
@@ -19,6 +35,21 @@ knn AS (
          1 AS src_layer
     FROM search_wiki_entity_card c
    WHERE c.emb IS NOT NULL
+   ORDER BY distance
+   LIMIT :knn_limit
+),
+knn_raw AS (
+  SELECT c.src_table,
+         c.name,
+         c.description,
+         c.axes,
+         c.measures,
+         c.covered,
+         c.emb <=> (SELECT qv FROM q2) AS distance,
+         1 AS src_layer
+    FROM search_wiki_entity_card c
+   WHERE c.emb IS NOT NULL
+     AND :'question_raw' <> :'question'
    ORDER BY distance
    LIMIT :knn_limit
 ),
@@ -111,6 +142,8 @@ struct_alias AS (
     FROM (SELECT src_table
             FROM alias_idx
            WHERE aliases @@ :'question'
+              OR (:'question_raw' <> :'question'
+                  AND aliases @@ :'question_raw')
            ORDER BY bm25(alias_idx.tableoid) DESC, src_table
            LIMIT :alias_top) a
     JOIN search_wiki_entity_card c ON c.src_table = a.src_table
@@ -142,6 +175,7 @@ pool AS (
          covered, distance, src_layer
     FROM (
       SELECT * FROM knn
+      UNION ALL SELECT * FROM knn_raw
       UNION ALL SELECT * FROM struct_catalog
       UNION ALL SELECT * FROM struct_register
       UNION ALL SELECT * FROM struct_move

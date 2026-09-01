@@ -11,10 +11,15 @@ WIKI_KNN_N = int(os.environ.get("WIKI_KNN_N", "15"))
 # [01.09] Пул шире паспортов: структурные слагаемые (словарь/мера) ГАРАНТИРУЮТ
 # присутствие, но не должны вытеснять близких kNN-соседей (замер: карточка
 # «отработанноевремя» при d=0.378 не входила в пул из 5 — три места занимал
-# словарь по слову «регистр»). Паспорта для верификации — по-прежнему 5.
+# словарь по слову «регистр»).
 WIKI_PICK_N = int(os.environ.get("WIKI_PICK_N", "8"))
 WIKI_ALIAS_TOP = int(os.environ.get("WIKI_ALIAS_TOP", "3"))
-WIKI_PASSPORT_N = int(os.environ.get("WIKI_PASSPORT_N", "5"))
+# [01.09, ночь] Паспортов столько же, сколько карточек у выбора: карточка за
+# пределами паспортов физически не может быть подтверждена верификацией
+# (замер: верная accumulationregister_книгапродаж стала №6 пула после
+# объединения двух форм вопроса — при 5 паспортах верификация её не видела и
+# вопрос уходил в no_data при живом эталоне 76 075).
+WIKI_PASSPORT_N = int(os.environ.get("WIKI_PASSPORT_N", "8"))
 WIKI_PASSPORT_BODY_MAX = int(os.environ.get("WIKI_PASSPORT_BODY_MAX", "1500"))
 WIKI_SEP_GAP = float(os.environ.get("WIKI_SEP_GAP", "0.04"))
 WIKI_EMBED_MAXLEN = int(os.environ.get("WIKI_EMBED_MAXLEN", "20000"))
@@ -159,6 +164,10 @@ def _wiki_hybrid_vars(question, intent):
     q_search = (intent.get("search_form") or "").strip() or (question or "")
     return {
         "question": q_search,
+        # [01.09, ночь] сырой вопрос — второй вход пула (kNN + словарь):
+        # search_form на склеенных именах сворачивается в голый токен, по
+        # которому вектор промахивается (замер L8: регрессия 17→10 match).
+        "question_raw": (question or ""),
         "embed_model": EMBED_MODEL.replace("'", "''"),
         "embed_secret": EMBED_SECRET_NAME.replace("'", "''"),
         "embed_dim": EMBED_DIM,
