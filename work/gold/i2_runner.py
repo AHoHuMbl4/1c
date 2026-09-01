@@ -231,6 +231,13 @@ def classify_verdict(
     if not t and not k and not nums:
         return VERDICT_UNRESOLVED
 
+    # [замер 01.09] честные kind — ПЕРВОЙ проверкой: no_data-ответ несёт
+    # служебные числа («рассмотрено 60/76») и пустой found, но это отказ,
+    # а не «число при нулевой находке». Живой случай: «остатки по всем трём
+    # складам сразу» — no_data при no_data-эталоне получал confident_wrong.
+    if k in _KIND_HONEST:
+        return VERDICT_HONEST_NO
+
     matches_raw = diag.get("found")
     if matches_raw is not None and nums:
         try:
@@ -241,9 +248,6 @@ def classify_verdict(
 
     if diag.get("doubt") is True and nums:
         return VERDICT_CONFIDENT_WRONG
-
-    if k in _KIND_HONEST:
-        return VERDICT_HONEST_NO
 
     if k in _KIND_ANSWER:
         if not nums:
