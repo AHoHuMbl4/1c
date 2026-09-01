@@ -319,7 +319,13 @@ t("SQL: gate BEFORE DELETE unmatched keys",
   < txt.find("DELETE FROM search_corpus c\nWHERE c.src_table IN"))
 t("SQL: content_hash fill AFTER gate",
   txt.find("вектор-бюджет")
-  < txt.find("UPDATE search_corpus SET content_hash = corpus_content_hash(doc)"))
+  < txt.find("миграция content_hash пачками"))
+t("SQL: миграция content_hash пачками (не одним UPDATE)",
+  "tmp3_ch_jobs" in txt
+  and "UPDATE search_corpus SET content_hash = corpus_content_hash(doc) WHERE content_hash IS NULL AND doc IS NOT NULL AND src_table IN (" in txt
+  and txt.find("UPDATE search_corpus SET content_hash") < txt.find("MERGE INTO search_corpus AS t"))
+t("SQL: монолитного UPDATE-миграции нет",
+  "UPDATE search_corpus SET content_hash = corpus_content_hash(doc)\nWHERE content_hash IS NULL AND doc IS NOT NULL;" not in txt)
 t("SQL: MATCHED content_hash + common_eq keep emb",
   "WHEN MATCHED AND t.content_hash IS DISTINCT FROM s.content_hash" in txt
   and "THEN t.emb ELSE NULL END" in txt)

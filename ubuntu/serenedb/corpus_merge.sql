@@ -717,11 +717,75 @@ WHERE (SELECT vector_loss_bypass FROM tmp3_merge_cfg LIMIT 1);
 
 -- Гейт пройден (или пустой корпус) — теперь можно писать. Миграция content_hash:
 -- заполняем NULL без сброса emb, иначе MERGE увидит NULL≠hash и убьёт векторы.
+-- [замер 01.09 okna] один UPDATE на весь корпус (1,66 млн строк) ЧАС висел без
+-- CPU и записи (WAL не рос с 288 МБ, потоки движка спали) — транзакция такого
+-- размера на 26.07.3 не доходит до фазы записи. Тот же приём, что пачки MERGE
+-- ниже (E4b): порции по src_table (литералы IN), большие сущности режем
+-- hash(row_key)%n_parts, checkpoint после каждой пачки. На повторных тактах
+-- NULL уже нет и все пачки пустые — миграция мгновенная.
 ALTER TABLE tmp3_corpus ADD COLUMN IF NOT EXISTS content_hash VARCHAR;
 UPDATE tmp3_corpus SET content_hash = corpus_content_hash(doc)
 WHERE content_hash IS NULL AND doc IS NOT NULL;
-UPDATE search_corpus SET content_hash = corpus_content_hash(doc)
-WHERE content_hash IS NULL AND doc IS NOT NULL;
+
+CREATE OR REPLACE TABLE tmp3_ch_ents AS
+SELECT src_table, count(*)::BIGINT AS n FROM search_corpus
+WHERE content_hash IS NULL AND doc IS NOT NULL
+GROUP BY 1;
+
+CREATE OR REPLACE TABLE tmp3_ch_jobs AS
+WITH cfg AS (SELECT chunk_rows FROM tmp3_merge_cfg LIMIT 1),
+small_ents AS (
+  SELECT e.src_table, e.n FROM tmp3_ch_ents e, cfg
+  WHERE e.n <= cfg.chunk_rows
+),
+large_ents AS (
+  SELECT e.src_table, e.n,
+         GREATEST(1, (e.n + cfg.chunk_rows - 1) // cfg.chunk_rows) AS n_parts
+  FROM tmp3_ch_ents e, cfg
+  WHERE e.n > cfg.chunk_rows
+),
+small_jobs AS (
+  SELECT s.src_table, s.n, 1::BIGINT AS n_parts, 0::BIGINT AS part,
+         ((sum(s.n) OVER (ORDER BY s.n DESC, s.src_table) - s.n)
+           // (SELECT chunk_rows FROM cfg)) AS job_id
+  FROM small_ents s
+),
+large_jobs AS (
+  SELECT l.src_table, l.n, l.n_parts, i.part,
+         1000000000 + row_number() OVER (ORDER BY l.src_table, i.part) AS job_id
+  FROM large_ents l
+  JOIN (SELECT unnest(range(64)) AS part) i ON i.part < l.n_parts
+)
+SELECT job_id, src_table, n, n_parts, part FROM small_jobs
+UNION ALL
+SELECT job_id, src_table, n, n_parts, part FROM large_jobs;
+
+SELECT 'миграция content_hash пачками' AS шаг, count(DISTINCT job_id) AS пачек,
+       sum(n) AS строк_к_миграции
+FROM tmp3_ch_jobs;
+
+SELECT stmt FROM (
+  SELECT job_id, 1 AS ord,
+         'UPDATE search_corpus SET content_hash = corpus_content_hash(doc) WHERE content_hash IS NULL AND doc IS NOT NULL AND src_table IN ('
+         || ins || ')'
+         || CASE WHEN n_parts = 1 THEN ''
+            ELSE ' AND (hash(row_key) % ' || n_parts || ') = ' || part END
+         || ';' AS stmt
+  FROM (
+    SELECT job_id,
+           string_agg(quote_literal(src_table), ', ') AS ins,
+           max(n_parts) AS n_parts,
+           min(part) AS part
+    FROM tmp3_ch_jobs GROUP BY job_id
+  ) g
+  UNION ALL
+  SELECT job_id, 2, 'SELECT checkpoint();'
+  FROM (SELECT DISTINCT job_id FROM tmp3_ch_jobs) x
+) z ORDER BY job_id, ord
+\gexec
+
+DROP TABLE IF EXISTS tmp3_ch_jobs;
+DROP TABLE IF EXISTS tmp3_ch_ents;
 
 -- ============ 2. ЗАПИСЬ — ПАЧКАМИ, КАЖДАЯ СО СВОИМ COMMIT ============
 -- [замер 18.08 klient-1] одна транзакция MERGE+UPDATE+DELETE на 15 148 327 строк
