@@ -433,6 +433,14 @@ def _normalize_intent(d, question=""):
     if isinstance(measure_raw, (list, tuple)) and len(measure_raw) > 1:
         fixed.append("measure alternatives:%d" % (len(measure_raw) - 1))
     out["measure"] = _intent_text(measure_raw)
+    # [01.09] search_form — поисковая форма вопроса без периода/чисел: пул
+    # вики-каскада ищется по ней, чтобы слова периода не утягивали вектор и
+    # словарь к чужим карточкам (замер: «X за прошлый месяц» → «закрытие
+    # месяца» в топе). Код-сторона только валидирует тип и длину.
+    _sf = _intent_text(d.get("search_form"))
+    if _sf and (len(_sf) > 200 or _sf.strip().lower() == (question or "").strip().lower()):
+        _sf = ""
+    out["search_form"] = _sf
 
     # 🔴 РОД ЗАПИСЕЙ И ИМЯ ВЕЛИЧИНЫ — НЕ ЗНАЧЕНИЯ, И В `terms` ИМ НЕ МЕСТО.
     # `terms` — то, что стоит В САМОЙ ЗАПИСИ (имя контрагента, товар, номер документа);

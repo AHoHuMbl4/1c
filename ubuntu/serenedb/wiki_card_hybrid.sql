@@ -115,6 +115,28 @@ struct_alias AS (
            LIMIT :alias_top) a
     JOIN search_wiki_entity_card c ON c.src_table = a.src_table
 ),
+-- [01.09 «один судья»] СПРОШЕННАЯ ВЕЛИЧИНА — вход пула: сущности-носители меры
+-- из вопроса (search_measure_alias, по стемам — те же данные, что выбор
+-- величины). «Остатки по складу» находит не «места хранения» (у них нет
+-- меры), а носителей меры — паспортная верификация решает дальше. На базе,
+-- где такой меры нет вообще, слагаемое пусто и вопрос честно уходит в
+-- no_data по итогам верификации (п. 13: данных по величине нет).
+-- Доки: Sql › Functions › List Functions › list_has_any.
+struct_measure AS (
+  SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
+         c.emb <=> (SELECT qv FROM q) AS distance,
+         2 AS src_layer
+    FROM (SELECT src_table FROM search_measure_alias
+           WHERE :'measure' <> ''
+             AND list_has_any(
+                   list_filter(ts_lexize(:'stem_dict', :'measure'),
+                               x -> length(x) >= 3),
+                   list_filter(ts_lexize(:'stem_dict',
+                               concat_ws(' ', measure, aliases)),
+                               x -> length(x) >= 3))
+           GROUP BY src_table) m
+    JOIN search_wiki_entity_card c ON c.src_table = m.src_table
+),
 pool AS (
   SELECT DISTINCT ON (src_table) src_table, name, description, axes, measures,
          covered, distance, src_layer
@@ -125,6 +147,7 @@ pool AS (
       UNION ALL SELECT * FROM struct_move
       UNION ALL SELECT * FROM struct_catalog_event
       UNION ALL SELECT * FROM struct_alias
+      UNION ALL SELECT * FROM struct_measure
     ) u
    ORDER BY src_table, src_layer DESC, distance
 ),

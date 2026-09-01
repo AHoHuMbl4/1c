@@ -785,7 +785,11 @@ Reply with JSON only.
              question asks WHO or WHAT participated in such activity. \\"object\\" when
              it asks about a static set of records (how many items/parties exist,
              are listed, are in a catalog). \\"none\\" when neither applies",
-  "action_axis": "short noun naming who or what acts in the question, in its language, or null"
+  "action_axis": "short noun naming who or what acts in the question, in its language, or null",
+  "search_form": "the question as a short search phrase in its own language: what the
+             question is about, with the entity names kept exactly as the user wrote
+             them. Dates, time periods and numeric thresholds stay out — they live in
+             period/amount"
 }
 
 Rules:
@@ -841,7 +845,7 @@ _ABOUT_OK = ("data", "coverage")
 _AMOUNT_OPS = ("=", ">", "<", ">=", "<=", "between")
 _ACTION_CLASS_OK = ("event", "object", "none")
 _INTENT_FIELDS = ("terms", "kind", "measure", "want", "period", "period2", "amount",
-                  "about", "action_class", "action_axis")
+                  "about", "action_class", "action_axis", "search_form")
 # Сколько прогонов разбора допустимо на один вопрос и какой отрыв лидера считается
 # согласием. 1 прогон — прежнее поведение. Это бюджет ТОЧНОСТИ входа, а не подстройка
 # под базу: от данных и от языка он не зависит.
