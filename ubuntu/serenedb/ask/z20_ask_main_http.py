@@ -3549,6 +3549,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if (picked and stop2_active(focus, measure_pick, no_arbiter, trusted)
             and not diag.get("sales_canon_locked")
             and not diag.get("catalog_count_locked")
+            # [01.09 «один путь»] стоп2 не возвращает отвергнутое
+            # верификацией: вики-лидер подтверждён — соперники «семьи/писаря/
+            # словаря» уже видены паспортами и отклонены (замер: книгапродаж
+            # — стоп2 возвращал реализациятмц/строки5с -> uncounted_cell).
+            and not diag.get("wiki_arbiter_locked")
             and len(arb_pool) < ARBITER_MAX):
         _lead = None
         _ok_s2, _top_s2 = _alias_verdict(picked[0])
