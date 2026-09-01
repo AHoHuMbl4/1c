@@ -34,8 +34,8 @@
    отказ; отказ при данных = дефект; догадка = ошибка).
 
 ### ЖИВОЕ СОСТОЯНИЕ (проверено ~11:20 UTC)
-- HEAD 2717db2 = origin/main. Все замки зелёные: wiki 63/0, stock 47/0,
-  fork 51/0, axis 41/0, verify 35/0, budget 50/0.
+- HEAD 8579626 = origin/main (памятка — последний коммит). Все замки зелёные:
+  wiki 63/0, stock 47/0, fork 51/0, axis 41/0, verify 35/0, budget 50/0.
 - Векторы: корпус 1 657 724 живых / NULL 0; резолвер 2 100 463 / 0.
   Бэкапы md5: 30b9663c… (31.08 23:58), d7aeb15e… (01.09 02:19).
 - Такт ЗЕЛЁНЫЙ (vector_loss_gate=0, content_hash NULL 0). 27B жив.
@@ -97,7 +97,7 @@
 честный kind-первой-веткой; «организации» = 1 (эталон!) на одном пути.
 
 ### КЛЮЧЕВЫЕ ФАКТЫ ОКНА (продолжение)
-- ask: :8091 прод (код 2717db2 выкачен), ASK_TOKEN из /etc/1c-serene-ask.env;
+- ask: :8091 прод (код 3e28177 выкачен = HEAD минус памятка), ASK_TOKEN из /etc/1c-serene-ask.env;
   веб-гейт :18801, WEB_TOKEN = /home/undebot/.openclaw-web/openclaw.json →
   gateway.auth.token; И2: work/gold/i2_runner.py на окне (есть --workers).
 - Такт: запуск руками systemctl start 1c-serene-pipeline@postgres
