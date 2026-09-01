@@ -49,7 +49,8 @@ Reply with one JSON object only:
 
 WIKI_VERIFY_SYS = """Assess each numbered entity passport against the user question.
 Each passport shows: name, wiki excerpt, platform kind, axes, measures,
-traits present only in this passport vs pool neighbors.
+traits present only in this passport vs pool neighbors;
+doesNotAnswer lists topics marked outside entity coverage.
 Reply with one JSON object only:
   {"verdicts": [{"index": <1-based passport index>, "fit": <"yes"|"no"|"unsure">,
                  "why": <one line>}]}
@@ -326,6 +327,7 @@ def wiki_passport_enrich(cards):
                 by_src[str(r[0])] = {
                     "wiki_body": (r[2] if len(r) > 2 else "") or "",
                     "parent": (r[5] if len(r) > 5 else "") or "",
+                    "not_enough_for": (r[7] if len(r) > 7 else "") or "",
                 }
         except RuntimeError:
             pass
@@ -341,6 +343,8 @@ def wiki_passport_enrich(cards):
             row["wiki_body"] = ""
         if extra.get("parent") is not None:
             row["parent"] = extra["parent"]
+        if extra.get("not_enough_for"):
+            row["not_enough_for"] = extra["not_enough_for"]
         row["platform_kind"] = wiki_platform_kind(
             row.get("src_table"), row.get("parent") or "")
         row["distinct"] = wiki_passport_distinct(row, top)
@@ -357,6 +361,10 @@ def wiki_format_passport_lines(passports, short_tail=None):
         if i >= WIKI_PASSPORT_N:
             break
         body = (p.get("wiki_body") or p.get("description") or "—")[:WIKI_PASSPORT_BODY_MAX]
+        distinct_line = p.get("distinct") or "—"
+        nef = (p.get("not_enough_for") or "").strip()
+        if nef:
+            distinct_line += "\n   doesNotAnswer: %s" % nef
         lines.append(
             "%d. passport\n   name: %s\n   wiki: %s\n   platform: %s\n   axes: %s\n"
             "   measures: %s\n   distinct: %s"
@@ -366,7 +374,7 @@ def wiki_format_passport_lines(passports, short_tail=None):
                p.get("platform_kind") or "—",
                p.get("axes") or "—",
                p.get("measures") or "—",
-               p.get("distinct") or "—"))
+               distinct_line))
     tail = short_tail or []
     if tail:
         names = ", ".join(

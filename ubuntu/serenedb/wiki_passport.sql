@@ -10,8 +10,10 @@ SELECT c.src_table,
        c.axes,
        c.measures,
        coalesce(t.parent, '') AS parent,
-       split_part(c.src_table, '_', 1) AS platform_prefix
+       split_part(c.src_table, '_', 1) AS platform_prefix,
+       coalesce(a.not_enough_for, '') AS not_enough_for
   FROM search_wiki_entity_card c
   LEFT JOIN wiki_pages w ON w.page_id = c.src_table
   LEFT JOIN search_tables t ON t.src_table = c.src_table
+  LEFT JOIN search_entity_alias a ON a.src_table = c.src_table
  WHERE c.src_table IN (:src_list);
