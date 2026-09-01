@@ -458,6 +458,19 @@ t("clarify day-basis: 2 options", len(_copts) == 2)
 t("clarify day-basis: needle lbl-work",
   any("lbl-work" in (o.get("label") or "") for o in _copts))
 
+# 🔴 [замер 01.09 okna] uncounted_cell: числа нет — меню из непосчитанного
+# не показываем (п. 21: отвечать нечем → честный отказ, а не переспрос).
+# Живой случай: «остатки по каждому складу отдельно» без регистров остатков.
+_c_res = A.fork_outcome_c(
+    "остатки по каждому складу отдельно",
+    {"reason": "uncounted_cell", "uncounted": [{"srcs": ["reg_a", "reg_b"]}]},
+    {}, {}, {}, picked_src=None, today="2026-09-01")
+t("uncounted_cell → no_data (не меню)",
+  _c_res and _c_res.get("kind") == "no_data"
+  and not (_c_res.get("options") or []))
+t("uncounted_cell: диагноз несёт причину",
+  (_c_res.get("diag") or {}).get("fork_c_reason") == "uncounted_cell")
+
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)

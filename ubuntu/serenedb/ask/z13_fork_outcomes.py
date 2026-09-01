@@ -899,6 +899,19 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
         d["fork_clarify_axis"] = axis_kind
     if t0 is not None:
         d["sec"] = round(time.time() - t0, 2)
+    # 🔴 [замер 01.09 okna] uncounted_cell = НЕТ ни одного посчитанного числа.
+    # Контракт исхода C — «число лидера + есть другое прочтение»: без числа
+    # показывать нечего, а меню из НЕпосчитанных вариантов — перекладывание
+    # на человека несделанной работы (п. 21: ответ → уточнение → отказ; здесь
+    # отвечать нечем — честный отказ). Живой случай: «остатки по каждому
+    # складу отдельно» при отсутствии в базе регистров остатков давал три
+    # чипа из непосчитанного вместо отказа. Структурно: ячейка непосчитываема
+    # на этой базе — на базе, где она считается, reason будет другим.
+    if c_why == "uncounted_cell":
+        return {"partial": partial or None, "kind": "no_data",
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "options": [], "sources": [],
+                "diag": d}
     clean_opts = [{**o, "found": 0} for o in (opts or [])]
     if len(clean_opts) < 2:
         return None
