@@ -290,15 +290,26 @@ def sales_compare_windows(intent, today, question=""):
 
 
 
-def entity_form_catalogs_for_kind(kind, allow_meaning=True):
+def entity_form_catalogs_for_kind(kind, allow_meaning=True, *, include_examples=True):
     """catalog_* по основам label/alias; запасной — meaning_candidates.
 
     allow_meaning=False: только stem/label SQL. Без явного окна F не берёт
     fuzzy meaning (иначе «прайс» → catalog_договоры и distinct чужой оси).
+
+    include_examples=False — НЕ звать best_used_for в совпадение: там лежат
+    ПРИМЕРЫ вопросов («сколько часов…», «сколько сотрудников»), и любое
+    вопросительное слово матчитось с чужими сущностями как «ось»
+    ([замер 01.09 okna] «сколько организаций» → ось «сколько» →
+    каталоги нормативов/физлиц → stock_override задушил верифицированного
+    лидера). Ось места — имя сущности (label+aliases), пример вопроса осью
+    быть не может. Осевые резолвы зовут с False; для kind-резолвов
+    умолчание True — прежнее поведение.
     """
     kind = (kind or "").strip()
     if not kind:
         return []
+    alias_fields = ("t.label, a.aliases, a.best_used_for"
+                    if include_examples else "t.label, a.aliases")
     out = []
     try:
         rs = psql(
@@ -306,10 +317,10 @@ def entity_form_catalogs_for_kind(kind, allow_meaning=True):
             "LEFT JOIN search_entity_alias a ON a.src_table = t.src_table "
             "WHERE t.src_table LIKE 'catalog_%%' AND list_has_any("
             "  list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
-            "  list_filter(ts_lexize(%s, concat_ws(' ', t.label, a.aliases, "
-            "                                      a.best_used_for)),"
+            "  list_filter(ts_lexize(%s, concat_ws(' ', %s),"
             "              x -> length(x) >= 3))"
-            % (TABLES, lit(STEM_DICT), lit(kind), lit(STEM_DICT)))
+            % (TABLES, lit(STEM_DICT), lit(kind), lit(STEM_DICT),
+               alias_fields))
         out = [r[0] for r in (rs or []) if r and r[0]]
     except RuntimeError:
         out = []

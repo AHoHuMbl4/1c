@@ -53,6 +53,19 @@ t("значения через map_extract_value(refs_map, …)",
 t("запасной search_refmap по owner",
   "search_refmap" in src_combined and "owner" in src_combined)
 
+# ── [замер 01.09 okna] ось места не резолвится по примерам вопросов ─────────
+# best_used_for карточек держит ПРИМЕРЫ вопросов («сколько сотрудников»):
+# любое вопросительное слово ложно резолвилось осью и включало stock_override
+# поверх верифицированного вики лидера («сколько организаций» → импорттмц).
+_here = os.path.dirname(os.path.abspath(__file__))
+_z12 = open(os.path.join(_here, "ask", "z12_stock_balance.py"), encoding="utf-8").read()
+_z05 = open(os.path.join(_here, "ask", "z05_entity_form.py"), encoding="utf-8").read()
+t("ось места: резолв без best_used_for (include_examples=False)",
+  re.search(r"def _catalogs_for_axis_word[\s\S]{0,900}include_examples=False",
+            _z12) is not None)
+t("kind-резолв прежний: include_examples=True в entity_form_catalogs_for_kind",
+  "include_examples=True" in _z05 and "best_used_for" in _z05)
+
 # ── поведение clarify (мок, без БД) ──────────────────────────────────────────
 wh = ["Vitrina / 1", "Bubuieci / 2", "Depozit / 3"]
 ask = A.warehouse_clarify("Сколько осталось на складе?", {}, {}, 0.0,

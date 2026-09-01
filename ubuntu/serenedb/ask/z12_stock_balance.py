@@ -24,7 +24,11 @@ def _catalogs_for_axis_word(word, intent=None, allow_meaning=None):
     if allow_meaning is None:
         allow_meaning = _intent_period_has_meaning(intent)
     try:
-        return entity_form_catalogs_for_kind(word, allow_meaning=allow_meaning) or []
+        # [замер 01.09 okna] ось места — только label+aliases: best_used_for
+        # держит примеры вопросов («сколько сотрудников»), и вопросительное
+        # слово из любого количественного вопроса ложно резолвилось осью.
+        return (entity_form_catalogs_for_kind(word, allow_meaning=allow_meaning,
+                                              include_examples=False) or [])
     except RuntimeError:
         return []
 
