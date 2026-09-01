@@ -2001,13 +2001,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Что не доехало до модели — уходит в ОТВЕТ, а не в журнал (п. 13). Объявлено здесь,
     # потому что ранние ветки возврата (нет совпадений) отвечают раньше выбора сущности.
     cut = {}
-    # Именованный остаток без balance-источника — до отбора/модели/форка ([замер 22.08 okna]).
-    if (stock_question_engaged(question, intent)
-            and stock_asks_named_product(question, intent)):
-        _goods_early = stock_goods_pool()
-        if not _goods_early:
-            diag["stock_named_early"] = True
-            return stock_balance_named_no_data(question, diag, cut, t0)
     # Условие вопроса, снятое на разборе (период не датой, порог не числом, понятие сверх
     # бюджета), расширяет множество ответа против того, о чём спросили. Такая потеря
     # выходит человеку тем же путём, что и остальные (п. 13), а не остаётся в журнале.
@@ -2304,10 +2297,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     else:
         cands = prefer_entity_for_stock(cands, question, intent)
     if K6R:
-        def _k6_mk_clarify(cat, holder, extra):
-            return k6_dual_atom_clarify_return(
-                cat, holder, question, diag, cut, t0, by, match, preds,
-                diag.get("marks") or {}, extra)
         _period0 = (intent or {}).get("period") or {}
         _has_period0 = bool(_period0.get("from") or _period0.get("to"))
 
@@ -2326,7 +2315,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 stem_dict=STEM_DICT, corpus=CORPUS, tables=TABLES,
                 sales_sum=sales_sum_intent(intent, question),
                 rank_intent=rank_intent_from(intent, None, question),
-                mk_clarify=_k6_mk_clarify,
                 catalogs_for_kind=(
                     _catalogs_for_kind if event_path_active(intent) else None))
         except RuntimeError as _k6_err:
@@ -2334,9 +2322,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["answer_fit_v2_down"] = type(_k6_err).__name__
         if _k6r.get("diag"):
             diag.update(_k6r["diag"])
-        if _k6r.get("clarify"):
-            шаг("K6 v2", dual_atom=True)
-            return _k6r["clarify"]
         cands = _k6r.get("cands") or cands
         counts_for_model = entity_pick_counts_for_model(
             by, diag, intent, question)
@@ -2347,52 +2332,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         cands = filter_stock_goods_registers(cands, question, diag, intent=intent, plan=plan)
         # [01.09 «один путь»] вторая постановка stock_canon_locked убрана.
         named = stock_asks_named_product(question, intent)
-        # K4-1 №12: остаток без предмета — уточнение товара (не figures по продажам).
-        if (not named and stock_subject_needs_clarify(question, intent)
-                and not measure_pick
-                and not (trusted or {}).get("subject")):
-            q_low = " ".join(str(question or "").lower().split())
-            # «всех складах» / all — склад снят; иначе тоже subject первее bridge.
-            diag["stock_subject_clarify"] = True
-            ask = _need_clarify(
-                question, [{"kind": "subject", "word": "товар"}],
-                "остаток без названного товара",
-                dict(diag, шаг="stock-subject"))
-            if ask:
-                return ask
         if named:
             _goods_cap = stock_goods_pool(capable)
-            if not _goods_cap:
-                return stock_balance_named_no_data(question, diag, cut, t0)
             cands = [c for c in cands if c in _goods_cap or c in capable]
             cands = filter_balance_structural(cands, diag)
-            if not cands:
-                return stock_balance_named_no_data(question, diag, cut, t0)
         else:
-            # K4-3 №11: несколько складов-значений → clarify до bridge/no_data.
-            # K7/K8: «всего» и «пo каждому» снимают складскую развилку (29.08).
-            if not stock_skips_warehouse_clarify(question, intent):
-                wh_ask = warehouse_clarify(question, diag, cut, t0)
-                if wh_ask:
-                    return wh_ask
             _stock_locked = diag.get("stock_canon_locked")
             if _stock_locked and _stock_locked not in cands:
                 cands = [_stock_locked] + list(cands)
-            if capable and not _stock_locked:
-                hit = [c for c in cands if c in capable]
-                if not hit:
-                    bridge = balance_bridge_clarify(
-                        question, capable, diag, cut, t0)
-                    if bridge:
-                        return bridge
             cands = filter_balance_structural(cands, diag)
             if not cands and _stock_locked:
                 cands = [_stock_locked]
-            elif not cands and capable:
-                bridge = balance_bridge_clarify(
-                    question, capable, diag, cut, t0)
-                if bridge:
-                    return bridge
     шаг("кандидаты собраны", всего=len(cands))
     # 🔴 «НА ЧТО НЕ ОТВЕЧАЕТ» — ВТОРАЯ ПОЛОВИНА ЗНАНИЯ УСТАНОВКИ, И ОНА НАКОНЕЦ ЧИТАЕТСЯ.
     # Установочный агент пишет про каждую сущность две половины: «на что отвечает»
@@ -2776,12 +2726,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # неоднозначности (исходы A/B/C, план §2): круг под-вызовов арбитра не собирается.
     # ASK_FORK_OUTCOMES=0 — волна-1: только `diag.fork` + старые исходы. В под-вызовах
     # (`no_arbiter`) и после доказанного билета (`trusted`) исходы не перехватывают.
-    if (stock_question_engaged(question, intent)
-            and stock_asks_named_product(question, intent)):
-        _goods_pf = stock_goods_pool()
-        if not _goods_pf:
-            diag["stock_named_pre_fork"] = True
-            return stock_balance_named_no_data(question, diag, cut, t0)
     _skip_stock_fork = (
         diag.get("stock_canon_locked")
         and stock_question_engaged(question, intent)
@@ -2855,32 +2799,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _scan_err = _e
             diag["fork_error"] = str(_e)[:160]
             sys.stderr.write("ask FORK: детектор не сработал: %s\n" % str(_e)[:160])
-    # ASK_ENTITY_FORM: форма F до выбора сущности моделью (K6).
-    # pre_entity + classes>1 = молчаливый лидер — гейт в try_entity_form_answer.
-    # Пул F — все catalog_/register_/document_ из cands (без head-среза круга).
     # [01.09 «один путь»] ранняя постановка продажного канона убрана:
     # выбирала сущность до вики-каскада. «Сколько продали» теперь идёт
     # через вики (карточка реализации по смыслу + верификация).
-    _ecp0 = try_event_count_period_clarify(
-        question, intent, diag, cut, t0, today=today, pool=list(cands or []),
-        trusted=trusted, resolved=resolved)
-    if _ecp0 is not None:
-        return _ecp0
-    if ASK_ENTITY_FORM and not no_arbiter and not trusted and not focus:
-        _ef_pool0 = list(dict.fromkeys(
-            list((_fork_early.get("pool") or []))
-            + [c for c in (cands or []) if str(c).startswith("catalog_")]
-            + [c for c in (cands or [])
-               if str(c).startswith("accumulationregister_")
-               or str(c).startswith("document_")]))
-        _ef0 = try_entity_form_answer(
-            question, intent, _ef_pool0, match=match, diag=diag, cut=cut, t0=t0,
-            today=today, when="pre_entity",
-            early_classes=(diag.get("fork") or {}).get("classes") or 0)
-        if _ef0 is not None:
-            шаг("форма сущности", form=((_ef0.get("diag") or {}).get("entity_form")),
-                when="pre_entity")
-            return _ef0
     # [01.09 «физически один путь»] ранний «0.00 по канону ДО выбора» убран
     # (поздняя ветка fork-исходов отвечает по выбранной вики-сущности).
     # ВЫБОР ЧЕЛОВЕКА ПОСЛЕ УТОЧНЕНИЯ важнее догадки: если задан `focus` и такая сущность

@@ -242,35 +242,6 @@ def same_number(ours, theirs):
         return False
 
 
-def k6_dual_atom_clarify_return(cat, holder, question, diag, cut, t0,
-                                    by, match, preds, marks, diag_extra=None):
-    """K6: два атома (карточки vs DISTINCT) — clarify до pick_entity, п.12."""
-    srcs = [c for c in (cat, holder) if c]
-    if len(srcs) < 2:
-        return None
-    try:
-        lab_by = {r[0]: r[1] for r in psql(
-            "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-            % (TABLES, ", ".join(lit(c) for c in srcs))) if r and r[0]}
-    except RuntimeError:
-        lab_by = {}
-    opts = mk_opts(srcs, lab_by, marks or {}, by or {},
-                   match=match or "", preds=preds or [])
-    if len(opts) < 2:
-        return None
-    d = dict(diag or {})
-    if diag_extra:
-        d.update(diag_extra)
-    d["k6_dual_atom"] = [cat, holder]
-    return {"partial": cut or None, "kind": "clarify",
-            "text": clarify_say(question, opts, d)
-                    or ", ".join("«%s»" % o["label"] for o in opts),
-            "options": opts, "sources": [o["label"] for o in opts],
-            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
-                               reason="k6_dual_atom_clarify")}
-
-
-
 
 def src_supports_question(src, intent, diag, by=None, question="", match=None):
     """Есть ли у выбранного src поддержка предмета вопроса (K4-2 страж B).

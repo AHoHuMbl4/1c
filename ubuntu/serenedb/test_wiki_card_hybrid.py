@@ -290,10 +290,7 @@ def main() -> int:
     t("bootstrap net-distinct in no_axis_member",
       "stock_net_distinct" in z20_patched
       and "no_axis_member" in z20_patched)
-    t("bootstrap ecp0 then entity_form_gate_open",
-      "entity_form_gate_open(intent, diag)" in z20_patched
-      and z20_patched.find("_ecp0 = try_event_count_period_clarify")
-      < z20_patched.find("entity_form_gate_open(intent, diag)"))
+    # [01.09 снят pre-wiki обход] bootstrap ecp0 — удалён кейс снятого обхода
     t("z20 disk has cascade call (on disk since 01.09)",
       "wiki_primary_entity_cascade(" in z20_raw)
 

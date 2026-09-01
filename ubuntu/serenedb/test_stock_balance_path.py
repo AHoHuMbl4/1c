@@ -61,8 +61,7 @@ t("петли: named via terms",
   A.stock_asks_named_product(
       "q", {"terms": [["петли"]], "want": "sum", "kind": "номенклатура",
             "action_class": "object", "action_axis": "склад"}))
-t("named no_data helper",
-  A.stock_balance_named_no_data("сколько петель?", {}, None, __import__("time").time()).get("kind") == "no_data")
+# [01.09 снят pre-wiki обход] named no_data helper — удалён кейс снятого обхода
 
 # --- K9: count+ось места без терма → агрегат, не subject-clarify ---
 t("count agg: без терма → aggregate path",
@@ -418,7 +417,7 @@ for _nm in (
         "prefer_entity_for_stock", "prefer_entity_for_catalog_count",
         "prefer_entity_for_sales", "prefer_entity_for_rank", "event_filter_pool",
         "stock_canon_src", "try_entity_form_answer", "try_event_count_period_clarify",
-        "stock_question_engaged", "stock_goods_pool", "stock_balance_named_no_data",
+        "stock_question_engaged", "stock_goods_pool",
         "rerank", "embed_model_live", "FORK_DETECT", "ASK_ENTITY_FORM",
         "ORDER_BY_MEANING"):
     if hasattr(A, _nm):
@@ -446,7 +445,6 @@ A.try_event_count_period_clarify = lambda *a, **k: None
 A.rerank = lambda q, labs: list(range(len(labs)))
 A.embed_model_live = lambda: False
 A.stock_goods_pool = lambda *a, **k: ["accumulationregister_wh"]
-A.stock_balance_named_no_data = lambda *a, **k: {"kind": "no_data", "text": "named"}
 A.kind_has_corpus_support = lambda k: True
 A.question_expects_accounting_data = lambda i, q, d: True
 A.canon_claims_question = lambda i, q: False

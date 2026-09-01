@@ -1,3 +1,21 @@
+## 2026-09-01 — Класс 2 чистки армии: pre-wiki обходы сняты, каскад — единственный вход
+
+**[код]** По картам армии (map2, «вредит 2/2») из z20 сняты все ранние возвраты
+ДО вики-каскада: entity_form pre_entity (жила на ASK_ENTITY_FORM=1), ранний
+try_event_count_period_clarify (пост-вызовы сохранены), K6R clarify-return
+(перестановка кандидатов оставлена), весь пучок ранних stock-возвратов
+(subject clarify, warehouse_clarify, оба balance_bridge_clarify, stock-named
+no_data — три места). Ставшие мёртвыми удалены: z12 stock_balance_named_no_data,
+z16 k6_dual_atom_clarify_return. Инертные (висят только на тестах, prod-путь
+их не зовёт): warehouse_clarify, balance_bridge_clarify,
+stock_subject_needs_clarify — отдельным решением. Теперь clarify с чипами
+делает только каскад (z21 mk_opts) и fork-исходы после него.
+**Числа:** замки: zones 99/0, step4 110/0, hybrid 65/0 (был кейс снятого обхода),
+verify 35/0, stock 45/0 (кейс снятой функции), intent 162/0, gate 130/0,
+k4_clarify 27/0, fork 51/0, entity_form 53/0, a3 14/0, passport 24/0; −126 строк.
+Полный прогон 67 — после окончания L14 (не рестартовать сервис во время прогона).
+**Доки:** TARGET.md п. 0/12/21.
+
 ## 2026-09-01 — Класс 1 чистки армии: мёртвый код удалён, каскад перенесён на диск
 
 **[код]** Армия (162 cursor-прогона, 81 кусок × 2 независимых прохода, карты

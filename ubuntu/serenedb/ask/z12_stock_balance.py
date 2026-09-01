@@ -1078,16 +1078,6 @@ def stock_asks_named_product(question, intent=None):
     return False
 
 
-def stock_balance_named_no_data(question, diag, cut, t0):
-    """Именованный остаток без баланс-источника — no_data после пустого поиска (п. 21)."""
-    d = dict(diag or {})
-    d["stock_named_absent"] = True
-    return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question),
-            "sources": [],
-            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
-                               reason="именованный товар не в баланс-источниках")}
-
-
 def _resolve_breakdown_balance_src(src, cands=None, intent=None):
     """Balance-регистр с товарной осью для итога+люка."""
     try:
