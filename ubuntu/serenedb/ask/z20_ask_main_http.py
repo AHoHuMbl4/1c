@@ -2023,27 +2023,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["intent_assumed"] = ", ".join(
             "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
             for a in разбор["assumed"])
-    # K4-2: kind без опоры в корпусе — no_data до чужого src (№14 анкеты).
-    # §4.3: канон, забравший вопрос, — сам поддержка; страж уступает канону.
-    # [01.09, ночь] …и вопросу, называющему сущность базы её именем: опора
-    # по словам вопроса, а не по слову модели (замер L9: kind «записи» убивал
-    # «записей в реализациятмц» при живом регистре — отказ при данных, п. 21).
+    # [01.09, ночь; решение владельца «делаем через вики, без дополнительных
+    # гейтов выше»] Ранние стражи kind/off-topic СНЯТЫ с позиции над
+    # вики-каскадом. Судья одна — паспортная верификация; оффтопик
+    # заканчивается тем же no_data, но итогом каскада (пустой пул → no_data
+    # без вызовов модели; verify none → no_data), а не отдельным стражем.
+    # Страж по слову модели kind убивал вопросы с живыми данными (замер L9:
+    # «записей в реализациятмц» kind=«записи» → no_data при 78 537 записях —
+    # отказ при наличии данных, п. 21). Маркеры остаются в diag для
+    # наблюдаемости, на исход не влияют.
     _kind_chk = (intent.get("kind") or "").strip()
     if (_kind_chk and not kind_has_corpus_support(_kind_chk)
-            and not question_names_corpus_entity(question)
             and not canon_claims_question(intent, question)):
         diag["kind_unsupported"] = _kind_chk
-        return {"partial": cut or None, "kind": "no_data", "sources": [],
-                "text": NO_DATA_TEXT or refuse_text(question),
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                             reason="kind_unsupported_in_corpus")}
-    # K4-2: off-topic / творческий запрос без учётного want (№17/18).
     if not question_expects_accounting_data(intent, question, diag):
         diag["non_accounting_question"] = True
-        return {"partial": cut or None, "kind": "no_data", "sources": [],
-                "text": NO_DATA_TEXT or refuse_text(question),
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                             reason="non_accounting_question")}
     # K4-1 / п. 12: длинное assumed-окно — уточнение, не число наугад.
     # Не при period_from_prior и не при доказанном ticket (trusted/resolved period).
     _period_from_prior = bool((diag.get("prior") or {}).get("period")
