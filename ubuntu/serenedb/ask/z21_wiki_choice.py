@@ -80,13 +80,58 @@ def wiki_platform_kind(src_table, parent=""):
     return kind_word(src_table) or str(src_table or "").split("_", 1)[0]
 
 
-def wiki_axis_phrase(intent):
-    """Оси разбора (kind + action_axis) — структурный вход SQL."""
+def wiki_axis_phrase(intent, question=""):
+    """Оси разбора (kind + action_axis) — структурный вход SQL.
+
+    [01.09 okna] ОСЬ ПОДАЁТСЯ В ФИЛЬТР ТОЛЬКО КОГДА БАЗА ЕЁ НЕСЁТ: у оси есть
+    носители (каталог-ось по label/aliases или регистры с такой ref-осью).
+    Слово без носителей — это ИМЯ ЦЕЛИ («записей в регистре книгапродаж»:
+    стемов «книгапродаж» нет ни в одном refcol), и осевой фильтр срезал весь
+    kNN-топ — пул пуст при живой карточке, no_data при живом эталоне
+    (29 вопросов «движений в регистре X»). Имя цели несёт сам вопрос —
+    kNN его видит; фильтр осей для несуществующей оси был бессмыслен и
+    вреден. Проверка носителей — штатные резолверы (resolved_warehouse_
+    axis_word / registers_for_kind_axes), не слова кода.
+    """
     if "intent_axis_words" in globals():
         words = intent_axis_words(intent)
         if words:
-            return " ".join(words)
+            phrase = " ".join(words)
+            if _wiki_axis_has_carriers(phrase, intent, question):
+                return phrase
+            return ""
     return wiki_action_axis(intent)
+
+
+_WIKI_AXIS_CARRIERS = {"at": 0.0, "phrase": None, "res": None}
+
+
+def _wiki_axis_has_carriers(phrase, intent, question=""):
+    """Есть ли у фразы-оси носители в базе (каталог-ось или ref-ось регистра).
+
+    Кэш 300 с по фразе. Ошибка чтения = «носителей нет» — фильтр оси
+    отключается, пул строится по kNN (безопасная сторона).
+    """
+    now = time.time()
+    if (_WIKI_AXIS_CARRIERS["phrase"] == phrase
+            and now - _WIKI_AXIS_CARRIERS["at"] < 300):
+        return _WIKI_AXIS_CARRIERS["res"]
+    res = False
+    try:
+        _rw = globals().get("resolved_warehouse_axis_word")
+        if callable(_rw) and _rw(question or phrase, intent or {}):
+            res = True
+    except RuntimeError:
+        res = False
+    if not res:
+        try:
+            _rg = globals().get("registers_for_kind_axes")
+            if callable(_rg) and _rg(intent or {}, None, question or phrase):
+                res = True
+        except RuntimeError:
+            res = False
+    _WIKI_AXIS_CARRIERS.update({"at": now, "phrase": phrase, "res": res})
+    return res
 
 
 def _wiki_hybrid_vars(question, intent):
@@ -101,7 +146,7 @@ def _wiki_hybrid_vars(question, intent):
         "embed_maxlen": WIKI_EMBED_MAXLEN,
         "knn_limit": WIKI_KNN_N,
         "action_class": ac_sql,
-        "action_axis": wiki_axis_phrase(intent).replace("'", "''"),
+        "action_axis": wiki_axis_phrase(intent, question).replace("'", "''"),
         "want_agg": 1 if wiki_aggregate_want(intent, question) else 0,
         "stem_dict": STEM_DICT.replace("'", "''"),
         "pick_limit": WIKI_PICK_N,
