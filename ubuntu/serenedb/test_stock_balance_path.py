@@ -376,7 +376,6 @@ _early_saved = {
     "children_by_parent": A.children_by_parent,
     "emb_ready": A.emb_ready,
     "K6R": A.K6R,
-    "pick_entity": A.pick_entity,
     "warehouse_clarify": A.warehouse_clarify,
     "psql": A.psql,
 }
@@ -389,7 +388,6 @@ A.meaning_candidates = lambda *a, **k: []
 A.children_by_parent = lambda by, match, preds: ({}, {})
 A.emb_ready = lambda table: False
 A.K6R = None
-A.pick_entity = lambda *a, **k: ([], {}, {})
 A.warehouse_clarify = lambda *a, **k: {
     "kind": "clarify", "text": "склад?", "options": [], "sources": [], "diag": {}}
 A._BALANCE_REGS.update({"at": time.time(), "set": {"accumulationregister_wh"}})
@@ -409,14 +407,13 @@ t("early stock path: plan not UnboundLocalError",
   _plan_err is None or "plan" not in str(_plan_err), _plan_err)
 
 
-# --- balance picked: event-пик не читается (UnboundLocalError _ev) ---
-_bal_ev_saved = dict(_early_saved)
+# --- wiki-only entity path: answer() без обходных пиков ---
+_wiki_only_saved = dict(_early_saved)
 for _nm in (
-        "try_balance_code_entity_pick", "try_event_code_entity_pick",
         "kind_has_corpus_support", "question_expects_accounting_data",
         "canon_claims_question", "period_assumed_needs_clarify", "_need_clarify",
         "term_ref_owners", "counts_for_model", "align_picked_to_terms",
-        "entity_choice_locked", "sales_refuse_sticky_focus", "hold_settled_entity",
+        "entity_choice_locked", "hold_settled_entity",
         "holders_of_target", "resolve_focus", "axis_focus_plan",
         "prefer_entity_for_stock", "prefer_entity_for_catalog_count",
         "prefer_entity_for_sales", "prefer_entity_for_rank", "event_filter_pool",
@@ -425,23 +422,7 @@ for _nm in (
         "rerank", "embed_model_live", "FORK_DETECT", "ASK_ENTITY_FORM",
         "ORDER_BY_MEANING"):
     if hasattr(A, _nm):
-        _bal_ev_saved[_nm] = getattr(A, _nm)
-_event_pick_called = []
-_bal_pick_called = []
-
-
-def _bal_picked_mock(*a, **k):
-    _bal_pick_called.append(1)
-    return {"picked": ["accumulationregister_wh"], "marks": {}, "plan": {}}
-
-
-def _ev_must_not_run(*a, **k):
-    _event_pick_called.append(1)
-    raise AssertionError("event pick when balance already picked")
-
-
-A.try_balance_code_entity_pick = _bal_picked_mock
-A.try_event_code_entity_pick = _ev_must_not_run
+        _wiki_only_saved[_nm] = getattr(A, _nm)
 A.parse_intent = lambda q, today: dict(_INTENT_EARLY)
 A.probe = lambda terms: ([], {})
 A.match_expr = lambda exprs, preds: ("", 0)
@@ -452,7 +433,6 @@ A.meaning_candidates = lambda *a, **k: []
 A.children_by_parent = lambda by, match, preds: ({}, {})
 A.emb_ready = lambda table: False
 A.K6R = None
-A.pick_entity = lambda *a, **k: (_ for _ in ()).throw(AssertionError("model called"))
 A.warehouse_clarify = lambda *a, **k: None
 A.stock_question_engaged = lambda *a, **k: False
 A.prefer_entity_for_stock = lambda c, *a, **k: c
@@ -476,7 +456,6 @@ A.term_ref_owners = lambda t: {}
 A.counts_for_model = lambda *a, **k: {}
 A.align_picked_to_terms = lambda picked, *a, **k: picked
 A.entity_choice_locked = lambda *a, **k: False
-A.sales_refuse_sticky_focus = lambda f, *a, **k: (f, {}, {}, None)
 A.hold_settled_entity = lambda f, *a, **k: f
 A.holders_of_target = lambda t: []
 A.resolve_focus = lambda f, d: f
@@ -488,21 +467,18 @@ if hasattr(A, "ASK_ENTITY_FORM"):
 if hasattr(A, "ORDER_BY_MEANING"):
     A.ORDER_BY_MEANING = False
 A.psql = lambda q: []
-_bal_ev_err = None
+_wiki_only_err = None
 try:
     A.answer("сколько на складе?", focus=None, no_arbiter=True)
 except UnboundLocalError as exc:
-    _bal_ev_err = exc
+    _wiki_only_err = exc
 except AssertionError:
     pass
 finally:
-    for _k, _v in _bal_ev_saved.items():
+    for _k, _v in _wiki_only_saved.items():
         setattr(A, _k, _v)
-t("balance picked: no UnboundLocalError _ev",
-  _bal_ev_err is None or "_ev" not in str(_bal_ev_err), _bal_ev_err)
-t("обходных пиков нет — сущность выбирает только вики",
-  not _bal_pick_called and not _event_pick_called,
-  (_bal_pick_called, _event_pick_called))
+t("wiki-only entity path: no UnboundLocalError",
+  _wiki_only_err is None, _wiki_only_err)
 # [01.09 «физически один путь»] обходных пиков больше нет вовсе: полный
 # answer() не зовёт ни баланс-, ни event-«ручной выбор» — сущность выбирает
 # только вики-каскад.

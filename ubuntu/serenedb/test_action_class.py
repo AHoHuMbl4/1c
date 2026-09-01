@@ -137,44 +137,6 @@ try:
 finally:
     A.kind_axis_hits = _old_kah2
 
-# --- K9-ф3: event code pick (офлайн, без psql) ---
-_old_k6r = A.K6R
-_feats_f3 = {
-    "accumulationregister_sales": {
-        "prefix": "accumulationregister", "holds_kind_axis": True,
-        "n_with_nums": 10, "axis_fit": 2, "has_qty_measure": 1,
-        "has_money_measure": 1, "n_ref_axes": 4},
-    "accumulationregister_книгапокупок": {
-        "prefix": "accumulationregister", "holds_kind_axis": True,
-        "n_with_nums": 10, "axis_fit": 2, "has_qty_measure": 0,
-        "has_money_measure": 1, "n_ref_axes": 1},
-}
-class _K6Stub:
-    @staticmethod
-    def event_rank_pick(cands, feats, intent, question=""):
-        return _old_k6r.event_rank_pick(cands, feats, intent, question)
-    @staticmethod
-    def event_movement_pool(cands, feats, intent):
-        return _old_k6r.event_movement_pool(cands, feats, intent)
-A.K6R = _K6Stub
-_old_pe = A.pick_entity
-A.pick_entity = lambda *a, **k: (_ for _ in ()).throw(AssertionError("model called"))
-try:
-    _intent = {"want": "count", "action_class": "event", "kind": "клиенты",
-               "action_axis": "клиенты"}
-    _diag = {"answer_fit_v2_full": _feats_f3}
-    _out = A.try_event_code_entity_pick(
-        "сколько покупают", _intent,
-        ["accumulationregister_книгапокупок", "accumulationregister_sales"],
-        _diag, {}, 0.0, {}, "", [], {})
-    t("event_code_pick: leader without model",
-      _out and _out.get("picked") == ["accumulationregister_sales"])
-    t("event_code_pick: diag lock",
-      _diag.get("event_code_lock") == "accumulationregister_sales")
-finally:
-    A.pick_entity = _old_pe
-    A.K6R = _old_k6r
-
 # --- K9-ф4/ф5: event distinct + fork A/B/C ---
 _old_lac = A.live_axis_col_for_count
 A.live_axis_col_for_count = lambda intent, src, axes=None: "Контрагент"
@@ -190,26 +152,6 @@ try:
           ["accumulationregister_a", "accumulationregister_b"]))
 finally:
     A.live_axis_col_for_count = _old_lac
-
-class _K6Stub2:
-    @staticmethod
-    def event_movement_pool(cands, feats, intent):
-        return []
-    @staticmethod
-    def event_rank_pick(cands, feats, intent, question=""):
-        return None, []
-    @staticmethod
-    def event_movement_any(cands):
-        return K6.event_movement_any(cands)
-A.K6R = _K6Stub2
-try:
-    _out2 = A.try_event_code_entity_pick(
-        "сколько наторговали", {"want": "sum", "action_class": "event"},
-        ["accumulationregister_sales"], {"answer_fit_v2_full": {}}, {}, 0.0,
-        {}, "", [], {})
-    t("event_code_pick: empty pool + movement -> None", _out2 is None)
-finally:
-    A.K6R = _old_k6r
 
 # fork A/B/C на distinct-атомах (офлайн)
 _intent_ev = {"want": "count", "action_class": "event", "kind": "клиенты",

@@ -696,40 +696,6 @@ def sales_noncanon_focus(src):
     return True
 
 
-def sales_refuse_sticky_focus(focus, trusted, resolved, intent, question, cands):
-    """Снять sticky focus/память/resolved, если это не канон продаж.
-
-    [замер 21.08 okna возврат 11]: «прошлый месяц» → focus_forced=
-    document_передачатмц… (данные до 2024) при живом регистре июль 2.7M.
-    Память/resolved без decision_id не люк §6bis.
-    Возвращает (focus, trusted, resolved, cleared_diag|None).
-    """
-    if not sales_sum_intent(intent, question):
-        return focus, trusted, resolved, None
-    if sales_ticket_hatch(trusted):
-        return focus, trusted, resolved, None
-    pool = list(cands or [])
-    if focus and focus not in pool:
-        pool = [focus] + pool
-    canon = sales_canon_src(pool, intent, question)
-    if not canon:
-        return focus, trusted, resolved, None
-    sticky = focus or (resolved or {}).get("src") or (
-        (trusted or {}).get("src") if isinstance(trusted, dict) else None)
-    if not sticky or sticky == canon:
-        return focus, trusted, resolved, None
-    if not sales_noncanon_focus(sticky):
-        return focus, trusted, resolved, None
-    cleared = {"было": sticky, "стало": canon,
-               "from_memory": bool(isinstance(trusted, dict)
-                                   and trusted.get("from_memory")),
-               "had_resolved": bool((resolved or {}).get("src"))}
-    if isinstance(trusted, dict) and trusted.get("from_memory"):
-        trusted = None
-    if isinstance(resolved, dict) and resolved.get("src"):
-        resolved = {k: v for k, v in resolved.items() if k != "src"}
-    return None, trusted, resolved, cleared
-
 
 def _is_price_list_noise(src):
     s = str(src or "").lower()

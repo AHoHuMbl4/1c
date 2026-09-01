@@ -549,8 +549,6 @@ def entity_form_gate_open(intent=None, diag=None):
     period = intent.get("period") or {}
     if period.get("origin") == "assumed":
         return True
-    if (diag or {}).get("event_count_period_assumed"):
-        return True
     return False
 
 
@@ -1009,63 +1007,6 @@ def event_filter_pool(cands, intent, diag):
         return list(cands or [])
     return K6R.event_movement_pool(cands, event_movement_feats(diag), intent)
 
-
-def try_event_code_entity_pick(question, intent, cands, diag, cut, t0, by, match, preds,
-                               marks):
-    if not event_path_active(intent) or not K6R:
-        return None
-    feats = event_movement_feats(diag)
-    if not feats:
-        return None
-    leader, tied = K6R.event_rank_pick(cands, feats, intent, question)
-    if leader:
-        diag["event_code_lock"] = leader
-        return {"picked": [leader], "marks": marks or {}, "plan": {}}
-    pool = K6R.event_movement_pool(cands, feats, intent)
-    if not pool:
-        diag["event_code_empty_pool"] = True
-        if K6R.event_movement_any(cands):
-            return None
-        return {"kind": "no_data",
-                "partial": cut or None,
-                "text": NO_DATA_TEXT or refuse_text(question),
-                "sources": [],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                   reason="event_no_axis_movement")}
-    if tied:
-        if event_duel_applies(intent, tied):
-            form = K6R.infer_rank_form(intent, question) if K6R else "distinct"
-            pos = {s: i for i, s in enumerate(cands or [])}
-            ordered = sorted(
-                tied,
-                key=lambda s: K6R.rank_key_v2(
-                    s, feats.get(s), intent, form, pos.get(s, 10**6))
-                if K6R else s)
-            diag["event_duel_pool"] = list(ordered)
-            diag["event_code_lock"] = ordered[0]
-            return {"picked": ordered, "marks": marks or {}, "plan": {}}
-        try:
-            lab_by = {r[0]: r[1] for r in psql(
-                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                % (TABLES, ", ".join(lit(c) for c in tied))) if r and r[0]}
-        except RuntimeError:
-            lab_by = {}
-        opts = mk_opts([t for t in tied if t in lab_by], lab_by, marks or {}, by,
-                       match=match, preds=preds)
-        if len(opts) >= 2:
-            diag["event_code_tie"] = tied
-            return {"partial": cut or None, "kind": "clarify",
-                    "text": clarify_say(question, opts, diag)
-                            or ", ".join("«%s»" % o["label"] for o in opts),
-                    "options": opts, "sources": [o["label"] for o in opts],
-                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-    diag["event_code_ambiguous"] = tied or pool[:4]
-    return {"kind": "no_data",
-            "partial": cut or None,
-            "text": NO_DATA_TEXT or refuse_text(question),
-            "sources": [],
-            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                               reason="event_rank_tie")}
 
 
 def aggregate_distinct_axis(src_table, match, preds, axis_col):

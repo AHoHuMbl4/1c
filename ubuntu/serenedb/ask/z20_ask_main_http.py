@@ -234,22 +234,6 @@ def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
     return (not bad), bad
 
 
-def count_figures(agg):
-    """Числа ответа, когда величина не названа: счёт и — если было — отброшенное.
-
-    🔴 `folders` уходит наружу вместе со счётом (`F249`). «Сколько записей» при
-    отброшенных папках справочника — это ДВА числа, а не одно, и молчаливая потеря
-    второго считается дефектом (п. 13). Прежде отброшенное держалось только прозой
-    модели: не назвала — гейт отказывал в ответе целиком, и `[замер 04.08]` на живом
-    вопросе «сколько всего контрагентов» это давало клиенту «проверенный ответ
-    невозможен» при посчитанных 12 записях и 1 папке. Теперь число уходит полем, то
-    есть доезжает и тогда, когда формулировка не сошлась.
-    """
-    out = {"count": (agg or {}).get("count")}
-    if (agg or {}).get("folders"):
-        out["folders"] = agg["folders"]
-    return out
-
 
 def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None, money=True,
              slot_mode=None):
@@ -765,7 +749,7 @@ Reply with JSON only, no text outside it:
 
 # Все НАШИ системные сообщения в одном месте: по ним `prompt_leak` ловит утечку
 # инструкции в ответ клиенту точным совпадением строки (`№27`).
-OUR_PROMPTS = [INTENT_SYS, PICK_SYS, AXIS_PICK_SYS, CLARIFY_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS]
+OUR_PROMPTS = [INTENT_SYS, AXIS_PICK_SYS, CLARIFY_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS]
 
 def _coverage_answer(question, diag, t0):
     """Ответ о полноте данных — из переписи, а не из корпуса (п. 13).
@@ -2982,70 +2966,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # корпус и упали («TSQUERY outside @@ match»).
             match = code_filter
     else:
-        picked, marks, plan = [], {}, {}
-        if diag.get("register_count_locked"):
-            picked = [diag["register_count_locked"]]
-        elif diag.get("sales_canon_locked"):
-            picked = [diag["sales_canon_locked"]]
-        _wiki = None
-        if ASK_WIKI_CHOICE:
-            _wiki = try_wiki_hybrid_entity_pick(
-                question, intent, diag, cut, t0,
-                by=by, match=match, preds=preds)
-            if (_wiki and _wiki.get("kind") in ("no_data", "clarify")
-                    and not diag.get("sales_canon_locked")):
-                return _wiki
-            if _wiki and _wiki.get("picked"):
-                picked, marks, plan = (
-                    _wiki["picked"], _wiki.get("marks") or {}, _wiki.get("plan") or {})
-                diag["wiki_hybrid_pick"] = True
-            elif _wiki is None and not diag.get("wiki_pick"):
-                diag["wiki_pick"] = "fallback"
-        if not picked:
-            _bal = try_balance_code_entity_pick(
-                question, intent, cands, diag, cut, t0, {}, plan=plan)
-            if _bal and _bal.get("kind") in ("no_data", "clarify"):
-                return _bal
-            if _bal and _bal.get("picked"):
-                picked, marks, plan = _bal["picked"], _bal.get("marks") or {}, _bal.get("plan") or {}
-                diag["balance_code_pick"] = True
-                if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
-                    diag["wiki_manual_fallback"] = "balance"
-            else:
-                _ev = try_event_code_entity_pick(
-                    question, intent, cands, diag, cut, t0, by, match, preds, {})
-                if _ev and _ev.get("kind") in ("no_data", "clarify"):
-                    return _ev
-                if _ev and _ev.get("picked"):
-                    picked, marks, plan = _ev["picked"], _ev.get("marks") or {}, _ev.get("plan") or {}
-                    diag["event_code_pick"] = True
-                    if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
-                        diag["wiki_manual_fallback"] = "event"
-                else:
-                    _ct = try_count_theme_code_pick(
-                        question, intent, cands, diag, cut, t0)
-                    if _ct and _ct.get("picked"):
-                        picked = _ct["picked"]
-                        marks, plan = {}, {}
-                        diag.update(_ct.get("diag") or {})
-                        if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
-                            diag["wiki_manual_fallback"] = "count_theme"
-                    elif not picked:
-                        if (ASK_WIKI_CHOICE and diag.get("wiki_pick") in ("none", "fallback")
-                                and question_expects_accounting_data(intent, question, diag)
-                                and diag.get("wiki_empty_pool")):
-                            return {"kind": "no_data",
-                                    "partial": cut or None,
-                                    "text": NO_DATA_TEXT or refuse_text(question),
-                                    "sources": [],
-                                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                                       reason="wiki_empty_pool")}
-                        try:
-                            picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
-                                                              counts_for_model, match, diag)
-                        except RuntimeError:
-                            picked, marks, plan = [], {}, {}
-                            diag["degraded"] = "выбор сущности сделан без модели"
+        _ep = wiki_primary_entity_cascade(
+            question, intent, cands, diag, cut, t0,
+            by, match, preds, counts_for_model)
+        if isinstance(_ep, dict) and _ep.get("kind"):
+            return _ep
+        picked = _ep.get("picked") or []
+        marks = _ep.get("marks") or {}
+        plan = _ep.get("plan") or {}
 
         # КОД С ИЕРАРХИЕЙ — НЕОДНОЗНАЧНОСТЬ, КОТОРУЮ РЕШАЕТ ЧЕЛОВЕК. «62» — это и номер
         # формы статистики, и счёт: буквальный поиск ведёт к форме, а иерархический

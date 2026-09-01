@@ -354,19 +354,6 @@ def _fake_okna(q):
 A.psql = _fake_okna
 A._measures_by_src = _fake_mbs
 try:
-    # path july: sticky focus на мёртвый документ → refuse → канон регистр
-    _f, _tr, _res, _clr = A.sales_refuse_sticky_focus(
-        "document_передачатмцврозничнуюторговлю_номенклатура",
-        {"ambiguity": "entity", "src": "document_передачатмцврозничнуюторговлю_номенклатура",
-         "from_memory": True},
-        {"src": "document_передачатмцврозничнуюторговлю_номенклатура"},
-        {"want": "sum", "kind": "продажи", "measure": "продали"},
-        OKNA_JULY_Q, OKNA_CANDS)
-    t("okna july: sticky focus снят", _f is None, _f)
-    t("okna july: memory trusted сброшен", _tr is None, _tr)
-    t("okna july: resolved.src снят", not (_res or {}).get("src"), _res)
-    t("okna july: cleared→канон регистр",
-      _clr and _clr.get("стало") == "accumulationregister_реализациятмц", _clr)
     _canon = A.sales_canon_src(OKNA_CANDS,
                                {"want": "sum", "measure": "продали"}, OKNA_JULY_Q)
     t("okna july: sales_canon_src = реализациятмц",
@@ -408,15 +395,6 @@ try:
         [_why_lock, "accumulationregister_книгапродаж"], True)
     t("okna why: singleton без книги",
       _a3 == [_why_lock], _a3)
-
-    # decision_id hatch: явный выбор документа НЕ снимаем
-    _fh, _th, _rh, _ch = A.sales_refuse_sticky_focus(
-        "document_реализациятмц",
-        {"ambiguity": "entity", "src": "document_реализациятмц"},
-        {},
-        {"want": "sum", "measure": "продали"}, OKNA_JULY_Q, OKNA_CANDS)
-    t("okna hatch: decision_id документ сохранён",
-      _fh == "document_реализациятмц" and _ch is None, (_fh, _ch))
 
     # noncanon detector
     t("okna noncanon: передача",

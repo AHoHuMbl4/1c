@@ -246,10 +246,6 @@ def main() -> int:
       and diag_so.get("wiki_pick") != "stock_override")
     t("stock override locks stock_canon",
       diag_so.get("stock_canon_locked") == "accumulationregister_stock")
-    t("wiki_stock_canon_takeover helper",
-      z21["wiki_stock_canon_takeover"](
-          "q", {}, {"stock_canon_locked": "accumulationregister_stock"}, [])
-      == "accumulationregister_stock")
 
     # wiki leader catalog + stock engaged → override register, not hybrid_pick
     z21["ASK_WIKI_CHOICE"] = True
@@ -298,19 +294,12 @@ def main() -> int:
       "entity_form_gate_open(intent, diag)" in z20_patched
       and z20_patched.find("_ecp0 = try_event_count_period_clarify")
       < z20_patched.find("entity_form_gate_open(intent, diag)"))
-    t("old z20 disk lacks cascade call (patch required)",
-      "wiki_primary_entity_cascade(" not in z20_raw)
+    t("z20 disk has cascade call (on disk since 01.09)",
+      "wiki_primary_entity_cascade(" in z20_raw)
 
     z21["ASK_WIKI_CHOICE"] = True
     z21["stock_question_engaged"] = lambda *a, **k: False
     z21["stock_canon_src"] = lambda *a, **k: None
-    _bal_calls = []
-    z21["try_balance_code_entity_pick"] = lambda *a, **k: (
-        _bal_calls.append(1) or {"picked": ["manual_balance"]})
-    z21["try_event_code_entity_pick"] = lambda *a, **k: None
-    z21["try_count_theme_code_pick"] = lambda *a, **k: None
-    z21["pick_entity"] = lambda *a, **k: ([], {}, {})
-
     def _wiki_none_with_pool(q, intent, diag, cut, t0, **kw):
         diag["wiki_attempted"] = True
         diag["wiki_pool_n"] = 2
@@ -322,11 +311,9 @@ def main() -> int:
     out = z21["wiki_primary_entity_cascade"](
         "q", {"want": "count"}, [], diag_c, None, 0, {}, "", [], {})
     t("wiki none+pool skips balance manual",
-      not _bal_calls and out.get("kind") == "no_data")
+      out.get("kind") == "no_data")
     t("wiki none+pool diag attempted",
       diag_c.get("wiki_attempted") and diag_c.get("wiki_pick") == "none")
-
-    _bal_calls.clear()
 
     def _wiki_degraded(q, intent, diag, cut, t0, **kw):
         diag["wiki_pick"] = "fallback"
@@ -339,7 +326,7 @@ def main() -> int:
     # [01.09 «физически один путь»] fallback-лестницы нет: даже при
     # degraded-вики баланс-«ручной выбор» не зовётся — честный отказ.
     t("вики degraded → no_data, не ручной выбор",
-      not _bal_calls and out2.get("kind") == "no_data")
+      out2.get("kind") == "no_data")
 
     r = subprocess.run([sys.executable, "-m", "py_compile", str(Z21)],
                        capture_output=True, text=True)

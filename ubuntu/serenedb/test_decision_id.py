@@ -116,12 +116,6 @@ A.reset_decisions_for_tests()
 t("рестарт хранилища → старый билет unknown",
   A.consume_decision(ids[0], "На какую сумму продали?")[1] == "unknown")
 
-# choice_error_response — внутренний снимок; клиенту answer_checked его не отдаёт
-err_out = A.choice_error_response("used", "x")
-t("снимок ошибки билета собирается (kind=choice_error)",
-  err_out["kind"] == "choice_error" and err_out["error"] == "used"
-  and err_out["text"] and "sources" in err_out)
-
 A.reset_decisions_for_tests()
 opts_r = [
     {"src": "document_a", "label": "Реализация (документ)", "distinct_by": "продажа", "found": 10},

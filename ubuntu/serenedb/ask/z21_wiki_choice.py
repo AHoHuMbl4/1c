@@ -584,31 +584,6 @@ def wiki_pick_from_cards(question, intent, cards, diag=None):
     return {"outcome": "leader", "leader": leader, "diag": diag}
 
 
-def wiki_stock_canon_takeover(question, intent, diag, cands, plan=None):
-    """Wiki catalog-tie/none не перекрывает stock_canon (остаток — регистр)."""
-    intent = intent or {}
-    plan = plan or {}
-    if (diag or {}).get("register_count_locked"):
-        return None
-    _ccq = globals().get("catalog_count_question")
-    if callable(_ccq) and _ccq(intent, question):
-        return None
-    _ckt = globals().get("catalog_kind_total_question")
-    if callable(_ckt) and _ckt(intent, question):
-        return None
-    if "stock_question_engaged" not in globals():
-        return None
-    if not stock_question_engaged(question, intent, plan):
-        return None
-    canon = (diag or {}).get("stock_canon_locked")
-    if not canon and "stock_canon_src" in globals():
-        try:
-            canon = stock_canon_src(cands, question, intent, plan)
-        except RuntimeError:
-            canon = None
-    return canon or None
-
-
 def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
                                 by, match, preds, counts_for_model, plan=None):
     """Wiki-first entity pick; manual balance/event/count_theme only on fallback.
@@ -622,9 +597,6 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
     уважаются первой проверкой.
     """
     picked, marks, plan = [], {}, plan or {}
-    if diag.get("register_count_locked"):
-        return {"picked": [diag["register_count_locked"]], "marks": {},
-                "plan": plan}
     if diag.get("sales_canon_locked"):
         return {"picked": [diag["sales_canon_locked"]], "marks": {},
                 "plan": plan}
@@ -716,13 +688,6 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
                 diag["wiki_pick"] = "clarify"
     if pick.get("outcome") == "degraded":
         diag["wiki_pick"] = "fallback"
-        return None
-    # event_count_period_assumed + clarify/none → fallback: event_code_pick
-    # считает distinct по оси (без wiki-clarify чужих карточек).
-    if (diag.get("event_count_period_assumed")
-            and pick.get("outcome") in ("clarify", "none")):
-        diag["wiki_pick"] = "fallback"
-        diag["wiki_period_assumed_fallback"] = pick.get("outcome")
         return None
     if pick.get("outcome") == "none":
         if not diag.get("wiki_pick"):

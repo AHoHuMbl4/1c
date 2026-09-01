@@ -563,35 +563,6 @@ def term_axis_hits(src_table, axes, groups):
     return out
 
 
-def resolve_member_names(src_table, col, groups, gis, target_src=""):
-    """Имена членов сравнения на оси — значения refs_map / имена search_refmap."""
-    names = []
-    for gi in gis or []:
-        if 0 <= gi < len(groups or []):
-            for a in groups[gi] or []:
-                if a and a not in names:
-                    names.append(str(a))
-    if not names:
-        return []
-    parts = " UNION ALL ".join("SELECT %s AS alt" % lit(n) for n in names)
-    try:
-        rs = psql(
-            "WITH q AS (%s), "
-            "vals AS ("
-            "  SELECT DISTINCT map_extract_value(refs_map, %s) AS val FROM %s "
-            "  WHERE src_table = %s AND refs_map IS NOT NULL) "
-            "SELECT DISTINCT v.val FROM q JOIN vals v "
-            "  ON lower(v.val) = lower(q.alt) "
-            "  OR (length(q.alt) >= 3 AND lower(v.val) LIKE '%%' || lower(q.alt) || '%%') "
-            "  OR list_has_any("
-            "       list_filter(ts_lexize(%s, v.val), x -> length(x) >= 3),"
-            "       list_filter(ts_lexize(%s, q.alt), x -> length(x) >= 3))"
-            % (parts, lit(col), CORPUS, lit(src_table), lit(STEM_DICT), lit(STEM_DICT)))
-    except RuntimeError:
-        return names
-    found = [r[0] for r in rs or [] if r and r[0]]
-    return found or names
-
 
 def _group_leader(agg):
     """Значение первой группы после ORDER — лидер, не итог множества."""

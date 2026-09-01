@@ -246,38 +246,6 @@ def rows_of(src_table, match, preds, limit, measure=None):
            frag, src, " AND ".join(where), order + ", row_key", limit))
 
 
-PICK_SYS = """You map a user's question to a record type.
-
-You get the question and a numbered list of record types that exist in this database.
-Answer with the NUMBER only — the type whose records would ANSWER the question.
-If the question genuinely fits SEVERAL types and the answers would be DIFFERENT — the
-asker could reasonably have meant either — answer with their numbers separated by a
-comma (at most three). Do that only for real ambiguity, not for uncertainty: if one
-type clearly answers the question better, give that one number.
-Some entries list what is typical for their records — the attributes that set them
-apart from the rest of the database. Use them to tell apart types whose names sound
-alike: they describe what the records actually are about.
-Entries marked as line items are the rows INSIDE another record: a question about a
-total, a sum or "how much in all" belongs to the record that owns them, not to the rows.
-Some entries show how many records already match the question; prefer a type that
-actually has matches over a same-sounding one that has none.
-If none of them fits, answer 0.
-Judge by meaning, across languages and wording: a question about sales belongs to the
-type that records sales even if the words differ.
-
-Then state WHAT has to be computed. Reply with one JSON object and nothing else:
-  {"types": [numbers], "quantity": "<exact name from that entry's list, or null>",
-   "compute": "count" | "sum" | "max" | "min" | "avg"}
-Rules for these fields:
-- "quantity" MUST be copied character for character from the "quantities recorded here"
-  list of the type you chose. Never invent a name, never translate it, never reshape it.
-  Use null when the question asks how MANY records there are rather than about a value.
-- "compute" is what the question asks for: how many records -> "count"; a total or
-  "how much in all" -> "sum"; the largest/smallest -> "max"/"min"; the average -> "avg".
-- If the type you chose has no quantity that the question is about, still name the type
-  and put null: the system will ask the user rather than guess."""
-
-
 def signal_terms(src_table, match, top):
     """Чем ЭТОТ источник отличается от базы в целом — по его совпадениям.
 

@@ -150,25 +150,6 @@ def slot_measure_uncovered(word, selected, names, alias_by=None):
     return False, []
 
 
-def clarify_complete(txt, opts, question=""):
-    """Код не имеет права выкинуть пункт уточнения: чего нет в тексте — дописать.
-
-    Форма пункта — нумерованная строка-вопрос (`format_clarify_options`): её
-    follow-up WebUI копирует в чип. Если все такие строки уже есть — не дублируем.
-    Проза, где мелькнули только подписи, нумерованными строками не считается.
-    """
-    lines = format_clarify_options(question, opts)
-    if not lines:
-        return txt or ""
-    body = (txt or "").rstrip()
-    low = body.lower()
-    missing = [ln for ln in lines if ln.lower() not in low]
-    if not missing:
-        return body
-    extra = "\n".join(missing)
-    return extra if not body else body + "\n" + extra
-
-
 # 🔴 ОТПЕЧАТОК ТИПИЗИРОВАН (15.08, аудит §5.2). Боевая форма `figures` — это
 # `compose_slot_values` ПЛЮС паспорт набора (`from`/`to`/`label`/`measure`,
 # `build_answer_passport`). Прежний отпечаток приводил к числу всё, что не `date*`,
@@ -579,27 +560,6 @@ def reissue_clarify(batch, err=None):
         if batch.get(k) is not None:
             out[k] = batch[k]
     return out
-
-
-def choice_error_response(error_code, decision_id=None):
-    """Внутренний снимок ошибки билета (журнал). Клиенту не отдаётся."""
-    texts = {
-        "unknown": "Этот вариант выбора больше недоступен. Задайте вопрос снова.",
-        "expired": "Срок выбора истёк. Задайте вопрос снова.",
-        "used": "Этот вариант уже был выбран. Задайте вопрос снова.",
-        "mismatch": "Выбор не подходит к этому вопросу. Задайте вопрос снова.",
-        "user_mismatch": "Выбор принадлежит другому пользователю. Задайте вопрос снова.",
-    }
-    code = error_code if error_code in texts else "unknown"
-    return {
-        "kind": "choice_error",
-        "text": texts[code],
-        "error": code,
-        "decision_id": decision_id,
-        "sources": [],
-        "partial": None,
-        "options": [],
-    }
 
 
 def reset_decisions_for_tests():

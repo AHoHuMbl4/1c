@@ -1,3 +1,26 @@
+## 2026-09-01 — Класс 1 чистки армии: мёртвый код удалён, каскад перенесён на диск
+
+**[код]** Армия (162 cursor-прогона, 81 кусок × 2 независимых прохода, карты
+`.claude/state/map0-*`, сводки `map2-*`) + grep-верификация оркестратора.
+Удалено (ноль живых вызовов при ASK_WIKI_CHOICE=1): z16 `pick_entity`,
+z07 `PICK_SYS`, z10 `try_count_theme_code_pick`, z12 `try_balance_code_entity_pick`,
+z05 `try_event_code_entity_pick`, z21 `wiki_stock_canon_takeover`, недостижимые
+ветки `register_count_locked` / `event_count_period_assumed` (флаги нигде не
+присваивались), z14 `clarify_complete`/`choice_error_response`, z17
+`resolve_member_names`, z19 `claims_in_text`, z20 `count_figures`, z11
+`sales_refuse_sticky_focus`. Главное: патч wiki-primary каскада перенесён с
+bootstrap на диск — `wiki_primary_entity_cascade(...)` теперь прямо в z20
+(~:2966), `_Z20_CASCADE_OLD/NEW` удалены; код на диске = код в бою. Тесты
+поправлены только в части ссылок на удалённое (моки/кейсы); живые кейсы не
+тронуты. Ловушка из армии: `rank_period_clarify_applies` и `catalog_count_src`
+выглядели мёртвыми, но живые (z10:605, патч _bootstrap:166) — НЕ удалены.
+**Числа:** замки после чистки: zones 99/0, step4 110/0, hybrid 66/0, verify 35/0,
+stock 46/0, intent 162/0, gate 130/0, k4_clarify 27/0, fork 51/0, entity_form 53/0,
+a3 14/0, passport 24/0. Прежние красные (сверены на чистом HEAD): k4_axis 1,
+k4_guess 3, sales_canon_prefer 1, action_class (TypeError на HEAD идентично).
+Полный прогон 67 — следующим шагом после выката.
+**Доки:** TARGET.md п. 0/12.
+
 ## 2026-09-01 — Названная сущность: без подмены при пустом окне и без «рода как оси»
 
 **[замер okna, L12]** после проверки меры (1020873): wrong 10→**5**, match 28,

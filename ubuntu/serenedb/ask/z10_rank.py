@@ -549,16 +549,6 @@ def count_theme_code_pick_applies(cands, diag, intent, question):
     return giant
 
 
-def try_count_theme_code_pick(question, intent, cands, diag, cut, t0):
-    """Обход pick_entity: один q_meta-лидер при ловушке гиганта."""
-    if not count_theme_code_pick_applies(cands, diag, intent, question):
-        return None
-    leader = cands[0]
-    d = dict(diag or {})
-    d["count_theme_code_pick"] = leader
-    return {"picked": [leader], "marks": {}, "plan": {},
-            "diag": d, "partial": cut}
-
 
 def rank_period_unspecified(intent, diag=None):
     """Rank/top-N: период не задан явно и не снят drop_assumed."""

@@ -344,8 +344,6 @@ def stock_question_engaged(question, intent=None, plan=None):
     _ckt = globals().get("catalog_kind_total_question")
     if callable(_ckt) and _ckt(intent, question):
         return False
-    if (intent or {}).get("register_count_locked"):
-        return False
     stock_kind = _kind_is_stock_scoped(intent, question)
     wh = question_mentions_warehouse_axis(question, intent, plan)
     if not stock_kind and not wh:
@@ -1016,55 +1014,6 @@ def prefer_entity_for_stock(cands, question, intent=None, plan=None):
             out.append(c)
     return out or [canon]
 
-
-def try_balance_code_entity_pick(question, intent, cands, diag, cut, t0, marks,
-                                 plan=None):
-    """K9-ф3: balance-path — лидер из registers_for_kind_axes до модели."""
-    intent = intent or {}
-    if not balance_path_engaged(intent, plan, question):
-        return None
-    capable = balance_capable_or_registers()
-    scoped = [c for c in (cands or []) if c]
-    pool = [c for c in registers_for_kind_axes(intent, scoped, question)
-            if c in capable and not register_is_balance_noise(c)]
-    if not pool:
-        pool = [c for c in stock_goods_pool(capable, intent, question) if c in scoped]
-    if not pool:
-        diag["balance_code_empty_pool"] = True
-        return {"kind": "no_data",
-                "partial": cut or None,
-                "text": NO_DATA_TEXT or refuse_text(question),
-                "sources": [],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                   reason="balance_no_axis_register")}
-    pool = _sort_stock_pool(pool, capable)
-    leader = pool[0]
-    if len(pool) == 1:
-        diag["balance_code_lock"] = leader
-        return {"picked": [leader], "marks": marks or {}, "plan": plan or {}}
-    keys = {s: _stock_register_rank_key(s, capable) for s in pool}
-    best = min(keys.values())
-    leaders = [s for s in pool if keys[s] == best]
-    if len(leaders) == 1:
-        diag["balance_code_lock"] = leaders[0]
-        return {"picked": leaders, "marks": marks or {}, "plan": plan or {}}
-    try:
-        lab_by = {r[0]: r[1] for r in psql(
-            "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-            % (TABLES, ", ".join(lit(c) for c in leaders))) if r and r[0]}
-    except RuntimeError:
-        lab_by = {}
-    opts = mk_opts([t for t in leaders if t in lab_by], lab_by, marks or {}, {},
-                   match="", preds="")
-    if len(opts) >= 2:
-        diag["balance_code_tie"] = leaders
-        return {"partial": cut or None, "kind": "clarify",
-                "text": clarify_say(question, opts, diag)
-                        or ", ".join("«%s»" % o["label"] for o in opts),
-                "options": opts, "sources": [o["label"] for o in opts],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-    diag["balance_code_lock"] = leader
-    return {"picked": [leader], "marks": marks or {}, "plan": plan or {}}
 
 
 def _stems_of_text(s):
