@@ -93,6 +93,28 @@ struct_catalog_event AS (
                      concat_ws(' ', t.label, a.aliases, a.best_used_for)),
                      x -> length(x) >= 3))
 ),
+-- [01.09 «один судья»] СЛОВАРЬ СИНОНИМОВ — ВХОД ПУЛА, А НЕ СУДЬЯ ПОСЛЕ.
+-- Раньше его лидер жил в отдельном вето (z20 _alias_verdict) и переигрывал
+-- уже верифицированный выбор; на склеенных именах («книгапродаж») словарь
+-- слеп и подставлял чужой топ по общим словам («строки 5-С») — верный ответ
+-- превращался в уточнение (замер L6: 55 из 67 — отказы при живых эталонах).
+-- Теперь словарь даёт КАНДИДАТОВ: топ-K по bm25 входит в пул наравне с kNN,
+-- а судьёй остаётся одна паспортная верификация каскада. Источник — те же
+-- данные (search_entity_alias), на любой базе; скорер и разделитель равных —
+-- штатные предписания движка.
+-- Доки: Sql › Indexes › Inverted › Ranking › Tie-breaking;
+--       Sql › Functions › Search › Relevance Scoring › Scorer Functions.
+struct_alias AS (
+  SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
+         c.emb <=> (SELECT qv FROM q) AS distance,
+         2 AS src_layer
+    FROM (SELECT src_table
+            FROM alias_idx
+           WHERE aliases @@ :'question'
+           ORDER BY bm25(alias_idx.tableoid) DESC, src_table
+           LIMIT :alias_top) a
+    JOIN search_wiki_entity_card c ON c.src_table = a.src_table
+),
 pool AS (
   SELECT DISTINCT ON (src_table) src_table, name, description, axes, measures,
          covered, distance, src_layer
@@ -102,6 +124,7 @@ pool AS (
       UNION ALL SELECT * FROM struct_register
       UNION ALL SELECT * FROM struct_move
       UNION ALL SELECT * FROM struct_catalog_event
+      UNION ALL SELECT * FROM struct_alias
     ) u
    ORDER BY src_table, src_layer DESC, distance
 ),

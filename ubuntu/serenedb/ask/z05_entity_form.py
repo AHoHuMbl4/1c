@@ -662,7 +662,7 @@ def entity_form_atom_complement(catalog_src="", sales_src="", axis="",
 
 
 
-def _pick_kind_axis_col(ax, axis_word, intent):
+def _pick_kind_axis_col(ax, axis_word, intent, meaning_ok=True):
     """K9-ф6: kind/action_axis → catalog target_src → col refcols.
 
     Порядок как entity_form_axis_on_sales / rank_axis_resolve (kind-only):
@@ -687,7 +687,7 @@ def _pick_kind_axis_col(ax, axis_word, intent):
             if reranked:
                 return reranked[0]
             return matched[0]["col"]
-    hits = kind_axis_hits(ax, axis_word)
+    hits = kind_axis_hits(ax, axis_word, meaning_ok=meaning_ok)
     if not hits:
         return None
     if len(hits) == 1:
@@ -722,7 +722,12 @@ def live_axis_col_for_count(intent, src, axes=None):
     if not axis_word:
         return None
     ax = axes if axes is not None else refcols_of(src)
-    return _pick_kind_axis_col(ax, axis_word, intent)
+    # Смысловой мост для оси — только когда ось НАЗВАНА человеком (action_axis);
+    # fallback-ось из рода записей («движений в регистре X») ищется по именам.
+    return _pick_kind_axis_col(
+        ax, axis_word, intent,
+        meaning_ok=bool((intent or {}).get("action_class") and
+                        (intent or {}).get("action_axis")))
 
 
 def count_defer_measure_clarify(intent, src, axes=None):
@@ -900,10 +905,13 @@ def try_event_count_period_clarify(question, intent, diag, cut, t0, today=None,
                     has_holder = True
                     break
         if has_holder:
-            intent["period"] = dict(ry)
-            intent["period"]["origin"] = "assumed"
-            if diag is not None:
-                diag["event_count_period_assumed"] = "rolling_year"
+            # [01.09, п.12 TARGET] ОКНО БЕЗ ВОПРОСА НЕ ПОДСТАВЛЯЕТСЯ: молчаливый
+            # rolling_year — догадка (замер: «движений в регистре реализациятмц»
+            # assumed-год срезал 44 829 записей и выдал «3 · Виды
+            # Деятельности» при эталоне 78 537). Путь event-count без
+            # названного периода возвращается сюда после вики-выбора и
+            # спрашивает окно чипами (месяц/квартал/12м/всё) — слово владельца:
+            # переспрос сразу с подсказками, не угадывание.
             return None
     return event_count_period_clarify(
         question, intent, diag, cut, t0, today=today)

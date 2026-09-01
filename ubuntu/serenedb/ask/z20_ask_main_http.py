@@ -3373,6 +3373,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # уточнением, а ни одной ошибки замена не поймала. Шум заменился шумом.
     if (SIGNAL_DISAGREE and top_by_question and picked and not focus
             and top_by_question not in picked
+            # [01.09 «один путь»] верифицированный вики-лидер не оспаривается
+            # вершиной по вектору: соперники уже видены паспортами и отвергнуты
+            # (wiki_verify_no), а rival, добавленный сюда, расширяет picked, и
+            # блок ниже отдаёт clarify «ambiguous» при верном выборе (замер:
+            # «записей в книгапродаж» — pick+verify верны, top_by_question
+            # реализациятмц → clarify вместо 76 075). Замок ставится ниже по
+            # коду из ЭТОЙ же пары признаков — здесь проверяется она сама.
+            # Симметрично гашению стоп2 и fork-исходов по wiki_arbiter_locked.
+            and not (diag.get("wiki_hybrid_pick")
+                     and diag.get("wiki_verify") == picked[0])
             and not (SKIP_SERVICE_RIVALS and top_by_question in служебные)):
         diag["signals_disagree"] = top_by_question
         if _family(top_by_question) in {_family(x) for x in picked if x != top_by_question}:
@@ -3469,10 +3479,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             doubt = False
     # Документ-регистратор идёт в круг ПЕРВЫМ соперником: он и есть второе прочтение,
     # а не «следующий по порядку отбора». При каноне продаж документ — люк, не соперник.
+    # [01.09 «один судья»] при верифицированном вики-лидере документ-регистратор
+    # не соперник выбора: регистр и его документ — один факт, записанный дважды
+    # (выбор уже подтверждён паспортами; замер: «движений в регистре
+    # реализациятмц» — pick+verify верны, writer_pair уводил в clarify при
+    # живом эталоне 78 537).
     if (diag.get("writer_pair") and picked and not focus and not no_arbiter
             and not diag.get("sales_canon_locked")
             and not diag.get("catalog_count_locked")
             and not diag.get("stock_canon_locked")
+            and not (diag.get("wiki_hybrid_pick")
+                     and diag.get("wiki_verify") == picked[0])
             and len(arb_pool) < ARBITER_MAX):
         arb_pool.append(diag["writer_pair"])
     if (sales_sum_intent(intent, question)
@@ -3623,6 +3640,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 or diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked")):
             return out
         w = (out.get("diag") or {}).get("focus")
+        # [01.09 «один путь», PLAN_WIKI_CHOICE] ответ собран по верифицированному
+        # вики-лидеру (та же пара признаков, что ставит wiki_arbiter_locked):
+        # кандидат уже проверен «да/нет» большим wiki-контекстом. Вето-словарь
+        # здесь — второй судья из другого источника поверх уже сделанной проверки
+        # (замер: «записей в книгапродаж» — pick+verify верны, а словарь на
+        # склеенном имени не находит алиасов и уводит верный ответ в clarify).
+        if (diag.get("wiki_hybrid_pick")
+                and diag.get("wiki_verify") == (w or "")):
+            diag["alias_veto_wiki_lock"] = True
+            return out
         if not w or out.get("kind") not in ("answer", "figures"):
             return out
         ok, top = _alias_verdict(w)
@@ -4091,6 +4118,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             and not guards_skip_for_choice(focus, measure_pick, trusted)
             and not no_arbiter
             and not diag.get("sales_canon_locked")
+            # [01.09 «один судья»] верифицированный вики-лидер словарём-вето
+            # не переигрывается: словарь теперь вход пула (struct_alias), а
+            # судья один — паспортная верификация. То же правило, что в
+            # _checked: wiki_hybrid_pick + wiki_verify == выбор.
+            and not (diag.get("wiki_hybrid_pick")
+                     and diag.get("wiki_verify") == picked[0])
             and not diag.get("catalog_count_locked")):
         cand = picked[0]
         if cand != top_by_question:

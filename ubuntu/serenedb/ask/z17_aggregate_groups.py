@@ -422,8 +422,16 @@ def measures_of_many(srcs):
     return out
 
 
-def kind_axis_hits(axes, kind_text):
-    """kind → оси, чей target_src сходится с родом тем же путём, что выбор сущности."""
+def kind_axis_hits(axes, kind_text, meaning_ok=True):
+    """kind → оси, чей target_src сходится с родом тем же путём, что выбор сущности.
+
+    meaning_ok=False — только совпадение ПО ИМЕНАМ (label/aliases/best_used_for):
+    смысловой мост («движения» ≈ «деятельности» по вектору) допустим, когда ось
+    НАЗВАНА человеком (action_axis); для fallback-оси из рода записей он брал
+    случайную ось регистра (замер 01.09: «движений в регистре реализациятмц» —
+    ось «ВидДеятельности» по смыслу → «3 · Виды Деятельности» при эталоне
+    78 537 строк).
+    """
     kind_text = (kind_text or "").strip()
     axes = [a for a in (axes or []) if a.get("col")]
     if not kind_text or not axes:
@@ -447,6 +455,8 @@ def kind_axis_hits(axes, kind_text):
     hits = [r[0] for r in rs or [] if r and r[0]]
     if hits:
         return hits
+    if not meaning_ok:
+        return []
     # Основы не сошлись (товар ↛ номенклатура). Дальше — тот же путь, что выбор
     # сущности: смысл и словарь, пересечённые с target_src осей выбранного источника.
     try:

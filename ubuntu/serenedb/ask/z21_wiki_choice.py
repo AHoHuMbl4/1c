@@ -9,6 +9,7 @@ apply_bindings(globals())
 ASK_WIKI_CHOICE = os.environ.get("ASK_WIKI_CHOICE", "0") == "1"
 WIKI_KNN_N = int(os.environ.get("WIKI_KNN_N", "15"))
 WIKI_PICK_N = int(os.environ.get("WIKI_PICK_N", "5"))
+WIKI_ALIAS_TOP = int(os.environ.get("WIKI_ALIAS_TOP", "3"))
 WIKI_PASSPORT_N = int(os.environ.get("WIKI_PASSPORT_N", "5"))
 WIKI_PASSPORT_BODY_MAX = int(os.environ.get("WIKI_PASSPORT_BODY_MAX", "1500"))
 WIKI_SEP_GAP = float(os.environ.get("WIKI_SEP_GAP", "0.04"))
@@ -150,6 +151,7 @@ def _wiki_hybrid_vars(question, intent):
         "want_agg": 1 if wiki_aggregate_want(intent, question) else 0,
         "stem_dict": STEM_DICT.replace("'", "''"),
         "pick_limit": WIKI_PICK_N,
+        "alias_top": WIKI_ALIAS_TOP,
     }
 
 
