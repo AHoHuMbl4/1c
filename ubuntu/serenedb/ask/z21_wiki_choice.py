@@ -547,7 +547,7 @@ def wiki_pick_from_cards(question, intent, cards, diag=None):
     except Exception as e:  # noqa: BLE001
         sys.stderr.write("ask DEGRADED: wiki pick без модели (%s)\n" % str(e)[:80])
         return {"outcome": "degraded", "diag": diag}
-    choice, separable = 0, k_sep
+    choice, separable, pick_reason = 0, k_sep, "model_none"
     txt = (raw or "").strip()
     try:
         j = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
@@ -558,11 +558,11 @@ def wiki_pick_from_cards(question, intent, cards, diag=None):
             if "separable" in j:
                 separable = bool(j.get("separable")) and k_sep
     except (ValueError, KeyError, TypeError):
-        nums = [int(x) for x in re.findall(r"\b(\d+)\b", txt)]
-        choice = nums[0] if nums else 0
+        choice = 0
+        pick_reason = "model_unparseable"
     if choice == 0:
         diag["wiki_pick"] = "none"
-        return {"outcome": "none", "reason": "model_none", "diag": diag}
+        return {"outcome": "none", "reason": pick_reason, "diag": diag}
     if choice < 1 or choice > len(cards):
         diag["wiki_pick"] = "bad_index"
         return {"outcome": "none", "reason": "bad_index", "diag": diag}

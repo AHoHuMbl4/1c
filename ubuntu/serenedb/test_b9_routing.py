@@ -84,37 +84,6 @@ try:
 finally:
     A._resolver_psql = real_r
 
-# ── align picked to terms (B8-06) ────────────────────────────────────────────
-real_psql = A.psql
-
-
-def _fake_psql(sql):
-    if "ts_lexize" in sql and "реализация" in sql.lower():
-        return [["{реализац,тмц}"]]
-    if "ts_lexize" in sql and "книга" in sql.lower():
-        return [["{книг,продаж}"]]
-    if "label FROM" in sql and "реализациятмц" in sql:
-        return [["Реализация ТМЦ"]]
-    if "label FROM" in sql and "книгапродаж" in sql:
-        return [["Книга Продаж"]]
-    return real_psql(sql)
-
-
-A.psql = _fake_psql
-try:
-    diag = {}
-    got = A.align_picked_to_terms(
-        ["accumulationregister_книгапродаж"],
-        ["accumulationregister_книгапродаж", "accumulationregister_реализациятмц"],
-        {"terms": [["реализация тмц"]], "want": "count"},
-        diag)
-    t("align: реализация тмц → регистр реализациятмц",
-      got == ["accumulationregister_реализациятмц"]
-      and diag.get("aligned_to_terms", {}).get("became")
-      == "accumulationregister_реализациятмц")
-finally:
-    A.psql = real_psql
-
 print()
 if FAIL:
     print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)

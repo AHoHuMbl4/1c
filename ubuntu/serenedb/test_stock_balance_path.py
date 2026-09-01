@@ -411,7 +411,7 @@ _wiki_only_saved = dict(_early_saved)
 for _nm in (
         "kind_has_corpus_support", "question_expects_accounting_data",
         "canon_claims_question", "period_assumed_needs_clarify", "_need_clarify",
-        "term_ref_owners", "counts_for_model", "align_picked_to_terms",
+        "term_ref_owners", "counts_for_model",
         "entity_choice_locked", "hold_settled_entity",
         "holders_of_target", "resolve_focus", "axis_focus_plan",
         "prefer_entity_for_stock", "prefer_entity_for_catalog_count",
@@ -452,7 +452,6 @@ A.period_assumed_needs_clarify = lambda i, t, question="": False
 A._need_clarify = lambda *a, **k: None
 A.term_ref_owners = lambda t: {}
 A.counts_for_model = lambda *a, **k: {}
-A.align_picked_to_terms = lambda picked, *a, **k: picked
 A.entity_choice_locked = lambda *a, **k: False
 A.hold_settled_entity = lambda f, *a, **k: f
 A.holders_of_target = lambda t: []

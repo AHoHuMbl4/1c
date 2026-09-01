@@ -1402,11 +1402,13 @@ def build_period_empty_answer(question, agg, intent, measure, src, match, preds,
                                 money=money, slot_mode=slot_mode)
     if money and measure:
         _figs["sum"] = "0.00"
-    if agg.get("count") is not None:
-        _figs["count"] = agg["count"]
+    _figs["count"] = agg.get("count") if agg.get("count") is not None else 0
     _figs.update(pass_fields or {})
+    _agg_atom = dict(agg)
+    if _agg_atom.get("count") is None:
+        _agg_atom["count"] = 0
     _atom = atom_from_agg(
-        agg, operation=atom_operation(
+        _agg_atom, operation=atom_operation(
             intent.get("want"), None,
             form=_form, grain=_grain, slot_mode=slot_mode),
         measure_id=(say_measure or measure or None),
@@ -1436,69 +1438,6 @@ def drop_period_preds(intent, preds):
     new_intent = dict(intent)
     new_intent["period"] = {}
     return new_intent, new_preds
-
-
-def _term_stems(intent):
-    """Основы слов из terms — для сопоставления с именем сущности."""
-    stems = set()
-    try:
-        for g in (intent or {}).get("terms") or []:
-            for alt in g or []:
-                if not alt:
-                    continue
-                kr = psql("SELECT ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(str(alt))))
-                stems |= {s for s in _stem_set(kr[0][0] if kr else "") if len(s) >= 3}
-                tail = str(alt).split("_", 1)[-1] if "_" in str(alt) else str(alt)
-                kr2 = psql("SELECT ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(tail)))
-                stems |= {s for s in _stem_set(kr2[0][0] if kr2 else "") if len(s) >= 3}
-    except RuntimeError:
-        pass
-    return stems
-
-
-def _src_covers_term_stems(src, term_stems):
-    if not src or not term_stems:
-        return False
-    parts = set()
-    try:
-        r = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1" % (TABLES, lit(src)))
-        lab = (r[0][0] if r and r[0] else "") or src
-        for chunk in (lab, _src_tag(src) or src):
-            kr = psql("SELECT ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(chunk)))
-            parts |= {s for s in _stem_set(kr[0][0] if kr else "") if len(s) >= 3}
-    except RuntimeError:
-        return False
-    return term_stems <= parts
-
-
-def align_picked_to_terms(picked, cands, intent, diag):
-    """B8-06: picked, не покрывающий stems terms, заменяется единственным cand, который покрывает."""
-    if not picked or len(picked) != 1:
-        return picked
-    term_stems = _term_stems(intent)
-    if not term_stems:
-        return picked
-    pool = list(dict.fromkeys(list(cands or []) + list(picked)))
-    fits = [c for c in pool if _src_covers_term_stems(c, term_stems)]
-    if not fits and term_stems:
-        try:
-            core = sorted(term_stems, key=len, reverse=True)[0]
-            pat = "%%" + core + "%%"
-            extra = [r[0] for r in psql(
-                "SELECT src_table FROM %s WHERE lower(replace(label, ' ', '')) LIKE %s "
-                "OR lower(src_table) LIKE %s LIMIT 12"
-                % (TABLES, lit(pat), lit(pat))) if r and r[0]]
-            pool = list(dict.fromkeys(pool + extra))
-            fits = [c for c in pool if _src_covers_term_stems(c, term_stems)]
-        except RuntimeError:
-            pass
-    if picked[0] in fits and _src_covers_term_stems(picked[0], term_stems):
-        return picked
-    if len(fits) == 1 and fits[0] != picked[0]:
-        if diag is not None:
-            diag["aligned_to_terms"] = {"was": picked[0], "became": fits[0]}
-        return [fits[0]]
-    return picked
 
 
 def _wiki_named_entity(diag, src):
@@ -2919,9 +2858,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if extra:
                 picked = list(dict.fromkeys((picked or []) + extra))
                 diag["code_ambiguous"] = extra
-
-    if picked and not entity_choice_locked(trusted, resolved):
-        picked = align_picked_to_terms(picked, cands, intent, diag)
 
     # 🔴 РАСХОЖДЕНИЕ НЕЗАВИСИМЫХ СИГНАЛОВ — ЭТО И ЕСТЬ НЕОДНОЗНАЧНОСТЬ.
     # [замер 30.07] реранкер на вопрос «На какую сумму мы закупили товаров и услуг?»
