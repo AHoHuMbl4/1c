@@ -3648,6 +3648,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _ef_guard["fork_outcome_skipped"])
     _ef_early = (_ef_guard.get("action") == "resolve_early")
     if (FORK_OUTCOMES and FORK_DETECT and not no_arbiter and not trusted
+            # [01.09 «один путь»] верифицированный вики-лидер — пространство
+            # прочтений из одного: развилка (A/B/C) про многопрочтения, их
+            # уже сняла вики-верификация паспортами. Запуск по чужим
+            # текстовым прочтениям возвращал uncounted_cell при верном
+            # лидере (замер: книгапродаж — fork строил 10 классов из
+            # параметров поиска при пуле в одну сущность).
+            and not diag.get("wiki_arbiter_locked")
             and (len(arb_pool) > 1 or _window_fork or _ef_early)):
         _t_out = time.time()
         _scan_err = None
