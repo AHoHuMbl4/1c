@@ -3450,6 +3450,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         doubt = (len(picked) > 1 or bool(diag.get("signals_disagree"))
                  or bool(diag.get("writer_pair")) or bool(diag.get("meaning_down")))
     arb_pool = list(picked)
+    # [01.09 «один путь»] ВИКИ-ВЕРИФИКАЦИЯ УЖЕ ПРОВЕРИЛА СОПЕРНИКОВ: если
+    # вики-лидер подтверждён верификацией (wiki_verify == лидер, единственный
+    # yes), кандидаты, отвергнутые паспортами (no), в круг арбитра НЕ
+    # заводятся — арбитр дублировал отвергнутое и топил верный выбор в
+    # развилке (замер: «записей в книгапродаж» — pick+verify верны, арбитр
+    # тащил catalog_организации/constant_организация → uncounted_cell →
+    # no_data при живом эталоне 76 075). Круг из одного = ответ.
+    if (picked and diag.get("wiki_hybrid_pick")
+            and diag.get("wiki_verify") == picked[0]):
+        diag["wiki_arbiter_locked"] = picked[0]
+        arb_pool = list(picked)
+        doubt = False
     if event_path_active(intent):
         arb_pool = event_filter_pool(arb_pool, intent, diag)
         if len(arb_pool) == 1:
