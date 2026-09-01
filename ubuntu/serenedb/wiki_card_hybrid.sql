@@ -114,6 +114,14 @@ axis_ok AS (
   SELECT p.src_table
     FROM pool p
    WHERE :'action_axis' = ''
+      -- [01.09 okna] class=none — вопрос без объектно/событийной семантики
+      -- («записей в регистре X» — прямой выбор по имени): осевые фильтры не
+      -- применимы, kNN-топ проходит как есть. Замер: «книгапродаж» давал
+      -- ПУСТОЙ пул — kind уезжал в action_axis, стемов kind в refcols
+      -- регистров нет, axis_ok выкашивал все kNN-карточки (29 вопросов
+      -- «движений в регистре X» уходили в no_data при живых эталонах).
+      -- Доки: Sql › Functions › Vector Functions › kNN.
+      OR :'action_class' = 'none'
       OR p.src_layer = 2
       OR EXISTS (
            SELECT 1 FROM search_refcols r
@@ -130,7 +138,7 @@ filtered AS (
     FROM pool p
     JOIN meta m ON m.src_table = p.src_table
    WHERE p.src_table IN (SELECT src_table FROM axis_ok)
-     AND NOT (:want_agg = 1 AND m.parent <> '')
+     AND NOT (:want_agg = 1 AND :'action_class' <> 'none' AND m.parent <> '')
      AND (
            :'action_class' NOT IN ('event', 'object')
         OR (:'action_class' = 'event'
