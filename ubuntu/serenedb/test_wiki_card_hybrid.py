@@ -225,9 +225,11 @@ def main() -> int:
     diag_so = {"stock_canon_locked": "accumulationregister_stock"}
     out_so = z21["wiki_primary_entity_cascade"](
         "q", {"want": "count"}, [], diag_so, None, 0, {}, "", [], {})
-    t("stock override on wiki clarify",
-      out_so.get("picked") == ["accumulationregister_stock"]
-      and diag_so.get("wiki_pick") == "stock_override")
+    # [01.09 «физически один путь»] перебоев вики-исхода больше нет:
+    # clarify возвращается человеку как есть, override невозможен.
+    t("wiki clarify возвращается без override",
+      out_so.get("kind") == "clarify"
+      and diag_so.get("wiki_pick") != "stock_override")
     t("stock override locks stock_canon",
       diag_so.get("stock_canon_locked") == "accumulationregister_stock")
     t("wiki_stock_canon_takeover helper",
@@ -244,11 +246,10 @@ def main() -> int:
     diag_cat = {}
     out_cat = z21["wiki_primary_entity_cascade"](
         "q", {"want": "count"}, [], diag_cat, None, 0, {}, "", [], {})
-    t("wiki catalog on stock → override register",
-      out_cat.get("picked") == ["accumulationregister_stock"]
-      and diag_cat.get("wiki_pick") == "stock_override"
-      and diag_cat.get("stock_canon_locked") == "accumulationregister_stock"
-      and not diag_cat.get("wiki_hybrid_pick"))
+    t("wiki catalog-лидер жив (перебоя регистром нет)",
+      out_cat.get("picked") == ["catalog_goods"]
+      and diag_cat.get("wiki_hybrid_pick") is True
+      and diag_cat.get("wiki_pick") != "stock_override")
 
     t("ASK_WIKI_CHOICE flag exists", "ASK_WIKI_CHOICE" in z21)
     t("wiki_primary_entity_cascade exists",
@@ -267,12 +268,15 @@ def main() -> int:
     z20_patched = _boot._patch_z20_wiki_primary(z20_raw)
     t("bootstrap patch injects cascade call",
       "wiki_primary_entity_cascade(" in z20_patched)
-    t("bootstrap patch allows stock_override past hybrid gate",
-      'wiki_pick") == "stock_override"' in z20_patched
-      or "stock_override" in z20_patched)
-    t("bootstrap patch catalog override except count canon",
-      "catalog_count_question(intent, question)" in z20_patched
-      and "catalog_kind_total_question(intent, question)" in z20_patched)
+    t("bootstrap patch: stock_override-инъекции больше нет",
+      "stock_override" not in z20_patched)
+    # [01.09 «физически один путь»] поздние канонные перебои вырезаны из z20:
+    # после патча в коде НЕТ вызовов канон-функций, выбирающих сущность.
+    t("z20 без поздних канон-выборов (один путь)",
+      "sales_canon_src(cands" not in z20_patched
+      and "register_count_src(cands" not in z20_patched
+      and "stock_canon_src(cands" not in z20_patched
+      and "catalog_count_src(cands" not in z20_patched)
     t("bootstrap net-distinct in no_axis_member",
       "stock_net_distinct" in z20_patched
       and "no_axis_member" in z20_patched)
@@ -318,8 +322,10 @@ def main() -> int:
     diag_c2 = {}
     out2 = z21["wiki_primary_entity_cascade"](
         "q", {"want": "count"}, [], diag_c2, None, 0, {}, "", [], {})
-    t("wiki fallback allows balance manual",
-      _bal_calls and out2.get("picked") == ["manual_balance"])
+    # [01.09 «физически один путь»] fallback-лестницы нет: даже при
+    # degraded-вики баланс-«ручной выбор» не зовётся — честный отказ.
+    t("вики degraded → no_data, не ручной выбор",
+      not _bal_calls and out2.get("kind") == "no_data")
 
     r = subprocess.run([sys.executable, "-m", "py_compile", str(Z21)],
                        capture_output=True, text=True)

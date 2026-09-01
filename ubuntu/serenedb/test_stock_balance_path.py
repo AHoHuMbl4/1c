@@ -500,9 +500,12 @@ finally:
         setattr(A, _k, _v)
 t("balance picked: no UnboundLocalError _ev",
   _bal_ev_err is None or "_ev" not in str(_bal_ev_err), _bal_ev_err)
-t("balance picked: event pick not invoked",
-  _bal_pick_called and not _event_pick_called,
+t("обходных пиков нет — сущность выбирает только вики",
+  not _bal_pick_called and not _event_pick_called,
   (_bal_pick_called, _event_pick_called))
+# [01.09 «физически один путь»] обходных пиков больше нет вовсе: полный
+# answer() не зовёт ни баланс-, ни event-«ручной выбор» — сущность выбирает
+# только вики-каскад.
 
 
 # --- early named: capable без goods pool → пустой pool ---

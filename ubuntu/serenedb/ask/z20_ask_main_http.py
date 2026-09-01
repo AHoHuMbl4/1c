@@ -2304,10 +2304,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         capable = balance_capable_or_registers()
         cands = filter_stock_balance_sales_noise(cands, question, diag)
         cands = filter_stock_goods_registers(cands, question, diag, intent=intent, plan=plan)
-        _stock_pre = stock_canon_src(cands, question, intent)
-        if _stock_pre:
-            diag["stock_canon_locked"] = _stock_pre
-            cands = prefer_entity_for_stock(cands, question, intent)
+        # [01.09 «один путь»] постановка stock_canon_locked убрана: замок —
+        # обходной выбор сущности. Пул чистится фильтрами, выбирает вики.
     else:
         cands = prefer_entity_for_stock(cands, question, intent)
     if K6R:
@@ -2352,10 +2350,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         capable = balance_capable_or_registers()
         cands = filter_stock_balance_sales_noise(cands, question, diag)
         cands = filter_stock_goods_registers(cands, question, diag, intent=intent, plan=plan)
-        _stock_canon = stock_canon_src(cands, question, intent) or diag.get("stock_canon_locked")
-        if _stock_canon:
-            diag["stock_canon_locked"] = _stock_canon
-            cands = prefer_entity_for_stock(cands, question, intent)
+        # [01.09 «один путь»] вторая постановка stock_canon_locked убрана.
         named = stock_asks_named_product(question, intent)
         # K4-1 №12: остаток без предмета — уточнение товара (не figures по продажам).
         if (not named and stock_subject_needs_clarify(question, intent)
@@ -2868,14 +2863,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # ASK_ENTITY_FORM: форма F до выбора сущности моделью (K6).
     # pre_entity + classes>1 = молчаливый лидер — гейт в try_entity_form_answer.
     # Пул F — все catalog_/register_/document_ из cands (без head-среза круга).
-    if (not no_arbiter and not focus
-            and not entity_choice_locked(trusted, resolved)
-            and not diag.get("sales_canon_locked")
-            and sales_canon_intent(intent, question, cands)):
-        _sc_pre_ecp = sales_canon_src(cands, intent, question, plan={})
-        if _sc_pre_ecp:
-            diag["sales_canon_locked"] = _sc_pre_ecp
-            шаг("канон продаж (до period-clarify)", стало=_sc_pre_ecp)
+    # [01.09 «один путь»] ранняя постановка продажного канона убрана:
+    # выбирала сущность до вики-каскада. «Сколько продали» теперь идёт
+    # через вики (карточка реализации по смыслу + верификация).
     _ecp0 = try_event_count_period_clarify(
         question, intent, diag, cut, t0, today=today, pool=list(cands or []),
         trusted=trusted, resolved=resolved)
@@ -2933,21 +2923,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         шаг("сущность снята — осталась", было=(focus or "—"), осталось=_held)
         diag["entity_held"] = {"было": focus, "осталось": _held}
         focus = _held
-    if (not focus and not no_arbiter
-            and not entity_choice_locked(trusted, resolved)):
-        if not diag.get("sales_canon_locked"):
-            _sc_pre = sales_canon_src(cands, intent, question, plan={})
-            if _sc_pre:
-                diag["sales_canon_locked"] = _sc_pre
-                шаг("канон продаж (ранний)", стало=_sc_pre)
-        if (not diag.get("sales_canon_locked")
-                and not diag.get("stock_canon_locked")
-                and not diag.get("catalog_count_locked")
-                and not diag.get("register_count_locked")):
-            _rc_pre = register_count_src(cands, intent, question)
-            if _rc_pre:
-                diag["register_count_locked"] = _rc_pre
-                шаг("канон регистра (ранний)", стало=_rc_pre)
+    # [01.09 инверсия, схема владельца PLAN_WIKI_CHOICE] ранняя постановка
+    # замков продаж/регистра убрана ИЗ НАЧАЛА: она перехватывала выбор ДО
+    # вики-каскада (замер: «Сколько валют?» — register_count замок хватал
+    # накопregister_импорттмц по стиху «валют» в его мерах, и ни одна карточка
+    # вики не виделась вопросом). Постановка обоих замков теперь ВНУТРИ
+    # wiki_primary_entity_cascade (z21) — ПОСЛЕ вики-попытки, как fallback.
+    # Поздний продажный канон ниже по коду не тронут.
     axis_plan = None
     if focus:
         axis_plan = axis_focus_plan(
@@ -3460,69 +3442,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     #      базу (п. 9). Поэтому связь не решает, а лишь ЗАВОДИТ второе прочтение в круг
     #      арбитра: спрашивает человека арбитр-детектор и только тогда, когда посчитанные
     #      числа разошлись. Сошлись — ответ уходит как прежде, цена правила равна счёту.
-    # Канон «продали»: регистр движений, не выбор модели и не книга НДС.
-    # Документ-регистратор в writer_pair не заводим — люк только по focus.
-    if (not focus and not no_arbiter
-            and not entity_choice_locked(trusted, resolved)
-            and (sales_sum_intent(intent, question)
-                 or sales_rank_engaged(intent, plan, question, cands))):
-        _canon = sales_canon_src(cands, intent, question, plan=plan)
-        if _canon:
-            _prev = list(picked or [])
-            if not _prev or _prev[0] != _canon:
-                diag["sales_canon_override"] = {"было": _prev, "стало": _canon}
-                шаг("канон продаж", было=(_prev[0] if _prev else "—"),
-                    стало=_canon)
-            picked = [_canon]
-            diag["sales_canon_locked"] = _canon
+    # 🔴 [01.09, требование владельца: «физически один путь»] Поздние канонные
+    # перебои выбора сущности ВЫРЕЗАНЫ (канон продаж, замок регистра, канон
+    # остатков, канон прайса): все они перебивали вики-лидер после каскада
+    # (замер: «Сколько валют?» — вики выбрала catalog_валюты, поздний замок
+    # регистра возвращал импорттмц). Единственный путь выбора —
+    # wiki_primary_entity_cascade (пул карточек → LLM → верификация). Функции
+    # канонов остались в зонах для слоёв, не выбирающих сущность.
     if period_zero_why_question(question) and sales_sum_intent(intent, question):
         diag["period_zero_why"] = True
         if (intent.get("want") or "") == "list":
             intent["want"] = "sum"
-    if (not focus and not no_arbiter
-            and not entity_choice_locked(trusted, resolved)
-            and not diag.get("sales_canon_locked")
-            and not diag.get("stock_canon_locked")
-            and not diag.get("catalog_count_locked")):
-        _reg = register_count_src(cands, intent, question)
-        if _reg:
-            _prev = list(picked or [])
-            if not _prev or _prev[0] != _reg:
-                diag["register_count_override"] = {"было": _prev, "стало": _reg}
-                шаг("канон регистра", было=(_prev[0] if _prev else "—"),
-                    стало=_reg)
-            picked = [_reg]
-            diag["register_count_locked"] = _reg
-    # Stock-path: balance-регистр, не каталог/табчасть (K7, [замер 29.08 okna]).
-    if (not focus and not no_arbiter
-            and not entity_choice_locked(trusted, resolved)
-            and not diag.get("sales_canon_locked")
-            and not diag.get("register_count_locked")
-            and not catalog_count_question(intent, question)
-            and not catalog_kind_total_question(intent, question)
-            and stock_question_engaged(question, intent)):
-        _stock = stock_canon_src(cands, question, intent) or diag.get("stock_canon_locked")
-        if _stock:
-            _prev = list(picked or [])
-            if not _prev or _prev[0] != _stock:
-                diag["stock_canon_override"] = {"было": _prev, "стало": _stock}
-                шаг("канон остатков", было=(_prev[0] if _prev else "—"),
-                    стало=_stock)
-            picked = [_stock]
-            diag["stock_canon_locked"] = _stock
-    # «прайс» = справочник товаров; документ установки цен — шум ([замер 21.08] 321757).
-    if (not focus and not no_arbiter and picked
-            and not entity_choice_locked(trusted, resolved)
-            and not diag.get("sales_canon_locked")
-            and not diag.get("stock_canon_locked")
-            and not diag.get("register_count_locked")):
-        _cat = catalog_count_src(cands, intent, question)
-        if _cat:
-            if picked[0] != _cat:
-                diag["catalog_count_override"] = {"было": list(picked), "стало": _cat}
-                шаг("канон прайса", было=picked[0], стало=_cat)
-            picked = [_cat]
-            diag["catalog_count_locked"] = _cat
     writer_pair = writer.get(picked[0]) if picked else None
     if (writer_pair and picked and writer_pair not in picked
             and not diag.get("sales_canon_locked")
@@ -4166,35 +4096,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 if ask:
                     return ask
     src = picked[0] if picked else None
+    # [01.09 «физически один путь»] осевые перебои сущности ПОСЛЕ выбора
+    # (event_axis_lock/balance_axis_lock, K9-ранг и сток-канон) убраны:
+    # выбирает только вики-каскад; оси работают внутри выбранной сущности.
     # К9: событийный вопрос — сущность-ответ это ДВИЖЕНИЕ (вид объекта — первый
     # ключ ранга v2, OData-префикс из метаданных). Если модель выбрала картотеку,
     # а ранг при action_class=event даёт лидера-движение с осью — берём лидер:
     # «клиенты покупают» = регистр покупок, справочник карточек — не ответ (п. 21).
-    if (not focus and event_path_active(intent)
-            and not diag.get("sales_canon_locked")
-            and not diag.get("catalog_count_locked")
-            and not diag.get("event_code_lock")):
-        _fe = event_movement_feats(diag)
-        if K6R and _fe:
-            _ev_src, _ = K6R.event_rank_pick(cands, _fe, intent, question)
-        else:
-            _ev_src = next((s for s in (diag.get("answer_fit_v2") or {})
-                            if str(s).startswith(("document_", "accumulationregister_"))),
-                           None)
-        if _ev_src and src != _ev_src:
-            src = _ev_src
-            picked = [_ev_src] + [c for c in (picked or []) if c != _ev_src]
-            diag["event_axis_lock"] = _ev_src
-    if (not focus and balance_path_engaged(intent, None, question)
-            and not diag.get("event_code_lock")
-            and not diag.get("balance_code_lock")
-            and not diag.get("sales_canon_locked")
-            and not diag.get("catalog_count_locked")):
-        _bal_src = stock_canon_src(cands, question, intent, plan) or diag.get("balance_code_lock")
-        if _bal_src and src != _bal_src:
-            src = _bal_src
-            picked = [_bal_src] + [c for c in (picked or []) if c != _bal_src]
-            diag["balance_axis_lock"] = _bal_src
     # 🔴 ЧАСТИЧНО СОВПАВШЕЙ СУЩНОСТИ — ЕЁ СОБСТВЕННОЕ УСЛОВИЕ, И РАНЬШЕ ВСЕХ ПРОВЕРОК.
     # `match` собран под общий порог: столько понятий у этой сущности не нашлось, значит по
     # нему у неё ноль строк. Не подменив условие здесь, мы бы своей же проверкой ниже

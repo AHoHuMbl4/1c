@@ -536,7 +536,16 @@ def wiki_stock_canon_takeover(question, intent, diag, cands, plan=None):
 
 def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
                                 by, match, preds, counts_for_model, plan=None):
-    """Wiki-first entity pick; manual balance/event/count_theme only on fallback."""
+    """Wiki-first entity pick; manual balance/event/count_theme only on fallback.
+
+    [01.09] Вики — ПЕРВАЯ ступень для всех вопросов (схема владельца
+    PLAN_WIKI_CHOICE: вход — LLM+вики понимает вопрос). Замки продаж/регистра
+    ставятся ЗДЕСЬ, ПОСЛЕ вики-попытки, как fallback — раньше они стояли в z20
+    выше каскада и перехватывали выбор до вики (замер: «Сколько валют?»
+    уходил в накопregister_импорттмц замком регистра по стиху «валют» в его
+    мерах). Уже поставленные замки (поздний продажный канон и др.) — по-прежнему
+    уважаются первой проверкой.
+    """
     picked, marks, plan = [], {}, plan or {}
     if diag.get("register_count_locked"):
         return {"picked": [diag["register_count_locked"]], "marks": {},
@@ -551,102 +560,31 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
             by=by, match=match, preds=preds)
         if (_wiki and _wiki.get("kind") in ("no_data", "clarify")
                 and not diag.get("sales_canon_locked")):
-            _sc = wiki_stock_canon_takeover(question, intent, diag, cands, plan)
-            if _sc:
-                picked = [_sc]
-                diag["wiki_stock_override"] = _sc
-                diag["wiki_pick"] = "stock_override"
-                diag["stock_canon_locked"] = _sc
-            else:
-                return _wiki
+            return _wiki
         if _wiki and _wiki.get("picked") and not picked:
             picked = _wiki["picked"]
             marks = _wiki.get("marks") or {}
             plan = _wiki.get("plan") or {}
-            # Wiki catalog на stock-вопрос — не канон остатка; takeover регистра.
-            _sc = wiki_stock_canon_takeover(question, intent, diag, cands, plan)
-            if _sc and str(picked[0]).startswith("catalog_"):
-                picked = [_sc]
-                diag["wiki_stock_override"] = _sc
-                diag["wiki_pick"] = "stock_override"
-                diag["stock_canon_locked"] = _sc
-            else:
-                diag["wiki_hybrid_pick"] = True
+            diag["wiki_hybrid_pick"] = True
         elif _wiki is None and not diag.get("wiki_pick"):
             diag["wiki_pick"] = "fallback"
-        if (not picked and diag.get("wiki_empty_pool")
-                and question_expects_accounting_data(intent, question, diag)):
-            _sc = wiki_stock_canon_takeover(question, intent, diag, cands, plan)
-            if _sc:
-                picked = [_sc]
-                diag["wiki_stock_override"] = _sc
-                diag["wiki_pick"] = "stock_override"
-                diag["stock_canon_locked"] = _sc
-            else:
-                return {"kind": "no_data",
-                        "partial": cut or None,
-                        "text": NO_DATA_TEXT or refuse_text(question),
-                        "sources": [],
-                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                           reason="wiki_empty_pool")}
-        if (not picked and diag.get("wiki_pool_n", 0) > 0
-                and diag.get("wiki_pick") in ("none", "axis_reject", "bad_index")):
-            _sc = wiki_stock_canon_takeover(question, intent, diag, cands, plan)
-            if _sc:
-                picked = [_sc]
-                diag["wiki_stock_override"] = _sc
-                diag["wiki_pick"] = "stock_override"
-                diag["stock_canon_locked"] = _sc
-            else:
-                _wiki_skip_manual = True
-                if (question_expects_accounting_data(intent, question, diag)
-                        and diag.get("wiki_pick") == "none"):
-                    return {"kind": "no_data",
-                            "partial": cut or None,
-                            "text": NO_DATA_TEXT or refuse_text(question),
-                            "sources": [],
-                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                               reason="wiki_none")}
-    if not picked and not _wiki_skip_manual:
-        _bal = try_balance_code_entity_pick(
-            question, intent, cands, diag, cut, t0, {}, plan=plan)
-        if _bal and _bal.get("kind") in ("no_data", "clarify"):
-            return _bal
-        if _bal and _bal.get("picked"):
-            picked = _bal["picked"]
-            marks = _bal.get("marks") or {}
-            plan = _bal.get("plan") or {}
-            diag["balance_code_pick"] = True
-            if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
-                diag["wiki_manual_fallback"] = "balance"
-        else:
-            _ev = try_event_code_entity_pick(
-                question, intent, cands, diag, cut, t0, by, match, preds, {})
-            if _ev and _ev.get("kind") in ("no_data", "clarify"):
-                return _ev
-            if _ev and _ev.get("picked"):
-                picked = _ev["picked"]
-                marks = _ev.get("marks") or {}
-                plan = _ev.get("plan") or {}
-                diag["event_code_pick"] = True
-                if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
-                    diag["wiki_manual_fallback"] = "event"
-            else:
-                _ct = try_count_theme_code_pick(
-                    question, intent, cands, diag, cut, t0)
-                if _ct and _ct.get("picked"):
-                    picked = _ct["picked"]
-                    marks, plan = {}, {}
-                    diag.update(_ct.get("diag") or {})
-                    if ASK_WIKI_CHOICE and diag.get("wiki_pick") and not diag.get("wiki_hybrid_pick"):
-                        diag["wiki_manual_fallback"] = "count_theme"
-    if not picked and not _wiki_skip_manual:
-        try:
-            picked, marks, plan = pick_entity(question, intent.get("kind"), cands,
-                                              counts_for_model, match, diag)
-        except RuntimeError:
-            picked, marks, plan = [], {}, {}
-            diag["degraded"] = "выбор сущности сделан без модели"
+    # 🔴 [01.09, требование владельца: «физически один путь»] Обходных
+    # выборов сущности больше НЕ СУЩЕСТВУЕТ: замки продаж/регистра/прайса,
+    # stock-takeover, баланс/событие/тема-коды, выбор по реранку — вырезаны.
+    # Единственный путь: вики-каскад (пул карточек → LLM → верификация
+    # паспортами). Дал лидера — работаем; дал чипы — спрашиваем человека;
+    # не дал ничего — честный отказ. На любой базе работает одна и та же
+    # логика, перепроверять точечно нечем и не нужно.
+    if not picked:
+        _reason = diag.get("wiki_pick") or "wiki_no_leader"
+        if diag.get("wiki_empty_pool"):
+            _reason = "wiki_empty_pool"
+        return {"kind": "no_data",
+                "partial": cut or None,
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "sources": [],
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                   reason=_reason)}
     return {"picked": picked, "marks": marks, "plan": plan}
 
 

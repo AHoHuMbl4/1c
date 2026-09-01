@@ -260,7 +260,17 @@ def classify_verdict(
             return VERDICT_CONFIDENT_WRONG
         return VERDICT_UNRESOLVED
 
-    # Без поля kind (веб-шлюз не доносит конверт ask) вердикт не вывести.
+    # Веб-шлюз не доносит kind (чистый chat-текст) — вердикт по числам текста
+    # против эталона [01.09]: эталон прозвучал среди чисел → match; при
+    # no_data-эталоне текст без чисел → honest_no; числа при no_data или
+    # эталон не прозвучал → confident_wrong; пусто → unresolved.
+    if not k and t:
+        if et.lower() == "no_data":
+            return VERDICT_HONEST_NO if not nums else VERDICT_CONFIDENT_WRONG
+        if et and nums:
+            if numbers_match_etalon(nums, et):
+                return VERDICT_MATCH
+            return VERDICT_CONFIDENT_WRONG
     return VERDICT_UNRESOLVED
 
 
