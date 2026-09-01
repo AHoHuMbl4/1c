@@ -179,7 +179,8 @@ def _patch_z20_wiki_primary(text: str) -> str:
     _net_anchor = (
         "    elif agg is None and serene_axis and serene_axis.no_axis_member(grain_dec):\n"
         "        rows = []\n"
-        "        _dac = live_axis_col_for_count(intent, src, axes)\n")
+        "        _dac = live_axis_col_for_count(intent, src, axes,\n"
+        "                                       named_entity=_wiki_named_entity(diag, src))\n")
     _net_insert = (
         "    elif agg is None and serene_axis and serene_axis.no_axis_member(grain_dec):\n"
         "        rows = []\n"
@@ -194,7 +195,8 @@ def _patch_z20_wiki_primary(text: str) -> str:
         "                agg = _net_agg\n"
         "                diag[\"stock_net_distinct\"] = True\n"
         "                diag[\"count_distinct_axis\"] = _net_agg.get(\"axis\")\n"
-        "        _dac = live_axis_col_for_count(intent, src, axes)\n")
+        "        _dac = live_axis_col_for_count(intent, src, axes,\n"
+        "                                       named_entity=_wiki_named_entity(diag, src))\n")
     if _net_anchor in text:
         text = text.replace(_net_anchor, _net_insert, 1)
     elif "no_axis_member(grain_dec)" in text:

@@ -697,11 +697,18 @@ def _pick_kind_axis_col(ax, axis_word, intent, meaning_ok=True):
     return reranked[0] if reranked else hits[0]
 
 
-def live_axis_col_for_count(intent, src, axes=None):
+def live_axis_col_for_count(intent, src, axes=None, named_entity=False):
     """want=count + живая ось search_refcols на движении → COUNT(DISTINCT ось).
 
     Структурно: document_/accumulationregister_ + refcol на kind/action_axis.
     action_class=object — счёт карточек/строк, без DISTINCT. Без списков слов.
+
+    [01.09, ночь] named_entity=True (сущность названа и верифицирована по
+    имени): род записей (kind) осью не становится — вопрос о записях названной
+    сущности, COUNT идёт по строкам (замер L12: «движений в регистре
+    реализациятмц» при верном COUNT=2240 рендерилось «2 · Виды Деятельности» —
+    distinct по случайному носителю рода «движения»). Названная человеком ось
+    (action_axis) работает и для названной сущности.
     """
     intent = intent or {}
     want = (intent.get("want") or "").strip().lower()
@@ -718,6 +725,8 @@ def live_axis_col_for_count(intent, src, axes=None):
         return None
     axis_word = (intent.get("action_axis") or "").strip()
     if not axis_word:
+        if named_entity:
+            return None
         axis_word = (intent.get("kind") or "").strip()
     if not axis_word:
         return None

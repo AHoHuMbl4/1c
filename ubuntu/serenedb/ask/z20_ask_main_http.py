@@ -1517,6 +1517,19 @@ def align_picked_to_terms(picked, cands, intent, diag):
     return picked
 
 
+def _wiki_named_entity(diag, src):
+    """Сущность названа вопросом и подтверждена вики-верификацией (один судья).
+
+    [01.09, ночь] Для такой сущности: род записей — не ось (нет distinct по
+    носителю рода), пустой probe — честный «0 в окне», а не подмена на топ
+    буквального поиска. Одна пара признаков, три точки применения.
+    """
+    return bool(src) and (
+        (diag or {}).get("wiki_arbiter_locked") == src
+        or ((diag or {}).get("wiki_hybrid_pick")
+            and (diag or {}).get("wiki_verify") == src))
+
+
 def resolve_focus(focus, diag=None, opts=None):
     """Свести `focus` к ИМЕНИ ИСТОЧНИКА, как бы его ни назвали.
 
@@ -4152,8 +4165,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # Модель назвала источник, куда поиск не попал: проверяем, есть ли там что-то
         # под наши условия, иначе остаёмся с тем, что реально нашлось. Выбор человека
         # (`focus`) так не перебиваем — он назвал сущность сам.
+        # [01.09, ночь] …и вики-верифицированный лидер так НЕ перебивается: он
+        # выбран по ИМЕНИ сущности, а не по тексту строк — ноль строк под
+        # условиями для него = честный «0 в окне» (эталон), а не повод уйти на
+        # топ буквального поиска. Замер L12: «движений в регистре
+        # отработанноевремя за 30 дней» — регистр верифицирован, строк в окне
+        # 0 (эталон 0), а подмена на max(by) отдала план счетов 6868.
+        _wiki_locked_src = _wiki_named_entity(diag, src)
         probe_rows = rows_of(src, match, preds, 1) if src else []
-        if not probe_rows and by:
+        if not probe_rows and by and not _wiki_locked_src:
             _hold_canon = (
                 sales_sum_intent(intent, question)
                 and empty_after_period_action(intent) in ("drop_assumed", "empty_period")
@@ -4824,7 +4844,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     elif agg is None and serene_axis and serene_axis.no_axis_member(grain_dec):
         rows = []
-        _dac = live_axis_col_for_count(intent, src, axes)
+        _dac = live_axis_col_for_count(intent, src, axes,
+                                       named_entity=_wiki_named_entity(diag, src))
         if _dac:
             agg = aggregate_distinct_axis(src, match, preds, _dac)
             if agg:
@@ -4870,7 +4891,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 agg = _net_agg
                 diag["stock_net_distinct"] = True
                 diag["count_distinct_axis"] = _net_agg.get("axis")
-        _dac = live_axis_col_for_count(intent, src, axes)
+        _dac = live_axis_col_for_count(intent, src, axes,
+                                       named_entity=_wiki_named_entity(diag, src))
         if (not _dac and diag.get("stock_canon_locked")
                 and stock_question_engaged(question, intent)
                 and (intent.get("want") or "") in ("count", "")):
@@ -5009,7 +5031,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             cov, cut, diag, grain_dec, axes, n_folders, rows, t0, say_measure)
     # K9-ф6/ф7/ф8: mtd/event DISTINCT — пара «N · ось» кодом (как fork A), не compose.
     _want_count = (intent.get("want") or "").strip().lower() in ("count", "")
-    if _want_count and event_path_active(intent) and src:
+    # [01.09, ночь] Вопрос о НАЗВАННОЙ вики-верификацией сущности — о её
+    # записях: род записей (kind) не ось. Иначе «движений в регистре
+    # реализациятмц» при верном COUNT=2240 рендерилось как «2 · Виды
+    # Деятельности» — distinct по случайному носителю рода (замер L12-пробы;
+    # тот же дефект, что снят в пуле 708e6a7, — здесь вторая точка).
+    _wiki_locked_src = _wiki_named_entity(diag, src)
+    if _want_count and event_path_active(intent) and src and not _wiki_locked_src:
         _dac_t = diag.get("count_distinct_axis")
         if not _dac_t:
             _dac_t = live_axis_col_for_count(intent, src, axes)
@@ -5021,7 +5049,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 agg = _dagg
                 n_folders = (agg or {}).get("folders") or 0
     if (((agg or {}).get("form") == "distinct_axis" or diag.get("count_distinct_axis"))
-            and _want_count):
+            and _want_count and not _wiki_locked_src):
         _ax_col = (agg or {}).get("axis") or diag.get("count_distinct_axis")
         _ax_lab = _passport_axis_label(_ax_col, axes) or (_ax_col or "")
         _dist_atom = atom_from_agg(
