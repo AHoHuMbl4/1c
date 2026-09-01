@@ -170,12 +170,37 @@ struct_measure AS (
            GROUP BY src_table) m
     JOIN search_wiki_entity_card c ON c.src_table = m.src_table
 ),
+-- [01.09, ночь] ВОПРОС НАЗЫВАЕТ СУЩНОСТЬ — её карточка гарантированно в пуле.
+-- Стемы слов сырого вопроса против стемов слов системного имени и label
+-- (те же данные базы, тот же ts_lexize-приём, что у struct_* выше). Закрывает
+-- два измеренных промаха остальных входов: kNN по вопросу со склеенным именем
+-- тонет в соседях по общим словам («движений в регистре книгапродаж» тянул
+-- «движения денежных средств», верный регистр не входил в топ-8 — замер
+-- L9-пробы), а словарь bm25 на склеенных именах слеп. Слагаемое только
+-- ДОБАВЛЯЕТ кандидатов — судья по-прежнему одна паспортная верификация.
+-- Доки: Sql › Functions › Search › Full-Text Search Functions › ts_lexize;
+--       Sql › Functions › List Functions › list_has_any.
+struct_named AS (
+  SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
+         c.emb <=> (SELECT qv FROM q) AS distance,
+         2 AS src_layer
+    FROM search_wiki_entity_card c
+    JOIN search_tables t ON t.src_table = c.src_table
+   WHERE list_has_any(
+           list_filter(ts_lexize(:'stem_dict', :'question_raw'),
+                       x -> length(x) >= 4),
+           list_filter(ts_lexize(:'stem_dict',
+                     concat_ws(' ', replace(t.src_table, '_', ' '),
+                               coalesce(t.label, ''))),
+                       x -> length(x) >= 4))
+),
 pool AS (
   SELECT DISTINCT ON (src_table) src_table, name, description, axes, measures,
          covered, distance, src_layer
     FROM (
       SELECT * FROM knn
       UNION ALL SELECT * FROM knn_raw
+      UNION ALL SELECT * FROM struct_named
       UNION ALL SELECT * FROM struct_catalog
       UNION ALL SELECT * FROM struct_register
       UNION ALL SELECT * FROM struct_move

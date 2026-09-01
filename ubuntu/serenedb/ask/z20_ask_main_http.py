@@ -2025,8 +2025,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             for a in разбор["assumed"])
     # K4-2: kind без опоры в корпусе — no_data до чужого src (№14 анкеты).
     # §4.3: канон, забравший вопрос, — сам поддержка; страж уступает канону.
+    # [01.09, ночь] …и вопросу, называющему сущность базы её именем: опора
+    # по словам вопроса, а не по слову модели (замер L9: kind «записи» убивал
+    # «записей в реализациятмц» при живом регистре — отказ при данных, п. 21).
     _kind_chk = (intent.get("kind") or "").strip()
     if (_kind_chk and not kind_has_corpus_support(_kind_chk)
+            and not question_names_corpus_entity(question)
             and not canon_claims_question(intent, question)):
         diag["kind_unsupported"] = _kind_chk
         return {"partial": cut or None, "kind": "no_data", "sources": [],

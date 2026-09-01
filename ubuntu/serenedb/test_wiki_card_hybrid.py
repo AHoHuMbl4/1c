@@ -118,6 +118,12 @@ def main() -> int:
     z21 = load_z21()
 
     t("knn CTE with LIMIT param", "LIMIT :knn_limit" in hybrid)
+    # [01.09, ночь] две формы вопроса — один пул + точное именование сущности.
+    t("knn_raw arm (raw question)", "knn_raw" in hybrid
+      and ":'question_raw'" in hybrid)
+    t("struct_named arm (entity named in question)",
+      "struct_named" in hybrid
+      and "replace(t.src_table, '_', ' ')" in hybrid)
     t("struct_catalog layer", "struct_catalog" in hybrid)
     t("struct_catalog_event layer", "struct_catalog_event" in hybrid)
     t("event catalog when want_agg", ":want_agg = 1 AND p.src_table LIKE 'catalog_%'" in hybrid)

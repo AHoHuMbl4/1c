@@ -426,6 +426,35 @@ def kind_has_corpus_support(kind):
     return False
 
 
+def question_names_corpus_entity(question):
+    """Вопрос называет сущность базы её именем: стем слова вопроса (≥4)
+    совпал со стемом слова системного имени или label из search_tables.
+
+    [01.09, ночь] Гейт «kind неподдержан» проверял слово МОДЕЛИ (kind) — на
+    «записей в реализациятмц» разбор дал kind «записи», опоры нет → no_data
+    при живом регистре на 78 537 записей (замер L9-пробы, п. 21). Здесь
+    опора ищется по словам САМОГО ВОПРОСА: человек назвал сущность точным
+    именем — вопрос поддержан независимо от того, что модель написала в
+    kind. Имена берутся из search_tables самой базы — работает на любой
+    базе. База недоступна — поддержан: отказ требует доказанного отсутствия.
+    Доки: Sql › Functions › Search › Full-Text Search Functions › ts_lexize.
+    """
+    q = (question or "").strip()
+    if not q:
+        return True
+    try:
+        return bool(psql(
+            "SELECT 1 FROM search_tables t"
+            " WHERE list_has_any("
+            "   list_filter(ts_lexize(%s, %s), x -> length(x) >= 4),"
+            "   list_filter(ts_lexize(%s, concat_ws(' ',"
+            "       replace(t.src_table, '_', ' '), coalesce(t.label, ''))),"
+            "     x -> length(x) >= 4))"
+            " LIMIT 1" % (lit(STEM_DICT), lit(q), lit(STEM_DICT))))
+    except RuntimeError:
+        return True
+
+
 def measure_class_alts(names, alias_by=None):
     """Два класса меры money|qty вместо полного списка nums (K4-3 №7).
 
