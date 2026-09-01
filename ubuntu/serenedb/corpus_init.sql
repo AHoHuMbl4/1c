@@ -37,17 +37,25 @@ ALTER TABLE search_corpus ADD COLUMN IF NOT EXISTS content_hash VARCHAR;
 -- сборка и слияние звали одну и ту же формулу. Доки: sql/functions/map#map_from_entries;
 -- map_keys; map_extract_value; sql/functions/list#list_filter; list_sort; array_to_string;
 -- sql/functions/utility#sha1; sql/statements/create_macro.
+-- [замер 01.09 okna] map_from_entries падал «Map keys must be unique» на первой
+-- же строке корпуса с дублирующимся ключом (значение содержало ' | ' и 'x: y'),
+-- роняя такт в миграции content_hash. Схлопывание дублей — штатный map_concat
+-- («on key collision the value is taken from the last map», sql/functions/map#map_concat)
+-- через list_reduce; пустой список в ELSE недостижим (CASE len=0), один элемент
+-- возвращается без свёртки. На строках без дублей результат побитово тот же
+-- (живая проба: '= map_from_entries(...) → t'), content_hash и emb чистых строк не меняются.
 CREATE OR REPLACE MACRO corpus_doc_bmap(doc) AS (
   CASE WHEN len(list_filter(string_split(coalesce(doc, ''), ' | '),
                             p -> position(': ' IN p) > 0)) = 0
        THEN MAP{}::MAP(VARCHAR, VARCHAR)
-       ELSE map_from_entries(
+       ELSE list_reduce(
               list_transform(
                 list_filter(string_split(doc, ' | '),
                             p -> position(': ' IN p) > 0),
-                p -> {'key': split_part(p, ': ', 1),
-                      'value': substr(p, length(split_part(p, ': ', 1)) + 3)}
-              )
+                p -> MAP {split_part(p, ': ', 1):
+                          substr(p, length(split_part(p, ': ', 1)) + 3)}
+              ),
+              (acc, m) -> map_concat(acc, m)
             )
   END
 );

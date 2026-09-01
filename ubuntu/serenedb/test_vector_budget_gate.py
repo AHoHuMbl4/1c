@@ -326,6 +326,19 @@ t("SQL: MATCHED content_hash + common_eq keep emb",
 t("SQL: row_key join unchanged",
   "ON t.src_table = s.src_table AND t.row_key = s.row_key" in txt)
 t("init: corpus_content_hash", "CREATE OR REPLACE MACRO corpus_content_hash(doc)" in init)
+# [замер 01.09 okna] map_from_entries падал на дублирующихся ключах (значение с ' | '
+# и 'x: y' внутри) — «Map keys must be unique», такт умирал в миграции content_hash.
+# Формула обязана схлопывать дубли map_concat'ом (последний выигрывает) и не звать
+# map_from_entries на необработанном списке пар.
+t("init: bmap дедуп дублей ключей",
+  "list_reduce(" in init and "(acc, m) -> map_concat(acc, m)" in init)
+t("init: bmap без сырого map_from_entries",
+  init.find("map_from_entries(\n") == -1)
+t("merge: bmap дедуп дублей ключей",
+  "list_reduce(" in txt and "(acc, m) -> map_concat(acc, m)" in txt)
+t("merge: bmap пустой список вне reduce (CASE len=0 раньше)",
+  0 < txt.find("THEN MAP{}::MAP(VARCHAR, VARCHAR)")
+  < txt.find("list_reduce("))
 t("init: content_hash column", "content_hash VARCHAR" in init)
 t("build.sh: MERGE_VECTOR_LOSS_TOLERANCE", "MERGE_VECTOR_LOSS_TOLERANCE" in bsh)
 t("build.sh: MERGE_VECTOR_LOSS_BYPASS", "MERGE_VECTOR_LOSS_BYPASS" in bsh)

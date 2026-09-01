@@ -451,17 +451,21 @@ ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS last_built_at TIMESTAMP;
 -- Доки: sql/functions/map#map_from_entries; list_intersect; map_extract_value;
 -- sql/functions/text#string_split; sql/functions/list#array_to_string; list_sort;
 -- sql/functions/utility#sha1; sql/statements/create_macro.
+-- [замер 01.09 okna] дубли ключей («Map keys must be unique» на map_from_entries)
+-- схлопываются map_concat'ом: последний выигрывает; на чистых строках результат
+-- идентичен старой формуле. Доки: sql/functions/map#map_concat.
 CREATE OR REPLACE MACRO corpus_doc_bmap(doc) AS (
   CASE WHEN len(list_filter(string_split(coalesce(doc, ''), ' | '),
                             p -> position(': ' IN p) > 0)) = 0
        THEN MAP{}::MAP(VARCHAR, VARCHAR)
-       ELSE map_from_entries(
+       ELSE list_reduce(
               list_transform(
                 list_filter(string_split(doc, ' | '),
                             p -> position(': ' IN p) > 0),
-                p -> {'key': split_part(p, ': ', 1),
-                      'value': substr(p, length(split_part(p, ': ', 1)) + 3)}
-              )
+                p -> MAP {split_part(p, ': ', 1):
+                          substr(p, length(split_part(p, ': ', 1)) + 3)}
+              ),
+              (acc, m) -> map_concat(acc, m)
             )
   END
 );
