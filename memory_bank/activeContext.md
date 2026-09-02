@@ -1,19 +1,89 @@
 # Активный контекст
 
-## С ЧЕГО НАЧАТЬ (срез 02.09 ~14:40 UTC; читать целиком; после compact)
+## С ЧЕГО НАЧАТЬ (срез 02.09 ~20:30 UTC, ПОД КОМПАКТ; читать целиком)
 
-### 🔴 РЕЖИМ: я — оркестратор, ВСЁ делается армиями агентов
-Владелец 02.09: «Делай так же все армиями агентов. Задание агенту, и армия для
-проверок даже. Ты — оркестратор. Видишь, какой эффект дал — за ночь почти всё
-решилось». Порядок на любую задачу: (1) я сам нахожу точные file:line и пишу
-самодостаточный промт в `.claude/state/prompt-<id>.md`; (2) исполнитель —
-cursor-agent; (3) проверка — замки/замеры мною, не словами агента; (4) коммит
-мною с ритуалами (ниже). 🔴 Квота Kimi-subagent исчерпана ночью (402) —
-обёртки не работают, cursor запускаю НАПРЯМУЮ Bash-фоном:
-`cd /srv/1c && timeout 3000 cursor-agent -p "$(cat .claude/state/prompt-X.md)"
---force --model auto --output-format stream-json | tee .claude/state/cursor-run-X.log`.
-Извлечь итог из лога: последний JSON-эвент type=result (скрипт-извлекалка
-использовалась 5 раз, см. историю сессии; финальный текст туда же пишется).
+### ГДЕ МЫ ОДНОЙ СТРОКОЙ
+Только okna. Такт №1 доваривает монолит → далее приёмка → L20-база →
+исполнение сошедшегося плана фиксов v3-финал армиями. Аудит TARGET (22+15+10
+агентов) завершён, план прошёл 3 круга до сходимости, всё в git/origin.
+
+### ЖИВОЕ: ТАКТ №1 (блокер этапа 0 плана)
+Идёт с 14:38 UTC 02.09 на пакете v10+фикс (HEAD 980e339=выкат, md5 ×8).
+Долгий — НОРМА: `EXECUTE p_doc('document_реализациятмц')` монолит (75k строк
+витрины, dup-гейт снял чанкование именно с неё; 5 других крупных ЧАНКУЕМЫХ
+прошли за ~6 мин). Движок жив (CPU ~1 ядро), корпус стоит на baseline
+1 665 427 / emb 1 657 724. Дозор — фоновая задача **bash-0ga67hnh** (сам
+пришлёт tail журнала + count). Паника «долго» = ложная; на 10-30× базах это
+аргумент для «полной B» (row-level дельта p_doc) — отдельный пакет, не начинать
+без волны аудита. ПРИЁМКА когда дозор позовёт: `psql -f /tmp/takt_baseline.sql`
+на окне (есть): count(*)≥1 665 427, count(emb)≥1 657 724, multiset-md5 realiz
+`71947efec4bebbc2eac4727b51694523` (74 785 строк), keys-md5 `b29eb438346e
+c9f7d87326b0243a9b9c`; vector_loss_gate=0 в журнале. Затем такт №2 (ручной
+`systemctl start 1c-serene-pipeline@postgres.service`, критерий «минуты при
+0 изменений») → таймеры обратно: 1c-serene-pipeline@postgres.timer +
+1c-packet-apply.timer (apply сервис стопнут мной, inactive) → отчёт
+/tmp/takt-report-* владельцу. Бэкапы векторов ×2 на окне (по 1 657 724),
+держать до двух зелёных тактов.
+
+### АУДИТ TARGET 02.09 (завершён; сводная docs/audit/TARGET_AUDIT_2026-09-02.md)
+22 аудитора (result-ta-*), 15 арбитров споров TD1-TD5 (result-td*-*,
+5/5 единогласно), 10 аудиторов плана (result-tp-*, result-tv2-*, result-tv3-*).
+Классы: К1 env-флаги руками (живой замер: 8 флагов =1 в /etc, установка не
+пишет; ASK_EMBED_NATIVE в /etc НЕТ → вопрос сегодня HTTP-каналом;
+ASK_WIKI_CHOICE=1 мёртвый хвост); К2 wiki_card_build.sql НЕ в такте →
+новая база глуха (wiki_publish.sh гоняет только wiki_build.sql; карточки
+строили руками 29.08); К3 слова домена (z11:789 имена каталогов; z13:9-18 =
+базлайн О6); К4 обходы wiki-замка z20:3293-3300+3400-3403 без гейта
+(подтверждено чтением); К5 догадки; К6 z17:180 молчаливая потеря предикатов
+(+match вообще не в live); К7 п.20 (psql на каждый SQL; serene_report схема
+в модель); К8 окно DELETE→xfer (corpus_merge:887-915, применение после
+DELETE); К9 i2_runner honest_no при числовом эталоне ДО сверки (маскирует
+п.21; подтверждено чтением) + no_stock константный эталон; К10 юниты.
+Чисто: числа считает SQL, ASK_WIKI_CHOICE из кода удалён, окna/klient только
+в комментариях.
+
+### ПЛАН ФИКСОВ — СОШЁЛСЯ, К ИСПОЛНЕНИЮ (docs/audit/FIX_PLAN_2026-09-02.md, 3e94855)
+Цикл: v1 → армия p1-p5 → v2 → контроль c1-c3 → v3 → финал f1-f2 (13/13 ДА,
+контракт чист). Порядок: **0** (приёмка такта → L20-база M0/W0/H0/R0 каноном
+§МЕХАНИКА, TSV client-gold-okna.tsv md5 358f59b1, выхлоп /tmp/i2-l20 →
+чеклист 0.3 .claude/state/l-anchor-checklist.md с полями id/text/class/
+expected_kind/expected_src/expected_answer/diag — ПРЕДУСЛОВИЕ этапов 2 и 3)
+→ **1∥2A** (1=прибор refusal_with_data в work/gold/i2_runner.py: ветка
+classify_verdict + VERDICT_* + сводка; Δmatch=0/Δwrong=0 на том же jsonl;
+2A=wiki_publish.sh → wiki_card_build.sql fail-closed + build.sh:573 вики
+роняет такт + embed_missing в build.sh ПОСЛЕ ./wiki_publish.sh по образцу
+entity_card:601-604 при NULL>0 + VACUUM REFRESH_INDEX после embed) → **2B**
+(замена period_relative_forms.json полным из work/acceptance, только
+календарные ключи, сленг выкинуть) → **3A** (вырезать post-lock prefer×3 +
+sales_canon_force_pool z20:3293-3300 и 3400-3403; arb_pool=[locked] при
+замке; удалить z21:671-673; z20:3406-3428=ENTITY_FORM-ловушка — не prefer!;
+удалить warehouse_clarify; ЛЮБОЙ кейс prefer≠wiki_verify → СТОП-эскалация
+владельцу ДО выката) → **3B** (degraded→clarify/no_data; clarify<2→no_data)
+→ **[3C]** (живой до-вики хвост SIGNAL_DISAGREE/writer_pair/_alias_clarify —
+только после L с кейсами без lock) → **4A** (дефолты→1 восьми флагов из
+таблицы 4A.1; SLOT_COVER/оси/MONEY_UNIT/SCORER вне; замок allow-list) →
+**4B** (ASK_EMBED_NATIVE: AB dim+cosine+лидеры пула, стейджинг :8092, свой
+L, затем default=1 + удаление HTTP-ветки) → **4C** (убрать ASK_WIKI_CHOICE
+из /etc) → **5** (z17 live-fallback: потерян pred/match → None; ГЕЙТ до
+фикса: замер via=live_column∧collapsed=equal, >0 → стоп-доклад) → **6**
+(corpus_merge: MERGE→APPLY xfer→DELETE; pending-страховка; mid-abort замок;
+STRICT=1; только после 2 зелёных тактов; приёмка по md5/emb-baseline)
+→ 7/8 по слову владельца. Каждый дифф: исполнитель → красная команда →
+выкат → L-прогон (match≥M*, wrong≤W*) → коммит+док. Открытый вопрос
+владельцу: допуск 0.5% + MERGE_VECTOR_LOSS_BYPASS. Interim для ручных merge:
+apply живой tmp3_merge_emb_xfer без re-merge (SQL в плане).
+
+### 🔴 РЕЖИМ: я — оркестратор, ВСЁ армиями агентов
+(1) сам нахожу file:line, пишу самодостаточный промт в
+`.claude/state/prompt-<id>.md`; (2) исполнитель — cursor-agent НАПРЯМУЮ
+Bash-фоном (квота Kimi-subagent исчерпана 402, обёрток нет):
+`cd /srv/1c && timeout 1800 cursor-agent -p "$(cat .claude/state/prompt-X.md)"
+--force --model auto --output-format stream-json 2>&1 | tee .claude/state/
+cursor-run-X.log`; (3) приёмка — замеры/чтение кода МОИ, не слова агента
+(примеры: z20:3291 и i2_runner:238 подтверждал сам); (4) коммит моими
+руками. Волны: 3 агента на анализ, круги до сходимости (доказано: 22+15+10).
+Промт из ФАЙЛА всегда (снайпер ловит git-слова в литерале). Отчёты агентов —
+result-*.md; итог из stream-json — последний type=result.
 
 ### КЛАССЫ 6-9c + q1/q2 — ВСЕ В main И ВЫКАЧЕНЫ (02.09, HEAD d6178ee = 980e339 с фиксом такта)
 - **Класс 6 (e2b269b):** исход A контракта — wiki-clarify по сущности: код
@@ -37,75 +107,29 @@ cursor-agent; (3) проверка — замки/замеры мною, не с
 - Карта 10 путей entity-clarify вне wiki — бэклог
   (.claude/state/result-rm6-mapC-*).
 
-### АУДИТ TARGET АРМИЕЙ (02.09 вечер; сводная docs/audit/TARGET_AUDIT_2026-09-02.md)
-22 отчёта result-ta-*: К1 п.0 — бой прав только с ручными env-флагами
-(замер /etc живой: 8 флагов =1, установка их не пишет; CALENDAR/CURRENCY_AXIS
-выкл и в бою); К2 п.0 — wiki_card_build.sql НЕ в такте → новая база глуха
-(no_data при живом корпусе); period_relative_forms.json в бою почти пуст; К3 имена каталогов z11:789;
-К4 обходы wiki-замка z20:3291+ (подтверждено чтением); К6 z17:180 молчаливый
-сброс предикатов даты; К7 serene_report шлёт схему в модель; К8 вектор-окно
-DELETE→xfer; К9 i2_runner honest_no при числовом эталоне ДО сверки
-(подтверждено чтением). Чисто: числа — SQL, ASK_WIKI_CHOICE удалён.
-Споры TD1-TD5 ×3 СОШЛИСЬ единогласно (result-td*-*, детали в
-docs/audit/TARGET_AUDIT_2026-09-02.md): обход wiki-замка реален; маскировка
-п.21 в приёмке реальна (до ~10 из 28 honest_no); эмбед вопроса = п.20 (из
-коробки ai_embed); live-fallback молча теряет период+match; FX-подмена реальна
-(путь выключен). Порядок фиксов после красной команды: TD2 → К2 → TD1+К4 →
-К1 → TD4 → К3/К5.
+### ОЧЕРЕДЬ (срез 02.09 ~20:30 UTC)
+Исполнение = план v3-финал (см. блок ПЛАН ФИКСОВ выше): 0 → 1∥2A → 2B →
+3A → 3B → [3C] → 4A → 4B → 4C → 5 → 6. L20 (0.2) — сразу после приёмки
+такта. Бэклог вне плана (не начинать без владельца): «полная B такта»
+(row-level p_doc, для баз 10-30×); 10 путей entity-clarify вне wiki (mapC);
+исход B контракта; И2 web. «реально покупают» 145 — скилл, решение №9.
 
-### ОЧЕРЕДЬ (срез 02.09 ~14:40 UTC)
-1. **Такт №1 идёт на окне** (см. ЖИВОЕ СЕЙЧАС) → приёмка → такт №2 («минуты»
-   при 0 изменений) → таймеры обратно → отчёт владельцу.
-2. **L20** (67 вопросов × 2, workers 16, ~28 мин; команда в МЕХАНИКА) — после
-   такта №1. Критерий: wrong ≤ 2 (2402 закрыт классом 9c), match растёт с 35.
-   Меряет q1+q2+9c + свежий корпус.
-3. **Остатки honest_no при числовом эталоне** (после L20 пересчитать классы):
-   «реально покупают» 145 — скилл-декомпозиция, позже (решение №9).
-4. **Бэклог общих механизмов (не начинать без владельца):** 10 путей
-   entity-clarify вне wiki (карта mapC); проброс dictionary-оси в group-by;
-   cold-start; исход B контракта. **Полная B такта** (row-level фильтр p_doc,
-   partial_rebuild=1) — отдельный пакет ПОСЛЕ доказанного B0 (замки на
-   частичный rebuild обязательны; scoped DELETE по op=upsert туда же).
-5. И2 web, К8 — после стабильного engine.
-
-### ЖИВОЕ СЕЙЧАС (02.09 ~14:40 UTC — ТАКТ №1 ИДЁТ, приёмка по baseline)
-- **HEAD = 980e339 = origin/main.** На окне выкачено всё (md5 ×8 файлов +
-  corpus_build.sql после фикса ee0173f5). Прод :8091 — на классе 9c.
-- 🔴 **Такт №1 идёт на окне с 14:38 UTC** (после фикса 980e339; sync-проверка
-  14:38:47 «изменённых строк 0», сейчас шаг сборки). Дозор —
-  фоновая задача **bash-0ga67hnh** (ssh-цикл is-active, при завершении сама
-  придёт нотификация с tail журнала + count корпуса). Такт №1 ДОЛГИЙ — норма
-  (backlog ~39 источников, реализациятмц монолит — у неё 2776 строк с пустым
-  Ref_Key+LineNumber → dup-гейт штатно снимает чанкование именно на ней).
-- **Первая попытка такта упала за 6 минут ДО merge** (вектора не задеты):
-  md5-строка формулы в search_quality.v (BIGINT). Фикс 980e339: формулы в
-  search_pdoc_formula; живой прогон блока на окне чистый (chunk_entities=6).
-- **Приёмка такта №1 (когда дозор позовёт):** count(*) ≥ 1 665 427,
-  count(emb) ≥ 1 657 724; multiset realiz = 71947efec4bebbc2eac4727b51694523
-  (74 785 строк; baseline — .claude/state/takt-baseline.txt); md5 row_key
-  realiz = b29eb438346ec9f7d87326b0243a9b9c; vector_loss_gate=0;
-  длительности шагов → отчёт. Затем такт №2 (0 изменений → «минуты»),
-  таймеры обратно (1c-serene-pipeline@postgres.timer + 1c-packet-apply.timer),
-  отчёт владельцу /tmp/takt-report-* на окне.
-- **Бэкапы векторов на окне (условие №1):** backup_corpus_emb_20260902_1430
-  (row_key) + backup_corpus_emb2_20260902_1500 (+content_hash), по 1 657 724,
-  сверены. Restore-drill пройден (5550/5550 бит-в-бит; restore: сначала
-  row_key, fallback по content_hash ТОЛЬКО из HAVING count(*)=1 групп —
-  на окне 110 254 коллизионные группы; coalesce над FLOAT[1024] движок НЕ
-  умеет — два UPDATE, не coalesce). Бэкапы держать до двух зелёных тактов.
-- **Что в пакете (d6178ee):** A чанкование по ячейкам; B0 search_changed_rows
-  (витринный ключ, partial_rebuild=0 константой — список НИКТО не читает);
-  C шаг 5 на embed_bulk (strict transfer, restore globals fail-closed, gate
-  p_doc/merge+idle-in-tx, tick_guard снят с шага 5, fail при «осталось>0»,
-  REFRESH corpus_ivf_idx + smoke kNN); D wiki_alias SQL-only fail-closed +
-  census «вне контура» (415 «прочих ошибок» были мисклассификацией).
-- **Красные замки пред-существующие (доказано stash-прогоном на HEAD):**
-  test_pipeline_doc 5/8 и test_build_solr_synonyms regexp_split — НЕ из пакета.
-- **Локальный движок на деве (serened :7890) ЗАВИС и не наш** (юнит serenedb вне
-  polkit-правил, рестарт — root/владелец). Решение владельца 02.09: «забудь про
-  дев, никаких ut_test, только okna, только SereneDB». Живые приёмки — на окне.
-- Доклады: .claude/state/result-audit-*, result-tf{1..9}-*, result-drev*,
-  result-exec-*, plan-takt-fix-v10.md (единый документ пакета).
+### ЖИВОЕ СЕЙЧАС (02.09 ~14:40 UTC; дубли верхней шапки сняты)
+- **HEAD = 980e339 = origin/main** (выше — 3e94855, доки/план). Прод :8091
+  на классе 9c. Первая попытка такта упала ДО merge (md5 в search_quality.v
+  BIGINT); фикс 980e339 — формулы в search_pdoc_formula, прогон чистый.
+- **Restore-drill векторов пройден** (5550/5550 бит-в-бит): сначала row_key,
+  fallback по content_hash ТОЛЬКО из HAVING count(*)=1 групп (на окне
+  110 254 коллизионные); coalesce над FLOAT[1024] движок не умеет — два
+  UPDATE. Бэкапы: backup_corpus_emb_20260902_1430 + _2_20260902_1500.
+- **Пакет v10 (d6178ee):** A чанкование по ячейкам; B0 search_changed_rows
+  (partial_rebuild=0 константой); C шаг 5 embed_bulk (strict, restore
+  globals fail-closed, REFRESH corpus_ivf_idx + smoke kNN); D wiki_alias
+  SQL-only + census. Единый документ: .claude/state/plan-takt-fix-v10.md.
+- **Красные замки пред-существующие** (доказано stash-прогоном): test_
+  pipeline_doc 5/8, test_build_solr_synonyms regexp_split — не чинить.
+- **Дев-serened :7890 завис и не наш** (юнит вне polkit): решение владельца
+  «забудь про дев, только okna, только SereneDB». Живые приёмки — на окне.
 
 ### МЕТРИКА СЕЙЧАС (L19, честная)
 35 match / 28 honest_no / 3 wrong / 1 unresolved из 67. TARGET: «не врёт» —
