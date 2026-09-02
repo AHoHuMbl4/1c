@@ -214,11 +214,26 @@ def main() -> int:
         json.dumps({"verdicts": [{"index": 1, "fit": "подходит", "why": "x"}]}), 1)
     t("parse russian fit подходит", v_ru and v_ru[0]["fit"] == "yes")
 
+    # [02.09, решение владельца] одиночная карточка — тот же путь verify, без struct_single
     single = _cards(1)
-    out_single = z21["wiki_verify_candidates"]("q", {}, single, {})
-    t("single pool struct leader no model",
-      out_single.get("outcome") == "leader"
-      and out_single.get("diag", {}).get("wiki_verify_skipped"))
+    z21["psql"] = lambda q: [
+        ("catalog_a", "Alpha", "wiki body", single[0]["axes"],
+         single[0]["measures"], "", "catalog"),
+    ]
+    z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [
+        {"index": 1, "fit": "yes", "why": "ok"},
+    ]})
+    z21["wiki_validate_leader_axes"] = lambda *a, **k: True
+    out_single_yes = z21["wiki_verify_candidates"]("q", {}, single, {})
+    t("single pool verify yes → leader",
+      out_single_yes.get("outcome") == "leader"
+      and out_single_yes.get("leader") == "catalog_a"
+      and not out_single_yes.get("diag", {}).get("wiki_verify_skipped"))
+    z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [
+        {"index": 1, "fit": "no", "why": "nope"},
+    ]})
+    out_single_no = z21["wiki_verify_candidates"]("q", {}, single, {})
+    t("single pool verify no → none", out_single_no.get("outcome") == "none")
 
     z21["psql"] = lambda q: []
     z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [

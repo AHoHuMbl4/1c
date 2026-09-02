@@ -469,21 +469,11 @@ def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
 
 
 def wiki_verify_candidates(question, intent, cards, diag=None):
-    """Один вызов модели: вопрос + ≤5 паспортов → verdicts."""
+    """Паспортная verify: вопрос + пул карточек (≥1) → модель → verdicts."""
     diag = dict(diag or {})
     cards = list(cards or [])
     if not cards:
         return {"outcome": "none", "reason": "empty_pool", "diag": diag}
-    if len(cards) == 1:
-        leader = cards[0].get("src_table")
-        if wiki_validate_leader_axes(leader, intent):
-            diag["wiki_verify"] = "struct_single"
-            diag["wiki_verify_skipped"] = True
-            return {"outcome": "leader", "leader": leader, "diag": diag,
-                    "verdicts": [{"index": 1, "fit": "yes", "why": "struct_single"}]}
-        diag["wiki_verify"] = "axis_reject"
-        return {"outcome": "none", "reason": "axis_reject", "diag": diag,
-                "verdicts": []}
     enriched = wiki_passport_enrich(cards)
     full = enriched[:WIKI_PASSPORT_N]
     short = enriched[WIKI_PASSPORT_N:]
