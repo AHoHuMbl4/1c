@@ -174,18 +174,19 @@ def main() -> int:
     t("passport cap 8 full + tail names", fmt9.count("passport\n") == 8)
     t("short tail names only", "Other pool names only:" in fmt9)
 
-    v_one = z21["wiki_parse_verify_response"](
+    v_one, m_one = z21["wiki_parse_verify_response"](
         json.dumps({"verdicts": [
             {"index": 1, "fit": "yes", "why": "matches axis"},
             {"index": 2, "fit": "no", "why": "wrong kind"},
         ]}), 2)
     t("parse two verdicts", len(v_one) == 2 and v_one[0]["fit"] == "yes")
+    t("parse full mode", m_one == "full")
 
     out_one = z21["wiki_outcome_from_verify"](v_one, _cards(2), {}, {})
     t("one yes → leader", out_one.get("outcome") == "leader"
       and out_one.get("leader") == "catalog_a")
 
-    v_two = z21["wiki_parse_verify_response"](
+    v_two, m_two = z21["wiki_parse_verify_response"](
         json.dumps({"verdicts": [
             {"index": 1, "fit": "yes", "why": "a"},
             {"index": 2, "fit": "yes", "why": "b"},
@@ -194,7 +195,7 @@ def main() -> int:
     t("two yes → clarify", out_two.get("outcome") == "clarify"
       and len(out_two.get("candidates") or []) == 2)
 
-    v_zero = z21["wiki_parse_verify_response"](
+    v_zero, m_zero = z21["wiki_parse_verify_response"](
         json.dumps({"verdicts": [
             {"index": 1, "fit": "no", "why": "nope"},
             {"index": 2, "fit": "no", "why": "nope2"},
@@ -202,7 +203,7 @@ def main() -> int:
     out_zero = z21["wiki_outcome_from_verify"](v_zero, _cards(2), {}, {})
     t("zero yes → none", out_zero.get("outcome") == "none")
 
-    v_unsure = z21["wiki_parse_verify_response"](
+    v_unsure, m_unsure = z21["wiki_parse_verify_response"](
         json.dumps({"verdicts": [
             {"index": 1, "fit": "yes", "why": "maybe a"},
             {"index": 2, "fit": "unsure", "why": "unclear"},
@@ -210,7 +211,7 @@ def main() -> int:
     out_unsure = z21["wiki_outcome_from_verify"](v_unsure, _cards(2), {}, {})
     t("yes+unsure → clarify", out_unsure.get("outcome") == "clarify")
 
-    v_ru = z21["wiki_parse_verify_response"](
+    v_ru, m_ru = z21["wiki_parse_verify_response"](
         json.dumps({"verdicts": [{"index": 1, "fit": "подходит", "why": "x"}]}), 1)
     t("parse russian fit подходит", v_ru and v_ru[0]["fit"] == "yes")
 
@@ -303,6 +304,42 @@ def main() -> int:
     t("try_wiki clarify options",
       res_cl and res_cl.get("kind") == "clarify"
       and len(res_cl.get("options") or []) >= 2)
+
+
+    # [02.09] обрезанный JSON: salvage завершённых verdicts
+    trunc_raw = (
+        '{"verdicts": ['
+        '{"index": 1, "fit": "yes", "why": "ok"}, '
+        '{"index": 2, "fit": "no", "why": "long text cut mid'
+    )
+    v_trunc, m_trunc = z21["wiki_parse_verify_response"](trunc_raw, 3)
+    t("truncated json salvage one verdict",
+      len(v_trunc) == 1 and v_trunc[0]["index"] == 1 and v_trunc[0]["fit"] == "yes")
+    t("truncated json salvage mode", m_trunc == "salvage")
+
+    v_garbage, m_garbage = z21["wiki_parse_verify_response"]("not json at all", 2)
+    t("garbage parse empty", v_garbage == [] and m_garbage == "failed")
+
+    v_bracket, m_bracket = z21["wiki_parse_verify_response"]("[", 2)
+    t("lone bracket parse empty", v_bracket == [] and m_bracket == "failed")
+
+    v_empty, m_empty = z21["wiki_parse_verify_response"]("", 2)
+    t("empty raw parse empty", v_empty == [] and m_empty == "failed")
+
+    z21["psql"] = lambda q: []
+    z21["wiki_validate_leader_axes"] = lambda *a, **k: True
+    z21["ds_chat"] = lambda *a, **k: "not json at all"
+    vfy_garbage = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    t("garbage verify → degraded not none",
+      vfy_garbage.get("outcome") == "degraded")
+
+    z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": []})
+    vfy_empty_ok = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    t("valid empty verdicts → none not degraded",
+      vfy_empty_ok.get("outcome") == "none")
+
+    t("WIKI_VERIFY_MAX_TOKENS default 2048",
+      z21.get("WIKI_VERIFY_MAX_TOKENS") == 2048)
 
     t("try_wiki integrates verify step",
       "wiki_verify_candidates" in Z21.read_text(encoding="utf-8"))

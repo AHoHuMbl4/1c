@@ -20,6 +20,7 @@ WIKI_ALIAS_TOP = int(os.environ.get("WIKI_ALIAS_TOP", "3"))
 # объединения двух форм вопроса — при 5 паспортах верификация её не видела и
 # вопрос уходил в no_data при живом эталоне 76 075).
 WIKI_PASSPORT_N = int(os.environ.get("WIKI_PASSPORT_N", "8"))
+WIKI_VERIFY_MAX_TOKENS = int(os.environ.get("WIKI_VERIFY_MAX_TOKENS", "2048"))
 WIKI_PASSPORT_BODY_MAX = int(os.environ.get("WIKI_PASSPORT_BODY_MAX", "1500"))
 WIKI_SEP_GAP = float(os.environ.get("WIKI_SEP_GAP", "0.04"))
 WIKI_EMBED_MAXLEN = int(os.environ.get("WIKI_EMBED_MAXLEN", "20000"))
@@ -383,42 +384,110 @@ def wiki_format_passport_lines(passports, short_tail=None):
     return "\n\n".join(lines)
 
 
-def wiki_parse_verify_response(raw, n_passports):
-    """Структурный разбор {verdicts:[{index, fit, why}]}."""
+_WIKI_VERIFY_FIT_MAP = {
+    "yes": "yes", "no": "no", "unsure": "unsure",
+    "подходит": "yes", "не_подходит": "no", "не подходит": "no",
+    "сомневаюсь": "unsure",
+}
+
+
+def _wiki_row_to_verdict(row, n_passports):
+    """Один объект verdict → нормализованная запись или None."""
+    if not isinstance(row, dict):
+        return None
+    idx = row.get("index")
+    if idx is None or not str(idx).strip().isdigit():
+        return None
+    i = int(idx)
+    if i < 1 or i > n_passports:
+        return None
+    fit_raw = str(row.get("fit") or "").strip().lower()
+    fit = _WIKI_VERIFY_FIT_MAP.get(
+        fit_raw, fit_raw if fit_raw in ("yes", "no", "unsure") else "")
+    if fit not in ("yes", "no", "unsure"):
+        return None
+    why = str(row.get("why") or "").strip()[:200]
+    return {"index": i, "fit": fit, "why": why}
+
+
+def _wiki_verdicts_from_rows(rows, n_passports):
     verdicts = []
+    if not isinstance(rows, list):
+        return verdicts
+    for row in rows:
+        v = _wiki_row_to_verdict(row, n_passports)
+        if v:
+            verdicts.append(v)
+    return verdicts
+
+
+def _wiki_salvage_verdicts(txt, n_passports):
+    """Завершённые объекты verdict из обрезанного JSON массива verdicts."""
+    verdicts = []
+    m = re.search(r'"verdicts"\s*:\s*\[', txt)
+    if not m:
+        return verdicts
+    pos = m.end()
+    n_txt = len(txt)
+    while pos < n_txt:
+        while pos < n_txt and txt[pos] in " \t\n\r,":
+            pos += 1
+        if pos >= n_txt or txt[pos] == "]":
+            break
+        if txt[pos] != "{":
+            break
+        depth = 0
+        start = pos
+        end = None
+        for i in range(pos, n_txt):
+            ch = txt[i]
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    end = i + 1
+                    break
+        if end is None:
+            break
+        try:
+            row = json.loads(txt[start:end])
+        except (ValueError, TypeError):
+            break
+        v = _wiki_row_to_verdict(row, n_passports)
+        if v:
+            verdicts.append(v)
+        pos = end
+    return verdicts
+
+
+def wiki_parse_verify_response(raw, n_passports):
+    """Структурный разбор {verdicts:[{index, fit, why}]}.
+
+    Возвращает (verdicts, mode): mode — full | salvage | failed.
+    """
     txt = (raw or "").strip()
     if not txt or n_passports <= 0:
-        return verdicts
+        return [], "failed"
     try:
         j = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
     except (ValueError, KeyError, TypeError):
-        return verdicts
+        salvaged = _wiki_salvage_verdicts(txt, n_passports)
+        if salvaged:
+            return salvaged, "salvage"
+        return [], "failed"
     if not isinstance(j, dict):
-        return verdicts
+        salvaged = _wiki_salvage_verdicts(txt, n_passports)
+        if salvaged:
+            return salvaged, "salvage"
+        return [], "failed"
     rows = j.get("verdicts")
     if not isinstance(rows, list):
-        return verdicts
-    fit_map = {
-        "yes": "yes", "no": "no", "unsure": "unsure",
-        "подходит": "yes", "не_подходит": "no", "не подходит": "no",
-        "сомневаюсь": "unsure",
-    }
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        idx = row.get("index")
-        if idx is None or not str(idx).strip().isdigit():
-            continue
-        i = int(idx)
-        if i < 1 or i > n_passports:
-            continue
-        fit_raw = str(row.get("fit") or "").strip().lower()
-        fit = fit_map.get(fit_raw, fit_raw if fit_raw in ("yes", "no", "unsure") else "")
-        if fit not in ("yes", "no", "unsure"):
-            continue
-        why = str(row.get("why") or "").strip()[:200]
-        verdicts.append({"index": i, "fit": fit, "why": why})
-    return verdicts
+        salvaged = _wiki_salvage_verdicts(txt, n_passports)
+        if salvaged:
+            return salvaged, "salvage"
+        return [], "failed"
+    return _wiki_verdicts_from_rows(rows, n_passports), "full"
 
 
 def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
@@ -487,11 +556,17 @@ def wiki_verify_candidates(question, intent, cards, diag=None):
             [{"role": "system", "content": WIKI_VERIFY_SYS},
              {"role": "user", "content": "%s\n\nPassports:\n%s"
               % (ask_text, listing)}],
-            max_tokens=400)
+            max_tokens=WIKI_VERIFY_MAX_TOKENS)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write("ask DEGRADED: wiki verify без модели (%s)\n" % str(e)[:80])
         return {"outcome": "degraded", "diag": diag}
-    verdicts = wiki_parse_verify_response(raw, len(full))
+    verdicts, parse_mode = wiki_parse_verify_response(raw, len(full))
+    if parse_mode == "salvage":
+        diag["wiki_verify_truncated"] = 1
+    if (raw or "").strip() and parse_mode == "failed":
+        sys.stderr.write("ask DEGRADED: wiki verify ответ не разобран\n")
+        diag["wiki_verify_n"] = len(full)
+        return {"outcome": "degraded", "verdicts": [], "diag": diag}
     diag["wiki_verify_n"] = len(full)
     resolved = wiki_outcome_from_verify(verdicts, full, intent, diag=diag)
     resolved["verdicts"] = verdicts
