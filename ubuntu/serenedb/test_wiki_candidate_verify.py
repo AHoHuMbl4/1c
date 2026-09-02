@@ -422,6 +422,55 @@ def main() -> int:
     t("measure metadata error does not drop leader",
       z21["wiki_leader_post_verify"]("catalog_a", {"measure": "alpha"}, "q", {}))
 
+    # [02.09] collapse: пустая мера + sales-вид → money-канон, не count
+    _sales_q = "позавчера сколько было продаж"
+    _sales_intent = {"kind": "продажи", "measure": "", "want": "count"}
+    z21["sales_sum_intent"] = lambda intent, question="": True
+    z21["sales_rank_engaged"] = lambda *a, **k: False
+    z21["sales_force_money_measure"] = lambda intent, question="": True
+    z21["sales_money_measure"] = lambda names, alias_by=None: "Всего"
+    z21["measures_of"] = lambda src: ["Всего", "Количество"]
+    z21["measure_aliases_of"] = lambda src: {}
+    z21["pick_measure"] = lambda src, question, word: (None, [], "none")
+    z21["unresolved_quantity"] = lambda m, alts, want, compute, names, totals=None: (m, list(alts or []))
+
+    def _agg_sales(src, match, preds, measure):
+        if measure:
+            return {"sum": 0.0, "count": 9, "form": "money", "grain": "row"}
+        return {"sum": None, "count": 9, "form": "number", "grain": "row"}
+
+    z21["aggregate"] = _agg_sales
+    z21["answer_slot_mode"] = lambda want, compute: "count"
+    z21["atom_operation"] = lambda *a, **k: "sum"
+    z21["measure_label_of"] = lambda src, m: m or "count"
+    z21["atom_from_agg"] = lambda agg, **k: {
+        "exact_value": agg.get("sum") if k.get("money") else agg.get("count"),
+        "operation": k.get("operation"), "measure_id": k.get("measure_id")}
+    z21["_passport_origin"] = lambda intent, diag: None
+    z21["split_ident"] = lambda s: s
+    z21["render_atom_pair"] = lambda atom: str(atom.get("exact_value"))
+    z21["_fmt"] = lambda v: str(v)
+    z21["_fork_figures_of"] = lambda atom: [atom.get("exact_value")]
+
+    diag_collapse = {}
+    tied_sales = ["accumulationregister_a", "accumulationregister_b"]
+    collapsed = z21["_wiki_clarify_collapse_answer"](
+        _sales_q, _sales_intent, tied_sales, "", [], diag_collapse, None, 0, {})
+    t("collapse sales empty measure uses money canon not count",
+      collapsed and collapsed.get("kind") == "answer"
+      and collapsed.get("text") == "0.0"
+      and diag_collapse.get("wiki_clarify_collapsed") == "equal"
+      and diag_collapse.get("wiki_clarify_collapsed_measure") == "Всего")
+
+    # count-only: без sales-канона свёртка считает записи
+    z21["sales_sum_intent"] = lambda intent, question="": False
+    diag_count = {}
+    collapsed_count = z21["_wiki_clarify_collapse_answer"](
+        "сколько записей", {"want": "count"}, tied_sales, "", [], diag_count, None, 0, {})
+    t("collapse non-sales count intent stays count",
+      collapsed_count and collapsed_count.get("text") == "9"
+      and diag_count.get("wiki_clarify_collapsed_measure") == "count")
+
     r = subprocess.run([sys.executable, "-m", "py_compile", str(Z21)],
                        capture_output=True, text=True)
     t("z21 py_compile", r.returncode == 0, r.stderr[:120])

@@ -727,6 +727,99 @@ def _wiki_agg_figure_num(agg, measure):
         return None
 
 
+def _wiki_collapse_resolve_measure(src, question, intent, match, preds, tied,
+                                   diag, plan=None):
+    """Measure for one tied branch — same rules as answer() after entity pick."""
+    g = globals()
+    plan = plan or {}
+    intent = intent or {}
+    measure_word = _intent_text(intent.get("measure"))
+    measures_of_fn = g.get("measures_of")
+    if not callable(measures_of_fn):
+        return None, None
+    _mnames = measures_of_fn(src)
+    measure_aliases_of_fn = g.get("measure_aliases_of")
+    _malias = (measure_aliases_of_fn(src)
+               if callable(measure_aliases_of_fn) else {})
+    pick_measure_fn = g.get("pick_measure")
+    if measure_word:
+        if not callable(pick_measure_fn):
+            return None, None
+        measure, alts, how = pick_measure_fn(src, question, measure_word)
+        if not measure or alts:
+            return None, None
+        return measure, how or "named"
+    measure, measure_alts, how = None, [], ""
+    if callable(pick_measure_fn):
+        measure, measure_alts, how = pick_measure_fn(src, question, "")
+    unresolved_quantity_fn = g.get("unresolved_quantity")
+    if not measure and not measure_alts and callable(unresolved_quantity_fn):
+        _need_q = ((intent.get("want") or "") == "sum"
+                   or (plan.get("compute") or "") in ("sum", "max", "min", "avg"))
+        _qt = {}
+        if _need_q and len(_mnames) > 1:
+            totals_of_fn = g.get("totals_of")
+            if callable(totals_of_fn):
+                try:
+                    _qt = {m: v for m, v, _mx, _mn
+                           in totals_of_fn(src, match or "", preds or [], _mnames)}
+                except RuntimeError:
+                    _qt = {}
+        measure, measure_alts = unresolved_quantity_fn(
+            measure, measure_alts, intent.get("want"), plan.get("compute"),
+            _mnames, _qt)
+    if measure_alts:
+        return None, None
+    sales_sum_intent_fn = g.get("sales_sum_intent")
+    sales_rank_engaged_fn = g.get("sales_rank_engaged")
+    _cands = list(tied or []) + ([src] if src else [])
+    _rank_sales = (sales_rank_engaged_fn(intent, plan, question, _cands)
+                   if callable(sales_rank_engaged_fn) else False)
+    if ((callable(sales_sum_intent_fn) and sales_sum_intent_fn(intent, question))
+            or _rank_sales):
+        _sm, _how = None, None
+        if _rank_sales:
+            sales_rank_resolve_measure_fn = g.get("sales_rank_resolve_measure")
+            if callable(sales_rank_resolve_measure_fn):
+                _axes = []
+                refcols_of_fn = g.get("refcols_of")
+                if callable(refcols_of_fn):
+                    try:
+                        _axes = refcols_of_fn(src)
+                    except RuntimeError:
+                        _axes = []
+                _sm, _how = sales_rank_resolve_measure_fn(
+                    _mnames, intent, question, _malias,
+                    src=src, axes=_axes, plan=plan, diag=diag)
+                if _how == "role_ask":
+                    measure_class_alts_fn = g.get("measure_class_alts")
+                    if callable(measure_class_alts_fn):
+                        _mc, _ma = measure_class_alts_fn(_mnames, _malias)
+                        if len(_ma) == 2:
+                            return None, None
+        else:
+            sales_force_money_measure_fn = g.get("sales_force_money_measure")
+            sales_money_measure_fn = g.get("sales_money_measure")
+            sales_qty_measure_fn = g.get("sales_qty_measure")
+            if (callable(sales_force_money_measure_fn)
+                    and sales_force_money_measure_fn(intent, question)):
+                if callable(sales_money_measure_fn):
+                    _sm = sales_money_measure_fn(_mnames, _malias)
+                    _how = "sales_canon"
+            elif callable(sales_qty_measure_fn):
+                _sm = sales_qty_measure_fn(_mnames, _malias)
+                _how = "sales_qty_canon"
+        if _sm:
+            measure, how = _sm, _how
+    if measure:
+        return measure, how
+    want = (intent.get("want") or "").strip().lower()
+    compute = (plan.get("compute") or "").strip().lower()
+    if want == "sum" or compute in ("sum", "max", "min", "avg"):
+        return None, None
+    return None, "count"
+
+
 def _wiki_clarify_collapse_answer(question, intent, tied, match, preds, diag,
                                   cut, t0, lab_by):
     """Equal measured totals across tied src_table -> kind=answer."""
@@ -734,19 +827,13 @@ def _wiki_clarify_collapse_answer(question, intent, tied, match, preds, diag,
     aggregate_fn = g.get("aggregate")
     if not callable(aggregate_fn):
         return None
-    pick_measure_fn = g.get("pick_measure")
-    measure_word = _intent_text((intent or {}).get("measure"))
     rows = []
     for src in tied:
-        measure = None
-        if measure_word:
-            if not callable(pick_measure_fn):
-                diag["wiki_clarify_collapsed"] = "unresolved"
-                return None
-            measure, _alts, _how = pick_measure_fn(src, question, measure_word)
-            if not measure:
-                diag["wiki_clarify_collapsed"] = "unresolved"
-                return None
+        measure, _how = _wiki_collapse_resolve_measure(
+            src, question, intent, match, preds, tied, diag, plan={})
+        if _how is None:
+            diag["wiki_clarify_collapsed"] = "unresolved"
+            return None
         try:
             agg = aggregate_fn(src, match or "", preds or [], measure)
         except RuntimeError:
@@ -763,6 +850,7 @@ def _wiki_clarify_collapse_answer(question, intent, tied, match, preds, diag,
         return None
     diag["wiki_clarify_collapsed"] = "equal"
     _src0, measure, agg, _num = rows[0]
+    diag["wiki_clarify_collapsed_measure"] = measure or "count"
     want = (intent or {}).get("want")
     plan = {}
     answer_slot_mode_fn = g.get("answer_slot_mode")

@@ -1,3 +1,18 @@
+## 2026-09-02 — Класс 6b: свёртка считает каноном основного пути, не count
+
+**[код]** Дефект L18: «позавчера сколько было продаж» схлопнулся в «9»
+(count), эталон 0.00 (деньги): при пустой названной мере свёртка считала
+count, а основной путь разрешил бы sales-канон (деньги). Правка:
+`_wiki_collapse_resolve_measure` повторяет разрешение меры основного пути
+(z20:4093-4186): pick_measure → sales-канон (z11: sales_sum_intent /
+sales_money_measure / sales_rank_resolve_measure); want=sum без канона →
+unresolved (чипы); count — только при want=count. diag несёт
+`wiki_clarify_collapsed_measure`.
+**Числа:** замки оркестратором: verify 55/0 (+2 кейса: sales+пустая мера →
+money-канон, не count; want=count без sales → count), hybrid 65/0,
+step4 110/0, k4_meta 12/0, fork 51/0, compose 92/0, period_empty 30/0.
+**Доки:** TARGET.md п. 12/19.
+
 ## 2026-09-02 — L18: 30/33/3/1 (класс 6 в бою) + класс 8
 
 **[замер okna, L18]** match 30 / honest_no 33 / wrong 3 / unresolved 1
