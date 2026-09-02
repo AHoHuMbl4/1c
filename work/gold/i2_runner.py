@@ -239,7 +239,7 @@ def classify_verdict(
         return VERDICT_HONEST_NO
 
     matches_raw = diag.get("found")
-    if matches_raw is not None and nums:
+    if matches_raw is not None and nums and not diag.get("period_window_empty"):
         try:
             if int(matches_raw) == 0:
                 return VERDICT_CONFIDENT_WRONG
