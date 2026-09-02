@@ -1069,6 +1069,7 @@ def wiki_leader_post_verify(leader, intent, question, diag=None):
             diag["wiki_none"] = "measure_not_carried"
             return False
     axis_word = _intent_text(intent.get("action_axis"))
+    axis_from_unaccounted = False
     if not axis_word:
         _rw = globals().get("resolved_warehouse_axis_word")
         if callable(_rw):
@@ -1076,9 +1077,19 @@ def wiki_leader_post_verify(leader, intent, question, diag=None):
                 axis_word = _rw(question, intent) or ""
             except RuntimeError:
                 axis_word = ""
+    if not axis_word:
+        _ru = globals().get("resolved_unaccounted_slice_axis_word")
+        if callable(_ru):
+            try:
+                axis_word = _ru(question, intent) or ""
+                if axis_word:
+                    axis_from_unaccounted = True
+            except RuntimeError:
+                axis_word = ""
     if (axis_word
             and not wiki_axis_is_question_subject(intent, axis_word)
-            and _wiki_axis_has_carriers(axis_word, intent, question)
+            and (axis_from_unaccounted
+                 or _wiki_axis_has_carriers(axis_word, intent, question))
             and not wiki_leader_carries_axis(
                 leader, axis_word, intent, question)):
         diag["wiki_axis_not_carried"] = leader

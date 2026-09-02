@@ -457,6 +457,54 @@ def main() -> int:
     t("empty action_axis + empty resolver → keep leader (unchanged)",
       ok_rw_empty and not diag_rw_empty.get("wiki_none"))
 
+    # [02.09] post-verify: ось из resolved_unaccounted_slice_axis_word
+    # (warehouse пуст; carriers не требуем — резолвер уже доказал joint=∅)
+    z21["resolved_warehouse_axis_word"] = lambda question, intent=None: ""
+    z21["_wiki_axis_has_carriers"] = lambda phrase, intent, question="": False
+    z21["wiki_leader_carries_axis"] = (
+        lambda leader, axis_word, intent=None, question="": leader != "catalog_nom")
+    z21["resolved_unaccounted_slice_axis_word"] = (
+        lambda question, intent=None: "axis_slice")
+
+    diag_ua = {}
+    ok_ua = z21["wiki_leader_post_verify"](
+        "catalog_nom",
+        {"kind": "entity_k", "action_axis": ""},
+        "q with unaccounted slice",
+        diag_ua)
+    t("empty action_axis + unaccounted resolver → none when leader lacks axis",
+      (not ok_ua) and diag_ua.get("wiki_none") == "axis_not_carried"
+      and diag_ua.get("wiki_axis_not_carried") == "catalog_nom")
+
+    diag_ua_ok = {}
+    ok_ua_ok = z21["wiki_leader_post_verify"](
+        "catalog_carrier",
+        {"kind": "entity_k", "action_axis": ""},
+        "q with unaccounted slice",
+        diag_ua_ok)
+    t("unaccounted resolver + leader carries axis → keep leader",
+      ok_ua_ok and not diag_ua_ok.get("wiki_none"))
+
+    diag_ua_subj = {}
+    ok_ua_subj = z21["wiki_leader_post_verify"](
+        "catalog_nom",
+        {"kind": "axis_slice", "action_axis": ""},
+        "q with unaccounted slice",
+        diag_ua_subj)
+    t("unaccounted resolver as subject → keep leader",
+      ok_ua_subj and not diag_ua_subj.get("wiki_none"))
+
+    z21["resolved_unaccounted_slice_axis_word"] = (
+        lambda question, intent=None: "")
+    diag_ua_empty = {}
+    ok_ua_empty = z21["wiki_leader_post_verify"](
+        "catalog_nom",
+        {"kind": "entity_k", "action_axis": ""},
+        "q no slice",
+        diag_ua_empty)
+    t("all axis resolvers empty → keep leader (unchanged)",
+      ok_ua_empty and not diag_ua_empty.get("wiki_none"))
+
     # [02.09] collapse: пустая мера + sales-вид → money-канон, не count
     _sales_q = "позавчера сколько было продаж"
     _sales_intent = {"kind": "продажи", "measure": "", "want": "count"}

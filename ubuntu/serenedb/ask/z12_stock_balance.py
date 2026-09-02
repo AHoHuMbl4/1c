@@ -202,6 +202,64 @@ def resolved_warehouse_axis_word(question, intent=None):
     return ""
 
 
+def _catalogs_joint_with_kind(cats, kind_cats):
+    """Есть ли носитель (регистр/документ) с refcol и на cats, и на kind_cats.
+
+    Тот же EXISTS-паттерн, что у _stock_place_axis_catalogs, но без пула
+    stock-eligible: совместный учёт kind×ось по любому движению.
+    Доки: Sql › Expressions › Subqueries › EXISTS.
+    """
+    cats = [c for c in (cats or []) if c]
+    kind_cats = [c for c in (kind_cats or []) if c]
+    if not cats or not kind_cats:
+        return False
+    rows = psql(
+        "SELECT 1 FROM search_refcols r1 "
+        "WHERE r1.target_src IN (%s) "
+        "  AND r1.col IS NOT NULL AND r1.col <> '' "
+        "  AND (r1.src_table LIKE 'accumulationregister_%%' "
+        "       OR r1.src_table LIKE 'document_%%') "
+        "  AND EXISTS ("
+        "    SELECT 1 FROM search_refcols r2 "
+        "    WHERE r2.src_table = r1.src_table "
+        "      AND r2.target_src IN (%s) "
+        "      AND r2.col IS NOT NULL AND r2.col <> ''"
+        "  ) LIMIT 1"
+        % (", ".join(lit(c) for c in cats),
+           ", ".join(lit(c) for c in kind_cats)))
+    return bool(rows)
+
+
+def resolved_unaccounted_slice_axis_word(question, intent=None):
+    """Вторичная dictionary-ось без совместного учёта с kind (не stock-path).
+
+    Слово → catalog базы, не kind/measure/action_axis, не product, и
+    joint(kind×catalog)=∅ по search_refcols. Ошибка метаданных → "".
+    """
+    intent = intent or {}
+    try:
+        kind = _intent_text(intent.get("kind"))
+        if not kind:
+            return ""
+        has_period = _intent_period_has_meaning(intent)
+        kind_cats = set(_catalogs_for_axis_word(kind, intent, has_period) or [])
+        if not kind_cats:
+            return ""
+        for w in _question_dictionary_axis_candidates(question, intent):
+            cats = [c for c in (_catalogs_for_axis_word(w, intent, has_period) or [])
+                    if c and not _is_product_catalog_target(c)]
+            if not cats:
+                continue
+            if set(cats) <= kind_cats:
+                continue
+            if _catalogs_joint_with_kind(cats, kind_cats):
+                continue
+            return w
+        return ""
+    except RuntimeError:
+        return ""
+
+
 def intent_axis_words(intent, question=""):
     """Оси из разбора + ось места из словаря по термам вопроса."""
     intent = intent or {}
