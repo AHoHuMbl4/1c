@@ -420,6 +420,43 @@ def main() -> int:
     t("measure metadata error does not drop leader",
       z21["wiki_leader_post_verify"]("catalog_a", {"measure": "alpha"}, "q", {}))
 
+    # [02.09] post-verify: ось из resolved_warehouse_axis_word при пустом action_axis
+    z21["wiki_measure_carried"] = lambda src, m: True
+    z21["_wiki_axis_has_carriers"] = lambda phrase, intent, question="": True
+    z21["wiki_leader_carries_axis"] = (
+        lambda leader, axis_word, intent=None, question="": leader != "catalog_nom")
+    z21["resolved_warehouse_axis_word"] = (
+        lambda question, intent=None: "axis_place")
+
+    diag_rw = {}
+    ok_rw = z21["wiki_leader_post_verify"](
+        "catalog_nom",
+        {"kind": "entity_k", "action_axis": ""},
+        "q with place axis",
+        diag_rw)
+    t("empty action_axis + place resolver → none when leader lacks axis",
+      (not ok_rw) and diag_rw.get("wiki_none") == "axis_not_carried"
+      and diag_rw.get("wiki_axis_not_carried") == "catalog_nom")
+
+    diag_rw_subj = {}
+    ok_rw_subj = z21["wiki_leader_post_verify"](
+        "catalog_nom",
+        {"kind": "axis_place", "action_axis": ""},
+        "q with place axis",
+        diag_rw_subj)
+    t("empty action_axis + place resolver as subject → keep leader",
+      ok_rw_subj and not diag_rw_subj.get("wiki_none"))
+
+    z21["resolved_warehouse_axis_word"] = lambda question, intent=None: ""
+    diag_rw_empty = {}
+    ok_rw_empty = z21["wiki_leader_post_verify"](
+        "catalog_nom",
+        {"kind": "entity_k", "action_axis": ""},
+        "q no place",
+        diag_rw_empty)
+    t("empty action_axis + empty resolver → keep leader (unchanged)",
+      ok_rw_empty and not diag_rw_empty.get("wiki_none"))
+
     # [02.09] collapse: пустая мера + sales-вид → money-канон, не count
     _sales_q = "позавчера сколько было продаж"
     _sales_intent = {"kind": "продажи", "measure": "", "want": "count"}
