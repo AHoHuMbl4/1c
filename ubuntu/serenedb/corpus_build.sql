@@ -1428,6 +1428,8 @@ FROM tmp3_build b
 
 -- Формула чанкования по сущности: md5('v8b' + метод порядка + chunk_cells + ncols).
 -- Пустой key_cols → сущность не чанкуется (монолит).
+-- search_pdoc_formula — строковые формулы; search_quality.v — только BIGINT.
+CREATE TABLE IF NOT EXISTS search_pdoc_formula (tbl VARCHAR, formula VARCHAR);
 CREATE OR REPLACE TABLE tmp3_pdoc_formula AS
 SELECT e.tbl,
        md5('v8b' || 'key_order' || cfg.chunk_cells::VARCHAR || '|' || e.ncols::VARCHAR) AS formula
@@ -1442,11 +1444,11 @@ WHERE len(k.key_cols) > 0
 -- Сброс resume при смене или отсутствии сохранённой формулы (до решения on_).
 DELETE FROM tmp3_pdoc_progress p
 WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_formula f WHERE f.tbl = p.tbl)
-  AND coalesce((SELECT sq.v FROM search_quality sq WHERE sq.k = 'pdoc_formula:' || p.tbl), '')
+  AND coalesce((SELECT f0.formula FROM search_pdoc_formula f0 WHERE f0.tbl = p.tbl), '')
       IS DISTINCT FROM (SELECT f2.formula FROM tmp3_pdoc_formula f2 WHERE f2.tbl = p.tbl);
 DELETE FROM tmp3_pdoc_stage s
 WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_formula f WHERE f.tbl = s.src_table)
-  AND coalesce((SELECT sq.v FROM search_quality sq WHERE sq.k = 'pdoc_formula:' || s.src_table), '')
+  AND coalesce((SELECT f0.formula FROM search_pdoc_formula f0 WHERE f0.tbl = s.src_table), '')
       IS DISTINCT FROM (SELECT f2.formula FROM tmp3_pdoc_formula f2 WHERE f2.tbl = s.src_table);
 
 CREATE OR REPLACE TABLE tmp3_pdoc_entity AS
@@ -1542,12 +1544,8 @@ INSERT INTO search_quality SELECT 'pdoc_chunk_cells', chunk_cells, current_setti
 FROM tmp3_pdoc_cfg;
 INSERT INTO search_quality SELECT 'pdoc_chunk_entities', count(DISTINCT tbl), 'сущностей выше порога'
 FROM tmp3_pdoc_chunks;
-INSERT INTO search_quality SELECT 'pdoc_formula:' || tbl, formula, 'формула чанкования сущности'
-FROM tmp3_pdoc_formula;
-INSERT INTO search_quality SELECT 'pdoc_chunk_formula',
-  coalesce(md5(string_agg(formula, '|' ORDER BY tbl)), md5('v8b')),
-  'агрегат формул чанкования'
-FROM tmp3_pdoc_formula;
+DELETE FROM search_pdoc_formula WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_formula);
+INSERT INTO search_pdoc_formula SELECT tbl, formula FROM tmp3_pdoc_formula;
 INSERT INTO search_quality SELECT 'pdoc_resume', (SELECT on_::INT FROM tmp3_resume_pdoc),
   CASE WHEN (SELECT on_ FROM tmp3_resume_pdoc) THEN 'докатка чанков' ELSE 'свежий такт' END;
 
