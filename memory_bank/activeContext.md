@@ -48,20 +48,37 @@ cursor-agent; (3) проверка — замки/замеры мною, не с
    (ответ лидера + люк с подписью при разных числах) — не начат.
 5. И2 web, К8 — после стабильного engine.
 
-### ЖИВОЕ СЕЙЧАС (02.09 ~13:10 UTC)
-- **HEAD = 837551d = origin/main = прод :8091.** Класс 9c (journal-ghost) выкачен,
-  md5 z05/z12/z21 совпали, сервисы active. **Проба живьём: кейс 2402 → no_data
-  (wiki_none=axis_not_carried) — ЗАКРЫТ**; негатив «номенклатуры в компании» →
-  answer с числом (не роняет); «прайс всего» → no_data по verify_none (honest_no,
-  раньше был wrong 2402).
-- **Пакет 9c (5 правок):** фикс скобки SQL efc (z05:320 — syntax error глотался
-  в []; был мёртв любой резолв слово→catalog при allow_meaning=False); 9b переписан
-  в journal-ghost (ось реальна = stem по documentjournal_%, не place/eligible);
-  класс 9 убран из post-verify (ложно ронял «в компании»); catch-all
-  _kind_is_stock_scoped→True убран; вакуумный carry при unaccounted → False.
-- **Запуск L20 — когда кончится такт** (идёт с 07:27 UTC, p_doc реализациятмц
-  2+ ч активного SQL, жив). Команда — в МЕХАНИКА ниже (workers 16).
-- Дозор такта bash-t68hy7vp жив; после завершения — NEXT у таймера не «-».
+### ЖИВОЕ СЕЙЧАС (02.09 ~12:30 UTC — ПЕРЕРЫВ ТАКТА, работа над ускорением)
+- **HEAD = 6a8a80c = origin/main = прод :8091** (класс 9c = 837551d; проба 2402
+  живьём → no_data, wiki_none=axis_not_carried — ЗАКРЫТ).
+- 🔴 **ТАКТ ОСТАНОВЛЕН по решению владельца (02.09):** таймер+сервис остановлены,
+  сирота p_doc добита (terminate). **Вектора целы: 1 657 724**, бэкапы на окне:
+  `backup_corpus_emb_20260902_1430` (row_key) и `backup_corpus_emb2_20260902_1500`
+  (+content_hash). Корпус 1 665 427 строк.
+- **Аудит такта (армия 5) — корень долгого такта:** не синк (10 с), не вектора
+  (дельта), не ненативность (всё штатное SereneDB — проверено по докам). Часы жрёт
+  сборка: p_doc на document_реализациятмц 75k×126 колонок = 9.45M ячеек с per-cell
+  regex при threads=4; чанкование не сработало (порог 626k СТРОК); инкремент
+  source-level, не row-level; embed такта serial ~15 стр/с против bulk 168-354.
+- **План правок такта — v7** (.claude/state/plan-takt-fix-v7.md поверх v6/v5):
+  6 волн аудита армией (5 аналитиков → 3 красных → 3+3 контроля ×2). Состав:
+  A — чанкование по ячейкам (chunk_rows=floor(626874/ncols), стабильный порядок
+  по key_cols+surrogate, хеш формулы + сброс resume, полнота stage перед finalize,
+  запрет p_doc_plain при живом progress, приёмка: count+мультимножество
+  (content_hash,row_key) до/после ИДЕНТИЧНЫ — семантику row_key НЕ менять!);
+  B0 — search_changed_rows с ВИТРИННЫМ ключом (НЕ sha1(doc) — apply его не может;
+  разрешение в row_key — будущая полная B), partial_rebuild=константа 0,
+  gone без Ref_Key, снимок в pipeline.sh; C — embed шаг 5 паттерном embed_bulk
+  (strict transfer, restore globals, gate p_doc/merge, tick_guard НЕ на шаге 5,
+  fail при осталось>0); D — wiki_alias SQL-only + юнит fail-closed, REFRESH
+  corpus_ivf_idx + smoke kNN, честный census (415 «ошибок» = вне контура).
+  Процедура: baseline JSON, запрет bypass, restore-drill, apply-таймер stop/wait/
+  start, отчёт владельцу /tmp/takt-report-*.
+- **Дальше:** волна 7 (подтверждающая, 3 агента) → исполнители ×4 параллельно
+  (разводка файлов без пересечений в v7) → полный прогон замков поверх суммы →
+  живые приёмки → выкат → ручной такт №1 (backlog 39, ДОЛГИЙ — норма) → такт №2
+  («минуты») → таймеры обратно → **L20** (критерий: wrong ≤ 2, match растёт с 35).
+- Доклады аудита: .claude/state/result-audit-{1..5}*.md, result-tf{1..7}-*.md.
 
 ### МЕТРИКА СЕЙЧАС (L19, честная)
 35 match / 28 honest_no / 3 wrong / 1 unresolved из 67. TARGET: «не врёт» —
