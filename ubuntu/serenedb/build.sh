@@ -448,10 +448,79 @@ ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
 # сам текст целиком лежит в корпусе и в ТЕКСТОВОМ индексе, по словам он находится весь.
 # Сколько строк обрезано — считает `coverage_build.sql` (`cov_emb_cut`), молча это не
 # происходит.
-echo "== 5. векторы новым строкам корпуса — сначала не-служебные"
-ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
-                        WHERE e.src_table = search_corpus.src_table AND e.cls = 'service')" \
-  ./embed_missing.sh search_corpus "substr(doc,1,$EMBED_MAXLEN)" "$WORKERS" "src_table,row_key" || fail "векторы корпуса (бизнес)"
+echo "== 5. векторы новым строкам корпуса — embed_bulk, не-служебные"
+# 🔴 Шаг 5 — embed_bulk, не embed_missing: tick_guard (rc=2) после merge оставил бы дыру NULL.
+# Gate: параллельный p_doc/corpus_merge недопустим (шаги 3–4 с ai_embed gate не трогают).
+_MERGE_BUSY=$(psql "$DSN" -tAc "
+SELECT count(*) FROM pg_stat_activity
+ WHERE pid <> pg_backend_pid()
+   AND coalesce(state, '') IN ('active', 'idle in transaction')
+   AND coalesce(query, '') <> ''
+   AND (query ILIKE '%p_doc%' OR query ILIKE '%corpus_merge%')" 2>/dev/null | tr -cd '0-9')
+[ "${_MERGE_BUSY:-0}" = "0" ] || fail "шаг 5: активны p_doc/corpus_merge (pg_stat_activity=${_MERGE_BUSY})"
+
+_EMB5_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
+                        WHERE e.src_table = search_corpus.src_table AND e.cls = 'service')"
+_EMB5_NULL=$(psql "$DSN" -tAc "
+SELECT count(*) FROM (SELECT src_table FROM search_corpus WHERE emb IS NULL) search_corpus
+ WHERE true AND (${_EMB5_WHERE})" 2>/dev/null | tr -cd '0-9')
+if [ "${_EMB5_NULL:-0}" = "0" ]; then
+  echo "== 5. пропуск: нет строк без вектора (не-служебные)"
+else
+  _glob_thr=$(psql "$DSN" -tAc "SHOW threads" 2>/dev/null | tr -cd '0-9')
+  _glob_hto=$(psql "$DSN" -tAc "SHOW http_timeout" 2>/dev/null | tr -cd '0-9')
+  restore_embed_globals() {
+    if [ -n "${_glob_thr:-}" ]; then
+      psql "$DSN" -q -c "SET GLOBAL threads = ${_glob_thr}" >/dev/null 2>&1 || return 1
+    fi
+    if [ -n "${_glob_hto:-}" ]; then
+      psql "$DSN" -q -c "SET GLOBAL http_timeout = ${_glob_hto}" >/dev/null 2>&1 || return 1
+    fi
+    return 0
+  }
+  _bulk_thr="${EMBED_THREADS:-3}"
+  case "$_bulk_thr" in ''|*[!0-9]*) _bulk_thr=3 ;; esac
+  [ "$_bulk_thr" -gt 3 ] && _bulk_thr=3
+  _emb5_json=""
+  if ! _emb5_json=$(ROWS_WHERE="${_EMB5_WHERE}" \
+      EMBED_THREADS="$_bulk_thr" \
+      EMBED_BATCH_ROWS="${EMBED_BATCH_ROWS:-16}" \
+      EMBED_TRANSFER_STRICT=1 \
+      EMBED_PROGRESS_SEC="${EMBED_PROGRESS_SEC:-300}" \
+      ./embed_bulk.sh search_corpus "substr(doc,1,$EMBED_MAXLEN)" "src_table,row_key"); then
+    restore_embed_globals \
+      || echo "WARN: restore GLOBAL threads/http_timeout не удался после ошибки embed_bulk" >&2
+    fail "векторы корпуса (embed_bulk)"
+  fi
+  restore_embed_globals || fail "restore GLOBAL threads/http_timeout после embed_bulk"
+  _emb5_was=$(printf '%s' "$_emb5_json" | sed -n 's/.*"было_без_вектора":\([0-9][0-9]*\).*/\1/p')
+  _emb5_left=$(printf '%s' "$_emb5_json" | sed -n 's/.*"осталось":\([0-9][0-9]*\).*/\1/p')
+  [ -n "$_emb5_left" ] && [ "$_emb5_left" = "0" ] \
+    || fail "embed_bulk: осталось ${_emb5_left:-?} без вектора (было ${_emb5_was:-?})"
+  _emb5_done=$((${_emb5_was:-0} - ${_emb5_left:-0}))
+  if [ "${_emb5_done:-0}" -gt 0 ]; then
+    _ivf_n=$(psql "$DSN" -tAc \
+      "SELECT count(*) FROM duckdb_indexes() WHERE index_name = 'corpus_ivf_idx'" \
+      2>/dev/null | tr -cd '0-9')
+    if [ "${_ivf_n:-0}" = "1" ]; then
+      echo "== 5-ivf. публикация corpus_ivf_idx после досчёта (${_emb5_done} строк)"
+      psql "$DSN" -q -c "VACUUM (REFRESH_INDEX) corpus_ivf_idx;" \
+        || fail "REFRESH corpus_ivf_idx"
+      _knn_n=$(psql "$DSN" -tAc "
+WITH v AS (SELECT emb AS q FROM search_corpus WHERE emb IS NOT NULL LIMIT 1)
+SELECT count(*) FROM (
+  SELECT 1 FROM search_corpus, v
+  WHERE search_corpus.emb IS NOT NULL
+  ORDER BY search_corpus.emb <=> v.q
+  LIMIT 5
+) s" 2>/dev/null | tr -cd '0-9')
+      echo "smoke kNN corpus: ${_knn_n:-0} строк" >&2
+      [ "${_knn_n:-0}" = "5" ] || fail "smoke kNN: ожидали 5 строк, получили ${_knn_n:-0}"
+    else
+      echo "== 5-ivf. corpus_ivf_idx не найден — REFRESH пропущен" >&2
+    fi
+  fi
+fi
 
 # 🔴 СЛУЖЕБНЫМ ВЕКТОР НЕ СЧИТАЕТСЯ. Решение владельца 29.07: «да, не нужны они в векторе».
 # [замер 29.07, УТ] это 257 966 строк из 632 683 — 41% корпуса: замеры времени платформы

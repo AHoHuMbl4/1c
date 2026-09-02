@@ -23,7 +23,7 @@
 #   EMBED_ROW_GROUP_SIZE=122880
 #   EMBED_ROUNDS=6 EMBED_RETRY_PAUSE=20 EMBED_CHUNK_RETRIES=8
 #   ROWS_WHERE, EMBED_DIM, EMBED_MAXLEN, EMBED_BATCH_CHARS
-#   EMBED_PROGRESS_SEC=60        # снимок прироста в рабочих базах по ходу
+#   EMBED_PROGRESS_SEC=300        # снимок прироста в рабочих базах (300–600 с)
 set -u
 
 TBL="${1:-}"; SRC="${2:-}"; KEY="${3:-}"
@@ -50,7 +50,13 @@ RGS="${EMBED_ROW_GROUP_SIZE:-122880}"
 ROUNDS="${EMBED_ROUNDS:-6}"
 PAUSE="${EMBED_RETRY_PAUSE:-20}"
 CHUNK_RETRIES="${EMBED_CHUNK_RETRIES:-8}"
-PROGRESS_SEC="${EMBED_PROGRESS_SEC:-60}"
+# Интервал ticker прогресса: 300–600 с (v10); умолчание 300.
+PROGRESS_SEC="${EMBED_PROGRESS_SEC:-300}"
+case "$PROGRESS_SEC" in
+  ''|*[!0-9]*) PROGRESS_SEC=300 ;;
+esac
+if [ "$PROGRESS_SEC" -lt 300 ]; then PROGRESS_SEC=300; fi
+if [ "$PROGRESS_SEC" -gt 600 ]; then PROGRESS_SEC=600; fi
 MODEL="${EMBED_MODEL:-}"
 DIM="${EMBED_DIM:-1024}"
 BUDGET="${EMBED_BATCH_CHARS:-12000}"
@@ -136,20 +142,35 @@ apply_globals() {
 
 # Перенос из присоединённых рабочих таблиц в целевую — одним запросом на файл.
 # Метка постоянная: прерванный прогон докатывается, а не считает заново.
+# EMBED_TRANSFER_STRICT=1 — сбой переноса = exit 1 (такт, не «|| true»).
 transfer_attached() {
-  local w wdb alias
+  local w wdb alias _strict=0
+  case "${EMBED_TRANSFER_STRICT:-0}" in
+    1|true|TRUE|yes|YES) _strict=1 ;;
+  esac
   for w in $(seq 0 $((N - 1))); do
     wdb="${WORK_DIR}/${TAG}_w${w}.db"
     [ -f "$wdb" ] || continue
     alias="bulk_w${w}"
-    psql "$DSN" -q -v ON_ERROR_STOP=1 <<SQL >/dev/null 2>&1 || true
+    if [ "$_strict" -eq 1 ]; then
+      psql "$DSN" -q -v ON_ERROR_STOP=1 <<SQL >/dev/null 2>&1 || return 1
 ATTACH OR REPLACE '${wdb}' AS ${alias} (ROW_GROUP_SIZE ${RGS});
 UPDATE ${TBL} t SET emb = p.emb
   FROM ${alias}.${TAG}_part p
  WHERE ${ON} AND t.emb IS NULL AND p.emb IS NOT NULL;
 DETACH ${alias};
 SQL
+    else
+      psql "$DSN" -q -v ON_ERROR_STOP=1 <<SQL >/dev/null 2>&1 || true
+ATTACH OR REPLACE '${wdb}' AS ${alias} (ROW_GROUP_SIZE ${RGS});
+UPDATE ${TBL} t SET emb = p.emb
+  FROM ${alias}.${TAG}_part p
+ WHERE ${ON} AND t.emb IS NULL AND p.emb IS NOT NULL;
+DETACH ${alias};
+SQL
+    fi
   done
+  return 0
 }
 
 # Сумма строк в рабочих part-таблицах присоединённых баз (живой прирост §8).
@@ -283,7 +304,9 @@ progress_loop() {
 echo "== embed_bulk  $(date -u +%H:%M:%S)  таблица=$TBL threads=$N batch=$ROWS_PER_BATCH pool/stream=$POOL" >&2
 
 # Докатка прерванного: перенос уже посчитанного из рабочих файлов.
-transfer_attached
+transfer_attached || {
+  case "${EMBED_TRANSFER_STRICT:-0}" in 1|true|TRUE|yes|YES) exit 1 ;; esac
+}
 
 n0=$(left_count) || exit 1
 if [ "${n0:-0}" = "0" ]; then
@@ -346,7 +369,9 @@ CREATE OR REPLACE TABLE ${TAG}_todo AS
 
   parts_n=$(count_attached_parts)
   echo "  круг $round: в рабочих базах $parts_n; перенос в $TBL" >&2
-  transfer_attached
+  transfer_attached || {
+    case "${EMBED_TRANSFER_STRICT:-0}" in 1|true|TRUE|yes|YES) exit 1 ;; esac
+  }
 
   # После переноса рабочие part можно очистить (файлы баз остаются — схема IF NOT EXISTS).
   for w in $(seq 0 $((N - 1))); do
@@ -381,5 +406,5 @@ done
 echo "{\"таблица\":\"$TBL\",\"было_без_вектора\":$n0,\"осталось\":${after:-?},\"потоков\":$N,\"режим\":\"bulk\",\"кругов\":$round}"
 [ -z "$after" ] && exit 1
 [ "$after" -eq 0 ] && exit 0
-[ "$after" -ge "$n0" ] && { echo "bulk не сдвинулся: было $n0, осталось $after" >&2; exit 1; }
-exit 0
+echo "bulk: осталось $after без вектора (было $n0)" >&2
+exit 1

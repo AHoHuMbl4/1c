@@ -569,6 +569,55 @@ def _ci_col(mart_cols: list[str], logical: str) -> str | None:
     return None
 
 
+def _parse_key_props(key_props: str) -> list[str]:
+    if not key_props:
+        return []
+    return [p.strip() for p in key_props.split(",") if p.strip()]
+
+
+def _enrich_key_cols(key_cols: list[str], mart_cols: list[str]) -> list[str]:
+    """Дописывает LineNumber в ключ регистра — как corpus_build.sql:61-65."""
+    lower = {k.lower() for k in key_cols}
+    if "linenumber" in lower:
+        return key_cols
+    if "recorder" not in lower:
+        return key_cols
+    if not _ci_col(mart_cols, "LineNumber"):
+        return key_cols
+    return key_cols + ["LineNumber"]
+
+
+def _resolve_key_cols(entity: str | None, manifest_key: list[str] | None,
+                      mart_cols: list[str]) -> list[str]:
+    """Логические key_cols: base_profile.key_props, иначе ключ из манифеста."""
+    key_cols: list[str] = []
+    if entity:
+        try:
+            kp = _psql_scalar(
+                "SELECT key_props FROM base_profile "
+                "WHERE lower(entity) = lower(%s) LIMIT 1" % _lit(entity))
+            if kp:
+                key_cols = _parse_key_props(kp)
+        except RuntimeError:
+            pass
+    if not key_cols and manifest_key:
+        key_cols = [safe_col(k) for k in manifest_key]
+    return _enrich_key_cols(key_cols, mart_cols)
+
+
+def _key_text_expr(mart_cols: list[str], key_cols: list[str]) -> str:
+    """Витринный ключ: string_agg значений key_cols через '|' (как corpus_build:1495)."""
+    cols = [_ci_col(mart_cols, k) for k in key_cols]
+    cols = [c for c in cols if c]
+    if not cols:
+        return "NULL"
+    exprs = ['coalesce(CAST("%s" AS VARCHAR), \'\')' % c for c in cols]
+    out = exprs[0]
+    for e in exprs[1:]:
+        out += " || '|' || " + e
+    return out
+
+
 def _check_mix_versions(table: str) -> None:
     # Инвариант К3 (контракт §9): одна версия на Ref_Key, запрос как у
     # poc_load_entity.load_entity_delta. Нарушение — карантин, дельту не льём.
@@ -604,7 +653,8 @@ def _delta_delete_clause(table: str, mart_cols: list) -> str:
     raise Quarantine("delta_without_key")
 
 
-def _delta_sql(table: str, src: str, header: list[str]) -> str:
+def _delta_sql(table: str, src: str, header: list[str],
+               key_cols: list[str] | None = None) -> str:
     # Источник истины формы — poc_load_entity.load_entity_delta (строки ~707-736):
     # состав колонок дельты выравнивается по ВИТРИНЕ (её список из duckdb_columns),
     # недостающие — пустые строки ('' — так пишет эталон: _cell(None)). Свой вариант
@@ -649,15 +699,28 @@ def _delta_sql(table: str, src: str, header: list[str]) -> str:
                            ("Recorder", "LineNumber", "Recorder_Type")) if c]
         _log("delta %s: нет Ref_Key, слияние по %s" % (table, nat))
     delete_sql = _delta_delete_clause(table, mart_cols)
+    changed_rows_sql = ""
+    if key_cols:
+        kt = _key_text_expr(mart_cols, key_cols)
+        changed_rows_sql = (
+            'INSERT INTO search_changed_rows (src_table, key_text, op, ts)\n'
+            'SELECT %s, %s, \'delta\', now() FROM "d_%s";\n'
+            % (_lit(table), kt, table))
     return ('CREATE OR REPLACE TEMP TABLE "d_%s" AS '
             'SELECT DISTINCT * FROM (%s) AS q;\n'
             '%s'
             'INSERT INTO "%s" (%s) SELECT %s FROM "d_%s";\n'
-            % (table, src, delete_sql, table, cols, sel, table))
+            '%s'
+            % (table, src, delete_sql, table, cols, sel, table, changed_rows_sql))
 
 
 def _apply_gone(path: str, changed_tables: set) -> int:
-    """gone.csv (колонки entity,ref_key): DELETE по ключам пачками."""
+    """gone.csv (колонки entity,ref_key): DELETE по ключам пачками.
+
+    search_changed_rows: key_text = ref_key как шлёт агент (витринный Ref_Key
+    документа); будущая полная B разрешает все строки витрины с этим Ref_Key.
+    DELETE витрины по Ref_Key — как прежде; регистр без Ref_Key — отдельный путь
+    дельты (_delta_delete_clause), не этот gone-DELETE."""
     with open(path, newline="", encoding="utf-8") as f:
         rows = list(csv.reader(f))
     if not rows:
@@ -677,9 +740,14 @@ def _apply_gone(path: str, changed_tables: set) -> int:
         table = safe_col(entity).lower()
         changed_tables.add(table)
         for i in range(0, len(ks), PACKET_APPLY_GONE_BATCH):
-            vals = ",".join("(%s)" % _lit(k) for k in ks[i:i + PACKET_APPLY_GONE_BATCH])
+            batch = ks[i:i + PACKET_APPLY_GONE_BATCH]
+            vals = ",".join("(%s)" % _lit(k) for k in batch)
             _psql('DELETE FROM "%s" WHERE "Ref_Key" IN '
                   '(SELECT k FROM (VALUES %s) AS g(k));' % (table, vals))
+            gone_vals = ",".join("(%s,%s)" % (_lit(table), _lit(k)) for k in batch)
+            _psql('INSERT INTO search_changed_rows (src_table, key_text, op, ts)\n'
+                  'SELECT v.t, v.k, \'deleted_gone\', now() FROM (VALUES %s) AS v(t, k);'
+                  % gone_vals)
         total += len(ks)
     return total
 
@@ -819,6 +887,9 @@ def _ensure_contract_tables() -> None:
     # DDL вне транзакции (движок так и работает), IF NOT EXISTS — повторяемо.
     _psql("CREATE TABLE IF NOT EXISTS search_changed_sources (src_table VARCHAR);\n"
           "GRANT SELECT ON search_changed_sources TO %s;\n"
+          "CREATE TABLE IF NOT EXISTS search_changed_rows "
+          "(src_table VARCHAR, key_text VARCHAR, op VARCHAR, "
+          "ts TIMESTAMP DEFAULT now());\n"
           "CREATE TABLE IF NOT EXISTS base_profile "
           "(entity TEXT, rows BIGINT, problem TEXT, key_props TEXT);\n"
           "CREATE TABLE IF NOT EXISTS search_quality (k TEXT, v BIGINT, note TEXT);\n"
@@ -882,8 +953,8 @@ def _plan(base_id: str, pkg_id: str, m: dict) -> list[str]:
         lines.append("  gone: чанки=%s" % ",".join(m["gone"].get("chunks") or []))
     if (m.get("metadata") or {}).get("included"):
         lines.append("  metadata: fingerprint=%s" % (m["metadata"].get("fingerprint") or ""))
-    lines.append("  контрактная транзакция: search_changed_sources + base_profile + "
-                 "search_quality.mart_changed_ts")
+    lines.append("  контрактная транзакция: search_changed_sources + search_changed_rows + "
+                 "base_profile + search_quality.mart_changed_ts")
     return lines
 
 
@@ -898,6 +969,7 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
     os.chmod(tmp, 0o755)  # каталог читает процесс движка (read_csv)
     try:
         try:
+            _ensure_contract_tables()
             files = _decrypt_chunks(base_id, pkg_id, m, tmp)
             for s in m.get("skipped") or []:
                 if isinstance(s, dict):
@@ -925,7 +997,12 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                 src = _csv_source(chunk_paths)
                 if op == "delta":
                     hdr = _csv_header(chunk_paths[0])
-                    merge = _delta_sql(table, src, hdr)  # здесь отсутствие таблицы — карантин
+                    mart_cols = _psql_col(
+                        'SELECT column_name FROM duckdb_columns() WHERE table_name=%s '
+                        "AND database_name = current_database() "
+                        'ORDER BY column_index' % _lit(table))
+                    key_cols = _resolve_key_cols(ent.get("name"), ent.get("key"), mart_cols)
+                    merge = _delta_sql(table, src, hdr, key_cols)
                     _check_mix_versions(table)
                     _psql(merge)
                 else:

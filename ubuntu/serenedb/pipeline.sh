@@ -44,12 +44,15 @@ echo "== синк витрины (дельта из 1С)"
 # DELETE FROM search_changed_sources. Apply кладёт отметки дописыванием; снимок
 # до синка возвращает их сборке. Иначе merge видит пустой список и пересобирает 0
 # при живом расхождении (okna 18.08 18:41/18:51: «изменились таблицы витрины: 0»
-# → «пересобирали 0 из 351»). Доки: sql/statements/insert, sql/statements/delete.
+# → «пересобирали 0 из 351»). search_changed_rows — тот же guard: снимок до синка,
+# HTTP-режим rows не пишет (waiver до partial=1). Доки: sql/statements/insert.
 KEEP_MARKS=0
 if [ -d "${ETL_ODATA_BASE:-}" ]; then
   KEEP_MARKS=1
   psql "$SERENEDB_DSN" -q -v ON_ERROR_STOP=1 -c \
-    "CREATE OR REPLACE TABLE tmp_changed_keep AS SELECT src_table FROM search_changed_sources;" \
+    "CREATE TABLE IF NOT EXISTS search_changed_rows (src_table VARCHAR, key_text VARCHAR, op VARCHAR, ts TIMESTAMP DEFAULT now());
+CREATE OR REPLACE TABLE tmp_changed_keep AS SELECT src_table FROM search_changed_sources;
+CREATE OR REPLACE TABLE tmp_changed_rows_keep AS SELECT * FROM search_changed_rows;" \
     || KEEP_MARKS=0
 fi
 /opt/openclaw-mcp/venv/bin/python serene_sync.py || echo "синк: частичные ошибки, см. выше"

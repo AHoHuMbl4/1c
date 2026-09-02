@@ -38,6 +38,8 @@ EnvironmentFile=-/etc/1c-wiki-alias-%i.env
 # не режет (см. TimeoutStartSec ниже).
 Environment=WIKI_ALIAS_MAX_SEC=0
 WorkingDirectory=/opt/1c-mcp-reports
+# Fail-closed (D.1): падение compile solr в wiki_alias.sh → ненулевой exit → unit failed.
+# Раньше solr-шаг глотался через «|| echo» — юнит оставался success при битом словаре.
 ExecStart=/bin/bash /opt/1c-mcp-reports/wiki_alias.sh 0
 # 🔴 [замер okna 27.08] TimeoutStartSec=7200 убил oneshot после 2h wall
 # (`start operation timed out. Terminating.`, Result=timeout, ExecMainStatus=15),

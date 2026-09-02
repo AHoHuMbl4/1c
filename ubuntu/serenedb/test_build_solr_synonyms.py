@@ -147,6 +147,23 @@ t("render_ddl pipeline idempotent",
 t("build has no alias+bridge wording", "alias+bridge" not in build)
 t("build has no search_synonym_bridge", "search_synonym_bridge" not in build)
 
+# --- (г) wiki_alias: тот же compile sql, fail-closed (D.1) ---
+wiki = open(os.path.join(ROOT, "wiki_alias.sh"), encoding="utf-8").read()
+wiki_solr = wiki[wiki.find("# ── Ф6.3:"):]
+t("wiki_alias has solr block", "# ── Ф6.3:" in wiki)
+t("wiki_alias calls compile sql", "solr_synonyms_compile.sql" in wiki_solr)
+t("wiki_alias no python solr compile",
+  "solr_synonyms_build.py compile" not in wiki_solr)
+t("wiki_alias hardcodes search_entity_alias",
+  '-v alias_table="search_entity_alias"' in wiki_solr)
+t("wiki_alias compile fail-closed",
+  "|| { echo" in wiki_solr and "exit 1" in wiki_solr
+  and "продолжается" not in wiki_solr, wiki_solr[-400:])
+
+unit = open(os.path.join(ROOT, "systemd", "1c-wiki-alias@.service"),
+            encoding="utf-8").read()
+t("unit documents fail-closed solr", "Fail-closed" in unit or "fail-closed" in unit)
+
 print()
 print("Итог:", PASS, "ok,", len(FAIL), "fail")
 if FAIL:

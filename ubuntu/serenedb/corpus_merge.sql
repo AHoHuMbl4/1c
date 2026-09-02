@@ -1,6 +1,10 @@
 \timing on
 \set ON_ERROR_STOP on
 
+-- 🔴 partial_rebuild=0 — константа пакета B0 (=1 только с row-level p_doc, отдельный пакет).
+-- Merge работает прежним режимом; search_changed_rows копится, удаления по списку — будущая B.
+\set partial_rebuild 0
+
 -- ПЕРЕНОС СОБРАННОГО КОРПУСА В БОЕВОЙ И ПУБЛИКАЦИЯ ПОИСКУ.
 -- Запускается после `corpus_build.sql` — он строит `tmp3_corpus` и ставит отметку `tmp3_run`.
 --

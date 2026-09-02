@@ -74,6 +74,16 @@ def main() -> int:
       "NOT EXISTS" in body and "transfer_attached" in body)
     t("прогресс по ходу",
       "bulk_progress" in body or "progress_loop" in body)
+    t("EMBED_PROGRESS_SEC умолчание 300",
+      "EMBED_PROGRESS_SEC:-300" in body)
+    t("EMBED_PROGRESS_SEC зажат 300–600",
+      "PROGRESS_SEC" in body and "-lt 300" in body and "-gt 600" in body)
+    t("EMBED_TRANSFER_STRICT в transfer",
+      "EMBED_TRANSFER_STRICT" in body)
+    t("strict: перенос без || true",
+      "_strict=1" in body or "EMBED_TRANSFER_STRICT" in body)
+    t("fail если осталось>0 (exit 1)",
+      "осталось $after без вектора" in body and "exit 1" in body.split("осталось $after")[-1][:80])
     t("нет имён klient/okna в коде",
       not re.search(r"\b(klient-1|klient1|okna|ut_test)\b", code))
     t("dbname у движка", "current_database()" in body)

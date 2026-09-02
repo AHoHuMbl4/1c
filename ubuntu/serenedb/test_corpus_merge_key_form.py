@@ -173,5 +173,33 @@ t("classify: правка 10 из 76214 — дельта, не стоп",
 t("classify: потеря 200 из 76214 — стоп",
   classify_entity(76214, 200, 76386) == "partial_stop")
 
+# --- B0: partial_rebuild=0 и scaffolding search_changed_rows ---
+t("SQL: partial_rebuild=0 константа", "\\set partial_rebuild 0" in txt)
+t("SQL: partial_rebuild комментарий",
+  "partial_rebuild=0" in txt and "отдельный пакет" in txt)
+
+apply_py = open(os.path.join(ROOT, "..", "packet", "packet_apply.py"),
+                encoding="utf-8").read()
+pipe = open(os.path.join(ROOT, "pipeline.sh"), encoding="utf-8").read()
+
+t("apply: search_changed_rows DDL",
+  "CREATE TABLE IF NOT EXISTS search_changed_rows" in apply_py)
+t("apply: key_text delta INSERT",
+  "INSERT INTO search_changed_rows" in apply_py and "delta" in apply_py
+  and "FROM \"d_" in apply_py)
+t("apply: gone deleted_gone",
+  "deleted_gone" in apply_py and "будущая полная B" in apply_py)
+t("apply: key_text concat |",
+  "|| '|' ||" in apply_py)
+t("apply: enrich LineNumber",
+  "_enrich_key_cols" in apply_py and "LineNumber" in apply_py)
+t("pipeline: IF NOT EXISTS search_changed_rows",
+  "CREATE TABLE IF NOT EXISTS search_changed_rows" in pipe)
+t("pipeline: tmp_changed_rows_keep",
+  "tmp_changed_rows_keep" in pipe)
+i_sync = pipe.find("python serene_sync.py")
+i_rows = pipe.find("tmp_changed_rows_keep")
+t("pipeline: rows snapshot до sync", i_sync >= 0 and i_rows >= 0 and i_rows < i_sync)
+
 print("PASS %d FAIL %d" % (PASS, len(FAIL)))
 sys.exit(1 if FAIL else 0)

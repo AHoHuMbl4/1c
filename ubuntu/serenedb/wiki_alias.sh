@@ -526,9 +526,12 @@ fi
 # Побочная таблица — черновик генератора; живой словарь имеет право меняться
 # только вслед за боевой (MERGE «только пустые строки» → пересборка из боевой).
 SOLR_SYN_DICT="${ASK_SOLR_SYNONYMS_DICT:-${SOLR_SYN_DICT:-search_dict_syn}}"
-SOLR_SYN_SRC_TABLE="${SOLR_SYN_SRC_TABLE:-search_entity_alias}"
-SOLR_OUT="${CSV_DIR:-/var/lib/serenedb}/solr_synonyms_${SOLR_SYN_DICT}.sql"
-python3 ./solr_synonyms_build.py compile \
-  --dsn "$DSN" --dict "$SOLR_SYN_DICT" --alias-table "$SOLR_SYN_SRC_TABLE" \
-  --out "$SOLR_OUT" --apply \
-  || echo "solr synonyms: шаг не прошёл, такт/юнит продолжается" >&2
+DICT_LOCALE="${SEARCH_DICT_LOCALE:-ru_RU.utf8}"
+# Тот же путь, что build.sh:511-517 — без Python-посредника. Fail-closed: юнит и ручной
+# прогон не маскируют битый словарь. alias_table жёстко search_entity_alias (см. выше).
+psql "$DSN" -q \
+  -v dict_locale="$DICT_LOCALE" \
+  -v solr_syn_dict="$SOLR_SYN_DICT" \
+  -v alias_table="search_entity_alias" \
+  -f "$HERE/solr_synonyms_compile.sql" \
+  || { echo "solr synonyms: компиляция не прошла ($SOLR_SYN_DICT)" >&2; exit 1; }

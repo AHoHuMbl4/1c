@@ -87,15 +87,24 @@ def _problem_from_skip(err):
     return err
 
 
-def _mart_count(entity):
-    """Число строк сущности в локальной витрине; 0, если таблицы ещё нет."""
+def _mart_table_exists(entity):
+    """Есть ли таблица сущности в локальной витрине (duckdb_tables)."""
     table = L.safe_col(entity).lower()
     sql = (
-        "SELECT CASE WHEN EXISTS (SELECT 1 FROM duckdb_tables() "
-        "WHERE database_name = current_database() AND table_name = %s) "
-        "THEN (SELECT count(*) FROM \"%s\") ELSE 0 END"
-        % (_lit(table), table.replace('"', '""'))
+        "SELECT EXISTS (SELECT 1 FROM duckdb_tables() "
+        "WHERE database_name = current_database() AND table_name = %s)"
+        % _lit(table)
     )
+    p = subprocess.run(["psql", DSN, "-tAc", sql], capture_output=True, text=True)
+    if p.returncode != 0:
+        raise RuntimeError(p.stderr.strip()[:200])
+    return p.stdout.strip() == "t"
+
+
+def _mart_count(entity):
+    """Число строк сущности в локальной витрине (таблица уже есть)."""
+    table = L.safe_col(entity).lower()
+    sql = 'SELECT count(*) FROM "%s"' % table.replace('"', '""')
     p = subprocess.run(["psql", DSN, "-tAc", sql], capture_output=True, text=True)
     if p.returncode != 0:
         raise RuntimeError(p.stderr.strip()[:200])
@@ -143,6 +152,8 @@ def count_one(es, skipped=None):
         if es in skipped:
             return es, -1, _problem_from_skip(skipped[es])
         try:
+            if not _mart_table_exists(es):
+                return es, 0, "вне контура"
             return es, _mart_count(es), ""
         except Exception as e:                  # noqa: BLE001
             return es, -1, type(e).__name__

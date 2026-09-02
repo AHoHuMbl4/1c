@@ -111,6 +111,15 @@ def _fake_mart(entity):
     return _COUNTS.get(entity, 0)
 
 
+def _fake_table_exists(entity):
+    # Сущности из _COUNTS или _ALL_ENTITIES с данными — «в витрине»; остальные — нет.
+    return entity in _COUNTS
+
+
+def _fake_mart_count(entity):
+    return _fake_mart(entity)
+
+
 # ── HTTP-режим (регресс) ───────────────────────────────────────────────────────
 _srv, http_base = _start_http()
 C.ODATA = http_base
@@ -134,7 +143,8 @@ C.ODATA = local_base
 L.ODATA = local_base
 L._KEYS_CACHE.clear()
 L._PROPS_CACHE.clear()
-C._mart_count = _fake_mart  # noqa: SLF001 — проба
+C._mart_count = _fake_mart_count  # noqa: SLF001 — проба
+C._mart_table_exists = _fake_table_exists  # noqa: SLF001
 
 check("local is_local", C._is_local(), True)
 check("local entity_sets", C.entity_sets(), _ALL_ENTITIES)
@@ -144,6 +154,17 @@ by_ent = {r["entity"]: r for r in rows_local}
 check("local count Catalog_А", by_ent["Catalog_А"]["rows"], 42)
 check("local count пустой", by_ent["Document_Пустой"]["rows"], 0)
 check("local problem пустой", by_ent["Document_Пустой"]["problem"], "")
+
+# ── packet: сущность есть в $metadata, но таблицы нет в витрине ───────────────
+C._mart_table_exists = lambda es: es in _COUNTS  # noqa: E731
+outside = C.count_one("Catalog_Закрыта", skipped={})
+check("local вне контура rows", outside[1], 0)
+check("local вне контура problem", outside[2], "вне контура")
+rows_out = C.census(sets=["Catalog_Закрыта"], meta=meta)
+check("local вне контура в summary",
+      (rows_out[0]["rows"], rows_out[0]["problem"]), (0, "вне контура"))
+s_out = C.summary(rows_out)
+check("local вне контура не прочие_ошибки", s_out["прочие_ошибки"], 0)
 
 # ── packet: skipped.json есть ($metadata тоже) ────────────────────────────────
 skip_path = os.path.join(local_base, "skipped.json")
@@ -181,7 +202,7 @@ except ValueError:
 # ── итог ───────────────────────────────────────────────────────────────────────
 _srv.shutdown()
 
-N_CHECKS = 17
+N_CHECKS = 22
 if FAILS:
     print("FAIL %d/%d" % (len(FAILS), N_CHECKS))
     print("\n\n".join(FAILS))

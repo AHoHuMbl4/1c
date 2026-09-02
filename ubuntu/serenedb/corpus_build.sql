@@ -1384,11 +1384,12 @@ QUALIFY row_number() OVER (PARTITION BY tbl ORDER BY pr, ord) = 1;
 -- (638 330 строк, 100 колонок) — in-memory working set >9,7 GiB (unspillable); та же
 -- логика порциями по 50 000 строк — 638 330/638 330, RSS ~2 GiB на порцию.
 --
--- 🔴 ПОРОГ И РАЗМЕР ПОРЦИИ — ВЫВЕДЕНЫ, НЕ ПОДОБРАНЫ:
---   ws_bytes_per_row = 2 GiB / 50 000  (замер рабочего набора на строку этой формы);
---   chunk_budget     = memory_limit × 0,25  (50k строк ≈ 21 % лимита 9,7 GiB);
---   chunk_rows       = floor(chunk_budget / ws_bytes_per_row);
---   порог чанкования = chunk_rows: больше — порции, иначе — прежний `p_doc` целиком.
+-- 🔴 ПОРОГ И РАЗМЕР ПОРЦИИ — ВЫВЕДЕНЫ, НЕ ПОДОБРАНЫ (бюджет ЯЧЕЕК, не строк):
+--   ws_bytes_per_cell = 2 GiB / 50 000  (замер рабочего набора на ячейку UNPIVOT);
+--   chunk_budget      = memory_limit × 0,25;
+--   chunk_cells       = floor(chunk_budget / ws_bytes_per_cell);
+--   порог чанкования  = nrows × ncols > chunk_cells; порция = floor(chunk_cells / ncols) строк.
+--   🔴 Без greatest(1000,…): иначе chunk_rows×ncols > chunk_cells → OOM на широких таблицах.
 -- На другой коробке пересчитается от `SHOW memory_limit` (Configuration › Pragmas › Memory Limit).
 CREATE OR REPLACE TABLE tmp3_pdoc_cfg AS
 WITH ml AS (SELECT current_setting('memory_limit') AS s),
@@ -1399,11 +1400,10 @@ WITH ml AS (SELECT current_setting('memory_limit') AS s),
                         THEN try_cast(regexp_extract(s, '^([0-9.]+)', 1) AS DOUBLE) * power(1024::BIGINT, 2)
                    ELSE try_cast(regexp_extract(s, '^([0-9.]+)', 1) AS DOUBLE) END AS mem_bytes
        FROM ml)
-SELECT 2147483648.0 / 50000.0 AS ws_bytes_per_row,
+SELECT 2147483648.0 / 50000.0 AS ws_bytes_per_cell,
        0.25 AS mem_fraction,
-       greatest(1000::BIGINT,
-                floor((SELECT mem_bytes FROM mem) * 0.25
-                      / (2147483648.0 / 50000.0))::BIGINT) AS chunk_rows
+       floor((SELECT mem_bytes FROM mem) * 0.25
+             / (2147483648.0 / 50000.0))::BIGINT AS chunk_cells
 FROM mem;
 
 CREATE TABLE IF NOT EXISTS tmp3_pdoc_progress (tbl VARCHAR PRIMARY KEY, rid_hi BIGINT, nrows BIGINT);
@@ -1412,32 +1412,142 @@ CREATE TABLE IF NOT EXISTS tmp3_pdoc_stage (
   nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP,
   refs_map MAP(VARCHAR, VARCHAR), refs_own MAP(VARCHAR, VARCHAR));
 
-CREATE OR REPLACE TABLE tmp3_resume_pdoc AS
-SELECT coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01') < now() - INTERVAL '6 hours'
-       AND (SELECT count(*) FROM tmp3_pdoc_progress) > 0 AS on_;
-
 -- query_table принимает только литерал имени таблицы, не колонку из JOIN
 -- (Sql › Functions › Table Functions › query_table; живой стопор 18.08:610).
-CREATE OR REPLACE TABLE tmp3_entity_rows (tbl VARCHAR, nrows BIGINT);
+CREATE OR REPLACE TABLE tmp3_entity_rows (tbl VARCHAR, nrows BIGINT, ncols BIGINT);
 DELETE FROM tmp3_entity_rows;
 SELECT 'INSERT INTO tmp3_entity_rows SELECT '
-       || quote_literal(b.tbl) || ', count(*)::BIGINT FROM query_table('
+       || quote_literal(b.tbl) || ', count(*)::BIGINT, '
+       -- duckdb_columns(), не information_schema: в SereneDB это штатный каталог колонок
+       -- витрины (Sql › System Catalog › duckdb_columns), совпадает с query_table/COLUMNS(*).
+       || '(SELECT count(*)::BIGINT FROM duckdb_columns() dc WHERE dc.database_name = current_database()'
+       || ' AND dc.table_name = ' || quote_literal(b.tbl) || ') FROM query_table('
        || quote_literal(b.tbl) || ');'
 FROM tmp3_build b
 \gexec
 
-CREATE OR REPLACE TABLE tmp3_pdoc_chunks AS
-SELECT e.tbl, gs AS lo, least(gs + cfg.chunk_rows - 1, e.nrows) AS hi, e.nrows
+-- Формула чанкования по сущности: md5('v8b' + метод порядка + chunk_cells + ncols).
+-- Пустой key_cols → сущность не чанкуется (монолит).
+CREATE OR REPLACE TABLE tmp3_pdoc_formula AS
+SELECT e.tbl,
+       md5('v8b' || 'key_order' || cfg.chunk_cells::VARCHAR || '|' || e.ncols::VARCHAR) AS formula
 FROM tmp3_entity_rows e
 CROSS JOIN tmp3_pdoc_cfg cfg
-CROSS JOIN LATERAL (SELECT unnest(generate_series(1::BIGINT, e.nrows, cfg.chunk_rows)) AS gs) g
-WHERE e.nrows > cfg.chunk_rows;
+JOIN tmp3_key k ON k.entity = lower(e.tbl)
+WHERE len(k.key_cols) > 0
+  AND e.ncols > 0
+  AND e.nrows * e.ncols > cfg.chunk_cells
+  AND floor(cfg.chunk_cells / e.ncols)::BIGINT >= 1;
 
-DELETE FROM search_quality WHERE k IN ('pdoc_chunk_rows', 'pdoc_chunk_entities', 'pdoc_resume');
-INSERT INTO search_quality SELECT 'pdoc_chunk_rows', chunk_rows, current_setting('memory_limit')
+-- Сброс resume при смене или отсутствии сохранённой формулы (до решения on_).
+DELETE FROM tmp3_pdoc_progress p
+WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_formula f WHERE f.tbl = p.tbl)
+  AND coalesce((SELECT sq.v FROM search_quality sq WHERE sq.k = 'pdoc_formula:' || p.tbl), '')
+      IS DISTINCT FROM (SELECT f2.formula FROM tmp3_pdoc_formula f2 WHERE f2.tbl = p.tbl);
+DELETE FROM tmp3_pdoc_stage s
+WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_formula f WHERE f.tbl = s.src_table)
+  AND coalesce((SELECT sq.v FROM search_quality sq WHERE sq.k = 'pdoc_formula:' || s.src_table), '')
+      IS DISTINCT FROM (SELECT f2.formula FROM tmp3_pdoc_formula f2 WHERE f2.tbl = s.src_table);
+
+CREATE OR REPLACE TABLE tmp3_pdoc_entity AS
+SELECT e.tbl, e.nrows, e.ncols,
+       floor(cfg.chunk_cells / e.ncols)::BIGINT AS chunk_rows
+FROM tmp3_entity_rows e
+CROSS JOIN tmp3_pdoc_cfg cfg
+JOIN tmp3_key k ON k.entity = lower(e.tbl)
+WHERE len(k.key_cols) > 0
+  AND e.ncols > 0
+  AND e.nrows * e.ncols > cfg.chunk_cells
+  AND floor(cfg.chunk_cells / e.ncols)::BIGINT >= 1;
+
+CREATE OR REPLACE TABLE tmp3_pdoc_chunks AS
+SELECT ent.tbl, gs AS lo, least(gs + ent.chunk_rows - 1, ent.nrows) AS hi,
+       ent.nrows, ent.chunk_rows, ent.ncols
+FROM tmp3_pdoc_entity ent
+CROSS JOIN LATERAL (SELECT unnest(generate_series(1::BIGINT, ent.nrows, ent.chunk_rows)) AS gs) g;
+
+-- Стабильный порядок строк: один раз материализуем (pos, keyvals) — значения колонок
+-- сортировки (key_cols + surrogate LineNumber/Recorder), без UNPIVOT всей таблицы на порцию.
+-- 🔴 ОДНО ВЫРАЖЕНИЕ keyvals — здесь и в p_doc_chunk (UNPIVOT + string_agg ниже).
+CREATE OR REPLACE TABLE tmp3_pdoc_order (tbl VARCHAR, pos BIGINT, keyvals VARCHAR);
+DELETE FROM tmp3_pdoc_order;
+SELECT 'INSERT INTO tmp3_pdoc_order SELECT '
+|| quote_literal(x.tbl) || ', pos, keyvals FROM ('
+|| 'WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower(' || quote_literal(x.tbl) || ')), '
+|| 'numbered AS (SELECT row_number() OVER (ORDER BY ' || x.order_expr || ') AS pos, q.* '
+|| 'FROM query_table(' || quote_literal(x.tbl) || ') q), '
+|| 'cells AS (SELECT pos, u.col, u.val, '
+|| 'coalesce(list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)), '
+|| 'CASE lower(u.col) WHEN ''linenumber'' THEN 1000000 WHEN ''recorder'' THEN 1000001 END) AS sort_ord '
+|| 'FROM numbered n UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (pos)))) u '
+|| 'WHERE list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)) IS NOT NULL '
+|| 'OR (lower(u.col) = ''linenumber'' AND NOT list_contains((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), ''linenumber'') '
+|| 'AND EXISTS (SELECT 1 FROM duckdb_columns() dc WHERE dc.database_name = current_database() '
+|| 'AND dc.table_name = ' || quote_literal(x.tbl) || ' AND dc.column_name = ''LineNumber'')) '
+|| 'OR (lower(u.col) = ''recorder'' AND NOT list_contains((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), ''recorder'') '
+|| 'AND EXISTS (SELECT 1 FROM duckdb_columns() dc WHERE dc.database_name = current_database() '
+|| 'AND dc.table_name = ' || quote_literal(x.tbl) || ' AND dc.column_name = ''Recorder''))), '
+|| 'agg AS (SELECT pos, string_agg(CASE WHEN val IS NULL THEN ''∅'' '
+|| 'ELSE replace(val::VARCHAR, ''|'', ''\\|'') END, ''|'' ORDER BY sort_ord) AS keyvals '
+|| 'FROM cells WHERE sort_ord IS NOT NULL GROUP BY pos) '
+|| 'SELECT pos, keyvals FROM agg);'
+FROM (
+  SELECT c.tbl, k.key_cols,
+    coalesce(
+      (SELECT string_agg('"' || u.x || '" NULLS LAST', ', '
+                         ORDER BY list_position(k.key_cols, u.x))
+       FROM unnest(k.key_cols) AS u(x)),
+      '1'
+    )
+    || CASE WHEN EXISTS (
+           SELECT 1 FROM duckdb_columns() dc
+           WHERE dc.database_name = current_database()
+             AND dc.table_name = c.tbl AND dc.column_name = 'LineNumber')
+           AND NOT list_contains(k.key_cols, 'LineNumber')
+          THEN ', "LineNumber" NULLS LAST' ELSE '' END
+    || CASE WHEN EXISTS (
+           SELECT 1 FROM duckdb_columns() dc
+           WHERE dc.database_name = current_database()
+             AND dc.table_name = c.tbl AND dc.column_name = 'Recorder')
+           AND NOT list_contains(k.key_cols, 'Recorder')
+          THEN ', "Recorder" NULLS LAST' ELSE '' END
+    AS order_expr
+  FROM (SELECT DISTINCT tbl FROM tmp3_pdoc_chunks) c
+  JOIN tmp3_key k ON k.entity = lower(c.tbl)
+) x
+\gexec
+
+-- Дубли keyvals = идентичные строки по ключу сортировки; чанкование размножит их по порциям.
+-- Такую сущность собираем монолитом (как без key_cols).
+CREATE OR REPLACE TABLE tmp3_pdoc_dup AS
+SELECT o.tbl
+FROM tmp3_pdoc_order o
+JOIN tmp3_entity_rows e ON e.tbl = o.tbl
+GROUP BY o.tbl, e.nrows
+HAVING count(*) <> count(DISTINCT o.keyvals)
+    OR count(*) <> e.nrows;
+DELETE FROM tmp3_pdoc_order WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_dup);
+DELETE FROM tmp3_pdoc_chunks WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_dup);
+DELETE FROM tmp3_pdoc_formula WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_dup);
+DELETE FROM tmp3_pdoc_entity WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_dup);
+
+CREATE OR REPLACE TABLE tmp3_resume_pdoc AS
+SELECT coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01') < now() - INTERVAL '6 hours'
+       AND (SELECT count(*) FROM tmp3_pdoc_progress) > 0 AS on_;
+
+DELETE FROM search_quality WHERE k IN ('pdoc_chunk_cells', 'pdoc_chunk_rows', 'pdoc_chunk_entities',
+                                       'pdoc_resume', 'pdoc_chunk_formula')
+  OR k LIKE 'pdoc_formula:%';
+INSERT INTO search_quality SELECT 'pdoc_chunk_cells', chunk_cells, current_setting('memory_limit')
 FROM tmp3_pdoc_cfg;
 INSERT INTO search_quality SELECT 'pdoc_chunk_entities', count(DISTINCT tbl), 'сущностей выше порога'
 FROM tmp3_pdoc_chunks;
+INSERT INTO search_quality SELECT 'pdoc_formula:' || tbl, formula, 'формула чанкования сущности'
+FROM tmp3_pdoc_formula;
+INSERT INTO search_quality SELECT 'pdoc_chunk_formula',
+  coalesce(md5(string_agg(formula, '|' ORDER BY tbl)), md5('v8b')),
+  'агрегат формул чанкования'
+FROM tmp3_pdoc_formula;
 INSERT INTO search_quality SELECT 'pdoc_resume', (SELECT on_::INT FROM tmp3_resume_pdoc),
   CASE WHEN (SELECT on_ FROM tmp3_resume_pdoc) THEN 'докатка чанков' ELSE 'свежий такт' END;
 
@@ -1459,8 +1569,8 @@ WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_chunks c WHERE c.tbl = p.tbl)
        OR EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = p.tbl));
 
 SELECT 'pdoc лимиты' AS шаг,
-       (SELECT ws_bytes_per_row FROM tmp3_pdoc_cfg)::BIGINT AS ws_байт_на_строку,
-       (SELECT chunk_rows FROM tmp3_pdoc_cfg) AS порция_строк,
+       (SELECT ws_bytes_per_cell FROM tmp3_pdoc_cfg)::BIGINT AS ws_байт_на_ячейку,
+       (SELECT chunk_cells FROM tmp3_pdoc_cfg) AS бюджет_ячеек,
        (SELECT v FROM search_quality WHERE k = 'pdoc_chunk_entities') AS крупных,
        (SELECT note FROM search_quality WHERE k = 'pdoc_resume') AS режим;
 
@@ -1731,8 +1841,47 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
  -- текст стал 560 400 символов против 15 724 у боевого кода, и две такие строки не могут
  -- получить вектор вовсе: у эмбеддера предел длины входа 33 000. Режем ЗНАЧЕНИЕ, а не
  -- строку целиком — так теряется хвост вложения, а не реквизиты (боевой аналог — clip()).
- src AS (SELECT row_number() OVER () AS rid, substr(coalesce(COLUMNS(*)::VARCHAR, ''), 1, 20000) FROM query_table($1)),
- src_f AS (SELECT * FROM src WHERE rid BETWEEN $2::BIGINT AND $3::BIGINT),
+ -- 🔴 keyvals — то же выражение, что при построении tmp3_pdoc_order (UNPIVOT + string_agg).
+ raw AS (SELECT * FROM query_table($1)),
+ numbered AS (SELECT row_number() OVER () AS rn, r.* FROM raw r),
+ sort_cells AS (
+   SELECT rn, u.col, u.val,
+          coalesce(list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)),
+                   CASE lower(u.col) WHEN 'linenumber' THEN 1000000 WHEN 'recorder' THEN 1000001 END) AS sort_ord
+   FROM numbered n
+   UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (rn)))) u
+   WHERE list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)) IS NOT NULL
+      OR (lower(u.col) = 'linenumber'
+          AND NOT list_contains((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), 'linenumber')
+          AND EXISTS (SELECT 1 FROM duckdb_columns() dc
+                      WHERE dc.database_name = current_database()
+                        AND dc.table_name = $1 AND dc.column_name = 'LineNumber'))
+      OR (lower(u.col) = 'recorder'
+          AND NOT list_contains((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), 'recorder')
+          AND EXISTS (SELECT 1 FROM duckdb_columns() dc
+                      WHERE dc.database_name = current_database()
+                        AND dc.table_name = $1 AND dc.column_name = 'Recorder'))
+ ),
+ kv AS (
+   SELECT rn, string_agg(
+            CASE WHEN val IS NULL THEN '∅' ELSE replace(val::VARCHAR, '|', '\|') END,
+            '|' ORDER BY sort_ord) AS keyvals
+   FROM sort_cells
+   WHERE sort_ord IS NOT NULL
+   GROUP BY rn
+ ),
+ src_f AS (
+   SELECT f.rid, substr(coalesce(COLUMNS(*)::VARCHAR, ''), 1, 20000)
+   FROM (
+     SELECT n.* EXCLUDE (rn), n.rn AS rid
+     FROM numbered n
+     JOIN kv USING (rn)
+     WHERE kv.keyvals IN (
+       SELECT o.keyvals FROM tmp3_pdoc_order o
+       WHERE o.tbl = $1 AND o.pos BETWEEN $2::BIGINT AND $3::BIGINT
+     )
+   ) f
+ ),
  cells AS (SELECT * FROM src_f UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (rid))))),
  -- Ключ собирается ОТДЕЛЬНО и до отбрасывания пустых: он про тождество строки,
  -- а не про текст. Порядок сегментов — объявленный порядок ключа из $metadata.
@@ -1899,8 +2048,37 @@ FROM (
 
 PREPARE p_doc_finalize AS
 INSERT INTO tmp3_corpus
-WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
+WITH chk AS (
+  SELECT CASE
+    WHEN coalesce((SELECT max(p.rid_hi) FROM tmp3_pdoc_progress p WHERE p.tbl = $1), 0)
+         < coalesce((SELECT max(p.nrows) FROM tmp3_pdoc_progress p WHERE p.tbl = $1), 0)
+      OR coalesce((
+           SELECT sum(c.hi - c.lo + 1)
+           FROM tmp3_pdoc_chunks c
+           JOIN tmp3_pdoc_progress p ON p.tbl = c.tbl
+           WHERE c.tbl = $1 AND c.hi <= p.rid_hi), 0)
+         <> coalesce((SELECT max(p.nrows) FROM tmp3_pdoc_progress p WHERE p.tbl = $1), -1)
+    THEN error('p_doc_finalize: неполные порции для ' || $1)
+  END
+),
+kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
 fold AS (SELECT (SELECT key_cols FROM kc) = ['Ref_Key'] AS on_),
+stage_chk AS (
+  SELECT count(*) AS stage_rows FROM tmp3_pdoc_stage WHERE src_table = $1
+),
+prog AS (
+  SELECT max(p.nrows) AS nrows FROM tmp3_pdoc_progress p WHERE p.tbl = $1
+),
+stage_gate AS (
+  SELECT CASE
+    WHEN (SELECT stage_rows FROM stage_chk) = 0
+    THEN error('p_doc_finalize: пустой stage для ' || $1)
+    WHEN NOT (SELECT on_ FROM fold)
+         AND (SELECT stage_rows FROM stage_chk)
+             <> coalesce((SELECT nrows FROM prog), -1)
+    THEN error('p_doc_finalize: stage rows <> nrows для ' || $1)
+  END
+),
 base AS (
   SELECT src_table, rk, doc, refs, nums, flags, doc_date AS dt, refs_map, refs_own
   FROM tmp3_pdoc_stage WHERE src_table = $1
@@ -1931,6 +2109,8 @@ fin AS (
 )
 SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash
 FROM fin
+CROSS JOIN chk
+CROSS JOIN stage_gate
 QUALIFY NOT (SELECT on_ FROM fold)
      OR row_number() OVER (PARTITION BY src_table, row_key ORDER BY doc, refs, doc_hash) = 1;
 
@@ -1993,12 +2173,11 @@ FROM base;
 -- удаляет строки только у сущностей, которые в этот раз собрались (`corpus_merge.sql`).
 SELECT 'EXECUTE p_doc(' || quote_literal(b.tbl) || ');'
 FROM tmp3_build b
-JOIN tmp3_entity_rows e ON e.tbl = b.tbl
-CROSS JOIN tmp3_pdoc_cfg cfg
-WHERE e.nrows <= cfg.chunk_rows
+WHERE NOT EXISTS (SELECT 1 FROM tmp3_pdoc_chunks c WHERE c.tbl = b.tbl)
   AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = b.tbl)
 \gexec
 
+\set ON_ERROR_STOP on
 SELECT stmt FROM (
   SELECT c.tbl, c.lo, 1 AS ord,
          'EXECUTE p_doc_chunk(' || quote_literal(c.tbl) || ', ' || c.lo || ', ' || c.hi || ');' AS stmt
@@ -2020,13 +2199,15 @@ SELECT stmt FROM (
 
 SELECT 'EXECUTE p_doc_finalize(' || quote_literal(f.tbl) || ');'
 FROM (
-  SELECT c.tbl
+  SELECT c.tbl, p.nrows, max(p.rid_hi) AS rid_hi,
+         sum(c.hi - c.lo + 1) FILTER (WHERE c.hi <= p.rid_hi) AS done_rows
   FROM tmp3_pdoc_chunks c
   JOIN tmp3_pdoc_progress p ON p.tbl = c.tbl
-  GROUP BY c.tbl, p.nrows
-  HAVING max(p.rid_hi) >= p.nrows
-     AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = c.tbl)
+  GROUP BY c.tbl, p.nrows, p.rid_hi
 ) f
+WHERE f.rid_hi >= f.nrows
+  AND f.done_rows = f.nrows
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = f.tbl)
 \gexec
 
 DELETE FROM tmp3_pdoc_stage s
@@ -2042,6 +2223,9 @@ WHERE EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = p.tbl);
 SELECT 'EXECUTE p_doc_plain(' || quote_literal(tbl) || ');'
 FROM tmp3_build s
 WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = s.tbl)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_pdoc_chunks c WHERE c.tbl = s.tbl)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_pdoc_progress p WHERE p.tbl = s.tbl)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_pdoc_stage st WHERE st.src_table = s.tbl)
 \gexec
 \set ON_ERROR_STOP on
 

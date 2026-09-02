@@ -865,6 +865,37 @@ curl -s -X POST http://127.0.0.1:${ASK_LISTEN_PORT:-8091}/ask -H 'Content-Type: 
 round-trip в проекте не делался ни разу. Прежде чем переводить на них резерв, это надо
 замерить (вопрос владельцу №46).
 
+### 10.10 Процедура ручного такта v10 (оркестратор)
+
+🔴 **Условие №1:** векторы не теряются. Семантику `row_key` и `content_hash` существующих
+строк **не менять**. Restore векторов: (1) `UPDATE` по `(src_table, row_key)`; (2) fallback
+по `content_hash` **только** из групп `HAVING count(*)=1 AND count(DISTINCT row_key)=1`
+(свободный fallback по hash без этих условий ставит чужие векторы).
+
+1. ✔ Сделано: таймер и сервис pipeline остановлены; сирота `p_doc` добита; бэкапы ×2 сняты
+   и сверены (`count(emb)` боевому).
+2. Перед тактом №1: `systemctl stop 1c-packet-apply.timer`; ждать in-flight
+   `1c-packet-apply.service` до `inactive`, потолок 10 мин → затем
+   `systemctl stop 1c-packet-apply.service`. Проверить: 0 активных `p_doc`, `tmp3_corpus`
+   пуст.
+3. Сверка бэкапов: `count` обоих = боевому `count(emb)`.
+4. Restore-drill: 100 строк из топ-коллизий backup2 → sandbox-таблица → двухшаговый restore
+   → `md5` бит-в-бит; fail → стоп.
+5. Baseline JSON: `count`, `count(emb)`, per-`src_table` → файл. `MERGE_VECTOR_LOSS_BYPASS=1`
+   **запрещён**; `vector_loss_gate=0` и `corpus_postcheck exit 0` — в критериях.
+6. Выкат (`deploy.sh` из закоммиченного дерева) → ручной такт №1 (backlog ~39 источников —
+   **долгий**, это норма, в отчёт явно).
+7. Приёмка: `count`/`emb` ≥ baseline; A: multiset `(content_hash, row_key)` realiz идентичен;
+   B0: `md5 row_key` идентичен; длительности шагов в отчёт; шаг 5 — `embed_bulk` (не
+   `tick_guard`); smoke kNN — 5 строк.
+8. Такт №2 при 0 изменений → критерий «минуты».
+9. `systemctl enable --now` обратно: `1c-packet-apply.timer` и
+   `1c-serene-pipeline@<база>.timer`; `NEXT` не «-». При падении такта — apply-таймер
+   возвращается **сразу** (данные важнее), запись в отчёт.
+10. Отчёт владельцу `/tmp/takt-report-YYYYMMDD-HHMM.txt`: ts, `count(emb)` до/после,
+    `changed_sources`, `tmp3_build`, длительности шагов, `n_chunks` и сек/порция, diff
+    витрина/корпус, `gate`/`bypass=0`, smoke kNN.
+
 ⚠ Оффлайн-снапшот пока не отменяется: он снимает каталог целиком, то есть **весь инстанс со
 всеми базами разом**, и заведомо включает файлы инвертированного индекса. Покрывает ли их
 `EXPORT DATABASE` — **не проверено ни замером, ни доками**: там перечислены «schema
