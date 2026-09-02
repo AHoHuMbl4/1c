@@ -1030,8 +1030,13 @@ def wiki_axis_is_question_subject(intent, axis_word):
     return kind.lower() == axis_word.lower()
 
 
-def wiki_leader_carries_axis(leader, axis_word, intent=None, question=""):
-    """Лидер структурно несёт named action_axis (каталог оси или refcol)."""
+def wiki_leader_carries_axis(leader, axis_word, intent=None, question="",
+                             *, require_axis_cats=False):
+    """Лидер структурно несёт named action_axis (каталог оси или refcol).
+
+    require_axis_cats=True (unaccounted dictionary-ось): пустой axis_cats →
+    False, не вакуумный True. LLM-action_axis без catalog — прежний fail-open.
+    """
     leader = (leader or "").strip()
     axis_word = (axis_word or "").strip()
     if not leader or not axis_word:
@@ -1045,7 +1050,7 @@ def wiki_leader_carries_axis(leader, axis_word, intent=None, question=""):
             return True
         axis_cats = [c for c in (_efc(axis_word, allow_meaning=has_period) or []) if c]
         if not axis_cats:
-            return True
+            return not require_axis_cats
         if leader in axis_cats:
             return True
         cats_sql = ", ".join(lit(c) for c in sorted(set(axis_cats)))
@@ -1071,13 +1076,6 @@ def wiki_leader_post_verify(leader, intent, question, diag=None):
     axis_word = _intent_text(intent.get("action_axis"))
     axis_from_unaccounted = False
     if not axis_word:
-        _rw = globals().get("resolved_warehouse_axis_word")
-        if callable(_rw):
-            try:
-                axis_word = _rw(question, intent) or ""
-            except RuntimeError:
-                axis_word = ""
-    if not axis_word:
         _ru = globals().get("resolved_unaccounted_slice_axis_word")
         if callable(_ru):
             try:
@@ -1091,7 +1089,8 @@ def wiki_leader_post_verify(leader, intent, question, diag=None):
             and (axis_from_unaccounted
                  or _wiki_axis_has_carriers(axis_word, intent, question))
             and not wiki_leader_carries_axis(
-                leader, axis_word, intent, question)):
+                leader, axis_word, intent, question,
+                require_axis_cats=axis_from_unaccounted)):
         diag["wiki_axis_not_carried"] = leader
         diag["wiki_none"] = "axis_not_carried"
         return False

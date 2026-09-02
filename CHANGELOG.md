@@ -1,3 +1,26 @@
+## 2026-09-02 — Класс 9c: journal-ghost ось без учёта → no_data (кейс 2402 закрыт кодом)
+
+**[код]** Кейс 2402 («сколько позиций числится на всех складах» → эталон no_data):
+круги 5-6 рецензий (3+3 агента) нашли ДВА слоя обрыва. (1) Живой баг SQL в
+`entity_form_catalogs_for_kind` (z05:320): нехватка скобки у `concat_ws` →
+syntax error молча глотался в `[]` — резолв слова→catalog при allow_meaning=False
+был мёртв для ЛЮБОГО слова (починен по образцу movements :356-358).
+(2) Предикат 9b «нет joint с предметом» ложный: joint местахранения×номенклатура
+на окне есть (документы), а учёта остатков нет. Принят journal-ghost: реальность
+оси = stem слова по label+aliases ТОЛЬКО documentjournal_% (document_% даёт ложный
+путь на «позициях номенклатуры» — замер круга 6) + ось не place/не stock-eligible.
+Из post-verify убран dictionary-вызов класса 9 (после починки SQL он ложно ронял
+«в компании»: org∈place+eligible — живой замер); в stock-path z12 оставлен.
+Убран catch-all `_kind_is_stock_scoped→True` (любой secondary catalog становился
+warehouse-осью). `wiki_leader_carries_axis`: при unaccounted пустой axis_cats →
+False (не вакуумный True); LLM-action_axis — прежний fail-open. Пакет 2/3+
+опровержение диссента (ACCUM-гейт отвергнут: «компании» спасал только шум
+import-регистров — непортабельно).
+**Числа:** замки оркестратором: verify 63/0 (+1), hybrid 63/0, step4 110/0,
+k4_meta 12/0, fork 51/0, compose 92/0, period_empty 30/0, stock_balance 48/0
+(+3 journal-ghost). Проба 2402 живьём — после выката, перед L20.
+**Доки:** TARGET.md п. 0/12/13/21.
+
 ## 2026-09-02 — Класс 9b: ось без учёта (unaccounted slice) в post-verify
 
 **[код]** Догон класса 9: живой замер показал, что резолвер оси-места пуст

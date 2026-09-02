@@ -37,6 +37,10 @@ def _default_entity_cats(w, **kw):
     return ["catalog_номенклатура"]
 A.entity_form_catalogs_for_kind = _default_entity_cats
 A.psql = lambda q: [("accumulationregister_x",)] if "search_refcols" in q.lower() else []
+# place/eligible: без catch-all warehouse-ось только через метаданные
+A._STOCK_PLACE_AXIS.update({
+    "at": time.time(), "set": frozenset(["catalog_склады"])})
+A._STOCK_PLACE_REF.update({"at": time.time(), "set": {"catalog_склады"}})
 
 # --- balance-path по intent, не словам вопроса ---
 t("balance path: intent engaged",
@@ -498,6 +502,61 @@ finally:
     A._base_knows_kind_or_measure = _old_knows
     A.entity_form_catalogs_for_kind = _old_cats0
     A.psql = _old_psql0
+
+# --- класс 9c: journal-ghost ось без учёта остатков ---
+_old_cats_jg = A.entity_form_catalogs_for_kind
+_old_psql_jg = A.psql
+_old_place_jg = dict(A._STOCK_PLACE_AXIS)
+_old_ref_jg = dict(A._STOCK_PLACE_REF)
+_old_prod_jg = A._is_product_catalog_target
+
+
+def _cats_jg(w, **kw):
+    wl = (w or "").strip().lower()
+    if wl in ("номенклатура", "позиции"):
+        return ["catalog_номенклатура"]
+    if wl.startswith("склад"):
+        return ["catalog_местахранения"]
+    if "компани" in wl or "орган" in wl:
+        return ["catalog_организации"]
+    return []
+
+
+def _psql_jg(q):
+    ql = q.lower()
+    if "documentjournal_" in ql and "ts_lexize" in ql:
+        if "склад" in ql:
+            return [("documentjournal_складскиеоперации",)]
+        return []
+    return []
+
+
+A.entity_form_catalogs_for_kind = _cats_jg
+A.psql = _psql_jg
+A._is_product_catalog_target = (
+    lambda s: "номенклатур" in str(s or "").lower())
+# ¬place / ¬eligible → journal-ghost срабатывает
+A._STOCK_PLACE_AXIS.update({"at": time.time(), "set": frozenset()})
+A._STOCK_PLACE_REF.update({"at": time.time(), "set": set()})
+INTENT_JG = {"want": "count", "kind": "номенклатура", "action_axis": ""}
+Q_JG = "сколько номенклатуры числится на складах"
+t("journal-ghost: склад → word when journal+catalog+¬eligible",
+  A.resolved_unaccounted_slice_axis_word(Q_JG, INTENT_JG).startswith("склад"))
+t("journal-ghost: без journal → empty",
+  A.resolved_unaccounted_slice_axis_word(
+      "сколько номенклатуры в компании", INTENT_JG) == "")
+# place/eligible режет — даже при journal
+A._STOCK_PLACE_AXIS.update({
+    "at": time.time(), "set": frozenset(["catalog_местахранения"])})
+t("journal-ghost: place/eligible → empty",
+  A.resolved_unaccounted_slice_axis_word(Q_JG, INTENT_JG) == "")
+A.entity_form_catalogs_for_kind = _old_cats_jg
+A.psql = _old_psql_jg
+A._is_product_catalog_target = _old_prod_jg
+A._STOCK_PLACE_AXIS.clear()
+A._STOCK_PLACE_AXIS.update(_old_place_jg)
+A._STOCK_PLACE_REF.clear()
+A._STOCK_PLACE_REF.update(_old_ref_jg)
 
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))
 if FAIL:

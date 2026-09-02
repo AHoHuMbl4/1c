@@ -140,8 +140,6 @@ def _catalogs_are_warehouse_axis(cats, intent=None, kind_cats=None):
         return True
     if any(_catalog_on_stock_eligible_register(c) for c in cats):
         return True
-    if _kind_is_stock_scoped(intent):
-        return True
     return False
 
 
@@ -230,11 +228,30 @@ def _catalogs_joint_with_kind(cats, kind_cats):
     return bool(rows)
 
 
-def resolved_unaccounted_slice_axis_word(question, intent=None):
-    """Вторичная dictionary-ось без совместного учёта с kind (не stock-path).
+def _word_names_documentjournal(word):
+    """Слово именует journal в метаданных: stem по label+aliases documentjournal_%."""
+    word = _intent_text(word)
+    if not word:
+        return False
+    try:
+        rs = psql(
+            "SELECT t.src_table FROM %s t "
+            "LEFT JOIN search_entity_alias a ON a.src_table = t.src_table "
+            "WHERE t.src_table LIKE 'documentjournal_%%' AND list_has_any("
+            "  list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
+            "  list_filter(ts_lexize(%s, concat_ws(' ', t.label, a.aliases)),"
+            "              x -> length(x) >= 3)) LIMIT 1"
+            % (TABLES, lit(STEM_DICT), lit(word), lit(STEM_DICT)))
+    except RuntimeError:
+        return False
+    return bool(rs)
 
-    Слово → catalog базы, не kind/measure/action_axis, не product, и
-    joint(kind×catalog)=∅ по search_refcols. Ошибка метаданных → "".
+
+def resolved_unaccounted_slice_axis_word(question, intent=None):
+    """Journal-ghost ось: catalog-слово именует journal, учёта остатков по оси нет.
+
+    Слово → catalog (не kind/product), stem-матч documentjournal_% (label+aliases),
+    и ось не place/не stock-eligible. Ошибка метаданных → "".
     """
     intent = intent or {}
     try:
@@ -245,14 +262,18 @@ def resolved_unaccounted_slice_axis_word(question, intent=None):
         kind_cats = set(_catalogs_for_axis_word(kind, intent, has_period) or [])
         if not kind_cats:
             return ""
+        place = _stock_place_axis_catalogs()
         for w in _question_dictionary_axis_candidates(question, intent):
-            cats = [c for c in (_catalogs_for_axis_word(w, intent, has_period) or [])
-                    if c and not _is_product_catalog_target(c)]
+            cats = [c for c in (_catalogs_for_axis_word(w, intent, False) or [])
+                    if c and c not in kind_cats
+                    and not _is_product_catalog_target(c)]
             if not cats:
                 continue
-            if set(cats) <= kind_cats:
+            if not _word_names_documentjournal(w):
                 continue
-            if _catalogs_joint_with_kind(cats, kind_cats):
+            if any(c in place for c in cats):
+                continue
+            if any(_catalog_on_stock_eligible_register(c) for c in cats):
                 continue
             return w
         return ""

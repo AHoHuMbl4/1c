@@ -420,13 +420,38 @@ def main() -> int:
     t("measure metadata error does not drop leader",
       z21["wiki_leader_post_verify"]("catalog_a", {"measure": "alpha"}, "q", {}))
 
-    # [02.09] post-verify: ось из resolved_warehouse_axis_word при пустом action_axis
+    # [02.09] class 9 снят из post-verify: warehouse-резолвер больше не зовётся
     z21["wiki_measure_carried"] = lambda src, m: True
     z21["_wiki_axis_has_carriers"] = lambda phrase, intent, question="": True
-    z21["wiki_leader_carries_axis"] = (
-        lambda leader, axis_word, intent=None, question="": leader != "catalog_nom")
-    z21["resolved_warehouse_axis_word"] = (
-        lambda question, intent=None: "axis_place")
+    _rw_calls = []
+
+    def _rw_track(question, intent=None):
+        _rw_calls.append(question)
+        return "axis_place"
+
+    z21["resolved_warehouse_axis_word"] = _rw_track
+    z21["resolved_unaccounted_slice_axis_word"] = (
+        lambda question, intent=None: "")
+
+    def _carries_real(leader, axis_word, intent=None, question="",
+                      *, require_axis_cats=False):
+        leader = (leader or "").strip()
+        axis_word = (axis_word or "").strip()
+        if not leader or not axis_word:
+            return True
+        _efc = z21.get("entity_form_catalogs_for_kind")
+        if not callable(_efc):
+            return True
+        period = (intent or {}).get("period") or {}
+        has_period = bool(period.get("from") or period.get("to"))
+        axis_cats = [c for c in (_efc(axis_word, allow_meaning=has_period) or []) if c]
+        if not axis_cats:
+            return not require_axis_cats
+        if leader in axis_cats:
+            return True
+        return leader != "catalog_nom"
+
+    z21["wiki_leader_carries_axis"] = _carries_real
 
     diag_rw = {}
     ok_rw = z21["wiki_leader_post_verify"](
@@ -434,35 +459,17 @@ def main() -> int:
         {"kind": "entity_k", "action_axis": ""},
         "q with place axis",
         diag_rw)
-    t("empty action_axis + place resolver → none when leader lacks axis",
-      (not ok_rw) and diag_rw.get("wiki_none") == "axis_not_carried"
-      and diag_rw.get("wiki_axis_not_carried") == "catalog_nom")
-
-    diag_rw_subj = {}
-    ok_rw_subj = z21["wiki_leader_post_verify"](
-        "catalog_nom",
-        {"kind": "axis_place", "action_axis": ""},
-        "q with place axis",
-        diag_rw_subj)
-    t("empty action_axis + place resolver as subject → keep leader",
-      ok_rw_subj and not diag_rw_subj.get("wiki_none"))
-
-    z21["resolved_warehouse_axis_word"] = lambda question, intent=None: ""
-    diag_rw_empty = {}
-    ok_rw_empty = z21["wiki_leader_post_verify"](
-        "catalog_nom",
-        {"kind": "entity_k", "action_axis": ""},
-        "q no place",
-        diag_rw_empty)
-    t("empty action_axis + empty resolver → keep leader (unchanged)",
-      ok_rw_empty and not diag_rw_empty.get("wiki_none"))
+    t("class9 removed: warehouse resolver not called from post-verify",
+      ok_rw and not _rw_calls and not diag_rw.get("wiki_none"))
 
     # [02.09] post-verify: ось из resolved_unaccounted_slice_axis_word
-    # (warehouse пуст; carriers не требуем — резолвер уже доказал joint=∅)
     z21["resolved_warehouse_axis_word"] = lambda question, intent=None: ""
     z21["_wiki_axis_has_carriers"] = lambda phrase, intent, question="": False
-    z21["wiki_leader_carries_axis"] = (
-        lambda leader, axis_word, intent=None, question="": leader != "catalog_nom")
+    z21["wiki_leader_carries_axis"] = _carries_real
+    z21["entity_form_catalogs_for_kind"] = (
+        lambda word, allow_meaning=True: (
+            ["catalog_места"] if str(word).startswith("склад")
+            or word == "axis_slice" else []))
     z21["resolved_unaccounted_slice_axis_word"] = (
         lambda question, intent=None: "axis_slice")
 
@@ -478,7 +485,7 @@ def main() -> int:
 
     diag_ua_ok = {}
     ok_ua_ok = z21["wiki_leader_post_verify"](
-        "catalog_carrier",
+        "catalog_места",
         {"kind": "entity_k", "action_axis": ""},
         "q with unaccounted slice",
         diag_ua_ok)
@@ -494,6 +501,35 @@ def main() -> int:
     t("unaccounted resolver as subject → keep leader",
       ok_ua_subj and not diag_ua_subj.get("wiki_none"))
 
+    # vacuum carry: unaccounted + пустой axis_cats → False (не True)
+    z21["entity_form_catalogs_for_kind"] = (
+        lambda word, allow_meaning=True: [])
+    z21["resolved_unaccounted_slice_axis_word"] = (
+        lambda question, intent=None: "складах")
+    diag_vac = {}
+    ok_vac = z21["wiki_leader_post_verify"](
+        "catalog_номенклатура",
+        {"kind": "номенклатура", "action_axis": ""},
+        "сколько номенклатуры числится на складах",
+        diag_vac)
+    t("2402-style: unaccounted + empty axis_cats → axis_not_carried",
+      (not ok_vac) and diag_vac.get("wiki_none") == "axis_not_carried"
+      and diag_vac.get("wiki_axis_not_carried") == "catalog_номенклатура")
+
+    # негатив: «в компании» — warehouse не в post-verify; unaccounted пуст → keep
+    z21["resolved_unaccounted_slice_axis_word"] = (
+        lambda question, intent=None: "")
+    z21["resolved_warehouse_axis_word"] = (
+        lambda question, intent=None: "компании")
+    diag_co = {}
+    ok_co = z21["wiki_leader_post_verify"](
+        "catalog_номенклатура",
+        {"kind": "номенклатура", "action_axis": ""},
+        "сколько номенклатуры в компании",
+        diag_co)
+    t("в компании: warehouse not in post-verify → keep leader",
+      ok_co and not diag_co.get("wiki_none"))
+
     z21["resolved_unaccounted_slice_axis_word"] = (
         lambda question, intent=None: "")
     diag_ua_empty = {}
@@ -504,6 +540,19 @@ def main() -> int:
         diag_ua_empty)
     t("all axis resolvers empty → keep leader (unchanged)",
       ok_ua_empty and not diag_ua_empty.get("wiki_none"))
+
+    # LLM action_axis + пустой efc: прежний vacuum True (require_axis_cats=False)
+    z21["_wiki_axis_has_carriers"] = lambda phrase, intent, question="": True
+    z21["entity_form_catalogs_for_kind"] = (
+        lambda word, allow_meaning=True: [])
+    diag_llm = {}
+    ok_llm = z21["wiki_leader_post_verify"](
+        "catalog_nom",
+        {"kind": "entity_k", "action_axis": "axis_k"},
+        "q",
+        diag_llm)
+    t("LLM action_axis + empty axis_cats → keep (vacuum fail-open)",
+      ok_llm and not diag_llm.get("wiki_none"))
 
     # [02.09] collapse: пустая мера + sales-вид → money-канон, не count
     _sales_q = "позавчера сколько было продаж"

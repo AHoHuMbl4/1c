@@ -317,7 +317,7 @@ def entity_form_catalogs_for_kind(kind, allow_meaning=True, *, include_examples=
             "LEFT JOIN search_entity_alias a ON a.src_table = t.src_table "
             "WHERE t.src_table LIKE 'catalog_%%' AND list_has_any("
             "  list_filter(ts_lexize(%s, %s), x -> length(x) >= 3),"
-            "  list_filter(ts_lexize(%s, concat_ws(' ', %s),"
+            "  list_filter(ts_lexize(%s, concat_ws(' ', %s)),"
             "              x -> length(x) >= 3))"
             % (TABLES, lit(STEM_DICT), lit(kind), lit(STEM_DICT),
                alias_fields))
