@@ -344,6 +344,84 @@ def main() -> int:
     t("try_wiki integrates verify step",
       "wiki_verify_candidates" in Z21.read_text(encoding="utf-8"))
 
+    # [02.09] post-verify: меры (все alts) + квалификатор action_axis
+    t("post-verify helpers exist",
+      all(callable(z21.get(n)) for n in (
+          "wiki_intent_named_measures", "wiki_leader_post_verify",
+          "wiki_axis_is_question_subject", "wiki_leader_carries_axis")))
+    t("intent measures list collects alts",
+      z21["wiki_intent_named_measures"](
+          {"measure": ["alpha", "beta"]}) == ["alpha", "beta"])
+    t("axis subject when kind equals axis",
+      z21["wiki_axis_is_question_subject"](
+          {"kind": "axis_k", "action_axis": "axis_k"}, "axis_k"))
+    t("axis qualifier when kind differs",
+      not z21["wiki_axis_is_question_subject"](
+          {"kind": "entity_k", "action_axis": "axis_k"}, "axis_k"))
+
+    _axis_cats = {"axis_k": ["catalog_axis"]}
+    z21["entity_form_catalogs_for_kind"] = (
+        lambda word, allow_meaning=True: _axis_cats.get(word) or [])
+    z21["_wiki_axis_has_carriers"] = lambda phrase, intent, question="": (
+        phrase == "axis_k")
+    z21["wiki_measure_carried"] = lambda src, m: (
+        m != "beta" or src == "catalog_carrier")
+
+    def _psql_measures(q):
+        qs = str(q)
+        if "search_measure_alias" in qs:
+            if "beta" in qs:
+                return [(2, 0 if "catalog_nom" in qs else 1)]
+            return [(0, 0)]
+        if "search_refcols" in qs:
+            if "catalog_nom" in qs:
+                return []
+            if "catalog_carrier" in qs:
+                return [(1,)]
+            return []
+        if "search_wiki_entity_card" in qs:
+            return [("x",)]
+        return [("x",)]
+
+    _real_wmc = z21["wiki_measure_carried"]
+    z21["psql"] = _psql_measures
+    z21["ASK_WIKI_CHOICE"] = True
+    z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(1)
+    z21["wiki_validate_leader_axes"] = lambda *a, **k: True
+    z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [
+        {"index": 1, "fit": "yes", "why": "ok"},
+    ]})
+
+    diag_axis = {}
+    res_axis = z21["try_wiki_hybrid_entity_pick"](
+        "q", {"kind": "entity_k", "action_axis": "axis_k",
+              "want": "count"}, diag_axis, None, 0)
+    t("leader without qualifier axis → none",
+      res_axis is None and diag_axis.get("wiki_none") == "axis_not_carried")
+
+    diag_subj = {}
+    res_subj = z21["try_wiki_hybrid_entity_pick"](
+        "q", {"kind": "axis_k", "action_axis": "axis_k",
+              "want": "count"}, diag_subj, None, 0)
+    t("leader axis-catalog when axis is subject → leader",
+      res_subj and res_subj.get("picked") == ["catalog_a"])
+
+    z21["wiki_hybrid_pool"] = lambda q, intent=None: [
+        {"src_table": "catalog_nom", "name": "N", "description": "",
+         "axes": "", "measures": "", "distance": 0.1,
+         "platform_kind": "справочник", "parent": ""}]
+    diag_meas = {}
+    res_meas = z21["try_wiki_hybrid_entity_pick"](
+        "q", {"measure": ["alpha", "beta"], "want": "count"},
+        diag_meas, None, 0)
+    t("second known measure not carried → none",
+      res_meas is None and diag_meas.get("wiki_none") == "measure_not_carried")
+
+    z21["wiki_measure_carried"] = _real_wmc
+    z21["psql"] = lambda q: (_ for _ in ()).throw(RuntimeError("db"))
+    t("measure metadata error does not drop leader",
+      z21["wiki_leader_post_verify"]("catalog_a", {"measure": "alpha"}, "q", {}))
+
     r = subprocess.run([sys.executable, "-m", "py_compile", str(Z21)],
                        capture_output=True, text=True)
     t("z21 py_compile", r.returncode == 0, r.stderr[:120])

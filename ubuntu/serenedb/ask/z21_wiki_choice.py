@@ -906,21 +906,95 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
                                        reason="wiki_separability")}
     leader = pick.get("leader")
     if leader:
-        # [01.09, ночь] Спрошенная величина — структурный факт, не промт.
-        # Если база ЗНАЕТ названную меру (есть носители в search_measure_alias),
-        # ответить на неё может только носитель: верификация-модель это
-        # пропускала (замер L11: «остатки по складу» → catalog_местахранения,
-        # носители «остатка» в базе — другие сущности; ответ «3 склада» при
-        # эталоне no_data). Если носителей в базе нет вовсе, мера — понятие из
-        # вопроса («торговля»), а не имя поля: доказать отсутствие нельзя,
-        # ответ не роняется (п. 21). Проверка кодом, судья — те же данные.
-        _measure = _intent_text((intent or {}).get("measure"))
-        if _measure and not wiki_measure_carried(leader, _measure):
-            diag["wiki_measure_not_carried"] = leader
-            diag["wiki_none"] = "measure_not_carried"
+        if not wiki_leader_post_verify(leader, intent, question, diag):
             return None
         return {"picked": [leader], "marks": {}, "plan": {}}
     return None
+
+
+def wiki_intent_named_measures(intent):
+    """Все названные в разборе меры: measure и альтернативы списком."""
+    intent = intent or {}
+    raw = intent.get("measure")
+    if isinstance(raw, (list, tuple)):
+        items = raw
+    elif raw is not None:
+        items = [raw]
+    else:
+        items = []
+    out, seen = [], set()
+    for item in items:
+        m = _intent_text(item)
+        if not m:
+            continue
+        key = m.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(m)
+    return out
+
+
+def wiki_axis_is_question_subject(intent, axis_word):
+    """Ось — предмет счёта (kind = action_axis), не квалификатор разреза."""
+    intent = intent or {}
+    axis_word = (axis_word or "").strip()
+    if not axis_word:
+        return False
+    kind = _intent_text(intent.get("kind")) or ""
+    if not kind:
+        return False
+    return kind.lower() == axis_word.lower()
+
+
+def wiki_leader_carries_axis(leader, axis_word, intent=None, question=""):
+    """Лидер структурно несёт named action_axis (каталог оси или refcol)."""
+    leader = (leader or "").strip()
+    axis_word = (axis_word or "").strip()
+    if not leader or not axis_word:
+        return True
+    try:
+        intent = intent or {}
+        period = intent.get("period") or {}
+        has_period = bool(period.get("from") or period.get("to"))
+        _efc = globals().get("entity_form_catalogs_for_kind")
+        if not callable(_efc):
+            return True
+        axis_cats = [c for c in (_efc(axis_word, allow_meaning=has_period) or []) if c]
+        if not axis_cats:
+            return True
+        if leader in axis_cats:
+            return True
+        cats_sql = ", ".join(lit(c) for c in sorted(set(axis_cats)))
+        rows = psql(
+            "SELECT 1 FROM search_refcols "
+            "WHERE src_table = %s AND target_src IN (%s) "
+            "  AND col IS NOT NULL AND trim(col) <> '' LIMIT 1"
+            % (lit(leader), cats_sql))
+        return bool(rows)
+    except RuntimeError:
+        return True
+
+
+def wiki_leader_post_verify(leader, intent, question, diag=None):
+    """Post-verify лидера: все известные меры + квалификатор action_axis."""
+    diag = diag if diag is not None else {}
+    intent = intent or {}
+    for m in wiki_intent_named_measures(intent):
+        if not wiki_measure_carried(leader, m):
+            diag["wiki_measure_not_carried"] = leader
+            diag["wiki_none"] = "measure_not_carried"
+            return False
+    axis_word = _intent_text(intent.get("action_axis"))
+    if (axis_word
+            and not wiki_axis_is_question_subject(intent, axis_word)
+            and _wiki_axis_has_carriers(axis_word, intent, question)
+            and not wiki_leader_carries_axis(
+                leader, axis_word, intent, question)):
+        diag["wiki_axis_not_carried"] = leader
+        diag["wiki_none"] = "axis_not_carried"
+        return False
+    return True
 
 
 def wiki_measure_carried(src_table, measure):
