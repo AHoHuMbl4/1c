@@ -5,6 +5,57 @@
 -- Merge работает прежним режимом; search_changed_rows копится, удаления по списку — будущая B.
 \set partial_rebuild 0
 
+-- Session memory_limit: 0.55 от current_setting (cookbook/performance/oom, 50-60%).
+-- Единица строки — та же, что вернул current_setting; без литералов и без ОС.
+SELECT (
+  WITH ml AS (SELECT current_setting('memory_limit') AS s),
+  parsed AS (
+    SELECT s,
+           lower(trim(regexp_replace(s, '^[0-9.]+\s*', ''))) AS unit_l,
+           try_cast(regexp_extract(s, '^([0-9.]+)', 1) AS DOUBLE) AS n
+    FROM ml
+  ),
+  bytes AS (
+    SELECT s, unit_l, n,
+           CASE
+             WHEN unit_l NOT IN ('', 'b', 'kb', 'mb', 'gb', 'kib', 'mib', 'gib')
+               THEN error('corpus_merge: неизвестная единица memory_limit: ' || s)
+             WHEN unit_l IN ('gib') THEN n * power(1024::BIGINT, 3)
+             WHEN unit_l IN ('mib') THEN n * power(1024::BIGINT, 2)
+             WHEN unit_l IN ('kib') THEN n * 1024
+             WHEN unit_l IN ('gb')  THEN n * power(1000::BIGINT, 3)
+             WHEN unit_l IN ('mb')  THEN n * power(1000::BIGINT, 2)
+             WHEN unit_l IN ('kb')  THEN n * 1000
+             ELSE n  -- '' / 'b' = байты
+           END AS mem_bytes,
+           CASE
+             WHEN unit_l IN ('gib') THEN power(1024::BIGINT, 3)
+             WHEN unit_l IN ('mib') THEN power(1024::BIGINT, 2)
+             WHEN unit_l IN ('kib') THEN 1024
+             WHEN unit_l IN ('gb')  THEN power(1000::BIGINT, 3)
+             WHEN unit_l IN ('mb')  THEN power(1000::BIGINT, 2)
+             WHEN unit_l IN ('kb')  THEN 1000
+             ELSE 1  -- '' / 'b'
+           END AS div,
+           CASE
+             WHEN unit_l IN ('gib') THEN 'GiB'
+             WHEN unit_l IN ('mib') THEN 'MiB'
+             WHEN unit_l IN ('kib') THEN 'KiB'
+             WHEN unit_l IN ('gb')  THEN 'GB'
+             WHEN unit_l IN ('mb')  THEN 'MB'
+             WHEN unit_l IN ('kb')  THEN 'KB'
+             ELSE 'B'  -- '' / 'b'
+           END AS unit
+    FROM parsed
+  )
+  SELECT (floor(mem_bytes * 0.55 / div))::BIGINT::VARCHAR
+         || CASE WHEN position(' ' in s) > 0 THEN ' ' ELSE '' END
+         || unit
+  FROM bytes
+) AS ml
+\gset
+SET memory_limit = :'ml';
+
 -- ПЕРЕНОС СОБРАННОГО КОРПУСА В БОЕВОЙ И ПУБЛИКАЦИЯ ПОИСКУ.
 -- Запускается после `corpus_build.sql` — он строит `tmp3_corpus` и ставит отметку `tmp3_run`.
 --
@@ -150,19 +201,18 @@ WHERE было > 0 AND стало > 0 AND стало >= было
 -- Правка строки при перепроведении: тот же refs (та же строка данных), новый
 -- контент → новый sha-ключ. Это изменение из 1С, а не потеря: пара по refs
 -- доказывает, что строка жива в новой сборке. Такие строки уходят из
--- «уйдёт» частичной потери.
-CREATE OR REPLACE TABLE tmp3_merge_edited_delta AS
-SELECT u.src_table, count(*)::BIGINT AS правок
-FROM tmp3_merge_unmatched u
-JOIN search_corpus c ON c.src_table = u.src_table AND c.row_key = u.row_key
-WHERE EXISTS (SELECT 1 FROM tmp3_corpus t
-              WHERE t.src_table = u.src_table AND t.refs = c.refs)
-GROUP BY 1;
+-- «уйдёт» частичной потери. edited_delta считается ПОСЛЕ unmatched (ниже).
 
+-- unmatched режется по сущностям: пустой каркас + PREPARE/EXECUTE на каждую
+-- таблицу стейджа вне rewrite_wave (fail-safe NOT IN wave и в теле).
 CREATE OR REPLACE TABLE tmp3_merge_unmatched AS
+SELECT c.src_table, c.row_key FROM search_corpus c WHERE false;
+
+PREPARE p_merge_unmatched AS
+INSERT INTO tmp3_merge_unmatched
 SELECT c.src_table, c.row_key
 FROM search_corpus c
-WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
+WHERE c.src_table = $1
   AND c.src_table NOT IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
   -- РАЗДЕЛЬНЫЕ анти-соединения, а не одно `IN (ключ, обрезанный ключ)`:
   -- список внутри `IN` лишает движок равенства, и он уходит в перебор. [замер 30.07]
@@ -197,6 +247,19 @@ WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
                     AND EXISTS (SELECT 1 FROM tmp3_key k
                                 WHERE k.entity = lower(c.src_table)
                                   AND list_contains(k.key_cols, 'Period')));
+
+SELECT DISTINCT 'EXECUTE p_merge_unmatched(' || quote_literal(src_table) || ');'
+FROM (SELECT DISTINCT src_table FROM tmp3_corpus
+      WHERE src_table NOT IN (SELECT src_table FROM tmp3_merge_rewrite_wave)) t
+\gexec
+
+CREATE OR REPLACE TABLE tmp3_merge_edited_delta AS
+SELECT u.src_table, count(*)::BIGINT AS правок
+FROM tmp3_merge_unmatched u
+JOIN search_corpus c ON c.src_table = u.src_table AND c.row_key = u.row_key
+WHERE EXISTS (SELECT 1 FROM tmp3_corpus t
+              WHERE t.src_table = u.src_table AND t.refs = c.refs)
+GROUP BY 1;
 
 CREATE OR REPLACE TABLE tmp3_merge_ent_guard AS
 SELECT e.src_table,

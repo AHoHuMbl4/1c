@@ -1411,6 +1411,9 @@ CREATE TABLE IF NOT EXISTS tmp3_pdoc_stage (
   src_table VARCHAR, rk VARCHAR, doc VARCHAR, refs VARCHAR,
   nums MAP(VARCHAR, DOUBLE), flags MAP(VARCHAR, BOOLEAN), doc_date TIMESTAMP,
   refs_map MAP(VARCHAR, VARCHAR), refs_own MAP(VARCHAR, VARCHAR));
+-- Хвост коллизий keyvals + маркер идемпотентности (V5); жизненный цикл = progress/stage.
+CREATE TABLE IF NOT EXISTS tmp3_pdoc_tail (tbl VARCHAR, keyvals VARCHAR);
+CREATE TABLE IF NOT EXISTS tmp3_pdoc_tail_done (tbl VARCHAR);
 
 -- query_table принимает только литерал имени таблицы, не колонку из JOIN
 -- (Sql › Functions › Table Functions › query_table; живой стопор 18.08:610).
@@ -1426,20 +1429,20 @@ SELECT 'INSERT INTO tmp3_entity_rows SELECT '
 FROM tmp3_build b
 \gexec
 
--- Формула чанкования по сущности: md5('v8b' + метод порядка + chunk_cells + ncols).
+-- Формула чанкования по сущности: md5('v8c' + метод порядка + chunk_cells + ncols).
 -- Пустой key_cols → сущность не чанкуется (монолит).
 -- search_pdoc_formula — строковые формулы; search_quality.v — только BIGINT.
 CREATE TABLE IF NOT EXISTS search_pdoc_formula (tbl VARCHAR, formula VARCHAR);
 CREATE OR REPLACE TABLE tmp3_pdoc_formula AS
 SELECT e.tbl,
-       md5('v8b' || 'key_order' || cfg.chunk_cells::VARCHAR || '|' || e.ncols::VARCHAR) AS formula
+       md5('v8c' || 'key_order' || cfg.chunk_cells::VARCHAR || '|' || e.ncols::VARCHAR) AS formula
 FROM tmp3_entity_rows e
 CROSS JOIN tmp3_pdoc_cfg cfg
 JOIN tmp3_key k ON k.entity = lower(e.tbl)
 WHERE len(k.key_cols) > 0
   AND e.ncols > 0
   AND e.nrows * e.ncols > cfg.chunk_cells
-  AND floor(cfg.chunk_cells / e.ncols)::BIGINT >= 1;
+  AND cfg.chunk_cells >= e.ncols;  -- ≡ floor(cells/ncols)≥1 (без floor: баг движка на AND с nrows*ncols);
 
 -- Сброс resume при смене или отсутствии сохранённой формулы (до решения on_).
 DELETE FROM tmp3_pdoc_progress p
@@ -1450,6 +1453,15 @@ DELETE FROM tmp3_pdoc_stage s
 WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_formula f WHERE f.tbl = s.src_table)
   AND coalesce((SELECT f0.formula FROM search_pdoc_formula f0 WHERE f0.tbl = s.src_table), '')
       IS DISTINCT FROM (SELECT f2.formula FROM tmp3_pdoc_formula f2 WHERE f2.tbl = s.src_table);
+-- Жизненный цикл хвоста коллизий = у progress/stage (смена formula).
+DELETE FROM tmp3_pdoc_tail t
+WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_formula f WHERE f.tbl = t.tbl)
+  AND coalesce((SELECT f0.formula FROM search_pdoc_formula f0 WHERE f0.tbl = t.tbl), '')
+      IS DISTINCT FROM (SELECT f2.formula FROM tmp3_pdoc_formula f2 WHERE f2.tbl = t.tbl);
+DELETE FROM tmp3_pdoc_tail_done d
+WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_formula f WHERE f.tbl = d.tbl)
+  AND coalesce((SELECT f0.formula FROM search_pdoc_formula f0 WHERE f0.tbl = d.tbl), '')
+      IS DISTINCT FROM (SELECT f2.formula FROM tmp3_pdoc_formula f2 WHERE f2.tbl = d.tbl);
 
 CREATE OR REPLACE TABLE tmp3_pdoc_entity AS
 SELECT e.tbl, e.nrows, e.ncols,
@@ -1460,7 +1472,7 @@ JOIN tmp3_key k ON k.entity = lower(e.tbl)
 WHERE len(k.key_cols) > 0
   AND e.ncols > 0
   AND e.nrows * e.ncols > cfg.chunk_cells
-  AND floor(cfg.chunk_cells / e.ncols)::BIGINT >= 1;
+  AND cfg.chunk_cells >= e.ncols;  -- ≡ floor(cells/ncols)≥1 (без floor: баг движка на AND с nrows*ncols);
 
 CREATE OR REPLACE TABLE tmp3_pdoc_chunks AS
 SELECT ent.tbl, gs AS lo, least(gs + ent.chunk_rows - 1, ent.nrows) AS hi,
@@ -1481,7 +1493,7 @@ SELECT 'INSERT INTO tmp3_pdoc_order SELECT '
 || 'cells AS (SELECT pos, u.col, u.val, '
 || 'coalesce(list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)), '
 || 'CASE lower(u.col) WHEN ''linenumber'' THEN 1000000 WHEN ''recorder'' THEN 1000001 END) AS sort_ord '
-|| 'FROM numbered n UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (pos)))) u '
+|| 'FROM numbered n UNPIVOT INCLUDE NULLS (val FOR col IN (COLUMNS(* EXCLUDE (pos)))) u '
 || 'WHERE list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)) IS NOT NULL '
 || 'OR (lower(u.col) = ''linenumber'' AND NOT list_contains((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), ''linenumber'') '
 || 'AND EXISTS (SELECT 1 FROM duckdb_columns() dc WHERE dc.database_name = current_database() '
@@ -1519,27 +1531,97 @@ FROM (
 ) x
 \gexec
 
--- Дубли keyvals = идентичные строки по ключу сортировки; чанкование размножит их по порциям.
--- Такую сущность собираем монолитом (как без key_cols).
-CREATE OR REPLACE TABLE tmp3_pdoc_dup AS
-SELECT o.tbl
-FROM tmp3_pdoc_order o
-JOIN tmp3_entity_rows e ON e.tbl = o.tbl
-GROUP BY o.tbl, e.nrows
-HAVING count(*) <> count(DISTINCT o.keyvals)
-    OR count(*) <> e.nrows;
-DELETE FROM tmp3_pdoc_order WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_dup);
-DELETE FROM tmp3_pdoc_chunks WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_dup);
-DELETE FROM tmp3_pdoc_formula WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_dup);
-DELETE FROM tmp3_pdoc_entity WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_dup);
+-- Коллизии keyvals: V5-хвост (уникальные порции + один батч на коллизионное множество)
+-- либо монолит. Порядок гейтов: (в) неполный order → mono; иначе collision_rows;
+-- (б) collision_rows×ncols > chunk_cells → mono + pdoc_tail_oversize; иначе (а) V5.
+-- collision_rows считается ДО DELETE (число строк order с keyvals из коллизионных групп,
+-- не count(DISTINCT)). Гейт покрытия: count(order)+collision_rows == nrows.
+DELETE FROM tmp3_pdoc_tail WHERE tbl IN (SELECT DISTINCT tbl FROM tmp3_pdoc_order);
+
+-- (в) неполный order → mono
+CREATE OR REPLACE TABLE tmp3_pdoc_mono AS
+SELECT e.tbl
+FROM tmp3_entity_rows e
+WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_entity pe WHERE pe.tbl = e.tbl)
+  AND (SELECT count(*) FROM tmp3_pdoc_order o WHERE o.tbl = e.tbl) <> e.nrows;
+
+-- Коллизионные группы и collision_rows (только полный order, ещё не mono)
+CREATE OR REPLACE TABLE tmp3_pdoc_collision AS
+WITH coll_keys AS (
+  SELECT o.tbl, o.keyvals
+  FROM tmp3_pdoc_order o
+  WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_entity pe WHERE pe.tbl = o.tbl)
+    AND o.tbl NOT IN (SELECT m.tbl FROM tmp3_pdoc_mono m)
+  GROUP BY o.tbl, o.keyvals
+  HAVING count(*) > 1
+),
+coll_rows AS (
+  SELECT o.tbl, count(*)::BIGINT AS collision_rows
+  FROM tmp3_pdoc_order o
+  JOIN coll_keys ck ON ck.tbl = o.tbl AND ck.keyvals IS NOT DISTINCT FROM o.keyvals
+  GROUP BY o.tbl
+)
+SELECT cr.tbl, cr.collision_rows, e.nrows, e.ncols, cfg.chunk_cells,
+       (cr.collision_rows * e.ncols > cfg.chunk_cells) AS oversize
+FROM coll_rows cr
+JOIN tmp3_entity_rows e ON e.tbl = cr.tbl
+CROSS JOIN tmp3_pdoc_cfg cfg;
+
+-- (б) oversize-хвост → mono
+INSERT INTO tmp3_pdoc_mono
+SELECT c.tbl FROM tmp3_pdoc_collision c WHERE c.oversize
+  AND c.tbl NOT IN (SELECT m.tbl FROM tmp3_pdoc_mono m);
+
+-- Каскад mono: полный сброс чанкования (диспетчер зовёт p_doc)
+DELETE FROM tmp3_pdoc_tail WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_mono);
+DELETE FROM tmp3_pdoc_tail_done WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_mono);
+DELETE FROM tmp3_pdoc_order WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_mono);
+DELETE FROM tmp3_pdoc_chunks WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_mono);
+DELETE FROM tmp3_pdoc_formula WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_mono);
+DELETE FROM tmp3_pdoc_entity WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_mono);
+
+-- (а) V5: сущность остаётся в chunks/formula/entity; из order — только коллизии;
+-- tmp3_pdoc_tail = DISTINCT keyvals коллизионных групп.
+INSERT INTO tmp3_pdoc_tail
+SELECT ck.tbl, ck.keyvals
+FROM (
+  SELECT o.tbl, o.keyvals
+  FROM tmp3_pdoc_order o
+  JOIN tmp3_pdoc_collision c ON c.tbl = o.tbl AND NOT c.oversize
+  GROUP BY o.tbl, o.keyvals
+  HAVING count(*) > 1
+) ck;
+
+DELETE FROM tmp3_pdoc_order o
+WHERE EXISTS (
+  SELECT 1 FROM tmp3_pdoc_tail t
+  WHERE t.tbl = o.tbl AND t.keyvals IS NOT DISTINCT FROM o.keyvals
+);
+
+-- Гейт покрытия сразу после DELETE (только V5): count(order)+collision_rows == nrows
+SELECT CASE
+  WHEN EXISTS (
+    SELECT 1
+    FROM tmp3_pdoc_collision c
+    WHERE NOT c.oversize
+      AND c.tbl NOT IN (SELECT m.tbl FROM tmp3_pdoc_mono m)
+      AND (SELECT count(*) FROM tmp3_pdoc_order o WHERE o.tbl = c.tbl) + c.collision_rows
+          <> c.nrows
+  )
+  THEN error('pdoc_tail: count(order)+collision_rows <> nrows')
+END;
+
+-- Совместимость: tmp3_pdoc_dup = mono (прежние читатели, если есть)
+CREATE OR REPLACE TABLE tmp3_pdoc_dup AS SELECT tbl FROM tmp3_pdoc_mono;
 
 CREATE OR REPLACE TABLE tmp3_resume_pdoc AS
 SELECT coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01') < now() - INTERVAL '6 hours'
        AND (SELECT count(*) FROM tmp3_pdoc_progress) > 0 AS on_;
 
 DELETE FROM search_quality WHERE k IN ('pdoc_chunk_cells', 'pdoc_chunk_rows', 'pdoc_chunk_entities',
-                                       'pdoc_resume', 'pdoc_chunk_formula')
-  OR k LIKE 'pdoc_formula:%';
+                                       'pdoc_resume', 'pdoc_chunk_formula', 'pdoc_tail_oversize')
+  OR k LIKE 'pdoc_formula:%'
+  OR k LIKE 'pdoc_tail:%';
 INSERT INTO search_quality SELECT 'pdoc_chunk_cells', chunk_cells, current_setting('memory_limit')
 FROM tmp3_pdoc_cfg;
 INSERT INTO search_quality SELECT 'pdoc_chunk_entities', count(DISTINCT tbl), 'сущностей выше порога'
@@ -1548,6 +1630,23 @@ DELETE FROM search_pdoc_formula WHERE tbl IN (SELECT tbl FROM tmp3_pdoc_formula)
 INSERT INTO search_pdoc_formula SELECT tbl, formula FROM tmp3_pdoc_formula;
 INSERT INTO search_quality SELECT 'pdoc_resume', (SELECT on_::INT FROM tmp3_resume_pdoc),
   CASE WHEN (SELECT on_ FROM tmp3_resume_pdoc) THEN 'докатка чанков' ELSE 'свежий такт' END;
+-- Видимость кейса V5/mono: единая форма tail_rows/nrows/ncols
+INSERT INTO search_quality
+SELECT 'pdoc_tail_oversize', count(*)::BIGINT, 'сущностей с хвостом > chunk_cells'
+FROM tmp3_pdoc_collision WHERE oversize;
+INSERT INTO search_quality
+SELECT 'pdoc_tail:' || x.tbl, x.tail_rows,
+       'nrows=' || x.nrows::VARCHAR || ' ncols=' || x.ncols::VARCHAR || ' path=' || x.path
+FROM (
+  SELECT m.tbl, 0::BIGINT AS tail_rows, e.nrows, e.ncols, 'mono_incomplete'::VARCHAR AS path
+  FROM tmp3_pdoc_mono m
+  JOIN tmp3_entity_rows e ON e.tbl = m.tbl
+  WHERE m.tbl NOT IN (SELECT c.tbl FROM tmp3_pdoc_collision c)
+  UNION ALL
+  SELECT c.tbl, c.collision_rows, c.nrows, c.ncols,
+         CASE WHEN c.oversize THEN 'mono_oversize' ELSE 'v5' END
+  FROM tmp3_pdoc_collision c
+) x;
 
 CREATE TABLE IF NOT EXISTS tmp3_corpus
   (src_table VARCHAR, row_key VARCHAR, doc VARCHAR, refs VARCHAR, doc_hash VARCHAR,
@@ -1565,6 +1664,10 @@ DELETE FROM tmp3_pdoc_progress p
 WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_chunks c WHERE c.tbl = p.tbl)
   AND (NOT (SELECT on_ FROM tmp3_resume_pdoc)
        OR EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = p.tbl));
+-- Хвост — артефакт плана (как order/chunks), не накопитель: на fresh не стираем (сброс — pre-decide/mono/post-finalize).
+DELETE FROM tmp3_pdoc_tail_done d
+WHERE EXISTS (SELECT 1 FROM tmp3_pdoc_chunks c WHERE c.tbl = d.tbl)
+  AND NOT (SELECT on_ FROM tmp3_resume_pdoc);
 
 SELECT 'pdoc лимиты' AS шаг,
        (SELECT ws_bytes_per_cell FROM tmp3_pdoc_cfg)::BIGINT AS ws_байт_на_ячейку,
@@ -1817,6 +1920,7 @@ QUALIFY NOT (SELECT on_ FROM fold)
           ORDER BY doc, refs, doc_hash) = 1) qq;
 
 
+-- 🔴 p_doc / p_doc_chunk / p_doc_tail — зеркала; менять только синхронно.
 PREPARE p_doc_chunk AS
 INSERT INTO tmp3_pdoc_stage
 WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
@@ -1847,7 +1951,7 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
           coalesce(list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)),
                    CASE lower(u.col) WHEN 'linenumber' THEN 1000000 WHEN 'recorder' THEN 1000001 END) AS sort_ord
    FROM numbered n
-   UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (rn)))) u
+   UNPIVOT INCLUDE NULLS (val FOR col IN (COLUMNS(* EXCLUDE (rn)))) u
    WHERE list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)) IS NOT NULL
       OR (lower(u.col) = 'linenumber'
           AND NOT list_contains((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), 'linenumber')
@@ -2044,6 +2148,236 @@ FROM (
   FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g) h;
 
 
+
+-- 🔴 p_doc / p_doc_chunk / p_doc_tail — зеркала одного тела сборки строки;
+-- менять только синхронно. У tail фильтр порции заменён на keyvals из tmp3_pdoc_tail.
+PREPARE p_doc_tail AS
+INSERT INTO tmp3_pdoc_stage
+WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
+ -- 🔴 ОДНО ВЫРАЖЕНИЕ НА ДВА МЕСТА. Прежде условие «есть где взять» стояло только у
+ -- отбрасывания колонок, а свёртка строк была безусловной: там, где условие защитило
+ -- колонки, строки всё равно схлопывались до одной — и данные табличной части исчезали.
+ -- Защита стояла на входе, а потеря происходила на выходе. Теперь оба места смотрят
+ -- в одно выражение, и разойтись не могут по построению.
+ --
+ -- Подчёркивания В САМОМ имени экранируются: имя объекта 1С законно бывает с
+ -- подчёркиванием (отраслевые префиксы), и без экранирования `Catalog_Мои_Товары`
+ -- считался бы дочерним для `Catalog_Мои`.
+ fold AS (SELECT (SELECT key_cols FROM kc) = ['Ref_Key'] AS on_),
+ -- coalesce ДО unpivot: иначе пустые ячейки исчезают вовсе (UNPIVOT роняет NULL), и
+ -- составной ключ схлопывается. Боевой ключ выглядит как «160.1|||ЛЕПРО|___|ЗП80РК» —
+ -- пустые сегменты значимы, они держат позицию. Без них разные строки дают ОДИН ключ,
+ -- то есть строка теряется молча (п. 13). Замерено: 789 строк из 97 965.
+ -- ОБРЕЗКА ЗНАЧЕНИЯ. Хранилища и вложения приезжают в витрину как текст, и без обрезки
+ -- строка корпуса вырастает до сотен тысяч символов. [замер 27.07] без неё самый длинный
+ -- текст стал 560 400 символов против 15 724 у боевого кода, и две такие строки не могут
+ -- получить вектор вовсе: у эмбеддера предел длины входа 33 000. Режем ЗНАЧЕНИЕ, а не
+ -- строку целиком — так теряется хвост вложения, а не реквизиты (боевой аналог — clip()).
+ -- 🔴 keyvals — то же выражение, что при построении tmp3_pdoc_order (UNPIVOT + string_agg).
+ raw AS (SELECT * FROM query_table($1)),
+ numbered AS (SELECT row_number() OVER () AS rn, r.* FROM raw r),
+ sort_cells AS (
+   SELECT rn, u.col, u.val,
+          coalesce(list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)),
+                   CASE lower(u.col) WHEN 'linenumber' THEN 1000000 WHEN 'recorder' THEN 1000001 END) AS sort_ord
+   FROM numbered n
+   UNPIVOT INCLUDE NULLS (val FOR col IN (COLUMNS(* EXCLUDE (rn)))) u
+   WHERE list_position((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), lower(u.col)) IS NOT NULL
+      OR (lower(u.col) = 'linenumber'
+          AND NOT list_contains((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), 'linenumber')
+          AND EXISTS (SELECT 1 FROM duckdb_columns() dc
+                      WHERE dc.database_name = current_database()
+                        AND dc.table_name = $1 AND dc.column_name = 'LineNumber'))
+      OR (lower(u.col) = 'recorder'
+          AND NOT list_contains((SELECT list_transform(key_cols, x -> lower(x::VARCHAR)) FROM kc), 'recorder')
+          AND EXISTS (SELECT 1 FROM duckdb_columns() dc
+                      WHERE dc.database_name = current_database()
+                        AND dc.table_name = $1 AND dc.column_name = 'Recorder'))
+ ),
+ kv AS (
+   SELECT rn, string_agg(
+            CASE WHEN val IS NULL THEN '∅' ELSE replace(val::VARCHAR, '|', '\|') END,
+            '|' ORDER BY sort_ord) AS keyvals
+   FROM sort_cells
+   WHERE sort_ord IS NOT NULL
+   GROUP BY rn
+ ),
+ src_f AS (
+   SELECT f.rid, substr(coalesce(COLUMNS(*)::VARCHAR, ''), 1, 20000)
+   FROM (
+     SELECT n.* EXCLUDE (rn), n.rn AS rid
+     FROM numbered n
+     JOIN kv USING (rn)
+     WHERE kv.keyvals IN (
+       SELECT DISTINCT t.keyvals FROM tmp3_pdoc_tail t
+       WHERE t.tbl = $1
+     )
+   ) f
+ ),
+ cells AS (SELECT * FROM src_f UNPIVOT (val FOR col IN (COLUMNS(* EXCLUDE (rid))))),
+ -- Ключ собирается ОТДЕЛЬНО и до отбрасывания пустых: он про тождество строки,
+ -- а не про текст. Порядок сегментов — объявленный порядок ключа из $metadata.
+ keyed AS (
+   SELECT u.rid, string_agg(u.val, '|' ORDER BY list_position((SELECT key_cols FROM kc), u.col)) AS row_key
+   FROM cells u
+   WHERE list_position((SELECT key_cols FROM kc), u.col) IS NOT NULL
+   GROUP BY u.rid),
+ j AS (
+   SELECT u.rid, u.col, u.val, c.ord, c.kind, c.own_ref,
+          list_position((SELECT key_cols FROM kc), u.col) AS keypos,
+          r.name AS refname, r.owner AS refowner,
+          (c.kind='ref' OR regexp_full_match(u.val,'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')) AS is_guid,
+          (c.kind IN ('text','flag') AND NOT c.is_companion AND c.col <> 'DataVersion'
+           AND NOT regexp_matches(u.val,'^(https?://|/)')) AS in_text,
+          (c.kind = 'num') AS is_num,
+          -- Булев реквизит — ОТДЕЛЬНАЯ карта, как и величины, и по той же причине:
+          -- обращаться к реквизиту по имени, а не искать подстроку в тексте документа.
+          -- [ревизия 30.07] `contains(doc, 'IsFolder: true')` — подстрочный поиск: литерал
+          -- может встретиться в комментарии или наименовании, и запись молча выпадет из
+          -- счёта. Сегодня совпадений нет (375 = 375 по граничному regexp), но булевых
+          -- реквизитов в корпусе 830 имён у 376 301 строки — на следующем совпадёт.
+          -- Агент `serenedb-native` проверил на живом движке: штатного способа достать
+          -- именованный реквизит из УЖЕ СОБРАННОГО текста у движка нет, `ts_phrase` даёт
+          -- ровно те же ложные срабатывания. Значит карта строится при сборке.
+          (c.kind = 'flag') AS is_flag,
+          -- 🔴 ВЕЛИЧИНА И ЧИСЛО В ТЕКСТЕ — РАЗНЫЕ ВЕЩИ, И ЭТО ОПЛАЧЕНО ОШИБКОЙ.
+          -- [замер 30.07] `SurrogateKey` попал в карту величин у 656 сущностей,
+          -- `LineNumber` — у 359, и на вопрос «сколько штук закупили» система отвечала
+          -- «считано по величине SurrogateKey». Складывать ключ бессмысленно: это
+          -- тождество строки, а не измерение.
+          --
+          -- Первая моя попытка исключила их из `is_num` — то есть СРАЗУ и из величин, и из
+          -- ТЕКСТА строки. Слияние отказало: «дублей ключа 1368». У обёрток регистров ключ
+          -- объявлен как `{Recorder, Recorder_Type}` и строки НЕ различает — их различал
+          -- именно номер строки в тексте. Без него тексты совпали, отпечатки совпали.
+          -- Защита сработала и перенос остановила, корпус остался цел.
+          --
+          -- Поэтому признаки разведены: в тексте число остаётся (оно про тождество
+          -- строки), в карту величин не идёт (там только то, что можно складывать).
+          -- Отличаем двумя правилами и БЕЗ списка слов о конкретной базе:
+          --   1) колонка входит в объявленный ключ (`$metadata` → `kc`) — тот же источник,
+          --      что `Ref_Key`; снимает `SurrogateKey` целиком (656 → 0);
+          --   2) `LineNumber`/`SurrogateKey` — имена САМОЙ ПЛАТФОРМЫ 1С, одинаковые на
+          --      любой конфигурации и языке. Нужны потому, что у обёрток регистров первое
+          --      правило их не ловит: [замер] уцелели 95 сущностей из 359. Тот же класс
+          --      факта, что `Ref_Key` и `DataVersion`.
+          (c.kind = 'num'
+           AND list_position((SELECT key_cols FROM kc), u.col) IS NULL
+           AND u.col NOT IN ('LineNumber', 'SurrogateKey')) AS is_measure,
+          -- ВСЕ даты строки, а не только выбранная. Прежде дата, не ставшая `doc_date`,
+          -- не попадала НИКУДА: ни в текст, ни в величины. [замер 28.07] так пропадали
+          -- 83 колонки и 30 909 значений, а у 24 сущностей не оставалось ни одной даты
+          -- вовсе — «когда открыт счёт», «до какого числа действует договор», «дата
+          -- регистрации контрагента» отвечать было нечем. `doc_date` по-прежнему одна:
+          -- она про фильтр по периоду, а текст — про то, что человек может спросить.
+          (c.kind = 'date') AS is_date,
+          (SELECT 1 FROM tmp3_datecol   d WHERE d.tbl=$1 AND d.col=u.col) AS is_dt
+   FROM cells u JOIN tmp3_cls c ON c.tbl=$1 AND c.col=u.col
+   -- 🔴 СОЕДИНЯЕМСЯ ТОЛЬКО С GUID-ОБРАЗНЫМИ ЗНАЧЕНИЯМИ. Прежде ключом соединения было
+   -- ЛЮБОЕ значение ячейки. Два следствия, оба плохие:
+   --   1) движок хеширует все ячейки подряд (миллионы) против 39 тыс. записей карты —
+   --      лишняя работа на каждой сущности;
+   --   2) 🔴 значение с БИТОЙ КОДИРОВКОЙ роняет соединение целиком:
+   --      `Invalid unicode (byte sequence mismatch) detected in value construction`.
+   --      [замер 28.07, вторая база] на `catalog_правилаинтеграциис1сдокументооборотом`
+   --      это убивало сборку ВСЕЙ сущности, а с `ON_ERROR_STOP on` — и весь такт.
+   --      Проверено: исходное значение соединяется, а после нашей же обрезки
+   --      `substr(…,1,20000)` — падает. То есть дефект наш, а не данных: на первой базе
+   --      он просто не стрелял, потому что там не было таких значений.
+   -- GUID по определению ASCII, поэтому битые байты до хеша не доходят вовсе.
+   -- Ссылкой может быть ТОЛЬКО GUID — значит сужение не теряет ни одной связи.
+   LEFT JOIN tmp3_refmap r
+          ON r.guid = CASE WHEN regexp_full_match(u.val,
+               '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
+             THEN u.val END
+   -- 🔴 У ССЫЛОЧНОГО ОБЪЕКТА ПОЛЯ ВЛОЖЕННОГО ТИПА В ТЕКСТ НЕ ИДУТ.
+   -- Вложенная табличная часть разворачивается загрузчиком в ту же таблицу, и её колонки
+   -- (`LineNumber`, номенклатура, количество…) попадали в текст объекта, размножая строки:
+   -- [замер 29.07] партнёров 216 строк на 164 объекта, раздуто 85 сущностей / 9 155 строк.
+   -- Бот отвечал «216 партнёров» вместо 164, и гейт это пропускал: 216 действительно
+   -- посчитано базой — посчитано не то.
+   -- Эти колонки НЕ теряются: табличная часть — отдельная сущность 1С, она загружена и в
+   -- корпусе есть у всех затронутых родителей (проверено).
+   -- Признак `own_prop` считается один раз в `tmp3_cls`; ключевые колонки не отбрасываются
+   -- никогда — иначе рассыпется тождество строки.
+   -- У обёрток наборов записей (регистры, ключ ≠ `['Ref_Key']`) поведение прежнее: там
+   -- вложенные строки и есть данные, [замер] сворачивание занизило бы число проводок вдвое.
+   -- 🔴 ВЫБРАСЫВАЕМ ТОЛЬКО ТО, ЧТО ЕСТЬ ГДЕ ВЗЯТЬ. Колонки вложенного типа убираются из
+   -- текста объекта лишь при условии, что сама вложенная сущность ЗАГРУЖЕНА и есть в
+   -- источниках. Иначе это не перенос, а потеря.
+   -- [замер 30.07] на второй базе дочерняя есть у всех затронутых — и я этого условия не
+   -- увидел. На ПЕРВОЙ базе из 41 затронутой сущности у **25 дочерней нет вовсе**: без
+   -- условия их колонки исчезли бы из текста, а взять их было бы негде.
+   -- Одна база снова умолчала о случае, которого в ней нет.
+   -- `coalesce(own_prop, true)` — БЕЗОПАСНОЕ НАПРАВЛЕНИЕ. `own_prop` считается через
+   -- LEFT JOIN, и у колонки, которую не объявлял НИКТО, он NULL. Без `coalesce` всё
+   -- выражение давало NULL, и `WHERE` выбрасывал ячейку — то есть терялось ровно то, про
+   -- что неизвестно, где его взять. Считаем такую колонку своей: лишний текст дешевле
+   -- потери.
+   WHERE u.val <> ''
+     AND NOT (coalesce(c.own_ref, false) AND NOT coalesce(c.own_prop, true)
+              AND list_position((SELECT key_cols FROM kc), u.col) IS NULL
+              AND (SELECT on_ FROM fold)
+              -- Проверяем ИМЕННО ту сущность, что объявила колонку.
+              AND EXISTS (SELECT 1 FROM tmp3_src s2 WHERE lower(s2.tbl) = c.decl_entity))),
+ pieces AS (
+   SELECT rid, ord, keypos, val, is_guid, refname, refowner, own_ref, col, is_num, is_measure, is_flag, is_dt, is_date,
+     CASE WHEN is_guid AND col='Ref_Key' AND own_ref THEN NULL
+          WHEN is_guid AND refname IS NOT NULL THEN replace(col,'_Key','') || ': ' || refname
+          WHEN is_guid THEN NULL
+          WHEN is_num AND corpus_cell_num(val) IS NOT NULL THEN col || ': ' ||
+               CASE WHEN corpus_cell_num(val) = floor(corpus_cell_num(val))
+                    THEN printf('%d', try_cast(val AS BIGINT))
+                    ELSE printf('%.2f', corpus_cell_num(val)) END
+          -- Незаполненная дата приезжает из 1С как `0001-01-01` — это НЕ дата, а пустое
+          -- место, и в тексте ему делать нечего.
+          WHEN is_date THEN nullif(col || ': ' || substr(val,1,10), col || ': 0001-01-01')
+          WHEN in_text THEN col || ': ' || val
+          ELSE NULL END AS piece,
+     CASE WHEN is_guid THEN 0 WHEN is_num THEN 2 WHEN is_date THEN 3 ELSE 1 END AS prio
+   FROM j)
+-- 🔴 ДВА УРОВНЯ, А НЕ ОДИН. `QUALIFY` не может ссылаться на ключ, который сам считается
+-- оконной функцией: движок отвечает `window function calls cannot be nested`. Ключ
+-- строится на внутреннем уровне, выбор одной строки на объект — на внешнем.
+-- 🔴 ДАЖЕ С ОТПЕЧАТКОМ ТЕКСТА КЛЮЧ МОЖЕТ ПОВТОРИТЬСЯ: у развёрнутых строк одного
+-- регистратора текст бывает одинаков целиком (две одинаковые строки табличной части —
+-- в 1С их различает LineNumber, а у текста различия нет). [замер 15.08, okna-1] после
+-- починки дедупа приёмника (строки табчастей доезжают все) слияние остановила защита:
+-- 17 269 дублей ключа в tmp3_corpus. Схлопывать такие строки нельзя (п. 13): это
+-- разные движения, и в суммах нужны обе. Ключ дополняется порядковым номером по
+-- полному детерминированному порядку — набор ключей стабилен между тактами, пока
+-- стабильны данные, и обе строки остаются в корпусе.
+SELECT src_table, rk, doc, refs, nums, flags, dt AS doc_date, refs_map, refs_own
+FROM (
+SELECT src_table, coalesce(row_key, sha1(doc)) AS rk, doc, refs, nums, flags, dt, refs_map, refs_own
+FROM (
+  SELECT $1::VARCHAR AS src_table,
+         coalesce(any_value(k.row_key),
+                  max(val) FILTER (is_guid AND col='Ref_Key' AND own_ref)) AS row_key,
+         regexp_replace($1,'^[^_]*_','') || coalesce(' | ' || string_agg(piece,' | ' ORDER BY prio, ord)
+                                                     FILTER (piece IS NOT NULL), '') AS doc,
+         coalesce(string_agg(piece,' | ' ORDER BY ord) FILTER (is_guid AND refname IS NOT NULL), '') AS refs,
+         map_from_entries(list({'key': col, 'value': corpus_cell_num(val)} ORDER BY col)
+                          FILTER (is_measure AND corpus_cell_num(val) IS NOT NULL)) AS nums,
+         coalesce(map_from_entries(list({'key': col, 'value': try_cast(val AS BOOLEAN)} ORDER BY col)
+                          FILTER (is_flag AND try_cast(val AS BOOLEAN) IS NOT NULL)),
+                  MAP{}::MAP(VARCHAR, BOOLEAN)) AS flags,
+         coalesce(map_from_entries(list({'key': replace(col,'_Key',''),
+                                         'value': coalesce(refname, val)} ORDER BY col)
+                          FILTER (is_guid AND col <> 'Ref_Key'
+                                  AND coalesce(val,'') <> ''
+                                  AND val <> '00000000-0000-0000-0000-000000000000')),
+                  MAP{}::MAP(VARCHAR, VARCHAR)) AS refs_map,
+         coalesce(map_from_entries(list({'key': replace(col,'_Key',''),
+                                         'value': refowner} ORDER BY col)
+                          FILTER (is_guid AND col <> 'Ref_Key'
+                                  AND refowner IS NOT NULL AND refowner <> '')),
+                  MAP{}::MAP(VARCHAR, VARCHAR)) AS refs_own,
+         max(nullif(try_cast(val AS TIMESTAMP), TIMESTAMP '0001-01-01 00:00:00'))
+             FILTER (is_dt IS NOT NULL) AS dt
+  FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g) h;
+
+
 PREPARE p_doc_finalize AS
 INSERT INTO tmp3_corpus
 WITH chk AS (
@@ -2071,10 +2405,16 @@ stage_gate AS (
   SELECT CASE
     WHEN (SELECT stage_rows FROM stage_chk) = 0
     THEN error('p_doc_finalize: пустой stage для ' || $1)
-    WHEN NOT (SELECT on_ FROM fold)
-         AND (SELECT stage_rows FROM stage_chk)
-             <> coalesce((SELECT nrows FROM prog), -1)
+    WHEN (SELECT stage_rows FROM stage_chk)
+         <> coalesce((SELECT nrows FROM prog), -1)
     THEN error('p_doc_finalize: stage rows <> nrows для ' || $1)
+  END
+),
+tail_gate AS (
+  SELECT CASE
+    WHEN EXISTS (SELECT 1 FROM tmp3_pdoc_tail t WHERE t.tbl = $1)
+     AND NOT EXISTS (SELECT 1 FROM tmp3_pdoc_tail_done d WHERE d.tbl = $1)
+    THEN error('p_doc_finalize: хвост коллизий не собран для ' || $1)
   END
 ),
 base AS (
@@ -2109,6 +2449,7 @@ SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_
 FROM fin
 CROSS JOIN chk
 CROSS JOIN stage_gate
+CROSS JOIN tail_gate
 QUALIFY NOT (SELECT on_ FROM fold)
      OR row_number() OVER (PARTITION BY src_table, row_key ORDER BY doc, refs, doc_hash) = 1;
 
@@ -2195,6 +2536,15 @@ SELECT stmt FROM (
 ) z ORDER BY tbl, lo, ord
 \gexec
 
+-- Хвост+маркер — одна multi-statement посылка (неявная транзакция; Multi-Statement Transactions): без явного BEGIN.
+SELECT 'EXECUTE p_doc_tail(' || quote_literal(t.tbl)
+    || '); INSERT INTO tmp3_pdoc_tail_done VALUES (' || quote_literal(t.tbl) || ');'
+FROM (SELECT DISTINCT tbl FROM tmp3_pdoc_tail) t
+WHERE NOT EXISTS (SELECT 1 FROM tmp3_pdoc_tail_done d WHERE d.tbl = t.tbl)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus c WHERE c.src_table = t.tbl)
+  AND EXISTS (SELECT 1 FROM tmp3_pdoc_chunks c WHERE c.tbl = t.tbl)
+\gexec
+
 SELECT 'EXECUTE p_doc_finalize(' || quote_literal(f.tbl) || ');'
 FROM (
   SELECT c.tbl, p.nrows, max(p.rid_hi) AS rid_hi,
@@ -2214,6 +2564,10 @@ WHERE s.src_table = c.tbl
   AND EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = c.tbl);
 DELETE FROM tmp3_pdoc_progress p
 WHERE EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = p.tbl);
+DELETE FROM tmp3_pdoc_tail t
+WHERE EXISTS (SELECT 1 FROM tmp3_corpus c WHERE c.src_table = t.tbl);
+DELETE FROM tmp3_pdoc_tail_done d
+WHERE EXISTS (SELECT 1 FROM tmp3_corpus c WHERE c.src_table = d.tbl);
 \set ON_ERROR_STOP on
 
 -- Второй заход: то, что не собралось, — упрощённым вариантом.
