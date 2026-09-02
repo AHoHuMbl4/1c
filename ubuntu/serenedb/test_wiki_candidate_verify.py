@@ -261,7 +261,6 @@ def main() -> int:
     t("mock two yes clarify", vfy2.get("outcome") == "clarify")
 
     # интеграция try_wiki: verify перекрывает pick-none
-    z21["ASK_WIKI_CHOICE"] = True
     z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(2)
     pick_calls = []
     verify_payload = []
@@ -385,7 +384,6 @@ def main() -> int:
 
     _real_wmc = z21["wiki_measure_carried"]
     z21["psql"] = _psql_measures
-    z21["ASK_WIKI_CHOICE"] = True
     z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(1)
     z21["wiki_validate_leader_axes"] = lambda *a, **k: True
     z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [

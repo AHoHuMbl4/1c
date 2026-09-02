@@ -6,7 +6,6 @@ from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
 
-ASK_WIKI_CHOICE = os.environ.get("ASK_WIKI_CHOICE", "0") == "1"
 WIKI_KNN_N = int(os.environ.get("WIKI_KNN_N", "15"))
 # [01.09] Пул шире паспортов: структурные слагаемые (словарь/мера) ГАРАНТИРУЮТ
 # присутствие, но не должны вытеснять близких kNN-соседей (замер: карточка
@@ -659,35 +658,33 @@ def wiki_pick_from_cards(question, intent, cards, diag=None):
 
 def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
                                 by, match, preds, counts_for_model, plan=None):
-    """Wiki-first entity pick; manual balance/event/count_theme only on fallback.
+    """Wiki entity pick — единственный путь выбора сущности.
 
-    [01.09] Вики — ПЕРВАЯ ступень для всех вопросов (схема владельца
-    PLAN_WIKI_CHOICE: вход — LLM+вики понимает вопрос). Замки продаж/регистра
-    ставятся ЗДЕСЬ, ПОСЛЕ вики-попытки, как fallback — раньше они стояли в z20
-    выше каскада и перехватывали выбор до вики (замер: «Сколько валют?»
-    уходил в накопregister_импорттмц замком регистра по стиху «валют» в его
-    мерах). Уже поставленные замки (поздний продажный канон и др.) — по-прежнему
-    уважаются первой проверкой.
+    [01.09] Вики — первая и единственная ступень (схема владельца
+    PLAN_WIKI_CHOICE: вход — LLM+вики понимает вопрос). Обходные
+    manual-выборы вырезаны. Если wiki вернула None без своего wiki_pick —
+    в diag ставится wiki_pick=fallback (деградация wiki: пустая таблица,
+    пустой пул, сбой verify), дальше честный no_data. Уже поставленный
+    sales_canon_locked уважается первой проверкой.
     """
     picked, marks, plan = [], {}, plan or {}
     if diag.get("sales_canon_locked"):
         return {"picked": [diag["sales_canon_locked"]], "marks": {},
                 "plan": plan}
     _wiki_skip_manual = False
-    if ASK_WIKI_CHOICE:
-        _wiki = try_wiki_hybrid_entity_pick(
-            question, intent, diag, cut, t0,
-            by=by, match=match, preds=preds)
-        if (_wiki and _wiki.get("kind") in ("no_data", "clarify", "answer")
-                and not diag.get("sales_canon_locked")):
-            return _wiki
-        if _wiki and _wiki.get("picked") and not picked:
-            picked = _wiki["picked"]
-            marks = _wiki.get("marks") or {}
-            plan = _wiki.get("plan") or {}
-            diag["wiki_hybrid_pick"] = True
-        elif _wiki is None and not diag.get("wiki_pick"):
-            diag["wiki_pick"] = "fallback"
+    _wiki = try_wiki_hybrid_entity_pick(
+        question, intent, diag, cut, t0,
+        by=by, match=match, preds=preds)
+    if (_wiki and _wiki.get("kind") in ("no_data", "clarify", "answer")
+            and not diag.get("sales_canon_locked")):
+        return _wiki
+    if _wiki and _wiki.get("picked") and not picked:
+        picked = _wiki["picked"]
+        marks = _wiki.get("marks") or {}
+        plan = _wiki.get("plan") or {}
+        diag["wiki_hybrid_pick"] = True
+    elif _wiki is None and not diag.get("wiki_pick"):
+        diag["wiki_pick"] = "fallback"
     # 🔴 [01.09, требование владельца: «физически один путь»] Обходных
     # выборов сущности больше НЕ СУЩЕСТВУЕТ: замки продаж/регистра/прайса,
     # stock-takeover, баланс/событие/тема-коды, выбор по реранку — вырезаны.
@@ -916,8 +913,6 @@ def _wiki_clarify_collapse_answer(question, intent, tied, match, preds, diag,
 def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
                                 by=None, match="", preds=None):
     """Единая точка интеграции для z20."""
-    if not ASK_WIKI_CHOICE:
-        return None
     if diag is None:
         diag = {}
     diag["wiki_attempted"] = True

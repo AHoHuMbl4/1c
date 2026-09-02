@@ -97,23 +97,18 @@ def main() -> int:
     t("z21_wiki_choice.py exists", Z21.is_file())
 
     import os as _os
-    _saved = {k: _os.environ.pop(k, None) for k in ("ASK_WIKI_CHOICE",)}
+    _os.environ.setdefault("ASK_TOKEN", "test")
+    _os.environ.setdefault("EMBED_BASE_URL", "-")
+    _os.environ.setdefault("EMBED_MODEL", "-")
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
+    import serene_ask as _sa
     try:
-        _os.environ.setdefault("ASK_TOKEN", "test")
-        _os.environ.setdefault("EMBED_BASE_URL", "-")
-        _os.environ.setdefault("EMBED_MODEL", "-")
-        if str(ROOT) not in sys.path:
-            sys.path.insert(0, str(ROOT))
-        import serene_ask as _sa
-        t("bootstrap ASK_WIKI_CHOICE defined", hasattr(_sa, "ASK_WIKI_CHOICE"))
-        t("bootstrap try_wiki branch off no NameError",
-          _sa.try_wiki_hybrid_entity_pick("сколько петель", {}, {}, None, 0) is None)
-    finally:
-        for k, v in _saved.items():
-            if v is None:
-                _os.environ.pop(k, None)
-            else:
-                _os.environ[k] = v
+        _sa.try_wiki_hybrid_entity_pick("сколько петель", {}, {}, None, 0)
+        _live_ok = True
+    except NameError:
+        _live_ok = False
+    t("try_wiki live call no NameError", _live_ok)
 
     z21 = load_z21()
 
@@ -231,7 +226,6 @@ def main() -> int:
     t("inseparable clarify", pick_cl.get("outcome") == "clarify")
 
     # stock override: wiki clarify → stock_canon
-    z21["ASK_WIKI_CHOICE"] = True
     z21["stock_question_engaged"] = lambda *a, **k: True
     z21["stock_canon_src"] = lambda *a, **k: "accumulationregister_stock"
     z21["try_wiki_hybrid_entity_pick"] = lambda *a, **k: {
@@ -248,7 +242,6 @@ def main() -> int:
       diag_so.get("stock_canon_locked") == "accumulationregister_stock")
 
     # wiki leader catalog + stock engaged → override register, not hybrid_pick
-    z21["ASK_WIKI_CHOICE"] = True
     z21["stock_question_engaged"] = lambda *a, **k: True
     z21["stock_canon_src"] = lambda *a, **k: "accumulationregister_stock"
     z21["try_wiki_hybrid_entity_pick"] = lambda *a, **k: {
@@ -261,7 +254,6 @@ def main() -> int:
       and diag_cat.get("wiki_hybrid_pick") is True
       and diag_cat.get("wiki_pick") != "stock_override")
 
-    t("ASK_WIKI_CHOICE flag exists", "ASK_WIKI_CHOICE" in z21)
     t("wiki_primary_entity_cascade exists",
       "wiki_primary_entity_cascade" in z21)
     t("cascade has wiki_skip_manual guard",
@@ -294,7 +286,6 @@ def main() -> int:
     t("z20 disk has cascade call (on disk since 01.09)",
       "wiki_primary_entity_cascade(" in z20_raw)
 
-    z21["ASK_WIKI_CHOICE"] = True
     z21["stock_question_engaged"] = lambda *a, **k: False
     z21["stock_canon_src"] = lambda *a, **k: None
     def _wiki_none_with_pool(q, intent, diag, cut, t0, **kw):
