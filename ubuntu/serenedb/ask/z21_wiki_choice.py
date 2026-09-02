@@ -603,7 +603,7 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
         _wiki = try_wiki_hybrid_entity_pick(
             question, intent, diag, cut, t0,
             by=by, match=match, preds=preds)
-        if (_wiki and _wiki.get("kind") in ("no_data", "clarify")
+        if (_wiki and _wiki.get("kind") in ("no_data", "clarify", "answer")
                 and not diag.get("sales_canon_locked")):
             return _wiki
         if _wiki and _wiki.get("picked") and not picked:
@@ -631,6 +631,123 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
                 "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
                                    reason=_reason)}
     return {"picked": picked, "marks": marks, "plan": plan}
+
+
+
+def _wiki_agg_figure_num(agg, measure):
+    """Branch figure for tied compare (same priority as figures_numbers)."""
+    if not agg:
+        return None
+    if measure:
+        v = agg.get("sum")
+        if v is None and int(agg.get("count") or 0) == 0:
+            v = 0.0
+    else:
+        v = agg.get("count")
+    if v is None:
+        return None
+    try:
+        return round(float(v), 2)
+    except (TypeError, ValueError):
+        return None
+
+
+def _wiki_clarify_collapse_answer(question, intent, tied, match, preds, diag,
+                                  cut, t0, lab_by):
+    """Equal measured totals across tied src_table -> kind=answer."""
+    g = globals()
+    aggregate_fn = g.get("aggregate")
+    if not callable(aggregate_fn):
+        return None
+    pick_measure_fn = g.get("pick_measure")
+    measure_word = _intent_text((intent or {}).get("measure"))
+    rows = []
+    for src in tied:
+        measure = None
+        if measure_word:
+            if not callable(pick_measure_fn):
+                diag["wiki_clarify_collapsed"] = "unresolved"
+                return None
+            measure, _alts, _how = pick_measure_fn(src, question, measure_word)
+            if not measure:
+                diag["wiki_clarify_collapsed"] = "unresolved"
+                return None
+        try:
+            agg = aggregate_fn(src, match or "", preds or [], measure)
+        except RuntimeError:
+            diag["wiki_clarify_collapsed"] = "unresolved"
+            return None
+        num = _wiki_agg_figure_num(agg, measure)
+        if num is None:
+            diag["wiki_clarify_collapsed"] = "unresolved"
+            return None
+        rows.append((src, measure, agg, num))
+    nums = {r[3] for r in rows}
+    if len(nums) > 1:
+        diag["wiki_clarify_collapsed"] = "differ"
+        return None
+    diag["wiki_clarify_collapsed"] = "equal"
+    _src0, measure, agg, _num = rows[0]
+    want = (intent or {}).get("want")
+    plan = {}
+    answer_slot_mode_fn = g.get("answer_slot_mode")
+    atom_operation_fn = g.get("atom_operation")
+    measure_label_of_fn = g.get("measure_label_of")
+    atom_from_agg_fn = g.get("atom_from_agg")
+    _passport_origin_fn = g.get("_passport_origin")
+    split_ident_fn = g.get("split_ident")
+    render_atom_pair_fn = g.get("render_atom_pair")
+    _fmt_fn = g.get("_fmt")
+    _fork_figures_of_fn = g.get("_fork_figures_of")
+    needed = (answer_slot_mode_fn, atom_operation_fn, measure_label_of_fn,
+              atom_from_agg_fn, _passport_origin_fn, split_ident_fn,
+              render_atom_pair_fn, _fork_figures_of_fn)
+    if not all(callable(f) for f in needed):
+        diag["wiki_clarify_collapsed"] = "unresolved"
+        return None
+    slot_mode = answer_slot_mode_fn(want, plan.get("compute"))
+    money = bool(measure)
+    _form = (agg or {}).get("form") or "number"
+    _grain = (agg or {}).get("grain") or "row"
+    op = atom_operation_fn(want, plan.get("compute"), form=_form, grain=_grain,
+                           slot_mode=slot_mode)
+    if not measure:
+        op = "count"
+    say_measure = measure
+    mlabel = (measure_label_of_fn(_src0, say_measure) if say_measure
+              else measure_label_of_fn(_src0, None))
+    atom = atom_from_agg_fn(
+        agg, operation=op,
+        measure_id=(say_measure or None),
+        measure_label=mlabel,
+        money=money,
+        period=(None if diag.get("period_assumed_dropped")
+                else (intent or {}).get("period")),
+        period_origin=_passport_origin_fn(intent, diag),
+        grain=_grain, form=_form,
+        axis=None, completeness=None,
+        folders=(agg or {}).get("folders") or 0,
+        src=None)
+    atom = dict(atom)
+    atom.pop("src", None)
+    mid = atom.get("measure_id")
+    if mid:
+        atom["measure_label"] = split_ident_fn(mid) or mid
+    text = render_atom_pair_fn(atom) or (_fmt_fn(atom.get("exact_value"))
+                                         if atom.get("exact_value") is not None
+                                         else "")
+    if not (text or "").strip():
+        diag["wiki_clarify_collapsed"] = "unresolved"
+        return None
+    figs = _fork_figures_of_fn(atom)
+    sources = [lab_by.get(s) or s.split("_", 1)[-1] for s in tied]
+    sources = [s for s in sources if s]
+    return {"partial": cut or None, "kind": "answer", "text": text,
+            "figures": figs, "atom": atom, "atoms": [atom],
+            "source_fixed": False, "memory_eligible": False,
+            "sources": sources,
+            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                               reason="wiki_separability_collapsed")}
 
 
 def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
@@ -702,6 +819,10 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
             lab_by = {}
         opts = mk_opts(tied, lab_by, {}, by or {}, match=match or "", preds=preds or [])
         if len(opts) >= 2:
+            collapsed = _wiki_clarify_collapse_answer(
+                question, intent, tied, match, preds, diag, cut, t0, lab_by)
+            if collapsed:
+                return collapsed
             return {"partial": cut or None, "kind": "clarify",
                     "text": clarify_say(question, opts, diag)
                             or ", ".join("«%s»" % o["label"] for o in opts),

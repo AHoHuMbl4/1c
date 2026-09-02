@@ -1,3 +1,22 @@
+## 2026-09-02 — Класс 6: исход A — равные числа по веткам clarify → ответ числом
+
+**[код]** По контракту владельца (исход A: «одно число, разный src → человеку
+число, люк не открывать»): в точке wiki-clarify (z21, `wiki_separability`)
+перед показом чипов код считает спрошенную меру по каждой tied-ветке
+(`pick_measure` z16:589 → `aggregate` z17:231, те же match/preds каскада).
+Все ветки дали одно число (включая все 0.00) → `kind=answer` сразу
+(`render_atom_pair`, `source_fixed=False`, `memory_eligible=False`, src в
+память не пишется — контракт). Числа разные, мера не разрешилась, ошибка
+SQL → чипы как раньше. След: `diag["wiki_clarify_collapsed"]` =
+equal/differ/unresolved. Карта точек — армия 4×2 cursor (сошлась).
+**Числа:** замки оркестратором: verify 36/0, hybrid 65/0, k4_meta 12/0,
+step4 110/0, fork 51/0, period_empty 30/0, compose 92/0, decision_id 30/0,
+terminal_round 24/0; test_focus_loop — ModuleNotFoundError mcp (среда
+оркестратора, без модуля; до правки то же). Полный прогон 67 — L18 после
+выката.
+**Доки:** TARGET.md п. 12/19/21; карты путей entity-clarify — .claude/state
+(result-rm6-map*, 10 путей, бэклог за пределами wiki-точки).
+
 ## 2026-09-02 — Класс 5: одиночная карточка тоже проходит верификацию
 
 **[код]** По решению владельца 02.09 из `wiki_verify_candidates` (z21) удалена
