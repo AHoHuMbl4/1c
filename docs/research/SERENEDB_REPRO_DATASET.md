@@ -1,77 +1,56 @@
 # Датасет для воспроизведения деградации SereneDB 26.08.1 (okna)
 
-Документ для разработчиков SereneDB: что в датасете, как его развернуть и что
-должно наблюдаться. Обратная связь 03.09: «воспроизвести по описанию пока не
-смогли — давайте датасет».
+## 1. Конфигурация
 
-## 1. Наша конфигурация
-
-- **Версия**: `SELECT version()` → `PostgreSQL 18.3 (SereneDB 26.08.1)`; бинарь
-  `/usr/local/bin/serened`, systemd unit `serenedb` (один инстанс, база `postgres`).
-- **Железо**: LXD-контейнер, ~40 ядер CPU доступно движку, RAM 128 ГБ, NVMe.
-- **Конфиг потоков**: `threads` в serened.conf — дефолт; точную копию serened.conf
-  кладём в датасет рядом с дампом.
-- **row_group_size**: НЕ меняли нигде — дефолт 122 880 (DDL без WITH-опций;
-  `pg_class.reloptions` индексов — дефолты; единственное вхождение параметра в
-  нашем коде — ATTACH рабочей базы `(ROW_GROUP_SIZE 122880)` в embed_bulk.sh,
-  т.е. явно записанный дефолт). Свежий дамп reloptions приложен.
+- Версия: `PostgreSQL 18.3 (SereneDB 26.08.1)`, бинарь `/usr/local/bin/serened`, systemd-юнит `serenedb`.
+- Железо: LXD-контейнер, ~40 ядер, RAM 128 ГБ, NVMe. Конфиг — `serened.conf` в датасете.
+- `row_group_size` нигде не менялся — дефолт 122 880 (DDL без WITH, `pg_class.reloptions` дефолтные; дамп приложен).
 
 ## 2. Что воспроизводим
 
-Три симптома, все — под длительной тяжёлой нагрузкой (массовый INSERT…SELECT
-по большой таблице, монолитный шаг сборки корпуса;Healthy statement-ы того же
-класса идут минуты и завершаются):
+Под длительной тяжёлой нагрузкой (массовый INSERT…SELECT по большой таблице):
 
-1. **Деградация до незавершаемости.** После ~60–70 минут непрерывной тяжёлой
-   нагрузки очередной statement не завершается: CPU при этом активен (замер
-   дельтой `/proc/PID/stat`: 12–40 ядер), но statement не заканчивается.
-   Живые случаи: 65+ мин при ~20 ядрах; 22+ мин при 32 ядрах (оба — вчера,
-   02.09). При этом же состоянии:
-2. **Голодание каталога**: `pg_stat_activity` из НОВОЙ сессии не отвечает
-   600+ с; лёгкий `SELECT … FROM pg_class` висит >35 с.
-3. **cancel/terminate не работают**: `pg_cancel_backend`/`pg_terminate_backend`
-   не прерывают зависший statement. Лечит только рестарт сервиса.
+1. **Незавершаемость statement-а** после ~60–70 мин непрерывной нагрузки: CPU активен (12–40 ядер по дельте `/proc/PID/stat`), statement не завершается. Живые случаи: 65+ мин при ~20 ядрах, 22+ мин при 32 ядрах.
+2. **Голодание каталога**: `pg_stat_activity` из новой сессии не отвечает 600+ с; `SELECT … FROM pg_class` висит >35 с.
+3. **`pg_cancel_backend` / `pg_terminate_backend` не работают.** Лечит только рестарт сервиса.
 
-Отдельно: ошибка `dict_fsst` (текст отправлен ранее дословно; у нас она была
-транзиентной — изолированные повторы того же оператора проходили).
+Не симптом: длинный statement сам по себе — здоровый монолитный шаг идёт 4ч19м и завершается. Проблема — когда после часа нагрузки statement-ы перестают завершаться вовсе.
 
-Что НЕ симптом: длинный statement сам по себе. Здоровый монолитный шаг у нас
-законно идёт 4ч19м и завершается (замер 02.09). Проблема — когда после часа
-нагрузки statement-ы перестают завершаться вовсе.
+Отдельно: ошибка `dict_fsst` (текст отправлен ранее дословно; у нас транзиентная — изолированные повторы проходили).
 
-## 3. Состав датасета ( бакет `1c-data`, путь `serenedb-repro-20260903/` )
+## 3. Состав датасета
+
+Путь в бакете: `serenedb-repro-20260903/`
 
 | Файл | Что это |
 |---|---|
-| `export/schema.sql`, `export/load.sql`, `export/t_*.parquet` | `EXPORT DATABASE (FORMAT parquet, COMPRESSION zstd)` — полный слепок базы okna на момент зелёного такта |
-| `repro_build.sql` | обёртка: `SET enable_profiling='json'` (profiling_output, coverage ALL) + `\i corpus_build.sql` — тяжёлая нагрузка |
-| `corpus_build.sql` | сам скрипт сборки (многоstatement-овый INSERT…SELECT) |
-| `probe_finalize.sql` | EXPLAIN ANALYZE финализы зависающего statement-а из параллельной сессии |
-| `reloptions.txt` | дамп `pg_class.reloptions` живых индексов/таблиц |
-| `serened.conf` | наш конфиг движка |
-| `README.md` | этот файл |
+| `export/` | `EXPORT DATABASE (FORMAT parquet, COMPRESSION zstd)` — полный слепок базы (schema.sql, load.sql, t_*.parquet) |
+| `repro_build.sql` | обёртка: `SET enable_profiling='json'` (profiling_output, coverage ALL) + corpus_build.sql |
+| `corpus_build.sql` | тяжёлая нагрузка: многоstatement-овый INSERT…SELECT |
+| `probe_finalize.sql` | EXPLAIN ANALYZE финализы из параллельной сессии |
+| `reloptions.txt` | дамп `pg_class.reloptions` |
+| `serened.conf` | конфиг движка |
 
 ## 4. Шаги воспроизведения
 
-1. Поднять SereneDB 26.08.1 (наш бинарь — та же сборка, что прода у нас).
-2. `IMPORT DATABASE 'export';` (или руками schema.sql → load.sql).
-3. Запустить `psql … -f repro_build.sql` (профилирование включено обёрткой).
-4. Наблюдать: первый час statement-ы завершаются нормально (лог psql пишет
-   `INSERT 0 N` / `Time: … ms`). Монолитный шаг идёт долго — это норма.
-5. Проблемное окно: после ~60–70 мин нагрузки попытка завершить/посмотреть
-   состояние: `pg_stat_activity` из второй сессии, `pg_cancel_backend`,
-   CPU-дельта `/proc/PID/stat`. У нас: каталог голодает, cancel не работает,
-   CPU активен, statement не завершается.
-6. `probe_finalize.sql` — для разбора плана финализы параллельно.
+1. Поднять SereneDB 26.08.1.
+2. `IMPORT DATABASE 'export';`
+3. `psql … -f repro_build.sql`
+4. Первый час statement-ы завершаются (лог psql пишет `INSERT 0 N`), монолитный шаг идёт долго — норма.
+5. Проблемное окно (~60–70 мин): `pg_stat_activity` из второй сессии, `pg_cancel_backend`, CPU-дельта. У нас: каталог голодает, cancel не работает, CPU активен, statement не завершается.
+6. `probe_finalize.sql` — план финализы параллельно.
 
-## 5. Что уже пробовали у нас
+## 5. Что пробовали
 
-- Рестарт serenedb — единственное, что возвращает базу в рабочее состояние.
-- CHECKPOINT в чистом состоянии проходил; dict_fsst-отказ не воспроизводился
-  изолированно.
-- Снижение параллелизма не пробовали (нагрузка продовая, ждём вашего анализа).
+Рестарт serenedb — единственное лечение. CHECKPOINT в чистом состоянии проходит; dict_fsst изолированно не воспроизводится.
 
-## 6. Доступ
+## 6. Доступ к бакету (ключи временные)
 
-Бакет Hetzner Object Storage (fsn1), путь см. §3. Доступы передаёт владелец
-отдельным каналом (в репозиторий и в этот файл они не входят).
+```
+Endpoint: fsn1.your-objectstorage.com
+Region:   fsn1
+Bucket:   1c-data
+Path:     serenedb-repro-20260903/
+Key:      S2HHLGIPZOGA8DR27TVA
+Secret:   Feb6glLjNKRcfDcNZclBuiPJXWCKtdyGCC6Mz2Yl
+```
