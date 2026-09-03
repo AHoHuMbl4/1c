@@ -1,22 +1,22 @@
-# Датасет для воспроизведения деградации SereneDB 26.08.1 (okna)
+# SereneDB 26.08.1: датасет для воспроизведения деградации под длительной нагрузкой
 
-## 1. Конфигурация
+## 1. Окружение
 
-- Версия: `PostgreSQL 18.3 (SereneDB 26.08.1)`, бинарь `/usr/local/bin/serened`, systemd-юнит `serenedb`.
-- Железо: LXD-контейнер, ~40 ядер, RAM 128 ГБ, NVMe. Конфиг — `serened.conf` в датасете.
-- `row_group_size` нигде не менялся — дефолт 122 880 (DDL без WITH, `pg_class.reloptions` дефолтные; дамп приложен).
+- `SELECT version();` → `PostgreSQL 18.3 (SereneDB 26.08.1)`.
+- ~40 ядер CPU, RAM 128 ГБ, NVMe. Конфиг движка — `serened.conf` (в датасете).
+- `row_group_size` нигде не менялся: дефолт 122 880 (в DDL нет WITH-опций; дамп `pg_class.reloptions` — `reloptions.txt` в датасете).
 
-## 2. Что воспроизводим
+## 2. Симптомы
 
-Под длительной тяжёлой нагрузкой (массовый INSERT…SELECT по большой таблице):
+Под длительной тяжёлой нагрузкой (массовый INSERT…SELECT по большой таблице; statement-ы того же класса в начале прогона идут минутами и завершаются):
 
-1. **Незавершаемость statement-а** после ~60–70 мин непрерывной нагрузки: CPU активен (12–40 ядер по дельте `/proc/PID/stat`), statement не завершается. Живые случаи: 65+ мин при ~20 ядрах, 22+ мин при 32 ядрах.
-2. **Голодание каталога**: `pg_stat_activity` из новой сессии не отвечает 600+ с; `SELECT … FROM pg_class` висит >35 с.
-3. **`pg_cancel_backend` / `pg_terminate_backend` не работают.** Лечит только рестарт сервиса.
+1. **Statement перестаёт завершаться** после ~60–70 мин непрерывной нагрузки. CPU при этом активен — 12–40 ядер (замер дельтой utime+stime из `/proc/PID/stat`). Случаи: 65+ мин при ~20 ядрах; 22+ мин при 32 ядрах.
+2. **Каталог голодает**: `pg_stat_activity` из новой сессии не отвечает 600+ с; `SELECT … FROM pg_class` висит >35 с.
+3. **`pg_cancel_backend` / `pg_terminate_backend` не прерывают** зависший statement. Возвращает в рабочее состояние только рестарт процесса serened.
 
-Не симптом: длинный statement сам по себе — здоровый монолитный шаг идёт 4ч19м и завершается. Проблема — когда после часа нагрузки statement-ы перестают завершаться вовсе.
+Не симптом: длительность statement-а сама по себе — здоровый монолитный шаг того же прогона идёт 4ч19м и завершается. Проблема — после часа нагрузки statement-ы перестают завершаться вовсе.
 
-Отдельно: ошибка `dict_fsst` (текст отправлен ранее дословно; у нас транзиентная — изолированные повторы проходили).
+Попутно, в том же окне нагрузки ловилась ошибка `dict_fsst` (несоответствие размера словаря, в нашем журнале `263799 > 262136`); транзиентная — изолированный повтор того же оператора проходил.
 
 ## 3. Состав датасета
 
@@ -24,25 +24,25 @@
 
 | Файл | Что это |
 |---|---|
-| `export/` | `EXPORT DATABASE (FORMAT parquet, COMPRESSION zstd)` — полный слепок базы (schema.sql, load.sql, t_*.parquet) |
-| `repro_build.sql` | обёртка: `SET enable_profiling='json'` (profiling_output, coverage ALL) + corpus_build.sql |
-| `corpus_build.sql` | тяжёлая нагрузка: многоstatement-овый INSERT…SELECT |
-| `probe_finalize.sql` | EXPLAIN ANALYZE финализы из параллельной сессии |
+| `export/` | `EXPORT DATABASE (FORMAT parquet, COMPRESSION zstd)` — полный слепок базы: `schema.sql`, `load.sql`, `t_*.parquet` |
+| `repro_build.sql` | обёртка: `SET enable_profiling='json'` (profiling_output, coverage ALL) + сама нагрузка |
+| `corpus_build.sql` | нагрузка: последовательность INSERT…SELECT по большим таблицам |
+| `probe_finalize.sql` | `EXPLAIN ANALYZE` финализы зависающего statement-а из параллельной сессии |
 | `reloptions.txt` | дамп `pg_class.reloptions` |
 | `serened.conf` | конфиг движка |
 
-## 4. Шаги воспроизведения
+## 4. Воспроизведение
 
 1. Поднять SereneDB 26.08.1.
-2. `IMPORT DATABASE 'export';`
-3. `psql … -f repro_build.sql`
-4. Первый час statement-ы завершаются (лог psql пишет `INSERT 0 N`), монолитный шаг идёт долго — норма.
-5. Проблемное окно (~60–70 мин): `pg_stat_activity` из второй сессии, `pg_cancel_backend`, CPU-дельта. У нас: каталог голодает, cancel не работает, CPU активен, statement не завершается.
-6. `probe_finalize.sql` — план финализы параллельно.
+2. Развернуть слепок: `IMPORT DATABASE 'export';` (или вручную: `schema.sql`, затем `load.sql`).
+3. Запустить нагрузку: `psql "host=127.0.0.1 port=<ваш_порт> user=postgres dbname=postgres" -f repro_build.sql`.
+4. Первый час statement-ы завершаются (psql пишет `INSERT 0 N`, `Time: … ms`); монолитный шаг идёт долго — это норма.
+5. Проблемное окно (~60–70 мин от старта нагрузки): из второй сессии — `pg_stat_activity`, `pg_cancel_backend`, параллельно CPU-дельту `/proc/PID/stat`. Ожидание: каталог голодает, cancel не работает, CPU активен, statement не завершается.
+6. Для разбора плана финализы — `probe_finalize.sql` из второй сессии.
 
-## 5. Что пробовали
+## 5. Что уже пробовали
 
-Рестарт serenedb — единственное лечение. CHECKPOINT в чистом состоянии проходит; dict_fsst изолированно не воспроизводится.
+Рестарт serened — единственное лечение. `CHECKPOINT` в чистом состоянии проходит; ошибка `dict_fsst` изолированным повтором не воспроизводится.
 
 ## 6. Доступ к бакету (ключи временные)
 
@@ -53,4 +53,11 @@ Bucket:   1c-data
 Path:     serenedb-repro-20260903/
 Key:      S2HHLGIPZOGA8DR27TVA
 Secret:   Feb6glLjNKRcfDcNZclBuiPJXWCKtdyGCC6Mz2Yl
+```
+
+Пример скачивания:
+
+```
+mc alias set h https://S2HHLGIPZOGA8DR27TVA:<SECRET>@fsn1.your-objectstorage.com
+mc cp --recursive h/1c-data/serenedb-repro-20260903/ .
 ```
