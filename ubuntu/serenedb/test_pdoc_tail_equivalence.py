@@ -1419,6 +1419,86 @@ SELECT 'COLL|' || coalesce((SELECT collision_rows::VARCHAR FROM tmp3_pdoc_collis
     check("«|»-хвост: stage/multiset == mono", vh == mh and vn == mn == nrows, f"{vn} vs {mn}")
 
 
+def test_identical_tail_duplicates() -> None:
+    """Идентичные по контенту дубли через хвост: finalize не схлопывает (≡ монолит)."""
+    print("\n== идентичные дубли через хвост: multiset == mono, nrows без схлопа ==")
+    tbl = "_m2_ident_dup"
+    psql(f"DROP TABLE IF EXISTS {tbl};")
+    # ≥2 строки с одинаковым keyvals И полностью одинаковым контентом — обе уходят в хвост
+    psql(
+        f"""
+CREATE TABLE {tbl} (id VARCHAR, payload VARCHAR, n VARCHAR);
+INSERT INTO {tbl} VALUES
+  ('same', 'x', '1'), ('same', 'x', '1'),
+  ('a', 'p', '2'), ('b', 'q', '3'), ('c', 'r', '4'), ('d', 's', '5');
+"""
+    )
+    _setup_empty_cls()
+    psql(_install_entity(tbl, ['id'], {"id": "text", "payload": "text", "n": "text"}))
+    nrows = 6
+    chunk_cells = 12  # 6*3=18 > 12; collision 2*3=6 ≤ 12 → V5
+    decide = ROOT / ".test_pdoc_tail_ident_decide.sql"
+    decide.write_text(
+        "\\set ON_ERROR_STOP on\n"
+        + _build_order_and_decide(tbl, chunk_cells, ['id'])
+        + f"""
+SELECT 'PATH|' || coalesce((SELECT note FROM search_quality WHERE k='pdoc_tail:{tbl}'), 'none');
+SELECT 'COLL|' || coalesce((SELECT collision_rows::VARCHAR FROM tmp3_pdoc_collision_saved WHERE tbl='{tbl}'),'0');
+SELECT 'TAIL_N|' || (SELECT count(*)::VARCHAR FROM tmp3_pdoc_tail WHERE tbl='{tbl}');
+SELECT 'IN_CHUNKS|' || CASE WHEN EXISTS (SELECT 1 FROM tmp3_pdoc_chunks WHERE tbl='{tbl}') THEN '1' ELSE '0' END;
+"""
+    )
+    out = psql_file(decide)
+    path = next(l.split("|", 1)[1] for l in out.splitlines() if l.startswith("PATH|"))
+    coll = int(next(l.split("|", 1)[1] for l in out.splitlines() if l.startswith("COLL|")))
+    tail_n = int(next(l.split("|", 1)[1] for l in out.splitlines() if l.startswith("TAIL_N|")))
+    in_chunks = next(l.split("|", 1)[1] for l in out.splitlines() if l.startswith("IN_CHUNKS|"))
+    check("идент-дубли: путь v5", "path=v5" in path, path)
+    check("идент-дубли: collision_rows = 2", coll == 2, str(coll))
+    check("идент-дубли: хвост непуст (обе через хвост)", tail_n >= 1, str(tail_n))
+    check("идент-дубли: сущность в chunks", in_chunks == "1")
+
+    mono_sql = ROOT / ".test_pdoc_tail_ident_mono.sql"
+    write_run_sql(mono_sql, "\\set ON_ERROR_STOP on\n" + _run_mono(tbl))
+    mono_out = psql_file(mono_sql)
+    mono_h, mono_n = _parse_multi(mono_out)
+
+    psql_file(decide)
+    v5_sql = ROOT / ".test_pdoc_tail_ident_run.sql"
+    write_run_sql(v5_sql, "\\set ON_ERROR_STOP on\n" + _run_chunk_tail_finalize(tbl))
+    v5_out = psql_file(v5_sql)
+    stage_line = next(l for l in v5_out.splitlines() if l.startswith("STAGE_AFTER_TAIL|"))
+    parts = stage_line.split("|")
+    stage_n, nrows_s = int(parts[1]), int(parts[3])
+    v5_h, v5_n = _parse_multi(v5_out)
+
+    check("идент-дубли: stage_rows == nrows", stage_n == nrows_s == nrows, stage_line)
+    check(
+        "идент-дубли: multiset content_hash,row_key == mono",
+        v5_h == mono_h and v5_n == mono_n,
+        f"{v5_n} vs {mono_n}",
+    )
+    check(
+        "идент-дубли: corpus N == mono N == nrows (никто не схлопнут)",
+        v5_n == mono_n == nrows,
+        f"v5={v5_n} mono={mono_n} nrows={nrows}",
+    )
+    # fin-суффикс #N разводит одинаковый mid-ключ; одинаково у обоих путей
+    hash_cnt = int(
+        psql(
+            f"""
+SELECT count(*) FROM tmp3_corpus
+WHERE src_table = '{tbl}' AND position('#' IN row_key) > 0
+"""
+        )
+    )
+    check(
+        "идент-дубли: есть row_key с '#'-суффиксом fin",
+        hash_cnt >= 2,
+        str(hash_cnt),
+    )
+
+
 def test_coverage_gate_negative() -> None:
     print("\n== негатив coverage-гейта: испорченный DELETE order ==")
     tbl = "_m2_cover_neg"
@@ -1498,6 +1578,7 @@ def main() -> int:
         test_combined_file_pipeline,
         test_battle_tail_multistmt,
         test_pipe_keyvals_empty_strings,
+        test_identical_tail_duplicates,
         test_coverage_gate_negative,
     ):
         try:

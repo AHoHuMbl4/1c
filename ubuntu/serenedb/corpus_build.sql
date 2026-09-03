@@ -2421,10 +2421,7 @@ base AS (
   SELECT src_table, rk, doc, refs, nums, flags, doc_date AS dt, refs_map, refs_own
   FROM tmp3_pdoc_stage WHERE src_table = $1
 ),
-dedup AS (
-  SELECT DISTINCT src_table, rk, doc, refs, nums, flags, dt, refs_map, refs_own
-  FROM base
-),
+-- Идентичные строки не схлопываются — их разводит fin-суффикс #N, как в монолитном p_doc (эталон); полноту держит stage_gate nrows.
 mid AS (
   SELECT src_table,
          CASE WHEN NOT (SELECT on_ FROM fold)
@@ -2433,7 +2430,7 @@ mid AS (
          doc, refs, sha1(doc || chr(0) || refs) AS doc_hash,
          nums, flags, dt, refs_map, refs_own,
          corpus_content_hash(doc) AS content_hash
-  FROM dedup
+  FROM base
 ),
 fin AS (
   SELECT src_table,
