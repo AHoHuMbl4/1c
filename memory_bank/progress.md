@@ -1,4 +1,78 @@
-## 2026-09-03: Скорость-II этапы 4+3 закоммичены (утро, после зелёного такта — выкат)
+## 2026-09-03 (смена целиком, к компакту): такт-марш, план полной B, ловушка 26.08.1
+
+**Задания владельца (03.09, действуют):** (1) посчитка такта кратно быстрее —
+Скорость-II + полная B; (2) после зелёного такта — FIX_PLAN_2026-09-02 этапами;
+всё агентами ×4 кругами до сходимости; только okna; вектора не терять.
+
+**Сделано за смену:**
+1. Круг D Скорости-II закрыт (D2=ДА); этапы 4+3 исполнены (S3+S4 параллельно),
+   красная ×4 → R4 ОТКАЗ (SET GLOBAL до рестарта сбрасывался, метка врала) →
+   фиксы → повторная ×4 = 4/4 ПРИНЯТЬ. Коммит **cb2d262** в origin: SET GLOBAL
+   allocator_background_threads каждый такт + зеркало ПОСЛЕ box_tune_restart_engine;
+   SKIP-канон resolver_build.sql (psql \if :resolver_skip_unpivot, дефолт=полный,
+   service-DELETE×2 всегда, resolver_unpivot=skipped + resolver_service_purged);
+   пост-стена REFRESH search_idx условен. Замки: alloc 28/0, skip_canon 29/0,
+   box_tune 88/88. Выкат — после зелёного такта №2 + живая проба current_setting.
+2. Решение №14: row-level дельта ОБЯЗАТЕЛЬНА. Разведка B1-B4 → аудит аудита
+   AA1-AA4 (доказано кодом: merge DELETE corpus_merge:950-953 стирает неизменившиеся
+   строки при частичном стейдже; три мира ключей A/B/C; HTTP-синк ключи выбрасывает
+   poc_load_entity:741-814; CDC в движке нет). План v1→v4.1 за 7 кругов (P/F/G/H/I,
+   30+ вердиктов), финал I1=ДА. Коммит **2115ee6**. Канон: mode=колонка tmp3_build
+   (единый CTAS, отдельная таблица запрещена); сторож A = STOP при mode≠full/NULL
+   при partial_rebuild=0 (НЕ anti-join — ложноположителен на легитимном gone);
+   L4(б) NULL-mode при любом flip; мост ДО merge-ветвления (0→2→(1∥3)→4);
+   unexpected = unmatched_kill − gone_expand − xfer_explained; бэкап emb —
+   предусловие flip 6a0; Speed-II-2 — барьер только перед B-4; 0f одним выкатом
+   со Speed-II-2 (общий corpus_build.sql); сторож B = шаг 4e; отчёт
+   rebuild_mode {partial,full}+причина. Исполнение: 0a-e∥2∥(1∥3) после такта
+   №2+L20, этап 4 после Speed-II-2.
+3. **Живая сборка окна = 26.08.1** (SELECT version(): «PostgreSQL 18.3 (SereneDB
+   26.08.1)»; доки «26.07.3» устарели — песочница Ф1 стала боевой после EXPORT/IMPORT).
+4. **Ловушка 26.08.1 (два случая):** после ~60-70 мин тяжёлой нагрузки statement-ы
+   НЕ завершаются (05:24-06:33: 65+ мин, ~20 ядер; 07:43-08:06: 22+ мин, 32 ядра),
+   cancel/terminate_backend не работают, pg_stat_activity из новой сессии голодал
+   600+с; лечит ТОЛЬКО рестарт serenedb; tmp3_* персистентны → resume-марш безопасен.
+   Здоровые statement-ы того же класса ≤10:44 (INSERT 645084 за 644с). Финализа
+   реализациятмц: на свежем движке — секунды, ровно 74982.
+5. **dict_fsst-отказ** (263799>262136, corpus_build:1532, order-INSERT после
+   275МБ доков): транзиентный грязный флеш — изолированные повторы + CHECKPOINT
+   чисты. Пакет разработчикам SereneDB отправлен через владельца (версия, дословные
+   ошибки, оба явления, таймлайны); репро-пакет на окне: /tmp/repro_build.sql
+   (enable_profiling='json' → profiling_output, coverage ALL) + /tmp/probe_finalize.sql
+   (EXPLAIN ANALYZE параллельной сессией); запуск после такта №2.
+6. Прогон №0e-маршем: №0e (04:55, умер на финализе-деградации) → №0e-2 (06:44,
+   финализа прошла за секунды, dict_fsst на order) → №0e-3 (07:03, дошёл до
+   645k-чанка) → **№0e-4 (08:06, лог /tmp/takt0_dry7.log, стейдж 1573317)** под
+   самозалечивающим дозором (/tmp/selfheal_dry.sh локально, task bash-dctaal8o:
+   молчание >25 мин → рестарт+resume автоматически).
+7. В доке найден и живьём проверен штатный профайлер: PRAGMA enable_profiling
+   ('json' сначала, потом profiling_output .json), profiling_coverage='ALL' для
+   INSERT; log_query_path; compression-прагмы (disabled_compression_methods/
+   force_compression=auto) — потенциальный обход dict_fsst.
+
+**ЦЕПОЧКА после «сборка завершена» (в №0e-4):** multiset tmp3_corpus ==
+74982/57ad85decc6bd7405bde5f42d1fe68ec (document_реализациятмц) и
+78733/bf9de8a65cd5023325c0f34bb6c64d5f (accumulationregister_реализациятмц);
+≠ → merge НЕ звать; = → merge руками (env юнита; крит: дырки emb NULL→0,
+count(emb)≥1657724, departed≈647) → search_quality corpus_built_ts=unix(now)+
+build_sql_hash=md5(corpus_build.sql+poc_load_entity.py) → systemctl start
+1c-serene-pipeline@postgres (SKIP_BUILD=1) → такт №2 минуты → таймеры pipeline+
+apply (apply стопнуты до конца приёмки!) → L20-ретейк (workers 16, TSV из
+/opt/1c-mcp-reports, /tmp/i2-l20) → выкат cb2d262 (deploy из HEAD, коммитить ДО
+scp; живая проба SET GLOBAL; M1 SKIP ≤5 мин) → доки §3.10 + CHANGELOG → репро
+SereneDB → Задание 2 FIX_PLAN этапами → Скорость-II-2 → 0f → полная B 2→(1∥3)→4.
+
+**Долги:** HOW_NOT_TO урок «аномалия движка → первым делом раздел Profiling/Logging
+доков» (со следующим кодовым коммитом); CHECKLIST_SEARCH_FIX при исполнении
+Скорости-II; отчёт владельцу утром (такт, ловушка 26.08.1, версия, план B, выкаты).
+
+**Ловушки смены (не повторять):** рестарт serenedb = единственное лекарство
+деградации; /proc-замер CPU (ps врёт, psql-пробы могут голодать); ssh+nohup
+стартер «висит»/timeout — прогн жив; pkill-литерал = самопопадание; add/commit
+разными вызовами, пат-спек, Числа+/Доки:; граф MCP → sleep 3 → grep → в коммит;
+activeContext ≤300; замки «26.07.3»-специфичные не трогать без живой пробы.
+
+## 2026-09-03 (утро): Скорость-II этапы 4+3 закоммичены (после зелёного такта — выкат)
 
 Исполнители ×2 (S4: build.sh+box_tune.sh; S3: resolver_build.sql) → красная ×4
 (3×ПРИНЯТЬ, R4 ОТКАЗАТЬ: SET GLOBAL до рестарта сбрасывался, метка applied врала) →
