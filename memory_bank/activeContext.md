@@ -7,41 +7,44 @@
 исполнение сошедшегося плана фиксов v3-финал армиями. Аудит TARGET (22+15+10
 агентов) завершён, план прошёл 3 круга до сходимости, всё в git/origin.
 
-### ЖИВОЕ: ТАКТ — пакет TAKT_SPEED v4 (этап выката)
-Такт №1 v10 УПАЛ 19:37 02.09: OOM serened на tmp3_merge_unmatched (6 анти одним
-CTAS, пик 91.7 ГБ за сутки); WAL всё откатил, корпус цел. Монолит до того дописал
-стейдж — эталон снят: document_реализациятмц 74 982/57ad85de, accumulation
-78 733/bf9de8a6 (дважды, /tmp/takt-monolith-ref.txt); 74 785 старого = дрейф.
-Продукт честно закрыт staleness-гейтом (L20 invalid, 66/67 no_data — ретейк после
-зелёного такта). **Сделано (армии A-F, 28 аудитов + 4 исполнителя):** план v4
-(docs/audit/TAKT_SPEED_PLAN_2026-09-02.md, 4/4 волна F) исполнен: V5-хвост
-коллизий + резка unmatched + v8c + INCLUDE NULLS; замки M2 55/55, M1 23/23,
-регресс зелёный; красная ×2 (баги fresh-wipe/BEGIN пойманы и закрыты). Бэкап
-backup_corpus_emb_20260902_pre_takt_speed = 1 657 724; предусловие: реализациятмц
-в changed (41 источник, не потреблены). **ДАЛЬШЕ по плану §5:** коммит → выкат в
-/opt/1c-mcp-reports (md5) → сухой №0 (`psql -f corpus_build.sql`, сверка
-multiset ≠ → merge не звать) → юнит №1 (крит: count≥1 665 427, emb≥1 657 724,
-multiset == эталон, дырки=живой ключ с emb NULL → 0, departed≈647 отчётом) →
-такт №2 (минуты) → таймеры (pipeline+apply, только после №2) → L20-ретейк →
-доки (SCALE_BLOCKERS/techContext/RUNBOOK) → Задание 2 FIX_PLAN. Вектора: откат
-только по (src_table,row_key) из свежего бэкапа.
+### ЖИВОЕ: ТАКТ — TAKT_SPEED v4, сухой №0e идёт (срез 03.09 ~05:00 UTC)
+Пакет v4 (V5-хвост+резка unmatched; план TAKT_SPEED_PLAN_2026-09-02.md; коммиты
+fb3eb55→bbf67cd→e2cb76c→980cbbf, в origin) + ТРИ бага, найденных живой приёмкой
+и закрытых (замки→красная→фикс→коммит→выкат md5): (1) dedup DISTINCT в finalize
+схлопывал идентичные дубли (−397) → убран; (2) MAP-касты в ORDER BY окон →
+doc,refs,doc_hash в обоих зеркалах; (3) QUALIFY со скалярподзапросом →
+BLOCKWISE_NL_JOIN на fold-TRUE (>50 мин) → fold-колонка+CROSS JOIN, row_number
+предвычислен, плоский WHERE; EXPLAIN-замок в M2. Замки: test_pdoc_tail_equivalence
+69/69, test_corpus_merge_unmatched_split 23/23; chunk_identity/plain_key — дев-
+контур (движок :7890 завис, НЕ регрессия). **№0e идёт с 04:55:24 UTC** (дозор
+фоновый; лог /tmp/takt0_dry4.log). ЦЕПОЧКА ПО ЗАВЕРШЕНИИ: (1) multiset tmp3_corpus
+по двум сущностям == эталон: document_реализациятмц 74982/57ad85decc6bd7405bde5
+f42d1fe68ec, accumulationregister_реализациятмц 78733/bf9de8a65cd5023325c0f34
+bb6c64d5f; ≠ → merge НЕ звать; (2) = → merge руками (psql -f /opt/1c-mcp-reports/
+corpus_merge.sql, env юнита; крит: дырки=живой ключ бэкапа с emb NULL→0,
+count(emb)≥1657724, векторов_умрёт/departed≈647 отчётом); (3) merge зелёный →
+поставить search_quality corpus_built_ts=unix(now) + build_sql_hash=md5(corpus_
+build.sql+poc_load_entity.py) → юнит systemctl start 1c-serene-pipeline@postgres
+(SKIP_BUILD=1, хвостовые шаги 1-period..8); (4) такт №2 минуты → (5) таймеры
+pipeline+apply (apply стопнут до конца приёмки!) → (6) L20-ретейк (§МЕХАНИКА;
+прошлый = invalid-stale) → (7) доки §3.10 (SCALE_BLOCKERS/techContext/RUNBOOK).
+Бэкап emb ×3 (свежий 1657724), откат только по (src_table,row_key). Продукт
+честно закрыт staleness-гейтом — откроется зелёным тактом. ЛОВУЧКИ СМЕНЫ:
+cancel/terminate_backend НЕ работают — снимать рестартом serenedb (tmp3_*
+персистентны, безопасно); pkill-литерал в той же ssh-строке = самопопадание;
+ssh+nohup стартер «висит» — не падение; CPU мерить дельтой /proc/PID/stat;
+выкат только из HEAD (коммить ДО scp); git add и commit РАЗНЫМИ вызовами.
+Не прочитан: result-t2d2.md (круг D Скорости-II). План Скорость-II = v3
+(TAKT_SPEED2_PLAN_2026-09-03.md: 4→3→2→1A, этап5 отложен; D1/D3 ДА, D4 внесён).
 
 ### АУДИТ TARGET 02.09 (завершён; сводная docs/audit/TARGET_AUDIT_2026-09-02.md)
-22 аудитора (result-ta-*), 15 арбитров споров TD1-TD5 (result-td*-*,
-5/5 единогласно), 10 аудиторов плана (result-tp-*, result-tv2-*, result-tv3-*).
-Классы: К1 env-флаги руками (живой замер: 8 флагов =1 в /etc, установка не
-пишет; ASK_EMBED_NATIVE в /etc НЕТ → вопрос сегодня HTTP-каналом;
-ASK_WIKI_CHOICE=1 мёртвый хвост); К2 wiki_card_build.sql НЕ в такте →
-новая база глуха (wiki_publish.sh гоняет только wiki_build.sql; карточки
-строили руками 29.08); К3 слова домена (z11:789 имена каталогов; z13:9-18 =
-базлайн О6); К4 обходы wiki-замка z20:3293-3300+3400-3403 без гейта
-(подтверждено чтением); К5 догадки; К6 z17:180 молчаливая потеря предикатов
-(+match вообще не в live); К7 п.20 (psql на каждый SQL; serene_report схема
-в модель); К8 окно DELETE→xfer (corpus_merge:887-915, применение после
-DELETE); К9 i2_runner honest_no при числовом эталоне ДО сверки (маскирует
-п.21; подтверждено чтением) + no_stock константный эталон; К10 юниты.
-Чисто: числа считает SQL, ASK_WIKI_CHOICE из кода удалён, окna/klient только
-в комментариях.
+22 аудитора + 15 арбитров + 10 аудиторов плана. Классы: К1 env-флаги руками
+(8 флагов=1 в /etc; ASK_EMBED_NATIVE в /etc нет — вопрос идёт HTTP; ASK_WIKI_CHOICE
+мёртв); К2 wiki_card_build.sql не в такте (новая база глуха); К3 слова домена
+(z11:789, z13:9-18=базлайн О6); К4 обходы wiki-замка z20:3293+ без гейта;
+К6 z17:180 молчаливая потеря предикатов; К7 п.20; К8 окно DELETE→xfer;
+К9 i2_runner honest_no при числовом эталоне ДО сверки; К10 юниты. Чисто:
+числа считает SQL, ASK_WIKI_CHOICE удалён, okna/klient только в комментариях.
 
 ### ПЛАН ФИКСОВ — СОШЁЛСЯ, К ИСПОЛНЕНИЮ (docs/audit/FIX_PLAN_2026-09-02.md, 3e94855)
 Цикл: v1 → армия p1-p5 → v2 → контроль c1-c3 → v3 → финал f1-f2 (13/13 ДА,
@@ -294,5 +297,4 @@ result-*.md; итог из stream-json — последний type=result.
 13. **Такт по таймеру разрешён и включён** (02.09): карта атомов (армия 8×2)
     доказала отсутствие флагов-убийц; таймер 1c-serene-pipeline@postgres.timer
     enabled. Каприз systemd: если сервис не запускался с загрузки, таймер не
-    планируется (NextElapse=infinity) — лечится одним ручным тактом, дальше
-    сам. В проде таймер включает firstbuild (ubuntu/packet/firstbuild_unit.sh:58).
+    планируется (NextElapse=infinity) — лечится одним ручным тактом.
