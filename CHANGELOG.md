@@ -1,3 +1,16 @@
+## 2026-09-03 (утро) — Финализ без QUALIFY-подзапроса (BLOCKWISE_NL_JOIN)
+
+**[замер]** Живой EXPLAIN на окне: QUALIFY-фильтр `NOT (SELECT on_ FROM fold) OR
+row_number()=1` планировщик SereneDB строил как `BLOCKWISE_NL_JOIN` с подзапросом
+на кортеж — на fold-TRUE сущности (реализациятмц, 75k) statement жёг 2-3 ядра
+>50 минут (fold-FALSE сворачивался: установкацен 323k шёл 11.6 мин); cancel/
+terminate на этой сборке не действуют — снято рестартом движка (корпус/stage
+персистентны, целы). **[код]** Финальный SELECT p_doc_finalize и зеркальный
+QUALIFY монолита переписаны: fold → колонка через CROSS JOIN, row_number →
+предвычислен в CTE rn, плоский `WHERE NOT fold_on OR rn=1` (семантика та же).
+Замок M2 дополнен EXPLAIN-кейсом «план без BLOCKWISE_NL_JOIN» на fold-TRUE
+фикстуре — **69/69**; M1 23/23. Числа: EXPLAIN был/стало, 50+ мин на 75k.
+
 ## 2026-09-03 — Финализ не схлопывает идентичные строки (фикс по сухому №0)
 
 **[замер]** Сухой такт №0 на okna (1 ч 43 м, 1 441 117 строк): accumulationregister

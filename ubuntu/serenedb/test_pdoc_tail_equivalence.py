@@ -295,6 +295,15 @@ def _offline_structure() -> None:
     # stage_gate: нет исключения fold
     sg = text[text.index("stage_gate AS") : text.index("tail_gate AS")]
     check("stage_gate без NOT fold", "NOT (SELECT on_ FROM fold)" not in sg)
+    check(
+        "нет QUALIFY fold-подзапроса (X6)",
+        "QUALIFY NOT (SELECT on_ FROM fold)" not in text,
+    )
+    check(
+        "fin2/rn rewrite финализатора (X6)",
+        "f.on_ AS fold_on FROM mid CROSS JOIN fold f)" in text
+        and "WHERE NOT rn.fold_on OR rn.rn = 1" in text,
+    )
     check("tail_gate перед finalize", "хвост коллизий не собран" in text)
     check("зеркало-комментарий", "p_doc / p_doc_chunk / p_doc_tail" in text)
     # жизненный цикл: formula / fresh (_done) / post-finalize; план хвоста на fresh не стирается
@@ -740,6 +749,114 @@ SELECT 'IN_CHUNKS|' || CASE WHEN EXISTS (SELECT 1 FROM tmp3_pdoc_chunks WHERE tb
     check("stage_rows == nrows (non-fold)", stage_n == nrows_s == nrows, stage_line)
     v5_h, v5_n = _parse_multi(v5_out)
     check("multiset content_hash,row_key == mono", v5_h == mono_h and v5_n == mono_n, f"{v5_n} vs {mono_n}")
+
+
+def _finalize_select_sql(tbl: str) -> str:
+    """Финальный SELECT финализатора (WITH…SELECT) с $1 → литерал — для EXPLAIN."""
+    body = _extract_prepare("p_doc_finalize")
+    wi = body.index("WITH ")
+    sql = body[wi:].rstrip().rstrip(";")
+    return sql.replace("$1", f"'{tbl}'")
+
+
+def _explain_finalize_plan(tbl: str) -> str:
+    """EXPLAIN финального SELECT финализатора на живом движке фикстуры."""
+    path = ROOT / f".test_pdoc_tail_explain_{tbl}.sql"
+    path.write_text(
+        "\\set ON_ERROR_STOP on\nEXPLAIN\n" + _finalize_select_sql(tbl) + ";\n",
+        encoding="utf-8",
+    )
+    return psql_file(path)
+
+
+def test_fold_finalize_plan_and_semantics() -> None:
+    """X6: fold-TRUE multiset ≡ mono; EXPLAIN финализатора без BLOCKWISE_NL_JOIN (и fold-FALSE)."""
+    print("\n== fold X6: multiset ≡ mono + EXPLAIN без BLOCKWISE_NL_JOIN ==")
+    tbl = "_m2_fold_x6"
+    psql(f"DROP TABLE IF EXISTS {tbl};")
+    psql(
+        f"""
+CREATE TABLE {tbl} ("Ref_Key" VARCHAR, name VARCHAR, n VARCHAR);
+INSERT INTO {tbl} VALUES
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1', 'x', '1'),
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa1', 'y', '2'),
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa2', 'z', '3'),
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3', 'w', '4'),
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa3', 'w2', '5'),
+  ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaa4', 'q', '6');
+"""
+    )
+    _setup_empty_cls()
+    psql(_install_entity(tbl, ['Ref_Key'], {"Ref_Key": "ref", "name": "text", "n": "text"}))
+    nrows = 6
+    chunk_cells = 12  # 6*3=18 > 12; collision~4*3=12 ≤ 12 → V5
+    decide = ROOT / ".test_pdoc_tail_fold_x6_decide.sql"
+    decide.write_text(
+        "\\set ON_ERROR_STOP on\n" + _build_order_and_decide(tbl, chunk_cells, ['Ref_Key'])
+    )
+    psql_file(decide)
+    in_chunks = int(psql(f"SELECT count(*) FROM tmp3_pdoc_chunks WHERE tbl='{tbl}'"))
+    if in_chunks == 0:
+        check("fold-x6 ушёл в mono (сверка V5 недоступна)", False, "oversize/mono")
+        return
+
+    mono_sql = ROOT / ".test_pdoc_tail_fold_x6_mono.sql"
+    write_run_sql(mono_sql, "\\set ON_ERROR_STOP on\n" + _run_mono(tbl))
+    mono_h, mono_n = _parse_multi(psql_file(mono_sql))
+
+    psql_file(decide)
+    v5_sql = ROOT / ".test_pdoc_tail_fold_x6_run.sql"
+    write_run_sql(v5_sql, "\\set ON_ERROR_STOP on\n" + _run_chunk_tail_finalize(tbl))
+    v5_out = psql_file(v5_sql)
+    v5_h, v5_n = _parse_multi(v5_out)
+    check(
+        "fold-TRUE multiset == mono",
+        v5_h == mono_h and v5_n == mono_n,
+        f"v5={v5_n}/{v5_h[:8]} mono={mono_n}/{mono_h[:8]}",
+    )
+    check("fold-TRUE сверка схлопнула объекты", v5_n == 4 and nrows == 6, f"n={v5_n}")
+
+    plan_fold = _explain_finalize_plan(tbl)
+    check(
+        "fold-TRUE EXPLAIN без BLOCKWISE_NL_JOIN",
+        "BLOCKWISE_NL_JOIN" not in plan_fold,
+        plan_fold[:300].replace("\n", " | "),
+    )
+
+    # fold-FALSE санити: тот же финальный SELECT, ключ ≠ ['Ref_Key']
+    tbl2 = "_m2_nofold_x6"
+    psql(f"DROP TABLE IF EXISTS {tbl2};")
+    psql(
+        f"""
+CREATE TABLE {tbl2} (id VARCHAR, payload VARCHAR);
+INSERT INTO {tbl2} VALUES ('a','1'),('b','2'),('c','3');
+"""
+    )
+    _setup_empty_cls()
+    psql(_install_entity(tbl2, ['id'], {"id": "text", "payload": "text"}))
+    # минимальный stage + progress, чтобы план читал base (гейты не error)
+    psql(
+        f"""
+DELETE FROM tmp3_pdoc_stage WHERE src_table='{tbl2}';
+INSERT INTO tmp3_pdoc_stage
+SELECT '{tbl2}', id, 'doc-'||id, '', MAP{{}}::MAP(VARCHAR,DOUBLE),
+       MAP{{}}::MAP(VARCHAR,BOOLEAN), NULL::TIMESTAMP,
+       MAP{{}}::MAP(VARCHAR,VARCHAR), MAP{{}}::MAP(VARCHAR,VARCHAR)
+FROM {tbl2};
+DELETE FROM tmp3_pdoc_progress WHERE tbl='{tbl2}';
+INSERT INTO tmp3_pdoc_progress VALUES ('{tbl2}', 3, 3);
+DELETE FROM tmp3_pdoc_chunks WHERE tbl='{tbl2}';
+INSERT INTO tmp3_pdoc_chunks VALUES ('{tbl2}', 1, 3, 3, 3, 2);
+DELETE FROM tmp3_pdoc_tail WHERE tbl='{tbl2}';
+DELETE FROM tmp3_pdoc_tail_done WHERE tbl='{tbl2}';
+"""
+    )
+    plan_nf = _explain_finalize_plan(tbl2)
+    check(
+        "fold-FALSE EXPLAIN без BLOCKWISE_NL_JOIN",
+        "BLOCKWISE_NL_JOIN" not in plan_nf,
+        plan_nf[:300].replace("\n", " | "),
+    )
 
 
 def test_fold_stage_rows() -> None:
@@ -1569,6 +1686,7 @@ def main() -> int:
 
     for fn in (
         test_fold_stage_rows,
+        test_fold_finalize_plan_and_semantics,
         test_v5_equivalence_and_coverage,
         test_incomplete_order_mono,
         test_oversize_mono,

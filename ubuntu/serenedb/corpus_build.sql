@@ -1835,12 +1835,19 @@ WITH kc AS (SELECT key_cols FROM tmp3_key WHERE entity = lower($1)),
 SELECT src_table,
        CASE WHEN count(*) OVER (PARTITION BY src_table, row_key) > 1
             THEN row_key || '#' || row_number() OVER (PARTITION BY src_table, row_key
-                                                      ORDER BY doc, refs, refs_map::VARCHAR,
-                                                               nums::VARCHAR, flags::VARCHAR, dt)
+                                                      -- doc, refs, doc_hash: полный детерминизм
+                                                      -- внутри партиции без MAP-кастов (аналог
+                                                      -- p_doc_plain; полная форма роняла движок
+                                                      -- в многочасовую сортировку, замер okna 03.09)
+                                                      ORDER BY doc, refs, doc_hash)
             ELSE row_key END AS row_key,
        doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash
 FROM (
 SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash FROM (
+-- без QUALIFY+скалярподзапроса: иначе BLOCKWISE_NL_JOIN (замер okna 03.09)
+SELECT fin2.*, row_number() OVER (PARTITION BY src_table, row_key
+     ORDER BY doc, refs, doc_hash) AS rn FROM (
+SELECT q.*, f.on_ AS fold_on FROM (
 SELECT src_table,
        -- 🔴 ОБЪЯВЛЕННЫЙ КЛЮЧ НЕ ВСЕГДА РАЗЛИЧАЕТ СТРОКИ. У регистров 1С отдаёт данные
        -- обёрткой (одна запись на регистратор, движения внутри списком), и объявленный
@@ -1852,7 +1859,7 @@ SELECT src_table,
        -- различает — он остаётся прежним, и отпечатки строк не меняются впустую.
        -- 🔴 У ССЫЛОЧНОГО ОБЪЕКТА ОТПЕЧАТОК К КЛЮЧУ НЕ ДОПИСЫВАЕТСЯ: строка корпуса
        -- обязана быть ОДНА на объект. После отбрасывания колонок вложенного типа строки
-       -- одного объекта дают одинаковый текст, и `QUALIFY` ниже оставляет одну.
+       -- одного объекта дают одинаковый текст, и WHERE ниже оставляет одну.
        CASE WHEN NOT (SELECT on_ FROM fold)
              AND count(*) OVER (PARTITION BY src_table, rk) > 1
             THEN rk || '#' || sha1(doc) ELSE rk END AS row_key,
@@ -1911,13 +1918,14 @@ FROM (
          max(nullif(try_cast(val AS TIMESTAMP), TIMESTAMP '0001-01-01 00:00:00'))
              FILTER (is_dt IS NOT NULL) AS dt
   FROM pieces LEFT JOIN keyed k USING (rid) GROUP BY rid) g) h) q
+CROSS JOIN fold f
+) fin2
+) rn
 -- 🔴 ОДНА СТРОКА НА ОБЪЕКТ — только для ссылочных объектов. Порядок ПОЛНЫЙ: если два
 -- представителя различаются, выбор обязан быть один и тот же при любом порядке чтения
 -- (`techContext` ловушки 29, 30). Расхождение текстов внутри объекта после починки
 -- загрузчика означать нечего не должно — это проверяется отдельным числом в отчёте.
-QUALIFY NOT (SELECT on_ FROM fold)
-     OR row_number() OVER (PARTITION BY src_table, row_key
-          ORDER BY doc, refs, doc_hash) = 1) qq;
+WHERE NOT rn.fold_on OR rn.rn = 1) qq;
 
 
 -- 🔴 p_doc / p_doc_chunk / p_doc_tail — зеркала; менять только синхронно.
@@ -2432,23 +2440,31 @@ mid AS (
          corpus_content_hash(doc) AS content_hash
   FROM base
 ),
+-- без QUALIFY+скалярподзапроса: иначе BLOCKWISE_NL_JOIN (замер okna 03.09)
+-- fold-фильтр ДО fin-суффикса #N (как в монолите: сначала одна строка на объект, потом разведение коллизий ключа)
+fin2 AS (SELECT mid.*, f.on_ AS fold_on FROM mid CROSS JOIN fold f),
+rn AS (SELECT fin2.*, row_number() OVER (PARTITION BY src_table, row_key ORDER BY doc, refs, doc_hash) AS rn FROM fin2),
+folded AS (
+  SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash
+  FROM rn WHERE NOT rn.fold_on OR rn.rn = 1
+),
 fin AS (
   SELECT src_table,
          CASE WHEN count(*) OVER (PARTITION BY src_table, row_key) > 1
               THEN row_key || '#' || row_number() OVER (PARTITION BY src_table, row_key
-                                                        ORDER BY doc, refs, refs_map::VARCHAR,
-                                                                 nums::VARCHAR, flags::VARCHAR, dt)
+                                                        -- doc, refs, doc_hash: полный детерминизм
+                                                        -- внутри партиции без MAP-кастов; полная
+                                                        -- форма многочасовая (замер okna 03.09)
+                                                        ORDER BY doc, refs, doc_hash)
               ELSE row_key END AS row_key,
          doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash
-  FROM mid
+  FROM folded
 )
 SELECT src_table, row_key, doc, refs, doc_hash, nums, flags, dt, refs_map, refs_own, content_hash
 FROM fin
 CROSS JOIN chk
 CROSS JOIN stage_gate
-CROSS JOIN tail_gate
-QUALIFY NOT (SELECT on_ FROM fold)
-     OR row_number() OVER (PARTITION BY src_table, row_key ORDER BY doc, refs, doc_hash) = 1;
+CROSS JOIN tail_gate;
 
 -- ============ 6-бис. УПРОЩЁННЫЙ ВАРИАНТ СБОРКИ (запасной) ============
 -- 🔴 ОДНА СУЩНОСТЬ НЕ ДОЛЖНА УБИВАТЬ ВЕСЬ ТАКТ. Полная сборка делает много тонкого:
