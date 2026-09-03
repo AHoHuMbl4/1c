@@ -285,9 +285,22 @@ SKIP_BUILD=$(psql "$DSN" -tA -c "SELECT CASE WHEN
          AND table_name IN ('tmp3_cls','tmp3_ent','tmp3_src','tmp3_corpus')) = 4
   THEN 1 ELSE 0 END" 2>/dev/null)
 
+# Скорость-II этап 4: allocator_background_threads на инстанс (не serened.conf).
+# Доки: configuration/overview#global-configuration-options (GLOBAL BOOLEAN);
+# sql/statements/set#set-a-global-variable — GLOBAL переживает сессию. build.sh
+# зовёт десятки отдельных psql — SESSION SET не переживёт следующую сессию.
+# ДО ветки SKIP: выполняется и в пропущенном такте. Отказ SET не роняет такт.
+if [ -f ./box_tune.sh ]; then
+  # shellcheck disable=SC1091
+  . ./box_tune.sh
+  box_tune_allocator_bg_threads "$DSN"
+fi
+
+_CORPUS_REBUILT=0
 if [ "${FORCE_REBUILD:-0}" != "1" ] && [ "$SKIP_BUILD" = "1" ]; then
   echo "== 1-2. корпус НЕ пересобирается: данные и код сборки не менялись с прошлого такта"
 else
+  _CORPUS_REBUILT=1
   # Момент ДО чтения витрины: им станет `corpus_built_ts` после удачного слияния.
   # Записывать сразу нельзя — упавшая сборка объявила бы себя состоявшейся, и
   # следующий такт пропустил бы пересборку несобранного.
@@ -413,8 +426,14 @@ ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
                         WHERE e.src_table = search_tables.src_table AND e.cls = 'service')" \
   ./embed_missing.sh search_tables label "$WORKERS" "src_table" || fail "векторы меток"
 
-echo "== 4. резолвер"
-psql "$DSN" -q -f resolver_build.sql || fail "сборка резолвера"
+# Скорость-II этап 3: после блока SKIP_BUILD — 1 когда корпус не пересобирался.
+# Логика skip только здесь; resolver_build.sql читает :resolver_skip_unpivot.
+RESOLVER_SKIP_UNPIVOT=0
+[ "${FORCE_REBUILD:-0}" != "1" ] && [ "$SKIP_BUILD" = "1" ] && RESOLVER_SKIP_UNPIVOT=1
+# Значение в журнале: grep по журналу восстанавливает «пропущен и почему» без БД.
+echo "== 4. резолвер (skip_unpivot=$RESOLVER_SKIP_UNPIVOT)"
+psql "$DSN" -q -v resolver_skip_unpivot="$RESOLVER_SKIP_UNPIVOT" \
+  -f resolver_build.sql || fail "сборка резолвера"
 # Вход эмбеддера ОБРЕЗАЕТСЯ здесь, а не в таблице: `resolver_index.value` идёт в предикат
 # `WHERE`, и обрезанное значение перестало бы совпадать с данными. [замер] два значения по
 # 560 282 символа отравляли свою пачку целиком — вместе с ними вектор не получали 16
@@ -451,6 +470,7 @@ ROWS_WHERE="NOT EXISTS (SELECT 1 FROM search_entity_class e
 echo "== 5. векторы новым строкам корпуса — embed_bulk, не-служебные"
 # 🔴 Шаг 5 — embed_bulk, не embed_missing: tick_guard (rc=2) после merge оставил бы дыру NULL.
 # Gate: параллельный p_doc/corpus_merge недопустим (шаги 3–4 с ai_embed gate не трогают).
+_emb5_done=0
 _MERGE_BUSY=$(psql "$DSN" -tAc "
 SELECT count(*) FROM pg_stat_activity
  WHERE pid <> pg_backend_pid()
@@ -541,10 +561,16 @@ else
   echo "== 5-alt. служебным сущностям вектор не считается (решение владельца); в переписи это видно причиной"
 fi
 
-# Публикация ЕЩЁ РАЗ: досчёт векторов правит `emb` уже после первого обновления индекса,
-# и без второго вызова индекс отдавал бы строки со старым вектором.
-echo "== 6. повторная публикация индекса после досчёта"
-psql "$DSN" -q -c "VACUUM (REFRESH_INDEX) search_idx;" || fail "публикация индекса"
+# Скорость-II пост-стена (C4-П1): REFRESH search_idx только если корпус
+# пересобирался в этом такте ИЛИ шаг 5 досчитал emb. corpus_merge.sql:1037 уже
+# рефрешит search_idx при слиянии; при пропуске корпуса и нулевом досчёте не
+# менялась ни одна строка search_corpus — безусловный REFRESH был стеной SKIP.
+if [ "${_CORPUS_REBUILT:-0}" = "1" ] || [ "${_emb5_done:-0}" -gt 0 ]; then
+  echo "== 6. повторная публикация индекса после досчёта"
+  psql "$DSN" -q -c "VACUUM (REFRESH_INDEX) search_idx;" || fail "публикация индекса"
+else
+  echo "== 6. пропуск REFRESH search_idx: корпус не пересобирался, досчёт emb=0"
+fi
 
 # Итог такта — СВЕРКОЙ с отпечатком «как было», а не печатью абсолютных чисел: «корпус:
 # 0 строк» в журнале выглядит так же спокойно, как «97 965 строк». Ненулевой код возврата

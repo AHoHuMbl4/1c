@@ -1,3 +1,23 @@
+## 2026-09-03 (утро, II) — Скорость-II этапы 4+3: SET GLOBAL аллокатора, SKIP-канон резолвера, пост-стена REFRESH
+
+**[код]** Исполнители ×2 параллельно (непересекающиеся файлы) + красная ×4 → фиксы →
+повторная красная ×4 — **4/4 ПРИНЯТЬ**. Этап 4: `box_tune_allocator_bg_threads` —
+идемпотентный `SET GLOBAL allocator_background_threads=true` в главном пути build.sh
+(до SKIP-ветки, каждый такт, без imён баз) + зеркало в онбординге **после**
+`box_tune_restart_engine` (блокер красной R4: GLOBAL живёт до рестарта движка —
+поставленный до, сбрасывался, а метка applied в search_quality врала, п.13); отказ SET
+не роняет такт (v=1/0 в search_quality); serened.conf не трогается до живой пробы.
+Этап 3: SKIP-канон resolver_build.sql на psql `\if :resolver_skip_unpivot` (дефолт=0=
+полный прогон, fail-closed к работе): при skip НЕ исполняются res_seen/res_val+UNPIVOT/
+MERGE/перенос (на сервер не уходят), ВСЕГДА — CREATE+права, оба service-DELETE, отчёт
++ метки `resolver_unpivot=skipped` и `resolver_service_purged` (счёт до DELETE —
+причина classify-flip названа). Пост-стена C4-П1: REFRESH search_idx только при
+пересборке корпуса или досчёте emb. Выкат — после зелёного такта №2 + живая проба SET.
+Замки: test_build_alloc_bg_threads 28/0, test_resolver_skip_canon 29/0, box_tune
+88/88, embed_step5 32/0, resolver_merge_emb 25/0. Числа: 4/4 ПРИНЯТЬ повторной красной,
+замки выше. Доки: configuration/overview#global-configuration-options;
+sql/statements/set#set-a-global-variable; cookbook/performance/environment#memory-allocator.
+
 ## 2026-09-03 (утро) — Финализ без QUALIFY-подзапроса (BLOCKWISE_NL_JOIN)
 
 **[замер]** Живой EXPLAIN на окне: QUALIFY-фильтр `NOT (SELECT on_ FROM fold) OR

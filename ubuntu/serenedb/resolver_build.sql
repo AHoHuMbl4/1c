@@ -24,7 +24,44 @@
 -- — семнадцать: прежний предел молча выбросил бы их все. Отбор только СТРУКТУРНЫЙ, по
 -- контракту платформы: объявленный тип строка, не спутник протокола, не версия записи,
 -- не вложение, не GUID (ссылку разрешает карта корпуса), не адрес.
+--
+-- Параметр psql (-v): resolver_skip_unpivot (0|1). Без -v — полный прогон
+-- (fail-closed к работе). При 1 — без UNPIVOT/MERGE/p_seen/p_val; CREATE, оба
+-- service-DELETE и отчёт resolver_* — всегда. Канон: TAKT_SPEED2_PLAN этап 3.
 
+-- Умолчание: переменная не передана → полный прогон (не «молчать»).
+\if :{?resolver_skip_unpivot}
+\else
+\set resolver_skip_unpivot 0
+\endif
+
+-- ============ CREATE + ПРАВА (всегда, обе ветки) ============
+CREATE TABLE IF NOT EXISTS resolver_index
+  (table_name VARCHAR, column_name VARCHAR, value VARCHAR, emb FLOAT[1024]);
+
+-- Права выдаются здесь же: на чистой машине таблица рождается этим файлом, и без этих
+-- команд `serene_resolver` её не прочитает, а `serene_ro` не будет отозван — то есть
+-- разделение ролей окажется невыполненным МОЛЧА, а `test_integrity.py` T3 упадёт.
+GRANT SELECT ON resolver_index TO serene_resolver;
+REVOKE SELECT ON resolver_index FROM serene_ro;
+
+-- Служебные таблицы прежней сборки вычищаем по КОНТРАКТУ 1С, а не по нашему корпусу:
+-- сущность — это то, что объявлено в `$metadata`. Прежняя ветка удаляла всё, чего нет в
+-- `tmp3_src`, то есть повторяла шаблон, запрещённый `HOW_NOT_TO §4.2`: пустой или
+-- устаревший `tmp3_src` стёр бы весь резолвер (89 436 значений, из них 66 479 с
+-- посчитанными векторами). Условие `count(*) > 0` не даёт сработать на пустых метаданных.
+-- ВСЕГДА: classify мог сменить состав сущностей/классов без смены витрины.
+DELETE FROM resolver_index r
+WHERE (SELECT count(*) FROM tmp3_ent) > 0
+  AND NOT EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(r.table_name));
+
+\if :resolver_skip_unpivot
+-- SKIP (resolver_skip_unpivot=1): без UNPIVOT/MERGE/p_seen/p_val и без переноса emb.
+-- MERGE с пустым USING + NOT MATCHED BY SOURCE DELETE стёр бы весь индекс
+-- (C1-ошибка плана v1; канон TAKT_SPEED2_PLAN этап 3). Индекс не трогаем —
+-- только service-DELETE выше/ниже и отчёт §4.
+
+\else
 -- ============ 1. ЧТО В ЭТОТ РАЗ ДЕЙСТВИТЕЛЬНО ПРОЧИТАНО ============
 -- 🔴 Без этого шага удаление стирало живые значения вместе с посчитанными векторами.
 -- Прежняя охрана смотрела на `tmp3_src` — «что числится источником», а не «что мы сейчас
@@ -86,24 +123,6 @@ SELECT 'значения' AS шаг, (SELECT count(*) FROM res_val) AS всег�
        (SELECT max(n_distinct) FROM res_dim) AS крупнейшее_измерение;
 
 -- ============ 3. СВЕДЕНИЕ С ХРАНИМЫМ — ОДНИМ MERGE ============
-CREATE TABLE IF NOT EXISTS resolver_index
-  (table_name VARCHAR, column_name VARCHAR, value VARCHAR, emb FLOAT[1024]);
-
--- Права выдаются здесь же: на чистой машине таблица рождается этим файлом, и без этих
--- команд `serene_resolver` её не прочитает, а `serene_ro` не будет отозван — то есть
--- разделение ролей окажется невыполненным МОЛЧА, а `test_integrity.py` T3 упадёт.
-GRANT SELECT ON resolver_index TO serene_resolver;
-REVOKE SELECT ON resolver_index FROM serene_ro;
-
--- Служебные таблицы прежней сборки вычищаем по КОНТРАКТУ 1С, а не по нашему корпусу:
--- сущность — это то, что объявлено в `$metadata`. Прежняя ветка удаляла всё, чего нет в
--- `tmp3_src`, то есть повторяла шаблон, запрещённый `HOW_NOT_TO §4.2`: пустой или
--- устаревший `tmp3_src` стёр бы весь резолвер (89 436 значений, из них 66 479 с
--- посчитанными векторами). Условие `count(*) > 0` не даёт сработать на пустых метаданных.
-DELETE FROM resolver_index r
-WHERE (SELECT count(*) FROM tmp3_ent) > 0
-  AND NOT EXISTS (SELECT 1 FROM tmp3_ent e WHERE e.entity = lower(r.table_name));
-
 -- 🔴 КЛЮЧ СТРОКИ = обрезанное значение. Прежний MERGE сравнивал полный `val`, а вставлял
 -- `substr(val,1,20000)`: после первого такта хранимое ≠ источнику → NOT MATCHED BY SOURCE
 -- DELETE + INSERT с emb=NULL на КАЖДОМ прогоне (эффект REPLACE, векторы сгорают).
@@ -171,9 +190,22 @@ FROM (SELECT i AS b FROM range(0, (SELECT ceil(count(*) / 1000.0)::BIGINT
                                    FROM res_emb_xfer_n)) t(i)) z
 \gexec
 
+\endif
+
 -- 🔴 SERVICE НЕ В РЕЗОЛВЕРЕ (возврат 2 / 21.08, DATA_SCOPE §9.4). Бизнес-вопросов к
 -- служебным сущностям нет: ни значения, ни их векторы. Даже если таблица не попала в
 -- tmp3_src в этот такт, старые строки service снимаем явно (MERGE их иначе не тронет).
+-- ВСЕГДА (и в skip): classify мог сменить классы между тактами без пересборки корпуса.
+-- П. 13: сколько снимет этот DELETE — считается ДО удаления и уходит в отчёт
+-- (resolver_service_purged): усыхание резолвера при classify-flip обязано быть
+-- названной причиной, а не необъяснимой дельтой абсолютных счётчиков.
+CREATE OR REPLACE TABLE res_service_purged AS
+SELECT count(*) AS n
+  FROM resolver_index r
+ WHERE EXISTS (
+   SELECT 1 FROM search_entity_class e
+   WHERE lower(e.src_table) = lower(r.table_name) AND e.cls = 'service'
+ );
 DELETE FROM resolver_index r
 WHERE EXISTS (
   SELECT 1 FROM search_entity_class e
@@ -183,6 +215,7 @@ WHERE EXISTS (
 -- ============ 4. ОТЧЁТ — В БАЗУ, А НЕ В ЖУРНАЛ ============
 -- П. 13: потеря обязана быть видна запросом, а не только тому, кто смотрел в консоль.
 -- `resolver_clipped` — значения, чей источник был длиннее ключа (обрезаны при MERGE).
+-- Счёт — из самого resolver_index (в skip res_val нет).
 DELETE FROM search_quality WHERE k LIKE 'resolver_%' AND k NOT LIKE 'resolver_emb_xfer%';
 INSERT INTO search_quality
             SELECT 'resolver_values',   count(*),                            'значений в резолвере'
@@ -192,5 +225,16 @@ UNION ALL   SELECT 'resolver_no_emb',   count(*) FILTER (WHERE emb IS NULL), 'ж
 UNION ALL   SELECT 'resolver_clipped', count(*) FILTER (WHERE length(value) = 20000),
                    'ключ = обрезанные 20000 символов источника'
             FROM resolver_index;
+
+-- Снятое как service — причина усыхания названа (classify-flip), счёт до DELETE.
+INSERT INTO search_quality
+SELECT 'resolver_service_purged', n, 'снято строк service (classify перевёл сущность в service)'
+  FROM res_service_purged;
+
+\if :resolver_skip_unpivot
+-- Метка skip видна запросом к search_quality, не только журналом такта.
+INSERT INTO search_quality
+SELECT 'resolver_unpivot', epoch(now())::BIGINT, 'skipped';
+\endif
 
 SELECT k, v, note FROM search_quality WHERE k LIKE 'resolver_%' ORDER BY k;

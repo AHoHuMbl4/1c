@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -260,6 +261,26 @@ def main() -> int:
     check("firstbuild calls embed_check", "embed_check.sh" in fbsh)
     check("firstbuild restore after pipeline", fbsh.find("pipeline@$DB") < fbsh.find("box_tune_restore") or "box_tune_restore" in fbsh)
     check("firstbuild calls disk preflight", "box_tune_disk_preflight" in fbsh)
+
+    # --- 10b. Скорость-II этап 4: allocator_background_threads в firstbuild, не в conf ---
+    tune_src = open(TUNE, encoding="utf-8").read()
+    m_apply_fn = re.search(
+        r"box_tune_apply_first_build\(\)\s*\{(.*?)\n\}",
+        tune_src,
+        re.S,
+    )
+    apply_fn = m_apply_fn.group(1) if m_apply_fn else ""
+    check(
+        "apply_first_build calls allocator_bg helper",
+        "box_tune_allocator_bg_threads" in apply_fn,
+    )
+    check(
+        "allocator_background_threads not upserted to conf",
+        not re.search(
+            r"box_tune_upsert_flag\s+[^\n]*allocator_background_threads",
+            tune_src,
+        ),
+    )
 
     # --- 11. E4b префлайт диска: числа ночи klient-1 18.08 06:06 ---
     # 30 ГиБ свободно, 15 148 327 строк: целиком WAL не влезет, пачка 1e6 — да.

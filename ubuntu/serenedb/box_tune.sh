@@ -322,6 +322,38 @@ box_tune_sql() {
   psql "$dsn" -q -c "$sql"
 }
 
+# Скорость-II этап 4: allocator_background_threads на весь инстанс.
+# Доки: configuration/overview#global-configuration-options (GLOBAL BOOLEAN);
+# sql/statements/set#set-a-global-variable — GLOBAL переживает сессию psql.
+# НЕ в serened.conf (пока нет живой пробы flagfile). Отказ SET не роняет:
+# v=1 применено / v=0 отклонено в search_quality; такт/онбординг продолжаются.
+box_tune_allocator_bg_threads() {
+  local dsn="${1:-${BOX_TUNE_DSN:-${SERENEDB_DSN:-}}}"
+  local form="SET GLOBAL allocator_background_threads = true"
+  local err note v note_esc
+  if [ -z "$dsn" ]; then
+    echo "box_tune: DSN пуст — allocator_background_threads пропущен" >&2
+    return 0
+  fi
+  if [ "${BOX_TUNE_SQL:-}" = 0 ]; then
+    echo "box_tune: SQL пропущен (SQL=0): $form" >&2
+    return 0
+  fi
+  err=$(psql "$dsn" -q -c "$form" 2>&1) && v=1 || v=0
+  if [ "$v" = 1 ]; then
+    note="applied form=${form}"
+  else
+    note="rejected form=${form} err=${err}"
+    echo "WARN: allocator_background_threads не применился (${form}): ${err}" >&2
+  fi
+  note_esc=$(printf '%s' "$note" | tr '\n' ' ' | sed "s/'/''/g")
+  note_esc="${note_esc:0:500}"
+  psql "$dsn" -q -c "DELETE FROM search_quality WHERE k='allocator_background_threads';
+    INSERT INTO search_quality VALUES ('allocator_background_threads', ${v}, '${note_esc}');" \
+    >/dev/null 2>&1 || true
+  return 0
+}
+
 box_tune_state_dir() {
   printf '%s\n' "${BOX_TUNE_STATE:-/var/lib/serenedb/box-tune.state}"
 }
@@ -610,6 +642,11 @@ box_tune_apply_first_build() {
   if [ "${BOX_TUNE_SKIP_RESTART:-}" != 1 ]; then
     box_tune_restart_engine
   fi
+  # Зеркало этапа 4 — ПОСЛЕ рестарта: SET GLOBAL живёт до рестарта движка (ловушка
+  # techContext «SET/SET GLOBAL до рестарта»). Поставленный до рестарта сбрасывается,
+  # а метка search_quality уже успела бы записать applied и врала бы (п. 13).
+  # Регулярно ставит каждый такт build.sh — здесь закрываем первую сборку.
+  box_tune_allocator_bg_threads "$dsn"
   echo "box_tune: первая сборка cpu_threads=$cpu_threads io_threads=$io_threads memory_limit=$limit_first swap=${swap_gib}G thread_min=$thread_min (возврат $limit_steady)"
 }
 
