@@ -24,17 +24,24 @@
 
 | Файл | Что это |
 |---|---|
-| `export/` | `EXPORT DATABASE (FORMAT parquet, COMPRESSION zstd)` — полный слепок базы: `schema.sql`, `load.sql`, `t_*.parquet` |
+| `export/schema.sql` | DDL всех 306 таблиц |
+| `export/load.sql` | COPY FROM для загрузки (запускать из каталога `export/`) |
+| `export/manifest.txt` | слаг файла → имя таблицы (латинский слаг ↔ исходное имя) |
+| `export/<префикс>_<NNN>.parquet` | данные 306 таблиц: 277 витрин (`document_*`, `accumulationregister_*`, `catalog_*`, `chartofaccounts_*`, `informationregister_*`) + 29 `search_*`; пофайловый `COPY … TO parquet (COMPRESSION zstd)` |
 | `repro_build.sql` | обёртка: `SET enable_profiling='json'` (profiling_output, coverage ALL) + сама нагрузка |
 | `corpus_build.sql` | нагрузка: последовательность INSERT…SELECT по большим таблицам |
-| `probe_finalize.sql` | `EXPLAIN ANALYZE` финализы зависающего statement-а из параллельной сессии |
+| `probe_finalize.sql` | `EXPLAIN ANALYZE` финализы из параллельной сессии |
 | `reloptions.txt` | дамп `pg_class.reloptions` |
 | `serened.conf` | конфиг движка |
+
+Слепок снят пофайлово, а не `EXPORT DATABASE`: на 26.08.1 `EXPORT DATABASE` падает целиком с `ERROR: Could not find node in column segment tree! Attempting to find row number "5267610" in 42 nodes` (после 523 файлов, на таблице `backup_corpus_emb`, ~5.27M строк). Ещё один кандидат к вашему фиксу. Вектора, бэкапы и tmp-таблицы в датасет не входят — для репро деградации не нужны, `corpus_build` строит корпус из витрин. Индексы не включены — `corpus_build` создаёт свои объекты сам.
+
+Обход от разработчика SereneDB (03.09): `SET force_dict_fsst_mode = 'AUTO_NATIVE'` — применяется на нашей стороне до фикса.
 
 ## 4. Воспроизведение
 
 1. Поднять SereneDB 26.08.1.
-2. Развернуть слепок: `IMPORT DATABASE 'export';` (или вручную: `schema.sql`, затем `load.sql`).
+2. Развернуть слепок: из каталога `export/` — `psql … -f schema.sql`, затем `psql … -f load.sql`.
 3. Запустить нагрузку: `psql "host=127.0.0.1 port=<ваш_порт> user=postgres dbname=postgres" -f repro_build.sql`.
 4. Первый час statement-ы завершаются (psql пишет `INSERT 0 N`, `Time: … ms`); монолитный шаг идёт долго — это норма.
 5. Проблемное окно (~60–70 мин от старта нагрузки): из второй сессии — `pg_stat_activity`, `pg_cancel_backend`, параллельно CPU-дельту `/proc/PID/stat`. Ожидание: каталог голодает, cancel не работает, CPU активен, statement не завершается.

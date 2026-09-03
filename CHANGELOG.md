@@ -1,3 +1,22 @@
+## 2026-09-03 (вечер) — Обход fsst (AUTO_NATIVE) по рекомендации SereneDB + датасет репро в S3 + новый баг EXPORT DATABASE
+
+**[решение+замер]** Andrei (SereneDB) воспроизвёл dict_fsst у себя и порекомендовал
+обход `SET force_dict_fsst_mode='AUTO_NATIVE'` (+30% диска) до их фикса. По приказу
+владельца: монолит №0e-4 остановлен в 17:28 UTC (рестарт, не дожидаясь порога);
+`SET GLOBAL` применён и подтверждён (`current_setting`=AUTO_NATIVE, 18:49 UTC);
+tmp3_* слиты (90 таблиц, \gexec); corpus_build перезапущен с нуля под обходом
+(лог /tmp/takt0_fsst.log, дозор порог 5.5 ч). **Новый баг движка 26.08.1:**
+`EXPORT DATABASE` падает целиком — `ERROR: Could not find node in column segment
+tree! Attempting to find row number "5267610" in 42 nodes` (523 файла/6.3 ГБ, оборвался
+на backup_corpus_emb ~5.27M строк); отправлен Andrei. **Датасет репро в бакете**
+1c-data/serenedb-repro-20260903/: export/ 309 файлов (306 таблиц: 277 витрин + 29
+search_*, пофайловый COPY TO parquet+zstd, 2.72 ГиБ, 306/306 без ошибок) + schema.sql
++ load.sql + manifest.txt + README (доступы §6) + reloptions.txt (57 КиБ, 1168
+объектов) + corpus_build.sql + repro_build.sql + probe_finalize.sql + serened.conf.
+Слаг-баг генератора (162 коллизии русских имён одной длины, manifest 144≠306) пойман
+сверкой счётчиков и исправлен суффиксами <префикс>_<NNN>. Заливка 96.8 МиБ/с.
+Числа: 306 таблиц/2.72 ГиБ/28 с; 90 DROP; tmp3 остаток 0. Доки: sql/statements/export_and_import_database; cookbook/file_formats/parquet_export
+
 ## 2026-09-03 (день) — №0e-4: снят вечный цикл самозалеча (порог 25 мин < монолит 4ч19м)
 
 **[замер]** Сухой такт №0e-4 шёл по кругу: 7 проходов corpus_build до одной точки

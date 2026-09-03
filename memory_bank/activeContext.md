@@ -7,46 +7,30 @@
 исполнение сошедшегося плана фиксов v3-финал армиями. Аудит TARGET (22+15+10
 агентов) завершён, план прошёл 3 круга до сходимости, всё в git/origin.
 
-### ЖИВОЕ: ТАКТ — №0e-4: монолит p_doc идёт без помех, дозор пассивный (срез 03.09 ~12:40 UTC)
-Пакет TAKT_SPEED v4 в origin (fb3eb55→980cbbf; замки 69/69 + 23/23; три живых бага
-закрыты — DISTINCT-дедуп, MAP-касты, NL_JOIN/fold). 🔴 ЖИВАЯ СБОРКА ОКНА =
-**26.08.1** («PostgreSQL 18.3 (SereneDB 26.08.1)», SELECT version() 03.09 — доки
-«26.07.3» устарели). 🔴 ЛОВУШКА 26.08.1: после ~60-70 мин тяжёлой нагрузки
-statement-ы НЕ завершаются (65 мин и 22+ мин, 20-32 ядра, журнал молчит),
-pg_stat_activity из новой сессии голодает 600+с, cancel/terminate НЕ работают —
-🔴 НОВЫЙ ФАКТ 03.09 (урок §3.109): порог самозалеча 25 мин резал здоровый
-монолит p_doc (вчерашний замер 4ч19м!) — 7 проходов по кругу, ~4.5 ч впустую.
-Теперь дозор пассивный: порог 5.5ч, цикл 10 мин (task bash-i4csmvt5); монолит
-с 12:21 UTC на 40 ядрах, ETA ~16:40. CPU-актив ≠ вердикт — различитель:
-прошлая длительность statement-а (лог /tmp/takt0_dry7.log).
-dict_fsst-отказ — транзиентный флеш, изолированные поводы проходят; стейдж рос 774995→1573317. Полный пакет разработчикам SereneDB уйдёт
-после такта №2 (репро: /tmp/repro_build.sql + probe_finalize.sql на окне,
-enable_profiling='json'+coverage ALL — проверен живьём). ЦЕПОЧКА ПО ЗАВЕРШЕНИИ №0e-4: (1) multiset tmp3_corpus
-по двум сущностям == эталон: document_реализациятмц 74982/57ad85decc6bd7405bde5
-f42d1fe68ec, accumulationregister_реализациятмц 78733/bf9de8a65cd5023325c0f34
-bb6c64d5f; ≠ → merge НЕ звать; (2) = → merge руками (psql -f /opt/1c-mcp-reports/
-corpus_merge.sql, env юнита; крит: дырки=живой ключ бэкапа с emb NULL→0,
-count(emb)≥1657724, векторов_умрёт/departed≈647 отчётом); (3) merge зелёный →
-поставить search_quality corpus_built_ts=unix(now) + build_sql_hash=md5(corpus_
-build.sql+poc_load_entity.py) → юнит systemctl start 1c-serene-pipeline@postgres
-(SKIP_BUILD=1, хвостовые шаги 1-period..8); (4) такт №2 минуты → (5) таймеры
-pipeline+apply (apply стопнут до конца приёмки!) → (6) L20-ретейк (§МЕХАНИКА;
-прошлый = invalid-stale) → (7) доки §3.10 (SCALE_BLOCKERS/techContext/RUNBOOK).
-Бэкап emb ×3 (свежий 1657724), откат только по (src_table,row_key). Продукт
-честно закрыт staleness-гейтом — откроется зелёным тактом. ЛОВУЧКИ СМЕНЫ:
-cancel/terminate_backend НЕ работают — снимать рестартом serenedb (tmp3_*
-персистентны, безопасно); pkill-литерал в той же ssh-строке = самопопадание;
-ssh+nohup стартер «висит» — не падение; CPU мерить дельтой /proc/PID/stat;
-выкат только из HEAD (коммить ДО scp); git add и commit РАЗНЫМИ вызовами.
-Круг D Скорости-II закрыт 4/4; план v3 принят (TAKT_SPEED2_PLAN: 4→3→2→1A).
-ЭТАПЫ 4+3 ИСПОЛНЕНЫ И ЗАКОММИЧЕНЫ (03.09; красная ×4 → R4 ОТКАЗ → фиксы →
-повторная 4/4 ПРИНЯТЬ; замки alloc 28/0, skip_canon 29/0): SET GLOBAL аллокатора
-каждый такт + зеркало после рестарта; SKIP-канон резолвера; пост-стена REFRESH.
-ВЫКАТ — после зелёного такта №2 + живая проба current_setting. Дальше Скорости-II:
-этапы 2 → 1A. «Полная B» (row-level): план v4.1 СОШЁЛСЯ 7 кругами аудита
-(FULLB_PLAN_2026-09-03.md; mode=колонка tmp3_build, сторож A≠EXISTS, мост до
-merge-ветвления 0→2→(1∥3)→4); исполнение после такта №2+L20, этап 4 — после
-Speed-II-2.
+### ЖИВОЕ: ТАКТ — сборка с обходом fsst AUTO_NATIVE (срез 03.09 ~18:50 UTC)
+Пакет TAKT_SPEED v4 в origin; v4-код в выкате (md5 229a2304 = репо). 🔴 ЖИВАЯ СБОРКА
+ОКНА = 26.08.1. 🔴 03.09 ВЕЧЕР: по рекомендации Andrei (SereneDB, воспроизвёл
+dict_fsst у себя) применён обход SET GLOBAL force_dict_fsst_mode='AUTO_NATIVE'
+(current_setting подтверждён; +30% диска; снять после их фикса); tmp3_* слиты (90);
+corpus_build перезапущен с нуля в 18:45 UTC, лог /tmp/takt0_fsst.log, дозор
+bash-c5c9ers3 (порог 5.5 ч — урок §3.109: порог = худший здоровый statement ×1.3).
+НОВЫЙ БАГ 26.08.1 (отправлен Andrei): EXPORT DATABASE падает «Could not find node
+in column segment tree!» (row 5267610, 42 nodes, backup_corpus_emb). ДАТАСЕТ РЕПРО
+В БАКЕТЕ 1c-data/serenedb-repro-20260903/ (доступы в README §6, владелец разрешил —
+ключи временные): export/ 306 таблиц пофайлово parquet+zstd 2.72 ГиБ (277 витрин +
+29 search_*; вектора/бэкапы/tmp не входят), schema.sql, load.sql, manifest.txt,
+README, reloptions.txt (1168 объектов), corpus_build.sql, repro_build.sql,
+probe_finalize.sql, serened.conf. ЦЕПОЧКА ПО «сборка завершена» (не менялась):
+(1) multiset tmp3_corpus == эталон 74982/57ad85decc6bd7405bde5f42d1fe68ec и
+78733/bf9de8a65cd5023325c0f34bb6c64d5f; ≠ → merge НЕ звать; (2) merge руками
+(psql -f /opt/1c-mcp-reports/corpus_merge.sql, env юнита; крит: дырки=0,
+count(emb)≥1657724, departed≈647); (3) search_quality corpus_built_ts+build_sql_hash
+→ юнит SKIP_BUILD → (4) такт №2 минуты → (5) таймеры pipeline+apply (стопнуты!) →
+(6) L20-ретейк → (7) доки §3.10. Бэкап emb ×3 жив. ЛОВУЧКИ: cancel/terminate не
+работают — снимать рестартом; pkill-литерал в ssh-строке = самопопадание (снова
+случилось 18:26 — kill только по PID отдельной командой); выкат из HEAD; add/commit
+раздельно. Скорость-II этапы 4+3 в cb2d262 — ВЫКАТ после такта №2. «Полная B» v4.1
+(2115ee6) — после такта №2+L20.
 
 ### АУДИТ TARGET 02.09 (завершён; сводная docs/audit/TARGET_AUDIT_2026-09-02.md)
 22 аудитора + 15 арбитров + 10 аудиторов плана. Классы: К1 env-флаги руками
