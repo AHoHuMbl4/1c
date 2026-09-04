@@ -7,30 +7,28 @@
 исполнение сошедшегося плана фиксов v3-финал армиями. Аудит TARGET (22+15+10
 агентов) завершён, план прошёл 3 круга до сходимости, всё в git/origin.
 
-### ЖИВОЕ: ТАКТ — сборка с обходом fsst AUTO_NATIVE (срез 03.09 ~18:50 UTC)
-Пакет TAKT_SPEED v4 в origin; v4-код в выкате (md5 229a2304 = репо). 🔴 ЖИВАЯ СБОРКА
-ОКНА = 26.08.1. 🔴 03.09 ВЕЧЕР: по рекомендации Andrei (SereneDB, воспроизвёл
-dict_fsst у себя) применён обход SET GLOBAL force_dict_fsst_mode='AUTO_NATIVE'
-(current_setting подтверждён; +30% диска; снять после их фикса); tmp3_* слиты (90);
-corpus_build перезапущен с нуля в 18:45 UTC, лог /tmp/takt0_fsst.log, дозор
-bash-c5c9ers3 (порог 5.5 ч — урок §3.109: порог = худший здоровый statement ×1.3).
-НОВЫЙ БАГ 26.08.1 (отправлен Andrei): EXPORT DATABASE падает «Could not find node
-in column segment tree!» (row 5267610, 42 nodes, backup_corpus_emb). ДАТАСЕТ РЕПРО
-В БАКЕТЕ 1c-data/serenedb-repro-20260903/ (доступы в README §6, владелец разрешил —
-ключи временные): export/ 306 таблиц пофайлово parquet+zstd 2.72 ГиБ (277 витрин +
-29 search_*; вектора/бэкапы/tmp не входят), schema.sql, load.sql, manifest.txt,
-README, reloptions.txt (1168 объектов), corpus_build.sql, repro_build.sql,
-probe_finalize.sql, serened.conf. ЦЕПОЧКА ПО «сборка завершена» (не менялась):
-(1) multiset tmp3_corpus == эталон 74982/57ad85decc6bd7405bde5f42d1fe68ec и
-78733/bf9de8a65cd5023325c0f34bb6c64d5f; ≠ → merge НЕ звать; (2) merge руками
-(psql -f /opt/1c-mcp-reports/corpus_merge.sql, env юнита; крит: дырки=0,
-count(emb)≥1657724, departed≈647); (3) search_quality corpus_built_ts+build_sql_hash
-→ юнит SKIP_BUILD → (4) такт №2 минуты → (5) таймеры pipeline+apply (стопнуты!) →
-(6) L20-ретейк → (7) доки §3.10. Бэкап emb ×3 жив. ЛОВУЧКИ: cancel/terminate не
-работают — снимать рестартом; pkill-литерал в ssh-строке = самопопадание (снова
-случилось 18:26 — kill только по PID отдельной командой); выкат из HEAD; add/commit
-раздельно. Скорость-II этапы 4+3 в cb2d262 — ВЫКАТ после такта №2. «Полная B» v4.1
-(2115ee6) — после такта №2+L20.
+### ЖИВОЕ: ТАКТ — ПРИОСТАНОВЛЕН до фикса SereneDB (срез 04.09 ~05:00 UTC)
+🔴 ВЕРДИКТ НОЧИ 03-04.09: деградация SereneDB 26.08.1 (statement не завершается
+при активном CPU; каталог голодает; cancel/terminate не работают) НЕ обходится
+ничем: AUTO_NATIVE/DEFAULT, свежий движок, хвосты скрипта, force_checkpoint,
+чистый непрерывный проход — умер на 64-й мин молчания. Портрет бага: EXPLAIN
+ANALYZE той же цепочки параллельно зависшему EXECUTE = 4.18 с; монолит p_doc
+1.66 с на свежем движке против 4ч19м деградации. Всё у Andrei: бакет
+1c-data/serenedb-repro-20260903/ (306 таблиц + probe_finalize_explain.txt +
+README+доступы §6 + reloptions). На окне: сборка ОСТАНОВЛЕНА 04:51 UTC,
+fsst-режим = AUTO_NATIVE (вернуть DEFAULT после их фикса), ВЕКТОРА ЦЕЛЫ (merge
+не звался, прод-корпус жив, бэкапы ×3), таймеры такта/apply стопнуты. ЧЕГО
+ЖДЁМ: фикс SereneDB (Andrei уже воспроизвёл dict_fsst; его вопрос про
+row_group_size закрыт reloptions.txt). ПОСЛЕ ФИКСА: чистый рестарт → полный
+corpus_build (ЕДИНЫЙ проход, без карусели; при зависании — только диагностика:
+pg_stat_activity, probe) → multiset 74982/57ad85de…, 78733/bf9de8a6… → merge
+(emb≥1657724, дырки=0, departed≈647) → search_quality → юнит SKIP_BUILD → такт
+№2 → таймеры → L20 → выкат cb2d262. Ловушки (HOW_NOT_TO §3.109/§3.110):
+рестарт откатывает к чекпойнту; resume-ветки скрипта деструктивны при
+прерываниях (tmp3_run, DELETE:1658); дозор по grep всего лога ловит старый
+«сборка завершена»; pkill-литерал в ssh = самопопадание; kill и запуск —
+разными ssh-командами; EXPLAIN-проба из второй сессии — различитель
+«данные быстрые/исполнение висит».
 
 ### АУДИТ TARGET 02.09 (завершён; сводная docs/audit/TARGET_AUDIT_2026-09-02.md)
 22 аудитора + 15 арбитров + 10 аудиторов плана. Классы: К1 env-флаги руками
