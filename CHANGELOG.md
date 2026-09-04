@@ -1,3 +1,17 @@
+## 2026-09-04 (день) — Разработчикам дослан $metadata: единственная внешняя зависимость corpus_build в датасете
+
+**[замер]** Просьба ребят «не хватает xml, который скрипт сам скачивает из 1С» — это
+`$metadata` (OData edmx). В такте он приезжает НЕ по HTTP, а локальным файлом:
+`read_text(:'gate' || '/$metadata')` (corpus_build.sql:35), где gate = ETL_ODATA_BASE =
+/var/lib/serenedb/packet-meta/okna-1 — снимок туда пишет packet_apply из пакетов
+агента. Снимок окна залит в бакет: `serenedb-repro-20260903/$metadata` (etag совпал
+с md5 источника). Сверено: corpus_build.sql в бакете побайтово равен репо
+(229a2304…), внешних переменных кроме :gate нет — больше разработчикам ничего не
+нужно. README датасета (бакет) и docs/research/SERENEDB_REPRO_DATASET.md дополнены:
+строка в §3, шаг запуска `-v gate=<каталог>` в §4.
+Числа: 890 387 Б; 819 EntityType; md5 3f396ff1a1cb7155f0d8c445f4487758.
+Доки: docs/research/SERENEDB_REPRO_DATASET.md
+
 ## 2026-09-04 (утро) — Починен автовброс «С ЧЕГО НАЧАТЬ»: заголовок раздела возвращён к H1
 
 **[замер]** Хук session-start.sh (вброс состояния в сессии Claude и Kimi) ищет

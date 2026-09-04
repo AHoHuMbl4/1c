@@ -28,6 +28,7 @@
 | `export/load.sql` | COPY FROM для загрузки (запускать из каталога `export/`) |
 | `export/manifest.txt` | слаг файла → имя таблицы (латинский слаг ↔ исходное имя) |
 | `export/<префикс>_<NNN>.parquet` | данные 306 таблиц: 277 витрин (`document_*`, `accumulationregister_*`, `catalog_*`, `chartofaccounts_*`, `informationregister_*`) + 29 `search_*`; пофайловый `COPY … TO parquet (COMPRESSION zstd)` |
+| `$metadata` | XML-снимок метаданных 1С (OData edmx, 819 EntityType, 890 387 Б, md5 `3f396ff1…`) — единственная внешняя зависимость нагрузки: `read_text(:'gate' \|\| '/$metadata')` (corpus_build.sql:35). У нас такт берёт его локальным файлом из packet-meta, снимок пишет packet_apply |
 | `repro_build.sql` | обёртка: `SET enable_profiling='json'` (profiling_output, coverage ALL) + сама нагрузка |
 | `corpus_build.sql` | нагрузка: последовательность INSERT…SELECT по большим таблицам |
 | `probe_finalize.sql` | `EXPLAIN ANALYZE` финализы из параллельной сессии |
@@ -42,7 +43,7 @@
 
 1. Поднять SereneDB 26.08.1.
 2. Развернуть слепок: из каталога `export/` — `psql … -f schema.sql`, затем `psql … -f load.sql`.
-3. Запустить нагрузку: `psql "host=127.0.0.1 port=<ваш_порт> user=postgres dbname=postgres" -f repro_build.sql`.
+3. Положить `$metadata` в отдельный каталог (имя файла — ровно `$metadata`) и передать каталог в `gate` при запуске нагрузки: `psql "host=127.0.0.1 port=<ваш_порт> user=postgres dbname=postgres" -v gate=<каталог> -f repro_build.sql` (переменная psql доезжает и внутрь `\i corpus_build.sql`; слэш в конце не нужен — скрипт сам дописывает `/$metadata`; других внешних зависимостей у нагрузки нет).
 4. Первый час statement-ы завершаются (psql пишет `INSERT 0 N`, `Time: … ms`); монолитный шаг идёт долго — это норма.
 5. Проблемное окно (~60–70 мин от старта нагрузки): из второй сессии — `pg_stat_activity`, `pg_cancel_backend`, параллельно CPU-дельту `/proc/PID/stat`. Ожидание: каталог голодает, cancel не работает, CPU активен, statement не завершается.
 6. Для разбора плана финализы — `probe_finalize.sql` из второй сессии.
