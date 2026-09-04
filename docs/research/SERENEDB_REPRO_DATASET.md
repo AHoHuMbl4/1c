@@ -30,6 +30,7 @@
 | `export/<префикс>_<NNN>.parquet` | данные 306 таблиц: 277 витрин (`document_*`, `accumulationregister_*`, `catalog_*`, `chartofaccounts_*`, `informationregister_*`) + 29 `search_*`; пофайловый `COPY … TO parquet (COMPRESSION zstd)` |
 | `$metadata` | XML-снимок метаданных 1С (OData edmx, 819 EntityType, 890 387 Б, md5 `3f396ff1…`) — единственная внешняя зависимость нагрузки: `read_text(:'gate' \|\| '/$metadata')` (corpus_build.sql:35). У нас такт берёт его локальным файлом из packet-meta, снимок пишет packet_apply |
 | `export-extra/` | довесок 04.09: 74 таблицы витрины, не вошедшие в первый слепок — `constant_*` (32), `documentjournal_*` (14), `chartofcharacteristictypes_*` (10), `chartofcalculationtypes_*` (8), `exchangeplan_*` (8), регистры бухгалтерии/расчёта (2); `schema_extra.sql` + `load_extra.sql` + `manifest_extra.txt` + parquet, слаги 307–380. Первый слепок нёс 277 из 351 источника `search_sources`, и замок `corpus_build.sql:978` («источники исчезли из витрины») останавливал прогон. Все 74 файла сверены: строк в parquet = строк в таблице-источнике |
+| `init_extra.sql` | довесок 04.09 (3): то, что не переносят ни schema, ни parquet — два макроса из corpus_init.sql (`corpus_doc_bmap` и `corpus_content_hash`; второй вызывает первого, нужны оба), `CREATE ROLE serene_ro` (GRANT-ы внутри corpus_build: :1001, :2615; если роль уже создана — строку закомментировать) и предсоздание `tmp3_run` (читается :1618 до создания :2743; пустая = полный проход). Выполнять после schema/load, до repro_build |
 | `repro_build.sql` | обёртка: `SET enable_profiling='json'` (profiling_output, coverage ALL) + сама нагрузка |
 | `corpus_build.sql` | нагрузка: последовательность INSERT…SELECT по большим таблицам |
 | `probe_finalize.sql` | `EXPLAIN ANALYZE` финализы из параллельной сессии |
@@ -45,12 +46,13 @@
 1. Поднять SereneDB 26.08.1.
 2. Развернуть слепок: из каталога `export/` — `psql … -f schema.sql`, затем `psql … -f load.sql`.
 3. Развернуть довесок из `export-extra/` тем же способом (`psql … -f schema_extra.sql`, затем `psql … -f load_extra.sql` из этого каталога) — без него прогон останавливается замком `corpus_build.sql:978` «источники исчезли из витрины».
-4. Положить `$metadata` в отдельный каталог (имя файла — ровно `$metadata`); каталог пойдёт в `gate` при запуске (слэш в конце не нужен — скрипт сам дописывает `/$metadata`).
-5. Исключить инкрементальный путь: `psql … -c "UPDATE search_quality SET v=0 WHERE k='changed_sources_ok';"` — иначе снятые `search_quality`/`search_refmap`/`search_corpus` могут направить скрипт в лёгкий инкремент вместо полного прохода (полный проход и есть нагрузка для репро).
-6. Запустить нагрузку: `psql "host=127.0.0.1 port=<ваш_порт> user=postgres dbname=postgres" -v gate=<каталог> -f repro_build.sql` (переменная psql доезжает и внутрь `\i corpus_build.sql`; других внешних зависимостей у нагрузки нет, `ai_embed` в `corpus_build.sql` не используется).
-7. Первый час statement-ы завершаются (psql пишет `INSERT 0 N`, `Time: … ms`); монолитный шаг идёт долго — это норма.
-8. Проблемное окно (~60–70 мин от старта нагрузки): из второй сессии — `pg_stat_activity`, `pg_cancel_backend`, параллельно CPU-дельту `/proc/PID/stat`. Ожидание: каталог голодает, cancel не работает, CPU активен, statement не завершается.
-9. Для разбора плана финализы — `probe_finalize.sql` из второй сессии.
+4. Выполнить `psql … -f init_extra.sql` — макросы `corpus_doc_bmap`/`corpus_content_hash` (второй вызывает первого), роль `serene_ro` и предсоздание `tmp3_run`; без него прогон падает на `corpus_build.sql:2467` «corpus_content_hash does not exist».
+5. Положить `$metadata` в отдельный каталог (имя файла — ровно `$metadata`); каталог пойдёт в `gate` при запуске (слэш в конце не нужен — скрипт сам дописывает `/$metadata`).
+6. Исключить инкрементальный путь: `psql … -c "UPDATE search_quality SET v=0 WHERE k='changed_sources_ok';"` — иначе снятые `search_quality`/`search_refmap`/`search_corpus` могут направить скрипт в лёгкий инкремент вместо полного прохода (полный проход и есть нагрузка для репро).
+7. Запустить нагрузку: `psql "host=127.0.0.1 port=<ваш_порт> user=postgres dbname=postgres" -v gate=<каталог> -f repro_build.sql` (переменная psql доезжает и внутрь `\i corpus_build.sql`; других внешних зависимостей у нагрузки нет, `ai_embed` в `corpus_build.sql` не используется).
+8. Первый час statement-ы завершаются (psql пишет `INSERT 0 N`, `Time: … ms`); монолитный шаг идёт долго — это норма.
+9. Проблемное окно (~60–70 мин от старта нагрузки): из второй сессии — `pg_stat_activity`, `pg_cancel_backend`, параллельно CPU-дельту `/proc/PID/stat`. Ожидание: каталог голодает, cancel не работает, CPU активен, statement не завершается.
+10. Для разбора плана финализы — `probe_finalize.sql` из второй сессии.
 
 ## 5. Что уже пробовали
 
