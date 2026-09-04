@@ -72,7 +72,8 @@ L, затем default=1 + удаление HTTP-ветки) → **4C** (убра
 ### 🔴 РЕЖИМ: я — оркестратор, ВСЁ армиями агентов (указание владельца 03.09: ×4)
 (1) сам нахожу file:line, пишу самодостаточный промт в
 `.claude/state/prompt-<id>.md`; (2) каждый агент — cursor-agent НАПРЯМУЮ
-Bash-фоном (квота Kimi-subagent исчерпана 402, обёрток нет):
+Bash-фоном (канон — cursor-agent, не Kimi-субагенты; доки —
+docs/ORCHESTRATION_CURSOR.md):
 `cd /srv/1c && timeout 1800 cursor-agent -p "$(cat .claude/state/prompt-X.md)"
 --force --model auto --output-format stream-json 2>&1 | tee .claude/state/
 cursor-run-X.log`; (3) приёмка — замеры/чтение кода МОИ, не слова агента;
@@ -91,19 +92,21 @@ type=result в stream-json; исполнителям — «коммитов НЕ
 (33458a2), класс 8 post-verify лидер (0a7a6d4), класс 9c journal-ghost (837551d),
 q1 ASK_WIKI_CHOICE удалён, q2 gold-эталоны на витрину (fc165a7).
 
-### ОЧЕРЕДЬ (срез 02.09 ~20:30 UTC)
+### ОЧЕРЕДЬ (срез 04.09)
 Исполнение = план v3-финал (см. блок ПЛАН ФИКСОВ выше): 0 → 1∥2A → 2B →
 3A → 3B → [3C] → 4A → 4B → 4C → 5 → 6. L20 (0.2) — сразу после приёмки
-такта. Бэклог вне плана (не начинать без владельца): «полная B такта»
-(row-level p_doc, для баз 10-30×); 10 путей entity-clarify вне wiki (mapC);
-исход B контракта; И2 web. «реально покупают» 145 — скилл, решение №9.
+такта (такт ждёт фикс SereneDB, см. ЖИВОЕ). «Полная B» — НЕ бэклог, а
+обязательный этап (решение №14, план сошёлся). Бэклог вне плана (не начинать
+без владельца): 10 путей entity-clarify вне wiki (mapC); исход B контракта;
+И2 web. «реально покупают» 145 — скилл, решение №9.
 
-### ЖИВОЕ СЕЙЧАС (02.09; история — в CHANGELOG/progress)
-- **HEAD = 062c413 = origin/main** (TAKT_SPEED v4 исполнен; подробности —
-  верхняя секция ЖИВОЕ). Restore-drill векторов пройден (5550/5550
-  бит-в-бит): сначала row_key, fallback по content_hash ТОЛЬКО из
+### ЖИВОЕ СЕЙЧАС (04.09; история — в CHANGELOG/progress)
+- **HEAD = b933902 = origin/main** (ночь 03-04.09: датасет SereneDB в S3,
+  вердикт «ждать фикс», уроки §3.109-3.110). Restore-drill векторов пройден
+  (5550/5550 бит-в-бит): сначала row_key, fallback по content_hash ТОЛЬКО из
   HAVING count(*)=1 групп; coalesce над FLOAT[1024] движок не умеет — два
-  UPDATE. Бэкапы: backup_corpus_emb_20260902_1430 + _2_20260902_1500.
+  UPDATE. Бэкапы: backup_corpus_emb_20260902_1430 + _2_20260902_1500 + свежий
+  1657724 — все живы, вектора НЕ терялись за ночь (merge не звался).
 - **Пакет v10 (d6178ee):** A чанкование по ячейкам; B0 search_changed_rows
   (partial_rebuild=0 константой); C шаг 5 embed_bulk (strict, restore
   globals fail-closed, REFRESH corpus_ivf_idx + smoke kNN); D wiki_alias
