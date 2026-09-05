@@ -101,6 +101,12 @@ q1 ASK_WIKI_CHOICE удалён, q2 gold-эталоны на витрину (fc1
 И2 web. «реально покупают» 145 — скилл, решение №9.
 
 ### ЖИВОЕ СЕЙЧАС (04.09; история — в CHANGELOG/progress)
+- **Словарь на Hetzner Inference (05.09, ключ владельца):** провайдер `vllm` на окне →
+  `https://inference.hetzner.com/api/v1` (Qwen3.8-27B), ключ в auth-store `vllm:default`
+  (apiKey-поля в провайдере НЕТ — deepseek-стиль, иначе --local без шлюза падает);
+  `/etc/1c-wiki-alias-postgres.env` несёт WIKI_ALIAS_MODEL/VLLM_BASE_URL/VLLM_MODEL_ID.
+  Платформа chat молчит (0 байт/300 с при /models 200) — смоук и прогон после появления
+  ёмкости; бэкап `openclaw.json.bak-nanogpt-20260905-191905`, откат uAI_-ключа — EMBED_HOSTS.
 - **HEAD = b933902 = origin/main** (ночь 03-04.09: датасет SereneDB в S3,
   вердикт «ждать фикс», уроки §3.109-3.110). Restore-drill векторов пройден
   (5550/5550 бит-в-бит): сначала row_key, fallback по content_hash ТОЛЬКО из

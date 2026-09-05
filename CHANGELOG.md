@@ -1,3 +1,25 @@
+## 2026-09-05 (вечер) — Словарь синонимов переведён на Hetzner Inference API (Qwen3.8-27B, ключ владельца); платформа chat пока не отвечает
+
+**[решение владельца + замер]** Ключ владельца опознан: **Hetzner Inference**
+(experimental, бесплатно; base `https://inference.hetzner.com/api/v1`, модель ровно наша
+`Qwen3.8-27B`, лимит 10 req/60с на ключ; доки предоставлены владельцем). Проводка на окне:
+провайдер `vllm` → hetzner, поле `apiKey` из провайдера УБРАНО — ключ в auth-store
+`vllm:default` (deepseek-стиль: с `apiKey=${VAR}` --local-вызовы без шлюза падают на
+secrets.resolve, а юнит окна зовёт runuser без `--preserve-environment`); allow-entry
+`vllm/Qwen3.8-27B` очищен от `chat_template_kwargs` (запрос — ровно форма доков);
+dict-агент и `/etc/1c-wiki-alias-postgres.env` (WIKI_ALIAS_MODEL/VLLM_BASE_URL/VLLM_MODEL_ID;
+без VLLM_API_KEY — иначе ensure вернул бы apiKey-поле) переведены на hetzner. Бэкапы:
+`openclaw.json.bak-nanogpt-20260905-191905` (исходное состояние), `/etc/1c-wiki-alias-postgres.env.bak-nanogpt-*`.
+Прежний uAI_-ключ auth-store затёрт; восстановление — из `/etc/1c-embed.env` (дев,
+EMBED_HOSTS), против 10.3.1.12:8000 проверен 200. **[замер]** Платформа chat сейчас НЕ
+обслуживает: `/models` 200 мгновенно; `chat/completions` Qwen3.8-27B — 0 байт за 300 с во
+всех формах (док-форма без max_tokens/stream в том числе); их вторая модель — мгновенный
+`ServiceUnavailable: failed to find endpoint candidates`. Попутно закрыто: ключ отвергнут
+nano-gpt/mistral/groq/nebius/fireworks/together/deepinfra (401; `/v1/models` у nano-gpt
+публичен — «200» ничего не доказывал). Смоук генератора — после появления ёмкости.
+Числа: 0 байт/300 с; 7 сервисов 401; 10 req/60с лимит доков.
+Доки: NETWORK.md; TARGET_STATUS.md п.16
+
 ## 2026-09-04 (вечер) — Репро: доложен init_extra.sql — макросы/роль/tmp3_run, которых нет в слепке таблиц
 
 **[замер]** Второй прогон разработчиков дошёл до `corpus_build.sql:2467` — «corpus_content_hash

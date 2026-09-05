@@ -82,6 +82,7 @@ RU (клиент)                         EU (Hetzner)
 | **Rerank** | `http://10.3.1.11:8005/rerank` | `http://178.63.211.188:8005/rerank` | gpu-1c |
 | **Whisper** ⏸ остановлен 23.08 (GPU под пересчёт) | `http://10.3.1.11:8006/v1/audio/transcriptions` | `http://178.63.211.188:8006/…` | gpu-1c |
 | **LLM (Qwen3.8-27B FP8, контекст 64k с 23.08)** | `http://10.3.1.12:8000/v1/chat/completions` | `http://49.13.97.101:8000/…` | gpu-qwen27b |
+| **LLM-словарь синонимов (с 05.09)** | `https://inference.hetzner.com/api/v1` — Qwen3.8-27B, ключ владельца, эксперимент (бесплатно) | прежний локальный `10.3.1.12:8000` (жив) | inference.hetzner.com |
 | **Diarize (pyannote)** ⏸ остановлен 23.08 (GPU под пересчёт) | `http://10.3.1.12:8001/` | `http://49.13.97.101:8001/` | gpu-qwen27b |
 | **Embeddings (2-й)** (падал по памяти, починен 23.08) | `http://10.3.1.12:8002/v1/embeddings` | `http://49.13.97.101:8002/…` | gpu-qwen27b |
 
