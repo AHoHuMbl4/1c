@@ -84,7 +84,7 @@ RU (клиент)                         EU (Hetzner)
 | **LLM (Qwen3.8-27B FP8, контекст 64k с 23.08)** | `http://10.3.1.12:8000/v1/chat/completions` | `http://49.13.97.101:8000/…` | gpu-qwen27b |
 | **LLM-словарь синонимов (с 06.09)** | `https://openrouter.ai/api/v1` — `qwen/qwen3.8-27b`, ключ владельца (pay-as-you-go) | прежний локальный `10.3.1.12:8000` (жив); Hetzner Inference не пошёл (край режет 300 с) | openrouter.ai |
 | **Diarize (pyannote)** ⏸ остановлен 23.08 (GPU под пересчёт) | `http://10.3.1.12:8001/` | `http://49.13.97.101:8001/` | gpu-qwen27b |
-| **Embeddings (2-й)** (падал по памяти, починен 23.08) | `http://10.3.1.12:8002/v1/embeddings` | `http://49.13.97.101:8002/…` | gpu-qwen27b |
+| **Embeddings (2-й)** ⛔ недоступен (снят из пулов 06.09; пул сведён на `10.3.1.11:8000`) | `—` | `—` | gpu-qwen27b |
 
 Env прод-коробок: `EMBED_HOSTS` = оба embed через `|ключ`; `EMBED_BASE_URL`/`EMBED_HOST` →
 `10.3.1.11:8000`; `RERANK_URL` → `10.3.1.11:8005/rerank`; `DEEPSEEK_BASE` → с 06.09
