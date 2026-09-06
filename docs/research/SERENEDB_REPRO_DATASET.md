@@ -75,3 +75,37 @@ Secret:   Feb6glLjNKRcfDcNZclBuiPJXWCKtdyGCC6Mz2Yl
 mc alias set h https://S2HHLGIPZOGA8DR27TVA:<SECRET>@fsn1.your-objectstorage.com
 mc cp --recursive h/1c-data/serenedb-repro-20260903/ .
 ```
+
+## 7. Хронология обмена и текущий статус (срез 06.09)
+
+Наш баг-репорт: деградация исполнения под длительной нагрузкой (§2). Датасет — §3,
+доступ — §6. Обмен по шагам:
+
+1. **03.09** — датасет собран и залит: 306 таблиц (parquet zstd), скрипты
+   (`repro_build.sql`, `corpus_build.sql`, `probe_finalize.sql`), `probe_finalize_explain.txt`,
+   `reloptions.txt`, `serened.conf`, README.
+2. **04.09 день** — разработчики: «не хватает xml, который скрипт сам скачивает из 1С».
+   Это `$metadata` (OData edmx): такт берёт его НЕ по HTTP, а локальным файлом
+   `read_text(:'gate' || '/$metadata')` (corpus_build.sql:35; gate = packet-meta).
+   Доложен снимок окна: 890 387 Б, 819 EntityType, md5 `3f396ff1…` (etag сверен).
+3. **04.09 вечер** — их прогон упал на `corpus_build.sql:978` «источники исчезли из
+   витрины»: fail-closed замок `search_sources` (351 источник) против 277 витрин слепка
+   (первый экспорт перечислял 5 префиксов видов). Доложен `export-extra/`: 74 таблицы
+   (constant 32, documentjournal 14, chartofcharacteristictypes 10,
+   chartofcalculationtypes 8, exchangeplan 8, регистры бухгалтерии/расчёта 2; слаги
+   307–380; все сверены строка-в-строку) + шаг принудительного полного прохода
+   (`UPDATE search_quality SET v=0 WHERE k='changed_sources_ok'`).
+4. **04.09 вечер-2** — их прогон дошёл до `corpus_build.sql:2467` «corpus_content_hash
+   does not exist»; руками создали роль `serene_ro` и `tmp3_run`. Доложен
+   `init_extra.sql`: ОБА макроса (`corpus_doc_bmap` + `corpus_content_hash` — второй
+   вызывает первого; тела побайтово из corpus_init.sql:47-82, репо = выкат md5
+   `25d50779`), `CREATE ROLE serene_ro`, предсоздание `tmp3_run` (:1618 читается раньше
+   :2743).
+5. **Реестр зависимостей закрыт по коду**: `corpus_cell_num` определён в самом
+   corpus_build.sql (:817); `query_table` — встроенная функция движка (их прогон дошёл
+   до :943 — доказано); `resolver_index`/`build_state`/текстовые словари/`ai_embed`
+   скрипт не использует. После `init_extra.sql` внешних дыр в датасете НЕТ — если
+   что-то падает дальше, это поведение движка, а не состав датасета.
+6. **Статус**: их сторона довела прогон до тяжёлой части (после init_extra внешних
+   препятствий нет). Ждём их вердикт/фикс 26.08.1 — сигнал приходит от владельца.
+   Наша цепочка после фикса — `memory_bank/activeContext.md`, раздел «ПОСЛЕ ФИКСА».
