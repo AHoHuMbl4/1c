@@ -1,3 +1,19 @@
+## 2026-09-06 — Словарь работает на OpenRouter (qwen/qwen3.8-27b): смоук полного пути 18,5 с
+
+**[замер + решение владельца]** Владелец дал ключ OpenRouter. Пробы: `/api/v1/key` 200
+(usage 0, лимита нет, pay-as-you-go); chat `qwen/qwen3.8-27b` — 200 за 4,5 с (провайдер
+под названием Darkbloom), против 257 с у Hetzner. Проводка окна: провайдер `vllm` →
+`https://openrouter.ai/api/v1`, ключ в auth-store `vllm:default` (заливка через tmp-файл
+undebot — прошлый фокус с /root упал Permission denied и дал 401, починено), model-id
+`qwen/qwen3.8-27b`, dict-агент и allow-entry `vllm/qwen/qwen3.8-27b`, env юнита
+`/etc/1c-wiki-alias-postgres.env` (WIKI_ALIAS_MODEL/VLLM_BASE_URL/VLLM_MODEL_ID),
+gateway env — ключ+base. **Смоук штатного пути генератора** (alias_infer_gateway →
+openclaw infer --local → OpenRouter): rc=0 за **18,5 с**, ответ — валидный JSON по схеме
+(aliases с ролями клиентов/поставщиков, quantities с короткими именами). Генератор готов
+к прогону по слову владельца (тратит его кредит). Бэкап `openclaw.json.bak-openrouter-*`.
+Числа: 4,5 с простой вызов; 18,5 с смоук (2 сущности, величины); Hetzner — 257 с/504.
+Доки: NETWORK.md; TARGET_STATUS п.16; memory_bank/activeContext.md
+
 ## 2026-09-06 (ночь) — Hetzner Inference: край режет запросы на ~300 с; генератор словаря при текущей скорости платформы не проходит
 
 **[замер]** Ночь автопроб (каждые 30 мин): почти всегда 504 (0 байт → потом HTML-страница

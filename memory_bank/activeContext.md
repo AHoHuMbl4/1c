@@ -101,14 +101,12 @@ q1 ASK_WIKI_CHOICE удалён, q2 gold-эталоны на витрину (fc1
 И2 web. «реально покупают» 145 — скилл, решение №9.
 
 ### ЖИВОЕ СЕЙЧАС (04.09; история — в CHANGELOG/progress)
-- **Словарь на Hetzner Inference (05.09, ключ владельца):** провайдер `vllm` на окне →
-  `https://inference.hetzner.com/api/v1` (Qwen3.8-27B), ключ в auth-store `vllm:default`
-  (apiKey-поля в провайдере НЕТ — deepseek-стиль, иначе --local без шлюза падает);
+- **Словарь на OpenRouter (06.09, ключ владельца):** провайдер `vllm` на окне →
+  `https://openrouter.ai/api/v1` (`qwen/qwen3.8-27b`), ключ в auth-store `vllm:default`;
   `/etc/1c-wiki-alias-postgres.env` несёт WIKI_ALIAS_MODEL/VLLM_* (+VLLM_TIMEOUT_SEC=900).
-  🔴 Край Hetzner режет запросы на ~300 с (504, стриминг тоже) — при текущей скорости
-  платформы генератор не проходит; автопроба ОТМЕНЕНА владельцем 06.09; откат на
-  локальный 27B — правка baseUrl; бэкап `openclaw.json.bak-nanogpt-20260905-191905`,
-  uAI_-ключ — EMBED_HOSTS.
+  ✅ Смоук полного пути 18,5 с, JSON по схеме. Hetzner Inference не пошёл (край режет 300 с,
+  504; автопроба отменена владельцем). Откат на локальный 27B — правка baseUrl; бэкапы
+  `openclaw.json.bak-openrouter-*` / `bak-nanogpt-20260905-191905`; uAI_-ключ — EMBED_HOSTS.
 - **HEAD = b933902 = origin/main** (ночь 03-04.09: датасет SereneDB в S3,
   вердикт «ждать фикс», уроки §3.109-3.110). Restore-drill векторов пройден
   (5550/5550 бит-в-бит): сначала row_key, fallback по content_hash ТОЛЬКО из
