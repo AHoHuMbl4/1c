@@ -101,12 +101,13 @@ q1 ASK_WIKI_CHOICE удалён, q2 gold-эталоны на витрину (fc1
 И2 web. «реально покупают» 145 — скилл, решение №9.
 
 ### ЖИВОЕ СЕЙЧАС (04.09; история — в CHANGELOG/progress)
-- **Словарь на OpenRouter (06.09, ключ владельца):** провайдер `vllm` на окне →
-  `https://openrouter.ai/api/v1` (`qwen/qwen3.8-27b`), ключ в auth-store `vllm:default`;
-  `/etc/1c-wiki-alias-postgres.env` несёт WIKI_ALIAS_MODEL/VLLM_* (+VLLM_TIMEOUT_SEC=900).
-  ✅ Смоук полного пути 18,5 с, JSON по схеме. Hetzner Inference не пошёл (край режет 300 с,
-  504; автопроба отменена владельцем). Откат на локальный 27B — правка baseUrl; бэкапы
-  `openclaw.json.bak-openrouter-*` / `bak-nanogpt-20260905-191905`; uAI_-ключ — EMBED_HOSTS.
+- **27B-потребители на OpenRouter (06.09, ключ владельца):** (а) словарь — провайдер
+  `vllm` на окне → `https://openrouter.ai/api/v1` (`qwen/qwen3.8-27b`), ключ в auth-store
+  `vllm:default`, смоук 18,5 с; (б) classify/reports-пайплайн — `DEEPSEEK_*` в
+  `/etc/1c-mcp-reports.env` и `/etc/1c-serene-ask-postgres.env` (base/model/key;
+  модель в env ОБЯЗАТЕЛЬНА — дефолт flash промахнётся), ask@postgres рестартован,
+  health 200, живой вопрос разобран. Hetzner не пошёл (край 300 с). Откат на локальный
+  27B — baseUrl/DEEPSEEK_BASE + uAI_-ключ (EMBED_HOSTS); бэкапы `*.bak-openrouter-*`.
 - **HEAD = b933902 = origin/main** (ночь 03-04.09: датасет SereneDB в S3,
   вердикт «ждать фикс», уроки §3.109-3.110). Restore-drill векторов пройден
   (5550/5550 бит-в-бит): сначала row_key, fallback по content_hash ТОЛЬКО из

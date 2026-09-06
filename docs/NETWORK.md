@@ -87,8 +87,9 @@ RU (клиент)                         EU (Hetzner)
 | **Embeddings (2-й)** (падал по памяти, починен 23.08) | `http://10.3.1.12:8002/v1/embeddings` | `http://49.13.97.101:8002/…` | gpu-qwen27b |
 
 Env прод-коробок: `EMBED_HOSTS` = оба embed через `|ключ`; `EMBED_BASE_URL`/`EMBED_HOST` →
-`10.3.1.11:8000`; `RERANK_URL` → `10.3.1.11:8005/rerank`; `DEEPSEEK_BASE` → `10.3.1.12:8000`
-(имя переменной историческое — модель Qwen3.8-27B).
+`10.3.1.11:8000`; `RERANK_URL` → `10.3.1.11:8005/rerank`; `DEEPSEEK_BASE` → с 06.09
+`https://openrouter.ai/api/v1` + `DEEPSEEK_MODEL=qwen/qwen3.8-27b` (имя переменной
+историческое; прежде — локальный 27B `10.3.1.12:8000`).
 
 **[замер 23.08]** Новая okna (`10.10.10.12`) переведена на внутренние адреса: curl пяти
 эндпоинтов с коробки 200 (whisper GET `/v1/audio/transcriptions` → 405 Method Not Allowed —

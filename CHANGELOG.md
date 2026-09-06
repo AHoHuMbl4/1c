@@ -1,3 +1,18 @@
+## 2026-09-06 — Весь 27B-контур переведён на OpenRouter: classify/reports-пайплайн (DEEPSEEK_* env) вслед за словарём
+
+**[замер]** Владелец: «не только генератор — там и пайплайн вопрос-ответ». Потребители
+27B кроме словаря: `classify_entities.py` (такт, build.sh:384, вся конфигурация из env),
+`serene_report.py`/`mcp_reports.py`/`report_query.py` (отчёты). Переключено:
+`/etc/1c-mcp-reports.env` (DEEPSEEK_BASE=https://openrouter.ai/api/v1, KEY, ДОБАВЛЕН
+DEEPSEEK_MODEL=qwen/qwen3.8-27b — файл его не нёс, дефолт deepseek-v4-flash промахнулся бы)
+и `/etc/1c-serene-ask-postgres.env` (BASE/MODEL переведены, KEY добавлен); бэкапы
+`*.bak-openrouter-*`. Транспортный тест значениями env: 200 за 2,3 с. Рестарт
+`1c-serene-ask@postgres` (+@staging): health :8091 → 200, живой вопрос диагностикой —
+разбор 13,6 с, wiki_verify `catalog_контрагенты`, отбор 351 сущность. serene_ask.py LLM
+не зовёт (разбор — SQL/словари); LLM-пути (classify такта, отчёты) пойдут по этим env.
+Числа: 2,3 с транспорт; 13,6 с разбор вопроса; health 200 после рестарта.
+Доки: NETWORK.md; TARGET_STATUS п.16; memory_bank/activeContext.md
+
 ## 2026-09-06 — Словарь работает на OpenRouter (qwen/qwen3.8-27b): смоук полного пути 18,5 с
 
 **[замер + решение владельца]** Владелец дал ключ OpenRouter. Пробы: `/api/v1/key` 200
