@@ -112,15 +112,19 @@ type=result в stream-json; исполнителям — «коммитов НЕ
   модель в env ОБЯЗАТЕЛЬНА — дефолт flash промахнётся), ask@postgres рестартован,
   health 200, живой вопрос разобран. Hetzner не пошёл (край 300 с). Откат на локальный
   27B — baseUrl/DEEPSEEK_BASE + uAI_-ключ (EMBED_HOSTS); бэкапы `*.bak-openrouter-*`.
+- **Перепроверка перед компактом (06.09):** веб-профиль бота (~/.openclaw-web) тоже
+  переведён на OpenRouter (смоук 4,5 с; primary у него deepseek); README бакета
+  синхронизирован с §7. 🔴 Дев-side /etc/1c-embed.env всё ещё несёт VLLM_BASE_URL=
+  49.13.97.101:8000 и :8002 в EMBED_HOSTS — root-файл, правит владелец; после оф 101
+  дев-прогоны упрутся (боевое окно чисто).
 - **HEAD = 7750018 = origin/main** (06.09). Вектора целы (merge не звался), бэкапы ×3
   живы; restore-drill пройден (5550/5550 бит-в-бит; fallback по content_hash только из
   HAVING count(*)=1; coalesce над FLOAT[1024] движок не умеет — два UPDATE).
 - **Пакет v10 (d6178ee):** A чанкование; B0 search_changed_rows; C embed_bulk (strict +
   REFRESH + smoke kNN); D wiki_alias SQL-only. Документ: .claude/state/plan-takt-fix-v10.md.
-- **Красные замки пред-существующие** (доказано stash-прогоном): test_
-  pipeline_doc 5/8, test_build_solr_synonyms regexp_split — не чинить.
-- **Дев-serened :7890 завис и не наш** (юнит вне polkit): решение владельца
-  «забудь про дев, только okna, только SereneDB». Живые приёмки — на окне.
+- **Красные замки пред-существующие** (доказано stash-прогоном): test_pipeline_doc
+  5/8, test_build_solr_synonyms regexp_split — не чинить. Дев-serened :7890 — не наш
+  (юнит вне polkit): решение владельца «забудь про дев, только okna». Приёмки — на окне.
 
 ### МЕТРИКА СЕЙЧАС (L19, честная)
 35 match / 28 honest_no / 3 wrong / 1 unresolved из 67. TARGET: «не врёт» —
