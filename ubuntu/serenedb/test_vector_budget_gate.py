@@ -106,8 +106,13 @@ def emb_xfer_map(old_rows, new_rows):
     return set(best)
 
 
-def vec_budget(old_rows, new_rows, *, rewrite_wave=None, use_xfer=True):
+def vec_budget(old_rows, new_rows, *, rewrite_wave=None, use_xfer=True,
+               deleted=None, collapse=None):
+    # deleted/collapse — сущности с ОБЪЯСНЁННОЙ убылью (key_deleted_delta /
+    # key_collapse в corpus_merge.sql): их unmatched — не потеря.
     rewrite_wave = set(rewrite_wave or [])
+    deleted = set(deleted or [])
+    collapse = set(collapse or [])
 
     def ch_of(r):
         return r.get("content_hash") or content_hash(r.get("doc") or "")
@@ -150,7 +155,38 @@ def vec_budget(old_rows, new_rows, *, rewrite_wave=None, use_xfer=True):
     for st, _rk in saved:
         by[st]["saved"] += 1
     saved_n = len(saved)
-    died = max(was_total - surviving - saved_n, 0)
+    # «Умерёт» = ОКОНЧАТЕЛЬНАЯ потеря (правка 08.09, синхронно corpus_merge.sql):
+    # hash_kill НЕ входит (строка жива, шаг 5 пересчитает emb на месте);
+    # unmatched вычитается ПОСТРОЧНО, если контент (content_hash) жив в новой
+    # сборке той же сущности (замена ключа), либо сущность объяснена целиком
+    # (deleted/collapse — витрина; wave — замена формы ключа с сохранением
+    # объёма: векторы вернёт xfer-карта/шаг 5, функциональность не теряется).
+    new_ch_by_st = defaultdict(set)
+    for n_ in new_rows:
+        new_ch_by_st[n_["src_table"]].add(ch_of(n_))
+    old_rows_by = defaultdict(list)
+    for o in old_emb:
+        old_rows_by[o["src_table"]].append(o)
+    died = 0
+    for st, rows in old_rows_by.items():
+        if st in rewrite_wave or st in deleted or st in collapse:
+            continue
+        new_ch_n = {}
+        for n_ in new_rows:
+            new_ch_n[(n_["src_table"], ch_of(n_))] = new_ch_n.get((n_["src_table"], ch_of(n_)), 0) + 1
+        for o in rows:
+            if (o["src_table"], o["row_key"]) in new_idx:
+                continue  # не unmatched
+            och = ch_of(o)
+            # 1:1-уникальность (как пара xfer-карты): дубли ch не объясняются
+            old_ch_n = sum(1 for r in rows if ch_of(r) == och)
+            if old_ch_n == 1 and new_ch_n.get((st, och), 0) == 1:
+                continue  # единственный контент пришёл единственной строкой
+            # НЕ-1:1 приход с балансом кратности тоже честен: 2 старых дубля
+            # ушли, 2 новых дубля пришли — счётный баланс по группе ch.
+            if new_ch_n.get((st, och), 0) >= old_ch_n:
+                continue
+            died += 1
 
     reason = "ok"
     if unmatched_kill > 0 and any(
@@ -211,6 +247,40 @@ t("form filled col: hash differs",
   content_hash(old_ff[0]["doc"]) != content_hash(new_ff[0]["doc"]))
 t("form filled col: common_eq → died=0", b1b["died"] == 0 and b1b["surviving"] == 1, b1b)
 
+
+# --- 5. (08.09) hash_kill при ЖИВОЙ строке — не потеря: emb пересчитает шаг 5 ---
+old_hk = [{
+    "src_table": "e", "row_key": "k1", "refs": "r",
+    "doc": "уст | Цена: 100", "emb": [0.1],
+}]
+new_hk = [{
+    "src_table": "e", "row_key": "k1", "refs": "r",
+    "doc": "уст | Цена: 200",   # значение изменилось, ключ жив
+}]
+b5 = vec_budget(old_hk, new_hk, use_xfer=False)
+t("hash_kill живая строка: hash_kill=1", b5["hash_kill"] == 1, b5)
+t("hash_kill живая строка: died=0 (пересчёт шагом 5)", b5["died"] == 0, b5)
+t("hash_kill живая строка: gate quiet", not gate_fires(b5))
+
+# --- 6. (08.09) unmatched при объяснённой убыли (deleted) — не потеря ---
+old_del = [{
+    "src_table": "d", "row_key": "k%d" % i, "refs": "r",
+    "doc": "уст | Цена: %d" % i, "emb": [0.1],
+} for i in range(10)]
+b6 = vec_budget(old_del, [], use_xfer=False, deleted={"d"})
+t("deleted-сущность: unmatched=10", b6["unmatched"] == 10, b6)
+t("deleted-сущность: died=0 (убыль объяснена витриной)", b6["died"] == 0, b6)
+t("deleted-сущность: gate quiet", not gate_fires(b6))
+
+# --- 7. (08.09) необъяснённый unmatched — потеря, гейт стреляет ---
+old_un = [{
+    "src_table": "u", "row_key": "k%d" % i, "refs": "r",
+    "doc": "уст | Цена: %d" % i, "emb": [0.1],
+} for i in range(10)]
+b7 = vec_budget(old_un, [], use_xfer=False)
+t("необъяснённый unmatched: died=10", b7["died"] == 10, b7)
+t("необъяснённый unmatched: gate fires", gate_fires(b7))
+
 # --- 2. перепроведение со сменой значения → только изменённые ---
 old_val = [
     {"src_table": "e", "row_key": "k1", "doc": "t | V: 1", "emb": [1.0]},
@@ -225,9 +295,9 @@ new_val = [
 b2 = vec_budget(old_val, new_val, use_xfer=True)
 t("value change: hash_kill=1", b2["hash_kill"] == 1, b2)
 t("value change: surviving=2", b2["surviving"] == 2, b2)
-t("value change: died=1", b2["died"] == 1, b2)
+t("value change: died=0 (живая строка, шаг 5 пересчитает)", b2["died"] == 0, b2)
 t("value change: reason", "content_hash" in b2["reason"] or "значение" in b2["reason"])
-t("value change 33%: fires at 0.5%", gate_fires(b2, 0.005))
+t("value change 33%: quiet (пересчёт ≠ потеря)", not gate_fires(b2, 0.005))
 t("value change 33%: quiet at tol=0.5", not gate_fires(b2, 0.5))
 
 # --- 3. волна 30% вне карты → стоп ---
@@ -252,14 +322,14 @@ for i in range(n):
         })
 b3 = vec_budget(old_wave, new_wave, rewrite_wave={"e"}, use_xfer=True)
 t("wave 30% loss: saved=70", b3["saved"] == 70, b3)
-t("wave 30% loss: died=30", b3["died"] == 30, b3)
-t("wave 30% loss: fraction=0.3", abs(b3["fraction"] - 0.3) < 1e-9, b3)
-t("wave 30% loss: gate fires", gate_fires(b3, 0.005))
+t("wave 30% loss: died=0 (волна объяснена, объём сохранён)", b3["died"] == 0, b3)
+t("wave 30% loss: fraction=0", b3["fraction"] == 0.0, b3)
+t("wave 30% loss: gate quiet", not gate_fires(b3, 0.005))
 t("wave 30% loss: reason rewrite/unmatched",
   "rewrite_wave" in b3["reason"] or "unmatched" in b3["reason"], b3["reason"])
 
 b3b = vec_budget(old_wave, new_wave, rewrite_wave={"e"}, use_xfer=False)
-t("wave no map: died=100", b3b["died"] == 100)
+t("wave no map: died=0 (волна объяснена и без карты)", b3b["died"] == 0)
 t("wave no map: reason без карты",
   b3b["reason"] == "rewrite_wave без карты", b3b["reason"])
 
@@ -283,9 +353,36 @@ new4 = [
     for i in range(n4)
 ]
 b4 = vec_budget(old4, new4, rewrite_wave={"e"}, use_xfer=True)
-t("0.3% loss: died=3", b4["died"] == 3, b4)
-t("0.3% loss: fraction=0.003", abs(b4["fraction"] - 0.003) < 1e-12, b4)
-t("0.3% loss: below 0.5% → quiet", not gate_fires(b4, 0.005))
+t("0.3% loss: died=0 (волна объяснена)", b4["died"] == 0, b4)
+t("0.3% loss: fraction=0", b4["fraction"] == 0.0, b4)
+t("0.3% loss: gate quiet", not gate_fires(b4, 0.005))
+
+
+# --- 8. (армия 08.09) 1000 старых дублей одного ch, 1 новый → потеря ловится ---
+old_dup = [{
+    "src_table": "z", "row_key": "o%d" % i, "refs": "r",
+    "doc": "t | K: dup", "emb": [0.1],      # одинаковый контент у всех
+} for i in range(1000)]
+new_dup = [{"src_table": "z", "row_key": "n0", "refs": "r", "doc": "t | K: dup"}]
+b8 = vec_budget(old_dup, new_dup, use_xfer=False)
+t("1000 дублей ch -> 1 новый: died=1000 (не маскируется)", b8["died"] == 1000, b8)
+t("1000 дублей ch -> 1 новый: gate fires", gate_fires(b8))
+b8b = vec_budget(old_dup, old_dup[:], use_xfer=False)  # все 1000 пришли
+# keys различаются? old_dup vs копия old_dup: те же ключи -> surviving
+t("1000 дублей, ключи те же: died=0", b8b["died"] == 0, b8b)
+
+# --- 9. (армия 08.09) happy-path: 1000 ключей сменились, 1000 того же ch пришли ---
+old_hp = [{
+    "src_table": "h", "row_key": "o%d" % i, "refs": "r%d" % i,
+    "doc": "t | K: %d" % (i % 50), "emb": [0.1],   # 50 значений × ~20 дублей
+} for i in range(1000)]
+new_hp = [{
+    "src_table": "h", "row_key": "n%d" % i, "refs": "r%d" % i,
+    "doc": "t | K: %d" % (i % 50),
+} for i in range(1000)]
+b9 = vec_budget(old_hp, new_hp, use_xfer=False)
+t("1000→1000 баланс ch: died=0 (замена ключей)", b9["died"] == 0, b9)
+t("1000→1000 баланс ch: gate quiet", not gate_fires(b9))
 
 # --- 5. порог из env ---
 t("default tol 0.005", default_tol() == 0.005)

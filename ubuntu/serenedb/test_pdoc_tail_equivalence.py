@@ -277,6 +277,12 @@ def _extract_battle_tail_dispatch_from_file() -> str:
 def _offline_structure() -> None:
     print("\n== оффлайн: структура corpus_build.sql ==")
     text = BUILD.read_text(encoding="utf-8")
+    # (08.09) докатка выключена: после обрыва следующий такт собирает СВЕЖИМ —
+    # удвоение монолита 147188=72206+74982 больше невозможно (ручной сброс
+    # tmp3_pdoc_progress/stage/tail/_done перед тактом был нарушением п.0).
+    check("докатка выключена (on_ = false)",
+          "SELECT false AS on_" in text
+          and "ДОКАТКА ВЫКЛЮЧЕНА" in text)
     check("есть PREPARE p_doc_tail", "PREPARE p_doc_tail AS" in text)
     check("есть tmp3_pdoc_tail", "CREATE TABLE IF NOT EXISTS tmp3_pdoc_tail" in text)
     check("есть tmp3_pdoc_tail_done", "CREATE TABLE IF NOT EXISTS tmp3_pdoc_tail_done" in text)

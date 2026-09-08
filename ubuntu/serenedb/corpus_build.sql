@@ -1614,9 +1614,18 @@ END;
 -- Совместимость: tmp3_pdoc_dup = mono (прежние читатели, если есть)
 CREATE OR REPLACE TABLE tmp3_pdoc_dup AS SELECT tbl FROM tmp3_pdoc_mono;
 
+-- 🔴 ДОКАТКА ВЫКЛЮЧЕНА до пакета «полная B» (08.09, указание владельца
+-- «ручное — в пайплайн»; решение №14 — B обязательна).
+-- Прежний resume («run старше 6 часов и progress непуст → докатка чанков») после
+-- ОБРЫВА прогона продолжал сборку поверх полуготового tmp3_corpus и УДВАИВАЛ
+-- монолит (замер 08.09: 147 188 = 72 206 старых + 74 982 свежих у
+-- реализациятмц) — лечили ручным DELETE из tmp3_pdoc_progress/stage/tail/
+-- tail_done перед тактом, что запрещено п.0. Со сборкой 11-12 мин (после
+-- map_entries-фикса) пересбор с нуля дешевле и безопаснее любой докатки:
+-- on_ = false делает все NOT on_-ветки чистящими (tmp3_corpus, stage,
+-- progress, tail_done — см. DELETE ниже), «свежий такт» — единственный режим.
 CREATE OR REPLACE TABLE tmp3_resume_pdoc AS
-SELECT coalesce((SELECT max(ts) FROM tmp3_run), TIMESTAMP '1970-01-01') < now() - INTERVAL '6 hours'
-       AND (SELECT count(*) FROM tmp3_pdoc_progress) > 0 AS on_;
+SELECT false AS on_;
 
 DELETE FROM search_quality WHERE k IN ('pdoc_chunk_cells', 'pdoc_chunk_rows', 'pdoc_chunk_entities',
                                        'pdoc_resume', 'pdoc_chunk_formula', 'pdoc_tail_oversize')

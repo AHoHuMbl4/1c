@@ -132,31 +132,68 @@ SEC_EMB_LIST="${SEC_EMB_LIST# }"
 SEC_EMB="${SEC_EMB_LIST%% *}"
 export EMBED_SECRETS="$SEC_EMB_LIST"
 export EMBED_DBNAME="$LOCK_TAG"
-# Исходный memory_limit движка ДО любого SET такта: corpus_merge ужимает его
-# глобально (0.55×), cleanup выше восстанавливает. Снимаем самым первым — до
-# embed_check/сборки, чтобы поймать значение, с которым движок живёт между тактами.
+# Исходные ГЛОБАЛЬНЫЕ настройки движка ДО любого SET такта. Обе имеют только
+# GLOBAL scope в SereneDB (доки Sql › Statements › SET/RESET › Scopes) и обе
+# обязаны ставиться/возвращаться сами — иначе каждое обслуживание руками (п.0):
+#   * memory_limit: corpus_merge ужимает его до 0.55x ГЛОБАЛЬНО; без возврата
+#     каскад между тактами 94.9→…→2 GiB ронял merge на OOM (замер 08.09, такт №10).
+#   * http_timeout: дефолт мал для шагов 3/4 (малые досчёты ai_embed до
+#     embed_bulk, который ставит его сам): замер 08.09 — «Timeout was reached»
+#     на 120 с; 600 — то же значение, что ставит embed_bulk (EMBED_BULK_HOWTO §5).
+# ЦЕЛЬ memory_limit = max(исходный, канон железа 80% RAM из /proc/meminfo —
+# как box_tune steady, без литералов). Выше канона не трогаем (чужой осознанный
+# конфиг), ниже — поднимаем: возврат «как было» замораживал бы деградацию,
+# если движок стартовал заниженным (замер 08.09: 30 GiB при 128 GiB RAM).
+# Ставится В НАЧАЛЕ такта (ниже по коду) и возвращается в cleanup.
 ML_BEFORE="$(psql "$DSN" -tAc "SELECT current_setting('memory_limit')" 2>/dev/null | tr -d '\r\n')"
+HT_BEFORE="$(psql "$DSN" -tAc "SELECT current_setting('http_timeout')" 2>/dev/null | tr -cd '0-9')"
+_ram_kb="$(awk '/^MemTotal:/{print $2; exit}' /proc/meminfo 2>/dev/null)"
+_ml_target="$ML_BEFORE"
+if [ -n "${_ram_kb:-}" ]; then
+  _ml_steady=$(( _ram_kb * 8 / 10 / (1024 * 1024) ))  # 80% RAM в целых GiB
+  # max(исходный, канон): чужой осознанный конфиг ВЫШЕ канона такт не понижает
+  # (армия 08.09, C1); парсинг единиц как в corpus_merge.sql (GiB/GB/MiB/MB).
+  # POSIX-awk (без match-массива: mawk его не умеет — армия 08.09, контроль C1)
+  _ml_now_mib="$(printf '%s' "$ML_BEFORE" | awk '
+    {
+      if (match($0, /^[0-9.]+/)) {
+        v = substr($0, RSTART, RLENGTH) + 0
+        u = tolower($0); sub(/^[0-9. ]*/, "", u)
+        if (u ~ /^gib/) print int(v * 1024)
+        else if (u ~ /^gb/) print int(v * 1000 * 1000 * 1000 / (1024 * 1024))
+        else if (u ~ /^mib/) print int(v)
+        else if (u ~ /^mb/) print int(v * 1000 * 1000 / (1024 * 1024))
+        else print int(v / (1024 * 1024))
+      }
+    }')"
+  if [ "${_ml_steady:-0}" -gt 0 ] && [ -n "${_ml_now_mib:-}" ] \
+     && [ "$_ml_now_mib" -lt $(( _ml_steady * 1024 )) ]; then
+    _ml_target="${_ml_steady} GiB"
+  fi
+fi
+psql "$DSN" -q -c "SET GLOBAL http_timeout = 600" >/dev/null 2>&1 \
+  || echo "build.sh: не поднят http_timeout=600 (шаги 3/4 могут таймаутиться)" >&2
+if [ -n "${_ml_target:-}" ] && [ "$_ml_target" != "$ML_BEFORE" ]; then
+  psql "$DSN" -q -c "SET memory_limit = '${_ml_target}'" >/dev/null 2>&1 \
+    || echo "build.sh: не поднят memory_limit='${_ml_target}' до канона" >&2
+fi
+
 cleanup() {
   local _drops="DROP SECRET IF EXISTS $SEC_ODG;"
   for _s in $SEC_EMB_LIST; do _drops="$_drops DROP SECRET IF EXISTS $_s;"; done
   psql "$DSN" -q -c "$_drops" >/dev/null 2>&1
-  # 🔴 ВОССТАНОВЛЕНИЕ memory_limit ДВИЖКА (ловушка SereneDB 08.09): SET
-  # memory_limit в SereneDB имеет только GLOBAL scope («cannot be set
-  # locally», доки Sql › SET/RESET › Scopes: без указания scope большинство
-  # опций глобальны) — corpus_merge.sql ужимает память ВСЕГО движка до 0.55×,
-  # и без восстановления каждый следующий такт считает от уже ужатого:
-  # каскад 94.9→52→28.7→…→2 GiB ронял merge на OOM (замер: такт №10,
-  # «1.9 GiB/2.0 GiB used»). Восстанавливаем ЗДЕСЬ, в cleanup: trap зовёт
-  # его при любом исходе такта, включая fail/прерывание.
-  if [ -n "${ML_BEFORE:-}" ]; then
-    if ! psql "$DSN" -q -c "SET memory_limit = '${ML_BEFORE}'" >/dev/null 2>/tmp/ml_restore.err; then
-      # Глотать НЕЛЬЗЯ (армия 08.09): молчаливый провал оставляет ужатый
-      # глобальный лимит — деградация замораживается до рестарта serened
-      # (SET GLOBAL не переживает процесс). Провал виден в журнале такта,
-      # путь лечения — RUNBOOK: рестарт движка возвращает конфиг-значение.
-      echo "build.sh: НЕ восстановлен memory_limit='${ML_BEFORE}' после такта" >&2
+  # ВОССТАНОВЛЕНИЕ ГЛОБНАСТРОЕК (ловушка 08.09: SET memory_limit/http_timeout
+  # глобальны). memory_limit — в _ml_target (max-политика выше): возврат
+  # «как было» заморозил бы ужатие. Провал НЕ глотается — виден в журнале.
+  if [ -n "${_ml_target:-}" ]; then
+    if ! psql "$DSN" -q -c "SET memory_limit = '${_ml_target}'" >/dev/null 2>/tmp/ml_restore.err; then
+      echo "build.sh: НЕ восстановлен memory_limit='${_ml_target}' после такта" >&2
       cat /tmp/ml_restore.err >&2 2>/dev/null || true
     fi
+  fi
+  if [ -n "${HT_BEFORE:-}" ]; then
+    psql "$DSN" -q -c "SET GLOBAL http_timeout = ${HT_BEFORE}" >/dev/null 2>&1 \
+      || echo "build.sh: НЕ восстановлен http_timeout='${HT_BEFORE}'" >&2
   fi
 }
 trap cleanup EXIT INT TERM HUP

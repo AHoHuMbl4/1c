@@ -16,14 +16,18 @@ After=network.target serenedb.service
 Wants=serenedb.service
 # 5 падений за час → failed, не петля. Таймер OnUnitInactiveSec=1min сам
 # повторит; Restart= ловит быстрый отказ (форма EMBED_HOST), пока таймер молчит.
-StartLimitIntervalSec=1h
-StartLimitBurst=5
+# RestartSec=30m (08.09): полный такт — 12+ мин сборки; автоповтор через 3 мин
+# после падения давал карусель пересборок, пока причина разбиралась (замер
+# 08.09: 4 подряд за смену). 30 минут — окно на разбор журнала; транзиентные
+# отказы (сеть/эмбеддер) ловит следующий плановый такт таймера.
+StartLimitIntervalSec=2h
+StartLimitBurst=4
 
 [Service]
 Type=oneshot
 TimeoutStartSec=infinity
 Restart=on-failure
-RestartSec=3min
+RestartSec=30min
 WorkingDirectory=/opt/1c-mcp-reports
 # 🔴 ПОРЯДОК ЗНАЧИМ, последний слой перекрывает предыдущие:
 #   1. общие ключи и пароли ролей;

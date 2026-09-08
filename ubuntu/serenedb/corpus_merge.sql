@@ -835,19 +835,67 @@ die_unmatched AS (
     AND NOT EXISTS (SELECT 1 FROM new_full n
                     WHERE n.src_table = o.src_table AND n.row_key = o.row_key)
   GROUP BY 1
+),
+-- НЕОБЪЯСНЁННЫЙ unmatched — единственный класс «окончательной потери».
+-- Объяснения из данных (правка 08.09; прежде гейт суммировал и пересчёт, и
+-- волны — первый такт нового канона чанкования проводили разовым
+-- MERGE_VECTOR_LOSS_BYPASS руками, что запрещено п.0):
+--   (а) ЗАМЕНА КЛЮЧА: контент строки (content_hash) жив в новой сборке той
+--       же сущности — строка переехала на новый ключ; вектор вернёт
+--       xfer-карта или досчитает шаг 5 (замер 08.09: установкацен 22 109,
+--       счёт-волны);
+--   (б) ЛЕГИТМНАЯ УБЫЛЬ 1С: сущность в key_deleted_delta (документы удалены
+--       — свидетель витрина) или key_collapse (перепроведение).
+-- Прочее (контент исчез без объяснения) — потеря, гейт STOPит (класс 31.08).
+-- hash_kill отдельно НЕ вычитается и в «умрёт» не входит: строка жива,
+-- шаг 5 пересчитает emb на месте.
+die_unexplained AS (
+  -- ch-приход объясняет строку только при СЧЁТНОМ балансе группы ch: новых
+  -- строк с этим ch пришло не меньше, чем было старых (частный случай — пара
+  -- 1:1, как в xfer-карте). Без баланса 1000 старых дублей одного ch при
+  -- одном новом «объяснялись» бы все — массовая потеря маскировалась (армия
+  -- 08.09). Дисбаланс → не объяснены → ловятся гейтом; плановая смена канона
+  -- чанкования с дисбалансом — операция обслуживания: первый такт после неё
+  -- идёт с MERGE_VECTOR_LOSS_BYPASS=1 по RUNBOOK (разовый обход, не код).
+  SELECT o.src_table, count(*)::BIGINT AS n
+  FROM old_full o
+  WHERE o.emb IS NOT NULL
+    AND NOT EXISTS (SELECT 1 FROM new_full n
+                    WHERE n.src_table = o.src_table AND n.row_key = o.row_key)
+    AND NOT EXISTS (SELECT 1 FROM new_full n2
+                    WHERE n2.src_table = o.src_table
+                      AND n2.ch IS NOT DISTINCT FROM o.ch
+                      AND ((SELECT count(*) FROM new_full n3
+                            WHERE n3.src_table = o.src_table
+                              AND n3.ch IS NOT DISTINCT FROM o.ch)
+                           >= (SELECT count(*) FROM old_full o2
+                               WHERE o2.src_table = o.src_table
+                                 AND o2.ch IS NOT DISTINCT FROM o.ch)))
+    AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_deleted_delta d
+                    WHERE d.src_table = o.src_table)
+    AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse c
+                    WHERE c.src_table = o.src_table)
+    AND NOT EXISTS (SELECT 1 FROM tmp3_merge_rewrite_wave rw
+                    WHERE rw.src_table = o.src_table)
+  GROUP BY 1
 )
-SELECT coalesce(w.src_table, s.src_table, x.src_table, h.src_table, u.src_table) AS src_table,
+-- 🔴 «УМРЁТ» = ОКОНЧАТЕЛЬНАЯ ПОТЕРЯ, А НЕ ПЕРЕСЧЁТ (правка 08.09 по указанию
+-- владельца «ручное — в пайплайн»; прежде гейт суммировал всё подряд и первый
+-- такт нового канона чанкования приходилось проводить разовым
+-- MERGE_VECTOR_LOSS_BYPASS — ручной шаг, запрещённый п.0). Классы:
+--   * hash_kill — строка ЖИВА (row_key на месте), контент изменился: MERGE
+--     обновит, emb=NULL, шаг 5 (embed_bulk) посчитает заново — НЕ потеря;
+--   * unmatched при ЗАМЕНЕ КЛЮЧА (контент жив в новой сборке) или
+--     ЛЕГИТМНОЙ УБЫЛИ (key_deleted_delta/key_collapse) — НЕ потеря;
+--   * прочий unmatched — контент исчез без объяснения: потеря, гейт STOPит
+--     (как при катастрофе 31.08).
+SELECT coalesce(w.src_table, s.src_table, x.src_table, h.src_table, u.src_table, du.src_table) AS src_table,
        coalesce(w.векторов_было, 0::BIGINT) AS векторов_было,
        coalesce(x.векторов_спасено_картой, 0::BIGINT) AS векторов_спасено_картой,
        coalesce(s.векторов_живёт, 0::BIGINT) AS векторов_живёт,
        coalesce(h.hash_kill, 0::BIGINT) AS hash_kill,
        coalesce(u.unmatched_kill, 0::BIGINT) AS unmatched_kill,
-       greatest(
-         coalesce(w.векторов_было, 0::BIGINT)
-           - coalesce(s.векторов_живёт, 0::BIGINT)
-           - coalesce(x.векторов_спасено_картой, 0::BIGINT),
-         0::BIGINT
-       ) AS векторов_умрёт,
+       coalesce(du.n, 0::BIGINT) AS векторов_умрёт,
        CASE
          WHEN coalesce(u.unmatched_kill, 0) > 0
               AND EXISTS (SELECT 1 FROM tmp3_merge_rewrite_wave rw
@@ -858,6 +906,8 @@ SELECT coalesce(w.src_table, s.src_table, x.src_table, h.src_table, u.src_table)
               AND EXISTS (SELECT 1 FROM tmp3_merge_rewrite_wave rw
                           WHERE rw.src_table = coalesce(w.src_table, u.src_table))
            THEN 'rewrite_wave: unmatched минус карта'
+         WHEN coalesce(u.unmatched_kill, 0) > 0 AND coalesce(du.n, 0) = 0
+           THEN 'unmatched объяснён (замена ключа/легитимная убыль)'
          WHEN coalesce(u.unmatched_kill, 0) > 0
            THEN 'unmatched'
          WHEN coalesce(h.hash_kill, 0) > 0
@@ -868,7 +918,8 @@ FROM was w
 FULL OUTER JOIN surviving s USING (src_table)
 FULL OUTER JOIN xfer x USING (src_table)
 FULL OUTER JOIN die_hash h USING (src_table)
-FULL OUTER JOIN die_unmatched u USING (src_table);
+FULL OUTER JOIN die_unmatched u USING (src_table)
+FULL OUTER JOIN die_unexplained du USING (src_table);
 
 DELETE FROM search_quality WHERE k IN ('vector_loss_gate', 'vector_loss_bypass');
 INSERT INTO search_quality
