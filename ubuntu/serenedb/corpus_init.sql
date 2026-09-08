@@ -60,19 +60,31 @@ CREATE OR REPLACE MACRO corpus_doc_bmap(doc) AS (
   END
 );
 
+-- content_hash: карта строится ОДИН РАЗ (map_entries), а не на каждый ключ.
+-- Прежняя форма (map_keys + map_extract_value в обеих лямбдах) пересобирала
+-- corpus_doc_bmap 2N+1 раз на строку — O(N²) разбора текста на документ, и
+-- p_doc_finalize на больших таблицах висел часами при активном CPU (портрет
+-- «деградации движка» 03-04.09; корень нашли разработчики SereneDB 08.09 по
+-- репро-датасету: тот же финализа — 7 мин против 5+ ч зависания). Значения
+-- идентичны побитово: map_entries перебирает те же уникальные ключи, что
+-- map_keys, а e.value — то же, что map_extract_value(m, e.key); замок M2
+-- (test_pdoc_tail_equivalence.py) + живая сверка формул на образце okna.
+-- Доки: sql/functions/map#map_entries; sql/functions/list#list_filter; list_sort;
+-- sql/functions/list#array_to_string; sql/functions/utility#sha1;
+-- sql/statements/create_macro.
 CREATE OR REPLACE MACRO corpus_content_hash(doc) AS (
   sha1(coalesce(
     array_to_string(
       list_sort(
         list_transform(
           list_filter(
-            map_keys(corpus_doc_bmap(doc)),
-            k -> k <> 'DataVersion'
-                 AND k <> '__metadata'
-                 AND position('navigationLinkUrl' IN k) = 0
-                 AND coalesce(map_extract_value(corpus_doc_bmap(doc), k), '') <> ''
+            map_entries(corpus_doc_bmap(doc)),
+            e -> e.key <> 'DataVersion'
+                 AND e.key <> '__metadata'
+                 AND position('navigationLinkUrl' IN e.key) = 0
+                 AND coalesce(e.value, '') <> ''
           ),
-          k -> k || chr(1) || map_extract_value(corpus_doc_bmap(doc), k)
+          e -> e.key || chr(1) || e.value
         )
       ),
       chr(0)

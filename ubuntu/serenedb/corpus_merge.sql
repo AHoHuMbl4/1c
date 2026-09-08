@@ -537,19 +537,23 @@ CREATE OR REPLACE MACRO corpus_doc_bmap(doc) AS (
   END
 );
 
+-- content_hash: карта один раз (map_entries) — как в corpus_init.sql (корень
+-- «деградации» 03-04.09: 2N+1 пересборок corpus_doc_bmap на строку; фикс
+-- разработчиков SereneDB 08.09, 7 мин против 5+ ч). Обе копии макроса обязаны
+-- совпадать побайтно. Доки: sql/functions/map#map_entries.
 CREATE OR REPLACE MACRO corpus_content_hash(doc) AS (
   sha1(coalesce(
     array_to_string(
       list_sort(
         list_transform(
           list_filter(
-            map_keys(corpus_doc_bmap(doc)),
-            k -> k <> 'DataVersion'
-                 AND k <> '__metadata'
-                 AND position('navigationLinkUrl' IN k) = 0
-                 AND coalesce(map_extract_value(corpus_doc_bmap(doc), k), '') <> ''
+            map_entries(corpus_doc_bmap(doc)),
+            e -> e.key <> 'DataVersion'
+                 AND e.key <> '__metadata'
+                 AND position('navigationLinkUrl' IN e.key) = 0
+                 AND coalesce(e.value, '') <> ''
           ),
-          k -> k || chr(1) || map_extract_value(corpus_doc_bmap(doc), k)
+          e -> e.key || chr(1) || e.value
         )
       ),
       chr(0)
