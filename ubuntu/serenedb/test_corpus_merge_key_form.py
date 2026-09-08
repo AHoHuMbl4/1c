@@ -33,11 +33,13 @@ def classify_entity(было, уйдёт, стало, *, recorder_alive=None, do
     if было > 0 and стало < было:
         return "shrink_stop"
     if уйдёт > 0 and уйдёт < было:
-        if стало > было and recorder_alive is True:
+        # (08.09) cand: «стало >= было» — равный объём тоже замена (каталог
+        # 368=368 с пересозданным GUID, такт №22), а не только рост.
+        if стало >= было and recorder_alive is True:
             return "collapse_ok"
-        if стало > было and recorder_alive is False and doc_alive is False:
+        if стало >= было and recorder_alive is False and doc_alive is False:
             return "deleted_delta_ok"
-        if стало > было and recorder_alive is False and doc_alive is True:
+        if стало >= было and recorder_alive is False and doc_alive is True:
             return "transport_stop"
         # Легитимные удаления 1С при перепроведении: без пары по refs, но доля
         # мала — порог 0.1% как в SQL (g.уйдёт > g.было * 0.001 → STOP).
@@ -48,6 +50,16 @@ def classify_entity(было, уйдёт, стало, *, recorder_alive=None, do
         return "key_form_ok"
     return "ok"
 
+
+# (08.09) равный объём: каталог 368=368, GUID пересоздан
+t("equal-volume dead guid -> deleted_delta_ok",
+  classify_entity(368, 1, 368, recorder_alive=False, doc_alive=False) == "deleted_delta_ok")
+t("equal-volume live guid -> transport_stop",
+  classify_entity(368, 1, 368, recorder_alive=False, doc_alive=True) == "transport_stop")
+t("equal-volume alive recorder -> collapse_ok",
+  classify_entity(368, 1, 368, recorder_alive=True) == "collapse_ok")
+t("equal-volume unknown -> partial_stop (1/368 > 0.1%)",
+  classify_entity(368, 1, 368) == "partial_stop")
 
 def is_rewrite_wave(было, стало, matched_exact, *, pct_unmatched=0.9, vol_tol=0.05):
     """Логика tmp3_merge_rewrite_wave (per-table, без имён таблиц)."""
@@ -69,7 +81,12 @@ t("key_form: 100% уход, новая больше", classify_entity(100, 100, 
 t("key_form: 100% уход, новая равна", classify_entity(206839, 206839, 208338) == "key_form_ok")
 t("collapse: частичный уход, рост, recorder жив",
   classify_entity(75436, 23, 76000, recorder_alive=True) == "collapse_ok")
-t("collapse: рост обязателен", classify_entity(100, 50, 100, recorder_alive=True) == "partial_stop")
+# (08.09) строгий рост больше не обязателен: равный объём при живом recorder —
+# тот же коллапс-класс (замена при сохранении объёма)
+t("collapse: равный объём + recorder жив -> collapse_ok",
+  classify_entity(100, 50, 100, recorder_alive=True) == "collapse_ok")
+t("partial_stop остаётся при усадке стало<было вне shrink",
+  classify_entity(100, 50, 99) == "shrink_stop")
 t("deleted_delta: мёртвый recorder, документ удалён",
   classify_entity(75436, 11, 76000, recorder_alive=False, doc_alive=False) == "deleted_delta_ok")
 t("transport: мёртвый recorder, документ жив",
