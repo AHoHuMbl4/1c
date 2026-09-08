@@ -234,12 +234,68 @@ WHERE c.src_table = $1
                   WHERE t.src_table = c.src_table
                     AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '#', 1)
                     AND position('#' in c.row_key) > 0
-                    AND split_part(c.row_key, '#', 1) <> '')
-  -- Перепроведение: тот же хвост ключа после Recorder (Period|измерения), другой
-  -- Recorder уже в tmp3 — не orphan. Только если Period в объявленном ключе:
-  -- для {Recorder,Recorder_Type,LineNumber} хвост = LineNumber, совпадение ложное.
+                    AND split_part(c.row_key, '#', 1) <> '');
+
+-- Перепроведение: тот же хвост ключа после Recorder (Period|измерения), другой
+-- Recorder уже в tmp3 — не orphan. Только если Period в объявленном ключе:
+-- для {Recorder,Recorder_Type,LineNumber} хвост = LineNumber, совпадение ложное.
+--
+-- 🔴 ЭТО СОЕДИНЕНИЕ ЖИВЁТ ОТДЕЛЬНЫМ PREPARE И ЗОВЁТСЯ ТОЛЬКО ДЛЯ СУЩНОСТЕЙ
+-- С Period В КЛЮЧЕ. «Только если Period» прежде стоял коррелированным EXISTS
+-- по tmp3_key ВНУТРИ подзапроса — и на сущностях БЕЗ Period (319 из 351) движок
+-- всё равно ВЫЧИСЛЯЛ соединение: у односегментного ключа (без '|') хвост за
+-- концом строки = '', равенство ''='' матчит ЛЮБУЮ пару строк той же сущности,
+-- и соединение вырождалось в декартово. [замер 08.09 okna] на
+-- document_установкаценноменклатуры (321 793 × 323 292, ключ {Ref_Key,LineNumber}):
+-- 2-3 мин активного CPU и 241.8 GiB спилла, statement не завершался — merge
+-- падал на этом месте четыре такта подряд. Вынос Period-константы из коррелята
+-- НЕ лечит (AND в движке не ленив: проба с выносом — 3:27 и то же переполнение).
+-- Те же пять анти-соединений без шестого: 0.4 с, unmatched 22 109 — побитово
+-- тот же результат (у сущности без Period шестое условие по смыслу всегда
+-- пропускало строки: NOT EXISTS с заведомо ложным EXISTS = true). Для 32
+-- сущностей с Period поведение не меняется вовсе — см. p_merge_unmatched_period.
+-- 🔴 p_merge_unmatched / p_merge_unmatched_period — ЗЕРКАЛА: пять общих
+-- анти-соединений обязаны совпадать побуквенно (прецедент p_doc / p_doc_chunk);
+-- правка одного — синхронная правка второго в том же заходе. Замок
+-- test_corpus_merge_unmatched_split.py гоняет оба тела на одной фикстуре
+-- и сверяет результат с эталонным монолитным SELECT.
+PREPARE p_merge_unmatched_period AS
+INSERT INTO tmp3_merge_unmatched
+SELECT c.src_table, c.row_key
+FROM search_corpus c
+WHERE c.src_table = $1
+  AND c.src_table NOT IN (SELECT src_table FROM tmp3_merge_rewrite_wave)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table AND t.row_key = c.row_key)
   AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
                   WHERE t.src_table = c.src_table
+                    AND t.row_key = regexp_replace(c.row_key, '#[0-9a-f]{40}$', ''))
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table
+                    AND t.row_key = split_part(c.row_key, '#', 1)
+                    AND position('#' in c.row_key) > 0)
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table
+                    AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '|', 1)
+                    AND split_part(c.row_key, '|', 1) <> '')
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table
+                    AND split_part(t.row_key, '|', 1) = split_part(c.row_key, '#', 1)
+                    AND position('#' in c.row_key) > 0
+                    AND split_part(c.row_key, '#', 1) <> '')
+  AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
+                  WHERE t.src_table = c.src_table
+                    -- ГЕЙТ РАЗМЕРНОСТИ КЛЮЧА — ПЕРВЫМ, до дорогого равенства хвостов:
+                    -- AND в движке не ленив, гейт после substr не отсекает декартово.
+                    -- «Хвост после Recorder» существует только при Recorder-префиксе,
+                    -- то есть при '|' в ключе ОБЕИХ сторон. Без гейта у односегментного
+                    -- ключа хвост за концом строки = '' и равенство ''='' матчит ЛЮБУЮ
+                    -- пару строк с разными первыми сегментами — декартово соединение и
+                    -- ЛОЖНОЕ «перепроведение» (orphan зря спасается). [замер 08.09
+                    -- okna] 219 994/219 994 строк Period-сущностей с '|', гейт ничего
+                    -- не меняет; на базе с ключом из одного Period он обязателен.
+                    AND position('|' in c.row_key) > 0
+                    AND position('|' in t.row_key) > 0
                     AND substr(t.row_key, length(split_part(t.row_key, '|', 1)) + 2)
                       = substr(c.row_key, length(split_part(c.row_key, '|', 1)) + 2)
                     AND split_part(t.row_key, '|', 1) <> split_part(c.row_key, '|', 1)
@@ -248,7 +304,15 @@ WHERE c.src_table = $1
                                 WHERE k.entity = lower(c.src_table)
                                   AND list_contains(k.key_cols, 'Period')));
 
-SELECT DISTINCT 'EXECUTE p_merge_unmatched(' || quote_literal(src_table) || ');'
+-- Диспетчер: Period в объявленном ключе сущности (свойство СУЩНОСТИ из
+-- $metadata-ключа, а не строки) выбирает полный вариант; прочие — базовый.
+-- COALESCE: сущности без записи в tmp3_key — базовый (прежде внутренний EXISTS
+-- был ложен, шестое условие пропускало строки — та же семантика).
+SELECT DISTINCT 'EXECUTE ' ||
+       CASE WHEN coalesce((SELECT list_contains(k.key_cols, 'Period')
+                           FROM tmp3_key k WHERE k.entity = lower(t.src_table)), false)
+            THEN 'p_merge_unmatched_period(' ELSE 'p_merge_unmatched(' END
+       || quote_literal(src_table) || ');'
 FROM (SELECT DISTINCT src_table FROM tmp3_corpus
       WHERE src_table NOT IN (SELECT src_table FROM tmp3_merge_rewrite_wave)) t
 \gexec

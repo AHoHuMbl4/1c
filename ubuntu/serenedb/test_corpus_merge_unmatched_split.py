@@ -34,10 +34,10 @@ def extract_prepare_body() -> str:
     text = MERGE.read_text(encoding="utf-8")
     start = text.index("PREPARE p_merge_unmatched AS")
     end = text.index("\\gexec", start)
-    # тело PREPARE до диспетчера (строка SELECT DISTINCT 'EXECUTE…)
+    # тело ОБОИХ PREPARE (базовый + period) до диспетчера
+    # (диспетчер — SELECT DISTINCT 'EXECUTE ' || CASE WHEN … Period …)
     block = text[start:end]
-    # отрезать диспетчер SELECT
-    cut = block.rfind("SELECT DISTINCT 'EXECUTE p_merge_unmatched(")
+    cut = block.rfind("SELECT DISTINCT 'EXECUTE ' ||")
     if cut < 0:
         raise RuntimeError("dispatcher SELECT not found after PREPARE")
     return block[:cut].rstrip() + "\n"
@@ -71,6 +71,8 @@ WHERE c.src_table IN (SELECT DISTINCT src_table FROM tmp3_corpus)
                     AND split_part(c.row_key, '#', 1) <> '')
   AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t
                   WHERE t.src_table = c.src_table
+                    AND position('|' in c.row_key) > 0
+                    AND position('|' in t.row_key) > 0
                     AND substr(t.row_key, length(split_part(t.row_key, '|', 1)) + 2)
                       = substr(c.row_key, length(split_part(c.row_key, '|', 1)) + 2)
                     AND split_part(t.row_key, '|', 1) <> split_part(c.row_key, '|', 1)
@@ -158,11 +160,15 @@ t("SQL: empty unmatched CTAS",
   "CREATE OR REPLACE TABLE tmp3_merge_unmatched AS\n"
   "SELECT c.src_table, c.row_key FROM search_corpus c WHERE false;" in txt)
 t("SQL: PREPARE p_merge_unmatched", "PREPARE p_merge_unmatched AS" in txt)
+t("SQL: PREPARE p_merge_unmatched_period", "PREPARE p_merge_unmatched_period AS" in txt)
 t("SQL: src_table = $1", "c.src_table = $1" in txt)
 t("SQL: fail-safe NOT IN rewrite_wave в теле",
   "NOT IN (SELECT src_table FROM tmp3_merge_rewrite_wave)" in txt)
 t("SQL: диспетчер \\gexec",
-  "EXECUTE p_merge_unmatched(" in txt and "\\gexec" in txt)
+  "SELECT DISTINCT 'EXECUTE ' ||" in txt and "\\gexec" in txt)
+t("SQL: диспетчер выбирает период-вариант по Period из ключа",
+  "CASE WHEN coalesce((SELECT list_contains(k.key_cols, 'Period')" in txt
+  and "THEN 'p_merge_unmatched_period(' ELSE 'p_merge_unmatched(' END" in txt)
 t("SQL: 6 анти-джойнов Period/tmp3_key",
   "list_contains(k.key_cols, 'Period')" in txt
   and txt.count("AND NOT EXISTS (SELECT 1 FROM tmp3_corpus t") >= 6)
@@ -213,6 +219,13 @@ INSERT INTO search_corpus VALUES
   -- ent_wave: в стейдже и в wave — unmatched не строится
   ('ent_wave', 'wave-old-1', 'rw', 'w'),
   ('ent_wave', 'wave-old-2', 'rw', 'w'),
+  -- ent_p: Period в ключе (период-вариант): rec1|tail-1 перепроведён (в tmp3 другой
+  -- Recorder с тем же хвостом — не orphan по шестому условию); recZ|tail-2 — orphan
+  ('ent_p', 'rec1|tail-1', 'rp', 'p'),
+  ('ent_p', 'recZ|tail-9', 'rp2', 'p2'),
+  -- ent_s: Period в ключе, но ключ ОДНОСЕГМЕНТНЫЙ (без '|'): хвост после
+  -- Recorder не определён — гейт размерности оставляет строку в unmatched
+  ('ent_s', 'soloparent', 'rs', 's'),
   -- вне стейджа: не попадает в unmatched ни по монолиту, ни по резке
   ('ent_other', 'solo', 'r', 'y');
 
@@ -222,7 +235,10 @@ INSERT INTO tmp3_corpus VALUES
   ('ent_a', 'k2', 'refs-a-2', 'keep'),
   ('ent_a', 'newsha', 'refs-a-edit', 'now'),
   ('ent_b', 'new-b', 'refs-b2', 'z'),
-  ('ent_wave', 'wave-new', 'rw', 'w');
+  ('ent_wave', 'wave-new', 'rw', 'w'),
+  ('ent_p', 'recX|tail-1', 'rp', 'p'),
+  ('ent_p', 'recY|tail-2', 'rp2', 'p2'),
+  ('ent_s', 'otherkey', 'rs2', 's2');
 
 CREATE TABLE tmp3_merge_rewrite_wave (
   src_table VARCHAR, было BIGINT, стало BIGINT);
@@ -232,6 +248,8 @@ CREATE TABLE tmp3_key (entity VARCHAR, key_cols VARCHAR[]);
 INSERT INTO tmp3_key VALUES
   ('ent_a', ['Ref_Key']),
   ('ent_b', ['Ref_Key']),
+  ('ent_p', ['Period', 'Dim1']),
+  ('ent_s', ['Period']),
   ('ent_wave', ['Period']);
 
 -- диспетчерский список (как в corpus_merge.sql)
@@ -243,16 +261,30 @@ SELECT 'M1:dispatch|' || string_agg(src_table, ',' ORDER BY src_table)
 FROM tmp3_merge_dispatch;
 
 -- резка: каркас + PREPARE + EXECUTE по списку диспетчера
+-- (диспетчер CASE: Period в ключе → период-вариант, иначе базовый)
 CREATE OR REPLACE TABLE tmp3_merge_unmatched AS
 SELECT c.src_table, c.row_key FROM search_corpus c WHERE false;
 
 {prepare}
 
-SELECT 'EXECUTE p_merge_unmatched(' || quote_literal(src_table) || ');'
+SELECT 'EXECUTE ' ||
+       CASE WHEN coalesce((SELECT list_contains(k.key_cols, 'Period')
+                           FROM tmp3_key k WHERE k.entity = lower(src_table)), false)
+            THEN 'p_merge_unmatched_period(' ELSE 'p_merge_unmatched(' END
+       || quote_literal(src_table) || ');'
 FROM tmp3_merge_dispatch;
--- serened shell без \\gexec — зовём EXECUTE сами:
+-- serened shell без \\gexec — зовём EXECUTE сами (по диспетчеру):
 EXECUTE p_merge_unmatched('ent_a');
 EXECUTE p_merge_unmatched('ent_b');
+EXECUTE p_merge_unmatched_period('ent_p');
+EXECUTE p_merge_unmatched_period('ent_s');
+
+-- односегментный ключ при Period: строка уходит в unmatched (гейт размерности),
+-- ложного спасения по ''-хвосту нет
+SELECT 'M1:solo_period_orphan|' || (
+  SELECT count(*) FROM tmp3_merge_unmatched
+  WHERE src_table = 'ent_s' AND row_key = 'soloparent'
+)::VARCHAR;
 
 {ref_sel}
 
@@ -356,8 +388,10 @@ def mget(key):
     return m.get(key, "")
 
 
-t("engine: dispatch == ent_a,ent_b",
-  mget("dispatch") == "ent_a,ent_b", mget("dispatch") or out[-400:])
+t("engine: dispatch == ent_a,ent_b,ent_p,ent_s",
+  mget("dispatch") == "ent_a,ent_b,ent_p,ent_s", mget("dispatch") or out[-400:])
+t("engine: односегментный ключ при Period → orphan (гейт '|')",
+  mget("solo_period_orphan") == "1", mget("solo_period_orphan"))
 t("engine: unmatched == эталонный SELECT",
   mget("eq_ref") == "true", mget("eq_ref") or out[-500:])
 t("engine: wave → 0 строк unmatched",
