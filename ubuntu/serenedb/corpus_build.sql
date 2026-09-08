@@ -1007,10 +1007,17 @@ SELECT (coalesce((SELECT v FROM search_quality WHERE k = 'changed_sources_ok'), 
         AND (SELECT count(*) FROM search_refmap) > 0) AS on_;
 
 -- Изменившиеся источники — те, что назвал синк, и только из числа собираемых.
+-- 🔴 ПЛЮС НОВЫЕ: источник, объявленный в search_sources, но НЕ ИМЕЮЩИЙ строк в
+-- боевом корпусе, обязан собраться В ЛЮБОМ режиме — иначе дельта навсегда
+-- пропускает появившуюся сущность, и постчек честно останавливает такт
+-- «источник не доехал до корпуса» (живой кейс 08.09: document_поступлениетмцимпорт_ос,
+-- 1 строка витрины, не в changed, в корпусе 0 — такт №25).
 CREATE OR REPLACE TABLE tmp3_changed AS
 SELECT s.tbl FROM tmp3_src s
 WHERE (SELECT on_ FROM tmp3_inc)
-  AND EXISTS (SELECT 1 FROM search_changed_sources c WHERE c.src_table = s.tbl);
+  AND (EXISTS (SELECT 1 FROM search_changed_sources c WHERE c.src_table = s.tbl)
+       OR (EXISTS (SELECT 1 FROM search_sources ss WHERE ss.src_table = s.tbl)
+           AND NOT EXISTS (SELECT 1 FROM search_corpus c WHERE c.src_table = s.tbl)));
 
 SELECT 'по-изменившемуся' AS шаг,
        (SELECT on_ FROM tmp3_inc) AS можно,
