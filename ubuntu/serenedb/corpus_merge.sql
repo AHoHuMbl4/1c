@@ -1038,7 +1038,7 @@ SELECT stmt FROM (
   -- после maps-UPDATE. При ошибке любого statement-а пачки ON_ERROR_STOP рвёт
   -- сессию — незакрытая транзакция откатывается движком целиком, смешанного
   -- состояния «emb обнулён, контент старый» не остаётся.
-  SELECT job_id, 0, 'BEGIN;'
+  SELECT job_id, 0, 'BEGIN;' AS stmt
   FROM (SELECT DISTINCT job_id FROM tmp3_merge_jobs) x
   UNION ALL
   -- 🔴 emb В MERGE-UPDATE НЕ ТРОГАЕМ: `emb = CASE … THEN t.emb ELSE NULL END`
@@ -1103,10 +1103,10 @@ SELECT stmt FROM (
   -- statement-ы; без BEGIN/COMMIT ошибка MERGE ПОСЛЕ успешного обнуления
   -- оставляла бы emb=NULL при ещё старом контенте (дырка до перезапуска).
   -- Multi-statement transactions — штатно (sql/statements/transactions).
-  SELECT job_id, 90, 'COMMIT;'
+  SELECT job_id, 90, 'COMMIT;' AS stmt
   FROM (SELECT DISTINCT job_id FROM tmp3_merge_jobs) x
   UNION ALL
-  SELECT job_id, 95, 'SELECT checkpoint();'
+  SELECT job_id, 95, 'SELECT checkpoint();' AS stmt
   FROM (SELECT DISTINCT job_id FROM tmp3_merge_jobs) x
 ) z ORDER BY job_id, ord
 \gexec

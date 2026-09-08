@@ -1,3 +1,10 @@
+**[код]** Дополнение к (4): у `BEGIN`/`COMMIT`/`checkpoint`-ветвей генератора пачек
+не было алиаса `AS stmt` — литерал в UNION назывался `?column?`, и внешний
+`SELECT stmt FROM (…)` падал «Referenced column "stmt" not found» (живой стоп
+такта №9). Все три ветви получили `AS stmt`.
+Числа: смоук генератора на фикстуре — «слияние пачками, 4 пачки»; замки 30+26 зелёные.
+Доки: sql/statements/transactions#multi-statement-transactions
+
 ## 2026-09-08 (4) — MERGE-волны: CASE над emb заменён транзакционной пачкой (ловушка FLOAT[1024] в CASE)
 
 **[замер + код]** Такт №8 с bypass дошёл до пакетного MERGE и упал
