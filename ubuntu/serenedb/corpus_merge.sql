@@ -6,6 +6,12 @@
 \set partial_rebuild 0
 
 -- Session memory_limit: 0.55 от current_setting (cookbook/performance/oom, 50-60%).
+-- 🔴 В SereneDB у memory_limit ТОЛЬКО GLOBAL scope («option cannot be set
+-- locally», доки Sql › Statements › SET/RESET › Scopes): этот SET ужимает
+-- память ВСЕГО движка, а не одной сессии. Поэтому build.sh (cleanup, trap на
+-- любой исход) восстанавливает исходное значение ПОСЛЕ такта; без этого
+-- каждый следующий такт считал 0.55 от уже ужатого — каскад 94.9→…→2 GiB
+-- ронял merge на OOM (замер okna 08.09, такт №10).
 -- Единица строки — та же, что вернул current_setting; без литералов и без ОС.
 SELECT (
   WITH ml AS (SELECT current_setting('memory_limit') AS s),
@@ -1038,7 +1044,7 @@ SELECT stmt FROM (
   -- после maps-UPDATE. При ошибке любого statement-а пачки ON_ERROR_STOP рвёт
   -- сессию — незакрытая транзакция откатывается движком целиком, смешанного
   -- состояния «emb обнулён, контент старый» не остаётся.
-  SELECT job_id, 0, 'BEGIN;' AS stmt
+  SELECT job_id, 0 AS ord, 'BEGIN;' AS stmt
   FROM (SELECT DISTINCT job_id FROM tmp3_merge_jobs) x
   UNION ALL
   -- 🔴 emb В MERGE-UPDATE НЕ ТРОГАЕМ: `emb = CASE … THEN t.emb ELSE NULL END`

@@ -132,10 +132,32 @@ SEC_EMB_LIST="${SEC_EMB_LIST# }"
 SEC_EMB="${SEC_EMB_LIST%% *}"
 export EMBED_SECRETS="$SEC_EMB_LIST"
 export EMBED_DBNAME="$LOCK_TAG"
+# Исходный memory_limit движка ДО любого SET такта: corpus_merge ужимает его
+# глобально (0.55×), cleanup выше восстанавливает. Снимаем самым первым — до
+# embed_check/сборки, чтобы поймать значение, с которым движок живёт между тактами.
+ML_BEFORE="$(psql "$DSN" -tAc "SELECT current_setting('memory_limit')" 2>/dev/null | tr -d '\r\n')"
 cleanup() {
   local _drops="DROP SECRET IF EXISTS $SEC_ODG;"
   for _s in $SEC_EMB_LIST; do _drops="$_drops DROP SECRET IF EXISTS $_s;"; done
   psql "$DSN" -q -c "$_drops" >/dev/null 2>&1
+  # 🔴 ВОССТАНОВЛЕНИЕ memory_limit ДВИЖКА (ловушка SereneDB 08.09): SET
+  # memory_limit в SereneDB имеет только GLOBAL scope («cannot be set
+  # locally», доки Sql › SET/RESET › Scopes: без указания scope большинство
+  # опций глобальны) — corpus_merge.sql ужимает память ВСЕГО движка до 0.55×,
+  # и без восстановления каждый следующий такт считает от уже ужатого:
+  # каскад 94.9→52→28.7→…→2 GiB ронял merge на OOM (замер: такт №10,
+  # «1.9 GiB/2.0 GiB used»). Восстанавливаем ЗДЕСЬ, в cleanup: trap зовёт
+  # его при любом исходе такта, включая fail/прерывание.
+  if [ -n "${ML_BEFORE:-}" ]; then
+    if ! psql "$DSN" -q -c "SET memory_limit = '${ML_BEFORE}'" >/dev/null 2>/tmp/ml_restore.err; then
+      # Глотать НЕЛЬЗЯ (армия 08.09): молчаливый провал оставляет ужатый
+      # глобальный лимит — деградация замораживается до рестарта serened
+      # (SET GLOBAL не переживает процесс). Провал виден в журнале такта,
+      # путь лечения — RUNBOOK: рестарт движка возвращает конфиг-значение.
+      echo "build.sh: НЕ восстановлен memory_limit='${ML_BEFORE}' после такта" >&2
+      cat /tmp/ml_restore.err >&2 2>/dev/null || true
+    fi
+  fi
 }
 trap cleanup EXIT INT TERM HUP
 
