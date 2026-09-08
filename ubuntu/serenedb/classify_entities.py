@@ -111,7 +111,12 @@ def ask(items):
         body_obj["chat_template_kwargs"] = {"enable_thinking": False}
         body_obj["thinking"] = {"type": "disabled"}
     body = json.dumps(body_obj).encode()
-    req = urllib.request.Request(DS_BASE + "/v1/chat/completions", data=body, method="POST")
+    # (08.09) идемпотентный /v1: DEEPSEEK_BASE бывает с хвостом /v1 (OpenRouter,
+    # /etc/1c-embed.env) и без (api.deepseek.com) — прежний конкат "/v1/chat…"
+    # на OpenRouter давал /api/v1/v1/chat/completions → HTTP 404, такт падал
+    # на шаге 2-бис два прогона подряд (замер okna 21:31/21:40).
+    _chat_base = DS_BASE if DS_BASE.endswith("/v1") else DS_BASE + "/v1"
+    req = urllib.request.Request(_chat_base + "/chat/completions", data=body, method="POST")
     req.add_header("Authorization", "Bearer " + DS_KEY)
     req.add_header("Content-Type", "application/json")
     try:
