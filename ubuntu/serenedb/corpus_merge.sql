@@ -403,12 +403,28 @@ FROM tmp3_merge_key_collapse;
 
 -- Частичный уход, мёртвый Recorder в регистре: документ-регистратор удалён из 1С —
 -- дельта, строки уходят из корпуса. Документ жив в витрине — дефект транспорта.
+-- 🔴 ДОКУМЕНТНАЯ СУЩНОСТЬ — САМА СЕБЕ РЕГИСТРАТОР: у неё нет Recorder и written_by
+-- (это связь «кто пишет регистр»), и прежний doc_tbl для неё был пуст — классификатор
+-- удалений её не покрывал, и легитимная убыль живой базы (okna 02.09+: 637 GUID
+-- документов, отсутствующих в витрине) стопилась гвардом «частичная потеря» как
+-- необъяснённая. Теперь: сегмент ключа — платформенный тип ('StandardODATA.…',
+-- как в 1С OData) → регистратор из него; иначе written_by; иначе при колонке
+-- ref_key в витрине (платформенное поле документов) doc_tbl = сама сущность,
+-- и её строки классифицируются тем же p_doc_alive (жив/помечен/удалён).
+-- Гейт 'StandardODATA.%' заодно убирает мусорные doc_tbl ('1'-'5' — LineNumber
+-- табличной части, попадавший в EXECUTE и ронявший «Table with name 1»).
 CREATE OR REPLACE TABLE tmp3_merge_delta_rec AS
 SELECT u.src_table, u.row_key, split_part(u.row_key, '|', 1) AS rec,
-       CASE WHEN split_part(u.row_key, '|', 2) <> ''
+       CASE WHEN split_part(u.row_key, '|', 2) LIKE 'StandardODATA.%'
             THEN lower(regexp_replace(split_part(u.row_key, '|', 2), '^.*\.', ''))
-            ELSE (SELECT st.written_by FROM search_tables st
-                  WHERE st.src_table = u.src_table) END AS doc_tbl
+            ELSE coalesce((SELECT st.written_by FROM search_tables st
+                           WHERE st.src_table = u.src_table),
+                          CASE WHEN EXISTS (SELECT 1 FROM duckdb_columns() dc
+                                             WHERE dc.database_name = current_database()
+                                               AND dc.table_name = u.src_table
+                                               AND lower(dc.column_name) = 'ref_key')
+                               THEN u.src_table END)
+       END AS doc_tbl
 FROM tmp3_merge_unmatched u
 WHERE u.src_table IN (SELECT src_table FROM tmp3_merge_collapse_cand)
   AND split_part(u.row_key, '|', 1) <> '';
@@ -424,6 +440,47 @@ WHERE NOT EXISTS (SELECT 1 FROM query_table($1) q WHERE q."Recorder" = r.rec);
 \set ON_ERROR_STOP off
 SELECT 'EXECUTE p_rec_dead(' || quote_literal(src_table) || ');'
 FROM tmp3_merge_collapse_regs
+\gexec
+\set ON_ERROR_STOP on
+
+-- Документные сущности cand (колонка ref_key есть, Recorder нет): их «регистратор»
+-- — они сами. Мёртвый ref_key (строки нет в витрине — deletionmark уже недоступен)
+-- означает «документ удалён из 1С» — та же семантика, что у мёртвого Recorder
+-- регистра: легитимная дельта, а не потеря.
+-- 🔴 ОГРАНИЧЕНИЕ ЭТОГО СВИДЕТЕЛЯ (армия 08.09): регистровая ветка смотрит ДВЕ
+-- таблицы (Recorder в регистре + документ в своей витрине), документная — ОДНУ,
+-- поэтому «строка исчезла при живом документе» здесь не отличима от удаления
+-- и уходит в deleted вместе с ним; транспорт-дефект для документного пути
+-- недостижим (мёртв/жив взаимоисключены одной таблицей), а ветка для документов
+-- меняет поведение с fail-closed (STOP «частичная потеря») на fail-open
+-- (deleted = легитимно). Регистровая ветка ложный deleted даёт при неполной
+-- витрине ДОКУМЕНТА (p_doc_alive) — с 31.08; здесь дыра та же по сути.
+-- Реальные страховки: вектор-бюджет (MERGE_VECTOR_LOSS_TOLERANCE, доля от базы)
+-- и «стало < было»; гварды ent_guard-порог и «удаление снесло бы» key_deleted
+-- исключают и НЕ защищают. Полный второй свидетель — search_changed_rows
+-- op='deleted_gone', пакет «полная B» (шапка этого файла; docs/audit/
+-- FULLB_PLAN_2026-09-03.md).
+CREATE OR REPLACE TABLE tmp3_merge_docs AS
+SELECT DISTINCT c.src_table
+FROM tmp3_merge_collapse_cand c
+WHERE EXISTS (SELECT 1 FROM duckdb_columns() dc
+              WHERE dc.database_name = current_database()
+                AND dc.table_name = c.src_table
+                AND lower(dc.column_name) = 'ref_key')
+  AND NOT EXISTS (SELECT 1 FROM duckdb_columns() dc
+                  WHERE dc.database_name = current_database()
+                    AND dc.table_name = c.src_table
+                    AND lower(dc.column_name) = 'recorder');
+
+PREPARE p_doc_dead AS
+INSERT INTO tmp3_merge_rec_dead
+SELECT $1::VARCHAR, r.rec
+FROM (SELECT DISTINCT rec FROM tmp3_merge_collapse_rec WHERE src_table = $1) r
+WHERE NOT EXISTS (SELECT 1 FROM query_table($1) q WHERE q."ref_key" = r.rec);
+
+\set ON_ERROR_STOP off
+SELECT 'EXECUTE p_doc_dead(' || quote_literal(src_table) || ');'
+FROM tmp3_merge_docs
 \gexec
 \set ON_ERROR_STOP on
 
