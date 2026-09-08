@@ -211,9 +211,12 @@ t("SQL: pair by content_hash",
 t("SQL: pair by refs fallback",
   "INNER JOIN tmp3_merge_emb_old_refs o USING (src_table, refs)" in txt)
 t("SQL: common_eq in xfer", "corpus_bmap_common_eq(n.bmap, o.bmap)" in txt)
+t("SQL: пачка в транзакции (BEGIN/COMMIT вокруг обнуления+MERGE)",
+  "'BEGIN;'" in txt and "'COMMIT;'" in txt)
 t("SQL: MERGE keeps emb on common_eq form",
-  "corpus_bmap_common_eq(corpus_doc_bmap(t.doc), corpus_doc_bmap(s.doc))" in txt
-  and "THEN t.emb ELSE NULL END" in txt)
+  "NOT corpus_bmap_common_eq(corpus_doc_bmap(c.doc), corpus_doc_bmap(t.doc))" in txt
+  and "UPDATE search_corpus c SET emb = NULL FROM tmp3_corpus t" in txt
+  and "emb = CASE WHEN" not in txt)  # CASE над FLOAT[1024] движком не реализован (08.09)
 t("SQL: MATCHED on content_hash",
   "WHEN MATCHED AND t.content_hash IS DISTINCT FROM s.content_hash" in txt)
 t("SQL: INSERT с NULL, перенос — после", "s.refs_map, NULL);" in txt)

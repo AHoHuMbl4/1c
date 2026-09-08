@@ -1034,13 +1034,33 @@ SELECT 'слияние пачками' AS шаг, count(DISTINCT job_id) AS па
 FROM tmp3_merge_jobs;
 
 SELECT stmt FROM (
+  -- 🔴 ПАЧКА В ТРАНЗАКЦИИ: BEGIN первым statement-ом каждой пачки, COMMIT (ord=90)
+  -- после maps-UPDATE. При ошибке любого statement-а пачки ON_ERROR_STOP рвёт
+  -- сессию — незакрытая транзакция откатывается движком целиком, смешанного
+  -- состояния «emb обнулён, контент старый» не остаётся.
+  SELECT job_id, 0, 'BEGIN;'
+  FROM (SELECT DISTINCT job_id FROM tmp3_merge_jobs) x
+  UNION ALL
+  -- 🔴 emb В MERGE-UPDATE НЕ ТРОГАЕМ: `emb = CASE … THEN t.emb ELSE NULL END`
+  -- над FLOAT[1024] движком не реализован («Unimplemented type for case
+  -- expression: FLOAT[1024]», живой стоп okna 08.09 — код впервые дошёл до
+  -- исполнения). Тот же обход, что в restore-drill 06.09: вместо CASE/COALESCE
+  -- над массивом — ДВА UPDATE. Обнуление — отдельной волной ord=1 выше (в
+  -- транзакции пачки):
+  -- контент изменился И общая часть карты различна → emb = NULL (шаг 5
+  -- досчитает); иначе emb строки-цели сохраняется MERGE-ом нетронутым.
+  -- 🔴 ВОЛНА ord=1 — ОБНУЛЕНИЕ emb ДО MERGE, а не после: прежний CASE сравнивал
+  -- СТАРЫЙ doc строки корпуса с новым (bmap_common_eq(t.doc, s.doc) в MERGE
+  -- вычисляется до UPDATE). После MERGE c.doc уже новый (= s.doc) и сравнение
+  -- всегда true — emb не обнулялся бы никогда. До MERGE c.doc/c.content_hash
+  -- ещё старые — семантика CASE воспроизведена точно.
   SELECT job_id, 1 AS ord,
-         'MERGE INTO search_corpus AS t USING (SELECT s.* FROM tmp3_corpus s WHERE s.src_table IN ('
+         'UPDATE search_corpus c SET emb = NULL FROM tmp3_corpus t WHERE t.src_table = c.src_table AND t.row_key = c.row_key AND t.content_hash IS DISTINCT FROM c.content_hash AND NOT corpus_bmap_common_eq(corpus_doc_bmap(c.doc), corpus_doc_bmap(t.doc)) AND t.src_table IN ('
          || ins
          || ')'
          || CASE WHEN n_parts = 1 THEN ''
-            ELSE ' AND (hash(s.row_key) % ' || n_parts || ') = ' || part END
-         || ') AS s ON t.src_table = s.src_table AND t.row_key = s.row_key WHEN MATCHED AND t.content_hash IS DISTINCT FROM s.content_hash THEN UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash, content_hash = s.content_hash, nums = s.nums, flags = s.flags, doc_date = s.doc_date, refs_map = s.refs_map, emb = CASE WHEN corpus_bmap_common_eq(corpus_doc_bmap(t.doc), corpus_doc_bmap(s.doc)) THEN t.emb ELSE NULL END WHEN NOT MATCHED THEN INSERT (src_table, row_key, doc, refs, doc_hash, content_hash, nums, flags, doc_date, refs_map, emb) VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.content_hash, s.nums, s.flags, s.doc_date, s.refs_map, NULL);' AS stmt
+            ELSE ' AND (hash(t.row_key) % ' || n_parts || ') = ' || part END
+         || ';' AS stmt
   FROM (
     SELECT job_id,
            string_agg(quote_literal(src_table), ', ') AS ins,
@@ -1050,6 +1070,21 @@ SELECT stmt FROM (
   ) g
   UNION ALL
   SELECT job_id, 2,
+         'MERGE INTO search_corpus AS t USING (SELECT s.* FROM tmp3_corpus s WHERE s.src_table IN ('
+         || ins
+         || ')'
+         || CASE WHEN n_parts = 1 THEN ''
+            ELSE ' AND (hash(s.row_key) % ' || n_parts || ') = ' || part END
+         || ') AS s ON t.src_table = s.src_table AND t.row_key = s.row_key WHEN MATCHED AND t.content_hash IS DISTINCT FROM s.content_hash THEN UPDATE SET doc = s.doc, refs = s.refs, doc_hash = s.doc_hash, content_hash = s.content_hash, nums = s.nums, flags = s.flags, doc_date = s.doc_date, refs_map = s.refs_map WHEN NOT MATCHED THEN INSERT (src_table, row_key, doc, refs, doc_hash, content_hash, nums, flags, doc_date, refs_map, emb) VALUES (s.src_table, s.row_key, s.doc, s.refs, s.doc_hash, s.content_hash, s.nums, s.flags, s.doc_date, s.refs_map, NULL);' AS stmt
+  FROM (
+    SELECT job_id,
+           string_agg(quote_literal(src_table), ', ') AS ins,
+           max(n_parts) AS n_parts,
+           min(part) AS part
+    FROM tmp3_merge_jobs GROUP BY job_id
+  ) g
+  UNION ALL
+  SELECT job_id, 3,
          'UPDATE search_corpus c SET nums = t.nums, flags = t.flags, doc_date = t.doc_date, refs_map = t.refs_map FROM tmp3_corpus t WHERE t.src_table = c.src_table AND t.row_key = c.row_key AND (c.nums IS DISTINCT FROM t.nums OR c.flags IS DISTINCT FROM t.flags OR c.doc_date IS DISTINCT FROM t.doc_date OR c.refs_map IS DISTINCT FROM t.refs_map) AND t.src_table IN ('
          || ins
          || ')'
@@ -1064,7 +1099,14 @@ SELECT stmt FROM (
     FROM tmp3_merge_jobs GROUP BY job_id
   ) g
   UNION ALL
-  SELECT job_id, 3, 'SELECT checkpoint();'
+  -- 🔴 ПАЧКА В ТРАНЗАКЦИИ (армия 08.09): обнуление emb и MERGE — отдельные
+  -- statement-ы; без BEGIN/COMMIT ошибка MERGE ПОСЛЕ успешного обнуления
+  -- оставляла бы emb=NULL при ещё старом контенте (дырка до перезапуска).
+  -- Multi-statement transactions — штатно (sql/statements/transactions).
+  SELECT job_id, 90, 'COMMIT;'
+  FROM (SELECT DISTINCT job_id FROM tmp3_merge_jobs) x
+  UNION ALL
+  SELECT job_id, 95, 'SELECT checkpoint();'
   FROM (SELECT DISTINCT job_id FROM tmp3_merge_jobs) x
 ) z ORDER BY job_id, ord
 \gexec
