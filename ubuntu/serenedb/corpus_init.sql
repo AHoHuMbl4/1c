@@ -93,6 +93,62 @@ CREATE OR REPLACE MACRO corpus_content_hash(doc) AS (
   ))
 );
 
+-- ── МОСТ МАРКЕРОВ СТРОК (полная B, этап 2; план FULLB §2a) ────────────────────
+-- Маркер search_changed_rows.key_text — ВИТРИННЫЙ ключ (мир B): `|`-join по
+-- enriched key_cols писателя (packet_apply _key_text_expr: declared + LineNumber
+-- в хвост регистрам; HTTP-контур шлёт голые Ref_Key). Ключ корпуса row_key (мир C)
+-- строится string_agg по DECLARED key_cols (corpus_build keyed CTE) + суффиксы
+-- «#N» (дубли) и «#sha1» (коллизии не-fold), fold-сущности — ключ шапки. Join
+-- «row_key=key_text вслепую» ЗАПРЕЩЁН (план §0) — расхождение миров живое:
+-- регистр-обёртка маркер `Rec|Type|LineNumber` против корпусного `Rec|Type#…`.
+-- Мост — ОДИН источник (этот макрос; персистентен, как corpus_content_hash):
+-- его зовут и фильтр сборки (этап 4), и merge-ветвление (этап 1).
+--
+-- n_seg = len(declared key_cols сущности) — передаёт вызывающий (tmp3_key).
+-- Правила (интроспекция-чеклист плана §0; правка по красной b2r3):
+--   * 1) ТОЧНЫЙ ПУТЬ ДО РАЗБИЕНИЙ: маркер совпадает с корпусным ключом ЦЕЛИКОМ
+--     (или его «#…»-потомок) — защищает значения, содержащие сам «|»
+--     (джойны писателя и сборки не экранируют разделитель — и там и там
+--     одинаково; при совпадении строк это тот же объект);
+--   * 2) ENRICHED-ХВОСТ (регистр: packet дописал LineNumber В КОНЕЦ): срез до
+--     declared-длины, но ТОЛЬКО когда хвост — ЦЕЛОЕ ЧИСЛО (LineNumber
+--     платформенно числовой; строковый хвост = «|» внутри значения —
+--     fail-closed false, иначе срез давал бы ложное совпадение на чужом
+--     префикс-ключе: «hello|world» при n=1 не должен матчить «hello»);
+--   * 3) ОБЪЕКТНЫЙ маркер (m<n_seg: HTTP шлёт голый Ref_Key, РКО без ТЧ):
+--     сегментный префикс — равно, хвост «|…» (строки ТЧ), потомки «#…»;
+--     разделитель защищает от ложного строкового префикса («ab» ≠ «abc|…»);
+--   * пустой маркер (все сегменты пустые) = MISS моста → false; вызывающий
+--     переводит сущность в mode=full (2b: fail-closed, не дыра, не отказ).
+CREATE OR REPLACE MACRO bridge_norm(marker, n_seg) AS (
+  array_to_string(
+    list_slice(string_split(coalesce(marker, ''), '|'), 1, n_seg),
+    '|')
+);
+
+CREATE OR REPLACE MACRO bridge_row_matches(row_key, marker, n_seg) AS (
+  CASE
+    WHEN coalesce(marker, '') = ''
+      OR len(list_filter(string_split(coalesce(marker, ''), '|'),
+                         s -> s <> '')) = 0
+      THEN false
+    -- 1) точный мир (включая «|» внутри значений)
+    WHEN row_key = marker OR starts_with(row_key, marker || '#')
+      THEN true
+    -- 2) enriched-хвост: числовой LineNumber в конце — срез до declared
+    WHEN len(string_split(marker, '|')) = n_seg + 1
+         AND regexp_full_match(string_split(marker, '|')[n_seg + 1], '[0-9]+')
+      THEN row_key = bridge_norm(marker, n_seg)
+           OR starts_with(row_key, bridge_norm(marker, n_seg) || '#')
+    -- 3) объектный маркер: сегментный префикс
+    WHEN len(string_split(marker, '|')) < n_seg
+      THEN row_key = marker
+           OR starts_with(row_key, marker || '|')
+           OR starts_with(row_key, marker || '#')
+    ELSE false
+  END
+);
+
 -- Справочник осей группы: какая колонка refs_map на какой каталог ссылается.
 -- Берётся из kind='ref' и search_refmap.owner. Пустая цель в таблицу не кладётся.
 CREATE TABLE IF NOT EXISTS search_refcols (
