@@ -249,7 +249,9 @@ def main() -> int:
     check("firstbuild StartLimitBurst=5", "StartLimitBurst=5" in fb)
     check("firstbuild StartLimitIntervalSec=1h", "StartLimitIntervalSec=1h" in fb)
     check("pipeline Restart=on-failure", "Restart=on-failure" in pl)
-    check("pipeline StartLimitBurst=5", "StartLimitBurst=5" in pl)
+    # (09.09) StartLimitBurst=8/15мин: ночной замер — зелёные быстрые такты+таймер
+    # 1мин пробивали 4/2ч даже успехами, конвейер стоял 00:30-03:04 (4b5bc0d).
+    check("pipeline StartLimitBurst=8", "StartLimitBurst=8" in pl)
 
     # --- 10. firstbuild_unit снимает path в начале (антилуп 14.08) ---
     fbsh = open(os.path.join(REPO, "ubuntu", "packet", "firstbuild_unit.sh"), encoding="utf-8").read()
@@ -354,7 +356,12 @@ def main() -> int:
     check("preflight tight names candidates", "swapfile-1c-build" in r.stderr or "Кандидаты" in r.stderr, r.stderr)
 
     bsh = open(os.path.join(REPO, "ubuntu", "serenedb", "build.sh"), encoding="utf-8").read()
-    check("build.sh calls disk preflight before merge", "box_tune_disk_preflight" in bsh and bsh.find("box_tune_disk_preflight") < bsh.find("corpus_merge.sql"))
+    # (09.09) порядок мерим по ВЫЗОВУ слияния («-f corpus_merge.sql»), не по первому
+    # упоминанию строки: комментарий шапки про memory_limit (458e5d4) стоит раньше
+    # префлайта и ронял проверку ложным красным.
+    check("build.sh calls disk preflight before merge",
+          "box_tune_disk_preflight" in bsh
+          and bsh.find("box_tune_disk_preflight") < bsh.find("-f corpus_merge.sql"))
     check("build.sh writes tmp3_merge_cfg", "tmp3_merge_cfg" in bsh)
     merg = open(os.path.join(REPO, "ubuntu", "serenedb", "corpus_merge.sql"), encoding="utf-8").read()
     check("merge chunks via gexec", "\\gexec" in merg and "tmp3_merge_jobs" in merg)
