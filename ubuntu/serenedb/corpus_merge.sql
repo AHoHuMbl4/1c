@@ -368,14 +368,22 @@ WHERE g.было > 0 AND g.стало < g.было;
 -- при off расхождение печатается, но psql ПРОДОЛЖАЕТ и гейт молчит. Паттерн
 -- p_rec_dead не годится: там INSERT без вердикта, здесь — STOP-проверка.
 -- Имя сущности в тексте ошибки — через quote_literal (экранирование кавычек).
-SELECT 'SELECT CASE WHEN (SELECT count(*) FROM query_table(' || quote_literal(src_table)
-       || ')) <> ' || стало
+-- 🔴 СЧЁТ ВИТРИНЫ — ПО DECLARED-КЛЮЧУ, не по строкам (живой стоп 21:02:
+-- контрагенты fold — витрина 373 РАЗВЁРНУТЫХ строк = 362 объектов, сборка 362;
+-- count(*) ронял гейт ложно). count(DISTINCT (ключ-колонки)) — объекты для
+-- fold, строки для построчных: та же форма, что корпусный row_key без суффиксов.
+SELECT 'SELECT CASE WHEN (SELECT count(DISTINCT (' || kexpr || ')) FROM query_table('
+       || quote_literal(src_table) || ')) <> ' || стало
        || ' THEN error(''corpus_merge: новая сборка меньше старой И разошлась с витриной: '''
        || ' || ' || quote_literal(src_table)
-       || ' || '' (стало ' || стало || ' витрина '' || '
-       || '(SELECT count(*) FROM query_table(' || quote_literal(src_table) || '))'
+       || ' || '' (стало ' || стало || ' ключей витрины '' || '
+       || '(SELECT count(DISTINCT (' || kexpr || ')) FROM query_table('
+       || quote_literal(src_table) || '))'
        || ' || '' было ' || было || ')'') END;'
-FROM tmp3_merge_shrink
+FROM (SELECT s.*, array_to_string(
+                 list_transform(k.key_cols, c -> '"' || c || '"'), ',') AS kexpr
+      FROM tmp3_merge_shrink s
+      JOIN tmp3_key k ON lower(k.entity) = s.src_table) q
 \gexec
 
 DELETE FROM search_quality WHERE k LIKE 'entity_source_shrink:%';

@@ -190,9 +190,12 @@ t("SQL: shrink STOP при расхождении с витриной (прям�
   "меньше старой И разошлась с витриной" in txt and "tmp3_merge_shrink" in txt
   and "entity_source_shrink" in txt)
 t("SQL: shrink-проверка прямыми gexec-командами, без PREPARE/mart-таблицы (RR-слепота)",
-  "SELECT CASE WHEN (SELECT count(*) FROM query_table(" in txt
+  "SELECT CASE WHEN (SELECT count(DISTINCT (" in txt
   and "PREPARE p_shrink_mart" not in txt
   and "tmp3_merge_shrink_mart" not in txt)
+t("SQL: счёт витрины ПО DECLARED-КЛЮЧУ (fold: объекты, не строки; стоп 21:02)",
+  "list_transform(k.key_cols, c -> '\"' || c || '\"')" in txt
+  and "lower(k.entity) = s.src_table" in txt)
 t("SQL: STOP-gexec НЕ под ON_ERROR_STOP off (контрольная sc5: error() при off молчит)",
   txt.find("\\set ON_ERROR_STOP off", txt.find("tmp3_merge_shrink AS"))
     > txt.find("Частичный уход при росте")
