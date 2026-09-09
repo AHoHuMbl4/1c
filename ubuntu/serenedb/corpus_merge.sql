@@ -565,6 +565,36 @@ FROM tmp3_merge_orphan_rec o
 INNER JOIN tmp3_merge_doc_alive a ON a.doc_tbl = o.doc_tbl AND a.rec = o.rec AND a.alive > 0
 GROUP BY 1, 2, 3;
 
+-- 🔴 REPOST_DELTA (живой стоп 09.09 19:34, 6 движений/2 документа): документ ЖИВ,
+-- движений в регистре нет, НО сам документ ИЗМЕНЯЛСЯ в этом окне — есть delta-маркер
+-- search_changed_rows (витринный ключ: равно rec — fold/HTTP, или хвост «|N» —
+-- построчный). Перепроведение сняло движения при живом документе — легитимная
+-- убыль 1С, классифицируем и пишем в quality; БЕЗ маркера — прежний STOP
+-- «дефект транспорта» (документ не трогали, а движения исчезли = потеря).
+-- Свидетель — данные (маркеры B0), не порог.
+CREATE OR REPLACE TABLE tmp3_merge_repost_delta AS
+SELECT t.src_table, t.rec, t.n
+FROM tmp3_merge_transport_defect t
+WHERE EXISTS (
+  SELECT 1 FROM search_changed_rows k
+  WHERE k.op = 'delta'
+    AND k.src_table = t.doc_tbl
+    AND (k.key_text = t.rec OR starts_with(k.key_text, t.rec || '|')));
+
+DELETE FROM search_quality WHERE k LIKE 'entity_repost_delta:%';
+INSERT INTO search_quality
+SELECT 'entity_repost_delta:' || src_table, n,
+       'движения сняты перепроведением живого документа (delta-маркер): recorder=' || rec
+FROM tmp3_merge_repost_delta;
+
+SELECT CASE WHEN count(*) > 0
+       THEN error('corpus_merge: документ жив, движений в регистре нет (дефект транспорта): '
+                  || string_agg(src_table || ' recorder=' || rec || ' (' || n || ')',
+                                ', ' ORDER BY src_table, rec)) END
+FROM tmp3_merge_transport_defect t
+WHERE NOT EXISTS (SELECT 1 FROM tmp3_merge_repost_delta r
+                  WHERE r.src_table = t.src_table AND r.rec = t.rec);
+
 CREATE OR REPLACE TABLE tmp3_merge_key_deleted_delta AS
 SELECT c.src_table, c.было, c.стало, count(d.row_key)::BIGINT AS уйдёт
 FROM tmp3_merge_collapse_cand c
@@ -577,12 +607,6 @@ INSERT INTO search_quality
 SELECT 'entity_deleted_delta:' || src_table, уйдёт,
        'было ' || было || ' → стало ' || стало
 FROM tmp3_merge_key_deleted_delta;
-
-SELECT CASE WHEN count(*) > 0
-       THEN error('corpus_merge: документ жив, движений в регистре нет (дефект транспорта): '
-                  || string_agg(src_table || ' recorder=' || rec || ' (' || n || ')',
-                                ', ' ORDER BY src_table, rec)) END
-FROM tmp3_merge_transport_defect;
 
 -- Допуск на легитимные удаления 1С при перепроведении (без пары по refs:
 -- строка и в витрине исчезла). Порог — доля от «было», не абсолютное число:
@@ -600,7 +624,11 @@ WHERE g.уйдёт > 0 AND g.уйдёт < g.было
   -- (09.09) SHRINK: убыль объяснена усохшим источником (сборка==витрина —
   -- \gexec-проверка выше остановила бы расхождение) — та же легитимная убыль.
   AND NOT EXISTS (SELECT 1 FROM tmp3_merge_shrink s
-                  WHERE s.src_table = g.src_table);
+                  WHERE s.src_table = g.src_table)
+  -- (09.09) REPOST_DELTA: движения сняты перепроведением живых документов
+  -- (delta-маркер) — массовое закрытие периода не должно стопить конвейер.
+  AND NOT EXISTS (SELECT 1 FROM tmp3_merge_repost_delta r
+                  WHERE r.src_table = g.src_table);
 
 DELETE FROM search_quality WHERE k LIKE 'entity_source_delta:%' OR k LIKE 'entity_edited_delta:%';
 INSERT INTO search_quality
@@ -922,6 +950,10 @@ die_unexplained AS (
     -- (сборка==витрина, \gexec-проверка выше) — легитимная убыль, не катастрофа.
     AND NOT EXISTS (SELECT 1 FROM tmp3_merge_shrink s
                     WHERE s.src_table = o.src_table)
+    -- (09.09) REPOST_DELTA: движения сняты перепроведением живого документа
+    -- (delta-маркер) — легитимная убыль движений, не потеря транспорта.
+    AND NOT EXISTS (SELECT 1 FROM tmp3_merge_repost_delta r
+                    WHERE r.src_table = o.src_table)
   GROUP BY 1
 )
 -- 🔴 «УМРЁТ» = ОКОНЧАТЕЛЬНАЯ ПОТЕРЯ, А НЕ ПЕРЕСЧЁТ (правка 08.09 по указанию

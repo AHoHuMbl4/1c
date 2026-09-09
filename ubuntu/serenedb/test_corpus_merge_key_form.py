@@ -29,7 +29,7 @@ def t(name, cond, detail=""):
 
 
 def classify_entity(было, уйдёт, стало, *, recorder_alive=None, doc_alive=None,
-                    mart=None):
+                    mart=None, doc_changed=False):
     """Логика tmp3_merge_ent_guard + key_form + key_collapse + deleted_delta.
 
     (09.09) shrink: усохшая сборка сверяется с ВИТРИНОЙ прямым \gexec-гейтом
@@ -50,6 +50,10 @@ def classify_entity(было, уйдёт, стало, *, recorder_alive=None, do
         if стало >= было and recorder_alive is False and doc_alive is False:
             return "deleted_delta_ok"
         if стало >= было and recorder_alive is False and doc_alive is True:
+            # (09.09) repost_delta: документ жив, но ИЗМЕНЯЛСЯ в окне (delta-маркер
+            # search_changed_rows) — перепроведение сняло движения: легитимно.
+            if doc_changed:
+                return "repost_delta_ok"
             return "transport_stop"
         # Легитимные удаления 1С при перепроведении: без пары по refs, но доля
         # мала — порог 0.1% как в SQL (g.уйдёт > g.было * 0.001 → STOP).
@@ -158,6 +162,27 @@ t("SQL: p_doc_alive", "PREPARE p_doc_alive AS" in txt)
 t("SQL: p_doc_alive deletionmark",
   'lower(try_cast(d."deletionmark" AS VARCHAR)) IS DISTINCT FROM \'true\'' in txt)
 t("SQL: transport_defect STOP", "дефект транспорта" in txt)
+t("SQL: repost_delta — delta-маркер объясняет снятие движений (живой стоп 19:34)",
+  "tmp3_merge_repost_delta" in txt
+  and "k.op = 'delta'" in txt
+  and "k.src_table = t.doc_tbl" in txt
+  and "(k.key_text = t.rec OR starts_with(k.key_text, t.rec || '|'))" in txt
+  and "entity_repost_delta:" in txt)
+t("SQL: transport STOP не трогает repost-пары",
+  "WHERE NOT EXISTS (SELECT 1 FROM tmp3_merge_repost_delta r" in txt)
+t("SQL: repost в die_unexplained (вектор легитимно умирает)",
+  txt.count("FROM tmp3_merge_repost_delta r") >= 2)
+t("SQL: repost в «частичной потере» (массовое закрытие периода, контрольная rc2)",
+  txt.count("FROM tmp3_merge_repost_delta r") >= 3)
+t("SQL: deleted_delta без дубля (repost ⊆ transport_defect, контрольная rc2)",
+  "AND NOT EXISTS (SELECT 1 FROM tmp3_merge_repost_delta r WHERE r.src_table = c.src_table)"
+  not in txt)
+t("classify: мёртвый recorder + живой документ + delta-маркер -> repost_delta_ok",
+  classify_entity(76214, 10, 76386, recorder_alive=False, doc_alive=True,
+                  doc_changed=True) == "repost_delta_ok")
+t("classify: мёртвый recorder + живой документ без маркера -> transport_stop",
+  classify_entity(76214, 10, 76386, recorder_alive=False, doc_alive=True,
+                  doc_changed=False) == "transport_stop")
 t("SQL: query_table Recorder", 'query_table($1) q WHERE q."Recorder"' in txt)
 t("SQL: Period repost anti-join", "list_contains(k.key_cols, 'Period')" in txt)
 t("SQL: частичная потеря STOP", "частичная потеря объектов" in txt)
