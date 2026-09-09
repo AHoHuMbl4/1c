@@ -55,15 +55,17 @@ t("регистр: DELETE EXISTS, не Ref_Key",
   "EXISTS" in s and "Recorder" in s and "Ref_Key" not in s, s)
 
 src = open(os.path.join(ROOT, "..", "packet", "packet_apply.py"), encoding="utf-8").read()
-# 🔴 Живой стоп okna 08.09 (пакет 000249): манифест РКО нёс LineNumber вне витрины —
-# маркерный SELECT падал, apply ретраил пакет 135 раз. Фильтр по пересечению:
-t("фильтр ключа маркера по витрине (пересечение)",
-  "if _ci_col(mart_cols, c)]" in src)
-mart_rko = ["Ref_Key", "Number", "DeletionMark"]
+# 🔴 Живой стоп okna 08.09→09.09 (пакет 000249): манифест РКО нёс LineNumber — витрина
+# её объявляет, а ЧАНК дельты нет; маркерный SELECT идёт ИЗ d_-чанка → «Referenced
+# column linenumber not found», apply ретраил пакет 135+. Ключ = манифест ∩ чанк:
+t("фильтр ключа маркера по чанку (пересечение)",
+  "if _ci_col(header, c) and _ci_col(mart_cols, c)]" in src)
+mart_rko = ["Ref_Key", "Number", "DeletionMark"]        # витрина
+hdr_rko = ["Ref_Key", "Number", "DeletionMark"]         # чанк дельки без ТЧ — без LineNumber
 kc_rko = [c for c in A._enrich_key_cols(["Ref_Key", "LineNumber"], mart_rko)
-          if A._ci_col(mart_rko, c)]
-t("модель: манифест РКО с LineNumber вне витрины -> ключ только Ref_Key",
-  A._key_text_expr(mart_rko, kc_rko)
+          if A._ci_col(hdr_rko, c) and A._ci_col(mart_rko, c)]
+t("модель: манифест РКО с LineNumber вне чанка -> ключ только Ref_Key (имена чанка)",
+  A._key_text_expr(hdr_rko, kc_rko)
   == "coalesce(CAST(\"Ref_Key\" AS VARCHAR), '')")
 # (09.09, полная B 0c/3d) писатели — upsert: UNIQUE тройка + освежение ts
 # (SKIP-инвариант 0b/5b читает max(ts), OR IGNORE замораживал бы свежесть).

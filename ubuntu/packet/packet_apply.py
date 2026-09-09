@@ -700,16 +700,18 @@ def _delta_sql(table: str, src: str, header: list[str],
         _log("delta %s: нет Ref_Key, слияние по %s" % (table, nat))
     delete_sql = _delta_delete_clause(table, mart_cols)
     changed_rows_sql = ""
-    # 🔴 КЛЮЧ МАРКЕРА — ТОЛЬКО ПО КОЛОНКАМ ВИТРИНЫ. [живой стоп okna 08.09 20:05,
-    # пакет 000249] манифест РКО нёс LineNumber, которой в витрине нет — маркерный
-    # SELECT падал «Referenced column linenumber not found», apply с ON_ERROR_STOP
-    # абортировал весь пакет и ретраил каждые 2 мин (135 раз), дельта не применялась.
-    # Внешний манифест не идеален по построению: фильтруем пересечением, сущность
-    # без пригодных колонок маркеров не пишет (мост полной B расширит объектный
-    # ключ по префиксу — см. FULLB_PLAN §2a).
-    kc = [c for c in _enrich_key_cols(key_cols, mart_cols) if _ci_col(mart_cols, c)]
+    # 🔴 КЛЮЧ МАРКЕРА — ТОЛЬКО ПО КОЛОНКАМ, ДОСТУПНЫМ В ЧАНКЕ. [живой стоп okna
+    # 08.09 20:05 → 09.09 05:23, пакет 000249] манифест РКО нёс LineNumber: витрина
+    # её объявляет, а ЧАНК дельты документа без табличной части — нет; маркерный
+    # SELECT идёт ИЗ d_-чанка, и колонка из витрины роняла его «Referenced column
+    # linenumber not found» (135+ ретраев, пакет verified). Внешний манифест не
+    # идеален по построению: ключ = пересечение манифеста с чанком (имена — из
+    # чанка, порядок сегментов — порядок ключа), сущность без пригодных колонок
+    # маркеров не пишет (мост полной B расширит объектный ключ по префиксу).
+    kc = [c for c in _enrich_key_cols(key_cols, mart_cols)
+          if _ci_col(header, c) and _ci_col(mart_cols, c)]
     if kc:
-        kt = _key_text_expr(mart_cols, kc)
+        kt = _key_text_expr(header, kc)
         # Upsert с освежением ts (не OR IGNORE): SKIP-инвариант полной B (план 0b/5b)
         # смотрит max(ts) против corpus_built_ts — повторная отметка того же ключа
         # тем же op ОБЯЗАНА двигать ts, иначе изменение молча теряет свежесть (п.13).
