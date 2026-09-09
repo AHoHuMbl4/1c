@@ -16,6 +16,12 @@ fail-open без снимка); (в) merge-литералы на канон: q."
 /d."DeletionMark" (замок key_form 92/0). Исполнение миграции и приёмка тактом
 — следующим шагом (запись дополняется). Доки: sql/statements/alter_table#rename-column;
 compatibility (duckdb_columns).
+**[дополнение ~21:00]** Миграция ИСПОЛНЕНА на окне: psql exit=0,
+repaired_tables=292, контроль leftover=0 (ошибка не сработала);
+catalog_страны = Ref_Key/DataVersion/DeletionMark/Code/Description — канон
+восстановлен. Выкат apply+merge = HEAD (f3ef911) ДО миграции. Такт
+пересборки 292 сущностей запущен — приёмка по дозору (запись закроется
+вердиктом такта).
 
 ## 2026-09-09 (6) — REPOST_DELTA: движения, снятые перепроведением живого документа (живой стоп 19:34)
 
