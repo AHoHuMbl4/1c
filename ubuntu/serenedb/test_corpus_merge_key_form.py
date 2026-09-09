@@ -32,17 +32,15 @@ def classify_entity(было, уйдёт, стало, *, recorder_alive=None, do
                     mart=None):
     """Логика tmp3_merge_ent_guard + key_form + key_collapse + deleted_delta.
 
-    (09.09) shrink: усохшая сборка СРАВНИВАЕТСЯ С ВИТРИНОЙ (свидетель, живой стоп
-    05:45: возврат 152<153 — строку ТЧ удалили в 1С): стало==витрине → источник
-    честно усох (запись в quality, пропуск); меньше витрины → обрыв, STOP;
-    ГЛУБОЖЕ 5% «было» при совпавшей витрине → STOP «обрезанный синк» (красная
-    sr2-3: класс «оба урезаны одинаково» не проходит молча).
+    (09.09) shrink: усохшая сборка сверяется с ВИТРИНОЙ прямым \gexec-гейтом
+    (стало≠витрина → STOP «разошлась»); подтверждённая убыль — легитимное
+    усохание источника, исключается из partial/die_unexplained membership'ом.
+    Порогов-из-головы нет (п.0: «обрезанный синк» держит coverage-постчек
+    в_1С/в_витрины — видимость, не число).
     """
     if было > 0 and стало < было:
         if mart is not None and mart == стало:
-            if (было - стало) <= было * 0.05:
-                return "shrink_ok"
-            return "shrink_deep_stop"
+            return "shrink_ok"
         return "shrink_stop"
     if уйдёт > 0 and уйдёт < было:
         # (08.09) cand: «стало >= было» — равный объём тоже замена (каталог
@@ -163,30 +161,35 @@ t("SQL: transport_defect STOP", "дефект транспорта" in txt)
 t("SQL: query_table Recorder", 'query_table($1) q WHERE q."Recorder"' in txt)
 t("SQL: Period repost anti-join", "list_contains(k.key_cols, 'Period')" in txt)
 t("SQL: частичная потеря STOP", "частичная потеря объектов" in txt)
-t("SQL: shrink STOP только при стало<витрины (09.09 свидетель витрины)",
+t("SQL: shrink STOP при расхождении с витриной (прямой \\gexec-гейт)",
   "меньше старой И разошлась с витриной" in txt and "tmp3_merge_shrink" in txt
   and "entity_source_shrink" in txt)
-t("SQL: shrink витрина через query_table count",
-  "PREPARE p_shrink_mart" in txt and "FROM query_table($1)" in txt)
-t("SQL: shrink проведён в «частичную потерю» (красные sr1/sr3)",
-  "JOIN tmp3_merge_shrink_mart m USING (src_table)" in txt
-  and txt.count("m.mart = s.стало") >= 3)
-t("SQL: shrink_mart живёт до вектор-гейта (не дропнут раньше)",
-  txt.find("DROP TABLE IF EXISTS tmp3_merge_shrink_mart")
-  > txt.find("die_unexplained"))
+t("SQL: shrink-проверка прямыми gexec-командами, без PREPARE/mart-таблицы (RR-слепота)",
+  "SELECT CASE WHEN (SELECT count(*) FROM query_table(" in txt
+  and "PREPARE p_shrink_mart" not in txt
+  and "tmp3_merge_shrink_mart" not in txt)
+t("SQL: STOP-gexec НЕ под ON_ERROR_STOP off (контрольная sc5: error() при off молчит)",
+  txt.find("\\set ON_ERROR_STOP off", txt.find("tmp3_merge_shrink AS"))
+    > txt.find("Частичный уход при росте")
+  or txt.count("\\set ON_ERROR_STOP off", txt.find("tmp3_merge_shrink AS"),
+               txt.find("Частичный уход при росте")) == 0)
+t("SQL: имя сущности в error-литерале экранировано quote_literal",
+  "|| ' || ' || quote_literal(src_table)" in txt)
+t("SQL: shrink проведён в «частичную потерю» и die_unexplained (membership)",
+  txt.count("FROM tmp3_merge_shrink s") >= 2)
+t("SQL: чисел-порогов в shrink-блоке нет (п.0; rewrite:0.05 вне зоны)",
+  "усохло больше 5" not in txt
+  and txt.find("Усыхание сборки") >= 0
+  and txt.find("Частичный уход при росте") > txt.find("Усыхание сборки")
+  and "0.05" not in txt[txt.find("Усыхание сборки"):txt.find("Частичный уход при росте")])
 t("classify: усохла по 1С (витрина=152=стало) -> shrink_ok",
   classify_entity(153, 0, 152, mart=152) == "shrink_ok")
 t("classify: обрыв сборки (витрина 153 > стало 152) -> shrink_stop",
   classify_entity(153, 0, 152, mart=153) == "shrink_stop")
 t("classify: витрины нет (без full) -> прежний stop",
   classify_entity(153, 0, 152) == "shrink_stop")
-t("classify: глубокое усыхание при совпавшей витрине -> deep stop",
-  classify_entity(153, 0, 90, mart=90) == "shrink_deep_stop")
-t("SQL: порог глубокого усыхания 5% в гейте",
-  "> s.было * 0.05" in txt and "усохло больше 5%" in txt)
 t("SQL: quality-ключ по сущности + чистка старья",
-  "'entity_source_shrink:' || s.src_table" in txt
-  and "k LIKE 'entity_source_shrink:%'" in txt)
+  "k LIKE 'entity_source_shrink:%'" in txt)
 t("SQL: search_quality entity_key_form_changed",
   "entity_key_form_changed:" in txt)
 t("SQL: search_quality entity_rewrite_wave",

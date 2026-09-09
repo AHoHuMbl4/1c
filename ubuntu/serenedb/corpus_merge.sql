@@ -353,60 +353,42 @@ LEFT JOIN tmp3_merge_rewrite_wave w USING (src_table);
 
 -- Усыхание сборки разбирается ниже (tmp3_merge_shrink): свидетель — витрина;
 -- безусловный STOP «стало<было» заменён на «стало<витрины» (живой стоп 09.09).
+-- Усыхание сборки: свидетель — витрина (живой стоп 09.09). 🔴 БЕЗ промежуточной
+-- DML-таблицы: движок repeatable read — SELECT той же psql-сессии НЕ ВИДИТ INSERT,
+-- сделанный \gexec-командой (замер 09.09: гейт видел mart пустой, после сессии
+-- строка на месте; DDL-заполненные таблицы видны). Проверка — ПРЯМЫЕ \gexec-
+-- команды per-entity: снапшот не мешает (витрина в сессии не менялась, «стало/
+-- было» — литералы из видимой DDL-таблицы shrink). Расхождение → STOP.
 CREATE OR REPLACE TABLE tmp3_merge_shrink AS
 SELECT g.src_table, g.было, g.стало
 FROM tmp3_merge_ent_guard g
 WHERE g.было > 0 AND g.стало < g.было;
 
-CREATE OR REPLACE TABLE tmp3_merge_shrink_mart (src_table VARCHAR, mart BIGINT);
-PREPARE p_shrink_mart AS
-INSERT INTO tmp3_merge_shrink_mart
-SELECT $1::VARCHAR, count(*) FROM query_table($1);
-
-\set ON_ERROR_STOP off
-SELECT 'EXECUTE p_shrink_mart(' || quote_literal(src_table) || ');'
+-- 🔴 ГОД ПОД ON_ERROR_STOP on (контрольная sc5a/b/c): команды несут error() —
+-- при off расхождение печатается, но psql ПРОДОЛЖАЕТ и гейт молчит. Паттерн
+-- p_rec_dead не годится: там INSERT без вердикта, здесь — STOP-проверка.
+-- Имя сущности в тексте ошибки — через quote_literal (экранирование кавычек).
+SELECT 'SELECT CASE WHEN (SELECT count(*) FROM query_table(' || quote_literal(src_table)
+       || ')) <> ' || стало
+       || ' THEN error(''corpus_merge: новая сборка меньше старой И разошлась с витриной: '''
+       || ' || ' || quote_literal(src_table)
+       || ' || '' (стало ' || стало || ' витрина '' || '
+       || '(SELECT count(*) FROM query_table(' || quote_literal(src_table) || '))'
+       || ' || '' было ' || было || ')'') END;'
 FROM tmp3_merge_shrink
 \gexec
-\set ON_ERROR_STOP on
 
+DELETE FROM search_quality WHERE k LIKE 'entity_source_shrink:%';
 INSERT INTO search_quality
-SELECT 'entity_source_shrink:' || s.src_table, s.было - s.стало,
-       'сущность усохла в 1С (витрина подтверждает): ' || s.src_table
-         || ' было=' || s.было || ' стало=витрине=' || s.стало
-FROM tmp3_merge_shrink s
-JOIN tmp3_merge_shrink_mart m USING (src_table)
-WHERE m.mart = s.стало;
-DELETE FROM search_quality WHERE k LIKE 'entity_source_shrink:%'
-  AND k NOT IN (SELECT 'entity_source_shrink:' || src_table
-                FROM tmp3_merge_shrink s
-                JOIN tmp3_merge_shrink_mart m USING (src_table)
-                WHERE m.mart = s.стало);
-
-SELECT CASE WHEN count(*) > 0
-       THEN error('corpus_merge: новая сборка меньше старой И разошлась с витриной: '
-                  || string_agg(s.src_table || ' (стало ' || s.стало
-                                || ', витрина ' || coalesce(m.mart, -1)
-                                || ', было ' || s.было || ')', ', ')) END
-FROM tmp3_merge_shrink s
-LEFT JOIN tmp3_merge_shrink_mart m USING (src_table)
-WHERE coalesce(m.mart, -1) <> s.стало;
-
--- Глубокое усыхание (>5% «было») — СТОП даже при совпавшей витрине: класс
--- «синк обрезал витрину, сборка совпала с обрезком» не должен проходить молча
--- (красная sr2-пункт3). Редактирования 1С (живой кейс 1/153=0.65%) проходят;
--- массовая пропажа — разбор руками. Порог — доля, не абсолют.
-SELECT CASE WHEN count(*) > 0
-       THEN error('corpus_merge: усохло больше 5% — витрина совпала, но убыль глубокая '
-                  || '(возможен обрезанный синк): '
-                  || string_agg(src_table || ' (' || (было - стало) || ' из ' || было
-                                || ', витрина ' || стало || ')', ', ')) END
-FROM tmp3_merge_shrink s
-JOIN tmp3_merge_shrink_mart m USING (src_table)
-WHERE m.mart = s.стало
-  AND (s.было - s.стало)::DOUBLE > s.было * 0.05;
--- shrink_mart НЕ дропаем здесь: объяснение «источник усох» проводится ниже —
--- в гейт «частичная потеря» и в die_unexplained (красные sr1/sr3: без этого
--- легитимная убыль 1/153>0.1% всё равно останавливала конвейер).
+SELECT 'entity_source_shrink:' || src_table, было - стало,
+       'сущность усохла в 1С (витрина подтверждена \gexec-проверкой выше): '
+         || src_table || ' было=' || было || ' стало=витрине=' || стало
+FROM tmp3_merge_shrink;
+-- Расхождение остановило бы исполнение error() в \gexec выше; ниже (частичная
+-- потеря, die_unexplained) сущность исключается membership'ом в shrink.
+-- «Обрезанный синк» (витрина сама порезана == сборке): внутри такта не отличим
+-- без второго свидетеля; видимость — coverage-постчек следующего такта (в_1С
+-- против в_витрины, п.13); усиление постчека — отдельный пункт, без чисел-из-головы.
 
 -- Частичный уход при росте сборки: проверяем, жив ли split_part(row_key,'|',1)
 -- в колонке Recorder витрины (имя платформы 1С, не домен). Все живы — коллапс
@@ -615,11 +597,10 @@ WHERE g.уйдёт > 0 AND g.уйдёт < g.было
   AND g.уйдёт::DOUBLE > g.было * 0.001
   AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse k WHERE k.src_table = g.src_table)
   AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_deleted_delta k WHERE k.src_table = g.src_table)
-  -- (09.09) SHRINK: убыль объяснена усохшим источником (сборка==витрина,
-  -- свидетель выше) — та же легитимная убыль 1С, что deleted_delta.
+  -- (09.09) SHRINK: убыль объяснена усохшим источником (сборка==витрина —
+  -- \gexec-проверка выше остановила бы расхождение) — та же легитимная убыль.
   AND NOT EXISTS (SELECT 1 FROM tmp3_merge_shrink s
-                  JOIN tmp3_merge_shrink_mart m USING (src_table)
-                  WHERE s.src_table = g.src_table AND m.mart = s.стало);
+                  WHERE s.src_table = g.src_table);
 
 DELETE FROM search_quality WHERE k LIKE 'entity_source_delta:%' OR k LIKE 'entity_edited_delta:%';
 INSERT INTO search_quality
@@ -938,10 +919,9 @@ die_unexplained AS (
     AND NOT EXISTS (SELECT 1 FROM tmp3_merge_rewrite_wave rw
                     WHERE rw.src_table = o.src_table)
     -- (09.09) SHRINK: вектор исчезающей строки объяснён усохшим источником
-    -- (сборка==витрина) — легитимная убыль 1С, не катастрофа (красные sr1/sr3).
+    -- (сборка==витрина, \gexec-проверка выше) — легитимная убыль, не катастрофа.
     AND NOT EXISTS (SELECT 1 FROM tmp3_merge_shrink s
-                    JOIN tmp3_merge_shrink_mart m USING (src_table)
-                    WHERE s.src_table = o.src_table AND m.mart = s.стало)
+                    WHERE s.src_table = o.src_table)
   GROUP BY 1
 )
 -- 🔴 «УМРЁТ» = ОКОНЧАТЕЛЬНАЯ ПОТЕРЯ, А НЕ ПЕРЕСЧЁТ (правка 08.09 по указанию
@@ -1028,8 +1008,6 @@ SELECT 'vector_loss_bypass', 1,
        'обход гейта вектор-бюджета (MERGE_VECTOR_LOSS_BYPASS), потеря='
          || (SELECT coalesce(sum(векторов_умрёт), 0) FROM tmp3_merge_vec_budget)
 WHERE (SELECT vector_loss_bypass FROM tmp3_merge_cfg LIMIT 1);
-
-DROP TABLE IF EXISTS tmp3_merge_shrink_mart;
 
 -- Гейт пройден (или пустой корпус) — теперь можно писать. Миграция content_hash:
 -- заполняем NULL без сброса emb, иначе MERGE увидит NULL≠hash и убьёт векторы.
