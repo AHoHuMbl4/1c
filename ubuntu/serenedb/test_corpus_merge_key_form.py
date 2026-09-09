@@ -28,9 +28,21 @@ def t(name, cond, detail=""):
         print("FAIL-", name, ("| " + str(detail))[:200] if detail else "")
 
 
-def classify_entity(было, уйдёт, стало, *, recorder_alive=None, doc_alive=None):
-    """Логика tmp3_merge_ent_guard + key_form + key_collapse + deleted_delta."""
+def classify_entity(было, уйдёт, стало, *, recorder_alive=None, doc_alive=None,
+                    mart=None):
+    """Логика tmp3_merge_ent_guard + key_form + key_collapse + deleted_delta.
+
+    (09.09) shrink: усохшая сборка СРАВНИВАЕТСЯ С ВИТРИНОЙ (свидетель, живой стоп
+    05:45: возврат 152<153 — строку ТЧ удалили в 1С): стало==витрине → источник
+    честно усох (запись в quality, пропуск); меньше витрины → обрыв, STOP;
+    ГЛУБОЖЕ 5% «было» при совпавшей витрине → STOP «обрезанный синк» (красная
+    sr2-3: класс «оба урезаны одинаково» не проходит молча).
+    """
     if было > 0 and стало < было:
+        if mart is not None and mart == стало:
+            if (было - стало) <= было * 0.05:
+                return "shrink_ok"
+            return "shrink_deep_stop"
         return "shrink_stop"
     if уйдёт > 0 and уйдёт < было:
         # (08.09) cand: «стало >= было» — равный объём тоже замена (каталог
@@ -151,7 +163,30 @@ t("SQL: transport_defect STOP", "дефект транспорта" in txt)
 t("SQL: query_table Recorder", 'query_table($1) q WHERE q."Recorder"' in txt)
 t("SQL: Period repost anti-join", "list_contains(k.key_cols, 'Period')" in txt)
 t("SQL: частичная потеря STOP", "частичная потеря объектов" in txt)
-t("SQL: shrink STOP", "новая сборка меньше старой" in txt)
+t("SQL: shrink STOP только при стало<витрины (09.09 свидетель витрины)",
+  "меньше старой И разошлась с витриной" in txt and "tmp3_merge_shrink" in txt
+  and "entity_source_shrink" in txt)
+t("SQL: shrink витрина через query_table count",
+  "PREPARE p_shrink_mart" in txt and "FROM query_table($1)" in txt)
+t("SQL: shrink проведён в «частичную потерю» (красные sr1/sr3)",
+  "JOIN tmp3_merge_shrink_mart m USING (src_table)" in txt
+  and txt.count("m.mart = s.стало") >= 3)
+t("SQL: shrink_mart живёт до вектор-гейта (не дропнут раньше)",
+  txt.find("DROP TABLE IF EXISTS tmp3_merge_shrink_mart")
+  > txt.find("die_unexplained"))
+t("classify: усохла по 1С (витрина=152=стало) -> shrink_ok",
+  classify_entity(153, 0, 152, mart=152) == "shrink_ok")
+t("classify: обрыв сборки (витрина 153 > стало 152) -> shrink_stop",
+  classify_entity(153, 0, 152, mart=153) == "shrink_stop")
+t("classify: витрины нет (без full) -> прежний stop",
+  classify_entity(153, 0, 152) == "shrink_stop")
+t("classify: глубокое усыхание при совпавшей витрине -> deep stop",
+  classify_entity(153, 0, 90, mart=90) == "shrink_deep_stop")
+t("SQL: порог глубокого усыхания 5% в гейте",
+  "> s.было * 0.05" in txt and "усохло больше 5%" in txt)
+t("SQL: quality-ключ по сущности + чистка старья",
+  "'entity_source_shrink:' || s.src_table" in txt
+  and "k LIKE 'entity_source_shrink:%'" in txt)
 t("SQL: search_quality entity_key_form_changed",
   "entity_key_form_changed:" in txt)
 t("SQL: search_quality entity_rewrite_wave",
