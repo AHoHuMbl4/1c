@@ -186,9 +186,9 @@ t("classify: мёртвый recorder + живой документ без мар
 t("SQL: query_table Recorder", 'query_table($1) q WHERE q."Recorder"' in txt)
 t("SQL: Period repost anti-join", "list_contains(k.key_cols, 'Period')" in txt)
 t("SQL: частичная потеря STOP", "частичная потеря объектов" in txt)
-t("SQL: shrink STOP при расхождении с витриной (прямой \\gexec-гейт)",
-  "меньше старой И разошлась с витриной" in txt and "tmp3_merge_shrink" in txt
-  and "entity_source_shrink" in txt)
+t("SQL: shrink STOP когда витрина НЕ ПОМЕЩАЕТСЯ в сборку (обрыв; дубли #N — не потеря, стоп 22:00)",
+  "меньше старой И меньше витрины" in txt and "tmp3_merge_shrink" in txt
+  and ")) > ' || стало" in txt and "entity_source_shrink" in txt)
 t("SQL: shrink-проверка прямыми gexec-командами, без PREPARE/mart-таблицы (RR-слепота)",
   "SELECT CASE WHEN (SELECT count(DISTINCT (" in txt
   and "PREPARE p_shrink_mart" not in txt
