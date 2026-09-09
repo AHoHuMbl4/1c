@@ -1,66 +1,75 @@
 # Активный контекст
 
-# С ЧЕГО НАЧАТЬ (срез 09.09 ~05:40 UTC; читать целиком)
+# С ЧЕГО НАЧАТЬ (срез 09.09 ~20:10 UTC; читать целиком)
 
 ### ГДЕ МЫ ОДНОЙ СТРОКОЙ / ЧТО ДЕЛАТЬ СЕЙЧАС
-Только okna. Такт в ПРОД-СОСТОЯНИИ. Полная B: **этап 0 ЗАКРЫТ живьём** (коммиты
-5172798+c03820e+00d2c52; приёмка: миграция 1897→461 + UNIQUE=1, apply APPLIED
-seq=549 после снятия живого стопа РКО, restore-строка rows в такте, packet-замок
-на живом движке «все проверки прошли»). 🔴 СЛЕДУЮЩИЙ ШАГ: **этап 2 (мост
-key_text→row_key, отдельный SQL-файл + замок L6) → этапы 1∥3 → Speed-II-2+0f →
-4 → 5 → flip**. Дизайн моста — .claude/state/fullb-stage2-design.md (живые
-key_cols сняты). L20 ПОСЛЕ B.
+Только okna. Полная B: **этапы 0 и 2 закрыты** (коммиты 5172798…2877588;
+HEAD=2877588=origin/main). Днём разморозка недели пакетов (после РКО-фикса)
+дала ДВА живых стопа merge — оба закрыты классами со свидетелями ДАННЫХ:
+shrink (витрина) и repost_delta (delta-маркер документа). 🔴 чисел-из-головы
+в гейтах НЕ заводить (слово владельца 09.09 по порогу 5%). СЛЕДУЮЩИЙ ШАГ:
+**этапы 1∥3 плана FULLB** (merge-ветвление по mode + писатели HTTP/tx) →
+Speed-II-2+0f → 4 → 5 → 6 (flip) → L20 после B. Дизайн моста —
+.claude/state/fullb-stage2-design.md; макросы bridge_* уже в corpus_init.
 
-### ЖИВОЕ: ТАКТ — ПРОД, 09.09 (срез после ночи)
-Такт целиком автоматический: №26 success 272 с; ночные таймерные такты зелёные по
-105-307 с; корпус 1668732/emb 1661029, деловых дырок 0 (7703 — служебные по решению
-владельца), 352 сущности. Исправление утра 09.09: StartLimit юнита 15мин/8 (ночной
-замер: быстрые такты+таймер 1 мин пробивали 4/2ч даже зелёными → простой 00:30-03:04;
-выкачен 4b5bc0d). Всё ручное смены 08.09 перекодировано (п.0): докатка off до B;
-гейт die_unexplained (счётный баланс ch-групп); build.sh http_timeout=600+память
-max(исходный,80%RAM); drop-in serenedb fsst AUTO_NATIVE (снять после их фикса);
-classify идемпотентный /v1; дельта собирает НОВЫЕ источники; cand «стало >= было».
-**09.09 утро: cb2d262 (Скорость-II 4+3) выкачен и принят живьём (148 с,
-allocator=1 applied, resolver_unpivot=skipped).** Коммиты 08-09.09: b7396fd…00d2c52
-(HEAD=00d2c52=origin/main; на окне corpus_init/pipeline/packet_apply/resolver/
-box_tune = HEAD).
+### ЖИВОЕ: ТАКТ — ПРОД + ДВА ИНЦИДЕНТА ДНЯ ЗАКРЫТЫ
+Такт полностью автоматический; ночные такты 105-307 с; корпус 1668732/emb
+1661029 (до инцидентов), деловых дырок 0. Утро: cb2d262 выкачен и принят
+(148 с, allocator=1, resolver_unpivot=skipped). ДЕНЬ: (а) 05:45 shrink-стоп
+(возврат 152<153 — в 1С удалили строку ТЧ) — класс entity_source_shrink,
+свидетель витрина прямыми \gexec-командами; (б) 19:34 repost-стоп (6 движений
+двух ЖИВЫХ документов с delta-маркерами — перепроведение) — класс
+entity_repost_delta, свидетель delta-маркер СУЩНОСТИ ДОКУМЕНТА (src_table=
+doc_tbl). Оба: армия ×3 + контроль ×3, замки 92/0, живые пробы. Вектора
+вне дельты не тронуты; финальный такт с фиксами — проверяется (дозор).
+
+### 🔴 ИНЦИДЕНТ ОТКРЫТ (09.09 ~20:30): 218 витрин с lowercase-колонками — конвейер стоит на «частичной потере» (catalog_страны 3 из 6)
+Слой 4 каскада после разморозки недели пакетов (РКО-стоп 08.09 20:05 → мой фикс
+09.09 → 2983 full_entity применились). Факты: (а) чанки агента несут
+lowercase-заголовки (ref_key/dataversion/code...) — с ~08.09 (до этого apply
+работал и витрины были верные; $metadata-снимок ИСТИННЫЙ: 1313× Name="Ref_Key");
+(б) apply-full ДОВЕРЯЕТ заголовку: `DROP; CREATE TABLE AS SELECT DISTINCT *
+FROM read_csv` (packet_apply.py:467-469) → витрина создаётся с чужим регистром;
+(в) масштаб: 218 таблиц с колонкой ref_key; сборка keyed ({Ref_Key}) не находит
+колонку → row_key=sha1(doc) → массовая замена формы ключей → честные STOP
+«частичная потеря» (первый: catalog_страны 20:00). Корпус/emb НЕ тронуты.
+Решение за владельцем (боевые данные): (A) разовая SQL-миграция колонок по
+$metadata-соответствию lower()→Name (универсальный код, без имён) + apply-фикс
+нормализации при full; (B) фикс агента (Windows, трек владельца) + перевыгрузка.
+До решения конвейер стоит; гейты ДЕРЖАТ данные (не ослаблять!).
+
+### 🔴 ЛОВУШКИ ДНЯ (вtechContext потом)
+- **RR-слепота**: движок repeatable read — SELECT той же psql-сессии НЕ ВИДИТ
+  INSERT, сделанный \gexec-командой (DDL-заполненные таблицы видны). Обход:
+  прямые \gexec-команды без промежуточных DML-таблиц.
+- **ON_ERROR_STOP off глотает error()**: печатает и ПРОДОЛЖАЕТ — STOP-гейты
+  в \gexec только под on (контроль sc5 пойрала молчание).
+- **Склейка DELETE||ALTER в ОДНОЙ \gexec-ячейке** роняет 26.08.1 «another
+  transaction has altered this table» — только раздельные блоки.
+- **Манифест РКО LineNumber вне чанка**: ключ маркера = манифест ∩ ЧАНК ∩
+  витрина, имена из чанка (SELECT идёт из d_).
 
 ### ДЛЯ ПОЛНОЙ B — что знать на входе
-- План: docs/audit/FULLB_PLAN_2026-09-03.md (сошёлся армиями 03.09). Порядок
-  0→2→(1∥3)→4→5→6. Этап 0 исполнен 09.09 (CHANGELOG (2)-(3)): UNIQUE-тройка
-  маркеров + идемпотентная миграция (ДВА раздельных \gexec — склейка DELETE||ALTER
-  в одной ячейке роняет 26.08.1), upsert DO UPDATE ts (SKIP-инвариант читает
-  max(ts)), ensure-миграция в apply ДО писателей, фильтр ключа маркера
-  манифест∩ЧАНК∩витрина (имена из чанка — SELECT идёт из d_; живой стоп РКО 08.09
-  20:05, 135+ ретраев, снят 09.09).
-- Этап 2 (мост): файл-владелец отдельный (build и merge зовут ОДИН источник);
-  нормализация маркера: срез до declared-длины (enrich дописывает LineNumber в
-  ХВОСТ регистрам; живой замер: packet key [Rec,RecType,LineNumber] vs corpus
-  declared [Rec,RecType]); m<d сегментов = объектный маркер (расширение по
-  префиксу — HTTP пишет голые ref); gone-expand через витрину (Ref_Key=ref →
-  ключи строк + потомки #…); пустой ключ → miss → mode=full (2b). Каждая форма
-  в замке L6.
-- Ключевые точки кода: tmp3_changed corpus_build.sql:1015-1020 (дельта+новые);
-  дельта-включение tmp3_inc :1004-1007; tmp3_build :1343-1354; row_key сборка
-  string_agg по declared key_cols (:1722, :2015, :2245); merge DELETE :1179-1182
-  (сущностный anti-join — ветвить по mode на этапе 1); гейт die_unexplained :857;
-  потребление sources :1295.
-- Протокол (владелец 08.09): каждая правка — 3 независимые проверки (армия ×3 линзы:
-  корректность/п.0-комплаенс/red-team; потом контрольная волна авторам замечаний);
-  замки обязательны и синхронны SQL (модели в тестах = формулы канона); выкат после
-  коммита (гейт check-golden требует дерево=HEAD); add и commit РАЗНЫМИ командами
-  (гейт check-docs/graph смотрит индекс ДО составной команды — два ложных стопа
-  09.09); пат-спек; «Числа:»/«Доки:»; граф MCP тем же коммитом.
-- Ловушки: SET memory_limit/http_timeout — только GLOBAL (build.sh ставит/снимает сам);
-  DDL в SereneDB нетранзакционен, DML — транзакционен; CASE/COALESCE над FLOAT[1024]
-  не реализованы; EXPLAIN-проба из второй сессии различает «висит исполнение»;
-  ALTER TABLE «теряет» таблицу до конца соединения — пробы разносить на вызовы.
-- Долги рядом: docs/audit/MANUAL_TO_UNIVERSAL_2026-09-08.md (источник 30 GiB; pin-block
-  :2530; /v1 в z01/serene_search_build; http_timeout ask-контура; внешние SereneDB:
-  dict_fsst-фикс → снять drop-in, отмена из глубины, EXPORT DATABASE);
-  packet_config.py на окне = aa7e700 (старее HEAD, отдельный разбор);
-  test_packet_apply на окне гонять с /tmp/age + /tmp/age-keygen (в репо
-  work/packet/bin/age) и PACKET_AGE_*_BIN.
+- План: docs/audit/FULLB_PLAN_2026-09-03.md, порядок 0→2→(1∥3)→4→5→6.
+  Этап 0 (маркеры UNIQUE+миграция+upsert+restore) и этап 2 (мост
+  bridge_norm/bridge_row_matches — три ветви, замок L6 28/0) ИСПОЛНЕНЫ.
+- Этап 1 (merge-ветвление по колонке mode): точки — DELETE :1250+ (сущностный
+  anti-join — ветвить по mode), сторож A (STOP при mode≠full при flip=0) ДО
+  vec-budget; vec-budget 1c (unexpected = unmatched − gone_expand −
+  xfer_explained). Этап 3 (писатели): poc_load_entity:741-756 (HTTP persist
+  changed/gone ДО return; serene_sync err → table_full), packet_apply tx
+  (маркеры В ТОЙ ЖЕ tx, что sources — :899-940 _contract_tx).
+- Ключевые точки: tmp3_inc corpus_build.sql:1004-1007; tmp3_changed :1015-1020;
+  tmp3_build :1343-1354; row_key string_agg по declared :1722+; merge DELETE
+  :1250+; die_unexplained :890+; потребление sources :1366+.
+- Протокол (владелец): армия ×3 линзы + контроль ×3 авторам; замки синхронны
+  SQL; add/commit РАЗНЫМИ вызовами; пат-спек; «Числа:»/«Доки:»; граф тем же
+  коммитом; выкат после коммита (дерево=HEAD).
+- Долги: coverage-постчек в_1С>в_витрины (усиление — прикрытие «обрезанный
+  синк»); MANUAL_TO_UNIVERSAL (источник 30 GiB; pin-block; /v1;
+  http_timeout); packet_config.py на окне = aa7e700 (старее HEAD); fsst
+  AUTO_NATIVE снять после их фикса; test_packet_apply на окне — с
+  /tmp/age,/tmp/age-keygen + PACKET_AGE_*_BIN.
 
 ### АУДИТ TARGET 02.09 — завершён (сводная docs/audit/TARGET_AUDIT_2026-09-02.md);
 классы К1-К10 исполняются планом фиксов ниже. КЛАССЫ 6-9c + q1/q2 — исполнены
@@ -105,22 +114,13 @@ type=result в stream-json; исполнителям — «коммитов НЕ
 без владельца): 10 путей entity-clarify вне wiki (mapC); исход B контракта;
 И2 web. «реально покупают» 145 — скилл, решение №9.
 
-### ЖИВОЕ СЕЙЧАС (06.09; история — в CHANGELOG/progress)
-- **27B-потребители на OpenRouter (06.09, ключ владельца):** (а) словарь — провайдер
-  `vllm` на окне → `https://openrouter.ai/api/v1` (`qwen/qwen3.8-27b`), ключ в auth-store
-  `vllm:default`, смоук 18,5 с; (б) classify/reports-пайплайн — `DEEPSEEK_*` в
-  `/etc/1c-mcp-reports.env` и `/etc/1c-serene-ask-postgres.env` (base/model/key;
-  модель в env ОБЯЗАТЕЛЬНА — дефолт flash промахнётся), ask@postgres рестартован,
-  health 200, живой вопрос разобран. Hetzner не пошёл (край 300 с). Откат на локальный
-  27B — baseUrl/DEEPSEEK_BASE + uAI_-ключ (EMBED_HOSTS); бэкапы `*.bak-openrouter-*`.
-- **Перепроверка перед компактом (06.09):** веб-профиль бота (~/.openclaw-web) тоже
-  переведён на OpenRouter (смоук 4,5 с; primary у него deepseek); README бакета
-  синхронизирован с §7. 🔴 Дев-side /etc/1c-embed.env всё ещё несёт VLLM_BASE_URL=
-  49.13.97.101:8000 и :8002 в EMBED_HOSTS — root-файл, правит владелец; после оф 101
-  дев-прогоны упрутся (боевое окно чисто).
-- **HEAD = 7750018 = origin/main** (06.09). Вектора целы (merge не звался), бэкапы ×3
-  живы; restore-drill пройден (5550/5550 бит-в-бит; fallback по content_hash только из
-  HAVING count(*)=1; coalesce над FLOAT[1024] движок не умеет — два UPDATE).
+### ЖИВОЕ СЕЙЧАС (срез 09.09; история — в CHANGELOG/progress)
+- **27B-потребители на OpenRouter (06.09):** словарь — провайдер vllm → openrouter
+  (qwen/qwen3.8-27b, ключ auth-store vllm:default); classify/reports — DEEPSEEK_*
+  в /etc/1c-mcp-reports.env и /etc/1c-serene-ask-postgres.env (модель в env
+  ОБЯЗАТЕЛЬНА). Откат — baseUrl/DEEPSEEK_BASE + uAI_-ключ.
+- **HEAD = origin/main** (следи в коммитах). Вектора целы, бэкапы живы;
+  restore-drill пройден (coalesce над FLOAT[1024] движок не умеет — два UPDATE).
 - **Пакет v10 (d6178ee):** A чанкование; B0 search_changed_rows; C embed_bulk (strict +
   REFRESH + smoke kNN); D wiki_alias SQL-only. Документ: .claude/state/plan-takt-fix-v10.md.
 - **Красные замки пред-существующие** (доказано stash-прогоном): test_pipeline_doc
