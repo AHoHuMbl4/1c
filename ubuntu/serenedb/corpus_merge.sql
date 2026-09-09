@@ -519,7 +519,7 @@ PREPARE p_doc_dead AS
 INSERT INTO tmp3_merge_rec_dead
 SELECT $1::VARCHAR, r.rec
 FROM (SELECT DISTINCT rec FROM tmp3_merge_collapse_rec WHERE src_table = $1) r
-WHERE NOT EXISTS (SELECT 1 FROM query_table($1) q WHERE q."ref_key" = r.rec);
+WHERE NOT EXISTS (SELECT 1 FROM query_table($1) q WHERE q."Ref_Key" = r.rec);
 
 \set ON_ERROR_STOP off
 SELECT 'EXECUTE p_doc_dead(' || quote_literal(src_table) || ');'
@@ -531,14 +531,14 @@ CREATE OR REPLACE TABLE tmp3_merge_doc_alive (doc_tbl VARCHAR, rec VARCHAR, aliv
 
 PREPARE p_doc_alive AS
 INSERT INTO tmp3_merge_doc_alive
-SELECT $1::VARCHAR, d."ref_key", count(*)
+SELECT $1::VARCHAR, d."Ref_Key", count(*)
 FROM query_table($1) d
-WHERE d."ref_key" IN (SELECT r.rec FROM tmp3_merge_delta_rec r WHERE r.doc_tbl = $1)
+WHERE d."Ref_Key" IN (SELECT r.rec FROM tmp3_merge_delta_rec r WHERE r.doc_tbl = $1)
   -- «Жив» = присутствует и НЕ помечен на удаление: annulled/deleted документы
   -- движений в регистрах не пишут, их отсутствие — не дефект транспорта.
   -- deletionmark — платформенное поле, есть у всех документных таблиц витрины.
-  AND lower(try_cast(d."deletionmark" AS VARCHAR)) IS DISTINCT FROM 'true'
-GROUP BY d."ref_key";
+  AND lower(try_cast(d."DeletionMark" AS VARCHAR)) IS DISTINCT FROM 'true'
+GROUP BY d."Ref_Key";
 
 \set ON_ERROR_STOP off
 SELECT 'EXECUTE p_doc_alive(' || quote_literal(doc_tbl) || ');'

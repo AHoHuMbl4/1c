@@ -159,8 +159,8 @@ t("SQL: tmp3_merge_key_collapse", "CREATE OR REPLACE TABLE tmp3_merge_key_collap
 t("SQL: tmp3_merge_key_deleted_delta", "CREATE OR REPLACE TABLE tmp3_merge_key_deleted_delta AS" in txt)
 t("SQL: p_collapse_dead", "PREPARE p_collapse_dead AS" in txt)
 t("SQL: p_doc_alive", "PREPARE p_doc_alive AS" in txt)
-t("SQL: p_doc_alive deletionmark",
-  'lower(try_cast(d."deletionmark" AS VARCHAR)) IS DISTINCT FROM \'true\'' in txt)
+t("SQL: p_doc_alive DeletionMark (канон регистра, инцидент 09.09)",
+  'lower(try_cast(d."DeletionMark" AS VARCHAR)) IS DISTINCT FROM \'true\'' in txt)
 t("SQL: transport_defect STOP", "дефект транспорта" in txt)
 t("SQL: repost_delta — delta-маркер объясняет снятие движений (живой стоп 19:34)",
   "tmp3_merge_repost_delta" in txt

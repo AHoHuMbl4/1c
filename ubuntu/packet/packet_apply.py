@@ -441,7 +441,46 @@ def _csv_header(path: str) -> list[str]:
         return next(csv.reader(f))
 
 
-def _full_sql(table: str, src: str) -> str:
+_META_CANON_CACHE: dict[str, dict[str, str]] = {}
+
+
+def _meta_canon(base_id: str) -> dict[str, str]:
+    """Глобальный канон регистра имён полей: lower(имя) → Name из $metadata.
+
+    Снимок пишет _apply_metadata (PACKET_META_DIR/<base>/$metadata) — контракт
+    1С, не конкретного пакета. Соответствие lower=lower единственно у
+    большинства имён; коллизия двух разных имён с одним lower — имя остаётся
+    как в чанке (fail-open к прежнему поведению), с записью в журнал.
+    """
+    if base_id in _META_CANON_CACHE:
+        return _META_CANON_CACHE[base_id]
+    canon: dict[str, str] = {}
+    path = os.path.join(PACKET_META_DIR, base_id or "", "$metadata")
+    try:
+        import xml.etree.ElementTree as ET
+        root = ET.parse(path).getroot()
+        names: dict[str, list[str]] = {}
+        for pr in root.iter():
+            if pr.tag.split("}")[-1] == "Property" and pr.get("Name"):
+                names.setdefault(pr.get("Name").lower(), []).append(pr.get("Name"))
+        # Повтор ОДНОГО И ТОГО ЖЕ имени у разных сущностей — не коллизия
+        # (Ref_Key есть у всех): единственное имя, скольким бы сущностям оно
+        # ни принадлежало. Коллизия — два РАЗНЫХ имени с одним lower.
+        canon = {low: v[0] for low, v in names.items() if len(set(v)) == 1}
+        if len(names) != len(canon):
+            _log("base=%s: $metadata-канон: %d коллизий регистра пропущено"
+                 % (base_id, len(names) - len(canon)))
+    except (OSError, ValueError) as e:
+        # Нет снимка/битый XML — прежнее поведение (регистр как в чанке),
+        # но не молча: расхождение видно в журнале (п.13).
+        _log("base=%s: $metadata-канон недоступен (%s) — регистр заголовка "
+             "как есть" % (base_id, str(e)[:120]))
+    _META_CANON_CACHE[base_id] = canon
+    return canon
+
+
+def _full_sql(table: str, src: str, *, header: list[str] | None = None,
+              canon: dict[str, str] | None = None) -> str:
     # Формы poc_load_entity.load_entity: DROP + CREATE, затем GRANT читающей роли.
     #
     # 🔴 Дедуп ведётся по ПОЛНОЙ строке (DISTINCT), а не по объявленному ключу.
@@ -461,6 +500,27 @@ def _full_sql(table: str, src: str) -> str:
     # строк от перекрытия страниц и повторной отправки чанка. Строки, у которых
     # ключ общий, а содержимое разное, — это данные, и они остаются.
     # Уникальность ключа проверяется после загрузки (_check_key_identifies).
+    #
+    # 🔴 НОРМАЛИЗАЦИЯ РЕГИСТРА КОЛОНОК ПО $metadata (инцидент 09.09: чанки
+    # агента несли lowercase-заголовки — 218 витрин создались «ref_key» вместо
+    # «Ref_Key», сборка потеряла ключи). Витрина строится по КАНОНУ контракта
+    # 1С, а не по регистру заголовка чанка: колонки перечисляются с алиасами
+    # canon[lower(h)] в КАЖДОЙ части UNION ALL (заголовки частей идентичны по
+    # контракту). Без канона/заголовка — прежняя форма SELECT *.
+    if header and canon:
+        parts, fixed = [], 0
+        for h in header:
+            c = canon.get(h.lower())
+            if c and c != h:
+                parts.append('"%s" AS "%s"' % (h, c))
+                fixed += 1
+            else:
+                parts.append('"%s"' % h)
+        if fixed:
+            src = src.replace("SELECT * FROM read_csv",
+                              "SELECT " + ", ".join(parts) + " FROM read_csv")
+            _log("full %s: нормализован регистр %d колонок по $metadata"
+                 % (table, fixed))
     wrapped = src if src.startswith("(") else None
     select = ("SELECT DISTINCT * FROM %s AS q" % wrapped) if wrapped \
         else src.replace("SELECT *", "SELECT DISTINCT *", 1)
@@ -1061,7 +1121,8 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                                  "чанка: %s -> %s" % (base_id, pkg_id, table,
                                                       key_cols, kept or "DISTINCT"))
                             key_cols = kept
-                    _psql(_full_sql(table, src))
+                    _psql(_full_sql(table, src, header=_csv_header(chunk_paths[0]),
+                                    canon=_meta_canon(base_id)))
                     _check_key_identifies(base_id, pkg_id, table, key_cols)
                     _check_rows_landed(base_id, pkg_id, table, ent.get("rows"))
                 changed_tables.add(table)
