@@ -55,13 +55,25 @@ t("регистр: DELETE EXISTS, не Ref_Key",
   "EXISTS" in s and "Recorder" in s and "Ref_Key" not in s, s)
 
 src = open(os.path.join(ROOT, "..", "packet", "packet_apply.py"), encoding="utf-8").read()
-t("delta: INSERT search_changed_rows из d_",
+# 🔴 Живой стоп okna 08.09 (пакет 000249): манифест РКО нёс LineNumber вне витрины —
+# маркерный SELECT падал, apply ретраил пакет 135 раз. Фильтр по пересечению:
+t("фильтр ключа маркера по витрине (пересечение)",
+  "if _ci_col(mart_cols, c)]" in src)
+mart_rko = ["Ref_Key", "Number", "DeletionMark"]
+kc_rko = [c for c in A._enrich_key_cols(["Ref_Key", "LineNumber"], mart_rko)
+          if A._ci_col(mart_rko, c)]
+t("модель: манифест РКО с LineNumber вне витрины -> ключ только Ref_Key",
+  A._key_text_expr(mart_rko, kc_rko)
+  == "coalesce(CAST(\"Ref_Key\" AS VARCHAR), '')")
+# (09.09, полная B 0c/3d) писатели — upsert: UNIQUE тройка + освежение ts
+# (SKIP-инвариант 0b/5b читает max(ts), OR IGNORE замораживал бы свежесть).
+t("delta: upsert search_changed_rows из d_",
   "INSERT INTO search_changed_rows" in src and "FROM \"d_" in src
-  and "delta" in src)
+  and "delta" in src and "DO UPDATE SET ts = EXCLUDED.ts" in src)
 t("delta: key_text concat в SELECT",
   "_key_text_expr" in src and "|| '|' ||" in src)
-t("gone: deleted_gone в INSERT",
-  "deleted_gone" in src and "INSERT INTO search_changed_rows" in src)
+t("gone: deleted_gone upsert",
+  "deleted_gone" in src and "DO UPDATE SET ts = EXCLUDED.ts" in src)
 t("gone: ref_key агента как key_text",
   "deleted_gone" in src and "v.k" in src)
 t("gone: комментарий полной B",

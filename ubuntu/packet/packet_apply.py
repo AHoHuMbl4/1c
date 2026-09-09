@@ -700,11 +700,23 @@ def _delta_sql(table: str, src: str, header: list[str],
         _log("delta %s: нет Ref_Key, слияние по %s" % (table, nat))
     delete_sql = _delta_delete_clause(table, mart_cols)
     changed_rows_sql = ""
-    if key_cols:
-        kt = _key_text_expr(mart_cols, key_cols)
+    # 🔴 КЛЮЧ МАРКЕРА — ТОЛЬКО ПО КОЛОНКАМ ВИТРИНЫ. [живой стоп okna 08.09 20:05,
+    # пакет 000249] манифест РКО нёс LineNumber, которой в витрине нет — маркерный
+    # SELECT падал «Referenced column linenumber not found», apply с ON_ERROR_STOP
+    # абортировал весь пакет и ретраил каждые 2 мин (135 раз), дельта не применялась.
+    # Внешний манифест не идеален по построению: фильтруем пересечением, сущность
+    # без пригодных колонок маркеров не пишет (мост полной B расширит объектный
+    # ключ по префиксу — см. FULLB_PLAN §2a).
+    kc = [c for c in _enrich_key_cols(key_cols, mart_cols) if _ci_col(mart_cols, c)]
+    if kc:
+        kt = _key_text_expr(mart_cols, kc)
+        # Upsert с освежением ts (не OR IGNORE): SKIP-инвариант полной B (план 0b/5b)
+        # смотрит max(ts) против corpus_built_ts — повторная отметка того же ключа
+        # тем же op ОБЯЗАНА двигать ts, иначе изменение молча теряет свежесть (п.13).
         changed_rows_sql = (
             'INSERT INTO search_changed_rows (src_table, key_text, op, ts)\n'
-            'SELECT %s, %s, \'delta\', now() FROM "d_%s";\n'
+            'SELECT %s, %s, \'delta\', now() FROM "d_%s"\n'
+            'ON CONFLICT (src_table, key_text, op) DO UPDATE SET ts = EXCLUDED.ts;\n'
             % (_lit(table), kt, table))
     return ('CREATE OR REPLACE TEMP TABLE "d_%s" AS '
             'SELECT DISTINCT * FROM (%s) AS q;\n'
@@ -745,8 +757,12 @@ def _apply_gone(path: str, changed_tables: set) -> int:
             _psql('DELETE FROM "%s" WHERE "Ref_Key" IN '
                   '(SELECT k FROM (VALUES %s) AS g(k));' % (table, vals))
             gone_vals = ",".join("(%s,%s)" % (_lit(table), _lit(k)) for k in batch)
+            # Upsert с освежением ts — симметрично delta-писателю: SKIP-инвариант
+            # полной B читает max(ts) маркеров (план 0b/5b), повторный gone того же
+            # ключа двигает свежесть, а не молча пропускается.
             _psql('INSERT INTO search_changed_rows (src_table, key_text, op, ts)\n'
-                  'SELECT v.t, v.k, \'deleted_gone\', now() FROM (VALUES %s) AS v(t, k);'
+                  'SELECT v.t, v.k, \'deleted_gone\', now() FROM (VALUES %s) AS v(t, k)\n'
+                  'ON CONFLICT (src_table, key_text, op) DO UPDATE SET ts = EXCLUDED.ts;'
                   % gone_vals)
         total += len(ks)
     return total
@@ -889,7 +905,28 @@ def _ensure_contract_tables() -> None:
           "GRANT SELECT ON search_changed_sources TO %s;\n"
           "CREATE TABLE IF NOT EXISTS search_changed_rows "
           "(src_table VARCHAR, key_text VARCHAR, op VARCHAR, "
-          "ts TIMESTAMP DEFAULT now());\n"
+          "ts TIMESTAMP DEFAULT now(), "
+          "UNIQUE (src_table, key_text, op));\n"
+          # База, собранная до пакета, несёт rows без UNIQUE — а писатели ниже уже
+          # идут upsert-ом ON CONFLICT (тройка): без констрейнта apply падает ДО
+          # corpus_init (исполняется позже такта). Приводим таблицу к форме здесь,
+          # идемпотентно (дедуп оставляет свежий ts — SKIP-инвариант читает max(ts)).
+          # 🔴 ДВА РАЗДЕЛЬНЫХ \gexec (красная b0c3, живой замер 26.08.1 :7895):
+          # склейка DELETE||chr(10)||ALTER в ОДНОЙ ячейке роняет ALTER «another
+          # transaction has altered this table» — вечный fail apply; раздельные
+          # блоки (как в corpus_init.sql) работают.
+          "SELECT 'DELETE FROM search_changed_rows WHERE rowid NOT IN ' ||\n"
+          "'(SELECT rowid FROM (SELECT rowid, row_number() OVER ' ||\n"
+          "'(PARTITION BY src_table, key_text, op ORDER BY ts DESC, rowid DESC) AS rn ' ||\n"
+          "'FROM search_changed_rows) w WHERE rn = 1);'\n"
+          "WHERE NOT EXISTS (SELECT 1 FROM information_schema.table_constraints "
+          "WHERE table_name = 'search_changed_rows' AND constraint_type = 'UNIQUE')\n"
+          "\\gexec\n"
+          "SELECT 'ALTER TABLE search_changed_rows ADD CONSTRAINT search_changed_rows_uniq ' ||\n"
+          "'UNIQUE (src_table, key_text, op);'\n"
+          "WHERE NOT EXISTS (SELECT 1 FROM information_schema.table_constraints "
+          "WHERE table_name = 'search_changed_rows' AND constraint_type = 'UNIQUE')\n"
+          "\\gexec\n"
           "CREATE TABLE IF NOT EXISTS base_profile "
           "(entity TEXT, rows BIGINT, problem TEXT, key_props TEXT);\n"
           "CREATE TABLE IF NOT EXISTS search_quality (k TEXT, v BIGINT, note TEXT);\n"

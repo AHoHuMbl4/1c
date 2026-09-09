@@ -126,6 +126,44 @@ ALTER TABLE search_tables ADD COLUMN IF NOT EXISTS written_by_all MAP(VARCHAR, B
 -- ноль источников. Найдено тремя независимыми проверками, подтверждено замером на копии.
 CREATE TABLE IF NOT EXISTS search_sources (src_table VARCHAR, seen_at TIMESTAMP);
 
+-- МАРКЕРЫ ИЗМЕНИВШИХСЯ СТРОК (пакет «полная B», план docs/audit/FULLB_PLAN_2026-09-03.md).
+-- Ключ — ВИТРИННЫЙ (мир B): `|`-join по key_cols витрины (packet_apply _key_text_expr),
+-- для документов с табличной частью — Ref_Key||'|'||LineNumber. op: 'delta' | 'deleted_gone'.
+-- UNIQUE (src_table, key_text, op) — дедуп накопления (3d): повторная отметка того же
+-- ключа тем же op не плодит строк (замер 09.09 окна: 1897 строк при 461 уникальной тройке);
+-- писатели — upsert ON CONFLICT ... DO UPDATE SET ts (штатно: sql/statements/insert#
+-- defining-a-conflict-target), повторная отметка ОБЯЗАНА освежать ts — SKIP-инвариант
+-- полной B (план 0b/5b) читает max(ts) против corpus_built_ts.
+-- Таблицу читает только контур такта — прав serene_ro не нужен.
+CREATE TABLE IF NOT EXISTS search_changed_rows (
+  src_table VARCHAR, key_text VARCHAR, op VARCHAR, ts TIMESTAMP DEFAULT now(),
+  UNIQUE (src_table, key_text, op));
+
+-- База, собранная ДО этого пакета, несёт таблицу без констрейнта и с дубями тройки
+-- (CREATE IF NOT EXISTS существующую не трогает — та же ловушка, что у search_tables).
+-- Миграция идемпотентна: оба statement-условия пусты, когда UNIQUE уже стоит.
+-- Дедуп оставляет строку с СВЕЖИМ ts (row_number ORDER BY ts DESC): старый ts в дубле
+-- молча съедал бы свежесть повторной отметки (п.13).
+-- TOCTOU (красная 09.09): параллельный 1c-packet-apply несёт ту же ensure-миграцию —
+-- столкновение в переходном окне роняет ОДИН процесс; пакет остаётся verified и
+-- ретраится (apply-таймер 2 мин), такт — restart. Данные не теряются: дедуп
+-- идемпотентен, после постановки констрейнта оба условия пусты. «ADD CONSTRAINT
+-- IF NOT EXISTS» движком не поддержан (живая проба 09.09).
+SELECT 'DELETE FROM search_changed_rows WHERE rowid NOT IN '
+       || '(SELECT rowid FROM (SELECT rowid, row_number() OVER '
+       || '(PARTITION BY src_table, key_text, op ORDER BY ts DESC, rowid DESC) AS rn '
+       || 'FROM search_changed_rows) w WHERE rn = 1);'
+WHERE NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
+                  WHERE table_name = 'search_changed_rows'
+                    AND constraint_type = 'UNIQUE')
+\gexec
+SELECT 'ALTER TABLE search_changed_rows ADD CONSTRAINT search_changed_rows_uniq '
+       || 'UNIQUE (src_table, key_text, op);'
+WHERE NOT EXISTS (SELECT 1 FROM information_schema.table_constraints
+                  WHERE table_name = 'search_changed_rows'
+                    AND constraint_type = 'UNIQUE')
+\gexec
+
 CREATE TABLE IF NOT EXISTS search_meta (k VARCHAR, v VARCHAR);
 GRANT SELECT ON search_meta TO serene_ro;
 GRANT SELECT ON search_meta TO serene_resolver;

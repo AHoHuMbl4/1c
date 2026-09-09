@@ -201,9 +201,10 @@ pipe = open(os.path.join(ROOT, "pipeline.sh"), encoding="utf-8").read()
 
 t("apply: search_changed_rows DDL",
   "CREATE TABLE IF NOT EXISTS search_changed_rows" in apply_py)
-t("apply: key_text delta INSERT",
+# (09.09, полная B 0c/3d) писатели — upsert с освежением ts (см. test_changed_rows_lock).
+t("apply: key_text delta upsert",
   "INSERT INTO search_changed_rows" in apply_py and "delta" in apply_py
-  and "FROM \"d_" in apply_py)
+  and "FROM \"d_" in apply_py and "DO UPDATE SET ts = EXCLUDED.ts" in apply_py)
 t("apply: gone deleted_gone",
   "deleted_gone" in apply_py and "будущая полная B" in apply_py)
 t("apply: key_text concat |",

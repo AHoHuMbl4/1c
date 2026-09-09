@@ -50,7 +50,7 @@ KEEP_MARKS=0
 if [ -d "${ETL_ODATA_BASE:-}" ]; then
   KEEP_MARKS=1
   psql "$SERENEDB_DSN" -q -v ON_ERROR_STOP=1 -c \
-    "CREATE TABLE IF NOT EXISTS search_changed_rows (src_table VARCHAR, key_text VARCHAR, op VARCHAR, ts TIMESTAMP DEFAULT now());
+    "CREATE TABLE IF NOT EXISTS search_changed_rows (src_table VARCHAR, key_text VARCHAR, op VARCHAR, ts TIMESTAMP DEFAULT now(), UNIQUE (src_table, key_text, op));
 CREATE OR REPLACE TABLE tmp_changed_keep AS SELECT src_table FROM search_changed_sources;
 CREATE OR REPLACE TABLE tmp_changed_rows_keep AS SELECT * FROM search_changed_rows;" \
     || KEEP_MARKS=0
@@ -60,6 +60,15 @@ if [ "$KEEP_MARKS" = 1 ]; then
   n=$(psql "$SERENEDB_DSN" -tA -c \
     "INSERT INTO search_changed_sources SELECT src_table FROM tmp_changed_keep WHERE src_table NOT IN (SELECT src_table FROM search_changed_sources); SELECT count(*) FROM search_changed_sources; DROP TABLE tmp_changed_keep;")
   echo "packet: отметки search_changed_sources возвращены сборке, строк $n"
+  # Полная B / 0d: строковые маркеры — тот же guard, что и sources (снимок до синка
+  # возвращается дописыванием отсутствующих). Сегодня rows стирает только их
+  # потребление в merge (после успешной сборки); восстановление симметрично
+  # sources и закрывает случай «синк поднял таблицу заново» без потери накопленного.
+  # ts снимка не откатывает живое: снимок старше apply того же такта, NOT EXISTS
+  # пропускает живую тройку — её ts и так свежее.
+  n_rows=$(psql "$SERENEDB_DSN" -tA -c \
+    "INSERT INTO search_changed_rows SELECT k.src_table, k.key_text, k.op, k.ts FROM tmp_changed_rows_keep k WHERE NOT EXISTS (SELECT 1 FROM search_changed_rows r WHERE r.src_table = k.src_table AND r.key_text IS NOT DISTINCT FROM k.key_text AND r.op = k.op); SELECT count(*) FROM search_changed_rows; DROP TABLE tmp_changed_rows_keep;")
+  echo "packet: отметки search_changed_rows возвращены сборке, строк $n_rows"
 fi
 
 echo "== сборка поискового слоя"

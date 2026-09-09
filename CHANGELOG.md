@@ -1,4 +1,33 @@
-## 2026-09-09 (1) — StartLimit юнита несовместим с быстрыми тактами (ночной замер) — 15 мин/8
+## 2026-09-09 (2) — Полная B, этап 0: маркеры строк получили канон DDL, upsert и миграцию живых баз
+
+**[код]** Исполнение docs/audit/FULLB_PLAN_2026-09-03.md (решение владельца №14),
+этап 0 (0c/0d/0e + синхронная часть 3d): (а) DDL search_changed_rows перенесён в
+corpus_init.sql с UNIQUE (src_table, key_text, op) + идемпотентная миграция живых
+баз (дедуп дублей тройки со свежим ts + ADD CONSTRAINT по \gexec-условию; та же
+миграция в _ensure_contract_tables apply — до писателей, иначе переходный такт
+падает на ON CONFLICT без констрейнта); (б) писатели packet_apply — upsert
+ON CONFLICT DO UPDATE SET ts=EXCLUDED.ts (не OR IGNORE: SKIP-инвариант 0b/5b читает
+max(ts), OR IGNORE замораживал свежесть — красная b0r2); (в) restore строкового
+снимка в pipeline.sh симметрично sources; (г) 🔴 живой стоп apply 08.09 20:05 закрыт:
+манифест РКО нёс LineNumber вне витрины, маркерный SELECT падал, пакет 000249
+ретраился 135 раз — ключ маркера строится по пересечению key_cols∩mart_cols.
+**[замер]** окна: 1897 маркеров / 461 уникальная тройка (дубли до миграции);
+apply-падения РКО 135× c 08.09 20:05; TOCTOU apply↔миграция оценён (разовое
+падение, авторетрай; ADD CONSTRAINT IF NOT EXISTS движком не поддержан — проба).
+Протокол: армия ×4 (b0r1 ПРИНЯТЬ, b0r2/b0r3/b0r4 ПРАВИТЬ → внесено) + контрольная
+волна: b0c2 5/5 ЗАКРЫТО-ПРИНЯТЬ, b0c4 ПРАВИТЬ (ломаное окно 0b-проверки — чинено:
+срез then..else по build.sh; дифф-артефакт дополнен замком) и b0c3 🔴 СТОП снят
+живой пробой на окне: склейка DELETE||chr(10)||ALTER в ОДНОЙ \gexec-ячейке роняет
+ALTER «another transaction has altered this table» (26.08.1) — ensure-миграция
+apply разнесена на два \gexec-блока, форма доказана на tmp-фикстуре окна (DELETE 2
++ ALTER, повтор пуст). Замки: changed_rows 15/0, gone_register 16/0, key_form 76/0,
+sources 19/19, resolver_skip 29/0, alloc 28/0, box_tune 88/88 (синхронизация
+StartLimitBurst=8 и префлайт по «-f corpus_merge.sql» — отставание от
+4b5bc0d/458e5d4, отдельным коммитом).
+Доки: sql/statements/insert#defining-a-conflict-target; sql/constraints#primary-key-and-unique-constraint.
+Также: cb2d262 (Скорость-II 4+3) выкачен на окно и принят живьём (148 с,
+allocator=1 applied, resolver_unpivot=skipped) — доля долга закрыта.
+
 
 **[замер]** Ночь 08-09.09: конвейер вставал при живых таймерах — зелёные такты по 2-5 мин
 (дельта) + пауза таймера 1 мин = старт каждые ~3 мин пробивал мой вчерашний
