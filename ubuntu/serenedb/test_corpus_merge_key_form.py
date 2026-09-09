@@ -203,8 +203,9 @@ t("SQL: STOP-gexec НЕ под ON_ERROR_STOP off (контрольная sc5: er
                txt.find("Частичный уход при росте")) == 0)
 t("SQL: имя сущности в error-литерале экранировано quote_literal",
   "|| ' || ' || quote_literal(src_table)" in txt)
-t("SQL: shrink проведён в «частичную потерю» и die_unexplained (membership)",
-  txt.count("FROM tmp3_merge_shrink s") >= 2)
+t("SQL: shrink проведён в partial/die_unexplained/«удаление снесло бы» (membership)",
+  txt.count("FROM tmp3_merge_shrink s") >= 3
+  and txt.count("FROM tmp3_merge_repost_delta r") >= 3)
 t("SQL: чисел-порогов в shrink-блоке нет (п.0; rewrite:0.05 вне зоны)",
   "усохло больше 5" not in txt
   and txt.find("Усыхание сборки") >= 0

@@ -688,7 +688,16 @@ FROM (SELECT count(*) AS уйдёт FROM tmp3_merge_unmatched u
         AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_collapse k
                         WHERE k.src_table = u.src_table)
         AND NOT EXISTS (SELECT 1 FROM tmp3_merge_key_deleted_delta k
-                        WHERE k.src_table = u.src_table));
+                        WHERE k.src_table = u.src_table)
+        -- (09.09) SHRINK/REPOST: убыль объяснена выше (витрина помещается в
+        -- сборку / перепроведение по delta-маркеру) — та же легитимная убыль,
+        -- что в partial и die_unexplained; гейт «снесло бы» — четвёртая точка
+        -- её проведения (живой стоп 22:14: установкацен 646862≈2×323570 —
+        -- старый канон с двойными дублями, полнота новой сборки доказана).
+        AND NOT EXISTS (SELECT 1 FROM tmp3_merge_shrink s
+                        WHERE s.src_table = u.src_table)
+        AND NOT EXISTS (SELECT 1 FROM tmp3_merge_repost_delta r
+                        WHERE r.src_table = u.src_table));
 
 -- Сужение величин — не ошибка, но и не пустяк: строка теряет числа, оставаясь на месте,
 -- и по журналу это неотличимо от «их там и не было». Считаем ДО записи, пока прежнее
