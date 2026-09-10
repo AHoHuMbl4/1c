@@ -1,6 +1,10 @@
 \timing on
 \set ON_ERROR_STOP on
 
+-- 🔴 partial_rebuild=0 — константа пакета (=1 только с row-level p_doc, отдельный пакет).
+-- R6: при 0 CTAS пишет mode='full' всем (зеркало corpus_merge.sql :3-6).
+\set partial_rebuild 0
+
 -- СБОРКА ПОИСКОВОГО КОРПУСА ШТАТНЫМИ СРЕДСТВАМИ SereneDB.
 --
 -- Это исполнение пункта 20 TARGET.md: данные лежат в SereneDB — работа с ними делается
@@ -929,56 +933,11 @@ SELECT s.src_table AS tbl FROM search_sources s
 WHERE EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table
               AND t.database_name = current_database());
 
--- 🔴 ТЕКСТ, КОТОРЫЙ НА САМОМ ДЕЛЕ ЧИСЛО. Бывает только Edm.String без recordtype
--- (или сэмпл в пустых первых строках). Смотрим до 200 непустых значений; ≥80%
--- парсятся `corpus_cell_num` — kind поднимается до num. Ключевые колонки и имена
--- платформы не трогаем — те же исключения, что у is_measure.
-CREATE OR REPLACE TABLE tmp3_cls_numhint (tbl VARCHAR, col VARCHAR, num_ratio DOUBLE);
-PREPARE p_cls_numhint AS
-INSERT INTO tmp3_cls_numhint
--- LIMIT на строках таблицы, а не на непустых значениях колонки, занижает ratio:
--- у регистров в первых строках ресурс часто пуст, а дальше заполнен — [замер 31.08].
-WITH cells AS (
-  SELECT val
-  FROM (SELECT * FROM query_table($1)) src
-  UNPIVOT (val FOR c IN (COLUMNS(*)))
-  WHERE c = $2 AND coalesce(val, '') <> ''
-  LIMIT 200
-)
-SELECT $1::VARCHAR, $2::VARCHAR,
-       count(*) FILTER (WHERE corpus_cell_num(val) IS NOT NULL)::DOUBLE
-           / greatest(count(*), 1)
-FROM cells;
-
-\set ON_ERROR_STOP off
-SELECT 'EXECUTE p_cls_numhint(' || quote_literal(c.tbl) || ', ' || quote_literal(c.col) || ');'
-FROM tmp3_cls0 c
-JOIN tmp3_src s ON s.tbl = c.tbl
-JOIN tmp3_key k ON k.entity = lower(c.tbl)
-WHERE c.kind = 'text'
-  AND NOT c.is_companion AND c.col <> 'DataVersion'
-  AND c.col NOT IN ('LineNumber', 'SurrogateKey')
-  AND NOT list_contains(coalesce(k.key_cols, []), c.col)
-\gexec
-\set ON_ERROR_STOP on
-
-CREATE OR REPLACE TABLE tmp3_cls AS
-SELECT c.tbl, c.ord, c.col, c.data_type, c.edm,
-       CASE WHEN c.kind = 'text' AND coalesce(h.num_ratio, 0) >= 0.8 THEN 'num'
-            ELSE c.kind END AS kind,
-       c.is_companion, c.own_ref, c.own_prop, c.decl_entity
-FROM tmp3_cls0 c
-LEFT JOIN tmp3_cls_numhint h ON h.tbl = c.tbl AND h.col = c.col;
-DROP TABLE tmp3_cls0;
-
 SELECT CASE WHEN count(*) > 0
        THEN error('источники исчезли из витрины (идёт синк?): ' || string_agg(src_table, ', ')) END
 FROM search_sources s
 WHERE NOT EXISTS (SELECT 1 FROM duckdb_tables() t WHERE t.table_name = s.src_table
                   AND t.database_name = current_database());
-
-SELECT 'классификация' AS шаг, (SELECT count(*) FROM tmp3_src) AS сущностей_корпуса,
-       (SELECT count(*) FROM tmp3_cls WHERE tbl IN (SELECT tbl FROM tmp3_src)) AS колонок;
 
 -- ============ 2-quater. ЧТО ПЕРЕЧИТЫВАТЬ: ТОЛЬКО ИЗМЕНИВШЕЕСЯ ============
 -- 🔴 Требование владельца 06.08: «обязательно не делать проходы по данным, которые не
@@ -1023,6 +982,143 @@ SELECT 'по-изменившемуся' AS шаг,
        (SELECT on_ FROM tmp3_inc) AS можно,
        (SELECT count(*) FROM tmp3_changed) AS изменилось_источников,
        (SELECT count(*) FROM tmp3_src) AS всего_источников;
+
+-- Фазовые метки инфрафаз (Speed-II-2): t0 один раз, дальше Δ сек от t0.
+-- LIKE 'build_phase%' — и build_phase:*, и build_phase_sec:* (форма T3-е).
+DELETE FROM search_quality WHERE k LIKE 'build_phase%';
+INSERT INTO search_quality
+SELECT 'build_phase:t0', epoch(now())::BIGINT, 'старт инфрафаз после tmp3_changed';
+
+-- Скоуп инфрафаз: полный проход или только изменившиеся (зеркало прежнего p_ref).
+CREATE OR REPLACE TABLE tmp3_infra_scope AS
+SELECT s.tbl
+FROM tmp3_src s
+WHERE NOT (SELECT on_ FROM tmp3_inc)
+   OR s.tbl IN (SELECT tbl FROM tmp3_changed);
+
+-- 🔴 ТЕКСТ, КОТОРЫЙ НА САМОМ ДЕЛЕ ЧИСЛО. Бывает только Edm.String без recordtype
+-- (или сэмпл в пустых первых строках). Смотрим до 200 непустых значений; ≥80%
+-- парсятся `corpus_cell_num` — kind поднимается до num. Ключевые колонки и имена
+-- платформы не трогаем — те же исключения, что у is_measure.
+-- Кэш search_cls_numhint: на инкременте пересчитываем только todo (NOT on_ / changed / miss sig).
+CREATE TABLE IF NOT EXISTS search_cls_numhint (
+  tbl VARCHAR, col VARCHAR, num_ratio DOUBLE, cols_sig VARCHAR,
+  PRIMARY KEY (tbl, col)
+);
+
+-- Сигнатура колонок из cls0 с EDM (классификатор смотрит edm прежде типа).
+CREATE OR REPLACE TABLE tmp3_cols_sig AS
+SELECT tbl,
+       string_agg(col || ':' || coalesce(data_type, '') || ':' || coalesce(edm, ''),
+                  ',' ORDER BY col) AS cols_sig
+FROM tmp3_cls0
+GROUP BY tbl;
+
+-- tbl к полному пересчёту: NOT on_ ∨ ∈changed ∨ нет кэша с той же sig (пустой кэш ≡ NOT on_).
+CREATE OR REPLACE TABLE tmp3_numhint_todo AS
+SELECT s.tbl
+FROM tmp3_src s
+JOIN tmp3_cols_sig g ON g.tbl = s.tbl
+WHERE NOT (SELECT on_ FROM tmp3_inc)
+   OR s.tbl IN (SELECT tbl FROM tmp3_changed)
+   OR NOT EXISTS (
+        SELECT 1 FROM search_cls_numhint h
+        WHERE h.tbl = s.tbl AND h.cols_sig IS NOT DISTINCT FROM g.cols_sig
+      );
+
+-- Снести устаревшие (tbl,col) у todo / ушедшие колонки.
+DELETE FROM search_cls_numhint h
+WHERE h.tbl IN (SELECT tbl FROM tmp3_numhint_todo)
+   OR NOT EXISTS (
+        SELECT 1 FROM duckdb_columns() c
+        WHERE c.database_name = current_database()
+          AND c.table_name = h.tbl AND c.column_name = h.col);
+
+CREATE OR REPLACE TABLE tmp3_cls_numhint (tbl VARCHAR, col VARCHAR, num_ratio DOUBLE);
+PREPARE p_cls_numhint AS
+INSERT INTO tmp3_cls_numhint
+-- LIMIT на строках таблицы, а не на непустых значениях колонки, занижает ratio:
+-- у регистров в первых строках ресурс часто пуст, а дальше заполнен — [замер 31.08].
+WITH cells AS (
+  SELECT val
+  FROM (SELECT * FROM query_table($1)) src
+  UNPIVOT (val FOR c IN (COLUMNS(*)))
+  WHERE c = $2 AND coalesce(val, '') <> ''
+  LIMIT 200
+)
+SELECT $1::VARCHAR, $2::VARCHAR,
+       count(*) FILTER (WHERE corpus_cell_num(val) IS NOT NULL)::DOUBLE
+           / greatest(count(*), 1)
+FROM cells;
+
+\set ON_ERROR_STOP off
+SELECT 'EXECUTE p_cls_numhint(' || quote_literal(c.tbl) || ', ' || quote_literal(c.col) || ');'
+FROM tmp3_cls0 c
+JOIN tmp3_numhint_todo t ON t.tbl = c.tbl
+JOIN tmp3_key k ON k.entity = lower(c.tbl)
+WHERE c.kind = 'text'
+  AND NOT c.is_companion AND c.col <> 'DataVersion'
+  AND c.col NOT IN ('LineNumber', 'SurrogateKey')
+  AND NOT list_contains(coalesce(k.key_cols, []), c.col)
+\gexec
+\set ON_ERROR_STOP on
+
+-- MERGE свежих ratio + sig в постоянный кэш.
+MERGE INTO search_cls_numhint d
+USING (
+  SELECT n.tbl, n.col, n.num_ratio, g.cols_sig
+  FROM tmp3_cls_numhint n
+  JOIN tmp3_cols_sig g ON g.tbl = n.tbl
+) x ON d.tbl = x.tbl AND d.col = x.col
+WHEN MATCHED THEN UPDATE SET num_ratio = x.num_ratio, cols_sig = x.cols_sig
+WHEN NOT MATCHED THEN INSERT VALUES (x.tbl, x.col, x.num_ratio, x.cols_sig);
+
+-- Потребитель кэша: hint только при актуальной cols_sig и eligibility как у EXECUTE
+-- (:1059-1062). Иначе stale ratio на колонке, ставшей companion/ключом → тихий
+-- kind-сдвиг → content_hash → emb (§3.113).
+CREATE OR REPLACE TABLE tmp3_cls AS
+SELECT c.tbl, c.ord, c.col, c.data_type, c.edm,
+       CASE WHEN c.kind = 'text'
+                 AND NOT c.is_companion
+                 AND c.col NOT IN ('LineNumber', 'SurrogateKey')
+                 AND c.col <> 'DataVersion'
+                 AND NOT EXISTS (
+                       SELECT 1 FROM tmp3_key kk
+                       WHERE kk.entity = lower(c.tbl)
+                         AND list_contains(coalesce(kk.key_cols, []), c.col))
+                 AND coalesce(h.num_ratio, 0) >= 0.8
+            THEN 'num'
+            ELSE c.kind END AS kind,
+       c.is_companion, c.own_ref, c.own_prop, c.decl_entity
+FROM tmp3_cls0 c
+JOIN tmp3_cols_sig g ON g.tbl = c.tbl
+LEFT JOIN search_cls_numhint h
+  ON h.tbl = c.tbl AND h.col = c.col
+ AND h.cols_sig IS NOT DISTINCT FROM g.cols_sig;
+DROP TABLE tmp3_cls0;
+
+DELETE FROM search_quality WHERE k IN ('numhint_recomputed', 'numhint_cache_hit');
+INSERT INTO search_quality
+SELECT 'numhint_recomputed', (SELECT count(*) FROM tmp3_numhint_todo), 'tbl с полным пересчётом numhint'
+UNION ALL
+SELECT 'numhint_cache_hit',
+       (SELECT count(*) FROM tmp3_src) - (SELECT count(*) FROM tmp3_numhint_todo),
+       'tbl взяли hint из кэша';
+
+-- changed непуст, а todo пуст — предикат кэша не заметил дельту.
+SELECT CASE WHEN (SELECT count(*) FROM tmp3_changed) > 0
+             AND (SELECT count(*) FROM tmp3_numhint_todo) = 0
+       THEN error('numhint: changed непуст, кэш не пересчитан') END;
+
+INSERT INTO search_quality
+SELECT 'build_phase:numhint', epoch(now())::BIGINT, NULL
+UNION ALL
+SELECT 'build_phase_sec:numhint',
+       epoch(now())::BIGINT - (SELECT v FROM search_quality WHERE k = 'build_phase:t0'),
+       'Δ сек от t0';
+
+SELECT 'классификация' AS шаг, (SELECT count(*) FROM tmp3_src) AS сущностей_корпуса,
+       (SELECT count(*) FROM tmp3_cls WHERE tbl IN (SELECT tbl FROM tmp3_src)) AS колонок;
 
 -- ============ 2-бис. КАРТА СУЩНОСТЕЙ: метка и связь шапка↔часть ============
 -- 🔴 `search_tables` (имя сущности для выбора моделью + связь `parent`) ПЕРЕСОБИРАЕТСЯ
@@ -1121,7 +1217,9 @@ GROUP BY 2;
 -- Одна сущность не должна ронять такт — как и в сборке текста (:595). Не посчитавшееся
 -- не исчезает: оно попадает в число `writer_failed` ниже.
 \set ON_ERROR_STOP off
-SELECT 'EXECUTE p_writer(' || quote_literal(tbl) || ');' FROM tmp3_regsrc
+SELECT 'EXECUTE p_writer(' || quote_literal(r.tbl) || ');'
+FROM tmp3_regsrc r
+JOIN tmp3_infra_scope sc ON sc.tbl = r.tbl
 \gexec
 \set ON_ERROR_STOP on
 
@@ -1167,7 +1265,8 @@ WHEN MATCHED AND (t.written_by       IS DISTINCT FROM x.written_by
 -- ошибка одного прогона осталась бы в карте навсегда, как это уже было с источниками (:162).
 UPDATE search_tables SET written_by = NULL, written_by_share = NULL, written_by_all = NULL
 WHERE (written_by IS NOT NULL OR written_by_share IS NOT NULL OR written_by_all IS NOT NULL)
-  AND NOT EXISTS (SELECT 1 FROM tmp3_link l WHERE l.src_table = search_tables.src_table);
+  AND NOT EXISTS (SELECT 1 FROM tmp3_link l WHERE l.src_table = search_tables.src_table)
+  AND NOT (SELECT on_ FROM tmp3_inc);   -- полный проход только; на инкременте вне link не трогаем
 
 DELETE FROM search_quality WHERE k LIKE 'writer_%';
 INSERT INTO search_quality
@@ -1186,7 +1285,9 @@ SELECT 'writer_unresolved', count(*), 'преобладающий регистр
 FROM tmp3_link WHERE written_by IS NULL
 UNION ALL
 SELECT 'writer_failed', count(*), 'источников с регистратором без единой связи: нет движений или шаг не прошёл'
-FROM tmp3_regsrc r WHERE NOT EXISTS (SELECT 1 FROM tmp3_writer w WHERE w.src_table = r.tbl);
+FROM tmp3_regsrc r
+JOIN tmp3_infra_scope sc ON sc.tbl = r.tbl
+WHERE NOT EXISTS (SELECT 1 FROM tmp3_writer w WHERE w.src_table = r.tbl);
 
 SELECT 'связь «кто пишет»' AS шаг,
        (SELECT count(*) FROM tmp3_regsrc) AS с_регистратором,
@@ -1194,6 +1295,13 @@ SELECT 'связь «кто пишет»' AS шаг,
        (SELECT count(*) FROM tmp3_link WHERE written_by IS NOT NULL
                                          AND len(map_keys(all_writers)) > 1) AS пишут_несколько,
        (SELECT round(median(share), 2) FROM tmp3_link WHERE written_by IS NOT NULL) AS медиана_доли;
+
+INSERT INTO search_quality
+SELECT 'build_phase:p_writer', epoch(now())::BIGINT, NULL
+UNION ALL
+SELECT 'build_phase_sec:p_writer',
+       epoch(now())::BIGINT - (SELECT v FROM search_quality WHERE k = 'build_phase:t0'),
+       'Δ сек от t0';
 
 -- ============ 3. КОЛОНКА-НАИМЕНОВАНИЕ и КАРТА ССЫЛОК ============
 CREATE OR REPLACE TABLE tmp3_namecol (tbl VARCHAR, col VARCHAR, ord INT, score DOUBLE, std INT);
@@ -1218,9 +1326,36 @@ QUALIFY c.col IN ('Description','Code')
          AND a.words*a.alpha*a.uniq >= max(a.words*a.alpha*a.uniq) OVER () / 2);
 
 SELECT 'EXECUTE p_stats(' || quote_literal(s.tbl) || ');'
-FROM tmp3_src s JOIN tmp3_key k ON k.entity=lower(s.tbl)
-WHERE k.key_cols=['Ref_Key']
+FROM tmp3_src s
+JOIN tmp3_key k ON k.entity = lower(s.tbl)
+JOIN tmp3_infra_scope sc ON sc.tbl = s.tbl
+WHERE k.key_cols = ['Ref_Key']
 \gexec
+
+-- namecol-STOP только при text-кандидатах (предикат как в PREPARE p_stats).
+SELECT CASE WHEN EXISTS (
+  SELECT 1 FROM tmp3_infra_scope sc
+  JOIN tmp3_key k ON k.entity = lower(sc.tbl)
+  WHERE k.key_cols = ['Ref_Key']
+    AND EXISTS (
+      SELECT 1 FROM tmp3_cls c
+      WHERE c.tbl = sc.tbl AND c.kind = 'text' AND NOT c.is_companion
+        AND c.col NOT IN ('LineNumber', 'SurrogateKey')
+        AND c.col <> 'DataVersion'
+        AND NOT EXISTS (
+          SELECT 1 FROM tmp3_key kk
+          WHERE kk.entity = lower(sc.tbl)
+            AND list_contains(coalesce(kk.key_cols, []), c.col))
+    )
+    AND NOT EXISTS (SELECT 1 FROM tmp3_namecol n WHERE n.tbl = sc.tbl)
+) THEN error('p_stats: пуст namecol в скоупе при text-кандидатах') END;
+
+INSERT INTO search_quality
+SELECT 'build_phase:p_stats', epoch(now())::BIGINT, NULL
+UNION ALL
+SELECT 'build_phase_sec:p_stats',
+       epoch(now())::BIGINT - (SELECT v FROM search_quality WHERE k = 'build_phase:t0'),
+       'Δ сек от t0';
 
 -- Сырая карта: по строке на каждое вхождение идентификатора. Однозначной она станет
 -- ниже; здесь намеренно собирается ВСЁ, чтобы было из чего выбирать.
@@ -1267,10 +1402,10 @@ SELECT guid, name FROM (
 QUALIFY row_number() OVER (PARTITION BY guid ORDER BY вх, owner, name) = 1;
 
 SELECT 'EXECUTE p_ref(' || quote_literal(s.tbl) || ');'
-FROM tmp3_src s JOIN tmp3_key k ON k.entity=lower(s.tbl)
-WHERE k.key_cols=['Ref_Key']
-  AND (NOT (SELECT on_ FROM tmp3_inc)
-       OR EXISTS (SELECT 1 FROM tmp3_changed c WHERE c.tbl = s.tbl))
+FROM tmp3_src s
+JOIN tmp3_key k ON k.entity = lower(s.tbl)
+JOIN tmp3_infra_scope sc ON sc.tbl = s.tbl
+WHERE k.key_cols = ['Ref_Key']
 \gexec
 
 -- Перечитанные владельцы заменяются целиком, прочие остаются. При полном проходе
@@ -1311,6 +1446,13 @@ QUALIFY row_number() OVER (PARTITION BY guid
 
 SELECT 'карта ссылок' AS шаг, count(*) AS записей FROM tmp3_refmap;
 
+INSERT INTO search_quality
+SELECT 'build_phase:p_ref', epoch(now())::BIGINT, NULL
+UNION ALL
+SELECT 'build_phase_sec:p_ref',
+       epoch(now())::BIGINT - (SELECT v FROM search_quality WHERE k = 'build_phase:t0'),
+       'Δ сек от t0';
+
 -- ============ 3-бис. У КОГО ПОМЕНЯЛОСЬ ИМЯ ============
 -- 🔴 ЗДЕСЬ ЕДИНСТВЕННОЕ МЕСТО, ГДЕ ЭКОНОМИЯ МОГЛА БЫ ИСПОРТИТЬ ДАННЫЕ. Имя ссылки попадает
 -- В ТЕКСТ строки («Контрагент: Ромашка»), поэтому переименование записи меняет текст у
@@ -1341,17 +1483,93 @@ SELECT lower(entity) AS tbl FROM search_coverage
                    'в корпусе больше витрины');
 
 CREATE OR REPLACE TABLE tmp3_build AS
-SELECT tbl FROM tmp3_src
+SELECT
+  s.tbl,
+  CASE
+    WHEN :partial_rebuild = 0 THEN 'full'
+    -- таблицы rows нет → все full (такт не падает; канон Q1).
+    WHEN NOT EXISTS (
+           SELECT 1 FROM duckdb_tables()
+           WHERE database_name = current_database()
+             AND table_name = 'search_changed_rows'
+         ) THEN 'full'
+    WHEN EXISTS (
+           SELECT 1 FROM tmp3_key k
+           WHERE k.entity = lower(s.tbl) AND len(k.key_cols) > 0
+         )
+     AND NOT (
+           s.tbl IN (SELECT tbl FROM tmp3_lag)
+        OR (SELECT count(*) FROM tmp3_renamed) > 200
+        OR EXISTS (
+             SELECT 1 FROM search_tables t, tmp3_lag l
+             WHERE t.src_table = s.tbl AND t.parent = l.tbl)
+        OR (
+             EXISTS (
+               SELECT 1 FROM duckdb_tables()
+               WHERE database_name = current_database()
+                 AND table_name = 'search_changed_rows')
+             AND EXISTS (
+               SELECT 1 FROM search_changed_rows r
+               WHERE r.src_table = s.tbl
+                 AND r.key_text = '*' AND r.op = 'full')
+           )
+        OR (
+             EXISTS (
+               SELECT 1 FROM duckdb_tables()
+               WHERE database_name = current_database()
+                 AND table_name = 'search_changed_rows')
+             AND s.tbl IN (SELECT tbl FROM tmp3_changed)
+             AND NOT EXISTS (
+               SELECT 1 FROM search_changed_rows r WHERE r.src_table = s.tbl)
+           )
+         )
+    THEN 'partial'
+    ELSE 'full'
+  END AS mode
+FROM tmp3_src s
 WHERE NOT (SELECT on_ FROM tmp3_inc)
    OR (SELECT count(*) FROM tmp3_renamed) > 200
-   OR tbl IN (SELECT tbl FROM tmp3_changed)
-   OR tbl IN (SELECT tbl FROM tmp3_lag)
-   OR tbl IN (SELECT s.tbl FROM tmp3_src s
-              WHERE EXISTS (SELECT 1 FROM search_tables t, tmp3_lag l
-                            WHERE t.src_table = s.tbl AND t.parent = l.tbl))
-   OR tbl IN (SELECT DISTINCT c.src_table FROM search_corpus c
+   OR s.tbl IN (SELECT tbl FROM tmp3_changed)
+   OR s.tbl IN (SELECT tbl FROM tmp3_lag)
+   OR s.tbl IN (SELECT s2.tbl FROM tmp3_src s2
+                WHERE EXISTS (SELECT 1 FROM search_tables t, tmp3_lag l
+                              WHERE t.src_table = s2.tbl AND t.parent = l.tbl))
+   OR s.tbl IN (SELECT DISTINCT c.src_table FROM search_corpus c
                 WHERE EXISTS (SELECT 1 FROM tmp3_renamed r
                               WHERE r.old_name <> '' AND contains(c.refs, r.old_name)));
+
+-- L4(б): mode только full|partial, без NULL.
+SELECT CASE WHEN EXISTS (
+         SELECT 1 FROM tmp3_build
+         WHERE mode IS NULL OR mode NOT IN ('full', 'partial')
+       )
+       THEN error('corpus_build: L4(б) mode NULL или вне {full,partial}') END;
+
+-- rebuild_mode per-src → search_quality (v=1 при partial; note=mode|reason).
+DELETE FROM search_quality WHERE k LIKE 'rebuild_mode:%';
+INSERT INTO search_quality
+SELECT
+  'rebuild_mode:' || b.tbl,
+  CASE WHEN b.mode = 'partial' THEN 1 ELSE 0 END,
+  b.mode || '|' ||
+    CASE
+      WHEN :partial_rebuild = 0 THEN 'entity-scope-interim'
+      WHEN b.mode = 'partial' THEN 'row-keys'
+      WHEN EXISTS (
+             SELECT 1 FROM duckdb_tables()
+             WHERE database_name = current_database()
+               AND table_name = 'search_changed_rows')
+       AND EXISTS (
+             SELECT 1 FROM search_changed_rows r
+             WHERE r.src_table = b.tbl AND r.key_text = '*' AND r.op = 'full')
+        THEN 'table_full'
+      WHEN b.tbl IN (SELECT tbl FROM tmp3_lag)
+        OR EXISTS (SELECT 1 FROM search_tables t, tmp3_lag l
+                   WHERE t.src_table = b.tbl AND t.parent = l.tbl)
+        THEN 'lag'
+      ELSE 'entity-scope'
+    END
+FROM tmp3_build b;
 
 SELECT 'к пересборке' AS шаг,
        (SELECT count(*) FROM tmp3_renamed) AS переименовано,
@@ -2756,5 +2974,12 @@ SELECT k, v, note FROM search_quality WHERE k LIKE 'refmap_%' OR k = 'clipped_do
 -- а не оборвалась на середине. `corpus_merge.sql` откажется переносить данные, если
 -- отметки нет или она старая — иначе он молча перенесёт вчерашние временные таблицы
 -- (они обычные, а не временные, и переживают сессию и рестарт движка).
+INSERT INTO search_quality
+SELECT 'build_phase:done', epoch(now())::BIGINT, NULL
+UNION ALL
+SELECT 'build_phase_sec:done',
+       epoch(now())::BIGINT - (SELECT v FROM search_quality WHERE k = 'build_phase:t0'),
+       'Δ сек от t0';
+
 CREATE OR REPLACE TABLE tmp3_run AS SELECT now() AS ts, count(*) AS собрано FROM tmp3_corpus;
 SELECT 'сборка завершена' AS шаг, собрано, ts FROM tmp3_run;

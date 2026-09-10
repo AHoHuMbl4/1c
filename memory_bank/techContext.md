@@ -1083,6 +1083,38 @@ LB (маркер `minInterval`), 20–40 с.
 
 ---
 
+## Ловушка 56. Персистентный кэш классов: потребитель ОБЯЗАН сверять сигнатуру и eligibility (Speed-II-2, 10.09)
+
+Сессионная tmp3_cls_numhint не могла подсунуть stale ratio — она писалась
+только по кандидатам текущего такта. Персистентный search_cls_numhint может:
+колонка стала companion/ключом (метаданные), а col:type:edm тот же → HIT →
+старый ratio ≥0.8 поднимает kind в num → контент меняет раскладку doc/nums →
+content_hash → merge обнуляет emb. Поэтому потребитель tmp3_cls сверяет
+`h.cols_sig IS NOT DISTINCT FROM g.cols_sig` И повторяет eligibility-предикаты
+EXECUTE-селектора (text, не companion, не LineNumber/SurrogateKey/DataVersion,
+не key_cols) в CASE. Пустой/miss кэша = полный пересчёт (не «hit с 0»); гейт
+«changed непуст ∧ todo=0 → STOP» ловит потерянный предикат дизъюнкта.
+Замок: test_corpus_build_measures (edm в sig; фикстура смены edm).
+
+## Ловушка 57. Скоуп p_stats/p_writer без гарда wipe = тихая порча written_by (Speed-II-2, 10.09)
+
+Сузить EXECUTE p_writer по changed, оставив NULL-wipe «WHERE NOT EXISTS
+(tmp3_link)» без гарда — все неперечитанные регистры теряют written_by, ask
+теряет сигнал «кто пишет» БЕЗ STOP (выбор сущности деградирует молча).
+Правильная форма: wipe только при `NOT (SELECT on_ FROM tmp3_inc)` (полный
+проход); ушедший регистратор в дельте закрывает MERGE-CASE link. Симметрично
+writer_failed считать по ∩scope — иначе метрика врёт почти на всех регистрах.
+
+## Ловушка 58. Две psql-сессии build/merge: рубильник \set живёт в ДВУХ файлах (0f, 10.09)
+
+\set не шарится между psql -f процессами. Идентичная строка
+`\set partial_rebuild N` обязана стоять в обоих файлах; замок проверяет regex
+ровно-один + равенство значений + потребление в обоих (build CASE, merge
+сторож A). Полуоткат merge при живом mode-CTAS — тихая потеря сторожа A
+(при flip=0 не падает!) — выкат/откат только парой с md5 обоих. Interim
+R6: при N=0 CTAS пишет mode='full' всем — иначе сторож A стопит каждый такт
+на честном partial.
+
 ## SereneDB 26.08.1 — песочница Ф1 (PLAN_UPGRADE_NATIVE) [22.08]
 
 **Отдельный каталог:** `work/sandbox-26081/`, `--server_directory=…/data`, порт **7895**

@@ -120,6 +120,15 @@ SELECT CASE WHEN count(*) > 0
 FROM (SELECT s.tbl FROM tmp3_build s
       WHERE NOT EXISTS (SELECT 1 FROM tmp3_corpus t WHERE t.src_table = s.tbl));
 
+-- Сторож A (R6): interim = full при partial_rebuild=0 (R6). Ловит
+-- рассинхрон выката build≠merge и регрессию CTAS mode; НЕ защита от
+-- introspection/кэша/векторов.
+SELECT CASE WHEN :partial_rebuild = 0
+            AND EXISTS (SELECT 1 FROM tmp3_build
+                        WHERE mode IS DISTINCT FROM 'full')
+       THEN error('corpus_merge: partial_rebuild=0, но mode≠full (R6: interim = full при partial_rebuild=0)')
+       END;
+
 -- Дубли ключа в источнике. [замер] движок на дубль в `MERGE` не ругается: одно совпадение
 -- берёт, второе игнорирует, а несовпавшие дубли вставляет оба. Ограничения уникальности
 -- на корпусе нет, и попавший дубль оттуда уже не уйдёт.

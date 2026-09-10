@@ -5,7 +5,8 @@
   - MACRO corpus_cell_num (locale-число → DOUBLE);
   - приоритет числового Edm при конфликте обёртка/recordtype;
   - is_measure (ключи, LineNumber/SurrogateKey);
-  - numhint text→num при num_ratio ≥ 0.8.
+  - numhint text→num при num_ratio ≥ 0.8;
+  - кэш search_cls_numhint (Speed-II-2): todo/MERGE/LEFT JOIN + скоуп инфрафаз.
 
 Запуск: python3 ubuntu/serenedb/test_corpus_build_measures.py
 """
@@ -15,6 +16,7 @@ import os
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(ROOT, "corpus_build.sql")
+INIT = os.path.join(ROOT, "corpus_init.sql")
 
 PASS, FAIL = 0, []
 
@@ -123,6 +125,7 @@ def read_build() -> str:
 
 
 sql = read_build()
+init = open(INIT, encoding="utf-8").read()
 t("corpus_build.sql exists", os.path.isfile(BUILD))
 t("macro corpus_cell_num declared", "CREATE OR REPLACE MACRO corpus_cell_num(val)" in sql)
 t("p_doc uses corpus_cell_num in nums",
@@ -215,10 +218,152 @@ nums3 = nums_from_row(
 t("SurrogateKey out of nums", "SurrogateKey" not in nums3, nums3)
 t("Qty still in nums", nums3.get("Qty") == 2.0, nums3)
 
-# --- SQL structural: numhint block ---
+# --- SQL structural: numhint (кэш search_cls_numhint, Speed-II-2) ---
+# Сессионная tmp3_cls_numhint — staging перед MERGE в постоянный кэш.
 t("tmp3_cls_numhint table", "CREATE OR REPLACE TABLE tmp3_cls_numhint" in sql)
 t("p_cls_numhint prepare", "PREPARE p_cls_numhint AS" in sql)
-t("cls final merges hint", "coalesce(h.num_ratio, 0) >= 0.8 THEN 'num'" in sql)
+t("cls final merges hint", "coalesce(h.num_ratio, 0) >= 0.8" in sql and "THEN 'num'" in sql)
+
+t("build: кэш search_cls_numhint CREATE IF NOT EXISTS",
+  "CREATE TABLE IF NOT EXISTS search_cls_numhint" in sql)
+t("init: DDL search_cls_numhint",
+  "CREATE TABLE IF NOT EXISTS search_cls_numhint" in init
+  and "cols_sig VARCHAR" in init)
+
+# (a) edm-only: cols_sig включает coalesce(edm,''); смена edm меняет sig;
+#     потребитель tmp3_cls сверяет cols_sig (не stale hint).
+_sig_blk = sql[sql.find("tmp3_cols_sig"):sql.find("tmp3_cols_sig") + 500]
+t("cols_sig: string_agg с coalesce(edm,'') из tmp3_cls0",
+  "coalesce(edm, '')" in _sig_blk
+  and "string_agg(col || ':' || coalesce(data_type, '') || ':' || coalesce(edm, '')" in _sig_blk
+  and "FROM tmp3_cls0" in _sig_blk)
+
+
+def _cols_sig_fixture(cols: list[tuple[str, str, str | None]]) -> str:
+    """Зеркало string_agg(col:data_type:edm) ORDER BY col — edm-компонент в sig."""
+    parts = [
+        "%s:%s:%s" % (col, dt, "" if edm is None else edm)
+        for col, dt, edm in sorted(cols, key=lambda x: x[0])
+    ]
+    return ",".join(parts)
+
+
+_sig_a = _cols_sig_fixture([("Amt", "VARCHAR", "Edm.String")])
+_sig_b = _cols_sig_fixture([("Amt", "VARCHAR", "Edm.Decimal")])
+t("edm-only: смена edm меняет cols_sig",
+  _sig_a != _sig_b
+  and "Edm.String" in _sig_a
+  and "Edm.Decimal" in _sig_b
+  and "coalesce(edm, '')" in _sig_blk,
+  "a=%r b=%r" % (_sig_a, _sig_b))
+
+_cls_blk = sql[sql.find("CREATE OR REPLACE TABLE tmp3_cls AS"):
+               sql.find("DROP TABLE tmp3_cls0") + 40]
+t("tmp3_cls: JOIN cols_sig + hint only if sig match",
+  "JOIN tmp3_cols_sig g ON g.tbl = c.tbl" in _cls_blk
+  and "h.cols_sig IS NOT DISTINCT FROM g.cols_sig" in _cls_blk
+  and "LEFT JOIN search_cls_numhint h" in _cls_blk)
+t("tmp3_cls: eligibility-зеркало EXECUTE (не companion/ключ/платформа)",
+  "NOT c.is_companion" in _cls_blk
+  and "c.col NOT IN ('LineNumber', 'SurrogateKey')" in _cls_blk
+  and "c.col <> 'DataVersion'" in _cls_blk
+  and "NOT EXISTS" in _cls_blk
+  and "list_contains(coalesce(kk.key_cols, []), c.col)" in _cls_blk)
+
+todo_blk = sql[sql.find("tmp3_numhint_todo"):sql.find("DELETE FROM search_cls_numhint")]
+t("todo: NOT on_ дизъюнкт",
+  "NOT (SELECT on_ FROM tmp3_inc)" in todo_blk)
+t("todo: changed дизъюнкт",
+  "IN (SELECT tbl FROM tmp3_changed)" in todo_blk)
+# (b) todo⊇changed: предикат tbl IN (SELECT tbl FROM tmp3_changed) в todo.
+t("todo⊇changed: tbl IN (SELECT tbl FROM tmp3_changed)",
+  "tbl IN (SELECT tbl FROM tmp3_changed)" in todo_blk
+  or "s.tbl IN (SELECT tbl FROM tmp3_changed)" in todo_blk)
+t("todo: NOT EXISTS(sig-совпадение) дизъюнкт",
+  "NOT EXISTS" in todo_blk
+  and "h.cols_sig IS NOT DISTINCT FROM g.cols_sig" in todo_blk)
+
+i_changed = sql.find("CREATE OR REPLACE TABLE tmp3_changed")
+i_exec_nh = sql.find("EXECUTE p_cls_numhint")
+t("EXECUTE p_cls_numhint JOIN tmp3_numhint_todo",
+  "JOIN tmp3_numhint_todo" in sql[i_exec_nh - 80:i_exec_nh + 200]
+  if i_exec_nh >= 0 else False,
+  "exec@%d" % i_exec_nh)
+t("EXECUTE p_cls_numhint после CREATE tmp3_changed",
+  i_changed >= 0 and i_exec_nh > i_changed,
+  "changed@%d exec@%d" % (i_changed, i_exec_nh))
+
+t("MERGE INTO search_cls_numhint", "MERGE INTO search_cls_numhint" in sql)
+t("tmp3_cls LEFT JOIN search_cls_numhint",
+  "LEFT JOIN search_cls_numhint h" in _cls_blk
+  and "h.tbl = c.tbl AND h.col = c.col" in _cls_blk)
+t("один CREATE tmp3_cls",
+  sql.count("CREATE OR REPLACE TABLE tmp3_cls AS") == 1,
+  sql.count("CREATE OR REPLACE TABLE tmp3_cls AS"))
+t("DROP tmp3_cls0 один",
+  sql.count("DROP TABLE tmp3_cls0") == 1,
+  sql.count("DROP TABLE tmp3_cls0"))
+
+t("гейт numhint: changed непуст",
+  "numhint: changed непуст" in sql
+  and "error(" in sql[sql.find("numhint: changed непуст") - 120:sql.find("numhint: changed непуст") + 40])
+t("quality numhint_recomputed", "'numhint_recomputed'" in sql)
+t("quality numhint_cache_hit", "'numhint_cache_hit'" in sql)
+
+# --- скоуп инфрафаз + wipe + namecol-STOP ---
+t("tmp3_infra_scope CTAS", "CREATE OR REPLACE TABLE tmp3_infra_scope AS" in sql)
+for _name, _marker in (
+    ("p_writer", "EXECUTE p_writer("),
+    ("p_stats", "EXECUTE p_stats("),
+    ("p_ref", "EXECUTE p_ref("),
+):
+    i = sql.find(_marker)
+    chunk = sql[i:i + 220] if i >= 0 else ""
+    t("%s JOIN tmp3_infra_scope" % _name,
+      i >= 0 and "JOIN tmp3_infra_scope" in chunk,
+      "pos=%d" % i)
+
+wipe_i = sql.find("UPDATE search_tables SET written_by = NULL")
+wipe_blk = sql[wipe_i:wipe_i + 350] if wipe_i >= 0 else ""
+t("wipe: NOT (SELECT on_ FROM tmp3_inc)",
+  wipe_i >= 0
+  and "NOT EXISTS (SELECT 1 FROM tmp3_link" in wipe_blk
+  and "AND NOT (SELECT on_ FROM tmp3_inc)" in wipe_blk)
+
+_nh_stop = sql.find("namecol-STOP")
+t("namecol-STOP: text-кандидаты + error",
+  _nh_stop >= 0
+  and "c.kind = 'text'" in sql[_nh_stop:_nh_stop + 900]
+  and "error('p_stats: пуст namecol в скоупе при text-кандидатах')" in sql)
+
+# (c) между PREPARE p_stats и namecol-STOP нет ON_ERROR_STOP off (0f: fail-stop).
+_i_pstats = sql.find("PREPARE p_stats")
+_i_namecol = sql.find("namecol-STOP", _i_pstats) if _i_pstats >= 0 else -1
+_pstats_to_namecol = (
+    sql[_i_pstats:_i_namecol] if _i_pstats >= 0 and _i_namecol > _i_pstats else ""
+)
+t("p_stats→namecol: нет ON_ERROR_STOP off",
+  _i_pstats >= 0 and _i_namecol > _i_pstats
+  and "\\set ON_ERROR_STOP off" not in _pstats_to_namecol,
+  "pstats@%d namecol@%d" % (_i_pstats, _i_namecol))
+
+# (d) writer_failed ⊆ infra_scope (не путать с EXECUTE p_writer — тот же JOIN там уже был).
+_wf_i = sql.find("'writer_failed'")
+_wf_blk = sql[_wf_i:_wf_i + 280] if _wf_i >= 0 else ""
+t("writer_failed: JOIN tmp3_infra_scope",
+  "FROM tmp3_regsrc r JOIN tmp3_infra_scope" in _wf_blk.replace("\n", " "),
+  _wf_blk[:120])
+
+# --- фазовые метки (t0 → numhint → p_writer → p_stats → p_ref → done) ---
+t("DELETE LIKE 'build_phase%'",
+  "DELETE FROM search_quality WHERE k LIKE 'build_phase%'" in sql)
+_prev = -1
+for _ph in ("t0", "numhint", "p_writer", "p_stats", "p_ref", "done"):
+    _key = "'build_phase:%s'" % _ph
+    _pos = sql.find(_key)
+    t("фаза build_phase:%s" % _ph, _pos >= 0 and _pos > _prev, "pos=%d prev=%d" % (_pos, _prev))
+    if _pos >= 0:
+        _prev = _pos
 
 print("\n---", PASS, "ok,", len(FAIL), "fail ---")
 if FAIL:

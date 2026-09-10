@@ -277,6 +277,12 @@ GRANT SELECT ON search_currency_rate_map TO serene_ro;
 GRANT SELECT ON search_currency_rate_map TO serene_resolver;
 
 CREATE TABLE IF NOT EXISTS search_quality (k VARCHAR, v BIGINT, note VARCHAR);
+-- Кэш классификации num/text (Speed-II-2); инвалидация по cols_sig (имя+тип+edm) в такте.
+CREATE TABLE IF NOT EXISTS search_cls_numhint (
+  tbl VARCHAR, col VARCHAR, num_ratio DOUBLE, cols_sig VARCHAR,
+  PRIMARY KEY (tbl, col)
+);
+GRANT SELECT ON search_cls_numhint TO serene_ro;
 CREATE TABLE IF NOT EXISTS build_state (ts TIMESTAMP, k VARCHAR, v BIGINT);
 -- Разметка «о таком спрашивают / это служебное». Заводится ЗДЕСЬ, а не только в
 -- `classify_entities.py`: сборка ссылается на неё при выборе очерёдности векторизации, и

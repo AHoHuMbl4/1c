@@ -4,32 +4,35 @@
 0c: DDL живёт в corpus_init.sql с UNIQUE (src_table, key_text, op); миграция для
 баз, собранных до пакета, идемпотентна (оба statement-условия пусты при готовом
 констрейнте). 0d: pipeline.sh возвращает строковый снимок после синка дописыванием
-отсутствующих — симметрично sources. Каркас L0: константа partial_rebuild объявлена
-в corpus_merge и равна 0 (ветвление merge — этап 1, сторож A — после 0f; полный L0
-на движке-фикстуре вводит этап 1d).
+отсутствующих — симметрично sources. L0/0f/сторож A: dual \\set partial_rebuild в
+build+merge; потребление через CASE (не \\if); сторож A в merge после empty-entity.
 
 Писатели пакета A: packet_apply (_contract_tx), poc_load_entity (_upsert_changed_rows),
 serene_sync (err → сентинель '*'/full).
 
 Запуск: python3 test_changed_rows_lock.py
 """
+import glob
 import os
 import re
 import sys
 
 ROOT = os.path.dirname(os.path.abspath(__file__))
 INIT = os.path.join(ROOT, "corpus_init.sql")
+BUILD = os.path.join(ROOT, "corpus_build.sql")
 MERGE = os.path.join(ROOT, "corpus_merge.sql")
 PIPE = os.path.join(ROOT, "pipeline.sh")
 APPLY = os.path.join(ROOT, "..", "packet", "packet_apply.py")
 POC = os.path.join(ROOT, "poc_load_entity.py")
 SYNC = os.path.join(ROOT, "serene_sync.py")
+UBUNTU = os.path.join(ROOT, "..")
 
 PASS, FAIL = 0, []
 
 UPSERT_ON_CONFLICT = (
     "ON CONFLICT (src_table, key_text, op) DO UPDATE SET ts = EXCLUDED.ts"
 )
+SET_PARTIAL_RE = re.compile(r"^\\set partial_rebuild ([01])\s*$", re.M)
 
 
 def t(name, cond, detail=""):
@@ -48,6 +51,7 @@ def _fn_body(src, name):
 
 
 init = open(INIT, encoding="utf-8").read()
+build = open(BUILD, encoding="utf-8").read()
 merge = open(MERGE, encoding="utf-8").read()
 pipe = open(PIPE, encoding="utf-8").read()
 apply_py = open(APPLY, encoding="utf-8").read()
@@ -104,11 +108,87 @@ t("pipeline: rows restore дописыванием отсутствующих",
 t("pipeline: rows snapshot снимается (DROP)",
   i_drop > i_restore > 0)
 
-# --- L0-каркас: рубильник пакета объявлен и мёртв (ветвление — этап 1) ---
+# --- L0/0f/сторож A: dual \\set + потребление CASE (не \\if) ---
+# Прежний assert «константа не читается до этапа 1» снят: потребление легитимно
+# (R6 CTAS + сторож A). \\if по-прежнему запрещён — только CASE.
 t("merge: константа partial_rebuild=0",
   "\\set partial_rebuild 0" in merge)
-t("merge: константа не читается до этапа 1 (проводки \\if нет)",
-  "\\if :partial_rebuild" not in merge)
+
+_sets_b = SET_PARTIAL_RE.findall(build)
+_sets_m = SET_PARTIAL_RE.findall(merge)
+t("dual \\set: ровно один в build",
+  len(_sets_b) == 1, _sets_b)
+t("dual \\set: ровно один в merge",
+  len(_sets_m) == 1, _sets_m)
+t("dual \\set: значения равны",
+  len(_sets_b) == 1 and len(_sets_m) == 1 and _sets_b[0] == _sets_m[0],
+  "build=%s merge=%s" % (_sets_b, _sets_m))
+
+t("потребление :partial_rebuild в build",
+  ":partial_rebuild" in build)
+t("потребление :partial_rebuild в merge",
+  ":partial_rebuild" in merge)
+t("\\if :partial_rebuild нет (CASE, не \\if)",
+  "\\if :partial_rebuild" not in build
+  and "\\if :partial_rebuild" not in merge)
+
+# (а) R6-ветка CTAS mode='full' при partial_rebuild=0
+t("build: CASE mode — :partial_rebuild=0 → 'full' (R6)",
+  "WHEN :partial_rebuild = 0 THEN 'full'" in build
+  and "END AS mode" in build)
+
+# (б) сторож A после empty-entity / «собрались пустыми», до vec_budget
+i_empty = merge.find("собрались пустыми")
+i_guard = merge.find("mode IS DISTINCT FROM 'full'")
+i_err_a = merge.find("partial_rebuild=0, но mode")
+i_vec = merge.find("tmp3_merge_vec_budget")
+t("merge: сторож A (mode IS DISTINCT FROM 'full' + error)",
+  i_guard >= 0 and i_err_a >= 0 and "error(" in merge[i_guard - 80:i_err_a + 120])
+t("merge: сторож A после empty-entity, до vec_budget",
+  i_empty >= 0 and i_guard > i_empty and i_vec > i_guard,
+  "empty@%d guard@%d vec@%d" % (i_empty, i_guard, i_vec))
+
+# L4(б) сразу после CTAS tmp3_build
+i_ctas = build.find("CREATE OR REPLACE TABLE tmp3_build AS")
+i_l4 = build.find("corpus_build: L4(б)")
+t("build: L4(б) после CTAS (mode IS NULL + error)",
+  i_ctas >= 0 and i_l4 > i_ctas
+  and "mode IS NULL" in build[i_ctas:i_l4 + 200]
+  and "error(" in build[i_l4 - 40:i_l4 + 120],
+  "ctas@%d l4@%d" % (i_ctas, i_l4))
+
+# rebuild_mode per-src
+t("build: rebuild_mode per-src k='rebuild_mode:'",
+  "'rebuild_mode:' ||" in build or "\"rebuild_mode:\" ||" in build)
+t("build: DELETE LIKE 'rebuild_mode:%'",
+  "DELETE FROM search_quality WHERE k LIKE 'rebuild_mode:%'" in build)
+
+# env-замок: unit-ы и git-шаблоны env — без PARTIAL_/MERGE_ (рубильник только \\set)
+_env_hits = []
+for _dir in (
+    os.path.join(UBUNTU, "systemd"),
+    os.path.join(UBUNTU, "packet", "systemd"),
+):
+    for _pat in ("*.service", "*.conf", "*.env", "*.env.example"):
+        for _p in glob.glob(os.path.join(_dir, "**", _pat), recursive=True):
+            try:
+                _txt = open(_p, encoding="utf-8").read()
+            except OSError:
+                continue
+            if re.search(r"PARTIAL_|MERGE_", _txt):
+                _env_hits.append(os.path.relpath(_p, UBUNTU))
+# шаблоны /etc из git (имена совпадают с EnvironmentFile юнитов)
+for _p in glob.glob(os.path.join(UBUNTU, "**", "*.env.example"), recursive=True):
+    try:
+        _txt = open(_p, encoding="utf-8").read()
+    except OSError:
+        continue
+    if re.search(r"PARTIAL_|MERGE_", _txt):
+        _rel = os.path.relpath(_p, UBUNTU)
+        if _rel not in _env_hits:
+            _env_hits.append(_rel)
+t("env-замок: нет PARTIAL_/MERGE_ в unit/env-шаблонах",
+  not _env_hits, _env_hits)
 
 # --- пакет A: HTTP-писатель poc_load_entity ---
 upsert_helper = _fn_body(poc, "_upsert_changed_rows")

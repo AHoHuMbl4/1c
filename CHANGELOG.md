@@ -1,3 +1,28 @@
+## 2026-09-10 (7) — Speed-II-2 + 0f + сторож A одним пакетом: кэш классификации, скоупы инфрафаз, колонка mode (interim R6) [код]
+
+**[код]** (волны: аудит ×4 → план → аудит плана ×4 → контроль ×4 → E1-E4-бис →
+пост-аудит ×4 → правки; канон docs/audit/SPEED2_0F_PLAN_2026-09-10.md — копия
+s2-plan-draft v1). `corpus_build.sql` (+347/−79): `\set partial_rebuild 0`
+(≡merge, dual-замок regex+равенство+потребление); слот после tmp3_changed —
+`tmp3_infra_scope` (single-source; p_stats/p_ref/p_writer EXECUTE только по
+ней; namecol-STOP при text-кандидатах); **кэш `search_cls_numhint`**
+(DDL init+GRANT): cols_sig = col:type:edm из cls0, todo = NOT on_ ∨ changed ∨
+miss-sig (пустой кэш ≡ полный пересчёт), DELETE устаревших, MERGE, потребитель
+с sig-сверкой И eligibility-зеркалом EXECUTE (стале-companion/ключ не поднимает
+kind — §3.113-путь закрыт, пост-аудит U2); гейт «changed непуст ∧ todo=0 →
+STOP»; NULL-wipe written_by только при NOT on_; **0f**: CTAS tmp3_build c mode
+(R6: flip=0 → full всем; Q1-гард duckdb_tables; changed-без-rows) + L4(б) +
+rebuild_mode per-src (v=0/1, note=mode|reason, DELETE LIKE за такт); 6 фазовых
+меток build_phase:*+DELETE один раз. `corpus_merge.sql` (+9): сторож A после
+empty-entity до дублей (ловит рассинхрон выката, НЕ introspection).
+`corpus_init.sql` (+6): DDL кэша. Замки: measures 65/0 (было 31), rows-lock
+36/0 (было 24: dual-\set/R6/сторож-порядок/L4б/rebuild_mode/env); остальные 12
+зелёные (мой прогон: 19/29/28/93/63/30/26/16/29/14/6/22, pdoc_tail 70/70).
+Числа: build 2968→+268/-60 net +208 строк; кэш пуст до первого такта
+(первичка = полный numhint — ожидаемо, U4-A1); flip=0 — все mode=full.
+Доки: docs/audit/SPEED2_0F_PLAN_2026-09-10.md; FULLB_PLAN 0f-интерим
+переписан (R6) тем же коммитом; TAKT_SPEED2_PLAN §2
+
 ## 2026-09-10 (6) — Полная B, пакет 1∥3-A «Писатели маркеров»: HTTP-дельта и packet пишут search_changed_rows; rows в одной tx с sources [код]
 
 **[код]** Этап 3 канона (docs/audit/FULLB_1PAR3_PLAN_2026-09-10.md; волны:
