@@ -678,6 +678,34 @@ def _key_text_expr(mart_cols: list[str], key_cols: list[str]) -> str:
     return out
 
 
+def _marker_keys_from_csv(chunk_paths: list[str], key_cols: list[str]) -> list[str]:
+    """key_text маркеров delta из CSV-чанка: колонки key_cols, join '|', как _key_text_expr.
+
+    Ключи берутся из пакета (п. 20), без SELECT из базы. ci-матчинг имён — _ci_col.
+    """
+    if not key_cols or not chunk_paths:
+        return []
+    out: list[str] = []
+    for path in chunk_paths:
+        with open(path, newline="", encoding="utf-8") as f:
+            rows = list(csv.reader(f))
+        if len(rows) < 2:
+            continue
+        header = rows[0]
+        cols = [_ci_col(header, k) for k in key_cols]
+        cols = [c for c in cols if c]
+        if not cols:
+            continue
+        idxs = [header.index(c) for c in cols]
+        for r in rows[1:]:
+            parts = [(r[i] if i < len(r) else "") for i in idxs]
+            out.append("|".join(parts))
+    # Дедуп с сохранением порядка: дубликат (src_table,key_text,op) в одном
+    # INSERT … VALUES роняет ON CONFLICT в PG-диалекте; прежний SQL шёл из
+    # TEMP с DISTINCT — паритет.
+    return list(dict.fromkeys(out))
+
+
 def _check_mix_versions(table: str) -> None:
     # Инвариант К3 (контракт §9): одна версия на Ref_Key, запрос как у
     # poc_load_entity.load_entity_delta. Нарушение — карантин, дельту не льём.
@@ -714,13 +742,16 @@ def _delta_delete_clause(table: str, mart_cols: list) -> str:
 
 
 def _delta_sql(table: str, src: str, header: list[str],
-               key_cols: list[str] | None = None) -> str:
+               key_cols: list[str] | None = None,
+               chunk_paths: list[str] | None = None) -> tuple[str, list[str]]:
     # Источник истины формы — poc_load_entity.load_entity_delta (строки ~707-736):
     # состав колонок дельты выравнивается по ВИТРИНЕ (её список из duckdb_columns),
     # недостающие — пустые строки ('' — так пишет эталон: _cell(None)). Свой вариант
     # merge не заводим: надстройка поверх эталонной формы, не перепись (HOW_NOT_TO §3.40).
     # TEMP-таблица → DELETE по Ref_Key → INSERT. Повтор безопасен: DELETE снимает
     # прошлую порцию тех же ключей.
+    # Маркеры search_changed_rows сюда не входят: TEMP d_* живёт только в одном
+    # _psql; ключи копятся в Python (_marker_keys_from_csv) и пишутся в _contract_tx.
     mart_cols = [r for r in _psql_col(
         'SELECT column_name FROM duckdb_columns() WHERE table_name=%s '
         "AND database_name = current_database() "  # ловушка №25: иначе видны чужие базы
@@ -759,42 +790,33 @@ def _delta_sql(table: str, src: str, header: list[str],
                            ("Recorder", "LineNumber", "Recorder_Type")) if c]
         _log("delta %s: нет Ref_Key, слияние по %s" % (table, nat))
     delete_sql = _delta_delete_clause(table, mart_cols)
-    changed_rows_sql = ""
     # 🔴 КЛЮЧ МАРКЕРА — ТОЛЬКО ПО КОЛОНКАМ, ДОСТУПНЫМ В ЧАНКЕ. [живой стоп okna
     # 08.09 20:05 → 09.09 05:23, пакет 000249] манифест РКО нёс LineNumber: витрина
-    # её объявляет, а ЧАНК дельты документа без табличной части — нет; маркерный
-    # SELECT идёт ИЗ d_-чанка, и колонка из витрины роняла его «Referenced column
-    # linenumber not found» (135+ ретраев, пакет verified). Внешний манифест не
-    # идеален по построению: ключ = пересечение манифеста с чанком (имена — из
-    # чанка, порядок сегментов — порядок ключа), сущность без пригодных колонок
-    # маркеров не пишет (мост полной B расширит объектный ключ по префиксу).
-    kc = [c for c in _enrich_key_cols(key_cols, mart_cols)
+    # её объявляет, а ЧАНК дельты документа без табличной части — нет; прежний
+    # SELECT из d_ с колонкой из витрины ронял «Referenced column linenumber not
+    # found». Ключ = пересечение манифеста с чанком (имена — из чанка, порядок
+    # сегментов — порядок ключа); без пригодных колонок маркеров нет (мост полной B
+    # расширит объектный ключ по префиксу). Сбор — из CSV пакета, не из базы.
+    kc = [c for c in _enrich_key_cols(key_cols or [], mart_cols)
           if _ci_col(header, c) and _ci_col(mart_cols, c)]
-    if kc:
-        kt = _key_text_expr(header, kc)
-        # Upsert с освежением ts (не OR IGNORE): SKIP-инвариант полной B (план 0b/5b)
-        # смотрит max(ts) против corpus_built_ts — повторная отметка того же ключа
-        # тем же op ОБЯЗАНА двигать ts, иначе изменение молча теряет свежесть (п.13).
-        changed_rows_sql = (
-            'INSERT INTO search_changed_rows (src_table, key_text, op, ts)\n'
-            'SELECT %s, %s, \'delta\', now() FROM "d_%s"\n'
-            'ON CONFLICT (src_table, key_text, op) DO UPDATE SET ts = EXCLUDED.ts;\n'
-            % (_lit(table), kt, table))
-    return ('CREATE OR REPLACE TEMP TABLE "d_%s" AS '
-            'SELECT DISTINCT * FROM (%s) AS q;\n'
-            '%s'
-            'INSERT INTO "%s" (%s) SELECT %s FROM "d_%s";\n'
-            '%s'
-            % (table, src, delete_sql, table, cols, sel, table, changed_rows_sql))
+    keys = _marker_keys_from_csv(chunk_paths or [], kc) if kc else []
+    sql = ('CREATE OR REPLACE TEMP TABLE "d_%s" AS '
+           'SELECT DISTINCT * FROM (%s) AS q;\n'
+           '%s'
+           'INSERT INTO "%s" (%s) SELECT %s FROM "d_%s";\n'
+           % (table, src, delete_sql, table, cols, sel, table))
+    return sql, keys
 
 
-def _apply_gone(path: str, changed_tables: set) -> int:
+def _apply_gone(path: str, changed_tables: set,
+                row_markers: list[tuple[str, str, str]]) -> int:
     """gone.csv (колонки entity,ref_key): DELETE по ключам пачками.
 
-    search_changed_rows: key_text = ref_key как шлёт агент (витринный Ref_Key
-    документа); будущая полная B разрешает все строки витрины с этим Ref_Key.
-    DELETE витрины по Ref_Key — как прежде; регистр без Ref_Key — отдельный путь
-    дельты (_delta_delete_clause), не этот gone-DELETE."""
+    Маркеры deleted_gone копятся в row_markers (пишутся в _contract_tx): key_text =
+    ref_key как шлёт агент (витринный Ref_Key документа); будущая полная B
+    разрешает все строки витрины с этим Ref_Key. DELETE витрины по Ref_Key — как
+    прежде; регистр без Ref_Key — отдельный путь дельты (_delta_delete_clause),
+    не этот gone-DELETE."""
     with open(path, newline="", encoding="utf-8") as f:
         rows = list(csv.reader(f))
     if not rows:
@@ -818,14 +840,8 @@ def _apply_gone(path: str, changed_tables: set) -> int:
             vals = ",".join("(%s)" % _lit(k) for k in batch)
             _psql('DELETE FROM "%s" WHERE "Ref_Key" IN '
                   '(SELECT k FROM (VALUES %s) AS g(k));' % (table, vals))
-            gone_vals = ",".join("(%s,%s)" % (_lit(table), _lit(k)) for k in batch)
-            # Upsert с освежением ts — симметрично delta-писателю: SKIP-инвариант
-            # полной B читает max(ts) маркеров (план 0b/5b), повторный gone того же
-            # ключа двигает свежесть, а не молча пропускается.
-            _psql('INSERT INTO search_changed_rows (src_table, key_text, op, ts)\n'
-                  'SELECT v.t, v.k, \'deleted_gone\', now() FROM (VALUES %s) AS v(t, k)\n'
-                  'ON CONFLICT (src_table, key_text, op) DO UPDATE SET ts = EXCLUDED.ts;'
-                  % gone_vals)
+            for k in batch:
+                row_markers.append((table, k, "deleted_gone"))
         total += len(ks)
     return total
 
@@ -995,7 +1011,8 @@ def _ensure_contract_tables() -> None:
           % RO_ROLE)
 
 
-def _contract_tx(changed_tables: set, profile: list[dict]) -> None:
+def _contract_tx(changed_tables: set, profile: list[dict],
+                 row_markers: list[tuple[str, str, str]] | None = None) -> None:
     """Последний шаг пакета: контрактные таблицы одной DML-транзакцией.
 
     🔴 Отметки изменённого ДОПИСЫВАЮТСЯ, а не переписываются, — и apply объявляет
@@ -1010,6 +1027,9 @@ def _contract_tx(changed_tables: set, profile: list[dict]) -> None:
     витрины на пакетном контуре, и каждая применённая таблица попадает в
     `changed_tables`. Потребляет отметки сборка (`corpus_merge`) — только те,
     что пересобрала.
+    Маркеры строк (search_changed_rows) — в той же tx, пачками VALUES×1000:
+    SKIP-инвариант полной B смотрит max(ts) против corpus_built_ts; повторная
+    отметка того же ключа тем же op двигает ts (ON CONFLICT DO UPDATE).
     """
     sql = ["BEGIN;"]
     if changed_tables:
@@ -1032,6 +1052,20 @@ def _contract_tx(changed_tables: set, profile: list[dict]) -> None:
         sql.append("INSERT INTO base_profile SELECT * FROM (VALUES %s) AS v(e, n, p, k) "
                    "WHERE NOT EXISTS (SELECT 1 FROM base_profile WHERE base_profile.entity = v.e);"
                    % vals)
+    if row_markers:
+        # Дедуп полной тройки с сохранением порядка: дубли из delta-чанков с ТЧ
+        # и на стыке delta/gone — иначе один INSERT … VALUES с повтором тройки
+        # роняет ON CONFLICT в PG-диалекте.
+        row_markers = list(dict.fromkeys(row_markers))
+        for i in range(0, len(row_markers), PACKET_APPLY_GONE_BATCH):
+            batch = row_markers[i:i + PACKET_APPLY_GONE_BATCH]
+            vals = ",".join("(%s,%s,%s)" % (_lit(t), _lit(k), _lit(o))
+                            for t, k, o in batch)
+            sql.append(
+                "INSERT INTO search_changed_rows (src_table, key_text, op, ts)\n"
+                "SELECT v.t, v.k, v.o, now() FROM (VALUES %s) AS v(t, k, o)\n"
+                "ON CONFLICT (src_table, key_text, op) DO UPDATE SET ts = EXCLUDED.ts;"
+                % vals)
     sql.append("DELETE FROM search_quality WHERE k='mart_changed_ts';")
     sql.append("INSERT INTO search_quality VALUES ('mart_changed_ts', epoch(now())::BIGINT, "
                "'витрина менялась (пакетный apply)');")
@@ -1087,6 +1121,7 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                 _log("base=%s pkg=%s log сохранён: %s" % (base_id, pkg_id, log_name))
             changed_tables: set = set()
             profile: list[dict] = []
+            row_markers: list[tuple[str, str, str]] = []
             for ent in m.get("entities") or []:
                 op = ent.get("op")
                 if op not in _DATA_OPS:
@@ -1101,9 +1136,10 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                         "AND database_name = current_database() "
                         'ORDER BY column_index' % _lit(table))
                     key_cols = _resolve_key_cols(ent.get("name"), ent.get("key"), mart_cols)
-                    merge = _delta_sql(table, src, hdr, key_cols)
+                    merge, keys = _delta_sql(table, src, hdr, key_cols, chunk_paths)
                     _check_mix_versions(table)
                     _psql(merge)
+                    row_markers.extend((table, k, "delta") for k in keys)
                 else:
                     key_cols = [safe_col(k) for k in ent.get("key") or []]
                     # 🔴 Ключ дедупликации — только из колонок, которые в чанке
@@ -1123,6 +1159,7 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                             key_cols = kept
                     _psql(_full_sql(table, src, header=_csv_header(chunk_paths[0]),
                                     canon=_meta_canon(base_id)))
+                    row_markers.append((table, "*", "full"))
                     _check_key_identifies(base_id, pkg_id, table, key_cols)
                     _check_rows_landed(base_id, pkg_id, table, ent.get("rows"))
                 changed_tables.add(table)
@@ -1130,7 +1167,7 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
                                 "table": table})
                 _log("base=%s pkg=%s entity=%s op=%s" % (base_id, pkg_id, table, op))
             if (m.get("gone") or {}).get("chunks") and "gone" in files:
-                n_gone = _apply_gone(files["gone"], changed_tables)
+                n_gone = _apply_gone(files["gone"], changed_tables, row_markers)
                 _log("base=%s pkg=%s gone=%d" % (base_id, pkg_id, n_gone))
             # Число строк профиля — фактическое, после всех операций пакета
             # (gone снимает строки уже после merge, как у serene_sync).
@@ -1144,11 +1181,13 @@ def apply_package(base_id: str, pkg_id: str, m: dict, dry_run: bool) -> str:
         except (RuntimeError, C.PacketCryptoError, OSError, KeyError) as e:
             # Сбой до контрактной транзакции: пакет остаётся verified, повтор
             # следующего захода безопасен (все операции повторяемы).
+            # row_markers на стеке отбрасываются — в search_changed_rows не
+            # попадают без успешного _contract_tx.
             _log("ОШИБКА base=%s pkg=%s: %s — пакет остался verified" % (base_id, pkg_id, str(e)[:300]))
             return "failed"
         try:
             _ensure_contract_tables()
-            _contract_tx(changed_tables, profile)
+            _contract_tx(changed_tables, profile, row_markers)
         except RuntimeError as e:
             _set_pkg_state(base_id, pkg_id, "quarantined",
                            "contract_tx_failed: %s" % str(e)[:200], seq=seq)

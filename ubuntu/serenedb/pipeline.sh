@@ -44,8 +44,9 @@ echo "== синк витрины (дельта из 1С)"
 # DELETE FROM search_changed_sources. Apply кладёт отметки дописыванием; снимок
 # до синка возвращает их сборке. Иначе merge видит пустой список и пересобирает 0
 # при живом расхождении (okna 18.08 18:41/18:51: «изменились таблицы витрины: 0»
-# → «пересобирали 0 из 351»). search_changed_rows — тот же guard: снимок до синка,
-# HTTP-режим rows не пишет (waiver до partial=1). Доки: sql/statements/insert.
+# → «пересобирали 0 из 351»). search_changed_rows — тот же guard: снимок до синка;
+# HTTP-контур (poc_load_entity/serene_sync) с пакета A пишет search_changed_rows
+# (delta/deleted_gone/full-сентинели) — объём restore вырос. Доки: sql/statements/insert.
 KEEP_MARKS=0
 if [ -d "${ETL_ODATA_BASE:-}" ]; then
   KEEP_MARKS=1

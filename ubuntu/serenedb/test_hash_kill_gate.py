@@ -183,5 +183,50 @@ t("SQL: vector_loss_gate не тронут",
 t("SQL: комментарий §3.113 / 1.43M",
   "§3.113" in txt and "1.43M" in txt)
 
+# --- R4: сентинель ('*','full') не объясняет hash_kill на нормальных ключах ---
+# op в модели маркеров не участвует (SQL тоже смотрит только key_text + ts).
+die_full = [("e", "k%d" % i, 1) for i in range(100)]
+markers_full = [("e", "*", 2000)]  # свежий table_full
+un_full = rehash_unexplained(die_full, markers_full, built_ts=1000)
+t("R4: mass + только (e,'*','full') → все unexplained",
+  len(un_full) == 100, len(un_full))
+t("R4: STOP при unexplained mass / total_emb",
+  rehash_gate_fires(len(un_full), 1000, tol=0.005))
+t("R4: bridge('*') false на нормальном ключе",
+  not bridge_row_matches("k0", "*", 1)
+  and not bridge_row_matches("ref|4", "*", 2))
+
+# CTE die_hash_unexplained не учится понимать op=full / table_full / '*'
+t("SQL: die_hash_unexplained без op=full/'*'/table_full",
+  "op='full'" not in block
+  and "op = 'full'" not in block
+  and "table_full" not in block
+  and "'*'" not in block
+  and '"*"' not in block)
+
+# --- Патология: row_key '*'/ '*|…'/ '*#…' — ветка 3 моста формально жива ---
+# Факт модели: marker='*' при n_seg>1 матчит starts_with(row_key,'*|') / '*#'.
+# FAIL-closed: такие формы не используем как row_key и не считаем объяснением
+# full-сентинеля в продукте (иначе ложная тишина гейта).
+t("pathology: факт — bridge матчит '*|1' vs '*' (n_seg=2)",
+  bridge_row_matches("*|1", "*", 2))
+t("pathology: факт — bridge матчит '*#x' vs '*'",
+  bridge_row_matches("*#x", "*", 1))
+t("pathology: факт — bridge матчит '*' vs '*'",
+  bridge_row_matches("*", "*", 1))
+t("pathology: факт — '*|1'+маркер'*' → explained (опасность ветки 3)",
+  rehash_unexplained([("e", "*|1", 2)], markers_full, built_ts=1000) == [])
+
+
+def _pathol_row_key(rk):
+    return rk == "*" or rk.startswith("*|") or rk.startswith("*#")
+
+
+t("pathology: FAIL-closed — '*'/ '*|'/ '*#' не row_key корпуса",
+  all(_pathol_row_key(k) for k in ("*", "*|1", "*|", "*#x", "*|foo"))
+  and not _pathol_row_key("ref|4")
+  and not _pathol_row_key("k0")
+  and not _pathol_row_key("ab|1"))
+
 print("PASS %d FAIL %d" % (PASS, len(FAIL)))
 sys.exit(1 if FAIL else 0)

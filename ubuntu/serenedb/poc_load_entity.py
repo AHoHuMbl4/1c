@@ -503,6 +503,39 @@ def _lit(v):
     return "'" + str(v).replace("'", "''") + "'"
 
 
+def _upsert_changed_rows(table, keys, op, batch=1000):
+    """Строковые маркеры search_changed_rows: один psql, пачки VALUES в одной tx.
+
+    Пустой список — no-op. Форма таблицы как в pipeline.sh (CREATE IF NOT EXISTS
+    на случай, когда снимок pipeline ещё не поднимал таблицу). Тело stdin:
+    CREATE; BEGIN; INSERT…VALUES пачка1; INSERT…пачка2; …; COMMIT — все пачки
+    внутри одной транзакции одного процесса psql. Атомарность: либо все маркеры,
+    либо ничего; обрыв → исключение → serene_sync err-ветка пишет ('*','full') →
+    полная пересборка сущности (fail-closed). ON CONFLICT освежает ts.
+    """
+    if not keys:
+        return
+    parts = [
+        "CREATE TABLE IF NOT EXISTS search_changed_rows ("
+        "src_table VARCHAR, key_text VARCHAR, op VARCHAR, "
+        "ts TIMESTAMP DEFAULT now(), "
+        "UNIQUE (src_table, key_text, op));",
+        "BEGIN;",
+    ]
+    for i in range(0, len(keys), batch):
+        chunk = keys[i:i + batch]
+        vals = ",".join("(%s,%s)" % (_lit(table), _lit(k)) for k in chunk)
+        parts.append(
+            "INSERT INTO search_changed_rows (src_table, key_text, op, ts)\n"
+            "SELECT v.t, v.k, %s, now() FROM (VALUES %s) AS v(t, k)\n"
+            "ON CONFLICT (src_table, key_text, op) DO UPDATE SET ts = EXCLUDED.ts;"
+            % (_lit(op), vals)
+        )
+    parts.append("COMMIT;")
+    # Один _psql_exec: цикл только собирает текст; psql в цикле не зовётся.
+    _psql_exec("\n".join(parts))
+
+
 def _mart_has(table, col):
     try:
         return bool(_psql_rows("SELECT 1 FROM duckdb_columns() WHERE table_name=%s "
@@ -808,6 +841,14 @@ def load_entity_delta(es, ro_role="serene_ro"):
         vals = ",".join("(%s)" % _lit(k) for k in gone)
         _psql_exec('DELETE FROM "%s" WHERE "Ref_Key" IN '
                    '(SELECT k FROM (VALUES %s) AS g(k));' % (table, vals))
+    # Маркеры — строго ПОСЛЕ DML витрины (upsert changed и DELETE gone). Иначе
+    # merge видит ключ в search_changed_rows, а строка в витрине ещё старая или
+    # на месте: рассинхрон маркеры↔витрина = молчаливая потеря (п. 13). 404-ключи
+    # остаются в changed, но уехали в gone — в delta их нет (persist ⊆ applied).
+    gone_set = set(gone)
+    delta_keys = [k for k in changed if k not in gone_set]
+    _upsert_changed_rows(table, delta_keys, "delta")
+    _upsert_changed_rows(table, gone, "deleted_gone")
     n = _psql_rows('SELECT count(*) FROM "%s"' % table)
     return {"entity": es, "table": table, "rows": int(n[0][0]) if n else len(ver_1c),
             "delta": True, "changed": len(changed), "gone": len(gone),
@@ -925,6 +966,9 @@ def load_entity(es, ro_role="serene_ro"):
     r = subprocess.run(["psql", DSN, "-v", "ON_ERROR_STOP=1"], input=sql, text=True, capture_output=True)
     if r.returncode != 0:
         raise RuntimeError(f"load error: {r.stderr.strip()[:200]}")
+    # Full-rewrite витрины прошёл: один сентинель ('*','full'). Построчные маркеры
+    # и второй EXCEPT здесь не считаем — сигнал полной пересборки, не перечень ключей.
+    _upsert_changed_rows(table, ["*"], "full")
     c = subprocess.run(["psql", DSN, "-tAc", f'SELECT count(*) FROM "{table}";'], text=True, capture_output=True)
     n = int(c.stdout.strip()) if c.returncode == 0 and c.stdout.strip().isdigit() else len(rows)
     # rows = grain витрины (после дедупа), rows_raw = сколько строк отдал OData.

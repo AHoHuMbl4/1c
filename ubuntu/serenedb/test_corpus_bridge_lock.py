@@ -5,10 +5,9 @@
 построчный (m>=n_seg) срезом до declared-длины + потомки «#…»; объектный (m<n_seg:
 HTTP-голый Ref_Key, РКО без ТЧ) сегментным префиксом; fold; пустой маркер = miss
 (вызывающий даёт mode=full). Статика: макрос определён в corpus_init и В ЕДИНСТВЕННОМ
-месте; потребители этапов 1/4 зовут его вызовом (grep ниже ловит копию формулы
-в build/merge). Проверку «bridge_row_matches( не в build/merge» на этапах 1/4
-меняют на обратную — «вызов есть» (оговорка контрольной b2r2): сейчас
-потребителей нет, план 0→2→(1∥3)→4 ведёт мост раньше merge-ветвления.
+месте; потребители зовут его вызовом (grep ловит копию формулы list_slice).
+corpus_build — вызова bridge_row_matches( нет и копии формулы нет; corpus_merge
+(rehash-гейт) — вызов макроса есть, list_slice-копии формулы нет.
 
 Запуск: python3 test_corpus_bridge_lock.py
 """
@@ -115,11 +114,14 @@ t("init: нормализация срезом list_slice(string_split…)",
   "list_slice(string_split(coalesce(marker, ''), '|'), 1, n_seg)" in init)
 t("init: пустой маркер — miss (fail-closed, len-форма b2r1)",
   init.count("len(list_filter(string_split(coalesce(marker, ''), '|'),") >= 1)
-for other in ("corpus_build.sql", "corpus_merge.sql"):
-    body = open(os.path.join(ROOT, other), encoding="utf-8").read()
-    t("%s: копии формулы моста нет (потребители зовут макрос)" % other,
-      "list_slice(string_split(" not in body
-      and "bridge_row_matches(" not in body)
+build_body = open(os.path.join(ROOT, "corpus_build.sql"), encoding="utf-8").read()
+t("corpus_build.sql: вызова bridge_row_matches нет и копии формулы нет",
+  "bridge_row_matches(" not in build_body
+  and "list_slice(string_split(" not in build_body)
+merge_body = open(os.path.join(ROOT, "corpus_merge.sql"), encoding="utf-8").read()
+t("corpus_merge.sql: вызов bridge_row_matches( есть, list_slice-копии нет",
+  "bridge_row_matches(" in merge_body
+  and "list_slice(string_split(" not in merge_body)
 
 print("PASS %d FAIL %d" % (PASS, len(FAIL)))
 sys.exit(1 if FAIL else 0)

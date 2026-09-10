@@ -1,3 +1,30 @@
+## 2026-09-10 (6) — Полная B, пакет 1∥3-A «Писатели маркеров»: HTTP-дельта и packet пишут search_changed_rows; rows в одной tx с sources [код]
+
+**[код]** Этап 3 канона (docs/audit/FULLB_1PAR3_PLAN_2026-09-10.md; волны:
+аудит ×4 → план → аудит плана ×4 → контроль ×4 → внедрение E1-E4 → пост-аудит
+×4 → контроль ×4 — все «ПРИНЯТЬ К ВЫКАТУ»). `poc_load_entity.py`:
+`_upsert_changed_rows` (один psql: CREATE+BEGIN+пачки INSERT+COMMIT — п.20 без
+psql-цикла, атомарность: обрыв → исключение → sync err → `('*','full')` →
+полная пересборка, fail-closed); `load_entity_delta` — маркеры `delta`
+(`changed − gone`, 404-ключи исключены)/`deleted_gone` СТРОГО после DML витрины;
+`load_entity` full-rewrite и `serene_sync` err — сентинель `('*','full')`
+(≡ глоссарий table_full; `*` НЕ объясняет построчный hash_kill — замок).
+`packet_apply.py`: `_marker_keys_from_csv` (ключи из CSV чанка, форма ≡
+`_key_text_expr`, дедуп `dict.fromkeys` — дубли в одном VALUES роняют ON
+CONFLICT); rows-маркеры копятся в `row_markers` и пишутся в `_contract_tx` В
+ТОЙ ЖЕ транзакции, что sources/mart_changed_ts (закрыта дыра «SKIP при живых
+маркерах», §1.5 FULLB); `_plan` текст стал правдой. `pipeline.sh`: комментарий
+про HTTP-rows обновлён. Замки: rows-lock 24/0 (ветки persist⊆/L7/3 литерала),
+hash_kill 29/0 (R4: mass+`*` → STOP; патология `*|`; grep CTE без op='full'),
+bridge 28/0 (инверсия build≠merge после ece361d), sources 19/19, retry 14,
+delta_register 6/0, log 22/0 — прогон мой. Числа: до выката search_changed_rows
+40115 (40114 delta/1 gone/0 full, всё packet); бэкап emb до выката
+emb_backup-20260910-162022.parquet 2.8ГБ 1668048 (=бой 1675751−7703 NULL);
+дифф: poc+44, sync+4, apply+127/−44, pipeline±5, замки +143. Остатки
+задокументированы армией: DML-фикстура обрыва tx (нет движка вне окна),
+pathology-отсев в писателе корпуса и runtime-STOP — пакет B. Доки:
+docs/audit/FULLB_1PAR3_PLAN_2026-09-10.md; docs/audit/FULLB_PLAN_2026-09-03.md §2 этап 3
+
 ## 2026-09-10 (5) — Гейт необъяснённого hash_kill: STOP на массовую смену текста вне свежей дельты 1С [код]
 
 **[код]** `corpus_merge.sql`: ROW-LEVEL CTE `die_hash_rows` + `die_hash_unexplained`
