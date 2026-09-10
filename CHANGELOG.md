@@ -1,3 +1,25 @@
+## 2026-09-10 (9) — пакет B «Merge по mode»: план v2 согласован тремя волнами армии ×4; стоп-точка владельцу [решение]
+
+**[решение]** (оркестратор, 12 cursor-прогонов: b1-b4 → p1-p4 → c1-c4). Канон
+FULLB2_PLAN v2: окно = только corpus_merge.sql одним md5. Решения волн:
+Q1=(в) — gone_expand держат ДВА свидетеля (мост + строки нет в mart),
+fanout_cap — кардинальность для quality, НЕ STOP-порог (кандидат-А old_full
+отвергнут как само-ссылка, post-apply COUNT=0 — ложный STOP); Q2-Q5 —
+предикаты p1 (count-eq по expect до DELETE; empty∧partial легитимен только
+при |gone_expand|>0; orphan-свидетель только mode=full; числитель 10% =
+unmatched full ∪ gone_expand partial); B4 repost→bridge — 🔴 ГОРЯЧИЙ путь:
+SQL-срез '#' до scp + allowlist прироста entity_repost_delta; B5 L-mid —
+снимок tmp3_merge_pre_emb до пачек + гейт merge_emb_holes (скоуп killed∩tmp3
+— наивный count дал бы ложный STOP на 7703 легитимных NULL) + пост-xfer
+зеркало; Q6 закрыт по коду (orphan-путь child ∉ стейдж не удаляет → механизм
+C STOP-детект остаётся). Барьеры выката: 6a0-lite; A-green/A-delta разводка
+(дельты из 1С всё ещё нет — verified=0) + override только по чеклисту;
+baseline то же окно дельты. Откат = §10.9-quater 8 пунктов. Контроль c4:
+11/11 правок дословно, вердикт «ДА, показывать». Внедрение — после «да»
+владельца. Числа: 12 прогонов армии, 4/4 волна-1 «не готов» → 4/4 волна-3
+сходимость; 16 отчётов docs/audit/fullb2-*.md; план 21.6 КБ. Доки:
+docs/audit/FULLB2_PLAN_2026-09-10.md; fullb2-audit-b1..b4; fullb2-plan-audit-p1..p4; fullb2-check-c1..c4
+
 ## 2026-09-10 (8) — HOT после выката Speed-II-2: постчек больше не сносит фазовые метки; SKIP-сбой виден в журнале [код]
 
 **[код]** (следствия V1/V2 по живому прогону). corpus_postcheck.sql: DELETE
