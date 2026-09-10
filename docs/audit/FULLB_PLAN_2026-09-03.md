@@ -252,7 +252,11 @@ M1 wall partial≪full (цифру после сухого нуля) · **M2 п�
 ANALYZE — actual rows по операторам на query_table/сыром CTE, ИЛИ прокси
 «порций=1 ∧ stage_rows≤K≪N»; wall в одиночку M2 не доказывает; члены
 count/order-сканов учитываются явно (4c)** · M3 unexpected-потери emb=0 вне
-дельты (M3 переформулирован: hash_kill в дельте — ожидаем, см. 1c) · M4 emb вне
+дельты (M3 переформулирован: hash_kill в дельте — ожидаем, см. 1c;
+**примечание 10.09:** M3/hash_kill в дельте объясним окном свежих маркеров
+`search_changed_rows` (`epoch(ts) > corpus_built_ts`); писательский full-маркер
+этапа 1∥3/3a добавит объяснение full-пересборки отдельной правкой — до тех пор
+плановая смена канона = STOP + one-shot `MERGE_VECTOR_REHASH_BYPASS` по RUNBOOK) · M4 emb вне
 дельты бит-в-бит · M5 multiset(content_hash‖row_key) partial-merge ≡ full · M6
 gone исчезают, соседи живы · M7 SKIP↔markers · M8 L20 Δmatch≥0 Δwrong≤0,
 coverage без дыр, rebuild_mode-отчёт заполнен. Не успех: «маркеры записались»,

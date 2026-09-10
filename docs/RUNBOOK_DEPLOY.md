@@ -880,6 +880,35 @@ curl -s -X POST http://127.0.0.1:${ASK_LISTEN_PORT:-8091}/ask -H 'Content-Type: 
 round-trip в проекте не делался ни разу. Прежде чем переводить на них резерв, это надо
 замерить (вопрос владельцу №46).
 
+### 10.9-bis Обход rehash-гейта (разовая операция)
+
+Гейт `hash_kill_unexplained` в `corpus_merge` стопит такт, если доля строк со
+сменой текста вне свежей дельты 1С (`epoch(search_changed_rows.ts) >
+corpus_built_ts`) превышает `MERGE_VECTOR_REHASH_TOLERANCE` (умолчание 0.5%).
+Легитимная плановая смена канона текста (миграция имён полей, массовый rewrite
+формы) — операция обслуживания, не путь коробки. Протокол:
+
+1. Бэкап emb parquet по канону `(src_table, row_key)`.
+2. Сверка `count` / `len(emb)=1024` с боевым.
+3. One-shot FAIL-CLOSED:
+   `systemctl stop 1c-serene-pipeline@<база>.timer`;
+   `systemctl set-environment MERGE_VECTOR_REHASH_BYPASS=1`;
+   `systemctl start 1c-serene-pipeline@<база>`;
+   `systemctl unset-environment MERGE_VECTOR_REHASH_BYPASS`;
+   `systemctl start 1c-serene-pipeline@<база>.timer`.
+   (prefix-env `VAR=1 systemctl start` в юните с EnvironmentFile НЕ работает —
+   переменная не доходит до ExecStart; только set-environment.)
+   При обрыве между `start` и `unset` BYPASS остаётся в manager env: **ПОСЛЕ
+   операции обязательно** `systemctl show-environment` без следа
+   `MERGE_VECTOR_REHASH_BYPASS` (финальная проверка протокола;
+   `systemctl show -p Environment` пуст — не годится).
+4. 🔴 **ЗАПРЕЩЕНО** писать `MERGE_VECTOR_REHASH_BYPASS` в
+   `/etc/1c-serene-pipeline-*.env` (прецедент LOSS 08.09: persistent bypass =
+   гейт выключен навсегда).
+5. После такта: `search_quality` ключ `rehash_gate` записан; cfg пересоздаётся
+   из env каждый такт — `cfg.rehash_bypass=false` при следующем **штатном**
+   старте без env (не проверять сразу после bypass-такта).
+
 ### 10.10 Процедура ручного такта v10 (оркестратор)
 
 🔴 **Условие №1:** векторы не теряются. Семантику `row_key` и `content_hash` существующих

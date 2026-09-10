@@ -1,3 +1,19 @@
+## 2026-09-10 (5) — Гейт необъяснённого hash_kill: STOP на массовую смену текста вне свежей дельты 1С [код]
+
+**[код]** `corpus_merge.sql`: ROW-LEVEL CTE `die_hash_rows` + `die_hash_unexplained`
+(вычет только свежих `search_changed_rows` через `bridge_row_matches` и окно
+`epoch(ts) > corpus_built_ts.v`); колонка `hash_kill_unexplained` в бюджете;
+отдельный SELECT CASE (не «векторов_умрёт») → `error(…§3.113…RUNBOOK…)`;
+метка `search_quality.rehash_gate`. `build.sh`: `MERGE_VECTOR_REHASH_TOLERANCE`
+(default 0.005) / `MERGE_VECTOR_REHASH_BYPASS` (default 0) в том же
+`CREATE tmp3_merge_cfg`. Замок `test_hash_kill_gate.py` (10 веток).
+Закрывает кейс 09.09: миграция регистра → content_hash ×1.43M → merge обнулил
+emb; vec-budget hash_kill не ловил (строка жива). Ряд зелёных тактов: hash_kill≈0,
+14 дней, n=194 («изменённых строк 0») — порог 0.5% тот же, что vector_loss.
+Обход — one-shot по RUNBOOK, не persistent env (прецедент LOSS 08.09).
+Числа: 1.43M hash_kill 09.09; tol=0.005; bypass default=0. Доки:
+sql/functions/utility#error; sql/functions/timestamp#epochtimestamp.
+
 ## 2026-09-10 (4) — Продакшен восстановлен полностью: досчёт на 5 картах, такт зелёный, бэкап векторов снят, 33ГБ чистки [замер] [код]
 
 **[замер]** Досчёт остатка 446 732 → **0 не-служебных**. Этапы: (1) тактовый

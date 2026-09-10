@@ -401,10 +401,24 @@ else
     1|true|TRUE|yes|YES) _vloss_bypass=true ;;
     *) _vloss_bypass=false ;;
   esac
+  # Порог необъяснённого hash_kill (смена текста вне свежей дельты 1С) —
+  # тот же 0.5%, что vector_loss. Обход — только one-shot
+  # MERGE_VECTOR_REHASH_BYPASS=1 по RUNBOOK (не в persistent env).
+  MERGE_VECTOR_REHASH_TOLERANCE="${MERGE_VECTOR_REHASH_TOLERANCE:-0.005}"
+  case "$MERGE_VECTOR_REHASH_TOLERANCE" in
+    ''|*[!0-9.]*|*.*.*) MERGE_VECTOR_REHASH_TOLERANCE=0.005 ;;
+  esac
+  MERGE_VECTOR_REHASH_BYPASS="${MERGE_VECTOR_REHASH_BYPASS:-0}"
+  case "$MERGE_VECTOR_REHASH_BYPASS" in
+    1|true|TRUE|yes|YES) _rehash_bypass=true ;;
+    *) _rehash_bypass=false ;;
+  esac
   psql "$DSN" -q -c "CREATE OR REPLACE TABLE tmp3_merge_cfg AS
     SELECT ${MERGE_CHUNK_ROWS}::BIGINT AS chunk_rows,
            ${MERGE_VECTOR_LOSS_TOLERANCE}::DOUBLE AS vector_loss_tol,
-           ${_vloss_bypass}::BOOLEAN AS vector_loss_bypass;" \
+           ${_vloss_bypass}::BOOLEAN AS vector_loss_bypass,
+           ${MERGE_VECTOR_REHASH_TOLERANCE}::DOUBLE AS rehash_tol,
+           ${_rehash_bypass}::BOOLEAN AS rehash_bypass;" \
     || fail "конфиг пачек слияния"
   psql "$DSN" -q -f corpus_merge.sql || fail "слияние корпуса"
 

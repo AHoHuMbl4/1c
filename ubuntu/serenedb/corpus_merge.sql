@@ -861,15 +861,22 @@ GROUP BY 1;
 CREATE TABLE IF NOT EXISTS tmp3_merge_cfg (
   chunk_rows BIGINT,
   vector_loss_tol DOUBLE,
-  vector_loss_bypass BOOLEAN
+  vector_loss_bypass BOOLEAN,
+  rehash_tol DOUBLE,
+  rehash_bypass BOOLEAN
 );
 ALTER TABLE tmp3_merge_cfg ADD COLUMN IF NOT EXISTS vector_loss_tol DOUBLE;
 ALTER TABLE tmp3_merge_cfg ADD COLUMN IF NOT EXISTS vector_loss_bypass BOOLEAN;
-INSERT INTO tmp3_merge_cfg (chunk_rows, vector_loss_tol, vector_loss_bypass)
-SELECT 1000000, 0.005, false
+ALTER TABLE tmp3_merge_cfg ADD COLUMN IF NOT EXISTS rehash_tol DOUBLE;
+ALTER TABLE tmp3_merge_cfg ADD COLUMN IF NOT EXISTS rehash_bypass BOOLEAN;
+INSERT INTO tmp3_merge_cfg (chunk_rows, vector_loss_tol, vector_loss_bypass,
+                            rehash_tol, rehash_bypass)
+SELECT 1000000, 0.005, false, 0.005, false
 WHERE (SELECT count(*) FROM tmp3_merge_cfg) = 0;
 UPDATE tmp3_merge_cfg SET vector_loss_tol = coalesce(vector_loss_tol, 0.005),
-                     vector_loss_bypass = coalesce(vector_loss_bypass, false);
+                     vector_loss_bypass = coalesce(vector_loss_bypass, false),
+                     rehash_tol = coalesce(rehash_tol, 0.005),
+                     rehash_bypass = coalesce(rehash_bypass, false);
 
 CREATE OR REPLACE TABLE tmp3_merge_vec_budget AS
 WITH rebuilt AS (
@@ -918,6 +925,22 @@ die_hash AS (
          AND NOT corpus_bmap_common_eq(o.bmap, n.bmap)
   WHERE o.emb IS NOT NULL
   GROUP BY 1
+),
+-- 🔴 ROW-LEVEL hash_kill (§3.113 / кейс 09.09: 1.43M emb=NULL после смены
+-- канона регистра имён). Тот же JOIN, что die_hash, БЕЗ GROUP BY; тонкая
+-- проекция (без emb/doc/bmap) — пик памяти на массовом срабатывании.
+-- Необъяснённые строки → гейт rehash ниже; emb_xfer НЕ вычитается;
+-- full-пересборку НЕ объясняем (писательского full-маркера ещё нет).
+die_hash_rows AS (
+  SELECT o.src_table, o.row_key,
+         coalesce((SELECT len(k.key_cols) FROM tmp3_key k
+                   WHERE k.entity = lower(o.src_table)), 0) AS n_seg
+  FROM old_full o
+  INNER JOIN new_full n
+          ON n.src_table = o.src_table AND n.row_key = o.row_key
+         AND n.ch IS DISTINCT FROM o.ch
+         AND NOT corpus_bmap_common_eq(o.bmap, n.bmap)
+  WHERE o.emb IS NOT NULL
 ),
 die_unmatched AS (
   SELECT o.src_table, count(*)::BIGINT AS unmatched_kill
@@ -977,6 +1000,23 @@ die_unexplained AS (
     AND NOT EXISTS (SELECT 1 FROM tmp3_merge_repost_delta r
                     WHERE r.src_table = o.src_table)
   GROUP BY 1
+),
+-- Необъяснённый hash_kill: строка сменила текст БЕЗ свежего маркера дельты 1С
+-- (epoch(ts) > corpus_built_ts.v). Старые маркеры истории НЕ объясняют
+-- (анти-ложный-PASS при смене канона). Сопоставление ТОЛЬКО через
+-- bridge_row_matches (corpus_init) — слепой row_key=key_text запрещён.
+die_hash_unexplained AS (
+  SELECT d.src_table, count(*)::BIGINT AS hash_kill_unexplained
+  FROM die_hash_rows d
+  WHERE NOT EXISTS (
+    SELECT 1 FROM search_changed_rows m
+    WHERE m.src_table = d.src_table
+      AND bridge_row_matches(d.row_key, m.key_text, d.n_seg)
+      AND epoch(m.ts)::BIGINT
+            > coalesce((SELECT v FROM search_quality
+                        WHERE k = 'corpus_built_ts' LIMIT 1), 0)::BIGINT
+  )
+  GROUP BY 1
 )
 -- 🔴 «УМРЁТ» = ОКОНЧАТЕЛЬНАЯ ПОТЕРЯ, А НЕ ПЕРЕСЧЁТ (правка 08.09 по указанию
 -- владельца «ручное — в пайплайн»; прежде гейт суммировал всё подряд и первый
@@ -988,13 +1028,15 @@ die_unexplained AS (
 --     ЛЕГИТМНОЙ УБЫЛИ (key_deleted_delta/key_collapse) — НЕ потеря;
 --   * прочий unmatched — контент исчез без объяснения: потеря, гейт STOPит
 --     (как при катастрофе 31.08).
-SELECT coalesce(w.src_table, s.src_table, x.src_table, h.src_table, u.src_table, du.src_table) AS src_table,
+SELECT coalesce(w.src_table, s.src_table, x.src_table, h.src_table,
+                u.src_table, du.src_table, hu.src_table) AS src_table,
        coalesce(w.векторов_было, 0::BIGINT) AS векторов_было,
        coalesce(x.векторов_спасено_картой, 0::BIGINT) AS векторов_спасено_картой,
        coalesce(s.векторов_живёт, 0::BIGINT) AS векторов_живёт,
        coalesce(h.hash_kill, 0::BIGINT) AS hash_kill,
        coalesce(u.unmatched_kill, 0::BIGINT) AS unmatched_kill,
        coalesce(du.n, 0::BIGINT) AS векторов_умрёт,
+       coalesce(hu.hash_kill_unexplained, 0::BIGINT) AS hash_kill_unexplained,
        CASE
          WHEN coalesce(u.unmatched_kill, 0) > 0
               AND EXISTS (SELECT 1 FROM tmp3_merge_rewrite_wave rw
@@ -1018,7 +1060,8 @@ FULL OUTER JOIN surviving s USING (src_table)
 FULL OUTER JOIN xfer x USING (src_table)
 FULL OUTER JOIN die_hash h USING (src_table)
 FULL OUTER JOIN die_unmatched u USING (src_table)
-FULL OUTER JOIN die_unexplained du USING (src_table);
+FULL OUTER JOIN die_unexplained du USING (src_table)
+FULL OUTER JOIN die_hash_unexplained hu USING (src_table);
 
 DELETE FROM search_quality WHERE k IN ('vector_loss_gate', 'vector_loss_bypass');
 INSERT INTO search_quality
@@ -1062,6 +1105,52 @@ SELECT 'vector_loss_bypass', 1,
        'обход гейта вектор-бюджета (MERGE_VECTOR_LOSS_BYPASS), потеря='
          || (SELECT coalesce(sum(векторов_умрёт), 0) FROM tmp3_merge_vec_budget)
 WHERE (SELECT vector_loss_bypass FROM tmp3_merge_cfg LIMIT 1);
+
+-- Гейт необъяснённого hash_kill (§3.113): массовая смена текста вне свежей
+-- дельты 1С → STOP ДО записи. Отдельный CASE, НЕ входит в «векторов_умрёт».
+-- Доки: sql/functions/utility#error; sql/functions/timestamp#epochtimestamp.
+DELETE FROM search_quality WHERE k = 'rehash_gate';
+INSERT INTO search_quality
+SELECT 'rehash_gate',
+       (SELECT coalesce(sum(hash_kill_unexplained), 0)
+        FROM tmp3_merge_vec_budget)::DOUBLE,
+       'необъяснённый hash_kill / всего='
+         || (SELECT count(*) FILTER (WHERE emb IS NOT NULL) FROM search_corpus)
+         || ' tol='
+         || (SELECT rehash_tol FROM tmp3_merge_cfg LIMIT 1);
+
+SELECT CASE
+  WHEN (SELECT rehash_bypass FROM tmp3_merge_cfg LIMIT 1)
+  THEN NULL
+  WHEN (SELECT count(*) FILTER (WHERE emb IS NOT NULL) FROM search_corpus) = 0
+  THEN NULL
+  WHEN (SELECT coalesce(sum(hash_kill_unexplained), 0)
+        FROM tmp3_merge_vec_budget)::DOUBLE
+         / (SELECT count(*) FILTER (WHERE emb IS NOT NULL) FROM search_corpus)
+       > (SELECT rehash_tol FROM tmp3_merge_cfg LIMIT 1)
+  THEN error(
+    'corpus_merge: массовая смена текста вне свежей дельты 1С — '
+    || (SELECT coalesce(sum(hash_kill_unexplained), 0) FROM tmp3_merge_vec_budget)
+    || ' из '
+    || (SELECT count(*) FILTER (WHERE emb IS NOT NULL) FROM search_corpus)
+    || ' (>'
+    || round(100.0 * (SELECT rehash_tol FROM tmp3_merge_cfg LIMIT 1), 3)
+    || '%): похоже на смену канона (§3.113). Бэкап emb по канону '
+    || '(src_table,row_key) + сверка + one-shot MERGE_VECTOR_REHASH_BYPASS=1 '
+    || 'по RUNBOOK; сущности: '
+    || (SELECT string_agg(
+                  src_table || ' unexplained=' || hash_kill_unexplained,
+                  '; '
+                )
+        FROM (
+          SELECT src_table, hash_kill_unexplained
+          FROM tmp3_merge_vec_budget
+          WHERE hash_kill_unexplained > 0
+          ORDER BY hash_kill_unexplained DESC
+          LIMIT 10
+        ) top)
+  )
+END;
 
 -- Гейт пройден (или пустой корпус) — теперь можно писать. Миграция content_hash:
 -- заполняем NULL без сброса emb, иначе MERGE увидит NULL≠hash и убьёт векторы.
