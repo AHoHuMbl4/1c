@@ -72,7 +72,12 @@ FROM s;
 
 -- След такта в БАЗЕ, а не только в журнале: по нему отвечающий сервис может судить о
 -- свежести данных (п. 17), а владелец — о том, что вообще происходило в последнем такте.
-DELETE FROM search_quality WHERE k LIKE 'build_%';
+-- Явный перечень: маска build_% срезала фазовые метки Speed-II-2 (build_phase:* /
+-- build_phase_sec:* — носитель M1/M2) на каждом такте. build_failed/build_degraded
+-- пишет corpus_build — сюда не входят.
+DELETE FROM search_quality WHERE k IN (
+  'build_ts', 'build_rows', 'build_noemb', 'build_noemb_all',
+  'build_res', 'build_sql_hash');
 INSERT INTO search_quality
             SELECT 'build_ts',    epoch(now())::BIGINT,                          'время конца такта'
 UNION ALL   SELECT 'build_rows',  count(*),                                      'строк корпуса' FROM search_corpus

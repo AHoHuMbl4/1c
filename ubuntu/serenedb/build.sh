@@ -343,6 +343,10 @@ SKIP_BUILD=$(psql "$DSN" -tA -c "SELECT CASE WHEN
        WHERE database_name = current_database()
          AND table_name IN ('tmp3_cls','tmp3_ent','tmp3_src','tmp3_corpus')) = 4
   THEN 1 ELSE 0 END" 2>/dev/null)
+# Пустой ответ (сбой psql / stderr сглотан) → else-ветка как раньше, но причина в журнале.
+if [ -z "$SKIP_BUILD" ]; then
+  echo "SKIP_BUILD запрос не ответил (полная пересборка)"
+fi
 
 # Скорость-II этап 4: allocator_background_threads на инстанс (не serened.conf).
 # Доки: configuration/overview#global-configuration-options (GLOBAL BOOLEAN);

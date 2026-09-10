@@ -17,6 +17,8 @@ import os
 ROOT = os.path.dirname(os.path.abspath(__file__))
 BUILD = os.path.join(ROOT, "corpus_build.sql")
 INIT = os.path.join(ROOT, "corpus_init.sql")
+POSTCHECK = os.path.join(ROOT, "corpus_postcheck.sql")
+BUILD_SH = os.path.join(ROOT, "build.sh")
 
 PASS, FAIL = 0, []
 
@@ -364,6 +366,24 @@ for _ph in ("t0", "numhint", "p_writer", "p_stats", "p_ref", "done"):
     t("фаза build_phase:%s" % _ph, _pos >= 0 and _pos > _prev, "pos=%d prev=%d" % (_pos, _prev))
     if _pos >= 0:
         _prev = _pos
+
+# --- E5: постчек не сносит build_phase:*; SKIP_BUILD пишет причину пустого ответа ---
+postcheck = open(POSTCHECK, encoding="utf-8").read()
+build_sh = open(BUILD_SH, encoding="utf-8").read()
+t("postcheck: нет LIKE 'build_%'",
+  "LIKE 'build_%'" not in postcheck)
+t("postcheck: DELETE build_* явным IN",
+  "DELETE FROM search_quality WHERE k IN (" in postcheck
+  and "'build_ts'" in postcheck[postcheck.find("DELETE FROM search_quality WHERE k IN ("):
+                                 postcheck.find("DELETE FROM search_quality WHERE k IN (") + 200]
+  and "'build_sql_hash'" in postcheck[postcheck.find("DELETE FROM search_quality WHERE k IN ("):
+                                      postcheck.find("DELETE FROM search_quality WHERE k IN (") + 200])
+t("corpus_build: build_phase-вставки живы",
+  "DELETE FROM search_quality WHERE k LIKE 'build_phase%'" in sql
+  and "'build_phase:t0'" in sql
+  and "'build_phase:done'" in sql)
+t("build.sh: echo при пустом SKIP_BUILD",
+  "SKIP_BUILD запрос не ответил (полная пересборка)" in build_sh)
 
 print("\n---", PASS, "ok,", len(FAIL), "fail ---")
 if FAIL:
