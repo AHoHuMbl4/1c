@@ -1849,6 +1849,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _trace_write("service", что, ms, status)
 
     today = time.strftime("%Y-%m-%d")
+    # Фаза «не рвать»: INTENT_MEMO пишется в z02 только после полного parse_intent;
+    # AskDeadline во время разбора (через ds_chat) memo не оставляет — записи нет.
     intent = parse_intent(question, today)
     apply_proven_period(intent, trusted=trusted, resolved=resolved)
     period_from_prior = False
@@ -2689,6 +2691,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             intent, question),
             question, intent)
         _fork_pool = event_filter_pool(_fork_pool, intent, diag)
+        if deadline_hit():
+            raise AskDeadline("deadline")
         try:
             _mbs = _measures_by_src(_fork_pool)
             _als = _aliases_by_src(_fork_pool)
@@ -2734,6 +2738,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 веток=diag["fork"]["srcs"], счёт_мс=diag["fork"]["cost_ms"])
             if len(_cls) > 1:
                 _fork_log(_cls, _mword or (intent.get("want") or ""))
+        except AskDeadline:
+            raise
         except Exception as _e:                         # noqa: BLE001
             _scan_err = _e
             diag["fork_error"] = str(_e)[:160]
@@ -3484,6 +3490,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _rows, _cls = {}, {}
         _mword = (intent.get("measure") or "").strip()
         _fwant = (intent.get("want") or "").strip()
+        if deadline_hit():
+            raise AskDeadline("deadline")
         try:
             # Исход B — по полному arb_pool (соперники развилки), не по cands[:16]:
             # ранний скан по отбору тянет посторонние классы (B8-01 регресс);
@@ -3537,6 +3545,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                 outcome_pool="arb_pool")
             шаг("детектор исходов", классов=len(_cls), пул=len(_out_pool),
                 счёт_мс=int((time.time() - _t_out) * 1000))
+        except AskDeadline:
+            raise
         except Exception as _e:                         # noqa: BLE001
             _scan_err = _e
             diag["fork_error"] = str(_e)[:160]
@@ -3610,6 +3620,95 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                  sec=round(time.time() - t0, 2))}
         # unique / empty — ниже обычный круг или одиночный ответ
 
+    # Speed-Ask A: ранний entity-clarify до arbiter×N (SPEED_ASK_PLAN §1.A; P1 №1-5,10).
+    # Точка — сразу перед циклом арбитра. Готовое меню побеждает deadline: opts
+    # собираются и возвращаются здесь, без raise AskDeadline (B-чек в цикле ниже
+    # уже не рвёт готовый clarify).
+    # Условия полного пути (любое истинно): no_arbiter; trusted (decision_id → trusted
+    # в answer); sales/catalog/stock/register_*_locked; wiki_arbiter_locked /
+    # wiki_verify==pick; writer_pair (writer_pair_proven появляется только после
+    # круга); одна src_table (слой measure z16, не entity-меню); односемейный
+    # tabpart/шапка без разных fork-атомов; cold sales_canon_src на простом
+    # sales-sum без list/rank.
+    # Отдельных pre-arbiter флагов нет: decision_id в answer(), proven/sole
+    # (sole/writer_pair_proven — пост-круг); «полный круг → один answer» —
+    # закрыто allow только на составном/доказанной неоднозначности источника.
+    if len(arb_pool) > 1 and not no_arbiter:
+        _ec_pool = list(arb_pool[:ARBITER_MAX])
+        _ec_q = " ".join(str(question or "").lower().replace("ё", "е").split())
+        _ec_report_lex = (
+            "полный отчет" in _ec_q
+            or "полного отчета" in _ec_q
+            or "и чего" in _ec_q)
+        _ec_composite = (
+            (intent.get("want") or "") == "list"
+            or _ec_report_lex
+            or rank_intent_from(intent, plan, question)
+            or sales_rank_engaged(intent, plan, question, arb_pool))
+        _ec_locks = (
+            diag.get("sales_canon_locked")
+            or diag.get("catalog_count_locked")
+            or diag.get("stock_canon_locked")
+            or diag.get("register_count_locked"))
+        _ec_wiki = (
+            bool(diag.get("wiki_arbiter_locked"))
+            or (bool(diag.get("wiki_hybrid_pick"))
+                and picked
+                and diag.get("wiki_verify") == picked[0]))
+        _ec_fams = {_family(x) for x in _ec_pool}
+        _ec_atom_fps = {
+            (a.get("fingerprint") if isinstance(a, dict) else None)
+            for a in ((diag.get("fork") or {}).get("atoms") or [])}
+        _ec_atom_fps.discard(None)
+        _ec_same_fam_no_atoms = (len(_ec_fams) <= 1 and len(_ec_atom_fps) <= 1)
+        _ec_one_src = len(set(_ec_pool)) <= 1
+        _ec_sales_cold = False
+        if not _ec_composite:
+            try:
+                _ec_sales_cold = bool(
+                    sales_sum_intent(intent, question)
+                    and sales_canon_src(
+                        list(cands or []) or list(arb_pool),
+                        intent, question, plan=plan))
+            except Exception:  # noqa: BLE001
+                _ec_sales_cold = False
+        _ec_ban = (
+            bool(trusted)
+            or bool(_ec_locks)
+            or _ec_wiki
+            or bool(diag.get("writer_pair"))
+            or _ec_one_src
+            or _ec_same_fam_no_atoms
+            or _ec_sales_cold)
+        _ec_src_ambig = (
+            (len(picked) > 1 or bool(diag.get("signals_disagree")))
+            and not _ec_locks
+            and not _ec_wiki
+            and not diag.get("signals_disagree_same_family"))
+        _ec_allow = _ec_composite or _ec_src_ambig
+        if _ec_allow and not _ec_ban:
+            try:
+                lab_by = {r[0]: r[1] for r in psql(
+                    "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                    % (TABLES, ", ".join(lit(c) for c in _ec_pool)))
+                    if r and r[0]}
+            except RuntimeError:
+                lab_by = {}
+            # preds=preds как у clarify :3848/:3749 — preds=None не используется
+            # (found/hints те же, что у полного пути).
+            opts = mk_opts(
+                [c for c in _ec_pool if c in lab_by], lab_by, marks, by,
+                match=match, preds=preds)
+            if len(opts) > 1:
+                diag["early_clarify_path"] = 1
+                diag["ambiguous"] = [o["src"] for o in opts]
+                шаг("ранний entity-clarify", вариантов=len(opts))
+                return {"partial": cut or None, "kind": "clarify",
+                        "text": clarify_say(question, opts, diag),
+                        "options": opts,
+                        "sources": [o["label"] for o in opts],
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+
     if len(arb_pool) > 1 and not no_arbiter:
         # 🔴 СНАЧАЛА АРБИТР, ПОТОМ ЧЕЛОВЕК. Порядок п. 21: ответ → уточняющий вопрос →
         # отказ. Спрашивать человека, не попытавшись ответить, — значит переложить на него
@@ -3619,6 +3718,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         cand_ans, cand_src = [], []
         mute = {}
         for c in arb_pool[:ARBITER_MAX]:
+            if deadline_hit():
+                raise AskDeadline("deadline")
             try:
                 # 🔴 `prior` ПРОБРАСЫВАЕТСЯ ВО ВСЕ ПОД-ВЫЗОВЫ КРУГА (15.08). Без него
                 # кандидаты считались по РАЗНЫМ окнам периода: внешний вызов унаследовал
@@ -3627,6 +3728,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 # была бы артефактом прибора, а не данных.
                 sub = answer(question, focus=c, measure_pick=measure_pick,
                              context=context, no_arbiter=True, prior=prior)
+            except AskDeadline:
+                raise
             except Exception:                  # noqa: BLE001 — один кандидат не должен
                 continue                       # ронять весь ответ
             if sub.get("kind") in ("answer", "figures") and (sub.get("text") or "").strip():
@@ -5844,6 +5947,8 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
             PV.ensure_partial_visible(out)
         _ask_journal_write(question, out, t0, trusted=trusted, user=user,
                            channel=channel, decision_id=decision_id, rid=rid)
+        # Часы rid: снять старт, чтобы _REQ_T0 не тёк между запросами.
+        _req_t0_clear(rid)
 
 
 
@@ -6070,6 +6175,8 @@ class Handler(BaseHTTPRequestHandler):
                                      context=context, prior=prior,
                                      decision_id=decision_id, user=user, channel=channel,
                                      mem_action=mem_action, rid=rid)
+                # Фаза «не рвать»: билеты только после успешного clarify-return;
+                # AskDeadline до seal_clarify → билетов нет. Journal — в finally.
                 if isinstance(out, dict) and out.get("options"):
                     out = seal_clarify(out, question, user=user)
                 out = attach_memory_shadow(out, user=user, action=mem_action,
@@ -6092,6 +6199,18 @@ class Handler(BaseHTTPRequestHandler):
                     out = stale_note(out, age, STALE_WARN_SEC, STALE_TEXT)
             _persist_ask_scope(out, question)
             return self._send(200, out)
+        except AskDeadline:
+            # Бюджет ASK_DEADLINE_SEC истёк: честный unavailable из ask (не текст моста).
+            # Готовое меню досюда не доходит — seal_clarify не звался; memo/билеты не пишем.
+            return self._send(503, {
+                "kind": "unavailable",
+                "text": ("Отвечаю дольше обычного — вопрос слишком широкий или система "
+                         "занята. Повторите вопрос или сузьте его (например, один вид "
+                         "продаж и период)."),
+                "sources": [],
+                "retry": True,
+                "diag": {"deadline_aborted": 1},
+            })
         except Exception as e:                          # noqa: BLE001
             # 🔴 ЧЕСТНЫЙ ОТКАЗ ПРИ СБОЕ (п. 18), А НЕ ВЫДУМАННЫЙ ОТВЕТ. Любое исключение
             # по дороге (модель молчит, база/движок недоступны, эмбеддер не отвечает)

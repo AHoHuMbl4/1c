@@ -353,6 +353,9 @@ def rerank(query, docs):
     """
     if not query or not docs or not RERANK_KEY:
         return []
+    # Часы запроса (rid из ContextVar): истёк бюджет — до urlopen не идём.
+    if deadline_hit():
+        raise AskDeadline("deadline")
     # 🔴 ФОРМАТ ЗАПРОСА — НАСТРОЙКА, А НЕ КОНСТАНТА. Прежде тут был зашит вид одного
     # облачного поставщика (`input`/`parameters`/`output.results`), и на любом другом
     # реранкере — включая свой, поднятый рядом с эмбеддером, — вызов молча падал бы в

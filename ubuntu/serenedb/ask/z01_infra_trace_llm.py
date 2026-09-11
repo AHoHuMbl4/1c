@@ -15,6 +15,10 @@ RESOLVER_DSN = os.environ.get("RESOLVER_DSN", "")
 RESOLVER_PW = os.environ.get("RESOLVER_PW", "")
 LISTEN_HOST = os.environ.get("ASK_LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("ASK_LISTEN_PORT", "8091"))
+# Бюджет времени одного запроса (часы по rid). Прод-инвариант цепочки таймаутов:
+# ASK_DEADLINE_SEC=88 < ASK_TIMEOUT=90 (мост) < requestTimeoutMs=100000 (шлюз).
+# mid-urlopen не отменяется: 88 — запас до моста 90, не гарантия обрыва сетевого вызова.
+ASK_DEADLINE_SEC = int(os.environ.get("ASK_DEADLINE_SEC", "88"))
 ASK_TOKEN = os.environ.get("ASK_TOKEN", "")
 MONEY_UNIT = os.environ.get("ASK_MONEY_UNIT", "")
 
@@ -66,6 +70,14 @@ ROWS_TO_MODEL = int(os.environ.get("ASK_ROWS_TO_MODEL", "25"))
 # rid+слой+шаг+мс+статус, без текста вопроса (приватность).
 _rid_ctx = contextvars.ContextVar("ask_rid", default="")
 
+# Старт часов запроса: rid -> time.monotonic(). Ставится в _rid_enter, снимается
+# при завершении (answer_checked.finally), чтобы словарь не тёк.
+_REQ_T0 = {}
+
+
+class AskDeadline(Exception):
+    """Истёк ASK_DEADLINE_SEC по rid — дальше работа не идёт, наружу unavailable."""
+
 
 def _new_rid():
     return secrets.token_hex(8)[:16]
@@ -86,7 +98,23 @@ def _rid_get():
 def _rid_enter(rid=None):
     rid = _rid_norm(rid)
     _rid_ctx.set(rid)
+    _REQ_T0[rid] = time.monotonic()
     return rid
+
+
+def _req_t0_clear(rid=None):
+    rid = rid or _rid_get()
+    if rid:
+        _REQ_T0.pop(rid, None)
+
+
+def deadline_hit(rid=None):
+    """True, если у rid задан старт и прошло больше ASK_DEADLINE_SEC."""
+    rid = rid or _rid_get()
+    t0 = _REQ_T0.get(rid) if rid else None
+    if t0 is None:
+        return False
+    return (time.monotonic() - t0) > ASK_DEADLINE_SEC
 
 
 def _trace_write(layer, step, ms, status="ok"):
@@ -534,6 +562,9 @@ def _ds_chat_body(messages, temperature=0, max_tokens=900):
 
 
 def ds_chat_post(body):
+    # rid — из ContextVar запроса (_rid_enter), не из глобала сессии.
+    if deadline_hit():
+        raise AskDeadline("deadline")
     req = urllib.request.Request(DS_BASE + "/v1/chat/completions",
                                  data=json.dumps(body).encode(), method="POST")
     req.add_header("Authorization", "Bearer " + DS_KEY)
