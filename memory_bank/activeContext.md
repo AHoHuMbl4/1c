@@ -119,7 +119,7 @@ p_doc, сторож B) → 5 (потребление rows+SKIP) → 6 (flip; П�
 И2 web. «реально покупают» 145 — скилл, решение №9.
 
 ### ЖИВОЕ СЕЙЧАС (срез 09.09; история — в CHANGELOG/progress)
-- 27B на OpenRouter (06.09): DEEPSEEK_* env; откат — baseUrl+uAI-ключ.
+- 27B OpenRouter (11.09 ПОЧИНЕНО: base без /v1 ×3 + DS_REASONING_OFF=1; замер: answer 107 лей + no_data; ⚠️ кредиты ~2,8/25 — пополнить; .12 лежит, путь не тронут).
 - HEAD=origin/main; вектора целы, бэкапы живы; restore-drill пройден.
 - **Пакет v10 (d6178ee):** A чанкование; B0 search_changed_rows; C embed_bulk (strict +
   REFRESH + smoke kNN); D wiki_alias SQL-only. Документ: .claude/state/plan-takt-fix-v10.md.
