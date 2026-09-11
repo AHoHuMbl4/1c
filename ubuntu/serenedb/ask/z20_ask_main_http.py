@@ -2229,14 +2229,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     cands = prefer_entity_for_sales(cands, intent, question)
     cands = prefer_entity_for_catalog_count(cands, intent, question)
     plan = {}
-    if stock_question_engaged(question, intent):
-        capable = balance_capable_or_registers()
-        cands = filter_stock_balance_sales_noise(cands, question, diag)
-        cands = filter_stock_goods_registers(cands, question, diag, intent=intent, plan=plan)
-        # [01.09 «один путь»] постановка stock_canon_locked убрана: замок —
-        # обходной выбор сущности. Пул чистится фильтрами, выбирает вики.
-    else:
-        cands = prefer_entity_for_stock(cands, question, intent)
     if K6R:
         _period0 = (intent or {}).get("period") or {}
         _has_period0 = bool(_period0.get("from") or _period0.get("to"))
@@ -2267,23 +2259,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         counts_for_model = entity_pick_counts_for_model(
             by, diag, intent, question)
         шаг("K6 v2", кандидатов=len(cands))
-    if stock_question_engaged(question, intent):
-        capable = balance_capable_or_registers()
-        cands = filter_stock_balance_sales_noise(cands, question, diag)
-        cands = filter_stock_goods_registers(cands, question, diag, intent=intent, plan=plan)
-        # [01.09 «один путь»] вторая постановка stock_canon_locked убрана.
-        named = stock_asks_named_product(question, intent)
-        if named:
-            _goods_cap = stock_goods_pool(capable)
-            cands = [c for c in cands if c in _goods_cap or c in capable]
-            cands = filter_balance_structural(cands, diag)
-        else:
-            _stock_locked = diag.get("stock_canon_locked")
-            if _stock_locked and _stock_locked not in cands:
-                cands = [_stock_locked] + list(cands)
-            cands = filter_balance_structural(cands, diag)
-            if not cands and _stock_locked:
-                cands = [_stock_locked]
     шаг("кандидаты собраны", всего=len(cands))
     # 🔴 «НА ЧТО НЕ ОТВЕЧАЕТ» — ВТОРАЯ ПОЛОВИНА ЗНАНИЯ УСТАНОВКИ, И ОНА НАКОНЕЦ ЧИТАЕТСЯ.
     # Установочный агент пишет про каждую сущность две половины: «на что отвечает»
@@ -2682,14 +2657,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # арбитра ×4), не вся база: иначе сотни несвязанных src с живым счётом
         # дают C с сотнями вариантов и секунды на SQL. Полный перечень cands —
         # по-прежнему источник отбора; детектор судит неоднозначность в голове.
-        _fork_pool = prefer_entity_for_stock(
-            prefer_entity_for_catalog_count(
+        _fork_pool = prefer_entity_for_catalog_count(
             prefer_entity_for_sales(
                 prefer_entity_for_rank(
                     list(cands[:max(ARBITER_MAX * 4, 16)]), intent, question),
                 intent, question),
-            intent, question),
-            question, intent)
+            intent, question)
         _fork_pool = event_filter_pool(_fork_pool, intent, diag)
         if deadline_hit():
             raise AskDeadline("deadline")
@@ -3299,7 +3272,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         arb_pool = prefer_entity_for_sales(
             arb_pool, intent, question, plan=plan)
     arb_pool = prefer_entity_for_catalog_count(arb_pool, intent, question)
-    arb_pool = prefer_entity_for_stock(arb_pool, question, intent)
     # Lock канона: один источник → period_empty / ответ, не clarify соперников.
     picked, arb_pool, doubt = sales_canon_force_pool(
         diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked"),
@@ -3656,8 +3628,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 and picked
                 and diag.get("wiki_verify") == picked[0]))
         _ec_fams = {_family(x) for x in _ec_pool}
+        # Отпечаток класса развилки — СПИСОК пар (`_fork_fp_diag`), а список в множество
+        # не кладётся: ключом становится его сериализация, иначе ранний clarify падает.
         _ec_atom_fps = {
-            (a.get("fingerprint") if isinstance(a, dict) else None)
+            (json.dumps(a.get("fingerprint"), sort_keys=True, default=str,
+                        ensure_ascii=False)
+             if isinstance(a, dict) else None)
             for a in ((diag.get("fork") or {}).get("atoms") or [])}
         _ec_atom_fps.discard(None)
         _ec_same_fam_no_atoms = (len(_ec_fams) <= 1 and len(_ec_atom_fps) <= 1)
