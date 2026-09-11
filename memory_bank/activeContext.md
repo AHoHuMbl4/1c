@@ -118,11 +118,11 @@ p_doc, сторож B) → 5 (потребление rows+SKIP) → 6 (flip; П�
 без владельца): 10 путей entity-clarify вне wiki (mapC); исход B контракта;
 И2 web. «реально покупают» 145 — скилл, решение №9.
 
-### ЖИВОЕ СЕЙЧАС (срез 09.09; история — в CHANGELOG/progress)
-- 27B OpenRouter (11.09 ПОЧИНЕНО: base без /v1 ×3 + DS_REASONING_OFF=1; замер: answer 107 лей + no_data; ⚠️ кредиты ~2,8/25 — пополнить; .12 лежит, путь не тронут).
-- HEAD=origin/main; вектора целы, бэкапы живы; restore-drill пройден.
-- **Пакет v10 (d6178ee):** A чанкование; B0 search_changed_rows; C embed_bulk (strict +
-  REFRESH + smoke kNN); D wiki_alias SQL-only. Документ: .claude/state/plan-takt-fix-v10.md.
+### ЖИВОЕ СЕЙЧАС (срез 11.09; история — в CHANGELOG/progress)
+- 27B OpenRouter (11.09 ПОЧИНЕНО: base без /v1 ×3 + DS_REASONING_OFF=1; ⚠️ кредиты ~2,8/25 — пополнить; .12 лежит, путь не тронут).
+- Web-контур Open WebUI ЖИВ (11.09: mcp-ask+шлюз подняты; ключ вики 200; ASK_TIMEOUT=90+русский отказ; braine-verify 1.1.8 EN-strip; замеры webui-slow-w1..w4). 🔴 ОСТАЛОСЬ ДОЛГО: rerank ~30/вопрос + INTENT_SAMPLES=5 (78с до clarify) — структурный пакет армией: план→аудит→стоп-точка.
+- HEAD=origin/main; вектора целы, бэкапы живы (полный снапшот 11.09); restore-drill пройден.
+- **Пакет v10 (d6178ee):** чанкование; search_changed_rows; embed_bulk strict+smoke; wiki_alias SQL-only. План: .claude/state/plan-takt-fix-v10.md.
 - **Красные замки пред-существующие** (доказано stash-прогоном): test_pipeline_doc
   5/8, test_build_solr_synonyms regexp_split — не чинить. Дев-serened :7890 — не наш
   (юнит вне polkit): решение владельца «забудь про дев, только okna». Приёмки — на окне.
