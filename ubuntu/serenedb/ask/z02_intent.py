@@ -381,7 +381,7 @@ def question_expects_accounting_data(intent, question, diag=None):
         return True
     if intent.get("terms"):
         return True
-    if diag.get("sales_canon_locked") or diag.get("sales_measure_canon"):
+    if diag.get("sales_measure_canon"):
         return True
     if sales_sum_intent(intent, question) or rank_question_text(question):
         return True

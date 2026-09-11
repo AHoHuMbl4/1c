@@ -97,35 +97,37 @@ _q_top = "Топ-5 товаров по продажам"
 _intent_top = {"want": "list", "kind": "товар", "amount": {"value": 5},
                "measure": "", "parse": {"assumed": []}}
 
-_sv = None
-if hasattr(A, "ASK_SALES_RANK_CANON"):
-    _sv = A.ASK_SALES_RANK_CANON
-    A.ASK_SALES_RANK_CANON = True
+# В3: sales_rank_resolve_measure / money-канон снесены — авто-мера запрещена.
+t("sales_rank_resolve_measure GONE (В3)",
+  not hasattr(A, "sales_rank_resolve_measure"))
+# measure_class_alts при money+qty → меню (не silent money)
+if hasattr(A, "measure_class_alts"):
+    _mc, _ma = A.measure_class_alts(_NAMES, _ALS)
+    t("M1 топ без меры → class alts меню (2)",
+      _mc is None and len(_ma) == 2, (_mc, _ma))
+    t("M2 class alts = money|qty представители",
+      set(_ma) == {"Всего", "Количество"}, _ma)
+else:
+    pending("M1–M2 measure_class_alts")
+# pick_measure / unresolved: >1 → ask, не winner
+_old_mof = getattr(A, "measures_of", None)
+_old_als = getattr(A, "measure_aliases_of", None)
+A.measures_of = lambda src: list(_NAMES)
+A.measure_aliases_of = lambda src: dict(_ALS)
 try:
-    if hasattr(A, "sales_rank_resolve_measure"):
-        # До патча B живой путь может вернуть Всего/Количество — это и есть
-        # дефект Э3 №8. После патча — (None, "role_ask").
-        sm, how = A.sales_rank_resolve_measure(
-            _NAMES, _intent_top, _q_top, _ALS,
-            src="accumulationregister_реализациятмц", axes=_AX_PROD)
-        if how == "role_ask" and sm is None:
-            t("M1 топ без меры → role_ask", True)
-        else:
-            # зафиксировать текущий дефект как известный до патча B
-            pending("M1 топ без меры → role_ask (сейчас how=%s sm=%s)"
-                    % (how, sm))
-        sm2, how2 = A.sales_rank_resolve_measure(
-            _NAMES,
-            {"want": "list", "kind": "товар", "measure": "деньгам"},
-            "Топ-5 товаров по деньгам", _ALS,
-            src="accumulationregister_реализациятмц", axes=_AX_PROD)
-        t("M2 топ по деньгам → money, не ask",
-          sm2 == "Всего" and how2 != "role_ask", (sm2, how2))
-    else:
-        pending("M1–M2 sales_rank_resolve_measure")
+    got, alts, how = A.pick_measure("src_x", _q_top, "")
+    t("M3 pick_measure без слова → не silent winner при >1",
+      (got is None and len(alts or []) > 1) or how in ("none", "ask"),
+      (got, alts, how))
+    um, ua = A.unresolved_quantity(None, [], "sum", "sum", _NAMES,
+                                   {"Всего": 10, "Количество": 3, "СуммаНДС": 1})
+    t("M4 unresolved >1 → меню (не names[0])",
+      um is None and len(ua) > 1, (um, ua))
 finally:
-    if _sv is not None:
-        A.ASK_SALES_RANK_CANON = _sv
+    if _old_mof is not None:
+        A.measures_of = _old_mof
+    if _old_als is not None:
+        A.measure_aliases_of = _old_als
 
 # ── Патч C: stock markers + subject ──────────────────────────────────────────
 q12 = "Сколько лежит на всех складах вместе?"

@@ -554,12 +554,11 @@ def main() -> int:
     t("LLM action_axis + empty axis_cats → keep (vacuum fail-open)",
       ok_llm and not diag_llm.get("wiki_none"))
 
-    # [02.09] collapse: пустая мера + sales-вид → money-канон, не count
+    # [02.09 / В2] collapse: пустая мера + sales-вид → money helper, не count
     _sales_q = "позавчера сколько было продаж"
     _sales_intent = {"kind": "продажи", "measure": "", "want": "count"}
     z21["sales_sum_intent"] = lambda intent, question="": True
     z21["sales_rank_engaged"] = lambda *a, **k: False
-    z21["sales_force_money_measure"] = lambda intent, question="": True
     z21["sales_money_measure"] = lambda names, alias_by=None: "Всего"
     z21["measures_of"] = lambda src: ["Всего", "Количество"]
     z21["measure_aliases_of"] = lambda src: {}

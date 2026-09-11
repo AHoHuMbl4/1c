@@ -879,8 +879,6 @@ def try_event_count_period_clarify(question, intent, diag, cut, t0, today=None,
     _sci = globals().get("sales_canon_intent")
     if callable(_sci) and _sci(intent, question, list(pool or [])):
         return None
-    if (diag or {}).get("sales_canon_locked"):
-        return None
     intent = intent if intent is not None else {}
     ry = entity_form_rolling_year(today)
     if ry.get("from") or ry.get("to"):
@@ -1003,9 +1001,8 @@ def event_movement_feats(diag):
 
 
 def event_filter_pool(cands, intent, diag):
-    if not event_path_active(intent) or not K6R:
-        return list(cands or [])
-    return K6R.event_movement_pool(cands, event_movement_feats(diag), intent)
+    # В2: entity-rank-v2 event_movement_pool снесён — pool без перестановки.
+    return list(cands or [])
 
 
 

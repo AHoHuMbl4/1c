@@ -259,7 +259,7 @@ def src_supports_question(src, intent, diag, by=None, question="", match=None):
         # Сюда доходим только если все группы matched (место A уже отказал иначе);
         # обрезанных резолвов («ПАНГЕЯ»→«П») не даёт сама гарда резолвера
         # (_shares_chars, подстроке нужен ≥3 знака) — отдельного порога не нужно.
-        if diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked"):
+        if diag.get("catalog_count_locked") or diag.get("stock_canon_locked"):
             return True
         if diag.get("sales_measure_canon"):
             return True
@@ -275,7 +275,7 @@ def src_supports_question(src, intent, diag, by=None, question="", match=None):
                 and not diag.get("by_vector")):
             return True
         return False
-    if diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked"):
+    if diag.get("catalog_count_locked") or diag.get("stock_canon_locked"):
         return True
     if diag.get("sales_measure_canon"):
         return True
@@ -345,7 +345,7 @@ def question_expects_accounting_data(intent, question, diag=None):
         return True
     if intent.get("terms"):
         return True
-    if diag.get("sales_canon_locked") or diag.get("sales_measure_canon"):
+    if diag.get("sales_measure_canon"):
         return True
     if sales_sum_intent(intent, question) or rank_question_text(question):
         return True
@@ -389,9 +389,7 @@ def kind_has_corpus_support(kind):
     try:
         if psql("SELECT 1 FROM alias_idx WHERE aliases @@ %s LIMIT 1" % lit(kind)):
             return True
-        if K6R:
-            return bool(K6R.stem_overlap_srcs(
-                psql, lit, kind, "catalog_%", stem_dict=STEM_DICT))
+        # В2: entity-rank-v2 stem_overlap_srcs снесён — без fallback по stem-rank.
     except RuntimeError:
         return True
     return False
@@ -430,9 +428,8 @@ def unresolved_quantity(measure, alts, want, compute, names, totals_by=None):
         return None, []
     if len(names) == 1:
         return names[0], []
-    if measure_ambiguous(names, totals_by or {}):
-        return None, names
-    return names[0], []
+    # В3 / формула №15: >1 имени — только меню, не names[0] (даже при равных итогах).
+    return None, names
 
 
 def mute_measure_blocks(sole, mute, cand_src):
@@ -611,27 +608,18 @@ def pick_measure(src_table, question, word):
     #     СуммаВзаиморасчетовПоТаре. Реранкер выбирал молча и ошибался: на верно выбранной
     #     сущности ответ дал 71 045 277,59 вместо 73 181 157,68 — сущность та, величина нет.
     names = measures_of(src_table)
-    wl = (word or "").strip().lower()
     got, alts, how = measure_choice(names, word,
                                     alias_by=measure_aliases_of(src_table))
     if how != 'rerank':
         return (got, alts, how)
-    idx = rerank(word, names)
-    ranked = [names[i] for i in idx] if idx else names
-    # БАЗОВАЯ ВЕЛИЧИНА ПРЕДПОЧТИТЕЛЬНЕЕ УТОЧНЁННОЙ, когда слово общее. У регистра бухучёта
-    # величины вложены: «Сумма» — база, «СуммаВРDr»/«СуммаНУCr» — её частные виды (разницы,
-    # налоговый учёт, дебет/кредит). Имя базы — ПРЕФИКС имён частных, это структурный факт,
-    # а не список. На «обороты»/«сумма» реранкер путался и брал частный вид — [замер 28.07]
-    # «обороты» → «СуммаВРDr». Если верхний по рангу — частный вид, а его база тоже в
-    # списке и в вопросе нет её уточнителя, берём базу.
-    top = ranked[0]
-    base = next((n for n in names if n != top and top.startswith(n)
-                 and sum(1 for m in names if m != n and m.startswith(n)) >= 2), None)
-    if base and base.lower() not in wl:
-        qualifier = top[len(base):].lower()
-        if qualifier and qualifier not in wl:
-            return (base, [], 'base')
-    return (top, [], 'rerank')
+    # В3: how∈{rerank,base}-winner при >1 мере запрещён — только меню (how=ask/alts).
+    # Реранкер/база больше не выбирают молча (п. 12 / формула №15 ступень 4).
+    if len(names) > 1:
+        fits = list(alts) if len(alts or []) > 1 else list(names)
+        return (None, fits, 'ask')
+    if names:
+        return (names[0], [], 'single')
+    return (None, [], 'none')
 
 
 register_zone('ask.z16_veto_pick_entity', globals())

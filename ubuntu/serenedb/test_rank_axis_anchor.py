@@ -52,13 +52,19 @@ t("rank measure skip when measure set",
 t("rank measure skip on sum",
   A.rank_measure_hint(names, {"want": "sum"}, "сколько всего") is None)
 
-# --- остаток: универсальный путь (22.08), ранний no_data снят ---
+# --- остаток: intent-путь (не слова вопроса) ---
 t("stock balance question",
-  A.question_asks_stock_balance("какого товара больше всего на складе?"))
+  A.question_asks_stock_balance(
+      "какого товара больше всего на складе?",
+      intent={"want": "list", "kind": "склад"}))
 t("movement question not stock",
-  not A.question_asks_stock_balance("какого товара больше всего по реализации"))
+  not A.question_asks_stock_balance(
+      "какого товара больше всего по реализации",
+      intent={"want": "list", "kind": "продажи"}))
 t("какого: not named (question word)",
-  not A.stock_asks_named_product("какого товара больше всего на складе?"))
+  not A.stock_asks_named_product(
+      "какого товара больше всего на складе?",
+      intent={"want": "list", "kind": "склад", "terms": []}))
 A._BALANCE_MAP.update({"at": time.time(), "rows": [
     ("accountingregister_x", "accounting", False, True, True, True),
 ]})
@@ -102,7 +108,8 @@ intent_sale = {"want": "sum", "kind": "товар", "amount": {}}
 t("rank intent «продали за всё время»",
   A.rank_intent_from(intent_sale, {}, "какого товара больше всего продали за всё время?"))
 hint_sale = A.rank_measure_hint(
-    names, intent_sale, "какого товара больше всего продали за всё время?")
+    names, {"want": "list", "kind": "товар", "amount": {}},
+    "какого товара больше всего продали за всё время?")
 t("rank measure «продали» → Количество", hint_sale == "Количество", hint_sale)
 
 # --- hotfix: count_kind не на rank ---
@@ -110,32 +117,9 @@ src = A.ask_source()
 t("compose: count_kind закрыт на rank",
   'if kw and slot_mode != "rank":' in src)
 
-# --- prefer entity: табчасть не первая ---
-class _Fake:
-    pass
-
-
-def _fake_psql(q):
-    if "written_by IN" in q:
-        return [("accumulationregister_реализациятмц",)]
-    if "parent, written_by" in q or "parent FROM" in q:
-        return [
-            ("document_реализациятмц_номенклатура", "document_реализациятмц", ""),
-            ("accumulationregister_реализациятмц", "", ""),
-        ]
-    raise RuntimeError("no db")
-
-
-_old_psql = A.psql
-A.psql = _fake_psql
-try:
-    got = A.prefer_entity_for_rank(
-        ["document_реализациятмц_номенклатура", "accumulationregister_реализациятмц"],
-        intent_sale, "какого товара больше всего продали за всё время?")
-    t("prefer rank: регистр перед табчастью",
-      got[0] == "accumulationregister_реализациятмц", got)
-finally:
-    A.psql = _old_psql
+# --- prefer entity: снесён в В2 — негатив ---
+t("prefer_entity_for_rank GONE (В2)",
+  not hasattr(A, "prefer_entity_for_rank"))
 
 
 # --- cd1789b follow-up: gate bad float → 503 на шаг() ---
@@ -172,29 +156,9 @@ try:
 except TypeError as e:
     t("answer шаг: preview на float-bad не падает", False, e)
 
-# --- prefer: две табчасти → регистр через written_by ---
-def _fake_psql2(q):
-    if "written_by IN" in q:
-        return [("accumulationregister_реализациятмц",)]
-    if "parent, written_by" in q or "parent FROM" in q:
-        return [
-            ("document_реализациятмц_номенклатура", "document_реализациятмц", ""),
-            ("document_передача_номенклатура", "document_передача", ""),
-        ]
-    raise RuntimeError("no db")
-
-
-_old2 = A.psql
-A.psql = _fake_psql2
-try:
-    q_all = "какого товара больше всего продали за всё время?"
-    got2 = A.prefer_entity_for_rank(
-        ["document_реализациятмц_номенклатура", "document_передача_номенклатура"],
-        intent_sale, q_all)
-    t("prefer all-child: регистр первым",
-      got2 and got2[0] == "accumulationregister_реализациятмц", got2)
-finally:
-    A.psql = _old2
+# --- prefer all-child: снесён в В2 ---
+t("prefer_entity_for_rank still GONE",
+  not hasattr(A, "prefer_entity_for_rank"))
 
 
 # --- e82abb5 follow-up: 217.10 в rank-тексте, детерминированный топ-1 ---
@@ -288,11 +252,14 @@ t("rank tail: count worded", "всего записей:" in (demo_full or ""), 
 t("rank tail: нет «· 1558»/«· 77557»", not re.search(r"·\\s*\\d", demo_full or ""),
   demo_full)
 
-# --- rank_measure_hint: _rank_wants_quantity ---
+# --- rank_measure_hint: _rank_wants_quantity (intent, не слова) ---
 t("_rank_wants_quantity: товар + больше всего",
-  A._rank_wants_quantity("какого товара больше всего передали?"), "")
+  A._rank_wants_quantity(
+      "какого товара больше всего передали?",
+      intent={"want": "list", "kind": "товар"}), "")
 t("_rank_wants_quantity: без слова товар",
-  not A._rank_wants_quantity("сколько продали за месяц?"), "")
+  not A._rank_wants_quantity("сколько продали за месяц?",
+                             intent={"want": "sum"}), "")
 
 # --- числа в именах групп заземлены ---
 AGG_NAME = {
@@ -315,41 +282,12 @@ _ok_n3, _bad_n3 = A.gate(
     "всего 777 штук", SEEN_NAME, AGG_NAME, [1], [], money=True, slot_mode="rank")
 t("name nums: 777 вне полей/имён отвергнуто", not _ok_n3, _bad_n3)
 
-# --- prefer: три табчасти, регистр по written_by ---
-def _fake_psql3(q):
-    if "written_by IN" in q:
-        return [("accumulationregister_реализациятмц",)]
-    if "parent, written_by" in q:
-        return [
-            ("document_реализациятмц_номенклатура", "document_реализациятмц", ""),
-            ("document_передачаврознице_номенклатура", "document_передачаврознице", ""),
-            ("document_реализациятмц_массабрутто", "document_реализациятмц", ""),
-        ]
-    raise RuntimeError("no db")
-
-_old3 = A.psql
-A.psql = _fake_psql3
-try:
-    q3 = "какого товара больше всего продали за всё время?"
-    c3 = [
-        "document_реализациятмц_номенклатура",
-        "document_передачаврознице_номенклатура",
-        "document_реализациятмц_массабрутто",
-    ]
-    got3 = A.prefer_entity_for_rank(c3, intent_sale, q3)
-    t("prefer 3 tabparts: регистр первый",
-      got3 and got3[0] == "accumulationregister_реализациятмц", got3)
-    t("prefer 3 tabparts: табчасти сняты",
-      not any(x.startswith("document_") and A.prefer_entity_for_rank.__name__
-              for x in got3),
-      [x for x in got3 if x.startswith("document_")])
-finally:
-    A.psql = _old3
+# --- prefer 3 tabparts: снесён в В2 ---
+t("prefer_entity_for_rank 3-tab GONE",
+  not hasattr(A, "prefer_entity_for_rank"))
 
 
-
-
-# --- 22.08: live okna rank question + row-grain gate fallback ---
+# --- 22.08: live okna rank; gate fallback снесён в В3 ---
 _q_live = "что лучше всего продавалось на этой неделе?"
 t("rank_question_text: лучше+продав", A.rank_question_text(_q_live))
 t("rank_intent from live q",
@@ -357,28 +295,10 @@ t("rank_intent from live q",
 t("total skips axis off for rank",
   not A.total_question_skips_axis({"want": "sum"}, "Количество",
                                   {"clarify": "axis"}, {"compute": "sum"}, _q_live))
-_agg_row = {"grain": "row", "count": 728, "sum": 31009.32, "measure": "Количество",
-            "groups": None}
-_grp_agg = {"grain": "group", "col": "refs_map.ТМЦ", "n_groups": 1,
-            "groups": [{"name": "Товар А", "value": 420.0, "count": 10}],
-            "measure": "Количество", "sum": 420.0}
-_called = []
-def _fake_agg(*a, **k):
-    _called.append(a)
-    return dict(_grp_agg)
-_old_agg = A.aggregate_groups
-A.aggregate_groups = _fake_agg
-_old_res = A.rank_axis_resolve
-A.rank_axis_resolve = lambda *a, **k: ("refs_map.ТМЦ", [])
-try:
-    fb = A.rank_gate_fallback_answer(
-        _q_live, _agg_row, "accumulationregister_реализациятмц", "", {}, "Количество",
-        True, {"want": "sum"}, {"compute": "sum"}, {}, [], {}, time.time(), "", "Количество")
-    t("rank_gate_fallback: row agg → answer", fb and fb.get("kind") == "answer", fb)
-    t("rank_gate_fallback: reaggregate called", bool(_called), _called)
-finally:
-    A.aggregate_groups = _old_agg
-    A.rank_axis_resolve = _old_res
+t("rank_gate_fallback_answer GONE (В3)",
+  not hasattr(A, "rank_gate_fallback_answer"))
+t("rank_deterministic_answer GONE (В3)",
+  not hasattr(A, "rank_deterministic_answer"))
 
 # slot_mode: rank intent без grain=group
 _sm2 = A.answer_slot_mode("sum", "sum", form="number", grain="row")
@@ -396,8 +316,7 @@ _sm = A.answer_slot_mode(_int.get("want"), _plan.get("compute"), form=_form, gra
 if A.rank_intent_from(_int, _plan, _q) and _sm == "sum":
     _sm = "rank"
 
-# --- 23.08 okna: rank axis auto (compute=max, multi kind_hits → ТМЦ, не clarify) ---
-# 24.08: ось — pick/rerank по вопросу (не product_axis_pref по именам колонок).
+# --- В3: ≥2 оси pick → меню (не auto ТМЦ) ---
 _axes6 = [
     {"col": "ВидДеятельности", "target_src": "catalog_видыдеятельности"},
     {"col": "Договор", "target_src": "catalog_договоры"},
@@ -409,15 +328,17 @@ _plan_max = {"compute": "max", "quantity": "Количество"}
 _old_pick_ax = A.rank_axis_pick
 A.rank_axis_pick = lambda q, k, axes: ["ТМЦ", "Договор"]
 try:
-    _pcol = A.rank_product_axis_col(
+    _pcol, _palts = A.rank_axis_resolve(
         "accumulationregister_реализациятмц", _axes6, _int_w, _q_live, _plan_max)
 finally:
     A.rank_axis_pick = _old_pick_ax
-t("rank week: product axis col", _pcol == "ТМЦ", _pcol)
+t("rank week: ≥2 pick → меню (не auto col)",
+  _pcol is None and "ТМЦ" in (_palts or []) and "Договор" in (_palts or []),
+  (_pcol, _palts))
 import serene_axis as _ax
-_gd6 = _ax.decide_grain(_axes6, [_pcol], {}, "max", False, rank_intent=True)
-t("rank week: grain group on ТМЦ", _gd6.get("grain") == "group"
-  and _gd6.get("col") == "ТМЦ" and not _gd6.get("clarify"), _gd6)
+_gd6 = _ax.decide_grain(_axes6, [], {}, "max", False, rank_intent=True)
+t("rank week: без hits → clarify axis",
+  _gd6.get("clarify") == "axis", _gd6)
 _gd_bad = _ax.decide_grain(_axes6, [a["col"] for a in _axes6], {}, "max",
                             False, rank_intent=True)
 t("rank week: multi hits would clarify", _gd_bad.get("clarify") == "axis", _gd_bad)

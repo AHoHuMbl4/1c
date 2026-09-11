@@ -279,6 +279,10 @@ def main() -> int:
       and "register_count_src(cands" not in z20_patched
       and "stock_canon_src(cands" not in z20_patched
       and "catalog_count_src(cands" not in z20_patched)
+    t("В2: z20 без sales_canon_locked",
+      "sales_canon_locked" not in z20_patched)
+    t("В2: z21 без bypass sales_canon_locked",
+      "sales_canon_locked" not in Z21.read_text(encoding="utf-8"))
     t("bootstrap net-distinct in no_axis_member",
       "stock_net_distinct" in z20_patched
       and "no_axis_member" in z20_patched)

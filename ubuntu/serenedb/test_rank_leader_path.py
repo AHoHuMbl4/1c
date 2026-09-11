@@ -4,12 +4,12 @@
 Замки:
   · sales_compare не крадёт «лучше всего» (живой дефект okna 24.08);
   · compare «неделя лучше прошлой» остаётся compare;
-  · rank_axis_resolve: pick/rerank по вопросу → ось; две правдоподобные → лидер+люк;
-  · предмет продажи (ТМЦ+Договоры) → лидер ТМЦ + люк Договоры;
-  · клиент → ось Контрагент;
+  · rank_axis_resolve: pick/rerank по вопросу → ось; две+ правдоподобные → меню (None, alts);
+  · предмет продажи (ТМЦ+Договоры) → меню, не auto col;
+  · клиент → ось Контрагент (одна ясная);
   · нет оси → (None, pool), не «тихо row»;
   · rank_leader_answer_text / atom несут имя из groups;
-  · rank_deterministic_answer: row agg → reaggregate + имя в text;
+  · rank_deterministic_answer / rank_gate_fallback — снесены (В3);
   · decide_grain: rank + 1 col → group; rank + много без hits → clarify.
 
 Запуск: python3 ubuntu/serenedb/test_rank_leader_path.py
@@ -112,22 +112,25 @@ try:
     col_sale, alts_sale = A.rank_axis_resolve(
         "accumulationregister_реализациятмц", _axes_sale,
         {"kind": "продажи"}, q_rank)
-    t("предмет продажи: лидер ТМЦ + люк Договоры",
-      col_sale == "ТМЦ" and alts_sale == ["Договор"], (col_sale, alts_sale))
+    t("предмет продажи: ≥2 оси → меню (не auto)",
+      col_sale is None and set(alts_sale or []) == {"ТМЦ", "Договор"},
+      (col_sale, alts_sale))
 
     col2, alts2 = A.rank_axis_resolve(
         "accumulationregister_реализациятмц", _axes,
         {"kind": "продажи"}, q_rank)
-    t("resolve продажи → ТМЦ лидер (Договор в люке)",
-      col2 == "ТМЦ" and "Договор" in (alts2 or []), (col2, alts2))
+    t("resolve продажи → меню (ТМЦ+Договор), не лидер",
+      col2 is None and "ТМЦ" in (alts2 or []) and "Договор" in (alts2 or []),
+      (col2, alts2))
 
     _axes2 = _axes + [{"col": "НоменклатурнаяГруппа",
                        "target_src": "catalog_номенклатурныегруппы"}]
     col3, alts3 = A.rank_axis_resolve(
         "accumulationregister_реализациятмц", _axes2,
         {"kind": "продажи"}, q_rank)
-    t("две+ оси pick → лидер + люк",
-      col3 == "ТМЦ" and "НоменклатурнаяГруппа" in (alts3 or []),
+    t("две+ оси pick → меню (не лидер+люк)",
+      col3 is None and "ТМЦ" in (alts3 or [])
+      and "НоменклатурнаяГруппа" in (alts3 or []),
       (col3, alts3))
 
     # Без сигнала pick/hits/rerank — честный None + pool (не silent first).
@@ -184,38 +187,17 @@ t("render_atom_pair несёт имя",
   "Item-A" in (A.render_atom_pair(atom) or ""), A.render_atom_pair(atom))
 
 
-# ── deterministic: row → reaggregate ─────────────────────────────────────────
-_called = []
-
-
-def _fake_agg(src, match, preds, measure, col, k, compute=None, members=None):
-    _called.append(col)
-    return dict(AGG, col=col)
-
-
-_old_agg = A.aggregate_groups
-_old_pick2 = A.rank_axis_pick
-A.aggregate_groups = _fake_agg
-A.rank_axis_pick = _fake_axis_pick
-try:
-    fb = A.rank_deterministic_answer(
-        q_rank, {"grain": "row", "sum": 100.0, "count": 5, "measure": "Количество"},
-        "accumulationregister_реализациятмц", "", {}, "Количество", False,
-        intent_sale, {"compute": "sum"}, {}, _axes, {}, time.time(), "",
-        "Количество")
-    t("deterministic: kind=answer", fb and fb.get("kind") == "answer", fb)
-    t("deterministic: имя в text",
-      fb and "Item-A" in (fb.get("text") or ""), fb and fb.get("text"))
-    t("deterministic: SQL-ось вызвана", "ТМЦ" in _called, _called)
-    t("deterministic: atom с именем",
-      fb and fb.get("atom") and "Item-A" in str(fb["atom"].get("measure_label")),
-      fb.get("atom") if fb else None)
-    t("deterministic: люк Договоры в options",
-      fb and any(o.get("distinct_by") == "Договор" for o in (fb.get("options") or [])),
-      fb.get("options") if fb else None)
-finally:
-    A.aggregate_groups = _old_agg
-    A.rank_axis_pick = _old_pick2
+# ── В3: deterministic/gate_fallback снесены (реранк не вердикт) ──────────────
+t("rank_deterministic_answer GONE",
+  not hasattr(A, "rank_deterministic_answer"))
+t("rank_gate_fallback_answer GONE",
+  not hasattr(A, "rank_gate_fallback_answer"))
+_z20 = open(__file__.replace("test_rank_leader_path.py",
+                             "ask/z20_ask_main_http.py"), encoding="utf-8").read()
+t("0 call-site rank_deterministic_answer in z20",
+  "rank_deterministic_answer" not in _z20)
+t("0 call-site rank_gate_fallback_answer in z20",
+  "rank_gate_fallback_answer" not in _z20)
 
 
 # ── decide_grain ─────────────────────────────────────────────────────────────

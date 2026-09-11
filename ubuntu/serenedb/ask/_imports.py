@@ -38,7 +38,3 @@ try:
     import serene_axis
 except ImportError:
     serene_axis = None
-try:
-    import entity_rank_v2 as K6R
-except ImportError:
-    K6R = None

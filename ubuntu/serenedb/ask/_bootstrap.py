@@ -53,24 +53,8 @@ def _patch_z20_wiki_primary(text: str) -> str:
     """
     # Post-pick stock_canon: не глушить при wiki_hybrid_pick, если уже stock_override
     # или stock_canon_locked (wiki catalog → takeover регистра).
-    _stock_old = (
-        "            and not diag.get(\"sales_canon_locked\")\n"
-        "            and not diag.get(\"register_count_locked\")\n"
-        "            and not catalog_count_question(intent, question)\n"
-        "            and not catalog_kind_total_question(intent, question)\n"
-        "            and stock_question_engaged(question, intent)):")
-    _stock_new = (
-        "            and not diag.get(\"sales_canon_locked\")\n"
-        "            and not diag.get(\"register_count_locked\")\n"
-        "            and not catalog_count_question(intent, question)\n"
-        "            and not catalog_kind_total_question(intent, question)\n"
-        "            and (not diag.get(\"wiki_hybrid_pick\")\n"
-        "                 or diag.get(\"wiki_pick\") == \"stock_override\"\n"
-        "                 or diag.get(\"stock_canon_locked\"))\n"
-        "            and stock_question_engaged(question, intent)):")
-    if _stock_old in text and "wiki_pick\") == \"stock_override\"" not in text:
-        text = text.replace(_stock_old, _stock_new, 1)
-    elif ("and not diag.get(\"wiki_hybrid_pick\")\n"
+    # В2: sales_canon_locked убран из тракта; stock_override-ветка ищет wiki_hybrid.
+    if ("and not diag.get(\"wiki_hybrid_pick\")\n"
           "            and stock_question_engaged(question, intent)):") in text:
         text = text.replace(
             "            and not diag.get(\"wiki_hybrid_pick\")\n"
@@ -81,18 +65,7 @@ def _patch_z20_wiki_primary(text: str) -> str:
             "            and stock_question_engaged(question, intent)):",
             1,
         )
-
-    _cat_old = (
-        "            and not diag.get(\"sales_canon_locked\")\n"
-        "            and not diag.get(\"stock_canon_locked\")):\n"
-        "        _cat = catalog_count_src(cands, intent, question)")
-    _cat_new = (
-        "            and not diag.get(\"sales_canon_locked\")\n"
-        "            and not diag.get(\"stock_canon_locked\")\n"
-        "            and not diag.get(\"register_count_locked\")):\n"
-        "        _cat = catalog_count_src(cands, intent, question)")
-    if _cat_old in text:
-        text = text.replace(_cat_old, _cat_new, 1)
+    # catalog_count_src / sales_canon_locked post-pick — снесены в В2; cat-патч no-op.
 
     # Net-distinct ДО ordinary aggregate в ветке no_axis_member (Q1/Q2 → 13322).
     # Триггер: stock_canon_locked ИЛИ stock_count_aggregate_without_subject —
@@ -141,100 +114,6 @@ def _patch_z20_wiki_primary(text: str) -> str:
         "                intent, question, match, preds, diag)\n")
     if _net2_old in text:
         text = text.replace(_net2_old, _net2_new, 1)
-
-    # Measure clarify: stock_canon_locked один достаточен (без stock_question_engaged).
-    _meas_old = (
-        "    if (diag.get(\"stock_canon_locked\") and stock_question_engaged(question, intent)):\n")
-    _meas_new = (
-        "    if diag.get(\"stock_canon_locked\"):\n")
-    if _meas_old in text:
-        text = text.replace(_meas_old, _meas_new, 1)
-    _skip_old = (
-        "    if (stock_question_engaged(question, intent)\n"
-        "            and question_has_aggregate_total_marker(question, intent, plan)\n"
-        "            and not diag.get(\"sales_measure_canon\")):\n"
-        "        measure_alts = []\n"
-        "        diag[\"stock_skip_measure_clarify\"] = True\n")
-    _skip_new = (
-        "    if ((diag.get(\"stock_canon_locked\")\n"
-        "            or (stock_question_engaged(question, intent)\n"
-        "                and question_has_aggregate_total_marker(question, intent, plan)))\n"
-        "            and not diag.get(\"sales_measure_canon\")):\n"
-        "        measure_alts = []\n"
-        "        diag[\"stock_skip_measure_clarify\"] = True\n")
-    if _skip_old in text:
-        text = text.replace(_skip_old, _skip_new, 1)
-
-    # Rank-fold measure clarify перекрывал stock_skip ([замер :8092] Q1
-    # stock_skip=True, но clarify кол-во/сумма/13322). При каноне остатка —
-    # не fold, а qty + net.
-    _rank_fold_old = (
-        "    if (serene_axis and grain_dec.get(\"form\") in (\"rank\", \"compare\")\n"
-        "            and not measure\n"
-        "            and not measure_already_proven(trusted, resolved, measure_pick)):\n")
-    _rank_fold_new = (
-        "    if (diag.get(\"stock_canon_locked\")\n"
-        "            and not stock_asks_named_product(question, intent)\n"
-        "            and (intent.get(\"want\") or \"\") in (\"count\", \"\")):\n"
-        "        grain_dec = {\"grain\": \"row\", \"col\": None, \"form\": \"number\",\n"
-        "                     \"named_gis\": [], \"clarify\": None}\n"
-        "        diag[\"axis_clarify_skipped\"] = \"stock_canon_count\"\n"
-        "        if not measure:\n"
-        "            _mq, _, _mh = measure_choice(\n"
-        "                measures_of(src) if src else [], \"колич\",\n"
-        "                alias_by=measure_aliases_of(src) if src else {})\n"
-        "            if _mq and _mh in (\"exact\", \"substring\", \"alias\", \"base\", \"single\"):\n"
-        "                measure = _mq\n"
-        "                diag[\"stock_measure_canon\"] = _mq\n"
-        "        measure_alts = []\n"
-        "    if (serene_axis and grain_dec.get(\"form\") in (\"rank\", \"compare\")\n"
-        "            and not measure\n"
-        "            and not diag.get(\"stock_canon_locked\")\n"
-        "            and not diag.get(\"stock_skip_measure_clarify\")\n"
-        "            and not measure_already_proven(trusted, resolved, measure_pick)):\n")
-    if _rank_fold_old in text and "axis_clarify_skipped\"] = \"stock_canon_count\"" not in text:
-        text = text.replace(_rank_fold_old, _rank_fold_new, 1)
-
-    # Sales money: после выбора меры — если sales_canon + sum-intent, форс денег.
-    _sales_force_anchor = (
-        "    diag[\"measure\"] = measure\n"
-        "    шаг(\"величина выбрана\", величина=(measure or \"—\"),\n"
-        "        подходящих=len(measure_alts or []))\n")
-    _sales_force_insert = (
-        "    if (diag.get(\"sales_canon_locked\") and src\n"
-        "            and sales_sum_intent(intent, question)\n"
-        "            and not measure_pick\n"
-        "            and sales_force_money_measure(intent, question)):\n"
-        "        _sm2 = sales_money_measure(\n"
-        "            measures_of(src), measure_aliases_of(src))\n"
-        "        if _sm2 and measure != _sm2:\n"
-        "            diag[\"sales_measure_canon\"] = {\n"
-        "                \"было\": measure, \"стало\": _sm2, \"how\": \"sales_canon_post\"}\n"
-        "            measure, measure_alts = _sm2, []\n"
-        "    diag[\"measure\"] = measure\n"
-        "    шаг(\"величина выбрана\", величина=(measure or \"—\"),\n"
-        "        подходящих=len(measure_alts or []))\n")
-    if (_sales_force_anchor in text
-            and "sales_canon_post" not in text):
-        text = text.replace(_sales_force_anchor, _sales_force_insert, 1)
-
-    # Fork B до выбора меры: при sales_canon + money-intent не отдавать qty-атом.
-    _fork_b_old = (
-        "        if _outc == \"B\":\n"
-        "            _b_classes = _pay.get(\"classes\") or []\n"
-        "            if rank_defer_fork_outcome_b(intent, plan, question, _b_classes):\n")
-    _fork_b_new = (
-        "        if _outc == \"B\":\n"
-        "            _b_classes = _pay.get(\"classes\") or []\n"
-        "            if (diag.get(\"sales_canon_locked\")\n"
-        "                    and sales_sum_intent(intent, question)\n"
-        "                    and sales_force_money_measure(intent, question)):\n"
-        "                diag.setdefault(\"fork\", {})[\"outcome_b_deferred_sales_money\"] = True\n"
-        "                шаг(\"исход B\", отложен=\"sales_money\", классов=len(_b_classes))\n"
-        "            elif rank_defer_fork_outcome_b(intent, plan, question, _b_classes):\n")
-    if (_fork_b_old in text
-            and "outcome_b_deferred_sales_money" not in text):
-        text = text.replace(_fork_b_old, _fork_b_new, 1)
 
     # F-гейт: entity_form_gate_open (assumed period на флаге 0), не только ASK_ENTITY_FORM.
     _ef_gate_old = "if ASK_ENTITY_FORM and not no_arbiter"

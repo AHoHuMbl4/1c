@@ -1203,109 +1203,6 @@ def _period_day_label(pf, pt):
 
 
 
-def sales_period_empty(agg, act, intent, diag, question):
-    """Нулевые продажи в названном окне — period_empty, даже если outside_period не посчитан."""
-    if period_empty_outcome(agg, act, intent, diag):
-        return True
-    if not sales_sum_intent(intent, question):
-        return False
-    try:
-        if int((agg or {}).get("count") or 0) != 0:
-            return False
-    except (TypeError, ValueError):
-        return False
-    if act in ("empty_period", "drop_assumed"):
-        return bool(sales_canon_engaged(diag))
-    if sales_canon_engaged(diag):
-        return sales_period_window_active(intent, diag)
-    return False
-
-
-def sales_period_window_active(intent, diag=None, preds=None):
-    """Окно периода задано: явно, assumed (parse/diag) или preds doc_date."""
-    pr = (intent or {}).get("period") or {}
-    if pr.get("from") or pr.get("to"):
-        return True
-    if empty_after_period_action(intent) in ("empty_period", "drop_assumed"):
-        return True
-    if preds and any("doc_date" in str(p) for p in (preds or [])):
-        return True
-    if "period." in str((diag or {}).get("intent_assumed") or ""):
-        return True
-    assumed = ((intent or {}).get("parse") or {}).get("assumed") or []
-    return any(str(a).startswith("period.") for a in assumed)
-
-
-def sales_fork_canon_empty_src(intent, diag, question, fork_diag, cands=None):
-    """Канон продаж в fork excluded (no_live_cells) = нулевые продажи за период.
-
-    Живой путь [замер 22.08 okna]: «почему… продаж ноль» — picked=[], fork pool=2,
-    регистр реализации excluded, курсы валют live → clarify вместо period_empty.
-    """
-    if not sales_sum_intent(intent, question):
-        return None
-    if rank_intent_from(intent, question=question):
-        return None
-    if not sales_period_window_active(intent, diag):
-        return None
-    canon = sales_canon_engaged(diag) or sales_canon_src(list(cands or []),
-                                                           intent, question)
-    if not canon:
-        return None
-    fd = fork_diag or {}
-    for item in (fd.get("excluded") or []):
-        if isinstance(item, dict) and item.get("src") == canon:
-            if item.get("reason") == "no_live_cells":
-                return canon
-    pool = fd.get("pool_srcs") or []
-    live = set(fd.get("live_srcs") or [])
-    if canon in pool and canon not in live:
-        return canon
-    return None
-
-
-def try_sales_fork_period_empty_answer(question, intent, diag, cut, t0, cands,
-                                       fork_diag):
-    """Ответ 0.00 по канону продаж, если fork исключил его как no_live_cells."""
-    canon = sales_fork_canon_empty_src(intent, diag, question, fork_diag, cands)
-    if not canon and diag.get("period_window_empty"):
-        _locked = sales_canon_engaged(diag) or diag.get("sales_canon_locked")
-        if _locked and sales_period_window_active(intent, diag):
-            canon = _locked
-    if not canon:
-        return None
-    if not sales_canon_engaged(diag):
-        diag["sales_canon_locked"] = canon
-    agg = {"count": 0, "sum": 0.0, "grain": "row", "form": "number"}
-    measure = None
-    try:
-        _mn = measures_of(canon)
-        if sales_force_money_measure(intent, question):
-            measure = sales_money_measure(_mn)
-    except RuntimeError:
-        pass
-    money = answer_money(intent.get("want"), "sum", measure)
-    diag["sales_fork_period_empty"] = canon
-    return build_period_empty_answer(
-        question, agg, intent, measure, canon, "", [], money, "sum",
-        None, cut, diag, {"grain": "row", "form": "number"}, [], 0, [], t0,
-        measure if money else None)
-
-
-def sales_fork_blocks_clarify(outcome, payload, intent, diag, question, cands,
-                              fork_diag):
-    """Fork C/empty/unique по постороннему src — не вместо period_empty канона."""
-    canon = sales_fork_canon_empty_src(intent, diag, question, fork_diag, cands)
-    if not canon:
-        return False
-    if outcome in ("C", "empty"):
-        return True
-    if outcome == "unique":
-        u_srcs = set((payload.get("class") or {}).get("srcs") or [])
-        return bool(u_srcs) and canon not in u_srcs
-    return False
-
-
 def dates_outside_period_filter(src, match, preds, intent):
     """Крайние doc_date по тем же условиям, но без фильтра периода."""
     date_preds = set(_predicates(intent))
@@ -1861,8 +1758,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if _yoy_compare_marker(question):
         _yp = intent.get("period") or {}
         _has_win = bool(_yp.get("from") or _yp.get("to"))
-        if (not sales_sum_intent(intent, question)
-                and not (period_from_prior and _has_win)):
+        # В2: без sales-канона — спросить, какие продажи (карточки вики), если нет окна.
+        if not (period_from_prior and _has_win) and not _has_win:
             return {
                 "partial": None, "kind": "clarify",
                 "text": "Сравнить какие продажи?",
@@ -1931,14 +1828,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if (intent.get("about") or "") == "coverage":
         # «почему продаж ноль, это сбой?» — не перепись системы, а period_empty
         # по продажам ([замер 21.08 okna] about=coverage → пустой figures).
-        if period_zero_why_question(question):
-            intent["about"] = "data"
-            if (intent.get("want") or "") == "list":
-                intent["want"] = "sum"
-            diag["about_coverage_refused"] = "period_zero_why"
-        else:
-            diag["about"] = "coverage"
-            return _coverage_answer(question, diag, t0)
+        diag["about"] = "coverage"
+        return _coverage_answer(question, diag, t0)
     # Что не доехало до модели — уходит в ОТВЕТ, а не в журнал (п. 13). Объявлено здесь,
     # потому что ранние ветки возврата (нет совпадений) отвечают раньше выбора сущности.
     cut = {}
@@ -2215,45 +2106,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # а выдуманный счёт был бы враньём в том самом поле, которым модель различает
     # кандидатов. Порядок ниже всё равно пересобирается по смыслу и реранкером.
     cands = list(by) + [t for t in extra if t not in by]
-    if event_path_active(intent):
-        _cands_pre_kind = len(cands)
-        cands = event_kind_catalog_expand_pool(cands, intent)
-        if len(cands) > _cands_pre_kind:
-            diag["event_kind_pool_expand"] = cands[_cands_pre_kind:]
-    cands = prefer_entity_for_rank(cands, intent, question)
-    cands = prefer_entity_for_sales(cands, intent, question)
-    cands = prefer_entity_for_catalog_count(cands, intent, question)
+    # В2: expand_pool / prefer×3 / entity-rank-v2 снесены — порядок без до-вики перестановок.
     plan = {}
-    if K6R:
-        _period0 = (intent or {}).get("period") or {}
-        _has_period0 = bool(_period0.get("from") or _period0.get("to"))
-
-        def _catalogs_for_kind(axis_word):
-            w = (axis_word or "").strip()
-            if not w:
-                return []
-            return entity_form_catalogs_for_kind(w, allow_meaning=_has_period0)
-
-        # K6 v2: при RuntimeError от psql порядок кандидатов прежний (diag answer_fit_v2_down)
-        # (RuntimeError от psql без DSN в офлайн-замках, сбой соединения) —
-        # порядок прежний, отметка в diag. Ранг не роняет ответ.
-        try:
-            _k6r = K6R.apply_to_candidates(
-                psql, lit, cands, intent, question, today=today,
-                stem_dict=STEM_DICT, corpus=CORPUS, tables=TABLES,
-                sales_sum=sales_sum_intent(intent, question),
-                rank_intent=rank_intent_from(intent, None, question),
-                catalogs_for_kind=(
-                    _catalogs_for_kind if event_path_active(intent) else None))
-        except RuntimeError as _k6_err:
-            _k6r = {}
-            diag["answer_fit_v2_down"] = type(_k6_err).__name__
-        if _k6r.get("diag"):
-            diag.update(_k6r["diag"])
-        cands = _k6r.get("cands") or cands
-        counts_for_model = entity_pick_counts_for_model(
-            by, diag, intent, question)
-        шаг("K6 v2", кандидатов=len(cands))
     шаг("кандидаты собраны", всего=len(cands))
     # 🔴 «НА ЧТО НЕ ОТВЕЧАЕТ» — ВТОРАЯ ПОЛОВИНА ЗНАНИЯ УСТАНОВКИ, И ОНА НАКОНЕЦ ЧИТАЕТСЯ.
     # Установочный агент пишет про каждую сущность две половины: «на что отвечает»
@@ -2411,7 +2265,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     #   п. 3  — «детерминированно на данных»: один вопрос обязан давать один ответ;
     #   п. 19 — «моделью не ищем»: отбор ведёт код, модель нужна только для смысла. Здесь
     #           же выбор сущности решался грамматической формой слова ОТ МОДЕЛИ;
-    #   п. 12 — молчаливый выбор между правдоподобными вариантами запрещён.
+    #   п. 12 — молчаливого выбора между правдоподобными вариантами нет.
     #
     # Как надо (`HOW_NOT_TO §3.16`): не подкручивать порядок, чтобы нужное «обычно
     # побеждало», а СДЕЛАТЬ ВЫТЕСНЕНИЕ НЕВОЗМОЖНЫМ. Сито считается по ДВУМ входам —
@@ -2419,157 +2273,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # голова списка берётся ОБЪЕДИНЕНИЕМ вперемежку. Тогда ни один вход в одиночку не
     # может выбросить кандидата: слово модели добавляет сигнал, но больше ничего не решает.
     # Верхняя граница прежняя (RERANK_TOP), то есть объём в модель не вырос — п. 19 цел.
+    # В2: сито emb+rerank и parent-before-child снесены (решение 6-Б).
+    # top_by_question остаётся None — signals_disagree ниже не опирается на сито.
     top_by_question = None
     order_by_question = []
-    # 🔴 ПОРЯДОК СТРОИТСЯ ПО ТОЙ ЖЕ ПОВЕРХНОСТИ, ЧТО И ОТБОР — ПО КАРТОЧКЕ (04.08).
-    # Здесь решается, что вообще ДОЙДЁТ до модели: набор кандидатов пересортировывается
-    # целиком, и всё, что не попало в голову, обрезается бюджетом перечня. До 04.08
-    # порядок строился по вектору МЕТКИ, тогда как отбор кандидатов уже с 03.08 идёт по
-    # карточке, — то есть найденное одной поверхностью раскладывалось другой, заведомо
-    # более слабой (`[замер 03.08]` до реранкера доходит 70 % против 52 %).
-    # `[замер 04.08]`, 44 пары приёмки, настоящие разборы шага 1: эталон доходит до
-    # модели (первые ~108 записей бюджета) — по метке **42 из 44**, по карточке
-    # **44 из 44**; до реранкера (первые 60) — 34 против 42. Прибор — `step3_bench.py`,
-    # раздел «доставка до шага 4».
-    # Откат честный: нет карточки или её векторы посчитаны другой моделью — работаем по
-    # метке, как раньше (`emb_ready` без отметки говорит «нет»).
-    order_src = CARD if emb_ready(CARD) else (TABLES if emb_ready(TABLES) else "")
-    # 🔴 ЭМБЕДДЕР УПАЛ — ЭТО СБОЙ, А НЕ «РАБОТАЕМ БЕЗ СМЫСЛА» (05.08).
-    # Когда смысловой путь выключается, порядок кандидатов остаётся по ЧИСЛУ СОВПАДЕНИЙ, а
-    # этот признак пропорционален размеру сущности, а не относимости. Ответ при этом уходил
-    # человеку с прежней уверенностью. Поймано пробой: под тройной нагрузкой (опыт «круг
-    # арбитра всегда») эмбеддер ответил `TimeoutError`, и начиная с девятого вопроса выбор
-    # выродился в служебный `informationregister_замерывремени` — ЧЕТЫРЕ неверных ответа
-    # подряд, все быстрые и все уверенные (`runs/2026-08-05-step4-J-alwaysarb.txt`).
-    # П. 18 `TARGET.md` требует честного поведения при сбое, а не тихой деградации.
-    #
-    # Различать «упал» и «векторов нет по устройству» обязательно: на базе без собранных
-    # векторов `emb_ready` тоже ложна, но это НЕ сбой, и превращать там каждый вопрос в
-    # уточнение нельзя. Различает `embed_model_live()` — он спрашивает сам сервис.
-    meaning_down = bool(ORDER_BY_MEANING and len(cands) > 1 and not order_src
-                        and not embed_model_live())
-    if meaning_down:
-        diag["meaning_down"] = "эмбеддер не ответил — порядок кандидатов без смысла"
-    if ORDER_BY_MEANING and len(cands) > 1 and order_src:
-        orders = []
-        for src_text in (question, intent.get("kind")):
-            if not src_text:
-                continue
-            try:
-                orders.append([r[0] for r in psql(
-                    "SELECT src_table FROM %s WHERE src_table IN (%s) "
-                    "AND emb IS NOT NULL "        # см. разбор в `resolve_near`
-                    # разделитель равенства: ниже порядок режется по RERANK_TOP,
-                    # и без него до реранкера доходят разные сущности
-                    "ORDER BY emb <=> %s, src_table"
-                    % (order_src, ", ".join(lit(c) for c in cands), _vec(src_text)))])
-            except RuntimeError:
-                pass
-        if orders:
-            # Вершина по САМОМУ ВОПРОСУ — независимый от модели сигнал. Ниже он служит
-            # признаком неоднозначности: если он расходится с выбором модели, вопрос
-            # честно допускает несколько прочтений, и по п. 12 мы обязаны спросить.
-            # Весь порядок по вопросу, а не только его вершина: если вершиной оказалась
-            # СЛУЖЕБНАЯ сущность, сигнал не выбрасывается, а берётся первый деловой —
-            # разбор у `signals_disagree` ниже.
-            order_by_question = list(orders[0])
-            top_by_question = order_by_question[0] if order_by_question else None
-            # Вперемежку: первый по вопросу, первый по слову, второй по вопросу, ...
-            order, seen = [], set()
-            for i in range(max(len(o) for o in orders)):
-                for o in orders:
-                    if i < len(o) and o[i] not in seen:
-                        seen.add(o[i]); order.append(o[i])
-            cands = order + [c for c in cands if c not in seen]
-            diag["sieve"] = len(orders)
-        else:
-            # Эмбеддер молчит — порядок остаётся по числу совпадений, но круг кандидатов
-            # не сужается: пришедшие от синонимов сохраняются, они добыты без вектора.
-            cands = sorted(by, key=lambda t: -by[t]) + [t for t in extra if t not in by]
-            # Отсев «не отвечает» держится и здесь: круг пересобран из `by`/`extra`,
-            # и без вычитания отсеянный сосед вернулся бы в обход правила.
-            if not_for and len(cands) > len(not_for):
-                cands = [c for c in cands if c not in not_for]
-            # 🔴 И ЭТО ТОЖЕ ОТКАЗ СМЫСЛОВОГО ПУТИ, А НЕ «ПОРЯДОК ПО СОВПАДЕНИЯМ» (05.08).
-            # Здесь `/health` эмбеддера отвечает (иначе мы бы сюда не зашли), но САМ вызов
-            # эмбеддинга упал или не уложился в таймаут, `orders` пуст, и порядок кандидатов
-            # задаётся числом совпадений — признаком, пропорциональным РАЗМЕРУ сущности.
-            # Прежде это проходило молча, и ответ уходил с обычной уверенностью.
-            # `[замер 05.08]` пять вопросов подряд («контрагенты», «организации»,
-            # «документы реализации», «строки товаров», «документы приобретения») ответили
-            # служебным `informationregister_замерывремени` — быстро, уверенно и неверно.
-            # Проверка по `/health` этот случай НЕ ловит: она была, и она сказала «жив».
-            diag["meaning_down"] = "вектор вопроса не посчитан — порядок кандидатов без смысла"
-        # 🔴 НАЙДЕННОЕ ШАГОМ 3 СТОИТ ВПЕРЕДИ (04.08). Выше набор пересортирован ОДНИМ
-        # сигналом — близостью вектора, — и найденное четырьмя поверхностями сразу теряет
-        # своё место. А режется список бюджетом перечня: `[замер 04.08]` живой ответ отдал
-        # модели 100 записей из 1502, и верная сущность стояла 106-й — то есть ошибка
-        # ответа была ошибкой ДОСТАВКИ, а не выбора. Порядок внутри головы — тот, в
-        # котором его отдало слияние мест; всё остальное идёт следом, как и раньше.
-        # `[замер 04.08]` на 44 парах приёмки при глубине перечня как в бою: эталон
-        # доходит до модели 44 из 44 против 43, до реранкера 43 против 42, и верным
-        # оказывается верхний кандидат 16 раз против 10.
-        # Сигнал `top_by_question` НЕ ТРОГАЕТСЯ: он выше и остаётся вершиной чистого
-        # вектора — на нём стоит признак неоднозначности шага 4, и менять его смысл
-        # отсюда нельзя.
-        if found_by_meaning:
-            in_cands = set(cands)
-            head3 = [t for t in found_by_meaning if t in in_cands]
-            if head3:
-                seen3 = set(head3)
-                cands = head3 + [c for c in cands if c not in seen3]
-                diag["order_head"] = len(head3)
-        head, tail = cands[:RERANK_TOP], cands[RERANK_TOP:]
-        if tail:
-            sb = diag.setdefault("selection_budget", {})
-            sb["reranked_of"] = len(cands)
-            sb["reranked"] = len(head)
-        try:
-            lab = {r[0]: r[1] for r in psql(
-                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                % (TABLES, ", ".join(lit(c) for c in head))) if r and r[0]}
-        except RuntimeError:
-            lab = {}
-        keys = [c for c in head if c in lab]
-        idx = rerank(question, [lab[c] for c in keys]) if keys else []
-        if idx:
-            best = [keys[i] for i in idx if 0 <= i < len(keys)]
-            cands = best + [c for c in head if c not in best] + tail
-            diag["order_by"] = "rerank"
-    # РЕБЁНОК НЕ МОЖЕТ СТОЯТЬ РАНЬШЕ РОДИТЕЛЯ. Табличная часть документа и сам документ —
-    # разные источники, и итог живёт в ШАПКЕ, а не в строках. Порядок по смыслу этого не
-    # знает: [замер 27.07] на вопросе «какая самая крупная продажа» метки табличных
-    # частей оказались ближе к слову «продажа» (0,566-0,574), чем метка документа
-    # (0,600), список пошёл модели с них, и ответом стала самая крупная СТРОКА
-    # накладной — 1 550 000 вместо 1 629 700. Ответ верный по числу и неверный по сути.
-    # Родитель берётся из КОНТРАКТА ПЛАТФОРМЫ (составной ключ), а не из имени: в
-    # `search_tables.parent` его записывает сборщик. Оба источника остаются в списке —
-    # мы не решаем за модель, мы лишь не ставим часть впереди целого.
-    # 🔴 Правило применяется ТОЛЬКО когда спрашивают ЧИСЛО. Оно и заводилось ради этого:
-    # итог документа живёт в шапке, а не в строках. Но на вопрос «что покупало ООО
-    # Ромашка» ответ как раз в СТРОКАХ — там наименования, — и правило уводило на шапку,
-    # где их нет. [замер 28.07] система честно отвечала «покупало товары и услуги,
-    # наименований нет», то есть правило мешало ответить.
-    wants_number = bool((intent.get("measure") or "").strip()) or \
-        intent.get("want") in ("sum", "count")
-    if wants_number and len(cands) > 1:
-        try:
-            par = {r[0]: r[1] for r in psql(
-                "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
-                % (TABLES, ", ".join(lit(c) for c in cands))) if r and r[0]}
-            ordered, placed = [], set()
-            for c in cands:
-                if par.get(c) in cands and par.get(c) not in placed:
-                    continue                    # ребёнок ждёт, пока встанет родитель
-                ordered.append(c)
-                placed.add(c)
-                for ch in cands:                # сразу за родителем — его части
-                    if ch not in placed and par.get(ch) == c:
-                        ordered.append(ch)
-                        placed.add(ch)
-            cands = ordered + [c for c in cands if c not in placed]
-        except RuntimeError:
-            pass                                # порядок остаётся прежним
+    meaning_down = False
     # Не подошло ничего вовсе (чужой язык, иное написание) — только тогда идём от
     # смысла вопроса к названиям всех сущностей.
     if not cands and emb_ready(TABLES):
@@ -2652,12 +2360,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         # арбитра ×4), не вся база: иначе сотни несвязанных src с живым счётом
         # дают C с сотнями вариантов и секунды на SQL. Полный перечень cands —
         # по-прежнему источник отбора; детектор судит неоднозначность в голове.
-        _fork_pool = prefer_entity_for_catalog_count(
-            prefer_entity_for_sales(
-                prefer_entity_for_rank(
-                    list(cands[:max(ARBITER_MAX * 4, 16)]), intent, question),
-                intent, question),
-            intent, question)
+        _fork_pool = list(cands[:max(ARBITER_MAX * 4, 16)])
         _fork_pool = event_filter_pool(_fork_pool, intent, diag)
         if deadline_hit():
             raise AskDeadline("deadline")
@@ -2843,7 +2546,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     #
     # Отсюда правило, не требующее ни порога, ни знания базы: если вершина по САМОМУ
     # ВОПРОСУ (считает база) не совпала с выбором модели — это два равноправных прочтения,
-    # и п. 12 прямо запрещает выбирать между ними молча. Спрашиваем человека готовым
+    # и п. 12 не допускает молчаливого выбора между ними. Спрашиваем человека готовым
     # механизмом уточнения (кнопки + «свой вариант», решение владельца 28.07).
     #
     # Это не «уточнять почаще на всякий случай»: пока оба сигнала согласны — ответ идёт
@@ -3209,13 +2912,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # регистра возвращал импорттмц). Единственный путь выбора —
     # wiki_primary_entity_cascade (пул карточек → LLM → верификация). Функции
     # канонов остались в зонах для слоёв, не выбирающих сущность.
-    if period_zero_why_question(question) and sales_sum_intent(intent, question):
-        diag["period_zero_why"] = True
-        if (intent.get("want") or "") == "list":
-            intent["want"] = "sum"
     writer_pair = writer.get(picked[0]) if picked else None
     if (writer_pair and picked and writer_pair not in picked
-            and not diag.get("sales_canon_locked")
             and not diag.get("catalog_count_locked")
             and not diag.get("stock_canon_locked")):
         diag["writer_pair"] = writer_pair
@@ -3255,22 +2953,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # реализациятмц» — pick+verify верны, writer_pair уводил в clarify при
     # живом эталоне 78 537).
     if (diag.get("writer_pair") and picked and not focus and not no_arbiter
-            and not diag.get("sales_canon_locked")
             and not diag.get("catalog_count_locked")
             and not diag.get("stock_canon_locked")
             and not (diag.get("wiki_hybrid_pick")
                      and diag.get("wiki_verify") == picked[0])
             and len(arb_pool) < ARBITER_MAX):
         arb_pool.append(diag["writer_pair"])
-    if (sales_sum_intent(intent, question)
-            or sales_rank_engaged(intent, plan, question, arb_pool)):
-        arb_pool = prefer_entity_for_sales(
-            arb_pool, intent, question, plan=plan)
-    arb_pool = prefer_entity_for_catalog_count(arb_pool, intent, question)
-    # Lock канона: один источник → period_empty / ответ, не clarify соперников.
-    picked, arb_pool, doubt = sales_canon_force_pool(
-        diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked"),
-        picked, arb_pool, doubt)
+    # В2: sales/rank/catalog prefer и force_pool снесены.
+    _locked_src = (diag.get("catalog_count_locked")
+                   or diag.get("stock_canon_locked")
+                   or diag.get("register_count_locked"))
+    if _locked_src:
+        picked, arb_pool, doubt = [_locked_src], [_locked_src], False
     if doubt and picked and not focus and not no_arbiter and len(arb_pool) < ARBITER_MAX:
         fam = {_family(x) for x in arb_pool}
         # 🔴 СОПЕРНИК БЕРЁТСЯ ПО ПОРЯДКУ ОТБОРА, И ЭТО РЕШЕНО ЗАМЕРОМ, А НЕ ВКУСОМ.
@@ -3331,9 +3025,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # соперники (семья, writer_pair, лидер словаря другой семьи). Вторая попытка
     # (VETO_HEAD) не отменяется: вместо ответа вслепую соперник входит в круг.
     # При lock канона стоп2 не наращивает соперников ([замер 21.08] воскресенье
-    # clarify после sales_canon_locked из-за stop2/src_conflict).
+    # clarify после sales_canon_GONE из-за stop2/src_conflict).
     if (picked and stop2_active(focus, measure_pick, no_arbiter, trusted)
-            and not diag.get("sales_canon_locked")
             and not diag.get("catalog_count_locked")
             # [01.09 «один путь»] стоп2 не возвращает отвергнутое
             # верификацией: вики-лидер подтверждён — соперники «семьи/писаря/
@@ -3369,11 +3062,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["arbiter_rivals"] = arb_pool[1:]
             шаг("стоп2 соперники", всего=len(arb_pool),
                 соперники=",".join(_added) or "—")
-    # Повторный singleton: стоп2/doubt могли добавить соперников после первого force.
-    picked, arb_pool, doubt = sales_canon_force_pool(
-        diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked"),
-        picked, arb_pool, doubt)
-    # В diag для журнала (ask_journal.doubt) — после финального force.
+    # В2: повторный force_pool снесён; прочие lock — singleton.
+    _locked_src2 = (diag.get("catalog_count_locked")
+                    or diag.get("stock_canon_locked")
+                    or diag.get("register_count_locked"))
+    if _locked_src2:
+        picked, arb_pool, doubt = [_locked_src2], [_locked_src2], False
     diag["doubt"] = bool(doubt)
 
     # ASK_ENTITY_FORM: distinct/complement до круга (K6), структура пула+окно.
@@ -3406,7 +3100,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         всегда переспрашивать, а не выбирать за человека.
         """
         if (not REQUIRE_SUPPORT or guards_skip_for_choice(focus, measure_pick, trusted)
-                or diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked")):
+                or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked")):
             return out
         w = (out.get("diag") or {}).get("focus")
         # [01.09 «один путь», PLAN_WIKI_CHOICE] ответ собран по верифицированному
@@ -3528,14 +3222,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 diag["fork"]["outcome_reason"] = _pay["reason"]
             if "na_classes" in _pay:
                 diag["fork"]["na_classes"] = _pay["na_classes"]
-        if sales_fork_blocks_clarify(_outc, _pay, intent, diag, question, cands,
-                                     diag.get("fork")):
-            _sfpe = try_sales_fork_period_empty_answer(
-                question, intent, diag, cut, t0, cands, diag.get("fork"))
-            if _sfpe is not None:
-                шаг("канон продаж: fork excluded → period_empty",
-                    src=diag.get("sales_fork_period_empty"))
-                return _sfpe
         _picked0 = picked[0] if picked else None
         if ASK_ATOM_TERMINAL and _outc == "unique":
             _uatom = ((_pay.get("class") or {}).get("atom") or {})
@@ -3595,7 +3281,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # в answer); sales/catalog/stock/register_*_locked; wiki_arbiter_locked /
     # wiki_verify==pick; writer_pair (writer_pair_proven появляется только после
     # круга); одна src_table (слой measure z16, не entity-меню); односемейный
-    # tabpart/шапка без разных fork-атомов; cold sales_canon_src на простом
+    # tabpart/шапка без разных fork-атомов; cold sales-src на простом
     # sales-sum без list/rank.
     # Отдельных pre-arbiter флагов нет: decision_id в answer(), proven/sole
     # (sole/writer_pair_proven — пост-круг); «полный круг → один answer» —
@@ -3613,8 +3299,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             or rank_intent_from(intent, plan, question)
             or sales_rank_engaged(intent, plan, question, arb_pool))
         _ec_locks = (
-            diag.get("sales_canon_locked")
-            or diag.get("catalog_count_locked")
+            diag.get("catalog_count_locked")
             or diag.get("stock_canon_locked")
             or diag.get("register_count_locked"))
         _ec_wiki = (
@@ -3633,24 +3318,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _ec_atom_fps.discard(None)
         _ec_same_fam_no_atoms = (len(_ec_fams) <= 1 and len(_ec_atom_fps) <= 1)
         _ec_one_src = len(set(_ec_pool)) <= 1
-        _ec_sales_cold = False
-        if not _ec_composite:
-            try:
-                _ec_sales_cold = bool(
-                    sales_sum_intent(intent, question)
-                    and sales_canon_src(
-                        list(cands or []) or list(arb_pool),
-                        intent, question, plan=plan))
-            except Exception:  # noqa: BLE001
-                _ec_sales_cold = False
+        # В2: sales_canon_GONE / _ec_sales_cold снесены — блок A иначе цел.
         _ec_ban = (
             bool(trusted)
             or bool(_ec_locks)
             or _ec_wiki
             or bool(diag.get("writer_pair"))
             or _ec_one_src
-            or _ec_same_fam_no_atoms
-            or _ec_sales_cold)
+            or _ec_same_fam_no_atoms)
         _ec_src_ambig = (
             (len(picked) > 1 or bool(diag.get("signals_disagree")))
             and not _ec_locks
@@ -3987,7 +3662,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if (REQUIRE_SUPPORT and picked
             and not guards_skip_for_choice(focus, measure_pick, trusted)
             and not no_arbiter
-            and not diag.get("sales_canon_locked")
             # [01.09 «один судья»] верифицированный вики-лидер словарём-вето
             # не переигрывается: словарь теперь вход пула (struct_alias), а
             # судья один — паспортная верификация. То же правило, что в
@@ -4033,12 +3707,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _wiki_locked_src = _wiki_named_entity(diag, src)
         probe_rows = rows_of(src, match, preds, 1) if src else []
         if not probe_rows and by and not _wiki_locked_src:
-            _hold_canon = (
-                sales_sum_intent(intent, question)
-                and empty_after_period_action(intent) in ("drop_assumed", "empty_period")
-                and (diag.get("sales_canon_locked") == src
-                     or sales_fork_canon_empty_src(
-                         intent, diag, question, diag.get("fork"), cands) == src))
+            # В2: sales_canon_GONE / sales_fork_canon_empty_src снесены.
+            _hold_canon = False
             if not _hold_canon:
                 src = max(by.items(), key=lambda kv: kv[1])[0]
     # Выбрана табличная часть — отбор идёт ПО ШАПКЕ. Её собственный текст слов вопроса
@@ -4062,23 +3732,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _probe = rows_of(src, match, preds, 1)
         if not _probe:
             diag["period_window_empty"] = True
-            _sfpe1 = try_sales_fork_period_empty_answer(
-                question, intent, diag, cut, t0, cands, diag.get("fork"))
-            if _sfpe1 is not None:
-                шаг("канон продаж: period_window_empty → period_empty",
-                    src=diag.get("sales_fork_period_empty"))
-                return _sfpe1
     diag["focus"], diag["found"] = src, by.get(src, 0)
-    if ((sales_sum_intent(intent, question)
-             or sales_rank_engaged(intent, plan, question,
-                                   list(cands or []) + [src]))
-            and src
-            and not diag.get("sales_canon_locked")
-            and not diag.get("catalog_count_locked")):
-        _canon_src = sales_canon_src(
-            list(cands or []) + [src], intent, question, plan=plan)
-        if _canon_src and src == _canon_src:
-            diag["sales_canon_locked"] = _canon_src
+    # В2: запись sales_canon_GONE снесена.
     шаг("сущность выбрана", сущность=(src or "—"), совпадений=by.get(src, 0),
         выбрал=("человек" if focus else ("код" if diag.get("event_code_lock") else "модель")),
         сомнение=bool(diag.get("signals_disagree")))
@@ -4134,17 +3789,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     _mnames = measures_of(src)
     _malias = measure_aliases_of(src)
     _rank_intent = rank_intent_from(intent, plan, question)
-    _rank_sales_early = sales_rank_engaged(
-        intent, plan, question, list(cands or []) + ([src] if src else []))
-    _mhint = (rank_measure_hint(_mnames, intent, question, _malias)
-              if not measure_pick and not _rank_sales_early else None)
+    # В3: rank_measure_hint / sales_money канон снесены — при >1 мере только меню.
     if plan.get("quantity") and plan["quantity"] in _mnames:
         measure = plan["quantity"]
         diag["measure_by_plan"] = True
         # 🔴 ГЕЙТ ВЕЛИЧИНЫ (задача 16 реестра «право на ответ (б)»). Имя, названное моделью,
         # проверялось ТОЛЬКО на существование у сущности — и этого мало: слову вопроса могут
         # отвечать несколько величин, и тогда модель выбрала одну из них молча, а п. 12
-        # запрещает выбирать между правдоподобными вариантами за человека. Раньше правило
+        # не допускает выбора между правдоподобными вариантами за человека. Раньше правило
         # жило внутри `pick_measure`, то есть на этот путь не распространялось вовсе.
         #
         # Спрашиваем не всегда, когда подходящих несколько, а только когда выбор МЕНЯЕТ
@@ -4160,36 +3812,21 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if measure_ambiguous(_alts, _tot):
                 measure, measure_alts = None, _alts
                 diag["measure_gate"] = {"слово": _word, "подошли": _alts}
-    elif _mhint:
-        measure, measure_alts, how = _mhint, [], "rank_hint"
-        diag["measure_rank_hint"] = _mhint
     else:
         measure, measure_alts, how = pick_measure(src, question,
                                                   (intent.get("measure") or ""))
-        if (_rank_intent and not _mhint
-                and _rank_wants_quantity(question)
-                and len(_mnames) > 1):
+        if (_rank_intent and _rank_wants_quantity(question)
+                and len(_mnames) > 1 and not measure):
             measure, measure_alts = None, _mnames
             how = "rank_no_quantity"
             diag["measure_rank_no_quantity"] = True
-        elif _rank_intent and how == "rerank":
-            _hint2 = _mhint or rank_measure_hint(_mnames, intent, question, _malias)
-            if _hint2:
-                measure, measure_alts, how = _hint2, [], "rank_hint"
-                diag["measure_rank_hint"] = _hint2
-            elif len(_mnames) > 1:
+        elif _rank_intent and how in ("rerank", "ask") and len(_mnames) > 1:
+            if not measure_alts:
                 measure, measure_alts = None, _mnames
-                diag["measure_guess_refused"] = "rank_rerank"
-        elif (_rank_intent and how == "rerank" and _mhint
-                and measure and measure != _mhint):
-            measure, how = _mhint, "rank_hint"
-            diag["measure_rank_hint"] = _mhint
+            else:
+                measure = None
+            diag["measure_guess_refused"] = how or "rank_rerank"
         # 🔴 ДОГАДКА РЕРАНКЕРА НЕ ГОДИТСЯ ТАМ, ГДЕ СПРАШИВАЮТ ВЕЛИЧИНУ. [замер 30.07]
-        # «Сколько НДС мы заплатили поставщикам?» — модель не смогла назвать величину
-        # (её у выбранного регистра нет), и прежний путь молча брал «КОплате»: ответ
-        # 13 777 225,30 вместо 11 036 086,09. Три прогона из трёх.
-        # Реранкер выбирает по похожести ИМЁН, не видя вопроса, — это ровно догадка, а
-        # догадка запрещена (п. 12). Спрашиваем человека, какую величину считать.
         if how == "rerank" and (plan.get("compute") in ("sum", "max", "min", "avg")
                                 or intent.get("want") == "sum"):
             alts = measures_of(src)
@@ -4222,42 +3859,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             measure, measure_alts = measure_pick, []
         else:
             diag["measure_pick_unresolved"] = measure_pick
-    # Канон «продали»: итог «сколько» → деньги; ранг «что продавалось» → Количество.
-    # Rank×sales (ASK_SALES_RANK_CANON): qty|money по роли оси/алиасов, не force_money.
+    # В3: sales money/qty канон снесён. Меню классов money|qty при rank — оставить.
     _rank_sales = sales_rank_engaged(
         intent, plan, question, list(cands or []) + ([src] if src else []))
-    if ((sales_sum_intent(intent, question) or _rank_sales) and not measure_pick
-            and (diag.get("sales_canon_locked") or src)):
+    if (_rank_sales and not measure_pick and src
+            and not measure and not measure_alts):
         _names = measures_of(src)
         _als = measure_aliases_of(src)
-        if _rank_sales:
-            _axes_early = []
-            try:
-                _axes_early = refcols_of(src) if src else []
-            except RuntimeError:
-                _axes_early = []
-            _sm, _how = sales_rank_resolve_measure(
-                _names, intent, question, _als,
-                src=src, axes=_axes_early, plan=plan, diag=diag)
-            if _how == "role_ask":
-                _sm = None
-                _mc, _ma = measure_class_alts(_names, _als)
-                if len(_ma) == 2:
-                    measure, measure_alts = None, _ma
-                    diag["measure_class_clarify"] = True
-                    diag["sales_rank_role_ask"] = True
-        elif sales_force_money_measure(intent, question):
-            _sm = sales_money_measure(_names, _als)
-            _how = "sales_canon"
-        else:
-            _sm = sales_qty_measure(_names, _als)
-            _how = "sales_qty_canon"
-        if _sm:
-            if measure != _sm or measure_alts:
-                diag["sales_measure_canon"] = {
-                    "было": measure, "alts": list(measure_alts or []), "стало": _sm,
-                    "how": _how}
-            measure, measure_alts, how = _sm, [], _how
+        _mc, _ma = measure_class_alts(_names, _als)
+        if len(_ma) == 2:
+            measure, measure_alts = None, _ma
+            diag["measure_class_clarify"] = True
+            diag["sales_rank_role_ask"] = True
     diag["measure"] = measure
     шаг("величина выбрана", величина=(measure or "—"),
         подходящих=len(measure_alts or []))
@@ -4316,21 +3929,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 return build_measure_empty_pivot(
                     question, measure, src, _alive_rows, cut, diag, t0,
                     intent, how=how, measure_pick=measure_pick)
-            # sales_sum: не уводить в measure-clarify; денежный канон держим
-            # (пустой период → period_empty / 0, не «какую меру?»).
-            if diag.get("sales_measure_canon"):
-                _keep = sales_money_measure(
-                    [r[0] for r in _alive_rows], measure_aliases_of(src))
-                if _keep:
-                    measure, measure_alts = _keep, []
-                    diag["measure"] = _keep
-                    diag["sales_measure_alive"] = _keep
-                # иначе оставляем канон — дальше period/агрегат
             elif _alive_rows:
                 diag["measure_all_zero" if _row is not None else "measure_no_values"] = measure
                 measure, measure_alts = None, [r[0] for r in _alive_rows]
                 diag["measure"] = None
-    if SLOT_COVER and measure and not measure_pick and not diag.get("sales_measure_canon"):
+    if SLOT_COVER and measure and not measure_pick:
         _unc, _cov = slot_measure_uncovered(
             (intent.get("measure") or "").strip(), measure,
             measures_of(src), measure_aliases_of(src))
@@ -4352,34 +3955,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         trusted=trusted, resolved=resolved)
     if _ecp2 is not None:
         return _ecp2
-    if (diag.get("stock_canon_locked") and stock_question_engaged(question, intent)):
-        if question_wants_per_axis_breakdown(question, intent, plan):
-            _sfb_m = stock_breakdown_leader_fallback(
-                question, src, match, preds, measure, diag, cut, t0,
-                intent=intent, plan=plan, cands=cands)
-            if _sfb_m:
-                return _sfb_m
-        if measure_alts and not measure:
-            _mq, _, _mh = measure_choice(
-                measure_alts, "колич",
-                alias_by=measure_aliases_of(src) if src else {})
-            if _mq and _mh in ("exact", "substring", "alias", "base", "single"):
-                measure = _mq
-                diag["stock_measure_canon"] = _mq
-        measure_alts = []
-    if (stock_question_engaged(question, intent)
-            and question_has_aggregate_total_marker(question, intent, plan)
-            and not diag.get("sales_measure_canon")):
-        measure_alts = []
-        diag["stock_skip_measure_clarify"] = True
+    # В3: stock_measure_canon / stock_skip_measure_clarify / breakdown-fallback снесены.
     if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
-            and not diag.get("sales_measure_canon")
             and (not _rank_sales or diag.get("sales_rank_role_ask"))):
         if count_defer_measure_clarify(intent, src, _ax_cd):
             diag["count_axis_defer_measure"] = True
             measure_alts = []
     if (measure_alts and not measure_already_proven(trusted, resolved, measure_pick)
-            and not diag.get("sales_measure_canon")
             and (not _rank_sales or diag.get("sales_rank_role_ask"))):
         # K4-2 / страж B: чужой src без поддержки предмета → no_data, не валюта/НДС.
         if not src_supports_question(src, intent, diag, by=by, question=question,
@@ -4436,8 +4018,42 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         or ", ".join("«%s»" % o["label"] for o in opts),
                 "options": opts, "sources": [src],
                 "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-    # Величина не названа — считаем итоги по всем и показываем модели с именами.
-    totals = [] if measure else totals_of(src, match, preds, measures_of(src))
+    # В3: при >1 мере путь идёт в меню; totals_of всем именам не используется.
+    # Безальтернативная мера — totals_of допустим.
+    if measure:
+        totals = []
+    else:
+        _tm = list(measures_of(src) if src else [])
+        if len(_tm) > 1:
+            # Страховка: сюда не должны дойти без measure_alts-clarify.
+            measure_alts = measure_alts or _tm
+            totals = []
+            diag["measure_totals_of_blocked"] = len(_tm)
+        else:
+            totals = totals_of(src, match, preds, _tm) if _tm else []
+    if (not measure and measure_alts
+            and not measure_already_proven(trusted, resolved, measure_pick)):
+        diag["measure_ambiguous"] = measure_alts
+        try:
+            diag["measure_totals"] = {m: v for m, v, _mx, _mn
+                                      in totals_of(src, match, preds, measure_alts)}
+        except RuntimeError:
+            pass
+        try:
+            _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
+                        % (TABLES, lit(src)))
+            _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
+        except RuntimeError:
+            _ent = ""
+        _caps = measure_captions(measure_alts, measure_aliases_of(src))
+        opts = [{"src": src, "measure": m, "label": _caps[m], "distinct_by": "",
+                 "entity_label": _ent}
+                for m in measure_alts]
+        return {"partial": cut or None, "kind": "clarify",
+                "text": clarify_say(question, opts, diag)
+                        or ", ".join("«%s»" % o["label"] for o in opts),
+                "options": opts, "sources": [src],
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     if totals:
         diag["totals"] = {m: [v, mx, mn] for m, v, mx, mn in totals}
     preds = preds + _num_pred(intent, measure)
@@ -4455,25 +4071,20 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 if any(a.get("col") == _acol for a in axes):
                     _kh = [_acol]
             _rank_intent = rank_intent_from(intent, plan, question)
-            # Рейтинг: ось из refcols+kind до axis-clarify ([замер 23.08]/
-            # [замер 24.08] не только ТМЦ — клиент/контрагент тем же путём).
+            # В3: авто-ось (rank_axis_auto / _kh=ordered[:1]) снесена.
+            # Одна ясная ось из resolve — в _kh; ≥2 — alts → decide_grain→clarify.
             _rank_hatch = []
             if _rank_intent:
                 _pcol, _rank_hatch = rank_axis_resolve(
                     src, axes, intent, question, plan)
-                if _pcol:
+                if _pcol and not _rank_hatch:
                     _kh = [_pcol]
-                    diag["rank_axis_auto"] = _pcol
-                if _rank_hatch:
+                elif _rank_hatch:
                     diag["rank_axis_alts"] = list(_rank_hatch)
-            if (not _kh and (plan.get("compute") in ("max", "min")
-                             or _rank_intent)):
-                # Rank: порядок по вопросу, не по kind (kind = род источника).
-                if _rank_intent and (question or "").strip():
-                    _ord = rank_axes_rerank(question, axes)
-                    _kh = _ord[:1] if _ord else []
-                if not _kh:
-                    _kh = kind_axis_rerank(axes, intent.get("kind"))
+                    _kh = []  # меню осей, не auto
+            if (not _kh and plan.get("compute") in ("max", "min")
+                    and not _rank_intent):
+                _kh = kind_axis_rerank(axes, intent.get("kind"))
             _th = term_axis_hits(src, axes, terms_for_axis)
             if _kh and _rank_intent:
                 _kh_set = set(_kh)
@@ -4483,8 +4094,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             grain_dec = serene_axis.decide_grain(
                 axes, _kh, _th, plan.get("compute"), src_is_child(src),
                 rank_intent=_rank_intent)
-            if _rank_intent:
-                diag["rank_axis_hatch_pending"] = list(_rank_hatch or [])
+            if _rank_intent and _rank_hatch:
+                diag["rank_axis_hatch_pending"] = list(_rank_hatch)
         except RuntimeError:
             pass
     diag["grain"] = grain_dec.get("grain")
@@ -4509,42 +4120,23 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                      "named_gis": [], "clarify": None}
         diag["axis_clarify_skipped"] = "total_without_breakdown"
     if grain_dec.get("clarify") == "axis":
-        if rank_intent_from(intent, plan, question):
-            _pcol, _halts = rank_axis_resolve(
-                src, axes, intent, question, plan)
-            if _pcol:
-                grain_dec = {"grain": "group", "col": _pcol, "form": "rank",
-                             "named_gis": [], "clarify": None}
-                diag["rank_axis_auto"] = _pcol
-                if _halts:
-                    diag["rank_axis_alts"] = list(_halts)
-                    diag["rank_axis_hatch_pending"] = list(_halts)
-                diag["grain"] = grain_dec["grain"]
-                diag["axis_col"] = _pcol
-                diag["axis_form"] = "rank"
-        if grain_dec.get("clarify") != "axis":
-            pass
-        else:
-            opts = axis_clarify_options(src, axes)
-            return {"partial": cut or None, "kind": "clarify",
-                "text": clarify_say(question, opts, diag)
-                        or ", ".join("«%s»" % o["label"] for o in opts),
-                "options": opts, "sources": [src] if src else [],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                             reason="уточните ось группы")}
+        # В3: clarify-путь без override rank_axis_auto.
+        opts = axis_clarify_options(src, axes)
+        return {"partial": cut or None, "kind": "clarify",
+            "text": clarify_say(question, opts, diag)
+                    or ", ".join("«%s»" % o["label"] for o in opts),
+            "options": opts, "sources": [src] if src else [],
+            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                         reason="уточните ось группы")}
 
     if (serene_axis and grain_dec.get("form") in ("rank", "compare")
             and not measure
             and not measure_already_proven(trusted, resolved, measure_pick)):
-        _mhint_fold = rank_measure_hint(
-            measures_of(src), intent, question, measure_aliases_of(src))
-        if _mhint_fold:
-            measure = _mhint_fold
-            diag["measure_rank_hint"] = _mhint_fold
+        # В3: авто-выбор rank_fold/rank_measure_hint снесён; clarify при >1 оставить.
         _rn = [m for m, v, mx, mn in (totals or [])]
         if not _rn:
-            _rn = measures_of(src)
-        if _rn:
+            _rn = list(measures_of(src) or [])
+        if len(_rn) > 1:
             _qt = {m: v for m, v, mx, mn in (totals or [])}
             _nr = None
             try:
@@ -4558,11 +4150,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 _nr = int(_cq[0][0]) if _cq and _cq[0] else None
             except (RuntimeError, TypeError, ValueError, IndexError):
                 _nr = None
-            if not measure:
-                measure, _rank_alts = serene_axis.rank_fold_choice(
-                    measure, _rn, _qt, n_rows=_nr)
-            else:
-                _rank_alts = []
+            _fold_m, _rank_alts = serene_axis.rank_fold_choice(
+                None, _rn, _qt, n_rows=_nr)
+            if not _rank_alts and _fold_m and len(_rn) > 1:
+                _rank_alts = list(_rn)  # В3: авто-winner убран, дальше меню
             if _rank_alts:
                 names = [m for m in _rank_alts if m]
                 try:
@@ -4597,11 +4188,12 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                              for o in opts),
                         "options": opts, "sources": [src],
                         "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-            if measure:
-                diag["measure"] = measure
-                for e in _num_pred(intent, measure):
-                    if e not in preds:
-                        preds.append(e)
+        elif len(_rn) == 1:
+            measure = _rn[0]
+            diag["measure"] = measure
+            for e in _num_pred(intent, measure):
+                if e not in preds:
+                    preds.append(e)
 
     agg, rows = None, None
     if (sales_compare_intent(intent, question) and src and measure):
@@ -4668,11 +4260,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
             if not _zero_period_not_missing(intent, diag, question, act, src):
-                _sfb = stock_breakdown_leader_fallback(
-                    question, src, match, preds, measure, diag, cut, t0,
-                    intent=intent, plan=plan, agg=None, cands=cands)
-                if _sfb:
-                    return _sfb
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -4693,11 +4280,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if (not rows and not (agg or {}).get("count")
                 and not _zero_period_not_missing(
                     intent, diag, question, empty_after_period_action(intent), src)):
-            _sfb2 = stock_breakdown_leader_fallback(
-                question, src, match, preds, measure, diag, cut, t0,
-                intent=intent, plan=plan, agg=agg, cands=cands)
-            if _sfb2:
-                return _sfb2
             return {"partial": cut or None, "kind": "no_data",
                     "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
@@ -4714,11 +4296,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if not agg or not agg.get("count"):
             act = empty_after_period_action(intent)
             if not _zero_period_not_missing(intent, diag, question, act, src):
-                _sfb3 = stock_breakdown_leader_fallback(
-                    question, src, match, preds, measure, diag, cut, t0,
-                    intent=intent, plan=plan, agg=agg, cands=cands)
-                if _sfb3:
-                    return _sfb3
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -4733,11 +4310,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # потеря была полной, и «данных нет» срабатывало про существование.
             act = empty_after_period_action(intent)
             if not _zero_period_not_missing(intent, diag, question, act, src):
-                _sfb4 = stock_breakdown_leader_fallback(
-                    question, src, match, preds, measure, diag, cut, t0,
-                    intent=intent, plan=plan, agg=None, cands=cands)
-                if _sfb4:
-                    return _sfb4
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -4773,11 +4345,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 agg = {"count": 0, "sum": 0.0, "src": src, "measure": measure,
                        "folders": 0, "out_of_range": 0, "count_amount": 0}
             else:
-                _sfb5 = stock_breakdown_leader_fallback(
-                    question, src, match, preds, measure, diag, cut, t0,
-                    intent=intent, plan=plan, agg=agg, cands=cands)
-                if _sfb5:
-                    return _sfb5
                 return {"partial": cut or None, "kind": "no_data",
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "sources": [],
@@ -4884,7 +4451,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # `n_folders` → 503 на «позавчера» → документ → «итого»: присвоение стояло ниже.
     say_measure = measure if money else None
     n_folders = (agg or {}).get("folders") or 0
-    if sales_period_empty(agg, _period_act, intent, diag, question):
+    if period_empty_outcome(agg, _period_act, intent, diag):
         return build_period_empty_answer(
             question, agg, intent, measure, src, match, preds, money, slot_mode,
             cov, cut, diag, grain_dec, axes, n_folders, rows, t0, say_measure)
@@ -4974,33 +4541,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         or (grain_dec or {}).get("form") == "compare")
     if (rank_intent_from(intent, plan, question) and measure and src
             and not _cmp_form_locked):
-        _pass_early, _pf = build_answer_passport(
-            period=(intent or {}).get("period"),
-            period_dropped=bool(diag.get("period_assumed_dropped")),
-            origin=_passport_origin(intent, diag),
-            src_label=_table_label(src),
-            src_kind=kind_word(src) if src else "",
-            measure=measure or "",
-            grain=(agg or {}).get("grain") or grain_dec.get("grain") or "row",
-            axis_label=_passport_axis_label(
-                _passport_axis_col(agg, grain_dec), axes),
-            form=(agg or {}).get("form") or grain_dec.get("form") or "number",
-            text="")
-        _det = rank_deterministic_answer(
-            question, agg, src, match, preds, measure, money,
-            intent, plan, diag, axes, cut, t0, _pass_early, say_measure,
-            grain_dec=grain_dec, cov=cov,
-            hatch_alts=(diag.get("rank_axis_hatch_pending")
-                        or diag.get("rank_axis_alts")))
-        if _det:
-            if _det.get("figures") is None:
-                _det["figures"] = compose_slot_values(
-                    agg if (agg or {}).get("grain") == "group" else (
-                        _det.get("atom") and agg) or agg,
-                    measure=measure, folders=n_folders, money=money,
-                    slot_mode="rank")
-                _det["figures"].update(_pf or {})
-            return _det
         # Нет оси — честный clarify по осям из данных, не «нет имени в строках».
         if ((agg or {}).get("grain") != "group"
                 or not ((agg.get("groups") or [{}])[0].get("name") or "").strip()):
@@ -5172,19 +4712,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     diag["claims"] = claims or None
     if not ok:
         sys.stderr.write("ask GATE: числа вне данных: %s\n" % bad[:6])
-        _rank_fb = rank_gate_fallback_answer(
-            question, agg, src, match, preds, measure, money,
-            intent, plan, diag, axes, cut, t0, _pass_frag, say_measure,
-            serene_axis=serene_axis)
-        if _rank_fb:
-            return _rank_fb
         # Гейт отклонил формулировку модели. Числа при этом посчитаны базой и верны —
         # отдаём их СТРУКТУРОЙ, а не своей прозой: свой текст был бы на одном языке
         # независимо от языка вопроса. Вызывающий формулирует сам.
         if agg:
             _pe_act = empty_after_period_action(intent)
             diag["empty_after_period_action"] = _pe_act
-            if sales_period_empty(agg, _pe_act, intent, diag, question):
+            if period_empty_outcome(agg, _pe_act, intent, diag):
                 return build_period_empty_answer(
                     question, agg, intent, measure, src, match, preds, money,
                     slot_mode, cov, cut, diag, grain_dec, axes, n_folders, rows,
@@ -5254,7 +4788,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             ask_back = ""
     # Канон уже ответил числом — встречный вопрос модели («какой месяц?») превращает
     # kind=answer в clarify без options ([замер 21.08] июль 2.7M + ask_back → scorer FAIL).
-    if ask_back and (diag.get("sales_canon_locked") or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked")):
+    if ask_back and (diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked")):
         diag["ask_back_dropped"] = "canon_locked"
         ask_back = ""
     if ask_back:

@@ -665,18 +665,13 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
     manual-выборы вырезаны. Если wiki вернула None без своего wiki_pick —
     в diag ставится wiki_pick=fallback (деградация wiki: пустая таблица,
     пустой пул, сбой verify), дальше честный no_data. Уже поставленный
-    sales_canon_locked уважается первой проверкой.
     """
     picked, marks, plan = [], {}, plan or {}
-    if diag.get("sales_canon_locked"):
-        return {"picked": [diag["sales_canon_locked"]], "marks": {},
-                "plan": plan}
     _wiki_skip_manual = False
     _wiki = try_wiki_hybrid_entity_pick(
         question, intent, diag, cut, t0,
         by=by, match=match, preds=preds)
-    if (_wiki and _wiki.get("kind") in ("no_data", "clarify", "answer")
-            and not diag.get("sales_canon_locked")):
+    if (_wiki and _wiki.get("kind") in ("no_data", "clarify", "answer")):
         return _wiki
     if _wiki and _wiki.get("picked") and not picked:
         picked = _wiki["picked"]
@@ -776,36 +771,18 @@ def _wiki_collapse_resolve_measure(src, question, intent, match, preds, tied,
             or _rank_sales):
         _sm, _how = None, None
         if _rank_sales:
-            sales_rank_resolve_measure_fn = g.get("sales_rank_resolve_measure")
-            if callable(sales_rank_resolve_measure_fn):
-                _axes = []
-                refcols_of_fn = g.get("refcols_of")
-                if callable(refcols_of_fn):
-                    try:
-                        _axes = refcols_of_fn(src)
-                    except RuntimeError:
-                        _axes = []
-                _sm, _how = sales_rank_resolve_measure_fn(
-                    _mnames, intent, question, _malias,
-                    src=src, axes=_axes, plan=plan, diag=diag)
-                if _how == "role_ask":
-                    measure_class_alts_fn = g.get("measure_class_alts")
-                    if callable(measure_class_alts_fn):
-                        _mc, _ma = measure_class_alts_fn(_mnames, _malias)
-                        if len(_ma) == 2:
-                            return None, None
+            # В2: rank-resolve меры снесён — при двух классах меры → clarify.
+            measure_class_alts_fn = g.get("measure_class_alts")
+            if callable(measure_class_alts_fn):
+                _mc, _ma = measure_class_alts_fn(_mnames, _malias)
+                if len(_ma) == 2:
+                    return None, None
         else:
-            sales_force_money_measure_fn = g.get("sales_force_money_measure")
             sales_money_measure_fn = g.get("sales_money_measure")
-            sales_qty_measure_fn = g.get("sales_qty_measure")
-            if (callable(sales_force_money_measure_fn)
-                    and sales_force_money_measure_fn(intent, question)):
-                if callable(sales_money_measure_fn):
-                    _sm = sales_money_measure_fn(_mnames, _malias)
-                    _how = "sales_canon"
-            elif callable(sales_qty_measure_fn):
-                _sm = sales_qty_measure_fn(_mnames, _malias)
-                _how = "sales_qty_canon"
+            if callable(sales_money_measure_fn):
+                _sm = sales_money_measure_fn(_mnames, _malias)
+                if _sm:
+                    _how = "sales_money"
         if _sm:
             measure, how = _sm, _how
     if measure:

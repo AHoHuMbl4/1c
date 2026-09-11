@@ -262,37 +262,36 @@ def rank_axis_resolve(src, axes, intent, question, plan=None):
     if not picked and q:
         ordered = rank_axes_rerank(q, axes)
         if ordered:
+            # В3: ≥2 правдоподобные → меню (не ordered[0] / не лидер+люк).
+            picked = [c for c in ordered if c in cols]
             if len(cols) == 2:
-                # Ровно две оси источника — оба прочтения (§2): лидер + люк.
-                picked = [c for c in ordered if c in cols]
                 for c in cols:
                     if c not in picked:
                         picked.append(c)
-            else:
-                # Топ rerank по вопросу; без словарного «ТМЦ важнее».
-                picked = [ordered[0]]
+            elif len(cols) > 2 and len(picked) < 2:
+                picked = list(cols)
     if not picked and kind and not q:
         picked = list(kind_axis_hits(axes, kind) or [])
         if not picked:
             picked = list(kind_axis_rerank(axes, kind) or [])
     if not picked and kind and q:
         # Kind без вопроса ошибочно брал одну ось (Договор на «продажи»).
-        # При живом вопросе kind только дополняет, если совпал с rerank-топом.
+        # При живом вопросе kind дополняет rerank; ≥2 → меню (В3).
         ordered = rank_axes_rerank(q, axes)
         kh = list(kind_axis_hits(axes, kind) or [])
         if ordered:
-            picked = [ordered[0]]
+            picked = [c for c in ordered if c in cols]
             for c in kh:
-                if c != picked[0] and c not in picked:
+                if c not in picked:
                     picked.append(c)
-                    break
         elif kh:
             picked = kh
     if not picked:
         return None, list(cols)
     if len(picked) == 1:
         return picked[0], []
-    return picked[0], picked[1:]
+    # В3: ≥2 оси — меню (axis-clarify), не auto col + люк.
+    return None, picked
 
 
 def rank_product_axis_col(src, axes, intent, question, plan=None):
@@ -333,162 +332,6 @@ def rank_leader_atom(agg, measure, money, src=None, intent=None, diag=None,
         period=per, grain="group", form="rank", axis=axis_lab,
         completeness=cov, excluded=excl, src=src,
         proof_status=PROOF_COMPUTED)
-
-
-def rank_deterministic_answer(question, agg, src, match, preds, measure, money,
-                              intent, plan, diag, axes, cut, t0, _pass_frag,
-                              say_measure, grain_dec=None, cov=None,
-                              hatch_alts=None):
-    """Ответ топ-1 кодом (§5 / п.19): имя из GROUP BY, модель не выбирает."""
-    if not rank_intent_from(intent, plan, question):
-        return None
-    _rank_agg = agg
-    _col = None
-    _need = (
-        (agg or {}).get("grain") != "group"
-        or not (agg.get("groups") or [])
-        or not ((agg.get("groups") or [{}])[0].get("name") or "").strip()
-    )
-    _sales_rg = sales_rank_engaged(intent, plan, question, [src] if src else None)
-    if _need:
-        _col, _alts = rank_axis_resolve(src, axes, intent, question, plan)
-        if hatch_alts is None:
-            hatch_alts = _alts
-        if not (_col and src and measure):
-            return None
-        if _sales_rg:
-            _k = _sales_rank_top_n(intent, plan, question)
-            _compute = "sum"
-        else:
-            _k = 1
-            if serene_axis:
-                try:
-                    _k = serene_axis.rank_k(
-                        (intent or {}).get("amount"),
-                        (plan or {}).get("compute"), 0, ROWS_TO_MODEL)
-                except Exception:
-                    _k = 1
-            _compute = (plan or {}).get("compute") or "sum"
-        _rank_agg = aggregate_groups(
-            src, match, preds, measure, _col, _k, _compute)
-        if _rank_agg:
-            diag["rank_reaggregate"] = _col
-            if _sales_rg:
-                diag["sales_rank_k"] = _k
-                diag["sales_rank_compute"] = _compute
-    if not _rank_agg or not (_rank_agg.get("groups") or []):
-        return None
-    if not ((_rank_agg.get("groups") or [{}])[0].get("name") or "").strip():
-        return None
-    _unit = _unit_for_measure(measure, money, src=src)
-    if _sales_rg:
-        _k_txt = _sales_rank_top_n(intent, plan, question)
-        _txt = rank_groups_answer_text(
-            _rank_agg, say_measure or measure, unit=_unit, k=_k_txt)
-    else:
-        _txt = rank_leader_answer_text(_rank_agg, say_measure or measure, unit=_unit)
-    if not _txt:
-        return None
-    _txt = ensure_count_named(_txt, _rank_agg, "rank")
-    _txt = ensure_answer_passport(_txt, _pass_frag)
-    _atom = rank_leader_atom(
-        _rank_agg, say_measure or measure, money, src=src, intent=intent,
-        diag=diag, axes=axes, grain_dec=grain_dec or {
-            "col": _rank_agg.get("col"), "grain": "group", "form": "rank"},
-        cov=cov, folders=(_rank_agg.get("folders") or 0))
-    opts = []
-    for acol in (hatch_alts or []):
-        if not acol or acol == (_rank_agg.get("col") or _col):
-            continue
-        lab = _passport_axis_label(acol, axes) or acol
-        opts.append({"src": src, "label": lab, "distinct_by": acol,
-                     "entity_label": lab})
-    diag["rank_deterministic"] = True
-    if opts:
-        diag["rank_axis_hatch"] = [o["distinct_by"] for o in opts]
-    out = {"partial": cut or None, "kind": "answer",
-           "text": _txt, "sources": [src] if src else [],
-           "atom": _atom, "atoms": [_atom] if _atom else [],
-           "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                              gate_ok=True)}
-    if opts:
-        out["options"] = opts
-    return out
-
-
-def rank_gate_fallback_answer(question, agg, src, match, preds, measure, money,
-                              intent, plan, diag, axes, cut, t0, _pass_frag,
-                              say_measure, serene_axis=None):
-    """После провала гейта: топ-1 из aggregate_groups, без текста модели."""
-    return rank_deterministic_answer(
-        question, agg, src, match, preds, measure, money, intent, plan, diag,
-        axes, cut, t0, _pass_frag, say_measure)
-
-
-def prefer_entity_for_rank(cands, intent, question, plan=None):
-    """Рейтинг товара: регистр/документ вместо табличной части в вилке."""
-    if not rank_intent_from(intent, plan, question):
-        return cands
-    q = (question or "").lower()
-    kind = ((intent or {}).get("kind") or "").lower()
-    productish = (
-        any(w in q for w in ("товар", "номенклатур", "product", "item", "goods"))
-        or any(w in kind for w in ("товар", "номенклатур", "product", "item", "goods"))
-    )
-    if not productish or len(cands or []) < 2:
-        return cands
-    try:
-        rs = psql(
-            "SELECT src_table, parent, written_by FROM %s WHERE src_table IN (%s)"
-            % (TABLES, ", ".join(lit(c) for c in cands)))
-    except RuntimeError:
-        return cands
-    parent_by = {}
-    for r in rs or []:
-        if not r or not r[0]:
-            continue
-        parent_by[r[0]] = (r[1] if len(r) > 1 else "") or ""
-    docs = set()
-    for c in cands:
-        p = parent_by.get(c) or ""
-        if p.startswith("document_"):
-            docs.add(p)
-    lifted = []
-    if docs:
-        try:
-            for r in psql(
-                    "SELECT src_table FROM %s WHERE src_table LIKE "
-                    "'accumulationregister_%%' AND written_by IN (%s)"
-                    % (TABLES, ", ".join(lit(d) for d in docs))) or []:
-                if r and r[0] and r[0] not in lifted:
-                    lifted.append(r[0])
-        except RuntimeError:
-            pass
-    children = [c for c in cands if parent_by.get(c)]
-    tops = [c for c in cands if c not in children]
-    reg_doc = [c for c in tops
-               if str(c).startswith(("accumulationregister_", "document_"))]
-    if reg_doc:
-        ordered = lifted + reg_doc + [c for c in tops if c not in reg_doc] + children
-    elif lifted:
-        ordered = lifted + list(cands)
-    elif not tops:
-        ordered = lifted + list(cands)
-    else:
-        ordered = tops + children
-    out, seen = [], set()
-    for c in ordered:
-        if c not in seen:
-            seen.add(c)
-            out.append(c)
-    if lifted and docs:
-        drop = {c for c in out
-                if str(c).startswith("document_") and parent_by.get(c) in docs}
-        if drop:
-            out = [c for c in out if c not in drop]
-        front = lifted + [c for c in out if c not in lifted]
-        out = front
-    return out
 
 
 def count_theme_code_pick_applies(cands, diag, intent, question):
