@@ -98,6 +98,14 @@ class Visitor(ast.NodeVisitor):
                     self.hits.append("any-in-q %r" % s[:40])
         self.generic_visit(node)
 
+    def visit_For(self, node):
+        """for … in («домен», …): — список в заголовке цикла, не Assign."""
+        if isinstance(node.iter, (ast.List, ast.Tuple)):
+            for s in _tuple_strings(node.iter):
+                if DOMAIN_LITERAL.search(s) and s.lower() not in ALLOW:
+                    self.hits.append("for-header %r" % s[:40])
+        self.generic_visit(node)
+
 
 def scan_dir():
     """relpath → {сообщение: счётчик} — строки НЕ в ключе (чувствительны к

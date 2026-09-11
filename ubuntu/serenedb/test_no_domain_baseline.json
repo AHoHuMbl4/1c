@@ -1,17 +1,4 @@
 {
- "_bootstrap.py": {
-  "literal 'z11_sales.py'": 1
- },
- "z05_entity_form.py": {
-  "any-in-q 'больше всего'": 1,
-  "any-in-q 'лучше всего'": 1,
-  "any-in-q 'меньше всего'": 1,
-  "any-in-q 'хуже всего'": 1
- },
- "z09_fork_detector.py": {
-  "literal 'всего'": 1,
-  "literal 'остат'": 1
- },
  "z10_rank.py": {
   "any-in-q 'goods'": 1,
   "any-in-q 'product'": 1,
@@ -42,6 +29,7 @@
   "any-in-q 'склад'": 1,
   "any-in-q 'топ продаж'": 2,
   "any-in-q 'хуже всего'": 3,
+  "for-header 'всего'": 1,
   "literal 'sales_rank_hint_canon'": 1
  }
 }
