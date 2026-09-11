@@ -3,8 +3,7 @@
 
 Окно: от начала answer() до шага «кандидаты собраны».
 В маршруте не используется filter_stock_*/prefer_entity_for_stock/stock_question_engaged
-в сборке пула. Серый край stock_bypass_empty_by (пустой by) — единственное
-допустимое вхождение stock_question_engaged до якоря (не чистка пула).
+в сборке пула. Серый край stock_bypass_empty_by снесён (В1): пустой by → no_data.
 После якоря prefer/filter в маршруте fork/arb тоже не используется; счётные
 слои (stock_question_engaged после wiki/arb) — разрешены.
 """
@@ -47,24 +46,8 @@ def _answer_window(text: str) -> tuple[str, str, str]:
         raise SystemExit("anchor кандидаты собраны not found after answer")
     end = start + m_end.end()
     pre = text[start:end]
-    # хвост answer до условной границы счётных слоёв: следующий stock_question_engaged
-    # после якоря, который не в _skip_stock_fork — грубо: до конца файла зоны
-    # достаточно запретить prefer/filter после якоря целиком в z20.
     post = text[end:]
     return pre, post, text[start:]
-
-
-def _mask_bypass(window: str) -> str:
-    """Убрать единственный серый край: empty-by → stock_bypass_empty_by."""
-    return re.sub(
-        r"if not by and not extra:\n"
-        r"\s*if stock_question_engaged\(question, intent\):\n"
-        r"\s*diag\[\"stock_bypass_empty_by\"\] = True\n"
-        r"(?:.*\n){0,3}",
-        "if not by and not extra:\n            # bypass masked for lock\n",
-        window,
-        count=1,
-    )
 
 
 def main() -> int:
@@ -74,16 +57,15 @@ def main() -> int:
     t("z20 readable", Z20.is_file() and len(text) > 1000)
     t("answer window non-empty", len(pre) > 200, len(pre))
 
-    masked = _mask_bypass(pre)
-    bypass_kept = "stock_bypass_empty_by" in pre
-    t("grey edge bypass kept", bypass_kept)
+    # В1: серый bypass снесён — маркера нет нигде в z20
+    t("no stock_bypass_empty_by in z20", "stock_bypass_empty_by" not in text)
 
     for name in FORBIDDEN:
-        hits = [i + 1 for i, line in enumerate(masked.splitlines()) if name in line]
+        hits = [i + 1 for i, line in enumerate(pre.splitlines()) if name in line]
         t(
             "route window: no %s" % name,
             not hits,
-            "lines_in_masked_window≈%s" % hits,
+            "lines_in_window≈%s" % hits,
         )
 
     # После «кандидаты собраны» prefer/filter не должны вернуться в маршрут

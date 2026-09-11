@@ -445,10 +445,24 @@ else:
 
 
 
-# ── apply=0 vs apply=1 ───────────────────────────────────────────────────────
-t("apply_notice из записи",
+# ── В1 негатив: auto-apply из z20 снесён; билеты decision_id живы ─────────────
+_z20 = open(os.path.join(HERE, "ask", "z20_ask_main_http.py"), encoding="utf-8").read()
+t("z20: нет _try_memory_apply", "def _try_memory_apply" not in _z20
+  and "_try_memory_apply(" not in _z20)
+t("z20: нет probe_memory_apply", "probe_memory_apply" not in _z20)
+t("z20: нет finish_apply", "finish_apply" not in _z20)
+# ACM helpers могут жить файлом — вне тракта z20
+t("ACM.probe_memory_apply жив в модуле", callable(getattr(ACM, "probe_memory_apply", None)))
+t("ACM.finish_apply жив в модуле", callable(getattr(ACM, "finish_apply", None)))
+# ядро билетов (ступень 5) не тронуто
+t("билеты: seal_clarify жив", callable(getattr(A, "seal_clarify", None)))
+t("билеты: consume_decision жив", callable(getattr(A, "consume_decision", None)))
+t("билеты: peek_resolved жив", callable(getattr(A, "peek_resolved", None)))
+# shadow-память (diag-only) остаётся: apply_notice не зовётся из z20-тракта apply
+t("apply_notice из записи (helper ACM)",
   ACM.apply_notice_text({"label": "Отгрузки", "measure": "сумма"})
   == "помню: Отгрузки / сумма")
+# shadow attach без apply: kind/text не меняются
 apply_opts = [
     {"src": "document_a", "label": "Отгрузки", "found": 10},
     {"src": "document_b", "label": "Оплаты", "found": 5},
@@ -461,25 +475,12 @@ ck_apply = ACM.class_meta_of(probe_out)["class_key"]
 st_apply = Store()
 _put(st_apply, "u1", ck_apply, "document_a", label="Отгрузки")
 st_apply.rows[(ACM.user_hash_of("u1"), ck_apply)]["entity_ver"] = ""
-pr = ACM.probe_memory_apply(probe_out, psql=st_apply.psql, tables="search_tables", user="u1")
-t("probe: can_apply без коллизии", pr.get("can_apply") is True, str(pr))
 sh = ACM.attach_choice_memory(
     dict(probe_out), psql=st_apply.psql, tables="search_tables",
     peek_decision=A.peek_decision, user="u1", enabled=True, lost_box=[0])
-t("apply=0: kind/text не меняются",
+t("shadow: kind/text не меняются",
   sh.get("kind") == "figures" and sh.get("text") == "пары")
-t("apply=0: mode=shadow", ((sh.get("diag") or {}).get("memory") or {}).get("mode") == "shadow")
-_put(st_apply, "u2", ck_apply, "document_b", label="Оплаты")
-pr_coll = ACM.probe_memory_apply(probe_out, psql=st_apply.psql, tables="search_tables", user="u1")
-t("probe: коллизия → can_apply false",
-  pr_coll.get("can_apply") is False and pr_coll.get("reason") == "collision")
-fin = ACM.finish_apply({"kind": "answer", "text": "1 234,56 руб.", "diag": {}}, pr)
-t("finish_apply: помню в text",
-  (fin.get("text") or "").startswith("помню: Отгрузки"))
-t("finish_apply: diag applied",
-  ((fin.get("diag") or {}).get("memory") or {}).get("applied") is True)
-pr_other = ACM.probe_memory_apply(probe_out, psql=st_apply.psql, tables="search_tables", user="u9")
-t("probe: чужой user miss", pr_other.get("can_apply") is False)
+t("shadow: mode=shadow", ((sh.get("diag") or {}).get("memory") or {}).get("mode") == "shadow")
 
 print("\nИТОГ: %d ok, %d fail" % (PASS, len(FAIL)))
 sys.exit(1 if FAIL else 0)

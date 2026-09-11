@@ -2182,14 +2182,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         by = tables_of("", preds)
         if by:
             diag["by_period_fill"] = True
-    # K4-3 №11: stock-вопрос с пустым отбором — не резать no_data до stock-path.
     if not by and not extra:
-        if stock_question_engaged(question, intent):
-            diag["stock_bypass_empty_by"] = True
-            # уйдём в stock-path ниже с пустыми cands → balance_bridge / warehouse
-        else:
-            return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
-                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+        return {"partial": cut or None, "kind": "no_data", "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
 
     # Кандидаты: те, где поиск ЧТО-ТО нашёл, плюс ближайшие по смыслу названия.
     # Кандидаты — те сущности, где поиск ДЕЙСТВИТЕЛЬНО что-то нашёл. Без отсечки по
@@ -5340,113 +5335,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             "diag": _diag_pack(diag, rows=len(rows), sec=round(time.time() - t0, 2), gate_ok=ok)}
 
 
-# ═══════════════ ШАГ «ДОСТАТОЧЕН ЛИ ВОПРОС ДЛЯ ОТВЕТА» (05.08) ═══════════════
-#
-# 🔴 ШАГ СТОИТ СНАРУЖИ `answer()`, И ЭТО НЕ УДОБСТВО, А УСЛОВИЕ ПРАВИЛЬНОСТИ. Круг арбитра
-# собирает ответы кандидатов ТЕМ ЖЕ `answer(..., focus=c, no_arbiter=True)`, и проверка
-# внутри превратила бы ответ кандидата в уточнение — тогда сравнивать стало бы нечего, и
-# арбитр-детектор замолчал бы. Ровно так 05.08 само себя гасило вето по синонимам
-# (разбор — врезка у `REQUIRE_SUPPORT` выше). Снаружи этой ошибки не бывает по построению:
-# подчинённые вызовы шага не видят вовсе.
-#
-# Что шагу нужно от соседей и почему это ничего не стоит: разбор вопроса (`parse_intent`
-# помнит ответ по ключу «вопрос + дата», поэтому вызов здесь отдаётся ДАРОМ — тот же
-# разбор потом возьмёт `answer`) и числа из `diag` уже собранного ответа.
-ENOUGH_ON = os.environ.get("ASK_ENOUGH", "1") not in ("0", "false", "no")
+
 # Veto of uncovered measure slot. Default OFF: do not enable without answer-rate measure.
 SLOT_COVER = os.environ.get("ASK_SLOT_COVER", "0") == "1"
-# Память описаний вопроса — по тому же ключу и того же размера, что у шага 1: описание
-# зависит ровно от текста вопроса, данных оно не видит.
-_FACTS_MEMO = {}
-
-
-def question_facts(question, today):
-    """Описание вопроса моделью: на что он указывает, назван ли период и величина.
-
-    Один вызов на вопрос, с памятью. Модель здесь — языковой инструмент: в её задании
-    (`serene_enough.FACTS_SYS`) нет ни слова о том, отвечать или переспрашивать. Вердикт
-    собирает код (`serene_enough.verdict_after`) из этого описания и из чисел базы.
-
-    Не разобралось — `None`, и шаг молчит: сбой описания сам по себе уточнением не
-    становится, иначе перебои у поставщика модели превращались бы в вопросы человеку.
-    """
-    key = (today, question)
-    hit = _FACTS_MEMO.get(key)
-    if hit is not None:
-        return json.loads(hit)
-    try:
-        raw = ds_chat([{"role": "system", "content": serene_enough.FACTS_SYS},
-                       {"role": "user", "content": "Question: %s" % question}],
-                      max_tokens=200)
-    except Exception:                              # noqa: BLE001 — сеть/квота поставщика
-        return None
-    got = serene_enough.parse_facts(raw)
-    if got is None:
-        return None
-    if len(_FACTS_MEMO) >= max(1, INTENT_MEMO):
-        _FACTS_MEMO.clear()
-    _FACTS_MEMO[key] = json.dumps(got, ensure_ascii=False)
-    return got
-
-
-def entity_has_dates(src):
-    """Есть ли у источника хоть одна дата — числом из базы, а не догадкой по имени.
-
-    Нужно затем, чтобы вопрос о периоде задавался только там, где период у данных вообще
-    бывает: у справочника дат нет, и «за какой период» там означало бы выбор, которого в
-    данных не существует.
-
-    Запрос дешёвый по построению: `LIMIT 1` во вложенном выборе — движку достаточно найти
-    одну строку, полный проход сущности не делается. Не получилось — считаем, что дат нет:
-    отсутствие сведений оставляет вопрос человеку прежним, а не расширяет его.
-    """
-    if not src:
-        return False
-    try:
-        r = psql("SELECT count(*) FROM (SELECT 1 FROM %s WHERE src_table = %s "
-                 "  AND doc_date IS NOT NULL LIMIT 1) x" % (CORPUS, lit(src)))
-    except RuntimeError:
-        return False
-    try:
-        return int(_num(r[0][0])) > 0 if r and r[0] else False
-    except (TypeError, ValueError, IndexError):
-        return False
-
-
-def _gate_need(text, rows=(), agg=None, allowed=None, our_dates=None):
-    """Гейт для текста уточнения этого шага: числа плюс утечка ЕГО СОБСТВЕННОГО задания.
-
-    Общий `gate_out` сверяет утечку по списку `OUR_PROMPTS`, собранному до появления шага,
-    и задания `NEED_SYS` там нет. Дописывать в чужой список отсюда — правка гейта (шаг 7,
-    его ведёт другая сессия), поэтому недостающая проверка стоит своей строкой здесь, на
-    том же штатном `prompt_leak`. Пересказанное человеку задание читается как факт о его
-    данных ровно так же, как выдуманное число.
-    """
-    ok, bad = gate_out(text, rows, agg, allowed, our_dates)
-    leak = prompt_leak(text, [serene_enough.NEED_SYS])
-    if leak:
-        return False, list(bad) + ["утечка инструкции: %s" % leak]
-    return ok, bad
-
-
-def _need_clarify(question, slots, why, diag):
-    """Уточнение о недостающих параметрах вопроса. `None` — сформулировать не вышло.
-
-    `options` пуст намеренно: выбирать здесь не из чего — кнопки предлагают ИСТОЧНИКИ, а
-    спрашиваем мы про сам вопрос («какой товар, за какой период»). Человек отвечает новым,
-    более полным вопросом, и на нём шаг уже молчит: значение названо. Протокол моста от
-    этого не меняется — `[CLARIFICATION NEEDED]` он ставит по `kind`, а перечень вариантов
-    у него необязателен.
-    """
-    txt = serene_enough.need_say(question, slots, ds_chat, _gate_need, diag)
-    if not txt:
-        return None
-    d = _diag_pack(diag or {})
-    d["not_enough"] = {"чего_нет": [s.get("kind") for s in slots if isinstance(s, dict)],
-                       "почему": why}
-    return {"partial": None, "kind": "clarify", "text": txt, "options": [],
-            "sources": [], "diag": d}
-
 
 def _journal_keep_n():
     """N последних строк: count(search_tables) × 6 видов × 2 (вопрос + клик)."""
@@ -5764,88 +5655,13 @@ def _answer_checked_core(question, focus=None, measure_pick=None, context="", pr
                          trusted=None, resolved=None):
     """Тело ответа без журнала — все return идут через обёртку answer_checked."""
     _token_acc_start()
-    def plain():
-        return answer(question, focus=focus, measure_pick=measure_pick, context=context,
-                      prior=prior, trusted=trusted, resolved=resolved)
-
-    if not (ENOUGH_ON and serene_enough) or guards_skip_for_choice(
-            focus, measure_pick, trusted):
-        return plain()
-    today = time.strftime("%Y-%m-%d")
-    try:
-        intent = parse_intent(question, today)
-    except RuntimeError:
-        return plain()                             # разбора нет — решает обычный путь
-    need, slots, why = serene_enough.verdict_before(intent)
-    if need:
-        ask = _need_clarify(question, slots, why, {"шаг": "достаточность до поиска"})
-        if ask:
-            return ask
-    out = plain()
-    if not isinstance(out, dict) or out.get("kind") not in ("answer", "figures"):
-        return out
-    if not serene_enough.facts_wanted(intent):
-        return out
-    facts = question_facts(question, today)
-    if not facts:
-        return out
-    d = out.get("diag") or {}
-    счёт = d.get("счёт") or {}
-    # Из скольких записей сложился итог. `со_значением` точнее `строк`: складываются
-    # только записи с величиной, и именно их число решает, меняет ли выбор предмета ответ.
-    counted = счёт.get("со_значением")
-    if counted is None:
-        counted = счёт.get("строк", d.get("rows", 0))
-    need, slots, why = serene_enough.verdict_after(
-        intent, facts, counted, entity_has_dates(d.get("focus")))
-    if not need:
-        return out
-    ask = _need_clarify(question, slots, why,
-                        dict(d, шаг="достаточность после счёта"))
-    return ask or out
-
-
-
-
-def _try_memory_apply(question, out, user, focus, measure_pick, context, prior,
-                      trusted, mem_action):
-    """Повторный прогон с веткой из памяти (ASK_MEMORY_APPLY=1)."""
-    if (not ASK_MEMORY_APPLY or not ASK_CHOICE_MEMORY or not user or trusted
-            or mem_action):
-        return out, trusted
-    probe = ACM.probe_memory_apply(
-        out, psql=psql, tables=TABLES, user=user)
-    if not probe.get("can_apply"):
-        return out, trusted
-    br = probe["branch"]
-    mfocus = br.get("src") or None
-    mmeas = br.get("measure") or None
-    if mmeas == "":
-        mmeas = None
-    # sales_sum: память на документ/журнал/книгу не применяем — канон регистр
-    # ([замер 21.08] память → передача ТМЦ → июль 0).
-    if mfocus and sales_sum_intent({}, question) and sales_noncanon_focus(mfocus):
-        return out, trusted
-    mem_trusted = ACM.memory_trusted(br)
-    out = _answer_checked_core(
-        question, focus=mfocus, measure_pick=mmeas or measure_pick,
-        context=context, prior=prior, trusted=mem_trusted,
-        resolved=peek_resolved(question, user))
-    out = ACM.finish_apply(out, probe)
-    return out, mem_trusted
+    return answer(question, focus=focus, measure_pick=measure_pick, context=context,
+                  prior=prior, trusted=trusted, resolved=resolved)
 
 def answer_checked(question, focus=None, measure_pick=None, context="", prior=None,
                    trusted=None, decision_id=None, user=None, channel=None,
                    mem_action=None, rid=None):
-    """Ответ вместе с шагом «достаточен ли вопрос». Точка входа сервиса.
-
-    Порядок п. 21 сохранён: сперва пробуем ответить, уточняем только там, где ответа с
-    одним смыслом не существует. Дешёвая половина стоит ДО поиска и экономит весь прогон,
-    решающая — ПОСЛЕ счёта, потому что опирается на посчитанные числа.
-
-    🔴 Доказанный выбор (`trusted` из decision_id) — шаг достаточности молчит целиком,
-    иначе тот же выбор вернулся бы вопросом. Сырой focus/measure шаг не гасят (аудит §10),
-    кроме аварийного ASK_RAW_FOCUS_TRUST=1.
+    """Точка входа сервиса: билеты decision_id → trusted, затем answer.
 
     Журнал (шаг 5): одна точка на всех исходах, включая choice_error и unavailable.
     """
@@ -5909,9 +5725,6 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
                 _d = dict(out.get("diag") or {})
                 _d.setdefault("ticket_variant", _tv)
                 out = dict(out, diag=_d)
-        out, trusted = _try_memory_apply(
-            question, out, user, focus, measure_pick, context, prior,
-            trusted, mem_action)
         return out
     except Exception:
         out = {"kind": "unavailable", "text": "", "sources": [], "retry": True, "partial": None}
