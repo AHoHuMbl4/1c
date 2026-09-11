@@ -1,3 +1,22 @@
+## 2026-09-11 (3) — Поднят упавший web-контур Open WebUI (mcp-ask лежал с 01.09; шлюз 18801 disabled) [операция]
+
+**[операция]** (сигнал владельца: «Ассистент 1С Open WebUI: Server Connection
+Error»). Цепочка браузер → Caddy(10.3.0.2) → Open WebUI :8080 →
+10.3.1.11:18801 (LXD proxy) → openclaw-gateway-web (undebot) →
+1c-mcp-ask@postgres → 1c-serene-ask. Найдено: **1c-mcp-ask@postgres inactive
+(dead), последняя запись журнала 01.09 10:55** (disabled — после падения не
+восстановился); **web-шлюз openclaw-gateway-web (user-unit undebot) disabled,
+18801 не слушал**. Поднято по канону setup-okna-backend-web.sh:
+`systemctl enable --now 1c-mcp-ask@postgres` + user
+`systemctl --user enable --now openclaw-gateway-web` (теперь переживают
+ребут). Сквозной замер: POST :18801/v1/chat/completions (токен шлюза,
+модель openclaw/main) → «За вчерашний день — 107 продаж», 117с — вся цепочка
+до базы жива; /v1/models 200. Фронт проверен: в env процесса действующий
+OPENAI_API_BASE_URL=http://10.3.1.11:18801/v1 (вторая строка файла —
+AUDIO_STT, не чат). Числа: mcp-ask 10 дней down; 18801 000→200; сквозной
+chat 200 «107 продаж»; models 200. Доки: ubuntu/open-webui/README.md;
+CHANGELOG 2026-09-11 (2)
+
 ## 2026-09-11 (2) — Починен контур ответов: двойной /v1 в DEEPSEEK_BASE (404 с 06.09) + reasoning-only у OpenRouter [код]
 
 **[код]** (диагноз по живому спросу владельца «можно ли задавать вопросы» —
