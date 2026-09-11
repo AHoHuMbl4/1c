@@ -1,3 +1,25 @@
+## 2026-09-11 (2) — Починен контур ответов: двойной /v1 в DEEPSEEK_BASE (404 с 06.09) + reasoning-only у OpenRouter [код]
+
+**[код]** (диагноз по живому спросу владельца «можно ли задавать вопросы» —
+нет, с 06.09 каждый POST /ask отвечал unavailable). Две причины, обе
+доказаны замером: (1) **двойной /v1**: код строит `DS_BASE + "/v1/chat/
+completions"` (z01:534), env задавал `https://openrouter.ai/api/v1` → запрос
+на `…/api/v1/v1/…` → **404** (замер curl: двойной 404, правильный 200). Это
+долг из 08.09 (чинили в classify_entities, z01 остался). Фикс: env
+`DEEPSEEK_BASE=https://openrouter.ai/api` в 3 файлах (mcp-reports, embed,
+serene-ask-postgres; bak-20260911-baseurl рядом). (2) **reasoning-only**:
+после фикса URL модель qwen/qwen3.8-27b (провайдер Io Net) отдавала
+`content=None`, весь ответ в `reasoning`, finish=length → «модель не вернула
+разбор вопроса» → 503. `chat_template_kwargs.enable_thinking=false`
+провайдер игнорирует; родное поле OpenRouter `reasoning:{enabled:false}`
+работает (замер: content «Четыре», reasoning None, stop). Фикс: z01
+`_ds_chat_body` + env-флаг `DS_REASONING_OFF` (дефолт выкл — путь на локальный
+27B vLLM не трогаем). Замки после правки: zone_names 99/0, intent 162/0.
+⚠️ Баланс OpenRouter ~2,8 из 25 кредитов — пополнить. Числа: 404→200
+(двойной/правильный URL); content None→«Четыре» (reasoning выкл); замки
+99/0+162/0. Доки: openrouter.ai/api/v1 (reasoning field); graph: долг
+classify 08.09 закрыт
+
 ## 2026-09-11 (1) — Полный снапшот базы холодной копией + ловушка: EXPORT DATABASE уронил движка OOM [операция]
 
 **[операция]** (указание владельца: «снапшот всего, восстановление без GPU»).

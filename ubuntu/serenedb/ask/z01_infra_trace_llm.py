@@ -191,6 +191,7 @@ DS_THINKING = os.environ.get("DEEPSEEK_THINKING", "disabled")
 # vLLM/Qwen: thinking выключается через extra_body, а не полем DeepSeek.
 # Включать только на инстансе с ASK-моделью qwen — DeepSeek extra_body игнорирует.
 ASK_THINKING_OFF_BODY = os.environ.get("ASK_THINKING_OFF_BODY", "") in ("1", "true", "yes")
+DS_REASONING_OFF = os.environ.get("DS_REASONING_OFF", "") in ("1", "true", "yes")
 
 # 🔴 ИМЯ НАСТРОЙКИ НЕ НАЗЫВАЕТ ПОСТАВЩИКА. Прежние `ALIBABA_*` читаются, но только как
 # запасной вариант: 02.08 эмбеддер переехал с dashscope на свой (Qwen3-Embedding-4B,
@@ -525,6 +526,10 @@ def _ds_chat_body(messages, temperature=0, max_tokens=900):
     if ASK_THINKING_OFF_BODY:
         # vLLM Qwen: kwargs на верхнем уровне тела; extra_body игнорируется [замер 17.08].
         body["chat_template_kwargs"] = {"enable_thinking": False}
+    if DS_REASONING_OFF:
+        # OpenRouter: нативный выключатель reasoning; chat_template_kwargs
+        # провайдер игнорирует — ответ уходит в reasoning без content [замер 11.09].
+        body["reasoning"] = {"enabled": False}
     return body
 
 
