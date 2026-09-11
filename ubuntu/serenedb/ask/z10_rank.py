@@ -6,20 +6,26 @@ from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
 
-def count_question_skips_axis(intent, measure, grain_dec):
-    """Счёт записей сущности без оси — axis-clarify здесь лишний (B8-02).
+def count_question_skips_axis(intent, measure, grain_dec, plan=None):
+    """Счёт записей сущности без оси — axis-clarify здесь лишний (B8-02 / Z2 §3.3).
 
     «Сколько контрагентов» — row count по справочнику; оси Parent/Город — не
-    альтернативные прочтения вопроса, а шум структуры. Аудит §2: clarify только
-    при неподписанных/непосчитанных ветках, не при count без measure.
+    альтернативные прочтения вопроса, а шум структуры. Plain count/list/пустой
+    want без явного разреза — не меню осей (волна W).
     """
     if (grain_dec or {}).get("clarify") != "axis":
         return False
     want = (intent or {}).get("want") or ""
-    if want not in ("count", "list"):
+    if want not in ("", "count", "list"):
+        return False
+    # list сам по себе — счёт/перечень без оси (исторический skip);
+    # явный разрез (amount / max|min) — не skip. count/"" — ещё not breakdown.
+    if want != "list" and question_wants_breakdown(intent, plan):
         return False
     amt = (intent or {}).get("amount") or {}
     if amt.get("op") or amt.get("value") is not None:
+        return False
+    if (plan or {}).get("compute") in ("max", "min"):
         return False
     if measure:
         return False

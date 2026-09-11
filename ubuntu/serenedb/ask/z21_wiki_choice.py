@@ -91,6 +91,130 @@ def wiki_platform_kind(src_table, parent=""):
     return kind_word(src_table) or str(src_table or "").split("_", 1)[0]
 
 
+# типы метаданных 1С ($metadata), не слова домена.
+# Родовые термины платформы — одинаковы для любой базы 1С. Длинные фразы
+# раньше коротких: «регистр накопления» до «регистр», «журнал документов»
+# до «журнал»/«документ».
+_NAMED_PLATFORM_TYPE_PHRASES = (
+    ("план видов характеристик", ("chartofcharacteristictypes",)),
+    ("план видов расчёта", ("chartofcalculationtypes",)),
+    ("регистр накопления", ("accumulationregister",)),
+    ("регистр сведений", ("informationregister",)),
+    ("регистр расчёта", ("calculationregister",)),
+    ("регистр бухгалтерии", ("accountingregister",)),
+    ("журнал документов", ("documentjournal",)),
+    ("бизнес-процесс", ("businessprocess",)),
+    ("план счетов", ("chartofaccounts",)),
+    ("план обмена", ("exchangeplan",)),
+    ("перечисление", ("enum",)),
+    ("справочник", ("catalog",)),
+    ("константа", ("constant",)),
+    ("журнал", ("documentjournal",)),
+    ("документ", ("document",)),
+    ("регистр", (
+        "accumulationregister",
+        "informationregister",
+        "calculationregister",
+        "accountingregister",
+    )),
+    ("задача", ("task",)),
+)
+
+# Паттерны словоформ родовых терминов типов (конечный словарь платформы).
+_NAMED_TYPE_WORD_RE = {
+    "регистр": r"регистр(?:а|е|ом|у|ы|ов)?",
+    "накопления": r"накоплен(?:ия|ие|ии|ием|ий)?",
+    "сведений": r"сведен(?:ий|ия|ие|ии|ием|иям|иями|иях)?",
+    "расчёта": r"расч[её]т(?:а|е|ом|у|ы|ов)?",
+    "бухгалтерии": r"бухгалтер(?:ии|ия|ией|ию)?",
+    "журнал": r"журнал(?:а|е|ом|у|ы|ов)?",
+    "документов": r"документ(?:ов|а|е|ом|у|ы|ам|ами|ах)?",
+    "документ": r"документ(?:а|е|ом|у|ы|ов|ам|ами|ах)?",
+    "справочник": r"справочник(?:а|е|ом|у|и|ов|ам|ами|ах)?",
+    "перечисление": r"перечислен(?:ие|ия|ии|ием|ий|ию)?",
+    "план": r"план(?:а|е|ом|у|ы|ов)?",
+    "видов": r"вид(?:ов|а|е|ом|у|ы|ам)?",
+    "характеристик": r"характеристик(?:а|и|е|ой|у|ам|ами|ах)?",
+    "счетов": r"сч[её]т(?:ов|а|е|ом|у|ы|ам)?",
+    "обмена": r"обмен(?:а|е|ом|у|ы)?",
+    "константа": r"констант(?:а|ы|е|ой|у|ам|ами|ах)?",
+    "бизнес-процесс": r"бизнес(?:\s*|-)+процесс(?:а|е|ом|у|ы|ов)?",
+    "задача": r"задач(?:а|и|е|ей|у|ам|ами|ах)?",
+}
+
+_NAMED_TYPE_PHRASE_RE = None
+
+
+def _norm_ye(text):
+    return (text or "").lower().replace("ё", "е")
+
+
+def _named_type_phrase_patterns():
+    """Скомпилировать фразы типов (один раз): границы слова, формы падежей."""
+    global _NAMED_TYPE_PHRASE_RE
+    if _NAMED_TYPE_PHRASE_RE is not None:
+        return _NAMED_TYPE_PHRASE_RE
+    out = []
+    for phrase, kinds in _NAMED_PLATFORM_TYPE_PHRASES:
+        parts = []
+        for raw in phrase.split():
+            key = raw
+            pat = _NAMED_TYPE_WORD_RE.get(key) or _NAMED_TYPE_WORD_RE.get(
+                _norm_ye(key))
+            if not pat:
+                pat = re.escape(_norm_ye(key))
+            parts.append(pat)
+        body = r"\s+".join(parts)
+        cre = re.compile(
+            r"(?<![а-яёa-z0-9_])" + body + r"(?![а-яёa-z0-9_])",
+            re.IGNORECASE)
+        out.append((cre, tuple(kinds)))
+    _NAMED_TYPE_PHRASE_RE = out
+    return out
+
+
+def named_platform_kinds(question):
+    """Допустимые OData-типы, если в вопросе назван род метаданных 1С.
+
+    Пустой список — тип не назван (фильтр пула не трогает). «регистр» без
+    уточнения → все *register. Длинные фразы раньше коротких.
+    """
+    q = _norm_ye(question)
+    if not q.strip():
+        return []
+    for cre, kinds in _named_type_phrase_patterns():
+        if cre.search(q):
+            return list(kinds)
+    return []
+
+
+def _card_odata_kind(card):
+    """OData-префикс карточки (platform kind) из src_table."""
+    src = str((card or {}).get("src_table") or "")
+    return src.split("_", 1)[0].lower() if src else ""
+
+
+def filter_pool_by_named_type(question, cards, diag=None):
+    """Исключить из пула карточки чужого типа, если тип назван в вопросе.
+
+    Не добавляет кандидатов и не сортирует. Тип не назван → пул как был.
+    После фильтра пустой пул — честное «нет такого типа» (каскад → no_data).
+    """
+    cards = list(cards or [])
+    allowed = named_platform_kinds(question)
+    if diag is not None:
+        diag["named_type"] = list(allowed)
+        diag["pool_before"] = len(cards)
+    if not allowed:
+        if diag is not None:
+            diag["pool_after"] = len(cards)
+        return cards
+    out = [c for c in cards if _card_odata_kind(c) in allowed]
+    if diag is not None:
+        diag["pool_after"] = len(out)
+    return out
+
+
 def wiki_axis_phrase(intent, question=""):
     """Оси разбора (kind + action_axis) — структурный вход SQL.
 
@@ -250,6 +374,61 @@ def wiki_format_card_lines(cards):
                c.get("axes") or "—",
                c.get("measures") or "—"))
     return "\n\n".join(lines)
+
+
+def wiki_menu_captions(options, passports_by_src=None, cards_by_src=None):
+    """Единый форматтер подписей меню (формула №15 ступень 4; K4 §2.1).
+
+    N вариантов на входе → N на выходе, порядок сохранён. Текст только из
+    wiki-passport / card (те же поля, что wiki_format_passport_lines /
+    wiki_format_card_lines). Без паспорта — человеческий label как есть.
+    Без LLM, без фильтрации / слияния / сортировки / выбора главного.
+    """
+    passports_by_src = passports_by_src or {}
+    cards_by_src = cards_by_src or {}
+    out = []
+    for opt in list(options or []):
+        row = dict(opt)
+        src = row.get("src") or ""
+        text = ""
+        p = passports_by_src.get(src) if src else None
+        if isinstance(p, dict):
+            name = (p.get("name") or "").strip()
+            body = (p.get("wiki_body") or p.get("description") or "").strip()
+            if body:
+                body = body[:200]
+            if name and body and name not in body:
+                text = "%s — %s" % (name, body)
+            else:
+                text = body or name
+        else:
+            c = cards_by_src.get(src) if src else None
+            if isinstance(c, dict):
+                name = (c.get("name") or "").strip()
+                desc = (c.get("description") or "").strip()
+                if desc:
+                    desc = desc[:200]
+                if name and desc and name not in desc:
+                    text = "%s — %s" % (name, desc)
+                else:
+                    text = desc or name
+        if text:
+            row["label"] = text
+            row["wiki_caption"] = text
+        out.append(row)
+    return out
+
+
+def wiki_captions_map_from_cards(cards):
+    """src_table → карточка/паспорт для wiki_menu_captions (порядок не трогает)."""
+    out = {}
+    for c in cards or []:
+        if not isinstance(c, dict):
+            continue
+        src = c.get("src_table") or ""
+        if src:
+            out[src] = c
+    return out
 
 
 def _wiki_substitute_passport_sql(template, src_tables):
@@ -510,7 +689,12 @@ def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
     diag["wiki_verify_yes"] = len(yes_i)
     diag["wiki_verify_unsure"] = len(unsure_i)
     diag["wiki_verify_no"] = len(no_i)
-    if len(yes_i) == 1 and not unsure_i:
+    # В4 / решение 4-А: лидер только если ровно ОДИН не отвергнут (yes),
+    # а ВСЕ остальные получили no. ≥2 неотвергнутых (два yes / yes+unsure) →
+    # wiki-tie clarify. Пропуск вердикта ≠ no — в лидера не пускает.
+    if (len(yes_i) == 1
+            and len(no_i) == len(passports) - 1
+            and not unsure_i):
         leader = passports[yes_i[0] - 1].get("src_table")
         if not wiki_validate_leader_axes(leader, intent):
             diag["wiki_verify"] = "axis_reject"
@@ -701,191 +885,6 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
 
 
 
-def _wiki_agg_figure_num(agg, measure):
-    """Branch figure for tied compare (same priority as figures_numbers)."""
-    if not agg:
-        return None
-    if measure:
-        v = agg.get("sum")
-        if v is None and int(agg.get("count") or 0) == 0:
-            v = 0.0
-    else:
-        v = agg.get("count")
-    if v is None:
-        return None
-    try:
-        return round(float(v), 2)
-    except (TypeError, ValueError):
-        return None
-
-
-def _wiki_collapse_resolve_measure(src, question, intent, match, preds, tied,
-                                   diag, plan=None):
-    """Measure for one tied branch — same rules as answer() after entity pick."""
-    g = globals()
-    plan = plan or {}
-    intent = intent or {}
-    measure_word = _intent_text(intent.get("measure"))
-    measures_of_fn = g.get("measures_of")
-    if not callable(measures_of_fn):
-        return None, None
-    _mnames = measures_of_fn(src)
-    measure_aliases_of_fn = g.get("measure_aliases_of")
-    _malias = (measure_aliases_of_fn(src)
-               if callable(measure_aliases_of_fn) else {})
-    pick_measure_fn = g.get("pick_measure")
-    if measure_word:
-        if not callable(pick_measure_fn):
-            return None, None
-        measure, alts, how = pick_measure_fn(src, question, measure_word)
-        if not measure or alts:
-            return None, None
-        return measure, how or "named"
-    measure, measure_alts, how = None, [], ""
-    if callable(pick_measure_fn):
-        measure, measure_alts, how = pick_measure_fn(src, question, "")
-    unresolved_quantity_fn = g.get("unresolved_quantity")
-    if not measure and not measure_alts and callable(unresolved_quantity_fn):
-        _need_q = ((intent.get("want") or "") == "sum"
-                   or (plan.get("compute") or "") in ("sum", "max", "min", "avg"))
-        _qt = {}
-        if _need_q and len(_mnames) > 1:
-            totals_of_fn = g.get("totals_of")
-            if callable(totals_of_fn):
-                try:
-                    _qt = {m: v for m, v, _mx, _mn
-                           in totals_of_fn(src, match or "", preds or [], _mnames)}
-                except RuntimeError:
-                    _qt = {}
-        measure, measure_alts = unresolved_quantity_fn(
-            measure, measure_alts, intent.get("want"), plan.get("compute"),
-            _mnames, _qt)
-    if measure_alts:
-        return None, None
-    sales_sum_intent_fn = g.get("sales_sum_intent")
-    sales_rank_engaged_fn = g.get("sales_rank_engaged")
-    _cands = list(tied or []) + ([src] if src else [])
-    _rank_sales = (sales_rank_engaged_fn(intent, plan, question, _cands)
-                   if callable(sales_rank_engaged_fn) else False)
-    if ((callable(sales_sum_intent_fn) and sales_sum_intent_fn(intent, question))
-            or _rank_sales):
-        _sm, _how = None, None
-        if _rank_sales:
-            # В2: rank-resolve меры снесён — при двух классах меры → clarify.
-            measure_class_alts_fn = g.get("measure_class_alts")
-            if callable(measure_class_alts_fn):
-                _mc, _ma = measure_class_alts_fn(_mnames, _malias)
-                if len(_ma) == 2:
-                    return None, None
-        else:
-            sales_money_measure_fn = g.get("sales_money_measure")
-            if callable(sales_money_measure_fn):
-                _sm = sales_money_measure_fn(_mnames, _malias)
-                if _sm:
-                    _how = "sales_money"
-        if _sm:
-            measure, how = _sm, _how
-    if measure:
-        return measure, how
-    want = (intent.get("want") or "").strip().lower()
-    compute = (plan.get("compute") or "").strip().lower()
-    if want == "sum" or compute in ("sum", "max", "min", "avg"):
-        return None, None
-    return None, "count"
-
-
-def _wiki_clarify_collapse_answer(question, intent, tied, match, preds, diag,
-                                  cut, t0, lab_by):
-    """Equal measured totals across tied src_table -> kind=answer."""
-    g = globals()
-    aggregate_fn = g.get("aggregate")
-    if not callable(aggregate_fn):
-        return None
-    rows = []
-    for src in tied:
-        measure, _how = _wiki_collapse_resolve_measure(
-            src, question, intent, match, preds, tied, diag, plan={})
-        if _how is None:
-            diag["wiki_clarify_collapsed"] = "unresolved"
-            return None
-        try:
-            agg = aggregate_fn(src, match or "", preds or [], measure)
-        except RuntimeError:
-            diag["wiki_clarify_collapsed"] = "unresolved"
-            return None
-        num = _wiki_agg_figure_num(agg, measure)
-        if num is None:
-            diag["wiki_clarify_collapsed"] = "unresolved"
-            return None
-        rows.append((src, measure, agg, num))
-    nums = {r[3] for r in rows}
-    if len(nums) > 1:
-        diag["wiki_clarify_collapsed"] = "differ"
-        return None
-    diag["wiki_clarify_collapsed"] = "equal"
-    _src0, measure, agg, _num = rows[0]
-    diag["wiki_clarify_collapsed_measure"] = measure or "count"
-    want = (intent or {}).get("want")
-    plan = {}
-    answer_slot_mode_fn = g.get("answer_slot_mode")
-    atom_operation_fn = g.get("atom_operation")
-    measure_label_of_fn = g.get("measure_label_of")
-    atom_from_agg_fn = g.get("atom_from_agg")
-    _passport_origin_fn = g.get("_passport_origin")
-    split_ident_fn = g.get("split_ident")
-    render_atom_pair_fn = g.get("render_atom_pair")
-    _fmt_fn = g.get("_fmt")
-    _fork_figures_of_fn = g.get("_fork_figures_of")
-    needed = (answer_slot_mode_fn, atom_operation_fn, measure_label_of_fn,
-              atom_from_agg_fn, _passport_origin_fn, split_ident_fn,
-              render_atom_pair_fn, _fork_figures_of_fn)
-    if not all(callable(f) for f in needed):
-        diag["wiki_clarify_collapsed"] = "unresolved"
-        return None
-    slot_mode = answer_slot_mode_fn(want, plan.get("compute"))
-    money = bool(measure)
-    _form = (agg or {}).get("form") or "number"
-    _grain = (agg or {}).get("grain") or "row"
-    op = atom_operation_fn(want, plan.get("compute"), form=_form, grain=_grain,
-                           slot_mode=slot_mode)
-    if not measure:
-        op = "count"
-    say_measure = measure
-    mlabel = (measure_label_of_fn(_src0, say_measure) if say_measure
-              else measure_label_of_fn(_src0, None))
-    atom = atom_from_agg_fn(
-        agg, operation=op,
-        measure_id=(say_measure or None),
-        measure_label=mlabel,
-        money=money,
-        period=(None if diag.get("period_assumed_dropped")
-                else (intent or {}).get("period")),
-        period_origin=_passport_origin_fn(intent, diag),
-        grain=_grain, form=_form,
-        axis=None, completeness=None,
-        folders=(agg or {}).get("folders") or 0,
-        src=None)
-    atom = dict(atom)
-    atom.pop("src", None)
-    mid = atom.get("measure_id")
-    if mid:
-        atom["measure_label"] = split_ident_fn(mid) or mid
-    text = render_atom_pair_fn(atom) or (_fmt_fn(atom.get("exact_value"))
-                                         if atom.get("exact_value") is not None
-                                         else "")
-    if not (text or "").strip():
-        diag["wiki_clarify_collapsed"] = "unresolved"
-        return None
-    figs = _fork_figures_of_fn(atom)
-    sources = [lab_by.get(s) or s.split("_", 1)[-1] for s in tied]
-    sources = [s for s in sources if s]
-    return {"partial": cut or None, "kind": "answer", "text": text,
-            "figures": figs, "atom": atom, "atoms": [atom],
-            "source_fixed": False, "memory_eligible": False,
-            "sources": sources,
-            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                               reason="wiki_separability_collapsed")}
-
 
 def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
                                 by=None, match="", preds=None):
@@ -899,6 +898,9 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
     except RuntimeError:
         return None
     cards = wiki_hybrid_pool(question, intent)
+    # Тип из текста вопроса — часть интерпретации: чужие platform_kind
+    # режем КОДОМ до verify/LLM (дополнение к В4, решение владельца 11.09).
+    cards = filter_pool_by_named_type(question, cards, diag=diag)
     diag["wiki_pool_n"] = len(cards)
     diag["wiki_pool"] = [c["src_table"] for c in cards]
     if not cards:
@@ -949,15 +951,15 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
         try:
             lab_by = {r[0]: r[1] for r in psql(
                 "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                % (TABLES, ", ".join(lit(c) for c in tied))) if r and r[0]}
+                % (TABLES, ", ".join(lit(c) for c in tied)))
+                if r and len(r) > 1 and r[0]}
         except RuntimeError:
             lab_by = {}
         opts = mk_opts(tied, lab_by, {}, by or {}, match=match or "", preds=preds or [])
         if len(opts) >= 2:
-            collapsed = _wiki_clarify_collapse_answer(
-                question, intent, tied, match, preds, diag, cut, t0, lab_by)
-            if collapsed:
-                return collapsed
+            # В4: равные числа → меню (1-Б); подписи из паспортов verify-кандидатов.
+            _pmap = wiki_captions_map_from_cards(pick.get("candidates") or [])
+            opts = wiki_menu_captions(opts, passports_by_src=_pmap)
             return {"partial": cut or None, "kind": "clarify",
                     "text": clarify_say(question, opts, diag)
                             or ", ".join("«%s»" % o["label"] for o in opts),
@@ -1072,6 +1074,29 @@ def wiki_leader_post_verify(leader, intent, question, diag=None):
         diag["wiki_none"] = "axis_not_carried"
         return False
     return True
+
+
+def wiki_leader_alive(diag, picked):
+    """Живой wiki-лидер: один picked, wiki_verify совпал, yes==1.
+
+    Признак тракта исходов (В4 / формула №15): при лидере меню развилки
+    и ранний entity-clarify уступают вики-выбору.
+    """
+    picked = [p for p in (picked or []) if p]
+    if len(picked) != 1:
+        return False
+    d = diag or {}
+    if not d.get("wiki_hybrid_pick"):
+        return False
+    if d.get("wiki_verify") != picked[0]:
+        return False
+    yes = d.get("wiki_verify_yes")
+    if yes is None:
+        return True
+    try:
+        return int(yes) == 1
+    except (TypeError, ValueError):
+        return False
 
 
 def wiki_measure_carried(src_table, measure):

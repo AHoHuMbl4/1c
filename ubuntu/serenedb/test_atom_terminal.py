@@ -68,20 +68,14 @@ t("K5a unique atom computed",
 _ans_u = A.fork_outcome_unique(
     "сколько документов реализации за декабрь 2025?",
     pay_u.get("class"), {"focus": "doc"})
-t("K5a unique→answer kind",
-  _ans_u and _ans_u.get("kind") in ("answer", "figures"),
-  (_ans_u or {}).get("kind"))
-t("K5a unique→answer несёт 307",
-  _ans_u and "307" in str((_ans_u or {}).get("text") or ""),
-  (_ans_u or {}).get("text"))
-t("K5a unique diag fork_outcome",
-  ((_ans_u or {}).get("diag") or {}).get("fork_outcome") == "unique")
+t("В4: unique→авто None (снос)",
+  _ans_u is None, _ans_u)
+t("В4: resolve unique остаётся классификацией", out_u == "unique")
 _restore(_s)
 
 _s = _flag(0)
-t("flag0: fork_outcome_unique всё равно строит пару (строитель чистый)",
-  A.fork_outcome_unique("q", pay_u.get("class"), {}) is not None)
-# ранний выход в answer() завязан на флаг — проверяем гейт флага отдельно
+t("flag0: fork_outcome_unique → None",
+  A.fork_outcome_unique("q", pay_u.get("class"), {}) is None)
 t("flag0: ASK_ATOM_TERMINAL is False", A.ASK_ATOM_TERMINAL is False)
 _restore(_s)
 
@@ -129,11 +123,8 @@ _mute = {
 _figs_zero = [{"count": 0}, {"count": 0}]
 _prom = A.prefer_mute_computed_over_clarify(
     _mute, "document_реализациятмц", _figs_zero, question="сколько документов?")
-t("mute+computed: prefer лидера, не clarify",
-  _prom is not None
-  and _prom.get("kind") in ("answer", "figures")
-  and "307" in str(_prom.get("text") or ""),
-  _prom)
+t("В4: mute+computed → None (авто снесён)",
+  _prom is None, _prom)
 _restore(_s)
 
 _s = _flag(0)

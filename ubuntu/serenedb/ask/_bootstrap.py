@@ -41,30 +41,15 @@ _ZONE_FILES = [
 
 _REGISTER_RE = re.compile(r"^register_zone\s*\(")
 
-# z20: каскад wiki-primary перенесён на диск 01.09; остальные патчи — при загрузке
-# (файл блокируется check-prompt-rules на docstring gate()), см. PLAN_WIKI_CHOICE §5.
+# z20: каскад wiki-primary и V4c wiki-лидер — на диске; патч: net + ef_gate (В7/В6).
 
 
 def _patch_z20_wiki_primary(text: str) -> str:
-    """Патчи z20 при загрузке (файл на диске — check-prompt-rules). Идемпотентны.
+    """Патчи z20 при загрузке. Идемпотентны.
 
-    Каскад wiki_primary_entity_cascade — на диске с 01.09; здесь только stock/cat/net
-    и далее.
+    На диске: wiki-лидер V4c (E/F/G/H). Здесь патч: net-distinct + ef_gate.
     """
-    # Post-pick stock_canon: не глушить при wiki_hybrid_pick, если уже stock_override
-    # или stock_canon_locked (wiki catalog → takeover регистра).
-    # В2: sales_canon_locked убран из тракта; stock_override-ветка ищет wiki_hybrid.
-    if ("and not diag.get(\"wiki_hybrid_pick\")\n"
-          "            and stock_question_engaged(question, intent)):") in text:
-        text = text.replace(
-            "            and not diag.get(\"wiki_hybrid_pick\")\n"
-            "            and stock_question_engaged(question, intent)):",
-            "            and (not diag.get(\"wiki_hybrid_pick\")\n"
-            "                 or diag.get(\"wiki_pick\") == \"stock_override\"\n"
-            "                 or diag.get(\"stock_canon_locked\"))\n"
-            "            and stock_question_engaged(question, intent)):",
-            1,
-        )
+    # Ветка A (stock wiki_hybrid) — якорь мёртв с В2; вычищена волной W.
     # catalog_count_src / sales_canon_locked post-pick — снесены в В2; cat-патч no-op.
 
     # Net-distinct ДО ordinary aggregate в ветке no_axis_member (Q1/Q2 → 13322).
@@ -114,6 +99,8 @@ def _patch_z20_wiki_primary(text: str) -> str:
         "                intent, question, match, preds, diag)\n")
     if _net2_old in text:
         text = text.replace(_net2_old, _net2_new, 1)
+
+    # V4c wiki-лидер (E/F/G/H) — на диске z20; патч no-op (волна W).
 
     # F-гейт: entity_form_gate_open (assumed period на флаге 0), не только ASK_ENTITY_FORM.
     _ef_gate_old = "if ASK_ENTITY_FORM and not no_arbiter"

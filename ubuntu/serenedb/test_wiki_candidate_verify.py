@@ -271,7 +271,11 @@ def main() -> int:
 
     def _ds_verify(*a, **k):
         verify_payload.append(a)
-        return json.dumps({"verdicts": [{"index": 1, "fit": "yes", "why": "v"}]})
+        # В4/4-А: лидер только при остальных no — мок обязан отвергнуть №2.
+        return json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "v"},
+            {"index": 2, "fit": "no", "why": "n"},
+        ]})
 
     z21["wiki_pick_from_cards"] = _pick
     z21["ds_chat"] = _ds_verify
@@ -554,53 +558,14 @@ def main() -> int:
     t("LLM action_axis + empty axis_cats → keep (vacuum fail-open)",
       ok_llm and not diag_llm.get("wiki_none"))
 
-    # [02.09 / В2] collapse: пустая мера + sales-вид → money helper, не count
-    _sales_q = "позавчера сколько было продаж"
-    _sales_intent = {"kind": "продажи", "measure": "", "want": "count"}
-    z21["sales_sum_intent"] = lambda intent, question="": True
-    z21["sales_rank_engaged"] = lambda *a, **k: False
-    z21["sales_money_measure"] = lambda names, alias_by=None: "Всего"
-    z21["measures_of"] = lambda src: ["Всего", "Количество"]
-    z21["measure_aliases_of"] = lambda src: {}
-    z21["pick_measure"] = lambda src, question, word: (None, [], "none")
-    z21["unresolved_quantity"] = lambda m, alts, want, compute, names, totals=None: (m, list(alts or []))
-
-    def _agg_sales(src, match, preds, measure):
-        if measure:
-            return {"sum": 0.0, "count": 9, "form": "money", "grain": "row"}
-        return {"sum": None, "count": 9, "form": "number", "grain": "row"}
-
-    z21["aggregate"] = _agg_sales
-    z21["answer_slot_mode"] = lambda want, compute: "count"
-    z21["atom_operation"] = lambda *a, **k: "sum"
-    z21["measure_label_of"] = lambda src, m: m or "count"
-    z21["atom_from_agg"] = lambda agg, **k: {
-        "exact_value": agg.get("sum") if k.get("money") else agg.get("count"),
-        "operation": k.get("operation"), "measure_id": k.get("measure_id")}
-    z21["_passport_origin"] = lambda intent, diag: None
-    z21["split_ident"] = lambda s: s
-    z21["render_atom_pair"] = lambda atom: str(atom.get("exact_value"))
-    z21["_fmt"] = lambda v: str(v)
-    z21["_fork_figures_of"] = lambda atom: [atom.get("exact_value")]
-
-    diag_collapse = {}
-    tied_sales = ["accumulationregister_a", "accumulationregister_b"]
-    collapsed = z21["_wiki_clarify_collapse_answer"](
-        _sales_q, _sales_intent, tied_sales, "", [], diag_collapse, None, 0, {})
-    t("collapse sales empty measure uses money canon not count",
-      collapsed and collapsed.get("kind") == "answer"
-      and collapsed.get("text") == "0.0"
-      and diag_collapse.get("wiki_clarify_collapsed") == "equal"
-      and diag_collapse.get("wiki_clarify_collapsed_measure") == "Всего")
-
-    # count-only: без sales-канона свёртка считает записи
-    z21["sales_sum_intent"] = lambda intent, question="": False
-    diag_count = {}
-    collapsed_count = z21["_wiki_clarify_collapse_answer"](
-        "сколько записей", {"want": "count"}, tied_sales, "", [], diag_count, None, 0, {})
-    t("collapse non-sales count intent stays count",
-      collapsed_count and collapsed_count.get("text") == "9"
-      and diag_count.get("wiki_clarify_collapsed_measure") == "count")
+    # [В4] collapse-equal снесён: равные числа при >1 → меню (1-Б).
+    t("В4: collapse helper отсутствует",
+      "_wiki_clarify_collapse_answer" not in z21)
+    z21_src = Z21.read_text(encoding="utf-8")
+    t("В4: collapse equal → clarify (нет silent helper в z21)",
+      "_wiki_clarify_collapse" not in z21_src
+      and "wiki_clarify_collapsed" not in z21_src)
+    t("В4: wiki_menu_captions есть", callable(z21.get("wiki_menu_captions")))
 
     r = subprocess.run([sys.executable, "-m", "py_compile", str(Z21)],
                        capture_output=True, text=True)

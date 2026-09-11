@@ -87,6 +87,39 @@ t("0 _meas_old bootstrap patch", "_meas_old" not in boot)
 t("0 _skip_old bootstrap patch", "_skip_old" not in boot)
 t("0 _rank_fold_old bootstrap patch", "_rank_fold_old" not in boot)
 
+# ── В4 негатив: вторые судьи / арбитр-цикл снесены ────────────────────────────
+def _real_calls(src, sym):
+    hits = []
+    for m in _re.finditer(r'\b%s\b' % _re.escape(sym), src):
+        line_start = src.rfind("\n", 0, m.start()) + 1
+        line = src[line_start:src.find("\n", m.start())]
+        code = line.split("#", 1)[0]
+        if sym in code:
+            hits.append(m.start())
+    return hits
+
+t("0 cand_src[0] in z20", "cand_src[0]" not in z20)
+t("0 wiki_arbiter_locked in z20", "wiki_arbiter_locked" not in z20)
+t("0 _alias_verdict in z20", "_alias_verdict" not in z20)
+t("0 no_arbiter=True in z20", "no_arbiter=True" not in z20)
+t("0 arbitrate( call in z20", not _real_calls(z20, "arbitrate"))
+t("0 collapse in z21",
+  "_wiki_clarify_collapse" not in (ASK / "z21_wiki_choice.py").read_text(encoding="utf-8")
+  and "wiki_clarify_collapsed" not in (ASK / "z21_wiki_choice.py").read_text(encoding="utf-8"))
+
+# ── Волна W: мерное clarify при entity-locked отсутствует ─────────────────────
+t("measure_hatch при entity-locked",
+  "measure_hatch" in z20 and "_entity_locked" in z20)
+t("мерный clarify только без locked (else)",
+  "Сущность не зафиксирована" in z20
+  or "не зафиксирована — прежнее меню" in z20)
+
+
+# (W-фикс) при живом wiki-лидере doubt сбрасывается: судья один (wiki verify),
+# writer_pair и прочие соперники — сырьё меню, не сомнение ответа.
+t("doubt-гейт при wiki-лидере",
+  "if wiki_leader_alive(diag, picked):\n        doubt = False" in z20)
+
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:
     print("failed:", "; ".join(FAIL))

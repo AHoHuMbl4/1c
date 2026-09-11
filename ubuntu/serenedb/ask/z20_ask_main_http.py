@@ -72,7 +72,7 @@ def rows_seen(rows):
 
 def gate(answer, rows, agg, thresholds=None, our_dates=None, money=True,
          slot_mode=None):
-    """Каждое число ответа обязано встречаться в данных, в итоге или в наших условиях.
+    """Числа ответа сверяются кодом с данными, итогом и нашими условиями.
 
     Правило живёт в КОДЕ, а не в промте: промт — это пожелание, а не гарантия.
     Числа из вопроса НЕ разрешаются: «вопрос» приходит как аргумент инструмента,
@@ -843,7 +843,6 @@ def _coverage_answer(question, diag, t0):
 # модели признаком неоднозначности. Решается замером, а не рассуждением.
 SIGNAL_DISAGREE = os.environ.get("ASK_SIGNAL_DISAGREE", "1") == "1"
 # Требовать подтверждения выбора сущности; иначе спрашивать человека.
-REQUIRE_SUPPORT = os.environ.get("ASK_REQUIRE_SUPPORT", "1") == "1"
 # Сколько готовых ответов отдавать арбитру. Больше двух-трёх не нужно: это
 # столько же полных ответов, сколько кандидатов, и время ответа растёт.
 ARBITER_MAX = int(os.environ.get("ASK_ARBITER_MAX", "3"))
@@ -1345,9 +1344,8 @@ def _wiki_named_entity(diag, src):
     буквального поиска. Одна пара признаков, три точки применения.
     """
     return bool(src) and (
-        (diag or {}).get("wiki_arbiter_locked") == src
-        or ((diag or {}).get("wiki_hybrid_pick")
-            and (diag or {}).get("wiki_verify") == src))
+        (diag or {}).get("wiki_hybrid_pick")
+        and (diag or {}).get("wiki_verify") == src)
 
 
 def resolve_focus(focus, diag=None, opts=None):
@@ -2533,8 +2531,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             extra = [t for t in sorted(holders, key=lambda x: -holders[x])[:3]
                      if t not in by and t not in picked and t not in not_for]
             if extra:
-                picked = list(dict.fromkeys((picked or []) + extra))
                 diag["code_ambiguous"] = extra
+                # Волна W / Z1-#1: при wiki_hybrid_pick holders — в diag, не в picked
+                # (иначе singleton-лидер ломается → entity-меню поверх каскада).
+                if not diag.get("wiki_hybrid_pick"):
+                    picked = list(dict.fromkeys((picked or []) + extra))
 
     # 🔴 РАСХОЖДЕНИЕ НЕЗАВИСИМЫХ СИГНАЛОВ — ЭТО И ЕСТЬ НЕОДНОЗНАЧНОСТЬ.
     # [замер 30.07] реранкер на вопрос «На какую сумму мы закупили товаров и услуг?»
@@ -2562,8 +2563,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # для арбитра, — поэтому берётся один раз и на весь круг кандидатов, которых мы можем
     # рассматривать. Без этого `_family` молча возвращала бы саму сущность, и в соперники
     # арбитру попадала бы табличная часть той же шапки: два ответа об одном и том же.
-    # Сомнение считается ниже, но объявляется здесь: его читает `_alias_verdict`, а тот
-    # определён раньше по тексту. Так порядок определений не решает поведение молча.
+    # В4: alias-veto снесён; doubt только для сборки меню-соперников.
     doubt = False
     par = {}
     writer = {}
@@ -2618,190 +2618,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     def _family(t):
         return par.get(t) or t
 
-    def _alias_verdict(cand):
-        """Подтверждает ли собственное знание базы, что отвечать надо ЭТОЙ сущностью.
-
-        🔴 ПРОВЕРКА ОБЯЗАНА СТОЯТЬ НА ИТОГОВОМ ВЫБОРЕ, А НЕ НА ПРОМЕЖУТОЧНОМ. [замер 30.07]
-        прежде она стояла ниже арбитра, а обе ветки арбитра возвращают ответ раньше — то
-        есть на всяком пути, где ответ вообще собрался, проверка не выполнялась. Вместе с
-        отсутствующим правом `SELECT` (см. `corpus_init.sql`) это давало защиту, не
-        работавшую НИ РАЗУ.
-
-        Опора относительная: подтверждена та сущность, чьи алиасы совпали с вопросом
-        ЛУЧШЕ ВСЕХ, а не всякая, у которой нашлось общее слово. Разбор чисел — у места
-        вызова. Поиск ведёт база (п. 19): алиасы — такая же поисковая поверхность, как
-        названия, и до этой правки они никого не приводили, только проверяли.
-
-        Возвращает (supported, alias_top). `supported=True` при отсутствии знания — это
-        не одобрение, а признание, что проверять нечем.
-        """
-        try:
-            # 🔴 СОБСТВЕННОЕ НАЗВАНИЕ СУЩНОСТИ — ТОЖЕ ЕЁ СЛОВО, И БРАТЬ ЕГО НАДО ИЗ ДАННЫХ.
-            # [замер 30.07] после перегенерации алиасов модель описала справочник
-            # номенклатуры по смыслу — «товар, услуга, работа, артикул, вес товара» — и
-            # выкинула слово «номенклатура». Подтверждения не нашлось, и ВЕРНЫЙ ответ
-            # «227 позиций» превратился в уточнение. Спрашивать модель о том, как
-            # называется сущность, незачем: название лежит в `search_tables.label`.
-            # Это устраняет целый класс провалов по построению: что бы модель ни забыла
-            # написать, своё имя сущность не теряет.
-            r = psql(
-                "WITH w AS ("
-                "  SELECT trim(u.w) AS t FROM search_entity_alias a, "
-                "         unnest(str_split(a.aliases, ',')) AS u(w) WHERE a.src_table = %s"
-                "  UNION ALL SELECT label FROM %s WHERE src_table = %s) "
-                "SELECT count(*) FILTER (t <> ''), "
-                "       count(*) FILTER (t <> '' "
-                "         AND list_has_any(ts_lexize(%s, t), ts_lexize(%s, %s))) FROM w"
-                % (lit(cand), TABLES, lit(cand),
-                   lit(STEM_DICT), lit(STEM_DICT), lit(question)))
-            known, hit = (int(r[0][0] or 0), int(r[0][1] or 0)) if r and r[0] else (0, 0)
-        except RuntimeError as e:
-            diag["alias_unreadable"] = str(e)[:120]
-            return True, []
-        if not known:
-            # Про ЭТУ сущность знания нет — требовать подтверждения нечем. Так выглядит
-            # база, где вики не собрана: [замер] в первой базе алиасов 0.
-            diag["alias_no_evidence"] = True
-            return True, []
-        if hit and not ALIAS_VETO:
-            return True, []
-        # Соперников подбираем ПО ВОПРОСУ, штатным ранжированием движка
-        # (`tfidf` учитывает редкость слова: «сколько» весит мало, «поставщикам» много).
-        # Свой счёт совпадений здесь стоял и был отвергнут замером — он считал ВСЕ общие
-        # слова, поэтому «сколько записей в справочнике» совпадало с чем угодно.
-        # 🔴 РАЗДЕЛИТЕЛЬ РАВЕНСТВА — см. врезку у `_fetch`: без него `ORDER BY … LIMIT`
-        # оставляет порядок равных на волю исполнения. Здесь это дороже, чем там: `top[0]`
-        # решает вето, `top[:2]` становятся вариантами уточнения, то есть ничья решает
-        # ВЫБОР СУЩНОСТИ. [замер 03.08] на боевом скорере (`tfidf`, `ut_test`) ничьих в
-        # первой восьмёрке 3-5 на каждом из семи вопросов приёмки, и у шести из семи на
-        # ничью попадает САМ СРЕЗ `LIMIT 8` — то есть произволен и состав восьмёрки.
-        # Разделитель — `src_table`: ключ `alias_idx` уникален (697 строк, 697 значений),
-        # значит порядок становится полным. Это штатное предписание движка, а не наш приём:
-        # доки, Indexes › Inverted › Ranking › Tie-breaking — «Add further ORDER BY columns
-        # after the scorer for a deterministic order — typically the primary key».
-        # 🔴 ЛИДЕР ИЩЕТСЯ ПО ТЕКСТУ ВОПРОСА, И ЭТО ИЗВЕСТНАЯ СЛАБОСТЬ, А НЕ ЗАМЫСЕЛ.
-        # Скорер считает совпадение по всем словам вопроса, включая «сколько», «у», «нас»:
-        # `[замер 05.08]` лидером ТРЁХ разных вопросов («сколько у нас партнёров»,
-        # «…организаций», «…складов») стал один и тот же регистр «Принятая Возвратная Тара» с
-        # одинаковой оценкой 12,49 — в его словаре есть фраза «сколько тары у нас». Верные
-        # ответы (164 партнёра, 5 организаций, 17 складов) вето отвергло именно так.
-        # Форма «искать по ПОНЯТИЯМ вопроса» (та же поверхность, которой идёт отбор —
-        # `alias_hits`) проверена и НЕ помогает: по понятию «партнёров» верный
-        # `catalog_партнеры` не входит в восьмёрку вовсе, по «организаций» стоит седьмым.
-        # Значит чинить надо словарь синонимов, а не запрос к нему (`ASK_ALIAS_BY_CONCEPTS`
-        # оставлен, чтобы обе формы мерились одной командой; разбор — `HOW_NOT_TO §1.57`).
-        try:
-            if ALIAS_BY_CONCEPTS:
-                top = [(t, 0.0) for t in alias_hits(exprs_all, ALIAS_TOP)]
-            else:
-                top = [(r[0], float(r[1])) for r in psql(
-                    "SELECT src_table, %s FROM %s WHERE aliases @@ %s"
-                    " ORDER BY 2 DESC, src_table LIMIT %d"
-                    % (SCORERS.get(SCORER, SCORERS["bm25"]) % ALIAS_INDEX, ALIAS_INDEX,
-                       lit(question), ALIAS_TOP)) if r and r[0]]
-        except RuntimeError:
-            top = []
-        # 🔴 ОТСЕЯННЫЙ «НЕ ОТВЕЧАЕТ» НЕ МОЖЕТ БЫТЬ ЛИДЕРОМ СЛОВАРЯ (06.08, вечер).
-        # Вето сравнивает выбор с лидером ранжирования, а лидера ВНЕ круга кандидатов
-        # считает «словарь один против всех» и пропускает выбор. Отсев убирает сущность
-        # из круга — и [замер 06.08] на вопросе «Кто нам поставляет товар?» это разоружило
-        # проверку целиком: лидер «Заказы Поставщикам» был отсеян по делу (сам пишет, что
-        # поставщиков не ведёт), его место в круге стало -1, вето молча пропустило, и
-        # неверный ответ ушёл уверенным. Сущность, отсеянная как непригодная ОТВЕЧАТЬ,
-        # непригодна и ЭТАЛОНОМ сравнения — лидер ищется среди оставшихся.
-        if not_for:
-            skipped = [t for t, _s in top if t in not_for]
-            if skipped:
-                diag["alias_top_not_for"] = skipped
-                top = veto_top_without(top, not_for)
-        miss = [t for t, _ in top if t not in par]
-        if miss:
-            try:
-                par.update({r[0]: (r[1] or "") for r in psql(
-                    "SELECT src_table, parent FROM %s WHERE src_table IN (%s)"
-                    % (TABLES, ", ".join(lit(t) for t in miss))) if r and r[0]})
-            except RuntimeError:
-                pass
-        diag["alias_top"] = [t for t, _ in top[:4]]
-
-        # Места в ОБЩЕМ порядке кандидатов (шаг 3: буквальный отбор, смысл, карточка,
-        # реранкер). Именно их сравнивает вето: место выбора против места лидера словаря.
-        # Семьями, а не сущностями — шапка и её табличная часть это одно прочтение.
-        _по_семьям = [_family(c) for c in cands]
-
-        def _место(t):
-            try:
-                return _по_семьям.index(_family(t))
-            except ValueError:
-                return -1
-
-        def _probe(ok, why):
-            """След для замера: из чего СЧИТАЕТСЯ каждая форма правила. Решений не принимает."""
-            if PROBE:
-                diag.setdefault("alias_probe", []).append({
-                    "cand": cand, "known": known, "hit": hit, "ok": bool(ok), "why": why,
-                    "top": [[t, round(s, 3)] for t, s in top[:4]],
-                    "leader": top[0][0] if top else "",
-                    "место_выбора": _место(cand),
-                    "место_лидера": _место(top[0][0]) if top else -1,
-                    "cand_rank": next((i for i, (t, _s) in enumerate(top)
-                                       if _family(t) == _family(cand)), -1)})
-            return ok
-        # 🔴 ЖЁСТКАЯ ФОРМА — ПОД ВЫКЛЮЧАТЕЛЕМ, И ЭТО НЕ ОСТОРОЖНОСТЬ, А ЗАМЕР.
-        # Решение владельца 30.07: когда вопросу отвечает несколько РАЗНЫХ объектов —
-        # всегда переспрашивать. Но [замер 30.07] на прежних алиасах жёсткая форма дала
-        # 1 улучшение против 3 ухудшений: верный ответ «227 позиций» превращался в
-        # уточнение, потому что данные были слабее механизма — на «сколько у нас
-        # партнёров» лучшим совпадением шла «Принятая Возвратная Тара».
-        # Включать только после замера, что база подсказывает верно.
-        # Семьи схлопываются: шапка и её табличная часть — одно прочтение, а не два.
-        # Числа тут НЕТ намеренно. Первая версия писала «среди трёх лучших семей», и это
-        # подгонка: тройка взялась из нашей базы, а на чужой ничего не значит. Ревизор
-        # поймал её до коммита. Согласие определяется без порога: подтверждает ЛИДЕР
-        # ранжирования, и решает его база, а не константа в коде. Совпали семьи —
-        # отвечаем; разошлись — объектов несколько, и человек выбирает сам.
-        # Сама форма правила — в `alias_supported` (там же её таблица истинности, разбор
-        # смягчения и числа, которыми оно отвергнуто). Здесь остаётся только то, что без
-        # базы не делается: спросить знание и подобрать соперников для уточнения.
-        # `сомнение` считается раньше по тексту (модель назвала несколько, сигналы
-        # разошлись, нашлась пара «регистр ← документ», отказал смысловой путь). Здесь оно
-        # решает, доступна ли вторая попытка: там, где спор ЕСТЬ, спрашивает п. 12.
-        ok = alias_supported(known, hit, _family(cand),
-                             _family(top[0][0]) if top else "",
-                             rank_cand=_место(cand),
-                             rank_leader=_место(top[0][0]) if top else -1,
-                             undisputed=not doubt)
-        return _probe(ok, "лидер" if top else "своё слово"), top
-
-    def _alias_clarify(cand, top):
-        """Список для человека: лучшие по вопросу, по одному представителю от семьи."""
-        seen, rivals = {_family(cand)}, []
-        for t, _n in top:
-            if t == cand or _family(t) in seen:
-                continue
-            seen.add(_family(t)); rivals.append(t)
-        opts_src = [cand] + rivals[:2]
-        try:
-            lab_by = {r[0]: r[1] for r in psql(
-                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
-        except RuntimeError:
-            return None
-        if len(opts_src) < 2 or not lab_by:
-            return None
-        # `distinct_by` — обязательное поле: `clarify_text` читает его без `get`. Прежняя
-        # копия правила его НЕ клала, то есть при первом же выполнении упала бы с
-        # `KeyError('distinct_by')`. Это ещё одно доказательство, что она не работала ни
-        # разу: путь, который никогда не исполнялся, донёс до продукта и дефект прав, и
-        # дефект формы данных.
-        opts = mk_opts([t for t in opts_src if t in lab_by], lab_by, marks, by, match=match, preds=preds)
-        if len(opts) < 2:
-            return None
-        diag["unsupported_pick"] = cand
-        return {"partial": cut or None, "kind": "clarify",
-                "text": clarify_say(question, opts, diag),
-                "options": opts, "sources": [o["label"] for o in opts],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+    # В4: alias-veto helpers снесены (wiki verify — судья).
     # 🔴 ОДНА СЕМЬЯ — НЕ ОДНО ПРОЧТЕНИЕ. Здесь стояло `_family(top) not in {_family(x)…}`:
     # если вершина по вектору оказывалась ШАПКОЙ ИЛИ СОСЕДНЕЙ ТАБЛИЧНОЙ ЧАСТЬЮ того же
     # документа, расхождение сигналов не считалось расхождением вовсе, сомнение не
@@ -2853,7 +2670,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             # «записей в книгапродаж» — pick+verify верны, top_by_question
             # реализациятмц → clarify вместо 76 075). Замок ставится ниже по
             # коду из ЭТОЙ же пары признаков — здесь проверяется она сама.
-            # Симметрично гашению стоп2 и fork-исходов по wiki_arbiter_locked.
+            # В4: arbiter-lock снесён; вики-лидер не глушит меню-соперника
+            # здесь — verify уже отфильтровал; signals только для меню.
             and not (diag.get("wiki_hybrid_pick")
                      and diag.get("wiki_verify") == picked[0])
             and not (SKIP_SERVICE_RIVALS and top_by_question in служебные)):
@@ -2927,6 +2745,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     else:
         doubt = (len(picked) > 1 or bool(diag.get("signals_disagree"))
                  or bool(diag.get("writer_pair")) or bool(diag.get("meaning_down")))
+    # В4/W: судья один (wiki verify). При подтверждённом лидере writer_pair и
+    # прочие «соперники» — сырьё для меню, а не сомнение в ответе: сомнение
+    # alive-лидера опровергнуто верификацией паспортов.
+    if wiki_leader_alive(diag, picked):
+        doubt = False
     arb_pool = list(picked)
     # [01.09 «один путь»] ВИКИ-ВЕРИФИКАЦИЯ УЖЕ ПРОВЕРИЛА СОПЕРНИКОВ: если
     # вики-лидер подтверждён верификацией (wiki_verify == лидер, единственный
@@ -2935,11 +2758,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # развилке (замер: «записей в книгапродаж» — pick+verify верны, арбитр
     # тащил catalog_организации/constant_организация → uncounted_cell →
     # no_data при живом эталоне 76 075). Круг из одного = ответ.
-    if (picked and diag.get("wiki_hybrid_pick")
-            and diag.get("wiki_verify") == picked[0]):
-        diag["wiki_arbiter_locked"] = picked[0]
-        arb_pool = list(picked)
-        doubt = False
+    # В4: arbiter-lock снесён — судья один (wiki verify); соперники
+    # для меню собираются ниже (writer_pair / signals / z09).
     if event_path_active(intent):
         arb_pool = event_filter_pool(arb_pool, intent, diag)
         if len(arb_pool) == 1:
@@ -2955,8 +2775,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if (diag.get("writer_pair") and picked and not focus and not no_arbiter
             and not diag.get("catalog_count_locked")
             and not diag.get("stock_canon_locked")
-            and not (diag.get("wiki_hybrid_pick")
-                     and diag.get("wiki_verify") == picked[0])
             and len(arb_pool) < ARBITER_MAX):
         arb_pool.append(diag["writer_pair"])
     # В2: sales/rank/catalog prefer и force_pool снесены.
@@ -3021,47 +2839,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         шаг("круг арбитра", всего=len(arb_pool),
             соперники=",".join(arb_pool[1:]) or "—")
 
-    # Стоп 2: без focus/measure_pick ответ не уходит, пока посчитаны уже определённые
-    # соперники (семья, writer_pair, лидер словаря другой семьи). Вторая попытка
-    # (VETO_HEAD) не отменяется: вместо ответа вслепую соперник входит в круг.
-    # При lock канона стоп2 не наращивает соперников ([замер 21.08] воскресенье
-    # clarify после sales_canon_GONE из-за stop2/src_conflict).
-    if (picked and stop2_active(focus, measure_pick, no_arbiter, trusted)
-            and not diag.get("catalog_count_locked")
-            # [01.09 «один путь»] стоп2 не возвращает отвергнутое
-            # верификацией: вики-лидер подтверждён — соперники «семьи/писаря/
-            # словаря» уже видены паспортами и отклонены (замер: книгапродаж
-            # — стоп2 возвращал реализациятмц/строки5с -> uncounted_cell).
-            and not diag.get("wiki_arbiter_locked")
-            and len(arb_pool) < ARBITER_MAX):
-        _lead = None
-        _ok_s2, _top_s2 = _alias_verdict(picked[0])
-        if _top_s2:
-            _lead = _top_s2[0][0]
-        _known = list(dict.fromkeys(
-            list(picked) + list(cands[:ARBITER_MAX])
-            + [t for t, _s in (_top_s2 or [])]
-            + ([diag["writer_pair"]] if diag.get("writer_pair") else [])))
-        _added = []
-        for r in determined_answer_rivals(
-                picked[0], par,
-                writer_pair=diag.get("writer_pair"),
-                alias_leader=_lead,
-                known_src=_known):
-            if len(arb_pool) >= ARBITER_MAX:
-                break
-            if r in arb_pool:
-                continue
-            if SKIP_SERVICE_RIVALS and r in служебные:
-                diag.setdefault("rival_service_skipped", []).append(r)
-                continue
-            arb_pool.append(r)
-            _added.append(r)
-        if _added:
-            diag["stop2_rivals"] = _added
-            diag["arbiter_rivals"] = arb_pool[1:]
-            шаг("стоп2 соперники", всего=len(arb_pool),
-                соперники=",".join(_added) or "—")
+    # В4: stop2 и alias-veto снесены (wiki verify — единственный судья).
     # В2: повторный force_pool снесён; прочие lock — singleton.
     _locked_src2 = (diag.get("catalog_count_locked")
                     or diag.get("stock_canon_locked")
@@ -3093,34 +2871,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             шаг("форма сущности", form=((_ef.get("diag") or {}).get("entity_form")))
             return _ef
 
-    def _checked(out):
-        """Ответ уходит только если собственное знание базы подтверждает выбор сущности.
-
-        Решение владельца 30.07: когда вопросу отвечает несколько РАЗНЫХ объектов —
-        всегда переспрашивать, а не выбирать за человека.
-        """
-        if (not REQUIRE_SUPPORT or guards_skip_for_choice(focus, measure_pick, trusted)
-                or diag.get("catalog_count_locked") or diag.get("stock_canon_locked") or diag.get("register_count_locked")):
-            return out
-        w = (out.get("diag") or {}).get("focus")
-        # [01.09 «один путь», PLAN_WIKI_CHOICE] ответ собран по верифицированному
-        # вики-лидеру (та же пара признаков, что ставит wiki_arbiter_locked):
-        # кандидат уже проверен «да/нет» большим wiki-контекстом. Вето-словарь
-        # здесь — второй судья из другого источника поверх уже сделанной проверки
-        # (замер: «записей в книгапродаж» — pick+verify верны, а словарь на
-        # склеенном имени не находит алиасов и уводит верный ответ в clarify).
-        if (diag.get("wiki_hybrid_pick")
-                and diag.get("wiki_verify") == (w or "")):
-            diag["alias_veto_wiki_lock"] = True
-            return out
-        if not w or out.get("kind") not in ("answer", "figures"):
-            return out
-        ok, top = _alias_verdict(w)
-        if ok:
-            return out
-        ask = _alias_clarify(w, top)
-        return ask or out
-
+    # В4: checked-обёртка и alias-veto снесены.
     # Исходы A/B/C — после сборки arb_pool (writer_pair / стоп 2 / сомнение) и до
     # круга под-вызовов. Пространство = arb_pool: именно те прочтения, между которыми
     # иначе шёл бы арбитр (план §3). Сырой focus сюда не гасит (trusted уже выше).
@@ -3138,13 +2889,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _ef_guard["fork_outcome_skipped"])
     _ef_early = (_ef_guard.get("action") == "resolve_early")
     if (FORK_OUTCOMES and FORK_DETECT and not no_arbiter and not trusted
-            # [01.09 «один путь»] верифицированный вики-лидер — пространство
-            # прочтений из одного: развилка (A/B/C) про многопрочтения, их
-            # уже сняла вики-верификация паспортами. Запуск по чужим
-            # текстовым прочтениям возвращал uncounted_cell при верном
-            # лидере (замер: книгапродаж — fork строил 10 классов из
-            # параметров поиска при пуле в одну сущность).
-            and not diag.get("wiki_arbiter_locked")
+            # В4: arbiter-lock снесён. При одном verify-yes пул обычно
+            # из одного — fork не откроется по len(arb_pool)>1.
             and (len(arb_pool) > 1 or _window_fork or _ef_early)):
         _t_out = time.time()
         _scan_err = None
@@ -3223,39 +2969,49 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if "na_classes" in _pay:
                 diag["fork"]["na_classes"] = _pay["na_classes"]
         _picked0 = picked[0] if picked else None
-        if ASK_ATOM_TERMINAL and _outc == "unique":
-            _uatom = ((_pay.get("class") or {}).get("atom") or {})
-            if (_uatom.get("proof_status") == PROOF_COMPUTED
-                    and _uatom.get("exact_value") is not None):
-                _ures = fork_outcome_unique(
-                    question, _pay.get("class"), diag, cut=cut, t0=t0)
-                if _ures is not None:
-                    шаг("исход unique→ответ",
-                        value=_uatom.get("exact_value"))
-                    return _ures
-        if _outc == "A":
-            шаг("исход A", srcs=len((_pay.get("class") or {}).get("srcs") or []))
-            return fork_outcome_a(question, _pay.get("class"), diag, cut=cut, t0=t0)
-        if _outc == "B":
+        # В4: fork-авто A/unique/B-лидер снесены. unique/A — fall-through
+        # (одно/меню ниже); B → меню C; C жив (+подписи в z13).
+        # Wiki-лидер (судья один): B/C/A-меню развилки откладываются.
+        _wiki_lead = wiki_leader_alive(diag, picked)
+        if _wiki_lead and _outc in ("A", "B", "C"):
+            diag["fork_deferred_to_wiki"] = True
+            diag.setdefault("fork", {})["deferred_to_wiki"] = True
+            шаг("fork отложен вики-лидеру", исход=_outc, src=picked[0])
+            _outc = "deferred_wiki"
+        elif _outc == "A":
+            _a_srcs = list((_pay.get("class") or {}).get("srcs") or [])
+            for _s in _a_srcs:
+                if _s and _s not in arb_pool and len(arb_pool) < ARBITER_MAX:
+                    arb_pool.append(_s)
+            if _a_srcs:
+                picked = list(dict.fromkeys(list(picked or []) + _a_srcs))
+            шаг("исход A→меню", srcs=len(_a_srcs))
+            # fall-through → early clarify / mk_opts
+        elif _outc == "B":
             _b_classes = _pay.get("classes") or []
             if rank_defer_fork_outcome_b(intent, plan, question, _b_classes):
                 diag.setdefault("fork", {})["outcome_b_deferred_rank"] = True
                 шаг("исход B", отложен="rank", классов=len(_b_classes))
             else:
-                _bres = fork_outcome_b(question, _pay, diag, cut=cut, t0=t0,
-                                       picked_src=_picked0,
-                                       day_basis_prefer=_day_prefer,
-                                       amount_basis_prefer=_curr_prefer,
-                                       today=today)
-                if _bres is not None:
-                    шаг("исход B", классов=len(_b_classes))
-                    return _bres
-                _outc, _pay = "C", {"reason": "uncounted_cell",
-                                    "detail": "pair_render_failed"}
+                _outc, _pay = "C", {"reason": "multi_class_menu",
+                                    "classes": _b_classes,
+                                    "fork_key": _pay.get("fork_key")}
                 diag["fork"]["outcome"] = "C"
+                шаг("исход B→C меню", классов=len(_b_classes))
         if _outc == "C":
+            # Меню сущности — из wiki_pool; fork-src вне пула не в options.
+            _wmenu = fork_clarify_from_wiki_pool(
+                question, diag, cut=cut, t0=t0, marks=marks, by=by,
+                match=match, preds=preds)
+            if _wmenu is not None:
+                шаг("исход C", причина="wiki_pool_menu",
+                    вариантов=len(_wmenu.get("options") or []))
+                return _wmenu
+            for _s in list((diag.get("fork") or {}).get("live_srcs") or []):
+                if _s and _s not in arb_pool and len(arb_pool) < ARBITER_MAX:
+                    arb_pool.append(_s)
             шаг("исход C", причина=_pay.get("reason") or "—")
-            return fork_outcome_c(
+            _cres = fork_outcome_c(
                 question, _pay, _cls, _rows, diag, cut=cut, t0=t0,
                 marks=marks, by=by, match=match, preds=preds,
                 picked_src=(picked[0] if picked else None),
@@ -3264,6 +3020,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 intent=intent, trusted=trusted,
                 measure_ctx=(_mword or _fwant or ""),
                 today=today)
+            _cres = fork_c_options_without_left_srcs(
+                _cres, (diag or {}).get("wiki_pool"))
+            if _cres is None:
+                return {"partial": cut or None, "kind": "no_data",
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "options": [], "sources": [],
+                        "diag": _diag_pack(
+                            diag, fork_outcome="C",
+                            fork_c_reason="no_wiki_pool_menu",
+                            sec=round(time.time() - t0, 2))}
+            return _cres
         if _outc == "unavailable":
             return {"partial": cut or None, "kind": "unavailable",
                     "text": "Не удалось проверить все прочтения вопроса. "
@@ -3271,14 +3038,18 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     "sources": [], "retry": True,
                     "diag": _diag_pack(diag, fork_outcome="unavailable",
                                  sec=round(time.time() - t0, 2))}
-        # unique / empty — ниже обычный круг или одиночный ответ
+        # unique / empty / A / deferred_wiki — ниже early clarify или ответ
+        if not wiki_leader_alive(diag, picked):
+            for _s in list((diag.get("fork") or {}).get("live_srcs") or []):
+                if _s and _s not in arb_pool and len(arb_pool) < ARBITER_MAX:
+                    arb_pool.append(_s)
 
     # Speed-Ask A: ранний entity-clarify до arbiter×N (SPEED_ASK_PLAN §1.A; P1 №1-5,10).
     # Точка — сразу перед циклом арбитра. Готовое меню побеждает deadline: opts
     # собираются и возвращаются здесь, без raise AskDeadline (B-чек в цикле ниже
     # уже не рвёт готовый clarify).
     # Условия полного пути (любое истинно): no_arbiter; trusted (decision_id → trusted
-    # в answer); sales/catalog/stock/register_*_locked; wiki_arbiter_locked /
+    # в answer); sales/catalog/stock/register_*_locked; arbiter-lock /
     # wiki_verify==pick; writer_pair (writer_pair_proven появляется только после
     # круга); одна src_table (слой measure z16, не entity-меню); односемейный
     # tabpart/шапка без разных fork-атомов; cold sales-src на простом
@@ -3286,30 +3057,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # Отдельных pre-arbiter флагов нет: decision_id в answer(), proven/sole
     # (sole/writer_pair_proven — пост-круг); «полный круг → один answer» —
     # закрыто allow только на составном/доказанной неоднозначности источника.
-    if len(arb_pool) > 1 and not no_arbiter:
-        _ec_pool = list(arb_pool[:ARBITER_MAX])
-        _ec_q = " ".join(str(question or "").lower().replace("ё", "е").split())
-        _ec_report_lex = (
-            "полный отчет" in _ec_q
-            or "полного отчета" in _ec_q
-            or "и чего" in _ec_q)
-        _ec_composite = (
-            (intent.get("want") or "") == "list"
-            or _ec_report_lex
-            or rank_intent_from(intent, plan, question)
-            or sales_rank_engaged(intent, plan, question, arb_pool))
+    # В4: ранний clarify A — главное меню при >1 src (K2 §2).
+    # Вход: len(picked)>1 ИЛИ len(arb_pool)>1. Баны на arbiter-lock /
+    # sales_cold / writer_pair-как-глушитель сняты.
+    if ((len(picked) > 1 or len(arb_pool) > 1) and not no_arbiter):
+        _ec_pool = list(dict.fromkeys(
+            list(picked or []) + list(arb_pool or [])))[:ARBITER_MAX]
         _ec_locks = (
             diag.get("catalog_count_locked")
             or diag.get("stock_canon_locked")
             or diag.get("register_count_locked"))
-        _ec_wiki = (
-            bool(diag.get("wiki_arbiter_locked"))
-            or (bool(diag.get("wiki_hybrid_pick"))
-                and picked
-                and diag.get("wiki_verify") == picked[0]))
         _ec_fams = {_family(x) for x in _ec_pool}
-        # Отпечаток класса развилки — СПИСОК пар (`_fork_fp_diag`), а список в множество
-        # не кладётся: ключом становится его сериализация, иначе ранний clarify падает.
         _ec_atom_fps = {
             (json.dumps(a.get("fingerprint"), sort_keys=True, default=str,
                         ensure_ascii=False)
@@ -3318,21 +3076,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _ec_atom_fps.discard(None)
         _ec_same_fam_no_atoms = (len(_ec_fams) <= 1 and len(_ec_atom_fps) <= 1)
         _ec_one_src = len(set(_ec_pool)) <= 1
-        # В2: sales_canon_GONE / _ec_sales_cold снесены — блок A иначе цел.
         _ec_ban = (
             bool(trusted)
             or bool(_ec_locks)
-            or _ec_wiki
-            or bool(diag.get("writer_pair"))
             or _ec_one_src
-            or _ec_same_fam_no_atoms)
-        _ec_src_ambig = (
-            (len(picked) > 1 or bool(diag.get("signals_disagree")))
-            and not _ec_locks
-            and not _ec_wiki
-            and not diag.get("signals_disagree_same_family"))
-        _ec_allow = _ec_composite or _ec_src_ambig
-        if _ec_allow and not _ec_ban:
+            or _ec_same_fam_no_atoms
+            or wiki_leader_alive(diag, picked))
+        if not _ec_ban:
             try:
                 lab_by = {r[0]: r[1] for r in psql(
                     "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
@@ -3340,11 +3090,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     if r and r[0]}
             except RuntimeError:
                 lab_by = {}
-            # preds=preds как у clarify :3848/:3749 — preds=None не используется
-            # (found/hints те же, что у полного пути).
             opts = mk_opts(
                 [c for c in _ec_pool if c in lab_by], lab_by, marks, by,
                 match=match, preds=preds)
+            # подписи из вики-паспорта/карточки (форматтер, без выбора)
+            try:
+                _cards = [{"src_table": o["src"]} for o in opts]
+                _enriched = wiki_passport_enrich(_cards) if opts else []
+                opts = wiki_menu_captions(
+                    opts, passports_by_src=wiki_captions_map_from_cards(_enriched))
+            except (RuntimeError, NameError, TypeError):
+                pass
             if len(opts) > 1:
                 diag["early_clarify_path"] = 1
                 diag["ambiguous"] = [o["src"] for o in opts]
@@ -3355,237 +3111,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         "sources": [o["label"] for o in opts],
                         "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
 
-    if len(arb_pool) > 1 and not no_arbiter:
-        # 🔴 СНАЧАЛА АРБИТР, ПОТОМ ЧЕЛОВЕК. Порядок п. 21: ответ → уточняющий вопрос →
-        # отказ. Спрашивать человека, не попытавшись ответить, — значит переложить на него
-        # работу, которую система может сделать сама. Поэтому по каждому кандидату
-        # СОБИРАЕТСЯ ПОЛНЫЙ ОТВЕТ (тем же кодом, через `focus`, — то есть числа считает
-        # база), и арбитр выбирает между готовыми ответами. Не выбрал — спрашиваем человека.
-        cand_ans, cand_src = [], []
-        mute = {}
-        for c in arb_pool[:ARBITER_MAX]:
-            if deadline_hit():
-                raise AskDeadline("deadline")
-            try:
-                # 🔴 `prior` ПРОБРАСЫВАЕТСЯ ВО ВСЕ ПОД-ВЫЗОВЫ КРУГА (15.08). Без него
-                # кандидаты считались по РАЗНЫМ окнам периода: внешний вызов унаследовал
-                # период из `prior`, а соперники — нет, и сравнение атомов шло по числам,
-                # посчитанным за разное время. Развилка, «доказанная» таким сравнением,
-                # была бы артефактом прибора, а не данных.
-                sub = answer(question, focus=c, measure_pick=measure_pick,
-                             context=context, no_arbiter=True, prior=prior)
-            except AskDeadline:
-                raise
-            except Exception:                  # noqa: BLE001 — один кандидат не должен
-                continue                       # ронять весь ответ
-            if sub.get("kind") in ("answer", "figures") and (sub.get("text") or "").strip():
-                cand_ans.append(sub["text"].split("⚠")[0].strip())
-                cand_src.append(sub)
-            else:
-                # Не сложившийся кандидат хранится ЦЕЛИКОМ, а не одним именем: его числа
-                # (посчитанные, но завёрнутые в уточнение) решают, есть ли расхождение.
-                mute[c] = sub
-            # 🔴 ПРИЧИНЫ partial СЛИВАЮТСЯ, А НЕ ЗАМЕНЯЮТСЯ (15.08). Под-ответ мог нести
-            # свою потерю (неполнота своей сущности, отброшенные строки); прежде она
-            # выбрасывалась вместе с под-ответом. Своя причина внешнего ответа старше:
-            # `setdefault`, замены нет.
-            for _k, _v in ((sub.get("partial") or {}).items()):
-                cut.setdefault(_k, _v)
-            if PROBE:
-                sd = sub.get("diag") or {}
-                diag.setdefault("arb_probe", []).append({
-                    "src": c, "kind": sub.get("kind"), "fig": sub.get("figures"),
-                    "почему": [k for k in ("measure_ambiguous", "measure_all_zero",
-                                           "measure_no_values", "ambiguous",
-                                           "unsupported_pick", "alias_no_evidence",
-                                           "not_enough") if sd.get(k)],
-                    "величины": sd.get("measure_ambiguous") or [],
-                    "measure": sd.get("measure")})
-        # 🔴 КАНДИДАТ, НЕ ДАВШИЙ ЧИСЛА, — ЭТО НЕ СОГЛАСИЕ (05.08).
-        # Соперник считается тем же кодом, и он может вернуться не числом, а собственным
-        # уточнением — например, когда у него самого несколько подходящих величин. Прежде
-        # такой ответ просто выпадал из `cand_ans`, сравнивать становилось нечего, и молчание
-        # засчитывалось за «числа сошлись»: ответ уходил по первому кандидату.
-        # Живой случай `[замер 05.08]`: «Во что нам обошлись закупки?» — пара
-        # «регистр ← документ» найдена, документ в круг попал, но его ответ пришёл
-        # уточнением по величине, и система всё равно ответила по регистру.
-        # Правило то же, что у `answers_diverge`: доказательства совпадения нет — спрашиваем.
-        # Оговорка узкая: только пара «источник ← документ, который его пишет», то есть
-        # структурная связь из данных, а не всякий не сложившийся кандидат — иначе вопрос
-        # задавался бы там, где соперник просто пуст.
-        #
-        # 🔴 НО «НЕТ ЧИСЛА В ОТВЕТЕ» И «НЕТ ЧИСЛА ВОВСЕ» — РАЗНЫЕ ВЕЩИ (05.08, вечер).
-        # Уточнение соперника бывает не о том, ЧТО отвечать, а о том, КАКОЙ ЕГО ВЕЛИЧИНОЙ
-        # (`measure_ambiguous`) или с каким встречным вопросом (`asked_back`). Числа при
-        # этом посчитаны базой — они лежат в его `figures` и в `measure_totals`. Делать из
-        # неоднозначности ВЕЛИЧИНЫ соперника вывод о неоднозначности СУЩНОСТИ значит
-        # спрашивать не о том: `[замер 05.08]` «Сколько денег нам должны клиенты?»
-        # отвечалось верно (`accumulationregister_расчетысклиентами`) и стало уточнением
-        # именно так. По п. 21 отвергнутый верный ответ — дефект проверки, а не осторожность.
-        # Поэтому совпадение ищется ЧИСЛАМИ: наш итог сверяется со всеми числами соперника.
-        # Нашлось равное — прочтения сошлись, вопрос был бы шумом; не нашлось (или числа у
-        # соперника нет ни одного) — правило работает как прежде и спрашивает.
-        # Порога и допуска нет намеренно, как и в `answers_diverge`: равенство или ничего.
-        доказано = False
-        if diag.get("writer_pair") in mute and picked and cand_src:
-            # Сверяется ответ ИМЕННО ВЫБРАННОЙ сущности, а не первый сложившийся: круг
-            # арбитра упорядочен, но выбор модели мог и не дать числа — тогда доказывать
-            # нечего, и правило работает как прежде.
-            свой = next((s for s in cand_src
-                         if (s.get("diag") or {}).get("focus") == picked[0]), None)
-            наше = (figures_numbers(свой) or [None])[0]
-            доказано = same_number(наше, figures_numbers(mute[diag["writer_pair"]]))
-            if доказано:
-                diag["writer_pair_proven"] = {"число": наше,
-                                              "у_соперника": diag["writer_pair"]}
-        # 🔴 СОПЕРНИК, НЕ ДАВШИЙ ОТВЕТА ВОВСЕ, — ТОЖЕ НЕ СОГЛАСИЕ (06.08). Правило 05.08
-        # смотрело только `mute` — соперника, чей ответ завернулся в уточнение. Но
-        # под-вызов может и УПАСТЬ (исключение выше — `continue`), и тогда соперник не
-        # попадает ни в ответы, ни в `mute`: круг «схлопывался» в одного, и путь
-        # «сложился один кандидат» отпускал его ответ БЕЗ сравнения чисел. Живой случай
-        # `[замер 06.08]`, приёмка №42 «Сколько документов реализации с нулевой суммой?»:
-        # выбран регистр «НДС Состояние Реализации 0» (4 записи), документ-регистратор
-        # в круге молчал — и неверный ответ ушёл уверенным, два прогона подряд. Это
-        # прямое нарушение п. 12 (выбор наугад между прочтениями) и п. 10.
-        if picked and not доказано and pair_unanswered(
-                diag.get("writer_pair"),
-                {(s.get("diag") or {}).get("focus") for s in cand_src}):
-            opts_src = [picked[0], diag["writer_pair"]]
-            try:
-                lab_by = {r[0]: r[1] for r in psql(
-                    "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                    % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
-            except RuntimeError:
-                lab_by = {}
-            opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by, match=match, preds=preds)
-            if len(opts) > 1:
-                diag["writer_pair_unproven"] = diag["writer_pair"]
-                return {"partial": cut or None, "kind": "clarify",
-                        "text": clarify_say(question, opts, diag), "options": opts,
-                        "sources": [o["label"] for o in opts],
-                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-        if len(cand_ans) > 1 and ARBITER_DETECTS:
-            _figs = [arbiter_figures(s) for s in cand_src]
-            _diverge = answers_diverge(_figs)
-            _src_c = answers_src_conflict([
-                {"src": (s.get("diag") or {}).get("focus"),
-                 "kind": s.get("kind"),
-                 "figures": f} for s, f in zip(cand_src, _figs)])
-            # A3 — только когда diverge уже ложь: совпавший счётчик не доказывает
-            # сущность (книга и реализации позавчера обе 19). Исключения «число
-            # одно — согласие» нет: цена — «контрагенты 155=155» станет уточнением.
-            if _diverge or _src_c:
-                # Исход A на позднем пути: числа сошлись, src разные — источник-нейтрально
-                # (тот же контракт, что ранний детектор). Расхождение чисел → C (clarify).
-                # 🔴 АРБИТР — ДЕТЕКТОР НЕОДНОЗНАЧНОСТИ, А НЕ ВЫБИРАЮЩИЙ (задача 17 реестра).
-                # Числа кандидатов посчитаны базой и РАЗОШЛИСЬ — значит вопросу отвечают разные
-                # объекты с разными величинами, и это доказанная неоднозначность, а не повод
-                # положиться на языковую догадку модели. Живой случай `[замер 03.08]`: на «на
-                # какую сумму мы закупили» кандидатами идут документ приобретения
-                # (`СуммаДокумента` 73 181 157,68) и регистр накопления «Закупки» (`Сумма`
-                # 1 137 949,71) — прежде выбирал арбитр, и в последнем прогоне приёмки выбрал
-                # регистр. Ошибка при этом честная по гейту: число посчитано верно, просто не по
-                # той сущности, — поэтому ловится это только здесь.
-                # Оба ответа уже собраны, то есть человеку предлагается выбор, за которым стоят
-                # реальные числа, а не догадка о том, что он имел в виду.
-                src_of = [s.get("diag", {}).get("focus") for s in cand_src]
-                try:
-                    lab_by = {r[0]: r[1] for r in psql(
-                        "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                        % (TABLES, ", ".join(lit(c) for c in src_of if c))) if r and r[0]}
-                except RuntimeError:
-                    lab_by = {}
-                opts = mk_opts([c for c in src_of if c], lab_by, marks, by, match=match, preds=preds)
-                if len(opts) > 1:
-                    if _diverge:
-                        diag["arbiter_detected"] = {
-                            "кандидаты": src_of,
-                            "числа": [(s.get("figures") or {}).get("sum")
-                                      if (s.get("figures") or {}).get("sum") is not None
-                                      else (s.get("figures") or {}).get("count")
-                                      for s in cand_src]}
-                    if _src_c:
-                        diag["arbiter_src_conflict"] = {"кандидаты": src_of}
-                    _mute_term = prefer_mute_computed_over_clarify(
-                        mute, (picked[0] if picked else None), _figs,
-                        question=question, cut=cut, diag=diag, t0=t0)
-                    if _mute_term is not None:
-                        шаг("mute computed→ответ", src=picked[0] if picked else None)
-                        return _mute_term
-                    return {"partial": cut or None, "kind": "clarify",
-                            "text": clarify_say(question, opts, diag), "options": opts,
-                            "sources": [o["label"] for o in opts],
-                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-        if len(cand_ans) > 1:
-            # Выбирающий arbitrate на ветке расхождения больше не зовётся (план §3):
-            # diverge/src_conflict выше уже ушли в clarify/A. Здесь атомы сошлись —
-            # выбирать моделью нечего. Код arbitrate сохранён; ASK_FORK_OUTCOMES=0
-            # возвращает прежний вызов (эвакуация волны-1).
-            if FORK_OUTCOMES:
-                out = dict(cand_src[0])
-                diag["arbiter"] = {"skipped": "fork_outcomes",
-                                   "candidates": [s.get("diag", {}).get("focus")
-                                                 for s in cand_src]}
-                out["diag"] = dict(out.get("diag", {}), arbiter=diag["arbiter"])
-                out["partial"] = cut or out.get("partial")
-                return _checked(out)
-            n = arbitrate(question, cand_ans, context)
-            diag["arbiter"] = {"candidates": [s.get("diag", {}).get("focus") for s in cand_src],
-                               "chose": None if n is None else
-                                        cand_src[n].get("diag", {}).get("focus")}
-            if n is not None:
-                out = dict(cand_src[n])
-                out["diag"] = dict(out.get("diag", {}), arbiter=diag["arbiter"])
-                out["partial"] = cut or out.get("partial")
-                return _checked(out)
-        elif len(cand_ans) == 1:
-            # Ответ смог собраться только у одного кандидата — остальные пусты. Выбирать не
-            # из чего, но это НЕ повод не проверять: «остальные не собрались» говорит о
-            # соперниках, а не о том, что этот верен.
-            out = dict(cand_src[0])
-            sole = (out.get("diag") or {}).get("focus")
-            # 🔴 ОДИНОЧКА ОБЯЗАНА БЫТЬ ВЫБОРОМ МОДЕЛИ, А НЕ СОПЕРНИКОМ (06.08, вечер).
-            # [замер 06.08], приёмка №42 «Сколько документов реализации с нулевой суммой?»:
-            # модель выбрала ВЕРНЫЙ документ реализации, но его ответ завернулся в
-            # уточнение о величине (пять суммовых полей), а собрался ответ соперника —
-            # регистра «НДС Состояние Реализации 0» с числом 4 при эталоне 0. Путь
-            # «сложился один» отпустил число СОПЕРНИКА как ответ на вопрос — выбор
-            # наугад между прочтениями, замаскированный под согласие круга. Если выбор
-            # модели молчит, а отвечает соперник, — прочтения два, и решает человек.
-            blocked = mute_measure_blocks(sole, mute, cand_src)
-            if picked and single_is_rival(picked[0], sole):
-                opts_src = [picked[0], sole]
-                try:
-                    lab_by = {r[0]: r[1] for r in psql(
-                        "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                        % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
-                except RuntimeError:
-                    lab_by = {}
-                opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by, match=match, preds=preds)
-                if len(opts) > 1:
-                    diag["single_was_rival"] = {"выбор": picked[0], "ответил": sole}
-                    return {"partial": cut or None, "kind": "clarify",
-                            "text": clarify_say(question, opts, diag), "options": opts,
-                            "sources": [o["label"] for o in opts],
-                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-            if blocked:
-                opts_src = [x for x in (sole, blocked) if x]
-                try:
-                    lab_by = {r[0]: r[1] for r in psql(
-                        "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                        % (TABLES, ", ".join(lit(c) for c in opts_src))) if r and r[0]}
-                except RuntimeError:
-                    lab_by = {}
-                opts = mk_opts([c for c in opts_src if c in lab_by], lab_by, marks, by, match=match, preds=preds)
-                if len(opts) > 1:
-                    diag["mute_measure_rival"] = {"ответил": sole, "уточнение": blocked}
-                    return {"partial": cut or None, "kind": "clarify",
-                            "text": clarify_say(question, opts, diag), "options": opts,
-                            "sources": [o["label"] for o in opts],
-                            "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-            out["diag"] = dict(out.get("diag", {}), arbiter={"single": True})
-            out["partial"] = cut or out.get("partial")
-            return _checked(out)
+    # В4: арбитр-цикл (N×answer / first-cand / mute_measure) снесён.
+    # Diverge-clarify — на простом пути: early-A / mk_opts выше и ниже, без подсчётов.
 
     if len(picked) > 1:
         try:
@@ -3595,6 +3122,13 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         except RuntimeError:
             lab_by = {}
         opts = mk_opts(list(picked), lab_by, marks, by, match=match, preds=preds)
+        try:
+            _cards = [{"src_table": o["src"]} for o in opts]
+            _enriched = wiki_passport_enrich(_cards) if opts else []
+            opts = wiki_menu_captions(
+                opts, passports_by_src=wiki_captions_map_from_cards(_enriched))
+        except (RuntimeError, NameError, TypeError):
+            pass
         if len(opts) > 1:
             diag["ambiguous"] = [o["src"] for o in opts]
             return {"partial": cut or None, "kind": "clarify",
@@ -3647,35 +3181,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     # вопросов 1, 3, 5, 13, 15, 17, 19, то есть в том числе у тех, что отвечались ВЕРНО).
     # Это ноль ошибок ценой отказа от ответов, а п. 21 `TARGET.md` ставит ответ выше
     # уточнения. Оговорка возвращена; разбор и числа — в `CHANGELOG` 04.08.
-    # 🔴 `not no_arbiter` — ПРОВЕРКА СТОИТ НА ИТОГОВОМ ОТВЕТЕ, А НЕ НА КАЖДОМ ПОСЧИТАННОМ
-    # КАНДИДАТЕ (05.08). Круг арбитра собирает ответы кандидатов ЭТИМ ЖЕ кодом
-    # (`answer(..., focus=c, no_arbiter=True)`), и с включённым `ALIAS_VETO` подчинённый
-    # вызов возвращал не число, а уточнение. Такой ответ в `cand_ans` не попадает, сравнивать
-    # становится нечего, и арбитр-детектор молчал — то есть вето само гасило механизм,
-    # который должен был поймать ошибку. Поймано пробой: на «Во что нам обошлись закупки?»
-    # пара «регистр ← документ» нашлась (`writer_pair`), соперник в круг попал, а ответ всё
-    # равно ушёл по регистру, потому что ответ документа не собрался.
-    # Итоговый выбор по-прежнему проверяется — `_checked()` на всех ветках возврата арбитра.
-    # Канон продаж/прайса уже зафиксировал src — ALIAS_VETO не должен уводить в
-    # clarify соперников ([замер 21.08] возврат 12: воскресенье/прайс →
-    # unsupported_pick на каноне при живом ответе на проде).
-    if (REQUIRE_SUPPORT and picked
-            and not guards_skip_for_choice(focus, measure_pick, trusted)
-            and not no_arbiter
-            # [01.09 «один судья»] верифицированный вики-лидер словарём-вето
-            # не переигрывается: словарь теперь вход пула (struct_alias), а
-            # судья один — паспортная верификация. То же правило, что в
-            # _checked: wiki_hybrid_pick + wiki_verify == выбор.
-            and not (diag.get("wiki_hybrid_pick")
-                     and diag.get("wiki_verify") == picked[0])
-            and not diag.get("catalog_count_locked")):
-        cand = picked[0]
-        if cand != top_by_question:
-            ok, top = _alias_verdict(cand)
-            if not ok:
-                ask = _alias_clarify(cand, top)
-                if ask:
-                    return ask
+    # В4: support/alias-veto путь снесён.
     src = picked[0] if picked else None
     # [01.09 «физически один путь»] осевые перебои сущности ПОСЛЕ выбора
     # (event_axis_lock/balance_axis_lock, K9-ранг и сток-канон) убраны:
@@ -3779,10 +3285,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         except RuntimeError:
             owners = []
         if len(owners) == 1 and owners[0] != src:
-            diag["measure_in_kin"] = {"было": src, "стало": owners[0], "величина": want}
-            src = owners[0]
-            match, preds = match, [p for p in preds if p]
-            diag["focus"], diag["found"] = src, by.get(src, 0)
+            # Волна W / Z1-#12: живой wiki-лидер (wiki_verify==src) — src не менять.
+            if diag.get("wiki_verify") == src:
+                diag["measure_in_kin_blocked"] = {
+                    "было": src, "кандидат": owners[0], "величина": want}
+            else:
+                diag["measure_in_kin"] = {"было": src, "стало": owners[0],
+                                         "величина": want}
+                src = owners[0]
+                match, preds = match, [p for p in preds if p]
+                diag["focus"], diag["found"] = src, by.get(src, 0)
 
     measure, measure_alts = None, []
     how = ""
@@ -3846,9 +3358,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                        in totals_of(src, match, preds, _qn)}
             except RuntimeError:
                 _qt = {}
+        _ent_locked = (
+            len(picked or []) == 1
+            and (bool(diag.get("wiki_hybrid_pick"))
+                 or bool(focus)
+                 or bool(trusted)))
         measure, measure_alts = unresolved_quantity(
             measure, measure_alts, intent.get("want"), plan.get("compute"),
-            _qn, _qt)
+            _qn, _qt, entity_locked=_ent_locked)
     if measure_pick:                           # человек уже выбрал величину кнопкой
         _names = measures_of(src)
         _resolved = resolve_measure(measure_pick, _names,
@@ -3971,8 +3488,14 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     "text": NO_DATA_TEXT or refuse_text(question),
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
                                  reason="subject_unsupported_before_measure_clarify")}
-        # K4-3 №7: при want=sum и двух классах money|qty — сначала класс, не все nums.
-        if ((intent.get("want") or "") == "sum"
+        _entity_locked = (
+            len(picked or []) == 1
+            and (bool(diag.get("wiki_hybrid_pick"))
+                 or bool(focus)
+                 or bool(trusted)))
+        # Без фиксации сущности — class-alts (меню); при locked — headline z09, не sales_*.
+        if (not _entity_locked
+                and (intent.get("want") or "") == "sum"
                 and not ((intent.get("measure") or "").strip())
                 and not measure_pick):
             _cls_m, _cls_alts = measure_class_alts(
@@ -3980,80 +3503,203 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if len(_cls_alts) == 2:
                 measure_alts = _cls_alts
                 diag["measure_class_clarify"] = True
-        diag["measure_ambiguous"] = measure_alts
-        # 🔴 ЧИСЛА ПОДХОДЯЩИХ ВЕЛИЧИН СЧИТАЮТСЯ ЗДЕСЬ ЖЕ — ОНИ НУЖНЫ НЕ ЧЕЛОВЕКУ, А ПРОВЕРКЕ
-        # НАД НАМИ (05.08). Этот же путь проходит КАНДИДАТ круга арбитра
-        # (`answer(..., focus=c)`), и его уточнение о собственной величине наверху читалось
-        # как «числа не сошлись» — хотя ни одного числа кандидата там не было вовсе.
-        # Один запрос теми же условиями отбора даёт итог по каждой подходящей величине, и
-        # совпадение становится ДОКАЗУЕМЫМ (разбор — у `writer_pair_unproven`).
-        # В модель это не уходит: путь возвращает уточнение, а `diag` модели не показывают.
         try:
-            diag["measure_totals"] = {m: v for m, v, _mx, _mn
-                                      in totals_of(src, match, preds, measure_alts)}
+            _mtot = {m: v for m, v, _mx, _mn
+                     in totals_of(src, match, preds, measure_alts)}
         except RuntimeError:
-            pass
-        # 🔴 `entity_label` — человеческое имя ТОЙ ЖЕ сущности, отдельно от `label`, где
-        # здесь лежит имя ВЕЛИЧИНЫ. Без него мост не мог назвать боту сущность иначе как
-        # внутренним именем (`src`), а оно оттуда утекало человеку (03.08). Спрашивается у
-        # базы, а не собирается разбором строки; не нашлось — поле пустое, и мост честно
-        # обходится без него.
-        try:
-            _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
-                        % (TABLES, lit(src)))
-            _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
-        except RuntimeError:
-            _ent = ""
-        _caps = measure_captions(measure_alts, measure_aliases_of(src))
-        opts = [{"src": src, "measure": m, "label": _caps[m], "distinct_by": "",
-                 "entity_label": _ent}
-                for m in measure_alts]
-        # 🔴 ВОПРОС ЗАДАЁТ МОДЕЛЬ, НА ЯЗЫКЕ СПРАШИВАЮЩЕГО. Здесь стояла наша русская фраза
-        # «Уточните, какую величину считать», и она составляла ВЕСЬ текст уточнения: на
-        # англоязычном клиенте человек не понял бы, что у него спрашивают. Тот же
-        # `clarify_text`, что и у выбора сущности; не смогла сформулировать — остаётся
-        # перечень величин, по нему выбор всё равно возможен.
-        return {"partial": cut or None, "kind": "clarify",
-                "text": clarify_say(question, opts, diag)
-                        or ", ".join("«%s»" % o["label"] for o in opts),
-                "options": opts, "sources": [src],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-    # В3: при >1 мере путь идёт в меню; totals_of всем именам не используется.
-    # Безальтернативная мера — totals_of допустим.
+            _mtot = {}
+        diag["measure_totals"] = dict(_mtot)
+        if _entity_locked:
+            # Волна W / Z2: мерная детализация → число+люк (A/B/C), не kind=clarify.
+            _live = [m for m in measure_alts if m in _mtot] or list(measure_alts)
+            _alias_by = measure_aliases_of(src) if src else {}
+            if len(_live) <= 1 or not measure_ambiguous(_live, _mtot):
+                # A: одна живая / равные totals — обычный ответ, люк закрыт.
+                measure = _live[0] if _live else measure_alts[0]
+                measure_alts = []
+                diag["measure"] = measure
+                diag["measure_hatch"] = "A"
+            else:
+                _mword = (intent.get("measure") or "").strip()
+                _hl = _fork_headline_measure(
+                    src, _mtot, _mword, alias_by=_alias_by,
+                    want=(intent.get("want") or ""))
+                if _hl is None:
+                    _pool = _fork_sum_headline_pool(_live)
+                    _hl = _pool[0] if _pool else None
+                _rest = [m for m in _live if m != _hl]
+                _has_caps = any(_alias_parts(_alias_by.get(m)) for m in _rest)
+                if _hl is None and not _has_caps:
+                    # C: headline нет и подписей нет — единственная вычислимая / count.
+                    _hl = _live[0] if _live else None
+                if _hl is None:
+                    measure = None
+                    measure_alts = []
+                    diag["measure_hatch"] = "C_count"
+                elif _has_caps and _hl:
+                    # B: разные числа + подписи — headline + люк с подписями.
+                    _caps = measure_captions(_live, _alias_by)
+                    try:
+                        _lab = psql(
+                            "SELECT label FROM %s WHERE src_table = %s LIMIT 1"
+                            % (TABLES, lit(src)))
+                        _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
+                    except RuntimeError:
+                        _ent = ""
+                    _agg = {"count": 0, "sum": _mtot.get(_hl), "min": None,
+                            "max": None, "avg": None, "measure": _hl, "src": src,
+                            "grain": "row", "form": "number"}
+                    _atom = atom_from_agg(
+                        _agg, operation="sum", measure_id=_hl,
+                        measure_label=_caps.get(_hl) or _hl, money=True,
+                        period=(intent or {}).get("period"),
+                        period_origin=_passport_origin(intent, diag),
+                        grain="row", form="number", src=src)
+                    _text = render_atom_pair(_atom) or str(_mtot.get(_hl))
+                    opts = []
+                    for m in _rest:
+                        _lab_m = _caps.get(m) or m
+                        _val = _mtot.get(m)
+                        opts.append({
+                            "src": src, "measure": m,
+                            "label": "%s: %s" % (_lab_m, _val),
+                            "distinct_by": "", "entity_label": _ent,
+                            "value": _val})
+                    diag["measure"] = _hl
+                    diag["measure_hatch"] = "B"
+                    diag["measure_ambiguous"] = _live
+                    return {"partial": cut or None, "kind": "figures",
+                            "text": _text,
+                            "figures": _fork_figures_of(_atom),
+                            "atom": _atom, "atoms": [_atom],
+                            "options": opts, "sources": [src] if src else [],
+                            "source_fixed": False, "memory_eligible": False,
+                            "diag": _diag_pack(
+                                diag, sec=round(time.time() - t0, 2),
+                                reason="measure_hatch_B")}
+                else:
+                    # C: разные числа, подписей нет — число + «есть другое прочтение».
+                    _caps = measure_captions([_hl], _alias_by)
+                    _agg = {"count": 0, "sum": _mtot.get(_hl), "min": None,
+                            "max": None, "avg": None, "measure": _hl, "src": src,
+                            "grain": "row", "form": "number"}
+                    _atom = atom_from_agg(
+                        _agg, operation="sum", measure_id=_hl,
+                        measure_label=_caps.get(_hl) or _hl, money=True,
+                        period=(intent or {}).get("period"),
+                        period_origin=_passport_origin(intent, diag),
+                        grain="row", form="number", src=src)
+                    _pair = render_atom_pair(_atom) or str(_mtot.get(_hl))
+                    _text = "%s · %s" % (_pair, FORK_OTHER_READING)
+                    diag["measure"] = _hl
+                    diag["measure_hatch"] = "C"
+                    diag["measure_ambiguous"] = _live
+                    return {"partial": cut or None, "kind": "figures",
+                            "text": _text,
+                            "figures": _fork_figures_of(_atom),
+                            "atom": _atom, "atoms": [_atom],
+                            "options": [], "sources": [src] if src else [],
+                            "source_fixed": False, "memory_eligible": False,
+                            "diag": _diag_pack(
+                                diag, sec=round(time.time() - t0, 2),
+                                reason="measure_hatch_C")}
+        else:
+            # Сущность не зафиксирована — прежнее меню мер (формула №15).
+            diag["measure_ambiguous"] = measure_alts
+            try:
+                _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
+                            % (TABLES, lit(src)))
+                _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
+            except RuntimeError:
+                _ent = ""
+            _caps = measure_captions(measure_alts, measure_aliases_of(src))
+            opts = [{"src": src, "measure": m, "label": _caps[m],
+                     "distinct_by": "", "entity_label": _ent}
+                    for m in measure_alts]
+            return {"partial": cut or None, "kind": "clarify",
+                    "text": clarify_say(question, opts, diag)
+                            or ", ".join("«%s»" % o["label"] for o in opts),
+                    "options": opts, "sources": [src],
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+    # После hatch A measure выбран; иначе totals_of одной мере / страховка.
     if measure:
         totals = []
     else:
         _tm = list(measures_of(src) if src else [])
-        if len(_tm) > 1:
-            # Страховка: сюда не должны дойти без measure_alts-clarify.
+        _entity_locked = (
+            len(picked or []) == 1
+            and (bool(diag.get("wiki_hybrid_pick"))
+                 or bool(focus)
+                 or bool(trusted)))
+        if len(_tm) > 1 and not _entity_locked:
+            # Страховка без фиксации: не уходить в compose по всем именам.
             measure_alts = measure_alts or _tm
             totals = []
             diag["measure_totals_of_blocked"] = len(_tm)
+        elif len(_tm) > 1 and _entity_locked and not measure_alts:
+            # Locked + нет alts: взять headline / первую, не меню.
+            try:
+                _mtot2 = {m: v for m, v, _mx, _mn
+                          in totals_of(src, match, preds, _tm)}
+            except RuntimeError:
+                _mtot2 = {}
+            _hl2 = _fork_headline_measure(
+                src, _mtot2, (intent.get("measure") or "").strip(),
+                alias_by=measure_aliases_of(src) if src else {},
+                want=(intent.get("want") or ""))
+            if _hl2 is None:
+                _pool2 = _fork_sum_headline_pool(_tm)
+                _hl2 = _pool2[0] if _pool2 else (_tm[0] if _tm else None)
+            if _hl2:
+                measure = _hl2
+                diag["measure"] = measure
+                diag["measure_hatch"] = diag.get("measure_hatch") or "A"
+            totals = []
         else:
             totals = totals_of(src, match, preds, _tm) if _tm else []
     if (not measure and measure_alts
             and not measure_already_proven(trusted, resolved, measure_pick)):
-        diag["measure_ambiguous"] = measure_alts
-        try:
-            diag["measure_totals"] = {m: v for m, v, _mx, _mn
-                                      in totals_of(src, match, preds, measure_alts)}
-        except RuntimeError:
-            pass
-        try:
-            _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
-                        % (TABLES, lit(src)))
-            _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
-        except RuntimeError:
-            _ent = ""
-        _caps = measure_captions(measure_alts, measure_aliases_of(src))
-        opts = [{"src": src, "measure": m, "label": _caps[m], "distinct_by": "",
-                 "entity_label": _ent}
-                for m in measure_alts]
-        return {"partial": cut or None, "kind": "clarify",
-                "text": clarify_say(question, opts, diag)
-                        or ", ".join("«%s»" % o["label"] for o in opts),
-                "options": opts, "sources": [src],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+        _entity_locked = (
+            len(picked or []) == 1
+            and (bool(diag.get("wiki_hybrid_pick"))
+                 or bool(focus)
+                 or bool(trusted)))
+        if _entity_locked:
+            # Страховка: при locked не clarify — взять первую живую.
+            try:
+                _mtot3 = {m: v for m, v, _mx, _mn
+                          in totals_of(src, match, preds, measure_alts)}
+            except RuntimeError:
+                _mtot3 = {}
+            _live3 = [m for m in measure_alts if m in _mtot3] or list(measure_alts)
+            measure = _live3[0] if _live3 else None
+            measure_alts = []
+            diag["measure"] = measure
+            diag["measure_hatch"] = diag.get("measure_hatch") or "A"
+            diag["measure_totals"] = dict(_mtot3)
+        else:
+            diag["measure_ambiguous"] = measure_alts
+            try:
+                diag["measure_totals"] = {m: v for m, v, _mx, _mn
+                                          in totals_of(src, match, preds,
+                                                       measure_alts)}
+            except RuntimeError:
+                pass
+            try:
+                _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
+                            % (TABLES, lit(src)))
+                _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
+            except RuntimeError:
+                _ent = ""
+            _caps = measure_captions(measure_alts, measure_aliases_of(src))
+            opts = [{"src": src, "measure": m, "label": _caps[m],
+                     "distinct_by": "", "entity_label": _ent}
+                    for m in measure_alts]
+            return {"partial": cut or None, "kind": "clarify",
+                    "text": clarify_say(question, opts, diag)
+                            or ", ".join("«%s»" % o["label"] for o in opts),
+                    "options": opts, "sources": [src],
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     if totals:
         diag["totals"] = {m: [v, mx, mn] for m, v, mx, mn in totals}
     preds = preds + _num_pred(intent, measure)
@@ -4063,7 +3709,19 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if serene_axis and src:
         try:
             axes = refcols_of(src)
-            _axis_word = (intent.get("action_axis") or "").strip() or intent.get("kind")
+            # Z2 §3.3 / волна W: plain count/sum/list без разреза — kind не в hits.
+            _aa = (intent.get("action_axis") or "").strip()
+            _want_ax = (intent.get("want") or "")
+            _plain_ax = (
+                _want_ax in ("", "count", "sum", "list")
+                and not question_wants_breakdown(intent, plan)
+                and not rank_intent_from(intent, plan, question))
+            if _aa:
+                _axis_word = _aa
+            elif _plain_ax:
+                _axis_word = ""
+            else:
+                _axis_word = intent.get("kind")
             _kh = kind_axis_hits(axes, _axis_word)
             _was = diag.get("focus_was_axis") or {}
             if _was.get("стало") == src and _was.get("ось"):
@@ -4101,7 +3759,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     diag["grain"] = grain_dec.get("grain")
     diag["axis_col"] = grain_dec.get("col")
     diag["axis_form"] = grain_dec.get("form")
-    if count_question_skips_axis(intent, measure, grain_dec):
+    if count_question_skips_axis(intent, measure, grain_dec, plan):
         grain_dec = {"grain": "row", "col": None, "form": "number",
                      "named_gis": [], "clarify": None}
         diag["axis_clarify_skipped"] = "count_without_measure"

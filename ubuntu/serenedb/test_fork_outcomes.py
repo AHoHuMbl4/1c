@@ -131,53 +131,21 @@ t("детерминизм ordered_fork_classes",
 # перестановка: B строит пары только через render; порядок = ordered
 A.fork_labels_of = _labs_ok
 out, pay = A.resolve_fork_outcome(cls2, rows2, "сумма", want="sum", rel_by_src={"a": ["Сумма"], "b": ["Сумма"]})
+# В4: fork-авто B/A снесены → негативы; resolve по-прежнему классифицирует.
 bres = A.fork_outcome_b("сколько?", pay, {}, picked_src="a")
-t("B: text = одна пара лидера (picked=a)",
-  bres and bres["kind"] == "figures"
-  and len(bres["atoms"]) == 2
-  and len(bres["options"]) == 1
-  and "Отгрузки" in bres["text"] and "100" in bres["text"]
-  and "Оплаты" not in bres["text"] and "200" not in bres["text"])
-# порядок текста = порядок atoms = ordered; смешать нельзя API
-swapped = "Оплаты: 100"
-# exact values: a has 100, b has 200; labels from _labs_ok by src
-# after ordered sort by fingerprint — whichever first
-t("B: source_fixed/memory_eligible false",
-  bres.get("source_fixed") is False and bres.get("memory_eligible") is False)
-t("B: options только не-лидерские классы",
-  len(bres["options"]) == 1
-  and bres["options"][0].get("label") == "Оплаты"
-  and all(o.get("src") and o.get("label") for o in bres["options"]))
+t("В4: fork_outcome_b → None (авто-лидер снесён)", bres is None)
+t("resolve по-прежнему → B при подписях", out == "B")
 
-# §2 B / аудит §6: обе пары в основном тексте (не меню clarify); память только по нажатию
-t("B §2: kind=figures, не clarify-меню",
-  bres.get("kind") == "figures"
-  and "100" in (bres.get("text") or "")
-  and "200" not in (bres.get("text") or "")
-  and "\n" not in (bres.get("text") or ""))
-t("B §2: люк options = N-1, memory_eligible=false (только нажатие)",
-  len(bres.get("options") or []) == 1
-  and bres.get("memory_eligible") is False
-  and bres.get("source_fixed") is False)
-
-# ── лидер люка (контракт 23.08) ───────────────────────────────────────────────
 split = A.fork_leader_class("a", pay.get("classes") or [])
-t("fork_leader_class: picked в классе a",
+t("fork_leader_class: picked в классе a (helper жив для C)",
   split and split[0].get("label") == "Отгрузки" and len(split[1]) == 1)
-t("B: atoms[0] = лидер", bres["atoms"][0].get("measure_label") == "Отгрузки")
 t("fork_leader_class: чужой src → None", A.fork_leader_class("z", pay.get("classes") or []) is None)
 
-# ── A: без метки источника ────────────────────────────────────────────────────
+# ── A: авто-ответ снесён ──────────────────────────────────────────────────────
 out, pay = A.resolve_fork_outcome(cls1, rows1, "сумма")
 ares = A.fork_outcome_a("сколько?", pay["class"], {})
-t("A: kind=answer, sources пуст, source_fixed=false",
-  ares["kind"] == "answer"
-  and ares["sources"] == []
-  and ares.get("source_fixed") is False
-  and ares.get("memory_eligible") is False)
-t("A: в тексте нет имён src",
-  "document_" not in (ares.get("text") or "")
-  and "accumulation" not in (ares.get("text") or ""))
+t("В4: fork_outcome_a → None (авто снесён)", ares is None)
+t("resolve по-прежнему → A при одном классе multi-src", out == "A")
 
 # ── флаг эвакуации ────────────────────────────────────────────────────────────
 t("FORK_OUTCOMES умолчание True", A.FORK_OUTCOMES is True)
@@ -432,13 +400,9 @@ out_pb, pay_pb = A.resolve_fork_outcome(
 t("partial B: axis missing → B not C",
   out_pb == "B" and pay_pb.get("partial_axis"))
 bres_pb = A.fork_outcome_b("q", pay_pb, {}, picked_src="reg_x", today="2026-08-29")
-t("partial B: leader number in text",
-  bres_pb and bres_pb.get("kind") == "figures"
-  and "100" in (bres_pb.get("text") or ""))
-t("partial B: люк working label",
-  bres_pb and any(
-      (o.get("label") or "") == "lbl-work"
-      for o in (bres_pb.get("options") or [])))
+t("В4: partial B auto → None (меню через C)", bres_pb is None)
+t("partial B: resolve всё ещё B/partial_axis",
+  out_pb == "B" and pay_pb.get("partial_axis"))
 A.ordered_fork_classes = _real_of
 A.calendar_axis_map_ready = _real_map_ready
 
@@ -470,6 +434,48 @@ t("uncounted_cell → no_data (не меню)",
   and not (_c_res.get("options") or []))
 t("uncounted_cell: диагноз несёт причину",
   (_c_res.get("diag") or {}).get("fork_c_reason") == "uncounted_cell")
+
+# ── В4 repair: C-меню сущности — wiki_pool, не fork-src ───────────────────────
+t("wiki_leader_alive: yes=1 → True",
+  A.wiki_leader_alive(
+      {"wiki_hybrid_pick": True, "wiki_verify": "src_a",
+       "wiki_verify_yes": 1}, ["src_a"]) is True)
+t("wiki_leader_alive: yes=2 → False",
+  A.wiki_leader_alive(
+      {"wiki_hybrid_pick": True, "wiki_verify": "src_a",
+       "wiki_verify_yes": 2}, ["src_a"]) is False)
+
+_act_d, _ = A.resolve_fork_wiki_gate(
+    {"wiki_hybrid_pick": True, "wiki_verify": "src_a",
+     "wiki_verify_yes": 1, "wiki_pool": ["src_a", "src_b"]},
+    ["src_a"], "B", {"classes": [{}, {}]}, question="q")
+t("C только без wiki-лидера: лидер → defer", _act_d == "defer")
+
+_pool_w = ["src_a", "src_b"]
+_old_psql = A.psql
+A.psql = lambda q: [(s, s) for s in _pool_w]
+_old_en = A.wiki_passport_enrich
+A.wiki_passport_enrich = lambda cards: [
+    {"src_table": c["src_table"], "name": c["src_table"], "wiki_body": "x"}
+    for c in cards]
+try:
+    _act_c, _pay_c = A.resolve_fork_wiki_gate(
+        {"wiki_pool": _pool_w, "wiki_verify_yes": 2},
+        [], "C", {"reason": "multi_class_menu"}, question="q")
+finally:
+    A.psql = _old_psql
+    A.wiki_passport_enrich = _old_en
+t("C из wiki-карточек: clarify", _act_c == "clarify")
+t("C из wiki-карточек: options ⊆ wiki_pool",
+  _act_c == "clarify"
+  and set(o["src"] for o in (_pay_c.get("options") or []) if o.get("src"))
+  <= set(_pool_w))
+
+_act_n, _pay_n = A.resolve_fork_wiki_gate(
+    {"wiki_pool": []}, [], "C",
+    {"reason": "multi_class_menu"}, question="q")
+t("C без wiki_pool → no_data (не fork-src меню)",
+  _act_n == "no_data" and not (_pay_n.get("options") or []))
 
 print()
 if FAIL:

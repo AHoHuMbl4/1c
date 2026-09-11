@@ -371,55 +371,14 @@ def _fork_figures_of(atom):
 
 
 def fork_outcome_a(question, class_item, diag, cut=None, t0=None):
-    """Исход A: источник-нейтральный ответ. Src не закреплять (аудит §5.3)."""
-    atom = dict((class_item or {}).get("atom") or {})
-    atom.pop("src", None)
-    # Метка таблицы — производная src; в A её нет (паспорт без src_label).
-    mid = atom.get("measure_id")
-    if mid:
-        atom["measure_label"] = split_ident(mid) or mid
-    else:
-        atom["measure_label"] = None
-    text = render_atom_pair(atom) or (_fmt(atom.get("exact_value"))
-                                      if atom.get("exact_value") is not None else "")
-    figs = _fork_figures_of(atom)
-    d = _diag_pack(diag, fork_outcome="A",
-             fork_srcs=list((class_item or {}).get("srcs") or []))
-    if t0 is not None:
-        d["sec"] = round(time.time() - t0, 2)
-    return {"partial": cut or None, "kind": "answer", "text": text,
-            "figures": figs, "atom": atom, "atoms": [atom],
-            "source_fixed": False, "memory_eligible": False,
-            "sources": [], "diag": d}
+    """В4: fork-авто A снесён — ответ не выбирается молча (меню выше)."""
+    return None
 
 
 
 def fork_outcome_unique(question, class_item, diag, cut=None, t0=None):
-    """Исход unique: один класс, один src, atom computed → ответ (K5a).
-
-    Тот же строитель, что исход A (`render_atom_pair`); в diag — `fork_outcome=unique`.
-    """
-    atom = dict((class_item or {}).get("atom") or {})
-    mid = atom.get("measure_id")
-    if mid and not (atom.get("measure_label") or "").strip():
-        atom["measure_label"] = split_ident(mid) or mid
-    text = render_atom_pair(atom) or (_fmt(atom.get("exact_value"))
-                                      if atom.get("exact_value") is not None else "")
-    if not (text or "").strip():
-        return None
-    figs = _fork_figures_of(atom)
-    srcs = list((class_item or {}).get("srcs") or [])
-    tag = ""
-    if srcs:
-        s0 = srcs[0]
-        tag = s0.split("_", 1)[1] if "_" in s0 else s0
-    d = _diag_pack(diag, fork_outcome="unique", fork_srcs=srcs)
-    if t0 is not None:
-        d["sec"] = round(time.time() - t0, 2)
-    return {"partial": cut or None, "kind": "answer", "text": text,
-            "figures": figs, "atom": atom, "atoms": [atom],
-            "source_fixed": False, "memory_eligible": False,
-            "sources": [tag] if tag else [], "diag": d}
+    """В4: fork-авто unique снесён — fall-through к обычному пути ответа."""
+    return None
 
 
 def _rivals_figures_empty(figures_list):
@@ -445,33 +404,8 @@ def _rivals_figures_empty(figures_list):
 
 def prefer_mute_computed_over_clarify(mute, picked_src, figures_list,
                                       question="", cut=None, diag=None, t0=None):
-    """Mute-лидер с computed atom вместо entity-clarify по пустым соперникам (K5a).
-
-    При выключенном ASK_ATOM_TERMINAL возвращает None.
-    """
-    if not ASK_ATOM_TERMINAL or not picked_src or not mute:
-        return None
-    if not _rivals_figures_empty(figures_list):
-        return None
-    sub = mute.get(picked_src)
-    if not isinstance(sub, dict):
-        return None
-    atom = dict(sub.get("atom") or {})
-    if (atom.get("proof_status") != PROOF_COMPUTED
-            or atom.get("exact_value") is None):
-        return None
-    text = render_atom_pair(atom)
-    if not (text or "").strip():
-        return None
-    figs = dict(sub.get("figures") or {}) or _fork_figures_of(atom)
-    d = _diag_pack(diag or {}, mute_computed_terminal=picked_src)
-    if t0 is not None:
-        d["sec"] = round(time.time() - t0, 2)
-    return {"partial": cut or sub.get("partial"),
-            "kind": "figures", "text": text,
-            "figures": figs, "atom": atom, "atoms": [atom],
-            "sources": list(sub.get("sources") or []),
-            "diag": d}
+    """В4: mute-автоответ убран; возврат None, путь идёт в меню."""
+    return None
 
 
 def atom_terminal_gate_text(atom, question, agg=None):
@@ -490,77 +424,8 @@ def atom_terminal_gate_text(atom, question, agg=None):
 
 def fork_outcome_b(question, payload, diag, cut=None, t0=None, picked_src=None,
                    day_basis_prefer=None, amount_basis_prefer=None, today=None):
-    """Исход B: ответ лидера (picked[0]→класс) + люк с остальными ветками."""
-    if not today:
-        today = time.strftime("%Y-%m-%d")
-    classes = list((payload or {}).get("classes") or [])
-    total = len(classes)
-    split = fork_leader_class(picked_src, classes,
-                              day_basis_prefer=day_basis_prefer,
-                              amount_basis_prefer=amount_basis_prefer)
-    if split is None:
-        return None
-    leader_it, rest = split
-    shown = [leader_it] + rest
-    atoms, opts = [], []
-    for it in shown:
-        lab = (it.get("label") or "").strip()
-        atom = dict(it.get("atom") or {})
-        atom.pop("src", None)
-        if lab:
-            atom["measure_label"] = lab
-        atoms.append(atom)
-    leader_atom = atoms[0] if atoms else None
-    text = render_atom_pair(leader_atom) if leader_atom else None
-    if text is None:
-        return None
-    for it in rest:
-        lab = (it.get("label") or "").strip()
-        srcs = list(it.get("srcs") or [])
-        rep = sorted(srcs)[0] if srcs else ""
-        row = it.get("row") or {}
-        db = _class_day_basis(it)
-        ab = _class_amount_basis(it)
-        opt = {"src": (ab or db or rep), "label": lab or rep,
-               "found": int(row.get("count") or 0),
-               "distinct_by": lab or ""}
-        if db:
-            opt["day_basis"] = db
-        if ab:
-            opt["amount_basis"] = ab
-        opts.append(opt)
-    for it in (payload or {}).get("axis_unavailable") or []:
-        lab = _fork_day_basis_branch_label(it, measure_ctx="", today=today)
-        if not lab:
-            ab = _class_amount_basis(it)
-            lab = (ab or _class_day_basis(it) or "").strip()
-        if not lab:
-            continue
-        p = (it.get("period") or {}) or ((it.get("atom") or {}).get("period") or {})
-        db = (p.get("day_basis") or "").strip()
-        ab = (p.get("amount_basis") or "").strip()
-        opt = {"src": ab or db or lab, "label": lab,
-               "found": 0, "distinct_by": lab, "axis_unavailable": True}
-        if db:
-            opt["day_basis"] = db
-        if ab:
-            opt["amount_basis"] = ab
-        opts.append(opt)
-    partial = dict(cut or {})
-    d = _diag_pack(diag, fork_outcome="B",
-             fork_key=(payload or {}).get("fork_key"),
-             fork_classes=total, fork_pairs_shown=len(shown),
-             fork_pairs_hidden=None,
-             fork_leader_src=str(picked_src or "")[:200] or None)
-    if t0 is not None:
-        d["sec"] = round(time.time() - t0, 2)
-    return {"partial": partial or None, "kind": "figures", "text": text,
-            "figures": {"pairs": len(atoms), "pairs_total": total,
-                        "pairs_hidden": None},
-            "atom": leader_atom, "atoms": atoms,
-            "options": opts,
-            "source_fixed": False, "memory_eligible": False,
-            "sources": [o["label"] for o in opts], "diag": d}
+    """В4: fork-авто B-лидер снесён — меню через исход C."""
+    return None
 
 
 def _fork_question_cyrillic(question):
@@ -915,6 +780,26 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
     clean_opts = [{**o, "found": 0} for o in (opts or [])]
     if len(clean_opts) < 2:
         return None
+    # В4 / формула №15: entity-src меню — только пересечение с wiki_pool.
+    _wpool = set(s for s in ((diag or {}).get("wiki_pool") or []) if s)
+    _src_opts = [o for o in clean_opts if o.get("src")]
+    if _src_opts:
+        if not _wpool:
+            return None
+        clean_opts = [o for o in clean_opts
+                      if not o.get("src") or o["src"] in _wpool]
+        if len([o for o in clean_opts if o.get("src")]) < 2:
+            return None
+    # В4: подписи меню из вики-паспорта/карточки (форматтер N→N).
+    try:
+        _cards = [{"src_table": o.get("src")} for o in clean_opts if o.get("src")]
+        if _cards and callable(globals().get("wiki_passport_enrich")):
+            _enriched = wiki_passport_enrich(_cards)
+            clean_opts = wiki_menu_captions(
+                clean_opts,
+                passports_by_src=wiki_captions_map_from_cards(_enriched))
+    except (RuntimeError, NameError, TypeError):
+        pass
     text = clarify_say(question, clean_opts, d)
     if not (text or "").strip():
         text = ", ".join("«%s»" % (o.get("label") or "") for o in clean_opts)
@@ -931,6 +816,110 @@ def fork_outcome_c(question, payload, classes, rows, diag, cut=None, t0=None,
             "options": clean_opts, "sources": [o["label"] for o in clean_opts],
             "diag": d}
 
+
+def fork_clarify_from_wiki_pool(question, diag, cut=None, t0=None,
+                                marks=None, by=None, match="", preds=None):
+    """Меню исхода C из diag.wiki_pool; подписи wiki_menu_captions.
+
+    Пул короче двух — None (без сборки options из src-веток детектора).
+    """
+    pool = list(dict.fromkeys(
+        s for s in ((diag or {}).get("wiki_pool") or []) if s))
+    if len(pool) < 2:
+        return None
+    try:
+        lab_by = {r[0]: r[1] for r in psql(
+            "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+            % (TABLES, ", ".join(lit(c) for c in pool)))
+            if r and r[0]}
+    except RuntimeError:
+        lab_by = {}
+    lab_by = lab_by or {}
+    try:
+        opts = mk_opts(pool, lab_by, marks, by, match=match, preds=preds)
+    except (RuntimeError, TypeError, IndexError, ValueError):
+        opts = []
+    if len(opts) < 2:
+        opts = [{"src": s, "label": lab_by.get(s) or s, "hint": "", "found": 0}
+                for s in pool]
+    try:
+        _cards = [{"src_table": o["src"]} for o in opts if o.get("src")]
+        _enriched = wiki_passport_enrich(_cards) if _cards else []
+        opts = wiki_menu_captions(
+            opts, passports_by_src=wiki_captions_map_from_cards(_enriched))
+    except (RuntimeError, NameError, TypeError):
+        pass
+    wset = set(pool)
+    opts = [o for o in opts
+            if (o.get("src") or "") in wset or not o.get("src")]
+    if len([o for o in opts if o.get("src")]) < 2:
+        return None
+    d = dict(diag or {})
+    d["fork_c_from_wiki"] = True
+    text = clarify_say(question, opts, d)
+    if not (text or "").strip():
+        text = ", ".join("«%s»" % (o.get("label") or "") for o in opts)
+    packed = _diag_pack(d, fork_outcome="C", fork_c_reason="wiki_pool_menu")
+    if t0 is not None:
+        packed["sec"] = round(time.time() - t0, 2)
+    return {"partial": cut or None, "kind": "clarify", "text": text,
+            "options": opts, "sources": [o.get("label") for o in opts],
+            "diag": packed}
+
+
+def fork_c_options_without_left_srcs(resp, wiki_pool):
+    """Убрать из clarify-ответа src вне wiki_pool; пустой пул + src → None."""
+    if not resp or resp.get("kind") != "clarify":
+        return resp
+    opts = list(resp.get("options") or [])
+    src_opts = [o for o in opts if o.get("src")]
+    if not src_opts:
+        return resp
+    pool = set(s for s in (wiki_pool or []) if s)
+    if not pool:
+        return None
+    kept = [o for o in opts if not o.get("src") or o["src"] in pool]
+    if len([o for o in kept if o.get("src")]) < 2:
+        return None
+    out = dict(resp)
+    out["options"] = kept
+    out["sources"] = [o.get("label") for o in kept]
+    return out
+
+
+def resolve_fork_wiki_gate(diag, picked, outc, pay, question="", cut=None,
+                           t0=None, marks=None, by=None, match="", preds=None):
+    """Решение B/C с учётом wiki-лидера (зеркало патча z20 / В4 repair).
+
+    Возвращает (action, payload):
+      defer   — wiki-лидер; payload=None, diag.fork_deferred_to_wiki=True
+      clarify — меню из wiki_pool
+      no_data — пула нет, entity-src меню из детектора не строится
+      pass    — исход не B/C (или A без лидера) — дальше обычный тракт
+    """
+    diag = diag if diag is not None else {}
+    pay = dict(pay or {})
+    if wiki_leader_alive(diag, picked) and outc in ("A", "B", "C"):
+        diag["fork_deferred_to_wiki"] = True
+        diag.setdefault("fork", {})["deferred_to_wiki"] = True
+        return "defer", None
+    if outc == "B":
+        outc = "C"
+        pay = {"reason": "multi_class_menu",
+               "classes": pay.get("classes") or [],
+               "fork_key": pay.get("fork_key")}
+    if outc != "C":
+        return "pass", {"outcome": outc, "pay": pay}
+    wmenu = fork_clarify_from_wiki_pool(
+        question, diag, cut=cut, t0=t0, marks=marks, by=by,
+        match=match, preds=preds)
+    if wmenu is not None:
+        return "clarify", wmenu
+    return "no_data", {
+        "kind": "no_data",
+        "options": [],
+        "diag": dict(diag, fork_c_reason="no_wiki_pool_menu"),
+    }
 
 
 register_zone('ask.z13_fork_outcomes', globals())
