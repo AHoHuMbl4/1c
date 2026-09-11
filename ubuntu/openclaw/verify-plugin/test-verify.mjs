@@ -129,6 +129,31 @@ t("strip: чистый текст не трогается", () => {
 t("strip: путь /var|/opt тоже режется", () => {
   assert.ok(!/\/(var|opt)\//.test(stripInternal("файл /var/lib/serenedb-charts/a.png и /opt/x")));
 });
+// model-tool-meta: EN-служебные фразы модели про tools/verification (дефект 11.09)
+t("strip: model-tool-meta — фраза дефекта wiki tools / verification", () => {
+  const dirty = "The wiki tools are returning a verification message rather than actual results. Let me proceed with the data tool to ask about yesterday's sales.";
+  const out = stripInternal(dirty);
+  assert.ok(!/wiki tools|verification message|Let me proceed|data tool/i.test(out));
+  assert.strictEqual(out.trim(), "");
+});
+t("strip: model-tool-meta — Let me proceed with the data tool", () => {
+  const out = stripInternal("Let me proceed with the data tool to ask about yesterday's sales.");
+  assert.ok(!/Let me proceed|data tool/i.test(out));
+  assert.strictEqual(out.trim(), "");
+});
+t("strip: model-tool-meta — русский ответ с числами не тронут", () => {
+  const s = "Вчера продажи составили 1 572 493 руб. по 3 документам.";
+  assert.strictEqual(stripInternal(s), s);
+});
+t("strip: model-tool-meta — EN-имя внутри русского ответа не тронуто", () => {
+  const s = "Контрагент Tool Sales и продукт Verification Pro — 12 шт.";
+  assert.strictEqual(stripInternal(s), s);
+});
+t("strip: model-tool-meta — I'll use the … tool", () => {
+  const out = stripInternal("I'll use the data tool to fetch yesterday's totals.");
+  assert.ok(!/I'll use|data tool/i.test(out));
+  assert.strictEqual(out.trim(), "");
+});
 
 // === ИЗОЩРЁННЫЕ (adversarial) ===
 

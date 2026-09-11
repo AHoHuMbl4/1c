@@ -181,6 +181,11 @@ const LEAK_LINE_RES = [
   /^.*\bdecision_id\b.*\b(?:ignore|ignored|reject|expir|fresh|re-ask|reask|ticket)\b.*$/gim,
   /^.*\b(?:expiring|fresh)\s+(?:ticket|options?)\b.*$/gim,
   /^.*\b(?:search_knowledge|grep_knowledge|list_knowledge|list_automation|query_knowledge)\w*\b.*$/gim,
+  // model-tool-meta: EN meta про tools/verification/proceed (дефект 11.09 Open WebUI).
+  /^.*\b(?:the\s+[\w-]+\s+)?tools?\s+(?:are|is)\s+returning\b.*$/gim,
+  /^.*\bverification\s+message\s+rather\s+than\b.*$/gim,
+  /^.*\blet\s+me\s+proceed\s+with\b.*$/gim,
+  /^.*\bI(?:'|’)?ll\s+use\s+(?:the\s+)?(?:[\w-]+\s+)*tools?\b.*$/gim,
 ];
 // 🔴 ВНУТРЕННИЕ ИМЕНА ИСТОЧНИКОВ ИЗ БЛОКА ВАРИАНТОВ. Мост собирает уточнение машинным
 // форматом `- <метка> | measure=<величина> | focus=<src_table>` (`mcp_ask.py`), где

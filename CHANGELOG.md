@@ -1,3 +1,22 @@
+## 2026-09-11 (4) — Быстрые победы контура Open WebUI: ключ вики, таймаут 90с с русским отказом, фильтр EN-утечки [код]
+
+**[код]** (волна webui-w1..w4 ×4 → fixes; критерий приёмки W4). (1) **Ключ
+вики**: EMBED_API_KEY в ~/.openclaw-web/gateway.systemd.env переписан из
+/etc/1c-embed.env (был невалиден → 401 на каждом wiki-ходе; замер: 401→200).
+(2) **Таймаут**: ASK_TIMEOUT=90 + MCP_ERROR_REPLY русский текст в
+/etc/1c-mcp-ask-postgres.env; requestTimeoutMs 300000→100000 в openclaw.json
+web (раньше: 300080мс TimeoutError + 5 минут молчания; теперь: честный
+русский отказ за 99с). (3) **EN-утечка**: braine-verify 1.1.8 — класс
+model-tool-meta в LEAK_LINE_RES (4 regex: tools are returning / verification
+message rather than / let me proceed with / I'll use … tool), тот же механизм
+stripInternal; тесты 126/0→131/0; npm-pack установлен в web-профиль
+(openclaw-1.1.8 md5 0b98a471…). Замеры после: простой вопрос 78с clarify
+«в каком разрезе», составной 99с русский отказ, EN_LEAK=False в обоих.
+Осталось (структурный пакет, отдельным планом): rerank ~30→≤5 (z20:2562,
+z16:619, z10:178, z17:489), ASK_INTENT_SAMPLES=5→кэш (z02:668), ранний
+clarify до полного цикла. Числа: 401→200; 300080мс→99000мс с русским
+текстом; 131/0 тесты; EN_LEAK=False. Доки: docs/audit/webui-slow-w1..w4.md
+
 ## 2026-09-11 (3) — Поднят упавший web-контур Open WebUI (mcp-ask лежал с 01.09; шлюз 18801 disabled) [операция]
 
 **[операция]** (сигнал владельца: «Ассистент 1С Open WebUI: Server Connection
