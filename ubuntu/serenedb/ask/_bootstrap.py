@@ -36,7 +36,7 @@ _ZONE_FILES = [
     "z19_answer_check.py",
     "z21_wiki_choice.py",
     "z22_health_tick.py",
-    "z20_ask_main_http.py",
+    "z20_ask_main_http_legacy.py",
 ]
 
 _REGISTER_RE = re.compile(r"^register_zone\s*\(")
@@ -203,7 +203,7 @@ def _body_end_line(lines: list[str]) -> int:
 
 def _exec_zone(path: Path, ns: dict) -> None:
     text = path.read_text(encoding="utf-8")
-    if path.name == "z20_ask_main_http.py":
+    if path.name == "z20_ask_main_http_legacy.py":
         text = _patch_z20_wiki_primary(text)
     lines = text.splitlines(True)
     start = _body_start_line(lines)
