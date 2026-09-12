@@ -1271,6 +1271,20 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
     return {"picked": picked, "marks": marks, "plan": plan}
 
 
+
+_WIKI_PICK_HINT_SENTINELS = frozenset({
+    "bad_index", "axis_reject", "fallback", "none", "clarify", "wiki_degraded",
+})
+
+
+def _stash_wiki_pick_hint(diag):
+    """Сохранить прежний wiki_pick (пик) до sentinel clarify/fallback."""
+    prev = (diag or {}).get("wiki_pick")
+    if (isinstance(prev, str) and prev.strip()
+            and prev not in _WIKI_PICK_HINT_SENTINELS):
+        diag["wiki_pick_hint"] = prev
+
+
 def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
                                 by=None, match="", preds=None):
     """Единая точка интеграции для z20."""
@@ -1308,22 +1322,38 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
         pick = wiki_pick_from_cards(question, intent, cards, diag=diag)
         diag.update(pick.get("diag") or {})
         if pick.get("outcome") == "degraded":
-            diag["wiki_pick"] = "fallback"
-            return None
-        verify = wiki_verify_candidates(question, intent, cards, diag=diag)
-        diag.update(verify.get("diag") or {})
-        if verify.get("outcome") == "degraded":
-            pass
-        elif verify.get("outcome") in ("leader", "clarify", "none"):
-            pick = verify
-            if verify.get("outcome") == "leader":
-                diag["wiki_pick"] = verify.get("leader") or diag.get("wiki_pick")
-            elif verify.get("outcome") == "none":
-                diag["wiki_pick"] = "none"
-                diag["wiki_none"] = verify.get("reason") or "verify_none"
-            elif verify.get("outcome") == "clarify":
+            # I0-П5: pick без модели — пика нет; пул>1 → меню, не отказ.
+            diag["wiki_degraded"] = 1
+            _stash_wiki_pick_hint(diag)
+            pick = {"outcome": "clarify", "candidates": list(cards), "diag": diag}
+            diag["wiki_pick"] = "clarify"
+        else:
+            verify = wiki_verify_candidates(question, intent, cards, diag=diag)
+            diag.update(verify.get("diag") or {})
+            if verify.get("outcome") == "degraded":
+                # I0-П5: непроверенный пик не утверждается.
+                # tie+degraded: меню по candidates пика, иначе по пулу.
+                diag["wiki_degraded"] = 1
+                _stash_wiki_pick_hint(diag)
+                prior = (pick.get("candidates")
+                         if pick.get("outcome") == "clarify" else None)
+                cand = list(prior) if prior else list(cards)
+                pick = {"outcome": "clarify", "candidates": cand, "diag": diag}
                 diag["wiki_pick"] = "clarify"
+            elif verify.get("outcome") in ("leader", "clarify", "none"):
+                pick = verify
+                if verify.get("outcome") == "leader":
+                    diag["wiki_pick"] = (
+                        verify.get("leader") or diag.get("wiki_pick"))
+                elif verify.get("outcome") == "none":
+                    diag["wiki_pick"] = "none"
+                    diag["wiki_none"] = verify.get("reason") or "verify_none"
+                elif verify.get("outcome") == "clarify":
+                    diag["wiki_pick"] = "clarify"
     if pick.get("outcome") == "degraded":
+        # Пул=1 (или иной остаточный degraded): честный отказ, не пик.
+        diag["wiki_degraded"] = 1
+        _stash_wiki_pick_hint(diag)
         diag["wiki_pick"] = "fallback"
         return None
     if pick.get("outcome") == "none":
@@ -1349,6 +1379,9 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
             return readings_menu(
                 question, "entity", opts, diag, cut, t0,
                 reason="wiki_separability")
+        # Меню не собралось (пустое окно / keep_empty) — честный reason.
+        if diag.get("wiki_degraded"):
+            diag["wiki_pick"] = "wiki_degraded"
     leader = pick.get("leader")
     if leader:
         if not wiki_leader_post_verify(leader, intent, question, diag):

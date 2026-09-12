@@ -1,3 +1,34 @@
+## 2026-09-13 (6) — П5-фикс: наблюдаемость degraded [код] [замер]
+
+**[код]** По красной ×2 на дифф П5. Срез i2 jsonl: `wiki_degraded` + `wiki_pick_hint`
+в `_I2_WIKI_DIAG_KEYS`. TRACE «wiki verify» печатается и при `wiki_degraded` (без
+счётчиков); `wiki_verify_trace_fields` → `verdicts=degraded leader=<wiki_pick_hint|->`.
+Перед sentinel clarify/fallback пик сохраняется в `wiki_pick_hint`. tie+degraded:
+меню по candidates пика (не раздувать до пула). Падение меню в no_data из-за
+пустого окна → `wiki_pick=wiki_degraded` (не «clarify»).
+
+**[замер]** candidate_verify **89/0**; one_path **77/0**; trace_rid **22/0**;
+i2_diag **13/0**; wiki_card_hybrid **67/0**; py_compile OK. Мутации: убрать
+`wiki_degraded` из среза → 1 fail; убрать `wiki_pick_hint` → 1 fail.
+
+Числа: 89/0 + 77/0 + 22/0 + 13/0 + 67/0; мутации 1+1 fail.
+Доки: docs/audit/onepath/I0-план-транспорт-и-вики.md §П5
+
+## 2026-09-13 (5) — П5: degraded verify не утверждает непроверенный пик [код] [замер]
+
+**[код]** I0v2 §П5 (скорректирован красной: не degraded→no_data, а исход по пулу).
+В `try_wiki_hybrid_entity_pick`: при `outcome==degraded` пик из `wiki_pick_from_cards`
+не уходит в `picked`; пул≥2 → clarify-меню по пулу (`readings_menu`/`mk_opts`/
+`wiki_menu_captions`), diag `wiki_degraded=1`; пул=1 → `None`/`wiki_pick=fallback`
+(как single-card). То же при degraded самого pick (модель pick недоступна).
+
+**[замер]** `test_wiki_candidate_verify` **86/0** (+6 P5a/b/v); `test_one_path` **77/0**;
+`test_verify_threshold_menu` 4/0; `test_wiki_homonym_menu` 10/0; `test_wiki_card_hybrid`
+67/0. Мутация «вернуть pass»: **6 fail**, в т.ч. P5a → `picked=['catalog_a']`.
+
+Числа: 86/0 + 77/0 + 4/0 + 10/0 + 67/0; мутация 6 fail.
+Доки: docs/audit/onepath/I0-план-транспорт-и-вики.md §П5
+
 ## 2026-09-13 (4) — П2b: согласие verify на sole-yes (лечение флипа судьи) [код] [замер]
 
 **[код]** План I0v2 §П2b, образец — существующее согласие intent (INTENT_SAMPLES). При

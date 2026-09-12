@@ -52,6 +52,8 @@ def main() -> int:
         "wiki_verify2_error": 0,
         "wiki_verify2_truncated": 0,
         "wiki_verdicts2": [{"i": 1, "fit": "yes", "why": "ok2"}],
+        "wiki_degraded": 1,
+        "wiki_pick_hint": "catalog_a",
         "found": 1,
         "doubt": False,
         "terms": ["noise"],
@@ -78,6 +80,11 @@ def main() -> int:
       and slice_.get("wiki_verdicts2") == [{"i": 1, "fit": "yes", "why": "ok2"}]
       and "wiki_verify2_error" in slice_
       and "wiki_verify2_truncated" in slice_)
+    t("wiki_diag_slice carries P5 degraded keys",
+      "wiki_degraded" in I2._I2_WIKI_DIAG_KEYS
+      and "wiki_pick_hint" in I2._I2_WIKI_DIAG_KEYS
+      and slice_.get("wiki_degraded") == 1
+      and slice_.get("wiki_pick_hint") == "catalog_a")
     t("wiki_diag_slice empty on junk",
       I2.wiki_diag_slice(None) == {} and I2.wiki_diag_slice({}) == {})
 

@@ -224,6 +224,8 @@ _I2_WIKI_DIAG_KEYS = (
     "wiki_verify2_error",
     "wiki_verify2_truncated",
     "wiki_verdicts2",
+    "wiki_degraded",
+    "wiki_pick_hint",
 )
 
 

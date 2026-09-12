@@ -57,10 +57,10 @@ def wiki_verify_trace_fields(diag):
     )
     has_second = any(k in diag for k in second_keys) or (
         isinstance(confirm_raw, str) and bool(confirm_raw.strip()))
-    if diag.get("wiki_verify_error"):
-        pick = diag.get("wiki_pick")
-        if isinstance(pick, str) and pick.strip():
-            leader = _wiki_trace_sanitize(pick)
+    if diag.get("wiki_degraded") or diag.get("wiki_verify_error"):
+        hint = diag.get("wiki_pick_hint")
+        if isinstance(hint, str) and hint.strip():
+            leader = _wiki_trace_sanitize(hint)
         else:
             leader = "-"
         out = {"verdicts": "degraded", "leader": leader, "confirm": confirm}
@@ -2014,7 +2014,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             question, intent, [], diag, cut, t0,
             {}, "", preds, {})
         if ("wiki_verify_yes" in diag or "wiki_verdicts" in diag
-                or diag.get("wiki_verify_error")):
+                or diag.get("wiki_verify_error")
+                or diag.get("wiki_degraded")):
             шаг("wiki verify", **wiki_verify_trace_fields(diag))
         if isinstance(_ep, dict) and _ep.get("kind"):
             шаг("wiki исход", kind=_ep.get("kind"))

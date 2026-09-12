@@ -808,6 +808,148 @@ def main() -> int:
       and "wiki_clarify_collapsed" not in z21_src)
     t("В4: wiki_menu_captions есть", callable(z21.get("wiki_menu_captions")))
 
+    # I0-П5: degraded verify — непроверенный пик не уходит в ответ
+    def _psql_p5(q):
+        qs = str(q)
+        if "search_wiki_entity_card" in qs and "LIMIT 1" in qs:
+            return [("x",)]
+        if "search_tables" in qs:
+            return [("catalog_a", "Alpha"), ("catalog_b", "Beta")]
+        if "wiki_pages" in qs or "wiki_passport" in qs:
+            return [("catalog_a", "Alpha", "w", "", "", "", "catalog"),
+                    ("catalog_b", "Beta", "w", "", "", "", "catalog")]
+        return [("x",)]
+
+    z21["psql"] = _psql_p5
+    z21["wiki_validate_leader_axes"] = lambda *a, **k: True
+    z21["wiki_leader_post_verify"] = lambda *a, **k: True
+    z21["filter_pool_by_named_type"] = lambda q, cards, diag=None: cards
+
+    # (а) пул≥2: pick=leader, verify=degraded → clarify, не picked
+    z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(2)
+
+    def _pick_leader(q, intent, cards, diag=None):
+        d = diag if diag is not None else {}
+        d["wiki_pick"] = "catalog_a"
+        return {"outcome": "leader", "leader": "catalog_a", "diag": d}
+
+    z21["wiki_pick_from_cards"] = _pick_leader
+    z21["wiki_verify_candidates"] = lambda q, intent, cards, diag=None: {
+        "outcome": "degraded", "diag": dict(diag or {})}
+    diag_a = {}
+    res_a = z21["try_wiki_hybrid_entity_pick"](
+        "q", {}, diag_a, None, 0, by={}, match="", preds=[])
+    t("P5a pool≥2 verify-degraded → clarify",
+      res_a and res_a.get("kind") == "clarify"
+      and len(res_a.get("options") or []) >= 2
+      and not res_a.get("picked"),
+      res_a)
+    t("P5a diag wiki_degraded=1", diag_a.get("wiki_degraded") == 1)
+    t("P5a peak not asserted as wiki_pick leader",
+      diag_a.get("wiki_pick") == "clarify")
+    t("P5a wiki_pick_hint preserves peak",
+      diag_a.get("wiki_pick_hint") == "catalog_a", diag_a)
+
+    # (а′) пул≥2: сам pick degraded → тоже меню по пулу
+    z21["wiki_pick_from_cards"] = lambda q, intent, cards, diag=None: {
+        "outcome": "degraded", "diag": diag or {}}
+    _verify_calls = []
+
+    def _verify_must_not(*a, **k):
+        _verify_calls.append(1)
+        return {"outcome": "leader", "leader": "catalog_a", "diag": {}}
+
+    z21["wiki_verify_candidates"] = _verify_must_not
+    diag_a2 = {}
+    res_a2 = z21["try_wiki_hybrid_entity_pick"](
+        "q", {}, diag_a2, None, 0, by={}, match="", preds=[])
+    t("P5a pick-degraded pool≥2 → clarify without verify",
+      res_a2 and res_a2.get("kind") == "clarify"
+      and not res_a2.get("picked")
+      and not _verify_calls
+      and diag_a2.get("wiki_degraded") == 1)
+
+    # (б) пул=1 + degraded → None
+    z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(1)
+    z21["wiki_verify_candidates"] = lambda q, intent, cards, diag=None: {
+        "outcome": "degraded", "diag": dict(diag or {})}
+    diag_b = {}
+    res_b = z21["try_wiki_hybrid_entity_pick"](
+        "q", {}, diag_b, None, 0, by={})
+    t("P5b pool=1 degraded → None",
+      res_b is None and diag_b.get("wiki_degraded") == 1
+      and diag_b.get("wiki_pick") == "fallback")
+
+
+    # (г) tie+degraded: пул 8, pick=clarify(cands=2) → меню из 2, не 8
+    def _cards8(n=8):
+        base = _cards(3)
+        out = list(base)
+        for i in range(3, n):
+            out.append({
+                "src_table": "catalog_x%d" % i, "name": "X%d" % i,
+                "description": "d", "axes": "a", "measures": "m",
+                "distance": 0.1 + i * 0.01, "platform_kind": "справочник",
+                "parent": ""})
+        return out
+
+    pool8 = _cards8(8)
+    z21["wiki_hybrid_pool"] = lambda q, intent=None: list(pool8)
+
+    def _pick_tie(q, intent, cards, diag=None):
+        d = diag if diag is not None else {}
+        d["wiki_pick"] = "clarify"
+        return {"outcome": "clarify", "candidates": list(cards)[:2], "diag": d}
+
+    z21["wiki_pick_from_cards"] = _pick_tie
+    z21["wiki_verify_candidates"] = lambda q, intent, cards, diag=None: {
+        "outcome": "degraded", "diag": dict(diag or {})}
+    # labels for any src in pool
+    def _psql_p5_tie(q):
+        qs = str(q)
+        if "search_wiki_entity_card" in qs and "LIMIT 1" in qs:
+            return [("x",)]
+        if "search_tables" in qs:
+            return [(c["src_table"], c["name"]) for c in pool8]
+        return [("x",)]
+    z21["psql"] = _psql_p5_tie
+    diag_tie = {}
+    res_tie = z21["try_wiki_hybrid_entity_pick"](
+        "q", {}, diag_tie, None, 0, by={}, match="", preds=[])
+    n_opts = len(res_tie.get("options") or []) if res_tie else -1
+    t("P5g tie+degraded menu size=2 not 8",
+      res_tie and res_tie.get("kind") == "clarify" and n_opts == 2,
+      {"n": n_opts, "res": res_tie, "deg": diag_tie.get("wiki_degraded")})
+
+    # (д) degraded-меню → no_data при <2 opts: reason=wiki_degraded
+    z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(2)
+    z21["wiki_pick_from_cards"] = _pick_leader
+    z21["wiki_verify_candidates"] = lambda q, intent, cards, diag=None: {
+        "outcome": "degraded", "diag": dict(diag or {})}
+    z21["mk_opts"] = lambda srcs, lab_by, *a, **k: (
+        [{"label": lab_by.get(srcs[0], srcs[0]), "src": srcs[0]}]
+        if srcs else [])
+    z21["psql"] = _psql_p5
+    diag_e = {}
+    res_e = z21["try_wiki_hybrid_entity_pick"](
+        "q", {}, diag_e, None, 0, by={}, match="", preds=["doc_date >= 'x'"])
+    t("P5e empty-window degraded → None wiki_pick=wiki_degraded",
+      res_e is None and diag_e.get("wiki_degraded") == 1
+      and diag_e.get("wiki_pick") == "wiki_degraded"
+      and diag_e.get("wiki_pick_hint") == "catalog_a",
+      diag_e)
+
+    # (в) щель «pass» закрыта: verify-degraded после pick-leader
+    # не оставляет leader в pick (мутация pass → краснеет)
+    try_src = z21_src
+    i_try = try_src.find("def try_wiki_hybrid_entity_pick")
+    i_next = try_src.find("\ndef wiki_intent_named_measures", i_try)
+    try_body = try_src[i_try:i_next if i_next > 0 else None]
+    t("P5v no bare pass on verify degraded",
+      "if verify.get(\"outcome\") == \"degraded\":\n            pass"
+      not in try_body
+      and "wiki_degraded" in try_body)
+
     r = subprocess.run([sys.executable, "-m", "py_compile", str(Z21)],
                        capture_output=True, text=True)
     t("z21 py_compile", r.returncode == 0, r.stderr[:120])

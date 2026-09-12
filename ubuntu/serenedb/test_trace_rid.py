@@ -127,15 +127,22 @@ if callable(fmt):
     ax = fmt({"wiki_verify": "axis_reject"})
     t("TRACE sentinel axis_reject",
       ax.get("leader") == "- (axis_reject)", ax)
-    deg = fmt({"wiki_verify_error": 1, "wiki_pick": "catalog_a",
+    deg = fmt({"wiki_verify_error": 1, "wiki_pick_hint": "catalog_a",
                "wiki_verdicts": []})
-    t("TRACE degraded uses wiki_pick",
+    t("TRACE degraded uses wiki_pick_hint",
       deg.get("verdicts") == "degraded" and deg.get("leader") == "catalog_a",
       deg)
     deg2 = fmt({"wiki_verify_error": 1, "wiki_verdicts": []})
-    t("TRACE degraded without pick -> leader=-",
+    t("TRACE degraded without hint -> leader=-",
       deg2.get("verdicts") == "degraded" and deg2.get("leader") == "-",
       deg2)
+    deg_wd = fmt({"wiki_degraded": 1, "wiki_pick_hint": "catalog_b"})
+    t("TRACE wiki_degraded alone uses hint",
+      deg_wd.get("verdicts") == "degraded" and deg_wd.get("leader") == "catalog_b",
+      deg_wd)
+    deg_ign = fmt({"wiki_verify_error": 1, "wiki_pick": "catalog_a"})
+    t("TRACE degraded ignores wiki_pick for leader",
+      deg_ign.get("leader") == "-", deg_ign)
     nl = fmt({"wiki_verify": "src" + chr(10) + "with  spaces", "wiki_verify_yes": 1})
     t("TRACE leader sanitized one line",
       chr(10) not in nl.get("leader", "") and "  " not in nl.get("leader", ""),
