@@ -32,7 +32,8 @@ knn AS (
          c.measures,
          c.covered,
          c.emb <=> (SELECT qv FROM q) AS distance,
-         1 AS src_layer
+         1 AS src_layer,
+         'knn' AS src_kind
     FROM search_wiki_entity_card c
    WHERE c.emb IS NOT NULL
    ORDER BY distance
@@ -46,7 +47,8 @@ knn_raw AS (
          c.measures,
          c.covered,
          c.emb <=> (SELECT qv FROM q2) AS distance,
-         1 AS src_layer
+         1 AS src_layer,
+         'knn' AS src_kind
     FROM search_wiki_entity_card c
    WHERE c.emb IS NOT NULL
      AND :'question_raw' <> :'question'
@@ -60,7 +62,8 @@ axis_words AS (
 struct_catalog AS (
   SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
          c.emb <=> (SELECT qv FROM q) AS distance,
-         2 AS src_layer
+         2 AS src_layer,
+         'struct_catalog' AS src_kind
     FROM search_wiki_entity_card c
     JOIN search_tables t ON t.src_table = c.src_table
     LEFT JOIN search_entity_alias a ON a.src_table = c.src_table
@@ -76,7 +79,8 @@ struct_catalog AS (
 struct_register AS (
   SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
          c.emb <=> (SELECT qv FROM q) AS distance,
-         2 AS src_layer
+         2 AS src_layer,
+         'struct_register' AS src_kind
     FROM search_wiki_entity_card c
    WHERE c.src_table LIKE 'accumulationregister_%'
      AND :'action_axis' <> ''
@@ -93,7 +97,8 @@ struct_register AS (
 struct_move AS (
   SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
          c.emb <=> (SELECT qv FROM q) AS distance,
-         2 AS src_layer
+         2 AS src_layer,
+         'struct_move' AS src_kind
     FROM search_wiki_entity_card c
     JOIN search_tables t ON t.src_table = c.src_table
     LEFT JOIN search_entity_alias a ON a.src_table = c.src_table
@@ -110,7 +115,8 @@ struct_move AS (
 struct_catalog_event AS (
   SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
          c.emb <=> (SELECT qv FROM q) AS distance,
-         2 AS src_layer
+         2 AS src_layer,
+         'struct_catalog_event' AS src_kind
     FROM search_wiki_entity_card c
     JOIN search_tables t ON t.src_table = c.src_table
     LEFT JOIN search_entity_alias a ON a.src_table = c.src_table
@@ -138,7 +144,8 @@ struct_catalog_event AS (
 struct_alias AS (
   SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
          c.emb <=> (SELECT qv FROM q) AS distance,
-         2 AS src_layer
+         2 AS src_layer,
+         'struct_alias' AS src_kind
     FROM (SELECT src_table
             FROM alias_idx
            WHERE aliases @@ :'question'
@@ -158,7 +165,8 @@ struct_alias AS (
 struct_measure AS (
   SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
          c.emb <=> (SELECT qv FROM q) AS distance,
-         2 AS src_layer
+         2 AS src_layer,
+         'struct_measure' AS src_kind
     FROM (SELECT src_table FROM search_measure_alias
            WHERE :'measure' <> ''
              AND list_has_any(
@@ -183,7 +191,8 @@ struct_measure AS (
 struct_named AS (
   SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
          c.emb <=> (SELECT qv FROM q) AS distance,
-         2 AS src_layer
+         2 AS src_layer,
+         'struct_named' AS src_kind
     FROM search_wiki_entity_card c
     JOIN search_tables t ON t.src_table = c.src_table
    WHERE list_has_any(
@@ -194,9 +203,13 @@ struct_named AS (
                                coalesce(t.label, ''))),
                        x -> length(x) >= 4))
 ),
+-- [13.09 I0-П4] src_kind — провенанс слагаемого (имена CTE). При нескольких
+-- путях: struct_* (src_layer=2) над knn; среди struct — struct_alias первым,
+-- чтобы object-фильтр мог отпустить только носителя словаря синонимов.
+-- Доки: Sql › Query syntax › SELECT › DISTINCT ON Clause.
 pool AS (
   SELECT DISTINCT ON (src_table) src_table, name, description, axes, measures,
-         covered, distance, src_layer
+         covered, distance, src_layer, src_kind
     FROM (
       SELECT * FROM knn
       UNION ALL SELECT * FROM knn_raw
@@ -208,7 +221,9 @@ pool AS (
       UNION ALL SELECT * FROM struct_alias
       UNION ALL SELECT * FROM struct_measure
     ) u
-   ORDER BY src_table, src_layer DESC, distance
+   ORDER BY src_table, src_layer DESC,
+            CASE WHEN src_kind = 'struct_alias' THEN 1 ELSE 0 END DESC,
+            distance
 ),
 meta AS (
   SELECT t.src_table, coalesce(t.parent, '') AS parent
@@ -252,12 +267,18 @@ filtered AS (
                  OR (:want_agg = 1 AND p.src_table LIKE 'catalog_%')))
         OR (:'action_class' = 'object'
             AND (p.src_table LIKE 'catalog_%'
-                 OR p.src_table LIKE 'accumulationregister_%'))
+                 OR p.src_table LIKE 'accumulationregister_%'
+                 -- [13.09 I0-П4] только struct_alias: носитель aliases
+                 -- («прайс-лист» → informationregister_*) доходит до судьи;
+                 -- struct_named/measure и knn под фильтром как прежде.
+                 OR p.src_kind = 'struct_alias'))
          )
 )
 -- Колонки = wiki_hybrid_pool: src_table, name, description, axes, measures,
--- covered, distance, parent, platform_prefix. rk в SELECT ломал src_table→«1».
--- Доки: Sql › Functions › Vector Functions › knn; AI Functions › ai_embed.
+-- covered, distance, parent, platform_prefix, src_kind.
+-- rk в SELECT ломал src_table→«1». src_kind — только в конец (позиционный
+-- читатель z21). Доки: Sql › Functions › Vector Functions › knn;
+-- AI Functions › ai_embed; Sql › Query syntax › SELECT › DISTINCT ON.
 SELECT f.src_table,
        f.name,
        substr(f.description, 1, 120) AS description_head,
@@ -266,7 +287,8 @@ SELECT f.src_table,
        f.covered,
        round(f.distance::numeric, 4) AS distance,
        coalesce(m.parent, '') AS parent,
-       split_part(f.src_table, '_', 1) AS platform_prefix
+       split_part(f.src_table, '_', 1) AS platform_prefix,
+       f.src_kind
   FROM filtered f
   LEFT JOIN meta m ON m.src_table = f.src_table
  ORDER BY f.src_layer DESC, f.distance, f.src_table

@@ -325,6 +325,128 @@ def main() -> int:
                        capture_output=True, text=True)
     t("z21 py_compile", r.returncode == 0, r.stderr[:120])
 
+    # --- I0-П4: src_kind + struct_alias exempt from object (не parent) ---
+    # Поведение читаем из SQL-фрагментов: убрать освобождение → (а) красный;
+    # ослабить на все struct_* → (б) красный.
+    filt = hybrid[hybrid.find("filtered AS"):hybrid.rfind("SELECT f.src_table")]
+    # object-ветка: от «= 'object'» до конца filtered
+    obj_from = filt.find("action_class' = 'object'")
+    obj_branch = filt[obj_from:] if obj_from >= 0 else ""
+
+    def _object_liberation_precise(branch: str) -> bool:
+        """Ровно один предикат освобождения: src_kind = 'struct_alias'.
+
+        Табличные LIKE catalog_%/accumulationregister_% — исходный фильтр,
+        не освобождение. Любой второй src_kind=, src_layer, 1=1, LIKE — нет.
+        """
+        clean = strip_sql_comments(branch)
+        rest = re.sub(
+            r"p\.?src_table\s+LIKE\s+'(?:catalog_|accumulationregister_)%'",
+            " ", clean, flags=re.I)
+        alias_n = len(re.findall(
+            r"src_kind\s*=\s*'struct_alias'", rest, re.I))
+        kind_eq_n = len(re.findall(r"src_kind\s*=", rest, re.I))
+        if alias_n != 1 or kind_eq_n != 1:
+            return False
+        if re.search(r"src_layer", rest, re.I):
+            return False
+        if re.search(r"\b1\s*=\s*1\b", rest):
+            return False
+        if re.search(r"\bLIKE\b", rest, re.I):
+            return False
+        return True
+
+    def _object_keeps(src_table: str, src_kind: str) -> bool:
+        if src_table.startswith("catalog_") or src_table.startswith(
+                "accumulationregister_"):
+            return True
+        clean = strip_sql_comments(obj_branch)
+        if _object_liberation_precise(obj_branch):
+            return src_kind == "struct_alias"
+        # Расширение/поломка освобождения: держит всё покрытое предикатами
+        # (второй src_kind=, 1=1, src_layer, LIKE struct_%) → P4b красный.
+        if (re.search(r"\b1\s*=\s*1\b", clean)
+                or re.search(r"src_layer", clean, re.I)):
+            return True
+        if re.search(r"src_kind\s+LIKE\s+'struct_%'", clean, re.I):
+            return src_kind.startswith("struct_")
+        kinds = re.findall(r"src_kind\s*=\s*'([^']*)'", clean, re.I)
+        return src_kind in kinds
+
+    def _parent_cuts(want_agg: int, action_class: str, parent: str) -> bool:
+        return bool(want_agg == 1 and action_class != "none" and parent)
+
+    ir = "informationregister_ценыноменклатуры"
+    # (а)
+    t("P4a: object keeps IR via struct_alias",
+      _object_keeps(ir, "struct_alias")
+      and _object_liberation_precise(obj_branch)
+      and re.search(r"src_kind\s*=\s*'struct_alias'", obj_branch, re.I))
+    # (б) knn и прочие struct_* — вырезаются
+    t("P4b: object cuts IR via knn", not _object_keeps(ir, "knn"))
+    t("P4b: object cuts IR via struct_named",
+      not _object_keeps(ir, "struct_named"))
+    t("P4b: object cuts IR via struct_measure",
+      not _object_keeps(ir, "struct_measure"))
+    t("P4b-mut: no blanket struct_% in object branch",
+      "src_kind LIKE 'struct_%'" not in obj_branch
+      and "src_kind LIKE 'struct%'" not in obj_branch)
+
+    # (в) parent-фильтр want_agg+tabpart НЕ ослаблен
+    t("P4c: parent filter phrase intact",
+      "NOT (:want_agg = 1 AND :'action_class' <> 'none' AND m.parent <> '')"
+      in hybrid)
+    t("P4c: parent still cuts tabpart (independent of src_kind)",
+      _parent_cuts(1, "object", "document_x")
+      and not _parent_cuts(0, "object", "document_x")
+      and not _parent_cuts(1, "none", "document_x")
+      # освобождение object не трогает parent-строку
+      and "src_kind" not in hybrid[
+          hybrid.find("NOT (:want_agg = 1"):
+          hybrid.find("NOT (:want_agg = 1") + 80])
+
+    # (г) порядок колонок: прежние 9, src_kind только хвост
+    final_sel = hybrid[hybrid.rfind("SELECT f.src_table"):]
+    final_head = final_sel.split("FROM")[0]
+    col_order = [
+        "f.src_table", "f.name", "description_head", "f.axes", "f.measures",
+        "f.covered", " AS distance", " AS parent", "platform_prefix",
+        "f.src_kind",
+    ]
+    positions = [final_head.find(c) for c in col_order]
+    t("P4g: column order stable + src_kind last",
+      all(p >= 0 for p in positions)
+      and positions == sorted(positions)
+      and positions[-1] == max(positions))
+    z21_src2 = Z21.read_text(encoding="utf-8")
+    t("P4g: z21 reads src_kind at r[9] (tail)",
+      'r[9]' in z21_src2
+      and '"src_kind"' in z21_src2
+      and "(r[7] if len(r) > 7" in z21_src2)
+    t("P4: src_kind arms present",
+      all(x in hybrid for x in (
+          "'struct_alias' AS src_kind",
+          "'struct_named' AS src_kind",
+          "'struct_measure' AS src_kind",
+          "'knn' AS src_kind")))
+    t("P4: DISTINCT prefers struct_alias provenance",
+      "CASE WHEN src_kind = 'struct_alias' THEN 1 ELSE 0 END" in hybrid)
+
+    # Читатель: реальный wiki_hybrid_pool (load_z21), строка пула 10 колонок
+    raw = (
+        "informationregister_ценыноменклатуры", "Цены", "d", "a", "m",
+        1, 0.2, "", "informationregister", "struct_alias")
+    z21_r = load_z21()
+    z21_r["psql"] = lambda q: [raw]
+    cards_r = z21_r["wiki_hybrid_pool"](
+        "прайс", {"want": "count", "action_class": "object"})
+    t("P4: pool reader maps r[9] → src_kind",
+      len(cards_r) == 1
+      and cards_r[0].get("src_kind") == "struct_alias"
+      and cards_r[0]["src_table"].startswith("informationregister_")
+      and cards_r[0].get("parent") == ""
+      and cards_r[0].get("platform_kind") == "informationregister")
+
     print("---", PASS, "ok,", len(FAIL), "fail")
     return 1 if FAIL else 0
 

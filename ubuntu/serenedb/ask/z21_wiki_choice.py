@@ -348,6 +348,8 @@ def wiki_hybrid_pool(question, intent=None):
             r = r[1:]
             src = str(r[0])
         parent = (r[7] if len(r) > 7 else "") or ""
+        # r[8]=platform_prefix (SQL); platform_kind считаем из src/parent.
+        # r[9]=src_kind — провенанс слагаемого пула (только в конец).
         out.append({
             "src_table": src,
             "name": (r[1] if len(r) > 1 else "") or "",
@@ -358,6 +360,7 @@ def wiki_hybrid_pool(question, intent=None):
             "distance": float(r[6]) if len(r) > 6 and r[6] is not None else 1.0,
             "parent": parent,
             "platform_kind": wiki_platform_kind(src, parent),
+            "src_kind": (r[9] if len(r) > 9 else "") or "",
         })
     return out
 
