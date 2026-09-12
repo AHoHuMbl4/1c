@@ -2,9 +2,16 @@
 -- Один круг разведения: выбор слова, отметка probe, JSON пачки для модели.
 -- Input: word раунда + текущие aliases/best/nef (промт v2; P2/P7).
 -- Доки: Aggregate string_agg; Utility md5; struct_pack; read_json не нужен здесь.
+-- Токены aliases: ' | ' с фолбэком ', '. Доки: Text string_split / len(list) / position.
 WITH al AS (
   SELECT src_table, trim(lower(x.a)) AS alias
-  FROM :alias_table, unnest(str_split(aliases, ',')) AS x(a)
+  FROM :alias_table, unnest(
+    CASE
+      WHEN len(str_split(coalesce(aliases, ''), ' | ')) = 1
+           AND position(', ' IN coalesce(aliases, '')) > 0
+        THEN str_split(aliases, ', ')
+      ELSE str_split(coalesce(aliases, ''), ' | ')
+    END) AS x(a)
   WHERE trim(x.a) <> ''),
 dup AS (SELECT alias FROM al GROUP BY 1 HAVING count(DISTINCT src_table) > 1),
 cand AS (

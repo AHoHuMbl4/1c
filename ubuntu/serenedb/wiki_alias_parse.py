@@ -21,8 +21,45 @@ import sys
 import unicodedata
 
 
-def _join(x, n=900):
-    return ", ".join(str(i).strip() for i in (x or []) if str(i).strip())[:n]
+# Хранение списков: разделитель ' | ' (P4 §2.4); потолок 1600 (P4 §3).
+_JOIN_SEP = " | "
+_JOIN_CAP = 1600
+
+
+def _scrub_pipe_elem(s):
+    """Элемент без '|': вырезать символ; пусто → отброс. Лог в stderr (P4 §2.4 п.4)."""
+    s = str(s).strip()
+    if not s:
+        return None
+    if "|" in s:
+        cleaned = s.replace("|", "").strip()
+        print(
+            "wiki_alias_parse: pipe in element stripped: %r -> %r"
+            % (s, cleaned or None),
+            file=sys.stderr,
+        )
+        if not cleaned:
+            return None
+        return cleaned
+    return s
+
+
+def _join(x, n=_JOIN_CAP):
+    parts = []
+    for i in (x or []):
+        cleaned = _scrub_pipe_elem(i)
+        if cleaned:
+            parts.append(cleaned)
+    s = _JOIN_SEP.join(parts)
+    if len(s) > n:
+        # п.13: обрезка по потолку видна (семантика среза прежняя — посреди элемента).
+        print(
+            "wiki_alias_parse: join truncated to %d: len=%d"
+            % (n, len(s)),
+            file=sys.stderr,
+        )
+        return s[:n]
+    return s
 
 
 def _dig(o):
@@ -78,12 +115,23 @@ def canon_measure(name, allowed):
 
 
 def _alias_tokens(raw):
-    """Список слов/оборотов из ответа модели (массив или CSV-строка)."""
+    """Список слов/оборотов из ответа модели (массив или CSV-строка).
+
+    CSV: новый разделитель ' | '; старый ', ' (и голая ',' как запас).
+    Дедуп — у вызывающей стороны (filter_entity_aliases), здесь не трогаем.
+    """
     if raw is None:
         return []
     if isinstance(raw, list):
         return [str(i).strip() for i in raw if str(i).strip()]
-    return [x.strip() for x in str(raw).split(",") if x.strip()]
+    s = str(raw)
+    if " | " in s:
+        parts = s.split(" | ")
+    elif ", " in s:
+        parts = s.split(", ")
+    else:
+        parts = s.split(",")
+    return [x.strip() for x in parts if x.strip()]
 
 
 # Стоп-варианты мета-классов платформы 1С (P3 §2): casefold + ё→е уже применены.

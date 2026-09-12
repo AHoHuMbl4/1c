@@ -7,10 +7,29 @@ from ask._wire import register_zone, apply_bindings
 apply_bindings(globals())
 
 def _alias_parts(raw):
-    """Алиасы поля: список или строка через запятую, как кладёт `wiki_alias.sh`."""
+    """Алиасы поля: список или CSV; новый ' | ', старый ', '/','."""
     if isinstance(raw, (list, tuple)):
         return [str(a).strip() for a in raw if str(a).strip()]
-    return [a.strip() for a in str(raw or "").split(",") if a.strip()]
+    if not raw:
+        return []
+    s = str(raw)
+    if " | " in s:
+        parts = s.split(" | ")
+    elif ", " in s:
+        parts = s.split(", ")
+    else:
+        parts = s.split(",")
+    out, seen = [], set()
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        key = p.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
 
 
 def _word_hits_text(wl, text):

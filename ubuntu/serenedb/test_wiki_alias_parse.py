@@ -51,9 +51,9 @@ by = {(r["src_table"], r["measure"]): r["aliases"] for r in meas}
 
 t("сущность разобрана", len(ents) == 1 and ents[0]["src_table"] == "document_отгрузкапробная")
 t("каноническое имя величины сохранено дословно",
-  by.get(("document_отгрузкапробная", "ИтогПробный")) == "оборот, сумма продаж, итог")
+  by.get(("document_отгрузкапробная", "ИтогПробный")) == "оборот | сумма продаж | итог")
 t("имя в другом регистре сводится к канону из входа, а не пишется как выдумала модель",
-  by.get(("document_отгрузкапробная", "СуммаКартойПробная")) == "оплата картой, карта"
+  by.get(("document_отгрузкапробная", "СуммаКартойПробная")) == "оплата картой | карта"
   and "суммакартойпробная" not in {r["measure"] for r in meas})
 t("🔴 выдуманное имя величины отброшено",
   not any(r["measure"] == "ВыдуманноеПоле" for r in meas), meas)
@@ -94,7 +94,7 @@ TEXT_H = """
 
 ents_h, meas_h = P.parse_items(TEXT_H, PAY_H)
 alias_csv = (ents_h[0]["aliases"] if ents_h else "") or ""
-alias_set = {a.strip().casefold() for a in alias_csv.split(",") if a.strip()}
+alias_set = {a.strip().casefold() for a in P._alias_tokens(alias_csv)}
 
 t("обиходное слово из ответа доходит до aliases сущности",
   "покупатель" in alias_set and "клиент пробный" in alias_set, alias_csv)
@@ -122,12 +122,6 @@ t("filter_entity_aliases: пустой ответ — пустой список"
 t("filter_entity_aliases: дубликаты схлопываются без учёта регистра",
   P.filter_entity_aliases(["Alpha", "alpha", "Beta"]) == ["Alpha", "Beta"])
 
-print()
-if FAIL:
-    print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))
-    sys.exit(1)
-print("ИТОГ: ok — все %d проверок прошли" % PASS)
-
 # ── обрезанный ответ (лимит токенов вызова; живой случай окна 28.08) ────────
 TEXT_TRUNC = """{
   "items": [
@@ -140,3 +134,9 @@ t("🔴 обрезанный JSON: целые элементы спасаютс�
   len(ents_t) == 1 and ents_t[0]["src_table"] == "catalog_пробный", ents_t)
 t("salvage: пустой/без items — пусто, не исключение",
   P._salvage_items("{}") == [] and P._salvage_items("xx") == [])
+
+print()
+if FAIL:
+    print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))
+    sys.exit(1)
+print("ИТОГ: ok — все %d проверок прошли" % PASS)

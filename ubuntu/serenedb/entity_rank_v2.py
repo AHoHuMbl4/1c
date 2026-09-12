@@ -73,9 +73,31 @@ def is_noncanon_sales(src):
 
 
 def _alias_parts(raw):
+    """Список алиасов из CSV-колонки (меры/словаря).
+
+    Новый разделитель ' | '; старый ', ' (и голая ',' как запас).
+    Дедуп по casefold; пустые отбрасываются.
+    """
     if not raw:
         return []
-    return [p.strip() for p in str(raw).split(",") if p.strip()]
+    s = str(raw)
+    if " | " in s:
+        parts = s.split(" | ")
+    elif ", " in s:
+        parts = s.split(", ")
+    else:
+        parts = s.split(",")
+    out, seen = [], set()
+    for p in parts:
+        p = p.strip()
+        if not p:
+            continue
+        key = p.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
 
 
 def _measure_choice(names, word, alias_by=None):
@@ -690,8 +712,16 @@ def kind_from_alias_overlap(psql, lit, question, stem_dict="search_dict_stem"):
     if not cats:
         return ""
     src = cats[0]
+    # Первый алиас: ' | ' (новое) с фолбэком ', '/',' (старое). Доки: split_part / str_split.
     lab = psql(
-        "SELECT coalesce(nullif(trim(split_part(a.aliases, ',', 1)), ''), t.label) "
+        "SELECT coalesce(nullif(trim("
+        "  CASE"
+        "    WHEN len(str_split(coalesce(a.aliases, ''), ' | ')) = 1"
+        "         AND position(', ' IN coalesce(a.aliases, '')) > 0"
+        "      THEN split_part(a.aliases, ', ', 1)"
+        "    ELSE split_part(coalesce(a.aliases, ''), ' | ', 1)"
+        "  END"
+        "), ''), t.label) "
         "FROM search_entity_alias a JOIN search_tables t ON t.src_table = a.src_table "
         "WHERE a.src_table = %s LIMIT 1" % lit(src))
     if lab and lab[0] and lab[0][0]:

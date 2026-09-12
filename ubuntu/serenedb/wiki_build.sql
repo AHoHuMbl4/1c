@@ -53,14 +53,23 @@ SELECT f.src_table AS page_id,
     || 'id: entity.' || f.src_table || chr(10)
     || 'canonicalId: ' || f.src_table || chr(10)
     || 'title: ' || f.label || chr(10)
+    -- aliases: ' | ' (новое) с фолбэком ', ' (старое; запятые в алиасах схемой запрещены).
+    -- best/nef: только ' | '; без ' | ' — один элемент целиком (запятая внутри фразы
+    -- разрешена, P4: «взнос работодателя, НДФЛ»). Доки: Text string_split / len(list).
     || coalesce((SELECT chr(10) || 'aliases:' || string_agg(chr(10) || '  - ' || trim(x.v), '')
-                   FROM unnest(str_split(a.aliases, ',')) AS x(v)
+                   FROM unnest(
+                     CASE
+                       WHEN len(str_split(coalesce(a.aliases, ''), ' | ')) = 1
+                            AND position(', ' IN coalesce(a.aliases, '')) > 0
+                         THEN str_split(a.aliases, ', ')
+                       ELSE str_split(coalesce(a.aliases, ''), ' | ')
+                     END) AS x(v)
                   WHERE a.aliases IS NOT NULL AND trim(x.v) <> ''), chr(10) || 'aliases: []')
     || coalesce((SELECT chr(10) || 'bestUsedFor:' || string_agg(chr(10) || '  - ' || trim(x.v), '')
-                   FROM unnest(str_split(a.best_used_for, ',')) AS x(v)
+                   FROM unnest(str_split(coalesce(a.best_used_for, ''), ' | ')) AS x(v)
                   WHERE a.best_used_for IS NOT NULL AND trim(x.v) <> ''), chr(10) || 'bestUsedFor: []')
     || coalesce((SELECT chr(10) || 'notEnoughFor:' || string_agg(chr(10) || '  - ' || trim(x.v), '')
-                   FROM unnest(str_split(a.not_enough_for, ',')) AS x(v)
+                   FROM unnest(str_split(coalesce(a.not_enough_for, ''), ' | ')) AS x(v)
                   WHERE a.not_enough_for IS NOT NULL AND trim(x.v) <> ''), chr(10) || 'notEnoughFor: []')
     || chr(10)
     || CASE WHEN f.parent <> '' OR f.children IS NOT NULL THEN 'relationships:' || chr(10) ELSE '' END

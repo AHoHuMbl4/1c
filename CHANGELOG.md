@@ -1,3 +1,29 @@
+## 2026-09-13 (12) — G2→G2d: разделитель ' | ', потолок 1600, dual-читатели, миграция-заготовка [код]
+
+**[код]** Слой формата P4 §2-3: `_join` пишет ' | ', потолок 900→1600, обрезка
+видима stderr'ом (п.13), валидатор '|' в элементах; `_alias_tokens` dual (' | '
+затем ', ' — старые строки); читатели: wiki_build aliases dual, best/nef
+pipe-only (запятая внутри фразы легальна — блокер R11: фолбэк ', ' ломал
+одноэлементные «взнос работодателя, НДФЛ»), collision_left/round dual, rank
+первый-алиас dual, reask append ' | '; `z02_intent` уже режет оба — не тронут;
+`wiki_alias_migrate_sep.sql` — snap → replace ', '→' | ' только вне
+скобочно-запятых паттернов → контрольные SELECT; НЕ исполнялась (только по слову
+владельца). Коммитятся исторические untracked: wiki_alias_reask_merge_confirmed.sql
+(рабочий reask-merge вне git с 28.08). Известные переходные (до миграции): старые
+multi-строки best/nef в frontmatter одним bullet'ом; смешанный 'a, b | c' после
+reask-append склеивает элементы — оба лечит миграция. Дочистки красных:
+G2c — entity_rank_v2._alias_parts мер dual (писатель ' | ' vs читатель ','
+расходились, R14); G2d — ask/z14_clarify_memory._alias_parts dual (читатель
+живого словаря entity+measure). Граф: снята ложная связь sh→migrate, заведён
+wiki_alias_reask_merge_confirmed.sql, наблюдения на rank/collision_left/round.
+Замки: test_wiki_alias_sep.py 36/0 (новый, 25→30→36), v2 64/0, parse 19/0
+(ИТОГ починен 17→19). Приёмка: красная ×2 (R11 блокер → G2b; R12 условные;
+R13 оба аудитора ГОДЕН; R14 блокер-граф закрыт оркестратором + G2c/G2d).
+
+Числа: sep 36/0, v2 64/0, parse 19/0, py_compile+bash -n ок; миграция 0 строк
+на бою (не запускалась).
+Доки: docs/audit/dict-audit/P4-формат.md; SereneDB Text string_split/position/replace/regexp_matches + List len (serenedb.com/docs/sql/functions/text, /list)
+
 ## 2026-09-13 (11) — СЕРИЯ G1→G1e ПРИНЯТА: промты v2 + мета-стоп P3 + force в генератор словаря [код]
 
 **[код]** Исполнение пакета P1-P7 (первый слой): init/reask-промты P1 §1
