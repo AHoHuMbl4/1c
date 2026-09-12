@@ -107,12 +107,13 @@ t("0 collapse in z21",
   "_wiki_clarify_collapse" not in (ASK / "z21_wiki_choice.py").read_text(encoding="utf-8")
   and "wiki_clarify_collapsed" not in (ASK / "z21_wiki_choice.py").read_text(encoding="utf-8"))
 
-# ── Волна W: мерное clarify при entity-locked отсутствует ─────────────────────
-t("measure_hatch при entity-locked",
-  "measure_hatch" in z20 and "_entity_locked" in z20)
-t("мерный clarify только без locked (else)",
-  "Сущность не зафиксирована" in z20
-  or "не зафиксирована — прежнее меню" in z20)
+# ── Откат люка: мерное меню без исключений (PLAN §7 п.8) ──────────────────────
+t("0 measure_hatch в z20", "measure_hatch" not in z20)
+t("мерное меню без исключений entity-locked",
+  "_entity_locked" not in z20
+  and 'diag["measure_ambiguous"]' in z20
+  and '"kind": "clarify"' in z20
+  and "measure_captions(" in z20)
 
 
 # (W-фикс) при живом wiki-лидере doubt сбрасывается: судья один (wiki verify),

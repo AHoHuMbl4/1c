@@ -3358,14 +3358,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                        in totals_of(src, match, preds, _qn)}
             except RuntimeError:
                 _qt = {}
-        _ent_locked = (
-            len(picked or []) == 1
-            and (bool(diag.get("wiki_hybrid_pick"))
-                 or bool(focus)
-                 or bool(trusted)))
         measure, measure_alts = unresolved_quantity(
             measure, measure_alts, intent.get("want"), plan.get("compute"),
-            _qn, _qt, entity_locked=_ent_locked)
+            _qn, _qt)
     if measure_pick:                           # человек уже выбрал величину кнопкой
         _names = measures_of(src)
         _resolved = resolve_measure(measure_pick, _names,
@@ -3488,14 +3483,8 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     "text": NO_DATA_TEXT or refuse_text(question),
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
                                  reason="subject_unsupported_before_measure_clarify")}
-        _entity_locked = (
-            len(picked or []) == 1
-            and (bool(diag.get("wiki_hybrid_pick"))
-                 or bool(focus)
-                 or bool(trusted)))
-        # Без фиксации сущности — class-alts (меню); при locked — headline z09, не sales_*.
-        if (not _entity_locked
-                and (intent.get("want") or "") == "sum"
+        # Класс money|qty при want=sum и двух живых классах — меню классов.
+        if ((intent.get("want") or "") == "sum"
                 and not ((intent.get("measure") or "").strip())
                 and not measure_pick):
             _cls_m, _cls_alts = measure_class_alts(
@@ -3509,197 +3498,72 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         except RuntimeError:
             _mtot = {}
         diag["measure_totals"] = dict(_mtot)
-        if _entity_locked:
-            # Волна W / Z2: мерная детализация → число+люк (A/B/C), не kind=clarify.
-            _live = [m for m in measure_alts if m in _mtot] or list(measure_alts)
-            _alias_by = measure_aliases_of(src) if src else {}
-            if len(_live) <= 1 or not measure_ambiguous(_live, _mtot):
-                # A: одна живая / равные totals — обычный ответ, люк закрыт.
-                measure = _live[0] if _live else measure_alts[0]
-                measure_alts = []
-                diag["measure"] = measure
-                diag["measure_hatch"] = "A"
-            else:
-                _mword = (intent.get("measure") or "").strip()
-                _hl = _fork_headline_measure(
-                    src, _mtot, _mword, alias_by=_alias_by,
-                    want=(intent.get("want") or ""))
-                if _hl is None:
-                    _pool = _fork_sum_headline_pool(_live)
-                    _hl = _pool[0] if _pool else None
-                _rest = [m for m in _live if m != _hl]
-                _has_caps = any(_alias_parts(_alias_by.get(m)) for m in _rest)
-                if _hl is None and not _has_caps:
-                    # C: headline нет и подписей нет — единственная вычислимая / count.
-                    _hl = _live[0] if _live else None
-                if _hl is None:
-                    measure = None
-                    measure_alts = []
-                    diag["measure_hatch"] = "C_count"
-                elif _has_caps and _hl:
-                    # B: разные числа + подписи — headline + люк с подписями.
-                    _caps = measure_captions(_live, _alias_by)
-                    try:
-                        _lab = psql(
-                            "SELECT label FROM %s WHERE src_table = %s LIMIT 1"
-                            % (TABLES, lit(src)))
-                        _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
-                    except RuntimeError:
-                        _ent = ""
-                    _agg = {"count": 0, "sum": _mtot.get(_hl), "min": None,
-                            "max": None, "avg": None, "measure": _hl, "src": src,
-                            "grain": "row", "form": "number"}
-                    _atom = atom_from_agg(
-                        _agg, operation="sum", measure_id=_hl,
-                        measure_label=_caps.get(_hl) or _hl, money=True,
-                        period=(intent or {}).get("period"),
-                        period_origin=_passport_origin(intent, diag),
-                        grain="row", form="number", src=src)
-                    _text = render_atom_pair(_atom) or str(_mtot.get(_hl))
-                    opts = []
-                    for m in _rest:
-                        _lab_m = _caps.get(m) or m
-                        _val = _mtot.get(m)
-                        opts.append({
-                            "src": src, "measure": m,
-                            "label": "%s: %s" % (_lab_m, _val),
-                            "distinct_by": "", "entity_label": _ent,
-                            "value": _val})
-                    diag["measure"] = _hl
-                    diag["measure_hatch"] = "B"
-                    diag["measure_ambiguous"] = _live
-                    return {"partial": cut or None, "kind": "figures",
-                            "text": _text,
-                            "figures": _fork_figures_of(_atom),
-                            "atom": _atom, "atoms": [_atom],
-                            "options": opts, "sources": [src] if src else [],
-                            "source_fixed": False, "memory_eligible": False,
-                            "diag": _diag_pack(
-                                diag, sec=round(time.time() - t0, 2),
-                                reason="measure_hatch_B")}
-                else:
-                    # C: разные числа, подписей нет — число + «есть другое прочтение».
-                    _caps = measure_captions([_hl], _alias_by)
-                    _agg = {"count": 0, "sum": _mtot.get(_hl), "min": None,
-                            "max": None, "avg": None, "measure": _hl, "src": src,
-                            "grain": "row", "form": "number"}
-                    _atom = atom_from_agg(
-                        _agg, operation="sum", measure_id=_hl,
-                        measure_label=_caps.get(_hl) or _hl, money=True,
-                        period=(intent or {}).get("period"),
-                        period_origin=_passport_origin(intent, diag),
-                        grain="row", form="number", src=src)
-                    _pair = render_atom_pair(_atom) or str(_mtot.get(_hl))
-                    _text = "%s · %s" % (_pair, FORK_OTHER_READING)
-                    diag["measure"] = _hl
-                    diag["measure_hatch"] = "C"
-                    diag["measure_ambiguous"] = _live
-                    return {"partial": cut or None, "kind": "figures",
-                            "text": _text,
-                            "figures": _fork_figures_of(_atom),
-                            "atom": _atom, "atoms": [_atom],
-                            "options": [], "sources": [src] if src else [],
-                            "source_fixed": False, "memory_eligible": False,
-                            "diag": _diag_pack(
-                                diag, sec=round(time.time() - t0, 2),
-                                reason="measure_hatch_C")}
+        _live = [m for m in measure_alts if m in _mtot] or list(measure_alts)
+        if len(_live) <= 1 or not measure_ambiguous(_live, _mtot):
+            # Одна живая мера или равные totals — обычный ответ.
+            measure = _live[0] if _live else measure_alts[0]
+            measure_alts = []
+            diag["measure"] = measure
         else:
-            # Сущность не зафиксирована — прежнее меню мер (формула №15).
-            diag["measure_ambiguous"] = measure_alts
+            # >1 живая с разными totals — меню мер (в т.ч. при locked-сущности).
+            diag["measure_ambiguous"] = _live
             try:
                 _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
                             % (TABLES, lit(src)))
                 _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
             except RuntimeError:
                 _ent = ""
-            _caps = measure_captions(measure_alts, measure_aliases_of(src))
+            _caps = measure_captions(_live, measure_aliases_of(src))
             opts = [{"src": src, "measure": m, "label": _caps[m],
                      "distinct_by": "", "entity_label": _ent}
-                    for m in measure_alts]
+                    for m in _live]
             return {"partial": cut or None, "kind": "clarify",
                     "text": clarify_say(question, opts, diag)
                             or ", ".join("«%s»" % o["label"] for o in opts),
                     "options": opts, "sources": [src],
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
-    # После hatch A measure выбран; иначе totals_of одной мере / страховка.
+    # При >1 мере путь идёт в меню; totals_of всем именам не используется.
     if measure:
         totals = []
     else:
         _tm = list(measures_of(src) if src else [])
-        _entity_locked = (
-            len(picked or []) == 1
-            and (bool(diag.get("wiki_hybrid_pick"))
-                 or bool(focus)
-                 or bool(trusted)))
-        if len(_tm) > 1 and not _entity_locked:
-            # Страховка без фиксации: не уходить в compose по всем именам.
+        if len(_tm) > 1:
             measure_alts = measure_alts or _tm
-            totals = []
-            diag["measure_totals_of_blocked"] = len(_tm)
-        elif len(_tm) > 1 and _entity_locked and not measure_alts:
-            # Locked + нет alts: взять headline / первую, не меню.
-            try:
-                _mtot2 = {m: v for m, v, _mx, _mn
-                          in totals_of(src, match, preds, _tm)}
-            except RuntimeError:
-                _mtot2 = {}
-            _hl2 = _fork_headline_measure(
-                src, _mtot2, (intent.get("measure") or "").strip(),
-                alias_by=measure_aliases_of(src) if src else {},
-                want=(intent.get("want") or ""))
-            if _hl2 is None:
-                _pool2 = _fork_sum_headline_pool(_tm)
-                _hl2 = _pool2[0] if _pool2 else (_tm[0] if _tm else None)
-            if _hl2:
-                measure = _hl2
-                diag["measure"] = measure
-                diag["measure_hatch"] = diag.get("measure_hatch") or "A"
-            totals = []
+            # Простой счёт строк (want=count/"") не развилка мер: мера не участвует
+            # в подсчёте записей — гасим меню, путь идёт в count-агрегат.
+            if (measure_alts and count_defer_measure_clarify(intent, src, _ax_cd)):
+                diag["count_axis_defer_measure"] = True
+                measure_alts = []
+                _tm = []
+            else:
+                totals = []
+                diag["measure_totals_of_blocked"] = len(_tm)
         else:
             totals = totals_of(src, match, preds, _tm) if _tm else []
     if (not measure and measure_alts
             and not measure_already_proven(trusted, resolved, measure_pick)):
-        _entity_locked = (
-            len(picked or []) == 1
-            and (bool(diag.get("wiki_hybrid_pick"))
-                 or bool(focus)
-                 or bool(trusted)))
-        if _entity_locked:
-            # Страховка: при locked не clarify — взять первую живую.
-            try:
-                _mtot3 = {m: v for m, v, _mx, _mn
-                          in totals_of(src, match, preds, measure_alts)}
-            except RuntimeError:
-                _mtot3 = {}
-            _live3 = [m for m in measure_alts if m in _mtot3] or list(measure_alts)
-            measure = _live3[0] if _live3 else None
-            measure_alts = []
-            diag["measure"] = measure
-            diag["measure_hatch"] = diag.get("measure_hatch") or "A"
-            diag["measure_totals"] = dict(_mtot3)
-        else:
-            diag["measure_ambiguous"] = measure_alts
-            try:
-                diag["measure_totals"] = {m: v for m, v, _mx, _mn
-                                          in totals_of(src, match, preds,
-                                                       measure_alts)}
-            except RuntimeError:
-                pass
-            try:
-                _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
-                            % (TABLES, lit(src)))
-                _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
-            except RuntimeError:
-                _ent = ""
-            _caps = measure_captions(measure_alts, measure_aliases_of(src))
-            opts = [{"src": src, "measure": m, "label": _caps[m],
-                     "distinct_by": "", "entity_label": _ent}
-                    for m in measure_alts]
-            return {"partial": cut or None, "kind": "clarify",
-                    "text": clarify_say(question, opts, diag)
-                            or ", ".join("«%s»" % o["label"] for o in opts),
-                    "options": opts, "sources": [src],
-                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+        diag["measure_ambiguous"] = measure_alts
+        try:
+            diag["measure_totals"] = {m: v for m, v, _mx, _mn
+                                      in totals_of(src, match, preds,
+                                                   measure_alts)}
+        except RuntimeError:
+            pass
+        try:
+            _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
+                        % (TABLES, lit(src)))
+            _ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
+        except RuntimeError:
+            _ent = ""
+        _caps = measure_captions(measure_alts, measure_aliases_of(src))
+        opts = [{"src": src, "measure": m, "label": _caps[m],
+                 "distinct_by": "", "entity_label": _ent}
+                for m in measure_alts]
+        return {"partial": cut or None, "kind": "clarify",
+                "text": clarify_say(question, opts, diag)
+                        or ", ".join("«%s»" % o["label"] for o in opts),
+                "options": opts, "sources": [src],
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
     if totals:
         diag["totals"] = {m: [v, mx, mn] for m, v, mx, mn in totals}
     preds = preds + _num_pred(intent, measure)

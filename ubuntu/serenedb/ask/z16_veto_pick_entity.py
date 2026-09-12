@@ -415,9 +415,8 @@ def unresolved_quantity(measure, alts, want, compute, names, totals_by=None,
     """Свести поле, когда вопрос про итог/max/min/avg, а величина ещё не выбрана.
 
     `want=count|list` сюда не входит: там в compose нет денег, уточнение полей
-    было бы «НДС или карта» на «сколько продаж». Одна величина — брать её.
-    Сущность зафиксирована (entity_locked): не форсировать меню — z20 A/B/C;
-    равные итоги → одно число (A). Без фиксации: >1 имени → alts (меню сущности).
+    было бы «НДС или карта» на «сколько продаж». Одна величина — брать её;
+    несколько имён — alts-меню (entity_locked оставлен в сигнатуре и не влияет).
     """
     if measure or alts:
         return measure, list(alts or [])
@@ -429,12 +428,7 @@ def unresolved_quantity(measure, alts, want, compute, names, totals_by=None,
         return None, []
     if len(names) == 1:
         return names[0], []
-    if entity_locked:
-        # Волна W / Z2: мерная детализация → число+люк в z20, не clarify.
-        if totals_by is not None and not measure_ambiguous(names, totals_by):
-            return names[0], []
-        return None, names
-    # Без фиксации сущности: >1 имени — меню (формула №15 ступень 4).
+    # >1 имени — меню мер; равные/разные totals разбирает z20 по totals_of.
     return None, names
 
 
