@@ -3,10 +3,16 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 import re
 from pathlib import Path
 
 _ASK_DIR = Path(__file__).resolve().parent
+
+# B5: тракт-переключатель «один путь» (флаг полигона/shadow; прод до flip на legacy).
+# ASK_ONEPATH=1 → главным обработчиком грузится новый z20, патч к legacy не применяется.
+_ONEPATH = os.environ.get("ASK_ONEPATH", "") == "1"
+_Z20_FILE = "z20_ask_main_http.py" if _ONEPATH else "z20_ask_main_http_legacy.py"
 
 
 def _zone_path(num: int, stem: str) -> str:
@@ -36,7 +42,7 @@ _ZONE_FILES = [
     "z19_answer_check.py",
     "z21_wiki_choice.py",
     "z22_health_tick.py",
-    "z20_ask_main_http_legacy.py",
+    _Z20_FILE,
 ]
 
 _REGISTER_RE = re.compile(r"^register_zone\s*\(")
