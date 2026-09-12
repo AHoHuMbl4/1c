@@ -46,13 +46,30 @@ def _wiki_trace_sanitize(value):
 def wiki_verify_trace_fields(diag):
     """Поля TRACE-шага «wiki verify» из diag (наблюдаемость, без смены выбора)."""
     diag = diag or {}
+    confirm_raw = diag.get("wiki_verify_confirm")
+    confirm = (
+        _wiki_trace_sanitize(confirm_raw)
+        if isinstance(confirm_raw, str) and confirm_raw.strip()
+        else "-")
+    second_keys = (
+        "wiki_verify2_yes", "wiki_verify2_no", "wiki_verify2_unsure",
+        "wiki_verify2_error", "wiki_verify2_truncated",
+    )
+    has_second = any(k in diag for k in second_keys) or (
+        isinstance(confirm_raw, str) and bool(confirm_raw.strip()))
     if diag.get("wiki_verify_error"):
         pick = diag.get("wiki_pick")
         if isinstance(pick, str) and pick.strip():
             leader = _wiki_trace_sanitize(pick)
         else:
             leader = "-"
-        return {"verdicts": "degraded", "leader": leader}
+        out = {"verdicts": "degraded", "leader": leader, "confirm": confirm}
+        if has_second:
+            out["2"] = "%d/%d/%d" % (
+                int(diag.get("wiki_verify2_yes") or 0),
+                int(diag.get("wiki_verify2_no") or 0),
+                int(diag.get("wiki_verify2_unsure") or 0))
+        return out
     yv = int(diag.get("wiki_verify_yes") or 0)
     nv = int(diag.get("wiki_verify_no") or 0)
     uv = int(diag.get("wiki_verify_unsure") or 0)
@@ -63,10 +80,17 @@ def wiki_verify_trace_fields(diag):
         leader = "- (%s)" % raw
     else:
         leader = _wiki_trace_sanitize(raw)
-    return {
+    out = {
         "verdicts": "%dyes/%dno/%du" % (yv, nv, uv),
         "leader": leader,
+        "confirm": confirm,
     }
+    if has_second:
+        out["2"] = "%d/%d/%d" % (
+            int(diag.get("wiki_verify2_yes") or 0),
+            int(diag.get("wiki_verify2_no") or 0),
+            int(diag.get("wiki_verify2_unsure") or 0))
+    return out
 
 
 def without_list_markers(text):

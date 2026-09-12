@@ -217,6 +217,13 @@ _I2_WIKI_DIAG_KEYS = (
     "wiki_verify_error",
     "wiki_none",
     "wiki_homonym_tie",
+    "wiki_verify_confirm",
+    "wiki_verify2_yes",
+    "wiki_verify2_no",
+    "wiki_verify2_unsure",
+    "wiki_verify2_error",
+    "wiki_verify2_truncated",
+    "wiki_verdicts2",
 )
 
 

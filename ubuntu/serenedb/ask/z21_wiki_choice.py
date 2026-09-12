@@ -956,6 +956,131 @@ def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
     }
 
 
+def _wiki_verify_fit_buckets(verdicts, n_passports):
+    """Индексы yes / unsure / no по вердиктам (1-based, как у модели)."""
+    by_idx = {v["index"]: v for v in (verdicts or [])}
+    yes_i, unsure_i, no_i = [], [], []
+    for i in range(1, n_passports + 1):
+        v = by_idx.get(i)
+        if not v:
+            continue
+        if v["fit"] == "yes":
+            yes_i.append(i)
+        elif v["fit"] == "unsure":
+            unsure_i.append(i)
+        else:
+            no_i.append(i)
+    return yes_i, unsure_i, no_i
+
+
+def _wiki_verify_confirm_sole_yes(
+        ask_text, listing, full, first_verdicts, first_leader, diag):
+    """Согласие на sole-yes: второй вызов тому же судье (I0-П2b).
+
+    agree — parse2=full, ровно n вердиктов, один yes|unsure = лидер₁, остальные no.
+    disagree / disagree-trunc / disagree-partial — иначе: clarify по yes∪unsure;
+    пусто / все-no₂ → none. Счётчики первого вызова не затираются (wiki_verify2_*).
+    """
+    n = len(full)
+    msgs = [{"role": "system", "content": WIKI_VERIFY_SYS},
+            {"role": "user", "content": "%s\n\nPassports:\n%s"
+             % (ask_text, listing)}]
+    raw2 = None
+    try:
+        raw2 = ds_chat(msgs, max_tokens=WIKI_VERIFY_MAX_TOKENS)
+    except Exception as e:  # noqa: BLE001
+        sys.stderr.write(
+            "ask: wiki verify confirm без модели (%s)\n" % str(e)[:80])
+        diag["wiki_verify2_error"] = 1
+        diag["wiki_verify_confirm"] = "disagree"
+        yes1, unsure1, _ = _wiki_verify_fit_buckets(first_verdicts, n)
+        tie_idx = sorted(set(yes1 + unsure1))
+        diag["wiki_verify"] = "clarify"
+        diag["wiki_verify_tie"] = [
+            full[i - 1].get("src_table") for i in tie_idx if 0 < i <= n]
+        return {
+            "outcome": "clarify",
+            "candidates": [full[i - 1] for i in tie_idx if 0 < i <= n],
+            "verdicts": first_verdicts,
+            "diag": diag,
+        }
+    verdicts2, parse2 = wiki_parse_verify_response(raw2, n)
+    if parse2 == "salvage":
+        diag["wiki_verify2_truncated"] = 1
+    if (raw2 or "").strip() and parse2 == "failed":
+        diag["wiki_verify2_error"] = 1
+        diag["wiki_verify_confirm"] = "disagree"
+        yes1, unsure1, _ = _wiki_verify_fit_buckets(first_verdicts, n)
+        tie_idx = sorted(set(yes1 + unsure1))
+        diag["wiki_verify"] = "clarify"
+        diag["wiki_verify_tie"] = [
+            full[i - 1].get("src_table") for i in tie_idx if 0 < i <= n]
+        return {
+            "outcome": "clarify",
+            "candidates": [full[i - 1] for i in tie_idx if 0 < i <= n],
+            "verdicts": first_verdicts,
+            "diag": diag,
+        }
+    yes2, unsure2, no2 = _wiki_verify_fit_buckets(verdicts2, n)
+    diag["wiki_verify2_yes"] = len(yes2)
+    diag["wiki_verify2_unsure"] = len(unsure2)
+    diag["wiki_verify2_no"] = len(no2)
+    diag["wiki_verdicts2"] = _wiki_verdicts_for_diag(verdicts2)
+    leader_idx = next(
+        (i for i in range(1, n + 1)
+         if full[i - 1].get("src_table") == first_leader),
+        None)
+    by2 = {v["index"]: v for v in (verdicts2 or [])}
+    n_v2 = len(verdicts2 or [])
+    covers_all = set(by2) == set(range(1, n + 1))
+    complete = (parse2 == "full" and n_v2 == n and covers_all)
+    same_fit = False
+    if leader_idx is not None:
+        v_lead = by2.get(leader_idx)
+        same_fit = bool(v_lead and v_lead["fit"] in ("yes", "unsure"))
+    other_yes = [i for i in yes2 if i != leader_idx]
+    other_unsure = [i for i in unsure2 if i != leader_idx]
+    # agree: полный разбор, все n, ровно один yes|unsure = лидер₁, остальные явные no.
+    # отсутствие вердикта ≠ no (salvage/partial → не agree).
+    if complete and same_fit and not other_yes and not other_unsure:
+        diag["wiki_verify_confirm"] = "agree"
+        return None  # лидер первого вызова остаётся
+    if parse2 == "salvage":
+        diag["wiki_verify_confirm"] = "disagree-trunc"
+    elif parse2 == "full" and not complete:
+        diag["wiki_verify_confirm"] = "disagree-partial"
+    else:
+        diag["wiki_verify_confirm"] = "disagree"
+    # Успешный второй «все no» — флип без поддержки: none (не утверждать 1-й yes).
+    if not yes2 and not unsure2 and len(no2) == n:
+        diag["wiki_verify"] = "none"
+        return {
+            "outcome": "none",
+            "reason": "verify_confirm_none",
+            "verdicts": first_verdicts,
+            "diag": diag,
+        }
+    yes1, unsure1, _ = _wiki_verify_fit_buckets(first_verdicts, n)
+    tie_idx = sorted(set(yes1 + unsure1 + yes2 + unsure2))
+    if not tie_idx:
+        diag["wiki_verify"] = "none"
+        return {
+            "outcome": "none",
+            "reason": "verify_confirm_none",
+            "verdicts": first_verdicts,
+            "diag": diag,
+        }
+    diag["wiki_verify"] = "clarify"
+    diag["wiki_verify_tie"] = [
+        full[i - 1].get("src_table") for i in tie_idx if 0 < i <= n]
+    return {
+        "outcome": "clarify",
+        "candidates": [full[i - 1] for i in tie_idx if 0 < i <= n],
+        "verdicts": first_verdicts,
+        "diag": diag,
+    }
+
+
 def wiki_verify_candidates(question, intent, cards, diag=None):
     """Паспортная verify: вопрос + пул карточек (≥1) → модель → verdicts."""
     diag = dict(diag or {})
@@ -970,6 +1095,11 @@ def wiki_verify_candidates(question, intent, cards, diag=None):
     kind = _intent_text((intent or {}).get("kind"))
     if kind:
         ask_text = "%s (%s)" % (ask_text, kind)
+    # Согласие только на sole-yes при пуле >1; wiki_verify_error — не подтверждать.
+    # (wiki_verify=="degraded" никто не пишет — мёртвая ветка снята, I0-П2b-фикс.)
+    skip_confirm = (
+        len(full) <= 1
+        or bool(diag.get("wiki_verify_error")))
     try:
         raw = ds_chat(
             [{"role": "system", "content": WIKI_VERIFY_SYS},
@@ -994,6 +1124,22 @@ def wiki_verify_candidates(question, intent, cards, diag=None):
     resolved["verdicts"] = verdicts
     d = dict(resolved.get("diag") or diag)
     d["wiki_verdicts"] = _wiki_verdicts_for_diag(verdicts)
+    # I0-П2b: sole-yes → повторный вызов (пул >1, не degraded).
+    if (not skip_confirm
+            and resolved.get("outcome") == "leader"
+            and resolved.get("leader")
+            and not d.get("wiki_verify_error")):
+        confirmed = _wiki_verify_confirm_sole_yes(
+            ask_text, listing, full, verdicts,
+            resolved.get("leader"), d)
+        if confirmed is not None:
+            confirmed["verdicts"] = confirmed.get("verdicts") or verdicts
+            cd = dict(confirmed.get("diag") or d)
+            if "wiki_verdicts" not in cd:
+                cd["wiki_verdicts"] = d.get("wiki_verdicts") or []
+            confirmed["diag"] = cd
+            return confirmed
+        d["wiki_verify_confirm"] = "agree"
     resolved["diag"] = d
     return resolved
 

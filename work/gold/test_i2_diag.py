@@ -45,6 +45,13 @@ def main() -> int:
         "wiki_verify_error": 1,
         "wiki_none": "verify_none",
         "wiki_homonym_tie": ["catalog_b"],
+        "wiki_verify_confirm": "agree",
+        "wiki_verify2_yes": 1,
+        "wiki_verify2_no": 1,
+        "wiki_verify2_unsure": 0,
+        "wiki_verify2_error": 0,
+        "wiki_verify2_truncated": 0,
+        "wiki_verdicts2": [{"i": 1, "fit": "yes", "why": "ok2"}],
         "found": 1,
         "doubt": False,
         "terms": ["noise"],
@@ -64,6 +71,13 @@ def main() -> int:
       and slice_.get("wiki_verify_error") == 1
       and slice_.get("wiki_none") == "verify_none"
       and slice_.get("wiki_homonym_tie") == ["catalog_b"])
+    t("wiki_diag_slice carries P2b confirm keys",
+      slice_.get("wiki_verify_confirm") == "agree"
+      and slice_.get("wiki_verify2_yes") == 1
+      and slice_.get("wiki_verify2_no") == 1
+      and slice_.get("wiki_verdicts2") == [{"i": 1, "fit": "yes", "why": "ok2"}]
+      and "wiki_verify2_error" in slice_
+      and "wiki_verify2_truncated" in slice_)
     t("wiki_diag_slice empty on junk",
       I2.wiki_diag_slice(None) == {} and I2.wiki_diag_slice({}) == {})
 

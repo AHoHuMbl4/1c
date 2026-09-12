@@ -140,6 +140,26 @@ if callable(fmt):
     t("TRACE leader sanitized one line",
       chr(10) not in nl.get("leader", "") and "  " not in nl.get("leader", ""),
       nl)
+    conf0 = fmt({"wiki_verify": "catalog_goods", "wiki_verify_yes": 1,
+                 "wiki_verify_no": 0, "wiki_verify_unsure": 0})
+    t("TRACE confirm absent -> -",
+      conf0.get("confirm") == "-" and "2" not in conf0, conf0)
+    conf1 = fmt({
+        "wiki_verify": "catalog_goods", "wiki_verify_yes": 1,
+        "wiki_verify_no": 1, "wiki_verify_unsure": 0,
+        "wiki_verify_confirm": "agree",
+        "wiki_verify2_yes": 1, "wiki_verify2_no": 1, "wiki_verify2_unsure": 0,
+    })
+    t("TRACE confirm+2 on second call",
+      conf1.get("confirm") == "agree" and conf1.get("2") == "1/1/0",
+      conf1)
+    conf_nl = fmt({
+        "wiki_verify": "catalog_a",
+        "wiki_verify_confirm": "disagree" + chr(10) + "x",
+        "wiki_verify2_yes": 0,
+    })
+    t("TRACE confirm sanitized",
+      chr(10) not in conf_nl.get("confirm", ""), conf_nl)
 
 print("\n%d проверок пройдено" % PASS)
 if FAIL:

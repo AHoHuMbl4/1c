@@ -254,6 +254,190 @@ def main() -> int:
     vfy = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
     t("mock one yes picked", vfy.get("outcome") == "leader"
       and vfy.get("leader") == "catalog_a")
+    t("mock one yes confirm agree",
+      (vfy.get("diag") or {}).get("wiki_verify_confirm") == "agree")
+
+    # I0-П2b: согласие sole-yes (второй вызов)
+    _calls = []
+
+    def _ds_seq(*a, **k):
+        _calls.append(1)
+        seq = getattr(_ds_seq, "seq")
+        i = min(len(_calls) - 1, len(seq) - 1)
+        item = seq[i]
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    z21["psql"] = lambda q: []
+    z21["wiki_validate_leader_axes"] = lambda *a, **k: True
+
+    _calls.clear()
+    _ds_seq.seq = [
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "a"},
+            {"index": 2, "fit": "no", "why": "n"},
+        ]}),
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "a2"},
+            {"index": 2, "fit": "no", "why": "n2"},
+        ]}),
+    ]
+    z21["ds_chat"] = _ds_seq
+    v_agree = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    t("P2b agree: second sole-yes → leader",
+      v_agree.get("outcome") == "leader"
+      and v_agree.get("leader") == "catalog_a"
+      and (v_agree.get("diag") or {}).get("wiki_verify_confirm") == "agree"
+      and len(_calls) == 2
+      and (v_agree.get("diag") or {}).get("wiki_verify_yes") == 1
+      and (v_agree.get("diag") or {}).get("wiki_verify2_yes") == 1)
+
+    # I0-П2b-фикс: salvage второго ответа (обрезан после лидера) ≠ agree
+    _calls.clear()
+    trunc2 = (
+        '{"verdicts": ['
+        '{"index": 1, "fit": "yes", "why": "ok"}, '
+        '{"index": 2, "fit": "no", "why": "cut mid'
+    )
+    _ds_seq.seq = [
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "a"},
+            {"index": 2, "fit": "no", "why": "n"},
+        ]}),
+        trunc2,
+    ]
+    z21["ds_chat"] = _ds_seq
+    v_trunc2 = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    d_trunc2 = v_trunc2.get("diag") or {}
+    t("P2b fix salvage2 after leader ≠ agree",
+      v_trunc2.get("outcome") != "leader"
+      and d_trunc2.get("wiki_verify_confirm") == "disagree-trunc"
+      and d_trunc2.get("wiki_verify2_truncated") == 1
+      and len(_calls) == 2,
+      (v_trunc2.get("outcome"), d_trunc2.get("wiki_verify_confirm")))
+
+    # I0-П2b-фикс: полный JSON только с объектом лидера (n=3) → disagree-partial
+    _calls.clear()
+    _ds_seq.seq = [
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "a"},
+            {"index": 2, "fit": "no", "why": "n"},
+            {"index": 3, "fit": "no", "why": "n"},
+        ]}),
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "only leader"},
+        ]}),
+    ]
+    z21["ds_chat"] = _ds_seq
+    v_partial = z21["wiki_verify_candidates"]("q", {}, _cards(3), {})
+    d_partial = v_partial.get("diag") or {}
+    t("P2b fix partial JSON only leader ≠ agree",
+      v_partial.get("outcome") != "leader"
+      and d_partial.get("wiki_verify_confirm") == "disagree-partial"
+      and len(_calls) == 2,
+      (v_partial.get("outcome"), d_partial.get("wiki_verify_confirm")))
+
+    # I0-П2b-фикс: лидер yes + чужой yes → disagree (other_yes)
+    _calls.clear()
+    _ds_seq.seq = [
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "a"},
+            {"index": 2, "fit": "no", "why": "n"},
+        ]}),
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "a2"},
+            {"index": 2, "fit": "yes", "why": "other"},
+        ]}),
+    ]
+    z21["ds_chat"] = _ds_seq
+    v_dual = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    d_dual = v_dual.get("diag") or {}
+    srcs_dual = [c.get("src_table") for c in (v_dual.get("candidates") or [])]
+    t("P2b fix leader+other yes → disagree",
+      v_dual.get("outcome") == "clarify"
+      and v_dual.get("leader") is None
+      and set(srcs_dual) == {"catalog_a", "catalog_b"}
+      and d_dual.get("wiki_verify_confirm") == "disagree"
+      and len(_calls) == 2,
+      (v_dual.get("outcome"), d_dual.get("wiki_verify_confirm"), srcs_dual))
+
+    _calls.clear()
+    _ds_seq.seq = [
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "a"},
+            {"index": 2, "fit": "no", "why": "n"},
+        ]}),
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "no", "why": "flip"},
+            {"index": 2, "fit": "yes", "why": "other"},
+        ]}),
+    ]
+    z21["ds_chat"] = _ds_seq
+    v_other = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    srcs_other = [c.get("src_table") for c in (v_other.get("candidates") or [])]
+    t("P2b disagree-other: clarify both, not leader",
+      v_other.get("outcome") == "clarify"
+      and v_other.get("leader") is None
+      and set(srcs_other) == {"catalog_a", "catalog_b"}
+      and (v_other.get("diag") or {}).get("wiki_verify_confirm") == "disagree"
+      and len(_calls) == 2)
+
+    _calls.clear()
+    _ds_seq.seq = [
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "a"},
+            {"index": 2, "fit": "no", "why": "n"},
+        ]}),
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "no", "why": "n"},
+            {"index": 2, "fit": "no", "why": "n"},
+        ]}),
+    ]
+    z21["ds_chat"] = _ds_seq
+    v_allno = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    t("P2b disagree-all-no → none",
+      v_allno.get("outcome") == "none"
+      and (v_allno.get("diag") or {}).get("wiki_verify_confirm") == "disagree"
+      and len(_calls) == 2)
+
+    _calls.clear()
+    _ds_seq.seq = [
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "a"},
+            {"index": 2, "fit": "no", "why": "n"},
+        ]}),
+        RuntimeError("confirm down"),
+    ]
+    z21["ds_chat"] = _ds_seq
+    v_err = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    srcs_err = [c.get("src_table") for c in (v_err.get("candidates") or [])]
+    t("P2b disagree-error → clarify first yes, not leader",
+      v_err.get("outcome") == "clarify"
+      and v_err.get("leader") is None
+      and srcs_err == ["catalog_a"]
+      and (v_err.get("diag") or {}).get("wiki_verify_confirm") == "disagree"
+      and (v_err.get("diag") or {}).get("wiki_verify2_error") == 1
+      and len(_calls) == 2)
+
+    _calls.clear()
+    _ds_seq.seq = [
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "yes", "why": "ok"},
+        ]}),
+        json.dumps({"verdicts": [
+            {"index": 1, "fit": "no", "why": "should not run"},
+        ]}),
+    ]
+    z21["ds_chat"] = _ds_seq
+    z21["psql"] = lambda q: [
+        ("catalog_a", "Alpha", "wiki body", "", "", "", "catalog"),
+    ]
+    v_single = z21["wiki_verify_candidates"]("q", {}, _cards(1), {})
+    t("P2b single pool: no confirm call",
+      v_single.get("outcome") == "leader"
+      and len(_calls) == 1
+      and "wiki_verify_confirm" not in (v_single.get("diag") or {}))
 
     z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [
         {"index": 1, "fit": "no", "why": "n"},
@@ -268,6 +452,8 @@ def main() -> int:
     ]})
     vfy2 = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
     t("mock two yes clarify", vfy2.get("outcome") == "clarify")
+    t("mock two yes no confirm",
+      "wiki_verify_confirm" not in (vfy2.get("diag") or {}))
 
     # интеграция try_wiki: verify перекрывает pick-none
     z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(2)
