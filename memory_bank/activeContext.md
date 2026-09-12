@@ -62,12 +62,12 @@
 
 ### ПЕРВОЕ ДЕЙСТВИЕ / ОЧЕРЕДЬ
 
-1. **G1 в полёте** (cursor; промт .claude/state/prompt-g1.md, лог
-   .claude/state/cursor-run-g1.log): промты v2 в wiki_alias.sh (3 места)
-   + проводки (WORD+aliases в collision Input; стоп-фильтр в parse И в
-   inline-круге; WIKI_ALIAS_FORCE=1) + замок test_wiki_alias_prompts_v2.py.
-   G0 ГОТОВ: docs/audit/dict-audit/G0-infer-params.md — прочитать вывод
-   (штатная передача temperature в infer — да/нет).
+1. **G1 в полёте** (cursor; промт prompt-g1.md, лог cursor-run-g1.log):
+   промты v2 + проводки + force + замок; дерево УЖЕ тронуто G1 — после
+   компакта: дифф + свой прогон замков + красная ×2 → коммит.
+   **G0 прочитан:** infer --local НЕ пробрасывает temp/seed/response_format
+   штатно — путь: агентный вызов `openclaw agent --local --message-file …`
+   + params в каталоге (G0-infer-params.md); решение — на приёмке G1.
 2. Приёмка G1: мой прогон замков → красная ×2 (cursor) → коммит.
    G2 — ОТДЕЛЬНО потом: разделитель ' | ' + потребители + лимиты.
 3. **Песочница (P7 §6):** на окне отдельный openclaw-HOME (НЕ боевой
