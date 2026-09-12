@@ -204,6 +204,83 @@ t(":probe_table только в init/round/left (остальные SQL без �
   all(":probe_table" not in p.read_text(encoding="utf-8") for p in other_sql),
   [p.name for p in other_sql if ":probe_table" in p.read_text(encoding="utf-8")])
 
+# ── G5: force в выборке пачек (select entity/measure) ─────────────────────────
+ent_sel = (HERE / "wiki_alias_select_entity_batch.sql").read_text(encoding="utf-8")
+meas_sel = (HERE / "wiki_alias_select_measure_batch.sql").read_text(encoding="utf-8")
+
+def _sql_body(s: str) -> str:
+    """Строки кода без --комментариев (счётчики NOT EXISTS не путают с шапкой)."""
+    return "\n".join(
+        ln for ln in s.splitlines() if not ln.lstrip().startswith("--")
+    )
+
+
+ent_body, meas_body = _sql_body(ent_sel), _sql_body(meas_sel)
+
+t("entity_batch: литерал coalesce(a.aliases,'') <> '' сохранён",
+  "coalesce(a.aliases,'') <> ''" in ent_sel)
+t("entity_batch: :force = 0 AND в обоих NOT EXISTS",
+  ent_body.count("NOT EXISTS") == 2 and ent_body.count(":force = 0 AND") == 2)
+t("entity_batch: шапка про force=1 / P7 §5.5",
+  "force=1" in ent_sel and "P7 §5.5" in ent_sel)
+
+e0 = re.sub(r":force\b", "0", ent_sel)
+e1 = re.sub(r":force\b", "1", ent_sel)
+t("entity force=0: отсев жив (0 = 0 AND + непустые)",
+  "0 = 0 AND" in e0 and "coalesce(a.aliases,'') <> ''" in e0)
+t("entity force=1: отсев выключен (1 = 0 AND) — непустые не режутся",
+  "1 = 0 AND" in e1 and ":force = 0 AND" not in e1)
+
+t("measure_batch: литерал coalesce(m.aliases,'') <> '' сохранён",
+  "coalesce(m.aliases,'') <> ''" in meas_sel)
+# Два NOT EXISTS отсева × seed+основной = 4; EXISTS сущности — без force.
+t("measure_batch: :force = 0 AND в обоих NOT EXISTS отсева (seed+main)",
+  meas_body.count("NOT EXISTS") == 4 and meas_body.count(":force = 0 AND") == 4)
+t("measure_batch: шапка про force=1 / P7 §5.5",
+  "force=1" in meas_sel and "P7 §5.5" in meas_sel)
+
+m0 = re.sub(r":force\b", "0", meas_sel)
+m1 = re.sub(r":force\b", "1", meas_sel)
+t("measure force=0: отсев жив (0 = 0 AND + непустые)",
+  "0 = 0 AND" in m0 and "coalesce(m.aliases,'') <> ''" in m0)
+t("measure force=1: отсев выключен (1 = 0 AND)",
+  "1 = 0 AND" in m1 and ":force = 0 AND" not in m1)
+
+# Оба select — через psql_wa_tA (обёртка несёт -v force); не голый psql.
+for _sel, _label in (
+    ("wiki_alias_select_entity_batch.sql", "entity"),
+    ("wiki_alias_select_measure_batch.sql", "measure"),
+):
+    _i = sh.find(_sel)
+    _chunk = sh[max(0, _i - 160):_i]
+    t("wiki_alias.sh: select_%s через psql_wa_tA (−v force)" % _label,
+      _i > 0 and "psql_wa_tA" in _chunk and "psql " not in _chunk.replace("psql_wa", ""),
+      _chunk[-80:])
+t("wiki_alias.sh: -v force в обеих обёртках psql_wa*",
+  sh.count('-v force="$WIKI_ALIAS_FORCE"') >= 2)
+
+# ── G5b: OFFSET-курсор при force=1 (продвижение пачек) ───────────────────────
+_OFF = "OFFSET CASE WHEN :force = 1 THEN :skip_rows ELSE 0 END"
+t("entity_batch: OFFSET CASE WHEN :force=1 THEN :skip_rows ELSE 0",
+  _OFF in ent_body)
+t("measure_batch: OFFSET CASE WHEN :force=1 THEN :skip_rows ELSE 0",
+  _OFF in meas_body)
+# Инвариант: при force=0 OFFSET всегда 0 (ветка ELSE 0 в том же CASE).
+t("OFFSET force=0 → ELSE 0 (оба select)",
+  all("ELSE 0 END" in b and _OFF in b for b in (ent_body, meas_body)))
+
+# entity-select: -v skip_rows="$done_total"; measure: -v skip_rows="$done_measures"
+_ei = sh.find("wiki_alias_select_entity_batch.sql")
+_echunk = sh[max(0, _ei - 220):_ei]
+t("wiki_alias.sh: entity-select несёт -v skip_rows=$done_total",
+  _ei > 0 and '-v skip_rows="$done_total"' in _echunk, _echunk[-100:])
+_mi = sh.find("wiki_alias_select_measure_batch.sql")
+_mchunk = sh[max(0, _mi - 280):_mi]
+t("wiki_alias.sh: measure-select несёт -v skip_rows=$done_measures",
+  _mi > 0 and '-v skip_rows="$done_measures"' in _mchunk, _mchunk[-120:])
+t("wiki_alias.sh: done_measures=0 перед циклом мер",
+  "done_measures=0" in sh and "done_measures=$((done_measures + BATCH))" in sh)
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

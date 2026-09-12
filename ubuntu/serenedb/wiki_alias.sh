@@ -155,7 +155,11 @@ while :; do
   # пустой PAY, stderr глотался, цикл молча выходил как «нет непокрытых» —
   # холостой прогон по живой базе. Ошибка базы обязана останавливать прогон
   # с текстом в журнале юнита, а не приравниваться к пустому результату.
-  if ! psql_wa_tA -v batch="$BATCH" \
+  # 🔴 OFFSET ТОЛЬКО ПРИ force=1. При force=0 пул сжимается сам (заполнение
+  # aliases / mark_skip выводит строку из NOT EXISTS) — OFFSET сдвинул бы
+  # mark_skip-хвост в голову и крутил бы одни и те же «пропущенные». При force=1
+  # пул = весь корпус всегда → :skip_rows (= done_total) — единственный курсор.
+  if ! psql_wa_tA -v batch="$BATCH" -v skip_rows="$done_total" \
       -f "$HERE/wiki_alias_select_entity_batch.sql" > "$TMP/pay"; then
     echo "алиасы: СБОЙ селекта пачки (ошибка выше) — прогон остановлен, пачка не потеряна" >&2
     exit 1
@@ -202,9 +206,12 @@ while :; do
       # остальные 543 остались без описания из-за одной пачки. Теперь пачка пропускается,
       # а её сущности помечаются, чтобы следующий проход не спотыкался о них снова и не
       # ходил по кругу. Сколько пропущено — печатается в конце, молчания тут быть не должно.
+      # При force=1 пул не сжимается mark_skip → OFFSET двигаем и здесь, иначе та же пачка.
       skipped=$((skipped + 1))
       echo "алиасы: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
       psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
+      done_total=$((done_total + BATCH))
+      [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
       continue
     }
 
@@ -239,10 +246,17 @@ done
 # величин остался бы пустым навсегда. Здесь пачка — сущности с непустым
 # алиасом записи, с величинами в данных и без единого непустого алиаса поля
 # (пустышка старше retry переспрашивается). Алиасы сущности НЕ перезаписываются.
+# 🔴 OFFSET МЕР — СВОЙ СЧЁТЧИК. done_total к этому моменту уже = число сущностей
+# первого прохода; подставлять его в skip_rows мер при force=1 сдвинуло бы пул
+# мер на весь entity-объём. done_measures стартует с 0 и растёт на BATCH пачки;
+# при force=0 OFFSET в SQL = 0 (счётчик не используется). CAP по-прежнему
+# смотрит на done_total (общий потолок прогона).
+done_measures=0
 while :; do
   over_budget && { echo "величины: бюджет $BUDGET с исчерпан — добор возьмёт следующий такт"; break; }
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
-  psql_wa_tA -v batch="$BATCH" \
+  # OFFSET только при force=1 (см. комментарий у entity-select выше).
+  psql_wa_tA -v batch="$BATCH" -v skip_rows="$done_measures" \
     -f "$HERE/wiki_alias_select_measure_batch.sql" > "$TMP/pay" 2>/dev/null
   chmod 644 "$TMP/pay" 2>/dev/null
   PAY=$(cat "$TMP/pay")
@@ -255,9 +269,13 @@ while :; do
   "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
     --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
     --ans "$TMP/ans" --err "$TMP/err" || {
+      # При force=1 mark_skip пул не сжимает → OFFSET двигаем и на осечке.
       skipped=$((skipped + 1))
       echo "величины: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
       psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_measure_skip.sql" >/dev/null 2>&1
+      done_measures=$((done_measures + BATCH))
+      done_total=$((done_total + BATCH))
+      [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
       continue
     }
   python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json"
@@ -269,6 +287,7 @@ while :; do
     -f "$HERE/wiki_alias_merge_measures.sql" 2>&1 | grep -i error
   have_m=$(psql_wa_tA -c "SELECT count(*) FROM $MEASURE_TABLE WHERE coalesce(aliases,'') <> ''" 2>/dev/null)
   echo "величины: непустых в базе $have_m"
+  done_measures=$((done_measures + BATCH))
   done_total=$((done_total + BATCH))
 done
 # ── ВТОРОЙ ПРОХОД: РАЗВЕСТИ ТЕХ, КОГО НАЗЫВАЮТ ОДИНАКОВО ────────────────────────────

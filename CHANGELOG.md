@@ -1,3 +1,25 @@
+## 2026-09-13 (14) — G5+G5b: force в выборке пачек — перегенерация живых строк [код]
+
+**[код]** Живой замер песочницы (прогон-проба 13.09 22:52, alias_sandbox): при
+WIKI_ALIAS_FORCE=1 MERGE обновлял живые строки, но select пачки отдавал ТОЛЬКО
+пустые — прогон был бессмыслен (в песочнице пустых 0, select вернул 1 остаточную;
+updated: document_поступлениетмцимпорт_ос, разделитель ' | ' и предметные алиасы
+подтверждены). G5: `:force = 0 AND`-обёртка обоих NOT EXISTS в
+wiki_alias_select_entity_batch.sql + обоих отсевов measure-select (EXISTS
+«сущность описана» без force — меры только у описанных). G5b (блокер красной
+R19/R20: при force пачки ЗАЛИПАЛИ на одной — seed=min(src_table), курсора не
+было): `OFFSET CASE WHEN :force = 1 THEN :skip_rows ELSE 0 END`; счётчики:
+done_total (entity) и СВОЙ done_measures (общий сдвинул бы пул мер на объём
+entity); += BATCH и на skip-ветках. Замки: sep 63/0 (44→57→63), v2 82/0,
+parse 19/0. Красные: R19/R20 — дельта верна, залипание → G5b; R21/R22 —
+принимать. Замечено (не блокер): CAP общий на entity+меры — при CAP=5 BATCH≥5
+меры не стартуют (так и до G5b); живая проба OFFSET CASE на движке у красных
+не снята (инстанс был занят прогоном) — проверена оркестратором перед выкатом.
+
+Числа: sep 63/0, v2 82/0, parse 19/0, bash -n ок; песочница: select при force
+теперь покрывает весь корпус (260 сущностей, 709 мер).
+Доки: docs/audit/dict-audit/P7-СШИВКА.md §5.5; SereneDB LIMIT/OFFSET (serenedb.com/docs/sql/query_syntax/limit)
+
 ## 2026-09-13 (13) — G3+G3b+G4: агентный режим gateway (27B песочница) + probe-переменная [код]
 
 **[код]** G3: alias_infer_gateway — env ALIAS_INFER_RUNTIME=agent → `openclaw agent
