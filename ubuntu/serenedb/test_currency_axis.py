@@ -150,116 +150,12 @@ rows_eq = {
     ("x", wfp_a): row(10, Всего=100.0),
 }
 pby_eq = {("x", wfp_d): p_doc, ("x", wfp_a): p_acct}
-cls_eq = A.fork_classes_windowed(
-    rows_eq, pby_eq, "продали", want="sum", rel_by_src={"x": ["Всего"]})
-out_eq, _ = A.resolve_fork_outcome(
-    cls_eq, {"x": row(10, Всего=100.0)}, measure_ctx="продали",
-    want="sum", rel_by_src={"x": ["Всего"]})
-t("курс=1 / равные → A/unique", out_eq in ("A", "unique"), out_eq)
 
-# ── разные + подписи → B ─────────────────────────────────────────────────────
-rows_diff = {
-    ("x", wfp_d): row(10, Всего=78758010.0),
-    ("x", wfp_a): row(10, Всего=79133447.03),
-}
-pby_diff = {("x", wfp_d): p_doc, ("x", wfp_a): p_acct}
-cls_diff = A.fork_classes_windowed(
-    rows_diff, pby_diff, "продали", want="sum", rel_by_src={"x": ["Всего"]})
-t("разные: 2 класса", len(cls_diff) == 2, len(cls_diff))
+# ── S1: fork_classes_windowed / outcomes снесены ──────────────────────────────
+t("S1: fork_classes_windowed GONE", not hasattr(A, "fork_classes_windowed"))
+t("S1: resolve_fork_outcome GONE", not hasattr(A, "resolve_fork_outcome"))
+t("S1 slit: fork_labels_of", callable(A.fork_labels_of))
+t("S1 slit: fork_labels_covering", callable(A.fork_labels_covering))
 
-
-def _labs_amt(fk, srcs):
-    out = {}
-    for s in srcs or []:
-        if s == "doc_amount":
-            out[s] = "in-doc-currency"
-        elif s == "accounting_amount":
-            out[s] = "in-acct-currency"
-    return out
-
-
-_real_labs = A.fork_labels_of
-A.fork_labels_of = _labs_amt
-_real_cov = A.fork_labels_covering
-
-
-def _cov_amt(srcs):
-    m = _labs_amt("", srcs)
-    return m, "fk-amt" if m else None
-
-
-A.fork_labels_covering = _cov_amt
-out_b, pay_b = A.resolve_fork_outcome(
-    cls_diff, {"x": row(10, Всего=78758010.0)}, measure_ctx="продали",
-    want="sum", rel_by_src={"x": ["Всего"]})
-t("разные+подписи → B", out_b == "B", out_b)
-bres = A.fork_outcome_b("q", pay_b, {}, picked_src="x")
-t("B: лидер doc_amount",
-  bres and A._class_amount_basis(
-      {"period": (bres["atoms"][0].get("period") or {}),
-       "atom": bres["atoms"][0]}) in ("", "doc_amount"),
-  bres)
-t("B: atoms[0] label in-doc-currency",
-  bres and bres["atoms"][0].get("measure_label") == "in-doc-currency")
-
-# ── разные без подписей → C ──────────────────────────────────────────────────
-A.fork_labels_of = lambda fk, srcs: {}
-A.fork_labels_covering = lambda srcs: ({}, None)
-out_c, pay_c = A.resolve_fork_outcome(
-    cls_diff, {"x": row(10, Всего=78758010.0)}, measure_ctx="продали",
-    want="sum", rel_by_src={"x": ["Всего"]})
-t("разные без подписей → C", out_c == "C" and pay_c.get("reason") == "unsigned_class",
-  out_c)
-cres = A.fork_outcome_c(
-    "q", pay_c, cls_diff, {"x": row(10, Всего=78758010.0)}, {},
-    picked_src="x")
-t("C: options пуст", cres and cres.get("options") == [])
-
-# ── EUR mismatch не отдаёт MDL молча ─────────────────────────────────────────
-A.fork_labels_of = _real_labs
-A.fork_labels_covering = _real_cov
-_real_cref = A.currency_ref_requested
-_real_cunit = A.currency_unit_for_ref
-A.currency_ref_requested = lambda intent, question, trusted=None: "eur-ref"
-A.currency_unit_for_ref = lambda ref: {"eur-ref": "EUR", "mdl-ref": "MDL"}.get(ref, "")
-A.accounting_currency_key = lambda: "mdl-ref"
-blk = A.currency_mismatch_blocks_answer({}, "сколько продали в евро", "document_x")
-A.currency_ref_requested = _real_cref
-A.currency_unit_for_ref = _real_cunit
-t("EUR question + MDL facts → clarify", blk and blk.get("kind") == "clarify", blk)
-t("clarify не figures с MDL-суммой",
-  blk and "EUR" in (blk.get("text") or ""))
-
-restore_meta(_real_meta)
-A.fork_labels_of = _real_labs
-A.fork_labels_covering = _real_cov
-restore_flag(saved)
-
-# ── grep: нет ISO/валютных литералов ─────────────────────────────────────────
-TRIG = re.compile(r"\bMDL\b|\bEUR\b|лей|евро", re.I)
-funcs = [
-    A.currency_axis_readings, A.currency_axis_open, A.expand_readings_currency_axis,
-    A.currency_amount_basis_prefer, A.currency_fx_probe, A.currency_sum_for_basis,
-    A.currency_patch_fork_scan, A.currency_unit_for_reading,
-    A.currency_ref_requested, A.currency_mismatch_blocks_answer,
-    A._class_amount_basis,
-]
-bad = []
-for fn in funcs:
-    try:
-        src = inspect.getsource(fn)
-    except OSError:
-        continue
-    if TRIG.search(src):
-        bad.append(fn.__name__)
-t("нет ISO/валютных литералов в currency-хелперах", not bad, bad)
-
-t("machine ids doc_amount/accounting_amount",
-  A._AMOUNT_BASIS_DOC == "doc_amount"
-  and A._AMOUNT_BASIS_ACCOUNTING == "accounting_amount")
-
-print()
-if FAIL:
-    print("ПРОВАЛЕНО:", len(FAIL), "из", PASS + len(FAIL), FAIL)
-    sys.exit(1)
-print("все", PASS, "проверок зелёные")
+print("PASS %d FAIL %d" % (PASS, len(FAIL)))
+sys.exit(1 if FAIL else 0)

@@ -41,7 +41,7 @@ GONE = (
 
 ask_blob = "\n".join(
     p.read_text(encoding="utf-8") for p in sorted(ASK.glob("*.py")))
-z20 = (ASK / "z20_ask_main_http_legacy.py").read_text(encoding="utf-8")
+z20 = (ASK / "z20_ask_main_http.py").read_text(encoding="utf-8")
 
 for name in GONE:
     t("gone in ask/: %s" % name, name not in ask_blob)

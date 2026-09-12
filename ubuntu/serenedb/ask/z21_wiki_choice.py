@@ -473,6 +473,63 @@ def wiki_human_menu_hint(hint):
     return h
 
 
+def fork_labels_of(fork_key, srcs):
+    """Проверенные подписи веток из `search_fork_label`: {src: label}. Пустые — пропуск.
+
+    Таблицы нет / права нет — пусто (как у алиасов): исход B тогда недостижим → C.
+
+    S1/B7: щель onepath (бывш. fork-детектор; W2-A1/W2-R1 — жива через
+    wiki-clarify / currency mismatch).
+    """
+    srcs = [s for s in (srcs or []) if s]
+    if not fork_key or not srcs:
+        return {}
+    try:
+        rows = psql(
+            "SELECT src, label FROM search_fork_label "
+            "WHERE fork_key = %s AND src IN (%s) AND coalesce(label,'') <> ''"
+            % (lit(fork_key), ", ".join(lit(s) for s in srcs)))
+    except RuntimeError:
+        return {}
+    out = {}
+    for r in rows or []:
+        if r and r[0] and r[1] and str(r[1]).strip():
+            out[r[0]] = str(r[1]).strip()
+    return out
+
+
+def fork_labels_covering(srcs):
+    """Подписи для набора src: ключ словаря, покрывающий все src, иначе частичный.
+
+    Возвращает ({src: label}, fork_key|None). Нужен, когда sha1(src_set¦ctx)
+    детектора не совпал с ключом, под которым агент писал подписи.
+
+    S1/B7: щель onepath (бывш. fork-детектор; W2-R1 — mk_opts ← wiki-clarify).
+    """
+    srcs = sorted({s for s in (srcs or []) if s})
+    if not srcs:
+        return {}, None
+    try:
+        rows = psql(
+            "SELECT fork_key, src, label FROM search_fork_label "
+            "WHERE src IN (%s) AND coalesce(label,'') <> ''"
+            % ", ".join(lit(s) for s in srcs))
+    except RuntimeError:
+        return {}, None
+    by_fk = {}
+    for r in rows or []:
+        if r and r[0] and r[1] and r[2] and str(r[2]).strip():
+            by_fk.setdefault(r[0], {})[r[1]] = str(r[2]).strip()
+    for k, m in by_fk.items():
+        if all(s in m for s in srcs):
+            return m, k
+    merged = {}
+    for m in by_fk.values():
+        merged.update(m)
+    return ({s: merged[s] for s in srcs if s in merged},
+            next(iter(by_fk), None))
+
+
 def wiki_menu_captions(options, passports_by_src=None, cards_by_src=None):
     """Единый форматтер подписей меню (формула №15 ступень 4; K4 §2.1).
 

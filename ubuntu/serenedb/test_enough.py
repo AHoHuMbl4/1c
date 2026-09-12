@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""В1 негатив: enough-слой снесён из _answer_checked_core.
+"""S1: enough-слой снесён из _answer_checked_core (тракт одного пути).
 
-ENOUGH_ON / serene_enough / question_facts / _need_clarify не читаются в ядре
-ответа. Модуль serene_enough.py может жить файлом — вне тракта answer_checked.
+ENOUGH_ON / question_facts / _need_clarify не читаются в ядре ответа.
 Запуск: python3 ubuntu/serenedb/test_enough.py
 """
 from __future__ import annotations
@@ -13,7 +12,7 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-Z20 = ROOT / "ask" / "z20_ask_main_http_legacy.py"
+Z20 = ROOT / "ask" / "z20_ask_main_http.py"
 
 PASS, FAIL = 0, []
 
@@ -29,7 +28,6 @@ def t(name, cond, detail=""):
 
 
 def _func_src(text: str, name: str) -> str:
-    """Тело top-level def name(...) до следующего def на том же уровне."""
     m = re.search(r"^def %s\(" % re.escape(name), text, re.M)
     if not m:
         return ""
@@ -44,17 +42,13 @@ def main() -> int:
     core = _func_src(text, "_answer_checked_core")
     t("_answer_checked_core найден", bool(core))
     t("ENOUGH_ON не читается в _answer_checked_core", "ENOUGH_ON" not in core)
-    t("serene_enough не читается в _answer_checked_core", "serene_enough" not in core)
     t("question_facts не в _answer_checked_core", "question_facts" not in core)
     t("_need_clarify не в _answer_checked_core", "_need_clarify" not in core)
     t("ENOUGH_ON нет в z20", "ENOUGH_ON" not in text)
     t("def question_facts снесён", "def question_facts" not in text)
     t("def _need_clarify снесён", "def _need_clarify" not in text)
-    # прямой вызов answer (как бывшая else-ветка)
     t("_answer_checked_core зовёт answer напрямую",
       bool(re.search(r"return answer\(", core)))
-
-    # синтаксис зоны
     try:
         ast.parse(text)
         t("z20 парсится (ast)", True)

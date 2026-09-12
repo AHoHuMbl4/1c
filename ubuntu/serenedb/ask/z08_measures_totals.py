@@ -274,5 +274,29 @@ _FORK_MEAS_TTL = int(os.environ.get("ASK_FORK_MEAS_TTL", "600"))
 _fork_meas_cache = {"at": 0.0, "by_src": {}}
 
 
+def _measures_by_src(cands):
+    """{сущность: [величины]} для всего круга — одним запросом, как `measures_of`.
+
+    S1/B7: щель для смешанных зон (бывш. fork-детектор; вызов из entity_form).
+    По одному обращению на сущность — рост с размером базы (п. 20), поэтому
+    карта строится одним проходом и кэшируется на `_FORK_MEAS_TTL` секунд.
+    """
+    now = time.time()
+    full = _fork_meas_cache["by_src"]
+    if full and now - _fork_meas_cache["at"] < _FORK_MEAS_TTL:
+        return {c: full.get(c, []) for c in cands}
+    try:
+        rows = psql("SELECT DISTINCT src_table, u.k FROM %s, unnest(map_keys(nums)) AS u(k) "
+                    "WHERE nums IS NOT NULL" % CORPUS)
+    except RuntimeError:
+        return {c: [] for c in cands}
+    full = {}
+    for r in rows:
+        if r and r[0] and r[1]:
+            full.setdefault(r[0], []).append(r[1])
+    _fork_meas_cache["at"] = now
+    _fork_meas_cache["by_src"] = full
+    return {c: full.get(c, []) for c in cands}
+
 
 register_zone('ask.z08_measures_totals', globals())

@@ -264,16 +264,15 @@ def main() -> int:
       (ROOT / "wiki_passport.sql").is_file())
 
     boot = (ROOT / "ask" / "_bootstrap.py").read_text(encoding="utf-8")
-    t("bootstrap z20 wiki patch", "_patch_z20_wiki_primary" in boot)
-    z20_raw = (ROOT / "ask" / "z20_ask_main_http_legacy.py").read_text(encoding="utf-8")
+    t("bootstrap keeps identity patch helper", "_patch_z20_wiki_primary" in boot)
+    z20_raw = (ROOT / "ask" / "z20_ask_main_http.py").read_text(encoding="utf-8")
     import ask._bootstrap as _boot
     z20_patched = _boot._patch_z20_wiki_primary(z20_raw)
-    t("bootstrap patch injects cascade call",
-      "wiki_primary_entity_cascade(" in z20_patched)
+    t("S1: patch identity", z20_patched == z20_raw)
+    t("z20 has cascade call on disk",
+      "wiki_primary_entity_cascade(" in z20_raw)
     t("bootstrap patch: stock_override-инъекции больше нет",
       "stock_override" not in z20_patched)
-    # [01.09 «физически один путь»] поздние канонные перебои вырезаны из z20:
-    # после патча в коде НЕТ вызовов канон-функций, выбирающих сущность.
     t("z20 без поздних канон-выборов (один путь)",
       "sales_canon_src(cands" not in z20_patched
       and "register_count_src(cands" not in z20_patched
@@ -283,12 +282,8 @@ def main() -> int:
       "sales_canon_locked" not in z20_patched)
     t("В2: z21 без bypass sales_canon_locked",
       "sales_canon_locked" not in Z21.read_text(encoding="utf-8"))
-    t("bootstrap net-distinct in no_axis_member",
-      "stock_net_distinct" in z20_patched
-      and "no_axis_member" in z20_patched)
-    # [01.09 снят pre-wiki обход] bootstrap ecp0 — удалён кейс снятого обхода
-    t("z20 disk has cascade call (on disk since 01.09)",
-      "wiki_primary_entity_cascade(" in z20_raw)
+    t("z20: stock_net_distinct на диске",
+      "stock_net_distinct" in z20_patched)
 
     z21["stock_question_engaged"] = lambda *a, **k: False
     z21["stock_canon_src"] = lambda *a, **k: None

@@ -98,13 +98,6 @@ _ALS = {
     "Всего": "итого,сумма,деньги,money",
     "Количество": "кол-во,штуки,qty,quantity",
 }
-_AX_PROD = [
-    {"col": "ТМЦ", "target_src": "catalog_номенклатура"},
-    {"col": "Контрагент", "target_src": "catalog_контрагенты"},
-]
-_q_top = "Топ-5 товаров по продажам"
-_intent_top = {"want": "list", "kind": "товар", "amount": {"value": 5},
-               "measure": "", "parse": {"assumed": []}}
 
 # В3: sales_rank_resolve_measure / money-канон снесены — авто-мера запрещена.
 t("sales_rank_resolve_measure GONE (В3)",
@@ -118,20 +111,28 @@ if hasattr(A, "measure_class_alts"):
       set(_ma) == {"Всего", "Количество"}, _ma)
 else:
     pending("M1–M2 measure_class_alts")
-# pick_measure / unresolved: >1 → ask, не winner
+# S1: pick_measure / unresolved_quantity снесены. На onepath >1 мер при sum
+# → _settle_measure отдаёт (None, alts) — меню, не silent winner / names[0].
 _old_mof = getattr(A, "measures_of", None)
 _old_als = getattr(A, "measure_aliases_of", None)
 A.measures_of = lambda src: list(_NAMES)
 A.measure_aliases_of = lambda src: dict(_ALS)
 try:
-    got, alts, how = A.pick_measure("src_x", _q_top, "")
-    t("M3 pick_measure без слова → не silent winner при >1",
-      (got is None and len(alts or []) > 1) or how in ("none", "ask"),
-      (got, alts, how))
-    um, ua = A.unresolved_quantity(None, [], "sum", "sum", _NAMES,
-                                   {"Всего": 10, "Количество": 3, "СуммаНДС": 1})
-    t("M4 unresolved >1 → меню (не names[0])",
-      um is None and len(ua) > 1, (um, ua))
+    t("S1: pick_measure GONE", not hasattr(A, "pick_measure"))
+    got, alts = A._settle_measure(
+        "src_x",
+        {"want": "sum", "measure": ""},
+        {"compute": "sum"},
+        None, None, None, {})
+    t("M3 _settle_measure без слова → не silent winner при >1",
+      got is None and len(alts or []) > 1, (got, alts))
+    um, ua = A._settle_measure(
+        "src_x",
+        {"want": "sum", "measure": ""},
+        {"compute": "sum", "quantity": "sum"},
+        None, None, None, {})
+    t("M4 sum >1 мер → меню (не names[0])",
+      um is None and len(ua or []) > 1 and ua[0] in _NAMES, (um, ua))
 finally:
     if _old_mof is not None:
         A.measures_of = _old_mof

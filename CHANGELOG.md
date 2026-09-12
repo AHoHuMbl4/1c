@@ -27,6 +27,37 @@ docs/audit/snos15-ONEPATH_PLAN.md (этап-1 армия O×3: остатки-н
 Числа: люк −217 строк; замки 14 файлов зелёные; z20 ~6225→~5000.
 Доки: docs/audit/snos15-ONEPATH_PLAN.md; snos15-PLAN §7 п.8
 
+## 2026-09-12 (18) — B7/S1 СНОС ИСПОЛНЕН: −7799 строк (legacy-z20 + z09/z13/z16), щели вынесены, загрузчик 141 строка; красная ×2 — снос чист [армия] [код] [замер]
+
+**[армия] S1** (cursor-agent, 20 мин; реестр W2-A1 + поправки красных
+W2-R1/R2/R3): вынесены живые щели (fork_labels_of/covering → z21;
+atom_terminal_gate_text + stock_balance_is_sales_noise → z15;
+pair_slots_only + _NON_DATA_MARKERS + question_expects_accounting_data →
+z02; headline-pool → z11; _measures_by_src → z08); СНЕСЕНЫ файлы
+z09_fork_detector.py (1018), z13_fork_outcomes.py (925),
+z16_veto_pick_entity.py (625), z20_ask_main_http_legacy.py (5103) —
+итог −7799/+177 по ask/; _bootstrap: один z20, ASK_LEGACY/_ONEPATH
+сняты, патч identity, 264→141 строк.
+
+**[армия] S1b + доводка оркестратора:** 4 замка (compose 93/0 — цель
+A._onepath_compose_gate + моки без resolve_focus/pick_measure; b9 7/0 —
+без fork_outcome_b; k4_guess 12/0 — через _settle_measure; period_empty
+30/0 — пивот пустышки только-legacy, пустое окно закрывает
+period_empty-ответ); test_measure_empty переписан некролог-негативом
+(7/0; 6 legacy-символов мерного пивота снесены и не возвращаются;
+абсолютный sys.path — изгнана интерференция путей).
+
+**[замер] Красная SR×2 (независимые):** снос ЧИСТ — 149/149 внешних
+символов нового тракта живы (W1-X1), щели на месте и зовутся
+(wiki→mk_opts→fork_labels_covering и др.), _bootstrap без снесённых
+зон/флагов, юниты чисты; окруженческие красные помечены
+(ask_embed_native, focus_loop). Все тракт-замки зелёные (one_path 41/0,
+zone 96/0, compose 93, captions 24/0, intent 162/0 и др.).
+
+Числа: −7799 строк кода; _bootstrap 264→141; 4 зоны/файла снесены;
+щели ~135 строк перенесены; SR 149/149 символов живы.
+Доки: docs/audit/onepath/{S1-cut,S1b-fix,SR1-red,SR2-red}.md; W2-A1
+
 ## 2026-09-12 (17) — FLIP ПОДТВЕРЖДЁН: L67 на ПРОДЕ 34/32/1/0 vs якорь легаси 22/41/4/0 (+12 match, −3 wrong) [замер]
 
 **[замер]** Полный прогон на проде :8091 (новый тракт, тег onepath-prod,

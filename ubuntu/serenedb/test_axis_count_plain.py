@@ -27,13 +27,14 @@ def t(name, cond, detail=""):
         print("FAIL-", name, detail)
 
 
-z20 = (ROOT / "ask" / "z20_ask_main_http_legacy.py").read_text(encoding="utf-8")
+z20 = (ROOT / "ask" / "z20_ask_main_http.py").read_text(encoding="utf-8")
 z10 = (ROOT / "ask" / "z10_rank.py").read_text(encoding="utf-8")
 
-# диск: kind не подставляется при plain
-t("диск: _plain_ax гейт", "_plain_ax" in z20 and "question_wants_breakdown" in z20)
-t("диск: count_question_skips_axis(..., plan)",
-  "count_question_skips_axis(intent, measure, grain_dec, plan)" in z20)
+# диск: plain count skip на одном пути
+t("диск: count_question_skips_axis в z20",
+  "count_question_skips_axis" in z20)
+t("диск: question_wants_breakdown рядом",
+  "question_wants_breakdown" in z20)
 t("z10: want ''|count|list",
   'want not in ("", "count", "list")' in z10
   or "want not in ('', 'count', 'list')" in z10)

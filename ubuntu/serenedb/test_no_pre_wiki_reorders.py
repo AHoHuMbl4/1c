@@ -22,7 +22,7 @@ def t(name, cond, detail=None):
         print("FAIL-", name, detail if detail is not None else "")
 
 
-z20 = (ASK / "z20_ask_main_http_legacy.py").read_text(encoding="utf-8")
+z20 = (ASK / "z20_ask_main_http.py").read_text(encoding="utf-8")
 z10 = (ASK / "z10_rank.py").read_text(encoding="utf-8")
 z11 = (ASK / "z11_sales.py").read_text(encoding="utf-8")
 imports = (ASK / "_imports.py").read_text(encoding="utf-8")
@@ -107,19 +107,17 @@ t("0 collapse in z21",
   "_wiki_clarify_collapse" not in (ASK / "z21_wiki_choice.py").read_text(encoding="utf-8")
   and "wiki_clarify_collapsed" not in (ASK / "z21_wiki_choice.py").read_text(encoding="utf-8"))
 
-# ── Откат люка: мерное меню без исключений (PLAN §7 п.8) ──────────────────────
+# ── Откат люка: мерное меню / doubt (PLAN §7 п.8) — S1 на одном пути ──────────
 t("0 measure_hatch в z20", "measure_hatch" not in z20)
-t("мерное меню без исключений entity-locked",
+t("мерное меню: settle/captions без entity-locked люка",
   "_entity_locked" not in z20
-  and 'diag["measure_ambiguous"]' in z20
-  and '"kind": "clarify"' in z20
+  and "_settle_measure" in z20
   and "measure_captions(" in z20)
 
-
-# (W-фикс) при живом wiki-лидере doubt сбрасывается: судья один (wiki verify),
-# writer_pair и прочие соперники — сырьё меню, не сомнение ответа.
-t("doubt-гейт при wiki-лидере",
-  "if wiki_leader_alive(diag, picked):\n        doubt = False" in z20)
+# doubt при wiki-лидере: на одном пути fork-doubt снесён; wiki_leader_alive жив
+t("doubt-гейт: wiki_leader_alive жив, fork-doubt снесён",
+  "wiki_leader_alive" in (ASK / "z21_wiki_choice.py").read_text(encoding="utf-8")
+  and "doubt = False" not in z20)
 
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:

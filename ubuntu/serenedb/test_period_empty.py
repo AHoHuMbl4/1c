@@ -136,8 +136,14 @@ src = A.ask_source()
 t("пустое окно не зовёт drop_period_preds",
   "intent, preds = drop_period_preds" not in src)
 t("флаг period_window_empty", "period_window_empty" in src)
+# S1: ветка `_мертва → build_measure_empty_pivot` жила только в legacy-z20/z16
+# и снесена. На onepath пустое окно закрывает period_empty (флаг выше);
+# пивота пустышки меры, который мог бы подменить all-time, больше нет.
+# Инвариант: нет пивота без учёта period_window_empty.
 t("пустышка меры не пивотит пустое окно",
-  "if _мертва and not diag.get(\"period_window_empty\")" in src)
+  "period_window_empty" in src
+  and "build_measure_empty_pivot" not in src
+  and "_мертва" not in src)
 t("compose не режет r[5] вслепую",
   "doc, dt, amt = r[5], r[3], r[2]" in src)
 

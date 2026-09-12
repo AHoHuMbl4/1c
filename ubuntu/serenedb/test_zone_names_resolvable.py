@@ -53,15 +53,8 @@ def _imports_namespace() -> dict:
 
 
 def _zone_body_slice(path: Path) -> tuple[list[ast.stmt], int, int]:
-    """Срез тела зоны. Патч — только legacy (как _bootstrap._exec_zone).
-
-    После flip: default = z20_ask_main_http.py (без патча);
-    ASK_LEGACY=1 → z20_ask_main_http_legacy.py + _patch_z20_wiki_primary.
-    Условие по имени файла — то же, что в bootstrap; от env не зависит.
-    """
+    """Срез тела зоны (как _bootstrap._exec_zone после S1 — без патча)."""
     text = path.read_text(encoding="utf-8")
-    if path.name == "z20_ask_main_http_legacy.py":
-        text = boot._patch_z20_wiki_primary(text)
     lines = text.splitlines(True)
     start = boot._body_start_line(lines)
     end = boot._body_end_line(lines)
@@ -74,41 +67,27 @@ def _zone_body_slice(path: Path) -> tuple[list[ast.stmt], int, int]:
     return kept, start, end
 
 
-def _assert_z20_branch(path: Path, expect_patch: bool) -> None:
-    """Обе ветки flip: new без патча, legacy с патчем — режутся и резолвятся.
-
-    Полный exec z20 в одиночку невозможен (INTENT_SYS и др. из z01–z22) —
-    проверяем срез + правило патча; полный load — через load_all / subprocess.
-    """
+def _assert_z20_single(path: Path) -> None:
+    """Единственный z20 после S1: режется, парсится, содержит wiki-каскад."""
     raw = path.read_text(encoding="utf-8")
-    if expect_patch:
-        patched = boot._patch_z20_wiki_primary(raw)
-        # идемпотентность: повторный патч не ломает; якорь net/ef на месте или no-op
-        patched2 = boot._patch_z20_wiki_primary(patched)
-        t(f"flip-branch patch idempotent {path.name}",
-          patched2 == patched)
-        text = patched
-        t(f"flip-branch legacy body has wiki cascade {path.name}",
-          "wiki_primary_entity_cascade" in text)
-    else:
-        t(f"flip-branch no patch for {path.name}",
-          path.name == "z20_ask_main_http.py")
-        text = raw
-        t(f"flip-branch new body has wiki cascade {path.name}",
-          "wiki_primary_entity_cascade" in text)
-    lines = text.splitlines(True)
+    # identity-патч (некролог B7): не меняет текст
+    patched = boot._patch_z20_wiki_primary(raw)
+    t(f"S1 patch identity {path.name}", patched == raw)
+    t(f"z20 body has wiki cascade {path.name}",
+      "wiki_primary_entity_cascade" in raw)
+    lines = raw.splitlines(True)
     start = boot._body_start_line(lines)
     end = boot._body_end_line(lines)
     try:
-        tree = ast.parse(text, filename=str(path))
+        tree = ast.parse(raw, filename=str(path))
         stmts = [
             n for n in tree.body
             if getattr(n, "lineno", 0) >= start and getattr(n, "lineno", 0) <= end
         ]
-        t(f"flip-branch parse/slice {path.name}",
+        t(f"z20 parse/slice {path.name}",
           bool(stmts), f"stmts={len(stmts)} start={start} end={end}")
     except SyntaxError as exc:
-        t(f"flip-branch parse/slice {path.name}", False, str(exc))
+        t(f"z20 parse/slice {path.name}", False, str(exc))
 
 
 def _assign_targets(node: ast.AST) -> list[str]:
@@ -243,39 +222,39 @@ def main() -> int:
     zone_files = boot.zone_paths()
     t("zone file count", len(zone_files) == len(boot._ZONE_FILES))
 
-    # Flip-контракт: оба файла на диске; патч только legacy (как _exec_zone).
+    # S1/B7: один z20; прежняя ветка и flip-люки снесены.
     z20_new = ASK_DIR / "z20_ask_main_http.py"
-    z20_leg = ASK_DIR / "z20_ask_main_http_legacy.py"
-    t("flip: new z20 on disk", z20_new.is_file(), str(z20_new))
-    t("flip: legacy z20 on disk", z20_leg.is_file(), str(z20_leg))
-    # Правило патча — по имени файла (как _bootstrap._exec_zone), не по env.
+    t("S1: single z20 on disk", z20_new.is_file(), str(z20_new))
+    t("S1: disk z*.py == _ZONE_FILES",
+      len(list(ASK_DIR.glob("z*.py"))) == len(boot._ZONE_FILES),
+      "%d vs %d" % (len(list(ASK_DIR.glob("z*.py"))), len(boot._ZONE_FILES)))
+    t("S1: _Z20_FILE is new z20", boot._Z20_FILE == "z20_ask_main_http.py")
     import inspect as _ins
-    _exec_src = _ins.getsource(boot._exec_zone)
-    t("patch rule in _exec_zone: only legacy filename",
-      'path.name == "z20_ask_main_http_legacy.py"' in _exec_src
-      and "_patch_z20_wiki_primary" in _exec_src)
-    # Явная проверка обеих веток (default=new и ASK_LEGACY=legacy) без смены env.
+    _boot_src = _ins.getsource(boot)
+    t("S1: no ASK_LEGACY switch in bootstrap",
+      "ASK_LEGACY" not in _boot_src and "_ONEPATH" not in _boot_src)
+    t("S1: _patch_z20_wiki_primary is identity",
+      boot._patch_z20_wiki_primary("abc") == "abc")
     if z20_new.is_file():
-        _assert_z20_branch(z20_new, expect_patch=False)
-    if z20_leg.is_file():
-        _assert_z20_branch(z20_leg, expect_patch=True)
+        _assert_z20_single(z20_new)
 
-    # Полный load новой ветки (симуляция flip default): ASK_ONEPATH=1 в подпроцессе.
+    # Полный load единственного тракта.
     import subprocess
     _probe = (
-        "import os,sys; os.environ['ASK_ONEPATH']='1'; "
+        "import os,sys; "
         "os.environ.setdefault('ASK_TOKEN','test'); "
         "os.environ.setdefault('EMBED_BASE_URL','-'); "
         "os.environ.setdefault('EMBED_MODEL','-'); "
         "sys.path.insert(0,%r); "
         "from ask import _bootstrap as b; "
         "assert b._Z20_FILE=='z20_ask_main_http.py', b._Z20_FILE; "
+        "assert len(b._ZONE_FILES)==len(list(__import__('pathlib').Path(%r).glob('z*.py'))); "
         "b.load_all({}); print('OK')"
-    ) % str(ROOT)
+    ) % (str(ROOT), str(ASK_DIR))
     _p = subprocess.run(
         [sys.executable, "-c", _probe],
         cwd=str(ROOT), capture_output=True, text=True, timeout=90)
-    t("flip-branch subprocess ASK_ONEPATH=1 load_all",
+    t("S1 subprocess load_all",
       _p.returncode == 0 and "OK" in (_p.stdout or ""),
       (_p.stderr or _p.stdout or "")[:200])
 

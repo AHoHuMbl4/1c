@@ -266,6 +266,30 @@ def sales_canon_intent(intent, question="", cands=None):
     return want in ("sum", "count", "")
 
 
+def _fork_headline_doc_measures(names):
+    """Итог шапки document_* — поля *Документа (метаданные платформы).
+
+    S1/B7: щель onepath (бывш. fork-детектор; W2-R2; кормит sales_money_measure).
+    """
+    return sorted(n for n in (names or []) if n and str(n).lower().endswith("документа"))
+
+
+def _fork_sum_headline_pool(names):
+    """Headline-меры sum-вопроса: *Документа и Всего (план §3, замер 17–21.08).
+
+    S1/B7: щель onepath (бывш. fork-детектор; W2-R2).
+    """
+    out = []
+    for h in _fork_headline_doc_measures(names):
+        if h not in out:
+            out.append(h)
+    for n in names or []:
+        if (n or "").strip().lower() == "всего" and n not in out:
+            out.append(n)
+            break
+    return out
+
+
 def sales_money_measure(names, alias_by=None):
     """Денежная мера среди имён полей (класс money для меню/мер до В3)."""
     names = list(names or [])

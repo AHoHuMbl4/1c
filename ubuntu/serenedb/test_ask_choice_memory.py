@@ -446,7 +446,7 @@ else:
 
 
 # ── В1 негатив: auto-apply из z20 снесён; билеты decision_id живы ─────────────
-_z20 = open(os.path.join(HERE, "ask", "z20_ask_main_http_legacy.py"), encoding="utf-8").read()
+_z20 = open(os.path.join(HERE, "ask", "z20_ask_main_http.py"), encoding="utf-8").read()
 t("z20: нет _try_memory_apply", "def _try_memory_apply" not in _z20
   and "_try_memory_apply(" not in _z20)
 t("z20: нет probe_memory_apply", "probe_memory_apply" not in _z20)

@@ -291,7 +291,7 @@ txt_fill, bad_fill = A._fill_figures(
 t("заливка при money=False: безымянный {total} не заполняется при живом sum",
   "28356" not in txt_fill and bad_fill)
 import inspect as _ins
-_ans = _ins.getsource(A.answer)
+_ans = _ins.getsource(A._onepath_compose_gate)
 _after = _ans.split("money = answer_money", 1)[1]
 t("retry: fill и gate второй попытки на money, не на bool(measure)",
   "bool(measure)" not in _after
@@ -459,15 +459,20 @@ t("group: want=sum с итогом множества — ок",
   A.asked_figure_missing("Итого 681 990.12, групп 80", _GAGG, "sum", True) is None)
 
 # ------------------------------------------------- fallback: незаполнимое место -> figures
+# S1: resolve_focus / pick_measure снесены. На onepath сущность/мера —
+# билет (resolved + entity_choice_locked / hold_settled_entity) и
+# _settle_measure; вики/меню обходим билетом, SQL — моками.
 _real = {
     "parse_intent": A.parse_intent,
+    "period_readings": A.period_readings,
+    "expand_readings_calendar_axis": A.expand_readings_calendar_axis,
+    "expand_readings_currency_axis": A.expand_readings_currency_axis,
+    "calendar_axis_unavailable_block": A.calendar_axis_unavailable_block,
+    "repair_period_from_question": A.repair_period_from_question,
+    "apply_proven_period": A.apply_proven_period,
     "probe": A.probe,
     "match_expr": A.match_expr,
     "tables_of": A.tables_of,
-    "meaning_candidates": A.meaning_candidates,
-    "children_by_parent": A.children_by_parent,
-    "resolve_focus": A.resolve_focus,
-    "pick_measure": A.pick_measure,
     "measures_of": A.measures_of,
     "measure_aliases_of": A.measure_aliases_of,
     "totals_of": A.totals_of,
@@ -477,6 +482,8 @@ _real = {
     "measure_label_of": A.measure_label_of,
     "refcols_of": A.refcols_of,
     "serene_axis": A.serene_axis,
+    "_table_label": A._table_label,
+    "kind_word": A.kind_word,
     "ds_chat": A.ds_chat,
 }
 try:
@@ -484,19 +491,22 @@ try:
         "terms": [], "kind": "продажи", "measure": "всего", "want": "sum",
         "parse": {}, "amount": {}, "period": {}, "about": "data"
     }
+    A.period_readings = lambda *a, **k: []
+    A.expand_readings_calendar_axis = lambda r, prefer=None: r
+    A.expand_readings_currency_axis = (
+        lambda r, prefer=None, intent=None, trusted=None: r)
+    A.calendar_axis_unavailable_block = lambda *a, **k: None
+    A.repair_period_from_question = lambda *a, **k: None
+    A.apply_proven_period = lambda *a, **k: None
     A.probe = lambda terms: ([], {})
     A.match_expr = lambda exprs, preds: ("", 0)
     A.tables_of = lambda match, preds: {"document_sales": 3}
-    # diag= — с meaning_candidates(..., diag=) в serene_ask (свежие правки 24.08);
-    # старый мок без kwargs ронял TypeError до проверок figures-fallback.
-    A.meaning_candidates = lambda exprs, kind_text, question, limit, exclude=None, diag=None: []
-    A.children_by_parent = lambda by, match, preds: ({}, {})
-    A.resolve_focus = lambda focus, diag=None, opts=None: focus
-    A.pick_measure = lambda src, question, want: ("Всего", [], "single")
     A.measures_of = lambda src: ["Всего"]
     A.measure_aliases_of = lambda src: {}
-    A.totals_of = lambda src, match, preds, names: [("Всего", 766510.44, 3300.0, 10.0)]
-    A.rows_of = lambda src, match, preds, limit, measure=None: [row("10.00", "2026-08-18", "Документ 1")]
+    A.totals_of = lambda src, match, preds, names: [
+        ("Всего", 766510.44, 3300.0, 10.0)]
+    A.rows_of = lambda src, match, preds, limit, measure=None: [
+        row("10.00", "2026-08-18", "Документ 1")]
     A.aggregate = lambda src, match, preds, measure: {
         "count": 330, "count_amount": 330, "sum": 766510.44, "min": 10.0,
         "max": 3300.0, "avg": 2322.76, "date_min": "2026-08-18",
@@ -507,12 +517,20 @@ try:
     A.measure_label_of = lambda src, measure: measure
     A.refcols_of = lambda src: []
     A.serene_axis = None
+    A._table_label = lambda src: "Продажи"
+    A.kind_word = lambda src: "документ"
     A.ds_chat = lambda messages, temperature=0, max_tokens=900: (
         '{"text": "Итого {total} руб. по {count} записям.", "ask": null, "claims": {}}'
         if "Reply with JSON only" in messages[0]["content"]
         else "Не могу ответить точно."
     )
-    out = A.answer("сколько продали вчера всего?", focus="document_sales", no_arbiter=True)
+    out = A.answer(
+        "сколько продали вчера всего?",
+        focus="document_sales",
+        measure_pick="Всего",
+        no_arbiter=True,
+        resolved={"src": "document_sales", "measure": "Всего"},
+    )
     t("незаполнимое место в sum-ответе → kind=figures, не no_data",
       out.get("kind") == "figures")
     t("fallback figures сохраняет посчитанную сумму",

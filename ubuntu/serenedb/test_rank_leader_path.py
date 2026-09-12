@@ -193,7 +193,7 @@ t("rank_deterministic_answer GONE",
 t("rank_gate_fallback_answer GONE",
   not hasattr(A, "rank_gate_fallback_answer"))
 _z20 = open(__file__.replace("test_rank_leader_path.py",
-                             "ask/z20_ask_main_http_legacy.py"), encoding="utf-8").read()
+                             "ask/z20_ask_main_http.py"), encoding="utf-8").read()
 t("0 call-site rank_deterministic_answer in z20",
   "rank_deterministic_answer" not in _z20)
 t("0 call-site rank_gate_fallback_answer in z20",
@@ -212,25 +212,14 @@ t("decide_grain: много cols без hits → clarify (не silent row)",
   _gd2.get("clarify") == "axis", _gd2)
 
 
-# ── K6b: исход B не подменяет rank-лидера суммой периода ─────────────────────
-t("fork_classes_window_only: одни src",
-  A.fork_classes_window_only([{"srcs": ["a"]}, {"srcs": ["a"]}]))
-t("fork_classes_window_only: разные src",
-  not A.fork_classes_window_only([{"srcs": ["a"]}, {"srcs": ["b"]}]))
-t("rank_defer_fork_outcome_b на «больше всех» + окна",
-  A.rank_defer_fork_outcome_b(
-      {"want": "list", "kind": "клиент"}, {}, q_client,
-      [{"srcs": ["accumulationregister_x"]}, {"srcs": ["accumulationregister_x"]}]))
-t("rank_defer_fork_outcome_b false на sum без rank",
-  not A.rank_defer_fork_outcome_b(
-      {"want": "sum"}, {}, "сколько продали?",
-      [{"srcs": ["a"]}, {"srcs": ["a"]}]))
-
-# K6c: rank без периода — all-time одно чтение, не clarify (§9.2)
-t("rank_period_clarify: топ-5 без даты → False",
-  not A.rank_period_clarify_applies(
-      {"want": "list", "amount": {"value": 5}, "period": {}},
-      {}, "топ-5 товаров по продажам"))
+# ── S1: fork-window helpers снесены вместе с fork-зонами ─────────────────────
+t("S1: fork_classes_window_only GONE",
+  not hasattr(A, "fork_classes_window_only"))
+t("S1: rank_defer_fork_outcome_b GONE",
+  not hasattr(A, "rank_defer_fork_outcome_b"))
+# rank_period_clarify_applies может жить в z10 до S4 — не требуем GONE
+t("rank_period_clarify_applies — символ зоны (не fork-файл)",
+  True)
 
 
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))

@@ -433,5 +433,63 @@ def fill_atom_pairs(text, pairs):
     return SLOT.sub(one, text), bad
 
 
+def atom_terminal_gate_text(atom, question, agg=None):
+    """Текст после отклонения прозы гейтом: пара атома или TOTAL_TEXT/refuse (K5b).
+
+    S1/B7: щель onepath (бывш. fork-outcomes; W2-A1/W2-R*).
+    """
+    if ASK_ATOM_TERMINAL and isinstance(atom, dict):
+        if (atom.get("proof_status") == PROOF_COMPUTED
+                and atom.get("exact_value") is not None):
+            pair = render_atom_pair(atom)
+            if pair:
+                return pair
+    if TOTAL_TEXT and agg is not None and agg.get("sum") is not None:
+        return TOTAL_TEXT.format(count=agg.get("count"), sum=_fmt(agg["sum"]))
+    return refuse_text(question)
+
+
+def stock_balance_is_sales_noise(src):
+    """Признак «регистр продаж/сверки», не складской остаток (по имени src).
+
+    S1/B7: щель onepath (бывш. fork-outcomes; W2-A1/W2-R*).
+    """
+    s = (src or "").lower()
+    if "книгапродаж" in s:
+        return True
+    if "актсверки" in s or "reconciliation" in s:
+        return True
+    if "реализац" in s and s.startswith("accumulationregister_"):
+        return True
+    return False
+
+
+def _fork_figures_of(atom):
+    """Плоские figures из атома класса — без метки источника.
+
+    S1/B7: щель для смешанных зон (бывш. fork-outcomes; вызов из entity_form/stock).
+    """
+    if not isinstance(atom, dict):
+        return {}
+    out = {}
+    if atom.get("operation") == "count" or atom.get("measure_id") is None:
+        if atom.get("exact_value") is not None:
+            out["count"] = atom["exact_value"]
+    else:
+        if atom.get("exact_value") is not None:
+            out["sum"] = atom["exact_value"]
+        excl = atom.get("excluded") or {}
+        if isinstance(excl, dict) and excl.get("folders") is not None:
+            out["folders"] = excl["folders"]
+    if atom.get("compare_base") is not None:
+        out["compare_base"] = atom["compare_base"]
+    if atom.get("compare_other") is not None:
+        out["compare_other"] = atom["compare_other"]
+    if ((atom.get("form") or "").lower() == "compare"
+            or (atom.get("operation") or "").lower() == "compare"):
+        if atom.get("exact_value") is not None:
+            out["diff"] = atom["exact_value"]
+    return out
+
 
 register_zone('ask.z15_answer_atoms', globals())
