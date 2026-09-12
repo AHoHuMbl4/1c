@@ -2198,6 +2198,41 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         if agg.get("n_groups") is not None:
             diag["n_groups"] = agg["n_groups"]
 
+    # Полнота отбора (п.13; перенос из legacy 3903-3949): период молча выбрасывает
+    # строки без даты и строки вне окна — оба числа видны в ответе числом.
+    # outside_period при пустом окне включает ответ «пусто за период»
+    # (build_period_empty_answer) вместо голого нуля.
+    _date_preds = _predicates(intent)
+    if _date_preds and agg:
+        try:
+            _kept = [p for p in preds if p not in _date_preds]
+            _u = psql("SELECT count(*) FROM %s WHERE %s AND doc_date IS NULL"
+                      % (INDEX if match else CORPUS,
+                         " AND ".join([w for w in ([match] + _kept
+                                       + ["src_table = %s" % lit(src)]) if w])))
+            _undated = int(_u[0][0]) if _u and _u[0] else 0
+        except (RuntimeError, ValueError, IndexError):
+            _undated = 0
+        if _undated:
+            agg["undated"] = _undated
+            cut["undated_excluded"] = _undated
+            if "счёт" in diag:
+                diag["счёт"]["без_даты_отброшено"] = _undated
+        try:
+            _base = " AND ".join([w for w in ([match] + _kept
+                                   + ["src_table = %s" % lit(src)]) if w])
+            _period_ok = " AND ".join(_date_preds)
+            _o = psql("SELECT count(*) FROM %s WHERE %s AND doc_date IS NOT NULL "
+                      "AND NOT (%s)"
+                      % (INDEX if match else CORPUS, _base, _period_ok))
+            _outside = int(_o[0][0]) if _o and _o[0] else 0
+        except (RuntimeError, ValueError, IndexError):
+            _outside = 0
+        if _outside:
+            agg["outside_period"] = _outside
+            if "счёт" in diag:
+                diag["счёт"]["вне_периода"] = _outside
+
     # ── 8. Compose + gate (дедлайн до compose — O3 №13) ───────────────────────
     if deadline_hit():
         raise AskDeadline("deadline")
