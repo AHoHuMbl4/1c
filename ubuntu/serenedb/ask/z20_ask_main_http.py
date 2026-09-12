@@ -2088,6 +2088,15 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     except RuntimeError:
         by = {}
     diag["found"] = by.get(src, 0) if src else 0
+    # Пустое окно — факт диагностики (перенос legacy 3242-3249): раннер и
+    # compose отличают «окно пустое» от «число при нулевой находке».
+    if src and empty_after_period_action(intent) in ("drop_assumed", "empty_period"):
+        try:
+            _probe = rows_of(src, match, preds, 1)
+        except RuntimeError:
+            _probe = []
+        if not _probe:
+            diag["period_window_empty"] = True
 
     cov = _coverage_of(src) if src else None
     if cov:
