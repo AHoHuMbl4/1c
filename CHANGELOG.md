@@ -27,6 +27,67 @@ docs/audit/snos15-ONEPATH_PLAN.md (этап-1 армия O×3: остатки-н
 Числа: люк −217 строк; замки 14 файлов зелёные; z20 ~6225→~5000.
 Доки: docs/audit/snos15-ONEPATH_PLAN.md; snos15-PLAN §7 п.8
 
+## 2026-09-12 (6) — АУДИТ ПРОМПТОВ армией ×3 (по указанию владельца): ANSWER_SYS.ask — лишний, CLARIFY_SYS — мёртвый, AXIS_PICK «several» — спорный [армия] [замер]
+
+**[армия] ×3 независимые линзы** (P1∥P2∥P3, все EXIT=0, read-only; отчёты
+docs/audit/onepath/P{1,2,3}-prompts.md): аудит шести живых SYS-промптов
+(COVERAGE z20; INTENT z01; CLARIFY/REFUSE z07; AXIS_PICK z10; ANSWER z18)
+против контракта одного пути и TARGET 19/21. Сходимость трёх линз + сводка
+оркестратора:
+
+- **ANSWER_SYS, блок `ask` («middle road»)** — ЛИШНИЙ: описывает снесённый
+  ask_back (A12); в legacy поле ask уже глушится `bare_clarify_forbidden`
+  (legacy ~4325), потребителей после B4 нет. Чистить в волне B4 вместе с
+  `_ask_back`-остатками; замер L67 обязателен.
+- **CLARIFY_SYS (z07)** — МЁРТВЫЙ: `clarify_text` 0 вызовов в дереве; меню
+  строится кодом `clarify_say`+`wiki_menu_captions` без LLM. Кандидат на
+  снос (проверить prompt_leak-замки).
+- **AXIS_PICK_SYS «several numbers»** — СПОРНЫЙ (расхождение линз): P2 —
+  кормит тихий multi-axis при разных прочтениях (по контракту >1 ось =
+  меню до SQL); P1/P3 — оставить. Решение — в B4 с общим замером.
+- **COVERAGE_SYS** — ХОРОШИЙ, оставить как есть: claims реально сверяются
+  гейтом; «never recompute» — дубль код-гейта, но полезная подсказка
+  (переносится дословно через люк владельца). Тонкости от P2 (не блокеры):
+  census кладёт сырые техимена — модель может пересказать их клиенту
+  (чинить census/human_table_label, не SYS); нет запрета внутренних имён
+  (симметрия с CLARIFY) — добавлять только с замером.
+- **INTENT_SYS, REFUSE_SYS, AXIS_PICK (остальное), ANSWER (запрет
+  рукописных чисел + плейсхолдеры)** — НЕ ТРОГАТЬ.
+- Хвост: WIKI_PICK/WIKI_VERIFY (z21:45-57) — главные промты каскада,
+  отдельного аудита не было — прогнать армией перед shadow (B5).
+
+Числа: 3/3 линзы EXIT=0; 6 промптов: чистить 1, снести 1, спорный 1,
+не трогать 3+остальное.
+Доки: docs/audit/onepath/P1-prompts.md, P2-prompts.md, P3-prompts.md
+
+## 2026-09-12 (5) — B2: новый z20_ask_main_http.py создан — инфра bit-identical, заглушка answer [армия] [замер]
+
+**[армия] B2** (cursor-agent EXIT=0, 337 с): создан новый
+`ubuntu/serenedb/ask/z20_ask_main_http.py` — 2104 строки, 67 символов:
+перенесены из legacy посимвольно gate/gate_out, clarify-оболочка, health
+(+тела `_coverage_*` без вызова из answer — дыра O3 №9), labels→mk_opts,
+period_empty, apply_prior_period/period_slot_for_inherit, journal,
+answer_checked/scope, Handler/main. `answer()` — честная заглушка
+unavailable «волна B3». Файл НЕ в списке зон `_bootstrap` — в рантайм не
+грузится (flip волной B6).
+
+**[замер] Приёмка оркестратора (независимая, AST-дамп верхнего уровня):**
+66/66 перенесённых символов совпадают с legacy посимвольно (answer-заглушка
+не считалась); 0 новых имён вне legacy; grep-негатив запрещённых имён
+(period_assumed_needs_clarify, warehouse_clarify, axis_focus_plan,
+try_entity_form, ecp, arb_pool, _ec_atom_fps, measure_hatch, fork_исходы,
+arbitrate) — пусто. Не перенесены 7: 3 нарушителя (axis_focus_plan,
+period_assumed_needs_clarify, warehouse_clarify — правильно) +
+resolve_focus/drop_period_preds/_wiki_named_entity/_word_hits_measure —
+решение за волнами B3/B4 (билетный путь B3 обязан провести через
+consume_decision, не через сырой focus). py_compile/ast.parse OK.
+Размер 2104 > оценки O2 (800-1100) из-за переноса комментариев — цель
+«≤1500 кода» держится (комментарии считаются отдельно на B7).
+Отчёт: docs/audit/onepath/B2-report.md.
+
+Числа: 2104 строк; 66/66 bit-identical; 0 запрещённых имён.
+Доки: docs/audit/onepath/B2-report.md; O2-project §2.1
+
 ## 2026-09-12 (4) — B0-армия: 13 grep-замков → legacy; срез 17 зелёных / 2 известных красных [армия] [замер]
 
 **[армия] B0** (cursor-agent EXIT=0, 265 с; приёмка оркестратора): во всех
