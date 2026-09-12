@@ -165,6 +165,45 @@ t("migrate: шапка — только по слову владельца",
   "ПО СЛОВУ ВЛАДЕЛЬЦА" in mig
   and "entity_card_build" in mig)
 
+# ── G4: PROBE_TABLE (песочница не марает боевую память столкновений) ─────────
+init = (HERE / "wiki_alias_init.sql").read_text(encoding="utf-8")
+# DDL-строка probe — переменная, не литерал (CREATE … :probe_table)
+ddl_probe = [ln for ln in init.splitlines() if "CREATE TABLE" in ln and "probe" in ln.lower()]
+t("init: DDL probe через :probe_table, без литерала search_alias_probe",
+  len(ddl_probe) == 1
+  and ":probe_table" in ddl_probe[0]
+  and "search_alias_probe" not in ddl_probe[0],
+  ddl_probe)
+t("init: литерал search_alias_probe отсутствует в файле",
+  "search_alias_probe" not in init)
+
+t("collision_round: :probe_table в NOT EXISTS и INSERT, литерала нет",
+  "FROM :probe_table" in round_sql
+  and "INSERT INTO :probe_table" in round_sql
+  and "search_alias_probe" not in round_sql)
+t("collision_left: :probe_table в NOT EXISTS, литерала нет",
+  "FROM :probe_table" in left
+  and "search_alias_probe" not in left)
+
+sh = (HERE / "wiki_alias.sh").read_text(encoding="utf-8")
+t("wiki_alias.sh: PROBE_TABLE дефолт search_alias_probe",
+  'PROBE_TABLE="${PROBE_TABLE:-search_alias_probe}"' in sh)
+t("wiki_alias.sh: -v probe_table в psql_wa и psql_wa_tA",
+  sh.count('-v probe_table="$PROBE_TABLE"') >= 2)
+# collision_left/round зовутся psql_wa_tA — переменная должна быть в обеих обёртках
+t("wiki_alias.sh: collision_left через psql_wa_tA (probe_table доезжает)",
+  'psql_wa_tA -f "$HERE/wiki_alias_collision_left.sql"' in sh)
+# :probe_table только в SQL, которые зовутся через обёртки с -v probe_table
+probe_sql_files = [
+    HERE / "wiki_alias_init.sql",
+    HERE / "wiki_alias_collision_round.sql",
+    HERE / "wiki_alias_collision_left.sql",
+]
+other_sql = [p for p in HERE.glob("wiki_alias*.sql") if p not in probe_sql_files]
+t(":probe_table только в init/round/left (остальные SQL без переменной)",
+  all(":probe_table" not in p.read_text(encoding="utf-8") for p in other_sql),
+  [p.name for p in other_sql if ":probe_table" in p.read_text(encoding="utf-8")])
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

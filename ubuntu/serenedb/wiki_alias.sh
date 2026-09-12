@@ -60,6 +60,9 @@ ALIAS_TABLE="${ALIAS_TABLE:-search_entity_alias}"
 # Словарь величин — отдельная таблица: связь поле → слова. Имя настраивается той же
 # ручкой, что и у сущностей, чтобы прогон рядом не трогал боевой словарь.
 MEASURE_TABLE="${MEASURE_TABLE:-search_measure_alias}"
+# Память «слово уже разводили» (collision). Песочница задаёт свою — иначе пометки
+# уйдут в боевую probe и следующий боевой круг молча пропустит эти слова (п.13).
+PROBE_TABLE="${PROBE_TABLE:-search_alias_probe}"
 # Периодическое доучивание (С5-пайплайн): 0 = выкл (боевые базы не меняются молча).
 REASK_EVERY="${WIKI_ALIAS_REASK_EVERY:-0}"
 case "$REASK_EVERY" in ''|*[!0-9]*) REASK_EVERY=0;; esac
@@ -87,6 +90,7 @@ psql_wa() {
   psql "$DSN" -q -v ON_ERROR_STOP=1 \
     -v alias_table="$ALIAS_TABLE" \
     -v measure_table="$MEASURE_TABLE" \
+    -v probe_table="$PROBE_TABLE" \
     -v retry_h="$RETRY_H" \
     -v force="$WIKI_ALIAS_FORCE" \
     "$@"
@@ -95,6 +99,7 @@ psql_wa_tA() {
   psql "$DSN" -tA -v ON_ERROR_STOP=1 \
     -v alias_table="$ALIAS_TABLE" \
     -v measure_table="$MEASURE_TABLE" \
+    -v probe_table="$PROBE_TABLE" \
     -v retry_h="$RETRY_H" \
     -v force="$WIKI_ALIAS_FORCE" \
     "$@"
@@ -293,7 +298,8 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
   # Ключ отметки — слово И ОТПЕЧАТОК НАБОРА сущностей, которые им называются. Появилась
   # новая сущность с тем же словом — отпечаток другой, вопрос задаётся заново. То есть это
   # не «спросили один раз и забыли», а «спросили про ЭТО столкновение».
-  # search_alias_probe создаётся в wiki_alias_init.sql (CREATE IF NOT EXISTS).
+  # :probe_table (PROBE_TABLE, умолч. search_alias_probe) — wiki_alias_init.sql (CREATE IF NOT EXISTS).
+  # Песочница задаёт свою PROBE_TABLE, чтобы не марать боевую память столкновений.
   rounds=0 asked=0 stopped=""
   # Предел кругов остаётся вторым ограничителем — на случай `WIKI_ALIAS_MAX_SEC=0`.
   while [ "$rounds" -lt "${WIKI_ALIAS_COLLISION_ROUNDS:-40}" ]; do
@@ -356,7 +362,7 @@ PY2
   done
   # Молчания тут быть не должно: видно и сколько спросили, и сколько ОСТАЛОСЬ на следующий
   # такт (упёрлись в предел кругов), и сколько столкновений модель разобрать не смогла —
-  # они лежат в `search_alias_probe` и сами собой больше не переспрашиваются.
+  # они лежат в `$PROBE_TABLE` (умолч. search_alias_probe) и сами собой больше не переспрашиваются.
   left=$(psql_wa_tA -f "$HERE/wiki_alias_collision_left.sql" 2>/dev/null)
   echo "разведение столкновений: кругов $rounds$stopped, спрошено слов $asked, осталось неспрошенных ${left:-?}"
 fi

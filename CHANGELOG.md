@@ -1,3 +1,27 @@
+## 2026-09-13 (13) — G3+G3b+G4: агентный режим gateway (27B песочница) + probe-переменная [код]
+
+**[код]** G3: alias_infer_gateway — env ALIAS_INFER_RUNTIME=agent → `openclaw agent
+--local --agent ${ALIAS_AGENT_ID:-dict} --message-file … --model … --thinking …
+--json` (G0: extra-params temp/seed только на агентном рантайме; P4 §4 temp=0
+обязателен; params — в каталоге песочцы openclaw.json: temperature 0, seed 42,
+maxTokens 8192); дефолт infer — боевой argv байт-прежний. G3b (блокеры красной
+R16): --session-key alias-gen-<uuid4> НА ВЫЗОВ (изоляция контекста пачек — без
+этого агент reuse-ил сессию agent:dict:main и история пачек текла в следующий
+промт) + subprocess timeout=ALIAS_AGENT_TIMEOUT_SEC (дефолт 1800с, замер пачки
+≤1034с; TimeoutExpired → exit 124). G4: search_alias_probe → :probe_table
+(PROBE_TABLE env, дефолт прежний, -v в обе обёртки psql_wa/psql_wa_tA) — иначе
+прогон песочницы маркирует слова в БОЕВОЙ памяти probe и боевой collision-цикл
+молча пропустит их (п.13). Песочница на окне: OPENCLAW_HOME=/home/undebot/
+.openclaw-sandbox (конфиг vllm→http://178.63.211.188:8000/v1, skipBootstrap,
+contextInjection=never — без bootstrap-шума), таблицы alias_sandbox(259)/
+alias_sandbox_measure(709)/probe_sandbox — копии боевых alias_okna_c5*. Замки:
+v2 82/0 (64→75→82), sep 44/0 (36→44), parse 19/0. Красные: R15×2 принимать;
+R16 2 блокера → G3b; R17+R18 принимать.
+
+Числа: v2 82/0, sep 44/0, parse 19/0, py_compile+bash -n ок; probe песочницы
+изолирована (probe_sandbox); боевой путь юнита не изменён (argv идентичен).
+Доки: docs/audit/dict-audit/G0-infer-params.md; docs/audit/dict-audit/P4-формат.md §4; OpenClaw cli/agent.md:21,57 + gateway/config-agents.md (skipBootstrap, contextInjection, params merge) — установленная сборка /usr/lib/node_modules/openclaw/docs
+
 ## 2026-09-13 (12) — G2→G2d: разделитель ' | ', потолок 1600, dual-читатели, миграция-заготовка [код]
 
 **[код]** Слой формата P4 §2-3: `_join` пишет ' | ', потолок 900→1600, обрезка

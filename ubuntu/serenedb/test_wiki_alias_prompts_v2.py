@@ -318,6 +318,118 @@ t("WIKI_ALIAS_FORCE проводка в оболочке",
 t("alias_infer_gateway: --temperature заглушка",
   "--temperature" in (HERE / "alias_infer_gateway.py").read_text(encoding="utf-8"))
 
+# ── gateway: ALIAS_INFER_RUNTIME infer|agent (G3) ────────────────────────────
+import json as _json
+import alias_infer_gateway as IG  # noqa: E402
+
+t("runtime дефолт {} → infer", IG.infer_runtime({}) == "infer")
+t("runtime agent → agent",
+  IG.infer_runtime({"ALIAS_INFER_RUNTIME": "agent"}) == "agent")
+t("runtime иное → infer",
+  IG.infer_runtime({"ALIAS_INFER_RUNTIME": "rpc"}) == "infer")
+
+_cmd_infer = IG.build_cmd(
+    message_file="/tmp/msg",
+    model="vllm/x",
+    thinking="off",
+    prompt="hi",
+    env={},
+)
+t("дефолт cmd = infer model run",
+  _cmd_infer[:4] == ["openclaw", "infer", "model", "run"]
+  and "--prompt" in _cmd_infer
+  and "openclaw agent" not in " ".join(_cmd_infer),
+  _cmd_infer)
+t("infer-режим без openclaw agent",
+  "agent" not in _cmd_infer)
+
+_cmd_agent = IG.build_cmd(
+    message_file="/tmp/msg",
+    model="vllm/x",
+    thinking="off",
+    env={"ALIAS_INFER_RUNTIME": "agent"},
+)
+t("agent cmd: --local --agent dict --message-file --json",
+  _cmd_agent[:3] == ["openclaw", "agent", "--local"]
+  and "--agent" in _cmd_agent
+  and _cmd_agent[_cmd_agent.index("--agent") + 1] == "dict"
+  and "--message-file" in _cmd_agent
+  and _cmd_agent[_cmd_agent.index("--message-file") + 1] == "/tmp/msg"
+  and "--json" in _cmd_agent,
+  _cmd_agent)
+t("agent-режим без infer model run",
+  "infer" not in _cmd_agent, _cmd_agent)
+
+# G3b: session-key на вызов + таймаут subprocess
+t("agent cmd: --session-key alias-gen-",
+  "--session-key" in _cmd_agent
+  and _cmd_agent[_cmd_agent.index("--session-key") + 1].startswith("alias-gen-"),
+  _cmd_agent)
+t("agent cmd: session-key присутствует (нет argv без ключа)",
+  "--session-key" in _cmd_agent
+  and "--agent" in _cmd_agent
+  and "--message-file" in _cmd_agent,
+  _cmd_agent)
+_cmd_agent_b = IG.build_cmd(
+    message_file="/tmp/msg",
+    model="vllm/x",
+    thinking="off",
+    env={"ALIAS_INFER_RUNTIME": "agent"},
+)
+_sk_a = _cmd_agent[_cmd_agent.index("--session-key") + 1]
+_sk_b = _cmd_agent_b[_cmd_agent_b.index("--session-key") + 1]
+t("session-key уникален между двумя build_cmd",
+  _sk_a != _sk_b
+  and _sk_a.startswith("alias-gen-")
+  and _sk_b.startswith("alias-gen-"),
+  (_sk_a, _sk_b))
+
+t("timeout дефолт 1800", IG.agent_timeout_sec({}) == 1800)
+t("timeout ALIAS_AGENT_TIMEOUT_SEC=7",
+  IG.agent_timeout_sec({"ALIAS_AGENT_TIMEOUT_SEC": "7"}) == 7)
+# замок на проводку: main() зовёт subprocess.run(..., timeout=agent_timeout_sec())
+_src = Path(IG.__file__).read_text(encoding="utf-8")
+t("timeout= передаётся в subprocess.run (литерал в main)",
+  "timeout=timeout_sec" in _src
+  and "agent_timeout_sec()" in _src
+  and "TimeoutExpired" in _src,
+  "timeout_sec / TimeoutExpired")
+t("infer-режим: argv прежний, таймаут тот же параметр",
+  _cmd_infer[:4] == ["openclaw", "infer", "model", "run"]
+  and "--session-key" not in _cmd_infer
+  and IG.agent_timeout_sec({}) == 1800,
+  _cmd_infer)
+
+_cmd_agent_id = IG.build_cmd(
+    message_file="/tmp/msg",
+    model="vllm/x",
+    thinking="off",
+    env={"ALIAS_INFER_RUNTIME": "agent", "ALIAS_AGENT_ID": "sandbox"},
+)
+t("ALIAS_AGENT_ID переопределяет агента",
+  _cmd_agent_id[_cmd_agent_id.index("--agent") + 1] == "sandbox",
+  _cmd_agent_id)
+
+_ok_code, _ok_body = IG.agent_result_from_stdout(
+    _json.dumps({"payloads": [{"text": "x"}], "meta": {}})
+)
+_ok_parsed = _json.loads(_ok_body)
+t("agent parser: payloads сохранены",
+  _ok_code == 0
+  and _ok_parsed["payloads"][0]["text"] == "x"
+  and _ok_parsed.get("meta", {}).get("transport") == "agent",
+  (_ok_code, _ok_body[:120]))
+_empty_fix = _json.dumps({"payloads": []})
+_empty_code, _empty_body = IG.agent_result_from_stdout(_empty_fix)
+t("agent parser: пустой payloads → exit 1 + сырой stdout",
+  _empty_code == 1 and _empty_body == _empty_fix,
+  (_empty_code, _empty_body[:120]))
+_blank_fix = _json.dumps({"payloads": [{"text": "  "}]})
+_blank_code, _blank_body = IG.agent_result_from_stdout(_blank_fix)
+t("agent parser: пустой text → exit 1",
+  _blank_code == 1 and _blank_body == _blank_fix,
+  (_blank_code, _blank_body[:120]))
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

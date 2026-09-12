@@ -27,11 +27,11 @@ cand AS (
 pick AS (
   SELECT c.alias, c.fp FROM cand c
   WHERE :'target_word' <> ''
-     OR NOT EXISTS (SELECT 1 FROM search_alias_probe p
+     OR NOT EXISTS (SELECT 1 FROM :probe_table p
                      WHERE p.alias = c.alias AND p.entities_fp = c.fp)
   ORDER BY c.n DESC, c.alias LIMIT 1),
 _mark AS (
-  INSERT INTO search_alias_probe
+  INSERT INTO :probe_table
   SELECT alias, fp, now() FROM pick RETURNING alias)
 SELECT p.alias || chr(9) || p.fp || chr(9) || coalesce(
   (SELECT to_json(list(struct_pack(

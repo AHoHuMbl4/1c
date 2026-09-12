@@ -21,5 +21,5 @@ cand AS (
                        AND s.not_enough_for ILIKE '%' || a.alias || '%')
   GROUP BY 1)
 SELECT count(*) FROM cand c
-WHERE NOT EXISTS (SELECT 1 FROM search_alias_probe p
+WHERE NOT EXISTS (SELECT 1 FROM :probe_table p
                    WHERE p.alias = c.alias AND p.entities_fp = c.fp);

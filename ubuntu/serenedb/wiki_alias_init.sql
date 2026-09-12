@@ -5,5 +5,5 @@ CREATE TABLE IF NOT EXISTS :alias_table (
 CREATE TABLE IF NOT EXISTS :measure_table (
   src_table VARCHAR, measure VARCHAR, aliases VARCHAR, seen_at TIMESTAMP);
 GRANT SELECT ON :measure_table TO serene_ro;
-CREATE TABLE IF NOT EXISTS search_alias_probe (
+CREATE TABLE IF NOT EXISTS :probe_table (
   alias VARCHAR, entities_fp VARCHAR, asked_at TIMESTAMP);
