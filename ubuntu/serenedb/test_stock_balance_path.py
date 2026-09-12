@@ -23,6 +23,11 @@ def t(name, cond, detail=None):
         FAIL.append(name)
         print("FAIL-", name, detail if detail is not None else "")
 
+# S3/S4 GONE batch
+for _n in ('stock_subject_needs_clarify', 'stock_canon_src', 'filter_balance_structural', 'question_asks_stock_balance'):
+    t("S3/S4 GONE: " + _n, not hasattr(A, _n))
+
+
 
 INTENT_STOCK = {"want": "count", "kind": "номенклатура", "action_class": "object",
                 "action_axis": "склад"}
@@ -71,17 +76,17 @@ t("петли: named via terms",
 t("count agg: без терма → aggregate path",
   A.stock_count_aggregate_without_subject(
       INTENT_STOCK, None, "q"))
-t("count agg: не subject clarify",
-  not A.stock_subject_needs_clarify(
-      "q", INTENT_STOCK))
+# S3/S4 DEL: t("count agg: не subject clarify",
+  # S3/S4 DEL: not A.stock_subject_needs_clarify(
+      # S3/S4 DEL: "q", INTENT_STOCK))
 t("count agg: терм measure → прежний named path",
   A.stock_asks_named_product(
       "q", dict(INTENT_STOCK, measure="петли"))
   and not A.stock_count_aggregate_without_subject(
       dict(INTENT_STOCK, measure="петли"), None, "q"))
-t("count agg: терм → subject clarify off (named)",
-  not A.stock_subject_needs_clarify(
-      "q", dict(INTENT_STOCK, measure="петли")))
+# S3/S4 DEL: t("count agg: терм → subject clarify off (named)",
+  # S3/S4 DEL: not A.stock_subject_needs_clarify(
+      # S3/S4 DEL: "q", dict(INTENT_STOCK, measure="петли")))
 
 # --- K9: живой intent без action_axis — ось «склад» из словаря по тексту вопроса ---
 INTENT_LIVE = {"want": "count", "kind": "позиции", "action_class": "object",
@@ -107,8 +112,8 @@ t("live intent: secondary axis known",
   A.secondary_axis_known(INTENT_LIVE, Q_LIVE))
 t("live intent: count aggregate path",
   A.stock_count_aggregate_without_subject(INTENT_LIVE, None, Q_LIVE))
-t("live intent: not subject clarify",
-  not A.stock_subject_needs_clarify(Q_LIVE, INTENT_LIVE))
+# S3/S4 DEL: t("live intent: not subject clarify",
+  # S3/S4 DEL: not A.stock_subject_needs_clarify(Q_LIVE, INTENT_LIVE))
 
 A._is_product_catalog = lambda s: "номенклатур" in str(s or "").lower()
 
@@ -140,11 +145,9 @@ A.psql = _canon_live_psql
 A._BALANCE_REGS.update({"at": time.time(), "set": {
     "accumulationregister_импорттмц", "accumulationregister_допзатратыимпорттмц"}})
 try:
-    _canon_live = A.stock_canon_src(
-        ["accumulationregister_допзатратыимпорттмц", "accumulationregister_импорттмц"],
-        Q_LIVE, INTENT_LIVE)
-    t("live intent: canon import not overhead",
-      _canon_live == "accumulationregister_импорттмц", _canon_live)
+    # S3/S4 DEL: _canon_live = A.stock_canon_src(...)
+    # S3/S4 DEL-dep: t("live intent: canon import not overhead", ...)
+    pass
 finally:
     A.entity_form_catalogs_for_kind = _old_cats0
     A.psql = _old_psql0
@@ -313,14 +316,9 @@ def _struct_psql(q):
 
 A.psql = _struct_psql
 try:
-    got = A.filter_balance_structural(
-        ["accountingregister_x", "accumulationregister_y", "document_z"], {})
-    t("structural: accounting kept",
-      "accountingregister_x" in got, got)
-    t("structural: empty warehouse dropped",
-      "accumulationregister_y" not in got, got)
-    t("structural: non-map kept",
-      "document_z" in got, got)
+    # S3/S4 DEL: got = A.filter_balance_structural(...)
+    # S3/S4 DEL-dep: t("structural: ...")
+    pass
 finally:
     A.psql = _real_psql
 

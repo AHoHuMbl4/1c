@@ -1,12 +1,10 @@
 #!/usr/bin/env python3
-"""S1: stock-фильтры не в маршруте выбора сущности нового z20.
+"""S1+S3: stock-фильтры не в маршруте выбора сущности; orphans z12 снесены.
 
-Серый край stock_bypass_empty_by снесён. Сироты filter/prefer живут в z12
-или снесены вместе с fork-outcomes (S1).
+Щель stock_balance_is_sales_noise — в answer-atoms.
 """
 from __future__ import annotations
 
-import re
 import sys
 from pathlib import Path
 
@@ -41,12 +39,10 @@ def main() -> int:
         t("z20: no %s" % name, not hits, "lines≈%s" % hits)
 
     z12 = (ROOT / "ask" / "z12_stock_balance.py").read_text(encoding="utf-8")
-    t("orphan filter_stock_goods_registers lives in z12",
-      "def filter_stock_goods_registers" in z12)
-    t("orphan prefer_entity_for_stock lives in z12",
-      "def prefer_entity_for_stock" in z12)
-    # S1: filter_stock_balance_sales_noise ушёл с fork-outcomes;
-    # щель stock_balance_is_sales_noise — в answer-atoms.
+    t("S3: filter_stock_goods_registers GONE from z12",
+      "def filter_stock_goods_registers" not in z12)
+    t("S3: prefer_entity_for_stock GONE from z12",
+      "def prefer_entity_for_stock" not in z12)
     import os
     os.environ.setdefault("ASK_TOKEN", "test")
     os.environ.setdefault("EMBED_BASE_URL", "-")
@@ -57,6 +53,10 @@ def main() -> int:
       callable(getattr(A, "stock_balance_is_sales_noise", None)))
     t("S1: filter_stock_balance_sales_noise снесён",
       not hasattr(A, "filter_stock_balance_sales_noise"))
+    t("S3: filter_stock_goods_registers снесён",
+      not hasattr(A, "filter_stock_goods_registers"))
+    t("S3: prefer_entity_for_stock снесён",
+      not hasattr(A, "prefer_entity_for_stock"))
 
     print("PASS %d FAIL %d" % (PASS, len(FAIL)))
     return 1 if FAIL else 0

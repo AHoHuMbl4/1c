@@ -6,26 +6,12 @@ from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
 
-def merge_period2_groups(agg, agg2):
-    """Второй срез по ключу группы. Нет пары — пусто, не ноль."""
-    if not agg:
-        return agg
-    by2 = {}
-    for g in (agg2 or {}).get("groups") or []:
-        by2[g.get("name") or ""] = g
-    for g in agg.get("groups") or []:
-        other = by2.get(g.get("name") or "")
-        g["value2"] = None if other is None else other.get("value")
-        g["count2"] = None if other is None else other.get("count")
-        g["missing2"] = other is None
-    agg["period2"] = True
-    agg["n_groups2"] = (agg2 or {}).get("n_groups")
-    agg["n_rows2"] = (agg2 or {}).get("count")
-    return agg
-
 
 def axis_clarify_options(src, axes):
-    """Подписи осей из меток target_src — не имена конфигурации в коде."""
+    """Подписи осей из меток target_src — не имена конфигурации в коде.
+
+    Одноимённые labels → различитель split_ident(col) (S2-c).
+    """
     axes = [a for a in (axes or []) if a.get("col")]
     if not axes:
         return []
@@ -39,14 +25,26 @@ def axis_clarify_options(src, axes):
                     labs[r[0]] = (r[1] or r[0]).strip()
         except RuntimeError:
             pass
-    opts = []
-    seen = set()
+    raw = []
     for a in axes:
         lab = labs.get(a.get("target_src") or "", a["col"])
-        if lab in seen:
+        raw.append((a["col"], lab))
+    seen_lab = {}
+    for _col, lab in raw:
+        k = (lab or "").lower()
+        seen_lab[k] = seen_lab.get(k, 0) + 1
+    opts = []
+    seen_col = set()
+    for col, lab in raw:
+        if col in seen_col:
             continue
-        seen.add(lab)
-        opts.append({"src": src, "label": lab, "distinct_by": a["col"],
+        seen_col.add(col)
+        label = lab
+        if seen_lab.get((lab or "").lower(), 0) > 1:
+            extra = split_ident(col) or col
+            if extra.lower() != (lab or "").lower():
+                label = "%s (%s)" % (lab, extra)
+        opts.append({"src": src, "label": label, "distinct_by": col,
                      "entity_label": lab})
     return opts
 
@@ -318,8 +316,6 @@ def ensure_count_named(text, agg, slot_mode=None):
     if nf in have or round(nf, 2) in have:
         return text
     return ((text or "").rstrip() + " · всего записей: " + _fmt(nf)).strip()
-
-
 
 
 def _measure_dimension(measure, names=None, alias_by=None):
@@ -604,32 +600,6 @@ def copied_figures(text, agg, rows):
     return out
 
 
-def _filled_ask(ask, agg, totals, money, diag=None, extra=None, slot_mode=None):
-    """Уточняющий вопрос с подставленными числами — или пусто, если он вышел с изъяном.
-
-    Разница с текстом ответа в том, чем платим за изъян. У ответа изъян ведёт ко второй
-    попытке и дальше к числам структурой: там есть что отдать вместо. У вопроса отдавать
-    нечего, и выбор простой — показать заготовку («за какой период, с {date_min}?») или
-    не задавать вопроса вовсе. Второе честнее: ответ при этом остаётся целым и уходит
-    человеку, а сорвавшийся вопрос виден в `diag`, а не в мессенджере.
-    """
-    ask, slots_bad = _fill_figures(ask, agg, totals, bool(money), extra,
-                                     slot_mode=slot_mode)
-    if not (ask or "").strip():
-        return ""
-    flaws = formulation_flaws(ask, slots_bad)
-    if flaws:
-        if isinstance(diag, dict):
-            diag["ask_dropped"] = flaws[:2]
-        return ""
-    return ask
-
-
-def _ask_back(raw):
-    """Поле ask снято из ANSWER_SYS (B4): уточнения только меню-построителем."""
-    return ""
-
-
 def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
             measure_used=None, folders=None, money=True, src=None, slot_mode=None,
             atom_pairs=None):
@@ -876,7 +846,6 @@ NUMTOK = re.compile(r"\d(?:[ \u00a0\u2007\u2009\u202f\u200b']\d|[.,]\d|\d)*")
 SEP = "  \u00a0\u2007\u2009\u202f\u200b',."
 DATE3 = re.compile(r"\b(\d{4})[.\-/](\d{1,2})[.\-/](\d{1,2})\b|\b(\d{1,2})[.\-/](\d{1,2})[.\-/](\d{4})\b")
 DATE2 = re.compile(r"\b(\d{1,2})[.\-/](\d{1,2})\b")
-
 
 
 register_zone('ask.z18_compose', globals())

@@ -105,31 +105,9 @@ t("disambiguate: many → kind_word, без OData-префикса",
   all(not A.label_has_meta_src(v) for v in dis2.values())
   and any("регистр" in v or "документ" in v for v in dis2.values()), dis2)
 
-# --- balance_bridge_clarify с пустым label ---
+# --- S3: balance_bridge_clarify снесён ---
+t("S3: balance_bridge_clarify GONE", not hasattr(A, "balance_bridge_clarify"))
 _real = A.psql
-
-
-def _empty_label_psql(q):
-    if "search_tables" in q or "FROM" in q.upper():
-        return [(SRC, None)]
-    return []
-
-
-A.psql = _empty_label_psql
-A._AMBIG_CACHE.clear()
-A._AMBIG_CACHE["at"] = 0.0
-A._AMBIG_CACHE["set"] = frozenset()
-try:
-    br = A.balance_bridge_clarify(
-        "Сколько товара на складе?", {SRC}, {}, {}, time.time(), labels={})
-    t("bridge: kind=clarify", br and br.get("kind") == "clarify", br)
-    leak, why = screen_leaks(br or {})
-    t("bridge: экран без OData-префиксов", not leak, (why, br))
-    # src внутри dict — внутреннее, допустимо
-    t("bridge: src внутри option остаётся",
-      br and any(o.get("src") == SRC for o in (br.get("options") or [])), br)
-finally:
-    A.psql = _real
 
 # --- mk_opts с lab_by={src: src} ---
 A._AMBIG_CACHE.clear()

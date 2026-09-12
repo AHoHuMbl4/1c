@@ -6,58 +6,6 @@ from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
 
-def stop2_active(focus=None, measure_pick=None, no_arbiter=False, trusted=None):
-    """Стоп 2: соперники в круг, пока неоднозначность не доказана билетом.
-
-    Сырой focus/measure — подсказка отбора, не выбор человека (аудит §10, план §6).
-    Гасит стоп 2 только decision_id (trusted) или аварийный ASK_RAW_FOCUS_TRUST=1.
-    """
-    if no_arbiter:
-        return False
-    if guards_skip_for_choice(focus, measure_pick, trusted):
-        return False
-    return True
-
-
-def determined_answer_rivals(picked, par, writer_pair=None, alias_leader=None,
-                            known_src=None):
-    """Соперники стопа 2: уже определённые, без бюджета шага 3.
-
-    Семья (шапка/ТЧ), writer_pair, лидер словаря другой семьи. Не «следующий по
-    RRF» и не порог веса. known_src — узкий набор уже известных таблиц (кандидаты,
-    alias_top), из которого берётся не больше одного соседа по семье.
-    """
-    if not picked:
-        return []
-
-    def family(t):
-        return (par or {}).get(t) or t
-
-    fam0 = family(picked)
-    out, seen = [], {picked}
-
-    def add(t):
-        if t and t not in seen:
-            seen.add(t)
-            out.append(t)
-
-    if writer_pair:
-        add(writer_pair)
-    parent = (par or {}).get(picked) or ""
-    if parent and parent != picked:
-        add(parent)
-    for t in (known_src or []):
-        if t == picked:
-            continue
-        if family(t) == fam0:
-            add(t)
-            break
-    if alias_leader and family(alias_leader) != fam0:
-        add(alias_leader)
-    return out
-
-
-
 
 def answer_money(want, compute, measure):
     """Нужны ли в этом ответе денежные числа.
@@ -181,7 +129,6 @@ def compose_slot_values(agg, measure=None, folders=0, money=None, slot_mode=None
 # Перепутанные подписи фразу не собирают: API смешать label одного атома с value другого отсутствует.
 UNIT_UNKNOWN = "unknown"                       # явная «единица неизвестна» (машинный маркер)
 PROOF_COMPUTED = "computed"
-PROOF_NA = "not_applicable"
 PROOF_UNCOUNTED = "not_computed"
 _ATOM_OPS = frozenset({"count", "sum", "max", "min", "avg", "rank", "compare", "list"})
 

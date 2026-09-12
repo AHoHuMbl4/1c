@@ -64,6 +64,11 @@ got1, a1, h1 = A.measure_choice(["Всего"], "всего", alias_by={})
 t("measure_choice: 1 имя → брать",
   got1 == "Всего", (got1, h1, a1))
 
+got_b, alts_b, how_b = A.measure_choice(
+    ["Сумма", "СуммаВРDr", "СуммаВРCr"], "сумм", alias_by={})
+t("S2-c: measure_choice без how=base при >1",
+  how_b == "ask" and got_b is None, (got_b, how_b, alts_b))
+
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:
     print("failed:", "; ".join(FAIL))

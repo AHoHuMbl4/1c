@@ -81,6 +81,15 @@ def load_z21():
         "clarify_say": lambda *a, **k: "clarify?",
         "mk_opts": lambda srcs, lab_by, *a, **k: [
             {"label": lab_by.get(s, s), "src": s} for s in srcs],
+        "wiki_menu_captions": lambda opts, **k: opts,
+        "wiki_captions_map_from_cards": lambda cards: {},
+        "human_table_label": lambda src, label=None: (
+            (label or "").strip() or (
+                str(src).split("_", 1)[1] if "_" in str(src) else str(src))),
+        "readings_menu": lambda question, kind, items, diag, cut, t0, *, reason="": (
+            {"kind": "clarify", "options": list(items or []), "text": reason or "?",
+             "diag": dict(diag or {}), "partial": cut}
+            if len(list(items or [])) >= 2 else None),
         "_diag_pack": lambda d, **k: d,
         "register_zone": lambda *a, **k: None,
         "apply_bindings": lambda g: None,

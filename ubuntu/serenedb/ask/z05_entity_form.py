@@ -289,7 +289,6 @@ def sales_compare_windows(intent, today, question=""):
     return p, {}, "explicit"
 
 
-
 def entity_form_catalogs_for_kind(kind, allow_meaning=True, *, include_examples=True):
     """catalog_* по основам label/alias; запасной — meaning_candidates.
 
@@ -375,303 +374,16 @@ def entity_form_movements_for_kind(kind, allow_meaning=True):
                 and not sales_noncanon_focus(s))]
 
 
-def register_count_src(cands, intent, question):
-    """Count строк именованного регистра: kind → movement ∩ pool.
+def _kind_axis_col_candidates(ax, axis_word, intent, meaning_ok=True):
+    """K9-ф6: кандидаты col по kind/action_axis — без silent winner / rerank.
 
-    Структурно: entity_form_movements_for_kind + префикс register_*.
-    Документ в пуле не перекрывает регистр с тем же kind-stem.
-    """
-    intent = intent or {}
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return None
-    kind = (intent.get("kind") or "").strip()
-    if not kind:
-        return None
-    if not entity_form_count_target_is_movement(intent, list(cands or [])):
-        return None
-    period = intent.get("period") or {}
-    has_period = bool(period.get("from") or period.get("to"))
-    found = entity_form_movements_for_kind(kind, allow_meaning=has_period)
-    if not found:
-        return None
-    pool = set(cands or [])
-    regs = [
-        s for s in found
-        if str(s).startswith((
-            "accumulationregister_", "informationregister_", "accountingregister_"))]
-    if pool:
-        in_pool = [s for s in regs if s in pool]
-        if in_pool:
-            regs = in_pool
-    if not regs:
-        return None
-    for pref in ("accumulationregister_", "informationregister_",
-                 "accountingregister_"):
-        hit = [s for s in regs if str(s).startswith(pref)]
-        if hit:
-            return sorted(hit)[0]
-    return sorted(regs)[0]
-
-
-def entity_form_count_target_is_movement(intent, pool):
-    """Гейт A: счёт-цель — движение (kind → document_/accumulationregister_*).
-
-    Структура: intent.kind + классы пула/поиска, не слова вопроса.
-    """
-    if not ASK_ENTITY_FORM:
-        return False
-    intent = intent or {}
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return False
-    kind = (intent.get("kind") or "").strip()
-    if not kind:
-        return False
-    raw = [str(s) for s in (pool or [])]
-    move_pool = [
-        s for s in raw
-        if s.startswith("document_")
-        or (s.startswith("accumulationregister_") and not sales_noncanon_focus(s))]
-    # Явное окно: счёт документов/движений за период — F не подменяет.
-    period = intent.get("period") or {}
-    has_period = bool(period.get("from") or period.get("to"))
-    found = entity_form_movements_for_kind(kind, allow_meaning=has_period)
-    if not found:
-        return False
-    # kind указывает на движение: пересечение с пулом или найденный класс.
-    if move_pool and any(s in set(move_pool) for s in found):
-        return True
-    if any(str(s).startswith("document_") for s in found):
-        return True
-    if move_pool and any(str(s).startswith("document_") for s in move_pool):
-        # в пуле есть document_* и kind резолвится в движение — счёт документов
-        return any(
-            str(s).startswith("document_") or str(s).startswith("accumulationregister_")
-            for s in found)
-    return bool(found)
-
-
-def entity_form_expand_pool(pool, intent=None):
-    """Каталоги из kind + sales-держатели осей (search_refcols / основы)."""
-    out = list(pool or [])
-    seen = set(out)
-    kind = ((intent or {}).get("kind") or "").strip()
-    if kind:
-        for s in entity_form_catalogs_for_kind(kind):
-            if s not in seen:
-                seen.add(s)
-                out.append(s)
-    for cat in [s for s in list(out) if str(s).startswith("catalog_")]:
-        for h in holders_of_target(cat) or []:
-            hs = (h.get("src") or "").strip()
-            if not hs.startswith("accumulationregister_"):
-                continue
-            if sales_noncanon_focus(hs):
-                continue
-            if hs not in seen:
-                seen.add(hs)
-                out.append(hs)
-    return out
-
-
-def event_kind_catalog_expand_pool(pool, intent=None):
-    """K9-ф9: event+count — kind-каталог → осевые движения в пул до выбора.
-
-    Тот же путь, что `_pick_kind_axis_col` / ф6: `entity_form_catalogs_for_kind`
-    (stem/alias из `search_entity_alias`, запасной — meaning_candidates) →
-    `holders_of_target` по refcol. Без kind→catalog — пул не меняем.
-    """
-    pool = list(pool or [])
-    if not event_path_active(intent):
-        return pool
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return pool
-    axis_word = (intent.get("action_axis") or "").strip()
-    if not axis_word:
-        axis_word = (intent.get("kind") or "").strip()
-    if not axis_word:
-        return pool
-    period = (intent or {}).get("period") or {}
-    has_period = bool(period.get("from") or period.get("to"))
-    cats = entity_form_catalogs_for_kind(axis_word, allow_meaning=has_period)
-    if not cats:
-        return pool
-    out = list(pool)
-    seen = set(out)
-    for cat in cats:
-        if cat not in seen:
-            seen.add(cat)
-            out.append(cat)
-        for h in holders_of_target(cat) or []:
-            hs = (h.get("src") or "").strip()
-            if not hs or hs in seen:
-                continue
-            pre = hs.split("_", 1)[0].lower()
-            if pre not in ("document", "accumulationregister"):
-                continue
-            if pre == "accumulationregister" and sales_noncanon_focus(hs):
-                continue
-            seen.add(hs)
-            out.append(hs)
-    return out
-
-
-def entity_form_rolling_year(today):
-    """Окно «год назад → today» для distinct без явного period (форма границ)."""
-    td = _calendar_date(today) or _calendar_date(time.strftime("%Y-%m-%d"))
-    if not td:
-        return {}
-    try:
-        start = td.replace(year=td.year - 1)
-    except ValueError:
-        start = td - datetime.timedelta(days=365)
-    return {"from": _iso_date(start), "to": _iso_date(td),
-            "origin": _ORIGIN_ASSUMED, "interpretation_id": "rolling_12m"}
-
-
-def entity_form_gate_open(intent=None, diag=None):
-    """True: ASK_ENTITY_FORM=1 или event+count с period.origin=assumed.
-
-    try_event_count_period_clarify на флаге 0 уже пишет rolling_year
-    (origin=assumed); без этого гейта F не вызывается и путь уходит в
-    event_code_pick ([замер :8092] покупатели → distinct 144 через F).
-    """
-    if ASK_ENTITY_FORM:
-        return True
-    intent = intent or {}
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return False
-    if not event_path_active(intent):
-        return False
-    period = intent.get("period") or {}
-    if period.get("origin") == "assumed":
-        return True
-    return False
-
-
-def entity_form_applicable(intent, pool):
-    """F открыта: want=count + catalog + sales.
-
-    Явное окно — для complement. Distinct без окна — только если в сыром пуле
-    уже есть движение (document_/register), иначе «всего клиентов» остаётся
-    счётом справочника.
-    Гейт A: kind → document_/accumulationregister_* (счёт движения) — F закрыта.
-    """
-    if not entity_form_gate_open(intent):
-        return False
-    intent = intent or {}
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return False
-    raw = list(pool or [])
-    # Гейт A: счёт-цель — само движение, не ось catalog×sales.
-    if entity_form_count_target_is_movement(intent, raw):
-        return False
-    has_movement = any(
-        (str(s).startswith("accumulationregister_") and not sales_noncanon_focus(s))
-        or str(s).startswith("document_")
-        for s in raw)
-    pool = entity_form_expand_pool(raw, intent)
-    has_cat = any(str(s).startswith("catalog_") for s in pool)
-    has_sales = any(
-        str(s).startswith("accumulationregister_") and not sales_noncanon_focus(s)
-        for s in pool)
-    if not (has_cat and has_sales):
-        return False
-    period = intent.get("period") or {}
-    # Event+count без окна: F всё ещё применима для non-product catalog —
-    # entity_form_structs подставит rolling year (distinct_axis). Ранний
-    # event_count_period_clarify иначе режет до F/wiki ([замер :8092] Q4).
-    # Product-catalog без окна structs сам отсекает — ложного complement нет.
-    if period.get("from") or period.get("to"):
-        return True
-    if event_path_active(intent):
-        return bool(has_cat and has_sales)
-    return bool(has_movement)
-
-
-def entity_form_collapse_guard(early_classes=0, arb_pool_len=1,
-                               form_applicable=False):
-    """Early classes>1 при схлопнутом arb_pool: исход на пуле или метка пропуска."""
-    try:
-        early_classes = int(early_classes or 0)
-        arb_pool_len = int(arb_pool_len or 0)
-    except (TypeError, ValueError):
-        early_classes, arb_pool_len = 0, 0
-    if early_classes <= 1 or arb_pool_len > 1:
-        return {"silent_unique": False, "action": "none"}
-    if form_applicable:
-        return {"silent_unique": False, "action": "resolve_early"}
-    return {"silent_unique": False, "action": "skip",
-            "fork_outcome_skipped": "arb_pool_collapsed"}
-
-
-def entity_form_pre_entity_ok(early_classes=0, form_n=1):
-    """True: один класс развилки и ровно одна форма по пулу (шаг pre_entity)."""
-    try:
-        early_classes = int(early_classes or 0)
-    except (TypeError, ValueError):
-        early_classes = 0
-    try:
-        form_n = int(form_n if form_n is not None else 0)
-    except (TypeError, ValueError):
-        form_n = 0
-    if early_classes > 1:
-        return False
-    if form_n != 1:
-        return False
-    return True
-
-
-def entity_form_atom_distinct(src="", axis="", value=None, period=None):
-    """AnswerAtom формы distinct_axis (COUNT DISTINCT по оси ссылки)."""
-    try:
-        ev = None if value is None else round(float(value), 2)
-    except (TypeError, ValueError):
-        ev = value
-    return build_answer_atom(
-        operation="count", exact_value=ev, measure_id=None,
-        measure_label=None, axis=(axis or None), form="distinct_axis",
-        proof_status=(PROOF_COMPUTED if ev is not None else PROOF_UNCOUNTED),
-        period=period, src=(src or None), grain="axis")
-
-
-def entity_form_atom_complement(catalog_src="", sales_src="", axis="",
-                                catalog_n=None, distinct_n=None, period=None):
-    """AnswerAtom формы complement = |catalog| − distinct_axis(sales)."""
-    try:
-        c = float(catalog_n) if catalog_n is not None else None
-        d = float(distinct_n) if distinct_n is not None else None
-        ev = None if c is None or d is None else round(c - d, 2)
-    except (TypeError, ValueError):
-        ev = None
-    return build_answer_atom(
-        operation="count", exact_value=ev, measure_id=None,
-        measure_label=None, axis=(axis or None), form="complement",
-        proof_status=(PROOF_COMPUTED if ev is not None else PROOF_UNCOUNTED),
-        period=period, src=(sales_src or catalog_src or None), grain="axis",
-        excluded=({"catalog": catalog_src, "sales": sales_src,
-                   "catalog_n": catalog_n, "distinct_n": distinct_n}
-                  if (catalog_src or sales_src) else None))
-
-
-
-
-def _pick_kind_axis_col(ax, axis_word, intent, meaning_ok=True):
-    """K9-ф6: kind/action_axis → catalog target_src → col refcols.
-
-    Порядок как entity_form_axis_on_sales / rank_axis_resolve (kind-only):
-    каталоги по stem/alias (`entity_form_catalogs_for_kind`), refcol с
-    target_src ∈ kind_cats; при нескольких — `kind_axis_rerank`; иначе
-    `kind_axis_hits` + rerank; нет соответствия — None.
+    Порядок как прежде: каталоги по stem/alias → matched cols; иначе
+    kind_axis_hits. При >1 — список для меню выше по тракту.
     """
     axis_word = (axis_word or "").strip()
     ax = [a for a in (ax or []) if a.get("col")]
     if not axis_word or not ax:
-        return None
+        return []
     period = ((intent or {}).get("period") or {})
     has_period = bool(period.get("from") or period.get("to"))
     kind_cats = set(entity_form_catalogs_for_kind(
@@ -679,20 +391,59 @@ def _pick_kind_axis_col(ax, axis_word, intent, meaning_ok=True):
     if kind_cats:
         matched = [a for a in ax if (a.get("target_src") or "") in kind_cats]
         if matched:
-            if len(matched) == 1:
-                return matched[0]["col"]
-            reranked = kind_axis_rerank(matched, axis_word)
-            if reranked:
-                return reranked[0]
-            return matched[0]["col"]
+            cols, seen = [], set()
+            for a in matched:
+                c = a["col"]
+                if c not in seen:
+                    seen.add(c)
+                    cols.append(c)
+            return cols
     hits = kind_axis_hits(ax, axis_word, meaning_ok=meaning_ok)
     if not hits:
-        return None
-    if len(hits) == 1:
-        return hits[0]
-    sub = [a for a in ax if a.get("col") in hits]
-    reranked = kind_axis_rerank(sub, axis_word) if sub else []
-    return reranked[0] if reranked else hits[0]
+        return []
+    cols, seen = [], set()
+    for c in hits:
+        if c not in seen:
+            seen.add(c)
+            cols.append(c)
+    return cols
+
+
+def _pick_kind_axis_col(ax, axis_word, intent, meaning_ok=True):
+    """Ровно один кандидат → col; 0 или >1 → None (меню/строки выше)."""
+    cands = _kind_axis_col_candidates(ax, axis_word, intent, meaning_ok=meaning_ok)
+    if len(cands) == 1:
+        return cands[0]
+    return None
+
+
+def live_axis_col_candidates(intent, src, axes=None, named_entity=False):
+    """Кандидаты DISTINCT-оси для count — без выбора победителя."""
+    intent = intent or {}
+    want = (intent.get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return []
+    ac = (intent.get("action_class") or "none").strip().lower()
+    if ac == "object":
+        return []
+    src = (src or "").strip()
+    if not src:
+        return []
+    pre = src.split("_", 1)[0].lower()
+    if pre not in ("document", "accumulationregister"):
+        return []
+    axis_word = (intent.get("action_axis") or "").strip()
+    if not axis_word:
+        if named_entity:
+            return []
+        axis_word = (intent.get("kind") or "").strip()
+    if not axis_word:
+        return []
+    ax = axes if axes is not None else refcols_of(src)
+    return _kind_axis_col_candidates(
+        ax, axis_word, intent,
+        meaning_ok=bool((intent or {}).get("action_class") and
+                        (intent or {}).get("action_axis")))
 
 
 def live_axis_col_for_count(intent, src, axes=None, named_entity=False):
@@ -707,34 +458,11 @@ def live_axis_col_for_count(intent, src, axes=None, named_entity=False):
     реализациятмц» при верном COUNT=2240 рендерилось «2 · Виды Деятельности» —
     distinct по случайному носителю рода «движения»). Названная человеком ось
     (action_axis) работает и для названной сущности.
+
+    S2-c: ровно один кандидат → взять; >1 → None (меню axis до SQL).
     """
-    intent = intent or {}
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return None
-    ac = (intent.get("action_class") or "none").strip().lower()
-    if ac == "object":
-        return None
-    src = (src or "").strip()
-    if not src:
-        return None
-    pre = src.split("_", 1)[0].lower()
-    if pre not in ("document", "accumulationregister"):
-        return None
-    axis_word = (intent.get("action_axis") or "").strip()
-    if not axis_word:
-        if named_entity:
-            return None
-        axis_word = (intent.get("kind") or "").strip()
-    if not axis_word:
-        return None
-    ax = axes if axes is not None else refcols_of(src)
-    # Смысловой мост для оси — только когда ось НАЗВАНА человеком (action_axis);
-    # fallback-ось из рода записей («движений в регистре X») ищется по именам.
-    return _pick_kind_axis_col(
-        ax, axis_word, intent,
-        meaning_ok=bool((intent or {}).get("action_class") and
-                        (intent or {}).get("action_axis")))
+    cands = live_axis_col_candidates(intent, src, axes, named_entity=named_entity)
+    return cands[0] if len(cands) == 1 else None
 
 
 def count_defer_measure_clarify(intent, src, axes=None):
@@ -751,175 +479,10 @@ def count_defer_measure_clarify(intent, src, axes=None):
         if rank_intent_from(intent):
             if not (src or "").strip():
                 return False
-            return bool(live_axis_col_for_count(intent, src, axes))
+            # S2-c: defer по наличию кандидатов, не по silent-победителю.
+            return bool(live_axis_col_candidates(intent, src, axes))
         return True
     return False
-
-
-def event_count_has_explicit_period(intent, diag=None):
-    """K9-ф8: event+count, окно from/to уже в intent — без assumed-clarify."""
-    if not event_path_active(intent):
-        return False
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return False
-    if (diag or {}).get("period_assumed_dropped"):
-        return False
-    p = (intent or {}).get("period") or {}
-    return bool(p.get("from") or p.get("to"))
-
-
-def event_count_period_unspecified(intent, diag=None):
-    """K9-ф7: период не назван — пустой intent.period или drop_assumed."""
-    if (diag or {}).get("period_assumed_dropped"):
-        return True
-    p = (intent or {}).get("period") or {}
-    return not (p.get("from") or p.get("to"))
-
-
-def event_count_has_live_axis(intent, src=None, axes=None, pool=None):
-    """event+count: есть живая ось DISTINCT на движении (src или пул)."""
-    intent = intent or {}
-    if not event_path_active(intent):
-        return False
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return False
-    if src:
-        ax = axes if axes is not None else refcols_of(src)
-        return bool(live_axis_col_for_count(intent, src, ax))
-    for s in pool or []:
-        pre = str(s).split("_", 1)[0].lower()
-        if pre not in ("document", "accumulationregister"):
-            continue
-        try:
-            ax = refcols_of(s)
-        except RuntimeError:
-            ax = []
-        if live_axis_col_for_count(intent, s, ax):
-            return True
-    return False
-
-
-def event_count_period_clarify_applies(intent, diag=None, src=None, axes=None,
-                                       pool=None, trusted=None, resolved=None):
-    """K9-ф7: event+count+ось+нет периода → переспрос (не угадывать окно)."""
-    if not event_count_has_live_axis(intent, src=src, axes=axes, pool=pool):
-        return False
-    if not event_count_period_unspecified(intent, diag):
-        return False
-    for prov in (trusted, resolved):
-        if isinstance(prov, dict) and prov.get("period") is not None:
-            return False
-    return True
-
-
-def event_count_period_option_readings(today=None):
-    """Варианты окна для event-count: месяц/квартал/год/всё — форма дат, не слова."""
-    if not today:
-        today = time.strftime("%Y-%m-%d")
-    td = _calendar_date(today)
-    if not td:
-        return [_window_reading({}, _ORIGIN_NONE, "none", today)]
-    out = []
-    ms, me = _month_range(td)
-    out.append(_window_reading(
-        {"from": _iso_date(ms), "to": _iso_date(me)},
-        _ORIGIN_EXPLICIT, "full_month", today))
-    qs, qe = _quarter_range(td)
-    out.append(_window_reading(
-        {"from": _iso_date(qs), "to": _iso_date(qe)},
-        _ORIGIN_EXPLICIT, "full_quarter", today))
-    ry = entity_form_rolling_year(today)
-    if ry.get("from") or ry.get("to"):
-        out.append(_window_reading(dict(ry), _ORIGIN_EXPLICIT, "rolling_12m", today))
-    out.append(_window_reading({}, _ORIGIN_NONE, "none", today))
-    return out
-
-
-def event_count_period_clarify(question, intent, diag, cut, t0, today=None):
-    """Clarify с кнопками-периодами (render_window_label + period в option)."""
-    readings = event_count_period_option_readings(today)
-    opts = []
-    for rd in readings:
-        pr = dict(rd.get("period") or {})
-        if rd.get("origin"):
-            pr["origin"] = rd["origin"]
-        if rd.get("interpretation_id"):
-            pr["interpretation_id"] = rd["interpretation_id"]
-        lab = render_window_label(pr, origin=rd.get("origin"), today=today)
-        if not lab:
-            lab = str(rd.get("interpretation_id") or "none")
-        opts.append({"src": "", "label": lab, "hint": "",
-                     "distinct_by": "period", "period": pr,
-                     "window_fp": rd.get("window_fp") or ""})
-    cyr = any("\u0400" <= c <= "\u04ff" for c in (question or ""))
-    text = ("За какой период считать?" if cyr else "Which period?")
-    d = dict(diag or {})
-    d["event_count_period_clarify"] = True
-    return {"partial": cut or None, "kind": "clarify", "text": text,
-            "options": opts, "sources": [],
-            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
-                               reason="event count: период не назван")}
-
-
-def try_event_count_period_clarify(question, intent, diag, cut, t0, today=None,
-                                   src=None, axes=None, pool=None,
-                                   trusted=None, resolved=None):
-    """None — не clarify; иначе ответ clarify с period-options.
-
-    Если kind→catalog с держателем-движением — подставляем rolling year
-    (assumed) и НЕ clarify. Не зависит от ASK_ENTITY_FORM: иначе при флаге=0
-    _ecp0 режет до wiki ([замер :8092] «реально покупают»).
-    """
-    if not event_count_period_clarify_applies(
-            intent, diag, src=src, axes=axes, pool=pool,
-            trusted=trusted, resolved=resolved):
-        return None
-    _sci = globals().get("sales_canon_intent")
-    if callable(_sci) and _sci(intent, question, list(pool or [])):
-        return None
-    intent = intent if intent is not None else {}
-    ry = entity_form_rolling_year(today)
-    if ry.get("from") or ry.get("to"):
-        kind = (intent.get("kind") or "").strip()
-        axis = (intent.get("action_axis") or "").strip() or kind
-        cats = []
-        if kind or axis:
-            try:
-                cats = list(entity_form_catalogs_for_kind(kind or axis) or [])
-            except RuntimeError:
-                cats = []
-        has_holder = False
-        for cat in cats:
-            try:
-                holders = holders_of_target(cat) or []
-            except RuntimeError:
-                holders = []
-            for h in holders:
-                hs = (h.get("src") or "").strip()
-                if hs.startswith("accumulationregister_") and not sales_noncanon_focus(hs):
-                    has_holder = True
-                    break
-            if has_holder:
-                break
-        if not has_holder:
-            for s in list(pool or []) + ([src] if src else []):
-                if (str(s).startswith("accumulationregister_")
-                        and not sales_noncanon_focus(str(s))):
-                    has_holder = True
-                    break
-        if has_holder:
-            # [01.09, п.12 TARGET] ОКНО БЕЗ ВОПРОСА НЕ ПОДСТАВЛЯЕТСЯ: молчаливый
-            # rolling_year — догадка (замер: «движений в регистре реализациятмц»
-            # assumed-год срезал 44 829 записей и выдал «3 · Виды
-            # Деятельности» при эталоне 78 537). Путь event-count без
-            # названного периода возвращается сюда после вики-выбора и
-            # спрашивает окно чипами (месяц/квартал/12м/всё) — слово владельца:
-            # переспрос сразу с подсказками, не угадывание.
-            return None
-    return event_count_period_clarify(
-        question, intent, diag, cut, t0, today=today)
 
 
 def apply_proven_period(intent, trusted=None, resolved=None):
@@ -943,67 +506,8 @@ def apply_proven_period(intent, trusted=None, resolved=None):
     return False
 
 
-def event_duel_applies(intent, pool):
-
-    """K9-ф5: event+count+>=2 осевых движений -> fork A/B/C, не clarify сущности."""
-    if not event_path_active(intent) or len(pool or []) < 2:
-        return False
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return False
-    n_axis = 0
-    for src in pool:
-        try:
-            ax = refcols_of(src)
-        except RuntimeError:
-            ax = []
-        if live_axis_col_for_count(intent, src, ax):
-            n_axis += 1
-    return n_axis >= 2
-
-
-def _event_distinct_fork_rows(intent, match, preds, rows, rel_by_src):
-    """K9-ф5: event+count+ось -> COUNT(DISTINCT) в fork_scan для исходов A/B/C."""
-    if not event_path_active(intent):
-        return rows
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", ""):
-        return rows
-    out = dict(rows or {})
-    for src in list(rel_by_src or {}):
-        if src not in out:
-            continue
-        try:
-            axes = refcols_of(src)
-        except RuntimeError:
-            axes = []
-        col = live_axis_col_for_count(intent, src, axes)
-        if not col:
-            continue
-        agg = aggregate_distinct_axis(src, match, preds, col)
-        if not agg or agg.get("count") is None:
-            continue
-        ax_lab = _passport_axis_label(col, axes)
-        d = dict(out[src])
-        d["count"] = agg["count"]
-        d["distinct_axis"] = col
-        d["distinct_axis_label"] = ax_lab
-        out[src] = d
-    return out
-
-
 def event_path_active(intent):
     return (intent or {}).get("action_class", "").strip().lower() == "event"
-
-
-def event_movement_feats(diag):
-    return (diag or {}).get("answer_fit_v2_full") or {}
-
-
-def event_filter_pool(cands, intent, diag):
-    # В2: entity-rank-v2 event_movement_pool снесён — pool без перестановки.
-    return list(cands or [])
-
 
 
 def aggregate_distinct_axis(src_table, match, preds, axis_col):
@@ -1036,178 +540,6 @@ def aggregate_distinct_axis(src_table, match, preds, axis_col):
             "axis": axis_col, "grain": "axis"}
 
 
-def entity_form_axis_on_sales(catalog_src, sales_srcs):
-    """Ось refs_map на sales, чей target_src = catalog (search_refcols).
-
-    Среди держателей — канон продаж по _sales_register_score (не книга/импорт).
-    """
-    catalog_src = (catalog_src or "").strip()
-    sales_srcs = [s for s in (sales_srcs or []) if s]
-    if not catalog_src or not sales_srcs:
-        return None, None
-    pairs = []
-    for s in sales_srcs:
-        for a in (refcols_of(s) or []):
-            if (a.get("target_src") or "") == catalog_src and a.get("col"):
-                pairs.append((s, a["col"]))
-                break
-    if not pairs:
-        for h in holders_of_target(catalog_src) or []:
-            if h.get("src") in sales_srcs and h.get("col"):
-                pairs.append((h["src"], h["col"]))
-    if not pairs:
-        return None, None
-    mbs = {}
-    try:
-        mbs = _measures_by_src([s for s, _c in pairs]) or {}
-    except RuntimeError:
-        mbs = {}
-    pairs.sort(key=lambda sc: (
-        -_sales_register_score(sc[0], mbs.get(sc[0]) or []),
-        sc[0]))
-    return pairs[0][0], pairs[0][1]
-
-
-def entity_form_structs(intent, pool, today=None):
-    """Все структурные кандидаты F по пулу (form+meta), без SQL-счёта.
-
-    Порядок как у entity_form_pick: сырой пул, затем kind. Нужен для
-    pre_entity: «форма по пулу не единственная» = len>1.
-    """
-    if not entity_form_applicable(intent, pool):
-        return []
-    raw = list(pool or [])
-    raw_set = set(raw)
-    period0 = dict((intent or {}).get("period") or {})
-    has_period0 = bool(period0.get("from") or period0.get("to"))
-    pool = entity_form_expand_pool(raw, intent)
-    cats = [s for s in pool if str(s).startswith("catalog_")]
-    sales = [s for s in pool
-             if str(s).startswith("accumulationregister_")
-             and not sales_noncanon_focus(s)]
-    period = dict(period0)
-    has_period = has_period0
-    kind = ((intent or {}).get("kind") or "").strip()
-    # Без окна — только stem/label SQL; meaning оставляем для complement с окном.
-    found = set(entity_form_catalogs_for_kind(
-        kind, allow_meaning=has_period0)) if kind else set()
-    # Без окна: только kind→catalog. Dump соседних catalog_* не повод для F.
-    if not has_period:
-        if not found:
-            return []
-        cats = [c for c in cats if c in found]
-        if not cats:
-            return []
-        # kind → товарный catalog: счёт строк справочника, не DISTINCT sales
-        if all(_is_product_catalog(c) for c in cats):
-            return []
-    # сначала каталоги из сырого пула/cands, затем совпавшие с kind
-    cats.sort(key=lambda c: (
-        0 if c in raw_set else 1,
-        0 if c in found else 1,
-        c))
-    out = []
-    for cat in cats:
-        src_s, axis = entity_form_axis_on_sales(cat, sales)
-        if not src_s or not axis:
-            continue
-        if _is_product_catalog(cat):
-            if not has_period:
-                continue
-            out.append(("complement", {
-                "catalog_src": cat, "sales_src": src_s, "axis": axis,
-                "period": dict(period)}))
-            continue
-        per = dict(period)
-        if not has_period:
-            per = entity_form_rolling_year(today)
-            if not (per.get("from") or per.get("to")):
-                continue
-        out.append(("distinct_axis", {
-            "catalog_src": cat, "sales_src": src_s, "axis": axis,
-            "period": per}))
-    return out
-
-
-def entity_form_pick(intent, pool, today=None):
-    """Выбрать (form, meta) из структуры пула: complement | distinct_axis | None.
-
-    Без явного окна F смотрит только catalog, на который указывает kind
-    (не весь dump развилки): иначе счёт справочника уходит в distinct по
-    соседней оси, которую держат те же строки sales.
-    """
-    structs = entity_form_structs(intent, pool, today=today)
-    if not structs:
-        return None, {}
-    return structs[0][0], structs[0][1]
-
-
-def entity_form_compute(form, meta, match=""):
-    """Посчитать атом выбранной формы F внутри движка."""
-    if not form or not meta:
-        return None
-    period = meta.get("period") or {}
-    preds = period_preds(period) if (period.get("from") or period.get("to")) else []
-    axis = meta.get("axis") or ""
-    sales = meta.get("sales_src") or ""
-    cat = meta.get("catalog_src") or ""
-    if form == "distinct_axis":
-        agg = aggregate_distinct_axis(sales, match, preds, axis)
-        if not agg:
-            return None
-        try:
-            _ax_cols = refcols_of(sales)
-        except RuntimeError:
-            _ax_cols = []
-        _ax_lab = _passport_axis_label(axis, _ax_cols) or axis
-        return entity_form_atom_distinct(
-            src=sales, axis=_ax_lab, value=agg.get("count"), period=period)
-    if form == "complement":
-        cat_agg = aggregate(cat, "", [], None)  # каталог без date-pred
-        dist = aggregate_distinct_axis(sales, match, preds, axis)
-        if not cat_agg or dist is None:
-            return None
-        return entity_form_atom_complement(
-            catalog_src=cat, sales_src=sales, axis=axis,
-            catalog_n=cat_agg.get("count"), distinct_n=dist.get("count"),
-            period=period)
-    return None
-
-
-def try_entity_form_answer(question, intent, pool, match="", diag=None,
-                          cut=None, t0=None, today=None, when=None,
-                          early_classes=0):
-    """Ответ формой F или None. На when=pre_entity зовёт entity_form_pre_entity_ok."""
-    if not entity_form_gate_open(intent, diag):
-        return None
-    pool = entity_form_expand_pool(pool, intent)
-    structs = entity_form_structs(intent, pool, today=today)
-    if not structs:
-        return None
-    if when == "pre_entity":
-        if not entity_form_pre_entity_ok(
-                early_classes=early_classes, form_n=len(structs)):
-            return None
-    form, meta = structs[0][0], structs[0][1]
-    atom = entity_form_compute(form, meta, match=match)
-    if not atom or atom.get("exact_value") is None:
-        return None
-    text = render_atom_pair(atom) or _fmt(atom.get("exact_value"))
-    if not (text or "").strip():
-        return None
-    d = _diag_pack(diag or {}, entity_form=form,
-                   entity_form_axis=meta.get("axis"),
-                   entity_form_sales=meta.get("sales_src"),
-                   entity_form_catalog=meta.get("catalog_src"))
-    if t0 is not None:
-        d["sec"] = round(time.time() - t0, 2)
-    figs = _fork_figures_of(atom)
-    return {"partial": cut or None, "kind": "answer", "text": text,
-            "figures": figs, "atom": atom, "atoms": [atom],
-            "source_fixed": False, "memory_eligible": False,
-            "sources": [], "diag": d}
-
-
 def aggregate_compare_sales(src, match, period1, period2, measure):
     """Diff двух сумм продаж (form=compare). Один src, два окна."""
     if not src or not measure:
@@ -1233,7 +565,6 @@ def aggregate_compare_sales(src, match, period1, period2, measure):
         "period2": True,
     })
     return out
-
 
 
 register_zone('ask.z05_entity_form', globals())

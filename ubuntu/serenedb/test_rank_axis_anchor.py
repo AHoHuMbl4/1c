@@ -22,6 +22,11 @@ def t(name, cond, detail=""):
         FAIL.append(name)
         print("FAIL-", name, ("| " + str(detail)[:200]) if detail else "")
 
+# S3/S4 GONE batch
+for _n in ('rank_measure_hint', '_gate_bad_preview', '_rank_wants_quantity', 'question_asks_stock_balance', 'rank_leader_answer_text'):
+    t("S3/S4 GONE: " + _n, not hasattr(A, _n))
+
+
 
 # --- дефект 1: билет оси не схлопывает rank в скаляр ---
 intent_top = {"want": "list", "kind": "товар", "amount": {"value": 1}}
@@ -43,24 +48,23 @@ t("rank_intent ≡ breakdown for list",
 
 # --- дефект 2: якорение меры на рейтинг товара ---
 names = ["Себестоимость", "Количество", "Всего"]
-hint = A.rank_measure_hint(
-    names, {"want": "list", "kind": "товар"}, "какого товара больше всего")
-t("rank measure hint → Количество", hint == "Количество", hint)
-t("rank measure skip when measure set",
-  A.rank_measure_hint(names, {"want": "list", "measure": "Всего"},
-                      "какого товара больше всего") is None)
-t("rank measure skip on sum",
-  A.rank_measure_hint(names, {"want": "sum"}, "сколько всего") is None)
+# S3/S4 DEL: hint = A.rank_measure_hint(...)
+# S3/S4 DEL-dep: t("rank measure hint → Количество", ...)
+# S3/S4 DEL: t("rank measure skip when measure set",
+  # S3/S4 DEL: A.rank_measure_hint(names, {"want": "list", "measure": "Всего"},
+                      # S3/S4 DEL: "какого товара больше всего") is None)
+# S3/S4 DEL: t("rank measure skip on sum",
+  # S3/S4 DEL: A.rank_measure_hint(names, {"want": "sum"}, "сколько всего") is None)
 
 # --- остаток: intent-путь (не слова вопроса) ---
-t("stock balance question",
-  A.question_asks_stock_balance(
-      "какого товара больше всего на складе?",
-      intent={"want": "list", "kind": "склад"}))
-t("movement question not stock",
-  not A.question_asks_stock_balance(
-      "какого товара больше всего по реализации",
-      intent={"want": "list", "kind": "продажи"}))
+# S3/S4 DEL: t("stock balance question",
+  # S3/S4 DEL: A.question_asks_stock_balance(
+      # S3/S4 DEL: "какого товара больше всего на складе?",
+      # S3/S4 DEL: intent={"want": "list", "kind": "склад"}))
+# S3/S4 DEL: t("movement question not stock",
+  # S3/S4 DEL: not A.question_asks_stock_balance(
+      # S3/S4 DEL: "какого товара больше всего по реализации",
+      # S3/S4 DEL: intent={"want": "list", "kind": "продажи"}))
 t("какого: not named (question word)",
   not A.stock_asks_named_product(
       "какого товара больше всего на складе?",
@@ -107,10 +111,8 @@ except TypeError as e:
 intent_sale = {"want": "sum", "kind": "товар", "amount": {}}
 t("rank intent «продали за всё время»",
   A.rank_intent_from(intent_sale, {}, "какого товара больше всего продали за всё время?"))
-hint_sale = A.rank_measure_hint(
-    names, {"want": "list", "kind": "товар", "amount": {}},
-    "какого товара больше всего продали за всё время?")
-t("rank measure «продали» → Количество", hint_sale == "Количество", hint_sale)
+# S3/S4 DEL: hint_sale = A.rank_measure_hint(...)
+# S3/S4 DEL-dep: t("rank measure «продали» → Количество", ...)
 
 # --- hotfix: count_kind не на rank ---
 src = A.ask_source()
@@ -139,9 +141,9 @@ t("gate bad — строки, не float",
   not bad_live or all(isinstance(x, str) for x in bad_live), bad_live)
 # воспроизведение bad_nums[0]=float до фикса: preview не падает
 try:
-    _p = A._gate_bad_preview([22.0])
+    # S3/S4 DEL: _p = A._gate_bad_preview([22.0])
     t("gate preview float не TypeError", True)
-    t("gate preview float → str", isinstance(_p, str) and "22" in _p, _p)
+    # S3/S4 DEL-dep: t("gate preview float → str", ...)
 except TypeError as e:
     t("gate preview float не TypeError", False, e)
 # число вне белого списка — строка в bad
@@ -151,7 +153,7 @@ t("gate reject 22: bad[0] str", bad_x and isinstance(bad_x[0], str), bad_x)
 # симуляция шага answer(): раньше bad[0][:60] на float → 503
 try:
     bad_sim = bad_x or [22.0]
-    _ = A._gate_bad_preview(bad_sim)
+    # S3/S4 DEL: _ = A._gate_bad_preview(bad_sim)
     t("answer шаг: preview на float-bad не падает", True)
 except TypeError as e:
     t("answer шаг: preview на float-bad не падает", False, e)
@@ -174,12 +176,9 @@ text217 = "Наибольшее количество — «Prod X»: {total}."
 filled217, bad217 = A._fill_figures(text217, AGG217, [], True, slot_mode="rank")
 t("rank fill: {total} не подставляет sum множества",
   "217" not in filled217.replace("\u00a0", ""), filled217)
-t("rank fill: g0 через rank_leader",
-  "3" in (A.rank_leader_answer_text(AGG217) or ""))
-ok217, bad217g = A.gate(
-    A.rank_leader_answer_text(AGG217) or "", SEEN217, AGG217, [1], [],
-    money=True, slot_mode="rank")
-t("rank gate leader 3 проходит", ok217, bad217g)
+# S3/S4 DEL: t("rank fill: g0 через rank_leader", ...)
+# S3/S4 DEL: ok217, bad217g = A.gate(A.rank_leader_answer_text(...))
+# S3/S4 DEL-dep: t("rank gate leader 3 проходит", ok217, bad217g)
 ok217b, bad217b = A.gate(
     "лидер 217.10", SEEN217, AGG217, [1], [], money=True, slot_mode="rank")
 t("rank gate 217.10 теперь в поверхности agg", ok217b, bad217b)
@@ -253,13 +252,13 @@ t("rank tail: нет «· 1558»/«· 77557»", not re.search(r"·\\s*\\d", demo
   demo_full)
 
 # --- rank_measure_hint: _rank_wants_quantity (intent, не слова) ---
-t("_rank_wants_quantity: товар + больше всего",
-  A._rank_wants_quantity(
-      "какого товара больше всего передали?",
-      intent={"want": "list", "kind": "товар"}), "")
-t("_rank_wants_quantity: без слова товар",
-  not A._rank_wants_quantity("сколько продали за месяц?",
-                             intent={"want": "sum"}), "")
+# S3/S4 DEL: t("_rank_wants_quantity: товар + больше всего",
+  # S3/S4 DEL: A._rank_wants_quantity(
+      # S3/S4 DEL: "какого товара больше всего передали?",
+      # S3/S4 DEL: intent={"want": "list", "kind": "товар"}), "")
+# S3/S4 DEL: t("_rank_wants_quantity: без слова товар",
+  # S3/S4 DEL: not A._rank_wants_quantity("сколько продали за месяц?",
+                             # S3/S4 DEL: intent={"want": "sum"}), "")
 
 # --- числа в именах групп заземлены ---
 AGG_NAME = {

@@ -76,101 +76,6 @@ def sales_sum_intent(intent, question=""):
     return want not in ("avg",)
 
 
-def _sales_register_score(src, measures):
-    """Движения с количеством+итого выше книги НДС/VAT по тому же регистратору."""
-    s = (src or "").lower()
-    ms = {(m or "").lower() for m in (measures or [])}
-    score = 0
-    if any("количество" in m or m in ("quantity", "qty", "count") for m in ms):
-        score += 10
-    if any(m in ("всего", "сумма", "total", "amount") or "всего" in m for m in ms):
-        score += 3
-    if any("ндс" in m or "vat" in m for m in ms) and score < 10:
-        score -= 4
-    if "книга" in s or "ндс" in s or "vat" in s:
-        score -= 8
-    if "реализац" in s or "продаж" in s or "sale" in s:
-        score += 2
-    return score
-
-
-def sales_lift_possible(cands):
-    """Структурный подъём sales-register по written_by из кандидатов (без cold).
-
-    True, если в cands уже есть не-книга accumulationregister_* либо document_*
-    (или parent/written_by → document), с которого поднимается регистр движений.
-    """
-    cands = list(cands or [])
-    if not cands:
-        return False
-    for c in cands:
-        if (str(c).startswith("accumulationregister_")
-                and not sales_noncanon_focus(c)):
-            return True
-    try:
-        rs = psql(
-            "SELECT src_table, parent, written_by FROM %s WHERE src_table IN (%s)"
-            % (TABLES, ", ".join(lit(c) for c in cands)))
-    except RuntimeError:
-        return False
-    docs = set()
-    for r in rs or []:
-        if not r or not r[0]:
-            continue
-        c = r[0]
-        if str(c).startswith("document_"):
-            docs.add(c)
-        p = (r[1] if len(r) > 1 else "") or ""
-        if p.startswith("document_"):
-            docs.add(p)
-        w = (r[2] if len(r) > 2 else "") or ""
-        if w.startswith("document_"):
-            docs.add(w)
-    for c in cands:
-        if str(c).startswith("document_"):
-            docs.add(c)
-    if not docs:
-        return False
-    try:
-        lifted = psql(
-            "SELECT src_table FROM %s WHERE src_table LIKE "
-            "'accumulationregister_%%' AND written_by IN (%s) LIMIT 1"
-            % (TABLES, ", ".join(lit(d) for d in docs)))
-    except RuntimeError:
-        return False
-    return bool(lifted and lifted[0] and lifted[0][0])
-
-
-def sales_rank_engaged(intent, plan=None, question="", cands=None):
-    """Gate rank×sales: флаг ∧ сильная форма rank ∧ structural lift (§2.1/§9).
-
-    Сильная форма — уже существующие детекторы: фраза рейтинга, sales_sum,
-    max/min или amount без порога. Голый want=list («как у нас дела?») —
-    не включает канон.
-
-    Compare двух окон продаж — не rank: want=list + compare_period давал
-    engaged и уводил меру в rank-resolve ([замер 26.08 okna]).
-    """
-    if not ASK_SALES_RANK_CANON:
-        return False
-    if sales_compare_intent(intent, question):
-        return False
-    if not rank_intent_from(intent, plan, question):
-        return False
-    intent = intent or {}
-    plan = plan or {}
-    amt = intent.get("amount") or {}
-    strong = (
-        sales_sum_intent(intent, question)
-        or rank_question_text(question)
-        or (plan.get("compute") or "") in ("max", "min")
-        or (not amt.get("op") and amt.get("value") is not None)
-    )
-    if not strong:
-        return False
-    return sales_lift_possible(cands)
-
-
 def _sales_rank_top_n(intent, plan, question):
     """K для rank×sales: amount / топ-N в тексте / иначе 1."""
     intent = intent or {}
@@ -204,66 +109,6 @@ def _sales_rank_top_n(intent, plan, question):
         except Exception:
             pass
     return 1
-
-
-def rank_groups_answer_text(agg, measure_label=None, unit="", k=None):
-    """Текст топ-K: «имя»: n · «имя2»: n2 … (скорер name/top-3)."""
-    if not agg or agg.get("grain") != "group":
-        return None
-    gs = [g for g in (agg.get("groups") or []) if isinstance(g, dict)]
-    if not gs:
-        return None
-    try:
-        lim = int(k) if k is not None else len(gs)
-    except (TypeError, ValueError):
-        lim = len(gs)
-    lim = max(1, min(lim, len(gs), ROWS_TO_MODEL))
-    u = (unit or "").strip()
-    suffix = (" " + u) if u and u != UNIT_UNKNOWN else ""
-    parts = []
-    for g in gs[:lim]:
-        nm = (g.get("name") or "").strip()
-        val = g.get("value")
-        if val is None:
-            continue
-        if nm:
-            parts.append("«%s»: %s%s" % (nm, _fmt_human(val), suffix))
-        else:
-            parts.append("%s%s" % (_fmt_human(val), suffix))
-    if not parts:
-        return None
-    if len(parts) == 1:
-        return parts[0]
-    return " · ".join(parts)
-
-
-def sales_canon_intent(intent, question="", cands=None):
-    """Канон продаж: явная sale-лексика или период+lift без catalog/stock/register."""
-    if sales_sum_intent(intent, question):
-        return True
-    intent = intent or {}
-    if not sales_lift_possible(list(cands or [])):
-        return False
-    period = intent.get("period") or {}
-    if not (period.get("from") or period.get("to")):
-        return False
-    if catalog_count_question(intent, question):
-        return False
-    if catalog_kind_total_question(intent, question):
-        return False
-    _ect = globals().get("entity_form_count_target_is_movement")
-    if callable(_ect) and _ect(intent, list(cands or [])):
-        return False
-    _rcs = globals().get("register_count_src")
-    if callable(_rcs) and _rcs(list(cands or []), intent, question):
-        return False
-    _sq = globals().get("stock_question_engaged")
-    if callable(_sq) and _sq(question, intent):
-        return False
-    if rank_intent_from(intent, question=question):
-        return False
-    want = (intent.get("want") or "").strip().lower()
-    return want in ("sum", "count", "")
 
 
 def _fork_headline_doc_measures(names):
@@ -336,15 +181,6 @@ def _zero_period_not_missing(intent, diag, question, act, src=None):
         pr = (intent or {}).get("period") or {}
         return bool(pr.get("from") or pr.get("to"))
     return False
-
-
-def sales_ticket_hatch(trusted):
-    """Явный люк документа: decision_id без from_memory (не sticky/память)."""
-    if not isinstance(trusted, dict) or not trusted.get("src"):
-        return False
-    if trusted.get("from_memory"):
-        return False
-    return bool(choice_proven(trusted, "entity") or trusted.get("ambiguity") == "entity")
 
 
 def sales_noncanon_focus(src):

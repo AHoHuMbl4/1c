@@ -26,6 +26,11 @@ def t(name, cond, detail=""):
         fails.append(name)
         print("FAIL-", name, "|", detail)
 
+# S3/S4 GONE batch
+for _n in ('rank_leader_answer_text', 'rank_leader_atom', 'rank_groups_answer_text'):
+    t("S3/S4 GONE: " + _n, not hasattr(A, _n))
+
+
 
 # ═══ 1. Единица от роли меры (не от answer_money / валюты документа) ═════════
 
@@ -83,18 +88,18 @@ agg_rank = {
     "n_groups": 5,
 }
 
-txt_no_unit = A.rank_leader_answer_text(agg_rank, measure_label="Сумма", unit="")
-t("rank_unit: без единицы — число без суффикса",
-  txt_no_unit is not None and "Товар А" in txt_no_unit
-  and not txt_no_unit.rstrip().endswith(" "), txt_no_unit)
+# S3/S4 DEL: txt_no_unit = A.rank_leader_answer_text(agg_rank, measure_label="Сумма", unit="")
+# S3/S4 DEL-dep: t("rank_unit: без единицы — число без суффикса",
+  # S3/S4 DEL-dep: txt_no_unit is not None and "Товар А" in txt_no_unit
+  # S3/S4 DEL-dep: and not txt_no_unit.rstrip().endswith(" "), txt_no_unit)
 
-txt_with_unit = A.rank_leader_answer_text(agg_rank, measure_label="Сумма", unit="лей")
-t("rank_unit: unit=лей — лей в тексте",
-  txt_with_unit is not None and "лей" in txt_with_unit, txt_with_unit)
+# S3/S4 DEL: txt_with_unit = A.rank_leader_answer_text(agg_rank, measure_label="Сумма", unit="лей")
+# S3/S4 DEL-dep: t("rank_unit: unit=лей — лей в тексте",
+  # S3/S4 DEL-dep: txt_with_unit is not None and "лей" in txt_with_unit, txt_with_unit)
 
-txt_unk_unit = A.rank_leader_answer_text(agg_rank, measure_label="Сумма", unit=A.UNIT_UNKNOWN)
-t("rank_unit: UNIT_UNKNOWN — нет в тексте",
-  txt_unk_unit is not None and "unknown" not in txt_unk_unit, txt_unk_unit)
+# S3/S4 DEL: txt_unk_unit = A.rank_leader_answer_text(agg_rank, measure_label="Сумма", unit=A.UNIT_UNKNOWN)
+# S3/S4 DEL-dep: t("rank_unit: UNIT_UNKNOWN — нет в тексте",
+  # S3/S4 DEL-dep: txt_unk_unit is not None and "unknown" not in txt_unk_unit, txt_unk_unit)
 
 # ═══ 5. env перекрывает ══════════════════════════════════════════════════════
 
@@ -174,25 +179,24 @@ agg_live = {
     "groups": [{"name": "Widget A", "value": 2675.0}],
     "n_groups": 3,
 }
-atom_live = A.rank_leader_atom(agg_live, "Quantity", True)
-t("live: rank_leader_atom qty → unit пусто",
-  atom_live is not None and atom_live.get("unit_or_currency") == "",
-  atom_live.get("unit_or_currency") if atom_live else None)
-t("live: rank_leader_atom qty measure_id сохранился",
-  atom_live is not None and atom_live.get("measure_id") == "Quantity", "")
-pair_live = A.render_atom_pair(atom_live) if atom_live else None
-t("live: render qty — нет «лей»",
-  pair_live is not None and "лей" not in pair_live, pair_live)
+# S3/S4 DEL: atom_live = A.rank_leader_atom(agg_live, "Quantity", True)
+# S3/S4 DEL-dep: t("live: rank_leader_atom qty → unit пусто",
+  # S3/S4 DEL-dep: atom_live is not None and atom_live.get("unit_or_currency") == "",
+  # S3/S4 DEL-dep: atom_live.get("unit_or_currency") if atom_live else None)
+# S3/S4 DEL-dep: t("live: rank_leader_atom qty measure_id сохранился",
+  # S3/S4 DEL-dep: atom_live is not None and atom_live.get("measure_id") == "Quantity", "")
+# S3/S4 DEL-dep: pair_live = A.render_atom_pair(atom_live) if atom_live else None
+# S3/S4 DEL-dep: t("live: render qty — нет «лей»", ...)
 
-atom_money = A.rank_leader_atom(agg_live, "Total", True)
-t("live: rank_leader_atom money → unit лей",
-  atom_money is not None and atom_money.get("unit_or_currency") == "лей",
-  atom_money.get("unit_or_currency") if atom_money else None)
-txt_qty = A.rank_groups_answer_text(
-    agg_live, "Quantity",
-    unit=A._unit_for_measure("Quantity", True, names=_names, alias_by=_als), k=3)
-t("live: rank text qty — имя есть, «лей» нет",
-  txt_qty is not None and "Widget A" in txt_qty and "лей" not in txt_qty, txt_qty)
+# S3/S4 DEL: atom_money = A.rank_leader_atom(agg_live, "Total", True)
+# S3/S4 DEL-dep: t("live: rank_leader_atom money → unit лей",
+  # S3/S4 DEL-dep: atom_money is not None and atom_money.get("unit_or_currency") == "лей",
+  # S3/S4 DEL-dep: atom_money.get("unit_or_currency") if atom_money else None)
+# S3/S4 DEL: txt_qty = A.rank_groups_answer_text(
+    # S3/S4 DEL: agg_live, "Quantity",
+    # S3/S4 DEL: unit=A._unit_for_measure("Quantity", True, names=_names, alias_by=_als), k=3)
+# S3/S4 DEL-dep: t("live: rank text qty — имя есть, «лей» нет",
+  # S3/S4 DEL-dep: txt_qty is not None and "Widget A" in txt_qty and "лей" not in txt_qty, txt_qty)
 A.MONEY_UNIT = saved4
 
 # ═══ grep-замок: «шт» / «руб» / RU-слов для единицы в _unit_for_measure нет ═

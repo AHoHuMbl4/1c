@@ -10,6 +10,13 @@ os.environ.setdefault("EMBED_MODEL", "-")
 
 import serene_ask as A  # noqa: E402
 
+def _reset_decisions_for_tests():
+    with A._DECISION_LOCK:
+        A._DECISIONS.clear()
+        A._CLARIFY_BATCHES.clear()
+        A._RESOLVED_CHOICES.clear()
+
+
 PASS, FAIL = 0, []
 
 
@@ -23,7 +30,7 @@ def t(name, cond, detail=""):
         print("FAIL-", name, ("| " + str(detail)[:160]) if detail else "")
 
 
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 Q = "сколько продали вчера всего?"
 USER = "web:test"
 
@@ -41,7 +48,7 @@ t("want=list → breakdown", A.question_wants_breakdown(intent_top))
 t("sum без amount → не breakdown",
   not A.question_wants_breakdown(intent_sum, {"compute": "sum"}))
 
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 ent_opts = [
     {"src": "document_a", "label": "Док A", "found": 10},
     {"src": "register_b", "label": "Рег B", "found": 5},
@@ -83,7 +90,7 @@ t("после axis measure не потеряна",
 t("choice_levels: entity+measure+axis",
   A.choice_levels_proven(None, resolved3) == {"entity", "measure", "axis"})
 
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 calls = []
 
 def _core_stub(question, focus=None, measure_pick=None, context="", prior=None,
@@ -136,7 +143,7 @@ t("entity_choice_locked по resolved.src",
 t("нулевой кандидат режется, если кто-то жив",
   A.keep_empty_period_opts([REG, FIZ], FOUND, ["doc_date >= 'x'"]) == [REG])
 
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 ent_opts_f = [
     {"src": REG, "label": "Реализация ТМЦ (регистр)", "found": 331},
     {"src": DOC, "label": "Реализация ТМЦ (документ)", "found": 10},

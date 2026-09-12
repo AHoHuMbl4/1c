@@ -38,6 +38,11 @@ def t(name, cond):
         FAIL.append(name)
         print("FAIL-", name)
 
+# S3/S4 GONE batch
+for _n in ('_slot_fp', 'answers_diverge', 'answers_src_conflict'):
+    t("S3/S4 GONE: " + _n, not hasattr(A, _n))
+
+
 
 def battle_figures(src_label, measure, count=19,
                    dmin="2025-07-01", dmax="2025-07-31",
@@ -59,53 +64,53 @@ _book = battle_figures("Книга продаж", "Сумма")
 t("боевая форма: есть count, date_min/date_max и паспорт from/to/label/measure",
   all(k in _doc for k in ("count", "date_min", "date_max",
                           "from", "to", "label", "measure")))
-t("отпечаток боевой формы не None (паспорт больше не ломает типизацию)",
-  A._slot_fp(_doc) is not None and A._slot_fp(_book) is not None)
+# S3/S4 DEL: t("отпечаток боевой формы не None (паспорт больше не ломает типизацию)",
+  # S3/S4 DEL: A._slot_fp(_doc) is not None and A._slot_fp(_book) is not None)
 
 # ── A3 достижим: два разных src, одинаковые числа и квалификаторы ───────────────────
-t("A3 боевой формы: одинаковые числа и квалификаторы, разные src — не расхождение",
-  A.answers_diverge([_doc, _book]) is False)
-t("A3 боевой формы: два src с совпавшим атомом — answers_src_conflict=True",
-  A.answers_src_conflict([
-      {"src": "document_sale", "kind": "answer", "figures": _doc},
-      {"src": "register_book", "kind": "answer", "figures": _book}]) is True)
+# S3/S4 DEL: t("A3 боевой формы: одинаковые числа и квалификаторы, разные src — не расхождение",
+  # S3/S4 DEL: A.answers_diverge([_doc, _book]) is False)
+# S3/S4 DEL: t("A3 боевой формы: два src с совпавшим атомом — answers_src_conflict=True",
+  # S3/S4 DEL: A.answers_src_conflict([
+      # S3/S4 DEL: {"src": "document_sale", "kind": "answer", "figures": _doc},
+      # S3/S4 DEL: {"src": "register_book", "kind": "answer", "figures": _book}]) is True)
 
 # ── Разные квалификаторы — это разные ответы (ветка diverge, не A3) ──────────────────
 _doc_qty = battle_figures("Реализация ТМЦ", "Количество")
-t("разное measure — расхождение (не согласие)",
-  A.answers_diverge([_doc, _doc_qty]) is True)
-t("разное measure — не ветка A3",
-  A.answers_src_conflict([
-      {"src": "document_sale", "kind": "answer", "figures": _doc},
-      {"src": "register_book", "kind": "answer", "figures": _doc_qty}]) is False)
+# S3/S4 DEL: t("разное measure — расхождение (не согласие)",
+  # S3/S4 DEL: A.answers_diverge([_doc, _doc_qty]) is True)
+# S3/S4 DEL: t("разное measure — не ветка A3",
+  # S3/S4 DEL: A.answers_src_conflict([
+      # S3/S4 DEL: {"src": "document_sale", "kind": "answer", "figures": _doc},
+      # S3/S4 DEL: {"src": "register_book", "kind": "answer", "figures": _doc_qty}]) is False)
 _doc_june = battle_figures("Реализация ТМЦ", "Сумма", pf="2025-06-01", pt="2025-06-30")
-t("разный период паспорта — расхождение",
-  A.answers_diverge([_doc, _doc_june]) is True)
-t("разный период паспорта — не ветка A3",
-  A.answers_src_conflict([
-      {"src": "document_sale", "kind": "answer", "figures": _doc},
-      {"src": "register_book", "kind": "answer", "figures": _doc_june}]) is False)
+# S3/S4 DEL: t("разный период паспорта — расхождение",
+  # S3/S4 DEL: A.answers_diverge([_doc, _doc_june]) is True)
+# S3/S4 DEL: t("разный период паспорта — не ветка A3",
+  # S3/S4 DEL: A.answers_src_conflict([
+      # S3/S4 DEL: {"src": "document_sale", "kind": "answer", "figures": _doc},
+      # S3/S4 DEL: {"src": "register_book", "kind": "answer", "figures": _doc_june}]) is False)
 _doc_dates = battle_figures("Реализация ТМЦ", "Сумма",
                             dmin="2025-07-02", dmax="2025-07-30")
-t("разные служебные даты набора — расхождение",
-  A.answers_diverge([_doc, _doc_dates]) is True)
+# S3/S4 DEL: t("разные служебные даты набора — расхождение",
+  # S3/S4 DEL: A.answers_diverge([_doc, _doc_dates]) is True)
 
 # ── label — производная src и в сравнение не входит ──────────────────────────────────
 _same_other_label = battle_figures("Совсем другая метка", "Сумма")
-t("метка источника различна — атом всё равно один (label исключён)",
-  A.answers_diverge([_doc, _same_other_label]) is False)
+# S3/S4 DEL: t("метка источника различна — атом всё равно один (label исключён)",
+  # S3/S4 DEL: A.answers_diverge([_doc, _same_other_label]) is False)
 
 # ── Голые {"count": 19} — прежнее поведение сохранено ───────────────────────────────
-t("голый счёт: 19=19 не расхождение",
-  A.answers_diverge([{"count": 19}, {"count": 19}]) is False)
-t("голый счёт: 19=19 при разных src — A3, как прежде",
-  A.answers_src_conflict([
-      {"src": "a", "kind": "answer", "figures": {"count": 19}},
-      {"src": "b", "kind": "answer", "figures": {"count": 19}}]) is True)
-t("голый счёт: 19 против 20 — расхождение",
-  A.answers_diverge([{"count": 19}, {"count": 20}]) is True)
-t("сравнивать нечем (пустой figures) — расхождение, как прежде",
-  A.answers_diverge([{"count": 19}, {}]) is True)
+# S3/S4 DEL: t("голый счёт: 19=19 не расхождение",
+  # S3/S4 DEL: A.answers_diverge([{"count": 19}, {"count": 19}]) is False)
+# S3/S4 DEL: t("голый счёт: 19=19 при разных src — A3, как прежде",
+  # S3/S4 DEL: A.answers_src_conflict([
+      # S3/S4 DEL: {"src": "a", "kind": "answer", "figures": {"count": 19}},
+      # S3/S4 DEL: {"src": "b", "kind": "answer", "figures": {"count": 19}}]) is True)
+# S3/S4 DEL: t("голый счёт: 19 против 20 — расхождение",
+  # S3/S4 DEL: A.answers_diverge([{"count": 19}, {"count": 20}]) is True)
+# S3/S4 DEL: t("сравнивать нечем (пустой figures) — расхождение, как прежде",
+  # S3/S4 DEL: A.answers_diverge([{"count": 19}, {}]) is True)
 
 print()
 if FAIL:

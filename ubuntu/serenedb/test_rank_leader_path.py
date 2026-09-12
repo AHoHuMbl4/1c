@@ -38,6 +38,11 @@ def t(name, cond, detail=""):
         FAIL.append(name)
         print("FAIL-", name, detail)
 
+# S3/S4 GONE batch
+for _n in ('rank_leader_answer_text', 'rank_leader_atom', 'rank_period_clarify_applies'):
+    t("S3/S4 GONE: " + _n, not hasattr(A, _n))
+
+
 
 # ── compare vs rank (корневая причина 24.08) ─────────────────────────────────
 q_rank = "что лучше всего продавалось на этой неделе?"
@@ -174,17 +179,17 @@ AGG = {
     ],
     "folders": 0, "count_amount": 3,
 }
-txt = A.rank_leader_answer_text(AGG, "Количество", unit="")
-t("leader text содержит имя",
-  txt and "Item-A" in txt and "2" in txt.replace("\u00a0", ""),
-  txt)
-atom = A.rank_leader_atom(AGG, "Количество", money=False, src="accumulationregister_x")
-t("leader atom: measure_label=имя группы",
-  atom and atom.get("measure_label", "").startswith("Item-A"), atom)
-t("leader atom: exact_value=2",
-  atom and float(atom.get("exact_value")) == 2.0, atom)
-t("render_atom_pair несёт имя",
-  "Item-A" in (A.render_atom_pair(atom) or ""), A.render_atom_pair(atom))
+# S3/S4 DEL: txt = A.rank_leader_answer_text(AGG, "Количество", unit="")
+# S3/S4 DEL-dep: t("leader text содержит имя",
+  # S3/S4 DEL-dep: txt and "Item-A" in txt and "2" in txt.replace("\u00a0", ""),
+  # S3/S4 DEL-dep: txt)
+# S3/S4 DEL: atom = A.rank_leader_atom(AGG, "Количество", money=False, src="accumulationregister_x")
+# S3/S4 DEL-dep: t("leader atom: measure_label=имя группы",
+  # S3/S4 DEL-dep: atom and atom.get("measure_label", "").startswith("Item-A"), atom)
+# S3/S4 DEL-dep: t("leader atom: exact_value=2",
+  # S3/S4 DEL-dep: atom and float(atom.get("exact_value")) == 2.0, atom)
+# S3/S4 DEL-dep: t("render_atom_pair несёт имя",
+  # S3/S4 DEL-dep: "Item-A" in (A.render_atom_pair(atom) or ""), A.render_atom_pair(atom))
 
 
 # ── В3: deterministic/gate_fallback снесены (реранк не вердикт) ──────────────
@@ -217,9 +222,9 @@ t("S1: fork_classes_window_only GONE",
   not hasattr(A, "fork_classes_window_only"))
 t("S1: rank_defer_fork_outcome_b GONE",
   not hasattr(A, "rank_defer_fork_outcome_b"))
-# rank_period_clarify_applies может жить в z10 до S4 — не требуем GONE
-t("rank_period_clarify_applies — символ зоны (не fork-файл)",
-  True)
+# S4: rank_period_clarify_applies снесён
+t("S4 GONE: rank_period_clarify_applies",
+  not hasattr(A, "rank_period_clarify_applies"))
 
 
 print("\n%d ok, %d fail" % (PASS, len(FAIL)))

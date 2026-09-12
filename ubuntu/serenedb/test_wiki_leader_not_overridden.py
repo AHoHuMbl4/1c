@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
-"""S1: wiki-лидер на одном пути; fork-gate снесён.
+"""S1+S3: wiki-лидер на одном пути; fork-gate и wiki_leader_alive снесены.
 
-Прежний resolve_fork_wiki_gate / fork_clarify_from_wiki_pool ушли с
-fork-outcomes. Живы: wiki_leader_alive, wiki-каскад в z20, identity-патч.
+Живы: wiki-каскад в z20, identity-патч, homonym-guard (E1).
 """
 from __future__ import annotations
 
@@ -32,11 +31,12 @@ def t(name, cond, detail=""):
         print("FAIL-", name, detail)
 
 
-t("wiki_leader_alive callable", callable(A.wiki_leader_alive))
+t("S3: wiki_leader_alive GONE", not hasattr(A, "wiki_leader_alive"))
 t("S1: fork_clarify_from_wiki_pool GONE",
   not hasattr(A, "fork_clarify_from_wiki_pool"))
 t("S1: resolve_fork_wiki_gate GONE",
   not hasattr(A, "resolve_fork_wiki_gate"))
+t("wiki_homonym_kind_peers жив", callable(getattr(A, "wiki_homonym_kind_peers", None)))
 
 z20 = (ROOT / "ask" / "z20_ask_main_http.py").read_text(encoding="utf-8")
 t("диск: wiki_primary_entity_cascade в z20",
@@ -49,20 +49,6 @@ patched = _patch_z20_wiki_primary(z20)
 t("S1: patch identity", patched == z20)
 t("S1: cascade после identity-патча",
   "wiki_primary_entity_cascade" in patched)
-
-# wiki_leader_alive: yes=1 → True
-diag1 = {
-    "wiki_hybrid_pick": True,
-    "wiki_verify": "document_alpha",
-    "wiki_verify_yes": 1,
-    "wiki_verify_no": 5,
-    "wiki_pool": ["document_alpha", "document_beta"],
-}
-t("wiki_leader_alive: yes=1",
-  A.wiki_leader_alive(diag1, ["document_alpha"]) is True)
-diag_tie = dict(diag1, wiki_verify_yes=2)
-t("wiki_leader_alive: tie yes=2 → False",
-  A.wiki_leader_alive(diag_tie, ["document_alpha"]) is False)
 
 print("PASS", PASS, "FAIL", len(FAIL))
 sys.exit(1 if FAIL else 0)

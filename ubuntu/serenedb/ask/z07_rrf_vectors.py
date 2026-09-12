@@ -246,50 +246,8 @@ def rows_of(src_table, match, preds, limit, measure=None):
            frag, src, " AND ".join(where), order + ", row_key", limit))
 
 
-def signal_terms(src_table, match, top):
-    """Чем ЭТОТ источник отличается от базы в целом — по его совпадениям.
-
-    Штатный рецепт движка (cookbook/search/significant-terms.test): частота терма в
-    подмножестве против ожидаемой по фону. Считаем по полю `refs` — это ссылки на
-    другие объекты, их словарь в шесть раз меньше словаря всей строки (11 744 против
-    71 604 термов) и в пять раз дешевле при том же разделении.
-
-    Зачем: два источника могут иметь ОДИНАКОВОЕ число совпадений по имени контрагента,
-    и выбирать модели не из чего. Отличительные реквизиты дают ей то, чего нет в
-    названии: у реализации это склад и расчёты с покупателями, у поступления на счёт —
-    банк и счёт организации. Это данные из индекса, а не правило в подсказке.
-    """
-    where = " AND ".join([w for w in [match, "src_table @@ %s" % lit(src_table)] if w])
-    try:
-        rs = psql(
-            "WITH bg AS (SELECT unnest(ts_dict_agg(refs)) t, unnest(ts_dict_count(refs)) b"
-            "            FROM %(i)s),"
-            "     fg AS (SELECT unnest(ts_dict_agg(refs)) t, unnest(ts_dict_count(refs)) f"
-            "            FROM %(i)s WHERE %(w)s),"
-            "     n  AS (SELECT (SELECT count(*) FROM %(i)s WHERE %(w)s) ft,"
-            "                   (SELECT count(*) FROM %(i)s) bt)"
-            # Разделитель равенства `fg.t` обязателен по той же причине, что у `_fetch`:
-            # отобранные термы уходят в подсказку модели («typical for these records») и в
-            # варианты уточнения, поэтому ничья на срезе меняла бы ВХОД выбора сущности.
-            # [замер 03.08] на семи соперниках вопроса «сколько всего мы продали» ничьи
-            # нашлись у двух (1 и 2 в первой шестёрке). Терм уникален в `fg` (`ts_dict_agg`
-            # отдаёт словарь), значит порядок полный.
-            " SELECT fg.t FROM fg JOIN bg USING (t) CROSS JOIN n"
-            " ORDER BY fg.f - bg.b * n.ft::DOUBLE / nullif(n.bt,0) DESC, fg.t LIMIT %(k)d"
-            % {"i": INDEX, "w": where, "k": top})
-    except RuntimeError:
-        return []
-    return [r[0] for r in rs if r and r[0]]
-
-
 # B4: тело CLARIFY_SYS/clarify_text снесено (0 callers). Имя CLARIFY_SYS
 # оставлено пустой строкой — legacy OUR_PROMPTS до flip (B6) ещё ссылается на символ.
-CLARIFY_SYS = ""
-
-
-def clarify_text(question, opts):
-    """Мёртвый символ (B4); меню — clarify_say / readings_menu."""
-    return ""
 
 
 # Формулировка нарочно НЕ говорит «данных нет»: этот же отказ уходит и там, где данные
@@ -483,8 +441,6 @@ def _resolve_values_corpus(term):
     return []
 
 
-
-
 def resolve_values(term):
     """Слово человека -> конкретные значения в базе («Питер» -> «Санкт-Петербург»).
 
@@ -550,7 +506,6 @@ def _ngrams(s, n=3):
     if len(s) < n:
         return {s} if s else set()
     return {s[i:i + n] for i in range(len(s) - n + 1)}
-
 
 
 register_zone('ask.z07_rrf_vectors', globals())

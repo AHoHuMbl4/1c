@@ -349,48 +349,7 @@ def period_readings(intent, today=None, period_from_prior=False):
     return readings if readings else [_window_reading(p, origin, "explicit", today)]
 
 
-def render_window_label(period, origin=None, today=None):
-    """Подпись W-ветки: ISO-даты + машинный origin/id формы (план §7).
-
-    Без кириллических литералов — только `_period_day_label` и ascii id формы.
-    """
-    p = period or {}
-    fr, to = p.get("from"), p.get("to")
-    if not fr and not to:
-        o = origin or p.get("origin") or _ORIGIN_NONE
-        return o if o != _ORIGIN_NONE else None
-    dates = _period_day_label(fr, to)
-    fid = p.get("interpretation_id") or _period_form_id(p, today)
-    o = origin or p.get("origin") or _ORIGIN_NONE
-    parts = [dates]
-    if fid and fid not in ("explicit", "none"):
-        parts.append(fid)
-    if o in (_ORIGIN_ASSUMED, _ORIGIN_PRIOR):
-        parts.append(o)
-    return " · ".join(parts)
-
-
 # Лидер оси W по умолчанию: MTD/WTD (с начала периода по сегодня), не полный календарь.
-_WINDOW_LEADER_FORMS = ("mtd", "wtd")
-
-
-def prefer_window_leader(readings, prefer_form=None):
-    """Reading-лидер для основного ответа: mtd/wtd, иначе первое прочтение.
-
-    prefer_form — ticket/словарь (например prev_week); иначе статус-кво §2.3.
-    """
-    readings = list(readings or [])
-    if not readings:
-        return None
-    if prefer_form:
-        for rd in readings:
-            if (rd.get("interpretation_id") or "") == prefer_form:
-                return rd
-    for prefer in _WINDOW_LEADER_FORMS:
-        for rd in readings:
-            if (rd.get("interpretation_id") or "") == prefer:
-                return rd
-    return readings[0]
 
 
 def period_relative_forms():
@@ -576,40 +535,6 @@ def repair_period_from_question(intent, question, today=None, period_from_prior=
     if changed:
         _strip_period_assumed(intent)
     return changed
-
-
-def apply_period_leader(intent, today=None, period_from_prior=False, question=""):
-    """Подключить period_readings к основному ответу (фаза B, план §2/§3).
-
-    Лидер по умолчанию — MTD/WTD; полный месяц/неделя остаются конкурирующим
-    прочтением для детектора. Возвращает список readings (для diag / исходов).
-    """
-    intent = intent if isinstance(intent, dict) else {}
-    repair_period_from_question(
-        intent, question, today, period_from_prior=period_from_prior)
-    prefer_form = None
-    pr0 = intent.get("period") or {}
-    if (pr0.get("interpretation_id") or "") in _WINDOW_FORM_IDS:
-        prefer_form = pr0.get("interpretation_id")
-    # Словарь relative period — для sum и rank; без конкурирующего wtd при лидере prev.
-    if ASK_SALES_RANK_CANON and not prefer_form:
-        prefer_form = period_form_from_question(question)
-        if (pr0.get("interpretation_id") or "") == "prev_week":
-            prefer_form = "prev_week"
-    readings = period_readings(intent, today, period_from_prior=period_from_prior)
-    leader = prefer_window_leader(readings, prefer_form=prefer_form)
-    if leader is None:
-        return readings
-    pr = dict(leader.get("period") or {})
-    if leader.get("origin"):
-        pr["origin"] = leader["origin"]
-    if leader.get("interpretation_id"):
-        pr["interpretation_id"] = leader["interpretation_id"]
-    if pr.get("from") or pr.get("to") or leader.get("interpretation_id") in (
-            "none", "drop_assumed"):
-        intent["period"] = pr
-    return readings
-
 
 
 register_zone('ask.z03_period_windows', globals())

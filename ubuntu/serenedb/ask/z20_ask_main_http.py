@@ -2051,6 +2051,41 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             if _a_menu:
                 шаг("меню прочтений оси", сколько=len(_a_opts))
                 return _a_menu
+    # S2-c: kind-axis count — >1 кандидат → меню оси ДО SQL (не silent rerank).
+    if (src and not grain_dec.get("col")
+            and _want in ("count", "")
+            and not choice_proven(trusted, "axis")
+            and not (resolved or {}).get("axis")):
+        _kax = live_axis_col_candidates(
+            intent, src, axes,
+            named_entity=_wiki_named_entity(diag, src))
+        if len(_kax) > 1:
+            _sub = [a for a in (axes or []) if a.get("col") in set(_kax)]
+            _k_opts = axis_clarify_options(src, _sub)
+            if len(_k_opts) > 1:
+                _k_menu = readings_menu(
+                    question, "axis", _k_opts, diag, cut, t0,
+                    reason="уточните ось")
+                if _k_menu:
+                    шаг("меню kind-оси count", сколько=len(_k_opts))
+                    return _k_menu
+        elif len(_kax) == 1:
+            grain_dec = dict(grain_dec or {})
+            grain_dec["col"] = _kax[0]
+            grain_dec["grain"] = "group"
+            if diag is not None:
+                diag["kind_axis_sole"] = _kax[0]
+    # S2-c: неоднозначная пара регистров stock net — меню ДО SQL.
+    if (src and stock_count_aggregate_without_subject(intent, plan, question)
+            and (measure or _count_defer or grain_dec.get("col"))):
+        _s_opts = stock_net_register_menu_opts(intent, question)
+        if _s_opts and len(_s_opts) > 1:
+            _s_menu = readings_menu(
+                question, "entity", _s_opts, diag, cut, t0,
+                reason="уточните регистр")
+            if _s_menu:
+                шаг("меню регистров stock-net", сколько=len(_s_opts))
+                return _s_menu
     diag["grain"] = grain_dec.get("grain")
     diag["axis_col"] = grain_dec.get("col")
     diag["axis_form"] = grain_dec.get("form")

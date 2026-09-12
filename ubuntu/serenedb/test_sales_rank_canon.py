@@ -38,23 +38,13 @@ for name in ("prefer_entity_for_sales", "sales_canon_force_pool",
     t("gone %s" % name, name not in ask_blob)
     t("no attr %s" % name, not hasattr(A, name))
 
-t("sales_rank_engaged callable", callable(A.sales_rank_engaged))
+t("S3: sales_rank_engaged GONE", not hasattr(A, "sales_rank_engaged"))
 t("sales_sum_intent callable", callable(A.sales_sum_intent))
 t("_sales_rank_top_n жив", callable(getattr(A, "_sales_rank_top_n", None)))
-
-# engaged: compare off
-t("engaged OFF на compare",
-  not A.sales_rank_engaged(
-      {"want": "list", "kind": "продажи"}, {},
-      "эта неделя лучше прошлой или хуже?",
-      ["accumulationregister_реализациятмц"]))
 
 # sum path still classified
 t("sum force_money GONE — sales_sum_intent on",
   A.sales_sum_intent({"want": "sum", "kind": "продажи"}, "сколько продали?"))
-t("flag1: sum не sales_rank_engaged без lift/cands",
-  not A.sales_rank_engaged({"want": "sum", "kind": "продажи"}, {},
-                           "сколько продали?", []))
 
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:

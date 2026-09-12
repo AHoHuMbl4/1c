@@ -17,21 +17,6 @@ def _predicates(intent):
     return period_preds((intent or {}).get("period"))
 
 
-def _fetch(match_sql, preds, order, limit):
-    where = [w for w in ([match_sql] + preds) if w]
-    src = INDEX if match_sql else CORPUS
-    # 🔴 РАЗДЕЛИТЕЛЬ РАВЕНСТВА ОБЯЗАТЕЛЕН. `ORDER BY … LIMIT` без него делает ОТВЕТ
-    # невоспроизводимым: у равных оценок порядок задаётся ходом исполнения, а `LIMIT`
-    # отрезает по этому порядку — в модель уезжают РАЗНЫЕ строки при одном и том же
-    # вопросе и неизменных данных. [замер 30.07] один вопрос пять раз: дважды ответ
-    # «невозможно», трижды верные 73 181 157,68. Это `techContext` ловушка 30, уже
-    # укусившая сборку корпуса; здесь она кусала ответы.
-    return psql(
-        "SELECT row_key, src_table, 0, coalesce(doc_date::date::text,''), "
-        "       %s AS s, doc FROM %s%s ORDER BY s DESC, src_table, row_key LIMIT %d"
-        % (order, src, (" WHERE " + " AND ".join(where)) if where else "", limit))
-
-
 def _like_pattern(alt):
     """Слово вопроса -> образец `ts_like`, где знаки слова остаются знаками.
 
@@ -217,139 +202,6 @@ def match_expr(exprs, preds):
     return with_refs("ts_compound(NULL, NULL, [%s], %d)" % (", ".join(exprs), best)), best
 
 
-def children_by_parent(by, match, preds):
-    """Табличные части сущностей, в которых нашлись совпадения (п. 3, п. 21).
-
-    🔴 ЗАЧЕМ. Бот отвечал по ОДНОЙ сущности и не умел связывать их между собой. Всё, что
-    лежит в табличной части, оказывалось недостижимо: [замер 28.07] на «какие товары мы
-    продали ООО Ромашка» система перечисляла ДОКУМЕНТЫ И СУММЫ, а не товары — ответ
-    выглядел уверенно и отвечал не на тот вопрос, что хуже отказа. Сами товары лежали
-    рядом, в `…_товары`, 76 строк.
-
-    Почему поиск их не находил: имя контрагента стоит в ШАПКЕ, в строках товаров его нет,
-    поэтому по словам вопроса они не совпадают никогда и в кандидаты не попадают.
-
-    Связь берётся СТРУКТУРНО, а не по именам: `parent` посчитан при сборке по составному
-    ключу (`$metadata` объявляет ключ табличной части как ссылка на владельца + номер
-    строки), а ключ строки-потомка начинается с ключа шапки. Отсюда отбор:
-    «строки потомка, чей владелец попал в совпадения». Считает база, одним запросом.
-    """
-    if not by or not match:
-        return {}, {}
-    parents = [t for t in by if by.get(t)]
-    if not parents:
-        return {}, {}
-    try:
-        rs = psql("SELECT src_table, parent FROM %s WHERE parent IN (%s)"
-                  % (TABLES, ", ".join(lit(p) for p in parents)))
-    except RuntimeError:
-        return {}, {}
-    pred_by = {}
-    for r in rs:
-        if not r or not r[0]:
-            continue
-        pred_by[r[0]] = ("split_part(row_key, '|', 1) IN (SELECT row_key FROM %s "
-                         "WHERE src_table = %s AND %s)" % (INDEX, lit(r[1]), match))
-    if not pred_by:
-        return {}, {}
-    # ОДИН запрос на все табличные части, а не по запросу на каждую: число обращений к
-    # базе не должно расти с числом сущностей (п. 20).
-    parts = " UNION ALL ".join(
-        "SELECT %s AS t, count(*) AS n FROM %s WHERE src_table = %s AND %s"
-        % (lit(c), CORPUS, lit(c), pred) for c, pred in pred_by.items())
-    out = {}
-    try:
-        for r in psql(parts):
-            try:
-                if int(r[1]) > 0:
-                    out[r[0]] = int(r[1])
-            except (ValueError, IndexError):
-                continue
-    except RuntimeError:
-        return {}, {}
-    return out, {c: pred_by[c] for c in out}
-
-
-def partial_tables(exprs, preds, best):
-    """Сущности, у которых нашлась ЧАСТЬ понятий вопроса, — с их собственным уровнем.
-
-    🔴 ЗАЧЕМ. `match_expr` выбирает ОДИН порог `k` на всю базу: наибольшее число понятий,
-    при котором хоть где-то есть совпадения. Порог глобальный, а ставит его та сущность,
-    где слова вопроса встретились гуще всего, — обычно это служебный справочник, в котором
-    помянуты все слова сразу. Все, кто нашёл на одно понятие меньше, отсекаются НАЦЕЛО:
-    их не видит ни шаг выбора, ни арбитр, ни человек.
-
-    `[замер 04.08]` на 44 парах приёмки: при выбранном `k` эталонная сущность доходит до
-    кандидатов в 5 случаях (11 %), а при «хотя бы одно понятие» — в 33 (75 %).
-    **28 эталонов из 44 теряет сам порог**, и потеря молчаливая (п. 13): в ответе о ней
-    нет ни слова, в журнале — тоже.
-
-    Поэтому уровень считается ПО КАЖДОЙ СУЩНОСТИ ОТДЕЛЬНО: сколько понятий вопроса нашлось
-    именно у неё. Один запрос на все понятия — число обращений к базе не растёт ни с числом
-    понятий, ни с числом сущностей (п. 20).
-
-    Возвращает ({сущность: уровень}, {сущность: своё условие поиска}) и только для тех,
-    кто НЕ прошёл общий порог: прошедшие уже лежат в `by`, их отбор не меняется ни на знак.
-
-    Число совпадений этим сущностям НЕ приписывается — как и кандидатам от синонимов и
-    смысла. Строки у них есть, но посчитаны они по более мягкому условию, и подавать это
-    тем же полем, которым модель различает кандидатов, значило бы сравнивать несравнимое.
-
-    Своё условие нужно потому, что `match` живёт дальше отбора: по нему считаются итоги
-    выбранной сущности (`aggregate`, `totals_of`, `rows_of`). Сущности, попавшей сюда,
-    общий строгий `match` не отвечает — у неё столько понятий и нет. Приём тот же, что у
-    табличных частей (`kid_pred`): у кандидата своё условие, и оно применяется, когда
-    выбрали именно его.
-    """
-    n = len(exprs or [])
-    if n < 2 or best <= 1:
-        return {}, {}                  # порогу нечего отсекать — и терять нечего
-    # 🔴 УРОВЕНЬ СЧИТАЕТСЯ ПО СТРОКЕ, А НЕ ПО СУЩНОСТИ ЦЕЛИКОМ. Считать «сколько понятий
-    # встретилось где-нибудь у этой сущности» — заманчиво и неверно: понятие А может стоять
-    # в одной строке, Б в другой, и тогда уровень 2 есть, а строки, отвечающей обоим,
-    # нет ни одной. Условие `ts_compound(…, 2)` по такой сущности даёт ПУСТО, и кандидат,
-    # добравшийся до выбора, посчитался бы нулём. Поймано собственным замером 04.08 на
-    # четырёх сущностях (`document_приобретениетоваровуслуг_товары` и др.).
-    # Поэтому спрашиваем базу прямо: при каком наибольшем `k` у сущности ЕСТЬ строка.
-    # Столько же обращений, сколько понятий, и все — одним запросом (п. 20).
-    # 🔴 Спрашиваем и САМ `best`, а не только уровни ниже. Иначе сущность, прошедшая общий
-    # порог, получает здесь уровень `best-1` (строка, отвечающая `best` понятиям, отвечает
-    # и `best-1`), попадает в частичные и уносит с собой СВОЁ, более мягкое условие — а по
-    # нему потом считаются итоги. То есть сущность, честно совпавшая по всем понятиям,
-    # посчиталась бы по ослабленному условию и дала бы завышенное число. Поймано собственным
-    # прибором 04.08: `catalog_новости` — 1 строка по общему условию против 3 по мягкому.
-    parts = []
-    for k in range(best, 0, -1):
-        where = " AND ".join(
-            [with_refs("ts_compound(NULL, NULL, [%s], %d)" % (", ".join(exprs), k))]
-            + [w for w in preds if w])
-        parts.append("SELECT src_table AS t, %d AS k FROM %s WHERE %s GROUP BY 1"
-                     % (k, INDEX, where))
-    if not parts:
-        return {}, {}
-    level = {}
-    try:
-        for r in psql(" UNION ALL ".join(parts)):
-            if not r or not r[0]:
-                continue
-            try:
-                k = int(r[1])
-            except (ValueError, IndexError):
-                continue
-            if k > level.get(r[0], 0):
-                level[r[0]] = k
-    except RuntimeError:
-        return {}, {}                  # отбор без этой подсказки остаётся прежним
-    out, pred_by = {}, {}
-    for t, lvl in level.items():
-        if lvl >= best or lvl < 1:
-            continue                   # прошёл общий порог — он уже в `by`
-        out[t] = lvl
-        pred_by[t] = with_refs("ts_compound(NULL, NULL, [%s], %d)"
-                               % (", ".join(exprs), lvl))
-    return out, pred_by
-
-
 def tables_of(match, preds):
     """Разложить ВСЁ множество совпадений по источникам — группировкой в индексе.
 
@@ -367,25 +219,6 @@ def tables_of(match, preds):
         except (ValueError, IndexError):
             pass
     return out
-
-
-def date_only_kind_filter(by, match, kind_ok):
-    """Пустой match: группировка по дате — не совпадение слов вопроса.
-
-    tables_of('', preds) отдаёт всех, у кого есть строка в окне. В день без
-    продаж это «Курсы валют» вместо вилки реализаций. kind_ok — сущности шага 3.
-    Нет kind_ok — не фильтруем: проверять нечем.
-    Возвращает (kept_by, dropped_srcs).
-    """
-    by = dict(by or {})
-    if match or not by:
-        return by, []
-    if not kind_ok:
-        return by, []
-    ok = set(kind_ok)
-    dropped = [s for s in by if s not in ok]
-    kept = {s: n for s, n in by.items() if s in ok}
-    return kept, dropped
 
 
 def keep_empty_period_opts(srcs, counted, preds):
@@ -543,62 +376,6 @@ def meaning_candidates(exprs, kind_text, question, limit, exclude=(), diag=None)
                 if t not in out:
                     out.append(t)
     return [t for t in out if t not in exclude]
-
-
-def entity_pick_counts_for_model(by, diag, intent=None, question=""):
-    """K6c: подсказка модели — тематическая доля строк, не сырой literal count.
-
-    Literal «matching records» от BM25 отдаёт гиганту-служебнику сотни тысяч
-    совпадений по общим словам; q_meta/q_row из answer_fit_v2 — доля строк с темой
-    вопроса (label/aliases/doc), см. K6_ENTITY_RANK §7.7–7.8.
-    """
-    by = dict(by or {})
-    feats = (diag or {}).get("answer_fit_v2_full") or {}
-    if not by or not feats:
-        return by
-    want = ((intent or {}).get("want") or "").strip().lower()
-    if want not in ("count", "") and not rank_intent_from(intent, question=question):
-        return by
-    out = dict(by)
-    for src, raw in by.items():
-        f = feats.get(src) or {}
-        if not int(f.get("q_meta_overlap") or 0):
-            continue
-        n_ov = int(f.get("q_row_overlap") or 0)
-        if n_ov > 0:
-            out[src] = n_ov
-            continue
-        n_rows = int(f.get("n_rows") or 0)
-        ratio = int(f.get("q_row_ratio") or 0)
-        if ratio > 0 and n_rows > 0:
-            out[src] = max(1, n_rows * ratio // 1000)
-        elif n_rows > 0:
-            out[src] = n_rows
-    return out
-
-
-def entity_matching_records_suffix(src, raw_count, diag=None):
-    """Строка « — N matching records» для pick_entity: q_meta → тема, иначе literal."""
-    if raw_count is None:
-        return ""
-    f = ((diag or {}).get("answer_fit_v2_full") or {}).get(src) or {}
-    if int(f.get("q_meta_overlap") or 0):
-        n_ov = int(f.get("q_row_overlap") or 0)
-        if n_ov > 0:
-            return " — %d matching records" % n_ov
-        n_rows = int(f.get("n_rows") or 0)
-        ratio = int(f.get("q_row_ratio") or 0)
-        if ratio > 0 and n_rows > 0:
-            return " — %d matching records" % max(1, n_rows * ratio // 1000)
-        if n_rows > 0:
-            return " — %d matching records" % n_rows
-    try:
-        n = int(raw_count)
-    except (TypeError, ValueError):
-        return ""
-    if n <= 0:
-        return ""
-    return " — %d matching records" % n
 
 
 register_zone('ask.z06_entity_search', globals())

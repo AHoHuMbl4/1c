@@ -83,82 +83,6 @@ def _live_std_excl_preds(src_table):
     return out
 
 
-def _live_ref_key_col(src_table):
-    """Фактическое имя колонки Ref_Key (регистр из duckdb_columns)."""
-    if not src_table:
-        return None
-    try:
-        r = psql(
-            "SELECT column_name FROM duckdb_columns() "
-            "WHERE table_name = %s AND lower(column_name) = 'ref_key' "
-            "LIMIT 1" % lit(src_table))
-    except RuntimeError:
-        return None
-    if r and r[0] and r[0][0]:
-        return r[0][0]
-    return None
-
-
-def aggregate_live_row_count(src_table):
-    """Живой count(*) строк витрины движения (регистр/документ).
-
-    Доки: Sql › Functions › Utility › query_table.
-    """
-    if not src_table:
-        return None
-    pre = str(src_table).split("_", 1)[0].lower()
-    if pre not in (
-            "accumulationregister", "informationregister",
-            "accountingregister", "document"):
-        return None
-    folder_pred = _live_std_excl_preds(src_table)
-    wsql = (" WHERE " + " AND ".join(folder_pred)) if folder_pred else ""
-    try:
-        r = psql(
-            "SELECT count(*) FROM query_table(%s)%s"
-            % (lit(src_table), wsql))
-    except RuntimeError:
-        return None
-    if not r or not r[0] or r[0][0] is None or r[0][0] == "":
-        return None
-    try:
-        return int(_num(r[0][0]))
-    except (TypeError, ValueError):
-        return None
-
-
-def aggregate_live_header_count(src_table):
-    """Живой счёт строк каталога (grain=header при наличии Ref_Key) с исключениями 1С.
-
-    Условие применимости — класс catalog + колонка ref_key (header). Счёт —
-    count(*) витрины с isfolder/deletionmark (guarded), не корпусные counts
-    детектора и не DISTINCT: [замер :8092] корпус 365, DISTINCT+excl 352,
-    count(*)+excl 363 = SQL-эталон. Доки: Sql › Functions › Utility › query_table;
-    Cookbook › Meta › duckdb_columns.
-    """
-    if not src_table:
-        return None
-    pre = str(src_table).split("_", 1)[0].lower()
-    if pre != "catalog":
-        return None
-    if not _live_ref_key_col(src_table):
-        return None
-    folder_pred = _live_std_excl_preds(src_table)
-    wsql = (" WHERE " + " AND ".join(folder_pred)) if folder_pred else ""
-    try:
-        r = psql(
-            "SELECT count(*) FROM query_table(%s)%s"
-            % (lit(src_table), wsql))
-    except RuntimeError:
-        return None
-    if not r or not r[0] or r[0][0] is None or r[0][0] == "":
-        return None
-    try:
-        return int(_num(r[0][0]))
-    except (TypeError, ValueError):
-        return None
-
-
 def aggregate_live_column(src_table, preds, measure):
     """Итог по колонке витрины через query_table, когда nums корпуса пуст.
 
@@ -354,7 +278,6 @@ def aggregate(src_table, match, preds, measure=None):
     return out
 
 
-
 def src_is_child(src_table):
     """Табличная часть: у источника заполнен parent. Не имя, а контракт сборки."""
     if not src_table:
@@ -381,44 +304,6 @@ def refcols_of(src_table):
     for r in rs or []:
         if r and r[0]:
             out.append({"col": r[0], "target_src": (r[1] or "") if len(r) > 1 else ""})
-    return out
-
-
-def holders_of_target(target_src):
-    """Держатели оси: src_table из search_refcols, где target_src = этот каталог."""
-    if not target_src:
-        return []
-    try:
-        rs = psql("SELECT src_table, col FROM search_refcols "
-                  "WHERE target_src = %s AND src_table IS NOT NULL AND src_table <> '' "
-                  "AND src_table <> %s AND col IS NOT NULL AND col <> '' "
-                  "ORDER BY src_table, col"
-                  % (lit(target_src), lit(target_src)))
-    except RuntimeError:
-        return []
-    out, seen = [], set()
-    for r in rs or []:
-        if r and r[0] and r[1] and r[0] not in seen:
-            seen.add(r[0])
-            out.append({"src": r[0], "col": r[1]})
-    return out
-
-
-def measures_of_many(srcs):
-    """Ключи nums по нескольким источникам — один запрос."""
-    if not srcs:
-        return {}
-    try:
-        rs = psql(
-            "SELECT src_table, u.k FROM %s, unnest(map_keys(nums)) AS u(k) "
-            "WHERE nums IS NOT NULL AND src_table IN (%s) GROUP BY 1, 2"
-            % (CORPUS, ", ".join(lit(s) for s in srcs)))
-    except RuntimeError:
-        return {}
-    out = {}
-    for r in rs or []:
-        if r and r[0] and len(r) > 1 and r[1]:
-            out.setdefault(r[0], []).append(r[1])
     return out
 
 
@@ -492,35 +377,6 @@ def kind_axis_rerank(axes, kind_text):
     return [cols[order[0]]]
 
 
-def term_ref_owners(groups):
-    """Для каждой группы terms — owner'ы search_refmap, чьё имя совпало."""
-    groups = list(groups or [])
-    parts = []
-    for gi, g in enumerate(groups):
-        for alt in (g or []):
-            if alt:
-                parts.append("SELECT %d AS gi, %s AS alt" % (gi, lit(str(alt))))
-    if not parts:
-        return {}
-    try:
-        rs = psql(
-            "WITH q AS (%s) "
-            "SELECT DISTINCT q.gi, m.owner FROM q "
-            "JOIN search_refmap m ON m.owner IS NOT NULL AND m.owner <> '' "
-            " AND (lower(m.name) = lower(q.alt) "
-            "      OR (length(q.alt) >= 3 AND lower(m.name) LIKE '%%' || lower(q.alt) || '%%') "
-            "      OR list_has_any(list_filter(ts_lexize(%s, m.name), x -> length(x) >= 3),"
-            "                      list_filter(ts_lexize(%s, q.alt), x -> length(x) >= 3)))"
-            % (" UNION ALL ".join(parts), lit(STEM_DICT), lit(STEM_DICT)))
-    except RuntimeError:
-        return {}
-    out = {}
-    for r in rs or []:
-        if r and r[1]:
-            out.setdefault(int(r[0]), []).append(r[1])
-    return out
-
-
 def term_axis_hits(src_table, axes, groups):
     """Какие группы terms попали в какие оси выбранного источника."""
     groups = list(groups or [])
@@ -561,7 +417,6 @@ def term_axis_hits(src_table, axes, groups):
         if r and r[1]:
             out.setdefault(int(r[0]), []).append(r[1])
     return out
-
 
 
 def _group_leader(agg):
@@ -692,7 +547,6 @@ def aggregate_groups(src_table, match, preds, measure, col, k, compute=None,
             "scope": {"src": src, "where": " AND ".join(where),
                       "folder_pred": folder_pred, "group_col": col},
             "folders": 0}
-
 
 
 register_zone('ask.z17_aggregate_groups', globals())

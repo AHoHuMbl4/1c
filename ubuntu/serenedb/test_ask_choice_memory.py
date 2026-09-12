@@ -26,6 +26,13 @@ os.environ.setdefault("ASK_CHOICE_MEMORY", "1")
 import ask_choice_mem as ACM  # noqa: E402
 import serene_ask as A  # noqa: E402
 
+def _reset_decisions_for_tests():
+    with A._DECISION_LOCK:
+        A._DECISIONS.clear()
+        A._CLARIFY_BATCHES.clear()
+        A._RESOLVED_CHOICES.clear()
+
+
 PASS, FAIL = 0, []
 
 
@@ -159,7 +166,7 @@ def _upsert_hook(store):
 
 # ── клик не пишет ────────────────────────────────────────────────────────────
 st = Store()
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 A.ASK_CHOICE_MEMORY = True
 opts = [
     {"src": "document_a", "label": "Отгрузки", "found": 10},
@@ -280,7 +287,7 @@ finally:
 
 
 # ── peek used ticket ─────────────────────────────────────────────────────────
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 sealed2 = A.seal_clarify(
     {"kind": "clarify", "text": "?", "options": opts, "diag": {}},
     "q", user="u1")
@@ -349,7 +356,7 @@ if os.environ.get("PGPASSWORD") and _engine_alive(RW):
     A.DSN = RO
     A.PGPASSWORD = os.environ.get("PGPASSWORD", "")
     A.ASK_CHOICE_MEMORY = True
-    A.reset_decisions_for_tests()
+    _reset_decisions_for_tests()
     live_opts = [
         {"src": "document_приобретениетоваровуслуг", "label": "Документ"},
         {"src": "accumulationregister_закупки", "label": "Регистр"},

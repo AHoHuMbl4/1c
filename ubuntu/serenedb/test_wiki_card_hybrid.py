@@ -36,6 +36,12 @@ def t(name: str, cond: bool, detail: str = "") -> None:
         FAIL.append(name)
         print("FAIL-", name, ("| " + str(detail)[:240]) if detail else "")
 
+# S3/S4 GONE batch
+_ask_blob = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT/"ask").glob("z*.py"))
+for _n in ('register_count_src', 'stock_canon_src'):
+    t("S3/S4 GONE: " + _n, ("def " + _n) not in _ask_blob)
+
+
 
 def strip_sql_comments(text: str) -> str:
     return re.sub(r"--[^\n]*", "", text)

@@ -155,34 +155,6 @@ def currency_axis_open():
                 and currency_rate_map_rows())
 
 
-def currency_amount_basis_prefer(intent=None, trusted=None):
-    """Лидер amount-basis: ticket/intent/словарь, иначе doc_amount (§2.4)."""
-    if isinstance(trusted, dict):
-        ab = (trusted.get("amount_basis") or "").strip()
-        if ab in _AMOUNT_BASIS_IDS:
-            return ab
-        for k in ("amount_basis", "currency_basis", "src", "label"):
-            v = str(trusted.get(k) or "").strip()
-            if v in _AMOUNT_BASIS_IDS:
-                return v
-            if v == "accounting":
-                return _AMOUNT_BASIS_ACCOUNTING
-            if v == "doc":
-                return _AMOUNT_BASIS_DOC
-    intent = intent or {}
-    ab = str(intent.get("amount_basis") or "").strip()
-    if ab in _AMOUNT_BASIS_IDS:
-        return ab
-    pr = intent.get("period") or {}
-    ab = str(pr.get("amount_basis") or "").strip()
-    if ab in _AMOUNT_BASIS_IDS:
-        return ab
-    hit = currency_basis_from_labels(intent)
-    if hit in _AMOUNT_BASIS_IDS:
-        return hit
-    return _AMOUNT_BASIS_LEADER_DEFAULT
-
-
 def currency_basis_from_labels(intent=None):
     """Подпись словаря currency_basis=doc|accounting из search_fork_label."""
     intent = intent or {}
@@ -268,19 +240,6 @@ def expand_readings_currency_axis(readings, prefer=None, rel_by_src=None,
         else:
             out.append(rd)
     return out
-
-
-def prefer_amount_basis_leader(readings, prefer=None):
-    readings = list(readings or [])
-    if not readings:
-        return None
-    prefer = prefer if prefer in _AMOUNT_BASIS_IDS else _AMOUNT_BASIS_LEADER_DEFAULT
-    for rd in readings:
-        ab = (rd.get("amount_basis")
-              or (rd.get("period") or {}).get("amount_basis") or "").strip()
-        if ab == prefer:
-            return rd
-    return readings[0]
 
 
 def _currency_period_where(map_row, preds):
@@ -391,38 +350,6 @@ def currency_fx_probe(src, preds):
         "n_fx": n_fx,
         "has_fx": (n_fx > 0 or round(doc_a, 2) != round(acct_a, 2)),
     }
-
-
-def currency_sum_for_basis(src, preds, amount_basis):
-    """Сумма по ветке amount-basis — один SQL §1.3."""
-    probe = currency_fx_probe(src, preds)
-    if not probe:
-        return None
-    if amount_basis == _AMOUNT_BASIS_ACCOUNTING:
-        return probe.get("accounting_amount")
-    return probe.get("doc_amount")
-
-
-def currency_patch_fork_scan(scan, preds, rel_by_src, period):
-    """Подмена sums в fork_scan для amount-basis reading."""
-    ab = (period or {}).get("amount_basis") or ""
-    if ab not in _AMOUNT_BASIS_IDS or not scan:
-        return scan
-    for src, row in list(scan.items()):
-        if src not in (rel_by_src or {}):
-            continue
-        if not currency_map_for_src(src):
-            continue
-        rel = rel_by_src.get(src) or []
-        new_sums = dict(row.get("sums") or {})
-        val = currency_sum_for_basis(src, preds, ab)
-        if val is not None:
-            for m in rel or list(new_sums.keys()):
-                if round(val, 2) != 0.0:
-                    new_sums[m] = val
-        row["sums"] = new_sums
-        scan[src] = row
-    return scan
 
 
 def currency_unit_for_ref(ref_key):
@@ -552,16 +479,6 @@ def currency_mismatch_blocks_answer(intent, question, src, trusted=None):
                  _AMOUNT_BASIS_ACCOUNTING) or _AMOUNT_BASIS_ACCOUNTING},
         ],
     }
-
-
-def _class_amount_basis(it):
-    """amount_basis класса — из period/atom."""
-    p = (it or {}).get("period") or {}
-    if not p.get("amount_basis"):
-        p = ((it or {}).get("atom") or {}).get("period") or {}
-    return (p.get("amount_basis")
-            or ((it or {}).get("atom") or {}).get("amount_basis")
-            or (it or {}).get("amount_basis") or "").strip()
 
 
 register_zone('ask.z04b_currency_axis', globals())

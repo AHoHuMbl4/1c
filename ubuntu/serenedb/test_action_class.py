@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S1: action_class / fork_classes снесены; щели и intent живы."""
+"""S1+S3: action_class / fork_classes / event_duel снесены; щели и intent живы."""
 from __future__ import annotations
 
 import os
@@ -28,10 +28,8 @@ def t(name, cond, detail=""):
 
 
 for name in ("fork_classes", "fork_classes_windowed", "fork_detector_scan",
-             "resolve_fork_outcome"):
-    t("S1 GONE: " + name, not hasattr(A, name))
-# event_duel_applies может жить в z05 до S3
-t("event_duel_applies — смешанная зона (не S1)", True)
+             "resolve_fork_outcome", "event_duel_applies"):
+    t("S1/S3 GONE: " + name, not hasattr(A, name))
 
 t("parse_intent callable", callable(A.parse_intent))
 t("pair_slots_only", A.pair_slots_only(2) is True)

@@ -42,6 +42,11 @@ def t(name, cond):
         FAIL.append(name)
         print("FAIL-", name)
 
+# S3/S4 GONE batch
+for _n in ('_ask_back', 'answers_diverge'):
+    t("S3/S4 GONE: " + _n, not hasattr(A, _n))
+
+
 
 NBSP = " "
 
@@ -82,10 +87,10 @@ t("оборванный ответ модели не отдаёт клиенту
 # B4: ask_back снесён (ANSWER_SYS без ask) — негатив: уточнение НЕ достаётся.
 _raw_ask = ('{"text": "Итого на {total} руб.", '
             '"ask": "Вас интересуют закупки или продажи?", "claims": {}}')
-t("уточнение НЕ достаётся из обёртки (ask_back снесён)",
-  A._ask_back(_raw_ask) in ("", None))
-t("уточнения нет — пусто, а не мусор",
-  A._ask_back('{"text": "…", "ask": null, "claims": {}}') == "")
+# S3/S4 DEL: t("уточнение НЕ достаётся из обёртки (ask_back снесён)",
+  # S3/S4 DEL: A._ask_back(_raw_ask) in ("", None))
+# S3/S4 DEL: t("уточнения нет — пусто, а не мусор",
+  # S3/S4 DEL: A._ask_back('{"text": "…", "ask": null, "claims": {}}') == "")
 _txt_no_ask = A._split_answer(_raw_ask)[0]
 t("текст ответа без вопросительного уточнения из ask",
   "?" not in (_txt_no_ask or "")
@@ -248,10 +253,10 @@ t("A2 count без величины: нет {total}/{max}/{avg} и нет {total
   and "{total" not in SENT["body"]
   and "{max}" not in SENT["body"]
   and "{avg}" not in SENT["body"])
-t("A2 count: отпечатки 19=19 при 112k vs 28k — не расхождение",
-  not A.answers_diverge([
-      A.compose_slot_values(dict(AGG, count=19, sum=112325.97), measure=None),
-      A.compose_slot_values(dict(AGG, count=19, sum=28356.37), measure=None)]))
+# S3/S4 DEL: t("A2 count: отпечатки 19=19 при 112k vs 28k — не расхождение",
+  # S3/S4 DEL: not A.answers_diverge([
+      # S3/S4 DEL: A.compose_slot_values(dict(AGG, count=19, sum=112325.97), measure=None),
+      # S3/S4 DEL: A.compose_slot_values(dict(AGG, count=19, sum=28356.37), measure=None)]))
 txt_nomoney, bad_nomoney = A._fill_figures(
     "19 продаж на {total:Штуки}.", dict(AGG, count=19, sum=28356.37), [],
     has_measure=False)
@@ -260,10 +265,10 @@ t("A2 count: без totals_shown число поля в текст не вста
 A.compose("покажи продажи", ROWS, AGG, totals=TOTALS, money=False)
 t("A2 list без величины: {total:ИМЯ} модели не показывается",
   "{total" not in SENT["body"] and "{count}" in SENT["body"])
-t("A1 деньги в compose: величина выбрана — 112k vs 28k это расхождение",
-  A.answers_diverge([
-      A.compose_slot_values(dict(AGG, count=19, sum=112325.97), measure="Всего"),
-      A.compose_slot_values(dict(AGG, count=19, sum=28356.37), measure="Всего")]))
+# S3/S4 DEL: t("A1 деньги в compose: величина выбрана — 112k vs 28k это расхождение",
+  # S3/S4 DEL: A.answers_diverge([
+      # S3/S4 DEL: A.compose_slot_values(dict(AGG, count=19, sum=112325.97), measure="Всего"),
+      # S3/S4 DEL: A.compose_slot_values(dict(AGG, count=19, sum=28356.37), measure="Всего")]))
 
 # Живой разбор «сколько … всего»: want=count, compute=sum, поле уже есть.
 _agg_cnt = dict(AGG, count=19, sum=28356.37, measure="Всего")

@@ -38,6 +38,11 @@ def t(name, cond):
         FAIL.append(name)
         print("FAIL-", name)
 
+# S3/S4 GONE batch
+for _n in ('children_by_parent',):
+    t("S3/S4 GONE: " + _n, not hasattr(A, _n))
+
+
 
 class Base:
     """Подставная база: помнит запросы и отвечает по правилу.
@@ -229,25 +234,8 @@ t("разложение: без слов остаются условия и ко
 t("разложение: без слов и без условий берётся всё (WHERE TRUE)",
   "WHERE TRUE" in with_base(rows([]), lambda: A.tables_of("", []))[1][0])
 
-# ------------------------------------------------------- табличные части найденных шапок
-def kids_rule(sql):
-    if sql.startswith("SELECT src_table, parent FROM"):
-        return [["document_продажа_товары", "document_продажа"]]
-    return [["document_продажа_товары", "76"]]
-
-
-(kids, pred), sql = with_base(
-    kids_rule, lambda: A.children_by_parent({"document_продажа": 6},
-                                            "doc @@ ts_phrase('Ромашка')", []))
-t("табличные части: строки найденной шапки попадают в кандидаты",
-  kids == {"document_продажа_товары": 76})
-t("табличные части: связь берётся структурно — по владельцу строки",
-  "split_part(row_key, '|', 1)" in pred["document_продажа_товары"])
-t("цена: один запрос на ВСЕ табличные части, а не по запросу на каждую", len(sql) == 2)
-(kids, pred), sql = with_base(kids_rule,
-                              lambda: A.children_by_parent({}, "doc @@ х", []))
-t("табличные части: без найденных шапок к базе не ходим вовсе",
-  kids == {} and sql == [])
+# ------------------------------------------------------- табличные части: S4 children_by_parent снесён
+t("S4 GONE: children_by_parent", not hasattr(A, "children_by_parent"))
 
 print("\n%d ok, %d FAIL" % (PASS, len(FAIL)))
 for f in FAIL:

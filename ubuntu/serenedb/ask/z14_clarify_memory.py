@@ -58,25 +58,13 @@ def measure_choice(names, word, alias_by=None):
         if len(covered) == 1:
             return (covered[0], [], 'alias')
         if len(covered) > 1:
-            base_of = [n for n in covered
-                       if sum(1 for m in covered if m != n and m.startswith(n))
-                       >= len(covered) - 1]
-            if len(base_of) == 1 and base_of[0].lower() != wl:
-                return (base_of[0], [], 'base')
+            # S2-c: >1 после фильтра → меню (silent «base» снят).
             return (None, covered, 'ask')
     same = sorted(n for n in names if wl in n.lower())
     if len(same) > 1:
-        # Базовая величина снимает неоднозначность, если её частные виды — её же префиксы
-        # (правило ниже): тогда спрашивать не о чем. Иначе — спрашиваем.
-        base_of = [n for n in same
-                   if sum(1 for m in same if m != n and m.startswith(n)) >= len(same) - 1]
-        if len(base_of) == 1 and base_of[0].lower() != wl:
-            return (base_of[0], [], 'base')
-        # Раз уж спрашиваем человека — показываются ВСЕ величины сущности, совпавшие
-        # со словом — первыми. Подстрока слепа к именованию базы: живой диалог okna
-        # 14.08 — на «сумму продаж» совпали только СуммаНДС и СуммаОплатыКарточкой,
-        # человек выбрал из двух неверных, а общий итог в этой базе зовётся «Всего»
-        # и в варианты не попал вовсе. Список короткий и приходит из данных.
+        # S2-c: >1 подстрок → ask; silent base-префикс убран.
+        # Совпавшие со словом — первыми; остальные величины сущности тоже в меню
+        # (подстрока слепа к именованию базы).
         return (None, same + [n for n in names if n not in same], 'ask')
     if len(same) == 1:
         return (same[0], [], 'substring')
@@ -139,17 +127,6 @@ def resolve_measure(text, measures, alias_by=None, diag=None):
     return None
 
 
-def slot_measure_uncovered(word, selected, names, alias_by=None):
-    """Вопрос назвал величину, выбранное поле её не покрывает, другое из names — покрывает."""
-    if not word or not selected or not names:
-        return False, []
-    got, alts, how = measure_choice(names, word, alias_by=alias_by)
-    covering = list(alts) if how == "ask" else ([got] if got else [])
-    if covering and selected not in covering:
-        return True, covering
-    return False, []
-
-
 # 🔴 ОТПЕЧАТОК ТИПИЗИРОВАН (15.08, аудит §5.2). Боевая форма `figures` — это
 # `compose_slot_values` ПЛЮС паспорт набора (`from`/`to`/`label`/`measure`,
 # `build_answer_passport`). Прежний отпечаток приводил к числу всё, что не `date*`,
@@ -160,88 +137,11 @@ def slot_measure_uncovered(word, selected, names, alias_by=None):
 # источника, производная `src`, и по ней совпавшие по числам прочтения различались бы
 # всегда. Нечисловое значение в непаспортном слоте сравнивается строкой: `None` от
 # паспорта больше не возникает, а разное по-прежнему даёт расхождение.
-_FP_SKIP = {"in_1c", "in_search", "missing", "_totals", "label"}
-_FP_STR = {"from", "to", "measure"}            # квалификаторы паспорта — строки
-
-
-def _slot_fp(f):
-    """Отпечаток плейсхолдеров одного кандидата. Покрытие и метка не входят."""
-    if not isinstance(f, dict):
-        return None
-    fp = []
-    for k in sorted(f):
-        if k in _FP_SKIP or str(k).startswith("_"):
-            continue
-        v = f.get(k)
-        if v is None or (isinstance(v, str) and not str(v).strip()):
-            continue
-        if str(k).startswith("date") or k in _FP_STR:
-            fp.append((k, str(v)))
-            continue
-        try:
-            fp.append((k, round(float(v), 2)))
-        except (TypeError, ValueError):
-            fp.append((k, str(v)))
-    return tuple(fp)
-
-
-def answers_diverge(figures):
-    """Сошлись ли ПОСЧИТАННЫЕ ответы кандидатов на одном числе (задача 17).
-
-    Сравнивается отпечаток плейсхолдеров compose, не заранее названное поле. Порога нет.
-    Совпали — выбирать не из чего. Сравнить нечем — расхождение, не согласие.
-    """
-    if len(figures) < 2:
-        return False
-
-    # Контракт: для суммовых вопросов важна финальная цифра, а не служебные
-    # поля (например `count_amount`). Разные src могут по-разному заполнять
-    # вспомогательные слоты при совпавшем итоговом числе — тогда арбитраж
-    # ошибочно уходил в `clarify`.
-    if isinstance(figures[0], dict) and figures[0].get("sum") is not None:
-        try:
-            sums = []
-            for f in figures:
-                if not isinstance(f, dict):
-                    return True
-                v = _intent_number(f.get("sum"))
-                if v is None:
-                    return True
-                sums.append(round(float(v), 2))
-            return len(set(sums)) > 1
-        except Exception:  # noqa: BLE001
-            pass
-
-    fps = []
-    for f in figures:
-        fp = _slot_fp(f)
-        if not fp:
-            return True
-        fps.append(fp)
-    return len(set(fps)) > 1
-
-def answers_src_conflict(cands):
-    """Разные src при совпавшем отпечатке — не согласие (A3).
-
-    Список из двух и больше `{src, kind, figures}`. Отпечаток — тот же
-    `answers_diverge` по `figures` (слоты compose, не голое count).
-    True = спрашивать. Один src, меньше двух `answer`, или отпечатки
-    разошлись — False (расхождение чисел — ветка `answers_diverge`).
-    Соперника в круг не заводит: смотрит тех, кто уже дал `kind=answer`.
-    """
-    ans = [c for c in (cands or [])
-           if (c.get("kind") == "answer") and c.get("src")]
-    if len(ans) < 2:
-        return False
-    if answers_diverge([c.get("figures") or {} for c in ans]):
-        return False
-    return len({c["src"] for c in ans}) > 1
 
 
 # ----------------------------------------------------------------- decision_id
 # Одноразовый билет выбора (план §6, аудит §10). Хранение — в процессе сервиса:
 # рестарт → старые билеты неизвестны. Сырой focus больше не доказывает выбор.
-RAW_FOCUS_TRUST = os.environ.get("ASK_RAW_FOCUS_TRUST", "0") == "1"
 DECISION_TTL_SEC = int(os.environ.get("ASK_DECISION_TTL_SEC", "3600"))
 _DECISION_LOCK = threading.Lock()
 _DECISIONS = {}  # id -> ticket
@@ -562,14 +462,6 @@ def reissue_clarify(batch, err=None):
     return out
 
 
-def reset_decisions_for_tests():
-    """Только оффлайн-пробы: очистить хранилище билетов."""
-    with _DECISION_LOCK:
-        _DECISIONS.clear()
-        _CLARIFY_BATCHES.clear()
-        _RESOLVED_CHOICES.clear()
-
-
 def attach_memory_shadow(out, user=None, action=None, decision_id=None):
     """Shadow-память: diag.memory, ответ не меняет. Ошибка не роняет ответ."""
     global _MEMORY_LOST
@@ -659,22 +551,6 @@ def hold_settled_entity(focus, trusted=None, resolved=None, found_by=None,
     if settled_n > 0 and new_n == 0:
         return settled
     return focus
-
-
-def guards_skip_for_choice(focus=None, measure_pick=None, trusted=None):
-    """Защиты гасит только доказанный билет или аварийный ASK_RAW_FOCUS_TRUST.
-
-    Сырой focus/measure сами по себе сюда не проходят (аудит §10).
-    """
-    if isinstance(trusted, dict) and trusted.get("from_memory"):
-        return True
-    if choice_proven(trusted, "entity") or choice_proven(trusted, "measure") \
-            or choice_proven(trusted, "axis"):
-        return True
-    if RAW_FOCUS_TRUST and (focus or measure_pick):
-        return True
-    return False
-
 
 
 register_zone('ask.z14_clarify_memory', globals())

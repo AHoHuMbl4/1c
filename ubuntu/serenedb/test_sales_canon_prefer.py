@@ -53,7 +53,7 @@ for name in ("prefer_entity_for_sales", "prefer_entity_for_rank",
     t("z20 no call %s" % name, name not in z20)
 
 t("sales_sum_intent жив", callable(getattr(A, "sales_sum_intent", None)))
-t("sales_rank_engaged жив", callable(getattr(A, "sales_rank_engaged", None)))
+t("S3: sales_rank_engaged GONE", not hasattr(A, "sales_rank_engaged"))
 t("sales_noncanon_focus жив", callable(getattr(A, "sales_noncanon_focus", None)))
 t("sales intent продали", A.sales_sum_intent({"want": "sum", "kind": "продажи"},
                                               "сколько продали сегодня?"))

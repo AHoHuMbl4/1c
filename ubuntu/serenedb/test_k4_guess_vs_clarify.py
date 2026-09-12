@@ -139,27 +139,16 @@ finally:
     if _old_als is not None:
         A.measure_aliases_of = _old_als
 
-# ── Патч C: stock markers + subject ──────────────────────────────────────────
+# ── Патч C / S3: stock markers + subject снесены ─────────────────────────────
 q12 = "Сколько лежит на всех складах вместе?"
-# До патча C маркеры не ловят «лежит/складах» — это дефект №12.
-if A.question_asks_stock_balance(q12):
-    t("S1 stock marker ловит №12", True)
-else:
-    pending("S1 stock marker ловит №12 (сейчас False — дефект)")
-
+t("S3: question_asks_stock_balance GONE", not hasattr(A, "question_asks_stock_balance"))
+t("S3: stock_subject_needs_clarify GONE", not hasattr(A, "stock_subject_needs_clarify"))
 t("S2 №12 без named product",
   not A.stock_asks_named_product(q12, intent={"want": "sum", "kind": "склад",
                                                "terms": [], "measure": ""}))
-
-# Склад-clarify ДО вики снесён: subject не спрашивается pre-wiki
 t("P0b: до wiki_primary в новом z20 нет warehouse/stock_subject clarify",
   "warehouse_clarify(" not in _pre_wiki
   and "stock_subject_needs_clarify(" not in _pre_wiki)
-if hasattr(A, "stock_subject_needs_clarify"):
-    t("S3 stock∧¬named → НЕ subject clarify до вики (снесён)",
-      not A.stock_subject_needs_clarify(q12, {"want": "sum", "terms": []}))
-else:
-    pending("S3 stock_subject_needs_clarify (патч C)")
 
 print("----")
 print("%d ok, %d FAIL, %d pending" % (PASS, len(FAIL), len(PENDING)))

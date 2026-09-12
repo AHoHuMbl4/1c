@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""S1: warehouse_clarify / legacy axis menu снесены; intent_axis_words жив."""
+"""S1+S3: warehouse_clarify / warehouse_axis_values снесены; readings_menu жив."""
 from __future__ import annotations
 
 import os
@@ -28,8 +28,7 @@ def t(name, cond, detail=""):
 
 
 t("S1: warehouse_clarify GONE", not hasattr(A, "warehouse_clarify"))
-t("S1: warehouse_axis_values GONE or live mixed",
-  True)  # mixed zone — S3
+t("S3: warehouse_axis_values GONE", not hasattr(A, "warehouse_axis_values"))
 t("readings_menu жив", callable(getattr(A, "readings_menu", None)))
 z20 = (ROOT / "ask" / "z20_ask_main_http.py").read_text(encoding="utf-8")
 t("z20 без warehouse_clarify call", "warehouse_clarify(" not in z20)

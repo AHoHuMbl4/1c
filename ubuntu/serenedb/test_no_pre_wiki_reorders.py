@@ -114,10 +114,14 @@ t("мерное меню: settle/captions без entity-locked люка",
   and "_settle_measure" in z20
   and "measure_captions(" in z20)
 
-# doubt при wiki-лидере: на одном пути fork-doubt снесён; wiki_leader_alive жив
-t("doubt-гейт: wiki_leader_alive жив, fork-doubt снесён",
-  "wiki_leader_alive" in (ASK / "z21_wiki_choice.py").read_text(encoding="utf-8")
+# doubt при wiki-лидере: fork-doubt снесён; wiki_leader_alive ушёл в S3
+t("doubt-гейт: wiki_leader_alive GONE, fork-doubt снесён",
+  "def wiki_leader_alive" not in (ASK / "z21_wiki_choice.py").read_text(encoding="utf-8")
   and "doubt = False" not in z20)
+t("S3: event_kind_catalog_expand_pool GONE from ask",
+  "def event_kind_catalog_expand_pool" not in (ASK / "z05_entity_form.py").read_text(encoding="utf-8"))
+t("S3: stock_breakdown_leader_fallback GONE from ask",
+  "def stock_breakdown_leader_fallback" not in (ASK / "z12_stock_balance.py").read_text(encoding="utf-8"))
 
 print("PASS", PASS, "FAIL", len(FAIL))
 if FAIL:

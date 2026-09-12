@@ -21,6 +21,13 @@ os.environ.setdefault("EMBED_MODEL", "-")
 
 import serene_ask as A  # noqa: E402
 
+def _reset_decisions_for_tests():
+    with A._DECISION_LOCK:
+        A._DECISIONS.clear()
+        A._CLARIFY_BATCHES.clear()
+        A._RESOLVED_CHOICES.clear()
+
+
 PASS, FAIL = 0, []
 
 
@@ -33,40 +40,45 @@ def t(name, cond):
         FAIL.append(name)
         print("FAIL-", name)
 
+# S3/S4 GONE batch
+for _n in ('RAW_FOCUS_TRUST', 'guards_skip_for_choice', 'stop2_active'):
+    t("S3/S4 GONE: " + _n, not hasattr(A, _n))
 
-A.reset_decisions_for_tests()
-A.RAW_FOCUS_TRUST = False
+
+
+_reset_decisions_for_tests()
+# S3/S4 DEL: A.RAW_FOCUS_TRUST = False
 
 # ── таблица истинности: сырой focus не гасит три защиты ──────────────────────
-t("сырой focus: guards_skip=False",
-  A.guards_skip_for_choice("catalog_x", None, None) is False)
-t("сырой focus: stop2_active=True",
-  A.stop2_active("catalog_x", None, False, None) is True)
-t("сырой measure: stop2_active=True",
-  A.stop2_active(None, "Сумма", False, None) is True)
-t("без выбора: stop2_active=True",
-  A.stop2_active(None, None, False, None) is True)
-t("no_arbiter: stop2_active=False",
-  A.stop2_active(None, None, True, None) is False)
+# S3/S4 DEL: t("сырой focus: guards_skip=False",
+  # S3/S4 DEL: A.guards_skip_for_choice("catalog_x", None, None) is False)
+# S3/S4 DEL: t("сырой focus: stop2_active=True",
+  # S3/S4 DEL: A.stop2_active("catalog_x", None, False, None) is True)
+# S3/S4 DEL: t("сырой measure: stop2_active=True",
+  # S3/S4 DEL: A.stop2_active(None, "Сумма", False, None) is True)
+# S3/S4 DEL: t("без выбора: stop2_active=True",
+  # S3/S4 DEL: A.stop2_active(None, None, False, None) is True)
+# S3/S4 DEL: t("no_arbiter: stop2_active=False",
+  # S3/S4 DEL: A.stop2_active(None, None, True, None) is False)
 
 trusted_ent = {"ambiguity": "entity", "src": "catalog_x"}
 trusted_meas = {"ambiguity": "measure", "src": "catalog_x", "measure": "Сумма"}
-t("билет entity: guards_skip=True",
-  A.guards_skip_for_choice("catalog_x", None, trusted_ent) is True)
-t("билет entity: stop2_active=False",
-  A.stop2_active("catalog_x", None, False, trusted_ent) is False)
-t("билет measure: stop2_active=False",
-  A.stop2_active(None, "Сумма", False, trusted_meas) is False)
+# S3/S4 DEL: t("билет entity: guards_skip=True",
+  # S3/S4 DEL: A.guards_skip_for_choice("catalog_x", None, trusted_ent) is True)
+# S3/S4 DEL: t("билет entity: stop2_active=False",
+  # S3/S4 DEL: A.stop2_active("catalog_x", None, False, trusted_ent) is False)
+# S3/S4 DEL: t("билет measure: stop2_active=False",
+  # S3/S4 DEL: A.stop2_active(None, "Сумма", False, trusted_meas) is False)
 
-old = A.RAW_FOCUS_TRUST
-A.RAW_FOCUS_TRUST = True
-t("ASK_RAW_FOCUS_TRUST=1: сырой focus гасит (эвакуация)",
-  A.guards_skip_for_choice("catalog_x", None, None) is True
-  and A.stop2_active("catalog_x", None, False, None) is False)
-A.RAW_FOCUS_TRUST = old
+# S3/S4 DEL: old = A.RAW_FOCUS_TRUST
+# S3/S4 DEL: A.RAW_FOCUS_TRUST = True
+# S3/S4 DEL: t("ASK_RAW_FOCUS_TRUST=1: сырой focus гасит (эвакуация)",
+  # S3/S4 DEL: A.guards_skip_for_choice("catalog_x", None, None) is True
+  # S3/S4 DEL: and A.stop2_active("catalog_x", None, False, None) is False)
+# S3/S4 DEL: A.RAW_FOCUS_TRUST = old
 
 # ── билеты ───────────────────────────────────────────────────────────────────
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 opts = [
     {"src": "document_a", "label": "А", "distinct_by": "продажа", "found": 10},
     {"src": "document_b", "label": "Б", "distinct_by": "оплата", "found": 5},
@@ -100,7 +112,7 @@ t("просроченный → expired",
   A.consume_decision(ids[1], "На какую сумму продали?")[1] == "expired")
 
 # user mismatch
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 sealed_u = A.seal_clarify(
     {"kind": "clarify", "options": [
         {"src": "a", "label": "A", "distinct_by": "x", "found": 1}]},
@@ -112,11 +124,11 @@ t("свой user → ok",
   A.consume_decision(tid_u, "q", user="u1")[1] is None)
 
 # restart = empty store
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 t("рестарт хранилища → старый билет unknown",
   A.consume_decision(ids[0], "На какую сумму продали?")[1] == "unknown")
 
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 opts_r = [
     {"src": "document_a", "label": "Реализация (документ)", "distinct_by": "продажа", "found": 10},
     {"src": "register_a", "label": "Продажи (регистр)", "distinct_by": "итоги", "found": 5},
@@ -153,7 +165,7 @@ t("unknown → core звался", len(core_calls) == 1)
 A._answer_checked_core = old_core
 
 # measure options
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 sealed_m = A.seal_clarify(
     {"kind": "clarify", "options": [
         {"src": "d", "measure": "Сумма", "label": "Сумма", "entity_label": "Док"},

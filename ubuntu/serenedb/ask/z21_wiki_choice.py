@@ -816,6 +816,58 @@ def wiki_parse_verify_response(raw, n_passports):
     return _wiki_verdicts_from_rows(rows, n_passports), "full"
 
 
+def _homonym_norm(s):
+    """Та же нормализация, что у disambiguate_labels: lower + без пробелов."""
+    return "".join(str(s).lower().split())
+
+
+def _homonym_keys(passport):
+    """Ключи имени/stem паспорта для одноимённости разных OData-kind."""
+    p = passport or {}
+    keys = set()
+    name = (p.get("name") or "").strip()
+    src = str(p.get("src_table") or "")
+    if not name and src:
+        # человеческий хвост после префикса (платформенное имя, не домен)
+        try:
+            name = (human_table_label(src) or "").strip()
+        except NameError:
+            parts = src.split("_", 1)
+            name = parts[1] if len(parts) == 2 else ""
+    n = _homonym_norm(name)
+    if n:
+        keys.add(n)
+    if "_" in src:
+        stem = _homonym_norm(src.split("_", 1)[1])
+        if stem:
+            keys.add(stem)
+    return frozenset(keys)
+
+
+def wiki_homonym_kind_peers(passports, focus_src):
+    """Соседи focus с тем же name/stem и другим OData-kind. ≥2 → конфликт.
+
+    Вердикт verify (yes/no) соседа не вычёркивает: лотерея как раз yes+no.
+    """
+    pool = [p for p in (passports or []) if p and p.get("src_table")]
+    focus = next((p for p in pool if p["src_table"] == focus_src), None)
+    if not focus or len(pool) < 2:
+        return []
+    fk = _homonym_keys(focus)
+    if not fk:
+        return []
+    fkind = _card_odata_kind(focus)
+    peers = [focus]
+    for p in pool:
+        if p["src_table"] == focus_src:
+            continue
+        if _card_odata_kind(p) == fkind:
+            continue
+        if fk & _homonym_keys(p):
+            peers.append(p)
+    return peers if len(peers) >= 2 else []
+
+
 def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
     """Исход верификации: leader / clarify / none (код, без «лучший из плохих»)."""
     diag = dict(diag or {})
@@ -840,6 +892,7 @@ def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
     # В4 / решение 4-А: лидер только если ровно ОДИН не отвергнут (yes),
     # а ВСЕ остальные получили no. ≥2 неотвергнутых (два yes / yes+unsure) →
     # wiki-tie clarify. Пропуск вердикта ≠ no — в лидера не пускает.
+    # S2-b: одноимённый peer другого kind → clarify, не silent leader.
     if (len(yes_i) == 1
             and len(no_i) == len(passports) - 1
             and not unsure_i):
@@ -847,6 +900,16 @@ def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
         if not wiki_validate_leader_axes(leader, intent):
             diag["wiki_verify"] = "axis_reject"
             return {"outcome": "none", "reason": "axis_reject", "diag": diag}
+        peers = wiki_homonym_kind_peers(passports, leader)
+        if peers:
+            diag["wiki_verify"] = "clarify"
+            diag["wiki_homonym_tie"] = [p.get("src_table") for p in peers]
+            diag["wiki_homonym_blocked_leader"] = leader
+            return {
+                "outcome": "clarify",
+                "candidates": peers,
+                "diag": diag,
+            }
         diag["wiki_verify"] = leader
         return {"outcome": "leader", "leader": leader, "diag": diag}
     if len(yes_i) == 0 and not unsure_i:
@@ -1032,8 +1095,6 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
     return {"picked": picked, "marks": marks, "plan": plan}
 
 
-
-
 def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
                                 by=None, match="", preds=None):
     """Единая точка интеграции для z20."""
@@ -1106,14 +1167,12 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
         opts = mk_opts(tied, lab_by, {}, by or {}, match=match or "", preds=preds or [])
         if len(opts) >= 2:
             # В4: равные числа → меню (1-Б); подписи из паспортов verify-кандидатов.
+            # S2-d-(а): clarify только через единый построитель (не bare Dict).
             _pmap = wiki_captions_map_from_cards(pick.get("candidates") or [])
             opts = wiki_menu_captions(opts, passports_by_src=_pmap)
-            return {"partial": cut or None, "kind": "clarify",
-                    "text": clarify_say(question, opts, diag)
-                            or ", ".join("«%s»" % o["label"] for o in opts),
-                    "options": opts, "sources": [o["label"] for o in opts],
-                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                       reason="wiki_separability")}
+            return readings_menu(
+                question, "entity", opts, diag, cut, t0,
+                reason="wiki_separability")
     leader = pick.get("leader")
     if leader:
         if not wiki_leader_post_verify(leader, intent, question, diag):
@@ -1222,29 +1281,6 @@ def wiki_leader_post_verify(leader, intent, question, diag=None):
         diag["wiki_none"] = "axis_not_carried"
         return False
     return True
-
-
-def wiki_leader_alive(diag, picked):
-    """Живой wiki-лидер: один picked, wiki_verify совпал, yes==1.
-
-    Признак тракта исходов (В4 / формула №15): при лидере меню развилки
-    и ранний entity-clarify уступают вики-выбору.
-    """
-    picked = [p for p in (picked or []) if p]
-    if len(picked) != 1:
-        return False
-    d = diag or {}
-    if not d.get("wiki_hybrid_pick"):
-        return False
-    if d.get("wiki_verify") != picked[0]:
-        return False
-    yes = d.get("wiki_verify_yes")
-    if yes is None:
-        return True
-    try:
-        return int(yes) == 1
-    except (TypeError, ValueError):
-        return False
 
 
 def wiki_measure_carried(src_table, measure):

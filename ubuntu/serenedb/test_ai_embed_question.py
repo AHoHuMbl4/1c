@@ -18,6 +18,14 @@ os.environ.setdefault("EMBED_SECRET", "ask_embed_test")
 os.environ.setdefault("EMBED_API", "texts")
 
 import serene_ask as A  # noqa: E402
+
+def _reload_embed_native_env():
+    A.EMBED_SECRET_NAME = A._embed_secret_name_from_env()
+    A.EMBED_PATH = os.environ.get("EMBED_PATH", "/v1/embeddings")
+    A.ASK_EMBED_NATIVE = os.environ.get("ASK_EMBED_NATIVE", "0") == "1"
+    A.EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
+    A._EMBED_SECRET_READY = False
+
 A.EMBED_API = os.environ.get("EMBED_API", "openai")
 
 PASS, FAIL = 0, []
@@ -41,7 +49,7 @@ def with_env(**kw):
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
-    A._reload_embed_native_env()
+    _reload_embed_native_env()
     return saved
 
 
@@ -51,7 +59,7 @@ def restore_env(saved):
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
-    A._reload_embed_native_env()
+    _reload_embed_native_env()
     A.EMBED_API = os.environ.get("EMBED_API", "openai")
 
 

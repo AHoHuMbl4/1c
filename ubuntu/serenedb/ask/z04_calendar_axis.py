@@ -6,10 +6,6 @@ from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
 
-def _sql_ident(name):
-    """Идентификатор колонки/таблицы в SQL (двойные кавычки)."""
-    return '"' + str(name).replace('"', '""') + '"'
-
 
 def calendar_registers():
     """Регистры календаря из search_meta (сборка §1-кватер). Как balance_registers."""
@@ -183,30 +179,6 @@ def calendar_axis_open():
                 and calendar_map_rows())
 
 
-def calendar_day_basis_prefer(intent=None, trusted=None, question=None):
-    """Лидер day-basis: ticket/intent, словарь meta, иначе calendar_days (§2.4)."""
-    if isinstance(trusted, dict):
-        db = (trusted.get("day_basis") or "").strip()
-        if db in _DAY_BASIS_IDS:
-            return db
-        for k in ("day_basis", "src", "label"):
-            v = str(trusted.get(k) or "").strip()
-            if v in _DAY_BASIS_IDS:
-                return v
-    intent = intent or {}
-    db = str(intent.get("day_basis") or "").strip()
-    if db in _DAY_BASIS_IDS:
-        return db
-    pr = intent.get("period") or {}
-    db = str(pr.get("day_basis") or "").strip()
-    if db in _DAY_BASIS_IDS:
-        return db
-    need = day_basis_from_question(question or "")
-    if need == _DAY_BASIS_WORKING:
-        return _DAY_BASIS_WORKING
-    return _DAY_BASIS_LEADER_DEFAULT
-
-
 def _day_basis_reading(base_rd, day_basis):
     """Одно прочтение окна с координатой day_basis (тот же from/to/origin/form)."""
     base = base_rd or {}
@@ -249,19 +221,6 @@ def expand_readings_calendar_axis(readings, prefer=None):
     return out
 
 
-def prefer_day_basis_leader(readings, prefer=None):
-    """Reading-лидер по day_basis (§2.4); иначе первое прочтение с окном."""
-    readings = list(readings or [])
-    if not readings:
-        return None
-    prefer = prefer if prefer in _DAY_BASIS_IDS else _DAY_BASIS_LEADER_DEFAULT
-    for rd in readings:
-        if (rd.get("day_basis") or (rd.get("period") or {}).get("day_basis")
-                ) == prefer:
-            return rd
-    return readings[0]
-
-
 def _working_day_doc_preds(period):
     """Предикат корпуса: doc_date ∈ дат day-basis=working из карты (один SQL, §1.3).
 
@@ -291,7 +250,6 @@ def _working_day_doc_preds(period):
         return []
     union = " UNION ".join(parts)
     return ["try_cast(doc_date AS DATE) IN (%s)" % union]
-
 
 
 register_zone('ask.z04_calendar_axis', globals())

@@ -200,34 +200,6 @@ def resolved_warehouse_axis_word(question, intent=None):
     return ""
 
 
-def _catalogs_joint_with_kind(cats, kind_cats):
-    """Есть ли носитель (регистр/документ) с refcol и на cats, и на kind_cats.
-
-    Тот же EXISTS-паттерн, что у _stock_place_axis_catalogs, но без пула
-    stock-eligible: совместный учёт kind×ось по любому движению.
-    Доки: Sql › Expressions › Subqueries › EXISTS.
-    """
-    cats = [c for c in (cats or []) if c]
-    kind_cats = [c for c in (kind_cats or []) if c]
-    if not cats or not kind_cats:
-        return False
-    rows = psql(
-        "SELECT 1 FROM search_refcols r1 "
-        "WHERE r1.target_src IN (%s) "
-        "  AND r1.col IS NOT NULL AND r1.col <> '' "
-        "  AND (r1.src_table LIKE 'accumulationregister_%%' "
-        "       OR r1.src_table LIKE 'document_%%') "
-        "  AND EXISTS ("
-        "    SELECT 1 FROM search_refcols r2 "
-        "    WHERE r2.src_table = r1.src_table "
-        "      AND r2.target_src IN (%s) "
-        "      AND r2.col IS NOT NULL AND r2.col <> ''"
-        "  ) LIMIT 1"
-        % (", ".join(lit(c) for c in cats),
-           ", ".join(lit(c) for c in kind_cats)))
-    return bool(rows)
-
-
 def _word_names_documentjournal(word):
     """Слово именует journal в метаданных: stem по label+aliases documentjournal_%."""
     word = _intent_text(word)
@@ -387,11 +359,6 @@ def balance_path_engaged(intent, plan=None, question=""):
     return balance_routing_core(intent, plan, question)
 
 
-def question_asks_stock_balance(question, intent=None, plan=None):
-    """Вопрос про остаток — триггер balance-path (intent, не слова вопроса)."""
-    return balance_path_engaged(intent, plan, question)
-
-
 def question_mentions_warehouse_axis(question, intent=None, plan=None):
     """Ось места: ref-ось product-register, не catalog kind-echo."""
     intent = intent or {}
@@ -469,123 +436,6 @@ def registers_for_kind_axes(intent, regs=None, question=""):
     return frozenset(r[0] for r in (rows or []) if r and r[0])
 
 
-def axis_catalog_values(axis_word, limit=20, intent=None):
-    """Значения оси: каталог по stem + refcol + map_extract_value(refs_map)."""
-    axis_word = (axis_word or "").strip()
-    if not axis_word:
-        return []
-    intent = intent or {}
-    period = intent.get("period") or {}
-    has_period = bool(period.get("from") or period.get("to"))
-    cats = []
-    try:
-        found = entity_form_catalogs_for_kind(axis_word, allow_meaning=has_period) or []
-    except RuntimeError:
-        found = []
-    for s in found:
-        if s and s not in cats:
-            cats.append(s)
-    if not cats:
-        return []
-    out, seen = [], set()
-
-    def _take(rows):
-        for r in rows or []:
-            w = (r[0] if r else None)
-            if w is None:
-                continue
-            s = str(w).strip()
-            if not s or s in seen or looks_like_src_table(s):
-                continue
-            seen.add(s)
-            out.append(s)
-            if len(out) >= int(limit):
-                return True
-        return False
-
-    try:
-        rows = psql(
-            "WITH cats(src) AS (VALUES %s), "
-            "cand AS ("
-            "  SELECT r.col,"
-            "         sum(CASE WHEN r.src_table LIKE 'accumulationregister_%%' "
-            "                  THEN 1 ELSE 0 END) AS on_accum,"
-            "         count(*) AS holders "
-            "  FROM search_refcols r "
-            "  WHERE r.target_src IN (SELECT src FROM cats) "
-            "    AND r.col IS NOT NULL AND r.col <> '' "
-            "  GROUP BY r.col), "
-            "scored AS ("
-            "  SELECT c.col, c.on_accum, c.holders,"
-            "         (SELECT count(DISTINCT map_extract_value(refs_map, c.col)) "
-            "          FROM %s "
-            "          WHERE map_extract_value(refs_map, c.col) IS NOT NULL) AS n_vals "
-            "  FROM cand c), "
-            "best AS ("
-            "  SELECT col FROM scored "
-            "  ORDER BY on_accum DESC, n_vals DESC, holders DESC "
-            "  LIMIT 1) "
-            "SELECT DISTINCT map_extract_value(c.refs_map, b.col) AS w "
-            "FROM %s c, best b "
-            "WHERE map_extract_value(c.refs_map, b.col) IS NOT NULL "
-            "LIMIT %d"
-            % (", ".join("(%s)" % lit(s) for s in cats), CORPUS, CORPUS,
-               int(limit)))
-    except RuntimeError:
-        rows = []
-    if _take(rows):
-        return out
-    if out:
-        return out
-    cats_sql = ", ".join(lit(s) for s in cats)
-    try:
-        rows = psql(
-            "SELECT DISTINCT name FROM search_refmap "
-            "WHERE owner IN (%s) AND name IS NOT NULL AND trim(name) <> '' "
-            "LIMIT %d" % (cats_sql, int(limit)))
-    except RuntimeError:
-        return out
-    _take(rows)
-    return out
-
-
-def warehouse_axis_values(limit=20, intent=None, question=""):
-    """Имена складов: axis_catalog_values по action_axis/kind/словарю."""
-    intent = intent or {}
-    for w in intent_axis_words(intent, question):
-        vals = axis_catalog_values(w, limit=limit, intent=intent)
-        if vals:
-            return vals
-    ax = resolved_warehouse_axis_word(question, intent)
-    if ax:
-        return axis_catalog_values(ax, limit=limit, intent=intent)
-    return []
-
-
-def warehouse_axis_is_live(intent=None, question=""):
-    """Живая ось места хранения: ≥2 значений из метаданных."""
-    try:
-        wh = warehouse_axis_values(intent=intent, question=question)
-    except RuntimeError:
-        return False
-    return len(wh or []) >= 2
-
-
-def stock_skips_warehouse_clarify(question, intent=None, plan=None):
-    """Не уточнять склад: итог, разрез, или ось+итог по всем."""
-    if not stock_question_engaged(question, intent, plan):
-        if not question_mentions_warehouse_axis(question, intent, plan):
-            return False
-    if question_has_aggregate_total_marker(question, intent, plan):
-        return True
-    if question_wants_per_axis_breakdown(question, intent, plan):
-        return True
-    if aggregate_count_intent(intent, plan, question) and secondary_axis_known(
-            intent, question):
-        return True
-    return False
-
-
 def stock_count_aggregate_without_subject(intent, plan=None, question=""):
     """Count + ось места + kind-каталог без именованного предмета → distinct-агрегат.
 
@@ -619,20 +469,6 @@ def stock_count_aggregate_without_subject(intent, plan=None, question=""):
     return True
 
 
-def stock_subject_needs_clarify(question, intent=None):
-    if not balance_path_engaged(intent, None, question):
-        return False
-    if stock_asks_named_product(question, intent):
-        return False
-    if stock_count_aggregate_without_subject(intent, None, question):
-        return False
-    if aggregate_count_intent(intent, None, question):
-        return True
-    if not secondary_axis_known(intent, question) and not (intent or {}).get("terms"):
-        return True
-    return False
-
-
 def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
     """Билет оси: grain=group сохраняется; form=rank при рейтинговом вопросе."""
     rankish = rank_intent_from(intent, plan, question) or (
@@ -640,38 +476,6 @@ def grain_dec_from_axis_ticket(intent, plan, grain_dec, prov_axis, question=""):
     form = "rank" if rankish else ((grain_dec or {}).get("form") or "number")
     return {"grain": "group", "col": prov_axis, "form": form,
             "named_gis": [], "clarify": None}
-
-
-def _rank_wants_quantity(question, intent=None):
-    """Рейтинг количества — из intent/rank_intent_from, не слова вопроса."""
-    intent = intent or {}
-    if not rank_intent_from(intent, question=question):
-        return False
-    want = (intent.get("want") or "").strip().lower()
-    if want not in ("count", "list", ""):
-        return False
-    for w in intent_axis_words(intent):
-        if w and _base_knows_kind_or_measure(w):
-            return True
-    kind = intent.get("kind") or ""
-    return bool(kind and _base_knows_kind_or_measure(kind))
-
-
-def rank_measure_hint(names, intent, question, alias_by=None):
-    """Рейтинг без явной меры: количество из intent, не из текста вопроса."""
-    names = list(names or [])
-    if not names:
-        return None
-    if (intent or {}).get("measure"):
-        return None
-    if not rank_intent_from(intent, question=question):
-        return None
-    if not _rank_wants_quantity(question, intent):
-        return None
-    got, _, how = measure_choice(names, "колич", alias_by=alias_by or {})
-    if got and how in ("exact", "substring", "alias", "base", "single"):
-        return got
-    return None
 
 
 def balance_registers():
@@ -839,49 +643,6 @@ def _stock_corpus_receipt_side_penalty(src, pool, corpus_counts, product_targets
     return 0 if my_n == min_n else 1
 
 
-def _stock_expense_side_penalty(src, pool, corpus_counts, product_targets_by_src):
-    """Corpus-count не различает приход/затраты на okna — см. _stock_cost_side_penalty."""
-    return 0
-
-
-def stock_goods_pool(capable=None, intent=None, question=""):
-    """Пул товарных balance-регистров: оси intent + ref на catalog ТМЦ."""
-    capable = capable if capable is not None else balance_capable_or_registers()
-    if not intent:
-        return frozenset()
-    broad = registers_for_kind_axes(intent, None, question)
-    if not broad:
-        return frozenset()
-    clean = {s for s in broad if not register_is_balance_noise(s)}
-    product_axis = _stock_registers_with_product_axis(clean)
-    if product_axis:
-        clean = {s for s in clean if s in product_axis}
-    if not clean:
-        return frozenset()
-    if capable:
-        in_cap = {s for s in clean if s in capable}
-        if in_cap:
-            return frozenset(in_cap)
-    return frozenset(clean)
-
-
-def filter_stock_goods_registers(cands, question, diag=None, intent=None, plan=None):
-    if not stock_question_engaged(question, intent, plan):
-        return cands
-    pool = stock_goods_pool(None, intent)
-    if not pool:
-        return cands
-    out, dropped = [], []
-    for c in list(cands or []):
-        if c and c.startswith("accumulationregister_") and c not in pool:
-            dropped.append(c)
-        else:
-            out.append(c)
-    if diag is not None and dropped:
-        diag["stock_non_goods_drop"] = sorted(set(dropped))
-    return out or list(pool)
-
-
 def _stock_corpus_counts(pool):
     pool = list(pool or [])
     if not pool:
@@ -921,94 +682,210 @@ def _sort_stock_pool(pool, capable=None):
     return pool
 
 
-def _stock_product_axis_col(src):
-    """Колонка refs_map на product-catalog для регистра."""
+def _stock_product_axis_cols(src):
+    """Все product-catalog refcol регистра (без silent first)."""
     src = (src or "").strip()
     if not src:
-        return None
+        return []
     try:
         ax = refcols_of(src) or []
     except RuntimeError:
-        return None
+        return []
+    cols, seen = [], set()
     for a in ax:
         if _is_product_catalog_target(a.get("target_src") or ""):
             col = (a.get("col") or "").strip()
-            if col:
-                return col
-    return None
+            if col and col not in seen:
+                seen.add(col)
+                cols.append(col)
+    return cols
 
 
-def _stock_qty_measure_name(src):
-    """Количественная мера регистра — measure_choice, не имя поля."""
+def _stock_product_axis_col(src):
+    """Колонка refs_map на product-catalog: ровно одна → взять; >1 → None."""
+    cols = _stock_product_axis_cols(src)
+    return cols[0] if len(cols) == 1 else None
+
+
+def _stock_qty_measure_candidates(src):
+    """Кандидаты qty-меры регистра: sole → [got]; >1 → alts; silent names[0] нет."""
     src = (src or "").strip()
     if not src:
-        return None
+        return []
     try:
         names = list(measures_of(src) or [])
     except RuntimeError:
-        return None
+        return []
     if not names:
-        return None
+        return []
+    if len(names) == 1:
+        return names
     try:
         alias_by = measure_aliases_of(src) or {}
     except RuntimeError:
         alias_by = {}
-    got, _, how = measure_choice(names, "колич", alias_by=alias_by)
-    if got and how in ("exact", "substring", "alias", "base", "single"):
-        return got
-    return names[0] if names else None
+    got, alts, how = measure_choice(names, "колич", alias_by=alias_by)
+    if got and how in ("exact", "substring", "alias", "single"):
+        return [got]
+    if how == "ask" and alts:
+        return list(alts)
+    return []
 
 
-def stock_net_register_pair(intent, question=""):
-    """Пара приход/расход одной товарной оси — по метаданным refcols и роли."""
+def _stock_qty_measure_name(src):
+    """Количественная мера регистра — sole после measure_choice; >1 → None."""
+    cands = _stock_qty_measure_candidates(src)
+    return cands[0] if len(cands) == 1 else None
+
+
+def _stock_receipt_candidates(active, pt_map, refs_map, corpus_counts):
+    """Не-sales регистры; cost/corpus — отсев классификатором, не silent max."""
+    active = list(active or [])
+    non_sales = [s for s in active if not stock_balance_is_sales_noise(s)]
+    if len(non_sales) <= 1:
+        return non_sales
+    snap = list(active)
+    no_cost = [s for s in non_sales
+               if _stock_cost_side_penalty(s, snap, pt_map, refs_map) == 0]
+    pool = no_cost if no_cost else non_sales
+    if len(pool) == 1:
+        return pool
+    no_corp = [s for s in pool
+               if _stock_corpus_receipt_side_penalty(
+                   s, snap, corpus_counts, pt_map) == 0]
+    if len(no_corp) == 1:
+        return no_corp
+    return pool
+
+
+def stock_net_pair_candidates(intent, question=""):
+    """Уникальные пары + неоднозначные регистры (S2-c: >1 → меню, не silent).
+
+    Возвращает (pairs, ambiguous_regs):
+      pairs — list[(receipt, expense, prod_col, qty)]
+      ambiguous_regs — регистры, где роль/пара не единственна.
+    """
     intent = intent or {}
     try:
         capable = balance_capable_or_registers()
     except RuntimeError:
-        return None
+        return [], []
     broad = registers_for_kind_axes(intent, None, question)
     if not broad:
-        return None
+        return [], []
     pool = list(_stock_registers_with_product_axis(broad))
     if len(pool) < 2:
-        return None
+        return [], []
     pt_map = _stock_product_targets_by_src(pool)
     cc = _stock_corpus_counts(pool)
+    refs_map = _stock_refs_by_src(pool)
     by_pt = {}
     for src in pool:
         pt = pt_map.get(src)
         if pt:
             by_pt.setdefault(pt, []).append(src)
+    pairs = []
+    ambiguous = []
     for _pt, siblings in by_pt.items():
         if len(siblings) < 2:
             continue
         active = [s for s in siblings if not stock_balance_is_reversal_noise(s)]
         if len(active) < 2:
             continue
-        sorted_s = _sort_stock_pool(list(active), capable)
-        receipt = None
-        expense = None
-        for s in sorted_s:
-            if not stock_balance_is_sales_noise(s):
-                receipt = s
-                break
-        for s in sorted_s:
-            if stock_balance_is_sales_noise(s):
-                expense = s
-                break
-        if not receipt:
-            receipt = sorted_s[0]
-        if not expense:
-            others = [s for s in sorted_s if s != receipt]
-            if others:
-                expense = max(others, key=lambda s: cc.get(s, 0))
-        if not receipt or not expense or receipt == expense:
-            continue
-        prod_col = _stock_product_axis_col(receipt) or _stock_product_axis_col(expense)
-        qty = _stock_qty_measure_name(receipt) or _stock_qty_measure_name(expense)
-        if prod_col and qty:
-            return receipt, expense, prod_col, qty
-    return None
+        expenses = [s for s in active if stock_balance_is_sales_noise(s)]
+        receipts = _stock_receipt_candidates(active, pt_map, refs_map, cc)
+        # capable — отсев непригодных, не выбор среди равных
+        if capable:
+            receipts = [s for s in receipts if s in capable] or receipts
+            expenses = [s for s in expenses if s in capable] or expenses
+        if len(receipts) == 1 and len(expenses) == 1 and receipts[0] != expenses[0]:
+            receipt, expense = receipts[0], expenses[0]
+            prod_col = (_stock_product_axis_col(receipt)
+                        or _stock_product_axis_col(expense))
+            qty = (_stock_qty_measure_name(receipt)
+                   or _stock_qty_measure_name(expense))
+            if prod_col and qty:
+                pairs.append((receipt, expense, prod_col, qty))
+            else:
+                ambiguous.extend(active)
+        else:
+            ambiguous.extend(active)
+    # дедуп ambiguous, порядок стабильный
+    seen = set()
+    amb_out = []
+    for s in ambiguous:
+        if s not in seen:
+            seen.add(s)
+            amb_out.append(s)
+    return pairs, amb_out
+
+
+def stock_net_register_menu_opts(intent, question=""):
+    """Options[] регистров для readings_menu при неоднозначной паре/роли."""
+    pairs, ambig = stock_net_pair_candidates(intent, question)
+    regs = list(ambig)
+    if len(pairs) > 1:
+        for receipt, expense, _pc, _q in pairs:
+            for s in (receipt, expense):
+                if s not in regs:
+                    regs.append(s)
+    if len(regs) < 2 and len(pairs) > 1:
+        # пары однозначны по роли, но их несколько — меню пар по receipt-src
+        opts = []
+        lab_by = {}
+        srcs = []
+        for receipt, expense, _pc, _q in pairs:
+            srcs.extend([receipt, expense])
+        srcs = list(dict.fromkeys(srcs))
+        if srcs:
+            try:
+                for r in psql(
+                        "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                        % (TABLES, ", ".join(lit(s) for s in srcs))) or []:
+                    if r and r[0]:
+                        lab_by[r[0]] = (r[1] or "").strip()
+            except RuntimeError:
+                pass
+        for receipt, expense, _pc, _q in pairs:
+            lr = human_table_label(receipt, lab_by.get(receipt))
+            le = human_table_label(expense, lab_by.get(expense))
+            kw = kind_word(receipt) or "регистр"
+            opts.append({
+                "src": receipt,
+                "label": "%s − %s (%s)" % (lr, le, kw),
+                "entity_label": lr,
+            })
+        return opts if len(opts) >= 2 else []
+    if len(regs) < 2:
+        return []
+    lab_by = {}
+    try:
+        for r in psql(
+                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(s) for s in regs))) or []:
+            if r and r[0]:
+                lab_by[r[0]] = (r[1] or "").strip()
+    except RuntimeError:
+        pass
+    opts = []
+    for reg in regs:
+        lab = human_table_label(reg, lab_by.get(reg))
+        kw = kind_word(reg) or "регистр"
+        role = ("расход" if stock_balance_is_sales_noise(reg) else "приход")
+        opts.append({
+            "src": reg,
+            "label": "%s (%s, %s)" % (lab, kw, role),
+            "entity_label": lab,
+        })
+    return opts
+
+
+def stock_net_register_pair(intent, question=""):
+    """Пара приход/расход одной товарной оси — sole; >1 → None (меню выше)."""
+    pairs, ambig = stock_net_pair_candidates(intent, question)
+    if ambig or len(pairs) != 1:
+        return None
+    return pairs[0]
 
 
 def aggregate_stock_net_distinct(intent, question, match, preds, diag=None):
@@ -1060,39 +937,6 @@ def aggregate_stock_net_distinct(intent, question, match, preds, diag=None):
         return None
     return {"count": n, "sum": None, "src": receipt, "form": "distinct_axis",
             "axis": prod_col, "grain": "axis", "net_expense_src": expense}
-
-
-def stock_canon_src(cands, question, intent=None, plan=None):
-    if not stock_question_engaged(question, intent, plan):
-        return None
-    capable = balance_capable_or_registers()
-    pool = [c for c in stock_goods_pool(capable, intent)
-            if not register_is_balance_noise(c)]
-    if not pool:
-        return None
-    pool = _sort_stock_pool(pool, capable)
-    in_cands = [c for c in (cands or []) if c in pool]
-    if in_cands:
-        return _sort_stock_pool(in_cands, capable)[0]
-    return pool[0]
-
-
-def prefer_entity_for_stock(cands, question, intent=None, plan=None):
-    """Stock-path: balance-регистр в голове, каталоги/документы вне пула."""
-    canon = stock_canon_src(cands, question, intent, plan)
-    if not canon:
-        return cands
-    capable = balance_capable_or_registers()
-    pool = {c for c in stock_goods_pool(capable, intent)
-            if not register_is_balance_noise(c)}
-    pool.add(canon)
-    out, seen = [], set()
-    for c in [canon] + [x for x in (cands or []) if x in pool and x != canon]:
-        if c and c not in seen:
-            seen.add(c)
-            out.append(c)
-    return out or [canon]
-
 
 
 def _stems_of_text(s):
@@ -1155,192 +999,6 @@ def stock_asks_named_product(question, intent=None):
             if _is_named_term(alt):
                 return True
     return False
-
-
-def _resolve_breakdown_balance_src(src, cands=None, intent=None):
-    """Balance-регистр с товарной осью для итога+люка."""
-    try:
-        cap = balance_capable_or_registers()
-        goods = stock_goods_pool(cap, intent)
-    except RuntimeError:
-        return src or None
-    goods = {c for c in (goods or []) if not register_is_balance_noise(c)}
-    if src and src in goods:
-        return src
-    for c in (cands or []):
-        if c in goods:
-            return c
-    if goods:
-        return sorted(goods, key=lambda s: _stock_register_rank_key(s, cap))[0]
-    if src and src in cap:
-        return src
-    if cap:
-        return sorted(cap)[0]
-    return src or None
-
-
-def _breakdown_fallback_measure(src, measure, intent=None):
-    """Мера count/sum для fallback — из intent или количественного поля регистра."""
-    if measure:
-        return measure
-    want = ((intent or {}).get("want") or "").strip().lower()
-    if want == "sum":
-        return measure
-    if not src:
-        return measure
-    try:
-        names = list(measures_of(src) or [])
-    except RuntimeError:
-        return measure
-    if not names:
-        return measure
-    got, _, how = measure_choice(names, "колич", alias_by={})
-    if got and how in ("exact", "substring", "alias", "base", "single"):
-        return got
-    return measure
-
-
-def stock_breakdown_leader_fallback(question, src, match, preds, measure, diag,
-                                    cut, t0, intent=None, plan=None, agg=None,
-                                    cands=None):
-    """Исход B: лидер-итог + люк значений оси из метаданных."""
-    if not question_wants_per_axis_breakdown(question, intent, plan):
-        return None
-    if not warehouse_axis_is_live(intent, question):
-        return None
-    intent = intent or {}
-    axis_word = (resolved_warehouse_axis_word(question, intent)
-                 or _intent_text(intent.get("action_axis"))
-                 or _intent_text(intent.get("kind")) or "")
-    wh = []
-    try:
-        wh = list(axis_catalog_values(axis_word, intent=intent) or [])
-    except RuntimeError:
-        return None
-    if len(wh) < 2:
-        return None
-    src = _resolve_breakdown_balance_src(src, cands, intent)
-    measure = _breakdown_fallback_measure(src, measure, intent)
-    if agg is None and src:
-        try:
-            agg = aggregate(src, match, preds, measure)
-        except RuntimeError:
-            agg = None
-    if not agg or agg.get("count") is None:
-        return None
-    want = ((intent or {}).get("want") or "").strip().lower()
-    op = "count" if want in ("count", "list", "") else "sum"
-    val = agg.get("count") if op == "count" else agg.get("sum")
-    if val is None:
-        return None
-    atom = atom_from_agg(
-        agg, operation=op,
-        measure_id=(measure or None),
-        measure_label=measure_label_of(src, measure) if src else measure,
-        money=(op == "sum"), src=src or None)
-    text = render_atom_pair(atom)
-    if not (text or "").strip():
-        return None
-    opts = [{"src": "", "label": w, "hint": "", "distinct_by": "warehouse",
-             "found": 0} for w in wh]
-    d = dict(diag or {})
-    d["stock_breakdown_fallback"] = "leader_plus_axis_loophole"
-    d["warehouse_axis_values"] = len(wh)
-    return {"partial": cut or None, "kind": "figures", "text": text,
-            "figures": _fork_figures_of(atom),
-            "atom": atom, "atoms": [atom],
-            "options": opts,
-            "source_fixed": False, "memory_eligible": False,
-            "sources": [src] if src else [],
-            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
-                               reason="разрез по оси: итог+люк")}
-
-
-def _balance_map_by_src():
-    """src → строка карты (form, структурные признаки)."""
-    out = {}
-    for r in balance_map_rows() or []:
-        if r and r[0]:
-            out[r[0]] = r
-    return out
-
-
-def filter_balance_structural(cands, diag=None):
-    """Отсев кандидатов без структурной пригодности для остатков (план §2).
-
-    Фильтрует, не добавляет. Требует: мера в nums, непустота, Period, баланс-структура
-    (RecordType или Дт/Кт) по карте $metadata.
-    """
-    cands = list(cands or [])
-    if not cands:
-        return cands
-    bm = _balance_map_by_src()
-    if not bm:
-        return cands
-    in_map = [c for c in cands if c in bm]
-    if not in_map:
-        return cands
-    rows = psql(
-        "SELECT src_table FROM %s WHERE src_table IN (%s) "
-        "  AND nums IS NOT NULL AND len(map_keys(nums)) > 0 "
-        "GROUP BY 1 HAVING count(*) > 0"
-        % (CORPUS, ", ".join(lit(c) for c in in_map)))
-    live = {r[0] for r in (rows or []) if r and r[0]}
-    kept = []
-    dropped = []
-    for c in cands:
-        if c not in bm:
-            kept.append(c)
-            continue
-        row = bm[c]
-        form = (row[1] or "").strip()
-        has_rt = bool(row[2]) if len(row) > 2 else False
-        has_dk = bool(row[3]) if len(row) > 3 else False
-        has_period = bool(row[4]) if len(row) > 4 else False
-        struct_ok = has_period and (has_rt or has_dk or form == "accumulation_warehouse")
-        if c in live and struct_ok:
-            kept.append(c)
-        else:
-            dropped.append(c)
-    if diag is not None and dropped:
-        diag["balance_structural_drop"] = sorted(dropped)
-    return kept
-
-
-def balance_bridge_clarify(question, capable, diag, cut, t0, labels=None):
-    """Словарный мост не принёс баланс-источник — clarify со списком пригодных."""
-    labels = labels or {}
-    srcs = sorted(capable)
-    if not srcs:
-        return None
-    lab_by = {}
-    missing = [s for s in srcs if s not in labels]
-    if missing:
-        for r in psql(
-                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                % (TABLES, ", ".join(lit(s) for s in missing))):
-            if r and r[0]:
-                lab_by[r[0]] = (r[1] or "").strip()
-    lab_by.update(labels)
-    opts = [{"src": s, "label": human_table_label(s, lab_by.get(s)), "hint": "",
-             "distinct_by": "", "found": 0} for s in srcs]
-    dis = disambiguate_labels([(o["src"], o["label"]) for o in opts])
-    for o in opts:
-        o["label"] = dis.get(o["src"], o["label"])
-    cyr = any("\u0400" <= c <= "\u04ff" for c in (question or ""))
-    if cyr:
-        text = ("Вопрос про остатки — уточните источник из списка "
-                "(без разреза по складам/товарам, если не указано иное).")
-    else:
-        text = ("Stock balance question — pick a source from the list "
-                "(aggregate, no warehouse/item breakdown unless specified).")
-    d = dict(diag or {})
-    d["balance_bridge"] = "clarify"
-    d["balance_capable"] = srcs
-    return {"partial": cut or None, "kind": "clarify", "text": text,
-            "options": opts, "sources": [o["label"] for o in opts],
-            "diag": _diag_pack(d, sec=round(time.time() - t0, 2),
-                               reason="мост не принёс баланс-источник")}
 
 
 register_zone('ask.z12_stock_balance', globals())

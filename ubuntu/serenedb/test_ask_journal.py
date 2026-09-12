@@ -23,6 +23,13 @@ os.environ.setdefault("ASK_JOURNAL", "1")
 
 import serene_ask as A  # noqa: E402
 
+def _reset_decisions_for_tests():
+    with A._DECISION_LOCK:
+        A._DECISIONS.clear()
+        A._CLARIFY_BATCHES.clear()
+        A._RESOLVED_CHOICES.clear()
+
+
 PASS, FAIL = 0, []
 
 
@@ -123,7 +130,7 @@ finally:
 
 
 # ── невалидный билет через одну точку answer_checked → общий путь ────────────
-A.reset_decisions_for_tests()
+_reset_decisions_for_tests()
 A.ASK_JOURNAL = False
 old_core = A._answer_checked_core
 A._answer_checked_core = lambda *a, **k: {

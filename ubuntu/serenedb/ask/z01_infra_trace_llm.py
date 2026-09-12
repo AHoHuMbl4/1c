@@ -48,7 +48,6 @@ ROWS_BUDGET = int(os.environ.get("ASK_ROWS_BUDGET_CHARS", "24000"))
 # Бюджеты ВРЕМЕНИ на отличительные реквизиты: сколько кандидатов считать и сколько
 # термов показывать. Один расчёт ~50 мс. На правильность выбора не влияют — влияют
 # на то, скольким кандидатам мы успеваем дать эту подсказку.
-TERMS_FOR = int(os.environ.get("ASK_TERMS_FOR", "3"))
 # Сколько потерянных сущностей называется поимённо в ответе о полноте. Это БЮДЖЕТ
 # КОНТЕКСТА (п. 19), а не порог правильности: общее число потерянных строк и сущностей
 # называется всегда и целиком, поимённый список ограничен, чтобы не расти с базой.
@@ -57,7 +56,6 @@ COVERAGE_TOP = int(os.environ.get("ASK_COVERAGE_TOP", "15"))
 # час — заведомо больше цикла такта (~6 мин), то есть срабатывает только когда
 # обновление реально встало (1С недоступна, такт падает), а не в норме.
 STALE_WARN_SEC = int(os.environ.get("ASK_STALE_WARN_SEC", "3600"))
-TERMS_TOP = int(os.environ.get("ASK_TERMS_TOP", "6"))
 TOPK = int(os.environ.get("ASK_TOPK", "40"))
 # След хода ответа в журнал сервиса (`journalctl -u 1c-serene-ask@…`). В самом ответе след
 # лежит всегда (`diag.шаги`) — переключатель только про вывод в поток ошибок, чтобы его
@@ -171,7 +169,6 @@ REFS_BOOST = os.environ.get("ASK_REFS_BOOST", "8.0")
 # признаёт сигнал негодным («эмбеддинг не связывает „продажи“ с „Реализация Товаров
 # Услуг“ и ставит выше „Склады“»), и [замер 27.07] это подтвердился и на 1024:
 # у «продажи» и у «sales» ближайшая метка — `catalog_склады`.
-ORDER_BY_MEANING = os.environ.get("ASK_ORDER_BY_MEANING", "1") not in ("0", "false", "no")
 
 # РЕРАНКЕР — модель, которая оценивает пару «вопрос ↔ название», а не расстояние между
 # двумя векторами. Для сопоставления слова человека с названием сущности это и есть
@@ -197,7 +194,6 @@ RERANK_API = os.environ.get("RERANK_API",
 # Сколько названий уходит в реранкер за один вопрос. Это БЮДЖЕТ КОНТЕКСТА, а не порог
 # правильности: он не подбирается под базу и не зависит от неё. Без него объём, уходящий
 # во внешнюю модель, рос бы с числом сущностей — прямое нарушение п. 19.
-RERANK_TOP = int(os.environ.get("ASK_RERANK_TOP", "60"))
 
 # У csv-разбора Python предел поля 128 КБ. Сборщик режет значения на 20 000 символов,
 # но строка корпуса склеивается из многих значений и предел перекрывает, а падение
@@ -270,15 +266,6 @@ EMBED_PATH = os.environ.get("EMBED_PATH", "/v1/embeddings")
 ASK_EMBED_NATIVE = os.environ.get("ASK_EMBED_NATIVE", "0") == "1"
 _EMBED_SECRET_LOCK = threading.Lock()
 _EMBED_SECRET_READY = False
-
-
-def _reload_embed_native_env():
-    global EMBED_SECRET_NAME, EMBED_PATH, ASK_EMBED_NATIVE, _EMBED_SECRET_READY, EMBED_DIM
-    EMBED_SECRET_NAME = _embed_secret_name_from_env()
-    EMBED_PATH = os.environ.get("EMBED_PATH", "/v1/embeddings")
-    ASK_EMBED_NATIVE = os.environ.get("ASK_EMBED_NATIVE", "0") == "1"
-    EMBED_DIM = int(os.environ.get("EMBED_DIM", "1024"))
-    _EMBED_SECRET_READY = False
 
 
 # Единственные две строки, которые уходят человеку от НАС, а не от модели: ответ модели
@@ -438,13 +425,6 @@ def _fmt_gate_bad(v):
     if isinstance(v, int):
         return str(v)
     return str(v)
-
-
-def _gate_bad_preview(bad, limit=60):
-    """Срез первой причины гейта для шага/журнала (str + limit)."""
-    if not bad:
-        return "—"
-    return _fmt_gate_bad(bad[0])[:limit]
 
 
 def _fmt_human(v):
@@ -877,7 +857,6 @@ STEM_DICT = os.environ.get("ASK_STEM_DICT", "search_dict_stem")
 # Умолч. выкл.; имя словаря без дефолта — карта правил в БД, не списки слов в коде.
 ASK_SOLR_SYNONYMS = os.environ.get("ASK_SOLR_SYNONYMS", "0") == "1"
 ASK_SOLR_SYNONYMS_DICT = os.environ.get("ASK_SOLR_SYNONYMS_DICT", "")
-
 
 
 register_zone('ask.z01_infra_trace_llm', globals())
