@@ -282,33 +282,14 @@ def signal_terms(src_table, match, top):
     return [r[0] for r in rs if r and r[0]]
 
 
-CLARIFY_SYS = """The question can be answered from several kinds of records, and the
-answers would differ. Ask the person ONE short question to find out which they meant.
-
-Rules:
-- Ask in the SAME language the question was asked in.
-- Describe each option in plain business words, using its name and what is typical for
-  its records. Never show table names, codes or internal identifiers.
-- One sentence, no preamble, no apology. End with a question mark."""
+# B4: тело CLARIFY_SYS/clarify_text снесено (0 callers). Имя CLARIFY_SYS
+# оставлено пустой строкой — legacy OUR_PROMPTS до flip (B6) ещё ссылается на символ.
+CLARIFY_SYS = ""
 
 
 def clarify_text(question, opts):
-    """Уточняющий вопрос формулирует МОДЕЛЬ — на языке спрашивающего.
-
-    Своей прозой это писать нельзя: она была бы на одном языке независимо от языка
-    вопроса (тот же дефект, что и с русскими умолчаниями ответа). Данные для фразы
-    уже посчитаны — названия источников и их отличительные реквизиты, — выдумывать
-    модели нечего.
-    """
-    body = "Question: %s\n\nOptions:\n" % question + "\n".join(
-        "- %s%s" % (o["label"],
-                    "" if not o["distinct_by"] else " (typical: %s)" % o["distinct_by"])
-        for o in opts)
-    try:
-        return (ds_chat([{"role": "system", "content": CLARIFY_SYS},
-                         {"role": "user", "content": body}], max_tokens=120) or "").strip()
-    except Exception:                          # noqa: BLE001 — сеть/квота
-        return ""                              # вызывающий сформулирует сам по options
+    """Мёртвый символ (B4); меню — clarify_say / readings_menu."""
+    return ""
 
 
 # Формулировка нарочно НЕ говорит «данных нет»: этот же отказ уходит и там, где данные

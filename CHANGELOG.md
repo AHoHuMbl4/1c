@@ -27,6 +27,38 @@ docs/audit/snos15-ONEPATH_PLAN.md (этап-1 армия O×3: остатки-н
 Числа: люк −217 строк; замки 14 файлов зелёные; z20 ~6225→~5000.
 Доки: docs/audit/snos15-ONEPATH_PLAN.md; snos15-PLAN §7 п.8
 
+## 2026-09-12 (9) — B4: полный тракт одного пути в новом z20 (меню до SQL → SQL → compose+gate) + чистка промптов по рою [армия] [замер]
+
+**[армия] B4** (cursor-agent EXIT=0, 633 с): `answer()` 1846-2220 в новом
+z20 (итог 2918 строк): (6) меню прочтений ДО SQL — окно (B3) → compare-
+границы (z11, слот-расчёт пары окон, не выбиратель) → count_defer (из
+z05:740 перенесён, гасит мерное меню) → мера (>1 alts → readings_menu,
+ровно 1 → sole, №12) → ось (>1 → axis_clarify_options → readings_menu);
+(7) SQL: probe → unmatched → no_data (после вики, SQL-ступень — O2 A3) →
+tables_of/totals_of → compare (z11) / groups (z17) / rows_of (z07) /
+stock net-distinct ТОЛЬКО при выбранных чтениях / distinct_axis при
+выбранной оси; пусто → «0 за окно» или честный no_data (п.21);
+(8) _onepath_compose_gate (atoms+gate+period_empty, z18) + stale_note;
+дедлайн до compose (№13); diag: settle/found/totals/счёт.
+
+**[замер] Чистка промптов по ядру роя ×12+2** (R1/R2-red): ANSWER_SYS —
+блок ask вырезан полностью (grep '"ask"' в z18 = 0); CLARIFY_SYS/
+clarify_text обнулены; arbitrate снесён; INTENT amount.op += "=" (код
+принимал с 04.08); OUR_PROMPTS: +WIKI_PICK_SYS/+WIKI_VERIFY_SYS, без
+CLARIFY — дыра leak-детектора закрыта.
+
+**[замер] Приёмка оркестратора:** py_compile ×4 (z20/z01/z07/z18) OK;
+test_one_path 41/0 (наращен: SQL-до-wiki-проверка); grep-негатив
+выбирателей = 1 легитимный вызов sales_compare_windows (слот-расчёт
+границ пары окон из календаря по форме вопроса; терминала нет, ответ
+через compose); legacy и _bootstrap не тронуты (diff пуст). SQL-ступень
+и compose-хвост прочитаны оркестратором построчно. Отчёт:
+docs/audit/onepath/B4-report.md.
+
+Числа: z20 2918; замок 41/0; промпты −1 мёртвый блок, −2 мёртвых
+промпта, +2 в leak-список, +1 буква схемы.
+Доки: CHANGELOG 12.09(9); docs/audit/onepath/B4-report.md; R1/R2-red.md
+
 ## 2026-09-12 (8) — РОЙ ПРОМПТОВ ×12 + красная ×2 (указание владельца: «много агентов, не по 3»): полное сходимое аудита промптов [армия] [замер]
 
 **[армия]** 12 независимых исполнителей (L1 потребители ∥ L2 дубль кода ∥

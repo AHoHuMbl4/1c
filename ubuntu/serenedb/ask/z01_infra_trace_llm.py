@@ -599,34 +599,6 @@ def ds_chat(messages, temperature=0, max_tokens=900):
 # Всё, что не разбирается в номер из предложенного списка, считается «не выбрал», и тогда
 # вопрос уходит человеку. Пересказать ответ он физически не может — его текст не попадает
 # в выдачу ни при каком исходе.
-def arbitrate(question, answers, context=""):
-    """Номер ответа, который действительно отвечает на вопрос; None — не выбрал."""
-    if len(answers) < 2:
-        return 0 if answers else None
-    listing = "\n\n".join("%d) %s" % (i + 1, a) for i, a in enumerate(answers))
-    sys_msg = ("You are given a user question and several ready answers produced by a "
-               "database system. The numbers in them are already computed and correct. "
-               "Choose the ONE answer that actually answers the question that was asked. "
-               "Do not rewrite, summarise or explain anything. "
-               "Reply with a single digit: the number of the answer. "
-               "If none of them answers the question, or two answer it equally well, "
-               "reply 0.")
-    user = ("%sQuestion: %s\n\nAnswers:\n%s\n\nNumber:"
-            % (("Conversation so far:\n%s\n\n" % context[-2000:]) if context else "",
-               question, listing))
-    try:
-        out = ds_chat([{"role": "system", "content": sys_msg},
-                       {"role": "user", "content": user}], max_tokens=8)
-    except Exception:                          # noqa: BLE001 — сеть/квота поставщика
-        return None
-    digits = "".join(ch for ch in (out or "") if ch.isdigit())[:2]
-    if not digits:
-        return None
-    n = int(digits)
-    if n == 0 or n > len(answers):             # «не выбрал» либо выдумал номер
-        return None
-    return n - 1
-
 
 def _embed_request(text, as_query):
     """Запрос к эмбеддеру. `as_query` — считать ВОПРОСОМ, а не документом (см. EMBED_API)."""
@@ -802,7 +774,7 @@ Reply with JSON only.
 
 {
   "terms":  [["alternatives for ONE concept"], ["alternatives for the NEXT concept"]],
-  "amount": {"op": ">"|"<"|">="|"<="|"between"|null, "value": number|null, "value2": number|null},
+  "amount": {"op": "="|">"|"<"|">="|"<="|"between"|null, "value": number|null, "value2": number|null},
   "period": {"from": "YYYY-MM-DD"|null, "to": "YYYY-MM-DD"|null},
   "want":   "list" | "sum" | "count",
   "measure": "the word from the question naming WHICH quantity is asked about

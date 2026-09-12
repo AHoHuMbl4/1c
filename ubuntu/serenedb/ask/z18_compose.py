@@ -56,17 +56,7 @@ ANSWER_SYS = """You answer an employee's question using ONLY the rows given to y
 
 Reply with JSON only, no text outside it:
 {"text": "the answer for the user",
- "ask": "one clarifying question, or null",
  "claims": {"total": number|null, "count": number|null, "max": number|null, "min": number|null}}
-
-"ask" is the middle road between answering and giving up. Fill it ONLY when the rows do
-not answer exactly what was asked, but they DO answer a closely related question about
-the same subject — a different direction of the same relation, a different period, a
-different role of the same party. Then put in "text" what the rows DO show, and in "ask"
-a single short question that would let you answer precisely. Do not ask when the rows
-answer the question — answer it. Do not ask when the rows are unrelated — say there is
-no data. Never ask about our database, tables or fields: ask about the person's intent,
-in their own words.
 
 🔴 NEVER WRITE A COMPUTED FIGURE YOURSELF. Not as digits, not in words, not even by
 copying it from the figures below. The system substitutes the placeholders that are
@@ -85,7 +75,7 @@ anything read from one row is copied.
 
 "claims" — leave every role null. It exists only for compatibility and is ignored.
 
-- Reply in the SAME language the question was asked in — "ask" too.
+- Reply in the SAME language the question was asked in.
 - Never invent numbers, dates or names that are not in the rows.
 - If the rows do not answer the question and nothing close to it, say plainly that there
   is no data. Silence is the last resort, not the first.
@@ -636,20 +626,8 @@ def _filled_ask(ask, agg, totals, money, diag=None, extra=None, slot_mode=None):
 
 
 def _ask_back(raw):
-    """Уточняющий вопрос модели, если она его задала.
-
-    Отдельной функцией, а не третьим членом кортежа `_split_answer`: у того пять путей
-    возврата, и добавлять элемент в каждый — способ ошибиться на ровном месте. Здесь
-    отсутствие поля и поломанная обёртка дают одно и то же — пусто, то есть «не спросила».
-    """
-    m = re.search(r"\{.*\}", raw or "", re.S)
-    if not m:
-        return ""
-    try:
-        d = json.loads(m.group(0))
-    except ValueError:
-        return ""
-    return str((d.get("ask") if isinstance(d, dict) else "") or "").strip()
+    """Поле ask снято из ANSWER_SYS (B4): уточнения только меню-построителем."""
+    return ""
 
 
 def compose(question, rows, agg, corrections=None, totals=None, coverage=None,

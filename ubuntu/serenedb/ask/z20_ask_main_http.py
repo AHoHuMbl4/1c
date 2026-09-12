@@ -1,8 +1,8 @@
-"""Zone 20: ask / HTTP (ask-main-http) — новый тракт «один путь» (волна B3).
+"""Zone 20: ask / HTTP (ask-main-http) — новый тракт «один путь» (волна B4).
 
-Инфраструктура перенесена bit-identical из z20_ask_main_http_legacy.py (B2).
-Тело answer() — линейный скелет: intent → readings → wiki → меню/SQL-заглушка.
-SQL/compose/gate — волна B4. В runtime/_bootstrap не грузится до flip (B6).
+Инфраструктура bit-identical из legacy (B2). Линейный answer(): intent →
+readings → wiki → меню прочтений ДО SQL → SQL → compose+gate.
+В runtime/_bootstrap не грузится до flip (B6).
 """
 from __future__ import annotations
 
@@ -752,7 +752,8 @@ Reply with JSON only, no text outside it:
 
 # Все НАШИ системные сообщения в одном месте: по ним `prompt_leak` ловит утечку
 # инструкции в ответ клиенту точным совпадением строки (`№27`).
-OUR_PROMPTS = [INTENT_SYS, AXIS_PICK_SYS, CLARIFY_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS]
+OUR_PROMPTS = [INTENT_SYS, AXIS_PICK_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS,
+               WIKI_PICK_SYS, WIKI_VERIFY_SYS]
 
 def _coverage_answer(question, diag, t0):
     """Ответ о полноте данных — из переписи, а не из корпуса (п. 13).
@@ -1392,17 +1393,21 @@ def apply_prior_period(intent, prior_intent, today=None):
 def readings_menu(question, kind, items, diag, cut, t0, *, reason=""):
     """Единый построитель меню прочтений (окно / ось / мера).
 
-    Подписи уже в items[].label — без имён метаданных 1С. Возвращает
-    clarify через clarify_opts_response либо None, если пунктов меньше двух.
+    Подписи — в items[].label (measure_captions / подписи окон / axis opts).
+    Возвращает clarify через clarify_opts_response; при <2 пунктах — None.
     """
+    items = list(items or [])
+    if len(items) < 2:
+        return None
     d = dict(diag or {})
     d["reading_kind"] = kind
+    d["choice"] = {"kind": kind, "n": len(items)}
     why = reason or ("уточните %s" % (kind or "вариант"))
     return clarify_opts_response(question, items, d, cut, t0, reason=why)
 
 
 def _reading_human_label(rd, today=None):
-    """Подпись прочтения окна/оси простыми словами (не имена таблиц 1С)."""
+    """Подпись прочтения окна простыми словами (не имена таблиц 1С)."""
     rd = rd or {}
     pr = dict(rd.get("period") or {})
     fr, to = pr.get("from"), pr.get("to")
@@ -1427,7 +1432,7 @@ def _reading_human_label(rd, today=None):
 
 
 def _readings_to_opts(readings, today=None):
-    """Список прочтений → options[] для readings_menu (билет period)."""
+    """Список прочтений окна → options[] для readings_menu (билет period)."""
     opts = []
     for rd in readings or []:
         pr = dict(rd.get("period") or {})
@@ -1470,16 +1475,380 @@ def _apply_sole_reading(intent, rd, diag):
         diag["period_sole_reading"] = rd.get("interpretation_id") or "explicit"
 
 
+def _wiki_named_entity(diag, src):
+    """Сущность названа вопросом и подтверждена вики-верификацией."""
+    return bool(src) and (
+        (diag or {}).get("wiki_hybrid_pick")
+        and (diag or {}).get("wiki_verify") == src)
+
+
+def _measure_menu_opts(src, measures):
+    """Меры → options[] с человеческими подписями (measure_captions)."""
+    names = list(measures or [])
+    caps = measure_captions(names, measure_aliases_of(src) if src else {})
+    ent = ""
+    if src:
+        try:
+            _lab = psql("SELECT label FROM %s WHERE src_table = %s LIMIT 1"
+                        % (TABLES, lit(src)))
+            ent = (_lab[0][0] or "") if _lab and _lab[0] else ""
+        except RuntimeError:
+            ent = ""
+    return [{"src": src, "measure": m, "label": caps.get(m) or m,
+             "distinct_by": "", "entity_label": ent} for m in names]
+
+
+def _settle_measure(src, intent, plan, measure_pick, trusted, resolved, diag):
+    """Единственность меры без ранжира: билет / одно имя / меню-кандидаты.
+
+    Не зовёт legacy-выбор меры по похожести. Count — через count_defer (меню не строится).
+    Возвращает (measure, alts) где alts>1 значит нужно меню.
+    """
+    measure, alts = None, []
+    names = list(measures_of(src) or []) if src else []
+    alias = measure_aliases_of(src) if src else {}
+    if measure_already_proven(trusted, resolved, measure_pick):
+        _pick = measure_pick
+        if _pick is None and isinstance(resolved, dict):
+            _pick = resolved.get("measure")
+        if _pick is None and isinstance(trusted, dict):
+            _pick = trusted.get("measure")
+        _res = resolve_measure(_pick, names, alias, diag) if _pick else None
+        if _res:
+            return _res, []
+        if _pick in names:
+            return _pick, []
+        if diag is not None:
+            diag["measure_pick_unresolved"] = _pick
+    if measure_pick:
+        _res = resolve_measure(measure_pick, names, alias, diag)
+        if _res:
+            return _res, []
+        if measure_pick in names:
+            return measure_pick, []
+    want_q = (plan.get("quantity") or "").strip()
+    word = (intent.get("measure") or "").strip()
+    if want_q and want_q in names:
+        measure = want_q
+        if word:
+            _got, _alts, _how = measure_choice(names, word, alias_by=alias)
+            if _how == "ask" and measure in (_alts or []) and len(_alts) > 1:
+                return None, list(_alts)
+        return measure, []
+    if word:
+        _got, _alts, _how = measure_choice(names, word, alias_by=alias)
+        if _got:
+            return _got, []
+        if _how == "ask" and _alts:
+            return None, list(_alts)
+    _need = ((intent.get("want") or "") == "sum"
+             or (plan.get("compute") or "") in ("sum", "max", "min", "avg"))
+    if _need and len(names) == 1:
+        return names[0], []
+    if _need and len(names) > 1:
+        return None, list(names)
+    return None, []
+
+
+def _settle_axis(src, intent, plan, question, trusted, resolved, diag, measure):
+    """Ось: билет / единственный кандидат / список для меню. Без silent rerank."""
+    grain = {"grain": "row", "col": None, "form": "number",
+             "named_gis": [], "clarify": None}
+    axes = []
+    if not src:
+        return grain, axes, []
+    try:
+        axes = refcols_of(src)
+    except RuntimeError:
+        axes = []
+    _prov = None
+    if choice_proven(trusted, "axis"):
+        _prov = (trusted or {}).get("axis")
+    elif (resolved or {}).get("axis"):
+        _prov = resolved["axis"]
+    if _prov:
+        grain = grain_dec_from_axis_ticket(
+            intent, plan, grain, _prov, question)
+        if diag is not None:
+            diag["axis_from_choice"] = _prov
+        return grain, axes, []
+    if count_question_skips_axis(intent, measure, grain, plan):
+        if diag is not None:
+            diag["axis_clarify_skipped"] = "count_without_measure"
+        return grain, axes, []
+    if total_question_skips_axis(intent, measure, grain, plan, question,
+                                 trusted=trusted, resolved=resolved):
+        if diag is not None:
+            diag["axis_clarify_skipped"] = "total_without_breakdown"
+        return grain, axes, []
+    if not serene_axis:
+        return grain, axes, []
+    _aa = (intent.get("action_axis") or "").strip()
+    _want = (intent.get("want") or "")
+    _plain = (
+        _want in ("", "count", "sum", "list")
+        and not question_wants_breakdown(intent, plan)
+        and not rank_intent_from(intent, plan, question))
+    _axis_word = _aa if _aa else ("" if _plain else intent.get("kind"))
+    _kh = kind_axis_hits(axes, _axis_word) if _axis_word else []
+    _rank = rank_intent_from(intent, plan, question)
+    _alts = []
+    if _rank:
+        _pcol, _hatch = rank_axis_resolve(src, axes, intent, question, plan)
+        if _pcol and not _hatch:
+            _kh = [_pcol]
+        elif _hatch:
+            _alts = list(_hatch)
+            _kh = []
+            if diag is not None:
+                diag["rank_axis_alts"] = list(_hatch)
+    terms_for_axis = [list(g) for g in (intent.get("terms") or [])]
+    _th = term_axis_hits(src, axes, terms_for_axis) if terms_for_axis else {}
+    if _kh and _rank:
+        _ks = set(_kh)
+        _th = {gi: [c for c in (cs or []) if c in _ks]
+               for gi, cs in (_th or {}).items()}
+        _th = {gi: cs for gi, cs in _th.items() if cs}
+    try:
+        grain = serene_axis.decide_grain(
+            axes, _kh, _th, plan.get("compute"), src_is_child(src),
+            rank_intent=_rank)
+    except Exception:  # noqa: BLE001
+        grain = {"grain": "row", "col": None, "form": "number",
+                 "named_gis": [], "clarify": None}
+    if _alts:
+        return grain, axes, _alts
+    if grain.get("clarify") == "axis":
+        opts = axis_clarify_options(src, axes)
+        cols = [o.get("distinct_by") or o.get("axis") or o.get("col")
+                for o in (opts or [])]
+        cols = [c for c in cols if c]
+        return grain, axes, cols or ["axis"]
+    return grain, axes, []
+
+
+def _onepath_compose_gate(question, intent, plan, src, match, preds, measure,
+                          agg, rows, totals, cov, cut, diag, grain_dec, axes,
+                          t0, trusted=None):
+    """Compose + gate: один ответ, одно число; без ask_back-clarify."""
+    money = answer_money(intent.get("want"), plan.get("compute"), measure)
+    _form = (agg or {}).get("form") or grain_dec.get("form") or "number"
+    _grain = (agg or {}).get("grain") or grain_dec.get("grain") or "row"
+    slot_mode = answer_slot_mode(intent.get("want"), plan.get("compute"),
+                                 form=_form, grain=_grain)
+    if (rank_intent_from(intent, plan, question) and slot_mode == "sum"
+            and (_form or "").lower() != "compare"):
+        slot_mode = "rank"
+    diag["slot_mode"] = slot_mode
+    _period_act = empty_after_period_action(intent)
+    diag["empty_after_period_action"] = _period_act
+    say_measure = measure if money else None
+    n_folders = (agg or {}).get("folders") or 0
+    if period_empty_outcome(agg, _period_act, intent, diag):
+        return build_period_empty_answer(
+            question, agg, intent, measure, src, match, preds, money, slot_mode,
+            cov, cut, diag, grain_dec, axes, n_folders, rows, t0, say_measure)
+    # Distinct-axis: атом в compose-хвосте (не отдельный терминал-выбиратель).
+    _want_count = (intent.get("want") or "").strip().lower() in ("count", "")
+    _wiki_locked = _wiki_named_entity(diag, src)
+    if (((agg or {}).get("form") == "distinct_axis" or diag.get("count_distinct_axis"))
+            and _want_count and not _wiki_locked):
+        if (agg or {}).get("form") != "distinct_axis":
+            _dac = diag.get("count_distinct_axis")
+            if _dac:
+                _dagg = aggregate_distinct_axis(src, match, preds, _dac)
+                if _dagg:
+                    agg = _dagg
+                    n_folders = (agg or {}).get("folders") or 0
+                    _form = "distinct_axis"
+                    _grain = "axis"
+    _tot_extra = []
+    if money and slot_mode == "list":
+        for _tm in (totals or []):
+            if (agg or {}).get("grain") == "group":
+                _tot_extra.append(_tm[1])
+            else:
+                _tot_extra.extend(_tm[1:])
+    extra_vals = (_filter_values(intent) + _tot_extra
+                  + ([cov["in_1c"], cov["in_search"], cov["missing"]] if cov else [])
+                  + ([agg["undated"]] if (agg or {}).get("undated") else [])
+                  + ([agg["outside_period"]] if (agg or {}).get("outside_period") else [])
+                  + ([agg["folders"]] if (agg or {}).get("folders") else [])
+                  + ([agg["n_groups"]] if slot_mode in ("rank", "list")
+                     and (agg or {}).get("grain") == "group"
+                     and agg.get("n_groups") is not None else []))
+    our_dates = _filter_dates(intent)
+    totals_shown = [] if (agg or {}).get("grain") == "group" else (totals if money else [])
+    _answer_pairs = [atom_from_agg(
+        agg, operation=atom_operation(
+            intent.get("want"), plan.get("compute"),
+            form=_form, grain=_grain, slot_mode=slot_mode),
+        measure_id=(say_measure or measure or None),
+        measure_label=measure_label_of(src, say_measure or measure),
+        money=money,
+        period=(None if diag.get("period_assumed_dropped")
+                else (intent or {}).get("period")),
+        period2=(intent or {}).get("period2") if _form == "compare" else None,
+        period_origin=_passport_origin(intent, diag),
+        grain=_grain, form=_form,
+        axis=_passport_axis_label(
+            (agg or {}).get("axis") or (agg or {}).get("col")
+            or grain_dec.get("col"), axes) or None,
+        completeness=cov, folders=n_folders, src=src,
+        compare_form=diag.get("compare_sales"))]
+    raw = compose(question, rows, agg, totals=totals_shown, coverage=cov,
+                  measure_used=say_measure, folders=n_folders, money=money,
+                  src=src, slot_mode=slot_mode, atom_pairs=_answer_pairs)
+    text, claims = _split_answer(raw)
+    by_hand = copied_figures(text, agg, rows)
+    cov_slots = ({"in_1c": cov["in_1c"], "in_search": cov["in_search"],
+                  "missing": cov["missing"]} if cov else None)
+    kw_src = kind_word(src) if src else ""
+    if kw_src and slot_mode != "rank":
+        cov_slots = dict(cov_slots or {})
+        cov_slots["count_kind"] = kw_src
+    text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots,
+                                      slot_mode=slot_mode)
+    if _answer_pairs:
+        text, pair_bad = fill_atom_pairs(text, _answer_pairs)
+        slots_bad = list(slots_bad) + list(pair_bad)
+    text = ensure_n_groups_named(text, agg)
+    _pass_frag, pass_fields = build_answer_passport(
+        period=(intent or {}).get("period"),
+        period_dropped=bool(diag.get("period_assumed_dropped")),
+        origin=_passport_origin(intent, diag),
+        src_label=_table_label(src),
+        src_kind=kind_word(src) if src else "",
+        measure=measure or "",
+        grain=(agg or {}).get("grain") or grain_dec.get("grain") or "row",
+        axis_label=_passport_axis_label(
+            _passport_axis_col(agg, grain_dec), axes),
+        form=(agg or {}).get("form") or grain_dec.get("form") or "number",
+        text=text)
+    text = ensure_answer_passport(text, _pass_frag)
+    bad_roles = formulation_flaws(text, slots_bad) + by_hand
+    ok_roles = not bad_roles
+    miss = asked_figure_missing(text, agg, intent.get("want"), money, n_folders)
+    if miss:
+        ok_roles, bad_roles = False, bad_roles + [miss]
+    leak = prompt_leak(text, OUR_PROMPTS)
+    if leak:
+        ok_roles, bad_roles = False, bad_roles + ["утечка инструкции: %s" % leak]
+    seen = rows_seen(rows)
+    ok_nums, bad_nums = gate(text, seen, agg, extra_vals, our_dates, money=money,
+                               slot_mode=slot_mode)
+    ok, bad = (ok_roles and ok_nums), (bad_roles + bad_nums)
+    if ok:
+        text = ensure_count_named(text, agg, slot_mode)
+    if not ok and agg:
+        diag["retry"] = [_fmt_gate_bad(x) for x in bad[:3]]
+        raw2 = compose(question, rows, agg,
+                       corrections=[_fmt_gate_bad(x) for x in bad[:3]],
+                       totals=totals_shown, coverage=cov,
+                       measure_used=say_measure, folders=n_folders,
+                       money=money, src=src, slot_mode=slot_mode,
+                       atom_pairs=_answer_pairs)
+        text2, claims2 = _split_answer(raw2)
+        by_hand2 = copied_figures(text2, agg, rows)
+        text2, slots_bad2 = _fill_figures(text2, agg, totals_shown, money,
+                                            cov_slots, slot_mode=slot_mode)
+        if _answer_pairs:
+            text2, pair_bad2 = fill_atom_pairs(text2, _answer_pairs)
+            slots_bad2 = list(slots_bad2) + list(pair_bad2)
+        text2 = ensure_n_groups_named(text2, agg)
+        _pass_frag2, pass_fields2 = build_answer_passport(
+            period=(intent or {}).get("period"),
+            period_dropped=bool(diag.get("period_assumed_dropped")),
+            origin=_passport_origin(intent, diag),
+            src_label=_table_label(src),
+            src_kind=kind_word(src) if src else "",
+            measure=measure or "",
+            grain=(agg or {}).get("grain") or grain_dec.get("grain") or "row",
+            axis_label=_passport_axis_label(
+                _passport_axis_col(agg, grain_dec), axes),
+            form=(agg or {}).get("form") or grain_dec.get("form") or "number",
+            text=text2)
+        text2 = ensure_answer_passport(text2, _pass_frag2)
+        bad_roles2 = formulation_flaws(text2, slots_bad2) + by_hand2
+        ok_roles2 = not bad_roles2
+        miss2 = asked_figure_missing(text2, agg, intent.get("want"), money,
+                                     n_folders)
+        if miss2:
+            ok_roles2, bad_roles2 = False, bad_roles2 + [miss2]
+        leak2 = prompt_leak(text2, OUR_PROMPTS)
+        if leak2:
+            ok_roles2, bad_roles2 = False, bad_roles2 + [
+                "утечка инструкции: %s" % leak2]
+        ok_nums2, bad_nums2 = gate(text2, seen, agg, extra_vals, our_dates,
+                                     money=money, slot_mode=slot_mode)
+        if ok_roles2 and ok_nums2 and (text2 or "").strip():
+            text, claims = text2, claims2
+            text = ensure_count_named(text, agg, slot_mode)
+            _pass_frag, pass_fields = _pass_frag2, pass_fields2
+            ok, bad = True, []
+            diag["retry_ok"] = True
+        else:
+            bad = bad + (bad_roles2 + bad_nums2)[:3]
+    diag["claims"] = claims or None
+    tag = _src_tag(src)
+    if not ok:
+        if agg:
+            if period_empty_outcome(agg, _period_act, intent, diag):
+                return build_period_empty_answer(
+                    question, agg, intent, measure, src, match, preds, money,
+                    slot_mode, cov, cut, diag, grain_dec, axes, n_folders,
+                    rows, t0, say_measure)
+            _figs = compose_slot_values(agg, measure=measure,
+                                         folders=n_folders, money=money,
+                                         slot_mode=slot_mode)
+            _figs.update(pass_fields or {})
+            _atom = _answer_pairs[0] if _answer_pairs else None
+            return {"partial": cut or None, "kind": "figures",
+                    "text": atom_terminal_gate_text(_atom, question, agg=agg),
+                    "figures": _figs, "atom": _atom,
+                    "atoms": [_atom] if _atom else [],
+                    "sources": [tag], "completeness": cov,
+                    "diag": _diag_pack(diag, gate_rejected=bad[:6])}
+        return {"partial": cut or None, "kind": "no_data",
+                "text": NO_DATA_TEXT or refuse_text(question), "sources": [],
+                "diag": _diag_pack(diag, gate_rejected=bad[:6])}
+    text = (text or "").strip()
+    _figs = compose_slot_values(agg, measure=measure, folders=n_folders,
+                                money=money, slot_mode=slot_mode)
+    _figs.update(pass_fields or {})
+    _atom = _answer_pairs[0] if _answer_pairs else None
+    if ASK_CURRENCY_AXIS:
+        _cur_cl = currency_mismatch_blocks_answer(
+            intent, question, src, trusted=trusted)
+        if _cur_cl:
+            _cur_cl["partial"] = cut or None
+            _cur_cl["sources"] = [tag]
+            _cur_cl["diag"] = _diag_pack(diag, sec=round(time.time() - t0, 2))
+            return _cur_cl
+    _money_unit = _unit_for_measure(measure, money, src=src)
+    if ASK_CURRENCY_AXIS and money:
+        try:
+            _cu = currency_unit_for_reading((intent or {}).get("period"), src=src)
+            if _cu:
+                _money_unit = _cu
+        except Exception:  # noqa: BLE001
+            pass
+    if money:
+        text = postprocess_money_answer_text(text, _money_unit)
+    return {"partial": cut or None, "kind": "answer", "text": text,
+            "sources": [tag], "completeness": cov, "measure": say_measure,
+            "figures": _figs, "atom": _atom,
+            "atoms": [_atom] if _atom else [],
+            "diag": _diag_pack(diag, rows=len(rows or []),
+                               sec=round(time.time() - t0, 2), gate_ok=True)}
+
+
 def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False,
             prior=None, trusted=None, resolved=None):
-    """Линейный тракт «один путь» (скелет B3; SQL — B4).
+    """Линейный тракт «один путь» (B4): вопрос → вики → меню → SQL → ответ.
 
-    вопрос → разбор → список прочтений (без лидера) → wiki-каскад →
-    меню при >1 прочтении → (B4) запрос → ответ.
-
-    Сырой focus без билета каскад не обходит (O3 №4). Молчаливого лидера
-    окна/оси нет (O3 №8). Coverage идёт после wiki (O3 №9).
-    Билеты consume/hold — в answer_checked (O3 №14); здесь — trusted/resolved.
+    Меню прочтений (окно/мера/ось) — ДО SQL. Count не спрашивает меру.
+    Молчаливых выбирателей нет. Compose+gate — один ответ, одно число.
     """
     # ── 1. Подготовка ────────────────────────────────────────────────────────
     if _token_acc.get() is None:
@@ -1510,8 +1879,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if deadline_hit():
         raise AskDeadline("deadline")
 
-    # ── 2. Readings: календарь/валюта → СПИСОК, без лидера (дыра O3 №8) ───────
-    # repair границ — не выбор; молчаливого лидера окна/оси нет (O3 №8).
+    # ── 2. Readings: список, без лидера (O3 №8) ──────────────────────────────
     repair_period_from_question(
         intent, question, today, period_from_prior=period_from_prior)
     readings = list(period_readings(
@@ -1519,16 +1887,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     readings = expand_readings_calendar_axis(readings, prefer=None)
     readings = expand_readings_currency_axis(
         readings, prefer=None, intent=intent, trusted=trusted)
-    # В intent["period"] из readings ничего не пишем (нет молчаливого лидера).
 
     preds = _predicates(intent)
     разбор = intent.get("parse") or {}
     diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind"),
-            "parse": разбор, "шаги": шаги, "onepath": "B3"}
+            "parse": разбор, "шаги": шаги, "onepath": "B4"}
     if period_from_prior:
         diag["period_from_prior"] = True
     if readings:
         diag["period_readings"] = len(readings)
+        diag["readings"] = {"window": len(readings)}
     шаг("разбор вопроса", тип=intent.get("kind"),
         понятий=len(intent.get("terms") or []),
         величина=(intent.get("measure") or "—"),
@@ -1551,8 +1919,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
             for a in разбор["assumed"])
 
-    # ── 3–5. Wiki — единственный выбор сущности; билет пропускает повтор ─────
-    # Coverage (about=coverage) НЕ раньше wiki (дыра O3 №9).
+    # ── 3–5. Wiki (O3 №4/№9/№14); deadline до wiki (O3 №13) ──────────────────
     about_coverage = (intent.get("about") or "") == "coverage"
     if about_coverage:
         diag["about"] = "coverage"
@@ -1563,8 +1930,6 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     picked = []
     marks = {}
     plan = {}
-    # Билет/resolved: выбор человека из ЭТОГО decision_id (дыра O3 №4/№14).
-    # Сырой focus без trusted/resolved каскад НЕ обходит.
     _ticket_locked = entity_choice_locked(trusted, resolved)
     _held = hold_settled_entity(
         focus, trusted, resolved, found_by=None, measure_pick=measure_pick)
@@ -1582,14 +1947,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             _ticket_locked = False
     if not _ticket_locked:
         if focus:
-            # Подсказка отбора — не доказанный выбор; каскад всё равно.
             diag["focus_hint"] = focus
-        # Кандидатный пул каскад строит сам (wiki_hybrid_pool); чужих пулов нет.
         _ep = wiki_primary_entity_cascade(
             question, intent, [], diag, cut, t0,
             {}, "", preds, {})
         if isinstance(_ep, dict) and _ep.get("kind"):
-            # clarify / no_data / answer из z21 (меню — wiki_menu_captions).
             шаг("wiki исход", kind=_ep.get("kind"))
             return _ep
         picked = list((_ep or {}).get("picked") or [])
@@ -1607,13 +1969,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             }
         шаг("wiki лидер", src=picked[0], сколько=len(picked))
 
-    # Coverage: ответ о полноте ПОСЛЕ wiki (или честный no_data выше).
     if about_coverage:
         шаг("coverage после wiki")
         return _coverage_answer(question, diag, t0)
 
-    # ── 6. Окно/ось как прочтения после wiki (меню — построитель; SQL — B4) ──
-    # Правило единственности: ровно один кандидат или билет (дыра O3 №12).
+    src = picked[0] if picked else None
+    diag["src"] = src
+    diag["focus"] = src
+    diag["found"] = 1 if src else 0
+
+    # ── 6. Меню прочтений ДО SQL (O3 №8/№10/№12) ─────────────────────────────
     if len(readings) > 1:
         _w_opts = _readings_to_opts(readings, today)
         _w_menu = readings_menu(
@@ -1626,30 +1991,232 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _apply_sole_reading(intent, readings[0], diag)
         шаг("единственное прочтение окна",
             id=(readings[0].get("interpretation_id") or "—"))
+    preds = _predicates(intent)
 
-    # Мера: count не спрашивается; >1 меры → меню (полная реализация — B4).
-    # В скелете только структура: measure_pick/билет уже есть — ок; иначе
-    # SQL-ступень B4 разберёт живые меры сущности.
+    # Compare-окна как readings (не sales_compare-терминал).
+    _cmp = bool(src and sales_compare_intent(intent, question))
+    if _cmp:
+        _p1, _p2, _cmp_form = sales_compare_windows(intent, today, question)
+        _cmp_ok = ((_p1.get("from") or _p1.get("to"))
+                   and (_p2.get("from") or _p2.get("to")))
+        if _cmp_ok:
+            intent["period"] = _p1
+            intent["period2"] = _p2
+            diag["compare_sales"] = _cmp_form
+            preds = _predicates(intent)
+            шаг("окна сравнения", form=_cmp_form)
+        else:
+            _cmp = False
+
     _want = (intent.get("want") or "").strip()
-    if _want == "count":
+    _ax_cd = []
+    if src:
+        try:
+            _ax_cd = refcols_of(src)
+        except RuntimeError:
+            _ax_cd = []
+    _count_defer = bool(
+        src and count_defer_measure_clarify(intent, src, _ax_cd))
+    if _count_defer:
         diag["count_no_measure_menu"] = True
+        diag["count_axis_defer_measure"] = True
 
-    # ── 7. SQL-ступень — заглушка волны B4 ────────────────────────────────────
+    measure, measure_alts = None, []
+    if not _count_defer:
+        measure, measure_alts = _settle_measure(
+            src, intent, plan, measure_pick, trusted, resolved, diag)
+        if measure_alts and len(measure_alts) > 1:
+            _m_opts = _measure_menu_opts(src, measure_alts)
+            _m_menu = readings_menu(
+                question, "measure", _m_opts, diag, cut, t0,
+                reason="уточните меру")
+            if _m_menu:
+                шаг("меню прочтений меры", сколько=len(_m_opts))
+                return _m_menu
+        if not measure and measure_alts and len(measure_alts) == 1:
+            measure = measure_alts[0]
+            measure_alts = []
+    diag["measure"] = measure
+    шаг("величина", величина=(measure or "—"),
+        подходящих=len(measure_alts or []))
+
+    grain_dec, axes, axis_alts = _settle_axis(
+        src, intent, plan, question, trusted, resolved, diag, measure)
+    if axis_alts and len(axis_alts) > 1:
+        _a_opts = axis_clarify_options(src, axes)
+        if len(_a_opts) > 1:
+            _a_menu = readings_menu(
+                question, "axis", _a_opts, diag, cut, t0,
+                reason="уточните ось")
+            if _a_menu:
+                шаг("меню прочтений оси", сколько=len(_a_opts))
+                return _a_menu
+    diag["grain"] = grain_dec.get("grain")
+    diag["axis_col"] = grain_dec.get("col")
+    diag["axis_form"] = grain_dec.get("form")
+    diag["settle"] = {
+        "src": src, "measure": measure,
+        "period": (intent.get("period") or {}).get("interpretation_id")
+                  or (intent.get("period") or {}).get("from"),
+        "axis": grain_dec.get("col"),
+        "compare": bool(_cmp),
+    }
+
+    # ── 7. SQL-ступень (src только из wiki; без silent src-подмены) ──────────
     if deadline_hit():
         raise AskDeadline("deadline")
-    шаг("sql stub B4", src=(picked[0] if picked else "—"))
-    return {
-        "kind": "unavailable",
-        "text": "запрос к данным ещё собирается (волна B4)",
-        "sources": [],
-        "partial": cut or None,
-        "options": [],
-        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                           onepath_stub="B4-sql",
-                           wiki_src=(picked[0] if picked else None),
-                           marks=marks or None,
-                           plan=plan or None),
-    }
+
+    # Row-filter после меню: unmatched → no_data (не выбиратель сущности).
+    exprs, kinds = probe(intent.get("terms") or [])
+    diag["match_by"] = {k: v for k, v in (kinds or {}).items() if k != "_resolved"}
+    if isinstance(kinds, dict) and kinds.get("_resolved"):
+        diag["resolved"] = kinds["_resolved"]
+    n_groups = len(intent.get("terms") or [])
+    matched_groups = matched_group_count(kinds)
+    if n_groups > 0 and matched_groups < n_groups:
+        diag["unmatched_terms"] = n_groups - matched_groups
+        шаг("значения не найдены", групп=n_groups - matched_groups)
+        return {"partial": cut or None, "kind": "no_data", "sources": [],
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                   reason="значения из вопроса не найдены в данных")}
+    match, _k = match_expr(exprs, preds)
+    diag["min_should_match"] = _k if exprs else 0
+    by = {}
+    try:
+        by = tables_of(match, preds) if src else {}
+    except RuntimeError:
+        by = {}
+    diag["found"] = by.get(src, 0) if src else 0
+
+    cov = _coverage_of(src) if src else None
+    if cov:
+        diag["incomplete"] = cov
+        if cov.get("missing", 0) > 0:
+            cut["coverage_missing"] = cov["missing"]
+
+    if measure:
+        preds = list(preds) + _num_pred(intent, measure)
+
+    totals = []
+    if measure and src:
+        try:
+            totals = totals_of(src, match, preds, [measure])
+        except RuntimeError:
+            totals = []
+    if totals:
+        diag["totals"] = {m: [v, mx, mn] for m, v, mx, mn in totals}
+
+    agg, rows = None, None
+    if _cmp and src and measure:
+        _cagg = aggregate_compare_sales(
+            src, match, intent.get("period") or {},
+            intent.get("period2") or {}, measure)
+        if _cagg:
+            agg, rows = _cagg, []
+            grain_dec = {"grain": "row", "col": None, "form": "compare",
+                         "named_gis": [], "clarify": None}
+            diag["grain"] = "row"
+            diag["axis_form"] = "compare"
+            шаг("sql compare", diff=agg.get("sum"))
+
+    if (agg is None and grain_dec.get("grain") == "group"
+            and grain_dec.get("col") and serene_axis and src):
+        _col = grain_dec["col"]
+        _named = grain_dec.get("named_gis") or []
+        _k = serene_axis.rank_k(intent.get("amount"), plan.get("compute"),
+                                len(_named), ROWS_TO_MODEL)
+        _compute_g = plan.get("compute")
+        agg = aggregate_groups(src, match, preds, measure, _col, _k,
+                               _compute_g, None)
+        if not agg or not agg.get("count"):
+            act = empty_after_period_action(intent)
+            if not _zero_period_not_missing(intent, diag, question, act, src):
+                return {"partial": cut or None, "kind": "no_data",
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "sources": [],
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+            if not agg:
+                agg = {"count": 0, "sum": 0.0, "src": src, "measure": measure,
+                       "folders": 0, "out_of_range": 0, "count_amount": 0,
+                       "grain": "group", "col": _col}
+        rows = serene_axis.group_rows((agg or {}).get("groups") or [])
+        шаг("sql groups", ось=_col, групп=(agg or {}).get("n_groups"))
+
+    if agg is None and src:
+        rows = rows_of(src, match, preds, TOPK, measure)
+        if not rows:
+            act = empty_after_period_action(intent)
+            if not _zero_period_not_missing(intent, diag, question, act, src):
+                return {"partial": cut or None, "kind": "no_data",
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "sources": [],
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+        # stock net-distinct — только явная SQL-форма при уже выбранных чтениях.
+        if (agg is None
+                and stock_count_aggregate_without_subject(intent, plan, question)
+                and (measure or _count_defer or grain_dec.get("col"))):
+            _net = aggregate_stock_net_distinct(
+                intent, question, match, preds, diag)
+            if _net:
+                agg = _net
+                diag["stock_net_distinct"] = True
+                diag["count_distinct_axis"] = _net.get("axis")
+        _dac = None
+        if grain_dec.get("col") and _want in ("count", ""):
+            _dac = grain_dec.get("col")
+        if not _dac:
+            _dac = live_axis_col_for_count(
+                intent, src, axes,
+                named_entity=_wiki_named_entity(diag, src))
+        if _dac and agg is None:
+            agg = aggregate_distinct_axis(src, match, preds, _dac)
+            if agg:
+                diag["count_distinct_axis"] = _dac
+        if agg is None:
+            agg = aggregate(src, match, preds, measure)
+        if not agg:
+            act = empty_after_period_action(intent)
+            if act in ("empty_period", "drop_assumed"):
+                agg = {"count": 0, "sum": 0.0, "src": src, "measure": measure,
+                       "folders": 0, "out_of_range": 0, "count_amount": 0}
+            else:
+                return {"partial": cut or None, "kind": "no_data",
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "sources": [],
+                        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2))}
+        шаг("sql aggregate", строк=(agg or {}).get("count"),
+            итог=(agg or {}).get("sum"))
+
+    if agg and agg.get("scope"):
+        diag["счёт"] = dict(agg["scope"], величина=measure,
+                            строк=agg["count"], со_значением=agg["count_amount"],
+                            групп_отброшено=agg["folders"],
+                            вне_разрядности=agg["out_of_range"])
+    if agg:
+        diag["n_rows"] = agg.get("count")
+        if agg.get("n_groups") is not None:
+            diag["n_groups"] = agg["n_groups"]
+
+    # ── 8. Compose + gate (дедлайн до compose — O3 №13) ───────────────────────
+    if deadline_hit():
+        raise AskDeadline("deadline")
+    шаг("compose+gate")
+    out = _onepath_compose_gate(
+        question, intent, plan, src, match, preds, measure,
+        agg, rows or [], totals, cov, cut, diag, grain_dec, axes, t0,
+        trusted=trusted)
+    if isinstance(out, dict):
+        d = dict(out.get("diag") or {})
+        d.setdefault("src", src)
+        d.setdefault("readings", diag.get("readings"))
+        d.setdefault("settle", diag.get("settle"))
+        d.setdefault("marks", marks or None)
+        d.setdefault("plan", plan or None)
+        out = dict(out, diag=d)
+        шаг("ответ", kind=out.get("kind"))
+    return out
+
 
 
 SLOT_COVER = os.environ.get("ASK_SLOT_COVER", "0") == "1"
