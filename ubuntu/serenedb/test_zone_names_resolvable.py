@@ -54,7 +54,7 @@ def _imports_namespace() -> dict:
 
 def _zone_body_slice(path: Path) -> tuple[list[ast.stmt], int, int]:
     text = path.read_text(encoding="utf-8")
-    if path.name == "z20_ask_main_http.py":
+    if path.name == "z20_ask_main_http_legacy.py":
         text = boot._patch_z20_wiki_primary(text)
     lines = text.splitlines(True)
     start = boot._body_start_line(lines)

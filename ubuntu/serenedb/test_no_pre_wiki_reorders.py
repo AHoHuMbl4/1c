@@ -22,7 +22,7 @@ def t(name, cond, detail=None):
         print("FAIL-", name, detail if detail is not None else "")
 
 
-z20 = (ASK / "z20_ask_main_http.py").read_text(encoding="utf-8")
+z20 = (ASK / "z20_ask_main_http_legacy.py").read_text(encoding="utf-8")
 z10 = (ASK / "z10_rank.py").read_text(encoding="utf-8")
 z11 = (ASK / "z11_sales.py").read_text(encoding="utf-8")
 imports = (ASK / "_imports.py").read_text(encoding="utf-8")

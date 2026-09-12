@@ -27,6 +27,27 @@ docs/audit/snos15-ONEPATH_PLAN.md (этап-1 армия O×3: остатки-н
 Числа: люк −217 строк; замки 14 файлов зелёные; z20 ~6225→~5000.
 Доки: docs/audit/snos15-ONEPATH_PLAN.md; snos15-PLAN §7 п.8
 
+## 2026-09-12 (4) — B0-армия: 13 grep-замков → legacy; срез 17 зелёных / 2 известных красных [армия] [замер]
+
+**[армия] B0** (cursor-agent EXIT=0, 265 с; приёмка оркестратора): во всех
+13 замках, читавших текст z20 по пути, путь переведён на
+`z20_ask_main_http_legacy.py` (дифф — ровно 1 строка на файл, проверено);
+других вхождений старого имени в test_*.py нет.
+
+**[замер] Срез:** 17 зелёных (zone 99/0, no_pre_wiki 39/0, wiki_leader,
+measure_hatch_luk, measure_menu_not_silent, axis_count_plain, enough,
+hatch, wiki_card_hybrid, rank_leader_path, sales_canon_prefer, ask_choice_
+memory, early_clarify_atom_fps, journal, compose и др.). Красные — НЕ от
+rename: `test_ask_embed_native` (эмбеддер недоступен в локальной среде);
+`test_final_stock_route_filters_absent` 13/1 — пред-существующий: проверка
+«plan={} kept before K6» ждёт `prefer_entity_for_catalog_count(...)`,
+снесённый ещё в 0434d71 (В2, 11.09); судьба по O5 — переписать под новый
+тракт, legacy не чиним. `test_measure_menu.py` — файла нет (имя-призрак).
+Отчёт: docs/audit/onepath/B0-locks-slice.md (119 строк).
+
+Числа: 13/13 redirect; 17 зелёных; 2 известных красных.
+Доки: docs/audit/onepath/B0-locks-slice.md; O5-locks §1
+
 ## 2026-09-12 (3) — ЭТАП-2/B0: старый z20 → z20_ask_main_http_legacy.py, помечен БЫВШИМ; выбор владельца — B [решение] [код] [замер]
 
 **[решение владельца]:** «B делаем. Старый файл переименуй и пометь как

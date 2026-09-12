@@ -27,7 +27,7 @@ def t(name, cond, detail=""):
         print("FAIL-", name, detail)
 
 
-z20 = (ROOT / "ask" / "z20_ask_main_http.py").read_text(encoding="utf-8")
+z20 = (ROOT / "ask" / "z20_ask_main_http_legacy.py").read_text(encoding="utf-8")
 z10 = (ROOT / "ask" / "z10_rank.py").read_text(encoding="utf-8")
 
 # диск: kind не подставляется при plain

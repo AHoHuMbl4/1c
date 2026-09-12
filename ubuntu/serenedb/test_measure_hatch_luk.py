@@ -27,7 +27,7 @@ def t(name, cond, detail=""):
         print("FAIL-", name, detail)
 
 
-z20 = (ASK / "z20_ask_main_http.py").read_text(encoding="utf-8")
+z20 = (ASK / "z20_ask_main_http_legacy.py").read_text(encoding="utf-8")
 
 # ── диск: люк-маркеры сняты ──────────────────────────────────────────────────
 t("0 measure_hatch в z20", "measure_hatch" not in z20)

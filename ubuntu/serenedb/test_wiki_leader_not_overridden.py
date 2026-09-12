@@ -42,7 +42,7 @@ t("fork_clarify_from_wiki_pool callable",
   callable(A.fork_clarify_from_wiki_pool))
 t("resolve_fork_wiki_gate callable", callable(A.resolve_fork_wiki_gate))
 
-z20 = (ROOT / "ask" / "z20_ask_main_http.py").read_text(encoding="utf-8")
+z20 = (ROOT / "ask" / "z20_ask_main_http_legacy.py").read_text(encoding="utf-8")
 # Волна W: V4c маркеры на ДИСКЕ (долг патча закрыт); патч — no-op по E–H.
 t("диск: fork_deferred_to_wiki в z20",
   "fork_deferred_to_wiki" in z20)

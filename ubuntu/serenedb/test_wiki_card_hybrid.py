@@ -265,7 +265,7 @@ def main() -> int:
 
     boot = (ROOT / "ask" / "_bootstrap.py").read_text(encoding="utf-8")
     t("bootstrap z20 wiki patch", "_patch_z20_wiki_primary" in boot)
-    z20_raw = (ROOT / "ask" / "z20_ask_main_http.py").read_text(encoding="utf-8")
+    z20_raw = (ROOT / "ask" / "z20_ask_main_http_legacy.py").read_text(encoding="utf-8")
     import ask._bootstrap as _boot
     z20_patched = _boot._patch_z20_wiki_primary(z20_raw)
     t("bootstrap patch injects cascade call",

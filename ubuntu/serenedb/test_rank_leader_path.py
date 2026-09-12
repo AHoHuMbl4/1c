@@ -193,7 +193,7 @@ t("rank_deterministic_answer GONE",
 t("rank_gate_fallback_answer GONE",
   not hasattr(A, "rank_gate_fallback_answer"))
 _z20 = open(__file__.replace("test_rank_leader_path.py",
-                             "ask/z20_ask_main_http.py"), encoding="utf-8").read()
+                             "ask/z20_ask_main_http_legacy.py"), encoding="utf-8").read()
 t("0 call-site rank_deterministic_answer in z20",
   "rank_deterministic_answer" not in _z20)
 t("0 call-site rank_gate_fallback_answer in z20",
