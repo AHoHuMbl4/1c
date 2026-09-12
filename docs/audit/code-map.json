@@ -1,11 +1,11 @@
 {
   "source": "ubuntu/serenedb/ask/",
-  "source_lines": 13281,
+  "source_lines": 13322,
   "package": true,
   "zones_file": "docs/audit/zones.json",
   "coverage_ok": true,
   "coverage_problems": [],
-  "function_count": 472,
+  "function_count": 474,
   "functions": [
     {
       "name": "_new_rid",
@@ -3941,8 +3941,8 @@
       "name": "answer",
       "qualname": "answer",
       "lineno": 1846,
-      "end_lineno": 2297,
-      "length": 452,
+      "end_lineno": 2310,
+      "length": 465,
       "nested": false,
       "zone_id": "20",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
@@ -3960,8 +3960,8 @@
     {
       "name": "_journal_keep_n",
       "qualname": "_journal_keep_n",
-      "lineno": 2303,
-      "end_lineno": 2317,
+      "lineno": 2316,
+      "end_lineno": 2330,
       "length": 15,
       "nested": false,
       "zone_id": "20",
@@ -3970,8 +3970,8 @@
     {
       "name": "_journal_code_md5",
       "qualname": "_journal_code_md5",
-      "lineno": 2320,
-      "end_lineno": 2327,
+      "lineno": 2333,
+      "end_lineno": 2340,
       "length": 8,
       "nested": false,
       "zone_id": "20",
@@ -3980,8 +3980,8 @@
     {
       "name": "_journal_build_ts",
       "qualname": "_journal_build_ts",
-      "lineno": 2330,
-      "end_lineno": 2341,
+      "lineno": 2343,
+      "end_lineno": 2354,
       "length": 12,
       "nested": false,
       "zone_id": "20",
@@ -3990,8 +3990,8 @@
     {
       "name": "_journal_alias_ver",
       "qualname": "_journal_alias_ver",
-      "lineno": 2344,
-      "end_lineno": 2357,
+      "lineno": 2357,
+      "end_lineno": 2370,
       "length": 14,
       "nested": false,
       "zone_id": "20",
@@ -4000,8 +4000,8 @@
     {
       "name": "_journal_sql_int",
       "qualname": "_journal_sql_int",
-      "lineno": 2360,
-      "end_lineno": 2366,
+      "lineno": 2373,
+      "end_lineno": 2379,
       "length": 7,
       "nested": false,
       "zone_id": "20",
@@ -4010,8 +4010,8 @@
     {
       "name": "_journal_sql_bool",
       "qualname": "_journal_sql_bool",
-      "lineno": 2369,
-      "end_lineno": 2372,
+      "lineno": 2382,
+      "end_lineno": 2385,
       "length": 4,
       "nested": false,
       "zone_id": "20",
@@ -4020,8 +4020,8 @@
     {
       "name": "_journal_atoms_slim",
       "qualname": "_journal_atoms_slim",
-      "lineno": 2375,
-      "end_lineno": 2403,
+      "lineno": 2388,
+      "end_lineno": 2416,
       "length": 29,
       "nested": false,
       "zone_id": "20",
@@ -4030,8 +4030,8 @@
     {
       "name": "_journal_clarify_options",
       "qualname": "_journal_clarify_options",
-      "lineno": 2406,
-      "end_lineno": 2428,
+      "lineno": 2419,
+      "end_lineno": 2441,
       "length": 23,
       "nested": false,
       "zone_id": "20",
@@ -4040,8 +4040,8 @@
     {
       "name": "_journal_doubt",
       "qualname": "_journal_doubt",
-      "lineno": 2431,
-      "end_lineno": 2440,
+      "lineno": 2444,
+      "end_lineno": 2453,
       "length": 10,
       "nested": false,
       "zone_id": "20",
@@ -4050,8 +4050,8 @@
     {
       "name": "_journal_ticket_variant",
       "qualname": "_journal_ticket_variant",
-      "lineno": 2443,
-      "end_lineno": 2456,
+      "lineno": 2456,
+      "end_lineno": 2469,
       "length": 14,
       "nested": false,
       "zone_id": "20",
@@ -4060,8 +4060,8 @@
     {
       "name": "_journal_intent",
       "qualname": "_journal_intent",
-      "lineno": 2459,
-      "end_lineno": 2461,
+      "lineno": 2472,
+      "end_lineno": 2474,
       "length": 3,
       "nested": false,
       "zone_id": "20",
@@ -4070,8 +4070,8 @@
     {
       "name": "_journal_fork_keys",
       "qualname": "_journal_fork_keys",
-      "lineno": 2464,
-      "end_lineno": 2472,
+      "lineno": 2477,
+      "end_lineno": 2485,
       "length": 9,
       "nested": false,
       "zone_id": "20",
@@ -4080,8 +4080,8 @@
     {
       "name": "_journal_uncounted_truncated",
       "qualname": "_journal_uncounted_truncated",
-      "lineno": 2475,
-      "end_lineno": 2494,
+      "lineno": 2488,
+      "end_lineno": 2507,
       "length": 20,
       "nested": false,
       "zone_id": "20",
@@ -4090,8 +4090,8 @@
     {
       "name": "_ask_journal_write",
       "qualname": "_ask_journal_write",
-      "lineno": 2497,
-      "end_lineno": 2611,
+      "lineno": 2510,
+      "end_lineno": 2624,
       "length": 115,
       "nested": false,
       "zone_id": "20",
@@ -4100,8 +4100,8 @@
     {
       "name": "_insert_row",
       "qualname": "_ask_journal_write._insert_row",
-      "lineno": 2541,
-      "end_lineno": 2590,
+      "lineno": 2554,
+      "end_lineno": 2603,
       "length": 50,
       "nested": true,
       "zone_id": "20",
@@ -4110,8 +4110,8 @@
     {
       "name": "_answer_checked_core",
       "qualname": "_answer_checked_core",
-      "lineno": 2614,
-      "end_lineno": 2619,
+      "lineno": 2627,
+      "end_lineno": 2632,
       "length": 6,
       "nested": false,
       "zone_id": "20",
@@ -4120,8 +4120,8 @@
     {
       "name": "answer_checked",
       "qualname": "answer_checked",
-      "lineno": 2621,
-      "end_lineno": 2700,
+      "lineno": 2634,
+      "end_lineno": 2713,
       "length": 80,
       "nested": false,
       "zone_id": "20",
@@ -4130,8 +4130,8 @@
     {
       "name": "_build_ask_scope",
       "qualname": "_build_ask_scope",
-      "lineno": 2703,
-      "end_lineno": 2744,
+      "lineno": 2716,
+      "end_lineno": 2757,
       "length": 42,
       "nested": false,
       "zone_id": "20",
@@ -4140,8 +4140,8 @@
     {
       "name": "_persist_ask_scope",
       "qualname": "_persist_ask_scope",
-      "lineno": 2747,
-      "end_lineno": 2766,
+      "lineno": 2760,
+      "end_lineno": 2779,
       "length": 20,
       "nested": false,
       "zone_id": "20",
@@ -4150,8 +4150,8 @@
     {
       "name": "_ensure_ask_scope_table",
       "qualname": "_ensure_ask_scope_table",
-      "lineno": 2769,
-      "end_lineno": 2780,
+      "lineno": 2782,
+      "end_lineno": 2793,
       "length": 12,
       "nested": false,
       "zone_id": "20",
@@ -4160,8 +4160,8 @@
     {
       "name": "log_message",
       "qualname": "Handler.log_message",
-      "lineno": 2786,
-      "end_lineno": 2787,
+      "lineno": 2799,
+      "end_lineno": 2800,
       "length": 2,
       "nested": true,
       "zone_id": "20",
@@ -4170,8 +4170,8 @@
     {
       "name": "_send",
       "qualname": "Handler._send",
-      "lineno": 2789,
-      "end_lineno": 2795,
+      "lineno": 2802,
+      "end_lineno": 2808,
       "length": 7,
       "nested": true,
       "zone_id": "20",
@@ -4180,8 +4180,8 @@
     {
       "name": "do_GET",
       "qualname": "Handler.do_GET",
-      "lineno": 2797,
-      "end_lineno": 2871,
+      "lineno": 2810,
+      "end_lineno": 2884,
       "length": 75,
       "nested": true,
       "zone_id": "20",
@@ -4190,8 +4190,8 @@
     {
       "name": "do_POST",
       "qualname": "Handler.do_POST",
-      "lineno": 2873,
-      "end_lineno": 2978,
+      "lineno": 2886,
+      "end_lineno": 2991,
       "length": 106,
       "nested": true,
       "zone_id": "20",
@@ -4200,8 +4200,8 @@
     {
       "name": "main",
       "qualname": "main",
-      "lineno": 2981,
-      "end_lineno": 2990,
+      "lineno": 2994,
+      "end_lineno": 3003,
       "length": 10,
       "nested": false,
       "zone_id": "20",
@@ -4518,10 +4518,30 @@
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
+      "name": "_wiki_sanitize_why",
+      "qualname": "_wiki_sanitize_why",
+      "lineno": 720,
+      "end_lineno": 724,
+      "length": 5,
+      "nested": false,
+      "zone_id": "21",
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "name": "_wiki_verdicts_for_diag",
+      "qualname": "_wiki_verdicts_for_diag",
+      "lineno": 727,
+      "end_lineno": 742,
+      "length": 16,
+      "nested": false,
+      "zone_id": "21",
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
       "name": "_wiki_row_to_verdict",
       "qualname": "_wiki_row_to_verdict",
-      "lineno": 720,
-      "end_lineno": 736,
+      "lineno": 745,
+      "end_lineno": 761,
       "length": 17,
       "nested": false,
       "zone_id": "21",
@@ -4530,8 +4550,8 @@
     {
       "name": "_wiki_verdicts_from_rows",
       "qualname": "_wiki_verdicts_from_rows",
-      "lineno": 739,
-      "end_lineno": 747,
+      "lineno": 764,
+      "end_lineno": 772,
       "length": 9,
       "nested": false,
       "zone_id": "21",
@@ -4540,8 +4560,8 @@
     {
       "name": "_wiki_salvage_verdicts",
       "qualname": "_wiki_salvage_verdicts",
-      "lineno": 750,
-      "end_lineno": 787,
+      "lineno": 775,
+      "end_lineno": 812,
       "length": 38,
       "nested": false,
       "zone_id": "21",
@@ -4550,8 +4570,8 @@
     {
       "name": "wiki_parse_verify_response",
       "qualname": "wiki_parse_verify_response",
-      "lineno": 790,
-      "end_lineno": 816,
+      "lineno": 815,
+      "end_lineno": 841,
       "length": 27,
       "nested": false,
       "zone_id": "21",
@@ -4560,8 +4580,8 @@
     {
       "name": "_homonym_norm",
       "qualname": "_homonym_norm",
-      "lineno": 819,
-      "end_lineno": 821,
+      "lineno": 844,
+      "end_lineno": 846,
       "length": 3,
       "nested": false,
       "zone_id": "21",
@@ -4570,8 +4590,8 @@
     {
       "name": "_homonym_keys",
       "qualname": "_homonym_keys",
-      "lineno": 824,
-      "end_lineno": 844,
+      "lineno": 849,
+      "end_lineno": 869,
       "length": 21,
       "nested": false,
       "zone_id": "21",
@@ -4580,8 +4600,8 @@
     {
       "name": "wiki_homonym_kind_peers",
       "qualname": "wiki_homonym_kind_peers",
-      "lineno": 847,
-      "end_lineno": 868,
+      "lineno": 872,
+      "end_lineno": 893,
       "length": 22,
       "nested": false,
       "zone_id": "21",
@@ -4590,8 +4610,8 @@
     {
       "name": "wiki_outcome_from_verify",
       "qualname": "wiki_outcome_from_verify",
-      "lineno": 871,
-      "end_lineno": 931,
+      "lineno": 896,
+      "end_lineno": 956,
       "length": 61,
       "nested": false,
       "zone_id": "21",
@@ -4600,9 +4620,9 @@
     {
       "name": "wiki_verify_candidates",
       "qualname": "wiki_verify_candidates",
-      "lineno": 934,
-      "end_lineno": 968,
-      "length": 35,
+      "lineno": 959,
+      "end_lineno": 996,
+      "length": 38,
       "nested": false,
       "zone_id": "21",
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
@@ -4610,8 +4630,8 @@
     {
       "name": "wiki_knn_separable",
       "qualname": "wiki_knn_separable",
-      "lineno": 971,
-      "end_lineno": 978,
+      "lineno": 999,
+      "end_lineno": 1006,
       "length": 8,
       "nested": false,
       "zone_id": "21",
@@ -4620,8 +4640,8 @@
     {
       "name": "wiki_validate_leader_axes",
       "qualname": "wiki_validate_leader_axes",
-      "lineno": 981,
-      "end_lineno": 993,
+      "lineno": 1009,
+      "end_lineno": 1021,
       "length": 13,
       "nested": false,
       "zone_id": "21",
@@ -4630,8 +4650,8 @@
     {
       "name": "wiki_pick_from_cards",
       "qualname": "wiki_pick_from_cards",
-      "lineno": 996,
-      "end_lineno": 1051,
+      "lineno": 1024,
+      "end_lineno": 1079,
       "length": 56,
       "nested": false,
       "zone_id": "21",
@@ -4640,8 +4660,8 @@
     {
       "name": "wiki_primary_entity_cascade",
       "qualname": "wiki_primary_entity_cascade",
-      "lineno": 1054,
-      "end_lineno": 1095,
+      "lineno": 1082,
+      "end_lineno": 1123,
       "length": 42,
       "nested": false,
       "zone_id": "21",
@@ -4650,8 +4670,8 @@
     {
       "name": "try_wiki_hybrid_entity_pick",
       "qualname": "try_wiki_hybrid_entity_pick",
-      "lineno": 1098,
-      "end_lineno": 1181,
+      "lineno": 1126,
+      "end_lineno": 1209,
       "length": 84,
       "nested": false,
       "zone_id": "21",
@@ -4660,8 +4680,8 @@
     {
       "name": "wiki_intent_named_measures",
       "qualname": "wiki_intent_named_measures",
-      "lineno": 1184,
-      "end_lineno": 1204,
+      "lineno": 1212,
+      "end_lineno": 1232,
       "length": 21,
       "nested": false,
       "zone_id": "21",
@@ -4670,8 +4690,8 @@
     {
       "name": "wiki_axis_is_question_subject",
       "qualname": "wiki_axis_is_question_subject",
-      "lineno": 1207,
-      "end_lineno": 1216,
+      "lineno": 1235,
+      "end_lineno": 1244,
       "length": 10,
       "nested": false,
       "zone_id": "21",
@@ -4680,8 +4700,8 @@
     {
       "name": "wiki_leader_carries_axis",
       "qualname": "wiki_leader_carries_axis",
-      "lineno": 1219,
-      "end_lineno": 1250,
+      "lineno": 1247,
+      "end_lineno": 1278,
       "length": 32,
       "nested": false,
       "zone_id": "21",
@@ -4690,8 +4710,8 @@
     {
       "name": "wiki_leader_post_verify",
       "qualname": "wiki_leader_post_verify",
-      "lineno": 1253,
-      "end_lineno": 1283,
+      "lineno": 1281,
+      "end_lineno": 1311,
       "length": 31,
       "nested": false,
       "zone_id": "21",
@@ -4700,8 +4720,8 @@
     {
       "name": "wiki_measure_carried",
       "qualname": "wiki_measure_carried",
-      "lineno": 1286,
-      "end_lineno": 1309,
+      "lineno": 1314,
+      "end_lineno": 1337,
       "length": 24,
       "nested": false,
       "zone_id": "21",
@@ -12524,63 +12544,63 @@
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_predicates",
-      "lineno": 1994,
+      "lineno": 2007,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_settle_axis",
-      "lineno": 2043,
+      "lineno": 2056,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "deadline_hit",
-      "lineno": 2101,
+      "lineno": 2114,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "probe",
-      "lineno": 2105,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "matched_group_count",
-      "lineno": 2110,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "match_expr",
       "lineno": 2118,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
+      "callee": "matched_group_count",
+      "lineno": 2123,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "match_expr",
+      "lineno": 2131,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
       "callee": "_predicates",
-      "lineno": 2249,
+      "lineno": 2262,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "deadline_hit",
-      "lineno": 2281,
+      "lineno": 2294,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_onepath_compose_gate",
-      "lineno": 2284,
+      "lineno": 2297,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
@@ -12615,91 +12635,91 @@
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_coverage_answer",
-      "lineno": 1974,
+      "lineno": 1987,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_readings_to_opts",
-      "lineno": 1983,
+      "lineno": 1996,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "readings_menu",
-      "lineno": 1984,
+      "lineno": 1997,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "sales_compare_windows",
-      "lineno": 1999,
+      "lineno": 2012,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_settle_measure",
-      "lineno": 2026,
+      "lineno": 2039,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "axis_clarify_options",
-      "lineno": 2046,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "live_axis_col_candidates",
       "lineno": 2059,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
+      "callee": "live_axis_col_candidates",
+      "lineno": 2072,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
       "callee": "stock_count_aggregate_without_subject",
-      "lineno": 2079,
+      "lineno": 2092,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "stock_net_register_menu_opts",
-      "lineno": 2081,
+      "lineno": 2094,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_coverage_of",
-      "lineno": 2136,
+      "lineno": 2149,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "aggregate_compare_sales",
-      "lineno": 2156,
+      "lineno": 2169,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "aggregate_groups",
-      "lineno": 2174,
+      "lineno": 2187,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "rows_of",
-      "lineno": 2191,
+      "lineno": 2204,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
@@ -12720,301 +12740,301 @@
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_apply_sole_reading",
-      "lineno": 1991,
+      "lineno": 2004,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "sales_compare_intent",
-      "lineno": 1997,
+      "lineno": 2010,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_predicates",
-      "lineno": 2006,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "refcols_of",
-      "lineno": 2015,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "count_defer_measure_clarify",
       "lineno": 2019,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
+      "callee": "refcols_of",
+      "lineno": 2028,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "count_defer_measure_clarify",
+      "lineno": 2032,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
       "callee": "_measure_menu_opts",
-      "lineno": 2029,
+      "lineno": 2042,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "readings_menu",
-      "lineno": 2030,
+      "lineno": 2043,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "readings_menu",
-      "lineno": 2048,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "choice_proven",
-      "lineno": 2057,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "axis_clarify_options",
-      "lineno": 2064,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "readings_menu",
-      "lineno": 2083,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "_diag_pack",
-      "lineno": 2116,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "tables_of",
-      "lineno": 2122,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "empty_after_period_action",
-      "lineno": 2128,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "rows_of",
-      "lineno": 2130,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "_num_pred",
-      "lineno": 2143,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "totals_of",
-      "lineno": 2148,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "empty_after_period_action",
-      "lineno": 2177,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "empty_after_period_action",
-      "lineno": 2193,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "stock_count_aggregate_without_subject",
-      "lineno": 2201,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "aggregate_stock_net_distinct",
-      "lineno": 2203,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "live_axis_col_for_count",
-      "lineno": 2213,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "aggregate_distinct_axis",
-      "lineno": 2217,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "aggregate",
-      "lineno": 2221,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "empty_after_period_action",
-      "lineno": 2223,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "psql",
-      "lineno": 2253,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "psql",
-      "lineno": 2269,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "_diag_pack",
-      "lineno": 1967,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "_wiki_named_entity",
       "lineno": 2061,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
+      "callee": "choice_proven",
+      "lineno": 2070,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "axis_clarify_options",
+      "lineno": 2077,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
       "callee": "readings_menu",
-      "lineno": 2066,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "refuse_text",
-      "lineno": 2115,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "_zero_period_not_missing",
-      "lineno": 2178,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "_zero_period_not_missing",
-      "lineno": 2194,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "answer",
-      "caller_zone": "20",
-      "callee": "refuse_text",
-      "lineno": 1965,
+      "lineno": 2096,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_diag_pack",
-      "lineno": 2182,
+      "lineno": 2129,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "tables_of",
+      "lineno": 2135,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "empty_after_period_action",
+      "lineno": 2141,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "rows_of",
+      "lineno": 2143,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "_num_pred",
+      "lineno": 2156,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "totals_of",
+      "lineno": 2161,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "empty_after_period_action",
+      "lineno": 2190,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "empty_after_period_action",
+      "lineno": 2206,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "stock_count_aggregate_without_subject",
+      "lineno": 2214,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "aggregate_stock_net_distinct",
+      "lineno": 2216,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "live_axis_col_for_count",
+      "lineno": 2226,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "aggregate_distinct_axis",
+      "lineno": 2230,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "aggregate",
+      "lineno": 2234,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "empty_after_period_action",
+      "lineno": 2236,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "psql",
+      "lineno": 2266,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "psql",
+      "lineno": 2282,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_diag_pack",
-      "lineno": 2198,
+      "lineno": 1980,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_wiki_named_entity",
-      "lineno": 2215,
+      "lineno": 2074,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "readings_menu",
+      "lineno": 2079,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "refuse_text",
+      "lineno": 2128,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "_zero_period_not_missing",
+      "lineno": 2191,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "_zero_period_not_missing",
+      "lineno": 2207,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "refuse_text",
+      "lineno": 1978,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "_diag_pack",
-      "lineno": 2231,
+      "lineno": 2195,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "_diag_pack",
+      "lineno": 2211,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "_wiki_named_entity",
+      "lineno": 2228,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "answer",
+      "caller_zone": "20",
+      "callee": "_diag_pack",
+      "lineno": 2244,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "refuse_text",
-      "lineno": 2180,
+      "lineno": 2193,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "refuse_text",
-      "lineno": 2196,
+      "lineno": 2209,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "refuse_text",
-      "lineno": 2229,
+      "lineno": 2242,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "lit",
-      "lineno": 2267,
+      "lineno": 2280,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer",
       "caller_zone": "20",
       "callee": "lit",
-      "lineno": 2256,
+      "lineno": 2269,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
@@ -13028,210 +13048,126 @@
       "caller": "_journal_keep_n",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2312,
+      "lineno": 2325,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_journal_build_ts",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2336,
+      "lineno": 2349,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_journal_alias_ver",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2349,
+      "lineno": 2362,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "_journal_uncounted_truncated",
-      "lineno": 2523,
+      "lineno": 2536,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "_journal_clarify_options",
-      "lineno": 2531,
+      "lineno": 2544,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "_journal_doubt",
-      "lineno": 2534,
+      "lineno": 2547,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "_journal_ticket_variant",
-      "lineno": 2535,
+      "lineno": 2548,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "_rid_norm",
-      "lineno": 2539,
+      "lineno": 2552,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "_journal_keep_n",
-      "lineno": 2602,
+      "lineno": 2615,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "_journal_atoms_slim",
-      "lineno": 2527,
+      "lineno": 2540,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "_journal_intent",
-      "lineno": 2529,
+      "lineno": 2542,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2583,
+      "lineno": 2596,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2604,
+      "lineno": 2617,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "_rid_get",
-      "lineno": 2539,
+      "lineno": 2552,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2597,
+      "lineno": 2610,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2599,
+      "lineno": 2612,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2606,
+      "lineno": 2619,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2538,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2553,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2554,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2555,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2557,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2558,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2559,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2560,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2561,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "_journal_sql_bool",
-      "lineno": 2562,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2563,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2564,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2565,
+      "lineno": 2551,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
@@ -13244,63 +13180,56 @@
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2567,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2568,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
-      "lineno": 2569,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2570,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "_journal_sql_bool",
+      "callee": "lit",
       "lineno": 2571,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2572,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2573,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2574,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "_journal_sql_bool",
       "lineno": 2575,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
@@ -13314,43 +13243,15 @@
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "psql",
-      "lineno": 2587,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "_journal_fork_keys",
-      "lineno": 2561,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "_journal_code_md5",
-      "lineno": 2564,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "_journal_build_ts",
-      "lineno": 2565,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "_journal_alias_ver",
-      "lineno": 2566,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write",
-      "caller_zone": "20",
-      "callee": "_journal_sql_bool",
+      "callee": "lit",
       "lineno": 2577,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2578,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
@@ -13363,22 +13264,71 @@
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "lit",
+      "callee": "_journal_sql_int",
+      "lineno": 2580,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
       "lineno": 2581,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2581,
+      "callee": "_journal_sql_int",
+      "lineno": 2582,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2583,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_sql_bool",
+      "lineno": 2584,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2585,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2586,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2587,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2588,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
       "callee": "lit",
-      "lineno": 2578,
+      "lineno": 2589,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
@@ -13391,99 +13341,85 @@
     {
       "caller": "_ask_journal_write",
       "caller_zone": "20",
+      "callee": "_journal_fork_keys",
+      "lineno": 2574,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_code_md5",
+      "lineno": 2577,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_build_ts",
+      "lineno": 2578,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_alias_ver",
+      "lineno": 2579,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "_journal_sql_bool",
+      "lineno": 2590,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
       "callee": "lit",
-      "lineno": 2588,
+      "lineno": 2592,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2594,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2594,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2591,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "psql",
+      "lineno": 2613,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2601,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2583,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2553,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2554,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2555,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2557,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2558,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2559,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2560,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2561,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "_journal_sql_bool",
-      "lineno": 2562,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2563,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2564,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2565,
+      "lineno": 2596,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
@@ -13496,63 +13432,56 @@
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2567,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2568,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
-      "lineno": 2569,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2570,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
-      "callee": "_journal_sql_bool",
+      "callee": "lit",
       "lineno": 2571,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2572,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2573,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "lit",
       "lineno": 2574,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
-      "callee": "_journal_sql_int",
+      "callee": "_journal_sql_bool",
       "lineno": 2575,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
@@ -13566,64 +13495,8 @@
     {
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
-      "callee": "psql",
-      "lineno": 2587,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "_journal_fork_keys",
-      "lineno": 2561,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "_journal_code_md5",
-      "lineno": 2564,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "_journal_build_ts",
-      "lineno": 2565,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "_journal_alias_ver",
-      "lineno": 2566,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "_journal_sql_bool",
+      "callee": "lit",
       "lineno": 2577,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2579,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2581,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ask_journal_write._insert_row",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2581,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
@@ -13637,216 +13510,356 @@
       "caller": "_ask_journal_write._insert_row",
       "caller_zone": "20",
       "callee": "lit",
+      "lineno": 2579,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2580,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2581,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2582,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2583,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_bool",
+      "lineno": 2584,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2585,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2586,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
+      "lineno": 2587,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_int",
       "lineno": 2588,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2589,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "psql",
+      "lineno": 2600,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_fork_keys",
+      "lineno": 2574,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_code_md5",
+      "lineno": 2577,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_build_ts",
+      "lineno": 2578,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_alias_ver",
+      "lineno": 2579,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "_journal_sql_bool",
+      "lineno": 2590,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2592,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2594,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2594,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2591,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ask_journal_write._insert_row",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2601,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_answer_checked_core",
       "caller_zone": "20",
       "callee": "_token_acc_start",
-      "lineno": 2617,
+      "lineno": 2630,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_answer_checked_core",
       "caller_zone": "20",
       "callee": "answer",
-      "lineno": 2618,
+      "lineno": 2631,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "_rid_enter",
-      "lineno": 2628,
+      "lineno": 2641,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "peek_resolved",
-      "lineno": 2635,
+      "lineno": 2648,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "hold_settled_entity",
-      "lineno": 2674,
+      "lineno": 2687,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "_answer_checked_core",
-      "lineno": 2679,
+      "lineno": 2692,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "_ask_journal_write",
-      "lineno": 2697,
+      "lineno": 2710,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "_req_t0_clear",
-      "lineno": 2700,
+      "lineno": 2713,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "consume_decision",
-      "lineno": 2637,
+      "lineno": 2650,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "accumulate_resolution",
-      "lineno": 2667,
+      "lineno": 2680,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "peek_resolved",
-      "lineno": 2668,
+      "lineno": 2681,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "lookup_clarify_batch",
-      "lineno": 2639,
+      "lineno": 2652,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "hold_settled_entity",
-      "lineno": 2644,
+      "lineno": 2657,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "_answer_checked_core",
-      "lineno": 2647,
+      "lineno": 2660,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "answer_checked",
       "caller_zone": "20",
       "callee": "reissue_clarify",
-      "lineno": 2640,
+      "lineno": 2653,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_build_ask_scope",
       "caller_zone": "20",
       "callee": "lit",
-      "lineno": 2729,
+      "lineno": 2742,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_build_ask_scope",
       "caller_zone": "20",
       "callee": "lit",
-      "lineno": 2733,
+      "lineno": 2746,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_persist_ask_scope",
       "caller_zone": "20",
       "callee": "_build_ask_scope",
-      "lineno": 2749,
+      "lineno": 2762,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "_persist_ask_scope",
-      "caller_zone": "20",
-      "callee": "_resolver_psql",
-      "lineno": 2761,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_persist_ask_scope",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2764,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_persist_ask_scope",
-      "caller_zone": "20",
-      "callee": "lit",
-      "lineno": 2764,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "_ensure_ask_scope_table",
       "caller_zone": "20",
       "callee": "_resolver_psql",
       "lineno": 2774,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
+      "caller": "_persist_ask_scope",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2777,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_persist_ask_scope",
+      "caller_zone": "20",
+      "callee": "lit",
+      "lineno": 2777,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
       "caller": "_ensure_ask_scope_table",
       "caller_zone": "20",
       "callee": "_resolver_psql",
-      "lineno": 2778,
+      "lineno": 2787,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "_ensure_ask_scope_table",
+      "caller_zone": "20",
+      "callee": "_resolver_psql",
+      "lineno": 2791,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_GET",
       "caller_zone": "20",
       "callee": "_classify_health_gap",
-      "lineno": 2813,
+      "lineno": 2826,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_GET",
       "caller_zone": "20",
       "callee": "_health_gap",
-      "lineno": 2807,
+      "lineno": 2820,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_GET",
       "caller_zone": "20",
       "callee": "_health_period_relative_forms",
-      "lineno": 2816,
+      "lineno": 2829,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_GET",
       "caller_zone": "20",
       "callee": "_measure_tick_status",
-      "lineno": 2827,
+      "lineno": 2840,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_GET",
       "caller_zone": "20",
       "callee": "_attach_native_freshness",
-      "lineno": 2868,
+      "lineno": 2881,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_GET",
       "caller_zone": "20",
       "callee": "_measure_native_index_freshness",
-      "lineno": 2823,
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "caller": "Handler.do_GET",
-      "caller_zone": "20",
-      "callee": "_attach_native_freshness",
       "lineno": 2836,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
@@ -13854,77 +13867,84 @@
       "caller": "Handler.do_GET",
       "caller_zone": "20",
       "callee": "_attach_native_freshness",
-      "lineno": 2847,
+      "lineno": 2849,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_GET",
       "caller_zone": "20",
       "callee": "_attach_native_freshness",
-      "lineno": 2853,
+      "lineno": 2860,
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "caller": "Handler.do_GET",
+      "caller_zone": "20",
+      "callee": "_attach_native_freshness",
+      "lineno": 2866,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_GET",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2800,
+      "lineno": 2813,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_POST",
       "caller_zone": "20",
       "callee": "_persist_ask_scope",
-      "lineno": 2947,
+      "lineno": 2960,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_POST",
       "caller_zone": "20",
       "callee": "attach_memory_shadow",
-      "lineno": 2914,
+      "lineno": 2927,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_POST",
       "caller_zone": "20",
       "callee": "answer_checked",
-      "lineno": 2921,
+      "lineno": 2934,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_POST",
       "caller_zone": "20",
       "callee": "attach_memory_shadow",
-      "lineno": 2929,
+      "lineno": 2942,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_POST",
       "caller_zone": "20",
       "callee": "psql",
-      "lineno": 2937,
+      "lineno": 2950,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_POST",
       "caller_zone": "20",
       "callee": "seal_clarify",
-      "lineno": 2928,
+      "lineno": 2941,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_POST",
       "caller_zone": "20",
       "callee": "stale_note",
-      "lineno": 2946,
+      "lineno": 2959,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "caller": "Handler.do_POST",
       "caller_zone": "20",
       "callee": "_num",
-      "lineno": 2938,
+      "lineno": 2951,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
@@ -14257,430 +14277,444 @@
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
+      "caller": "_wiki_verdicts_for_diag",
+      "caller_zone": "21",
+      "callee": "_wiki_sanitize_why",
+      "lineno": 740,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
       "caller": "_wiki_verdicts_from_rows",
       "caller_zone": "21",
       "callee": "_wiki_row_to_verdict",
-      "lineno": 744,
+      "lineno": 769,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "_wiki_salvage_verdicts",
       "caller_zone": "21",
       "callee": "_wiki_row_to_verdict",
-      "lineno": 783,
+      "lineno": 808,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_parse_verify_response",
       "caller_zone": "21",
       "callee": "_wiki_salvage_verdicts",
-      "lineno": 806,
+      "lineno": 831,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_parse_verify_response",
       "caller_zone": "21",
       "callee": "_wiki_salvage_verdicts",
-      "lineno": 812,
+      "lineno": 837,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_parse_verify_response",
       "caller_zone": "21",
       "callee": "_wiki_verdicts_from_rows",
-      "lineno": 816,
+      "lineno": 841,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_parse_verify_response",
       "caller_zone": "21",
       "callee": "_wiki_salvage_verdicts",
-      "lineno": 801,
+      "lineno": 826,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "_homonym_keys",
       "caller_zone": "21",
       "callee": "_homonym_norm",
-      "lineno": 837,
+      "lineno": 862,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "_homonym_keys",
       "caller_zone": "21",
       "callee": "_homonym_norm",
-      "lineno": 841,
+      "lineno": 866,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "_homonym_keys",
       "caller_zone": "21",
       "callee": "human_table_label",
-      "lineno": 833,
+      "lineno": 858,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_homonym_kind_peers",
       "caller_zone": "21",
       "callee": "_homonym_keys",
-      "lineno": 856,
+      "lineno": 881,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_homonym_kind_peers",
       "caller_zone": "21",
       "callee": "_card_odata_kind",
-      "lineno": 859,
+      "lineno": 884,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_homonym_kind_peers",
       "caller_zone": "21",
       "callee": "_card_odata_kind",
-      "lineno": 864,
+      "lineno": 889,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_homonym_kind_peers",
       "caller_zone": "21",
       "callee": "_homonym_keys",
-      "lineno": 866,
+      "lineno": 891,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_outcome_from_verify",
       "caller_zone": "21",
       "callee": "wiki_homonym_kind_peers",
-      "lineno": 903,
+      "lineno": 928,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_outcome_from_verify",
       "caller_zone": "21",
       "callee": "wiki_validate_leader_axes",
-      "lineno": 900,
+      "lineno": 925,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_verify_candidates",
       "caller_zone": "21",
       "callee": "wiki_passport_enrich",
-      "lineno": 940,
-      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
-    },
-    {
-      "caller": "wiki_verify_candidates",
-      "caller_zone": "21",
-      "callee": "wiki_format_passport_lines",
-      "lineno": 943,
-      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
-    },
-    {
-      "caller": "wiki_verify_candidates",
-      "caller_zone": "21",
-      "callee": "_intent_text",
-      "lineno": 945,
-      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
-    },
-    {
-      "caller": "wiki_verify_candidates",
-      "caller_zone": "21",
-      "callee": "wiki_parse_verify_response",
-      "lineno": 957,
-      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
-    },
-    {
-      "caller": "wiki_verify_candidates",
-      "caller_zone": "21",
-      "callee": "wiki_outcome_from_verify",
       "lineno": 965,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_verify_candidates",
       "caller_zone": "21",
+      "callee": "wiki_format_passport_lines",
+      "lineno": 968,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "caller": "wiki_verify_candidates",
+      "caller_zone": "21",
+      "callee": "_intent_text",
+      "lineno": 970,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "caller": "wiki_verify_candidates",
+      "caller_zone": "21",
+      "callee": "wiki_parse_verify_response",
+      "lineno": 982,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "caller": "wiki_verify_candidates",
+      "caller_zone": "21",
+      "callee": "wiki_outcome_from_verify",
+      "lineno": 991,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "caller": "wiki_verify_candidates",
+      "caller_zone": "21",
+      "callee": "_wiki_verdicts_for_diag",
+      "lineno": 994,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "caller": "wiki_verify_candidates",
+      "caller_zone": "21",
       "callee": "ds_chat",
-      "lineno": 949,
+      "lineno": 974,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_pick_from_cards",
       "caller_zone": "21",
       "callee": "wiki_knn_separable",
-      "lineno": 1002,
+      "lineno": 1030,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_pick_from_cards",
       "caller_zone": "21",
       "callee": "wiki_format_card_lines",
-      "lineno": 1004,
+      "lineno": 1032,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_pick_from_cards",
       "caller_zone": "21",
       "callee": "_intent_text",
-      "lineno": 1006,
+      "lineno": 1034,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_pick_from_cards",
       "caller_zone": "21",
       "callee": "ds_chat",
-      "lineno": 1010,
+      "lineno": 1038,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_pick_from_cards",
       "caller_zone": "21",
       "callee": "wiki_validate_leader_axes",
-      "lineno": 1042,
+      "lineno": 1070,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_primary_entity_cascade",
       "caller_zone": "21",
       "callee": "try_wiki_hybrid_entity_pick",
-      "lineno": 1066,
+      "lineno": 1094,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_primary_entity_cascade",
       "caller_zone": "21",
       "callee": "_diag_pack",
-      "lineno": 1093,
+      "lineno": 1121,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_primary_entity_cascade",
       "caller_zone": "21",
       "callee": "refuse_text",
-      "lineno": 1091,
+      "lineno": 1119,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "wiki_hybrid_pool",
-      "lineno": 1109,
-      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
-    },
-    {
-      "caller": "try_wiki_hybrid_entity_pick",
-      "caller_zone": "21",
-      "callee": "filter_pool_by_named_type",
-      "lineno": 1112,
-      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
-    },
-    {
-      "caller": "try_wiki_hybrid_entity_pick",
-      "caller_zone": "21",
-      "callee": "wiki_verify_candidates",
-      "lineno": 1128,
-      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
-    },
-    {
-      "caller": "try_wiki_hybrid_entity_pick",
-      "caller_zone": "21",
-      "callee": "wiki_pick_from_cards",
-      "lineno": 1132,
-      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
-    },
-    {
-      "caller": "try_wiki_hybrid_entity_pick",
-      "caller_zone": "21",
-      "callee": "wiki_verify_candidates",
       "lineno": 1137,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
+      "callee": "filter_pool_by_named_type",
+      "lineno": 1140,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "caller": "try_wiki_hybrid_entity_pick",
+      "caller_zone": "21",
+      "callee": "wiki_verify_candidates",
+      "lineno": 1156,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "caller": "try_wiki_hybrid_entity_pick",
+      "caller_zone": "21",
+      "callee": "wiki_pick_from_cards",
+      "lineno": 1160,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "caller": "try_wiki_hybrid_entity_pick",
+      "caller_zone": "21",
+      "callee": "wiki_verify_candidates",
+      "lineno": 1165,
+      "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
+    },
+    {
+      "caller": "try_wiki_hybrid_entity_pick",
+      "caller_zone": "21",
       "callee": "mk_opts",
-      "lineno": 1167,
+      "lineno": 1195,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "psql",
-      "lineno": 1105,
+      "lineno": 1133,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "question_expects_accounting_data",
-      "lineno": 1116,
+      "lineno": 1144,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "wiki_captions_map_from_cards",
-      "lineno": 1171,
+      "lineno": 1199,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "wiki_menu_captions",
-      "lineno": 1172,
+      "lineno": 1200,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "readings_menu",
-      "lineno": 1173,
+      "lineno": 1201,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "wiki_leader_post_verify",
-      "lineno": 1178,
+      "lineno": 1206,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "_diag_pack",
-      "lineno": 1122,
+      "lineno": 1150,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "refuse_text",
-      "lineno": 1120,
+      "lineno": 1148,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "psql",
-      "lineno": 1161,
+      "lineno": 1189,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "try_wiki_hybrid_entity_pick",
       "caller_zone": "21",
       "callee": "lit",
-      "lineno": 1163,
+      "lineno": 1191,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_intent_named_measures",
       "caller_zone": "21",
       "callee": "_intent_text",
-      "lineno": 1196,
+      "lineno": 1224,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_axis_is_question_subject",
       "caller_zone": "21",
       "callee": "_intent_text",
-      "lineno": 1213,
+      "lineno": 1241,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_leader_carries_axis",
       "caller_zone": "21",
       "callee": "psql",
-      "lineno": 1243,
+      "lineno": 1271,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_leader_carries_axis",
       "caller_zone": "21",
       "callee": "lit",
-      "lineno": 1242,
+      "lineno": 1270,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_leader_carries_axis",
       "caller_zone": "21",
       "callee": "lit",
-      "lineno": 1247,
+      "lineno": 1275,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_leader_post_verify",
       "caller_zone": "21",
       "callee": "wiki_intent_named_measures",
-      "lineno": 1257,
+      "lineno": 1285,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_leader_post_verify",
       "caller_zone": "21",
       "callee": "_intent_text",
-      "lineno": 1262,
+      "lineno": 1290,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_leader_post_verify",
       "caller_zone": "21",
       "callee": "wiki_measure_carried",
-      "lineno": 1258,
+      "lineno": 1286,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_leader_post_verify",
       "caller_zone": "21",
       "callee": "wiki_axis_is_question_subject",
-      "lineno": 1274,
+      "lineno": 1302,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_leader_post_verify",
       "caller_zone": "21",
       "callee": "_wiki_axis_has_carriers",
-      "lineno": 1276,
+      "lineno": 1304,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_leader_post_verify",
       "caller_zone": "21",
       "callee": "wiki_leader_carries_axis",
-      "lineno": 1277,
+      "lineno": 1305,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_measure_carried",
       "caller_zone": "21",
       "callee": "psql",
-      "lineno": 1295,
+      "lineno": 1323,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_measure_carried",
       "caller_zone": "21",
       "callee": "lit",
-      "lineno": 1303,
+      "lineno": 1331,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_measure_carried",
       "caller_zone": "21",
       "callee": "lit",
-      "lineno": 1303,
+      "lineno": 1331,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_measure_carried",
       "caller_zone": "21",
       "callee": "lit",
-      "lineno": 1303,
+      "lineno": 1331,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "caller": "wiki_measure_carried",
       "caller_zone": "21",
       "callee": "lit",
-      "lineno": 1303,
+      "lineno": 1331,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
@@ -15282,7 +15316,7 @@
     },
     {
       "name": "ASK_SLOT_COVER",
-      "lineno": 2301,
+      "lineno": 2314,
       "default": "0",
       "in_function": null,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
@@ -15983,73 +16017,67 @@
     },
     {
       "kind": "psql",
-      "lineno": 2253,
+      "lineno": 2266,
       "in_function": "answer",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2269,
+      "lineno": 2282,
       "in_function": "answer",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2312,
+      "lineno": 2325,
       "in_function": "_journal_keep_n",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2336,
+      "lineno": 2349,
       "in_function": "_journal_build_ts",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2349,
+      "lineno": 2362,
       "in_function": "_journal_alias_ver",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2583,
+      "lineno": 2596,
       "in_function": "_ask_journal_write",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2604,
+      "lineno": 2617,
       "in_function": "_ask_journal_write",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2597,
+      "lineno": 2610,
       "in_function": "_ask_journal_write",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2599,
+      "lineno": 2612,
       "in_function": "_ask_journal_write",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2606,
+      "lineno": 2619,
       "in_function": "_ask_journal_write",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2538,
-      "in_function": "_ask_journal_write",
-      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
-    },
-    {
-      "kind": "psql",
-      "lineno": 2587,
+      "lineno": 2551,
       "in_function": "_ask_journal_write",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
@@ -16061,25 +16089,31 @@
     },
     {
       "kind": "psql",
-      "lineno": 2583,
+      "lineno": 2613,
+      "in_function": "_ask_journal_write",
+      "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
+    },
+    {
+      "kind": "psql",
+      "lineno": 2596,
       "in_function": "_ask_journal_write._insert_row",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2587,
+      "lineno": 2600,
       "in_function": "_ask_journal_write._insert_row",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2800,
+      "lineno": 2813,
       "in_function": "Handler.do_GET",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
     {
       "kind": "psql",
-      "lineno": 2937,
+      "lineno": 2950,
       "in_function": "Handler.do_POST",
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py"
     },
@@ -16109,37 +16143,37 @@
     },
     {
       "kind": "ds_chat",
-      "lineno": 949,
+      "lineno": 974,
       "in_function": "wiki_verify_candidates",
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "kind": "ds_chat",
-      "lineno": 1010,
+      "lineno": 1038,
       "in_function": "wiki_pick_from_cards",
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "kind": "psql",
-      "lineno": 1105,
+      "lineno": 1133,
       "in_function": "try_wiki_hybrid_entity_pick",
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "kind": "psql",
-      "lineno": 1161,
+      "lineno": 1189,
       "in_function": "try_wiki_hybrid_entity_pick",
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "kind": "psql",
-      "lineno": 1243,
+      "lineno": 1271,
       "in_function": "wiki_leader_carries_axis",
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
     {
       "kind": "psql",
-      "lineno": 1295,
+      "lineno": 1323,
       "in_function": "wiki_measure_carried",
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py"
     },
@@ -17386,8 +17420,8 @@
       "title": "ask / HTTP",
       "start": "_filter_dates",
       "from": 1,
-      "to": 2997,
-      "lines": 2997,
+      "to": 3010,
+      "lines": 3010,
       "file": "ubuntu/serenedb/ask/z20_ask_main_http.py",
       "functions": [
         "_filter_dates",
@@ -17583,8 +17617,8 @@
       "title": "Вики-выбор",
       "start": "_wiki_hybrid_sql",
       "from": 1,
-      "to": 1312,
-      "lines": 1312,
+      "to": 1340,
+      "lines": 1340,
       "file": "ubuntu/serenedb/ask/z21_wiki_choice.py",
       "functions": [
         "_wiki_hybrid_sql",
@@ -17618,6 +17652,8 @@
         "wiki_passport_distinct",
         "wiki_passport_enrich",
         "wiki_format_passport_lines",
+        "_wiki_sanitize_why",
+        "_wiki_verdicts_for_diag",
         "_wiki_row_to_verdict",
         "_wiki_verdicts_from_rows",
         "_wiki_salvage_verdicts",
@@ -17638,7 +17674,7 @@
         "wiki_leader_post_verify",
         "wiki_measure_carried"
       ],
-      "function_count": 50,
+      "function_count": 52,
       "incoming_zones": [
         "04b",
         "20"
@@ -17667,8 +17703,10 @@
         "_wiki_passport_sql",
         "_wiki_row_to_verdict",
         "_wiki_salvage_verdicts",
+        "_wiki_sanitize_why",
         "_wiki_substitute_passport_sql",
         "_wiki_substitute_sql",
+        "_wiki_verdicts_for_diag",
         "_wiki_verdicts_from_rows",
         "filter_pool_by_named_type",
         "named_platform_kinds",
@@ -17702,7 +17740,7 @@
         "wiki_validate_leader_axes",
         "wiki_verify_candidates"
       ],
-      "internal_count": 47,
+      "internal_count": 49,
       "externally_called": [
         "fork_labels_covering",
         "fork_labels_of",

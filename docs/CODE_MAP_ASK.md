@@ -1,6 +1,6 @@
 # Карта `ubuntu/serenedb/ask/`
 
-Сгенерировано `ubuntu/serenedb/code_map.py`. Строк файла: **13281**. Функций: **472**. Зон: **20**. Сквозных (≥3 зон-вызывающих): **18**.
+Сгенерировано `ubuntu/serenedb/code_map.py`. Строк файла: **13322**. Функций: **474**. Зон: **20**. Сквозных (≥3 зон-вызывающих): **18**.
 
 Границы зон — по якорям (`start`[/`end`] в `docs/audit/zones.json`), номера строк вычисляются при каждом прогоне.
 
@@ -23,8 +23,8 @@
 - [17 aggregate-groups](ubuntu/serenedb/ask/z17_aggregate_groups.py:1) — Агрегаты и группы (якорь `_vec` … `aggregate_groups`; `1–552`)
 - [18 compose](ubuntu/serenedb/ask/z18_compose.py:1) — Формулировка (якорь `axis_clarify_options` … `compose`; `1–851`)
 - [19 answer-check](ubuntu/serenedb/ask/z19_answer_check.py:1) — Проверка ответа (якорь `_readings` … `_filter_values`; `1–368`)
-- [20 ask-main-http](ubuntu/serenedb/ask/z20_ask_main_http.py:1) — ask / HTTP (якорь `_filter_dates` … `Handler`; `1–2997`)
-- [21 wiki-choice](ubuntu/serenedb/ask/z21_wiki_choice.py:1) — Вики-выбор (якорь `_wiki_hybrid_sql` … `wiki_measure_carried`; `1–1312`)
+- [20 ask-main-http](ubuntu/serenedb/ask/z20_ask_main_http.py:1) — ask / HTTP (якорь `_filter_dates` … `Handler`; `1–3010`)
+- [21 wiki-choice](ubuntu/serenedb/ask/z21_wiki_choice.py:1) — Вики-выбор (якорь `_wiki_hybrid_sql` … `wiki_measure_carried`; `1–1340`)
 - [22 health-tick](ubuntu/serenedb/ask/z22_health_tick.py:1) — Health и тик (якорь `_parse_tick_status_note` … `_measure_tick_status`; `1–58`)
 
 ## Таблица зон
@@ -48,8 +48,8 @@
 | 17 | aggregate-groups | `_vec` | 552 | 17 | 11 | 3 | 6 |
 | 18 | compose | `axis_clarify_options` | 851 | 19 | 2 | 8 | 2 |
 | 19 | answer-check | `_readings` | 368 | 13 | 3 | 2 | 4 |
-| 20 | ask-main-http | `_filter_dates` | 2997 | 75 | 3 | 19 | 70 |
-| 21 | wiki-choice | `_wiki_hybrid_sql` | 1312 | 50 | 2 | 6 | 47 |
+| 20 | ask-main-http | `_filter_dates` | 3010 | 75 | 3 | 19 | 70 |
+| 21 | wiki-choice | `_wiki_hybrid_sql` | 1340 | 52 | 2 | 6 | 49 |
 | 22 | health-tick | `_parse_tick_status_note` | 58 | 2 | 1 | 2 | 1 |
 
 ## 01. infra-trace-llm — Инфра, TRACE, LLM
@@ -567,7 +567,7 @@
 
 ## 20. ask-main-http — ask / HTTP
 
-Якорь: `_filter_dates`, end `Handler`. Участок: [`ubuntu/serenedb/ask/z20_ask_main_http.py:1`](ubuntu/serenedb/ask/z20_ask_main_http.py:1)–`2997`.
+Якорь: `_filter_dates`, end `Handler`. Участок: [`ubuntu/serenedb/ask/z20_ask_main_http.py:1`](ubuntu/serenedb/ask/z20_ask_main_http.py:1)–`3010`.
 
 Функций: 75. Входящие зоны: 12, 18, 21. Исходящие зоны: 01, 02, 03, 04, 04b, 05, 06, 07, 08, 10, 11, 12, 14, 15, 17, 18, 19, 21, 22.
 
@@ -627,35 +627,35 @@
 - [`_settle_measure`](ubuntu/serenedb/ask/:1501) `1501–1550` len=50
 - [`_settle_axis`](ubuntu/serenedb/ask/:1553) `1553–1627` len=75
 - [`_onepath_compose_gate`](ubuntu/serenedb/ask/:1630) `1630–1843` len=214
-- [`answer`](ubuntu/serenedb/ask/:1846) `1846–2297` len=452
-- [`_journal_keep_n`](ubuntu/serenedb/ask/:2303) `2303–2317` len=15
-- [`_journal_code_md5`](ubuntu/serenedb/ask/:2320) `2320–2327` len=8
-- [`_journal_build_ts`](ubuntu/serenedb/ask/:2330) `2330–2341` len=12
-- [`_journal_alias_ver`](ubuntu/serenedb/ask/:2344) `2344–2357` len=14
-- [`_journal_sql_int`](ubuntu/serenedb/ask/:2360) `2360–2366` len=7
-- [`_journal_sql_bool`](ubuntu/serenedb/ask/:2369) `2369–2372` len=4
-- [`_journal_atoms_slim`](ubuntu/serenedb/ask/:2375) `2375–2403` len=29
-- [`_journal_clarify_options`](ubuntu/serenedb/ask/:2406) `2406–2428` len=23
-- [`_journal_doubt`](ubuntu/serenedb/ask/:2431) `2431–2440` len=10
-- [`_journal_ticket_variant`](ubuntu/serenedb/ask/:2443) `2443–2456` len=14
-- [`_journal_intent`](ubuntu/serenedb/ask/:2459) `2459–2461` len=3
-- [`_journal_fork_keys`](ubuntu/serenedb/ask/:2464) `2464–2472` len=9
-- [`_journal_uncounted_truncated`](ubuntu/serenedb/ask/:2475) `2475–2494` len=20
-- [`_ask_journal_write`](ubuntu/serenedb/ask/:2497) `2497–2611` len=115
-- [`_answer_checked_core`](ubuntu/serenedb/ask/:2614) `2614–2619` len=6
-- [`answer_checked`](ubuntu/serenedb/ask/:2621) `2621–2700` len=80
-- [`_build_ask_scope`](ubuntu/serenedb/ask/:2703) `2703–2744` len=42
-- [`_persist_ask_scope`](ubuntu/serenedb/ask/:2747) `2747–2766` len=20
-- [`_ensure_ask_scope_table`](ubuntu/serenedb/ask/:2769) `2769–2780` len=12
-- [`main`](ubuntu/serenedb/ask/:2981) `2981–2990` len=10
+- [`answer`](ubuntu/serenedb/ask/:1846) `1846–2310` len=465
+- [`_journal_keep_n`](ubuntu/serenedb/ask/:2316) `2316–2330` len=15
+- [`_journal_code_md5`](ubuntu/serenedb/ask/:2333) `2333–2340` len=8
+- [`_journal_build_ts`](ubuntu/serenedb/ask/:2343) `2343–2354` len=12
+- [`_journal_alias_ver`](ubuntu/serenedb/ask/:2357) `2357–2370` len=14
+- [`_journal_sql_int`](ubuntu/serenedb/ask/:2373) `2373–2379` len=7
+- [`_journal_sql_bool`](ubuntu/serenedb/ask/:2382) `2382–2385` len=4
+- [`_journal_atoms_slim`](ubuntu/serenedb/ask/:2388) `2388–2416` len=29
+- [`_journal_clarify_options`](ubuntu/serenedb/ask/:2419) `2419–2441` len=23
+- [`_journal_doubt`](ubuntu/serenedb/ask/:2444) `2444–2453` len=10
+- [`_journal_ticket_variant`](ubuntu/serenedb/ask/:2456) `2456–2469` len=14
+- [`_journal_intent`](ubuntu/serenedb/ask/:2472) `2472–2474` len=3
+- [`_journal_fork_keys`](ubuntu/serenedb/ask/:2477) `2477–2485` len=9
+- [`_journal_uncounted_truncated`](ubuntu/serenedb/ask/:2488) `2488–2507` len=20
+- [`_ask_journal_write`](ubuntu/serenedb/ask/:2510) `2510–2624` len=115
+- [`_answer_checked_core`](ubuntu/serenedb/ask/:2627) `2627–2632` len=6
+- [`answer_checked`](ubuntu/serenedb/ask/:2634) `2634–2713` len=80
+- [`_build_ask_scope`](ubuntu/serenedb/ask/:2716) `2716–2757` len=42
+- [`_persist_ask_scope`](ubuntu/serenedb/ask/:2760) `2760–2779` len=20
+- [`_ensure_ask_scope_table`](ubuntu/serenedb/ask/:2782) `2782–2793` len=12
+- [`main`](ubuntu/serenedb/ask/:2994) `2994–3003` len=10
 
 Зовут снаружи зоны: `human_table_label`, `kind_word`, `looks_like_src_table`, `mk_opts`, `readings_menu`
 
 ## 21. wiki-choice — Вики-выбор
 
-Якорь: `_wiki_hybrid_sql`, end `wiki_measure_carried`. Участок: [`ubuntu/serenedb/ask/z21_wiki_choice.py:1`](ubuntu/serenedb/ask/z21_wiki_choice.py:1)–`1312`.
+Якорь: `_wiki_hybrid_sql`, end `wiki_measure_carried`. Участок: [`ubuntu/serenedb/ask/z21_wiki_choice.py:1`](ubuntu/serenedb/ask/z21_wiki_choice.py:1)–`1340`.
 
-Функций: 50. Входящие зоны: 04b, 20. Исходящие зоны: 01, 02, 07, 10, 12, 20.
+Функций: 52. Входящие зоны: 04b, 20. Исходящие зоны: 01, 02, 07, 10, 12, 20.
 
 Функции:
 
@@ -690,25 +690,27 @@
 - [`wiki_passport_distinct`](ubuntu/serenedb/ask/:619) `619–636` len=18
 - [`wiki_passport_enrich`](ubuntu/serenedb/ask/:639) `639–681` len=43
 - [`wiki_format_passport_lines`](ubuntu/serenedb/ask/:684) `684–710` len=27
-- [`_wiki_row_to_verdict`](ubuntu/serenedb/ask/:720) `720–736` len=17
-- [`_wiki_verdicts_from_rows`](ubuntu/serenedb/ask/:739) `739–747` len=9
-- [`_wiki_salvage_verdicts`](ubuntu/serenedb/ask/:750) `750–787` len=38
-- [`wiki_parse_verify_response`](ubuntu/serenedb/ask/:790) `790–816` len=27
-- [`_homonym_norm`](ubuntu/serenedb/ask/:819) `819–821` len=3
-- [`_homonym_keys`](ubuntu/serenedb/ask/:824) `824–844` len=21
-- [`wiki_homonym_kind_peers`](ubuntu/serenedb/ask/:847) `847–868` len=22
-- [`wiki_outcome_from_verify`](ubuntu/serenedb/ask/:871) `871–931` len=61
-- [`wiki_verify_candidates`](ubuntu/serenedb/ask/:934) `934–968` len=35
-- [`wiki_knn_separable`](ubuntu/serenedb/ask/:971) `971–978` len=8
-- [`wiki_validate_leader_axes`](ubuntu/serenedb/ask/:981) `981–993` len=13
-- [`wiki_pick_from_cards`](ubuntu/serenedb/ask/:996) `996–1051` len=56
-- [`wiki_primary_entity_cascade`](ubuntu/serenedb/ask/:1054) `1054–1095` len=42
-- [`try_wiki_hybrid_entity_pick`](ubuntu/serenedb/ask/:1098) `1098–1181` len=84
-- [`wiki_intent_named_measures`](ubuntu/serenedb/ask/:1184) `1184–1204` len=21
-- [`wiki_axis_is_question_subject`](ubuntu/serenedb/ask/:1207) `1207–1216` len=10
-- [`wiki_leader_carries_axis`](ubuntu/serenedb/ask/:1219) `1219–1250` len=32
-- [`wiki_leader_post_verify`](ubuntu/serenedb/ask/:1253) `1253–1283` len=31
-- [`wiki_measure_carried`](ubuntu/serenedb/ask/:1286) `1286–1309` len=24
+- [`_wiki_sanitize_why`](ubuntu/serenedb/ask/:720) `720–724` len=5
+- [`_wiki_verdicts_for_diag`](ubuntu/serenedb/ask/:727) `727–742` len=16
+- [`_wiki_row_to_verdict`](ubuntu/serenedb/ask/:745) `745–761` len=17
+- [`_wiki_verdicts_from_rows`](ubuntu/serenedb/ask/:764) `764–772` len=9
+- [`_wiki_salvage_verdicts`](ubuntu/serenedb/ask/:775) `775–812` len=38
+- [`wiki_parse_verify_response`](ubuntu/serenedb/ask/:815) `815–841` len=27
+- [`_homonym_norm`](ubuntu/serenedb/ask/:844) `844–846` len=3
+- [`_homonym_keys`](ubuntu/serenedb/ask/:849) `849–869` len=21
+- [`wiki_homonym_kind_peers`](ubuntu/serenedb/ask/:872) `872–893` len=22
+- [`wiki_outcome_from_verify`](ubuntu/serenedb/ask/:896) `896–956` len=61
+- [`wiki_verify_candidates`](ubuntu/serenedb/ask/:959) `959–996` len=38
+- [`wiki_knn_separable`](ubuntu/serenedb/ask/:999) `999–1006` len=8
+- [`wiki_validate_leader_axes`](ubuntu/serenedb/ask/:1009) `1009–1021` len=13
+- [`wiki_pick_from_cards`](ubuntu/serenedb/ask/:1024) `1024–1079` len=56
+- [`wiki_primary_entity_cascade`](ubuntu/serenedb/ask/:1082) `1082–1123` len=42
+- [`try_wiki_hybrid_entity_pick`](ubuntu/serenedb/ask/:1126) `1126–1209` len=84
+- [`wiki_intent_named_measures`](ubuntu/serenedb/ask/:1212) `1212–1232` len=21
+- [`wiki_axis_is_question_subject`](ubuntu/serenedb/ask/:1235) `1235–1244` len=10
+- [`wiki_leader_carries_axis`](ubuntu/serenedb/ask/:1247) `1247–1278` len=32
+- [`wiki_leader_post_verify`](ubuntu/serenedb/ask/:1281) `1281–1311` len=31
+- [`wiki_measure_carried`](ubuntu/serenedb/ask/:1314) `1314–1337` len=24
 
 Зовут снаружи зоны: `fork_labels_covering`, `fork_labels_of`, `wiki_primary_entity_cascade`
 
@@ -1048,7 +1050,7 @@
 - `rows_seen`
 - `without_list_markers`
 
-### 21 wiki-choice (47/50)
+### 21 wiki-choice (49/52)
 
 - `_card_odata_kind`
 - `_homonym_keys`
@@ -1063,8 +1065,10 @@
 - `_wiki_passport_sql`
 - `_wiki_row_to_verdict`
 - `_wiki_salvage_verdicts`
+- `_wiki_sanitize_why`
 - `_wiki_substitute_passport_sql`
 - `_wiki_substitute_sql`
+- `_wiki_verdicts_for_diag`
 - `_wiki_verdicts_from_rows`
 - `filter_pool_by_named_type`
 - `named_platform_kinds`
@@ -1190,7 +1194,7 @@
 | `ASK_HEALTH_NATIVE_FRESHNESS` | [519](ubuntu/serenedb/ask/:519) | "0" | `(модуль)` |
 | `ASK_HEALTH_SEARCH_IDX` | [520](ubuntu/serenedb/ask/:520) | "search_idx" | `(модуль)` |
 | `ASK_AMBIG_TTL` | [847](ubuntu/serenedb/ask/:847) | "300" | `(модуль)` |
-| `ASK_SLOT_COVER` | [2301](ubuntu/serenedb/ask/:2301) | "0" | `(модуль)` |
+| `ASK_SLOT_COVER` | [2314](ubuntu/serenedb/ask/:2314) | "0" | `(модуль)` |
 | `WIKI_KNN_N` | [9](ubuntu/serenedb/ask/:9) | "15" | `(модуль)` |
 | `WIKI_PICK_N` | [14](ubuntu/serenedb/ask/:14) | "8" | `(модуль)` |
 | `WIKI_ALIAS_TOP` | [15](ubuntu/serenedb/ask/:15) | "3" | `(модуль)` |
@@ -1298,31 +1302,31 @@
 - [`ubuntu/serenedb/ask/:1112`](ubuntu/serenedb/ask/:1112) в `live_src_counts`
 - [`ubuntu/serenedb/ask/:1196`](ubuntu/serenedb/ask/:1196) в `dates_outside_period_filter`
 - [`ubuntu/serenedb/ask/:1492`](ubuntu/serenedb/ask/:1492) в `_measure_menu_opts`
-- [`ubuntu/serenedb/ask/:2253`](ubuntu/serenedb/ask/:2253) в `answer`
-- [`ubuntu/serenedb/ask/:2269`](ubuntu/serenedb/ask/:2269) в `answer`
-- [`ubuntu/serenedb/ask/:2312`](ubuntu/serenedb/ask/:2312) в `_journal_keep_n`
-- [`ubuntu/serenedb/ask/:2336`](ubuntu/serenedb/ask/:2336) в `_journal_build_ts`
-- [`ubuntu/serenedb/ask/:2349`](ubuntu/serenedb/ask/:2349) в `_journal_alias_ver`
-- [`ubuntu/serenedb/ask/:2583`](ubuntu/serenedb/ask/:2583) в `_ask_journal_write`
-- [`ubuntu/serenedb/ask/:2604`](ubuntu/serenedb/ask/:2604) в `_ask_journal_write`
-- [`ubuntu/serenedb/ask/:2597`](ubuntu/serenedb/ask/:2597) в `_ask_journal_write`
-- [`ubuntu/serenedb/ask/:2599`](ubuntu/serenedb/ask/:2599) в `_ask_journal_write`
-- [`ubuntu/serenedb/ask/:2606`](ubuntu/serenedb/ask/:2606) в `_ask_journal_write`
-- [`ubuntu/serenedb/ask/:2538`](ubuntu/serenedb/ask/:2538) в `_ask_journal_write`
-- [`ubuntu/serenedb/ask/:2587`](ubuntu/serenedb/ask/:2587) в `_ask_journal_write`
+- [`ubuntu/serenedb/ask/:2266`](ubuntu/serenedb/ask/:2266) в `answer`
+- [`ubuntu/serenedb/ask/:2282`](ubuntu/serenedb/ask/:2282) в `answer`
+- [`ubuntu/serenedb/ask/:2325`](ubuntu/serenedb/ask/:2325) в `_journal_keep_n`
+- [`ubuntu/serenedb/ask/:2349`](ubuntu/serenedb/ask/:2349) в `_journal_build_ts`
+- [`ubuntu/serenedb/ask/:2362`](ubuntu/serenedb/ask/:2362) в `_journal_alias_ver`
+- [`ubuntu/serenedb/ask/:2596`](ubuntu/serenedb/ask/:2596) в `_ask_journal_write`
+- [`ubuntu/serenedb/ask/:2617`](ubuntu/serenedb/ask/:2617) в `_ask_journal_write`
+- [`ubuntu/serenedb/ask/:2610`](ubuntu/serenedb/ask/:2610) в `_ask_journal_write`
+- [`ubuntu/serenedb/ask/:2612`](ubuntu/serenedb/ask/:2612) в `_ask_journal_write`
+- [`ubuntu/serenedb/ask/:2619`](ubuntu/serenedb/ask/:2619) в `_ask_journal_write`
+- [`ubuntu/serenedb/ask/:2551`](ubuntu/serenedb/ask/:2551) в `_ask_journal_write`
 - [`ubuntu/serenedb/ask/:2600`](ubuntu/serenedb/ask/:2600) в `_ask_journal_write`
-- [`ubuntu/serenedb/ask/:2583`](ubuntu/serenedb/ask/:2583) в `_ask_journal_write._insert_row`
-- [`ubuntu/serenedb/ask/:2587`](ubuntu/serenedb/ask/:2587) в `_ask_journal_write._insert_row`
-- [`ubuntu/serenedb/ask/:2800`](ubuntu/serenedb/ask/:2800) в `Handler.do_GET`
-- [`ubuntu/serenedb/ask/:2937`](ubuntu/serenedb/ask/:2937) в `Handler.do_POST`
+- [`ubuntu/serenedb/ask/:2613`](ubuntu/serenedb/ask/:2613) в `_ask_journal_write`
+- [`ubuntu/serenedb/ask/:2596`](ubuntu/serenedb/ask/:2596) в `_ask_journal_write._insert_row`
+- [`ubuntu/serenedb/ask/:2600`](ubuntu/serenedb/ask/:2600) в `_ask_journal_write._insert_row`
+- [`ubuntu/serenedb/ask/:2813`](ubuntu/serenedb/ask/:2813) в `Handler.do_GET`
+- [`ubuntu/serenedb/ask/:2950`](ubuntu/serenedb/ask/:2950) в `Handler.do_POST`
 - [`ubuntu/serenedb/ask/:338`](ubuntu/serenedb/ask/:338) в `wiki_hybrid_pool`
 - [`ubuntu/serenedb/ask/:488`](ubuntu/serenedb/ask/:488) в `fork_labels_of`
 - [`ubuntu/serenedb/ask/:513`](ubuntu/serenedb/ask/:513) в `fork_labels_covering`
 - [`ubuntu/serenedb/ask/:651`](ubuntu/serenedb/ask/:651) в `wiki_passport_enrich`
-- [`ubuntu/serenedb/ask/:1105`](ubuntu/serenedb/ask/:1105) в `try_wiki_hybrid_entity_pick`
-- [`ubuntu/serenedb/ask/:1161`](ubuntu/serenedb/ask/:1161) в `try_wiki_hybrid_entity_pick`
-- [`ubuntu/serenedb/ask/:1243`](ubuntu/serenedb/ask/:1243) в `wiki_leader_carries_axis`
-- [`ubuntu/serenedb/ask/:1295`](ubuntu/serenedb/ask/:1295) в `wiki_measure_carried`
+- [`ubuntu/serenedb/ask/:1133`](ubuntu/serenedb/ask/:1133) в `try_wiki_hybrid_entity_pick`
+- [`ubuntu/serenedb/ask/:1189`](ubuntu/serenedb/ask/:1189) в `try_wiki_hybrid_entity_pick`
+- [`ubuntu/serenedb/ask/:1271`](ubuntu/serenedb/ask/:1271) в `wiki_leader_carries_axis`
+- [`ubuntu/serenedb/ask/:1323`](ubuntu/serenedb/ask/:1323) в `wiki_measure_carried`
 - [`ubuntu/serenedb/ask/:25`](ubuntu/serenedb/ask/:25) в `_measure_tick_status`
 
 ### ds_chat (8)
@@ -1333,8 +1337,8 @@
 - [`ubuntu/serenedb/ask/:184`](ubuntu/serenedb/ask/:184) в `rank_axis_pick`
 - [`ubuntu/serenedb/ask/:824`](ubuntu/serenedb/ask/:824) в `compose`
 - [`ubuntu/serenedb/ask/:796`](ubuntu/serenedb/ask/:796) в `_coverage_answer`
-- [`ubuntu/serenedb/ask/:949`](ubuntu/serenedb/ask/:949) в `wiki_verify_candidates`
-- [`ubuntu/serenedb/ask/:1010`](ubuntu/serenedb/ask/:1010) в `wiki_pick_from_cards`
+- [`ubuntu/serenedb/ask/:974`](ubuntu/serenedb/ask/:974) в `wiki_verify_candidates`
+- [`ubuntu/serenedb/ask/:1038`](ubuntu/serenedb/ask/:1038) в `wiki_pick_from_cards`
 
 ### embed_one (1)
 

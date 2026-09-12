@@ -109,6 +109,38 @@ gen = A._rid_get()
 t("answer_checked: генерирует rid", len(gen) >= 12)
 t("answer_checked: rid 12-16 alnum", gen.isalnum() and 12 <= len(gen) <= 16)
 
+
+# ── I0-П2-фикс: формат TRACE «wiki verify» ───────────────────────────────────
+fmt = getattr(A, "wiki_verify_trace_fields", None)
+t("wiki_verify_trace_fields exported", callable(fmt))
+if callable(fmt):
+    sole = fmt({"wiki_verify": "catalog_goods", "wiki_verify_yes": 1,
+                "wiki_verify_no": 0, "wiki_verify_unsure": 0})
+    t("TRACE sole: leader=src not none",
+      sole.get("leader") == "catalog_goods"
+      and sole.get("verdicts") == "1yes/0no/0u",
+      sole)
+    bad = fmt({"wiki_verify": "bad_index", "wiki_verify_yes": 0,
+               "wiki_verify_no": 0, "wiki_verify_unsure": 0})
+    t("TRACE sentinel bad_index",
+      bad.get("leader") == "- (bad_index)", bad)
+    ax = fmt({"wiki_verify": "axis_reject"})
+    t("TRACE sentinel axis_reject",
+      ax.get("leader") == "- (axis_reject)", ax)
+    deg = fmt({"wiki_verify_error": 1, "wiki_pick": "catalog_a",
+               "wiki_verdicts": []})
+    t("TRACE degraded uses wiki_pick",
+      deg.get("verdicts") == "degraded" and deg.get("leader") == "catalog_a",
+      deg)
+    deg2 = fmt({"wiki_verify_error": 1, "wiki_verdicts": []})
+    t("TRACE degraded without pick -> leader=-",
+      deg2.get("verdicts") == "degraded" and deg2.get("leader") == "-",
+      deg2)
+    nl = fmt({"wiki_verify": "src" + chr(10) + "with  spaces", "wiki_verify_yes": 1})
+    t("TRACE leader sanitized one line",
+      chr(10) not in nl.get("leader", "") and "  " not in nl.get("leader", ""),
+      nl)
+
 print("\n%d проверок пройдено" % PASS)
 if FAIL:
     print("ПРОВАЛЕНО %d: %s" % (len(FAIL), "; ".join(FAIL)))

@@ -30,6 +30,44 @@ LIST_MARKER = re.compile(r"^[ \t]*\d+[.)][ \t]+", re.M)
 # этого прибор шага 7 отвергал 7 верных ответов из 44 вопросов на одной лишь нумерации.
 INLINE_MARKER = re.compile(r"(?<=[:;,])[ \t]*\d{1,2}[.)][ \t]+")
 
+# Метки исхода wiki-verify / wiki_pick — не src-лидера (TRACE).
+_WIKI_VERIFY_TRACE_SENTINELS = frozenset({
+    "bad_index", "axis_reject", "fallback", "none", "clarify",
+})
+
+
+def _wiki_trace_sanitize(value):
+    """Одна строка для TRACE (как _wiki_sanitize_why в z21): без CR/LF, <=200."""
+    s = str(value or "").replace("\r", " ").replace("\n", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:200]
+
+
+def wiki_verify_trace_fields(diag):
+    """Поля TRACE-шага «wiki verify» из diag (наблюдаемость, без смены выбора)."""
+    diag = diag or {}
+    if diag.get("wiki_verify_error"):
+        pick = diag.get("wiki_pick")
+        if isinstance(pick, str) and pick.strip():
+            leader = _wiki_trace_sanitize(pick)
+        else:
+            leader = "-"
+        return {"verdicts": "degraded", "leader": leader}
+    yv = int(diag.get("wiki_verify_yes") or 0)
+    nv = int(diag.get("wiki_verify_no") or 0)
+    uv = int(diag.get("wiki_verify_unsure") or 0)
+    raw = diag.get("wiki_verify")
+    if not (isinstance(raw, str) and raw):
+        leader = "-"
+    elif raw in _WIKI_VERIFY_TRACE_SENTINELS:
+        leader = "- (%s)" % raw
+    else:
+        leader = _wiki_trace_sanitize(raw)
+    return {
+        "verdicts": "%dyes/%dno/%du" % (yv, nv, uv),
+        "leader": leader,
+    }
+
 
 def without_list_markers(text):
     """Разметка списка — не утверждение о данных (`F248`).
@@ -1951,6 +1989,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _ep = wiki_primary_entity_cascade(
             question, intent, [], diag, cut, t0,
             {}, "", preds, {})
+        if ("wiki_verify_yes" in diag or "wiki_verdicts" in diag
+                or diag.get("wiki_verify_error")):
+            шаг("wiki verify", **wiki_verify_trace_fields(diag))
         if isinstance(_ep, dict) and _ep.get("kind"):
             шаг("wiki исход", kind=_ep.get("kind"))
             return _ep

@@ -200,6 +200,54 @@ def ask_fields_from_payload(data: Any) -> tuple[str, dict, list[float], str]:
     return "", {}, extract_numbers(text), text
 
 
+# Ключи wiki-* из diag для компактной записи в i2-answers.jsonl (П2).
+_I2_WIKI_DIAG_KEYS = (
+    "wiki_pool",
+    "wiki_pick",
+    "wiki_verify",
+    "wiki_verify_yes",
+    "wiki_verify_unsure",
+    "wiki_verify_no",
+    "wiki_verdicts",
+    "wiki_empty_pool",
+    "wiki_leader",
+    "wiki_attempted",
+    "wiki_verify_n",
+    "wiki_verify_truncated",
+    "wiki_verify_error",
+    "wiki_none",
+    "wiki_homonym_tie",
+)
+
+
+def wiki_diag_slice(diag: Optional[dict]) -> dict:
+    """Подмножество diag.wiki_* для jsonl (без раздувания записи)."""
+    if not isinstance(diag, dict):
+        return {}
+    return {k: diag[k] for k in _I2_WIKI_DIAG_KEYS if k in diag}
+
+
+def path_answer_jsonl_fields(ans: "PathAnswer") -> dict:
+    """Поля engine/web в i2-answers.jsonl (старые ключи + wiki/doubt/found)."""
+    rec: dict = {
+        "verdict": ans.verdict,
+        "kind": ans.kind,
+        "text": (ans.text or "")[:500],
+        "nums": (ans.nums or [])[:8],
+        "latency_s": ans.latency_s,
+        "error": ans.transport_error,
+    }
+    diag = ans.diag if isinstance(ans.diag, dict) else {}
+    wiki = wiki_diag_slice(diag)
+    if wiki:
+        rec["wiki"] = wiki
+    if "doubt" in diag:
+        rec["doubt"] = diag.get("doubt")
+    if "found" in diag:
+        rec["found"] = diag.get("found")
+    return rec
+
+
 def classify_verdict(
     *,
     text: str = "",
@@ -839,21 +887,17 @@ def run_i2(
                     "web": None,
                 }
                 if row.engine:
-                    rec["engine"] = {
-                        "verdict": row.engine.verdict,
-                        "kind": row.engine.kind,
-                        "text": row.engine.text[:500],
-                        "nums": row.engine.nums[:8],
-                        "latency_s": row.engine.latency_s,
-                        "error": row.engine.transport_error,
-                    }
+                    rec["engine"] = path_answer_jsonl_fields(row.engine)
                 if row.web:
+                    web_rec = path_answer_jsonl_fields(row.web)
+                    # web раньше не писал kind — сохраняем прежний набор ключей + wiki.
                     rec["web"] = {
-                        "verdict": row.web.verdict,
-                        "text": row.web.text[:500],
-                        "nums": row.web.nums[:8],
-                        "latency_s": row.web.latency_s,
-                        "error": row.web.transport_error,
+                        k: web_rec[k]
+                        for k in (
+                            "verdict", "text", "nums", "latency_s", "error",
+                            "wiki", "doubt", "found",
+                        )
+                        if k in web_rec
                     }
                 fh.write(json.dumps(rec, ensure_ascii=False) + "\n")
     return rows, summaries, report

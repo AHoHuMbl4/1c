@@ -1,3 +1,25 @@
+## 2026-09-13 (3) — П2: наблюдаемость wiki-verify (вердикты судьи видны) [код] [замер]
+
+**[код]** План I0v2 §П2, только наблюдаемость, поведение выбора не тронуто (красная ×2
+по диффу: «ни одного изменённого условия/раннего выхода/порядка»). Правки:
+`z21` — `wiki_verdicts=[{i,fit,why}]` в diag (санитизация why одной строкой), при
+исключении модели `wiki_verdicts=[]`+`wiki_verify_error=1`; `z20` — TRACE-шаг
+«wiki verify» (агрегат `Nyes/Nno/Nu`, лидер из `wiki_verify`, sentinel'ы `bad_index/
+axis_reject/fallback/none/clarify` → `leader=- (...)`, деградация → `verdicts=degraded`);
+`i2_runner` — wiki-срез diag в jsonl (pool/pick/verify/verdicts/счётчики/attempted/
+truncated/error/homonym_tie), прежние ключи не сдвинуты (web-ветка — прежний набор).
+
+**[замер]** Замки (мой прогон): `test_wiki_candidate_verify` **70/0**, `test_i2_diag`
+(новый, untracked→git) **11/0**, `test_one_path` **77/0**, `test_trace_rid` **17/0**,
+py_compile ask/* OK; симуляция красной: 8 вердиктов ≈ 415 мкс / 1.9 КБ в jsonl.
+Замер паспорта-мишеней: aliases/«про что» видны судье в 1500 симв (позиции 126–911,
+5 страниц) — П1-«добавить колонки» отменён как дубль (I1 §1).
+Прежние красные: `test_client_gold` 55/2 (web-классификатор, вне П2), `test_pipeline_doc`
+5/8 (дрейф PIPELINE.md), ask_embed_native/focus_loop (окружение).
+
+Числа: 70/0 + 11/0 + 77/0 + 17/0.
+Доки: docs/audit/onepath/I0-план-транспорт-и-вики.md; I1-проверка-плана.md
+
 ## 2026-09-13 (2) — замок-некролог S1 закоммичен (найден выкат-гейтом) [код] [замер]
 
 **[код]** `ubuntu/serenedb/test_fork_atom_aggregate.py` — остался незакоммиченным

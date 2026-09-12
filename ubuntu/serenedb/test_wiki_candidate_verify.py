@@ -350,6 +350,52 @@ def main() -> int:
     t("valid empty verdicts → none not degraded",
       vfy_empty_ok.get("outcome") == "none")
 
+    # I0-П2-фикс: исключение ds_chat → wiki_verdicts=[] + wiki_verify_error=1
+    def _boom(*a, **k):
+        raise RuntimeError("model down")
+
+    z21["ds_chat"] = _boom
+    vfy_exc = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    d_exc = vfy_exc.get("diag") or {}
+    t("exception degraded → wiki_verdicts []",
+      vfy_exc.get("outcome") == "degraded" and d_exc.get("wiki_verdicts") == [])
+    t("exception degraded → wiki_verify_error 1",
+      d_exc.get("wiki_verify_error") == 1)
+    t("exception degraded → TRACE condition",
+      ("wiki_verdicts" in d_exc or d_exc.get("wiki_verify_error")))
+
+    # I0-П2: diag несёт wiki_verdicts (наблюдаемость, без смены выбора)
+    z21["psql"] = lambda q: []
+    z21["wiki_validate_leader_axes"] = lambda *a, **k: True
+    z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [
+        {"index": 1, "fit": "yes", "why": "ok line"},
+        {"index": 2, "fit": "no", "why": "reject"},
+    ]})
+    vfy_diag = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    wv = (vfy_diag.get("diag") or {}).get("wiki_verdicts")
+    t("diag wiki_verdicts keys i/fit/why",
+      isinstance(wv, list) and len(wv) == 2
+      and all(set(x) == {"i", "fit", "why"} for x in wv)
+      and wv[0]["i"] == 1 and wv[0]["fit"] == "yes"
+      and wv[1]["i"] == 2 and wv[1]["fit"] == "no",
+      wv)
+    z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [
+        {"index": 1, "fit": "yes",
+         "why": "line1\nline2  with   spaces\r\nand CR"},
+        {"index": 2, "fit": "no", "why": "n"},
+    ]})
+    vfy_nl = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    why_nl = ((vfy_nl.get("diag") or {}).get("wiki_verdicts") or [{}])[0].get("why", "")
+    t("diag why one line no newlines",
+      "\n" not in why_nl and "\r" not in why_nl
+      and "  " not in why_nl
+      and why_nl.startswith("line1 line2"),
+      repr(why_nl))
+    z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": []})
+    vfy_empty_diag = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
+    t("empty verdicts → wiki_verdicts []",
+      (vfy_empty_diag.get("diag") or {}).get("wiki_verdicts") == [])
+
     t("WIKI_VERIFY_MAX_TOKENS default 2048",
       z21.get("WIKI_VERIFY_MAX_TOKENS") == 2048)
 

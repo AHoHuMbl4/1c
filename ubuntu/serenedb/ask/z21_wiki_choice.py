@@ -717,6 +717,31 @@ _WIKI_VERIFY_FIT_MAP = {
 }
 
 
+def _wiki_sanitize_why(why):
+    """why для diag/журнала: одна строка, ≤200 символов."""
+    s = str(why or "").replace("\r", " ").replace("\n", " ")
+    s = re.sub(r"\s+", " ", s).strip()
+    return s[:200]
+
+
+def _wiki_verdicts_for_diag(verdicts):
+    """Компактные вердикты в diag: ключи i/fit/why, why санитизирован."""
+    out = []
+    for v in verdicts or []:
+        if not isinstance(v, dict):
+            continue
+        idx = v.get("index")
+        fit = v.get("fit")
+        if idx is None or fit not in ("yes", "no", "unsure"):
+            continue
+        out.append({
+            "i": int(idx),
+            "fit": fit,
+            "why": _wiki_sanitize_why(v.get("why")),
+        })
+    return out
+
+
 def _wiki_row_to_verdict(row, n_passports):
     """Один объект verdict → нормализованная запись или None."""
     if not isinstance(row, dict):
@@ -953,6 +978,8 @@ def wiki_verify_candidates(question, intent, cards, diag=None):
             max_tokens=WIKI_VERIFY_MAX_TOKENS)
     except Exception as e:  # noqa: BLE001
         sys.stderr.write("ask DEGRADED: wiki verify без модели (%s)\n" % str(e)[:80])
+        diag["wiki_verdicts"] = []
+        diag["wiki_verify_error"] = 1
         return {"outcome": "degraded", "diag": diag}
     verdicts, parse_mode = wiki_parse_verify_response(raw, len(full))
     if parse_mode == "salvage":
@@ -960,11 +987,14 @@ def wiki_verify_candidates(question, intent, cards, diag=None):
     if (raw or "").strip() and parse_mode == "failed":
         sys.stderr.write("ask DEGRADED: wiki verify ответ не разобран\n")
         diag["wiki_verify_n"] = len(full)
+        diag["wiki_verdicts"] = []
         return {"outcome": "degraded", "verdicts": [], "diag": diag}
     diag["wiki_verify_n"] = len(full)
     resolved = wiki_outcome_from_verify(verdicts, full, intent, diag=diag)
     resolved["verdicts"] = verdicts
-    resolved["diag"] = dict(resolved.get("diag") or diag)
+    d = dict(resolved.get("diag") or diag)
+    d["wiki_verdicts"] = _wiki_verdicts_for_diag(verdicts)
+    resolved["diag"] = d
     return resolved
 
 
