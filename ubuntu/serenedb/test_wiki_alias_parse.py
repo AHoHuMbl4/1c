@@ -135,6 +135,86 @@ t("🔴 обрезанный JSON: целые элементы спасаютс�
 t("salvage: пустой/без items — пусто, не исключение",
   P._salvage_items("{}") == [] and P._salvage_items("xx") == [])
 
+# ── G6: extract_items_payload (reasoning-преамбула; живой замер песочницы 13.09) ─
+# Живой кейс: Qwen3.8-27B на collision отвечает прозой («Let me analyze…»),
+# в прозе — обрывки schema {"items":[…]}, валидный JSON с items — в КОНЦЕ
+# (ans ~20022 символов, items около 19293). Жадый \{.*\} брал первую { из
+# прозы → loads падал → rows=[].
+
+_FINAL_ITEMS = (
+    '{"items":[{"entity":"catalog_партнёрыпробные",'
+    '"aliases":["партнёр","покупатель"],'
+    '"bestUsedFor":["кто покупает"],'
+    '"notEnoughFor":["юрлицо — см. контрагенты"],'
+    '"quantities":[]},'
+    '{"entity":"catalog_контрагентыпробные",'
+    '"aliases":["контрагент","юрлицо"],'
+    '"bestUsedFor":["ИНН"],'
+    '"notEnoughFor":["покупатель — см. партнёры"],'
+    '"quantities":[]}]}'
+)
+
+# Мотив живого ans: преамбула + schema-фрагмент с { в прозе + финальный JSON.
+TEXT_PREAMBLE = (
+    "Let me analyze this task carefully.\n\n"
+    "The shared word is \"party\". I need to rebuild aliases for each type.\n"
+    "Looking at the schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"]}],\n"
+    "note the incomplete sketch above; prose braces appear there too.\n\n"
+    "Final answer:\n"
+    + _FINAL_ITEMS
+)
+
+got_pre = P.extract_items_payload(TEXT_PREAMBLE)
+t("G6: преамбула+schema-фрагмент → items из финального JSON",
+  got_pre is not None
+  and len(got_pre.get("items") or []) == 2
+  and got_pre["items"][0]["entity"] == "catalog_партнёрыпробные",
+  got_pre)
+ents_pre, _ = P.parse_items(TEXT_PREAMBLE, {
+    "items": [
+        {"entity": "catalog_партнёрыпробные", "title": "Партнёры", "quantities": ""},
+        {"entity": "catalog_контрагентыпробные", "title": "Контрагенты", "quantities": ""},
+    ]
+})
+t("G6: parse_items через extract — 2 сущности из преамбулы",
+  len(ents_pre) == 2
+  and {r["src_table"] for r in ents_pre}
+  == {"catalog_партнёрыпробные", "catalog_контрагентыпробные"},
+  ents_pre)
+
+got_clean = P.extract_items_payload(_FINAL_ITEMS)
+t("G6: чистый JSON без преамбулы — как раньше",
+  got_clean is not None and len(got_clean["items"]) == 2, got_clean)
+
+# JSON в середине + хвост-проза с } — жадный цепляет хвост; попытка 3 режет.
+TEXT_MID = (
+    "note schema {\"items\":[]} sketch.\n"
+    + _FINAL_ITEMS
+    + "\nThat covers the siblings. Extra brace noise: {\"done\": true}"
+)
+got_mid = P.extract_items_payload(TEXT_MID)
+t("G6: JSON в середине + хвост с } → items-объект (не хвост)",
+  got_mid is not None
+  and len(got_mid.get("items") or []) == 2
+  and got_mid["items"][0]["entity"] == "catalog_партнёрыпробные",
+  got_mid)
+
+got_none = P.extract_items_payload("Let me think. No payload here {\"x\":1}")
+t("G6: нет items → None, не исключение",
+  got_none is None)
+
+# salvage-регресс: обрезанный JSON по-прежнему спасает целый элемент
+ents_t2, _ = P.parse_items(TEXT_TRUNC, {"items": []})
+t("G6: обрезанный JSON — salvage по-прежнему спасает (регресс)",
+  len(ents_t2) == 1 and ents_t2[0]["src_table"] == "catalog_пробный", ents_t2)
+
+# PY2 collision: маркер вызова extract_items_payload в wiki_alias.sh
+_sh = open(os.path.join(os.path.dirname(__file__), "wiki_alias.sh"),
+           encoding="utf-8").read()
+t("G6: collision PY2 зовёт extract_items_payload",
+  "extract_items_payload" in _sh
+  and "payload = extract_items_payload(text)" in _sh)
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

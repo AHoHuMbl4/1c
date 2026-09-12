@@ -83,6 +83,103 @@ def text_from_agent(raw):
         return raw
 
 
+def extract_items_payload(text):
+    """Достать dict с ключом items из ответа модели (в т.ч. с reasoning-преамбулой).
+
+    Стратегия (живая песочница 13.09: проза + обрывки схемы, валидный JSON в конце):
+      1) весь text = JSON;
+      2) жадный ``\\{.*\\}`` (прежнее поведение);
+      3) от последнего ``"items"`` назад до ближайшей ``{``, сегмент до
+         последней ``}``; при провале loads — укорачивать по предыдущей ``}``.
+    Неудача попытки — кратко в stderr. Нет items → None (не исключение).
+    """
+    text = text or ""
+
+    def _ok(obj):
+        return isinstance(obj, dict) and "items" in obj
+
+    # 1: целиком
+    try:
+        obj = json.loads(text)
+        if _ok(obj):
+            return obj
+        print(
+            "wiki_alias_parse: extract attempt 1: JSON without items",
+            file=sys.stderr,
+        )
+    except ValueError as e:
+        print(
+            "wiki_alias_parse: extract attempt 1 failed: %s" % (e,),
+            file=sys.stderr,
+        )
+
+    # 2: жадный {.*} (как раньше)
+    m = re.search(r"\{.*\}", text, re.S)
+    if m:
+        try:
+            obj = json.loads(m.group(0))
+            if _ok(obj):
+                return obj
+            print(
+                "wiki_alias_parse: extract attempt 2: JSON without items",
+                file=sys.stderr,
+            )
+        except ValueError as e:
+            print(
+                "wiki_alias_parse: extract attempt 2 failed: %s" % (e,),
+                file=sys.stderr,
+            )
+    else:
+        print(
+            "wiki_alias_parse: extract attempt 2 failed: no {…} match",
+            file=sys.stderr,
+        )
+
+    # 3: последний "items" → назад до { → до последней }; укорачивать при нужде
+    idx = text.rfind('"items"')
+    if idx < 0:
+        print(
+            "wiki_alias_parse: extract attempt 3 failed: no \"items\"",
+            file=sys.stderr,
+        )
+        return None
+    brace = text.rfind("{", 0, idx)
+    if brace < 0:
+        print(
+            "wiki_alias_parse: extract attempt 3 failed: no { before items",
+            file=sys.stderr,
+        )
+        return None
+    end = text.rfind("}")
+    if end <= brace:
+        print(
+            "wiki_alias_parse: extract attempt 3 failed: no } after items",
+            file=sys.stderr,
+        )
+        return None
+    segment = text[brace : end + 1]
+    while segment:
+        try:
+            obj = json.loads(segment)
+            if _ok(obj):
+                return obj
+            print(
+                "wiki_alias_parse: extract attempt 3: JSON without items",
+                file=sys.stderr,
+            )
+            return None
+        except ValueError:
+            prev = segment.rfind("}", 0, len(segment) - 1)
+            if prev < 0:
+                break
+            segment = segment[: prev + 1]
+    print(
+        "wiki_alias_parse: extract attempt 3 failed: loads",
+        file=sys.stderr,
+    )
+    return None
+
+
 def allowed_quantities(pay):
     """entity -> канонические имена величин из входной пачки (как в данных, не из модели)."""
     out = {}
@@ -456,16 +553,18 @@ def parse_items(text, pay):
     allowed = allowed_quantities(pay)
     titles = titles_by_entity(pay)
     entity_rows, measure_rows = [], []
-    m = re.search(r"\{.*\}", text or "", re.S)
-    if not m:
-        return entity_rows, measure_rows
-    try:
-        items = json.loads(m.group(0)).get("items") or []
-    except ValueError:
+    payload = extract_items_payload(text)
+    if payload is not None:
+        items = payload.get("items") or []
+    else:
         # [замер окно 28.08] длинные пачки обрезаются лимитом токенов
         # вызова: JSON рвётся на середине items. Целые элементы до среза
         # обязаны спасаться, а не теряться пачкой (п. 13); остаток
         # переспросится идемпотентно на следующем круге.
+        # extract вернул None — salvage по жадному сегменту (логика не тронута).
+        m = re.search(r"\{.*\}", text or "", re.S)
+        if not m:
+            return entity_rows, measure_rows
         items = _salvage_items(m.group(0))
     for it in items:
         if not isinstance(it, dict):

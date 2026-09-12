@@ -351,8 +351,8 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
         echo "разведение: пачка пропущена ($(head -c 100 "$TMP/err" | tr -d '\n'))" >&2; continue; }
     python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true
     python3 - "$TMP/ans" "$TMP/pay" "$TMP/rows.json" <<'PY2'
-import json, re, sys
-from wiki_alias_parse import filter_entity_aliases, text_from_agent, _join, titles_by_entity
+import json, sys
+from wiki_alias_parse import filter_entity_aliases, extract_items_payload, text_from_agent, _join, titles_by_entity
 raw = open(sys.argv[1], encoding='utf-8', errors='replace').read()
 try:
     pay = json.loads(open(sys.argv[2], encoding='utf-8').read() or '[]')
@@ -360,19 +360,16 @@ except ValueError:
     pay = []
 title_by = titles_by_entity(pay)
 text = text_from_agent(raw)
-m = re.search(r'\{.*\}', text, re.S)
+payload = extract_items_payload(text)
 rows = []
-if m:
-    try:
-        for it in (json.loads(m.group(0)).get('items') or []):
-            e = (it.get('entity') or '').strip()
-            if not e: continue
-            aliases = filter_entity_aliases(it.get('aliases'), title=title_by.get(e))
-            rows.append({"src_table": e, "aliases": _join(aliases),
-                         "best_used_for": _join(it.get('bestUsedFor')),
-                         "not_enough_for": _join(it.get('notEnoughFor'))})
-    except ValueError:
-        pass
+if payload is not None:
+    for it in (payload.get('items') or []):
+        e = (it.get('entity') or '').strip()
+        if not e: continue
+        aliases = filter_entity_aliases(it.get('aliases'), title=title_by.get(e))
+        rows.append({"src_table": e, "aliases": _join(aliases),
+                     "best_used_for": _join(it.get('bestUsedFor')),
+                     "not_enough_for": _join(it.get('notEnoughFor'))})
 open(sys.argv[3], 'w', encoding='utf-8').write(json.dumps(rows, ensure_ascii=False))
 print("разведено сущностей: %d" % len(rows))
 PY2
