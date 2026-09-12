@@ -7,7 +7,8 @@
 
 Алиасы сущности: обиходные слова из ответа модели доходят до таблицы; имена
 величин и их алиасы из того же ответа в `search_entity_alias` не пишутся —
-их место в `search_measure_alias` (`filter_entity_aliases`).
+их место в `search_measure_alias` (`filter_entity_aliases`). Мета-ярлыки
+платформы 1С (класс объекта, не предмет) вычищаются тем же фильтром.
 
 Запуск из скрипта:
     python3 wiki_alias_parse.py ANS.json PAY ROWS.json MEASURES.json
@@ -17,6 +18,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+import unicodedata
 
 
 def _join(x, n=900):
@@ -84,28 +86,270 @@ def _alias_tokens(raw):
     return [x.strip() for x in str(raw).split(",") if x.strip()]
 
 
-def filter_entity_aliases(aliases, quantity_names=None, quantity_aliases=None):
-    """Оставить обиходные слова сущности; выкинуть мусор величин.
+# Стоп-варианты мета-классов платформы 1С (P3 §2): casefold + ё→е уже применены.
+# Предметные («тмц», «склад», «номенклатура») сюда не входят.
+_PLATFORM_META_STOP = frozenset({
+    # ru
+    "список", "списки",
+    "справочник", "справочники",
+    "каталог", "каталоги",
+    "реестр", "реестры",
+    "тип", "типы",
+    "вид", "виды",
+    "группа", "группы",
+    "документ", "документы",
+    "журнал", "журналы",
+    "регистр", "регистры",
+    "отчет", "отчеты",
+    "запись", "записи",
+    "карточка", "карточки",
+    "перечень", "перечни",
+    "перечисление", "перечисления",
+    "константа", "константы",
+    "движение", "движения",
+    # en
+    "list", "lists",
+    "catalog", "catalogues", "catalogs",
+    "directory", "directories",
+    "journal", "journals",
+    "register", "registers",
+    "document", "documents",
+    "report", "reports",
+    "enum", "enumeration",
+})
 
-    Отсев — по данным той же пачки/ответа (имена полей из входа и алиасы величин
-    из ответа модели), без списков слов конкретной базы или языка.
+
+# Невидимые: soft-hyphen/BOM — удалить; ZWSP/ZWNJ/ZWJ — пробел (граница слова),
+# иначе «список\\u200bклиентов» склеится и не сопоставится со стопом (R6-2).
+# NFKC — только в _norm_meta_token (сопоставление); сохраняемый остаток без NFKC
+# (канон P3 §4.2 п.1 / R7: «№5»/«м²» не портить).
+_INVISIBLE_DROP = ("\u00ad", "\ufeff")
+_INVISIBLE_SPACE = ("\u200b", "\u200c", "\u200d")
+
+
+def _strip_invisibles(s: str) -> str:
+    """Чистка невидимок для сохраняемого остатка (без NFKC)."""
+    s = s or ""
+    for ch in _INVISIBLE_DROP:
+        s = s.replace(ch, "")
+    for ch in _INVISIBLE_SPACE:
+        s = s.replace(ch, " ")
+    return s
+
+
+def _norm_meta_token(s: str) -> str:
+    """Нормализация только для сопоставления со стопом/ban (NFKC+casefold+ё→е)."""
+    s = _strip_invisibles(s or "")
+    s = unicodedata.normalize("NFKC", s)
+    return s.strip().casefold().replace("ё", "е")
+
+
+# Краевая пунктуация токена при сопоставлении со стопом/ban (P3 §4.2; R4).
+_EDGE_PUNCT = set("«„“\"»(),;:.!?…—–")
+
+# Разделители слов фразы (и краевые символы остатка после выреза).
+_SEP_CHARS = " -/_"
+
+
+def _strip_edge_punct(s: str) -> str:
+    """Срезать краевые запятые/скобки/кавычки/.!?…/тире; дефис/слэш/_ — не сюда."""
+    s = (s or "").strip()
+    while s and s[0] in _EDGE_PUNCT:
+        s = s[1:]
+    while s and s[-1] in _EDGE_PUNCT:
+        s = s[:-1]
+    return s.strip()
+
+
+def _clean_result_edges(s: str) -> str:
+    """Края остатка: пробелы, дефис/слэш/_, краевая пунктуация _EDGE_PUNCT."""
+    s = (s or "").strip()
+    while s:
+        if s[0] in _EDGE_PUNCT or s[0] in _SEP_CHARS:
+            s = s[1:].lstrip()
+            continue
+        if s[-1] in _EDGE_PUNCT or s[-1] in _SEP_CHARS:
+            s = s[:-1].rstrip()
+            continue
+        break
+    return s.strip()
+
+
+_SEP_RE = re.compile(r"([\s\-/_]+)")
+
+
+def _phrase_parts(phrase: str):
+    """Чередование слов и разделителей на уже подготовленной фразе.
+
+    Пробел/дефис/слэш/_ — разделители; краевая пунктуация слова срезана.
+    """
+    raw = (phrase or "").strip()
+    if not raw:
+        return []
+    parts = []
+    for i, chunk in enumerate(_SEP_RE.split(raw)):
+        if not chunk:
+            continue
+        if i % 2 == 1:
+            parts.append(("s", chunk))
+            continue
+        w = _strip_edge_punct(chunk)
+        if w:
+            parts.append(("w", w))
+    return parts
+
+
+def _phrase_words(phrase: str):
+    """Слова фразы для сопоставления со стопом/ban (без разделителей)."""
+    return [w for kind, w in _phrase_parts(phrase) if kind == "w"]
+
+
+def _strip_platform_meta_phrase(phrase: str, ban=None):
+    """Убрать мета-токены и слова quantity-ban из фразы.
+
+    Возвращает (результат|None, words_removed). None = фразу отбросить.
+    Канон P3 §4.2 + R5/R7: дефис/слэш/_ — разделитель матча; вырез — из
+    исходной фразы (только чистка невидимок, без NFKC) с сохранением
+    разделителей; при вырезе из середины соседние разделители схлопываются
+    в один (левый); нет выреза — фраза как есть; пусто → отброс.
+    Qty-бан — точный по целому токену/слову, не по кускам multi-word фразы
+    (канон §3.1): multi-word qty в ban не режет отдельные слова.
+    """
+    ban = ban or set()
+    prepared = _strip_invisibles(phrase or "").strip()
+    parts = _phrase_parts(prepared)
+    words = [w for kind, w in parts if kind == "w"]
+    if not words:
+        return None, False
+
+    def _drop_word(w: str) -> bool:
+        key = _norm_meta_token(w)
+        if key in _PLATFORM_META_STOP:
+            return True
+        # точный матч целого слова/токена со стопом ban (не подстрока фразы)
+        if key in ban:
+            return True
+        return False
+
+    n_drop = sum(1 for w in words if _drop_word(w))
+    if n_drop == 0:
+        edge = _clean_result_edges(_strip_edge_punct(prepared))
+        return (edge if edge else None), False
+
+    out_chunks = []
+    prev_kept = False
+    # Один разделитель между оставшимися словами (левый из пары при вырезе).
+    sep_buf = None
+    for kind, val in parts:
+        if kind == "s":
+            if prev_kept and sep_buf is None:
+                sep_buf = val
+            continue
+        if _drop_word(val):
+            continue
+        if prev_kept and sep_buf is not None:
+            out_chunks.append(sep_buf)
+        out_chunks.append(val)
+        prev_kept = True
+        sep_buf = None
+
+    if not out_chunks:
+        return None, True
+    result = _clean_result_edges("".join(out_chunks))
+    if not result:
+        return None, True
+    return result, True
+
+
+def titles_by_entity(pay):
+    """entity -> title из входной пачки (wiki_entity_facts.label), не из ответа модели."""
+    out = {}
+    if isinstance(pay, dict):
+        pay = pay.get("items") or pay.get("value") or []
+    for rec in pay or []:
+        if not isinstance(rec, dict):
+            continue
+        e = (rec.get("entity") or rec.get("src_table") or "").strip()
+        if not e:
+            continue
+        tit = (rec.get("title") or "").strip()
+        if tit:
+            out[e] = tit
+    return out
+
+
+def filter_entity_aliases(aliases, quantity_names=None, quantity_aliases=None,
+                          title=None):
+    """Оставить обиходные слова сущности; выкинуть мусор величин и мета-класс.
+
+    Отсев величин — по данным той же пачки/ответа. Мета — конечный стоп
+    платформы 1С (P3), без слов конкретной базы. Quantities этим фильтром
+    не трогаются (вызывающая сторона передаёт только entity-aliases).
+    Всё вырезано + title есть → [title]; без title → [] (P3 §4.3). Голое
+    мета-слово не оставляем «чтобы не пусто».
     """
     ban = set()
     for n in quantity_names or []:
         s = str(n).strip()
         if s:
-            ban.add(s.casefold())
+            ban.add(_norm_meta_token(s))
     for a in quantity_aliases or []:
         s = str(a).strip()
         if s:
-            ban.add(s.casefold())
-    out, seen = [], set()
-    for tok in _alias_tokens(aliases):
-        key = tok.casefold()
+            ban.add(_norm_meta_token(s))
+    toks = _alias_tokens(aliases)
+    after_qty = []
+    seen = set()
+    for tok in toks:
+        key = _norm_meta_token(tok)
         if key in ban or key in seen:
+            if key in ban:
+                print(
+                    "wiki_alias_parse: quantity-name alias dropped: %r" % (tok,),
+                    file=sys.stderr,
+                )
             continue
         seen.add(key)
-        out.append(tok)
+        after_qty.append(tok)
+
+    out, seen_out = [], set()
+    dropped_meta = []
+    for tok in after_qty:
+        cleaned, words_removed = _strip_platform_meta_phrase(tok, ban=ban)
+        if cleaned is None:
+            dropped_meta.append(tok)
+            print(
+                "wiki_alias_parse: platform meta alias dropped: %r" % (tok,),
+                file=sys.stderr,
+            )
+            continue
+        if words_removed:
+            print(
+                "wiki_alias_parse: platform meta token stripped: %r -> %r"
+                % (tok, cleaned),
+                file=sys.stderr,
+            )
+        key = _norm_meta_token(cleaned)
+        if key in seen_out:
+            continue
+        seen_out.add(key)
+        out.append(cleaned)
+
+    # P3 §4.3 / R6-1: исходные алиасы были, после ВСЕХ фильтров пусто → title
+    if not out and toks:
+        title_s = (title or "").strip()
+        if title_s:
+            print(
+                "wiki_alias_parse: meta filter emptied aliases; title fallback: %r"
+                % (title_s,),
+                file=sys.stderr,
+            )
+            return [title_s]
+        print(
+            "wiki_alias_parse: meta filter emptied aliases; no title (empty record)",
+            file=sys.stderr,
+        )
+        return []
     return out
 
 
@@ -162,6 +406,7 @@ def _salvage_items(raw_json):
 def parse_items(text, pay):
     """(entity_rows, measure_rows). Величины — только с каноническим именем и непустым алиасом."""
     allowed = allowed_quantities(pay)
+    titles = titles_by_entity(pay)
     entity_rows, measure_rows = [], []
     m = re.search(r"\{.*\}", text or "", re.S)
     if not m:
@@ -194,7 +439,8 @@ def parse_items(text, pay):
             kept_measures.append(
                 {"src_table": e, "measure": name, "aliases": _join(q_toks)})
         ent_aliases = filter_entity_aliases(
-            it.get("aliases"), quantity_names=allow, quantity_aliases=q_alias_ban)
+            it.get("aliases"), quantity_names=allow, quantity_aliases=q_alias_ban,
+            title=titles.get(e))
         entity_rows.append({
             "src_table": e,
             "aliases": _join(ent_aliases),

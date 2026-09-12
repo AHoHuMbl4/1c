@@ -1,5 +1,7 @@
 \set ON_ERROR_STOP on
 -- Запись сущностей и величин после разбора ответа модели. Доки: read_json; MERGE INTO.
+-- Переменная force (0/1, WIKI_ALIAS_FORCE): 1 — обновлять и непустые aliases сущности
+-- (песочница). Без флага (0) — только пустые, как раньше.
 MERGE INTO :alias_table t
 USING (
   SELECT src_table, aliases, best_used_for, not_enough_for
@@ -9,7 +11,7 @@ USING (
   WHERE coalesce(aliases,'') <> ''
 ) n
 ON (t.src_table = n.src_table)
-WHEN MATCHED AND coalesce(t.aliases,'') = '' THEN
+WHEN MATCHED AND (coalesce(t.aliases,'') = '' OR :force = 1) THEN
   UPDATE SET aliases = n.aliases, best_used_for = n.best_used_for,
              not_enough_for = n.not_enough_for, seen_at = now()
 WHEN NOT MATCHED THEN

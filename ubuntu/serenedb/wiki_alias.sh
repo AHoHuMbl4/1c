@@ -76,6 +76,9 @@ CAP="${1:-0}"
 # Умолчание модели — своя vLLM Qwen3.8-27B (0 $); DeepSeek — через WIKI_ALIAS_MODEL.
 WIKI_ALIAS_MODEL="${WIKI_ALIAS_MODEL:-vllm/Qwen3.8-27B}"
 WIKI_ALIAS_THINKING="${WIKI_ALIAS_THINKING:-off}"
+# Force-перегенерация непустых aliases (песочница; штатный путь без флага = 0).
+WIKI_ALIAS_FORCE="${WIKI_ALIAS_FORCE:-0}"
+case "$WIKI_ALIAS_FORCE" in 1) WIKI_ALIAS_FORCE=1;; *) WIKI_ALIAS_FORCE=0;; esac
 cd "$(dirname "$0")" || exit 1
 HERE="$(pwd)"
 
@@ -85,6 +88,7 @@ psql_wa() {
     -v alias_table="$ALIAS_TABLE" \
     -v measure_table="$MEASURE_TABLE" \
     -v retry_h="$RETRY_H" \
+    -v force="$WIKI_ALIAS_FORCE" \
     "$@"
 }
 psql_wa_tA() {
@@ -92,6 +96,7 @@ psql_wa_tA() {
     -v alias_table="$ALIAS_TABLE" \
     -v measure_table="$MEASURE_TABLE" \
     -v retry_h="$RETRY_H" \
+    -v force="$WIKI_ALIAS_FORCE" \
     "$@"
 }
 DB_TAG=$(psql "$DSN" -tAc 'SELECT current_database()' 2>/dev/null | tr -cd 'A-Za-z0-9_')
@@ -170,8 +175,9 @@ while :; do
     # 🔴 ОБИХОДНЫЕ СЛОВА, А НЕ ПЕРЕФРАЗИРОВКИ TITLE (25.08). Задание «SHORT NAMES …
     # including its own title» давало морфологию метаданных («Контрагенты, контрагент»)
     # и имена реквизитов в aliases; ts_lexize('…','клиент') оставался без связи
-    # (живой замер okna 25.08). Просим слова из вопросов людей + title; имена величин
-    # — только в quantities. Отсев мусора — `wiki_alias_parse.filter_entity_aliases`.
+    # (живой замер okna 25.08). Промт v2 title в aliases ЗАПРЕЩАЕТ; title — только
+    # fallback фильтра при опустошении (P3 §4.3). Имена величин — только в quantities.
+    # Отсев мусора — `wiki_alias_parse.filter_entity_aliases`.
     # 🔴 СЛОВА РОЛИ В ПОТОКЕ (28.08, вечер). Полный C5-прогон okna дал для
     # контрагентов «клиентов и поставщиков», но не «покупателей»: на вопрос
     # «сколько покупателей было за этот месяц» ф9-связь kind→catalog не собралась
@@ -179,7 +185,7 @@ while :; do
     # потока, не сущности: тот же каталог в продаже называют покупателями, в закупке
     # поставщиками. Задание теперь явно просит слова роли для каждого потока, где
     # запись участвует; пример в задании — общебизнесовой, не про конкретную базу.
-    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — everyday words a person uses when asking about this kind of record (the words that appear in their question), and also the record title itself; people also call the same records by the ROLE they play in a specific flow — one and the same catalog is named differently depending on the flow it is asked about (for example, one counterparty catalog is called buyers in sales questions and suppliers in purchase questions), so include those role words for every flow this kind of record takes part in — the input lists those flows for each record (types that hold it as a reference), and the role words come from them; quantity and field names go only under quantities; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. Answer language for every string field = the language of that record's title (the English example below is STRUCTURE ONLY — never copy its language into the output when the title is in another language). For EACH record: (1) aliases — ONLY everyday words a person actually puts in a question when they mean THIS kind of record (their spoken asking-words). ALSO include ROLE words for every flow listed in the input for this record: the same catalog is named differently by role depending on the flow (structure example: a counterparty catalog → buyers in sales flows, suppliers in purchase flows); take roles ONLY from the listed flows — do not invent flows. Limits: 3 to 8 aliases; each alias is 1 to 3 words; no sentences; no question words alone (how/how many/what/who as standalone tokens). Do NOT add the title (or a morphological variant of the title) as an alias — the title is already known from input. Quantity names and field names go ONLY under quantities, never under aliases. BANS for aliases (skip the token if unsure): platform meta-labels and their equivalents in the title language (list, catalog, directory, types, kinds, register, journal, document, classifier, form, report as a meta-word); case/number/inflection variants of the SAME stem (pick one citation form); Latin-script words when the title is not Latin; words that equally fit a sibling in THIS batch (leave those out of aliases — put the distinction in notEnoughFor); jargon opaque to a non-developer. (2) quantities — for EVERY name from the input quantities list, copy that name EXACTLY and give 1-5 short names a person uses for that value (a noun, or a noun with the action/event word they say — e.g. spoken event forms for money totals), 1-3 words each, no sentences. Same bans as aliases. If a listed quantity has no clear everyday name, return it with an empty aliases array. (3) bestUsedFor — 2 to 4 short question TEMPLATES this record truly answers (the shape of what a person asks). No foreign topics (do not advertise price-list / stock-balance / customer-count questions for a record that does not answer them). No office jargon gerunds. Prefer spoken wording over metadata wording. (4) notEnoughFor — two kinds of short strings, both required when applicable: (a) THEMATIC \"not me\" — topic labels a person might confuse with this record but that this record does NOT answer (stock balances, price list, customer list/count, cash, payroll, … — only topics that are plausible confusions for THIS title); (b) SIBLING redirect — for each easy-to-confuse sibling from THIS input list, one short string: sibling title then what THAT sibling answers instead. Hard format rule for EVERY notEnoughFor string: no commas and no parentheses inside the string (downstream stores arrays as comma-CSV). Use a dash or the word \"not\"/\"see\" instead. Prefer 3-8 strings total. If unsure whether a topic is a real confusion — omit it. Global: if you are not sure a token or claim is correct — do not write it (omit; never guess). Do not invent quantities, flows, or sibling names that are not in the input. One structure example (English skeleton only; rewrite all strings into the title language of each real item): {\"entity\":\"catalog_counterparties\",\"aliases\":[\"buyers\",\"suppliers\",\"customers\"],\"quantities\":[{\"name\":\"Count\",\"aliases\":[\"headcount\",\"how many partners\"]}],\"bestUsedFor\":[\"how many customers\",\"who bought this month\"],\"notEnoughFor\":[\"not stock balances\",\"not price list\",\"Organizations - our own companies not trading partners\"]} Never copy the English example strings into the output when the title language is different — rewrite every string in the title language. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
@@ -237,7 +243,7 @@ while :; do
   PAY=$(cat "$TMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
   {
-    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — everyday words a person uses when asking about this kind of record (the words that appear in their question), and also the record title itself; people also call the same records by the ROLE they play in a specific flow — one and the same catalog is named differently depending on the flow it is asked about (for example, one counterparty catalog is called buyers in sales questions and suppliers in purchase questions), so include those role words for every flow this kind of record takes part in — the input lists those flows for each record (types that hold it as a reference), and the role words come from them; quantity and field names go only under quantities; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. Answer language for every string field = the language of that record's title (the English example below is STRUCTURE ONLY — never copy its language into the output when the title is in another language). For EACH record: (1) aliases — ONLY everyday words a person actually puts in a question when they mean THIS kind of record (their spoken asking-words). ALSO include ROLE words for every flow listed in the input for this record: the same catalog is named differently by role depending on the flow (structure example: a counterparty catalog → buyers in sales flows, suppliers in purchase flows); take roles ONLY from the listed flows — do not invent flows. Limits: 3 to 8 aliases; each alias is 1 to 3 words; no sentences; no question words alone (how/how many/what/who as standalone tokens). Do NOT add the title (or a morphological variant of the title) as an alias — the title is already known from input. Quantity names and field names go ONLY under quantities, never under aliases. BANS for aliases (skip the token if unsure): platform meta-labels and their equivalents in the title language (list, catalog, directory, types, kinds, register, journal, document, classifier, form, report as a meta-word); case/number/inflection variants of the SAME stem (pick one citation form); Latin-script words when the title is not Latin; words that equally fit a sibling in THIS batch (leave those out of aliases — put the distinction in notEnoughFor); jargon opaque to a non-developer. (2) quantities — for EVERY name from the input quantities list, copy that name EXACTLY and give 1-5 short names a person uses for that value (a noun, or a noun with the action/event word they say — e.g. spoken event forms for money totals), 1-3 words each, no sentences. Same bans as aliases. If a listed quantity has no clear everyday name, return it with an empty aliases array. (3) bestUsedFor — 2 to 4 short question TEMPLATES this record truly answers (the shape of what a person asks). No foreign topics (do not advertise price-list / stock-balance / customer-count questions for a record that does not answer them). No office jargon gerunds. Prefer spoken wording over metadata wording. (4) notEnoughFor — two kinds of short strings, both required when applicable: (a) THEMATIC \"not me\" — topic labels a person might confuse with this record but that this record does NOT answer (stock balances, price list, customer list/count, cash, payroll, … — only topics that are plausible confusions for THIS title); (b) SIBLING redirect — for each easy-to-confuse sibling from THIS input list, one short string: sibling title then what THAT sibling answers instead. Hard format rule for EVERY notEnoughFor string: no commas and no parentheses inside the string (downstream stores arrays as comma-CSV). Use a dash or the word \"not\"/\"see\" instead. Prefer 3-8 strings total. If unsure whether a topic is a real confusion — omit it. Global: if you are not sure a token or claim is correct — do not write it (omit; never guess). Do not invent quantities, flows, or sibling names that are not in the input. One structure example (English skeleton only; rewrite all strings into the title language of each real item): {\"entity\":\"catalog_counterparties\",\"aliases\":[\"buyers\",\"suppliers\",\"customers\"],\"quantities\":[{\"name\":\"Count\",\"aliases\":[\"headcount\",\"how many partners\"]}],\"bestUsedFor\":[\"how many customers\",\"who bought this month\"],\"notEnoughFor\":[\"not stock balances\",\"not price list\",\"Organizations - our own companies not trading partners\"]} Never copy the English example strings into the output when the title language is different — rewrite every string in the title language. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
@@ -309,7 +315,8 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     {
       # 🔴 Общие обиходные слова оставляем в aliases: иначе ts_lexize теряет связь
       # («клиент» → пусто, замер okna 25.08). Различие соседей — в notEnoughFor.
-      printf '%s' "JSON only, no prose, no code fences. The record types below are ALL CALLED BY THE SAME WORD in this database — a person using that word could mean any of them. For each, in the SAME language as its title: (1) aliases — everyday asking-words and the title for THIS type; everyday words that also fit siblings stay in aliases, and the sibling distinction goes in notEnoughFor; (2) bestUsedFor — what only this one answers; (3) notEnoughFor — the other types from this list and what each answers instead. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+      _WA_COLL='JSON only, no prose, no code fences. The record types in Input are ALL CALLED BY THE SAME WORD in this database. That shared word is "<SHARED_WORD>": a person who types only that word could mean any type below. For EACH type, in the SAME language as its title, rebuild the three fields as follows. (1) aliases — MUST keep "<SHARED_WORD>" in the list (never drop it: people use it). Also keep the title if it is already an everyday asking-word; do not invent case/number variants of the same stem. ADD exactly 1 or 2 DISTINCTIVE everyday words or short phrases (1-3 words each) that a person would use when they mean THIS type and not the siblings — grounded only in this type'\''s title and quantities from Input (and in its current aliases if Input lists them). Distinctive phrases may stay unique to this type, or overlap a sibling only when both truly share that role; empty contrast (only the shared word and bare title for every sibling) is forbidden. Do not add platform meta-labels (list, catalog, register, journal, document, types, kinds, directory, registry). Do not add Latin tokens when the title is not Latin. If unsure a word is everyday for THIS type — omit it. (2) bestUsedFor — 2 to 4 short topic templates this type alone answers among the siblings (not full sentences, no foreign topics that belong to a sibling). (3) notEnoughFor — when a person says "<SHARED_WORD>" but means a COMPETITOR TOPIC that another type in this list answers better, name that TOPIC (what they are looking for), then optionally the sibling title from Input. Prefer themes over bare sibling names. Example shape: "stock on hand / warehouse balances — see <sibling title>"; "current price list — see <sibling title>". Do not invent siblings outside Input. If unsure — omit that line. Few-shot (English scaffold only; YOUR output language = language of each title): Shared word "party". Types: {title:"Business partners", quantities:"headcount"} and {title:"Legal counterparties", quantities:"taxpayer id"}. Good items sketch: partners aliases ["party","partners","buyers"] bestUsedFor ["who we sell to","partner headcount"] notEnoughFor ["legal taxpayer / contract party — see Legal counterparties"]; counterparties aliases ["party","counterparties","legal entities"] bestUsedFor ["taxpayer id","contract party"] notEnoughFor ["sales partner list — see Business partners"]. Bad: dropping "party"; aliases that are only ["party"] for both; notEnoughFor that only repeats the other type'\''s machine id with no topic. Schema: {"items":[{"entity":"...","aliases":["..."],"bestUsedFor":["..."],"notEnoughFor":["..."]}]}. Every Input entity must appear once; entity values copy Input exactly. Input: '
+      printf '%s' "${_WA_COLL//<SHARED_WORD>/$WORD}"
       cat "$TMP/pay"
     } > "$TMP/msg"
     chmod 644 "$TMP/msg"
@@ -318,24 +325,16 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
       --ans "$TMP/ans" --err "$TMP/err" || {
         echo "разведение: пачка пропущена ($(head -c 100 "$TMP/err" | tr -d '\n'))" >&2; continue; }
     python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true
-    python3 - "$TMP/ans" "$TMP/rows.json" <<'PY2'
+    python3 - "$TMP/ans" "$TMP/pay" "$TMP/rows.json" <<'PY2'
 import json, re, sys
+from wiki_alias_parse import filter_entity_aliases, text_from_agent, _join, titles_by_entity
 raw = open(sys.argv[1], encoding='utf-8', errors='replace').read()
-text = ''
 try:
-    env = json.loads(raw)
-    def dig(o):
-        if isinstance(o, dict):
-            for k, v in o.items():
-                if k in ('text', 'content') and isinstance(v, str) and '{' in v:
-                    yield v
-                yield from dig(v)
-        elif isinstance(o, list):
-            for v in o:
-                yield from dig(v)
-    c = list(dig(env)); text = max(c, key=len) if c else ''
+    pay = json.loads(open(sys.argv[2], encoding='utf-8').read() or '[]')
 except ValueError:
-    text = raw
+    pay = []
+title_by = titles_by_entity(pay)
+text = text_from_agent(raw)
 m = re.search(r'\{.*\}', text, re.S)
 rows = []
 if m:
@@ -343,13 +342,13 @@ if m:
         for it in (json.loads(m.group(0)).get('items') or []):
             e = (it.get('entity') or '').strip()
             if not e: continue
-            j = lambda x: ', '.join(str(i).strip() for i in (x or []) if str(i).strip())[:900]
-            rows.append({"src_table": e, "aliases": j(it.get('aliases')),
-                         "best_used_for": j(it.get('bestUsedFor')),
-                         "not_enough_for": j(it.get('notEnoughFor'))})
+            aliases = filter_entity_aliases(it.get('aliases'), title=title_by.get(e))
+            rows.append({"src_table": e, "aliases": _join(aliases),
+                         "best_used_for": _join(it.get('bestUsedFor')),
+                         "not_enough_for": _join(it.get('notEnoughFor'))})
     except ValueError:
         pass
-open(sys.argv[2], 'w', encoding='utf-8').write(json.dumps(rows, ensure_ascii=False))
+open(sys.argv[3], 'w', encoding='utf-8').write(json.dumps(rows, ensure_ascii=False))
 print("разведено сущностей: %d" % len(rows))
 PY2
     chmod 644 "$TMP/rows.json" 2>/dev/null   # тот же случай, что в первом проходе
@@ -394,7 +393,7 @@ if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
       PAY=$(cat "$TMP/reask_pay")
       case "$PAY" in ''|'[]'|'null') break;; esac
       {
-        printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. For each, in the SAME language as its title: (1) aliases — everyday words a person uses when asking about this kind of record (the words that appear in their question), and also the record title itself; people also call the same records by the ROLE they play in a specific flow — one and the same catalog is named differently depending on the flow it is asked about (for example, one counterparty catalog is called buyers in sales questions and suppliers in purchase questions), so include those role words for every flow this kind of record takes part in — the input lists those flows for each record (types that hold it as a reference), and the role words come from them; quantity and field names go only under quantities; (2) quantities — for EVERY name from the input quantities list, copy that name exactly and give the short names a person uses for that value (a noun or a noun with the action word, 1-3 words each, no sentences); (3) bestUsedFor — the questions it answers; (4) notEnoughFor — what it does not answer, naming the sibling types from this list that a person could mean instead and what each of them answers. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
+        printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. Answer language for every string field = the language of that record's title (the English example below is STRUCTURE ONLY — never copy its language into the output when the title is in another language). For EACH record: (1) aliases — ONLY everyday words a person actually puts in a question when they mean THIS kind of record (their spoken asking-words). ALSO include ROLE words for every flow listed in the input for this record: the same catalog is named differently by role depending on the flow (structure example: a counterparty catalog → buyers in sales flows, suppliers in purchase flows); take roles ONLY from the listed flows — do not invent flows. Limits: 3 to 8 aliases; each alias is 1 to 3 words; no sentences; no question words alone (how/how many/what/who as standalone tokens). Do NOT add the title (or a morphological variant of the title) as an alias — the title is already known from input. Quantity names and field names go ONLY under quantities, never under aliases. BANS for aliases (skip the token if unsure): platform meta-labels and their equivalents in the title language (list, catalog, directory, types, kinds, register, journal, document, classifier, form, report as a meta-word); case/number/inflection variants of the SAME stem (pick one citation form); Latin-script words when the title is not Latin; words that equally fit a sibling in THIS batch (leave those out of aliases — put the distinction in notEnoughFor); jargon opaque to a non-developer. (2) quantities — for EVERY name from the input quantities list, copy that name EXACTLY and give 1-5 short names a person uses for that value (a noun, or a noun with the action/event word they say — e.g. spoken event forms for money totals), 1-3 words each, no sentences. Same bans as aliases. If a listed quantity has no clear everyday name, return it with an empty aliases array. (3) bestUsedFor — 2 to 4 short question TEMPLATES this record truly answers (the shape of what a person asks). No foreign topics (do not advertise price-list / stock-balance / customer-count questions for a record that does not answer them). No office jargon gerunds. Prefer spoken wording over metadata wording. (4) notEnoughFor — two kinds of short strings, both required when applicable: (a) THEMATIC \"not me\" — topic labels a person might confuse with this record but that this record does NOT answer (stock balances, price list, customer list/count, cash, payroll, … — only topics that are plausible confusions for THIS title); (b) SIBLING redirect — for each easy-to-confuse sibling from THIS input list, one short string: sibling title then what THAT sibling answers instead. Hard format rule for EVERY notEnoughFor string: no commas and no parentheses inside the string (downstream stores arrays as comma-CSV). Use a dash or the word \"not\"/\"see\" instead. Prefer 3-8 strings total. If unsure whether a topic is a real confusion — omit it. Global: if you are not sure a token or claim is correct — do not write it (omit; never guess). Do not invent quantities, flows, or sibling names that are not in the input. One structure example (English skeleton only; rewrite all strings into the title language of each real item): {\"entity\":\"catalog_counterparties\",\"aliases\":[\"buyers\",\"suppliers\",\"customers\"],\"quantities\":[{\"name\":\"Count\",\"aliases\":[\"headcount\",\"how many partners\"]}],\"bestUsedFor\":[\"how many customers\",\"who bought this month\"],\"notEnoughFor\":[\"not stock balances\",\"not price list\",\"Organizations - our own companies not trading partners\"]} Never copy the English example strings into the output when the title language is different — rewrite every string in the title language. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
         cat "$TMP/reask_pay"
       } > "$TMP/reask_msg"
       chmod 644 "$TMP/reask_msg"
@@ -413,6 +412,7 @@ if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
         -v measure_table="$MEASURE_TABLE" \
         -v rows_path="$TMP/reask_rows.json" \
         -v measures_path="$TMP/reask_meas.json" \
+        -v force="${WIKI_ALIAS_FORCE:-0}" \
         -f "$HERE/wiki_alias_merge_entity.sql" 2>&1 | grep -i error || true
       # Сверка: только подтверждённые связи дописываются в основной словарь.
       python3 "$(cd "$HERE/../.." && pwd)/work/pipeline/alias_reask_confirm.py" \

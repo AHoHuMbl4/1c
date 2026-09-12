@@ -1,5 +1,6 @@
 \set ON_ERROR_STOP on
 -- Только величины (добор; алиасы сущности не трогаем). Доки: read_json; MERGE INTO.
+-- force (0/1, WIKI_ALIAS_FORCE): 1 — обновлять и непустые aliases величины (песочница).
 MERGE INTO :measure_table t
 USING (
   SELECT src_table, measure, aliases
@@ -8,7 +9,7 @@ USING (
   WHERE coalesce(aliases,'') <> ''
 ) n
 ON (t.src_table = n.src_table AND t.measure = n.measure)
-WHEN MATCHED AND coalesce(t.aliases,'') = '' THEN
+WHEN MATCHED AND (coalesce(t.aliases,'') = '' OR :force = 1) THEN
   UPDATE SET aliases = n.aliases, seen_at = now()
 WHEN NOT MATCHED THEN
   INSERT (src_table, measure, aliases, seen_at)

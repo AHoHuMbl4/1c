@@ -36,6 +36,11 @@ def main() -> int:
     p.add_argument("--message-file", required=True)
     p.add_argument("--model", required=True)
     p.add_argument("--thinking", default="off")
+    p.add_argument(
+        "--temperature",
+        default=None,
+        help="accepted for callers; not forwarded (CLI has no matching flag)",
+    )
     p.add_argument("--ans", required=True, help="stdout JSON (обёртка под parse)")
     p.add_argument("--err", default="", help="stderr агента")
     args = p.parse_args()
@@ -44,6 +49,16 @@ def main() -> int:
     if not prompt.strip():
         print("alias_infer_gateway: пустой prompt", file=sys.stderr)
         return 2
+
+    if args.temperature is not None:
+        # openclaw infer model run: --model/--thinking/--local/--gateway/--json/--prompt/--file
+        # (docs/cli/infer.md). No --temperature in that surface; leave unused.
+        print(
+            "alias_infer_gateway: --temperature=%s noted but not forwarded "
+            "(openclaw infer model run has no matching CLI flag)"
+            % (args.temperature,),
+            file=sys.stderr,
+        )
 
     cmd = [
         "openclaw",

@@ -1,5 +1,6 @@
 \set ON_ERROR_STOP on
 -- Один круг разведения: выбор слова, отметка probe, JSON пачки для модели.
+-- Input: word раунда + текущие aliases/best/nef (промт v2; P2/P7).
 -- Доки: Aggregate string_agg; Utility md5; struct_pack; read_json не нужен здесь.
 WITH al AS (
   SELECT src_table, trim(lower(x.a)) AS alias
@@ -26,10 +27,17 @@ _mark AS (
   INSERT INTO search_alias_probe
   SELECT alias, fp, now() FROM pick RETURNING alias)
 SELECT p.alias || chr(9) || p.fp || chr(9) || coalesce(
-  (SELECT to_json(list(struct_pack(entity := f.src_table, title := f.label,
-                                   quantities := coalesce(f.measures,''))))
+  (SELECT to_json(list(struct_pack(
+      entity := f.src_table,
+      title := f.label,
+      quantities := coalesce(f.measures,''),
+      word := p.alias,
+      aliases := coalesce(a.aliases, ''),
+      best_used_for := coalesce(a.best_used_for, ''),
+      not_enough_for := coalesce(a.not_enough_for, ''))))
    FROM (SELECT f.* FROM wiki_entity_facts f
           WHERE f.src_table IN (SELECT src_table FROM al WHERE alias = p.alias)
-          ORDER BY f.src_table LIMIT :batch) f),
+          ORDER BY f.src_table LIMIT :batch) f
+   LEFT JOIN :alias_table a ON a.src_table = f.src_table),
   '[]')
 FROM pick p;
