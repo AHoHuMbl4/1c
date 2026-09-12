@@ -44,19 +44,37 @@ def t(name, cond, detail=None):
         print("FAIL-", name, detail if detail is not None else "")
 
 
+# U3 §4.2: маркеры wiki-паспорта на экране (не только OData-префиксы)
+SCREEN_PASSPORT_MARKERS = (
+    "pagetype:",
+    "entitytype:",
+    "canonicalid:",
+    "id: entity.",
+)
+
+
 def screen_leaks(obj):
-    """True, если на первом экране видны служебные имена."""
+    """True, если на первом экране видны служебные имена / wiki-паспорт."""
     parts = [str(obj.get("text") or "")]
     for o in obj.get("options") or []:
         if not isinstance(o, dict):
             continue
         parts.append(str(o.get("label") or ""))
         parts.append(str(o.get("hint") or ""))
-    blob = "\n".join(parts).lower()
+        parts.append(str(o.get("wiki_caption") or ""))
+    blob = "\n".join(parts)
+    low = blob.lower()
     for p in META_PREFIXES:
-        if p in blob:
+        if p in low:
             return True, p
-    for tok in blob.replace("\n", " ").split():
+    for m in SCREEN_PASSPORT_MARKERS:
+        if m in low:
+            return True, m
+    # строка-забор YAML ---
+    for ln in blob.splitlines():
+        if ln.strip() == "---":
+            return True, "---"
+    for tok in low.replace("\n", " ").split():
         if A.looks_like_src_table(tok.strip(".,;:?«»\"'()")):
             return True, tok
     return False, None
@@ -136,6 +154,34 @@ t("format: сырой src в label заменён",
 ok_lab = "Отгрузка Пробная (документ)"
 t("регрессия: Отгрузка Пробная (документ) допустима",
   not A.label_has_meta_src(ok_lab))
+
+# --- U3 §4.2: сырой passport через wiki_menu_captions → без утечки ---
+_RAW_PASSPORT = (
+    "---\n"
+    "pageType: entity\n"
+    "entityType: AccumulationRegister\n"
+    "id: entity.accumulationregister_реализациятмц\n"
+    "canonicalId: accumulationregister_реализациятмц\n"
+    "title: Реализация ТМЦ\n"
+    "---\n"
+    "\n"
+    "# Реализация ТМЦ\n"
+)
+_u3_opts = A.wiki_menu_captions(
+    [{"src": SRC, "label": "prev", "hint": "pageType: entity"}],
+    passports_by_src={
+        SRC: {"name": "Реализация ТМЦ", "wiki_body": _RAW_PASSPORT},
+    },
+)
+_u3_screen = {"text": "", "options": _u3_opts}
+_u3_leak, _u3_why = screen_leaks(_u3_screen)
+t("U3 wiki_menu_captions: экран без паспорта", not _u3_leak, (_u3_why, _u3_opts))
+t("U3 wiki_menu_captions: src внутри option допустим",
+  any(o.get("src") == SRC for o in _u3_opts), _u3_opts)
+t("U3 wiki_menu_captions: label человеческий",
+  (_u3_opts[0].get("label") or "") == "Реализация ТМЦ"
+  or "Реализация ТМЦ" in (_u3_opts[0].get("label") or ""),
+  _u3_opts[0])
 
 print("----")
 print("%d ok, %d FAIL" % (PASS, len(FAIL)))

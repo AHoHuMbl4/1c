@@ -61,8 +61,9 @@ t("B3: пустые terms + by_meaning hit → support",
       {"by_meaning": ["document_реализация"]},
       by={},
       question="сколько продали?"))
-t("B4: sales_canon_locked → support",
-  A.src_supports_question(
+# sales_canon снесён (0434d71): ключ в diag не даёт support
+t("B4: sales_canon_locked не влияет на исход (снесён)",
+  not A.src_supports_question(
       "accumulationregister_x",
       {"terms": []},
       {"sales_canon_locked": "accumulationregister_x"},

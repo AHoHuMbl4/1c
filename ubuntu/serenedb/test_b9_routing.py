@@ -37,19 +37,19 @@ t("count с amount не пропускается",
   A.count_question_skips_axis({"want": "count", "amount": {"value": 5}},
                               None, {"clarify": "axis"}) is False)
 
-# ── outcome B без pair_budget (B8-01/04) ─────────────────────────────────────
+# ── outcome B: fork-авто снесён (В4); count по-прежнему пропускает axis-clarify ─
 many = [{"atom": {"operation": "sum", "exact_value": i, "proof_status": A.PROOF_COMPUTED},
          "label": "L%d" % i, "srcs": ["s%d" % i], "row": {"count": 1}}
         for i in range(20)]
 pay = {"classes": many, "fork_key": "fk"}
 bres = A.fork_outcome_b("сколько?", pay, {}, picked_src="s5")
-t("B: лидер в text, 19 в люке, atoms=20",
-  bres and len(bres.get("atoms") or []) == 20
-  and len(bres.get("options") or []) == 19
-  and "L5" in (bres.get("text") or "")
-  and (bres.get("partial") or {}).get("fork_limitation") is None)
-t("B: pairs_hidden null",
-  (bres.get("figures") or {}).get("pairs_hidden") is None)
+t("B: fork_outcome_b → None (авто-лидер снесён, не меню)",
+  bres is None)
+t("B: нет pairs_hidden / люка от fork-B",
+  bres is None
+  or (bres.get("figures") or {}).get("pairs_hidden") is None)
+# Смысл B8-02 в новом тракте: count не зовёт axis-clarify (форма ответа иная —
+# хелпер count_question_skips_axis жив; см. блок выше).
 
 # ── literal resolver fallback (B8-03) ──────────────────────────────────────────
 real_r = A._resolver_psql

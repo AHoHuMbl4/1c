@@ -378,10 +378,11 @@ _early_saved = {
     "meaning_candidates": A.meaning_candidates,
     "children_by_parent": A.children_by_parent,
     "emb_ready": A.emb_ready,
-    "K6R": A.K6R,
     "warehouse_clarify": A.warehouse_clarify,
     "psql": A.psql,
 }
+# K6R снесён (0434d71) — негатив: символа нет; в моки не кладём
+t("K6R снесён (нет атрибута)", not hasattr(A, "K6R"))
 A.parse_intent = lambda q, today: dict(_INTENT_EARLY)
 A.probe = lambda terms: ([], {})
 A.match_expr = lambda exprs, preds: ("", 0)
@@ -390,7 +391,6 @@ A.partial_tables = lambda exprs, preds, k: ({}, "")
 A.meaning_candidates = lambda *a, **k: []
 A.children_by_parent = lambda by, match, preds: ({}, {})
 A.emb_ready = lambda table: False
-A.K6R = None
 A.warehouse_clarify = lambda *a, **k: {
     "kind": "clarify", "text": "склад?", "options": [], "sources": [], "diag": {}}
 A._BALANCE_REGS.update({"at": time.time(), "set": {"accumulationregister_wh"}})
@@ -435,7 +435,6 @@ A.partial_tables = lambda exprs, preds, k: ({}, "")
 A.meaning_candidates = lambda *a, **k: []
 A.children_by_parent = lambda by, match, preds: ({}, {})
 A.emb_ready = lambda table: False
-A.K6R = None
 A.warehouse_clarify = lambda *a, **k: None
 A.stock_question_engaged = lambda *a, **k: False
 A.prefer_entity_for_stock = lambda c, *a, **k: c

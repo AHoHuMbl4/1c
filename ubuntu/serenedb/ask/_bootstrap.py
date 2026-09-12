@@ -9,10 +9,11 @@ from pathlib import Path
 
 _ASK_DIR = Path(__file__).resolve().parent
 
-# B5: тракт-переключатель «один путь» (флаг полигона/shadow; прод до flip на legacy).
-# ASK_ONEPATH=1 → главным обработчиком грузится новый z20, патч к legacy не применяется.
-_ONEPATH = os.environ.get("ASK_ONEPATH", "") == "1"
-_Z20_FILE = "z20_ask_main_http.py" if _ONEPATH else "z20_ask_main_http_legacy.py"
+# B5→B6: тракт-переключатель (flip 12.09). Default — НОВЫЙ тракт одного пути;
+# откат ASK_LEGACY=1 → бывший тракт (legacy) с его патчем, до сноса legacy в B7.
+_ONEPATH = os.environ.get("ASK_LEGACY", "") != "1"
+_Z20_FILE = ("z20_ask_main_http_legacy.py" if not _ONEPATH
+             else "z20_ask_main_http.py")
 
 
 def _zone_path(num: int, stem: str) -> str:

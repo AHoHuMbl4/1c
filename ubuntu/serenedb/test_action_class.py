@@ -90,7 +90,8 @@ t("dual_atom no clarify on event",
 _old_kah = A.kind_axis_hits
 _old_ra = A.refcols_of
 _old_ada = A.aggregate_distinct_axis
-A.kind_axis_hits = lambda axes, word: ["Контрагент"] if word else []
+A.kind_axis_hits = lambda axes, word, meaning_ok=True: (
+    ["Контрагент"] if word else [])
 A.refcols_of = lambda src: [{"col": "Контрагент", "target_src": "catalog_x"}]
 A.aggregate_distinct_axis = lambda src, match, preds, col: {
     "count": 141, "sum": None, "src": src, "form": "distinct_axis",
@@ -116,7 +117,7 @@ finally:
 
 # --- K9-ф2: count+ось → defer clarify мер ---
 _old_kah2 = A.kind_axis_hits
-A.kind_axis_hits = lambda axes, word: (
+A.kind_axis_hits = lambda axes, word, meaning_ok=True: (
     ["Контрагент"] if word and axes else [])
 try:
     t("count_defer_measure_clarify event+axis",
@@ -169,8 +170,8 @@ _rows_eq = {"src_a": _row_dist(141), "src_b": _row_dist(141)}
 _cls_eq = _fc_dist(_rows_eq)
 out_a, pay_a = A.resolve_fork_outcome(_cls_eq, _rows_eq, want="count")
 _ares = A.fork_outcome_a("q", pay_a["class"], {})
-t("event duel equal -> A", out_a == "A" and _ares.get("kind") == "answer"
-  and not (_ares.get("options") or []))
+t("event duel equal -> класс A, fork-A авто None",
+  out_a == "A" and _ares is None)
 
 _rows_diff = {"src_a": _row_dist(141), "src_b": _row_dist(76)}
 _cls_diff = _fc_dist(_rows_diff)
@@ -178,8 +179,8 @@ _old_fl = A.fork_labels_of
 A.fork_labels_of = lambda fk, srcs: {s: "Движение %s" % s for s in srcs}
 out_b, pay_b = A.resolve_fork_outcome(_cls_diff, _rows_diff, want="count")
 _bres = A.fork_outcome_b("q", pay_b, {}, picked_src="src_a")
-t("event duel diff+labels -> B", out_b == "B" and _bres and _bres.get("options")
-  and len(_bres.get("options") or []) >= 1)
+t("event duel diff+labels -> класс B, fork-B авто None",
+  out_b == "B" and _bres is None)
 A.fork_labels_of = lambda fk, srcs: {}
 out_c, pay_c = A.resolve_fork_outcome(_cls_diff, _rows_diff, want="count")
 _cres = A.fork_outcome_c("q", pay_c, _cls_diff, _rows_diff, {}, picked_src="src_a")
@@ -197,15 +198,15 @@ _old_kah3 = A.kind_axis_hits
 _old_ada3 = A.aggregate_distinct_axis
 _old_ro3 = A.refcols_of
 _old_tl = A._table_label
-A.kind_axis_hits = lambda axes, word: ["Контрагент"] if word else []
+A.kind_axis_hits = lambda axes, word, meaning_ok=True: (
+    ["Контрагент"] if word else [])
 A.refcols_of = lambda src: [{"col": "Контрагент", "target_src": "catalog_контрагенты"}]
 A._table_label = lambda src: "Контрагенты"
 A.aggregate_distinct_axis = lambda src, match, preds, col: {
     "count": 141, "sum": None, "src": src, "form": "distinct_axis",
     "axis": col, "grain": "axis"}
 try:
-    _agg = A.aggregate_distinct_axis(
-        "accumulationregister_реализациятмц", "", ["doc_date >= '2026-08-01'"],
+    _agg = A.aggregate_distinct_axis(        "accumulationregister_реализациятмц", "", ["doc_date >= '2026-08-01'"],
         "Контрагент")
     t("distinct agg has axis field", _agg.get("axis") == "Контрагент"
       and _agg.get("form") == "distinct_axis")

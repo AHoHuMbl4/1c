@@ -53,6 +53,12 @@ def _imports_namespace() -> dict:
 
 
 def _zone_body_slice(path: Path) -> tuple[list[ast.stmt], int, int]:
+    """Срез тела зоны. Патч — только legacy (как _bootstrap._exec_zone).
+
+    После flip: default = z20_ask_main_http.py (без патча);
+    ASK_LEGACY=1 → z20_ask_main_http_legacy.py + _patch_z20_wiki_primary.
+    Условие по имени файла — то же, что в bootstrap; от env не зависит.
+    """
     text = path.read_text(encoding="utf-8")
     if path.name == "z20_ask_main_http_legacy.py":
         text = boot._patch_z20_wiki_primary(text)
@@ -66,6 +72,43 @@ def _zone_body_slice(path: Path) -> tuple[list[ast.stmt], int, int]:
         if getattr(n, "lineno", 0) >= start and getattr(n, "lineno", 0) <= end
     ]
     return kept, start, end
+
+
+def _assert_z20_branch(path: Path, expect_patch: bool) -> None:
+    """Обе ветки flip: new без патча, legacy с патчем — режутся и резолвятся.
+
+    Полный exec z20 в одиночку невозможен (INTENT_SYS и др. из z01–z22) —
+    проверяем срез + правило патча; полный load — через load_all / subprocess.
+    """
+    raw = path.read_text(encoding="utf-8")
+    if expect_patch:
+        patched = boot._patch_z20_wiki_primary(raw)
+        # идемпотентность: повторный патч не ломает; якорь net/ef на месте или no-op
+        patched2 = boot._patch_z20_wiki_primary(patched)
+        t(f"flip-branch patch idempotent {path.name}",
+          patched2 == patched)
+        text = patched
+        t(f"flip-branch legacy body has wiki cascade {path.name}",
+          "wiki_primary_entity_cascade" in text)
+    else:
+        t(f"flip-branch no patch for {path.name}",
+          path.name == "z20_ask_main_http.py")
+        text = raw
+        t(f"flip-branch new body has wiki cascade {path.name}",
+          "wiki_primary_entity_cascade" in text)
+    lines = text.splitlines(True)
+    start = boot._body_start_line(lines)
+    end = boot._body_end_line(lines)
+    try:
+        tree = ast.parse(text, filename=str(path))
+        stmts = [
+            n for n in tree.body
+            if getattr(n, "lineno", 0) >= start and getattr(n, "lineno", 0) <= end
+        ]
+        t(f"flip-branch parse/slice {path.name}",
+          bool(stmts), f"stmts={len(stmts)} start={start} end={end}")
+    except SyntaxError as exc:
+        t(f"flip-branch parse/slice {path.name}", False, str(exc))
 
 
 def _assign_targets(node: ast.AST) -> list[str]:
@@ -199,6 +242,42 @@ def _self_check_red_case() -> None:
 def main() -> int:
     zone_files = boot.zone_paths()
     t("zone file count", len(zone_files) == len(boot._ZONE_FILES))
+
+    # Flip-контракт: оба файла на диске; патч только legacy (как _exec_zone).
+    z20_new = ASK_DIR / "z20_ask_main_http.py"
+    z20_leg = ASK_DIR / "z20_ask_main_http_legacy.py"
+    t("flip: new z20 on disk", z20_new.is_file(), str(z20_new))
+    t("flip: legacy z20 on disk", z20_leg.is_file(), str(z20_leg))
+    # Правило патча — по имени файла (как _bootstrap._exec_zone), не по env.
+    import inspect as _ins
+    _exec_src = _ins.getsource(boot._exec_zone)
+    t("patch rule in _exec_zone: only legacy filename",
+      'path.name == "z20_ask_main_http_legacy.py"' in _exec_src
+      and "_patch_z20_wiki_primary" in _exec_src)
+    # Явная проверка обеих веток (default=new и ASK_LEGACY=legacy) без смены env.
+    if z20_new.is_file():
+        _assert_z20_branch(z20_new, expect_patch=False)
+    if z20_leg.is_file():
+        _assert_z20_branch(z20_leg, expect_patch=True)
+
+    # Полный load новой ветки (симуляция flip default): ASK_ONEPATH=1 в подпроцессе.
+    import subprocess
+    _probe = (
+        "import os,sys; os.environ['ASK_ONEPATH']='1'; "
+        "os.environ.setdefault('ASK_TOKEN','test'); "
+        "os.environ.setdefault('EMBED_BASE_URL','-'); "
+        "os.environ.setdefault('EMBED_MODEL','-'); "
+        "sys.path.insert(0,%r); "
+        "from ask import _bootstrap as b; "
+        "assert b._Z20_FILE=='z20_ask_main_http.py', b._Z20_FILE; "
+        "b.load_all({}); print('OK')"
+    ) % str(ROOT)
+    _p = subprocess.run(
+        [sys.executable, "-c", _probe],
+        cwd=str(ROOT), capture_output=True, text=True, timeout=90)
+    t("flip-branch subprocess ASK_ONEPATH=1 load_all",
+      _p.returncode == 0 and "OK" in (_p.stdout or ""),
+      (_p.stderr or _p.stdout or "")[:200])
 
     zones_with_header_imports = 0
     for path in zone_files:

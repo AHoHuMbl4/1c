@@ -137,23 +137,20 @@ t("C: options пуст", cres and cres.get("options") == [], (cres or {}).get("o
 t("C: FORK_OTHER_READING в тексте",
   cres and A.FORK_OTHER_READING in (cres.get("text") or ""), (cres or {}).get("text"))
 
-# (в) с подписями → B
+# (в) с подписями → класс B, но fork-B авто снесён: окна — только readings/меню
 A.fork_labels_of = _labs_from_db
 A.fork_labels_covering = _cov_from_db
 out_b, pay_b = A.resolve_fork_outcome(
     cls_diff, rows_flat, measure_ctx="summa", want="sum",
     rel_by_src={"reg_x": ["Сумма"]})
-t("с подписями → B", out_b == "B", out_b)
+t("с подписями → B (класс)", out_b == "B", out_b)
 bres = A.fork_outcome_b("q", pay_b, {}, picked_src="reg_x")
-t("B: лидер calendar + lbl-cal-window",
-  bres and bres.get("atoms")
-  and bres["atoms"][0].get("measure_label") == "lbl-cal-window",
-  (bres or {}).get("atoms"))
-t("B: люк working_days + lbl-work-window",
-  bres and len(bres.get("options") or []) == 1
-  and bres["options"][0].get("day_basis") == "working_days"
-  and bres["options"][0].get("label") == "lbl-work-window",
-  (bres or {}).get("options"))
+t("B: fork-B лидер не выбирает окно (авто снесён)",
+  bres is None, bres)
+t("B: fork-B люк не выбирает окно (окна — readings/меню)",
+  bres is None
+  and not (isinstance(bres, dict) and (bres.get("options") or [])),
+  bres)
 
 A.fork_labels_of = _real_labs
 A.fork_labels_covering = _real_cov

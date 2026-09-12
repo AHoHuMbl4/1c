@@ -376,6 +376,103 @@ def wiki_format_card_lines(cards):
     return "\n\n".join(lines)
 
 
+import re
+
+# YAML-забор: три ASCII-дефиса. Unicode em-dash «—» (U+2014) НЕ разделитель.
+_YAML_FENCE = re.compile(r"(?m)^---\s*$")
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+_CAPTION_FORBIDDEN = (
+    "pagetype:", "entitytype:", "canonicalid:",
+    "\nid:", "id: entity.", "aliases:", "bestusedfor:", "notenoughfor:",
+    "relationships:", "targetid:",
+)
+
+
+def wiki_strip_passport_yaml(text):
+    """Тело wiki_pages / card.description → без YAML-frontmatter.
+
+    Если текст начинается с забора --- … ---, берём хвост после закрывающего.
+    Если забор встречается позже — берём префикс до первого забора
+    (на случай «заголовок\\n---\\nmeta»). Em-dash «—» не режем.
+    """
+    t = (text or "").replace("\r\n", "\n")
+    if not t.strip():
+        return ""
+    lines = t.split("\n")
+    fence_idx = [i for i, ln in enumerate(lines) if _YAML_FENCE.match(ln)]
+    if not fence_idx:
+        return t.strip()
+    if fence_idx[0] == 0 and len(fence_idx) >= 2:
+        return "\n".join(lines[fence_idx[1] + 1:]).strip()
+    if fence_idx[0] == 0:
+        return ""  # только frontmatter, закрывающего нет
+    return "\n".join(lines[:fence_idx[0]]).strip()
+
+
+def wiki_caption_leaks(text):
+    """True, если строка несёт паспортные ключи / YAML-забор / сырой src в backticks."""
+    s = (text or "")
+    if "---" in s and _YAML_FENCE.search(s):
+        return True
+    low = s.lower()
+    if any(m in low for m in _CAPTION_FORBIDDEN):
+        return True
+    if "`" in s and looks_like_src_table(
+            s.split("`")[1].strip() if s.count("`") >= 2 else ""):
+        return True
+    return False
+
+
+def wiki_human_menu_caption(name, body, existing_label=""):
+    """Единая санитарная подпись для ЛЮБОГО пункта меню из wiki-паспорта.
+
+    Порядок: (1) name; (2) H1 после снятия YAML; (3) уже человеческий
+    existing_label от mk_opts (с kind-различителем). Паспортные ключи
+    отсекает wiki_caption_leaks.
+    """
+    name = (name or "").strip()
+    existing = (existing_label or "").strip()
+    human = wiki_strip_passport_yaml(body or "")
+    h1 = ""
+    for ln in human.splitlines():
+        ln = ln.strip()
+        if ln.startswith("#"):
+            h1 = ln.lstrip("#").strip()
+            break
+    base_pre = (name or "").strip()
+    h1_pre = h1.strip()
+    # кандидаты-«грязные» не участвуют (U4-красная обход №1: фоллбек в name)
+    name = base_pre if not wiki_caption_leaks(base_pre) else ""
+    h1 = h1_pre if not wiki_caption_leaks(h1_pre) else ""
+    base = name or h1
+    # сохранить «Реализация ТМЦ (регистр…)» от disambiguate_labels, если чисто
+    if (existing and not wiki_caption_leaks(existing)
+            and base and base.lower() in existing.lower()):
+        out = existing
+    else:
+        out = base or (existing if not wiki_caption_leaks(existing) else "")
+    if wiki_caption_leaks(out):
+        out = name or h1 or "вариант"
+    if not out:
+        # U4-красная обход №2: пустой результат не оставляет грязный prev
+        out = "вариант"
+    return out.strip()
+
+
+def wiki_human_menu_hint(hint):
+    """Hint без UUID и без паспортных ключей. Пусто — допустимо."""
+    h = (hint or "").strip()
+    if not h:
+        return ""
+    h = _UUID_RE.sub("", h)
+    h = re.sub(r"\s{2,}", " ", h).strip(" ;,")
+    if wiki_caption_leaks(h):
+        return ""
+    return h
+
+
 def wiki_menu_captions(options, passports_by_src=None, cards_by_src=None):
     """Единый форматтер подписей меню (формула №15 ступень 4; K4 §2.1).
 
@@ -390,31 +487,25 @@ def wiki_menu_captions(options, passports_by_src=None, cards_by_src=None):
     for opt in list(options or []):
         row = dict(opt)
         src = row.get("src") or ""
-        text = ""
+        name = ""
+        body = ""
         p = passports_by_src.get(src) if src else None
         if isinstance(p, dict):
             name = (p.get("name") or "").strip()
-            body = (p.get("wiki_body") or p.get("description") or "").strip()
-            if body:
-                body = body[:200]
-            if name and body and name not in body:
-                text = "%s — %s" % (name, body)
-            else:
-                text = body or name
+            body = (p.get("wiki_body") or p.get("description") or "")
         else:
             c = cards_by_src.get(src) if src else None
             if isinstance(c, dict):
                 name = (c.get("name") or "").strip()
-                desc = (c.get("description") or "").strip()
-                if desc:
-                    desc = desc[:200]
-                if name and desc and name not in desc:
-                    text = "%s — %s" % (name, desc)
-                else:
-                    text = desc or name
+                body = (c.get("description") or "")
+        # даже без паспорта — прогнать уже лежащий label/hint (общее правило)
+        prev = (row.get("label") or "").strip()
+        text = wiki_human_menu_caption(name, body, existing_label=prev)
         if text:
             row["label"] = text
             row["wiki_caption"] = text
+        if "hint" in row:
+            row["hint"] = wiki_human_menu_hint(row.get("hint"))
         out.append(row)
     return out
 
