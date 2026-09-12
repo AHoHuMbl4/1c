@@ -27,6 +27,72 @@ docs/audit/snos15-ONEPATH_PLAN.md (этап-1 армия O×3: остатки-н
 Числа: люк −217 строк; замки 14 файлов зелёные; z20 ~6225→~5000.
 Доки: docs/audit/snos15-ONEPATH_PLAN.md; snos15-PLAN §7 п.8
 
+## 2026-09-12 (8) — РОЙ ПРОМПТОВ ×12 + красная ×2 (указание владельца: «много агентов, не по 3»): полное сходимое аудита промптов [армия] [замер]
+
+**[армия]** 12 независимых исполнителей (L1 потребители ∥ L2 дубль кода ∥
+L3 контракт ∥ L4 исполнимость ∥ L5 user-части/п.19 ∥ L6 prompt_leak ∥
+L7 пропущенное ∥ L8 история/замеры ∥ L9-L12 полные независимые повторы;
+каждый САМ строил реестр промптов и вызовов — никаких списков от
+оркестратора) + красная пара R1/R2 (атака сходимости). 14/14 EXIT=0,
+read-only. Отчёты: docs/audit/onepath/L{1..12}-lens.md, R{1,2}-red.md.
+
+**[замер] Реестр (сошёлся у всех): 9 system-промптов** (8 констант + inline
+ARBITRATE): INTENT (z01), CLARIFY/REFUSE (z07), AXIS_PICK (z10), ANSWER
+(z18), COVERAGE (z20), WIKI_PICK/WIKI_VERIFY (z21); все через ds_chat.
+
+**Ядро сходимости (все 12 + 2 красных):**
+1. ANSWER_SYS блок `ask` — мёртвый текст (код давит ask_back
+   `bare_clarify_forbidden`), учит модель спрашивать после ответа — против
+   одного пути. Чистить в B4 с замером L67.
+2. CLARIFY_SYS/clarify_text и ARBITRATE — мёртвые (0 вызовов; сносы вызовов
+   178ce51/14aec85, тексты остались). Снести в B4/B5.
+3. OUR_PROMPTS без WIKI_PICK/WIKI_VERIFY — дыра leak-детектора. Добавить
+   (риск 0) в B4.
+4. `why` в WIKI_VERIFY — парсится, на исход не влияет (z21), лишние токены.
+   Убрать в B5.
+5. Техимена в user-частях: wiki-карточки axes `col -> target_src`,
+   axis-метки `(col)`, census сырой `entity` — подтверждено кодом (L5, L9;
+   красные доказали). Чистить КОДОМ в B5 под замерами.
+6. INTENT: в схеме нет amount.op `"="`, код принимает (замер 04.08) —
+   добавить в B5; `period2` НЕ добавлять (compare пишет код, legacy:3738).
+7. claims в ANSWER мертвы / в COVERAGE живы.
+
+**Красные отбили ложные правки:** separable жив (форсирует меню при
+большом kNN gap — контракт); WIKI_PICK «полумёртв» лишь частично (verify
+затирает исход, кроме degraded — задумано); NEVER WRITE FIGURE и ядро
+INTENT — не трогать без бенчмарка. **Пропущенное всеми 12 нашла красная:**
+thinking-переключатели ds_chat, мёртвый return-clarify после drop ask_back,
+инъекция kind в wiki user, WIKI_SEP_GAP, wiki_leader_post_verify — очередь
+B5.
+
+Числа: 14/14 EXIT=0; реестр 9 промптов сошёлся у всех; ядро 7 выводов.
+Доки: docs/audit/onepath/L{1..12}-lens.md; R1-red.md; R2-red.md
+
+## 2026-09-12 (7) — B3: скелет линейного answer() в новом z20; замок test_one_path 26/0 [армия] [замер]
+
+**[армия] B3** (cursor-agent EXIT=0, 411 с): в новом z20 (2351 строка,
++248) написан линейный тракт `answer()` (строки 1473-1652):
+(1) intent/prior/deadline; (2) readings календарь/валюта СПИСКОМ без
+лидера (prefer=None; в intent["period"] из readings не пишется — дыра
+O3 №8 закрыта); (3-5) wiki_primary_entity_cascade — единственный выбор
+сущности; билет entity_choice_locked+hold_settled_entity пропускает
+повтор, сырой focus — только diag-подсказка, каскад всё равно (№4/№14);
+clarify/no_data из z21 — терминалы; нет лидера — честный no_data;
+coverage строго ПОСЛЕ wiki (№9); (6) >1 readings → readings_menu
+построителем ДО SQL, ровно 1 → sole (№12); count — без вопрос меры;
+(7) SQL-заглушка unavailable (волна B4). Дедлайн-точки: после intent,
+перед wiki, перед SQL (№13).
+
+**[замер] Приёмка оркестратора:** py_compile OK; test_one_path.py 26/0
+(новый замок: единый построитель clarify, запрещённые символы, порядок
+вики→SQL); grep-негатив нарушителей (apply_period_leader,
+prefer_window_leader, arb_pool, axis_focus_plan, try_entity_form, ecp,
+_ec_atom_fps) = 0; скелет прочитан оркестратором построчно — ступени в
+порядке контракта. Отчёт: docs/audit/onepath/B3-report.md.
+
+Числа: z20 2351 строк; скелет 180 строк; замок 26/0.
+Доки: docs/audit/onepath/B3-report.md; ONEPATH_PLAN §2
+
 ## 2026-09-12 (6) — АУДИТ ПРОМПТОВ армией ×3 (по указанию владельца): ANSWER_SYS.ask — лишний, CLARIFY_SYS — мёртвый, AXIS_PICK «several» — спорный [армия] [замер]
 
 **[армия] ×3 независимые линзы** (P1∥P2∥P3, все EXIT=0, read-only; отчёты

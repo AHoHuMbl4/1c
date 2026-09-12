@@ -1,8 +1,8 @@
-"""Zone 20: ask / HTTP (ask-main-http) — новый тракт «один путь» (волна B2).
+"""Zone 20: ask / HTTP (ask-main-http) — новый тракт «один путь» (волна B3).
 
-Инфраструктура перенесена bit-identical из z20_ask_main_http_legacy.py.
-Тело answer() — временная заглушка unavailable до волны B3.
-В runtime/_bootstrap не грузится до flip (B6). Эскиз: docs/audit/onepath/O2-project.md §2.1.
+Инфраструктура перенесена bit-identical из z20_ask_main_http_legacy.py (B2).
+Тело answer() — линейный скелет: intent → readings → wiki → меню/SQL-заглушка.
+SQL/compose/gate — волна B4. В runtime/_bootstrap не грузится до flip (B6).
 """
 from __future__ import annotations
 
@@ -1389,19 +1389,266 @@ def apply_prior_period(intent, prior_intent, today=None):
     return True
 
 
+def readings_menu(question, kind, items, diag, cut, t0, *, reason=""):
+    """Единый построитель меню прочтений (окно / ось / мера).
+
+    Подписи уже в items[].label — без имён метаданных 1С. Возвращает
+    clarify через clarify_opts_response либо None, если пунктов меньше двух.
+    """
+    d = dict(diag or {})
+    d["reading_kind"] = kind
+    why = reason or ("уточните %s" % (kind or "вариант"))
+    return clarify_opts_response(question, items, d, cut, t0, reason=why)
+
+
+def _reading_human_label(rd, today=None):
+    """Подпись прочтения окна/оси простыми словами (не имена таблиц 1С)."""
+    rd = rd or {}
+    pr = dict(rd.get("period") or {})
+    fr, to = pr.get("from"), pr.get("to")
+    parts = []
+    if fr and to:
+        parts.append("с %s по %s" % (fr, to))
+    elif fr:
+        parts.append("с %s" % fr)
+    elif to:
+        parts.append("по %s" % to)
+    else:
+        parts.append("без периода")
+    db = rd.get("day_basis") or pr.get("day_basis") or ""
+    if db == "working":
+        parts.append("рабочие дни")
+    elif db == "calendar":
+        parts.append("календарные дни")
+    ab = rd.get("amount_basis") or pr.get("amount_basis") or ""
+    if ab:
+        parts.append(str(ab))
+    return ", ".join(parts)
+
+
+def _readings_to_opts(readings, today=None):
+    """Список прочтений → options[] для readings_menu (билет period)."""
+    opts = []
+    for rd in readings or []:
+        pr = dict(rd.get("period") or {})
+        if rd.get("origin"):
+            pr["origin"] = rd.get("origin")
+        if rd.get("interpretation_id"):
+            pr["interpretation_id"] = rd.get("interpretation_id")
+        for k in ("day_basis", "amount_basis"):
+            v = rd.get(k)
+            if v:
+                pr[k] = v
+        opts.append({
+            "src": "",
+            "label": _reading_human_label(rd, today),
+            "hint": "",
+            "distinct_by": "period",
+            "period": pr,
+            "window_fp": rd.get("window_fp") or "",
+        })
+    return opts
+
+
+def _apply_sole_reading(intent, rd, diag):
+    """Ровно одно прочтение из данных — не выбиратель, а единственный кандидат."""
+    if not isinstance(rd, dict):
+        return
+    pr = dict(rd.get("period") or {})
+    if rd.get("origin"):
+        pr["origin"] = rd.get("origin")
+    if rd.get("interpretation_id"):
+        pr["interpretation_id"] = rd.get("interpretation_id")
+    for k in ("day_basis", "amount_basis"):
+        v = rd.get(k)
+        if v:
+            pr[k] = v
+    if pr.get("from") or pr.get("to") or pr.get("interpretation_id") in (
+            "none", "drop_assumed"):
+        intent["period"] = pr
+    if diag is not None:
+        diag["period_sole_reading"] = rd.get("interpretation_id") or "explicit"
+
+
 def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False,
             prior=None, trusted=None, resolved=None):
-    """Временная заглушка волны B2: тракт answer переписывается в B3+.
+    """Линейный тракт «один путь» (скелет B3; SQL — B4).
 
-    Инфраструктура (gate/health/journal/Handler) уже на месте; логики тракта здесь нет.
+    вопрос → разбор → список прочтений (без лидера) → wiki-каскад →
+    меню при >1 прочтении → (B4) запрос → ответ.
+
+    Сырой focus без билета каскад не обходит (O3 №4). Молчаливого лидера
+    окна/оси нет (O3 №8). Coverage идёт после wiki (O3 №9).
+    Билеты consume/hold — в answer_checked (O3 №14); здесь — trusted/resolved.
     """
+    # ── 1. Подготовка ────────────────────────────────────────────────────────
+    if _token_acc.get() is None:
+        _token_acc_start()
+    resolved = dict(resolved or {})
+    if resolved.get("src") and not focus:
+        focus = resolved["src"]
+    if "measure" in resolved and measure_pick is None:
+        mp = resolved.get("measure")
+        measure_pick = mp if mp not in (None, "") else measure_pick
+    t0 = time.time()
+    шаги = []
+
+    def шаг(что, **чем):
+        ms = int((time.time() - t0) * 1000)
+        шаги.append(dict(шаг=что, мс=ms, **чем))
+        status = (" ".join("%s=%s" % (k, v) for k, v in чем.items())
+                  if чем else "ok")
+        _trace_write("service", что, ms, status)
+
+    today = time.strftime("%Y-%m-%d")
+    intent = parse_intent(question, today)
+    apply_proven_period(intent, trusted=trusted, resolved=resolved)
+    period_from_prior = False
+    if prior:
+        period_from_prior = apply_prior_period(
+            intent, parse_intent(prior, today), today)
+    if deadline_hit():
+        raise AskDeadline("deadline")
+
+    # ── 2. Readings: календарь/валюта → СПИСОК, без лидера (дыра O3 №8) ───────
+    # repair границ — не выбор; молчаливого лидера окна/оси нет (O3 №8).
+    repair_period_from_question(
+        intent, question, today, period_from_prior=period_from_prior)
+    readings = list(period_readings(
+        intent, today, period_from_prior=period_from_prior) or [])
+    readings = expand_readings_calendar_axis(readings, prefer=None)
+    readings = expand_readings_currency_axis(
+        readings, prefer=None, intent=intent, trusted=trusted)
+    # В intent["period"] из readings ничего не пишем (нет молчаливого лидера).
+
+    preds = _predicates(intent)
+    разбор = intent.get("parse") or {}
+    diag = {"terms": intent.get("terms"), "preds": preds, "kind": intent.get("kind"),
+            "parse": разбор, "шаги": шаги, "onepath": "B3"}
+    if period_from_prior:
+        diag["period_from_prior"] = True
+    if readings:
+        diag["period_readings"] = len(readings)
+    шаг("разбор вопроса", тип=intent.get("kind"),
+        понятий=len(intent.get("terms") or []),
+        величина=(intent.get("measure") or "—"),
+        считать=(intent.get("want") or "—"),
+        прочтений=len(readings),
+        потеряно=(",".join(разбор.get("lost") or []) or "—"))
+
+    _cal_blk = calendar_axis_unavailable_block(
+        question, intent=intent, trusted=trusted, diag=diag, cut=None, t0=t0)
+    if _cal_blk:
+        шаг("calendar_axis_unavailable",
+            need=(diag or {}).get("calendar_axis_unavailable"))
+        return _cal_blk
+
+    cut = {}
+    if разбор.get("lost"):
+        cut["intent_lost"] = ", ".join(разбор["lost"])
+    if разбор.get("assumed"):
+        diag["intent_assumed"] = ", ".join(
+            "%s=%s" % (a, (intent.get("period") or {}).get(a.split(".")[-1], ""))
+            for a in разбор["assumed"])
+
+    # ── 3–5. Wiki — единственный выбор сущности; билет пропускает повтор ─────
+    # Coverage (about=coverage) НЕ раньше wiki (дыра O3 №9).
+    about_coverage = (intent.get("about") or "") == "coverage"
+    if about_coverage:
+        diag["about"] = "coverage"
+
+    if deadline_hit():
+        raise AskDeadline("deadline")
+
+    picked = []
+    marks = {}
+    plan = {}
+    # Билет/resolved: выбор человека из ЭТОГО decision_id (дыра O3 №4/№14).
+    # Сырой focus без trusted/resolved каскад НЕ обходит.
+    _ticket_locked = entity_choice_locked(trusted, resolved)
+    _held = hold_settled_entity(
+        focus, trusted, resolved, found_by=None, measure_pick=measure_pick)
+    if _ticket_locked:
+        src = (_held
+               or (resolved or {}).get("src")
+               or ((trusted or {}).get("src") if isinstance(trusted, dict) else None))
+        if src:
+            picked = [src]
+            diag["entity_from_ticket"] = src
+            if _held != focus:
+                шаг("сущность с билета", было=(focus or "—"), осталось=_held)
+            шаг("wiki пропущена — билет", src=src)
+        else:
+            _ticket_locked = False
+    if not _ticket_locked:
+        if focus:
+            # Подсказка отбора — не доказанный выбор; каскад всё равно.
+            diag["focus_hint"] = focus
+        # Кандидатный пул каскад строит сам (wiki_hybrid_pool); чужих пулов нет.
+        _ep = wiki_primary_entity_cascade(
+            question, intent, [], diag, cut, t0,
+            {}, "", preds, {})
+        if isinstance(_ep, dict) and _ep.get("kind"):
+            # clarify / no_data / answer из z21 (меню — wiki_menu_captions).
+            шаг("wiki исход", kind=_ep.get("kind"))
+            return _ep
+        picked = list((_ep or {}).get("picked") or [])
+        marks = (_ep or {}).get("marks") or {}
+        plan = (_ep or {}).get("plan") or {}
+        if not picked:
+            шаг("wiki нет лидера")
+            return {
+                "kind": "no_data",
+                "partial": cut or None,
+                "text": NO_DATA_TEXT or refuse_text(question),
+                "sources": [],
+                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                   reason=diag.get("wiki_pick") or "wiki_no_leader"),
+            }
+        шаг("wiki лидер", src=picked[0], сколько=len(picked))
+
+    # Coverage: ответ о полноте ПОСЛЕ wiki (или честный no_data выше).
+    if about_coverage:
+        шаг("coverage после wiki")
+        return _coverage_answer(question, diag, t0)
+
+    # ── 6. Окно/ось как прочтения после wiki (меню — построитель; SQL — B4) ──
+    # Правило единственности: ровно один кандидат или билет (дыра O3 №12).
+    if len(readings) > 1:
+        _w_opts = _readings_to_opts(readings, today)
+        _w_menu = readings_menu(
+            question, "window", _w_opts, diag, cut, t0,
+            reason="уточните период")
+        if _w_menu:
+            шаг("меню прочтений окна", сколько=len(_w_opts))
+            return _w_menu
+    elif len(readings) == 1:
+        _apply_sole_reading(intent, readings[0], diag)
+        шаг("единственное прочтение окна",
+            id=(readings[0].get("interpretation_id") or "—"))
+
+    # Мера: count не спрашивается; >1 меры → меню (полная реализация — B4).
+    # В скелете только структура: measure_pick/билет уже есть — ок; иначе
+    # SQL-ступень B4 разберёт живые меры сущности.
+    _want = (intent.get("want") or "").strip()
+    if _want == "count":
+        diag["count_no_measure_menu"] = True
+
+    # ── 7. SQL-ступень — заглушка волны B4 ────────────────────────────────────
+    if deadline_hit():
+        raise AskDeadline("deadline")
+    шаг("sql stub B4", src=(picked[0] if picked else "—"))
     return {
         "kind": "unavailable",
-        "text": "тракт переписывается (волна B3)",
+        "text": "запрос к данным ещё собирается (волна B4)",
         "sources": [],
-        "partial": None,
+        "partial": cut or None,
         "options": [],
-        "diag": {"onepath_stub": "B2"},
+        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                           onepath_stub="B4-sql",
+                           wiki_src=(picked[0] if picked else None),
+                           marks=marks or None,
+                           plan=plan or None),
     }
 
 
