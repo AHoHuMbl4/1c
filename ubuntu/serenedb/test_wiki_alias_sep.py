@@ -146,24 +146,74 @@ z02 = (HERE / "ask" / "z02_intent.py").read_text(encoding="utf-8")
 t("z02_intent: re.split [,;|/] не трогали",
   're.split(r"[,;|/]"' in z02)
 
-# ── миграционный SQL ─────────────────────────────────────────────────────────
+# ── promote: union-MERGE черновик→бой (§3.99) ────────────────────────────────
+def _sql_body_early(s: str) -> str:
+    return "\n".join(
+        ln for ln in s.splitlines() if not ln.lstrip().startswith("--")
+    )
+
+
+prom_path = HERE / "wiki_alias_promote.sql"
+t("promote: файл wiki_alias_promote.sql есть", prom_path.is_file())
+prom = prom_path.read_text(encoding="utf-8") if prom_path.is_file() else ""
+prom_body = _sql_body_early(prom) if prom else ""
+
+t("promote: union-MERGE через _alias_union_tokens",
+  "CREATE OR REPLACE MACRO _alias_union_tokens" in prom
+  and "MERGE INTO" in prom
+  and "_alias_union_tokens(t.aliases, s.draft_aliases)" in prom)
+t("promote: dual-сплит маркер ',| [|] ' (без backslash, scs §3.119)",
+  ",| [|] " in prom)
+t("promote: снапшот боя _pre_promote_ + snap_suffix",
+  "_pre_promote_" in prom
+  and 'CREATE TABLE :"entity_snap" AS SELECT * FROM :"battle_table"' in prom
+  and ":snap_suffix" in prom)
+t("promote: гейты fail-closed (a)(b)(c)(d) + \\if + error",
+  "GATE (a)" in prom and "GATE (b)" in prom and "GATE (c)" in prom and "GATE (d)" in prom
+  and "\\if :gate_a_ok" in prom and "\\if :gate_b_ok" in prom and "\\if :gate_c_ok" in prom
+  and "\\if :gate_d_ok" in prom
+  and "error(" in prom)
+t("promote: гейт (d) построчный — list_has_all(battle, snap) по ключу",
+  "list_has_all(" in prom
+  and 'JOIN :"entity_snap" s ON' in prom.replace("\n", " ")
+  and "list_filter(list_transform(" in prom)
+t("promote: нет replace-стиля SET aliases = n. (§3.99)",
+  not re.search(r"SET\s+aliases\s*=\s*n\.", prom_body, re.I)
+  and "aliases = n.aliases" not in prom_body)
+t("promote: нет DELETE unmatched-by-source (C2)",
+  "NOT MATCHED BY SOURCE" not in prom_body)
+t("promote: скобочные best/nef → боевые (не режем)",
+  "оставляем БОЕВОЕ" in prom
+  and "regexp_matches(coalesce(t.best_used_for" in prom)
+t("promote: откат закомментирован внизу",
+  "ОТКАТ" in prom and "pre_promote_" in prom
+  and "INSERT INTO search_entity_alias SELECT *" in prom)
+t("promote: шапка — только по слову владельца",
+  "ПО СЛОВУ ВЛАДЕЛЬЦА" in prom and "§3.99" in prom)
+
+# ── residual SEP migrate (после promote) ─────────────────────────────────────
 mig = (HERE / "wiki_alias_migrate_sep.sql").read_text(encoding="utf-8")
-t("migrate: snap CREATE TABLE … AS SELECT *",
-  "CREATE TABLE :alias_snap AS SELECT * FROM :alias_table" in mig
-  and "CREATE TABLE :measure_snap AS SELECT * FROM :measure_table" in mig)
-t("migrate: replace с условием скобок",
+mig_body = _sql_body_early(mig)
+t("migrate: residual — БЕЗ собственного CREATE snap",
+  "CREATE TABLE" not in mig_body
+  and "pre_promote_" in mig
+  and "НЕ свой" in mig)
+t("migrate: replace с скобками + guard position(' | ')=0",
   "replace(aliases, ', ', ' | ')" in mig
   and "regexp_matches(aliases, '\\([^)]*,[^)]*\\)')" in mig
-  and "NOT regexp_matches" in mig)
-t("migrate: контрольные SELECT по колонкам",
-  "entity.aliases replaced" in mig
-  and "entity.best_used_for replaced" in mig
-  and "entity.not_enough_for replaced" in mig
-  and "measure.aliases replaced" in mig
-  and "untouched" in mig)
+  and "NOT regexp_matches" in mig
+  and "position(' | ' IN aliases) = 0" in mig
+  and "position(' | ' IN best_used_for) = 0" in mig
+  and "position(' | ' IN not_enough_for) = 0" in mig)
+t("migrate: транзакция BEGIN/COMMIT + dry_run",
+  "BEGIN;" in mig and "COMMIT;" in mig
+  and "dry_run" in mig and "aliases_elig" in mig)
+t("migrate: скобочные 13/27 — комментарий, force-regen отдельно",
+  "13/27" in mig and "force-regen" in mig)
+t("migrate: откат из снапшота promote",
+  "ОТКАТ" in mig and "pre_promote_" in mig)
 t("migrate: шапка — только по слову владельца",
-  "ПО СЛОВУ ВЛАДЕЛЬЦА" in mig
-  and "entity_card_build" in mig)
+  "ПО СЛОВУ ВЛАДЕЛЬЦА" in mig)
 
 # ── G4: PROBE_TABLE (песочница не марает боевую память столкновений) ─────────
 init = (HERE / "wiki_alias_init.sql").read_text(encoding="utf-8")
