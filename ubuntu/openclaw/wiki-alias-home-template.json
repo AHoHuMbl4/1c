@@ -20,6 +20,11 @@
             "maxTokens": 12288,
             "chat_template_kwargs": {
               "enable_thinking": false
+            },
+            "extra_body": {
+              "response_format": {
+                "type": "json_object"
+              }
             }
           }
         }

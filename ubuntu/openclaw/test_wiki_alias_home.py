@@ -40,6 +40,13 @@ def t(name, cond, detail=None):
         print("FAIL-", name, ("| " + str(detail)[:200]) if detail else "")
 
 
+def _params_response_format_type(params: dict | None) -> object:
+    """type из params.extra_body.response_format; None если блока нет."""
+    return (
+        ((params or {}).get("extra_body") or {}).get("response_format") or {}
+    ).get("type")
+
+
 # ─── шаблон ───────────────────────────────────────────────────────────
 raw = TEMPLATE.read_text(encoding="utf-8")
 t("шаблон: файл существует", TEMPLATE.is_file())
@@ -104,6 +111,10 @@ if tpl is not None:
     t("шаблон: params.maxTokens=12288", params.get("maxTokens") == 12288)
     t("шаблон: enable_thinking false",
       (params.get("chat_template_kwargs") or {}).get("enable_thinking") is False)
+    # json_object: иначе vLLM отвечает свободным текстом (замер 13.09 10/10 vs 6/10)
+    rf_type = _params_response_format_type(params)
+    t("шаблон: extra_body.response_format.type=json_object",
+      rf_type == "json_object", rf_type)
 
     alist = (tpl.get("agents") or {}).get("list") or []
     agent = alist[0] if alist else {}
@@ -227,6 +238,18 @@ try:
         t("живой: params maxTokens=12288", params.get("maxTokens") == 12288)
         t("живой: enable_thinking false",
           (params.get("chat_template_kwargs") or {}).get("enable_thinking") is False)
+        t("живой: extra_body.response_format.type=json_object",
+          _params_response_format_type(params) == "json_object",
+          _params_response_format_type(params))
+        # Самодиагностика замка: без блока проверка НЕ зелёная «всегда»
+        _mut = json.loads(json.dumps(cfg))
+        _mp = ((
+            ((_mut.get("agents") or {}).get("defaults") or {}).get("models") or {}
+        ).get(mk) or {}).get("params") or {}
+        _mp.pop("extra_body", None)
+        t("замок: без extra_body проверка ВИДИТ дефект",
+          _params_response_format_type(_mp) != "json_object",
+          _params_response_format_type(_mp))
         agent = ((cfg.get("agents") or {}).get("list") or [{}])[0]
         t("живой: агент dict",
           agent.get("id") == agent_id and agent.get("model") == mk)

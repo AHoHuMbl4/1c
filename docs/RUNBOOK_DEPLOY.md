@@ -870,6 +870,15 @@ bash ubuntu/openclaw/wiki_alias_setup_home.sh /var/lib/1c-wiki-alias-home \
    `$OPENCLAW_HOME/.openclaw/openclaw.json`. Подставить путь к `.openclaw` или
    относительный путь → OpenClaw ищет ещё один вложенный `.openclaw`
    (скрипт отказывает на не-`/*`).
+4. **`response_format: json_object`** — в шаблоне (`params.extra_body`,
+   сливается в тело запроса `openai-completions`; доки `config-agents.md`).
+   Замер 13.09 (10 тяжёлых collision-слов на ногу, первая попытка):
+   локальная vLLM 6/10 → **10/10** валидных; OpenRouter 2/10 → 4/10
+   (битость там НЕ закрыта — страховка `--retry-items-json 2` в скриптах).
+   🔴 Провайдер БЕЗ поддержки `response_format` может отвечать 400 на каждый
+   вызов: видимо по журналу («пачка пропущена» + err с 400, п.13), словарь не
+   растёт. Лечение: убрать `extra_body.response_format` из params этого HOME
+   (оставив `chat_template_kwargs`) и положиться на ретрай.
 
 В env прогона (шаг 3) при отдельном HOME: `OPENCLAW_HOME=…`. Env доходит до
 бота через `runuser -u undebot --` (без login-shell); `su -` HOME песочницы
