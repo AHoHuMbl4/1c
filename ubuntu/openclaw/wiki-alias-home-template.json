@@ -44,7 +44,7 @@
         "models": [
           {
             "id": "@@WIKI_LLM_MODEL_ID@@",
-            "name": "wiki-alias generator (vLLM)",
+            "name": "wiki-alias generator",
             "reasoning": true,
             "input": [
               "text"

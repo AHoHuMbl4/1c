@@ -76,8 +76,9 @@ CAP="${1:-0}"
 # Модель/thinking — infer model run через alias_infer_gateway.py.
 # 🔴 Транспорт: умолчание --local (cli/infer.md). [замер 24.08] --gateway =
 # RPC-потолок 120 с → GatewayTransportError; loc 1034 с / пачка 20 — exit 0.
-# Умолчание модели — своя vLLM Qwen3.8-27B (0 $); DeepSeek — через WIKI_ALIAS_MODEL.
-WIKI_ALIAS_MODEL="${WIKI_ALIAS_MODEL:-vllm/Qwen3.8-27B}"
+# Умолчание модели — OpenRouter qwen/qwen3.8-27b (провайдер vllm в конфиге HOME
+# смотрит на openrouter.ai); своя GPU vLLM — через WIKI_ALIAS_MODEL.
+WIKI_ALIAS_MODEL="${WIKI_ALIAS_MODEL:-vllm/qwen/qwen3.8-27b}"
 WIKI_ALIAS_THINKING="${WIKI_ALIAS_THINKING:-off}"
 # Force-перегенерация непустых aliases (песочница; штатный путь без флага = 0).
 WIKI_ALIAS_FORCE="${WIKI_ALIAS_FORCE:-0}"

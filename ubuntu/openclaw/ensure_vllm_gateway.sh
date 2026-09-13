@@ -1,5 +1,5 @@
 #!/bin/bash
-# Подключить vLLM (Qwen3.8-27B) к шлюзу OpenClaw undebot — идемпотентно, с бэкапом.
+# Подключить провайдер vllm (умолч. OpenRouter qwen/qwen3.8-27b) к шлюзу OpenClaw undebot — идемпотентно, с бэкапом.
 #
 # Зовётся из branch_alias.sh / wiki_alias.sh при ALIAS_ENSURE_VLLM=1 (умолчание).
 # Должен выполняться от undebot (1c-branch-alias через runuser) или с правом писать
@@ -15,7 +15,7 @@ CFG="${OPENCLAW_CONFIG_PATH:-$STATE/openclaw.json}"
 
 export VLLM_API_KEY="${VLLM_API_KEY:-${EMBED_API_KEY:-}}"
 export VLLM_BASE_URL="${VLLM_BASE_URL:-}"
-export VLLM_MODEL_ID="${VLLM_MODEL_ID:-Qwen3.8-27B}"
+export VLLM_MODEL_ID="${VLLM_MODEL_ID:-qwen/qwen3.8-27b}"
 [ -z "$VLLM_API_KEY" ] || [ -z "$VLLM_BASE_URL" ] && {
   echo "ensure_vllm: нет VLLM_API_KEY=${VLLM_API_KEY:+set} VLLM_BASE_URL=${VLLM_BASE_URL:-unset} — пропуск" >&2
   exit 0

@@ -9,7 +9,7 @@
 # Пример:
 #   WIKI_LLM_API_KEY=<из /etc или песочницы> \
 #     ./wiki_alias_setup_home.sh /home/undebot/.openclaw-sandbox \
-#       http://127.0.0.1:8000/v1 Qwen3.8-27B dict undebot
+#       https://openrouter.ai/api/v1 qwen/qwen3.8-27b dict undebot
 #
 # Скрипт НЕ запускает генерацию и НЕ трогает чужие HOME — только указанный
 # OPENCLAW_HOME. Боевой ~/.openclaw не патчится (для боя — ensure_vllm_gateway.sh).

@@ -99,8 +99,9 @@ BRANCH_ALIAS_SESSION="${BRANCH_ALIAS_SESSION_KEY:-branch-alias-$(date +%Y%m%d-%H
 # Модель и thinking — через infer model run (замер 17.08). Умолчание транспорта
 # — --local (cli/infer.md Behavior; [замер 24.08] wiki-alias: --gateway = RPC 120 с).
 # BRANCH_ALIAS_INFER=gateway — только короткая проба маршрутизации.
-# Модель — vLLM Qwen3.8-27B (0 $); DeepSeek pro — через BRANCH_ALIAS_MODEL.
-BRANCH_ALIAS_MODEL="${BRANCH_ALIAS_MODEL:-vllm/Qwen3.8-27B}"
+# Модель — OpenRouter qwen/qwen3.8-27b (провайдер vllm в конфиге HOME на openrouter.ai);
+# своя GPU vLLM / DeepSeek pro — через BRANCH_ALIAS_MODEL.
+BRANCH_ALIAS_MODEL="${BRANCH_ALIAS_MODEL:-vllm/qwen/qwen3.8-27b}"
 BRANCH_ALIAS_THINKING="${BRANCH_ALIAS_THINKING:-off}"
 ZERO_STREAK_MAX="${BRANCH_ALIAS_ZERO_STREAK_MAX:-3}"
 zero_streak=0

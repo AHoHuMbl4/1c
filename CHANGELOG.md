@@ -1,3 +1,42 @@
+## 2026-09-13 (21) — Генератор словаря возвращён на OpenRouter (GPU-эпизод 188 закрыт) [код]+[замер]
+
+**[решение владельца]** «qwen27b верни как было на openrouter и доделай что
+нужно»; «работаем только на сервере OKNA» — локальный :8091 НЕ наш контур
+(молчит с 27.08, 22 потока CLOSE_WAIT; не трогаем). 27B с 188 снята
+владельцем, остались эмбеддер+реранкер.
+
+**[замер]** Утренняя диагностика: тики 1c-serene-pipeline с вечера 12.09
+крутили словарь впустую — песочница и дефолты смотрели на мёртвую 27B
+(404 на /v1/chat/completions; alias-usage до 08:25 — вызовы без ответов;
+collision-лог: 1314 пустышек). Порчи словаря нет: инвариант записи G8a
+пустышки не пускает; метрика A3 без сдвига (КАША 42/ОК 15/ПРОБЕЛ 61).
+
+**[замер]** Песочница OKNA переключена на OpenRouter серверным скриптом
+(бэкап openclaw.json.bak-gpu-20260913; ключ взят из /etc/1c-mcp-reports.env —
+в argv/stdout не попадал). Smoke тем же путём, что ходит тик (runuser undebot,
+OPENCLAW_HOME песочницы, agent --local --model vllm/qwen/qwen3.8-27b):
+POST openrouter.ai → 200 за 2.7 с, валидный JSON, chat_template_kwargs
+enable_thinking:false OpenRouter не отверг.
+
+**[код]** Дефолт модели vllm/Qwen3.8-27B → vllm/qwen/qwen3.8-27b (провайдер
+«vllm» в HOME указывает на openrouter.ai; alias имени сохранён — auth-профиль
+vllm:default не тронут): wiki_alias.sh, branch_alias.sh,
+1c-wiki-alias.env.example, instance/openclaw.json (id+name+рефы),
+ensure_vllm_gateway.sh, patch_vllm_provider.py, wiki-alias-home-template.json
+(name провайдер-нейтральный), wiki_alias_setup_home.sh (пример),
+RUNBOOK §10.6-bis (пример setup_home → openrouter). Красная ×2: R1
+(консистентность) ПРИНЯТЬ — исполняемых остатков GPU-эпохи нет, легитимны
+только история/фикстуры/инфра-доки; R2 (семантика) ПРИНЯТЬ — резолв
+vllm/qwen/qwen3.8-27b по первому «/» подтверждён живым прогоном parseModelRef
+установленной сборки, want==cur против живого bot-home, п.0 не нарушен
+(env перекрывает во всех трёх местах). Оговорка R2 про VLLM_BASE_URL=49.13…
+в /etc/1c-embed.env отклонена замером: это ЛОКАЛЬНЫЙ файл стенда; на OKNA
+VLLM-строк в embed.env нет — ensure_vllm штатно пропускает.
+
+Числа: замки v2 92/0, sep 88/0, parse 26/0, branch 27/0, deploy 46/0,
+home 70/0, bash -n ×3, py_compile, json instance валиден; smoke 200/2.7 с.
+Доки: docs/audit/dict-audit/P4-формат.md; .claude/state/{prompt-or1,prompt-or2}.md
+
 ## 2026-09-13 (20) — Лечение 20/20 из snap + повторный collision-прогон V2: обрубков 0 [замер]
 
 **[замер]** H4 лечение (dual-критерий, G8c2): UPDATE 20 — все испорченные

@@ -20,7 +20,7 @@
       "models": {
         "deepseek/deepseek-v4-flash": {},
         "deepseek/deepseek-v4-pro": {},
-        "vllm/Qwen3.8-27B": {
+        "vllm/qwen/qwen3.8-27b": {
           "params": {
             "chat_template_kwargs": {
               "enable_thinking": false
@@ -37,7 +37,7 @@
     "list": [
       {
         "id": "dict",
-        "model": "vllm/Qwen3.8-27B",
+        "model": "vllm/qwen/qwen3.8-27b",
         "thinkingDefault": "off"
       }
     ]
@@ -74,8 +74,8 @@
         "timeoutSeconds": 300,
         "models": [
           {
-            "id": "Qwen3.8-27B",
-            "name": "Qwen3.8 27B (vLLM)",
+            "id": "qwen/qwen3.8-27b",
+            "name": "Qwen3.8 27B (OpenRouter)",
             "reasoning": true,
             "input": [
               "text"

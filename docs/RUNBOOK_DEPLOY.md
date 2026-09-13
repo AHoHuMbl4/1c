@@ -853,7 +853,8 @@ systemctl daemon-reload
 # (прогон под undebot); без него владельца не трогаем.
 export WIKI_LLM_API_KEY=…   # не в git, не в истории shell при записи в отчёт
 bash ubuntu/openclaw/wiki_alias_setup_home.sh /var/lib/1c-wiki-alias-home \
-  https://<vllm-host>/v1 Qwen3.8-27B dict undebot
+  https://openrouter.ai/api/v1 qwen/qwen3.8-27b dict undebot
+  # или своя GPU vLLM: https://<vllm-host>/v1 <model_id> dict undebot
 ```
 
 🔴 Ловушки (G7-checklist §2 / G0):

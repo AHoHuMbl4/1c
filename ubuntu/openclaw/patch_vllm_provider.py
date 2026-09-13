@@ -12,7 +12,7 @@ import sys
 from copy import deepcopy
 from pathlib import Path
 
-VLLM_MODEL_ID = os.environ.get("VLLM_MODEL_ID", "Qwen3.8-27B")
+VLLM_MODEL_ID = os.environ.get("VLLM_MODEL_ID", "qwen/qwen3.8-27b")
 VLLM_BASE = (os.environ.get("VLLM_BASE_URL") or "").rstrip("/")
 if VLLM_BASE and not VLLM_BASE.endswith("/v1"):
     VLLM_BASE = VLLM_BASE + "/v1"
@@ -27,7 +27,7 @@ def vllm_provider_block() -> dict:
         "models": [
             {
                 "id": VLLM_MODEL_ID,
-                "name": "Qwen3.8 27B (vLLM)",
+                "name": "Qwen3.8 27B (OpenRouter)",
                 "reasoning": True,
                 "input": ["text"],
                 "cost": {"input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0},
