@@ -4727,3 +4727,22 @@ backslash в SQL проверяется ЖИВЫМ SELECT на движке че
 журнальным — обязательный шаг выката, он и поймал. (4) Найденное попутно:
 `replace(aliases,'\\,',chr(1))` на этом движке мёртв с рождения (ищет два
 backslash), данных с `\,` в бою нет — оставлено как есть, не чинить молча.
+
+## §3.120 — Ручная проба генератора без OPENCLAW_HOME ушла в HOME бота: «model does not support tools» [ошибка своя, 13.09]
+
+**Что сделал не так.** Проверял переключение генератора словаря на OpenRouter
+ручным прогоном `runuser -u undebot -- python3 alias_infer_gateway.py ...` —
+БЕЗ `env OPENCLAW_HOME=/home/undebot/.openclaw-sandbox`, который юнит получает
+из /etc env. Прогон ушёл в дефолтный HOME undebot — ДОМ БОТА — и OpenClaw
+честно ответил «No callable tools … the selected model does not support
+tools» (allowlist бота: message, bundle-mcp, wiki_search, wiki_get).
+**Чем кончилось.** Полчаса разбора «что сломалось в конфиге OpenRouter»:
+сверка бэкапов, diff конфигов, канонический перерендер через
+wiki_alias_setup_home.sh — конфиг был ни при чём, траектория 09:30 с тем же
+model id имела status=success. **Как надо.** Любая ручная проба контура,
+который юнит получает через EnvironmentFile, повторяет ВЕСЬ env юнита
+(`systemctl cat` → Environment/EnvironmentFile), а не только команду.
+Признак именно этой ошибки: в err чужой tools.allow (wiki_search/wiki_get —
+это дом бота, у генератора его нет). Канонический ремонт generator-HOME —
+перерендер `wiki_alias_setup_home.sh <HOME> <base_url> <model_id> dict undebot`
+с WIKI_LLM_API_KEY в env, а не ручные правки/откаты бэкапов.
