@@ -51,13 +51,16 @@ WITH raw AS (
         WHERE coalesce(trim(aliases), '') <> ''
      ),
      -- Dual: ',' (CSV, escape \,) ИЛИ ' | ' (канон P4). Чистый CSV без pipe — как раньше.
+     -- 🔴 Паттерн БЕЗ backslash: строковые литералы движки стандарт-конформны
+     -- (backslash не escape): '\\|' дошёл бы до RE2 как '\\|' → сплит по ПРОБЕЛУ
+     -- (живой замер okna 13.09: 258 мусорных правил, '|' токеном). Класс [|] — литерал.
      split AS (
        SELECT r.aliases,
               trim(t.term) AS term
          FROM raw r,
               unnest(regexp_split_to_array(
                        replace(r.aliases, '\\,', chr(1)),
-                       ',| \\| ')) AS t(term)
+                       ',| [|] ')) AS t(term)
         WHERE trim(t.term) <> ''
      ),
      unesc AS (

@@ -459,13 +459,13 @@ t("G8c2 dual: pipe — фраза с запятой целая (1 атом + д�
 
 # ── SEP: Solr dual-split (', ' / ',' И ' | ') — блокер миграции ───────────────
 # Twin = solr_synonyms_build.split_alias_csv / rule_from_alias_csv (паритет SQL).
-# SQL: статика маркера regexp ',| \| ' в solr_synonyms_compile.sql.
+# SQL: статика маркера regexp ',| [|] ' (класс, без backslash — scs, §3.119).
 import solr_synonyms_build as SB  # noqa: E402
 
 _solr_sql = (HERE / "solr_synonyms_compile.sql").read_text(encoding="utf-8")
-t("solr compile.sql: dual regexp ',| \\| ' (CSV + pipe)",
+t("solr compile.sql: dual regexp ',| [|] ' (CSV + pipe, без backslash — scs)",
   "regexp_split_to_array(" in _solr_sql
-  and ",| \\\\| " in _solr_sql
+  and ",| [|] " in _solr_sql
   and "replace(r.aliases, '\\\\,', chr(1))" in _solr_sql,
   "marker missing")
 
