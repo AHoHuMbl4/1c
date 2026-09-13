@@ -71,7 +71,8 @@
    метрика A3 до/после в CHANGELOG.
 2. **Локальный прод :8091 — НЕ НАШ КОНТУР (владелец 13.09: «работаем только
    на сервере OKNA»).** Молчит с 27.08 (22 потока CLOSE_WAIT) — не трогаем.
-3. Очередь J (18 honest_no с живым эталоном) — отдельный эпизод.
+3. Очередь J (18 honest_no с живым эталоном) — отдельный эпизод; сюда же
+   дыра R4: infer rc0 + 0 разобранных без mark_skip (молчаливый пропуск пачки).
 4. Стоп-точка выката I0 на прод (L67 30/36/1) — взвешивается владельцем.
 5. Миграция разделителя боевой таблицы — wiki_alias_migrate_sep.sql, по слову.
 
@@ -111,9 +112,9 @@
   i2-answers.jsonl (логика i2_runner.py:215+).
 - LLM прода = OpenRouter qwen/qwen3.8-27b (env DEEPSEEK_*; победитель env —
   /etc/1c-serene-ask-postgres.env; 402 = стоп-владельцу). Генератор словаря —
-  OpenRouter qwen/qwen3.8-27b через песочницу (дефолт vllm/qwen/qwen3.8-27b
-  в wiki/branch_alias.sh; бэкап GPU-конфига песочницы
-  openclaw.json.bak-gpu-20260913). Такт жив, вектора целы;
+  OpenRouter qwen/qwen3.8-27b, ALIAS_INFER_RUNTIME=agent + OPENCLAW_HOME=
+  песочница в env юнита и тика (infer = «No text output»: params не действуют,
+  thinking съедает вывод — techContext ловушка 60). Такт жив, вектора целы;
   полигон :8092 — transient probe8092 (systemd-run; порт задавать env-файлом
   /tmp/probe_root/port.env ПОСЛЕДНИМ EnvironmentFile — Environment= средой
   перекрывается файлами!).

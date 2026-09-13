@@ -1,3 +1,44 @@
+## 2026-09-13 (22) — Wiki-генератор на agent-рантайм: infer давал «No text output» на OpenRouter [код]+[замер]
+
+**[замер]** Добор 37 слов collision после возврата на OpenRouter: первый
+вызов юнита успешен (200, «разведено сущностей: 2»), дальше серия пропусков.
+Полный err пачки: `status=200 elapsedMs=812` + `Error: No text output
+returned for provider "vllm" model "qwen/qwen3.8-27b"`. Причина: infer
+(`openclaw infer model run --local`) НЕ применяет params каталога (G0) —
+enable_thinking=false не уходит, reasoning-модель съедает вывод размышлением,
+текст пуст. Agent-рантайм params применяет: после перевода env юнита и тика
+на ALIAS_INFER_RUNTIME=agent + OPENCLAW_HOME=песочница — вызовы 200,
+stopReason=stop, разведение пошло (09:16/09:17 по 2 сущности за круг;
+единичный битый JSON — известный эпизод P4 §5.2, переспрос поздних кругов).
+
+**[код/конфиг]** OKNA: /etc/1c-wiki-alias-postgres.env и
+/etc/1c-serene-pipeline-postgres.env + ALIAS_INFER_RUNTIME=agent,
+OPENCLAW_HOME=/home/undebot/.openclaw-sandbox (бэкапы .bak-20260913).
+Репо: 1c-wiki-alias.env.example — дефолт agent + OPENCLAW_HOME обязателен
+при agent (раньше infer + закомментированный HOME: новая база встала бы на
+молча битый путь); RUNBOOK §10.6-bis §2 — штатный прогон = agent+HOME
+(прежняя фраза «infer достаточно боевого профиля» опровергнута замером,
+оставлен разбор). Красная: R3 ПРИНЯТЬ; R4 НЕ ПРИНЯТЬ — блокеры: (1)
+раскомментированный OPENCLAW_HOME в примере = footgun без setup_home;
+(2) код-дефолт infer при пустом env канон не держит, а infer на «No text
+output» даёт rc0 + 0 разобранных БЕЗ mark_skip — молчаливая дыра в entity-
+цикле (хуже пропуска: сущность не помечается, цикл бьёт в ту же дыру).
+Ответ: дефолт infer_runtime() в коде infer→agent (мусорное значение env
+тоже → agent; явный infer сохранён для провайдеров без reasoning), замок
+prompts_v2 синхронизирован (дефолт agent; infer-путь под явным env),
+OPENCLAW_HOME в примере снова закомментирован (пусто → HOME бота, там есть
+агент dict — рабочий фолбэк со смешиванием контура). Дыра rc0/mark_skip
+уходит в очередь J. Повторная красная дельты: R5 ПРИНЯТЬ (оба блокера
+закрыты; infer-дефолта в исполняемой логике не осталось), R6 ПРИНЯТЬ
+(env через runuser наследуется без --preserve-environment; agent с пустым
+payloads → exit 1 → mark_skip — silent-дыра в проде не возвращается;
+косметика: шапка gateway, имя проверки, комментарии wiki/branch — сняты
+тем же заходом).
+
+Числа: deploy 46/0, home 70/0; живой: infer 200/0.8 с «No text output»
+×2 подряд → agent 200/4.3 с stopReason=stop, 2+2 сущности за 2 круга.
+Доки: docs/RUNBOOK_DEPLOY.md §10.6-bis; .claude/state/{prompt-or3,prompt-or4}.md
+
 ## 2026-09-13 (21) — Генератор словаря возвращён на OpenRouter (GPU-эпизод 188 закрыт) [код]+[замер]
 
 **[решение владельца]** «qwen27b верни как было на openrouter и доделай что

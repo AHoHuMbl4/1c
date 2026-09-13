@@ -96,7 +96,7 @@ over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUD
 # 🔴 Свежий transcript на каждый прогон: битая сессия `branch-alias` от
 # биллингового прогона 16.08 ловила TranscriptNotContinuableError [17.08].
 BRANCH_ALIAS_SESSION="${BRANCH_ALIAS_SESSION_KEY:-branch-alias-$(date +%Y%m%d-%H%M%S)}"
-# Модель и thinking — через infer model run (замер 17.08). Умолчание транспорта
+# Модель и thinking — через alias_infer_gateway.py (замер 17.08). Умолчание транспорта
 # — --local (cli/infer.md Behavior; [замер 24.08] wiki-alias: --gateway = RPC 120 с).
 # BRANCH_ALIAS_INFER=gateway — только короткая проба маршрутизации.
 # Модель — OpenRouter qwen/qwen3.8-27b (провайдер vllm в конфиге HOME на openrouter.ai);

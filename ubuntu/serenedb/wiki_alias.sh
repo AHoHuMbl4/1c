@@ -73,7 +73,7 @@ case "$WIKI_ALIAS_TICK" in ''|*[!0-9]*) WIKI_ALIAS_TICK=0;; esac
 REASK_CAP="${WIKI_ALIAS_REASK_CAP:-$BATCH}"
 case "$REASK_CAP" in ''|*[!0-9]*) REASK_CAP="$BATCH";; esac
 CAP="${1:-0}"
-# Модель/thinking — infer model run через alias_infer_gateway.py.
+# Модель/thinking — вызов через alias_infer_gateway.py (рантайм agent/infer).
 # 🔴 Транспорт: умолчание --local (cli/infer.md). [замер 24.08] --gateway =
 # RPC-потолок 120 с → GatewayTransportError; loc 1034 с / пачка 20 — exit 0.
 # Умолчание модели — OpenRouter qwen/qwen3.8-27b (провайдер vllm в конфиге HOME

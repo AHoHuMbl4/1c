@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Один вызов модели через `openclaw infer model run` без tool surface.
+"""Один вызов модели через `openclaw` CLI (рантаймы infer/agent) без tool surface.
 
 Умолчание — `--local` (доки установленной сборки `cli/infer.md` Behavior:
 stateless `model run` defaults to local; gateway не нужен). 🔴 [замер 24.08]
@@ -14,7 +14,10 @@ Agent-режим (`ALIAS_INFER_RUNTIME=agent`): `openclaw agent --local` +
 `--message-file` (доки `cli/agent.md`). Нужен песочнице 27B: G0 показал, что
 `infer model run --local` не читает `params` каталога (extra-params только на
 агентном рантайме), а P4 §4 требует temperature=0 — оно уже в openclaw.json
-песочницы (seed/maxTokens тоже). Боевой путь по умолчанию остаётся `infer`.
+песочницы (seed/maxTokens тоже). С 13.09 дефолт — `agent`: на reasoning-
+модели без thinking-kwargs infer получает 200 без текста («No text output
+returned», живой замер okna, OpenRouter qwen/qwen3.8-27b) — techContext
+ловушка 60. `infer` остаётся для провайдеров без reasoning-вывода.
 
 Сессия на вызов (agent): `--session-key alias-gen-<uuid4hex>` — bare ключ +
 `--agent` скопится в `agent:<id>:<key>` (доки `cli/agent.md`); изоляция
@@ -48,10 +51,10 @@ def infer_transport_flag(env: dict | None = None) -> str:
 
 
 def infer_runtime(env: dict | None = None) -> str:
-    """`infer` (дефолт, боевой путь) или `agent` (песочница: params из каталога)."""
+    """`agent` (дефолт: params из каталога) или `infer` (без params; провайдер без reasoning)."""
     src = env if env is not None else os.environ
-    raw = (src.get("ALIAS_INFER_RUNTIME") or "infer").strip().lower()
-    return "agent" if raw == "agent" else "infer"
+    raw = (src.get("ALIAS_INFER_RUNTIME") or "agent").strip().lower()
+    return "infer" if raw == "infer" else "agent"
 
 
 def agent_id(env: dict | None = None) -> str:

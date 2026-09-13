@@ -841,9 +841,10 @@ systemctl daemon-reload
 
 #### 2. Генераторный HOME OpenClaw
 
-Для штатного первого прогона (`ALIAS_INFER_RUNTIME=infer`) достаточно боевого
-профиля undebot с vLLM. Отдельный HOME — для agent/27B и песочницы (не трогать
-шлюз бота):
+Штатный прогон — `ALIAS_INFER_RUNTIME=agent` + отдельный HOME (песочница):
+на infer params каталога не действуют (G0) и reasoning-модель отвечает 200
+без текста («No text output returned»; живой замер okna 13.09, OpenRouter).
+Отдельный HOME не трогает шлюз бота:
 
 ```bash
 # G7a: ubuntu/openclaw/wiki_alias_setup_home.sh

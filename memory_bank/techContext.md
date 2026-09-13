@@ -1153,3 +1153,19 @@ restore-инстансом на reflink-копии (порт :7891, отдель
 Полный отчёт и ворота GO/NO-GO: `docs/UPGRADE_F1_REPORT.md`. Цифры IVF — после прогона в
 `work/sandbox-26081/results/`.
 
+
+## Ловушка 60. `openclaw infer model run --local` не применяет params каталога — reasoning-модель отвечает 200 без текста
+
+Один и тот же HOME через два рантайма даёт РАЗНЫЙ запрос: `agent --local` читает
+`agents.defaults.models[].params` (temperature/seed/maxTokens/chat_template_kwargs),
+`infer model run --local` — нет (G0; канон — alias_infer_gateway.py). На reasoning-
+модели без `enable_thinking: false` размышление съедает бюджет вывода: HTTP 200 за
+~0.8 с и `Error: No text output returned for provider …` — внешне «пустой ответ
+провайдера», на деле неготовый запрос. Живой замер 13.09 (okna, OpenRouter
+qwen/qwen3.8-27b, добор словаря): infer — серия «No text output» подряд; agent на
+тех же пачках — 200 / stopReason=stop / валидный JSON.
+
+**Как надо.** Генератор словаря — только agent-рантайм (ALIAS_INFER_RUNTIME=agent +
+OPENCLAW_HOME на генераторный HOME, RUNBOOK §10.6-bis; env юнита и тика, 13.09);
+infer — только для провайдеров без reasoning-вывода. Признак в журнале: «пачка
+пропущена» с err, где после `status=200` строка `No text output returned`.

@@ -443,20 +443,20 @@ t("alias_infer_gateway: --temperature заглушка",
 import json as _json
 import alias_infer_gateway as IG  # noqa: E402
 
-t("runtime дефолт {} → infer", IG.infer_runtime({}) == "infer")
+t("runtime дефолт {} → agent", IG.infer_runtime({}) == "agent")
 t("runtime agent → agent",
   IG.infer_runtime({"ALIAS_INFER_RUNTIME": "agent"}) == "agent")
-t("runtime иное → infer",
-  IG.infer_runtime({"ALIAS_INFER_RUNTIME": "rpc"}) == "infer")
+t("runtime иное → agent",
+  IG.infer_runtime({"ALIAS_INFER_RUNTIME": "rpc"}) == "agent")
 
 _cmd_infer = IG.build_cmd(
     message_file="/tmp/msg",
     model="vllm/x",
     thinking="off",
     prompt="hi",
-    env={},
+    env={"ALIAS_INFER_RUNTIME": "infer"},
 )
-t("дефолт cmd = infer model run",
+t("infer cmd (явный env) = infer model run",
   _cmd_infer[:4] == ["openclaw", "infer", "model", "run"]
   and "--prompt" in _cmd_infer
   and "openclaw agent" not in " ".join(_cmd_infer),
