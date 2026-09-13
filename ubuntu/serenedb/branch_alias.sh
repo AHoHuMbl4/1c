@@ -189,6 +189,8 @@ while :; do
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
   t_agent=$(date +%s)
+  # --retry-items-json НЕ вешаем: ответ веток — схема {"forks":[…]} (branch_alias_parse),
+  # не items; items-валидация шлюза сюда не применима.
   "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
     --model "$BRANCH_ALIAS_MODEL" --thinking "$BRANCH_ALIAS_THINKING" \
     --ans "$TMP/ans" --err "$TMP/err" || {

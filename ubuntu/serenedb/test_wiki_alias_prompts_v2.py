@@ -551,6 +551,183 @@ t("agent parser: пустой text → exit 1",
   _blank_code == 1 and _blank_body == _blank_fix,
   (_blank_code, _blank_body[:120]))
 
+# ── --retry-items-json (ретрай битого items JSON в шлюзе) ─────────────────────
+import tempfile as _tmpmod
+
+t("retry-items-json: флаг в argparse (дефолт 0)",
+  "--retry-items-json" in _src
+  and "default=0" in _src
+  and "retry-items-json" in _src,
+  "flag+default=0")
+
+# дефолт 0: валидный конверт agent + проза без items → exit 0 (как раньше)
+_broken_text = "Let me think. No JSON items here."
+_ok_items_text = '{"items":[{"entity":"catalog_x","aliases":["a","b"]}]}'
+_agent_broken = _json.dumps({"payloads": [{"text": _broken_text}], "meta": {}})
+_agent_ok = _json.dumps({"payloads": [{"text": _ok_items_text}], "meta": {}})
+
+
+class _Proc:
+    def __init__(self, stdout, returncode=0, stderr=""):
+        self.stdout = stdout
+        self.returncode = returncode
+        self.stderr = stderr
+
+
+def _run_gateway_main(argv, env_extra=None, fake_stdout_seq=None):
+    """Вызов IG.main() с подменой subprocess.run; возвращает (rc, ans, err, calls)."""
+    calls = []
+    seq = list(fake_stdout_seq or [])
+    idx = {"i": 0}
+
+    def _fake_run(cmd, **kw):
+        calls.append(list(cmd))
+        i = idx["i"]
+        idx["i"] = i + 1
+        item = seq[i] if i < len(seq) else seq[-1]
+        if isinstance(item, _Proc):
+            return item
+        return _Proc(item)
+
+    old_run = IG.subprocess.run
+    old_argv = sys.argv
+    old_env = {k: os.environ.get(k) for k in (
+        "ALIAS_INFER_RUNTIME", "ALIAS_AGENT_TIMEOUT_SEC",
+    )}
+    try:
+        IG.subprocess.run = _fake_run
+        if env_extra:
+            for k, v in env_extra.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        with _tmpmod.TemporaryDirectory() as td:
+            td = Path(td)
+            msg = td / "msg"
+            msg.write_text("prompt body for gateway test", encoding="utf-8")
+            ans = td / "ans"
+            err = td / "err"
+            sys.argv = [
+                "alias_infer_gateway.py",
+                "--message-file", str(msg),
+                "--model", "vllm/x",
+                "--thinking", "off",
+                "--ans", str(ans),
+                "--err", str(err),
+            ] + list(argv)
+            rc = IG.main()
+            ans_txt = ans.read_text(encoding="utf-8") if ans.exists() else ""
+            err_txt = err.read_text(encoding="utf-8") if err.exists() else ""
+            return rc, ans_txt, err_txt, calls
+    finally:
+        IG.subprocess.run = old_run
+        sys.argv = old_argv
+        for k, v in old_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+_rc0, _ans0, _err0, _calls0 = _run_gateway_main(
+    [],  # без --retry-items-json → дефолт 0
+    env_extra={"ALIAS_INFER_RUNTIME": "agent"},
+    fake_stdout_seq=[_agent_broken],
+)
+t("retry дефолт 0: битый items + валидный конверт → exit 0, 1 вызов",
+  _rc0 == 0 and len(_calls0) == 1
+  and "retry" not in _err0
+  and _broken_text in _ans0,
+  (_rc0, len(_calls0), _err0[:80], _ans0[:80]))
+
+_rc_r, _ans_r, _err_r, _calls_r = _run_gateway_main(
+    ["--retry-items-json", "2"],
+    env_extra={"ALIAS_INFER_RUNTIME": "agent"},
+    fake_stdout_seq=[_agent_broken, _agent_ok],
+)
+t("retry 2: 1-я битая → 2-я ok, exit 0, err содержит retry 1/2",
+  _rc_r == 0 and len(_calls_r) == 2
+  and "retry 1/2" in _err_r
+  and "items" in _ans_r
+  and "catalog_x" in _ans_r,
+  (_rc_r, len(_calls_r), _err_r, _ans_r[:120]))
+t("retry: session-key свежий на каждую попытку",
+  len(_calls_r) == 2
+  and "--session-key" in _calls_r[0]
+  and "--session-key" in _calls_r[1]
+  and _calls_r[0][_calls_r[0].index("--session-key") + 1]
+  != _calls_r[1][_calls_r[1].index("--session-key") + 1],
+  (_calls_r[0][_calls_r[0].index("--session-key") + 1],
+   _calls_r[1][_calls_r[1].index("--session-key") + 1]))
+
+_rc_x, _ans_x, _err_x, _calls_x = _run_gateway_main(
+    ["--retry-items-json", "1"],
+    env_extra={"ALIAS_INFER_RUNTIME": "agent"},
+    fake_stdout_seq=[_agent_broken, _agent_broken],
+)
+t("retry исчерпание: обе битые → exit 1",
+  _rc_x == 1 and len(_calls_x) == 2
+  and "retry 1/1" in _err_x,
+  (_rc_x, len(_calls_x), _err_x))
+
+_infer_broken = _json.dumps({
+    "outputs": [{"text": _broken_text}],
+    "transport": "local", "provider": "vllm", "model": "x", "attempts": 0,
+})
+_infer_ok = _json.dumps({
+    "outputs": [{"text": _ok_items_text}],
+    "transport": "local", "provider": "vllm", "model": "x", "attempts": 0,
+})
+_rc_i, _ans_i, _err_i, _calls_i = _run_gateway_main(
+    ["--retry-items-json", "2"],
+    env_extra={"ALIAS_INFER_RUNTIME": "infer"},
+    fake_stdout_seq=[_infer_broken, _infer_ok],
+)
+t("retry infer: та же items-валидация, exit 0 после ретрая",
+  _rc_i == 0 and len(_calls_i) == 2
+  and "retry 1/2" in _err_i
+  and _calls_i[0][:4] == ["openclaw", "infer", "model", "run"]
+  and "catalog_x" in _ans_i,
+  (_rc_i, len(_calls_i), _err_i, _ans_i[:120]))
+
+# R8: rc!=0 (провайдер/инфра) — без ретрая, исходный exit (не маскировать под items)
+_rc_500, _ans_500, _err_500, _calls_500 = _run_gateway_main(
+    ["--retry-items-json", "2"],
+    env_extra={"ALIAS_INFER_RUNTIME": "agent"},
+    fake_stdout_seq=[_Proc("provider error body", returncode=500, stderr="HTTP 500\n")],
+)
+t("retry: rc!=0 (500) при N=2 → 1 вызов, exit 500, err без retry",
+  _rc_500 == 500 and len(_calls_500) == 1
+  and "retry" not in _err_500
+  and "items JSON invalid" not in _err_500
+  and "provider error body" in _ans_500,
+  (_rc_500, len(_calls_500), _err_500[:120], _ans_500[:80]))
+
+# rc==0 + валидный items с первой попытки → без ретраев
+_rc_ok1, _ans_ok1, _err_ok1, _calls_ok1 = _run_gateway_main(
+    ["--retry-items-json", "2"],
+    env_extra={"ALIAS_INFER_RUNTIME": "agent"},
+    fake_stdout_seq=[_agent_ok],
+)
+t("retry: rc==0 + валидный items с 1-й → 1 вызов, exit 0, без retry",
+  _rc_ok1 == 0 and len(_calls_ok1) == 1
+  and "retry" not in _err_ok1
+  and "catalog_x" in _ans_ok1,
+  (_rc_ok1, len(_calls_ok1), _err_ok1[:80], _ans_ok1[:120]))
+
+# проводка в wiki_alias.sh: ровно 3 сайта (entity/measure/collision), не reask/dayfork
+_retry_n = sh.count("--retry-items-json 2")
+t("wiki_alias.sh: --retry-items-json 2 ровно ×3 (entity/measure/collision)",
+  _retry_n == 3, _retry_n)
+
+_br = (HERE / "branch_alias.sh").read_text(encoding="utf-8")
+t("branch_alias.sh: без --retry-items-json (форма forks, не items)",
+  "--retry-items-json 2" not in _br
+  and "не items" in _br
+  and '{"forks"' in _br,
+  "comment+no-flag")
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

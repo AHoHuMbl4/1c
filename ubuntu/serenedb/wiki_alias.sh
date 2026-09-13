@@ -201,6 +201,7 @@ while :; do
   chmod 644 "$TMP/msg"
   "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
     --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
+    --retry-items-json 2 \
     --ans "$TMP/ans" --err "$TMP/err" || {
       # 🔴 ОДНА ОСЕЧКА НЕ ОСТАНАВЛИВАЕТ ВСЁ. [замер 30.07] на 143-й сущности из 686 модель
       # не ответила в срок (`LLM request timed out`), и прежний код обрывал цикл целиком —
@@ -269,6 +270,7 @@ while :; do
   chmod 644 "$TMP/msg"
   "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
     --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
+    --retry-items-json 2 \
     --ans "$TMP/ans" --err "$TMP/err" || {
       # При force=1 mark_skip пул не сжимает → OFFSET двигаем и на осечке.
       skipped=$((skipped + 1))
@@ -348,6 +350,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     chmod 644 "$TMP/msg"
     "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
       --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
+      --retry-items-json 2 \
       --ans "$TMP/ans" --err "$TMP/err" || {
         echo "разведение: пачка пропущена ($(head -c 100 "$TMP/err" | tr -d '\n'))" >&2; continue; }
     python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true

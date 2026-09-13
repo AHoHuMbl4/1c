@@ -1,3 +1,26 @@
+## 2026-09-13 (23) — Ретрай битого JSON в шлюзе генератора (--retry-items-json) [код]
+
+**[код]** Шлюз alias_infer_gateway.py: опт-ин `--retry-items-json N` (дефолт 0 =
+поведение байт-идентично). rc==0 + невалидный items (agent-конверт битый ИЛИ
+extract_items_payload None) → до N ретраев, свежий session-key на попытку,
+«retry k/N» в err, исчерпание → exit 1 (mark_skip в entity/measure; в collision
+probe помечен до вызова — слово до ручной чистки, честно в docstring).
+rc!=0 и таймаут — БЕЗ ретрая, исходный код наружу (блокер R8: труп провайдера
+не размножается ×N+1, инфра не маскируется под битый JSON). Подключено
+--retry-items-json 2 в wiki_alias.sh ×3 (entity/measure/collision); branch не
+подключён (payload {"forks":…}, не items — комментарий). Причина: битость
+27-46% (замеры 13.09), collision-слово при битом ответе теряется из очереди
+навсегда (probe-отметка ДО вызова). Исполнители cursor ×2; красная: R7
+ПРИНЯТЬ; R8 НЕ ПРИНЯТЬ (блокер rc!=0) → дельта → R9/R10 ПРИНЯТЬ (оговорки:
+soft-бюджет тика ×3 худший случай — конечный overshoot, не hang; «temp=0/seed=42
++ ретрай = лотерея провайдерской недетерминированности» — зафиксирована в
+techContext к ловушке 60; спасательность меряем по «retry k/N» полного прогона).
+
+Числа: замки prompts_v2 102/0 (92+10), branch 27/0, sep 88/0, parse 26/0,
+deploy 46/0, home 70/0, bash -n ×2, py_compile — приёмка замками оркестратора.
+Доки: techContext ловушка 60+дополнение; .claude/state/{prompt-ex1-retry,
+prompt-ex2-r8delta,prompt-r7,prompt-r8,prompt-r9,prompt-r10}.md
+
 ## 2026-09-13 (22) — Wiki-генератор на agent-рантайм: infer давал «No text output» на OpenRouter [код]+[замер]
 
 **[замер]** Добор 37 слов collision после возврата на OpenRouter: первый

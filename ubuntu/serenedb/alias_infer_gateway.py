@@ -27,6 +27,20 @@ reuse шёл в `agent:dict:main` и один растущий session.jsonl).
 Таймаут subprocess: `ALIAS_AGENT_TIMEOUT_SEC` (дефолт 1800; замер пачки до
 1034 с). TimeoutExpired → kill, err с причиной, ans = сырой stdout, exit 124.
 Таймаут на оба режима (infer тоже может висеть); дефолт 1800 не режет бой.
+
+`--retry-items-json N` (дефолт 0 = байт-идентично прежнему): при N>0 после
+subprocess с returncode==0 ответ валидируется по items-критерию
+(`wiki_alias_parse.extract_items_payload`); невалидный (битый agent-конверт
+или extract → None) → повтор (свежий `build_cmd` / session-key), всего
+попыток ≤ N+1. returncode!=0 (ошибка провайдера и т.п.) — без ретрая,
+exit = исходный код процесса (как при N=0). 🔴 [замер 13.09] без
+strict-режима модель 27B отдаёт битый JSON в 27–46% вызовов; конверт agent
+проходит, а `extract_items_payload` позже даёт None — слово collision
+теряется (рядом по смыслу techContext ловушка 60: «успех» оболочки без
+полезного текста). Исчерпание → exit 1; mark_skip срабатывает в
+entity/measure вызовах wiki_alias.sh; в collision probe-отметка ставится
+ДО вызова (wiki_alias_collision_round.sql), поэтому слово при исчерпании
+остаётся помеченным до ручной чистки probe.
 """
 from __future__ import annotations
 
@@ -37,6 +51,11 @@ import subprocess
 import sys
 import uuid
 from pathlib import Path
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+if str(_SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(_SCRIPT_DIR))
+from wiki_alias_parse import extract_items_payload  # noqa: E402
 
 
 def infer_transport_flag(env: dict | None = None) -> str:
@@ -151,6 +170,92 @@ def agent_result_from_stdout(stdout: str) -> tuple[int, str]:
     return 0, json.dumps(data, ensure_ascii=False, indent=2) + "\n"
 
 
+def _payloads_text(body: str) -> str:
+    """Склеить text из payloads обёртки agent/ans."""
+    try:
+        data = json.loads(body or "")
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    texts = [
+        str(o.get("text") or "").strip()
+        for o in (data.get("payloads") or [])
+        if isinstance(o, dict)
+    ]
+    return "\n".join(t for t in texts if t)
+
+
+def _wrap_infer(stdout: str) -> tuple[int, str, str]:
+    """Разобрать stdout infer → (code, ans_body, joined_text)."""
+    try:
+        infer = json.loads(stdout)
+    except (json.JSONDecodeError, TypeError):
+        return 1, stdout or "", ""
+    if not isinstance(infer, dict):
+        return 1, stdout or "", ""
+    texts = [
+        str(o.get("text") or "").strip()
+        for o in (infer.get("outputs") or [])
+        if isinstance(o, dict)
+    ]
+    text = "\n".join(t for t in texts if t)
+    wrapped = {
+        "payloads": [{"text": text}],
+        "meta": {
+            "transport": infer.get("transport"),
+            "agentMeta": {
+                "provider": infer.get("provider"),
+                "model": infer.get("model"),
+                "fallbackAttempts": infer.get("attempts"),
+            },
+        },
+        "_infer": infer,
+    }
+    body = json.dumps(wrapped, ensure_ascii=False, indent=2) + "\n"
+    return 0, body, text
+
+
+def _attempt_ok_agent(stdout: str, returncode: int) -> tuple[bool, int, str, str]:
+    """(ok, code, ans_body, reason). reason — краткая строка при !ok."""
+    if returncode != 0:
+        return False, returncode, stdout or "", "items JSON invalid"
+    code, body = agent_result_from_stdout(stdout or "")
+    if code != 0:
+        return False, code, body, "items JSON invalid"
+    if extract_items_payload(_payloads_text(body)) is None:
+        return False, 0, body, "items JSON invalid"
+    return True, 0, body, ""
+
+
+def _attempt_ok_infer(stdout: str, returncode: int) -> tuple[bool, int, str, str]:
+    """(ok, code, ans_body, reason)."""
+    if returncode != 0:
+        return False, returncode, stdout or "", "items JSON invalid"
+    code, body, text = _wrap_infer(stdout or "")
+    if code != 0:
+        return False, 1, body, "items JSON invalid"
+    if extract_items_payload(text) is None:
+        return False, 0, body, "items JSON invalid"
+    return True, 0, body, ""
+
+
+def _write_timeout(args, timeout_sec: int, exc: subprocess.TimeoutExpired) -> int:
+    out = exc.stdout if isinstance(exc.stdout, str) else (
+        (exc.stdout or b"").decode("utf-8", errors="replace")
+    )
+    err_blob = (
+        "alias_infer_gateway: subprocess timeout after %ds\n" % (timeout_sec,)
+        + (exc.stderr if isinstance(exc.stderr, str) else (
+            (exc.stderr or b"").decode("utf-8", errors="replace")
+        ))
+    )
+    if args.err:
+        Path(args.err).write_text(err_blob, encoding="utf-8")
+    Path(args.ans).write_text(out or "", encoding="utf-8")
+    return 124
+
+
 def main() -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--message-file", required=True)
@@ -163,6 +268,12 @@ def main() -> int:
     )
     p.add_argument("--ans", required=True, help="stdout JSON (обёртка под parse)")
     p.add_argument("--err", default="", help="stderr агента")
+    p.add_argument(
+        "--retry-items-json",
+        type=int,
+        default=0,
+        help="retries when items JSON invalid (0 = off, total attempts N+1)",
+    )
     args = p.parse_args()
 
     prompt = Path(args.message_file).read_text(encoding="utf-8")
@@ -188,82 +299,156 @@ def main() -> int:
                 file=sys.stderr,
             )
 
-    if runtime == "agent":
-        cmd = build_cmd(
-            message_file=args.message_file,
-            model=args.model,
-            thinking=args.thinking,
-        )
-    else:
-        cmd = build_cmd(
-            message_file=args.message_file,
-            model=args.model,
-            thinking=args.thinking,
-            prompt=prompt,
-        )
+    retry_n = max(0, int(args.retry_items_json or 0))
     timeout_sec = agent_timeout_sec()
-    try:
-        proc = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=timeout_sec
-        )
-    except subprocess.TimeoutExpired as exc:
-        out = exc.stdout if isinstance(exc.stdout, str) else (
-            (exc.stdout or b"").decode("utf-8", errors="replace")
-        )
-        err_blob = (
-            "alias_infer_gateway: subprocess timeout after %ds\n" % (timeout_sec,)
-            + (exc.stderr if isinstance(exc.stderr, str) else (
-                (exc.stderr or b"").decode("utf-8", errors="replace")
-            ))
-        )
+
+    # ── N=0: прежний путь (без items-валидации) ─────────────────────────────
+    if retry_n == 0:
+        if runtime == "agent":
+            cmd = build_cmd(
+                message_file=args.message_file,
+                model=args.model,
+                thinking=args.thinking,
+            )
+        else:
+            cmd = build_cmd(
+                message_file=args.message_file,
+                model=args.model,
+                thinking=args.thinking,
+                prompt=prompt,
+            )
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout_sec
+            )
+        except subprocess.TimeoutExpired as exc:
+            return _write_timeout(args, timeout_sec, exc)
+        err_blob = proc.stderr or ""
+        if proc.returncode != 0 and (proc.stdout or "").strip():
+            err_blob = (err_blob + "\n" + proc.stdout).strip() + "\n"
         if args.err:
             Path(args.err).write_text(err_blob, encoding="utf-8")
-        Path(args.ans).write_text(out or "", encoding="utf-8")
-        return 124
-    err_blob = proc.stderr or ""
-    if proc.returncode != 0 and (proc.stdout or "").strip():
-        err_blob = (err_blob + "\n" + proc.stdout).strip() + "\n"
-    if args.err:
-        Path(args.err).write_text(err_blob, encoding="utf-8")
 
-    if proc.returncode != 0:
-        Path(args.ans).write_text(proc.stdout or "", encoding="utf-8")
-        return proc.returncode
+        if proc.returncode != 0:
+            Path(args.ans).write_text(proc.stdout or "", encoding="utf-8")
+            return proc.returncode
 
-    if runtime == "agent":
-        code, body = agent_result_from_stdout(proc.stdout or "")
-        Path(args.ans).write_text(body, encoding="utf-8")
-        return code
+        if runtime == "agent":
+            code, body = agent_result_from_stdout(proc.stdout or "")
+            Path(args.ans).write_text(body, encoding="utf-8")
+            return code
 
-    try:
-        infer = json.loads(proc.stdout)
-    except json.JSONDecodeError:
-        Path(args.ans).write_text(proc.stdout or "", encoding="utf-8")
-        return 1
+        try:
+            infer = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            Path(args.ans).write_text(proc.stdout or "", encoding="utf-8")
+            return 1
 
-    texts = [
-        str(o.get("text") or "").strip()
-        for o in (infer.get("outputs") or [])
-        if isinstance(o, dict)
-    ]
-    text = "\n".join(t for t in texts if t)
-    wrapped = {
-        "payloads": [{"text": text}],
-        "meta": {
-            "transport": infer.get("transport"),
-            "agentMeta": {
-                "provider": infer.get("provider"),
-                "model": infer.get("model"),
-                "fallbackAttempts": infer.get("attempts"),
+        texts = [
+            str(o.get("text") or "").strip()
+            for o in (infer.get("outputs") or [])
+            if isinstance(o, dict)
+        ]
+        text = "\n".join(t for t in texts if t)
+        wrapped = {
+            "payloads": [{"text": text}],
+            "meta": {
+                "transport": infer.get("transport"),
+                "agentMeta": {
+                    "provider": infer.get("provider"),
+                    "model": infer.get("model"),
+                    "fallbackAttempts": infer.get("attempts"),
+                },
             },
-        },
-        "_infer": infer,
-    }
-    Path(args.ans).write_text(
-        json.dumps(wrapped, ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return 0
+            "_infer": infer,
+        }
+        Path(args.ans).write_text(
+            json.dumps(wrapped, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        return 0
+
+    # ── N>0: ретрай по items-критерию ───────────────────────────────────────
+    retry_notes: list[str] = []
+    last_ans = ""
+    last_err = ""
+    max_attempts = retry_n + 1
+
+    for attempt in range(max_attempts):
+        if runtime == "agent":
+            cmd = build_cmd(
+                message_file=args.message_file,
+                model=args.model,
+                thinking=args.thinking,
+            )
+        else:
+            cmd = build_cmd(
+                message_file=args.message_file,
+                model=args.model,
+                thinking=args.thinking,
+                prompt=prompt,
+            )
+        try:
+            proc = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=timeout_sec
+            )
+        except subprocess.TimeoutExpired as exc:
+            return _write_timeout(args, timeout_sec, exc)
+
+        err_blob = proc.stderr or ""
+        if proc.returncode != 0 and (proc.stdout or "").strip():
+            err_blob = (err_blob + "\n" + proc.stdout).strip() + "\n"
+
+        # Инфра/провайдер (rc!=0): без ретрая, как при N=0 — исходный exit.
+        if proc.returncode != 0:
+            if args.err:
+                Path(args.err).write_text(err_blob, encoding="utf-8")
+            Path(args.ans).write_text(proc.stdout or "", encoding="utf-8")
+            return proc.returncode
+
+        if runtime == "agent":
+            ok, _code, body, reason = _attempt_ok_agent(
+                proc.stdout or "", proc.returncode
+            )
+        else:
+            ok, _code, body, reason = _attempt_ok_infer(
+                proc.stdout or "", proc.returncode
+            )
+
+        last_ans = body
+        last_err = err_blob
+
+        if ok:
+            err_out = last_err
+            if retry_notes:
+                err_out = (
+                    (err_out.rstrip("\n") + "\n" if err_out.strip() else "")
+                    + "\n".join(retry_notes)
+                    + "\n"
+                )
+            if args.err:
+                Path(args.err).write_text(err_out, encoding="utf-8")
+            Path(args.ans).write_text(last_ans, encoding="utf-8")
+            return 0
+
+        # rc==0, но items невалидны — ретрай k/N, если остались
+        k = attempt + 1
+        if k <= retry_n:
+            retry_notes.append("retry %d/%d: %s" % (k, retry_n, reason))
+            continue
+        break
+
+    err_out = last_err
+    if retry_notes:
+        err_out = (
+            (err_out.rstrip("\n") + "\n" if err_out.strip() else "")
+            + "\n".join(retry_notes)
+            + "\n"
+        )
+    if args.err:
+        Path(args.err).write_text(err_out, encoding="utf-8")
+    Path(args.ans).write_text(last_ans, encoding="utf-8")
+    return 1  # исчерпание: exit 1; mark_skip — entity/measure; collision — probe до вызова
 
 
 if __name__ == "__main__":
