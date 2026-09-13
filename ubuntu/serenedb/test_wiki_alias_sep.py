@@ -281,6 +281,127 @@ t("wiki_alias.sh: measure-select несёт -v skip_rows=$done_measures",
 t("wiki_alias.sh: done_measures=0 перед циклом мер",
   "done_measures=0" in sh and "done_measures=$((done_measures + BATCH))" in sh)
 
+# ── G8b: cand/left не выбирают мета-стоп P3 (живые множества равны) ───────────
+# Правило: frozenset SQL VALUES == _PLATFORM_META_STOP (строгое равенство).
+_META_NOT_IN = "NOT IN (SELECT word FROM meta_stop)"
+_PICK_ORDER = "ORDER BY c.n DESC, c.alias LIMIT 1"
+_VALUES_RE = re.compile(
+    r"meta_stop\s*\(\s*word\s*\)\s*AS\s*\(\s*VALUES\s*((?:\([^)]+\)\s*,?\s*)+)\)",
+    re.IGNORECASE | re.DOTALL,
+)
+_WORD_RE = re.compile(r"\(\s*'((?:[^'\\]|\\.)*)'\s*\)")
+
+
+def _meta_stop_from_sql(sql_text: str) -> frozenset:
+    m = _VALUES_RE.search(sql_text)
+    if not m:
+        return frozenset()
+    return frozenset(_WORD_RE.findall(m.group(1)))
+
+
+_py_stop = frozenset(P._PLATFORM_META_STOP)
+_round_stop = _meta_stop_from_sql(round_sql)
+_left_stop = _meta_stop_from_sql(left)
+
+t("G8b round: meta_stop VALUES == _PLATFORM_META_STOP",
+  _round_stop == _py_stop,
+  "only_sql=%r only_py=%r" % (sorted(_round_stop - _py_stop),
+                              sorted(_py_stop - _round_stop)))
+t("G8b left: meta_stop VALUES == _PLATFORM_META_STOP",
+  _left_stop == _py_stop,
+  "only_sql=%r only_py=%r" % (sorted(_left_stop - _py_stop),
+                              sorted(_py_stop - _left_stop)))
+t("G8b round: cand фильтр NOT IN meta_stop",
+  _META_NOT_IN in round_sql)
+t("G8b left: cand фильтр NOT IN meta_stop",
+  _META_NOT_IN in left)
+t("G8b round: комментарий источник _PLATFORM_META_STOP",
+  "wiki_alias_parse.py:_PLATFORM_META_STOP" in round_sql)
+t("G8b left: комментарий источник _PLATFORM_META_STOP",
+  "wiki_alias_parse.py:_PLATFORM_META_STOP" in left)
+t("G8b pick: ORDER BY c.n DESC, c.alias LIMIT 1 неизменен",
+  _PICK_ORDER in round_sql)
+
+# ── G8c / H4: recover_collision из снапшота (заготовка, без живой базы) ───────
+rec = (HERE / "wiki_alias_recover_collision.sql").read_text(encoding="utf-8")
+rec_body = _sql_body(rec)
+
+t("recover: :snap_table переменная (не хардкод snap-имени)",
+  ":snap_table" in rec
+  and "alias_okna_c5" not in rec
+  and "alias_okna_c5_pre_v2" not in rec)
+t("recover: :alias_table + :since в критерии",
+  ":alias_table" in rec and "CAST(:'since' AS TIMESTAMP)" in rec)
+t("recover: str_split ' | ' < 3 в критерии",
+  "len(str_split(coalesce(t.aliases, ''), ' | ')) < 3" in rec)
+t("recover: UPDATE ... FROM snap",
+  "UPDATE :alias_table t" in rec_body
+  and "FROM :snap_table s" in rec_body
+  and "SET aliases = s.aliases" in rec_body)
+_upd = rec_body[rec_body.find("UPDATE :alias_table t"):
+            rec_body.find("SELECT 'recovered_now_match_snap'")]
+t("recover: UPDATE без SET seen_at (мягкость)",
+  "seen_at =" not in _upd.replace("seen_at >=", "SEEN_AT_GE"))
+t("recover: контрольные SELECT (отчёт + remaining_stub)",
+  "n_to_recover" in rec
+  and "remaining_stub" in rec
+  and "recovered_now_match_snap" in rec
+  and "LIMIT 20" in rec)
+t("recover: шапка-предупреждение о запуске",
+  "ПО СЛОВУ ВЛАДЕЛЬЦА" in rec
+  and "ПЕРЕД повторным" in rec
+  and "G8c" in rec
+  and "H4" in rec)
+
+
+def _n_pipe(a: str | None) -> int:
+    """Как len(str_split(coalesce(a,''), ' | ')): '' → [''], len=1."""
+    if a is None:
+        a = ""
+    if a == "":
+        return 1
+    return len(a.split(" | "))
+
+
+def _stub_aliases(a: str | None) -> bool:
+    if a is None:
+        a = ""
+    n = _n_pipe(a)
+    all_short = a != "" and all(len(x.strip()) < 4 for x in a.split(" | "))
+    return n < 3 or all_short
+
+
+def should_recover(t_aliases, s_aliases, *, has_snap: bool, seen_fresh: bool) -> bool:
+    """Py-эмуляция критерия H4 recover_collision."""
+    if not seen_fresh or not has_snap or s_aliases is None:
+        return False
+    if not _stub_aliases(t_aliases):
+        return False
+    sn, tn = _n_pipe(s_aliases), _n_pipe(t_aliases)
+    return sn >= 3 or sn > tn
+
+
+t("recover-crit: обрубок+хороший snap → восстановить",
+  should_recover(
+      "номенклатуры | товара",
+      "Вид Номенклатуры | Виды Номенклатуры | тип товара | номенклатура",
+      has_snap=True, seen_fresh=True) is True)
+t("recover-crit: хорошее новое (≥3) → НЕ трогать",
+  should_recover(
+      "акт сверки | сверка взаиморасчетов | акт сверки расчетов | остаток",
+      "акт сверки | сверка | взаиморасчёты | долг | расхождения",
+      has_snap=True, seen_fresh=True) is False)
+t("recover-crit: snap тоже плох → НЕ трогать",
+  should_recover(
+      "цен | и",
+      "цена | вид",
+      has_snap=True, seen_fresh=True) is False)
+t("recover-crit: нет в snap → НЕ трогать",
+  should_recover(
+      "номенклатуры | товара",
+      None,
+      has_snap=False, seen_fresh=True) is False)
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

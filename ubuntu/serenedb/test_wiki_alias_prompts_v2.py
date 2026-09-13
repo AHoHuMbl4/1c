@@ -48,6 +48,127 @@ t("collision: шаблон SHARED_WORD", "<SHARED_WORD>" in sh)
 t("collision: подстановка WORD", "${_WA_COLL//<SHARED_WORD>/$WORD}" in sh)
 t("collision: DISTINCTIVE в промте", "DISTINCTIVE" in sh)
 
+# ── G8a: collision V2 (H1) + PY2 инвариант записи (H3) ────────────────────────
+_wa_coll_m = re.search(r"_WA_COLL='((?:[^']|'\\'')*)'", sh)
+_wa_coll = _wa_coll_m.group(1) if _wa_coll_m else ""
+t("collision V2: роль disambiguation engine",
+  "disambiguation engine" in _wa_coll, _wa_coll[:80])
+# few-shot: два типа × bestUsedFor в полном JSON (не sketch)
+_fs = ""
+if "Good full output:" in _wa_coll:
+    _fs = _wa_coll.split("Good full output:", 1)[1].split("Bad:", 1)[0]
+t("collision V2: few-shot полный JSON (два bestUsedFor)",
+  _fs.count('"bestUsedFor"') == 2
+  and '"entity":"ent_partners"' in _fs
+  and '"entity":"ent_counterparties"' in _fs,
+  (_fs.count('"bestUsedFor"'), _fs[:120]))
+t("collision V2: quality over quantity",
+  "quality over quantity" in _wa_coll)
+# V0-маркеры — нейтральные подстроки без императивов: старое оформление
+# проверяем по уникальным V0-фразам-существительным. Gate-safe промта держит
+# гейт коммита (check-prompt-rules, бьёт по добавленным литералам) — в замке
+# не дублируем: любой паттерн триггеров в тесте сам стал бы триггером.
+_v0_meta = "platform meta-labels"
+_v0_contrast = "empty contrast"
+_v0_exact = "exactly 1 or 2"
+t("collision V2: позитив (нет V0 meta-labels списка)",
+  _v0_meta not in _wa_coll
+  and "concrete everyday words a person would type" in _wa_coll)
+t("collision V2: contrast в позитивной форме (whole asking-words)",
+  "give contrast with whole asking-words" in _wa_coll
+  and _v0_exact not in _wa_coll
+  and "quality over quantity" in _wa_coll)
+
+# H3: маркеры skip-ветки в PY2 (не в init)
+_py2 = ""
+if "<<'PY2'" in sh:
+    _py2 = sh.split("<<'PY2'", 1)[1].split("PY2\n", 1)[0]
+t("collision H3: маркер skip-ветки is_title_fb / degenerate",
+  "is_title_fb" in _py2
+  and "degenerate after filter" in _py2
+  and "len(aliases) < 2" in _py2)
+t("collision H3: лог-строка в PY2",
+  "collision row skipped (degenerate after filter):" in _py2
+  and "kept previous" in _py2)
+
+# Живой вызов сборщика rows: извлекаем PY2 из sh и прогоняем фикстуры
+import json as _json
+import tempfile as _tf
+import subprocess as _sp
+
+
+def _run_collision_py2(items, pay):
+    """Прогон реального PY2-heredoc из wiki_alias.sh на фикстуре."""
+    assert "<<'PY2'" in sh
+    body = sh.split("<<'PY2'\n", 1)[1].split("\nPY2\n", 1)[0]
+    with _tf.TemporaryDirectory() as td:
+        td = Path(td)
+        ans = td / "ans"
+        payf = td / "pay"
+        rowsf = td / "rows.json"
+        ans.write_text(
+            _json.dumps({"payloads": [{"text": _json.dumps(
+                {"items": items}, ensure_ascii=False)}]}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        payf.write_text(_json.dumps(pay, ensure_ascii=False), encoding="utf-8")
+        r = _sp.run(
+            [sys.executable, "-c", body, str(ans), str(payf), str(rowsf)],
+            cwd=str(HERE),
+            capture_output=True,
+            text=True,
+        )
+        rows = _json.loads(rowsf.read_text(encoding="utf-8") or "[]")
+        return rows, r.stderr, r.returncode
+
+
+_deg_items = [{
+    "entity": "ent_a",
+    "aliases": ["ок"],
+    "bestUsedFor": ["x"],
+    "notEnoughFor": ["y"],
+}]
+_deg_pay = [{"entity": "ent_a", "title": "Сущность А", "quantities": ""}]
+_deg_rows, _deg_err, _deg_rc = _run_collision_py2(_deg_items, _deg_pay)
+t("collision H3: [['ок']] → строка пропущена",
+  _deg_rc == 0 and _deg_rows == []
+  and "collision row skipped (degenerate after filter): ent_a" in _deg_err
+  and "kept previous" in _deg_err,
+  (_deg_rows, _deg_err[:200], _deg_rc))
+
+# фикстура: две сущности с ≥2 aliases len≥4 → обе записаны
+_ok_items = [
+    {"entity": "ent_a", "aliases": ["фраза нормальная", "вторая фраза"],
+     "bestUsedFor": ["x"], "notEnoughFor": ["y"]},
+    {"entity": "ent_b", "aliases": ["фраза нормальная", "вторая фраза"],
+     "bestUsedFor": ["x"], "notEnoughFor": ["y"]},
+]
+_ok_pay = [
+    {"entity": "ent_a", "title": "Тип А", "quantities": ""},
+    {"entity": "ent_b", "title": "Тип Б", "quantities": ""},
+]
+_ok_rows, _ok_err, _ok_rc = _run_collision_py2(_ok_items, _ok_pay)
+t("collision H3: две нормальные фразы → обе сущности записаны",
+  _ok_rc == 0 and len(_ok_rows) == 2
+  and {r["src_table"] for r in _ok_rows} == {"ent_a", "ent_b"}
+  and "degenerate after filter" not in _ok_err,
+  (_ok_rows, _ok_err[:200], _ok_rc))
+
+# title-fallback [title] — валиден (одна строка = title)
+_tf_items = [{
+    "entity": "ent_tf",
+    "aliases": ["справочник"],
+    "bestUsedFor": ["x"],
+    "notEnoughFor": ["y"],
+}]
+_tf_pay = [{"entity": "ent_tf", "title": "Банки", "quantities": ""}]
+_tf_rows, _tf_err, _tf_rc = _run_collision_py2(_tf_items, _tf_pay)
+t("collision H3: title-fallback [title] → записан",
+  _tf_rc == 0 and len(_tf_rows) == 1
+  and _tf_rows[0]["aliases"] == "Банки"
+  and "degenerate after filter" not in _tf_err,
+  (_tf_rows, _tf_err[:200], _tf_rc))
+
 # ── (б) filter_entity_aliases meta ───────────────────────────────────────────
 got = P.filter_entity_aliases(
     ["список", "справочник", "тмц", "склад", "номенклатура", "покупатель"])
