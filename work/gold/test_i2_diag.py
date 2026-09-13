@@ -154,6 +154,75 @@ def main() -> int:
           isinstance(web.get("wiki"), dict)
           and web["wiki"].get("wiki_verify_error") == 1)
 
+    # J-4: корзины clarify_menu vs honest_no
+    v_menu = I2.classify_verdict(
+        text="1. Продажи\n2. Отгрузки",
+        etalon="100",
+        kind="clarify",
+        options=[{"label": "Продажи"}, {"label": "Отгрузки"}],
+    )
+    t("clarify+menu → clarify_menu",
+      v_menu == I2.VERDICT_CLARIFY_MENU)
+    t("clarify+menu not honest_no",
+      v_menu != I2.VERDICT_HONEST_NO)
+    t("clarify empty → honest_no",
+      I2.classify_verdict(
+          text="Уточните?", etalon="100", kind="clarify", options=[],
+      ) == I2.VERDICT_HONEST_NO)
+    t("no_data → honest_no",
+      I2.classify_verdict(text="нет данных", etalon="no_data", kind="no_data")
+      == I2.VERDICT_HONEST_NO)
+
+    menu_ans = I2.PathAnswer(
+        path=I2.PATH_ENGINE,
+        text="1. Продажи\n2. Отгрузки",
+        kind="clarify",
+        options=[{"label": "Продажи"}, {"label": "Отгрузки"}],
+        latency_s=0.1,
+    )
+    empty_ans = I2.PathAnswer(
+        path=I2.PATH_ENGINE,
+        text="Уточните?",
+        kind="clarify",
+        options=[],
+        latency_s=0.1,
+    )
+    nodata_ans = I2.PathAnswer(
+        path=I2.PATH_ENGINE,
+        text="нет",
+        kind="no_data",
+        latency_s=0.1,
+    )
+    with tempfile.TemporaryDirectory() as td:
+        I2.run_i2(
+            [
+                I2.QuestionRow(question="q-menu", etalon="100", engine=None),
+                I2.QuestionRow(question="q-empty", etalon="100", engine=None),
+                I2.QuestionRow(question="q-nodata", etalon="no_data", engine=None),
+            ],
+            paths=[I2.PATH_ENGINE],
+            engine_ask=lambda q: (
+                menu_ans if q == "q-menu"
+                else empty_ans if q == "q-empty"
+                else nodata_ans
+            ),
+            out_dir=td,
+            workers=1,
+        )
+        summary = json.load(
+            open(os.path.join(td, "i2-summary.json"), encoding="utf-8"))
+        eng_s = summary.get("engine") or {}
+        t("summary содержит clarify_menu",
+          "clarify_menu" in eng_s
+          and eng_s.get("clarify_menu") == 1
+          and eng_s.get("honest_no") == 2
+          and (eng_s.get("counts") or {}).get("clarify_menu") == 1,
+          eng_s)
+        report = open(
+            os.path.join(td, "i2-report.md"), encoding="utf-8").read()
+        t("report показывает clarify_menu",
+          "clarify_menu" in report, report[:240])
+
     print("---", PASS, "ok,", len(FAIL), "fail")
     return 1 if FAIL else 0
 

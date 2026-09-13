@@ -896,6 +896,128 @@ def wiki_homonym_kind_peers(passports, focus_src):
     return peers if len(peers) >= 2 else []
 
 
+# OData-префиксы, для которых COUNT строк — штатная мера таблицы (не quantity паспорта).
+_WIKI_COUNT_IDENTITY_KINDS = frozenset((
+    "accumulationregister",
+    "informationregister",
+    "calculationregister",
+    "accountingregister",
+    "document",
+))
+
+
+def _wiki_count_row_intent(intent):
+    """want=count: вопрос про число строк/записей сущности, не про меру паспорта."""
+    want = str((intent or {}).get("want") or "").strip().lower()
+    return want == "count"
+
+
+def _wiki_count_identity_candidate(passport):
+    return _card_odata_kind(passport) in _WIKI_COUNT_IDENTITY_KINDS
+
+
+def _wiki_parse_ts_lexize(v):
+    """Ответ `ts_lexize` → множество лексем (как z02._stem_set: `{a,b}`)."""
+    try:
+        return _stem_set(v)
+    except NameError:
+        if isinstance(v, (list, tuple)):
+            return {str(x) for x in v if str(x)}
+        s = str(v or "").strip()
+        if s.startswith("{") and s.endswith("}"):
+            s = s[1:-1]
+        return {p.strip().strip('"') for p in s.split(",") if p.strip()}
+
+
+def _wiki_ts_lexize_sets(words):
+    """Лексемы токенов через STEM_DICT (`ts_lexize`). None = канал недоступен.
+
+    Доки: Sql › Functions › Search › Full-Text → `ts_lexize(dictionary, text)`.
+    Канал тот же, что z02.same_concept_groups / z05.entity_form_*: psql + STEM_DICT.
+    Intent лексем вопроса не несёт — нового SQL сверх этого канала нет.
+    """
+    words = [str(w) for w in (words or []) if str(w or "").strip()]
+    if not words:
+        return []
+    try:
+        cols = ["ts_lexize(%s, %s)" % (lit(STEM_DICT), lit(w)) for w in words]
+        row = psql("SELECT " + ", ".join(cols))[0]
+    except (RuntimeError, IndexError, TypeError, NameError):
+        return None
+    return [frozenset(_wiki_parse_ts_lexize(row[i] if i < len(row) else ""))
+            for i in range(len(words))]
+
+
+def _wiki_entity_named_in_question(passport, question):
+    """Тождество сущности вопросу: stem/name паспорта ↔ формулировка (склейка/слова).
+
+    Число строк SQL после pick считает; здесь только «та ли сущность названа».
+    Слова — по лексемам STEM_DICT. Нет ts_lexize (оффлайн/DSN) — строгое
+    равенство `_homonym_norm` токенов (ветка без падежной близости).
+    """
+    keys = _homonym_keys(passport)
+    qn = _homonym_norm(question or "")
+    for k in keys:
+        if len(k) >= 4 and k in qn:
+            return True
+    name = (passport or {}).get("name") or ""
+    name_words = [
+        w for w in re.findall(r"[а-яёa-z0-9]+", _norm_ye(name)) if len(w) >= 3]
+    if not name_words:
+        return False
+    q_words = re.findall(r"[а-яёa-z0-9]+", _norm_ye(question or ""))
+    if not q_words:
+        return False
+    lex = _wiki_ts_lexize_sets(list(name_words) + list(q_words))
+    if lex is None:
+        # Граница: без STEM_DICT — только `_homonym_norm`, без самописного стеммера.
+        q_set = {_homonym_norm(w) for w in q_words}
+        return all(_homonym_norm(nw) in q_set for nw in name_words)
+    n = len(name_words)
+    name_sets, q_sets = lex[:n], lex[n:]
+    for nw, ns in zip(name_words, name_sets):
+        hit = False
+        for qw, qs in zip(q_words, q_sets):
+            if ns and qs and (ns & qs):
+                hit = True
+                break
+            if _homonym_norm(nw) == _homonym_norm(qw):
+                hit = True
+                break
+        if not hit:
+            return False
+    return True
+
+
+def _wiki_apply_count_identity_verdicts(verdicts, passports, question, intent):
+    """want=count + регистр/документ: fit = тождество сущности, не меры паспорта.
+
+    Чужая сущность остаётся no. Каталоги и не-count — вердикты модели без сдвига.
+    """
+    if not _wiki_count_row_intent(intent):
+        return list(verdicts or [])
+    by_idx = {
+        v["index"]: dict(v) for v in (verdicts or [])
+        if isinstance(v, dict) and v.get("index") is not None}
+    out = []
+    for i, p in enumerate(passports or [], 1):
+        if not _wiki_count_identity_candidate(p):
+            if i in by_idx:
+                out.append(by_idx[i])
+            continue
+        hit = _wiki_entity_named_in_question(p, question)
+        prev = by_idx.get(i) or {}
+        if hit:
+            why = prev.get("why") if prev.get("fit") == "yes" else (
+                "entity matches question; row count via SQL")
+            out.append({"index": i, "fit": "yes", "why": str(why or "")[:200]})
+        else:
+            why = prev.get("why") if prev.get("fit") == "no" else (
+                "entity does not match question")
+            out.append({"index": i, "fit": "no", "why": str(why or "")[:200]})
+    return out
+
+
 def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
     """Исход верификации: leader / clarify / none (код, без «лучший из плохих»)."""
     diag = dict(diag or {})
@@ -977,7 +1099,8 @@ def _wiki_verify_fit_buckets(verdicts, n_passports):
 
 
 def _wiki_verify_confirm_sole_yes(
-        ask_text, listing, full, first_verdicts, first_leader, diag):
+        ask_text, listing, full, first_verdicts, first_leader, diag,
+        question=None, intent=None):
     """Согласие на sole-yes: второй вызов тому же судье (I0-П2b).
 
     agree — parse2=full, ровно n вердиктов, один yes|unsure = лидер₁, остальные no.
@@ -1024,6 +1147,9 @@ def _wiki_verify_confirm_sole_yes(
             "verdicts": first_verdicts,
             "diag": diag,
         }
+    # J-2: тот же identity-override на втором вызове (confirm не переворачивает count).
+    verdicts2 = _wiki_apply_count_identity_verdicts(
+        verdicts2, full, question if question is not None else ask_text, intent)
     yes2, unsure2, no2 = _wiki_verify_fit_buckets(verdicts2, n)
     diag["wiki_verify2_yes"] = len(yes2)
     diag["wiki_verify2_unsure"] = len(unsure2)
@@ -1123,6 +1249,9 @@ def wiki_verify_candidates(question, intent, cards, diag=None):
         diag["wiki_verdicts"] = []
         return {"outcome": "degraded", "verdicts": [], "diag": diag}
     diag["wiki_verify_n"] = len(full)
+    # J-2: count строк регистра/документа — fit по тождеству сущности, не по мерам.
+    verdicts = _wiki_apply_count_identity_verdicts(
+        verdicts, full, question, intent)
     resolved = wiki_outcome_from_verify(verdicts, full, intent, diag=diag)
     resolved["verdicts"] = verdicts
     d = dict(resolved.get("diag") or diag)
@@ -1134,7 +1263,7 @@ def wiki_verify_candidates(question, intent, cards, diag=None):
             and not d.get("wiki_verify_error")):
         confirmed = _wiki_verify_confirm_sole_yes(
             ask_text, listing, full, verdicts,
-            resolved.get("leader"), d)
+            resolved.get("leader"), d, question=question, intent=intent)
         if confirmed is not None:
             confirmed["verdicts"] = confirmed.get("verdicts") or verdicts
             cd = dict(confirmed.get("diag") or d)
@@ -1374,17 +1503,30 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
         except RuntimeError:
             lab_by = {}
         opts = mk_opts(tied, lab_by, {}, by or {}, match=match or "", preds=preds or [])
+        # J-1: keep_empty срезал ≥2 tied → <2. Меню из исходных tied (п.21:
+        # данные/прочтения есть — человек выберет). Не лидер из одного живого
+        # (красная отвергла демоцию; единственный unsure = догадка п.12).
+        if len(tied) >= 2 and len(opts) < 2:
+            opts = mk_opts(tied, lab_by, {}, by or {}, match=match or "",
+                           preds=None)
         if len(opts) >= 2:
             # В4: равные числа → меню (1-Б); подписи из паспортов verify-кандидатов.
             # S2-d-(а): clarify только через единый построитель (не bare Dict).
             _pmap = wiki_captions_map_from_cards(pick.get("candidates") or [])
             opts = wiki_menu_captions(opts, passports_by_src=_pmap)
-            return readings_menu(
+            menu = readings_menu(
                 question, "entity", opts, diag, cut, t0,
                 reason="wiki_separability")
-        # Меню не собралось (пустое окно / keep_empty) — честный reason.
+            if menu is not None:
+                return menu
+        # J-1: wiki_pick=clarify не уходит в kind=no_data. При <2 опций
+        # (sole-unsure / builder None) — demote в "none": каскад идёт обычным
+        # путём none. Не kind=clarify с 1 пунктом: readings_menu требует ≥2.
         if diag.get("wiki_degraded"):
             diag["wiki_pick"] = "wiki_degraded"
+        else:
+            diag["wiki_pick"] = "none"
+            diag["wiki_none"] = diag.get("wiki_none") or "clarify_lt2"
     leader = pick.get("leader")
     if leader:
         if not wiki_leader_post_verify(leader, intent, question, diag):

@@ -48,9 +48,32 @@ t("collision: шаблон SHARED_WORD", "<SHARED_WORD>" in sh)
 t("collision: подстановка WORD", "${_WA_COLL//<SHARED_WORD>/$WORD}" in sh)
 t("collision: DISTINCTIVE в промте", "DISTINCTIVE" in sh)
 
+# ── J-3: spoken action/event forms в aliases (init + collision) ───────────────
+# Общий канал генератора: event-формы — в aliases (пул читает aliases @@).
+# Маркер без wordlist и без императивов-запретов (п.0 + check-prompt-rules).
+_j3_mark = "spoken action/event forms people use when asking about events"
+_j3_n = sh.count(_j3_mark)
+t("J-3: event-формы в aliases — маркер ×4 (init×3 + collision)",
+  _j3_n == 4, _j3_n)
+t("J-3: init-aliases содержат event-маркер (BANS-строки)",
+  all(_j3_mark in m.group(0)
+      for m in re.finditer(
+          r"printf '%s' \"JSON only[^\n]*CLOSE IN MEANING[^\n]*\"", sh)),
+  _j3_n)
+# wordlist L67 — в каноне промтов отсутствовать (как мета-слова не чеклистом RU)
+for _w in ("наторговали", "сделали", "вышло", "покупают"):
+    t("J-3: нет wordlist «%s»" % _w, _w not in sh)
+
 # ── G8a: collision V2 (H1) + PY2 инвариант записи (H3) ────────────────────────
 _wa_coll_m = re.search(r"_WA_COLL='((?:[^']|'\\'')*)'", sh)
 _wa_coll = _wa_coll_m.group(1) if _wa_coll_m else ""
+t("J-3: collision содержит event-маркер",
+  _j3_mark in _wa_coll, _wa_coll[200:320] if _wa_coll else "empty")
+t("J-3 антикаша: event под отличительностью THIS type",
+  "distinctive for THIS type among" in _wa_coll
+  and _j3_mark in _wa_coll
+  and "1-2 DISTINCTIVE" in _wa_coll,
+  ("distinctive" in _wa_coll, _j3_mark in _wa_coll))
 t("collision V2: роль disambiguation engine",
   "disambiguation engine" in _wa_coll, _wa_coll[:80])
 # few-shot: два типа × bestUsedFor в полном JSON (не sketch)

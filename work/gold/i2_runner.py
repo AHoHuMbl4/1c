@@ -72,12 +72,14 @@ PATH_WEB = "web"
 
 VERDICT_MATCH = "match"
 VERDICT_HONEST_NO = "honest_no"
+VERDICT_CLARIFY_MENU = "clarify_menu"
 VERDICT_CONFIDENT_WRONG = "confident_wrong"
 VERDICT_UNRESOLVED = "unresolved"
 
 _ALL_VERDICTS = (
     VERDICT_MATCH,
     VERDICT_HONEST_NO,
+    VERDICT_CLARIFY_MENU,
     VERDICT_CONFIDENT_WRONG,
     VERDICT_UNRESOLVED,
 )
@@ -89,9 +91,39 @@ _NUM_RE = re.compile(
 _CURRENCY_TAIL = re.compile(r"\s*(?:₽|руб\.?|р\.?|€|\$|usd|eur)\s*$", re.I)
 
 # Значения поля kind ответа /ask (PIPELINE.md §«kind HTTP-ответа»), не словари фраз.
-_KIND_HONEST = frozenset({"clarify", "no_data", "unavailable"})
+# clarify вынесен: с меню → clarify_menu; без меню (clarify_empty) → honest_no.
+# honest_no = «нет ответа без меню» (no_data/unavailable/clarify_empty), не переспрос.
+_KIND_HONEST = frozenset({"no_data", "unavailable"})
 _KIND_ANSWER = frozenset({"answer", "figures"})
 
+
+def labeled_clarify_options(options: Optional[list] = None) -> list:
+    """Опции clarify с человеческой подписью (label|measure), как clarify_opts_response."""
+    out: list = []
+    for o in options or []:
+        if not isinstance(o, dict):
+            continue
+        lab = (o.get("label") or o.get("measure") or "")
+        if isinstance(lab, str) and lab.strip():
+            out.append(o)
+    return out
+
+
+def options_from_payload(data: Any) -> list:
+    """options[] из того же конверта, что ask_fields_from_payload."""
+    if not isinstance(data, dict):
+        return []
+    candidates: list[dict] = [data]
+    for key in ("ask", "ask_result", "result", "data"):
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            candidates.append(nested)
+    for cand in candidates:
+        k = cand.get("kind")
+        if isinstance(k, str) and k.strip():
+            opts = cand.get("options")
+            return list(opts) if isinstance(opts, list) else []
+    return []
 
 def numify_token(tok: str) -> Optional[float]:
     s = re.sub(r"[%s]" % _SP, "", (tok or "").strip())
@@ -265,13 +297,19 @@ def classify_verdict(
     diag: Optional[dict] = None,
     transport_error: str = "",
     nums: Optional[list[float]] = None,
+    options: Optional[list] = None,
 ) -> str:
     """Механический вердикт И2 по полям ответа /ask, не по фразам текста.
 
-    kind ∈ {clarify, no_data, unavailable} → honest_no;
+    kind=clarify + ≥1 option с label|measure → clarify_menu (штатный переспрос);
+    kind=clarify без меню (clarify_empty) → honest_no;
+    kind ∈ {no_data, unavailable} → honest_no;
     kind ∈ {answer, figures} + число = эталон → match, иначе confident_wrong;
     diag.found == 0 или diag.doubt is True при числе → confident_wrong;
     нет kind / транспорт / пусто → unresolved.
+
+    honest_no с J-4: «нет ответа без меню»; clarify с меню сюда не входит
+    (обратная совместимость ключа, смысл сужен — TARGET п.12/21).
     """
     if transport_error:
         return VERDICT_UNRESOLVED
@@ -292,9 +330,13 @@ def classify_verdict(
     # служебные числа («рассмотрено 60/76») и пустой found, но это отказ,
     # а не «число при нулевой находке». Живой случай: «остатки по всем трём
     # складам сразу» — no_data при no_data-эталоне получал confident_wrong.
+    # [J-4] clarify с меню — отдельная корзина; пустой clarify → honest_no.
+    if k == "clarify":
+        if labeled_clarify_options(options):
+            return VERDICT_CLARIFY_MENU
+        return VERDICT_HONEST_NO  # clarify_empty
     if k in _KIND_HONEST:
         return VERDICT_HONEST_NO
-
     matches_raw = diag.get("found")
     if matches_raw is not None and nums and not diag.get("period_window_empty"):
         try:
@@ -338,6 +380,7 @@ class PathAnswer:
     kind: str = ""
     diag: dict = field(default_factory=dict)
     nums: list[float] = field(default_factory=list)
+    options: list = field(default_factory=list)
     latency_s: float = 0.0
     transport_error: str = ""
     verdict: str = VERDICT_UNRESOLVED
@@ -345,7 +388,6 @@ class PathAnswer:
     def __post_init__(self) -> None:
         if not self.nums and self.text:
             self.nums = extract_numbers(self.text)
-
 
 @dataclass
 class QuestionRow:
@@ -641,6 +683,7 @@ def ask_engine(
         kind=kind,
         diag=diag,
         nums=nums,
+        options=options_from_payload(data),
         latency_s=lat,
     )
 
@@ -680,6 +723,7 @@ def ask_web(
         kind=kind,
         diag=diag,
         nums=nums,
+        options=options_from_payload(data),
         latency_s=lat,
     )
 
@@ -692,9 +736,9 @@ def _apply_verdict(row: QuestionRow, ans: PathAnswer) -> PathAnswer:
         diag=ans.diag,
         transport_error=ans.transport_error,
         nums=ans.nums if ans.nums else None,
+        options=ans.options,
     )
     return ans
-
 
 def run_path(
     rows: list[QuestionRow],
@@ -728,22 +772,36 @@ def run_path(
 def summarize(rows: list[QuestionRow], path: str) -> dict[str, Any]:
     n = len(rows)
     counts = {v: 0 for v in _ALL_VERDICTS}
+    clarify_empty = 0
     for row in rows:
         ans = row.engine if path == PATH_ENGINE else row.web
         if ans is None:
             counts[VERDICT_UNRESOLVED] += 1
         else:
             counts[ans.verdict] = counts.get(ans.verdict, 0) + 1
+            # clarify_empty: kind=clarify без меню → verdict=honest_no (метка подкорзины)
+            if (
+                (ans.kind or "").strip().lower() == "clarify"
+                and ans.verdict == VERDICT_HONEST_NO
+            ):
+                clarify_empty += 1
     honest = counts.get(VERDICT_HONEST_NO, 0)
+    clarify_menu = counts.get(VERDICT_CLARIFY_MENU, 0)
+    match_n = counts.get(VERDICT_MATCH, 0)
+    # honest_no: нет ответа без меню (no_data/unavailable/clarify_empty).
+    # clarify_menu сюда НЕ входит (ключ сохранён; смысл с J-4 сужен).
     return {
         "path": path,
         "total": n,
         "counts": counts,
+        "match": match_n,
         "confident_wrong": counts.get(VERDICT_CONFIDENT_WRONG, 0),
         "honest_no": honest,
         "honest_no_share": round(honest / n, 4) if n else 0.0,
+        "clarify_menu": clarify_menu,
+        "clarify_menu_share": round(clarify_menu / n, 4) if n else 0.0,
+        "clarify_empty": clarify_empty,
     }
-
 
 def format_report(
     rows: list[QuestionRow],
@@ -769,14 +827,19 @@ def format_report(
             continue
         cw = s["confident_wrong"]
         n = s["total"]
+        cm = s.get("clarify_menu", 0)
         lines.append(
-            "## %s: уверенно неверных = %d из %d; honest_no = %d (%.1f%%)"
+            "## %s: match = %d; honest_no = %d (%.1f%%); "
+            "clarify_menu = %d (%.1f%%); уверенно неверных = %d из %d"
             % (
                 key,
-                cw,
-                n,
+                s.get("match", 0),
                 s["honest_no"],
                 100.0 * s["honest_no_share"],
+                cm,
+                100.0 * s.get("clarify_menu_share", 0.0),
+                cw,
+                n,
             )
         )
         lines.append("вердикты: " + json.dumps(s["counts"], ensure_ascii=False))

@@ -939,6 +939,72 @@ def main() -> int:
       and diag_e.get("wiki_pick_hint") == "catalog_a",
       diag_e)
 
+    # ── J-1: clarify <2 / keep_empty ─────────────────────────────────────────
+    # (а) sole-unsure: verify-clarify с 1 кандидатом при пуле≥2 →
+    #     wiki_pick был clarify; после — demote none (не лидер, п.12).
+    z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(2)
+    z21["wiki_pick_from_cards"] = lambda q, intent, cards, diag=None: {
+        "outcome": "leader", "leader": "catalog_a", "diag": diag or {}}
+    z21["wiki_verify_candidates"] = lambda q, intent, cards, diag=None: {
+        "outcome": "clarify",
+        "candidates": list(cards)[:1],
+        "diag": dict(diag or {})}
+    z21["mk_opts"] = lambda srcs, lab_by, *a, **k: [
+        {"label": lab_by.get(s, s), "src": s} for s in srcs]
+    z21["psql"] = lambda q: (
+        [("catalog_a", "Alpha"), ("catalog_b", "Beta")]
+        if "search_tables" in str(q) else [("x",)])
+    diag_j1a = {}
+    res_j1a = z21["try_wiki_hybrid_entity_pick"](
+        "q", {}, diag_j1a, None, 0, by={}, match="", preds=[])
+    t("J-1a sole-unsure clarify<2 → None без wiki_pick=clarify",
+      res_j1a is None
+      and diag_j1a.get("wiki_pick") != "clarify"
+      and diag_j1a.get("wiki_pick") == "none",
+      {"res": res_j1a, "pick": diag_j1a.get("wiki_pick")})
+
+    # (б) ≥2 tied, keep_empty оставил 1 → меню из исходных tied, не отказ
+    z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(2)
+
+    def _pick_clarify2(q, intent, cards, diag=None):
+        d = diag if diag is not None else {}
+        d["wiki_pick"] = "clarify"
+        return {"outcome": "clarify",
+                "candidates": list(cards)[:2], "diag": d}
+
+    z21["wiki_pick_from_cards"] = _pick_clarify2
+    z21["wiki_verify_candidates"] = lambda q, intent, cards, diag=None: {
+        "outcome": "clarify",
+        "candidates": list(cards)[:2],
+        "diag": dict(diag or {})}
+
+    def _mk_opts_keep(srcs, lab_by, marks=None, by=None, match="",
+                      preds=None, live=None):
+        # preds is not None — как keep_empty: срез до 1; preds=None — все tied
+        if preds is not None and srcs:
+            return [{"label": lab_by.get(srcs[0], srcs[0]), "src": srcs[0]}]
+        return [{"label": lab_by.get(s, s), "src": s} for s in (srcs or [])]
+
+    z21["mk_opts"] = _mk_opts_keep
+    z21["psql"] = lambda q: (
+        [("catalog_a", "Alpha"), ("catalog_b", "Beta")]
+        if "search_tables" in str(q) else [("x",)])
+    diag_j1b = {}
+    res_j1b = z21["try_wiki_hybrid_entity_pick"](
+        "q", {}, diag_j1b, None, 0, by={}, match="",
+        preds=["doc_date >= 'x'"])
+    t("J-1b keep_empty ≥2→1 → меню из tied, не отказ",
+      res_j1b and res_j1b.get("kind") == "clarify"
+      and len(res_j1b.get("options") or []) >= 2
+      and diag_j1b.get("wiki_pick") == "clarify",
+      {"res": res_j1b, "pick": diag_j1b.get("wiki_pick")})
+
+    # (в) инвариант: финальный wiki_pick=clarify ⇒ kind=clarify и ≥1 option
+    t("J-1c wiki_pick=clarify ⇒ kind=clarify ≥1 option",
+      not (diag_j1b.get("wiki_pick") == "clarify"
+           and not (res_j1b and res_j1b.get("kind") == "clarify"
+                    and len(res_j1b.get("options") or []) >= 1)))
+
     # (в) щель «pass» закрыта: verify-degraded после pick-leader
     # не оставляет leader в pick (мутация pass → краснеет)
     try_src = z21_src
@@ -949,6 +1015,151 @@ def main() -> int:
       "if verify.get(\"outcome\") == \"degraded\":\n            pass"
       not in try_body
       and "wiki_degraded" in try_body)
+
+    # J-2: want=count + регистр — fit по тождеству сущности, не по мерам паспорта.
+    # P5/J-1 подменяли wiki_verify_candidates в ns — перезагрузка чистого модуля.
+    z21 = load_z21()
+    # Мок судьи всегда all-no (как ложный verify_none на «движений»).
+    def _all_no_verify(*a, **k):
+        content = ""
+        if a and isinstance(a[0], (list, tuple)) and a[0]:
+            content = str((a[0][-1] or {}).get("content") or "")
+        n = max(1, content.count("passport\n"))
+        return json.dumps({
+            "verdicts": [
+                {"index": i, "fit": "no",
+                 "why": "passport has no movement count measure"}
+                for i in range(1, n + 1)]})
+
+    # Оффлайн-STEM_DICT: ts_lexize → лексемы (контракт z02._stem_set `{a,b}`).
+    # Без списка домена — только формы контрольных пар J-2.
+    _J2_LEX = {
+        "реализации": "{реализац}", "реализация": "{реализац}",
+        "закупки": "{закупк}", "тмц": "{тмц}",
+        "книга": "{книг}", "продаж": "{продаж}", "продажи": "{продаж}",
+        "номера": "{номер}", "бсо": "{бсо}",
+        "покупок": "{покупк}", "покупки": "{покупк}",
+    }
+
+    def _psql_j2_lex(q):
+        qs = str(q)
+        if "ts_lexize" not in qs:
+            return []
+        words = re.findall(r"ts_lexize\('(?:russian|search_dict_stem)',\s*'([^']*)'\)", qs)
+        if not words:
+            words = re.findall(r"ts_lexize\([^,]+,\s*'([^']*)'\)", qs)
+        row = []
+        for w in words:
+            key = w.lower().replace("ё", "е")
+            row.append(_J2_LEX.get(key, "{%s}" % key))
+        return [row] if row else []
+
+    reg_ok = [{
+        "src_table": "accumulationregister_книгапокупок",
+        "name": "Книга Покупок",
+        "description": "purchase book register",
+        "axes": "Контрагент",
+        "measures": "Всего; СуммаНДС",
+        "distance": 0.1,
+        "platform_kind": "регистр",
+        "parent": "",
+    }]
+    reg_other = [{
+        "src_table": "accumulationregister_реализациятмц",
+        "name": "Реализация ТМЦ",
+        "description": "sales register",
+        "axes": "Номенклатура",
+        "measures": "Сумма; Количество",
+        "distance": 0.2,
+        "platform_kind": "регистр",
+        "parent": "",
+    }]
+    reg_bso = [{
+        "src_table": "accumulationregister_номерабсо",
+        "name": "Номера БСО",
+        "description": "bso numbers",
+        "axes": "Номер",
+        "measures": "Количество",
+        "distance": 0.1,
+        "platform_kind": "регистр",
+        "parent": "",
+    }]
+    reg_sales = [{
+        "src_table": "accumulationregister_книгапродаж",
+        "name": "Книга продаж",
+        "description": "sales book",
+        "axes": "Контрагент",
+        "measures": "Всего",
+        "distance": 0.1,
+        "platform_kind": "регистр",
+        "parent": "",
+    }]
+    z21["psql"] = _psql_j2_lex
+    z21["ds_chat"] = _all_no_verify
+    z21["wiki_validate_leader_axes"] = lambda *a, **k: True
+
+    named = z21["_wiki_entity_named_in_question"]
+    # Контрольные пары (склейка + лексемы + чужая сущность).
+    t("J-2 named: номерабсо ↔ Номера БСО",
+      named(reg_bso[0], "номерабсо") is True)
+    t("J-2 named: закупки ↔ Реализация ТМЦ",
+      named(reg_other[0], "закупки") is False)
+    t("J-2 named: реализации ТМЦ ↔ Реализация ТМЦ",
+      named(reg_other[0], "реализации ТМЦ") is True)
+    t("J-2 named: реализации ↔ Реализация",
+      named({"name": "Реализация", "src_table": "document_x"},
+            "реализации") is True)
+    t("J-2 named: книгапродаж ↔ Книга продаж",
+      named(reg_sales[0], "книгапродаж") is True)
+    # Без ts_lexize — строгое `_homonym_norm` по словам (склейка keys не
+    # спасает: реализациятмц ∉ реализациитмц). Падеж не схлопывается.
+    z21["psql"] = lambda q: (_ for _ in ()).throw(RuntimeError("no dsn"))
+    t("J-2 named offline: реализации ТМЦ ≠ Реализация ТМЦ (strict)",
+      named(reg_other[0], "реализации ТМЦ") is False)
+    z21["psql"] = _psql_j2_lex
+
+    # Нет самописного префиксного стеммера (≥4/≤2).
+    t("J-2 no _wiki_word_stem_close",
+      "_wiki_word_stem_close" not in z21
+      and "len(a) - n <= 2" not in Z21.read_text(encoding="utf-8"))
+
+    q_count_ok = 'Сколько движений в регистре «книгапокупок»?'
+    out_j2_ok = z21["wiki_verify_candidates"](
+        q_count_ok, {"want": "count"}, reg_ok, {})
+    t("J-2 count + matching register → not verify_none",
+      out_j2_ok.get("outcome") == "leader"
+      and out_j2_ok.get("leader") == "accumulationregister_книгапокупок",
+      (out_j2_ok.get("outcome"), out_j2_ok.get("leader"),
+       out_j2_ok.get("reason")))
+
+    q_count_foreign = 'Сколько движений в регистре «книгапокупок»?'
+    out_j2_no = z21["wiki_verify_candidates"](
+        q_count_foreign, {"want": "count"}, reg_other, {})
+    t("J-2 count + foreign entity → honest none",
+      out_j2_no.get("outcome") == "none"
+      and (out_j2_no.get("reason") or "") == "verify_none",
+      (out_j2_no.get("outcome"), out_j2_no.get("reason")))
+
+    # не-count (want=sum): all-no модели остаётся none — identity-override не трогает.
+    out_j2_sum = z21["wiki_verify_candidates"](
+        q_count_ok, {"want": "sum", "measure": "СуммаНДС"}, reg_ok, {})
+    t("J-2 non-count measure keeps prior verify_none",
+      out_j2_sum.get("outcome") == "none"
+      and (out_j2_sum.get("reason") or "") == "verify_none",
+      (out_j2_sum.get("outcome"), out_j2_sum.get("reason")))
+
+    # пул из верного + чужого: sole identity-yes, чужой остаётся no.
+    pool_two = reg_ok + reg_other
+    out_j2_pool = z21["wiki_verify_candidates"](
+        q_count_ok, {"want": "count"}, pool_two, {})
+    t("J-2 count pool: matching sole leader, foreign no",
+      out_j2_pool.get("outcome") == "leader"
+      and out_j2_pool.get("leader") == "accumulationregister_книгапокупок"
+      and (out_j2_pool.get("diag") or {}).get("wiki_verify_yes") == 1
+      and (out_j2_pool.get("diag") or {}).get("wiki_verify_no") == 1,
+      (out_j2_pool.get("outcome"), out_j2_pool.get("leader"),
+       (out_j2_pool.get("diag") or {}).get("wiki_verify_yes"),
+       (out_j2_pool.get("diag") or {}).get("wiki_verify_confirm")))
 
     r = subprocess.run([sys.executable, "-m", "py_compile", str(Z21)],
                        capture_output=True, text=True)
