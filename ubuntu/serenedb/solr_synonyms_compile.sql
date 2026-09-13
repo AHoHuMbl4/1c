@@ -50,11 +50,14 @@ WITH raw AS (
          FROM :"alias_table"
         WHERE coalesce(trim(aliases), '') <> ''
      ),
+     -- Dual: ',' (CSV, escape \,) ИЛИ ' | ' (канон P4). Чистый CSV без pipe — как раньше.
      split AS (
        SELECT r.aliases,
               trim(t.term) AS term
          FROM raw r,
-              unnest(regexp_split_to_array(replace(r.aliases, '\\,', chr(1)), ',')) AS t(term)
+              unnest(regexp_split_to_array(
+                       replace(r.aliases, '\\,', chr(1)),
+                       ',| \\| ')) AS t(term)
         WHERE trim(t.term) <> ''
      ),
      unesc AS (

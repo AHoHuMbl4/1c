@@ -215,6 +215,34 @@ t("G6: collision PY2 зовёт extract_items_payload",
   "extract_items_payload" in _sh
   and "payload = extract_items_payload(text)" in _sh)
 
+# R4: stdout-контракт «0 разобранных» (оболочка читает числа sed/awk)
+ents0, meas0 = P.parse_items('{"items":[]}', PAY)
+t("R4: items=[] → 0 сущностей и 0 величин",
+  len(ents0) == 0 and len(meas0) == 0, (ents0, meas0))
+
+import io
+import tempfile
+from contextlib import redirect_stdout
+
+_td = tempfile.mkdtemp()
+try:
+    _ans = os.path.join(_td, "ans.json")
+    _pay = os.path.join(_td, "pay.json")
+    _rows = os.path.join(_td, "rows.json")
+    _meas = os.path.join(_td, "meas.json")
+    open(_ans, "w", encoding="utf-8").write('{"items":[]}\n')
+    open(_pay, "w", encoding="utf-8").write("[]\n")
+    _buf = io.StringIO()
+    with redirect_stdout(_buf):
+        _rc = P.main(["wiki_alias_parse.py", _ans, _pay, _rows, _meas])
+    _out = _buf.getvalue().strip()
+    t("R4: main items=[] → ровно «алиасов разобрано: 0, величин: 0»",
+      _rc == 0 and _out == "алиасов разобрано: 0, величин: 0",
+      (_rc, _out))
+finally:
+    import shutil
+    shutil.rmtree(_td, ignore_errors=True)
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

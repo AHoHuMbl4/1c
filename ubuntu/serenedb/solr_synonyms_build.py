@@ -56,13 +56,25 @@ def escape_term(term: str) -> str:
 
 
 def split_alias_csv(aliases: str) -> list[str]:
-    """Разобрать CSV алиасов; термы с экранированной запятой не режутся."""
+    """Разобрать aliases по ',' и ' | '; термы с экранированной запятой не режутся.
+
+    Паритет solr_synonyms_compile.sql: regexp ',| \\| ' после replace \\, → маркер.
+    Чистый CSV без pipe — прежнее поведение (регресс-ноль).
+    """
     out, cur, i, s = [], [], 0, aliases or ""
     while i < len(s):
         ch = s[i]
         if ch == "\\" and i + 1 < len(s):
             cur.append(s[i + 1])
             i += 2
+            continue
+        # ' | ' — канон P4 (до запятой: иначе "a, b | c" режется обоими)
+        if s.startswith(" | ", i):
+            t = "".join(cur).strip()
+            if t:
+                out.append(t)
+            cur = []
+            i += 3
             continue
         if ch == ",":
             t = "".join(cur).strip()

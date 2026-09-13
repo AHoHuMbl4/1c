@@ -728,6 +728,50 @@ t("branch_alias.sh: без --retry-items-json (форма forks, не items)",
   and '{"forks"' in _br,
   "comment+no-flag")
 
+# ── R4: rc0 + 0 разобранных → mark_skip (якорь + окно, не голый grep) ─────────
+# Entity: окно от первого вызова разбора до MERGE entity (до merge_entity.sql).
+_i_parse_e = sh.find('python3 ./wiki_alias_parse.py "$TMP/ans"')
+_i_merge_e = sh.find("wiki_alias_merge_entity.sql", _i_parse_e) if _i_parse_e >= 0 else -1
+_win_e = sh[_i_parse_e:_i_merge_e] if _i_parse_e >= 0 and _i_merge_e > _i_parse_e else ""
+t("R4 entity: окно parse→MERGE найдено",
+  bool(_win_e), (_i_parse_e, _i_merge_e))
+t("R4 entity: parse-0 → mark_skip до MERGE",
+  "wiki_alias_mark_skip.sql" in _win_e
+  and "rc0" in _win_e
+  and "разобрано 0" in _win_e,
+  _win_e[:160])
+
+# Measure: окно от разбора после entity-MERGE до merge_measures.sql.
+_i_parse_m = sh.find("python3 ./wiki_alias_parse.py", _i_merge_e) if _i_merge_e >= 0 else -1
+_i_merge_m = sh.find("wiki_alias_merge_measures.sql", _i_parse_m) if _i_parse_m >= 0 else -1
+_win_m = sh[_i_parse_m:_i_merge_m] if _i_parse_m >= 0 and _i_merge_m > _i_parse_m else ""
+t("R4 measure: окно parse→MERGE найдено",
+  bool(_win_m), (_i_parse_m, _i_merge_m))
+t("R4 measure: parse-0 → mark_measure_skip до MERGE",
+  "wiki_alias_mark_measure_skip.sql" in _win_m
+  and "rc0" in _win_m
+  and "разобрано 0" in _win_m,
+  _win_m[:160])
+
+_mark_skip = (HERE / "wiki_alias_mark_skip.sql").read_text(encoding="utf-8")
+_mark_meas = (HERE / "wiki_alias_mark_measure_skip.sql").read_text(encoding="utf-8")
+t("R4 mark_skip: MERGE + WHEN MATCHED UPDATE seen_at",
+  "MERGE INTO" in _mark_skip
+  and "WHEN MATCHED" in _mark_skip
+  and "UPDATE SET seen_at" in _mark_skip
+  and "WHEN NOT MATCHED THEN INSERT" in _mark_skip,
+  _mark_skip[:120])
+t("R4 mark_measure_skip: MERGE + WHEN MATCHED UPDATE seen_at",
+  "MERGE INTO" in _mark_meas
+  and "WHEN MATCHED" in _mark_meas
+  and "UPDATE SET seen_at" in _mark_meas
+  and "WHEN NOT MATCHED THEN INSERT" in _mark_meas,
+  _mark_meas[:120])
+
+t("R4 echo: «rc0» и «разобрано 0» в оболочке",
+  "rc0" in sh and "разобрано 0" in sh,
+  ("rc0" in sh, "разобрано 0" in sh))
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))

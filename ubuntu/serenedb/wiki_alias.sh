@@ -219,7 +219,20 @@ while :; do
 
   # Разбор ответа модели — своим кодом это разрешено (п. 20: проверка ответа модели).
   # Выдуманное имя величины отбрасывается: во входном списке его не было.
-  python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json"
+  # 🔴 rc0 шлюза + 0 разобранных = попытка, не успех (R4). items=[] проходит
+  # валидацию шлюза, MERGE был no-op, mark_skip не звался — пачка терялась молча.
+  parse_out=$(python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json")
+  echo "$parse_out"
+  ents_n=$(printf '%s\n' "$parse_out" | sed -n 's/.*алиасов разобрано: \([0-9][0-9]*\).*/\1/p' | tail -n1)
+  case "$ents_n" in ''|*[!0-9]*) ents_n=0;; esac
+  if [ "$ents_n" -eq 0 ]; then
+    skipped=$((skipped + 1))
+    echo "алиасы: пачка пропущена (rc0, разобрано 0)" >&2
+    psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
+    done_total=$((done_total + BATCH))
+    [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
+    continue
+  fi
   python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true
   # 🔴 ФАЙЛ ЧИТАЕТ ДВИЖОК, А НЕ МЫ. Каталогу права выставлены при создании, но
   # сам файл рождается с маской процесса: такт идёт из `build.sh`, где стоит
@@ -281,7 +294,20 @@ while :; do
       [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
       continue
     }
-  python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json"
+  # rc0 + 0 величин = попытка (R4), зеркало entity-ветки выше.
+  parse_out=$(python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json")
+  echo "$parse_out"
+  meas_n=$(printf '%s\n' "$parse_out" | sed -n 's/.*величин: \([0-9][0-9]*\).*/\1/p' | tail -n1)
+  case "$meas_n" in ''|*[!0-9]*) meas_n=0;; esac
+  if [ "$meas_n" -eq 0 ]; then
+    skipped=$((skipped + 1))
+    echo "величины: пачка пропущена (rc0, разобрано 0)" >&2
+    psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_measure_skip.sql" >/dev/null 2>&1
+    done_measures=$((done_measures + BATCH))
+    done_total=$((done_total + BATCH))
+    [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
+    continue
+  fi
   python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true
   chmod 644 "$TMP/rows.json" "$TMP/measures.json" 2>/dev/null
   # Только величины. rows.json с алиасами сущности здесь намеренно не пишется в
@@ -435,8 +461,19 @@ if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
           echo "reask: пачка пропущена ($(head -c 100 "$TMP/reask_err" | tr -d '\n'))" >&2
           continue
         }
-      python3 ./wiki_alias_parse.py "$TMP/reask_ans" "$TMP/reask_pay" \
-        "$TMP/reask_rows.json" "$TMP/reask_meas.json"
+      # rc0 + 0 разобранных = попытка (R4); --retry-items-json сюда не вешаем.
+      parse_out=$(python3 ./wiki_alias_parse.py "$TMP/reask_ans" "$TMP/reask_pay" \
+        "$TMP/reask_rows.json" "$TMP/reask_meas.json")
+      echo "$parse_out"
+      ents_n=$(printf '%s\n' "$parse_out" | sed -n 's/.*алиасов разобрано: \([0-9][0-9]*\).*/\1/p' | tail -n1)
+      case "$ents_n" in ''|*[!0-9]*) ents_n=0;; esac
+      if [ "$ents_n" -eq 0 ]; then
+        skipped=$((skipped + 1))
+        echo "reask: пачка пропущена (rc0, разобрано 0)" >&2
+        psql_wa -v pay_path="$TMP/reask_pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
+        REASK_DONE=$((REASK_DONE + BATCH))
+        continue
+      fi
       chmod 644 "$TMP/reask_rows.json" "$TMP/reask_meas.json" 2>/dev/null
       # Боковая таблица: полный ответ модели (не основной словарь).
       psql "$DSN" -q -v ON_ERROR_STOP=1 \

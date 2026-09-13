@@ -457,6 +457,62 @@ t("G8c2 dual: pipe — фраза с запятой целая (1 атом + д�
   and _pipe_with_comma.split(" | ") == ["«взнос работодателя, НДФЛ»", "другая"],
   _pipe_with_comma.split(" | "))
 
+# ── SEP: Solr dual-split (', ' / ',' И ' | ') — блокер миграции ───────────────
+# Twin = solr_synonyms_build.split_alias_csv / rule_from_alias_csv (паритет SQL).
+# SQL: статика маркера regexp ',| \| ' в solr_synonyms_compile.sql.
+import solr_synonyms_build as SB  # noqa: E402
+
+_solr_sql = (HERE / "solr_synonyms_compile.sql").read_text(encoding="utf-8")
+t("solr compile.sql: dual regexp ',| \\| ' (CSV + pipe)",
+  "regexp_split_to_array(" in _solr_sql
+  and ",| \\\\| " in _solr_sql
+  and "replace(r.aliases, '\\\\,', chr(1))" in _solr_sql,
+  "marker missing")
+
+# (a) только ' | ' → правило (до dual было 0)
+_pipe_only = SB.rule_from_alias_csv("клиент | покупатель | контрагент")
+t("solr twin: (a) pipe-only даёт правило",
+  _pipe_only is not None
+  and set(p.strip() for p in _pipe_only.split(","))
+  == {"клиент", "покупатель", "контрагент"},
+  _pipe_only)
+
+# (b) только ', ' → те же правила, что раньше (регресс-ноль)
+_csv_only = SB.rule_from_alias_csv("клиент, покупатель, контрагент")
+t("solr twin: (b) csv-only как раньше",
+  _csv_only == "клиент, покупатель, контрагент",
+  _csv_only)
+t("solr twin: (b) csv ≡ pipe (один класс)",
+  _csv_only is not None and _pipe_only is not None
+  and set(p.strip() for p in _csv_only.split(","))
+  == set(p.strip() for p in _pipe_only.split(",")),
+  (_csv_only, _pipe_only))
+
+# escape CSV не сломан dual'ом
+_esc = SB.rule_from_alias_csv("red\\,blue, green")
+t("solr twin: (b) escape \\, жив",
+  _esc is not None and "red\\,blue" in _esc and "green" in _esc,
+  _esc)
+
+# (c) смешанная таблица — правила от обеих строк
+_mixed = SB.compile_rules([
+    {"aliases": "alpha, beta"},
+    {"aliases": "one | two"},
+    {"aliases": "solo"},
+])
+_mixed_lines = set(_mixed.splitlines())
+t("solr twin: (c) mixed CSV+pipe → обе правила",
+  "alpha, beta" in _mixed_lines and "one, two" in _mixed_lines,
+  _mixed)
+
+# (d) одиночное слово без разделителя — как раньше (не правило)
+t("solr twin: (d) одиночное без sep → None",
+  SB.rule_from_alias_csv("solo") is None)
+t("solr twin: (d) одиночное pipe-слово → None",
+  SB.rule_from_alias_csv("толькоодно") is None)
+t("solr twin: (d) split_alias_csv одиночное",
+  SB.split_alias_csv("solo") == ["solo"])
+
 print()
 if FAIL:
     print("ИТОГ: FAIL — %d из %d: %s" % (len(FAIL), len(FAIL) + PASS, "; ".join(FAIL)))
