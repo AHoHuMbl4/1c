@@ -332,8 +332,10 @@ t("recover: :snap_table переменная (не хардкод snap-имен�
   and "alias_okna_c5_pre_v2" not in rec)
 t("recover: :alias_table + :since в критерии",
   ":alias_table" in rec and "CAST(:'since' AS TIMESTAMP)" in rec)
-t("recover: str_split ' | ' < 3 в критерии",
-  "len(str_split(coalesce(t.aliases, ''), ' | ')) < 3" in rec)
+t("recover: dual n_elems < 3 в критерии (CASE position)",
+  "position(' | ' IN coalesce(t.aliases, '')) > 0" in rec
+  and "THEN str_split(coalesce(t.aliases, ''), ' | ')" in rec
+  and "ELSE str_split(coalesce(t.aliases, ''), ', ') END) < 3" in rec)
 t("recover: UPDATE ... FROM snap",
   "UPDATE :alias_table t" in rec_body
   and "FROM :snap_table s" in rec_body
@@ -354,30 +356,34 @@ t("recover: шапка-предупреждение о запуске",
   and "H4" in rec)
 
 
-def _n_pipe(a: str | None) -> int:
-    """Как len(str_split(coalesce(a,''), ' | ')): '' → [''], len=1."""
+def _n_elems(a: str | None) -> int:
+    """Dual как SQL: pipe если ' | ' есть, иначе ', '. '' → [''], len=1."""
     if a is None:
         a = ""
     if a == "":
         return 1
-    return len(a.split(" | "))
+    if " | " in a:
+        return len(a.split(" | "))
+    return len(a.split(", "))
 
 
 def _stub_aliases(a: str | None) -> bool:
     if a is None:
         a = ""
-    n = _n_pipe(a)
-    all_short = a != "" and all(len(x.strip()) < 4 for x in a.split(" | "))
+    n = _n_elems(a)
+    # Короткость — по pipe-разбору t (текущий формат); dual только счётчик.
+    parts = a.split(" | ") if a else [""]
+    all_short = a != "" and all(len(x.strip()) < 4 for x in parts)
     return n < 3 or all_short
 
 
 def should_recover(t_aliases, s_aliases, *, has_snap: bool, seen_fresh: bool) -> bool:
-    """Py-эмуляция критерия H4 recover_collision."""
+    """Py-эмуляция критерия H4 recover_collision (dual n_elems)."""
     if not seen_fresh or not has_snap or s_aliases is None:
         return False
     if not _stub_aliases(t_aliases):
         return False
-    sn, tn = _n_pipe(s_aliases), _n_pipe(t_aliases)
+    sn, tn = _n_elems(s_aliases), _n_elems(t_aliases)
     return sn >= 3 or sn > tn
 
 
@@ -401,6 +407,55 @@ t("recover-crit: нет в snap → НЕ трогать",
       "номенклатуры | товара",
       None,
       has_snap=False, seen_fresh=True) is False)
+
+# ── G8c2: dual-счётчик (snap старого формата ', ') ───────────────────────────
+# Маркер: position ' | ' + ELSE str_split ', ' (как в SQL n_elems).
+t("G8c2 SQL: dual-CASE (position ' | ' + ELSE str_split ', ')",
+  "position(' | ' IN coalesce(s.aliases, '')) > 0" in rec
+  and "THEN str_split(coalesce(s.aliases, ''), ' | ')" in rec
+  and "ELSE str_split(coalesce(s.aliases, ''), ', ')" in rec
+  and "G8c2" in rec
+  and "СТАРЫЙ формат" in rec)
+
+# 1) t обрубок pipe + snap хороший ', ' (3+) → лечится (баг до dual: n_pipe(snap)=1)
+t("G8c2 crit: stub pipe + snap ', ' ≥3 → recover",
+  should_recover(
+      "номенклатуры | товара",
+      "Вид Номенклатуры, Виды Номенклатуры, тип товара, номенклатура",
+      has_snap=True, seen_fresh=True) is True)
+# 2) t хороший pipe ≥3 → НЕ
+t("G8c2 crit: t pipe ≥3 → НЕ трогать",
+  should_recover(
+      "акт сверки | сверка взаиморасчетов | акт сверки расчетов | остаток",
+      "акт, сверка, долг, расхождения",
+      has_snap=True, seen_fresh=True) is False)
+# 3) snap ', ' плох (1–2) → НЕ
+t("G8c2 crit: snap ', ' плох (2) → НЕ",
+  should_recover(
+      "цен | и",
+      "цена, вид",
+      has_snap=True, seen_fresh=True) is False)
+# 4) snap пуст → НЕ (n_elems('')=1, не > stub и не ≥3)
+t("G8c2 crit: snap пуст → НЕ",
+  should_recover(
+      "номенклатуры | товара",
+      "",
+      has_snap=True, seen_fresh=True) is False)
+# 5) запятая ВНУТРИ фразы в snap старого формата:
+# dual без ' | ' режет по ', ' → ДВА элемента («взнос…» / «НДФЛ»), как до миграции.
+# В новом формате (' | ') запятая внутри фразы НЕ режет — одна целая.
+# Осознанно: для snap pre-v2 это два элемента; критерий ≥3 их не спасёт в одиночку.
+_comma_inside = "«взнос работодателя, НДФЛ»"
+_comma_parts_old = _comma_inside.split(", ")  # dual ELSE-ветка (нет ' | ')
+t("G8c2 dual: snap «взнос работодателя, НДФЛ» → 2 элемента (старый ', ')",
+  _n_elems(_comma_inside) == 2
+  and _comma_parts_old == ["«взнос работодателя", "НДФЛ»"],
+  (_n_elems(_comma_inside), _comma_parts_old))
+_pipe_with_comma = "«взнос работодателя, НДФЛ» | другая"
+t("G8c2 dual: pipe — фраза с запятой целая (1 атом + другая)",
+  _n_elems(_pipe_with_comma) == 2
+  and _pipe_with_comma.split(" | ") == ["«взнос работодателя, НДФЛ»", "другая"],
+  _pipe_with_comma.split(" | "))
 
 print()
 if FAIL:
