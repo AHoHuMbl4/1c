@@ -1,3 +1,25 @@
+## 2026-09-13 (16) — G7a-d: пайплайн подключения новой базы — словарь без рук [код]
+
+**[код]** Владелец: «новая база (отдельный сервер, тот же код) — всё само». A1-чеклист
+(.claude/state/G7-checklist.md) ручных шагов ночи: HOME-конфиг, env прогона, выкат,
+snap/probe. G7a: шаблон генераторного openclaw-HOME
+(ubuntu/openclaw/wiki-alias-home-template.json, @@плейсхолдеры@@) + скрипт установки
+wiki_alias_setup_home.sh (apiKey только из env; ловушки ночи: maxTokens 12288 на
+МОДЕЛИ провайдера, chat_template_kwargs enable_thinking false, skipBootstrap,
+contextInjection never; abs-guard HOME; опция owner chown). G7b:
+1c-wiki-alias.env.example (все переменные wiki_alias.sh + ALIAS_INFER_RUNTIME/
+OPENCLAW_HOME/ALIAS_AGENT_ID/ALIAS_AGENT_TIMEOUT_SEC; FORCE 🔴 только по слову) +
+RUNBOOK §10.6-bis «подключение новой базы: словарь» (выкат → HOME → env → юнит →
+контроль; EXCH-права и молчаливый exit 0; перегенерация 🔴). G7c: deploy_wiki_alias.sh
+— выкат 26 файлов (⊇ все вызовы wiki_alias.sh; md5-сверка, .bak до scp, ключ из env,
+НЕ рестартует). G7d (блокеры красных): abs-guard, owner-arg, branch_alias.sh в FILES,
+копируемые команды RUNBOOK. Замки: test_wiki_alias_home.py 70/0 (живой прогон скрипта),
+test_wiki_alias_deploy.py 46/0. Красные: R25/R26 блокеры → G7d; R27/R28 принимать
+(мягко: статический маркер chown-строки слабее живого — не блокер).
+
+Числа: home 70/0, deploy 46/0, bash -n ок; deploy FILES=26 ⊇ 24 вызовов wiki_alias.sh.
+Доки: docs/RUNBOOK_DEPLOY.md §10.6-bis; G0-infer-params.md; G7-checklist.md
+
 ## 2026-09-13 (15) — G6: extract JSON из ответа с reasoning-преамбулой [код]
 
 **[код]** Живой замер песочницы (27B, agent-путь): Qwen3.8-27B на collision

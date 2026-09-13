@@ -1,0 +1,78 @@
+{
+  "agents": {
+    "defaults": {
+      "workspace": "@@OPENCLAW_WORKSPACE@@",
+      "skipBootstrap": true,
+      "contextInjection": "never",
+      "thinkingDefault": "off",
+      "heartbeat": {
+        "every": "0m"
+      },
+      "skills": [],
+      "model": {
+        "primary": "vllm/@@WIKI_LLM_MODEL_ID@@"
+      },
+      "models": {
+        "vllm/@@WIKI_LLM_MODEL_ID@@": {
+          "params": {
+            "temperature": 0,
+            "seed": 42,
+            "maxTokens": 12288,
+            "chat_template_kwargs": {
+              "enable_thinking": false
+            }
+          }
+        }
+      }
+    },
+    "list": [
+      {
+        "id": "@@WIKI_ALIAS_AGENT_ID@@",
+        "model": "vllm/@@WIKI_LLM_MODEL_ID@@",
+        "thinkingDefault": "off"
+      }
+    ]
+  },
+  "models": {
+    "mode": "merge",
+    "providers": {
+      "vllm": {
+        "baseUrl": "@@WIKI_LLM_BASE_URL@@",
+        "apiKey": "@@WIKI_LLM_API_KEY@@",
+        "api": "openai-completions",
+        "timeoutSeconds": 900,
+        "models": [
+          {
+            "id": "@@WIKI_LLM_MODEL_ID@@",
+            "name": "wiki-alias generator (vLLM)",
+            "reasoning": true,
+            "input": [
+              "text"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 65536,
+            "maxTokens": 12288,
+            "compat": {
+              "thinkingFormat": "qwen-chat-template",
+              "supportsTools": false
+            },
+            "api": "openai-completions"
+          }
+        ]
+      }
+    }
+  },
+  "auth": {
+    "profiles": {
+      "vllm:default": {
+        "provider": "vllm",
+        "mode": "api_key"
+      }
+    }
+  }
+}

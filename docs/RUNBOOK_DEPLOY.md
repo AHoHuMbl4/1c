@@ -788,6 +788,162 @@ env только после `systemctl restart 1c-serene-ask@<база>` — `de
 поднят, любое утверждение «свежесть обеспечена» в любом документе неверно.
 *(Живое состояние такта на 26.08 офлайн не перепроверялось.)*
 
+### 10.6-bis Подключение новой базы: словарь синонимов (автоматически)
+
+Первое заполнение пустого словаря на новой базе движка — oneshot-юнит
+`1c-wiki-alias@<база>` (`ubuntu/serenedb/systemd/1c-wiki-alias@.service`). Имя
+экземпляра = `dbname`. Скрипт сам делает DDL (`wiki_alias_init.sql`), пачки
+entity/measure, collision и хвост solr; ручной `psql` под словарь не нужен.
+Опора шагов «руками ночью → что уже само» — `.claude/state/G7-checklist.md`.
+
+#### 1. Выкат кода генератора
+
+На стенде с `SERENE_SRC_DIR` достаточно `ubuntu/serenedb/deploy.sh` (§10.2). На
+продукте без src — горячий выкат генератора:
+
+```bash
+# G7c: ubuntu/serenedb/deploy_wiki_alias.sh
+# Каталог назначения: ${WIKI_DEPLOY_DIR:-/opt/1c-mcp-reports}.
+# Юниты не рестартует, генерацию не стартует.
+WIKI_DEPLOY_TARGET=user@host WIKI_DEPLOY_SSH_KEY=~/.ssh/key \
+  bash ubuntu/serenedb/deploy_wiki_alias.sh
+```
+
+Минимальный набор рантайма генератора (реконструкция G1–G6 / G7-checklist §1;
+полный список держит `deploy_wiki_alias.sh` по фактическим вызовам из
+`wiki_alias.sh`):
+
+| Файл | Зачем |
+|---|---|
+| `wiki_alias.sh` | оркестратор прогона |
+| `wiki_alias_parse.py` | разбор ответа модели + мета-стоп P3 |
+| `alias_infer_gateway.py` | вызов infer / agent |
+| `wiki_alias_init.sql` | DDL alias / measure / probe |
+| `wiki_alias_select_{entity,measure}_batch.sql` | пачки |
+| `wiki_alias_merge_{entity,measures}.sql` | MERGE |
+| `wiki_alias_{mark_skip,mark_measure_skip}.sql` | пустые попытки |
+| `wiki_alias_collision_{round,merge,left}.sql` | столкновения |
+| `wiki_alias_publish.sql` | счётчики + REFRESH |
+| `wiki_alias_reask_*.sql` | доучивание (выкл. при `REASK_EVERY=0`) |
+| `wiki_alias_{fork_init,dayfork_*}.sql` + `branch_alias_parse.py` | развилки (day-basis) |
+| `branch_alias.sh` | опциональный контур развилок src/окно (`if -x ./branch_alias.sh`) |
+| `solr_synonyms_compile.sql` | хвост Ф6.3 (без Python-посредника) |
+
+Шаблон юнита (один раз на машину):
+
+```bash
+cp ubuntu/serenedb/systemd/1c-wiki-alias@.service /etc/systemd/system/
+systemctl daemon-reload
+```
+
+`TimeoutStartSec=infinity` — длительность растёт с чужой базой; фиксированный
+потолок systemd убивал прогон на середине ([замер okna 27.08], §9).
+
+#### 2. Генераторный HOME OpenClaw
+
+Для штатного первого прогона (`ALIAS_INFER_RUNTIME=infer`) достаточно боевого
+профиля undebot с vLLM. Отдельный HOME — для agent/27B и песочницы (не трогать
+шлюз бота):
+
+```bash
+# G7a: ubuntu/openclaw/wiki_alias_setup_home.sh
+#   setup_home.sh <OPENCLAW_HOME> <base_url> <model_id> [agent_id=dict] [owner]
+# OPENCLAW_HOME — только абсолютный путь (/*). apiKey — только из env
+# WIKI_LLM_API_KEY (не argv). 5-й argv [owner] — chown -R после создания
+# (прогон под undebot); без него владельца не трогаем.
+export WIKI_LLM_API_KEY=…   # не в git, не в истории shell при записи в отчёт
+bash ubuntu/openclaw/wiki_alias_setup_home.sh /var/lib/1c-wiki-alias-home \
+  https://<vllm-host>/v1 Qwen3.8-27B dict undebot
+```
+
+🔴 Ловушки (G7-checklist §2 / G0):
+
+1. **`maxTokens` на модели провайдера** (`models.providers.vllm.models[].maxTokens`),
+   не только в `params` агента — иначе обрез JSON / «пустые» пачки. Канон
+   генератора: **12288**.
+2. **`enable_thinking: false`** — через
+   `params.chat_template_kwargs`, не надеяться на `--thinking off` (на
+   `infer … --local` kwargs каталога не применяются → песочница = `agent`).
+3. **`OPENCLAW_HOME` = домашний каталог**, конфиг =
+   `$OPENCLAW_HOME/.openclaw/openclaw.json`. Подставить путь к `.openclaw` или
+   относительный путь → OpenClaw ищет ещё один вложенный `.openclaw`
+   (скрипт отказывает на не-`/*`).
+
+В env прогона (шаг 3) при отдельном HOME: `OPENCLAW_HOME=…`. Env доходит до
+бота через `runuser -u undebot --` (без login-shell); `su -` HOME песочницы
+потеряет.
+
+#### 2-bis. Каталог обмена EXCH (`CSV_DIR` / `/var/lib/serenedb`)
+
+`wiki_alias.sh` пишет временные JSON пачек только сюда (`mktemp -d
+"$EXCH/wiki-alias-XXXXXX"`): `serened` не видит `/tmp` ([замер 30.07]). Если у
+пользователя юнита (обычно `undebot`) нет права записи в каталог —
+`mktemp` падает, скрипт печатает «нет доступа» и **выходит с `exit 0`**
+(юнит oneshot = success, словарь пуст). Проверка до первого прогона:
+
+```bash
+# от имени пользователя юнита (см. User= в 1c-wiki-alias@.service)
+runuser -u undebot -- test -w "${CSV_DIR:-/var/lib/serenedb}" \
+  && echo "EXCH writable" || echo "EXCH: нет записи — починить ACL/группу"
+# или: namei -l /var/lib/serenedb ; getfacl /var/lib/serenedb
+```
+
+#### 3. Env экземпляра
+
+```bash
+cp ubuntu/serenedb/systemd/1c-wiki-alias.env.example \
+   /etc/1c-wiki-alias-<база>.env
+# SERENEDB_DSN: user=postgres (rw), dbname=<база>. Таблицы по умолчанию
+# (search_entity_alias / search_measure_alias / search_alias_probe) создаст
+# init.sql сам — имена в env для первого боя можно не трогать.
+chmod 600 /etc/1c-wiki-alias-<база>.env
+```
+
+Без файла слой записи отсутствует: общий `1c-mcp-reports.env` даёт `serene_ro`,
+INSERT отказывает ([замер okna 27.08]).
+
+#### 4. Первый прогон
+
+```bash
+systemctl start 1c-wiki-alias@<база>
+# ExecStart: wiki_alias.sh 0 (CAP=0), WIKI_ALIAS_MAX_SEC=0, FORCE не задан (=0).
+# Долгий прогон — только юнит или nohup на окне; интерактивный ssh отмирает.
+```
+
+#### 5. Контроль
+
+```bash
+journalctl -u 1c-wiki-alias@<база> -f
+# счётчики (имена таблиц — из env; дефолт бой):
+psql "$SERENEDB_DSN" -c \
+  "SELECT count(*) AS alias_rows,
+          count(*) FILTER (WHERE coalesce(aliases,'') <> '') AS filled
+   FROM search_entity_alias"
+systemctl status 1c-wiki-alias@<база>   # oneshot: success / failed
+```
+
+Fail-closed: падение compile solr → ненулевой exit юнита (комментарий D.1 в
+шаблоне сервиса).
+
+#### Перегенерация / песочница
+
+🔴 **Только по слову владельца.** Боевой словарь и миграцию разделителя
+(`wiki_alias_migrate_sep.sql`) не запускать из установки новой базы.
+
+1. Snap боевых таблиц в sandbox-имена (пример формы; точный SQL окна — у владельца):
+   `CREATE TABLE alias_sandbox AS SELECT * FROM search_entity_alias;` — то же для
+   measure; probe — своя пустая или копия.
+2. В `/etc/1c-wiki-alias-<база>.env` (или отдельном файле песочницы):
+   `ALIAS_TABLE` / `MEASURE_TABLE` / `PROBE_TABLE` = sandbox;
+   `ALIAS_INFER_RUNTIME=agent`; `OPENCLAW_HOME=…`; при нужде `WIKI_ALIAS_BATCH=8`.
+3. Перед повторным force: `TRUNCATE <probe_sandbox>;` — иначе collision
+   «уже спрашивали» глушит слова.
+4. `WIKI_ALIAS_FORCE=1` → `systemctl start 1c-wiki-alias@<база>` (или тот же
+   скрипт под тем же env). G5/G5b: select отдаёт живые + OFFSET; без них force
+   был бессмыслен (MERGE обновлял, select брал только пустые).
+5. Приёмка редакции (A3/B2 и т.п.) — отдельное слово владельца; перенос sandbox →
+   бой — тоже.
+
 ### 10.7 Подключение к боту
 Бот ходит в отвечающий сервис через MCP-мост `ask_1c` (`1c-mcp-ask@ut_test`, :6016), а мост — по
 `ASK_URL`. **`ASK_URL` — единственный рычаг выбора того, какой сервис (а значит, какая база
