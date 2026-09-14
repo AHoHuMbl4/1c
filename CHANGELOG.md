@@ -1,3 +1,34 @@
+## 2026-09-14 (37) — Promote: матрица (г) лечения замороженных best/nef + замок порядка веток [код]+[замер]
+
+**[код]** wiki_alias_promote.sql (вариант (г), решение владельца 14.09):
+WHEN MATCHED для best_used_for/not_enough_for — четырёхветочный CASE
+вместо «паттерн в t ИЛИ s → боевое»: (1) бой заморожен + draft чист и
+непуст → ПОЛЕ := DRAFT ЦЕЛИКОМ (heal — атомы битой строки резать
+нельзя); (2) бой заморожен + draft грязен/пуст → боевое; (3) бой чист +
+draft заморожен → боевое (не union — грязный черновик); (4) оба чисты →
+_alias_union_tokens. Порядок веток обязателен: heal ПЕРВОЙ (условия heal
+и keep-frozen пересекаются — поздний heal мёртв), union последней.
+aliases — по-прежнему только union (§3.99), INSERT — draft сырьём.
+Счётчики after: best/nef frozen healed/dirty/empty (eligibility
+снапшот×draft) + insert_with_pattern. Лгущие комментарии (~120/~138
+«не replace», ~317) переписаны под матрицу — красная REJECT ×3
+(red-promote-{1,2,3}). test_wiki_alias_sep.py: ассерт «матрица (г)» —
+find-порядок heal<keep<union, NOT-форма heal-условия + положительная
+форма keep-dirty (count>=2), счётчики, шапка; мутационные пробы
+(heal/keep swap, drop clean+dirty) замок ловит.
+**[замер] Приёмка (оркестратор):** sep 110/0, prompts_v2 113/0, deploy
+46/0; ЖИВАЯ фикстура на движке окна (клоны по адресу _test, бой не
+тронут, песочница вычищена): все ветки t — heal_best, heal_nef,
+frozen_dirty, frozen_empty, clean_dirty (бой, не union), both_clean
+(union), insert_pat, battle_only; гейты a–d t; счётчики по фикстуре
+(best 1/1/1, nef 1/0/0, insert 1). Красная ×3 red2-{1,2,3} ACCEPT с
+первого круга. Deploy-скрипт promote.sql НЕ носит — выкат scp вручную
+(замер по FILES в deploy_wiki_alias.sh).
+Числа: +106/−12 по 2 файлам; замки 110/113/46 зелёные; живая
+фикстура 8/8 веток.
+Доки: dictfix-plan.md §4 шаг 3; red-promote-{1,2,3}.md (REJECT),
+red2-{1,2,3}.md (ACCEPT), exec4/exec5-promote-report.md.
+
 ## 2026-09-14 (36) — Генератор словаря на «1 задача = 1 вызов» (явное решение владельца): монолит упразднён [код]+[решение]
 
 **[решение]** Владелец 14.09: «точно 100% делай много точечных вызовов.

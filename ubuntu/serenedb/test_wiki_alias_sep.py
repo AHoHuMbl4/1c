@@ -182,9 +182,43 @@ t("promote: нет replace-стиля SET aliases = n. (§3.99)",
   and "aliases = n.aliases" not in prom_body)
 t("promote: нет DELETE unmatched-by-source (C2)",
   "NOT MATCHED BY SOURCE" not in prom_body)
-t("promote: скобочные best/nef → боевые (не режем)",
-  "оставляем БОЕВОЕ" in prom
-  and "regexp_matches(coalesce(t.best_used_for" in prom)
+t("promote: матрица (г) best/nef — heal/keep/union",
+  # бой заморожен + чистый непустой draft → replace draft
+  "THEN s.draft_best" in prom
+  and "THEN s.draft_nef" in prom
+  and "NOT regexp_matches(coalesce(s.draft_best" in prom
+  and "NOT regexp_matches(coalesce(s.draft_nef" in prom
+  and "trim(s.draft_best) <> ''" in prom
+  and "trim(s.draft_nef) <> ''" in prom
+  # бой заморожен + dirty/empty draft → боевое; бой чист + dirty draft → боевое
+  and prom.count("THEN t.best_used_for") >= 2
+  and prom.count("THEN t.not_enough_for") >= 2
+  # NOT-форма в heal + положительная в keep-dirty-draft (иначе две keep без WHEN)
+  and prom.count("regexp_matches(coalesce(s.draft_best") >= 2
+  and prom.count("regexp_matches(coalesce(s.draft_nef") >= 2
+  # порядок веток: heal раньше keep (иначе heal мёртв); union после keep
+  and prom.find("THEN s.draft_best") < prom.find("THEN t.best_used_for")
+  and prom.find("THEN s.draft_nef") < prom.find("THEN t.not_enough_for")
+  and prom.find("THEN t.best_used_for")
+     < prom.find("_alias_union_tokens(t.best_used_for, s.draft_best)")
+  and prom.find("THEN t.not_enough_for")
+     < prom.find("_alias_union_tokens(t.not_enough_for, s.draft_nef)")
+  # оба чисты → union
+  and "_alias_union_tokens(t.best_used_for, s.draft_best)" in prom
+  and "_alias_union_tokens(t.not_enough_for, s.draft_nef)" in prom
+  # aliases — union как было (§3.99)
+  and "_alias_union_tokens(t.aliases, s.draft_aliases)" in prom
+  # отчёт: счётчики веток
+  and "best_frozen_healed" in prom
+  and "best_frozen_dirty_draft" in prom
+  and "best_frozen_empty_draft" in prom
+  and "nef_frozen_healed" in prom
+  and "nef_frozen_dirty_draft" in prom
+  and "nef_frozen_empty_draft" in prom
+  and "insert_with_pattern" in prom
+  # шапка под матрицу (г), не старое «оставляем БОЕВОЕ»
+  and "матрица заморозки (г)" in prom
+  and "оставляем БОЕВОЕ" not in prom)
 t("promote: откат закомментирован внизу",
   "ОТКАТ" in prom and "pre_promote_" in prom
   and "INSERT INTO search_entity_alias SELECT *" in prom)

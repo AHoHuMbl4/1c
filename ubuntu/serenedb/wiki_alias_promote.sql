@@ -16,9 +16,14 @@
 -- Снапшот боя: <battle>_pre_promote_<snap_suffix> (+ measure).
 -- Повтор с тем же suffix → CREATE TABLE падает (не молчаливый overwrite).
 --
--- best_used_for / not_enough_for: union атомов тем же dual-сплитом, НО если
--- у боя ИЛИ черновика есть скобочный паттерн «(…,…») — атомы не режем:
--- оставляем БОЕВОЕ значение (скобочные 13/27 → force-regen отдельным эпизодом).
+-- best_used_for / not_enough_for — матрица заморозки (г) / dictfix-plan §4 шаг 3:
+--   бой заморожен (паттерн '\([^)]*,[^)]*\)') + draft чист и непуст → поле := draft
+--     ЦЕЛИКОМ (replace, не union — атомы битой строки резать нельзя);
+--   бой заморожен + (draft с паттерном ИЛИ trim(draft)='') → боевое;
+--   бой чист + draft с паттерном → боевое (не union — защита от грязного черновика);
+--   оба чисты → _alias_union_tokens (как aliases / §3.99);
+--   aliases — по-прежнему только union токенов (§3.99);
+--   NOT MATCHED INSERT — draft сырьём; паттерн в новых строках — счётчиком отчёта.
 --
 -- Пример:
 --   psql "$DSN" \
@@ -112,7 +117,9 @@ CREATE TABLE :"measure_snap" AS SELECT * FROM :"battle_measure";
 \echo promote: snap → :entity_snap / :measure_snap
 
 -- ── 2) Источник MERGE: только строки черновика (бой-only не попадают → не трогаем)
--- Поля draft_* — сырой черновик; union строится в MERGE через макрос (не replace).
+-- Поля draft_* — сырой черновик. aliases — только union (§3.99); best/nef — CASE (г):
+--   heal = подмена поля чистым непустым draft, keep при битом/пустом draft,
+--   union при обоих чистых (см. UPDATE SET ниже).
 CREATE OR REPLACE TEMP TABLE _promote_entity_src AS
 SELECT
   d.src_table,
@@ -130,7 +137,9 @@ SELECT
   coalesce(d.seen_at, now()) AS draft_seen_at
 FROM :"draft_measure" d;
 
--- ── 3) union-MERGE (токены; НЕ подмена поля целиком с черновика) ─────────────
+-- ── 3) MERGE: aliases = union (§3.99); best/nef = CASE матрицы (г) ────────────
+--   heal → подмена поля чистым непустым draft; keep → бой при битом/пустом draft
+--   (и при dirty draft на чистом бое); union → оба чисты (_alias_union_tokens).
 BEGIN;
 
 MERGE INTO :"battle_table" t
@@ -138,15 +147,26 @@ USING _promote_entity_src s
 ON (t.src_table = s.src_table)
 WHEN MATCHED THEN UPDATE SET
   aliases = _alias_union_tokens(t.aliases, s.draft_aliases),
+  -- матрица (г): порядок веток важен — heal раньше keep-frozen
   best_used_for = CASE
     WHEN regexp_matches(coalesce(t.best_used_for, ''), '\([^)]*,[^)]*\)')
-      OR regexp_matches(coalesce(s.draft_best, ''), '\([^)]*,[^)]*\)')
+     AND NOT regexp_matches(coalesce(s.draft_best, ''), '\([^)]*,[^)]*\)')
+     AND trim(s.draft_best) <> ''
+      THEN s.draft_best
+    WHEN regexp_matches(coalesce(t.best_used_for, ''), '\([^)]*,[^)]*\)')
+      THEN t.best_used_for
+    WHEN regexp_matches(coalesce(s.draft_best, ''), '\([^)]*,[^)]*\)')
       THEN t.best_used_for
     ELSE _alias_union_tokens(t.best_used_for, s.draft_best)
   END,
   not_enough_for = CASE
     WHEN regexp_matches(coalesce(t.not_enough_for, ''), '\([^)]*,[^)]*\)')
-      OR regexp_matches(coalesce(s.draft_nef, ''), '\([^)]*,[^)]*\)')
+     AND NOT regexp_matches(coalesce(s.draft_nef, ''), '\([^)]*,[^)]*\)')
+     AND trim(s.draft_nef) <> ''
+      THEN s.draft_nef
+    WHEN regexp_matches(coalesce(t.not_enough_for, ''), '\([^)]*,[^)]*\)')
+      THEN t.not_enough_for
+    WHEN regexp_matches(coalesce(s.draft_nef, ''), '\([^)]*,[^)]*\)')
       THEN t.not_enough_for
     ELSE _alias_union_tokens(t.not_enough_for, s.draft_nef)
   END,
@@ -297,7 +317,9 @@ SELECT error(
 
 COMMIT;
 
--- ── 5) Счётчики ПОСЛЕ ────────────────────────────────────────────────────────
+-- ── 5) Счётчики ПОСЛЕ (+ матрица (г): frozen heal/dirty/empty, insert-pattern) ─
+-- healed/dirty/empty — eligibility по snap×draft (не сверка поля боя после MERGE);
+-- after-бой участвует только в insert_with_pattern (бой ∉ snap ∧ паттерн).
 SELECT 'after' AS phase,
        (SELECT count(*) FROM :"battle_table") AS battle_entity_rows,
        (SELECT count(*) FROM :"battle_measure") AS battle_measure_rows,
@@ -313,7 +335,45 @@ SELECT 'after' AS phase,
        (SELECT count(DISTINCT trim(tok))
           FROM :"battle_measure" b,
                unnest(regexp_split_to_array(coalesce(b.aliases, ''), ',| [|] ')) u(tok)
-         WHERE trim(tok) <> '') AS battle_measure_tokens_distinct;
+         WHERE trim(tok) <> '') AS battle_measure_tokens_distinct,
+       (SELECT count(*)
+          FROM :"entity_snap" s
+          JOIN :"draft_table" d ON d.src_table = s.src_table
+         WHERE regexp_matches(coalesce(s.best_used_for, ''), '\([^)]*,[^)]*\)')
+           AND NOT regexp_matches(coalesce(d.best_used_for, ''), '\([^)]*,[^)]*\)')
+           AND trim(coalesce(d.best_used_for, '')) <> '') AS best_frozen_healed,
+       (SELECT count(*)
+          FROM :"entity_snap" s
+          JOIN :"draft_table" d ON d.src_table = s.src_table
+         WHERE regexp_matches(coalesce(s.best_used_for, ''), '\([^)]*,[^)]*\)')
+           AND regexp_matches(coalesce(d.best_used_for, ''), '\([^)]*,[^)]*\)')) AS best_frozen_dirty_draft,
+       (SELECT count(*)
+          FROM :"entity_snap" s
+          JOIN :"draft_table" d ON d.src_table = s.src_table
+         WHERE regexp_matches(coalesce(s.best_used_for, ''), '\([^)]*,[^)]*\)')
+           AND trim(coalesce(d.best_used_for, '')) = '') AS best_frozen_empty_draft,
+       (SELECT count(*)
+          FROM :"entity_snap" s
+          JOIN :"draft_table" d ON d.src_table = s.src_table
+         WHERE regexp_matches(coalesce(s.not_enough_for, ''), '\([^)]*,[^)]*\)')
+           AND NOT regexp_matches(coalesce(d.not_enough_for, ''), '\([^)]*,[^)]*\)')
+           AND trim(coalesce(d.not_enough_for, '')) <> '') AS nef_frozen_healed,
+       (SELECT count(*)
+          FROM :"entity_snap" s
+          JOIN :"draft_table" d ON d.src_table = s.src_table
+         WHERE regexp_matches(coalesce(s.not_enough_for, ''), '\([^)]*,[^)]*\)')
+           AND regexp_matches(coalesce(d.not_enough_for, ''), '\([^)]*,[^)]*\)')) AS nef_frozen_dirty_draft,
+       (SELECT count(*)
+          FROM :"entity_snap" s
+          JOIN :"draft_table" d ON d.src_table = s.src_table
+         WHERE regexp_matches(coalesce(s.not_enough_for, ''), '\([^)]*,[^)]*\)')
+           AND trim(coalesce(d.not_enough_for, '')) = '') AS nef_frozen_empty_draft,
+       (SELECT count(*)
+          FROM :"battle_table" t
+          LEFT JOIN :"entity_snap" s ON s.src_table = t.src_table
+         WHERE s.src_table IS NULL
+           AND (regexp_matches(coalesce(t.best_used_for, ''), '\([^)]*,[^)]*\)')
+                OR regexp_matches(coalesce(t.not_enough_for, ''), '\([^)]*,[^)]*\)'))) AS insert_with_pattern;
 
 \echo promote: OK. Дальше — wiki_alias_migrate_sep.sql (residual ', '→' | '), затем Solr из боя.
 
