@@ -38,7 +38,10 @@ elif [ "$(id -u)" = 0 ] && command -v runuser >/dev/null 2>&1; then
 else
   RUNAS_BOT=(sudo -u "$BOTUSER" -H)
 fi
-BATCH="${WIKI_ALIAS_BATCH:-20}"
+# [замер 14.09] BATCH=1: на пачках >1 модель роняет event-квоту (глаголы выжигаются
+# баном «подходит соседу»), на длинных пайлоадах иногда отдаёт пустой ответ; при 1
+# размер пайлоада привязан только к самой записи — устойчиво на любой базе (п.0).
+BATCH="${WIKI_ALIAS_BATCH:-1}"
 # 🔴 ПУСТАЯ ЗАПИСЬ — ЭТО ПОПЫТКА, А НЕ ОТВЕТ. Осечка пачки помечает её сущности пустыми
 # строками, чтобы проход не ходил по кругу; но отбор пропускал их по одному факту наличия
 # записи, и сущность выбывала из словаря НАВСЕГДА. Живой случай okna 13.08: 140 записей из
@@ -141,6 +144,18 @@ BUDGET="${WIKI_ALIAS_MAX_SEC:-120}"  # 0 = без потолка (over_budget)
 t_start=$(date +%s)
 over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUDGET" ]; }
 
+# [замер 14.09] ПАРАЛЛЕЛЬНЫЕ ВОРКЕРЫ ПЕРВОГО ПРОХОДА (только force=1). vLLM батчит
+# одновременные вызовы почти бесплатно: 3 параллельных — 74/168/188 с на вызов против
+# ~420 с на те же три последовательно (живой замер шлюзом генератора). Решётка:
+# воркер i берёт пачки i, i+WORKERS, … — при force=1 пул = весь корпус, OFFSET-курсор
+# детерминирован, решётки не пересекаются, MERGE-строки пачек не пересекаются тоже.
+# При force=0 пул сжимается сам (OFFSET=0) — воркеры столкнулись бы на голове пула:
+# параллель принудительно выключается.
+WORKERS="${WIKI_ALIAS_WORKERS:-1}"
+case "$WORKERS" in ''|*[!0-9]*) WORKERS=1;; esac
+[ "$WORKERS" -lt 1 ] && WORKERS=1
+[ "$WIKI_ALIAS_FORCE" != "1" ] && WORKERS=1
+
 # ── Промты «1 задача = 1 вызов» (dictfix-final-prompt.md, дословно) ──
 _WA_INIT_A=$(cat <<'EOF_WA_PROMPT'
 JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. Answer language for every string = the language of that record's title (the English example below is STRUCTURE ONLY — never copy its language when the title is in another language). TASK: for EACH record produce ONLY the aliases field — everyday words a person actually puts in a question when they mean THIS kind of record (their spoken asking-words). RULES: (1) Include ROLE words for every flow listed in the input for this record: the same catalog is named differently by role depending on the flow (structure example: a counterparty catalog → buyers in sales flows, suppliers in purchase flows); take roles ONLY from the listed flows — do not invent flows. (2) WHEN the input for this record lists flows, OR lists quantities that are movement / money-total / event totals (not a bare headcount/Count alone): at least ONE alias MUST be a spoken action/event form people use when asking about such events (same language as the title, 1-2 words). Keep that event alias even if a sibling could use a similar word — the sibling distinction belongs to the notEnoughFor field (a separate call), not to dropping the event alias. If you must drop something to fit the limit, drop a redundant noun synonym, never the event alias. For records without flows/quantities, event aliases are optional — include only when natural. (3) Limits: 3 to 10 aliases; each alias is 1 to 3 words; no sentences; no question words alone (how/how many/what/who as standalone tokens). (4) Do NOT add the title (or a morphological variant of the title) as an alias — the title is already known from input. Do not put quantity names or field names into aliases (quantities are filled by a separate call). (5) BANS (skip the token if unsure): platform meta-labels and their equivalents in the title language (list, catalog, directory, types, kinds, register, journal, document, classifier, form, report as a meta-word); case/number/inflection variants of the SAME stem (pick one citation form); Latin-script words when the title is not Latin; NOUN words that equally fit a sibling in THIS batch (leave those out — the distinction goes to notEnoughFor; this ban is about nouns — spoken action/event forms stay, see rule 2); jargon opaque to a non-developer. (6) "If unsure — omit" applies to meta-labels and jargon; for action/event forms on records where Input lists flows, OR lists quantities that are movement / money-total / event totals (not a bare headcount/Count alone): prefer one everyday event form over a near-duplicate noun synonym. Structure example (English skeleton only): {"items":[{"entity":"catalog_counterparties","aliases":["buyers","suppliers","customers"]}]} Never copy the English example strings into the output when the title language is different. Every Input entity appears once; entity values copy Input exactly. Schema: {"items":[{"entity":"<exact copy of Input entity string>","aliases":["..."]}]}. Input:
@@ -222,6 +237,16 @@ wa_infer_three_fields() {
   fi
 }
 
+# Первый проход сущностей — воркер на решётке курсора (WORKERS×параллельно при
+# force=1, иначе один). Все временные файлы воркера — в своём $WTMP, счётчики —
+# в своих файлах; пачки воркеров не пересекаются (решётка), MERGE-строки тоже.
+wiki_alias_entities_worker() {
+  local w="$1" WTMP done_total wskipped STEP
+  WTMP="$TMP/w$w"; mkdir -p "$WTMP"
+  [ "$(id -u)" = 0 ] && chown "$BOTUSER" "$WTMP" 2>/dev/null || true
+  done_total=$(( w * BATCH ))
+  wskipped=0
+  STEP=$(( BATCH * WORKERS ))
 while :; do
   # 🔴 ПАЧКА — ЭТО ГРУППА ПОХОЖИХ, А НЕ СЛУЧАЙНЫЕ СУЩНОСТИ ПОДРЯД.
   # [замер 30.07] описанные поодиночке страницы не различают соседей: у «Подтверждения
@@ -243,12 +268,13 @@ while :; do
   # mark_skip-хвост в голову и крутил бы одни и те же «пропущенные». При force=1
   # пул = весь корпус всегда → :skip_rows (= done_total) — единственный курсор.
   if ! psql_wa_tA -v batch="$BATCH" -v skip_rows="$done_total" \
-      -f "$HERE/wiki_alias_select_entity_batch.sql" > "$TMP/pay"; then
+      -f "$HERE/wiki_alias_select_entity_batch.sql" > "$WTMP/pay"; then
     echo "алиасы: СБОЙ селекта пачки (ошибка выше) — прогон остановлен, пачка не потеряна" >&2
-    exit 1
+    echo 1 > "$WTMP/.fail"
+    return 1
   fi
-  chmod 644 "$TMP/pay" 2>/dev/null
-  PAY=$(cat "$TMP/pay")
+  chmod 644 "$WTMP/pay" 2>/dev/null
+  PAY=$(cat "$WTMP/pay")
   case "$PAY" in ''|'[]'|'null') break;; esac
 
   # 🔴 ЗАДАНИЕ ПЕРЕДАЁТСЯ ФАЙЛОМ, А НЕ АРГУМЕНТОМ. [замер 30.07] с `-m "$PAY"` на пачке из 25
@@ -256,13 +282,13 @@ while :; do
   # доходит. У `openclaw agent` для этого есть штатный `--message-file`. Тот же класс дефекта, что
   # «стена argv» в разборе `HOW_NOT_TO §0`: данные аргументом командной строки не передаются.
   # «1 задача = 1 вызов»: init-A/B/C → сборка → один MERGE (dictfix §2).
-  if ! parse_out=$(wa_infer_three_fields init "$TMP/pay" "$TMP/ent" \
-        "$TMP/rows.json" "$TMP/measures.json" "алиасы" \
+  if ! parse_out=$(wa_infer_three_fields init "$WTMP/pay" "$WTMP/ent" \
+        "$WTMP/rows.json" "$WTMP/measures.json" "алиасы" \
         "$_WA_INIT_A" "$_WA_INIT_B" "$_WA_INIT_C"); then
-      skipped=$((skipped + 1))
+      wskipped=$((wskipped + 1))
       echo "алиасы: пачка пропущена (падение поля A/B/C)" >&2
-      psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
-      done_total=$((done_total + BATCH))
+      psql_wa -v pay_path="$WTMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
+      done_total=$((done_total + STEP))
       [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
       continue
   fi
@@ -275,10 +301,10 @@ while :; do
   ents_n=$(printf '%s\n' "$parse_out" | sed -n 's/.*алиасов разобрано: \([0-9][0-9]*\).*/\1/p' | tail -n1)
   case "$ents_n" in ''|*[!0-9]*) ents_n=0;; esac
   if [ "$ents_n" -eq 0 ]; then
-    skipped=$((skipped + 1))
+    wskipped=$((wskipped + 1))
     echo "алиасы: пачка пропущена (rc0, разобрано 0)" >&2
-    psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
-    done_total=$((done_total + BATCH))
+    psql_wa -v pay_path="$WTMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
+    done_total=$((done_total + STEP))
     [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
     continue
   fi
@@ -289,19 +315,43 @@ while :; do
   # okna-1 13.08: словарь встал на 140 из 351 при «алиасов разобрано: 20» каждую
   # пачку — то есть деньги за модель тратились, а словарь не рос. Права ставятся
   # рядом с записью, как у `msg` выше.
-  chmod 644 "$TMP/rows.json" "$TMP/measures.json" 2>/dev/null
+  chmod 644 "$WTMP/rows.json" "$WTMP/measures.json" 2>/dev/null
   # Запись — ОДНИМ запросом из файла, без цикла по строкам (п. 20). Пустая заготовка,
   # оставшаяся от прежней осечки, сначала снимается: иначе ответ модели молча падал бы
   # мимо словаря (`NOT IN` считает такую строку уже отвеченной), и переспрос был бы
   # бесполезен — деньги за модель тратились бы вечно.
-  psql_wa -v rows_path="$TMP/rows.json" -v measures_path="$TMP/measures.json" \
+  psql_wa -v rows_path="$WTMP/rows.json" -v measures_path="$WTMP/measures.json" \
     -f "$HERE/wiki_alias_merge_entity.sql" 2>&1 | grep -i error
 
   have=$(psql_wa_tA -c "SELECT count(*) FROM $ALIAS_TABLE" 2>/dev/null)
   echo "алиасы: всего в базе $have"
-  done_total=$((done_total + BATCH))
+  done_total=$((done_total + STEP))
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
   over_budget && { echo "алиасы: бюджет $BUDGET с исчерпан — остальные сущности возьмёт следующий такт"; break; }
+done
+  echo "$wskipped" > "$WTMP/.skipped"
+  echo "$done_total" > "$WTMP/.done"
+}
+
+for w in $(seq 0 $((WORKERS - 1))); do
+  if [ "$WORKERS" -gt 1 ]; then
+    wiki_alias_entities_worker "$w" &
+  else
+    wiki_alias_entities_worker "$w"
+  fi
+done
+[ "$WORKERS" -gt 1 ] && wait
+# 🔴 СБОЙ СЕЛЕКТА ≠ «БАЗА КОНЧИЛАСЬ» и в параллельном воркере: exit субшелла
+# погасил бы стоп, прогон продолжился бы молча. Воркер ставит .fail — главный
+# скрипт останавливает юнит целиком.
+for w in $(seq 0 $((WORKERS - 1))); do
+  [ -f "$TMP/w$w/.fail" ] && { echo "алиасы: воркер $w упал по сбою селекта — прогон остановлен" >&2; exit 1; }
+done
+for w in $(seq 0 $((WORKERS - 1))); do
+  s=$(cat "$TMP/w$w/.skipped" 2>/dev/null); case "$s" in ''|*[!0-9]*) s=0;; esac
+  skipped=$((skipped + s))
+  d=$(cat "$TMP/w$w/.done" 2>/dev/null); case "$d" in ''|*[!0-9]*) d=0;; esac
+  [ "$d" -gt "$done_total" ] && done_total="$d"
 done
 # ── ДОБОР ВЕЛИЧИН: сущность описана, поля — нет ────────────────────────────────
 # Первый проход берёт тех, кого ещё нет в словаре сущностей. Уже описанные
