@@ -73,8 +73,15 @@ REASK_STALE_DAYS="${WIKI_ALIAS_REASK_STALE_DAYS:-30}"
 case "$REASK_STALE_DAYS" in ''|*[!0-9]*) REASK_STALE_DAYS=30;; esac
 WIKI_ALIAS_TICK="${WIKI_ALIAS_TICK:-0}"
 case "$WIKI_ALIAS_TICK" in ''|*[!0-9]*) WIKI_ALIAS_TICK=0;; esac
-REASK_CAP="${WIKI_ALIAS_REASK_CAP:-$BATCH}"
-case "$REASK_CAP" in ''|*[!0-9]*) REASK_CAP="$BATCH";; esac
+# 🔴 [замер 14.09] COLL_BATCH — размер пачки collision/reask. Эти пачки — ГРУППЫ
+# записей (общее слово / перевопрос уточнений), к «1 задача = 1 вызов» первого
+# прохода отношения не имеют: при BATCH=1 группа из одной записи ломает разведение
+# (модель не видит сестёр) и перевопрос. Свой размер, исторический дефолт 8.
+COLL_BATCH="${WIKI_ALIAS_COLLISION_BATCH:-8}"
+case "$COLL_BATCH" in ''|*[!0-9]*) COLL_BATCH=8;; esac
+[ "$COLL_BATCH" -lt 1 ] && COLL_BATCH=1
+REASK_CAP="${WIKI_ALIAS_REASK_CAP:-$COLL_BATCH}"
+case "$REASK_CAP" in ''|*[!0-9]*) REASK_CAP="$COLL_BATCH";; esac
 CAP="${1:-0}"
 # Модель/thinking — вызов через alias_infer_gateway.py (рантайм agent/infer).
 # 🔴 Транспорт: умолчание --local (cli/infer.md). [замер 24.08] --gateway =
@@ -453,7 +460,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     rounds=$((rounds + 1))
     # Выбор слова + отметка probe + JSON пачки — один psql (wiki_alias_collision_round.sql).
     # `md5(string_agg(...))` — штатные функции движка (Aggregate; Utility md5).
-    ROUND=$(psql_wa_tA -v batch="$BATCH" -v target_word="$TARGET_WORD" \
+    ROUND=$(psql_wa_tA -v batch="$COLL_BATCH" -v target_word="$TARGET_WORD" \
       -f "$HERE/wiki_alias_collision_round.sql" 2>/dev/null) || ROUND=""
     [ -z "$ROUND" ] && break
     WORD=${ROUND%%$'\t'*}
@@ -509,7 +516,7 @@ if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
       over_budget && { echo "reask: бюджет $BUDGET с исчерпан" >&2; break; }
       psql "$DSN" -tA -v ON_ERROR_STOP=1 \
         -v alias_table="$ALIAS_TABLE" \
-        -v batch="$BATCH" \
+        -v batch="$COLL_BATCH" \
         -v reask_stale_days="$REASK_STALE_DAYS" \
         -v pool_path="$POOL_JSON" \
         -f "$HERE/wiki_alias_reask_select_entity_batch.sql" > "$TMP/reask_pay" 2>/dev/null
@@ -530,7 +537,7 @@ if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
         skipped=$((skipped + 1))
         echo "reask: пачка пропущена (rc0, разобрано 0)" >&2
         psql_wa -v pay_path="$TMP/reask_pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
-        REASK_DONE=$((REASK_DONE + BATCH))
+        REASK_DONE=$((REASK_DONE + COLL_BATCH))
         continue
       fi
       chmod 644 "$TMP/reask_rows.json" "$TMP/reask_meas.json" 2>/dev/null
@@ -562,7 +569,7 @@ if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
           -v journal_path="$TMP/reask_rejected.json" \
           -f "$HERE/wiki_alias_reask_journal.sql" 2>&1 | grep -i error || true
       fi
-      REASK_DONE=$((REASK_DONE + BATCH))
+      REASK_DONE=$((REASK_DONE + COLL_BATCH))
     done
     echo "reask: обработано пачек до $REASK_DONE сущностей" >&2
   fi
