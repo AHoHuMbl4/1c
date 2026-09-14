@@ -598,7 +598,302 @@ def parse_items(text, pay):
     return entity_rows, measure_rows
 
 
+# ── «1 задача = 1 вызов»: однопольные JSON → полный item (dictfix §2) ─────────
+# Падение поля (ретрай до сборки): не JSON/не schema; aliases пуст/ниже минимума
+# сайта; best пуст или <2; NEF пуст — НЕ падение; NEF/best — hard-format.
+
+_FIELD_KEYS = ("aliases", "bestUsedFor", "notEnoughFor")
+_PAREN_COMMA_RE = re.compile(r"\([^)]*,[^)]*\)")
+
+
+def _hard_format_best_ok(s: str) -> bool:
+    """bestUsedFor: запрет скобок с запятой внутри (P-8)."""
+    return _PAREN_COMMA_RE.search(s or "") is None
+
+
+def _hard_format_nef_ok(s: str) -> bool:
+    """notEnoughFor: без запятых и скобок (downstream comma-CSV)."""
+    s = s or ""
+    return "," not in s and "(" not in s and ")" not in s
+
+
+def _items_from_field_text(text):
+    """items из однопольного ответа; None = не JSON / нет schema items."""
+    payload = extract_items_payload(text or "")
+    if payload is None:
+        return None
+    items = payload.get("items")
+    if not isinstance(items, list):
+        return None
+    return items
+
+
+def entities_from_pay(pay):
+    """Множество entity-ключей Input пачки (точные строки, без нормализации)."""
+    out = set()
+    if isinstance(pay, dict):
+        pay = pay.get("items") or pay.get("value") or []
+    for rec in pay or []:
+        if not isinstance(rec, dict):
+            continue
+        e = (rec.get("entity") or rec.get("src_table") or "").strip()
+        if e:
+            out.add(e)
+    return out
+
+
+def _field_values_map(items, field, allowed=None):
+    """entity -> list значений поля (только строки/токены).
+
+    allowed — set entity из Input: неизвестная → пропуск + stderr;
+    дубль внутри ответа → пропуск дубля + stderr. Возвращает
+    (out|None, n_unknown): None = schema (нет ключа поля на item).
+    """
+    out = {}
+    n_unknown = 0
+    seen = set()
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        e = (it.get("entity") or "").strip()
+        if not e:
+            continue
+        if e in seen:
+            print(
+                "wiki_alias_parse: duplicate entity skipped: %r" % (e,),
+                file=sys.stderr,
+            )
+            continue
+        if allowed is not None and e not in allowed:
+            print(
+                "wiki_alias_parse: unknown entity skipped: %r" % (e,),
+                file=sys.stderr,
+            )
+            n_unknown += 1
+            continue
+        seen.add(e)
+        if field not in it:
+            return None, n_unknown  # schema: ключ поля обязателен
+        raw = it.get(field)
+        if raw is None:
+            out[e] = []
+        elif isinstance(raw, list):
+            out[e] = [str(x).strip() for x in raw if str(x).strip()]
+        else:
+            out[e] = _alias_tokens(raw)
+    return out, n_unknown
+
+
+def _aliases_meet_min(aliases, title, site):
+    """True если aliases проходят минимум сайта после filter."""
+    title_s = (title or "").strip()
+    if site == "collision":
+        is_title_fb = (len(aliases) == 1 and title_s and aliases[0] == title_s)
+        if is_title_fb:
+            return True
+        if len(aliases) < 2 or all(len(a) < 4 for a in aliases):
+            return False
+        return True
+    # init / reask
+    return len(aliases) >= 3
+
+
+def _payload_text(raw_or_text):
+    """Текст с items: конверт шлюза (text_from_agent) или сырой JSON items."""
+    raw = raw_or_text or ""
+    dug = text_from_agent(raw)
+    if dug and '"items"' in dug:
+        return dug
+    if '"items"' in raw:
+        return raw
+    return dug or raw
+
+
+def check_field_answer(raw_or_text, pay, field, site="init"):
+    """Проверка одного поля до сборки.
+
+    Возвращает (ok: bool, reason: str). reason пуст при ok.
+    site: init|collision (reask = init). field: aliases|bestUsedFor|notEnoughFor.
+    """
+    if field not in _FIELD_KEYS:
+        return False, "unknown field %r" % (field,)
+    if site not in ("init", "collision"):
+        return False, "unknown site %r" % (site,)
+    text = _payload_text(raw_or_text)
+
+    items = _items_from_field_text(text)
+    if items is None:
+        return False, "%s: not JSON / no items schema" % field
+
+    pay_ents = entities_from_pay(pay)
+    fmap, n_unknown = _field_values_map(items, field, allowed=pay_ents)
+    if fmap is None:
+        return False, "%s: schema — missing field key on an item" % field
+    # Любая причёсанная/чужая entity = ретрай поля (доля неизвестных > 0).
+    if n_unknown > 0:
+        return False, "%s: unknown entity not in Input (n=%d)" % (
+            field, n_unknown)
+    if not fmap:
+        return False, "%s: items empty" % field
+
+    titles = titles_by_entity(pay)
+    allowed = allowed_quantities(pay)
+
+    if field == "aliases":
+        ok_n = 0
+        for e, raw_aliases in fmap.items():
+            filtered = filter_entity_aliases(
+                raw_aliases, quantity_names=allowed.get(e) or [],
+                title=titles.get(e))
+            if _aliases_meet_min(filtered, titles.get(e), site):
+                ok_n += 1
+            else:
+                return False, (
+                    "%s: entity %s below min after filter (site=%s, n=%d)"
+                    % (field, e, site, len(filtered)))
+        if ok_n == 0:
+            return False, "%s: no entity met min after filter" % field
+        return True, ""
+
+    if field == "bestUsedFor":
+        for e, vals in fmap.items():
+            if len(vals) < 2:
+                return False, "%s: entity %s has %d templates (need >=2)" % (
+                    field, e, len(vals))
+            for s in vals:
+                if not _hard_format_best_ok(s):
+                    return False, (
+                        "%s: hard-format (paren+comma) entity %s: %r"
+                        % (field, e, s[:80]))
+        return True, ""
+
+    # notEnoughFor: пустой список допустим; падение — schema (выше) или hard-format
+    for e, vals in fmap.items():
+        for s in vals:
+            if not _hard_format_nef_ok(s):
+                return False, (
+                    "%s: hard-format (comma/paren) entity %s: %r"
+                    % (field, e, s[:80]))
+    return True, ""
+
+
+def assemble_field_items(aliases_raw, best_raw, nef_raw, pay, site="init"):
+    """Собрать три однопольных ответа в entity_rows (формат parse_items).
+
+    aliases/best/nef — сырой ответ шлюза или JSON-текст. measures не заполняются
+    (quantities — отдельный сайт). При site=collision строки ниже минимума
+    aliases пропускаются с логом (как прежний PY2).
+    """
+    titles = titles_by_entity(pay)
+    allowed = allowed_quantities(pay)
+    pay_ents = entities_from_pay(pay)
+
+    def _map(raw, field):
+        text = _payload_text(raw)
+        items = _items_from_field_text(text)
+        if items is None:
+            return {}
+        fmap, _n_unk = _field_values_map(items, field, allowed=pay_ents)
+        return fmap or {}
+
+    a_map = _map(aliases_raw, "aliases")
+    b_map = _map(best_raw, "bestUsedFor")
+    c_map = _map(nef_raw, "notEnoughFor")
+
+    entities = []
+    seen = set()
+    for e in list(a_map) + list(b_map) + list(c_map):
+        if e not in seen:
+            seen.add(e)
+            entities.append(e)
+
+    rows = []
+    for e in entities:
+        filtered = filter_entity_aliases(
+            a_map.get(e), quantity_names=allowed.get(e) or [],
+            title=titles.get(e))
+        if site == "collision":
+            title_s = (titles.get(e) or "").strip()
+            is_title_fb = (len(filtered) == 1 and title_s
+                           and filtered[0] == title_s)
+            if not is_title_fb and (
+                    len(filtered) < 2 or all(len(a) < 4 for a in filtered)):
+                print(
+                    "collision row skipped (degenerate after filter): %s"
+                    " — kept previous" % e,
+                    file=sys.stderr,
+                )
+                continue
+        elif len(filtered) < 3:
+            print(
+                "init row skipped (aliases < 3 after filter): %s" % e,
+                file=sys.stderr,
+            )
+            continue
+        best = b_map.get(e) or []
+        if len(best) < 2:
+            print(
+                "row skipped (bestUsedFor < 2): %s" % e,
+                file=sys.stderr,
+            )
+            continue
+        nef = c_map.get(e) or []
+        rows.append({
+            "src_table": e,
+            "aliases": _join(filtered),
+            "best_used_for": _join(best),
+            "not_enough_for": _join(nef),
+        })
+    return rows
+
+
 def main(argv):
+    # --check-field FIELD --site SITE ANS PAY  → exit 0/1, reason в stderr
+    if len(argv) >= 2 and argv[1] == "--check-field":
+        # argv: script --check-field FIELD --site SITE ANS PAY
+        field = argv[2]
+        site = "init"
+        rest = argv[3:]
+        if rest and rest[0] == "--site":
+            site = rest[1]
+            rest = rest[2:]
+        ans_path, pay_path = rest[0], rest[1]
+        raw = open(ans_path, encoding="utf-8", errors="replace").read()
+        try:
+            pay = json.loads(open(pay_path, encoding="utf-8").read() or "[]")
+        except ValueError:
+            pay = []
+        ok, reason = check_field_answer(raw, pay, field, site=site)
+        if not ok:
+            print("wiki_alias_parse: field fail %s: %s" % (field, reason),
+                  file=sys.stderr)
+            return 1
+        return 0
+
+    # --assemble --site SITE ANS_A ANS_B ANS_C PAY ROWS [MEASURES]
+    if len(argv) >= 2 and argv[1] == "--assemble":
+        site = "init"
+        rest = argv[2:]
+        if rest and rest[0] == "--site":
+            site = rest[1]
+            rest = rest[2:]
+        ans_a, ans_b, ans_c, pay_path, rows_path = rest[:5]
+        meas_path = rest[5] if len(rest) > 5 else None
+        try:
+            pay = json.loads(open(pay_path, encoding="utf-8").read() or "[]")
+        except ValueError:
+            pay = []
+        raw_a = open(ans_a, encoding="utf-8", errors="replace").read()
+        raw_b = open(ans_b, encoding="utf-8", errors="replace").read()
+        raw_c = open(ans_c, encoding="utf-8", errors="replace").read()
+        entities = assemble_field_items(raw_a, raw_b, raw_c, pay, site=site)
+        open(rows_path, "w", encoding="utf-8").write(
+            json.dumps(entities, ensure_ascii=False))
+        if meas_path:
+            open(meas_path, "w", encoding="utf-8").write("[]")
+        print("алиасов разобрано: %d, величин: 0" % len(entities))
+        return 0
+
     ans_path, pay_path, rows_path, meas_path = argv[1], argv[2], argv[3], argv[4]
     raw = open(ans_path, encoding="utf-8", errors="replace").read()
     try:

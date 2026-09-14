@@ -137,9 +137,91 @@ skipped=0
 # на боевой базе — час, то есть предел «40» молча означал «час», и п. 17 не выполнялся.
 # Бюджет измеряет то, что и ограничено контрактом, — ВРЕМЯ. Не успевшее за бюджет никуда
 # не девается: работа идёт следующим тактом с того же места (оба прохода идемпотентны).
-BUDGET="${WIKI_ALIAS_MAX_SEC:-120}"
+BUDGET="${WIKI_ALIAS_MAX_SEC:-120}"  # 0 = без потолка (over_budget)
 t_start=$(date +%s)
 over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUDGET" ]; }
+
+# ── Промты «1 задача = 1 вызов» (dictfix-final-prompt.md, дословно) ──
+_WA_INIT_A=$(cat <<'EOF_WA_PROMPT'
+JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. Answer language for every string = the language of that record's title (the English example below is STRUCTURE ONLY — never copy its language when the title is in another language). TASK: for EACH record produce ONLY the aliases field — everyday words a person actually puts in a question when they mean THIS kind of record (their spoken asking-words). RULES: (1) Include ROLE words for every flow listed in the input for this record: the same catalog is named differently by role depending on the flow (structure example: a counterparty catalog → buyers in sales flows, suppliers in purchase flows); take roles ONLY from the listed flows — do not invent flows. (2) WHEN the input for this record lists flows, OR lists quantities that are movement / money-total / event totals (not a bare headcount/Count alone): at least ONE alias MUST be a spoken action/event form people use when asking about such events (same language as the title, 1-2 words). Keep that event alias even if a sibling could use a similar word — the sibling distinction belongs to the notEnoughFor field (a separate call), not to dropping the event alias. If you must drop something to fit the limit, drop a redundant noun synonym, never the event alias. For records without flows/quantities, event aliases are optional — include only when natural. (3) Limits: 3 to 10 aliases; each alias is 1 to 3 words; no sentences; no question words alone (how/how many/what/who as standalone tokens). (4) Do NOT add the title (or a morphological variant of the title) as an alias — the title is already known from input. Do not put quantity names or field names into aliases (quantities are filled by a separate call). (5) BANS (skip the token if unsure): platform meta-labels and their equivalents in the title language (list, catalog, directory, types, kinds, register, journal, document, classifier, form, report as a meta-word); case/number/inflection variants of the SAME stem (pick one citation form); Latin-script words when the title is not Latin; NOUN words that equally fit a sibling in THIS batch (leave those out — the distinction goes to notEnoughFor; this ban is about nouns — spoken action/event forms stay, see rule 2); jargon opaque to a non-developer. (6) "If unsure — omit" applies to meta-labels and jargon; for action/event forms on records where Input lists flows, OR lists quantities that are movement / money-total / event totals (not a bare headcount/Count alone): prefer one everyday event form over a near-duplicate noun synonym. Structure example (English skeleton only): {"items":[{"entity":"catalog_counterparties","aliases":["buyers","suppliers","customers"]}]} Never copy the English example strings into the output when the title language is different. Every Input entity appears once; entity values copy Input exactly. Schema: {"items":[{"entity":"<exact copy of Input entity string>","aliases":["..."]}]}. Input:
+EOF_WA_PROMPT
+)
+_WA_INIT_B=$(cat <<'EOF_WA_PROMPT'
+JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING. Answer language for every string = the language of that record's title (the English example below is STRUCTURE ONLY). TASK: for EACH record produce ONLY the bestUsedFor field — 2 to 4 short question TEMPLATES this record truly answers (the shape of what a person asks, not full sentences). RULES: (1) No foreign topics (do not advertise price-list / stock-balance / customer-count questions for a record that does not answer them). (2) No office jargon gerunds. Prefer spoken wording over metadata wording. (3) Hard format rule for EVERY string: no PARENTHESES WITH A COMMA INSIDE the string (parentheses without a comma, and commas outside parentheses, are fine). Rewrite enumerations with a dash or a word instead. Structure example (English skeleton only): {"items":[{"entity":"catalog_counterparties","bestUsedFor":["how many customers","who bought this month"]}]} Never copy the English example strings when the title language is different. Every Input entity appears once; entity values copy Input exactly. Schema: {"items":[{"entity":"<exact copy of Input entity string>","bestUsedFor":["..."]}]}. Input:
+EOF_WA_PROMPT
+)
+_WA_INIT_C=$(cat <<'EOF_WA_PROMPT'
+JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. Answer language for every string = the language of that record's title (the English example below is STRUCTURE ONLY). TASK: for EACH record produce ONLY the notEnoughFor field — short strings telling what this record does NOT answer. TWO KINDS, both required when applicable: (a) THEMATIC "not me" — topic labels a person might confuse with this record but that this record does NOT answer (stock balances, price list, customer list/count, cash, payroll, … — only topics that are plausible confusions for THIS title); (b) SIBLING redirect — for each easy-to-confuse sibling from THIS input list, one short string: sibling title then what THAT sibling answers instead. When a sibling shares this record's action/event asking-words, name that shared topic here (what THAT sibling's events are). FORMAT RULES: no commas and no parentheses inside any string (downstream stores arrays as comma-CSV). Use a dash or the word "not"/"see" instead. Prefer 3-8 strings total. If unsure whether a topic is a real confusion — omit it. Do not invent sibling names that are not in the input. Structure example (English skeleton only): {"items":[{"entity":"catalog_counterparties","notEnoughFor":["not stock balances","not price list","Organizations - our own companies not trading partners"]}]} Never copy the English example strings when the title language is different. Every Input entity appears once; entity values copy Input exactly. Schema: {"items":[{"entity":"<exact copy of Input entity string>","notEnoughFor":["..."]}]}. Input:
+EOF_WA_PROMPT
+)
+_WA_COLL_A=$(cat <<'EOF_WA_PROMPT'
+You are a database disambiguation engine. JSON only, no prose, no code fences. The record types in Input are ALL CALLED BY THE SAME WORD in this database. That shared word is "<SHARED_WORD>": a person who types only that word could mean any type below. Answer language = the language of each title. TASK: for EACH type produce ONLY the aliases field. RULES: (1) Keep "<SHARED_WORD>" in the list — people use it. Also keep the title if it is already an everyday asking-word; each alias is a distinct word — no grammatical variants of the same stem. (2) ADD 1-2 DISTINCTIVE everyday words or short phrases (1-3 words each) that a person would use when they mean THIS type and not the siblings. WHEN the input for this type lists flows, OR lists quantities that are movement / money-total / event totals (not a bare headcount/Count alone): at least ONE of the added words MUST be a spoken action/event form people use when asking about such events (same language as the title). Keep that event word even if a sibling could use a similar one — the sibling distinction belongs to the notEnoughFor field (a separate call), not to dropping the event word. If only 1 confident — add just 1; quality over quantity. (3) Ground aliases only in this type title, its listed flows, and quantities from Input (and in its current aliases if Input lists them); take roles/event cues from listed flows and quantities only — do not invent flows or quantities. (4) Distinctive phrases may stay unique to this type, or overlap a sibling only when both truly share that role; empty contrast (only the shared word and bare title for every sibling) leaves siblings indistinguishable — give contrast with whole asking-words, not truncated title fragments. (5) Aliases are only concrete everyday words a person would type for THIS type. Match the title language exactly. When unsure a word is everyday for THIS type — omit it (this "unsure — omit" applies to noun words; for action/event forms on types where Input lists flows, OR lists quantities that are movement / money-total / event totals (not a bare headcount/Count alone): prefer one everyday event form over a near-duplicate noun synonym). Few-shot (English scaffold only; YOUR output language = language of each title). Shared word "party": {"items":[{"entity":"ent_partners","aliases":["party","partners","buyers"]},{"entity":"ent_counterparties","aliases":["party","counterparties","legal entities"]}]}. Schema: {"items":[{"entity":"<exact copy of Input entity string>","aliases":["..."]}]}. Every Input entity appears once; entity values copy Input exactly. Input:
+EOF_WA_PROMPT
+)
+_WA_COLL_B=$(cat <<'EOF_WA_PROMPT'
+You are a database disambiguation engine. JSON only, no prose, no code fences. The record types in Input are ALL CALLED BY THE SAME WORD in this database ("<SHARED_WORD>"). Answer language = the language of each title. TASK: for EACH type produce ONLY the bestUsedFor field — 2 to 4 short topic templates this type alone answers among the siblings (short phrases, not full sentences; topics belong to this type, not to a sibling). RULES: (1) No foreign topics (do not advertise price-list / stock-balance / customer-count questions for a type that does not answer them). (2) No office jargon gerunds. Prefer spoken wording over metadata wording. (3) FORMAT RULE: no PARENTHESES WITH A COMMA INSIDE any string (parentheses without a comma, and commas outside parentheses, are fine). Rewrite enumerations with a dash or a word instead. Few-shot (English scaffold only): {"items":[{"entity":"ent_partners","bestUsedFor":["who we sell to","partner headcount"]},{"entity":"ent_counterparties","bestUsedFor":["taxpayer id","contract party"]}]}. Schema: {"items":[{"entity":"<exact copy of Input entity string>","bestUsedFor":["..."]}]}. Input:
+EOF_WA_PROMPT
+)
+_WA_COLL_C=$(cat <<'EOF_WA_PROMPT'
+You are a database disambiguation engine. JSON only, no prose, no code fences. The record types in Input are ALL CALLED BY THE SAME WORD in this database. That shared word is "<SHARED_WORD>": a person who types only that word could mean any type below. Answer language = the language of each title. TASK: for EACH type produce ONLY the notEnoughFor field — when a person says "<SHARED_WORD>" but means a COMPETITOR TOPIC that another type in this list answers better, name that TOPIC (what they are looking for), then optionally the sibling title from Input. RULES: (1) Prefer themes over bare sibling names. Example shape: "stock on hand / warehouse balances — see <sibling title>"; "current price list — see <sibling title>". (2) Siblings come only from Input. (3) Each type includes the shared word "<SHARED_WORD>" in at least one notEnoughFor entry so later passes see the collision was addressed. (4) When a sibling shares this type's action/event asking-words, name that shared topic here (what THAT sibling's events are). (5) FORMAT RULE: no commas and no parentheses inside any string (downstream stores arrays as comma-CSV). Use a dash or the word "not"/"see" instead. (6) When unsure — omit that line. Few-shot (English scaffold only; YOUR output language = language of each title). Shared word "party": {"items":[{"entity":"ent_partners","notEnoughFor":["party as legal taxpayer / contract party — see Legal counterparties"]},{"entity":"ent_counterparties","notEnoughFor":["party as sales partner list — see Business partners"]}]}. Schema: {"items":[{"entity":"<exact copy of Input entity string>","notEnoughFor":["..."]}]}. Input:
+EOF_WA_PROMPT
+)
+
+# Вызов одного поля с ретраем до сборки (dictfix §2). Падение — в stderr (п.13).
+# $1=prompt $2=pay $3=ans $4=err $5=msg $6=field $7=site(init|collision) $8=log_tag
+wa_infer_field() {
+  local prompt="$1" pay="$2" ans="$3" err="$4" msg="$5" field="$6" site="$7" tag="$8"
+  local attempt
+  for attempt in 0 1 2; do
+    {
+      printf '%s' "$prompt"
+      cat "$pay"
+    } > "$msg"
+    chmod 644 "$msg"
+    # stdout шлюза глотаем: вызывающий ловит только строку сборки в parse_out=$(…).
+    if ! "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$msg" \
+      --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
+      --retry-items-json 2 \
+      --ans "$ans" --err "$err" >/dev/null; then
+      echo "$tag: поле $field попытка $attempt шлюз ($(head -c 100 "$err" 2>/dev/null | tr -d '\n'))" >&2
+      continue
+    fi
+    if python3 ./wiki_alias_parse.py --check-field "$field" --site "$site" \
+         "$ans" "$pay"; then
+      return 0
+    fi
+    echo "$tag: поле $field попытка $attempt не прошло валидацию" >&2
+  done
+  echo "$tag: поле $field ПАДЕНИЕ после ретраев" >&2
+  return 1
+}
+
+# Три поля A/B/C → rows.json (+ пустой measures при meas_out непустом).
+# $1=site $2=pay $3=pref(tmp prefix) $4=rows_out $5=meas_out|"" $6=tag
+# $7,$8,$9 = prompts A B C (уже с подставленным SHARED_WORD для collision)
+# stdout — только итог assemble («алиасов разобрано: N…»).
+wa_infer_three_fields() {
+  local site="$1" pay="$2" pref="$3" rows_out="$4" meas_out="$5" tag="$6"
+  local pA="$7" pB="$8" pC="$9"
+  wa_infer_field "$pA" "$pay" "${pref}.ans_a" "${pref}.err_a" "${pref}.msg_a" \
+    aliases "$site" "$tag" || return 1
+  wa_infer_field "$pB" "$pay" "${pref}.ans_b" "${pref}.err_b" "${pref}.msg_b" \
+    bestUsedFor "$site" "$tag" || return 1
+  wa_infer_field "$pC" "$pay" "${pref}.ans_c" "${pref}.err_c" "${pref}.msg_c" \
+    notEnoughFor "$site" "$tag" || return 1
+  python3 ./alias_usage_log.py --contour wiki --ans "${pref}.ans_a" \
+    --model "$WIKI_ALIAS_MODEL" >/dev/null 2>&1 || true
+  if [ -n "$meas_out" ]; then
+    python3 ./wiki_alias_parse.py --assemble --site "$site" \
+      "${pref}.ans_a" "${pref}.ans_b" "${pref}.ans_c" \
+      "$pay" "$rows_out" "$meas_out"
+  else
+    python3 ./wiki_alias_parse.py --assemble --site "$site" \
+      "${pref}.ans_a" "${pref}.ans_b" "${pref}.ans_c" \
+      "$pay" "$rows_out"
+  fi
+}
+
 while :; do
   # 🔴 ПАЧКА — ЭТО ГРУППА ПОХОЖИХ, А НЕ СЛУЧАЙНЫЕ СУЩНОСТИ ПОДРЯД.
   # [замер 30.07] описанные поодиночке страницы не различают соседей: у «Подтверждения
@@ -173,55 +255,22 @@ while :; do
   # сущностей команда отвечала «Missing message»: длинный JSON в аргументе командной строки не
   # доходит. У `openclaw agent` для этого есть штатный `--message-file`. Тот же класс дефекта, что
   # «стена argv» в разборе `HOW_NOT_TO §0`: данные аргументом командной строки не передаются.
-  {
-    # 🔴 СЛОВАРЬ — ЭТО СЛОВА, А НЕ ВОПРОСЫ (05.08, вечер). Прежнее задание просило «the
-    # natural way someone would ask for that value», и модель честно клала в словарь вопросы
-    # целиком: у регистра тары там оказалось «сколько тары у нас». Поиск считает совпадение
-    # по всем словам вопроса, включая «сколько», «у», «нас», — и этот регистр стал лидером
-    # ЛЮБОГО вопроса «сколько у нас …» с одной и той же оценкой 12,49 на трёх разных
-    # вопросах приёмки (партнёры, склады, организации). Верные ответы 164, 17 и 5 из-за
-    # этого отвергались проверкой выбора. Разбор — `work/entity-choice/ANSWER_RATE_P21.md`.
-    #
-    # 🔴 ОБИХОДНЫЕ СЛОВА, А НЕ ПЕРЕФРАЗИРОВКИ TITLE (25.08). Задание «SHORT NAMES …
-    # including its own title» давало морфологию метаданных («Контрагенты, контрагент»)
-    # и имена реквизитов в aliases; ts_lexize('…','клиент') оставался без связи
-    # (живой замер okna 25.08). Промт v2 title в aliases ЗАПРЕЩАЕТ; title — только
-    # fallback фильтра при опустошении (P3 §4.3). Имена величин — только в quantities.
-    # Отсев мусора — `wiki_alias_parse.filter_entity_aliases`.
-    # 🔴 СЛОВА РОЛИ В ПОТОКЕ (28.08, вечер). Полный C5-прогон okna дал для
-    # контрагентов «клиентов и поставщиков», но не «покупателей»: на вопрос
-    # «сколько покупателей было за этот месяц» ф9-связь kind→catalog не собралась
-    # (в алиасах нет стема «покупател»), ответ остался 76 по кассе. Роль — вещь
-    # потока, не сущности: тот же каталог в продаже называют покупателями, в закупке
-    # поставщиками. Задание теперь явно просит слова роли для каждого потока, где
-    # запись участвует; пример в задании — общебизнесовой, не про конкретную базу.
-    printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. Answer language for every string field = the language of that record's title (the English example below is STRUCTURE ONLY — never copy its language into the output when the title is in another language). For EACH record: (1) aliases — ONLY everyday words a person actually puts in a question when they mean THIS kind of record (their spoken asking-words). ALSO include ROLE words for every flow listed in the input for this record: the same catalog is named differently by role depending on the flow (structure example: a counterparty catalog → buyers in sales flows, suppliers in purchase flows); take roles ONLY from the listed flows — do not invent flows. ALSO include 1-2 spoken action/event forms people use when asking about events THIS kind of record captures, when such forms are natural for the type (same language as the title; same quality limits as other aliases; distinctive for THIS type among siblings in THIS batch — forms that equally fit a sibling go under notEnoughFor). Limits: 3 to 8 aliases; each alias is 1 to 3 words; no sentences; no question words alone (how/how many/what/who as standalone tokens). Do NOT add the title (or a morphological variant of the title) as an alias — the title is already known from input. Quantity names and field names go ONLY under quantities, never under aliases. BANS for aliases (skip the token if unsure): platform meta-labels and their equivalents in the title language (list, catalog, directory, types, kinds, register, journal, document, classifier, form, report as a meta-word); case/number/inflection variants of the SAME stem (pick one citation form); Latin-script words when the title is not Latin; words that equally fit a sibling in THIS batch (leave those out of aliases — put the distinction in notEnoughFor); jargon opaque to a non-developer. (2) quantities — for EVERY name from the input quantities list, copy that name EXACTLY and give 1-5 short names a person uses for that value (a noun, or a noun with the action/event word they say — e.g. spoken event forms for money totals), 1-3 words each, no sentences. Same bans as aliases. If a listed quantity has no clear everyday name, return it with an empty aliases array. (3) bestUsedFor — 2 to 4 short question TEMPLATES this record truly answers (the shape of what a person asks). No foreign topics (do not advertise price-list / stock-balance / customer-count questions for a record that does not answer them). No office jargon gerunds. Prefer spoken wording over metadata wording. (4) notEnoughFor — two kinds of short strings, both required when applicable: (a) THEMATIC \"not me\" — topic labels a person might confuse with this record but that this record does NOT answer (stock balances, price list, customer list/count, cash, payroll, … — only topics that are plausible confusions for THIS title); (b) SIBLING redirect — for each easy-to-confuse sibling from THIS input list, one short string: sibling title then what THAT sibling answers instead. Hard format rule for EVERY notEnoughFor string: no commas and no parentheses inside the string (downstream stores arrays as comma-CSV). Use a dash or the word \"not\"/\"see\" instead. Prefer 3-8 strings total. If unsure whether a topic is a real confusion — omit it. Global: if you are not sure a token or claim is correct — do not write it (omit; never guess). Do not invent quantities, flows, or sibling names that are not in the input. One structure example (English skeleton only; rewrite all strings into the title language of each real item): {\"entity\":\"catalog_counterparties\",\"aliases\":[\"buyers\",\"suppliers\",\"customers\"],\"quantities\":[{\"name\":\"Count\",\"aliases\":[\"headcount\",\"how many partners\"]}],\"bestUsedFor\":[\"how many customers\",\"who bought this month\"],\"notEnoughFor\":[\"not stock balances\",\"not price list\",\"Organizations - our own companies not trading partners\"]} Never copy the English example strings into the output when the title language is different — rewrite every string in the title language. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
-    cat "$TMP/pay"
-  } > "$TMP/msg"
-  chmod 644 "$TMP/msg"
-  "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
-    --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
-    --retry-items-json 2 \
-    --ans "$TMP/ans" --err "$TMP/err" || {
-      # 🔴 ОДНА ОСЕЧКА НЕ ОСТАНАВЛИВАЕТ ВСЁ. [замер 30.07] на 143-й сущности из 686 модель
-      # не ответила в срок (`LLM request timed out`), и прежний код обрывал цикл целиком —
-      # остальные 543 остались без описания из-за одной пачки. Теперь пачка пропускается,
-      # а её сущности помечаются, чтобы следующий проход не спотыкался о них снова и не
-      # ходил по кругу. Сколько пропущено — печатается в конце, молчания тут быть не должно.
-      # При force=1 пул не сжимается mark_skip → OFFSET двигаем и здесь, иначе та же пачка.
+  # «1 задача = 1 вызов»: init-A/B/C → сборка → один MERGE (dictfix §2).
+  if ! parse_out=$(wa_infer_three_fields init "$TMP/pay" "$TMP/ent" \
+        "$TMP/rows.json" "$TMP/measures.json" "алиасы" \
+        "$_WA_INIT_A" "$_WA_INIT_B" "$_WA_INIT_C"); then
       skipped=$((skipped + 1))
-      echo "алиасы: пачка пропущена ($(head -c 120 "$TMP/err" | tr -d '\n'))" >&2
+      echo "алиасы: пачка пропущена (падение поля A/B/C)" >&2
       psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
       done_total=$((done_total + BATCH))
       [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
       continue
-    }
+  fi
 
   # Разбор ответа модели — своим кодом это разрешено (п. 20: проверка ответа модели).
   # Выдуманное имя величины отбрасывается: во входном списке его не было.
   # 🔴 rc0 шлюза + 0 разобранных = попытка, не успех (R4). items=[] проходит
   # валидацию шлюза, MERGE был no-op, mark_skip не звался — пачка терялась молча.
-  parse_out=$(python3 ./wiki_alias_parse.py "$TMP/ans" "$TMP/pay" "$TMP/rows.json" "$TMP/measures.json")
   echo "$parse_out"
   ents_n=$(printf '%s\n' "$parse_out" | sed -n 's/.*алиасов разобрано: \([0-9][0-9]*\).*/\1/p' | tail -n1)
   case "$ents_n" in ''|*[!0-9]*) ents_n=0;; esac
@@ -233,7 +282,6 @@ while :; do
     [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
     continue
   fi
-  python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true
   # 🔴 ФАЙЛ ЧИТАЕТ ДВИЖОК, А НЕ МЫ. Каталогу права выставлены при создании, но
   # сам файл рождается с маской процесса: такт идёт из `build.sh`, где стоит
   # `umask 077` (секреты), и `rows.json` выходил 600 root — движок (`serenedb`)
@@ -366,49 +414,17 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     printf '%s' "$PAY" > "$TMP/pay"
     chmod 644 "$TMP/pay" 2>/dev/null
     case "$PAY" in ''|'[]'|'null') continue;; esac
-    {
-      # 🔴 Общие обиходные слова оставляем в aliases: иначе ts_lexize теряет связь
-      # («клиент» → пусто, замер okna 25.08). Различие соседей — в notEnoughFor.
-      _WA_COLL='You are a database disambiguation engine. JSON only, no prose, no code fences. The record types in Input are ALL CALLED BY THE SAME WORD in this database. That shared word is "<SHARED_WORD>": a person who types only that word could mean any type below. For EACH type, in the SAME language as its title, rebuild the three fields as follows. (1) aliases — keep "<SHARED_WORD>" in the list — people use it. Also keep the title if it is already an everyday asking-word; each alias is a distinct word — no grammatical variants of the same stem. ADD 1-2 DISTINCTIVE everyday words or short phrases (1-3 words each) that a person would use when they mean THIS type and not the siblings — including spoken action/event forms people use when asking about events THIS type captures, when such forms are natural and distinctive for THIS type among the siblings (same language as the title; same quality limits); if only 1 confident — add just 1; quality over quantity. Ground aliases only in this type title and quantities from Input (and in its current aliases if Input lists them). Distinctive phrases may stay unique to this type, or overlap a sibling only when both truly share that role; empty contrast (only the shared word and bare title for every sibling) leaves siblings indistinguishable — give contrast with whole asking-words, not truncated title fragments. Aliases are only concrete everyday words a person would type for THIS type. Match the title language exactly. When unsure a word is everyday for THIS type — omit it. (2) bestUsedFor — 2 to 4 short topic templates this type alone answers among the siblings (short phrases, not full sentences; topics belong to this type, not a sibling). (3) notEnoughFor — when a person says "<SHARED_WORD>" but means a COMPETITOR TOPIC that another type in this list answers better, name that TOPIC (what they are looking for), then optionally the sibling title from Input. Prefer themes over bare sibling names. Example shape: "stock on hand / warehouse balances — see <sibling title>"; "current price list — see <sibling title>". Siblings come only from Input. When unsure — omit that line. Each type includes the shared word "<SHARED_WORD>" in at least one notEnoughFor entry so later passes see the collision was addressed. Few-shot (English scaffold only; YOUR output language = language of each title). Shared word "party". Input types: {"entity":"ent_partners","title":"Business partners","quantities":"headcount"} and {"entity":"ent_counterparties","title":"Legal counterparties","quantities":"taxpayer id"}. Good full output: {"items":[{"entity":"ent_partners","aliases":["party","partners","buyers"],"bestUsedFor":["who we sell to","partner headcount"],"notEnoughFor":["party as legal taxpayer / contract party — see Legal counterparties"]},{"entity":"ent_counterparties","aliases":["party","counterparties","legal entities"],"bestUsedFor":["taxpayer id","contract party"],"notEnoughFor":["party as sales partner list — see Business partners"]}]}. Bad: dropping "party"; aliases that are only ["party"] for both; truncated title fragments as the only distinguishers; notEnoughFor that only repeats the other type machine id with no topic. Schema: {"items":[{"entity":"<exact copy of Input entity string>","aliases":["<everyday asking-word>","<everyday asking-word>"],"bestUsedFor":["<topic template>","<topic template>"],"notEnoughFor":["<competitor topic — see <sibling title from Input>>"]}]}. Every Input entity appears once; entity values copy Input exactly. Input: '
-      printf '%s' "${_WA_COLL//<SHARED_WORD>/$WORD}"
-      cat "$TMP/pay"
-    } > "$TMP/msg"
-    chmod 644 "$TMP/msg"
-    "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
-      --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
-      --retry-items-json 2 \
-      --ans "$TMP/ans" --err "$TMP/err" || {
-        echo "разведение: пачка пропущена ($(head -c 100 "$TMP/err" | tr -d '\n'))" >&2; continue; }
-    python3 ./alias_usage_log.py --contour wiki --ans "$TMP/ans" --model "$WIKI_ALIAS_MODEL" 2>/dev/null || true
-    python3 - "$TMP/ans" "$TMP/pay" "$TMP/rows.json" <<'PY2'
-import json, sys
-from wiki_alias_parse import filter_entity_aliases, extract_items_payload, text_from_agent, _join, titles_by_entity
-raw = open(sys.argv[1], encoding='utf-8', errors='replace').read()
-try:
-    pay = json.loads(open(sys.argv[2], encoding='utf-8').read() or '[]')
-except ValueError:
-    pay = []
-title_by = titles_by_entity(pay)
-text = text_from_agent(raw)
-payload = extract_items_payload(text)
-rows = []
-if payload is not None:
-    for it in (payload.get('items') or []):
-        e = (it.get('entity') or '').strip()
-        if not e: continue
-        aliases = filter_entity_aliases(it.get('aliases'), title=title_by.get(e))
-        title_s = (title_by.get(e) or '').strip()
-        # title-fallback [title] — валиден (P3 §4.3); иначе <2 или все <4 → не писать
-        is_title_fb = (len(aliases) == 1 and title_s and aliases[0] == title_s)
-        if not is_title_fb and (len(aliases) < 2 or all(len(a) < 4 for a in aliases)):
-            print("collision row skipped (degenerate after filter): %s — kept previous" % e, file=sys.stderr)
-            continue
-        rows.append({"src_table": e, "aliases": _join(aliases),
-                     "best_used_for": _join(it.get('bestUsedFor')),
-                     "not_enough_for": _join(it.get('notEnoughFor'))})
-open(sys.argv[3], 'w', encoding='utf-8').write(json.dumps(rows, ensure_ascii=False))
-print("разведено сущностей: %d" % len(rows))
-PY2
+    # «1 задача = 1 вызов»: collision-A/B/C → сборка → collision_merge.
+    _CA="${_WA_COLL_A//<SHARED_WORD>/$WORD}"
+    _CB="${_WA_COLL_B//<SHARED_WORD>/$WORD}"
+    _CC="${_WA_COLL_C//<SHARED_WORD>/$WORD}"
+    if ! parse_out=$(wa_infer_three_fields collision "$TMP/pay" "$TMP/coll" \
+          "$TMP/rows.json" "" "разведение" \
+          "$_CA" "$_CB" "$_CC"); then
+      echo "разведение: пачка пропущена (падение поля A/B/C)" >&2
+      continue
+    fi
+    echo "$parse_out"
     chmod 644 "$TMP/rows.json" 2>/dev/null   # тот же случай, что в первом проходе
     psql_wa -v rows_path="$TMP/rows.json" -f "$HERE/wiki_alias_collision_merge.sql" >/dev/null 2>&1
   done
@@ -450,20 +466,13 @@ if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
       chmod 644 "$TMP/reask_pay" 2>/dev/null
       PAY=$(cat "$TMP/reask_pay")
       case "$PAY" in ''|'[]'|'null') break;; esac
-      {
-        printf '%s' "JSON only, no prose, no code fences. Below are record types of one database, shown together because they are CLOSE IN MEANING — that is what makes them easy to confuse. Answer language for every string field = the language of that record's title (the English example below is STRUCTURE ONLY — never copy its language into the output when the title is in another language). For EACH record: (1) aliases — ONLY everyday words a person actually puts in a question when they mean THIS kind of record (their spoken asking-words). ALSO include ROLE words for every flow listed in the input for this record: the same catalog is named differently by role depending on the flow (structure example: a counterparty catalog → buyers in sales flows, suppliers in purchase flows); take roles ONLY from the listed flows — do not invent flows. ALSO include 1-2 spoken action/event forms people use when asking about events THIS kind of record captures, when such forms are natural for the type (same language as the title; same quality limits as other aliases; distinctive for THIS type among siblings in THIS batch — forms that equally fit a sibling go under notEnoughFor). Limits: 3 to 8 aliases; each alias is 1 to 3 words; no sentences; no question words alone (how/how many/what/who as standalone tokens). Do NOT add the title (or a morphological variant of the title) as an alias — the title is already known from input. Quantity names and field names go ONLY under quantities, never under aliases. BANS for aliases (skip the token if unsure): platform meta-labels and their equivalents in the title language (list, catalog, directory, types, kinds, register, journal, document, classifier, form, report as a meta-word); case/number/inflection variants of the SAME stem (pick one citation form); Latin-script words when the title is not Latin; words that equally fit a sibling in THIS batch (leave those out of aliases — put the distinction in notEnoughFor); jargon opaque to a non-developer. (2) quantities — for EVERY name from the input quantities list, copy that name EXACTLY and give 1-5 short names a person uses for that value (a noun, or a noun with the action/event word they say — e.g. spoken event forms for money totals), 1-3 words each, no sentences. Same bans as aliases. If a listed quantity has no clear everyday name, return it with an empty aliases array. (3) bestUsedFor — 2 to 4 short question TEMPLATES this record truly answers (the shape of what a person asks). No foreign topics (do not advertise price-list / stock-balance / customer-count questions for a record that does not answer them). No office jargon gerunds. Prefer spoken wording over metadata wording. (4) notEnoughFor — two kinds of short strings, both required when applicable: (a) THEMATIC \"not me\" — topic labels a person might confuse with this record but that this record does NOT answer (stock balances, price list, customer list/count, cash, payroll, … — only topics that are plausible confusions for THIS title); (b) SIBLING redirect — for each easy-to-confuse sibling from THIS input list, one short string: sibling title then what THAT sibling answers instead. Hard format rule for EVERY notEnoughFor string: no commas and no parentheses inside the string (downstream stores arrays as comma-CSV). Use a dash or the word \"not\"/\"see\" instead. Prefer 3-8 strings total. If unsure whether a topic is a real confusion — omit it. Global: if you are not sure a token or claim is correct — do not write it (omit; never guess). Do not invent quantities, flows, or sibling names that are not in the input. One structure example (English skeleton only; rewrite all strings into the title language of each real item): {\"entity\":\"catalog_counterparties\",\"aliases\":[\"buyers\",\"suppliers\",\"customers\"],\"quantities\":[{\"name\":\"Count\",\"aliases\":[\"headcount\",\"how many partners\"]}],\"bestUsedFor\":[\"how many customers\",\"who bought this month\"],\"notEnoughFor\":[\"not stock balances\",\"not price list\",\"Organizations - our own companies not trading partners\"]} Never copy the English example strings into the output when the title language is different — rewrite every string in the title language. Schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"],\"quantities\":[{\"name\":\"<exact from input quantities>\",\"aliases\":[\"...\"]}],\"bestUsedFor\":[\"...\"],\"notEnoughFor\":[\"...\"]}]}. Input: "
-        cat "$TMP/reask_pay"
-      } > "$TMP/reask_msg"
-      chmod 644 "$TMP/reask_msg"
-      "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/reask_msg" \
-        --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
-        --ans "$TMP/reask_ans" --err "$TMP/reask_err" || {
-          echo "reask: пачка пропущена ($(head -c 100 "$TMP/reask_err" | tr -d '\n'))" >&2
-          continue
-        }
-      # rc0 + 0 разобранных = попытка (R4); --retry-items-json сюда не вешаем.
-      parse_out=$(python3 ./wiki_alias_parse.py "$TMP/reask_ans" "$TMP/reask_pay" \
-        "$TMP/reask_rows.json" "$TMP/reask_meas.json")
+      # «1 задача = 1 вызов»: init-A/B/C (тот же канон, что entity-init).
+      if ! parse_out=$(wa_infer_three_fields init "$TMP/reask_pay" "$TMP/reask" \
+            "$TMP/reask_rows.json" "$TMP/reask_meas.json" "reask" \
+            "$_WA_INIT_A" "$_WA_INIT_B" "$_WA_INIT_C"); then
+        echo "reask: пачка пропущена (падение поля A/B/C)" >&2
+        continue
+      fi
       echo "$parse_out"
       ents_n=$(printf '%s\n' "$parse_out" | sed -n 's/.*алиасов разобрано: \([0-9][0-9]*\).*/\1/p' | tail -n1)
       case "$ents_n" in ''|*[!0-9]*) ents_n=0;; esac

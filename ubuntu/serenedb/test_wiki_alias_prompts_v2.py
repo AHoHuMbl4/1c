@@ -28,169 +28,144 @@ sh = (HERE / "wiki_alias.sh").read_text(encoding="utf-8")
 coll_sql = (HERE / "wiki_alias_collision_round.sql").read_text(encoding="utf-8")
 merge_sql = (HERE / "wiki_alias_merge_entity.sql").read_text(encoding="utf-8")
 
-# ── (а) три printf init + collision markers ──────────────────────────────────
-init_hits = [
-    m.group(0)
-    for m in re.finditer(r"printf '%s' \"JSON only[^\n]*CLOSE IN MEANING[^\n]*\"", sh)
-]
-# init may span one line; also catch via BANS count
-bans_n = sh.count("BANS for aliases")
-# Маркер хвоста init-промта P7 (без императива в литерале: замок ищет
-# уникальную подстроку этой фразы — в wiki_alias.sh она ровно в хвосте ×3).
-never_n = sh.count("English example strings")
-thematic_n = sh.count("THEMATIC")
-old_n = sh.count("also the record title itself")
-t("init×3: маркер BANS", bans_n == 3, bans_n)
-t("init×3: no-EN-copy маркер (P7)", never_n == 3, never_n)
-t("init×3: THEMATIC", thematic_n >= 3, thematic_n)
-t("старый маркер title itself отсутствует", old_n == 0, old_n)
-t("collision: шаблон SHARED_WORD", "<SHARED_WORD>" in sh)
-t("collision: подстановка WORD", "${_WA_COLL//<SHARED_WORD>/$WORD}" in sh)
-t("collision: DISTINCTIVE в промте", "DISTINCTIVE" in sh)
+# ── (а) шесть блоков промтов «1 задача = 1 вызов» (атомы-строки, без .claude/state) ─
+def _heredoc(var: str) -> str:
+    m = re.search(
+        rf"{re.escape(var)}=\$\(cat <<'EOF_WA_PROMPT'\n(.*?)\nEOF_WA_PROMPT",
+        sh, re.S)
+    return m.group(1) if m else ""
 
-# ── J-3: spoken action/event forms в aliases (init + collision) ───────────────
-# Общий канал генератора: event-формы — в aliases (пул читает aliases @@).
-# Маркер без wordlist и без императивов-запретов (п.0 + check-prompt-rules).
-_j3_mark = "spoken action/event forms people use when asking about events"
-_j3_n = sh.count(_j3_mark)
-t("J-3: event-формы в aliases — маркер ×4 (init×3 + collision)",
-  _j3_n == 4, _j3_n)
-t("J-3: init-aliases содержат event-маркер (BANS-строки)",
-  all(_j3_mark in m.group(0)
-      for m in re.finditer(
-          r"printf '%s' \"JSON only[^\n]*CLOSE IN MEANING[^\n]*\"", sh)),
-  _j3_n)
-# wordlist L67 — в каноне промтов отсутствовать (как мета-слова не чеклистом RU)
+
+_init_a, _init_b, _init_c = _heredoc("_WA_INIT_A"), _heredoc("_WA_INIT_B"), _heredoc("_WA_INIT_C")
+_coll_a, _coll_b, _coll_c = _heredoc("_WA_COLL_A"), _heredoc("_WA_COLL_B"), _heredoc("_WA_COLL_C")
+t("шесть heredoc-блоков промтов на месте",
+  all([_init_a, _init_b, _init_c, _coll_a, _coll_b, _coll_c]),
+  (len(_init_a), len(_init_b), len(_init_c), len(_coll_a), len(_coll_b), len(_coll_c)))
+
+_ent_once = "Every Input entity appears once; entity values copy Input exactly"
+t("INIT-A/B/C: entity copy Input exactly",
+  _ent_once in _init_a and _ent_once in _init_b and _ent_once in _init_c)
+t("INIT-A/B/C: Schema exact copy of Input entity string",
+  all('<exact copy of Input entity string>' in x
+      for x in (_init_a, _init_b, _init_c)))
+t("INIT-A: лимит 3 to 10",
+  "3 to 10" in _init_a)
+t("INIT-B + COLL-B: no PARENTHESES WITH A COMMA INSIDE",
+  "no PARENTHESES WITH A COMMA INSIDE" in _init_b
+  and "no PARENTHESES WITH A COMMA INSIDE" in _coll_b)
+t("INIT-C + COLL-C: hard format NEF (no commas and no parentheses)",
+  "no commas and no parentheses" in _init_c
+  and "no commas and no parentheses" in _coll_c)
+t("collision: шаблон SHARED_WORD в A/B/C",
+  all("<SHARED_WORD>" in x for x in (_coll_a, _coll_b, _coll_c)))
+t("collision: подстановка WORD в A/B/C",
+  '_WA_COLL_A//<SHARED_WORD>/$WORD' in sh
+  and '_WA_COLL_B//<SHARED_WORD>/$WORD' in sh
+  and '_WA_COLL_C//<SHARED_WORD>/$WORD' in sh)
+t("COLLISION-A: DISTINCTIVE + entity exact",
+  "DISTINCTIVE" in _coll_a
+  and _ent_once in _coll_a
+  and '<exact copy of Input entity string>' in _coll_a)
+
+# «1 задача = 1 вызов»: на пачку — три поля (три вызова шлюза через wa_infer_field)
+_tf_body = ""
+if "wa_infer_three_fields()" in sh:
+    _tf_body = sh.split("wa_infer_three_fields()", 1)[1].split("\nwhile :;", 1)[0]
+t("1 задача=1 вызов: three_fields → aliases/best/nef",
+  'aliases "$site"' in _tf_body
+  and 'bestUsedFor "$site"' in _tf_body
+  and 'notEnoughFor "$site"' in _tf_body
+  and _tf_body.count("wa_infer_field ") == 3,
+  _tf_body.count("wa_infer_field "))
+t("1 задача=1 вызов: шлюз внутри wa_infer_field",
+  "alias_infer_gateway.py" in sh.split("wa_infer_field()", 1)[1].split(
+      "wa_infer_three_fields()", 1)[0])
+
+# measure / dayfork — без новых маркеров INIT (тексты сайтов не менялись)
+_meas_txt = ""
+# вырежем measure-промт между «величины» циклом и dayfork: первый printf CLOSE IN MEANING после done_measures
+_i_meas = sh.find("done_measures=0")
+_i_day = sh.find("FORK CLASSES")
+if _i_meas >= 0 and _i_day > _i_meas:
+    _meas_txt = sh[_i_meas:_i_day]
+_day_txt = sh[_i_day:_i_day + 800] if _i_day >= 0 else ""
+t("measure/dayfork: без новых маркеров entity-copy",
+  _ent_once not in _meas_txt
+  and _ent_once not in _day_txt
+  and "<exact copy of Input entity string>" not in _meas_txt
+  and "FORK CLASSES" in _day_txt
+  and "3 to 8" in _meas_txt,  # measure по-прежнему 3..8, не 3..10
+  (_ent_once in _meas_txt, "3 to 8" in _meas_txt, "FORK CLASSES" in _day_txt))
+
+# event-формы в A-промтах (без wordlist базы)
+_event_mark = "spoken action/event form"
+t("event-формы: INIT-A и COLL-A",
+  _event_mark in _init_a and _event_mark in _coll_a)
 for _w in ("наторговали", "сделали", "вышло", "покупают"):
-    t("J-3: нет wordlist «%s»" % _w, _w not in sh)
+    t("нет wordlist «%s»" % _w, _w not in sh)
 
-# ── G8a: collision V2 (H1) + PY2 инвариант записи (H3) ────────────────────────
-_wa_coll_m = re.search(r"_WA_COLL='((?:[^']|'\\'')*)'", sh)
-_wa_coll = _wa_coll_m.group(1) if _wa_coll_m else ""
-t("J-3: collision содержит event-маркер",
-  _j3_mark in _wa_coll, _wa_coll[200:320] if _wa_coll else "empty")
-t("J-3 антикаша: event под отличительностью THIS type",
-  "distinctive for THIS type among" in _wa_coll
-  and _j3_mark in _wa_coll
-  and "1-2 DISTINCTIVE" in _wa_coll,
-  ("distinctive" in _wa_coll, _j3_mark in _wa_coll))
-t("collision V2: роль disambiguation engine",
-  "disambiguation engine" in _wa_coll, _wa_coll[:80])
-# few-shot: два типа × bestUsedFor в полном JSON (не sketch)
-_fs = ""
-if "Good full output:" in _wa_coll:
-    _fs = _wa_coll.split("Good full output:", 1)[1].split("Bad:", 1)[0]
-t("collision V2: few-shot полный JSON (два bestUsedFor)",
-  _fs.count('"bestUsedFor"') == 2
-  and '"entity":"ent_partners"' in _fs
-  and '"entity":"ent_counterparties"' in _fs,
-  (_fs.count('"bestUsedFor"'), _fs[:120]))
-t("collision V2: quality over quantity",
-  "quality over quantity" in _wa_coll)
-# V0-маркеры — нейтральные подстроки без императивов: старое оформление
-# проверяем по уникальным V0-фразам-существительным. Gate-safe промта держит
-# гейт коммита (check-prompt-rules, бьёт по добавленным литералам) — в замке
-# не дублируем: любой паттерн триггеров в тесте сам стал бы триггером.
-_v0_meta = "platform meta-labels"
-_v0_contrast = "empty contrast"
-_v0_exact = "exactly 1 or 2"
-t("collision V2: позитив (нет V0 meta-labels списка)",
-  _v0_meta not in _wa_coll
-  and "concrete everyday words a person would type" in _wa_coll)
-t("collision V2: contrast в позитивной форме (whole asking-words)",
-  "give contrast with whole asking-words" in _wa_coll
-  and _v0_exact not in _wa_coll
-  and "quality over quantity" in _wa_coll)
-
-# H3: маркеры skip-ветки в PY2 (не в init)
-_py2 = ""
-if "<<'PY2'" in sh:
-    _py2 = sh.split("<<'PY2'", 1)[1].split("PY2\n", 1)[0]
-t("collision H3: маркер skip-ветки is_title_fb / degenerate",
-  "is_title_fb" in _py2
-  and "degenerate after filter" in _py2
-  and "len(aliases) < 2" in _py2)
-t("collision H3: лог-строка в PY2",
-  "collision row skipped (degenerate after filter):" in _py2
-  and "kept previous" in _py2)
-
-# Живой вызов сборщика rows: извлекаем PY2 из sh и прогоняем фикстуры
+# ── collision assemble (бывший H3/PY2): через assemble_field_items ────────────
 import json as _json
-import tempfile as _tf
-import subprocess as _sp
+import io as _io
+from contextlib import redirect_stderr as _redir_err
 
 
-def _run_collision_py2(items, pay):
-    """Прогон реального PY2-heredoc из wiki_alias.sh на фикстуре."""
-    assert "<<'PY2'" in sh
-    body = sh.split("<<'PY2'\n", 1)[1].split("\nPY2\n", 1)[0]
-    with _tf.TemporaryDirectory() as td:
-        td = Path(td)
-        ans = td / "ans"
-        payf = td / "pay"
-        rowsf = td / "rows.json"
-        ans.write_text(
-            _json.dumps({"payloads": [{"text": _json.dumps(
-                {"items": items}, ensure_ascii=False)}]}, ensure_ascii=False),
-            encoding="utf-8",
-        )
-        payf.write_text(_json.dumps(pay, ensure_ascii=False), encoding="utf-8")
-        r = _sp.run(
-            [sys.executable, "-c", body, str(ans), str(payf), str(rowsf)],
-            cwd=str(HERE),
-            capture_output=True,
-            text=True,
-        )
-        rows = _json.loads(rowsf.read_text(encoding="utf-8") or "[]")
-        return rows, r.stderr, r.returncode
+def _assemble_coll(items_a, items_b, items_c, pay):
+    err = _io.StringIO()
+    with _redir_err(err):
+        rows = P.assemble_field_items(
+            _json.dumps({"items": items_a}, ensure_ascii=False),
+            _json.dumps({"items": items_b}, ensure_ascii=False),
+            _json.dumps({"items": items_c}, ensure_ascii=False),
+            pay, site="collision")
+    return rows, err.getvalue()
 
 
-_deg_items = [{
-    "entity": "ent_a",
-    "aliases": ["ок"],
-    "bestUsedFor": ["x"],
-    "notEnoughFor": ["y"],
-}]
 _deg_pay = [{"entity": "ent_a", "title": "Сущность А", "quantities": ""}]
-_deg_rows, _deg_err, _deg_rc = _run_collision_py2(_deg_items, _deg_pay)
+_deg_rows, _deg_err = _assemble_coll(
+    [{"entity": "ent_a", "aliases": ["ок"]}],
+    [{"entity": "ent_a", "bestUsedFor": ["x", "y"]}],
+    [{"entity": "ent_a", "notEnoughFor": ["z"]}],
+    _deg_pay)
 t("collision H3: [['ок']] → строка пропущена",
-  _deg_rc == 0 and _deg_rows == []
+  _deg_rows == []
   and "collision row skipped (degenerate after filter): ent_a" in _deg_err
   and "kept previous" in _deg_err,
-  (_deg_rows, _deg_err[:200], _deg_rc))
+  (_deg_rows, _deg_err[:200]))
 
-# фикстура: две сущности с ≥2 aliases len≥4 → обе записаны
-_ok_items = [
-    {"entity": "ent_a", "aliases": ["фраза нормальная", "вторая фраза"],
-     "bestUsedFor": ["x"], "notEnoughFor": ["y"]},
-    {"entity": "ent_b", "aliases": ["фраза нормальная", "вторая фраза"],
-     "bestUsedFor": ["x"], "notEnoughFor": ["y"]},
-]
 _ok_pay = [
     {"entity": "ent_a", "title": "Тип А", "quantities": ""},
     {"entity": "ent_b", "title": "Тип Б", "quantities": ""},
 ]
-_ok_rows, _ok_err, _ok_rc = _run_collision_py2(_ok_items, _ok_pay)
+_ok_rows, _ok_err = _assemble_coll(
+    [{"entity": "ent_a", "aliases": ["фраза нормальная", "вторая фраза"]},
+     {"entity": "ent_b", "aliases": ["фраза нормальная", "вторая фраза"]}],
+    [{"entity": "ent_a", "bestUsedFor": ["x", "y"]},
+     {"entity": "ent_b", "bestUsedFor": ["x", "y"]}],
+    [{"entity": "ent_a", "notEnoughFor": ["z"]},
+     {"entity": "ent_b", "notEnoughFor": ["z"]}],
+    _ok_pay)
 t("collision H3: две нормальные фразы → обе сущности записаны",
-  _ok_rc == 0 and len(_ok_rows) == 2
+  len(_ok_rows) == 2
   and {r["src_table"] for r in _ok_rows} == {"ent_a", "ent_b"}
   and "degenerate after filter" not in _ok_err,
-  (_ok_rows, _ok_err[:200], _ok_rc))
+  (_ok_rows, _ok_err[:200]))
 
-# title-fallback [title] — валиден (одна строка = title)
-_tf_items = [{
-    "entity": "ent_tf",
-    "aliases": ["справочник"],
-    "bestUsedFor": ["x"],
-    "notEnoughFor": ["y"],
-}]
 _tf_pay = [{"entity": "ent_tf", "title": "Банки", "quantities": ""}]
-_tf_rows, _tf_err, _tf_rc = _run_collision_py2(_tf_items, _tf_pay)
+_tf_rows, _tf_err = _assemble_coll(
+    [{"entity": "ent_tf", "aliases": ["справочник"]}],
+    [{"entity": "ent_tf", "bestUsedFor": ["x", "y"]}],
+    [{"entity": "ent_tf", "notEnoughFor": ["z"]}],
+    _tf_pay)
 t("collision H3: title-fallback [title] → записан",
-  _tf_rc == 0 and len(_tf_rows) == 1
+  len(_tf_rows) == 1
   and _tf_rows[0]["aliases"] == "Банки"
   and "degenerate after filter" not in _tf_err,
-  (_tf_rows, _tf_err[:200], _tf_rc))
+  (_tf_rows, _tf_err[:200]))
+
+t("collision: assemble + check-field в оболочке",
+  "--assemble" in sh and "--check-field" in sh
+  and "wa_infer_three_fields" in sh)
 
 # ── (б) filter_entity_aliases meta ───────────────────────────────────────────
 got = P.filter_entity_aliases(
@@ -406,10 +381,14 @@ t("collision SQL: текущие aliases", "aliases := coalesce(a.aliases" in co
 t("collision SQL: best_used_for", "best_used_for := coalesce(a.best_used_for" in coll_sql)
 t("collision SQL: not_enough_for", "not_enough_for := coalesce(a.not_enough_for" in coll_sql)
 t("collision SQL: JOIN alias_table", "LEFT JOIN :alias_table a ON a.src_table" in coll_sql)
-t("collision parse зовёт filter_entity_aliases",
-  "from wiki_alias_parse import filter_entity_aliases" in sh)
-t("collision parse передаёт title из pay",
-  "titles_by_entity" in sh and "title=title_by.get" in sh)
+# filter/title — в assemble_field_items (parse.py), не inline PY2 в .sh
+_parse_src = (HERE / "wiki_alias_parse.py").read_text(encoding="utf-8")
+t("assemble зовёт filter_entity_aliases + titles_by_entity",
+  "filter_entity_aliases(" in _parse_src
+  and "titles_by_entity" in _parse_src
+  and "def assemble_field_items" in _parse_src)
+t("оболочка collision/init идёт через --assemble",
+  "--assemble" in sh and "wa_infer_three_fields" in sh)
 
 # ── (г) merge force: два текста различаются условием MATCHED ─────────────────
 t("merge SQL: условие force",
@@ -739,10 +718,11 @@ t("retry: rc==0 + валидный items с 1-й → 1 вызов, exit 0, бе�
   and "catalog_x" in _ans_ok1,
   (_rc_ok1, len(_calls_ok1), _err_ok1[:80], _ans_ok1[:120]))
 
-# проводка в wiki_alias.sh: ровно 3 сайта (entity/measure/collision), не reask/dayfork
+# проводка: --retry-items-json 2 в wa_infer_field (entity/collision/reask)
+# и отдельно в measure-сайте; dayfork/branch — без флага.
 _retry_n = sh.count("--retry-items-json 2")
-t("wiki_alias.sh: --retry-items-json 2 ровно ×3 (entity/measure/collision)",
-  _retry_n == 3, _retry_n)
+t("wiki_alias.sh: --retry-items-json 2 ×2 (wa_infer_field + measure)",
+  _retry_n == 2, _retry_n)
 
 _br = (HERE / "branch_alias.sh").read_text(encoding="utf-8")
 t("branch_alias.sh: без --retry-items-json (форма forks, не items)",
@@ -752,17 +732,19 @@ t("branch_alias.sh: без --retry-items-json (форма forks, не items)",
   "comment+no-flag")
 
 # ── R4: rc0 + 0 разобранных → mark_skip (якорь + окно, не голый grep) ─────────
-# Entity: окно от первого вызова разбора до MERGE entity (до merge_entity.sql).
-_i_parse_e = sh.find('python3 ./wiki_alias_parse.py "$TMP/ans"')
+# Entity: от three_fields/assemble до MERGE entity.
+_i_parse_e = sh.find("wa_infer_three_fields init")
+if _i_parse_e < 0:
+    _i_parse_e = sh.find("wiki_alias_parse.py --assemble")
 _i_merge_e = sh.find("wiki_alias_merge_entity.sql", _i_parse_e) if _i_parse_e >= 0 else -1
 _win_e = sh[_i_parse_e:_i_merge_e] if _i_parse_e >= 0 and _i_merge_e > _i_parse_e else ""
-t("R4 entity: окно parse→MERGE найдено",
+t("R4 entity: окно three_fields→MERGE найдено",
   bool(_win_e), (_i_parse_e, _i_merge_e))
 t("R4 entity: parse-0 → mark_skip до MERGE",
   "wiki_alias_mark_skip.sql" in _win_e
   and "rc0" in _win_e
   and "разобрано 0" in _win_e,
-  _win_e[:160])
+  _win_e[:200])
 
 # Measure: окно от разбора после entity-MERGE до merge_measures.sql.
 _i_parse_m = sh.find("python3 ./wiki_alias_parse.py", _i_merge_e) if _i_merge_e >= 0 else -1

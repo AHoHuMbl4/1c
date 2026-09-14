@@ -67,11 +67,20 @@ SELECT p.alias || chr(9) || p.fp || chr(9) || coalesce(
       entity := f.src_table,
       title := f.label,
       quantities := coalesce(f.measures,''),
+      flows := flows,
       word := p.alias,
       aliases := coalesce(a.aliases, ''),
       best_used_for := coalesce(a.best_used_for, ''),
       not_enough_for := coalesce(a.not_enough_for, ''))))
-   FROM (SELECT f.* FROM wiki_entity_facts f
+   FROM (SELECT f.*,
+             coalesce((SELECT string_agg(lbl, ', ') FROM (
+                       SELECT DISTINCT t2.label AS lbl,
+                              t2.src_table LIKE 'accumulationregister_%' AS is_reg
+                       FROM search_refcols r
+                       JOIN search_tables t2 ON t2.src_table = r.src_table
+                       WHERE r.target_src = f.src_table
+                       ORDER BY is_reg DESC, lbl LIMIT 12) x), '') AS flows
+           FROM wiki_entity_facts f
           WHERE f.src_table IN (SELECT src_table FROM al WHERE alias = p.alias)
           ORDER BY f.src_table LIMIT :batch) f
    LEFT JOIN :alias_table a ON a.src_table = f.src_table),

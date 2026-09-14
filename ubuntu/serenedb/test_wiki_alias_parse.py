@@ -135,12 +135,194 @@ t("🔴 обрезанный JSON: целые элементы спасаютс�
 t("salvage: пустой/без items — пусто, не исключение",
   P._salvage_items("{}") == [] and P._salvage_items("xx") == [])
 
-# ── G6: extract_items_payload (reasoning-преамбула; живой замер песочницы 13.09) ─
-# Живой кейс: Qwen3.8-27B на collision отвечает прозой («Let me analyze…»),
-# в прозе — обрывки schema {"items":[…]}, валидный JSON с items — в КОНЦЕ
-# (ans ~20022 символов, items около 19293). Жадый \{.*\} брал первую { из
-# прозы → loads падал → rows=[].
+# ── G6: «1 задача = 1 вызов» — --check-field / --assemble / сторож entity ─────
+# PY2/extract в .sh убраны: разбор поля и сборка — CLI wiki_alias_parse.
+import io
+import json as _json
+import tempfile
+from contextlib import redirect_stderr, redirect_stdout
 
+_PAY_G6 = [
+    {"entity": "ent_a", "title": "Тип А", "quantities": ""},
+    {"entity": "ent_b", "title": "Тип Б", "quantities": ""},
+]
+
+_ANS_A = _json.dumps({
+    "items": [
+        {"entity": "ent_a", "aliases": ["фраза нормальная", "вторая фраза", "третья"]},
+        {"entity": "ent_b", "aliases": ["слово длинное", "ещё одно", "третье слово"]},
+    ]
+}, ensure_ascii=False)
+_ANS_B = _json.dumps({
+    "items": [
+        {"entity": "ent_a", "bestUsedFor": ["как считать", "кто купил"]},
+        {"entity": "ent_b", "bestUsedFor": ["сколько было", "когда закрыли"]},
+    ]
+}, ensure_ascii=False)
+_ANS_C = _json.dumps({
+    "items": [
+        {"entity": "ent_a", "notEnoughFor": ["not stock", "see sibling"]},
+        {"entity": "ent_b", "notEnoughFor": ["not price"]},
+    ]
+}, ensure_ascii=False)
+
+# валидная сборка: aliases+best+nef в одну строку
+_rows_ok = P.assemble_field_items(_ANS_A, _ANS_B, _ANS_C, _PAY_G6, site="init")
+t("G6: assemble — две сущности, aliases+best+nef",
+  len(_rows_ok) == 2
+  and {r["src_table"] for r in _rows_ok} == {"ent_a", "ent_b"}
+  and all(r.get("aliases") and r.get("best_used_for") for r in _rows_ok)
+  and any(r.get("not_enough_for") for r in _rows_ok),
+  _rows_ok)
+
+_ok_check, _ok_why = P.check_field_answer(_ANS_A, _PAY_G6, "aliases", site="init")
+t("G6: --check-field aliases ok на валидном",
+  _ok_check and _ok_why == "", (_ok_check, _ok_why))
+
+# P-8 hard-format: bestUsedFor — скобка+запятая внутри; запятая без скобок ок;
+# notEnoughFor — любая запятая/скобка = падение
+_ANS_BEST_PAREN = _json.dumps({
+    "items": [
+        {"entity": "ent_a", "bestUsedFor": ["topic (a, b)", "other topic"]},
+        {"entity": "ent_b", "bestUsedFor": ["how many", "who bought"]},
+    ]
+}, ensure_ascii=False)
+_fail_paren, _why_paren = P.check_field_answer(
+    _ANS_BEST_PAREN, _PAY_G6, "bestUsedFor", site="init")
+t("G6: check-field bestUsedFor paren+comma → fail",
+  (not _fail_paren) and "hard-format (paren+comma)" in _why_paren,
+  (_fail_paren, _why_paren))
+
+_ANS_BEST_COMMA = _json.dumps({
+    "items": [
+        {"entity": "ent_a", "bestUsedFor": ["topic a, b", "other topic"]},
+        {"entity": "ent_b", "bestUsedFor": ["how many", "who bought"]},
+    ]
+}, ensure_ascii=False)
+_ok_comma, _why_comma = P.check_field_answer(
+    _ANS_BEST_COMMA, _PAY_G6, "bestUsedFor", site="init")
+t("G6: check-field bestUsedFor comma without paren → ok",
+  _ok_comma and _why_comma == "", (_ok_comma, _why_comma))
+
+_ANS_NEF_FMT = _json.dumps({
+    "items": [
+        {"entity": "ent_a", "notEnoughFor": ["topic (x)"]},
+        {"entity": "ent_b", "notEnoughFor": ["ok topic"]},
+    ]
+}, ensure_ascii=False)
+_fail_nef, _why_nef = P.check_field_answer(
+    _ANS_NEF_FMT, _PAY_G6, "notEnoughFor", site="init")
+t("G6: check-field notEnoughFor hard-format → fail",
+  (not _fail_nef) and "hard-format (comma/paren)" in _why_nef,
+  (_fail_nef, _why_nef))
+
+# неизвестная entity: assemble пропускает + stderr; check — падение
+_ANS_UNK = _json.dumps({
+    "items": [
+        {"entity": "ent_a", "aliases": ["фраза нормальная", "вторая фраза", "третья"]},
+        {"entity": "ent_scrubbed", "aliases": ["чужое", "ещё чужое", "третье"]},
+    ]
+}, ensure_ascii=False)
+_err_unk = io.StringIO()
+with redirect_stderr(_err_unk):
+    _rows_unk = P.assemble_field_items(
+        _ANS_UNK, _ANS_B, _ANS_C, _PAY_G6, site="init")
+t("G6: неизвестная entity — не в rows, stderr пропуск",
+  all(r["src_table"] != "ent_scrubbed" for r in _rows_unk)
+  and "unknown entity skipped" in _err_unk.getvalue()
+  and "ent_scrubbed" in _err_unk.getvalue(),
+  (_rows_unk, _err_unk.getvalue()[:200]))
+
+_fail_unk, _why_unk = P.check_field_answer(
+    _ANS_UNK, _PAY_G6, "aliases", site="init")
+t("G6: check-field — любая неизвестная entity = падение",
+  (not _fail_unk) and "unknown entity" in _why_unk,
+  (_fail_unk, _why_unk))
+
+# дубль entity: пропуск дубля + stderr; первая копия остаётся
+_ANS_DUP = _json.dumps({
+    "items": [
+        {"entity": "ent_a", "aliases": ["фраза нормальная", "вторая фраза", "третья"]},
+        {"entity": "ent_a", "aliases": ["дубль один", "дубль два", "дубль три"]},
+        {"entity": "ent_b", "aliases": ["слово длинное", "ещё одно", "третье слово"]},
+    ]
+}, ensure_ascii=False)
+_err_dup = io.StringIO()
+with redirect_stderr(_err_dup):
+    _rows_dup = P.assemble_field_items(
+        _ANS_DUP, _ANS_B, _ANS_C, _PAY_G6, site="init")
+_alias_a = next((r["aliases"] for r in _rows_dup if r["src_table"] == "ent_a"), "")
+t("G6: дубль entity — пропуск + stderr, первая копия",
+  "duplicate entity skipped" in _err_dup.getvalue()
+  and "фраза нормальная" in _alias_a
+  and "дубль один" not in _alias_a
+  and len(_rows_dup) == 2,
+  (_alias_a, _err_dup.getvalue()[:200], _rows_dup))
+
+# collision-degenerate: короткие aliases → пропуск строки
+_ANS_DEG = _json.dumps({
+    "items": [{"entity": "ent_a", "aliases": ["ок"]}]
+}, ensure_ascii=False)
+_ANS_DEG_B = _json.dumps({
+    "items": [{"entity": "ent_a", "bestUsedFor": ["x", "y"]}]
+}, ensure_ascii=False)
+_ANS_DEG_C = _json.dumps({
+    "items": [{"entity": "ent_a", "notEnoughFor": ["z"]}]
+}, ensure_ascii=False)
+_err_deg = io.StringIO()
+with redirect_stderr(_err_deg):
+    _rows_deg = P.assemble_field_items(
+        _ANS_DEG, _ANS_DEG_B, _ANS_DEG_C,
+        [{"entity": "ent_a", "title": "Сущность А", "quantities": ""}],
+        site="collision")
+t("G6: collision-degenerate — строка пропущена",
+  _rows_deg == []
+  and "collision row skipped (degenerate after filter)" in _err_deg.getvalue()
+  and "kept previous" in _err_deg.getvalue(),
+  (_rows_deg, _err_deg.getvalue()[:200]))
+
+# CLI --assemble / --check-field
+_td = tempfile.mkdtemp()
+try:
+    _pay_p = os.path.join(_td, "pay.json")
+    _a = os.path.join(_td, "a.json")
+    _b = os.path.join(_td, "b.json")
+    _c = os.path.join(_td, "c.json")
+    _rows_p = os.path.join(_td, "rows.json")
+    open(_pay_p, "w", encoding="utf-8").write(_json.dumps(_PAY_G6, ensure_ascii=False))
+    open(_a, "w", encoding="utf-8").write(_ANS_A)
+    open(_b, "w", encoding="utf-8").write(_ANS_B)
+    open(_c, "w", encoding="utf-8").write(_ANS_C)
+    _buf = io.StringIO()
+    with redirect_stdout(_buf):
+        _rc_asm = P.main([
+            "wiki_alias_parse.py", "--assemble", "--site", "init",
+            _a, _b, _c, _pay_p, _rows_p,
+        ])
+    _out_asm = _buf.getvalue().strip()
+    _rows_cli = _json.loads(open(_rows_p, encoding="utf-8").read())
+    t("G6: CLI --assemble → 2 строки + stdout",
+      _rc_asm == 0 and len(_rows_cli) == 2
+      and "алиасов разобрано: 2" in _out_asm,
+      (_rc_asm, _out_asm, _rows_cli))
+    _rc_chk = P.main([
+        "wiki_alias_parse.py", "--check-field", "aliases", "--site", "init",
+        _a, _pay_p,
+    ])
+    t("G6: CLI --check-field aliases → 0",
+      _rc_chk == 0, _rc_chk)
+    open(_a, "w", encoding="utf-8").write(_ANS_UNK)
+    _rc_bad = P.main([
+        "wiki_alias_parse.py", "--check-field", "aliases", "--site", "init",
+        _a, _pay_p,
+    ])
+    t("G6: CLI --check-field неизвестная → 1",
+      _rc_bad == 1, _rc_bad)
+finally:
+    import shutil
+    shutil.rmtree(_td, ignore_errors=True)
+
+# extract_items_payload — регресс (преамбула), без зависимости от PY2 в .sh
 _FINAL_ITEMS = (
     '{"items":[{"entity":"catalog_партнёрыпробные",'
     '"aliases":["партнёр","покупатель"],'
@@ -153,83 +335,28 @@ _FINAL_ITEMS = (
     '"notEnoughFor":["покупатель — см. партнёры"],'
     '"quantities":[]}]}'
 )
-
-# Мотив живого ans: преамбула + schema-фрагмент с { в прозе + финальный JSON.
 TEXT_PREAMBLE = (
     "Let me analyze this task carefully.\n\n"
-    "The shared word is \"party\". I need to rebuild aliases for each type.\n"
     "Looking at the schema: {\"items\":[{\"entity\":\"...\",\"aliases\":[\"...\"]}],\n"
-    "note the incomplete sketch above; prose braces appear there too.\n\n"
     "Final answer:\n"
     + _FINAL_ITEMS
 )
-
 got_pre = P.extract_items_payload(TEXT_PREAMBLE)
-t("G6: преамбула+schema-фрагмент → items из финального JSON",
-  got_pre is not None
-  and len(got_pre.get("items") or []) == 2
-  and got_pre["items"][0]["entity"] == "catalog_партнёрыпробные",
+t("G6: extract преамбула → items из финального JSON",
+  got_pre is not None and len(got_pre.get("items") or []) == 2,
   got_pre)
-ents_pre, _ = P.parse_items(TEXT_PREAMBLE, {
-    "items": [
-        {"entity": "catalog_партнёрыпробные", "title": "Партнёры", "quantities": ""},
-        {"entity": "catalog_контрагентыпробные", "title": "Контрагенты", "quantities": ""},
-    ]
-})
-t("G6: parse_items через extract — 2 сущности из преамбулы",
-  len(ents_pre) == 2
-  and {r["src_table"] for r in ents_pre}
-  == {"catalog_партнёрыпробные", "catalog_контрагентыпробные"},
-  ents_pre)
-
-got_clean = P.extract_items_payload(_FINAL_ITEMS)
-t("G6: чистый JSON без преамбулы — как раньше",
-  got_clean is not None and len(got_clean["items"]) == 2, got_clean)
-
-# JSON в середине + хвост-проза с } — жадный цепляет хвост; попытка 3 режет.
-TEXT_MID = (
-    "note schema {\"items\":[]} sketch.\n"
-    + _FINAL_ITEMS
-    + "\nThat covers the siblings. Extra brace noise: {\"done\": true}"
-)
-got_mid = P.extract_items_payload(TEXT_MID)
-t("G6: JSON в середине + хвост с } → items-объект (не хвост)",
-  got_mid is not None
-  and len(got_mid.get("items") or []) == 2
-  and got_mid["items"][0]["entity"] == "catalog_партнёрыпробные",
-  got_mid)
-
-got_none = P.extract_items_payload("Let me think. No payload here {\"x\":1}")
-t("G6: нет items → None, не исключение",
-  got_none is None)
-
-# salvage-регресс: обрезанный JSON по-прежнему спасает целый элемент
-ents_t2, _ = P.parse_items(TEXT_TRUNC, {"items": []})
-t("G6: обрезанный JSON — salvage по-прежнему спасает (регресс)",
-  len(ents_t2) == 1 and ents_t2[0]["src_table"] == "catalog_пробный", ents_t2)
-
-# PY2 collision: маркер вызова extract_items_payload в wiki_alias.sh
-_sh = open(os.path.join(os.path.dirname(__file__), "wiki_alias.sh"),
-           encoding="utf-8").read()
-t("G6: collision PY2 зовёт extract_items_payload",
-  "extract_items_payload" in _sh
-  and "payload = extract_items_payload(text)" in _sh)
 
 # R4: stdout-контракт «0 разобранных» (оболочка читает числа sed/awk)
 ents0, meas0 = P.parse_items('{"items":[]}', PAY)
 t("R4: items=[] → 0 сущностей и 0 величин",
   len(ents0) == 0 and len(meas0) == 0, (ents0, meas0))
 
-import io
-import tempfile
-from contextlib import redirect_stdout
-
-_td = tempfile.mkdtemp()
+_td2 = tempfile.mkdtemp()
 try:
-    _ans = os.path.join(_td, "ans.json")
-    _pay = os.path.join(_td, "pay.json")
-    _rows = os.path.join(_td, "rows.json")
-    _meas = os.path.join(_td, "meas.json")
+    _ans = os.path.join(_td2, "ans.json")
+    _pay = os.path.join(_td2, "pay.json")
+    _rows = os.path.join(_td2, "rows.json")
+    _meas = os.path.join(_td2, "meas.json")
     open(_ans, "w", encoding="utf-8").write('{"items":[]}\n')
     open(_pay, "w", encoding="utf-8").write("[]\n")
     _buf = io.StringIO()
@@ -241,7 +368,7 @@ try:
       (_rc, _out))
 finally:
     import shutil
-    shutil.rmtree(_td, ignore_errors=True)
+    shutil.rmtree(_td2, ignore_errors=True)
 
 print()
 if FAIL:
