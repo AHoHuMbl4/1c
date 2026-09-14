@@ -1,4 +1,4 @@
-# ПАМЯТКА ПРОДОЛЖЕНИЯ после компакта (записана 14.09 ~10:00, эпизод «починка словаря: 1 задача = 1 вызов», regen ожидает «да» владельца)
+# ПАМЯТКА ПРОДОЛЖЕНИЯ после компакта (записана 14.09 ~10:00, эпизод «починка словаря: 1 задача = 1 вызов», regen ожидает «да» владельца; ДОП 10:50: «да» ПОЛУЧЕНО, regen ЗАПУЩЕН — §3а)
 
 Прочитать ПЕРВЫМ вместе с memory_bank/activeContext.md (шапка «С ЧЕГО НАЧАТЬ»).
 Это продолжение continuation-j3-20260913.md (законы/механика там не устарели).
@@ -170,3 +170,43 @@
   [pending] promote (г) → Solr → A3 → возврат эмбеддера (владелец) → L67
   [pending] приёмка §5 + коммит эпизода + REGRESSION_BASE1
   [pending] стоп-точка I0 на прод — владелец
+
+## 3а. REGEN ЗАПУЩЕН 14.09 10:44 («да» владельца: «фиксируем и внедряем»)
+
+- Коммиты до запуска: d91b6c9 (37, promote г) и 0599241 (38, entity-строка
+  COLL-B/C + замок 6/6) — оба запушены; выкат deploy 26 файлов md5 ok
+  (бэкап .bak-deploy-20260914-104344); promote+migrate_sep в /opt/1c-mcp-reports.
+- Снапшоты: alias_okna_c5_pre_split_20260914 (260) +
+  _measure_pre_split_20260914 (795).
+- env /etc/1c-wiki-alias-postgres.env: FORCE=1, COLLISIONS=0, MAX_SEC=0;
+  модель vllm/Qwen3.8-27B ЛОКАЛЬНАЯ (песочница baseUrl 178.63.211.188:8000,
+  шлюз жив — Unauthorized без ключа, ключ в auth-store песочницы).
+- Старт: systemctl start --no-block 1c-wiki-alias@postgres.service (10:44).
+  Живой ход: ретраи полей работают («поле aliases попытка 0 не прошло
+  валидацию» → переспрос), сторожа живые (duplicate entity skipped,
+  meta token stripped).
+- Наблюдатель ФОНОМ у меня: bash-t2a3xttd, лог
+  .claude/state/regen-watch.log (каждые 2 мин: is-active + count/max-seen_at
+  alias_okna_c5 + 2 строки журнала). Финиш = is-active inactive/failed.
+- ДАЛЬШЕ по финишу: env FORCE=0 COLLISIONS=1 → collision до «осталось 0»
+  (ROUNDS=40 уже в env) → promote (г) из /opt/1c-mcp-reports с
+  snap_suffix=20260914b → migrate_sep → Solr → A3 → слово владельцу на
+  возврат эмбеддера → L67 → приёмка §5 (п.8 ниже) → REGRESSION_BASE1.
+
+## 3б. СОСТОЯНИЕ НА ВЕЧЕР 14.09 (~17:40)
+
+- Коммиты дня: d91b6c9 (37 promote-г), 0599241 (38 entity-строка COLL-B/C),
+  2e625b7 (39 BATCH=1+WORKERS), 40d70e5 (40 COLL_BATCH), 5c8da0e (41
+  collision-параллель), 66d0203 (42 план автоматизации), (43) сироты-promote.
+- Реген-2: 256/260, 0 пустых, 3 брошено (NEF hard-format у выдачибланков;
+  below-min плательщикиндс) — видно в журнале, не молчаливо.
+- Collision параллельный (COLL_WORKERS=3) идёт с 16:56; хвост 230→~185,
+  наблюдатель bash-l1n3bvgj (coll5-watch.log). По финишу: ROUNDS вернуть 40!
+- Promote теперь с фильтром сирот (wiki_entity_facts) + orphan_skipped;
+  живая проба на *_t — фантом отсеян.
+- После collision: promote snap_suffix=20260914c → migrate_sep → solr → A3
+  → СЛОВО ВЛАДЕЛЬЦА на возврат эмбеддера → такт → L67 + REGRESSION_BASE1.
+- Памятка о том, как НЕ делать: юнит, стартовавший ДО деплоя, работает
+  старым кодом (coll-3); pkill/pgrep -f по своей подстроке; ssh-кавычки —
+  файлами; python3 -c многострочник — heredoc-файлом; git add отдельным
+  вызовом (снайпер).

@@ -120,6 +120,11 @@ CREATE TABLE :"measure_snap" AS SELECT * FROM :"battle_measure";
 -- Поля draft_* — сырой черновик. aliases — только union (§3.99); best/nef — CASE (г):
 --   heal = подмена поля чистым непустым draft, keep при битом/пустом draft,
 --   union при обоих чистых (см. UPDATE SET ниже).
+-- 🔴 СИРОТЫ ЧЕРНОВИКА НЕ УХОДЯТ В БОЙ [замер 14.09]: строка, которой нет в
+-- wiki_entity_facts (движок — источник истины), иначе INSERT-ветка MERGE внесла
+-- бы её в бой навсегда (unmatched-by-source не удаляются). Живой пример:
+-- фантом-опечатка от 28.08. Пропущенные сироты видны счётчиком orphan_skipped
+-- в фазе after — молчаливой потери нет (п. 13).
 CREATE OR REPLACE TEMP TABLE _promote_entity_src AS
 SELECT
   d.src_table,
@@ -127,7 +132,8 @@ SELECT
   coalesce(d.best_used_for, '') AS draft_best,
   coalesce(d.not_enough_for, '') AS draft_nef,
   coalesce(d.seen_at, now()) AS draft_seen_at
-FROM :"draft_table" d;
+FROM :"draft_table" d
+WHERE EXISTS (SELECT 1 FROM wiki_entity_facts f WHERE f.src_table = d.src_table);
 
 CREATE OR REPLACE TEMP TABLE _promote_measure_src AS
 SELECT
@@ -373,7 +379,11 @@ SELECT 'after' AS phase,
           LEFT JOIN :"entity_snap" s ON s.src_table = t.src_table
          WHERE s.src_table IS NULL
            AND (regexp_matches(coalesce(t.best_used_for, ''), '\([^)]*,[^)]*\)')
-                OR regexp_matches(coalesce(t.not_enough_for, ''), '\([^)]*,[^)]*\)'))) AS insert_with_pattern;
+                OR regexp_matches(coalesce(t.not_enough_for, ''), '\([^)]*,[^)]*\)'))) AS insert_with_pattern,
+       (SELECT count(*)
+          FROM :"draft_table" d
+         WHERE NOT EXISTS (SELECT 1 FROM wiki_entity_facts f
+                            WHERE f.src_table = d.src_table)) AS orphan_skipped;
 
 \echo promote: OK. Дальше — wiki_alias_migrate_sep.sql (residual ', '→' | '), затем Solr из боя.
 
