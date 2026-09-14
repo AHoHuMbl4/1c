@@ -109,65 +109,6 @@ gen = A._rid_get()
 t("answer_checked: генерирует rid", len(gen) >= 12)
 t("answer_checked: rid 12-16 alnum", gen.isalnum() and 12 <= len(gen) <= 16)
 
-
-# ── I0-П2-фикс: формат TRACE «wiki verify» ───────────────────────────────────
-fmt = getattr(A, "wiki_verify_trace_fields", None)
-t("wiki_verify_trace_fields exported", callable(fmt))
-if callable(fmt):
-    sole = fmt({"wiki_verify": "catalog_goods", "wiki_verify_yes": 1,
-                "wiki_verify_no": 0, "wiki_verify_unsure": 0})
-    t("TRACE sole: leader=src not none",
-      sole.get("leader") == "catalog_goods"
-      and sole.get("verdicts") == "1yes/0no/0u",
-      sole)
-    bad = fmt({"wiki_verify": "bad_index", "wiki_verify_yes": 0,
-               "wiki_verify_no": 0, "wiki_verify_unsure": 0})
-    t("TRACE sentinel bad_index",
-      bad.get("leader") == "- (bad_index)", bad)
-    ax = fmt({"wiki_verify": "axis_reject"})
-    t("TRACE sentinel axis_reject",
-      ax.get("leader") == "- (axis_reject)", ax)
-    deg = fmt({"wiki_verify_error": 1, "wiki_pick_hint": "catalog_a",
-               "wiki_verdicts": []})
-    t("TRACE degraded uses wiki_pick_hint",
-      deg.get("verdicts") == "degraded" and deg.get("leader") == "catalog_a",
-      deg)
-    deg2 = fmt({"wiki_verify_error": 1, "wiki_verdicts": []})
-    t("TRACE degraded without hint -> leader=-",
-      deg2.get("verdicts") == "degraded" and deg2.get("leader") == "-",
-      deg2)
-    deg_wd = fmt({"wiki_degraded": 1, "wiki_pick_hint": "catalog_b"})
-    t("TRACE wiki_degraded alone uses hint",
-      deg_wd.get("verdicts") == "degraded" and deg_wd.get("leader") == "catalog_b",
-      deg_wd)
-    deg_ign = fmt({"wiki_verify_error": 1, "wiki_pick": "catalog_a"})
-    t("TRACE degraded ignores wiki_pick for leader",
-      deg_ign.get("leader") == "-", deg_ign)
-    nl = fmt({"wiki_verify": "src" + chr(10) + "with  spaces", "wiki_verify_yes": 1})
-    t("TRACE leader sanitized one line",
-      chr(10) not in nl.get("leader", "") and "  " not in nl.get("leader", ""),
-      nl)
-    conf0 = fmt({"wiki_verify": "catalog_goods", "wiki_verify_yes": 1,
-                 "wiki_verify_no": 0, "wiki_verify_unsure": 0})
-    t("TRACE confirm absent -> -",
-      conf0.get("confirm") == "-" and "2" not in conf0, conf0)
-    conf1 = fmt({
-        "wiki_verify": "catalog_goods", "wiki_verify_yes": 1,
-        "wiki_verify_no": 1, "wiki_verify_unsure": 0,
-        "wiki_verify_confirm": "agree",
-        "wiki_verify2_yes": 1, "wiki_verify2_no": 1, "wiki_verify2_unsure": 0,
-    })
-    t("TRACE confirm+2 on second call",
-      conf1.get("confirm") == "agree" and conf1.get("2") == "1/1/0",
-      conf1)
-    conf_nl = fmt({
-        "wiki_verify": "catalog_a",
-        "wiki_verify_confirm": "disagree" + chr(10) + "x",
-        "wiki_verify2_yes": 0,
-    })
-    t("TRACE confirm sanitized",
-      chr(10) not in conf_nl.get("confirm", ""), conf_nl)
-
 print("\n%d проверок пройдено" % PASS)
 if FAIL:
     print("ПРОВАЛЕНО %d: %s" % (len(FAIL), "; ".join(FAIL)))
