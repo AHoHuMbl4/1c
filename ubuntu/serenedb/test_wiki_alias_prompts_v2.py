@@ -43,8 +43,9 @@ t("шесть heredoc-блоков промтов на месте",
   (len(_init_a), len(_init_b), len(_init_c), len(_coll_a), len(_coll_b), len(_coll_c)))
 
 _ent_once = "Every Input entity appears once; entity values copy Input exactly"
-t("INIT-A/B/C: entity copy Input exactly",
-  _ent_once in _init_a and _ent_once in _init_b and _ent_once in _init_c)
+t("все шесть промтов: entity copy Input exactly (ревью владельца 14.09: COLL-B/C тоже)",
+  all(_ent_once in x
+      for x in (_init_a, _init_b, _init_c, _coll_a, _coll_b, _coll_c)))
 t("INIT-A/B/C: Schema exact copy of Input entity string",
   all('<exact copy of Input entity string>' in x
       for x in (_init_a, _init_b, _init_c)))
