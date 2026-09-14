@@ -454,36 +454,74 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
   # :probe_table (PROBE_TABLE, умолч. search_alias_probe) — wiki_alias_init.sql (CREATE IF NOT EXISTS).
   # Песочница задаёт свою PROBE_TABLE, чтобы не марать боевую память столкновений.
   rounds=0 asked=0 stopped=""
+  # [замер 14.09] ПАРАЛЛЕЛЬНЫЕ СЛОВА: одна пачка слова идёт ~10 мин (группа до
+  # COLL_BATCH записей × 3 поля); хвост 230 слов последовательно — двое суток.
+  # Очередь из COLL_WORKERS слов собирается быстрыми pick-ами (probe отмечает
+  # каждое ДО вызова модели), генерация — параллельными субшеллами в
+  # изолированных $TMP/cw$iq, а MERGE — строго последовательно после wait:
+  # разные слова пересекаются по строкам сущностей, конкурентный MERGE терял
+  # бы правки (read-modify-write одного поля).
+  COLL_WORKERS="${WIKI_ALIAS_COLLISION_WORKERS:-3}"
+  case "$COLL_WORKERS" in ''|*[!0-9]*) COLL_WORKERS=3;; esac
+  [ "$COLL_WORKERS" -lt 1 ] && COLL_WORKERS=1
   # Предел кругов остаётся вторым ограничителем — на случай `WIKI_ALIAS_MAX_SEC=0`.
   while [ "$rounds" -lt "${WIKI_ALIAS_COLLISION_ROUNDS:-40}" ]; do
     over_budget && { stopped=" (бюджет $BUDGET с исчерпан)"; break; }
-    rounds=$((rounds + 1))
-    # Выбор слова + отметка probe + JSON пачки — один psql (wiki_alias_collision_round.sql).
-    # `md5(string_agg(...))` — штатные функции движка (Aggregate; Utility md5).
-    ROUND=$(psql_wa_tA -v batch="$COLL_BATCH" -v target_word="$TARGET_WORD" \
-      -f "$HERE/wiki_alias_collision_round.sql" 2>/dev/null) || ROUND=""
-    [ -z "$ROUND" ] && break
-    WORD=${ROUND%%$'\t'*}
-    rest=${ROUND#*$'\t'}
-    FP=${rest%%$'\t'*}
-    PAY=${rest#*$'\t'}
-    asked=$((asked + 1))
-    printf '%s' "$PAY" > "$TMP/pay"
-    chmod 644 "$TMP/pay" 2>/dev/null
-    case "$PAY" in ''|'[]'|'null') continue;; esac
-    # «1 задача = 1 вызов»: collision-A/B/C → сборка → collision_merge.
-    _CA="${_WA_COLL_A//<SHARED_WORD>/$WORD}"
-    _CB="${_WA_COLL_B//<SHARED_WORD>/$WORD}"
-    _CC="${_WA_COLL_C//<SHARED_WORD>/$WORD}"
-    if ! parse_out=$(wa_infer_three_fields collision "$TMP/pay" "$TMP/coll" \
-          "$TMP/rows.json" "" "разведение" \
-          "$_CA" "$_CB" "$_CC"); then
-      echo "разведение: пачка пропущена (падение поля A/B/C)" >&2
-      continue
-    fi
-    echo "$parse_out"
-    chmod 644 "$TMP/rows.json" 2>/dev/null   # тот же случай, что в первом проходе
-    psql_wa -v rows_path="$TMP/rows.json" -f "$HERE/wiki_alias_collision_merge.sql" >/dev/null 2>&1
+    # ── сбор очереди: до COLL_WORKERS слов; pick последовательный (по одному
+    # слову за psql), отметка probe в момент выбора — дублей слов в очереди нет.
+    QWORDS="" Q=0
+    for iq in $(seq 1 "$COLL_WORKERS"); do
+      # красная red5: предел кругов не может быть перешагнут сбором очереди;
+      # явное TARGET_WORD — ровно один слот (probe-фильтр в SQL при этом
+      # выключен, дубль слова ушёл бы в параллель ×N).
+      [ "$rounds" -lt "${WIKI_ALIAS_COLLISION_ROUNDS:-40}" ] || break
+      ROUND=$(psql_wa_tA -v batch="$COLL_BATCH" -v target_word="$TARGET_WORD" \
+        -f "$HERE/wiki_alias_collision_round.sql" 2>/dev/null) || ROUND=""
+      [ -z "$ROUND" ] && break
+      WORD=${ROUND%%$'\t'*}
+      rest=${ROUND#*$'\t'}
+      FP=${rest%%$'\t'*}
+      PAY=${rest#*$'\t'}
+      WTMP="$TMP/cw$iq"; mkdir -p "$WTMP"
+      [ "$(id -u)" = 0 ] && chown "$BOTUSER" "$WTMP" 2>/dev/null || true
+      rm -f "$WTMP/rows.json"   # красная red5b: stale rows.json упавшего слова не должен попасть в merge
+      printf '%s' "$PAY" > "$WTMP/pay"
+      printf '%s' "$WORD" > "$WTMP/word"
+      chmod 644 "$WTMP/pay" "$WTMP/word" 2>/dev/null
+      QWORDS="$QWORDS $iq"
+      Q=$((Q + 1))
+      rounds=$((rounds + 1))
+      [ -n "$TARGET_WORD" ] && break
+    done
+    [ "$Q" -eq 0 ] && break
+    asked=$((asked + Q))
+    # ── параллельная генерация слов очереди (изолированные $WTMP)
+    for iq in $QWORDS; do
+      (
+        WTMP="$TMP/cw$iq"
+        PAY=$(cat "$WTMP/pay" 2>/dev/null)
+        case "$PAY" in ''|'[]'|'null') exit 0;; esac
+        WORD=$(cat "$WTMP/word" 2>/dev/null)
+        # «1 задача = 1 вызов»: collision-A/B/C → сборка (merge после wait).
+        _CA="${_WA_COLL_A//<SHARED_WORD>/$WORD}"
+        _CB="${_WA_COLL_B//<SHARED_WORD>/$WORD}"
+        _CC="${_WA_COLL_C//<SHARED_WORD>/$WORD}"
+        if ! parse_out=$(wa_infer_three_fields collision "$WTMP/pay" "$WTMP/coll" \
+              "$WTMP/rows.json" "" "разведение" \
+              "$_CA" "$_CB" "$_CC"); then
+          echo "разведение: пачка пропущена (падение поля A/B/C)" >&2
+          exit 0
+        fi
+        echo "$parse_out"
+        chmod 644 "$WTMP/rows.json" 2>/dev/null   # тот же случай, что в первом проходе
+      ) &
+    done
+    wait
+    # ── MERGE строго последовательно: слова пересекаются по строкам сущностей.
+    for iq in $QWORDS; do
+      [ -s "$TMP/cw$iq/rows.json" ] || continue
+      psql_wa -v rows_path="$TMP/cw$iq/rows.json" -f "$HERE/wiki_alias_collision_merge.sql" >/dev/null 2>&1
+    done
   done
   # Молчания тут быть не должно: видно и сколько спросили, и сколько ОСТАЛОСЬ на следующий
   # такт (упёрлись в предел кругов), и сколько столкновений модель разобрать не смогла —
