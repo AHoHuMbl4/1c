@@ -27,7 +27,7 @@
 // Чистая политика и функции — в verify-core.js (оффлайн-тесты test-verify.mjs).
 
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULTS, buildClarifyPresentation, channelUserOf, dataTurnActive, digitBlob, evaluate, extractText, finalizeDecision, injectAskRid, injectAskUser, isBlockedSideTool, isClarify, isServiceError, mergeRef, newRid, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny, traceEnabled, traceLine } from "./verify-core.js";
+import { DEFAULTS, buildClarifyPresentation, channelUserOf, dataTurnActive, digitBlob, evaluate, extractText, finalizeDecision, injectAskRid, injectAskUser, isBlockedSideTool, isClarify, isServiceError, mergeRef, newRid, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, rewriteAsk1cParams, selfFetchNeeded, stripInternal, toolMatchesAny, traceEnabled, traceLine, whyMaxAttempts } from "./verify-core.js";
 
 let PLUGIN_API = null; // штатный api движка; выставляется в register()
 
@@ -85,7 +85,7 @@ const inbound = new Map(); // sessKey -> { at, digits:Set<string>, blob:string }
 // пустого `inbound`. Текст берётся из `before_agent_run`, который даёт текущий ввод
 // пользователя и срабатывает всегда (доки `plugins/hooks.md`).
 const prompts = new Map(); // sessKey -> { at, text } (вопрос текущего хода)
-const clarifyLocks = new Map(); // sessKey -> { at, question, options[] }
+const clarifyLocks = new Map(); // sessKey -> { at, question, options[], runId }
 const identities = new Map(); // run:<id>|sess:<key> -> { user, kind, channel, at }
 const turnRid = new Map(); // sessKey -> { at, rid }
 
@@ -334,9 +334,9 @@ export default definePluginEntry({
           || ((prompts.get(sessKey) && prompts.get(sessKey).text) || "");
         const options = parseClarifyOptions(text);
         if (q && options.length) {
-          clarifyLocks.set(sessKey, { at: Date.now(), question: q, options });
+          clarifyLocks.set(sessKey, { at: Date.now(), question: q, options, runId });
           prune(clarifyLocks, cfg.refTtlMs);
-          dbg(cfg, `clarify_lock set sess=${sessKey} opts=${options.length} q=${q.slice(0, 80)}`);
+          dbg(cfg, `clarify_lock set sess=${sessKey} runId=${runId} opts=${options.length} q=${q.slice(0, 80)}`);
         }
       } else if (clarifyLocks.has(sessKey)) {
         clarifyLocks.delete(sessKey);
@@ -423,7 +423,9 @@ export default definePluginEntry({
           dbg(cfg, `self_fetch sess=${sessKey} runId=${runId} FAILED`);
         }
       }
-      const d = finalizeDecision((event && event.lastAssistantMessage) || "", ref2, inb, cfg, haveRef);
+      const lock = sessKey ? clarifyLocks.get(sessKey) : null;
+      const d = finalizeDecision((event && event.lastAssistantMessage) || "", ref2, inb, cfg, haveRef,
+                                 { clarifyLock: lock, runId });
       // 🔴 УСПЕХ ГЕЙТА ПИШЕТСЯ В ЖУРНАЛ НАРАВНЕ С ОТКАЗОМ. Пока молчал только успех,
       // «проверил и пропустил» было неотличимо от «не звался вовсе» — ровно так дыра с
       // доставкой и прожила одиннадцать дней незамеченной.
@@ -434,7 +436,11 @@ export default definePluginEntry({
       return {
         action: "revise",
         reason: d.reason,
-        retry: { instruction: d.instruction, maxAttempts: 1, idempotencyKey: d.idempotencyKey },
+        retry: {
+          instruction: d.instruction,
+          maxAttempts: whyMaxAttempts(d.why),
+          idempotencyKey: d.idempotencyKey,
+        },
       };
     // 🔴 БЮДЖЕТ ХУКА ПОДНЯТ ПОД СВОЙ ПОХОД ЗА ДАННЫМИ. Умолчание движка — 15 с, а сервис
     // ответов отвечает 30-70 с ([замер 03.08] приёмка: 16-175 с на вопрос). При таймауте

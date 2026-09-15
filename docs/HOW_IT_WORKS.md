@@ -792,6 +792,25 @@ openclaw --profile <база> onboard        # свой config, stateDir, worksp
   `openclaw agent --deliver` без канала отбивается **до** отправки
   (`channel_resolved_to_internal`) — хуки доставки при этом не зовутся вовсе.
 
+### Финальная миля verify (web4): бюджеты по why и граница замка
+
+На `before_agent_finalize` плагин `braine-verify` мапит решение `evaluate` в
+`revise` с дифференцированным бюджетом попыток (`WHY_MAX_ATTEMPTS`):
+`figures` / `no-figures-in-answer` / `clarify-lock` — по 2; `no-data-tool` — 1.
+Идемпотентность — стабильный ключ `ask-verify:<why>` (для `no-data-tool` оставлен
+исторический `require-data-tool`). Меню без пропущенных опций revise не получает.
+
+Замок уточнения (`clarifyLocks`) привязан к **`runId` хода**, а не к delivery-хуку:
+валиден только при совпадении непустых `lock.runId` и `runId` события finalize
+(fail-closed). Чужой или пустой runId → замок молчит; при `ref.clarify` текущего
+хода ответ без option-ключей всё равно уходит в `clarify-lock`.
+
+`mergeRef` при новом clarify не сливает цифры предыдущего figures (clarify-only
+whitelist опций); figures после clarify полностью заменяет эталон. Ветка
+`no-figures-in-answer` стоит до раннего allow пустых токенов: эталон с цифрами,
+ответ без чисел → revise (п. 21).
+
+
 ## Как снимается замер — порядок, а не привычка
 
 Записано после ночи 31.07, в которой два вывода подряд оказались неверными: один потому,

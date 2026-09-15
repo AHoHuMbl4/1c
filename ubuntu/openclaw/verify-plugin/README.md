@@ -74,9 +74,50 @@ braine («второго мозга»). Это требование владел
 
 ## Тест и установка
 ```bash
-node test-verify.mjs                 # оффлайн-юниты чистой логики (118 кейсов, без базы и сети)
+node test-verify.mjs                 # оффлайн-юниты чистой логики (138 кейсов, без базы и сети)
 npm pack --pack-destination /tmp     # собрать tgz
 openclaw plugins install npm-pack:/tmp/openclaw-braine-verify-1.1.4.tgz --force
 openclaw plugins inspect braine-verify --runtime --json   # проверить, что хуки зарегистрированы
 # включить: plugins.allow += "braine-verify"; plugins.entries.braine-verify.enabled = true
 ```
+
+
+## Финальная миля (web4): revise на `before_agent_finalize`
+
+Delivery-хуки (`message_sending` / `message_received`) в веб-транспорте почти не
+живут ([замер 15.09]). Числовая и clarify-половина на пути без доставки держится
+`finalizeDecision` → `{action:"revise", retry}`.
+
+### Clarify-only digits в `mergeRef`
+- Новый clarify-результат **не наследует** `digits` предыдущего figures-вызова
+  того же хода: иначе меню + чужие суммы из прошлого вызова проходили allow.
+- В whitelist уточнения входят цифры **опций** (labels / found / measure / hint)
+  и числа самого clarify-текста (`found=311`) — легитимное меню остаётся
+  заземлённым.
+- Figures после clarify в том же ходе **полностью заменяет** эталон
+  (`clarify=false`, digits только новые).
+
+### Причины revise (`why`) и бюджет попыток
+| why | Attempts | idempotencyKey | Когда |
+|---|---|---|---|
+| `figures` | 2 | `ask-verify:figures` | необоснованная цифра / clarify+чужая цифра |
+| `no-figures-in-answer` | 2 | `ask-verify:no-figures-in-answer` | в эталоне есть цифры, в ответе — ни одной |
+| `clarify-lock` | 2 | `ask-verify:clarify-lock` | clarify текущего хода или runId-валидный замок, ответ без option-ключей |
+| `no-data-tool` | 1 | `require-data-tool` | ход без обращения к данным (ключ не переименовывался) |
+
+Хост-cap движка = 3; плагин не обходит его. Потолок латентности worst ≈ основной
+проход + 2×DeepSeek ≈ **50–75 с** (figures/no-figures/clarify-lock с Attempts=2).
+Меню (clarify-эталон без пропущенных опций) revise **не** получает.
+
+### Граница замка = `runId`
+`clarifyLocks` хранит `runId` постановки. На finalize замок валиден только если
+`lock.runId` и текущий `runId` **оба непустые и равны** (fail-closed: null на
+любой стороне → замок молчит). Delivery-хуков и timestamp-границ нет — на вебе
+мертвы.
+
+## Известные ограничения
+- Multipart-ответы «число + вопрос-хвост» триггером `no-figures` не ловятся
+  (число есть — ветка не работает); семантика без чисел — только «нет чисел при
+  числовом ref»; прописью («семь») — не ловится.
+- После исчерпания бюджета уходит последний вариант модели (видно в журнале why).
+- Delivery-подмена в веб-транспорте отсутствует ([замер 15.09]) — предел нативного.

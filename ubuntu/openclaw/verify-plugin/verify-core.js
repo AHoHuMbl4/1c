@@ -69,6 +69,16 @@ export const DEFAULTS = {
   protocolLeakReviseInstruction:
     "Rewrite for the user using ONLY the grounded answer below when present. "
     + "Omit tools, tickets, decision_id, and reasoning about the call.",
+  clarifyLockReviseReason:
+    "The data tool asked for clarification, but the answer omits the options.",
+  clarifyLockReviseInstruction:
+    "Rewrite the answer using only the grounded answer below. Its clarification options "
+    + "are the choices to present to the user, with the figures exactly as grounded.",
+  noFiguresReviseReason:
+    "The data tool returned figures, but the answer names none of them.",
+  noFiguresReviseInstruction:
+    "Rewrite the answer using only the grounded answer below. Its figures are the numbers "
+    + "to state in the reply, copied exactly.",
   // Тексты — для МОДЕЛИ, не для человека, поэтому по-английски и без предметных примеров:
   // продукт коробочный, язык клиента заранее неизвестен.
   reviseReason: "This turn ended without consulting the company data tool.",
@@ -95,6 +105,27 @@ export const DEFAULTS = {
   stripInternal: true, // детерминированно резать внутреннее (SQL/пути/маркеры) из исходящего — КОДОМ
   trace: true, // TRACE rid по слоям; выключение: ASK_TRACE=0 или trace:false
 };
+
+// Дифференцированный бюджет revise-попыток по why (хост-cap 3). Меню (clarify) без
+// revise, кроме why=clarify-lock. Потолок латентности worst ≈ основной + 2×DeepSeek.
+export const WHY_MAX_ATTEMPTS = Object.freeze({
+  figures: 2,
+  "no-figures-in-answer": 2,
+  "clarify-lock": 2,
+  "no-data-tool": 1,
+});
+
+export function whyMaxAttempts(why) {
+  const n = WHY_MAX_ATTEMPTS[why];
+  return typeof n === "number" ? n : 1;
+}
+
+export function whyIdempotencyKey(why) {
+  if (why === "no-data-tool") return "require-data-tool";
+  if (why === "protocol-leak") return "protocol-leak";
+  return "ask-verify:" + why;
+}
+
 
 // числовой токен = группы цифр, соединённые ОДИНОЧНЫМ разделителем тысяч/десятых
 // (7 727 406 020, 1 234,56, 1.000.000). Разделитель засчитывается только если сразу за
@@ -813,12 +844,41 @@ export function mergeRef(prev, text, nowMs, noDataMarker, clarifyMarker, service
     }
   }
   // Подписи вариантов уточнения из текстового протокола OPTIONS — тоже в белый список.
-  for (const opt of parseClarifyOptions(text)) {
+  const clarifyOpts = parseClarifyOptions(text);
+  for (const opt of clarifyOpts) {
     if (opt.label) labels.add(normClarifyKey(opt.label));
+  }
+  // Clarify-only whitelist: цифры ОПЦИЙ (labels / found / measure / hint), не данные
+  // предыдущего figures-вызова. Легитимное меню с found=N остаётся заземлённым.
+  if (isCl) {
+    for (const opt of clarifyOpts) {
+      for (const field of [opt.label, opt.focus, opt.measure, opt.hint, opt.found]) {
+        if (field == null || field === "") continue;
+        for (const t of numericTokens(String(field), 1)) digits.add(t);
+      }
+    }
   }
   if (!prev) {
     return { at: nowMs, text: String(text), digits, blob, noData: isND, clarify: isCl,
              svcError: isSE, labels };
+  }
+  // Figures после clarify в том же ходе: эталон ПОЛНОСТЬЮ заменяется (окно после выбора).
+  if (prev.clarify && !isCl && !isND && !isSE) {
+    return { at: nowMs, text: String(text), digits, blob, noData: false, clarify: false,
+             svcError: false, labels };
+  }
+  // Новый clarify НЕ наследует digits данных предыдущего вызова (clarify-only).
+  if (isCl) {
+    return {
+      at: nowMs,
+      text: String(text),
+      digits,
+      blob,
+      noData: isND,
+      clarify: true,
+      svcError: Boolean(prev.svcError || isSE),
+      labels,
+    };
   }
   for (const d of digits) prev.digits.add(d);
   const mergedLabels = prev.labels || new Set();
@@ -907,13 +967,39 @@ function localeReviseSuffix(inb) {
     : "";
 }
 
-export function finalizeDecision(answer, ref, inb, cfg, haveRef) {
+export function clarifyLockValid(lock, runId) {
+  // Fail-closed: пустой runId на любой стороне → замок невалиден.
+  return !!(lock && lock.runId && runId && String(lock.runId) === String(runId));
+}
+
+export function missingOptionKeys(content, options) {
+  const hay = normClarifyKey(content || "");
+  const missing = [];
+  for (const opt of options || []) {
+    const keys = [stripChoiceNum(opt.label), opt.focus, opt.measure]
+      .map((x) => normClarifyKey(x)).filter((x) => x && x.length >= 2);
+    if (!keys.length) continue;
+    if (!keys.some((k) => hay.includes(k))) {
+      missing.push(opt.focus || opt.label);
+    }
+  }
+  return missing;
+}
+
+function groundedBlock(instruction, inb, grounded) {
+  const base = instruction + localeReviseSuffix(inb);
+  if (!grounded) return base;
+  return base + "\n\nGrounded answer:\n" + grounded;
+}
+
+export function finalizeDecision(answer, ref, inb, cfg, haveRef, opts) {
   const c = { ...DEFAULTS, ...(cfg || {}) };
+  const o = opts || {};
   if (!haveRef) {
     if (c.requireDataTool === false) return { action: "pass", why: "require-data-tool-off" };
     return { action: "revise", why: "no-data-tool", reason: c.reviseReason,
              instruction: c.reviseInstruction + localeReviseSuffix(inb),
-             idempotencyKey: "require-data-tool" };
+             idempotencyKey: whyIdempotencyKey("no-data-tool") };
   }
   if (c.verifyOnFinalize === false) return { action: "pass", why: "verify-on-finalize-off" };
   if (!answer) return { action: "pass", why: "no-answer-text" };
@@ -924,21 +1010,48 @@ export function finalizeDecision(answer, ref, inb, cfg, haveRef) {
     const grounded = boundedGrounded(stripInternal(src), c);
     return {
       action: "revise", why: "protocol-leak", reason: c.protocolLeakReviseReason,
-      instruction: (grounded
-        ? c.protocolLeakReviseInstruction + localeReviseSuffix(inb)
-          + "\n\nGrounded answer:\n" + grounded
-        : c.protocolLeakReviseInstruction + localeReviseSuffix(inb)),
-      idempotencyKey: "protocol-leak",
+      instruction: groundedBlock(c.protocolLeakReviseInstruction, inb, grounded),
+      idempotencyKey: whyIdempotencyKey("protocol-leak"),
     };
   }
+
+  const lockOk = clarifyLockValid(o.clarifyLock, o.runId);
+  const clarifying = !!(ref && ref.clarify) || lockOk;
+  let missingOpts = [];
+  if (ref && ref.clarify) missingOpts = missingClarifyOptions(answer, ref);
+  else if (lockOk) missingOpts = missingOptionKeys(answer, o.clarifyLock.options);
+
+  // clarify-lock раньше no-figures: валидный замок/clarify + missing-варианты → revise.
+  if (clarifying && missingOpts.length) {
+    const src = (d.action === "replace" && d.content) ? d.content
+              : (ref && ref.text) ? ref.text
+              : "";
+    const grounded = boundedGrounded(src, c);
+    return {
+      action: "revise", why: "clarify-lock",
+      reason: c.clarifyLockReviseReason,
+      instruction: groundedBlock(c.clarifyLockReviseInstruction, inb, grounded),
+      idempotencyKey: whyIdempotencyKey("clarify-lock"),
+    };
+  }
+
+  // Паритет reason evaluate → finalize why (таблица плана web4).
+  if (d.action === "replace" && d.reason === "no-figures-in-answer") {
+    const grounded = boundedGrounded(d.content || (ref && ref.text) || "", c);
+    return {
+      action: "revise", why: "no-figures-in-answer",
+      reason: c.noFiguresReviseReason,
+      instruction: groundedBlock(c.noFiguresReviseInstruction, inb, grounded),
+      idempotencyKey: whyIdempotencyKey("no-figures-in-answer"),
+    };
+  }
+
   if (d.action === "allow") return { action: "pass", why: "figures-ok" };
   const grounded = boundedGrounded(d.action === "replace" ? d.content : "", c);
   return {
     action: "revise", why: "figures", reason: c.figureReviseReason,
-    instruction: (grounded
-      ? c.figureReviseInstruction + localeReviseSuffix(inb) + "\n\nGrounded answer:\n" + grounded
-      : c.figureReviseInstruction + localeReviseSuffix(inb)),
-    idempotencyKey: "verify-figures",
+    instruction: groundedBlock(c.figureReviseInstruction, inb, grounded),
+    idempotencyKey: whyIdempotencyKey("figures"),
   };
 }
 
@@ -947,19 +1060,7 @@ export function finalizeDecision(answer, ref, inb, cfg, haveRef) {
 //   { action: "replace", content: str }     — заменить (обоснованным ответом braine / «нет данных»)
 //   { action: "cancel", reason: str }       — не отправлять вовсе
 export function missingClarifyOptions(content, ref) {
-  const opts = parseClarifyOptions((ref && ref.text) || "");
-  if (!opts.length) return [];
-  const hay = normClarifyKey(content || "");
-  const missing = [];
-  for (const opt of opts) {
-    const keys = [stripChoiceNum(opt.label), opt.focus, opt.measure]
-      .map((x) => normClarifyKey(x)).filter((x) => x && x.length >= 2);
-    if (!keys.length) continue;
-    if (!keys.some((k) => hay.includes(k))) {
-      missing.push(opt.focus || opt.label);
-    }
-  }
-  return missing;
+  return missingOptionKeys(content, parseClarifyOptions((ref && ref.text) || ""));
 }
 
 export function evaluate(content, ref, inb, cfg, presentation) {
@@ -986,7 +1087,17 @@ export function evaluate(content, ref, inb, cfg, presentation) {
     const missing = missingClarifyOptions(content, ref);
     if (missing.length) {
       return { action: "replace", content: ref.text,
-               reason: "clarify options missing from render" };
+               reason: "missing-clarify-options" };
+    }
+  }
+
+  // Числа есть в эталоне данных, ответ их не называет (п.21). Ветка ДО раннего allow
+  // пустых токенов — иначе мертва. Не для clarify/noData/svcError.
+  if (ref && !ref.clarify && !ref.noData && !ref.svcError
+      && ref.digits && ref.digits.size > 0) {
+    const figTok = [...numericTokens(withoutListMarkers(content), c.minDigitsWithRef)];
+    if (figTok.length === 0) {
+      return { action: "replace", content: ref.text, reason: "no-figures-in-answer" };
     }
   }
 

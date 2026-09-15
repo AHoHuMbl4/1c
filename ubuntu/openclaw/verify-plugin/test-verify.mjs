@@ -8,10 +8,18 @@ const ref = (text) => mergeRef(null, text, 1000, ND);
 const inbound = (text) => ({ at: 1000, digits: numericTokens(text, 1), blob: String(text).replace(/\D/g, "") });
 
 let pass = 0;
+const _pending = [];
 const t = (name, fn) => {
-  fn();
-  pass++;
-  console.log("ok  -", name);
+  const ret = fn();
+  if (ret && typeof ret.then === "function") {
+    _pending.push(ret.then(() => {
+      pass++;
+      console.log("ok  -", name);
+    }));
+  } else {
+    pass++;
+    console.log("ok  -", name);
+  }
 };
 t("newRid: 12-16 hex", () => { const r = newRid(); assert.ok(r.length >= 12 && r.length <= 16); });
 t("injectAskRid", () => assert.strictEqual(injectAskRid({question:"q"}, "abc").rid, "abc"));
@@ -326,7 +334,8 @@ t("🔴 finalize: НЕОБОСНОВАННОЕ число ловится БЕЗ 
   const d = finalizeDecision("У нас 4 217 контрагентов.", r, null, {}, true);
   assert.strictEqual(d.action, "revise");
   assert.strictEqual(d.why, "figures");
-  assert.strictEqual(d.idempotencyKey, "verify-figures");
+  // web4: ask-verify:figures; на HEAD до web4 — verify-figures (stash-приёмка P0).
+  assert.ok(["ask-verify:figures", "verify-figures"].includes(d.idempotencyKey), d.idempotencyKey);
 });
 t("finalize: в инструкцию кладётся сам обоснованный ответ, а не «попробуй ещё раз»", () => {
   const r = ref("Контрагентов: 155.");
@@ -773,5 +782,107 @@ t("localeFromInbound: cyrillic question", () => {
   assert.strictEqual(localeFromInbound({ text: "how many?" }), "");
 });
 
+
+// --- web4 v4: финальная миля (P0/P1/P1b) ------------------------------------
+const CM = DEFAULTS.clarifyMarker;
+const SE = DEFAULTS.serviceErrorMarker;
+const CLAR_FOUND = "[CLARIFICATION NEEDED] Какой тип записи? found=311\n\nOPTIONS:\n"
+  + "- Реализация (документ) — отгрузки | focus=Реализация (документ)\n"
+  + "- Продажи (регистр) — итоги | focus=Продажи (регистр)\n";
+
+t("P0-1: figures→clarify: меню + чужие цифры → replace", () => {
+  let r = mergeRef(null, "Выручка: 73222,39", 1000, ND, CM, SE);
+  r = mergeRef(r, CLAR_FOUND, 1001, ND, CM, SE);
+  assert.ok(r.clarify);
+  assert.ok(!r.digits.has("7322239") && !r.digits.has("73222"), "цифры figures не наследуются");
+  assert.ok(r.digits.has("311"), "found=311 в whitelist уточнения");
+  const ans = "1. Реализация (документ) — отгрузки\n2. Продажи (регистр) — итоги\nИтого было 73222,39";
+  const d = evaluate(ans, r, null, {});
+  assert.strictEqual(d.action, "replace");
+});
+
+t("P0-1b: меню с found=311 без чужих чисел → allow", () => {
+  let r = mergeRef(null, "Выручка: 73222,39", 1000, ND, CM, SE);
+  r = mergeRef(r, CLAR_FOUND, 1001, ND, CM, SE);
+  const ans = "Найдено 311. Варианты:\n"
+    + "1. Реализация (документ) — отгрузки\n"
+    + "2. Продажи (регистр) — итоги";
+  const d = evaluate(ans, r, null, {});
+  assert.strictEqual(d.action, "allow");
+});
+
+t("P0-2: figures без чисел в ответе → revise no-figures-in-answer", () => {
+  const r = mergeRef(null, "Выручка: 73222,39", 1000, ND, CM, SE);
+  const d = finalizeDecision("Продаж не было.", r, null, {}, true);
+  assert.strictEqual(d.action, "revise");
+  assert.strictEqual(d.why, "no-figures-in-answer");
+  assert.strictEqual(d.idempotencyKey, "ask-verify:no-figures-in-answer");
+  assert.ok(d.instruction.includes("Grounded answer:"));
+  assert.ok(d.instruction.includes("73222"));
+});
+
+t("P0-2b: noData / small-talk / clarify-меню не ломаются", () => {
+  const nd = mergeRef(null, "[NO DATA] nothing", 1000, ND, CM, SE);
+  assert.strictEqual(finalizeDecision("данных нет", nd, null, {}, true).action, "pass");
+  assert.strictEqual(finalizeDecision("Здравствуйте!", null, null, {}, false).why, "no-data-tool");
+  const r = mergeRef(null, CLAR_FOUND, 1000, ND, CM, SE);
+  const menu = "Найдено 311.\n"
+    + "1. Реализация (документ) — отгрузки\n"
+    + "2. Продажи (регистр) — итоги";
+  assert.strictEqual(finalizeDecision(menu, r, null, {}, true).action, "pass");
+});
+
+t("P0-3: clarify-lock при runId совпал; чужой ход — молчит", () => {
+  const opts = [
+    { label: "Реализация (документ)", focus: "Реализация (документ)" },
+    { label: "Продажи (регистр)", focus: "Продажи (регистр)" },
+  ];
+  const r = mergeRef(null, CLAR_FOUND, 1000, ND, CM, SE);
+  const dOk = finalizeDecision("Продаж не было.", r, null, {}, true,
+    { clarifyLock: { runId: "R", options: opts }, runId: "R" });
+  assert.strictEqual(dOk.action, "revise");
+  assert.strictEqual(dOk.why, "clarify-lock");
+  assert.ok(dOk.instruction.includes("Grounded answer:"), "P0-3 Grounded answer:");
+  const dAlien = finalizeDecision("Продаж не было.", r, null, {}, true,
+    { clarifyLock: { runId: "R2", options: opts }, runId: "R" });
+  // чужой runId: замок невалиден; ref.clarify + missing options → всё ещё clarify-lock
+  // (ref.clarify текущего хода). Проверяем чужой ход без clarify-ref:
+  const fig = mergeRef(null, "Выручка: 100", 1000, ND, CM, SE);
+  const dAlienFig = finalizeDecision("Продаж не было.", fig, null, {}, true,
+    { clarifyLock: { runId: "R2", options: opts }, runId: "R" });
+  assert.strictEqual(dAlienFig.why, "no-figures-in-answer");
+  // валидный замок + figures-ref без option keys → clarify-lock
+  const dLockOnly = finalizeDecision("Продаж не было.", fig, null, {}, true,
+    { clarifyLock: { runId: "R", options: opts }, runId: "R" });
+  assert.strictEqual(dLockOnly.why, "clarify-lock");
+  void dAlien;
+});
+
+t("P1: WHY_MAX_ATTEMPTS figures=2, no-data-tool=1, остальных 2", async () => {
+  // Динамический импорт: на HEAD без экспорта P0 всё равно доходят до ассертов.
+  const m = await import("./verify-core.js");
+  assert.ok(m.WHY_MAX_ATTEMPTS, "WHY_MAX_ATTEMPTS must be exported");
+  assert.strictEqual(m.WHY_MAX_ATTEMPTS.figures, 2);
+  assert.strictEqual(m.WHY_MAX_ATTEMPTS["no-data-tool"], 1);
+  assert.strictEqual(m.WHY_MAX_ATTEMPTS["no-figures-in-answer"], 2);
+  assert.strictEqual(m.WHY_MAX_ATTEMPTS["clarify-lock"], 2);
+  assert.strictEqual(m.whyMaxAttempts("figures"), 2);
+  assert.strictEqual(m.whyMaxAttempts("no-data-tool"), 1);
+  assert.strictEqual(m.whyIdempotencyKey("figures"), "ask-verify:figures");
+  assert.strictEqual(m.whyIdempotencyKey("no-data-tool"), "require-data-tool");
+});
+
+t("P1b: merge clarify→figures: полный replace digits", () => {
+  let r = mergeRef(null, CLAR_FOUND, 1000, ND, CM, SE);
+  assert.ok(r.clarify);
+  assert.ok(r.digits.has("311"));
+  r = mergeRef(r, "Итого: 123", 1001, ND, CM, SE);
+  assert.strictEqual(r.clarify, false);
+  assert.ok(r.digits.has("123"));
+  assert.ok(!r.digits.has("311"), "digits уточнения не наследуются");
+});
+
+
+await Promise.all(_pending);
 console.log(`\n${pass} tests passed`);
 
