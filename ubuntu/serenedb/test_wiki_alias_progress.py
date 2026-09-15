@@ -155,9 +155,37 @@ def main() -> int:
         and 'WIKI_ALIAS_POLL_SEC' in body,
     )
     t(
-        "TERM родителя при тишине",
-        'kill -TERM "$PPID"' in body
-        and "стоп-при-тишине:" in body,
+        "TERM/KILL через setsid-киллер (не одиночный TERM $PPID)",
+        "setsid bash -c" in body
+        and "стоп-при-тишине:" in body
+        and 'kill -TERM "$PPID"' not in body
+        and "_stall_main=$$" in body,
+    )
+    t(
+        "setsid-киллер: TERM группе (минус-PGID)",
+        'kill -TERM -- -"$pgid"' in body
+        and "(TERM группе" in body,
+    )
+    t(
+        "KILL_GRACE_SEC default 15 + санитайз",
+        'WIKI_ALIAS_KILL_GRACE_SEC="${WIKI_ALIAS_KILL_GRACE_SEC:-15}"' in body
+        and "WIKI_ALIAS_KILL_GRACE_SEC=15;;" in body,
+    )
+    t(
+        "эскалация KILL после паузы grace",
+        'sleep "$grace"' in body
+        and 'kill -KILL -- -"$pgid"' in body
+        and "(KILL группе" in body,
+    )
+    t(
+        "env.example: KILL_GRACE_SEC=15",
+        "WIKI_ALIAS_KILL_GRACE_SEC=15" in env,
+    )
+    t(
+        "чужая PGID → дерево /proc-детей (не чужая группа)",
+        '[ "$pgid" = "$main" ]' in body
+        and 'task/*/children' in body
+        and "wa_kill_tree" in body,
     )
     t(
         "trap EXIT гасит наблюдателя + финальный репорт",

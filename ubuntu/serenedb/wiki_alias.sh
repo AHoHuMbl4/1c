@@ -89,9 +89,12 @@ esac
 WIKI_ALIAS_REPORT_EVERY_SEC="${WIKI_ALIAS_REPORT_EVERY_SEC:-300}"
 WIKI_ALIAS_STALL_SEC="${WIKI_ALIAS_STALL_SEC:-8100}"
 WIKI_ALIAS_POLL_SEC="${WIKI_ALIAS_POLL_SEC:-10}"
+# Пауза между TERM и KILL -9 группе/дереву главного при стоп-при-тишине.
+WIKI_ALIAS_KILL_GRACE_SEC="${WIKI_ALIAS_KILL_GRACE_SEC:-15}"
 case "$WIKI_ALIAS_REPORT_EVERY_SEC" in ''|*[!0-9]*) WIKI_ALIAS_REPORT_EVERY_SEC=300;; esac
 case "$WIKI_ALIAS_STALL_SEC" in ''|*[!0-9]*) WIKI_ALIAS_STALL_SEC=8100;; esac
 case "$WIKI_ALIAS_POLL_SEC" in ''|*[!0-9]*) WIKI_ALIAS_POLL_SEC=10;; esac
+case "$WIKI_ALIAS_KILL_GRACE_SEC" in ''|*[!0-9]*) WIKI_ALIAS_KILL_GRACE_SEC=15;; esac
 # POLL=0 при живом REPORT/STALL → 10 (иначе цикл проверки не крутится).
 if [ "$WIKI_ALIAS_POLL_SEC" -eq 0 ] \
    && { [ "$WIKI_ALIAS_REPORT_EVERY_SEC" -gt 0 ] || [ "$WIKI_ALIAS_STALL_SEC" -gt 0 ]; }; then
@@ -242,8 +245,49 @@ if [ "$WIKI_ALIAS_REPORT_EVERY_SEC" -gt 0 ] || [ "$WIKI_ALIAS_STALL_SEC" -gt 0 ]
       if [ "$WIKI_ALIAS_STALL_SEC" -gt 0 ]; then
         silent=$((now - max_ts))
         if [ "$silent" -gt "$WIKI_ALIAS_STALL_SEC" ]; then
-          echo "стоп-при-тишине: ${silent} сек без прогресса (последний: ${_pg_last_lab} возрастом ${silent} с)" >&2
-          kill -TERM "$PPID"
+          # bash откладывает TERM главному, пока оно в wait форграунд-psql
+          # ([замер] одиночный TERM → стоп только после возврата ребёнка).
+          # Путь: setsid-киллер (свой session → не гибнет от группового TERM).
+          # Главное = $$ (не $PPID): в bash-( ) субшелле $$ = PID главного
+          # скрипта, а PPID = родитель главного (systemd/shell) — убивать его
+          # нельзя и бессмысленно.
+          # [замер] setsid/systemd: PGID==PID главного (лидер группы) →
+          #   kill -TERM/-KILL -$PGID бьёт всё дерево, включая зависший psql.
+          # Чужая группа (ручной запуск в чужой session, PGID≠PID): групповой
+          # kill убил бы соседей — тогда TERM/KILL только главному и прямым
+          # детям из /proc/$$/task/*/children (без pkill -P).
+          _stall_main=$$
+          _stall_pgid=$(ps -o pgid= -p "$_stall_main" 2>/dev/null | tr -d '[:space:]')
+          case "$_stall_pgid" in ''|*[!0-9]*) _stall_pgid=$_stall_main;; esac
+          echo "стоп-при-тишине: ${silent} сек без прогресса (последний: ${_pg_last_lab} возрастом ${silent} с) (TERM группе ${_stall_pgid})" >&2
+          setsid bash -c '
+            main="$1"; pgid="$2"; grace="$3"
+            wa_kill_tree() {
+              local sig="$1" c f
+              kill -s "$sig" "$main" 2>/dev/null || true
+              for f in /proc/"$main"/task/*/children; do
+                [ -r "$f" ] || continue
+                for c in $(cat "$f"); do
+                  case "$c" in ""|*[!0-9]*) continue;; esac
+                  kill -s "$sig" "$c" 2>/dev/null || true
+                done
+              done
+            }
+            if [ "$pgid" = "$main" ]; then
+              kill -TERM -- -"$pgid" 2>/dev/null || true
+            else
+              wa_kill_tree TERM
+            fi
+            sleep "$grace"
+            if kill -0 "$main" 2>/dev/null; then
+              echo "стоп-при-тишине: эскалация (KILL группе ${pgid})" >&2
+              if [ "$pgid" = "$main" ]; then
+                kill -KILL -- -"$pgid" 2>/dev/null || true
+              else
+                wa_kill_tree KILL
+              fi
+            fi
+          ' bash "$_stall_main" "$_stall_pgid" "$WIKI_ALIAS_KILL_GRACE_SEC" </dev/null >/dev/null &
           exit 0
         fi
       fi
