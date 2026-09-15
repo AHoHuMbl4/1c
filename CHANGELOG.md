@@ -101,8 +101,13 @@ parse 34/0, bash -n чист. Доки: Regular Expressions › regexp_split_to_
 Text Functions › printf; Subqueries › EXISTS; Aggregate FILTER.
 Живая проба wa_p4: поймала «invalid format specifier» у printf с BIGINT —
 ABORT-ветка отработала штатно (текст ошибки в журнале, exit 1); замена на
-конкатенацию || с ::VARCHAR (канон репо), красная red26 ×3 ПРИНЯТЬ, ручной
-SELECT на движке вернул кортеж с event_gap=0 («продали» пойман аффиксом).
+конкатенацию || с ::VARCHAR (канон репо), красная red26 ×3 ПРИНЯТЬ.
+Приёмка 4b: строка журнала «отчёт качества init: entities=5 empty_aliases=3
+empty_best=4 empty_nef=3 measures=11 measures_nonempty=1 measure_tokens=1
+need_event=1 has_event=1 event_gap=0» = ручному SELECT БАЙТ-В-БАЙТ;
+юнит зелёно завершён; «продали» пойман аффиксом при длине>суффикса,
+need_event от реального src_table с потоками. Песочница дропнута, env
+окна откачен. Шаг 4 закрыт.
 Числа: +25 строк wiki_alias.sh, SQL 1 файл, замок 46/0.
 Доки: plan-quality-report.md; PLAN_DICT_AUTOMATION §3 шаг 4.
 
