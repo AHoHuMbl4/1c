@@ -1,3 +1,27 @@
+## 2026-09-15 (50) — Шаг 1 PLAN_DICT_AUTOMATION: WIKI_ALIAS_MODE=tick|cycle [код]
+
+**[код]** Полный пересбор словаря — одним прогоном юнита, без ручных env-танцев
+(Р2/Р3) и ручной promote-цепочки (Р9). `wiki_alias.sh`: MODE=tick (умолчание,
+существующий поток после раннего диспетчера не меняется) | cycle — фазы а–ж:
+датированные черновики + СВОЯ probe (боевую search_alias_probe не трогает),
+init FORCE=1→(перед collision FORCE=0/WORKERS=1, reask выкл), collision до нуля
+с лифтом CEILING (MAX+стоп-без-прогресса; CAP>0 = проба: клещи+лифт off),
+гейты promote fail-closed (left=0|ALLOW_LEFT, uncovered|CAP), цель promote
+только BATTLE_TABLE(песочница)|PROMOTE_BATTLE=1, migrate_sep, solr (песочница —
+пропуск, бой не пересобирается из песка), A3-корзины в журнал. Бюджет —
+модельные фазы; расхождение после promote = exit≠0. Журнал: фазы
+START|END|ABORT + elapsed + budget_left + счётчики; нечитаемое — «?», не ноль.
+Deploy FILES += wiki_alias_metric_a3.sql. env.example: MODE закомментирован
+(«только разовый запуск»). Красная: план v2 (red9 ×3) → дифф круги red10/red11/
+red12/red13 ×3 каждый; red12b-находки (fail-open collision_left, нули A3,
+ранний DDL до изоляции probe) закрыты (G1–G3) и подтверждены red13 ×3 ПРИНЯТЬ.
+Замки: cycle 50/0 (новый), deploy 49/0, parse 34/0, prompts_v2 113/0, sep
+110/0, bash -n чист; test_wiki_alias_psql 70/72 — 2 легаси-FAIL есть и на HEAD
+(worktree-проверка), не регресс. Полный cycle НЕ гонялся (решение 48) —
+точечная живая проба на окне следующим шагом.
+Числа: +481/-1 wiki_alias.sh, +1 deploy, +5 env.example, замок 50/0.
+Доки: PLAN_DICT_AUTOMATION.md; plan-cycle-mode.md (.claude/state).
+
 ## 2026-09-15 (49) — metric_a3.sql из /tmp окна → репо (фаза «ж» cycle) [решение]
 
 **[решение]** A3-замер качества словаря (топ-100 вопросов 30 дней → корзины

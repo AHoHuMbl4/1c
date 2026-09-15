@@ -52,6 +52,7 @@ FILES=(
   wiki_alias_dayfork_merge.sql
   wiki_alias_promote.sql
   wiki_alias_migrate_sep.sql
+  wiki_alias_metric_a3.sql
   solr_synonyms_compile.sql
 )
 
