@@ -80,6 +80,29 @@ verify-plugin остаётся конгломератом; симметрия ч
 Числа: 25/39/16/131 зелёные; конверт 532→чистый хвост.
 Доки: API_ASK.md §4; HOW_IT_WORKS.md §8a; MAP.md; ubuntu/openclaw/README.md.
 
+## 2026-09-15 (57) — Шаг 4 PLAN_DICT_AUTOMATION: авто-отчёт качества init-фазы [код]
+
+**[код]** Замена Р7 («контроль качества — выгрузки TSV + python руками»).
+`wiki_alias_quality_report.sql` — одна строка key=value в journal:
+entities, empty_aliases/best/nef, measures, measures_nonempty,
+measure_tokens, need_event (EXISTS search_refcols — критерий потоков как в
+select-batch, не facts-колонка), has_event (аффикс-детектор событийных
+форм: ТОЛЬКО окончания языка али/или/айся/айте/уйте/ируй + токен длиннее
+суффикса — целый «или»-союз не матчится; эвристика оптимистична, gap —
+сигнал копать), event_gap. Вызов в tick (после measure-добора, до purge) и
+cycle (после «б END»); heartbeat «quality»; fail-closed: сбой SQL → ABORT
+с текстом ошибки (120 символов, $TMP/.quality_err), exit 1 — init без
+отчёта успешным не считается (п.13); пустая таблица → строка нулей.
+Красная: план v2 (red23 ×3: аффиксы вместо словаря форм, один event_gap,
+одна grep-строка, ABORT) → дифф red24 ×3 (длина>суффикса; деталь ошибки в
+ABORT) → red25 ×3 ПРИНЯТЬ. Замки: quality 46/0 (новый), cycle 50/0,
+probe 38/0, progress 56/0, deploy 53/0, prompts_v2 113/0, sep 110/0,
+parse 34/0, bash -n чист. Доки: Regular Expressions › regexp_split_to_array;
+Text Functions › printf; Subqueries › EXISTS; Aggregate FILTER.
+Живая проба wa_p4 — следующим заходом.
+Числа: +25 строк wiki_alias.sh, SQL 1 файл, замок 46/0.
+Доки: plan-quality-report.md; PLAN_DICT_AUTOMATION §3 шаг 4.
+
 ## 2026-09-15 (56) — Голый wait ловил вечного наблюдателя: collision вис (живая проба) [код][замер]
 
 **[замер]** Живая проба шага 3(б) дважды воспроизвела зависание: после pick

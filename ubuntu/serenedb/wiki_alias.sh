@@ -336,6 +336,22 @@ wa_probe_purge() {
   echo "probe-чистка: удалено $deleted осталось failed $failed_left (gen_ver=$GEN_VER)" >&2
 }
 
+# Отчёт качества init (plan-quality-report v2): heartbeat → SQL → одна stderr-строка.
+# 🔴 fail-closed: ошибка/пустой вывод — ABORT (init без отчёта неуспешен, п.13).
+wa_quality_report() {
+  local out err
+  wa_progress_write "$TMP/.progress_main" 0 "quality"
+  out=$(psql_wa_tA -f "$HERE/wiki_alias_quality_report.sql" 2>"$TMP/.quality_err") || out=""
+  out=$(printf '%s' "$out" | tr -d '\r' | head -n 1)
+  if [ -z "$out" ]; then
+    err=$(head -c 120 "$TMP/.quality_err" | tr -d '\n')
+    echo "отчёт качества init: ABORT (сбой SQL: $err)" >&2
+    return 1
+  fi
+  echo "отчёт качества init: $out" >&2
+  return 0
+}
+
 # Пометка ok/failed после merge (UPDATE по alias+entities_fp).
 wa_probe_mark() {
   local word="$1" fp="$2" result="$3"
@@ -902,6 +918,11 @@ wiki_alias_run_cycle() {
   case "$have_m" in ''|*[!0-9]*) have_m='?';; esac
   _cycle_phase б END "done=$done_total skipped=$skipped have=$have have_m=$have_m FORCE=0 WORKERS=1 reask=0"
 
+  # Отчёт качества init — после фазы б, до collision (фаза в).
+  if ! wa_quality_report; then
+    return 1
+  fi
+
   # ── в) collision до нуля с лифтом CEILING ──
   # F3: клещи min(CEILING,CAP)/MAX до START — журнал печатает фактический потолок.
   _v_ceiling="${WIKI_ALIAS_COLLISION_ROUNDS:-40}"
@@ -1162,6 +1183,10 @@ while :; do
   done_total=$((done_total + BATCH))
   wa_progress_write "$TMP/.progress_meas" "$done_measures" "meas"
 done
+# Отчёт качества init — после measure-добора, до purge/collision (plan-quality-report).
+if ! wa_quality_report; then
+  exit 1
+fi
 # ── ВТОРОЙ ПРОХОД: РАЗВЕСТИ ТЕХ, КОГО НАЗЫВАЮТ ОДИНАКОВО ────────────────────────────
 # 🔴 Указание владельца 30.07: «если и там и там есть одно и то же описание, значит надо
 # уточнить или правильно разложить через ллм, что это такое».
