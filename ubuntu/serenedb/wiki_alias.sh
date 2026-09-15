@@ -612,7 +612,10 @@ wiki_alias_run_cycle() {
   PROBE_TABLE="${ALIAS_TABLE}_probe"
   for exists in "$ALIAS_TABLE" "$MEASURE_TABLE" "$PROBE_TABLE"; do
     # fail-closed: stderr не глушим; любой ответ кроме 0/1 — ABORT (red10a-2/red10b-1).
-    draft_n=$(psql "$DSN" -tAc "SELECT CASE WHEN to_regclass('$exists') IS NULL THEN 0 ELSE 1 END" | tr -d '[:space:]')
+    # existence-чек штатным каталогом: to_regclass в SereneDB НЕТ (живая проба 15.09:
+    # «Scalar Function ... does not exist» → честный ABORT, ничего не перезаписано —
+    # fail-closed сработал до этой правки). Доки: Sql › Information Schema › tables.
+    draft_n=$(psql "$DSN" -tAc "SELECT count(*) FROM information_schema.tables WHERE table_name = '$exists'" | tr -d '[:space:]')
     case "$draft_n" in
       1)
         _cycle_phase а ABORT "таблица $exists уже есть — не overwrite; полный cycle не resume — хвост после упавшего solr/A3 добивается вручную (имена снапшотов уже в журнале promote)"
