@@ -251,6 +251,46 @@ def main() -> int:
         and "wa_progress_report" in body,
     )
 
+    # ── нет голого wait (живая проба 15.09: hang на вечном наблюдателе) ─────
+    def _bare_wait_lines(text: str) -> list[str]:
+        """Детектор голого wait: строка из одного wait или wait после &&.
+        Ассерт ниже требует, чтобы таких строк в wiki_alias.sh не было
+        (подойдут только wait с PID-аргументом)."""
+        bad: list[str] = []
+        for ln in text.splitlines():
+            code = ln.split("#", 1)[0].rstrip()
+            s = code.strip()
+            if not s:
+                continue
+            if s == "wait":
+                bad.append(ln)
+                continue
+            if re.search(r"&&\s*wait\s*$", s):
+                bad.append(ln)
+        return bad
+
+    bare = _bare_wait_lines(body)
+    t(
+        "нет голого wait (только wait $var / \"$var\" / PID)",
+        not bare,
+        "bare=" + repr(bare[:5]),
+    )
+    # инверсия: вернуть голый wait → условие краснеет
+    body_bare = body + "\nwait\n"
+    inv_bare = _bare_wait_lines(body_bare)
+    t(
+        "инверсия: голый wait → ассерт краснеет",
+        bool(inv_bare) and any(x.strip() == "wait" for x in inv_bare),
+        f"inv={inv_bare!r}",
+    )
+    body_and_wait = body + "\n[ \"$WORKERS\" -gt 1 ] && wait\n"
+    inv_and = _bare_wait_lines(body_and_wait)
+    t(
+        "инверсия: && wait в конце → ассерт краснеет",
+        any(re.search(r"&&\s*wait\s*$", x.strip()) for x in inv_and),
+        f"inv={inv_and!r}",
+    )
+
     print()
     if FAIL:
         print("ИТОГО: %d ok, %d FAIL" % (PASS, len(FAIL)))

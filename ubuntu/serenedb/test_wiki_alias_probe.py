@@ -242,6 +242,30 @@ def main() -> int:
         bool(re.search(r'wa_progress_write\s+"[^"]+"\s+\S+\s+"probe"', body)),
     )
 
+    # ── collision wait только порождённых (не голый wait → hang наблюдателя) ─
+    t(
+        "collision: PID-ы субшеллов в _pg (cycle+tick)",
+        body.count('_pg="$_pg $!"') >= 2 and body.count('_pg=""') >= 2,
+    )
+    t(
+        "collision: wait $_pg (не голый wait)",
+        body.count("wait $_pg") >= 2
+        and not re.search(r"(?m)^\s*wait\s*$", body)
+        and not re.search(r"&&\s*wait\s*$", body),
+    )
+    # инверсия: голый wait после генерации → условие краснеет
+    body_wait_bare = re.sub(
+        r"\[ -n \"\$_pg\" \] && wait \$_pg",
+        "wait",
+        body,
+        count=1,
+    )
+    t(
+        "инверсия: голый wait вместо wait $_pg → краснеет",
+        body_wait_bare.count("wait $_pg") < body.count("wait $_pg")
+        and bool(re.search(r"(?m)^\s*wait\s*$", body_wait_bare)),
+    )
+
     # ── п.0: нет имён конкретной базы в новых SQL / GEN_VER ─────────────────
     banned = (
         "alias_okna",

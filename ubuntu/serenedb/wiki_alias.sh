@@ -602,14 +602,17 @@ _CYCLE_RETRY_ITEMS=2
 _cycle_run_init_pass() {
   done_total=0
   skipped=0
+  pids=""
   for w in $(seq 0 $((WORKERS - 1))); do
     if [ "$WORKERS" -gt 1 ]; then
       wiki_alias_entities_worker "$w" &
+      pids="$pids $!"
     else
       wiki_alias_entities_worker "$w"
     fi
   done
-  [ "$WORKERS" -gt 1 ] && wait
+  # ждём только порождённых: голый wait ловит вечного наблюдателя (живая проба 15.09, стоп-при-тишине 129 с)
+  [ "$WORKERS" -gt 1 ] && wait $pids
   for w in $(seq 0 $((WORKERS - 1))); do
     [ -f "$TMP/w$w/.fail" ] && {
       echo "алиасы: воркер $w упал по сбою селекта — прогон остановлен" >&2
@@ -749,6 +752,7 @@ _cycle_run_collision() {
       [ "$Q" -eq 0 ] && break
       asked=$((asked + Q))
       window_asked=$((window_asked + Q))
+      _pg=""
       for iq in $QWORDS; do
         (
           WTMP="$TMP/cw$iq"
@@ -770,8 +774,10 @@ _cycle_run_collision() {
           chmod 644 "$WTMP/rows.json" 2>/dev/null
           wa_progress_write "$WA_PROGRESS_FILE" 1 "col"
         ) &
+        _pg="$_pg $!"
       done
-      wait
+      # ждём только порождённых: голый wait ловит вечного наблюдателя (живая проба 15.09, стоп-при-тишине 129 с)
+      [ -n "$_pg" ] && wait $_pg
       for iq in $QWORDS; do
         # merge внутри wa_probe_result_for (RETURNING → count); пометка всегда.
         _pr=$(wa_probe_result_for "$TMP/cw$iq")
@@ -1064,14 +1070,17 @@ fi
 
 # ── tick (умолч.): существующий поток ниже — без изменений поведения ──
 
+pids=""
 for w in $(seq 0 $((WORKERS - 1))); do
   if [ "$WORKERS" -gt 1 ]; then
     wiki_alias_entities_worker "$w" &
+    pids="$pids $!"
   else
     wiki_alias_entities_worker "$w"
   fi
 done
-[ "$WORKERS" -gt 1 ] && wait
+# ждём только порождённых: голый wait ловит вечного наблюдателя (живая проба 15.09, стоп-при-тишине 129 с)
+[ "$WORKERS" -gt 1 ] && wait $pids
 # 🔴 СБОЙ СЕЛЕКТА ≠ «БАЗА КОНЧИЛАСЬ» и в параллельном воркере: exit субшелла
 # погасил бы стоп, прогон продолжился бы молча. Воркер ставит .fail — главный
 # скрипт останавливает юнит целиком.
@@ -1228,6 +1237,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     [ "$Q" -eq 0 ] && break
     asked=$((asked + Q))
     # ── параллельная генерация слов очереди (изолированные $WTMP)
+    _pg=""
     for iq in $QWORDS; do
       (
         WTMP="$TMP/cw$iq"
@@ -1250,8 +1260,10 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
         chmod 644 "$WTMP/rows.json" 2>/dev/null   # тот же случай, что в первом проходе
         wa_progress_write "$WA_PROGRESS_FILE" 1 "col"
       ) &
+      _pg="$_pg $!"
     done
-    wait
+    # ждём только порождённых: голый wait ловит вечного наблюдателя (живая проба 15.09, стоп-при-тишине 129 с)
+    [ -n "$_pg" ] && wait $_pg
     # ── MERGE+пометка строго последовательно: слова пересекаются по строкам сущностей.
     for iq in $QWORDS; do
       _pr=$(wa_probe_result_for "$TMP/cw$iq")
