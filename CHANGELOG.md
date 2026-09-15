@@ -24,6 +24,28 @@ verify-plugin остаётся конгломератом; симметрия ч
 Числа: 25/39/16/131 зелёные; конверт 532→чистый хвост.
 Доки: API_ASK.md §4; HOW_IT_WORKS.md §8a; MAP.md; ubuntu/openclaw/README.md.
 
+## 2026-09-15 (52) — Шаг 2 PLAN_DICT_AUTOMATION: прогресс-репорт + стоп-при-тишине [код]
+
+**[код]** Замена Р6 («часы простоя не видны никому»). wiki_alias.sh (tick И cycle):
+пер-писательские прогресс-файлы (ent_$w / meas / col_$iq / main), heartbeat ДО
+каждой попытки infer (метка infer:<field>) и метки немодельных фаз
+(ddl/sel/pub/promote/migrate/solr/branch/a3/dayfork); один фоновый наблюдатель
+после $TMP — репорт в журнал каждые WIKI_ALIAS_REPORT_EVERY_SEC (умолч. 300;
+старт/период/финал по trap EXIT) и стоп-при-тишине WIKI_ALIAS_STALL_SEC >
+(умолч. 8100 = 1.5 × (retry 2+1) × ALIAS_AGENT_TIMEOUT_SEC 1800 — покрывает
+внутренние ретраи шлюза и длинные одиночные psql) с kill TERM главному → юнит
+failed честно; POLL (умолч. 10) отделён от REPORT. DDL tick перенесён после
+наблюдателя (висящий init-DDL ловится). Красная: план v2 (red15 ×3 — находки
+встроены: seed t_start, poll≠report, heartbeat infer, STALL-арифметика, метки
+немодельных фаз) → дифф red16 ×3 (финал-репорт глотался 2>/dev/null — REJECT,
+исправлено H1; STALL 2700→8100 H2; reask-sel H3) → red17 ×3 ПРИНЯТЬ.
+Замки: progress 48/0 (новый), cycle 50/0, deploy 49/0, parse 34/0,
+prompts_v2 113/0 (счётчик retry-литералов цел), sep 110/0, bash -n чист.
+Живая DSN-проба — следующим заходом (unroutable 10.255.255.1:7890,
+STALL=45/POLL=5/REPORT=20, ожидание «стоп-при-тишине» ≤ ~180 с).
+Числа: +155/−7 wiki_alias.sh; env.example +6; замок 48/0.
+Доки: plan-progress-stall.md (.claude/state); PLAN_DICT_AUTOMATION §3 шаг 2.
+
 ## 2026-09-15 (51) — Точечная живая проба cycle на окне: пайплайн ✔, модельное плечо ждёт эндпойнт [замер]
 
 **[замер]** Проба по решению (48): юнит 1c-wiki-alias@postgres (окно), MODE=cycle,

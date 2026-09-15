@@ -81,6 +81,22 @@ case "$WIKI_ALIAS_MODE" in tick|cycle) ;; *)
   exit 1
   ;;
 esac
+# Прогресс-репорт и стоп-при-тишине (plan-progress-stall.md). 0 = выкл.
+# STALL умолч. 8100 = 1.5 × (retry+1) × ALIAS_AGENT_TIMEOUT_SEC
+# (retry шлюза = 2 → до 3 subprocess × 1800 = 5400; ×1.5 = 8100).
+# Иначе ложный TERM на внутренних ретраях шлюза и на длинных одиночных
+# psql (VACUUM / promote), где .progress_* не обновляется минутами.
+WIKI_ALIAS_REPORT_EVERY_SEC="${WIKI_ALIAS_REPORT_EVERY_SEC:-300}"
+WIKI_ALIAS_STALL_SEC="${WIKI_ALIAS_STALL_SEC:-8100}"
+WIKI_ALIAS_POLL_SEC="${WIKI_ALIAS_POLL_SEC:-10}"
+case "$WIKI_ALIAS_REPORT_EVERY_SEC" in ''|*[!0-9]*) WIKI_ALIAS_REPORT_EVERY_SEC=300;; esac
+case "$WIKI_ALIAS_STALL_SEC" in ''|*[!0-9]*) WIKI_ALIAS_STALL_SEC=8100;; esac
+case "$WIKI_ALIAS_POLL_SEC" in ''|*[!0-9]*) WIKI_ALIAS_POLL_SEC=10;; esac
+# POLL=0 при живом REPORT/STALL → 10 (иначе цикл проверки не крутится).
+if [ "$WIKI_ALIAS_POLL_SEC" -eq 0 ] \
+   && { [ "$WIKI_ALIAS_REPORT_EVERY_SEC" -gt 0 ] || [ "$WIKI_ALIAS_STALL_SEC" -gt 0 ]; }; then
+  WIKI_ALIAS_POLL_SEC=10
+fi
 # 🔴 [замер 14.09] COLL_BATCH — размер пачки collision/reask. Эти пачки — ГРУППЫ
 # записей (общее слово / перевопрос уточнений), к «1 задача = 1 вызов» первого
 # прохода отношения не имеют: при BATCH=1 группа из одной записи ломает разведение
@@ -132,18 +148,12 @@ JOURNAL_TABLE="${WIKI_ALIAS_JOURNAL_TABLE:-alias_${DB_TAG}_reask_journal}"
 bash "$(cd "$(dirname "$0")/.." && pwd)/openclaw/ensure_vllm_gateway.sh" || echo "алиасы: ensure_vllm — предупреждение" >&2
 
 command -v openclaw >/dev/null 2>&1 || { echo "алиасы: openclaw не установлен — шаг пропущен"; exit 0; }
-# DDL alias/measure/probe — один процесс psql (wiki_alias_init.sql).
-# 🔴 cycle этот вызов пропускает (red12b-3): DDL делает фаза «а» уже по ЧЕРНОВЫМ
-# именам с изолированной probe; ранний вызов создавал бы умолчательные таблицы
-# (в т.ч. боевую search_alias_probe) до включения изоляции.
-[ "$WIKI_ALIAS_MODE" != "cycle" ] && psql_wa -f "$HERE/wiki_alias_init.sql" >/dev/null 2>&1
-
 # 🔴 ОБМЕН ФАЙЛАМИ — ТОЛЬКО ЧЕРЕЗ КАТАЛОГ, ЧИТАЕМЫЙ ДВИЖКОМ. [замер 30.07] `read_json` из
 # `/tmp/...` даёт «No files found»: процесс `serened` этот путь не видит. Тот же каталог, что у
 # загрузчика (`CSV_DIR`, по умолчанию `/var/lib/serenedb`).
 EXCH="${CSV_DIR:-/var/lib/serenedb}"
 TMP=$(mktemp -d "$EXCH/wiki-alias-XXXXXX") || { echo "алиасы: нет доступа к $EXCH" >&2; exit 0; }
-chmod 755 "$TMP"; trap 'rm -rf "$TMP"' EXIT
+chmod 755 "$TMP"
 # 🔴 КАТАЛОГ ПИШЕТ БОТ, А СОЗДАЁТСЯ ОТ ROOT. [okna 27.08] alias_infer_gateway идёт
 # под undebot (RUNAS_BOT), а mktemp рождает каталог root:root 755 — бот не может
 # записать ans/err, каждая пачка падает PermissionError и помечает сущности пустыми.
@@ -160,6 +170,99 @@ skipped=0
 # не девается: работа идёт следующим тактом с того же места (оба прохода идемпотентны).
 BUDGET="${WIKI_ALIAS_MAX_SEC:-120}"  # 0 = без потолка (over_budget)
 t_start=$(date +%s)
+
+# ── прогресс / стоп-при-тишине (plan-progress-stall.md) ──
+# Одна строка unixts<TAB>счётчик<TAB>метка; атомарно >tmp && mv. Дешёво, не в цикле psql.
+wa_progress_write() {
+  local f="$1" c="${2:-0}" lab="${3:-.}" now
+  [ -n "${f:-}" ] || return 0
+  now=$(date +%s)
+  printf '%s\t%s\t%s\n' "$now" "$c" "$lab" > "${f}.tmp" && mv -f "${f}.tmp" "$f"
+}
+wa_progress_scan() {
+  # выставляет _pg_max_ts / _pg_last_lab / _pg_files (seed = t_start).
+  local f ts _c lab
+  _pg_max_ts=$t_start
+  _pg_last_lab="(seed)"
+  _pg_files=""
+  for f in "$TMP"/.progress_*; do
+    [ -f "$f" ] || continue
+    case "$f" in *.tmp) continue;; esac
+    IFS=$'\t' read -r ts _c lab < "$f" || continue
+    case "$ts" in ''|*[!0-9]*) continue;; esac
+    _pg_files="${_pg_files:+$_pg_files,}${f##*/}"
+    if [ "$ts" -ge "$_pg_max_ts" ]; then
+      _pg_max_ts=$ts
+      _pg_last_lab="${lab:-?}"
+    fi
+  done
+}
+wa_progress_report() {
+  local kind="${1:-}" now elapsed left age cleft
+  now=$(date +%s)
+  elapsed=$((now - t_start))
+  if [ "$BUDGET" = "0" ]; then
+    left=inf
+  else
+    left=$((BUDGET - elapsed))
+    [ "$left" -lt 0 ] && left=0
+  fi
+  wa_progress_scan
+  age=$((now - _pg_max_ts))
+  cleft=$(cat "$TMP/.collision_left_echo" 2>/dev/null || true)
+  echo "прогресс${kind:+ ($kind)}: elapsed=${elapsed}s budget_left=${left}s last=${_pg_last_lab} age=${age}s files=${_pg_files:-none}${cleft:+ collision_left=$cleft}" >&2
+}
+_PROGRESS_OBS_PID=""
+_wiki_alias_on_exit() {
+  if [ -n "${_PROGRESS_OBS_PID:-}" ]; then
+    kill "$_PROGRESS_OBS_PID" 2>/dev/null || true
+    wait "$_PROGRESS_OBS_PID" 2>/dev/null || true
+    _PROGRESS_OBS_PID=""
+  fi
+  if [ "${WIKI_ALIAS_REPORT_EVERY_SEC:-0}" -gt 0 ]; then
+    # Без 2>/dev/null: wa_progress_report пишет в stderr — подавление глотало бы финал.
+    wa_progress_report "финал" || true
+  fi
+  rm -rf "$TMP"
+}
+# Наблюдатель — tick и cycle; seed max_ts=t_start (нет файлов ≠ эпоха 0).
+if [ "$WIKI_ALIAS_REPORT_EVERY_SEC" -gt 0 ] || [ "$WIKI_ALIAS_STALL_SEC" -gt 0 ]; then
+  (
+    last_rep=0
+    if [ "$WIKI_ALIAS_REPORT_EVERY_SEC" -gt 0 ]; then
+      wa_progress_report "старт"
+      last_rep=$(date +%s)
+    fi
+    while :; do
+      sleep "$WIKI_ALIAS_POLL_SEC"
+      now=$(date +%s)
+      wa_progress_scan
+      max_ts=$_pg_max_ts
+      [ "$max_ts" -lt "$t_start" ] && max_ts=$t_start
+      if [ "$WIKI_ALIAS_STALL_SEC" -gt 0 ]; then
+        silent=$((now - max_ts))
+        if [ "$silent" -gt "$WIKI_ALIAS_STALL_SEC" ]; then
+          echo "стоп-при-тишине: ${silent} сек без прогресса (последний: ${_pg_last_lab} возрастом ${silent} с)" >&2
+          kill -TERM "$PPID"
+          exit 0
+        fi
+      fi
+      if [ "$WIKI_ALIAS_REPORT_EVERY_SEC" -gt 0 ] \
+         && [ $((now - last_rep)) -ge "$WIKI_ALIAS_REPORT_EVERY_SEC" ]; then
+        wa_progress_report
+        last_rep=$now
+      fi
+    done
+  ) &
+  _PROGRESS_OBS_PID=$!
+fi
+trap '_wiki_alias_on_exit' EXIT
+
+# DDL tick — ПОСЛЕ наблюдателя (живая проба: висящий init-DDL ловится stall).
+# 🔴 cycle пропускает (red12b-3): DDL в фазе «а» по черновым именам + своя probe.
+[ "$WIKI_ALIAS_MODE" != "cycle" ] && wa_progress_write "$TMP/.progress_main" 0 "ddl"
+[ "$WIKI_ALIAS_MODE" != "cycle" ] && psql_wa -f "$HERE/wiki_alias_init.sql" >/dev/null 2>&1
+
 over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUDGET" ]; }
 
 # [замер 14.09] ПАРАЛЛЕЛЬНЫЕ ВОРКЕРЫ ПЕРВОГО ПРОХОДА (только force=1). vLLM батчит
@@ -206,6 +309,9 @@ wa_infer_field() {
   local prompt="$1" pay="$2" ans="$3" err="$4" msg="$5" field="$6" site="$7" tag="$8"
   local attempt
   for attempt in 0 1 2; do
+    # Heartbeat до КАЖДОЙ попытки: штатная тишина ≤ один вызов шлюза (plan-progress-stall).
+    [ -n "${WA_PROGRESS_FILE:-}" ] \
+      && wa_progress_write "$WA_PROGRESS_FILE" "$attempt" "infer:$field"
     {
       printf '%s' "$prompt"
       cat "$pay"
@@ -260,6 +366,7 @@ wa_infer_three_fields() {
 # в своих файлах; пачки воркеров не пересекаются (решётка), MERGE-строки тоже.
 wiki_alias_entities_worker() {
   local w="$1" WTMP done_total wskipped STEP
+  local WA_PROGRESS_FILE="$TMP/.progress_ent_$w"
   WTMP="$TMP/w$w"; mkdir -p "$WTMP"
   [ "$(id -u)" = 0 ] && chown "$BOTUSER" "$WTMP" 2>/dev/null || true
   done_total=$(( w * BATCH ))
@@ -285,6 +392,7 @@ while :; do
   # aliases / mark_skip выводит строку из NOT EXISTS) — OFFSET сдвинул бы
   # mark_skip-хвост в голову и крутил бы одни и те же «пропущенные». При force=1
   # пул = весь корпус всегда → :skip_rows (= done_total) — единственный курсор.
+  wa_progress_write "$WA_PROGRESS_FILE" "$done_total" "sel"
   if ! psql_wa_tA -v batch="$BATCH" -v skip_rows="$done_total" \
       -f "$HERE/wiki_alias_select_entity_batch.sql" > "$WTMP/pay"; then
     echo "алиасы: СБОЙ селекта пачки (ошибка выше) — прогон остановлен, пачка не потеряна" >&2
@@ -307,6 +415,7 @@ while :; do
       echo "алиасы: пачка пропущена (падение поля A/B/C)" >&2
       psql_wa -v pay_path="$WTMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
       done_total=$((done_total + STEP))
+      wa_progress_write "$WA_PROGRESS_FILE" "$done_total" "ent"
       [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
       continue
   fi
@@ -323,6 +432,7 @@ while :; do
     echo "алиасы: пачка пропущена (rc0, разобрано 0)" >&2
     psql_wa -v pay_path="$WTMP/pay" -f "$HERE/wiki_alias_mark_skip.sql" >/dev/null 2>&1
     done_total=$((done_total + STEP))
+    wa_progress_write "$WA_PROGRESS_FILE" "$done_total" "ent"
     [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
     continue
   fi
@@ -344,6 +454,7 @@ while :; do
   have=$(psql_wa_tA -c "SELECT count(*) FROM $ALIAS_TABLE" 2>/dev/null)
   echo "алиасы: всего в базе $have"
   done_total=$((done_total + STEP))
+  wa_progress_write "$WA_PROGRESS_FILE" "$done_total" "ent"
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
   over_budget && { echo "алиасы: бюджет $BUDGET с исчерпан — остальные сущности возьмёт следующий такт"; break; }
 done
@@ -407,6 +518,7 @@ _cycle_run_init_pass() {
       break
     }
     [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
+    wa_progress_write "$TMP/.progress_meas" "$done_measures" "sel"
     psql_wa_tA -v batch="$BATCH" -v skip_rows="$done_measures" \
       -f "$HERE/wiki_alias_select_measure_batch.sql" > "$TMP/pay" 2>/dev/null
     chmod 644 "$TMP/pay" 2>/dev/null
@@ -417,6 +529,7 @@ _cycle_run_init_pass() {
       cat "$TMP/pay"
     } > "$TMP/msg"
     chmod 644 "$TMP/msg"
+    wa_progress_write "$TMP/.progress_meas" "$done_measures" "meas"
     "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
       --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
       --retry-items-json "$_CYCLE_RETRY_ITEMS" \
@@ -426,6 +539,7 @@ _cycle_run_init_pass() {
         psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_measure_skip.sql" >/dev/null 2>&1
         done_measures=$((done_measures + BATCH))
         done_total=$((done_total + BATCH))
+        wa_progress_write "$TMP/.progress_meas" "$done_measures" "meas"
         [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
         continue
       }
@@ -439,6 +553,7 @@ _cycle_run_init_pass() {
       psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_measure_skip.sql" >/dev/null 2>&1
       done_measures=$((done_measures + BATCH))
       done_total=$((done_total + BATCH))
+      wa_progress_write "$TMP/.progress_meas" "$done_measures" "meas"
       [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
       continue
     fi
@@ -450,6 +565,7 @@ _cycle_run_init_pass() {
     echo "величины: непустых в базе $have_m"
     done_measures=$((done_measures + BATCH))
     done_total=$((done_total + BATCH))
+    wa_progress_write "$TMP/.progress_meas" "$done_measures" "meas"
   done
   return 0
 }
@@ -524,6 +640,7 @@ _cycle_run_collision() {
       for iq in $QWORDS; do
         (
           WTMP="$TMP/cw$iq"
+          WA_PROGRESS_FILE="$TMP/.progress_col_$iq"
           PAY=$(cat "$WTMP/pay" 2>/dev/null)
           case "$PAY" in ''|'[]'|'null') exit 0;; esac
           WORD=$(cat "$WTMP/word" 2>/dev/null)
@@ -534,10 +651,12 @@ _cycle_run_collision() {
                 "$WTMP/rows.json" "" "разведение" \
                 "$_CA" "$_CB" "$_CC"); then
             echo "разведение: пачка пропущена (падение поля A/B/C)" >&2
+            wa_progress_write "$WA_PROGRESS_FILE" 0 "col"
             exit 0
           fi
           echo "$parse_out"
           chmod 644 "$WTMP/rows.json" 2>/dev/null
+          wa_progress_write "$WA_PROGRESS_FILE" 1 "col"
         ) &
       done
       wait
@@ -556,6 +675,7 @@ _cycle_run_collision() {
       ;;
     esac
     echo "разведение столкновений: кругов $rounds CEILING=$CEILING, спрошено слов $asked, осталось $left${stopped:+ ($stopped)}"
+    printf '%s\n' "$left" > "$TMP/.collision_left_echo"
 
     [ "$left" -eq 0 ] && break
     [ -n "$TARGET_WORD" ] && break
@@ -628,6 +748,7 @@ wiki_alias_run_cycle() {
         ;;
     esac
   done
+  wa_progress_write "$TMP/.progress_main" 0 "ddl"
   psql_wa -f "$HERE/wiki_alias_init.sql" >/dev/null 2>&1 || {
     _cycle_phase а ABORT "DDL черновика не прошёл"
     return 1
@@ -747,6 +868,7 @@ wiki_alias_run_cycle() {
     _cycle_phase д ABORT "promote не выполнен: задай BATTLE_TABLE или PROMOTE_BATTLE=1"
     return 1
   fi
+  wa_progress_write "$TMP/.progress_main" 0 "promote"
   psql "$DSN" -v ON_ERROR_STOP=1 \
     -v draft_table="$ALIAS_TABLE" \
     -v battle_table="$BATTLE_E" \
@@ -764,6 +886,7 @@ wiki_alias_run_cycle() {
   # ── е) migrate_sep + solr (бой: compile; песочница: skip — red10c-1) ──
   # Хвост без модели — выполняется всегда после успешных гейтов (plan §3).
   _cycle_phase е START
+  wa_progress_write "$TMP/.progress_main" 0 "migrate"
   psql "$DSN" -v ON_ERROR_STOP=1 \
     -v battle_table="$BATTLE_E" \
     -v battle_measure="$BATTLE_M" \
@@ -777,6 +900,7 @@ wiki_alias_run_cycle() {
   SOLR_SYN_DICT="${ASK_SOLR_SYNONYMS_DICT:-${SOLR_SYN_DICT:-search_dict_syn}}"
   DICT_LOCALE="${SEARCH_DICT_LOCALE:-ru_RU.utf8}"
   if [ "$BATTLE_E" = "search_entity_alias" ]; then
+    wa_progress_write "$TMP/.progress_main" 0 "solr"
     psql "$DSN" -q \
       -v dict_locale="$DICT_LOCALE" \
       -v solr_syn_dict="$SOLR_SYN_DICT" \
@@ -795,6 +919,7 @@ wiki_alias_run_cycle() {
 
   # ── ж) A3: корзины КАША/ОК/ПРОБЕЛ в журнал ──
   _cycle_phase ж START "dict_table=$BATTLE_E"
+  wa_progress_write "$TMP/.progress_main" 0 "a3"
   a3_out=$(psql "$DSN" -v ON_ERROR_STOP=1 -v dict_table="$BATTLE_E" \
     -f "$HERE/wiki_alias_metric_a3.sql" 2>&1)
   a3_rc=$?
@@ -858,6 +983,7 @@ while :; do
   over_budget && { echo "величины: бюджет $BUDGET с исчерпан — добор возьмёт следующий такт"; break; }
   [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
   # OFFSET только при force=1 (см. комментарий у entity-select выше).
+  wa_progress_write "$TMP/.progress_meas" "$done_measures" "sel"
   psql_wa_tA -v batch="$BATCH" -v skip_rows="$done_measures" \
     -f "$HERE/wiki_alias_select_measure_batch.sql" > "$TMP/pay" 2>/dev/null
   chmod 644 "$TMP/pay" 2>/dev/null
@@ -868,6 +994,7 @@ while :; do
     cat "$TMP/pay"
   } > "$TMP/msg"
   chmod 644 "$TMP/msg"
+  wa_progress_write "$TMP/.progress_meas" "$done_measures" "meas"
   "${RUNAS_BOT[@]}" python3 ./alias_infer_gateway.py --message-file "$TMP/msg" \
     --model "$WIKI_ALIAS_MODEL" --thinking "$WIKI_ALIAS_THINKING" \
     --retry-items-json 2 \
@@ -878,6 +1005,7 @@ while :; do
       psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_measure_skip.sql" >/dev/null 2>&1
       done_measures=$((done_measures + BATCH))
       done_total=$((done_total + BATCH))
+      wa_progress_write "$TMP/.progress_meas" "$done_measures" "meas"
       [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
       continue
     }
@@ -892,6 +1020,7 @@ while :; do
     psql_wa -v pay_path="$TMP/pay" -f "$HERE/wiki_alias_mark_measure_skip.sql" >/dev/null 2>&1
     done_measures=$((done_measures + BATCH))
     done_total=$((done_total + BATCH))
+    wa_progress_write "$TMP/.progress_meas" "$done_measures" "meas"
     [ "$CAP" != "0" ] && [ "$done_total" -ge "$CAP" ] && break
     continue
   fi
@@ -905,6 +1034,7 @@ while :; do
   echo "величины: непустых в базе $have_m"
   done_measures=$((done_measures + BATCH))
   done_total=$((done_total + BATCH))
+  wa_progress_write "$TMP/.progress_meas" "$done_measures" "meas"
 done
 # ── ВТОРОЙ ПРОХОД: РАЗВЕСТИ ТЕХ, КОГО НАЗЫВАЮТ ОДИНАКОВО ────────────────────────────
 # 🔴 Указание владельца 30.07: «если и там и там есть одно и то же описание, значит надо
@@ -981,6 +1111,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     for iq in $QWORDS; do
       (
         WTMP="$TMP/cw$iq"
+        WA_PROGRESS_FILE="$TMP/.progress_col_$iq"
         PAY=$(cat "$WTMP/pay" 2>/dev/null)
         case "$PAY" in ''|'[]'|'null') exit 0;; esac
         WORD=$(cat "$WTMP/word" 2>/dev/null)
@@ -992,10 +1123,12 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
               "$WTMP/rows.json" "" "разведение" \
               "$_CA" "$_CB" "$_CC"); then
           echo "разведение: пачка пропущена (падение поля A/B/C)" >&2
+          wa_progress_write "$WA_PROGRESS_FILE" 0 "col"
           exit 0
         fi
         echo "$parse_out"
         chmod 644 "$WTMP/rows.json" 2>/dev/null   # тот же случай, что в первом проходе
+        wa_progress_write "$WA_PROGRESS_FILE" 1 "col"
       ) &
     done
     wait
@@ -1010,6 +1143,7 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
   # они лежат в `$PROBE_TABLE` (умолч. search_alias_probe) и сами собой больше не переспрашиваются.
   left=$(psql_wa_tA -f "$HERE/wiki_alias_collision_left.sql" 2>/dev/null)
   echo "разведение столкновений: кругов $rounds$stopped, спрошено слов $asked, осталось неспрошенных ${left:-?}"
+  printf '%s\n' "${left:-}" > "$TMP/.collision_left_echo"
 fi
 
 [ "$skipped" -gt 0 ] && echo "алиасы: пачек пропущено из-за отказа модели: $skipped" >&2
@@ -1034,6 +1168,7 @@ if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
     REASK_DONE=0
     while [ "$REASK_DONE" -lt "$REASK_CAP" ]; do
       over_budget && { echo "reask: бюджет $BUDGET с исчерпан" >&2; break; }
+      wa_progress_write "$TMP/.progress_main" "$REASK_DONE" "sel"
       psql "$DSN" -tA -v ON_ERROR_STOP=1 \
         -v alias_table="$ALIAS_TABLE" \
         -v batch="$COLL_BATCH" \
@@ -1044,6 +1179,7 @@ if [ "$REASK_EVERY" -gt 0 ] && [ "$WIKI_ALIAS_TICK" -gt 0 ] \
       PAY=$(cat "$TMP/reask_pay")
       case "$PAY" in ''|'[]'|'null') break;; esac
       # «1 задача = 1 вызов»: init-A/B/C (тот же канон, что entity-init).
+      WA_PROGRESS_FILE="$TMP/.progress_main"
       if ! parse_out=$(wa_infer_three_fields init "$TMP/reask_pay" "$TMP/reask" \
             "$TMP/reask_rows.json" "$TMP/reask_meas.json" "reask" \
             "$_WA_INIT_A" "$_WA_INIT_B" "$_WA_INIT_C"); then
@@ -1097,6 +1233,7 @@ fi
 
 # Итог «алиасов в базе» — wiki_alias_publish.sql (stats + REFRESH, не в tx с INSERT).
 # Внутри publish: VACUUM (REFRESH_TABLE) $ALIAS_TABLE.
+wa_progress_write "$TMP/.progress_main" 0 "pub"
 psql_wa -f "$HERE/wiki_alias_publish.sql" \
   || echo "алиасы: VACUUM (REFRESH_TABLE) $ALIAS_TABLE не прошёл" >&2
 
@@ -1124,6 +1261,7 @@ mark_day_fork_attempt() {
 day_fork_done=0
 while :; do
   fork_over_budget && break
+  wa_progress_write "$TMP/.progress_main" "$day_fork_done" "dayfork"
   BUNDLE=$(psql_wa_tA \
     -v fork_class_table="$FORK_CLASS_TABLE" \
     -v fork_label_table="$FORK_LABEL_TABLE" \
@@ -1167,6 +1305,7 @@ while :; do
 done
 # Обычные src/окно классы — тот же штатный генератор (рядом, не вместо systemd-юнита).
 if [ -x ./branch_alias.sh ]; then
+  wa_progress_write "$TMP/.progress_main" 0 "branch"
   BRANCH_ALIAS_MAX_SEC="${BRANCH_ALIAS_MAX_SEC:-60}" ./branch_alias.sh "${BRANCH_ALIAS_CAP:-10}" \
     || echo "развилки src: шаг не прошёл, такт продолжается" >&2
 fi
@@ -1184,6 +1323,7 @@ SOLR_SYN_DICT="${ASK_SOLR_SYNONYMS_DICT:-${SOLR_SYN_DICT:-search_dict_syn}}"
 DICT_LOCALE="${SEARCH_DICT_LOCALE:-ru_RU.utf8}"
 # Тот же путь, что build.sh:511-517 — без Python-посредника. Fail-closed: юнит и ручной
 # прогон не маскируют битый словарь. alias_table жёстко search_entity_alias (см. выше).
+wa_progress_write "$TMP/.progress_main" 0 "solr"
 psql "$DSN" -q \
   -v dict_locale="$DICT_LOCALE" \
   -v solr_syn_dict="$SOLR_SYN_DICT" \
