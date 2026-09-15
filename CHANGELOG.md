@@ -39,6 +39,33 @@ verify-plugin остаётся конгломератом; симметрия ч
 Числа: 25/39/16/131 зелёные; конверт 532→чистый хвост.
 Доки: API_ASK.md §4; HOW_IT_WORKS.md §8a; MAP.md; ubuntu/openclaw/README.md.
 
+## 2026-09-15 (55) — Шаг 3 PLAN_DICT_AUTOMATION: probe ok/failed + самоочистка при смене версии [код]
+
+**[код]** Замена Р5 («спрашивалось сломанным кодом ≠ разведено»; руками чистил
+дважды). probe += result/gen_ver (ADD COLUMN IF NOT EXISTS — доки Sql ›
+Statements › ALTER TABLE › ADD COLUMN; IF NOT EXISTS в разделе не назван, форма
+канона corpus_init; MERGE…RETURNING для счётчика ok — живая проверка на
+движке 26.07.3 обе формы). GEN_VER = md5(скрипт+модель+thinking) — смена
+промтов/кода/модели = новая версия; пустой md5 → честный ABORT. Пометка после
+merge: ok = (≥1 объект ∧ merge затронул ≥1 строку) ∨ слово+fp исчезло из
+кандидатов; иначе failed (падения, rc0-пустышки). Самоочистка: остаются
+ok-любой-версии и failed-текущей; уходят failed-чужой и ВСЕ пустые (убитые
+kill/stall и легаси Р5) — только по ВЫБРАННОЙ probe прогона (tick: перед
+if COLLISIONS; cycle: фаза в после а; боевую search_alias_probe cycle не
+чистит). Журнал: «probe-чистка: удалено N осталось failed M», «разведение:
+слово → ok/failed». Файлы: wiki_alias_probe_{mark,purge,still}.sql новые,
+deploy FILES += 3, collision_round INSERT именами колонок, collision_merge
+RETURNING. Красная: план v2 (red19 ×3: ключ alias+fp, ok-по-MERGE, политика
+пустых, место purge, модель в версии, guard) → дифф red20 ×3 (purge-счётчик
+по «|» ≠ таб → всегда «?»; tick purge внутри if COLLISIONS — приёмка (а)
+невозможна; red20c ОТКЛОНИТЬ) → фиксы J1/J2 (exec19) → red21 ×3 ПРИНЯТЬ.
+Замки: probe 35/0 (новый), cycle 50/0, deploy 52/0, progress 53/0,
+prompts_v2 113/0, sep 110/0, parse 34/0, bash -n чист. Живые пробы (а)/(б)
+на окне — следующим заходом (рецепт red20c: песочные таблицы, модель мертва —
+отказы и есть материал).
+Числа: +110/−12 в 6 файлах + 3 новых SQL + замок 35/0.
+Доки: plan-probe-result.md; Sql › Statements › ALTER TABLE › ADD COLUMN.
+
 ## 2026-09-15 (54) — Фикс стоп-при-тишины: киллер бил мимо ($PPID≠главное) [код][замер]
 
 **[замер]** Живая DSN-проба сторожа (unroutable 10.255.255.1:7890, STALL=45,

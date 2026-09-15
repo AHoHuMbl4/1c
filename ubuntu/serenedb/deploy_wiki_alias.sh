@@ -41,6 +41,9 @@ FILES=(
   wiki_alias_collision_round.sql
   wiki_alias_collision_merge.sql
   wiki_alias_collision_left.sql
+  wiki_alias_probe_mark.sql
+  wiki_alias_probe_purge.sql
+  wiki_alias_probe_still.sql
   wiki_alias_reask_init.sql
   wiki_alias_reask_select_entity_batch.sql
   wiki_alias_reask_merge_confirmed.sql

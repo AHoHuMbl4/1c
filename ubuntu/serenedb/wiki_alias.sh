@@ -123,6 +123,20 @@ case "$WIKI_ALIAS_FORCE" in 1) WIKI_ALIAS_FORCE=1;; *) WIKI_ALIAS_FORCE=0;; esac
 cd "$(dirname "$0")" || exit 1
 HERE="$(pwd)"
 
+# ── версия генератора для самоочистки probe (plan-probe-result.md) ──
+# md5(скрипт + модель + thinking): смена кода/промтов/модели = новая версия.
+# Пустой/битый md5 → ABORT (fail-closed: без версии чистку не делаем).
+GEN_VER=$(
+  { cat "$HERE/wiki_alias.sh"; printf '%s%s' "$WIKI_ALIAS_MODEL" "$WIKI_ALIAS_THINKING"; } \
+    | md5sum 2>/dev/null | awk '{print $1}'
+)
+case "$GEN_VER" in
+  ''|*[!0-9a-fA-F]*)
+    echo "алиасы: GEN_VER пуст/битый — ABORT (fail-closed)" >&2
+    exit 1
+    ;;
+esac
+
 # Общие psql-параметры: таблицы и retry — один -f вместо веера -c (п. 20, Э1а).
 psql_wa() {
   psql "$DSN" -q -v ON_ERROR_STOP=1 \
@@ -308,6 +322,59 @@ trap '_wiki_alias_on_exit' EXIT
 [ "$WIKI_ALIAS_MODE" != "cycle" ] && psql_wa -f "$HERE/wiki_alias_init.sql" >/dev/null 2>&1
 
 over_budget() { [ "$BUDGET" != "0" ] && [ $(( $(date +%s) - t_start )) -ge "$BUDGET" ]; }
+
+# Самоочистка probe: оставить ok-любой и failed-текущей GEN_VER; убрать остальное.
+# 🔴 Только по выбранной PROBE_TABLE прогона (tick — env уже финален; cycle — после фазы а).
+wa_probe_purge() {
+  local out deleted failed_left
+  wa_progress_write "$TMP/.progress_main" 0 "probe"
+  out=$(psql_wa_tA -v gen_ver="$GEN_VER" -f "$HERE/wiki_alias_probe_purge.sql" 2>/dev/null) || out=""
+  deleted=${out%%$'\t'*}
+  failed_left=${out#*$'\t'}
+  case "$deleted" in ''|*[!0-9]*) deleted="?";; esac
+  case "$failed_left" in ''|*[!0-9]*) failed_left="?";; esac
+  echo "probe-чистка: удалено $deleted осталось failed $failed_left (gen_ver=$GEN_VER)" >&2
+}
+
+# Пометка ok/failed после merge (UPDATE по alias+entities_fp).
+wa_probe_mark() {
+  local word="$1" fp="$2" result="$3"
+  wa_progress_write "$TMP/.progress_main" 0 "probe"
+  [ -n "${WA_PROGRESS_FILE:-}" ] && wa_progress_write "$WA_PROGRESS_FILE" 0 "probe"
+  psql_wa -v word="$word" -v fp="$fp" -v result="$result" -v gen_ver="$GEN_VER" \
+    -f "$HERE/wiki_alias_probe_mark.sql" >/dev/null 2>&1 || \
+    echo "разведение: пометка probe не записалась ($word)" >&2
+  echo "разведение: слово ${word} → ${result}" >&2
+}
+
+# ok = (≥1 объект модели И MERGE затронул ≥1) ИЛИ word+fp исчез из cand (still=0).
+# Иначе failed (падение поля, rc0-пустышка, merge no-op без разрешения).
+wa_probe_result_for() {
+  local wtmp="$1" word fp objs merge_n still result
+  word=$(cat "$wtmp/word" 2>/dev/null || true)
+  fp=$(cat "$wtmp/fp" 2>/dev/null || true)
+  result=failed
+  objs=0
+  merge_n=0
+  if [ -s "$wtmp/rows.json" ]; then
+    objs=$(python3 -c 'import json,sys; print(len(json.load(open(sys.argv[1]))))' \
+      "$wtmp/rows.json" 2>/dev/null) || objs=0
+    case "$objs" in ''|*[!0-9]*) objs=0;; esac
+    if [ "$objs" -ge 1 ]; then
+      merge_n=$(psql_wa_tA -v rows_path="$wtmp/rows.json" \
+        -f "$HERE/wiki_alias_collision_merge.sql" 2>/dev/null | grep -c . || true)
+      case "$merge_n" in ''|*[!0-9]*) merge_n=0;; esac
+    fi
+  fi
+  if [ "$objs" -ge 1 ] && [ "$merge_n" -ge 1 ]; then
+    result=ok
+  elif [ -n "$word" ] && [ -n "$fp" ]; then
+    still=$(psql_wa_tA -v word="$word" -v fp="$fp" \
+      -f "$HERE/wiki_alias_probe_still.sql" 2>/dev/null) || still="?"
+    case "$still" in 0) result=ok;; esac
+  fi
+  printf '%s' "$result"
+}
 
 # [замер 14.09] ПАРАЛЛЕЛЬНЫЕ ВОРКЕРЫ ПЕРВОГО ПРОХОДА (только force=1). vLLM батчит
 # одновременные вызовы почти бесплатно: 3 параллельных — 74/168/188 с на вызов против
@@ -672,7 +739,8 @@ _cycle_run_collision() {
         rm -f "$WTMP/rows.json"
         printf '%s' "$PAY" > "$WTMP/pay"
         printf '%s' "$WORD" > "$WTMP/word"
-        chmod 644 "$WTMP/pay" "$WTMP/word" 2>/dev/null
+        printf '%s' "$FP" > "$WTMP/fp"
+        chmod 644 "$WTMP/pay" "$WTMP/word" "$WTMP/fp" 2>/dev/null
         QWORDS="$QWORDS $iq"
         Q=$((Q + 1))
         rounds=$((rounds + 1))
@@ -705,8 +773,11 @@ _cycle_run_collision() {
       done
       wait
       for iq in $QWORDS; do
-        [ -s "$TMP/cw$iq/rows.json" ] || continue
-        psql_wa -v rows_path="$TMP/cw$iq/rows.json" -f "$HERE/wiki_alias_collision_merge.sql" >/dev/null 2>&1
+        # merge внутри wa_probe_result_for (RETURNING → count); пометка всегда.
+        _pr=$(wa_probe_result_for "$TMP/cw$iq")
+        WORD=$(cat "$TMP/cw$iq/word" 2>/dev/null || true)
+        FP=$(cat "$TMP/cw$iq/fp" 2>/dev/null || true)
+        wa_probe_mark "$WORD" "$FP" "$_pr"
       done
       [ -n "$TARGET_WORD" ] && break
     done
@@ -841,6 +912,8 @@ wiki_alias_run_cycle() {
   case "$CAP" in ''|*[!0-9]*|0) _cycle_phase в START "CEILING=$_v_ceiling" ;;
     *) _cycle_phase в START "CEILING=$_v_ceiling (точечная проба CAP=$CAP)" ;;
   esac
+  # Самоочистка probe черновика — после фазы а (PROBE_TABLE уже свой), до collision.
+  wa_probe_purge
   if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
     _cycle_run_collision
   else
@@ -1093,6 +1166,10 @@ done
 # Здесь пачка набирается НЕ по близости, а по ФАКТУ СТОЛКНОВЕНИЯ: одно и то же слово ведёт
 # в несколько сущностей. Это признак из данных, а не порог и не список слов.
 # Пересчитывается на каждом круге: разведённые пары из списка уходят сами.
+# :probe_table (PROBE_TABLE, умолч. search_alias_probe) — wiki_alias_init.sql (CREATE IF NOT EXISTS).
+# Песочница задаёт свою PROBE_TABLE, чтобы не марать боевую память столкновений.
+# Самоочистка probe — до if COLLISIONS (зеркало cycle): при COLLISIONS=0 чистка всё равно идёт.
+wa_probe_purge
 if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
   # 🔴 ПАМЯТЬ О ЗАДАННЫХ ВОПРОСАХ — ИНАЧЕ ПРОХОД НЕ СХОДИТСЯ. [замер 05.08, боевая база]
   # проход выбирал слово, спрашивал модель и обновлял `not_enough_for`. Но если модель не
@@ -1107,8 +1184,6 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
   # Ключ отметки — слово И ОТПЕЧАТОК НАБОРА сущностей, которые им называются. Появилась
   # новая сущность с тем же словом — отпечаток другой, вопрос задаётся заново. То есть это
   # не «спросили один раз и забыли», а «спросили про ЭТО столкновение».
-  # :probe_table (PROBE_TABLE, умолч. search_alias_probe) — wiki_alias_init.sql (CREATE IF NOT EXISTS).
-  # Песочница задаёт свою PROBE_TABLE, чтобы не марать боевую память столкновений.
   rounds=0 asked=0 stopped=""
   # [замер 14.09] ПАРАЛЛЕЛЬНЫЕ СЛОВА: одна пачка слова идёт ~10 мин (группа до
   # COLL_BATCH записей × 3 поля); хвост 230 слов последовательно — двое суток.
@@ -1143,7 +1218,8 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
       rm -f "$WTMP/rows.json"   # красная red5b: stale rows.json упавшего слова не должен попасть в merge
       printf '%s' "$PAY" > "$WTMP/pay"
       printf '%s' "$WORD" > "$WTMP/word"
-      chmod 644 "$WTMP/pay" "$WTMP/word" 2>/dev/null
+      printf '%s' "$FP" > "$WTMP/fp"
+      chmod 644 "$WTMP/pay" "$WTMP/word" "$WTMP/fp" 2>/dev/null
       QWORDS="$QWORDS $iq"
       Q=$((Q + 1))
       rounds=$((rounds + 1))
@@ -1176,10 +1252,12 @@ if [ "${WIKI_ALIAS_COLLISIONS:-1}" = "1" ]; then
       ) &
     done
     wait
-    # ── MERGE строго последовательно: слова пересекаются по строкам сущностей.
+    # ── MERGE+пометка строго последовательно: слова пересекаются по строкам сущностей.
     for iq in $QWORDS; do
-      [ -s "$TMP/cw$iq/rows.json" ] || continue
-      psql_wa -v rows_path="$TMP/cw$iq/rows.json" -f "$HERE/wiki_alias_collision_merge.sql" >/dev/null 2>&1
+      _pr=$(wa_probe_result_for "$TMP/cw$iq")
+      WORD=$(cat "$TMP/cw$iq/word" 2>/dev/null || true)
+      FP=$(cat "$TMP/cw$iq/fp" 2>/dev/null || true)
+      wa_probe_mark "$WORD" "$FP" "$_pr"
     done
   done
   # Молчания тут быть не должно: видно и сколько спросили, и сколько ОСТАЛОСЬ на следующий

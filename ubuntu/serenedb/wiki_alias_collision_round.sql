@@ -60,7 +60,9 @@ pick AS (
                      WHERE p.alias = c.alias AND p.entities_fp = c.fp)
   ORDER BY c.n DESC, c.alias LIMIT 1),
 _mark AS (
-  INSERT INTO :probe_table
+  -- Явные колонки: probe += result/gen_ver (DEFAULT ''); позиционный INSERT
+  -- из трёх значений на пятиколоночной таблице падает.
+  INSERT INTO :probe_table (alias, entities_fp, asked_at)
   SELECT alias, fp, now() FROM pick RETURNING alias)
 SELECT p.alias || chr(9) || p.fp || chr(9) || coalesce(
   (SELECT to_json(list(struct_pack(

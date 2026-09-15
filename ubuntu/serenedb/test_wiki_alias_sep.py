@@ -282,9 +282,12 @@ probe_sql_files = [
     HERE / "wiki_alias_init.sql",
     HERE / "wiki_alias_collision_round.sql",
     HERE / "wiki_alias_collision_left.sql",
+    HERE / "wiki_alias_probe_mark.sql",
+    HERE / "wiki_alias_probe_purge.sql",
+    HERE / "wiki_alias_probe_still.sql",
 ]
 other_sql = [p for p in HERE.glob("wiki_alias*.sql") if p not in probe_sql_files]
-t(":probe_table только в init/round/left (остальные SQL без переменной)",
+t(":probe_table только в init/round/left/probe_* (остальные SQL без переменной)",
   all(":probe_table" not in p.read_text(encoding="utf-8") for p in other_sql),
   [p.name for p in other_sql if ":probe_table" in p.read_text(encoding="utf-8")])
 
