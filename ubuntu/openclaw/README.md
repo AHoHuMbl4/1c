@@ -16,6 +16,17 @@
 | `qa/qa-probes.sh` | QA-батарея через CLI (без Telegram): приветствие, мета, инъекции, отчёт-чисто, нет-данных, не-слил-SQL |
 | `requirements.txt` | зависимости `mcp_braine.py` |
 
+
+## Мост `mcp_ask` (активный контур)
+
+Сервис MCP `ask_1c` → serene_ask. Webchat-конверт движка (HISTORY/CURRENT + `User:`)
+снимается с `question` в мосту до сведения pending (`strip_webchat_question_envelope`).
+
+Замки (тот же venv, что у моста):
+- `test_mcp_ask.py` — формат ответа моста
+- `test_mcp_ask_pending.py` — pending clarify / текстовый выбор
+- `test_mcp_ask_envelope.py` — чистка webchat-конверта
+
 ## Правила слоя (🔴 приоритетнее прочего — см. `docs/OPENCLAW_BOT.md`)
 - **Только нативное OpenClaw.** Кастом — с явного согласия владельца (гейт `braine-verify` одобрен).
 - **Документацию движка смотреть в склонированных репо** `/opt/openclaw`, `/opt/openclaw-engine` (read-only),

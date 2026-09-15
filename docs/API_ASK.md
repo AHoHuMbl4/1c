@@ -166,6 +166,15 @@ verify-plugin — числа и подписи из `ATOM_JSON`/OPTIONS (бел�
   (план §6). Telegram несёт штатный `presentation` с `callback=ask1c:<decision_id>`;
   WebUI — детерминированный текст OPTIONS (каналы не приравниваются; генерацию
   чипов этот контур не меняет).
+- **Webchat-конверт движка:** OpenClaw иногда кладёт в `question` конгломерат
+  (`[Chat messages since your last reply - for context]` … `[Current message -
+  respond to this]` + `User: …`). Мост (`mcp_ask.strip_webchat_question_envelope`)
+  снимает его с `question` (и с `focus`/`measure`, если там те же маркеры) **до**
+  сведения pending: `/ask` и `locked_q` получают чистый хвост, поэтому строки
+  OPTIONS/чипов строятся из чистого вопроса (формат OPTIONS не меняется, свободный
+  ввод остаётся). Пустой хвост после CURRENT или хвост из одного `User:` — вопрос
+  не чистим (исходник как есть). Поле `context` не трогаем. Факт чистки виден в
+  журнале моста: `TRACE <rid> bridge envelope_stripped <было>/<стало>`.
 
 Бэкенд готов; мост/`verify-plugin` собирают presentation для Telegram.
 

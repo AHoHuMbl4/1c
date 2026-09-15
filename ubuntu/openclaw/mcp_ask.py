@@ -379,6 +379,53 @@ def _with_partial(out, data):
 
 
 
+# Маркеры webchat-конверта OpenClaw (HISTORY + CURRENT). Same-line CURRENT — не формат.
+# Сверено с openclaw@2026.7.1-2 (buildHistoryContext / stripStructuralPrefixes).
+_WEBCHAT_CURRENT_LINE_RE = re.compile(
+    r"(?m)^(\r?\n?)\[Current message - respond to this\][^\S\r\n]*\r?\n")
+_WEBCHAT_HISTORY_LINE_RE = re.compile(
+    r"(?m)^[^\S\r\n]*\[Chat messages since your last reply - for context\]"
+    r"[^\S\r\n]*\r?($|\n)")
+_WEBCHAT_HISTORY_MARK = "[Chat messages since your last reply - for context]"
+_WEBCHAT_USER_PREFIX_RE = re.compile(r"(?i)^User:\s*")
+
+
+def strip_webchat_question_envelope(text):
+    """Снимает webchat-конверт движка с текста вопроса, если оба маркера на месте.
+
+    Канон: HISTORY-строка, история, CURRENT-строка, текущее сообщение (часто с
+    User:). Без конверта возвращает тот же объект text, без пересборки.
+    Пустой хвост после CURRENT (или один User:) — исходный текст как есть.
+
+    Сверено с openclaw@2026.7.1-2 (buildHistoryContext / stripStructuralPrefixes).
+    """
+    if not isinstance(text, str) or not text:
+        return text
+    cur = _WEBCHAT_CURRENT_LINE_RE.search(text)
+    if not cur:
+        return text
+    before = text[:cur.start()]
+    # HISTORY — префикс всего текста (после leading [^\S\r\n]*) или полная строка;
+    # substring в середине чужой строки конвертом не считается.
+    lead = re.match(r"[^\S\r\n]*", text)
+    lead_n = lead.end() if lead else 0
+    history_ok = (
+        text[lead_n:].startswith(_WEBCHAT_HISTORY_MARK)
+        or bool(_WEBCHAT_HISTORY_LINE_RE.search(before)))
+    if not history_ok:
+        return text
+    tail = text[cur.end():].strip(" \t\r\n")
+    if not tail:
+        return text
+    if _WEBCHAT_USER_PREFIX_RE.match(tail):
+        body = _WEBCHAT_USER_PREFIX_RE.sub("", tail, count=1)
+        # Хвост из одного User: — исходник (выуживание из истории = догадка, п. 12).
+        if not body.strip(" \t\r\n"):
+            return text
+        return body
+    return tail
+
+
 def _choice_prompt(question, label):
     """Строка-вопрос варианта: тот же вид, что serene_ask.clarify_choice_prompt."""
     stem = (question or "").strip().rstrip("?").strip()
@@ -515,6 +562,17 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
     t0 = time.monotonic()
     mem = str(memory or "").strip().lower()
     mem_action = mem if mem in ("remember", "forget") else None
+
+    # Webchat-конверт движка → чистый хвост до сведения pending (слой 1 веб-проводки).
+    q_raw = question
+    question = strip_webchat_question_envelope(question)
+    if question is not q_raw:
+        _trace(rid, "bridge", "envelope_stripped", 0,
+               "%d/%d" % (len(q_raw), len(question)))
+    if focus:
+        focus = strip_webchat_question_envelope(focus)
+    if measure:
+        measure = strip_webchat_question_envelope(measure)
 
     resolved = _pending.apply_pending_before_ask(
         question, focus, measure, decision_id, user, channel)

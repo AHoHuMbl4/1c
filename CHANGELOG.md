@@ -1,3 +1,29 @@
+## 2026-09-15 (52) — web1: чистка webchat-конверта в мосту ask_1c [код][замер]
+
+**[код]** Замер 15.09 (живой веб-диалог, разбор текстом): вопрос из webchat-канала
+движка OpenClaw приходит в `ask_1c(question=…)` конгломератом
+`[Chat messages since your last reply - for context] … [Current message - respond
+to this] User: <текст>` (532–1225 симв) — сломано всё, что стоит на тексте выбора:
+pending-сведение к decision_id мертво, `locked_q` хранит конгломерат, clarify-опции
+строятся из мусора, персона теряет меню («вчера» → «данных нет» при живых данных).
+Мост научился снимать конверт: `strip_webchat_question_envelope` (mcp_ask.py),
+строгое распознавание (CURRENT отдельной строкой + HISTORY префиксом/строкой,
+substring не считается), `(?i)^User:\s*`, пустой хвост → исходник, no-op → тот же
+объект; вызов до `apply_pending_before_ask`; focus/measure той же функцией при
+маркере; `context` не трогаем. Факт чистки — `TRACE <rid> bridge
+envelope_stripped <было>/<стало>`. Штатной настройки движка нет (openclaw@2026.7.1-2,
+доки concepts/messages.md, openai-http-api.md — линза B).
+**[замер]** Замки: новый test_mcp_ask_envelope.py **25/0** (регресс: при
+нейтрализованной чистке 11/25 краснеют — замер красной rd2 в /tmp-копии);
+test_mcp_ask.py **39/0**, test_mcp_ask_pending.py **16/0**, verify-plugin
+test-verify.mjs **131** — без правки ассертов. Красные волны: план ×3 (REJECT/
+ACCEPT/REJECT → v2 → ACCEPT ×3), дифф ×3 (REJECT только по CHANGELOG — закрыт
+этой записью; ACCEPT ×2). Окно после выката: in-flight pending ≤TTL 900 с может
+дать один лишний clarify живой сессии. Долги (не этой волной): `clarifyLocks.question`
+verify-plugin остаётся конгломератом; симметрия чистки `context`.
+Числа: 25/39/16/131 зелёные; конверт 532→чистый хвост.
+Доки: API_ASK.md §4; HOW_IT_WORKS.md §8a; MAP.md; ubuntu/openclaw/README.md.
+
 ## 2026-09-15 (51) — Точечная живая проба cycle на окне: пайплайн ✔, модельное плечо ждёт эндпойнт [замер]
 
 **[замер]** Проба по решению (48): юнит 1c-wiki-alias@postgres (окно), MODE=cycle,
@@ -47,7 +73,7 @@ red12/red13 ×3 каждый; red12b-находки (fail-open collision_left, �
 Числа: +481/-1 wiki_alias.sh, +1 deploy, +5 env.example, замок 50/0.
 Доки: PLAN_DICT_AUTOMATION.md; plan-cycle-mode.md (.claude/state).
 
-## 2026-09-15 (49) — metric_a3.sql из /tmp окна → репо (фаза «ж» cycle) [решение]
+## 2026-09-15 (49) — metric_a3.sql из /tmp окна → ubuntu/serenedb (замер A3 в репо, фаза ж cycle); граф; CHANGELOG (49)
 
 **[решение]** A3-замер качества словаря (топ-100 вопросов 30 дней → корзины
 КАША/ОК/ПРОБЕЛ по покрытию стемов) жил в /tmp/metric_a3.sql на окне — а /tmp
