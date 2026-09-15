@@ -107,8 +107,8 @@ def main() -> int:
     )
     t("SQL: эвристика в комментарии", "эвристика" in sql)
     t(
-        "SQL: одна команда SELECT printf",
-        sql.count("SELECT printf(") == 1 and "FROM base" in sql,
+        "SQL: одна команда SELECT (конкатенация key=value)",
+        sql.count("SELECT 'entities='") == 1 and "FROM base" in sql,
     )
     for bad in (
         "search_entity_alias",
@@ -126,12 +126,12 @@ def main() -> int:
         else:
             t(f"SQL: нет имени «{bad}»", bad not in sql)
 
-    # Ключи кортежа — в форматной строке по порядку.
-    fmt = re.search(r"printf\(\s*'([^']+)'", sql)
-    fmt_s = fmt.group(1) if fmt else ""
-    t("SQL: форматная строка key=value", bool(fmt_s))
+    # Ключи кортежа — в конкатенации по порядку (printf с BIGINT в SereneDB
+    # падает «invalid format specifier» — живая проба 15.09; канон — || с кастами).
+    fmt_s = sql
+    t("SQL: строка key=value конкатенацией", "'entities=' ||" in sql and "::VARCHAR" in sql)
     for k in KEYS:
-        t(f"SQL: ключ {k}=", f"{k}=%s" in fmt_s or f"{k}=%d" in fmt_s)
+        t(f"SQL: ключ {k}=", f"' {k}=' ||" in sql or f"'{k}=' ||" in sql)
     # Порядок ключей
     positions = [fmt_s.find(f"{k}=") for k in KEYS]
     t(

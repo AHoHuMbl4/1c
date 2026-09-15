@@ -1,7 +1,9 @@
 \set ON_ERROR_STOP on
 -- Отчёт качества init-фазы: одна строка key=value в journal (plan-quality-report v2).
--- Доки: Regular Expressions › regexp_split_to_array; Text Functions › printf;
---       Expressions › Subqueries › EXISTS; Aggregate Functions (FILTER).
+-- Доки: Regular Expressions › regexp_split_to_array; Expressions › Subqueries
+--       › EXISTS; Aggregate Functions (FILTER). Вывод — конкатенация || с
+--       ::VARCHAR: printf с BIGINT в SereneDB даёт «invalid format
+--       specifier» (живая проба 15.09).
 -- Канон токенов aliases: regexp_split_to_array ',| [|] ' (wiki_alias_promote).
 -- Потоки (need_event): EXISTS search_refcols.target_src — как
 -- wiki_alias_select_entity_batch (не колонка facts, не имена мер).
@@ -47,10 +49,16 @@ meas AS (
            WHERE trim(tok) <> '') AS measure_tokens
     FROM :measure_table
 )
-SELECT printf(
-  'entities=%s empty_aliases=%s empty_best=%s empty_nef=%s measures=%s measures_nonempty=%s measure_tokens=%s need_event=%s has_event=%s event_gap=%s',
-  b.entities, b.empty_aliases, b.empty_best, b.empty_nef,
-  m.measures, m.measures_nonempty, m.measure_tokens,
-  b.need_event, b.has_event, (b.need_event - b.has_event)
-)
+-- Конкатенация || с кастами — канон репо (collision_round); printf с BIGINT
+-- в SereneDB даёт «invalid format specifier» (живая проба 15.09, ABORT-ветка).
+SELECT 'entities=' || b.entities::VARCHAR
+    || ' empty_aliases=' || b.empty_aliases::VARCHAR
+    || ' empty_best=' || b.empty_best::VARCHAR
+    || ' empty_nef=' || b.empty_nef::VARCHAR
+    || ' measures=' || m.measures::VARCHAR
+    || ' measures_nonempty=' || m.measures_nonempty::VARCHAR
+    || ' measure_tokens=' || m.measure_tokens::VARCHAR
+    || ' need_event=' || b.need_event::VARCHAR
+    || ' has_event=' || b.has_event::VARCHAR
+    || ' event_gap=' || (b.need_event - b.has_event)::VARCHAR
 FROM base b, meas m;

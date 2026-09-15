@@ -99,7 +99,10 @@ ABORT) → red25 ×3 ПРИНЯТЬ. Замки: quality 46/0 (новый), cycl
 probe 38/0, progress 56/0, deploy 53/0, prompts_v2 113/0, sep 110/0,
 parse 34/0, bash -n чист. Доки: Regular Expressions › regexp_split_to_array;
 Text Functions › printf; Subqueries › EXISTS; Aggregate FILTER.
-Живая проба wa_p4 — следующим заходом.
+Живая проба wa_p4: поймала «invalid format specifier» у printf с BIGINT —
+ABORT-ветка отработала штатно (текст ошибки в журнале, exit 1); замена на
+конкатенацию || с ::VARCHAR (канон репо), красная red26 ×3 ПРИНЯТЬ, ручной
+SELECT на движке вернул кортеж с event_gap=0 («продали» пойман аффиксом).
 Числа: +25 строк wiki_alias.sh, SQL 1 файл, замок 46/0.
 Доки: plan-quality-report.md; PLAN_DICT_AUTOMATION §3 шаг 4.
 
