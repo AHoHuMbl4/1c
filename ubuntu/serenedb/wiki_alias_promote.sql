@@ -7,9 +7,9 @@
 --    Solr после переноса — только из боя (хвост wiki_alias.sh), не из черновика.
 --
 -- Параметры psql (-v):
---   draft_table     — черновик сущностей (умолч. alias_okna_c5)
+--   draft_table     — черновик сущностей (ОБЯЗАТЕЛЕН; умолчание убрано по п.0)
 --   battle_table    — бой сущностей (умолч. search_entity_alias)
---   draft_measure   — черновик мер (умолч. alias_okna_c5_measure)
+--   draft_measure   — черновик мер (ОБЯЗАТЕЛЕН; умолчание убрано по п.0)
 --   battle_measure  — бой мер (умолч. search_measure_alias)
 --   snap_suffix     — дата/метка снапшота (ОБЯЗАТЕЛЕН), напр. 20260913
 --
@@ -27,9 +27,9 @@
 --
 -- Пример:
 --   psql "$DSN" \
---     -v draft_table=alias_okna_c5 \
+--     -v draft_table=<имя-черновика-сущностей> \
 --     -v battle_table=search_entity_alias \
---     -v draft_measure=alias_okna_c5_measure \
+--     -v draft_measure=<имя-черновика-мер> \
 --     -v battle_measure=search_measure_alias \
 --     -v snap_suffix=20260913 \
 --     -f wiki_alias_promote.sql
@@ -40,9 +40,14 @@
 --       error(); Utility CREATE MACRO.
 -- =============================================================================
 
+-- 🔴 [п.0] Имя черновика — ОБЯЗАТЕЛЬНЫЙ параметр: умолчание с именем таблицы
+-- конкретной базы было привязкой (замер п.0-пробы 15.09). Боевые имена — контур
+-- продукта, одинаковы на любой базе, остаются умолчаниями.
 \if :{?draft_table}
 \else
-\set draft_table alias_okna_c5
+SELECT error(
+  'wiki_alias_promote: нужен -v draft_table=<черновик сущностей> (умолчание убрано по п.0 TARGET)'
+);
 \endif
 \if :{?battle_table}
 \else
@@ -50,7 +55,9 @@
 \endif
 \if :{?draft_measure}
 \else
-\set draft_measure alias_okna_c5_measure
+SELECT error(
+  'wiki_alias_promote: нужен -v draft_measure=<черновик мер> (умолчание убрано по п.0 TARGET)'
+);
 \endif
 \if :{?battle_measure}
 \else
