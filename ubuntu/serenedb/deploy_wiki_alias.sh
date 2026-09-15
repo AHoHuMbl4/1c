@@ -50,6 +50,8 @@ FILES=(
   wiki_alias_dayfork_mark.sql
   wiki_alias_dayfork_batch.sql
   wiki_alias_dayfork_merge.sql
+  wiki_alias_promote.sql
+  wiki_alias_migrate_sep.sql
   solr_synonyms_compile.sql
 )
 
