@@ -1,3 +1,29 @@
+## 2026-09-17 (2) — D1 ИСПОЛНЕНА: guard вырожденности меры всех форм, красная ×3 ACCEPT (круг 10) [код][замер]
+
+- Слой 3 («0,00 — продаж не было») закрыт механизмом, не промтом: guard в
+  `ubuntu/serenedb/ask/z20_ask_main_http.py` (точка _onepath_compose_gate; триггеры
+  всех форм + stock/count предикаты; единый table-wide SELECT с live-probe; локальный
+  force-live с preds-rewrite; sole с ВИДИМОЙ пометкой в text; коридор group/rank/list
+  B2-билнером; consume-bypass; клик degenerate → текст; R6 fail-soft);
+  проводка ключей вердикта `z14_clarify_memory.py` (measure_verdict/digest*/
+  answer_mode/count*).
+- Замок `ubuntu/serenedb/test_measure_degenerate.py`: 72 → 94 кейса; краснел на HEAD
+  (B1, F-CMP1), теперь 94/0.
+- Красная волна на дифф: 10 кругов ×3 = 30 вердиктов, 24 блокера снято fix1–fix9
+  (sole-пометка в text, live-only hint/answer_mode по формам, rows_of, _num_pred
+  rebind, z14-проводка, None-безопасность, nums-призрак, compare one-sided None,
+  consume-зеркала); круг 10 — ACCEPT ×3.
+- Побочно: ложные срабатывания check-prompt-rules на StrReplace z20 (сканирует весь
+  файл, не добавленные строки) — правки шли через проверенные apply-скрипты
+  (.claude/state/d1fix*-apply.py), хук — в ремонт владельцу; критик круга 6 оставил
+  stash-конфликт в CHANGELOG/PLAN_ORCHESTRATOR — восстановлено до HEAD, stash соседа
+  цел; в HEAD CHANGELOG вшиты старые маркеры конфликта (коммит 6d4b955 соседа) —
+  доложено.
+Числа: замок 94/0; перестраховка зелёная — one_path 77/0, compose 91, period_empty 30,
+menu_not_silent 12, measure_empty 7, rank_axis_anchor 60, rank_leader_path 27,
+ask_journal 11; красная 10×3=30 вердиктов (20 REJECT/10 ACCEPT по кругам, финал ×3).
+Доки: канон .claude/state/design-b.md §1 (15 кругов красной на дизайн).
+
 ## 2026-09-17 (1) — ресэрч ×4 + живая проверка окна + дизайн v18 канон (15 красных кругов ×3) + D0 [решение][замер]
 
 - Ресёрч ×4 cursor-agent по слову владельца (один промт без фокусов, «где искать —

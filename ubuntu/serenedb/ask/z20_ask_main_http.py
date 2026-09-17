@@ -1504,6 +1504,9 @@ def _settle_measure(src, intent, plan, measure_pick, trusted, resolved, diag):
     Не зовёт legacy-выбор меры по похожести. Count — через count_defer (меню не строится).
     Возвращает (measure, alts) где alts>1 значит нужно меню.
     """
+    # D1 proven-канал: только choice_levels_proven (не голый measure_pick)
+    if diag is not None and "measure" in choice_levels_proven(trusted, resolved):
+        diag["measure_proven_human"] = True
     measure, alts = None, []
     names = list(measures_of(src) or []) if src else []
     alias = measure_aliases_of(src) if src else {}
@@ -1627,6 +1630,813 @@ def _settle_axis(src, intent, plan, question, trusted, resolved, diag, measure):
     return grain, axes, []
 
 
+
+# ── D1: guard вырожденности меры (design-b §1, v18) ─────────────────────────
+# Доки: Sql › Query syntax › FILTER; Sql › Expressions › Casting (TRY_CAST);
+# Sql › Functions › Aggregate Functions (count/DISTINCT); Cookbook › Meta › duckdb_columns.
+
+
+def _measure_zeroish(x):
+    """x is None или float(x)==0 после try_cast-подобного приведения. Без ε."""
+    if x is None:
+        return True
+    if isinstance(x, bool):
+        return False
+    if isinstance(x, (int, float)):
+        try:
+            return float(x) == 0.0
+        except (TypeError, ValueError):
+            return False
+    s = str(x).strip().replace("\u00a0", "").replace(" ", "").replace(",", ".")
+    if not s:
+        return True
+    try:
+        return float(s) == 0.0
+    except (TypeError, ValueError):
+        return False
+
+
+def _measure_field_alive_rule(name, values=None, kind="numeric"):
+    """Правило живости поля (замковые T-* без SQL). True = жива."""
+    vals = list(values or [])
+    if kind == "numeric":
+        nums = []
+        for v in vals:
+            if v is None or (isinstance(v, str) and not str(v).strip()):
+                continue
+            try:
+                nums.append(float(str(v).replace(",", ".").replace(" ", "")))
+            except (TypeError, ValueError):
+                continue
+        if not nums:
+            return False
+        return any(n != 0.0 for n in nums)
+    # non-numeric: count>0 ∧ distinct<=1 → вырождена (False); иначе жива
+    if not vals:
+        return False
+    distinct = len(set(vals))
+    return not (len(vals) > 0 and distinct <= 1)
+
+
+def _measure_short_circuit_agg(digest, digest_form="sum", count=0, count_amount=0,
+                               measure=None, via="nums", min_v=None, max_v=None,
+                               grain="row", form="number"):
+    """Минимальный agg из ticket-дайджеста (круг 30: agg[digest_form]=digest)."""
+    agg = {
+        "count": int(count or 0),
+        "count_amount": int(count_amount or 0),
+        "form": form,
+        "grain": grain,
+        "min": min_v,
+        "max": max_v,
+        "measure": measure,
+        "measure_label": measure,
+        "scope": {"via": via or "nums"},
+        "folders": 0,
+        "out_of_range": 0,
+    }
+    key = digest_form or "sum"
+    agg[key] = digest
+    if key != "sum":
+        agg.setdefault("sum", None)
+    return agg
+
+
+def _measure_degenerate_not_kept_answer(question, measure, src, diag, cut, t0,
+                                        reason=None):
+    """B2 / dead-click: мера не ведётся — atoms=[], без числового атома."""
+    try:
+        label = (measure_label_of(src, measure) if (src and measure) else "") or measure or ""
+    except Exception:  # noqa: BLE001
+        label = measure or ""
+    text = "мера «%s» не ведётся" % label
+    d = dict(diag or {})
+    d["measure_degenerate"] = True
+    d["measure_degenerate_outcome"] = "not_kept"
+    if reason:
+        d["measure_degenerate_reason"] = reason
+    tag = _src_tag(src) if src else ""
+    sec = round(time.time() - t0, 2) if t0 else None
+    return {
+        "partial": cut or None,
+        "kind": "answer",
+        "text": text,
+        "atoms": [],
+        "sources": [tag] if tag else [],
+        "diag": _diag_pack(d, sec=sec),
+    }
+
+
+def _measure_degenerate_check_error(question, measure, src, diag, cut, t0):
+    """R6 fail-soft: без числового атома."""
+    text = ("не удалось проверить, ведётся ли мера; "
+            "итог по ней не подтверждаю")
+    d = dict(diag or {})
+    d["measure_degenerate_check"] = "error"
+    tag = _src_tag(src) if src else ""
+    sec = round(time.time() - t0, 2) if t0 else None
+    return {
+        "partial": cut or None,
+        "kind": "answer",
+        "text": text,
+        "atoms": [],
+        "sources": [tag] if tag else [],
+        "diag": _diag_pack(d, sec=sec),
+    }
+
+
+def _measure_text_with_total_answer(question, live_measure, n, src, diag, cut, t0,
+                                    dead_measure=None):
+    """Текст-с-итогом: N только через gate_out(allowed=[N]), totals=[]."""
+    try:
+        lab = (measure_label_of(src, live_measure) if src else "") or live_measure or ""
+    except Exception:  # noqa: BLE001
+        lab = live_measure or ""
+    try:
+        num = float(n)
+    except (TypeError, ValueError):
+        num = n
+    text = ("по «%s» доступен итог за период = %s, "
+            "без ранжирования/группировки" % (lab, num))
+    ok, bad = gate_out(text, [], None, allowed=[num], money=True)
+    if not ok:
+        d = dict(diag or {})
+        d["measure_degenerate_check"] = "error"
+        d["text_with_total_gate"] = bad[:4]
+        return _measure_degenerate_check_error(
+            question, live_measure, src, d, cut, t0)
+    d = dict(diag or {})
+    d["measure_degenerate"] = True
+    d["measure_degenerate_outcome"] = "text_with_total"
+    d["totals"] = []
+    if dead_measure:
+        d["measure_sole_replace"] = dead_measure
+    tag = _src_tag(src) if src else ""
+    sec = round(time.time() - t0, 2) if t0 else None
+    return {
+        "partial": cut or None,
+        "kind": "answer",
+        "text": text,
+        "atoms": [],
+        "sources": [tag] if tag else [],
+        "measure": live_measure,
+        "diag": _diag_pack(d, sec=sec),
+    }
+
+
+def _groups_all_zeroish(agg):
+    groups = (agg or {}).get("groups") or []
+    if not groups:
+        return False
+    for g in groups:
+        if isinstance(g, dict):
+            if not _measure_zeroish(g.get("value")):
+                return False
+        else:
+            return False
+    return True
+
+
+def _measure_degenerate_triggered(money=None, measure=None, slot_mode=None,
+                                  form=None, grain=None, compute=None,
+                                  agg=None, intent=None, plan=None, diag=None):
+    """Единый helper приоритета: compare > group|rank > sum > list.
+    Возвращает (form_key|None, why).
+    """
+    diag = diag or {}
+    if diag.get("stock_net_distinct"):
+        return None, "stock_net_distinct"
+    if (slot_mode or "") == "count":
+        return None, "count"
+    # consume-bypass: живая мера с билета — оконный 0 честный
+    _mv = diag.get("measure_verdict")
+    if _mv is None and isinstance(intent, dict):
+        pass
+    if _mv == "alive":
+        return None, "consume_alive"
+    try:
+        count = int((agg or {}).get("count") or 0)
+    except (TypeError, ValueError):
+        count = 0
+    if count <= 0:
+        return None, "count0"
+    form = (form or "").lower()
+    grain = (grain or "").lower()
+    slot_mode = (slot_mode or "").lower()
+    compute = (compute or "").strip().lower()
+    plan = plan or {}
+    op = compute or (plan.get("compute") or "").strip().lower()
+    # atom_operation may mirror compute
+    sum_v = (agg or {}).get("sum")
+    ca = (agg or {}).get("count_amount")
+    try:
+        ca_i = int(ca) if ca is not None else None
+    except (TypeError, ValueError):
+        ca_i = None
+
+    # compare PRIORITY
+    if form == "compare":
+        if (count > 0
+                and _measure_zeroish((agg or {}).get("compare_base"))
+                and _measure_zeroish((agg or {}).get("compare_other"))):
+            return "compare", "compare"
+        return None, "compare_skip"
+
+    # group|rank corridor
+    if grain == "group" or slot_mode == "rank" or form == "rank":
+        if form == "compare":
+            return None, "compare_not_rank"
+        if not measure:
+            return None, "no_measure"
+        sum_trig = (sum_v is not None and _measure_zeroish(sum_v))
+        groups = (agg or {}).get("groups") or []
+        if groups:
+            if sum_trig or _groups_all_zeroish(agg):
+                return ("group" if grain == "group" else "rank"), "group_rank"
+            return None, "group_nonzero"
+        # empty groups — как list; sum=None (fold count) НЕ повод (круг 32)
+        if (ca_i is not None and ca_i > 0
+                and (sum_v is not None and _measure_zeroish(sum_v))):
+            return ("group" if grain == "group" else "rank"), "empty_groups_sum0"
+        if ca_i == 0:
+            return ("group" if grain == "group" else "rank"), "empty_groups_ca0"
+        return None, "rank_skip"
+
+    # avg/min/max — только при реально выставленной операции
+    if op in ("avg", "min", "max") and measure and count > 0:
+        shown = (agg or {}).get(op)
+        if shown is None and op == "avg":
+            shown = (agg or {}).get("avg")
+        if _measure_zeroish(shown):
+            return op, op
+        return None, "op_nonzero"
+
+    # sum
+    if (money and measure and slot_mode == "sum" and form != "compare"
+            and grain != "group" and op not in ("avg", "min", "max")
+            and count > 0 and _measure_zeroish(sum_v)):
+        return "sum", "sum"
+
+    # list
+    if (slot_mode == "list" and money and measure and count > 0):
+        if ca_i is not None and ca_i > 0 and _measure_zeroish(sum_v):
+            return "list", "list"
+        if ca_i == 0:
+            return "list", "list_ca0"
+    return None, "silent"
+
+
+def _degeneracy_folder_pred():
+    return "NOT coalesce(map_extract_value(flags, 'IsFolder'), false)"
+
+
+def _degeneracy_nums_expr(measure):
+    return ("TRY_CAST(map_extract(nums, %s)[1] AS DECIMAL(38,10))"
+            % lit(measure))
+
+
+def _degeneracy_table_wide_select(src, measures, layer="nums"):
+    """Один SELECT: alive+max_abs по каждой мере. FROM канон — не search_idx."""
+    names = [m for m in (measures or []) if m]
+    if not src or not names:
+        return {}
+    parts = []
+    if layer == "live":
+        # query_table + try_cast колонок
+        for m in names:
+            col = "try_cast(%s AS DECIMAL(38,10))" % (
+                '"' + str(m).replace('"', '""') + '"')
+            parts.append(
+                "count(%s) FILTER (%s IS NOT NULL AND %s <> 0) > 0" % (col, col, col))
+            parts.append(
+                "max(abs(%s)) FILTER (%s IS NOT NULL)" % (col, col))
+        folder_bits = []
+        try:
+            folder_bits = list(_live_std_excl_preds(src) or [])
+        except Exception:  # noqa: BLE001
+            folder_bits = []
+        where = list(folder_bits)
+        wsql = (" WHERE " + " AND ".join(where)) if where else ""
+        sql = ("SELECT %s FROM query_table(%s)%s"
+               % (", ".join(parts), lit(src), wsql))
+    else:
+        folder = _degeneracy_folder_pred()
+        for m in names:
+            expr = _degeneracy_nums_expr(m)
+            parts.append(
+                "count(*) FILTER (%s IS NOT NULL AND %s <> 0) > 0"
+                % (expr, expr))
+            parts.append(
+                "max(abs(%s)) FILTER (%s IS NOT NULL)" % (expr, expr))
+        sql = ("SELECT %s FROM %s WHERE src_table = %s AND %s"
+               % (", ".join(parts), CORPUS, lit(src), folder))
+    try:
+        r = psql(sql)
+    except RuntimeError:
+        return None  # signal error
+    if not r or not r[0]:
+        return {m: {"alive": False, "max_abs": 0.0, "layer": layer} for m in names}
+    row = list(r[0]) + [None] * (2 * len(names))
+    out = {}
+    for i, m in enumerate(names):
+        alive = bool(row[2 * i])
+        try:
+            mx = float(row[2 * i + 1] or 0)
+        except (TypeError, ValueError):
+            mx = 0.0
+        out[m] = {"alive": alive, "max_abs": mx, "layer": layer}
+    return out
+
+
+def _live_preds_rewrite(preds, intent, measure):
+    """Период + amount на try_cast; без match/map_extract(nums)."""
+    out = []
+    for p in preds or []:
+        ps = str(p)
+        if "map_extract" in ps:
+            continue
+        if "@@" in ps or "ts_" in ps:
+            continue
+        if "src_table" in ps:
+            continue
+        if "doc_date" in ps:
+            out.append(ps)
+            continue
+        # прочие — только если не nums
+        if "nums" in ps:
+            continue
+        out.append(ps)
+    # amount на try_cast колонки
+    a = (intent or {}).get("amount") or {}
+    op, v, v2 = a.get("op"), a.get("value"), a.get("value2")
+    if op and v is not None and measure:
+        m = "try_cast(%s AS DECIMAL(38,10))" % (
+            '"' + str(measure).replace('"', '""') + '"')
+        if op == "between" and v2 is not None:
+            out.append("%s BETWEEN %s AND %s" % (m, float(v), float(v2)))
+        elif op in ("=", ">", "<", ">=", "<="):
+            out.append("%s %s %s" % (m, op, float(v)))
+    return out
+
+
+def _measure_degenerate_verdict(src, measures, requested, agg, diag):
+    """Table-wide вердикт + live-probe. Memo per-request по src (полный вердикт)."""
+    memo = diag.setdefault("_measure_deg_memo", {})
+    key = src
+    if key in memo and isinstance(memo[key], dict) and memo[key].get("_full"):
+        return memo[key]["verdict"], None
+    if deadline_hit():
+        return None, "deadline"
+    names = list(measures or [])
+    if requested and requested not in names:
+        names = list(names) + [requested]
+    # via=live_column -> стартовый слой live; иначе nums. Итог — оба слоя.
+    via = ((agg or {}).get("scope") or {}).get("via")
+    start = "live" if via == "live_column" else "nums"
+    other = "nums" if start == "live" else "live"
+    raw = _degeneracy_table_wide_select(src, names, layer=start)
+    if raw is None:
+        return None, "error"
+    verdict = dict(raw)
+    # второй слой: меры без ненулевых в стартовом — одним SELECT
+    need_other = [m for m, v in verdict.items() if not v.get("alive")]
+    if need_other:
+        if deadline_hit():
+            return None, "deadline"
+        second = _degeneracy_table_wide_select(src, need_other, layer=other)
+        if second is None:
+            return None, "error"
+        for m, v in (second or {}).items():
+            if v.get("alive"):
+                verdict[m] = {"alive": True, "max_abs": v.get("max_abs") or 0.0,
+                              "layer": other}
+            elif m in verdict:
+                verdict[m]["layer"] = start
+    memo[key] = {"_full": True, "verdict": verdict}
+    return verdict, None
+
+
+def _sole_rebind_preds(preds, intent, new_measure):
+    """Amount/map_extract старой меры снять; _num_pred новой или пусто."""
+    out = []
+    for p in preds or []:
+        ps = str(p)
+        if "map_extract" in ps and "nums" in ps:
+            continue
+        out.append(p)
+    out.extend(_num_pred(intent, new_measure))
+    return out
+
+
+def _live_only_menu_hint():
+    """Та же формулировка формы, что у text_with_total — число не входит."""
+    sample = _measure_text_with_total_answer(
+        "", "x", 0, None, {}, None, 0.0)
+    raw = (sample or {}).get("text") or ""
+    # «по «x» доступен итог за период = 0.0, …» → «доступен итог за период, …»
+    if " = " in raw and raw.startswith("по "):
+        head, tail = raw.split(" = ", 1)
+        phrase = head.split("» ", 1)[-1] if "» " in head else head
+        suffix = tail.split(", ", 1)[-1] if ", " in tail else ""
+        if phrase and suffix:
+            return "%s, %s" % (phrase, suffix)
+    return raw
+
+
+def _measure_menu_build(src, live_scored, requested, requested_alive, word, diag,
+                        layers=None, form=None):
+    """names = live ∪ {requested if dead}; annotate after _measure_menu_opts."""
+    live_names = [m for m, _ in live_scored]
+    names = list(live_names)
+    dead = None
+    if requested and not requested_alive and requested not in names:
+        dead = requested
+        names = names + [requested]
+    # порядок: слово → max_abs DESC; мёртвая последняя
+    alias = measure_aliases_of(src) if src else {}
+    covered = set()
+    if word and live_names:
+        _got, _alts, _how = measure_choice(live_names, word, alias_by=alias)
+        if _how in ("exact", "alias") and _got in live_names:
+            covered.add(_got)
+        elif _how == "ask":
+            for n in (_alts or []):
+                if n in live_names:
+                    covered.add(n)
+    scored = {m: mx for m, mx in live_scored}
+    live_sorted = sorted(
+        live_names,
+        key=lambda m: (0 if m in covered else 1, -(scored.get(m) or 0.0), m))
+    if dead:
+        ordered = live_sorted + [dead]
+    else:
+        ordered = live_sorted
+    opts = _measure_menu_opts(src, ordered)
+    layers = layers or {}
+    corridor = (form or "") in ("group", "rank", "list")
+    live_hint = None
+    for o in opts:
+        m = o.get("measure")
+        if dead and m == dead:
+            o["hint"] = "0 · не ведётся"
+            o["measure_verdict"] = "degenerate"
+            o["answer_mode"] = "aggregate"
+        elif layers.get(m) == "live" and corridor:
+            # text_with_total — ТОЛЬКО коридор group|rank|list
+            o["measure_verdict"] = "alive"
+            if live_hint is None:
+                live_hint = _live_only_menu_hint()
+            o["hint"] = live_hint
+            o["answer_mode"] = "text_with_total"
+        elif layers.get(m) == "live":
+            # sum-формы: клик -> штатный guard (force-live); без corridor-hint
+            # measure_verdict!=alive: иначе consume-bypass глушит guard
+            o["answer_mode"] = "aggregate"
+        else:
+            o["measure_verdict"] = "alive"
+            o["answer_mode"] = "aggregate"
+    return opts
+
+
+def _force_live_aggregate(src, preds, intent, measure, form_key, agg, diag):
+    """Локальный force-live: aggregate_live_column напрямую с rewrite preds."""
+    if deadline_hit():
+        return None, "deadline"
+    live_preds = _live_preds_rewrite(preds, intent, measure)
+    if form_key == "compare":
+        # два окна
+        p1 = (intent or {}).get("period") or {}
+        p2 = (intent or {}).get("period2") or {}
+        preds1 = _live_preds_rewrite(period_preds(p1), intent, measure)
+        preds2 = _live_preds_rewrite(period_preds(p2), intent, measure)
+        a1 = aggregate_live_column(src, preds1, measure)
+        a2 = aggregate_live_column(src, preds2, measure)
+        if a1 is None and a2 is None:
+            return None, "live_none"
+        # one-sided None: пустое окно = честный 0 той стороны (канон)
+        b = 0.0 if a1 is None else (a1 or {}).get("sum")
+        o = 0.0 if a2 is None else (a2 or {}).get("sum")
+        out = dict(agg or {})
+        out["compare_base"] = b
+        out["compare_other"] = o
+        try:
+            out["sum"] = (None if b is None or o is None
+                          else float(b) - float(o))
+        except (TypeError, ValueError):
+            out["sum"] = None
+        out["count"] = max(int((a1 or {}).get("count") or 0),
+                           int((a2 or {}).get("count") or 0), 1)
+        out["count_amount"] = int((a1 or {}).get("count_amount") or 0)
+        out["form"] = "compare"
+        out["measure"] = measure
+        out["scope"] = {"via": "live_column", "src": "query_table"}
+        return out, None
+    live = aggregate_live_column(src, live_preds, measure)
+    if live is None:
+        return None, "live_none"
+    return live, None
+
+
+def _measure_degenerate_guard(
+        question, intent, plan, src, match, preds, measure, agg, rows, totals,
+        cov, cut, diag, grain_dec, axes, t0, trusted, money, form, grain,
+        slot_mode, say_measure):
+    """Точка D1. Возвращает (early_response|None, state_updates_dict|None)."""
+    diag = diag if diag is not None else {}
+    if diag.get("measure_degenerate_guard") == "worked":
+        return None, None
+    # consume-bypass from trusted
+    if isinstance(trusted, dict) and trusted.get("measure_verdict") == "alive":
+        diag["measure_verdict"] = "alive"
+        return None, None
+    if diag.get("measure_verdict") == "alive":
+        return None, None
+
+    compute = (plan or {}).get("compute") or ""
+    form_key, why = _measure_degenerate_triggered(
+        money=money, measure=measure, slot_mode=slot_mode,
+        form=form, grain=grain, compute=compute,
+        agg=agg, intent=intent, plan=plan, diag=diag)
+    if not form_key:
+        return None, None
+
+    # предфильтр (где min/max не None)
+    if form_key not in ("group", "rank") and grain != "group":
+        try:
+            ca = int((agg or {}).get("count_amount") or 0)
+        except (TypeError, ValueError):
+            ca = 0
+        mn, mx = (agg or {}).get("min"), (agg or {}).get("max")
+        try:
+            mn_f = float(mn) if mn is not None else None
+            mx_f = float(mx) if mx is not None else None
+        except (TypeError, ValueError):
+            mn_f = mx_f = None
+        if (ca > 0 and mn_f is not None and mx_f is not None
+                and (mn_f != 0.0 or mx_f != 0.0)):
+            return None, None  # C1: жива в окне по min/max
+
+    if deadline_hit():
+        return _measure_degenerate_check_error(
+            question, measure, src, diag, cut, t0), None
+
+    try:
+        names = list(measures_of(src) or []) if src else []
+    except Exception:  # noqa: BLE001
+        names = []
+    if measure and measure not in names:
+        names = list(names) + [measure]
+
+    verdict, err = _measure_degenerate_verdict(src, names, measure, agg, diag)
+    if err == "deadline":
+        return _measure_degenerate_check_error(
+            question, measure, src, diag, cut, t0), None
+    if err == "error" or verdict is None:
+        return _measure_degenerate_check_error(
+            question, measure, src, diag, cut, t0), None
+
+    req = verdict.get(measure) or {"alive": False, "max_abs": 0.0, "layer": "nums"}
+    live_scored = []
+    for m, v in verdict.items():
+        if m == measure:
+            continue
+        if v.get("alive"):
+            live_scored.append((m, float(v.get("max_abs") or 0.0)))
+    # requested live?
+    req_alive = bool(req.get("alive"))
+    n_live_others = len(live_scored)
+    proven = bool(diag.get("measure_proven_human"))
+    corridor = form_key in ("group", "rank", "list")
+    sole_forms = form_key in ("sum", "avg", "min", "max", "compare")
+    word = ((intent or {}).get("measure") or "").strip()
+
+    # запрошенная жива table-wide (nums ИЛИ live) ∧ окно 0 → C1 (честный 0)
+    # F-VIT-нуль: via=live_column НЕ обнуляет nums-alive → B2 (антиканон снят)
+    if req_alive and req.get("layer") != "live":
+        # жива nums — оконный 0 честный; флаг (б) НЕ ставим
+        return None, None
+
+    # branch (б) entry flag BEFORE reagg (после C1 nums-alive)
+    diag["measure_degenerate_guard"] = "worked"
+    if req_alive and req.get("layer") == "live" and sole_forms:
+        # force-live локально
+        new_agg, lerr = _force_live_aggregate(
+            src, preds, intent, measure, form_key, agg, diag)
+        if lerr == "deadline":
+            return _measure_degenerate_check_error(
+                question, measure, src, diag, cut, t0), None
+        if lerr == "live_none":
+            # table-wide live-alive ∧ окно NULL → C1 честный 0; totals←[]
+            return None, {"totals": [], "clear_totals_diag": True}
+        updates = {
+            "agg": new_agg,
+            "totals": [],
+            "rows": [],
+            "measure": measure,
+            "say_measure": measure if money else None,
+            "money": money,
+            "clear_totals_diag": True,
+        }
+        return None, updates
+    if req_alive and req.get("layer") == "live" and corridor:
+        # текст-с-итогом force-live sum
+        new_agg, lerr = _force_live_aggregate(
+            src, preds, intent, measure, "sum", agg, diag)
+        if lerr or not new_agg:
+            if lerr == "live_none":
+                # C1 честный 0; totals←[] (иначе второе число из nums totals_of)
+                return None, {"totals": [], "clear_totals_diag": True}
+            return _measure_degenerate_check_error(
+                question, measure, src, diag, cut, t0), None
+        return _measure_text_with_total_answer(
+            question, measure, new_agg.get("sum"), src, diag, cut, t0), None
+
+    # запрошенная мёртва
+    if n_live_others == 0:
+        return _measure_degenerate_not_kept_answer(
+            question, measure, src, diag, cut, t0, reason=why), None
+
+    # proven ∧ 1 живой → меню 2; proven ∧ ≥2 → меню всех
+    if proven and n_live_others >= 1:
+        _layers = {
+            m: ((verdict.get(m) or {}).get("layer") or "nums")
+            for m, _ in live_scored}
+        opts = _measure_menu_build(
+            src, live_scored, measure, False, word, diag, layers=_layers,
+            form=form_key)
+        if len(opts) < 2:
+            return _measure_degenerate_not_kept_answer(
+                question, measure, src, diag, cut, t0), None
+        reason = "мера «%s» не ведётся" % (
+            (measure_label_of(src, measure) if src else measure) or measure or "")
+        menu = readings_menu(question, "measure", opts, diag, cut, t0, reason=reason)
+        if menu is None:
+            return _measure_degenerate_not_kept_answer(
+                question, measure, src, diag, cut, t0), None
+        return menu, None
+
+    if n_live_others >= 2:
+        _layers = {
+            m: ((verdict.get(m) or {}).get("layer") or "nums")
+            for m, _ in live_scored}
+        opts = _measure_menu_build(
+            src, live_scored, measure, False, word, diag, layers=_layers,
+            form=form_key)
+        reason = "мера «%s» не ведётся" % (
+            (measure_label_of(src, measure) if src else measure) or measure or "")
+        menu = readings_menu(question, "measure", opts, diag, cut, t0, reason=reason)
+        if menu is None:
+            return _measure_degenerate_not_kept_answer(
+                question, measure, src, diag, cut, t0), None
+        return menu, None
+
+    # ровно 1 живой сосед
+    live_m, live_abs = live_scored[0]
+    live_meta = verdict.get(live_m) or {}
+    live_layer = live_meta.get("layer") or "nums"
+
+    if corridor:
+        if live_layer == "live":
+            new_agg, lerr = _force_live_aggregate(
+                src, preds, intent, live_m, "sum", agg, diag)
+            if lerr == "live_none":
+                # table-wide жива ∧ окно пусто → текст-с-итогом N=0
+                return _measure_text_with_total_answer(
+                    question, live_m, 0, src, diag, cut, t0,
+                    dead_measure=measure), None
+            if lerr or not new_agg:
+                # error/deadline → R6
+                return _measure_degenerate_check_error(
+                    question, measure, src, diag, cut, t0), None
+            return _measure_text_with_total_answer(
+                question, live_m, new_agg.get("sum"), src, diag, cut, t0,
+                dead_measure=measure), None
+        # nums-alive → sole формой с пометкой
+        # group|rank → ТОЛЬКО aggregate_groups при col; list → aggregate
+        if deadline_hit():
+            return _measure_degenerate_check_error(
+                question, measure, src, diag, cut, t0), None
+        sole_preds = _sole_rebind_preds(preds, intent, live_m)
+        try:
+            if form_key in ("group", "rank"):
+                col = (agg or {}).get("col") or (grain_dec or {}).get("col")
+                if not col:
+                    return _measure_degenerate_not_kept_answer(
+                        question, measure, src, diag, cut, t0), None
+                k = (agg or {}).get("n_groups") or 10
+                new_agg = aggregate_groups(
+                    src, match, sole_preds, live_m, col, k,
+                    (plan or {}).get("compute"), None)
+            else:
+                # list
+                new_agg = aggregate(src, match, sole_preds, live_m)
+        except Exception:  # noqa: BLE001
+            new_agg = None
+        if not new_agg:
+            return _measure_degenerate_not_kept_answer(
+                question, measure, src, diag, cut, t0), None
+        new_rows = []
+        if form_key == "list":
+            try:
+                new_rows = rows_of(src, match, sole_preds, TOPK, live_m) or []
+            except Exception:  # noqa: BLE001
+                new_rows = []
+        diag["measure_sole_replace"] = measure
+        try:
+            new_totals = totals_of(src, match, sole_preds, [live_m])
+        except Exception:  # noqa: BLE001
+            new_totals = []
+        updates = {
+            "agg": new_agg,
+            "measure": live_m,
+            "totals": new_totals,
+            "rows": new_rows,
+            "say_measure": live_m,
+            "money": answer_money(
+                (intent or {}).get("want"), (plan or {}).get("compute"), live_m),
+            "sole_mark": measure,
+        }
+        return None, updates
+
+    if sole_forms:
+        if live_layer == "live":
+            new_agg, lerr = _force_live_aggregate(
+                src, preds, intent, live_m, form_key, agg, diag)
+            if lerr == "deadline":
+                return _measure_degenerate_check_error(
+                    question, measure, src, diag, cut, t0), None
+            if lerr == "live_none":
+                # sole x live_none: C1 честный 0 по НОВОЙ мере с sole-пометкой
+                zero_agg = dict(agg or {})
+                zero_agg.update({
+                    "sum": 0.0, "min": 0.0, "max": 0.0, "avg": 0.0,
+                    "count_amount": 0, "measure": live_m,
+                    "scope": {"via": "live_column", "src": "query_table",
+                              "where": ""},
+                })
+                if form_key == "compare":
+                    zero_agg["compare_base"] = 0.0
+                    zero_agg["compare_other"] = 0.0
+                    zero_agg["form"] = "compare"
+                    zero_agg["sum"] = 0.0
+                diag["measure_sole_replace"] = measure
+                updates = {
+                    "agg": zero_agg, "measure": live_m, "totals": [], "rows": [],
+                    "say_measure": live_m,
+                    "money": answer_money(
+                        (intent or {}).get("want"), (plan or {}).get("compute"),
+                        live_m),
+                    "clear_totals_diag": True, "sole_mark": measure,
+                }
+                return None, updates
+            if lerr or not new_agg:
+                return _measure_degenerate_check_error(
+                    question, measure, src, diag, cut, t0), None
+            diag["measure_sole_replace"] = measure
+            updates = {
+                "agg": new_agg, "measure": live_m, "totals": [], "rows": [],
+                "say_measure": live_m,
+                "money": answer_money(
+                    (intent or {}).get("want"), (plan or {}).get("compute"), live_m),
+                "clear_totals_diag": True, "sole_mark": measure,
+            }
+            return None, updates
+        # nums sole
+        if deadline_hit():
+            return _measure_degenerate_check_error(
+                question, measure, src, diag, cut, t0), None
+        sole_preds = _sole_rebind_preds(preds, intent, live_m)
+        try:
+            if form_key == "compare":
+                new_agg = aggregate_compare_sales(
+                    src, match,
+                    (intent or {}).get("period") or {},
+                    (intent or {}).get("period2") or {}, live_m)
+            else:
+                new_agg = aggregate(src, match, sole_preds, live_m)
+        except Exception:  # noqa: BLE001
+            new_agg = None
+        if not new_agg:
+            return _measure_degenerate_not_kept_answer(
+                question, measure, src, diag, cut, t0), None
+        diag["measure_sole_replace"] = measure
+        try:
+            new_totals = totals_of(src, match, sole_preds, [live_m])
+        except Exception:  # noqa: BLE001
+            new_totals = []
+        updates = {
+            "agg": new_agg, "measure": live_m, "totals": new_totals,
+            "say_measure": live_m,
+            "money": answer_money(
+                (intent or {}).get("want"), (plan or {}).get("compute"), live_m),
+            "sole_mark": measure,
+        }
+        return None, updates
+
+    return _measure_degenerate_not_kept_answer(
+        question, measure, src, diag, cut, t0), None
+
+
 def _onepath_compose_gate(question, intent, plan, src, match, preds, measure,
                           agg, rows, totals, cov, cut, diag, grain_dec, axes,
                           t0, trusted=None):
@@ -1662,6 +2472,46 @@ def _onepath_compose_gate(question, intent, plan, src, match, preds, measure,
                     n_folders = (agg or {}).get("folders") or 0
                     _form = "distinct_axis"
                     _grain = "axis"
+    # D1: guard вырожденности меры (после period_empty/distinct, до _answer_pairs)
+    if isinstance(trusted, dict) and trusted.get("measure_verdict"):
+        diag["measure_verdict"] = trusted.get("measure_verdict")
+    _md_early, _md_upd = _measure_degenerate_guard(
+        question, intent, plan, src, match, preds, measure, agg, rows, totals,
+        cov, cut, diag, grain_dec, axes, t0, trusted, money, _form, _grain,
+        slot_mode, say_measure)
+    if _md_early is not None:
+        return _md_early
+    _sole_note = None
+    if _md_upd:
+        if "agg" in _md_upd and _md_upd["agg"] is not None:
+            agg = _md_upd["agg"]
+            n_folders = (agg or {}).get("folders") or 0
+            _form = (agg or {}).get("form") or _form
+            _grain = (agg or {}).get("grain") or _grain
+        if "measure" in _md_upd:
+            measure = _md_upd["measure"]
+        if "totals" in _md_upd:
+            totals = _md_upd["totals"]
+        if "rows" in _md_upd:
+            rows = _md_upd["rows"]
+        if "money" in _md_upd:
+            money = _md_upd["money"]
+        if "say_measure" in _md_upd:
+            say_measure = _md_upd["say_measure"]
+        else:
+            say_measure = measure if money else None
+        if _md_upd.get("clear_totals_diag"):
+            diag["totals"] = []
+        if _md_upd.get("sole_mark"):
+            # видимая пометка замены — в diag и в клиентский text (п.12)
+            diag["measure_sole_replace"] = _md_upd["sole_mark"]
+            try:
+                _dead_lab = measure_label_of(src, _md_upd["sole_mark"]) or _md_upd["sole_mark"]
+            except Exception:  # noqa: BLE001
+                _dead_lab = _md_upd["sole_mark"]
+            diag["measure_sole_note"] = (
+                "вместо «%s», которая не ведётся" % _dead_lab)
+            _sole_note = diag["measure_sole_note"]
     _tot_extra = []
     if money and slot_mode == "list":
         for _tm in (totals or []):
@@ -1713,6 +2563,8 @@ def _onepath_compose_gate(question, intent, plan, src, match, preds, measure,
         text, pair_bad = fill_atom_pairs(text, _answer_pairs)
         slots_bad = list(slots_bad) + list(pair_bad)
     text = ensure_n_groups_named(text, agg)
+    if _sole_note:
+        text = ("%s. %s" % (_sole_note.rstrip("."), (text or "").lstrip())).strip()
     _pass_frag, pass_fields = build_answer_passport(
         period=(intent or {}).get("period"),
         period_dropped=bool(diag.get("period_assumed_dropped")),
@@ -1756,6 +2608,8 @@ def _onepath_compose_gate(question, intent, plan, src, match, preds, measure,
             text2, pair_bad2 = fill_atom_pairs(text2, _answer_pairs)
             slots_bad2 = list(slots_bad2) + list(pair_bad2)
         text2 = ensure_n_groups_named(text2, agg)
+        if _sole_note:
+            text2 = ("%s. %s" % (_sole_note.rstrip("."), (text2 or "").lstrip())).strip()
         _pass_frag2, pass_fields2 = build_answer_passport(
             period=(intent or {}).get("period"),
             period_dropped=bool(diag.get("period_assumed_dropped")),
@@ -2142,17 +2996,70 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if measure:
         preds = list(preds) + _num_pred(intent, measure)
 
-    totals = []
-    if measure and src:
-        try:
-            totals = totals_of(src, match, preds, [measure])
-        except RuntimeError:
-            totals = []
-    if totals:
-        diag["totals"] = {m: [v, mx, mn] for m, v, mx, mn in totals}
-
+    # D1 consume: degenerate option -> text; short-circuit digest -> agg from ticket
+    _tv = (trusted or {}).get("measure_verdict") if isinstance(trusted, dict) else None
+    _sc_skip_aggregate = False
     agg, rows = None, None
-    if _cmp and src and measure:
+    if _tv == "degenerate":
+        return _measure_degenerate_not_kept_answer(
+            question, measure, src, diag, cut, t0, reason="consume_degenerate")
+    if (_tv == "alive" and isinstance(trusted, dict)
+            and trusted.get("digest") is not None
+            and (trusted.get("digest_form") or "sum") in ("sum", "avg", "min", "max")
+            and (trusted.get("answer_mode") or "short_circuit") == "short_circuit"
+            and trusted.get("count_amount") is not None):
+        _df = trusted.get("digest_form") or "sum"
+        _via = trusted.get("digest_scope")
+        if isinstance(_via, dict):
+            _via = _via.get("via") or "nums"
+        agg = _measure_short_circuit_agg(
+            digest=trusted.get("digest"), digest_form=_df,
+            count=trusted.get("count") or 0,
+            count_amount=trusted.get("count_amount"),
+            measure=measure, via=_via or "nums",
+            min_v=trusted.get("min"), max_v=trusted.get("max"),
+            grain=(grain_dec or {}).get("grain") or "row", form=_df)
+        rows = []
+        totals = []
+        diag["totals"] = []
+        diag["measure_verdict"] = "alive"
+        diag["answer_mode"] = "short_circuit"
+        _sc_skip_aggregate = True
+
+    # D1-fix9: клик text_with_total → force-live + билнер (канон §1, без corridor)
+    # (без повторного corridor-распознавания; ошибка force-live → R6)
+    if (_tv == "alive" and isinstance(trusted, dict)
+            and (trusted.get("answer_mode") or "") == "text_with_total"
+            and not _sc_skip_aggregate):
+        if src and measure:
+            new_agg, lerr = _force_live_aggregate(
+                src, preds, intent, measure, "sum", {}, diag)
+            if lerr == "live_none":
+                # table-wide жива ∧ окно пусто → текст-с-итогом N=0
+                diag["answer_mode"] = "text_with_total"
+                return _measure_text_with_total_answer(
+                    question, measure, 0, src, diag, cut, t0)
+            if lerr or not new_agg:
+                # error/deadline → R6 (не молчаливый aggregate)
+                return _measure_degenerate_check_error(
+                    question, measure, src, diag, cut, t0)
+            diag["answer_mode"] = "text_with_total"
+            return _measure_text_with_total_answer(
+                question, measure, new_agg.get("sum"), src, diag, cut, t0)
+
+    totals = []
+    if not _sc_skip_aggregate:
+        if measure and src:
+            try:
+                totals = totals_of(src, match, preds, [measure])
+            except RuntimeError:
+                totals = []
+        if totals:
+            diag["totals"] = {m: [v, mx, mn] for m, v, mx, mn in totals}
+
+    if _sc_skip_aggregate:
+        pass
+    elif _cmp and src and measure:
         _cagg = aggregate_compare_sales(
             src, match, intent.get("period") or {},
             intent.get("period2") or {}, measure)
