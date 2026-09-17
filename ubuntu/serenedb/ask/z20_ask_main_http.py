@@ -1056,7 +1056,8 @@ def opts_hints(srcs):
     return out
 
 
-def mk_opts(srcs, lab_by, marks=None, by=None, match="", preds=None, live=None):
+def mk_opts(srcs, lab_by, marks=None, by=None, match="", preds=None, live=None,
+            skip_empty_filter=False):
     """Варианты уточнения одним видом на все пять веток ответа.
 
     Здесь же дописывается вид записи одноимённым источникам: подпись, которую читает
@@ -1066,12 +1067,15 @@ def mk_opts(srcs, lab_by, marks=None, by=None, match="", preds=None, live=None):
     В перечень идёт источник с живым счётом по тем же предикатам, что и ответ
     (период). Если в датированном окне пусты ВСЕ кандидаты — оставляем их:
     вилка прочтений, после выбора отвечает period_empty.
+
+    skip_empty_filter=True (D2-гомоним): preds окна сохраняются для found,
+    keep_empty_period_opts не режет пиров с found=0.
     """
     marks, by = marks or {}, by or {}
     counted = live
     if counted is None and preds is not None:
         counted = live_src_counts(srcs, match, preds)
-    if counted is not None:
+    if counted is not None and not skip_empty_filter:
         srcs = keep_empty_period_opts(srcs, counted, preds)
     cov, _fk = fork_labels_covering(srcs)
     if cov:

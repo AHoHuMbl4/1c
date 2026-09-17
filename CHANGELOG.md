@@ -1,3 +1,23 @@
+## 2026-09-17 (3) — D2 ИСПОЛНЕНА: гомоним из базы + kind-подписи, красная ×3 ACCEPT (круг 5) [код][замер]
+
+- Слой 2 («Реализация ТМЦ» документ↔регистр — молчаливый выбор) закрыт:
+  `ubuntu/serenedb/ask/z21_wiki_choice.py` — gate после wiki_leader_post_verify:
+  дешёвый амбиг-чек (count по норм-литералу), ОДИН peer-SELECT по нормализованному
+  label (NBSP-совместимая норма: regexp_replace '\s'g — вариант (а), доки RE2),
+  карточки/синтетика, общий helper конвейера с skip_empty_filter (только гомоним),
+  named-kind ПЕРВЫМ (узкий named без пиров → leader даже при сбое peer-SQL),
+  opts<2 → не silent leader, fail-soft R6 при сбое на амбиг-метке; kind-подпись
+  ровно один раз (mk_opts/disambiguate, captions не снимает, без двойных суффиксов,
+  не-гомонимные меню без суффиксов — как HEAD); `z20` — mk_opts(+skip_empty_filter).
+- Замок `test_wiki_homonym_menu.py`: 27 → 42 кейса (двойной kind, NBSP, узкий
+  named+fail, separability-регресс, found=0 при 2 пирах, production-моки).
+- Красная ×3 на дифф: 5 кругов = 15 вердиктов, 9 блокеров снято fix1–fix4;
+  круг 5 — ACCEPT ×3. Перестраховка: one_path 78/0, measure_degenerate 94/0,
+  compose 91, period_empty 30.
+Числа: замок гомонима 42/0 (красные кейсы на HEAD-симуляции подтверждены критиками);
+красная 5×3=15 вердиктов; 9 блокеров.
+Доки: канон .claude/state/design-b.md §2; SereneDB regexp_replace/RE2 (fix4).
+
 ## 2026-09-17 (2) — D1 ИСПОЛНЕНА: guard вырожденности меры всех форм, красная ×3 ACCEPT (круг 10) [код][замер]
 
 - Слой 3 («0,00 — продаж не было») закрыт механизмом, не промтом: guard в

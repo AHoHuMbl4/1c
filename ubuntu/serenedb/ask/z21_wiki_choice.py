@@ -555,10 +555,22 @@ def wiki_menu_captions(options, passports_by_src=None, cards_by_src=None):
             if isinstance(c, dict):
                 name = (c.get("name") or "").strip()
                 body = (c.get("description") or "")
-        # даже без паспорта — прогнать уже лежащий label/hint (общее правило)
+        # даже без паспорта — прогнать уже лежащий label/hint (общее правило).
+        # Kind-суффикс mk_opts (« (документ)») не терять: captions поверх
+        # чистого label, вид дописывается после ровно один раз.
         prev = (row.get("label") or "").strip()
-        text = wiki_human_menu_caption(name, body, existing_label=prev)
+        kw = ""
+        try:
+            kw = (kind_word(src) or "") if src else ""
+        except NameError:
+            kw = ""
+        kind_sfx = (" (%s)" % kw) if kw else ""
+        had_kind = bool(kind_sfx and prev.endswith(kind_sfx))
+        prev_clean = prev[: -len(kind_sfx)].rstrip() if had_kind else prev
+        text = wiki_human_menu_caption(name, body, existing_label=prev_clean)
         if text:
+            if had_kind and kind_sfx and not text.endswith(kind_sfx):
+                text = "%s%s" % (text, kind_sfx)
             row["label"] = text
             row["wiki_caption"] = text
         if "hint" in row:
@@ -868,6 +880,227 @@ def wiki_homonym_kind_peers(passports, focus_src):
     return peers if len(peers) >= 2 else []
 
 
+def wiki_load_cards_by_src(src_tables):
+    """Догрузка карточек по src_table (штатная таблица search_wiki_entity_card)."""
+    srcs = [s for s in (src_tables or []) if s]
+    if not srcs:
+        return {}
+    lst = ", ".join(lit(s) for s in srcs)
+    out = {}
+    try:
+        rows = psql(
+            "SELECT c.src_table, c.name, c.description, c.axes, c.measures, "
+            "c.covered, coalesce(t.parent, '') "
+            "FROM search_wiki_entity_card c "
+            "LEFT JOIN %s t ON t.src_table = c.src_table "
+            "WHERE c.src_table IN (%s)" % (TABLES, lst))
+    except RuntimeError:
+        return {}
+    for r in rows or []:
+        if not r or not r[0]:
+            continue
+        src = str(r[0])
+        parent = (r[6] if len(r) > 6 else "") or ""
+        out[src] = {
+            "src_table": src,
+            "name": (r[1] if len(r) > 1 else "") or "",
+            "description": (r[2] if len(r) > 2 else "") or "",
+            "axes": (r[3] if len(r) > 3 else "") or "",
+            "measures": (r[4] if len(r) > 4 else "") or "",
+            "covered": int(r[5] or 0) if len(r) > 5 else 0,
+            "parent": parent,
+            "platform_kind": wiki_platform_kind(src, parent),
+        }
+    return out
+
+
+def wiki_db_homonym_peer_rows(leader_src, label_norm):
+    """Один SELECT: src_table с тем же норм-label и другим OData-префиксом.
+
+    Stem — не критерий (канон D2). Без LIMIT на сборе. RuntimeError — наружу
+    (fail-soft на амбиг-метке).
+    """
+    leader_src = (leader_src or "").strip()
+    label_norm = (label_norm or "").strip()
+    if not leader_src or not label_norm:
+        return []
+    lkind = leader_src.split("_", 1)[0].lower()
+    rows = psql(
+        "SELECT src_table, label FROM %s "
+        "WHERE regexp_replace(lower(coalesce(label, '')), '\\s|\\p{Z}', '', 'g') = %s "
+        "  AND src_table <> %s"
+        % (TABLES, lit(label_norm), lit(leader_src)))
+    out = []
+    for r in rows or []:
+        if not r or not r[0]:
+            continue
+        src = str(r[0])
+        if src.split("_", 1)[0].lower() == lkind:
+            continue
+        out.append((src, (r[1] if len(r) > 1 else "") or ""))
+    return out
+
+
+def wiki_entity_clarify_menu(question, candidates, diag, cut, t0,
+                             by=None, match="", preds=None,
+                             *, reason="wiki_separability"):
+    """Общий конвейер clarify entity: mk_opts → captions → readings_menu.
+
+    D2-гомоним (reason=wiki_homonym_db): skip_empty_filter — пир found=0 не
+    выпадает; kind — из mk_opts/disambiguate_labels (fallback — один
+    label_with_kind при сборке). Прочие wiki-меню — без skip и без пост-kind.
+    """
+    cands = [c for c in (candidates or []) if c]
+    tied = []
+    for c in cands:
+        if isinstance(c, dict):
+            src = c.get("src_table") or c.get("src") or ""
+        else:
+            src = str(c or "")
+        if src and src not in tied:
+            tied.append(src)
+    if len(tied) < 2:
+        return None
+    try:
+        lab_by = {
+            r[0]: r[1] for r in psql(
+                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
+                % (TABLES, ", ".join(lit(c) for c in tied)))
+            if r and len(r) > 1 and r[0]}
+    except RuntimeError:
+        lab_by = {}
+    for c in cands:
+        if not isinstance(c, dict):
+            continue
+        src = c.get("src_table") or c.get("src") or ""
+        name = (c.get("name") or "").strip()
+        if src and name and src not in lab_by:
+            lab_by[src] = name
+    window_preds = list(preds) if preds is not None else []
+    is_homonym = reason == "wiki_homonym_db"
+    opts = mk_opts(
+        tied, lab_by, {}, by or {}, match=match or "", preds=window_preds,
+        skip_empty_filter=is_homonym)
+    # rebuild — только гомоним (канон D2); не-гомоним opts<2 → None как HEAD
+    if is_homonym and len(opts) < 2 and len(tied) >= 2:
+        counted = by or {}
+        opts = []
+        for s in tied:
+            raw = lab_by.get(s) or human_table_label(s)
+            opts.append({
+                "src": s,
+                "label": label_with_kind(s, raw),
+                "hint": "",
+                "distinct_by": "",
+                "found": counted.get(s, 0),
+            })
+    if len(opts) < 2:
+        return None
+    _pmap = wiki_captions_map_from_cards(cands)
+    opts = wiki_menu_captions(opts, passports_by_src=_pmap)
+    return readings_menu(
+        question, "entity", opts, diag, cut, t0, reason=reason)
+
+
+def wiki_homonym_peer_fail_soft(question, diag, cut, t0):
+    """R6: амбиг-метка и сбой peer-SQL — текст без числа, не picked/leader."""
+    d = dict(diag or {})
+    d["wiki_homonym_peer_check"] = "error"
+    d["wiki_pick"] = "homonym_peer_fail"
+    text = ("не удалось проверить одноимённые источники; "
+            "число без уточнения не подтверждаю")
+    sec = round(time.time() - t0, 2) if t0 else None
+    return {
+        "partial": cut or None,
+        "kind": "answer",
+        "text": text,
+        "atoms": [],
+        "sources": [],
+        "diag": _diag_pack(d, sec=sec),
+    }
+
+
+def wiki_leader_db_homonym_gate(leader, question, intent, diag, cut, t0,
+                                by=None, match="", preds=None):
+    """После sole-yes: пиры из базы по label → clarify; иначе None (=leader)."""
+    leader = (leader or "").strip()
+    if not leader:
+        return None
+    try:
+        rows = psql(
+            "SELECT label FROM %s WHERE src_table = %s LIMIT 1"
+            % (TABLES, lit(leader)))
+    except RuntimeError:
+        return wiki_homonym_peer_fail_soft(question, diag, cut, t0)
+    label = ""
+    if rows and rows[0] and rows[0][0]:
+        label = str(rows[0][0])
+    label_norm = _homonym_norm(label)
+    if not label_norm:
+        return None
+    # штатная ambiguous_labels глотает SQL-сбой → пустой set → silent leader;
+    # дешёвый свой check с пробросом ошибки (канон fail-soft, не swallow)
+    try:
+        cnt_rows = psql(
+            "SELECT count(*) FROM %s WHERE regexp_replace(lower(coalesce(label, '')), '\\s|\\p{Z}', '', 'g') = %s"
+            % (TABLES, lit(label_norm)))
+    except RuntimeError:
+        return wiki_homonym_peer_fail_soft(question, diag, cut, t0)
+    n_peers = 0
+    if cnt_rows and cnt_rows[0] and cnt_rows[0][0] is not None:
+        try:
+            n_peers = int(cnt_rows[0][0])
+        except (TypeError, ValueError):
+            n_peers = 0
+    if n_peers <= 1:
+        return None
+    allowed = named_platform_kinds(question)
+    leader_kind = _card_odata_kind({"src_table": leader})
+    # named-kind ПЕРВЫМ: нет рода ≠ лидера в allowed → пиров быть не может → leader
+    if allowed and not any(k != leader_kind for k in allowed):
+        return None
+    try:
+        peer_rows = wiki_db_homonym_peer_rows(leader, label_norm)
+    except RuntimeError:
+        # R6 только когда после фильтра рода пир ещё возможен
+        if allowed and not any(k != leader_kind for k in allowed):
+            return None
+        return wiki_homonym_peer_fail_soft(question, diag, cut, t0)
+    peers_src = []
+    for src, _lab in peer_rows:
+        if allowed and _card_odata_kind({"src_table": src}) not in allowed:
+            continue
+        peers_src.append(src)
+    if not peers_src:
+        return None
+    cards_by = wiki_load_cards_by_src([leader] + peers_src)
+    candidates = []
+    if leader in cards_by:
+        candidates.append(cards_by[leader])
+    else:
+        candidates.append({"src_table": leader, "name": label})
+    peer_lab = {s: l for s, l in peer_rows}
+    for src in peers_src:
+        if src in cards_by:
+            candidates.append(cards_by[src])
+        else:
+            candidates.append({
+                "src_table": src,
+                "name": peer_lab.get(src) or label,
+            })
+    if diag is not None:
+        diag["wiki_pick"] = "clarify"
+        diag["wiki_homonym_db_peers"] = [
+            c.get("src_table") for c in candidates]
+    menu = wiki_entity_clarify_menu(
+        question, candidates, diag, cut, t0,
+        by=by, match=match, preds=preds,
+        reason="wiki_homonym_db")
+    if menu is not None:
+        return menu
+    return wiki_homonym_peer_fail_soft(question, diag, cut, t0)
+
+
 def wiki_outcome_from_verify(verdicts, passports, intent, diag=None):
     """Исход верификации: leader / clarify / none (код, без «лучший из плохих»)."""
     diag = dict(diag or {})
@@ -1156,27 +1389,19 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
         diag["wiki_none"] = pick.get("reason") or "model_none"
         return None
     if pick.get("outcome") == "clarify":
-        tied = [c["src_table"] for c in (pick.get("candidates") or [])]
-        try:
-            lab_by = {r[0]: r[1] for r in psql(
-                "SELECT src_table, label FROM %s WHERE src_table IN (%s)"
-                % (TABLES, ", ".join(lit(c) for c in tied)))
-                if r and len(r) > 1 and r[0]}
-        except RuntimeError:
-            lab_by = {}
-        opts = mk_opts(tied, lab_by, {}, by or {}, match=match or "", preds=preds or [])
-        if len(opts) >= 2:
-            # В4: равные числа → меню (1-Б); подписи из паспортов verify-кандидатов.
-            # S2-d-(а): clarify только через единый построитель (не bare Dict).
-            _pmap = wiki_captions_map_from_cards(pick.get("candidates") or [])
-            opts = wiki_menu_captions(opts, passports_by_src=_pmap)
-            return readings_menu(
-                question, "entity", opts, diag, cut, t0,
-                reason="wiki_separability")
+        return wiki_entity_clarify_menu(
+            question, pick.get("candidates") or [], diag, cut, t0,
+            by=by, match=match, preds=preds,
+            reason="wiki_separability")
     leader = pick.get("leader")
     if leader:
         if not wiki_leader_post_verify(leader, intent, question, diag):
             return None
+        gated = wiki_leader_db_homonym_gate(
+            leader, question, intent, diag, cut, t0,
+            by=by, match=match, preds=preds)
+        if gated is not None:
+            return gated
         return {"picked": [leader], "marks": {}, "plan": {}}
     return None
 
