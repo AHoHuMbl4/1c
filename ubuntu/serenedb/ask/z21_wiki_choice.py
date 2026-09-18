@@ -29,6 +29,8 @@ WIKI_RESCUE_TOP = int(os.environ.get("WIKI_RESCUE_TOP", "24"))
 WIKI_NORM_DIST = int(os.environ.get("WIKI_NORM_DIST", "2"))
 WIKI_RESOLVER_TIMEOUT_SEC = float(os.environ.get("WIKI_RESOLVER_TIMEOUT_SEC", "0.8"))
 WIKI_CONCEPTS_TIMEOUT_SEC = float(os.environ.get("WIKI_CONCEPTS_TIMEOUT_SEC", "0.8"))
+# PERF4: покарточный параллельный verify (design-c §2 шаг 3, решение владельца 18.09).
+WIKI_VERIFY_WORKERS = int(os.environ.get("WIKI_VERIFY_WORKERS", "4"))
 
 _HYBRID_SQL = None
 _PASSPORT_SQL = None
@@ -70,6 +72,16 @@ Reply with one JSON object only:
   {"verdicts": [{"index": <1-based passport index>, "fit": <"yes"|"no"|"unsure">,
                  "why": <one line>}]}
 Include one verdict per passport shown."""
+
+# Покарточный verify (rescue шаг 3): один паспорт = один вызов, маленький контекст.
+WIKI_CARD_VERIFY_SYS = (
+    "Assess this entity passport against the user question. "
+    "Passport fields: name, wiki excerpt, platform kind, axes, measures, "
+    "traits present in this passport vs pool neighbors; "
+    "doesNotAnswer lists topics marked outside entity coverage. "
+    "Return one JSON object: "
+    '{"fit": <"yes"|"no"|"unsure">, "why": <one line>}'
+)
 
 
 def wiki_aggregate_want(intent, question=""):
@@ -1767,8 +1779,14 @@ def wiki_concepts_call(question, cards, diag=None, *, retry=True):
     return r1
 
 
-def wiki_passport_enrich_slice(cards):
-    """Enrich ПОЛНЫМ body на переданный слайс (не только первые 8)."""
+def wiki_passport_enrich_slice(cards, cache=None, *, distinct_against=None):
+    """Enrich ПОЛНЫМ body на переданный слайс (не только первые 8).
+
+    cache: опциональный dict src_table → {wiki_body, parent, not_enough_for};
+    живёт только внутри одного прохода (передаёт caller параметром, не через diag),
+    между HTTP-запросами не шарится. Пишем только успешные body.
+    distinct_against: пул для wiki_passport_distinct (покарточный verify — весь pool).
+    """
     cards = list(cards or [])
     if not cards:
         return []
@@ -1777,25 +1795,41 @@ def wiki_passport_enrich_slice(cards):
     srcs = [c.get("src_table") for c in cards if c.get("src_table")]
     if not srcs:
         return [dict(c) for c in cards]
-    template = _wiki_passport_sql()
-    if template.strip().startswith("\\set"):
-        template = "\n".join(
-            ln for ln in template.splitlines()
-            if not ln.strip().startswith("\\set"))
-    lst = ", ".join("'%s'" % str(s).replace("'", "''") for s in srcs)
-    qsql = template.replace(":src_list", lst).replace(
-        ":body_max", str(WIKI_PASSPORT_BODY_MAX))
-    try:
-        for r in psql(qsql) or []:
-            if not r or not r[0]:
-                continue
-            by_src[str(r[0])] = {
-                "wiki_body": (r[2] if len(r) > 2 else "") or "",
-                "parent": (r[5] if len(r) > 5 else "") or "",
-                "not_enough_for": (r[7] if len(r) > 7 else "") or "",
-            }
-    except RuntimeError:
-        pass
+    missing = []
+    seen_miss = set()
+    for s in srcs:
+        if cache is not None and s in cache:
+            by_src[s] = cache[s]
+        elif s not in seen_miss:
+            seen_miss.add(s)
+            missing.append(s)
+    if missing:
+        template = _wiki_passport_sql()
+        if template.strip().startswith("\\set"):
+            template = "\n".join(
+                ln for ln in template.splitlines()
+                if not ln.strip().startswith("\\set"))
+        lst = ", ".join("'%s'" % str(s).replace("'", "''") for s in missing)
+        qsql = template.replace(":src_list", lst).replace(
+            ":body_max", str(WIKI_PASSPORT_BODY_MAX))
+        try:
+            for r in psql(qsql) or []:
+                if not r or not r[0]:
+                    continue
+                entry = {
+                    "wiki_body": (r[2] if len(r) > 2 else "") or "",
+                    "parent": (r[5] if len(r) > 5 else "") or "",
+                    "not_enough_for": (r[7] if len(r) > 7 else "") or "",
+                }
+                key = str(r[0])
+                by_src[key] = entry
+                # кэш только успешный body; miss/ошибка/пустой SQL — без записи
+                if cache is not None and entry.get("wiki_body"):
+                    cache[key] = entry
+        except RuntimeError:
+            pass
+    distinct_pool = (list(distinct_against)
+                     if distinct_against is not None else cards)
     out = []
     for c in cards:
         row = dict(c)
@@ -1812,65 +1846,164 @@ def wiki_passport_enrich_slice(cards):
             row["not_enough_for"] = extra["not_enough_for"]
         row["platform_kind"] = wiki_platform_kind(
             row.get("src_table"), row.get("parent") or "")
-        row["distinct"] = wiki_passport_distinct(row, cards)
+        row["distinct"] = wiki_passport_distinct(row, distinct_pool)
         out.append(row)
     return out
 
 
-def wiki_batch_verify(question, intent, cards, diag=None):
-    """Паспорта порциями WIKI_PASSPORT_N; MERGE вердиктов по src_table всех батчей."""
+def _wiki_parse_card_verify(raw):
+    """Разбор ответа покарточного verify: flat {fit,why} или verdicts[index=1]."""
+    verdicts, mode = wiki_parse_verify_response(raw, 1)
+    if verdicts:
+        return verdicts[0], mode
+    txt = (raw or "").strip()
+    if not txt:
+        return None, "failed"
+    try:
+        j = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
+    except (ValueError, KeyError, TypeError):
+        return None, "failed"
+    if not isinstance(j, dict):
+        return None, "failed"
+    if "fit" in j:
+        v = _wiki_row_to_verdict({"index": 1, "fit": j.get("fit"),
+                                 "why": j.get("why")}, 1)
+        if v:
+            return v, "full"
+    return None, "failed"
+
+
+def wiki_batch_verify(question, intent, cards, diag=None, *, passport_cache=None):
+    """Покарточный параллельный verify (design-c §2 шаг 3, PERF4).
+
+    1 карточка = 1 ds_chat; ThreadPoolExecutor(WIKI_VERIFY_WORKERS).
+    Гейт бюджета: deadline_hit() перед СТАРТОМ каждого вызова модели;
+    уже стартовавшие дозавершаются и вливаются. Кэш паспортов — параметром
+    (не diag). Имя wiki_batch_verify сохранено: замки мокают его.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
     diag = dict(diag or {})
     cards = list(cards or [])
     if not cards:
-        return {"verdicts_by_src": {}, "passports": [], "incomplete": False, "diag": diag}
+        return {"verdicts_by_src": {}, "passports": [], "incomplete": False,
+                "diag": diag}
+    if passport_cache is not None and not isinstance(passport_cache, dict):
+        passport_cache = None
+    # backward compat: старый путь через diag (до PERF4) — читаем, не пишем
+    if passport_cache is None:
+        legacy = diag.get("_wiki_passport_cache")
+        if isinstance(legacy, dict):
+            passport_cache = legacy
+
+    workers = max(1, int(WIKI_VERIFY_WORKERS or 1))
+    cache_lock = threading.Lock()
     by_src = {}
     all_passports = []
     incomplete = False
-    batch_n = 0
-    for i in range(0, len(cards), WIKI_PASSPORT_N):
-        if deadline_hit():
-            incomplete = True
-            diag["wiki_batch_verify_deadline"] = True
-            break
-        slice_cards = cards[i:i + WIKI_PASSPORT_N]
-        enriched = wiki_passport_enrich_slice(slice_cards)
-        listing = wiki_format_passport_lines(enriched)
-        ask_text = question or ""
-        kind = _intent_text((intent or {}).get("kind"))
-        if kind:
-            ask_text = "%s (%s)" % (ask_text, kind)
+    started_n = 0
+    skipped_n = 0
+    err_last = None
+    pool_cards = cards  # distinct vs полный входной пул этого вызова
+    # Промт карточки собирается здесь (главный поток): kind/_intent_text
+    # фиксируются аргументом, а не повторным чтением в воркере (PERF6).
+    ask_text = question or ""
+    kind = _intent_text((intent or {}).get("kind"))
+    if kind:
+        ask_text = "%s (%s)" % (ask_text, kind)
+
+    def _enrich_one(card):
         try:
+            with cache_lock:
+                return wiki_passport_enrich_slice(
+                    [card], cache=passport_cache, distinct_against=pool_cards)
+        except TypeError as e:
+            msg = str(e)
+            # мок замка без cache=/distinct_against=
+            if "unexpected keyword argument" in msg:
+                try:
+                    with cache_lock:
+                        return wiki_passport_enrich_slice(
+                            [card], cache=passport_cache)
+                except TypeError:
+                    return wiki_passport_enrich_slice([card])
+            raise
+
+    def _verify_one(card, ask_text=ask_text):
+        nonlocal started_n, skipped_n, err_last
+        src = card.get("src_table")
+        enriched = _enrich_one(card)
+        p = enriched[0] if enriched else dict(card)
+        listing = wiki_format_passport_lines([p])
+        # гейт СТАРТА вызова модели (решение владельца): сериализован —
+        # число вызовов у границы времени может превышать последовательный.
+        # rid и token_acc живут в ContextVar; пул наследует их через
+        # copy_context().run на каждом submit (PERF6).
+        with cache_lock:
+            if deadline_hit():
+                skipped_n += 1
+                return {"src": src, "passport": p, "verdict": None,
+                        "skipped": True}
             rem = _deadline_remaining_sec()
             if rem is not None and rem <= 0:
-                incomplete = True
-                break
+                skipped_n += 1
+                return {"src": src, "passport": p, "verdict": None,
+                        "skipped": True}
+            started_n += 1
+        try:
             raw = ds_chat(
-                [{"role": "system", "content": WIKI_VERIFY_SYS},
-                 {"role": "user", "content": "%s\n\nPassports:\n%s"
+                [{"role": "system", "content": WIKI_CARD_VERIFY_SYS},
+                 {"role": "user", "content": "%s\n\nPassport:\n%s"
                   % (ask_text, listing)}],
                 max_tokens=WIKI_VERIFY_MAX_TOKENS)
         except Exception as e:  # noqa: BLE001
-            incomplete = True
-            diag["wiki_batch_verify_error"] = str(e)[:80]
-            break
-        verdicts, parse_mode = wiki_parse_verify_response(raw, len(enriched))
+            with cache_lock:
+                err_last = str(e)[:80]
+            return {"src": src, "passport": p, "verdict": None, "error": True}
+        v, parse_mode = _wiki_parse_card_verify(raw)
         if parse_mode == "failed" and (raw or "").strip():
-            incomplete = True
-        batch_n += 1
-        for vi, p in enumerate(enriched):
-            src = p.get("src_table")
-            if not src:
+            return {"src": src, "passport": p, "verdict": None,
+                    "parse_failed": True}
+        return {"src": src, "passport": p, "verdict": v, "skipped": False}
+
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        # Снимок ContextVar главного потока на каждый submit (rid, token_acc).
+        futs = [pool.submit(contextvars.copy_context().run, _verify_one, c)
+                for c in cards]
+        for fut in as_completed(futs):
+            try:
+                r = fut.result()
+            except Exception as e:  # noqa: BLE001
+                incomplete = True
+                err_last = str(e)[:80]
                 continue
-            all_passports.append(p)
-            v = None
-            for vv in verdicts or []:
-                if vv.get("index") == vi + 1:
-                    v = vv
-                    break
-            if v:
+            if not r:
+                incomplete = True
+                continue
+            p = r.get("passport")
+            src = r.get("src")
+            if p and src:
+                all_passports.append(p)
+            if r.get("skipped") or r.get("error") or r.get("parse_failed"):
+                incomplete = True
+                continue
+            v = r.get("verdict")
+            if src and v:
                 by_src[src] = v
-    diag["wiki_batch_verify_n"] = batch_n
+            elif src:
+                incomplete = True
+
+    if skipped_n:
+        diag["wiki_batch_verify_deadline"] = True
+        diag["wiki_card_verify_deadline"] = True
+    if err_last:
+        diag["wiki_batch_verify_error"] = err_last
+        diag["wiki_card_verify_error"] = err_last
+    diag["wiki_batch_verify_n"] = started_n
+    diag["wiki_card_verify_n"] = started_n
+    diag["wiki_card_verify_workers"] = workers
     diag["wiki_batch_verdicts"] = len(by_src)
+    diag["wiki_card_verdicts"] = len(by_src)
     return {
         "verdicts_by_src": by_src,
         "passports": all_passports,
@@ -2021,7 +2154,7 @@ def _rescue_no_data(question, diag, cut, t0, reason):
 def wiki_rescue_full_pool_pass(question, intent, diag, cut, t0,
                                by=None, match="", preds=None, plan=None,
                                *, origin="cascade"):
-    """ТОЧКА 1 / escalate: сборка rescue_pool → батч-verify → резолвер → исход."""
+    """ТОЧКА 1 / escalate: сборка rescue_pool → покарточный verify → резолвер → исход."""
     diag = diag if isinstance(diag, dict) else {}
     intent = intent or {}
     plan = plan or {}
@@ -2037,232 +2170,297 @@ def wiki_rescue_full_pool_pass(question, intent, diag, cut, t0,
     if origin == "escalate":
         diag["wiki_rescue_escalated"] = True
 
-    # шаг 1 — rescue_pool
-    try:
-        pool = wiki_hybrid_pool(
-            question, intent, rescue_mode=True, diag=diag)
-    except Exception as e:  # noqa: BLE001
-        diag["wiki_rescue_pool_error"] = str(e)[:80]
-        pool = []
-    # named-фильтр на rescue пропускаем: флаг named_pool_zeroed — с каскада;
-    # force_menu ниже держит sole при этом флаге.
-    # SQL вернул TOP+1; ceiling_hit := pre-limit > WIKI_RESCUE_TOP
-    pre_count = len(pool)
-    ceiling_hit = pre_count > WIKI_RESCUE_TOP
-    if ceiling_hit:
-        diag["wiki_rescue_truncated"] = pre_count - WIKI_RESCUE_TOP
-        pool = pool[:WIKI_RESCUE_TOP]
-    else:
-        diag["wiki_rescue_truncated"] = 0
-    diag["wiki_rescue_pool_n"] = len(pool)
-    diag["wiki_rescue_pre_count"] = pre_count
-    diag["wiki_rescue_pool"] = [c.get("src_table") for c in pool]
+    # PERF4: кэш паспортов локально в проходе, параметром (НЕ diag — п.16).
+    passport_cache = {}
+    sec_pool = 0.0
+    sec_verify = 0.0
+    sec_resolver = 0.0
+    sec_menu = [0.0]
 
-    # шаг 2 — пуст → прежний честный no_data
-    if not pool:
-        return None  # caller сохраняет прежний исход
+    def _stamp_stages():
+        # ДО любого _diag_pack (красная №2); тел паспортов в diag нет.
+        # Идемпотентно: повторный вызов (в т.ч. finally) обновляет ключи in-place,
+        # не плодит дубли; shallow-copy в _diag_pack видит финальные значения.
+        stages = diag.get("wiki_rescue_stage_sec")
+        if not isinstance(stages, dict):
+            stages = {}
+            diag["wiki_rescue_stage_sec"] = stages
+        stages["pool"] = round(sec_pool, 1)
+        stages["verify"] = round(sec_verify, 1)
+        stages["resolver"] = round(sec_resolver, 1)
+        stages["menu"] = round(sec_menu[0], 1)
+        diag.pop("_wiki_passport_cache", None)  # страховка от чужого наследия
 
-    force_menu = bool(diag.get("named_pool_zeroed"))
-
-    # R-I: дедлайн после входа
-    if deadline_hit():
-        diag["wiki_rescue_ri"] = "deadline"
-        if len(pool) >= 2:
-            menu = _rescue_menu_or_degrade(
-                question, pool, diag, cut, t0, reason="wiki_rescue",
-                intent=intent, plan=plan, by=by, match=match, preds=preds)
-            if menu is not None:
-                return menu
-        return None
-
-    # шаг 3 — батч-verify
-    batch = wiki_batch_verify(question, intent, pool, diag=diag)
-    diag.update(batch.get("diag") or {})
-    # ceiling_hit = pre-limit>TOP only; named_pool_zeroed stays its own diag key
-    # (sole held by force_menu below, without wiki_ceiling_hit)
-    outcome = wiki_outcome_from_full_verify(
-        batch.get("verdicts_by_src") or {}, pool, intent, diag=diag,
-        ceiling_hit=ceiling_hit)
-
-    # шаг 4 — резолвер один раз; трихотомия до sole
-    concepts = []
-    concepts_pending = False
-    resolver = {"ok": False, "fail": True, "verdict": None, "concepts": []}
-    provisional_sole = outcome.get("outcome") == "leader"
-    try:
-        resolver = wiki_pool_resolver(question, pool, diag)
-        if resolver.get("ok"):
-            concepts = list(resolver.get("concepts") or [])
+    try:  # stamp в finally + явный stamp перед pack-путями
+        # шаг 1 — rescue_pool
+        _tp0 = time.monotonic()
+        try:
+            pool = wiki_hybrid_pool(
+                question, intent, rescue_mode=True, diag=diag)
+        except Exception as e:  # noqa: BLE001
+            diag["wiki_rescue_pool_error"] = str(e)[:80]
+            pool = []
+        sec_pool = time.monotonic() - _tp0
+        # named-фильтр на rescue пропускаем: флаг named_pool_zeroed — с каскада;
+        # force_menu ниже держит sole при этом флаге.
+        # SQL вернул TOP+1; ceiling_hit := pre-limit > WIKI_RESCUE_TOP
+        pre_count = len(pool)
+        ceiling_hit = pre_count > WIKI_RESCUE_TOP
+        if ceiling_hit:
+            diag["wiki_rescue_truncated"] = pre_count - WIKI_RESCUE_TOP
+            pool = pool[:WIKI_RESCUE_TOP]
         else:
-            # один inline-повтор
-            diag["wiki_resolver_retry"] = True
+            diag["wiki_rescue_truncated"] = 0
+        diag["wiki_rescue_pool_n"] = len(pool)
+        diag["wiki_rescue_pre_count"] = pre_count
+        diag["wiki_rescue_pool"] = [c.get("src_table") for c in pool]
+
+        # шаг 2 — пуст → прежний честный no_data
+        if not pool:
+            return None  # caller сохраняет прежний исход
+
+        force_menu = bool(diag.get("named_pool_zeroed"))
+
+        # R-I: дедлайн после входа
+        if deadline_hit():
+            diag["wiki_rescue_ri"] = "deadline"
+            if len(pool) >= 2:
+                _tm0 = time.monotonic()
+                _stamp_stages()
+                menu = _rescue_menu_or_degrade(
+                    question, pool, diag, cut, t0, reason="wiki_rescue",
+                    intent=intent, plan=plan, by=by, match=match, preds=preds)
+                sec_menu[0] += time.monotonic() - _tm0
+                if menu is not None:
+                    return menu
+            return None
+
+        # шаг 3 — покарточный параллельный verify
+        _tv0 = time.monotonic()
+        try:
+            batch = wiki_batch_verify(
+                question, intent, pool, diag=diag,
+                passport_cache=passport_cache)
+        except TypeError as e:
+            # мок замка без passport_cache=
+            if "passport_cache" in str(e):
+                batch = wiki_batch_verify(
+                    question, intent, pool, diag=diag)
+            else:
+                raise
+        sec_verify = time.monotonic() - _tv0
+        diag.update(batch.get("diag") or {})
+        # ceiling_hit = pre-limit>TOP only; named_pool_zeroed stays its own diag key
+        # (sole held by force_menu below, without wiki_ceiling_hit)
+        outcome = wiki_outcome_from_full_verify(
+            batch.get("verdicts_by_src") or {}, pool, intent, diag=diag,
+            ceiling_hit=ceiling_hit)
+
+        # шаг 4 — резолвер один раз; трихотомия до sole
+        concepts = []
+        concepts_pending = False
+        resolver = {"ok": False, "fail": True, "verdict": None, "concepts": []}
+        provisional_sole = outcome.get("outcome") == "leader"
+        _tr0 = time.monotonic()
+        try:
             resolver = wiki_pool_resolver(question, pool, diag)
             if resolver.get("ok"):
                 concepts = list(resolver.get("concepts") or [])
             else:
-                concepts_pending = True
-                diag["wiki_concepts_unavailable"] = True
-    except Exception as e:  # noqa: BLE001
-        concepts_pending = True
-        diag["wiki_resolver_err"] = str(e)[:80]
+                # один inline-повтор
+                diag["wiki_resolver_retry"] = True
+                resolver = wiki_pool_resolver(question, pool, diag)
+                if resolver.get("ok"):
+                    concepts = list(resolver.get("concepts") or [])
+                else:
+                    concepts_pending = True
+                    diag["wiki_concepts_unavailable"] = True
+        except Exception as e:  # noqa: BLE001
+            concepts_pending = True
+            diag["wiki_resolver_err"] = str(e)[:80]
+        sec_resolver = time.monotonic() - _tr0
 
-    # успех (в т.ч. пустой) = отвечено; pending ≠ ответ (повтор — consume)
-    if concepts_pending:
-        diag.pop("rescue_concepts", None)
-        diag["rescue_concepts_pending"] = True
-    else:
-        diag["rescue_concepts"] = list(concepts)
-
-    verd = resolver.get("verdict") if resolver.get("ok") else None
-
-    def _menu(reason="wiki_rescue", cands=None):
-        cands = cands if cands is not None else pool
-        if len(cands) < 2:
-            return None
-        return _rescue_menu_or_degrade(
-            question, cands, diag, cut, t0, reason=reason,
-            intent=intent, plan=plan, by=by, match=match, preds=preds,
-            concepts=concepts, pending=concepts_pending)
-
-    def _finish_sole(leader):
-        # demote ТОЛЬКО при fail/pending (§2 шаг 3(a)); пустой OK = ответ
-        _concepts_gap = (
-            concepts_pending
-            or (resolver.get("fail") and not resolver.get("ok")))
-        if _concepts_gap:
-            excl = conceptual_term_group_norms(
-                intent.get("terms") or [], intent=intent, concepts=[],
-                src=leader, question=question)
-            remaining_non = False
-            for g in (intent.get("terms") or []):
-                n = _term_group_norm(g)
-                if n and n not in excl and not _group_is_platform_only(g):
-                    remaining_non = True
-                    break
-            if remaining_non:
-                m = _menu()
-                if m is not None:
-                    return m
-                return _rescue_no_data(
-                    question, diag, cut, t0, "wiki_rescue_demote")
-        if not wiki_leader_post_verify(leader, intent, question, diag):
-            return _rescue_no_data(
-                question, diag, cut, t0, "wiki_post_verify_fail")
-        gated = wiki_leader_db_homonym_gate(
-            leader, question, intent, diag, cut, t0,
-            by=by, match=match, preds=preds, plan=plan)
-        if gated is not None:
-            return _stamp_rescue_concepts(
-                gated, concepts, pending=concepts_pending)
-        lead_card = next((c for c in pool if c.get("src_table") == leader), None)
-        marks = {}
-        if lead_card and lead_card.get("src_layer") is not None:
-            diag["src_layer"] = lead_card.get("src_layer")
-        _out = {"picked": [leader], "marks": marks, "plan": plan}
+        # успех (в т.ч. пустой) = отвечено; pending ≠ ответ (повтор — consume)
         if concepts_pending:
-            _out["rescue_concepts_pending"] = True
+            diag.pop("rescue_concepts", None)
+            diag["rescue_concepts_pending"] = True
         else:
-            # успех (в т.ч. пустой) = отвечено
-            _out["rescue_concepts"] = list(concepts)
-        return _out
+            diag["rescue_concepts"] = list(concepts)
 
-    # --- таблица (a)/(b)/(b2)/(c) ---
-    # (a) sole-yes: concepts-only уже получены; трихотомия игнорируется
-    if provisional_sole and not force_menu:
-        return _finish_sole(outcome.get("leader"))
+        verd = resolver.get("verdict") if resolver.get("ok") else None
 
-    # (b) in-pool kind-гомоним
-    if outcome.get("outcome") == "clarify" and outcome.get("reason") == "homonym":
-        m = _menu(reason="wiki_homonym_db", cands=outcome.get("candidates") or pool)
-        if m is not None:
-            return m
-        return wiki_homonym_peer_fail_soft(question, diag, cut, t0)
+        def _nd(reason):
+            _stamp_stages()
+            return _rescue_no_data(question, diag, cut, t0, reason)
 
-    # (b2) verify-clarify >=2: tie → wiki_separability; полный пул — fallback
-    if outcome.get("outcome") == "clarify":
-        if outcome.get("reason") == "separability":
-            reason = "wiki_separability"
-        else:
-            reason = ("wiki_rescue" if origin != "cascade"
-                      else "wiki_separability")
-        m = _menu(reason=reason, cands=outcome.get("candidates") or pool)
-        if m is not None:
-            return m
-        m = _menu(reason="wiki_rescue", cands=pool)
-        if m is not None:
-            return m
-        return None
+        def _menu(reason="wiki_rescue", cands=None):
+            cands = cands if cands is not None else pool
+            if len(cands) < 2:
+                _stamp_stages()  # до pack на caller fail_soft / early paths
+                return None
+            _tm0 = time.monotonic()
+            try:
+                _stamp_stages()  # до pack внутри меню
+                return _rescue_menu_or_degrade(
+                    question, cands, diag, cut, t0, reason=reason,
+                    intent=intent, plan=plan, by=by, match=match, preds=preds,
+                    concepts=concepts, pending=concepts_pending)
+            finally:
+                sec_menu[0] += time.monotonic() - _tm0
 
-    # (c) none/unsure/неполнота — трихотомия читается
-    if outcome.get("outcome") == "incomplete":
-        # verd==one + неполный вердикт → дозапрос батчей; sole → путь (a)
-        if verd == "one":
-            vb = dict(batch.get("verdicts_by_src") or {})
-            missing = [c for c in pool if c.get("src_table") not in vb]
-            if missing and not deadline_hit():
-                diag["wiki_batch_verify_refetch"] = True
-                batch2 = wiki_batch_verify(question, intent, missing, diag=diag)
-                vb.update(batch2.get("verdicts_by_src") or {})
-                diag.update(batch2.get("diag") or {})
-                batch = {
-                    "verdicts_by_src": vb,
-                    "passports": list(batch.get("passports") or []) + list(
-                        batch2.get("passports") or []),
-                    "incomplete": bool(batch2.get("incomplete")) or (
-                        len(vb) < len(pool)),
-                    "diag": diag,
-                }
-                outcome = wiki_outcome_from_full_verify(
-                    vb, pool, intent, diag=diag,
-                    ceiling_hit=ceiling_hit)
-                if outcome.get("outcome") == "leader" and not force_menu:
-                    return _finish_sole(outcome.get("leader"))
-            # остался non-sole → меню
-        m = _menu()
-        if m is not None:
-            return m
-        if len(pool) == 1:
-            return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_rd")
-        return None
+        def _finish_sole(leader):
+            # штамп ДО post_verify / db-гомоним-гейта / любых упакованных возвратов
+            _stamp_stages()
+            # demote ТОЛЬКО при fail/pending (§2 шаг 3(a)); пустой OK = ответ
+            _concepts_gap = (
+                concepts_pending
+                or (resolver.get("fail") and not resolver.get("ok")))
+            if _concepts_gap:
+                excl = conceptual_term_group_norms(
+                    intent.get("terms") or [], intent=intent, concepts=[],
+                    src=leader, question=question)
+                remaining_non = False
+                for g in (intent.get("terms") or []):
+                    n = _term_group_norm(g)
+                    if n and n not in excl and not _group_is_platform_only(g):
+                        remaining_non = True
+                        break
+                if remaining_non:
+                    m = _menu()
+                    if m is not None:
+                        return m
+                    return _nd("wiki_rescue_demote")
+            if not wiki_leader_post_verify(leader, intent, question, diag):
+                return _nd("wiki_post_verify_fail")
+            gated = wiki_leader_db_homonym_gate(
+                leader, question, intent, diag, cut, t0,
+                by=by, match=match, preds=preds, plan=plan)
+            if gated is not None:
+                return _stamp_rescue_concepts(
+                    gated, concepts, pending=concepts_pending)
+            lead_card = next((c for c in pool if c.get("src_table") == leader), None)
+            marks = {}
+            if lead_card and lead_card.get("src_layer") is not None:
+                diag["src_layer"] = lead_card.get("src_layer")
+            _out = {"picked": [leader], "marks": marks, "plan": plan}
+            if concepts_pending:
+                _out["rescue_concepts_pending"] = True
+            else:
+                # успех (в т.ч. пустой) = отвечено
+                _out["rescue_concepts"] = list(concepts)
+            return _out
 
-    # ceiling_hit → sole уже не выставлялся; меню
-    if ceiling_hit or force_menu:
-        m = _menu()
-        if m is not None:
-            return m
-        if len(pool) == 1:
-            return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_rd")
-        return None
+        # --- таблица (a)/(b)/(b2)/(c) ---
+        # (a) sole-yes: concepts-only уже получены; трихотомия игнорируется
+        if provisional_sole and not force_menu:
+            return _finish_sole(outcome.get("leader"))
 
-    # трихотомия на none/unsure
-    if verd == "one":
-        # полный вердикт → меню всего пула (резолвер не лидер)
-        m = _menu()
-        if m is not None:
-            return m
-        if len(pool) == 1:
-            return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_rd")
-        return None
-    if verd in ("many", None) or resolver.get("fail") or diag.get("resolver_input_truncated"):
-        m = _menu()
-        if m is not None:
-            return m
-        if len(pool) == 1:
-            return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_rd")
-        return None
-    if verd == "none":
-        if diag.get("resolver_input_truncated") or ceiling_hit:
+        # (b) in-pool kind-гомоним
+        if outcome.get("outcome") == "clarify" and outcome.get("reason") == "homonym":
+            m = _menu(reason="wiki_homonym_db", cands=outcome.get("candidates") or pool)
+            if m is not None:
+                return m
+            _stamp_stages()
+            return wiki_homonym_peer_fail_soft(question, diag, cut, t0)
+
+        # (b2) verify-clarify >=2: tie → wiki_separability; полный пул — fallback
+        if outcome.get("outcome") == "clarify":
+            if outcome.get("reason") == "separability":
+                reason = "wiki_separability"
+            else:
+                reason = ("wiki_rescue" if origin != "cascade"
+                          else "wiki_separability")
+            m = _menu(reason=reason, cands=outcome.get("candidates") or pool)
+            if m is not None:
+                return m
+            m = _menu(reason="wiki_rescue", cands=pool)
+            if m is not None:
+                return m
+            return None
+
+        # (c) none/unsure/неполнота — трихотомия читается
+        if outcome.get("outcome") == "incomplete":
+            # verd==one + неполный вердикт → дозапрос батчей; sole → путь (a)
+            if verd == "one":
+                vb = dict(batch.get("verdicts_by_src") or {})
+                missing = [c for c in pool if c.get("src_table") not in vb]
+                if missing and not deadline_hit():
+                    diag["wiki_batch_verify_refetch"] = True
+                    diag["wiki_card_verify_refetch"] = True
+                    _tv1 = time.monotonic()
+                    try:
+                        batch2 = wiki_batch_verify(
+                            question, intent, missing, diag=diag,
+                            passport_cache=passport_cache)
+                    except TypeError as e:
+                        if "passport_cache" in str(e):
+                            batch2 = wiki_batch_verify(
+                                question, intent, missing, diag=diag)
+                        else:
+                            raise
+                    sec_verify += time.monotonic() - _tv1
+                    vb.update(batch2.get("verdicts_by_src") or {})
+                    diag.update(batch2.get("diag") or {})
+                    batch = {
+                        "verdicts_by_src": vb,
+                        "passports": list(batch.get("passports") or []) + list(
+                            batch2.get("passports") or []),
+                        "incomplete": bool(batch2.get("incomplete")) or (
+                            len(vb) < len(pool)),
+                        "diag": diag,
+                    }
+                    outcome = wiki_outcome_from_full_verify(
+                        vb, pool, intent, diag=diag,
+                        ceiling_hit=ceiling_hit)
+                    if outcome.get("outcome") == "leader" and not force_menu:
+                        return _finish_sole(outcome.get("leader"))
+                # остался non-sole → меню
             m = _menu()
             if m is not None:
                 return m
-        # полное покрытие → честный no_data (ПОЛИТИКА)
-        return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_none")
+            if len(pool) == 1:
+                return _nd("wiki_rescue_rd")
+            return None
 
-    m = _menu()
-    if m is not None:
-        return m
-    return None
+        # ceiling_hit → sole уже не выставлялся; меню
+        if ceiling_hit or force_menu:
+            m = _menu()
+            if m is not None:
+                return m
+            if len(pool) == 1:
+                return _nd("wiki_rescue_rd")
+            return None
 
+        # трихотомия на none/unsure
+        if verd == "one":
+            # полный вердикт → меню всего пула (резолвер не лидер)
+            m = _menu()
+            if m is not None:
+                return m
+            if len(pool) == 1:
+                return _nd("wiki_rescue_rd")
+            return None
+        if verd in ("many", None) or resolver.get("fail") or diag.get("resolver_input_truncated"):
+            m = _menu()
+            if m is not None:
+                return m
+            if len(pool) == 1:
+                return _nd("wiki_rescue_rd")
+            return None
+        if verd == "none":
+            if diag.get("resolver_input_truncated") or ceiling_hit:
+                m = _menu()
+                if m is not None:
+                    return m
+            # полное покрытие → честный no_data (ПОЛИТИКА)
+            return _nd("wiki_rescue_none")
+
+        m = _menu()
+        if m is not None:
+            return m
+        return None
+    finally:
+        _stamp_stages()
 
 
 def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,

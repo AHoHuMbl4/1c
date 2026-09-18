@@ -1799,6 +1799,65 @@ def run_R_K():
     _restore()
 
 
+def run_PERF_gate_context():
+    """PERF6: гейт дедлайна в воркерах видит rid через copy_context.
+
+    Без мока deadline_hit — реальный _rid_ctx / _REQ_T0. На коде без
+    copy_context().run сценарий падает (воркер слеп к rid → ds_chat > 0).
+    """
+    SECTION["cur"] = "PERF"
+    _reset_session()
+    _restore()  # живой deadline_hit, не _install_deadline
+    _save("wiki_passport_enrich_slice", "ds_chat", "WIKI_VERIFY_WORKERS",
+          "wiki_format_passport_lines")
+    A.WIKI_VERIFY_WORKERS = 4
+    A.wiki_passport_enrich_slice = (
+        lambda cards, cache=None, distinct_against=None, **kw: [
+            dict(c) for c in (cards or [])])
+    A.wiki_format_passport_lines = lambda cards: "P"
+
+    calls = {"n": 0}
+
+    def _ds(messages, max_tokens=0):
+        calls["n"] += 1
+        return '{"fit":"yes","why":"ok"}'
+
+    A.ds_chat = _ds
+    pool = [_card("catalog_gate_%02d" % i, "g%d" % i) for i in range(6)]
+
+    rid = A._rid_enter()
+    try:
+        A._REQ_T0[rid] = time.monotonic() - float(A.ASK_DEADLINE_SEC) - 5.0
+        t("gate-context-main-hit",
+          A.deadline_hit() is True and A._rid_get() == rid,
+          "rid=%s hit=%s" % (A._rid_get(), A.deadline_hit()))
+        batch = A.wiki_batch_verify(
+            "сколько клиентов", {"kind": "catalog", "want": "count"},
+            pool, diag={})
+        d = batch.get("diag") or {}
+        t("gate-context-blind",
+          calls["n"] == 0
+          and batch.get("incomplete") is True
+          and d.get("wiki_card_verify_deadline") is True
+          and d.get("wiki_batch_verify_deadline") is True
+          and int(d.get("wiki_batch_verify_n", -1)) == 0
+          and len(batch.get("verdicts_by_src") or {}) == 0,
+          "ds=%s inc=%s d=%s vb=%s" % (
+              calls["n"], batch.get("incomplete"), {
+                  k: d.get(k) for k in (
+                      "wiki_card_verify_deadline",
+                      "wiki_batch_verify_deadline",
+                      "wiki_batch_verify_n")},
+              len(batch.get("verdicts_by_src") or {})))
+    finally:
+        A._req_t0_clear(rid)
+        try:
+            A._rid_ctx.set("")
+        except Exception:  # noqa: BLE001
+            pass
+    _restore()
+
+
 def main():
     runners = [
         ("R-A", run_R_A),
@@ -1812,6 +1871,7 @@ def main():
         ("R-I", run_R_I),
         ("R-J", run_R_J),
         ("R-K", run_R_K),
+        ("PERF", run_PERF_gate_context),
     ]
     per = {}
     for name, fn in runners:
