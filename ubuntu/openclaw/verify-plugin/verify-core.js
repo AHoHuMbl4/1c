@@ -751,10 +751,12 @@ export function atomLabels(payload) {
   }
   for (const o of (payload.options || [])) {
     if (!o || typeof o !== "object") continue;
-    for (const k of ["label", "entity_label", "measure"]) {
+    for (const k of ["label", "entity_label", "measure", "hint"]) {
       const lab = String(o[k] || "").trim();
       if (lab) out.add(normClarifyKey(lab));
     }
+    const cap = optionButtonCaption(o);
+    if (cap) out.add(normClarifyKey(cap));
   }
   return out;
 }
@@ -780,6 +782,36 @@ export function presentationLabels(presentation) {
   return out.filter(Boolean);
 }
 
+/** D4: подпись кнопки = label+(hint); TG text≤64 символа ≠ callback≤64 байт. */
+export const TG_BTN_TEXT_MAX = 64;
+export const TG_BTN_CALLBACK_MAX = 64;
+export const TG_BUTTONS_MAX = 8;
+
+export function optionButtonCaption(o) {
+  const lab = String((o && (o.label || o.measure)) || "").trim();
+  const hint = String((o && o.hint) || "").trim();
+  if (lab && hint) return lab + " (" + hint + ")";
+  return lab || hint;
+}
+
+export function clarifyOverflowLine(options) {
+  const eligible = [];
+  for (const o of options || []) {
+    if (!o || typeof o !== "object") continue;
+    const lab = String(o.label || o.measure || "").trim();
+    const did = String(o.decision_id || "").trim();
+    if (!lab || !did) continue;
+    const cb = "ask1c:" + did;
+    if (Buffer.byteLength(cb, "utf8") > TG_BTN_CALLBACK_MAX) continue;
+    eligible.push(o);
+  }
+  if (eligible.length <= TG_BUTTONS_MAX) return "";
+  const rest = eligible.slice(TG_BUTTONS_MAX);
+  const names = rest.map((o) => String(o.label || o.measure || "").trim()).filter(Boolean);
+  if (!names.length) return "";
+  return "ещё " + names.length + ": " + names.join(", ");
+}
+
 /** Собрать presentation из options с decision_id (доки Message Presentation). */
 export function buildClarifyPresentation(options) {
   const buttons = [];
@@ -789,8 +821,11 @@ export function buildClarifyPresentation(options) {
     const did = String(o.decision_id || "").trim();
     if (!lab || !did) continue;
     const cb = "ask1c:" + did;
-    if (Buffer.byteLength(cb, "utf8") > 64) continue;
-    buttons.push({ label: lab, action: { type: "callback", value: cb } });
+    if (Buffer.byteLength(cb, "utf8") > TG_BTN_CALLBACK_MAX) continue;
+    if (buttons.length >= TG_BUTTONS_MAX) break;
+    const full = optionButtonCaption(o);
+    const btnText = [...full].length <= TG_BTN_TEXT_MAX ? full : lab;
+    buttons.push({ label: btnText, action: { type: "callback", value: cb } });
   }
   if (!buttons.length) return null;
   return { tone: "info", blocks: [{ type: "buttons", buttons }] };

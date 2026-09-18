@@ -1,7 +1,7 @@
 // Оффлайн-тест чистой логики verify-core (node --test не нужен; простые assert).
 // Запуск: node test-verify.mjs
 import assert from "node:assert";
-import { DEFAULTS, boundedGrounded, hasProtocolLeak, injectAskRid, isBlockedSideTool, localeFromInbound, newRid, traceLine, buildClarifyPresentation, channelUserOf, evaluate, extractText, finalizeDecision, injectAskUser, isServiceError, looksLikeChoiceAttempt, matchClarifyOption, mergeRef, missingClarifyOptions, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripChoiceNum, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
+import { DEFAULTS, boundedGrounded, hasProtocolLeak, injectAskRid, isBlockedSideTool, localeFromInbound, newRid, traceLine, buildClarifyPresentation, clarifyOverflowLine, optionButtonCaption, channelUserOf, evaluate, extractText, finalizeDecision, injectAskUser, isServiceError, looksLikeChoiceAttempt, matchClarifyOption, mergeRef, missingClarifyOptions, normClarifyKey, numericTokens, parseAtomJson, parseClarifyOptions, parsePresentationJson, presentationAllowed, rewriteAsk1cParams, selfFetchNeeded, stripChoiceNum, stripInternal, toolMatches, toolMatchesAny } from "./verify-core.js";
 
 const ND = DEFAULTS.noDataMarker;
 const ref = (text) => mergeRef(null, text, 1000, ND);
@@ -880,6 +880,78 @@ t("P1b: merge clarify→figures: полный replace digits", () => {
   assert.strictEqual(r.clarify, false);
   assert.ok(r.digits.has("123"));
   assert.ok(!r.digits.has("311"), "digits уточнения не наследуются");
+});
+
+// --- D4: числа/★/мёртвые в hint опций; хвост «ещё N» ---
+t("D4: optionButtonCaption = label+(hint)", async () => {
+  const m = await import("./verify-core.js");
+  assert.strictEqual(m.optionButtonCaption({ label: "Всего", hint: "итог: 4 218 825,39" }),
+    "Всего (итог: 4 218 825,39)");
+  assert.strictEqual(m.optionButtonCaption({ label: "Сумма", hint: "0 · не ведётся" }),
+    "Сумма (0 · не ведётся)");
+  assert.ok(m.optionButtonCaption({ label: "Всего", hint: "★ итог: 1" }).startsWith("Всего (★"));
+});
+
+t("D4: число в hint → clarify allow + presentation whitelist", () => {
+  const opts = [{ label: "Всего", hint: "итог: 4218825,39", decision_id: "d1" }];
+  const tool = "[CLARIFICATION NEEDED]\nOPTIONS:\n- Всего — итог: 4218825,39 | measure=Всего | focus=\n"
+    + "ATOM_JSON:\n" + JSON.stringify({ atoms: [], options: opts });
+  const r = mergeRef(null, tool, 1000, ND, CM, SE);
+  assert.ok(r.clarify);
+  assert.ok(r.digits.has("4218825") || r.digits.has("421882539") || [...r.digits].some((d) => d.includes("4218")),
+    "число из hint в whitelist");
+  const pres = buildClarifyPresentation(opts);
+  assert.ok(pres);
+  assert.ok(pres.blocks[0].buttons[0].label.includes("4218825")
+    || pres.blocks[0].buttons[0].label.includes("Всего"));
+  assert.strictEqual(presentationAllowed(pres, r.labels), true);
+  const d = evaluate("Выберите: Всего (итог: 4218825,39)", r, null, {},
+    pres);
+  assert.ok(d.action === "allow" || d.action === "pass" || d.action === "replace"
+    || d.why !== "presentation label outside data whitelist");
+});
+
+t("D4: «0 · не ведётся» в hint → валидна и видна на кнопке", async () => {
+  const m = await import("./verify-core.js");
+  const opts = [{ label: "Сумма", hint: "0 · не ведётся", decision_id: "dead1" }];
+  const cap = m.optionButtonCaption(opts[0]);
+  assert.ok(cap.includes("0 · не ведётся"));
+  const pres = m.buildClarifyPresentation(opts);
+  assert.strictEqual(pres.blocks[0].buttons[0].label, cap);
+  const tool = "[CLARIFICATION NEEDED]\nATOM_JSON:\n" + JSON.stringify({ atoms: [], options: opts });
+  const r = mergeRef(null, tool, 1000, ND, CM, SE);
+  assert.ok(r.labels.has(m.normClarifyKey(cap)) || r.labels.has(m.normClarifyKey("Сумма")));
+  assert.strictEqual(m.presentationAllowed(pres, r.labels), true);
+});
+
+t("D4: ★ в hint → отрисовывается на кнопке", async () => {
+  const m = await import("./verify-core.js");
+  const opts = [{ label: "Всего", hint: "★ итог: 72948,21", decision_id: "star1" }];
+  const pres = m.buildClarifyPresentation(opts);
+  assert.ok(pres.blocks[0].buttons[0].label.includes("★"));
+});
+
+t("D4: хвост «ещё N» при >TG_BUTTONS_MAX", async () => {
+  const m = await import("./verify-core.js");
+  const opts = [];
+  for (let i = 1; i <= 10; i++) {
+    opts.push({ label: "Мера" + i, decision_id: "id" + i, hint: "итог: " + i });
+  }
+  const pres = m.buildClarifyPresentation(opts);
+  assert.strictEqual(pres.blocks[0].buttons.length, m.TG_BUTTONS_MAX);
+  const line = m.clarifyOverflowLine(opts);
+  assert.ok(line.startsWith("ещё 2:"));
+  assert.ok(line.includes("Мера9") && line.includes("Мера10"));
+});
+
+t("D4: TG text>64 → короткий label, hint не в кнопке", async () => {
+  const m = await import("./verify-core.js");
+  const longHint = "итог: " + "9".repeat(80);
+  const opts = [{ label: "Всего", hint: longHint, decision_id: "long1" }];
+  const full = m.optionButtonCaption(opts[0]);
+  assert.ok([...full].length > m.TG_BTN_TEXT_MAX);
+  const pres = m.buildClarifyPresentation(opts);
+  assert.strictEqual(pres.blocks[0].buttons[0].label, "Всего");
 });
 
 

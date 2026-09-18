@@ -439,13 +439,24 @@ def _choice_prompt(question, label):
     return lab + "?"
 
 
-def _clarify_presentation(opts):
-    """Штатный presentation: кнопки с callback=decision_id (Telegram ≤64 байт).
+# D4B_MARK: TG text≤64 chars ≠ callback≤64 bytes; buttons max + «ещё N».
+_TG_BTN_TEXT_MAX = 64
+_TG_BTN_CALLBACK_MAX = 64
+_TG_BUTTONS_MAX = 8
 
-    WebUI интерактивный presentation не несёт — там текст OPTIONS + свободный ввод
-    (замок 11). Свободный ввод рядом с кнопками остаётся доступным отдельно.
-    """
-    buttons = []
+
+def _option_caption(o):
+    """Подпись кнопки/веб-OPTIONS: label + (hint); label в данных чистый."""
+    lab = (o.get("label") or o.get("measure") or "").strip()
+    hint = (o.get("hint") or "").strip()
+    if lab and hint:
+        return "%s (%s)" % (lab, hint)
+    return lab or hint
+
+
+def _clarify_eligible_opts(opts):
+    """Опции с label и callback≤64 байт — кандидаты в TG-кнопки."""
+    out = []
     for o in opts or []:
         if not isinstance(o, dict):
             continue
@@ -454,11 +465,45 @@ def _clarify_presentation(opts):
         if not lab or not did:
             continue
         cb = "ask1c:" + did
-        if len(cb.encode("utf-8")) > 64:
+        if len(cb.encode("utf-8")) > _TG_BTN_CALLBACK_MAX:
             continue
+        out.append(o)
+    return out
+
+
+def _clarify_overflow_line(opts):
+    """Видимый хвост «ещё N: …» для опций вне TG-кнопок (п.13)."""
+    eligible = _clarify_eligible_opts(opts)
+    if len(eligible) <= _TG_BUTTONS_MAX:
+        return ""
+    rest = eligible[_TG_BUTTONS_MAX:]
+    names = []
+    for o in rest:
+        name = (o.get("label") or o.get("measure") or "").strip()
+        if name:
+            names.append(name)
+    if not names:
+        return ""
+    return "ещё %d: %s" % (len(names), ", ".join(names))
+
+
+def _clarify_presentation(opts):
+    """Штатный presentation: кнопки callback=decision_id; подпись label+(hint).
+
+    Текст кнопки ≤64 символа (отдельно от callback_data ≤64 байт): при
+    переполнении — короткий label, полный дайджест в OPTIONS. WebUI presentation
+    не несёт — веб-кнопка = label+hint из OPTIONS без обреза. Сверх
+    _TG_BUTTONS_MAX — хвост «ещё N» в тексте/OPTIONS.
+    """
+    buttons = []
+    for o in _clarify_eligible_opts(opts)[:_TG_BUTTONS_MAX]:
+        lab = (o.get("label") or o.get("measure") or "").strip()
+        did = (o.get("decision_id") or "").strip()
+        full = _option_caption(o)
         # OpenClaw: callback_data = "namespace:payload" (interactive-registry).
+        btn_text = full if len(full) <= _TG_BTN_TEXT_MAX else lab
         buttons.append({
-            "label": lab,
+            "label": btn_text,
             "action": {"type": "callback", "value": "ask1c:" + did},
         })
     if not buttons:
@@ -501,8 +546,10 @@ def _format_clarify_out(question, data):
         did_tail = (" | decision_id=%s" % did) if did else ""
         if o.get("measure"):
             name = o.get("label") or o["measure"]
+            why = (o.get("hint") or "").strip()
+            head = ("%s — %s" % (name, why)) if why else name
             lines.append("- %s | measure=%s | focus=%s%s"
-                         % (name, name, o.get("entity_label") or "", did_tail))
+                         % (head, name, o.get("entity_label") or "", did_tail))
         elif o.get("src") or o.get("label"):
             name = o.get("label") or o.get("src") or ""
             why = (o.get("hint") or "").strip()
@@ -515,6 +562,9 @@ def _format_clarify_out(question, data):
         out += "\n\n" + text
     if lines:
         out += "\n\n%s:\n%s" % (CLARIFY_LABEL, "\n".join(lines))
+    overflow = _clarify_overflow_line(opts)
+    if overflow:
+        out += "\n\n" + overflow
     block = _atom_json_block(_atoms_of(data), opts)
     if block:
         out += "\n\n" + block
@@ -663,12 +713,17 @@ def ask_1c(question: str, focus: str = "", measure: str = "",
                 if not isinstance(o, dict):
                     continue
                 name = o.get("label") or o.get("src") or ""
+                why = (o.get("hint") or "").strip()
+                head = ("%s — %s" % (name, why)) if why else name
                 did = (o.get("decision_id") or "").strip()
                 if name:
                     lines_opts.append("- %s | focus=%s%s" % (
-                        name, name, (" | decision_id=%s" % did) if did else ""))
+                        head, name, (" | decision_id=%s" % did) if did else ""))
             if lines_opts:
                 parts.append("%s:\n%s" % (CLARIFY_LABEL, "\n".join(lines_opts)))
+            overflow = _clarify_overflow_line(opts)
+            if overflow:
+                parts.append(overflow)
             pres = _clarify_presentation(opts)
             if isinstance(data, dict) and data.get("presentation") is None and pres:
                 data = dict(data)
