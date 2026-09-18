@@ -4125,12 +4125,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         _raw_terms, intent=intent, concepts=[], src=src,
         question=question, exact_matched=None)
     _disc_terms, _ = filter_terms_by_concepts(_raw_terms, _det_excl)
-    _disc_exprs, _disc_kinds = probe(_disc_terms)
+    _disc_exprs, _disc_kinds = probe(
+        _disc_terms, question=question, src=src,
+        src_label=(human_table_label(src) if src else None))
     _exact = _exact_matched_norms(_disc_terms, _disc_kinds)
     _probe_terms = terms_for_probe(
         intent, trusted=trusted, resolved=resolved, diag=diag,
         src=src, question=question, exact_matched=_exact)
-    exprs, kinds = probe(_probe_terms)
+    exprs, kinds = probe(
+        _probe_terms, question=question, src=src,
+        src_label=(human_table_label(src) if src else None))
     diag["match_by"] = {k: v for k, v in (kinds or {}).items() if k != "_resolved"}
     if isinstance(kinds, dict) and kinds.get("_resolved"):
         diag["resolved"] = kinds["_resolved"]
@@ -4151,7 +4155,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 return _p2
             if isinstance(_p2, dict) and _p2.get("continue"):
                 _probe_terms = list(_p2.get("terms") or _probe_terms)
-                exprs, kinds = probe(_probe_terms)
+                exprs, kinds = probe(
+                    _probe_terms, question=question, src=src,
+                    src_label=(human_table_label(src) if src else None))
                 diag["match_by"] = {
                     k: v for k, v in (kinds or {}).items() if k != "_resolved"}
                 n_groups = len(_probe_terms)
@@ -4276,12 +4282,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     _raw_terms, intent=intent, concepts=[], src=src,
                     question=question, exact_matched=None)
                 _disc_terms2, _ = filter_terms_by_concepts(_raw_terms, _det_excl2)
-                _disc_exprs2, _disc_kinds2 = probe(_disc_terms2)
+                _disc_exprs2, _disc_kinds2 = probe(
+                    _disc_terms2, question=question, src=src,
+                    src_label=(human_table_label(src) if src else None))
                 _exact = _exact_matched_norms(_disc_terms2, _disc_kinds2)
                 _probe_terms = terms_for_probe(
                     intent, trusted=trusted, resolved=resolved, diag=diag,
                     src=src, question=question, exact_matched=_exact)
-                exprs, kinds = probe(_probe_terms)
+                exprs, kinds = probe(
+                    _probe_terms, question=question, src=src,
+                    src_label=(human_table_label(src) if src else None))
                 diag["match_by"] = {
                     k: v for k, v in (kinds or {}).items() if k != "_resolved"}
                 if isinstance(kinds, dict) and kinds.get("_resolved"):
@@ -4303,7 +4313,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                             return _p2b
                         if isinstance(_p2b, dict) and _p2b.get("continue"):
                             _probe_terms = list(_p2b.get("terms") or _probe_terms)
-                            exprs, kinds = probe(_probe_terms)
+                            exprs, kinds = probe(
+                                _probe_terms, question=question, src=src,
+                                src_label=(human_table_label(src) if src else None))
                             diag["match_by"] = {
                                 k: v for k, v in (kinds or {}).items()
                                 if k != "_resolved"}

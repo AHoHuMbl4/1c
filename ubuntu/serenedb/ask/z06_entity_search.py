@@ -40,7 +40,215 @@ def _like_pattern(alt):
     return "%" + s + "%"
 
 
-def probe(groups):
+# C4 / design-c §3: норм-склейка имён на входе probe (мин-длина, допуск).
+# Дефолты — замер 18.09 (damerau=2) и канон §3 (3 при len>=16); пороги — env.
+_PROBE_NORM_MIN_LEN = int(os.environ.get("PROBE_NORM_MIN_LEN", "8"))
+_PROBE_NORM_DIST = int(os.environ.get("PROBE_NORM_DIST", "2"))
+_PROBE_NORM_DIST_LONG = int(os.environ.get("PROBE_NORM_DIST_LONG", "3"))
+_PROBE_NORM_LONG_AT = int(os.environ.get("PROBE_NORM_LONG_AT", "16"))
+
+
+def _probe_norm(s):
+    """lower + без пробелов (образец `_homonym_norm` z21)."""
+    return "".join(str(s).lower().split())
+
+
+def _probe_norm_dist(glue):
+    """Допуск span-предиката: 2; 3 при длине склейки >=16 (канон §3)."""
+    return (_PROBE_NORM_DIST_LONG
+            if len(glue or "") >= _PROBE_NORM_LONG_AT else _PROBE_NORM_DIST)
+
+
+def _probe_group_primary(group):
+    if isinstance(group, (list, tuple)):
+        for alt in group:
+            s = str(alt or "").strip()
+            if s:
+                return s
+        return ""
+    return str(group or "").strip()
+
+
+def _probe_tokens(text):
+    return [t for t in re.findall(r"[0-9a-zA-Zа-яА-ЯёЁ]+", text or "") if t]
+
+
+def _probe_src_targets(src=None, src_label=None):
+    """Норм-хвост src_table и норм-label (длина >=8) — цели exclude-only гарда."""
+    targets = []
+    if src:
+        raw = str(src)
+        tail = raw.split("_", 1)[1] if "_" in raw else raw
+        tn = _probe_norm(tail)
+        if tn and len(tn) >= _PROBE_NORM_MIN_LEN:
+            targets.append(tn)
+    if src_label:
+        ln = _probe_norm(src_label)
+        if ln and len(ln) >= _PROBE_NORM_MIN_LEN and ln not in targets:
+            targets.append(ln)
+    return targets
+
+
+def _probe_src_name_hit_glues(glues, src=None, src_label=None, diag=None):
+    """ГАРД exclude-only: hit-склейки одним SQL (штатный damerau_levenshtein).
+
+    unnest(склейки) × unnest(хвост/label src); length>=8; допуск 2 (3 при len>=16).
+    Доки: Sql › Functions › Text Functions › damerau_levenshtein;
+          Sql › Query syntax › SELECT › unnest.
+    Fail-soft: сбой → пустой set (гард недоступен = как неизвестный src), diag-факт.
+    Кэш — на один вызов probe (результат держит вызывающий).
+    """
+    glues = [g for g in (glues or []) if g and len(g) >= _PROBE_NORM_MIN_LEN]
+    if not glues:
+        return set()
+    targets = _probe_src_targets(src, src_label)
+    if not targets:
+        return set()
+    # Один SELECT: CASE-допуск по длине склейки (канон §3), без локального DL.
+    glue_lit = "[%s]" % ", ".join(lit(g) for g in glues)
+    target_lit = "[%s]" % ", ".join(lit(t) for t in targets)
+    qsql = (
+        "SELECT g.glue FROM unnest(%s) AS g(glue), unnest(%s) AS t(tgt) "
+        "WHERE length(g.glue) >= %d AND length(t.tgt) >= %d "
+        "AND damerau_levenshtein(g.glue, t.tgt) <= ("
+        "CASE WHEN length(g.glue) >= %d THEN %d ELSE %d END)"
+        % (glue_lit, target_lit,
+           _PROBE_NORM_MIN_LEN, _PROBE_NORM_MIN_LEN,
+           _PROBE_NORM_LONG_AT, _PROBE_NORM_DIST_LONG, _PROBE_NORM_DIST))
+    try:
+        rows = psql(qsql)
+    except Exception:  # noqa: BLE001 — fail-soft: гард недоступен
+        if diag is not None:
+            diag["probe_src_name_sql_error"] = True
+        return set()
+    hits = set()
+    for r in rows or []:
+        if r and r[0]:
+            hits.add(str(r[0]))
+    return hits
+
+
+def _probe_span_is_src_name(glue, hit_glues):
+    """True, если склейка в hit-множестве гарда (exclude-only, без match-expr)."""
+    return bool(glue) and glue in (hit_glues or ())
+
+
+def _probe_iter_spans(groups, question=None):
+    """Единая span-функция: непрерывные >=2 токена → (glue, n_toks, frozenset gis).
+
+    С `question`: окна только по смежным токенам вопроса (эталон `_question_spans_glued`);
+    токен вне term-групп — разрыв окна (не выкидывается из порядка). Span — только если
+    все токены окна входят в term-группы (gis). Без `question`: span только внутри одной
+    группы соседних токенов primary; чужие группы через пустоту не склеиваются.
+    Склейка — `_probe_norm`; короче `_PROBE_NORM_MIN_LEN` отбрасываются.
+    """
+    groups = list(groups or [])
+    g_primary_toks = [_probe_tokens(_probe_group_primary(g)) for g in groups]
+    g_norm_sets = [set(_probe_norm(t) for t in toks) for toks in g_primary_toks]
+
+    def _gi_of(nt):
+        for gi, ns in enumerate(g_norm_sets):
+            if nt in ns:
+                return gi
+        return None
+
+    # Непрерывные пробеги in-group токенов: дыра рвёт окно (как z21 spans).
+    runs = []
+    if question:
+        cur = []
+        for tok in _probe_tokens(question):
+            nt = _probe_norm(tok)
+            gi = _gi_of(nt) if nt else None
+            if gi is None:
+                if cur:
+                    runs.append(cur)
+                    cur = []
+                continue
+            cur.append((tok, gi))
+        if cur:
+            runs.append(cur)
+    else:
+        # Без порядка вопроса непрерывность между группами недоступна —
+        # span только внутри multi-token primary одной группы.
+        for gi, toks in enumerate(g_primary_toks):
+            if len(toks) >= 2:
+                runs.append([(t, gi) for t in toks])
+
+    # glue -> (n_toks, gis); при равной склейке держим кратчайший span (shortest-hit).
+    best = {}
+    for flat in runs:
+        n = len(flat)
+        for i in range(n):
+            for j in range(i + 2, n + 1):
+                toks = [flat[k][0] for k in range(i, j)]
+                gis = frozenset(flat[k][1] for k in range(i, j))
+                glue = _probe_norm(" ".join(toks))
+                if not glue or len(glue) < _PROBE_NORM_MIN_LEN:
+                    continue
+                n_toks = j - i
+                prev = best.get(glue)
+                if prev is None or n_toks < prev[0]:
+                    best[glue] = (n_toks, gis)
+                elif n_toks == prev[0]:
+                    best[glue] = (n_toks, prev[1] | gis)
+    # shortest-hit: короче по токенам, затем по длине склейки
+    return sorted(
+        ((glue, n_toks, gis) for glue, (n_toks, gis) in best.items()),
+        key=lambda x: (x[1], len(x[0]), x[0]))
+
+
+def _probe_span_trigger(per_group, n_groups, span_hits, excluded_gis=None):
+    """Триггер SUPERSEDE: ≥1 UNMATCHED ∨ у покрытой группы hit только fuzzy/part."""
+    excluded = excluded_gis or frozenset()
+    if any(gi not in per_group and gi not in excluded
+           for gi in range(n_groups)):
+        return True
+    soft = {"fuzzy", "part"}
+    for _glue, _n_toks, gis, _exprs in span_hits:
+        for gi in gis:
+            if gi in excluded:
+                continue
+            cur = per_group.get(gi)
+            if cur is not None and cur[2] in soft:
+                return True
+    return False
+
+
+def _probe_apply_span_supersede(per_group, n_groups, span_hits, diag,
+                                excluded_gis=None):
+    """SUPERSEDE: span перезаписывает unmatched/fuzzy/part; exact/slop не трогает.
+
+    OR всех hit-exprs покрывающих spans (порядок — shortest-hit). diag-тег `norm`
+    только при живом count(*)>0 (иначе группа остаётся unmatched).
+    """
+    excluded = excluded_gis or frozenset()
+    if not span_hits or not _probe_span_trigger(
+            per_group, n_groups, span_hits, excluded_gis=excluded):
+        return
+    soft = {"fuzzy", "part"}
+    for gi in range(n_groups):
+        if gi in excluded:
+            continue
+        cur = per_group.get(gi)
+        if cur is not None and cur[2] not in soft:
+            continue  # exact/slop/resolved/… — не трогаем; unmatched — cur is None
+        covering = [h for h in span_hits if gi in h[2]]
+        if not covering:
+            continue
+        exprs = []
+        glues = []
+        for glue, _n_toks, _gis, hit_exprs in covering:
+            glues.append(glue)
+            for e in hit_exprs:
+                if e not in exprs:
+                    exprs.append(e)
+        if not exprs:
+            continue
+        per_group[gi] = (0, exprs, "norm")
+        diag.setdefault("_norm", {})[gi] = list(glues)
+
+
+def probe(groups, question=None, src=None, src_label=None):
     """Проверить все слова вопроса ОДНИМ запросом и вернуть выражение на каждое понятие.
 
     Три способа на каждое слово, по убыванию строгости:
@@ -53,9 +261,39 @@ def probe(groups):
     `ts_starts_with('сбербан')` = 143. Поэтому для них слово приводится к нижнему регистру.
     Раньше здесь был цикл подбора длины префикса — до шести отдельных запросов на слово,
     и для имён собственных он не находил ничего вообще.
+
+    C4 (design-c §3): в тот же UNION — span-склейки (>=2 токенов через границы групп);
+    hit = `ts_levenshtein(склейка, допуск)` (+ `ts_like` только на точной склейке);
+    при триггере SUPERSEDE перезаписывает unmatched/fuzzy/part тегом `norm` ДО
+    resolve_values. Exclude-only по имени src — группа целиком вне матча (п.13).
     """
+    groups = list(groups or [])
+    diag = {}
+    # Сначала spans + гард: hit-склейки → excluded_gis (понятие (iii)); для них
+    # ни lit-, ни span-match-expr, SUPERSEDE запрещён; в unmatched не входят.
+    span_list = list(_probe_iter_spans(groups, question=question))
+    src_name_hits = _probe_src_name_hit_glues(
+        [g for g, _n, _gis in span_list],
+        src=src, src_label=src_label, diag=diag)
+    excluded_gis = set()
+    excluded_hit_glues = {}
+    for glue, _n_toks, gis in span_list:
+        if not _probe_span_is_src_name(glue, src_name_hits):
+            continue
+        for gi in gis:
+            excluded_gis.add(gi)
+            excluded_hit_glues.setdefault(gi, []).append(glue)
+    if excluded_gis:
+        diag["probe_src_name_excluded"] = sorted(excluded_gis)
+        diag["_src_name"] = {
+            gi: list(glues) for gi, glues in excluded_hit_glues.items()}
+        for gi in excluded_gis:
+            diag[gi] = "src_name"
+
     probes, meta = [], []
     for gi, group in enumerate(groups):
+        if gi in excluded_gis:
+            continue
         for ai_, alt in enumerate(group):
             variants = [("exact", "ts_phrase(%s)" % lit(alt))]
             words = alt.split()
@@ -79,17 +317,40 @@ def probe(groups):
             for kind, expr in variants:
                 probes.append("SELECT %d i, count(*) n FROM %s WHERE doc @@ %s"
                               % (len(meta), INDEX, expr))
-                meta.append((gi, kind, expr))
+                meta.append(("lit", gi, kind, expr))
+    # Span-arms того же UNION (Доки: Cookbook › Search › Fuzzy Search › ts_levenshtein;
+    # Sql › Functions › Search › Full-Text — term predicates / ts_like).
+    # Exclude-only гард: один SQL штатной damerau_levenshtein на вызов probe
+    # (Доки: Sql › Functions › Text Functions › damerau_levenshtein;
+    # Sql › Query syntax › SELECT › unnest).
+    for glue, n_toks, gis in span_list:
+        if _probe_span_is_src_name(glue, src_name_hits) or (gis & excluded_gis):
+            continue
+        dist = _probe_norm_dist(glue)
+        span_variants = [
+            ("ts_levenshtein(%s, %d)" % (lit(glue), dist)),
+        ]
+        pat = _like_pattern(glue)
+        if pat is not None:
+            span_variants.append("ts_like(%s)" % lit(pat))
+        for expr in span_variants:
+            probes.append("SELECT %d i, count(*) n FROM %s WHERE doc @@ %s"
+                          % (len(meta), INDEX, expr))
+            meta.append(("span", glue, n_toks, gis, expr))
     if not probes:
-        return [], {}
+        return [], diag
     counts = {}
     for r in psql(" UNION ALL ".join(probes)):
         try:
             counts[int(r[0])] = int(r[1])
         except (ValueError, IndexError):
             pass
-    per_group, diag = {}, {}
-    for i, (gi, kind, expr) in enumerate(meta):
+    per_group = {}
+    # 1) буквальные kinds по группам
+    for i, entry in enumerate(meta):
+        if entry[0] != "lit":
+            continue
+        _tag, gi, kind, expr = entry
         if counts.get(i, 0) <= 0:
             continue
         rank = {"exact": 0, "slop": 1, "fuzzy": 2, "part": 3}[kind]
@@ -98,6 +359,29 @@ def probe(groups):
             per_group[gi] = (rank, [expr], kind)
         elif rank == cur[0] and expr not in cur[1]:
             cur[1].append(expr)
+    # 2) живые span-hits (count>0), shortest уже в порядке _probe_iter_spans
+    span_acc = {}  # glue -> (n_toks, gis, [exprs])
+    for i, entry in enumerate(meta):
+        if entry[0] != "span":
+            continue
+        _tag, glue, n_toks, gis, expr = entry
+        if counts.get(i, 0) <= 0:
+            continue
+        cur = span_acc.get(glue)
+        if cur is None:
+            span_acc[glue] = (n_toks, gis, [expr])
+        else:
+            if expr not in cur[2]:
+                cur[2].append(expr)
+            span_acc[glue] = (cur[0], cur[1] | gis, cur[2])
+    span_hits = [
+        (glue, n_toks, gis, exprs)
+        for glue, (n_toks, gis, exprs) in sorted(
+            span_acc.items(), key=lambda kv: (kv[1][0], len(kv[0]), kv[0]))
+    ]
+    # 3) SUPERSEDE до resolve_values (excluded_gis — вне матча)
+    _probe_apply_span_supersede(
+        per_group, len(groups), span_hits, diag, excluded_gis=excluded_gis)
     # РЕЗОЛВЕР — ФОЛЛБЭК ДЛЯ ГРУПП БЕЗ СОВПАДЕНИЯ. Если слово не нашлось ни точно, ни по
     # опечатке, ни подстрокой — оно записано в базе иначе (сокращение, разговорное имя).
     # Спрашиваем резолвер: слово -> конкретные значения базы, и ищем уже по ним, точной
@@ -105,6 +389,8 @@ def probe(groups):
     # вопросы не влияет — у них совпадение есть. Резолвленное значение видно в ответе:
     # человек проверит, то ли слово поняли.
     for gi, group in enumerate(groups):
+        if gi in excluded_gis:
+            continue
         if gi in per_group:
             continue                           # уже нашлось буквально — резолвить нечего
         vals = []
