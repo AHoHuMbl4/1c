@@ -1,28 +1,19 @@
-# Этап C (v19, круг 17, КАНОН СВЕДЁН): «Один путь — без ловушек до и после» — резолверный проход полного пула + норм-имена + журнал незнакомых слов
+# Этап C (v19, ФИНАЛ — канон заморожен 18.09, решение владельца: к коду; красная ×3 далее на ДИФФЫ): «Один путь — без ловушек до и после» — резолверный проход полного пула + норм-имена + журнал незнакомых слов
 
 Оркестратор Kimi, 18.09. Заказ владельца: «Всё должно идти по 1 пути. Общему!! Никаких
 ловушек до и после». Исполнение — армия cursor-agent, красная ×3, круги до ACCEPT ×3.
-Круги 1–16 (48×REJECT) влиты; КРУГ-16: ТОЧКА 2 = «concepts + ОДНОРАЗОВЫЙ escalate
-в общий rescue ТОЧКИ 1 при неподтверждённом лидере»: continue — только если лидер из
-wiki_full_pool/rescue ИЛИ src_layer==2 ИЛИ settled; kNN-only/урезанный каскад ∧
-unmatched → одноразовая эскалация wiki_rescue (переverify полного пула; флаг запрета
-рекурсии); src_layer-проводка ТРИ места: колонка финального SELECT hybrid + поле
-карточки + запись при picked (гард escalate только src_layer==1 ∧ не settled; до
-появления колонки замок «нет поля» ЗАПРЕЩЁН — иначе вечный escalate); C3 — одно место
-записи unknown_* при ЛЮБОМ выходе прохода (sole/меню/continue/no_data/R-I); sole
-формула явно: ровно 1 yes ∧ ВСЕ прочие no ∧ |verdicts|==|pool| (не среза); повтор-fail
-concepts на consume — честная ДЕГРАДАЦИЯ при лежащей LLM (§0 — на живом контуре;
-двукратный fail LLM вне дефекта волны, фиксируется в журнале). Круги 1–15 (45×REJECT) влиты; ЕДИНСТВЕННЫЙ канон — ТЕЛО ниже (сводки кругов удалены
-как источник дрейфа; история — cursor-run-redc1..45.log). КРУГ-15: n_groups/matched и
-probe — из ОДНОГО источника terms_for_probe (исключённые группы не входят в n_groups,
-diag-skipped); ТОЧКА 2: после exclude непонятийных unmatched не осталось → continue при
-ЛЮБОМ уже settled/picked лидере (src_layer==2 — гард только при незафиксированной
-сущности/kNN-шуме; тогда однократная эскалация в wiki_rescue полный пул, запрет
-рекурсии в ТОЧКУ 2); SUPERSEDE norm-тег только после живого count(*)>0 hit-expr (иначе
-группа остаётся unmatched); R-C — три независимых assert (wiki-DL→rescue_pool;
-(iii)-exclude имени src → count без сужения; SUPERSEDE — синтетика value-групп, glue
-которых НЕ хитит выбранный src); Q5-хвост: остальные группы («движений», «регистре»)
-закрываются (i)/(ii); замок unmatched==0 ∨ все оставшиеся (i)/(ii) → путь до count.
+Круги 1–22 (66×REJECT) влиты; ЕДИНСТВЕННЫЙ канон — ТЕЛО ниже; все формулы предыдущих
+кругов в шапке SUPERSEDED (история — cursor-run-redc1..66.log). Сводка КРУГОВ 17–22
+(итоговые формулы, DETAILS — в теле): ТОЧКА 2: continue = (wiki_full_pool ∨ rescue ∨
+settled ∨ (исключение чисто детерминированное ∧ LLM дважды недоступна)) ∧ ¬(ii)-only;
+escalate = cascade_truncated ∧ ¬settled ∧ ¬escalated; дизъюнкция (1)-(4) без
+fall-through; (iii)/(iv) применяются БЕЗУСЛОВНО при известном src (сон — только (ii));
+demote/R-D повтор-fail: no_data только если после детерминированного exclude остались
+группы вне (i)∪(iii)∪(iv); (b2) verify-clarify → tie-меню (skip: wiki_rescue ∨
+(wiki_separability ∧ wiki_full_pool)); sole = полный вердикт финального пула ∧
+¬ceiling_hit; r[9]=src_layer (r[8]=platform_prefix); эталон Q5: сверка 80 173 vs tsv
+78 176 — ОБЯЗАТЕЛЬНЫЙ предшаг C5 (до сверы замок на механику count-без-сужения, не на
+число).
 
 ПОЛИТИКА ВЛАДЕЛЬЦА (пересмотр — только владелец; красная не блокирует): честный отказ =
 «данных нет И LLM-резолвер подтвердил пустоту пула». «Никакие» при полном покрытии →
@@ -39,7 +30,7 @@ diag-skipped); ТОЧКА 2: после exclude непонятийных unmatch
 | «а сколько наторговали в воскресенье» | 0,00 (честный ноль, НЕ отказ) | то же + пустое окно → period_empty |
 | «сегодня сколько уже наотгружали» | 661 458,38 | то же |
 | «сколько за этот месяц уже вышло» | 2 083 550,46 | то же |
-| «Сколько движений в регистре реализации ТМЦ?» | 80 173 (эталон владельца 18.09; сверка с tsv до выката) | склеенное имя: wiki-пул И/ИЛИ term-probe (в т.ч. двумя группами) |
+| «Сколько движений в регистре реализации ТМЦ?» | 80 173 (эталон владельца 18.09; эталон: сверка 80 173 vs client-gold tsv 78 176 — обязательный ПРЕДШАГ C5; до сверы замок на механику (count без сужения), число — после сверы) | склеенное имя: wiki-пул И/ИЛИ term-probe (в т.ч. двумя группами) |
 | «сколько у нас вообще клиентов сейчас» | 361 | bm25-топ-3 (alias_top=3) |
 
 Каждый из 6 — путь ДО ЧИСЛА, включая цепочку кликов и шаг после sole (probe не убивает).
@@ -80,16 +71,16 @@ rescue НЕ зовётся, sole без меню запрещён). Проход
 ТОЧКА 2 НЕ выбирает сущность — только concepts-исключение term-групп. Если понятийное
 исключение ещё не вычислено (быстрый путь, лидер жив): ОДИН concepts-вызов того же
 резолвера (fail-soft, <=800 мс; 🔴 при первом fail — ОДИН inline-повтор в том же
-запросе; повтор-fail — прежний честный no_data) → понятийные группы исключаются:
+запросе; повтор-fail — честная деградация недоступности LLM: при живом лидере и покрытии (i)/(iii)/(iv) — continue; чисто-(ii)-группы без LLM — прежний честный исход, §6-граница, журнал) → понятийные группы исключаются:
 после exclude матрица (n_groups и probe — из ОДНОГО terms_for_probe; исключённые в
 n_groups не входят, diag-skipped): (1) остался НЕпонятийный unmatched → прежний
-честный no_data; (2) непонятийных unmatched НЕ осталось ∧ (лидер из wiki_full_pool/rescue ∨
-src_layer==2 ∨ settled) → continue БЕЗ exprs исключённых групп; (3) лидер kNN-only/
-урезанного каскада ∧ не settled → ОДНОРАЗОВЫЙ escalate в общий rescue ТОЧКИ 1
-(переverify полного пула; флаг diag запрета рекурсии; исходы по R-I/R-D; ТОЧКА 2
-при этом = «concepts + escalate», сущность выбирает только rescue). Проводка
-src_layer: колонка финального SELECT hybrid + поле dict карточки + запись при
-picked/leader; гард escalate только src_layer==1 ∧ не settled; замок «нет поля → не
+честный no_data; (2) непонятийных unmatched НЕ осталось ∧ (wiki_full_pool ∨ rescue ∨ settled ∨ (исключение чисто детерминированное (i)/(iii)/(iv) ∧ LLM недоступна дважды)) ∧ НЕ (ii)-only → continue БЕЗ exprs исключённых групп; (3) cascade_truncated (¬wiki_full_pool ∧ ¬rescue_origin — любой лидер урезанного каскада, вкл. src_layer==2) ∧ ¬settled ∧ ¬escalated, ИЛИ (ii)-only → ОДНОРАЗОВЫЙ escalate в общий rescue ТОЧКИ 1 (переverify полного пула; флаг diag
+запрета рекурсии; исходы — общие правила R-I/R-D; отсутствие поля src_layer ≠ src_layer==1);
+(4) иначе — явный R-D/прежний no_data (полная дизъюнкция, без fall-through). Проводка
+src_layer: колонка В КОНЦЕ финального SELECT hybrid → r[9] (КАРТА АКТУАЛЬНАЯ: r[8]=
+platform_prefix уже проецируется, парсер его НЕ читает, platform_kind — Python;
+r[7]=parent; r[9]=src_layer — НОВЫЙ, парсер читает его, r[8] не трогать) + поле dict
+карточки + запись при picked/leader; гард: cascade_truncated ∧ ¬settled ∧ ¬escalated; замок «нет поля → не
 подтверждён» до появления колонки ЗАПРЕЩЁН (вечный escalate). Уже вычисленные concepts (цепочка/rescue) — LLM не зовётся. Страховка: L67
 «honest_no −6 ровно» + «не ухудшает wrong».
 
@@ -100,8 +91,9 @@ clarify из прохода несёт в option внутренний rescue_con
 при fail); issue_decision прокидывает ОБА ключа в билет (whitelist-цикл z14:324–328; в
 публичный options-JSON моста НЕ идут — замок). При consume accumulate_resolution КОПИТ
 обе в resolved (z14:262–281 — явная правка накопления) — до конца цепочки.
-terms_for_probe читает ticket ∪ resolved ∪ diag (предикат: wiki_full_pool ∨
-rescue_concepts где-либо; иначе спит). Pending на consume: ОДИН повтор concepts; успех
+terms_for_probe читает ticket ∪ resolved ∪ diag; (iii)/(iv) применяются БЕЗУСЛОВНО
+при известном src (вкл. consume: src/focus/resolved.src; «спит» на быстром пути —
+только слой (ii)). Pending на consume: ОДИН повтор concepts; успех
 → полный список в resolved; повтор-fail → только (i), terms-only слово честно умирает
 (граница). Entity-опция: запрещены ТОЛЬКО measure_verdict / measure consume-bypass
 (answer_mode/short-circuit/measure-digest_form); entity-digest(count)+hint — как в
@@ -132,13 +124,18 @@ wiki_pick_from_cards / as-is verify / as-is outcome / as-is pool НЕ вызыв
 (не только первые 8 — z21:656/1177 не переиспользуются as-is), remaining AskDeadline,
 вердикты MERGE по src_table ВСЕХ батчей (sole-yes по первому батчу = срез), fail-soft.
 Исход — НОВОЙ функцией (штатные правила на ПОЛНОМ списке; ФОРМУЛА sole: ровно 1 yes ∧ ВСЕ прочие no ∧ |verdicts|==|pool| (не среза; копипаста z21:1110 запрещена); in-pool тай z21:1139–1148).
-🔴 Полнота = вердикты по всем карточкам ∧ wiki_rescue_truncated=false; при truncated —
-sole-yes ЗАПРЕЩЁН (меню/резолвер). ТАБЛИЦА (матрица provisional × трихотомия; sole — ТОЛЬКО от verify):
+🔴 Полнота sole = вердикты по всем карточкам ФИНАЛЬНОГО пула ∧ ¬ceiling_hit
+(ceiling_hit := pre-limit>24 — РАЗВЕДЁН с verdicts_incomplete батчей); при
+ceiling_hit sole ЗАПРЕЩЁН — меню всего пула + клик; при verdicts_incomplete —
+дозапрос батчей/шаг 4. ТАБЛИЦА (матрица provisional × трихотомия; sole — ТОЛЬКО от verify):
 (a) verify sole-yes (полный, truncated=false) → шаг 4 звон ОДИН: читается ТОЛЬКО
 concepts (трихотомия игнорируется) → concepts OK → post_verify + db-гомоним-гейт →
-sole/leader; fail concepts ∧ terms вне (i) → demote → меню всего пула;
-(b) in-pool тай → тот же звон, concepts-only (трихотомия игнорируется) → меню пиров
-wiki_homonym_db (D2, с rescue_concepts);
+sole/leader; fail concepts ∧ после детерминированного exclude остались группы вне (i)∪(iii)∪(iv) → demote: |pool|>=2 → меню всего пула, иначе R-D (покрытие (i)/(iii)/(iv) → continue по (2) ТОЧКИ 2);
+(r[9]=src_layer: 1=kNN, 2=struct/alias/named). (b) in-pool kind-гомоним после sole (z21:1139–1148) → тот же звон, concepts-only →
+меню пиров wiki_homonym_db (D2, с rescue_concepts);
+(b2) verify-clarify >=2 неотвергнутых (z21:1154–1166, полный пул) → тот же звон,
+concepts-only → меню tie-кандидатов reason=wiki_separability|wiki_rescue (skip+
+rebuild; НЕ через трихотомию — «никакие»/no_data при живых неотвергнутых запрещены);
 (c) none/unsure/неполнота/меню-None → звон, трихотомия ЧИТАЕТСЯ:
     «ровно один» ∧ НЕполный вердикт → дозапрос батчей → стал sole-yes → путь (a);
     остался non-sole → меню всего пула (sole по резолверу ЗАПРЕЩЁН — R-J);
@@ -147,8 +144,8 @@ wiki_homonym_db (D2, с rescue_concepts);
     «несколько»/fail/truncated → len>=2 меню всего пула; len==1 прежний исход/R-D;
     (меню — только |pool|>=2 во ВСЕХ ветках (c); |pool|==1 → R-D/политика);
     «никакие» ∧ полное покрытие → честный no_data (ПОЛИТИКА); truncated → меню.
-Любой clarify из прохода: reason=wiki_rescue → skip_empty_filter+rebuild (правка
-skip-ветки z21:980–998: условие расширяется с только-wiki_homonym_db на wiki_rescue);
+Любой clarify из прохода: reason=wiki_rescue → skip_empty_filter+rebuild (правка skip-ветки z21:980–998: условие расширяется с
+только-wiki_homonym_db на wiki_rescue ∨ (wiki_separability ∧ diag.wiki_full_pool));
 меню-None при живом пуле → деградация меню всего пула. post_verify после sole-yes при
 полноте: fail → честный исход (R6 как D2).
 
@@ -173,7 +170,9 @@ Fail-soft concepts ∧ terms вне (i) → provisional-leader ДЕМОТИРУ�
 резолвера ∪ (iii) span-склейки (>=2 токенов, в т.ч. через границы групп) со скалярным
 DL<=допуск против норм-хвоста/label ВЫБРАННОГО src (детерминированно; применяется
 ВСЕГДА до probe при известном src, в т.ч. быстрый путь; «спит» на быстром пути
-только (ii)). ЕДИНАЯ функция → исключаемые term-группы (норм-форма совпадает).
+только (ii)) ∪ (iv) детерминированный платформенный RE-исключатель ПОНЯТИЙ (отдельный словарь
+метаданных платформы 1С: «регистр*», «движен*» явно; НЕ named_platform_kinds-фильтр
+пула) — «регистре»/«движений» закрываются без LLM. ЕДИНАЯ функция → исключаемые term-группы (норм-форма совпадает).
 Применение: (iii) — ВСЕГДА до probe при известном src (единая точка terms_for_probe);
 (ii) — ТОЧКА 1 (до probe, diag) и ТОЧКА 2 (гейт unmatched) и клик/цепочка (ticket ∪
 resolved). На быстром пути без смерти спит только (ii) («петли» не задет — (iii)
@@ -248,7 +247,7 @@ checkpoint+исход → intent_json; один write в finally; ask_journal_te
   terms → exclude (не матч): эталон Q5 = count всего src БЕЗ match-сужения (замок).
 - R-D (контракт): no_data ТОЛЬКО при: пустой rescue_pool ∨ «никакие» при полном
   покрытии ∨ непонятийное отсутствующее значение ∨ честные post_verify/homonym-fail
-  после sole-yes при полноте ∨ не-sole |pool|==1 ∨ повтор-fail concepts. Иного нет.
+  после sole-yes при полноте ∨ не-sole |pool|==1 ∨ повтор-fail concepts ПРИ остающихся группах вне (i)∪(iii)∪(iv) (иначе — continue по (2) ТОЧКИ 2). Иного нет.
 - R-E: живой исход → 0 вызовов ТОЧКИ 1; off-topic → 0 вызовов.
 - R-F: unknown_words + unknown_terms_unmatched + checkpoint + исход на всех return
   точек 1/2; ОБА ключа в _journal_intent; один write; фикстура живого разбора Q1–4.
@@ -261,8 +260,9 @@ checkpoint+исход → intent_json; один write в finally; ask_journal_te
 - R-I: дедлайн/меню-None/fail-soft после входа → деградация: len>=2 → меню всего пула
   (digests best-effort); len==1 → прежний исход/R-D; 503 из прохода запрещён.
 - R-J: ★ один; резолвер ★/порядок/сужение/лидер не пишет.
-- R-K: |opts(wiki_rescue)| == |rescue_pool| (после дедупа; assert reason=wiki_rescue →
-  skip_empty_filter+rebuild).
+- R-K: ТОЛЬКО для reason=wiki_rescue — |opts| == |rescue_pool| (после дедупа;
+  skip_empty_filter+rebuild); tie-меню (b2) reason=wiki_separability — замок на
+  соответствие candidates тайа (не полный пул).
 - Перепрогон всех существующих (one_path 77, degenerate 97, digest 52, homonym 42,
   card_hybrid 79, ask_journal, step2, verify 144, mcp_ask 39+25+16) + поимённый список
   смены ожиданий no_data→меню (каскад z21, card_hybrid, step2, ask_journal).
