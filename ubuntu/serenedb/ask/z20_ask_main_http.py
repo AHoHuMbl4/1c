@@ -1665,6 +1665,32 @@ def _measure_zeroish(x):
         return False
 
 
+def _measure_sql_bool(v):
+    """Булево из psql --csv: t/f/true/false/0/1. Не голый bool(str).
+
+    F-hotfix: bool('f') и bool('false') в Python истинны; table-wide вердикт
+    помечал мёртвые меры живыми и уходил в ложный C1 вместо ветки (б).
+    """
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    if isinstance(v, (int, float)):
+        try:
+            return float(v) != 0.0
+        except (TypeError, ValueError):
+            return False
+    s = str(v).strip().lower()
+    if s in ("", "f", "false", "0", "no", "n", "null", "none"):
+        return False
+    if s in ("t", "true", "1", "yes", "y"):
+        return True
+    try:
+        return float(s) != 0.0
+    except (TypeError, ValueError):
+        return False
+
+
 def _measure_field_alive_rule(name, values=None, kind="numeric"):
     """Правило живости поля (замковые T-* без SQL). True = жива."""
     vals = list(values or [])
@@ -1920,8 +1946,10 @@ def _degeneracy_table_wide_select(src, measures, layer="nums"):
         for m in names:
             col = "try_cast(%s AS DECIMAL(38,10))" % (
                 '"' + str(m).replace('"', '""') + '"')
+            # 0/1 INTEGER: csv не отдаёт t/f; парсер всё равно _measure_sql_bool
             parts.append(
-                "count(%s) FILTER (%s IS NOT NULL AND %s <> 0) > 0" % (col, col, col))
+                "CASE WHEN count(%s) FILTER (%s IS NOT NULL AND %s <> 0) > 0 "
+                "THEN 1 ELSE 0 END" % (col, col, col))
             parts.append(
                 "max(abs(%s)) FILTER (%s IS NOT NULL)" % (col, col))
         folder_bits = []
@@ -1938,8 +1966,8 @@ def _degeneracy_table_wide_select(src, measures, layer="nums"):
         for m in names:
             expr = _degeneracy_nums_expr(m)
             parts.append(
-                "count(*) FILTER (%s IS NOT NULL AND %s <> 0) > 0"
-                % (expr, expr))
+                "CASE WHEN count(*) FILTER (%s IS NOT NULL AND %s <> 0) > 0 "
+                "THEN 1 ELSE 0 END" % (expr, expr))
             parts.append(
                 "max(abs(%s)) FILTER (%s IS NOT NULL)" % (expr, expr))
         sql = ("SELECT %s FROM %s WHERE src_table = %s AND %s"
@@ -1953,7 +1981,7 @@ def _degeneracy_table_wide_select(src, measures, layer="nums"):
     row = list(r[0]) + [None] * (2 * len(names))
     out = {}
     for i, m in enumerate(names):
-        alive = bool(row[2 * i])
+        alive = _measure_sql_bool(row[2 * i])
         try:
             mx = float(row[2 * i + 1] or 0)
         except (TypeError, ValueError):

@@ -1,3 +1,20 @@
+## 2026-09-18 (4) — F-hotfix: CSV-bool парсинг вердикта guard'а (боевой дефект пробы), красная ×3 ACCEPT [код][замер]
+
+- Живая проба после выката поймала дефект: «выручка за август» → выбор регистра →
+  «0, Поле Сумма во всех записях равно 0» — guard молчал. Причина: `_degeneracy_
+  table_wide_select` парсил булевы psql --csv как `bool(row[...])` — 'f'/'false' в
+  Python = True → все меры «живы» → ложный C1 «честный 0» до ветки (б). Замки не
+  ловили (моки отдавали питоновские bool, не CSV-строки).
+- Фикс: честный разбор `_measure_sql_bool` ('t'/'f'/'true'/'false'/'1'/'0', пусто/
+  NULL → False) + CASE 1/0 в SELECT; list/rank триггеры — по канону (None-ветка
+  hotfix-черновика откачена красной: сверх §1). Замок: +3 кейса F-HOTFIX (94→97).
+- Красная ×3: круг 1 — 2 ACCEPT/1 REJECT (сверх-канонное расширение снято),
+  круг 2 — ACCEPT ×3.
+Числа: замок 97/0; регрессия digest 52, one_path 78, compose 91, period_empty 30,
+homonym 42 — зелёная; боевое воспроизведение (curl measure=Сумма) — до фикса
+«0,00», после — меню живых мер (проверено повторной пробой).
+Доки: канон .claude/state/design-b.md §1.
+
 ## 2026-09-18 (3) — D3 ИСПОЛНЕНА: ask_journal feedback (measure_degenerate + decision_id), красная ×3 ACCEPT (круг 1) [код][замер]
 
 - `ubuntu/serenedb/ask_journal.sql`: идемпотентные ALTER — measure_degenerate JSON

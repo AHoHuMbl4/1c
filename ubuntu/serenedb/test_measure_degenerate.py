@@ -1252,6 +1252,75 @@ try:
 finally:
     _restore()
 
+# F-HOTFIX-CSV-BOOL / battle выручка→Сумма
+# Бой: psql --csv отдаёт alive как 'f'/'t'. bool('f')==True → ложный C1.
+try:
+    A.deadline_hit = lambda rid=None: False
+    A.measures_of = lambda src: list(ALL_MEAS)
+
+    def _csv_bool_psql(sql):
+        s = sql.lower()
+        if "query_table" in s:
+            # live: Сумма мертва, соседи живы (строки как у --csv)
+            return [["f", "0", "t", "4218825.39", "t", "50.0"]]
+        return [["f", "0", "f", "0", "f", "0"]]
+
+    A.psql = _csv_bool_psql
+    raw_nums = A._degeneracy_table_wide_select(SRC, ALL_MEAS, layer="nums")
+    t("F-HOTFIX sql_bool 'f' → not alive",
+      (raw_nums.get(MEAS_DEAD) or {}).get("alive") is False
+      and hasattr(A, "_measure_sql_bool")
+      and A._measure_sql_bool("f") is False
+      and A._measure_sql_bool("t") is True
+      and A._measure_sql_bool("false") is False,
+      raw_nums)
+
+    # полный gate: nums все 'f', live соседи 't' → меню (б), не C1
+    calls = _install_common(verdict={
+        MEAS_DEAD: {"alive": False, "max_abs": 0.0, "layer": "nums"},
+        MEAS_LIVE: {"alive": True, "max_abs": 4218825.39, "layer": "live"},
+        MEAS_LIVE2: {"alive": True, "max_abs": 100.0, "layer": "live"},
+    })
+    # подмена psql поверх _install_common: CSV-строки t/f
+    def _battle_psql(sql):
+        calls["n"] += 1
+        calls["sqls"].append(sql)
+        s = sql.lower()
+        if "filter" in s and "search_corpus" in s:
+            return [["f", "0", "f", "0", "f", "0"]]
+        if "filter" in s and "query_table" in s:
+            return [["f", "0", "t", "4218825.39", "t", "100"]]
+        if "from search_tables" in s:
+            return [("регистр продаж",)]
+        return []
+    A.psql = _battle_psql
+    A.rank_intent_from = lambda *a, **k: False
+    out_b = _call_gate(
+        agg=_base_agg(sum=0.0, min=0.0, max=0.0, count=2231, count_amount=2231),
+        intent=_intent(want="sum", measure_word="выручка"),
+        measure=MEAS_DEAD)
+    t("F-HOTFIX battle want=sum CSV-f → clarify меню",
+      (out_b or {}).get("kind") == "clarify"
+      and len((out_b or {}).get("options") or []) >= 2
+      and ((out_b or {}).get("diag") or {}).get("measure_degenerate_guard")
+      == "worked",
+      {"kind": (out_b or {}).get("kind"),
+       "nopt": len((out_b or {}).get("options") or []),
+       "diag": (out_b or {}).get("diag")})
+
+    # list + count_amount=None — канон §1: None ≠ повод (F-hotfix2)
+    trig = A._measure_degenerate_triggered
+    fk, why = trig(
+        money=True, measure=MEAS_DEAD, slot_mode="list", form="number",
+        grain="row", compute="",
+        agg=_base_agg(sum=0.0, count=2231, count_amount=None),
+        intent=_intent(want="list"), plan=_plan(""), diag=_diag())
+    t("F-HOTFIX list ca=None zeroish sum → silent",
+      fk is None, (fk, why))
+finally:
+    _restore()
+
+
 print("\nИТОГ:", "ok — %d проверок" % PASS if not FAIL
       else "FAIL — %d из %d: %s" % (
           len(FAIL), PASS + len(FAIL), ", ".join(FAIL[:25])))
