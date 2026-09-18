@@ -1,3 +1,50 @@
+## 2026-09-18 (7) — волна C1+C2 кодом: резолверный проход полного пула принят красной ACCEPT ×3 (круг 7) [код][замер]
+
+- Реализован канон design-c.md §2 в 4 файлах (z21_wiki_choice.py +981, z20_ask_main_http.py
+  +503, wiki_card_hybrid.sql +59, z14_clarify_memory.py +14; всего 1525/−42): ТОЧКА 1 в
+  wiki_primary_entity_cascade (вход — любой отказ каскада кроме wiki_none_empty/off-topic,
+  один раз, diag wiki_full_pool); ТОЧКА 2 перед no_data «значения не найдены» (матрица
+  (1)–(4) без fall-through, одноразовый escalate); rescue_pool = hybrid-SQL в rescue-режиме
+  (96/24, БЕЗ axis_ok/filtered-срезов, struct_norm гардится :rescue_mode=1); норм-слагаемое —
+  span-склейки (≥2 токена, ≥8 символов) против хвоста src_table штатной
+  damerau_levenshtein (допуск 2, lower); батч-verify с enrich на каждый слайс, НОВАЯ
+  outcome-функция (sole = 1 yes ∧ прочие no ∧ |verd|==|pool| ∧ ¬ceiling_hit, pre-limit
+  через LIMIT TOP+1); таблица (a)/(b)/(b2)/(c); LLM-резолвер — один вызов на проход
+  (даже при sole), ★ только llm_option_highlight; билеты rescue_concepts(+pending) в
+  z14 whitelist/accumulate (в публичный JSON моста не идут); r[9]=src_layer.
+- Красная ×3 на дифф: 7 кругов, 21 вердикт (логи cursor-run-redc12r{1..7}-{1..3}.log).
+  Круги: 1 — 7 блоков (норм-склейка всем вопросом; ceiling-эвристика; «движен*» вне
+  класса — п.0); 2 — 6 (named-фильтр молча резал rescue; escalate не одноразовый;
+  запрет в SYS-промте); 3 — 2 кодовых + граф-артефакт скоупа (в белом списке красной
+  граф теперь явно); 4 — 1 (escalate менял сущность без пересчёта settle — риск
+  неверного числа); 5 — раскол прочтения «пустой concepts» (1 красный против канона);
+  6 — 3×REJECT с единогласным разворотом: «успешный пустой concepts = отвечено, LLM
+  повторно не зовётся» (по дословным фразам канона); 7 — 3×ACCEPT. Плюс микро-гард
+  :rescue_mode=1 в struct_norm (заметка круга 7 №1: быстрый путь структурно идентичен
+  HEAD независимо от семантики unnest([])).
+- Замки (исполнитель + красная + оркестратор, трижды): one_path 78/0, measure_degenerate
+  97/0, measure_digest 52/0, wiki_homonym_menu 42/0, wiki_card_hybrid 67/0, step2 36/0,
+  ask_journal 21/0 (live skip). test_wiki_candidate_verify падает NameError
+  finalize_clarify_menu И на чистом HEAD (worktree-проверка оркестратора) — не регресс
+  волны, долг C5.
+- Долги волны (заметки красной, не блоки): wiki_rescue_truncated занижен при pre>25
+  (boolean ceiling_hit верен); мёртвый алиас _point2_gather_concepts; устаревшие
+  file:line в отчётах исполнителей (код верен); label-санитизация в wiki_pool_resolver;
+  ложные блоки check-prompt-rules на z20 (LLM-строки) — исполнители обходили
+  python-heredoc по правилу 7.
+- Снайпер коммита (штатный смысловой гейт): локальная Python-реализация Damerau в z21
+  убрана — (iii)-сверка span↔хвост/label выбранного src теперь ОДНИМ SQL-запросом на
+  проход штатной damerau_levenshtein (кэш, fail-soft, переиспользование при
+  src_layer=2); расход локальной копии с движком (1 vs 2 на эталонной паре) устранён
+  [код]. Допуск 2 санкционирован замороженным каноном design-c §2 шаг 1 / §3.
+- Граф mcp-memory.json: наблюдения C1+C2 по z20/z21/wiki_card_hybrid тем же коммитом
+  (гейт check-graph-fresh). Выкат на окно и живые пробы 6 вопросов — волна после
+  C4/C3/C5 (план памятки).
+Числа: замки 78/0, 97/0, 52/0, 42/0, 67/0, 36/0, 21/0 (live skip); красная 21 вердикт
+за 7 кругов, ACCEPT ×3 на круге 7; дифф 1525(+)/42(−) по 4 файлам кода + граф.
+Доки: Sql › Functions › Text Functions › damerau_levenshtein; Sql › Query syntax ›
+SELECT › unnest; канон .claude/state/design-c.md §2.
+
 ## 2026-09-18 (6) — линия C «один путь»: факты 4 линз + дизайн v19 круга-2 (красная круг-1 3×REJECT влита) [замер]
 
 - Заказ (слово владельца «поехали» после компакта): 6/67 отказов при живых данных → 0;

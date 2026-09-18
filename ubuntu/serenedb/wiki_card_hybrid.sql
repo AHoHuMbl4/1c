@@ -1,9 +1,10 @@
 \set ON_ERROR_STOP on
 -- Б3: гибридный пул — kNN top-N ∪ структурные носители оси, затем сужение.
--- Доки: Vector Search › k-nearest-neighbor (kNN); ai_embed — Sql › Functions › AI Functions.
+-- Доки: Vector Search › k-nearest-neighbor (kNN); ai_embed — Sql › Functions › AI Functions;
+--       Sql › Functions › Search Functions › damerau_levenshtein (Text Similarity).
 -- Параметры: question, question_raw, embed_model, embed_secret, embed_dim,
 --   embed_maxlen, knn_limit, action_class, action_axis, want_agg, stem_dict,
---   pick_limit.
+--   pick_limit, alias_top, measure, rescue_mode, norm_glues, norm_dist.
 
 WITH q AS (
   SELECT ai_embed(substr(:'question', 1, :embed_maxlen),
@@ -194,6 +195,31 @@ struct_named AS (
                                coalesce(t.label, ''))),
                        x -> length(x) >= 4))
 ),
+-- C1 rescue: норм-слагаемое — скалярный damerau_levenshtein: любой span-склейки
+-- вопроса (UNNEST :norm_glues, длина >=8) против хвоста src_table (после
+-- первого «_»). Допуск :norm_dist (живой замер 18.09: реализациитмц↔
+-- реализациятмц = 2). Keyword / replace / ts_levenshtein по полю — нет.
+-- Гард :rescue_mode=1: на быстром пути слой структурно выключен (красная 7 №1).
+-- Доки: Sql › Functions › Search Functions › damerau_levenshtein;
+--       Sql › Query syntax › SELECT › unnest.
+struct_norm AS (
+  SELECT c.src_table, c.name, c.description, c.axes, c.measures, c.covered,
+         c.emb <=> (SELECT qv FROM q) AS distance,
+         2 AS src_layer
+    FROM search_wiki_entity_card c
+   WHERE :rescue_mode = 1
+     AND position('_' IN c.src_table) > 0
+     AND EXISTS (
+           SELECT 1
+             FROM unnest(:norm_glues) AS g(glue)
+            WHERE length(g.glue) >= 8
+              AND damerau_levenshtein(
+                    g.glue,
+                    lower(replace(
+                      substring(c.src_table FROM position('_' IN c.src_table) + 1),
+                      ' ', ''))) <= :norm_dist
+         )
+),
 pool AS (
   SELECT DISTINCT ON (src_table) src_table, name, description, axes, measures,
          covered, distance, src_layer
@@ -207,6 +233,7 @@ pool AS (
       UNION ALL SELECT * FROM struct_catalog_event
       UNION ALL SELECT * FROM struct_alias
       UNION ALL SELECT * FROM struct_measure
+      UNION ALL SELECT * FROM struct_norm
     ) u
    ORDER BY src_table, src_layer DESC, distance
 ),
@@ -254,10 +281,26 @@ filtered AS (
             AND (p.src_table LIKE 'catalog_%'
                  OR p.src_table LIKE 'accumulationregister_%'))
          )
+),
+-- rescue_mode=1: без axis_ok/filtered (diag rescue_no_axis_filter в Python).
+selected AS (
+  SELECT p.src_table, p.name, p.description, p.axes, p.measures, p.covered,
+         p.distance, p.src_layer, coalesce(m.parent, '') AS parent
+    FROM pool p
+    LEFT JOIN meta m ON m.src_table = p.src_table
+   WHERE :rescue_mode = 1
+  UNION ALL
+  SELECT f.src_table, f.name, f.description, f.axes, f.measures, f.covered,
+         f.distance, f.src_layer, coalesce(m.parent, '') AS parent
+    FROM filtered f
+    LEFT JOIN meta m ON m.src_table = f.src_table
+   WHERE :rescue_mode = 0
 )
 -- Колонки = wiki_hybrid_pool: src_table, name, description, axes, measures,
--- covered, distance, parent, platform_prefix. rk в SELECT ломал src_table→«1».
--- Доки: Sql › Functions › Vector Functions › knn; AI Functions › ai_embed.
+-- covered, distance, parent, platform_prefix, src_layer (последняя).
+-- rk в SELECT ломал src_table→«1».
+-- Доки: Sql › Functions › Vector Functions › knn; AI Functions › ai_embed;
+--       Sql › Functions › Search Functions › damerau_levenshtein.
 SELECT f.src_table,
        f.name,
        substr(f.description, 1, 120) AS description_head,
@@ -265,9 +308,9 @@ SELECT f.src_table,
        f.measures,
        f.covered,
        round(f.distance::numeric, 4) AS distance,
-       coalesce(m.parent, '') AS parent,
-       split_part(f.src_table, '_', 1) AS platform_prefix
-  FROM filtered f
-  LEFT JOIN meta m ON m.src_table = f.src_table
+       f.parent,
+       split_part(f.src_table, '_', 1) AS platform_prefix,
+       f.src_layer
+  FROM selected f
  ORDER BY f.src_layer DESC, f.distance, f.src_table
  LIMIT :pick_limit;

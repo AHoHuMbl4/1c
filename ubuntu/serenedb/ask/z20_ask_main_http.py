@@ -758,7 +758,7 @@ Reply with JSON only, no text outside it:
 # Все НАШИ системные сообщения в одном месте: по ним `prompt_leak` ловит утечку
 # инструкции в ответ клиенту точным совпадением строки (`№27`).
 OUR_PROMPTS = [INTENT_SYS, AXIS_PICK_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS,
-               WIKI_PICK_SYS, WIKI_VERIFY_SYS]
+               WIKI_PICK_SYS, WIKI_VERIFY_SYS, WIKI_RESOLVER_SYS]
 
 def _coverage_answer(question, diag, t0):
     """Ответ о полноте данных — из переписи, а не из корпуса (п. 13).
@@ -2872,6 +2872,206 @@ def kind_prior_sort(opts, intent=None, plan=None):
     return sorted(opts, key=_rank)
 
 
+
+def _gather_rescue_concepts(trusted=None, resolved=None, diag=None):
+    """Merge rescue_concepts из ticket ∪ resolved ∪ diag; пустые списки не затирают."""
+    concepts = []
+    for bag in (trusted, resolved, diag):
+        if not isinstance(bag, dict):
+            continue
+        c = bag.get("rescue_concepts")
+        if isinstance(c, list):
+            concepts.extend(c)
+        elif c:
+            concepts.append(c)
+    return concepts
+
+
+def terms_for_probe(intent, *, trusted=None, resolved=None, diag=None,
+                    src=None, question="", exact_matched=None):
+    """Единая точка подготовки terms перед probe (ticket ∪ resolved ∪ diag).
+
+    Понятийные группы (i)–(iv) исключаются; n_groups и probe — из одного результата.
+    """
+    intent = intent or {}
+    terms = list(intent.get("terms") or [])
+    concepts = _gather_rescue_concepts(trusted, resolved, diag)
+    try:
+        excl = conceptual_term_group_norms(
+            terms, intent=intent, concepts=concepts, src=src,
+            question=question or "", exact_matched=exact_matched)
+    except NameError:
+        excl = set()
+    kept, skipped = filter_terms_by_concepts(terms, excl, diag=diag)
+    if diag is not None:
+        diag["terms_for_probe_n"] = len(kept)
+        if concepts:
+            diag.setdefault("rescue_concepts", list(concepts))
+    return kept
+
+
+def _point2_gather_concepts(trusted=None, resolved=None, diag=None):
+    """То же слияние, что terms_for_probe — пустой [] в ticket не затирает смысл."""
+    return _gather_rescue_concepts(trusted, resolved, diag)
+
+
+
+def _exact_matched_norms(terms, kinds):
+    """Нормы term-групп с kind=exact из результата probe."""
+    terms = list(terms or [])
+    kinds = kinds or {}
+    out = []
+    for gi, kind in kinds.items():
+        if not isinstance(gi, int) or kind != "exact":
+            continue
+        if gi < 0 or gi >= len(terms):
+            continue
+        n = _term_group_norm(terms[gi])
+        if n:
+            out.append(n)
+    return out
+
+
+def _point2_unmatched_gate(question, intent, diag, cut, t0, *, src=None,
+                           trusted=None, resolved=None, probe_terms=None,
+                           kinds=None, preds=None, plan=None, by=None,
+                           exact_matched=None):
+    """ТОЧКА 2 перед no_data unmatched: матрица (1)-(4), без выбора сущности."""
+    diag = diag if isinstance(diag, dict) else {}
+    intent = intent or {}
+    probe_terms = list(probe_terms or [])
+    kinds = kinds or {}
+    if exact_matched is None:
+        exact_matched = _exact_matched_norms(probe_terms, kinds)
+    # settled: только ticket/resolved/entity_from_ticket — не src текущего pick
+    # (канон ТОЧКА 2 (3): escalate для лидера урезанного каскада;
+    # src по-прежнему кормит (iii) в conceptual_term_group_norms ниже).
+    settled = bool(
+        (isinstance(trusted, dict) and trusted.get("src"))
+        or (isinstance(resolved, dict) and resolved.get("src"))
+        or diag.get("entity_from_ticket"))
+    wiki_full = bool(diag.get("wiki_full_pool"))
+    rescue_origin = bool(
+        diag.get("wiki_rescue_origin") or diag.get("wiki_rescue_escalated"))
+    escalated = bool(diag.get("wiki_rescue_escalated"))
+    cascade_truncated = (not wiki_full) and (not rescue_origin)
+
+    concepts = _point2_gather_concepts(trusted, resolved, diag)
+    llm_unavailable = False
+    # вычислено = ключ-список (в т.ч. пустой) при ¬pending; pending → consume
+    _bags = (trusted, resolved, diag)
+    _pending = any(
+        isinstance(bag, dict) and bag.get("rescue_concepts_pending")
+        for bag in _bags)
+    has_concepts_key = any(
+        isinstance(bag, dict)
+        and isinstance(bag.get("rescue_concepts"), list)
+        for bag in _bags)
+    # LLM в ТОЧКЕ 2 только если ключа нет вовсе и pending нет
+    if not has_concepts_key and not _pending:
+        cards = []
+        if src:
+            cards = [{
+                "src_table": src,
+                "name": human_table_label(src) or src,
+                "description": "",
+            }]
+        if not cards:
+            cards = [{"src_table": "?", "name": "?", "description": ""}]
+        r = wiki_concepts_call(question, cards, diag)
+        if r.get("ok"):
+            concepts = list(r.get("concepts") or [])
+            # успех (в т.ч. пустой) = отвечено
+            diag["rescue_concepts"] = concepts
+        else:
+            llm_unavailable = True
+            diag.pop("rescue_concepts", None)
+
+    excl = conceptual_term_group_norms(
+        intent.get("terms") or [], intent=intent, concepts=concepts,
+        src=src, question=question, exact_matched=exact_matched)
+    det_excl = conceptual_term_group_norms(
+        intent.get("terms") or [], intent=intent, concepts=[],
+        src=src, question=question, exact_matched=exact_matched)
+
+    non_concept_unmatched = []
+    concept_unmatched = []
+    for i, g in enumerate(probe_terms):
+        if isinstance(i, int) and i in kinds:
+            continue  # matched (exact/slop/fuzzy/part/resolved/corpus_literal)
+        n = _term_group_norm(g)
+        if (n and n in excl) or _group_is_platform_only(g):
+            concept_unmatched.append(g)
+        else:
+            non_concept_unmatched.append(g)
+
+    # (1) остался непонятийный unmatched → прежний no_data
+    if non_concept_unmatched:
+        diag["point2_branch"] = 1
+        return None
+
+    # ii_only: покрытие ТОЛЬКО через (ii); при известном src (iii) — det
+    ii_only = bool(concept_unmatched) and all(
+        _term_group_norm(g) not in det_excl for g in concept_unmatched)
+    deterministic_only = bool(concept_unmatched) and all(
+        _term_group_norm(g) in det_excl for g in concept_unmatched)
+    # пустой concept_unmatched после exclude — det coverage
+    if not concept_unmatched and not non_concept_unmatched:
+        deterministic_only = True
+        ii_only = False
+
+    kept, _sk = filter_terms_by_concepts(
+        intent.get("terms") or [], excl, diag=diag)
+
+    # (2) continue — settled → даже при чистом (ii); ii_only без settled → (3)
+    cond2 = (
+        (wiki_full or rescue_origin or settled
+         or (deterministic_only and llm_unavailable))
+        and (not ii_only or settled)
+    )
+    if cond2:
+        diag["point2_branch"] = 2
+        return {"continue": True, "terms": kept}
+
+    # (3) escalate — только not settled; ii_only тоже только тогда (R-G consume)
+    want_escalate = (
+        not settled
+        and ((cascade_truncated and not escalated) or ii_only)
+    )
+    if want_escalate:
+        if wiki_full or escalated:
+            diag["point2_branch"] = 4
+            return None
+        diag["point2_branch"] = 3
+        diag["wiki_point2_escalate"] = True
+        _resc = wiki_rescue_full_pool_pass(
+            question, intent, diag, cut, t0,
+            by=by or {}, match="", preds=preds, plan=plan or {},
+            origin="escalate")
+        if isinstance(_resc, dict):
+            if _resc.get("kind") in ("no_data", "clarify", "answer"):
+                return _resc
+            if _resc.get("picked"):
+                # список (в т.ч. пустой) = отвечено; нет ключа → снять
+                _rc = _resc.get("rescue_concepts")
+                if isinstance(_rc, list):
+                    diag["rescue_concepts"] = list(_rc)
+                else:
+                    diag.pop("rescue_concepts", None)
+                if _resc.get("rescue_concepts_pending"):
+                    diag["rescue_concepts_pending"] = True
+                else:
+                    diag.pop("rescue_concepts_pending", None)
+                return _resc
+        return None
+
+    # (4) иначе
+    diag["point2_branch"] = 4
+    return None
+
+
+
+
 def llm_option_highlight(question, opts, diag=None, *, timeout_sec=None):
     """Highlight recommended option: ★ APPEND at end of HINT (круг 25)."""
     opts = list(opts or [])
@@ -3918,19 +4118,262 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         raise AskDeadline("deadline")
 
     # Row-filter после меню: unmatched → no_data (не выбиратель сущности).
-    exprs, kinds = probe(intent.get("terms") or [])
+    # Exact из probe kinds → (ii)-exclude после discovery-probe ((i)/(iii)/(iv));
+    # финал — один terms_for_probe → n_groups+exprs.
+    _raw_terms = list(intent.get("terms") or [])
+    _det_excl = conceptual_term_group_norms(
+        _raw_terms, intent=intent, concepts=[], src=src,
+        question=question, exact_matched=None)
+    _disc_terms, _ = filter_terms_by_concepts(_raw_terms, _det_excl)
+    _disc_exprs, _disc_kinds = probe(_disc_terms)
+    _exact = _exact_matched_norms(_disc_terms, _disc_kinds)
+    _probe_terms = terms_for_probe(
+        intent, trusted=trusted, resolved=resolved, diag=diag,
+        src=src, question=question, exact_matched=_exact)
+    exprs, kinds = probe(_probe_terms)
     diag["match_by"] = {k: v for k, v in (kinds or {}).items() if k != "_resolved"}
     if isinstance(kinds, dict) and kinds.get("_resolved"):
         diag["resolved"] = kinds["_resolved"]
-    n_groups = len(intent.get("terms") or [])
+    _exact = _exact_matched_norms(_probe_terms, kinds)
+    n_groups = len(_probe_terms)
     matched_groups = matched_group_count(kinds)
     if n_groups > 0 and matched_groups < n_groups:
         diag["unmatched_terms"] = n_groups - matched_groups
-        шаг("значения не найдены", групп=n_groups - matched_groups)
-        return {"partial": cut or None, "kind": "no_data", "sources": [],
-                "text": NO_DATA_TEXT or refuse_text(question),
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                   reason="значения из вопроса не найдены в данных")}
+        # --- ТОЧКА 2: concepts-исключение; матрица (1)-(4) без fall-through ---
+        _p2 = _point2_unmatched_gate(
+            question, intent, diag, cut, t0,
+            src=src, trusted=trusted, resolved=resolved,
+            probe_terms=_probe_terms, kinds=kinds,
+            preds=preds, plan=plan, by=None,
+            exact_matched=_exact)
+        if _p2 is not None:
+            if isinstance(_p2, dict) and _p2.get("kind"):
+                return _p2
+            if isinstance(_p2, dict) and _p2.get("continue"):
+                _probe_terms = list(_p2.get("terms") or _probe_terms)
+                exprs, kinds = probe(_probe_terms)
+                diag["match_by"] = {
+                    k: v for k, v in (kinds or {}).items() if k != "_resolved"}
+                n_groups = len(_probe_terms)
+                matched_groups = matched_group_count(kinds)
+                if n_groups > 0 and matched_groups < n_groups:
+                    diag["unmatched_terms"] = n_groups - matched_groups
+                    шаг("значения не найдены", групп=n_groups - matched_groups)
+                    return {"partial": cut or None, "kind": "no_data", "sources": [],
+                            "text": NO_DATA_TEXT or refuse_text(question),
+                            "diag": _diag_pack(
+                                diag, sec=round(time.time() - t0, 2),
+                                reason="значения из вопроса не найдены в данных")}
+            elif isinstance(_p2, dict) and _p2.get("picked"):
+                # escalate заменил сущность — settle меры/оси заново под новый src
+                # (канон ТОЧКА 2 (3): ответ по новой сущности; старый settle не годится).
+                picked = list(_p2["picked"])
+                src = picked[0] if picked else src
+                diag["src"] = src
+                diag["focus"] = src
+                if _p2.get("plan") is not None:
+                    plan = _p2.get("plan") or {}
+                if _p2.get("marks") is not None:
+                    marks = _p2.get("marks") or {}
+                # сбросить settle-метки прежнего src — не подсовывать в SQL/меню
+                for _sk in (
+                        "count_no_measure_menu", "count_axis_defer_measure",
+                        "kind_axis_sole", "axis_clarify_skipped",
+                        "axis_from_choice", "rank_axis_alts",
+                        "measure_pick_unresolved", "measure_proven_human",
+                        "measure", "grain", "axis_col", "axis_form", "settle"):
+                    diag.pop(_sk, None)
+                _ax_cd = []
+                if src:
+                    try:
+                        _ax_cd = refcols_of(src)
+                    except RuntimeError:
+                        _ax_cd = []
+                _count_defer = bool(
+                    src and count_defer_measure_clarify(intent, src, _ax_cd))
+                if _count_defer:
+                    diag["count_no_measure_menu"] = True
+                    diag["count_axis_defer_measure"] = True
+                measure, measure_alts = None, []
+                if not _count_defer:
+                    measure, measure_alts = _settle_measure(
+                        src, intent, plan, measure_pick, trusted, resolved, diag)
+                    if measure_alts and len(measure_alts) > 1:
+                        _m_opts = _measure_menu_opts(src, measure_alts)
+                        _m_menu = readings_menu(
+                            question, "measure", _m_opts, diag, cut, t0,
+                            reason="уточните меру")
+                        if _m_menu:
+                            шаг("меню прочтений меры", сколько=len(_m_opts),
+                                после="escalate")
+                            return _m_menu
+                    if not measure and measure_alts and len(measure_alts) == 1:
+                        measure = measure_alts[0]
+                        measure_alts = []
+                diag["measure"] = measure
+                шаг("величина", величина=(measure or "—"),
+                    подходящих=len(measure_alts or []), после="escalate")
+                grain_dec, axes, axis_alts = _settle_axis(
+                    src, intent, plan, question, trusted, resolved, diag, measure)
+                if axis_alts and len(axis_alts) > 1:
+                    _a_opts = axis_clarify_options(src, axes)
+                    if len(_a_opts) > 1:
+                        _a_menu = readings_menu(
+                            question, "axis", _a_opts, diag, cut, t0,
+                            reason="уточните ось")
+                        if _a_menu:
+                            шаг("меню прочтений оси", сколько=len(_a_opts),
+                                после="escalate")
+                            return _a_menu
+                if (src and not grain_dec.get("col")
+                        and _want in ("count", "")
+                        and not choice_proven(trusted, "axis")
+                        and not (resolved or {}).get("axis")):
+                    _kax = live_axis_col_candidates(
+                        intent, src, axes,
+                        named_entity=_wiki_named_entity(diag, src))
+                    if len(_kax) > 1:
+                        _sub = [a for a in (axes or [])
+                                if a.get("col") in set(_kax)]
+                        _k_opts = axis_clarify_options(src, _sub)
+                        if len(_k_opts) > 1:
+                            _k_menu = readings_menu(
+                                question, "axis", _k_opts, diag, cut, t0,
+                                reason="уточните ось")
+                            if _k_menu:
+                                шаг("меню kind-оси count", сколько=len(_k_opts),
+                                    после="escalate")
+                                return _k_menu
+                    elif len(_kax) == 1:
+                        grain_dec = dict(grain_dec or {})
+                        grain_dec["col"] = _kax[0]
+                        grain_dec["grain"] = "group"
+                        diag["kind_axis_sole"] = _kax[0]
+                if (src and stock_count_aggregate_without_subject(
+                        intent, plan, question)
+                        and (measure or _count_defer or grain_dec.get("col"))):
+                    _s_opts = stock_net_register_menu_opts(intent, question)
+                    if _s_opts and len(_s_opts) > 1:
+                        _s_menu = readings_menu(
+                            question, "entity", _s_opts, diag, cut, t0,
+                            reason="уточните регистр")
+                        if _s_menu:
+                            шаг("меню регистров stock-net", сколько=len(_s_opts),
+                                после="escalate")
+                            return _s_menu
+                diag["grain"] = grain_dec.get("grain")
+                diag["axis_col"] = grain_dec.get("col")
+                diag["axis_form"] = grain_dec.get("form")
+                diag["settle"] = {
+                    "src": src, "measure": measure,
+                    "period": (intent.get("period") or {}).get("interpretation_id")
+                              or (intent.get("period") or {}).get("from"),
+                    "axis": grain_dec.get("col"),
+                    "compare": bool(_cmp),
+                }
+                # exact/probe заново по НОВОМУ src (старый _exact от pre-escalate)
+                _det_excl2 = conceptual_term_group_norms(
+                    _raw_terms, intent=intent, concepts=[], src=src,
+                    question=question, exact_matched=None)
+                _disc_terms2, _ = filter_terms_by_concepts(_raw_terms, _det_excl2)
+                _disc_exprs2, _disc_kinds2 = probe(_disc_terms2)
+                _exact = _exact_matched_norms(_disc_terms2, _disc_kinds2)
+                _probe_terms = terms_for_probe(
+                    intent, trusted=trusted, resolved=resolved, diag=diag,
+                    src=src, question=question, exact_matched=_exact)
+                exprs, kinds = probe(_probe_terms)
+                diag["match_by"] = {
+                    k: v for k, v in (kinds or {}).items() if k != "_resolved"}
+                if isinstance(kinds, dict) and kinds.get("_resolved"):
+                    diag["resolved"] = kinds["_resolved"]
+                _exact = _exact_matched_norms(_probe_terms, kinds)
+                n_groups = len(_probe_terms)
+                matched_groups = matched_group_count(kinds)
+                if n_groups > 0 and matched_groups < n_groups:
+                    diag["unmatched_terms"] = n_groups - matched_groups
+                    # escalate сожжён (wiki_full_pool); матрица (1)/(2)/(4), без (3)
+                    _p2b = _point2_unmatched_gate(
+                        question, intent, diag, cut, t0,
+                        src=src, trusted=trusted, resolved=resolved,
+                        probe_terms=_probe_terms, kinds=kinds,
+                        preds=preds, plan=plan, by=None,
+                        exact_matched=_exact)
+                    if _p2b is not None:
+                        if isinstance(_p2b, dict) and _p2b.get("kind"):
+                            return _p2b
+                        if isinstance(_p2b, dict) and _p2b.get("continue"):
+                            _probe_terms = list(_p2b.get("terms") or _probe_terms)
+                            exprs, kinds = probe(_probe_terms)
+                            diag["match_by"] = {
+                                k: v for k, v in (kinds or {}).items()
+                                if k != "_resolved"}
+                            n_groups = len(_probe_terms)
+                            matched_groups = matched_group_count(kinds)
+                            if n_groups > 0 and matched_groups < n_groups:
+                                diag["unmatched_terms"] = (
+                                    n_groups - matched_groups)
+                                шаг("значения не найдены",
+                                    групп=n_groups - matched_groups)
+                                return {
+                                    "partial": cut or None, "kind": "no_data",
+                                    "sources": [],
+                                    "text": (NO_DATA_TEXT
+                                             or refuse_text(question)),
+                                    "diag": _diag_pack(
+                                        diag, sec=round(time.time() - t0, 2),
+                                        reason=("значения из вопроса "
+                                                "не найдены в данных")),
+                                }
+                        elif isinstance(_p2b, dict) and _p2b.get("picked"):
+                            # escalate уже сожжён — picked здесь не ожидаем
+                            шаг("значения не найдены",
+                                групп=n_groups - matched_groups)
+                            return {
+                                "partial": cut or None, "kind": "no_data",
+                                "sources": [],
+                                "text": NO_DATA_TEXT or refuse_text(question),
+                                "diag": _diag_pack(
+                                    diag, sec=round(time.time() - t0, 2),
+                                    reason=("значения из вопроса "
+                                            "не найдены в данных")),
+                            }
+                        else:
+                            шаг("значения не найдены",
+                                групп=n_groups - matched_groups)
+                            return {
+                                "partial": cut or None, "kind": "no_data",
+                                "sources": [],
+                                "text": NO_DATA_TEXT or refuse_text(question),
+                                "diag": _diag_pack(
+                                    diag, sec=round(time.time() - t0, 2),
+                                    reason=("значения из вопроса "
+                                            "не найдены в данных")),
+                            }
+                    else:
+                        шаг("значения не найдены",
+                            групп=n_groups - matched_groups)
+                        return {
+                            "partial": cut or None, "kind": "no_data",
+                            "sources": [],
+                            "text": NO_DATA_TEXT or refuse_text(question),
+                            "diag": _diag_pack(
+                                diag, sec=round(time.time() - t0, 2),
+                                reason=("значения из вопроса "
+                                        "не найдены в данных")),
+                        }
+            else:
+                шаг("значения не найдены", групп=n_groups - matched_groups)
+                return {"partial": cut or None, "kind": "no_data", "sources": [],
+                        "text": NO_DATA_TEXT or refuse_text(question),
+                        "diag": _diag_pack(
+                            diag, sec=round(time.time() - t0, 2),
+                            reason="значения из вопроса не найдены в данных")}
+        else:
+            шаг("значения не найдены", групп=n_groups - matched_groups)
+            return {"partial": cut or None, "kind": "no_data", "sources": [],
+                    "text": NO_DATA_TEXT or refuse_text(question),
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                       reason="значения из вопроса не найдены в данных")}
     match, _k = match_expr(exprs, preds)
     diag["min_should_match"] = _k if exprs else 0
     by = {}
@@ -4619,6 +5062,50 @@ def answer_checked(question, focus=None, measure_pick=None, context="", prior=No
             trusted = ticket
             accumulate_resolution(question, user, ticket)
             resolved = peek_resolved(question, user)
+            # C1 R-G: pending → один повтор concepts на consume
+            if (isinstance(resolved, dict)
+                    and resolved.get("rescue_concepts_pending")
+                    and not resolved.get("rescue_concepts")):
+                try:
+                    _src = (resolved.get("src") or focus
+                            or (ticket.get("src") if isinstance(ticket, dict) else None))
+                    _cards = [{"src_table": _src or "?",
+                               "name": human_table_label(_src) if _src else "?",
+                               "description": ""}]
+                    _cr = wiki_concepts_call(question, _cards, diag={})
+                    if _cr.get("ok"):
+                        resolved = dict(resolved)
+                        _cok = list(_cr.get("concepts") or [])
+                        # успех (в т.ч. пустой) = отвечено; pending снят
+                        resolved["rescue_concepts"] = _cok
+                        resolved.pop("rescue_concepts_pending", None)
+                        _acc = {"src": resolved.get("src"),
+                                "expires_at": resolved.get("expires_at"),
+                                "rescue_concepts": _cok}
+                        accumulate_resolution(question, user, _acc)
+                        resolved = peek_resolved(question, user)
+                    else:
+                        # повтор-fail → [] без pending; повтор больше не зовётся
+                        accumulate_resolution(
+                            question, user,
+                            {"src": resolved.get("src"),
+                             "rescue_concepts": [],
+                             "expires_at": resolved.get("expires_at")})
+                        resolved = peek_resolved(question, user)
+                except Exception:  # noqa: BLE001
+                    # исключение = тот же повтор-fail: персистим [] без pending
+                    try:
+                        accumulate_resolution(
+                            question, user,
+                            {"src": (resolved.get("src")
+                                     if isinstance(resolved, dict) else None),
+                             "rescue_concepts": [],
+                             "expires_at": (resolved.get("expires_at")
+                                            if isinstance(resolved, dict)
+                                            else None)})
+                        resolved = peek_resolved(question, user)
+                    except Exception:  # noqa: BLE001
+                        pass
         if resolved.get("src") and not focus:
             focus = resolved["src"]
         if "measure" in resolved and measure_pick is None:

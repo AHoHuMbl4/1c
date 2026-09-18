@@ -23,9 +23,24 @@ WIKI_VERIFY_MAX_TOKENS = int(os.environ.get("WIKI_VERIFY_MAX_TOKENS", "2048"))
 WIKI_PASSPORT_BODY_MAX = int(os.environ.get("WIKI_PASSPORT_BODY_MAX", "1500"))
 WIKI_SEP_GAP = float(os.environ.get("WIKI_SEP_GAP", "0.04"))
 WIKI_EMBED_MAXLEN = int(os.environ.get("WIKI_EMBED_MAXLEN", "20000"))
+# C1 rescue: полный пул без срезов каскада 3/8 (design-c §2 шаг 1).
+WIKI_RESCUE_ALIAS_N = int(os.environ.get("WIKI_RESCUE_ALIAS_N", "96"))
+WIKI_RESCUE_TOP = int(os.environ.get("WIKI_RESCUE_TOP", "24"))
+WIKI_NORM_DIST = int(os.environ.get("WIKI_NORM_DIST", "2"))
+WIKI_RESOLVER_TIMEOUT_SEC = float(os.environ.get("WIKI_RESOLVER_TIMEOUT_SEC", "0.8"))
+WIKI_CONCEPTS_TIMEOUT_SEC = float(os.environ.get("WIKI_CONCEPTS_TIMEOUT_SEC", "0.8"))
 
 _HYBRID_SQL = None
 _PASSPORT_SQL = None
+
+WIKI_RESOLVER_SYS = (
+    "Map the user question to numbered entity options (human labels and hints only). "
+    "Return one JSON object: "
+    '{"verdict":"one"|"many"|"none","concepts":[<tokens>]}'
+    ". verdict one = exactly one option fits; many = several fit; none = no option fits. "
+    "concepts = question tokens naming the entity, a measure, a kind, or a platform type "
+    "(as opposed to data-filter values)."
+)
 
 
 def _wiki_hybrid_sql():
@@ -123,6 +138,10 @@ _NAMED_PLATFORM_TYPE_PHRASES = (
 # Паттерны словоформ родовых терминов типов (конечный словарь платформы).
 _NAMED_TYPE_WORD_RE = {
     "регистр": r"регистр(?:а|е|ом|у|ы|ов)?",
+    # формы «движен*» — производные платформенного механизма регистров (iv);
+    # многословная value-группа («движения денежных средств») не exclude:
+    # _group_is_platform_only требует все слова группы платформенными.
+    "движен": r"движен(?:и[еяю]|ий|иями|иям|иях|ием)?",
     "накопления": r"накоплен(?:ия|ие|ии|ием|ий)?",
     "сведений": r"сведен(?:ий|ия|ие|ии|ием|иям|иями|иях)?",
     "расчёта": r"расч[её]т(?:а|е|ом|у|ы|ов)?",
@@ -212,6 +231,8 @@ def filter_pool_by_named_type(question, cards, diag=None):
     out = [c for c in cards if _card_odata_kind(c) in allowed]
     if diag is not None:
         diag["pool_after"] = len(out)
+        if len(cards) > 0 and len(out) == 0:
+            diag["named_pool_zeroed"] = True
     return out
 
 
@@ -278,7 +299,27 @@ def _wiki_axis_has_carriers(phrase, intent, question=""):
     return res
 
 
-def _wiki_hybrid_vars(question, intent):
+def _rescue_norm_glues(question, norm_glue=""):
+    """Span-норм-склейки для struct_norm (>=2 токена, длина склейки >=8).
+
+    design-c §2 шаг 1: против хвоста src_table — любой span с DL<=допуск,
+    не склейка всего вопроса.
+    """
+    explicit = (norm_glue or "").strip()
+    if explicit:
+        g = _homonym_norm(explicit)
+        return [g] if len(g) >= 8 else []
+    seen = set()
+    out = []
+    for glue, _toks in _question_spans_glued(question or "", min_tokens=2):
+        if len(glue) < 8 or glue in seen:
+            continue
+        seen.add(glue)
+        out.append(glue)
+    return out
+
+
+def _wiki_hybrid_vars(question, intent, *, rescue_mode=False, norm_glue=""):
     intent = intent or {}
     ac = wiki_action_class(intent)
     ac_sql = ac if ac in ("event", "object") else "none"
@@ -287,6 +328,17 @@ def _wiki_hybrid_vars(question, intent):
     # («закрытие месяца») и выталкивали верную карточку. LLM-шаги каскада
     # по-прежнему видят исходный вопрос.
     q_search = (intent.get("search_form") or "").strip() or (question or "")
+    if rescue_mode:
+        glues = _rescue_norm_glues(question, norm_glue=norm_glue)
+        alias_top = WIKI_RESCUE_ALIAS_N
+        # TOP+1: Python видит pre-limit и отличает потолок от ровно-TOP
+        pick_limit = WIKI_RESCUE_TOP + 1
+    else:
+        # обычный каскад: struct_norm пуст (glue только если передан явно)
+        glues = _rescue_norm_glues(question, norm_glue=norm_glue) if (
+            norm_glue or "").strip() else []
+        alias_top = WIKI_ALIAS_TOP
+        pick_limit = WIKI_PICK_N
     return {
         "question": q_search,
         # [01.09, ночь] сырой вопрос — второй вход пула (kNN + словарь):
@@ -302,9 +354,12 @@ def _wiki_hybrid_vars(question, intent):
         "action_axis": wiki_axis_phrase(intent, question).replace("'", "''"),
         "want_agg": 1 if wiki_aggregate_want(intent, question) else 0,
         "stem_dict": STEM_DICT.replace("'", "''"),
-        "pick_limit": WIKI_PICK_N,
-        "alias_top": WIKI_ALIAS_TOP,
+        "pick_limit": pick_limit,
+        "alias_top": alias_top,
         "measure": (intent.get("measure") or "").replace("'", "''"),
+        "rescue_mode": 1 if rescue_mode else 0,
+        "norm_glues": glues,
+        "norm_dist": WIKI_NORM_DIST,
     }
 
 
@@ -313,6 +368,10 @@ def _wiki_substitute_sql(template, vars_):
     for key, val in vars_.items():
         if isinstance(val, int):
             rep = str(val)
+        elif isinstance(val, (list, tuple)):
+            # SQL list literal для UNNEST(:norm_glues)
+            items = ["'%s'" % str(x).replace("'", "''") for x in val]
+            rep = "[%s]" % ", ".join(items)
         else:
             rep = "'%s'" % str(val).replace("'", "''")
         out = out.replace(":%s" % key, rep)
@@ -320,8 +379,12 @@ def _wiki_substitute_sql(template, vars_):
     return out
 
 
-def wiki_hybrid_pool(question, intent=None):
-    """kNN-топ-N → структурное сужение в SQL. Пустой пул — []."""
+def wiki_hybrid_pool(question, intent=None, *, rescue_mode=False, norm_glue="",
+                     diag=None):
+    """kNN-топ-N → структурное сужение в SQL. Пустой пул — [].
+
+    rescue_mode: без axis_ok/filtered, alias/pick потолки rescue, +norm.
+    """
     if not question:
         return []
     try:
@@ -333,10 +396,19 @@ def wiki_hybrid_pool(question, intent=None):
         sql_body = "\n".join(
             ln for ln in sql_body.splitlines()
             if not ln.strip().startswith("\\set"))
-    qsql = _wiki_substitute_sql(sql_body, _wiki_hybrid_vars(question, intent))
+    vars_ = _wiki_hybrid_vars(
+        question, intent, rescue_mode=rescue_mode, norm_glue=norm_glue)
+    if rescue_mode and diag is not None:
+        diag["rescue_no_axis_filter"] = True
+        diag["wiki_rescue_alias_n"] = vars_["alias_top"]
+        diag["wiki_rescue_top"] = WIKI_RESCUE_TOP
+    qsql = _wiki_substitute_sql(sql_body, vars_)
     try:
         rows = psql(qsql)
     except RuntimeError:
+        # fail-soft норм-слагаемого / SQL: пустой пул, не 503
+        if rescue_mode and diag is not None:
+            diag["wiki_rescue_sql_error"] = True
         return []
     out = []
     for r in rows or []:
@@ -348,7 +420,14 @@ def wiki_hybrid_pool(question, intent=None):
             r = r[1:]
             src = str(r[0])
         parent = (r[7] if len(r) > 7 else "") or ""
-        out.append({
+        # r[8]=platform_prefix (есть; Python kind — из src); r[9]=src_layer.
+        src_layer = None
+        if len(r) > 9 and r[9] is not None:
+            try:
+                src_layer = int(r[9])
+            except (TypeError, ValueError):
+                src_layer = None
+        card = {
             "src_table": src,
             "name": (r[1] if len(r) > 1 else "") or "",
             "description": (r[2] if len(r) > 2 else "") or "",
@@ -358,7 +437,10 @@ def wiki_hybrid_pool(question, intent=None):
             "distance": float(r[6]) if len(r) > 6 and r[6] is not None else 1.0,
             "parent": parent,
             "platform_kind": wiki_platform_kind(src, parent),
-        })
+        }
+        if src_layer is not None:
+            card["src_layer"] = src_layer
+        out.append(card)
     return out
 
 
@@ -978,11 +1060,17 @@ def wiki_entity_clarify_menu(question, candidates, diag, cut, t0,
             lab_by[src] = name
     window_preds = list(preds) if preds is not None else []
     is_homonym = reason == "wiki_homonym_db"
+    # C1: skip+rebuild также для wiki_rescue и wiki_separability при full_pool
+    _skip_rebuild = (
+        is_homonym
+        or reason == "wiki_rescue"
+        or (reason == "wiki_separability" and bool((diag or {}).get("wiki_full_pool")))
+    )
     opts = mk_opts(
         tied, lab_by, {}, by or {}, match=match or "", preds=window_preds,
-        skip_empty_filter=is_homonym)
-    # rebuild — только гомоним (канон D2); не-гомоним opts<2 → None как HEAD
-    if is_homonym and len(opts) < 2 and len(tied) >= 2:
+        skip_empty_filter=_skip_rebuild)
+    # rebuild при skip-ветке; иначе opts<2 → None как HEAD
+    if _skip_rebuild and len(opts) < 2 and len(tied) >= 2:
         counted = by or {}
         opts = []
         for s in tied:
@@ -1287,6 +1375,891 @@ def wiki_pick_from_cards(question, intent, cards, diag=None):
     return {"outcome": "leader", "leader": leader, "diag": diag}
 
 
+
+# ── C1+C2: резолверный проход полного пула (design-c §2) ─────────────────────
+
+def _term_group_primary(group):
+    """Первая непустая альтернатива term-группы."""
+    if isinstance(group, (list, tuple)):
+        for a in group:
+            s = str(a or "").strip()
+            if s:
+                return s
+        return ""
+    return str(group or "").strip()
+
+
+def _term_group_norm(group):
+    return _homonym_norm(_term_group_primary(group))
+
+
+def _src_tail_norm(src):
+    src = str(src or "")
+    if "_" not in src:
+        return ""
+    return _homonym_norm(src.split("_", 1)[1])
+
+
+def _src_label_norm(src, card=None):
+    if card and (card.get("name") or "").strip():
+        return _homonym_norm(card.get("name"))
+    try:
+        return _homonym_norm(human_table_label(src) or "")
+    except Exception:  # noqa: BLE001
+        return _src_tail_norm(src)
+
+
+def _question_spans_glued(question, min_tokens=2):
+    """Непрерывные >=min_tokens токена вопроса → норм-склейки (через границы групп)."""
+    toks = [t for t in re.findall(r"[0-9a-zA-Zа-яА-ЯёЁ]+", question or "") if t]
+    out = []
+    n = len(toks)
+    for i in range(n):
+        for j in range(i + min_tokens, n + 1):
+            glue = _homonym_norm(" ".join(toks[i:j]))
+            if glue:
+                out.append((glue, toks[i:j]))
+    return out
+
+
+def _token_is_platform_word(tok):
+    t = _norm_ye(tok or "")
+    if not t:
+        return False
+    for _key, pat in _NAMED_TYPE_WORD_RE.items():
+        cre = re.compile(
+            r"(?<![а-яёa-z0-9_])" + pat + r"(?![а-яёa-z0-9_])",
+            re.IGNORECASE)
+        if cre.fullmatch(t):
+            return True
+    return False
+
+
+def _group_is_platform_only(group):
+    """(iv): вся группа — платформенные слова с границами; value-микс остаётся."""
+    if isinstance(group, (list, tuple)):
+        alts = [str(a or "").strip() for a in group if str(a or "").strip()]
+    else:
+        alts = [str(group or "").strip()] if str(group or "").strip() else []
+    if not alts:
+        return False
+    # берём первичную форму; многословная value-группа с чужим токеном — False
+    words = re.findall(r"[0-9a-zA-Zа-яА-ЯёЁ]+", alts[0])
+    if not words:
+        return False
+    return all(_token_is_platform_word(w) for w in words)
+
+
+# (iii) кэш на проход: src+spans+targets не меняются внутри одного ask.
+_III_SPAN_HIT_CACHE = {}
+
+
+def _iii_span_targets(src, card=None):
+    """Норм-хвост и норм-label выбранного src (длина >=8), без дублей."""
+    targets = []
+    tail = _src_tail_norm(src)
+    if tail and len(tail) >= 8:
+        targets.append(tail)
+    lab = _src_label_norm(src, card)
+    if lab and len(lab) >= 8 and lab not in targets:
+        targets.append(lab)
+    return targets
+
+
+def _iii_cache_put(key, hits):
+    if len(_III_SPAN_HIT_CACHE) >= 16:
+        _III_SPAN_HIT_CACHE.clear()
+    _III_SPAN_HIT_CACHE[key] = frozenset(hits)
+
+
+def _iii_span_hit_glues(src, question, *, card=None, dist=None, diag=None,
+                        src_layer=None):
+    """(iii) hit-склейки одним SQL: штатный damerau_levenshtein, допуск WIKI_NORM_DIST.
+
+    Доки: Sql › Functions › Text Functions › damerau_levenshtein;
+          Sql › Query syntax › SELECT › unnest.
+    Fail-soft: сбой → пустой set (слой (iii) недоступен), diag-факт.
+    src_layer=2 (struct_norm): склейка уже совпала против хвоста в hybrid-SQL —
+    переиспользуем факт без запроса: hit = склейки, для которых length-гард
+    против хвоста совместим с допуском И (точный == хвост ИЛИ единственный
+    кандидат); иначе — один SELECT тем же предикатом (точный список hit).
+    """
+    dist = WIKI_NORM_DIST if dist is None else dist
+    spans = _question_spans_glued(question or "", min_tokens=2)
+    glue_toks = {}
+    glues = []
+    for glue, toks in spans:
+        if not glue or len(glue) < 8:
+            continue
+        if glue in glue_toks:
+            continue
+        glue_toks[glue] = list(toks)
+        glues.append(glue)
+    if not src or not glues:
+        return set(), glue_toks
+
+    targets = _iii_span_targets(src, card)
+    if not targets:
+        return set(), glue_toks
+
+    layer = src_layer
+    if layer is None and card is not None:
+        layer = card.get("src_layer")
+    try:
+        layer = int(layer) if layer is not None else None
+    except (TypeError, ValueError):
+        layer = None
+
+    cache_key = (str(src), tuple(glues), tuple(targets), int(dist), layer)
+    cached = _III_SPAN_HIT_CACHE.get(cache_key)
+    if cached is not None:
+        return set(cached), glue_toks
+
+    hits = set()
+    # src_layer=2: struct_norm уже доказал EXISTS(glue↔хвост). Без запроса —
+    # только когда список hit однозначен (exact == хвост или ровно один
+    # length-совместимый кандидат); иначе падаем в SQL за точным DL.
+    if layer == 2:
+        tail = _src_tail_norm(src)
+        if tail and len(tail) >= 8:
+            exact = [g for g in glues if g == tail]
+            compat = [g for g in glues if abs(len(g) - len(tail)) <= int(dist)]
+            if exact:
+                hits = set(exact)
+            elif len(compat) == 1:
+                hits = set(compat)
+            # иначе — SQL ниже (точный DL движка)
+            if hits:
+                _iii_cache_put(cache_key, hits)
+                return hits, glue_toks
+
+    # Один SELECT на проход: unnest(склейки) × targets, штатный DL.
+    glue_lit = "[%s]" % ", ".join(lit(g) for g in glues)
+    target_lit = "[%s]" % ", ".join(lit(t) for t in targets)
+    qsql = (
+        "SELECT g.glue FROM unnest(%s) AS g(glue), unnest(%s) AS t(tgt) "
+        "WHERE length(g.glue) >= 8 AND length(t.tgt) >= 8 "
+        "AND damerau_levenshtein(g.glue, t.tgt) <= %d"
+        % (glue_lit, target_lit, int(dist)))
+    try:
+        rows = psql(qsql)
+    except Exception:  # noqa: BLE001 — fail-soft: (iii) недоступен
+        if diag is not None:
+            diag["conceptual_iii_sql_error"] = True
+        _iii_cache_put(cache_key, ())
+        return set(), glue_toks
+    for r in rows or []:
+        if r and r[0]:
+            hits.add(str(r[0]))
+    _iii_cache_put(cache_key, hits)
+    return hits, glue_toks
+
+
+def conceptual_term_group_norms(terms, *, intent=None, concepts=None, src=None,
+                                question="", card=None, exact_matched=None,
+                                diag=None, src_layer=None):
+    """Единая понятийность (i)–(iv) → set норм-форм исключаемых term-групп.
+
+    (i) measure/kind ∪ (ii) concepts ∪ (iii) span-DL к хвосту/label src ∪
+    (iv) платформенные слова всей группой. Concepts не помечают exact-matched.
+    (iii) — штатный damerau_levenshtein одним SQL на проход (не локальный DL).
+    """
+    intent = intent or {}
+    exclude = set()
+    # (i) слоты measure/kind
+    for slot in ("measure", "kind"):
+        raw = intent.get(slot)
+        items = raw if isinstance(raw, (list, tuple)) else ([raw] if raw else [])
+        for it in items:
+            n = _homonym_norm(_intent_text(it) if callable(globals().get("_intent_text")) else str(it or ""))
+            if not n and it is not None:
+                n = _homonym_norm(str(it))
+            if n:
+                exclude.add(n)
+    # (ii) concepts резолвера
+    exact = set(_homonym_norm(x) for x in (exact_matched or []) if x)
+    for c in (concepts or []):
+        n = _homonym_norm(c)
+        if n and n not in exact:
+            exclude.add(n)
+    # (iv) платформенные
+    for g in (terms or []):
+        if _group_is_platform_only(g):
+            n = _term_group_norm(g)
+            if n:
+                exclude.add(n)
+    # (iii) span-DL при известном src — безусловно (один SQL / кэш / src_layer=2)
+    if src:
+        hit_glues, glue_toks = _iii_span_hit_glues(
+            src, question, card=card, diag=diag, src_layer=src_layer)
+        hit_toks = set()
+        for glue in hit_glues:
+            exclude.add(glue)
+            for t in glue_toks.get(glue) or []:
+                hit_toks.add(_homonym_norm(t))
+        for g in (terms or []):
+            gn = _term_group_norm(g)
+            if not gn:
+                continue
+            # группа пересекается с hit-токенами span
+            gtoks = [_homonym_norm(t) for t in re.findall(
+                r"[0-9a-zA-Zа-яА-ЯёЁ]+", _term_group_primary(g))]
+            if any(t in hit_toks for t in gtoks):
+                exclude.add(gn)
+            # группа ≡ имя/хвост src
+            if gn == _src_tail_norm(src) or gn == _src_label_norm(src, card):
+                exclude.add(gn)
+    return exclude
+
+
+def filter_terms_by_concepts(terms, exclude_norms, diag=None):
+    """Исключить понятийные term-группы; вернуть (kept, skipped)."""
+    kept, skipped = [], []
+    excl = set(exclude_norms or [])
+    for g in (terms or []):
+        n = _term_group_norm(g)
+        if n and n in excl:
+            skipped.append(g)
+        else:
+            # также: любая альтернатива группы в excl
+            alts = g if isinstance(g, (list, tuple)) else [g]
+            if any(_homonym_norm(a) in excl for a in alts if a):
+                skipped.append(g)
+            else:
+                kept.append(g)
+    if diag is not None and skipped:
+        diag["probe_terms_skipped"] = [
+            _term_group_primary(g) for g in skipped]
+        diag["conceptual_exclude_n"] = len(skipped)
+    return kept, skipped
+
+
+def _wiki_resolver_budget_sec(*, concepts_only=False):
+    try:
+        rem = _deadline_remaining_sec()
+    except Exception:  # noqa: BLE001
+        rem = None
+    wait = (WIKI_CONCEPTS_TIMEOUT_SEC if concepts_only
+            else WIKI_RESOLVER_TIMEOUT_SEC)
+    if rem is not None:
+        wait = min(wait, float(rem))
+    return max(0.0, wait)
+
+
+def wiki_pool_resolver(question, cards, diag=None, *, concepts_only=False):
+    """Один LLM-вызов: трихотомия + concepts. Fail-soft; ★ не пишет.
+
+    Образец бюджета — llm_option_highlight (<=800 мс). Вход: вопрос + label+hint.
+    """
+    diag = diag if isinstance(diag, dict) else {}
+    cards = list(cards or [])
+    out = {"verdict": None, "concepts": [], "ok": False, "fail": False}
+    if not cards:
+        out["fail"] = True
+        return out
+    if deadline_hit():
+        out["fail"] = True
+        diag["wiki_resolver"] = "deadline"
+        return out
+    wait = _wiki_resolver_budget_sec(concepts_only=concepts_only)
+    if wait <= 0:
+        out["fail"] = True
+        diag["wiki_resolver"] = "no_budget"
+        return out
+    # вход LLM <= PICK_BUDGET
+    lines, used = [], []
+    budget = int(globals().get("PICK_BUDGET") or 8000)
+    size = 0
+    truncated = False
+    for i, c in enumerate(cards):
+        lab = (c.get("name") or "").strip() or human_table_label(c.get("src_table") or "")
+        hint = (c.get("description") or "").strip()[:80]
+        if not lab:
+            continue
+        row = "%d. %s%s" % (len(used) + 1, lab, (" (%s)" % hint) if hint else "")
+        if size + len(row) + 1 > budget and used:
+            truncated = True
+            break
+        used.append(c)
+        lines.append(row)
+        size += len(row) + 1
+    if truncated:
+        diag["resolver_input_truncated"] = True
+    if len(used) < 1:
+        out["fail"] = True
+        return out
+    prompt = (
+        "Q: %s\nOptions:\n%s\n"
+        "Reply with JSON {\"verdict\":\"one|many|none\",\"concepts\":[...]}."
+        % (str(question or "").strip(), "\n".join(lines)))
+    messages = [
+        {"role": "system", "content": WIKI_RESOLVER_SYS},
+        {"role": "user", "content": prompt},
+    ]
+    raw = ""
+    try:
+        body = _ds_chat_body(messages, temperature=0, max_tokens=200)
+        if deadline_hit():
+            out["fail"] = True
+            diag["wiki_resolver"] = "deadline"
+            return out
+        req = urllib.request.Request(
+            DS_BASE + "/v1/chat/completions",
+            data=json.dumps(body).encode(), method="POST")
+        req.add_header("Authorization", "Bearer " + (DS_KEY or ""))
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=wait) as r:
+            data = json.loads(r.read())
+        raw = (_ds_chat_content(data) or "").strip()
+    except Exception as e:  # noqa: BLE001
+        out["fail"] = True
+        diag["wiki_resolver"] = "error"
+        diag["wiki_resolver_err"] = str(e)[:80]
+        return out
+    try:
+        j = json.loads(raw[raw.index("{"):raw.rindex("}") + 1])
+    except (ValueError, KeyError, TypeError):
+        out["fail"] = True
+        diag["wiki_resolver"] = "unparseable"
+        return out
+    if not isinstance(j, dict):
+        out["fail"] = True
+        return out
+    verd = str(j.get("verdict") or "").strip().lower()
+    if verd in ("one", "exactly one", "1"):
+        verd = "one"
+    elif verd in ("many", "several", "multi", "multiple"):
+        verd = "many"
+    elif verd in ("none", "no", "zero", "0"):
+        verd = "none"
+    else:
+        verd = None
+    concepts = []
+    raw_c = j.get("concepts")
+    if isinstance(raw_c, list):
+        for x in raw_c:
+            s = str(x or "").strip()
+            if s:
+                concepts.append(s)
+    out["verdict"] = verd if not concepts_only else None
+    out["concepts"] = concepts
+    out["ok"] = True
+    diag["wiki_resolver"] = verd or ("concepts" if concepts_only else "ok")
+    # успех (в т.ч. пустой список) = отвечено; LLM больше не зовётся
+    diag["rescue_concepts"] = list(concepts)
+    return out
+
+
+def wiki_concepts_call(question, cards, diag=None, *, retry=True):
+    """Concepts-вызов с одним inline-повтором при первом fail (<=800 мс)."""
+    diag = diag if isinstance(diag, dict) else {}
+    r1 = wiki_pool_resolver(question, cards, diag, concepts_only=True)
+    if r1.get("ok"):
+        return r1
+    if retry:
+        diag["wiki_concepts_retry"] = True
+        r2 = wiki_pool_resolver(question, cards, diag, concepts_only=True)
+        if r2.get("ok"):
+            return r2
+        diag["wiki_concepts_unavailable"] = True
+        return r2
+    diag["wiki_concepts_unavailable"] = True
+    return r1
+
+
+def wiki_passport_enrich_slice(cards):
+    """Enrich ПОЛНЫМ body на переданный слайс (не только первые 8)."""
+    cards = list(cards or [])
+    if not cards:
+        return []
+    by_src = {}
+    # обходим срез WIKI_PASSPORT_N: подставляем весь слайс
+    srcs = [c.get("src_table") for c in cards if c.get("src_table")]
+    if not srcs:
+        return [dict(c) for c in cards]
+    template = _wiki_passport_sql()
+    if template.strip().startswith("\\set"):
+        template = "\n".join(
+            ln for ln in template.splitlines()
+            if not ln.strip().startswith("\\set"))
+    lst = ", ".join("'%s'" % str(s).replace("'", "''") for s in srcs)
+    qsql = template.replace(":src_list", lst).replace(
+        ":body_max", str(WIKI_PASSPORT_BODY_MAX))
+    try:
+        for r in psql(qsql) or []:
+            if not r or not r[0]:
+                continue
+            by_src[str(r[0])] = {
+                "wiki_body": (r[2] if len(r) > 2 else "") or "",
+                "parent": (r[5] if len(r) > 5 else "") or "",
+                "not_enough_for": (r[7] if len(r) > 7 else "") or "",
+            }
+    except RuntimeError:
+        pass
+    out = []
+    for c in cards:
+        row = dict(c)
+        extra = by_src.get(row.get("src_table") or "", {})
+        if extra.get("wiki_body"):
+            row["wiki_body"] = extra["wiki_body"]
+        elif row.get("description"):
+            row["wiki_body"] = row["description"]
+        else:
+            row["wiki_body"] = ""
+        if extra.get("parent") is not None:
+            row["parent"] = extra["parent"]
+        if extra.get("not_enough_for"):
+            row["not_enough_for"] = extra["not_enough_for"]
+        row["platform_kind"] = wiki_platform_kind(
+            row.get("src_table"), row.get("parent") or "")
+        row["distinct"] = wiki_passport_distinct(row, cards)
+        out.append(row)
+    return out
+
+
+def wiki_batch_verify(question, intent, cards, diag=None):
+    """Паспорта порциями WIKI_PASSPORT_N; MERGE вердиктов по src_table всех батчей."""
+    diag = dict(diag or {})
+    cards = list(cards or [])
+    if not cards:
+        return {"verdicts_by_src": {}, "passports": [], "incomplete": False, "diag": diag}
+    by_src = {}
+    all_passports = []
+    incomplete = False
+    batch_n = 0
+    for i in range(0, len(cards), WIKI_PASSPORT_N):
+        if deadline_hit():
+            incomplete = True
+            diag["wiki_batch_verify_deadline"] = True
+            break
+        slice_cards = cards[i:i + WIKI_PASSPORT_N]
+        enriched = wiki_passport_enrich_slice(slice_cards)
+        listing = wiki_format_passport_lines(enriched)
+        ask_text = question or ""
+        kind = _intent_text((intent or {}).get("kind"))
+        if kind:
+            ask_text = "%s (%s)" % (ask_text, kind)
+        try:
+            rem = _deadline_remaining_sec()
+            if rem is not None and rem <= 0:
+                incomplete = True
+                break
+            raw = ds_chat(
+                [{"role": "system", "content": WIKI_VERIFY_SYS},
+                 {"role": "user", "content": "%s\n\nPassports:\n%s"
+                  % (ask_text, listing)}],
+                max_tokens=WIKI_VERIFY_MAX_TOKENS)
+        except Exception as e:  # noqa: BLE001
+            incomplete = True
+            diag["wiki_batch_verify_error"] = str(e)[:80]
+            break
+        verdicts, parse_mode = wiki_parse_verify_response(raw, len(enriched))
+        if parse_mode == "failed" and (raw or "").strip():
+            incomplete = True
+        batch_n += 1
+        for vi, p in enumerate(enriched):
+            src = p.get("src_table")
+            if not src:
+                continue
+            all_passports.append(p)
+            v = None
+            for vv in verdicts or []:
+                if vv.get("index") == vi + 1:
+                    v = vv
+                    break
+            if v:
+                by_src[src] = v
+    diag["wiki_batch_verify_n"] = batch_n
+    diag["wiki_batch_verdicts"] = len(by_src)
+    return {
+        "verdicts_by_src": by_src,
+        "passports": all_passports,
+        "incomplete": incomplete or len(by_src) < len(cards),
+        "diag": diag,
+    }
+
+
+def wiki_outcome_from_full_verify(verdicts_by_src, pool, intent, diag=None,
+                                  *, ceiling_hit=False):
+    """Исход verify на ПОЛНОМ финальном пуле (копипаста :1110 с срезом — нет).
+
+    sole = ровно 1 yes ∧ все прочие no ∧ |verdicts|==|pool| ∧ ¬ceiling_hit.
+    """
+    diag = dict(diag or {})
+    pool = list(pool or [])
+    if not pool:
+        return {"outcome": "none", "reason": "empty_pool", "diag": diag}
+    if ceiling_hit:
+        diag["wiki_ceiling_hit"] = True
+    vb = verdicts_by_src or {}
+    yes_src, unsure_src, no_src, missing = [], [], [], []
+    for c in pool:
+        src = c.get("src_table")
+        v = vb.get(src)
+        if not v:
+            missing.append(src)
+            continue
+        fit = v.get("fit")
+        if fit == "yes":
+            yes_src.append(src)
+        elif fit == "unsure":
+            unsure_src.append(src)
+        else:
+            no_src.append(src)
+    diag["wiki_verify_yes"] = len(yes_src)
+    diag["wiki_verify_unsure"] = len(unsure_src)
+    diag["wiki_verify_no"] = len(no_src)
+    diag["wiki_verify_missing"] = len(missing)
+    complete = (len(missing) == 0 and len(vb) >= len(pool)
+                and not ceiling_hit)
+    # sole только при полном вердикте и без потолка
+    if (complete and len(yes_src) == 1 and not unsure_src
+            and len(no_src) == len(pool) - 1):
+        leader = yes_src[0]
+        if not wiki_validate_leader_axes(leader, intent):
+            diag["wiki_verify"] = "axis_reject"
+            return {"outcome": "none", "reason": "axis_reject", "diag": diag}
+        peers = wiki_homonym_kind_peers(
+            [{"src_table": c.get("src_table"), "name": c.get("name")}
+             for c in pool], leader)
+        if peers:
+            diag["wiki_verify"] = "clarify"
+            diag["wiki_homonym_tie"] = [p.get("src_table") for p in peers]
+            diag["wiki_homonym_blocked_leader"] = leader
+            return {"outcome": "clarify", "candidates": peers,
+                    "reason": "homonym", "diag": diag}
+        diag["wiki_verify"] = leader
+        return {"outcome": "leader", "leader": leader, "diag": diag}
+    if missing:
+        return {"outcome": "incomplete", "reason": "verdicts_incomplete",
+                "diag": diag}
+    if len(yes_src) == 0 and not unsure_src:
+        diag["wiki_verify"] = "none"
+        return {"outcome": "none", "reason": "verify_none", "diag": diag}
+    tie = []
+    seen = set()
+    for src in yes_src + unsure_src:
+        if src not in seen:
+            seen.add(src)
+            card = next((c for c in pool if c.get("src_table") == src), None)
+            tie.append(card or {"src_table": src})
+    if len(tie) >= 2:
+        diag["wiki_verify"] = "clarify"
+        diag["wiki_verify_tie"] = [c.get("src_table") for c in tie]
+        return {"outcome": "clarify", "candidates": tie,
+                "reason": "separability", "diag": diag}
+    diag["wiki_verify"] = "none"
+    return {"outcome": "none", "reason": "verify_none", "diag": diag}
+
+
+def _stamp_rescue_concepts(menu, concepts, *, pending=False):
+    if not isinstance(menu, dict) or menu.get("kind") != "clarify":
+        return menu
+    for o in menu.get("options") or []:
+        if not isinstance(o, dict):
+            continue
+        if pending:
+            o["rescue_concepts_pending"] = True
+            # pending ≠ ответ; повтор — прерогатива consume
+            o.pop("rescue_concepts", None)
+        else:
+            # успех (в т.ч. пустой) = отвечено
+            o["rescue_concepts"] = list(concepts or [])
+    return menu
+
+
+def _rescue_menu_or_degrade(question, pool, diag, cut, t0, *, reason="wiki_rescue",
+                            intent=None, plan=None, by=None, match="", preds=None,
+                            concepts=None, pending=False):
+    """Меню всего пула; None при живом пуле → деградация R-I (повтор меню/R-D)."""
+    pool = list(pool or [])
+    if len(pool) < 2:
+        return None  # caller → R-D
+    menu = wiki_entity_clarify_menu(
+        question, pool, diag, cut, t0,
+        by=by, match=match, preds=preds,
+        reason=reason, intent=intent, plan=plan)
+    if menu is None and len(pool) >= 2:
+        # R-I: деградация — rebuild opts вручную + finalize
+        diag["wiki_rescue_menu_degraded"] = True
+        tied = [c.get("src_table") for c in pool if c.get("src_table")]
+        opts = []
+        for s, c in zip(tied, pool):
+            raw = (c.get("name") or "").strip() or human_table_label(s)
+            opts.append({
+                "src": s,
+                "label": label_with_kind(s, raw) if callable(globals().get("label_with_kind")) else raw,
+                "hint": "",
+                "distinct_by": "",
+                "found": (by or {}).get(s, 0),
+            })
+        if len(opts) >= 2:
+            menu = finalize_clarify_menu(
+                question, "entity", opts, diag, cut, t0, reason=reason,
+                intent=intent, plan=plan, match=match or "", preds=preds,
+                with_digests=True)
+    if menu is not None:
+        menu = _stamp_rescue_concepts(menu, concepts, pending=pending)
+    return menu
+
+
+def _rescue_no_data(question, diag, cut, t0, reason):
+    return {
+        "kind": "no_data",
+        "partial": cut or None,
+        "text": NO_DATA_TEXT or refuse_text(question),
+        "sources": [],
+        "diag": _diag_pack(diag, sec=round(time.time() - t0, 2), reason=reason),
+    }
+
+
+def wiki_rescue_full_pool_pass(question, intent, diag, cut, t0,
+                               by=None, match="", preds=None, plan=None,
+                               *, origin="cascade"):
+    """ТОЧКА 1 / escalate: сборка rescue_pool → батч-verify → резолвер → исход."""
+    diag = diag if isinstance(diag, dict) else {}
+    intent = intent or {}
+    plan = plan or {}
+    # однократность прохода: повторный вход (любой origin) — прежний исход
+    if diag.get("wiki_full_pool") or diag.get("wiki_rescue_escalated"):
+        return None
+    # дедлайн до входа — прежний исход; штамп однократности не сжигается
+    _dh = globals().get("deadline_hit")
+    if callable(_dh) and _dh():
+        return None
+    diag["wiki_full_pool"] = True
+    diag["wiki_rescue_origin"] = origin
+    if origin == "escalate":
+        diag["wiki_rescue_escalated"] = True
+
+    # шаг 1 — rescue_pool
+    try:
+        pool = wiki_hybrid_pool(
+            question, intent, rescue_mode=True, diag=diag)
+    except Exception as e:  # noqa: BLE001
+        diag["wiki_rescue_pool_error"] = str(e)[:80]
+        pool = []
+    # named-фильтр на rescue пропускаем: флаг named_pool_zeroed — с каскада;
+    # force_menu ниже держит sole при этом флаге.
+    # SQL вернул TOP+1; ceiling_hit := pre-limit > WIKI_RESCUE_TOP
+    pre_count = len(pool)
+    ceiling_hit = pre_count > WIKI_RESCUE_TOP
+    if ceiling_hit:
+        diag["wiki_rescue_truncated"] = pre_count - WIKI_RESCUE_TOP
+        pool = pool[:WIKI_RESCUE_TOP]
+    else:
+        diag["wiki_rescue_truncated"] = 0
+    diag["wiki_rescue_pool_n"] = len(pool)
+    diag["wiki_rescue_pre_count"] = pre_count
+    diag["wiki_rescue_pool"] = [c.get("src_table") for c in pool]
+
+    # шаг 2 — пуст → прежний честный no_data
+    if not pool:
+        return None  # caller сохраняет прежний исход
+
+    force_menu = bool(diag.get("named_pool_zeroed"))
+
+    # R-I: дедлайн после входа
+    if deadline_hit():
+        diag["wiki_rescue_ri"] = "deadline"
+        if len(pool) >= 2:
+            menu = _rescue_menu_or_degrade(
+                question, pool, diag, cut, t0, reason="wiki_rescue",
+                intent=intent, plan=plan, by=by, match=match, preds=preds)
+            if menu is not None:
+                return menu
+        return None
+
+    # шаг 3 — батч-verify
+    batch = wiki_batch_verify(question, intent, pool, diag=diag)
+    diag.update(batch.get("diag") or {})
+    # ceiling_hit = pre-limit>TOP only; named_pool_zeroed stays its own diag key
+    # (sole held by force_menu below, without wiki_ceiling_hit)
+    outcome = wiki_outcome_from_full_verify(
+        batch.get("verdicts_by_src") or {}, pool, intent, diag=diag,
+        ceiling_hit=ceiling_hit)
+
+    # шаг 4 — резолвер один раз; трихотомия до sole
+    concepts = []
+    concepts_pending = False
+    resolver = {"ok": False, "fail": True, "verdict": None, "concepts": []}
+    provisional_sole = outcome.get("outcome") == "leader"
+    try:
+        resolver = wiki_pool_resolver(question, pool, diag)
+        if resolver.get("ok"):
+            concepts = list(resolver.get("concepts") or [])
+        else:
+            # один inline-повтор
+            diag["wiki_resolver_retry"] = True
+            resolver = wiki_pool_resolver(question, pool, diag)
+            if resolver.get("ok"):
+                concepts = list(resolver.get("concepts") or [])
+            else:
+                concepts_pending = True
+                diag["wiki_concepts_unavailable"] = True
+    except Exception as e:  # noqa: BLE001
+        concepts_pending = True
+        diag["wiki_resolver_err"] = str(e)[:80]
+
+    # успех (в т.ч. пустой) = отвечено; pending ≠ ответ (повтор — consume)
+    if concepts_pending:
+        diag.pop("rescue_concepts", None)
+        diag["rescue_concepts_pending"] = True
+    else:
+        diag["rescue_concepts"] = list(concepts)
+
+    verd = resolver.get("verdict") if resolver.get("ok") else None
+
+    def _menu(reason="wiki_rescue", cands=None):
+        cands = cands if cands is not None else pool
+        if len(cands) < 2:
+            return None
+        return _rescue_menu_or_degrade(
+            question, cands, diag, cut, t0, reason=reason,
+            intent=intent, plan=plan, by=by, match=match, preds=preds,
+            concepts=concepts, pending=concepts_pending)
+
+    def _finish_sole(leader):
+        # demote ТОЛЬКО при fail/pending (§2 шаг 3(a)); пустой OK = ответ
+        _concepts_gap = (
+            concepts_pending
+            or (resolver.get("fail") and not resolver.get("ok")))
+        if _concepts_gap:
+            excl = conceptual_term_group_norms(
+                intent.get("terms") or [], intent=intent, concepts=[],
+                src=leader, question=question)
+            remaining_non = False
+            for g in (intent.get("terms") or []):
+                n = _term_group_norm(g)
+                if n and n not in excl and not _group_is_platform_only(g):
+                    remaining_non = True
+                    break
+            if remaining_non:
+                m = _menu()
+                if m is not None:
+                    return m
+                return _rescue_no_data(
+                    question, diag, cut, t0, "wiki_rescue_demote")
+        if not wiki_leader_post_verify(leader, intent, question, diag):
+            return _rescue_no_data(
+                question, diag, cut, t0, "wiki_post_verify_fail")
+        gated = wiki_leader_db_homonym_gate(
+            leader, question, intent, diag, cut, t0,
+            by=by, match=match, preds=preds, plan=plan)
+        if gated is not None:
+            return _stamp_rescue_concepts(
+                gated, concepts, pending=concepts_pending)
+        lead_card = next((c for c in pool if c.get("src_table") == leader), None)
+        marks = {}
+        if lead_card and lead_card.get("src_layer") is not None:
+            diag["src_layer"] = lead_card.get("src_layer")
+        _out = {"picked": [leader], "marks": marks, "plan": plan}
+        if concepts_pending:
+            _out["rescue_concepts_pending"] = True
+        else:
+            # успех (в т.ч. пустой) = отвечено
+            _out["rescue_concepts"] = list(concepts)
+        return _out
+
+    # --- таблица (a)/(b)/(b2)/(c) ---
+    # (a) sole-yes: concepts-only уже получены; трихотомия игнорируется
+    if provisional_sole and not force_menu:
+        return _finish_sole(outcome.get("leader"))
+
+    # (b) in-pool kind-гомоним
+    if outcome.get("outcome") == "clarify" and outcome.get("reason") == "homonym":
+        m = _menu(reason="wiki_homonym_db", cands=outcome.get("candidates") or pool)
+        if m is not None:
+            return m
+        return wiki_homonym_peer_fail_soft(question, diag, cut, t0)
+
+    # (b2) verify-clarify >=2: tie → wiki_separability; полный пул — fallback
+    if outcome.get("outcome") == "clarify":
+        if outcome.get("reason") == "separability":
+            reason = "wiki_separability"
+        else:
+            reason = ("wiki_rescue" if origin != "cascade"
+                      else "wiki_separability")
+        m = _menu(reason=reason, cands=outcome.get("candidates") or pool)
+        if m is not None:
+            return m
+        m = _menu(reason="wiki_rescue", cands=pool)
+        if m is not None:
+            return m
+        return None
+
+    # (c) none/unsure/неполнота — трихотомия читается
+    if outcome.get("outcome") == "incomplete":
+        # verd==one + неполный вердикт → дозапрос батчей; sole → путь (a)
+        if verd == "one":
+            vb = dict(batch.get("verdicts_by_src") or {})
+            missing = [c for c in pool if c.get("src_table") not in vb]
+            if missing and not deadline_hit():
+                diag["wiki_batch_verify_refetch"] = True
+                batch2 = wiki_batch_verify(question, intent, missing, diag=diag)
+                vb.update(batch2.get("verdicts_by_src") or {})
+                diag.update(batch2.get("diag") or {})
+                batch = {
+                    "verdicts_by_src": vb,
+                    "passports": list(batch.get("passports") or []) + list(
+                        batch2.get("passports") or []),
+                    "incomplete": bool(batch2.get("incomplete")) or (
+                        len(vb) < len(pool)),
+                    "diag": diag,
+                }
+                outcome = wiki_outcome_from_full_verify(
+                    vb, pool, intent, diag=diag,
+                    ceiling_hit=ceiling_hit)
+                if outcome.get("outcome") == "leader" and not force_menu:
+                    return _finish_sole(outcome.get("leader"))
+            # остался non-sole → меню
+        m = _menu()
+        if m is not None:
+            return m
+        if len(pool) == 1:
+            return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_rd")
+        return None
+
+    # ceiling_hit → sole уже не выставлялся; меню
+    if ceiling_hit or force_menu:
+        m = _menu()
+        if m is not None:
+            return m
+        if len(pool) == 1:
+            return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_rd")
+        return None
+
+    # трихотомия на none/unsure
+    if verd == "one":
+        # полный вердикт → меню всего пула (резолвер не лидер)
+        m = _menu()
+        if m is not None:
+            return m
+        if len(pool) == 1:
+            return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_rd")
+        return None
+    if verd in ("many", None) or resolver.get("fail") or diag.get("resolver_input_truncated"):
+        m = _menu()
+        if m is not None:
+            return m
+        if len(pool) == 1:
+            return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_rd")
+        return None
+    if verd == "none":
+        if diag.get("resolver_input_truncated") or ceiling_hit:
+            m = _menu()
+            if m is not None:
+                return m
+        # полное покрытие → честный no_data (ПОЛИТИКА)
+        return _rescue_no_data(question, diag, cut, t0, "wiki_rescue_none")
+
+    m = _menu()
+    if m is not None:
+        return m
+    return None
+
+
+
 def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
                                 by, match, preds, counts_for_model, plan=None):
     """Wiki entity pick — единственный путь выбора сущности.
@@ -1319,15 +2292,41 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
     # не дал ничего — честный отказ. На любой базе работает одна и та же
     # логика, перепроверять точечно нечем и не нужно.
     if not picked:
-        _reason = diag.get("wiki_pick") or "wiki_no_leader"
-        if diag.get("wiki_empty_pool"):
-            _reason = "wiki_empty_pool"
-        return {"kind": "no_data",
-                "partial": cut or None,
-                "text": NO_DATA_TEXT or refuse_text(question),
-                "sources": [],
-                "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
-                                   reason=_reason)}
+        # ТОЧКА 1: любой уход в отказ, кроме wiki_none_empty/off-topic
+        # (off-topic уже вернулся выше через kind=no_data reason=wiki_none_empty).
+        _dh = globals().get("deadline_hit")
+        if not diag.get("wiki_full_pool") and not (callable(_dh) and _dh()):
+            _resc = wiki_rescue_full_pool_pass(
+                question, intent, diag, cut, t0,
+                by=by, match=match, preds=preds, plan=plan,
+                origin="cascade")
+            if isinstance(_resc, dict):
+                if _resc.get("kind") in ("no_data", "clarify", "answer"):
+                    return _resc
+                if _resc.get("picked"):
+                    picked = _resc["picked"]
+                    marks = _resc.get("marks") or marks
+                    plan = _resc.get("plan") or plan
+                    # список (в т.ч. пустой) = отвечено; нет ключа → снять
+                    _rc = _resc.get("rescue_concepts")
+                    if isinstance(_rc, list):
+                        diag["rescue_concepts"] = list(_rc)
+                    else:
+                        diag.pop("rescue_concepts", None)
+                    if _resc.get("rescue_concepts_pending"):
+                        diag["rescue_concepts_pending"] = True
+                    else:
+                        diag.pop("rescue_concepts_pending", None)
+        if not picked:
+            _reason = diag.get("wiki_pick") or "wiki_no_leader"
+            if diag.get("wiki_empty_pool"):
+                _reason = "wiki_empty_pool"
+            return {"kind": "no_data",
+                    "partial": cut or None,
+                    "text": NO_DATA_TEXT or refuse_text(question),
+                    "sources": [],
+                    "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
+                                       reason=_reason)}
     return {"picked": picked, "marks": marks, "plan": plan}
 
 
@@ -1405,6 +2404,9 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
             by=by, match=match, preds=preds, plan=plan)
         if gated is not None:
             return gated
+        lead_card = next((c for c in cards if c.get("src_table") == leader), None)
+        if lead_card and lead_card.get("src_layer") is not None:
+            diag["src_layer"] = lead_card.get("src_layer")
         return {"picked": [leader], "marks": {}, "plan": {}}
     return None
 

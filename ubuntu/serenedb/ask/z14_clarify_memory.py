@@ -276,6 +276,13 @@ def accumulate_resolution(question, user, ticket):
             acc["axis"] = ticket.get("axis")
         if amb == "period" and ticket.get("period") is not None:
             acc["period"] = dict(ticket.get("period") or {})
+        # C1 R-G: concepts переживают цепочку кликов
+        if "rescue_concepts" in ticket:
+            acc["rescue_concepts"] = list(ticket.get("rescue_concepts") or [])
+        if ticket.get("rescue_concepts_pending"):
+            acc["rescue_concepts_pending"] = True
+        elif "rescue_concepts" in ticket:
+            acc.pop("rescue_concepts_pending", None)
         acc["expires_at"] = float(ticket.get("expires_at") or 0) or (
             time.time() + max(60, DECISION_TTL_SEC))
         _RESOLVED_CHOICES[key] = acc
@@ -323,7 +330,7 @@ def issue_decision(question, option, ambiguity, options_ver, user=None, parse=No
     if isinstance(option, dict):
         for _k in ("measure_verdict", "digest", "digest_form",
                    "digest_scope", "answer_mode", "count", "count_amount",
-                   "min", "max"):
+                   "min", "max", "rescue_concepts", "rescue_concepts_pending"):
             if _k in option:
                 ticket[_k] = option.get(_k)
     with _DECISION_LOCK:
@@ -357,10 +364,15 @@ def seal_clarify(out, question, user=None, parse=None):
         row = dict(o)
         snap = dict(o)
         snap.pop("decision_id", None)
+        # внутренние ключи rescue — в билете; во все проекции моста не идут
+        snap.pop("rescue_concepts", None)
+        snap.pop("rescue_concepts_pending", None)
         plain.append(snap)
         row["decision_id"] = issue_decision(
             question, row, amb, ver, user=user, parse=parse,
             class_meta=class_meta, batch_id=batch_id)
+        row.pop("rescue_concepts", None)
+        row.pop("rescue_concepts_pending", None)
         sealed.append(row)
     with _DECISION_LOCK:
         _CLARIFY_BATCHES[batch_id] = {
