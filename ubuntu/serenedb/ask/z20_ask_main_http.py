@@ -3070,6 +3070,113 @@ def _point2_unmatched_gate(question, intent, diag, cut, t0, *, src=None,
     return None
 
 
+def _c3_term_group_label(group):
+    """Label of a term group for journal feed."""
+    if isinstance(group, (list, tuple)):
+        parts = [str(x).strip() for x in group if str(x or "").strip()]
+        return " ".join(parts) if parts else ""
+    return str(group or "").strip()
+
+
+def _c3_unknown_words(intent, diag=None, *, include_rescue_concepts=False):
+    """measure/kind slots of intent with _base_knows False; point1 adds rescue_concepts."""
+    words = []
+    seen = set()
+    intent = intent or {}
+
+    def _add(raw):
+        w = (raw if isinstance(raw, str) else str(raw or "")).strip()
+        if not w:
+            return
+        key = w.casefold()
+        if key in seen:
+            return
+        try:
+            known = bool(_base_knows_kind_or_measure(w))
+        except Exception:  # noqa: BLE001 — offline/fail → known (empty feed)
+            known = True
+        if known:
+            return
+        seen.add(key)
+        words.append(w)
+
+    for slot in ("measure", "kind"):
+        raw = intent.get(slot)
+        if isinstance(raw, (list, tuple)):
+            for it in raw:
+                _add(it)
+        else:
+            _add(raw)
+    if include_rescue_concepts:
+        for tok in _gather_rescue_concepts(None, None, diag):
+            _add(tok)
+    return words
+
+
+def _c3_unknown_terms_unmatched(intent, diag=None, *, probe_terms=None,
+                                kinds=None, question="", exact_matched=None):
+    """Probe-failed term groups outside conceptual (i)-(iv). No probe → empty."""
+    if probe_terms is None:
+        return []
+    probe_terms = list(probe_terms or [])
+    kinds = kinds or {}
+    concepts = _gather_rescue_concepts(None, None, diag)
+    src = (diag or {}).get("src") if isinstance(diag, dict) else None
+    try:
+        excl = conceptual_term_group_norms(
+            probe_terms, intent=intent or {}, concepts=concepts, src=src,
+            question=question or "", exact_matched=exact_matched)
+    except Exception:  # noqa: BLE001
+        excl = set()
+    out = []
+    for i, g in enumerate(probe_terms):
+        if isinstance(i, int) and i in kinds:
+            continue
+        n = _term_group_norm(g)
+        try:
+            plat = bool(_group_is_platform_only(g))
+        except Exception:  # noqa: BLE001
+            plat = False
+        if (n and n in excl) or plat:
+            continue
+        lab = _c3_term_group_label(g)
+        if lab:
+            out.append(lab)
+    return out
+
+
+def _c3_stamp_diag(diag, intent, *, checkpoint, outcome=None,
+                   probe_terms=None, kinds=None, question="",
+                   exact_matched=None):
+    """Write unknown_* + checkpoint (+ outcome) into diag before point1/2 returns."""
+    if not isinstance(diag, dict):
+        return diag
+    diag["unknown_words"] = _c3_unknown_words(
+        intent, diag, include_rescue_concepts=(checkpoint == "point1"))
+    diag["unknown_terms_unmatched"] = _c3_unknown_terms_unmatched(
+        intent, diag, probe_terms=probe_terms, kinds=kinds,
+        question=question, exact_matched=exact_matched)
+    diag["checkpoint"] = checkpoint
+    if outcome is not None:
+        diag["outcome"] = outcome
+    return diag
+
+
+def _c3_stamp_out(out, intent, *, checkpoint, probe_terms=None, kinds=None,
+                  question="", exact_matched=None):
+    """Stamp packed answer diag; answer kind unchanged."""
+    if not isinstance(out, dict):
+        return out
+    d = out.get("diag")
+    if not isinstance(d, dict):
+        d = {}
+        out = dict(out)
+        out["diag"] = d
+    _c3_stamp_diag(
+        d, intent, checkpoint=checkpoint, outcome=out.get("kind"),
+        probe_terms=probe_terms, kinds=kinds,
+        question=question, exact_matched=exact_matched)
+    return out
 
 
 def llm_option_highlight(question, opts, diag=None, *, timeout_sec=None):
@@ -3968,6 +4075,17 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             question, intent, [], diag, cut, t0,
             {}, "", preds, {})
         if isinstance(_ep, dict) and _ep.get("kind"):
+            _r = ((_ep.get("diag") or {}).get("reason")
+                  if isinstance(_ep.get("diag"), dict) else None)
+            # off-topic wiki_none_empty: ТОЧКА 1 не входила — корм не штампуем
+            if _r != "wiki_none_empty":
+                _ep = _c3_stamp_out(
+                    _ep, intent, checkpoint="point1", question=question)
+                if isinstance(diag, dict) and isinstance(_ep.get("diag"), dict):
+                    for _k in ("unknown_words", "unknown_terms_unmatched",
+                               "checkpoint", "outcome"):
+                        if _k in _ep["diag"]:
+                            diag[_k] = _ep["diag"][_k]
             шаг("wiki исход", kind=_ep.get("kind"))
             return _ep
         picked = list((_ep or {}).get("picked") or [])
@@ -3975,6 +4093,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         plan = (_ep or {}).get("plan") or {}
         if not picked:
             шаг("wiki нет лидера")
+            _c3_stamp_diag(
+                diag, intent, checkpoint="point1", outcome="no_data",
+                question=question)
             return {
                 "kind": "no_data",
                 "partial": cut or None,
@@ -4152,7 +4273,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             exact_matched=_exact)
         if _p2 is not None:
             if isinstance(_p2, dict) and _p2.get("kind"):
-                return _p2
+                return _c3_stamp_out(
+                    _p2, intent, checkpoint="point2",
+                    probe_terms=_probe_terms, kinds=kinds,
+                    question=question, exact_matched=_exact)
             if isinstance(_p2, dict) and _p2.get("continue"):
                 _probe_terms = list(_p2.get("terms") or _probe_terms)
                 exprs, kinds = probe(
@@ -4160,11 +4284,16 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     src_label=(human_table_label(src) if src else None))
                 diag["match_by"] = {
                     k: v for k, v in (kinds or {}).items() if k != "_resolved"}
+                _exact = _exact_matched_norms(_probe_terms, kinds)
                 n_groups = len(_probe_terms)
                 matched_groups = matched_group_count(kinds)
                 if n_groups > 0 and matched_groups < n_groups:
                     diag["unmatched_terms"] = n_groups - matched_groups
                     шаг("значения не найдены", групп=n_groups - matched_groups)
+                    _c3_stamp_diag(
+                        diag, intent, checkpoint="point2", outcome="no_data",
+                        probe_terms=_probe_terms, kinds=kinds,
+                        question=question, exact_matched=_exact)
                     return {"partial": cut or None, "kind": "no_data", "sources": [],
                             "text": NO_DATA_TEXT or refuse_text(question),
                             "diag": _diag_pack(
@@ -4310,7 +4439,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         exact_matched=_exact)
                     if _p2b is not None:
                         if isinstance(_p2b, dict) and _p2b.get("kind"):
-                            return _p2b
+                            return _c3_stamp_out(
+                                _p2b, intent, checkpoint="point2",
+                                probe_terms=_probe_terms, kinds=kinds,
+                                question=question, exact_matched=_exact)
                         if isinstance(_p2b, dict) and _p2b.get("continue"):
                             _probe_terms = list(_p2b.get("terms") or _probe_terms)
                             exprs, kinds = probe(
@@ -4319,6 +4451,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                             diag["match_by"] = {
                                 k: v for k, v in (kinds or {}).items()
                                 if k != "_resolved"}
+                            _exact = _exact_matched_norms(_probe_terms, kinds)
                             n_groups = len(_probe_terms)
                             matched_groups = matched_group_count(kinds)
                             if n_groups > 0 and matched_groups < n_groups:
@@ -4326,6 +4459,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                                     n_groups - matched_groups)
                                 шаг("значения не найдены",
                                     групп=n_groups - matched_groups)
+                                _c3_stamp_diag(
+                                    diag, intent, checkpoint="point2",
+                                    outcome="no_data",
+                                    probe_terms=_probe_terms, kinds=kinds,
+                                    question=question, exact_matched=_exact)
                                 return {
                                     "partial": cut or None, "kind": "no_data",
                                     "sources": [],
@@ -4340,6 +4478,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                             # escalate уже сожжён — picked здесь не ожидаем
                             шаг("значения не найдены",
                                 групп=n_groups - matched_groups)
+                            _c3_stamp_diag(
+                                diag, intent, checkpoint="point2",
+                                outcome="no_data",
+                                probe_terms=_probe_terms, kinds=kinds,
+                                question=question, exact_matched=_exact)
                             return {
                                 "partial": cut or None, "kind": "no_data",
                                 "sources": [],
@@ -4352,6 +4495,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         else:
                             шаг("значения не найдены",
                                 групп=n_groups - matched_groups)
+                            _c3_stamp_diag(
+                                diag, intent, checkpoint="point2",
+                                outcome="no_data",
+                                probe_terms=_probe_terms, kinds=kinds,
+                                question=question, exact_matched=_exact)
                             return {
                                 "partial": cut or None, "kind": "no_data",
                                 "sources": [],
@@ -4364,6 +4512,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                     else:
                         шаг("значения не найдены",
                             групп=n_groups - matched_groups)
+                        _c3_stamp_diag(
+                            diag, intent, checkpoint="point2",
+                            outcome="no_data",
+                            probe_terms=_probe_terms, kinds=kinds,
+                            question=question, exact_matched=_exact)
                         return {
                             "partial": cut or None, "kind": "no_data",
                             "sources": [],
@@ -4375,6 +4528,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                         }
             else:
                 шаг("значения не найдены", групп=n_groups - matched_groups)
+                _c3_stamp_diag(
+                    diag, intent, checkpoint="point2", outcome="no_data",
+                    probe_terms=_probe_terms, kinds=kinds,
+                    question=question, exact_matched=_exact)
                 return {"partial": cut or None, "kind": "no_data", "sources": [],
                         "text": NO_DATA_TEXT or refuse_text(question),
                         "diag": _diag_pack(
@@ -4382,6 +4539,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                             reason="значения из вопроса не найдены в данных")}
         else:
             шаг("значения не найдены", групп=n_groups - matched_groups)
+            _c3_stamp_diag(
+                diag, intent, checkpoint="point2", outcome="no_data",
+                probe_terms=_probe_terms, kinds=kinds,
+                question=question, exact_matched=_exact)
             return {"partial": cut or None, "kind": "no_data", "sources": [],
                     "text": NO_DATA_TEXT or refuse_text(question),
                     "diag": _diag_pack(diag, sec=round(time.time() - t0, 2),
@@ -4856,7 +5017,19 @@ def _journal_ticket_variant(out, trusted=None):
 
 def _journal_intent(out):
     d = (out.get("diag") or {}) if isinstance(out, dict) else {}
-    return {k: d.get(k) for k in ("kind", "terms", "measure", "want") if d.get(k) not in (None, "", [])}
+    res = {k: d.get(k) for k in ("kind", "terms", "measure", "want")
+           if d.get(k) not in (None, "", [])}
+    # C3 корм шагу 7: оба ключа + checkpoint (+ исход) в intent_json
+    for k in ("unknown_words", "unknown_terms_unmatched", "checkpoint"):
+        if k in d and d.get(k) is not None:
+            res[k] = d.get(k)
+    if "checkpoint" in res:
+        oc = d.get("outcome")
+        if oc in (None, "") and isinstance(out, dict):
+            oc = out.get("kind")
+        if oc not in (None, ""):
+            res["outcome"] = oc
+    return res
 
 
 def _journal_fork_keys(out):
