@@ -1,3 +1,24 @@
+## 2026-09-18 (1) — D4 ч.1 ИСПОЛНЕНА: дайджесты опций + kind-prior + LLM-арбитр (ask), красная ×3 ACCEPT (круг 6) [код][замер]
+
+- Дайджесты в HINT (label чист; append к занятому entity-hint; «0 · не ведётся» у
+  мёртвых мер; «записей: 0» у пустых entity; «посчитаю по выбору» при промахе
+  бюджета): два шага (table-wide вердикт D1 → оконный batched digest-SELECT на
+  слой; nums: match+период+folder+amount; live: без match, doc_date→date_col
+  витрины, try_cast); count/count_amount на меру (с amount-фильтром); compare —
+  превью-пара одним SELECT; list — batched; rank/group — defer; digest ≡ aggregate
+  числом (avg round(2)); клик: short-circuit (agg[digest_form]=digest, totals=[],
+  SKIP aggregate+totals_of, «на момент вопроса»).
+- kind-prior: ТОЛЬКО accumulationregister_ выше document_ (остальные — единый
+  ранг, stable sort); на entity-меню денежность по вопросу (want/compute≠count).
+- LLM-арбитр llm_option_highlight: после дайджестов+prior, вход label+hint (без
+  сырых имён, п.16), ★ append в конец hint на месте, sync-wait ≤ min(800 мс,
+  remaining), fail-soft — меню уходит всегда (внешний try на весь блок).
+- Замок НОВЫЙ test_measure_digest.py: 52 кейса (16→52 за fix1–fix5). Красная ×3:
+  6 кругов = 18 вердиктов, 18 блокеров снято. Регрессия: degenerate 94, homonym 42,
+  one_path 78 (расширен статикой), compose 91, period_empty 30.
+Числа: замок 52/0; красная 6×3=18 вердиктов (9 ACCEPT/9 REJECT по кругам, финал ×3).
+Доки: канон .claude/state/design-b.md §1b.
+
 ## 2026-09-17 (3) — D2 ИСПОЛНЕНА: гомоним из базы + kind-подписи, красная ×3 ACCEPT (круг 5) [код][замер]
 
 - Слой 2 («Реализация ТМЦ» документ↔регистр — молчаливый выбор) закрыт:

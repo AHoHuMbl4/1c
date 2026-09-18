@@ -144,6 +144,13 @@ def load_z21(extra_ns=None):
             (c.get("src_table") or ""): c for c in (cards or [])
             if isinstance(c, dict) and c.get("src_table")},
         "readings_menu": _readings_menu,
+        # D4: z21 зовёт finalize_clarify_menu; offline-замок — без SQL дайджестов
+        "finalize_clarify_menu": (
+            lambda question, kind, items, diag, cut, t0, *, reason="",
+                   intent=None, plan=None, match="", preds=None,
+                   form_key=None, layers=None, src=None, slot_mode=None,
+                   with_digests=True: _readings_menu(
+                       question, kind, items, diag, cut, t0, reason=reason)),
         "wiki_validate_leader_axes": lambda leader, intent: True,
         "_diag_pack": lambda d, **k: d,
         "register_zone": lambda *a, **k: None,
@@ -327,7 +334,8 @@ def main():
       "skip_empty_filter" in z20)
     z21txt = Z21.read_text(encoding="utf-8")
     t("z21: readings_menu на clarify hybrid",
-      "readings_menu(" in z21txt)
+      ("readings_menu(" in z21txt
+       or "finalize_clarify_menu(" in z21txt))
     t("z21: wiki_homonym_kind_peers жив",
       "def wiki_homonym_kind_peers" in z21txt)
     t("z21: wiki_leader_db_homonym_gate жив",

@@ -142,7 +142,9 @@ def _install_common(verdict=None, live_vals=None):
         calls["n"] += 1
         calls["sqls"].append(sql)
         s = sql.lower()
-        if "from search_idx" in s and "filter" in s:
+        # degeneracy table-wide only (alive+max_abs); digest SELECT may use INDEX
+        if ("from search_idx" in s and "filter" in s
+                and ("max(abs(" in s or "<> 0" in s)):
             calls["bad_from"] = True
             return [[False, 0.0] * len(ALL_MEAS)]
         if "filter" in s and ("search_corpus" in s or "query_table" in s):

@@ -943,7 +943,7 @@ def wiki_db_homonym_peer_rows(leader_src, label_norm):
 
 def wiki_entity_clarify_menu(question, candidates, diag, cut, t0,
                              by=None, match="", preds=None,
-                             *, reason="wiki_separability"):
+                             *, reason="wiki_separability", intent=None, plan=None):
     """Общий конвейер clarify entity: mk_opts → captions → readings_menu.
 
     D2-гомоним (reason=wiki_homonym_db): skip_empty_filter — пир found=0 не
@@ -998,8 +998,11 @@ def wiki_entity_clarify_menu(question, candidates, diag, cut, t0,
         return None
     _pmap = wiki_captions_map_from_cards(cands)
     opts = wiki_menu_captions(opts, passports_by_src=_pmap)
-    return readings_menu(
-        question, "entity", opts, diag, cut, t0, reason=reason)
+    # D4: captions final then digests/kind-prior/highlight
+    return finalize_clarify_menu(
+        question, "entity", opts, diag, cut, t0, reason=reason,
+        intent=intent, plan=plan, match=match or "", preds=preds,
+        with_digests=True)
 
 
 def wiki_homonym_peer_fail_soft(question, diag, cut, t0):
@@ -1021,7 +1024,7 @@ def wiki_homonym_peer_fail_soft(question, diag, cut, t0):
 
 
 def wiki_leader_db_homonym_gate(leader, question, intent, diag, cut, t0,
-                                by=None, match="", preds=None):
+                                by=None, match="", preds=None, plan=None):
     """После sole-yes: пиры из базы по label → clarify; иначе None (=leader)."""
     leader = (leader or "").strip()
     if not leader:
@@ -1095,7 +1098,7 @@ def wiki_leader_db_homonym_gate(leader, question, intent, diag, cut, t0,
     menu = wiki_entity_clarify_menu(
         question, candidates, diag, cut, t0,
         by=by, match=match, preds=preds,
-        reason="wiki_homonym_db")
+        reason="wiki_homonym_db", intent=intent, plan=plan)
     if menu is not None:
         return menu
     return wiki_homonym_peer_fail_soft(question, diag, cut, t0)
@@ -1298,7 +1301,7 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
     _wiki_skip_manual = False
     _wiki = try_wiki_hybrid_entity_pick(
         question, intent, diag, cut, t0,
-        by=by, match=match, preds=preds)
+        by=by, match=match, preds=preds, plan=plan)
     if (_wiki and _wiki.get("kind") in ("no_data", "clarify", "answer")):
         return _wiki
     if _wiki and _wiki.get("picked") and not picked:
@@ -1329,7 +1332,7 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
 
 
 def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
-                                by=None, match="", preds=None):
+                                by=None, match="", preds=None, plan=None):
     """Единая точка интеграции для z20."""
     if diag is None:
         diag = {}
@@ -1392,14 +1395,14 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
         return wiki_entity_clarify_menu(
             question, pick.get("candidates") or [], diag, cut, t0,
             by=by, match=match, preds=preds,
-            reason="wiki_separability")
+            reason="wiki_separability", intent=intent, plan=plan)
     leader = pick.get("leader")
     if leader:
         if not wiki_leader_post_verify(leader, intent, question, diag):
             return None
         gated = wiki_leader_db_homonym_gate(
             leader, question, intent, diag, cut, t0,
-            by=by, match=match, preds=preds)
+            by=by, match=match, preds=preds, plan=plan)
         if gated is not None:
             return gated
         return {"picked": [leader], "marks": {}, "plan": {}}

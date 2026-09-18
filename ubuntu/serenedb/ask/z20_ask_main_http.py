@@ -261,21 +261,26 @@ def gate_out(text, rows=(), agg=None, allowed=None, our_dates=None, money=True,
 
 
 def _opt_values(opts):
-    """Числа, которые модель ВИДЕЛА, сочиняя уточнение: имена вариантов и их приметы.
+    """Numbers the model saw while drafting clarify: option names and marks.
 
-    Больше ей ничего не давали (`clarify_text` кладёт в задание только вопрос, метки и
-    `distinct_by`), поэтому всё остальное числовое в уточнении — сочинённое.
+    D4: hint and digest scalars join the gate_out allow-list.
     """
     out = []
     for o in (opts or []):
-        for k in ("label", "distinct_by", "measure", "entity_label"):
+        for k in ("label", "distinct_by", "measure", "entity_label", "hint"):
             out += sorted(_norm_numbers(o.get(k) or ""))
         if o.get("found") is not None:
             try:
                 out.append(float(o["found"]))
             except (TypeError, ValueError):
                 pass
+        if o.get("digest") is not None:
+            try:
+                out.append(float(o["digest"]))
+            except (TypeError, ValueError):
+                pass
     return out
+
 
 
 def clarify_choice_prompt(question, label):
@@ -1700,6 +1705,11 @@ def _measure_short_circuit_agg(digest, digest_form="sum", count=0, count_amount=
         "out_of_range": 0,
     }
     key = digest_form or "sum"
+    if key == "avg" and digest is not None:
+        try:
+            digest = round(float(digest), 2)  # D4FIX3_MARK: ≡ z17
+        except (TypeError, ValueError):
+            pass
     agg[key] = digest
     if key != "sum":
         agg.setdefault("sum", None)
@@ -1952,8 +1962,16 @@ def _degeneracy_table_wide_select(src, measures, layer="nums"):
     return out
 
 
-def _live_preds_rewrite(preds, intent, measure):
-    """Период + amount на try_cast; без match/map_extract(nums)."""
+def _live_preds_rewrite(preds, intent, measure, src=None):
+    """Период→date_col витрины; amount на try_cast(measure); без match/nums.
+    Как aggregate_live_column (z17:100–103). D4FIX1_MARK.
+    """
+    date_col = None
+    if src:
+        try:
+            date_col = _live_measure_date_col(src)
+        except Exception:  # noqa: BLE001
+            date_col = None
     out = []
     for p in preds or []:
         ps = str(p)
@@ -1964,13 +1982,18 @@ def _live_preds_rewrite(preds, intent, measure):
         if "src_table" in ps:
             continue
         if "doc_date" in ps:
-            out.append(ps)
+            if date_col:
+                out.append(ps.replace(
+                    "doc_date",
+                    "try_cast(%s AS TIMESTAMP)" % _sql_ident_col(date_col)))
+            else:
+                # no date_col: keep for aggregate_live_column rewrite;
+                # digest-batch without date_col fails soft on query_table
+                out.append(ps)
             continue
-        # прочие — только если не nums
         if "nums" in ps:
             continue
         out.append(ps)
-    # amount на try_cast колонки
     a = (intent or {}).get("amount") or {}
     op, v, v2 = a.get("op"), a.get("value"), a.get("value2")
     if op and v is not None and measure:
@@ -2047,6 +2070,902 @@ def _live_only_menu_hint():
     return raw
 
 
+
+# --- D4 digests / kind-prior / llm_option_highlight (D4_DIGEST_MARK) ---
+_DIGEST_DEFER = "посчитаю по выбору"
+_DIGEST_DEAD = "0 · не ведётся"
+_LLM_STAR_PREFIX = "★ "
+_DIGEST_AS_OF = "на момент вопроса"
+
+
+def _hint_append(opt, piece):
+    """Append piece to option hint (различитель · дайджест · star)."""
+    if not isinstance(opt, dict):
+        return
+    piece = (piece or "").strip()
+    if not piece:
+        return
+    cur = (opt.get("hint") or "").strip()
+    if not cur:
+        opt["hint"] = piece
+        return
+    if piece in cur:
+        return
+    opt["hint"] = "%s · %s" % (cur, piece)
+
+
+def _deadline_remaining_sec():
+    """Seconds left on ASK_DEADLINE; None if no clock."""
+    try:
+        rid = _rid_get()
+    except Exception:  # noqa: BLE001
+        rid = None
+    t0 = _REQ_T0.get(rid) if rid else None
+    if t0 is None:
+        return None
+    return max(0.0, float(ASK_DEADLINE_SEC) - (time.monotonic() - t0))
+
+
+def _digest_form_of(form_key=None, intent=None, plan=None, slot_mode=None):
+    """Digest form key from form_key/intent/plan/slot_mode."""
+    fk = (form_key or "").strip().lower()
+    if fk in ("sum", "avg", "min", "max", "compare", "rank", "group", "list", "count"):
+        return fk
+    compute = ((plan or {}).get("compute") or "").strip().lower()
+    if compute in ("avg", "min", "max", "sum"):
+        return compute
+    want = ((intent or {}).get("want") or "").strip().lower()
+    sm = (slot_mode or "").strip().lower()
+    if sm in ("rank", "compare", "list", "count", "sum"):
+        return sm
+    if want == "count":
+        return "count"
+    if want == "list":
+        return "list"
+    if want == "sum":
+        return "sum"
+    return "sum"
+
+def _fmt_digest_num(v):
+    try:
+        return _fmt_human(v)
+    except Exception:  # noqa: BLE001
+        return _fmt(v)
+
+
+def _digest_hint_text(form, payload):
+    """Human digest caption for hint; label stays clean."""
+    form = (form or "sum").lower()
+    if payload is None:
+        return _DIGEST_DEFER
+    if isinstance(payload, dict) and payload.get('defer'):
+        return _DIGEST_DEFER
+    if isinstance(payload, dict) and payload.get('dead'):
+        return _DIGEST_DEAD
+    if form in ("sum", "avg", "min", "max"):
+        v = payload.get("value") if isinstance(payload, dict) else payload
+        if v is None:
+            # D4FIX5_MARK: digest ok + count known -> itog:0 / записей:N (not defer)
+            n = None
+            if isinstance(payload, dict):
+                n = payload.get("count")
+                if n is None:
+                    n = payload.get("count_amount")
+            if n is None:
+                return _DIGEST_DEFER
+            try:
+                ni = int(n)
+            except (TypeError, ValueError):
+                ni = 0
+            if ni == 0:
+                word = {"sum": "итог", "avg": "среднее", "min": "мин",
+                        "max": "макс"}.get(form, "итог")
+                return "%s: %s" % (word, _fmt_digest_num(0))
+            return "записей: %s" % _fmt_digest_num(n)
+        word = {"sum": "итог", "avg": "среднее", "min": "мин", "max": "макс"}.get(form, "итог")
+        return "%s: %s" % (word, _fmt_digest_num(v))
+    if form == "count":
+        n = payload.get("count") if isinstance(payload, dict) else payload
+        if n is None:
+            return _DIGEST_DEFER
+        return "записей: %s" % _fmt_digest_num(n)
+    if form == "compare":
+        if not isinstance(payload, dict):
+            return _DIGEST_DEFER
+        b, o = payload.get("base"), payload.get("other")
+        if b is None or o is None:
+            return _DIGEST_DEFER
+        return "сравнение: %s против %s" % (_fmt_digest_num(b), _fmt_digest_num(o))
+    if form == "list":
+        if not isinstance(payload, dict):
+            return _DIGEST_DEFER
+        n = payload.get("count")
+        prev = payload.get("preview") or []
+        if n is None:
+            return _DIGEST_DEFER
+        if prev:
+            return "список %s: %s" % (_fmt_digest_num(n), ", ".join(str(x) for x in prev[:3]))
+        return "список: %s" % _fmt_digest_num(n)
+    if form in ("rank", "group"):
+        if not isinstance(payload, dict):
+            return _DIGEST_DEFER
+        if payload.get("defer") or not payload.get("top"):
+            return _DIGEST_DEFER
+        top = payload.get("top") or {}
+        key, val = top.get("key"), top.get("value")
+        if key is None or val is None:
+            return _DIGEST_DEFER
+        kind = "топ" if form == "rank" else "группа"
+        return "%s: %s = %s" % (kind, key, _fmt_digest_num(val))
+    if form == "entity":
+        if not isinstance(payload, dict):
+            return _DIGEST_DEFER
+        n = payload.get("count")
+        dmin, dmax = payload.get("date_min"), payload.get("date_max")
+        if n is None:
+            return _DIGEST_DEFER
+        # n==0 — пустое окно/счётчик, не мёртвая мера (DEAD только measure degenerate)
+        parts = ["записей: %s" % _fmt_digest_num(n)]
+        if int(n or 0) > 0 and dmin and dmax:
+            y1, y2 = str(dmin)[:4], str(dmax)[:4]
+            if y1 and y2:
+                parts.append("данные %s–%s" % (y1, y2))
+        return " · ".join(parts)
+    return _DIGEST_DEFER
+
+
+def _nfloat(x):
+    try:
+        return None if x is None or x == "" else float(x)
+    except (TypeError, ValueError):
+        return None
+
+
+def _digest_strip_amount_preds(preds):
+    """Срез amount/map_extract(nums): период+folder остаются; мера — отдельно. D4FIX1_MARK."""
+    out = []
+    for p in preds or []:
+        ps = str(p)
+        if "map_extract" in ps and "nums" in ps:
+            continue
+        out.append(p)
+    return out
+
+
+def _digest_nums_filter(folder, intent, measure):
+    """FILTER = folder ∧ amount этой меры (как клик aggregate)."""
+    bits = [folder] if folder else []
+    if intent is not None and measure:
+        bits.extend(_num_pred(intent, measure) or [])
+    return " AND ".join(bits) if bits else "TRUE"
+
+
+def _digest_nums_batch(src, measures, match, preds, form, intent=None):
+    """One nums SELECT; count+amount per measure in FILTER. Docs: FILTER; TRY_CAST.
+    D4FIX4_MARK: count(*) FILTER (folder ∧ amount_m) ≡ aggregate.count.
+    """
+    names = [m for m in (measures or []) if m]
+    if not src or not names:
+        return {}
+    folder = _degeneracy_folder_pred()
+    base = _digest_strip_amount_preds(preds)
+    where = [w for w in ([match] + list(base) + ["src_table = %s" % lit(src)]) if w]
+    tbl = INDEX if match else CORPUS
+    parts = []
+    for m in names:
+        filt = _digest_nums_filter(folder, intent, m)
+        expr = ("TRY_CAST(map_extract(nums, %s)[1] AS DECIMAL(38,10))" % lit(m))
+        parts.append("count(*) FILTER (%s)" % filt)
+        parts.append("sum(%s) FILTER (%s)" % (expr, filt))
+        parts.append("min(%s) FILTER (%s)" % (expr, filt))
+        parts.append("max(%s) FILTER (%s)" % (expr, filt))
+        parts.append(
+            "CASE WHEN count(%s) FILTER (%s) > 0 "
+            "THEN sum(%s) FILTER (%s) / count(%s) FILTER (%s) END"
+            % (expr, filt, expr, filt, expr, filt))
+        parts.append("count(%s) FILTER (%s)" % (expr, filt))
+    sql = ("SELECT %s FROM %s WHERE %s" % (", ".join(parts), tbl, " AND ".join(where)))
+    try:
+        r = psql(sql)
+    except RuntimeError:
+        return None
+    if not r or not r[0]:
+        return {m: {"value": None, "count": 0, "count_amount": 0, "min": None, "max": None, "via": "nums"} for m in names}
+    row = list(r[0]) + [None] * (6 * len(names))
+    out = {}
+    for i, m in enumerate(names):
+        base_i = 6 * i
+        cnt_raw, s, mn, mx, av, ca = row[base_i:base_i + 6]
+        try:
+            cnt = int(cnt_raw or 0)
+        except (TypeError, ValueError):
+            cnt = 0
+        s, mn, mx, av = _nfloat(s), _nfloat(mn), _nfloat(mx), _nfloat(av)
+        if av is not None:
+            av = round(av, 2)  # D4FIX3_MARK: ≡ z17 aggregate avg
+        try:
+            ca_i = int(ca or 0)
+        except (TypeError, ValueError):
+            ca_i = 0
+        val = {"avg": av, "min": mn, "max": mx}.get(form, s)
+        out[m] = {"value": val, "sum": s, "min": mn, "max": mx, "avg": av,
+                  "count": cnt, "count_amount": ca_i, "via": "nums"}
+    return out
+
+
+def _digest_live_batch(src, measures, preds, intent, form):
+    """One live SELECT: date_col rewrite + folder; count+amount per measure.
+    D4FIX4_MARK: count(*) FILTER (amount_m) ≡ aggregate_live_column.count.
+    """
+    names = [m for m in (measures or []) if m]
+    if not src or not names:
+        return {}
+    # period+folder shared; amount — на try_cast каждой меры (как клик)
+    base_preds = _live_preds_rewrite(preds, intent, None, src=src)
+    folder_bits = []
+    try:
+        folder_bits = list(_live_std_excl_preds(src) or [])
+    except Exception:  # noqa: BLE001
+        folder_bits = []
+    where = list(base_preds) + list(folder_bits)
+    wsql = (" WHERE " + " AND ".join(where)) if where else ""
+    parts = []
+    for m in names:
+        col = "try_cast(%s AS DECIMAL(38,10))" % ('"' + str(m).replace('"', '""') + '"')
+        amt = _live_preds_rewrite([], intent, m, src=src)
+        if amt:
+            filt = " AND ".join(amt)
+            parts.append("count(*) FILTER (%s)" % filt)
+            parts.append("sum(%s) FILTER (%s)" % (col, filt))
+            parts.append("min(%s) FILTER (%s)" % (col, filt))
+            parts.append("max(%s) FILTER (%s)" % (col, filt))
+            parts.append(
+                "CASE WHEN count(%s) FILTER (%s) > 0 "
+                "THEN sum(%s) FILTER (%s) / count(%s) FILTER (%s) END"
+                % (col, filt, col, filt, col, filt))
+            parts.append("count(%s) FILTER (%s)" % (col, filt))
+        else:
+            parts.append("count(*)")
+            parts.append("sum(%s)" % col)
+            parts.append("min(%s)" % col)
+            parts.append("max(%s)" % col)
+            parts.append("CASE WHEN count(%s) > 0 THEN sum(%s) / count(%s) END" % (col, col, col))
+            parts.append("count(%s)" % col)
+    sql = ("SELECT %s FROM query_table(%s)%s" % (", ".join(parts), lit(src), wsql))
+    try:
+        r = psql(sql)
+    except RuntimeError:
+        return None
+    if not r or not r[0]:
+        return {m: {"value": None, "count": 0, "count_amount": 0, "min": None, "max": None, "via": "live"} for m in names}
+    row = list(r[0]) + [None] * (6 * len(names))
+    out = {}
+    for i, m in enumerate(names):
+        base_i = 6 * i
+        cnt_raw, s, mn, mx, av, ca = row[base_i:base_i + 6]
+        try:
+            cnt = int(cnt_raw or 0)
+        except (TypeError, ValueError):
+            cnt = 0
+        s, mn, mx, av = _nfloat(s), _nfloat(mn), _nfloat(mx), _nfloat(av)
+        if av is not None:
+            av = round(av, 2)  # D4FIX3_MARK: ≡ z17 aggregate_live_column avg
+        try:
+            ca_i = int(ca or 0)
+        except (TypeError, ValueError):
+            ca_i = 0
+        val = {"avg": av, "min": mn, "max": mx}.get(form, s)
+        out[m] = {"value": val, "sum": s, "min": mn, "max": mx, "avg": av,
+                  "count": cnt, "count_amount": ca_i, "via": "live"}
+    return out
+
+
+def _digest_compare_batch(src, measures, match, preds, intent, layers):
+    """Compare preview pair: one SELECT per layer (two period-FILTER sets)."""
+    names = [m for m in (measures or []) if m]
+    if not src or not names:
+        return {}
+    p1 = (intent or {}).get("period") or {}
+    p2 = (intent or {}).get("period2") or {}
+    out = {}
+    nums_m = [m for m in names if (layers or {}).get(m, "nums") != "live"]
+    live_m = [m for m in names if (layers or {}).get(m) == "live"]
+    p1bits = period_preds(p1)
+    p2bits = period_preds(p2)
+    p1c = " AND ".join(p1bits) if p1bits else "TRUE"
+    p2c = " AND ".join(p2bits) if p2bits else "TRUE"
+    if nums_m:
+        if deadline_hit():
+            for m in nums_m:
+                out[m] = {"defer": True}
+        else:
+            folder = _degeneracy_folder_pred()
+            # период — только в FILTER; amount — на меру; чужой amount срезан
+            base = [p for p in _digest_strip_amount_preds(preds) if "doc_date" not in str(p)]
+            where = [w for w in ([match] + list(base) + ["src_table = %s" % lit(src)]) if w]
+            tbl = INDEX if match else CORPUS
+            parts = ["count(*) FILTER ((%s) AND (%s))" % (folder, p1c)]
+            for m in nums_m:
+                filt = _digest_nums_filter(folder, intent, m)
+                f1 = "(%s) AND (%s)" % (filt, p1c)
+                expr = ("TRY_CAST(map_extract(nums, %s)[1] AS DECIMAL(38,10))" % lit(m))
+                parts.append("sum(%s) FILTER (%s)" % (expr, f1))
+                parts.append("min(%s) FILTER (%s)" % (expr, f1))
+                parts.append("max(%s) FILTER (%s)" % (expr, f1))
+                parts.append(
+                    "CASE WHEN count(%s) FILTER (%s) > 0 "
+                    "THEN sum(%s) FILTER (%s) / count(%s) FILTER (%s) END"
+                    % (expr, f1, expr, f1, expr, f1))
+                parts.append("count(%s) FILTER (%s)" % (expr, f1))
+            parts.append("count(*) FILTER ((%s) AND (%s))" % (folder, p2c))
+            for m in nums_m:
+                filt = _digest_nums_filter(folder, intent, m)
+                f2 = "(%s) AND (%s)" % (filt, p2c)
+                expr = ("TRY_CAST(map_extract(nums, %s)[1] AS DECIMAL(38,10))" % lit(m))
+                parts.append("sum(%s) FILTER (%s)" % (expr, f2))
+                parts.append("min(%s) FILTER (%s)" % (expr, f2))
+                parts.append("max(%s) FILTER (%s)" % (expr, f2))
+                parts.append(
+                    "CASE WHEN count(%s) FILTER (%s) > 0 "
+                    "THEN sum(%s) FILTER (%s) / count(%s) FILTER (%s) END"
+                    % (expr, f2, expr, f2, expr, f2))
+                parts.append("count(%s) FILTER (%s)" % (expr, f2))
+            sql = ("SELECT %s FROM %s WHERE %s" % (", ".join(parts), tbl, " AND ".join(where)))
+            try:
+                r = psql(sql)
+            except RuntimeError:
+                for m in nums_m:
+                    out[m] = {"defer": True}
+                r = None
+            if r is not None:
+                need = 1 + 5 * len(nums_m)
+                row = list((r or [[]])[0] or []) + [None] * (need * 2)
+                try:
+                    cnt1 = int(row[0] or 0)
+                except (TypeError, ValueError):
+                    cnt1 = 0
+                off2 = need
+                for i, m in enumerate(nums_m):
+                    b1 = 1 + 5 * i
+                    b2 = off2 + 1 + 5 * i
+                    s1 = _nfloat(row[b1])
+                    s2 = _nfloat(row[b2])
+                    try:
+                        ca1 = int(row[b1 + 4] or 0)
+                    except (TypeError, ValueError):
+                        ca1 = 0
+                    out[m] = {
+                        "base": s1, "other": s2,
+                        "count": cnt1, "count_amount": ca1, "via": "nums",
+                    }
+    if live_m:
+        if deadline_hit():
+            for m in live_m:
+                out[m] = {"defer": True}
+        else:
+            # один query_table: два набора period-FILTER после date_col rewrite
+            base0 = _live_preds_rewrite(
+                [p for p in (preds or []) if "doc_date" not in str(p)],
+                intent, None, src=src)
+            folder_bits = []
+            try:
+                folder_bits = list(_live_std_excl_preds(src) or [])
+            except Exception:  # noqa: BLE001
+                folder_bits = []
+            where = list(base0) + list(folder_bits)
+            wsql = (" WHERE " + " AND ".join(where)) if where else ""
+            rp1 = _live_preds_rewrite(p1bits, intent, None, src=src)
+            rp2 = _live_preds_rewrite(p2bits, intent, None, src=src)
+            f1p = " AND ".join(rp1) if rp1 else "TRUE"
+            f2p = " AND ".join(rp2) if rp2 else "TRUE"
+            parts = ["count(*) FILTER (%s)" % f1p]
+            for m in live_m:
+                col = "try_cast(%s AS DECIMAL(38,10))" % (
+                    '"' + str(m).replace('"', '""') + '"')
+                amt = _live_preds_rewrite([], intent, m, src=src)
+                extra = (" AND " + " AND ".join(amt)) if amt else ""
+                ff1 = "(%s)%s" % (f1p, extra)
+                parts.append("sum(%s) FILTER (%s)" % (col, ff1))
+                parts.append("min(%s) FILTER (%s)" % (col, ff1))
+                parts.append("max(%s) FILTER (%s)" % (col, ff1))
+                parts.append(
+                    "CASE WHEN count(%s) FILTER (%s) > 0 "
+                    "THEN sum(%s) FILTER (%s) / count(%s) FILTER (%s) END"
+                    % (col, ff1, col, ff1, col, ff1))
+                parts.append("count(%s) FILTER (%s)" % (col, ff1))
+            parts.append("count(*) FILTER (%s)" % f2p)
+            for m in live_m:
+                col = "try_cast(%s AS DECIMAL(38,10))" % (
+                    '"' + str(m).replace('"', '""') + '"')
+                amt = _live_preds_rewrite([], intent, m, src=src)
+                extra = (" AND " + " AND ".join(amt)) if amt else ""
+                ff2 = "(%s)%s" % (f2p, extra)
+                parts.append("sum(%s) FILTER (%s)" % (col, ff2))
+                parts.append("min(%s) FILTER (%s)" % (col, ff2))
+                parts.append("max(%s) FILTER (%s)" % (col, ff2))
+                parts.append(
+                    "CASE WHEN count(%s) FILTER (%s) > 0 "
+                    "THEN sum(%s) FILTER (%s) / count(%s) FILTER (%s) END"
+                    % (col, ff2, col, ff2, col, ff2))
+                parts.append("count(%s) FILTER (%s)" % (col, ff2))
+            sql = ("SELECT %s FROM query_table(%s)%s" % (", ".join(parts), lit(src), wsql))
+            try:
+                r = psql(sql)
+            except RuntimeError:
+                for m in live_m:
+                    out[m] = {"defer": True}
+                r = None
+            if r is not None:
+                need = 1 + 5 * len(live_m)
+                row = list((r or [[]])[0] or []) + [None] * (need * 2)
+                try:
+                    cnt1 = int(row[0] or 0)
+                except (TypeError, ValueError):
+                    cnt1 = 0
+                off2 = need
+                for i, m in enumerate(live_m):
+                    b1 = 1 + 5 * i
+                    b2 = off2 + 1 + 5 * i
+                    s1 = _nfloat(row[b1])
+                    s2 = _nfloat(row[b2])
+                    try:
+                        ca1 = int(row[b1 + 4] or 0)
+                    except (TypeError, ValueError):
+                        ca1 = 0
+                    out[m] = {
+                        "base": s1, "other": s2,
+                        "count": cnt1, "count_amount": ca1, "via": "live",
+                    }
+    return out
+
+
+def _digest_list_batch(src, measures, match, preds, layers, intent=None, limit=3):
+    """Size + top-3 preview ОДНИМ SELECT (UNION ALL); live — defer."""
+    names = [m for m in (measures or []) if m]
+    if not src or not names:
+        return {}
+    out = {}
+    nums_m = [m for m in names if (layers or {}).get(m, "nums") != "live"]
+    live_m = [m for m in names if (layers or {}).get(m) == "live"]
+    for m in live_m:
+        out[m] = {"defer": True}
+    if not nums_m:
+        return out
+    if deadline_hit():
+        return {m: {"defer": True} for m in names}
+    folder = _degeneracy_folder_pred()
+    tbl = INDEX if match else CORPUS
+    # counts: один SELECT, amount на меру в FILTER
+    base = _digest_strip_amount_preds(preds)
+    where = [w for w in ([match] + list(base) + ["src_table = %s" % lit(src), folder]) if w]
+    parts = []
+    for m in nums_m:
+        expr = ("TRY_CAST(map_extract(nums, %s)[1] AS DECIMAL(38,10))" % lit(m))
+        amt = _num_pred(intent, m) if intent is not None else []
+        filt = ("(%s IS NOT NULL)" % expr)
+        if amt:
+            filt = "(%s) AND (%s)" % (filt, " AND ".join(amt))
+        parts.append("count(%s) FILTER (%s)" % (expr, filt))
+    sql = ("SELECT %s FROM %s WHERE %s" % (", ".join(parts), tbl, " AND ".join(where)))
+    try:
+        r = psql(sql)
+    except RuntimeError:
+        return None
+    row = list((r or [[]])[0] or []) + [None] * len(nums_m)
+    counts = {}
+    for i, m in enumerate(nums_m):
+        try:
+            counts[m] = int(row[i] or 0)
+        except (TypeError, ValueError):
+            counts[m] = 0
+    # preview: ОДИН UNION ALL (не цикл psql по мерам)
+    unions = []
+    for i, m in enumerate(nums_m):
+        expr = ("TRY_CAST(map_extract(nums, %s)[1] AS DECIMAL(38,10))" % lit(m))
+        preds_m = list(base) + list(_num_pred(intent, m) if intent is not None else [])
+        where_m = [w for w in ([match] + preds_m + ["src_table = %s" % lit(src), folder]) if w]
+        unions.append(
+            "(SELECT %d AS mid, CAST(%s AS VARCHAR) AS v FROM %s WHERE %s AND %s IS NOT NULL "
+            "ORDER BY %s DESC NULLS LAST LIMIT %d)"
+            % (i, expr, tbl, " AND ".join(where_m), expr, expr, int(limit)))
+    previews = {m: [] for m in nums_m}
+    if unions:
+        sql_p = "SELECT mid, v FROM (%s)" % " UNION ALL ".join(unions)
+        try:
+            pr = psql(sql_p)
+            for rr in (pr or []):
+                if not rr or rr[0] is None:
+                    continue
+                try:
+                    mid = int(rr[0])
+                except (TypeError, ValueError):
+                    continue
+                if 0 <= mid < len(nums_m) and rr[1] is not None:
+                    previews[nums_m[mid]].append(str(rr[1]))
+        except RuntimeError:
+            previews = {m: [] for m in nums_m}
+    for m in nums_m:
+        n = counts.get(m, 0)
+        out[m] = {"count": n, "preview": previews.get(m) or [], "via": "nums",
+                  "count_amount": n}
+    return out
+
+
+def _digest_rank_group_batch(src, measures, match, preds, layers, form):
+    """Top-1 same-form preview, or defer (no bare sum digit)."""
+    _ = (src, measures, match, preds, layers, form)
+    return {m: {"defer": True} for m in (measures or []) if m}
+
+
+def _digest_entity_batch(srcs, match, preds):
+    """One SELECT for all entities: CORPUS + doc_date."""
+    names = [s for s in (srcs or []) if s]
+    if not names:
+        return {}
+    lst = ", ".join(lit(s) for s in names)
+    where = ["src_table IN (%s)" % lst]
+    for p in preds or []:
+        ps = str(p)
+        if "src_table" in ps:
+            continue
+        if "@@" in ps or "ts_" in ps:
+            continue
+        where.append(ps)
+    sql = (
+        "SELECT src_table, count(*), "
+        "coalesce(min(doc_date)::date::text,''), "
+        "coalesce(max(doc_date)::date::text,'') "
+        "FROM %s WHERE %s GROUP BY src_table"
+        % (CORPUS, " AND ".join(where)))
+    try:
+        r = psql(sql)
+    except RuntimeError:
+        return None
+    out = {s: {"count": 0, "date_min": "", "date_max": "", "via": "corpus"} for s in names}
+    for row in (r or []):
+        if not row or not row[0]:
+            continue
+        try:
+            n = int(row[1] or 0)
+        except (TypeError, ValueError):
+            n = 0
+        out[row[0]] = {
+            "count": n,
+            "date_min": (row[2] or "") if len(row) > 2 else "",
+            "date_max": (row[3] or "") if len(row) > 3 else "",
+            "via": "corpus",
+        }
+    return out
+
+def _apply_measure_digest_to_opt(opt, form, dig, layers=None):
+    """Set digest/hint/answer_mode on option; label untouched."""
+    if not isinstance(opt, dict):
+        return
+    if (opt.get("measure_verdict") or "") == "degenerate":
+        if _DIGEST_DEAD not in (opt.get('hint') or ''):
+            _hint_append(opt, _DIGEST_DEAD)
+        return
+    if dig is None or (isinstance(dig, dict) and dig.get('defer')):
+        _hint_append(opt, _DIGEST_DEFER)
+        return
+    if form in ("sum", "avg", "min", "max"):
+        val = dig.get("value") if isinstance(dig, dict) else None
+        ca = dig.get("count_amount") if isinstance(dig, dict) else None
+        cnt = dig.get("count") if isinstance(dig, dict) else None
+        via = (dig.get("via") if isinstance(dig, dict) else None) or "nums"
+        _hint_append(opt, _digest_hint_text(form, dig))
+        if val is not None and ca is not None:
+            opt["digest"] = val
+            opt["digest_form"] = form
+            opt["digest_scope"] = {"via": via}
+            opt["count"] = cnt if cnt is not None else 0
+            opt["count_amount"] = ca
+            opt["min"] = dig.get("min")
+            opt["max"] = dig.get("max")
+            if (opt.get("answer_mode") or "") != "text_with_total":
+                opt["answer_mode"] = "short_circuit"
+                opt["measure_verdict"] = "alive"
+        return
+    if form in ("compare", "list", "rank", "group", "count"):
+        _hint_append(opt, _digest_hint_text(form, dig))
+        return
+    _hint_append(opt, _DIGEST_DEFER)
+
+
+def attach_option_digests(opts, *, kind, question=None, intent=None, plan=None,
+                          match='', preds=None, diag=None, form_key=None,
+                          layers=None, src=None, slot_mode=None):
+    """Digest helper for menus with >1 options. Best-effort after verdict."""
+    opts = list(opts or [])
+    if len(opts) < 2:
+        return opts
+    kind = (kind or "").strip().lower()
+    form = _digest_form_of(form_key, intent, plan, slot_mode)
+    layers = dict(layers or {})
+    diag = diag if isinstance(diag, dict) else {}
+    if deadline_hit():
+        for o in opts:
+            if (o.get("measure_verdict") or "") == "degenerate":
+                continue
+            try:
+                found_n = int(o.get("found") or 0)  # D4FIX5_MARK coerce
+            except (TypeError, ValueError):
+                found_n = 0
+            if kind == "entity" and found_n == 0:
+                # пустое окно entity ≠ «не ведётся» (п.13)
+                _hint_append(o, _digest_hint_text("entity", {"count": 0}))
+            else:
+                _hint_append(o, _DIGEST_DEFER)
+        diag["menu_digests"] = False
+        return opts
+    if kind == "entity":
+        srcs = [o.get("src") for o in opts if o.get("src")]
+        batch = _digest_entity_batch(srcs, match, preds)
+        if batch is None:
+            for o in opts:
+                _hint_append(o, _DIGEST_DEFER)
+            diag["menu_digests"] = False
+            return opts
+        for o in opts:
+            s = o.get("src")
+            dig = batch.get(s) or {"count": 0}
+            _hint_append(o, _digest_hint_text("entity", dig))
+            o["digest"] = dig.get("count")
+            o["digest_form"] = "count"
+            o["digest_scope"] = {"via": "corpus"}
+            o["count"] = dig.get("count")
+            o["count_amount"] = dig.get("count")
+        diag["menu_digests"] = True
+        return opts
+    if kind != "measure":
+        return opts
+    src = src or next((o.get("src") for o in opts if o.get("src")), None)
+    measures = []
+    for o in opts:
+        m = o.get("measure")
+        if m and m not in measures:
+            measures.append(m)
+        if m and m not in layers:
+            if (o.get("answer_mode") or "") == "text_with_total":
+                layers[m] = "live"
+            elif isinstance(o.get('digest_scope'), dict) and (
+                    o.get('digest_scope') or {}).get('via') == 'live':
+                layers[m] = "live"
+            else:
+                layers.setdefault(m, "nums")
+    def _is_dead(m):
+        return any((o.get('measure') == m and
+                    (o.get('measure_verdict') or '') == 'degenerate')
+                   for o in opts)
+    alive_nums = [m for m in measures if layers.get(m, "nums") != "live" and not _is_dead(m)]
+    alive_live = [m for m in measures if layers.get(m) == "live" and not _is_dead(m)]
+    batch = {}
+    if form in ("sum", "avg", "min", "max"):
+        if alive_nums:
+            if deadline_hit():
+                for m in alive_nums:
+                    batch[m] = {"defer": True}
+            else:
+                b = _digest_nums_batch(
+                    src, alive_nums, match, preds, form, intent=intent)
+                if b is None:
+                    for m in alive_nums:
+                        batch[m] = {"defer": True}
+                else:
+                    batch.update(b)
+        # live-fail → только live-меры defer; nums уже в batch (D4FIX1_MARK)
+        if alive_live:
+            if deadline_hit():
+                for m in alive_live:
+                    batch[m] = {"defer": True}
+            else:
+                b = _digest_live_batch(src, alive_live, preds, intent, form)
+                if b is None:
+                    for m in alive_live:
+                        batch[m] = {"defer": True}
+                else:
+                    batch.update(b)
+    elif form == "compare":
+        b = _digest_compare_batch(
+            src, alive_nums + alive_live, match, preds, intent, layers)
+        if b is None:
+            for m in alive_nums + alive_live:
+                batch[m] = {"defer": True}
+        else:
+            batch.update(b or {})
+    elif form == "list":
+        b = _digest_list_batch(
+            src, alive_nums + alive_live, match, preds, layers, intent=intent)
+        if b is None:
+            for m in alive_nums + alive_live:
+                batch[m] = {"defer": True}
+        else:
+            batch.update(b or {})
+    elif form in ("rank", "group"):
+        batch.update(_digest_rank_group_batch(
+            src, alive_nums + alive_live, match, preds, layers, form) or {})
+    elif form == "count":
+        if deadline_hit():
+            for m in measures:
+                batch[m] = {"defer": True}
+        else:
+            ref_m = alive_nums[0] if alive_nums else (measures[0] if measures else None)
+            b = _digest_nums_batch(
+                src, [ref_m] if ref_m else [], match, preds, "sum", intent=intent)
+            if b is None:
+                for m in measures:
+                    batch[m] = {"defer": True}
+            else:
+                for m in measures:
+                    ref = b.get(ref_m) or {}
+                    batch[m] = {"count": ref.get("count"), "via": "nums"}
+    else:
+        for m in measures:
+            batch[m] = {"defer": True}
+    for o in opts:
+        _apply_measure_digest_to_opt(o, form, batch.get(o.get("measure")), layers=layers)
+    diag["menu_digests"] = True
+    return opts
+
+def kind_prior_sort(opts, intent=None, plan=None):
+    """Boost only accumulationregister_ when period+answer_money (D4FIX3_MARK).
+
+    Канон кругов 23–24: prior — ТОЛЬКО accumulationregister_ выше document_;
+    accounting/information/catalog — без prior (тот же rank, что document_).
+    Entity без меры: денежность ПО ВОПРОСУ (want/compute ≠ count) — тот же
+    критерий, что answer_money без колонки; денежный словарь мер не зовём.
+    """
+    opts = list(opts or [])
+    if len(opts) < 2:
+        return opts
+    want = (intent or {}).get("want")
+    compute = (plan or {}).get("compute") if plan else None
+    money = False
+    saw_measure = False
+    for o in opts:
+        m = o.get("measure")
+        if m:
+            saw_measure = True
+            if answer_money(want, compute, m):
+                money = True
+                break
+    if not saw_measure:
+        # entity-меню: нет колонки → как answer_money с truthy measure
+        counting = (compute or "") == "count" or (want or "") == "count"
+        money = not counting
+    period = bool((intent or {}).get("period") or (intent or {}).get("period2"))
+    if not (money and period):
+        return opts
+    def _rank(o):
+        src = (o.get("src") or "").lower()
+        if src.startswith("accumulationregister_"):
+            return 0
+        return 1  # document_ и все прочие — одинаково (stable sort)
+    return sorted(opts, key=_rank)
+
+
+def llm_option_highlight(question, opts, diag=None, *, timeout_sec=None):
+    """Highlight recommended option: ★ APPEND at end of HINT (круг 25)."""
+    opts = list(opts or [])
+    diag = diag if isinstance(diag, dict) else None
+    if len(opts) < 2:
+        return None
+    if deadline_hit():
+        if diag is not None:
+            diag["llm_pick"] = None
+        return None
+    rem = _deadline_remaining_sec()
+    wait = 0.8 if rem is None else min(0.8, rem)
+    if timeout_sec is not None:
+        try:
+            wait = min(wait, float(timeout_sec))
+        except (TypeError, ValueError):
+            pass
+    if wait <= 0:
+        if diag is not None:
+            diag["llm_pick"] = None
+        return None
+    lines = []
+    idx_map = []  # prompt index → opts index; без label не шлём measure (п.16)
+    for i, o in enumerate(opts):
+        lab = (o.get("label") or "").strip()
+        if not lab:
+            continue
+        hint = (o.get("hint") or "").strip()
+        if label_has_meta_src(lab):
+            lab = human_table_label(o.get('src'), lab)
+        button = lab
+        if hint:
+            button = "%s (%s)" % (lab, hint)
+        idx_map.append(i)
+        lines.append("%d. %s" % (len(idx_map), button))
+    if len(idx_map) < 2:
+        if diag is not None:
+            diag["llm_pick"] = None
+        return None
+    prompt = (
+        "Q: %s\nOptions:\n%s\n"
+        "Reply with one index 1..%d."
+        % (str(question or "").strip(), "\n".join(lines), len(idx_map)))
+    messages = [
+        {"role": "system", "content": "Return one index digit."},
+        {"role": "user", "content": prompt},
+    ]
+    pick = None
+    try:
+        body = _ds_chat_body(messages, temperature=0, max_tokens=16)
+        if deadline_hit():
+            if diag is not None:
+                diag["llm_pick"] = None
+            return None
+        req = urllib.request.Request(
+            DS_BASE + "/v1/chat/completions",
+            data=json.dumps(body).encode(), method='POST')
+        req.add_header("Authorization", "Bearer " + (DS_KEY or ""))
+        req.add_header("Content-Type", "application/json")
+        with urllib.request.urlopen(req, timeout=wait) as r:
+            data = json.loads(r.read())
+        text = (_ds_chat_content(data) or "").strip()
+        m = re.search(r"\d+", text or "")
+        if m:
+            n = int(m.group(0))
+            if 1 <= n <= len(idx_map):
+                pick = idx_map[n - 1]
+    except Exception:  # noqa: BLE001
+        pick = None
+    if pick is None:
+        if diag is not None:
+            diag["llm_pick"] = None
+        return None
+    o = opts[pick]
+    # канон круг 25: ★ APPEND в конец hint («… · ★»), не префикс
+    hint = (o.get("hint") or "")
+    if "★" not in hint:
+        _hint_append(o, "★")
+    if diag is not None:
+        diag["llm_pick"] = pick
+    return pick
+
+
+def finalize_clarify_menu(question, kind, items, diag, cut, t0, *, reason='',
+                          intent=None, plan=None, match='', preds=None,
+                          form_key=None, layers=None, src=None, slot_mode=None,
+                          with_digests=True):
+    """Captions done then digests, kind-prior, highlight, readings_menu.
+    D4FIX5_MARK: digests/prior/llm fail-soft wrap; readings_menu on exit.
+    """
+    items = list(items or [])
+    d = diag if isinstance(diag, dict) else {}
+    if with_digests and len(items) >= 2 and (kind or "") in ("measure", "entity"):
+        digests_ok = False
+        try:
+            items = attach_option_digests(
+                items, kind=kind, question=question, intent=intent, plan=plan,
+                match=match, preds=preds, diag=d, form_key=form_key,
+                layers=layers, src=src, slot_mode=slot_mode)
+            digests_ok = True
+            items = kind_prior_sort(items, intent=intent, plan=plan)
+            llm_option_highlight(question, items, d)
+            if d.get("llm_pick") is not None:
+                d.setdefault("menu", {})
+                if isinstance(d["menu"], dict):
+                    d["menu"]["llm_pick"] = d.get("llm_pick")
+                    d["menu"]["digests"] = bool(d.get("menu_digests"))
+        except Exception:  # noqa: BLE001 — fail-soft keep menu
+            d["llm_pick"] = None
+            if not digests_ok:
+                d["menu_digests"] = False
+                for o in items:
+                    if not isinstance(o, dict):
+                        continue
+                    if (o.get("measure_verdict") or "") == "degenerate":
+                        continue
+                    if _DIGEST_DEFER not in (o.get("hint") or ""):
+                        _hint_append(o, _DIGEST_DEFER)
+    return readings_menu(question, kind, items, d, cut, t0, reason=reason)
+
+
+
 def _measure_menu_build(src, live_scored, requested, requested_alive, word, diag,
                         layers=None, form=None):
     """names = live ∪ {requested if dead}; annotate after _measure_menu_opts."""
@@ -2106,13 +3025,13 @@ def _force_live_aggregate(src, preds, intent, measure, form_key, agg, diag):
     """Локальный force-live: aggregate_live_column напрямую с rewrite preds."""
     if deadline_hit():
         return None, "deadline"
-    live_preds = _live_preds_rewrite(preds, intent, measure)
+    live_preds = _live_preds_rewrite(preds, intent, measure, src=src)
     if form_key == "compare":
         # два окна
         p1 = (intent or {}).get("period") or {}
         p2 = (intent or {}).get("period2") or {}
-        preds1 = _live_preds_rewrite(period_preds(p1), intent, measure)
-        preds2 = _live_preds_rewrite(period_preds(p2), intent, measure)
+        preds1 = _live_preds_rewrite(period_preds(p1), intent, measure, src=src)
+        preds2 = _live_preds_rewrite(period_preds(p2), intent, measure, src=src)
         a1 = aggregate_live_column(src, preds1, measure)
         a2 = aggregate_live_column(src, preds2, measure)
         if a1 is None and a2 is None:
@@ -2273,7 +3192,11 @@ def _measure_degenerate_guard(
                 question, measure, src, diag, cut, t0), None
         reason = "мера «%s» не ведётся" % (
             (measure_label_of(src, measure) if src else measure) or measure or "")
-        menu = readings_menu(question, "measure", opts, diag, cut, t0, reason=reason)
+        menu = finalize_clarify_menu(
+            question, "measure", opts, diag, cut, t0, reason=reason,
+            intent=intent, plan=plan, match=match, preds=preds,
+            form_key=form_key, layers=_layers, src=src, slot_mode=slot_mode,
+            with_digests=True)
         if menu is None:
             return _measure_degenerate_not_kept_answer(
                 question, measure, src, diag, cut, t0), None
@@ -2288,7 +3211,11 @@ def _measure_degenerate_guard(
             form=form_key)
         reason = "мера «%s» не ведётся" % (
             (measure_label_of(src, measure) if src else measure) or measure or "")
-        menu = readings_menu(question, "measure", opts, diag, cut, t0, reason=reason)
+        menu = finalize_clarify_menu(
+            question, "measure", opts, diag, cut, t0, reason=reason,
+            intent=intent, plan=plan, match=match, preds=preds,
+            form_key=form_key, layers=_layers, src=src, slot_mode=slot_mode,
+            with_digests=True)
         if menu is None:
             return _measure_degenerate_not_kept_answer(
                 question, measure, src, diag, cut, t0), None
@@ -3028,6 +3955,7 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         diag["totals"] = []
         diag["measure_verdict"] = "alive"
         diag["answer_mode"] = "short_circuit"
+        diag["digest_as_of"] = True
         _sc_skip_aggregate = True
 
     # D1-fix9: клик text_with_total → force-live + билнер (канон §1, без corridor)
@@ -3203,6 +4131,11 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
         d.setdefault("settle", diag.get("settle"))
         d.setdefault("marks", marks or None)
         d.setdefault("plan", plan or None)
+        if diag.get("digest_as_of") or d.get("answer_mode") == "short_circuit":
+            d["digest_as_of"] = True
+            txt = (out.get("text") or "").strip()
+            if txt and _DIGEST_AS_OF not in txt:
+                out = dict(out, text="%s (%s)" % (txt, _DIGEST_AS_OF))
         out = dict(out, diag=d)
         шаг("ответ", kind=out.get("kind"))
     return out

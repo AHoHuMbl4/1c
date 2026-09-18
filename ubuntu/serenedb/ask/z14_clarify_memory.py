@@ -322,7 +322,8 @@ def issue_decision(question, option, ambiguity, options_ver, user=None, parse=No
     # D1 consume-bypass / short-circuit: ключи из option (круги 21/29/31/32/33)
     if isinstance(option, dict):
         for _k in ("measure_verdict", "digest", "digest_form",
-                   "digest_scope", "answer_mode", "count", "count_amount"):
+                   "digest_scope", "answer_mode", "count", "count_amount",
+                   "min", "max"):
             if _k in option:
                 ticket[_k] = option.get(_k)
     with _DECISION_LOCK:

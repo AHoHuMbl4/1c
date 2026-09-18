@@ -35,6 +35,8 @@ def t(name, cond, detail=None):
 ALLOWED_CLARIFY_BUILDERS = {
     "clarify_opts_response",
     "readings_menu",
+    # D2: общий helper clarify entity (mk_opts→captions→kind→readings_menu)
+    "wiki_entity_clarify_menu",
 }
 
 JOURNAL_FUNCS = {
@@ -95,6 +97,7 @@ HOMO_GUARD_MARKERS = (
     "same_label", "homonym", "ambiguous_label", "label_tie",
     "disambiguate_labels", "norm_label", "equal_label",
     "wiki_homonym_kind_peers",
+    "wiki_leader_db_homonym_gate", "wiki_db_homonym_peer_rows",
 )
 
 
@@ -405,8 +408,15 @@ t("z21: wiki_outcome_from_verify не лидер при label-tie",
   or "len(passports) == 1" in src_out)
 
 hybrid_src = (ast.get_source_segment(z21, hybrid) or "") if hybrid else ""
+clarify_fn = _func_node(z21_tree, "wiki_entity_clarify_menu")
+clarify_src = (
+    (ast.get_source_segment(z21, clarify_fn) or "") if clarify_fn else "")
+# D2: mk_opts живёт в общем helper (hybrid зовёт wiki_entity_clarify_menu)
 t("z21: mk_opts на clarify-tie (различитель вида)",
-  "mk_opts" in hybrid_src)
+  "mk_opts" in clarify_src
+  or ("mk_opts" in hybrid_src and "wiki_entity_clarify_menu" in hybrid_src))
+t("z21: wiki_entity_clarify_menu → readings_menu",
+  clarify_fn is not None and "readings_menu" in clarify_src)
 
 t("z20: label_with_kind / disambiguate_labels живы",
   "def label_with_kind" in z20 and "def disambiguate_labels" in z20)
