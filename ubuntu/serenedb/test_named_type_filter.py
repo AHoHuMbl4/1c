@@ -162,13 +162,22 @@ captured = {}
 def _mock_pool(q, intent=None):
     return list(pool_reg)
 
-def _mock_verify(q, intent, cards, diag=None):
+def _mock_batch(q, intent, cards, diag=None, *, passport_cache=None):
+    # PERF7: try_wiki → wiki_batch_verify; 0 yes → none (прежний test_stop)
     captured["cards"] = list(cards or [])
-    return {"outcome": "none", "reason": "test_stop", "diag": dict(diag or {})}
+    vb = {
+        c["src_table"]: {"fit": "no", "why": "test_stop"}
+        for c in (cards or []) if c.get("src_table")
+    }
+    return {
+        "verdicts_by_src": vb,
+        "passports": list(cards or []),
+        "incomplete": False,
+        "diag": dict(diag or {}),
+    }
 
 z21["wiki_hybrid_pool"] = _mock_pool
-z21["wiki_verify_candidates"] = _mock_verify
-z21["wiki_pick_from_cards"] = _mock_verify
+z21["wiki_batch_verify"] = _mock_batch
 z21["psql"] = lambda q: [(1,)] if "search_wiki_entity_card" in q else []
 diag_w = {}
 z21["try_wiki_hybrid_entity_pick"](

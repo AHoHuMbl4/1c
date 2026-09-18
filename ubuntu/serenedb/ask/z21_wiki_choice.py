@@ -2535,7 +2535,14 @@ def wiki_primary_entity_cascade(question, intent, cands, diag, cut, t0,
 
 def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
                                 by=None, match="", preds=None, plan=None):
-    """Единая точка интеграции для z20."""
+    """Единая точка интеграции для z20.
+
+    PERF7 (решение владельца 18.09): быстрый путь — per-card verify
+    (wiki_batch_verify / WIKI_CARD_VERIFY_SYS), без пачковых pick/verify.
+    Исходы (лидер / меню / отказ) собирает код из одиночных вердиктов.
+    wiki_pick_from_cards / wiki_verify_candidates не зовутся из пути вопроса
+    (функции as-is остаются для замков).
+    """
     if diag is None:
         diag = {}
     diag["wiki_attempted"] = True
@@ -2562,56 +2569,103 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
         diag["wiki_pick"] = "none"
         diag["wiki_empty_pool"] = True
         return None
-    if len(cards) == 1:
-        verify = wiki_verify_candidates(question, intent, cards, diag=diag)
-        diag.update(verify.get("diag") or {})
-        pick = verify
-    else:
-        pick = wiki_pick_from_cards(question, intent, cards, diag=diag)
-        diag.update(pick.get("diag") or {})
-        if pick.get("outcome") == "degraded":
+
+    # PERF7: локальный кэш паспортов прохода (не между HTTP-запросами; не diag).
+    passport_cache = {}
+    sec_verify = 0.0
+    sec_resolve = 0.0
+
+    def _stamp_fast_stages():
+        # ДО любого _diag_pack (урок PERF5); тел паспортов в diag нет.
+        stages = diag.get("wiki_fast_stage_sec")
+        if not isinstance(stages, dict):
+            stages = {}
+            diag["wiki_fast_stage_sec"] = stages
+        stages["verify"] = round(sec_verify, 1)
+        stages["resolve"] = round(sec_resolve, 1)
+        diag.pop("_wiki_passport_cache", None)
+
+    try:
+        # один проход: pick+verify → per-card параллельно (WIKI_VERIFY_WORKERS)
+        _tv0 = time.monotonic()
+        try:
+            batch = wiki_batch_verify(
+                question, intent, cards, diag=diag,
+                passport_cache=passport_cache)
+        except TypeError as e:
+            # мок замка без passport_cache=
+            if "passport_cache" in str(e):
+                batch = wiki_batch_verify(
+                    question, intent, cards, diag=diag)
+            else:
+                raise
+        sec_verify = time.monotonic() - _tv0
+        diag.update(batch.get("diag") or {})
+
+        _tr0 = time.monotonic()
+        vb = batch.get("verdicts_by_src") or {}
+        # полная недоступность модели → прежний degraded/fallback
+        if (not vb
+                and (diag.get("wiki_batch_verify_error")
+                     or diag.get("wiki_card_verify_error"))):
             diag["wiki_pick"] = "fallback"
+            sec_resolve = time.monotonic() - _tr0
+            _stamp_fast_stages()
             return None
-        verify = wiki_verify_candidates(question, intent, cards, diag=diag)
-        diag.update(verify.get("diag") or {})
-        if verify.get("outcome") == "degraded":
-            pass
-        elif verify.get("outcome") in ("leader", "clarify", "none"):
-            pick = verify
-            if verify.get("outcome") == "leader":
-                diag["wiki_pick"] = verify.get("leader") or diag.get("wiki_pick")
-            elif verify.get("outcome") == "none":
-                diag["wiki_pick"] = "none"
-                diag["wiki_none"] = verify.get("reason") or "verify_none"
-            elif verify.get("outcome") == "clarify":
-                diag["wiki_pick"] = "clarify"
-    if pick.get("outcome") == "degraded":
-        diag["wiki_pick"] = "fallback"
-        return None
-    if pick.get("outcome") == "none":
-        if not diag.get("wiki_pick"):
+
+        pick = wiki_outcome_from_full_verify(
+            vb, cards, intent, diag=diag, ceiling_hit=False)
+        diag.update(pick.get("diag") or {})
+        # неполнота (дедлайн/parse) — отказ каскада, не 503
+        if pick.get("outcome") == "incomplete":
             diag["wiki_pick"] = "none"
-        diag["wiki_none"] = pick.get("reason") or "model_none"
-        return None
-    if pick.get("outcome") == "clarify":
-        return wiki_entity_clarify_menu(
-            question, pick.get("candidates") or [], diag, cut, t0,
-            by=by, match=match, preds=preds,
-            reason="wiki_separability", intent=intent, plan=plan)
-    leader = pick.get("leader")
-    if leader:
-        if not wiki_leader_post_verify(leader, intent, question, diag):
+            diag["wiki_none"] = pick.get("reason") or "verdicts_incomplete"
+            sec_resolve = time.monotonic() - _tr0
+            _stamp_fast_stages()
             return None
-        gated = wiki_leader_db_homonym_gate(
-            leader, question, intent, diag, cut, t0,
-            by=by, match=match, preds=preds, plan=plan)
-        if gated is not None:
-            return gated
-        lead_card = next((c for c in cards if c.get("src_table") == leader), None)
-        if lead_card and lead_card.get("src_layer") is not None:
-            diag["src_layer"] = lead_card.get("src_layer")
-        return {"picked": [leader], "marks": {}, "plan": {}}
-    return None
+
+        if pick.get("outcome") == "none":
+            if not diag.get("wiki_pick"):
+                diag["wiki_pick"] = "none"
+            diag["wiki_none"] = pick.get("reason") or "verify_none"
+            sec_resolve = time.monotonic() - _tr0
+            _stamp_fast_stages()
+            return None
+
+        if pick.get("outcome") == "clarify":
+            diag["wiki_pick"] = "clarify"
+            sec_resolve = time.monotonic() - _tr0
+            _stamp_fast_stages()  # до pack внутри меню
+            return wiki_entity_clarify_menu(
+                question, pick.get("candidates") or [], diag, cut, t0,
+                by=by, match=match, preds=preds,
+                reason="wiki_separability", intent=intent, plan=plan)
+
+        leader = pick.get("leader")
+        if leader:
+            diag["wiki_pick"] = leader
+            if not wiki_leader_post_verify(leader, intent, question, diag):
+                sec_resolve = time.monotonic() - _tr0
+                _stamp_fast_stages()
+                return None
+            gated = wiki_leader_db_homonym_gate(
+                leader, question, intent, diag, cut, t0,
+                by=by, match=match, preds=preds, plan=plan)
+            if gated is not None:
+                sec_resolve = time.monotonic() - _tr0
+                _stamp_fast_stages()  # до pack в gate/меню
+                return gated
+            lead_card = next(
+                (c for c in cards if c.get("src_table") == leader), None)
+            if lead_card and lead_card.get("src_layer") is not None:
+                diag["src_layer"] = lead_card.get("src_layer")
+            sec_resolve = time.monotonic() - _tr0
+            _stamp_fast_stages()
+            return {"picked": [leader], "marks": {}, "plan": {}}
+        sec_resolve = time.monotonic() - _tr0
+        return None
+    finally:
+        _stamp_fast_stages()
 
 
 def wiki_intent_named_measures(intent):

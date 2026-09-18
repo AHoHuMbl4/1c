@@ -280,25 +280,26 @@ def main() -> int:
     vfy2 = z21["wiki_verify_candidates"]("q", {}, _cards(2), {})
     t("mock two yes clarify", vfy2.get("outcome") == "clarify")
 
-    # интеграция try_wiki: verify перекрывает pick-none
+    # интеграция try_wiki: per-card batch (1 yes → leader); pick больше не зовётся
     z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(2)
-    pick_calls = []
-    verify_payload = []
+    batch_calls = []
 
-    def _pick(q, intent, cards, diag=None):
-        pick_calls.append(1)
-        return {"outcome": "none", "reason": "model_none", "diag": diag or {}}
+    def _batch_leader(q, intent, cards, diag=None, *, passport_cache=None):
+        batch_calls.append(1)
+        # В4/4-А: лидер только при остальных no
+        vb = {
+            "catalog_a": {"fit": "yes", "why": "v"},
+            "catalog_b": {"fit": "no", "why": "n"},
+        }
+        return {
+            "verdicts_by_src": vb,
+            "passports": list(cards or []),
+            "incomplete": False,
+            "diag": dict(diag or {}),
+        }
 
-    def _ds_verify(*a, **k):
-        verify_payload.append(a)
-        # В4/4-А: лидер только при остальных no — мок обязан отвергнуть №2.
-        return json.dumps({"verdicts": [
-            {"index": 1, "fit": "yes", "why": "v"},
-            {"index": 2, "fit": "no", "why": "n"},
-        ]})
-
-    z21["wiki_pick_from_cards"] = _pick
-    z21["ds_chat"] = _ds_verify
+    z21["wiki_batch_verify"] = _batch_leader
+    z21["wiki_validate_leader_axes"] = lambda *a, **k: True
     z21["psql"] = lambda q: (
         [("catalog_a", "Alpha", "wiki", "", "", "", "catalog")]
         if "wiki_passport" in str(q) or "wiki_pages" in str(q)
@@ -306,14 +307,22 @@ def main() -> int:
     diag_i = {}
     res = z21["try_wiki_hybrid_entity_pick"]("q", {}, diag_i, None, 0, by={})
     t("try_wiki verify overrides pick none",
-      res and res.get("picked") == ["catalog_a"] and pick_calls)
+      res and res.get("picked") == ["catalog_a"] and batch_calls)
     t("try_wiki diag wiki_verify", diag_i.get("wiki_verify_yes") == 1)
 
-    # clarify с options ≥2
-    z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [
-        {"index": 1, "fit": "yes", "why": "a"},
-        {"index": 2, "fit": "unsure", "why": "b"},
-    ]})
+    # clarify с options ≥2 (два неотвергнутых → меню)
+    def _batch_clarify(q, intent, cards, diag=None, *, passport_cache=None):
+        return {
+            "verdicts_by_src": {
+                "catalog_a": {"fit": "yes", "why": "a"},
+                "catalog_b": {"fit": "unsure", "why": "b"},
+            },
+            "passports": list(cards or []),
+            "incomplete": False,
+            "diag": dict(diag or {}),
+        }
+
+    z21["wiki_batch_verify"] = _batch_clarify
     z21["psql"] = lambda q: (
         [("catalog_a", "Alpha", "w", "", "", "", "catalog"),
          ("catalog_b", "Beta", "w", "", "", "", "catalog")]
@@ -410,9 +419,20 @@ def main() -> int:
     z21["psql"] = _psql_measures
     z21["wiki_hybrid_pool"] = lambda q, intent=None: _cards(1)
     z21["wiki_validate_leader_axes"] = lambda *a, **k: True
-    z21["ds_chat"] = lambda *a, **k: json.dumps({"verdicts": [
-        {"index": 1, "fit": "yes", "why": "ok"},
-    ]})
+
+    def _batch_yes(q, intent, cards, diag=None, *, passport_cache=None):
+        vb = {
+            c["src_table"]: {"fit": "yes", "why": "ok"}
+            for c in (cards or []) if c.get("src_table")
+        }
+        return {
+            "verdicts_by_src": vb,
+            "passports": list(cards or []),
+            "incomplete": False,
+            "diag": dict(diag or {}),
+        }
+
+    z21["wiki_batch_verify"] = _batch_yes
 
     diag_axis = {}
     res_axis = z21["try_wiki_hybrid_entity_pick"](
