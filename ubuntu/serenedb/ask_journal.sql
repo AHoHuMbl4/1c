@@ -74,6 +74,10 @@ ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS doubt BOOLEAN;
 ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS clarify_options JSON;
 ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS atoms JSON;
 ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS ticket_variant VARCHAR;
+-- D3 (design-b §3): feedback шага 7 пайплайна — меню/guard (б) + consumed decision_id.
+-- Доки: Sql › Statements › ALTER TABLE › ADD COLUMN; Data import and export › Json › JSON Type.
+ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS measure_degenerate JSON;
+ALTER TABLE ask_journal ADD COLUMN IF NOT EXISTS decision_id VARCHAR;
 
 -- Текст вопроса — ОТДЕЛЬНАЯ таблица (приватность шага 5: в ask_journal текста нет).
 -- serene_ro пишет (INSERT) и ротирует (DELETE + SELECT id); SELECT q_text — нет.

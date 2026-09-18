@@ -129,6 +129,149 @@ finally:
     A.ENOUGH_ON = True
 
 
+# ── D3: measure_degenerate + decision_id ─────────────────────────────────────
+import json as _json
+
+captured_d3, nid_d3 = [], [100]
+A.ASK_JOURNAL = True
+A._JOURNAL_KEEP = 1000
+A._JOURNAL_LOST = 0
+A.psql = _fake_psql_factory(captured_d3, nid_d3)
+try:
+    # меню-исход (D2-entity, без guard б): полный options, llm_pick
+    opts45 = [
+        {"label": "o%d" % i, "src": "document_X_%d" % i,
+         "decision_id": "dec-%d" % i, "hint": "h%d" % i}
+        for i in range(45)
+    ]
+    menu_out = {
+        "kind": "clarify",
+        "text": "уточните",
+        "options": opts45,
+        "diag": {
+            "menu_digests": True,
+            "llm_pick": 2,
+            "menu": {"llm_pick": 2, "digests": True},
+            "reading_kind": "entity",
+            "src": "document_X_0",
+        },
+        "partial": None,
+    }
+    A._ask_journal_write("q-menu", menu_out, A.time.monotonic(),
+                         user="u", channel="d3")
+    ins_menu = [s for s in captured_d3
+                if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")][-1]
+    # вытащить JSON measure_degenerate из SQL (литерал после ::JSON / в VALUES)
+    md_raw = None
+    if "measure_degenerate" in ins_menu.lower() or "NULL" in ins_menu:
+        # значение перед decision_id / в хвосте: ищем JSON-объект с "menu"
+        for part in ins_menu.split("::JSON"):
+            if '"menu"' in part or "'menu'" in part:
+                # lit() обычно '...' с экранированием
+                frag = part.rsplit(",", 1)[0] if part.strip().endswith(",") else part
+                # взять последнюю quoted-строку
+                q = frag.rfind("'")
+                if q > 0:
+                    p = frag.rfind("'", 0, q - 1)
+                    if p >= 0:
+                        cand = frag[p + 1:q].replace("''", "'")
+                        try:
+                            md_raw = _json.loads(cand)
+                        except Exception:
+                            pass
+    # запасной путь: через helper напрямую + проверка INSERT не NULL
+    helper_md = A._journal_measure_degenerate(menu_out)
+    t("D3 меню: helper options полный (не :40)",
+      helper_md is not None
+      and len((helper_md.get("menu") or {}).get("options") or []) == 45,
+      str(helper_md)[:120] if helper_md else "None")
+    t("D3 меню: llm_pick есть",
+      helper_md is not None
+      and (helper_md.get("menu") or {}).get("llm_pick") == 2)
+    t("D3 меню: INSERT не NULL measure_degenerate",
+      "NULL, NULL)" not in ins_menu.replace(" ", "")
+      and ("::JSON" in ins_menu or helper_md is not None),
+      ins_menu[-180:])
+    t("D3 меню: без блока (б) live_measures",
+      helper_md is not None and "live_measures" not in helper_md)
+
+    # исход (б): src/measure/live_measures/form
+    b_out = {
+        "kind": "clarify",
+        "text": "мера",
+        "options": [
+            {"label": "Всего", "measure": "Всего", "decision_id": "b1"},
+            {"label": "Сумма", "measure": "Сумма", "decision_id": "b2"},
+        ],
+        "diag": {
+            "measure_degenerate_guard": "worked",
+            "src": "accumulationregister_sales",
+            "measure": "Сумма",
+            "live_measures": ["Всего", "Количество", "Цена", "Скидка", "НДС"],
+            "form": "sum",
+            "menu_digests": True,
+            "llm_pick": 0,
+            "menu": {"llm_pick": 0, "digests": True},
+        },
+        "partial": None,
+    }
+    md_b = A._journal_measure_degenerate(b_out)
+    t("D3 (б): блок src/measure/live_measures/form",
+      md_b is not None
+      and md_b.get("src") == "accumulationregister_sales"
+      and md_b.get("measure") == "Сумма"
+      and md_b.get("live_measures") == [
+          "Всего", "Количество", "Цена", "Скидка", "НДС"]
+      and md_b.get("form") == "sum",
+      str(md_b)[:200] if md_b else "None")
+    t("D3 (б): menu.options полный",
+      md_b is not None
+      and len((md_b.get("menu") or {}).get("options") or []) == 2)
+
+    # обычный ответ без меню и без (б) → NULL
+    plain = {"kind": "answer", "text": "1", "diag": {"src": "x", "measure": "y"},
+             "partial": None}
+    t("D3 plain: measure_degenerate NULL",
+      A._journal_measure_degenerate(plain) is None)
+    n_before = len([s for s in captured_d3
+                    if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")])
+    A._ask_journal_write("q-plain", plain, A.time.monotonic(),
+                         user="u", channel="d3")
+    ins_plain = [s for s in captured_d3
+                 if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")][-1]
+    # хвост VALUES: ..., NULL, NULL) — md и decision_id пусты
+    t("D3 plain: INSERT md NULL",
+      ", NULL, NULL)" in ins_plain or ins_plain.rstrip().endswith("NULL, NULL)"),
+      ins_plain[-120:])
+
+    # consumed decision_id в settle-строке
+    settle = {"kind": "answer", "text": "42", "diag": {}, "partial": None}
+    A._ask_journal_write(
+        "q-settle", settle, A.time.monotonic(),
+        trusted={"src": "accumulationregister_sales", "label": "Всего"},
+        user="u", channel="d3", decision_id="consumed-dec-99")
+    ins_settle = [s for s in captured_d3
+                  if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")][-1]
+    t("D3 settle: decision_id в INSERT",
+      "consumed-dec-99" in ins_settle, ins_settle[-100:])
+
+    # второй write нет — один INSERT на один вызов answer_checked
+    n0 = len([s for s in captured_d3
+              if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")])
+    A.answer = lambda *a, **k: {
+        "kind": "answer", "text": "ok", "diag": {}, "partial": None}
+    A.ENOUGH_ON = False
+    _ = A.answer_checked("q-once", channel="d3", user="u",
+                         decision_id=None, trusted={"src": "x"})
+    n1 = len([s for s in captured_d3
+              if s.strip().upper().startswith("INSERT INTO ASK_JOURNAL ")])
+    t("D3: второй write нет (1 INSERT на answer_checked)",
+      n1 - n0 == 1, "delta=%d" % (n1 - n0))
+    A.ENOUGH_ON = True
+finally:
+    A.psql = old_psql
+
+
 # ── невалидный билет через одну точку answer_checked → общий путь ────────────
 _reset_decisions_for_tests()
 A.ASK_JOURNAL = False

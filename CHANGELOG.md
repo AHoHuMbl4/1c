@@ -1,3 +1,17 @@
+## 2026-09-18 (3) — D3 ИСПОЛНЕНА: ask_journal feedback (measure_degenerate + decision_id), красная ×3 ACCEPT (круг 1) [код][замер]
+
+- `ubuntu/serenedb/ask_journal.sql`: идемпотентные ALTER — measure_degenerate JSON
+  (любой меню-исход: menu.options полный список/digests/llm_pick/kind_top; блок
+  src/measure/live_measures/form — только исход (б)) + decision_id VARCHAR
+  (consumed, каждая ticket-consumed строка).
+- `z20` _ask_journal_write: обе колонки в INSERT (параметр decision_id уже
+  приходил, в INSERT не попадал — z20:2514+); второго write нет; поведение
+  ответов не менялось. Замок test_ask_journal: 11 → 21.
+- Красная ×3 на дифф: круг 1 — ACCEPT ×3. Регрессия: degenerate 94, digest 52,
+  one_path 78 — зелёная. Читатель — шаг 7 пайплайна (соседняя линия, не тронута).
+Числа: замок журнала 21/0; красная 1×3 = 3 ACCEPT.
+Доки: канон .claude/state/design-b.md §3.
+
 ## 2026-09-18 (2) — D4 ч.2 ИСПОЛНЕНА: мост рисует дайджесты/★, verify пускает числа, красная ×3 ACCEPT (круг 1) [код][замер]
 
 - Мост `ubuntu/openclaw/mcp_ask.py` (точечно): подпись кнопки = label+hint

@@ -3141,6 +3141,9 @@ def _measure_degenerate_guard(
 
     # branch (б) entry flag BEFORE reagg (после C1 nums-alive)
     diag["measure_degenerate_guard"] = "worked"
+    # D3: полный список живых мер + form — в diag для колонки measure_degenerate
+    diag["live_measures"] = [m for m, _ in live_scored]
+    diag["form"] = form_key
     if req_alive and req.get("layer") == "live" and sole_forms:
         # force-live локально
         new_agg, lerr = _force_live_aggregate(
@@ -4247,6 +4250,74 @@ def _journal_atoms_slim(out):
     return atoms
 
 
+
+def _journal_measure_degenerate(out):
+    """D3: JSON колонки measure_degenerate. NULL без меню и без исхода (б).
+
+    Меню-блок — на ЛЮБОМ меню-исходе (вкл. D2-entity); options полным списком
+    (не opts[:40]). Блок {src, measure, live_measures, form} — только при
+    measure_degenerate_guard=worked. D3_JOURNAL_FEEDBACK_MARK
+    """
+    if not isinstance(out, dict):
+        return None
+    d = out.get("diag") or {}
+    if not isinstance(d, dict):
+        d = {}
+    kind = out.get("kind")
+    opts = out.get("options") or []
+    is_menu = kind in ("clarify", "figures") and bool(opts)
+    is_b = d.get("measure_degenerate_guard") == "worked"
+    if not is_menu and not is_b:
+        return None
+    payload = {}
+    if is_b:
+        live = d.get("live_measures")
+        if not isinstance(live, (list, tuple)):
+            live = []
+        payload["src"] = d.get("src")
+        payload["measure"] = d.get("measure")
+        payload["live_measures"] = list(live)
+        payload["form"] = d.get("form") or d.get("slot_mode")
+    if is_menu:
+        full = []
+        for o in opts:
+            if not isinstance(o, dict):
+                continue
+            row = {}
+            for k in ("label", "src", "measure", "hint", "distinct_by",
+                      "decision_id", "digest", "digest_form",
+                      "measure_verdict", "answer_mode"):
+                v = o.get(k)
+                if v is None or v == "":
+                    continue
+                row[k] = v
+            if row:
+                full.append(row)
+        menu_d = d.get("menu") if isinstance(d.get("menu"), dict) else {}
+        llm_pick = menu_d.get("llm_pick", d.get("llm_pick"))
+        digests = menu_d.get("digests")
+        if digests is None:
+            digests = bool(d.get("menu_digests")) if "menu_digests" in d else False
+        kind_top = menu_d.get("kind_top")
+        if kind_top is None:
+            first = opts[0] if opts and isinstance(opts[0], dict) else {}
+            src0 = first.get("src") or ""
+            if src0:
+                try:
+                    kind_top = kind_word(src0) or None
+                except Exception:  # noqa: BLE001
+                    kind_top = None
+            if not kind_top:
+                kind_top = d.get("reading_kind") or None
+        payload["menu"] = {
+            "options": full,
+            "digests": bool(digests),
+            "llm_pick": llm_pick,
+            "kind_top": kind_top,
+        }
+    return payload or None
+
+
 def _journal_clarify_options(out):
     """Варианты слоя 2 — clarify или B-люк (kind=figures с options).
 
@@ -4378,6 +4449,13 @@ def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
         doubt = _journal_doubt(out if isinstance(out, dict) else {})
         ticket_var = _journal_ticket_variant(
             out if isinstance(out, dict) else {}, trusted=trusted)
+        md_payload = _journal_measure_degenerate(
+            out if isinstance(out, dict) else {})
+        md_json = (json.dumps(md_payload, ensure_ascii=False)
+                   if md_payload is not None else None)
+        # consumed decision_id — в каждую ticket-consumed строку (D3)
+        dec_id = (str(decision_id) if (decision_id and ticket_used)
+                  else None)
         latency = int((time.monotonic() - t0) * 1000) if t0 else 0
         nid = int(psql("SELECT nextval('ask_journal_id_seq')")[0][0])
         jr = _rid_norm(rid or _rid_get())
@@ -4389,10 +4467,11 @@ def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
                 "fork_outcome, atoms, fork_keys, ticket_used, ticket_error, code_md5, "
                 "build_ts, alias_ver, tokens_in, tokens_out, tokens_calls, latency_ms, "
                 "partial_flag, freshness_age_sec, uncounted, truncated, discarded_before, "
-                "rid, doubt, clarify_options, ticket_variant"
+                "rid, doubt, clarify_options, ticket_variant, measure_degenerate, "
+                "decision_id"
                 ") VALUES (%s, current_database(), %s, %s, %s, %s, %s, %s, %s, %s::JSON, "
                 "%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
-                "%s, %s)"
+                "%s, %s, %s, %s)"
                 % (nid,
                    lit(channel or ""),
                    lit(user_hash),
@@ -4420,7 +4499,9 @@ def _ask_journal_write(question, out, t0, trusted=None, user=None, channel=None,
                    lit(jr),
                    _journal_sql_bool(doubt) if doubt is not None else "NULL",
                    ("%s::JSON" % lit(clarify_json)) if clarify_json is not None else "NULL",
-                   lit(ticket_var) if ticket_var is not None else "NULL"))
+                   lit(ticket_var) if ticket_var is not None else "NULL",
+                   ("%s::JSON" % lit(md_json)) if md_json is not None else "NULL",
+                   lit(dec_id) if dec_id is not None else "NULL"))
             # Не `q in sql`: короткое «q» ложно совпадает с q_hash/q_len.
             if q and (lit(q) in sql or lit(q[:8000]) in sql):
                 raise RuntimeError("ask_journal: текст вопроса попал в SQL")
