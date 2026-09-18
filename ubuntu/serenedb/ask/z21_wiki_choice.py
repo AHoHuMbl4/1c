@@ -1779,13 +1779,44 @@ def wiki_concepts_call(question, cards, diag=None, *, retry=True):
     return r1
 
 
-def wiki_passport_enrich_slice(cards, cache=None, *, distinct_against=None):
+def _wiki_passport_fetch_sql(missing):
+    """Один psql на список src (без склейки карточек между воркерами)."""
+    by_src = {}
+    if not missing:
+        return by_src
+    template = _wiki_passport_sql()
+    if template.strip().startswith("\\set"):
+        template = "\n".join(
+            ln for ln in template.splitlines()
+            if not ln.strip().startswith("\\set"))
+    lst = ", ".join("'%s'" % str(s).replace("'", "''") for s in missing)
+    qsql = template.replace(":src_list", lst).replace(
+        ":body_max", str(WIKI_PASSPORT_BODY_MAX))
+    try:
+        for r in psql(qsql) or []:
+            if not r or not r[0]:
+                continue
+            by_src[str(r[0])] = {
+                "wiki_body": (r[2] if len(r) > 2 else "") or "",
+                "parent": (r[5] if len(r) > 5 else "") or "",
+                "not_enough_for": (r[7] if len(r) > 7 else "") or "",
+            }
+    except RuntimeError:
+        pass
+    return by_src
+
+
+def wiki_passport_enrich_slice(cards, cache=None, *, distinct_against=None,
+                               cache_lock=None, inflight=None):
     """Enrich ПОЛНЫМ body на переданный слайс (не только первые 8).
 
     cache: опциональный dict src_table → {wiki_body, parent, not_enough_for};
     живёт только внутри одного прохода (передаёт caller параметром, не через diag),
     между HTTP-запросами не шарится. Пишем только успешные body.
     distinct_against: пул для wiki_passport_distinct (покарточный verify — весь pool).
+    cache_lock / inflight (PERF10): чтение/запись словаря кэша — под коротким
+    lock; psql ВНЕ lock. inflight: src → Event — дедуп параллельных промахов
+    одного src (лидер ходит в SQL, остальные ждут Event). Без lock — как раньше.
     """
     cards = list(cards or [])
     if not cards:
@@ -1795,39 +1826,84 @@ def wiki_passport_enrich_slice(cards, cache=None, *, distinct_against=None):
     srcs = [c.get("src_table") for c in cards if c.get("src_table")]
     if not srcs:
         return [dict(c) for c in cards]
+
+    def _cache_get(s):
+        if cache is None:
+            return None
+        return cache.get(s)
+
+    def _cache_put(key, entry):
+        # кэш только успешный body; miss/ошибка/пустой SQL — без записи
+        if cache is not None and entry and entry.get("wiki_body"):
+            cache[key] = entry
+
     missing = []
-    seen_miss = set()
-    for s in srcs:
-        if cache is not None and s in cache:
-            by_src[s] = cache[s]
-        elif s not in seen_miss:
-            seen_miss.add(s)
-            missing.append(s)
-    if missing:
-        template = _wiki_passport_sql()
-        if template.strip().startswith("\\set"):
-            template = "\n".join(
-                ln for ln in template.splitlines()
-                if not ln.strip().startswith("\\set"))
-        lst = ", ".join("'%s'" % str(s).replace("'", "''") for s in missing)
-        qsql = template.replace(":src_list", lst).replace(
-            ":body_max", str(WIKI_PASSPORT_BODY_MAX))
+    wait_events = []  # (src, Event) — ждать лидера вне lock
+    lead_srcs = []
+    seen = set()
+
+    def _classify_locked():
+        for s in srcs:
+            if s in seen:
+                continue
+            seen.add(s)
+            hit = _cache_get(s)
+            if hit is not None:
+                by_src[s] = hit
+                continue
+            if (cache_lock is not None and inflight is not None
+                    and s in inflight):
+                wait_events.append((s, inflight[s]))
+                continue
+            if cache_lock is not None and inflight is not None:
+                inflight[s] = threading.Event()
+                lead_srcs.append(s)
+            else:
+                missing.append(s)
+
+    if cache_lock is not None:
+        with cache_lock:
+            _classify_locked()
+    else:
+        _classify_locked()
+
+    # Ждём лидеров ВНЕ lock (иначе deadlock).
+    for s, ev in wait_events:
+        ev.wait()
+        if cache_lock is not None:
+            with cache_lock:
+                hit = _cache_get(s)
+                if hit is not None:
+                    by_src[s] = hit
+        else:
+            hit = _cache_get(s)
+            if hit is not None:
+                by_src[s] = hit
+
+    fetch_list = lead_srcs if lead_srcs else missing
+    if fetch_list:
+        # psql ВНЕ lock (PERF10): параллельные воркеры — свои короткие сессии
+        fetched = {}
         try:
-            for r in psql(qsql) or []:
-                if not r or not r[0]:
-                    continue
-                entry = {
-                    "wiki_body": (r[2] if len(r) > 2 else "") or "",
-                    "parent": (r[5] if len(r) > 5 else "") or "",
-                    "not_enough_for": (r[7] if len(r) > 7 else "") or "",
-                }
-                key = str(r[0])
-                by_src[key] = entry
-                # кэш только успешный body; miss/ошибка/пустой SQL — без записи
-                if cache is not None and entry.get("wiki_body"):
-                    cache[key] = entry
-        except RuntimeError:
-            pass
+            fetched = _wiki_passport_fetch_sql(fetch_list)
+            by_src.update(fetched)
+        finally:
+            def _store_and_release():
+                for key, entry in fetched.items():
+                    _cache_put(key, entry)
+                # лидеры (в т.ч. miss) — отпускаем ждущих; иначе Event.wait hang
+                if cache_lock is not None and inflight is not None:
+                    for s in lead_srcs:
+                        ev = inflight.pop(s, None)
+                        if ev is not None:
+                            ev.set()
+
+            if cache_lock is not None:
+                with cache_lock:
+                    _store_and_release()
+            else:
+                _store_and_release()
+
     distinct_pool = (list(distinct_against)
                      if distinct_against is not None else cards)
     out = []
@@ -1874,12 +1950,13 @@ def _wiki_parse_card_verify(raw):
 
 
 def wiki_batch_verify(question, intent, cards, diag=None, *, passport_cache=None):
-    """Покарточный параллельный verify (design-c §2 шаг 3, PERF4).
+    """Покарточный параллельный verify (design-c §2 шаг 3, PERF4/PERF10).
 
     1 карточка = 1 ds_chat; ThreadPoolExecutor(WIKI_VERIFY_WORKERS).
     Гейт бюджета: deadline_hit() перед СТАРТОМ каждого вызова модели;
     уже стартовавшие дозавершаются и вливаются. Кэш паспортов — параметром
-    (не diag). Имя wiki_batch_verify сохранено: замки мокают его.
+    (не diag). Паспортный SQL — параллельно (lock только на dict кэша, PERF10).
+    Имя wiki_batch_verify сохранено: замки мокают его.
     """
     from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -1895,9 +1972,16 @@ def wiki_batch_verify(question, intent, cards, diag=None, *, passport_cache=None
         legacy = diag.get("_wiki_passport_cache")
         if isinstance(legacy, dict):
             passport_cache = legacy
+    # PERF11: эфемерный кэш на вызов — дедуп inflight кладёт body в dict;
+    # без него waiter после Event читает пустой cache → пустой паспорт.
+    # Между запросами ничего не живёт (локальная переменная, как в rescue).
+    if passport_cache is None:
+        passport_cache = {}
 
     workers = max(1, int(WIKI_VERIFY_WORKERS or 1))
+    # cache_lock: micro-lock словаря кэша + атомарность счётчиков/гейта старта
     cache_lock = threading.Lock()
+    inflight = {}  # src → Event: дедуп параллельных SQL одного src
     by_src = {}
     all_passports = []
     incomplete = False
@@ -1913,20 +1997,30 @@ def wiki_batch_verify(question, intent, cards, diag=None, *, passport_cache=None
         ask_text = "%s (%s)" % (ask_text, kind)
 
     def _enrich_one(card):
+        # PERF10: psql ВНЕ lock; micro-lock только внутри enrich_slice на cache
         try:
-            with cache_lock:
-                return wiki_passport_enrich_slice(
-                    [card], cache=passport_cache, distinct_against=pool_cards)
+            return wiki_passport_enrich_slice(
+                [card], cache=passport_cache, distinct_against=pool_cards,
+                cache_lock=cache_lock, inflight=inflight)
         except TypeError as e:
             msg = str(e)
-            # мок замка без cache=/distinct_against=
+            # мок замка без cache=/distinct_against=/cache_lock=/inflight=
             if "unexpected keyword argument" in msg:
                 try:
-                    with cache_lock:
-                        return wiki_passport_enrich_slice(
-                            [card], cache=passport_cache)
+                    return wiki_passport_enrich_slice(
+                        [card], cache=passport_cache,
+                        distinct_against=pool_cards, cache_lock=cache_lock)
                 except TypeError:
-                    return wiki_passport_enrich_slice([card])
+                    try:
+                        return wiki_passport_enrich_slice(
+                            [card], cache=passport_cache,
+                            distinct_against=pool_cards)
+                    except TypeError:
+                        try:
+                            return wiki_passport_enrich_slice(
+                                [card], cache=passport_cache)
+                        except TypeError:
+                            return wiki_passport_enrich_slice([card])
             raise
 
     def _verify_one(card, ask_text=ask_text):
