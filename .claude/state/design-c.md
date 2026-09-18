@@ -249,7 +249,8 @@ checkpoint+исход → intent_json; один write в finally; ask_journal_te
   silent leader; живой замер ранга — GO/NO-GO.
 - R-C (Q5): probe: span матчит «реализациятмц» (якорь — живая проба на инстансе);
   SUPERSEDE (fuzzy-фикстура: две группы, у одной ложный fuzzy → exprs ОБЕИХ = span);
-  exact-фикстура: обе exact → span не применяется; триггер; допуск 1; мин-длина 8;
+  exact-фикстура: обе exact → span не применяется; триггер; допуск 2 (3 при len≥16 —
+  замер 18.09, §2/§3 канона); мин-длина 8;
   синтетика у порога; wiki-ветка: src в rescue_pool через норм-предикат хвоста
   (damerau_levenshtein; проба ДО кода; «Доки:» в коммите); 🔴 имя выбранного src в
   terms → exclude (не матч): эталон Q5 = count всего src БЕЗ match-сужения (замок).

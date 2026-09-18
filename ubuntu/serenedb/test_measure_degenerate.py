@@ -750,7 +750,7 @@ try:
     A.sales_compare_intent = lambda *a, **k: False
     A._predicates = lambda intent: []
     A.match_expr = lambda *a, **k: ("doc @@ ts_phrase('x')", 0)
-    A.probe = lambda terms: ([], {})
+    A.probe = lambda terms, **kw: ([], {})
     A.matched_group_count = lambda kinds: 0
     A.stock_net_register_menu_opts = lambda *a, **k: []
     A._coverage_of = lambda src: None
@@ -887,7 +887,7 @@ try:
     A.rank_intent_from = lambda *a, **k: True
     A._predicates = lambda intent: ["doc_date >= '2026-08-01'"]
     A.match_expr = lambda *a, **k: ("doc @@ ts_phrase('x')", 0)
-    A.probe = lambda terms: ([], {})
+    A.probe = lambda terms, **kw: ([], {})
     A.matched_group_count = lambda kinds: 0
     A.stock_net_register_menu_opts = lambda *a, **k: []
     A._coverage_of = lambda src: None
@@ -1081,7 +1081,7 @@ try:
     A.rank_intent_from = lambda *a, **k: True
     A._predicates = lambda intent: ["doc_date >= '2026-08-01'"]
     A.match_expr = lambda *a, **k: ("doc @@ ts_phrase('x')", 0)
-    A.probe = lambda terms: ([], {})
+    A.probe = lambda terms, **kw: ([], {})
     A.matched_group_count = lambda kinds: 0
     A.stock_net_register_menu_opts = lambda *a, **k: []
     A._coverage_of = lambda src: None
@@ -1164,7 +1164,7 @@ try:
     # НЕ мокаем rank_intent_from=True — вопрос без маркеров
     A._predicates = lambda intent: ["doc_date >= '2026-08-01'"]
     A.match_expr = lambda *a, **k: ("doc @@ ts_phrase('x')", 0)
-    A.probe = lambda terms: ([], {})
+    A.probe = lambda terms, **kw: ([], {})
     A.matched_group_count = lambda kinds: 0
     A.stock_net_register_menu_opts = lambda *a, **k: []
     A._coverage_of = lambda src: None

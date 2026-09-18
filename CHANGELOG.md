@@ -1,3 +1,39 @@
+## 2026-09-18 (10) — волна C5: замок R-A..R-K (117/0), находка продукта (entity-bypass гард), полный перепрогон 17 замков [код][замер]
+
+- ПРЕДШАГ — сверка эталона Q5 живым замером на окне: accumulationregister_реализациятмц
+  = 80 259 сейчас; 80 173 (владелец) — счёт того же регистра на момент его замера;
+  78 176 (client-gold tsv) — более ранний снапшот растущей базы; колонок-фильтров в
+  регистре нет (deletionmark/posted отсутствуют) — другого смысла за числом нет.
+  Механика эталона = count ВСЕГО accum-регистра без сужения; живая проба сверяется со
+  свежим счётом на момент пробы; tsv не менялся молча (строка — исторический снапшот).
+- Новый замок `test_onepath_rescue.py` (R-A..R-K канона §5): 117/0; 6 кругов красной ×3
+  (18 вердиктов) выжгли тавтологии (consume-копия, or-True, слабые OR, допуск-in,
+  no_data-принятие, e2e-тай-полный-пул) — финал ACCEPT ×3; пробы ломания на каждом
+  кругу (damerau→[] 7 fail, iii→∅, порог 99, гейт→picked и т.д.).
+- 🔴 НАХОДКА ЗАМКА в продукте: issue_decision (z14:329+) копировал
+  measure_verdict/answer_mode/digest_form в билет при любом ambiguity, включая entity
+  — нарушение канона §2 R-G. Гард: при ambiguity=entity три ключа не копируются
+  (digest/count/min/max/rescue_concepts* — копируются, D2/D4-путь жив); вторая линия —
+  strip в _stamp_rescue_concepts (z21). Замки после: onepath_rescue 117/0,
+  ask_choice_memory 45/0, measure_digest 52/0.
+- Обслуживание замков (монтаж, НЕ ожидания): test_measure_degenerate — 4 стаба probe
+  +**kw (сигнатура call-site после C4); test_wiki_candidate_verify — стаб
+  finalize_clarify_menu (NameError был и на чистом HEAD — worktree-проверка), 64/0.
+- Канон design-c.md §5: строка допуска приведена к «2 (3 при len≥16)» — сверка с §2/§3
+  (живой замер 18.09); прочее тело канона не менялось.
+- ПОЛНЫЙ ПЕРЕПРОГОН (оркестратор): one_path 78/0, degenerate 97/0, digest 52/0,
+  homonym 42/0, card_hybrid 67/0, step2 36/0, ask_journal 21/0, entity_form 27/0,
+  wiki_alias_probe 38/0, journal_fields 22/0, ask_choice_memory 45/0,
+  onepath_rescue 117/0, candidate_verify 64/0, mcp_ask 39/0 + envelope 25/0 +
+  pending 16/0 (venv /opt/openclaw-mcp). СМЕН ОЖИДАНИЙ no_data→меню НЕ ПОТРЕБОВАЛОСЬ
+  ни в одном существующем замке.
+- Граф: наблюдения по z14/z21/test_wiki_candidate_verify тем же коммитом. Дальше —
+  выкат на окно (5 файлов), GO/NO-GO, живые пробы 6 вопросов, L67, доки.
+Числа: замок 117/0 (6 кругов красной, финал ACCEPT ×3); перепрогон 17/17 зелёные;
+находка продукта закрыта гардом; живой счёт Q5 = 80 259 (растёт).
+Доки: канон .claude/state/design-c.md §5 (допуск 2); Sql › Functions › Text Functions
+› damerau_levenshtein.
+
 ## 2026-09-18 (9) — волна C3 кодом: незнакомые слова в журнал приняты красной ACCEPT ×3 (круг 2) [код][замер]
 
 - Канон design-c.md §4 реализован в z20_ask_main_http.py (+176/−3): unknown_words

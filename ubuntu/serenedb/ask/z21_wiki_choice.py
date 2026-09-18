@@ -1958,6 +1958,11 @@ def _stamp_rescue_concepts(menu, concepts, *, pending=False):
     for o in menu.get("options") or []:
         if not isinstance(o, dict):
             continue
+        # Entity-опция: measure consume-bypass в option не эмитится (design-c §2);
+        # сдираем, если попали чужим путём (вторая линия к гарду issue_decision).
+        o.pop("measure_verdict", None)
+        o.pop("answer_mode", None)
+        o.pop("digest_form", None)
         if pending:
             o["rescue_concepts_pending"] = True
             # pending ≠ ответ; повтор — прерогатива consume

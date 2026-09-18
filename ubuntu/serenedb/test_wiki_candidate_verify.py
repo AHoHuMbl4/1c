@@ -59,6 +59,13 @@ def load_z21():
     sys.modules["ask._wire"] = fake
     sys.modules["ask._imports"] = real_imp
     src = Z21.read_text(encoding="utf-8")
+
+    def _readings_menu(question, kind, items, diag, cut, t0, *, reason=""):
+        return (
+            {"kind": "clarify", "options": list(items or []), "text": reason or "?",
+             "diag": dict(diag or {}), "partial": cut}
+            if len(list(items or [])) >= 2 else None)
+
     ns = {
         "__name__": "z21_wiki_choice",
         "__file__": str(Z21),
@@ -86,10 +93,14 @@ def load_z21():
         "human_table_label": lambda src, label=None: (
             (label or "").strip() or (
                 str(src).split("_", 1)[1] if "_" in str(src) else str(src))),
-        "readings_menu": lambda question, kind, items, diag, cut, t0, *, reason="": (
-            {"kind": "clarify", "options": list(items or []), "text": reason or "?",
-             "diag": dict(diag or {}), "partial": cut}
-            if len(list(items or [])) >= 2 else None),
+        "readings_menu": _readings_menu,
+        # D4: z21 зовёт finalize_clarify_menu; offline-замок — без SQL дайджестов
+        "finalize_clarify_menu": (
+            lambda question, kind, items, diag, cut, t0, *, reason="",
+                   intent=None, plan=None, match="", preds=None,
+                   form_key=None, layers=None, src=None, slot_mode=None,
+                   with_digests=True: _readings_menu(
+                       question, kind, items, diag, cut, t0, reason=reason)),
         "_diag_pack": lambda d, **k: d,
         "register_zone": lambda *a, **k: None,
         "apply_bindings": lambda g: None,

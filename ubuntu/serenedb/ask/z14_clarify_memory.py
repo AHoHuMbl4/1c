@@ -327,10 +327,17 @@ def issue_decision(question, option, ambiguity, options_ver, user=None, parse=No
         "batch_id": batch_id,
     }
     # D1 consume-bypass / short-circuit: ключи из option (круги 21/29/31/32/33)
+    # Entity: запрещены только measure_verdict / answer_mode / digest_form
+    # (measure consume-bypass); entity-digest(count)+hint — как в D2/D4 (design-c §2).
     if isinstance(option, dict):
-        for _k in ("measure_verdict", "digest", "digest_form",
-                   "digest_scope", "answer_mode", "count", "count_amount",
-                   "min", "max", "rescue_concepts", "rescue_concepts_pending"):
+        _copy_keys = ("measure_verdict", "digest", "digest_form",
+                      "digest_scope", "answer_mode", "count", "count_amount",
+                      "min", "max", "rescue_concepts", "rescue_concepts_pending")
+        if ambiguity == "entity":
+            _copy_keys = tuple(
+                k for k in _copy_keys
+                if k not in ("measure_verdict", "answer_mode", "digest_form"))
+        for _k in _copy_keys:
             if _k in option:
                 ticket[_k] = option.get(_k)
     with _DECISION_LOCK:
