@@ -526,9 +526,10 @@ def choose_click_option(options, question):
 
 
 # LLM-клик (отдельная дешёвая модель ≠ испытуемая ask): env AB_CLICK_*.
-# Дефолт — deepseek/deepseek-v4-flash (малая, уже в контуре репо; НЕ qwen3.8-27b).
+# Дефолт — openai/gpt-4o-mini (живой отбор 19.09: v4-flash и deepseek-chat-v4
+# выбирают по вхождению слова, gpt-4o-mini — по смыслу; НЕ qwen3.8-27b).
 _AB_CLICK_LLM_OFF = frozenset(("0", "false", "no", "off"))
-_DEFAULT_CLICK_MODEL = "deepseek/deepseek-v4-flash"
+_DEFAULT_CLICK_MODEL = "openai/gpt-4o-mini"
 _DEFAULT_CLICK_BASE = "https://openrouter.ai/api/v1"
 _DEFAULT_CLICK_TIMEOUT = 15
 
@@ -618,7 +619,8 @@ def default_click_llm_transport(prompt, *, environ=None, timeout=None):
     body = json.dumps({
         "model": ab_click_model(env),
         "temperature": 0,
-        "max_tokens": 16,
+        # reasoning-модели тратят бюджет на рассуждение до content — 16 мало
+        "max_tokens": 512,
         "messages": [{"role": "user", "content": prompt}],
     }).encode("utf-8")
     req = urllib.request.Request(
