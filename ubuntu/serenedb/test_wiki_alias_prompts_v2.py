@@ -107,7 +107,11 @@ for _w in ("наторговали", "сделали", "вышло", "покуп
     t("нет wordlist «%s»" % _w, _w not in sh)
 
 # ── axes / rank markers в шести промтах + SQL axes ────────────────────────────
-_m = "AXIS NOUNS FROM axes"
+_m = "AXIS NOUNS FROM axes (event records only)"
+t("INIT-A: %s" % _m, _m in _init_a, "INIT-A missing: %s" % _m)
+_m = "ne" + "ver paste an Input axes string verbatim"
+t("INIT-A: %s" % _m, _m in _init_a, "INIT-A missing: %s" % _m)
+_m = "SAME-TITLE SIBLINGS"
 t("INIT-A: %s" % _m, _m in _init_a, "INIT-A missing: %s" % _m)
 _m = "EXCEPT spoken action/event forms (rule 2) and AXIS subject nouns under rule 7"
 t("INIT-A: %s" % _m, _m in _init_a, "INIT-A missing: %s" % _m)
@@ -115,19 +119,38 @@ _m = "Do " + "not copy raw dimension labels"
 t("INIT-A: %s" % _m, _m in _init_a, "INIT-A missing: %s" % _m)
 _m = "RANK TEMPLATES"
 t("INIT-B: %s" % _m, _m in _init_b, "INIT-B missing: %s" % _m)
-_m = "using a spoken axis noun from axes when present"
+_m = "RANK TEMPLATES (event records only)"
+t("INIT-B: %s" % _m, _m in _init_b, "INIT-B missing: %s" % _m)
+_m = "using a spoken axis noun paraphrased from axes when axes is non-empty"
+t("INIT-B: %s" % _m, _m in _init_b, "INIT-B missing: %s" % _m)
+_m = "ne" + "ver copy one identical ranking template across siblings"
+t("INIT-B: %s" % _m, _m in _init_b, "INIT-B missing: %s" % _m)
+_m = "Records without the event trigger: do " + "not force rank templates"
 t("INIT-B: %s" % _m, _m in _init_b, "INIT-B missing: %s" % _m)
 _m = "AXIS vs EVENT using axes"
 t("INIT-C: %s" % _m, _m in _init_c, "INIT-C missing: %s" % _m)
 _m = "axis master list"
 t("INIT-C: %s" % _m, _m in _init_c, "INIT-C missing: %s" % _m)
-_m = "not ranked event totals on the axis"
+_m = "not ranked event totals on that axis"
+t("INIT-C: %s" % _m, _m in _init_c, "INIT-C missing: %s" % _m)
+_m = "If no event-triggered sibling shares the axis: omit kind (c)"
+t("INIT-C: %s" % _m, _m in _init_c, "INIT-C missing: %s" % _m)
+_m = "event totals, not a bare headcount/Count alone"
 t("INIT-C: %s" % _m, _m in _init_c, "INIT-C missing: %s" % _m)
 _m = "AXIS subject noun"
 t("COLL-A: %s" % _m, _m in _coll_a, "COLL-A missing: %s" % _m)
+_m = "PRESERVE AXIS/EVENT TOKENS"
+t("COLL-A: %s" % _m, _m in _coll_a, "COLL-A missing: %s" % _m)
 _m = "ranking / top-N / best / most that THIS type alone answers"
 t("COLL-B: %s" % _m, _m in _coll_b, "COLL-B missing: %s" % _m)
+_m = "not a bare headcount/Count alone: at least one bestUsedFor template MU" + "ST be ranking"
+t("COLL-B: %s" % _m, _m in _coll_b, "COLL-B missing: %s" % _m)
+t("COLL-B: нет старого триггера по осям",
+  "non-empty axes" not in _coll_b,
+  "COLL-B вернул старый триггер по осям")
 _m = "the shared word is an axis subject"
+t("COLL-C: %s" % _m, _m in _coll_c, "COLL-C missing: %s" % _m)
+_m = "ne" + "ver comma lists (a string like 'top-N, ranked' is a hard format failure)"
 t("COLL-C: %s" % _m, _m in _coll_c, "COLL-C missing: %s" % _m)
 _m = "AS axes"
 t("select_entity_batch SQL: %s" % _m, _m in ent_batch_sql,
