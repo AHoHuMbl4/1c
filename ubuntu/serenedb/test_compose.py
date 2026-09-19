@@ -503,8 +503,8 @@ try:
     A.calendar_axis_unavailable_block = lambda *a, **k: None
     A.repair_period_from_question = lambda *a, **k: None
     A.apply_proven_period = lambda *a, **k: None
-    A.probe = lambda terms: ([], {})
-    A.match_expr = lambda exprs, preds: ("", 0)
+    A.probe = lambda terms, **kw: ([], {})
+    A.match_expr = lambda exprs, preds, **kw: ("", 0)
     A.tables_of = lambda match, preds: {"document_sales": 3}
     A.measures_of = lambda src: ["Всего"]
     A.measure_aliases_of = lambda src: {}

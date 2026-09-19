@@ -525,20 +525,180 @@ def choose_click_option(options, question):
     return best
 
 
+# LLM-клик (отдельная дешёвая модель ≠ испытуемая ask): env AB_CLICK_*.
+# Дефолт — deepseek/deepseek-v4-flash (малая, уже в контуре репо; НЕ qwen3.8-27b).
+_AB_CLICK_LLM_OFF = frozenset(("0", "false", "no", "off"))
+_DEFAULT_CLICK_MODEL = "deepseek/deepseek-v4-flash"
+_DEFAULT_CLICK_BASE = "https://openrouter.ai/api/v1"
+_DEFAULT_CLICK_TIMEOUT = 15
+
+
+def ab_click_llm_enabled(environ=None):
+    """AB_CLICK_LLM=0|false|no|off — принудительно токен-матч."""
+    env = environ if environ is not None else os.environ
+    return (env.get("AB_CLICK_LLM") or "1").strip().lower() not in _AB_CLICK_LLM_OFF
+
+
+def ab_click_api_key(environ=None):
+    """Ключ OpenRouter: OPENROUTER_API_KEY | OR_KEY | DEEPSEEK_API_KEY (ask-контур)."""
+    env = environ if environ is not None else os.environ
+    for k in ("OPENROUTER_API_KEY", "OR_KEY", "DEEPSEEK_API_KEY"):
+        v = (env.get(k) or "").strip()
+        if v:
+            return v
+    return ""
+
+
+def ab_click_base(environ=None):
+    """База chat API. AB_CLICK_BASE | OPENROUTER_BASE | DEEPSEEK_BASE | openrouter."""
+    env = environ if environ is not None else os.environ
+    for k in ("AB_CLICK_BASE", "OPENROUTER_BASE", "DEEPSEEK_BASE"):
+        v = (env.get(k) or "").strip().rstrip("/")
+        if v:
+            return v
+    return _DEFAULT_CLICK_BASE
+
+
+def ab_click_model(environ=None):
+    env = environ if environ is not None else os.environ
+    return (env.get("AB_CLICK_MODEL") or _DEFAULT_CLICK_MODEL).strip() or _DEFAULT_CLICK_MODEL
+
+
+def format_click_llm_prompt(question, options):
+    """Вопрос + опции (index, label, hint[:120]) → промт; эталон не входит.
+
+    Формат ответа (одна цифра) держится parse_click_llm_index + fallback
+    на choose_click_option, не текстом промта.
+    """
+    lines = [
+        "Вопрос сотрудника компании:",
+        (question or "").strip(),
+        "",
+        "Пункты меню уточнения:",
+    ]
+    for i, o in enumerate(options or []):
+        if not isinstance(o, dict):
+            continue
+        lab = (o.get("label") or o.get("text") or "").strip()
+        hint = (o.get("hint") or "").strip()[:120]
+        row = "%d. %s" % (i, lab)
+        if hint:
+            row += " — %s" % hint
+        lines.append(row)
+    lines.append("")
+    lines.append("Номер пункта меню по смыслу вопроса (цифра):")
+    return "\n".join(lines)
+
+
+def parse_click_llm_index(text, n_options):
+    """Первое целое в ответе; None если нет / вне [0, n)."""
+    if text is None or n_options <= 0:
+        return None
+    m = re.search(r"-?\d+", str(text).strip())
+    if not m:
+        return None
+    try:
+        idx = int(m.group(0))
+    except ValueError:
+        return None
+    if 0 <= idx < int(n_options):
+        return idx
+    return None
+
+
+def default_click_llm_transport(prompt, *, environ=None, timeout=None):
+    """POST …/chat/completions → content. Исключение при сети/таймауте/кривом JSON."""
+    env = environ if environ is not None else os.environ
+    key = ab_click_api_key(env)
+    if not key:
+        raise RuntimeError("нет OPENROUTER_API_KEY/OR_KEY/DEEPSEEK_API_KEY")
+    base = ab_click_base(env)
+    chat_base = base if base.endswith("/v1") else base + "/v1"
+    to = _DEFAULT_CLICK_TIMEOUT if timeout is None else float(timeout)
+    body = json.dumps({
+        "model": ab_click_model(env),
+        "temperature": 0,
+        "max_tokens": 16,
+        "messages": [{"role": "user", "content": prompt}],
+    }).encode("utf-8")
+    req = urllib.request.Request(
+        chat_base + "/chat/completions", data=body, method="POST")
+    req.add_header("Authorization", "Bearer " + key)
+    req.add_header("Content-Type", "application/json")
+    with urllib.request.urlopen(req, timeout=to) as r:
+        payload = json.loads(r.read().decode("utf-8"))
+    return (((payload.get("choices") or [{}])[0].get("message") or {})
+            .get("content"))
+
+
+def call_click_llm(question, options, *, transport=None, environ=None,
+                   timeout=None):
+    """Индекс опции от LLM или None (таймаут/мусор/нет ключа).
+
+    transport(prompt) -> str | вызывается вместо HTTP (замки).
+    """
+    opts = [o for o in (options or []) if isinstance(o, dict)]
+    if not opts:
+        return None
+    prompt = format_click_llm_prompt(question, opts)
+    try:
+        if transport is not None:
+            raw = transport(prompt)
+        else:
+            raw = default_click_llm_transport(
+                prompt, environ=environ, timeout=timeout)
+    except Exception:  # noqa: BLE001 — сеть/таймаут/квота → fallback
+        return None
+    return parse_click_llm_index(raw, len(opts))
+
+
+def choose_click_option_llm(options, question, *, transport=None,
+                            environ=None, etalon=None, timeout=None):
+    """Клик: LLM по смыслу → fallback choose_click_option (токены).
+
+    etalon в сигнатуре намеренно: путь LLM его не читает (замок).
+    Возвращает (option|None, source) где source — 'llm' | 'tokens'.
+    """
+    _ = etalon  # эталон в выборе не участвует
+    if not isinstance(options, list) or not options:
+        return None, "tokens"
+    opts = [o for o in options if isinstance(o, dict)]
+    if not opts:
+        return None, "tokens"
+    env = environ if environ is not None else os.environ
+    if ab_click_llm_enabled(env):
+        idx = call_click_llm(
+            question, opts, transport=transport, environ=env, timeout=timeout)
+        if idx is not None:
+            return opts[idx], "llm"
+    return choose_click_option(opts, question), "tokens"
+
+
+def format_click_fact_label(option, source):
+    """label[:40] + пометка источника (llm|tokens) для fact."""
+    lab = option_click_label(option)
+    if not lab:
+        return ""
+    src = source if source in ("llm", "tokens") else "tokens"
+    return "%s (%s)" % (lab, src)
+
+
 # Финал цепочки кликов (TARGET п.12/п.21): ответ или честный отказ.
 _CHAIN_DONE = frozenset(("answer", "no_data", "figures", "unavailable"))
 
 
 def ask_with_clarify_follow(question, branch_needle=None, max_steps=4,
-                            user=None, rid=None, click_first=False):
+                            user=None, rid=None, click_first=False,
+                            click_transport=None, click_environ=None):
     """Цепочка /ask: clarify → клик decision_id → … до answer/no_data.
 
-    click_first=True (digits/name): клик по смыслу подписи (токены вопроса vs
-    label/hint), до max_steps кликов; при нуле совпадений — первая опция.
+    click_first=True (digits/name): клик LLM-по-смыслу с fallback на токены
+    (choose_click_option_llm), до max_steps кликов.
     branch_needle (legacy clarify/name): выбор по подстроке; без needle и без
     click_first — один запрос (kind: кликов нет).
+    click_transport — коллбек промта LLM (тесты); click_environ — подмена env.
     Возвращает (out0, out_final, hops, total_sec, click_labels);
-    hops — число кликов; click_labels — label[:40] каждой выбранной опции.
+    hops — число кликов; click_labels — «label[:40] (llm|tokens)» каждой опции.
     """
     user = user or ASK_USER
     out0, out = None, None
@@ -561,9 +721,12 @@ def ask_with_clarify_follow(question, branch_needle=None, max_steps=4,
             break
         opts = extract_clarify_options(out)
         if click_first:
-            chosen = choose_click_option(opts, question)
+            chosen, src = choose_click_option_llm(
+                opts, question, transport=click_transport,
+                environ=click_environ)
         else:
             chosen = choose_clarify_option(opts, branch_needle)
+            src = "tokens"
         if not chosen:
             break
         decision_id = (chosen.get("decision_id") or "").strip()
@@ -571,7 +734,7 @@ def ask_with_clarify_follow(question, branch_needle=None, max_steps=4,
             break
         if hops >= max_steps:
             break
-        lab = option_click_label(chosen)
+        lab = format_click_fact_label(chosen, src)
         if lab:
             click_labels.append(lab)
         hops += 1

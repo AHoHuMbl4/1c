@@ -6,13 +6,19 @@ from ask._wire import register_zone, apply_bindings
 
 apply_bindings(globals())
 
-def count_question_skips_axis(intent, measure, grain_dec, plan=None):
+def count_question_skips_axis(intent, measure, grain_dec, plan=None, question=""):
     """Счёт записей сущности без оси — axis-clarify здесь лишний (B8-02 / Z2 §3.3).
 
     «Сколько контрагентов» — row count по справочнику; оси Parent/Город — не
     альтернативные прочтения вопроса, а шум структуры. Plain count/list/пустой
     want без явного разреза — не меню осей (волна W).
     """
+    # как total: rank_intent_from(question). bare want=list без фразы —
+    # исторический skip перечня (test_axis_count_plain), не rank-меню.
+    if rank_intent_from(intent, plan, question):
+        want0 = (intent or {}).get("want") or ""
+        if want0 != "list" or rank_question_text(question):
+            return False
     if (grain_dec or {}).get("clarify") != "axis":
         return False
     want = (intent or {}).get("want") or ""

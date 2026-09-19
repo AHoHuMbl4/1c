@@ -134,6 +134,107 @@ def test_choose_clarify_option():
     t("choose_clarify_option: находит по подстроке", chosen and chosen.get("decision_id") == "d1", chosen)
 
 
+def _clients_menu():
+    """Живой кейс слепоты токен-матча: «клиентов» → «Клиент Банк»."""
+    return [
+        {
+            "label": "Правила Обмена Клиент Банк",
+            "hint": "записей: 10",
+            "decision_id": "d_bank",
+        },
+        {
+            "label": "Контрагенты",
+            "hint": "Контроль сроков оплаты | НДС контрагента",
+            "decision_id": "d_contr",
+        },
+        {
+            "label": "Физические Лица",
+            "hint": "сотрудники",
+            "decision_id": "d_fl",
+        },
+    ]
+
+
+def test_click_llm_modes():
+    q = "сколько у нас всего клиентов сейчас"
+    opts = _clients_menu()
+    tokens_pick = S.choose_click_option(opts, q)
+    t("tokens baseline: клиенты → Клиент Банк (слепота)",
+      tokens_pick and tokens_pick.get("decision_id") == "d_bank",
+      tokens_pick)
+
+    # (а) LLM вернула валидный индекс → выбран он
+    seen = {"n": 0, "prompt": "", "etalon_in_prompt": False}
+
+    def transport_ok(prompt):
+        seen["n"] += 1
+        seen["prompt"] = prompt
+        # эталон не должен попасть в промт
+        if "ЭТАЛОН_СЕКРЕТ_999" in prompt or "999001" in prompt:
+            seen["etalon_in_prompt"] = True
+        return "1"
+
+    chosen, src = S.choose_click_option_llm(
+        opts, q, transport=transport_ok,
+        etalon="ЭТАЛОН_СЕКРЕТ_999=999001",
+        environ={"AB_CLICK_LLM": "1"})
+    t("llm (а): валидный индекс → Контрагенты",
+      chosen and chosen.get("decision_id") == "d_contr" and src == "llm",
+      (chosen, src))
+    t("llm (а): transport вызван", seen["n"] == 1, seen["n"])
+    fact = S.format_click_fact_label(chosen, src)
+    t("llm (а): fact с пометкой llm",
+      fact.startswith("Контрагенты") and "(llm)" in fact, fact)
+
+    # (б) LLM таймаут/мусор → fallback токен-матч
+    def transport_junk(_prompt):
+        return "не знаю, может контрагенты?"
+
+    chosen_b, src_b = S.choose_click_option_llm(
+        opts, q, transport=transport_junk, environ={"AB_CLICK_LLM": "1"})
+    t("llm (б): мусор → tokens + Клиент Банк",
+      src_b == "tokens" and chosen_b and chosen_b.get("decision_id") == "d_bank",
+      (chosen_b, src_b))
+
+    def transport_timeout(_prompt):
+        raise TimeoutError("simulated")
+
+    chosen_t, src_t = S.choose_click_option_llm(
+        opts, q, transport=transport_timeout, environ={"AB_CLICK_LLM": "1"})
+    t("llm (б): таймаут → tokens",
+      src_t == "tokens" and chosen_t and chosen_t.get("decision_id") == "d_bank",
+      (chosen_t, src_t))
+
+    # (в) AB_CLICK_LLM=0 → токен-матч, transport не зовётся
+    seen_off = {"n": 0}
+
+    def transport_must_not(_prompt):
+        seen_off["n"] += 1
+        return "1"
+
+    chosen_off, src_off = S.choose_click_option_llm(
+        opts, q, transport=transport_must_not,
+        environ={"AB_CLICK_LLM": "0"})
+    t("llm (в): AB_CLICK_LLM=0 → tokens",
+      src_off == "tokens" and chosen_off
+      and chosen_off.get("decision_id") == "d_bank",
+      (chosen_off, src_off))
+    t("llm (в): transport не вызван", seen_off["n"] == 0, seen_off["n"])
+
+    # (г) LLM-путь не трогает эталон (промт без эталона; параметр ignored)
+    t("llm (г): эталон не в промте",
+      not seen["etalon_in_prompt"]
+      and "ЭТАЛОН_СЕКРЕТ_999" not in seen["prompt"]
+      and "999001" not in seen["prompt"],
+      seen["prompt"][:120])
+    # промт несёт вопрос и подписи, не эталон
+    t("llm (г): промт содержит вопрос и опции",
+      "клиентов" in seen["prompt"]
+      and "Контрагенты" in seen["prompt"]
+      and "0. Правила Обмена Клиент Банк" in seen["prompt"],
+      seen["prompt"][:200])
+
+
 def main():
     test_load_gold()
     test_digits()
@@ -142,6 +243,7 @@ def main():
     test_clarify()
     test_name()
     test_choose_clarify_option()
+    test_click_llm_modes()
     print("\nИТОГ:", "ok — все %d проверок прошли" % PASS if not FAIL
           else "FAIL — %d из %d: %s" % (len(FAIL), PASS + len(FAIL), ", ".join(FAIL)))
     sys.exit(1 if FAIL else 0)

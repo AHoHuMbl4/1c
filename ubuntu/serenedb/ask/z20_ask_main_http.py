@@ -359,12 +359,12 @@ def clarify_say(question, opts, diag=None):
 
 def clarify_opts_response(question, opts, diag, cut, t0, *, reason="", gate_ok=False,
                           partial=None, sources=None, extra_diag=None):
+    # Keep builder-supplied found; axis opts have no found so ambiguity stays "axis".
     clean = []
     for o in opts or []:
         if not o:
             continue
         co = dict(o)
-        co["found"] = 0
         if co.get("label") or co.get("measure"):
             clean.append(co)
     if len(clean) < 2:
@@ -1564,7 +1564,11 @@ def _settle_measure(src, intent, plan, measure_pick, trusted, resolved, diag):
 
 
 def _settle_axis(src, intent, plan, question, trusted, resolved, diag, measure):
-    """Ось: билет / единственный кандидат / список для меню. Без silent rerank."""
+    """Ось: билет / единственный кандидат / список для меню. Без silent rerank.
+
+    Порядок: proven-axis → refcols → decide_grain → kind_hits>1 → count/total skip.
+    Skip до decide_grain бесполезен: обе функции ждут grain.clarify=="axis".
+    """
     grain = {"grain": "row", "col": None, "form": "number",
              "named_gis": [], "clarify": None}
     axes = []
@@ -1584,15 +1588,6 @@ def _settle_axis(src, intent, plan, question, trusted, resolved, diag, measure):
             intent, plan, grain, _prov, question)
         if diag is not None:
             diag["axis_from_choice"] = _prov
-        return grain, axes, []
-    if count_question_skips_axis(intent, measure, grain, plan):
-        if diag is not None:
-            diag["axis_clarify_skipped"] = "count_without_measure"
-        return grain, axes, []
-    if total_question_skips_axis(intent, measure, grain, plan, question,
-                                 trusted=trusted, resolved=resolved):
-        if diag is not None:
-            diag["axis_clarify_skipped"] = "total_without_breakdown"
         return grain, axes, []
     if not serene_axis:
         return grain, axes, []
@@ -1629,6 +1624,22 @@ def _settle_axis(src, intent, plan, question, trusted, resolved, diag, measure):
     except Exception:  # noqa: BLE001
         grain = {"grain": "row", "col": None, "form": "number",
                  "named_gis": [], "clarify": None}
+    if _kh and len(_kh) > 1:
+        return grain, axes, list(_kh)
+    # skip after decide_grain so grain.clarify is set when guards run
+    if count_question_skips_axis(intent, measure, grain, plan, question):
+        if diag is not None:
+            diag["axis_clarify_skipped"] = "count_without_measure"
+        grain = {"grain": "row", "col": None, "form": "number",
+                 "named_gis": [], "clarify": None}
+        return grain, axes, []
+    if total_question_skips_axis(intent, measure, grain, plan, question,
+                                 trusted=trusted, resolved=resolved):
+        if diag is not None:
+            diag["axis_clarify_skipped"] = "total_without_breakdown"
+        grain = {"grain": "row", "col": None, "form": "number",
+                 "named_gis": [], "clarify": None}
+        return grain, axes, []
     if _alts:
         return grain, axes, _alts
     if grain.get("clarify") == "axis":
@@ -4181,7 +4192,9 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     grain_dec, axes, axis_alts = _settle_axis(
         src, intent, plan, question, trusted, resolved, diag, measure)
     if axis_alts and len(axis_alts) > 1:
-        _a_opts = axis_clarify_options(src, axes)
+        _allowed = set(axis_alts)
+        _sub = [a for a in (axes or []) if a.get("col") in _allowed]
+        _a_opts = axis_clarify_options(src, _sub if len(_sub) >= 2 else axes)
         if len(_a_opts) > 1:
             _a_menu = readings_menu(
                 question, "axis", _a_opts, diag, cut, t0,
@@ -4352,7 +4365,10 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 grain_dec, axes, axis_alts = _settle_axis(
                     src, intent, plan, question, trusted, resolved, diag, measure)
                 if axis_alts and len(axis_alts) > 1:
-                    _a_opts = axis_clarify_options(src, axes)
+                    _allowed = set(axis_alts)
+                    _sub = [a for a in (axes or []) if a.get("col") in _allowed]
+                    _a_opts = axis_clarify_options(
+                        src, _sub if len(_sub) >= 2 else axes)
                     if len(_a_opts) > 1:
                         _a_menu = readings_menu(
                             question, "axis", _a_opts, diag, cut, t0,
