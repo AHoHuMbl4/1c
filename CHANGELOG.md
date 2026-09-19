@@ -1,3 +1,18 @@
+## 2026-09-19 (6) — снос мёртвого score-кода (FALLBACK1-остатки); красная ACCEPT ×3 [код]
+
+- Снесены не-вызываемые после FALLBACK1 сущности: wiki_outcome_from_score_verify
+  (−82), _wiki_parse_card_verify (−36), WIKI_CARD_VERIFY_SYS (−12), orphan-хелперы
+  _wiki_score_int/_wiki_attach_score/WIKI_SCORE_* (−26); из OUR_PROMPTS (z20) —
+  ссылка. Итог: z21 −165 строк. Живой путь цел: wiki_batch_verify + WIKI_VERIFY_SYS
+  + wiki_outcome_from_full_verify, пачковый pick+verify, параллельные паспорта
+  (ThreadPoolExecutor/WIKI_VERIFY_WORKERS), ТОЧКИ 1/2, readings_menu, skip-стражи.
+- Замки все зелёные: one_path 78/0, onepath_rescue 119/0, terminal_round 24,
+  axis_loop 23/0, compose 91, measure_degenerate 97, homonym 42/0, gate 56/0,
+  step4_guards 27/0. Красная ×3 ACCEPT (grep *.py — ноль ссылок, AST-проверка,
+  OUR_PROMPTS 8 имён целы).
+- Выкат на прод не требуется до следующего рестарта: снесён код мёртвый, поведения
+  нет (решение зафиксировано; следующий выкат повезёт автоматически).
+
 ## 2026-09-19 (5) — доводка LLM-клика: бюджет reasoning-моделям + дефолт по живому отбору [код][замер]
 
 - max_tokens 16 → 512: reasoning-модели (deepseek-v4-flash) тратят весь бюджет на

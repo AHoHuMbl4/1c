@@ -758,8 +758,7 @@ Reply with JSON only, no text outside it:
 # Все НАШИ системные сообщения в одном месте: по ним `prompt_leak` ловит утечку
 # инструкции в ответ клиенту точным совпадением строки (`№27`).
 OUR_PROMPTS = [INTENT_SYS, AXIS_PICK_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS,
-               WIKI_PICK_SYS, WIKI_VERIFY_SYS, WIKI_CARD_VERIFY_SYS,
-               WIKI_RESOLVER_SYS]
+               WIKI_PICK_SYS, WIKI_VERIFY_SYS, WIKI_RESOLVER_SYS]
 
 def _coverage_answer(question, diag, t0):
     """Ответ о полноте данных — из переписи, а не из корпуса (п. 13).
