@@ -247,7 +247,8 @@ def ask(q, decision_id=None, user=None, rid=None):
     if TOK:
         req.add_header("Authorization", "Bearer " + TOK)
     t = time.time()
-    timeout = int(os.environ.get("AB_ASK_TIMEOUT", "600"))
+    # таймаут одного хопа цепочки; умолчание 100 с (полное окно вопроса — сумма хопов)
+    timeout = int(os.environ.get("AB_ASK_TIMEOUT", "100"))
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             out = json.loads(r.read())
@@ -356,31 +357,276 @@ def choose_clarify_option(options, needle):
     return None
 
 
-def ask_with_clarify_follow(question, branch_needle=None, max_steps=6, user=None, rid=None):
-    """Если сервис ответил clarify и варианты можно однозначно выбрать — идём дальше.
+def extract_clarify_options(out):
+    """options[] ответа /ask; запасной разбор ATOM_JSON из text (формат моста)."""
+    if not isinstance(out, dict):
+        return []
+    opts = out.get("options")
+    if isinstance(opts, list) and opts:
+        return opts
+    text = out.get("text") or ""
+    marker = "ATOM_JSON:"
+    idx = text.find(marker)
+    if idx < 0:
+        return []
+    raw = text[idx + len(marker):].strip()
+    for stop in ("\nPRESENTATION_JSON:", "\n\nPRESENTATION_JSON:"):
+        cut = raw.find(stop)
+        if cut >= 0:
+            raw = raw[:cut].strip()
+            break
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        brace = raw.find("{")
+        if brace < 0:
+            return []
+        try:
+            payload = json.loads(raw[brace:])
+        except (TypeError, ValueError, json.JSONDecodeError):
+            return []
+    if isinstance(payload, dict):
+        inner = payload.get("options")
+        if isinstance(inner, list):
+            return inner
+    return []
 
-    Важно: для digits/kind ветвление отключается (branch_needle=None), иначе появится
-    "ремонт" провалов.
+
+def first_option_decision_id(out):
+    """decision_id верхней опции (порядок меню уже отсортирован системой)."""
+    for o in extract_clarify_options(out):
+        if not isinstance(o, dict):
+            continue
+        did = (o.get("decision_id") or "").strip()
+        if did:
+            return did
+    return None
+
+
+# Стоп-слова русского вопросного синтаксиса (не домен базы): значимые токены
+# вопроса для клика по подписи меню — без «сколько/всего/у нас/…».
+_QUESTION_STOP_WORDS = frozenset((
+    "сколько", "скольки", "всего", "всей", "всему", "всем", "всех", "все", "всё",
+    "у", "нас", "нам", "нами", "наш", "наша", "наши", "нашего", "нашей",
+    "дай", "дайте", "давай", "покажи", "покажите", "скажи", "скажите",
+    "какой", "какая", "какие", "какое", "каков", "какова", "каково", "каковы",
+    "что", "чего", "чему", "чем", "это", "этот", "эта", "эти", "этого", "этой",
+    "как", "где", "когда", "кто", "кого", "кому", "чей", "чья", "чье", "чьё",
+    "есть", "был", "была", "было", "были", "будет", "будут", "быть",
+    "и", "а", "но", "или", "либо", "да", "нет", "не", "ни", "же", "ли", "бы",
+    "в", "во", "на", "по", "из", "за", "к", "ко", "от", "до", "для", "при",
+    "про", "об", "о", "с", "со", "без", "над", "под", "между", "через",
+    "то", "та", "те", "тот", "туда", "там", "тут", "здесь", "сейчас", "теперь",
+    "уже", "еще", "ещё", "только", "просто", "очень", "вообще", "нужно", "надо",
+    "можно", "пожалуйста", "мне", "меня", "мной", "мы", "вы", "вас", "вам",
+    "они", "он", "она", "оно", "их", "его", "ее", "её", "мне", "мои", "моих",
+    "ваш", "ваши", "твои", "сей", "сих",
+))
+_TOKEN_RE = re.compile(r"[0-9a-zA-Zа-яА-ЯёЁ]+", re.UNICODE)
+# Окончания русского вопросного/именного склонения (длинные раньше коротких).
+_RU_SUFFIXES = (
+    "ями", "ами", "ого", "ему", "ими", "ыми", "ах", "ях",
+    "ов", "ев", "ей", "ом", "ем", "ам", "ям",
+    "ые", "ие", "ое", "ее", "ых", "их", "ым", "им",
+    "ой", "ий", "ый", "ая", "яя", "ою", "ею",
+    "ы", "и", "а", "я", "у", "ю", "е", "о",
+)
+
+
+def significant_tokens(text):
+    """Значимые токены: lower, без стоп-слов вопроса, длина ≥ 3, не чистая цифра."""
+    out = []
+    raw = str(text or "").lower().replace("ё", "е")
+    for tok in _TOKEN_RE.findall(raw):
+        if len(tok) < 3 or tok.isdigit() or tok in _QUESTION_STOP_WORDS:
+            continue
+        out.append(tok)
+    return out
+
+
+def _ru_stem(tok):
+    """Грубый стем: снять одно типичное окончание, корень ≥4."""
+    w = tok or ""
+    for suf in _RU_SUFFIXES:
+        if len(w) >= len(suf) + 4 and w.endswith(suf):
+            return w[:-len(suf)]
+    return w
+
+
+def _tokens_soft_match(a, b):
+    """Равенство, префикс ≥4 или общий стем после снятия окончания."""
+    if a == b:
+        return True
+    if len(a) < 4 or len(b) < 4:
+        return False
+    if a.startswith(b) or b.startswith(a):
+        return True
+    sa, sb = _ru_stem(a), _ru_stem(b)
+    if len(sa) < 4 or len(sb) < 4:
+        return False
+    if sa == sb:
+        return True
+    return sa.startswith(sb) or sb.startswith(sa)
+
+
+def token_overlap_count(query_tokens, hay_tokens):
+    """Сколько токенов вопроса имеют мягкое совпадение в hay."""
+    if not query_tokens or not hay_tokens:
+        return 0
+    n = 0
+    for qt in query_tokens:
+        if any(_tokens_soft_match(qt, ht) for ht in hay_tokens):
+            n += 1
+    return n
+
+
+def option_click_label(o):
+    """Подпись опции для отчёта о клике (label[:40])."""
+    if not isinstance(o, dict):
+        return ""
+    lab = (o.get("label") or o.get("text") or "").strip()
+    return lab[:40]
+
+
+def choose_click_option(options, question):
+    """Клик как у человека: max совпадений токенов вопроса с label, затем hint.
+
+    Эталон не используется. Ноль совпадений у всех — первая опция с decision_id
+    (как прежний click_first). При равном числе совпадений предпочитаем более
+    плотное покрытие токенов опции (короткая подпись / hint с нужным словом
+    сильнее длинного имени, где слово встретилось случайно).
+    """
+    if not isinstance(options, list) or not options:
+        return None
+    opts = [o for o in options if isinstance(o, dict)]
+    if not opts:
+        return None
+    q_toks = significant_tokens(question)
+    best = None
+    best_key = None  # (hits, density, label_hits, -index)
+    for i, o in enumerate(opts):
+        label_t = significant_tokens(
+            (o.get("label") or o.get("text") or ""))
+        hint_t = significant_tokens(o.get("hint") or "")
+        # label затем hint — один мешок подписи, которую видит человек
+        bag = label_t + [t for t in hint_t if t not in label_t]
+        hits = token_overlap_count(q_toks, bag)
+        label_hits = token_overlap_count(q_toks, label_t)
+        density = (float(hits) / float(len(bag))) if (hits and bag) else 0.0
+        key = (hits, density, label_hits, -i)
+        if best is None or key > best_key:
+            best = o
+            best_key = key
+    if not best_key or best_key[0] <= 0:
+        for o in opts:
+            if (o.get("decision_id") or "").strip():
+                return o
+        return opts[0]
+    return best
+
+
+# Финал цепочки кликов (TARGET п.12/п.21): ответ или честный отказ.
+_CHAIN_DONE = frozenset(("answer", "no_data", "figures", "unavailable"))
+
+
+def ask_with_clarify_follow(question, branch_needle=None, max_steps=4,
+                            user=None, rid=None, click_first=False):
+    """Цепочка /ask: clarify → клик decision_id → … до answer/no_data.
+
+    click_first=True (digits/name): клик по смыслу подписи (токены вопроса vs
+    label/hint), до max_steps кликов; при нуле совпадений — первая опция.
+    branch_needle (legacy clarify/name): выбор по подстроке; без needle и без
+    click_first — один запрос (kind: кликов нет).
+    Возвращает (out0, out_final, hops, total_sec, click_labels);
+    hops — число кликов; click_labels — label[:40] каждой выбранной опции.
     """
     user = user or ASK_USER
     out0, out = None, None
     decision_id = None
-    for _step in range(max_steps):
-        out, _sec = ask(question, decision_id=decision_id, user=user, rid=rid)
+    hops = 0
+    total_sec = 0.0
+    click_labels = []
+    # max_steps кликов ⇒ до max_steps+1 запросов
+    for _step in range(max_steps + 1):
+        out, sec = ask(question, decision_id=decision_id, user=user, rid=rid)
+        total_sec += float(sec or 0)
         if out0 is None:
             out0 = out
-        if (out or {}).get("kind") != "clarify":
+        kind = (out or {}).get("kind") or ""
+        if kind in _CHAIN_DONE:
             break
-        if not branch_needle:
+        if kind != "clarify":
             break
-        opts = out.get("options") or []
-        chosen = choose_clarify_option(opts, branch_needle)
+        if not click_first and not branch_needle:
+            break
+        opts = extract_clarify_options(out)
+        if click_first:
+            chosen = choose_click_option(opts, question)
+        else:
+            chosen = choose_clarify_option(opts, branch_needle)
         if not chosen:
             break
-        decision_id = chosen.get("decision_id")
+        decision_id = (chosen.get("decision_id") or "").strip()
         if not decision_id:
             break
-    return out0, out
+        if hops >= max_steps:
+            break
+        lab = option_click_label(chosen)
+        if lab:
+            click_labels.append(lab)
+        hops += 1
+    return out0, out, hops, round(total_sec, 2), click_labels
+
+
+def want_is_live_number(want):
+    """Эталон-число есть (включая 0): no_data при нём — дефект п.21."""
+    return bool(want_number_digits(want))
+
+
+def verdict_digits(want, out, *, stuck_on_clarify=False):
+    """Вердикт digits по TARGET: OK/WRONG/HONEST_NO/REFUSAL_WITH_DATA."""
+    kind = (out or {}).get("kind") or ""
+    if stuck_on_clarify or kind == "clarify":
+        return ("REFUSAL_WITH_DATA", "меню без ответа после кликов",
+                "kind=clarify")
+    if kind == "no_data":
+        if want_is_live_number(want):
+            return ("REFUSAL_WITH_DATA", "no_data при живом эталоне",
+                    "want=%s" % want_number_digits(want))
+        return "HONEST_NO", "", "no_data"
+    if kind in ("answer", "figures"):
+        ok, defect, fact = score_digits(want, out)
+        if ok:
+            return "OK", "", fact
+        return "WRONG", defect or "число не сошлось", fact
+    if kind == "unavailable":
+        return "REFUSAL_WITH_DATA", "сервис unavailable", "kind=unavailable"
+    return ("REFUSAL_WITH_DATA", "нет финального ответа",
+            "kind=%s" % (kind or "—"))
+
+
+def verdict_name(want, out, *, stuck_on_clarify=False):
+    """Вердикт name по TARGET: OK/WRONG/HONEST_NO/REFUSAL_WITH_DATA."""
+    kind = (out or {}).get("kind") or ""
+    if stuck_on_clarify or kind == "clarify":
+        return ("REFUSAL_WITH_DATA", "меню без ответа после кликов",
+                "kind=clarify")
+    if kind == "no_data":
+        # имя в эталоне — «живые данные»; no_data при них — дефект п.21
+        pairs = parse_name_pairs(want)
+        if pairs and any((nm or "").strip() for nm, _nn in pairs):
+            return ("REFUSAL_WITH_DATA", "no_data при живом эталоне-имени",
+                    "no_data")
+        return "HONEST_NO", "", "no_data"
+    if kind in ("answer", "figures"):
+        ok, defect, fact = score_name(want, out)
+        if ok:
+            return "OK", "", fact
+        return "WRONG", defect or "имя/число не сошлись", fact
+    if kind == "unavailable":
+        return "REFUSAL_WITH_DATA", "сервис unavailable", "kind=unavailable"
+    return ("REFUSAL_WITH_DATA", "нет финального ответа",
+            "kind=%s" % (kind or "—"))
 
 
 def kind_expected_for_kind_mode(sql, want, question=""):
@@ -679,108 +925,118 @@ def main():
     for sc in scorers:
         if not LIVE_CONTOUR:
             restart(sc)
-        hits, secs, errs = 0, 0.0, 0
+        hits, wrongs, honest_nos, refusals = 0, 0, 0, 0
+        secs, errs = 0.0, 0
         rows = []
         failures = []
 
         for q, sql, mode, want in computed:
-            branch_needle = None
-            if mode in ("clarify", "name"):
-                branch_needle = want
-                if mode == "name" and want:
-                    # для ветки уточнения по имени берем первое имя
-                    np = parse_name_pairs(want)
-                    if np and np[0][0]:
-                        branch_needle = np[0][0]
-
-            t0 = time.time()
-            out0 = outf = None
             ask_rid = (
                 _probe_protocol.new_rid("ab") if _probe_protocol and (PROBE or LIVE_CONTOUR)
                 else None)
-            if mode in ("digits", "kind"):
-                out0, outf = ask_with_clarify_follow(
-                    q, branch_needle=None, user=ASK_USER, rid=ask_rid)
+            # digits/name: клик по смыслу подписи до ответа (п.12/п.21).
+            # kind: без кликов (проверка исхода). clarify: без кликов (меню = эталон).
+            if mode in ("digits", "name"):
+                out0, outf, hops, sec, clicks = ask_with_clarify_follow(
+                    q, click_first=True, max_steps=4, user=ASK_USER, rid=ask_rid)
             elif mode == "clarify":
-                out0, outf = ask_with_clarify_follow(
-                    q, branch_needle=want, user=ASK_USER, rid=ask_rid)
-            elif mode == "name":
-                out0, outf = ask_with_clarify_follow(
-                    q, branch_needle=branch_needle, user=ASK_USER, rid=ask_rid)
+                out0, outf, hops, sec, clicks = ask_with_clarify_follow(
+                    q, branch_needle=None, click_first=False, max_steps=0,
+                    user=ASK_USER, rid=ask_rid)
             else:
-                out0, outf = ask_with_clarify_follow(
-                    q, branch_needle=None, user=ASK_USER, rid=ask_rid)
+                # kind и прочие: один запрос, кликов нет
+                out0, outf, hops, sec, clicks = ask_with_clarify_follow(
+                    q, branch_needle=None, click_first=False, max_steps=0,
+                    user=ASK_USER, rid=ask_rid)
 
-            sec = round(time.time() - t0, 2)
-            if (out0 or {}).get("diag", {}).get("error"):
+            if (out0 or {}).get("diag", {}).get("error") or (
+                    outf or {}).get("diag", {}).get("error"):
                 errs += 1
 
-            ok = False
             defect = ""
             fact = ""
+            final_kind = (outf or {}).get("kind") or (out0 or {}).get("kind") or "—"
+            stuck = (final_kind == "clarify")
             if mode == "digits":
-                if PROBE == "okna":
-                    ok, defect, fact = score_digits_probe(want, out0)
-                else:
-                    ok, defect, fact = score_digits(want, out0)
+                verdict, defect, fact = verdict_digits(
+                    want, outf, stuck_on_clarify=stuck)
+            elif mode == "name":
+                verdict, defect, fact = verdict_name(
+                    want, outf, stuck_on_clarify=stuck)
             elif mode == "kind":
                 ok, defect, fact = score_kind(sql, want, out0, question=q)
+                verdict = "OK" if ok else "FAIL"
             elif mode == "clarify":
                 ok, defect, fact = score_clarify(want, out0)
-            elif mode == "name":
-                ok, defect, fact = score_name(want, outf)
-                # если в финале всё равно clarify — это "лишний clarify"
-                if not ok and (outf or {}).get("kind") == "clarify":
-                    defect = defect or "лишний clarify"
+                verdict = "OK" if ok else "FAIL"
             else:
-                ok, defect, fact = False, "неизвестный режим", "mode=%s" % mode
+                verdict, defect, fact = (
+                    "FAIL", "неизвестный режим", "mode=%s" % mode)
+            if clicks:
+                click_fact = "click=" + " → ".join(clicks)
+                fact = ("%s; %s" % (fact, click_fact)) if fact else click_fact
 
-            hits += 1 if ok else 0
+            if verdict == "OK":
+                hits += 1
+            elif verdict == "WRONG":
+                wrongs += 1
+            elif verdict == "HONEST_NO":
+                honest_nos += 1
+            elif verdict == "REFUSAL_WITH_DATA":
+                refusals += 1
+            else:
+                wrongs += 1  # FAIL kind/clarify и прочее → неверных
+
             secs += sec
-            got_kind = (out0 or {}).get("kind") or "—"
-            rows.append((q, mode, ok, defect, got_kind, fact, sec))
-            if not ok:
-                failures.append((q, mode, defect or "FAIL", got_kind, fact))
-                # красная строка для отчёта гейта / живой самопроверки
+            rows.append((q, mode, verdict, defect, final_kind, fact, hops, sec))
+            if verdict != "OK":
+                failures.append((q, mode, verdict, defect or "FAIL",
+                                 final_kind, fact, hops))
                 sys.stderr.write(
-                    "🔴 FAIL %s | %s | %s (got %s) %s\n"
-                    % (mode, (q or "")[:60], defect or "FAIL", got_kind, fact or ""))
+                    "🔴 %s %s | %s | %s (got %s hops=%d) %s\n"
+                    % (verdict, mode, (q or "")[:60], defect or verdict,
+                       final_kind, hops, fact or ""))
 
-        table[sc] = (hits, round(secs / len(computed), 2), rows, errs)
-        print("\n== %s: верных %d/%d, средняя %.2f с%s"
-              % (sc, hits, len(computed), secs / len(computed),
+        n = len(computed)
+        avg = round(secs / n, 2) if n else 0.0
+        table[sc] = (hits, avg, rows, errs, wrongs, honest_nos, refusals)
+        print("\n== %s: верных %d / неверных %d / honest_no %d / "
+              "refusal_defect %d  (из %d), средняя цепочка %.2f с%s"
+              % (sc, hits, wrongs, honest_nos, refusals, n, avg,
                  ", СБОЕВ %d" % errs if errs else ""))
 
-        # Markdown-таблица на отчёт.
-        print("\n| question | mode | verdict | fact |")
-        print("|---|---|---|---|")
-        for q, mode, ok, defect, got_kind, fact, sec in rows:
-            verdict = "OK" if ok else "FAIL"
-            # fact: компактно, но с достаточным контекстом
+        print("\n| question | verdict | hops | time | fact |")
+        print("|---|---|---|---|---|")
+        for q, mode, verdict, defect, got_kind, fact, hops, sec in rows:
             kind_part = "kind=%s" % got_kind
             fact_part = fact or ""
-            time_part = "%.1fs" % sec
-            if ok:
-                cell = "%s; %s; %s" % (kind_part, time_part, fact_part)
+            if verdict == "OK":
+                cell = "%s; %s" % (kind_part, fact_part)
             else:
-                cell = "%s; %s; %s; class=%s" % (kind_part, time_part, fact_part, defect)
+                cell = "%s; %s; class=%s" % (kind_part, fact_part, defect or verdict)
+            if mode and mode != "digits":
+                cell = "mode=%s; %s" % (mode, cell)
             q_cell = (q or "").replace("\n", " ").replace("|", "\\|")
             cell = cell.replace("\n", " ").replace("|", "\\|")
-            print("| %s | %s | %s | %s |" % (q_cell[:120], mode, verdict, cell[:160]))
+            print("| %s | %s | %d | %.1fs | %s |"
+                  % (q_cell[:120], verdict, hops, sec, cell[:160]))
 
         if failures:
             print("\nПровалы (всего %d):" % len(failures))
-            for q, mode, defect, got_kind, fact in failures:
-                print("- %s | %s | %s (got %s)" % (mode, q[:60], defect, got_kind))
+            for q, mode, verdict, defect, got_kind, fact, hops in failures:
+                print("- %s | %s | %s | %s (got %s hops=%d)"
+                      % (verdict, mode, q[:60], defect, got_kind, hops))
 
     print("\n" + "=" * 62)
     best = max(table.items(), key=lambda kv: (kv[1][0], -kv[1][1]))
-    for sc, (hits, avg, _r, errs) in table.items():
-        print("  %-9s верных %d/%d  средняя %.2f с%s%s"
-              % (sc, hits, len(gold), avg, "  сбоев %d" % errs if errs else "",
+    for sc, (hits, avg, _r, errs, wrongs, honest_nos, refusals) in table.items():
+        print("  %-9s верных %d / неверных %d / honest_no %d / "
+              "refusal_defect %d  из %d  средняя %.2f с%s%s"
+              % (sc, hits, wrongs, honest_nos, refusals, len(gold), avg,
+                 "  сбоев %d" % errs if errs else "",
                  "   <= лучший" if sc == best[0] else ""))
 
-    hits, _avg, _rows, errs = best[1]
+    hits, _avg, _rows, errs = best[1][:4]
     return write_mark(best[0], hits, len(gold), errs)
 
 
