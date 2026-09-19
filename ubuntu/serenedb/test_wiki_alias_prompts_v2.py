@@ -26,6 +26,7 @@ def t(name, cond, detail=""):
 
 sh = (HERE / "wiki_alias.sh").read_text(encoding="utf-8")
 coll_sql = (HERE / "wiki_alias_collision_round.sql").read_text(encoding="utf-8")
+ent_batch_sql = (HERE / "wiki_alias_select_entity_batch.sql").read_text(encoding="utf-8")
 merge_sql = (HERE / "wiki_alias_merge_entity.sql").read_text(encoding="utf-8")
 
 # ── (а) шесть блоков промтов «1 задача = 1 вызов» (атомы-строки, без .claude/state) ─
@@ -104,6 +105,42 @@ t("event-формы: INIT-A и COLL-A",
   _event_mark in _init_a and _event_mark in _coll_a)
 for _w in ("наторговали", "сделали", "вышло", "покупают"):
     t("нет wordlist «%s»" % _w, _w not in sh)
+
+# ── axes / rank markers в шести промтах + SQL axes ────────────────────────────
+_m = "AXIS NOUNS FROM axes"
+t("INIT-A: %s" % _m, _m in _init_a, "INIT-A missing: %s" % _m)
+_m = "EXCEPT spoken action/event forms (rule 2) and AXIS subject nouns under rule 7"
+t("INIT-A: %s" % _m, _m in _init_a, "INIT-A missing: %s" % _m)
+_m = "Do " + "not copy raw dimension labels"
+t("INIT-A: %s" % _m, _m in _init_a, "INIT-A missing: %s" % _m)
+_m = "RANK TEMPLATES"
+t("INIT-B: %s" % _m, _m in _init_b, "INIT-B missing: %s" % _m)
+_m = "using a spoken axis noun from axes when present"
+t("INIT-B: %s" % _m, _m in _init_b, "INIT-B missing: %s" % _m)
+_m = "AXIS vs EVENT using axes"
+t("INIT-C: %s" % _m, _m in _init_c, "INIT-C missing: %s" % _m)
+_m = "axis master list"
+t("INIT-C: %s" % _m, _m in _init_c, "INIT-C missing: %s" % _m)
+_m = "not ranked event totals on the axis"
+t("INIT-C: %s" % _m, _m in _init_c, "INIT-C missing: %s" % _m)
+_m = "AXIS subject noun"
+t("COLL-A: %s" % _m, _m in _coll_a, "COLL-A missing: %s" % _m)
+_m = "ranking / top-N / best / most that THIS type alone answers"
+t("COLL-B: %s" % _m, _m in _coll_b, "COLL-B missing: %s" % _m)
+_m = "the shared word is an axis subject"
+t("COLL-C: %s" % _m, _m in _coll_c, "COLL-C missing: %s" % _m)
+_m = "AS axes"
+t("select_entity_batch SQL: %s" % _m, _m in ent_batch_sql,
+  "wiki_alias_select_entity_batch.sql missing: %s" % _m)
+_m = "axes := axes"
+t("select_entity_batch SQL: %s" % _m, _m in ent_batch_sql,
+  "wiki_alias_select_entity_batch.sql missing: %s" % _m)
+_m = "AS axes"
+t("collision_round SQL: %s" % _m, _m in coll_sql,
+  "wiki_alias_collision_round.sql missing: %s" % _m)
+_m = "axes := axes"
+t("collision_round SQL: %s" % _m, _m in coll_sql,
+  "wiki_alias_collision_round.sql missing: %s" % _m)
 
 # ── collision assemble (бывший H3/PY2): через assemble_field_items ────────────
 import json as _json

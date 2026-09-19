@@ -70,6 +70,7 @@ SELECT p.alias || chr(9) || p.fp || chr(9) || coalesce(
       title := f.label,
       quantities := coalesce(f.measures,''),
       flows := flows,
+      axes := axes,
       word := p.alias,
       aliases := coalesce(a.aliases, ''),
       best_used_for := coalesce(a.best_used_for, ''),
@@ -81,7 +82,15 @@ SELECT p.alias || chr(9) || p.fp || chr(9) || coalesce(
                        FROM search_refcols r
                        JOIN search_tables t2 ON t2.src_table = r.src_table
                        WHERE r.target_src = f.src_table
-                       ORDER BY is_reg DESC, lbl LIMIT 12) x), '') AS flows
+                       ORDER BY is_reg DESC, lbl LIMIT 12) x), '') AS flows,
+             coalesce((SELECT string_agg(lbl, ', ') FROM (
+                       SELECT DISTINCT t2.label AS lbl,
+                              t2.src_table LIKE 'catalog_%' AS is_axis
+                       FROM search_refcols r
+                       JOIN search_tables t2 ON t2.src_table = r.target_src
+                       WHERE r.src_table = f.src_table
+                         AND r.target_src <> f.src_table
+                       ORDER BY is_axis DESC, lbl LIMIT 12) x), '') AS axes
            FROM wiki_entity_facts f
           WHERE f.src_table IN (SELECT src_table FROM al WHERE alias = p.alias)
           ORDER BY f.src_table LIMIT :batch) f
