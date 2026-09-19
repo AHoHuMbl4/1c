@@ -31,6 +31,13 @@ WIKI_RESOLVER_TIMEOUT_SEC = float(os.environ.get("WIKI_RESOLVER_TIMEOUT_SEC", "0
 WIKI_CONCEPTS_TIMEOUT_SEC = float(os.environ.get("WIKI_CONCEPTS_TIMEOUT_SEC", "0.8"))
 # PERF4: покарточный параллельный verify (design-c §2 шаг 3, решение владельца 18.09).
 WIKI_VERIFY_WORKERS = int(os.environ.get("WIKI_VERIFY_WORKERS", "4"))
+# FIXSCORE (решение владельца 19.09): per-card ОЦЕНКА 0-10, сравнение КОДОМ.
+# L67 1/25: «да» 2–4 карточкам без сравнения → mass clarify. Отрыв >= 2 баллов
+# от второго = лидер (sole-эквивалент); иначе меню только верхнего score.
+# Константа в коде (не env): одна формула для быстрого пути и rescue.
+WIKI_SCORE_LEAD_MARGIN = 2
+# Все score <= ceiling → отказной none (как verify_none при all-no).
+WIKI_SCORE_NONE_CEILING = 3
 
 _HYBRID_SQL = None
 _PASSPORT_SQL = None
@@ -73,14 +80,17 @@ Reply with one JSON object only:
                  "why": <one line>}]}
 Include one verdict per passport shown."""
 
-# Покарточный verify (rescue шаг 3): один паспорт = один вызов, маленький контекст.
+# Покарточный verify (rescue шаг 3 / быстрый путь): один паспорт = один вызов.
+# FIXSCORE 19.09: оценка 0–10 (насколько паспорт отвечает вопросу); сравнение — кодом.
 WIKI_CARD_VERIFY_SYS = (
-    "Assess this entity passport against the user question. "
+    "Score how well this entity passport answers the user question "
+    "(0 = unrelated, 10 = exact match). "
     "Passport fields: name, wiki excerpt, platform kind, axes, measures, "
     "traits present in this passport vs pool neighbors; "
     "doesNotAnswer lists topics marked outside entity coverage. "
     "Return one JSON object: "
-    '{"fit": <"yes"|"no"|"unsure">, "why": <one line>}'
+    '{"score": <0-10 integer>, "fit": <"yes"|"no"|"unsure">, "why": <one line>}. '
+    "score is required."
 )
 
 
@@ -1927,25 +1937,66 @@ def wiki_passport_enrich_slice(cards, cache=None, *, distinct_against=None,
     return out
 
 
-def _wiki_parse_card_verify(raw):
-    """Разбор ответа покарточного verify: flat {fit,why} или verdicts[index=1]."""
-    verdicts, mode = wiki_parse_verify_response(raw, 1)
-    if verdicts:
-        return verdicts[0], mode
-    txt = (raw or "").strip()
-    if not txt:
-        return None, "failed"
+def _wiki_score_int(raw_score):
+    """score 0–10 целое или None (нет/битое → карточка неоценённая)."""
+    if raw_score is None or isinstance(raw_score, bool):
+        return None
     try:
-        j = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
-    except (ValueError, KeyError, TypeError):
-        return None, "failed"
-    if not isinstance(j, dict):
-        return None, "failed"
-    if "fit" in j:
-        v = _wiki_row_to_verdict({"index": 1, "fit": j.get("fit"),
-                                 "why": j.get("why")}, 1)
+        s = int(raw_score)
+    except (TypeError, ValueError):
+        return None
+    if s < 0 or s > 10:
+        return None
+    return s
+
+
+def _wiki_attach_score(verdict, raw_score):
+    """Добавить score к вердикту; без валидного score → None (неоценённая)."""
+    if not isinstance(verdict, dict):
+        return None
+    s = _wiki_score_int(raw_score)
+    if s is None:
+        return None
+    out = dict(verdict)
+    out["score"] = s
+    return out
+
+
+def _wiki_parse_card_verify(raw):
+    """Разбор per-card ОЦЕНКИ: {score, fit?, why} или verdicts[index=1]+score.
+
+    Без валидного score ответ = failed (карточка неоценённая, не ноль).
+    """
+    txt = (raw or "").strip()
+    j = None
+    if txt:
+        try:
+            j = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
+        except (ValueError, KeyError, TypeError):
+            j = None
+    if isinstance(j, dict) and "score" in j:
+        fit_row = {"index": 1, "fit": j.get("fit") or "unsure",
+                   "why": j.get("why")}
+        # fit опционален для diag; битый fit → unsure, score всё равно нужен
+        fit_raw = str(fit_row["fit"] or "").strip().lower()
+        fit = _WIKI_VERIFY_FIT_MAP.get(
+            fit_raw, fit_raw if fit_raw in ("yes", "no", "unsure") else "unsure")
+        if fit not in ("yes", "no", "unsure"):
+            fit = "unsure"
+        why = str(j.get("why") or "").strip()[:200]
+        v = _wiki_attach_score(
+            {"index": 1, "fit": fit, "why": why}, j.get("score"))
         if v:
             return v, "full"
+        return None, "failed"
+    verdicts, mode = wiki_parse_verify_response(raw, 1)
+    if verdicts:
+        v0 = verdicts[0]
+        # score мог прийти в том же объекте verdict (мок/расширенный batch)
+        scored = _wiki_attach_score(v0, v0.get("score") if isinstance(v0, dict)
+                                    else None)
+        if scored:
+            return scored, mode
     return None, "failed"
 
 
@@ -2179,6 +2230,96 @@ def wiki_outcome_from_full_verify(verdicts_by_src, pool, intent, diag=None,
     return {"outcome": "none", "reason": "verify_none", "diag": diag}
 
 
+def wiki_outcome_from_score_verify(verdicts_by_src, pool, intent, diag=None,
+                                   *, ceiling_hit=False):
+    """Исход per-card ОЦЕНКИ 0–10 (FIXSCORE, решение владельца 19.09).
+
+    Сортировка по score убыв. ТОП-1 с отрывом от ТОП-2 >= WIKI_SCORE_LEAD_MARGIN
+    → лидер (sole-эквивалент: дальше post_verify/homonym/шаг 4). Отрыв меньше
+    (вкл. равенство) → clarify кандидатов верхней полосы score
+    (top .. top-(margin-1); не весь пул; tie как (b2)). Все score <=
+    WIKI_SCORE_NONE_CEILING → none. Без score у карточки (unsure/parse-fail) →
+    неоценённая → incomplete, не ноль. ceiling_hit блокирует лидера.
+    wiki_outcome_from_full_verify не трогаем (fit-sole для замков/наследия).
+    """
+    diag = dict(diag or {})
+    pool = list(pool or [])
+    if not pool:
+        return {"outcome": "none", "reason": "empty_pool", "diag": diag}
+    if ceiling_hit:
+        diag["wiki_ceiling_hit"] = True
+    vb = verdicts_by_src or {}
+    scored = []  # (score, src)
+    missing = []
+    for c in pool:
+        src = c.get("src_table")
+        v = vb.get(src)
+        s = _wiki_score_int(v.get("score") if isinstance(v, dict) else None)
+        if s is None:
+            missing.append(src)
+            continue
+        scored.append((s, src))
+    diag["wiki_verify_scored"] = len(scored)
+    diag["wiki_verify_missing"] = len(missing)
+    diag["wiki_verify_scores"] = {src: sc for sc, src in scored}
+    if missing:
+        return {"outcome": "incomplete", "reason": "verdicts_incomplete",
+                "diag": diag}
+    if not scored:
+        diag["wiki_verify"] = "none"
+        return {"outcome": "none", "reason": "verify_none", "diag": diag}
+    scored.sort(key=lambda t: (-t[0], t[1]))
+    top_score = scored[0][0]
+    if top_score <= WIKI_SCORE_NONE_CEILING:
+        diag["wiki_verify"] = "none"
+        diag["wiki_score_top"] = top_score
+        return {"outcome": "none", "reason": "verify_none", "diag": diag}
+    second_score = scored[1][0] if len(scored) > 1 else None
+    margin = (top_score - second_score) if second_score is not None else (
+        top_score + 1)  # одна карточка: отрыв «бесконечный» ≥ margin
+    diag["wiki_score_top"] = top_score
+    diag["wiki_score_second"] = second_score
+    diag["wiki_score_margin"] = margin
+    # sole/лидер только при полном вердикте и без потолка
+    if (not ceiling_hit and margin >= WIKI_SCORE_LEAD_MARGIN):
+        leader = scored[0][1]
+        if not wiki_validate_leader_axes(leader, intent):
+            diag["wiki_verify"] = "axis_reject"
+            return {"outcome": "none", "reason": "axis_reject", "diag": diag}
+        peers = wiki_homonym_kind_peers(
+            [{"src_table": c.get("src_table"), "name": c.get("name")}
+             for c in pool], leader)
+        if peers:
+            diag["wiki_verify"] = "clarify"
+            diag["wiki_homonym_tie"] = [p.get("src_table") for p in peers]
+            diag["wiki_homonym_blocked_leader"] = leader
+            return {"outcome": "clarify", "candidates": peers,
+                    "reason": "homonym", "diag": diag}
+        diag["wiki_verify"] = leader
+        return {"outcome": "leader", "leader": leader, "diag": diag}
+    # отрыв < margin → меню кандидатов «верхней полосы»: score в пределах
+    # (LEAD_MARGIN-1) от топа. Так [9,8] (отрыв 1) → оба; [9,9,2] → два топа;
+    # [9,7,...] уже лидер (отрыв 2). Не весь пул (tie-семантика как у (b2)).
+    band_floor = top_score - (WIKI_SCORE_LEAD_MARGIN - 1)
+    tie_srcs = [src for sc, src in scored if sc >= band_floor]
+    tie = []
+    seen = set()
+    for src in tie_srcs:
+        if src in seen:
+            continue
+        seen.add(src)
+        card = next((c for c in pool if c.get("src_table") == src), None)
+        tie.append(card or {"src_table": src})
+    if len(tie) >= 2:
+        diag["wiki_verify"] = "clarify"
+        diag["wiki_verify_tie"] = [c.get("src_table") for c in tie]
+        return {"outcome": "clarify", "candidates": tie,
+                "reason": "separability", "diag": diag}
+    # один в полосе, но отрыв < margin (потолок/патология) — не silent sole
+    diag["wiki_verify"] = "none"
+    return {"outcome": "none", "reason": "verify_none", "diag": diag}
+
+
 def _stamp_rescue_concepts(menu, concepts, *, pending=False):
     if not isinstance(menu, dict) or menu.get("kind") != "clarify":
         return menu
@@ -2346,7 +2487,7 @@ def wiki_rescue_full_pool_pass(question, intent, diag, cut, t0,
         diag.update(batch.get("diag") or {})
         # ceiling_hit = pre-limit>TOP only; named_pool_zeroed stays its own diag key
         # (sole held by force_menu below, without wiki_ceiling_hit)
-        outcome = wiki_outcome_from_full_verify(
+        outcome = wiki_outcome_from_score_verify(
             batch.get("verdicts_by_src") or {}, pool, intent, diag=diag,
             ceiling_hit=ceiling_hit)
 
@@ -2503,7 +2644,7 @@ def wiki_rescue_full_pool_pass(question, intent, diag, cut, t0,
                             len(vb) < len(pool)),
                         "diag": diag,
                     }
-                    outcome = wiki_outcome_from_full_verify(
+                    outcome = wiki_outcome_from_score_verify(
                         vb, pool, intent, diag=diag,
                         ceiling_hit=ceiling_hit)
                     if outcome.get("outcome") == "leader" and not force_menu:
@@ -2707,7 +2848,7 @@ def try_wiki_hybrid_entity_pick(question, intent, diag, cut, t0,
             _stamp_fast_stages()
             return None
 
-        pick = wiki_outcome_from_full_verify(
+        pick = wiki_outcome_from_score_verify(
             vb, cards, intent, diag=diag, ceiling_hit=False)
         diag.update(pick.get("diag") or {})
         # неполнота (дедлайн/parse) — отказ каскада, не 503

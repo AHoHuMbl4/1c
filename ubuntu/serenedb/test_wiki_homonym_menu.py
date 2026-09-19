@@ -248,17 +248,17 @@ def _psql_router(tables, cards=None, fail_peer=False, fail_ambig_label=False,
 
 
 def _batch_verify_leader(leader):
-    """Мок wiki_batch_verify: ровно один yes на leader → sole → leader."""
+    """Мок wiki_batch_verify: лидер score=9, прочие 2 → отрыв>=2 → leader."""
     def _batch(question, intent, cards, diag=None, *, passport_cache=None):
         vb = {}
         for c in cards or []:
             src = c.get("src_table")
             if not src:
                 continue
-            vb[src] = {
-                "fit": "yes" if src == leader else "no",
-                "why": "ok" if src == leader else "n",
-            }
+            if src == leader:
+                vb[src] = {"fit": "yes", "score": 9, "why": "ok"}
+            else:
+                vb[src] = {"fit": "no", "score": 2, "why": "n"}
         return {
             "verdicts_by_src": vb,
             "passports": list(cards or []),
