@@ -758,7 +758,7 @@ Reply with JSON only, no text outside it:
 # Все НАШИ системные сообщения в одном месте: по ним `prompt_leak` ловит утечку
 # инструкции в ответ клиенту точным совпадением строки (`№27`).
 OUR_PROMPTS = [INTENT_SYS, AXIS_PICK_SYS, REFUSE_SYS, ANSWER_SYS, COVERAGE_SYS,
-               WIKI_PICK_SYS, WIKI_VERIFY_SYS, WIKI_RESOLVER_SYS]
+               WIKI_PICK_SYS, WIKI_VERIFY_SYS, WIKI_RESOLVER_SYS, CNT_SUBJECT_SYS]
 
 def _coverage_answer(question, diag, t0):
     """Ответ о полноте данных — из переписи, а не из корпуса (п. 13).
@@ -3834,7 +3834,16 @@ def _onepath_compose_gate(question, intent, plan, src, match, preds, measure,
     cov_slots = ({"in_1c": cov["in_1c"], "in_search": cov["in_search"],
                   "missing": cov["missing"]} if cov else None)
     kw_src = kind_word(src) if src else ""
-    if kw_src and slot_mode != "rank":
+    _ax_kind = ""
+    if ((agg or {}).get("form") or "").lower() == "distinct_axis":
+        _ax_kind = ((agg or {}).get("axis_label")
+                    or _passport_axis_label(
+                        (agg or {}).get("axis") or (agg or {}).get("col")
+                        or grain_dec.get("col"), axes) or "").strip()
+    if _ax_kind and slot_mode != "rank":
+        cov_slots = dict(cov_slots or {})
+        cov_slots["count_kind"] = _ax_kind
+    elif kw_src and slot_mode != "rank":
         cov_slots = dict(cov_slots or {})
         cov_slots["count_kind"] = kw_src
     text, slots_bad = _fill_figures(text, agg, totals_shown, money, cov_slots,
@@ -4590,6 +4599,22 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
     if measure:
         preds = list(preds) + _num_pred(intent, measure)
 
+    # CNT-SUBJECT: records vs axis_values — один LLM-слой до count-агрегата.
+    _cnt_axis = cnt_subject_axis_col(
+        intent, src, grain_dec, axes,
+        named_entity=_wiki_named_entity(diag, src))
+    _cnt_ax_lab = _passport_axis_label(_cnt_axis, axes) if _cnt_axis else ""
+    if not _cnt_ax_lab and _cnt_axis:
+        _cnt_ax_lab = _cnt_axis
+    resolve_cnt_subject(
+        question, intent, src, _cnt_axis,
+        src_label=human_table_label(src) if src else "",
+        src_kind=kind_word(src) if src else "",
+        axis_label=_cnt_ax_lab,
+        plan=plan,
+        diag=diag)
+    _cnt_subj = (diag or {}).get("cnt_subject")
+
     # D1 consume: degenerate option -> text; short-circuit digest -> agg from ticket
     _tv = (trusted or {}).get("measure_verdict") if isinstance(trusted, dict) else None
     _sc_skip_aggregate = False
@@ -4666,7 +4691,28 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
             diag["axis_form"] = "compare"
             шаг("sql compare", diff=agg.get("sum"))
 
-    if (agg is None and grain_dec.get("grain") == "group"
+    # CNT-SUBJECT axis_values: COUNT(DISTINCT ось) раньше groups/records.
+    _cnt_axis_sql = (diag or {}).get("cnt_subject_axis") or _cnt_axis
+    if (agg is None and _cnt_subj == "axis_values" and _cnt_axis_sql and src
+            and _want in ("count", "")
+            and not rank_intent_from(intent, plan, question)):
+        agg = aggregate_distinct_axis(src, match, preds, _cnt_axis_sql)
+        if agg:
+            diag["count_distinct_axis"] = _cnt_axis_sql
+            _alab = _passport_axis_label(_cnt_axis_sql, axes) or _cnt_ax_lab or ""
+            if _alab:
+                agg["axis_label"] = _alab
+            rows = []
+            шаг("sql cnt_subject distinct", ось=_cnt_axis_sql,
+                строк=(agg or {}).get("count"))
+
+    # records / fallback: groups только если слой не сказал records на plain count
+    _skip_groups_for_cnt = (
+        _cnt_subj == "records" and _want in ("count", "")
+        and not question_wants_breakdown(intent, plan)
+        and not rank_intent_from(intent, plan, question))
+    if (agg is None and not _skip_groups_for_cnt
+            and grain_dec.get("grain") == "group"
             and grain_dec.get("col") and serene_axis and src):
         _col = grain_dec["col"]
         _named = grain_dec.get("named_gis") or []
@@ -4709,16 +4755,23 @@ def answer(question, focus=None, measure_pick=None, context="", no_arbiter=False
                 diag["stock_net_distinct"] = True
                 diag["count_distinct_axis"] = _net.get("axis")
         _dac = None
-        if grain_dec.get("col") and _want in ("count", ""):
-            _dac = grain_dec.get("col")
-        if not _dac:
-            _dac = live_axis_col_for_count(
-                intent, src, axes,
-                named_entity=_wiki_named_entity(diag, src))
-        if _dac and agg is None:
-            agg = aggregate_distinct_axis(src, match, preds, _dac)
-            if agg:
-                diag["count_distinct_axis"] = _dac
+        # records: не DISTINCT; axis_values уже обработан выше; fallback — как было
+        # rank-guard: как early-ветка — forced axis_values+rank не крадёт топ.
+        if (_cnt_subj != "records"
+                and not rank_intent_from(intent, plan, question)):
+            if grain_dec.get("col") and _want in ("count", ""):
+                _dac = grain_dec.get("col")
+            if not _dac:
+                _dac = live_axis_col_for_count(
+                    intent, src, axes,
+                    named_entity=_wiki_named_entity(diag, src))
+            if _dac and agg is None:
+                agg = aggregate_distinct_axis(src, match, preds, _dac)
+                if agg:
+                    diag["count_distinct_axis"] = _dac
+                    _alab2 = _passport_axis_label(_dac, axes) or ""
+                    if _alab2:
+                        agg["axis_label"] = _alab2
         if agg is None:
             agg = aggregate(src, match, preds, measure)
         if not agg:

@@ -540,6 +540,124 @@ def aggregate_distinct_axis(src_table, match, preds, axis_col):
             "axis": axis_col, "grain": "axis"}
 
 
+# ── CNT-SUBJECT: records vs distinct axis values (один LLM-слой) ─────────────
+# Валидатор parse_cnt_subject + SQL aggregate_* держат контракт кодом (п.0/п.19).
+
+CNT_SUBJECT_SYS = """Map the user's question to what a count covers on the found source.
+
+Input: question; source label and platform kind; axis label; current plan
+(count matching records).
+
+Reply with one JSON object only:
+  {"subject": "records"|"axis_values"}
+- records — question targets the source rows (documents, movements, cards).
+- axis_values — question targets distinct values of the given axis.
+Labels come from the input; the figure comes from SQL later."""
+
+CNT_SUBJECT_OK = frozenset(("records", "axis_values"))
+
+
+def parse_cnt_subject(raw):
+    """Кодовый валидатор ответа слоя: records|axis_values|None."""
+    if raw is None:
+        return None
+    txt = raw if isinstance(raw, str) else str(raw)
+    txt = txt.strip()
+    if not txt:
+        return None
+    try:
+        j = json.loads(txt[txt.index("{"):txt.rindex("}") + 1])
+    except (ValueError, TypeError, json.JSONDecodeError):
+        return None
+    if not isinstance(j, dict):
+        return None
+    sub = j.get("subject")
+    if isinstance(sub, str):
+        sub = sub.strip().lower()
+    return sub if sub in CNT_SUBJECT_OK else None
+
+
+def cnt_subject_axis_col(intent, src, grain_dec=None, axes=None,
+                         named_entity=False):
+    """Выбранная ось или единственный live-кандидат. Без оси — None."""
+    col = ((grain_dec or {}).get("col") or "").strip()
+    if col:
+        return col
+    return live_axis_col_for_count(
+        intent, src, axes, named_entity=named_entity)
+
+
+def cnt_subject_should_call(intent, src, axis_col, plan=None, question=""):
+    """want=count|'' + ось; справочник/ранг — не зовём (предмет = строки источника)."""
+    if not (axis_col or "").strip():
+        return False
+    want = ((intent or {}).get("want") or "").strip().lower()
+    if want not in ("count", ""):
+        return False
+    if rank_intent_from(intent, plan, question):
+        return False
+    pre = str(src or "").split("_", 1)[0].lower()
+    # catalog: count строк справочника уже верен; различать нечего.
+    if pre == "catalog":
+        return False
+    return bool(src)
+
+
+def resolve_cnt_subject(question, intent, src, axis_col, *,
+                        src_label="", src_kind="", axis_label="",
+                        plan=None, diag=None):
+    """Один ds_chat → records|axis_values; сбой → records + diag fallback.
+
+    diag['cnt_subject'] ∈ records|axis_values|fallback.
+    diag['cnt_subject_axis'] — колонка оси при вызове.
+    """
+    axis_col = (axis_col or "").strip()
+    if diag is not None:
+        diag.pop("cnt_subject", None)
+        diag.pop("cnt_subject_axis", None)
+    if not cnt_subject_should_call(
+            intent, src, axis_col, plan=plan, question=question):
+        # z20 читает только diag; без записи None открывает later-DISTINCT.
+        if diag is not None:
+            diag["cnt_subject"] = "records"
+        return "records"
+    if diag is not None:
+        diag["cnt_subject_axis"] = axis_col
+    _dh = globals().get("deadline_hit")
+    if callable(_dh) and _dh():
+        if diag is not None:
+            diag["cnt_subject"] = "fallback"
+        return "records"
+    src_lab = (src_label or "").strip() or str(src or "")
+    src_k = (src_kind or "").strip() or (
+        str(src or "").split("_", 1)[0] if src else "")
+    ax_lab = (axis_label or "").strip() or axis_col
+    user = (
+        "Question: %s\n"
+        "Source label: %s\n"
+        "Source kind: %s\n"
+        "Axis label: %s\n"
+        "Current plan: count matching records"
+        % (question or "", src_lab, src_k, ax_lab))
+    try:
+        raw = ds_chat(
+            [{"role": "system", "content": CNT_SUBJECT_SYS},
+             {"role": "user", "content": user}],
+            temperature=0, max_tokens=60)
+    except Exception:  # noqa: BLE001 — AskDeadline / сеть / разбор
+        if diag is not None:
+            diag["cnt_subject"] = "fallback"
+        return "records"
+    sub = parse_cnt_subject(raw)
+    if sub is None:
+        if diag is not None:
+            diag["cnt_subject"] = "fallback"
+        return "records"
+    if diag is not None:
+        diag["cnt_subject"] = sub
+    return sub
+
+
 def aggregate_compare_sales(src, match, period1, period2, measure):
     """Diff двух сумм продаж (form=compare). Один src, два окна."""
     if not src or not measure:

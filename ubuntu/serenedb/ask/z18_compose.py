@@ -712,11 +712,20 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
         body += ("\n\nCOMPUTED OVER ALL MATCHING ROWS. The values are not shown; each "
                  "placeholder below is replaced by the system with the exact figure:")
         kw = kind_word(src) if src else ""
-        if kw and slot_mode != "rank":
+        _dist = ((agg or {}).get("form") or "").lower() == "distinct_axis"
+        if kw and slot_mode != "rank" and not _dist:
             body += "\n  count_kind (record type noun) -> {count_kind}"
-        # sum=0.0 делает has_money ложным; {count} на sum/rank — дыра 5ca1b66.
+        if _dist:
+            _ax = ((agg or {}).get("axis_label") or (agg or {}).get("axis")
+                   or "").strip()
+            if _ax:
+                body += "\n  count_kind (axis subject noun) -> {count_kind}"
+            # sum=0.0 делает has_money ложным; {count} на sum/rank — дыра 5ca1b66.
         if slot_mode not in ("sum", "rank"):
-            body += "\n  count (number of records) -> {count}"
+            if _dist:
+                body += "\n  count (distinct values of the chosen axis) -> {count}"
+            else:
+                body += "\n  count (number of records) -> {count}"
         if agg.get("date_min"):
             body += "\n  period                    -> {date_min} .. {date_max}"
         if agg.get("undated"):
@@ -732,11 +741,20 @@ def compose(question, rows, agg, corrections=None, totals=None, coverage=None,
                  "are not shown; each placeholder below is replaced by the system with "
                  "the exact figure:" % (agg.get("measure") or "-"))
         kw = kind_word(src) if src else ""
-        if kw and slot_mode != "rank":
+        _dist = ((agg or {}).get("form") or "").lower() == "distinct_axis"
+        if kw and slot_mode != "rank" and not _dist:
             body += "\n  count_kind (record type noun) -> {count_kind}"
+        if _dist:
+            _ax = ((agg or {}).get("axis_label") or (agg or {}).get("axis")
+                   or "").strip()
+            if _ax:
+                body += "\n  count_kind (axis subject noun) -> {count_kind}"
         # Стоп 1: на sum/rank счёт не слот модели (код может дописать после гейта).
         if slot_mode in ("count", "list"):
-            body += "\n  count (number of records) -> {count}"
+            if _dist:
+                body += "\n  count (distinct values of the chosen axis) -> {count}"
+            else:
+                body += "\n  count (number of records) -> {count}"
         # 🔴 ПО СКОЛЬКИМ ЗАПИСЯМ ПОСЧИТАНЫ sum И avg. `aggregate` считает `count_amount`
         # отдельно именно для этого («иначе среднее по 31 строке уходит как среднее по
         # 1344»), но до модели число не доходило вовсе — комментарий в `aggregate`

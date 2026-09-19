@@ -1,3 +1,31 @@
+## 2026-09-19 (8) — CNT-SUBJECT: смысловой слой «что считать» (записи vs разные значения оси); красная ×3 круг-3 [код][замер]
+
+- Основание (решение владельца): «сколько клиентов реально покупают?» → регистр+ось
+  → count записей 76 202 словами «клиентов», верно 145 = COUNT(DISTINCT ось); соседний
+  «сколько документов за декабрь» = 3027 записей — верен. Разница смысловая → один
+  LLM-слой сравнивает вопрос с найденным (подписи вики) и говорит механизму ЧТО
+  считать; числа всегда из SQL (п.19). Не «промт-правило»: допустимые формулы
+  перечислены кодом, ответ валидируется, fallback на текущее поведение.
+- Слой (z05): CNT_SUBJECT_SYS + parse_cnt_subject (валидатор records|axis_values) +
+  cnt_subject_should_call (только want∈{count,""} + ось + не справочник; rank-guard) +
+  resolve_cnt_subject (один ds_chat max_tokens=60, deadline→fallback,
+  diag cnt_subject=records|axis_values|fallback; при should_call=False тоже пишет
+  records) + cnt_subject_axis_col (sole-ось; >1 кандидат → None, меню раньше слоя).
+  Врезка z20 до count-агрегата; axis_values → aggregate_distinct_axis
+  (COUNT(DISTINCT map_extract_value(refs_map, ось))); формулировка z18 не называет
+  значения оси «записями».
+- Красная: круг-1 ×3 = ACCEPT + REJECT×2 (№2/№3 независимо: rank при want=count звал
+  слой, axis_values крал топ-путь) → круг-2 (rank-guard should_call + early-ветка) →
+  красная ×3 = ACCEPT + REJECT×2 (later-ветка без guard + diag None) → круг-3
+  (diag=records при should_call=False + rank-guard later) → красная ×3 = **ACCEPT×3**
+  (каждая проверила все три пути DISTINCT своими моками: forced axis_values+rank при
+  agg=None/grain=row/groups упали — DISTINCT не зовётся; контроль без rank — зовётся).
+- Замок test_cnt_subject 38/0: parse/should_call/fallback/DISTINCT-SQL/эталон-не-в-ходе/
+  формулировка/п.0/rank-гварды. Все прежние замки зелёные.
+- Числа: замки — cnt_subject 38/0, one_path 78/0, axis_loop 23/0, terminal_round 24,
+  compose 91, axis_count 13/0, degenerate 97, decision_id 24, gate 56/0, step4 27/0.
+- Доки: TARGET п.19/п.0/п.12/п.21; приёмка — руки владельца в вебе (решение 19.09).
+
 ## 2026-09-19 (7) — финальный L67 после AXISLOOP: refusal_defect=0 (петли мертвы); 8/25 = смесь дефектов замера и продукта [замер]
 
 - Прод (окно, z20/z10 выкачены 9210b8e, прод-юнит перезапущен): полный L67 с
