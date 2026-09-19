@@ -229,6 +229,19 @@ sole: полный путь до числа); отрыв < 2 → clarify-мен�
 >= 30, wrong <= 1; иначе — ЗАПАСНОЙ ПЛАН (одобрен владельцем): возврат пачкового
 pick+verify (as-is функции) на быстрый путь.
 
+### 🔴 [откат на батч, 19.09] ЗАПАСНОЙ ПЛАН ВКЛЮЧЁН
+
+L67 per-card (да/нет и ОЦЕНКА) дал 1–2/25 против базиса 30: абсолютная оценка не
+разруливает регистры-близнецы (10/10/10/9 у accum/document/Книга продаж/розница).
+Возврат ПАЧКОВОГО pick+verify (as-is `wiki_pick_from_cards` + `wiki_verify_candidates`
+на быстрый путь; rescue — `wiki_batch_verify` с `WIKI_VERIFY_SYS` порциями
+`WIKI_PASSPORT_N`, sole = 1 yes ∧ прочие no ∧ |verd|==|pool| ∧ ¬ceiling_hit;
+таблица (a)/(b)/(b2)/(c) — исходная батч-редакция §2 Шаг 3). Из PERF сохранены:
+параллельные паспорта (micro-lock+inflight), passport-кэш параметром,
+`wiki_rescue_stage_sec`/`wiki_fast_stage_sec`, гейт бюджета перед вызовом батча,
+`WIKI_VERIFY_WORKERS` для паспортного SQL. Score-слой (`wiki_outcome_from_score_verify`,
+`WIKI_CARD_VERIFY_SYS`) — не вызывается.
+
 ### Что закрывает / Запреты
 
 Q1–4: полный пул → verify/резолвер → меню (цепочка жива) или sole → D1 → число; лидер

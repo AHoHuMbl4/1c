@@ -81,11 +81,11 @@ def _pool_n(n, leader=None):
 
 
 def _verdict(src, fit, score=None):
-    """Транспорт per-card ОЦЕНКИ: {score, fit}. score по умолчанию из fit
-    (sole: yes=9/no=2 → отрыв>=2; tie: явные равные score в сценарии)."""
-    if score is None:
-        score = {"yes": 9, "no": 2, "unsure": 5}.get(fit, 2)
-    return {"fit": fit, "score": score, "index": 1, "src_table": src}
+    """Транспорт батч-verify (C5): {fit}; score игнор (откат 19.09)."""
+    out = {"fit": fit, "index": 1, "src_table": src}
+    if score is not None:
+        out["score"] = score
+    return out
 
 
 def _verdicts_map(pool, yes_src=None, unsure=(), missing=()):
@@ -544,7 +544,7 @@ def run_R_B():
     A.wiki_passport_enrich_slice = _enrich
     A.ds_chat = lambda *a, **k: "1:yes"
     A.wiki_parse_verify_response = lambda raw, n_cards: (
-        [{"index": i + 1, "fit": "no", "score": 2} for i in range(n_cards)],
+        [{"index": i + 1, "fit": "no"} for i in range(n_cards)],
         "ok")
     batch = A.wiki_batch_verify(Q6, {"want": "count"}, pool, diag={})
     t("batch-enrich-beyond-first-8",
@@ -563,7 +563,7 @@ def run_R_B():
     enrich_slices.clear()
     A.deadline_hit = lambda rid=None: len(enrich_slices) >= 1
     batch_inc = A.wiki_batch_verify(Q6, {"want": "count"}, pool, diag={})
-    oc_inc = A.wiki_outcome_from_score_verify(
+    oc_inc = A.wiki_outcome_from_full_verify(
         batch_inc.get("verdicts_by_src") or {}, pool, {"want": "count"}, {},
         ceiling_hit=False)
     t("batch-incomplete-triggers-menu-or-requery",
@@ -576,13 +576,13 @@ def run_R_B():
     A.deadline_hit = lambda rid=None: False
 
     vb = _verdicts_map(pool, yes_src=SRC_CLIENTS)
-    oc = A.wiki_outcome_from_score_verify(
+    oc = A.wiki_outcome_from_full_verify(
         vb, pool, {"want": "count"}, {}, ceiling_hit=False)
     t("sole-yes-full-complete",
       oc.get("outcome") == "leader" and oc.get("leader") == SRC_CLIENTS,
       "oc=%s" % oc)
 
-    oc_c = A.wiki_outcome_from_score_verify(
+    oc_c = A.wiki_outcome_from_full_verify(
         vb, pool, {"want": "count"}, {}, ceiling_hit=True)
     t("ceiling-blocks-sole",
       oc_c.get("outcome") != "leader", "oc=%s" % oc_c)
@@ -612,7 +612,7 @@ def run_R_B():
     vb2 = {SRC_TMZ: _verdict(SRC_TMZ, "yes"),
            SRC_PEER: _verdict(SRC_PEER, "no"),
            SRC_OTHER: _verdict(SRC_OTHER, "no")}
-    oc_h = A.wiki_outcome_from_score_verify(vb2, pool2, {}, {})
+    oc_h = A.wiki_outcome_from_full_verify(vb2, pool2, {}, {})
     t("in-pool-tie-homonym-menu",
       oc_h.get("outcome") == "clarify" and oc_h.get("reason") == "homonym",
       "oc=%s" % oc_h)
@@ -642,11 +642,11 @@ def run_R_B():
       "kind=%s" % (out_nz.get("kind") if isinstance(out_nz, dict) else out_nz))
 
     pool4 = [_card("a_1", "A"), _card("a_2", "B"), _card("a_3", "C")]
-    # tie = равные топы (отрыв < 2); score-семантика вместо yes+unsure
-    vb4 = {"a_1": _verdict("a_1", "yes", score=8),
-           "a_2": _verdict("a_2", "unsure", score=8),
-           "a_3": _verdict("a_3", "no", score=2)}
-    oc4 = A.wiki_outcome_from_score_verify(vb4, pool4, {}, {})
+    # tie = yes+unsure (батч C5 / (b2))
+    vb4 = {"a_1": _verdict("a_1", "yes"),
+           "a_2": _verdict("a_2", "unsure"),
+           "a_3": _verdict("a_3", "no")}
+    oc4 = A.wiki_outcome_from_full_verify(vb4, pool4, {}, {})
     t("separability-tie-candidates",
       oc4.get("outcome") == "clarify"
       and oc4.get("reason") == "separability"
@@ -996,13 +996,13 @@ def run_R_C():
       and out_peer.get("kind") == "clarify"
       and len(out_peer.get("options") or []) >= 2,
       "out=%s" % out_peer)
-    # два высоких равных score на похожих хвостах — не единственный лидер
+    # два yes на похожих хвостах — не sole (батч C5)
     vb_two = {
-        SRC_TMZ: _verdict(SRC_TMZ, "yes", score=9),
-        SRC_PEER: _verdict(SRC_PEER, "yes", score=9),
-        SRC_OTHER: _verdict(SRC_OTHER, "no", score=2),
+        SRC_TMZ: _verdict(SRC_TMZ, "yes"),
+        SRC_PEER: _verdict(SRC_PEER, "yes"),
+        SRC_OTHER: _verdict(SRC_OTHER, "no"),
     }
-    oc_two = A.wiki_outcome_from_score_verify(
+    oc_two = A.wiki_outcome_from_full_verify(
         vb_two, pool_peer, {"want": "count"}, {}, ceiling_hit=False)
     t("peer-tail-two-yes-not-sole-leader",
       oc_two.get("outcome") != "leader"
@@ -1133,7 +1133,7 @@ def run_R_D():
     # sole-yes (полный batch, ¬ceiling) → гейт fail-soft/clarify → не silent picked
     pool_h = [_card(SRC_FAR, "far"), _card(SRC_OTHER, "other")]
     vb_h = _verdicts_map(pool_h, yes_src=SRC_FAR)
-    oc_h = A.wiki_outcome_from_score_verify(
+    oc_h = A.wiki_outcome_from_full_verify(
         vb_h, pool_h, {"want": "sum"}, {}, ceiling_hit=False)
     t("homonym-fail-sole-fixture",
       oc_h.get("outcome") == "leader" and oc_h.get("leader") == SRC_FAR,
@@ -1607,7 +1607,7 @@ def run_R_H():
     vb = _verdicts_map(
         [_card("catalog_item_%02d" % i) for i in range(top)],
         yes_src="catalog_item_00")
-    oc = A.wiki_outcome_from_score_verify(
+    oc = A.wiki_outcome_from_full_verify(
         vb, [_card("catalog_item_%02d" % i) for i in range(top)],
         {}, {}, ceiling_hit=True)
     t("truncated-sole-blocked",
@@ -1786,9 +1786,9 @@ def run_R_K():
     A.wiki_hybrid_pool = lambda *a, **k: list(full)
     A.wiki_batch_verify = lambda *a, **k: {
         "verdicts_by_src": {
-            "a_1": _verdict("a_1", "yes", score=8),
-            "a_2": _verdict("a_2", "unsure", score=8),
-            "a_3": _verdict("a_3", "no", score=2),
+            "a_1": _verdict("a_1", "yes"),
+            "a_2": _verdict("a_2", "unsure"),
+            "a_3": _verdict("a_3", "no"),
         },
         "passports": full, "incomplete": False, "diag": {}}
     A.wiki_pool_resolver = lambda *a, **k: {
@@ -1807,10 +1807,10 @@ def run_R_K():
 
 
 def run_PERF_gate_context():
-    """PERF6: гейт дедлайна в воркерах видит rid через copy_context.
+    """Гейт дедлайна до вызова батча: rid в ContextVar главного потока.
 
-    Без мока deadline_hit — реальный _rid_ctx / _REQ_T0. На коде без
-    copy_context().run сценарий падает (воркер слеп к rid → ds_chat > 0).
+    Без мока deadline_hit — реальный _rid_ctx / _REQ_T0. При hit до
+    старта батча ds_chat не зовётся (wiki_batch_verify_n == 0).
     """
     SECTION["cur"] = "PERF"
     _reset_session()
@@ -1827,7 +1827,7 @@ def run_PERF_gate_context():
 
     def _ds(messages, max_tokens=0):
         calls["n"] += 1
-        return '{"score":9,"fit":"yes","why":"ok"}'
+        return '{"verdicts":[{"index":1,"fit":"yes","why":"ok"}]}'
 
     A.ds_chat = _ds
     pool = [_card("catalog_gate_%02d" % i, "g%d" % i) for i in range(6)]

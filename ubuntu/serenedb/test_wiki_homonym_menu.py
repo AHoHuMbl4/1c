@@ -247,27 +247,6 @@ def _psql_router(tables, cards=None, fail_peer=False, fail_ambig_label=False,
     return _psql
 
 
-def _batch_verify_leader(leader):
-    """Мок wiki_batch_verify: лидер score=9, прочие 2 → отрыв>=2 → leader."""
-    def _batch(question, intent, cards, diag=None, *, passport_cache=None):
-        vb = {}
-        for c in cards or []:
-            src = c.get("src_table")
-            if not src:
-                continue
-            if src == leader:
-                vb[src] = {"fit": "yes", "score": 9, "why": "ok"}
-            else:
-                vb[src] = {"fit": "no", "score": 2, "why": "n"}
-        return {
-            "verdicts_by_src": vb,
-            "passports": list(cards or []),
-            "incomplete": False,
-            "diag": dict(diag or {}),
-        }
-    return _batch
-
-
 def _run_leader_pick(z, leader, question="", tables=None, cards=None,
                      ambig=None, fail_peer=False, preds=None, by=None,
                      fail_leader_label=False, fail_ambig=False,
@@ -288,8 +267,11 @@ def _run_leader_pick(z, leader, question="", tables=None, cards=None,
         fail_ambig_count=fail_ambig_count)
     z["wiki_hybrid_pool"] = lambda q, intent=None: [
         cards.get(leader) or {"src_table": leader, "name": LABEL}]
-    # PERF7: try_wiki зовёт wiki_batch_verify (per-card); 1 yes → leader
-    z["wiki_batch_verify"] = _batch_verify_leader(leader)
+    # откат 19.09: быстрый путь — pick+verify батч
+    z["wiki_verify_candidates"] = lambda *a, **k: {
+        "outcome": "leader", "leader": leader, "diag": {}}
+    z["wiki_pick_from_cards"] = lambda *a, **k: {
+        "outcome": "leader", "leader": leader, "diag": {}}
     z["wiki_leader_post_verify"] = lambda *a, **k: True
     diag = {}
     return z["try_wiki_hybrid_entity_pick"](
@@ -447,7 +429,8 @@ def main():
     z["psql"] = psql_count
     z["wiki_hybrid_pool"] = lambda q, intent=None: [
         {"src_table": DOC, "name": LABEL}]
-    z["wiki_batch_verify"] = _batch_verify_leader(DOC)
+    z["wiki_verify_candidates"] = lambda *a, **k: {
+        "outcome": "leader", "leader": DOC, "diag": {}}
     z["wiki_leader_post_verify"] = lambda *a, **k: True
     out_na = z["try_wiki_hybrid_entity_pick"](
         "сколько", {}, {}, None, 0.0, by={}, match="", preds=[])
@@ -665,7 +648,10 @@ def main():
     z["psql"] = psql_named_fail
     z["wiki_hybrid_pool"] = lambda q, intent=None: [
         cards_both.get(REG) or {"src_table": REG, "name": LABEL}]
-    z["wiki_batch_verify"] = _batch_verify_leader(REG)
+    z["wiki_verify_candidates"] = lambda *a, **k: {
+        "outcome": "leader", "leader": REG, "diag": {}}
+    z["wiki_pick_from_cards"] = lambda *a, **k: {
+        "outcome": "leader", "leader": REG, "diag": {}}
     z["wiki_leader_post_verify"] = lambda *a, **k: True
     diag_nf = {}
     out_nf = z["try_wiki_hybrid_entity_pick"](
