@@ -130,6 +130,7 @@ SereneDB — самостоятельный сервер со своим хра�
 | [`docs/TARGET_STATUS.md`](docs/TARGET_STATUS.md) | **Стадия по каждому из 21 пункта контракта** — что готово, что осталось, чем закрыто |
 | [`docs/STATE_2026-07-26.md`](docs/STATE_2026-07-26.md) | Исторический снимок замеров **на 26.07** — за текущим состоянием сюда не ходить |
 | [`docs/HOW_IT_WORKS.md`](docs/HOW_IT_WORKS.md) | **Пайплайн целиком**: где база, где поиск, какие вызовы |
+| [`docs/HOW_IT_WORKS_PLAIN.md`](docs/HOW_IT_WORKS_PLAIN.md) | **То же простыми словами** — только смысл, без ссылок на код |
 | [`docs/VECTOR_DECISION.md`](docs/VECTOR_DECISION.md) | Вектор и `ivf`: замеры, ловушки, разбор собственных ошибок |
 | [`docs/PRODUCTION_PLAN.md`](docs/PRODUCTION_PLAN.md) | Доведение до продакшена: что сделано и что осталось |
 | [`ubuntu/1c-gateway/README.md`](ubuntu/1c-gateway/README.md) | OData read-only шлюз (только GET) |
