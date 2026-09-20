@@ -1,3 +1,15 @@
+## 2026-09-20 (16) — Слепок такта v3: +period_relative_forms.json и +patch_vllm_provider.py — по двум хвостам владельца [замер]
+
+- period_relative_forms.json: build.sh требует его каждый такт fail-closed
+  (копия в CSV_DIR + загрузка в search_meta через period_relative_forms_load.sql);
+  в v2 был только загрузчик. Словарь форм периодов, не секрет — в слепок.
+- patch_vllm_provider.py: зовётся ensure_vllm_gateway.sh при живом ключе,
+  нужен генерации алиасов wiki_alias. В v2 каталог ubuntu-openclaw был с
+  одним файлом — теперь два.
+- Итог v3: 82 файла состава (69 serenedb + 2 packet + 2 openclaw + 4 work +
+  5 юнитов), архив перезалит, сверка 3/3. В v2 README счёт был завышен на 1
+  (посчитан md5sums) — исправлен.
+
 ## 2026-09-20 (15) — Слепок такта v2: добор всех зависимостей по списку вызовов (83 файла вместо 36) — по находке владельца [замер]
 
 - Владелец: 4 файла такта (tick_status.sh, period_relative_forms_load.sql,
