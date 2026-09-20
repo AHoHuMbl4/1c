@@ -1,3 +1,20 @@
+## 2026-09-20 (15) — Слепок такта v2: добор всех зависимостей по списку вызовов (83 файла вместо 36) — по находке владельца [замер]
+
+- Владелец: 4 файла такта (tick_status.sh, period_relative_forms_load.sql,
+  classify_entities.py, wiki_publish.sh) отсутствовали в слепке, хотя зовутся
+  build.sh. Разбор полного списка вызовов build.sh/pipeline.sh/wiki_alias.sh
+  показал больше дыр: такт зовёт файлы за пределами ubuntu/serenedb —
+  ubuntu/packet (packet_config, packet_meta_signal), ubuntu/openclaw
+  (ensure_vllm_gateway), work/acceptance + work/entity-choice + work/pipeline
+  (4 файла алиас-линейки относительными путями ../..).
+- Слепок v2: 68 файлов ubuntu-serenedb + 2 + 1 + 4 + 5 юнитов = 83 файла;
+  архив перезалит в okna-tact-20260920 (сверка 3/3), README переписан.
+- Не вошли и помечены в README: тесты, мёртвый serene_search_build.py,
+  deploy.sh (утилита выката, в такте — только на dev-стенде при
+  SERENE_SRC_DIR). Гейт check-golden остановил первую попытку команды с
+  именем deploy.sh в cp-списке — команду переписал без этого файла, люк
+  не открывал.
+
 ## 2026-09-20 (14) — IVF на 26.08.1: обрыв 26.07.3 не воспроизводится — чистый стенд + перезапись вывода в двух доках [замер]
 
 - Отдельный --server_directory (правило ivf-опытов), случайные FLOAT[1024],
