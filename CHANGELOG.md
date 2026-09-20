@@ -1,3 +1,25 @@
+## 2026-09-20 (5) — ВЕКТОРА OKNA → S3 Hetzner: слепок 5 таблиц (5,7 ГБ) в бакет 1c-data/okna-vectors-20260920 [замер]
+
+- Доступ к Hetzner Object Storage подтверждён живым: `/etc/1c-s3.env`
+  (fsn1.your-objectstorage.com, бакет `1c-data`) — тот же, что в
+  `docs/research/SERENEDB_REPRO_DATASET.md` §6; `/usr/bin/mc` оказался
+  Midnight Commander, заливка boto3.
+- Состав снят по живой базе окна (SereneDB 26.08.1): `search_corpus`
+  1 678 919 векторов (dim 1024, всё с emb≠NULL из 1 686 622), `resolver_index`
+  2 150 079, `search_entity_card` 255, `search_tables` 352/255,
+  `search_wiki_entity_card` 351. Бэкапы `backup_corpus_emb*` (5,5 ГБ ×3,
+  02.09) и служебные `res_emb_*`/`tmp*`/`*_todo` не брались — дубли/транзиент.
+- Экспорт штатным server-side `COPY … TO parquet (COMPRESSION zstd)` на окне
+  (п. 20); счётчики COPY == счётчикам таблиц; md5 dev↔окно совпали по 5/5;
+  перенос окно→dev и заливка multipart (64 МБ × 10 потоков).
+- Сверка после заливки head_object: размеры 7/7 объектов (включая README и
+  md5sums) байт-в-байт; у трёх малых parquet etag == md5 файла.
+- Гейт `check-golden` остановил первый маршрут (scp env в `/etc` окна —
+  формально выкат при незакоммиченном дереве): cred остались на dev, заливка
+  с dev, `/etc` окна не тронут.
+- Локальные копии слепка пока оставлены: окно `/var/lib/serenedb/okna_vec_20260920`,
+  dev `/tmp/okna_vec_20260920` (чистка — по слову владельца).
+
 ## 2026-09-20 (4) — ФАЙЛ ПРАВИЛ ПРОМТОВ ГЕНЕРАТОРА: docs/PROMPT_RULES_DICT_MODEL.md — по слову владельца «запиши, ТОЧНО, без додумываний» [решение]
 
 - Отдельного файла не было (аудит A5 + канон в state + уроки вперемешку).
