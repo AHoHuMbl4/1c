@@ -1,3 +1,18 @@
+## 2026-09-20 (10) — HOW_IT_WORKS_PLAIN: путь данных Windows и веб — описано по факту живых замеров [замер]
+
+- Живой маршрут пакета снят на всех хостах: агент (OData → CSV zstd → age)
+  → mTLS CN=okna-1 → HAProxy pro-router :443 (verify required, CA
+  1c-packet-ca, серт 1c-gate.timpul.pro) → LXD-прокси 10.3.1.11:6090 →
+  packet_server окна (Bearer базы + age-расшифровка) → packet_apply →
+  витрина. Четыре слоя защиты описаны.
+- Веб найден на отдельной VM openclaw-okna (2.28.49.158): Caddy → Open WebUI
+  :8080 → OpenAI-API на 10.3.1.11:18801 (LXD-прокси gw-web-18801) → шлюз
+  бота окна → MCP :6016 → ask :8091 → SereneDB :7890. /dash/* — Grafana 3001
+  + адаптер 3002.
+- Секреты контура (токены агента/ask/mcp/webui, age-ключ, grafana, отпечатки
+  mTLS) записаны в HOW_IT_WORKS_PLAIN.md — файл локальный (skip-worktree,
+  ключи), в git значения не идут. CHANGELOG — без значений.
+
 ## 2026-09-20 (9) — S3: слепок Windows-установщика и агента (windows-installer-20260920); статус «работает, протестировано владельцем» [замер]
 
 - Архив каталога `windows/` (27 файлов: odata-setup с готовым exe, packet-agent,
